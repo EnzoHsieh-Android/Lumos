@@ -1,0 +1,539 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/凍結接受非綠判定.md b/docs/lumos-toolchain-knowledge/Issues/凍結接受非綠判定.md
+index 1ca10f9d..dac3692f 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/凍結接受非綠判定.md
++++ b/docs/lumos-toolchain-knowledge/Issues/凍結接受非綠判定.md
+@@ -15,21 +15,21 @@ related:
+ summary: |-
+   FLAG:TECHNICAL
+   PITFALL:`loop replay --freeze` 與週跑補凍只擋 rc2,處置閘判 rc1(沒過)的迴圈照樣凍成標準答案 [出處:引句錨定整段比對設計審 r1–r4 回滾席(四輪都指到同一族)] [根因:凍結把「當下的判定」當標準答案,不問它是不是綠] [repro:對一個處置閘 rc1 的迴圈跑 lumos loop replay <編號> --freeze --spec <計劃>,看 verdict.json 的 rc]
+ ---
+ # 凍結接受非綠判定
+ 
+ ## 症狀
+ 
+ - 手動 `lumos loop replay <編號> --freeze`(含 `--note` 重凍)只在處置閘回 rc2 時擋下;rc1(判不過)照樣把 `{"rc": 1, "fails": [...]}` 寫進 `governance/replay/<編號>/verdict.json`。
+ - 週跑 `governance/autonomous_loop/replay_weekly.py` 對「有收斂紀錄但沒判定檔」的迴圈自動補凍,同樣不先確認現在是綠的。
+-- 2026-10-13 帳上 305 份判定檔有 5 份是 rc1(`code-batch14`、`code-batch13b`、`code-待決問題改存開頭欄位`、`code-審查跑滿回顧`、`code-兩席相反時端出張力-v2`),沒查過是刻意凍紅還是意外。
++- 2026-10-13 帳上 307 份判定檔有 5 份是 rc1(`code-batch14`、`code-batch13b`、`code-待決問題改存開頭欄位`、`code-審查跑滿回顧`、`code-兩席相反時端出張力-v2`),沒查過是刻意凍紅還是意外。
+ 
+ ## 根因
+ 
+ 凍結的語意是「把這一刻的判定固定成之後回放的標準答案」,設計時沒區分這一刻是不是綠。判準本身有錯、或舊工作樹跑舊程式時凍結,會把錯的紅燈固定下來;之後只能再重凍一次,而重凍本身又是同一個動作。
+ 
+ ## 現在怎麼繞
+ 
+ 回放報漂移時,先用最新程式跑一次處置閘;是綠的才 `--freeze --note` 重凍,是紅的先查判準(見 [[Projects/引句錨定整段比對_計劃]]〈回退〉)。
+ 
+ ## 什麼條件算修好
+diff --git a/docs/lumos-toolchain-knowledge/Projects/引句錨定整段比對_計劃.md b/docs/lumos-toolchain-knowledge/Projects/引句錨定整段比對_計劃.md
+index 63e270c6..99e6eb63 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/引句錨定整段比對_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/引句錨定整段比對_計劃.md
+@@ -23,21 +23,21 @@ decisions:
+     valid: true
+ ---
+ # 引句錨定整段比對_計劃
+ 
+ > 白話:審查席每條發現要附一段原文引句,工具檢查那段字真的在被審材料裡——這是收貨時唯一擋「編造證據」的一道。現在的抽取只取到第一個閉引號,後面寫什麼都不看:前半照抄、後半接一個閉引號再編,照樣判「全數錨定」(Issue 2026-09-06 實測)。這篇改成照括號配對切出整段引句,引號裡面那段整段都要對得上(引號外的文字不算引句,工具不驗);引號沒閉合、或引句結束後到下一條引句之前還有落單的收尾引號,判格式不合。哪一版判準由記帳當下蓋在帳上的章決定,處置閘與回放照章重算;寫側用哪一版由程式常數決定。分兩階段上線:先讓所有讀帳的地方認得章(寫側仍用舊判準),再用一個提交把寫側切到新判準、同時改文件。來源是世界解總覽〈跨類優先順序〉第 6 名(總覽寫「行區間+整段」,本篇只做整段,理由見〈量測〉),也是立案清單第 18 項。
+ 
+ PRIOR-ART: 括號配對(深度計數)是解析巢狀分隔符的標準做法,不另發明判準。「判準版本蓋在資料列上、讀的時候照那一列的版本選判準」在本 repo 是新機制:既有的版本欄位(回放凍結閉包的 `engine_rev`)語意是「版本對不上就視為過期、跳過重算」,不是在兩套活著的判準之間分派;本篇不沿用它,理由見〈判準版本蓋在帳上〉最後一點。外部對照是資料庫的「先擴後縮」遷移(expand/contract:先上線認得新格式的讀者,再上線寫新格式的寫者)與序列化格式的 schema version 欄位。兩個時間切換先例(`_SEV_WRITESIDE_CUTOFF` 純日期字串比對、`_SECURITY_SEAT_SINCE` 帶時區走 `_loop_ts_key`)不採用:它們留下「合入當天舊碼寫帳」與時區兩個坑,蓋章做法兩個坑都沒有。「版本蓋在帳列」本身有先例:`_DOOR_RULE_VERSION` 蓋在 spec-gate 帳列的 `door_rule`、`small_change_rule` 欄,但只記錄、不分派判準;本篇差在讀的時候照章選判準。寫側判準不放設定檔,用程式常數 `_QUOTE_WRITE_RULE`(同 `_REPLAY_ENGINE_REV` 由提交改):設定檔任何一處寫壞都會讓寫側悄悄退版、而且帳只進不出(r4 正確性、邊界、簡化三席),常數要改就得過推送閘與代碼審、git 有痕。
+ RETIRE-IF: 第二階段合入後 8 週內,寫側記下的引句擋下事件裡 `kind=new-only`(只有新判準擋、舊判準會放)的那些,人工逐條看後誤傷(原文引句正當卻判不合)多於抓到的真截斷或夾帶,就還原第二階段的提交(寫側常數回 `legacy`,文件一起退)並重新設計;或之後改成結構化引句(席位交回 JSON、引句欄位單獨一格),文字抽取不再需要,這套規則整個拿掉。
+ 
+ REVISIT:2026-10-20 第一階段合入主線後一週內:跑 `lumos quote-check --compare-rules` 依〈量測〉口徑重算並寫回〈量測〉;把「舊判過新判不過」逐條人工讀,分成真抓(截斷、夾帶、編造)與誤傷(正當引句被判不合);stray 那幾條另外標出「落單收尾引號是在報告最後一條引句之後的散文裡、或是說明文字直接打出引號字元」的,單獨計數(代碼審 r1 邊界、正確性席:最後一條引句的尾段一路掃到報告結尾),誤傷多於真抓就不開第二階段、回頭改抽取規則並寫回本篇;否則照〈兩階段上線〉開第二階段的提交(照 `pitfalls --diff` 判的分級走審查);第一階段還沒合入就順延並寫明原因
+-REVISIT:2026-12-20 第二階段合入滿 8 週(第二階段晚於 2026-10-25 合入就照實順延):跑 `lumos gov --since 60 --full | grep 'quote-rule:' | grep 'kind=new-only'` 列出只有新判準擋下的事件,逐筆讀 note 裡的 `quote=` 片段(報告還在就連報告一起讀),判真抓或誤傷,對照 RETIRE-IF;期間若已還原第二階段,先記還原日,只數還原前的事件
++REVISIT:2026-12-20 第二階段合入滿 8 週(第二階段晚於 2026-10-25 合入就照實順延):跑 `grep '"note": "quote-rule:' docs/.governance-log.jsonl | grep 'kind=new-only'` 直接讀治理帳原檔列出只有新判準擋下的事件(`lumos gov --full` 每筆只印 note 前 50 字,看不到排在最後的 `quote=`;代碼審 r2 規格符合、回滾兩席),逐筆讀 note 裡的 `quote=` 片段(報告還在就連報告一起讀),判真抓或誤傷,對照 RETIRE-IF;期間若已還原第二階段,先記還原日,只數還原前的事件
+ 
+ ## 量測(2026-10-13,拿帳上紀錄用一次性腳本重算)
+ 
+ - 口徑:`docs/.canary-log.jsonl` 每列取 `report_path` 與 `snapshot_path`(沒有就取 `spec_path`),同一組(報告, 快照)只算一次,不分載體與非載體席,不切日期。這次共 3273 組:讀不到或不是 UTF-8 20 組、兩版都抽不到引句 221 組,其餘 3032 組的交叉表——兩版都全數錨定 2587、兩版都不過 356、舊判準過新判準不過 44、舊判準不過新判準過 45。
+ - 舊過新不過的 44 組裡,23 組是量測腳本多加的「標籤後面不是引號就判不合」造成的(說明文字提到「引句:」這個詞就會中),那條規則本篇不採用;其餘 21 條是引號沒閉合 8、落單收尾引號 9、整段比對後錨不到 4。只看 `ts` 在 2026-09-20 之後的列,這 21 條那幾類共 5 條。舊不過新過的 45 組多半是巢狀引號被舊判準截在內層、前半錨不到。
+ - 當時腳本的規則與本篇最終規則有兩處不同(那時邊界只看同一行、反引號與圍欄有遮蔽),所以上面只當量級。第一階段實作後用 `lumos quote-check --compare-rules` 依同一口徑重算,數字以那個指令輸出為準,並在本節補一行實測結果。
+ - 第一階段實測(2026-10-13,`lumos quote-check --compare-rules --repo .`,本分支帳本):兩版都錨定 2627、兩版都不過 359、舊判過新判不過 21(unclosed 8、stray 9、整段錨不到 4)、舊判不過新判過 43、零引句 235;略過:讀不到 19 組、非 UTF-8 1 組、壞行 0 列。耗時 23.5 秒、行程尖峰約 1.38 GB。
+ - 試過但放棄的更嚴版本:「引句必須自成一行、閉引號後不准有任何字」,2026-09-20 之後的報告約 5% 會翻(引句後接註記、標籤寫在行中間、跨行引句都是正當寫法),只會逼席位重寫、不擋造假。總覽寫的「行區間」比對屬這一類,不做。
+ - 試過但拿掉的規則:「反引號行內程式碼與 ``` 圍欄裡的引句不算」——r1 三席獨立指出它讓「把造假引句包進反引號」整條消失、不被檢查,比舊判準還寬;改回照舊抽、照舊驗,範本教席位示範時別寫那個標籤。
+ 
+@@ -62,42 +62,42 @@ REVISIT:2026-12-20 第二階段合入滿 8 週(第二階段晚於 2026-10-25 合
+ 6. 每條結果帶 `ok` 與 `quote`;格式不合的另帶 `malformed: True` 與 `kind`(沿用現行 `malformed` 鍵,`seat-check` 照舊跳過這種列),而且只有格式不合的列 `quote` 欄截到 200 字並加「…(截斷)」——錨定與錨不到的列保留全文,`seat-check` 拿全文比材料範圍。
+ 
+ 工具保證的範圍(寫進範本與 Issue,不宣稱更多):引號「裡面」那段是真的。引句結束後、沒有落單收尾引號的文字(例如引句後接註記或散文,或 `引句:「真前綴」「編造後半」` 這種第二對沒有標籤的引號)不算引句內容,工具不驗也不擋——這跟正當的「引句後接註記」在文字上分不開,只能靠讀的人看清楚引號在哪裡結束。舊判準對這類一樣放行,不是新退步。
+ 
+ ### 判準版本蓋在帳上
+ 
+ - 寫側判準:程式常數 `_QUOTE_WRITE_RULE`(與 `_quote_rows` 放同一區),第一階段值 `"legacy"`,第二階段改成 `"full-span-v1"`。不放設定檔(理由見 PRIOR-ART)。
+ - `_quote_rows(text, snap, *, rule)`:`rule` 是只收關鍵字的必填參數,值 `"legacy"` 或 `"full-span-v1"`,其他值丟 `ValueError`。四個呼叫點(記帳寫側、處置閘、手動 `quote-check`、席位核對 `seat-check`)各自明確傳。
+ - 寫側(`cmd_canary` 驗載體引句那段):用 `_QUOTE_WRITE_RULE` 檢查,通過時寫入的那一列帶 `quote_rule=<_QUOTE_WRITE_RULE>`,章跟帳在同一行一次寫入;被擋時不寫帳。主檢查本身丟例外時照現行政策處理(原例外往外傳、rc1,`t_canary_carrier_invalid_snapshot_encoding` 釘住),不吞。
+ - 讀章(處置閘專用一支小函式,與 `_quote_rows` 同區;回放經由處置閘,不另設呼叫點):該列有 `quote_rule` 鍵、值是 `legacy` 或 `full-span-v1` → 用那一版;沒有這個鍵 → `legacy`;有這個鍵但值是別的 → 判失敗、不 traceback,訊息一律「引句判準欄不認得:<repr(值)>,可能是新版程式寫的或帳被手改」。
+-- 處置閘引句那一步:第一行印「引句判準:<版本>」(沒章時印「引句判準:legacy(帳上無章)」)。呼叫 `_quote_rows` 時除了現有的 `OSError`、`UnicodeDecodeError`,其他例外也接住:這一步判失敗,印「引句判準 <版本> 丟例外:<型別>:<訊息前 120 字>」,不 traceback——回放對同一迴圈因此算出「判失敗」,跟凍結時的「過」不同,週跑報邏輯漂移(紅燈),不會落進一般錯誤。判失敗時(錨不到、零引句、讀檔失敗、判準丟例外)另印一行新增的診斷指令 `lumos quote-check <報告> --spec <快照> --rule <版本>`(現行沒有這一行;路徑用 shell 引號包起來,同檔回放過期提示的做法;章不認得的列不印)。錨不到那行另標「(其中 N 條格式不合)」。記憶體不足(`MemoryError`)不當成判準丟例外,照常往外丟(代碼審 r1 資源席:否則暫時性資源不足會被凍成判失敗)。
++- 處置閘引句那一步:第一行印「引句判準:<版本>」(沒章時印「引句判準:legacy(帳上無章)」)。呼叫 `_quote_rows` 時除了現有的 `OSError`、`UnicodeDecodeError`,其他例外也接住:這一步判失敗,印「引句判準 <版本> 丟例外:<型別>:<訊息前 120 字>」,不 traceback——回放對同一迴圈因此算出「判失敗」,跟凍結時的「過」不同,週跑報邏輯漂移(紅燈),不會落進一般錯誤。判失敗時(錨不到、零引句、讀檔失敗、判準丟例外)另印一行新增的診斷指令 `lumos quote-check <報告> --spec <快照> --rule <版本>`(現行沒有這一行;路徑用同檔的 `_sh_quote` 包起來,開頭是 `-` 的補成 `./`,免得照抄時被當成選項;章不認得的列不印)。錨不到那行另標「(其中 N 條格式不合)」。記憶體不足(`MemoryError`)不當成判準丟例外,照常往外丟(代碼審 r1 資源席:否則暫時性資源不足會被凍成判失敗);寫側求 `kind` 那一次與比較模式同一規則(r2 架構對齊席),代價是 `loop next` 代問處置閘時遇到記憶體不足會整支 traceback、結束碼非 0,不會誤放行(r2 資源席)。
+ - **判準一經蓋章就不改它的判定**:之後要調整新判準的判定結果(放寬、收緊、修誤判),一律新增一個版本值(例如 `full-span-v2`)與對應分支,舊版本分支照原樣留著;只修「丟例外、不改任何判定」的錯不算改判定。機械守法:`t_quote_full_span_v1_pinned` 用一組固定輸入釘住 `full-span-v1` 每條結果的 `ok`、`malformed`、`kind`,測試說明寫明「這支紅了代表改了已蓋章判準的判定,該開新版本值,不是改測試」。這是回放能重現已凍結判定的前提,也是不推進回放引擎版本的代價。
+-- 手動 `lumos quote-check <報告> --spec <快照> [--rule legacy|full-span-v1]`(`--rule` 用 argparse 的 choices,值不認得走 argparse 的 rc2):預設用 `_QUOTE_WRITE_RULE`;人讀輸出第一行印「引句判準:<版本>」;`--json` 物件多一個 `rule` 欄。
++- 手動 `lumos quote-check <報告> --spec <快照> [--rule legacy|full-span-v1]`(`--rule` 用 argparse 的 choices,值不認得走 argparse 的 rc2):預設用 `_QUOTE_WRITE_RULE`;人讀輸出第一行印「引句判準:<版本>」,格式不合的列標「(格式不合:<kind>)」;`--json` 物件多一個 `rule` 欄。
+ - `seat-check` 用 `_QUOTE_WRITE_RULE`;現有注入測試把 `cmd_seat_check` 放進只有少數全域名的環境跑,同步把那個測試的替身改成收 `rule=` 關鍵字,並把 `_QUOTE_WRITE_RULE` 放進那個環境。
+ - 回放:凍結閉包裡的帳是整行原樣(含 `quote_rule`),重算照章判;已凍結的 305 個迴圈都沒有這一欄,照 `legacy` 重算,跟凍結當時相同。不推進 `_REPLAY_ENGINE_REV`——推了會讓全部黃金抽查變成「制度已演進、跳過重算」,丟掉回放保護。
+ - 這推翻 Issue 寫的「改判準必須同時推進回放版本」前提(那個前提假設判準跟著程式走)。決策照現行指令記:`lumos decision-add Projects/引句錨定整段比對_計劃 "引句判準換版不推進回放引擎版本,改由帳上的章決定" --decided 2026-10-13 --context "不選:推進 _REPLAY_ENGINE_REV(會讓全部黃金抽查跳過重算)、用時間切換(合入當天與時區兩個坑)、寫側判準放設定檔(寫壞就悄悄退版)" --why "章在帳上,回放決定性由章保證;代價是舊版程式讀到新章會誤判,用兩階段上線壓小,且蓋過章的判準不再改判定"`;Issue 結案在第二階段提交裡做,正文補一節說明前提失效並連到這條決策,`lumos set` 改成 done。
+ 
+ ### 兩階段上線(先擴後縮)
+ 
+ - 第一階段(本計劃第一個功能提交):只改程式與測試——抽取規則、讀章、處置閘例外處理、寫側蓋章與擋下事件、`gov --stats` 分類、比較指令、兩個測試替身。同一個提交另外帶了三樣不講引句判準的文字:設計審跑滿回顧要求的兩處手冊改動(`skills/lumos-design-loop/SKILL.md` 折入那步加「新增機制先寫最小解為什麼不夠」、`templates.md` 回滾席那列加「凍結入口同族一次掃完」)、`Systems/loop-convergence-recording` 新增講判準蓋章機制的一節(只寫第一階段現況,不宣稱整段保證)、兩篇 Issue(凍結接受非綠判定、消費專案接入靜默失效回放漂移)。`_QUOTE_WRITE_RULE="legacy"`:寫側照舊用舊判準檢查,新帳蓋 `legacy` 章。這階段行為上等於沒改,只是所有讀帳的地方都認得章了;**文件一句都不改**(寫側還是舊判準,文件若先寫「整段保證」就是說謊,r4 接手的人、回滾兩席)。`t_quote_full_span_rule_stamped_on_ledger` 裡有一段釘「常數是 `legacy`、新帳蓋 `legacy`」。
+ - 第二階段(另一個提交,照 `pitfalls --diff` 判的分級走審查):同一個提交裡做完全部——`_QUOTE_WRITE_RULE` 改成 `"full-span-v1"`;〈同步改的地方〉整份清單;釘常數的那段斷言改成新值;Issue 結案、立案清單第 18 項結案、世界解總覽第 6 名補註。推之前照〈推送前驗證〉再跑一次回放全跑(常數翻了,寫側的判準就變了)。同一個提交裡評估要不要擋「第二階段之後的載體列缺章」:第二階段後刪掉一列的 `quote_rule` 就會讓處置閘退回舊判準(代碼審 r1 資安席);候選做法是以第二階段提交日為切點,之後的載體列缺章判失敗。回退第二階段=還原這一個提交,程式與文件一起退。由接手這個計劃的會談做,時機與條件寫在第一條 REVISIT。
+ - 消費專案:lumos 每台機器裝一次、消費專案共用同一份程式,第二階段合入後所有專案一起換;不提供個別專案回退(沒有證據需要,r4 簡化席)。
+ - 舊版程式窗口:任何還沒同步到第一階段的工作樹,讀到 `full-span-v1` 章時不認得,會照舊判準重算——巢狀那類可能誤判紅。這只在第二階段之後才可能發生(第二階段之前沒有程式會蓋 `full-span-v1` 章),所以窗口是「第二階段合入後、還沒同步主線的工作樹」。
+ 
+ ### 量測與留痕
+ 
+-- `lumos quote-check --compare-rules [--repo 根]`:比較模式,唯讀、不進任何閘,只給第一條 REVISIT 用。這時報告、`--spec`、`--rule` 都不准帶,帶了就手動檢查擋下(中文「擋下:」訊息、rc2,不用 argparse 互斥群組——同檔既有做法);一般模式缺報告或 `--spec` 也改成手動檢查擋下(原本 `--spec` 是 argparse 必填)。不另設 `--since`、`--carriers`、`--json`(r4 簡化席:只為一次性決定服務,旗標越多越要審)。
+-  - 帳本:`<repo>/docs/.canary-log.jsonl`(同 `severity-check`),不存在就印「擋下:找不到帳本 <路徑>」rc2。帳上的路徑是不可信輸入:解析後不在 `<repo>` 裡、不是一般檔(管線、裝置檔)、或路徑本身壞掉(含 NUL、孤立代理字元)都算「讀不到」,不讀、不中止(代碼審 r1 資安、資源、邊界三席)。逐行讀用既有的 `_ledger_lines`(不會把 U+2028 這類字元劈開);空行略過不計;不是合法 JSON、或是 JSON 但不是物件的行算壞行。
++- `lumos quote-check --compare-rules [--repo 根]`:比較模式,唯讀、不進任何閘,只給第一條 REVISIT 用。這時報告、`--spec`、`--rule`、`--json` 都不准帶,帶了就手動檢查擋下(中文「擋下:」訊息、rc2,不用 argparse 互斥群組——同檔既有做法);一般模式缺報告或 `--spec` 也改成手動檢查擋下(原本 `--spec` 是 argparse 必填)。不另設 `--since`、`--carriers`、`--json`(r4 簡化席:只為一次性決定服務,旗標越多越要審)。
++  - 帳本:`<repo>/docs/.canary-log.jsonl`(同 `severity-check`),不存在就印「擋下:找不到帳本 <路徑>」rc2。帳上的路徑是不可信輸入:解析後不在 `<repo>` 裡、不是一般檔(管線、裝置檔)、超過 `_QUOTE_COMPARE_MAX_BYTES`(128 MB,帳上最大的真實快照約 72 MB)、或路徑本身壞掉(含 NUL、孤立代理字元)都算「讀不到」,不讀、不中止(代碼審 r1 資安、資源、邊界三席)。開一次檔、用同一個檔案代號確認一般檔與大小再讀,檢查與讀取之間被換成管線或符號連結也騙不過(r2 資源席);讀出來的換行照 `read_text` 的做法統一成 `\n`,跟處置閘讀到的一樣(r2 正確性席)。逐行讀用既有的 `_ledger_lines`(不會把 U+2028 這類字元劈開);空行略過不計;不是合法 JSON、或是 JSON 但不是物件的行算壞行。
+   - 口徑:每列取 `report_path` 與 `snapshot_path`(沒有就取 `spec_path`),路徑相對 `<repo>` 解;同一組(報告, 快照)只算第一次出現那列,不分載體與非載體席,不切日期。
+   - 依快照路徑分組,一組一組處理,同一份快照只讀一次,處理完就丟;兩版判準各對報告跑一次。實測參考:現行舊判準把帳上 3271 組全跑一遍約 12.9 秒、行程尖峰約 1.65 GB(r4 邊界席);比較模式實測 23.5 秒、尖峰約 1.38 GB——兩版判準各自對快照正規化一次,同一份快照下有 N 份報告就正規化 2N 次,唯讀指令、只給 REVISIT 用,不另做快取。
+   - 輸出逐字(測試照這些字串比對):`兩版都錨定 N`、`兩版都不過 N`、`舊判過新判不過 N`、`舊判不過新判過 N`、`零引句 N`(這五行單位是「組」)、`略過:讀不到 a 組、非 UTF-8 b 組、壞行 c 列`,以及舊判過新判不過的逐條清單(報告路徑、kind)。
+-- 寫側擋下載體時(不論哪一版判準擋的,含零引句),用 `_gate_event_or_warn(..., "canary", "blocked", note, hard=True)` 記一筆,note 形狀照同檔既有擋下事件:`quote-rule:<_QUOTE_WRITE_RULE> kind=<new-only|both|legacy-only|unknown> cats=<unclosed,stray,miss,short,none 的集合> report=<報告路徑> report_sha=<前 12 碼> loop=<編號> auditor=<席> id=<隨機碼> quote=<第一條不過的引句,空白壓成單一空格、濾掉控制與格式字元、前 60 字>`。片段是審查席可控的文字,所以濾掉終端跳脫字元、而且排在最後:讀者照「第一個 `report=`」取值時不會被片段裡偽造的欄位騙到(代碼審 r1 資安席)。`kind` 由寫側另用另一版判準算一次得出(擋下那一刻是唯一確定讀得到報告原文的時候,事後報告常被退回重寫覆蓋,r4 接手的人席),這一次計算整段包例外保護,出錯就記 `kind=unknown cats=err`,擋下照舊。`quote=` 片段讓 REVISIT 在報告已不在時仍能判真抓或誤傷。
++- 寫側擋下載體時(不論哪一版判準擋的,含零引句),用 `_gate_event_or_warn(..., "canary", "blocked", note, hard=True)` 記一筆,note 形狀照同檔既有擋下事件:`quote-rule:<_QUOTE_WRITE_RULE> kind=<new-only|both|legacy-only|unknown> cats=<unclosed,stray,miss,short,none 的集合;舊判準的格式不合列沒有 kind,記成 unclosed> report=<報告路徑> report_sha=<前 12 碼> loop=<編號> auditor=<席> id=<隨機碼> quote=<第一條不過的引句先截 400 字、過同檔的顯示消毒 `_esc_clean`(控制與雙向覆寫字元換空格)、空白壓成單一空格、取前 60 字,清光了記 `-`>`。片段是審查席可控的文字,所以重用既有的消毒(r2 架構對齊席:不另寫一套)、而且排在最後:讀者照「第一個 `report=`」取值時不會被片段裡偽造的欄位騙到(代碼審 r1 資安席)。`kind` 由寫側另用另一版判準算一次得出(擋下那一刻是唯一確定讀得到報告原文的時候,事後報告常被退回重寫覆蓋,r4 接手的人席),這一次計算整段包例外保護,出錯就記 `kind=unknown cats=err`,擋下照舊。`quote=` 片段讓 REVISIT 在報告已不在時仍能判真抓或誤傷。
+ - `lumos gov --stats` 的「記帳被寫側擋下」改成四格互斥:先判 note 是否以 `quote-rule:` 開頭 → 引句判準;其餘照現行的包含判斷分 `report-not-normalized` → 報告沒正規化、`findings-over-reported` → findings 多於 reported、其餘 → 缺 refuted-set(這一格現行就混有跑滿回顧沒寫的擋下事件(`scripts/lumos` 記 cap-retro 那段),本篇不改它的語意);輸出逐字 `記帳被寫側擋下 N 次(報告沒正規化 a / 缺 refuted-set b / findings 多於 reported c / 引句判準 d)`,四格相加等於 N。
+ 
+ ### 推送前驗證(自我治理)
+ 
+ - 舊分支沒被改壞:改程式之前,用未改的提交對全帳每組(報告, 快照)跑一次現行 `_quote_rows`,把每組結果(每條的 quote、ok、malformed)存成 scratchpad 的基線檔;實作後用新程式 `rule="legacy"` 再跑一次,逐組比對必須完全相同。兩次都用同一支一次性腳本(放 scratchpad,不進 repo),比對結果寫進 `lumos new verification` 開的驗證紀錄。
+ - 回放零漂移:對 `governance/replay/` 底下全部已凍結迴圈逐一跑 `lumos loop replay <編號> --golden governance/replay/<編號>/verdict.json`(單個約 1 秒,305 個約 5 分鐘),全部「回放一致」才推;不一致的,要用改前的程式回放同一個迴圈,結果相同(主線既有、不是本次造成)才算數,並各自立 Issue。結果寫進同一份驗證紀錄。第二階段推之前再跑一次。第一階段實跑:306 個 305 一致,1 個主線既有(見 [[Issues/消費專案接入靜默失效回放漂移]])。
+ - 效能:一份含 5000 個連續未閉合標籤的報告,抽取 1 秒內完成(有測試)。
+ - 實作前先跑一次相關測試子集當基線:`-k quote`、`-k disposal`、`-k canary`、`-k seat_check`、`-k replay`、`-k gov_stats`。
+ 
+ ### 同步改的地方
+@@ -137,31 +137,32 @@ REVISIT:2026-12-20 第二階段合入滿 8 週(第二階段晚於 2026-10-25 合
+ - 不可逆的部分:帳上的 `quote_rule` 欄與擋下事件留在帳本(只進不出);讀帳的地方(`scripts/lumos` 約 30 處與 `governance/autonomous_loop/` 的讀帳腳本)都是逐欄 `.get`,多一欄不受影響。
+ 
+ ## 實務隱患
+ 
+ - 自我治理:這次改的是審查系統自己收貨那道守衛,改壞了審查證據就不可信。對策見〈推送前驗證〉:舊分支用改前基線逐組比對、回放全跑零漂移、兩階段上線、v1 判定釘版測試。
+ - 不可逆:見〈回退〉最後一點。
+ - 降級路徑:寫側判準只能改程式常數,要過推送閘與代碼審、git 有痕;沒有設定檔可以一行改回舊判準放行造假(r4 正確性、邊界兩席指出設定檔版本的這條路)。
+ - 凍結與重算入口遇到非綠判定(r4 回滾席逐一列出):
+   - 處置閘:非綠就 rc1,不放行。
+   - 回放 `--golden`:判準丟例外時照本篇改成判失敗,報邏輯漂移(紅燈)。
+-  - 手動 `loop replay --freeze` 與 `--freeze --note` 重凍:現行只擋 rc2,rc1 照樣凍(帳上 305 份有 5 份 rc1)。凍結接受非綠判定是回放的既有設計,不屬本篇範圍,另立 Issue〈凍結接受非綠判定〉追蹤;本篇的處理程序是:回放報漂移時先用最新程式跑一次處置閘,是綠的才 `--freeze --note` 重凍,是紅的照〈回退〉查判準。
++  - 手動 `loop replay --freeze` 與 `--freeze --note` 重凍:現行只擋 rc2,rc1 照樣凍(2026-10-13 帳上 307 份有 5 份 rc1)。凍結接受非綠判定是回放的既有設計,不屬本篇範圍,另立 Issue〈凍結接受非綠判定〉追蹤;本篇的處理程序是:回放報漂移時先用最新程式跑一次處置閘,是綠的才 `--freeze --note` 重凍,是紅的照〈回退〉查判準。
+   - 週跑補凍(`governance/autonomous_loop/replay_weekly.py`):只對「有收斂紀錄但沒判定檔」的迴圈補凍,同上屬既有設計、同一張 Issue。
+   - 舊工作樹凍結:還沒同步主線的工作樹若對蓋 `full-span-v1` 章的迴圈凍結,會凍出舊判準的紅燈;合進主線後新程式回放報漂移、看得見,照上面的程序處理。
+ - 引句內含落單引號字元的正當內容(例如引用一段正則,裡面有 `「`)會判引號沒閉合或被後面的收尾引號補閉合而錨不到;席位要改引一段不含落單引號的片段。範本寫明。
+ - 說明文字直接打出收尾引號字元(例如報告在描述「這裡多了一個 」」)會被當成落單收尾引號:r4 邊界席用完整規則在帳上重算,3034 份有引句的報告有 20 份判落單,2026-09-20 之後 8 份,其中 5 份是本計劃自己 r1–r3 的審查報告。範本寫明「提到收尾引號字元時用文字描述」;第一條 REVISIT 重算時這類算誤傷。
+ - 整段引句寫在一般敘述的引號裡(例:`「如下引句:「原文」」`)時,外層兩個引號在預先配對時配成一對;標籤的開引號只配到內層閉引號,所以這條照常抽取比對;外層收尾引號落在這條的尾段裡,尾段自己數時它前面沒有同型開引號,會判落單——帳上未見這種寫法,接受,範本不教這種寫法。
+ - 帳上的章可以被手改刪掉,刪了就退回舊判準:凍結前不比現況差、沒有偵測;凍結後改章回放報帳被動。別的工作樹仍跑舊版程式時寫的帳沒有章,照舊判準判,跟它當時寫側一致。
+ - 效能:預先配對、標籤處理、各條尾段各掃一次,總成本與報告長度成正比(5000 標籤限時測試釘住);比較指令依快照分組、同時只留一份快照,記憶體尖峰約 1.65 GB 量級(見〈量測與留痕〉)。
+ - 忘了閉合的引句被後面別處多出來的收尾引號補閉合時(第 3 步),它算錨不到、`cats` 記 `miss`、條數少算被吞進去的那一條,不會記成 `unclosed`;仍然擋下(代碼審 r1 正確性席)。釘在 `t_quote_full_span_v1_pinned`。
+ - 大量短引句:每條引句對整份快照做子字串搜尋,5 萬條引句對 1.4 MB 快照約 55 秒;舊判準本來就這樣,寫側擋下時另算一次 `kind`、比較模式兩版都跑,各多一倍(代碼審 r1 資安席)。真實報告最大約 229 KB,沒有上限保護。
+ - 還原後的統計:還原到第一階段之前的程式時,舊版 `gov --stats` 不認得 `quote-rule:` 事件,會把它們算進「缺 refuted-set」或(片段含那個字樣時)「報告沒正規化」;總數不變,只是分格錯(代碼審 r1 回滾席實跑)。
++- 舊判準對大量未閉合標籤是二次方成本(2 萬個約 4.5 秒、10 萬個超過 2 分鐘;新判準 0.02 秒),比較模式要對帳上每份報告都跑一次舊判準,多了一個入口;舊判準不改(代碼審 r2 資源、邊界席)。真實報告最大約 229 KB,不構成威脅。
+ - 已排除:金流:不碰任何金流或扣款相關程式
+ - 已排除:對外送出:只在本機讀報告、快照與帳本,不送任何東西到外部服務
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-13,6 席:正確性、邊界、接手的人、最壞時序、回滾、架構對齊,同門 sonnet;外家未派):42 條/blocking 22 條/切換機制、遮蔽規則與回退三塊要重做——改成判準版本蓋在帳上、拿掉反引號與圍欄遮蔽、落單收尾引號看到下一條引句為止、停用改成換寫側蓋的章。席報告與收貨紀錄在 `governance/review-reports/引句錨定整段比對/`。
+ - 行為例:輸入 `引句:「合法前綴文字至少十個字」` 換行接 `編造後半根本不在審材裡」` → 新判準判格式不合(r1 前只看同一行會放過);帳上 `quote_rule` 缺 → 處置閘照舊判準、值為未知字串 → 判失敗。
+ - r2(2026-10-13,6 席全新,同門 sonnet;外家未派):40 條/blocking 19 條/蓋章方向成立,細節不足——補「標籤」定義(帶開引號)與引句內含標籤的處理、章的值域與讀章規則、讀側隔離閥與設定區塊、兩階段上線、比較指令的參數形狀與容錯、擋下事件分類與 gov 統計、改前基線與回放全跑、量測口徑重寫、同步清單逐處對準、新增 S7 回放條款。
+ - 行為例:輸入 `引句:「真的原文真的原文真的」這是引句:編造後半」` → 「引句:」後面不是開引號不算標籤,尾段掃到落單 `」` → 判格式不合;帳列 `"quote_rule": ""` → 處置閘判失敗並寫明格式不合,不退回舊判準。
+ - r3(2026-10-13,6 席全新,同門 sonnet;外家未派):47 條/blocking 16 條/r2 新增的段落成了新審查面——抽取改一次堆疊配對(原寫法實測二次方)、設定讀取補型別與壞值退路、截斷只套格式不合的列、手動指令補 `--repo`、比較指令補參數邊界與輸出字面、擋下事件補報告指紋與 `kind` 例外保護、同步清單補四處。跑滿三輪,人裁再跑一輪(cap-decision extra-round),跑滿回顧在卷證 `cap-retro.json`。
+diff --git a/scripts/lumos b/scripts/lumos
+index f97ed930..c73b8031 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -25779,20 +25779,21 @@ def _quote_norm(s):
+ _QUOTE_MIN_NORM_LEN = 10   # 錨定紀律「引句 ≥10 字」轉機械(r1 否決席:一字引句必然錨得到=紀律被架空)
+ 
+ 
+ # ═══ 引句判準(Projects/引句錨定整段比對_計劃)═══
+ # 寫側用哪一版判準:程式常數,不放設定檔(設定檔任何一處寫壞都會讓寫側悄悄退版、而且帳只進不出——設計審 r4 三席)。
+ # 第一階段 legacy(行為不變,只讓讀帳的地方認得章);第二階段改成 full-span-v1,與文件同步放在同一個提交,回退就還原那個提交。
+ _QUOTE_WRITE_RULE = "legacy"
+ _QUOTE_RULES = ("legacy", "full-span-v1")
+ _QUOTE_LABEL_RE = r"引句(?:（[^）\n]{0,40}）)?\**[：:]\s*"   # 與 legacy 分支內的標籤規則同一條
+ _QUOTE_MALFORMED_CAP = 200
++_QUOTE_COMPARE_MAX_BYTES = 128 * 1024 * 1024   # 比較模式單檔上限:帳上最大的真實快照約 72 MB,留一倍餘裕(代碼審 r2 資源席)
+ 
+ 
+ def _quote_rows(rtext, stext, *, rule):
+     """quote-check 核心(T4 抽出供 CLI 與 disposal gate 共用——★單一實作★):依 rule 分派判準。
+     ★判準一經蓋章就不改它的判定★:要改判定就新增一個版本值與分支,舊分支原樣留著(t_quote_full_span_v1_pinned 釘住 full-span-v1)。"""
+     if rule == "legacy":
+         return _quote_rows_legacy(rtext, stext)
+     if rule == "full-span-v1":
+         return _quote_rows_full_span_v1(rtext, stext)
+     raise ValueError(f"不認得的引句判準:{rule!r}")
+@@ -25806,39 +25807,42 @@ def _quote_rule_of(row):
+     v = row.get("quote_rule")
+     if isinstance(v, str) and v in _QUOTE_RULES:
+         return v, v, None
+     return None, None, f"引句判準欄不認得:{v!r},可能是新版程式寫的或帳被手改"
+ 
+ 
+ def _quote_block_note(write_rule, rows, rtext, stext, report, loop, auditor):
+     """寫側用引句判準擋下載體時的治理帳 note。kind 由另一版判準再算一次得出(擋下那一刻是唯一確定讀得到報告原文的時候,
+     事後報告常被退回重寫覆蓋);這一次計算整段包例外,出錯記 kind=unknown cats=err,擋下照舊。"""
+     import re
+-    import unicodedata
+     import uuid
+     other = "legacy" if write_rule == "full-span-v1" else "full-span-v1"
+ 
+     def passes(rs):
+         return rs is not None and all(x["ok"] for x in rs)
+     if rows is None:
+         cats, first = ["none"], None
+     else:
+-        cats = sorted({x.get("kind") or ("short" if x.get("too_short") else "miss") for x in rows if not x["ok"]})
++        # 舊判準的格式不合列沒有 kind(標籤數多於抽到的條數 = 引號沒閉合或型態不符),記成 unclosed(代碼審 r2 規格符合席)
++        cats = sorted({x.get("kind") or ("unclosed" if x.get("malformed") else "short" if x.get("too_short") else "miss")
++                       for x in rows if not x["ok"]})
+         first = next((x["quote"] for x in rows if not x["ok"]), None)
+     try:
+         other_rows = _quote_rows(rtext, stext, rule=other)
+         kind = "both" if not passes(other_rows) else ("new-only" if write_rule == "full-span-v1" else "legacy-only")
++    except MemoryError:   # 資源不足不是判準的錯,三處(處置閘、寫側、比較模式)一律照常往外丟(代碼審 r2 架構對齊席)
++        raise
+     except Exception:
+         kind, cats = "unknown", ["err"]
+-    # 片段是審查席可控的文字(代碼審 r1 資安席):空白壓成一格、濾掉控制與格式字元(終端跳脫序列),而且排在 note 最後——
+-    # 讀者照「第一個 report=/id=」取值時不會被片段裡偽造的欄位騙到
+-    snippet = "".join(c for c in re.sub(r"\s+", " ", first) if unicodedata.category(c) not in ("Cc", "Cf")).strip()[:60] if first else "-"
++    # 片段是審查席可控的文字(代碼審 r1 資安席):先截一段再用同檔的顯示消毒 _esc_clean(控制、雙向覆寫字元換空格;r2 架構對齊席:
++    # 不另寫一套),空白壓成一格,清光了也記 -;而且排在 note 最後——讀者照「第一個 report=/id=」取值時不會被片段裡偽造的欄位騙到
++    snippet = (re.sub(r"\s+", " ", _esc_clean(first[:400], 400)).strip()[:60] or "-") if first else "-"
+     try:
+         sha12 = _sha256_file(report)[:12]
+     except OSError:
+         sha12 = "?"
+     return (f"quote-rule:{write_rule} kind={kind} cats={','.join(cats)} report={report} report_sha={sha12} "
+             f"loop={loop or ''} auditor={auditor or ''} id={uuid.uuid4().hex[:8]} quote={snippet}")
+ 
+ 
+ def _quote_anchor_row(q, hay, hay_ns):
+     """一條引句跟快照比對 → 結果列(兩版判準共用的比對:正規化後子字串、空白全剝再比一次、10 字下限)。"""
+@@ -26503,22 +26507,23 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+                 print(f"[disposal] 留痕: ✓ — 判定輪全席 {n_files} 份留痕存在且 sha256 與帳面一致{_ik_note}")
+             if ok and vacuous and carrier is None:
+                 print("[disposal] quote-check: —(零發現報告無引句可驗,略過;橫幅不宣稱錨定)")
+             elif ok:
+                 _qrule, _qlabel, _qerr = _quote_rule_of(_qsrc)
+                 if _qerr:   # 章值不認得:判失敗,不印診斷指令(--rule 收不了這個值)
+                     print(f"[disposal] quote-check: ✗ — {_qerr}")
+                     fails.append("quote")
+                 else:
+                     print(f"[disposal] 引句判準:{_qlabel}")
+-                    import shlex as _shlex_q   # 印給人照抄的指令,路徑加引號(同檔回放過期提示的做法;代碼審 r1 回滾席)
+-                    _qdiag = f"    診斷:lumos quote-check {_shlex_q.quote(str(rp))} --spec {_shlex_q.quote(str(sp))} --rule {_qrule}"
++                    # 印給人照抄的指令:路徑用同檔的 _sh_quote 加引號(代碼審 r1 回滾席、r2 架構對齊席),開頭是 - 的補成 ./ 免得被當選項(r2 邊界席)
++                    _qarg = lambda x: _sh_quote(("./" + str(x)) if str(x).startswith("-") else str(x))
++                    _qdiag = f"    診斷:lumos quote-check {_qarg(rp)} --spec {_qarg(sp)} --rule {_qrule}"
+                     rows, _qbad = None, False
+                     try:
+                         _rtext_q = _prov_path(rp).read_text(encoding="utf-8")
+                         _stext_q = _prov_path(sp).read_text(encoding="utf-8")
+                     except (OSError, UnicodeDecodeError) as e:
+                         # sha 讀二進位過了,text 讀可炸(非 UTF-8)——FAIL 不 traceback(r1 s4 席)
+                         print(f"[disposal] quote-check: ✗ — 報告/快照讀不成文字({e.__class__.__name__})")
+                         print(_qdiag)
+                         fails.append("quote")
+                         _qbad = True
+@@ -26699,31 +26704,43 @@ def _quote_compare_rules(repo):
+             continue
+         rp, sp = r.get("report_path"), r.get("snapshot_path") or r.get("spec_path")
+         if not (isinstance(rp, str) and rp and isinstance(sp, str) and sp) or (rp, sp) in seen:
+             continue
+         seen.add((rp, sp))
+         by_snap.setdefault(sp, []).append(rp)
+ 
+     root_real = root.resolve()
+ 
+     def _read(rel):
+-        """帳上路徑是不可信輸入(代碼審 r1 資安席):解析後要在 repo 裡、是一般檔才讀;壞路徑(NUL、孤立代理字元)與管線、裝置檔
+-        一律當讀不到(OSError),不讓整本比較報表因一列壞帳中止或卡死。"""
++        """帳上路徑是不可信輸入(代碼審 r1 資安席、r2 資源席):解析後要在 repo 裡;開一次檔、用同一個檔案代號確認是一般檔、
++        大小不超過 _QUOTE_COMPARE_MAX_BYTES 再讀(檢查與讀取之間被換成管線或符號連結也騙不過,管線不會卡住);
++        壞路徑(NUL、孤立代理字元)、管線、裝置檔、超大檔一律當讀不到(OSError)。讀出來的換行照 read_text 的做法統一成 \n,
++        跟處置閘與手動 quote-check 讀到的一樣(r2 正確性席:單獨的 \r 會讓兩邊判法不同)。"""
++        import os
++        import stat
+         try:
+             fp = (Path(rel) if Path(rel).is_absolute() else root / rel).resolve()
+-            if not fp.is_relative_to(root_real) or not fp.is_file():
+-                raise OSError(f"不在 repo 內或不是一般檔:{rel!r}")
+-            return fp.read_bytes().decode("utf-8")
+-        except ValueError as e:   # embedded null byte、UnicodeEncodeError(UnicodeDecodeError 另由呼叫端算非 UTF-8)
+-            if isinstance(e, UnicodeDecodeError):
+-                raise
++            if not fp.is_relative_to(root_real):
++                raise OSError(f"不在 repo 內:{rel!r}")
++            fd = os.open(fp, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
++        except ValueError as e:   # embedded null byte、UnicodeEncodeError(孤立代理字元)
+             raise OSError(str(e)) from e
++        with os.fdopen(fd, "rb") as fh:
++            st = os.fstat(fh.fileno())
++            if not stat.S_ISREG(st.st_mode):
++                raise OSError(f"不是一般檔:{rel!r}")
++            if st.st_size > _QUOTE_COMPARE_MAX_BYTES:
++                raise OSError(f"超過 {_QUOTE_COMPARE_MAX_BYTES} 位元組:{rel!r}")
++            data = fh.read(_QUOTE_COMPARE_MAX_BYTES + 1)
++        if len(data) > _QUOTE_COMPARE_MAX_BYTES:
++            raise OSError(f"超過 {_QUOTE_COMPARE_MAX_BYTES} 位元組:{rel!r}")
++        return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+     cnt = {"both_ok": 0, "both_bad": 0, "old_only": 0, "new_only": 0, "zero": 0, "unread": 0, "nonutf": 0}
+     old_only = []
+     for sp, reports in by_snap.items():
+         try:
+             stext = _read(sp)
+         except UnicodeDecodeError:
+             cnt["nonutf"] += len(reports)
+             continue
+         except OSError:
+             cnt["unread"] += len(reports)
+@@ -26767,22 +26784,22 @@ def _quote_compare_rules(repo):
+ 
+ 
+ def cmd_quote_check(report, spec, as_json=False, rule=None, compare=False, repo="."):
+     """錨定檢查(T2,vault-free):報告內每條「引句：「…」」norm 後須為凍結快照 norm 後的
+     子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句(★驗不了≠通過,fail loud★)。
+     ★比對對象必須是派工當下的凍結快照,不是現檔★——對現檔跑,finding 折入後引句會
+     「自我成真」(重設計 r1 Codex 折入:循環自證)。"""
+     import json
+     import re
+     if compare:
+-        if report or spec or rule:
+-            print("擋下:--compare-rules 掃整本帳,不收報告、--spec 或 --rule;要檢查單一報告就拿掉 --compare-rules", file=sys.stderr)
++        if report or spec or rule or as_json:
++            print("擋下:--compare-rules 掃整本帳,不收報告、--spec、--rule 或 --json;要檢查單一報告就拿掉 --compare-rules", file=sys.stderr)
+             return 2
+         return _quote_compare_rules(repo)
+     if not report or not spec:
+         print("擋下:要給報告與 --spec <凍結快照>(或改用 --compare-rules 掃整本帳)", file=sys.stderr)
+         return 2
+     rule = rule or _QUOTE_WRITE_RULE
+     try:
+         rtext = Path(report).read_text(encoding="utf-8")
+         stext = Path(spec).read_text(encoding="utf-8")
+     except (OSError, UnicodeDecodeError) as e:
+@@ -26800,20 +26817,22 @@ def cmd_quote_check(report, spec, as_json=False, rule=None, compare=False, repo=
+     miss = [r for r in rows if not r["ok"]]
+     if as_json:
+         print(json.dumps({"report": str(report), "spec": str(spec), "rule": rule,
+                           "total": len(rows), "miss": len(miss), "quotes": rows},
+                          ensure_ascii=False))
+     else:
+         print(f"引句判準:{rule}")
+         for i, r in enumerate(rows, 1):
+             mark = "✓" if r["ok"] else "✗"
+             short = f"(<{_QUOTE_MIN_NORM_LEN} 字下限)" if r.get("too_short") else ""
++            if r.get("malformed"):   # 格式不合要看得出來,不然會被誤讀成單純錨不到(代碼審 r2 規格符合席)
++                short += f"(格式不合:{r['kind']})" if r.get("kind") else "(格式不合)"
+             print(f"  {mark} #{i} 「{r['quote'][:60]}」{short}")
+         print(f"{'✅ 全數錨定:報告裡每句引言都能在凍結快照找到原文' if not miss else f'⛔ {len(rows)} 句引言有 {len(miss)} 句在凍結快照裡找不到(找不到的那幾句不採信)'}"
+               f"(比對時忽略粗體、反引號和空白差異;比對對象應該是派工當下的凍結快照)")
+     return 0 if not miss else 1
+ 
+ 
+ 
+ 
+ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+ _NODE_SUFFIX_RE = re.compile(r"(_計劃|_實作計畫|_調研)$")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c1be4f86..ea1817ff 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -26945,38 +26945,38 @@ def _qfs_project(prefix):
+     files = {}
+     for name, q in (("good", "引句:「合法前綴文字至少十個字,後面接的是別的東西。」\n"),
+                     ("fab", "引句:「合法前綴文字至少十個字」編造後半根本不在審材裡」\n"),
+                     ("nest", "引句:「規則「甲」其實存在,規則乙也在。」\n")):
+         f = d / ("%s.md" % name)
+         f.write_text(head + q, encoding="utf-8")
+         files[name] = f
+     return root, v, d, spec, snap, files
+ 
+ 
+-def _qfs_lumos(v, *args, rule=None, broken=None):
++def _qfs_lumos(v, *args, rule=None, broken=None, exc="RuntimeError"):
+     """在同一程序裡跑 lumos:rule 給了就把寫側常數 _QUOTE_WRITE_RULE 換成它;broken 給了就讓 _quote_rows 對那一版丟例外
+     (產品碼不留切換判準的開關,subprocess 也注不進例外)。"""
+     import subprocess as _sp, sys as _sys
+     argv = ["lumos", "--vault", str(v), *args]
+     code = ("import sys, importlib.machinery, importlib.util\n"
+             "ld = importlib.machinery.SourceFileLoader('lm', %r)\n"
+             "sp = importlib.util.spec_from_loader('lm', ld); m = importlib.util.module_from_spec(sp); ld.exec_module(m)\n"
+-            "rule, broken = %r, %r\n"
++            "rule, broken, exc = %r, %r, %r\n"
+             "if rule is not None: m._QUOTE_WRITE_RULE = rule\n"
+             "if broken is not None:\n"
+             "    orig = m._quote_rows\n"
+             "    def _b(*a, **k):\n"
+-            "        if k.get('rule') == broken: raise RuntimeError('壞掉的判準')\n"
++            "        if k.get('rule') == broken: raise __import__('builtins').__dict__[exc]('壞掉的判準')\n"
+             "        return orig(*a, **k)\n"
+             "    m._quote_rows = _b\n"
+             "sys.argv = %r\n"
+-            "sys.exit(m._cli())\n") % (GRAPHCTL, rule, broken, argv)
++            "sys.exit(m._cli())\n") % (GRAPHCTL, rule, broken, exc, argv)
+     return _sp.run([_sys.executable, "-c", code], capture_output=True, text=True)
+ 
+ 
+ def _qfs_record(v, lid, rpt, snap, spec, auditor="正確性-sonnet", carrier=True, rule=_QFS_V1, broken=None):
+     args = ["canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", auditor, "--severity", "minor",
+             "--findings", "1", "--report", str(rpt), "--snapshot", str(snap), "--spec", str(spec), "--reviewed", _sha256_of(spec)]
+     if carrier:
+         args += ["--findings-set", "F1", "--folded-set", "F1", "--refuted-set", "none"]
+     return _qfs_lumos(v, *args, rule=rule, broken=broken)
+ 
+@@ -27001,22 +27001,22 @@ def t_quote_full_span_rule_stamped_on_ledger():
+     """[引句錨定整段比對 S5]寫側常數 full-span-v1:通過蓋章、被擋不寫帳;處置閘照載體列的章選判準(載體列之後另有無章
+     非載體列也不影響)、無章用 legacy、章值不認得判失敗不 traceback;常數 legacy 時新帳蓋 legacy、舊 v1 帳照新判準;
+     第一階段常數是 legacy;處置閘遇到判準丟例外判失敗、印型別、不 traceback;手動 quote-check 第一行印判準、--rule 覆蓋、--json 帶 rule。"""
+     import json as _j, shutil as _sh
+     m = _load_lumos_inproc()
+     check("引句整段 S5:第一階段寫側常數是 legacy", m._QUOTE_WRITE_RULE == "legacy", m._QUOTE_WRITE_RULE)
+     root, v, d, spec, snap, f = _qfs_project("gctl-qrs-")
+     try:
+         r = _qfs_lumos(v, "quote-check", str(f["fab"]), "--spec", str(snap), rule=_QFS_V1)
+         first = r.stdout.splitlines()[0] if r.stdout.strip() else ""
+-        check("引句整段 S5:手動 quote-check 預設跟寫側常數(新判準),後半編造 rc1,第一行印判準",
+-              r.returncode == 1 and first == "引句判準:%s" % _QFS_V1, (r.returncode, r.stdout[:200]))
++        check("引句整段 S5:手動 quote-check 預設跟寫側常數(新判準),後半編造 rc1,第一行印判準,人讀輸出標出格式不合與 kind",
++              r.returncode == 1 and first == "引句判準:%s" % _QFS_V1 and "(格式不合:stray)" in r.stdout, (r.returncode, r.stdout[:300]))
+         r2 = _qfs_lumos(v, "quote-check", str(f["fab"]), "--spec", str(snap), "--rule", "legacy", "--json", rule=_QFS_V1)
+         js = _j.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+         check("引句整段 S5:--rule legacy 覆蓋常數、照舊判準判錨定,--json 物件帶 rule 欄", r2.returncode == 0 and js.get("rule") == "legacy", r2.stdout[:200])
+         lid = "qrs-%s" % _M1U
+         rw = _qfs_record(v, lid, f["fab"], snap, spec)
+         check("引句整段 S5:寫側用新判準擋下後半編造的載體,而且不寫帳", rw.returncode == 2 and not _qfs_rows_of(d, lid), (rw.returncode, rw.stderr[-200:]))
+         ok = _qfs_record(v, lid, f["good"], snap, spec)
+         _qfs_record(v, lid, f["good"], snap, spec, auditor="邊界-sonnet", carrier=False)
+         rows = _qfs_rows_of(d, lid)
+         car = [x for x in rows if "findings_set" in x]
+@@ -27025,31 +27025,41 @@ def t_quote_full_span_rule_stamped_on_ledger():
+               [x.get("quote_rule") for x in rows])
+ 
+         def gate(**kw):
+             return _qfs_lumos(v, "loop", "status", lid, "--disposal", "--spec", str(snap), "--repo", str(root), **kw)
+         base = car[-1]
+         fab_row = dict(base, report_path=base["report_path"].replace("good.md", "fab.md"), report_sha256=_sha256_of(f["fab"]))
+         _qfs_set_row(d, lid, fab_row)
+         g1 = gate()
+         check("引句整段 S5:載體列章 v1 + 報告後半編造 → 處置閘判不過並印判準(載體列之後的無章非載體列不影響)",
+               g1.returncode == 1 and ("引句判準:%s" % _QFS_V1) in g1.stdout, g1.stdout[-300:])
++        check("引句整段 S5:判不過時印診斷指令,帶帳上的章", "診斷:lumos quote-check " in g1.stdout and "--rule %s" % _QFS_V1 in g1.stdout, g1.stdout[-300:])
++        gm = gate(broken=_QFS_V1, exc="MemoryError")
++        check("引句整段 S5:判準遇到記憶體不足 → 照常往外丟(非 0、stderr 有 MemoryError),不當成判準丟例外",
++              gm.returncode != 0 and "MemoryError" in gm.stderr and "丟例外" not in gm.stdout, (gm.returncode, gm.stdout[-200:], gm.stderr[-200:]))
+         gx = gate(broken=_QFS_V1)
+         check("引句整段 S5:處置閘遇到判準丟例外 → 判失敗、印「丟例外」與型別、不 traceback",
+               gx.returncode == 1 and "丟例外" in gx.stdout and "RuntimeError" in gx.stdout and "Traceback" not in gx.stderr, (gx.returncode, gx.stdout[-300:], gx.stderr[-200:]))
+         _qfs_set_row(d, lid, {k: x for k, x in fab_row.items() if k != "quote_rule"})
+         g0 = gate()
+         check("引句整段 S5:載體列無章 → 照舊判準判過,並印「帳上無章」", g0.returncode == 0 and "帳上無章" in g0.stdout, g0.stdout[-300:])
+         for bad in ("", None, 5, ["full-span-v1"], "future-v9"):
+             _qfs_set_row(d, lid, dict(base, quote_rule=bad))
+             gb = gate()
+             check("引句整段 S5:章值 %r → 判失敗、印「引句判準欄不認得」、不 traceback" % (bad,),
+                   gb.returncode == 1 and "引句判準欄不認得" in gb.stdout and "Traceback" not in gb.stderr, (gb.returncode, gb.stdout[-200:], gb.stderr[-200:]))
++        zq = d / "零 引句.md"
++        zq.write_text("severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n沒有引句\n", encoding="utf-8")
++        _qfs_set_row(d, lid, dict(base, report_path=base["report_path"].replace("good.md", "零 引句.md"), report_sha256=_sha256_of(zq)))
++        gz = gate()
++        check("引句整段 S5:零引句判失敗也印診斷指令,含空白的路徑加了引號",
++              gz.returncode == 1 and "零引句" in gz.stdout and "診斷:lumos quote-check '" in gz.stdout, gz.stdout[-400:])
+         _qfs_set_row(d, lid, fab_row)
+         check("引句整段 S5:寫側常數是 legacy 時,已蓋 v1 的帳照新判準仍判不過", gate(rule="legacy").returncode == 1, "")
+         lx = "qrs-leg-%s" % _M1U
+         rr = _qfs_record(v, lx, f["fab"], snap, spec, rule="legacy")
+         cr = [x for x in _qfs_rows_of(d, lx) if "findings_set" in x]
+         check("引句整段 S5:寫側常數 legacy → 舊判準放行並蓋 legacy", rr.returncode == 0 and cr and cr[-1].get("quote_rule") == "legacy", (rr.returncode, rr.stderr[-200:]))
+         ln = "qrs-def-%s" % _M1U
+         rd = _qfs_record(v, ln, f["fab"], snap, spec, rule=None)
+         cd = [x for x in _qfs_rows_of(d, ln) if "findings_set" in x]
+         check("引句整段 S5:不換常數(第一階段預設)→ 舊判準放行並蓋 legacy", rd.returncode == 0 and cd and cd[-1].get("quote_rule") == "legacy", (rd.returncode, rd.stderr[-200:]))
+@@ -27067,68 +27077,80 @@ def t_quote_full_span_compare_and_event():
+     try:
+         lid = "qce-%s" % _M1U
+         _qfs_record(v, lid, f["fab"], snap, spec)
+         _qfs_record(v, lid, f["fab"], snap, spec)
+         zero = d / "zero.md"
+         zero.write_text("severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n沒有引句\n", encoding="utf-8")
+         _qfs_record(v, lid, zero, snap, spec)
+         _qfs_record(v, lid, f["nest"], snap, spec, rule="legacy")
+         spoof = d / "spoof.md"
+         spoof.write_text("severity: minor\n1. 甲\nseverity: minor\nblocking: 否\n"
+-                         "引句:「\x1b[2J\x07report-not-normalized report=/etc/x 偽造的引句內容」尾巴」\n", encoding="utf-8")
++                         "引句:「\x1b[2J\x07\u202ereport-not-normalized report=/etc/x 偽造的引句內容」尾巴」\n", encoding="utf-8")
+         _qfs_record(v, lid, spoof, snap, spec)
+         br = _qfs_record(v, lid, f["fab"], snap, spec, broken="legacy")
+         check("引句整段 S6:另一版判準求 kind 丟例外 → 寫側照樣擋(rc2)、不 traceback", br.returncode == 2 and "Traceback" not in br.stderr, (br.returncode, br.stderr[-300:]))
+         evs = [_j.loads(ln) for ln in (d / ".governance-log.jsonl").read_text(encoding="utf-8").splitlines() if ln.strip()]
+         hit = [e for e in evs if e.get("gate") == "canary" and e.get("kind") == "blocked" and str(e.get("note", "")).startswith("quote-rule:")]
+         notes = [e["note"] for e in hit]
+         check("引句整段 S6:寫側擋下六次各記一筆 blocked", len(hit) == 6, notes)
+         if len(hit) == 6:
+             sha12 = _sha256_of(f["fab"])[:12]
+             check("引句整段 S6:後半編造記 kind=new-only、cats 含 stray,帶 quote= 片段、report=、report_sha=<前 12 碼> 與各自不同的 id=",
+                   all("kind=new-only" in n and "stray" in n and "quote=合法前綴文字至少十個字" in n and "report=" in n
+                       and ("report_sha=%s" % sha12) in n and "id=" in n for n in notes[:2]) and notes[0] != notes[1], notes[:2])
+             check("引句整段 S6:零引句兩版都擋 → kind=both、cats=none", "kind=both" in notes[2] and "cats=none" in notes[2], notes[2])
+             check("引句整段 S6:常數 legacy 擋下巢狀(新判準會放)→ kind=legacy-only、quote= 是被截的前半",
+                   notes[3].startswith("quote-rule:legacy") and "kind=legacy-only" in notes[3] and "quote=規則「甲" in notes[3], notes[3])
+             sp_note = notes[4]
+             check("引句整段 S6:引句片段濾掉控制字元、排在 note 最後,第一個 report= 是真的報告路徑(片段裡偽造的欄位騙不到)",
+-                  "\x1b" not in sp_note and "\x07" not in sp_note and sp_note.index("quote=") > sp_note.index("id=")
++                  "\x1b" not in sp_note and "\x07" not in sp_note and "\u202e" not in sp_note and sp_note.index("quote=") > sp_note.index("id=")
+                   and sp_note.split("report=", 1)[1].startswith(str(spoof)), sp_note)
+             check("引句整段 S6:求 kind 出錯記 kind=unknown", "kind=unknown" in notes[5], notes[5])
++        m = _load_lumos_inproc()
++        n_empty = m._quote_block_note("legacy", [{"quote": "\x1b\x07\u202e", "ok": False}], "x", "x", str(f["good"]), "l", "a")
++        check("引句整段 S6:引句片段清光了記 quote=-(跟沒有引句同一個佔位)", n_empty.endswith("quote=-"), n_empty)
++        n_leg = m._quote_block_note("legacy", [{"quote": "(引號未閉合/開閉型態不符,無法抽取)", "ok": False, "malformed": True}],
++                                    "x", "x", str(f["good"]), "l", "a")
++        check("引句整段 S6:舊判準的格式不合列(沒有 kind)記 cats=unclosed,不記成 miss", "cats=unclosed" in n_leg, n_leg)
+         st = run(v, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
+         check("引句整段 S6:gov --stats 四格互斥、相加等於總數(片段裡含 report-not-normalized 字樣的那筆只算引句判準)",
+               "記帳被寫側擋下 6 次(報告沒正規化 0 / 缺 refuted-set 0 / findings 多於 reported 0 / 引句判準 6)" in st, st[-600:])
+         _qfs_record(v, lid, f["good"], snap, spec)
+         _qfs_record(v, "qce2-%s" % _M1U, f["nest"], snap, spec)
+         led = d / ".canary-log.jsonl"
+         raw = {"loop": "qce3-%s" % _M1U, "auditor": "x", "report_path": str(f["fab"]), "snapshot_path": str(snap)}
+         dup = dict(raw, loop="qce4-%s" % _M1U)
+         outside = Path(_tf.mkdtemp(prefix="gctl-qce-out-"))
+         (outside / "o.md").write_text(_QFS_SNAP, encoding="utf-8")
+         (d / "latin.md").write_bytes("引句".encode("utf-8") + b"\xff\xfe")
+-        skips = [dict(raw, loop="qs1", report_path=str(outside / "o.md")),          # repo 外 → 讀不到
++        import os as _os
++        _os.mkfifo(d / "pipe.md")
++        (d / "cr-snap.md").write_bytes("第一行\r> 甲乙丙丁戊己庚辛壬癸子丑寅卯\r尾\n".encode("utf-8"))
++        (d / "cr-rep.md").write_text("引句:「第一行 甲乙丙丁戊己庚辛壬癸子丑寅卯」\n", encoding="utf-8")
++        skips = [dict(raw, loop="qs0", report_path=str(d / "cr-rep.md"), snapshot_path=str(d / "cr-snap.md")),  # 單獨 \r 換行照 read_text 統一
++                 dict(raw, loop="qs5", report_path=str(d / "pipe.md")),          # 管線 → 讀不到、不卡住
++                 dict(raw, loop="qs1", report_path=str(outside / "o.md")),          # repo 外 → 讀不到
+                  dict(raw, loop="qs2", report_path="docs/a\u0000b.md"),             # 含 NUL → 讀不到(不 traceback)
+                  dict(raw, loop="qs3", report_path="docs/不存在.md"),               # 不存在 → 讀不到
+                  dict(raw, loop="qs4", report_path=str(d / "latin.md"))]             # 非 UTF-8
+         led.write_text(led.read_text(encoding="utf-8") + _j.dumps(raw, ensure_ascii=False) + "\n\n" + _j.dumps(dup, ensure_ascii=False)
+                        + "\n" + "\n".join(_j.dumps(x, ensure_ascii=False) for x in skips) + "\n{壞行\n[1]\n", encoding="utf-8")
+         r = run(v, "quote-check", "--compare-rules", "--repo", str(root))
+         out = r.stdout
+-        check("引句整段 S6:compare-rules 不帶報告也能跑,照字面印交叉表(同一組報告與快照只算一次)",
+-              r.returncode == 0 and "兩版都錨定 1" in out and "舊判過新判不過 1" in out and "舊判不過新判過 1" in out
++        check("引句整段 S6:compare-rules 不帶報告也能跑,照字面印交叉表(同一組報告與快照只算一次;單獨 \\r 換行的快照跟處置閘一樣判錨定)",
++              r.returncode == 0 and "兩版都錨定 2" in out and "舊判過新判不過 1" in out and "舊判不過新判過 1" in out
+               and "兩版都不過 0" in out and "零引句 0" in out, out[-500:] + r.stderr[-200:])
+-        check("引句整段 S6:略過照字面分得開(repo 外、含 NUL、不存在都算讀不到;非 UTF-8 另算;壞行含非物件行、空行不算)",
+-              "略過:讀不到 3 組、非 UTF-8 1 組、壞行 2 列" in out and "Traceback" not in r.stderr, out[-500:] + r.stderr[-300:])
++        check("引句整段 S6:略過照字面分得開(管線、repo 外、含 NUL、不存在都算讀不到;非 UTF-8 另算;壞行含非物件行、空行不算)",
++              "略過:讀不到 4 組、非 UTF-8 1 組、壞行 2 列" in out and "Traceback" not in r.stderr, out[-500:] + r.stderr[-300:])
+         _sh.rmtree(outside, ignore_errors=True)
+         check("引句整段 S6:舊判過新判不過逐條列報告路徑與 kind", "fab.md" in out and "stray" in out, out[-500:])
+-        for extra in ((str(f["good"]),), ("--spec", str(snap)), ("--rule", "legacy")):
++        for extra in ((str(f["good"]),), ("--spec", str(snap)), ("--rule", "legacy"), ("--json",)):
+             b = run(v, "quote-check", "--compare-rules", "--repo", str(root), *extra)
+             check("引句整段 S6:compare-rules 加 %s → rc2 擋下" % (extra[0] if extra[0].startswith("--") else "報告",),
+                   b.returncode == 2 and "擋下" in b.stderr, (b.returncode, b.stderr[-200:]))
+         bare = Path(_tf.mkdtemp(prefix="gctl-qce-bare-"))
+         try:
+             b = run(v, "quote-check", "--compare-rules", "--repo", str(bare))
+             check("引句整段 S6:帳本不存在 → rc2 擋下", b.returncode == 2 and "找不到帳本" in b.stderr, (b.returncode, b.stderr[-200:]))
+         finally:
+             _sh.rmtree(bare, ignore_errors=True)
+         b = run(v, "quote-check", str(f["good"]))

@@ -9527,9 +9527,12 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
             print(f"    逃逸帳 {len(escapes)} 筆(審查放行後下游抓到的;最重 {_worst or '—'};歸因是人工判斷)")
         if _rej:
             _d = lambda r: str(r.get("detail", "") or r.get("note", ""))
-            _rn = sum(1 for r in _rej if "report-not-normalized" in _d(r))
-            _rf = sum(1 for r in _rej if "findings-over-reported" in _d(r))
-            print(f"    記帳被寫側擋下 {len(_rej)} 次(報告沒正規化 {_rn} / 缺 refuted-set {len(_rej) - _rn - _rf} / findings 多於 reported {_rf});擋下後有沒有補記,對照上面 K 看")
+            # 四格互斥:先判 note 開頭是不是 quote-rule:(引句判準擋下,note 裡可能引到別的字樣),其餘照原本的包含判斷
+            _rq = [r for r in _rej if _d(r).startswith("quote-rule:")]
+            _rest = [r for r in _rej if not _d(r).startswith("quote-rule:")]
+            _rn = sum(1 for r in _rest if "report-not-normalized" in _d(r))
+            _rf = sum(1 for r in _rest if "findings-over-reported" in _d(r))
+            print(f"    記帳被寫側擋下 {len(_rej)} 次(報告沒正規化 {_rn} / 缺 refuted-set {len(_rest) - _rn - _rf} / findings 多於 reported {_rf} / 引句判準 {len(_rq)});擋下後有沒有補記,對照上面 K 看")
         print()
     # 設計迴圈結案方式(工具鏈補強十件 #6):達上限卻從沒過關的審查編號 = 人裁放行。
     # 只看 gate=design-loop 的事件(2026-08-22 起才記;之前的迴圈沒帳,算不出來,這裡如實講)。
@@ -10962,14 +10965,19 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                 print(f"擋下:--snapshot 指的檔案讀不到: {e}", file=sys.stderr)
                 return 2
             else:
-                _qrows = _quote_rows(_rtext, _stext)
+                _qrule_w = _QUOTE_WRITE_RULE   # 讀一次,檢查、kind、章、事件全用同一個值
+                _qrows = _quote_rows(_rtext, _stext, rule=_qrule_w)
                 if _qrows is None:
+                    _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked",
+                                        _quote_block_note(_qrule_w, None, _rtext, _stext, report, loop, auditor, _validated_sha.get("--report")), hard=True)
                     print("擋下:載體報告沒有引句，無法核對凍結材料；尚未寫入 canary 帳。", file=sys.stderr)
                     print("  若本輪沒有發現，移除處置選項後記帳；若需要處置清單，改選每句都錨定的載體。", file=sys.stderr)
                     return 2
             if _qrows:
                 _qmiss = [r for r in _qrows if not r["ok"]]
                 if _qmiss:
+                    _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked",
+                                        _quote_block_note(_qrule_w, _qrows, _rtext, _stext, report, loop, auditor, _validated_sha.get("--report")), hard=True)
                     print(f"擋下:這一席要當全輪的帳本載體(帶了處置清單),但它的 {len(_qrows)} 句引言裡"
                           f"有 {len(_qmiss)} 句在凍結快照裡找不到原文。", file=sys.stderr)
                     print("  載體是整輪的記帳憑據,引句錨不回審材就等於憑據對不上;規矩是**挑每句都錨得到的那一席當載體**。", file=sys.stderr)
@@ -10979,6 +10987,7 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                     print("  常見情況:引的是既有程式碼(用來說明「專案本來就有這個做法」),它不在只含改動的快照裡", file=sys.stderr)
                     print("  ——這種引句不算編造,但那一席就不適合當載體;換一席全錨的來帶處置清單。", file=sys.stderr)
                     return 2
+            rec["quote_rule"] = _qrule_w   # 判準章跟帳在同一行一次寫入;處置閘與回放照章重算(引句錨定整段比對 d1)
     # --intake 選配(intake守衛 T3,2026-08-30 d1):給了就走同款四行為,不給不擋。
     # 讀側重驗在處置閘③(★全輪掃——intake_path 掛 r1 帳列而判定輪多為 r2+,只掃判定輪=常態空轉,r3-F3★)。
     for _flag, _p in (("--report", report), ("--snapshot", snapshot), ("--intake", intake)):
@@ -25783,7 +25792,156 @@ def _quote_norm(s):
 _QUOTE_MIN_NORM_LEN = 10   # 錨定紀律「引句 ≥10 字」轉機械(r1 否決席:一字引句必然錨得到=紀律被架空)
 
 
-def _quote_rows(rtext, stext):
+# ═══ 引句判準(Projects/引句錨定整段比對_計劃)═══
+# 寫側用哪一版判準:程式常數,不放設定檔(設定檔任何一處寫壞都會讓寫側悄悄退版、而且帳只進不出——設計審 r4 三席)。
+# 第一階段 legacy(行為不變,只讓讀帳的地方認得章);第二階段改成 full-span-v1,與文件同步放在同一個提交,回退就還原那個提交。
+_QUOTE_WRITE_RULE = "legacy"
+_QUOTE_RULES = ("legacy", "full-span-v1")
+_QUOTE_LABEL_RE = r"引句(?:（[^）\n]{0,40}）)?\**[：:]\s*"   # 與 legacy 分支內的標籤規則同一條
+_QUOTE_MALFORMED_CAP = 200
+
+
+def _quote_rows(rtext, stext, *, rule):
+    """quote-check 核心(T4 抽出供 CLI 與 disposal gate 共用——★單一實作★):依 rule 分派判準。
+    ★判準一經蓋章就不改它的判定★:要改判定就新增一個版本值與分支,舊分支原樣留著(t_quote_full_span_v1_pinned 釘住 full-span-v1)。"""
+    if rule == "legacy":
+        return _quote_rows_legacy(rtext, stext)
+    if rule == "full-span-v1":
+        return _quote_rows_full_span_v1(rtext, stext)
+    raise ValueError(f"不認得的引句判準:{rule!r}")
+
+
+def _quote_rule_of(row):
+    """處置閘讀帳上的引句判準章 → (版本, 顯示標籤, 錯誤訊息或 None)。回放經由處置閘,不另設呼叫點。
+    沒有 quote_rule 鍵 → legacy(帳上無章);值是認得的版本 → 用它;其他值一律判失敗(可能是新版程式寫的,也可能帳被手改)。"""
+    if "quote_rule" not in row:
+        return "legacy", "legacy(帳上無章)", None
+    v = row.get("quote_rule")
+    if isinstance(v, str) and v in _QUOTE_RULES:
+        return v, v, None
+    return None, None, f"引句判準欄不認得:{v!r},可能是新版程式寫的或帳被手改"
+
+
+def _quote_block_note(write_rule, rows, rtext, stext, report, loop, auditor, report_sha=None):
+    """寫側用引句判準擋下載體時的治理帳 note。kind 由另一版判準再算一次得出(擋下那一刻是唯一確定讀得到報告原文的時候,
+    事後報告常被退回重寫覆蓋);這一次計算整段包例外,出錯記 kind=unknown cats=err,擋下照舊。"""
+    import re
+    import uuid
+    other = "legacy" if write_rule == "full-span-v1" else "full-span-v1"
+
+    def passes(rs):
+        return rs is not None and all(x["ok"] for x in rs)
+    if rows is None:
+        cats, first = ["none"], None
+    else:
+        # 舊判準的格式不合列沒有 kind(標籤數多於抽到的條數 = 引號沒閉合或型態不符),記成 unclosed(代碼審 r2 規格符合席)
+        cats = sorted({x.get("kind") or ("unclosed" if x.get("malformed") else "short" if x.get("too_short") else "miss")
+                       for x in rows if not x["ok"]})
+        first = next((x["quote"] for x in rows if not x["ok"]), None)
+    try:
+        other_rows = _quote_rows(rtext, stext, rule=other)
+        kind = "both" if not passes(other_rows) else ("new-only" if write_rule == "full-span-v1" else "legacy-only")
+    except MemoryError:   # 資源不足不是判準的錯,處置閘與寫側一律照常往外丟(代碼審 r2 架構對齊席)
+        raise
+    except Exception:
+        kind, cats = "unknown", ["err"]
+    # 片段是審查席可控的文字(代碼審 r1 資安席):先截一段再用同檔的顯示消毒 _esc_clean(控制、雙向覆寫字元換空格;r2 架構對齊席:
+    # 不另寫一套),空白壓成一格,清光了也記 -;而且排在 note 最後——讀者照「第一個 report=/id=」取值時不會被片段裡偽造的欄位騙到
+    # 片段走同檔既有的無損跳脫 _kill_esc(共用 _PATH_SPECIAL_CATS:控制、格式含標籤字元與方向標記與零寬、行段分隔、孤立代理字元
+    # 換成看得見的 \uXXXX;r4 架構對齊席:不另寫一套過濾,r3 資安、邊界席:看不見的字元不能原樣進帳);先截 60 字再跳脫
+    snippet = (_kill_esc(re.sub(r"[ \t]+", " ", first[:60]).strip()) or "-") if first else "-"
+    if report_sha:   # 寫側驗過的那份位元組的指紋(r4 資源席:擋下當下重讀檔,兩次讀之間被換掉會記到沒驗過的內容)
+        sha12 = report_sha[:12]
+    else:
+        try:
+            sha12 = _sha256_file(report)[:12]
+        except OSError:
+            sha12 = "?"
+    return (f"quote-rule:{write_rule} kind={kind} cats={','.join(cats)} report={report} report_sha={sha12} "
+            f"loop={loop or ''} auditor={auditor or ''} id={uuid.uuid4().hex[:8]} quote={snippet}")
+
+
+def _quote_anchor_row(q, hay, hay_ns):
+    """一條引句跟快照比對 → 結果列(兩版判準共用的比對:正規化後子字串、空白全剝再比一次、10 字下限)。"""
+    nq = _quote_norm(q)
+    too_short = len(nq) < _QUOTE_MIN_NORM_LEN
+    anchored = nq in hay or nq.replace(" ", "") in hay_ns
+    return {"quote": q, "ok": (not too_short) and anchored, **({"too_short": True} if too_short else {})}
+
+
+def _quote_tail_has_stray(text, start, end):
+    """text[start:end] 這段尾巴裡有沒有落單收尾引號:兩型各一個計數器,遇開引號加一、遇同型閉引號時計數器大於零就減一、等於零就是落單。
+    ★每條引句的尾段自己數,不看全域堆疊★(設計審 r4 正確性、邊界兩席:前文有沒閉合的開引號時,全域堆疊會把編造段落的收尾引號配走)。"""
+    closes = {"」": "「", "』": "『"}
+    depth = {"「": 0, "『": 0}
+    for ch in text[start:end]:
+        if ch in depth:
+            depth[ch] += 1
+        elif ch in closes:
+            if not depth[closes[ch]]:
+                return True
+            depth[closes[ch]] -= 1
+    return False
+
+
+def _quote_full_span_items(rtext):
+    """新判準的前兩步 → [(標籤起點, 開引號位置, 配對閉引號位置或 None)] 或 None(零標籤):
+    ①從頭到尾掃一次預先配對(兩型各一個堆疊,堆疊空時的閉引號不配對);②依位置挑出獨立引句——落在前一條整段引句裡的標籤
+    是引句內容,不另成一條。"""
+    import re
+    closes = {"」": "「", "』": "『"}
+    stacks = {"「": [], "『": []}
+    pair = {}
+    for i, ch in enumerate(rtext):
+        if ch in stacks:
+            stacks[ch].append(i)
+        elif ch in closes and stacks[closes[ch]]:
+            pair[stacks[closes[ch]].pop()] = i
+    labels = [(m.start(), m.end() - 1) for m in re.finditer(_QUOTE_LABEL_RE + r"[「『]", rtext)]
+    if not labels:
+        return None
+    items, covered = [], -1
+    for ls, op in labels:   # ls:標籤起點,只用來判它是不是落在前一條整段引句裡
+        if ls < covered:
+            continue
+        cp = pair.get(op)
+        items.append((ls, op, cp))
+        if cp is not None:
+            covered = cp
+    return items
+
+
+def _quote_rows_full_span_v1(rtext, stext):
+    """新判準:照括號配對切整段引句(可巢狀、可跨行),整段要錨進快照;引號沒閉合、或引句結束後到下一條引句前有落單收尾引號
+    → 格式不合(malformed + kind)。零引句回 None。每一步整份報告只掃一次,總成本與報告長度成正比。
+    ★落單收尾引號由每條引句的尾段自己數,不看全域堆疊★:前文只要有一個沒閉合的開引號,全域堆疊會把後面編造段落的收尾引號配走
+    (設計審 r4 正確性、邊界兩席實測)。"""
+    items = _quote_full_span_items(rtext)
+    if items is None:
+        return None
+
+    def cap(q):
+        return q if len(q) <= _QUOTE_MALFORMED_CAP else q[:_QUOTE_MALFORMED_CAP] + "…(截斷)"
+    hay = _quote_norm(stext)
+    hay_ns = hay.replace(" ", "")
+    rows = []
+    for k, (_ls, op, cp) in enumerate(items):
+        if cp is None:
+            eol = rtext.find("\n", op + 1, op + 2 + _QUOTE_MALFORMED_CAP)
+            end = eol if eol >= 0 else min(len(rtext), op + 1 + _QUOTE_MALFORMED_CAP + 1)
+            rows.append({"quote": cap(rtext[op + 1:end]), "ok": False, "malformed": True, "kind": "unclosed"})
+            continue
+        q = rtext[op + 1:cp]
+        nxt = items[k + 1][0] if k + 1 < len(items) else len(rtext)
+        if _quote_tail_has_stray(rtext, cp + 1, nxt):
+            rows.append({"quote": cap(q), "ok": False, "malformed": True, "kind": "stray"})
+            continue
+        rows.append(_quote_anchor_row(q, hay, hay_ns))
+    return rows
+
+
+# 舊判準:★原樣保留,一字不改★(函式本體與說明逐字等於改名前的 _quote_rows;已蓋 legacy 章的帳與 305 個凍結判定靠它重算)
+def _quote_rows_legacy(rtext, stext):
     """quote-check 核心(T4 抽出供 CLI 與 disposal gate 共用——★單一實作★):
     回 [{'quote','ok'},...];零引句回 None(呼叫端 fail loud)。
     引句止於★同型★閉引號:「…」內容許『』(r1 s1 席:原 [^」』]+ 在巢狀『就截斷,
@@ -26382,27 +26540,56 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             if ok and vacuous and carrier is None:
                 print("[disposal] quote-check: —(零發現報告無引句可驗,略過;橫幅不宣稱錨定)")
             elif ok:
-                try:
-                    rows = _quote_rows(_prov_path(rp).read_text(encoding="utf-8"),
-                                       _prov_path(sp).read_text(encoding="utf-8"))
-                except (OSError, UnicodeDecodeError) as e:
-                    # sha 讀二進位過了,text 讀可炸(非 UTF-8)——FAIL 不 traceback(r1 s4 席)
-                    print(f"[disposal] quote-check: ✗ — 報告/快照讀不成文字({e.__class__.__name__})")
+                _qrule, _qlabel, _qerr = _quote_rule_of(_qsrc)
+                if _qerr:   # 章值不認得:判失敗,不印診斷指令(--rule 收不了這個值)
+                    print(f"[disposal] quote-check: ✗ — {_qerr}")
                     fails.append("quote")
-                    rows = None
                 else:
-                    if rows is None:
-                        print("[disposal] quote-check: ✗ — 報告零引句(驗不了≠通過)")
+                    print(f"[disposal] 引句判準:{_qlabel}")
+                    # 印給人照抄的指令:路徑用 --repo 解成實際路徑(r3 回滾席:不然要在 repo 根才照抄得動),參數交給同檔的 _drift_sh(node=True)
+                    # (要引號才加、開頭是 - 補 ./;r3 架構對齊席:不另寫一套),整行再過 _esc_clean(路徑裡的控制字元不印到終端;r3 資安席)
+                    # 路徑含控制字元或過長就不印可照貼的指令(消毒或截斷會讓照抄的指令指到別的檔;同 _drift_fix_hint 的做法,r4 正確性、邊界席)
+                    _qps = (str(_prov_path(rp)), str(_prov_path(sp)))
+                    _qdiag = ("[disposal]     診斷:報告或快照路徑含控制字元或過長,不印可照貼的指令;自己用 lumos quote-check <報告> --spec <快照> --rule " + _qrule
+                              if any(_path_special_chars(x) or len(x) > 1000 for x in _qps) else
+                              f"[disposal]     診斷:lumos quote-check {_drift_sh(_qps[0], node=True)} --spec {_drift_sh(_qps[1], node=True)} --rule {_qrule}")
+                    rows, _qbad = None, False
+                    try:
+                        _rtext_q = _prov_path(rp).read_text(encoding="utf-8")
+                        _stext_q = _prov_path(sp).read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError) as e:
+                        # sha 讀二進位過了,text 讀可炸(非 UTF-8)——FAIL 不 traceback(r1 s4 席)
+                        print(f"[disposal] quote-check: ✗ — 報告/快照讀不成文字({e.__class__.__name__})")
+                        print(_qdiag)
                         fails.append("quote")
+                        _qbad = True
                     else:
-                        miss = [q for q in rows if not q["ok"]]
-                        n_short = sum(1 for q in rows if q.get("too_short"))
-                        if miss:
-                            print(f"[disposal] quote-check: ✗ — {len(miss)}/{len(rows)} 條錨不到快照"
-                                  + (f"(其中 {n_short} 條低於 {_QUOTE_MIN_NORM_LEN} 字下限)" if n_short else ""))
+                        try:
+                            rows = _quote_rows(_rtext_q, _stext_q, rule=_qrule)
+                        except MemoryError:      # 資源不足不是判準的錯,照常往外丟(代碼審 r1 資源席:否則會被當成判準丟例外凍成判失敗)
+                            raise
+                        except Exception as e:   # ★判準本身丟例外 → 判失敗、不 traceback★:回放因此算出跟凍結時不同的判定,週跑報邏輯漂移
+                            print(f"[disposal] quote-check: ✗ — 引句判準 {_qrule} 丟例外:{e.__class__.__name__}:{str(e)[:120]}")
+                            print(_qdiag)
+                            fails.append("quote")
+                            _qbad = True
+                    if not _qbad:
+                        if rows is None:
+                            print("[disposal] quote-check: ✗ — 報告零引句(驗不了≠通過)")
+                            print(_qdiag)
                             fails.append("quote")
                         else:
-                            print(f"[disposal] quote-check: ✓ — {len(rows)} 條引句全數錨定")
+                            miss = [q for q in rows if not q["ok"]]
+                            n_short = sum(1 for q in rows if q.get("too_short"))
+                            if miss:
+                                n_bad = sum(1 for q in miss if q.get("malformed"))
+                                print(f"[disposal] quote-check: ✗ — {len(miss)}/{len(rows)} 條錨不到快照"
+                                      + (f"(其中 {n_short} 條低於 {_QUOTE_MIN_NORM_LEN} 字下限)" if n_short else "")
+                                      + (f"(其中 {n_bad} 條格式不合)" if n_bad else ""))
+                                print(_qdiag)
+                                fails.append("quote")
+                            else:
+                                print(f"[disposal] quote-check: ✓ — {len(rows)} 條引句全數錨定")
     # ── canary 觀測(不進合取——d4;none=停用制無植入輪——d5) ──
     ca = sum(1 for r in latest if r.get("kind") == "caught")
     mi = sum(1 for r in latest if r.get("kind") == "missed")
@@ -26525,13 +26712,17 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     return 0
 
 
-def cmd_quote_check(report, spec, as_json=False):
+def cmd_quote_check(report, spec, as_json=False, rule=None):
     """錨定檢查(T2,vault-free):報告內每條「引句：「…」」norm 後須為凍結快照 norm 後的
     子字串。rc0=全 ok、rc1=有 miss、rc2=IO/零引句(★驗不了≠通過,fail loud★)。
     ★比對對象必須是派工當下的凍結快照,不是現檔★——對現檔跑,finding 折入後引句會
     「自我成真」(重設計 r1 Codex 折入:循環自證)。"""
     import json
     import re
+    if not report or not spec:
+        print("擋下:要給報告與 --spec <凍結快照>", file=sys.stderr)
+        return 2
+    rule = rule or _QUOTE_WRITE_RULE
     try:
         rtext = Path(report).read_text(encoding="utf-8")
         stext = Path(spec).read_text(encoding="utf-8")
@@ -26539,23 +26730,26 @@ def cmd_quote_check(report, spec, as_json=False):
         # UnicodeDecodeError 非 OSError——非 UTF-8 檔原本直接 traceback(r1 s4 席)
         print(f"擋下:檔案讀不到: {e}", file=sys.stderr)
         return 2
-    rows = _quote_rows(rtext, stext)
+    rows = _quote_rows(rtext, stext, rule=rule)
     if rows is None:
         print("擋下:這份審查報告裡一句「引句：「…」」都抽不到;驗不了不等於通過——"
               "審查員沒照派工格式寫的話,先補引句再記帳。\n"
               "  常見原因:①標籤寫成『引文:』『Quote:』等別名(只認「引句」;粗體或加註記的變體可以)"
               " ②引號用半形 \"…\" 或【…】(只認「」『』) "
-              "③引句跟標籤不在同一行 ④開閉引號不成對(這種會列成錨不到,不是零條)", file=sys.stderr)
+              "③引句跟標籤不在同一行 ④開閉引號不成對、引號沒閉合、或引句後有落單的收尾引號(這幾種會列成錨不到或格式不合,不是零條)", file=sys.stderr)
         return 2
     miss = [r for r in rows if not r["ok"]]
     if as_json:
-        print(json.dumps({"report": str(report), "spec": str(spec),
+        print(json.dumps({"report": str(report), "spec": str(spec), "rule": rule,
                           "total": len(rows), "miss": len(miss), "quotes": rows},
                          ensure_ascii=False))
     else:
+        print(f"引句判準:{rule}")
         for i, r in enumerate(rows, 1):
             mark = "✓" if r["ok"] else "✗"
             short = f"(<{_QUOTE_MIN_NORM_LEN} 字下限)" if r.get("too_short") else ""
+            if r.get("malformed"):   # 格式不合要看得出來,不然會被誤讀成單純錨不到(代碼審 r2 規格符合席)
+                short += f"(格式不合:{r['kind']})" if r.get("kind") else "(格式不合)"
             print(f"  {mark} #{i} 「{r['quote'][:60]}」{short}")
         print(f"{'✅ 全數錨定:報告裡每句引言都能在凍結快照找到原文' if not miss else f'⛔ {len(rows)} 句引言有 {len(miss)} 句在凍結快照裡找不到(找不到的那幾句不採信)'}"
               f"(比對時忽略粗體、反引號和空白差異;比對對象應該是派工當下的凍結快照)")
@@ -26797,7 +26991,7 @@ def cmd_seat_check(report, dispatch, ledger=None, as_json=False):
         if mp not in rtext and name not in rtext:
             out["unreported"].append(mp)
     # ② out_of_scope:引句錨不進任何 material(空白剝除 fallback 同 _quote_rows)
-    quotes = _quote_rows(rtext, "") or []
+    quotes = _quote_rows(rtext, "", rule=_QUOTE_WRITE_RULE) or []
     for q in quotes:
         if q.get("malformed"):
             continue
@@ -53183,9 +53377,10 @@ def main():
     p.add_argument("--json", dest="enf_json", action="store_true", help="輸出 JSON")
 
     p = sub.add_parser("quote-check", help="[T2 錨定檢查] 報告引句逐條對回凍結快照(vault-free;rc0 全 ok/rc1 有 miss/rc2 IO或零引句)")
-    p.add_argument("qc_report", metavar="報告.md")
-    p.add_argument("--spec", dest="qc_spec", required=True, metavar="凍結快照.md")
+    p.add_argument("qc_report", nargs="?", default=None, metavar="報告.md")
+    p.add_argument("--spec", dest="qc_spec", default=None, metavar="凍結快照.md", help="一般模式必填(手動檢查,缺了擋下 rc2)")
     p.add_argument("--json", action="store_true", dest="qc_json")
+    p.add_argument("--rule", dest="qc_rule", default=None, choices=_QUOTE_RULES, help="指定引句判準(預設照寫側常數 _QUOTE_WRITE_RULE);處置閘判失敗時印的診斷指令會帶帳上的章")
 
     p = sub.add_parser("link-candidates", help="[補鏈候選] code→節點連結缺失候選生成(唯讀恆 rc0/不寫檔;人裁後補引用;輸入壞損 rc2)")
     p.add_argument("lc_file", nargs="?", default=None, metavar="code檔", help="單檔模式(與 --all-goldset 互斥)")
@@ -53521,7 +53716,7 @@ def main():
     if args.cmd == "dart-sarif":
         return cmd_dart_sarif(out=args.dart_out)
     if args.cmd == "quote-check":
-        return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json)
+        return cmd_quote_check(args.qc_report, args.qc_spec, as_json=args.qc_json, rule=args.qc_rule)
     if args.cmd == "seat-check":
         return cmd_seat_check(args.sc_report, args.sc_dispatch, ledger=args.sc_ledger, as_json=args.sc_json)
     if args.cmd == "severity-check":
