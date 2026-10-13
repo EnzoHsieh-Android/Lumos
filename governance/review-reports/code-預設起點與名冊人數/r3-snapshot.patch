@@ -1,0 +1,392 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+index fa52d1bf..af995dac 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
++++ b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+@@ -173,10 +173,14 @@ lumos canary record caught|missed|none --loop <id> --severity clean|minor|major|
+ **收束**:按下 `canary record` 之前,intake 要**寫完**——包含「我後來又發現什麼」
+ 「我判錯什麼」「留痕紀律哪裡沒做到」那幾段。這幾段恰恰是最容易事後才想到的,
+ 而它們一補下去就把整輪作廢。想補的時候先問一句:這一輪記帳了沒?
+ 
+ **順帶一條**:存席報告之前**打開看一眼**。子代理的 `.output` 是 JSONL 逐字稿不是報告,
+ 存錯了 `quote-check` 會出現一堆莫名其妙的錨不到(它從逐字稿裡撈到各種中間文字當引句),
+ 而那個症狀很容易被誤判成「席位引錯了」。
+ 
+ REVISIT:2026-10-21 補上 loop replay --freeze 寫入端的 --note 防線:提前檢查與真正歸檔之間若有另一個凍結先寫好判定檔,沒帶 --note 的那邊會歸檔舊檔後在 note.strip() 崩潰、繞過重凍要帶理由(代碼審 code-凍結暫存檔清理 r3 正確性席);另開小修正,在 _replay_write_verdict 歸檔前或 _refroze 有值時再判一次 [closed:2026-10-08 寫入端歸檔前再判一次 --note,擋下訊息抽成 _replay_refreeze_blocked 兩處共用;t_loop_replay_freeze_race_needs_note]
+ REVISIT:2026-12-08 查治理帳與回報有沒有「同一個編號的判定檔被另一個凍結無聲覆蓋」(寫入端 target.exists 與 os.replace 之間的空檔,主線原本就有;代碼審 code-凍結並行重凍防線 r1 正確性席);有一筆就改成 os.link 不覆蓋建立、撞到 FileExistsError 走重凍路徑
++
++## loop next 的人數以應派名冊為準(2026-10-13)
++
++WHY:loop next 印的「這輪要 N 人審」與 --json 的 width/min_seats,新迴圈從應派名冊數(佔人數的必派席;名冊為空才退回 _TIER_PARAMS);首筆帳在 panel 閘退役日前的舊 panel 迴圈維持 _TIER_PARAMS 原值 [出處:2026-10-13 一般分級代碼審記帳帶了 --round,人數印 3、名冊只列一位審查員;第一版連 panel 閘的最少人數一起改(r1 單審席:放寬舊迴圈的閘),第二版只改印的數字(r2 單審席實跑出印 1 人、閘要 3 人)] [因:新迴圈代問處置閘,處置閘不收最少人數,照名冊不會改到判定;舊迴圈代問 panel 閘,這個數字就是每輪最少人數,改它等於改收斂判準,要走設計審] [不選:只修一般分級代碼審那個組合——其他組合目前剛好一致,但同一個病根] [test:t_loop_next_width_matches_roster]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index 6873bdb6..c600af36 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -205,10 +205,16 @@ WHY:表態的來源座標必須共用引用驗證入口，避免同一個不存
+ 
+ `pitfalls --diff --json` 的 arch_alignment 在專案宣告了 arch_targets 時才多 targets(節點→檔清單)與 warnings(壞宣告的固定警告);沒宣告的專案輸出逐字不變,files 的值型別也沒改。目標組的檔不找鄰居、沒有鄰居也照列,也不算張力候選。這裡只讀起點版設定、不讀節點——維持不載圖譜;規則內容由派工鏡頭附(見 [[Systems/arch-alignment-lens]])。code-loop check 用跟表態同一個範圍印「架構對齊基準:目標 <節點> N 支檔」,範圍內改了宣告或目標節點再多印一行,兩行都不改判定。
+ 
+ `pitfalls --diff --json` 的輸出改成無損跳脫(2026-10-09,[[Projects/架構對齊可宣告目標架構_計劃]] 代碼審 r2):行與段分隔、控制、雙向覆寫這幾類字元寫成 JSON 的 \uXXXX,讀回來的值不變。原因是檔名由被審分支決定,U+2028 原樣輸出時 code-loop check 與 pre-push 用逐行方式找 JSON 那一行會切壞,走 fail-open 放行。讀 diff 那一端同理(r3):解析 git diff 只照換行切行,不用 splitlines——它也在 U+2028、U+0085、單獨的 CR 切,內容或檔名帶這些字元時,一行新增碼會被切成「新增的前半」加「當成脈絡的後半」,風險寫法漏掃、分級被繞過。r4 再補兩處:git 輸出改用位元組讀(文字模式會先把單獨的 CR 換成換行),檔頭認得 git 加了 C 式引號的檔名(檔名含 tab、雙引號、反斜線時 git 整段包引號,原本認不得,那支檔的新增行被算到上一支檔頭上或整支消失);切行與檔頭跟派工鏡頭共用同兩支函式。
+ 
+ ## pitfalls --stage(2026-10-12,[[Projects/後端工程提問與證據擴充_計劃]] S3)
+ 
+ 計劃模式多一個 `--stage <階段>`:先列那一階段的需求風險面(表在 [[Systems/情境出題]]),再列開頭欄位 `pending_questions` 那一階段還沒結(待查、待人)的題,阻塞在前、不可逆其次、同級照題號數字;清單讀不懂照印風險面再回 2;`--json` 有題才多 `questions` 鍵、讀不懂多 `questions_error`。讀法只吃檔案文字、不需要筆記庫(做法見 [[Projects/待決問題改存開頭欄位_計劃]])。[test:t_qfm_stage_lists_open_questions]
+ REVISIT:2027-01-31 `--stage` 目前不列待決問題:開頭欄位版上線後把題目清單接回 `--stage`,還沒做就決定續做或撤案 [closed:2026-10-12 開頭欄位版上線:規格閘讀 pending_questions 擋阻塞沒結的需求與架構題,--stage 接回題目清單,見 [[Projects/待決問題改存開頭欄位_計劃]]]
+ 不帶 `--stage` 時輸出不變;階段寫錯、或跟 `--diff` 一起用回 2(`--diff` 只收改動範圍、不接計劃)。綁的測試 `t_backend_qo_stage_facets_only`。`--stage` 的參數檢查(階段值、不能和 `--diff` 並用、要給計劃路徑)放在 `--stage` 自己的函式裡,讓主指令只多一個分支(推送前新增告警閘:主指令在合併基準時複雜度就已超標,這次只多 1)。
++
++## 手動 code-loop check 的預設起點取最近的主線(2026-10-13)
++
++WHY:手動 `code-loop check` 不帶範圍時,起點改成「主線候選合起來跟 HEAD 的最近共同祖先」:候選沿用推送閘的 `_push_mainlines`(遠端取這條分支上游所在的遠端,沒有就用 origin),只多加本機 main/master(手動檢查在推送前跑,本機主線可能有還沒推的提交);不再照「先本機 main、再 master」的固定順序取第一個 [出處:2026-10-13 本會談實測:本機 main 落後遠端 52 個提交,範圍把別人已合併的高風險改動算進來、印出 tier=high] [因:推送閘的起點早就因同一個理由改成全部候選一起算,候選清單與挑法(`_push_pick_base`)都重用,不另立第三套主線判法(代碼審 r1 架構對齊席)] [不選:掃全部遠端(過期 fork 的 main 若含 HEAD,整條分支會被當成沒有改動而少擋,r1 單審席)、改成優先遠端 main(遠端可能落後本機未推的主線提交,一樣是固定順序)] [test:t_codeloop_default_base_prefers_newest_mainline]
++
++REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍用 `_mainline_ref`(固定順序取第一個),本機 main 落後或有多個遠端時可能跟上面算分級的範圍不同;到期在一個本機 main 落後的工作樹各跑一次兩種範圍,不同就改成共用 `_codeloop_default_base`,相同就刪這行(代碼審 r2 架構對齊席)
+diff --git a/scripts/lumos b/scripts/lumos
+index 51ad6efc..53065646 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -15370,38 +15370,51 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+             print("擋下:這是全新的審查編號,還沒有任何記錄,工具不會幫你猜分級(猜錯之後格式兜不起來反而卡住)。第一次呼叫請加 --tier 指定分級", file=sys.stderr)
+             return 2
+         eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
+     width, cap = _TIER_PARAMS[eff_tier]
+     light = eff_tier == "light"
+     # seq=循序 code loop(skill 設計行為:code 的 standard 走單 reviewer 循序;
+     # 2026-08-18 循序codeloop-tier錨定案——not panel_fmt 是硬規格,code+standard 的 panel 帳照 panel 樣式走)
+     seq = (eff_tier == "standard" and _roster_kind(loop_id) == "code" and not panel_fmt)
+     if seq:
+         width = 1   # 單 reviewer;cap 沿 _TIER_PARAMS["standard"][1]=3(分量本就正確,不另覆寫)
++    # ★人數以應派名冊為準★(名冊是編制數字的單一來源,見 _TIER_ROSTER 上方註解):佔人數的必派席有幾個就是幾人審。
++    # 2026-10-13 踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),這裡照 _TIER_PARAMS 印 3 人,名冊卻只列一位審查員。
++    # ★人數以應派名冊為準,但已退役 panel 閘的舊迴圈除外★(名冊是編制數字的單一來源,見 _TIER_ROSTER 上方註解)。
++    # 新迴圈(首筆帳在 panel 閘退役日之後)代問的是處置閘,處置閘不收最少人數,印名冊的人數不會改到任何判定;
++    # 舊 panel 迴圈代問的是 panel 閘,它拿這個數字當每輪最少人數,印的跟閘要的都維持 _TIER_PARAMS 原值——
++    # 第一版只改印的數字,代碼審 r2 單審席實跑出「印 1 人、閘要 3 人」;再前一版連閘一起改,r1 單審席抓到會放寬舊迴圈的閘。
++    # 2026-10-13 踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),這裡照 _TIER_PARAMS 印 3 人,名冊卻只列一位審查員。
++    gate_width = width
++    old_panel = panel_fmt and not light and not _panel_retired_for(rounds)
++    _roster0, _rnote0 = _roster_next_payload(loop_id, eff_tier)
++    if not old_panel and _roster0 and _roster0.get("seats"):
++        width = sum(1 for _s in _roster0["seats"] if _s.get("occupies_w") and _s.get("requirement") != "conditional") or width
++        gate_width = width
+     # ── tier↔格式一致性(code-loop r1 折入:格式推導可被繞——high 漏帶 --round 會走鬆的 legacy 閘;
+     #    2026-08-18 放寬單一象限:code∧standard∧無round=循序設計行為,不再誤擋——歷史三個循序 loop
+     #    因此被迫落 legacy cap6,見 Issues/loop-next吐不可宣告的tier) ──
+     if rounds:
+         if eff_tier in ("standard", "high") and not panel_fmt and not seq:
+             print(f"擋下:{eff_tier} 這個分級規定每筆記錄都要帶輪次(--round),但這個編號目前的記錄全都沒帶,兩邊對不上。"
+                   "之後記錄請帶 --round;如果一開始分級就選錯,請開新的審查編號", file=sys.stderr)
+             return 2
+         if light and panel_fmt:
+             print("擋下:light 分級只能用單人、不分輪次的記錄,但這個編號的記錄帶了輪次(--round),兩邊對不上。確認分級選對了沒;選錯請開新的審查編號", file=sys.stderr)
+             return 2
+     rounds_count = len({r["round"] for r in rounds}) if panel_fmt else len(rounds)
+     n_next = rounds_count + 1
+ 
+     def emit(phase, extra=None):
+         out = {"phase": phase, "tier": eff_tier, "orchestrator": eff_orch, "round": n_next, "width": width,
+-               "min_seats": width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
+-        _roster, _rnote = _roster_next_payload(loop_id, eff_tier)
++               "min_seats": gate_width, "cap": cap, "advisory": "分級由編排者第一筆記錄時宣告、之後定死;工具只照分級查表,不自己判斷"}
++        _roster, _rnote = _roster0, _rnote0
+         # JSON 消費者也要拿到相對家族(code-codex-s2 r1 單reviewer F2):不改 family 欄(_TIER_ROSTER 契約),加 relative_family 與 orchestrator;複製一份別動共用表
+         if _roster is None:
+             out["roster"] = None
+         else:
+             out["roster"] = {k: v for k, v in _roster.items() if k != "seats"}
+             out["roster"]["orchestrator"] = eff_orch
+             out["roster"]["seats"] = [dict(s, relative_family=("同門" if s.get("family") == "claude" else "外家" if s.get("family") == "external" else s.get("family"))) for s in _roster.get("seats", [])]
+         if _rnote:
+             out["roster_note"] = _rnote
+         def _tpl_flags():
+@@ -15676,21 +15689,21 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+     # 判法與 panel 閘自己拒判的那支同一支(_panel_retired_for),兩邊不會對「新舊」有不同意見。
+     disposal = panel_fmt and not light and _panel_retired_for(rounds)
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+         if disposal:   # 處置閘是獨立的一套,不收 need/min-seats(那是 panel 閘的參數)
+             # readonly:loop next 是唯讀指針,代問不准順手寫席位異常紀錄,重跑才不會灌水(代碼審 r1 正確性席)
+             rc = cmd_loop_status(env, loop_id, spec=spec, repo=repo, disposal=True, readonly=True)
+         else:
+             rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
+                                  spec=spec, repo=repo, panel=(panel_fmt and not light),
+-                                 light=light, min_seats=width)   # 恆傳(light/legacy=1;code-loop r1 折入)
++                                 light=light, min_seats=gate_width)   # 恆傳(light/legacy=1;code-loop r1 折入)
+     if rc == 2:
+         sys.stderr.write(buf.getvalue())
+         return 2
+     if rc == 0:
+         if disposal:
+             _loop_gov_mark(env, loop_id, "converged", "loop next 判處置閘通過")
+             return emit("converged", {"gate_basis": "處置閘通過(每個發現都折入或附理由放行、留痕可重算、引句錨定)"})
+         _loop_gov_mark(env, loop_id, "converged", "loop next 判四關全過")
+         return emit("converged", {"gate_basis": "四關全過(連續乾淨輪數、引用對得上、問題數遞減、文件沒被改過)"})
+     # ③ cap(資訊充分且未 PASS)
+@@ -47218,21 +47231,21 @@ def _push_mainline_full(repo_root, cand):
+     return (r.stdout.strip() or None), False
+ 
+ 
+ def _push_mainlines(repo_root, remote, pushed_ref):
+     """推送的主線候選 → ([(候選名, sha)], 查詢失敗的說明或 "")。候選:refs/remotes/<遠端>/HEAD、main@{upstream}、
+     master@{upstream}、<遠端>/main、<遠端>/master(沒給遠端名跳過帶遠端的);找得到的全部回,不取第一個
+     (推送閘接漂移檢查代碼審 r3:照順序取第一個,git-flow 與 fork 兩頭顧不到,改由 _push_range_start 取最近的分岔點)。
+     ★跳過「就是這次被推的那條」★:候選指到的 refs/remotes/<遠端>/<分支> 跟 refs/remotes/<--push-remote>/<被推分支>
+     完全相同才跳過——遠端與分支都要比(r3 正確性席:只比分支短名時,推 fork 的 main 會把正本的 main 也跳過)。
+     跟 _mainline_ref(筆記形狀擋、每支檔有家、筆記內容審用的主線判法,只認 main/master 的 upstream)並存,理由與收斂路見
+-    Issues/推送前其他閘的範圍在合過主線時會多算。"""
++    Issues/推送前其他閘的範圍在合過主線時會多算。手動 code-loop check 的預設起點(_codeloop_default_base)也用這份候選,只多加本機 main/master。"""
+     pushed = pushed_ref[len("refs/heads/"):] if (pushed_ref or "").startswith("refs/heads/") else None
+     target = f"refs/remotes/{remote}/{pushed}" if (remote and pushed) else None
+     cands = ([f"refs/remotes/{remote}/HEAD"] if remote else []) + ["main@{upstream}", "master@{upstream}"] \
+         + ([f"refs/remotes/{remote}/main", f"refs/remotes/{remote}/master"] if remote else [])
+     out = []
+     for cand in cands:
+         sha, failed = _push_rev(repo_root, cand)
+         if failed:
+             return [], f"查主線候選 {cand} 時 git 失敗或逾時"
+         if not sha:
+@@ -47381,21 +47394,21 @@ def _lens_full_sha(repo_root, rev):
+         return None
+     sha = r.stdout.strip()
+     return sha if _LENS_SHA_RE.match(sha) else None
+ 
+ 
+ def _mainline_ref(repo_root, remote_only=False):
+     """主線 tip:本地 main/master 的 upstream 優先(r3:remote 未必叫 origin),沒設 upstream 才用本地分支。
+     回 (ref 名, sha) 或 None。remote_only=True 只認 upstream(筆記形狀擋:推主線時本地 main 就是要推的頂端,
+     拿它當「已在主線上」會把整批都排除掉)。
+     存量漂移檢查的推送起點另用 _push_mainlines(遠端 HEAD、遠端 main/master 也算候選、跳過被推的那條、全部候選一起算分岔點);
+-    兩套並存的理由與收斂路見 _lens_push_base 的說明。"""
++    兩套並存的理由與收斂路見 _lens_push_base 的說明。手動 code-loop check 的預設起點(_codeloop_default_base)走 _push_mainlines 那套。"""
+     for cand in (("main@{upstream}", "master@{upstream}") if remote_only else ("main@{upstream}", "master@{upstream}", "main", "master")):
+         sha = _lens_full_sha(repo_root, cand)
+         if sha:
+             return cand, sha
+     return None
+ 
+ 
+ def _lens_backing_note(qid, ent, st):
+     """派工鏡頭:被標 needs_backing 的 satisfied 在 200 字截斷之後另接背書註記。形狀不對一律「記錄形狀不對」,不讓派工失敗。"""
+     if st != "satisfied":
+@@ -50926,20 +50939,57 @@ def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
+                         more = f"(另有 {len(cands[qid]) - 1} 個改動檔也命中這題)" if len(cands[qid]) > 1 else ""
+                         ent["hint"] = (f"候選張力:{c.get('file')} 新增 {'/'.join(c.get('patterns') or [])},對照檔 {', '.join(c.get('siblings') or [])} 都沒有"
+                                        f"——刻意沿用既有寫法或刻意改用新做法,status 填 tension{more}")
+             else:
+                 ent = {"status": "na", "question": row["question"], "auto": True,
+                        "reason": "未觸發:" + ", ".join(spec_w for spec_w in (list(s["when"]) + list(s.get("when_raw", ())) for s in _STACK_QUESTION_SPECS[_stk] if s["id"] == qid) for spec_w in spec_w)}
+             tpl[qid] = ent
+     return tpl
+ 
+ 
++def _codeloop_default_base(repo_root):
++    """手動 code-loop check 不帶範圍時的起點 → sha 或 None。
++    主線候選沿用推送閘的 _push_mainlines(遠端 HEAD、main/master 的 upstream、遠端 main/master),只多加本機 main/master——
++    手動檢查在推送之前跑,本機主線可能有還沒推上去的提交;遠端取這條分支在 git 設定登記的上游遠端(要真的存在;上游是本機分支不算),沒有就用 origin,再沒有而只有一個遠端就用它(不掃全部遠端:
++    過期的 fork 遠端若剛好含 HEAD,整條分支會被當成沒有改動而少擋,代碼審 r1 單審席)。
++    找得到的候選一起交給 `git merge-base --all HEAD <候選…>` 算最近的共同祖先,多個時照 _push_pick_base 取歷史最長的。
++    ★不照固定順序取第一個★:原本先試本機 main,本機 main 落後遠端時會把別人已合併的改動算進範圍、印錯分級(2026-10-13 落後
++    52 個提交、誤判 tier=high);推送閘的起點早就因同一個理由改成全部候選一起算(_push_range_start 的說明)。"""
++    rl = _lens_git(repo_root, "remote")
++    remotes = rl.stdout.split() if rl is not None and rl.returncode == 0 else []
++    remote = None
++    br = _lens_git(repo_root, "symbolic-ref", "-q", "--short", "HEAD")
++    if br is not None and br.returncode == 0 and br.stdout.strip():
++        rc = _lens_git(repo_root, "config", "--get", f"branch.{br.stdout.strip()}.remote")
++        name = rc.stdout.strip() if rc is not None and rc.returncode == 0 else ""
++        if name in remotes:          # 上游是本機分支時 remote 是「.」,不算(r2 單審席:拿 @{upstream} 切斜線會把 feature/base 切成 feature)
++            remote = name
++    if remote is None:
++        remote = "origin" if "origin" in remotes else (remotes[0] if len(remotes) == 1 else None)
++    mls, err = _push_mainlines(repo_root, remote, None)
++    if err:
++        return None
++    shas = [sha for _n, sha in mls]
++    for local in ("refs/heads/main", "refs/heads/master"):
++        sha = _lens_full_sha(repo_root, local)
++        if sha:
++            shas.append(sha)
++    shas = list(dict.fromkeys(shas))
++    if not shas:
++        return None
++    r = _lens_git(repo_root, "merge-base", "--all", "HEAD", *shas)
++    bases = [x for x in (r.stdout.split() if r is not None and r.returncode == 0 else []) if _LENS_SHA_RE.match(x)]
++    if not bases:
++        return None
++    return _push_pick_base(repo_root, bases, None, "主線", "")[0]
++
++
+ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False):
+     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
+     AND 無有效 pass/skip 留痕 → blocked=True。
+     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
+     local_sha 與 remote_ref 分支),否則讀當前 checkout HEAD/branch(向後相容)。
+     diff_range 給了則跳 merge-base 推導直接算 tier;否則沿 merge-base..HEAD 現行為。
+     fail-open:pitfalls 出錯 / 非 git / 無 merge-base → tier 視作非 high(不 blocked)。
+     回傳 dict{blocked:bool, reason:str, tier:str}。
+     """
+     import json as _json
+@@ -50954,29 +51004,23 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+     marker_branch = branch or _codeloop_git_branch(repo_root)
+     raw_range = diff_range        # 改寫全零起點之前的原值:合併提交認合進來那一側要拿它比第一個母
+     merge_cache = {}
+     if not marker_sha:
+         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
+         return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
+ 
+     if diff_range is None:
+         # 現行為:merge-base..HEAD 推導(向後相容)
+         head_sha = _codeloop_git_head(repo_root)
+-        mb = None
+-        for base_branch in ("main", "master"):
+-            r = _sp.run(["git", "merge-base", "HEAD", base_branch],
+-                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+-            if r.returncode == 0 and r.stdout.strip():
+-                mb = r.stdout.strip()
+-                if mb == head_sha:
+-                    return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+-                break
++        mb = _codeloop_default_base(repo_root)
++        if mb and mb == head_sha:
++            return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+         if not mb:
+             _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
+             return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+         diff_range = f"{mb}..HEAD"
+     else:
+         # 起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,照筆記形狀擋與每支檔有家共用的判法換成真的起點;
+         # 原本原樣交給 pitfalls、它回 rc2、這裡走 fail-open(2026-09-28 全零修正的代碼審通才席)
+         rg = _lens_range_ok(diff_range)
+         if rg is not None:
+             a, b = rg
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 74e52a90..2b6658a0 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -37157,20 +37157,103 @@ def t_loop_next_roster():
+     with open(vault.parent / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+         f.write(_jj.dumps({"ts": "2026-08-18T09:00:00+08:00", "kind": "caught", "loop": "oldloop",
+                            "severity": "minor", "auditor": "sonnet"}) + "\n")
+     r5 = run(vault, "loop", "next", "oldloop", "--json")
+     check("next-roster: legacy 推導不炸", r5.returncode != 2, r5.stderr[:200])
+     d5 = _j.loads(r5.stdout.strip())
+     check("next-roster: legacy 給單席通才", isinstance(d5.get("roster"), dict)
+           and len(d5["roster"]["seats"]) == 1, r5.stdout[:300])
+ 
+ 
++def t_loop_next_width_matches_roster():
++    """loop next 印的「這輪要 N 人審」要等於應派名冊裡佔人數的必派席數——名冊是編制數字的單一來源;
++    但已退役 panel 閘的舊迴圈除外——它代問 panel 閘、拿這個數字當每輪最少人數,印的跟閘要的都維持分級原值(改收斂判準要走設計審)。
++    2026-10-13 實際踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),人數印 3,名冊卻只列一位審查員;
++    第一版修法連閘的最少人數一起改成 1(r1 單審席:放寬舊迴圈的閘),第二版只改印的數字(r2 單審席:印 1 人、閘要 3 人)。
++    新迴圈代問處置閘、不收最少人數,所以照名冊;預期值寫死,不從名冊重算。"""
++    import json as _j
++    vault, repo, spec, rec, disp = _mk_roster_fixture()
++
++    def check_one(loop, width, min_seats, *extra):
++        r = run(vault, "loop", "next", loop, "--orchestrator", "claude", "--json", *extra)
++        d = _j.loads(r.stdout.strip())
++        check("next 人數(%s %s):印 %s 人、閘最少 %s 人" % (loop, " ".join(extra), width, min_seats),
++              d.get("width") == width and d.get("min_seats") == min_seats, (d.get("width"), d.get("min_seats")))
++    for loop, tier, width, ms in (("dz-w1", "standard", 3, 3), ("dz-w2", "high", 5, 5), ("dz-w3", "light", 1, 1),
++                                  ("code-w1", "standard", 1, 1), ("code-w2", "high", 5, 5), ("code-w3", "light", 1, 1)):
++        check_one(loop, width, ms, "--tier", tier)
++    rec("code-w4", "r1", "正確性-sonnet")     # 一般分級代碼審、帳帶輪次(多人審格式);夾具帳日期 2026-08-18 在 panel 閘退役日前
++    check_one("code-w4", 3, 3)                 # 舊 panel 迴圈:代問 panel 閘,印的跟閘要的都是 3
++    import os as _os
++    _old = _os.environ.get("LUMOS_PANEL_RETIRE_CUTOFF")
++    _os.environ["LUMOS_PANEL_RETIRE_CUTOFF"] = "2026-01-01"   # 把同一份帳當成退役日後的新迴圈 → 代問處置閘
++    try:
++        check_one("code-w4", 1, 1)
++        rh = run(vault, "loop", "next", "code-w4", "--orchestrator", "claude")
++        check("next 人數:新迴圈的一般分級代碼審帶輪次,人讀輸出寫 1 人審(跟名冊的單一審查員一致)", "這輪要 1 人審" in rh.stdout, rh.stdout[:200])
++    finally:
++        if _old is None:
++            _os.environ.pop("LUMOS_PANEL_RETIRE_CUTOFF", None)
++        else:
++            _os.environ["LUMOS_PANEL_RETIRE_CUTOFF"] = _old
++
++def t_codeloop_default_base_prefers_newest_mainline():
++    """手動跑 code-loop check(不帶範圍)時,起點要取離 HEAD 最近的主線共同祖先:本機 main 落後、遠端追蹤的
++    main 已往前時,不能拿落後的本機 main 算範圍(2026-10-13 踩到:本機 main 落後 52 個提交,把別人已合併的
++    高風險改動算進這次範圍,印出錯的 tier=high)。另釘:不掃上游以外的遠端(過期 fork 含 HEAD 會少擋)、
++    HEAD 就在主線上時呼叫端照舊早退、沒有共同祖先回 None。"""
++    import subprocess as _sp, tempfile as _tf, shutil as _sh
++    m = _load_lumos_inproc()
++    root = Path(_tf.mkdtemp(prefix="gctl-cldb-"))
++    try:
++        def g(*a):
++            return _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True, check=True).stdout.strip()
++        g("init", "-q", "-b", "main")
++        g("config", "user.email", "t@t"); g("config", "user.name", "t")
++        g("remote", "add", "origin", str(root / "nowhere"))
++        (root / "a.txt").write_text("1\n", encoding="utf-8"); g("add", "."); g("commit", "-qm", "c1")
++        old = g("rev-parse", "HEAD")
++        (root / "a.txt").write_text("2\n", encoding="utf-8"); g("commit", "-qam", "c2 主線往前")
++        new = g("rev-parse", "HEAD")
++        g("update-ref", "refs/remotes/origin/main", new)
++        g("update-ref", "refs/heads/main", old)            # 本機 main 落後
++        g("checkout", "-q", "-b", "feat", new)
++        (root / "b.txt").write_text("x\n", encoding="utf-8"); g("add", "."); g("commit", "-qm", "feat")
++        feat = g("rev-parse", "HEAD")
++        check("code-loop 預設起點:取遠端追蹤 main(最近的共同祖先),不取落後的本機 main", m._codeloop_default_base(root) == new, "")
++        g("remote", "add", "fork", str(root / "nowhere2"))
++        g("update-ref", "refs/remotes/fork/main", feat)    # 過期 fork 的 main 剛好含 HEAD
++        check("code-loop 預設起點:上游以外的遠端不算候選(fork 含 HEAD 不會讓整條分支變成沒有改動)",
++              m._codeloop_default_base(root) == new, "")
++        v = m._codeloop_guard_verdict(root)
++        check("code-loop check 呼叫端:有改動時不走「merge-base == HEAD」早退", "merge-base == HEAD" not in str(v.get("reason")), v)
++        g("checkout", "-q", "--detach", new)
++        v2 = m._codeloop_guard_verdict(root)
++        check("code-loop check 呼叫端:HEAD 就在主線上 → 照舊早退(無 branch diff)", "merge-base == HEAD" in str(v2.get("reason")), v2)
++        g("checkout", "-q", "feat")
++        g("config", "branch.feat.remote", "fork"); g("update-ref", "-d", "refs/remotes/origin/main")
++        g("update-ref", "refs/remotes/fork/main", new)
++        check("code-loop 預設起點:分支上游登記在 fork → 用 fork 的 main", m._codeloop_default_base(root) == new, "")
++        g("config", "branch.feat.remote", "."); g("config", "branch.feat.merge", "refs/heads/main")
++        g("update-ref", "refs/remotes/origin/main", new); g("update-ref", "-d", "refs/remotes/fork/main")
++        check("code-loop 預設起點:上游是本機分支(remote=.)→ 不把分支名當遠端,退到 origin", m._codeloop_default_base(root) == new, "")
++        g("config", "--unset", "branch.feat.remote"); g("config", "--unset", "branch.feat.merge")
++        g("remote", "rename", "origin", "github"); g("remote", "remove", "fork")
++        check("code-loop 預設起點:只有一個遠端而且不叫 origin → 用它", m._codeloop_default_base(root) == new, "")
++        g("update-ref", "-d", "refs/remotes/github/main")
++        check("code-loop 預設起點:沒有遠端追蹤時照舊用本機 main", m._codeloop_default_base(root) == old, "")
++        g("checkout", "-q", "--orphan", "lone"); g("commit", "-qm", "孤兒")
++        check("code-loop 預設起點:跟主線沒有共同祖先 → None", m._codeloop_default_base(root) is None, "")
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_codeloop_default_base_prefers_newest_mainline")
++
+ def t_loop_status_roster_check():
+     """S3:--roster 觀測對帳(分桶/兼任/unknown 降級/conditional/三形狀/rc 不變/四模式落點)。"""
+     import json as _j
+     vault, repo, spec, rec, disp = _mk_roster_fixture()
+     L = "rl-obs"
+     rec(L, "r1", "lens1-sonnet"); rec(L, "r1", "lens2-sonnet")
+     # r1 dispatch:三形狀並用——dict 頂層/seats 陣列/頂層 list;claude 3 席、外家缺
+     disp(L, "r1-dispatch-s1.json", {"round": "r1", "seat": "s1", "auditor": "lens1-sonnet"})
+     disp(L, "r1-dispatch-s2.json", {"seats": [{"auditor": "lens2-sonnet"}]})
+     disp(L, "r1-dispatch-s3.json", [{"auditor": "lens3-opus"}])
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index e9aca9c3..90fef2a2 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -10,20 +10,21 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
+ 
+ ## 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light` 只派一席架構對齊(Enzo 裁:每個分級都派架構對齊,小改動也不准脫離既有架構亂加;light 不再可跳)。light 有兩個機械來源:改動裡沒有程式檔(只有文件/圖/資料);或這次範圍碰到的計劃是風險低、全靠人驗、推送前小改動閘過(`pitfalls --diff` 不載圖譜,只會提示;`lumos spec-gate --push-check <範圍>` 才印「改動風險分級:light」)。同一份輸出的 `stack_questions_applicable`(這次改動觸發到的棧別效能檢核題)**跟 tier 無關**:有題就要在推送前表態,少一題 `code-loop check` 就擋([[Projects/棧別提問表態閘_計劃]])。
+ - pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:合約測試紅、有適用題表態不完整、**這次改動帶進新的告警**、high 沒有 `lumos code-loop pass|skip --note` 留痕,四個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。新增告警那道跟表態一樣不看 tier,誤報走 `lumos lint-waive <指紋> --note`(留痕、會被統計);整道關掉是 `LUMOS_SKIP_LINT_NEW`,細節見 [[Projects/新增告警閘_計劃]]。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。**把本機提交壓成一個、或 rebase 之後也一樣失效——內容沒變也算**(原本記的提交不再是祖先);所以要壓提交就先壓、再表態與留痕,順序反了就重跑一次(擋下訊息會給指令)。
+ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ - **工具鏈本 repo 的五次修復試行**：首次派工前、每輪開始／接手及收尾，先讀 [[Projects/代碼審修復穩定性試行_計劃]] 的登記、停止狀態與工作目錄限制；僅符合條件的工作走 `reference.md`〈修復穩定性試行〉。五案收尾或到期先回顧，不自行延長；其他專案照原流程。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。凍結前先把手上的改動提交(之後修正關卡拿這個提交當「修正前」)。
++   **首輪派審前先自己變異**:新功能第一次凍結材料之前,編排者對這次新寫的判斷函式逐條分支在複本上改壞一處(條件反過來、邊界差一、回傳值換掉)跑相關測試,沒翻紅的那條補斷言;介面測試的假輸入照真實輸出的形狀造(抓一次真輸出當樣本),不要用手寫的簡化形狀——這兩類漏洞留到審查席才抓,每條都多花一輪(週評通知代碼審跑滿回顧,卷證 `governance/review-reports/code-週評通知/cap-retro.json`)。
+    **先表態**(派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的題填成:
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
+    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
+    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
+    **修訂輪先準備修補鏡頭**：上一輪有修補時，按共用派工範本 §3.1 固定兩端版本、產生 `rN-repair.patch` 與 `rN-repair-binding.json`；完整改動與上下文仍在審材內。先核對上一輪派工單與 fix-check 的起點，缺漏或不同就記材料不可得、釐清後再比較。材料不可得不等於沒有回歸；不改現有閘結果與輪數。
+ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill(專案在 `.lumos/config.json` 的 `arch_targets` 宣告了目標架構的目錄改標目標節點,規則由範本裡的 `LUMOS-ARCH-TARGET: on` 讓 hook 附上),派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。

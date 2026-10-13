@@ -180,3 +180,7 @@ lumos canary record caught|missed|none --loop <id> --severity clean|minor|major|
 
 REVISIT:2026-10-21 補上 loop replay --freeze 寫入端的 --note 防線:提前檢查與真正歸檔之間若有另一個凍結先寫好判定檔,沒帶 --note 的那邊會歸檔舊檔後在 note.strip() 崩潰、繞過重凍要帶理由(代碼審 code-凍結暫存檔清理 r3 正確性席);另開小修正,在 _replay_write_verdict 歸檔前或 _refroze 有值時再判一次 [closed:2026-10-08 寫入端歸檔前再判一次 --note,擋下訊息抽成 _replay_refreeze_blocked 兩處共用;t_loop_replay_freeze_race_needs_note]
 REVISIT:2026-12-08 查治理帳與回報有沒有「同一個編號的判定檔被另一個凍結無聲覆蓋」(寫入端 target.exists 與 os.replace 之間的空檔,主線原本就有;代碼審 code-凍結並行重凍防線 r1 正確性席);有一筆就改成 os.link 不覆蓋建立、撞到 FileExistsError 走重凍路徑
+
+## loop next 的人數以應派名冊為準(2026-10-13)
+
+WHY:loop next 印的「這輪要 N 人審」與 --json 的 width/min_seats,新迴圈從應派名冊數(佔人數的必派席;名冊為空才退回 _TIER_PARAMS);首筆帳在 panel 閘退役日前的舊 panel 迴圈維持 _TIER_PARAMS 原值 [出處:2026-10-13 一般分級代碼審記帳帶了 --round,人數印 3、名冊只列一位審查員;第一版連 panel 閘的最少人數一起改(r1 單審席:放寬舊迴圈的閘),第二版只改印的數字(r2 單審席實跑出印 1 人、閘要 3 人)] [因:新迴圈代問處置閘,處置閘不收最少人數,照名冊不會改到判定;舊迴圈代問 panel 閘,這個數字就是每輪最少人數,改它等於改收斂判準,要走設計審] [不選:只修一般分級代碼審那個組合——其他組合目前剛好一致,但同一個病根] [test:t_loop_next_width_matches_roster]
