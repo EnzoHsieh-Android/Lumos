@@ -50189,30 +50189,33 @@ def t_bound_tests_parallel_error_stops_fast():
             "bad": {"profile": "python", "root": "no-such-dir", "run_cmd": cmd}}})
         bad = ["A", "bad", "t_g0", "real"]
         slows = [["A", "good", "t_slow%d" % i, "real"] for i in range(3)]
-        probe = ("import sys, importlib.machinery, importlib.util, json\n"
-                 "l = importlib.machinery.SourceFileLoader('m', sys.argv[1])\n"
-                 "s = importlib.util.spec_from_loader('m', l); m = importlib.util.module_from_spec(s); l.exec_module(m)\n"
-                 "from pathlib import Path\n"
-                 "try:\n    m._run_bound_tests(Path(sys.argv[2]), [tuple(x) for x in json.loads(sys.argv[3])])\n"
-                 "    print('NO-RAISE')\n"
-                 "except OSError as e:\n    print('RAISED', type(e).__name__)\n")
+        sp = d / "spawned"
+        sp.mkdir()
         # 兩條工作執行緒:出錯那支排第一,或排第二(跟第一支慢測試同時開跑)
         for name, items in (("出錯那支排第一", [bad] + slows), ("出錯那支排在慢測試後面、同時開跑", [slows[0], bad] + slows[1:])):
-            for f in (d / "pids").iterdir():
+            for f in list((d / "pids").iterdir()) + list(sp.iterdir()):
                 f.unlink()
             t0 = _time.time()
-            r = _sp.run([sys.executable, "-c", probe, str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items)],
-                        capture_output=True, text=True, timeout=60)
+            # 出錯那支(t_g0)晚 0.3 秒才出錯,讓另一條工作執行緒先開出慢測試:不然清單是空的,「不留孤兒」照綠(r3 正確性席);
+            # 延遲鍵比對的是展開後的指令字串,要用方法名,不能用 cwd 的 no-such-dir(收尾修正代碼審 r1 正確性席)
+            r = _sp.run([sys.executable, "-c", _bt_spawn_probe(), str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items),
+                         str(sp), _j.dumps({"t_g0": [0.3, 0]})], capture_output=True, text=True, timeout=60)
             took = _time.time() - t0
             check("並行 S5(%s):例外照樣往外丟" % name, "RAISED" in r.stdout, r.stdout[-300:] + r.stderr[-300:])
+            check("並行 S5(%s)前置:出錯前確實有慢測試開出程序" % name, len(list(sp.iterdir())) >= 1, sorted(x.name for x in sp.iterdir()))
             check("並行 S5(%s):整個程式 5 秒內結束,不等慢測試(實際 %.1f 秒;慢測試要 12 秒)" % (name, took), took < 5, took)
             deadline = _time.time() + 2
             while _bt_alive_pids(d) and _time.time() < deadline:
                 _time.sleep(0.1)
-            check("並行 S5(%s):同批已開跑的慢測試被收掉,不留孤兒" % name, not _bt_alive_pids(d), _bt_alive_pids(d))
+            while _bt_groups_alive(sp) and _time.time() < deadline:
+                _time.sleep(0.1)
+            check("並行 S5(%s):同批已開跑的慢測試被收掉,不留孤兒" % name, not _bt_alive_pids(d) and not _bt_groups_alive(sp),
+                  (_bt_alive_pids(d), _bt_groups_alive(sp)))
             _bt_kill_pids(d)
     finally:
         _bt_kill_pids(d)
+        if (d / "spawned").is_dir():
+            _bt_kill_groups(d / "spawned")
         _sh.rmtree(d, ignore_errors=True)
     print("  ✓ t_bound_tests_parallel_error_stops_fast")
 
@@ -50247,24 +50250,15 @@ def t_bound_tests_parallel_interrupt_stops_dispatch():
     try:
         _bt_parallel_fixture(d, 2)
         (d / "started").mkdir()
+        (d / "spawned").mkdir()
         (d / "run.py").write_text("import sys, time, os\nm = sys.argv[1]\n"
                                   "here = os.path.dirname(os.path.abspath(__file__))\n"
                                   "open(os.path.join(here, 'pids', str(os.getpid())), 'w').close()\n"
                                   "open(os.path.join(here, 'started', m), 'w').close()\n"
                                   "time.sleep(1.5)\nprint('1 passed in 0.01s')\n", encoding="utf-8")
         items = [["A", "python", "t_g%d" % i, "real"] for i in range(8)]
-        # 先把 SIGINT 裝回預設處理:推送前掛鉤在背景開分片,非互動 shell 的背景程序會繼承「忽略 SIGINT」,
-        # Python 啟動時看到已忽略就不裝 KeyboardInterrupt,中斷整個被吞(2026-10-13 推送閘實測紅)
-        probe = ("import signal; signal.signal(signal.SIGINT, signal.default_int_handler)\n"
-                 "import sys, time, importlib.machinery, importlib.util, json\n"
-                 "l = importlib.machinery.SourceFileLoader('m', sys.argv[1])\n"
-                 "s = importlib.util.spec_from_loader('m', l); m = importlib.util.module_from_spec(s); l.exec_module(m)\n"
-                 "from pathlib import Path\n"
-                 "try:\n    m._run_bound_tests(Path(sys.argv[2]), [tuple(x) for x in json.loads(sys.argv[3])])\n"
-                 "    print('NO-INTERRUPT')\n"
-                 "except KeyboardInterrupt:\n    print('INTERRUPTED', flush=True)\n    time.sleep(5)\n")
-        pr = _sp.Popen([sys.executable, "-c", probe, str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items)],
-                       stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        pr = _sp.Popen([sys.executable, "-c", _bt_spawn_probe(), str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items),
+                        str(d / "spawned"), "{}", "5"], stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
         deadline = _time.time() + 30
         while not any((d / "started").iterdir()) and _time.time() < deadline and pr.poll() is None:
             _time.sleep(0.05)
@@ -50280,6 +50274,157 @@ def t_bound_tests_parallel_interrupt_stops_dispatch():
         _bt_kill_pids(d)
         _sh.rmtree(d, ignore_errors=True)
     print("  ✓ t_bound_tests_parallel_interrupt_stops_dispatch")
+
+
+def _bt_spawn_probe():
+    """子程序裡跑閘的探針:把 subprocess.Popen 包一層,每開一支就把 pid 寫進 spawned/(程序群組編號=pid),
+    並可依指令裡的子字串在開程序前後各延遲幾秒(argv[5] 是 JSON {子字串: [前, 後]}),用來重現「開程序很慢」。
+    結果印 RAISED(OSError)/INTERRUPTED/NO-RAISE;argv[6](選填)是印 INTERRUPTED 後再待幾秒(S7 要看中斷後還有沒有派新的)。
+    先把 SIGINT 裝回預設處理:推送前掛鉤在背景開分片,非互動 shell 的背景程序會繼承「忽略 SIGINT」,
+    Python 啟動時看到已忽略就不裝 KeyboardInterrupt,中斷整個被吞(2026-10-13 推送閘實測紅)。"""
+    return ("import signal; signal.signal(signal.SIGINT, signal.default_int_handler)\n"
+            "import sys, os, time, json, subprocess, importlib.machinery, importlib.util\n"
+            "spawned, delays = sys.argv[4], json.loads(sys.argv[5])\n"
+            "_Real = subprocess.Popen\n"
+            "class _P(_Real):\n"
+            "    def __init__(self, cmd, *a, **k):\n"
+            "        pre, post = next((v for s, v in delays.items() if s in str(cmd)), (0, 0))\n"
+            "        time.sleep(pre)\n"
+            "        super().__init__(cmd, *a, **k)\n"
+            "        open(os.path.join(spawned, str(self.pid)), 'w').close()\n"
+            "        time.sleep(post)\n"
+            "subprocess.Popen = _P\n"
+            "l = importlib.machinery.SourceFileLoader('m', sys.argv[1])\n"
+            "s = importlib.util.spec_from_loader('m', l); m = importlib.util.module_from_spec(s); l.exec_module(m)\n"
+            "from pathlib import Path\n"
+            "try:\n    m._run_bound_tests(Path(sys.argv[2]), [tuple(x) for x in json.loads(sys.argv[3])])\n"
+            "    print('NO-RAISE', flush=True)\n"
+            "except KeyboardInterrupt:\n    print('INTERRUPTED', flush=True)\n"
+            "    time.sleep(float(sys.argv[6]) if len(sys.argv) > 6 else 0)\n"
+            "except OSError as e:\n    print('RAISED', type(e).__name__, flush=True)\n")
+
+
+def _bt_groups_alive(spawned):
+    """spawned/ 記下的程序群組裡,還有成員活著的那些(群組 leader 已收掉、孫程序還在也算活著)。"""
+    import os as _os
+    alive = []
+    for f in Path(spawned).iterdir():
+        try:
+            _os.killpg(int(f.name), 0)
+            alive.append(int(f.name))
+        except (OSError, ValueError):
+            pass
+    return alive
+
+
+def _bt_kill_groups(spawned):
+    import os as _os, signal as _sig
+    for pid in _bt_groups_alive(spawned):
+        try:
+            _os.killpg(pid, _sig.SIGKILL)
+        except OSError:
+            pass
+
+
+def t_bound_tests_parallel_interrupt_reaps():
+    """[合約測試閘並行執行 S7 補]同時跑時主流程被中斷(Ctrl-C),同批已開跑的測試程序群組要被收掉,不留孤兒
+    (高風險代碼審 r3 正確性席:S7 只查不再派新的,拿掉中斷路徑的收尾也照綠)。假測試睡 30 秒,探針一印 INTERRUPTED 就結束。"""
+    import subprocess as _sp, shutil as _sh, time as _time, json as _j, signal as _sig
+    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+    sp = d / "spawned"
+    pr = None
+    try:
+        _bt_parallel_fixture(d, 2)
+        sp.mkdir()
+        (d / "run.py").write_text("import time\ntime.sleep(30)\nprint('1 passed in 0.01s')\n", encoding="utf-8")
+        items = [["A", "python", "t_g%d" % i, "real"] for i in range(4)]
+        pr = _sp.Popen([sys.executable, "-c", _bt_spawn_probe(), str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items),
+                        str(sp), "{}"], stdout=_sp.PIPE, stderr=_sp.PIPE, text=True)
+        deadline = _time.time() + 30
+        while len(list(sp.iterdir())) < 2 and _time.time() < deadline and pr.poll() is None:
+            _time.sleep(0.05)
+        pr.send_signal(_sig.SIGINT)
+        out, err = pr.communicate(timeout=60)
+        check("並行 S7 補 前置:中斷前兩支都已開跑,中斷有送到", "INTERRUPTED" in out and len(list(sp.iterdir())) >= 2,
+              (out[-300:] + err[-300:], sorted(x.name for x in sp.iterdir())))
+        deadline = _time.time() + 2
+        while _bt_groups_alive(sp) and _time.time() < deadline:
+            _time.sleep(0.1)
+        check("並行 S7 補:中斷後同批已開跑的測試程序群組都被收掉", not _bt_groups_alive(sp), _bt_groups_alive(sp))
+    finally:
+        if pr is not None and pr.poll() is None:
+            pr.kill()
+        if sp.is_dir():
+            _bt_kill_groups(sp)
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_parallel_interrupt_reaps")
+
+
+def t_bound_tests_parallel_slow_spawn_reaped():
+    """[合約測試閘並行執行 S5 補]同時跑時一支出錯,另一支正卡在「程序開了、還沒交回」超過兩秒,
+    收尾也要等它交回再收掉,不能等到一半就放棄、讓程式結束後留下孤兒(高風險代碼審 r3 併發席:舊版最多等 2 秒)。
+    探針讓 t_g1 開出程序後再卡 3 秒才交回,出錯那支(平台 root 不存在)晚 0.5 秒才出錯。"""
+    import subprocess as _sp, shutil as _sh, time as _time, json as _j
+    d = Path(tempfile.mkdtemp(prefix="gctl-btpar-"))
+    sp = d / "spawned"
+    try:
+        cmd = "{python} run.py {method}"
+        _bt_parallel_fixture(d, 2, {"default_platform": "good", "platforms": {
+            "good": {"profile": "python", "root": ".", "run_cmd": cmd},
+            "bad": {"profile": "python", "root": "no-such-dir", "run_cmd": cmd}}})
+        sp.mkdir()
+        (d / "run.py").write_text("import time\ntime.sleep(30)\nprint('1 passed in 0.01s')\n", encoding="utf-8")
+        items = [["A", "good", "t_g1", "real"], ["A", "bad", "t_g0", "real"]]
+        r = _sp.run([sys.executable, "-c", _bt_spawn_probe(), str(Path(GRAPHCTL).resolve()), str(d), _j.dumps(items),
+                     str(sp), _j.dumps({"t_g1": [0, 3], "t_g0": [0.5, 0]})], capture_output=True, text=True, timeout=60)
+        check("並行 S5 補 前置:例外照樣往外丟,慢交回那支確實開了程序", "RAISED" in r.stdout and len(list(sp.iterdir())) == 1,
+              (r.stdout[-300:] + r.stderr[-300:], sorted(x.name for x in sp.iterdir())))
+        deadline = _time.time() + 2
+        while _bt_groups_alive(sp) and _time.time() < deadline:
+            _time.sleep(0.1)
+        check("並行 S5 補:開程序很慢的那支也被收掉,不留孤兒", not _bt_groups_alive(sp), _bt_groups_alive(sp))
+    finally:
+        if sp.is_dir():
+            _bt_kill_groups(sp)
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_bound_tests_parallel_slow_spawn_reaped")
+
+
+def t_bound_tests_reap_deadline_not_reset():
+    """[合約測試閘並行執行 收尾上限]收尾等「正在開」的程序最多等一次上限,重叫 reap(收尾中途再按 Ctrl-C 會重試)
+    不能每次重算期限——不然連按 Ctrl-C 反而永遠停不下來(收尾修正代碼審 r1 正確性席實測)。
+    一支 popen 卡 3 秒才交回,第一次 reap(wait=1) 約 1 秒返回,第二次要立刻返回,最後那支開完當下被收掉。"""
+    import threading as _th, time as _time, subprocess as _sp
+    m = _load_lumos_inproc()
+    procs = m._BtProcs()
+    got = {}
+
+    def slow_popen():
+        _time.sleep(3)
+        return _sp.Popen([sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True)
+
+    t = _th.Thread(target=lambda: got.update(p=procs.launch(slow_popen)), daemon=True)
+    t.start()
+    _time.sleep(0.2)
+    t0 = _time.monotonic()
+    procs.reap(wait=1.0)
+    first = _time.monotonic() - t0
+    t1 = _time.monotonic()
+    procs.reap(wait=1.0)
+    second = _time.monotonic() - t1
+    t.join(10)
+    try:
+        check("收尾上限 前置:第一次 reap 等到上限才返回(實際 %.2f 秒)" % first, 0.8 <= first < 2.5, first)
+        check("收尾上限:第二次 reap 不重算期限、立刻返回(實際 %.2f 秒)" % second, second < 0.3, second)
+        p = got.get("p")
+        deadline = _time.time() + 3
+        while p is not None and p.poll() is None and _time.time() < deadline:
+            _time.sleep(0.05)
+        check("收尾上限:超過上限才開完的那支,開完當下被收掉", p is not None and p.poll() is not None, p)
+    finally:
+        if got.get("p") is not None and got["p"].poll() is None:
+            got["p"].kill()
+    print("  ✓ t_bound_tests_reap_deadline_not_reset")
 
 
 def t_bound_tests_secs_monotonic():
