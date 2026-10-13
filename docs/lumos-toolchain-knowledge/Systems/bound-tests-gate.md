@@ -58,6 +58,8 @@ about_code:
 
 > 白話:改到相依功能,以前工具只會「點名」那些功能綁的測試,跑不跑靠自律。現在 pre-push 每次呼叫的 `code-loop check` 會把被點名的測試當場跑完:紅的、綁了不存在測試的、名字不合法的,一律擋推送。
 
+本機的掛接點在 `scripts/hooks/pre-push`(推送前呼叫 `code-loop check`,tag 推送另走 `bound-tests --advisory`);CI 那一側在 `.github/workflows/ci.yml`,全套與後盾閘分成平行的工作跑。
+
 ## 怎麼跑
 
 ★2026-09-07 起有兩條路★([[Projects/合約測試閘什麼時候跑_計劃]],人裁):

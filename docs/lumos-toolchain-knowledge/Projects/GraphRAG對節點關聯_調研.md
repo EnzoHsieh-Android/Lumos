@@ -4,12 +4,12 @@ summary: |-
   KEY:Graph RAG 招牌手法對我們幫助有限——PPR 擴散 2026-07-28 已消融殺除(候選池中位 3 < 推薦位 8,重排無從改變結果);模型抽知識圖外界實測丟約三成實體,我們的圖是人寫帶型別連結;社群摘要答整體題,有 scope 標籤與目錄頂著
   KEY:外界評比(arXiv 2502.11371、GraphRAG-Bench ICLR'26):單跳題普通檢索贏、多跳題圖檢索小贏、兩者合併最好;編輯時推播本質是單跳查詢
   KEY:真正卡住的是評測題少且同源自驗,Graph RAG 解決不了;外界最有用的訊號是 agentic search 勝過預先塞內容(Claude Code、GRASP、LocAgent)→建議一:擴充既有逐字稿唯讀儀器 recount.py 量「推了什麼、有沒有用上」與 miss(不新增 lumos 寫帳,F08 否決過),以 miss 長出非同源評測題;建議二:搜尋零命中時用詞共現改寫(借 LazyGraphRAG,不用模型)——兩者都先量再做,待 Enzo 裁
-status: doing
+status: done
 created: 2026-09-11
 updated: 2026-09-11
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/retrieval
 related:
   - "[[Projects/檢索優化_調研]]"
@@ -17,6 +17,7 @@ related:
   - "[[Systems/retrieval-ranking]]"
   - "[[Projects/結構訊號補鏈D3_計劃]]"
   - "[[Projects/主session鏡頭利用率_計劃]]"
+  - "[[Projects/中文無空白查詢回退_計劃]]"
 decisions:
   - content: 採納建議一(記「推了什麼、agent 有沒有用上」,以 miss 長出非同源評測題)與建議二(搜尋零命中時用詞共現改寫,借 LazyGraphRAG 不用模型);不借 PPR 重排、模型抽圖、社群摘要、RRF 換融合公式。順序:建議一先做(它也是建議二的量測基礎),各自立計劃過設計審
     id: d1

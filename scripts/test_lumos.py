@@ -46523,6 +46523,113 @@ def t_hooks_path_forms_all_recognized():
     print("  ✓ t_hooks_path_forms_all_recognized")
 
 
+def t_hooks_path_sibling_worktree():
+    """★附加工作樹裡,掛鉤路徑指向主工作目錄的 hooks 不算沒接上★(2026-10-13 實機確認)。
+
+    core.hooksPath 存在共用的 .git/config,所有工作樹看到的都是主工作目錄那份 scripts/hooks;
+    enforcement 只認「指向自己這個工作樹」,於是在每個附加工作樹裡都把每次推送都在跑的兩道 git 閘印成 inactive。
+    ★但也不能直接說 active★:跑的是主工作目錄那份,工作樹裡改過的 hook 推送時不會跑——內容不同要講出來。
+    反向對照:指向無關 repo 的 scripts/hooks 不准被當成自家;主工作目錄那份不在要翻紅。
+    """
+    import subprocess as _sp, tempfile as _tf, shutil as _sh, os as _os
+    _need_src("scripts/lumos")
+    lumos = Path(GRAPHCTL).resolve()
+    base = Path(_tf.mkdtemp(prefix="gctl-wthooks-"))
+    try:
+        def _repo(p):
+            _sp.run(["git", "init", "-q", str(p)], check=True, capture_output=True)
+            h = p / "scripts" / "hooks"
+            h.mkdir(parents=True)
+            for fn in ("pre-commit", "pre-push"):
+                f = h / fn
+                f.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                _os.chmod(f, 0o755)
+            g = ["git", "-C", str(p), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.hooksPath=/dev/null"]
+            _sp.run([*g, "add", "-A"], check=True, capture_output=True)
+            _sp.run([*g, "commit", "-q", "-m", "init"], check=True, capture_output=True)
+            return h
+        main = base / "main"
+        mh = _repo(main)
+        wt = base / "wt"
+        _sp.run(["git", "-C", str(main), "worktree", "add", "-q", str(wt)], check=True, capture_output=True)
+        _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(mh)], check=True, capture_output=True)
+
+        def _line(layer):
+            r = _sp.run([sys.executable, str(lumos), "enforcement"],
+                        capture_output=True, text=True, cwd=str(wt), timeout=180)
+            rows = [row for row in r.stdout.splitlines() if layer in row]
+            return rows[0] if rows else "沒有這一列"
+
+        for layer in ("git-pre-commit", "git-pre-push"):
+            ln = _line(layer)
+            check("★工作樹裡掛鉤指向主工作目錄、內容相同 → active(%s)★" % layer,
+                  " active" in ln and "inactive" not in ln, ln)
+            fn = layer.removeprefix("git-")
+            check("★說明要講跑的是主工作目錄那份(%s)★" % layer, ("另一個工作目錄那份 %s" % (mh / fn)) in ln, ln)
+
+        # 工作樹裡改了 pre-push:推送時跑的不是這份 → degraded,不是 active 也不是 inactive
+        (wt / "scripts" / "hooks" / "pre-push").write_text("#!/bin/sh\necho changed\nexit 0\n", encoding="utf-8")
+        ln = _line("git-pre-push")
+        check("★工作樹的 hook 跟生效那份不同 → degraded★", "degraded" in ln, ln)
+        ln = _line("git-pre-commit")
+        check("★沒改的那支照樣 active★", " active" in ln and "inactive" not in ln, ln)
+
+        # 工作樹裡根本沒有這支 hook:推送時本來就跑生效那份,不准說成「內容不同」而判 degraded(代碼審 r1 通才席)
+        (wt / "scripts" / "hooks" / "pre-commit").unlink()
+        ln = _line("git-pre-commit")
+        check("★工作樹沒有同名 hook → 照樣 active,不是 degraded★", " active" in ln and "degraded" not in ln, ln)
+        check("★而且說明講的是沒有,不是不同★", "不同" not in ln, ln)
+
+        # 指向同 repo 裡某個子資料夾的 scripts/hooks:不是另一個工作目錄的根,不准當成工作樹那份(代碼審 r1 通才席)
+        sub = main / "sub" / "scripts" / "hooks"
+        sub.mkdir(parents=True)
+        for fn in ("pre-commit", "pre-push"):
+            f = sub / fn
+            f.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            _os.chmod(f, 0o755)
+        _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(sub)], check=True, capture_output=True)
+        ln = _line("git-pre-push")
+        check("★指向 repo 內子資料夾的 scripts/hooks 不算另一個工作目錄★",
+              "inactive" in ln and "另一個工作目錄" not in ln, ln)
+
+        # 反向對照①:指向無關 repo 的 scripts/hooks → 不是自家
+        oh = _repo(base / "other")
+        _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(oh)], check=True, capture_output=True)
+        ln = _line("git-pre-commit")
+        check("★指向無關 repo 的 scripts/hooks 不准當自家★", "inactive" in ln, ln)
+
+        _sp.run(["git", "-C", str(main), "config", "core.hooksPath", str(mh)], check=True, capture_output=True)
+        # 生效那份在但不可執行 → inactive(代碼審 r2 通才席:拿掉可執行檢查原本照綠)
+        _os.chmod(mh / "pre-push", 0o644)
+        ln = _line("git-pre-push")
+        check("★生效那份不可執行 → inactive★", "inactive" in ln, ln)
+        _os.chmod(mh / "pre-push", 0o755)
+        # 生效那份的回頭重讀沒帶 --gate → inactive,而且點名生效那份(代碼審 r2 通才席)
+        keep = (mh / "pre-push").read_text(encoding="utf-8")
+        (mh / "pre-push").write_text("#!/bin/sh\nlumos note-audit reread-check --range x\n", encoding="utf-8")
+        ln = _line("git-pre-push")
+        check("★生效那份沒接上關卡 → inactive 並點名它★", "inactive" in ln and str(mh / "pre-push") in ln, ln)
+        (mh / "pre-push").write_text(keep, encoding="utf-8")
+        # 工作樹那份讀不到:不准掉成 unknown 只剩錯誤碼,要列 degraded 並講讀不到哪支(代碼審 r2 通才席)
+        wpc = wt / "scripts" / "hooks" / "pre-commit"
+        wpc.write_text((mh / "pre-commit").read_text(encoding="utf-8"), encoding="utf-8")
+        _os.chmod(wpc, 0o000)
+        try:
+            ln = _line("git-pre-commit")
+        finally:
+            _os.chmod(wpc, 0o644)
+        if _os.access(wpc, _os.R_OK) and _os.geteuid() != 0:
+            check("★工作樹那份讀不到 → degraded 並講讀不到★", "degraded" in ln and "讀不到" in ln, ln)
+
+        # 反向對照②:指回主工作目錄,但那份 pre-commit 不在 → inactive
+        (mh / "pre-commit").unlink()
+        ln = _line("git-pre-commit")
+        check("★主工作目錄那份不在 → inactive★", "inactive" in ln, ln)
+    finally:
+        _sh.rmtree(base, ignore_errors=True)
+    print("  ✓ t_hooks_path_sibling_worktree")
+
+
 def t_wrapper_log_path_agrees():
     """★第二個來源的路徑要兩邊都宣告,不能只有讀的那一側自己猜★(2026-09-08 架構對齊席 A1)。
 
