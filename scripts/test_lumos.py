@@ -34463,14 +34463,15 @@ def t_summary_line_verify():
     orig = m.atomic_write_verify
 
     def _boom(*a, **k):
-        raise RuntimeError("測試:自驗失敗")
+        raise m.WriteBlocked("測試:自驗失敗")
     m.atomic_write_verify = _boom
-    buf = io.StringIO()
+    buf, old_argv = io.StringIO(), sys.argv
+    sys.argv = ["lumos", "--vault", str(v), "summary-line", "Systems/Pay", "正常的一條", "改過的一條"]
     try:
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            rc = m.cmd_summary_line(m.Env(v), "Systems/Pay", "正常的一條", "改過的一條")
+            rc = m._cli()
     finally:
-        m.atomic_write_verify = orig
+        m.atomic_write_verify, sys.argv = orig, old_argv
     check("①寫入自驗失敗:rc2、原檔不動", rc == 2 and p.read_text(encoding="utf-8") == before, buf.getvalue())
     r = run(v, "summary-line", "Systems/Pay", "正常的一條", "改過的一條", "--dry-run")
     check("②--dry-run:印改後、檔不動", r.returncode == 0 and "改過的一條" in r.stdout and p.read_text(encoding="utf-8") == before,
@@ -48037,6 +48038,53 @@ def _disp_run(args, cwd=None):
     return _sp.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, cwd=cwd)
 
 
+def t_stack_questions_kotlin_spring_triggers():
+    """[後端工程提問與證據擴充 S4] Kotlin 寫 Spring 後端時,交易/資料存取與外呼的寫法要觸發 kt 的後端題;
+    只出現 Android 寫法(Room 的 @Entity/@Query("SELECT…")、Retrofit、Compose)不觸發新加的兩題。翻紅釘:拿掉這兩題 → ①② 翻紅。"""
+    m = _load_lumos_inproc()
+    def hits(lines):
+        app, meta = m._stack_applicability({"kt": lines}, 300)
+        return {x["id"] for x in meta.get("kt", []) if x["applicable"]}
+    spring_data = ['@Transactional', 'fun place(cmd: PlaceOrder) {', 'interface OrderRepo : JpaRepository<Order, Long>',
+                   'jdbcTemplate.update("update stock set qty = qty - 1 where id = ?", id)']
+    check("① Spring 交易與資料存取寫法觸發 kt-springdata", "kt-springdata" in hits(spring_data), str(hits(spring_data)))
+    spring_ext = ['val body = webClient.get().uri("/stock").retrieve()', 'private val rest = RestTemplate()']
+    check("② Spring 外呼寫法觸發 kt-springhttp", "kt-springhttp" in hits(spring_ext), str(hits(spring_ext)))
+    android = ['@Entity(tableName = "orders")', '@Query("SELECT * FROM orders")', 'val api = Retrofit.Builder().build()',
+               '@Composable fun Screen() {}']
+    h = hits(android)
+    check("③ Android 寫法不觸發新加的兩題", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
+    big = hits(["val x = 1"] * 400)
+    check("④ 超過行數門檻也不因門檻而亮(shape_only)", "kt-springdata" not in big and "kt-springhttp" not in big and "kt-coroutines" in big, str(big))
+    # 代碼審 r1 邊界席、通才席:Android 自訂類名與通用字誤觸發、Spring 的其他寫法漏觸發
+    for line in ('class AppWebClient : WebViewClient() {', 'class RestClient(private val api: Api) {', 'val c = MyRestClient()',
+                 'val webClient = MyWebViewClient()', 'val c: DatabaseClient = get()', '@Lock("x") fun f() {}'):
+        h = hits([line])
+        check(f"⑤ Android 自訂寫法不觸發:{line}", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
+    for line, qid in (('@get:Transactional', "kt-springdata"), ('val rows = jdbcClient.sql("select 1").query()', "kt-springdata"),
+                      ('private val jdbc: JdbcClient', "kt-springdata"), ('private val mongo: MongoTemplate', "kt-springdata"),
+                      ('@Lock(LockModeType.PESSIMISTIC_WRITE)', "kt-springdata"), ('val db = DatabaseClient.create(factory)', "kt-springdata"),
+                      ('val client = RestClient.builder().build()', "kt-springhttp"), ('@HttpExchange("/stock")', "kt-springhttp"),
+                      ('private val webClient: WebClient', "kt-springhttp"), ('import org.springframework.web.client.RestClient', "kt-springhttp")):
+        check(f"⑥ Spring 寫法要觸發 {qid}:{line}", qid in hits([line]), str(hits([line])))
+    # 代碼審 r2 邊界席、正確性席:diff 常常只改呼叫行、宣告不在 diff 裡;小寫變數的 Spring 用戶端呼叫要亮(② 原本靠同一份裡的 RestTemplate() 才綠)
+    for line, qid in (('val body = webClient.get().uri("/stock").retrieve()', "kt-springhttp"),
+                      ('val r = restTemplate.exchange(url, HttpMethod.POST, entity, String::class.java)', "kt-springhttp"),
+                      ('val res = restClient.get().uri("/x").retrieve().body<String>()', "kt-springhttp"),
+                      ('restTemplate.getForObject(url, String::class.java)', "kt-springhttp"),
+                      ('val rows = databaseClient.sql("select * from t").fetch().all()', "kt-springdata"),
+                      # 代碼審 r3 通才席:變數名帶前綴、this. 開頭、安全呼叫、清單外的方法
+                      ('val r = paymentWebClient.get().uri("/x").retrieve()', "kt-springhttp"),
+                      ('stockRestTemplate.exchange(url, HttpMethod.GET, null, String::class.java)', "kt-springhttp"),
+                      ('this.restTemplate.postForLocation(url, body)', "kt-springhttp"),
+                      ('restTemplate?.exchange(url, HttpMethod.GET, null, String::class.java)', "kt-springhttp"),
+                      ('orderDatabaseClient.sql("select 1").fetch().all()', "kt-springdata")):
+        check(f"⑦ 只有呼叫行也要觸發 {qid}:{line}", qid in hits([line]), str(hits([line])))
+    for line in ('webView.webViewClient = MyWebViewClient()', 'webClient.onPageFinished(view, url)', 'val webClient = AppWebClient()'):
+        h = hits([line])
+        check(f"⑧ Android WebView 寫法不觸發:{line}", "kt-springhttp" not in h, str(h))
+
+
 def t_stack_question_triggers():
     """[表態閘 S2]每題有唯一 id 與非空 when、id 集合釘住(改 id=刻意動作,r3 正確性席 C1);
     比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;前端 .ts 歸 vue。
@@ -48047,6 +48095,7 @@ def t_stack_question_triggers():
     check("①每題 id 唯一且 when 非空(regex 已在載入時編譯)", len(ids) == len(set(ids)) and all(s["when"] for v in m._STACK_QUESTION_SPECS.values() for s in v), str(ids))
     check("①id 集合釘住(改 id 要來改這條測試——改語意才換 id 的紀律靠這裡逼)",
           set(ids) == {"kt-compose", "kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections", "kt-leaks", "kt-startup",
+                       "kt-springdata", "kt-springhttp",   # 2026-10-12 Kotlin 寫 Spring 後端(後端工程提問與證據擴充 S4)
                        "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
@@ -48134,8 +48183,8 @@ def t_stack_question_triggers():
         _disp_repo(d)
         r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
         data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
-        check("⑤stack_questions 語意不變(kt 整組 7 題)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
-        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 8, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+extcode
+        check("⑤stack_questions 語意不變(kt 整組 7 題;Spring 後端兩題是 shape_only 不進整組清單)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
+        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 10, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+Spring 後端兩題+extcode
         # 刪行也算:拿掉 viewModelScope 那行 → kt-coroutines 仍適用
         P = Path(d); (P / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n}\n", encoding="utf-8")
         import subprocess as _sp
@@ -56745,6 +56794,1632 @@ def t_spec_gate_ears_shapes():
     check("② 合法的觸發型與無條件型不被點名", "S1(" not in r.stdout and "S2(" not in r.stdout, r.stdout[-500:])
 
 
+def t_backend_qo_question_section_not_parsed():
+    """[後端工程提問與證據擴充] 〈待決問題〉的正文解析撤出(代碼審 code-後端情境出題 三輪都在同一處換形狀,已改存開頭欄位,
+    [[Projects/待決問題改存開頭欄位_計劃]]):規格閘與 lint 不讀這一節,有標阻塞的題也不擋不報,跟沒有這一節的計劃一樣。
+    開頭欄位版上線後保留:題目改存開頭欄位,正文照樣不讀。翻紅釘:規格閘或 lint 又去讀正文這一節 → ①② 翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo7")
+    _qo_plan(kg, "na", ["- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:待人][阻塞]",
+                        "- [Q2] 甲 [類:需求][階段:需求][狀態:已決] → #d9"])
+    r = run(kg, "spec-gate", "Projects/na_計劃")
+    check("① 規格閘不因正文〈待決問題〉擋、不印這一節", r.returncode == 0 and "待決問題" not in r.stdout, r.stdout[-600:])
+    out = run(kg, "lint", "Projects/na_計劃").stdout
+    check("② lint 不報〈待決問題〉的寫法", "待決問題" not in out, out[-600:])
+
+
+def t_backend_qo_stage_facets_only():
+    """[後端工程提問與證據擴充 S3] pitfalls --stage 只列那一階段的需求風險面;有〈待決問題〉一節也不列題(正文解析已撤出);
+    不帶 --stage 時有沒有這一節輸出一字不差;錯的階段、與 --diff 並用、讀不動的檔都回 2。翻紅釘:又列出題目 → ② 翻紅。"""
+    import json as _j
+    root = Path(tempfile.mkdtemp(prefix="gctl-qo8-"))
+    (root / ".git").mkdir()
+    md = root / "plan.md"
+    md.write_text("# 訂單系統\n\n需求:做一個訂單 API,使用者可以下單。\n\n## 待決問題\n\n- [Q1] 阻塞題 [類:需求][階段:需求][狀態:待人][阻塞]\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
+    check("① rc0,列出需求階段的風險面(一律適用的 req-success 與提到下單的 req-duplicate)",
+          r.returncode == 0 and "[req-success]" in r.stdout and "[req-duplicate]" in r.stdout and "[arch-necessity]" not in r.stdout, r.stdout[-600:])
+    check("② 不列〈待決問題〉的題", "[Q1]" not in r.stdout and "待決問題" not in r.stdout, r.stdout[-600:])
+    j = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求", "--json")
+    check("③ JSON 只有階段與風險面", j.returncode == 0 and set(_j.loads(j.stdout)) == {"stage", "facets"}, j.stdout[-400:])
+    plain = run(root, "pitfalls", str(md), "--repo", str(root))
+    other = root / "plan2.md"
+    other.write_text(md.read_text(encoding="utf-8").replace("## 待決問題", "## 其他筆記"), encoding="utf-8")
+    plain2 = run(root, "pitfalls", str(other), "--repo", str(root))
+    check("④ 不帶 --stage 時,有沒有〈待決問題〉一節輸出一字不差", plain.stdout.replace(str(md), "X") == plain2.stdout.replace(str(other), "X")
+          and plain.returncode == plain2.returncode, plain.stdout[-400:])
+    bad = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "上線")
+    check("⑤ 不認得的階段回 2", bad.returncode == 2, bad.stdout + bad.stderr)
+    both = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--stage", "需求")
+    check("⑥ 跟 --diff 並用回 2", both.returncode == 2, both.stdout + both.stderr)
+    badenc = root / "bad.md"
+    badenc.write_bytes(b"\xff\xfe## \x00x\n")
+    be = run(root, "pitfalls", str(badenc), "--repo", str(root), "--stage", "需求")
+    check("⑦ 讀不動的計劃(非 UTF-8)回 2、訊息帶「擋下:」、不吐 Python 追蹤", be.returncode == 2 and "擋下:" in be.stderr and "Traceback" not in be.stderr, be.stderr[-400:])
+
+
+def _qo_plan(kg, name, questions, clauses=None):
+    """帶正文〈待決問題〉一節的計劃(驗「正文不讀」用)。"""
+    p = kg / "Projects" / f"{name}_計劃.md"
+    body = "\n".join(clauses or [])
+    p.write_text("---\ntype: project\nstatus: doing\n---\n# " + name + "\n\n" + body
+                 + "\n\n## 待決問題\n\n" + "\n".join(questions) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+    return p
+
+
+_QO_DEC = "decisions:\n  - content: 採用甲方案\n    id: d1\n    decided: 2026-10-12\n    valid: true\n  - content: 舊方案\n    id: d2\n    decided: 2026-10-01\n    valid: false\n"
+
+
+# ─── 待決問題改存開頭欄位_計劃:pending_questions 欄位、嚴格讀法、兩支寫入指令、三個消費端 ───
+
+def _qfm_q(qid="Q1", text="訂單成功的定義是什麼", cls="需求", stage="需求", status="待人", **kw):
+    """一題的開頭欄位原文(2 格起頭、4 格鍵);kw 依序附在後面,值照原樣寫(要引號自己帶)。"""
+    lines = [f"  - id: {qid}", f"    text: {text}", f"    class: {cls}", f"    stage: {stage}", f"    status: {status}"]
+    lines += [f"    {k}: {v}" for k, v in kw.items()]
+    return "\n".join(lines) + "\n"
+
+
+def _qfm_plan(kg, name, pq, clauses=None, decisions=_QO_DEC, body=""):
+    """開頭欄位帶 pq(原文;None=不寫這個欄位)的計劃;預設有一條有效決策 d1、一條作廢決策 d2。"""
+    p = kg / "Projects" / f"{name}_計劃.md"
+    fm = "---\ntype: project\nstatus: doing\n" + decisions + ("" if pq is None else pq) + "---\n"
+    p.write_text(fm + "# " + name + "\n\n" + "\n".join(clauses or ["- [S1] 系統應回 200 [test:t_green]"]) + "\n" + _SG_ROLLBACK + body,
+                 encoding="utf-8")
+    return p
+
+
+def t_qfm_gate_holds_blocking():
+    """[待決問題改存開頭欄位 S1] 阻塞、需求或架構、沒結的題讓規格閘回 1(風險高低、--no-run、沒條款都一樣);
+    延後、自答、指到不存在或作廢的決策都算沒結;推送前只提醒不改回傳碼。翻紅釘:規格閘不讀這個欄位 → ① 翻紅;
+    「結了」只看狀態不查決策 → ⑤⑥ 翻紅。"""
+    import subprocess as _sp
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfm1")
+    _qfm_plan(kg, "base", None)
+    base = run(kg, "spec-gate", "Projects/base_計劃")
+    check("⓪ 前置:沒有欄位的同一份計劃規格閘 rc0", base.returncode == 0, base.stdout[-400:])
+    _qfm_plan(kg, "a", "pending_questions:\n" + _qfm_q(blocking="true"))
+    r = run(kg, "spec-gate", "Projects/a_計劃")
+    check("① 阻塞的需求題待人 → rc1 並列出 Q1", r.returncode == 1 and "Q1" in r.stdout and "訂單成功" in r.stdout, r.stdout[-600:])
+    r = run(kg, "spec-gate", "Projects/a_計劃", "--no-run")
+    check("② 帶 --no-run 也擋", r.returncode == 1 and "Q1" in r.stdout, r.stdout[-400:])
+    _qfm_plan(kg, "a2", "pending_questions:\n" + _qfm_q(stage="架構", status="待查", blocking="true"), clauses=["純散文,沒有條款。"])
+    r = run(kg, "spec-gate", "Projects/a2_計劃")
+    check("③ 沒有條款、架構階段待查也擋", r.returncode == 1 and "Q1" in r.stdout, r.stdout[-400:])
+    for nm, kw in (("b1", dict(blocking="false")), ("b2", dict(stage="實作", blocking="true")), ("b3", {})):
+        _qfm_plan(kg, nm, "pending_questions:\n" + _qfm_q(**kw))
+        r = run(kg, "spec-gate", f"Projects/{nm}_計劃")
+        check(f"④ 不擋:{nm}(沒標阻塞/實作階段/沒寫阻塞)", r.returncode == 0 and "Q1" not in r.stdout, r.stdout[-400:])
+    cases = (("c1", dict(status="延後", reason="等示範", blocking="true")), ("c2", dict(status="自答", source="README", blocking="true")),
+             ("c3", dict(status="已決", decision='"#d9"', blocking="true")), ("c4", dict(status="已決", decision='"#d2"', blocking="true")),
+             ("c5", dict(status="已驗", decision='"#d9"', tests="t_green", blocking="true")))
+    for nm, kw in cases:
+        _qfm_plan(kg, nm, "pending_questions:\n" + _qfm_q(**kw))
+        r = run(kg, "spec-gate", f"Projects/{nm}_計劃")
+        check(f"⑤ 沒結也擋:{nm}({kw['status']}{'、' + kw.get('decision', '') if kw.get('decision') else ''})", r.returncode == 1 and "Q1" in r.stdout, r.stdout[-400:])
+    for nm, dec in (("e1", '"#d1"'), ("e2", '"Projects/e2_計劃#d1"'), ("e3", '"Projects/base_計劃#d1"')):
+        _qfm_plan(kg, nm, "pending_questions:\n" + _qfm_q(status="已決", decision=dec, blocking="true"))
+        r = run(kg, "spec-gate", f"Projects/{nm}_計劃")
+        check(f"⑥ 已決並指到有效決策就不擋:{dec}", r.returncode == 0 and "Q1" not in r.stdout, r.stdout[-400:])
+    # 推送前:只提醒,不改回傳碼;題號不見了、題目文字變了也提醒
+    git = lambda *a: _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    p = _qfm_plan(kg, "push", "pending_questions:\n" + _qfm_q() + _qfm_q("Q2", text="乙題") + _qfm_q("Q3", text="丙題"))
+    git("add", "-A"); git("commit", "-qm", "p1", "--no-verify")
+    _qfm_plan(kg, "push", "pending_questions:\n" + _qfm_q(blocking="true") + _qfm_q("Q3", text="丙題改了"))
+    git("add", "-A"); git("commit", "-qm", "p2", "--no-verify")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("⑦ 推送前 rc0,提醒阻塞沒結的 Q1", r.returncode == 0 and "Q1" in r.stdout and "沒結" in r.stdout, r.stdout[-600:])
+    check("⑧ 推送前提醒 Q2 不見了、Q3 題目文字變了", "Q2" in r.stdout and "不見" in r.stdout and "Q3" in r.stdout and "文字變了" in r.stdout, r.stdout[-600:])
+
+
+_QFM_Q = _qfm_q()   # 一題合法的題目:開頭欄位不帶決策時,pending_questions: 在檔案第 4 行、這題的 id 在第 5 行、最後一個鍵在第 9 行
+_QFM_BAD = {   # 讀不懂的每一種:名稱 → (開頭欄位原文, 預期的檔案行號, 原因關鍵字)。每一例只放一處毛病,關鍵字指名那一條規則
+    "看不懂的行": ("pending_questions:\n" + _QFM_Q + "    這行不是鍵值\n", 10, "讀不懂這行"),
+    "縮排三格": ("pending_questions:\n" + _QFM_Q + "   source: x\n", 10, "讀不懂這行"),
+    "題目縮排四格": ("pending_questions:\n" + _QFM_Q + "    - id: Q2\n", 10, "讀不懂這行"),
+    "tab": ("pending_questions:\n" + _QFM_Q + "\tsource: x\n", 10, "tab"),
+    "頂格清單項": ("pending_questions:\n" + _QFM_Q + "- id: Q2\n", 10, "讀不懂這行"),
+    "id不在第一個": ("pending_questions:\n  - text: 甲\n", 5, "第一個鍵必須是 id"),
+    "不認得的鍵": ("pending_questions:\n" + _qfm_q(owner="誰"), 10, "不認得的鍵"),
+    "同鍵兩次": ("pending_questions:\n" + _QFM_Q + "    status: 已決\n", 10, "寫了兩次"),
+    "編號重複": ("pending_questions:\n" + _QFM_Q + _QFM_Q, 10, "重複"),
+    "前導零": ("pending_questions:\n" + _qfm_q("Q01"), 5, "格式不對"),
+    "缺必有鍵": ("pending_questions:\n  - id: Q1\n    text: 甲\n    stage: 需求\n    status: 待人\n", 5, "缺必有的鍵 class"),
+    "階段不在清單": ("pending_questions:\n" + _qfm_q(stage="上線"), 5, "stage 要是"),
+    "狀態不在清單": ("pending_questions:\n" + _qfm_q(status="處理中"), 5, "status 要是"),
+    "布林寫錯": ("pending_questions:\n" + _qfm_q(blocking="yes"), 10, "不加引號的 true 或 false"),
+    "布林加引號": ("pending_questions:\n" + _qfm_q(blocking='"true"'), 10, "不加引號的 true 或 false"),
+    "多行值": ("pending_questions:\n" + _qfm_q(text="|"), 6, "多行"),
+    "沒引號含空白井號": ("pending_questions:\n" + _qfm_q(text="甲 #乙"), 6, "不加引號時"),
+    "雙引號內含雙引號": ("pending_questions:\n" + _qfm_q(text='"甲"乙"'), 6, "引號寫法"),
+    "雙引號內含反斜線": ("pending_questions:\n" + _qfm_q(text='"甲\\乙"'), 6, "引號寫法"),
+    "單引號內含單引號": ("pending_questions:\n" + _qfm_q(text="'甲'乙'"), 6, "引號寫法"),
+    "空清單後接題": ("pending_questions: []\n" + _QFM_Q, 5, "空清單"),
+    "欄位後直接接值": ("pending_questions: 甲\n", 4, "直接接了值"),
+    "欄位寫兩次": ("pending_questions:\n" + _QFM_Q + "pending_questions:\n", 10, "寫了兩次"),
+    "拼錯欄位名少s": ("pending_question:\n" + _QFM_Q, 4, "寫錯"),
+    "拼錯欄位名冒號前空白": ("pending_questions :\n" + _QFM_Q, 4, "寫錯"),
+    "拼錯欄位名加引號": ('"pending_questions":\n' + _QFM_Q, 4, "寫錯"),
+    "合併衝突標記": ("pending_questions:\n" + _QFM_Q + "<<<<<<< HEAD\n", 10, "讀不懂這行"),
+    "tests空段": ("pending_questions:\n" + _qfm_q(tests="t_a,,t_b"), 5, "tests"),
+    "tests重複": ("pending_questions:\n" + _qfm_q(tests="t_a, t_a"), 5, "tests"),
+}
+
+
+def t_qfm_strict_parse_fail_closed():
+    """[待決問題改存開頭欄位 S2] 文法表外的每一種寫法都讀不懂,錯誤指名那一條規則與檔案行號(每一例只放一處毛病,
+    不讓別條規則代打);規格閘回 1 說無法判定、lint 報同一個行號;註解、行尾空白、CRLF、BOM、[] 與零題不算讀不懂;
+    正文怎麼寫都不影響。翻紅釘:拿掉任一條規則 → 那一例翻紅;行號基準算錯 → ① 全紅、③ 翻紅。"""
+    lm = _load_lumos_inproc()
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfm2")
+    for i, (nm, (pq, line, kw)) in enumerate(_QFM_BAD.items()):
+        p = _qfm_plan(kg, f"bad{i}", pq, decisions="")
+        _present, _qs, errs = lm.pq_parse(*lm._pq_fm_of_text(p.read_text(encoding="utf-8")))
+        check(f"① {nm}:第 {line} 行報「{kw}」", any(no == line and kw in why for no, why in errs), errs)
+    for i in (0, 4, 13, 23):   # 規格閘、lint 端到端抽四種(看不懂的行、頂格清單項、布林寫錯、拼錯欄位名)
+        nm, (_pq, line, _kw) = list(_QFM_BAD.items())[i]
+        r = run(kg, "spec-gate", f"Projects/bad{i}_計劃", "--no-run")
+        lt = run(kg, "lint", f"Projects/bad{i}_計劃")
+        check(f"② {nm}:規格閘 rc1 說無法判定、lint 報第 {line} 行", r.returncode == 1 and "無法判定" in r.stdout
+              and f"第 {line} 行" in lt.stdout, (r.stdout[-300:], lt.stdout[-300:]))
+    ok = {"註解與行尾空白": "pending_questions:\n  # 備註\n" + _QFM_Q.replace("    text: 訂單成功的定義是什麼", "    text: 訂單成功的定義是什麼   "),
+          "空清單": "pending_questions: []\n", "沒有題": "pending_questions:\n",
+          "三種值寫法": "pending_questions:\n" + _qfm_q(text='"甲: 乙"', source="'含\"雙引號'", reason="平常字")}
+    for i, (nm, pq) in enumerate(ok.items()):
+        p = _qfm_plan(kg, f"ok{i}", pq, decisions="")
+        _present, _qs, errs = lm.pq_parse(*lm._pq_fm_of_text(p.read_text(encoding="utf-8")))
+        check(f"③ {nm}:讀得懂", not errs, errs)
+    r = run(kg, "spec-gate", "Projects/ok0_計劃")
+    lt = run(kg, "lint", "Projects/ok0_計劃")
+    check("④ 註解那份端到端:規格閘 rc0、lint 不報", r.returncode == 0 and "無法判定" not in r.stdout and "待決問題" not in lt.stdout,
+          (r.stdout[-300:], lt.stdout[-300:]))
+    p = _qfm_plan(kg, "crlf", "pending_questions:\n" + _QFM_Q + "    owner: 誰\n", decisions="")
+    p.write_bytes(b"\xef\xbb\xbf" + p.read_bytes().replace(b"\n", b"\r\n"))
+    _present, _qs, errs = lm.pq_parse(*lm._pq_fm_of_text(p.read_text(encoding="utf-8-sig")))
+    check("⑤ CRLF 加 BOM:照樣讀,行號不偏(owner 在第 10 行)", any(no == 10 and "不認得的鍵" in why for no, why in errs), errs)
+    _qfm_plan(kg, "body", "pending_questions:\n" + _QFM_Q, body="\n## 待決問題\n\n- [Q9] 正文的題 [類:需求][階段:需求][狀態:待人][阻塞]\n```\n")
+    r = run(kg, "spec-gate", "Projects/body_計劃")
+    check("⑥ 正文寫了〈待決問題〉與沒關的圍欄,不影響判定", r.returncode == 0 and "Q9" not in r.stdout, r.stdout[-300:])
+
+
+def t_qfm_commands_write_and_verify():
+    """[待決問題改存開頭欄位 S3] question-add 給下一號、往返一致、能在 [] 上加題、拒換行、併發不丟題;
+    question-set 只在寫完那一題「結了」規則與必附都過才寫。翻紅釘:拿掉寫入鎖 → ⑦ 翻紅;寫前不驗 → ⑧ 翻紅。"""
+    import subprocess as _sp, re
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfm3")
+    p = _qfm_plan(kg, "w", None)
+    r = run(kg, "question-add", "Projects/w_計劃", "訂單成功: 定義 #1 \"引號\" true", "--class", "需求", "--stage", "需求", "--blocking")
+    check("① 沒有欄位時加第一題 rc0、回印全域編號", r.returncode == 0 and "Projects/w_計劃.md#Q1" in r.stdout, r.stdout + r.stderr)
+    for t in ("12", "true", "甲: 乙", "說 'a' 與 #b"):
+        r = run(kg, "question-add", "Projects/w_計劃", t, "--class", "需求", "--stage", "實作", "--source", "README 第一段")
+        check(f"② 題目文字往返:{t}", r.returncode == 0, r.stderr)
+    lt = run(kg, "lint", "Projects/w_計劃")
+    txt = p.read_text(encoding="utf-8")
+    r = run(kg, "question-add", "Projects/w_計劃", "說 'a' 與 \"b\": c", "--class", "需求", "--stage", "實作")
+    check("②b 同時有單雙引號:共用格式化寫不出兩邊讀得一樣的寫法 → rc2 說換掉一種引號", r.returncode == 2 and "引號" in r.stderr, r.stderr)
+    check("③ 五題都讀得懂、編號 Q1–Q5、blocking 不加引號", "待決問題" not in lt.stdout and all(f"id: Q{i}" in txt for i in range(1, 6))
+          and "blocking: true" in txt, (lt.stdout[-400:], txt[:900]))
+    sg = run(kg, "pitfalls", str(p), "--repo", str(d), "--stage", "實作", "--json")
+    import json as _j
+    got = [q["text"] for q in _j.loads(sg.stdout).get("questions", [])] if sg.returncode == 0 else []
+    check("④ 讀回來的文字跟寫進去的一模一樣", got == ["12", "true", "甲: 乙", "說 'a' 與 #b"], sg.stdout[-600:] + sg.stderr)
+    e = _qfm_plan(kg, "e", "pending_questions: []\n")
+    r = run(kg, "question-add", "Projects/e_計劃", "甲", "--class", "需求", "--stage", "需求")
+    check("⑤ 在 pending_questions: [] 上加題成功", r.returncode == 0 and "id: Q1" in e.read_text(encoding="utf-8"), r.stderr)
+    before = e.read_text(encoding="utf-8")
+    for args, why in ((("甲\n乙",), "換行"), (("甲\t乙",), "tab"), (("甲", "--blocking", "--status", "延後", "--reason", "x"), "阻塞又延後"),
+                      (("甲", "--status", "已決"), "已決沒決策"), (("甲", "--status", "已決", "--decision", "#d9"), "指到不存在的決策")):
+        r = run(kg, "question-add", "Projects/e_計劃", args[0], "--class", "需求", "--stage", "需求", *args[1:])
+        check(f"⑥ question-add 拒寫:{why} → rc2 不改檔", r.returncode == 2 and e.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
+    lost = []
+    for rnd in range(3):   # 一回合不一定撞得到(沒鎖時實測同時起跑 8 個,三回合裡有一回合丟題),跑三回合、每回合 12 個
+        c = _qfm_plan(kg, f"c{rnd}", None)
+        procs = [_sp.Popen([sys.executable, GRAPHCTL, "--vault", str(kg), "question-add", f"Projects/c{rnd}_計劃", f"題{i}", "--class", "需求",
+                            "--stage", "需求"], stdout=_sp.PIPE, stderr=_sp.PIPE) for i in range(12)]
+        for pp in procs:
+            pp.communicate()   # communicate 讀乾管線,輸出多也不會卡住(代碼審 r8 併發席)
+        rcs = [pp.returncode for pp in procs]
+        ids = sorted(re.findall(r"id: (Q\d+)", c.read_text(encoding="utf-8")))
+        if rcs != [0] * 12 or ids != sorted(f"Q{i}" for i in range(1, 13)):
+            lost.append((rnd, rcs, ids))
+    check("⑦ 十二個程序同時加題(三回合):每回合十二題都在、編號不重複", not lost, lost)
+    s = _qfm_plan(kg, "s", "pending_questions:\n" + _qfm_q(blocking="true") + _qfm_q("Q2", stage="實作", irreversible="true")
+                  + _qfm_q("Q3", status="延後", reason="等"))
+    before = s.read_text(encoding="utf-8")
+    bad = ((("Q1", "status=已決"), "已決沒決策"), (("Q1", "status=已決", "decision=#d9"), "指到不存在的決策"),
+           (("Q1", "status=已決", "decision=#d2"), "指到作廢的決策"), (("Q1", "status=已驗", "decision=#d1"), "已驗沒測試"),
+           (("Q1", "status=延後", "reason=等"), "阻塞改延後"), (("Q3", "blocking=true"), "延後的題加阻塞"),
+           (("Q2", "status=自答", "source=x"), "不可逆改自答"), (("Q1", "id=Q9"), "改編號"), (("Q1", "owner=誰"), "不認得的鍵"),
+           (("Q1", "status"), "沒有等號"), (("Q1", "text="), "必有鍵清空"), (("Q9", "status=待查"), "沒有這一題"))
+    for args, why in bad:
+        r = run(kg, "question-set", "Projects/s_計劃", *args)
+        check(f"⑧ question-set 拒寫:{why} → rc2 不改檔", r.returncode == 2 and s.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
+    r = run(kg, "question-set", "Projects/s_計劃", "Q1", "status=已決", "decision=#d1", "source=a=b")
+    t2 = s.read_text(encoding="utf-8")
+    check("⑨ 一次改狀態加決策成功、只切第一個等號", r.returncode == 0 and "status: 已決" in t2 and "source: a=b" in t2, r.stdout + r.stderr)
+    r = run(kg, "question-set", "Projects/s_計劃", "Q3", "reason=")
+    check("⑩ 清掉延後題的理由 → 必附不齊 rc2", r.returncode == 2, r.stdout + r.stderr)
+    lm = _load_lumos_inproc()
+    env = lm.Env(kg)
+    path = kg / "Projects" / "s_計劃.md"
+    lines, _s0, e_fm = lm.load_raw_for_edit(path)
+    before = path.read_text(encoding="utf-8")
+    try:
+        with lm._vault_write_lock(env.vault):   # 呼叫端要拿著寫入鎖(atomic_write_verify 會檢查)
+            lm._pq_commit(env, "Projects/s_計劃.md", path, lines, e_fm, lines[1:e_fm], {"id": "Q1", "text": "不一樣的題", "class": "需求", "stage": "需求", "status": "待人"})
+        got = "沒擋"
+    except RuntimeError as e:
+        got = str(e)
+    check("⑫ 寫完讀回來跟要寫的不一樣 → RuntimeError、檔案沒動", "不一樣" in got and path.read_text(encoding="utf-8") == before, got)
+    broken = _qfm_plan(kg, "br", "pending_questions:\n" + _qfm_q() + "    亂寫\n")
+    before = broken.read_text(encoding="utf-8")
+    r1 = run(kg, "question-add", "Projects/br_計劃", "甲", "--class", "需求", "--stage", "需求")
+    r2 = run(kg, "question-set", "Projects/br_計劃", "Q1", "status=待查")
+    check("⑪ 清單本身讀不懂時兩支指令都拒寫", r1.returncode == 2 and r2.returncode == 2 and broken.read_text(encoding="utf-8") == before,
+          r1.stderr + r2.stderr)
+
+
+def t_qfm_lint_attachments():
+    """[待決問題改存開頭欄位 S4] 清單讀得懂時 lint 查必附與「結了」:假決策、作廢決策、格式不合的連結、已驗的測試名不在條款、
+    自答沒出處、延後沒理由、不可逆自答、阻塞延後;寫齊的不報。翻紅釘:拿掉任一項檢查 → 那一項翻紅。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfm4")
+    cases = {"指到不存在的決策": _qfm_q(status="已決", decision='"#d9"'), "指到作廢的決策": _qfm_q(status="已決", decision='"#d2"'),
+             "連結格式不合": _qfm_q(status="已決", decision='"[[Projects/x_計劃]]#d1"'),
+             "測試不在條款": _qfm_q(status="已驗", decision='"#d1"', tests="t_red"), "已驗沒測試": _qfm_q(status="已驗", decision='"#d1"'),
+             "自答沒出處": _qfm_q(status="自答"), "延後沒理由": _qfm_q(status="延後"),
+             "不可逆自答": _qfm_q(status="自答", source="x", irreversible="true"), "阻塞延後": _qfm_q(status="延後", reason="x", blocking="true")}
+    for i, (nm, q) in enumerate(cases.items()):
+        _qfm_plan(kg, f"l{i}", "pending_questions:\n" + q)
+        out = run(kg, "lint", f"Projects/l{i}_計劃").stdout
+        check(f"① lint 報:{nm}", "Q1" in out and "待決問題" in out, out[-400:])
+    good = ("pending_questions:\n" + _qfm_q(status="已驗", decision='"#d1"', tests="t_green, t_green2")
+            + _qfm_q("Q2", status="自答", source="README") + _qfm_q("Q3", status="延後", reason="等")
+            + _qfm_q("Q4", status="已決", decision='"Projects/g_計劃#d1"'))
+    _qfm_plan(kg, "g", good, clauses=["- [S1] 系統應回 200 [test:t_green]", "- [S2] 系統應拒絕 [test:t_green2]"])
+    out = run(kg, "lint", "Projects/g_計劃").stdout
+    check("② 寫齊的四題不報", "待決問題" not in out, out[-500:])
+    _qfm_plan(kg, "pf", "pending_questions:\n" + _qfm_q(status="已驗", decision='"#d1"', tests="py:t_green"))
+    out = run(kg, "lint", "Projects/pf_計劃").stdout
+    check("③ 測試名比法跟條款綁定同一套:單平台設定下 py:t_green 不是 t_green(規格閘也把它當另一個名字)", "Q1" in out and "py:t_green" in out, out[-500:])
+
+
+def t_qfm_stage_lists_open_questions():
+    """[待決問題改存開頭欄位 S5] --stage 在需求風險面之後列那一階段沒結的題:阻塞、不可逆、其餘,同級照編號數字;
+    JSON 有題才多 questions;讀不懂照印風險面再回 2。翻紅釘:改成照字串排序 → ② 翻紅;不列題 → ① 翻紅。"""
+    import json as _j, re
+    root = Path(tempfile.mkdtemp(prefix="gctl-qfm5-"))
+    (root / ".git").mkdir()
+    md = root / "plan.md"
+    pq = ("pending_questions:\n" + _qfm_q("Q2", text="乙") + _qfm_q("Q10", text="癸") + _qfm_q("Q3", text="丙", irreversible="true")
+          + _qfm_q("Q4", text="丁", blocking="true") + _qfm_q("Q5", text="戊", status="已決", decision='"#d1"')
+          + _qfm_q("Q6", text="己", stage="架構", blocking="true") + _qfm_q("Q7", text="庚", status="待查"))
+    md.write_text("---\ntype: project\n" + pq + "---\n# 訂單\n\n需求:做一個訂單 API,使用者可以下單。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
+    out = r.stdout
+    check("① rc0,需求風險面之後列出題目", r.returncode == 0 and "[req-success]" in out and out.find("[req-success]") < out.find("Q4"), out[-800:])
+    order = [m for m in re.findall(r"\[(Q\d+)\]", out)]
+    check("② 阻塞在前、不可逆其次、同級照編號數字(Q10 在 Q2、Q7 之後);已決與別的階段不列", order == ["Q4", "Q3", "Q2", "Q7", "Q10"], order)
+    j = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求", "--json")
+    jj = _j.loads(j.stdout) if j.returncode == 0 else {}
+    check("③ JSON 多 questions 鍵、順序同上", set(jj) == {"stage", "facets", "questions"} and [q["id"] for q in jj["questions"]] == order, j.stdout[-400:])
+    md.write_text("---\ntype: project\npending_questions:\n" + _qfm_q() + "    亂寫\n---\n# 訂單\n\n需求:使用者可以下單。\n", encoding="utf-8")
+    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
+    check("④ 讀不懂:照印需求風險面、印原因、rc2", r.returncode == 2 and "[req-success]" in r.stdout and "無法判定" in (r.stdout + r.stderr), r.stdout[-400:] + r.stderr)
+    j = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求", "--json")
+    jj = _j.loads(j.stdout) if j.stdout.strip().startswith("{") else {}
+    check("⑤ 讀不懂的 JSON:多 questions_error、rc2", j.returncode == 2 and "questions_error" in jj and "facets" in jj, j.stdout[-400:])
+    lm = _load_lumos_inproc()
+    check("⑥ 需求風險面每一項的階段都在 PQ_STAGES 裡", all(f["stage"] in lm.PQ_STAGES for f in lm._REQUIREMENT_FACETS), "")
+
+
+def _qfm_fm(pq, head=("type: project", "status: doing")):
+    """開頭欄位行(不含 ---):head 之後接 pq 原文;fm 第一行在檔案第 2 行。"""
+    return list(head) + pq.rstrip("\n").split("\n")
+
+
+def t_qfm_value_hygiene():
+    """[待決問題改存開頭欄位 代碼審 r1 字元衛生] 讀寫兩端用同一條規則:值不能含換行類字元(含 U+2028/U+2029/\\x0b/\\x0c/\\x85)與控制字元、
+    不能是空字串(含引號包的空白);題號只收 ASCII 數字、最多 6 位;內部用的鍵名寫不進檔,讀不懂只回報、不丟例外。
+    翻紅釘:拿掉任一條 → 那一條翻紅。"""
+    lm = _load_lumos_inproc()
+    for ch, nm in ((" ", "U+2028"), (" ", "U+2029"), ("\x0b", "\\x0b"), ("\x0c", "\\x0c"), ("\x85", "\\x85"),
+                   ("\x1b", "ESC"), ("\x00", "NUL"), ("\x7f", "DEL")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=f"甲{ch}乙")))
+        check(f"① 讀:題目文字含 {nm} → 讀不懂", bool(errs), errs)
+    for v, nm in (('""', "雙引號空字串"), ("''", "單引號空字串"), ('"   "', "引號包空白")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=v)))
+        check(f"② 讀:text 是{nm} → 讀不懂", bool(errs), errs)
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(cls=v)))
+        check(f"② 讀:class 是{nm} → 讀不懂", bool(errs), errs)
+    for qid, nm in (("Q" + "9" * 7, "七位數"), ("Q1٣", "阿拉伯數字"), ("Q１", "全形數字")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(qid)))
+        check(f"③ 讀:題號{nm} → 讀不懂", bool(errs), errs)
+    _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q("Q" + "9" * 6)))
+    check("③ 讀:六位數題號讀得懂", not errs, errs)
+    try:
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n  - id: Q1\n    text: 甲\n    _line: 3\n    stage: 需求\n    status: 待人\n"))
+        ok = bool(errs)
+    except Exception as e:   # noqa: BLE001 — 這條就是在驗不丟例外
+        ok, errs = False, repr(e)
+    check("④ 讀:題目裡寫了 _line 鍵又缺鍵 → 回報讀不懂、不丟例外", ok, errs)
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmh")
+    p = _qfm_plan(kg, "h", "pending_questions:\n" + _qfm_q())
+    before = p.read_text(encoding="utf-8")
+    for v, nm in (("甲 乙", "U+2028"), ("甲\x0b乙", "\\x0b"), ("甲\x1b[2J乙", "ESC 控制序列"), ("   ", "全空白")):
+        r = run(kg, "question-add", "Projects/h_計劃", v, "--class", "需求", "--stage", "需求")
+        check(f"⑤ 寫:question-add 題目文字是{nm} → rc2 不改檔", r.returncode == 2 and p.read_text(encoding="utf-8") == before, r.stderr)
+    r = run(kg, "question-set", "Projects/h_計劃", "Q1", "source=甲 乙")
+    check("⑤ 寫:question-set 值含 U+2029 → rc2 不改檔", r.returncode == 2 and p.read_text(encoding="utf-8") == before, r.stderr)
+    big = _qfm_plan(kg, "big", "pending_questions:\n" + _qfm_q("Q" + "9" * 6))
+    r = run(kg, "question-add", "Projects/big_計劃", "甲", "--class", "需求", "--stage", "需求")
+    check("⑥ 題號到上限時加題 → rc2、訊息講題號上限、不丟追蹤", r.returncode == 2 and "題號" in r.stderr and "Traceback" not in r.stderr, r.stderr)
+
+
+def t_qfm_range_end():
+    """[待決問題改存開頭欄位 代碼審 r1 範圍結尾] 清單範圍止於下一個頂格的鍵(鍵名可帶空格或點);題目的鍵掉到頂格、
+    欄位名用連字號,都算讀不懂而不是靜默結束或當成沒有欄位。翻紅釘:頂格鍵只認 \\w → ① 翻紅;不認掉出來的題目鍵 → ② 翻紅。"""
+    lm = _load_lumos_inproc()
+    for nxt in ("related notes: x", "a.b: x", "aliases: []"):
+        _p, qs, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q() + nxt))
+        check(f"① 題目後面接頂格鍵 {nxt!r}:範圍在它之前結束、讀得懂", not errs and len(qs) == 1, errs)
+    for nxt in ("blocking: true", "irreversible: true"):   # r2:只擋旗標;status、decision 這類名字筆記本身的頂格欄位也會用(見 t_qfm_r2_folds ①)
+        _p, qs, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q() + nxt))
+        check(f"② 題目的旗標掉到頂格 {nxt!r} → 讀不懂", bool(errs), errs)
+    for head in ("pending-questions:", "Pending Questions:"):
+        present, _q, errs = lm.pq_parse(_qfm_fm(head + "\n" + _qfm_q()))
+        check(f"③ 欄位名寫成 {head!r} → 當寫錯的欄位名、讀不懂", present and bool(errs), errs)
+
+
+def t_qfm_linear_cost():
+    """[待決問題改存開頭欄位 代碼審 r1 平方級] 拼錯欄位名的偵測對長行是線性;判「結了」時同一篇的決策只解析一次。
+    翻紅釘:改回沒錨定的 re.sub → ① 翻紅;每題重解析決策 → ② 翻紅。"""
+    import time
+    lm = _load_lumos_inproc()
+    fm = ["type: project", "x" + " " * 60000 + "y"]
+    t0 = time.perf_counter()
+    lm.pq_parse(fm)
+    dt = time.perf_counter() - t0
+    check("① 頂格一行夾六萬個空白:嚴格讀法 0.5 秒內跑完", dt < 0.5, f"{dt:.2f}s")
+    pq = "pending_questions:\n" + "".join(_qfm_q(f"Q{i}", status="已決", decision='"#d1"', blocking="true") for i in range(1, 61))
+    text = "---\ntype: project\n" + _QO_DEC + pq + "---\n# p\n"
+    env = lm.Env.from_texts(Path("/nonexistent-vault"), {"Projects/p_計劃.md": text})
+    _p, qs, errs = lm.pq_parse(env.notes["Projects/p_計劃.md"].fm_lines)
+    calls = []
+    real = lm.parse_decisions
+    lm.parse_decisions = lambda *a, **k: (calls.append(1), real(*a, **k))[1]
+    try:
+        bad = lm._pq_blocking_open(env, "Projects/p_計劃.md", qs)
+    finally:
+        lm.parse_decisions = real
+    check("② 60 題都指 #d1:沒有擋的題、決策只解析一次", not errs and bad == [] and len(calls) <= 1, (errs, len(calls)))
+    T = {"Projects/p_計劃.md": "---\ntype: project\n" + _QO_DEC + "pending_questions:\n"
+         + "".join(_qfm_q(f"Q{i}", status="已決", decision='"Projects/p_計劃#d1"', blocking="true") for i in range(1, 401)) + "---\n# p\n"}
+    T.update({f"Systems/s{i}.md": "---\ntype: system\n---\n# s\n" for i in range(3000)})
+    env = lm.Env.from_texts(Path("/nonexistent-vault"), T)
+    _p, qs, _e = lm.pq_parse(env.notes["Projects/p_計劃.md"].fm_lines)
+
+    class _CountIter(dict):   # 數判定時把整個筆記庫掃過幾遍(不靠機器快慢當判準)
+        scans = 0
+
+        def __iter__(self):
+            _CountIter.scans += 1
+            return super().__iter__()
+    env.notes = _CountIter(env.notes)
+    bad = lm._pq_blocking_open(env, "Projects/p_計劃.md", qs)
+    check("③ 400 題帶路徑的決策連結、筆記庫 3000 篇:整庫最多掃一遍(路徑索引只建一次,不是每題掃整庫)", bad == [] and _CountIter.scans <= 1, _CountIter.scans)
+
+
+def t_qfm_decision_add_shares_lock():
+    """[待決問題改存開頭欄位 代碼審 r1 寫入互斥] decision-add 與 question-add 同時改同一篇,兩邊寫的都要在
+    (決策指令也拿同一把寫入鎖)。翻紅釘:決策指令不拿鎖 → ① 翻紅。"""
+    import subprocess as _sp, re
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfml")
+    lost = []
+    for rnd in range(3):
+        p = _qfm_plan(kg, f"m{rnd}", None, decisions="")
+        cmds = ([["decision-add", f"Projects/m{rnd}_計劃", f"決策{i}", "--decided", "2026-10-12"] for i in range(8)]
+                + [["question-add", f"Projects/m{rnd}_計劃", f"題{i}", "--class", "需求", "--stage", "需求"] for i in range(8)])
+        procs = [_sp.Popen([sys.executable, GRAPHCTL, "--vault", str(kg), *c], stdout=_sp.PIPE, stderr=_sp.PIPE) for c in cmds]
+        outs = [pp.communicate() for pp in procs]
+        rcs = [pp.returncode for pp in procs]
+        t = p.read_text(encoding="utf-8")
+        nd, nq = len(re.findall(r"(?m)^    id: d\d+$", t)), len(re.findall(r"(?m)^  - id: Q\d+$", t))
+        if rcs != [0] * 16 or nd != 8 or nq != 8:
+            # 失敗時把每支的回傳碼與第一句錯誤印出來:分得出是搶鎖逾時(rc2「等了 60 秒」)還是寫入真的被蓋掉(rc0 卻少題)(代碼審 r4 正確性席)
+            errs = sorted({o[1].decode("utf-8", "replace").strip().splitlines()[0][:80] for o, rc in zip(outs, rcs) if rc != 0 and o[1].strip()})
+            lost.append((rnd, nd, nq, rcs, errs))
+    check("① 八個決策加八個題目同時寫(三回合):每回合全部都在", not lost, lost)
+
+
+def t_qfm_push_remind_ranges():
+    """[待決問題改存開頭欄位 代碼審 r1 推送前提醒] 整份計劃被刪不報「題號不見了」;三點範圍用合併基準比;
+    git 讀不到時講一句不靜默。翻紅釘:刪檔也比對 → ① 翻紅;三點範圍拿左端 → ② 翻紅。"""
+    import subprocess as _sp
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmp")
+    git = lambda *a: _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    p = _qfm_plan(kg, "del", "pending_questions:\n" + _qfm_q() + _qfm_q("Q2", text="乙"), decisions="")
+    git("add", "-A"); git("commit", "-qm", "a", "--no-verify")
+    p.unlink(); git("add", "-A"); git("commit", "-qm", "b", "--no-verify")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("① 整份計劃刪掉:不報題號不見了", r.returncode == 0 and "不見了" not in r.stdout, r.stdout[-400:])
+    q = _qfm_plan(kg, "tri", "pending_questions:\n" + _qfm_q(), decisions="")
+    git("add", "-A"); git("commit", "-qm", "c", "--no-verify")
+    git("branch", "feat")
+    _qfm_plan(kg, "tri", "pending_questions:\n" + _qfm_q() + _qfm_q("Q2", text="主線加的題"), decisions="")
+    git("add", "-A"); git("commit", "-qm", "main-adds", "--no-verify")
+    git("checkout", "-q", "feat")
+    _qfm_plan(kg, "tri", "pending_questions:\n" + _qfm_q() + _qfm_q("Q3", text="分支加的題"), decisions="")
+    git("add", "-A"); git("commit", "-qm", "feat-adds", "--no-verify")
+    r = run(kg, "spec-gate", "--push-check", "master...feat" if git("rev-parse", "--verify", "master").returncode == 0 else "main...feat", "--repo", str(d))
+    check("② 三點範圍用合併基準:不把主線後來加的 Q2 報成不見了", r.returncode == 0 and "Q2" not in r.stdout, r.stdout[-400:])
+
+
+def t_qfm_frontmatter_writers_take_lock():
+    """[待決問題改存開頭欄位 代碼審 r2 寫入互斥] 一條規則:會讀改寫開頭欄位的寫入都在寫入鎖裡——atomic_write_verify 沒拿鎖就不寫;
+    decision-reindex --all 跟 question-add 同時跑,題目都在。翻紅釘:拿掉 atomic_write_verify 的鎖檢查 → ① 翻紅;--all 不拿鎖 → ② 翻紅(reindex 自己會被拒寫、回傳碼不是 0)。"""
+    import subprocess as _sp, re
+    lm = _load_lumos_inproc()
+    v = mkvault()
+    p = v / "Projects" / "w_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\n---\n# w\n", encoding="utf-8")
+    before = p.read_text(encoding="utf-8")
+    try:
+        lm.atomic_write_verify(p, ["---", "type: project", "status: done", "---", "# w", ""], "status", lambda _f: True)
+        got = "寫了"
+    except RuntimeError as e:
+        got = str(e)
+    check("① 沒拿寫入鎖就呼叫 atomic_write_verify → 不寫、說要拿鎖", "鎖" in got and p.read_text(encoding="utf-8") == before, got)
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmw")
+    lost = []
+    for rnd in range(3):
+        q = kg / "Projects" / f"r{rnd}_計劃.md"
+        q.write_text("---\ntype: project\nstatus: doing\ndecisions:\n  - content: 沒編號的舊決策\n    decided: 2026-10-01\n    valid: true\n---\n# r\n"
+                     + _SG_ROLLBACK, encoding="utf-8")
+        cmds = [["decision-reindex", "--all"]] + [["question-add", f"Projects/r{rnd}_計劃", f"題{i}", "--class", "需求", "--stage", "需求"] for i in range(6)]
+        procs = [_sp.Popen([sys.executable, GRAPHCTL, "--vault", str(kg), *c], stdout=_sp.PIPE, stderr=_sp.PIPE) for c in cmds]
+        for pp in procs:
+            pp.communicate()   # communicate 讀乾管線,輸出多也不會卡住(代碼審 r8 併發席)
+        rcs = [pp.returncode for pp in procs]
+        n = len(re.findall(r"(?m)^  - id: Q\d+$", q.read_text(encoding="utf-8")))
+        ids = re.findall(r"(?m)^    id: d\d+$", q.read_text(encoding="utf-8"))
+        if rcs != [0] * 7 or n != 6 or not ids:   # reindex --all 自己也要成功(回 0、真的編了號),不只看題目沒丟
+            lost.append((rnd, rcs, n))
+    check("② decision-reindex --all 跟六個 question-add 同時跑(三回合):每回合六題都在", not lost, lost)
+
+
+def t_qfm_r2_folds():
+    """[待決問題改存開頭欄位 代碼審 r2] 頂格欄位跟題目的鍵同名不誤擋(只有 blocking/irreversible 掉到頂格才擋);字元規則用專案共用的
+    特殊字元類別(含零寬、雙向控制、孤立代理);題號帶控制字元不進錯誤訊息;測試名不能含中括號;決策連結對篇照共用索引(大小寫、NFC),
+    路徑要整條對上、短名撞名不收;平台設定壞掉只講一次;計劃改名後照樣比題號。翻紅釘:任一條拿掉 → 那一條翻紅。"""
+    import subprocess as _sp, unicodedata as _ud
+    lm = _load_lumos_inproc()
+    for nxt in ("status: doing", "source: 外部", "reason: x"):
+        _p, qs, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q() + nxt))
+        check(f"① 頂格欄位 {nxt!r} 接在清單後面:範圍結束、讀得懂", not errs and len(qs) == 1, errs)
+    for nxt in ("blocking: true", "irreversible: true"):
+        _p, qs, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q() + nxt))
+        check(f"① 旗標 {nxt!r} 掉到頂格 → 讀不懂(掉了就少擋)", bool(errs), errs)
+    for ch, nm in (("‮", "雙向覆寫 U+202E"), ("​", "零寬空格"), ("﻿", "中間的 BOM"), ("\udcff", "孤立代理")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=f"甲{ch}乙")))
+        check(f"② 題目文字含{nm} → 讀不懂", bool(errs), errs)
+    _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n  - id: Q1\x1b[2J\n    text: 甲\n"))
+    check("③ 題號帶 ESC:讀不懂,錯誤訊息裡沒有原始 ESC", bool(errs) and not any("\x1b" in w for _n, w in errs), errs)
+    for t in ("t_green]", "t_a [test:t_b"):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(tests=f'"{t}"')))
+        check(f"④ 測試名 {t!r} 含中括號 → 讀不懂", bool(errs), errs)
+    dec = "decisions:\n  - content: 甲\n    id: d1\n    decided: 2026-10-01\n    valid: true\n"
+    T = {"Projects/x_計劃.md": "---\ntype: project\n" + dec + "---\n# x\n", "Systems/y_計劃.md": "---\ntype: system\n" + dec + "---\n# y\n",
+         "Projects/y_計劃.md": "---\ntype: project\n" + dec + "---\n# y\n", "Projects/ガ_計劃.md": "---\ntype: project\n" + dec + "---\n# g\n"}
+    env = lm.Env.from_texts(Path("/nonexistent"), T)
+    for ref, want in (("Zzz/x_計劃#d1", "missing"), ("Projects/x_計劃#d1", "ok"), ("projects/X_計劃.md#d1", "ok"), ("X_計劃#d1", "ok"),
+                      ("y_計劃#d1", "bad"), ("Systems/y_計劃#d1", "ok"), (_ud.normalize("NFD", "Projects/ガ_計劃#d1"), "ok")):
+        got = lm._pq_decision_state(env, "Projects/x_計劃.md", ref)
+        check(f"⑤ 決策連結 {ref!r} → {want}", got == want, got)
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmc")
+    (d / ".lumos" / "config.json").write_text("{壞掉", encoding="utf-8")
+    _qfm_plan(kg, "cfg", "pending_questions:\n" + "".join(_qfm_q(f"Q{i}", status="已驗", decision='"#d1"', tests="t_green") for i in range(1, 5)))
+    r = run(kg, "lint", "Projects/cfg_計劃")
+    check("⑥ 平台設定壞掉:四題已驗,平台設定那句只講一次(另一句讀不了是筆記欄位開關那道既有檢查印的)",
+          (r.stdout + r.stderr).count("先用預設的單一設定跑") == 1, (r.stdout + r.stderr)[-500:])
+    git = lambda *a: _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    (d / ".lumos" / "config.json").write_text('{"test_profile": "python"}', encoding="utf-8")
+    _qfm_plan(kg, "mv", "pending_questions:\n" + _qfm_q() + _qfm_q("Q2", text="乙"), decisions="")
+    git("add", "-A"); git("commit", "-qm", "a", "--no-verify")
+    git("mv", str(kg / "Projects" / "mv_計劃.md"), str(kg / "Projects" / "mv2_計劃.md"))
+    _qfm_plan(kg, "mv2", "pending_questions:\n" + _qfm_q(), decisions="")
+    git("add", "-A"); git("commit", "-qm", "b", "--no-verify")
+    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+    check("⑦ 計劃改名又刪了 Q2:照樣提醒 Q2 不見了", r.returncode == 0 and "Q2" in r.stdout and "不見了" in r.stdout, r.stdout[-400:])
+    tip = git("rev-parse", "HEAD").stdout.strip()
+    git("checkout", "-q", "-b", "side", "HEAD~1")
+    r = run(kg, "spec-gate", "--push-check", ".." + tip, "--repo", str(d))
+    check("⑧ 範圍左端空著(..b)照 git 當 HEAD..b:照樣比題號、不跳過", r.returncode == 0 and "Q2" in r.stdout and "跳過" not in r.stdout, r.stdout[-400:])
+
+
+def t_qfm_r3_folds():
+    """[待決問題改存開頭欄位 代碼審 r3] 每放寬一條判斷都配一個放寬後仍必須擋的反例:頂格欄位接在清單最後讀得懂,但後面又出現題目就擋
+    (不靜默丟題);旗標大小寫變體掉到頂格照擋;emoji 組合用的零寬連接字、軟連字號、旗幟標籤字放行,雙向控制與零寬空格照擋;
+    只差大小寫的兩篇,完全相符的路徑優先;寫入鎖要是這個筆記庫的鎖;鎖逾時一律「擋下」rc2;推送前範圍以 - 開頭或解不出就講一句跳過。
+    翻紅釘:任一條拿掉 → 那一條翻紅。"""
+    import io, contextlib, subprocess as _sp
+    lm = _load_lumos_inproc()
+    for mid in ("reason: 等人回覆", "status: 延後", "Blocking: true"):
+        fm = _qfm_fm("pending_questions:\n" + _qfm_q(status="延後", reason="x") + mid + "\n" + _qfm_q("Q2", stage="架構", status="待查", blocking="true"))
+        _p, qs, errs = lm.pq_parse(fm)
+        check(f"① 清單中間夾頂格 {mid!r}、後面還有題 → 讀不懂(不靜默丟掉 Q2)", bool(errs), (errs, [q["id"] for q in qs]))
+    _p, qs, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q() + "status: doing\naliases: []"))
+    check("① 反例:頂格欄位接在清單最後、後面沒有題 → 讀得懂", not errs and len(qs) == 1, errs)
+    for nxt in ("BLOCKING: true", "Irreversible: true"):
+        _p, qs, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q() + nxt))
+        check(f"② 旗標大小寫變體 {nxt!r} 掉到頂格 → 讀不懂", bool(errs), errs)
+    for t, nm in (("家庭\U0001f468‍\U0001f469‍\U0001f467要不要", "emoji 零寬連接字"), ("co\u00adoperate 要不要", "軟連字號(字母文字;r8 起夾漢字不放行)"),
+                  ("旗\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f", "旗幟標籤字")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=t)))
+        check(f"③ 題目文字含{nm} → 讀得懂", not errs, errs)
+    for ch, nm in (("‮", "雙向覆寫"), ("⁦", "雙向隔離"), ("​", "零寬空格"), ("﻿", "中間的 BOM")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=f"甲{ch}乙")))
+        check(f"③ 反例:題目文字含{nm} → 照樣讀不懂", bool(errs), errs)
+    dec = "decisions:\n  - content: 甲\n    id: d1\n    decided: 2026-10-01\n    valid: true\n"
+    env = lm.Env.from_texts(Path("/nonexistent"), {"Projects/A.md": "---\ntype: project\n" + dec + "---\n# a\n",
+                                                    "projects/a.md": "---\ntype: project\n" + dec + "---\n# a\n"})
+    check("④ 只差大小寫的兩篇:完全相符的路徑優先 → ok", lm._pq_decision_state(env, "Projects/A.md", "Projects/A#d1") == "ok", "")
+    check("④ 反例:大小寫都不相符、又有兩篇 → 格式不合", lm._pq_decision_state(env, "Projects/A.md", "PROJECTS/A#d1") == "bad", "")
+    va, vb = mkvault(), mkvault()
+    pb = vb / "Projects" / "b_計劃.md"
+    pb.write_text("---\ntype: project\nstatus: doing\n---\n# b\n", encoding="utf-8")
+    try:
+        with lm._vault_write_lock(va):
+            lm.atomic_write_verify(pb, ["---", "type: project", "status: done", "---", "# b", ""], "status", lambda _f: True)
+        got = "寫了"
+    except RuntimeError as e:
+        got = str(e)
+    check("⑤ 拿著 A 筆記庫的鎖寫 B 筆記庫的檔 → 不寫", "鎖" in got and "status: doing" in pb.read_text(encoding="utf-8"), got)
+    with lm._vault_write_lock(vb):
+        lm.atomic_write_verify(pb, ["---", "type: project", "status: done", "---", "# b", ""], "status", lambda _f: True)
+    check("⑤ 反例:拿著 B 自己的鎖 → 寫得進", "status: done" in pb.read_text(encoding="utf-8"), "")
+    v = mkvault()
+    (v / "Systems" / "S.md").write_text("---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 甲乙丙\ndecisions:\n  - content: 甲\n    id: d1\n"
+                                        "    context: 舊\n    decided: 2026-10-01\n    valid: true\n---\n# s\n", encoding="utf-8")
+    real = lm._vault_write_lock
+
+    def _busy(_vault):
+        raise RuntimeError("等了 60 秒還輪不到寫入(測試模擬)")
+    for argv in (["decision-amend", "Systems/S", "d1", "--field", "context", "--text", "新"], ["guard", "bind", "Systems/S", "甲乙丙", "t_x"],
+                 ["guard", "audit", "Systems/S", "甲乙丙"]):
+        lm._vault_write_lock = _busy
+        err, old = io.StringIO(), sys.argv
+        sys.argv = ["lumos", "--vault", str(v), *argv]
+        try:
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                rc = lm.main()
+            crash = ""
+        except Exception as e:   # noqa: BLE001 — 這條就是在驗不丟追蹤
+            rc, crash = None, repr(e)
+        finally:
+            lm._vault_write_lock, sys.argv = real, old
+        check(f"⑥ 鎖逾時:{argv[0]} {argv[1]} → 擋下、rc2、不丟追蹤", rc == 2 and "擋下" in err.getvalue() and not crash, (rc, crash, err.getvalue()[-200:]))
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr3")
+    _qfm_plan(kg, "p", "pending_questions:\n" + _qfm_q(), decisions="")
+    git = lambda *a: _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    git("add", "-A"); git("commit", "-qm", "p", "--no-verify")
+    out_file = d / "pwn.txt"
+    for rng in (f"--output={out_file}..HEAD", "HEAD..nonexist"):
+        r = run(kg, "spec-gate", "--push-check", rng, "--repo", str(d))
+        check(f"⑦ 推送前範圍 {rng[:20]!r}:不當 git 選項(指令列拒收或放行)、不寫出檔", r.returncode in (0, 2) and not out_file.exists(), r.stdout[-300:])
+    env2 = lm.Env(kg)
+    vrel = str(kg.relative_to(d))
+    for rng, why in ((f"--output={out_file}..HEAD", "以 - 開頭"), ("HEAD..nonexist", "認不得")):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            lm._pq_push_remind(env2, d, vrel, [f"{vrel}/Projects/p_計劃.md"], rng)
+        check(f"⑦ 推送前提醒本身:範圍{why} → 講一句跳過、不寫出檔", "跳過" in buf.getvalue() and not out_file.exists(), buf.getvalue()[-200:])
+
+
+def t_qfm_r4_folds():
+    """[待決問題改存開頭欄位 代碼審 r4](★以下是 r4 當時的規則★:r5 起符號連結筆記改成擋下,r6 起清單外的題改用整份歸屬檢查與鍵名判斷、
+    旗幟只收三面英國地區旗;現行規則看 t_qfm_r6_*、t_qfm_r7_*)反例照工具正常流程會產生的欄位排列:清單後面接 decisions、lands_in、tags、summary 區塊這類
+    「自己有內容」的欄位讀得懂,只有單行值的頂格鍵後面又出現題目才算切斷;旗幟標籤字只在旗幟序列裡放行,單獨出現照擋,只有放行字元的
+    文字算空值;筆記是符號連結也寫得進;守衛的 plan/abandon、amend(在 git 庫裡)鎖逾時都回擋下;兄弟目錄名字當前綴不算同一個筆記庫;
+    推送前用 --push-check= 寫法把 - 開頭的範圍送進去也不寫檔。翻紅釘:任一條拿掉 → 那一條翻紅。"""
+    import io, contextlib, os as _os, subprocess as _sp
+    lm = _load_lumos_inproc()
+    head = "pending_questions:\n" + _qfm_q()
+    for tail, nm in (("decisions:\n  - content: 選甲\n    id: d1\n    decided: 2026-10-12\n    valid: true", "decisions 清單"),
+                     ("lands_in:\n  - Systems/x", "lands_in 清單"), ("tags:\n  - type/project", "tags 清單"),
+                     ("summary: |-\n  - id: 這是摘要裡的條列", "summary 多行區塊"), ("related: []\naliases:\n  - 別名", "空清單加清單")):
+        _p, qs, errs = lm.pq_parse(_qfm_fm(head + tail))
+        check(f"① 清單後面接{nm}:讀得懂、題目不少", not errs and len(qs) == 1, errs)
+    for mid in ("reason: 等人回覆", "status: 延後", "class: 需求"):
+        _p, qs, errs = lm.pq_parse(_qfm_fm(head + mid + "\n" + _qfm_q("Q2", stage="架構", status="待查", blocking="true")))
+        check(f"① 反例:單行值的頂格 {mid!r} 後面又有題 → 讀不懂", bool(errs), (errs, [q['id'] for q in qs]))
+    import time as _t
+    long_flag = "\U0001f3f4" + "\U000e0067" * 20000 + "\U000e007f"
+    t0 = _t.perf_counter()
+    got = lm._pq_bad_char(long_flag)
+    dt = _t.perf_counter() - t0
+    check("② 兩萬個標籤字接在旗幟後:一串只檢查一次(1 秒內,平方級要一分鐘以上);r5 起不是真旗幟形狀、照擋", got is not None and dt < 1.0, f"{dt:.2f}s")
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr4")
+    _qfm_plan(kg, "f", None, decisions="")
+    r1 = run(kg, "question-add", "Projects/f_計劃", "一", "--class", "需求", "--stage", "需求", "--blocking")
+    r2 = run(kg, "decision-add", "Projects/f_計劃", "選甲", "--decided", "2026-10-12")
+    r3 = run(kg, "question-set", "Projects/f_計劃", "Q1", "status=已決", "decision=#d1")
+    r4 = run(kg, "spec-gate", "Projects/f_計劃", "--no-run")
+    check("① 工具流程:先加題、再記決策(決策接在清單後)、再把題改已決 → 都成功、規格閘不擋",
+          [r1.returncode, r2.returncode, r3.returncode] == [0, 0, 0] and "無法判定" not in r4.stdout and r4.returncode == 0,
+          (r3.stderr[-300:], r4.stdout[-300:]))
+    flag = "\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f"
+    _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=f"旗{flag}子")))
+    check("② 旗幟 emoji 序列裡的標籤字 → 讀得懂", not errs, errs)
+    for t, nm in (("甲\U000e0069\U000e0067\U000e006e乙", "沒有旗幟開頭的標籤字"), ("\U0001f3f4\U000e0067\U000e0062", "旗幟序列沒收尾"),
+                  ("‍‌", "只有零寬連接字"), ("­", "只有軟連字號")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=f'"{t}"')))
+        check(f"② 反例:{nm} → 讀不懂", bool(errs), errs)
+    v = mkvault()
+    ext = v.parent / "ext_計劃.md"
+    ext.write_text("---\ntype: project\nstatus: doing\n---\n# x\n", encoding="utf-8")
+    _os.symlink(ext, v / "Projects" / "x_計劃.md")
+    r = run(v, "question-add", "Projects/x_計劃", "甲", "--class", "需求", "--stage", "需求")
+    check("③ 筆記是指到庫外的符號連結:不誤判成沒拿鎖(r5 起改成講明是符號連結、擋下,見 t_qfm_r5_folds ④)",
+          "沒拿" not in r.stderr, r.stderr[-300:])
+    sib = v.parent / (v.name + "2")
+    sib.mkdir()
+    pf = sib / "z.md"
+    pf.write_text("---\ntype: project\nstatus: doing\n---\n# z\n", encoding="utf-8")
+    try:
+        with lm._vault_write_lock(v):
+            lm.atomic_write_verify(pf, ["---", "type: project", "status: done", "---", "# z", ""], "status", lambda _f: True)
+        got = "寫了"
+    except RuntimeError as e:
+        got = str(e)
+    check("④ 拿著 kg 的鎖寫 kg2(名字是前綴的兄弟目錄)→ 不寫", "鎖" in got and "status: doing" in pf.read_text(encoding="utf-8"), got)
+    gv = mkvault()
+    _sp.run(["git", "init", "-q", str(gv.parent)], capture_output=True)
+    (gv / "Systems" / "S.md").write_text("---\ntype: system\nstatus: doing\ndecisions:\n  - content: 甲\n    id: d1\n    context: 舊\n"
+                                         "    decided: 2026-10-01\n    valid: true\n---\n# s\n", encoding="utf-8")
+    real = lm._vault_write_lock
+
+    def _busy(_vault):
+        raise RuntimeError("等了 60 秒還輪不到寫入(測試模擬)")
+    for argv in (["decision-amend", "Systems/S", "d1", "--field", "context", "--text", "新"], ["guard", "abandon", "Systems/S", "--why", "測試"],
+                 ["guard", "plan", "Systems/S", "某條合約", "--why", "測試"]):
+        lm._vault_write_lock = _busy
+        err, old = io.StringIO(), sys.argv
+        sys.argv = ["lumos", "--vault", str(gv), *argv]
+        try:
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                rc = lm.main()
+            crash = ""
+        except Exception as e:   # noqa: BLE001 — 這條就是在驗不丟追蹤
+            rc, crash = None, repr(e)
+        finally:
+            lm._vault_write_lock, sys.argv = real, old
+        check(f"⑤ 鎖逾時(git 庫裡):{argv[0]} {argv[1]} → 擋下、rc2、不丟追蹤", rc == 2 and "擋下" in err.getvalue() and "輪不到" in err.getvalue() and not crash,
+              (rc, crash, err.getvalue()[-200:]))
+    d2, kg2 = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr4b")
+    _qfm_plan(kg2, "p", "pending_questions:\n" + _qfm_q(), decisions="")
+    _sp.run(["git", "-C", str(d2), "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(d2), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "p", "--no-verify"], capture_output=True)
+    out = d2 / "pwn.txt"
+    r = run(kg2, "spec-gate", f"--push-check=--output={out}..HEAD", "--repo", str(d2))
+    check("⑥ --push-check=--output=…:不當 git 選項、不寫出任何檔", r.returncode == 0 and not out.exists() and not (d2 / "pwn.txt..HEAD").exists(),
+          (r.returncode, r.stdout[-200:]))
+
+
+def t_qfm_r5_folds():
+    """[待決問題改存開頭欄位 代碼審 r5] 清單被切斷用「像題號的行出現在清單外」判,不看它落在哪個頂格鍵底下:自己有內容的鍵
+    (lands_in、tags、空值、區塊)底下、隔了幾個單行鍵、或題目行寫歪(text 開頭、縮 3 格、id:Q2)都擋;工具自己寫的決策 id 是 d 開頭、
+    摘要裡的條列不是題號,照樣讀得懂。旗幟序列的標籤字只收真旗幟的形狀(兩個小寫字母加一到三個小寫字母或數字);異體選擇符補充區
+    與連續異體選擇符擋;點字空白、韓文填充字這類看不見的字算空值;筆記是符號連結就擋下、講明要改哪一篇,連結原樣留著;推送前提醒
+    印檔名先清掉能改畫面的字元(ESC 這類控制字元 git 自己會加引號跳脫、走不到這裡,雙向覆寫字元會原樣進來);summary-line 拿鎖逾時回擋下。翻紅釘:任一條拿掉 → 那一條翻紅。"""
+    import subprocess as _sp
+    lm = _load_lumos_inproc()
+    head = "pending_questions:\n" + _qfm_q()
+    q2 = _qfm_q("Q2", stage="架構", status="待查", blocking="true")
+    for mid, nm in (("lands_in:\n  - Systems/x\n", "lands_in 清單底下"), ("tags:\n  - type/project\nupdated: 2026-10-12\n", "清單鍵加單行鍵之後"),
+                    ("reason: x\nsource: y\n", "兩個單行鍵之後"), ("reason:\n", "空值的頂格鍵底下"), ("decisions:\n", "空的 decisions 底下")):
+        _p, qs, errs = lm.pq_parse(_qfm_fm(head + mid + q2))
+        check(f"① 反例:阻塞題寫在{nm} → 讀不懂(不靜默丟題)", bool(errs), (errs, [q['id'] for q in qs]))
+    _p, qs, errs = lm.pq_parse(_qfm_fm(head + "summary: |\n  id: Q3\n  - id: Q4\n"))
+    check("① 正例:block scalar 裡的 id 與清單行都只是文字", not errs and [q["id"] for q in qs] == ["Q1"], (errs, qs))
+    for bad, nm in (("  - text: 甲\n    id: Q2\n", "題目行用 text 開頭"), ("   - id: Q2\n", "縮 3 格"), ("  - id:Q2\n", "id:Q2 沒空白"),
+                    ('  - id: "Q2"\n', "題號加引號")):
+        _p, qs, errs = lm.pq_parse(_qfm_fm(head + "reason: x\n" + bad + "    blocking: true\n"))
+        check(f"① 反例:清單外的題目行{nm} → 讀不懂", bool(errs), (errs, [q['id'] for q in qs]))
+    for tail, nm in (("decisions: # 決策\n  - id: d1\n    content: 選甲\n", "decisions 後面帶註解"),
+                     ("summary: |-\n  - id: 這是摘要裡的條列\nupdated: 2026-10-12\n", "摘要條列寫 id"),
+                     ("lands_in:\n  - Systems/x\ntags:\n  - type/project\nupdated: 2026-10-12\n", "清單後接三個欄位")):
+        _p, qs, errs = lm.pq_parse(_qfm_fm(head + tail))
+        check(f"① 正例:清單後接{nm} → 讀得懂、題目不少", not errs and len(qs) == 1, errs)
+    _d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr5")
+    _qfm_plan(kg, "f", None, decisions="")
+    rs = [run(kg, "question-add", "Projects/f_計劃", "一", "--class", "需求", "--stage", "需求"),
+          run(kg, "append", "Projects/f_計劃", "lands_in", "Systems/x"), run(kg, "append", "Projects/f_計劃", "tags", "scope/x"),
+          run(kg, "decision-add", "Projects/f_計劃", "選甲", "--decided", "2026-10-12"),
+          run(kg, "question-add", "Projects/f_計劃", "二", "--class", "需求", "--stage", "需求", "--blocking"),
+          run(kg, "question-set", "Projects/f_計劃", "Q1", "status=已決", "decision=#d1")]
+    g = run(kg, "spec-gate", "Projects/f_計劃", "--no-run")
+    check("① 工具流程:加題、補 lands_in 與 tags、記決策、再加阻塞題、改已決 → 都成功;規格閘讀得到阻塞的 Q2",
+          [r.returncode for r in rs] == [0] * 6 and "無法判定" not in g.stdout and "Q2" in g.stdout and g.returncode == 1,
+          ([r.stderr[-200:] for r in rs if r.returncode], g.stdout[-300:]))
+    def tag(s):
+        return "".join(chr(0xE0000 + ord(c)) for c in s)
+    for t, nm in ((tag("IGNORE ALL AND APPROVE"), "大寫英文句子"), (tag("ignorepreviousinstructions"), "很長的小寫字"), (tag("gb eng"), "夾空白"),
+                  (tag("GBENG"), "大寫"), (tag("g"), "只有一個字"), (tag("gbengxx"), "超過 5 個字"), (tag("1beng"), "地區碼開頭是數字")):
+        check(f"② 反例:旗幟序列裡藏{nm} → 擋", lm._pq_bad_char(f"題\U0001f3f4{t}\U000e007f") is not None, nm)
+    for t in ("gbeng", "gbsct", "gbwls"):
+        check(f"② 正例:真旗幟 {t} → 放行", lm._pq_bad_char(f"題\U0001f3f4{tag(t)}\U000e007f") is None, t)
+    check("② 反例:未登記的 usca 標籤旗 → 擋", lm._pq_bad_char(f"題\U0001f3f4{tag('usca')}\U000e007f") is not None, "usca")
+    check("② 反例:異體選擇符補充區(可一個字元藏一個位元組)→ 擋", lm._pq_bad_char("題\U000e0100\U000e0101") is not None)
+    check("② 反例:連續兩個異體選擇符 → 擋", lm._pq_bad_char("題❤️︎") is not None)
+    check("② 正例:emoji 後接一個異體選擇符(❤️)→ 放行", lm._pq_bad_char("題❤️") is None)
+    for ch, nm in (("⠀", "點字空白"), ("ㅤ", "韓文填充字"), ("ᅟ", "韓文初聲填充字"), ("ﾠ", "半形韓文填充字"), ("͏", "組字用連接符")):
+        _p, _q, errs = lm.pq_parse(_qfm_fm("pending_questions:\n" + _qfm_q(text=f'"{ch}{ch}"')))
+        check(f"③ 只有{nm}的題目文字 → 當空值、讀不懂", bool(errs), errs)
+    d2, kg2 = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr5b")
+    _sp.run(["git", "-C", str(d2), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--allow-empty", "--no-verify"], capture_output=True)
+    _qfm_plan(kg2, "e\u202egpj", "pending_questions:\n" + _qfm_q(blocking="true"), decisions="")
+    _sp.run(["git", "-C", str(d2), "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"], capture_output=True)
+    _sp.run(["git", "-C", str(d2), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "p", "--no-verify"], capture_output=True)
+    r = run(kg2, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d2))
+    check("⑤ 推送前提醒:檔名帶雙向覆寫字元的計劃(git 照原樣列出)→ 照樣提醒、印出的檔名不含它", "Q1" in r.stdout and "\u202e" not in r.stdout, r.stdout[-300:])
+    _qfm_r5_write_side(lm)
+
+
+def _qfm_r5_write_side(lm):
+    """t_qfm_r5_folds 的寫入那一半(④ 符號連結、⑥ summary-line 鎖逾時;拆出來是為了不超過複雜度上限)。"""
+    import io, contextlib, os as _os
+    v = mkvault()
+    ext = v.parent / "ext_計劃.md"
+    ext.write_text("---\ntype: project\nstatus: doing\n---\n# x\n", encoding="utf-8")
+    ln = v / "Projects" / "x_計劃.md"
+    _os.symlink(ext, ln)
+    inner = v / "Systems" / "H.md"
+    inner.write_text("---\ntype: system\nstatus: doing\n---\n# h\n", encoding="utf-8")
+    _os.symlink(_os.path.join("..", "Systems", "H.md"), v / "Projects" / "hl_計劃.md")
+    for name, target, argv in (("庫外", ext, ["question-add", "Projects/x_計劃", "甲", "--class", "需求", "--stage", "需求"]),
+                               ("庫內", inner, ["set", "Projects/hl_計劃", "status", "done"])):
+        before = target.read_text(encoding="utf-8")
+        r = run(v, *argv)
+        lk = v / "Projects" / ("x_計劃.md" if name == "庫外" else "hl_計劃.md")
+        check(f"④ 筆記是指到{name}的符號連結:擋下、講明是符號連結;連結還在、它指到的那篇沒被改",
+              r.returncode == 2 and "符號連結" in r.stderr and "沒拿" not in r.stderr and lk.is_symlink()
+              and target.read_text(encoding="utf-8") == before, (r.returncode, r.stderr[-300:]))
+    sv = mkvault()
+    (sv / "Systems" / "S.md").write_text("---\ntype: system\nstatus: doing\nsummary: |\n  甲乙丙\n---\n# s\n", encoding="utf-8")
+    real = lm._vault_write_lock
+
+    def _busy(_vault):
+        raise lm.WriteBlocked("等了 60 秒還輪不到寫入(測試模擬)")
+    lm._vault_write_lock = _busy
+    err, old = io.StringIO(), sys.argv
+    sys.argv = ["lumos", "--vault", str(sv), "summary-line", "Systems/S", "甲乙", "丁"]
+    try:
+        with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+            rc = lm._cli()   # 命令列入口(r8 起擋下的最後防線在 _cli)
+        crash = ""
+    except Exception as e:   # 這條就是在驗不丟追蹤
+        rc, crash = None, repr(e)
+    finally:
+        lm._vault_write_lock, sys.argv = real, old
+    check("⑥ summary-line 拿鎖逾時 → 擋下、rc2、不丟追蹤", rc == 2 and "輪不到" in err.getvalue() and not crash, (rc, crash, err.getvalue()[-200:]))
+
+
+def _qfm_r6_owner_cases(q, base, owners):
+    for pos in ("before", "inside", "after"):
+        for owner in owners:
+            if pos == "inside" and "summary: |-" in owner:
+                continue  # block scalar 內容明定排除；它沒有可插題的結構項目，不拿文字內容冒充 inside 軸。
+            parts = (q, owner) if pos == "before" else (owner, q)
+            if pos == "inside":
+                lines = owner.rstrip("\n").split("\n")
+                cut = 2 if len(lines) > 1 else 1
+                parts = ("\n".join(lines[:cut]) + "\n", q,
+                         ("\n".join(lines[cut:]) + "\n") if lines[cut:] else "")
+            yield f"owner-{pos}-{owner.split(':', 1)[0]}", base + "".join(parts)
+
+
+def _qfm_r6_hidden_question_cases(lm, marker):
+    """每個軸只變一件事；共同判準由測試端統一套，不為各例另寫期待答案。"""
+    q = _qfm_q("Q2", text=marker, stage="架構", status="待查", blocking="true")
+    base = "type: project\nstatus: doing\npending_questions:\n" + _qfm_q()
+    owners = (
+        "reason: x\n", "reason:\n", "lands_in:\n  - Systems/x\n",
+        "summary: |-\n  摘要文字\nupdated: 2026-10-13\n", "decisions:\n",
+        "decisions:\n  - id: d1\n    content: 選甲\n    decided: 2026-10-13\n    valid: true\n",
+    )
+    yield from _qfm_r6_owner_cases(q, base, owners)
+    for indent in range(6):
+        moved = "".join((" " * indent + ln.lstrip(" ") + "\n") for ln in q.rstrip("\n").split("\n"))
+        yield f"indent-{indent}", base + "reason: x\n" + moved
+    firsts = (
+        q, q.replace("  - id: Q2\n", "  - text: " + marker + "\n    id: Q2\n", 1),
+        q.replace("id: Q2", "id : Q2", 1), q.replace("id: Q2", "id:Q2", 1),
+        q.replace("id: Q2", "ID: Q2", 1), q.replace("id: Q2", "id: 'Q2'", 1),
+    )
+    for i, item in enumerate(firsts):
+        yield f"first-order-{i}", base + "reason: x\n" + item
+    for qid in ("Q02", "q2", "\uff31\uff12", "Q2tail", "Q2 # 尾註", "2", "Q1234567"):
+        yield f"qid-{qid!a}", base + "reason: x\n" + q.replace("Q2", qid, 1)
+    for value in ("[x]", "{x: y}", "&x value", "*x", "!str value"):
+        yield f"struct-{value!a}", base + f"related: {value}\n" + q
+    yield "empty-flow-ok-owner", base + "related: []\n" + q
+    for cp in range(0x110000):
+        ch = chr(cp)
+        if ch != " " and ch != "\t" and (ch.isspace() or lm._pq_is_default_ignorable(ch)):
+            yield f"leading-U+{cp:04X}", base + "reason: x\n" + ch + q
+
+
+def t_qfm_r6_frontmatter_ownership_generator():
+    """[定案甲] 生成器把同一題搬過各種擁有者與結構變形；題被收進來或整份拒讀，沒有第三條靜默路。"""
+    lm = _load_lumos_inproc()
+    marker = "R6-UNIQUE-HIDDEN-QUESTION"
+    lost = []
+    for name, fm_text in _qfm_r6_hidden_question_cases(lm, marker):
+        for eol in ("\n", "\r\n"):
+            text = "\ufeff---" + eol + fm_text.replace("\n", eol) + "---" + eol + "# x" + eol
+            fm, line0 = lm._pq_fm_of_text(text)
+            for route, src, off in (("text", fm, line0), ("direct", fm_text.split("\n"), 1)):
+                _present, qs, errs = lm.pq_parse(src, line0=off)
+                found = any(q.get("text") == marker for q in qs)
+                if not (found or errs):
+                    lost.append((name, "CRLF" if eol == "\r\n" else "LF", route))
+    check("① 所有歸屬/縮排/鍵序/題號/Unicode 行首/flow 變形都不會讓阻塞題靜默消失", not lost, lost[:20])
+    positive = ("type: project\nsummary: |-\n  id: Q3\n    - id: Q4\n"
+                "decisions:\n  - content: |\n      stage: 架構\n    id: d1\n    decided: 2026-10-13\n    valid: true\n"
+                "pending_questions:\n" + _qfm_q())
+    _p, qs, errs = lm.pq_parse(positive.split("\n"), line0=1)
+    check("② block scalar 內的 id 與 - id 都只算文字", not errs and [q["id"] for q in qs] == ["Q1"], errs)
+
+
+_QFM_UNICODE16_DICP_RANGES_TEXT = """00AD
+034F
+061C
+115F-1160
+17B4-17B5
+180B-180F
+200B-200F
+202A-202E
+2060-206F
+3164
+FE00-FE0F
+FEFF
+FFA0
+FFF0-FFF8
+1BCA0-1BCA3
+1D173-1D17A
+E0000-E0FFF"""
+
+
+def _qfm_unicode16_dicp_ranges():
+    """測試端獨立抄 Unicode 16 DerivedCoreProperties.txt，不引用產品表(代碼審 r7 合約圖譜席 K2)。"""
+    out = []
+    for row in _QFM_UNICODE16_DICP_RANGES_TEXT.splitlines():
+        a, sep, b = row.partition("-")
+        out.append((int(a, 16), int(b if sep else a, 16)))
+    return tuple(out)
+
+
+def _qfm_r6_dicp_chars(_lm):
+    for a, b in _qfm_unicode16_dicp_ranges():
+        yield from map(chr, range(a, b + 1))
+
+
+def _qfm_tag_chars(s):
+    return "".join(chr(0xE0000 + ord(c)) for c in s)
+
+
+def t_qfm_r6_unicode_table_and_positions():
+    """[定案乙] 官方 DICP 全表逐字驗類別與五種惡意位置；合法序列另走正例，避免抽樣掩掉抄表錯誤。"""
+    lm = _load_lumos_inproc()
+    expected_ranges = _qfm_unicode16_dicp_ranges()
+    chars = list(_qfm_r6_dicp_chars(lm))
+    wrong_cat = [(f"U+{ord(c):04X}", unicodedata.category(c)) for c in chars
+                 if unicodedata.category(c) not in ("Cf", "Mn", "Lo", "Cn")]
+    check("① DICP 表逐段等於測試獨立抄錄的 Unicode 16 DerivedCoreProperties.txt，總碼位 4174",
+          tuple(lm._PQ_DICP_RANGES) == expected_ranges and len(chars) == 4174
+          and lm._PQ_DICP_UNICODE_VERSION == unicodedata.unidata_version and not wrong_cat,
+          (len(chars), unicodedata.unidata_version, wrong_cat[:20]))
+    bad = []
+    for c in chars:
+        probes = (c, c + "字", "字" + c, "1" + c + "2", "甲" + c + c + "乙", "a" + c + "b" + c + "1" + c)
+        if not lm._pq_blank(c) or any(lm._pq_bad_char(v) is None for v in probes):
+            bad.append(f"U+{ord(c):04X}")
+    for c in lm._PQ_BLANK_LOOKALIKES:
+        probes = (c, c + "字", "字" + c, "1" + c + "2", "甲" + c + c + "乙")
+        if not lm._pq_blank(c) or any(lm._pq_bad_char(v) is None for v in probes):
+            bad.append(f"補充 U+{ord(c):04X}")
+    check("② DICP 與補充表逐字：單獨算空，前中後/相連/反覆插入都擋", not bad, bad[:20])
+    flags = ["🏴" + _qfm_tag_chars(x) + "\U000e007f" for x in ("gbeng", "gbsct", "gbwls")]
+    valid = [*flags, "👨‍👩‍👧‍👦", "👍🏽", "❤️", "❤️‍🔥", "1️⃣", "क्‍ष", "क्‌ष", "co\u00adoperate"]
+    check("③ 合法旗/ZWJ/ZWNJ/膚色/愛心/鍵帽/軟連字號全部放行",
+          all(lm._pq_bad_char(v) is None for v in valid),
+          [(v, lm._pq_bad_char(v)) for v in valid if lm._pq_bad_char(v) is not None])
+    invalid = [flags[0] + flags[1], flags[0] + _qfm_tag_chars("x"), "e\u0301", "\u200d甲", "甲\u200d"]
+    check("④ 相鄰兩旗、旗後游離標籤、NFD、隱形字首尾全部擋", all(lm._pq_bad_char(v) is not None for v in invalid), invalid)
+
+
+def t_qfm_r6_unicode_writers_normalize_and_roundtrip():
+    """[定案乙寫側] question-add 先轉 NFC；每個合法零寬/異體/旗序列寫回後逐字一致。"""
+    lm = _load_lumos_inproc()
+    _d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr6unicode")
+    path = _qfm_plan(kg, "u", None, decisions="")
+    vals = ["🏴" + _qfm_tag_chars(x) + "\U000e007f" for x in ("gbeng", "gbsct", "gbwls")]
+    vals += ["👨‍👩‍👧‍👦", "👍🏽", "❤️", "❤️‍🔥", "1️⃣", "क्‍ष", "क्‌ष", "co\u00adoperate", "e\u0301"]
+    rcs = [run(kg, "question-add", "Projects/u_計劃", v, "--class", "需求", "--stage", "需求").returncode for v in vals]
+    fm, _ = lm.split_frontmatter(path.read_text(encoding="utf-8"))
+    _p, qs, errs = lm.pq_parse(fm)
+    got = [q["text"] for q in qs]
+    want = [unicodedata.normalize("NFC", v) for v in vals]
+    check("⑤ 合法值經 question-add 寫回逐字一致，NFD 輸入落盤前轉 NFC", not errs and rcs == [0] * len(vals) and got == want,
+          (rcs, errs, got, want))
+
+
+def t_qfm_r6_writeblocked_inventory_and_edges():
+    """[定案丙] AST 釘住全部 atomic 寫入者；讀檔失敗與寫入原語拒絕都只回 WriteBlocked。"""
+    import ast, contextlib, io
+    lm = _load_lumos_inproc()
+    tree = ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8"))
+    got = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+           and any(isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "atomic_write_verify"
+                   for x in ast.walk(n))}
+    expected = {
+        "_guard_plan_locked", "_guard_settle_pass", "_guard_settle_home", "_guard_settle_record",
+        "_guard_abandon_locked", "_cmd_guard_bind_locked", "_guard_kill_add_locked", "_guard_kill_rm_locked",
+        "_cmd_guard_audit_locked", "_summary_line_locked", "_cmd_set_locked", "_set_conditions_locked",
+        "_cmd_append_locked", "_cmd_remove_locked", "_cmd_remove_scalar", "_cmd_decision_supersede_locked",
+        "_cmd_decision_add_locked", "_pq_commit", "_cmd_decision_reindex_locked", "_append_decision_ref_locked",
+        "_dref_remove_ref_locked", "_cmd_dref_promote_locked", "_drift_fix_write", "_decision_amend_locked",
+    }
+    check("① atomic_write_verify 呼叫者固定 24 支；新增寫入者沒登記會紅", got == expected and len(got) == 24,
+          (len(got), sorted(got - expected), sorted(expected - got)))
+    root = mkvault().parent / "qfmr6-wb"
+    root.mkdir()
+    real = root / "real.md"
+    raw = b"---\ntype: project\nstatus: doing\nsummary: |-\n  KEY:x\n---\n# x\n"
+    real.write_bytes(raw)
+    external = root / "external.md"
+    external.symlink_to(real)
+    broken = root / "broken.md"
+    broken.symlink_to(root / "gone.md")
+    failures = []
+    try:
+        loaded, _s, _e = lm.load_raw_for_edit(external)
+        if "\n".join(loaded).encode("utf-8") != raw:
+            failures.append(("可讀符號連結", "內容不同"))
+    except lm.WriteBlocked as exc:
+        failures.append(("可讀符號連結不應在讀取時擋", str(exc)))
+    try:
+        lm.load_raw_for_edit(broken)
+        failures.append(("壞掉的符號連結", "未擋"))
+    except lm.WriteBlocked as exc:
+        if "讀不到" not in str(exc):
+            failures.append(("壞掉的符號連結", str(exc)))
+    orig_read = Path.read_bytes
+    try:
+        Path.read_bytes = lambda self: (_ for _ in ()).throw(PermissionError("denied")) if self == real else orig_read(self)
+        try:
+            lm.load_raw_for_edit(real)
+            failures.append(("PermissionError", "未擋"))
+        except lm.WriteBlocked:
+            pass
+    finally:
+        Path.read_bytes = orig_read
+    orig_try = lm._excl_lock_try
+    try:
+        lm._excl_lock_try = lambda *_a, **_k: (_ for _ in ()).throw(PermissionError("lock denied"))
+        try:
+            with lm._vault_write_lock(root):
+                pass
+            failures.append(("拿鎖 PermissionError", "未擋"))
+        except lm.WriteBlocked:
+            pass
+    finally:
+        lm._excl_lock_try = orig_try
+    check("② 可讀符號連結照常讀；壞連結、讀檔權限、拿鎖失敗只丟 WriteBlocked，原檔不變", not failures and real.read_bytes() == raw,
+          failures)
+    v = mkvault()
+    note = v / "Systems" / "W.md"
+    note.write_bytes(raw.replace(b"type: project", b"type: system"))
+    before = note.read_bytes()
+    old_lock, old_argv = lm._vault_write_lock, sys.argv
+    lm._vault_write_lock = lambda _v: (_ for _ in ()).throw(lm.WriteBlocked("拿鎖逾時(測試)"))
+    sys.argv = ["lumos", "--vault", str(v), "summary-line", "Systems/W", "KEY:x", "KEY:y"]
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = lm._cli()
+    finally:
+        lm._vault_write_lock, sys.argv = old_lock, old_argv
+    check("③ 命令列入口把 WriteBlocked 變 rc2/擋下，沒有成功文字或 traceback",
+          rc == 2 and err.getvalue().startswith("擋下:") and "Traceback" not in err.getvalue()
+          and "✓" not in out.getvalue() and "改後" not in out.getvalue() and note.read_bytes() == before,
+          (rc, out.getvalue(), err.getvalue()))
+
+
+def t_qfm_r6_signoff_rolls_back_both_sides():
+    """[定案丙 signoff] 帳追加失敗時筆記與既有帳逐位元還原，且失敗前不印成功。"""
+    import contextlib, io
+    lm = _load_lumos_inproc()
+    v = mkvault()
+    note = v / "Systems" / "S.md"
+    note.write_text("---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:x\n---\n# s\n", encoding="utf-8")
+    log = v.parent / ".signoff-log.jsonl"
+    log.write_bytes(b'{"old":true}\n')
+    note_before, log_before = note.read_bytes(), log.read_bytes()
+    old_argv = sys.argv
+    import os as _os
+    real_os_open = _os.open
+
+    def blocked_open(file, flags, *a, **k):   # r8 起帳用 os.open 拿原始描述子,注入點跟著搬到這一層
+        if Path(file) == log:
+            raise PermissionError("ledger denied")
+        return real_os_open(file, flags, *a, **k)
+    _os.open = blocked_open
+    sys.argv = ["lumos", "--vault", str(v), "signoff", "Systems/S", "--note", "人工確認"]
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = lm._cli()
+    finally:
+        _os.open, sys.argv = real_os_open, old_argv
+    check("④ signoff 帳失敗：rc2、雙邊位元不變、stdout 無成功訊號",
+          rc == 2 and err.getvalue().startswith("擋下:") and "Traceback" not in err.getvalue()
+          and "✓" not in out.getvalue() and "改後" not in out.getvalue()
+          and note.read_bytes() == note_before and log.read_bytes() == log_before,
+          (rc, out.getvalue(), err.getvalue(), note.read_bytes() == note_before, log.read_bytes() == log_before))
+
+
+def t_qfm_r6_tool_flow_and_repo_compatibility():
+    """[定案甲正例] 所有既有 frontmatter 寫入流程逐步跑；真 repo 含待決問題的文件仍讀得懂。"""
+    lm = _load_lumos_inproc()
+    _d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr6flow")
+    p = kg / "Projects" / "flow_計劃.md"
+    p.write_text("---\ntype: project\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ 流程守衛\n  WHY:流程標記舊 [出處:測試] [因:驗工具]\n---\n# flow\n" + _SG_ROLLBACK,
+                 encoding="utf-8")
+    steps = (
+        ("question-add", "question-add", "Projects/flow_計劃", "待確認", "--class", "需求", "--stage", "需求"),
+        ("question-set", "question-set", "Projects/flow_計劃", "Q1", "text=待確認二"),
+        ("decision-add", "decision-add", "Projects/flow_計劃", "採甲方案", "--decided", "2026-10-13"),
+        ("decision-amend", "decision-amend", "Projects/flow_計劃", "d1", "--field", "content", "--text", "採甲方案修訂"),
+        ("question-set 已決", "question-set", "Projects/flow_計劃", "Q1", "status=已決", "decision=#d1"),
+        ("decision-supersede", "decision-supersede", "Projects/flow_計劃", "#d1", "--by", "改採乙方案", "--ended", "2026-10-13"),
+        ("decision-add 二", "decision-add", "Projects/flow_計劃", "採乙方案", "--decided", "2026-10-13"),
+        ("question-set 改指", "question-set", "Projects/flow_計劃", "Q1", "decision=#d2"),
+        ("append lands_in", "append", "Projects/flow_計劃", "lands_in", "Systems/lumos-cli-read"),
+        ("append tags", "append", "Projects/flow_計劃", "tags", "scope/cli"),
+        ("append related", "append", "Projects/flow_計劃", "related", "Systems/lumos-cli-read"),
+        ("append aliases", "append", "Projects/flow_計劃", "aliases", "流程別名"),
+        ("set", "set", "Projects/flow_計劃", "status", "doing"),
+        ("summary-line", "summary-line", "Projects/flow_計劃", "流程標記舊", "新片段含 id: Q3"),
+        ("signoff", "signoff", "Projects/flow_計劃", "--note", "流程確認"),
+        ("guard bind", "guard", "bind", "Projects/flow_計劃", "流程守衛", "t_qfm_r6_tool_flow_and_repo_compatibility"),
+    )
+    failures = []
+    for label, *argv in steps:
+        r = run(kg, *argv)
+        fm, _ = lm.split_frontmatter(p.read_text(encoding="utf-8"))
+        _present, _qs, errs = lm.pq_parse(fm)
+        gate = run(kg, "spec-gate", "Projects/flow_計劃", "--no-run")
+        if r.returncode != 0 or errs or "無法判定" in (gate.stdout + gate.stderr):
+            failures.append((label, r.returncode, r.stderr[-160:], errs, gate.returncode, (gate.stdout + gate.stderr)[-160:]))
+    check("⑤ question/decision/append/set/summary/signoff/guard 全流程每步都仍讀得懂", not failures, failures)
+
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    unreadable, pending = [], []
+    for f in (repo / "docs").rglob("*.md"):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except UnicodeError:
+            continue
+        fm, _ = lm.split_frontmatter(text)
+        if fm is None:
+            continue
+        np, _nq, ne = lm.pq_parse(fm)
+        if np:
+            pending.append(str(f.relative_to(repo)))
+        if ne:
+            unreadable.append((str(f.relative_to(repo)), ne[:2]))
+    check("⑥ docs 含 pending_questions 的現存篇仍可讀",
+          not unreadable and bool(pending), (unreadable[:10], pending))
+
+
+def _qfm_r7_hidden(ind="  ", sub="    ", idv="Q2", first="id"):
+    ks = [(first, idv if first == "id" else "MARK")]
+    ks.extend((k, v) for k, v in (("id", idv), ("text", "MARK"), ("class", "需求"),
+              ("stage", "架構"), ("status", "待查"), ("blocking", "true")) if k != first)
+    return f"{ind}- {ks[0][0]}: {ks[0][1]}\n" + "".join(f"{sub}{k}: {v}\n" for k, v in ks[1:])
+
+
+def _qfm_r7_check_hidden_ownership(lm, q1):
+    owners = ("reason: x\n", "reason:\n", "lands_in:\n  - Systems/x\n", "aliases:\n  - 別名\n",
+              "decisions:\n  - content: 甲\n    id: d1\n    decided: 2026-10-01\n    valid: true\n",
+              "summary: |\n  摘要\nupdated: 2026-10-13\n", "tags:\n  - type/project\nupdated: 2026-10-13\n")
+    shapes = ({}, {"idv": "Q02"}, {"idv": "q2"}, {"idv": "Q\uff12"}, {"idv": "Q2 # x"}, {"idv": "2"}, {"first": "text"},
+              {"ind": "   ", "sub": "     "}, {"ind": "\u00a0\u00a0", "sub": "\u00a0" * 4}, {"ind": "", "sub": "  "}, {"ind": "    ", "sub": "      "})
+    lost = []
+    for o in owners:
+        for sh in shapes:
+            for fm in (q1 + o + _qfm_r7_hidden(**sh), o + _qfm_r7_hidden(**sh) + q1):
+                for nl in ("\n", "\r\n"):
+                    _p, qs, errs = lm.pq_parse(fm.replace("\n", nl).split("\n"))
+                    if not errs and not any(q.get("text") == "MARK" for q in qs):
+                        lost.append((o[:12], sh, repr(nl)))
+    check("① 308 種搬位置、寫歪、換行組合:沒有一種讓題靜默消失", not lost and len(owners) * len(shapes) * 4 == 308, lost[:10])
+
+
+def _qfm_r7_check_question_keys(lm, q1):
+    for t in ("aliases:\n  - {id: Q2, blocking: true}\n", "aliases:\n  - [x, {id: Q2}]\n", 'aliases:\n  - "id": Q2\n',
+              "aliases:\n  - ID: Q2\n", "aliases:\n  - \uff49\uff44: Q2\n", "aliases:\n  - blocking: true\n", "decisions:\n  - id: Q2\n    text: x\n",
+              "decisions:\n  - content: 甲\n    Stage: 架構\n"):
+        _p, _q, errs = lm.pq_parse((q1 + t).split("\n"))
+        check(f"② 清單外的題目鍵 {t.split(chr(10))[1].strip()[:30]!r} → 讀不懂", bool(errs), errs)
+
+
+def _qfm_r7_check_legacy_shapes(lm, q1):
+    for t in ("decisions:\n  - content: 甲\n    decided: 2026-10-01\n    valid: true\n", "decisions:\n  - content: 甲\n    id: d1\n  KEY:★說明行\n",
+              "aliases:\n  - tier: high 代碼審\n", "aliases:\n  - [test:]/[manual:] 標記\n", "aliases:\n  - \"invalid choice: 'legacy'\"\n",
+              "aliases:\n  - decision:block只擋一次\n", 'aliases:\n  - "text: 只是引號純量"\n', "related: []\n"):
+        _p, qs, errs = lm.pq_parse((q1 + t).split("\n"))
+        check(f"③ 舊筆記寫法 {t.split(chr(10))[1].strip()[:30]!r} → 讀得懂", not errs and len(qs) == 1, errs)
+
+
+def _qfm_r7_check_repo_compatibility(lm, q1):
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    bad = []
+    for f in sorted((repo / "docs").rglob("*.md")):
+        try:
+            fm, _ = lm.split_frontmatter(f.read_text(encoding="utf-8"))
+        except UnicodeError:
+            continue
+        if fm is None or any(ln.startswith("pending_questions:") for ln in fm):
+            continue
+        for lines in (fm + q1.rstrip("\n").split("\n"), q1.rstrip("\n").split("\n") + fm):
+            _p, qs, errs = lm.pq_parse(lines)
+            if errs or len(qs) != 1:
+                bad.append((str(f.relative_to(repo)), errs[:1]))
+    check("④ docs 每篇筆記加一題在開頭欄位最前或最後 → 都讀得懂", not bad, bad[:10])
+
+
+def _qfm_r7_check_question_add(lm):
+    _d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfmr7")
+    (kg / "Projects" / "old_計劃.md").write_text("---\ntype: project\nstatus: doing\ndecisions:\n  - content: 舊決策沒編號\n"
+                                              "    decided: 2026-09-01\n    valid: true\n---\n# old\n" + _SG_ROLLBACK, encoding="utf-8")
+    r = run(kg, "question-add", "Projects/old_計劃", "新題", "--class", "需求", "--stage", "需求")
+    _p, qs, errs = lm.pq_parse(lm.split_frontmatter((kg / "Projects" / "old_計劃.md").read_text(encoding="utf-8"))[0])
+    check("⑤ 決策沒編號的舊筆記:question-add 成功、讀回一題、沒有錯誤", r.returncode == 0 and len(qs) == 1 and not errs,
+          (r.returncode, r.stderr[-200:], errs))
+
+
+def _qfm_r7_check_unicode_layers(lm, q1):
+    nb = q1 + "\u00a0\u00a0- id: Q2\n\u00a0\u00a0\u00a0\u00a0text: MARK\n"
+    _p, _q, errs = lm.pq_parse(nb.split("\n"))
+    check("⑥ 不斷行空白縮排的題:錯誤訊息點名 U+00A0(不是只說頂格寫錯)", any("U+00A0" in e[1] for e in errs), errs)
+    nfd = "e\u0301"
+    check("⑥ 不是 NFC 的值:字元檢查與讀值兩層各自擋", lm._pq_bad_char(nfd) is not None and "NFC" in (lm._strict_scalar(nfd)[1] or ""),
+          (lm._pq_bad_char(nfd), lm._strict_scalar(nfd)))
+
+
+def t_qfm_r7_writeblocked_keeps_old_handlers():
+    """[待決問題改存開頭欄位 代碼審 r7] 寫入被拒改丟 WriteBlocked 之後,原本只接 ValueError 的呼叫端(讀到 CRLF、BOM 的筆記就略過那一篇)
+    與只接 RuntimeError 的呼叫端(拿鎖、自驗)都照樣接得住。翻紅釘:WriteBlocked 只繼承 RuntimeError → ① 紅。"""
+    lm = _load_lumos_inproc()
+    v = mkvault()
+    p = v / "Systems" / "C.md"
+    p.write_bytes(b"---\r\ntype: system\r\nstatus: doing\r\n---\r\n# c\r\n")
+    got = []
+    for exc in (ValueError, RuntimeError):
+        try:
+            lm.load_raw_for_edit(p)
+            got.append("沒擋")
+        except exc as e:
+            got.append(type(e).__name__)
+    check("① CRLF 筆記:只接 ValueError、只接 RuntimeError 的兩種呼叫端都接得住", got == ["WriteBlocked", "WriteBlocked"], got)
+
+
+def t_qfm_r7_key_based_ownership():
+    """[待決問題改存開頭欄位 代碼審 r7] 清單外認題目靠鍵名(題目才有的鍵、不是 d 開頭的 id),不靠題號長相:
+    ① 一題搬到七種欄位底下或之前、題號與縮排寫歪十一種、LF 與 CRLF,共 308 種組合,不准「題不見、錯誤 0」;
+    ② 鍵名寫成大寫、全形、加引號、流式 {…},或只剩 blocking 一個鍵,都擋;
+    ③ 舊筆記的寫法照樣讀得懂:決策沒編號、決策裡夾 `  KEY:` 說明行、別名是一行 `鍵: 值`、`[文字]` 開頭、引號裡有冒號;
+    ④ repo 的 docs/ 每一篇筆記,把一題加在開頭欄位最前或最後,都讀得懂(原本 8 篇會被誤擋,其中 4 篇是決策沒編號、加題就被拒);
+    ⑤ 決策沒編號的筆記用 question-add 加題成功。翻紅釘:改回「決策 id 必須是 d 加數字」→ ③④⑤ 紅;
+    純量清單把一行 `鍵: 值` 一律擋 → ③④ 紅;流式檢查排在一行 mapping 放行之後 → ② 紅;認鍵名不做 NFKC 或大小寫 → ② 紅;
+    ⑥ 行首特殊空白的訊息、NFC 的兩層各自拆掉 → ⑥ 紅(這兩道在擋不擋上有別的規則代打,釘的是訊息與各層本身)。"""
+    lm = _load_lumos_inproc()
+    q1 = "pending_questions:\n  - id: Q1\n    text: 甲\n    class: 需求\n    stage: 需求\n    status: 待人\n"
+    _qfm_r7_check_hidden_ownership(lm, q1)
+    _qfm_r7_check_question_keys(lm, q1)
+    _qfm_r7_check_legacy_shapes(lm, q1)
+    _qfm_r7_check_repo_compatibility(lm, q1)
+    _qfm_r7_check_question_add(lm)
+    _qfm_r7_check_unicode_layers(lm, q1)
+
+
+def t_qfm_r8_outside_key_rule():
+    """[第八輪單一規則甲] 清單外只看行首、題目鍵、含題目鍵的 flow；其餘形狀交還原欄位讀法。
+    翻紅釘:略過 `_pq_outside_line_problem` 的題目鍵判斷 → ①②紅。"""
+    lm = _load_lumos_inproc()
+    q1 = "pending_questions:\n" + _qfm_q()
+    hidden = (
+        "id: Q2\ntext: 頂格整題\nclass: 需求\nstage: 架構\nstatus: 待查\n",
+        "decisions:\n  - {id: Q2, text: 流式題, class: 需求, stage: 架構}\n",
+        "related:\n  - - id: Q2\n      text: 雙層清單題\n",
+        "&題目 text: anchor 修飾鍵\n",
+        "- *題目\n",
+        "!題目 text: tag 修飾鍵\n",
+        "\"text\": 頂格引號鍵\n",
+        "aliases:\n  - 'id': Q2\n    'stage': 架構\n",
+        "extra: {\"class\": 需求}\n",
+    )
+    for body in hidden:
+        _p, _q, errs = lm.pq_parse((q1 + body).split("\n"))
+        check(f"① 清單外題目形狀 {body.splitlines()[0]!r} → 整份讀不懂", bool(errs), errs)
+    # 照 YAML 文法列舉鍵的寫法(不是只列想得到的例子),放在別的欄位底下,斷言擋下的原因真的是清單外鍵名規則(代碼審 r8 四席)
+    yaml_keys = ('x:\n  "text" : 引號後空白\n', 'x: {"id":"Q2","text":"JSON 風格"}\n', "x:\n  'stage' : 單引號空白\n",
+                 "x: {&a text: flow 裡的 anchor}\n", "x: {!!str id: Q2}\n", "x:\n  -\tid: Q2\n", "x:\n  ? text\n",
+                 'x:\n  "te\\u0078t": 跳脫鍵\n', 'x: ["id":"Q2"]\n', "x:\n  - - - - id: Q9\n", "x:\n  status: 待查\n",
+                 "x: &a\n  text: y\n", "x: *ref\n", "x:\n  pending_questions:\n",
+                 'x:\n  ? "i\\\n    d"\n  : Q2\n', "x: {? text : y}\n", "x:\n  ?\n    text\n  : y\n",
+                 "x:\n- status: 待人\n", "extra: {a: 1,\n  b: 2, id: Q2, text: 跨行藏題}\n")
+    for body in yaml_keys:
+        _p, _q, errs = lm.pq_parse((q1 + body).split("\n"))
+        why = " ".join(e[1] for e in errs)
+        check(f"⑥ 清單外 {body.split(chr(10))[-2]!r} 由鍵名規則擋下",
+              any(w in why for w in ("題目的鍵", "流式寫法", "anchor", "alias", "tag", "要頂格", "複雜鍵")), errs)
+    for head in ("? pending_questions\n:\n  - id: Q1\n    text: 阻塞題\n", "{pending_questions: [{id: Q1, text: x}]}\n",
+                 "<<: {pending_questions: [{id: Q1}]}\n"):
+        _p, _q, errs = lm.pq_parse(head.split("\n"))
+        check(f"⑥b 清單頭寫成 {head.split(chr(10))[0][:20]!r} → 判讀不懂,不當成沒有題目", any("要頂格" in e[1] for e in errs), errs)
+    for ok in ("type: project\nsummary: |-\n  FACT:x\n  pending_questions: 之後補\n",
+               q1 + "summary: |-\n  pending_questions: 之後補\n", q1 + "x: {a: 1, b: [x, {c: 2}]}\n", "status: doing\n" + q1):
+        _p, _q, errs = lm.pq_parse(ok.split("\n"))
+        check("⑥c 摘要文字提到欄位名、同一行寫完的流式、頂格 status 不誤擋", not errs, (ok[:40], errs))
+    two = q1 + "# 備註: 下一題\n" + _qfm_q().replace("Q1", "Q2")
+    _p, qs, errs = lm.pq_parse(two.split("\n"))
+    check("⑦ 清單中間的頂格註解不切斷清單,兩題都讀到", not errs and [q["id"] for q in qs] == ["Q1", "Q2"], (errs, qs))
+    import time as _t
+    cost = []
+    for n in (20000, 80000):
+        t0 = _t.perf_counter()
+        lm.pq_parse((q1 + "x:\n  " + "- " * n + "a\n").split("\n"))
+        cost.append(_t.perf_counter() - t0)
+    check("⑧ 連串 `- ` 的單行是線性耗時(資料量四倍,時間不到八倍)", cost[1] < max(cost[0], 0.01) * 8, cost)
+    for owner in ("reason:\n", "lands_in:\n  - Systems/x\n", "aliases:\n  - 別名\n", "decisions:\n"):
+        for field in ("text: 漏題\n", "class: 需求\n", "stage: 架構\n", "blocking: true\n",
+                      "irreversible: true\n", "id: Q99\n"):
+            indent = "  " if owner != "reason:\n" else "    "
+            _p, _q, errs = lm.pq_parse((q1 + owner + indent + field).split("\n"))
+            check(f"② {owner.split(':')[0]} 底下的 {field.split(':')[0]} → 讀不懂", bool(errs), errs)
+    positive = (
+        q1 + "中文鍵: 值\n\"中文\": 只是引號鍵\n2fa: yes\nreason: 第一行\n  第二行續寫\n"
+        "settings:\n  mode: strict\n- 頂格清單文字\nKEY:★INVARIANT★ 說明行\n"
+        "decisions:\n   - content: 不同縮排的決策\n     id: d1\n"
+        "  - content: |\n      stage: 架構\n    id: d2\n    decided: 2026-10-13\n    valid: true\n"
+        "summary: |2\n  這種不是既有 block scalar，但普通內容仍交還原欄位\n"
+    )
+    _p, qs, errs = lm.pq_parse(positive.split("\n"))
+    check("③ 中文/引號/數字鍵、續行、巢狀 mapping、頂格清單、KEY、不同縮排決策、既有 block scalar 都不誤擋",
+          not errs and [q["id"] for q in qs] == ["Q1"], errs)
+    _p, _q, errs = lm.pq_parse((q1 + "summary: |2\n  stage: 架構\n").split("\n"))
+    check("④ |2 不算既有 block scalar，內容真的有題目鍵時 fail-closed", bool(errs), errs)
+    check("⑤ 三支讀法共用的 block scalar 常數只含專案既有四種",
+          lm.BLOCK_SCALAR_HEADERS == ("|", "|-", ">", ">-"), lm.BLOCK_SCALAR_HEADERS)
+
+
+def t_qfm_r8_unicode_scripts_and_budget():
+    """[第八輪單一規則乙] 連字控制依文字系統，異體符號依基底，合法位置仍受總量上限。
+    翻紅釘:拿掉 `_pq_invisible_over_limit` 的超量回傳 → ④紅。"""
+    lm = _load_lumos_inproc()
+    valid = ("ن\u200c ", "ക\u200d ", "co\u00adoperate", "\u1820\u180b", "\u203c\ufe0f",
+             "\u2049\ufe0f", "\u2139\ufe0f", "\u3030\ufe0f", "\u303d\ufe0f", "1\ufe0f\u20e3", "\u24c2\ufe0e")
+    check("① 波斯/馬拉雅拉姆詞尾、軟連字、蒙古選擇符、標點與鍵帽異體都放行",
+          all(lm._pq_bad_char(v) is None for v in valid),
+          [(v, lm._pq_bad_char(v)) for v in valid if lm._pq_bad_char(v) is not None])
+    invalid = ("a\u200db", "\u03b1\u200d\u03b2", "я\u200dю", "漢\u200d字", "あ\u200dい", "한\u200d글", "\u1820\u180b\u180c")
+    check("② 拉丁/希臘/西里爾/漢字/假名/韓文的連字控制與連續蒙古選擇符都擋",
+          all(lm._pq_bad_char(v) is not None for v in invalid), invalid)
+    bad = lm._strict_scalar("❤️\u200c字")[1] or ""
+    check("③ 可忽略字元不得相連，訊息稱看不見的字元而非控制字元",
+          "看不見的字元(U+200C)不在允許的位置" in bad and "控制字元" not in bad, bad)
+    okay = "a\u00adb\u00adc"
+    too_many = "a\u00adb\u00adc\u00add"
+    check("④ 合法位置的看不見選擇仍受 min(32,max(2,可見字//4)) 額度",
+          lm._strict_scalar(okay)[1] is None and "看不見的字元太多" in (lm._strict_scalar(too_many)[1] or ""),
+          (lm._strict_scalar(okay), lm._strict_scalar(too_many)))
+    nfc_err = lm._strict_scalar("A\u030a")[1] or ""
+    check("⑤ NFC 訊息指向真正不合的組合字 U+030A", "U+030A" in nfc_err, nfc_err)
+    # 預期逐條手寫(不從程式的 emoji 表推):一般符號不算 emoji、emoji 的看不見字元也有串長與整份上限
+    channels = ("\u2500\u200d" * 20 + "\u2500", "\u00b0\u200d\u00b0", "好!\ufe0f", "好\u3002\ufe0f", "甲\uff0c\ufe0e",
+                "a^\ufe0f", "a+\ufe0f", "\U0001f600\u200d" * 30 + "\U0001f600",
+                "\U0001f468\u200d\U0001f469\u200d\U0001f467\u200d\U0001f466\u200d\U0001f466",
+                "a\u200d\U0001f600", "\U0001f600\u200da",
+                " ".join(["\U0001f3f4\U000e0067\U000e0062\U000e0065\U000e006e\U000e0067\U000e007f"] * 3),
+                "x\ue000y", "a\u0378b", "a\U000f0000b", "中\u00ad文", "あ\u00adい", "\U0001d159",
+                "\u0646\u200c\u0628" * 10, "a\u00a0b\u00a0c\u00a0d", "abcd\u00ad" * 1000 + "z", "abcd\u00ad" * 40 + "z",
+                "\U0001f600\ufe0f " * 70, "\u2500\u200d\u2500", "a\u2500\ufe0f")
+    check("⑥ 框線、度數、一般標點的字縫與後綴擋;emoji 連接符一串超過三個、只有單側是 emoji、三面旗超過整份上限、"
+          "私用區與未指派碼位、軟連字號夾漢字或假名、像空白的 U+1D159、超過可見字四分之一的連字控制與特殊空白都擋",
+          all(lm._strict_scalar(v)[1] for v in channels), [v for v in channels if not lm._strict_scalar(v)[1]])
+    persian = ("من می\u200cخواهم این کتاب\u200cها را بخوانم و بعد از آن به خانه\u200cام بروم تا با دوستانم درباره\u200cی "  # noqa: RUF001 - 真實波斯文樣本
+               "موضوع\u200cهای مختلف صحبت کنم و نتیجه\u200cها را بنویسم و نامه\u200cها را بفرستم و کار\u200cها را تمام کنم و "  # noqa: RUF001 - 真實波斯文樣本
+               "برنامه\u200cها را بچینم")  # noqa: RUF001 - 真實波斯文樣本
+    orca = lm._strict_scalar("\U0001facd")[1] or ""
+    check("⑥c 這版 Unicode 還沒收錄的 emoji 講明是版本問題,不說成看不見的字元",
+          "還沒指派" in orca and "看不見" not in orca, orca)
+    long_ok = (persian, "我" + "\u2764\ufe0f" * 17, "\U0001f600\u200d\U0001f600 " * 6)
+    check("⑥b 真實長句與多個 emoji 不誤擋:含 9 個 ZWNJ 的波斯文長句(超過舊上限 8)、17 個愛心、六組雙人 ZWJ(沒有固定上限 8 與 16)",
+          persian.count("\u200c") >= 9 and all(lm._strict_scalar(v)[1] is None for v in long_ok),
+          [(v[:20], lm._strict_scalar(v)) for v in long_ok])
+    emoji_ok = ("\U0001f468\u200d\U0001f469\u200d\U0001f467\u200d\U0001f466 一家", "\U0001f3f3\ufe0f\u200d\U0001f308",
+                "\U0001f44d\U0001f3fd 好", "\u2194\ufe0f 雙向", "\u00a9\ufe0f 版權", "我\u2764\ufe0f你")
+    check("⑦ 家庭、彩虹旗、膚色、箭頭、版權符號、愛心這些真 emoji 照樣放行",
+          all(lm._strict_scalar(v)[1] is None for v in emoji_ok), [(v, lm._strict_scalar(v)) for v in emoji_ok])
+
+
+def t_qfm_r8_signoff_and_write_refusal():  # noqa: C901 - 一支測試依序驗同一寫入原語的七個邊界
+    """[第八輪單一規則丙] 寫入拒絕只在原語；signoff 鎖內取原稿、帳只追加,失敗用原始描述子截回。
+    翻紅釘:拿掉帳失敗分支的 `os.ftruncate(fd, pos)` → ③紅;WriteBlocked 不在建立時清洗 → ⑧紅。"""
+    import contextlib, io, os as _os, time as _time
+    lm = _load_lumos_inproc()
+
+    def note_at(v, name="S"):
+        p = v / "Systems" / f"{name}.md"
+        p.write_text("---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:x\n---\n# s\n", encoding="utf-8")
+        return p
+
+    v = mkvault()
+    real = note_at(v, "Real")
+    real.write_text(real.read_text(encoding="utf-8").replace("KEY:x", "KEY:★INVARIANT★ 合約 [test:BoundTest]"), encoding="utf-8")
+    sym = v / "Systems" / "Sym.md"
+    sym.symlink_to(real.name)
+    hard = v / "Systems" / "Hard.md"
+    _os.link(real, hard)
+    refused = []
+    for label, p in (("符號連結", sym), ("硬連結", hard)):
+        before = real.read_bytes()
+        try:
+            with lm._vault_write_lock(v):
+                lm.atomic_write_verify(p, ["---", "type: system", "status: done", "---", "# x", ""], "status", lambda f: f.get("status") == "done")
+            refused.append((label, "未擋"))
+        except lm.WriteBlocked as exc:
+            if label not in str(exc) or real.read_bytes() != before:
+                refused.append((label, str(exc)))
+    check("① 符號與硬連結只在寫入原語拒絕，目標逐位元不變", not refused, refused)
+    noop_before = real.read_bytes()
+    noop = run(v, "guard", "bind", "Systems/Sym", "合約", "BoundTest")
+    check("①b guard bind 已綁的唯讀 no-op 可經符號連結完成，不觸發寫入拒絕",
+          noop.returncode == 0 and "無需重綁" in noop.stdout and real.read_bytes() == noop_before,
+          (noop.returncode, noop.stdout, noop.stderr))
+
+    broken = v / "Systems" / "Broken.md"
+    broken.symlink_to("missing.md")
+    try:
+        lm.load_raw_for_edit(broken)
+        read_state = "未擋"
+    except lm.WriteBlocked as exc:
+        read_state = str(exc)
+    check("② 可讀符號連結可讀、壞連結以乾淨的讀不到拒絕", lm.load_raw_for_edit(sym)[0][0] == "---" and "讀不到" in read_state, read_state)
+
+    pv = mkvault()
+    pn = note_at(pv)
+    plog = pv.parent / ".signoff-log.jsonl"
+    plog.write_bytes(b'{"old":true}\n')
+    pnb, plb = pn.read_bytes(), plog.read_bytes()
+    import errno as _errno
+
+    def _signoff_with(vault, note_text, patch, unpatch):
+        old_argv = sys.argv
+        sys.argv = ["lumos", "--vault", str(vault), "signoff", "Systems/S", "--note", note_text]
+        o, e = io.StringIO(), io.StringIO()
+        patch()
+        try:
+            with contextlib.redirect_stdout(o), contextlib.redirect_stderr(e):
+                r = lm._cli()
+        finally:
+            unpatch()
+            sys.argv = old_argv
+        return r, o.getvalue(), e.getvalue()
+
+    # 在系統呼叫層注入「寫了一半就磁碟已滿」:帳的描述子第一次 write 只寫一半,第二次丟 ENOSPC(真實寫滿就是這個樣子)
+    real_os_open, real_os_write = _os.open, _os.write
+    ledger_fds, calls = set(), []
+
+    def fake_open(path, flags, *a, **k):
+        fd = real_os_open(path, flags, *a, **k)
+        if Path(path).name == ".signoff-log.jsonl":
+            ledger_fds.add(fd)
+        return fd
+
+    def fake_write(fd, data):
+        if fd not in ledger_fds:
+            return real_os_write(fd, data)
+        calls.append(len(data))
+        if len(calls) == 1:
+            return real_os_write(fd, bytes(data[:max(1, len(data) // 2)]))
+        raise OSError(_errno.ENOSPC, "No space left on device")
+
+    def patch_os():
+        _os.open, _os.write = fake_open, fake_write
+
+    def unpatch_os():
+        _os.open, _os.write = real_os_open, real_os_write
+
+    rc, _o, err = _signoff_with(pv, "人工確認", patch_os, unpatch_os)
+    check("③ 帳寫了一半就磁碟已滿:截回原長度,舊帳與筆記逐位元不變(注入在系統呼叫層,不用假檔案把手)",
+          rc == 2 and len(calls) == 2 and pn.read_bytes() == pnb and plog.read_bytes() == plb and "已截回原長度" in err,
+          (rc, calls, err, pn.read_bytes() == pnb, plog.read_bytes()))
+
+    fv = mkvault()
+    fnote = note_at(fv)
+    flog = fv.parent / ".signoff-log.jsonl"
+    fnb = fnote.read_bytes()
+    ledger_fds.clear()
+    calls.clear()
+    rc, _o, err = _signoff_with(fv, "第一次", patch_os, unpatch_os)
+    check("③b 第一次簽核(帳還不存在)寫一半失敗:新建的帳整個刪掉,筆記逐位元不變",
+          rc == 2 and not _os.path.lexists(flog) and fnote.read_bytes() == fnb and "新建的簽核帳已刪掉" in err,
+          (rc, err, _os.path.lexists(flog)))
+
+    lv = mkvault()
+    lnote = note_at(lv)
+    llog = lv.parent / ".signoff-log.jsonl"
+    llog.write_bytes(b'{"old":1}\n')
+    lnb, llb = lnote.read_bytes(), llog.read_bytes()
+    real_lstat = Path.lstat
+
+    def patch_lstat():
+        Path.lstat = lambda self: (_ for _ in ()).throw(PermissionError("EIO sim")) if self == llog else real_lstat(self)
+
+    def unpatch_lstat():
+        Path.lstat = real_lstat
+
+    rc, _o, err = _signoff_with(lv, "檢查失敗", patch_lstat, unpatch_lstat)
+    check("③c 帳的連結檢查本身失敗:筆記照樣還原、帳不動,訊息說筆記已還原",
+          rc == 2 and lnote.read_bytes() == lnb and llog.read_bytes() == llb and "筆記已還原原狀" in err,
+          (rc, err, lnote.read_bytes() == lnb))
+
+    kv = mkvault()
+    knote = note_at(kv)
+    klog = kv.parent / ".signoff-log.jsonl"
+    klog.write_bytes(b'{"old":1}\n')
+    knb, klb = knote.read_bytes(), klog.read_bytes()
+    real_fsync = _os.fsync
+
+    def kbd_fsync(fd):
+        if fd in ledger_fds:
+            raise KeyboardInterrupt()
+        return real_fsync(fd)
+
+    def patch_kbd():
+        ledger_fds.clear()
+        _os.open, _os.fsync = fake_open, kbd_fsync
+
+    def unpatch_kbd():
+        _os.open, _os.fsync = real_os_open, real_fsync
+
+    try:
+        _signoff_with(kv, "中斷", patch_kbd, unpatch_kbd)
+        kstate = "沒丟出"
+    except KeyboardInterrupt:
+        kstate = "丟出"
+    check("③e 整行寫進帳、fsync 時被 Ctrl-C:帳截回原長度、筆記還原,再把中斷往外丟(不留一行沒戳記的簽核)",
+          kstate == "丟出" and knote.read_bytes() == knb and klog.read_bytes() == klb,
+          (kstate, knote.read_bytes() == knb, klog.read_bytes()))
+
+    uv = mkvault()
+    note_at(uv)
+    ulog = uv.parent / ".signoff-log.jsonl"
+    ur = run(uv, "signoff", "Systems/S", "--note", 'x\u2028{"node":"A.md","ref":"FORGED"}')
+    check("③f 備註裡的行分隔字元不會在帳裡切出第二行(偽造的簽核)",
+          ur.returncode == 0 and len(ulog.read_text(encoding="utf-8").splitlines()) == 1, (ur.returncode, ulog.read_text(encoding="utf-8")))
+
+    dirv = mkvault()
+    dnote = note_at(dirv)
+    (dirv.parent / ".signoff-log.jsonl").mkdir()
+    dnb = dnote.read_bytes()
+    dr = run(dirv, "signoff", "Systems/S", "--note", "帳是目錄")
+    check("③d 帳檔是目錄:講明不是一般檔案(不誤報硬連結),筆記還原",
+          dr.returncode == 2 and "不是一般檔案" in dr.stderr and "硬連結" not in dr.stderr and dnote.read_bytes() == dnb,
+          (dr.returncode, dr.stderr))
+
+    wv = mkvault()
+    note_at(wv)
+    wlog = wv.parent / ".signoff-log.jsonl"
+    wlog.write_bytes(b'{"old":1}\n')
+    before = wlog.read_bytes()
+    orig_read, old_argv = Path.read_bytes, sys.argv
+    Path.read_bytes = lambda self: (_ for _ in ()).throw(PermissionError("ledger unreadable")) if self == wlog else orig_read(self)
+    sys.argv = ["lumos", "--vault", str(wv), "signoff", "Systems/S", "--note", "只追加"]
+    wout, werr = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(wout), contextlib.redirect_stderr(werr):
+            wrc = lm._cli()
+    finally:
+        Path.read_bytes, sys.argv = orig_read, old_argv
+    after = wlog.read_bytes()
+    check("④ 帳檔不可經 read_bytes 讀仍只追加、不截斷；成功 stdout 保留 set 與 signoff 兩行",
+          wrc == 0 and after.startswith(before) and len(after) > len(before)
+          and "✓ set" in wout.getvalue() and "✓ signoff" in wout.getvalue(),
+          (wrc, wout.getvalue(), werr.getvalue(), after))
+
+    cv = mkvault()
+    cn = note_at(cv)
+    clog = cv.parent / ".signoff-log.jsonl"
+    target = cv.parent / "ledger-target"
+    target.write_bytes(b"KEEP\n")
+    clog.symlink_to(target.name)
+    ready = cv.parent / "ready"
+    helper = ("import importlib.machinery,importlib.util,sys,time;from pathlib import Path;"
+              "p=sys.argv[1];v=Path(sys.argv[2]);r=Path(sys.argv[3]);"
+              "ld=importlib.machinery.SourceFileLoader('lmhold',p);sp=importlib.util.spec_from_loader(ld.name,ld);m=importlib.util.module_from_spec(sp);ld.exec_module(m);"
+              "c=m._vault_write_lock(v);c.__enter__();n=v/'Systems'/'S.md';n.write_text(n.read_text().replace('status: doing','status: done'),encoding='utf-8');r.write_text('ready');time.sleep(.4);c.__exit__(None,None,None)")
+    proc = subprocess.Popen([sys.executable, "-c", helper, str(GRAPHCTL), str(cv), str(ready)])
+    deadline = _time.monotonic() + 5
+    while not ready.exists() and _time.monotonic() < deadline:
+        _time.sleep(.01)
+    cr = run(cv, "signoff", "Systems/S", "--note", "應失敗")
+    proc.wait(timeout=5)
+    check("⑤ 另一程序持鎖寫成 done 後，signoff 才進鎖；帳捷徑失敗時保留那個改動且目標帳不變",
+          cr.returncode == 2 and "status: done" in cn.read_text(encoding="utf-8") and target.read_bytes() == b"KEEP\n"
+          and "符號連結" in cr.stderr, (cr.returncode, cr.stderr, cn.read_text(encoding="utf-8"), target.read_bytes()))
+
+    dv = mkvault()
+    dn = note_at(dv)
+    db = dn.read_bytes()
+    rs = [run(dv, "decision-add", "Systems/S", "採甲", "--decided", "2026-10-13", opt, "甲" + nl + "乙")
+          for opt in ("--context", "--why") for nl in ("\n", "\r", "\x1c", "\u2028")]
+    rs += [run(dv, "decision-add", "Systems/S", "採甲", "--decided", "2026-10-13", "--why", "甲\x1b[2J乙"),
+           run(dv, "decision-add", "Systems/S", "採甲\t乙", "--decided", "2026-10-13"),
+           run(dv, "decision-add", "Systems/S", "採甲", "--decided", "2026-10-13\n"),
+           run(dv, "decision-add", "Systems/S", "採甲", "--decided", "\uff12\uff10\uff12\uff16-10-13")]
+    bom = dv / "Systems" / "Bom.md"
+    bom.write_text("\ufeff---\ntype: system\n---\n# b\n", encoding="utf-8")
+    _recipes, bom_err = lm._kill_read_recipes(bom)
+    check("⑥ decision-add 自由文字換行與控制字元(ESC、tab)、日期尾端換行全擋且不寫；guard kill 的 BOM 訊息照舊",
+          all(r.returncode == 2 for r in rs) and dn.read_bytes() == db and "開頭帶 BOM" in (bom_err or ""),
+          ([(r.returncode, r.stderr) for r in rs], bom_err))
+
+    ev = mkvault()
+    note_at(ev)
+    old_lock, old_argv = lm._vault_write_lock, sys.argv
+    lm._vault_write_lock = lambda _v: (_ for _ in ()).throw(lm.WriteBlocked("evil\x1b[2J"))
+    sys.argv = ["lumos", "--vault", str(ev), "set", "Systems/S", "status", "done"]
+    eout, eerr = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(eout), contextlib.redirect_stderr(eerr):
+            erc = lm._cli()
+    finally:
+        lm._vault_write_lock, sys.argv = old_lock, old_argv
+    check("⑦ 最外層 WriteBlocked 訊息先清洗再印", erc == 2 and "\x1b" not in eerr.getvalue() and "evil" in eerr.getvalue(), repr(eerr.getvalue()))
+
+    gv = mkvault()
+    greal = note_at(gv, "Real")
+    greal.write_text(greal.read_text(encoding="utf-8").replace("KEY:x", "KEY:★INVARIANT★ 甲合約 [test:BoundTest]"), encoding="utf-8")
+    (gv / "Systems" / "Sym\x1b[31mRED.md").symlink_to(greal.name)
+    gres = [run(gv, "guard", sub, "Systems/Sym\x1b[31mRED", *extra)
+            for sub, extra in (("bind", ("甲合約", "OtherTest")), ("audit", ("甲合約", "--model", "m")))]
+    check("⑧ 指令內部自己接住擋下錯誤時(guard 子指令)也印不出檔名裡的控制字元:訊息在建立時就清洗",
+          all(r.returncode == 2 and "\x1b" not in r.stderr and "符號連結" in r.stderr for r in gres),
+          [(r.returncode, r.stderr) for r in gres])
+
+
+def t_qfm_absent_field_unchanged():
+    """[待決問題改存開頭欄位 S6] 沒有欄位與零題時,規格閘、lint、--stage(含 JSON 只有兩個鍵)跟現行一樣。
+    翻紅釘:零題被當讀不懂、或 JSON 多鍵 → 翻紅。"""
+    import json as _j
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qfm6")
+    outs = {}
+    for nm, pq in (("n0", None), ("n1", "pending_questions: []\n"), ("n2", "pending_questions:\n")):
+        p = _qfm_plan(kg, nm, pq, decisions="")   # 不帶決策:每篇的作廢決策會讓「舊否決」筆數逐篇變多
+        g = run(kg, "spec-gate", f"Projects/{nm}_計劃")
+        lt = run(kg, "lint", f"Projects/{nm}_計劃")
+        st = run(kg, "pitfalls", str(p), "--repo", str(d), "--stage", "需求", "--json")
+        outs[nm] = (g.returncode, g.stdout.replace(nm, "N"), lt.returncode, "待決問題" in lt.stdout, st.returncode, st.stdout)
+    check("① 三種寫法的規格閘、lint、--stage 結果相同", outs["n0"] == outs["n1"] == outs["n2"], outs)
+    check("② JSON 只有 stage 與 facets", set(_j.loads(outs["n0"][5])) == {"stage", "facets"}, outs["n0"][5][-300:])
+    check("③ 沒有欄位時規格閘、lint 都不出現待決問題的字樣", "待決問題" not in outs["n0"][1] and not outs["n0"][3], outs["n0"][1][-300:])
+    txt = run(kg, "pitfalls", str(kg / "Projects" / "n0_計劃.md"), "--repo", str(d), "--stage", "需求")
+    check("④ 沒有欄位時 --stage 文字輸出不出現待決問題那一段", txt.returncode == 0 and "待決問題" not in txt.stdout, txt.stdout[-300:])
+
+
 def t_spec_gate_stopwords():
     """[規格落成可驗收條件 S2] 句首是停用詞(當然/在此…)→ 當無條件型,不是格式看不懂。翻紅釘:停用詞表清空 → ① 翻紅。"""
     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg2")
@@ -63800,7 +65475,7 @@ def t_lumos_parses_under_old_grammar():
     # 在檔頭多 import 一個 3.11 才有的 tomllib,ruff 照綠、3.9 啟動卻在印出「需要 3.14」之前就炸(代碼審 r1)。
     # 要加新模組:確認 3.9 標準庫有它,再加進下面的清單。
     import ast as _ast
-    ok39 = {"__future__", "argparse", "collections", "glob", "json", "os", "pathlib", "re", "shlex", "shutil", "subprocess",
+    ok39 = {"__future__", "argparse", "bisect", "collections", "glob", "json", "os", "pathlib", "re", "shlex", "shutil", "subprocess",
             "sys", "time", "unicodedata", "uuid"}
     for rel, end in (("scripts/lumos", "# ── python-floor gate end ──"), ("scripts/merge-claude-settings.py", "    _py_floor_gate()")):
         text = (repo / rel).read_text(encoding="utf-8")
@@ -75454,7 +77129,8 @@ def t_fix_check_record_complete():
     root, v, base, head = _fc_env(base_files={"gone.py": "y = 1\n"})
     (root / "中文.py").write_text("x = 1\n", encoding="utf-8")
     (root / "gone.py").unlink()
-    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "more + rm gone")
+    _fc_git(root, "add", "-A")
+    _fc_git(root, "commit", "-qm", "more + rm gone")
     _fc_ledger(root, v, findings="f1,f2,f3", folded="f1,f2,f3", kinds={"f1": "code", "f2": "code", "f3": "spec"})
     groups = [
         _fc_group("G1", cat="weird", findings=["f1"]),
@@ -75779,39 +77455,49 @@ def t_loop_next_fix_check_reminder():
     check("①沒有修正紀錄 → needed 附 --record-template", fc and fc["status"] == "needed" and "--record-template" in fc["cmd"]
           and set(fc) == {"status", "round", "cmd"}, str(fc))
     rp = _fc_record(root, base, [_fc_group()])
-    _fc_git(root, "add", "-A"); _fc_git(root, "commit", "-qm", "record")
+    _fc_git(root, "add", "-A")
+    _fc_git(root, "commit", "-qm", "record")
     rt = _fc_lum(root, v, "loop", "next", "code-fx")
     check("②還沒驗 → 文字模式印提醒與指令", "修正關卡" in rt.stdout and "lumos loop fix-check code-fx --round r1" in rt.stdout, rt.stdout[-500:])
     base_rc = rt.returncode
     _fc_check(root, v)
-    r = nxt(); check("③通過後 status=passed", fcj(r)["status"] == "passed", str(fcj(r)))
+    r = nxt()
+    check("③通過後 status=passed", fcj(r)["status"] == "passed", str(fcj(r)))
     rt = _fc_lum(root, v, "loop", "next", "code-fx")
     check("④通過後文字模式不印提醒、rc 不變", "修正關卡" not in rt.stdout and rt.returncode == base_rc, rt.stdout[-400:])
-    _fc_git(root, "add", "docs/.canary-log.jsonl", "docs/.governance-log.jsonl"); _fc_git(root, "commit", "-qm", "ledger")
-    r = nxt(); check("⑤之後只提交了帳本 → 仍 passed", fcj(r)["status"] == "passed", str(fcj(r)))
+    _fc_git(root, "add", "docs/.canary-log.jsonl", "docs/.governance-log.jsonl")
+    _fc_git(root, "commit", "-qm", "ledger")
+    r = nxt()
+    check("⑤之後只提交了帳本 → 仍 passed", fcj(r)["status"] == "passed", str(fcj(r)))
     (root / "prod.py").write_text("def clamp(n):\n    return min(n, 5)  # again\n", encoding="utf-8")
     _fc_git(root, "commit", "-qam", "more code")
-    r = nxt(); check("⑥之後提交了程式 → needed", fcj(r)["status"] == "needed", str(fcj(r)))
+    r = nxt()
+    check("⑥之後提交了程式 → needed", fcj(r)["status"] == "needed", str(fcj(r)))
     _fc_check(root, v)
     rp.write_text(rp.read_text(encoding="utf-8") + " ", encoding="utf-8")
-    r = nxt(); check("⑦紀錄改過 → needed", fcj(r)["status"] == "needed", str(fcj(r)))
+    r = nxt()
+    check("⑦紀錄改過 → needed", fcj(r)["status"] == "needed", str(fcj(r)))
     _fc_record(root, base, [_fc_group(tests=["t_nosuch"])])
     _fc_check(root, v)
-    r = nxt(); check("⑧最後一筆是 warned → needed", fcj(r)["status"] == "needed", str(fcj(r)))
+    r = nxt()
+    check("⑧最後一筆是 warned → needed", fcj(r)["status"] == "needed", str(fcj(r)))
     _fc_record(root, base, [_fc_group()])
     _fc_check(root, v)
     gl = root / "docs" / ".governance-log.jsonl"
-    evl = [_j.loads(l) for l in gl.read_text(encoding="utf-8").splitlines() if l.strip()]
+    evl = [_j.loads(line) for line in gl.read_text(encoding="utf-8").splitlines() if line.strip()]
     fake = dict([e for e in evl if e.get("gate") == "fix-check"][-1], head_sha=12345, token="fake")   # 型別不對(手寫帳)不能讓 loop next 當掉
     with open(gl, "a", encoding="utf-8") as fh:
         fh.write(_j.dumps(fake, ensure_ascii=False) + "\n")
-    r = nxt(); check("⑧b 最後一筆 passed 但 head_sha 型別不對 → needed(不當掉)", fcj(r)["status"] == "needed", str(fcj(r)))
+    r = nxt()
+    check("⑧b 最後一筆 passed 但 head_sha 型別不對 → needed(不當掉)", fcj(r)["status"] == "needed", str(fcj(r)))
     _fc_check(root, v, env_extra={"LUMOS_SKIP_FIX_CHECK": "1"})
-    r = nxt(); check("⑨skipped-env → skipped", fcj(r)["status"] == "skipped", str(fcj(r)))
+    r = nxt()
+    check("⑨skipped-env → skipped", fcj(r)["status"] == "skipped", str(fcj(r)))
     rt = _fc_lum(root, v, "loop", "next", "code-fx")
     check("⑩文字模式印「已跳過」", "已跳過" in rt.stdout, rt.stdout[-300:])
     _fc_ledger(root, v, loop="design-x")
-    r = nxt("design-x"); check("⑪設計審迴圈不出 fix_check", fcj(r) is None, r.stdout[-300:])
+    r = nxt("design-x")
+    check("⑪設計審迴圈不出 fix_check", fcj(r) is None, r.stdout[-300:])
     r = nxt()
     dc = _j.loads(r.stdout.strip().splitlines()[-1]).get("disposal_cmd") or ""
     check("⑫第 2 輪範本含 --regression-set", "--regression-set" in dc, dc)
@@ -81373,6 +83059,31 @@ def t_test_quality_cli():
                          cwd=Path(GRAPHCTL).resolve().parent.parent, capture_output=True, text=True, timeout=60)
     check("測試品質收證、歸因與無效結果獨立控制", run.returncode == 0,
           (run.stdout + run.stderr)[-4000:])
+
+
+def t_qo_ablation_scorer_suite():
+    """情境出題對照實驗計分器的整組單元測試(自主迴圈測試檔的 TestQoAblation),包成主測試檔的入口,
+    讓修正紀錄與條款能綁(代碼審 code-後端情境出題 r1:最後統計方向、一致率重算、遮罩、壞檔)。"""
+    _need_src("governance/eval/qo-ablation-2026-10/qo_ablation.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", "TestQoAblation"],
+                         cwd=root, capture_output=True, text=True, timeout=120)
+    import re
+    output = run.stdout + run.stderr
+    check("計分器整組測試全綠", run.returncode == 0 and re.search(r"Ran [1-9][0-9]* tests", output) is not None, output[-4000:])
+
+
+def t_scenario_probe_collect_only_and_answer_cap():
+    """情境探針:只收回答的題省略判準欄位不崩、回答上限照參數傳到每一場(代碼審 code-後端情境出題 r1 外家席、正確性席、架構席)。"""
+    root = Path(GRAPHCTL).resolve().parent.parent
+    names = ["TestScenarioProbeAblation.test_collect_only_without_expect_key_grades_without_crash",
+             "TestScenarioProbeAblation.test_answer_max_flows_as_argument_not_global",
+             "TestScenarioProbeAblation.test_validate_scenario_collect_only_allows_empty_expect",
+             "TestScenarioProbeAblation.test_answer_max_reaches_codex_runner_and_cli_wiring"]
+    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", *names],
+                         cwd=root, capture_output=True, text=True, timeout=120)
+    output = run.stdout + run.stderr
+    check("探針四支相關測試全綠", run.returncode == 0 and f"Ran {len(names)} tests" in output, output[-4000:])
 
 
 def t_test_quality_scan_cli():

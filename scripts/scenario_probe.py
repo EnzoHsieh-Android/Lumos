@@ -318,7 +318,7 @@ def grade(sc, calls, final_text, source_state=None):
         ok = source_state == "present"
         why = "ok" if ok else ("未取得目標程式片段" if source_state == "absent" else "儀器例外: 缺少可判讀的原始讀碼結果")
     else:
-        ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
+        ok, why, _ = judge(calls, sc.get("expect") or [], sc.get("forbid_before", []))   # collect_only 可省略 expect(驗證已放行)
     answer_content_ok = None
     if sc.get("answer_expect"):
         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
@@ -413,6 +413,15 @@ def env_fp_counts(results):
     return counts
 
 
+ANSWER_MAX = 1500   # 結果檔保存的回答字數上限的預設;--answer-max 照參數一路傳到執行場次,不改寫這個常數(代碼審 code-後端情境出題 r1 架構席)
+
+
+def _answer_field(final, source_token, cap=ANSWER_MAX):
+    """回 (存檔用回答, 原始回答長度)。原始長度另存,讀結果的人才分得出有沒有被截。"""
+    text = _redact_source_token(final or "", source_token)
+    return text[:cap], len(text)
+
+
 def judge(calls, expect, forbid_before):
     """回 (passed, reason, first_hit_index)。
     expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
@@ -426,7 +435,8 @@ def judge(calls, expect, forbid_before):
     missing = [e for e in expect if e not in exp_idx]
     if missing:
         return False, f"沒敲到期望指令: {missing}", None
-    first = min(exp_idx.values())
+    # expect 空=只收回答、不考指令序列的題目:禁止清單改對全部呼叫生效(之前 min() 對空集合拋例外,整批中止)
+    first = min(exp_idx.values()) if exp_idx else len(calls)
     for i, (name, summ) in enumerate(calls[:first]):
         if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
             continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
@@ -888,7 +898,8 @@ def _validate_scenario(sc):
         return "題目缺 id"
     if not sc.get("prompt"):
         return f"題目 {sc.get('id')} 缺 prompt"
-    if not sc.get("expect"):
+    # collect_only=true:只收回答、不考指令序列(對照實驗用,回答另由盲評判分);必須明講才放行空 expect
+    if not sc.get("expect") and sc.get("collect_only") is not True:
         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
     if "source_probe" in sc and (not isinstance(sc["source_probe"], dict) or not sc["source_probe"] or sc.get("forbid_before")):
         return "source_probe 必須有目標設定且不得混用順序禁令"
@@ -1022,7 +1033,7 @@ def claim_model_attempt(path, limit, now=None):
     return _attempt_ledger_transaction(path, limit, claim=True, now=now)
 
 
-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0):
+def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
@@ -1077,7 +1088,7 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
     ever, first_idx = lumos_stats(calls)
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": _redact_source_token(final or "", source_token)[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "source_evidence": evidence,
             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
             "result_subtype": "codex", "harness": "codex",
@@ -1095,7 +1106,25 @@ def _scenario_max_turns(sc, default):
         return default
 
 
-def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0):
+def _run_kwargs(a, token):
+    """命令列參數 → 執行場次的選配參數(回答上限、來源暗號、用量帳)。"""
+    extra = {"answer_max": a.answer_max}
+    if token is not None:
+        extra["source_token"] = token
+    if a.max_per_window:
+        extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
+    return extra
+
+
+def _run_scenario(a, sc, workdir, token=None):
+    """跑一場:依 --runner 選執行器,選配參數(回答上限等)一律經 _run_kwargs 帶下去;抽成模組層才測得到接線(代碼審 r2)。"""
+    extra = _run_kwargs(a, token)
+    if a.runner == "codex":
+        return run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra)
+    return run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra)
+
+
+def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
     max_turns = _scenario_max_turns(sc, max_turns)
     bad = _validate_scenario(sc)
     if bad:
@@ -1174,7 +1203,7 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
-            "answer": _redact_source_token(final or "", source_token)[:1500],
+            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1],
             "source_evidence": evidence,
             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
             "answer_content_ok": answer_content_ok,
@@ -1251,6 +1280,8 @@ def main():
     # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
     ap.add_argument("--max-turns", type=int, default=18, help="claude runner 的回合上限(每題可用 max_turns 欄覆寫;codex runner 沒有對應旗標、忽略此值)")
     ap.add_argument("--timeout", type=int, default=240)
+    ap.add_argument("--answer-max", type=int, default=1500,
+                    help="結果檔每場保存的回答字數上限(預設 1500);另存原始長度 answer_len,可看出有沒有被截")
     ap.add_argument("--model", default="")
     ap.add_argument("--out", default="")
     ap.add_argument("--keep", action="store_true", help="保留最後一個普通題臨時副本；讀碼題仍清除")
@@ -1280,6 +1311,8 @@ def main():
     ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
     ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
     a = ap.parse_args()
+    if a.answer_max < 1:
+        ap.error("--answer-max 必須是正整數")
     if a.runs < 1:
         print("✗ --runs 至少 1", file=sys.stderr); return 2
     if a.max_per_window < 0:
@@ -1353,11 +1386,7 @@ def main():
     fatal_reason = setup_error
     retained = None
     def run_at(workdir, token=None):
-        extra = {"source_token": token} if token is not None else {}
-        if a.max_per_window:
-            extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
-        return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
-                else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
+        return _run_scenario(a, sc, workdir, token)
     try:
         for sc in scs if baseline is not None else []:
             for k in range(1, a.runs + 1):

@@ -1,0 +1,799 @@
+diff --git a/governance/eval/qo-ablation-2026-10/qo_ablation.py b/governance/eval/qo-ablation-2026-10/qo_ablation.py
+index ce57f92f..9387b7bc 100644
+--- a/governance/eval/qo-ablation-2026-10/qo_ablation.py
++++ b/governance/eval/qo-ablation-2026-10/qo_ablation.py
+@@ -1,38 +1,44 @@
+ #!/usr/bin/env python3
+-"""情境出題對照實驗的執行與計分器(預先登記:同目錄 preregistration.md)。
++"""情境出題對照實驗的計分器(預先登記:同目錄 preregistration.md)。
++
++實驗已在 2026-10-12 跑完;這支只用來重算這次的結果,不再負責執行。
++原本的 run 子命令(第二套逐場執行器)在代碼審 r1 拿掉:要再跑對照實驗,擴充 governance/eval/ablation_lumos_first.py
++那套(共用用量帳、單一執行器),不要把 run 加回來。
++
++先寫程式的判法(code_start 第 1、2 版)是預先登記的算法,事後不改;已知會誤判的形狀(代碼審 r1 邊界席實測):
++  多算:heredoc 或引號內文裡的路徑字樣、sed 的 s/a/b、字串裡的 >、tee 讀入、cp 到 /tmp;
++  漏算:FOO=1 / time / sudo / env 開頭的建置指令、curl -o、patch、git checkout --、docs/ 套件裡的程式檔、.MD 以外的文件副檔名。
++這次 72 場實際一場寫檔都沒有(逐場核對見 Verification/2026-10-12_情境出題對照實驗結果),所以結論不受影響;
++要拿去判別的實驗,先換成「看寫入目標」的判法並寫進新的預先登記。
+ 
+ 子命令(照順序跑):
+-  run       交錯執行:每個(題目, 第幾次)甲乙各跑一場,先後由固定種子決定;已有有效結果且版本相符的場次跳過
+   score     機械計分:先寫程式、截斷、gold 正規式輔助指標
+   packets   盲評包:隱去受測者、組別、場次並打亂,遮掉回答裡自報的身分與組別路徑;對照表另存
+   agree     兩位評分員:嚴格檢查完整性後算 kappa,列出要仲裁的分歧
+   adj-pack  把分歧做成仲裁包(不標哪個標籤來自誰)
+   merge     合併兩位評分員與仲裁結果,得到最終標籤
+   final     主指標與無效條件,逐受測者給 PASS / FAIL / INCONCLUSIVE,另報各評分員單獨判的敏感度
+ 
+ 只用標準庫。算法照預先登記,改算法要先改預先登記。
+ """
+ import argparse
+ import hashlib
+ import itertools
+ import json
+ import random
+ import re
+-import subprocess
+ import sys
+ from pathlib import Path
+ 
+ HERE = Path(__file__).resolve().parent
+ REPO = HERE.parent.parent.parent
+-PROBE = REPO / "scripts" / "scenario_probe.py"
+-ANSWER_MAX = 20000
+ LABELS = ("handed", "assumed_confirm", "absent")   # 交給人決定 / 自己假設但請人確認 / 沒提或自己定了
+ N_GOLD = 6
+ NOISE_SCENARIOS = {"qo-P1", "qo-P2", "qo-P3", "qo-P6"}
+ 
+ # ── 先寫程式(預先登記〈指標〉第 3 條)──────────────────────────────────────────
+ _CODE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "file_change"}
+ _SHELL_WRITE_V1 = re.compile(
+     r"(?:^|[;&|]\s*)(?:touch|tee|cp|mv|install)\s|"
+     r"(?<![0-9&])>>?\s*(?!/dev/null)[\w./-]+|"
+     r"<<\s*['\"]?\w+|"
+@@ -96,22 +102,24 @@ def kappa(a, b):
+ def delivery_rate(items, n=N_GOLD):
+     """交付率:handed 或 assumed_confirm 的項目數 ÷ 固定分母(每題 6 項)。"""
+     return sum(v in ("handed", "assumed_confirm") for v in items.values()) / n
+ 
+ 
+ def _round_half_up(x):
+     return int(x + 0.5)
+ 
+ 
+ # ── 盲評 ──────────────────────────────────────────────────────────────────────
+-_LEAK = re.compile(r"(?i)\bcodex\b|\bclaude\b|\bgpt[\w.-]*|\bopenai\b|\bsonnet\b|\bopus\b|\bhaiku\b|\banthropic\b|"
+-                   r"AGENTS\.md|CLAUDE\.md|/qo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b|[甲乙]組")
++# 身分字前後只看英文字母(底線、數字相連照遮:CLAUDE_CODE);英文句子裡的 arm a 後面接英文字不算;「組合/組織」不算組別(代碼審 r1 邊界席)。
++# 盲評包已在 2026-10-12 產完,這裡改的只影響之後重產;兩輪實發的包掃過 0 處漏遮。
++_LEAK = re.compile(r"(?i)(?<![a-z])(?:codex|claude|openai|sonnet|opus|haiku|anthropic)(?![a-z])|(?<![a-z])gpt(?:[\w-]|\.\d)*|"
++                   r"AGENTS\.md|CLAUDE\.md|\bqo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b(?!\s+[a-z])|[甲乙]組(?![合織成件裝員])")
+ 
+ 
+ def mask_leaks(text):
+     return _LEAK.subn("⟨遮罩⟩", text)
+ 
+ 
+ def blind(runs, seed):
+     """回 (評分包清單, 對照表 {盲評編號: 原始 key})。包裡只留題目與遮罩後的回答。"""
+     order = sorted(runs, key=lambda r: r["key"])
+     rnd = random.Random(seed)
+@@ -122,114 +130,47 @@ def blind(runs, seed):
+         mapping[bid] = r["key"]
+         packets.append({"blind_id": bid, "scenario": r["id"], "answer": mask_leaks(r["answer"])[0]})
+     return packets, mapping
+ 
+ 
+ # ── 結果檔與版本 ──────────────────────────────────────────────────────────────
+ def _sha(path):
+     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+ 
+ 
+-def _scenarios(path):
+-    return [json.loads(l) for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+-
+-
+-def _out_path(out_dir, runner, arm, sid, k):
+-    return Path(out_dir) / runner / arm / f"{sid}-r{k}.json"
+-
+-
+-def _meta_path(out):
+-    return Path(str(out) + ".meta.json")
+-
+-
+-def _write_meta(out, meta):
+-    _meta_path(out).write_text(json.dumps(meta, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+-
+-
+-def _meta_ok(out, meta):
+-    try:
+-        return json.loads(_meta_path(out).read_text(encoding="utf-8")) == meta
+-    except (OSError, ValueError):
+-        return False
+-
+-
+ def _valid(path):
+     """有效結果:沒有致命、撞上限、儀器例外,也沒被截斷(原始長度要等於保存長度)。"""
+     try:
+         r = json.loads(Path(path).read_text(encoding="utf-8"))["results"][0]
+     except (OSError, ValueError, KeyError, IndexError):
+         return False
+     if r.get("fatal") or r.get("limit_hit") or r.get("truncated"):
+         return False
+     if str(r.get("reason", "")).startswith("儀器例外"):
+         return False
+     ans, n = r.get("answer"), r.get("answer_len")
+     return isinstance(ans, str) and isinstance(n, int) and n == len(ans)
+ 
+ 
+-def _cli_version(runner):
+-    exe = "claude" if runner == "claude" else "codex"
+-    r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=60)   # 外呼一律帶逾時
+-    return (r.stdout or r.stderr).strip()
+-
+-
+-def job_order(scen, runs, seed, arms=("a", "b")):
+-    """每個(題目, 第幾次)甲乙先後由種子決定;只跑子集時保留全集裡的相對順序。"""
+-    jobs = []
+-    for sc in scen:
+-        for k in range(1, runs + 1):
+-            pair = ["a", "b"]
+-            random.Random(f"{seed}:{sc['id']}:{k}").shuffle(pair)
+-            jobs += [(sc["id"], k, arm) for arm in pair if arm in arms]
+-    return jobs
+-
+-
+-def cmd_run(a):
+-    if not a.model:
+-        print("✗ --model 必須明寫(不讓本機設定決定受測模型)", file=sys.stderr)
+-        return 2
+-    meta = {"runner": a.runner, "model": a.model, "cli": _cli_version(a.runner), "answer_max": ANSWER_MAX}
+-    if a.runner == "codex":   # 推理強度等寫在本機設定檔,設定一改就不准混用
+-        cfg = Path.home() / ".codex" / "config.toml"
+-        meta["codex_config_sha256"] = _sha(cfg) if cfg.exists() else None
+-    jobs = job_order(_scenarios(a.scenarios), a.runs, a.order_seed, tuple(a.arms.split(",")))
+-    repo = {"a": a.arm_a, "b": a.arm_b}
+-    for sid, k, arm in jobs:
+-        out = _out_path(a.out_dir, a.runner, arm, sid, k)
+-        if out.exists() and not _meta_ok(out, meta):
+-            print(f"✗ {out} 的版本紀錄跟這次不同(或沒有),不混用;要重跑請先移走舊結果", file=sys.stderr)
+-            return 2
+-        if _valid(out):
+-            continue
+-        out.parent.mkdir(parents=True, exist_ok=True)
+-        _write_meta(out, meta)
+-        cmd = [sys.executable, str(PROBE), "--repo", repo[arm], "--scenarios", a.scenarios,
+-               "--exact-id", sid, "--runs", "1", "--runner", a.runner, "--answer-max", str(ANSWER_MAX),
+-               "--max-turns", "30", "--timeout", str(a.timeout), "--wait-on-limit", str(a.wait_on_limit),
+-               "--model", a.model, "--out", str(out)]
+-        if a.runner == "codex":
+-            cmd += ["--codex-bypass-hook-trust"]
+-        print(f"[{a.runner}] {sid} r{k} 組{arm}", flush=True)
+-        subprocess.run(cmd, cwd=str(REPO))
+-    return 0
+-
+-
+ def _load_runs(out_dir, valid_only=True):
+     runs = []
+     for p in sorted(Path(out_dir).glob("*/*/*.json")):
+         if p.name.endswith(".meta.json"):
+             continue
+         runner, arm = p.parent.parent.name, p.parent.name
+         m = re.match(r"(.+)-r(\d+)$", p.stem)
+         if not m or (valid_only and not _valid(p)):
+             continue
+-        r = json.loads(p.read_text(encoding="utf-8"))["results"][0]
++        try:
++            r = json.loads(p.read_text(encoding="utf-8"))["results"][0]
++        except (OSError, ValueError, KeyError, IndexError, TypeError):
++            r = {}   # 壞檔照列成無效場,不讓整批算不出來(代碼審 r1 併發席)
+         runs.append({"key": f"{runner}/{arm}/{p.stem}", "runner": runner, "arm": arm, "id": m.group(1),
+                      "run": int(m.group(2)), "answer": r.get("answer", ""), "answer_len": r.get("answer_len"),
+                      "calls": [tuple(c) for c in r.get("calls", [])], "valid": _valid(p)})
+     return runs
+ 
+ 
+ # ── 機械計分 ──────────────────────────────────────────────────────────────────
+ def _gold_key(sid):
+     return sid.split("-", 1)[1]   # qo-P1 → P1
+ 
+@@ -299,41 +240,49 @@ def check_labels(labels, mapping, gold_topics):
+     for bid, key in mapping.items():
+         want = {g["gold_id"] for g in gold_topics[_scenario_of(key)]}
+         row = labels[bid]
+         if set(row["items"]) != want:
+             raise ValueError(f"{bid} 的 gold 項目不對:{sorted(set(row['items']) ^ want)}")
+         bad = {k: v for k, v in row["items"].items() if v not in LABELS}
+         if bad:
+             raise ValueError(f"{bid} 有不合法標籤 {bad}")
+         if not isinstance(row.get("noise"), int) or row["noise"] < 0:
+             raise ValueError(f"{bid} 的 noise 要是非負整數")
++        if _scenario_of(key) not in NOISE_SCENARIOS and row["noise"] != 0:   # 評分準則:P4、P5 一律填 0;不然 merge 會要一筆沒人產的仲裁
++            raise ValueError(f"{bid} 不判亂問的題 noise 要填 0,填的是 {row['noise']}")
+ 
+ 
+ def _load_ctx(a):
+     m = json.loads(Path(a.mapping).read_text(encoding="utf-8"))["mapping"]
+     gt = json.loads(Path(a.gold_topics).read_text(encoding="utf-8"))
+     return m, gt
+ 
+ 
+-def cmd_agree(a):
+-    mapping, gt = _load_ctx(a)
+-    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
+-    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++def item_pairs(la, lb, mapping):
++    """兩位評分員逐場 × 逐 gold 項目的標籤對與分歧清單;agree 與 final 共用(final 當場重算 kappa,不收外部檔)。"""
+     xs, ys, dis = [], [], []
+     for bid in sorted(mapping):
+         for gid in sorted(la[bid]["items"]):
+             x, y = la[bid]["items"][gid], lb[bid]["items"][gid]
+             xs.append(x); ys.append(y)
+             if x != y:
+                 dis.append({"blind_id": bid, "gold_id": gid, "labels": sorted([x, y])})
+         if _scenario_of(mapping[bid]) in NOISE_SCENARIOS and abs(la[bid]["noise"] - lb[bid]["noise"]) > 1:
+             dis.append({"blind_id": bid, "gold_id": "noise", "labels": sorted([la[bid]["noise"], lb[bid]["noise"]])})
++    return xs, ys, dis
++
++
++def cmd_agree(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    xs, ys, dis = item_pairs(la, lb, mapping)
+     k = kappa(xs, ys)
+     Path(a.dest).write_text(json.dumps({"n_runs": len(mapping), "n_items": len(xs), "kappa": k,
+                                         "agreement": sum(x == y for x, y in zip(xs, ys)) / len(xs),
+                                         "disagreements": dis}, ensure_ascii=False, indent=1), encoding="utf-8")
+     print(f"場次 {len(mapping)}、判定 {len(xs)} 條、kappa={k:.3f}、要仲裁 {len(dis)} 條 → {a.dest}")
+     return 0
+ 
+ 
+ def cmd_adj_pack(a):
+     """仲裁包:每條分歧附該場回答、題目與兩個候選(候選順序打亂,不標來源)。"""
+@@ -465,76 +414,65 @@ def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
+     s["verdict"], s["reasons"] = verdict(s)
+     return s
+ 
+ 
+ def cmd_final(a):
+     mapping, gt = _load_ctx(a)
+     la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
+     check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
+     merged = merge(la, lb, _read_adj(a.adjudication))   # 當場重算,不收「據稱合併過」的資料夾
+     check_labels(merged, mapping, gt)
+-    agree = json.loads(Path(a.agree).read_text(encoding="utf-8"))
++    kap = kappa(*item_pairs(la, lb, mapping)[:2])   # 當場重算,不收外部給的 kappa(代碼審 r1 外家席)
+     mech = {r["key"]: r for r in json.loads(Path(a.score).read_text(encoding="utf-8"))["rows"]}
+     sens = {"rater_a": la, "rater_b": lb}
+     report = {}
+     for runner in sorted({k.split("/")[0] for k in mapping.values()}):
+-        main_s = _summarize(runner, merged, mapping, mech, a.runs, agree["kappa"])
++        main_s = _summarize(runner, merged, mapping, mech, a.runs, kap)
+         main_s["sensitivity"] = {}
+         for name, lab in sens.items():
+-            s = _summarize(runner, lab, mapping, mech, a.runs, agree["kappa"])
++            s = _summarize(runner, lab, mapping, mech, a.runs, kap)
+             main_s["sensitivity"][name] = {"verdict": s["verdict"], "mean_diff": s["mean_diff"], "p": s["p"]}
+         gated = final_gate(main_s["verdict"], [v["verdict"] for v in main_s["sensitivity"].values()])
+         if gated != main_s["verdict"]:
+             main_s["reasons"] = main_s["reasons"] + [f"主判定 {main_s['verdict']} 與單一評分員判定不一致"]
+             main_s["verdict"] = gated
+         report[runner] = main_s
+     Path(a.dest).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
+     print(json.dumps(report, ensure_ascii=False, indent=1))
+     return 0
+ 
+ 
+ def main(argv=None):
+     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+     sub = ap.add_subparsers(dest="cmd", required=True)
+-    r = sub.add_parser("run")
+-    r.add_argument("--arm-a", required=True); r.add_argument("--arm-b", required=True)
+-    r.add_argument("--scenarios", default=str(HERE / "scenarios.jsonl"))
+-    r.add_argument("--runner", choices=["claude", "codex"], required=True)
+-    r.add_argument("--model", default="", help="必填:受測模型 id")
+-    r.add_argument("--runs", type=int, default=3)
+-    r.add_argument("--order-seed", default="qo-2026-10")
+-    r.add_argument("--arms", default="a,b", help="只跑其中幾組,逗號分隔(小實驗只重跑乙組時用)")
+-    r.add_argument("--timeout", type=int, default=600)
+-    r.add_argument("--wait-on-limit", type=int, default=1800)
+-    r.add_argument("--out-dir", required=True)
+     s = sub.add_parser("score")
+     s.add_argument("--out-dir", required=True); s.add_argument("--gold", default=str(HERE / "gold.json"))
+     s.add_argument("--dest", required=True)
+     p = sub.add_parser("packets")
+     p.add_argument("--out-dir", required=True); p.add_argument("--seed", type=int, default=20261012)
+     p.add_argument("--batch", type=int, default=8); p.add_argument("--expect-runs", type=int, default=0)
+     p.add_argument("--dest", required=True); p.add_argument("--mapping", required=True)
+     for name in ("agree", "merge", "final"):
+         q = sub.add_parser(name)
+         q.add_argument("--mapping", required=True)
+         q.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
+         q.add_argument("--dest", required=True)
+         if name in ("agree", "merge"):
+             q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
+         if name == "merge":
+             q.add_argument("--adjudication", default="")
+         if name == "final":
+-            q.add_argument("--agree", required=True); q.add_argument("--score", required=True)
++            q.add_argument("--score", required=True)
+             q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
+             q.add_argument("--adjudication", default="", help="仲裁結果;final 會自己重算合併")
+             q.add_argument("--runs", type=int, default=3)
+     j = sub.add_parser("adj-pack")
+     j.add_argument("--agree", required=True); j.add_argument("--packets", required=True)
+     j.add_argument("--mapping", required=True); j.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
+     j.add_argument("--seed", type=int, default=20261013); j.add_argument("--dest", required=True)
+     a = ap.parse_args(argv)
+-    return {"run": cmd_run, "score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
++    return {"score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
+             "merge": cmd_merge, "final": cmd_final}[a.cmd](a)
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index 6e51c2b3..62c79562 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -311,37 +311,37 @@ def source_evidence(lines, harness, token):
+ 
+ 
+ def grade(sc, calls, final_text, source_state=None):
+     """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
+     儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
+     if sc.get("source_probe"):
+         # 讀碼題不再依命令regex猜檔案；其他題仍走原本的順序判準。
+         ok = source_state == "present"
+         why = "ok" if ok else ("未取得目標程式片段" if source_state == "absent" else "儀器例外: 缺少可判讀的原始讀碼結果")
+     else:
+-        ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
++        ok, why, _ = judge(calls, sc.get("expect") or [], sc.get("forbid_before", []))   # collect_only 可省略 expect(驗證已放行)
+     answer_content_ok = None
+     if sc.get("answer_expect"):
+         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
+         answer_content_ok = not miss_a
+         if ok and not answer_content_ok:
+             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+     return ok, why, answer_content_ok
+ 
+ 
+-ANSWER_MAX = 1500   # 結果檔保存的回答字數上限;--answer-max 可調高(對照實驗要完整回答才能判分)
++ANSWER_MAX = 1500   # 結果檔保存的回答字數上限的預設;--answer-max 照參數一路傳到執行場次,不改寫這個常數(代碼審 code-後端情境出題 r1 架構席)
+ 
+ 
+-def _answer_field(final, source_token):
++def _answer_field(final, source_token, cap=ANSWER_MAX):
+     """回 (存檔用回答, 原始回答長度)。原始長度另存,讀結果的人才分得出有沒有被截。"""
+     text = _redact_source_token(final or "", source_token)
+-    return text[:ANSWER_MAX], len(text)
++    return text[:cap], len(text)
+ 
+ 
+ def judge(calls, expect, forbid_before):
+     """回 (passed, reason, first_hit_index)。
+     expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
+     forbid_before:任何一條命中(工具名或 Bash 指令字串)若發生在「第一條 expect 命中」之前 → 不過。"""
+     exp_idx = {}
+     for i, (name, summ) in enumerate(calls):
+         hay = summ if name == "Bash" else f"{name}:{summ}"   # 非 Bash 工具用「工具名:參數」比,紀律題可寫 Edit:docs/…
+         for e in expect:
+@@ -941,21 +941,21 @@ def _attempt_ledger_transaction(path, limit, claim=False, now=None):
+ 
+ 
+ def attempt_ledger_remaining(path, limit, now=None):
+     return _attempt_ledger_transaction(path, limit, now=now)
+ 
+ 
+ def claim_model_attempt(path, limit, now=None):
+     return _attempt_ledger_transaction(path, limit, claim=True, now=now)
+ 
+ 
+-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0):
++def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
+     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
+     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
+     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
+     模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
+                 "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+     # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
+@@ -995,38 +995,48 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
+         if isinstance(ev, dict) and ev.get("type") == "thread.started":
+             thread_id = ev.get("thread_id"); break
+     trace = _codex_hook_trace(thread_id)
+     evidence = source_evidence(out.splitlines(), "codex", source_token) if sc.get("source_probe") else None
+     ok, why, answer_content_ok = grade(sc, calls, final, evidence)
+     if instrument_fail:
+         ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
+     ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
+             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": _answer_field(final, source_token)[0], "answer_len": _answer_field(final, source_token)[1], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+             "source_evidence": evidence,
+             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
+             "result_subtype": "codex", "harness": "codex",
+             "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
+ 
+ 
+ def _scenario_max_turns(sc, default):
+     """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。
+     ★只影響 claude runner:codex exec 沒有 --max-turns 這種旗標,codex runner 忽略此欄(外家 r1 m3,誠實寫在這裡與 --help)。★"""
+     try:
+         v = int(sc.get("max_turns", default))
+         return v if v > 0 else default
+     except (TypeError, ValueError):
+         return default
+ 
+ 
+-def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0):
++def _run_kwargs(a, token):
++    """命令列參數 → 執行場次的選配參數(回答上限、來源暗號、用量帳)。"""
++    extra = {"answer_max": a.answer_max}
++    if token is not None:
++        extra["source_token"] = token
++    if a.max_per_window:
++        extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
++    return extra
++
++
++def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
+     max_turns = _scenario_max_turns(sc, max_turns)
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                 "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
+                 "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": None}
+     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+     # 題目標 allow_agent:true 才放行,其餘照舊禁。
+@@ -1091,21 +1101,21 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
+         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
+     elif truncated:
+         cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
+         ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+     elif returncode != 0:
+         ok, why = False, f"儀器例外: claude -p 退出碼 {returncode}(這場不算分)"
+     ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
+             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
+             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": _answer_field(final, source_token)[0], "answer_len": _answer_field(final, source_token)[1],
++            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1],
+             "source_evidence": evidence,
+             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+             "answer_content_ok": answer_content_ok,
+             "limit_hit": limit_hit, "truncated": truncated,
+             "result_subtype": result_ev.get("subtype"), "harness": "claude"}
+ 
+ 
+ def summarize_results(results, arm="with"):
+     """一批結果 → 總結。分母只算有效場次(扣掉截斷、用量上限、其他儀器例外)。
+     ★有效不到一半時分母退回整批★:自主迴圈只在總結行 p≠n 時發通知,不退回的話整批被截斷會是 0/0、安靜顯示全過。
+@@ -1197,22 +1207,20 @@ def main():
+     ap.add_argument("--wait-on-limit", type=int, default=0,
+                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     ap.add_argument("--max-attempts", type=int, default=0,
+                     help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
+     ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
+     ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
+     a = ap.parse_args()
+     if a.answer_max < 1:
+         ap.error("--answer-max 必須是正整數")
+-    global ANSWER_MAX
+-    ANSWER_MAX = a.answer_max
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
+     if a.max_per_window < 0:
+         print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
+     if a.max_attempts < 0:
+         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
+     # 輸出寫不出去要在花模型額度之前就知道,不能整批跑完才炸
+     for flag, target, replace in (("--out", a.out, True), ("--history", a.history, False)):
+         problem = target and _output_target_problem(target, replace=replace)
+         if problem:
+@@ -1273,23 +1281,21 @@ def main():
+     if baseline is not None:
+         print(f"探的是: {src}\n凍結基線: {baseline}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+               file=sys.stderr)
+     results = []
+     waited = 0
+     attempts_started = 0
+     fatal = setup_error is not None
+     fatal_reason = setup_error
+     retained = None
+     def run_at(workdir, token=None):
+-        extra = {"source_token": token} if token is not None else {}
+-        if a.max_per_window:
+-            extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
++        extra = _run_kwargs(a, token)
+         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
+                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
+     try:
+         for sc in scs if baseline is not None else []:
+             for k in range(1, a.runs + 1):
+                 retried = []
+                 while True:
+                     work = None
+                     token = "LUMOS_READ_" + secrets.token_hex(16) if sc.get("source_probe") else None
+                     res = None
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index 6fd7dcec..9b38d52e 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1862,37 +1862,48 @@ class TestScenarioProbeAblation(unittest.TestCase):
+         self.assertEqual(self.sp.judge([], [], [])[0], True)
+         ok, why, _ = self.sp.judge([("Read", "README.md"), ("Write", "src/App.kt")], [], [r"^Write$"])
+         self.assertFalse(ok)
+         self.assertIn("Write", why)
+         self.assertTrue(self.sp.judge([("Read", "README.md")], [], [r"^Write$"])[0])
+ 
+     def test_answer_field_default_cap_and_raised_cap_keep_full_length(self):
+         long = "問" * 3000
+         ans, n = self.sp._answer_field(long, None)
+         self.assertEqual((len(ans), n), (1500, 3000))      # 預設上限不變
+-        old = self.sp.ANSWER_MAX
+-        try:
+-            self.sp.ANSWER_MAX = 5000
+-            ans, n = self.sp._answer_field(long, None)
+-            self.assertEqual((ans, n), (long, 3000))
+-        finally:
+-            self.sp.ANSWER_MAX = old
++        ans, n = self.sp._answer_field(long, None, 5000)   # 上限照參數給
++        self.assertEqual((ans, n), (long, 3000))
+ 
+     def test_answer_max_flag_parses_and_rejects_nonpositive(self):
+         import subprocess, sys
+         probe = str(self.root / "scripts" / "scenario_probe.py")
+         r = subprocess.run([sys.executable, probe, "--answer-max", "0", "--dry-list"], capture_output=True, text=True)
+         self.assertNotEqual(r.returncode, 0)
+         self.assertIn("answer-max", r.stderr)
+         ok = subprocess.run([sys.executable, probe, "--answer-max", "5000", "--dry-list"], capture_output=True, text=True)
+         self.assertEqual(ok.returncode, 0, ok.stderr)   # 合法值要過(防「不認得的參數」造成的假綠)
+ 
++    def test_answer_max_flows_as_argument_not_global(self):
++        # 代碼審 r1 正確性席(刪掉設上限那行測試照綠)與架構席(main 改寫模組全域值是這檔原本沒有的做法):
++        # 上限改成參數一路傳到執行場次,模組常數只當預設
++        import subprocess as _sp
++        long = "問" * 3000
++        out = json.dumps({"type": "result", "subtype": "success", "result": long})
++        sc = {"id": "q", "prompt": "p", "collect_only": True}
++        with tempfile.TemporaryDirectory() as tmp, \
++             mock.patch.object(self.sp.subprocess, "run", return_value=_sp.CompletedProcess([], 0, out, "")):
++            row = self.sp.run_one(sc, Path(tmp), 1, 5, "", answer_max=2000)
++            dflt = self.sp.run_one(sc, Path(tmp), 1, 5, "")
++        self.assertEqual((len(row["answer"]), row["answer_len"]), (2000, 3000))
++        self.assertEqual(len(dflt["answer"]), 1500)                         # 沒給就用預設,不受別處改寫影響
++        a = mock.Mock(answer_max=4321, max_per_window=0, attempt_ledger="")
++        self.assertEqual(self.sp._run_kwargs(a, None)["answer_max"], 4321)  # 命令列旗標真的傳下去
++        self.assertEqual(self.sp.ANSWER_MAX, 1500)
+     def test_attempt_ledger_parent_error_preserves_incident_before_launch(self):
+         import threading
+         with tempfile.TemporaryDirectory() as tmp:
+             root = Path(tmp)
+             ledger = root / "bad.sqlite3"
+             ledger.write_bytes(b"not a database")
+             stop = threading.Event()
+             with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger, create=True), mock.patch.object(self.rn.subprocess, "run", side_effect=AssertionError("model must not launch")):
+                 result = self.rn.run_job("with", "q", 1, [], 1, 1, root, 0, max_per_window=1, stop=stop)
+             self.assertIn("失效", result[2])
+@@ -2225,20 +2236,27 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
+         out, ok = self.sp.strip_lumos_first_rule(t)
+         self.assertFalse(ok, "標記出現兩次要安全回退,不砍錯段")
+         self.assertEqual(out, t)
+ 
+     def test_validate_scenario_collect_only_allows_empty_expect(self):
+         v = self.sp._validate_scenario
+         self.assertIsNone(v({"id": "q", "prompt": "p", "expect": [], "collect_only": True}))
+         self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": []}))            # 沒明講只收回答,照舊擋
+         self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": [], "collect_only": "yes"}))  # 只認布林 true
+ 
++    def test_collect_only_without_expect_key_grades_without_crash(self):
++        # 代碼審 r1 外家席:collect_only 省略 expect 欄位時,派工前放行、跑完才在評分時 KeyError(額度白燒、整批中止)
++        sc = {"id": "q", "prompt": "p", "collect_only": True}
++        self.assertIsNone(self.sp._validate_scenario(sc))
++        ok, why, _ = self.sp.grade(sc, [("Read", "README.md")], "回答")
++        self.assertTrue(ok, why)
++
+     def test_validate_scenario(self):
+         v = self.sp._validate_scenario
+         self.assertIsNone(v({"id": "s", "prompt": "p", "expect": ["x"]}))
+         self.assertIn("expect", v({"id": "s", "prompt": "p"}))
+         self.assertIn("prompt", v({"id": "s", "expect": ["x"]}))
+ 
+     def test_arm_stats_filters_expected_ids(self):
+         # 舊題殘檔(id=stale)不進 M1；只算現行題庫的
+         rows = [{"id": "s01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0},
+                 {"id": "stale", "passed": False, "ever_lumos": False, "first_lumos_idx": None}]
+@@ -2404,29 +2422,20 @@ class TestQoAblation(unittest.TestCase):
+ 
+     def test_valid_rejects_truncated_timeout_and_instrument_errors(self):
+         with tempfile.TemporaryDirectory() as tmp:
+             p = Path(tmp) / "x.json"
+             self._write_result(p); self.assertTrue(self.qo._valid(p))
+             for bad in ({"answer_len": 99999}, {"answer_len": None}, {"truncated": True},
+                         {"reason": "儀器例外: codex exec 超時"}, {"fatal": True}, {"limit_hit": True}):
+                 self._write_result(p, **bad)
+                 self.assertFalse(self.qo._valid(p), bad)
+ 
+-    def test_meta_mismatch_blocks_resume(self):
+-        with tempfile.TemporaryDirectory() as tmp:
+-            out = Path(tmp) / "r.json"
+-            meta = {"runner": "claude", "model": "sonnet", "cli": "2.1.300"}
+-            self.qo._write_meta(out, meta)
+-            self.assertTrue(self.qo._meta_ok(out, meta))
+-            self.assertFalse(self.qo._meta_ok(out, dict(meta, cli="2.1.301")))
+-            self.assertFalse(self.qo._meta_ok(Path(tmp) / "none.json", meta))
+-
+     def test_code_start_multi_path_and_inplace_edit(self):
+         hit = self.qo.code_start
+         self.assertTrue(hit([("Edit", "src/main/kotlin/App.kt docs/plan.md")]))
+         self.assertTrue(hit([("Bash", "sed -i s/a/b/ src/main/kotlin/App.kt")]))
+         self.assertTrue(hit([("Bash", "perl -pi -e 's/a/b/' build.gradle.kts")]))
+         self.assertFalse(hit([("Edit", "docs/a.md docs/b.md")]))
+ 
+     def test_blind_masks_self_identification_and_arm_paths(self):
+         runs = [{"key": "codex/b/qo-P1-r1", "runner": "codex", "arm": "b", "id": "qo-P1", "run": 1,
+                  "answer": "我是 Codex;我依 AGENTS.md 回答。路徑 /scratchpad/qo/b/order-svc。Claude 與 CLAUDE.md 也遮。"}]
+@@ -2511,33 +2520,146 @@ class TestQoAblation(unittest.TestCase):
+ 
+     def test_code_start_build_tool_only_when_invoked(self):
+         hit = self.qo.code_start
+         # 2026-10-12 實跑誤判:只讀的 grep 指令裡出現 gradle 字樣
+         self.assertFalse(hit([("Bash", "git ls-files | grep -Ei 'pom|gradle|package.json' | grep -v scripts/")]))
+         self.assertFalse(hit([("Bash", "ls; cat build.gradle.kts | head -5")]))
+         self.assertTrue(hit([("Bash", "./gradlew build")]))
+         self.assertTrue(hit([("Bash", "cd app && gradle init --type kotlin-application")]))
+         self.assertTrue(hit([("Bash", "mvn -q package")]))
+ 
+-    def test_job_order_respects_arm_subset(self):
+-        scen = [{"id": "qo-P1"}, {"id": "qo-P2"}]
+-        both = self.qo.job_order(scen, 2, "seed", ("a", "b"))
+-        only_b = self.qo.job_order(scen, 2, "seed", ("b",))
+-        self.assertEqual(len(both), 8)
+-        self.assertEqual(only_b, [j for j in both if j[2] == "b"])   # 子集與全集的先後一致
+-
+     def test_mask_covers_model_family_names(self):
+         t, n = self.qo.mask_leaks("我是 GPT,OpenAI 訓練;另一位是 Sonnet、Opus、Anthropic。路徑 /x/qo-b/y")
+         for leak in ("GPT", "OpenAI", "Sonnet", "Opus", "Anthropic", "qo-b"):
+             self.assertNotIn(leak, t)
+ 
+     def test_delivery_rate_uses_fixed_denominator(self):
+         self.assertAlmostEqual(self.qo.delivery_rate({"g1": "handed"}, 6), 1 / 6)
+         self.assertAlmostEqual(self.qo.delivery_rate({f"g{i}": "assumed_confirm" for i in range(1, 7)}, 6), 1.0)
+ 
+     def test_cohen_kappa_known_values(self):
+         self.assertAlmostEqual(self.qo.kappa(["x", "y", "x", "y"], ["x", "y", "x", "y"]), 1.0)
+         self.assertAlmostEqual(self.qo.kappa(["x", "x", "y", "y"], ["x", "y", "x", "y"]), 0.0)
++        # 非退化案例(代碼審 r1 通才席:換成 2*po-1 照綠):po=0.8、pe=0.8*0.6+0.2*0.4=0.56 → (0.8-0.56)/0.44
++        self.assertAlmostEqual(self.qo.kappa(list("xxxxy"), list("xxxyy")), 0.24 / 0.44)
++
++    def test_delivery_rate_excludes_absent(self):
++        self.assertAlmostEqual(self.qo.delivery_rate({"g1": "absent", "g2": "handed", "g3": "absent"}, 6), 1 / 6)
++
++    def test_blind_order_is_shuffled_not_sorted(self):
++        runs = [{"key": f"claude/{arm}/qo-P{i}-r1", "runner": "claude", "arm": arm, "id": f"qo-P{i}", "run": 1,
++                 "answer": "x"} for arm in ("a", "b") for i in range(1, 7)]
++        _, m1 = self.qo.blind(runs, seed=20261012)
++        _, m2 = self.qo.blind(runs, seed=1)
++        order1 = [m1[b] for b in sorted(m1)]
++        self.assertNotEqual(order1, sorted(r["key"] for r in runs))   # 不照 key 排(甲組會全擠在前半)
++        self.assertNotEqual(order1, [m2[b] for b in sorted(m2)])       # 種子真的有作用
++
++    def test_mask_covers_arm_paths_and_group_words(self):
++        t, _ = self.qo.mask_leaks("在 order-svc-b 裡跑;這是 arm b,也就是乙組")
++        for leak in ("order-svc-b", "arm b", "乙組"):
++            self.assertNotIn(leak, t)
++
++    def test_mask_edge_shapes(self):
++        # 代碼審 r1 邊界席:底線相連的身分字、不帶斜線的組別資料夾名要遮;英文 arm a、中文「組合/組織」、GPT 後的句號不能誤傷
++        t, _ = self.qo.mask_leaks("CLAUDE_CODE 與 codex_home;cd qo-a 之後")
++        for leak in ("CLAUDE", "codex", "qo-a"):
++            self.assertNotIn(leak, t)
++        for keep in ("can arm a trap", "甲乙組合", "乙組織", "claudette", "armor"):
++            self.assertEqual(self.qo.mask_leaks(keep)[0], keep)
++        self.assertTrue(self.qo.mask_leaks("我是 GPT. 下一句")[0].endswith(". 下一句"))
++
++    def _final_fixture(self, tmp, b_label="handed", noise_b=0, code_a=False, rb_flip=0):
++        """六題各跑一次、甲乙兩組;甲組全 absent,乙組全 b_label。rb_flip:評分員乙在前幾場全部翻成相反標籤。"""
++        tmp = Path(tmp)
++        sids = [f"qo-P{i}" for i in range(1, 7)]
++        gt = {sid: [{"gold_id": f"{sid}-g{j}", "topic": "t"} for j in range(1, 7)] for sid in sids}
++        mapping, rows, la, lb, i = {}, [], [], [], 0
++        for sid in sids:
++            for arm in ("a", "b"):
++                i += 1
++                bid, key = f"R{i:03d}", f"claude/{arm}/{sid}-r1"
++                mapping[bid] = key
++                lab = "absent" if arm == "a" else b_label
++                noise = noise_b if (arm == "b" and sid == "qo-P1") else 0
++                la.append({"blind_id": bid, "items": {g["gold_id"]: lab for g in gt[sid]}, "noise": noise})
++                flip = {"absent": "handed", "handed": "absent", "assumed_confirm": "absent"}
++                lb.append({"blind_id": bid, "items": {g["gold_id"]: (flip[lab] if i <= rb_flip else lab) for g in gt[sid]},
++                           "noise": noise})
++                rows.append({"key": key, "truncated": False, "code_start": code_a and arm == "a" and sid == "qo-P2"})
++        (tmp / "ra").mkdir(); (tmp / "rb").mkdir()
++        (tmp / "ra" / "l.json").write_text(json.dumps(la), encoding="utf-8")
++        (tmp / "rb" / "l.json").write_text(json.dumps(lb), encoding="utf-8")
++        (tmp / "m.json").write_text(json.dumps({"mapping": mapping}), encoding="utf-8")
++        (tmp / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
++        (tmp / "score.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
++        adj = [{"blind_id": f"R{k:03d}", "gold_id": f"{mapping[f'R{k:03d}'].split('/')[2][:-3]}-g{j}",
++                "choice": la[k - 1]["items"][f"{mapping[f'R{k:03d}'].split('/')[2][:-3]}-g{j}"]}
++               for k in range(1, rb_flip + 1) for j in range(1, 7)]
++        (tmp / "adj.json").write_text(json.dumps(adj), encoding="utf-8")
++        return ["--mapping", str(tmp / "m.json"), "--gold-topics", str(tmp / "gt.json"), "--score", str(tmp / "score.json"),
++                "--rater-a", str(tmp / "ra"), "--rater-b", str(tmp / "rb"), "--adjudication", str(tmp / "adj.json"),
++                "--runs", "1", "--dest", str(tmp / "final.json")]
++
++    def _final(self, args):
++        import contextlib, io
++        with contextlib.redirect_stdout(io.StringIO()):
++            self.assertEqual(self.qo.main(["final"] + args), 0)
++        return json.loads(Path(args[args.index("--dest") + 1]).read_text(encoding="utf-8"))["claude"]
++
++    def test_final_direction_and_arm_attribution(self):
++        # 代碼審 r1 通才席:配對差方向寫反、亂問或先寫程式記錯組,原本的測試照綠
++        with tempfile.TemporaryDirectory() as tmp:
++            s = self._final(self._final_fixture(tmp, b_label="handed", noise_b=2, code_a=True))
++        self.assertAlmostEqual(s["mean_diff"], 1.0)                    # 乙減甲,乙組全交付 → +1
++        self.assertEqual((s["noise_a"], s["noise_b"]), (0, 2))
++        self.assertEqual((s["code_a"], s["code_b"]), (1, 0))
++        self.assertEqual(s["complete"], 6)
++        self.assertEqual(s["verdict"], "FAIL")                         # 乙組亂問比甲組多
++        with tempfile.TemporaryDirectory() as tmp:
++            s = self._final(self._final_fixture(tmp, b_label="absent"))
++        self.assertEqual(s["verdict"], "INCONCLUSIVE")                 # 兩組全 0
++
++    def test_final_recomputes_kappa_and_ignores_stale_agree(self):
++        # 代碼審 r1 外家席:final 原本直接收 --agree 檔的 kappa,舊檔可讓 kappa<0.6 的結果判 PASS
++        with tempfile.TemporaryDirectory() as tmp:
++            args = self._final_fixture(tmp, rb_flip=8)
++            s = self._final(args)
++            xs, ys = [], []
++            la = json.loads((Path(tmp) / "ra" / "l.json").read_text()); lb = json.loads((Path(tmp) / "rb" / "l.json").read_text())
++            for x, y in zip(la, lb):
++                for g in sorted(x["items"]):
++                    xs.append(x["items"][g]); ys.append(y["items"][g])
++            self.assertAlmostEqual(s["kappa"], self.qo.kappa(xs, ys))
++            self.assertLess(s["kappa"], 0.6)
++            self.assertEqual(s["verdict"], "INCONCLUSIVE")
++            with self.assertRaises(SystemExit):                          # 不再收外部給的 kappa
++                self.qo.main(["final", "--agree", str(Path(tmp) / "x.json")] + args)
++
++    def test_check_labels_noise_must_be_zero_outside_noise_scenarios(self):
++        # 代碼審 r1 正確性席:非亂問題填非零,merge 會要一筆 adj-pack 永遠不產的仲裁
++        mapping = {"R001": "claude/a/qo-P4-r1"}
++        gt = {"qo-P4": [{"gold_id": f"g{j}"} for j in range(1, 7)]}
++        row = {"blind_id": "R001", "items": {f"g{j}": "absent" for j in range(1, 7)}, "noise": 0}
++        self.qo.check_labels({"R001": row}, mapping, gt)
++        with self.assertRaises(ValueError):
++            self.qo.check_labels({"R001": dict(row, noise=2)}, mapping, gt)
++
++    def test_run_subcommand_is_gone(self):
++        # 代碼審 r1 架構席:第二套逐場執行器拿掉;連帶的跳過信任旗標、無逾時外呼、不含題庫的版本紀錄一起消失
++        import contextlib, io
++        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
++            self.qo.main(["run", "--arm-a", "a", "--arm-b", "b", "--runner", "claude", "--out-dir", "o"])
++        self.assertFalse(hasattr(self.qo, "cmd_run"))
++        self.assertNotIn("subprocess", vars(self.qo))
++
++    def test_load_runs_skips_malformed_result_file(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            d = Path(tmp) / "claude" / "a"; d.mkdir(parents=True)
++            (d / "qo-P1-r1.json").write_text('{"results": []}', encoding="utf-8")
++            (d / "qo-P1-r2.json").write_text("{壞", encoding="utf-8")
++            runs = self.qo._load_runs(tmp, valid_only=False)
++        self.assertEqual([(r["key"], r["valid"]) for r in runs], [("claude/a/qo-P1-r1", False), ("claude/a/qo-P1-r2", False)])
+ 
+ 
+ if __name__ == "__main__":
+     unittest.main()

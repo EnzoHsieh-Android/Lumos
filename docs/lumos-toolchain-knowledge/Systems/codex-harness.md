@@ -183,3 +183,16 @@ PITFALL:同一輪修復若只在快取讀取端拒絕外部連結，等待端卻
 ## 目標架構標記(2026-10-09,[[Projects/架構對齊可宣告目標架構_計劃]])
 
 派工掛鉤多認一行 LUMOS-ARCH-TARGET: on(代碼審與設計審兩條路都認),多傳 --arch-target;舊版 lumos 不認回 rc2 空輸出時,把 --role-cards 與 --arch-target 一起拿掉重叫,照附圖譜段。失敗分支照附的附加段從角色段擴成角色段加目標架構段。Codex 編排走 --arm/--claim,目前不附目標架構段(同角色卡)。
+
+## 探針收完整回答與空指令序列題(2026-10-12,[[Projects/後端工程提問與證據擴充_計劃]])
+
+情境探針原本只為「有沒有先敲 lumos」這類題目設計:每題一定有要命中的指令序列、回答只留前 1500 字。情境出題對照實驗(預先登記在 governance/eval/qo-ablation-2026-10/)要的是「只收回答、不考指令序列」,而且要完整回答才能盲評,Codex 外家審查實測指出兩個擋路的洞,這次一起補:
+
+- 指令序列清單是空的題目,判分時原本會拋例外、整批第一場就中止;現在空清單視同通過,「禁止先做的事」改對全部呼叫檢查。
+- 新增保存上限旗標(預設仍是 1500 字,舊題行為不變),每場另記回答原始長度,讀結果的人分得出有沒有被截。
+- 綁的測試:`test_judge_empty_expect_does_not_crash_and_checks_forbid_over_all_calls`、`test_answer_field_default_cap_and_raised_cap_keep_full_length`、`test_answer_max_flag_parses_and_rejects_nonpositive`;三處修正各自突變過,測試都會紅。
+- 派工前的題目把關照舊擋「缺指令序列」的題(以前畸形題白燒過一場額度);只收回答的題要在題目明寫 `collect_only: true`(只認布林 true)才放行。綁的測試:`test_validate_scenario_collect_only_allows_empty_expect`,放寬成任何真值時會紅。這道把關是正式開跑前的冒煙測試抓到的,判分函式那處修正擋不到它。
+- 2026-10-12 代碼審(外家席)再補:只收回答的題連判準欄位都省略時,把關會放行,但判分函式原本直接取那個欄位,要等模型跑完才崩、白燒額度。判分改成欄位不在就當空清單。綁的測試:`test_collect_only_without_expect_key_grades_without_crash`。
+- 回答保存上限(`--answer-max`,預設 1500 字)照參數一路傳到每一場的執行函式,不由主程式改寫模組常數(同次代碼審架構席:這檔原本沒有「主程式改寫全域值」的做法,而且刪掉那一行時舊測試照綠)。綁的測試:`test_answer_max_flows_as_argument_not_global`;Codex 那條執行路徑與命令列接線(抽成模組層的單場執行函式才測得到)另由 `test_answer_max_reaches_codex_runner_and_cli_wiring` 守(第 2 輪審查:拿掉這兩處的傳遞,原本的測試全綠)。這兩條與「只收回答要明寫」那條一起包成主測試檔的 `t_scenario_probe_collect_only_and_answer_cap`(修正關卡只認主測試檔的入口)。
+- RULE:跑探針之前,題目檔與受測 repo 要是自己審過的 [依據:審計] [since:2026-10-12] [retire:人裁] [until:2027-04-12] [confirmed:2026-10-12] ——受測 AI 帶著殼層工具,沙盒只隔離受測 repo 的檔案;2026-10-12 對照實驗裡,一場受測 AI 真的在主機起了資料庫容器(代碼審 code-後端情境出題 r1 資安席從卷證找到)。題目或受測 repo 的 CLAUDE.md 裡寫的指令,會以操作者身分在主機上跑。
+REVISIT:2027-04-12 看探針有沒有改成殼層也隔離(容器或受限帳號);改了就撤上面那條 RULE

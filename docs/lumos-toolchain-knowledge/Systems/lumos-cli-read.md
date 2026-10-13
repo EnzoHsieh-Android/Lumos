@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-07
+updated: 2026-10-13
 self_audit: claude-fable/2026-08-24
 about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
@@ -19,7 +19,7 @@ summary: |-
   WHY:doctor 接在 S16 後面多三段筆記格子的過期提醒,都不計入問題數、不寫治理帳:S16 到 S19 讀摘要條目共用 _note_summary_entries(續行接回、單行寫法的 summary 照判;S16 原本逐實體行判);S17 標了作廢的行,接手欄位指到的節點或決策不在、或也作廢了(只看一跳,決策引用用 _dref_norm 解析、判翻案照 E3);S18 RULE 的度量式撤除條件成立(先用提交時同一支 _slot_retire_err 重驗寫法,寫不合列成提醒;治理帳檔尾只讀一遍,跟帳增速那段共用 _gov_tail_bytes 與逐筆版 _drift_jsonl_iter;暖機、[since:] 不滿 N 週、閘目前 off 不判;整段包住,算不出來只講一句);S19 FACT/FLOW/DEP 的 [confirmed:] 超過 [recheck:] 或來源預設。S17、S18 在 --ci 不跑(要讀本機帳、只在完整 doctor),S19 照跑、條數照軟段既有上限;印出前清控制字元。這幾段 doctor 提醒讀 .lumos/config.json 統一走 _doctor_cfg_bytes(捷徑不跟;度量段的 lint-new 開關也用它讀好的那份,_lint_new_config 加 from_snapshot) [出處:2026-10-02 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 3 步 [S13]] [因:時間到期是時間的函數,只看新寫行的擋送不到沒人碰的舊行;這三種只提醒,記帳會變成每次重唸同一批的週報噪音] [test:t_slots_doctor_reminders] [test:t_slots_doctor_reminders_edges] [test:t_slots_doctor_reminders_r2]
   WHY:lint 對新文法的摘要行照筆記格子那張表唸,舊寫法的行照舊判準;RULE 六個鍵在新文法的行走 slot_parse,不留第二套切欄位規則 [出處:2026-10-01 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 0 步] [因:範本換成新寫法後只用舊判準會把合格的新寫法唸成錯,全部換新表又會對幾百行舊帳噴警告] [test:t_slots_single_table]
   WHY:[2026-09-30 [[Projects/存量漂移改法_計劃]] 代碼審 r3、r4]find 把 ./ 開頭當明確路徑:剝掉 ./ 後只認那一篇,找不到就回找不到、不退回用檔名猜——drift 的提示對 - 開頭的節點印成 ./-x(不然被當成選項),退回猜會讓 lumos set ./z 改到 A/z 那一篇 [test:t_drift_fix_review_r4_edges]
-  RULE:[since:2026-09-25][confirmed:2026-09-25][retire:note_lint.gate 在所有消費專案都打開且連續 8 週零擋下 → 改回只在 CI 跑;或擋下的一半以上事後是誤擋 → 預設改回只提醒]★筆記欄位新規則擋不擋看專案開關 note_lint.gate★(on/warn/off,沒設=warn;設定檔壞掉、捷徑檔、note_lint 不是物件=當沒設並警告;值看不懂=當 on)——新規則:四類筆記 status 必填(空白也算沒填)、日期年-月-日且是真日期(含決策 decided/ended)、決策 valid 有寫只能 true/false(不分大小寫、沒寫不算錯)、about_code 每項要是磁碟上的檔且不在圖譜資料夾、type project 的「_計劃」在 created ≥ 2026-09-12 時要有 lands_in 且每項是 Systems/<名> 純字串(不要求已存在)。★開關只管新規則;lint 原有錯誤規則照舊擋提交★。判定抽成 `_lint_collect`(原有)與 `_lint_new_rules`(新增),`lumos lint` 與健檢 L 段都呼叫它們。單源 [[Projects/筆記欄位關卡補齊_計劃]] [test:t_note_lint_gate_default_warns] [test:t_note_lint_gate_does_not_relax_existing_rules] [test:t_lint_status_required]
+  RULE:[since:2026-09-25][confirmed:2026-09-25][retire:note_lint.gate 在所有消費專案都打開且連續 8 週零擋下 → 改回只在 CI 跑;或擋下的一半以上事後是誤擋 → 預設改回只提醒]★筆記欄位新規則擋不擋看專案開關 note_lint.gate★(on/warn/off,沒設=warn;設定檔壞掉、捷徑檔、note_lint 不是物件=當沒設並警告;值看不懂=當 on)——新規則:四類筆記 status 必填(空白也算沒填)、日期年-月-日且是真日期(含決策 decided/ended)、決策 valid 有寫只能 true/false(不分大小寫、沒寫不算錯)、about_code 每項要是磁碟上的檔且不在圖譜資料夾、type project 的「_計劃」在 created ≥ 2026-09-12 時要有 lands_in 且每項是 Systems/<名> 純字串(不要求已存在)、計劃開頭欄位 pending_questions 讀得懂且必附齊(2026-10-12 加,[[Projects/待決問題改存開頭欄位_計劃]])。★開關只管新規則;lint 原有錯誤規則照舊擋提交★。判定抽成 `_lint_collect`(原有)與 `_lint_new_rules`(新增),`lumos lint` 與健檢 L 段都呼叫它們。單源 [[Projects/筆記欄位關卡補齊_計劃]] [test:t_note_lint_gate_default_warns] [test:t_note_lint_gate_does_not_relax_existing_rules] [test:t_lint_status_required]
   PITFALL:[2026-09-25 代碼審 r1 正確性席、邊界席、外家兩席]三個坑:①★開關要從跟每支檔有家同一個 repo 根讀(_vault_repo_root,往上找 .git)★——初版用另一支找根,圖譜就在 repo 根、巢狀專案、monorepo 深層三種擺法都讀錯、開關一律當 warn;②★健檢改成整個圖譜跑 lint 之後,一篇 type 寫成清單的筆記會讓整個健檢丟例外★——lint 補防呆、L 段逐篇包住,順手修了總索引那段拿 type 查集合的同一個舊坑;③★日期寫成空字串會繞過日期規則與既有建立日切點★,寫了卻空一律報錯——頂層日期與決策 decided/ended 共用 `_note_date_problem` 一支判斷(代碼審 r2 五席:初修只補了頂層三個,同構的決策日期沒跟上)。設定檔整份不是物件也要警告。重現:`type:` 寫成兩行清單跑 lumos doctor [test:t_note_lint_gate_repo_root_layouts] [test:t_doctor_note_lint_survives_malformed_note] [test:t_lint_empty_date_is_error] [test:t_note_lint_config_not_object_warns]
   KEY:[2026-09-25 筆記欄位關卡補齊]★健檢 L 段擴充:每篇跑 lint 錯誤等級規則(原有+新增),整個擴充部分照開關★——原有規則以前只在提交前對改到的那篇查,--no-verify 一次就推得上去;第一次改成整個圖譜跑,所以原有規則在推送前也照開關,消費專案更新當下不會被舊筆記硬擋(設計審 r3 外家席)。不讀碰到清單(預告合約那段的 --touched-from 擋法不受影響)。本 repo 開關 on,558 篇零違規,健檢多花約 0.1 秒 [test:t_doctor_note_lint_gate_on_blocks] [test:t_doctor_note_lint_ignores_touched_list] [test:t_repo_graph_passes_note_lint]
   RULE:[since:2026-09-21][confirmed:2026-09-21][retire:連續兩個月零觸發,或誤報多過真報]`lint` 會唸四個脈絡前綴的形狀(WHY 要出處、RULE 要日期加退場條件、PITFALL 要防回歸、FACT 要「以程式碼為準」加查詢指令),只警告不擋——規則是寫給人判斷的,機械只看形狀,判錯就擋會逼人繞過去。★刻意不套 `FLOW:`/`DEP:`★:本 repo 這兩個前綴有 277 行舊的,一開就是幾百條警告,誤報多過真報的機制活不過一週;新寫的現況描述改用 `FACT:` 就會被管到。單源 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]] 第三階段 [test:t_lint_context_marker_requirements]
@@ -113,6 +113,12 @@ about_code:
 ---
 # lumos-cli-read
 
+## 2026-10-13 待決問題嚴格讀法
+
+含 `pending_questions` 的 frontmatter 對清單外每一行只套一條規則，不再替頂格值、純量清單或 `decisions` 各寫文法：非 ASCII 結構縮排拒讀；`鍵: 值`(含重複 `- ` 與 flow collection 內片段)的鍵名經 NFKC/大小寫正規化後，若是題目專用鍵或值不是 `d` 加數字的 `id` 就拒讀，只有頂格 `status` 豁免；結構位置的 anchor/alias/tag 照舊拒讀。鍵的寫法照 YAML 文法認:引號鍵(含引號與冒號間的空白、JSON 風格冒號緊接值、雙引號跳脫)、flow 片段裡帶 anchor/tag 的鍵、`-<tab>` 起頭都算；`? ` 複雜鍵(含單獨一行的 `?`)可以跨行藏鍵名,清單外一律判讀不懂；flow 要在同一行閉合,跨行判讀不懂；status 只有鍵在第 0 欄才豁免；頂格註解不結束清單；清單頭只認頂格 `pending_questions:`,縮排、清單項、`?` 複雜鍵、流式或 `<<:` 合併鍵寫出的清單頭判讀不懂(block scalar 內文提到不算)；中文鍵、非題目鍵的引號鍵、數字開頭鍵、續行純量、巢狀 mapping、頂格清單、`KEY:` 與不同縮排決策不猜。四種 block scalar header 共用一份常數，內容只依「縮排嚴格深於鍵欄位」定界；其他 header 的內容照常逐行掃。[test:t_qfm_r6_frontmatter_ownership_generator,t_qfm_r6_tool_flow_and_repo_compatibility,t_qfm_r7_key_based_ownership,t_qfm_r8_outside_key_rule]
+
+文字值以 Unicode 16.0.0 的 Default_Ignorable_Code_Point 完整範圍為基礎，測試端獨立抄官方逐段清單並核對 4174 個碼位；ZWJ/ZWNJ 只在需要連字控制的文字系統字母或記號後放行(emoji ZWJ 仍要求兩側 emoji)，軟連字號須夾在字母間，蒙古變體只准一個接蒙古字母，FE0E/FE0F 只接 emoji/鍵帽基底；「emoji」用近似 Unicode 16 Extended_Pictographic 的碼位表(BMP 逐段、補充平面 1F000–1FAFF 整段)加膚色修飾(不用 Unicode 類別 So:So 含框線、度數這類一般符號，字縫會變成藏字通道)；emoji 之間的 ZWJ 一串最多 3 個(標準序列最長的四人家庭就是 3 個)。軟連字號只在非東亞文字的字母之間；私用區與未指派碼位拒讀。整份值的可忽略字元合計不得超過 `min(64,max(16,可見字元數))`；非 emoji 的 ZWJ/ZWNJ、軟連字號、蒙古變體與特殊 Zs 受 `min(32,max(2,可見字元數//4))` 額度；相鄰 DICP 拒絕，只有 emoji 序列內的 `FE0F+ZWJ+emoji` 例外，並要求 NFC。錯誤指向真正不合的碼位。這條合約限制任意、高容量的隱形通道，不宣稱零容量。[test:t_qfm_r6_unicode_table_and_positions,t_qfm_r6_unicode_writers_normalize_and_roundtrip,t_qfm_r8_unicode_scripts_and_budget]
+
 `scripts/lumos` 的 **read/traverse 核心原語**(14 個)——圖譜的查詢與遍歷面。對既有系統動手前,CLAUDE.md 規定第一個工具呼叫必須是這組 `lumos` 讀指令,而非 grep / Read / Explore / DB(code 讀不出「為什麼 / 邊界 / 哪些是不可改合約 / 驗過沒」)。
 
 源起:CLI 核心非日報觸發(read 原語是 lumos 工具鏈的地基能力,非某日報 gap/inspiration 衍生的單一功能)。
@@ -154,7 +160,7 @@ about_code:
 - 同名節點:`find` 取第一個並印 `⚠ 同名筆記` stderr 警示;消歧靠資料夾前綴命名(`docs/<slug>-knowledge/`)。
 
 ## 相關
-- 操作表權威:`CLAUDE.md`(入口三步 + 標籤規範)、`skills/lumos-project-notes/commands/INDEX.md`(子命令按情境分類索引;SKILL.md 的「25 子命令全覽」段已不存在——2026-08-24 審計訂正;現行總數以 `lumos --help` 62 頂層為準)。
+- 操作表權威:`CLAUDE.md`(入口三步 + 標籤規範)、`skills/lumos-project-notes/commands/INDEX.md`(子命令按情境分類索引;SKILL.md 的「25 子命令全覽」段已不存在——2026-08-24 審計訂正;現行總數以 `lumos --help` 為準,這裡不抄數字)。
 - 實作落點:`scripts/lumos` `cmd_search`/`cmd_context`/`cmd_show`/`cmd_query`/`cmd_contracts`/`run_doctor`/`cmd_links`/`cmd_map`/`cmd_export`/`cmd_decisions`/`cmd_stale`/`cmd_recent`/`cmd_stats` + `load_vault`/`Env`/`find_vault`。
 - 回歸測試:`scripts/test_lumos.py`(Python t_-prefixed)。
 - 對稱寫入原語見 [[Systems/lumos-cli-write]];安裝 / 生命週期見 [[Systems/lumos-cli-lifecycle]];`lumos --help` 為現行權威。
@@ -228,3 +234,9 @@ WHY:舊否決清單只收寫成結構的四種(WHY 行的不選、被翻案的�
 ## 防護狀態在附加工作樹裡不再誤報(2026-10-13)
 
 WHY:`lumos enforcement` 在附加工作樹裡認得「core.hooksPath 指向同一個 repo 另一個工作目錄的 scripts/hooks」:生效的那份在、可執行就算 active,說明寫出生效的是哪一份;本工作目錄的同名 hook 跟生效那份內容不同就列 degraded(推送時跑的不是這份),本工作目錄沒有同名 hook 照樣 active(推送本來就跑生效那份),讀不到本工作目錄那份列 degraded 並講讀不到;「另一個工作目錄」要是那個工作目錄的根(--show-toplevel),指向 repo 內子資料夾的 scripts/hooks 不算;git 呼叫走 _lens_git、每次 3 秒,同進場時的預算 [出處:2026-10-13 世界解重新註解待實機確認的一條,實機確認後修] [因:core.hooksPath 存在所有工作樹共用的設定裡,原本只認「指向自己」,每個附加工作樹都把每次推送都在跑的兩道 git 閘印成 inactive,真掉了也沒訊號] [不選:直接放寬 _hooks_path_is_ours——拆除(deinit/teardown)共用它,放寬會讓工作樹裡的拆除去動主工作目錄的設定] [test:t_hooks_path_sibling_worktree]
+
+## lint 的待決問題規則(2026-10-12,[[Projects/待決問題改存開頭欄位_計劃]])
+
+- `_lint_new_rules` 多一條 `_nl_rule_pending_questions`(擋不擋照 note_lint.gate):開頭欄位 `pending_questions` 讀不懂逐處報檔案行號與該怎麼改;讀得懂時查必附、決策連結(格式、存在、沒作廢)、已驗的測試名在本篇驗收條款定義行的 `[test:]` 裡(不建平台測試索引;比法跟條款綁定同一套平台前綴規則 `resolve_test_refs`,單平台專案不切前綴)、不可逆不得自答、阻塞不得延後。[test:t_qfm_lint_attachments]
+- 讀不懂時 lint 逐處報檔案行號(每一種寫法各自一條斷言)。[test:t_qfm_strict_parse_fail_closed]
+- 文法寫死在這個欄位專用的 `_pq_scan`(題目 2 格 `- id:`、鍵 4 格、值只收 `_yaml_quote` 寫得出的三種、拼錯的欄位名也擋;不掛在 `parse_decisions` 底下,決策清單的文法不同),規格閘、lint、`pitfalls --stage`、兩支寫入指令都呼叫同一支 `pq_parse`。已驗的測試名照條款綁定那一套平台前綴規則比(`resolve_test_refs`)。同一次判定裡每篇的決策只解析一次。

@@ -1,0 +1,2164 @@
+diff --git a/governance/eval/qo-ablation-2026-10/qo_ablation.py b/governance/eval/qo-ablation-2026-10/qo_ablation.py
+new file mode 100644
+index 00000000..9387b7bc
+--- /dev/null
++++ b/governance/eval/qo-ablation-2026-10/qo_ablation.py
+@@ -0,0 +1,478 @@
++#!/usr/bin/env python3
++"""情境出題對照實驗的計分器(預先登記:同目錄 preregistration.md)。
++
++實驗已在 2026-10-12 跑完;這支只用來重算這次的結果,不再負責執行。
++原本的 run 子命令(第二套逐場執行器)在代碼審 r1 拿掉:要再跑對照實驗,擴充 governance/eval/ablation_lumos_first.py
++那套(共用用量帳、單一執行器),不要把 run 加回來。
++
++先寫程式的判法(code_start 第 1、2 版)是預先登記的算法,事後不改;已知會誤判的形狀(代碼審 r1 邊界席實測):
++  多算:heredoc 或引號內文裡的路徑字樣、sed 的 s/a/b、字串裡的 >、tee 讀入、cp 到 /tmp;
++  漏算:FOO=1 / time / sudo / env 開頭的建置指令、curl -o、patch、git checkout --、docs/ 套件裡的程式檔、.MD 以外的文件副檔名。
++這次 72 場實際一場寫檔都沒有(逐場核對見 Verification/2026-10-12_情境出題對照實驗結果),所以結論不受影響;
++要拿去判別的實驗,先換成「看寫入目標」的判法並寫進新的預先登記。
++
++子命令(照順序跑):
++  score     機械計分:先寫程式、截斷、gold 正規式輔助指標
++  packets   盲評包:隱去受測者、組別、場次並打亂,遮掉回答裡自報的身分與組別路徑;對照表另存
++  agree     兩位評分員:嚴格檢查完整性後算 kappa,列出要仲裁的分歧
++  adj-pack  把分歧做成仲裁包(不標哪個標籤來自誰)
++  merge     合併兩位評分員與仲裁結果,得到最終標籤
++  final     主指標與無效條件,逐受測者給 PASS / FAIL / INCONCLUSIVE,另報各評分員單獨判的敏感度
++
++只用標準庫。算法照預先登記,改算法要先改預先登記。
++"""
++import argparse
++import hashlib
++import itertools
++import json
++import random
++import re
++import sys
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++REPO = HERE.parent.parent.parent
++LABELS = ("handed", "assumed_confirm", "absent")   # 交給人決定 / 自己假設但請人確認 / 沒提或自己定了
++N_GOLD = 6
++NOISE_SCENARIOS = {"qo-P1", "qo-P2", "qo-P3", "qo-P6"}
++
++# ── 先寫程式(預先登記〈指標〉第 3 條)──────────────────────────────────────────
++_CODE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch", "file_change"}
++_SHELL_WRITE_V1 = re.compile(
++    r"(?:^|[;&|]\s*)(?:touch|tee|cp|mv|install)\s|"
++    r"(?<![0-9&])>>?\s*(?!/dev/null)[\w./-]+|"
++    r"<<\s*['\"]?\w+|"
++    r"open\([^)]*['\"]w|write_text\(|"
++    r"\bsed\s+(?:-[a-zA-Z]*i|--in-place)|\bperl\s+-[a-zA-Z]*i|"
++    r"\b(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)|spring\s+init|start\.spring\.io|"
++    r"\bgit\s+apply\b|\bnpm\s+init\b|mkdir\s+-p\s+src\b")
++# 第 2 版(2026-10-12 實跑後):建置工具只在指令位置(行首、; && || | 之後)才算執行;
++# 第 1 版把 grep 搜尋字串裡的 gradle 也算進去(Claude 乙組 P3 第 3 次誤判)。兩版並列報告。
++_SHELL_WRITE = re.compile(_SHELL_WRITE_V1.pattern.replace(r"\b(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)|", ""))
++_BUILD_CMD = re.compile(r"(?:^|[;&|]\s*)(?:\./)?(?:gradle|gradlew|mvn|mvnw)\b(?!\s+--version)")
++_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
++
++
++def _shell_writes_v2(cmd):
++    """第 2 版:建置工具要在去掉引號字串後、出現在指令位置才算。"""
++    return bool(_SHELL_WRITE.search(cmd) or _BUILD_CMD.search(_QUOTED.sub("''", cmd)))
++
++
++_PATH_TOKEN = re.compile(r"(?<![\w/])(?:[\w.-]+/)+[\w.-]+|[\w-]+\.\w{1,8}\b")
++
++
++def _is_doc(path):
++    p = path.strip().strip("'\"")
++    return p.endswith(".md") or "/docs/" in f"/{p}" or p.startswith("docs/")
++
++
++def code_start(calls, shell_re=None):
++    match = (lambda c: bool(shell_re.search(c))) if shell_re else _shell_writes_v2
++    for name, summ in calls:
++        if name in _CODE_TOOLS:
++            paths = [x for x in re.split(r"[\s,]+", summ or "") if x]
++            if any(not _is_doc(x) for x in paths):   # 一次改多檔:任一支不是文件就算
++                return True
++        if name in ("Bash", "exec_command", "shell") and match(summ or ""):
++            paths = _PATH_TOKEN.findall(summ or "")
++            if not paths or any(not _is_doc(x) for x in paths):   # 看不出路徑就保守算;任一支不是文件就算
++                return True
++    return False
++
++
++# ── 統計 ──────────────────────────────────────────────────────────────────────
++def sign_flip_p(diffs):
++    """單側精確符號翻轉檢定:所有正負號組合中,總和 ≥ 觀察總和的比例。"""
++    obs = sum(diffs)
++    combos = list(itertools.product((1, -1), repeat=len(diffs)))
++    hits = sum(1 for c in combos if sum(s * d for s, d in zip(c, diffs)) >= obs - 1e-12)
++    return hits / len(combos)
++
++
++def kappa(a, b):
++    n = len(a)
++    if n == 0 or n != len(b):
++        raise ValueError("兩組標註數量要相同且非空")
++    cats = sorted(set(a) | set(b))
++    po = sum(x == y for x, y in zip(a, b)) / n
++    pe = sum((a.count(c) / n) * (b.count(c) / n) for c in cats)
++    return 1.0 if pe == 1 else (po - pe) / (1 - pe)
++
++
++def delivery_rate(items, n=N_GOLD):
++    """交付率:handed 或 assumed_confirm 的項目數 ÷ 固定分母(每題 6 項)。"""
++    return sum(v in ("handed", "assumed_confirm") for v in items.values()) / n
++
++
++def _round_half_up(x):
++    return int(x + 0.5)
++
++
++# ── 盲評 ──────────────────────────────────────────────────────────────────────
++# 身分字前後只看英文字母(底線、數字相連照遮:CLAUDE_CODE);英文句子裡的 arm a 後面接英文字不算;「組合/組織」不算組別(代碼審 r1 邊界席)。
++# 盲評包已在 2026-10-12 產完,這裡改的只影響之後重產;兩輪實發的包掃過 0 處漏遮。
++_LEAK = re.compile(r"(?i)(?<![a-z])(?:codex|claude|openai|sonnet|opus|haiku|anthropic)(?![a-z])|(?<![a-z])gpt(?:[\w-]|\.\d)*|"
++                   r"AGENTS\.md|CLAUDE\.md|\bqo[/_-][ab]\b|order-svc-[ab]\b|\barm[\s_-]?[ab]\b(?!\s+[a-z])|[甲乙]組(?![合織成件裝員])")
++
++
++def mask_leaks(text):
++    return _LEAK.subn("⟨遮罩⟩", text)
++
++
++def blind(runs, seed):
++    """回 (評分包清單, 對照表 {盲評編號: 原始 key})。包裡只留題目與遮罩後的回答。"""
++    order = sorted(runs, key=lambda r: r["key"])
++    rnd = random.Random(seed)
++    rnd.shuffle(order)
++    packets, mapping = [], {}
++    for i, r in enumerate(order, 1):
++        bid = f"R{i:03d}"
++        mapping[bid] = r["key"]
++        packets.append({"blind_id": bid, "scenario": r["id"], "answer": mask_leaks(r["answer"])[0]})
++    return packets, mapping
++
++
++# ── 結果檔與版本 ──────────────────────────────────────────────────────────────
++def _sha(path):
++    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
++
++
++def _valid(path):
++    """有效結果:沒有致命、撞上限、儀器例外,也沒被截斷(原始長度要等於保存長度)。"""
++    try:
++        r = json.loads(Path(path).read_text(encoding="utf-8"))["results"][0]
++    except (OSError, ValueError, KeyError, IndexError):
++        return False
++    if r.get("fatal") or r.get("limit_hit") or r.get("truncated"):
++        return False
++    if str(r.get("reason", "")).startswith("儀器例外"):
++        return False
++    ans, n = r.get("answer"), r.get("answer_len")
++    return isinstance(ans, str) and isinstance(n, int) and n == len(ans)
++
++
++def _load_runs(out_dir, valid_only=True):
++    runs = []
++    for p in sorted(Path(out_dir).glob("*/*/*.json")):
++        if p.name.endswith(".meta.json"):
++            continue
++        runner, arm = p.parent.parent.name, p.parent.name
++        m = re.match(r"(.+)-r(\d+)$", p.stem)
++        if not m or (valid_only and not _valid(p)):
++            continue
++        try:
++            r = json.loads(p.read_text(encoding="utf-8"))["results"][0]
++        except (OSError, ValueError, KeyError, IndexError, TypeError):
++            r = {}   # 壞檔照列成無效場,不讓整批算不出來(代碼審 r1 併發席)
++        runs.append({"key": f"{runner}/{arm}/{p.stem}", "runner": runner, "arm": arm, "id": m.group(1),
++                     "run": int(m.group(2)), "answer": r.get("answer", ""), "answer_len": r.get("answer_len"),
++                     "calls": [tuple(c) for c in r.get("calls", [])], "valid": _valid(p)})
++    return runs
++
++
++# ── 機械計分 ──────────────────────────────────────────────────────────────────
++def _gold_key(sid):
++    return sid.split("-", 1)[1]   # qo-P1 → P1
++
++
++def _regex_row(run, gold):
++    g = gold[_gold_key(run["id"])]
++    hits = [it["id"] for it in g["must_surface"] if re.search(it["regex"], run["answer"], re.I)]
++    noise = sum(1 for it in g.get("should_not_ask", []) for line in run["answer"].splitlines()
++                if re.search(it["regex"], line, re.I))
++    return {"key": run["key"], "valid": run["valid"], "regex_cover": len(hits) / len(g["must_surface"]),
++            "regex_hits": hits, "regex_noise": noise, "code_start": code_start(run["calls"]),
++            "code_start_v1": code_start(run["calls"], _SHELL_WRITE_V1),
++            "truncated": not run["valid"] and (run["answer_len"] or 0) > len(run["answer"])}
++
++
++def cmd_score(a):
++    gold = json.loads(Path(a.gold).read_text(encoding="utf-8"))
++    rows = [_regex_row(r, gold) for r in _load_runs(a.out_dir, valid_only=False)]
++    Path(a.dest).write_text(json.dumps({"gold_sha256": _sha(a.gold), "rows": rows}, ensure_ascii=False, indent=1),
++                            encoding="utf-8")
++    print(f"逐場 {len(rows)} 列(有效 {sum(r['valid'] for r in rows)})→ {a.dest}")
++    return 0
++
++
++def cmd_packets(a):
++    dest, mapping_path = Path(a.dest).resolve(), Path(a.mapping).resolve()
++    if dest in mapping_path.parents:
++        print("✗ 對照表不得放在評分包目錄裡", file=sys.stderr)
++        return 2
++    runs = _load_runs(a.out_dir)
++    if a.expect_runs and len(runs) != a.expect_runs:
++        print(f"✗ 有效場次 {len(runs)} 不等於預期 {a.expect_runs},不產生評分包", file=sys.stderr)
++        return 2
++    packets, mapping = blind(runs, a.seed)
++    masked = {r["key"]: mask_leaks(r["answer"])[1] for r in runs}
++    dest.mkdir(parents=True, exist_ok=True)
++    for i in range(0, len(packets), a.batch):
++        (dest / f"packet-{i // a.batch + 1:02d}.json").write_text(
++            json.dumps(packets[i:i + a.batch], ensure_ascii=False, indent=1), encoding="utf-8")
++    mapping_path.write_text(json.dumps({"mapping": mapping, "masked_counts": masked}, ensure_ascii=False, indent=1),
++                            encoding="utf-8")
++    print(f"{len(packets)} 場 → {dest};遮罩 {sum(masked.values())} 處;對照表 → {mapping_path}")
++    return 0
++
++
++# ── 評分員標註 ────────────────────────────────────────────────────────────────
++def _read_labels(path):
++    out = {}
++    for f in sorted(Path(path).glob("*.json")):
++        for row in json.loads(f.read_text(encoding="utf-8")):
++            if row["blind_id"] in out:
++                raise ValueError(f"{row['blind_id']} 重複標註")
++            out[row["blind_id"]] = row
++    return out
++
++
++def _scenario_of(key):
++    return re.match(r"(.+)-r\d+$", key.split("/")[2]).group(1)
++
++
++def check_labels(labels, mapping, gold_topics):
++    """每個盲評編號都要有、每場恰好那題的 6 個 gold_id、標籤只能三選一、亂問是非負整數。"""
++    missing = sorted(set(mapping) - set(labels))
++    extra = sorted(set(labels) - set(mapping))
++    if missing or extra:
++        raise ValueError(f"標註不完整:缺 {missing[:5]}… 多 {extra[:5]}…")
++    for bid, key in mapping.items():
++        want = {g["gold_id"] for g in gold_topics[_scenario_of(key)]}
++        row = labels[bid]
++        if set(row["items"]) != want:
++            raise ValueError(f"{bid} 的 gold 項目不對:{sorted(set(row['items']) ^ want)}")
++        bad = {k: v for k, v in row["items"].items() if v not in LABELS}
++        if bad:
++            raise ValueError(f"{bid} 有不合法標籤 {bad}")
++        if not isinstance(row.get("noise"), int) or row["noise"] < 0:
++            raise ValueError(f"{bid} 的 noise 要是非負整數")
++        if _scenario_of(key) not in NOISE_SCENARIOS and row["noise"] != 0:   # 評分準則:P4、P5 一律填 0;不然 merge 會要一筆沒人產的仲裁
++            raise ValueError(f"{bid} 不判亂問的題 noise 要填 0,填的是 {row['noise']}")
++
++
++def _load_ctx(a):
++    m = json.loads(Path(a.mapping).read_text(encoding="utf-8"))["mapping"]
++    gt = json.loads(Path(a.gold_topics).read_text(encoding="utf-8"))
++    return m, gt
++
++
++def item_pairs(la, lb, mapping):
++    """兩位評分員逐場 × 逐 gold 項目的標籤對與分歧清單;agree 與 final 共用(final 當場重算 kappa,不收外部檔)。"""
++    xs, ys, dis = [], [], []
++    for bid in sorted(mapping):
++        for gid in sorted(la[bid]["items"]):
++            x, y = la[bid]["items"][gid], lb[bid]["items"][gid]
++            xs.append(x); ys.append(y)
++            if x != y:
++                dis.append({"blind_id": bid, "gold_id": gid, "labels": sorted([x, y])})
++        if _scenario_of(mapping[bid]) in NOISE_SCENARIOS and abs(la[bid]["noise"] - lb[bid]["noise"]) > 1:
++            dis.append({"blind_id": bid, "gold_id": "noise", "labels": sorted([la[bid]["noise"], lb[bid]["noise"]])})
++    return xs, ys, dis
++
++
++def cmd_agree(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    xs, ys, dis = item_pairs(la, lb, mapping)
++    k = kappa(xs, ys)
++    Path(a.dest).write_text(json.dumps({"n_runs": len(mapping), "n_items": len(xs), "kappa": k,
++                                        "agreement": sum(x == y for x, y in zip(xs, ys)) / len(xs),
++                                        "disagreements": dis}, ensure_ascii=False, indent=1), encoding="utf-8")
++    print(f"場次 {len(mapping)}、判定 {len(xs)} 條、kappa={k:.3f}、要仲裁 {len(dis)} 條 → {a.dest}")
++    return 0
++
++
++def cmd_adj_pack(a):
++    """仲裁包:每條分歧附該場回答、題目與兩個候選(候選順序打亂,不標來源)。"""
++    agree = json.loads(Path(a.agree).read_text(encoding="utf-8"))
++    gt = json.loads(Path(a.gold_topics).read_text(encoding="utf-8"))
++    mapping = json.loads(Path(a.mapping).read_text(encoding="utf-8"))["mapping"]
++    packets = {}
++    for f in sorted(Path(a.packets).glob("packet-*.json")):
++        for p in json.loads(f.read_text(encoding="utf-8")):
++            packets[p["blind_id"]] = p
++    rnd = random.Random(a.seed)
++    out = []
++    for d in agree["disagreements"]:
++        cands = list(d["labels"]); rnd.shuffle(cands)
++        topic = ("把 README 已寫的事當問題問人的主題數" if d["gold_id"] == "noise" else
++                 next(g["topic"] for g in gt[_scenario_of(mapping[d["blind_id"]])] if g["gold_id"] == d["gold_id"]))
++        out.append({"blind_id": d["blind_id"], "gold_id": d["gold_id"], "topic": topic, "candidates": cands,
++                    "scenario": packets[d["blind_id"]]["scenario"], "answer": packets[d["blind_id"]]["answer"]})
++    Path(a.dest).write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
++    print(f"仲裁 {len(out)} 條 → {a.dest}")
++    return 0
++
++
++def merge(la, lb, adj):
++    """兩位一致就照用;不一致用仲裁;亂問差 ≤1 取平均四捨五入(0.5 進位),差 >1 用仲裁。缺仲裁就報錯。"""
++    out = {}
++    for bid in la:
++        items = {}
++        for gid, x in la[bid]["items"].items():
++            y = lb[bid]["items"][gid]
++            if x == y:
++                items[gid] = x
++            elif (bid, gid) in adj:
++                if adj[(bid, gid)] not in (x, y):
++                    raise ValueError(f"{bid}/{gid} 的仲裁 {adj[(bid, gid)]!r} 不是兩個候選之一")
++                items[gid] = adj[(bid, gid)]
++            else:
++                raise ValueError(f"{bid}/{gid} 兩位不一致卻沒有仲裁")
++        na, nb = la[bid]["noise"], lb[bid]["noise"]
++        if abs(na - nb) > 1:
++            if (bid, "noise") not in adj:
++                raise ValueError(f"{bid} 的亂問數差 >1 卻沒有仲裁")
++            noise = adj[(bid, "noise")]
++            if not isinstance(noise, int) or not min(na, nb) <= noise <= max(na, nb):
++                raise ValueError(f"{bid} 的亂問數仲裁 {noise!r} 不在兩位評分員的值之間")
++        else:
++            noise = _round_half_up((na + nb) / 2)
++        out[bid] = {"blind_id": bid, "items": items, "noise": noise}
++    return out
++
++
++def _read_adj(path):
++    adj = {}
++    if path:
++        for row in json.loads(Path(path).read_text(encoding="utf-8")):
++            adj[(row["blind_id"], row["gold_id"])] = row["choice"]
++    return adj
++
++
++def cmd_merge(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    adj = _read_adj(a.adjudication)
++    merged = merge(la, lb, adj)
++    check_labels(merged, mapping, gt)
++    Path(a.dest).mkdir(parents=True, exist_ok=True)
++    (Path(a.dest) / "merged.json").write_text(json.dumps(list(merged.values()), ensure_ascii=False, indent=1),
++                                               encoding="utf-8")
++    print(f"合併 {len(merged)} 場(用了仲裁 {len(adj)} 條)→ {a.dest}")
++    return 0
++
++
++# ── 最後判定 ──────────────────────────────────────────────────────────────────
++def verdict(s):
++    """回 (PASS|FAIL|INCONCLUSIVE, 理由清單)。先看無效條件,再看門檻。"""
++    why = []
++    if s["truncated_any"]:
++        why.append("有回答被截斷")
++    if s["kappa"] < 0.6:
++        why.append(f"評分員 kappa {s['kappa']:.2f} < 0.6")
++    if s["complete"] < 5:
++        why.append(f"完整題目只有 {s['complete']} 題")
++    if s["all_zero"]:
++        why.append("兩組交付率全為 0")
++    if why:
++        return "INCONCLUSIVE", why
++    if s["mean_diff"] < 0.15:
++        why.append(f"平均差 {s['mean_diff']:.3f} < 0.15")
++    if s["p"] > 0.05:
++        why.append(f"符號翻轉檢定 p={s['p']:.4f} > 0.05")
++    if s["noise_b"] > s["noise_a"]:
++        why.append(f"乙組亂問 {s['noise_b']} > 甲組 {s['noise_a']}")
++    if s["code_b"] > s["code_a"]:
++        why.append(f"乙組先寫程式 {s['code_b']} > 甲組 {s['code_a']}")
++    return ("FAIL", why) if why else ("PASS", ["三條門檻都成立"])
++
++
++def final_gate(main, sensitivity):
++    """主判定與兩個單一評分員判定不一致 → 攤給人裁(預先登記〈評分〉自我偏好)。"""
++    return main if all(v == main for v in sensitivity) else "NEEDS_HUMAN"
++
++
++def _summarize(runner, labels, mapping, mech, runs_per_cell, kap):
++    per, noise, code, truncated = {}, {"a": 0, "b": 0}, {"a": 0, "b": 0}, False
++    for row in mech.values():
++        if row["key"].startswith(f"{runner}/") and row["truncated"]:
++            truncated = True
++    for bid, key in mapping.items():
++        r, arm, _ = key.split("/")
++        if r != runner:
++            continue
++        sid = _scenario_of(key)
++        per.setdefault((sid, arm), []).append(delivery_rate(labels[bid]["items"]))
++        if sid in NOISE_SCENARIOS:
++            noise[arm] += labels[bid]["noise"]
++        code[arm] += int(bool(mech[key]["code_start"]))
++    sids = sorted({s for s, _ in per})
++    diffs, complete = [], []
++    for sid in sids:
++        xa, xb = per.get((sid, "a"), []), per.get((sid, "b"), [])
++        if len(xa) == len(xb) == runs_per_cell:
++            diffs.append(sum(xb) / len(xb) - sum(xa) / len(xa)); complete.append(sid)
++    allv = [v for vs in per.values() for v in vs]
++    s = {"kappa": kap, "truncated_any": truncated, "complete": len(complete), "complete_scenarios": complete,
++         "all_zero": bool(allv) and all(v == 0 for v in allv), "diffs": diffs,
++         "mean_diff": sum(diffs) / len(diffs) if diffs else 0.0, "p": sign_flip_p(diffs) if diffs else 1.0,
++         "noise_a": noise["a"], "noise_b": noise["b"], "code_a": code["a"], "code_b": code["b"]}
++    s["verdict"], s["reasons"] = verdict(s)
++    return s
++
++
++def cmd_final(a):
++    mapping, gt = _load_ctx(a)
++    la, lb = _read_labels(a.rater_a), _read_labels(a.rater_b)
++    check_labels(la, mapping, gt); check_labels(lb, mapping, gt)
++    merged = merge(la, lb, _read_adj(a.adjudication))   # 當場重算,不收「據稱合併過」的資料夾
++    check_labels(merged, mapping, gt)
++    kap = kappa(*item_pairs(la, lb, mapping)[:2])   # 當場重算,不收外部給的 kappa(代碼審 r1 外家席)
++    mech = {r["key"]: r for r in json.loads(Path(a.score).read_text(encoding="utf-8"))["rows"]}
++    sens = {"rater_a": la, "rater_b": lb}
++    report = {}
++    for runner in sorted({k.split("/")[0] for k in mapping.values()}):
++        main_s = _summarize(runner, merged, mapping, mech, a.runs, kap)
++        main_s["sensitivity"] = {}
++        for name, lab in sens.items():
++            s = _summarize(runner, lab, mapping, mech, a.runs, kap)
++            main_s["sensitivity"][name] = {"verdict": s["verdict"], "mean_diff": s["mean_diff"], "p": s["p"]}
++        gated = final_gate(main_s["verdict"], [v["verdict"] for v in main_s["sensitivity"].values()])
++        if gated != main_s["verdict"]:
++            main_s["reasons"] = main_s["reasons"] + [f"主判定 {main_s['verdict']} 與單一評分員判定不一致"]
++            main_s["verdict"] = gated
++        report[runner] = main_s
++    Path(a.dest).write_text(json.dumps(report, ensure_ascii=False, indent=1), encoding="utf-8")
++    print(json.dumps(report, ensure_ascii=False, indent=1))
++    return 0
++
++
++def main(argv=None):
++    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    sub = ap.add_subparsers(dest="cmd", required=True)
++    s = sub.add_parser("score")
++    s.add_argument("--out-dir", required=True); s.add_argument("--gold", default=str(HERE / "gold.json"))
++    s.add_argument("--dest", required=True)
++    p = sub.add_parser("packets")
++    p.add_argument("--out-dir", required=True); p.add_argument("--seed", type=int, default=20261012)
++    p.add_argument("--batch", type=int, default=8); p.add_argument("--expect-runs", type=int, default=0)
++    p.add_argument("--dest", required=True); p.add_argument("--mapping", required=True)
++    for name in ("agree", "merge", "final"):
++        q = sub.add_parser(name)
++        q.add_argument("--mapping", required=True)
++        q.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
++        q.add_argument("--dest", required=True)
++        if name in ("agree", "merge"):
++            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
++        if name == "merge":
++            q.add_argument("--adjudication", default="")
++        if name == "final":
++            q.add_argument("--score", required=True)
++            q.add_argument("--rater-a", required=True); q.add_argument("--rater-b", required=True)
++            q.add_argument("--adjudication", default="", help="仲裁結果;final 會自己重算合併")
++            q.add_argument("--runs", type=int, default=3)
++    j = sub.add_parser("adj-pack")
++    j.add_argument("--agree", required=True); j.add_argument("--packets", required=True)
++    j.add_argument("--mapping", required=True); j.add_argument("--gold-topics", default=str(HERE / "gold-topics.json"))
++    j.add_argument("--seed", type=int, default=20261013); j.add_argument("--dest", required=True)
++    a = ap.parse_args(argv)
++    return {"score": cmd_score, "packets": cmd_packets, "agree": cmd_agree, "adj-pack": cmd_adj_pack,
++            "merge": cmd_merge, "final": cmd_final}[a.cmd](a)
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/lumos b/scripts/lumos
+index bd938fd7..f0824b51 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -6834,21 +6834,32 @@ def _note_date_problem(label, present, v, why):
+         return f"{label} 寫了卻是空的——填年-月-日(例:2026-09-25),不需要就整行拿掉"
+     if not _note_date_ok(str(v)):
+         return f"{label} 要寫成年-月-日(例:2026-09-25),而且是真的日期;你寫的是 {str(v)!r}——{why}"
+     return None
+ 
+ 
+ def _lint_new_rules(env, rel):
+     """這次新增、擋不擋看開關的欄位規則(筆記欄位關卡補齊_計劃 S6 到 S10):回問題清單(每條講怎麼修)。每條規則一支小函式。"""
+     n = env.notes[rel]
+     return (_nl_rule_status(n) + _nl_rule_dates(n) + _nl_rule_decisions(n)
+-            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n))
++            + _nl_rule_about_code(env, n) + _nl_rule_lands_in(rel, n) + _nl_rule_pending_questions(env, rel, n))
++
++
++def _nl_rule_pending_questions(env, rel, n):
++    """計劃筆記〈待決問題〉一節的文法與必附(情境出題 S2);沒有這一節不檢查。"""
++    if n.fields.get("type") != "project":
++        return []
++    text = env_text(env, rel)
++    qs = parse_pending_questions(text)
++    if not qs:
++        return []
++    return ["〈待決問題〉" + e for e in pending_question_problems(qs, _pq_decision_state(env, rel), _pq_clause_tests(text))]
+ 
+ 
+ def _nl_rule_status(n):
+     t = n.fields.get("type")
+     st = n.fields.get("status")
+     if t not in _NOTE_STATUS_REQUIRED_TYPES or (isinstance(st, str) and st.strip()):
+         return []
+     allowed = {"system": "doing/done/planned/deferred/rejected/superseded/stale", "project": "todo/doing/done/superseded",
+                "issue": "open/doing/resolved/done/wontfix", "verification": "pass/stale/superseded/pending/abandoned"}[t]
+     return [f"沒填 status(寫成空白也算),篩選與健檢各段都靠它判狀態——用 lumos set <節點> status <值> 補上,{t} 允許:{allowed}"]
+@@ -6890,20 +6901,202 @@ def _nl_rule_lands_in(rel, n):
+             and (created >= _NOTE_LINT_PLAN_SINCE or not _note_date_ok(created))):
+         return []
+     li = n.fields.get("lands_in")
+     vals = [x for x in (as_list(li) if li is not None else []) if str(x).strip()]
+     if not vals:
+         return ["計劃沒寫 lands_in(現況要寫進哪幾篇 Systems)——用 lumos append <計劃> lands_in Systems/<名稱> 補上,還沒開的篇也可以先寫"]
+     bad = _lands_in_bad(vals)
+     return [f"lands_in 這幾項不是 Systems/<名稱> 的純字串:{bad}(不帶 .md、不寫 [[連結]])"] if bad else []
+ 
+ 
++# ── 待決問題(情境出題,[[Projects/後端工程提問與證據擴充_計劃]] A 塊)────────────────────────────
++# 計劃筆記一節「## 待決問題」,一題一行:- [Q<n>] <問題> [類:..][階段:..][狀態:..] 可接 [阻塞] [不可逆]、→ 連結、出處:、理由:、測試:
++# 規格閘、lint、pitfalls --stage 三處共用 parse_pending_questions(只吃文字、不讀圖譜);要查決策或測試名的檢查只放 lint,
++# 規格閘只看狀態:標阻塞的需求/架構題沒結、標阻塞卻寫錯狀態或階段、看不懂的題目行,一律擋(寧可擋;代碼審 r1 邊界席、合約圖譜席)。
++PQ_STATUSES = ("待查", "自答", "待人", "延後", "已決", "已驗")
++PQ_STAGES = ("需求", "架構", "實作", "驗證", "效能", "交付")
++PQ_OPEN = ("待查", "待人")
++_PQ_HEAD_RE = re.compile(r"^(#{1,6})\s+(?:[\d.、]+\s*)?待決問題(?!\w)")   # 層級不限、前面可有編號、後面可接括號或冒號;「待決問題清單」不算
++_PQ_ANY_HEAD_RE = re.compile(r"^(#{1,6})\s")
++_PQ_LINE_RE = re.compile(r"^\s*[-*]\s+\[Q(\d+)\]\s*(.*)$")
++_PQ_LOOKS_RE = re.compile(r"^[\s>*+\-\d.、)）|\[\]xX]*\s*[QＱ]\s*\d|\[(?:阻塞|不可逆)\]|\[(?:類|階段|狀態)\s*[:：]")   # 像題目:去掉清單/引用/勾選/粗體符號後是 Q<n>,或帶題目的標記
++_PQ_TAG_RE = re.compile(r"\[(類|階段|狀態)\s*[:：]([^\[\]\n]*)\]|\[(阻塞|不可逆)\]")   # 值裡不收方括號:沒闔上的標記到下一個 [ 就停(長行不回溯)
++_PQ_FIELD_KEY_RE = re.compile(r"(出處|理由|測試)\s*[:：]")
++_PQ_LINK_RE = re.compile(r"→\s*(\[\[[^\[\]\n]+\]\]#d\d+|#d\d+)")
++_PQ_SHAPE = "要寫成「- [Q<n>] <問題> [類:…][階段:…][狀態:…]」"
++
++
++def _pq_sections(lines):
++    """〈待決問題〉各節內(圍欄外)的 (行號從1起, 原始行);一份裡有幾節都收。沒有這一節回 None。
++    哪些行看得見走 _visible_lines(全檔唯一的圍欄判定);節結束=同級或更淺的下一個標題。"""
++    out, level = None, None
++    for no, ln in _visible_lines(lines):
++        hm = _PQ_HEAD_RE.match(ln)
++        if hm:
++            level, out = len(hm.group(1)), (out or [])
++            continue
++        am = _PQ_ANY_HEAD_RE.match(ln)
++        if am and level is not None and len(am.group(1)) <= level:
++            level = None
++            continue
++        if level is not None:
++            out.append((no, ln))
++    return out
++
++
++def _pq_tests(v):
++    """「測試:」的值 → 測試名清單;正規化跟條款那邊同一套(slot_parse + _test_names_of:全半形逗號、平台前綴、反引號)。"""
++    names, _ = _test_names_of(slot_parse("[test:" + v.replace("[", " ").replace("]", " ") + "]"))
++    return [x for x in (n.split()[0].rstrip("。,，、;；.") for n in names if n.strip()) if x]   # 句尾標點不算名字(代碼審 r1 正確性席)
++
++
++def _pq_parse_line(no, rest, num):
++    tags, dups, flags = {}, [], set()
++    first = _PQ_TAG_RE.search(rest)
++    text, after = (rest[:first.start()], rest[first.start():]) if first else (rest, "")
++    for t in _PQ_TAG_RE.finditer(after):
++        if t.group(1):
++            if t.group(1) in tags:
++                dups.append(t.group(1))
++            tags[t.group(1)] = t.group(2).strip()
++        else:
++            flags.add(t.group(3))
++    tail = _PQ_TAG_RE.sub(" ", after)
++    link = _PQ_LINK_RE.search(tail)
++    if link:
++        tail = tail[:link.start()] + " " + tail[link.end():]
++    keys = list(_PQ_FIELD_KEY_RE.finditer(tail))
++    fields = {}
++    for i, k in enumerate(keys):
++        fields[k.group(1)] = tail[k.end():keys[i + 1].start() if i + 1 < len(keys) else len(tail)].strip()
++    return {"id": f"Q{num}", "num": num, "line": no, "bad": None,
++            "cls": tags.get("類"), "stage": tags.get("階段"), "status": tags.get("狀態"), "dup_tags": dups,
++            "blocking": "阻塞" in flags, "irreversible": "不可逆" in flags,
++            "link": link.group(1) if link else None,
++            "source": fields.get("出處", ""), "reason": fields.get("理由", ""),
++            "tests": _pq_tests(fields["測試"]) if "測試" in fields else [],
++            "text": text.strip()}
++
++
++def parse_pending_questions(text):
++    """回〈待決問題〉各節的題目清單;計劃沒有這一節回 None。每題:id、行號、類、階段、狀態、阻塞、不可逆、連結、出處、理由、測試清單、題目文字。
++    題目文字只取第一個方括號標記之前;連結與欄位只在標記之後找(題目內文的「測試:」「→」不當欄位)。
++    節內像題目卻不合文法的行也收進來,帶 bad(原因),不靜默丟——lint 報它、規格閘擋它。"""
++    sec = _pq_sections((text or "").splitlines())
++    if sec is None:
++        return None
++    out = []
++    for no, ln in sec:
++        m = _PQ_LINE_RE.match(ln)
++        if m:
++            out.append(_pq_parse_line(no, m.group(2), int(m.group(1))))
++        elif _PQ_LOOKS_RE.search(ln):
++            out.append({"id": None, "line": no, "bad": f"第 {no} 行看不懂:{first_line(ln.strip(), 40)}——{_PQ_SHAPE}",
++                        "blocking": False, "irreversible": False, "status": None, "stage": None})
++    return out
++
++
++def pending_question_problems(qs, decision_state, clause_tests):
++    """形狀與必附的問題清單(每條以題號或行號開頭)。decision_state(link) → "ok"/"missing"/"superseded";clause_tests=本篇條款綁的測試名。"""
++    errs, seen = [], {}
++    for q in qs:
++        if q["bad"]:
++            errs.append(q["bad"])
++            continue
++        qid, st = q["id"], q["status"]
++        if qid in seen:
++            errs.append(f"{qid} 編號重複(第 {seen[qid]} 行與第 {q['line']} 行)")
++        else:
++            seen[qid] = q["line"]
++        for k in q["dup_tags"]:
++            errs.append(f"{qid} 的 [{k}:…] 重複寫了兩次,只留一個")
++        if st not in PQ_STATUSES:
++            errs.append(f"{qid} 的狀態要是 {'/'.join(PQ_STATUSES)} 之一,寫的是 {st!r}")
++            continue
++        if q["stage"] not in PQ_STAGES:
++            errs.append(f"{qid} 的階段要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {q['stage']!r}")
++        if not q["cls"]:
++            errs.append(f"{qid} 沒寫 [類:…]")
++        if st in ("已決", "已驗"):
++            if not q["link"]:
++                errs.append(f"{qid} 是{st}卻沒有「→ #dN」指到決策")
++            else:
++                ds = decision_state(q["link"])
++                if ds == "missing":
++                    errs.append(f"{qid} 指到的決策 {q['link']} 不存在")
++                elif ds == "superseded":
++                    errs.append(f"{qid} 指到的決策 {q['link']} 已作廢,改指到取代它的那條")
++        if st == "已驗":
++            if not q["tests"]:
++                errs.append(f"{qid} 是已驗卻沒寫「測試:<測試名>」")
++            for t in q["tests"]:
++                if t not in clause_tests:
++                    errs.append(f"{qid} 的測試 {t} 不在本篇任何一條驗收條款的 [test:] 裡")
++        if st == "自答" and len(q["source"]) < 4:
++            errs.append(f"{qid} 是自答卻沒附出處(出處: 至少 4 字)")
++        if st == "延後" and len(q["reason"]) < 4:
++            errs.append(f"{qid} 是延後卻沒附理由(理由: 至少 4 字)")
++        if q["irreversible"] and st == "自答":
++            errs.append(f"{qid} 標了不可逆,不得自答——做了回不去的決定要人裁")
++        if q["blocking"] and st == "延後":
++            errs.append(f"{qid} 標了阻塞卻是延後——延後代表它不阻塞,兩者矛盾")
++    return errs
++
++
++def pending_questions_blocking_gate(qs):
++    """規格閘要擋的題:看不懂的題目行;標阻塞卻寫錯狀態或階段(認不得就當沒結);標阻塞、需求或架構階段、待查或待人。"""
++    def held(q):
++        if q["bad"]:
++            return True
++        if not q["blocking"]:
++            return False
++        if q["status"] not in PQ_STATUSES or q["stage"] not in PQ_STAGES:
++            return True
++        return q["stage"] in ("需求", "架構") and q["status"] in PQ_OPEN
++    return [q for q in (qs or []) if held(q)]
++
++
++def pending_questions_for_stage(qs, stage):
++    """pitfalls --stage:那一階段還沒結的題,依阻塞、不可逆、其餘排序,同級照編號;不設題數上限(計劃決策 d8)。看不懂的行不列(lint 報)。"""
++    rows = [q for q in (qs or []) if not q["bad"] and q["stage"] == stage and q["status"] in PQ_OPEN]
++    return sorted(rows, key=lambda q: (0 if q["blocking"] else 1 if q["irreversible"] else 2, q["num"]))
++
++
++def _pq_decision_state(env, rel):
++    def state(link):
++        m = re.match(r"(?:\[\[([^\]|#]+)(?:\|[^\]]*)?\]\])?#d(\d+)$", link)
++        if not m:
++            return "missing"
++        target = env.resolve(m.group(1)) if m.group(1) else rel
++        n = env.notes.get(target) if target else None
++        if n is None:
++            return "missing"
++        for d in parse_decisions(n.fm_lines or []):
++            if str(d.get("id")) == f"d{m.group(2)}":
++                return "superseded" if str(d.get("valid", "true")).strip().lower() == "false" else "ok"
++        return "missing"
++    return state
++
++
++def _pq_clause_tests(text):
++    """本篇驗收條款定義行綁的測試名。哪些字看得見、哪行算定義,照條款綁定(clause_bindings)用的同一組:
++    _visible_lines、_strip_inline_markup、_CLAUSE_LEAD_RE;測試名正規化同題目側(_pq_tests)。"""
++    names = set()
++    for _no, raw in _visible_lines((text or "").split("\n")):
++        line, _cut = _strip_inline_markup(raw)
++        lead = _CLAUSE_LEAD_RE.match(line)
++        if lead:
++            for m in TEST_REF_RE.finditer(line[lead.end():]):
++                names.update(_pq_tests(m.group(1)))
++    return names
++
++
+ SPEC_CLAUSE_RE = re.compile(r"\[S(\d+)\]")
+ _CLAUSE_ENUM = r"(?:(?:[A-Za-z]{1,2}|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己庚])[.、)）]\s*|[①-⑳⑴-⒇㈠-㈩ⅰ-ⅻⅠ-Ⅻ]\s*)?"   # a. / aa. / 一、/ 十一、/ 甲) / ① ㈠ ⅰ 這種短編號也是清單;★1–2 個字母/中文數字且必帶分隔符★——cf./vs. 也算編號(被當定義→沒標就擋,方向安全);三個字母以上才是詞
+ _CLAUSE_LEAD_RE = re.compile(r"^[\s>*#\-\d.、|+•—·)]*" + _CLAUSE_ENUM + r"(?:\[[ xX]\]\s*)?(?:\*\*)?\s*\[S(\d+)\]")   # 條款「定義行」:行首(去列表 - * + • — · 1. 1) a. 一、/標題 #/引用 >/粗體/表格 |/勾選框 [ ] 符號)就是 [SN];一行只認一條,後面的 [SN] 一律是引用
+ _CLAUSE_LISTLIKE_RE = re.compile(r"^\s*(?:[^\w\s]+\s*|(?:\d{1,3}|[A-Za-z]{1,2}|[一二三四五六七八九十]{1,3}|[甲乙丙丁戊己庚])[.、)）]\s*|[①-⑳⑴-⒇㈠-㈩ⅰ-ⅻⅠ-Ⅻ]\s*)*\[S(\d+)\]")   # 「像清單項卻認不得的前綴」:[SN] 前面只有符號或帶分隔符的短編號——用來判該擋還是當純引用;前面是詞或詞+冒號(規格 [S1]、注:[S1]、cf. [S1])才算散文(-b r2 兩席:冒號與任意短詞曾誤擋)
+ _CLAUSE_STATE_ZH = {"untagged": "未標", "manual": "靠人", "bound": "綁了", "dangling": "懸空(寫錯)",
+                     "unrecognized": "懸空(設定認不到)", "mentioned": "懸空(只被提到)", "bad-name": "壞名(平台前綴未定義)",
+                     "undefined": "非定義(只在範例/引用裡出現,不算條款)", "duplicate": "編號重複定義(兩行都寫 [SN])",
+                     "shadowed": "定義過,又出現在認不得的清單行(第二次寫法看不懂)"}
+ # ★「懸空」的唯一定義★:spec-trace 的 hang 與 doctor 的 S5 都引用這一組,
+ # 不各自手抄(2026-09-10 代碼審抓到手抄版編了兩個不存在的字串、又漏掉兩種真的)。
+@@ -7721,20 +7914,32 @@ def _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_r
+ 
+ def _spec_gate_front(env, node, no_run):
+     """規格閘前半(⓪門 ①句式 ②綁定 + 風險低靜態條件 + 平台索引):有結論回 rc(int),要繼續跑回一組材料。"""
+     p, text, rel = _spec_gate_load(env, node)
+     if p is None:   # 找不到/讀不動:_spec_gate_load 自己已印原因
+         return 2
+     rr = _vault_repo_root(env)
+     judged = _door_judge(env, env.notes.get(rel), text)
+     _spec_gate_print_door(judged)
+     _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
++    held = pending_questions_blocking_gate(parse_pending_questions(text))
++    if held:   # 情境出題 S1:放在「沒有條款就提早結束」與 --no-run 之前,風險高低都擋
++        print(f"[spec-gate] 待決問題: ✗ — {len(held)} 題擋下(標阻塞、在需求或架構階段、還沒決定;或寫法看不懂,寧可擋):")
++        for q in held:
++            if q["bad"]:
++                print(f"    • {q['bad']}")
++            elif q["status"] not in PQ_STATUSES or q["stage"] not in PQ_STAGES:
++                print(f"    • [{q['id']}] {q['text']}(第 {q['line']} 行,標了阻塞,狀態 {q['status']!r} 或階段 {q['stage']!r} 認不得,當成還沒結)")
++            else:
++                print(f"    • [{q['id']}] {q['text']}(第 {q['line']} 行,狀態 {q['status']})")
++        print("    先問人或自己查清楚,把狀態改成已決(→ #dN 指到決策)再過閘;不阻塞的題就拿掉 [阻塞];寫法問題用 lumos lint <計劃> 看細節")
++        return 1
+     door = judged["door"]
+     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
+     if rc is not None:
+         return rc
+     clauses = [b for b in rows_b if b["state"] != "undefined"]
+     prep = _spec_gate_prepare(rr, text, clauses)
+     if prep is None:
+         return 1 if door == "low" else 0
+     keeps = _spec_gate_twoway_gate(p, rr, text, clauses, prep[4]) if door == "low" else set()
+     if keeps is None:
+@@ -26464,20 +26669,38 @@ PITFALL_CLASSES = {
+ }
+ _PITFALL_COMPILED = {c: [re.compile(p, re.I) for p in pats] for c, pats in PITFALL_CLASSES.items()}
+ _PITFALL_GENERAL = [
+     "併發——同資源兩請求同時進來會怎樣?",
+     "效能——這段會進熱路徑/大資料量嗎?",
+     "資源——連線/檔案/鎖有沒有確定釋放?",
+     # 風險類廣度反問(已知坑機械前置 S0,2026-08-08):寫死 4 類太少,改反問在場 LLM
+     # 自我分類——分類是語意判斷,不該 regex 猜。★三處同步:此處+templates.md:31+design-loop skill★
+     "列出此功能碰到的風險類(不限既有金流/寄送/不可逆/守衛面:認證/並發/快取/遷移/PII/限流/狀態同步…),逐類答隱患;無則寫『無+為什麼』。",
+ ]
++# 需求風險面(情境出題;內容源與挑選理由在 [[Systems/情境出題]]):鍵沿用 _STACK_QUESTION_SPECS 的 id/q/when,多一個 stage。
++# 每一項是「什麼情況下要釐清什麼」,AI 依當下需求寫成具體問題;不是固定題目,也不是規格閘的風險類。when 比對計劃筆記文字。
++_REQUIREMENT_FACETS = [
++    {"id": "req-success", "stage": "需求", "q": "「成功」「完成」的定義是什麼?驗收條件能不能量?", "when": [r"."]},
++    {"id": "req-scope", "stage": "需求", "q": "本期範圍到哪裡?哪些明確不做?", "when": [r"."]},
++    {"id": "req-duplicate", "stage": "需求", "q": "同一個請求重送、重按、重試時要怎麼處理?", "when": [r"API|送出|提交|下單|兌換|預約|付款|扣|建立|寫入"]},
++    {"id": "arch-necessity", "stage": "架構", "q": "要引入的新元件解決什麼問題?有沒有更簡單的做法?誰維運?", "when": [r"(?i)redis|kafka|佇列|queue|快取|cache|微服務|拆成|新服務|訊息"]},
++    {"id": "arch-consistency", "stage": "架構", "q": "同一份資料在哪幾個地方各有一份?誰是準?可以晚多久同步?", "when": [r"拆|服務|快取|同步|一致|副本|非同步|事件"]},
++    {"id": "arch-irreversible", "stage": "架構", "q": "哪些決定做了回不去(資料格式、對外介面、刪除)?要誰點頭?", "when": [r"."]},
++    {"id": "impl-concurrency", "stage": "實作", "q": "同一份資源被同時改會怎樣?要怎麼防?", "when": [r"庫存|餘額|點數|名額|預約|搶|併發|同時|高併發|扣"]},
++    {"id": "impl-failure", "stage": "實作", "q": "中途失敗、外部系統沒回應、逾時的時候,資料會停在什麼狀態?怎麼補?", "when": [r"寄|通知|外部|第三方|非同步|呼叫|事件|訊息|物流"]},
++    {"id": "verify-evidence", "stage": "驗證", "q": "要用什麼證據證明做對了?哪幾條要能自動重跑?", "when": [r"."]},
++    {"id": "perf-target", "stage": "效能", "q": "流量與延遲目標是多少?在什麼負載下、用什麼口徑量?", "when": [r"(?i)高併發|大量|流量|延遲|毫秒|\bms\b|rps|qps|效能|壓測"]},
++    {"id": "deliver-ops", "stage": "交付", "q": "出事時怎麼知道、怎麼排查、怎麼回復?", "when": [r"."]},
++    {"id": "deliver-security", "stage": "交付", "q": "誰能做這件事?有哪些敏感資料?邊界在哪?", "when": [r"會員|使用者|帳號|權限|個資|付款|登入|管理員"]},
++]
++
++
+ _PITFALL_QUESTIONS = {
+     "payment": "冪等鍵怎麼設計?重複扣款如何防?部分失敗怎麼補償/對帳?",
+     "external-send": "重試會不會風暴?收端如何去重?超時與速率上限?",
+     "prod-irreversible": "回滾路徑?遷移順序與鎖表窗口?",
+     "self-governance": "誤擋的逃生口?繞過有沒有留痕?",
+ }
+ _PITFALL_BLACKLIST = ("方案評比", "canary 相容性", "誠實天花板", "審計修正紀錄")
+ # 棧別效能追問(pitfalls棧別效能追問_計劃 T1):diff 命中該棧檔案時附進 manifest。
+ # 內容源=圖譜 Systems/效能檢核目錄「人判提問」欄,每棧取最載重 3-5 問(kt=6 cs=4 vue=4 sql=3;idioms ⚠不可機檢條目優先入問+2026-07-20 洩漏/裝箱補(R1 並行/R3 競態等);2026-07-19 使用者補全)——
+ # 目錄改動須同步此表、反向亦然(散落漂移家規);提問式>陳述式(逼答哲學,Vercel 56% 跳過實證)。
+@@ -26522,20 +26745,34 @@ _STACK_QUESTION_SPECS = {
+         {"id": "kt-dispatchers", "q": 'Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?',
+          "when": ['Dispatchers\\.', 'withContext\\(', 'suspend fun', 'ensureActive', 'runBlocking', 'Looper\\.getMainLooper', 'runOnUiThread', 'HandlerThread']},
+         {"id": "kt-flow", "q": 'Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?',
+          "when": ['StateFlow', 'SharedFlow', '\\bChannel\\b', '\\bflow\\s*\\{', 'shareIn', 'stateIn', '\\.collect\\b', 'collectLatest', 'repeatOnLifecycle', 'conflate', '\\.buffer\\(', 'LiveData', 'EventBus', 'PublishSubject', 'BroadcastReceiver']},
+         {"id": "kt-collections", "q": '大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?熱路徑 value class 有沒有被泛型/可空觸發裝箱?',
+          "when": ['\\.(map|filter|flatMap|sortedBy|groupBy)\\s*\\{', 'asSequence', '@JvmInline', 'value class', '\\bArrayList\\(', 'Collections\\.sort', '\\.addAll\\(']},
+         {"id": "kt-leaks", "q": '洩漏:單例/SDK/companion 有沒有持 Activity Context 或 View(該給 applicationContext)?長活物件持 ViewModel/View 引用?',
+          "when": ['\\bContext\\b', 'companion object', 'WeakReference', '\\bActivity\\b', '\\bView\\b', 'WeakReference', 'static\\s+(?:final\\s+)?(?:Context|Activity|View)\\b', 'TimerTask', 'registerReceiver']},
+         {"id": "kt-startup", "q": '啟動:Application onCreate/首幀前有沒有同步重活(eager SDK init/磁碟 IO/大 JSON 解析)?拖冷啟+ANR 面;刻意暖機=正當取捨但要寫明理由(延後 init 可能把延遲挪到首筆業務,更糟)?',
+          "when": ['onCreate\\(', ': Application\\(\\)', 'SplashScreen', '\\binit\\s*\\{', '\\.commit\\(\\)', 'Class\\.forName', 'assets\\.open']},
++        # Kotlin 寫 Spring 後端(2026-10-12,[[Projects/後端工程提問與證據擴充_計劃]] S4):上面七題是 Android 導向,
++        # .kt 檔裡的交易/資料存取/外呼原本沒有任何題會亮。觸發詞只收 Spring/JPA 專屬寫法——Room 也用 @Entity 與 @Query("SELECT…"),不收。
++        # shape_only:只在真的寫到 Spring 寫法時才亮,不因行數門檻整組亮、也不進改檔前推播的整組清單(Android 專案看不到也不用答)。
++        {"id": "kt-springdata", "q": '資料層(Spring/JPA/JDBC):查詢會不會在迴圈裡跑(N+1)?LAZY 關聯是不是在迴圈裡才一筆筆載入?大表有沒有分頁或串流?@Transactional 有沒有被同一個類別內部呼叫(代理不生效)?交易裡有沒有夾外部呼叫?扣庫存這類共享資源用的是條件更新或鎖,還是先讀後寫?',
++         # 整組比對不分大小寫;撞 Android 自訂類名的字用 (?-i:…) 局部分大小寫並加字詞邊界,或只認 Spring 專屬的呼叫形狀(代碼審 r1 邊界席、通才席)
++         "when": ['@(?:get:|set:|field:)?Transactional\\b', 'JpaRepository', 'CrudRepository', 'PagingAndSortingRepository', 'MongoRepository',
++                  'R2dbcRepository', 'JdbcTemplate', '\\bJdbcClient\\b', '\\b(?:Reactive)?MongoTemplate\\b',
++                  'EntityManager', 'jakarta\\.persistence', 'javax\\.persistence', 'LockModeType', '@Modifying', 'TransactionTemplate',
++                  'R2dbcEntityTemplate', '(?-i:\\bDatabaseClient\\.(?:create|builder)\\b)', 'org\\.springframework\\.(?:r2dbc|data|jdbc|transaction)\\b'],
++         "shape_only": True},
++        {"id": "kt-springhttp", "q": '外呼(Spring):每個 HTTP 呼叫有沒有同時設連線逾時與讀取逾時(RestTemplate 預設無限等)?重試有沒有退避與次數上限?下單、付款、寄送這類不可逆操作重送前有沒有冪等鍵?對方掛掉時會拖垮誰?',
++         "when": ['(?-i:\\bRestTemplate\\b)', '(?-i:\\bWebClient\\b)', '(?-i:\\bRestClient\\.(?:create|builder)\\b)',
++                  'org\\.springframework\\.web\\.(?:client|reactive\\.function\\.client|service\\.annotation)\\b', '@FeignClient',
++                  '@(?:Http|Get|Post|Put|Delete|Patch)Exchange\\b', '@Retryable', 'Resilience4j', '@CircuitBreaker', 'RetryTemplate'], "shape_only": True},
+     ],
+     "cs": [
+         {"id": "cs-async", "q": '熱路徑有沒有阻塞異步(.Result/.Wait)?互不依賴的 await 有沒有 Task.WhenAll 並行?CancellationToken 斷鏈?',
+          "when": ['\\bawait\\b', '\\.Result\\b', '\\.Wait\\(', 'GetAwaiter\\(', 'Task\\.Run', 'CancellationToken', 'Thread\\.Sleep', 'new Thread\\(', 'ThreadPool\\.QueueUserWorkItem', 'BackgroundWorker', '\\bWebClient\\b', '\\.GetResult\\(\\)', 'Task\\.WaitAll', 'Monitor\\.Wait']},
+         {"id": "cs-data", "needs_backing": True, "q": '查詢有沒有 N+1/SELECT * 進大表?大結果集有分頁、過濾聚合下推到資料層嗎?',
+          "when": ['\\bSELECT\\b', 'FromSql', '\\.Query(Async)?<', '\\.Include\\(', '\\.Skip\\(', '\\.Take\\(', 'IQueryable', '\\.ToList', 'SqlCommand', 'SqlDataReader', 'ExecuteReader', 'DataTable', '\\bDataSet\\b', 'SqlDataAdapter'], "when_raw": ['"(SELECT|INSERT|UPDATE|DELETE)\\s[^"]*\\b(FROM|INTO|SET|WHERE)\\b']},
+         {"id": "cs-cache", "q": '熱讀路徑該不該上快取?熱路徑有沒有短命大物件(該用 Span/ValueTask)?',
+          "when": ['IMemoryCache', 'HybridCache', 'IDistributedCache', 'new byte\\[', 'MemoryStream', 'Span<', 'ValueTask', 'HttpRuntime\\.Cache', 'HttpContext\\.Current', '\\bstatic\\s+(readonly\\s+)?(Dictionary|List)<']},
+         {"id": "cs-linq", "q": 'LINQ:IEnumerable 有沒有被多次枚舉(查詢重跑,該 ToList 一次)?長鏈中間集合要不要收斂?',
+          "when": ['IEnumerable<', '\\.Select\\(', '\\.Where\\(', 'foreach\\s*\\(', '\\.Count\\(\\)\\s*[><=]', '\\.ToArray\\(\\)\\.', '\\.ElementAt\\(']},
+@@ -42842,25 +43079,66 @@ def cmd_dart_sarif(out=None):
+                 fh.write(text)
+         except OSError as e:
+             # 代碼審 r1 邊界席:原本丟 Python 追蹤訊息、rc1;閘一律用系統暫存檔路徑呼叫碰不到,手動給錯路徑時講清楚
+             print(f"擋下:結果檔寫不進去({e.__class__.__name__}):{out}", file=sys.stderr)
+             return 2
+     else:
+         print(text)
+     return 0
+ 
+ 
+-def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None):
++def _pitfalls_stage(md, stage, as_json):
++    """pitfalls --stage:只列那一階段的需求風險面,與計劃〈待決問題〉裡那一階段還沒結的題(情境出題 S3)。"""
++    import json
++    try:
++        text = Path(md).read_text(encoding="utf-8-sig")
++    except (OSError, UnicodeDecodeError) as e:
++        print(f"擋下:讀不到 {md}:{e}", file=sys.stderr)
++        return 2
++    facets = [f for f in _REQUIREMENT_FACETS if f["stage"] == stage and any(re.search(w, text) for w in f["when"])]
++    allq = parse_pending_questions(text) or []
++    qs = pending_questions_for_stage(allq, stage)
++    bad = [q["bad"] for q in allq if q["bad"]]
++    if as_json:
++        print(json.dumps({"stage": stage, "facets": facets, "questions": qs, "unreadable": bad}, ensure_ascii=False, indent=2))
++        return 0
++    print(f"[pitfalls] 階段:{stage}")
++    print(f"  需求風險面({len(facets)} 項;每一項寫成這份需求的具體問題,先自己查、只把要人決定的交給人):")
++    for f in facets:
++        print(f"    - [{f['id']}] {f['q']}")
++    print(f"  這一階段還沒結的待決問題({len(qs)} 題;標阻塞或不可逆的全部一次問,其餘排在後面):")
++    for q in qs:
++        tag = "阻塞" if q["blocking"] else "不可逆" if q["irreversible"] else ""
++        print(f"    - [{q['id']}] {q['text']}" + (f"({tag})" if tag else "") + f"  狀態 {q['status']}")
++    if bad:
++        print(f"  ⚠ {len(bad)} 行像題目但看不懂,沒列進來:")
++        for b in bad:
++            print(f"    - {b}")
++    return 0
++
++
++def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None, stage=None):
+     """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
+     spec 模式印通用 4 問(含風險類反問)+ 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。
+     --no-lint:--diff 只跑 regex 層(快,給 pre-push advisory)。"""
+     import json
++    if stage is not None:
++        if diff is not None:
++            print("擋下:--stage 只用在計劃模式(給計劃筆記路徑),不能和 --diff 一起用", file=sys.stderr)
++            return 2
++        if stage not in PQ_STAGES:
++            print(f"擋下:--stage 要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {stage!r}", file=sys.stderr)
++            return 2
++        if not md:
++            print("擋下:--stage 要給計劃筆記路徑", file=sys.stderr)
++            return 2
++        return _pitfalls_stage(md, stage, as_json)
+     repo_root = _anchor_repo_root(repo)
+     if repo_root is None:
+         return 2
+     if diff is not None:
+         if diff.startswith("-"):
+             # --diff 值直接進 git 當 positional;'-' 開頭會被 git 誤認成選項(可寫任意檔,
+             # 如 --output=<path>——r2 panel major 實測驗證)。查詢命令慣例=usage-error rc2。
+             print("擋下:--diff 的值不能用 - 開頭(會被當成選項)", file=sys.stderr)
+             return 2
+         if disp_tpl:
+@@ -50488,21 +50766,21 @@ HELP_WHEN = {
+     "bind": "把寫好的測試綁回合約的 KEY 行([test:])。別手改。",
+     "plan": "這條合約之後才會做:一次寫好預告標記、建待完成的守衛節點、雙向連好。查那篇功能節點時會看到它,逾期會擋推送而且不准延期。",
+     "settle": "預告的那條做完了:預告行換成正式合約行並綁上測試,守衛節點就地轉成已通過(要 --test);已經 pass 但還留著預告句時補改成歷史說法(不用 --test,可給 --date)。",
+     "abandon": "預告的那條決定不做了:立墓碑而不是刪掉(下一個人看得到曾經打算做什麼)。要先 lumos signoff <守衛節點> --ref <守衛節點>。",
+     "required": "看現在有幾條預告還沒做完、有沒有逾期或七天內到期。有逾期回非零。",
+     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
+     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
+     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住;加 --try 寫完當場只跑這一條。",
+     "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add;不帶 --id 跑一次列出這篇每條的短身分。",
+     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。--id <短身分> 只跑那一條。",
+-    "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次:風險低時紅綠是放行條件(不符就擋)、風險高只印不擋,相依功能的合約測試紅一律擋。",
++    "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠、〈待決問題〉有沒有標阻塞的需求或架構題還沒結(或寫法看不懂);綁的測試真跑一次:風險低時紅綠是放行條件(不符就擋)、風險高只印不擋,相依功能的合約測試紅一律擋。",
+     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
+     "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
+     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by(紀錄寫了 system_refs 就只看它列的)。預設 dry-run,--apply 才寫。",
+     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+     "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+     "rejections": "設計前先看以前否決過什麼:收齊圖譜裡的不選欄位、被翻案與寫著不做的決策、作廢的整篇,按概念比對你的提案。",
+     "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
+     "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
+     "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
+     "stats": "圖譜多大、各資料夾幾篇。",
+@@ -50528,21 +50806,21 @@ HELP_WHEN = {
+     "update": "專案裡的工具組舊了,從唯一來源更新(含 CLAUDE.md 紀律區塊);先看會改什麼加 --dry-run。",
+     "bootstrap": "新機器第一次裝:clone 來源、裝全域指令、skills、專案接線。",
+     "init": "新專案要用圖譜:建資料夾、.gitignore、pre-commit / pre-push。",
+     "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
+     "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
+     "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
+     "report-normalize": "席報告收進來、記帳之前:看嚴重度寫法有沒有照規定(檔首檔級行、每條一行獨立 severity),--write 只搬格式不改內容。",
+     "prose-lint": "spec 動筆後的白話健檢:掃中文模糊措辭,只提醒不擋(設計審排乾步驟用)。",
+     "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
+-    "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審)。",
++    "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審);--stage <階段> 列計劃那一階段的需求風險面與還沒結的待決問題。",
+     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
+     "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
+     "updated-sync": "doctor 說有筆記的 updated 落後 git 最後改動時:lumos updated-sync --stale 一次改成今天(或給節點名只改那幾篇);先看加 --dry-run。",
+     "ci-status": "只看上次 CI 結果,不打網路。",
+     "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
+     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
+     "build": "挖掘檔案↔測試的關係,存成地圖。",
+     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
+     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
+@@ -51403,20 +51681,22 @@ def main():
+     p.add_argument("--repo", dest="pf_repo", help="repo root(預設 cwd 向上找 .git)")
+     p.add_argument("--check", action="store_true", help="命中風險類且無「## 實務隱患」節 → rc 1")
+     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
+     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
+     p.add_argument("--dispositions-template", dest="pf_disp_tpl", action="store_true",
+                    help="--diff 模式:印這次改動的表態樣板 JSON(適用題留空、未觸發題自動 na);填完給 lumos code-loop dispositions <檔>")
+     p.add_argument("--carry", dest="pf_carry", action="store_true",
+                    help="配 --dispositions-template:把這個分支最後一筆表態裡 id 相同且仍適用的舊答案帶過來(改碼後只答新題)")
+     p.add_argument("--branch", dest="pf_branch", default=None,
+                    help="配 --carry:從哪個分支名下的表態記錄帶(預設 checkout 分支;合進主線後推主線可帶原分支名)")
++    p.add_argument("--stage", dest="pf_stage", default=None,
++                   help="計劃模式:只列這一階段(需求/架構/實作/驗證/效能/交付)的需求風險面與還沒結的待決問題")
+ 
+     cw = sub.add_parser("ci-wait", help="[CI回流閉環] push 後同輪等 GitHub Actions 結論(綠 rc0/紅 rc1;需 .lumos/config.json 宣告 ci 區塊才啟用)")
+     cw.add_argument("--timeout", dest="cw_timeout", type=float, default=1800.0)   # 600 撐不過 ~15min CI(2026-08-27),→1800 並順帶治 ci-status 過期(ci-wait 跑完才寫 ci-log)
+     cw.add_argument("--grace", dest="cw_grace", type=float, default=30.0, help="判綠/判無 run 前的重查窗(秒)")
+     cw.add_argument("--repo-dir", dest="cw_repo", default=None)
+     cw.add_argument("--sha", dest="cw_sha", default=None)
+     cw.add_argument("--branch", dest="cw_branch", default=None)
+     cw.add_argument("--json", dest="cw_json", action="store_true")
+     evp = sub.add_parser("events", help="[事件帳] 讀 Claude 會談的事件帳(lumos-ledger 外掛寫的):列最近會談或印一場")
+     evp.add_argument("--session", dest="ev_session", default=None)
+@@ -51746,21 +52026,21 @@ def main():
+     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
+         return cmd_report_normalize(args.path, write=args.write)
+     if args.cmd == "fold-check":
+         return cmd_fold_check(args.path, as_json=args.as_json)
+     if args.cmd == "refcheck":
+         return cmd_refcheck(args.md, repo=args.refcheck_repo, as_json=args.as_json)
+     if args.cmd == "pitfalls":
+         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
+                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
+                             disp_tpl=getattr(args, "pf_disp_tpl", False), carry=getattr(args, "pf_carry", False),
+-                            branch=getattr(args, "pf_branch", None))
++                            branch=getattr(args, "pf_branch", None), stage=getattr(args, "pf_stage", None))
+     if args.cmd == "testmap":
+         if args.tmcmd == "build":
+             return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)
+         return cmd_testmap_affected(diff=args.tm_diff, repo=args.tm_repo,
+                                     as_json=args.tm_json)
+     if args.cmd == "test-layers":
+         return cmd_test_layers(diff=args.tl_diff, repo=args.tl_repo, as_json=args.tl_json)
+     if args.cmd == "lint-check":
+         return cmd_lint_check(repo=args.lc_repo, smoke=args.lc_smoke, as_json=args.lc_json)
+     if args.cmd == "rule-check":
+diff --git a/scripts/scenario_probe.py b/scripts/scenario_probe.py
+index c8d300ff..62c79562 100755
+--- a/scripts/scenario_probe.py
++++ b/scripts/scenario_probe.py
+@@ -311,44 +311,54 @@ def source_evidence(lines, harness, token):
+ 
+ 
+ def grade(sc, calls, final_text, source_state=None):
+     """回 (passed, reason, answer_content_ok)。兩個執行器共用:先判工具序列,再看答案內容(有 answer_expect 才看)。
+     儀器層的覆寫(用量上限/截斷/退出碼)由呼叫端在這之後做。"""
+     if sc.get("source_probe"):
+         # 讀碼題不再依命令regex猜檔案；其他題仍走原本的順序判準。
+         ok = source_state == "present"
+         why = "ok" if ok else ("未取得目標程式片段" if source_state == "absent" else "儀器例外: 缺少可判讀的原始讀碼結果")
+     else:
+-        ok, why, _ = judge(calls, sc["expect"], sc.get("forbid_before", []))
++        ok, why, _ = judge(calls, sc.get("expect") or [], sc.get("forbid_before", []))   # collect_only 可省略 expect(驗證已放行)
+     answer_content_ok = None
+     if sc.get("answer_expect"):
+         miss_a = [e for e in sc["answer_expect"] if not re.search(e, final_text or "", re.I)]
+         answer_content_ok = not miss_a
+         if ok and not answer_content_ok:
+             ok, why = False, f"敲對了指令,但答案缺關鍵事實: {miss_a}"
+     return ok, why, answer_content_ok
+ 
+ 
++ANSWER_MAX = 1500   # 結果檔保存的回答字數上限的預設;--answer-max 照參數一路傳到執行場次,不改寫這個常數(代碼審 code-後端情境出題 r1 架構席)
++
++
++def _answer_field(final, source_token, cap=ANSWER_MAX):
++    """回 (存檔用回答, 原始回答長度)。原始長度另存,讀結果的人才分得出有沒有被截。"""
++    text = _redact_source_token(final or "", source_token)
++    return text[:cap], len(text)
++
++
+ def judge(calls, expect, forbid_before):
+     """回 (passed, reason, first_hit_index)。
+     expect:每條 regex 必須各自命中至少一次(對 Bash 指令字串比對)。
+     forbid_before:任何一條命中(工具名或 Bash 指令字串)若發生在「第一條 expect 命中」之前 → 不過。"""
+     exp_idx = {}
+     for i, (name, summ) in enumerate(calls):
+         hay = summ if name == "Bash" else f"{name}:{summ}"   # 非 Bash 工具用「工具名:參數」比,紀律題可寫 Edit:docs/…
+         for e in expect:
+             if e not in exp_idx and re.search(e, hay):
+                 exp_idx[e] = i
+     missing = [e for e in expect if e not in exp_idx]
+     if missing:
+         return False, f"沒敲到期望指令: {missing}", None
+-    first = min(exp_idx.values())
++    # expect 空=只收回答、不考指令序列的題目:禁止清單改對全部呼叫生效(之前 min() 對空集合拋例外,整批中止)
++    first = min(exp_idx.values()) if exp_idx else len(calls)
+     for i, (name, summ) in enumerate(calls[:first]):
+         if name in ("Read", "Grep", "Glob") and "/.claude/skills/" in summ:
+             continue   # 讀索引/skill 手冊是期望行為,不算「先做了別的」
+         for f in forbid_before:
+             if re.search(f, name) or (name == "Bash" and re.search(f, summ)):
+                 return False, f"在敲 lumos 之前先做了 {name}: {summ[:80]!r}", first
+     return True, "ok", first
+ 
+ 
+ # ── 修法 A ablation(Projects/修法A_lumos先行ablation_計劃)──────────────────────────
+@@ -796,21 +806,22 @@ def _hide_answer_bank(work):
+ 
+ 
+ def _validate_scenario(sc):
+     """題目缺必要欄位就回一句錯誤字串(否則 None)。★r1 邊界席:缺 expect 的畸形題原本會先燒一次真實
+     claude -p 才在索引時炸,白花稀缺配額;改成派工前先擋。"""
+     if (not isinstance(sc.get("id"), str) or not sc["id"].strip()
+             or not sc["id"].isprintable()):
+         return "題目缺 id"
+     if not sc.get("prompt"):
+         return f"題目 {sc.get('id')} 缺 prompt"
+-    if not sc.get("expect"):
++    # collect_only=true:只收回答、不考指令序列(對照實驗用,回答另由盲評判分);必須明講才放行空 expect
++    if not sc.get("expect") and sc.get("collect_only") is not True:
+         return f"題目 {sc.get('id')} 缺 expect(判準),不跑"
+     if "source_probe" in sc and (not isinstance(sc["source_probe"], dict) or not sc["source_probe"] or sc.get("forbid_before")):
+         return "source_probe 必須有目標設定且不得混用順序禁令"
+     return None
+ 
+ 
+ def _codex_home_dir():
+     """Codex 家目錄一律問 scripts/lumos 的 _codex_home()(單源;code-codex-refine r1 架構 #2:別再第二套算 CODEX_HOME)。"""
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+@@ -930,21 +941,21 @@ def _attempt_ledger_transaction(path, limit, claim=False, now=None):
+ 
+ 
+ def attempt_ledger_remaining(path, limit, now=None):
+     return _attempt_ledger_transaction(path, limit, now=now)
+ 
+ 
+ def claim_model_attempt(path, limit, now=None):
+     return _attempt_ledger_transaction(path, limit, claim=True, now=now)
+ 
+ 
+-def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0):
++def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypass_trust=False, source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
+     """Codex 版 runner:`codex exec --json -C <沙盒> --sandbox workspace-write <prompt>`。
+     預設不帶 --dangerously-bypass-hook-trust(本機審過信任 hook 就會跑;沒審過 hook 不 fire、結果 hooks_fired=0 看得出);
+     --codex-bypass-hook-trust 只給隔離環境。stop_block=off 設 LUMOS_STOP_BLOCK_OFF=1 關掉 Codex 收工擋停(對照組)。
+     模型由 codex 設定決定(-m 可覆寫);用量上限偵測 Codex 側沒對應訊號,limit_hit 恆 False 並在 result_subtype 標 codex。"""
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False, "reason": f"儀器例外: {bad}", "first_tool": None,
+                 "n_calls": 0, "calls": [], "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": "codex", "harness": "codex"}
+     # stdin 必重導向 DEVNULL:codex exec 沒有 tty 時會等 stdin(2026-08-23 外家席實測「stdin 要重導否則掛住」)
+@@ -984,38 +995,48 @@ def run_one_codex(sc, workdir, timeout, model, arm="with", stop_block="on", bypa
+         if isinstance(ev, dict) and ev.get("type") == "thread.started":
+             thread_id = ev.get("thread_id"); break
+     trace = _codex_hook_trace(thread_id)
+     evidence = source_evidence(out.splitlines(), "codex", source_token) if sc.get("source_probe") else None
+     ok, why, answer_content_ok = grade(sc, calls, final, evidence)
+     if instrument_fail:
+         ok, why = False, f"儀器例外: {instrument_fail}(這場不算分)"
+     ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why, "first_tool": calls[0] if calls else None,
+             "n_calls": len(calls), "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": _redact_source_token(final or "", source_token)[:1500], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
++            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1], "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+             "source_evidence": evidence,
+             "answer_content_ok": answer_content_ok, "limit_hit": False, "truncated": truncated,
+             "result_subtype": "codex", "harness": "codex",
+             "stop_block": stop_block, "thread_id": thread_id, "hook_trace": trace}
+ 
+ 
+ def _scenario_max_turns(sc, default):
+     """每題可自帶 max_turns(2026-09-05 第二輪審視 d6:s15 這種要先查再建的題 18 步不夠,24 步時被砍在建檔前)。壞值退預設。
+     ★只影響 claude runner:codex exec 沒有 --max-turns 這種旗標,codex runner 忽略此欄(外家 r1 m3,誠實寫在這裡與 --help)。★"""
+     try:
+         v = int(sc.get("max_turns", default))
+         return v if v > 0 else default
+     except (TypeError, ValueError):
+         return default
+ 
+ 
+-def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0):
++def _run_kwargs(a, token):
++    """命令列參數 → 執行場次的選配參數(回答上限、來源暗號、用量帳)。"""
++    extra = {"answer_max": a.answer_max}
++    if token is not None:
++        extra["source_token"] = token
++    if a.max_per_window:
++        extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
++    return extra
++
++
++def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=None, attempt_ledger=None, max_per_window=0, answer_max=ANSWER_MAX):
+     max_turns = _scenario_max_turns(sc, max_turns)
+     bad = _validate_scenario(sc)
+     if bad:
+         return {"id": sc.get("id", "?"), "cat": sc.get("cat"), "passed": False,
+                 "reason": f"儀器例外: {bad}", "first_tool": None, "n_calls": 0, "calls": [],
+                 "secs": 0, "stderr": "", "arm": arm, "ever_lumos": False, "first_lumos_idx": None,
+                 "limit_hit": False, "result_subtype": None}
+     # ★逐題開放 Agent(2026-08-22)★:預設禁,因為多數題目不需要、開了只是燒錢又慢。
+     # 但「要說沒有之前先派乾淨 agent 對一次」這條紀律,★不派 agent 就測不出來★——
+     # 題目標 allow_agent:true 才放行,其餘照舊禁。
+@@ -1080,21 +1101,21 @@ def run_one(sc, workdir, max_turns, timeout, model, arm="with", source_token=Non
+         ok, why = False, "儀器例外: 帳號用量/速率上限,claude -p 沒真的跑,這場不算分"
+     elif truncated:
+         cause = f"逾時 {timeout}s" if timed_out else f"撞到回合上限 {max_turns}"
+         ok, why = False, f"儀器例外: {cause},紀錄不完整,這場不算分(截斷)"
+     elif returncode != 0:
+         ok, why = False, f"儀器例外: claude -p 退出碼 {returncode}(這場不算分)"
+     ever, first_idx = lumos_stats(calls)
+     return {"id": sc["id"], "cat": sc.get("cat"), "passed": ok, "reason": why,
+             "first_tool": calls[0] if calls else None, "n_calls": len(calls),
+             "calls": calls, "secs": round(time.time() - t0, 1), "stderr": err if not ok else "",
+-            "answer": _redact_source_token(final or "", source_token)[:1500],
++            "answer": _answer_field(final, source_token, answer_max)[0], "answer_len": _answer_field(final, source_token, answer_max)[1],
+             "source_evidence": evidence,
+             "arm": arm, "ever_lumos": ever, "first_lumos_idx": first_idx,
+             "answer_content_ok": answer_content_ok,
+             "limit_hit": limit_hit, "truncated": truncated,
+             "result_subtype": result_ev.get("subtype"), "harness": "claude"}
+ 
+ 
+ def summarize_results(results, arm="with"):
+     """一批結果 → 總結。分母只算有效場次(扣掉截斷、用量上限、其他儀器例外)。
+     ★有效不到一半時分母退回整批★:自主迴圈只在總結行 p≠n 時發通知,不退回的話整批被截斷會是 0/0、安靜顯示全過。
+@@ -1153,20 +1174,22 @@ def main():
+     ap.add_argument("--only", default="")
+     ap.add_argument("--exact-id", default=None,
+                     help="只跑 id 完全相等的一題；消融派工專用，找不到或重複時拒絕")
+     # ★預設 8 → 18(2026-08-22)★:實測既有題庫最慢 6 步(s02/s11),8 只留 2 步餘裕;
+     # absence 題組天生要「查不到→換方法再查」,最慢 12 步——吃預設會在它開口之前截斷,
+     # 三題全假紅。假紅的下一步永遠是有人把閘關掉,所以預設本身要夠。
+     # ★為什麼不設更大★:步數上限不是「越寬越安全」。給太多步,那些其實在瞎繞的題也可能
+     # 繞到答對,反而把問題蓋掉。18 = 最慢那題(12 步)加一半餘裕,不是拍腦袋。
+     ap.add_argument("--max-turns", type=int, default=18, help="claude runner 的回合上限(每題可用 max_turns 欄覆寫;codex runner 沒有對應旗標、忽略此值)")
+     ap.add_argument("--timeout", type=int, default=240)
++    ap.add_argument("--answer-max", type=int, default=1500,
++                    help="結果檔每場保存的回答字數上限(預設 1500);另存原始長度 answer_len,可看出有沒有被截")
+     ap.add_argument("--model", default="")
+     ap.add_argument("--out", default="")
+     ap.add_argument("--keep", action="store_true", help="保留最後一個普通題臨時副本；讀碼題仍清除")
+     ap.add_argument("--sample", type=int, default=0, help="只抽 N 題(決定性:依 --seed 輪轉,給自主迴圈每週抽查用)")
+     ap.add_argument("--seed", default="", help="抽樣種子(例:週數);同種子同題")
+     ap.add_argument("--history", default="", help="把本次摘要 append 到這個 jsonl(ts/passed/total/failed)")
+     ap.add_argument("--ts", default="", help="寫進 history 的時間戳(排程端給)")
+     ap.add_argument("--dry-list", action="store_true", help="只印抽到的題目 id,不跑(測抽樣用)")
+     ap.add_argument("--allow-stale-targets", action="store_true",
+                     help="題目指的東西已經不存在也照跑(預設停手;腐爛的題目會量出假訊號)")
+@@ -1182,20 +1205,22 @@ def main():
+     ap.add_argument("--arm", choices=["with", "without"], default="with",
+                     help="with=現況;without=沙盒 CLAUDE.md 砍「第一個工具呼叫」小節+入口 hook 靜默(見 Projects/修法A_lumos先行ablation_計劃)")
+     ap.add_argument("--wait-on-limit", type=int, default=0,
+                     help="撞到帳號用量上限時最多等幾秒(每 300 秒重試同一場;預設 0=不等,照記成儀器例外)。"
+                          "2026-09-02 實跑:4 路平行約 35 分鐘就撞上限,之後 115 場全是 4 秒假失敗")
+     ap.add_argument("--max-attempts", type=int, default=0,
+                     help="本批最多啟動幾次模型，含用量重試；0=不設。消融派工的窗口額度專用")
+     ap.add_argument("--max-per-window", type=int, default=0, help="本機共用帳五小時啟動意圖上限；0=停用記帳")
+     ap.add_argument("--attempt-ledger", default="", help="共用用量帳路徑；首次初始化冷卻五小時，初始化前先停止舊探針")
+     a = ap.parse_args()
++    if a.answer_max < 1:
++        ap.error("--answer-max 必須是正整數")
+     if a.runs < 1:
+         print("✗ --runs 至少 1", file=sys.stderr); return 2
+     if a.max_per_window < 0:
+         print("✗ --max-per-window 不可為負", file=sys.stderr); return 2
+     if a.max_attempts < 0:
+         print("✗ --max-attempts 不可為負", file=sys.stderr); return 2
+     # 輸出寫不出去要在花模型額度之前就知道,不能整批跑完才炸
+     for flag, target, replace in (("--out", a.out, True), ("--history", a.history, False)):
+         problem = target and _output_target_problem(target, replace=replace)
+         if problem:
+@@ -1256,23 +1281,21 @@ def main():
+     if baseline is not None:
+         print(f"探的是: {src}\n凍結基線: {baseline}" + (f"\n組別: {a.arm}  每題 {a.runs} 次" if (a.arm != "with" or a.runs > 1) else ""),
+               file=sys.stderr)
+     results = []
+     waited = 0
+     attempts_started = 0
+     fatal = setup_error is not None
+     fatal_reason = setup_error
+     retained = None
+     def run_at(workdir, token=None):
+-        extra = {"source_token": token} if token is not None else {}
+-        if a.max_per_window:
+-            extra.update(attempt_ledger=Path(a.attempt_ledger or default_attempt_ledger()).absolute(), max_per_window=a.max_per_window)
++        extra = _run_kwargs(a, token)
+         return (run_one_codex(sc, workdir, a.timeout, a.model, a.arm, a.stop_block, a.codex_bypass_hook_trust, **extra) if a.runner == "codex"
+                 else run_one(sc, workdir, a.max_turns, a.timeout, a.model, a.arm, **extra))
+     try:
+         for sc in scs if baseline is not None else []:
+             for k in range(1, a.runs + 1):
+                 retried = []
+                 while True:
+                     work = None
+                     token = "LUMOS_READ_" + secrets.token_hex(16) if sc.get("source_probe") else None
+                     res = None
+diff --git a/scripts/test_autonomous_loop.py b/scripts/test_autonomous_loop.py
+index 5b74fa05..9b38d52e 100644
+--- a/scripts/test_autonomous_loop.py
++++ b/scripts/test_autonomous_loop.py
+@@ -1850,20 +1850,60 @@ class TestScenarioProbeAblation(unittest.TestCase):
+     def setUpClass(cls):
+         import importlib.util
+         root = Path(__file__).resolve().parent.parent
+         spec = importlib.util.spec_from_file_location("scenario_probe", root / "scripts" / "scenario_probe.py")
+         cls.sp = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.sp)
+         spec2 = importlib.util.spec_from_file_location("ablation_lumos_first",
+                                                        root / "governance" / "eval" / "ablation_lumos_first.py")
+         cls.rn = importlib.util.module_from_spec(spec2); spec2.loader.exec_module(cls.rn)
+         cls.root = root
+ 
++    def test_judge_empty_expect_does_not_crash_and_checks_forbid_over_all_calls(self):
++        # 只收回答、不考指令序列的題目(expect 空):不得拋例外;禁止清單改對全部呼叫生效
++        self.assertEqual(self.sp.judge([], [], [])[0], True)
++        ok, why, _ = self.sp.judge([("Read", "README.md"), ("Write", "src/App.kt")], [], [r"^Write$"])
++        self.assertFalse(ok)
++        self.assertIn("Write", why)
++        self.assertTrue(self.sp.judge([("Read", "README.md")], [], [r"^Write$"])[0])
++
++    def test_answer_field_default_cap_and_raised_cap_keep_full_length(self):
++        long = "問" * 3000
++        ans, n = self.sp._answer_field(long, None)
++        self.assertEqual((len(ans), n), (1500, 3000))      # 預設上限不變
++        ans, n = self.sp._answer_field(long, None, 5000)   # 上限照參數給
++        self.assertEqual((ans, n), (long, 3000))
++
++    def test_answer_max_flag_parses_and_rejects_nonpositive(self):
++        import subprocess, sys
++        probe = str(self.root / "scripts" / "scenario_probe.py")
++        r = subprocess.run([sys.executable, probe, "--answer-max", "0", "--dry-list"], capture_output=True, text=True)
++        self.assertNotEqual(r.returncode, 0)
++        self.assertIn("answer-max", r.stderr)
++        ok = subprocess.run([sys.executable, probe, "--answer-max", "5000", "--dry-list"], capture_output=True, text=True)
++        self.assertEqual(ok.returncode, 0, ok.stderr)   # 合法值要過(防「不認得的參數」造成的假綠)
++
++    def test_answer_max_flows_as_argument_not_global(self):
++        # 代碼審 r1 正確性席(刪掉設上限那行測試照綠)與架構席(main 改寫模組全域值是這檔原本沒有的做法):
++        # 上限改成參數一路傳到執行場次,模組常數只當預設
++        import subprocess as _sp
++        long = "問" * 3000
++        out = json.dumps({"type": "result", "subtype": "success", "result": long})
++        sc = {"id": "q", "prompt": "p", "collect_only": True}
++        with tempfile.TemporaryDirectory() as tmp, \
++             mock.patch.object(self.sp.subprocess, "run", return_value=_sp.CompletedProcess([], 0, out, "")):
++            row = self.sp.run_one(sc, Path(tmp), 1, 5, "", answer_max=2000)
++            dflt = self.sp.run_one(sc, Path(tmp), 1, 5, "")
++        self.assertEqual((len(row["answer"]), row["answer_len"]), (2000, 3000))
++        self.assertEqual(len(dflt["answer"]), 1500)                         # 沒給就用預設,不受別處改寫影響
++        a = mock.Mock(answer_max=4321, max_per_window=0, attempt_ledger="")
++        self.assertEqual(self.sp._run_kwargs(a, None)["answer_max"], 4321)  # 命令列旗標真的傳下去
++        self.assertEqual(self.sp.ANSWER_MAX, 1500)
+     def test_attempt_ledger_parent_error_preserves_incident_before_launch(self):
+         import threading
+         with tempfile.TemporaryDirectory() as tmp:
+             root = Path(tmp)
+             ledger = root / "bad.sqlite3"
+             ledger.write_bytes(b"not a database")
+             stop = threading.Event()
+             with mock.patch.object(self.rn, "default_attempt_ledger", return_value=ledger, create=True), mock.patch.object(self.rn.subprocess, "run", side_effect=AssertionError("model must not launch")):
+                 result = self.rn.run_job("with", "q", 1, [], 1, 1, root, 0, max_per_window=1, stop=stop)
+             self.assertIn("失效", result[2])
+@@ -2190,20 +2230,33 @@ print(json.dumps({'status':result[2],'stop':stop.is_set(),'candidate':len(list(o
+         self.assertEqual(f([("Bash", "grep lumos-toolchain docs/")]), (False, None))
+         self.assertEqual(f([("Bash", "cd x && lumos search foo")]), (True, 0))
+         self.assertEqual(f([("Bash", "python3 scripts/lumos show X")]), (True, 0))
+ 
+     def test_strip_rejects_duplicate_markers(self):
+         t = "a\n" + self.sp.RULE_HEAD + "\nx\n" + self.sp.RULE_END + "\nb\n" + self.sp.RULE_HEAD + "\n"
+         out, ok = self.sp.strip_lumos_first_rule(t)
+         self.assertFalse(ok, "標記出現兩次要安全回退,不砍錯段")
+         self.assertEqual(out, t)
+ 
++    def test_validate_scenario_collect_only_allows_empty_expect(self):
++        v = self.sp._validate_scenario
++        self.assertIsNone(v({"id": "q", "prompt": "p", "expect": [], "collect_only": True}))
++        self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": []}))            # 沒明講只收回答,照舊擋
++        self.assertIn("expect", v({"id": "q", "prompt": "p", "expect": [], "collect_only": "yes"}))  # 只認布林 true
++
++    def test_collect_only_without_expect_key_grades_without_crash(self):
++        # 代碼審 r1 外家席:collect_only 省略 expect 欄位時,派工前放行、跑完才在評分時 KeyError(額度白燒、整批中止)
++        sc = {"id": "q", "prompt": "p", "collect_only": True}
++        self.assertIsNone(self.sp._validate_scenario(sc))
++        ok, why, _ = self.sp.grade(sc, [("Read", "README.md")], "回答")
++        self.assertTrue(ok, why)
++
+     def test_validate_scenario(self):
+         v = self.sp._validate_scenario
+         self.assertIsNone(v({"id": "s", "prompt": "p", "expect": ["x"]}))
+         self.assertIn("expect", v({"id": "s", "prompt": "p"}))
+         self.assertIn("prompt", v({"id": "s", "expect": ["x"]}))
+ 
+     def test_arm_stats_filters_expected_ids(self):
+         # 舊題殘檔(id=stale)不進 M1；只算現行題庫的
+         rows = [{"id": "s01", "passed": True, "ever_lumos": True, "first_lumos_idx": 0},
+                 {"id": "stale", "passed": False, "ever_lumos": False, "first_lumos_idx": None}]
+@@ -2308,12 +2361,305 @@ class TestProbeSandboxGuard(unittest.TestCase):
+         # 只驗「有 LUMOS_PROBE → 退 2 且不動機器」;不跑無旗標分支(那會真的重裝、動 ~/.claude)
+         import os, subprocess
+         for sub in ("install", "update", "uninstall", "bootstrap"):
+             with mock.patch.dict(os.environ, {"LUMOS_PROBE": "1"}):
+                 r = subprocess.run([sys.executable, str(Path(__file__).resolve().parent / "lumos"), sub],
+                                    capture_output=True, text=True)
+             self.assertEqual(r.returncode, 2, f"{sub} 在 LUMOS_PROBE 下應退 2")
+             self.assertIn("LUMOS_PROBE", r.stderr, f"{sub} 應印守衛訊息")
+ 
+ 
++
++class TestQoAblation(unittest.TestCase):
++    """情境出題對照實驗的執行與計分器(governance/eval/qo-ablation-2026-10/qo_ablation.py)。
++    預先登記寫死的算法:先寫程式判法、盲評包不洩組別、逐題配對的精確符號翻轉檢定。"""
++
++    @classmethod
++    def setUpClass(cls):
++        import importlib.util
++        root = Path(__file__).resolve().parent.parent
++        spec = importlib.util.spec_from_file_location(
++            "qo_ablation", root / "governance" / "eval" / "qo-ablation-2026-10" / "qo_ablation.py")
++        cls.qo = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.qo)
++
++    def test_code_start_detects_shell_writes_and_ignores_docs(self):
++        hit = self.qo.code_start
++        self.assertTrue(hit([("Write", "src/main/kotlin/App.kt")]))
++        self.assertTrue(hit([("Bash", "mkdir -p src/main/kotlin && touch src/main/kotlin/App.kt")]))
++        self.assertTrue(hit([("Bash", 'python3 -c "open(\"build.gradle.kts\",\"w\").write(1)"')]))
++        self.assertTrue(hit([("Bash", "cat > build.gradle.kts <<EOF")]))
++        self.assertTrue(hit([("Bash", "gradle init --type kotlin-application")]))
++        self.assertTrue(hit([("Bash", "touch App.kt")]))                  # 單獨的 touch 也要中
++        self.assertTrue(hit([("Bash", "echo 'fun main(){}' > App.kt")]))     # 重新導向寫檔
++        self.assertFalse(hit([("Bash", "git log --oneline 2> /dev/null")]))  # 丟到 /dev/null 不算
++        self.assertFalse(hit([("Write", "docs/order-svc-knowledge/Projects/訂單_計劃.md")]))
++        self.assertFalse(hit([("Bash", "ls -la && cat README.md")]))
++        self.assertFalse(hit([("Bash", "lumos search 訂單 > /dev/null")]))
++
++    def test_blind_packets_hide_arm_runner_and_run(self):
++        runs = [{"key": f"claude/{arm}/qo-P1-r{k}", "runner": "claude", "arm": arm, "id": "qo-P1", "run": k,
++                 "answer": f"回答{arm}{k}"} for arm in ("a", "b") for k in (1, 2)]
++        packets, mapping = self.qo.blind(runs, seed=7)
++        blob = json.dumps(packets, ensure_ascii=False)
++        for leak in ("claude/", '"arm"', '"runner"', "qo-P1-r"):
++            self.assertNotIn(leak, blob)
++        self.assertEqual(sorted(mapping.values()), sorted(r["key"] for r in runs))
++        self.assertEqual(len(set(mapping)), 4)
++        self.assertEqual(self.qo.blind(runs, seed=7), (packets, mapping))   # 同種子同結果
++
++    def test_sign_flip_p_matches_exact_enumeration(self):
++        # 六題差全正:單側 p = 1/64
++        self.assertAlmostEqual(self.qo.sign_flip_p([0.2, 0.1, 0.3, 0.2, 0.15, 0.25]), 1 / 64)
++        # 全為 0:沒有差異,p = 1
++        self.assertAlmostEqual(self.qo.sign_flip_p([0, 0, 0, 0, 0, 0]), 1.0)
++        # 一正一負等量:翻轉後總和 >= 觀察值的組合 3/4
++        self.assertAlmostEqual(self.qo.sign_flip_p([0.1, -0.1]), 0.75)
++
++    def _write_result(self, path, **kw):
++        r = {"id": "qo-P1", "answer": "ok", "answer_len": 2, "calls": [], "reason": "ok"}
++        r.update(kw)
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(json.dumps({"results": [r]}, ensure_ascii=False), encoding="utf-8")
++
++    def test_valid_rejects_truncated_timeout_and_instrument_errors(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            p = Path(tmp) / "x.json"
++            self._write_result(p); self.assertTrue(self.qo._valid(p))
++            for bad in ({"answer_len": 99999}, {"answer_len": None}, {"truncated": True},
++                        {"reason": "儀器例外: codex exec 超時"}, {"fatal": True}, {"limit_hit": True}):
++                self._write_result(p, **bad)
++                self.assertFalse(self.qo._valid(p), bad)
++
++    def test_code_start_multi_path_and_inplace_edit(self):
++        hit = self.qo.code_start
++        self.assertTrue(hit([("Edit", "src/main/kotlin/App.kt docs/plan.md")]))
++        self.assertTrue(hit([("Bash", "sed -i s/a/b/ src/main/kotlin/App.kt")]))
++        self.assertTrue(hit([("Bash", "perl -pi -e 's/a/b/' build.gradle.kts")]))
++        self.assertFalse(hit([("Edit", "docs/a.md docs/b.md")]))
++
++    def test_blind_masks_self_identification_and_arm_paths(self):
++        runs = [{"key": "codex/b/qo-P1-r1", "runner": "codex", "arm": "b", "id": "qo-P1", "run": 1,
++                 "answer": "我是 Codex;我依 AGENTS.md 回答。路徑 /scratchpad/qo/b/order-svc。Claude 與 CLAUDE.md 也遮。"}]
++        packets, _ = self.qo.blind(runs, seed=1)
++        text = packets[0]["answer"]
++        for leak in ("Codex", "AGENTS.md", "/qo/b/", "Claude", "CLAUDE.md"):
++            self.assertNotIn(leak, text)
++
++    def _gold_topics(self):
++        return {"qo-P1": [{"gold_id": f"g{i}", "topic": "t"} for i in range(1, 7)]}
++
++    def _labels(self, bids, label="handed", drop=None):
++        rows = []
++        for b in bids:
++            items = {f"g{i}": label for i in range(1, 7)}
++            if drop:
++                items.pop(drop)
++            rows.append({"blind_id": b, "items": items, "noise": 0})
++        return rows
++
++    def test_check_labels_strict_completeness(self):
++        mapping = {"R001": "claude/a/qo-P1-r1", "R002": "claude/b/qo-P1-r1"}
++        gt = self._gold_topics()
++        ok = {r["blind_id"]: r for r in self._labels(["R001", "R002"])}
++        self.qo.check_labels(ok, mapping, gt)
++        with self.assertRaises(ValueError):
++            self.qo.check_labels({k: v for k, v in ok.items() if k == "R001"}, mapping, gt)   # 漏評整場
++        with self.assertRaises(ValueError):
++            self.qo.check_labels({r["blind_id"]: r for r in self._labels(["R001", "R002"], drop="g6")}, mapping, gt)
++        bad = {r["blind_id"]: r for r in self._labels(["R001", "R002"], label="maybe")}
++        with self.assertRaises(ValueError):
++            self.qo.check_labels(bad, mapping, gt)
++
++    def test_merge_uses_adjudication_and_noise_rules(self):
++        a = {"R001": {"blind_id": "R001", "items": {"g1": "handed", "g2": "absent"}, "noise": 0}}
++        b = {"R001": {"blind_id": "R001", "items": {"g1": "handed", "g2": "handed"}, "noise": 3}}
++        adj = {("R001", "g2"): "handed", ("R001", "noise"): 2}
++        m = self.qo.merge(a, b, adj)
++        self.assertEqual(m["R001"]["items"], {"g1": "handed", "g2": "handed"})
++        self.assertEqual(m["R001"]["noise"], 2)                       # 差 >1 走仲裁
++        b["R001"]["noise"] = 1
++        self.assertEqual(self.qo.merge(a, b, {("R001", "g2"): "absent"})["R001"]["noise"], 1)  # 0 與 1 平均 0.5 → 四捨五入取 1(round half up)
++        with self.assertRaises(ValueError):
++            self.qo.merge(a, dict(b, R001=dict(b["R001"], noise=3)), {("R001", "g2"): "absent"})  # 該仲裁沒仲裁
++        with self.assertRaises(ValueError):
++            self.qo.merge(a, dict(b, R001=dict(b["R001"], noise=2)), {("R001", "g2"): "absent"})  # 差剛好 2 也要仲裁
++
++    def test_verdict_applies_invalid_conditions(self):
++        V = self.qo.verdict
++        good = {"kappa": 0.8, "truncated_any": False, "complete": 6, "all_zero": False,
++                "mean_diff": 0.2, "p": 1 / 64, "noise_a": 2, "noise_b": 1, "code_a": 1, "code_b": 0}
++        self.assertEqual(V(good)[0], "PASS")
++        self.assertEqual(V(dict(good, truncated_any=True))[0], "INCONCLUSIVE")
++        self.assertEqual(V(dict(good, kappa=0.59))[0], "INCONCLUSIVE")
++        self.assertEqual(V(dict(good, complete=4))[0], "INCONCLUSIVE")
++        self.assertEqual(V(dict(good, all_zero=True))[0], "INCONCLUSIVE")
++        self.assertEqual(V(dict(good, mean_diff=0.14))[0], "FAIL")
++        self.assertEqual(V(dict(good, p=0.06))[0], "FAIL")
++        self.assertEqual(V(dict(good, noise_b=3))[0], "FAIL")
++        self.assertEqual(V(dict(good, code_b=2))[0], "FAIL")
++
++    def test_merge_rejects_adjudication_outside_candidates(self):
++        a = {"R001": {"blind_id": "R001", "items": {"g1": "handed"}, "noise": 0}}
++        b = {"R001": {"blind_id": "R001", "items": {"g1": "absent"}, "noise": 3}}
++        with self.assertRaises(ValueError):
++            self.qo.merge(a, b, {("R001", "g1"): "assumed_confirm", ("R001", "noise"): 1})   # 第三種標籤
++        with self.assertRaises(ValueError):
++            self.qo.merge(a, b, {("R001", "g1"): "handed", ("R001", "noise"): 7})            # 不在兩值之間
++        self.assertEqual(self.qo.merge(a, b, {("R001", "g1"): "absent", ("R001", "noise"): 2})["R001"]["noise"], 2)
++
++    def test_final_gate_needs_human_when_sensitivity_disagrees(self):
++        self.assertEqual(self.qo.final_gate("PASS", ["PASS", "PASS"]), "PASS")
++        self.assertEqual(self.qo.final_gate("FAIL", ["FAIL", "FAIL"]), "FAIL")
++        self.assertEqual(self.qo.final_gate("PASS", ["PASS", "INCONCLUSIVE"]), "NEEDS_HUMAN")
++        self.assertEqual(self.qo.final_gate("PASS", ["FAIL", "PASS"]), "NEEDS_HUMAN")
++
++    def test_code_start_shell_mixed_code_and_doc_paths(self):
++        hit = self.qo.code_start
++        self.assertTrue(hit([("Bash", "sed -i s/a/b/ src/App.kt docs/plan.md")]))
++        self.assertFalse(hit([("Bash", "cat > docs/order-svc-knowledge/Projects/訂單_計劃.md <<'EOF'")]))
++        self.assertTrue(hit([("Bash", "mkdir -p src")]))
++
++    def test_code_start_build_tool_only_when_invoked(self):
++        hit = self.qo.code_start
++        # 2026-10-12 實跑誤判:只讀的 grep 指令裡出現 gradle 字樣
++        self.assertFalse(hit([("Bash", "git ls-files | grep -Ei 'pom|gradle|package.json' | grep -v scripts/")]))
++        self.assertFalse(hit([("Bash", "ls; cat build.gradle.kts | head -5")]))
++        self.assertTrue(hit([("Bash", "./gradlew build")]))
++        self.assertTrue(hit([("Bash", "cd app && gradle init --type kotlin-application")]))
++        self.assertTrue(hit([("Bash", "mvn -q package")]))
++
++    def test_mask_covers_model_family_names(self):
++        t, n = self.qo.mask_leaks("我是 GPT,OpenAI 訓練;另一位是 Sonnet、Opus、Anthropic。路徑 /x/qo-b/y")
++        for leak in ("GPT", "OpenAI", "Sonnet", "Opus", "Anthropic", "qo-b"):
++            self.assertNotIn(leak, t)
++
++    def test_delivery_rate_uses_fixed_denominator(self):
++        self.assertAlmostEqual(self.qo.delivery_rate({"g1": "handed"}, 6), 1 / 6)
++        self.assertAlmostEqual(self.qo.delivery_rate({f"g{i}": "assumed_confirm" for i in range(1, 7)}, 6), 1.0)
++
++    def test_cohen_kappa_known_values(self):
++        self.assertAlmostEqual(self.qo.kappa(["x", "y", "x", "y"], ["x", "y", "x", "y"]), 1.0)
++        self.assertAlmostEqual(self.qo.kappa(["x", "x", "y", "y"], ["x", "y", "x", "y"]), 0.0)
++        # 非退化案例(代碼審 r1 通才席:換成 2*po-1 照綠):po=0.8、pe=0.8*0.6+0.2*0.4=0.56 → (0.8-0.56)/0.44
++        self.assertAlmostEqual(self.qo.kappa(list("xxxxy"), list("xxxyy")), 0.24 / 0.44)
++
++    def test_delivery_rate_excludes_absent(self):
++        self.assertAlmostEqual(self.qo.delivery_rate({"g1": "absent", "g2": "handed", "g3": "absent"}, 6), 1 / 6)
++
++    def test_blind_order_is_shuffled_not_sorted(self):
++        runs = [{"key": f"claude/{arm}/qo-P{i}-r1", "runner": "claude", "arm": arm, "id": f"qo-P{i}", "run": 1,
++                 "answer": "x"} for arm in ("a", "b") for i in range(1, 7)]
++        _, m1 = self.qo.blind(runs, seed=20261012)
++        _, m2 = self.qo.blind(runs, seed=1)
++        order1 = [m1[b] for b in sorted(m1)]
++        self.assertNotEqual(order1, sorted(r["key"] for r in runs))   # 不照 key 排(甲組會全擠在前半)
++        self.assertNotEqual(order1, [m2[b] for b in sorted(m2)])       # 種子真的有作用
++
++    def test_mask_covers_arm_paths_and_group_words(self):
++        t, _ = self.qo.mask_leaks("在 order-svc-b 裡跑;這是 arm b,也就是乙組")
++        for leak in ("order-svc-b", "arm b", "乙組"):
++            self.assertNotIn(leak, t)
++
++    def test_mask_edge_shapes(self):
++        # 代碼審 r1 邊界席:底線相連的身分字、不帶斜線的組別資料夾名要遮;英文 arm a、中文「組合/組織」、GPT 後的句號不能誤傷
++        t, _ = self.qo.mask_leaks("CLAUDE_CODE 與 codex_home;cd qo-a 之後")
++        for leak in ("CLAUDE", "codex", "qo-a"):
++            self.assertNotIn(leak, t)
++        for keep in ("can arm a trap", "甲乙組合", "乙組織", "claudette", "armor"):
++            self.assertEqual(self.qo.mask_leaks(keep)[0], keep)
++        self.assertTrue(self.qo.mask_leaks("我是 GPT. 下一句")[0].endswith(". 下一句"))
++
++    def _final_fixture(self, tmp, b_label="handed", noise_b=0, code_a=False, rb_flip=0):
++        """六題各跑一次、甲乙兩組;甲組全 absent,乙組全 b_label。rb_flip:評分員乙在前幾場全部翻成相反標籤。"""
++        tmp = Path(tmp)
++        sids = [f"qo-P{i}" for i in range(1, 7)]
++        gt = {sid: [{"gold_id": f"{sid}-g{j}", "topic": "t"} for j in range(1, 7)] for sid in sids}
++        mapping, rows, la, lb, i = {}, [], [], [], 0
++        for sid in sids:
++            for arm in ("a", "b"):
++                i += 1
++                bid, key = f"R{i:03d}", f"claude/{arm}/{sid}-r1"
++                mapping[bid] = key
++                lab = "absent" if arm == "a" else b_label
++                noise = noise_b if (arm == "b" and sid == "qo-P1") else 0
++                la.append({"blind_id": bid, "items": {g["gold_id"]: lab for g in gt[sid]}, "noise": noise})
++                flip = {"absent": "handed", "handed": "absent", "assumed_confirm": "absent"}
++                lb.append({"blind_id": bid, "items": {g["gold_id"]: (flip[lab] if i <= rb_flip else lab) for g in gt[sid]},
++                           "noise": noise})
++                rows.append({"key": key, "truncated": False, "code_start": code_a and arm == "a" and sid == "qo-P2"})
++        (tmp / "ra").mkdir(); (tmp / "rb").mkdir()
++        (tmp / "ra" / "l.json").write_text(json.dumps(la), encoding="utf-8")
++        (tmp / "rb" / "l.json").write_text(json.dumps(lb), encoding="utf-8")
++        (tmp / "m.json").write_text(json.dumps({"mapping": mapping}), encoding="utf-8")
++        (tmp / "gt.json").write_text(json.dumps(gt), encoding="utf-8")
++        (tmp / "score.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
++        adj = [{"blind_id": f"R{k:03d}", "gold_id": f"{mapping[f'R{k:03d}'].split('/')[2][:-3]}-g{j}",
++                "choice": la[k - 1]["items"][f"{mapping[f'R{k:03d}'].split('/')[2][:-3]}-g{j}"]}
++               for k in range(1, rb_flip + 1) for j in range(1, 7)]
++        (tmp / "adj.json").write_text(json.dumps(adj), encoding="utf-8")
++        return ["--mapping", str(tmp / "m.json"), "--gold-topics", str(tmp / "gt.json"), "--score", str(tmp / "score.json"),
++                "--rater-a", str(tmp / "ra"), "--rater-b", str(tmp / "rb"), "--adjudication", str(tmp / "adj.json"),
++                "--runs", "1", "--dest", str(tmp / "final.json")]
++
++    def _final(self, args):
++        import contextlib, io
++        with contextlib.redirect_stdout(io.StringIO()):
++            self.assertEqual(self.qo.main(["final"] + args), 0)
++        return json.loads(Path(args[args.index("--dest") + 1]).read_text(encoding="utf-8"))["claude"]
++
++    def test_final_direction_and_arm_attribution(self):
++        # 代碼審 r1 通才席:配對差方向寫反、亂問或先寫程式記錯組,原本的測試照綠
++        with tempfile.TemporaryDirectory() as tmp:
++            s = self._final(self._final_fixture(tmp, b_label="handed", noise_b=2, code_a=True))
++        self.assertAlmostEqual(s["mean_diff"], 1.0)                    # 乙減甲,乙組全交付 → +1
++        self.assertEqual((s["noise_a"], s["noise_b"]), (0, 2))
++        self.assertEqual((s["code_a"], s["code_b"]), (1, 0))
++        self.assertEqual(s["complete"], 6)
++        self.assertEqual(s["verdict"], "FAIL")                         # 乙組亂問比甲組多
++        with tempfile.TemporaryDirectory() as tmp:
++            s = self._final(self._final_fixture(tmp, b_label="absent"))
++        self.assertEqual(s["verdict"], "INCONCLUSIVE")                 # 兩組全 0
++
++    def test_final_recomputes_kappa_and_ignores_stale_agree(self):
++        # 代碼審 r1 外家席:final 原本直接收 --agree 檔的 kappa,舊檔可讓 kappa<0.6 的結果判 PASS
++        with tempfile.TemporaryDirectory() as tmp:
++            args = self._final_fixture(tmp, rb_flip=8)
++            s = self._final(args)
++            xs, ys = [], []
++            la = json.loads((Path(tmp) / "ra" / "l.json").read_text()); lb = json.loads((Path(tmp) / "rb" / "l.json").read_text())
++            for x, y in zip(la, lb):
++                for g in sorted(x["items"]):
++                    xs.append(x["items"][g]); ys.append(y["items"][g])
++            self.assertAlmostEqual(s["kappa"], self.qo.kappa(xs, ys))
++            self.assertLess(s["kappa"], 0.6)
++            self.assertEqual(s["verdict"], "INCONCLUSIVE")
++            with self.assertRaises(SystemExit):                          # 不再收外部給的 kappa
++                self.qo.main(["final", "--agree", str(Path(tmp) / "x.json")] + args)
++
++    def test_check_labels_noise_must_be_zero_outside_noise_scenarios(self):
++        # 代碼審 r1 正確性席:非亂問題填非零,merge 會要一筆 adj-pack 永遠不產的仲裁
++        mapping = {"R001": "claude/a/qo-P4-r1"}
++        gt = {"qo-P4": [{"gold_id": f"g{j}"} for j in range(1, 7)]}
++        row = {"blind_id": "R001", "items": {f"g{j}": "absent" for j in range(1, 7)}, "noise": 0}
++        self.qo.check_labels({"R001": row}, mapping, gt)
++        with self.assertRaises(ValueError):
++            self.qo.check_labels({"R001": dict(row, noise=2)}, mapping, gt)
++
++    def test_run_subcommand_is_gone(self):
++        # 代碼審 r1 架構席:第二套逐場執行器拿掉;連帶的跳過信任旗標、無逾時外呼、不含題庫的版本紀錄一起消失
++        import contextlib, io
++        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
++            self.qo.main(["run", "--arm-a", "a", "--arm-b", "b", "--runner", "claude", "--out-dir", "o"])
++        self.assertFalse(hasattr(self.qo, "cmd_run"))
++        self.assertNotIn("subprocess", vars(self.qo))
++
++    def test_load_runs_skips_malformed_result_file(self):
++        with tempfile.TemporaryDirectory() as tmp:
++            d = Path(tmp) / "claude" / "a"; d.mkdir(parents=True)
++            (d / "qo-P1-r1.json").write_text('{"results": []}', encoding="utf-8")
++            (d / "qo-P1-r2.json").write_text("{壞", encoding="utf-8")
++            runs = self.qo._load_runs(tmp, valid_only=False)
++        self.assertEqual([(r["key"], r["valid"]) for r in runs], [("claude/a/qo-P1-r1", False), ("claude/a/qo-P1-r2", False)])
++
++
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b68b772f..c35b197c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -47726,30 +47726,62 @@ def _disp_repo(d, kt_body=None, config=None, with_issue=True):
+     (P / "app" / "Screen.kt").write_text(body, encoding="utf-8")
+     g("add", "-A"); g("commit", "-qm", "kt change")
+     return _sp.run(["git", "rev-parse", "HEAD"], cwd=d, capture_output=True, text=True).stdout.strip()
+ 
+ 
+ def _disp_run(args, cwd=None):
+     import subprocess as _sp
+     return _sp.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, cwd=cwd)
+ 
+ 
++def t_stack_questions_kotlin_spring_triggers():
++    """[後端工程提問與證據擴充 S4] Kotlin 寫 Spring 後端時,交易/資料存取與外呼的寫法要觸發 kt 的後端題;
++    只出現 Android 寫法(Room 的 @Entity/@Query("SELECT…")、Retrofit、Compose)不觸發新加的兩題。翻紅釘:拿掉這兩題 → ①② 翻紅。"""
++    m = _load_lumos_inproc()
++    def hits(lines):
++        app, meta = m._stack_applicability({"kt": lines}, 300)
++        return {x["id"] for x in meta.get("kt", []) if x["applicable"]}
++    spring_data = ['@Transactional', 'fun place(cmd: PlaceOrder) {', 'interface OrderRepo : JpaRepository<Order, Long>',
++                   'jdbcTemplate.update("update stock set qty = qty - 1 where id = ?", id)']
++    check("① Spring 交易與資料存取寫法觸發 kt-springdata", "kt-springdata" in hits(spring_data), str(hits(spring_data)))
++    spring_ext = ['val body = webClient.get().uri("/stock").retrieve()', 'private val rest = RestTemplate()']
++    check("② Spring 外呼寫法觸發 kt-springhttp", "kt-springhttp" in hits(spring_ext), str(hits(spring_ext)))
++    android = ['@Entity(tableName = "orders")', '@Query("SELECT * FROM orders")', 'val api = Retrofit.Builder().build()',
++               '@Composable fun Screen() {}']
++    h = hits(android)
++    check("③ Android 寫法不觸發新加的兩題", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
++    big = hits(["val x = 1"] * 400)
++    check("④ 超過行數門檻也不因門檻而亮(shape_only)", "kt-springdata" not in big and "kt-springhttp" not in big and "kt-coroutines" in big, str(big))
++    # 代碼審 r1 邊界席、通才席:Android 自訂類名與通用字誤觸發、Spring 的其他寫法漏觸發
++    for line in ('class AppWebClient : WebViewClient() {', 'class RestClient(private val api: Api) {', 'val c = MyRestClient()',
++                 'val webClient = MyWebViewClient()', 'val c: DatabaseClient = get()', '@Lock("x") fun f() {}'):
++        h = hits([line])
++        check(f"⑤ Android 自訂寫法不觸發:{line}", "kt-springdata" not in h and "kt-springhttp" not in h, str(h))
++    for line, qid in (('@get:Transactional', "kt-springdata"), ('val rows = jdbcClient.sql("select 1").query()', "kt-springdata"),
++                      ('private val jdbc: JdbcClient', "kt-springdata"), ('private val mongo: MongoTemplate', "kt-springdata"),
++                      ('@Lock(LockModeType.PESSIMISTIC_WRITE)', "kt-springdata"), ('val db = DatabaseClient.create(factory)', "kt-springdata"),
++                      ('val client = RestClient.builder().build()', "kt-springhttp"), ('@HttpExchange("/stock")', "kt-springhttp"),
++                      ('private val webClient: WebClient', "kt-springhttp"), ('import org.springframework.web.client.RestClient', "kt-springhttp")):
++        check(f"⑥ Spring 寫法要觸發 {qid}:{line}", qid in hits([line]), str(hits([line])))
++
++
+ def t_stack_question_triggers():
+     """[表態閘 S2]每題有唯一 id 與非空 when、id 集合釘住(改 id=刻意動作,r3 正確性席 C1);
+     比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;前端 .ts 歸 vue。
+     翻紅釘:拔掉 _stack_norm_line 的註解跳過 → ③翻紅;把 changed_lines 只收 + 行 → ⑥「純刪除 diff 也觸發」翻紅(r1 合約測試席 f5 訂正編號)。"""
+     import json as _j
+     m = _load_lumos_inproc()
+     ids = [s["id"] for v in m._STACK_QUESTION_SPECS.values() for s in v]
+     check("①每題 id 唯一且 when 非空(regex 已在載入時編譯)", len(ids) == len(set(ids)) and all(s["when"] for v in m._STACK_QUESTION_SPECS.values() for s in v), str(ids))
+     check("①id 集合釘住(改 id 要來改這條測試——改語意才換 id 的紀律靠這裡逼)",
+           set(ids) == {"kt-compose", "kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections", "kt-leaks", "kt-startup",
++                       "kt-springdata", "kt-springhttp",   # 2026-10-12 Kotlin 寫 Spring 後端(後端工程提問與證據擴充 S4)
+                        "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
+                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
+                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
+                        "swift-main", "swift-swiftui", "swift-leaks", "swift-startup", "swift-concurrency", "swift-energy",
+                        "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory",
+                        "py-eventloop", "py-parallel", "py-external", "py-memory", "py-hotpath",
+                        "java-concurrency", "java-resources", "java-data", "java-external", "java-memory",
+                        "java-collections", "java-android",
+                        "dart-build", "dart-list", "dart-dispose", "dart-async", "dart-isolate", "dart-platform",
+                        # 外部回應碼(2026-10-03 Projects/外部回應碼語意要有出處_計劃):sql 以外八棧各一題
+@@ -47823,22 +47855,22 @@ def t_stack_question_triggers():
+             if _qid is None:
+                 check(f"③{_stk} 乾淨舊法樣本零觸發:{_line[:30]}", not _got, str(_got))
+             else:
+                 check(f"③{_stk} 舊法樣本亮同一題 {_qid}:{_line[:30]}", _qid in _got, str(_got))
+     app3, meta3 = m._stack_applicability({"kt": ["x"] * 301}, 300)
+     check("④超過門檻全表適用且 triggered_by 註明", len(app3["kt"]) == 7 and meta3["kt"][0]["triggered_by"] == ["行數>300"], str(meta3["kt"][0]))
+     with tempfile.TemporaryDirectory() as d:
+         _disp_repo(d)
+         r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
+         data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
+-        check("⑤stack_questions 語意不變(kt 整組 7 題)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
+-        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 8, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+extcode
++        check("⑤stack_questions 語意不變(kt 整組 7 題;Spring 後端兩題是 shape_only 不進整組清單)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
++        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 10, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+Spring 後端兩題+extcode
+         # 刪行也算:拿掉 viewModelScope 那行 → kt-coroutines 仍適用
+         P = Path(d); (P / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n}\n", encoding="utf-8")
+         import subprocess as _sp
+         _sp.run(["git", "commit", "-qam", "remove launch"], cwd=d)
+         r2 = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
+         data2 = _j.loads([l for l in r2.stdout.splitlines() if l.startswith("{")][0])
+         check("⑥純刪除 diff 也觸發(拿掉 viewModelScope.launch → kt-coroutines 適用)", "kt" in data2["stack_questions_applicable"], str(data2.get("stack_questions_applicable")))
+     with tempfile.TemporaryDirectory() as d:
+         import subprocess as _sp
+         g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+@@ -55969,20 +56001,216 @@ def _sg_plan(kg, name, clauses, rollback=_SG_ROLLBACK):
+ def t_spec_gate_ears_shapes():
+     """[規格落成可驗收條件 S1] 定義行不合那條文法或帶複合觸發 → 「格式看不懂」不是條款。翻紅釘:拿掉文法檢查 → ① 翻紅。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg1")
+     _sg_plan(kg, "甲", ["- [S1] 當送出表單,系統應回 200 [test:t_green]", "- [S2] 系統應拒絕空白輸入 [test:t_green]",
+                        "- [S3] 在後台裡,若管理員登入,則系統應顯示按鈕 [test:t_green]", "- [S4] 當送出表單,系統回 200 [test:t_green]"])
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     check("① 複合觸發與缺「應」的兩條被判格式看不懂、rc1", r.returncode == 1 and "格式看不懂" in r.stdout and "S3" in r.stdout and "S4" in r.stdout, r.stdout[-500:])
+     check("② 合法的觸發型與無條件型不被點名", "S1(" not in r.stdout and "S2(" not in r.stdout, r.stdout[-500:])
+ 
+ 
++def _qo_plan(kg, name, questions, clauses=None, decisions=""):
++    """帶〈待決問題〉一節的計劃;decisions 是開頭欄位的 decisions 區塊原文。"""
++    p = kg / "Projects" / f"{name}_計劃.md"
++    body = "\n".join(clauses or [])
++    p.write_text("---\ntype: project\nstatus: doing\n" + decisions + "---\n# " + name + "\n\n" + body
++                 + "\n\n## 待決問題\n\n" + "\n".join(questions) + "\n" + _SG_ROLLBACK, encoding="utf-8")
++    return p
++
++
++_QO_DEC = "decisions:\n  - content: 採用甲方案\n    id: d1\n    decided: 2026-10-12\n    valid: true\n  - content: 舊方案\n    id: d2\n    decided: 2026-10-01\n    valid: false\n"
++
++
++def t_backend_qo_blocking_question_holds_spec_gate():
++    """[後端工程提問與證據擴充 S1] 需求/架構階段標阻塞、狀態待查或待人的題 → 規格閘回 1(不論風險、--no-run、有無條款);
++    已決並指到有效決策就不擋;實作以後階段的阻塞題不擋;沒有〈待決問題〉的計劃行為不變。翻紅釘:拿掉前段檢查 → ①②③ 翻紅。"""
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo1")
++    q_block = "- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:待人][阻塞]"
++    _qo_plan(kg, "qa", [q_block], decisions=_QO_DEC)
++    r = run(kg, "spec-gate", "Projects/qa_計劃")
++    check("① 只有待決問題、沒有條款 → rc1 並列出 Q1", r.returncode == 1 and "Q1" in r.stdout and "待決問題" in r.stdout, r.stdout[-600:])
++    r2 = run(kg, "spec-gate", "Projects/qa_計劃", "--no-run")
++    check("② 帶 --no-run 也擋", r2.returncode == 1 and "Q1" in r2.stdout, r2.stdout[-600:])
++    _qo_plan(kg, "qb", [q_block], clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
++    r3 = run(kg, "spec-gate", "Projects/qb_計劃")
++    check("③ 有條款的計劃也擋", r3.returncode == 1 and "Q1" in r3.stdout, r3.stdout[-600:])
++    _qo_plan(kg, "qc", ["- [Q1] 訂單成功的定義是什麼 [類:需求][階段:需求][狀態:已決][阻塞] → #d1"], decisions=_QO_DEC)
++    r4 = run(kg, "spec-gate", "Projects/qc_計劃")
++    check("④ 已決並指到有效決策 → 不因它擋", "Q1" not in r4.stdout or r4.returncode == 0, r4.stdout[-600:])
++    _qo_plan(kg, "qd", ["- [Q1] 壓測門檻要多少 [類:驗證][階段:效能][狀態:待人][阻塞]"], decisions=_QO_DEC)
++    r5 = run(kg, "spec-gate", "Projects/qd_計劃")
++    check("⑤ 效能階段的阻塞題不擋規格閘", r5.returncode == 0, r5.stdout[-600:])
++    _sg_plan(kg, "qe", ["純散文,沒有條款。"])
++    base = run(kg, "spec-gate", "Projects/qe_計劃")
++    check("⑥ 沒有〈待決問題〉的計劃不印這一節、rc0", base.returncode == 0 and "待決問題" not in base.stdout, base.stdout[-400:])
++    # 對照組(代碼審 r1 通才席:放寬或縮窄擋法條件測試照綠):沒標阻塞的待人題不擋、架構階段要擋
++    _qo_plan(kg, "qf", ["- [Q1] 要不要支援取消 [類:需求][階段:需求][狀態:待人]"], decisions=_QO_DEC)
++    r6 = run(kg, "spec-gate", "Projects/qf_計劃")
++    check("⑦ 沒標阻塞的需求階段待人題不擋", r6.returncode == 0, r6.stdout[-600:])
++    _qo_plan(kg, "qg", ["- [Q1] 要不要拆成兩個服務 [類:架構][階段:架構][狀態:待查][阻塞]"], decisions=_QO_DEC)
++    r7 = run(kg, "spec-gate", "Projects/qg_計劃")
++    check("⑧ 架構階段標阻塞的待查題要擋", r7.returncode == 1 and "Q1" in r7.stdout, r7.stdout[-600:])
++
++
++def t_backend_qo_parser_robust():
++    """[後端工程提問與證據擴充 S2] 待決問題解析(代碼審 r1 邊界席、合約圖譜席、架構席):看不懂的題目行要報、不能靜默丟;
++    圍欄裡的標題與題目不算;標題放寬、多節全收;全形冒號認得;題目文字只取第一個標記之前;測試名兩邊同一套正規化;
++    長行不卡。翻紅釘:改回逐行讀原文 → ③ 翻紅;改回只認 `- [Qn]` 且不報 → ① 翻紅。"""
++    m = _load_lumos_inproc()
++    P = m.parse_pending_questions
++
++    def sec(*lines, head="## 待決問題"):
++        return "# x\n\n" + head + "\n\n" + "\n".join(lines) + "\n\n## 回退\n"
++
++    ok = "[類:需求][階段:需求][狀態:待人][阻塞]"
++    for bad in ("1. [Q1] 真 " + ok, "- Q2 真 " + ok, "- [ ] [Q3] 真 " + ok, "- **[Q4]** 真 " + ok,
++                "> - [Q5] 真 " + ok, "+ [Q6] 真 " + ok, "- [Ｑ7] 真 " + ok):
++        qs = P(sec(bad))
++        check(f"① 看不懂的題目行要留下來報錯、規格閘要擋:{bad[:14]}", qs is not None and len(qs) == 1 and qs[0].get("bad")
++              and m.pending_questions_blocking_gate(qs) and any("看不懂" in e for e in m.pending_question_problems(qs, lambda l: "ok", set())), qs)
++    for head in ("## 待決問題(v2)", "### 待決問題", "## 6. 待決問題", "## 待決問題 ##", "## 待決問題:"):
++        qs = P(sec("- [Q1] 真 " + ok, head=head))
++        check(f"② 標題變體也認得:{head}", qs and qs[0]["id"] == "Q1" and not qs[0].get("bad"), qs)
++    fenced = "# x\n\n```\n## 待決問題\n- [Q9] 範例 [類:a][階段:需求][狀態:已決]\n```\n\n## 待決問題\n\n```\n# note\n- [Q8] 範例 " + ok + "\n```\n- [Q1] 真 " + ok + "\n"
++    qs = P(fenced)
++    check("③ 圍欄裡的標題與題目不算、圍欄裡的 # 不結束這一節", [q["id"] for q in qs or []] == ["Q1"], qs)
++    two = "# x\n\n## 待決問題\n- [Q1] 一 " + ok + "\n\n## 別節\n文字\n\n## 待決問題\n- [Q2] 二 " + ok + "\n"
++    check("④ 兩節都收", [q["id"] for q in P(two) or []] == ["Q1", "Q2"], P(two))
++    nested = "# x\n\n### 待決問題\n- [Q1] 一 " + ok + "\n#### 補充\n- [Q2] 二 " + ok + "\n## 下一節\n- [Q3] 不是題 " + ok + "\n"
++    check("⑤ 比它深的標題不結束這一節、同級或更淺才結束", [q["id"] for q in P(nested) or []] == ["Q1", "Q2"], P(nested))
++    q = P(sec("- [Q1] 真 [類：需求][階段：需求][狀態：待查][阻塞]"))[0]
++    check("⑥ 標記裡的全形冒號認得", (q["status"], q["stage"], q["cls"]) == ("待查", "需求", "需求"), q)
++    for tag in ("[狀態:待查。]", "[階段:需求/架構][狀態:待人]"):
++        qs = P(sec("- [Q1] 真 [類:需求]" + ("[階段:需求]" if "階段" not in tag else "") + tag + "[阻塞]"))
++        check(f"⑦ 標了阻塞但狀態或階段寫錯 → 規格閘照擋:{tag}", m.pending_questions_blocking_gate(qs), qs)
++    q = P(sec("- [Q1] 單元測試:要補嗎、從 A → B 怎麼遷 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_x"))[0]
++    check("⑧ 題目文字只取第一個標記之前,內文的「測試:」「→」不當欄位", q["text"] == "單元測試:要補嗎、從 A → B 怎麼遷"
++          and q["tests"] == ["t_x"] and q["link"] == "#d1", q)
++    q = P(sec("- [Q1] 真 [類:需求][階段:需求][狀態:自答] 出處: → #d1"))[0]
++    check("⑨ 連結不算進出處的字數", q["source"] == "" and q["link"] == "#d1", q)
++    q = P(sec("- [Q1] 真 [類:需求][階段:需求][狀態:自答] 出處：README 第一段"))[0]
++    check("⑩ 全形冒號的出處認得", q["source"] == "README 第一段", q)
++    qs = P(sec("- [Q1] 真 [類:需求][階段:需求][狀態:待人][狀態:已決]"))
++    check("⑪ 同一行寫兩個狀態要報", any("重複" in e and "狀態" in e for e in m.pending_question_problems(qs, lambda l: "ok", set())), qs)
++    clause = "# x\n\n- [S1] 系統應回 200 [test: py：t_x, t_y]\n- 範例 `[S3] 系統應 [test:t_bt]`\n\n```\n- [S2] 範例 [test:t_fake]\n```\n"
++    tests = m._pq_clause_tests(clause)
++    check("⑫ 條款測試名:圍欄與反引號裡的不算(同條款綁定)、平台前綴照同一套正規化", tests == {"py:t_x", "t_y"}, tests)
++    qs = P(sec("- [Q1] 真 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試: py:t_x，t_y"))
++    check("⑬ 題目側寫法照抄條款也對得上(含全形逗號清單)", not m.pending_question_problems(qs, lambda l: "ok", tests), qs)
++    qs = P(sec("- [Q1] 真 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_x,t_nope"))
++    check("⑭ 清單裡有一個不在條款就報那一個", any("t_nope" in e for e in m.pending_question_problems(qs, lambda l: "ok", {"t_x"})), qs)
++    qs = P(sec("- [Q1] 真 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_x。"))
++    check("⑭b 測試名結尾的標點不算進名字(代碼審 r1 正確性席)", qs[0]["tests"] == ["t_x"], qs)
++    import time as _t
++    t0 = _t.time()
++    P(sec("- [Q1] 真 [類:需求][階段:需求][狀態:待人] 出處:" + " " * 60000 + "x"))
++    P(sec("- [Q1] " + "[類:" * 40000))
++    check("⑮ 長行(6 萬空白、4 萬個沒闔上的標記)兩秒內解完", _t.time() - t0 < 2, _t.time() - t0)
++
++
++def t_backend_qo_lint_gate_rc():
++    """[後端工程提問與證據擴充 S2] 〈待決問題〉的 lint 規則跟著 note_lint.gate:on 時有錯回非 0,warn 時只印、回 0(代碼審 r1 正確性席:原本只 grep 輸出)。
++    翻紅釘:規則不掛進新規則那一路 → ① 翻紅。"""
++    import json as _j
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo6")
++    cfgp = d / ".lumos" / "config.json"
++    base = _j.loads(cfgp.read_text(encoding="utf-8"))
++    _qo_plan(kg, "lr", ["- [Q1] 甲 [類:需求][階段:需求][狀態:已決] → #d9"], decisions=_QO_DEC)
++    for gate, want_fail in (("on", True), ("warn", False)):
++        cfgp.write_text(_j.dumps(dict(base, note_lint={"gate": gate})), encoding="utf-8")
++        r = run(kg, "lint", "Projects/lr_計劃")
++        check(f"① gate={gate}:{'回非 0' if want_fail else '回 0'}且印出 Q1 的問題", (r.returncode != 0) == want_fail
++              and "Q1" in r.stdout and "不存在" in r.stdout, f"rc={r.returncode} " + r.stdout[-600:])
++
++
++def t_backend_qo_gate_fail_closed():
++    """[後端工程提問與證據擴充 S1] 規格閘寧可擋:看不懂的題目行、標阻塞但狀態寫錯的題都擋並講原因;
++    跨篇決策連結 [[別篇]]#dN 照那篇的決策判。翻紅釘:閘只看合法阻塞題 → ①② 翻紅。"""
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo5")
++    _qo_plan(kg, "fa", ["1. [Q1] 訂單成功的定義 [類:需求][階段:需求][狀態:待人][阻塞]"], decisions=_QO_DEC)
++    r = run(kg, "spec-gate", "Projects/fa_計劃")
++    check("① 看不懂的題目行 → rc1 並講看不懂", r.returncode == 1 and "看不懂" in r.stdout, r.stdout[-600:])
++    _qo_plan(kg, "fb", ["- [Q1] 訂單成功的定義 [類:需求][階段:需求][狀態:待查。][阻塞]"], decisions=_QO_DEC)
++    r = run(kg, "spec-gate", "Projects/fb_計劃")
++    check("② 標阻塞但狀態寫錯 → rc1", r.returncode == 1 and "Q1" in r.stdout, r.stdout[-600:])
++    (kg / "Projects" / "別篇_計劃.md").write_text("---\ntype: project\nstatus: doing\n" + _QO_DEC + "---\n# 別篇\n", encoding="utf-8")
++    _qo_plan(kg, "fc", ["- [Q1] 一 [類:需求][階段:實作][狀態:已決] → [[別篇_計劃]]#d2",
++                        "- [Q2] 二 [類:需求][階段:實作][狀態:已決] → [[別篇_計劃]]#d1"])
++    out = run(kg, "lint", "Projects/fc_計劃").stdout
++    check("③ 跨篇連結照那篇判:指到作廢的 d2 要報、有效的 d1 不報",
++          any("Q1" in ln and "作廢" in ln for ln in out.splitlines()) and not any("Q2" in ln and "待決問題" in ln for ln in out.splitlines()), out[-800:])
++
++
++def t_backend_qo_question_line_shape():
++    """[後端工程提問與證據擴充 S2] lint 逐條抓:已決指到不存在或已作廢的決策、自答沒出處、延後沒理由、不可逆卻自答、
++    阻塞卻延後、已驗的測試名不在本篇條款、編號重複;合乎文法與方括號順序不同的行不報。翻紅釘:拿掉 lint 規則 → 全部翻紅。"""
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "qo2")
++    good = ["- [Q1] 一 [類:需求][階段:需求][狀態:已決] → #d1",
++            "- [Q2] 二 [狀態:自答][階段:架構][類:架構] 出處:README 第一段寫了技術選型",
++            "- [Q3] 三 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_green",
++            "- [Q4] 四 [類:失敗][階段:實作][狀態:延後] 理由:等示範跑完再定"]
++    _qo_plan(kg, "lg", good, clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
++    r = run(kg, "lint", "Projects/lg_計劃")
++    check("① 合乎文法(含方括號順序不同)的四行不報待決問題的錯", "待決問題" not in r.stdout, r.stdout[-800:])
++    bad = ["- [Q1] 甲 [類:需求][階段:需求][狀態:已決] → #d9",
++           "- [Q2] 乙 [類:需求][階段:需求][狀態:已決] → #d2",
++           "- [Q3] 丙 [類:需求][階段:需求][狀態:自答]",
++           "- [Q4] 丁 [類:需求][階段:需求][狀態:延後]",
++           "- [Q5] 戊 [類:需求][階段:需求][狀態:自答][不可逆] 出處:我自己判斷就好",
++           "- [Q6] 己 [類:需求][階段:需求][狀態:延後][阻塞] 理由:之後再說吧",
++           "- [Q7] 庚 [類:驗證][階段:驗證][狀態:已驗] → #d1 測試:t_missing",
++           "- [Q7] 辛 [類:需求][階段:需求][狀態:待人]"]
++    _qo_plan(kg, "lb", bad, clauses=["- [S1] 系統應回 200 [test:t_green]"], decisions=_QO_DEC)
++    out = run(kg, "lint", "Projects/lb_計劃").stdout
++    for q, why in (("Q1", "不存在"), ("Q2", "作廢"), ("Q3", "出處"), ("Q4", "理由"), ("Q5", "不可逆"), ("Q6", "阻塞"),
++                   ("Q7", "t_missing"), ("Q7", "重複")):
++        check(f"② {q} 因「{why}」被報", any(q in ln and why in ln for ln in out.splitlines()), out[-1500:])
++
++
++def t_backend_qo_stage_order_and_cap():
++    """[後端工程提問與證據擴充 S3] pitfalls --stage:依阻塞、不可逆、其餘排序,阻塞或不可逆的全部列出不截斷;
++    不帶 --stage 時有沒有這一節輸出一字不差;--stage 錯值或與 --diff 並用回 2。翻紅釘:排序改成照編號 → ② 翻紅;一般模式也印待決問題 → ⑤ 翻紅。"""
++    root = Path(tempfile.mkdtemp(prefix="gctl-qo3-"))
++    (root / ".git").mkdir()
++    qs = ["- [Q1] 一般題 [類:需求][階段:需求][狀態:待人]",
++          "- [Q2] 不可逆題 [類:需求][階段:需求][狀態:待人][不可逆]",
++          "- [Q3] 阻塞題甲 [類:需求][階段:需求][狀態:待人][阻塞]",
++          "- [Q4] 阻塞題乙 [類:需求][階段:需求][狀態:待人][阻塞]",
++          "- [Q5] 阻塞題丙 [類:需求][階段:需求][狀態:待人][阻塞]",
++          "- [Q6] 阻塞題丁 [類:需求][階段:需求][狀態:待人][阻塞]",
++          "- [Q7] 已決題 [類:需求][階段:需求][狀態:已決] → #d1",
++          "- [Q8] 別階段 [類:驗證][階段:驗證][狀態:待人]"]
++    md = root / "plan.md"
++    md.write_text("# 訂單系統\n\n需求:做一個訂單 API。\n\n## 待決問題\n\n" + "\n".join(qs) + "\n", encoding="utf-8")
++    plain_before = run(root, "pitfalls", str(md), "--repo", str(root))
++    r = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "需求")
++    out = r.stdout
++    check("① rc0", r.returncode == 0, out[-600:])
++    pos = {q: out.find(f"[{q}]") for q in ("Q1", "Q2", "Q3", "Q4", "Q5", "Q6")}
++    check("② 阻塞四題都在不可逆之前、不可逆在一般題之前", all(-1 < pos[x] < pos["Q2"] for x in ("Q3", "Q4", "Q5", "Q6")) and pos["Q2"] < pos["Q1"], out[-800:])
++    check("③ 阻塞與不可逆共 5 題全列,不因題數截斷", all(pos[q] > -1 for q in ("Q2", "Q3", "Q4", "Q5", "Q6")), out[-800:])
++    check("④ 已決題與別階段的題不列", "[Q7]" not in out and "[Q8]" not in out, out[-800:])
++    md_other = root / "plan2.md"   # 同一份內容只換節標題:有沒有〈待決問題〉一節,不帶 --stage 的輸出要一字不差(代碼審 r1 合約圖譜席、通才席)
++    md_other.write_text(md.read_text(encoding="utf-8").replace("## 待決問題", "## 其他筆記"), encoding="utf-8")
++    plain_other = run(root, "pitfalls", str(md_other), "--repo", str(root))
++    check("⑤ 不帶 --stage 時,有沒有〈待決問題〉一節輸出一字不差", plain_before.stdout.replace(str(md), "X") == plain_other.stdout.replace(str(md_other), "X")
++          and plain_before.returncode == plain_other.returncode and "[Q3]" not in plain_before.stdout, plain_before.stdout[-400:])
++    bad = run(root, "pitfalls", str(md), "--repo", str(root), "--stage", "上線")
++    check("⑥ 不認得的階段回 2", bad.returncode == 2, bad.stdout + bad.stderr)
++    both = run(root, "pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root), "--stage", "需求")
++    check("⑦ 跟 --diff 並用回 2", both.returncode == 2, both.stdout + both.stderr)
++    badenc = root / "bad.md"
++    badenc.write_bytes(b"\xff\xfe## \x00x\n")
++    be = run(root, "pitfalls", str(badenc), "--repo", str(root), "--stage", "需求")
++    check("⑧ 讀不動的計劃(非 UTF-8)回 2、訊息帶「擋下:」、不吐 Python 追蹤", be.returncode == 2 and "擋下:" in be.stderr and "Traceback" not in be.stderr, be.stderr[-400:])
++
++
+ def t_spec_gate_stopwords():
+     """[規格落成可驗收條件 S2] 句首是停用詞(當然/在此…)→ 當無條件型,不是格式看不懂。翻紅釘:停用詞表清空 → ① 翻紅。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg2")
+     _sg_plan(kg, "乙", ["- [S1] 當然系統應保留舊資料 [test:t_green]", "- [S2] 在此情境下系統應拒絕 [test:t_green]"])
+     r = run(kg, "spec-gate", "Projects/乙_計劃")
+     check("① 停用詞開頭的兩條都算條款、rc0", r.returncode == 0 and "格式看不懂" not in r.stdout, r.stdout[-500:])
+ 
+ 
+ def t_spec_gate_missing_separator():
+     """[規格落成可驗收條件 S13] 句首是觸發詞但整行沒有分隔 → 格式看不懂並印缺逗號(r5 正確性席:原本兩邊都掉不進去)。"""
+@@ -80599,20 +80827,44 @@ def t_decisions_superseded_output_unchanged():
+ 
+ 
+ def t_test_quality_cli():
+     _need_src("scripts/test_test_quality_cli.py")
+     run = subprocess.run([sys.executable, "scripts/test_test_quality_cli.py"],
+                          cwd=Path(GRAPHCTL).resolve().parent.parent, capture_output=True, text=True, timeout=60)
+     check("測試品質收證、歸因與無效結果獨立控制", run.returncode == 0,
+           (run.stdout + run.stderr)[-4000:])
+ 
+ 
++def t_qo_ablation_scorer_suite():
++    """情境出題對照實驗計分器的整組單元測試(自主迴圈測試檔的 TestQoAblation),包成主測試檔的入口,
++    讓修正紀錄與條款能綁(代碼審 code-後端情境出題 r1:最後統計方向、一致率重算、遮罩、壞檔)。"""
++    _need_src("governance/eval/qo-ablation-2026-10/qo_ablation.py")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", "TestQoAblation"],
++                         cwd=root, capture_output=True, text=True, timeout=120)
++    import re
++    output = run.stdout + run.stderr
++    check("計分器整組測試全綠", run.returncode == 0 and re.search(r"Ran [1-9][0-9]* tests", output) is not None, output[-4000:])
++
++
++def t_scenario_probe_collect_only_and_answer_cap():
++    """情境探針:只收回答的題省略判準欄位不崩、回答上限照參數傳到每一場(代碼審 code-後端情境出題 r1 外家席、正確性席、架構席)。"""
++    root = Path(GRAPHCTL).resolve().parent.parent
++    names = ["TestScenarioProbeAblation.test_collect_only_without_expect_key_grades_without_crash",
++             "TestScenarioProbeAblation.test_answer_max_flows_as_argument_not_global",
++             "TestScenarioProbeAblation.test_validate_scenario_collect_only_allows_empty_expect"]
++    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", *names],
++                         cwd=root, capture_output=True, text=True, timeout=120)
++    output = run.stdout + run.stderr
++    check("探針三支相關測試全綠", run.returncode == 0 and "Ran 3 tests" in output, output[-4000:])
++
++
+ def t_test_quality_scan_cli():
+     _need_src("scripts/test_quality_scan.py")
+     _need_src("scripts/test_test_quality_scan.py")
+     root = Path(GRAPHCTL).resolve().parent.parent
+     run = subprocess.run([sys.executable, "scripts/test_test_quality_scan.py"],
+                          cwd=root, capture_output=True, text=True, timeout=60)
+     import re
+     output = run.stdout + run.stderr
+     check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
+           re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+diff --git a/skills/lumos-design-loop/SKILL.md b/skills/lumos-design-loop/SKILL.md
+index a68fb787..44a5f02b 100644
+--- a/skills/lumos-design-loop/SKILL.md
++++ b/skills/lumos-design-loop/SKILL.md
+@@ -3,20 +3,21 @@ name: lumos-design-loop
+ description: 設計 spec 或計劃寫完、要進實作之前的審查迴圈——讓幾個不知道脈絡的審查員輪流挑毛病,每輪用 lumos loop next 派席、lumos canary record 記帳、lumos loop status --disposal 判過不過——散文 spec 走處置閘,一輪裡每個發現都折掉或附理由接受就放行實作;跑滿上限沒過就攤給人裁。觸發:剛寫完 spec/設計/計劃筆記準備動手、有人問「這份設計審過沒」、指名 design loop 或對抗審計。小改動可跳過但要在計劃筆記註明。指令速查在 lumos-project-notes 的 commands/05-設計審查迴圈.md。
+ ---
+ # 設計審查迴圈——一頁手冊
+ 
+ 白話:一份設計寫完、動手實作之前,讓幾個不知道脈絡的審查員輪流挑毛病。每輪派人、收報告、機械驗報告、把真問題折回設計、記帳、問閘過了沒。**散文 spec 的收斂判準=處置閘:一輪裡每個發現都折掉或附理由接受,這輪就算收斂**;跑滿上限沒過就攤給人裁。**你(主對話)負責派人和判讀,lumos 只出記帳與判閘的指令,不會自己派 agent。**
+ 
+ 指令速查:`lumos-project-notes` 的 `commands/05-設計審查迴圈.md`。派工的完整 prompt 在同目錄 `templates.md`(派工以它為準)。
+ 每條規則的由來與事故見 `reference.md`〈入口頁舊版全文(去時效前)〉。
+ 
+ ## 什麼時候用、什麼時候跳
++- **待決問題先清**:計劃有 `## 待決問題` 一節時,需求或架構階段標阻塞、還沒決定的題會讓規格閘直接回 1(不論風險高低);先問人或自己查清,改成已決再判門(寫法見 lumos-project-notes 的「新需求先找要人決定的事」)。
+ - **先判門**:設計寫完先跑 `lumos spec-gate <計劃>`。印 `PASS(風險低)` → 不進本迴圈、直接實作(推送前 pre-push 會把留痕裡的測試全跑);判風險高 → 照本 skill 走。判門規則、條款句式與小改動閘的細節看它的輸出與 [[Projects/雙向門放行_計劃]]。
+ - **用**:spec / 設計 / 計劃筆記寫完、要進實作前。被審的唯一真檔 = 圖譜計劃筆記 `Projects/<主題>_計劃.md`;loop 編號 = 檔名去 `_計劃` 轉 kebab。
+ - **跳**:改錯字、一行、純機械(改名、補欄位)——可跳,但在 commit 或計劃筆記寫一句為什麼跳。
+ - **light(單人+架構對齊席、最多兩輪)**:小而不瑣碎的 spec 才准(暫用值:預估實作改動 ≲50 行且孤立);碰金流 / 對外寄送 / 正式環境不可逆 / 守衛面、動到 ★INVARIANT★、演算法密集、改動偏大——任一命中就走完整迴圈。忘了判就走完整(寧多不少)。這道判斷目前靠你自己誠實,沒有機械擋。**light 輪只要冒出存活 ≥major → 算 light 誤判,立刻升級**:開新編號(原編號加 `-std`)走完整迴圈,乾淨輪不洗回來。
+ - 進場前一行 `lumos loop next <編號> --tier standard|high|light --orchestrator claude|codex --spec <計劃.md>`,第一次一定帶 `--tier` 與 `--orchestrator`(誰在編排;外家席=不是編排者那一家),之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」:近名或已翻案的先讀它的 decisions 再開案。開案前再跑 `lumos rejections` 把舊否決清單讀完,按概念(不是字面)比對這份設計;撞到就先問人「上次因為這個理由否決,現在還這麼想嗎」,答案寫進計劃再開審。
+ 
+ ## 一輪怎麼跑(照這個順序)
+ 1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審。
+ 2. **先機械排乾**(每輪):
+    - `lumos refcheck <副本> --repo <根> --json`:引的檔案/行號不存在直接修真檔。
+diff --git a/skills/lumos-project-notes/SKILL.md b/skills/lumos-project-notes/SKILL.md
+index df321ff5..504df959 100644
+--- a/skills/lumos-project-notes/SKILL.md
++++ b/skills/lumos-project-notes/SKILL.md
+@@ -30,20 +30,26 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—
+ 
+ ## 2. 動手前
+ 
+ - 寫或改測試先讀 `commands/03-寫回圖譜.md`〈實作測試品質〉；先列輸入、預期結果、判準來源與應抓到的錯誤。
+ 
+ - `lumos impact --file <檔>` / `--diff <範圍>`:哪些筆記、驗證、決策會受影響(Edit 前 hook 也會塞一份,但只推你碰到的檔)。
+ - `lumos pitfalls --diff <範圍>`:風險分級;`tier: high` 要過代碼審(`lumos-code-loop`)。
+ - 要刪 / 改名東西:`lumos search <舊名> --code` 逐句判哪些筆記還在講它。
+ - 改了環境 / 流程 / 設定(版本、金鑰、hook、排程):`lumos stale --candidate --match <關鍵字>` 列出寫了「改到這個就該重驗」的驗證紀錄。
+ - 設計、spec、計劃一律寫成 `Projects/<主題>_計劃` 筆記(`type: project`),不寫到別的路徑;動筆前一行 `PRIOR-ART:`(最小解在哪層 / 世界解過沒 / 借用‧自建‧採用)。
++- **新需求先找要人決定的事,再動手**(情境出題,2026-10-12 對照實驗驗過,單源 [[Projects/後端工程提問與證據擴充_計劃]]):
++  1. 先讀 README 與 repo 既有文件、筆記;裡面寫了答案的不要再問人,直接引用。
++  2. 對照風險面(`lumos pitfalls <計劃筆記路徑> --stage <需求|架構|實作|驗證|效能|交付>` 會列出那一階段的)找缺口;能自己查、能推得出、有安全預設的自己答並寫出處。
++  3. 只把業務規則、成本、風險能接受到哪、做了回不去的決定、產品行為交給人;會擋住後面工作的、做了回不去的有幾題就一次問完,其他排後面,每題附建議答案。
++  4. 題目寫進計劃的 `## 待決問題`,一題一行:`- [Q<n>] <問題> [類:<值>][階段:<值>][狀態:<值>]`,可加 `[阻塞]` `[不可逆]`;狀態取 待查/自答/待人/延後/已決/已驗,自答附 `出處:`、延後附 `理由:`、已決 `→ #dN` 指到決策、已驗再加 `測試:<條款綁的測試名>`;不可逆不得自答,阻塞不得延後(lint 會查)。
++  5. 需求或架構階段標阻塞、還沒決定的題,規格閘會擋;要人決定的題沒回答前不寫程式。
+ 
+ ## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
+ 
+ | 要做 | 敲 |
+ |---|---|
+ | 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+ | 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+ | 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+ | 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+ | 正文段落 | Edit;寫完 `lumos lint <節點>` |
+diff --git a/skills/lumos-project-notes/commands/02-動手前算波及.md b/skills/lumos-project-notes/commands/02-動手前算波及.md
+index c403d421..7aaf27a6 100644
+--- a/skills/lumos-project-notes/commands/02-動手前算波及.md
++++ b/skills/lumos-project-notes/commands/02-動手前算波及.md
+@@ -1,16 +1,16 @@
+ # 02 動手前算波及(你準備改 code 的時候)
+ 
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「我要改這個檔/這段 diff,哪些筆記、驗證、決策會受影響?」 | `lumos impact --file <檔>` 或 `lumos impact --diff <起點..終點>`;查某節點一層鄰居 `lumos impact --node <節點>` | 先列「必看」(合約/事故),再列相關 top-8;每條都是該動手前看的 | Edit/Write 時 hook 會自動注入一份,但只推你碰到的檔,邊界要自己查 |
+-| 「這份 spec/這段改動有什麼實務隱患?風險分級多高?」 | `lumos pitfalls <spec.md>` 或 `lumos pitfalls --diff <範圍>` | 印提問清單;`tier: high` 代表推送前要過代碼審(見 06);`--diff` 另印這次改動觸發到的棧別效能檢核題(不看 tier,推送前每題要表態,見 06) | 高風險改動沒審就推、或觸發到的檢核題沒表態,pre-push 會擋 |
++| 「這份 spec/這段改動有什麼實務隱患?風險分級多高?」 | `lumos pitfalls <spec.md>` 或 `lumos pitfalls --diff <範圍>`;只看某一階段:`lumos pitfalls <計劃> --stage <需求\|架構\|實作\|驗證\|效能\|交付>` | 印提問清單(`--stage` 只印那一階段的需求風險面與〈待決問題〉裡還沒結的題,阻塞與不可逆排前面、不截斷);`tier: high` 代表推送前要過代碼審(見 06);`--diff` 另印這次改動觸發到的棧別效能檢核題(不看 tier,推送前每題要表態,見 06) | 高風險改動沒審就推、或觸發到的檢核題沒表態,pre-push 會擋 |
+ | 「改了這些檔,該跑哪一層測試?」 | `lumos test-layers --diff <範圍>` | 提醒用,不擋 | 漏跑整合/UI 層 |
+ | 「改了這些檔,具體該跑哪幾個測試?」 | `lumos testmap affected --diff <範圍>`(第一次先 `lumos testmap build`) | 建議清單,不擋 | 跑全套浪費時間,或漏跑 |
+ | 「改了 A 檔,歷史上常一起改的 B 檔要不要跟著改?」 | `lumos cochange check [--staged\|--diff …]`;看規則 `lumos cochange rules` | 警告清單,不擋;pre-commit 也會自動跑 | 漏改夥伴檔 |
+ | 「about_code 預標標錯一整批,要整批撤」 | `lumos about-code revert --batch <YYYY-MM-DD> --dry-run` 先看,再去掉 --dry-run 真撤 | 只動 stamp 第一段 = batch-<日期> 的節點;人工修正過的(claude/…)不動 | 誤撤人工修正 |
+ | 「doctor 說某篇 about_code 標了之後正文改過」 | 對 → `lumos about-code restamp <節點>`;不對 → set/append/remove 修完再 restamp | 沒有批次模式是刻意的:一口氣洗白等於蓋橡皮章 | 標籤跟正文脫節,推薦愈推愈偏 |
+ | 「批次預標的 stamp 還是舊的兩段式,doctor 量不出過期」 | `lumos about-code migrate-stamp --at <標註當時 commit> --repo .` | 一次性;用當時正文算雜湊,之後 doctor 自然列出改過的 | 過期的標籤永遠不會被 doctor 喊 |
+ | 「改某支檔,推薦裡哪些是真的『關於』它的」 | `lumos impact --file <檔> --ranked` | 固定席裡 `about_hit` 者排前(hook 顯示 ★關於★);總開關 `LUMOS_IMPACT_ABOUT=0` 逃生 | 分不出「真的在講這支檔」和「只是連到」 |
+ | 「hook 推的必看裡怎麼沒有那些 CLI 樞紐筆記了」 | 2026-08-24 起固定席只認硬合約(INVARIANT/IRREVERSIBLE)+事故 | 守衛面軟標記樞紐降到輸出尾端「守衛面參考」小節(最多 3 條) | `LUMOS_IMPACT_HARD_PIN=0` 逃生回舊制;不逃就是看不到那幾篇 |
+ | 「我刪掉/改名了符號,筆記還在講舊的嗎?」 | `lumos search <舊名> --code` 逐句判;`lumos delguard` 是 pre-commit 自動跑的版本 | 列出還在指名舊符號的筆記 | delguard 逾時會放行,別只靠它 |
+ | 「這段 code 沒有任何筆記連到它,該補嗎?」 | `lumos link-candidates [--diff …]` | 候選清單,唯讀;要不要補由人裁 | 新 code 變圖譜孤兒 |
+diff --git a/skills/lumos-project-notes/commands/05-設計審查迴圈.md b/skills/lumos-project-notes/commands/05-設計審查迴圈.md
+index d1c323b4..beecefe6 100644
+--- a/skills/lumos-project-notes/commands/05-設計審查迴圈.md
++++ b/skills/lumos-project-notes/commands/05-設計審查迴圈.md
+@@ -2,21 +2,21 @@
+ 
+ 白話:一份設計 spec 在動手實作前,讓幾個不知道脈絡的審查員輪流挑毛病,每輪記帳;散文 spec 走處置閘——一輪裡每個發現折掉或附理由接受就算過(2026-08-25 裁;K=2 連續乾淨只剩已定錨 panel 帳的舊迴圈在用)。完整流程在 `lumos-design-loop` skill;這裡只列「什麼時候敲哪個」。
+ 
+ | 情境 | 指令 | 結果怎麼讀 |
+ |---|---|---|
+ | 「這輪該派誰、第幾輪、怎麼記帳?」(每輪開頭) | `lumos loop next <編號> [--tier standard\|high\|light] [--orchestrator claude\|codex] [--spec <計劃.md>]`(首輪兩個旗標都必帶;--orchestrator=誰在編排,外家席=不是編排者那一家);第一次一定帶 --tier | 印現在狀態、這輪要幾人、應派哪個角色、記帳的指令範本 |
+ | 「spec 動筆後想先掃模糊措辭」(排乾步驟) | `lumos prose-lint <計劃.md>` | 只提醒不擋,rc 恆 0;掃出的類別歸編排者排乾,派工詞明寫席位不得報 |
+ | 「席報告收進來,先看格式對不對」 | `lumos report-normalize <席報告.md>`(只印);`--write` 只搬格式(行內/標題/列表式等級→獨立行、補檔級行;不補值不改等級不動引句);2026-09-09 起 canary record 對沒正規化的報告 rc2——「報了幾條」由機器從報告數 | rc0 已正規化/改完;rc1 還有機器轉不了的、印行號要人改(或退回該席) |
+ | 「審查員交報告了,要記這一輪」 | `lumos canary record none --loop <編號> --round rN --auditor <席> --severity <等級> --findings <數> --spec <計劃.md> --reviewed <sha256> [--scope-lines N]`;★散文設計審記帳型態(2026-08-25):各席一筆留痕**不帶三個 set**,同輪僅一筆彙總 carrier 帶 `--findings-set/--folded-set/--accepted-set/--accept-reason`;全席都要 `--report/--snapshot`;★2026-09-09 起 carrier 必帶 `--refuted-set <id=理由串\|none>`(編排者重現不到的;非 none 帶 `--intake`,id 要在 intake 重現表同一列整字出現)★;每條發現標 `--finding-kind id=code\|spec\|process`(在修程式 / 被審文件 / 流程自己要求的東西) | 印憑證;超過 1800 行會提醒拆開審 |
+ | 「這輪/這個編號過關了沒?」 | 散文設計審新迴圈一律 `lumos loop status <編號> --disposal --spec … --repo …`(單輪全處置即收斂;同輪有 blocker 席則 accepted 必空);panel(每席各記一筆)→ `--gate --panel --min-seats 3`(K=2,僅已定錨 panel 帳的舊迴圈用);兩閘互斥,問錯會被指路;單人 `--light`;結清 `--settle <清單.json> --gate` | ✅ GATE PASS / ⛔ GATE FAIL,後面寫卡在哪一關 |
+-| 「設計寫完了,退得回嗎、條款句式對嗎、綁了測試沒、跑起來紅還是綠?」 | `lumos spec-gate <計劃>`(⓪判門 ①句式 ②綁定+回退節 ③跑 ④相依回歸;`--no-run` 只驗到②;`--door-rule` 印門規則版本;`--push-check <範圍> --repo <根>` 是 pre-push 用的) | 第一行印「門: 風險高(訊號)/風險低(四類已排除)」。風險高:rc1=句式/綁定/回退節/相依回歸有缺;紅綠只印,接著 loop next。風險低:沒標 [keeps] 的每條要紅、keeps 的要既存且綠、manual 收、測試名互不相同,過了印 PASS(風險低) 直接實作不派審;留痕進審查帳,推送前再跑一次(全靠人的計劃改跑小改動閘:擴散/相對量/歷史/目的) |
++| 「設計寫完了,退得回嗎、條款句式對嗎、綁了測試沒、跑起來紅還是綠?」 | `lumos spec-gate <計劃>`(⓪判門 ①句式 ②綁定+回退節 ③跑 ④相依回歸;計劃有〈待決問題〉時,標阻塞的需求或架構題還沒結、或題目行看不懂,判門之後就回 1,風險高低都一樣;`--no-run` 只驗到②;`--door-rule` 印門規則版本;`--push-check <範圍> --repo <根>` 是 pre-push 用的) | 第一行印「門: 風險高(訊號)/風險低(四類已排除)」。風險高:rc1=句式/綁定/回退節/相依回歸有缺;紅綠只印,接著 loop next。風險低:沒標 [keeps] 的每條要紅、keeps 的要既存且綠、manual 收、測試名互不相同,過了印 PASS(風險低) 直接實作不派審;留痕進審查帳,推送前再跑一次(全靠人的計劃改跑小改動閘:擴散/相對量/歷史/目的) |
+ | 「條款都標了嗎?閘會不會擋在條款那一步?」 | `lumos spec-trace <計劃>`(每條印 綁了/靠人/未標/懸空;rc1=有未標)——2026-09-09 起處置閘第五步擋「有 [SN] 卻沒 [test:]/[manual:]」的條款(只對首筆帳 09-09 起的設計審迴圈;拿 .patch 當設計審審材也擋;`[manual:]` 要 ≥4 字;只在範例/引用裡出現的 id 不算條款) | 未標的那幾條 + 補法一句 |
+ | 「審查員的引句是不是真的在 spec 裡?」 | `lumos quote-check <報告.md> --spec <凍結快照.md>` | 錨不到的引句不採信 |
+ | 「這席帳面嚴重度跟報告對得上嗎?(疑低報)」 | `lumos severity-check --loop <編號> --round <rN> --auditor <席> --repo <根>` | 第四道收貨;歷史帳 advisory、新帳抓到=寫側 bug 開 Issue;寫側 record 已硬擋低報,這是縱深第二層 |
+ | 「decision_refs 雞生蛋:回填舊筆記背書哪條決策」 | `lumos decision-refs backlog` → `candidates <節點>` → 讀判 → `add-ai <節點> <ref>` → 人 `promote` | T3 自動養成六原語;雙欄不對稱信任(ai-ref 抑制不了 E2、人 promote 才升級);單次單趟批次 |
+ | 「查決策背書或移掉誤填的引用」 | `lumos decision-refs list <節點> [--by ai\|human]`;確認誤填才 `lumos decision-refs prune <節點> <ref> --by ai`(人工欄改用 `--by human`) | list讀既有背書;prune只剪指定欄,不帶--by會動ai／human兩欄;先查後剪,不因AI不認同就刪人已核可的決策
+ | 「收斂了,把判定凍成標準答案」 | `lumos loop replay <編號> --freeze --spec <計劃.md> --repo <根>` | 收工流程新步驟(2026-08-26):gate PASS、卷證 commit 後當場凍;產 governance/replay/<編號>/verdict.json;重凍要 --note 留痕 |
+ | 「懷疑判定邏輯被改壞/帳被動了」 | `lumos loop replay <編號> --golden governance/replay/<編號>/verdict.json --repo <根>` | 對凍結閉包重算;邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期=列出不紅;唯讀不落帳 |
+ | 「派工單要查的材料,報告有沒有都碰到?」 | `lumos seat-check <報告.md> --dispatch <rN-dispatch.json> [--ledger <出界帳.jsonl>]` | unreported=沒碰;out_of_scope=引到範圍外 |
+ | 「想找人覆核某一筆判定」 | `lumos canary second --id <憑證> --verdict agree\|overturn --auditor <另一人>` | 必須換人 |
+ | 「跑滿上限沒過,人裁決定破例再開一輪/接受風險」 | `lumos loop cap-decision <編號> --decision extra-round\|accept-risk --note "<理由>"` | 進治理帳(gate=loop-retro);只收多席、2026-08-26 後開、非 light、帳上輪數已到上限的迴圈,不符 rc2;寫不進去 rc1 |
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index e2a88e0f..57a806b3 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -9,21 +9,21 @@
+ | 「這個模組/欄位/流程為什麼這樣設計?」 | `lumos search <詞>` → `lumos context <節點>` | grep 只看得到 code 現在長怎樣,看不到為什麼、邊界、哪裡不能改 |
+ | 「動這段之前有沒有什麼不能碰的?」 | `lumos contracts <節點>` | 合約(★INVARIANT★)寫在圖譜不在 code;碰了 pre-push 會擋 |
+ | 「我要改 X,會波及到什麼?」 | `lumos impact --file <檔>` 或 `--diff <範圍>` | grep 找得到呼叫點,找不到「哪些筆記/驗證/決策會因此失效」 |
+ | 「哪些東西是金流/未收案/連到某節點的?」 | `lumos query --tag 家族/值 [--active] [--linked 節點]` | 這是欄位篩選,grep 字串會漏掉同義標籤 |
+ | 「這個詞圖譜裡有沒有記?」 | `lumos search <詞>`;0 命中就換同義詞再搜 | 用 grep 判「沒記」,以前真的錯過 |
+ | 中文查詢 | 概念之間加空白:`作廢 收回 點數`,不要 `作廢訂單點數怎麼收回` | 黏成一串當片語比對,幾乎必定 0 筆 |
+ | 「這篇筆記完整內容」 | `lumos show <節點>` | search 只給索引行,下結論前要讀全文 |
+ | 「最近誰改了什麼 / 現在在做什麼」 | `lumos recent --days 7`、`lumos query --tag status/doing` | git log 看不到圖譜層的進度 |
+ | 「我刪掉/改名了一個函式,筆記會不會還在講它?」 | `lumos search <舊名> --code` 逐句判 | delguard 只在 commit 時提醒,而且逾時會放行;推送時 drift check 的舊句檢查 m1 也會列出筆記還在講消失名稱的句子,照 `commands/04-自檢與健康.md` 處理 |
+ | 「當初為什麼做這個決定?後來翻案了嗎?」 | `lumos decisions <節點> [--superseded]` | 決策是結構化欄位,grep 散文抓不全 |
+-| 「設計寫完要進審之前,這份退得回嗎、條款句式對嗎、跑起來紅綠?」 | `lumos spec-gate <計劃節點>` | 先判門:風險高→句式/綁定/回退節擋、紅綠只印、再進審;風險低(四行已排除+沒命中硬訊號)→不派審,沒標 keeps 的條款各自紅才放行並留痕;相依回歸紅就擋 |
++| 「設計寫完要進審之前,這份退得回嗎、條款句式對嗎、跑起來紅綠?」 | `lumos spec-gate <計劃節點>` | 先判門;〈待決問題〉有標阻塞的需求或架構題沒結(或寫法看不懂)就擋;風險高→句式/綁定/回退節擋、紅綠只印、再進審;風險低(四行已排除+沒命中硬訊號)→不派審,沒標 keeps 的條款各自紅才放行並留痕;相依回歸紅就擋 |
+ | 「這個計劃的條款每條綁了測試沒、哪條還沒標?」 | `lumos spec-trace <計劃節點>` | 裁決看條款那一行的 [test:]/[manual:];舊制「驗證筆記回指」欄只當對照 |
+ | 「上一個 session 做到一半斷了 / 接手別人做一半的計劃」 | `lumos handoff <計劃節點>` | git status 看得到檔、看不到上一輪在動什麼與人最後說了什麼;逐字稿在本機,指令自己找(排掉自己這個 session)、缺就印「意圖不可得」 |
+ | 「比較審查流程有沒有改善?」 | 開 `commands/06-代碼審與推送.md`〈離線比較審查收斂〉 | 先看修復、保留與新缺陷,再看輪數 |
+ | 「Claude 會談做了什麼?」 | `lumos events` | 讀外掛事件帳;Codex 沒有 |
+ | 「我 push 了,CI 跑得怎樣?」 | `lumos ci-wait`(等結果)/ `lumos ci-status`(看上次) | 結果會進治理帳,`gh run list` 不會 |
+ | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |
+ | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
+ | 「接手一個沒圖譜的舊專案,想搞懂某塊再動手」 | 開 `commands/09-節點還原.md` 走七步 | 圖譜是空的,search 必 0 筆;直接硬讀 code 會漏承重牆與 why |
+ 
+ ## 二、九類子檔(按情境分)
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 46ffd591..919590ae 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -844,21 +844,21 @@ system_refs:
+ **落地或迭代某個計劃節點的 Verification 應有 `plan_refs` 陣列（選填）**，反指它對應的計劃筆記。意圖鏈 = 計劃（動工前的共識）→ 實作 → Verification 回指；有了這條邊，「後續翻盤有沒有回頭對照計劃」就從個人習慣變成 graph-doctor Check 4 可機械檢查的事。
+ 
+ ```yaml
+ plan_refs:
+   - "[[服務台豁免作廢_計劃]]"
+ ```
+ 
+ 設計理由（2026-06-12 Sonnet 對抗審計收斂，原「plan 物種四件套」提案砍半）：
+ - **單向指針，不雙寫**：計劃側不設 `fulfilled_by` 鏡像欄位——那會跟 Systems 的 `verified_by` 形成雙軌雙寫，必 drift。要看某計劃落地了哪些驗證，反查 `plan_refs` 即得。
+ - **不建 plan 物種**：計劃沿用 `type: project` + 檔名 `_計劃` 後綴識別；`proposed/agreed/done/superseded` 四態對單人+AI 流程過重。部分翻盤（計劃 5 條決策翻 1 條）用既有 `decisions[].valid: false` 決策級粒度表達，不整篇標 superseded。
+-- **不做模板化盤問**：enforcement 只管「鏈的存在與一致」，不管「思考的品質」——形式 section 保證不了思考發生（開發者 2026-06-12 否決）。
++- ~~**不做模板化盤問**~~（2026-06-12 否決，**2026-10-12 已作廢**）：計劃筆記現在可以帶一節〈待決問題〉，已決的題要連到決策、已驗的題要連到本篇條款綁的測試;規格閘擋標阻塞的需求或架構題,lint 查連結與必附；取代理由與撤除條件見 [[Projects/後端工程提問與證據擴充_計劃]]。enforcement 仍只管「鏈的存在與一致」，不評思考的品質。
+ 
+ **何時寫計劃節點**（opt-in，非義務；2026-06-12 審計收斂的客觀判準）：
+ 
+ 1. **需求討論跨超過一個 session → 預設寫**（session 數客觀可判，「大改造」主觀不可判）
+ 2. 動工前需要跨人 / 跨團隊共識（如服務台豁免案的後台分工）
+ 3. 變更跨多個 Systems 節點（計劃沒有單一宿主可住）
+ 4. **任何工具產出「設計 / spec」→ 一律寫計劃節點**（brainstorming、writing-plans、OpenSpec、其他 SDD / spec-driven 框架皆同；既然有正式設計產出，它就該住圖譜，不是散在 repo 檔）
+ 
+ 其餘變更**不寫計劃**：節點 `decisions[]` 一條 + Verification 即可——一條 decision 就是微型計劃（superseded 條目自帶意圖凍結語意）。常態工作流維持「對話敲定 → 依當下脈絡開發 → 事後沉澱」，計劃節點是大型變更的 opt-in，不是進場義務。
+ 
