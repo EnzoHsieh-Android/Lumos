@@ -1,0 +1,1056 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2615ef8f..57384255 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -64153,60 +64153,1017 @@ def _dr_hook_run(root, stdin, args=(), hook=None, **env):
+     log.unlink(missing_ok=True)
+     e = dict(_os.environ, GIT_DIR=str(root / ".git"), LUMOS_TEST_SHARDS="1")
+     for k in ("LUMOS_SKIP_DRIFT_CHECK", "FAKE_DRIFT_RC", "FAKE_DRIFT_SIG", "FAKE_SIG_CMD", "FAKE_INT_CMD", "FAKE_RC_CMD"):
+         e.pop(k, None)
+     e.update(env)
+     r = sp.run(["bash", str(hook), *args], cwd=str(root), input=stdin, capture_output=True, text=True, env=e, timeout=300)
+     lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+     return r.returncode, lines, r.stdout + r.stderr
+ 
+ 
+-def t_prepush_gates_stop_on_signal():
+-    """推送前掛鉤裡「rc1 擋、其他非零放行」的閘(每支檔有家、筆記形狀擋、雙向門放行 spec-gate、code-loop check、
+-    存量漂移檢查、回頭重讀檢查——後者 Projects/舊句兩道轉擋_計劃起)被訊號殺掉(回傳碼 128 以上,多半是 Ctrl-C)→ 印「<閘名>被中斷(rc=…),推送停下,後面的檢查不跑。」、
+-    exit 那個回傳碼、不跑全套(推送閘接漂移檢查代碼審 r2 架構對齊席 F3:原本只有漂移那道會停)。
+-    先證明現場:把掛鉤裡那幾行停下拿掉(等同舊掛鉤),同一個被殺掉的閘會被當成放行、照跑全套、rc0。
++def _clkg_repo():
++    """code-loop check 判定函式的現場:一個有一個提交的 git 專案、docs/ 在(治理帳寫得進去)。"""
++    import subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix="gctl-clkg-"))
++    sp.run(["git", "init", "-q", "-b", "feat", str(root)], capture_output=True)
++    for k, v in (("user.email", "t@t.t"), ("user.name", "t"), ("commit.gpgsign", "false")):
++        sp.run(["git", "-C", str(root), "config", k, v], capture_output=True)
++    (root / "docs").mkdir()
++    (root / "a.py").write_text("x = 1\n", encoding="utf-8")
++    sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++    sp.run(["git", "-C", str(root), "commit", "-qm", "init", "--no-verify"], capture_output=True)
++    return root
+ 
+-    翻紅釘:拿掉任一道閘後面的 pp_stop_if_signaled → 那一道紅;pp_stop_if_signaled 門檻改成 >128 以外的值(例如只認 130)→ 全紅。
+-    """
+-    print("t_prepush_gates_stop_on_signal")
+-    import re
+-    _need_src("scripts/hooks/pre-push")
++
++class _ClkgFakes:
++    """_clkg_run 換掉的那幾支(判定函式「問別人」的地方);照情境回固定答案,呼叫記進 calls。"""
++
++    def __init__(self, head, sc):
++        import subprocess as _sp
++        self.head, self.sc, self.calls, self.real_run = head, sc, [], _sp.run
++
++    def bt(self, repo_root, diff_range, skip=False, skip_note="", payload=None, advisory=False):
++        self.calls.append(("bound", advisory))
++        if self.sc["bt"] == "red":
++            return {"status": "red", "reason": "受波及合約的測試沒過:t_fake_contract(1 支紅)"}
++        return {"status": "green", "reason": "受波及合約的測試全綠(1 支)"}
++
++    def disp(self, repo_root, pf_data, marker_sha, marker_branch, at_sha, t, deadline=None, merge_side=None):
++        self.calls.append(("disp", t))
++        if self.sc["disp"]:
++            return {"blocked": True, "gate_mode": "all", "applicable": 2, "checked": 0,
++                    "problems": ["kt-fake-a:沒有表態", "kt-fake-b:沒有表態"]}
++        return {"blocked": False, "gate_mode": "all", "applicable": 0, "checked": 0, "problems": []}
++
++    def lint(self, repo_root, diff_range, deadline=None):
++        self.calls.append(("lint",))
++        if self.sc["lint"]:
++            return {"blocked": True, "status": "blocked", "reason": "1 條新增的告警",
++                    "new": [{"file": "a.py", "line": 1, "rule": "E999", "message": "假的告警", "key": "fp1"}], "ran": ["x"]}
++        return {"blocked": False, "status": "clean", "ran": ["x"]}
++
++    def read(self, repo_root, branch):
++        return {"same": {"head_sha": self.head, "status": "passed"},
++                "stale": {"head_sha": "1" * 40, "status": "passed"}}.get(self.sc["marker"])
++
++    def merge(self, repo_root, marker_sha, raw_range, cache, t):
++        if self.sc["merge_pass"]:
++            return {"blocked": False, "tier": t, "reason": "有效留痕(合併提交:假的)"}, None
++        return None, None
++
++    def run(self, cmd, *a, **kw):
++        import subprocess as _sp, json as _j
++        if not (isinstance(cmd, (list, tuple)) and "pitfalls" in cmd):
++            return self.real_run(cmd, *a, **kw)
++        self.calls.append(("pitfalls",))
++        out = {"fail": (2, "", "假的 pitfalls 失敗"), "nojson": (0, "沒有 JSON\n", ""), "exc": (0, "{壞掉的 JSON\n", "")}.get(
++            self.sc["pf"], (0, _j.dumps({"tier": self.sc["tier"], "stack_questions_applicable": {}}) + "\n", ""))
++        return _sp.CompletedProcess(cmd, *out)
++
++
++def _clkg_run(root, *, keep_going, bt="green", tier="standard", disp=False, lint=False, pf="ok", marker=None,
++              exempt=False, merge_pass=False, env_skip=False, advisory=False, as_json=False):
++    """在行程內跑 code-loop check(把判定函式依賴的幾支換成假的,其餘照真的跑)→ (rc, stdout, stderr, 呼叫紀錄)。
++    bt:受波及合約測試 green/red;tier:pitfalls 算出的分級;disp/lint:表態、新增告警閘擋不擋;
++    pf:ok / fail(pitfalls 回非零)/ nojson / exc(吐壞掉的 JSON,解析時丟例外);marker:None / "same"(留痕 sha 相符)/ "stale";
++    exempt:留痕過時但屬簿記豁免;merge_pass:合併提交認得到合進來那一側的留痕;env_skip:LUMOS_SKIP_CODE_LOOP=1。
++    換掉的都是判定函式「問別人」的那幾支,判定函式自己與印訊息那段照真的跑。"""
++    import io, contextlib, subprocess as _sp, os as _os
++    m = _load_lumos_inproc()
++    head = _na_head(root)
++    fk = _ClkgFakes(head, {"bt": bt, "tier": tier, "disp": disp, "lint": lint, "pf": pf, "marker": marker, "merge_pass": merge_pass})
++    swaps = {"_bound_tests_check": fk.bt, "_dispositions_verdict": fk.disp, "_lint_new_verdict": fk.lint,
++             "_lint_new_config": lambda repo_root, **k: {"budget_sec": 5, "mode": "block"},
++             "_codeloop_read": fk.read, "_codeloop_merge_side_pass": fk.merge,
++             "_codeloop_record_valid": lambda r, a, b: (True, "中間只動簿記檔") if exempt else (False, "非純簿記增量"),
++             "_mainline_ref": lambda repo_root, remote_only=False: None, "_arch_target_check_lines": lambda r, d, g: []}
++    saved = {k: getattr(m, k) for k in swaps}
++    old_env = _os.environ.pop("LUMOS_SKIP_CODE_LOOP", None)
++    if env_skip:
++        _os.environ["LUMOS_SKIP_CODE_LOOP"] = "1"
++    out, err = io.StringIO(), io.StringIO()
++    try:
++        for k, v in swaps.items():
++            setattr(m, k, v)
++        _sp.run = fk.run
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++            rc = m.cmd_code_loop("check", repo=str(root), as_json=as_json, diff_range=f"{head}..{head}", at_sha=head,
++                                 marker_branch="feat", bound_advisory=advisory, **({"keep_going": True} if keep_going else {}))
++    finally:
++        _sp.run = fk.real_run
++        for k, v in saved.items():
++            setattr(m, k, v)
++        _os.environ.pop("LUMOS_SKIP_CODE_LOOP", None)
++        if old_env is not None:
++            _os.environ["LUMOS_SKIP_CODE_LOOP"] = old_env
++
++    def norm(t):
++        return t.replace(head, "<SHA>").replace(head[:8], "<SHA8>")
++    return rc, norm(out.getvalue()), norm(err.getvalue()), fk.calls
++
++# ── 推送前一次列出全部擋下原因(Projects/推送前一次列出全部擋下原因_計劃)──────────────────────────────────
++# 掛鉤這邊的測試共用一支假 lumos:照子命令與環境變數決定回傳碼與輸出(計劃〈驗收條款〉的「測試怎麼搭」)。
++# 現場:每支檔有家的骨架(有真提交、推送行指得到真 sha,逐 ref 那幾道才走得到)+ 已提交的簽名檔。
++_PPC_FAKE = r'''#!/usr/bin/env python3
++import sys, json, pathlib, os, subprocess, signal, glob, shutil, time
++LOG, REAL = __LOG__, __REAL__
++a = sys.argv[1:]
++pathlib.Path(LOG).open('a').write(' '.join(a) + '\n')
++c = a[0] if a else ''
++new = os.environ.get('FAKE_NEW') == '1'
++rcs = {}
++for part in filter(None, os.environ.get('FAKE_RCS', '').split(',')):
++    k, _, v = part.partition(':')
++    rcs[k] = int(v)
++if c == 'python-path':
++    print(sys.executable); sys.exit(0)
++key = c + ('-help' if '--help' in a else '')
++if c and key == os.environ.get('FAKE_SIG_CMD'):
++    os.kill(os.getpid(), signal.SIGTERM)
++if c and c == os.environ.get('FAKE_HOOK_SIG_CMD'):
++    os.kill(os.getppid(), getattr(signal, os.environ.get('FAKE_HOOK_SIG', 'SIGTERM')))
++    time.sleep(0.5)
++if c and c == os.environ.get('FAKE_RM_TMP_CMD'):
++    for p in glob.glob(os.path.join(os.environ.get('TMPDIR', '/nonexistent'), 'lumos-prepush-*')):
++        if os.path.isdir(p):
++            shutil.rmtree(p, ignore_errors=True)
++if c == 'code-loop' and '--help' in a:
++    print('usage: lumos code-loop check [--json] [--diff A..B]' + (' [--keep-going]' if new else ''))
++    sys.exit(0)
++if c == 'push-summary':
++    if not new:
++        print('lumos: error: argument cmd: invalid choice: push-summary', file=sys.stderr); sys.exit(2)
++    if c in rcs:
++        sys.exit(rcs[c])
++    sys.exit(subprocess.run([sys.executable, REAL, *a]).returncode)
++if c == 'code-loop' and '--keep-going' in a and not new:
++    print('lumos: error: unrecognized arguments: --keep-going', file=sys.stderr); sys.exit(2)
++if c in rcs:
++    print('擋下:假的 ' + c + ' 擋下原因', file=sys.stderr)
++    if c == 'code-loop' and os.environ.get('FAKE_CL_TEXT'):
++        print(os.environ['FAKE_CL_TEXT'], file=sys.stderr)
++    if c == 'code-loop' and new:
++        line = os.environ.get('FAKE_CL_LINE', 'LUMOS-BLOCKS: review')
++        if line != 'NONE':
++            print(line)
++    sys.exit(rcs[c])
++if c == 'impact' and '--json' in a:
++    print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))
++elif c == 'pitfalls' and '--json' in a:
++    print(json.dumps({'tier': 'standard'}))
++sys.exit(0)
++'''
++
++_PPC_SUITE = r'''import pathlib, os, subprocess, signal, time, sys
++LOG = __LOG__
++pathlib.Path(LOG).open('a').write('SUITE\n')
++_sig = os.environ.get('FAKE_SUITE_SIG')
++if _sig:
++    # 1/TERM:只對掛鉤送 TERM(被砍);INT:對整個行程群組送 SIGINT(Ctrl-C 的樣子;測試把掛鉤開在自己的群組裡)
++    if _sig == 'INT':
++        os.killpg(os.getpgrp(), signal.SIGINT)
++    else:
++        gp = int(subprocess.run(['ps', '-o', 'ppid=', '-p', str(os.getppid())], capture_output=True, text=True).stdout.strip())
++        os.kill(gp, signal.SIGTERM)
++    time.sleep(4)
++    pathlib.Path(LOG).open('a').write('SUITE-END\n')
++if os.environ.get('FAKE_SUITE_RED'):
++    print('  ✗ t_fake_red_case')
++    print('0 passed, 1 failed')
++    sys.exit(1)
++print('1 passed, 0 failed')
++'''
++
++# 自主迴圈那支測試的假身:FAKE_AUTOLOOP_RED 有值時紅(只在測試把它放進現場時才會被叫)
++_PPC_AUTOLOOP = r'''import os, sys
++if os.environ.get('FAKE_AUTOLOOP_RED'):
++    print('FAIL: t_fake_autoloop_case')
++    print('Ran 3 tests in 0.1s')
++    sys.exit(1)
++print('Ran 3 tests in 0.1s')
++'''
++
++
++def _ppc_repo():
++    """→ (root, 遠端舊值, 本地頂端)。假 lumos、假全套測試放工作目錄、不提交(跟 _dr_hook_fakes 同一個理由)。"""
++    import os as _os
+     root = _dr_repo()
+     base = _na_head(root)
+     _nh_node(root, "Pay", summary="FLOW:b")
++    _nh_file(root, "governance/anchor-baseline.json", "{}\n")
+     _nh_commit(root, "c")
+     head = _na_head(root)
+-    _dr_hook_fakes(root)
+-    stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
+-    gates = (("home", "每支檔有家檢查"), ("note-shape", "筆記形狀擋"), ("spec-gate", "雙向門放行檢查(spec-gate)"),
+-             ("code-loop", "code-loop check"), ("drift", "存量漂移檢查"), ("note-audit", "回頭重讀檢查"))
+-    txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+-    old_txt, n = re.subn(r"^[ \t]*pp_stop_if_signaled \"\$[a-z]+_rc\".*\n", "", txt, flags=re.M)
+-    # 六道的停下都拿掉:漂移那道在這次之前就會停(寫法不同),拿掉後一樣退回放行,一起當對照。
+-    # 第六道是回頭重讀檢查:原本只在 130(Ctrl-C)停,Projects/舊句兩道轉擋_計劃 起照其他會擋的閘 128 以上都停
+-    # 第七、八行是新分支首推起點(push-range,Projects/新分支首推會擋的閘改用真起點_計劃):迴圈裡一次、餵 doctor 的觸及清單一次;
+-    # 這支的推送行遠端舊值不是全零、走不到它,被殺掉停下的情形在 t_prepush_new_branch_block_range ⑦ 驗
+-    check("前置:掛鉤裡八行 pp_stop_if_signaled(六道會擋的閘+新分支首推起點兩處)", n == 8, str(n))
+-    old_hook = Path(tempfile.mkdtemp(prefix="gctl-oldhook-")) / "pre-push"
+-    old_hook.write_text(old_txt, encoding="utf-8")
+-    rc, lines, out = _dr_hook_run(root, stdin)
+-    check("前置:沒人被殺掉時整支掛鉤放行、跑到全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-400:]}")
+-    for cmd, name in gates:
+-        rc, lines, out = _dr_hook_run(root, stdin, hook=old_hook, FAKE_SIG_CMD=cmd)
+-        called = any(ln.startswith(cmd) for ln in lines)
+-        check(f"前置({cmd}):拿掉停下的掛鉤(等同舊掛鉤)被殺掉的閘當成放行、照跑全套", called and rc == 0 and "SUITE" in lines,
+-              f"rc={rc} {lines} {out[-300:]}")
+-        rc, lines, out = _dr_hook_run(root, stdin, FAKE_SIG_CMD=cmd)
+-        check(f"{cmd}被訊號殺掉(rc≥128)→ 掛鉤停下、回那個回傳碼、不跑全套、講明是哪道被中斷",
+-              rc >= 128 and "SUITE" not in lines and f"{name}被中斷(rc={rc}),推送停下,後面的檢查不跑。" in out,
+-              f"rc={rc} {lines} {out[-300:]}")
++    log = root / "argv.log"
++    (root / "scripts" / "lumos").write_text(
++        _PPC_FAKE.replace("__LOG__", repr(str(log))).replace("__REAL__", repr(str(Path(GRAPHCTL).resolve()))), encoding="utf-8")
++    _os.chmod(root / "scripts" / "lumos", 0o755)
++    (root / "skills" / "lumos-project-notes").mkdir(parents=True, exist_ok=True)
++    (root / "scripts" / "test_lumos.py").write_text(_PPC_SUITE.replace("__LOG__", repr(str(log))), encoding="utf-8")
++    return root, base, head
++
++
++def _ppc_env(root, env):
++    import os as _os
++    tmp = root.with_name(root.name + "-tmp")
++    tmp.mkdir(exist_ok=True)
++    e = {k: v for k, v in _os.environ.items() if not k.startswith("FAKE_") and k not in (
++        "LUMOS_SKIP_DRIFT_CHECK", "LUMOS_SKIP_REREAD_CHECK", "LUMOS_SKIP_CODE_LOOP", "LUMOS_PUSH_ATTEMPT", "GIT_DIR")}
++    e.update(GIT_DIR=str(root / ".git"), LUMOS_TEST_SHARDS="1", TMPDIR=str(tmp))
++    e.update(env)
++    return e
++
++
++_PPC_CAP_LINE = '# 新版的樣子:原始碼裡有 "--keep-going" 這個字樣(掛鉤讀檔找它判版本)\n'
++
++
++def _ppc_set_new(root, new):
++    """假 lumos 扮新版(FAKE_NEW=1)時原始碼裡要有 "--keep-going" 字樣——掛鉤讀檔找它,不執行 --help;扮舊版時拿掉。"""
++    f = root / "scripts" / "lumos"
++    t = f.read_text(encoding="utf-8").replace(_PPC_CAP_LINE, "")
++    f.write_text(t + (_PPC_CAP_LINE if new else ""), encoding="utf-8")
++
++
++def _ppc_sigint_default():
++    """起掛鉤前把 SIGINT 裝回預設:掛鉤平常由前景的 git 叫起;測試若跑在背景(推送前閘的分片),繼承來的「忽略 SIGINT」
++    會讓 bash 的 INT 陷阱裝不上(進場就忽略的訊號不能再接),測 Ctrl-C 的斷言在分片裡假紅(2026-10-14 分片實測)。"""
++    import signal
++    signal.signal(signal.SIGINT, signal.SIG_DFL)
++
++
++def _ppc_run(root, stdin, hook=None, **env):
++    """用 /bin/bash(macOS 上是 3.2)真的跑推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。"""
++    import subprocess as sp
++    hook = hook or Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    _ppc_set_new(root, env.get("FAKE_NEW") == "1")
++    log = root / "argv.log"
++    log.unlink(missing_ok=True)
++    r = sp.run(["/bin/bash", str(hook)], cwd=str(root), input=stdin, capture_output=True, text=True,
++               env=_ppc_env(root, env), timeout=300, preexec_fn=_ppc_sigint_default)
++    lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
++    return r.returncode, lines, r.stdout + r.stderr
++
++
++def _ppc_rows(out):
++    """彙總段裡逐筆那幾行 → [(閘名, ref 或 ""), …];沒有彙總段回 None。"""
++    import re
++    i = out.rfind("這次推送共有")
++    if i < 0:
++        return None
++    rows = []
++    for ln in out[i:].splitlines()[1:]:
++        mm = re.match(r"^\s+\d+\. (\S+?)(?: \[([^\]]*)\])?:", ln)
++        if mm:
++            rows.append((mm.group(1), mm.group(2) or ""))
++    return rows
++
++
++def _ppc_rows_full(out):
++    """彙總段裡逐筆那幾行 → [(閘名, ref 或 "", 原因), …];沒有彙總段回 None。"""
++    import re
++    i = out.rfind("這次推送共有")
++    if i < 0:
++        return None
++    rows = []
++    for ln in out[i:].splitlines()[1:]:
++        mm = re.match(r"^\s+\d+\. (\S+?)(?: \[([^\]]*)\])?:(.*)$", ln)
++        if mm:
++            rows.append((mm.group(1), mm.group(2) or "", mm.group(3)))
++    return rows
++
++
++def _ppc_header(out):
++    import re
++    mm = re.search(r"這次推送共有 (\d+) 筆擋下\((\d+) 道閘\)", out)
++    return (int(mm.group(1)), int(mm.group(2))) if mm else None
++
++
++def _ppc_cleanup(root):
++    import shutil
++    shutil.rmtree(root, ignore_errors=True)
++    shutil.rmtree(root.with_name(root.name + "-tmp"), ignore_errors=True)
++
++
++_PPC_GATES = (("anchor", {"FAKE_RCS": "anchor:1"}), ("anchor-baseline", None), ("doctor", {"FAKE_RCS": "doctor:1"}),
++              ("home", {"FAKE_RCS": "home:1"}), ("note-shape", {"FAKE_RCS": "note-shape:1"}),
++              ("spec-gate", {"FAKE_RCS": "spec-gate:1"}), ("code-loop", {"FAKE_RCS": "code-loop:1"}),
++              ("drift", {"FAKE_RCS": "drift:1"}), ("reread", {"FAKE_RCS": "note-audit:1"}))
++
++
++def t_prepush_each_gate_blocks_alone():
++    """[S6] 全套之前的 9 道閘逐道各讓它單獨擋一次:掛鉤每次都回 1、全套沒被跑到、彙總列出那一道(1 筆、1 道閘),
++    而且排在它後面的閘照樣被叫(收集,不是遇錯就停)。
++    ①前置:沒有任何一道擋時,9 道都真的被叫到、跑到全套、rc0——不然「擋下時全套沒跑」可能只是假全套根本不會被叫。
++    翻紅釘:任一道的 pp_record_block 拿掉(擋下變成什麼都不記)→ 那一道 rc0、全套照跑而紅;
++    任一道改回 exit 1 → 那一道「後面的閘照樣被叫」紅;判斷點拿掉 → 全部「全套沒跑」紅。"""
++    print("t_prepush_each_gate_blocks_alone")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1")
++        called = {g: any(ln.startswith(p) for ln in lines) for g, p in (
++            ("anchor", "anchor verify"), ("doctor", "doctor --ci"), ("home", "home check"), ("note-shape", "note-shape"),
++            ("spec-gate", "spec-gate --push-check"), ("code-loop", "code-loop check --diff"), ("drift", "drift check"),
++            ("reread", "note-audit reread-check"))}
++        check("①前置:沒有一道擋 → 9 道(簽名檔那道是 git)都被叫到、跑到全套、rc0、不印彙總",
++              rc == 0 and all(called.values()) and "SUITE" in lines and _ppc_header(out) is None,
++              f"rc={rc} {called} {out[-400:]}")
++        bl = root / "governance" / "anchor-baseline.json"
++        for gate, env in _PPC_GATES:
++            if env is None:
++                bl.write_text("{}\n\n", encoding="utf-8")
++                rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1")
++                _nh_git(root, "checkout", "--", "governance/anchor-baseline.json")
++            else:
++                rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", **env)
++            rows = _ppc_rows(out)
++            check(f"②{gate} 單獨擋:回 1、全套沒跑、彙總 1 筆 1 道閘、列出 {gate}",
++                  rc == 1 and "SUITE" not in lines and _ppc_header(out) == (1, 1) and rows == [(gate, "")],
++                  f"rc={rc} rows={rows} head={_ppc_header(out)} {out[-500:]}")
++            check(f"③{gate} 擋下之後,排在最後的回頭重讀照樣被叫(收集)", any(ln.startswith("note-audit reread-check") for ln in lines),
++                  str(lines[-4:]))
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_multi_ref_blocks():
++    """[S14] 一次推兩個分支 ref、兩個都被每支檔有家擋:彙總兩筆(ref 欄有值)、閘數 1;推刪除照舊跳過、推 tag 照舊不跑代碼審判定,
++    不多記也不漏記。
++    翻紅釘:彙總不分 ref(同一道只記一筆)→ ①紅;ref 欄在多 ref 時不印 → ①紅;刪除不跳過 → ③多一筆紅;tag 跑了代碼審 → ④紅。"""
++    print("t_prepush_multi_ref_blocks")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        two = f"refs/heads/main {head} refs/heads/main {base}\nrefs/heads/main {head} refs/heads/feat {base}\n"
++        rc, lines, out = _ppc_run(root, two, FAKE_NEW="1", FAKE_RCS="home:1")
++        rows = _ppc_rows(out)
++        check("①兩個 ref 都被同一道擋 → 彙總 2 筆 1 道閘,ref 欄分別是兩個 ref",
++              rc == 1 and _ppc_header(out) == (2, 1) and rows == [("home", "refs/heads/main"), ("home", "refs/heads/feat")]
++              and "SUITE" not in lines, f"rc={rc} {rows} {out[-500:]}")
++        z = "0" * 40
++        dt = f"(delete) {z} refs/heads/old {base}\nrefs/tags/v1 {head} refs/tags/v1 {base}\n"
++        rc, lines, out = _ppc_run(root, dt, FAKE_NEW="1", FAKE_RCS="home:1,code-loop:1")
++        rows = _ppc_rows(out)
++        homes = [ln for ln in lines if ln.startswith("home check")]
++        check("②刪除+tag:每支檔有家只對 tag 那一行跑一次(刪除跳過)", len(homes) == 1, str(lines))
++        check("③彙總只有 tag 那一筆(刪除不記;非刪除的推送行只有一行,ref 欄不印)", rc == 1 and rows == [("home", "")] and _ppc_header(out) == (1, 1),
++              f"rc={rc} {rows} {out[-400:]}")
++        check("④推 tag 照舊不跑代碼審判定(code-loop:1 也不會被記)",
++              not any(ln.startswith("code-loop check --diff") for ln in lines) and ("code-loop", "refs/tags/v1") not in (rows or []),
++              str(lines))
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_block_survives_lost_record():
++    """[S15] code-loop check 回 1 但輸出沒有 LUMOS-BLOCKS: 行、那一行是空的、或 reason_kind 不在對照表 → 掛鉤照樣回 1、記一筆 code-loop;
++    擋下之後暫存檔寫不進去(暫存目錄在那一道跑的時候被刪掉)→ 掛鉤照樣回 1,彙總講明有幾筆原因沒寫進暫存檔。
++    翻紅釘:掛鉤只照 LUMOS-BLOCKS 解析出的筆數記(解析不到就不記)→ ①②紅;判斷點改看暫存檔有沒有內容 → ④紅;
++    寫暫存檔的 2>/dev/null 放回 >> 後面(開檔失敗的訊息擋不住)→ ④雜訊那條紅(代碼審 r1 邊界席 2)。"""
++    print("t_prepush_block_survives_lost_record")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++        for label, line in (("沒有那一行", "NONE"), ("那一行是空的", "LUMOS-BLOCKS: "), ("reason_kind 不在對照表", "LUMOS-BLOCKS: weird_kind")):
++            rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_LINE=line)
++            rows = _ppc_rows(out)
++            check(f"①code-loop 回 1、{label} → 掛鉤回 1、記一筆 code-loop、全套沒跑",
++                  rc == 1 and rows == [("code-loop", "")] and "SUITE" not in lines, f"rc={rc} {rows} {out[-400:]}")
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_LINE="LUMOS-BLOCKS: weird_kind")
++        check("②對照表查不到的用通用句", "代碼審判定擋下(細節在上面)" in out, out[-400:])
++        check("③機讀那一行不印給人看", "LUMOS-BLOCKS:" not in out, out[-400:])
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1", FAKE_RM_TMP_CMD="home")
++        check("④擋下那一道跑的時候暫存目錄被刪(暫存檔寫不進去)→ 照樣回 1、全套沒跑",
++              rc == 1 and "SUITE" not in lines, f"rc={rc} {lines[-3:]} {out[-500:]}")
++        check("④彙總講明有幾筆原因沒寫進暫存檔", "其中有 1 筆的原因沒寫進暫存檔" in out, out[-500:])
++        check("④暫存目錄被刪之後,掛鉤寫暫存檔失敗不印雜訊(沒有「No such file or directory」)",
++              "No such file or directory" not in out, out[-800:])
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_mixed_versions():
++    """[S7] 新掛鉤配上不認得 --keep-going、也沒有 push-summary 的舊 lumos,代碼審判定會擋 → 掛鉤回 1(不是放行)、印簡版彙總;
++    掛鉤沒把 --keep-going 塞給它(舊版會回 2,而 2 在掛鉤裡是放行)。新版 lumos 則帶 --keep-going。
++    ①前置:舊 lumos 收到 --keep-going 會回 2——不然「沒塞旗標」這條驗不出東西。
++    翻紅釘:掛鉤不探測、一律帶 --keep-going → ②紅(rc0 放行);改回執行 --help 判版本 → ②b紅;push-summary 失敗不印簡版 → ③紅。"""
++    print("t_prepush_mixed_versions")
++    import subprocess as sp
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        r = sp.run([sys.executable, str(root / "scripts" / "lumos"), "code-loop", "check", "--keep-going"], capture_output=True, text=True,
++                   env=_ppc_env(root, {}))
++        check("①前置:舊 lumos 不認得 --keep-going → 回 2", r.returncode == 2, str(r.returncode))
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++        rc, lines, out = _ppc_run(root, stdin, FAKE_RCS="code-loop:1")
++        cl = [ln for ln in lines if ln.startswith("code-loop check --diff")]
++        check("②舊 lumos、代碼審會擋 → 掛鉤回 1、全套沒跑、沒帶 --keep-going",
++              rc == 1 and "SUITE" not in lines and cl and all("--keep-going" not in ln for ln in cl), f"rc={rc} {cl} {out[-400:]}")
++        check("②b判版本是讀檔找字樣,不執行 code-loop check --help(跟掛鉤探 --shard、--suite、--graph 同一種寫法)",
++              not any(ln.startswith("code-loop check --help") for ln in lines), str(lines))
++        check("③push-summary 不存在 → 掛鉤自己印簡版彙總,列出 code-loop", "簡版彙總" in out and _ppc_rows(out) == [("code-loop", "")],
++              out[-500:])
++        rc, lines, out = _ppc_run(root, stdin)
++        check("④舊 lumos、沒有一道擋 → 照舊放行跑全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-300:]}")
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1")
++        cl = [ln for ln in lines if ln.startswith("code-loop check --diff")]
++        check("⑤新 lumos → 帶 --keep-going、彙總由 push-summary 印(不是簡版)",
++              rc == 1 and cl and all("--keep-going" in ln for ln in cl) and "簡版彙總" not in out and _ppc_header(out) == (1, 1),
++              f"rc={rc} {cl} {out[-400:]}")
++    finally:
++        _ppc_cleanup(root)
++
++
++# 掛鉤對照表每種原因句的預期值:照計劃〈做法〉5 的例句與 r1 收貨定稿逐字寫在這裡(不從掛鉤或 scripts/lumos 讀,免得跟著一起錯)
++_PPC_KIND_SENTENCES = {"bound_tests": "受波及合約的測試沒過(或證不出跑過)", "dispositions": "棧別檢核題表態不完整",
++                       "lint_new": "這次改動帶進了新的告警", "review": "高風險改動沒有有效的代碼審留痕"}
++_PPC_ANCHOR_NOTE = "裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑"
++
++
++def t_prepush_block_kinds_each_recorded():
++    """代碼審判定一次擋兩個以上原因時,掛鉤照 LUMOS-BLOCKS: 行每個種類各記一筆、閘數只算一道,原因用對照表那一句;
++    那一行有兩行時只取最後一行;逗號後的空白、空元素略過。(代碼審 r1 邊界席 3、合約席 2)
++    判準:計劃〈做法〉5「每個 reason_kind 各記一筆、M 只算一道、有多行時取最後一行」;預期句子是 _PPC_KIND_SENTENCES 逐字寫的。
++    翻紅釘:記帳迴圈只記第一個種類 → ①②紅;對照表兩句對調 → ②紅;取第一行而不是最後一行 → ④紅;空元素也記 → ③紅。"""
++    print("t_prepush_block_kinds_each_recorded")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++        S = _PPC_KIND_SENTENCES
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_LINE="LUMOS-BLOCKS: bound_tests, review")
++        rows = _ppc_rows_full(out)
++        check("①兩個種類(逗號後帶空白)→ 彙總 2 筆 1 道閘,各一句對照表原因,全套沒跑",
++              rc == 1 and _ppc_header(out) == (2, 1) and "SUITE" not in lines
++              and rows == [("code-loop", "", S["bound_tests"]), ("code-loop", "", S["review"])], f"rc={rc} {rows} {out[-500:]}")
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1",
++                                  FAKE_CL_LINE="LUMOS-BLOCKS: bound_tests,dispositions,lint_new,review")
++        rows = _ppc_rows_full(out)
++        check("②四種都在 → 4 筆 1 道閘,照順序各是對照表那一句",
++              rc == 1 and _ppc_header(out) == (4, 1)
++              and rows == [("code-loop", "", S[k]) for k in ("bound_tests", "dispositions", "lint_new", "review")], f"{rows} {out[-600:]}")
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_LINE="LUMOS-BLOCKS: lint_new,,dispositions")
++        rows = _ppc_rows_full(out)
++        check("③空元素略過 → 2 筆", rc == 1 and _ppc_header(out) == (2, 1)
++              and rows == [("code-loop", "", S["lint_new"]), ("code-loop", "", S["dispositions"])], f"{rows} {out[-500:]}")
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1",
++                                  FAKE_CL_LINE="LUMOS-BLOCKS: review\nLUMOS-BLOCKS: lint_new,dispositions")
++        rows = _ppc_rows_full(out)
++        check("④兩行 LUMOS-BLOCKS: → 只取最後一行(2 筆:新增告警、表態),兩行都不印給人看",
++              rc == 1 and _ppc_header(out) == (2, 1) and "LUMOS-BLOCKS:" not in out
++              and rows == [("code-loop", "", S["lint_new"]), ("code-loop", "", S["dispositions"])], f"{rows} {out[-500:]}")
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_plain_summary_anchor_note():
++    """push-summary 不能用(回非零或舊版沒有)時掛鉤自己印的簡版彙總:有裁判簽名那筆時最前面多一行「裁判檔沒簽名」提示句,
++    沒有那筆時不印;經新版 push-summary 印的彙總也一樣。(代碼審 r1 合約席 1;句子照計劃〈做法〉1 逐字)
++    翻紅釘:簡版提示句改字或拿掉 → ①紅;不論有沒有裁判簽名都印 → ②紅;Python 端提示句改字 → ③紅。"""
++    print("t_prepush_plain_summary_anchor_note")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="anchor:1,push-summary:2")
++        check("①簡版彙總+裁判簽名擋 → 印提示句、回 1", rc == 1 and "簡版彙總" in out and _PPC_ANCHOR_NOTE in out, out[-600:])
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1,push-summary:2")
++        check("②簡版彙總、沒有裁判簽名那筆 → 不印提示句", rc == 1 and "簡版彙總" in out and "裁判檔沒簽名" not in out, out[-600:])
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="anchor:1")
++        check("③新版 push-summary 印的彙總(不是簡版)也帶提示句", rc == 1 and "簡版彙總" not in out and _PPC_ANCHOR_NOTE in out,
++              out[-600:])
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_push_summary_anchor_note_and_separators():
++    """lumos push-summary 直接跑:①有 anchor 那筆時印「裁判檔沒簽名」提示句(逐字)、沒有時不印;
++    ②暫存檔只照換行字元切:ref 名帶 U+2028、U+2029、U+0085、跳頁字元這類 Python splitlines 也會斷的字元時,那一筆不能被切掉
++    (git 允許 ref 名帶這些字元;掛鉤的簡版彙總照換行讀,兩邊要一致)。(代碼審 r1 合約席 1、邊界席 1)
++    翻紅釘:提示句改字 → ①紅;改回 splitlines → ②紅(筆數或閘數少、多出「沒寫進暫存檔」)。"""
++    print("t_push_summary_anchor_note_and_separators")
++    import subprocess as sp
++    d = Path(tempfile.mkdtemp(prefix="gctl-pssum-"))
++    try:
++        bf = d / "blocks"
++        bf.write_text("anchor\t-\t裁判檔沒簽名那筆\nhome\trefs/heads/x\t沒家\n", encoding="utf-8")
++        r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "1",
++                    "--repo", str(d)], capture_output=True, text=True)
++        check("①有 anchor 那筆 → 印提示句", r.returncode == 0 and _PPC_ANCHOR_NOTE in r.stderr, r.stderr[-400:])
++        bf.write_text("home\trefs/heads/x\t沒家\n", encoding="utf-8")
++        r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "1", "--refs", "1",
++                    "--repo", str(d)], capture_output=True, text=True)
++        check("①沒有 anchor 那筆 → 不印提示句", r.returncode == 0 and "裁判檔沒簽名" not in r.stderr, r.stderr[-400:])
++        for name, ch in (("U+2028", " "), ("U+2029", " "), ("U+0085", "\x85"), ("跳頁", "\x0c")):
++            bf.write_bytes(f"home\trefs/heads/a{ch}b\t沒家\ndoctor\t-\t健檢\n".encode("utf-8"))
++            r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "2",
++                        "--repo", str(d)], capture_output=True, text=True)
++            # 只照 \n 切輸出(印出的 ref 名裡那個字元原樣留著,用 splitlines 讀輸出會把這一列自己切斷)
++            import re as _re
++            rows = [mm.group(1) for mm in (_re.match(r"^\s+\d+\. (\S+?)(?: \[|:)", ln) for ln in r.stderr.split("\n")) if mm]
++            check(f"②ref 名帶 {name} → 2 筆 2 道閘、兩列都在、沒有「沒寫進暫存檔」",
++                  r.returncode == 0 and _ppc_header(r.stderr) == (2, 2) and rows == ["home", "doctor"]
++                  and "沒寫進暫存檔" not in r.stderr, f"{rows} {r.stderr[-400:]!r}")
++    finally:
++        import shutil as _sh
++        _sh.rmtree(d, ignore_errors=True)
++
++
++def t_push_summary_repo_root_like_push_range():
++    """push-summary 找 repo 根的寫法跟 push-range 同一支(_note_audit_root):沒帶 --repo 時從子資料夾跑,帳寫進 repo 根的
++    docs/.governance-log.jsonl;不在 git 專案裡又沒帶 --repo → rc2 講明(push-range 同樣)。(代碼審 r1 架構對齊席 2)
++    翻紅釘:改回 Path(repo) if repo else Path.cwd() → ①紅(帳沒寫進 repo 根)、②紅(回 0)。"""
++    print("t_push_summary_repo_root_like_push_range")
++    import subprocess as sp, json as _j, os
++    root = _clkg_repo()
++    plain = Path(tempfile.mkdtemp(prefix="gctl-psnogit-"))
++    try:
++        sub = root / "sub"
++        sub.mkdir()
++        bf = plain / "blocks"
++        bf.write_text("home\t-\t沒家\n", encoding="utf-8")
++        led = root / "docs" / ".governance-log.jsonl"
++        r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "1", "--refs", "1"],
++                   cwd=str(sub), capture_output=True, text=True)
++        evs = [_j.loads(x) for x in (led.read_text(encoding="utf-8").splitlines() if led.exists() else []) if x.strip()]
++        check("①子資料夾、沒帶 --repo → 帳寫進 repo 根(多一筆 prepush-summary)",
++              r.returncode == 0 and [e.get("gate") for e in evs] == ["prepush-summary"], f"rc={r.returncode} {evs} {r.stderr[-300:]}")
++        env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE")}
++        env["GIT_CEILING_DIRECTORIES"] = str(plain.parent)
++        r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "1", "--refs", "1"],
++                   cwd=str(plain), capture_output=True, text=True, env=env)
++        r2 = sp.run([sys.executable, GRAPHCTL, "push-range", "--diff", "a..b", "--push-remote", "", "--pushed-ref", ""],
++                    cwd=str(plain), capture_output=True, text=True, env=env)
++        check("②不在 git 專案、沒帶 --repo → rc2 講明,跟 push-range 一樣",
++              r.returncode == 2 and r2.returncode == 2 and "不是 git 專案" in r.stderr and "不是 git 專案" in r2.stderr,
++              f"rc={r.returncode}/{r2.returncode} {r.stderr[-200:]} {r2.stderr[-200:]}")
++    finally:
++        import shutil as _sh
++        _sh.rmtree(root, ignore_errors=True)
++        _sh.rmtree(plain, ignore_errors=True)
++
++
++def t_prepush_escape_records_once():
++    """收集模式下代碼審判定一次印出「受波及合約的測試沒過」與「tier=high 且…缺留痕」兩句時,逃逸自動記帳只記一筆
++    (合約測試紅那筆,--stage push-gate);只有其中一句時照舊記那一句的那一筆。(代碼審 r1 通才席 2:原本遇錯就停時只印第一句)
++    翻紅釘:兩句各記一筆(兩個獨立 if)→ ①紅;缺留痕那句優先 → ①紅;只有缺留痕那句時不記 → ③紅。"""
++    print("t_prepush_escape_records_once")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++        bt = "擋下:受波及合約的測試沒過:t_fake_contract(1 支紅)(tier=high)"
++        rv = "擋下:tier=high 且無留痕(尚未跑 code-loop pass/skip)"
++
++        def esc(lines):
++            return [ln.split("--stage ")[1].split()[0] for ln in lines if ln.startswith("loop escape --auto")]
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_TEXT=bt + "\n" + rv,
++                                  FAKE_CL_LINE="LUMOS-BLOCKS: bound_tests,review")
++        check("①兩句都在 → 逃逸只記一筆、是合約測試紅那筆", rc == 1 and esc(lines) == ["push-gate"], f"rc={rc} {esc(lines)}")
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_TEXT=bt,
++                                  FAKE_CL_LINE="LUMOS-BLOCKS: bound_tests")
++        check("②只有合約測試紅 → 記 push-gate 一筆", rc == 1 and esc(lines) == ["push-gate"], str(esc(lines)))
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1", FAKE_CL_TEXT=rv,
++                                  FAKE_CL_LINE="LUMOS-BLOCKS: review")
++        check("③只有缺留痕 → 記 push-gate-unreviewed 一筆", rc == 1 and esc(lines) == ["push-gate-unreviewed"], str(esc(lines)))
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_test_logs_inside_tmp():
++    """全套測試與自主迴圈那支的 log 放在掛鉤的暫存資料夾裡(離開時整個清):全綠時 TMPDIR 底下不留任何 lumos-prepush 開頭的東西;
++    紅的時候,訊息指給人看的那份先搬到暫存資料夾外、再印它的路徑——路徑指得到檔、檔裡有紅的那支。(代碼審 r1 併發席 2)
++    翻紅釘:log 照舊在暫存資料夾外 mktemp → ①紅(全綠也留兩個檔);紅時印的是暫存資料夾裡那份 → ②③紅(印出的路徑已被刪)。"""
++    print("t_prepush_test_logs_inside_tmp")
++    import re
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    tmp = root.with_name(root.name + "-tmp")
++    try:
++        (root / "scripts" / "test_autonomous_loop.py").write_text(_PPC_AUTOLOOP, encoding="utf-8")
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
++
++        def left():
++            return sorted(p.name for p in tmp.glob("lumos-prepush*"))
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1")
++        check("①全綠 → rc0、TMPDIR 底下不留 lumos-prepush 開頭的檔或資料夾", rc == 0 and "SUITE" in lines and left() == [],
++              f"rc={rc} {left()} {out[-300:]}")
++        for label, env, red in (("全套測試", {"FAKE_SUITE_RED": "1"}, "t_fake_red_case"),
++                                ("自主迴圈那支", {"FAKE_AUTOLOOP_RED": "1"}, "t_fake_autoloop_case")):
++            for p in tmp.glob("lumos-prepush*"):
++                p.unlink()
++            rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", **env)
++            mm = re.search(r"在這裡:\n\s+(\S+)", out)
++            kept = Path(mm.group(1)) if mm else None
++            check(f"②{label}紅 → 回 1、印出的 log 路徑在掛鉤結束後還在、裡面有紅的那支",
++                  rc == 1 and kept is not None and kept.is_file() and red in kept.read_text(encoding="utf-8", errors="replace"),
++                  f"rc={rc} kept={kept} {out[-500:]}")
++            check(f"③{label}紅 → TMPDIR 底下只留那一份 log(暫存資料夾整個清掉)",
++                  kept is not None and left() == [kept.name] and kept.parent == tmp, f"{left()} {kept}")
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_summary_records_event():
++    """[S12] 有擋下時版控治理帳多一筆 prepush-summary(kind blocked、hard、帶這次推送的識別碼、extra 帶筆數、閘數、閘名清單、推送行數);
++    push-summary 失敗時掛鉤仍回 1、改印簡版彙總。用真的 lumos 寫帳(假 lumos 把 push-summary 轉給真的)。
++    翻紅釘:push-summary 不寫帳 → ①紅;_KNOWN_GATES 沒登記 prepush-summary → ①紅(寫入器拒寫);掛鉤看 push-summary 的回傳碼決定擋不擋 → ③紅。"""
++    print("t_prepush_summary_records_event")
++    import json as _j
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        stdin = f"refs/heads/main {head} refs/heads/main {base}\nrefs/heads/main {head} refs/heads/feat {base}\n"
++        led = root / "docs" / ".governance-log.jsonl"
++        before = led.read_text(encoding="utf-8").splitlines() if led.exists() else []
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1,drift:1")
++        after = led.read_text(encoding="utf-8").splitlines() if led.exists() else []
++        evs = [_j.loads(x) for x in after[len(before):] if x.strip()]
++        ps = [e for e in evs if e.get("gate") == "prepush-summary"]
++        e = ps[0] if len(ps) == 1 else {}
++        check("①多一筆 prepush-summary:blocked、hard、帶推送識別碼", len(ps) == 1 and e.get("kind") == "blocked" and e.get("hard") is True
++              and str(e.get("attempt_id", "")).count("-") >= 1, f"{ps} {out[-400:]}")
++        check("②extra:4 筆、2 道閘、閘名清單、2 行推送", e.get("blocks") == 4 and e.get("gates_n") == 2
++              and sorted(e.get("gates") or []) == ["drift", "home"] and e.get("refs") == 2, str(e))
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1,push-summary:2")
++        check("③push-summary 失敗 → 掛鉤仍回 1、印簡版彙總、全套沒跑", rc == 1 and "簡版彙總" in out and "SUITE" not in lines,
++              f"rc={rc} {out[-400:]}")
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_prepush_interrupt_stops_every_gate():
++    """[S10] 掛鉤註解區塊「中斷就停」列舉的每一支 lumos 呼叫被訊號殺掉(回傳碼 128 以上)→ 掛鉤以該回傳碼結束、印「<閘名>被中斷」、
++    不再開始後面的閘(被殺掉的那支就是最後一次呼叫)、不跑全套;掛鉤自己收到 INT/TERM → 手上那支結束後就結束(130/143)、
++    不再開始下一道;等全套測試時被砍(只對掛鉤送 TERM)或按 Ctrl-C(對整個行程群組送 SIGINT)→ 立刻結束,
++    ★全套測試的各片(掛鉤的孫行程)也要收掉★,不留下繼續跑的孤兒、TMPDIR 底下不留東西;裁判簽名與圖譜健檢回 2 照舊記成擋下。
++    清單與程式要對得上:非註解的 pp_stop_if_signaled 呼叫行數 = 清單筆數。(併入原 t_prepush_gates_stop_on_signal。)
++    對照組:把掛鉤裡的停下全拿掉,同一支被殺掉的呼叫就不會以那個回傳碼結束。
++    翻紅釘(2026-10-14 逐條變異實測):拿掉任一支後面的 pp_stop_if_signaled → 那一支紅;門檻改成只認 130 → 全紅;
++    陷阱裡不 exit(舊寫法)→ ④⑤⑥⑦紅;跑測試的子殼不收它起的各片(代碼審 r1 併發席 1)→ ⑥⑦紅;裁判簽名改成只有 rc1 才擋 → ⑧紅。"""
++    print("t_prepush_interrupt_stops_every_gate")
++    import re, subprocess as sp, time as _time
++    _need_src("scripts/hooks/pre-push")
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    txt = hook.read_text(encoding="utf-8")
++    entries = re.findall(r"^# 中斷就停:([a-z-]+)\|([^|\n]+)\|(.+)$", txt, flags=re.M)
++    calls = [ln for ln in txt.splitlines() if re.match(r"^\s*pp_stop_if_signaled \"", ln)]
++    check("①清單在、而且跟程式裡的 pp_stop_if_signaled 呼叫行數一樣多", len(entries) >= 9 and len(entries) == len(calls),
++          f"清單 {len(entries)} 筆、呼叫 {len(calls)} 行")
++    check("①刻意不接的也列在同一個區塊、各附理由", len(re.findall(r"^# 中斷不停:[^|\n]+\|.{4,}$", txt, flags=re.M)) >= 4, "")
++    root, base, head = _ppc_repo()
++    old_hook = root.with_name(root.name + "-oldhook")
++    try:
++        z = "0" * 40
++        normal = f"refs/heads/main {head} refs/heads/main {base}\n"
++        newbr = f"refs/heads/main {head} refs/heads/feat {z}\n"
++        old_hook.write_text(re.sub(r"^[ \t]*pp_stop_if_signaled \".*\n", "", txt, flags=re.M), encoding="utf-8")
++        for cmd, name, _what in entries:
++            stdin = newbr if cmd == "push-range" else normal
++            rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_SIG_CMD=cmd)
++            last = lines[-1] if lines else ""
++            want = cmd + " "
++            check(f"②{_what}被殺掉 → 以那個回傳碼結束、講明、被殺掉的是最後一次呼叫、全套沒跑",
++                  rc >= 128 and f"{name}被中斷(rc={rc})" in out and last.startswith(want) and "SUITE" not in lines,
++                  f"rc={rc} last={last!r} {out[-300:]}")
++            rc, lines, out = _ppc_run(root, stdin, hook=old_hook, FAKE_NEW="1", FAKE_SIG_CMD=cmd)
++            check(f"③對照:拿掉停下的掛鉤,{_what}被殺掉時不會以 128 以上結束", rc < 128, f"rc={rc}")
++        for sig, want in (("SIGTERM", 143), ("SIGINT", 130)):
++            rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_HOOK_SIG_CMD="home", FAKE_HOOK_SIG=sig)
++            check(f"④掛鉤自己收到 {sig}(每支檔有家跑到一半)→ 那支結束後掛鉤以 {want} 結束、不再開始筆記形狀擋、全套沒跑",
++                  rc == want and lines and lines[-1].startswith("home check") and "SUITE" not in lines,
++                  f"rc={rc} {lines[-3:]} {out[-300:]}")
++        tmp = root.with_name(root.name + "-tmp")
++        outf = tmp / "bg.out"
++        with open(outf, "w") as fh:
++            t0 = _time.monotonic()
++            p = sp.Popen(["/bin/bash", str(hook)], cwd=str(root), stdin=sp.PIPE, stdout=fh, stderr=fh, text=True,
++                         env=_ppc_env(root, {"FAKE_NEW": "1", "FAKE_SUITE_SIG": "1"}))
++            p.communicate(normal, timeout=120)
++            took = _time.monotonic() - t0
++        bg = outf.read_text(encoding="utf-8", errors="replace")
++        check("⑤等全套測試時收到 TERM → 掛鉤立刻以 143 結束(不等背景那支跑完、不印測試結果)",
++              p.returncode == 143 and took < 3.5 and "條斷言過" not in bg and "測試有紅" not in bg,
++              f"rc={p.returncode} took={took:.1f}s {bg[-300:]}")
++        # 假全套在送出訊號後睡 4 秒再記 SUITE-END:它沒被收掉的話,掛鉤結束後它會變成孤兒繼續跑完、記下這一行
++        _time.sleep(max(0.0, 5.0 - (_time.monotonic() - t0)))
++        log_txt = (root / "argv.log").read_text(encoding="utf-8") if (root / "argv.log").exists() else ""
++        check("⑥被砍(TERM)之後,全套測試那一片也被收掉(沒有孤兒跑完記下 SUITE-END)、TMPDIR 底下沒留 lumos-prepush 開頭的東西",
++              "SUITE" in log_txt and "SUITE-END" not in log_txt and not list(tmp.glob("lumos-prepush*")),
++              f"{log_txt[-200:]!r} {sorted(x.name for x in tmp.glob('lumos-prepush*'))}")
++        (root / "argv.log").unlink(missing_ok=True)
++        with open(outf, "w") as fh:
++            t0 = _time.monotonic()
++            p = sp.Popen(["/bin/bash", str(hook)], cwd=str(root), stdin=sp.PIPE, stdout=fh, stderr=fh, text=True,
++                         env=_ppc_env(root, {"FAKE_NEW": "1", "FAKE_SUITE_SIG": "INT"}), start_new_session=True,
++                         preexec_fn=_ppc_sigint_default)
++            p.communicate(normal, timeout=120)
++            took = _time.monotonic() - t0
++        bg = outf.read_text(encoding="utf-8", errors="replace")
++        _time.sleep(max(0.0, 5.0 - (_time.monotonic() - t0)))
++        log_txt = (root / "argv.log").read_text(encoding="utf-8") if (root / "argv.log").exists() else ""
++        check("⑦等全套測試時按 Ctrl-C(整個行程群組收到 SIGINT)→ 掛鉤以 130 結束,全套那一片也被收掉、TMPDIR 底下沒留東西",
++              p.returncode == 130 and took < 3.5 and "SUITE" in log_txt and "SUITE-END" not in log_txt
++              and not list(tmp.glob("lumos-prepush*")),
++              f"rc={p.returncode} took={took:.1f}s {log_txt[-200:]!r} {sorted(x.name for x in tmp.glob('lumos-prepush*'))} {bg[-300:]}")
++        for gate, cmd in (("anchor", "anchor"), ("doctor", "doctor")):
++            rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_RCS=f"{cmd}:2")
++            check(f"⑧{gate} 回 2 → 照舊記成擋下(非零就擋)", rc == 1 and _ppc_rows(out) == [(gate, "")], f"rc={rc} {out[-300:]}")
++    finally:
++        _ppc_cleanup(root)
++        old_hook.unlink(missing_ok=True)
++
++
++def t_prepush_collects_all_blocks():
++    """[S1][S2] 用真的 lumos 跑推送前掛鉤(搭法沿用 t_prepush_cheap_gates_run_before_expensive_suite)。
++    S1:圖譜健檢有壞連結、而且簽名檔改過沒提交 → 回 1,兩道的完整說明都印、彙總裡兩道都列出,全套沒被跑到。
++    S2:只有圖譜健檢擋 → 回 1,印它原本的完整說明加彙總(1 筆 1 道閘),全套沒跑;都沒擋 → 照舊跑到全套、不印彙總。
++    翻紅釘:圖譜健檢擋下改回 exit 1 → ①只剩一道而紅;判斷點拿掉 → ①③全套跑了而紅;彙總不印 → ①③紅。"""
++    print("t_prepush_collects_all_blocks")
++    import subprocess as _sp, os as _os, shutil as _sh
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    if not hook.is_file():
++        raise _SrcOnly("消費端沒有 pre-push(非來源 repo),這段沒驗到")
++    lumos_real = Path(GRAPHCTL).resolve()
++
++    def mk(break_graph):
++        d = Path(tempfile.mkdtemp(prefix="gctl-ppcollect-"))
++        _sp.run(["git", "init", "-b", "main", str(d)], capture_output=True)
++        _sp.run(["git", "-C", str(d), "config", "user.email", "t@t"], capture_output=True)
++        _sp.run(["git", "-C", str(d), "config", "user.name", "t"], capture_output=True)
++        (d / "scripts").mkdir()
++        (d / "scripts" / "lumos").symlink_to(lumos_real)
++        (d / "skills" / "lumos-project-notes").mkdir(parents=True)
++        marker = d / "EXPENSIVE-SUITE-RAN"
++        for name in ("test_lumos.py", "test_autonomous_loop.py"):
++            (d / "scripts" / name).write_text(
++                f"from pathlib import Path\nPath({str(marker)!r}).write_text('ran')\nprint('FAKE ok')\n", encoding="utf-8")
++        kg = d / "docs" / "t-knowledge" / "Systems"
++        kg.mkdir(parents=True)
++        bad = '\n  - "[[Systems/根本不存在的節點]]"' if break_graph else ""
++        (kg / "a.md").write_text(f"---\ntype: system\nstatus: done\nrelated:{bad or ' []'}\nsummary: |-\n  KEY:測試用\n---\n# a\n",
++                                 encoding="utf-8")
++        (d / "governance").mkdir()
++        _sp.run([sys.executable, str(lumos_real), "anchor", "approve", "--note", "fixture"], cwd=str(d), capture_output=True)
++        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
++        _sp.run(["git", "-C", str(d), "commit", "-qm", "init"], capture_output=True)
++        return d, marker
++
++    def run(d):
++        env = {k: v for k, v in _os.environ.items() if k != "LUMOS_PUSH_ATTEMPT"}
++        env["GIT_DIR"] = str(d / ".git")
++        return _sp.run(["/bin/bash", str(hook)], cwd=str(d), input="refs/heads/main dummy refs/heads/main dummy\n",
++                       capture_output=True, text=True, env=env, timeout=300)
++    d1, m1 = mk(break_graph=True)
++    d2, m2 = mk(break_graph=False)
++    try:
++        bl = d1 / "governance" / "anchor-baseline.json"
++        check("前置:現場真的產出簽名檔了", bl.is_file(), str(bl))
++        bl.write_text(bl.read_text(encoding="utf-8") + "\n", encoding="utf-8")
++        r = run(d1)
++        rows = _ppc_rows(r.stderr) or []
++        gates = [g for g, _ in rows]
++        check("①S1 兩道同時擋:回 1、兩道的說明都印、全套沒跑", r.returncode == 1 and not m1.exists()
++              and "知識庫健康檢查發現問題" in r.stderr and "簽名檔改過了但沒提交" in r.stderr,
++              f"rc={r.returncode} {r.stderr[-600:]}")
++        check("②S1 彙總裡兩道都列出(筆數、閘數照實算)", "doctor" in gates and "anchor-baseline" in gates
++              and _ppc_header(r.stderr) == (len(rows), len(set(gates))) and len(rows) >= 2, f"{rows} {r.stderr[-600:]}")
++        _sp.run(["git", "-C", str(d1), "checkout", "--", "governance/anchor-baseline.json"], capture_output=True)
++        r = run(d1)
++        check("③S2 只有圖譜健檢擋:回 1、印它原本的完整說明加彙總(1 筆 1 道閘)、全套沒跑",
++              r.returncode == 1 and not m1.exists() and "知識庫健康檢查發現問題" in r.stderr and "三條路選一條" in r.stderr
++              and _ppc_header(r.stderr) == (1, 1) and _ppc_rows(r.stderr) == [("doctor", "")], f"rc={r.returncode} {r.stderr[-600:]}")
++        r = run(d2)
++        check("④S2 都沒擋:照舊跑到全套、不印彙總", m2.exists() and _ppc_header(r.stderr) is None, f"rc={r.returncode} {r.stderr[-400:]}")
++    finally:
++        _sh.rmtree(d1, ignore_errors=True)
++        _sh.rmtree(d2, ignore_errors=True)
++
++
++def t_prepush_stops_without_python():
++    """[S3] 找不到 Python 3.14 時,推送前掛鉤立刻結束:回 1、只印找不到 3.14 的說明,不收集、不往下跑
++    (後面的閘一道都沒印、沒有彙總)。守的是既有行為不被改壞,改動前就是綠的。
++    現場刻意讓簽名檔改過沒提交:掛鉤要是沒停、往下收集,那一道一定會印「簽名檔改過了但沒提交」。
++    翻紅釘:找不到 3.14 那裡的 exit 1 改成 pp_record_block → 後面的閘照跑、印出別道的擋下句與彙總而紅。"""
++    print("t_prepush_stops_without_python")
++    import os as _os, tempfile as _tf, subprocess as _sp, shutil as _sh
++    if not hasattr(_os, "setsid"):
++        raise _SrcOnly("非 POSIX,這段沒驗到")
++    _need_src("scripts/hooks/pre-push")
++    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
++    tmp = Path(_tf.mkdtemp(prefix="gctl-ppnopy-"))
++    try:
++        nopy = _py314_sysbin(tmp)
++        root = _py314_hook_repo(tmp / "a")
++        (root / "governance").mkdir()
++        (root / "governance" / "anchor-baseline.json").write_text("{}\n", encoding="utf-8")
++        _sp.run(["git", "-C", str(root), "add", "-A"], capture_output=True)
++        _sp.run(["git", "-C", str(root), "commit", "-qm", "b", "--no-verify"], capture_output=True)
++        (root / "governance" / "anchor-baseline.json").write_text("{}\n\n", encoding="utf-8")
++        base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON", "GIT_DIR")}
++        base.update(HOME=str(tmp), LUMOS_PYTHON_SEARCH_DIRS=str(tmp / "nowhere"), PATH=str(nopy))
++        r = _sp.run(["/bin/bash", str(hook)], cwd=str(root), capture_output=True, text=True, input="", env=base, timeout=120)
++        check("①找不到 3.14 → 回 1、印說明", r.returncode == 1 and "要用 Python 3.14" in r.stderr, r.stderr[-400:])
++        check("②立刻結束:後面的閘一道都沒跑(沒有簽名檔那道的擋下句)、沒有彙總",
++              "簽名檔改過了但沒提交" not in r.stderr and "這次推送共有" not in r.stderr and "簡版彙總" not in r.stderr
++              and "負責把關的檔案" not in r.stderr, r.stderr[-600:])
++    finally:
++        _sh.rmtree(tmp, ignore_errors=True)
++
++
++_CLKG_GOLD_A = ("  受波及合約測試:受波及合約的測試全綠(1 支)\n",
++                "擋下:這次改動有 2 題效能檢核適用,但表態不完整(2 處)——分支 feat,版本 <SHA8>。\n  - kt-fake-a:沒有表態\n  - kt-fake-b:沒有表態\n"
++                "在意的原因:題目推到眼前不等於有人回答;推送前每一題要有機器讀得懂的交代(做到了附證據/不適用附理由/待辦連 Issue),這不是審查,跟 tier 無關。\n"
++                "接下來(適用題算在 <SHA>..<SHA>,樣板用同一個範圍):\n"
++                "    lumos pitfalls --diff <SHA>..<SHA> --dispositions-template --carry > /tmp/disp.json   # 填完:\n"
++                "    lumos code-loop dispositions /tmp/disp.json\n")
++_CLKG_GOLD_B = ("",
++                "⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 feat,版本 <SHA8>):受波及合約的測試沒過:t_fake_contract(1 支紅)\n"
++                "  受波及合約測試:受波及合約的測試沒過:t_fake_contract(1 支紅)\n"
++                "  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n"
++                "    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"\n")
++
++
++def _clkg_last_blocks(out):
++    ln = [ln for ln in out.splitlines() if ln.startswith("LUMOS-BLOCKS:")]
++    return ln[-1] if ln else None
++
++
++def t_code_loop_check_keep_going():
++    """[S4] code-loop check --keep-going:表態不完整且有新增告警 → 兩個原因都印、回 1;合約測試紅且 tier=high 又沒留痕 → 兩個原因都印;
++    不帶 --keep-going → 只印第一個,stdout 與 stderr 跟改動前一字不差(_CLKG_GOLD_A/B 是改動前用同一個現場錄下來的輸出)。
++    帶旗標時多印一行 LUMOS-BLOCKS:(給掛鉤讀);--json 多一個 blocks 清單、reason 放第一筆、tier 是算出來的分級;
++    治理帳照舊一次判定一筆 code-loop blocked,extra 帶 blocks 的種類清單;合約測試只是低風險提醒時不記成擋下、照印「只提醒不擋」。
++    現場在行程內跑:判定函式「問別人」的那幾支換成假的(合約測試、表態、新增告警、pitfalls、留痕),判定函式與印訊息那段照真的跑。
++    翻紅釘:keep-going 模式第一個擋下就回傳 → ③④紅;不帶旗標時也跑完四道 → ①紅(lint 被叫)、②紅;合約測試狀態句照第一個原因或整體 blocked 選 → ⑤b紅。"""
++    print("t_code_loop_check_keep_going")
++    import json as _j, subprocess as _sp
++    root = _clkg_repo()
++    try:
++        rc, o, e, c = _clkg_run(root, keep_going=False, disp=True, lint=True)
++        check("①不帶:表態+新增告警都會擋 → 只印表態那一個,新增告警閘沒跑,輸出跟改動前一字不差",
++              rc == 1 and (o, e) == _CLKG_GOLD_A and ("lint",) not in c, f"rc={rc}\n{o!r}\n{e!r}")
++        rc, o, e, c = _clkg_run(root, keep_going=False, bt="red", tier="high")
++        check("②不帶:合約測試紅+tier=high 沒留痕 → 只印合約測試那一個,一字不差", rc == 1 and (o, e) == _CLKG_GOLD_B,
++              f"rc={rc}\n{o!r}\n{e!r}")
++        led = root / "docs" / ".governance-log.jsonl"
++        n0 = len(led.read_text(encoding="utf-8").splitlines()) if led.exists() else 0
++        rc, o, e, c = _clkg_run(root, keep_going=True, disp=True, lint=True)
++        check("③帶:表態與新增告警兩個原因都印(原本的擋下句)、回 1",
++              rc == 1 and "表態不完整(2 處)——分支 feat" in e and "這次改動帶進了新的問題(1 條新增的告警)" in e
++              and "lumos lint-waive fp1" in e, e[-800:])
++        check("③機讀行列出兩種", _clkg_last_blocks(o) == "LUMOS-BLOCKS: dispositions,lint_new", o[-300:])
++        evs = [_j.loads(x) for x in led.read_text(encoding="utf-8").splitlines()[n0:] if x.strip()]
++        cl = [x for x in evs if x.get("gate") == "code-loop" and x.get("kind") == "blocked"]
++        check("③治理帳照舊一筆 code-loop blocked,extra 帶種類清單", len(cl) == 1 and cl[0].get("blocks") == ["dispositions", "lint_new"],
++              str(evs)[:600])
++        rc, o, e, c = _clkg_run(root, keep_going=True, bt="red", tier="high")
++        check("④帶:合約測試紅且 tier=high 沒留痕 → 兩個原因都印、回 1", rc == 1 and "受波及合約的測試沒過" in e
++              and "tier=high 且無留痕" in e, e[-800:])
++        check("④機讀行", _clkg_last_blocks(o) == "LUMOS-BLOCKS: bound_tests,review", o[-300:])
++        check("④合約測試記成擋下 → 印跳過指令,不印「只提醒不擋」", "--skip-bound-tests" in e and "只提醒不擋" not in e, e[-800:])
++        rc, o, e, c = _clkg_run(root, keep_going=True, bt="red", advisory=True, disp=True)
++        check("⑤低風險合約紅只是提醒+表態擋 → 只記表態、照印「只提醒不擋」",
++              rc == 1 and _clkg_last_blocks(o) == "LUMOS-BLOCKS: dispositions" and "只提醒不擋" in e, o[-200:] + e[-600:])
++        rc, o, e, c = _clkg_run(root, keep_going=True, bt="red", advisory=True, lint=True)
++        check("⑤b低風險合約紅只是提醒+新增告警擋(第一個原因不是表態)→ 照印「只提醒不擋」,不印合約測試的跳過指令",
++              rc == 1 and _clkg_last_blocks(o) == "LUMOS-BLOCKS: lint_new" and "只提醒不擋" in e and "--skip-bound-tests" not in e,
++              o[-200:] + e[-600:])
++        rc, o, e, c = _clkg_run(root, keep_going=True, bt="red", tier="high", as_json=True)
++        v = _j.loads(o.strip().splitlines()[-1]) if o.strip() else {}
++        check("⑥--json:blocks 兩筆、reason 是第一筆、tier 是算出來的 high", v.get("blocked") is True
++              and [b.get("reason_kind") for b in v.get("blocks") or []] == ["bound_tests", "review"]
++              and v.get("reason") == (v.get("blocks") or [{}])[0].get("reason") and v.get("tier") == "high", str(v)[:500])
++        rc, o, e, c = _clkg_run(root, keep_going=True)
++        check("⑦帶旗標、沒有一道擋 → 回 0、機讀行是空的", rc == 0 and _clkg_last_blocks(o) == "LUMOS-BLOCKS: ", o[-300:])
++        r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--help"], capture_output=True, text=True)
++        check("⑧code-loop check --help 有 --keep-going", "--keep-going" in r.stdout, r.stdout[-300:])
++        check("⑧scripts/lumos 原始碼裡有 \"--keep-going\" 字樣(掛鉤讀檔找它判版本,不執行 --help)",
++              '"--keep-going"' in Path(GRAPHCTL).read_text(encoding="utf-8"), "")
++    finally:
++        import shutil as _sh
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_code_loop_keep_going_pass_sites_keep_blocks():
++    """[S13] code-loop check --keep-going 已記下一筆擋下之後,走到 8 個放行站點的每一個都仍回 1:pitfalls 失敗、pitfalls 沒有 JSON、
++    pitfalls 例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕要求被環境變數跳過、合併側放行;pitfalls 失敗(三種)時新增告警閘照跑。
++    每個站點先跑一次「沒有先前的擋下」當前置:同一個現場回 0,證明真的走到那個放行站點。
++    另掃判定函式原始碼:每個 return 都要經過收尾函式 _fin。
++    翻紅釘:任一站點直接 return 放行(不經 _fin)→ 那一站紅、原始碼守衛也紅;pitfalls 失敗時不跑新增告警閘 → ③紅。"""
++    print("t_code_loop_keep_going_pass_sites_keep_blocks")
++    import ast
++    root = _clkg_repo()
++    try:
++        sites = (("pitfalls 失敗", dict(pf="fail"), dict(bt="red")),
++                 ("pitfalls 沒有 JSON", dict(pf="nojson"), dict(bt="red")),
++                 ("pitfalls 例外", dict(pf="exc"), dict(bt="red")),
++                 ("tier 不是 high", dict(tier="standard"), dict(disp=True)),
++                 ("留痕有效", dict(tier="high", marker="same"), dict(disp=True)),
++                 ("留痕過時但屬簿記豁免", dict(tier="high", marker="stale", exempt=True), dict(disp=True)),
++                 ("留痕要求被環境變數跳過", dict(tier="high", env_skip=True), dict(disp=True)),
++                 ("合併側放行", dict(tier="high", merge_pass=True), dict(disp=True)))
++        for name, site, prior in sites:
++            rc0, _o0, e0, _c0 = _clkg_run(root, keep_going=True, **site)
++            check(f"①前置({name}):沒有先前的擋下 → 回 0(真的走到這個放行站點)", rc0 == 0, f"rc={rc0} {e0[-300:]}")
++            rc, o, e, c = _clkg_run(root, keep_going=True, **site, **prior)
++            want = "bound_tests" if "bt" in prior else "dispositions"
++            check(f"②{name}:先記下一筆擋下 → 仍回 1、機讀行留著那一筆", rc == 1 and _clkg_last_blocks(o) == f"LUMOS-BLOCKS: {want}",
++                  f"rc={rc} {o[-200:]} {e[-300:]}")
++            if site.get("pf"):
++                check(f"③{name}:新增告警閘照跑", ("lint",) in c, str(c))
++        rc, o, e, c = _clkg_run(root, keep_going=True, pf="fail", bt="red", lint=True)
++        check("④pitfalls 失敗時新增告警閘照判:合約紅+新增告警 → 兩筆都記", rc == 1
++              and _clkg_last_blocks(o) == "LUMOS-BLOCKS: bound_tests,lint_new", o[-200:])
++        src = Path(GRAPHCTL).read_text(encoding="utf-8")
++        tree = ast.parse(src)
++        fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_codeloop_guard_verdict"), None)
++        bad = []
++        # 「這一道擋下」的結果(收集分流 kg.hit(...) 指派的變數)也算經過收尾:hit 不帶旗標時回的就是 fin(v),帶旗標時回 None 不回傳
++        via_hit = set()
++        if fn is not None:
++            for x in ast.walk(fn):
++                if isinstance(x, ast.Assign) and isinstance(x.value, ast.Call) and isinstance(x.value.func, ast.Attribute) \
++                        and x.value.func.attr == "hit":
++                    via_hit.update(tg.id for tg in x.targets if isinstance(tg, ast.Name))
++        kg_src = ast.get_source_segment(src, next((n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_CodeloopKg"),
++                                                  ast.Pass())) or ""
++        check("⑤前置:收集分流 hit 不帶旗標時回的是 self.fin(v)", "return self.fin(v)" in kg_src, kg_src[:300])
++
++        def walk(node):
++            for ch in ast.iter_child_nodes(node):
++                if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
++                    continue
++                if isinstance(ch, ast.Return):
++                    v = ch.value
++                    if not ((isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "_fin")
++                            or (isinstance(v, ast.Name) and v.id in via_hit)):
++                        bad.append(ch.lineno)
++                walk(ch)
++        if fn is not None:
++            walk(fn)
++        n_ret = len([1 for x in ast.walk(fn) if isinstance(x, ast.Return)]) if fn is not None else 0
++        check("⑤判定函式的每個 return 都經過收尾函式 _fin", fn is not None and not bad and n_ret >= 8, f"沒經過的行:{bad} 總數 {n_ret}")
++    finally:
++        import shutil as _sh
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_code_loop_keep_going_pf_fail_stricter():
++    """pitfalls 失敗(回非零、沒有 JSON、例外)而這次改動帶進新告警:不帶 --keep-going 照舊整個 fail-open 放行、新增告警閘不跑;
++    帶 --keep-going(推送前掛鉤認得就一律帶)時新增告警閘照跑、擋下 → 掛鉤實際走的路比直接跑 CLI 嚴。計劃〈做法〉5 寫明這個差異,
++    這支把兩邊釘住。(代碼審 r1 正確性席 1)
++    翻紅釘:keep-going 下 pitfalls 失敗時不跑新增告警閘 → ②紅;不帶旗標時也跑 → ①紅。"""
++    print("t_code_loop_keep_going_pf_fail_stricter")
++    root = _clkg_repo()
++    try:
++        for pf in ("fail", "nojson", "exc"):
++            rc, o, e, c = _clkg_run(root, keep_going=False, pf=pf, lint=True)
++            check(f"①pitfalls {pf}、不帶旗標 → 回 0 放行、新增告警閘沒跑", rc == 0 and ("lint",) not in c, f"rc={rc} {c} {e[-300:]}")
++            rc, o, e, c = _clkg_run(root, keep_going=True, pf=pf, lint=True)
++            check(f"②pitfalls {pf}、帶 --keep-going → 新增告警閘照跑並擋下、回 1、機讀行只有 lint_new",
++                  rc == 1 and ("lint",) in c and _clkg_last_blocks(o) == "LUMOS-BLOCKS: lint_new"
++                  and "這次改動帶進了新的問題(1 條新增的告警)" in e, f"rc={rc} {o[-200:]} {e[-400:]}")
++    finally:
++        import shutil as _sh
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_prepush_cl_reason_table_matches_lumos():
++    """漂移守衛(結構測試,行為另由 t_prepush_block_kinds_each_recorded 驗):掛鉤 pp_cl_reason 的對照表跟 scripts/lumos 的
++    _CODELOOP_BLOCK_KIND_REASONS 要逐字一致(種類一樣、每種的句子一樣、查不到時的通用句一樣),而且 scripts/lumos 裡判定函式會產生的
++    每一個 reason_kind 都要在表上——新加一種擋下卻沒補掛鉤的表,彙總會退成通用句。(代碼審 r1 架構對齊席 3、邊界席 3)
++    翻紅釘:掛鉤或 lumos 任一邊改一句、加一種、刪一種 → ①②紅;lumos 新增一種 reason_kind 沒登記 → ③紅。"""
++    print("t_prepush_cl_reason_table_matches_lumos")
++    import re, ast
++    _need_src("scripts/hooks/pre-push")
++    hook = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
++    mm = re.search(r"^pp_cl_reason\(\) \{\n(.*?)^\}", hook, flags=re.M | re.S)
++    body = mm.group(1) if mm else ""
++    hk = dict(re.findall(r"^\s+([a-z_]+)\) echo \"([^\"]+)\" ;;$", body, flags=re.M))
++    hf = re.findall(r"^\s+\*\) echo \"([^\"]+)\" ;;$", body, flags=re.M)
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    tree = ast.parse(src)
++    py = fb = None
++    for n in tree.body:
++        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
++            if n.targets[0].id == "_CODELOOP_BLOCK_KIND_REASONS":
++                py = ast.literal_eval(n.value)
++            elif n.targets[0].id == "_CODELOOP_BLOCK_KIND_FALLBACK":
++                fb = ast.literal_eval(n.value)
++    check("①兩邊都抽得到表,而且種類與句子逐字一致", bool(hk) and py is not None and hk == py, f"掛鉤 {hk}\nlumos {py}")
++    check("②查不到時的通用句一致", len(hf) == 1 and fb is not None and hf[0] == fb, f"掛鉤 {hf} lumos {fb!r}")
++    emitted = set(re.findall(r"""reason_kind["']?\s*[:=]\s*["']([a-z_]+)["']""", src))
++    check("③scripts/lumos 會產生的每個 reason_kind 都在表上(表上也沒有多出沒人產生的)",
++          bool(emitted) and py is not None and emitted == set(py), f"產生 {sorted(emitted)} 表 {sorted(py or {})}")
+ 
+ 
+ def _dr_settle(root, name="G"):
+     """守衛紀錄 pending → pass,預告句留著(舊版 settle 的樣子)。"""
+     g = root / _DR_VAULT / "Verification" / f"{name}.md"
+     g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                  encoding="utf-8")
+ 
+ 
+ def t_prepush_and_ci_wire_drift_check():

@@ -1,0 +1,201 @@
+{
+ "base": "3305a5dbe8b52e32a9fc02b8a889f42fb308c979",
+ "groups": [
+  {
+   "id": "G1",
+   "category": "concurrency",
+   "findings": [
+    "正1",
+    "併2",
+    "通1"
+   ],
+   "prior": {
+    "why_failed": "r3 把起片改成一層 Python 先 setpgid 再 execv,只在 macOS 上驗,沒想到掛鉤明文支援的 Windows Python 沒有 setpgid、它的 execv 又會讓外層立刻回 0",
+    "new_approach": "啟動器有 setpgid 才換群組再 execv,setpgid 失敗就不換群組照樣 execv;沒有 setpgid 就在同一個行程裡用 runpy 跑測試檔;補一支用刪掉 setpgid、execv 換成立刻回 0 的包裝模擬 Windows 的測試"
+   },
+   "paths": [
+    {
+     "at": "scripts/hooks/pre-push:_PP_OWN_PGRP",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_launcher_without_setpgid"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:t_prepush_interrupt_launcher_without_setpgid",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_launcher_without_setpgid"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:**沒有 `os.setpgid` 的 Python 不換群組**",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_launcher_without_setpgid"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:在原生 Windows 的 Python 上推送時",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_launcher_without_setpgid"
+     ]
+    }
+   ],
+   "note": "沒有 Windows 環境,用包裝模擬:先 del os.setpgid、把 os.execv 換成立刻以 0 結束,再跑掛鉤裡抽出的啟動器;另有 setpgid 丟 PermissionError 與 POSIX 照常兩組。改前模擬 Windows 與 setpgid 失敗兩組 6 條全紅(AttributeError / PermissionError,rc1)。變異:拿掉 hasattr 判斷 → 模擬 Windows 3 條紅(rc1);沒有 setpgid 時也走 execv → 模擬 Windows 3 條紅(rc0、沒寫 END)。"
+  },
+  {
+   "id": "G2",
+   "category": "concurrency",
+   "findings": [
+    "併1"
+   ],
+   "prior": {
+    "why_failed": "r3 改成整組送 TERM 後只送一發,以為剩下的殘留來自片換群組之前的空窗;實測的 4–12 毫秒視窗剛好是最安全的一段,沒量到片正在生孫行程的那一段",
+    "new_approach": "_pp_kill_jobs 送完第一發後短等 0.2 秒,對每個群組再送一次 TERM、錯誤吞掉;測試加一個收到 TERM 才生孫行程的假片,讓只送一發必定留孤兒"
+   },
+   "paths": [
+    {
+     "at": "scripts/hooks/pre-push:_pp_kill_jobs",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:FAKE_SUITE_LATE_KID",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:**整組送 TERM 之後短等再送第二發**",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:整組只送一發 TERM 時",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    }
+   ],
+   "note": "孤兒實測(/bin/bash 3.2.57、macOS;從真掛鉤抽 _pp_kill_jobs、三個陷阱、_PP_OWN_PGRP、run_group,主殼加兩個子殼各 4 片,假片是起來就起兩個 sleep 孫行程的 bash 腳本;掛鉤啟動後 20–45 毫秒隨機送 TERM,掛鉤結束後 0.6 秒數殘留的孫行程):修前 150 次 32 次留下孤兒(共 47 個);修後 150 次 0 次。每次的殘留當場砍掉,實驗後 pgrep 無殘留。測試 ⑫(假片收到 TERM 才生孫行程)改前紅、改後綠;變異:拿掉第二發 → ⑫紅;第二發不短等 → ⑫紅。"
+  },
+  {
+   "id": "G3",
+   "category": "boundary",
+   "findings": [
+    "邊1",
+    "邊2",
+    "邊3",
+    "合3"
+   ],
+   "prior": {
+    "why_failed": "r3 的掃描器把 $(…) 先收成一個字、雙引號內容換成 x,寫檔規則又排除前面是 & 的重導向;手寫例子只釘了包組、註解、續行,切段與引號規則壞掉照綠",
+    "new_approach": "不補成完整的 bash 解析器:$(…) 裡面另外當一行掃、雙引號裡的 $(…) 照程式碼留著、寫檔認 &> 與 &>>;切段與單引號各補一條手寫例子;here-doc 與帶反斜線引號的 $'…' 改成斷言掛鉤裡沒有,出現就紅"
+   },
+   "paths": [
+    {
+     "at": "scripts/test_lumos.py:_ppc_bash_logical_lines",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_touched_file_write_fails_quietly"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:_ppc_loose_quiet_writes",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_touched_file_write_fails_quietly"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:t_prepush_touched_file_write_fails_quietly",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_touched_file_write_fails_quietly"
+     ]
+    }
+   ],
+   "note": "新增 11 條手寫例子與一條前提斷言;改前 4 條例子紅($(…) 兩條、&> 兩條)。$'…' 的斷言放寬成「沒有帶反斜線引號的 $'…'」:掛鉤第 104、114 行一帶本來就有 $'\\t'、$'\\t\\n',掃描器把它們當單引號處理是對的,只有裡面帶反斜線引號時收尾位置才會錯。變異(清 __pycache__):不切 ;、不切 ()、單引號不當引號、不掃 $(…) 裡面、雙引號裡的 $(…) 不另外處理、不認 &> → 各自對應的例子紅;&& 與單一 & 都不切 → && 例子紅(只拿掉 && 那個選項是等價變異:單一 & 與 | 本來就切得開);掛鉤加 here-doc、加帶反斜線引號的 $'…'、加 $(…) 裡沒包組的寫檔 → ④紅。掛鉤現況掃描結果照舊是空的。"
+  },
+  {
+   "id": "G4",
+   "category": "other",
+   "findings": [
+    "合1",
+    "合2",
+    "合4"
+   ],
+   "prior": {
+    "why_failed": "r3 補了孫行程與只對子殼送 HUP 的斷言,卻只寫進〈做法〉的散文與測試說明,S10 條款沒跟上;四句原因句定了計劃為正本,但沒有測試讀計劃",
+    "new_approach": "S10 補兩句條款並綁同一支測試;〈做法〉2 寫明只有子殼收到 HUP 時回 1、紅的清單為空的原因,⑪ 改驗 rc==1;新增一支守衛直接讀計劃那一行、逐字比對四句與測試常數"
+   },
+   "paths": [
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:只有跑測試的子殼收到 HUP 時,應收掉各片與它們的孫行程",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:**只有子殼收到 HUP 時掛鉤回 1**",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:t_prepush_interrupt_stops_every_gate",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:t_prepush_cl_reason_sentences_match_plan",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_cl_reason_sentences_match_plan"
+     ]
+    }
+   ],
+   "note": "條款與說明補齊、測試收緊;lumos lint 兩篇 0 問題。變異:子殼結束碼 128 以上時掛鉤直接以那個碼結束(rc129)→ ⑪紅(原本只驗非零會照綠);計劃那段改一句 → 計劃守衛②紅;測試常數改一句 → ②紅;計劃那段改成抽不出四句 → ①②紅。"
+  },
+  {
+   "id": "G5",
+   "category": "other",
+   "findings": [
+    "資1"
+   ],
+   "prior": {
+    "why_failed": "修補前就有:掛鉤每個 $PY 閘都吃推送行程的 PYTHONPATH,沒有任何地方寫明這是刻意不防的範圍",
+    "new_approach": "不加機制,在掛鉤設定 PY 的地方加註解、在 Systems/bound-tests-gate 加一行 WHY 寫明它在工具鏈資安範圍外(要先能控制推送行程的環境)與不選的做法"
+   },
+   "paths": [
+    {
+     "at": "scripts/hooks/pre-push:在工具鏈的資安範圍外",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_launcher_without_setpgid"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_launcher_without_setpgid"
+     ]
+    }
+   ],
+   "note": "純註解與筆記,沒有行為改動;列的測試是跑換群組那段啟動器的那支,它不驗這句話,只是這組沒有對應的行為可測。"
+  }
+ ]
+}

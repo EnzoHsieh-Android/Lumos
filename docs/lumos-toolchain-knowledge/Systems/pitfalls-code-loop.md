@@ -224,3 +224,15 @@ REVISIT:2027-01-31 `--stage` 目前不列待決問題:開頭欄位版上線後�
 WHY:手動 `code-loop check` 不帶範圍時,起點改成「主線候選合起來跟 HEAD 的最近共同祖先」:候選沿用推送閘的 `_push_mainlines`(遠端取這條分支上游所在的遠端,沒有就用 origin),只多加本機 main/master(手動檢查在推送前跑,本機主線可能有還沒推的提交);不再照「先本機 main、再 master」的固定順序取第一個 [出處:2026-10-13 本會談實測:本機 main 落後遠端 52 個提交,範圍把別人已合併的高風險改動算進來、印出 tier=high] [因:推送閘的起點早就因同一個理由改成全部候選一起算,候選清單與挑法(`_push_pick_base`)都重用,不另立第三套主線判法(代碼審 r1 架構對齊席)] [不選:掃全部遠端(過期 fork 的 main 若含 HEAD,整條分支會被當成沒有改動而少擋,r1 單審席)、改成優先遠端 main(遠端可能落後本機未推的主線提交,一樣是固定順序)] [test:t_codeloop_default_base_prefers_newest_mainline]
 
 REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍用 `_mainline_ref`(固定順序取第一個),本機 main 落後或有多個遠端時可能跟上面算分級的範圍不同;到期在一個本機 main 落後的工作樹各跑一次兩種範圍,不同就改成共用 `_codeloop_default_base`,相同就刪這行(代碼審 r2 架構對齊席)
+
+## code-loop check --keep-going(2026-10-14,[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5)
+
+白話:`code-loop check` 本來是第一道沒過就停(合約測試 → 表態 → 新增告警 → 審查留痕,先中的先報);帶 `--keep-going` 時四道都判完、每道擋下各印各的原句,推送前掛鉤用它一次看到這個 ref 的全部原因。不帶旗標時行為與輸出一字不變,CI 與其他呼叫者不受影響。
+
+WHY:判定函式裡所有 return 都經過同一個收尾函式 `_fin`:keep-going 下擋下累積進清單,清單非空就回擋下(第一筆的欄位、`blocks` 清單、tier 一律是算出來的分級),清單是空的才照原樣放行——放行站點(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)的意思變成「這一道過了」,不能蓋掉前面記下的擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]] 第一輪設計審(代碼審內部放行蓋掉擋下)] [因:收集模式下最大的風險是某個放行站點直接回傳、把前面記下的擋下吞成放行] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+
+WHY:keep-going 下 pitfalls 失敗時,表態(要 pitfalls 的資料)與代碼審留痕(要 tier)照舊 fail-open 不判,新增告警閘只看改動範圍,照跑;合約測試先紅時照樣算分級、判後面幾道,兩個合約測試擋下點(一般的、與帶低風險提醒旗標卻算出 tier=high 重跑的那個)都記成 `bound_tests`。所以推送前(掛鉤認得就一律帶旗標)比直接跑 CLI 嚴:pitfalls 失敗又有新增告警時,不帶旗標放行,帶旗標擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5;第一輪代碼審正確性席要求寫明這個差異] [因:一次列出全部原因,前提是每一道在它需要的資料拿得到時都判] [test:t_code_loop_check_keep_going] [test:t_code_loop_keep_going_pf_fail_stricter]
+
+WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitfalls 失敗時照跑新增告警閘)集中在 `_CodeloopKg`;跑 pitfalls 取分級那一步拆成 `_codeloop_pitfalls_tier`。判定函式的複雜度 40→32(改動前 35) [出處:第一輪代碼審通才席:新增告警閘把這支的 C901 當成新告警擋下] [因:放行站點不經收尾的守衛照舊成立(每個回傳是 `_fin(...)`,或 `hit` 指派的變數、而且緊接在判它非空的 `if <那個變數>:` 底下——不帶旗標時 `hit` 回的就是 `fin(v)`,帶旗標時回 None,無條件 `return` 那個變數會讓整個判定函式回 None、下游 `.get` 崩);函式定義那一行多了參數,指紋已經變了,所以另用 lint-waive 附理由留痕] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+
+輸出契約:文字模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`(沒有擋下時是空的),是推送前掛鉤唯一的機讀通道;`--json` 不印這一行,改多一個 `blocks` 清單(每筆 `reason_kind`、`reason`),`blocked`、`reason`(第一筆)照舊。合約測試狀態那幾句照「合約測試有沒有記成擋下」選:沒記成擋下(低風險只提醒)就照印「只提醒不擋」。治理帳照舊一次判定一筆 `code-loop` `blocked`(統計的筆數意義不變),`extra` 多一個 `blocks` 種類清單。掛鉤那一頭怎麼讀見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉。

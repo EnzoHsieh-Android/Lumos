@@ -1,0 +1,925 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md b/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
+index 727340cf..f1f5d99b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
+@@ -31,33 +31,33 @@ REVISIT:2026-12-15 數一次 `prepush-summary` 事件裡兩道以上不同閘的
+ 
+ 1. **掛鉤收集擋下原因**:掛鉤裡全套測試之前的每一道會擋的閘——裁判簽名(`anchor verify`)、簽名檔沒提交(`governance/anchor-baseline.json` 有未提交改動)、圖譜健檢(`doctor --ci`)、每支檔有家(`home check`)、筆記形狀(`note-shape`)、雙向門放行(`spec-gate --push-check`)、代碼審判定(`code-loop check`)、存量漂移(`drift check`)、回頭重讀(`note-audit reread-check --gate`),共 9 道——擋下時不再 `exit 1`,改呼叫共用函式 `pp_record_block <閘名> <ref 或空> <一句原因>`,照原樣把該道的完整說明印出來,然後繼續下一道。同一道被多個 ref 擋下時各記一筆。
+    - **擋不擋只看記憶體裡的旗標**:`pp_record_block` 第一件事是設兩個純量變數 `_PP_BLOCKED=1`、`_PP_NBLK=$((_PP_NBLK+1))`(純量,bash 3.2 搭 `set -u` 不會有空陣列展開的問題),第二件事才把一行追加到 `$_PP_TMP/blocks`。判斷點只看 `_PP_BLOCKED`;暫存檔只拿來印彙總。追加失敗(磁碟滿、暫存目錄被刪)不影響擋下,彙總那一步看到檔案讀不到或筆數少於 `_PP_NBLK` 時,印「共 N 筆擋下,其中有幾筆的原因沒寫進暫存檔,細節看上面各段」。
+    - **暫存檔一行的格式**:`printf '%s\t%s\t%s\n'`,三欄是閘名、ref、原因。ref 空的時候寫 `-`(bash 用 tab 當分隔讀回時,連續兩個 tab 會被合成一個,空欄會被吃掉——`/bin/bash` 3.2.57 實測)。原因一律是掛鉤裡寫死的一句(不放工具輸出),ref 名照 git 規則不含控制字元;函式仍先把三個欄位裡的 tab、換行換成空白再寫。
+    - **裁判簽名也收集,不再立刻停**:裁判簽名管的是測試檔與掛鉤(錨點清單),不管 `scripts/lumos`。被改的若是掛鉤本身,它在這一刻已經在跑,停不停都由它決定,提早結束換不到可信度。後面的閘大多是 `scripts/lumos` 在判,不經過測試檔;例外是代碼審那一道的受波及合約測試與雙向門放行,它們會在全套之前跑 `scripts/test_lumos.py` 裡的測試——這兩道的綠燈這次用的是沒簽名的測試檔。不論結果,這次推送都已經因為裁判簽名被擋,所以不會變成放行;彙總裡有裁判簽名那筆時,最前面加一行「裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑」。
+    - **裁判簽名與圖譜健檢維持「非零就擋」**:這兩道現在用 `if ! …` 寫,非零一律擋。改成取回傳碼之後,128 以上照第 2 點停下,其他非零照舊記成擋下(不能變成「只有 1 才擋」,否則回 2 的工具錯誤會變放行)。
+    - **刪除與 tag 照舊**:逐 ref 迴圈遇到刪除照舊跳過、tag 照舊不跑代碼審判定,只把原本的擋下換成記下。
+    - **跟 pre-commit 的關係**:pre-commit 的 Gate PY、Gate H、Gate NS 之間仍是遇錯就停,本計劃不改。理由:那幾道合計幾秒,修完重提交的代價是幾秒;推送這邊每重推一次要幾分鐘,這才是要解的痛。
+ 2. **中斷一律結束**:
+    - **列舉,不逐行**:判斷點之前要接 `pp_stop_if_signaled` 的,是 9 道裡的 8 支 lumos 呼叫(簽名檔沒提交那道是 git)加上新分支首推起點(`push-range`)與這次推送改到哪些檔那一支;清單寫在掛鉤一個註解區塊裡,守衛測試照清單逐支驗。刻意不接的照列在同一個註解區塊、各附一句理由:`|| true` 寫法的盡力而為呼叫(逃逸自動記帳、該補哪層測試、低風險合約測試提醒、`pitfalls`)與管線裡的呼叫——被中斷時它們本來就走放行,不會把擋下變成放行;中斷照樣會由下一支在清單上的呼叫或第 2 點的陷阱接住。現有的 `t_prepush_gates_stop_on_signal` 數 8 行的寫法改成照這份清單驗。
+-   - **陷阱拆開**:`EXIT` 負責 `impact_done`、刪 `$_PP_TMP`,以及在預演模式下刪掉驗過的那張票(第 7 點);`INT` 改成「先 `kill` 掛鉤自己的背景工作(`jobs -p`),再 `exit 130`」,`TERM` 同樣但 `exit 143`(結束時再走 `EXIT` 那支收拾)。現在 `trap … EXIT INT TERM` 共用一支、裡面不結束,掛鉤自己收到中斷時會刪掉暫存目錄後繼續往下跑(`/bin/bash` 3.2.57 實測:陷阱跑完印出下一行);這是現有的缺陷,收集模式會讓它更常踩到,一起修。
+-   - **全套測試的各片也要收掉**(代碼審第一輪併發席):`jobs -p` 只列得到掛鉤的直接子行程,也就是跑測試的那個子殼;各片是子殼用 `&` 起的孫行程。而且非互動 bash 用 `&` 起的背景命令忽略 SIGINT,按 Ctrl-C 時整個行程群組收到的 INT 也殺不到各片。所以子殼(`run_group`)自己接 TERM:收到就把它起的各片收掉再結束。掛鉤的 INT/TERM 陷阱送給子殼的 TERM 由它往下傳。`/bin/bash` 3.2.57 實測:改之前被砍或按 Ctrl-C 後,四片都變成 ppid=1 的孤兒;改之後一片都不剩。
++   - **陷阱拆開**:`EXIT` 負責 `impact_done`、刪 `$_PP_TMP`,以及在預演模式下刪掉驗過的那張票(第 7 點);`INT` 改成「先 `kill` 掛鉤自己的背景工作(`jobs -p`),再 `exit 130`」,`TERM` 同樣但 `exit 143`,`HUP` 同樣但 `exit 129`(結束時再走 `EXIT` 那支收拾;HUP 是代碼審第二輪併發席補的:ssh 或編輯器只對掛鉤送掛斷時,沒接的話掛鉤直接死、各片全變孤兒)。現在 `trap … EXIT INT TERM` 共用一支、裡面不結束,掛鉤自己收到中斷時會刪掉暫存目錄後繼續往下跑(`/bin/bash` 3.2.57 實測:陷阱跑完印出下一行);這是現有的缺陷,收集模式會讓它更常踩到,一起修。
++   - **全套測試的各片也要收掉**(代碼審第一輪併發席):`jobs -p` 只列得到掛鉤的直接子行程,也就是跑測試的那個子殼;各片是子殼用 `&` 起的孫行程。而且非互動 bash 用 `&` 起的背景命令忽略 SIGINT,按 Ctrl-C 時整個行程群組收到的 INT 也殺不到各片。所以子殼(`run_group`)自己接 TERM 與 HUP:收到就把它起的各片收掉再結束。掛鉤的 INT/TERM/HUP 陷阱送給子殼的 TERM 由它往下傳。子殼收片用主殼同一支 `_pp_kill_jobs`(子殼裡 `jobs -p` 列的就是它自己起的各片),不自己記 pid 收:「`&` 起片」與「記下 pid」是兩個敘述,訊號落在中間時剛起的那片不在清單上(代碼審第二輪併發席、架構對齊席);記下的 pid 只拿來 `wait` 收各片的離開碼。`/bin/bash` 3.2.57 實測:改之前被砍或按 Ctrl-C 後,四片都變成 ppid=1 的孤兒;改之後一片都不剩。
+    - **時機**:bash 要等前景子程序結束才跑陷阱。按 Ctrl-C 時整個前景程序組都會收到 INT,子程序自己會先停;只對掛鉤送 TERM 時,掛鉤會等手上那支子程序跑完才結束——S10 寫的「立刻」是指「目前那支子程序結束之後,不再開始下一道」。
+-3. **全套測試之前統一判**:判斷點放在建 `_AUTOLOOP_LOG`、`_TESTS_LOG` 那兩個 log 檔之前。兩個 log 都放在 `$_PP_TMP` 裡,正常結束、擋下、中斷時都由 `EXIT` 陷阱一起清。原本它們用 `mktemp` 建在 `$_PP_TMP` 外,中斷與全綠時都會留下(代碼審第一輪併發席)。測試紅時要指給人看的那一份,先複製到暫存資料夾外,再印複製出去那份的路徑。
++3. **全套測試之前統一判**:判斷點放在建 `_AUTOLOOP_LOG`、`_TESTS_LOG` 那兩個 log 檔之前。兩個 log 都放在 `$_PP_TMP` 裡,正常結束、擋下、中斷時都由 `EXIT` 陷阱一起清。原本它們用 `mktemp` 建在 `$_PP_TMP` 外,中斷與全綠時都會留下(代碼審第一輪併發席)。測試紅時要指給人看的那一份,先複製到暫存資料夾外,再印複製出去那份的路徑(S18)。
+    - `_PP_BLOCKED` 是 1 時,呼叫 `lumos push-summary --blocks-file "$_PP_TMP/blocks" --count "$_PP_NBLK" --refs <這次非刪除的推送行數>`:由它印「這次推送共有 N 筆擋下(M 道閘)」的彙總(N 是筆數,同一道被多個 ref 擋或代碼審內部擋兩個原因都各算一筆;M 是不同閘名的個數),逐筆一行:閘名、ref、原因,詳細處理方式看上面那一段。ref 欄在 `--refs` 大於 1 時印。它同時落一筆治理帳(閘名 `prepush-summary`、kind `blocked`、hard、帶 `LUMOS_PUSH_ATTEMPT`、`extra` 裡放 N、M、不同閘名的清單與推送行數)。`prepush-summary` 要登記進已知閘名清單 `_KNOWN_GATES`,不然事件會被拒寫。
+    - 不論 `push-summary` 成不成功,掛鉤接著一律 `exit 1`,不跑自主迴圈測試與全套測試。`push-summary` 回非零或不存在(舊版 lumos)時,掛鉤自己用 `while IFS=$'\t' read -r` 逐行印一份簡版彙總——觀測失效不得改變擋下。
+    - `_PP_BLOCKED` 不是 1 才照舊往下跑測試。
+    - 為什麼由掛鉤呼叫一支會記帳的子命令:先例是掛鉤呼叫 `loop escape --auto`,把掛鉤算好的內容交給它記帳。彙總必須在所有閘之後才算得出來,只有掛鉤知道全部結果;印彙總與記這一筆是 `push-summary` 自己的工作,不是開一個任意寫帳的入口(它只收這一種格式的檔)。
+    - 連帶擋下照實列:圖譜健檢擋下時,依賴圖譜索引的閘(每支檔有家、雙向門放行、回頭重讀)可能跟著擋。彙總照實列出,不去猜哪道是連帶;這會讓 RETIRE-IF 的筆數偏多,方向是「更不容易撤」,可以接受。
+ 4. **前提壞掉的照舊立刻停**:找不到 Python 3.14、暫存目錄建不起來(掛鉤開頭的總暫存目錄,與測試前建 log 檔那一步)、使用者中斷(第 2 點)——這幾種後面什麼都跑不了或不該再跑,維持立刻結束。找不到 `scripts/lumos` 照舊是「提醒後放行」(`exit 0`),不在收集範圍。
+ 5. **代碼審判定內部也全部判完**:`lumos code-loop check` 新增 `--keep-going`(名字照 PRIOR-ART 的 `make -k`):
+    - 四道判定(合約測試、表態、新增告警、代碼審留痕)都跑完,每道擋下各印各的訊息(原本的擋下句一字不改),最後只要有一道擋下就 rc1。
+-   - **一處判**:判定函式在這個模式下把擋下累積進一個清單,函式裡所有回傳都經過同一個收尾函式:清單非空就回擋下,清單是空的才照原樣回放行。放行站點的意思變成「這一道過了」,不能蓋掉前面記下的擋下。現有的放行站點有 8 個:pitfalls 失敗、pitfalls 沒有 JSON、pitfalls 例外、tier 不是 high、留痕有效(sha 直接相符)、留痕過時但屬簿記豁免、留痕要求被環境變數跳過、合併側放行。守衛測試掃這支函式的原始碼,不准有不經收尾函式的回傳;另外逐站點各一支行為測試(S13)。
++   - **一處判**:判定函式在這個模式下把擋下累積進一個清單,函式裡所有回傳都經過同一個收尾函式:清單非空就回擋下,清單是空的才照原樣回放行。放行站點的意思變成「這一道過了」,不能蓋掉前面記下的擋下。現有的放行站點有 8 個:pitfalls 失敗、pitfalls 沒有 JSON、pitfalls 例外、tier 不是 high、留痕有效(sha 直接相符)、留痕過時但屬簿記豁免、留痕要求被環境變數跳過、合併側放行。守衛測試掃這支函式的原始碼,每個 `return` 只准兩種形狀:直接 `return _fin(...)`;或回傳由收集分流 `kg.hit(...)` 指派的變數,而且緊接在判它非空的 `if <那個變數>:` 底下(不帶旗標時 `hit` 回的就是收尾後的結果;帶旗標時回 None,不判非空就回傳會讓整個函式回 None,代碼審第二輪合約席)。另外逐站點各一支行為測試(S13)。
+    - **合約測試有兩個擋下點**:一般的那個,與「帶低風險提醒旗標但算出 tier=high 時重跑」的那個;兩個在這個模式下都記成 `reason_kind: bound_tests` 並繼續。
+    - **pitfalls 失敗時**:表態需要 pitfalls 的資料,照現在 fail-open 不判;代碼審留痕需要 tier,同樣不判;新增告警閘只看改動範圍、不需要 pitfalls,照跑。前面記下的擋下照算。(不帶這個旗標時照舊整個 fail-open。)
+      - **所以推送前比直接跑 CLI 嚴**:掛鉤認得這個旗標就一律帶上。所以「pitfalls 暫時失敗(逾時、環境壞),而且這次改動帶進新告警」時,不帶旗標會放行,推送前會因新增告警擋下(`LUMOS-BLOCKS: lint_new`)。這是有意的,方向是更嚴、不是放行(代碼審第一輪正確性席要求寫明)。[test: t_code_loop_keep_going_pf_fail_stricter]
+    - 合約測試先紅時照樣算風險分級,後面幾道照判。
+    - 帶 `--json` 時多一個 `blocks` 清單(每筆 `reason_kind` 與 `reason`);`blocked`、`reason`(放第一筆)照舊;`tier` 在這個模式下一律是算出來的分級,pitfalls 失敗時是 `unknown`。不帶 `--keep-going` 時行為與輸出一字不變(其他呼叫者如 CI 不受影響)。
+    - 印合約測試狀態的那幾句照「合約測試有沒有記成擋下」選,不照第一個擋下原因選:記成擋下就不印「低風險只提醒不擋」那類句子。
+    - 治理帳照舊一次判定一筆 `code-loop` `blocked` 事件(現有統計的筆數意義不變),`extra` 多放 `blocks` 的 `reason_kind` 清單。
+    - **給掛鉤讀的那一行**:這個模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`。掛鉤的規則:`code-loop check` 回 1 時,不論這一行在不在、解析出幾筆,至少記一筆 `code-loop`;解析得到就每個 `reason_kind` 各記一筆(閘名一律是 `code-loop`,所以 M 只算一道),原因用對照表寫死的一句(例:表態那筆是「棧別檢核題表態不完整」),對照表查不到的用通用句「代碼審判定擋下(細節在上面)」;有多行時取最後一行。掛鉤把這一行從要印給人看的輸出裡濾掉。
+    - 為什麼不直接讀 `--json`:掛鉤要把給人看的文字原樣印出來,逃逸自動記帳也靠文字裡的兩句擋下句;改讀 JSON 就得呼叫兩次或另外組文字。所以文字輸出之外只加這一行,它是掛鉤唯一的機讀通道。
+    - 逃逸自動記帳照現在的判斷,認「受波及合約的測試沒過」與「tier=high 且」兩句。**一個 ref 只記一筆,合約測試紅優先**(代碼審第一輪通才席):原本遇錯就停,只會印第一句;帶這個旗標後兩句會同時印出。各記一筆的話,修好測試重推時缺留痕那筆會再記一次,`push-gate-unreviewed` 的筆數就比實際抓到的漏多。[test: t_prepush_escape_records_once]
+@@ -85,29 +85,30 @@ REVISIT:2026-12-15 數一次 `prepush-summary` 事件裡兩道以上不同閘的
+    - 直接寫版控帳、不經分流的另外兩支(代碼審留痕與表態的寫入器)只被 `pass`、`skip`、`dispositions` 呼叫,掛鉤路徑不會碰到,不改;實作第一步仍照 S9 的判準盤點一次,盤點表寫進本節。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當兩道彼此獨立的便宜閘同時擋下(例:圖譜健檢有壞連結,且 `governance/anchor-baseline.json` 改過沒提交)時,推送前掛鉤應回 1,彙總裡兩道都列出,而且全套測試沒有被跑到。[test: t_prepush_collects_all_blocks]
+ - [S2] 當只有一道擋下時,應回 1、印出那一道原本的完整說明加彙總,全套測試沒有被跑到;當沒有任何一道擋下時,應照舊跑到全套測試。[test: t_prepush_collects_all_blocks]
+ - [S3] 當找不到 Python 3.14 時,掛鉤應立刻結束(不收集、不往下跑)。這條守的是既有行為不被改壞,改動前就是綠的。[test: t_prepush_stops_without_python]
+ - [S4] 當 `lumos code-loop check --keep-going` 遇到表態不完整且有新增告警時,兩個原因都應印出、回 1;合約測試紅且 tier=high 又沒有代碼審留痕時,兩個原因也都應印出;不帶 `--keep-going` 時應照舊只印第一個,輸出與現在一字不差。[test: t_code_loop_check_keep_going]
+ - [S5] 當執行 `lumos push-preview` 時,不應推送、不應跑全套與自主迴圈測試,應印出各道結果;有擋下時回 1、全過時回 0 並說明全套測試沒跑;遠端沒有這個分支時,照 git 給的推送行當成新分支首推處理;回傳碼只依結果檔判,結果檔不在、解析不出、或推送行數是 0 時回 2。[test: t_push_preview_runs_gates_without_suite]
+ - [S6] 9 道閘逐道各讓它單獨擋一次,掛鉤每次都應回 1、全套沒被跑到、彙總列出那一道。[test: t_prepush_each_gate_blocks_alone]
+-- [S13] `code-loop check --keep-going` 已記下一筆擋下之後,走到 8 個放行站點的每一個(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)都應仍回 1;判定函式的原始碼裡不應有不經收尾函式的回傳;pitfalls 失敗時新增告警閘應照跑。[test: t_code_loop_keep_going_pass_sites_keep_blocks]
++- [S13] `code-loop check --keep-going` 已記下一筆擋下之後,走到 8 個放行站點的每一個(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)都應仍回 1;判定函式原始碼裡的每個回傳都應是 `_fin(...)`,或緊接在 `if <變數>:` 底下回傳由 `kg.hit(...)` 指派的那個變數;pitfalls 失敗時新增告警閘應照跑。[test: t_code_loop_keep_going_pass_sites_keep_blocks]
+ - [S14] 一次推兩個 ref、兩個都被同一道擋下時,彙總應列兩筆(ref 欄有值)、閘數算 1;推的是刪除時照舊跳過、推 tag 時照舊不跑代碼審判定,不應因此多記或漏記。[test: t_prepush_multi_ref_blocks]
+ - [S15] `code-loop check` 回 1 但輸出沒有 `LUMOS-BLOCKS:` 行、那一行是空的、或 `reason_kind` 不在對照表時,掛鉤應仍回 1;任何一道擋下後暫存檔寫不進去時,掛鉤也應仍回 1。[test: t_prepush_block_survives_lost_record]
+ - [S16] 預演模式下,即使 git 沒有照預演跑(用一支會忽略 `--dry-run` 的假 git 驗),也不應有任何物件被推出去:掛鉤在預演模式一律回 1。[test: t_push_preview_hook_never_lets_git_push]
+ - [S17] 環境變數 `LUMOS_PUSH_PREVIEW` 的值不是 32 個十六進位字(例:`*`、`../x`)時,掛鉤應照真推送跑,且不應刪除票資料夾裡的任何檔;`push-preview` 開始時只應刪掉建立者行程已不在的票。[test: t_push_preview_token_required]
+ - [S7] 當新掛鉤配上不認得 `--keep-going`、也沒有 `push-summary` 的舊 lumos,而代碼審判定會擋時,掛鉤應回 1(不是放行),並印簡版彙總。[test: t_prepush_mixed_versions]
+ - [S8] 當環境裡有 `LUMOS_PUSH_PREVIEW` 但沒有對應的票(或票檔裡的隨機值不符)時,真推送應照常跑到全套測試,並印那句「忽略」;`push-preview` 遇到沒有預演標記的掛鉤時應回 2 且不跑掛鉤。[test: t_push_preview_token_required]
+ - [S9] 預演擋下前後,`git status --porcelain` 對受版控的檔應沒有差異,本機帳應多出帶 `preview: true` 的事件,`lumos gov` 的統計不應算進這些事件。[test: t_push_preview_no_tracked_ledger_writes]
+-- [S10] 掛鉤註解區塊列舉的每一支 lumos 呼叫被訊號中斷(回傳碼 128 以上)時,掛鉤應以該回傳碼結束、不再開始後面的閘;掛鉤自己收到 INT 或 TERM 時,應在手上那支子程序結束後結束、收掉自己的背景工作(含全套測試的各片,不留 ppid=1 的孤兒、TMPDIR 底下不留東西),不應刪掉暫存目錄後繼續跑;裁判簽名與圖譜健檢回 2 時應照舊記成擋下。[test: t_prepush_interrupt_stops_every_gate]
++- [S10] 掛鉤註解區塊列舉的每一支 lumos 呼叫被訊號中斷(回傳碼 128 以上)時,掛鉤應以該回傳碼結束、不再開始後面的閘;掛鉤自己收到 INT、TERM 或 HUP 時,應在手上那支子程序結束後結束(130、143、129)、收掉自己的背景工作(含全套測試的各片,不留 ppid=1 的孤兒、TMPDIR 底下不留東西),不應刪掉暫存目錄後繼續跑;裁判簽名與圖譜健檢回 2 時應照舊記成擋下。[test: t_prepush_interrupt_stops_every_gate]
++- [S18] 全套測試與自主迴圈那支的 log 應放在掛鉤的暫存目錄內:全綠時 TMPDIR 底下不應留下任何 `lumos-prepush` 開頭的東西;任一支紅時掛鉤應回 1,紅時印出的 log 路徑在掛鉤結束後應還在、檔裡有紅的那支,而且 TMPDIR 底下只留那一份。[test:t_prepush_test_logs_inside_tmp]
+ - [S11] `push-preview` 在 detached HEAD 沒給參數、沒有追蹤分支又沒給參數、git 連不上遠端、本機落後遠端(非快轉)時,都應回 2 並說明原因,不應回 0 或 1。[test: t_push_preview_edges]
+ - [S12] 有擋下時,版控治理帳應多一筆 `prepush-summary` 事件,帶筆數、閘名清單與這次推送的識別碼;`push-summary` 失敗時掛鉤仍回 1。[test: t_prepush_summary_records_event]
+ 
+ - 測試怎麼搭:S6、S7、S10 用一支假的 `scripts/lumos`(小 Python 腳本,照子命令與環境變數決定回傳碼與輸出;`--help` 輸出可選擇帶不帶 `--keep-going`),放進測試搭的假 repo,讓每一道都能單獨擋、單獨被中斷;S1、S2 用真的 lumos(圖譜健檢壞連結加簽名檔改過沒提交,沿用 `t_prepush_cheap_gates_run_before_expensive_suite` 的搭法)。現有範本餵的推送行是假的提交編號,逐 ref 那幾道走不到,所以逐道驗一律用假 lumos。
+ - 既有守衛要一起更新:`t_prepush_cheap_gates_run_before_expensive_suite`(便宜的閘擋下時不跑全套)行為不變、照舊要綠;`t_prepush_gates_stop_on_signal` 現在數 `pp_stop_if_signaled` 的行數(8 行),改成第 2 點的逐行規則,併進 S10 那支。
+ 
+ ## 實作清單(照順序)
+ 
+ 1. 盤點斷言「某道擋下後,後面的閘沒被叫」的既有接線測試(漂移檢查、雙向門放行、回頭重讀各自的接線測試等),收集模式下這類斷言會翻紅,逐支改成「擋下時全套沒跑」。
+ 2. 先寫第 S1–S17 的紅測試,再改掛鉤與 `scripts/lumos`。
+@@ -135,21 +136,21 @@ REVISIT:2026-12-15 數一次 `prepush-summary` 事件裡兩道以上不同閘的
+ 
+ ## 回退
+ 
+ - 還原提交,lumos 本身即回到遇錯就停;`code-loop check` 不帶 `--keep-going` 的行為沒變,CI 與其他呼叫者不受影響。
+ - 消費專案:掛鉤是 `lumos update` 逐位元組複製過去的,也在錨點清單裡。回退(或上線)之後,每個消費專案要跑 `lumos update`,再 `lumos anchor approve --note "<為什麼>"` 並提交簽名檔,否則下一次推送會被裁判簽名擋下。本機安裝那份(`core.hooksPath` 指向的)要 `git pull` 更新。
+ - 版本錯開的中間狀態都安全:新掛鉤配舊 lumos 走第 6 點的探測與簡版彙總;舊掛鉤配新 lumos 等於沒有這個功能;`push-preview` 遇到舊掛鉤回 2 不跑。
+ - 撤除時一併改回:掛鉤的收集與預演段、`code-loop check --keep-going`、`push-preview`、`push-summary`、第 8 點的預演分流、實作清單第 6 點列的每一份文件,以及 [[Projects/全repo審視_計劃]] #12 旁的註記。
+ 
+ ## 進度
+ 
+-- 第一批(〈做法〉1–6,條款 S1–S4、S6、S7、S10、S12–S15)已實作,說明落在 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉與 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
++- 第一批(〈做法〉1–6,條款 S1–S4、S6、S7、S10、S12–S15、S18)已實作,說明落在 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉與 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
+ - 實作時定下、第二批要沿用的細節:掛鉤記的閘名是 `anchor`、`anchor-baseline`、`doctor`、`home`、`note-shape`、`spec-gate`、`code-loop`、`drift`、`reread`;`push-summary` 的 `extra` 鍵是 `blocks`(筆數)、`gates_n`(閘數)、`gates`、`refs`,暫存檔少行時多一個 `lost`;`LUMOS-BLOCKS:` 行只在文字模式印(`--json` 改看 `blocks` 清單);代碼審判定的版本探測是讀檔找 `"--keep-going"` 字樣,不執行 lumos,所以不在「中斷就停」清單上(第一輪代碼審修正前是執行 `--help`、在清單上)。
+ 
+ - 新增告警閘的 2 條 C901(第一輪代碼審通才席):兩支本來就超標,函式定義那一行多了 keep_going 參數,指紋對不上才被算成新的。`_codeloop_guard_verdict` 先把收集模式的分流與 pitfalls 那一步抽成小函式,複雜度 40→32(改動前 35);`cmd_code_loop` 實際從 53 降到 26。兩條都用 `lumos lint-waive` 附理由留痕。指紋是「規則+檔名+那一行程式碼」,不含複雜度數字,所以只要定義那一行變了,降到 35 以下也照樣算新。
+ 
+ REVISIT:2026-11-15 做第二批(〈做法〉7、8:push-preview 預演與預演事件分流,條款 S5、S8、S9、S11、S16、S17),掛鉤的預演模式與 `# lumos-hook-cap: push-preview` 標記一起加
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-14,6 席):35 條/blocking 23/預演開關、版本混用、預演寫帳、代碼審內部放行蓋掉擋下、中斷與暫存、撤除條件量不到、測試只驗兩道是主要缺口,全數折入,做法改寫成 8 點。席報告在 `governance/review-reports/推送前一次列出全部擋下原因/`。
+ - 依根因分組折入(每組一條統一規則,不逐點補):
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index fbd7c06a..6e0a5509 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -118,25 +118,25 @@ PITFALL:測同時跑被中斷的測試,在推送前掛鉤裡永遠收不到中
+ WHY:同時跑時子程序一律經由 `_BtProcs.launch` 開:開之前看收尾標記、數一支「正在開」,收尾立標記後等正在開的都開完(最多 30 秒;期限在第一次收尾時定下,中途再按 Ctrl-C 重叫收尾也沿用同一個期限,不會越按越久)再整組收掉;收尾中途再按 Ctrl-C 也收完再走 [出處:2026-10-13 高風險代碼審第三輪併發席,[[Issues/合約測試閘並行收尾小問題]]] [因:舊版開完才登記、收尾最多等 2 秒,開程序卡更久或收尾中再按一次 Ctrl-C 都會在程式結束後留下孤兒] [不選:開程序與登記整段包在同一把鎖——同時跑的開頭會退化成一支一支開] [test:t_bound_tests_parallel_slow_spawn_reaped] [test:t_bound_tests_parallel_interrupt_reaps] [test:t_bound_tests_reap_deadline_not_reset]
+ 
+ ## 推送前一次列出全部擋下原因(2026-10-14)
+ 
+ 白話:推送被擋時,原本一次只看得到第一個原因,修好重推(每次掛鉤要跑幾分鐘)才看到下一個;現在全套測試之前那幾道便宜的閘全部跑完,一次列出全部原因,有任何一道擋下就在全套之前結束。
+ 
+ WHY:全套測試之前的 9 道閘(裁判簽名、簽名檔沒提交、圖譜健檢、每支檔有家、筆記形狀、雙向門放行、代碼審判定、存量漂移、回頭重讀)擋下時不再立刻結束,改成記下、照原樣印那一道的說明、繼續下一道;跑到建測試 log 暫存檔之前有任何一筆,就叫 `lumos push-summary` 印「這次推送共有 N 筆擋下(M 道閘)」逐筆一行、記一筆 `prepush-summary` 治理帳,然後一律 exit 1,自主迴圈與全套都不跑。同一道被多個 ref 擋各記一筆,ref 欄在非刪除的推送行多於一行時才印 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]] [因:2026-10-13、10-14 兩批推送被依序擋了四次與兩次,每次修完重推才看到下一道] [不選:維持遇錯就停——那是 2026-09-06 全 repo 審視 #12 只調順序時的裁定,沒評估過一次列出;pre-commit 的幾道一起改——那幾道合計幾秒,重提交的代價不是要解的痛] [test:t_prepush_collects_all_blocks] [test:t_prepush_each_gate_blocks_alone] [test:t_prepush_multi_ref_blocks]
+ 
+ WHY:擋不擋只看記憶體裡的兩個純量(`_PP_BLOCKED`、`_PP_NBLK`),記一筆時先設它們、才追加暫存檔;彙總照 `--count` 算筆數,暫存檔讀不到或少幾行時講明有幾筆沒寫進去。`push-summary` 回非零或不存在(舊版 lumos)時掛鉤自己印簡版彙總,照樣 exit 1 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]] 第二輪設計審] [因:暫存檔寫不進去(磁碟滿、暫存目錄被刪)或觀測那支壞掉,都不能把擋下變成放行;bash 3.2 搭 set -u 展開空陣列會出錯,所以不用陣列] [test:t_prepush_block_survives_lost_record] [test:t_prepush_summary_records_event]
+ 
+-WHY:`push-summary` 讀暫存檔只照換行字元切,不用 `splitlines`;找 repo 根跟 `push-range` 同一支 `_note_audit_root`(沒帶 `--repo` 又不在 git 專案裡就回 2)。掛鉤寫暫存檔(含雙向門放行那份留底檔)失敗時,錯誤訊息整組丟掉 [出處:第一輪代碼審邊界席、架構對齊席] [因:`splitlines` 也會在 U+2028、U+0085、跳頁這類字元斷行,而 git 允許 ref 名帶它們,那一筆會被切成兩段丟掉,跟掛鉤照換行讀的簡版彙總對不上;`2>/dev/null` 寫在 `>>` 後面時,bash 先開檔,開檔失敗的訊息在導走之前就印出來了] [test:t_push_summary_anchor_note_and_separators] [test:t_push_summary_repo_root_like_push_range] [test:t_prepush_block_survives_lost_record]
++WHY:`push-summary` 讀暫存檔只照換行字元切,不用 `splitlines`;找 repo 根跟 `push-range` 同一支 `_note_audit_root`(沒帶 `--repo` 又不在 git 專案裡就回 2)。掛鉤寫暫存檔(含雙向門放行那份留底檔)失敗時,錯誤訊息整組丟掉 [出處:第一輪代碼審邊界席、架構對齊席] [因:`splitlines` 也會在 U+2028、U+2029、U+0085 這類字元斷行,而 git 允許 ref 名帶它們(git 2.39.2 的 `git check-ref-format` 實測可過;跳頁與 0x1c–0x1e 是控制字元,會被拒,推不出來),那一筆會被切成兩段丟掉,跟掛鉤照換行讀的簡版彙總對不上;`2>/dev/null` 寫在 `>>` 後面時,bash 先開檔,開檔失敗的訊息在導走之前就印出來了,所以掛鉤裡寫進檔案又丟掉 stderr 的重導向一律包成一組] [test:t_push_summary_anchor_note_and_separators] [test:t_push_summary_repo_root_like_push_range] [test:t_prepush_block_survives_lost_record] [test:t_prepush_touched_file_write_fails_quietly]
+ 
+ WHY:代碼審判定那一道,掛鉤在逐 ref 迴圈之前讀一次 `scripts/lumos` 的原始碼,看有沒有 `"--keep-going"` 字樣。有就帶上這個旗標,讀它最後印的 `LUMOS-BLOCKS:` 行,每個種類記一筆;有多行時只取最後一行。原因用掛鉤寫死的對照表,查不到用通用句。沒有那個字樣就不帶旗標,照舊只看回傳碼。不論那一行在不在、解析出幾筆,回 1 時至少記一筆,那一行也不印給人看 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5、6;第一輪代碼審架構對齊席] [因:掛鉤與 scripts/lumos 分開複製到消費專案,core.hooksPath 又讓好幾個工作樹共用一份掛鉤,版本一定會錯開;舊版不認得旗標回 2,而 2 在掛鉤裡是放行] [不選:執行 `code-loop check --help` 看輸出——同一支掛鉤探 `--shard`、`--suite`、`--graph` 都是讀檔找字樣,而且註解寫明不執行對方,多一種做法還要多一條中斷條目;掛鉤改讀 `--json`——要呼叫兩次或另外組文字,逃逸自動記帳又靠文字裡的兩句擋下句] [test:t_prepush_mixed_versions] [test:t_prepush_block_kinds_each_recorded]
+ 
+-WHY:掛鉤 `pp_cl_reason` 的對照表跟 `scripts/lumos` 的 `_CODELOOP_BLOCK_KIND_REASONS`(加上查不到時的通用句)各存一份,逐字一致;判定函式會產生的每個 `reason_kind` 都要在表上 [出處:第一輪代碼審架構對齊席、邊界席] [因:掛鉤要能配舊版 lumos 跑,不能向 lumos 要這份表;但兩份各寫一份會漂,新加一種擋下卻沒補掛鉤的表,彙總會退成通用句] [test:t_prepush_cl_reason_table_matches_lumos]
++WHY:每種擋下的一句話原因只存在掛鉤 `pp_cl_reason` 那一份;它的種類要跟 `scripts/lumos` 判定會產生的 `reason_kind` 一樣多、一樣名(雙向),而產生 `reason_kind` 的地方一律寫字面字串 [出處:第一輪代碼審架構對齊席、邊界席;第二輪代碼審通才席、架構對齊席、合約席] [因:掛鉤要能配舊版 lumos 跑,不能向 lumos 要這份表;新加一種擋下卻沒補掛鉤的表,彙總會退成通用句;種類若經變數產生,守衛從原始碼抽不到、會照綠] [不選:`scripts/lumos` 也存一份句子表、`--json` 的 blocks 每筆帶 `summary`——第一輪折入時加的,沒有任何程式讀,只為了給漂移測試一個比對對象,第二輪拿掉] [test:t_prepush_cl_reason_table_matches_lumos]
+ 
+ WHY:同一個 ref 的代碼審判定同時印出「受波及合約的測試沒過」與「tier=high 且…缺留痕」兩句時,逃逸自動記帳只記一筆,而且是合約測試紅那一筆 [出處:第一輪代碼審通才席] [因:原本遇錯就停時只會印第一句;收集模式兩句都印,兩筆都記的話,修好測試重推時缺留痕那筆又記一次,`push-gate-unreviewed` 的筆數會比實際抓到的漏多] [test:t_prepush_escape_records_once]
+ 
+ WHY:裁判簽名也改成收集:它管的是測試檔與掛鉤,不管 `scripts/lumos`;被改的若是掛鉤本身,它這一刻已經在跑,提早結束換不到可信度。這次推送反正已經因它被擋,不會變成放行;彙總裡有它時最前面多一行講明代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔;`push-summary` 印的與掛鉤簡版彙總印的都有這一行 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉1] [因:兩道會在全套之前跑 scripts/test_lumos.py 裡的測試,它們的綠燈這次不算數] [test:t_prepush_each_gate_blocks_alone] [test:t_prepush_plain_summary_anchor_note] [test:t_push_summary_anchor_note_and_separators]
+ 
+-WHY:中斷一律結束:清單上的每一支呼叫被訊號殺掉(128 以上)就以那個回傳碼停下;陷阱拆開,EXIT 只收拾,INT/TERM 先收掉自己的背景工作再以 130/143 結束 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉2] [因:原本 EXIT、INT、TERM 共用一支陷阱、裡面不結束,掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測),收集模式會更常踩到;bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是那支結束之後不再開始下一道] [test:t_prepush_interrupt_stops_every_gate]
++WHY:中斷一律結束:清單上的每一支呼叫被訊號殺掉(128 以上)就以那個回傳碼停下;陷阱拆開,EXIT 只收拾,INT/TERM/HUP 先收掉自己的背景工作再以 130/143/129 結束 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉2] [因:原本 EXIT、INT、TERM 共用一支陷阱、裡面不結束,掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測),收集模式會更常踩到;bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是那支結束之後不再開始下一道] [test:t_prepush_interrupt_stops_every_gate]
+ 
+-PITFALL:掛鉤被砍或按 Ctrl-C 之後,全套測試的各片變成 ppid=1 的孤兒繼續跑(最多八分鐘,輸出寫進已刪的資料夾),兩個測試 log 也留在 TMPDIR [出處:第一輪代碼審併發席,/bin/bash 3.2.57 實測四片全成孤兒] [根因:掛鉤的陷阱只對 `jobs -p` 列出的直接子行程(跑測試的子殼)送 TERM,各片是孫行程;非互動 bash 用 & 起的背景命令又忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到;兩個 log 用 mktemp 建在 `$_PP_TMP` 外] [修法:跑測試的子殼 `run_group` 自己接 TERM,收掉它起的各片;兩個 log 改放 `$_PP_TMP` 內,紅時要給人看的那份先複製到外面再印路徑;測試起掛鉤時先把 SIGINT 裝回預設,不然測試跑在推送前閘的背景分片裡、繼承「忽略 SIGINT」,bash 的 INT 陷阱裝不上,測 Ctrl-C 的斷言會假紅] [test:t_prepush_interrupt_stops_every_gate] [test:t_prepush_test_logs_inside_tmp]
++PITFALL:掛鉤被砍或按 Ctrl-C 之後,全套測試的各片變成 ppid=1 的孤兒繼續跑(最多八分鐘,輸出寫進已刪的資料夾),兩個測試 log 也留在 TMPDIR [出處:第一輪代碼審併發席,/bin/bash 3.2.57 實測四片全成孤兒;第二輪代碼審併發席、架構對齊席:只對掛鉤送 HUP 時 8 片全活著] [根因:掛鉤的陷阱只對 `jobs -p` 列出的直接子行程(跑測試的子殼)送 TERM,各片是孫行程;非互動 bash 用 & 起的背景命令又忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到;主殼與子殼原本都沒接 HUP;兩個 log 用 mktemp 建在 `$_PP_TMP` 外] [修法:跑測試的子殼 `run_group` 自己接 TERM 與 HUP,用主殼同一支 `_pp_kill_jobs`(`jobs -p`)收掉它起的各片——不自己記 pid 收,「& 起片」與「記下 pid」之間有空窗,訊號落在中間會漏收剛起的那片;主殼也接 HUP(129);測試看那一片的 pid 在掛鉤結束後有沒有消失,不靠「睡幾秒再看有沒有寫下結束標記」的計時窗口(負載下會假綠);兩個 log 改放 `$_PP_TMP` 內,紅時要給人看的那份先複製到外面再印路徑;測試起掛鉤時先把 SIGINT 裝回預設,不然測試跑在推送前閘的背景分片裡、繼承「忽略 SIGINT」,bash 的 INT 陷阱裝不上,測 Ctrl-C 的斷言會假紅] [test:t_prepush_interrupt_stops_every_gate] [test:t_prepush_test_logs_inside_tmp]
+ 
+ 找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的四道怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index 424fb225..ed3ff586 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -222,11 +222,11 @@ REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍
+ ## code-loop check --keep-going(2026-10-14,[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5)
+ 
+ 白話:`code-loop check` 本來是第一道沒過就停(合約測試 → 表態 → 新增告警 → 審查留痕,先中的先報);帶 `--keep-going` 時四道都判完、每道擋下各印各的原句,推送前掛鉤用它一次看到這個 ref 的全部原因。不帶旗標時行為與輸出一字不變,CI 與其他呼叫者不受影響。
+ 
+ WHY:判定函式裡所有 return 都經過同一個收尾函式 `_fin`:keep-going 下擋下累積進清單,清單非空就回擋下(第一筆的欄位、`blocks` 清單、tier 一律是算出來的分級),清單是空的才照原樣放行——放行站點(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)的意思變成「這一道過了」,不能蓋掉前面記下的擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]] 第一輪設計審(代碼審內部放行蓋掉擋下)] [因:收集模式下最大的風險是某個放行站點直接回傳、把前面記下的擋下吞成放行] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+ 
+ WHY:keep-going 下 pitfalls 失敗時,表態(要 pitfalls 的資料)與代碼審留痕(要 tier)照舊 fail-open 不判,新增告警閘只看改動範圍,照跑;合約測試先紅時照樣算分級、判後面幾道,兩個合約測試擋下點(一般的、與帶低風險提醒旗標卻算出 tier=high 重跑的那個)都記成 `bound_tests`。所以推送前(掛鉤認得就一律帶旗標)比直接跑 CLI 嚴:pitfalls 失敗又有新增告警時,不帶旗標放行,帶旗標擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5;第一輪代碼審正確性席要求寫明這個差異] [因:一次列出全部原因,前提是每一道在它需要的資料拿得到時都判] [test:t_code_loop_check_keep_going] [test:t_code_loop_keep_going_pf_fail_stricter]
+ 
+ WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitfalls 失敗時照跑新增告警閘)集中在 `_CodeloopKg`;跑 pitfalls 取分級那一步拆成 `_codeloop_pitfalls_tier`。判定函式的複雜度 40→32(改動前 35) [出處:第一輪代碼審通才席:新增告警閘把這支的 C901 當成新告警擋下] [因:放行站點不經收尾的守衛照舊成立(每個回傳是 `_fin(...)`,或 `hit` 的結果——不帶旗標時 `hit` 回的就是 `fin(v)`);函式定義那一行多了參數,指紋已經變了,所以另用 lint-waive 附理由留痕] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+ 
+-輸出契約:文字模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`(沒有擋下時是空的),是推送前掛鉤唯一的機讀通道;`--json` 不印這一行,改多一個 `blocks` 清單(每筆 `reason_kind`、`reason`,以及 `summary`:那個種類的一句話原因,取自 `_CODELOOP_BLOCK_KIND_REASONS`,跟掛鉤的對照表逐字一致),`blocked`、`reason`(第一筆)照舊。合約測試狀態那幾句照「合約測試有沒有記成擋下」選:沒記成擋下(低風險只提醒)就照印「只提醒不擋」。治理帳照舊一次判定一筆 `code-loop` `blocked`(統計的筆數意義不變),`extra` 多一個 `blocks` 種類清單。掛鉤那一頭怎麼讀見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉。
++輸出契約:文字模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`(沒有擋下時是空的),是推送前掛鉤唯一的機讀通道;`--json` 不印這一行,改多一個 `blocks` 清單(每筆 `reason_kind`、`reason`),`blocked`、`reason`(第一筆)照舊。合約測試狀態那幾句照「合約測試有沒有記成擋下」選:沒記成擋下(低風險只提醒)就照印「只提醒不擋」。治理帳照舊一次判定一筆 `code-loop` `blocked`(統計的筆數意義不變),`extra` 多一個 `blocks` 種類清單。掛鉤那一頭怎麼讀見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉。
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 538cfb6a..5d120ab6 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "f554467831df6ff62cd8b134627d995b5953adfbba1531916be6381a9b42e009",
++    "scripts/test_lumos.py": "6458bc0cfd6ba7a42b0ea42822a007e9b6ef094a4bd99bf6b68946ee0536327f",
+     "scripts/test_autonomous_loop.py": "b360429f2d41bb32d0b21b125f482f7694fefa828f2be7020902382f9f3c9e9c",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+-    "scripts/hooks/pre-push": "1967bc7b94d3be1566f6f58b0414b06118620ea50dc87cb18a760163ae0abb2c",
++    "scripts/hooks/pre-push": "31813401d3bc197ac2e06afa07a56357d25bb39773260807a6f5eca4ecf9bef4",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "a3494328d4df22fd7ad8c28bb34a8bef5edd8dd8ab14a3118c9d3f4f44b022bc",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "b21d8133174b2b0ea9d8abad973fdcb430dc0d79d7b3591cf5764e1847838dff",
+     "scripts/hooks/claude/check-graph-sync.py": "24b58d13eac5211823d7e7f3125ff6db81212a43351ae0dd2585ef0d4c247485",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-10-14T04:55:12+08:00",
+-  "note": "推送前收集第一輪代碼審修正:跑測試的子殼收掉各片、log 放暫存資料夾、版本探測改讀檔、逃逸只記一筆、暫存檔寫入不印雜訊;補多種類、提示句、對照表漂移等測試;測試起掛鉤時把 SIGINT 裝回預設"
++  "approved_at": "2026-10-14T07:27:33+08:00",
++  "note": "代碼審 r2 折入:收片改用 _pp_kill_jobs、接 HUP、包組重導向;漂移守衛與孤兒測試改寫"
+ }
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 1cda83b4..09e8de72 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -124,22 +124,22 @@ pp_plain_summary() {
+     echo ""
+     echo "══ 這次推送共有 $_PP_NBLK 筆擋下($_m 道閘)══ 簡版彙總(這個 repo 的 lumos 沒能印彙總,多半是舊版)"
+     case "$_gates" in *" anchor "*) echo "裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑" ;; esac
+     printf '%s' "$_lines"
+     [[ "$_n" -lt "$_PP_NBLK" ]] && echo "  共 $_PP_NBLK 筆擋下,其中有 $((_PP_NBLK - _n)) 筆的原因沒寫進暫存檔,細節看上面各段。"
+     echo "每一道怎麼處理看上面那一段;全套測試這次沒跑(便宜的閘先擋下了),修好之後重推會再從頭跑一次。"
+   } >&2
+ }
+ 
+ # 代碼審判定 rc1 時,LUMOS-BLOCKS: 行裡每個種類各記一筆的原因(對照表寫死;查不到用通用句)。
+-# ★跟 scripts/lumos 的 _CODELOOP_BLOCK_KIND_REASONS / _CODELOOP_BLOCK_KIND_FALLBACK 逐字同步★(t_prepush_cl_reason_table_matches_lumos 守):
+-# 掛鉤要能配舊版 lumos 跑,所以不向 lumos 要這份表,自己留一份。
++# ★種類要跟 scripts/lumos 判定會產生的 reason_kind 一樣多、一樣名★(t_prepush_cl_reason_table_matches_lumos 雙向守):
++# 句子只有這一份——掛鉤要能配舊版 lumos 跑,所以不向 lumos 要。
+ pp_cl_reason() {
+   case "$1" in
+     bound_tests) echo "受波及合約的測試沒過(或證不出跑過)" ;;
+     dispositions) echo "棧別檢核題表態不完整" ;;
+     lint_new) echo "這次改動帶進了新的告警" ;;
+     review) echo "高風險改動沒有有效的代碼審留痕" ;;
+     *) echo "代碼審判定擋下(細節在上面)" ;;
+   esac
+ }
+ 
+@@ -150,30 +150,31 @@ _PP_REMOTE="${1:-}"
+ # ★給圖譜健康那一段用★:逾期的預告合約,本機這一層只擋「這次碰到的」那幾條,
+ # 別人的逾期不該擋掉你的推送(被擋的人解不開別人的合約)。CI 不給這份清單,那邊照舊擋全部。
+ pp_touched_file() {
+   local _f _r
+   [[ -n "$_EMPTY_TREE" ]] || return 0
+   # ★放進 $_PP_TMP,不要自己另外 mktemp 一個檔★(代碼審 r1 架構席):那個目錄有 trap 在收,
+   # 正常結束、exit 1、Ctrl-C、被砍都會清掉。自己逐處 rm 會在「還沒回傳路徑就被打斷」時漏掉
+   # ——這支腳本前面那段註解就是為了同一種漏而寫的,不要再走一次同一條路。
+   [[ -n "$_PP_TMP" && -d "$_PP_TMP" ]] || return 0
+   _f="$_PP_TMP/touched.txt"
+-  : > "$_f" 2>/dev/null || return 0
++  { : > "$_f"; } 2>/dev/null || return 0
+   # 範圍跟會擋的閘同一支(這份清單餵 doctor --touched-from,會擋)。每個 ref 的 diff 都成功、結果卻是空的(推的東西
+   # 已整段在主線上)→ 照樣交空清單,意思是「這次什麼都沒碰到」;任何一個 diff 失敗、或根本沒有推送行 → 不交(doctor 照舊全擋)
+   local _n=0 _ok=1
+   for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+     read -r _ _lsha _rref _rsha <<< "$_ppl"
+     [[ "$_lsha" == "$_ZERO" ]] && continue
+     pp_block_range_for "$_rsha" "$_lsha" "$_rref" quiet
+     _n=$((_n + 1))
+-    git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f" 2>/dev/null || _ok=0
++    # 重導向包成一組(跟 pp_record_block 同一族,代碼審 r2 架構對齊席):清單檔寫不進去(暫存目錄被刪)時不印開檔雜訊
++    { git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f"; } 2>/dev/null || _ok=0
+   done
+   if [[ "$_ok" -eq 1 && ( -s "$_f" || "$_n" -gt 0 ) ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
+ }
+ 
+ # 沒有 scripts/lumos → 降級放行(不為缺環境 brick push,CI 兜底);有 lumos 卻找不到 Python 3.14 → 擋下
+ # (Projects/最低Python版本改3.14_計劃 做法第 3 點;PY 在下面讀完設定後才決定)
+ GRAPHCTL="$REPO_ROOT/scripts/lumos"
+ PY=""
+ # ── python-launcher begin(三支 git 掛鉤與四支安裝腳本內嵌同一段,t_python_launcher_blocks_agree 逐字守一致)──
+ # 只負責找一支任何版本的 python 把 lumos 叫起來;版本判斷全交給 lumos(Systems/python直譯器選擇)。
+@@ -271,21 +272,21 @@ _lumos_block_no_py314() {
+ # ★失敗隔離★:算不出來 → 暫存檔不存在或是空的 → 合約測試閘記一筆帳放行,不拖垮別的檢查。
+ _IMPACT_JSON=""
+ impact_once() {   # $1=diff range;算一次,結果放進 $_IMPACT_JSON
+   _IMPACT_JSON=""
+   [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+   # ★用同檔既有的樣板寫法與命名家族★(代碼審 r1 架構對齊席):
+   # 同一支腳本下面幾行就有 lumos-prepush-autoloop-XXXXXX / lumos-prepush-tests-XXXXXX,
+   # 而且旁邊的註解特別說明過「★XXXXXX 必須在結尾★」是踩過才定下來的。
+   local _f; _f="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-impact-XXXXXX" 2>/dev/null || true)"
+   [ -n "$_f" ] || return 0
+-  if "$PY" "$GRAPHCTL" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" > "$_f" 2>/dev/null \
++  if { "$PY" "$GRAPHCTL" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" > "$_f"; } 2>/dev/null \
+      && [ -s "$_f" ]; then
+     _IMPACT_JSON="$_f"
+   else
+     rm -f "$_f"
+   fi
+ }
+ impact_done() { [ -n "$_IMPACT_JSON" ] && rm -f "$_IMPACT_JSON"; _IMPACT_JSON=""; }
+ # ★擋下或收到訊號時也要清★(代碼審 r1 外家否決席判 minor,屬實):
+ # 上面那支只在 ref 迴圈正常跑到尾端時執行。擋下時要等全部跑完在判斷點才 exit 1(推送前收集),
+ # 收到訊號則中途結束——沒有 EXIT 陷阱收的話,每被擋或被中斷一次就留一個暫存檔在 $TMPDIR 裡慢慢累積。
+@@ -296,20 +297,23 @@ if [[ -z "$_PP_TMP" || ! -d "$_PP_TMP" ]]; then
+   echo "擋下:推送前檢查需要一個暫存目錄,但 ${TMPDIR:-/tmp} 建不出來(不存在或不可寫);修好 TMPDIR 再推。" >&2
+   exit 1
+ fi
+ # 陷阱拆開(計劃〈做法〉2):EXIT 收拾;INT/TERM 先收掉自己的背景工作再結束(結束時再走 EXIT 那支)。
+ # 原本三個共用一支、裡面不結束:掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測)。
+ # bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是指那支結束之後、不再開始下一道。
+ _pp_kill_jobs() { local _j; _j="$(jobs -p 2>/dev/null)"; [[ -n "$_j" ]] && kill $_j 2>/dev/null; return 0; }
+ trap 'impact_done; rm -rf "$_PP_TMP"' EXIT
+ trap '_pp_kill_jobs; exit 130' INT
+ trap '_pp_kill_jobs; exit 143' TERM
++# HUP 也接(代碼審 r2 併發席):ssh 或編輯器只對掛鉤送掛斷時,沒接的話掛鉤直接死、EXIT 照跑刪掉暫存目錄,
++# 跑測試的子殼與各片全部繼續跑(/bin/bash 3.2.57 實測 8 片全活著)。129 = 128 + SIGHUP。
++trap '_pp_kill_jobs; exit 129' HUP
+ # (2026-09-11 起「該動哪篇」的點名改由每支檔有家照家算——下面 home check --diff 會印;原本這裡以反引號為種子的
+ #  impact --sync-only 會把人推回寫了一堆別人檔名的大雜燴節點,拿掉。Projects/每支檔有家_計劃 [S15]。impact_once 留給合約測試閘用。)
+ # ★合約測試閘:低風險也跑,紅了印出來記帳但不擋;高風險照舊擋★(人裁 2026-09-07)
+ # 不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
+ # ——而這支腳本自己在別的地方就把那條當第三選項在教,那條零留痕。
+ bound_tests_advisory() {   # $1=diff range(暫存檔沒算出來時退回自己算)
+   [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+   if [ -n "$_IMPACT_JSON" ]; then
+     "$PY" "$GRAPHCTL" bound-tests --from-json "$_IMPACT_JSON" --advisory --repo "$REPO_ROOT" || true
+   else
+@@ -795,24 +799,27 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+   if [[ "$_suite_mode" == "light" && -n "$_SUITE_KEYS" ]]; then
+     _keys_args=(--suite keys --keys "$_SUITE_KEYS")
+   elif [[ "$_suite_mode" == "light" ]]; then
+     echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;CI 會跑全套當後盾。" >&2
+   fi
+   _sdir="$_PP_TMP/shards"; mkdir -p "$_sdir"
+   _rc=0; _krc_all3=1
+   run_group() {   # $1=log 前綴,其餘=執行器參數;每片一個子行程,回傳 0=全綠、3=每片都選中 0 支、1=有紅
+     local _pfx="$1"; shift
+     local _pids=() _i _p _r _any3=0 _bad=0
+-    # ★各片是掛鉤的孫行程,要由這個子殼自己收★(代碼審 r1 併發席,/bin/bash 3.2.57 實測):掛鉤的 INT/TERM 陷阱只對 jobs -p 列出的
++    # ★各片是掛鉤的孫行程,要由這個子殼自己收★(代碼審 r1 併發席,/bin/bash 3.2.57 實測):掛鉤的 INT/TERM/HUP 陷阱只對 jobs -p 列出的
+     # 直接子行程(這個子殼)送 TERM;而非互動 bash 用 & 起的背景命令忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到各片。
+-    # 不收的話被砍或按 Ctrl-C 之後各片變孤兒繼續跑(最多八分鐘、佔 CPU、輸出寫進已刪的資料夾)。子殼收到 TERM 就把各片收掉再結束。
+-    trap 'kill ${_pids[@]+"${_pids[@]}"} 2>/dev/null; exit 143' TERM
++    # 不收的話被砍或按 Ctrl-C 之後各片變孤兒繼續跑(最多八分鐘、佔 CPU、輸出寫進已刪的資料夾)。子殼收到 TERM 或 HUP 就把各片收掉再結束。
++    # ★收片用同一支 _pp_kill_jobs(jobs -p),不要自己記 pid 收★(代碼審 r2 併發席、架構對齊席):子殼裡 jobs -p 列的就是它起的各片;
++    # 自己記的話,「& 起片」與「記下 pid」是兩個敘述,訊號落在中間時剛起的那片不在清單上、漏收。下面的 _pids 只拿來 wait 收離開碼。
++    trap '_pp_kill_jobs; exit 143' TERM
++    trap '_pp_kill_jobs; exit 129' HUP
+     for _i in $(seq 1 "$_shards"); do
+       if [[ "$_shards" -le 1 ]]; then
+         "$PY" "$REPO_ROOT/scripts/test_lumos.py" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+       else
+         # 這條路不帶 --json-summary:判紅靠子行程離開碼、列紅的靠 log,摘要檔寫了沒人讀
+         # 就是白工(r1 通才席抓到)。那個旗標留著給要機讀的人用,不是給這裡用的。
+         "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+       fi
+       _pids+=($!)
+     done
+@@ -839,21 +846,21 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+   fi
+   wait "$_gpid" || _grc=$?
+   [[ "$_grc" -ne 0 ]] && _rc=1      # 文件子集/全套選中 0 支也算紅(執行器那邊本來就這樣判)
+   if [[ ${#_keys_args[@]} -gt 0 ]]; then
+     if [[ "$_krc" -eq 3 ]]; then
+       echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;CI 會跑全套當後盾。" >&2
+     elif [[ "$_krc" -ne 0 ]]; then
+       _rc=1
+     fi
+   fi
+-  cat "$_sdir"/*.log > "$_TESTS_LOG" 2>/dev/null || true
++  { cat "$_sdir"/*.log > "$_TESTS_LOG"; } 2>/dev/null || true
+   if [[ $_rc -ne 0 ]]; then
+     {
+       echo ""
+       echo "擋下:test_lumos.py 有紅,有測試沒過。"
+       echo "紅的是這幾支:"
+       grep -h "✗ " "$_TESTS_LOG" | head -20 | sed 's/^/    /'
+       echo ""
+       echo "完整輸出(所有分片接在一起)在這裡:"
+       echo "   $(pp_keep_log "$_TESTS_LOG" tests)"
+       echo ""
+diff --git a/scripts/lumos b/scripts/lumos
+index cf11568d..2a3be295 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -51234,29 +51234,23 @@ def _codeloop_default_base(repo_root):
+     shas = list(dict.fromkeys(shas))
+     if not shas:
+         return None
+     r = _lens_git(repo_root, "merge-base", "--all", "HEAD", *shas)
+     bases = [x for x in (r.stdout.split() if r is not None and r.returncode == 0 else []) if _LENS_SHA_RE.match(x)]
+     if not bases:
+         return None
+     return _push_pick_base(repo_root, bases, None, "主線", "")[0]
+ 
+ 
+-# code-loop check --keep-going 每種擋下的一句話原因(JSON 的 blocks 每筆帶 summary)。★推送前掛鉤 pp_cl_reason 有一份逐字相同的★
+-# (掛鉤要能配舊版 lumos 跑,不向這裡要表);t_prepush_cl_reason_table_matches_lumos 把兩份、以及判定函式會產生的 reason_kind 綁在一起。
+-_CODELOOP_BLOCK_KIND_REASONS = {
+-    "bound_tests": "受波及合約的測試沒過(或證不出跑過)",
+-    "dispositions": "棧別檢核題表態不完整",
+-    "lint_new": "這次改動帶進了新的告警",
+-    "review": "高風險改動沒有有效的代碼審留痕",
+-}
+-_CODELOOP_BLOCK_KIND_FALLBACK = "代碼審判定擋下(細節在上面)"
++# 每種擋下的一句話原因只有推送前掛鉤 pp_cl_reason 那一份(掛鉤要能配舊版 lumos 跑,不向這裡要);這裡產生的 reason_kind
++# 一律寫字面字串,t_prepush_cl_reason_table_matches_lumos 拿它跟掛鉤的對照表比種類(代碼審 r2:原本這裡另存一份句子表給
++# JSON blocks 的 summary 欄位用,沒有任何程式讀,拿掉)。
+ 
+ 
+ class _CodeloopKg:
+     """code-loop check 判定函式的收集模式分流(Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):
+     fin 是唯一的收尾;hit 是「這一道擋下」——不帶 keep_going 時回收尾後的結果(呼叫端直接回傳),帶的話記進清單、回 None(繼續下一道)。
+     從判定函式抽出來,讓它的分支數回到改動前的量(代碼審 r1 通才席:新增告警閘把複雜度 35→40 當成新告警擋下)。"""
+ 
+     def __init__(self, keep_going):
+         self.keep_going = keep_going
+         self.blocks = []        # 記下的擋下(每筆是原本會直接回傳的那個擋下 dict)
+@@ -51286,22 +51280,21 @@ def _codeloop_kg_finish(v, blocks, keep_going, tier):
+     放行站點走到這裡的意思是「這一道過了」,不能蓋掉前面記下的擋下。"""
+     if not keep_going:
+         return v
+     if v.get("blocked") and v not in blocks:
+         blocks.append(v)
+     if not blocks:
+         return dict(v, blocks=[])
+     out = dict(blocks[0])
+     out["blocked"] = True
+     out["tier"] = tier
+-    out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", ""),
+-                      "summary": _CODELOOP_BLOCK_KIND_REASONS.get(b.get("reason_kind"), _CODELOOP_BLOCK_KIND_FALLBACK)} for b in blocks]
++    out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", "")} for b in blocks]
+     for b in blocks:   # 各道的明細照原本的鍵放著,印訊息那段各取各的
+         for k in ("bound_tests", "dispositions", "lint_new"):
+             if k in b:
+                 out[k] = b[k]
+     return out
+ 
+ 
+ def _codeloop_lint_new_step(repo_root, diff_range, tier):
+     """3.6 新增告警閘(Projects/新增告警閘_計劃,2026-09-13):只看改動範圍、不需要 pitfalls 的資料。回這一道的擋下 dict 或 None(放行)。"""
+     lv = None
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 57384255..bab8a492 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -64311,27 +64311,30 @@ if c == 'impact' and '--json' in a:
+ elif c == 'pitfalls' and '--json' in a:
+     print(json.dumps({'tier': 'standard'}))
+ sys.exit(0)
+ '''
+ 
+ _PPC_SUITE = r'''import pathlib, os, subprocess, signal, time, sys
+ LOG = __LOG__
+ pathlib.Path(LOG).open('a').write('SUITE\n')
+ _sig = os.environ.get('FAKE_SUITE_SIG')
+ if _sig:
+-    # 1/TERM:只對掛鉤送 TERM(被砍);INT:對整個行程群組送 SIGINT(Ctrl-C 的樣子;測試把掛鉤開在自己的群組裡)
++    # 先記下自己的 pid(測試拿它查「掛鉤結束後這一片還活著沒」),再送訊號:
++    # 1/TERM:只對掛鉤送 TERM(被砍);HUP:只對掛鉤送 SIGHUP(掛斷);INT:對整個行程群組送 SIGINT(Ctrl-C 的樣子;測試把掛鉤開在自己的群組裡)
++    pathlib.Path(LOG).open('a').write('SUITE-PID %d\n' % os.getpid())
+     if _sig == 'INT':
+         os.killpg(os.getpgrp(), signal.SIGINT)
+     else:
+         gp = int(subprocess.run(['ps', '-o', 'ppid=', '-p', str(os.getppid())], capture_output=True, text=True).stdout.strip())
+-        os.kill(gp, signal.SIGTERM)
+-    time.sleep(4)
++        os.kill(gp, signal.SIGHUP if _sig == 'HUP' else signal.SIGTERM)
++    # 沒被收掉的話會在這裡睡很久(遠長於測試等它消失的時限),孤兒一定抓得到;測試收尾會把它砍掉
++    time.sleep(float(os.environ.get('FAKE_SUITE_LINGER', '30')))
+     pathlib.Path(LOG).open('a').write('SUITE-END\n')
+ if os.environ.get('FAKE_SUITE_RED'):
+     print('  ✗ t_fake_red_case')
+     print('0 passed, 1 failed')
+     sys.exit(1)
+ print('1 passed, 0 failed')
+ '''
+ 
+ # 自主迴圈那支測試的假身:FAKE_AUTOLOOP_RED 有值時紅(只在測試把它放進現場時才會被叫)
+ _PPC_AUTOLOOP = r'''import os, sys
+@@ -64535,20 +64538,50 @@ def t_prepush_block_survives_lost_record():
+         rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1", FAKE_RM_TMP_CMD="home")
+         check("④擋下那一道跑的時候暫存目錄被刪(暫存檔寫不進去)→ 照樣回 1、全套沒跑",
+               rc == 1 and "SUITE" not in lines, f"rc={rc} {lines[-3:]} {out[-500:]}")
+         check("④彙總講明有幾筆原因沒寫進暫存檔", "其中有 1 筆的原因沒寫進暫存檔" in out, out[-500:])
+         check("④暫存目錄被刪之後,掛鉤寫暫存檔失敗不印雜訊(沒有「No such file or directory」)",
+               "No such file or directory" not in out, out[-800:])
+     finally:
+         _ppc_cleanup(root)
+ 
+ 
++def t_prepush_touched_file_write_fails_quietly():
++    """「這次推送改到哪些檔」那支(pp_touched_file)建好清單檔之後,暫存目錄被刪(追加寫入開檔失敗)→ 不印開檔雜訊
++    (沒有「No such file or directory」),照樣不交清單(圖譜健檢照舊全擋)、後面的擋下照記。跟 pp_record_block 同一族:
++    重導向要包成一組,2>/dev/null 寫在 >> 後面時,開檔失敗的訊息在 stderr 被導走之前就印出來了(代碼審 r2 架構對齊席 3)。
++    現場:新分支首推(遠端舊值是 40 個 0)時清單檔建好後會先叫 push-range 算起點,假 lumos 在那一刻把暫存目錄刪掉。
++    翻紅釘:把 pp_touched_file 的追加寫入改回 `>> "$_f" 2>/dev/null` → ②④紅;同檔別處寫成那種形狀 → ④紅。"""
++    print("t_prepush_touched_file_write_fails_quietly")
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    try:
++        z = "0" * 40
++        stdin = f"refs/heads/main {head} refs/heads/feat {z}\n"
++        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1", FAKE_RM_TMP_CMD="push-range")
++        pr = [i for i, ln in enumerate(lines) if ln.startswith("push-range ")]
++        dr = [i for i, ln in enumerate(lines) if ln.startswith("doctor ")]
++        check("①前置:清單那支的 push-range 在圖譜健檢之前跑(暫存目錄就是在那一刻被刪的)、圖譜健檢沒拿到清單",
++              bool(pr) and bool(dr) and pr[0] < dr[0] and "--touched-from" not in lines[dr[0]], str(lines))
++        check("②追加寫入失敗不印開檔雜訊", "No such file or directory" not in out, out[-800:])
++        check("③後面的擋下照算(暫存目錄沒了,彙總只能講筆數)、掛鉤回 1、全套沒跑",
++              rc == 1 and "SUITE" not in lines and "這次推送共有 1 筆擋下" in out, f"rc={rc} {out[-400:]}")
++    finally:
++        _ppc_cleanup(root)
++    # 同族一次掃完:掛鉤裡「寫進檔案、丟掉 stderr」的重導向一律包成一組(不是只修被點名的那一處)
++    import re
++    hook_txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
++    loose = [i for i, ln in enumerate(hook_txt.splitlines(), 1)
++             if not ln.lstrip().startswith("#") and re.search(r"[^&0-9]>>? *\"[^\"]*\" 2>/dev/null", ln)]
++    check("④掛鉤裡沒有「> 檔 2>/dev/null」沒包組的寫法(開檔失敗的訊息會漏出來)", not loose, f"行:{loose}")
++
++
+ def t_prepush_mixed_versions():
+     """[S7] 新掛鉤配上不認得 --keep-going、也沒有 push-summary 的舊 lumos,代碼審判定會擋 → 掛鉤回 1(不是放行)、印簡版彙總;
+     掛鉤沒把 --keep-going 塞給它(舊版會回 2,而 2 在掛鉤裡是放行)。新版 lumos 則帶 --keep-going。
+     ①前置:舊 lumos 收到 --keep-going 會回 2——不然「沒塞旗標」這條驗不出東西。
+     翻紅釘:掛鉤不探測、一律帶 --keep-going → ②紅(rc0 放行);改回執行 --help 判版本 → ②b紅;push-summary 失敗不印簡版 → ③紅。"""
+     print("t_prepush_mixed_versions")
+     import subprocess as sp
+     _need_src("scripts/hooks/pre-push")
+     root, base, head = _ppc_repo()
+     try:
+@@ -64632,37 +64665,38 @@ def t_prepush_plain_summary_anchor_note():
+         check("②簡版彙總、沒有裁判簽名那筆 → 不印提示句", rc == 1 and "簡版彙總" in out and "裁判檔沒簽名" not in out, out[-600:])
+         rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="anchor:1")
+         check("③新版 push-summary 印的彙總(不是簡版)也帶提示句", rc == 1 and "簡版彙總" not in out and _PPC_ANCHOR_NOTE in out,
+               out[-600:])
+     finally:
+         _ppc_cleanup(root)
+ 
+ 
+ def t_push_summary_anchor_note_and_separators():
+     """lumos push-summary 直接跑:①有 anchor 那筆時印「裁判檔沒簽名」提示句(逐字)、沒有時不印;
+-    ②暫存檔只照換行字元切:ref 名帶 U+2028、U+2029、U+0085、跳頁字元這類 Python splitlines 也會斷的字元時,那一筆不能被切掉
+-    (git 允許 ref 名帶這些字元;掛鉤的簡版彙總照換行讀,兩邊要一致)。(代碼審 r1 合約席 1、邊界席 1)
++    ②暫存檔只照換行字元切:ref 名帶 U+2028、U+2029、U+0085 這類 Python splitlines 也會斷的字元時,那一筆不能被切掉
++    (git 允許 ref 名帶這三種,git 2.39.2 的 check-ref-format 實測可過;掛鉤的簡版彙總照換行讀,兩邊要一致)。(代碼審 r1 合約席 1、邊界席 1)
++    跳頁與 0x1c–0x1e 是控制字元,git 拒絕,推不出來,所以不測(代碼審 r2 合約席 1:原本那組測的是 git 推不出來的輸入)。
+     翻紅釘:提示句改字 → ①紅;改回 splitlines → ②紅(筆數或閘數少、多出「沒寫進暫存檔」)。"""
+     print("t_push_summary_anchor_note_and_separators")
+     import subprocess as sp
+     d = Path(tempfile.mkdtemp(prefix="gctl-pssum-"))
+     try:
+         bf = d / "blocks"
+         bf.write_text("anchor\t-\t裁判檔沒簽名那筆\nhome\trefs/heads/x\t沒家\n", encoding="utf-8")
+         r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "1",
+                     "--repo", str(d)], capture_output=True, text=True)
+         check("①有 anchor 那筆 → 印提示句", r.returncode == 0 and _PPC_ANCHOR_NOTE in r.stderr, r.stderr[-400:])
+         bf.write_text("home\trefs/heads/x\t沒家\n", encoding="utf-8")
+         r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "1", "--refs", "1",
+                     "--repo", str(d)], capture_output=True, text=True)
+         check("①沒有 anchor 那筆 → 不印提示句", r.returncode == 0 and "裁判檔沒簽名" not in r.stderr, r.stderr[-400:])
+-        for name, ch in (("U+2028", " "), ("U+2029", " "), ("U+0085", "\x85"), ("跳頁", "\x0c")):
++        for name, ch in (("U+2028", " "), ("U+2029", " "), ("U+0085", "\x85")):
+             bf.write_bytes(f"home\trefs/heads/a{ch}b\t沒家\ndoctor\t-\t健檢\n".encode("utf-8"))
+             r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "2",
+                         "--repo", str(d)], capture_output=True, text=True)
+             # 只照 \n 切輸出(印出的 ref 名裡那個字元原樣留著,用 splitlines 讀輸出會把這一列自己切斷)
+             import re as _re
+             rows = [mm.group(1) for mm in (_re.match(r"^\s+\d+\. (\S+?)(?: \[|:)", ln) for ln in r.stderr.split("\n")) if mm]
+             check(f"②ref 名帶 {name} → 2 筆 2 道閘、兩列都在、沒有「沒寫進暫存檔」",
+                   r.returncode == 0 and _ppc_header(r.stderr) == (2, 2) and rows == ["home", "doctor"]
+                   and "沒寫進暫存檔" not in r.stderr, f"{rows} {r.stderr[-400:]!r}")
+     finally:
+@@ -64789,26 +64823,27 @@ def t_prepush_summary_records_event():
+         rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1,push-summary:2")
+         check("③push-summary 失敗 → 掛鉤仍回 1、印簡版彙總、全套沒跑", rc == 1 and "簡版彙總" in out and "SUITE" not in lines,
+               f"rc={rc} {out[-400:]}")
+     finally:
+         _ppc_cleanup(root)
+ 
+ 
+ def t_prepush_interrupt_stops_every_gate():
+     """[S10] 掛鉤註解區塊「中斷就停」列舉的每一支 lumos 呼叫被訊號殺掉(回傳碼 128 以上)→ 掛鉤以該回傳碼結束、印「<閘名>被中斷」、
+     不再開始後面的閘(被殺掉的那支就是最後一次呼叫)、不跑全套;掛鉤自己收到 INT/TERM → 手上那支結束後就結束(130/143)、
+-    不再開始下一道;等全套測試時被砍(只對掛鉤送 TERM)或按 Ctrl-C(對整個行程群組送 SIGINT)→ 立刻結束,
++    不再開始下一道;等全套測試時被砍(只對掛鉤送 TERM)、按 Ctrl-C(對整個行程群組送 SIGINT)或掛斷(只對掛鉤送 HUP)→ 立刻結束,
+     ★全套測試的各片(掛鉤的孫行程)也要收掉★,不留下繼續跑的孤兒、TMPDIR 底下不留東西;裁判簽名與圖譜健檢回 2 照舊記成擋下。
+     清單與程式要對得上:非註解的 pp_stop_if_signaled 呼叫行數 = 清單筆數。(併入原 t_prepush_gates_stop_on_signal。)
+     對照組:把掛鉤裡的停下全拿掉,同一支被殺掉的呼叫就不會以那個回傳碼結束。
+     翻紅釘(2026-10-14 逐條變異實測):拿掉任一支後面的 pp_stop_if_signaled → 那一支紅;門檻改成只認 130 → 全紅;
+-    陷阱裡不 exit(舊寫法)→ ④⑤⑥⑦紅;跑測試的子殼不收它起的各片(代碼審 r1 併發席 1)→ ⑥⑦紅;裁判簽名改成只有 rc1 才擋 → ⑧紅。"""
++    陷阱裡不 exit(舊寫法)→ ④⑤⑥⑦紅;跑測試的子殼不收它起的各片(代碼審 r1 併發席 1)→ ⑥⑦⑨紅;裁判簽名改成只有 rc1 才擋 → ⑧紅;
++    主殼或子殼不接 HUP(代碼審 r2 併發席 2)→ ⑨紅。⑥⑦⑨看那一片的 pid 有沒有消失,不靠計時窗口(代碼審 r2 邊界席:負載下會假綠)。"""
+     print("t_prepush_interrupt_stops_every_gate")
+     import re, subprocess as sp, time as _time
+     _need_src("scripts/hooks/pre-push")
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+     txt = hook.read_text(encoding="utf-8")
+     entries = re.findall(r"^# 中斷就停:([a-z-]+)\|([^|\n]+)\|(.+)$", txt, flags=re.M)
+     calls = [ln for ln in txt.splitlines() if re.match(r"^\s*pp_stop_if_signaled \"", ln)]
+     check("①清單在、而且跟程式裡的 pp_stop_if_signaled 呼叫行數一樣多", len(entries) >= 9 and len(entries) == len(calls),
+           f"清單 {len(entries)} 筆、呼叫 {len(calls)} 行")
+     check("①刻意不接的也列在同一個區塊、各附理由", len(re.findall(r"^# 中斷不停:[^|\n]+\|.{4,}$", txt, flags=re.M)) >= 4, "")
+@@ -64829,51 +64864,83 @@ def t_prepush_interrupt_stops_every_gate():
+                   f"rc={rc} last={last!r} {out[-300:]}")
+             rc, lines, out = _ppc_run(root, stdin, hook=old_hook, FAKE_NEW="1", FAKE_SIG_CMD=cmd)
+             check(f"③對照:拿掉停下的掛鉤,{_what}被殺掉時不會以 128 以上結束", rc < 128, f"rc={rc}")
+         for sig, want in (("SIGTERM", 143), ("SIGINT", 130)):
+             rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_HOOK_SIG_CMD="home", FAKE_HOOK_SIG=sig)
+             check(f"④掛鉤自己收到 {sig}(每支檔有家跑到一半)→ 那支結束後掛鉤以 {want} 結束、不再開始筆記形狀擋、全套沒跑",
+                   rc == want and lines and lines[-1].startswith("home check") and "SUITE" not in lines,
+                   f"rc={rc} {lines[-3:]} {out[-300:]}")
+         tmp = root.with_name(root.name + "-tmp")
+         outf = tmp / "bg.out"
+-        with open(outf, "w") as fh:
+-            t0 = _time.monotonic()
+-            p = sp.Popen(["/bin/bash", str(hook)], cwd=str(root), stdin=sp.PIPE, stdout=fh, stderr=fh, text=True,
+-                         env=_ppc_env(root, {"FAKE_NEW": "1", "FAKE_SUITE_SIG": "1"}))
+-            p.communicate(normal, timeout=120)
+-            took = _time.monotonic() - t0
+-        bg = outf.read_text(encoding="utf-8", errors="replace")
+-        check("⑤等全套測試時收到 TERM → 掛鉤立刻以 143 結束(不等背景那支跑完、不印測試結果)",
+-              p.returncode == 143 and took < 3.5 and "條斷言過" not in bg and "測試有紅" not in bg,
+-              f"rc={p.returncode} took={took:.1f}s {bg[-300:]}")
+-        # 假全套在送出訊號後睡 4 秒再記 SUITE-END:它沒被收掉的話,掛鉤結束後它會變成孤兒繼續跑完、記下這一行
+-        _time.sleep(max(0.0, 5.0 - (_time.monotonic() - t0)))
+-        log_txt = (root / "argv.log").read_text(encoding="utf-8") if (root / "argv.log").exists() else ""
+-        check("⑥被砍(TERM)之後,全套測試那一片也被收掉(沒有孤兒跑完記下 SUITE-END)、TMPDIR 底下沒留 lumos-prepush 開頭的東西",
+-              "SUITE" in log_txt and "SUITE-END" not in log_txt and not list(tmp.glob("lumos-prepush*")),
+-              f"{log_txt[-200:]!r} {sorted(x.name for x in tmp.glob('lumos-prepush*'))}")
+-        (root / "argv.log").unlink(missing_ok=True)
+-        with open(outf, "w") as fh:
+-            t0 = _time.monotonic()
+-            p = sp.Popen(["/bin/bash", str(hook)], cwd=str(root), stdin=sp.PIPE, stdout=fh, stderr=fh, text=True,
+-                         env=_ppc_env(root, {"FAKE_NEW": "1", "FAKE_SUITE_SIG": "INT"}), start_new_session=True,
+-                         preexec_fn=_ppc_sigint_default)
+-            p.communicate(normal, timeout=120)
+-            took = _time.monotonic() - t0
+-        bg = outf.read_text(encoding="utf-8", errors="replace")
+-        _time.sleep(max(0.0, 5.0 - (_time.monotonic() - t0)))
+-        log_txt = (root / "argv.log").read_text(encoding="utf-8") if (root / "argv.log").exists() else ""
+-        check("⑦等全套測試時按 Ctrl-C(整個行程群組收到 SIGINT)→ 掛鉤以 130 結束,全套那一片也被收掉、TMPDIR 底下沒留東西",
+-              p.returncode == 130 and took < 3.5 and "SUITE" in log_txt and "SUITE-END" not in log_txt
+-              and not list(tmp.glob("lumos-prepush*")),
+-              f"rc={p.returncode} took={took:.1f}s {log_txt[-200:]!r} {sorted(x.name for x in tmp.glob('lumos-prepush*'))} {bg[-300:]}")
++        linger = 30.0   # 假全套送出訊號後睡這麼久:沒被收掉就是孤兒,遠長於下面等它消失的時限
++        _pids_seen = []
++
++        def _alive(pid):
++            import os as _os
++            try:
++                _os.kill(pid, 0)
++            except ProcessLookupError:
++                return False
++            except PermissionError:
++                return True
++            return True
++
++        def _suite_run(sig, new_session):
++            """起掛鉤、讓假全套在跑的時候送訊號 → (rc, 起掛鉤到掛鉤結束的秒數, 輸出, 假全套那片的 pid 或 None, 那片在時限內消失沒)。
++            ★孤兒判準不靠計時窗口★(代碼審 r2 邊界席):直接看那一片的 pid——掛鉤結束後 10 秒內還在就是孤兒。
++            原本靠「假全套睡 4 秒後記 SUITE-END、測試在起掛鉤後第 5 秒讀」,負載下餘裕只剩約 0.3 秒,拿掉收片陷阱也照綠。"""
++            (root / "argv.log").unlink(missing_ok=True)
++            kw = dict(start_new_session=True, preexec_fn=_ppc_sigint_default) if new_session else {}
++            with open(outf, "w") as fh:
++                t0 = _time.monotonic()
++                p = sp.Popen(["/bin/bash", str(hook)], cwd=str(root), stdin=sp.PIPE, stdout=fh, stderr=fh, text=True,
++                             env=_ppc_env(root, {"FAKE_NEW": "1", "FAKE_SUITE_SIG": sig, "FAKE_SUITE_LINGER": str(linger)}), **kw)
++                p.communicate(normal, timeout=120)
++                took = _time.monotonic() - t0
++            log_txt = (root / "argv.log").read_text(encoding="utf-8") if (root / "argv.log").exists() else ""
++            mm = re.search(r"^SUITE-PID (\d+)$", log_txt, flags=re.M)
++            pid = int(mm.group(1)) if mm else None
++            gone = False
++            if pid is not None:
++                _pids_seen.append(pid)
++                dl = _time.monotonic() + 10.0
++                while _alive(pid) and _time.monotonic() < dl:
++                    _time.sleep(0.05)
++                gone = not _alive(pid)
++            return p.returncode, took, outf.read_text(encoding="utf-8", errors="replace"), pid, gone
++
++        def _tmp_left():
++            return sorted(x.name for x in tmp.glob("lumos-prepush*"))
++        try:
++            # took 的上限是相對量:掛鉤要是等那一片跑完才結束,至少要 linger 秒;取一半當界線,負載下前面幾道閘慢幾秒也不會假紅
++            rc, took, bg, pid, gone = _suite_run("1", False)
++            check("⑤等全套測試時收到 TERM → 掛鉤立刻以 143 結束(不等背景那支跑完、不印測試結果)",
++                  rc == 143 and pid is not None and took < linger / 2 and "條斷言過" not in bg and "測試有紅" not in bg,
++                  f"rc={rc} took={took:.1f}s pid={pid} {bg[-300:]}")
++            check("⑥被砍(TERM)之後,全套測試那一片也被收掉(掛鉤結束後 10 秒內那個 pid 就不在了)、TMPDIR 底下沒留 lumos-prepush 開頭的東西",
++                  pid is not None and gone and not _tmp_left(), f"pid={pid} gone={gone} {_tmp_left()}")
++            rc, took, bg, pid, gone = _suite_run("INT", True)
++            check("⑦等全套測試時按 Ctrl-C(整個行程群組收到 SIGINT)→ 掛鉤以 130 結束,全套那一片也被收掉、TMPDIR 底下沒留東西",
++                  rc == 130 and pid is not None and took < linger / 2 and gone and not _tmp_left(),
++                  f"rc={rc} took={took:.1f}s pid={pid} gone={gone} {_tmp_left()} {bg[-300:]}")
++            rc, took, bg, pid, gone = _suite_run("HUP", False)
++            check("⑨等全套測試時只對掛鉤送 SIGHUP(ssh、編輯器掛斷)→ 掛鉤以 129 結束,全套那一片也被收掉、TMPDIR 底下沒留東西",
++                  rc == 129 and pid is not None and took < linger / 2 and gone and not _tmp_left(),
++                  f"rc={rc} took={took:.1f}s pid={pid} gone={gone} {_tmp_left()} {bg[-300:]}")
++        finally:
++            import os as _os, signal as _signal
++            for _pid in _pids_seen:   # 沒被收掉的孤兒(紅的時候)由這裡砍掉,不留給機器
++                if _alive(_pid):
++                    try:
++                        _os.kill(_pid, _signal.SIGKILL)
++                    except OSError:
++                        pass
+         for gate, cmd in (("anchor", "anchor"), ("doctor", "doctor")):
+             rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_RCS=f"{cmd}:2")
+             check(f"⑧{gate} 回 2 → 照舊記成擋下(非零就擋)", rc == 1 and _ppc_rows(out) == [(gate, "")], f"rc={rc} {out[-300:]}")
+     finally:
+         _ppc_cleanup(root)
+         old_hook.unlink(missing_ok=True)
+ 
+ 
+ def t_prepush_collects_all_blocks():
+     """[S1][S2] 用真的 lumos 跑推送前掛鉤(搭法沿用 t_prepush_cheap_gates_run_before_expensive_suite)。
+@@ -65028,39 +65095,81 @@ def t_code_loop_check_keep_going():
+               rc == 1 and _clkg_last_blocks(o) == "LUMOS-BLOCKS: dispositions" and "只提醒不擋" in e, o[-200:] + e[-600:])
+         rc, o, e, c = _clkg_run(root, keep_going=True, bt="red", advisory=True, lint=True)
+         check("⑤b低風險合約紅只是提醒+新增告警擋(第一個原因不是表態)→ 照印「只提醒不擋」,不印合約測試的跳過指令",
+               rc == 1 and _clkg_last_blocks(o) == "LUMOS-BLOCKS: lint_new" and "只提醒不擋" in e and "--skip-bound-tests" not in e,
+               o[-200:] + e[-600:])
+         rc, o, e, c = _clkg_run(root, keep_going=True, bt="red", tier="high", as_json=True)
+         v = _j.loads(o.strip().splitlines()[-1]) if o.strip() else {}
+         check("⑥--json:blocks 兩筆、reason 是第一筆、tier 是算出來的 high", v.get("blocked") is True
+               and [b.get("reason_kind") for b in v.get("blocks") or []] == ["bound_tests", "review"]
+               and v.get("reason") == (v.get("blocks") or [{}])[0].get("reason") and v.get("tier") == "high", str(v)[:500])
++        check("⑥--json:blocks 每筆只有 reason_kind、reason 兩個鍵(輸出契約;沒人讀的欄位不放,代碼審 r2 通才席)",
++              bool(v.get("blocks")) and all(sorted(b) == ["reason", "reason_kind"] for b in v.get("blocks") or []), str(v.get("blocks"))[:400])
+         rc, o, e, c = _clkg_run(root, keep_going=True)
+         check("⑦帶旗標、沒有一道擋 → 回 0、機讀行是空的", rc == 0 and _clkg_last_blocks(o) == "LUMOS-BLOCKS: ", o[-300:])
+         r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--help"], capture_output=True, text=True)
+         check("⑧code-loop check --help 有 --keep-going", "--keep-going" in r.stdout, r.stdout[-300:])
+         check("⑧scripts/lumos 原始碼裡有 \"--keep-going\" 字樣(掛鉤讀檔找它判版本,不執行 --help)",
+               '"--keep-going"' in Path(GRAPHCTL).read_text(encoding="utf-8"), "")
+     finally:
+         import shutil as _sh
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_code_loop_keep_going_pass_sites_keep_blocks():
+     """[S13] code-loop check --keep-going 已記下一筆擋下之後,走到 8 個放行站點的每一個都仍回 1:pitfalls 失敗、pitfalls 沒有 JSON、
+     pitfalls 例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕要求被環境變數跳過、合併側放行;pitfalls 失敗(三種)時新增告警閘照跑。
+     每個站點先跑一次「沒有先前的擋下」當前置:同一個現場回 0,證明真的走到那個放行站點。
+-    另掃判定函式原始碼:每個 return 都要經過收尾函式 _fin。
+-    翻紅釘:任一站點直接 return 放行(不經 _fin)→ 那一站紅、原始碼守衛也紅;pitfalls 失敗時不跑新增告警閘 → ③紅。"""
++    另掃判定函式原始碼:每個 return 要嘛是 _fin(...),要嘛是「緊接在 `if <變數>:` 底下、回傳由 kg.hit(...) 指派的那個變數」
++    (不帶旗標時 hit 回的就是 fin(v);帶旗標時回 None,所以回傳前一定要判非空)。
++    翻紅釘:任一站點直接 return 放行(不經 _fin)→ 那一站紅、原始碼守衛也紅;pitfalls 失敗時不跑新增告警閘 → ③紅;
++    把 `if _stop: return _stop` 改成無條件 return _stop → ⑤紅(代碼審 r2 合約席 2)。"""
+     print("t_code_loop_keep_going_pass_sites_keep_blocks")
+     import ast
++    # 原始碼守衛先跑:行為那段若因判定函式回 None 而例外,這一段照樣給得出結論
++    src = Path(GRAPHCTL).read_text(encoding="utf-8")
++    tree = ast.parse(src)
++    fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_codeloop_guard_verdict"), None)
++    bad = []
++    # 「這一道擋下」的結果(收集分流 kg.hit(...) 指派的變數)也算經過收尾:hit 不帶旗標時回的就是 fin(v),帶旗標時回 None 不回傳
++    via_hit = set()
++    if fn is not None:
++        for x in ast.walk(fn):
++            if isinstance(x, ast.Assign) and isinstance(x.value, ast.Call) and isinstance(x.value.func, ast.Attribute) \
++                    and x.value.func.attr == "hit":
++                via_hit.update(tg.id for tg in x.targets if isinstance(tg, ast.Name))
++    kg_src = ast.get_source_segment(src, next((n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_CodeloopKg"),
++                                              ast.Pass())) or ""
++    check("⑤前置:收集分流 hit 不帶旗標時回的是 self.fin(v)", "return self.fin(v)" in kg_src, kg_src[:300])
++
++    # 回傳 hit 指派的變數時,緊鄰的外層要是 `if <那個變數>:`、而且 return 是那個 if 本體的第一句(帶旗標時 hit 回 None,
++    # 無條件 return 會讓整個判定函式回 None、下游 .get 崩;代碼審 r2 合約席 2)。guarded 記下這種 return 的行號。
++    guarded = set()
++
++    def walk(node):
++        for ch in ast.iter_child_nodes(node):
++            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
++                continue
++            if isinstance(ch, ast.If) and isinstance(ch.test, ast.Name) and ch.body and isinstance(ch.body[0], ast.Return) \
++                    and isinstance(ch.body[0].value, ast.Name) and ch.body[0].value.id == ch.test.id:
++                guarded.add(ch.body[0].lineno)
++            if isinstance(ch, ast.Return):
++                v = ch.value
++                if not ((isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "_fin")
++                        or (isinstance(v, ast.Name) and v.id in via_hit and ch.lineno in guarded)):
++                    bad.append(ch.lineno)
++            walk(ch)
++    if fn is not None:
++        walk(fn)
++    n_ret = len([1 for x in ast.walk(fn) if isinstance(x, ast.Return)]) if fn is not None else 0
++    check("⑤判定函式的每個 return 要嘛是 _fin(...),要嘛是緊接在 `if <變數>:` 底下回傳 hit 指派的那個變數",
++          fn is not None and not bad and n_ret >= 8 and guarded, f"不合的行:{bad} 總數 {n_ret} 有判非空的 {sorted(guarded)}")
+     root = _clkg_repo()
+     try:
+         sites = (("pitfalls 失敗", dict(pf="fail"), dict(bt="red")),
+                  ("pitfalls 沒有 JSON", dict(pf="nojson"), dict(bt="red")),
+                  ("pitfalls 例外", dict(pf="exc"), dict(bt="red")),
+                  ("tier 不是 high", dict(tier="standard"), dict(disp=True)),
+                  ("留痕有效", dict(tier="high", marker="same"), dict(disp=True)),
+                  ("留痕過時但屬簿記豁免", dict(tier="high", marker="stale", exempt=True), dict(disp=True)),
+                  ("留痕要求被環境變數跳過", dict(tier="high", env_skip=True), dict(disp=True)),
+                  ("合併側放行", dict(tier="high", merge_pass=True), dict(disp=True)))
+@@ -65069,49 +65178,20 @@ def t_code_loop_keep_going_pass_sites_keep_blocks():
+             check(f"①前置({name}):沒有先前的擋下 → 回 0(真的走到這個放行站點)", rc0 == 0, f"rc={rc0} {e0[-300:]}")
+             rc, o, e, c = _clkg_run(root, keep_going=True, **site, **prior)
+             want = "bound_tests" if "bt" in prior else "dispositions"
+             check(f"②{name}:先記下一筆擋下 → 仍回 1、機讀行留著那一筆", rc == 1 and _clkg_last_blocks(o) == f"LUMOS-BLOCKS: {want}",
+                   f"rc={rc} {o[-200:]} {e[-300:]}")
+             if site.get("pf"):
+                 check(f"③{name}:新增告警閘照跑", ("lint",) in c, str(c))
+         rc, o, e, c = _clkg_run(root, keep_going=True, pf="fail", bt="red", lint=True)
+         check("④pitfalls 失敗時新增告警閘照判:合約紅+新增告警 → 兩筆都記", rc == 1
+               and _clkg_last_blocks(o) == "LUMOS-BLOCKS: bound_tests,lint_new", o[-200:])
+-        src = Path(GRAPHCTL).read_text(encoding="utf-8")
+-        tree = ast.parse(src)
+-        fn = next((n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_codeloop_guard_verdict"), None)
+-        bad = []
+-        # 「這一道擋下」的結果(收集分流 kg.hit(...) 指派的變數)也算經過收尾:hit 不帶旗標時回的就是 fin(v),帶旗標時回 None 不回傳
+-        via_hit = set()
+-        if fn is not None:
+-            for x in ast.walk(fn):
+-                if isinstance(x, ast.Assign) and isinstance(x.value, ast.Call) and isinstance(x.value.func, ast.Attribute) \
+-                        and x.value.func.attr == "hit":
+-                    via_hit.update(tg.id for tg in x.targets if isinstance(tg, ast.Name))
+-        kg_src = ast.get_source_segment(src, next((n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "_CodeloopKg"),
+-                                                  ast.Pass())) or ""
+-        check("⑤前置:收集分流 hit 不帶旗標時回的是 self.fin(v)", "return self.fin(v)" in kg_src, kg_src[:300])
+-
+-        def walk(node):
+-            for ch in ast.iter_child_nodes(node):
+-                if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+-                    continue
+-                if isinstance(ch, ast.Return):
+-                    v = ch.value
+-                    if not ((isinstance(v, ast.Call) and isinstance(v.func, ast.Name) and v.func.id == "_fin")
+-                            or (isinstance(v, ast.Name) and v.id in via_hit)):
+-                        bad.append(ch.lineno)
+-                walk(ch)
+-        if fn is not None:
+-            walk(fn)
+-        n_ret = len([1 for x in ast.walk(fn) if isinstance(x, ast.Return)]) if fn is not None else 0
+-        check("⑤判定函式的每個 return 都經過收尾函式 _fin", fn is not None and not bad and n_ret >= 8, f"沒經過的行:{bad} 總數 {n_ret}")
+     finally:
+         import shutil as _sh
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_code_loop_keep_going_pf_fail_stricter():
+     """pitfalls 失敗(回非零、沒有 JSON、例外)而這次改動帶進新告警:不帶 --keep-going 照舊整個 fail-open 放行、新增告警閘不跑;
+     帶 --keep-going(推送前掛鉤認得就一律帶)時新增告警閘照跑、擋下 → 掛鉤實際走的路比直接跑 CLI 嚴。計劃〈做法〉5 寫明這個差異,
+     這支把兩邊釘住。(代碼審 r1 正確性席 1)
+     翻紅釘:keep-going 下 pitfalls 失敗時不跑新增告警閘 → ②紅;不帶旗標時也跑 → ①紅。"""
+@@ -65123,47 +65203,93 @@ def t_code_loop_keep_going_pf_fail_stricter():
+             check(f"①pitfalls {pf}、不帶旗標 → 回 0 放行、新增告警閘沒跑", rc == 0 and ("lint",) not in c, f"rc={rc} {c} {e[-300:]}")
+             rc, o, e, c = _clkg_run(root, keep_going=True, pf=pf, lint=True)
+             check(f"②pitfalls {pf}、帶 --keep-going → 新增告警閘照跑並擋下、回 1、機讀行只有 lint_new",
+                   rc == 1 and ("lint",) in c and _clkg_last_blocks(o) == "LUMOS-BLOCKS: lint_new"
+                   and "這次改動帶進了新的問題(1 條新增的告警)" in e, f"rc={rc} {o[-200:]} {e[-400:]}")
+     finally:
+         import shutil as _sh
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
++# 種類由別的支(收集分流、收尾)轉手而不是自己產生的地方:值可以不是字面字串,但每支只准有這麼多處(多一處就是有人新開了轉手路)
++_CL_REASON_KIND_CARRIERS = {"_CodeloopKg.hit": 1, "_codeloop_kg_finish": 1}
++
++
++def _cl_reason_kind_sites(src):
++    """掃 scripts/lumos 原始碼裡所有「設定 reason_kind」的地方(dict 字面的鍵、reason_kind= 關鍵字參數、x["reason_kind"] = 指派)
++    → (字面種類的集合, 值不是字面字串的站點 [(所在函式, 行號)])。所在函式用「類別.方法」或函式名。"""
++    import ast
++    tree = ast.parse(src)
++    kinds, nonlit = set(), []
++
++    def val(owner, v):
++        if isinstance(v, ast.Constant) and isinstance(v.value, str):
++            kinds.add(v.value)
++        else:
++            nonlit.append((owner, v.lineno))
++
++    def visit(node, owner):
++        for ch in ast.iter_child_nodes(node):
++            if isinstance(ch, ast.ClassDef):
++                visit(ch, ch.name)
++                continue
++            if isinstance(ch, (ast.FunctionDef, ast.AsyncFunctionDef)):
++                visit(ch, f"{owner}.{ch.name}" if owner and not owner.startswith("_fn:") else ch.name)
++                continue
++            if isinstance(ch, ast.Dict):
++                for k, v in zip(ch.keys, ch.values):
++                    if isinstance(k, ast.Constant) and k.value == "reason_kind":
++                        val(owner, v)
++            elif isinstance(ch, ast.keyword) and ch.arg == "reason_kind":
++                val(owner, ch.value)
++            elif isinstance(ch, ast.Assign):
++                for tg in ch.targets:
++                    if isinstance(tg, ast.Subscript) and isinstance(tg.slice, ast.Constant) and tg.slice.value == "reason_kind":
++                        val(owner, ch.value)
++            visit(ch, owner)
++    visit(tree, "")
++    return kinds, nonlit
++
++
++# 查不到種類時的通用句:照計劃〈做法〉5 逐字寫在這裡(不從掛鉤讀)
++_PPC_KIND_FALLBACK = "代碼審判定擋下(細節在上面)"
++
++
+ def t_prepush_cl_reason_table_matches_lumos():
+-    """漂移守衛(結構測試,行為另由 t_prepush_block_kinds_each_recorded 驗):掛鉤 pp_cl_reason 的對照表跟 scripts/lumos 的
+-    _CODELOOP_BLOCK_KIND_REASONS 要逐字一致(種類一樣、每種的句子一樣、查不到時的通用句一樣),而且 scripts/lumos 裡判定函式會產生的
+-    每一個 reason_kind 都要在表上——新加一種擋下卻沒補掛鉤的表,彙總會退成通用句。(代碼審 r1 架構對齊席 3、邊界席 3)
+-    翻紅釘:掛鉤或 lumos 任一邊改一句、加一種、刪一種 → ①②紅;lumos 新增一種 reason_kind 沒登記 → ③紅。"""
++    """漂移守衛(結構測試,行為另由 t_prepush_block_kinds_each_recorded 驗):scripts/lumos 會產生的 reason_kind 集合,
++    跟掛鉤 pp_cl_reason 對照表的種類集合要一樣(雙向:掛鉤少一種,新種類的彙總會退成通用句;掛鉤多一種,是沒人產生的死條目);
++    每種的句子與查不到時的通用句照 _PPC_KIND_SENTENCES / _PPC_KIND_FALLBACK 逐字(計劃與 r1 收貨定稿,不從掛鉤讀)。
++    ★設定 reason_kind 的值一律要是字面字串★(代碼審 r2 合約席 4):種類若經變數或組字串產生,上面抽集合的那步抽不到,守衛會照綠;
++    只有收集分流與收尾兩處轉手(_CL_REASON_KIND_CARRIERS)可以不是字面,而且各只准一處。
++    原本 scripts/lumos 也存一份句子表(_CODELOOP_BLOCK_KIND_REASONS)給 JSON 的 summary 欄位用,沒有任何程式讀它,r2 拿掉。
++    翻紅釘:掛鉤加一種或刪一種 → ①紅;lumos 新增一種 reason_kind 沒補掛鉤 → ①紅;掛鉤改一句 → ②紅;
++    產生種類改成變數傳入 → ③紅。"""
+     print("t_prepush_cl_reason_table_matches_lumos")
+-    import re, ast
++    import re
+     _need_src("scripts/hooks/pre-push")
+     hook = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+     mm = re.search(r"^pp_cl_reason\(\) \{\n(.*?)^\}", hook, flags=re.M | re.S)
+     body = mm.group(1) if mm else ""
+     hk = dict(re.findall(r"^\s+([a-z_]+)\) echo \"([^\"]+)\" ;;$", body, flags=re.M))
+     hf = re.findall(r"^\s+\*\) echo \"([^\"]+)\" ;;$", body, flags=re.M)
+-    src = Path(GRAPHCTL).read_text(encoding="utf-8")
+-    tree = ast.parse(src)
+-    py = fb = None
+-    for n in tree.body:
+-        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
+-            if n.targets[0].id == "_CODELOOP_BLOCK_KIND_REASONS":
+-                py = ast.literal_eval(n.value)
+-            elif n.targets[0].id == "_CODELOOP_BLOCK_KIND_FALLBACK":
+-                fb = ast.literal_eval(n.value)
+-    check("①兩邊都抽得到表,而且種類與句子逐字一致", bool(hk) and py is not None and hk == py, f"掛鉤 {hk}\nlumos {py}")
+-    check("②查不到時的通用句一致", len(hf) == 1 and fb is not None and hf[0] == fb, f"掛鉤 {hf} lumos {fb!r}")
+-    emitted = set(re.findall(r"""reason_kind["']?\s*[:=]\s*["']([a-z_]+)["']""", src))
+-    check("③scripts/lumos 會產生的每個 reason_kind 都在表上(表上也沒有多出沒人產生的)",
+-          bool(emitted) and py is not None and emitted == set(py), f"產生 {sorted(emitted)} 表 {sorted(py or {})}")
++    emitted, nonlit = _cl_reason_kind_sites(Path(GRAPHCTL).read_text(encoding="utf-8"))
++    check("①scripts/lumos 會產生的 reason_kind 跟掛鉤對照表的種類一樣(掛鉤沒少、也沒多)",
++          bool(hk) and bool(emitted) and set(hk) == emitted, f"產生 {sorted(emitted)} 掛鉤 {sorted(hk)}")
++    check("②掛鉤每種的句子與通用句跟計劃定稿逐字一致",
++          hk == {k: _PPC_KIND_SENTENCES[k] for k in hk if k in _PPC_KIND_SENTENCES} and set(hk) <= set(_PPC_KIND_SENTENCES)
++          and hf == [_PPC_KIND_FALLBACK], f"掛鉤 {hk} 通用句 {hf}")
++    from collections import Counter
++    per = Counter(owner for owner, _ln in nonlit)
++    stray = [(o, ln) for o, ln in nonlit if o not in _CL_REASON_KIND_CARRIERS]
++    over = {o: n for o, n in per.items() if o in _CL_REASON_KIND_CARRIERS and n > _CL_REASON_KIND_CARRIERS[o]}
++    check("③設定 reason_kind 的值都是字面字串(只有收集分流與收尾各一處轉手例外)", not stray and not over,
++          f"不是字面的:{stray} 轉手處超量:{over}")
+ 
+ 
+ def _dr_settle(root, name="G"):
+     """守衛紀錄 pending → pass,預告句留著(舊版 settle 的樣子)。"""
+     g = root / _DR_VAULT / "Verification" / f"{name}.md"
+     g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                  encoding="utf-8")
+ 
+ 
+ def t_prepush_and_ci_wire_drift_check():

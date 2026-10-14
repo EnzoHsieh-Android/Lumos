@@ -1,0 +1,164 @@
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 1cda83b4..09e8de72 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -124,22 +124,22 @@ pp_plain_summary() {
+     echo ""
+     echo "══ 這次推送共有 $_PP_NBLK 筆擋下($_m 道閘)══ 簡版彙總(這個 repo 的 lumos 沒能印彙總,多半是舊版)"
+     case "$_gates" in *" anchor "*) echo "裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑" ;; esac
+     printf '%s' "$_lines"
+     [[ "$_n" -lt "$_PP_NBLK" ]] && echo "  共 $_PP_NBLK 筆擋下,其中有 $((_PP_NBLK - _n)) 筆的原因沒寫進暫存檔,細節看上面各段。"
+     echo "每一道怎麼處理看上面那一段;全套測試這次沒跑(便宜的閘先擋下了),修好之後重推會再從頭跑一次。"
+   } >&2
+ }
+ 
+ # 代碼審判定 rc1 時,LUMOS-BLOCKS: 行裡每個種類各記一筆的原因(對照表寫死;查不到用通用句)。
+-# ★跟 scripts/lumos 的 _CODELOOP_BLOCK_KIND_REASONS / _CODELOOP_BLOCK_KIND_FALLBACK 逐字同步★(t_prepush_cl_reason_table_matches_lumos 守):
+-# 掛鉤要能配舊版 lumos 跑,所以不向 lumos 要這份表,自己留一份。
++# ★種類要跟 scripts/lumos 判定會產生的 reason_kind 一樣多、一樣名★(t_prepush_cl_reason_table_matches_lumos 雙向守):
++# 句子只有這一份——掛鉤要能配舊版 lumos 跑,所以不向 lumos 要。
+ pp_cl_reason() {
+   case "$1" in
+     bound_tests) echo "受波及合約的測試沒過(或證不出跑過)" ;;
+     dispositions) echo "棧別檢核題表態不完整" ;;
+     lint_new) echo "這次改動帶進了新的告警" ;;
+     review) echo "高風險改動沒有有效的代碼審留痕" ;;
+     *) echo "代碼審判定擋下(細節在上面)" ;;
+   esac
+ }
+ 
+@@ -150,30 +150,31 @@ _PP_REMOTE="${1:-}"
+ # ★給圖譜健康那一段用★:逾期的預告合約,本機這一層只擋「這次碰到的」那幾條,
+ # 別人的逾期不該擋掉你的推送(被擋的人解不開別人的合約)。CI 不給這份清單,那邊照舊擋全部。
+ pp_touched_file() {
+   local _f _r
+   [[ -n "$_EMPTY_TREE" ]] || return 0
+   # ★放進 $_PP_TMP,不要自己另外 mktemp 一個檔★(代碼審 r1 架構席):那個目錄有 trap 在收,
+   # 正常結束、exit 1、Ctrl-C、被砍都會清掉。自己逐處 rm 會在「還沒回傳路徑就被打斷」時漏掉
+   # ——這支腳本前面那段註解就是為了同一種漏而寫的,不要再走一次同一條路。
+   [[ -n "$_PP_TMP" && -d "$_PP_TMP" ]] || return 0
+   _f="$_PP_TMP/touched.txt"
+-  : > "$_f" 2>/dev/null || return 0
++  { : > "$_f"; } 2>/dev/null || return 0
+   # 範圍跟會擋的閘同一支(這份清單餵 doctor --touched-from,會擋)。每個 ref 的 diff 都成功、結果卻是空的(推的東西
+   # 已整段在主線上)→ 照樣交空清單,意思是「這次什麼都沒碰到」;任何一個 diff 失敗、或根本沒有推送行 → 不交(doctor 照舊全擋)
+   local _n=0 _ok=1
+   for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+     read -r _ _lsha _rref _rsha <<< "$_ppl"
+     [[ "$_lsha" == "$_ZERO" ]] && continue
+     pp_block_range_for "$_rsha" "$_lsha" "$_rref" quiet
+     _n=$((_n + 1))
+-    git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f" 2>/dev/null || _ok=0
++    # 重導向包成一組(跟 pp_record_block 同一族,代碼審 r2 架構對齊席):清單檔寫不進去(暫存目錄被刪)時不印開檔雜訊
++    { git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f"; } 2>/dev/null || _ok=0
+   done
+   if [[ "$_ok" -eq 1 && ( -s "$_f" || "$_n" -gt 0 ) ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
+ }
+ 
+ # 沒有 scripts/lumos → 降級放行(不為缺環境 brick push,CI 兜底);有 lumos 卻找不到 Python 3.14 → 擋下
+ # (Projects/最低Python版本改3.14_計劃 做法第 3 點;PY 在下面讀完設定後才決定)
+ GRAPHCTL="$REPO_ROOT/scripts/lumos"
+ PY=""
+ # ── python-launcher begin(三支 git 掛鉤與四支安裝腳本內嵌同一段,t_python_launcher_blocks_agree 逐字守一致)──
+ # 只負責找一支任何版本的 python 把 lumos 叫起來;版本判斷全交給 lumos(Systems/python直譯器選擇)。
+@@ -271,21 +272,21 @@ _lumos_block_no_py314() {
+ # ★失敗隔離★:算不出來 → 暫存檔不存在或是空的 → 合約測試閘記一筆帳放行,不拖垮別的檢查。
+ _IMPACT_JSON=""
+ impact_once() {   # $1=diff range;算一次,結果放進 $_IMPACT_JSON
+   _IMPACT_JSON=""
+   [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+   # ★用同檔既有的樣板寫法與命名家族★(代碼審 r1 架構對齊席):
+   # 同一支腳本下面幾行就有 lumos-prepush-autoloop-XXXXXX / lumos-prepush-tests-XXXXXX,
+   # 而且旁邊的註解特別說明過「★XXXXXX 必須在結尾★」是踩過才定下來的。
+   local _f; _f="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-impact-XXXXXX" 2>/dev/null || true)"
+   [ -n "$_f" ] || return 0
+-  if "$PY" "$GRAPHCTL" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" > "$_f" 2>/dev/null \
++  if { "$PY" "$GRAPHCTL" impact --diff "$1" --sync-check --json --repo "$REPO_ROOT" > "$_f"; } 2>/dev/null \
+      && [ -s "$_f" ]; then
+     _IMPACT_JSON="$_f"
+   else
+     rm -f "$_f"
+   fi
+ }
+ impact_done() { [ -n "$_IMPACT_JSON" ] && rm -f "$_IMPACT_JSON"; _IMPACT_JSON=""; }
+ # ★擋下或收到訊號時也要清★(代碼審 r1 外家否決席判 minor,屬實):
+ # 上面那支只在 ref 迴圈正常跑到尾端時執行。擋下時要等全部跑完在判斷點才 exit 1(推送前收集),
+ # 收到訊號則中途結束——沒有 EXIT 陷阱收的話,每被擋或被中斷一次就留一個暫存檔在 $TMPDIR 裡慢慢累積。
+@@ -296,20 +297,23 @@ if [[ -z "$_PP_TMP" || ! -d "$_PP_TMP" ]]; then
+   echo "擋下:推送前檢查需要一個暫存目錄,但 ${TMPDIR:-/tmp} 建不出來(不存在或不可寫);修好 TMPDIR 再推。" >&2
+   exit 1
+ fi
+ # 陷阱拆開(計劃〈做法〉2):EXIT 收拾;INT/TERM 先收掉自己的背景工作再結束(結束時再走 EXIT 那支)。
+ # 原本三個共用一支、裡面不結束:掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測)。
+ # bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是指那支結束之後、不再開始下一道。
+ _pp_kill_jobs() { local _j; _j="$(jobs -p 2>/dev/null)"; [[ -n "$_j" ]] && kill $_j 2>/dev/null; return 0; }
+ trap 'impact_done; rm -rf "$_PP_TMP"' EXIT
+ trap '_pp_kill_jobs; exit 130' INT
+ trap '_pp_kill_jobs; exit 143' TERM
++# HUP 也接(代碼審 r2 併發席):ssh 或編輯器只對掛鉤送掛斷時,沒接的話掛鉤直接死、EXIT 照跑刪掉暫存目錄,
++# 跑測試的子殼與各片全部繼續跑(/bin/bash 3.2.57 實測 8 片全活著)。129 = 128 + SIGHUP。
++trap '_pp_kill_jobs; exit 129' HUP
+ # (2026-09-11 起「該動哪篇」的點名改由每支檔有家照家算——下面 home check --diff 會印;原本這裡以反引號為種子的
+ #  impact --sync-only 會把人推回寫了一堆別人檔名的大雜燴節點,拿掉。Projects/每支檔有家_計劃 [S15]。impact_once 留給合約測試閘用。)
+ # ★合約測試閘:低風險也跑,紅了印出來記帳但不擋;高風險照舊擋★(人裁 2026-09-07)
+ # 不選「低風險也擋」的理由:擋下去最可能的結果不是人去修測試,是人改走 --no-verify
+ # ——而這支腳本自己在別的地方就把那條當第三選項在教,那條零留痕。
+ bound_tests_advisory() {   # $1=diff range(暫存檔沒算出來時退回自己算)
+   [ -n "$PY" ] && [ -f "$GRAPHCTL" ] || return 0
+   if [ -n "$_IMPACT_JSON" ]; then
+     "$PY" "$GRAPHCTL" bound-tests --from-json "$_IMPACT_JSON" --advisory --repo "$REPO_ROOT" || true
+   else
+@@ -795,24 +799,27 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+   if [[ "$_suite_mode" == "light" && -n "$_SUITE_KEYS" ]]; then
+     _keys_args=(--suite keys --keys "$_SUITE_KEYS")
+   elif [[ "$_suite_mode" == "light" ]]; then
+     echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;CI 會跑全套當後盾。" >&2
+   fi
+   _sdir="$_PP_TMP/shards"; mkdir -p "$_sdir"
+   _rc=0; _krc_all3=1
+   run_group() {   # $1=log 前綴,其餘=執行器參數;每片一個子行程,回傳 0=全綠、3=每片都選中 0 支、1=有紅
+     local _pfx="$1"; shift
+     local _pids=() _i _p _r _any3=0 _bad=0
+-    # ★各片是掛鉤的孫行程,要由這個子殼自己收★(代碼審 r1 併發席,/bin/bash 3.2.57 實測):掛鉤的 INT/TERM 陷阱只對 jobs -p 列出的
++    # ★各片是掛鉤的孫行程,要由這個子殼自己收★(代碼審 r1 併發席,/bin/bash 3.2.57 實測):掛鉤的 INT/TERM/HUP 陷阱只對 jobs -p 列出的
+     # 直接子行程(這個子殼)送 TERM;而非互動 bash 用 & 起的背景命令忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到各片。
+-    # 不收的話被砍或按 Ctrl-C 之後各片變孤兒繼續跑(最多八分鐘、佔 CPU、輸出寫進已刪的資料夾)。子殼收到 TERM 就把各片收掉再結束。
+-    trap 'kill ${_pids[@]+"${_pids[@]}"} 2>/dev/null; exit 143' TERM
++    # 不收的話被砍或按 Ctrl-C 之後各片變孤兒繼續跑(最多八分鐘、佔 CPU、輸出寫進已刪的資料夾)。子殼收到 TERM 或 HUP 就把各片收掉再結束。
++    # ★收片用同一支 _pp_kill_jobs(jobs -p),不要自己記 pid 收★(代碼審 r2 併發席、架構對齊席):子殼裡 jobs -p 列的就是它起的各片;
++    # 自己記的話,「& 起片」與「記下 pid」是兩個敘述,訊號落在中間時剛起的那片不在清單上、漏收。下面的 _pids 只拿來 wait 收離開碼。
++    trap '_pp_kill_jobs; exit 143' TERM
++    trap '_pp_kill_jobs; exit 129' HUP
+     for _i in $(seq 1 "$_shards"); do
+       if [[ "$_shards" -le 1 ]]; then
+         "$PY" "$REPO_ROOT/scripts/test_lumos.py" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+       else
+         # 這條路不帶 --json-summary:判紅靠子行程離開碼、列紅的靠 log,摘要檔寫了沒人讀
+         # 就是白工(r1 通才席抓到)。那個旗標留著給要機讀的人用,不是給這裡用的。
+         "$PY" "$REPO_ROOT/scripts/test_lumos.py" --shard "$_i/$_shards" "$@" > "$_sdir/$_pfx$_i.log" 2>&1 &
+       fi
+       _pids+=($!)
+     done
+@@ -839,21 +846,21 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+   fi
+   wait "$_gpid" || _grc=$?
+   [[ "$_grc" -ne 0 ]] && _rc=1      # 文件子集/全套選中 0 支也算紅(執行器那邊本來就這樣判)
+   if [[ ${#_keys_args[@]} -gt 0 ]]; then
+     if [[ "$_krc" -eq 3 ]]; then
+       echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;CI 會跑全套當後盾。" >&2
+     elif [[ "$_krc" -ne 0 ]]; then
+       _rc=1
+     fi
+   fi
+-  cat "$_sdir"/*.log > "$_TESTS_LOG" 2>/dev/null || true
++  { cat "$_sdir"/*.log > "$_TESTS_LOG"; } 2>/dev/null || true
+   if [[ $_rc -ne 0 ]]; then
+     {
+       echo ""
+       echo "擋下:test_lumos.py 有紅,有測試沒過。"
+       echo "紅的是這幾支:"
+       grep -h "✗ " "$_TESTS_LOG" | head -20 | sed 's/^/    /'
+       echo ""
+       echo "完整輸出(所有分片接在一起)在這裡:"
+       echo "   $(pp_keep_log "$_TESTS_LOG" tests)"
+       echo ""

@@ -1,0 +1,61 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index cf11568d..2a3be295 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -51234,29 +51234,23 @@ def _codeloop_default_base(repo_root):
+     shas = list(dict.fromkeys(shas))
+     if not shas:
+         return None
+     r = _lens_git(repo_root, "merge-base", "--all", "HEAD", *shas)
+     bases = [x for x in (r.stdout.split() if r is not None and r.returncode == 0 else []) if _LENS_SHA_RE.match(x)]
+     if not bases:
+         return None
+     return _push_pick_base(repo_root, bases, None, "主線", "")[0]
+ 
+ 
+-# code-loop check --keep-going 每種擋下的一句話原因(JSON 的 blocks 每筆帶 summary)。★推送前掛鉤 pp_cl_reason 有一份逐字相同的★
+-# (掛鉤要能配舊版 lumos 跑,不向這裡要表);t_prepush_cl_reason_table_matches_lumos 把兩份、以及判定函式會產生的 reason_kind 綁在一起。
+-_CODELOOP_BLOCK_KIND_REASONS = {
+-    "bound_tests": "受波及合約的測試沒過(或證不出跑過)",
+-    "dispositions": "棧別檢核題表態不完整",
+-    "lint_new": "這次改動帶進了新的告警",
+-    "review": "高風險改動沒有有效的代碼審留痕",
+-}
+-_CODELOOP_BLOCK_KIND_FALLBACK = "代碼審判定擋下(細節在上面)"
++# 每種擋下的一句話原因只有推送前掛鉤 pp_cl_reason 那一份(掛鉤要能配舊版 lumos 跑,不向這裡要);這裡產生的 reason_kind
++# 一律寫字面字串,t_prepush_cl_reason_table_matches_lumos 拿它跟掛鉤的對照表比種類(代碼審 r2:原本這裡另存一份句子表給
++# JSON blocks 的 summary 欄位用,沒有任何程式讀,拿掉)。
+ 
+ 
+ class _CodeloopKg:
+     """code-loop check 判定函式的收集模式分流(Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):
+     fin 是唯一的收尾;hit 是「這一道擋下」——不帶 keep_going 時回收尾後的結果(呼叫端直接回傳),帶的話記進清單、回 None(繼續下一道)。
+     從判定函式抽出來,讓它的分支數回到改動前的量(代碼審 r1 通才席:新增告警閘把複雜度 35→40 當成新告警擋下)。"""
+ 
+     def __init__(self, keep_going):
+         self.keep_going = keep_going
+         self.blocks = []        # 記下的擋下(每筆是原本會直接回傳的那個擋下 dict)
+@@ -51286,22 +51280,21 @@ def _codeloop_kg_finish(v, blocks, keep_going, tier):
+     放行站點走到這裡的意思是「這一道過了」,不能蓋掉前面記下的擋下。"""
+     if not keep_going:
+         return v
+     if v.get("blocked") and v not in blocks:
+         blocks.append(v)
+     if not blocks:
+         return dict(v, blocks=[])
+     out = dict(blocks[0])
+     out["blocked"] = True
+     out["tier"] = tier
+-    out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", ""),
+-                      "summary": _CODELOOP_BLOCK_KIND_REASONS.get(b.get("reason_kind"), _CODELOOP_BLOCK_KIND_FALLBACK)} for b in blocks]
++    out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", "")} for b in blocks]
+     for b in blocks:   # 各道的明細照原本的鍵放著,印訊息那段各取各的
+         for k in ("bound_tests", "dispositions", "lint_new"):
+             if k in b:
+                 out[k] = b[k]
+     return out
+ 
+ 
+ def _codeloop_lint_new_step(repo_root, diff_range, tier):
+     """3.6 新增告警閘(Projects/新增告警閘_計劃,2026-09-13):只看改動範圍、不需要 pitfalls 的資料。回這一道的擋下 dict 或 None(放行)。"""
+     lv = None
