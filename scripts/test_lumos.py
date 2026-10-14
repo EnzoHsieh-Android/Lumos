@@ -19073,6 +19073,9 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         #   pass 後提交它們原本會失效擋推——補進白名單後不失效(Issues/簿記白名單漏canary與bypass帳)
         (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"x"}\n', encoding="utf-8")
         (Path(d) / "docs" / ".bypass-log.jsonl").write_text('{"ts":"t"}\n', encoding="utf-8")
+        # 測試耗時表也是簿記(推送與CI提速 代碼審 r1 合約圖譜席:原本只驗它在清單裡,沒驗留痕真的不失效)
+        (Path(d) / "governance").mkdir(exist_ok=True)
+        (Path(d) / "governance" / "test-durations.json").write_text('{"version": 1, "tests": {"t_x": 1.0}}\n', encoding="utf-8")
         g("add", "-A")
         g("commit", "-qm", "gov bookkeeping")
         check("★前置★ 現場成立:pass 後 HEAD 真的前進了(≠留痕 sha)",
@@ -19080,7 +19083,8 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         chg = g("diff", "--name-only", pass_sha, "HEAD").stdout.splitlines()
         check("★前置★ 現場成立:該 commit 只動簿記檔(含 canary/bypass)",
               chg and all(f.startswith(("docs/.governance", "docs/.usage", "docs/.canary",
-                                        "docs/.bypass", "governance/code-loop/")) for f in chg), str(chg))
+                                        "docs/.bypass", "governance/code-loop/", "governance/test-durations.json")) for f in chg)
+              and "governance/test-durations.json" in chg, str(chg))
         r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
                     capture_output=True, text=True)
         check("★pass 後純簿記 commit → 留痕仍有效 rc0(原:sha 過時追尾)★", r.returncode == 0,
@@ -21800,6 +21804,408 @@ def t_runner_shard_partitions_completely():
     check("分片: 機讀摘要有過/紅/跳過三個數字", all(k in d for k in ("passed", "failed", "skipped")), str(d))
     check("分片: 機讀摘要列得出紅的是哪幾支", "failed_names" in d, str(d))
 
+
+
+def t_runner_shard_by_duration():
+    """[推送與CI提速 S1、S2]有耗時表就照耗時分(由大到小丟給總權重最小的一份);沒表照名字輪流分;表壞了每一份都擋。"""
+    import subprocess as _sp, json as _j, shutil as _sh, statistics as _st
+    # ① 分法本身:照權重由大到小、丟給總權重最小的一份,聯集等於全部、不重複
+    names = [f"t_{i:03d}" for i in range(40)]
+    table = {n: (30.0 if i % 4 == 0 and i < 16 else 1.0) for i, n in enumerate(names)}   # 四支 30 秒照名字輪流分會落在同一份
+    buckets = _shard_by_duration(names, table, 4)
+    flat = [n for b in buckets for n in b]
+    check("耗時分片:聯集等於全部、不重複", sorted(flat) == sorted(names) and len(flat) == len(set(flat)), (len(flat), len(set(flat))))
+    check("耗時分片:四支 30 秒的各落一份(由大到小丟給最輕的)", [sum(1 for n in b if table[n] == 30.0) for b in buckets] == [1, 1, 1, 1], buckets)
+    loads = [sum(max(table[n], 0.05) for n in b) for b in buckets]
+    rr = [[n for k, n in enumerate(names) if k % 4 == j] for j in range(4)]
+    rr_loads = [sum(table[n] for n in b) for b in rr]
+    check("★前置★ 現場成立:照名字輪流分在這組資料下確實不平均", max(rr_loads) - min(rr_loads) > 50, rr_loads)
+    check("耗時分片:各份總權重比照名字輪流分時更接近", max(loads) - min(loads) < max(rr_loads) - min(rr_loads), (loads, rr_loads))
+    # ② 權重下限與平手比支數:一堆 0 秒的測試不能全擠進同一份(r1 邊界失效席 F4)
+    zeros = {n: (0.0 if i else 5.0) for i, n in enumerate(names)}   # 一支 5 秒、其餘 0 秒
+    zb = _shard_by_duration(names, zeros, 4)
+    holders = [b for b in zb if any(zeros[n] == 0.0 for n in b)]
+    check("耗時分片:0 秒的測試不會全擠進同一份(有下限、平手比支數)", len(holders) >= 3, [len(b) for b in zb])
+    # ③ 表裡沒有的用全表中位數
+    part = {n: table[n] for n in names[:20]}
+    med = _st.median(part.values())
+    b2 = _shard_by_duration(names, part, 4)
+    check("耗時分片:表裡沒有的測試也分得到(用中位數)", sorted(n for b in b2 for n in b) == sorted(names) and med > 0, med)
+    # ④ 確定性:同一份表、同一份清單,兩次算出來一模一樣
+    check("耗時分片:同輸入同結果(各份獨立算也一致)", _shard_by_duration(names, table, 4) == buckets, "")
+    # ⑤ 每條規則各一組小輸入,拿掉那條規則結果就會變(代碼審 r1 合約圖譜席:原本四條規則拿掉任一條測試照綠)。
+    #    輸入是照「拿掉該條規則會不會改結果」搜出來的;期望值照 docstring 的規則手算得到
+    rules = (
+        ("權重下限 0.05", ["t_g", "t_f", "t_e", "t_d", "t_c", "t_b", "t_a"], 2,
+         {"t_a": 0.5, "t_b": 0.5, "t_c": 0.0, "t_d": 2.0, "t_e": 0.0, "t_f": 1.0, "t_g": 2.0},
+         [["t_d", "t_f", "t_c"], ["t_g", "t_a", "t_b", "t_e"]]),
+        ("表裡沒有的用全表中位數", ["t_g", "t_f", "t_e", "t_d", "t_c", "t_b", "t_a"], 2,
+         {"t_b": 0.25, "t_d": 2.0, "t_e": 1.0, "t_g": 0.5},
+         [["t_d", "t_f", "t_b"], ["t_e", "t_a", "t_c", "t_g"]]),
+        ("權重下限是 0.05(改成 0.04 結果就變)", ["t_a", "t_b", "t_c", "t_d", "t_e"], 2,
+         {"t_a": 0.1, "t_b": 0.0, "t_c": 0.0, "t_d": 0.15, "t_e": 0.0},
+         [["t_d", "t_c"], ["t_a", "t_b", "t_e"]]),
+        ("權重下限是 0.05(改成 0.06 結果就變)", ["t_a", "t_b", "t_c", "t_d", "t_e", "t_f", "t_g"], 3,
+         {"t_a": 0.0, "t_b": 0.045, "t_c": 0.0, "t_d": 0.15, "t_e": 0.045, "t_f": 0.055, "t_g": 0.1},
+         [["t_d", "t_e"], ["t_g", "t_b"], ["t_f", "t_a", "t_c"]]),
+        ("中位數取全表(含這次清單外的舊條目),不是只算清單裡的", ["t_a", "t_b", "t_c", "t_d", "t_e"], 2,
+         {"t_a": 0.5, "t_c": 2.0, "t_d": 0.5, "t_e": 2.0, "t_gone": 9.0, "t_gone2": 9.0},
+         [["t_b", "t_e"], ["t_c", "t_a", "t_d"]]),
+        ("同權重照名字排(跟傳入順序無關)", ["t_d", "t_c", "t_b", "t_a"], 2,
+         {"t_a": 1.0, "t_b": 1.0, "t_c": 0.25, "t_d": 0.0},
+         [["t_a", "t_c"], ["t_b", "t_d"]]),
+        ("同總權重取支數少的", ["t_a", "t_b", "t_c", "t_d", "t_e", "t_f", "t_g", "t_h", "t_i"], 2,
+         {"t_a": 0.0, "t_b": 0.7, "t_c": 0.7, "t_d": 1.0, "t_e": 1.0, "t_f": 0.3, "t_g": 0.0, "t_h": 1.0, "t_i": 0.1},
+         [["t_d", "t_h", "t_f", "t_i", "t_g"], ["t_e", "t_b", "t_c", "t_a"]]),
+    )
+    for label, nm, n, tb, want in rules:
+        check("耗時分片規則:%s" % label, _shard_by_duration(nm, tb, n) == want, _shard_by_duration(nm, tb, n))
+    # ⑥ 份數遠多於測試數:只回傳測試數那麼多份(多出來的編號就是空片),不照份數配置
+    #    (代碼審 r1 邊界輸入席:比較次數隨份數長;r2 四席:配置也隨份數長,1/100000000 要 7.7GB)
+    import time as _tm
+    t0 = _tm.time()
+    huge = _shard_by_duration(names, table, 10 ** 7)
+    took = _tm.time() - t0
+    check("耗時分片:份數一千萬時只回傳測試數那麼多份、每支各一份", len(huge) == len(names) and sorted(n for b in huge for n in b) == sorted(names)
+          and all(len(b) == 1 for b in huge), len(huge))
+    check("耗時分片:份數一千萬也在 0.5 秒內算完(照份數配置要一秒多、近 1GB)", took < 0.5, took)
+    # ⑦ 整支執行器:沒表照名字輪流分;表格式不對每一份都 rc2;有表時印表雜湊與總支數
+    base = Path(tempfile.mkdtemp(prefix="gctl-durshard-"))
+    try:
+        (base / "scripts").mkdir()
+        (base / "governance").mkdir()
+        runner = base / "scripts" / "test_lumos.py"
+        _sh.copy(Path(__file__).resolve(), runner)
+        _sh.copy(GRAPHCTL, base / "scripts" / "lumos")   # 讀表規則在主程式,執行器載入它來用
+        def run(*a):
+            return _sp.run([sys.executable, str(runner), *a], capture_output=True, text=True, timeout=180)
+        r = run("--shard", "1/3", "--list")
+        check("沒有耗時表:照名字輪流分並說明", r.returncode == 0 and "沒有耗時表" in (r.stdout + r.stderr), (r.returncode, r.stderr[-200:]))
+        rr_all = sorted(k for k in globals() if k.startswith("t_"))
+        rr_got = [[l for l in run("--shard", f"{i}/3", "--list").stdout.splitlines() if l.startswith("t_")] for i in (1, 2, 3)]
+        check("沒有耗時表:第 i 份恰好是排序後第 i、i+3、i+6… 支", rr_got == [[n for k, n in enumerate(rr_all) if k % 3 == j] for j in range(3)],
+              [len(b) for b in rr_got])
+        tbl = base / "governance" / "test-durations.json"
+        # 各種壞表在行程內直接驗讀表那一支(r2 通才席:原本每種壞表起三個子行程,整支 59 秒、只剩 3 倍逾時餘裕)
+        read = _load_lumos_inproc()._read_durations_table
+        for label, bad in (("不是 JSON", "{nope"), ("不是物件", "[]"), ("tests 是空的", '{"version": 1, "tests": {}}'),
+                           ("秒數是字串", '{"version": 1, "tests": {"t_x": "1"}}'), ("秒數是負數", '{"version": 1, "tests": {"t_x": -1}}'),
+                           ("秒數是 NaN", '{"version": 1, "tests": {"t_x": NaN}}'), ("tests 不是物件", '{"version": 1, "tests": []}'),
+                           ("秒數是布林", '{"version": 1, "tests": {"t_x": true}}'),
+                           ("秒數是 Infinity", '{"version": 1, "tests": {"t_x": Infinity}}'),
+                           ("秒數是轉不成浮點的超大整數", '{"version": 1, "tests": {"t_x": 1%s}}' % ("0" * 400)),
+                           ("巢狀過深", "[" * 1000000 + "]" * 1000000)):
+            tbl.write_text(bad, encoding="utf-8")
+            try:
+                read(tbl)
+                why = None
+            except ValueError as e:
+                why = str(e)
+            check("耗時表%s:讀表擋下並說明" % label, bool(why), why)
+        tbl.unlink()
+        tbl.mkdir()
+        try:
+            read(tbl)
+            why = None
+        except ValueError as e:
+            why = str(e)
+        check("耗時表位置是資料夾:當成壞表擋下,不當成沒有表(r2 邊界輸入席)", why == "不是一般檔", why)
+        tbl.rmdir()
+        tbl.symlink_to(base / "nowhere.json")
+        try:
+            read(tbl)
+            why = None
+        except ValueError as e:
+            why = str(e)
+        check("耗時表是斷掉的符號連結:當成壞表擋下", why == "不是一般檔", why)
+        tbl.unlink()
+        # 子行程:各份對同一張壞表得出同一結論(rc2),不各自退回輪流分
+        for label, make in (("不是 JSON", lambda: tbl.write_text("{nope", encoding="utf-8")), ("位置是資料夾", tbl.mkdir)):
+            make()
+            rcs = [run("--shard", f"{i}/3", "--list").returncode for i in (1, 2, 3)]
+            check("耗時表%s:每一份都 rc2 擋下(不各自退回)" % label, rcs == [2, 2, 2], rcs)
+            tbl.rmdir() if tbl.is_dir() else tbl.unlink()
+        tbl.write_text("{nope", encoding="utf-8")
+        # 純文件推送也是分片跑文件子集(CI 與推送前掛鉤都是):表壞了那時就擋,不會等到下一次全套(r1 正確性席)
+        r = run("--shard", "1/3", "--suite", "docs", "--list")
+        check("耗時表壞了:分片跑文件子集也 rc2 擋下", r.returncode == 2 and "耗時表" in r.stderr, (r.returncode, r.stderr[-200:]))
+        tbl.write_text(_j.dumps({"version": 1, "tests": {"t_runner_shard_by_duration": 9.0}}), encoding="utf-8")
+        outs = [run("--shard", f"{i}/3", "--list") for i in (1, 2, 3)]
+        got = [l for o in outs for l in o.stdout.splitlines() if l.startswith("t_")]
+        allnames = sorted(k for k in globals() if k.startswith("t_"))
+        check("有耗時表:三份聯集等於全部、不重複", sorted(got) == allnames and len(got) == len(set(got)), (len(got), len(allnames)))
+        heads = {l.split("耗時表", 1)[1].split(",", 1)[0].strip() for o in outs for l in (o.stdout + o.stderr).splitlines() if "分法:耗時表" in l}
+        import hashlib as _hl
+        check("有耗時表:每一份印的是表的 SHA-256 前 8 碼", heads == {_hl.sha256(tbl.read_bytes()).hexdigest()[:8]}, heads)
+        totals = {l.split("共 ", 1)[1].split(" 支", 1)[0] for o in outs for l in o.stdout.splitlines() if "分法:耗時表" in l}
+        check("有耗時表:每一份印總支數", totals == {str(len(allnames))}, totals)
+        big = len(allnames) + 1
+        r = run("--shard", f"{big}/{big}")
+        check("有耗時表時片數比測試多:空片照舊擋 rc1", r.returncode == 1 and "一支測試都沒分到" in r.stderr, (r.returncode, r.stderr[-200:]))
+    finally:
+        _sh.rmtree(base, ignore_errors=True)
+    print("  ✓ t_runner_shard_by_duration")
+
+
+def t_test_durations_refresh():
+    """[推送與CI提速 S3、S5]執行器記下各支實測秒數(過、紅、逾時、例外都記,跳過的不記,只在來源 repo 寫);
+    `lumos test-durations refresh` 取每支最新一筆合進耗時表、沒跑到的保留舊值、讀完刪 run 檔;
+    舊表讀不懂就擋、不覆蓋;兩邊的秒數規則與表路徑同一份;只改耗時表的提交算簿記、推送判成文件改動。"""
+    import subprocess as _sp, json as _j, os as _os, time as _tm, shutil as _sh
+    base = Path(tempfile.mkdtemp(prefix="gctl-durref-"))
+    try:
+        def git(*a):
+            return _sp.run(["git", "-C", str(base), *a], capture_output=True, text=True, check=True)
+        git("init", "-q")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
+        def lumos(*a):
+            return _sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, timeout=120, cwd=str(base))
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        check("沒有 run 檔 → rc2 說明要先跑測試", r.returncode == 2 and "test-durations-run" in r.stderr, (r.returncode, r.stderr[-200:]))
+        gov, lum = base / "governance", base / ".lumos"
+        gov.mkdir()
+        lum.mkdir()
+        tbl = gov / "test-durations.json"
+        # 舊表開頭帶 BOM:執行器讀得進,刷新也要讀得進、不清空(r1 邊界輸入席)
+        tbl.write_bytes(b"\xef\xbb\xbf" + _j.dumps({"version": 1, "tests": {"t_old": 7.0, "t_a": 1.0}}).encode())
+        # 檔名順序跟時間順序相反:舊的叫 shard2of2、新的叫 shard1of2,照檔名排會讓舊值蓋掉新值(r2 合約圖譜席)
+        older, newer = lum / "test-durations-run-shard2of2.json", lum / "test-durations-run-shard1of2.json"
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_a": 2.0, "t_b": 3.14159}}), encoding="utf-8")
+        newer.write_text(_j.dumps({"version": 1, "tests": {"t_a": 5.0, "t_bad": "x", "t_huge": 10 ** 400}}), encoding="utf-8")
+        # run 檔的 tests 形狀不對:當成讀不懂的略過,不讓整支崩潰、也不擋其他好的檔(r1 正確性、邊界輸入席)
+        odd = [lum / ("test-durations-run-%s.json" % k) for k in ("str", "list", "top")]
+        for p, body in zip(odd, ('{"tests": "abc"}', '{"tests": [1, 2]}', "[1]")):
+            p.write_text(body, encoding="utf-8")
+        # 列得出來、卻讀不到檔案資訊的 run 檔(斷掉的符號連結;等同列出之後被另一個刷新刪掉):略過,不讓排序崩潰(r2 併發資源席)
+        (lum / "test-durations-run-gone.json").symlink_to(base / "gone.json")
+        # 舊的固定暫存檔名被放成符號連結:刷新不能跟著它寫到別處(r1 資安席)
+        victim = base / "victim.txt"
+        victim.write_text("原樣", encoding="utf-8")
+        (gov / "test-durations.json.lumos-tmp").symlink_to(victim)
+        now = _tm.time()
+        _os.utime(older, (now - 100, now - 100))
+        _os.utime(newer, (now, now))
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        got = _j.loads(tbl.read_text(encoding="utf-8"))["tests"]
+        check("refresh rc0", r.returncode == 0, (r.returncode, r.stderr[-300:]))
+        check("★前置★ 現場成立:檔名排序跟時間排序相反", sorted([older.name, newer.name])[-1] == older.name, "")
+        check("同一支取檔案時間最新的那筆(不是檔名排最後的)", got.get("t_a") == 5.0, got)
+        check("只在舊 run 檔出現的也合進來,秒數存到小數三位", got.get("t_b") == 3.142, got)
+        check("沒跑到的保留舊值(舊表帶 BOM 也讀得進)", got.get("t_old") == 7.0, got)
+        check("秒數不合法的那筆不收(字串、轉不成浮點的超大整數)", "t_bad" not in got and "t_huge" not in got, got)
+        check("tests 形狀不對的 run 檔略過並說明", r.stderr.count("略過讀不懂的") == 3, r.stderr[-300:])
+        check("斷掉的符號連結 run 檔略過並說一聲", "略過斷掉的符號連結 test-durations-run-gone.json" in r.stderr, r.stderr[-300:])
+        (lum / "test-durations-run-gone.json").unlink()
+        check("讀完刪掉 run 檔", not any(lum.glob("test-durations-run*.json")), list(lum.iterdir()))
+        check("舊的固定暫存檔名是符號連結時不跟著寫", victim.read_text(encoding="utf-8") == "原樣", victim.read_text(encoding="utf-8"))
+        check("寫完沒留下暫存檔", not [p for p in gov.iterdir() if p.name.endswith(".tmp-wlf")], list(gov.iterdir()))
+        # 舊表讀不懂或有不合法的秒數:擋下、不覆蓋、run 檔留著(r1 架構對齊、規格符合、邊界輸入席)
+        for label, body in (("不是 JSON", b"{nope"), ("巢狀過深", b"[" * 1000000 + b"]" * 1000000), ("有轉不成浮點的超大整數", ('{"version": 1, "tests": {"t_x": 1%s}}' % ("0" * 400)).encode())):
+            tbl.write_bytes(body)
+            older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.0}}), encoding="utf-8")
+            r = lumos("test-durations", "refresh", "--repo", str(base))
+            check("舊表%s:rc2 擋下、說明怎麼辦" % label, r.returncode == 2 and r.stderr.startswith("擋下:") and "刪掉它再刷新" in r.stderr, (r.returncode, r.stderr[-200:]))
+            check("舊表%s:舊表原樣、run 檔留著" % label, tbl.read_bytes() == body and older.exists(), "")
+        # 刷新讀完到刪檔之間有一片剛好寫了新內容:那個 run 檔留著給下次,不跟著刪(r1 併發資源席)。在寫表那一步插進一次改寫來模擬
+        tbl.unlink()
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.0}}), encoding="utf-8")
+        newer.write_text(_j.dumps({"version": 1, "tests": {"t_d": 1.0}}), encoding="utf-8")
+        mm = _load_lumos_module()
+        orig_write = mm._write_lf
+        def racing_write(path, text):
+            newer.write_text(_j.dumps({"version": 1, "tests": {"t_d": 1.0, "t_late": 2.0}}), encoding="utf-8")
+            return orig_write(path, text)
+        mm._write_lf = racing_write
+        try:
+            rv = mm.cmd_test_durations_refresh(str(base))
+        finally:
+            mm._write_lf = orig_write
+        check("★前置★ 現場成立:刷新本身成功", rv == 0 and tbl.exists(), rv)
+        check("讀完沒被改過的 run 檔照樣刪", not older.exists(), "")
+        check("讀完之後被改寫的 run 檔留著給下次", newer.exists() and "t_late" in newer.read_text(encoding="utf-8"), "")
+        newer.unlink()
+        # 刷新是原子換名:寫完表是新的檔(inode 換了),不是在原檔上直接改寫(r3 合約圖譜席)
+        ino_before = tbl.stat().st_ino
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.5}}), encoding="utf-8")
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        check("刷新寫表是換成新檔(原子換名),不是原地改寫", r.returncode == 0 and tbl.stat().st_ino != ino_before, (r.returncode, r.stderr[-200:]))
+        # run 檔標成紅的那幾支:只在比舊值大時才收(環境壞掉一堆瞬間紅,不能把表拉小;紅或逾時讓它更慢就收)(r3 通才席)
+        cur = _j.loads(tbl.read_text(encoding="utf-8"))["tests"]
+        check("★前置★ 現場成立:表裡 t_c 是 1.5", cur.get("t_c") == 1.5, cur)
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 0.01, "t_d": 9.0}, "failed": ["t_c", "t_d"]}), encoding="utf-8")
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        cur = _j.loads(tbl.read_text(encoding="utf-8"))["tests"]
+        check("紅的那支比舊值小:不收,保留舊值", r.returncode == 0 and cur.get("t_c") == 1.5, cur)
+        check("紅的那支表裡沒有:照收", cur.get("t_d") == 9.0, cur)
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 4.0}, "failed": ["t_c"]}), encoding="utf-8")
+        lumos("test-durations", "refresh", "--repo", str(base))
+        check("紅的那支比舊值大(逾時這類):照收", _j.loads(tbl.read_text(encoding="utf-8"))["tests"].get("t_c") == 4.0, "")
+        # 同一時間只准一個刷新:鎖檔在就擋下、不動表也不刪 run 檔(r3 併發資源席:兩個同時跑,後寫的蓋掉先寫的)
+        lock = lum / "test-durations-refresh.lock"
+        lock.write_text("別人\n", encoding="utf-8")
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 7.0}}), encoding="utf-8")
+        snap = tbl.read_bytes()
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        check("另一個刷新正在跑(鎖檔在):rc2 擋下並說明", r.returncode == 2 and "另一個刷新正在跑" in r.stderr, (r.returncode, r.stderr[-200:]))
+        check("被鎖擋下時:表沒動、run 檔留著、別人的鎖檔留著", tbl.read_bytes() == snap and older.exists() and lock.exists(), "")
+        lock.unlink()
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        check("刷新跑完:自己的鎖檔清掉", r.returncode == 0 and not lock.exists(), (r.returncode, r.stderr[-200:]))
+        # 刪掉幾個就報幾個:同名樣式的資料夾刪不掉,不算進刪掉的數量、列出來(r3 正確性、邊界輸入席)
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 3.0}}), encoding="utf-8")
+        odd_dir = lum / "test-durations-run-dir.json"
+        odd_dir.mkdir()
+        r = lumos("test-durations", "refresh", "--repo", str(base))
+        check("刪不掉的不算進刪掉數量、列出名字", r.returncode == 0 and "讀完刪掉 1 個 run 檔" in r.stdout and "test-durations-run-dir.json" in r.stderr, (r.stdout[-200:], r.stderr[-200:]))
+        odd_dir.rmdir()
+        # 寫不進去:rc1、訊息照慣例「擋下:」開頭(r1 架構對齊席)
+        tbl.unlink()
+        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.0}}), encoding="utf-8")
+        _os.chmod(gov, 0o555)
+        try:
+            r = lumos("test-durations", "refresh", "--repo", str(base))
+        finally:
+            _os.chmod(gov, 0o755)
+        check("寫不進耗時表:rc1 且說明以「擋下:」開頭", r.returncode == 1 and r.stderr.startswith("擋下:寫不進耗時表"), (r.returncode, r.stderr[-200:]))
+        # 讀表規則與路徑只有主程式一份,執行器載入它來用(r2 架構對齊席:本檔慣例是讀活的常數,不抄第二份)
+        m = _load_lumos_inproc()
+        import inspect as _insp, re as _re
+        own = Path(__file__).read_text(encoding="utf-8")
+        check("執行器沒有自己的一份秒數規則或讀表規則", not _re.search(r"^def (_duration_ok|_read_durations_table)\b", own, _re.M)
+              and "_load_lumos_inproc()._read_durations_table" in _insp.getsource(_load_durations_table), "")
+        check("執行器讀的耗時表路徑就是主程式的常數",
+              _durations_table_path() == Path(GRAPHCTL).resolve().parent.parent / m._TEST_DURATIONS_REL
+              and "_load_lumos_inproc()._TEST_DURATIONS_REL" in _insp.getsource(_durations_table_path), str(_durations_table_path()))
+        # 只改耗時表 → 簿記檔、推送判成文件改動
+        m = _load_lumos_module()
+        check("耗時表在簿記檔清單裡(刷新不讓代碼審留痕失效)", "governance/test-durations.json" in m._BOOKKEEPING_FILES, "")
+        tbl.write_text(_j.dumps({"version": 1, "tests": {"t_a": 1.0}}), encoding="utf-8")
+        for p in lum.glob("test-durations-run*.json"):   # 上面擋下的情境留著的 run 檔,不帶進這個提交
+            p.unlink()
+        victim.unlink()
+        (gov / "test-durations.json.lumos-tmp").unlink()
+        git("add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "durations")
+        r = lumos("pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--json", "--repo", str(base))
+        try:
+            suite = _j.loads(r.stdout).get("suite")
+        except ValueError:
+            suite = None
+        check("只改耗時表的推送判成文件改動(CI 只跑文件子集)", suite == "docs", (suite, r.stdout[-300:], r.stderr[-200:]))
+    finally:
+        _sh.rmtree(base, ignore_errors=True)
+    # 執行器記秒數:在臨時 repo 放一份執行器加幾支會過、紅、例外、逾時、跳過的小測試,不碰真 repo 的 .lumos/(r1 正確性、合約圖譜席)
+    box = Path(tempfile.mkdtemp(prefix="gctl-durrun-"))
+    try:
+        (box / "scripts").mkdir()
+        _sh.copy(GRAPHCTL, box / "scripts" / "lumos")   # 讀表規則在主程式,執行器載入它來用
+        src = Path(__file__).resolve().read_text(encoding="utf-8")
+        tail = '\n\nif __name__ == "__main__":'
+        extra = ('\n\ndef t_zzdur_ok():\n    check("ok", True, "")\n'
+                 '\n\ndef t_zzdur_red():\n    check("紅", False, "")\n'
+                 '\n\ndef t_zzdur_exc():\n    raise RuntimeError("boom")\n'
+                 '\n\ndef t_zzdur_slow():\n    import time\n    time.sleep(5)\n'
+                 '\n\ndef t_zzdur_skip():\n    raise _SrcOnly("跳過")\n'
+                 '\n\ndef t_zzswap_table():\n    import os\n    p = Path(GRAPHCTL).resolve().parent.parent / "governance" / "test-durations.json"\n'
+                 '    m = os.environ.get("ZZSWAP", "")\n'
+                 '    if m == "write":\n        p.parent.mkdir(exist_ok=True)\n        p.write_text(\'{"version": 1, "tests": {"t_x": 1.0}}\', encoding="utf-8")\n'
+                 '    elif m == "change":\n        p.write_text(\'{"version": 1, "tests": {"t_x": 2.0}}\', encoding="utf-8")\n'
+                 '    elif m == "delete":\n        p.unlink()\n'
+                 '    elif m == "garbage":\n        p.write_text("{nope", encoding="utf-8")\n'
+                 '    check("動了表", True, "")\n')
+        check("★前置★ 現場成立:執行器檔尾的進入點只有一處", src.count(tail) == 1, src.count(tail))
+        (box / "scripts" / "test_lumos.py").write_text(src.replace(tail, extra + tail), encoding="utf-8")
+        env = dict(_os.environ, LUMOS_TEST_TIMEOUT="2")
+        def run_box():
+            return _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "-k", "t_zzdur_"],
+                           capture_output=True, text=True, timeout=120, env=env)
+        rr = run_box()
+        check("★前置★ 現場成立:五支小測試都跑到了", all(k in rr.stdout for k in ("t_zzdur_red", "t_zzdur_exc", "TIMEOUT t_zzdur_slow", "skip t_zzdur_skip")), rr.stdout[-500:])
+        check("消費專案(沒有 skills/lumos-project-notes)不寫 run 檔", not (box / ".lumos").exists() or not any((box / ".lumos").glob("test-durations-run*.json")), "")
+        (box / "skills" / "lumos-project-notes").mkdir(parents=True)
+        rr = run_box()
+        run_file = box / ".lumos" / "test-durations-run.json"
+        got = _j.loads(run_file.read_text(encoding="utf-8"))["tests"] if run_file.is_file() else {}
+        check("來源 repo:過、紅、例外、逾時都記秒數", all(k in got for k in ("t_zzdur_ok", "t_zzdur_red", "t_zzdur_exc", "t_zzdur_slow")), (sorted(got), rr.stdout[-300:]))
+        check("來源 repo:跳過的不記", "t_zzdur_skip" not in got, sorted(got))
+        # 一片跑的期間耗時表換了:從無到有、被改、被刪、改壞都要擋下 rc2;表沒換照常(r1 併發資源席;r3 合約圖譜席:原本只驗從無到有)
+        tblb = box / "governance" / "test-durations.json"
+        def swap(mode, start):
+            if start is None:
+                if tblb.exists():
+                    tblb.unlink()
+            else:
+                tblb.parent.mkdir(exist_ok=True)
+                tblb.write_text(start, encoding="utf-8")
+            return _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "--shard", "1/1", "-k", "t_zzswap_table"],
+                           capture_output=True, text=True, timeout=120, env=dict(env, ZZSWAP=mode))
+        table_a = '{"version": 1, "tests": {"t_x": 1.0}}'
+        for label, mode, start in (("從無到有", "write", None), ("被改", "change", table_a), ("被刪", "delete", table_a), ("改壞", "garbage", table_a)):
+            rs = swap(mode, start)
+            check("★前置★ 現場成立:%s那次那支小測試真的跑到了" % label, "t_zzswap_table" in rs.stdout, rs.stdout[-300:])
+            check("分片跑的期間耗時表%s → rc2 擋下" % label, rs.returncode == 2 and "耗時表換了" in rs.stderr, (rs.returncode, rs.stderr[-300:]))
+        rs = swap("write", table_a)
+        check("表沒換(開頭結尾同一張)→ 照常 rc0", rs.returncode == 0, (rs.returncode, rs.stderr[-300:]))
+        # run 檔:不分片時同名舊檔合進來(先跑的那批不被子集蓋掉),紅的那幾支記在 failed(r3 通才席)
+        run_file.unlink()
+        _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "-k", "t_zzdur_ok"], capture_output=True, text=True, timeout=120, env=env)
+        _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "-k", "t_zzdur_red"], capture_output=True, text=True, timeout=120, env=env)
+        rd = _j.loads(run_file.read_text(encoding="utf-8")) if run_file.is_file() else {}
+        check("不分片跑兩次不同子集:兩次的秒數都留著", {"t_zzdur_ok", "t_zzdur_red"} <= set(rd.get("tests", {})), rd)
+        check("run 檔記下紅的那幾支", rd.get("failed") == ["t_zzdur_red"], rd.get("failed"))
+        # 執行器寫 run 檔不跟著固定暫存名的符號連結寫(r3 通才席;快取用同一支寫法)
+        victim = box / "victim.txt"
+        victim.write_text("原樣", encoding="utf-8")
+        (box / ".lumos" / "test-durations-run.json.lumos-tmp").symlink_to(victim)
+        (box / ".lumos" / "test-cache.json.lumos-tmp").symlink_to(victim)
+        _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "-k", "t_zzdur_ok"], capture_output=True, text=True, timeout=120, env=env)
+        check("執行器寫快取與 run 檔不跟著固定暫存名的符號連結寫", victim.read_text(encoding="utf-8") == "原樣", victim.read_text(encoding="utf-8")[:80])
+        check("★前置★ 現場成立:那次執行器真的有寫 run 檔", "t_zzdur_ok" in _j.loads(run_file.read_text(encoding="utf-8"))["tests"], "")
+        # 主程式載不進來(不在、語法錯):分片乾淨擋下 rc2,不丟堆疊(r3 正確性、邊界輸入席)
+        (box / "scripts" / "lumos").write_text("def broken(:\n", encoding="utf-8")
+        rs = _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "--shard", "1/2", "--list"], capture_output=True, text=True, timeout=120)
+        check("主程式語法錯:分片 rc2、說明載不進來、不丟堆疊", rs.returncode == 2 and "載不進來" in rs.stderr and "Traceback" not in rs.stderr, (rs.returncode, rs.stderr[-300:]))
+        (box / "scripts" / "lumos").unlink()
+        rs = _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "--shard", "1/2", "--list"], capture_output=True, text=True, timeout=120)
+        check("主程式不在:分片 rc2、說明載不進來、不丟堆疊", rs.returncode == 2 and "載不進來" in rs.stderr and "Traceback" not in rs.stderr, (rs.returncode, rs.stderr[-300:]))
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+    print("  ✓ t_test_durations_refresh")
+
+
+def t_ci_yml_speed_shape():
+    """[推送與CI提速 S4]ci.yml 有 concurrency:PR 用編號分組且取消舊的,推到 main 用提交編號分組不取消;shards 印每份耗時。"""
+    y = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    top = "\n".join(l for l in y.split("\njobs:", 1)[0].splitlines() if not l.lstrip().startswith("#"))   # 註解行不算(r3 合約圖譜席)
+    check("ci.yml 頂層有 concurrency", "\nconcurrency:" in top, top[-400:])
+    check("concurrency 群組:PR 用編號、推送用提交編號", "github.event.pull_request.number || github.sha" in top, top[-400:])
+    check("只有 PR 事件取消進行中的工作", "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in top, top[-400:])
+    shards = y.split("\n  shards:", 1)[1].split("\n  gates:", 1)[0]
+    code = [l for l in shards.splitlines() if not l.lstrip().startswith("#")]   # 註解裡也有「份耗時」字樣,只看指令行(r1 合約圖譜席)
+    run = [l for l in code if "test_lumos.py --shard" in l]
+    check("★前置★ 現場成立:找得到跑分片的那一行", len(run) == 1, run)
+    line = run[0] if run else ""
+    check("shards 每一份開頭印開始時間", 'echo "第 $i 份開始' in line, line)
+    check("印各份日誌時先撈出開始時間那行(尾端 25 行看不到)", 'grep -m1 "份開始" "/tmp/shard-$i.log"' in "\n".join(code), "")
+    check("shards 每一份結尾印耗時", 'echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"' in line, line)
+    check("測試紅了也印耗時:子殼層先 set +e(預設 bash -e 會跳過後面)", line.lstrip().startswith("( set +e;"), line)
+    # 真的跑一次:把跑測試那一段換成會紅/會綠的指令,照 Actions 預設的 bash -e 跑,外層要收到同一個離開碼
+    # (r2 合約圖譜席:拿掉子殼層結尾的 exit $rc,紅的分片會被吞成綠,只比字串的斷言抓不到)
+    import subprocess as _sp, tempfile as _tf, shutil as _sh
+    wait_line = [l for l in code if "wait" in l and "jobs -p" in l]
+    check("★前置★ 現場成立:找得到收各份離開碼的那一行", len(wait_line) == 1, wait_line)
+    d = _tf.mkdtemp(prefix="gctl-ciyml-")
+    try:
+        for want, cmd in ((1, "false"), (0, "true")):
+            body = line.strip().replace('python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"', cmd).replace('"/tmp/shard-$i.log"', f'"{d}/s$i.log"')
+            script = f"set -u\nrc=0\nSHARD_TOTAL=1\nfor i in 1; do\n{body}\ndone\n{wait_line[0].strip() if wait_line else ''}\necho \"outer=$rc\"\n"
+            r = _sp.run(["bash", "-e", "-c", script], capture_output=True, text=True, timeout=30)
+            log = Path(d, "s1.log").read_text(encoding="utf-8") if Path(d, "s1.log").exists() else ""
+            check(f"子殼層裡測試{'紅' if want else '綠'}:外層收到 {want}、日誌有開始時間與耗時",
+                  f"outer={want}" in r.stdout and "份開始" in log and "份耗時" in log, (r.stdout, r.stderr[-200:], log))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+    print("  ✓ t_ci_yml_speed_shape")
 
 
 def t_shard_partition_survives_ff_and_seed():
@@ -38815,6 +39221,65 @@ TEST_TIMEOUT_SEC = int(_os_timeout.environ.get("LUMOS_TEST_TIMEOUT", "180"))
 # 上限要對「現在最慢那支」有足夠餘裕,否則慢一點的機器(CI)會假紅,
 # 然後下一步就是有人把 LUMOS_TEST_TIMEOUT 設 0 繞過——閘變裝飾。
 SLOWEST = []
+_DURATIONS = {}          # 這一輪每支測試的實測秒數(過、紅、逾時、例外都記;跳過的不記),跑完寫給耗時表刷新用
+_DURATION_FLOOR = 0.05   # 權重下限:一堆 0 秒的測試不能全擠進同一份(推送與CI提速 r1 邊界失效席)
+
+
+def _durations_table_path():
+    # 路徑與讀表規則只在 scripts/lumos 一份(本檔慣例:_load_lumos_inproc 讀活的常數,不抄第二份;代碼審 r2 架構對齊席)
+    return Path(GRAPHCTL).resolve().parent.parent / _load_lumos_inproc()._TEST_DURATIONS_REL
+
+
+def _load_durations_table():
+    """讀耗時表,回 (表, 雜湊前 8 碼);沒有表回 (None, None);讀不懂丟 ValueError(訊息帶表的路徑)。規則在 scripts/lumos 的
+    _read_durations_table,刷新指令用的是同一支。同一個提交的每一份讀到的是同一個檔,所以格式不對時每一份都會擋——不各自退回輪流分,
+    免得混用兩種分法、聯集出錯。主程式載不進來(不在、語法錯)也轉成 ValueError,讓呼叫端照樣乾淨擋下(代碼審 r3 正確性、邊界輸入席)。"""
+    try:
+        path = _durations_table_path()
+        read = _load_lumos_inproc()._read_durations_table
+    except Exception as e:   # 載入主程式丟什麼都有可能(FileNotFoundError、SyntaxError、AttributeError…)
+        raise ValueError(f"讀表規則在 scripts/lumos,載不進來:{type(e).__name__}: {e}") from e
+    try:
+        return read(path)
+    except ValueError as e:
+        raise ValueError(f"{path}:{e}") from e
+
+
+def _write_text_atomic(path, text):
+    """寫暫存檔再原子換名;暫存檔名每次不同、獨佔建立,所以放在固定位置的符號連結不會被跟著寫(代碼審 r3 通才席:
+    原本快取與 run 檔都用固定的 .lumos-tmp 名稱)。失敗時清掉暫存檔、把 OSError 往外丟。"""
+    import os as _ow, uuid as _uw
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{_ow.getpid()}-{_uw.uuid4().hex[:8]}.lumos-tmp")
+    fd = _ow.open(str(tmp), _ow.O_WRONLY | _ow.O_CREAT | _ow.O_EXCL, 0o666)
+    try:
+        with _ow.fdopen(fd, "wb") as fh:
+            fh.write(text.encode("utf-8"))
+        _ow.replace(tmp, path)
+    except BaseException:
+        try:
+            _ow.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _shard_by_duration(names, table, n):
+    """照耗時把 names 分成 n 份:權重 = 表裡秒數(沒有的用全表中位數,下限 0.05 秒),由大到小、同權重照名字,
+    逐支丟給總權重最小的一份(同總權重取支數少的、再取編號小的)。同輸入同結果,各份聯集等於全部、不重複。
+    份數比測試多時,多出來的份一定是空的:只回傳前 min(n, len(names)) 份,呼叫端取不到的編號就是空片
+    (代碼審 r1、r2 邊界輸入與併發資源席:原本照份數配置,打錯成 1/100000000 要 7.7GB)。"""
+    import statistics as _sd
+    med = _sd.median(table.values())
+    w = {nm: max(float(table.get(nm, med)), _DURATION_FLOOR) for nm in names}
+    live = min(n, len(names))
+    loads, counts, buckets = [0.0] * live, [0] * live, [[] for _ in range(live)]
+    for nm in sorted(names, key=lambda x: (-w[x], x)):
+        k = min(range(live), key=lambda j: (loads[j], counts[j], j))
+        loads[k] += w[nm]
+        counts[k] += 1
+        buckets[k].append(nm)
+    return buckets
 SKIPPED_NAMES = []   # r1 代碼審折入:跳過只記總數的話,「換掉哪一支」看不出來;把名字也留著
 # 天生就慢的測試(輪詢 CI 這種)給自己的上限。
 # ★不要為了遷就最慢那支把全域上限拉高★——那會讓真的卡死也要等到那個上限才被打斷,
@@ -39275,7 +39740,21 @@ def main():
             if _n < 1 or not (1 <= _i <= _n):
                 print(f"擋下:--shard {_args.shard} 不合理(第幾片要在 1 到共幾片之間)", file=sys.stderr)
                 return 2
-            tests = [t for k, t in enumerate(tests) if k % _n == _i - 1]
+            try:
+                _table, _thash = _load_durations_table()
+            except (OSError, ValueError) as _e:
+                print(f"擋下:耗時表讀不懂({_e});修好或刪掉它(刪掉就照名字輪流分)",
+                      file=sys.stderr)
+                return 2
+            _total = len(tests)
+            if _table is None:
+                print("沒有耗時表,照名字輪流分")
+                tests = [t for k, t in enumerate(tests) if k % _n == _i - 1]
+            else:
+                _buckets = _shard_by_duration([t.__name__ for t in tests], _table, _n)
+                _mine = set(_buckets[_i - 1]) if _i <= len(_buckets) else set()
+                tests = [t for t in tests if t.__name__ in _mine]
+                print(f"分法:耗時表 {_thash},共 {_total} 支,這份分到 {len(tests)} 支")
             print(f"這是第 {_i} 片(共 {_n} 片),分到 {len(tests)} 支")
             if not tests and _args.suite:
                 # 子集配分片(r2 正確性席 blocker):關鍵字子集常常只選中一兩支,切 4 片必有空片;子集整體非空(上面 rc3 那關已過),
@@ -39347,6 +39826,7 @@ def main():
         _failed_names = []
         for t in tests:
             _round_fail_before = FAIL
+            _dur_start = _time_slow.time()
             try:
                 # ★單一處的自動規則,不往每支測試塞一行★:`t_slim_*` 整族驗的是「交付包」
                 # (slim/ 底下的產物 + slim-gen/slim-scan),那是來源 repo 專用。用前綴在
@@ -39383,6 +39863,8 @@ def main():
             except Exception as e:
                 FAIL += 1
                 print(f"  ✗ {t.__name__} EXCEPTION: {e}")
+            if t.__name__ not in SKIPPED_NAMES:
+                _DURATIONS[t.__name__] = round(_time_slow.time() - _dur_start, 3)
             # 這一支有沒有紅,決定要不要進「上次紅過」的快取,以及 -x 要不要停在這裡
             if FAIL > _round_fail_before:
                 _failed_names.append(t.__name__)
@@ -39396,17 +39878,30 @@ def main():
         # ★r1 折入:原子寫入★——沿用專案既有的 .lumos/*.json 寫法(寫暫存檔再 rename),
         #   不是直接覆蓋;分片時各片各寫各的檔名,不會互相蓋掉。
         if _is_src:
+            import json as _jc2
             try:
-                import json as _jc2, os as _osc
-                _cache.parent.mkdir(parents=True, exist_ok=True)
-                _tmpc = _cache.with_suffix(_cache.suffix + ".lumos-tmp")
-                _tmpc.write_text(_jc2.dumps({"failed": _failed_names}, ensure_ascii=False),
-                                 encoding="utf-8")
-                _osc.replace(_tmpc, _cache)
+                _write_text_atomic(_cache, _jc2.dumps({"failed": _failed_names}, ensure_ascii=False))
             except OSError:
+                pass
+            # 各支實測秒數:給 `lumos test-durations refresh` 合進耗時表(推送與CI提速 S3);同快取的位置與條件
+            if _DURATIONS:
+                _dur = _cache_dir / (f"test-durations-run-shard{_args.shard.replace('/', 'of')}.json"
+                                     if _args.shard else "test-durations-run.json")
+                # 同名的舊 run 檔先合進來:不分片時每次都寫同一個檔,跑一小段子集不能把先前全套量到的蓋掉(代碼審 r3 通才席)
+                _old_tests, _old_failed = {}, []
                 try:
-                    _tmpc.unlink()
-                except (OSError, NameError):
+                    _od = _jc2.loads(_dur.read_bytes())
+                    if isinstance(_od, dict) and isinstance(_od.get("tests"), dict):
+                        _old_tests = _od["tests"]
+                        _old_failed = [x for x in _od.get("failed") or [] if isinstance(x, str)]
+                except (OSError, ValueError, RecursionError):
+                    pass
+                _fail_now = set(_failed_names)
+                _merged_failed = sorted({x for x in _old_failed if x not in _DURATIONS} | (_fail_now & set(_DURATIONS)))
+                try:
+                    _write_text_atomic(_dur, _jc2.dumps({"version": 1, "tests": {**_old_tests, **_DURATIONS},
+                                                         "failed": _merged_failed}, ensure_ascii=False, sort_keys=True))
+                except OSError:
                     pass
         if SLOWEST:
             top = sorted(SLOWEST, reverse=True)[:5]
@@ -39453,6 +39948,17 @@ def main():
                       f"或設 LUMOSEXPECTED_SKIP_MAX=<數字> 暫時放行。")
             else:
                 print(f"  (這台不是來源 repo 或是 Windows,跳過本來就會多,所以只記不判紅)")
+        if _args.shard:
+            # ★跑完再讀一次耗時表,跟開頭讀到的比★(代碼審 r1 併發資源席):各片各自讀表,有人在各片啟動之間換了表
+            # (刷新、切分支、git pull),各片就照不同的表分,聯集不再等於全部、卻全綠。先啟動的那片結尾一定讀到新表,在這裡擋下。
+            try:
+                _thash_end = _load_durations_table()[1]
+            except (OSError, ValueError):
+                _thash_end = "讀不懂"
+            if _thash_end != _thash:
+                print(f"擋下:這一片跑的期間耗時表換了(開頭 {_thash or '沒有表'}、結尾 {_thash_end or '沒有表'});"
+                      f"各片可能照不同的表分,聯集不保證等於全部,重跑一次", file=sys.stderr)
+                return 2
         return 1 if FAIL else 0
     finally:
         # ★收尾一定要跑到★(r1 外家席抓到):原本寫在 return 之前,所以 `-k` 打錯字的早退、
@@ -68051,6 +68557,9 @@ def t_push_summary_anchor_note_and_separators():
         r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "1", "--refs", "1",
                     "--repo", str(d)], capture_output=True, text=True)
         check("①沒有 anchor 那筆 → 不印提示句", r.returncode == 0 and "裁判檔沒簽名" not in r.stderr, r.stderr[-400:])
+        # 行程內呼叫也回 0(不是 None):sys.exit(None) 也是 0,只看離開碼抓不到函式結尾的 return 被吃掉(推送與CI提速 代碼審 r1 通才席)
+        rv = _load_lumos_module().cmd_push_summary(str(d), str(bf), 1, 1)
+        check("①行程內呼叫 cmd_push_summary 回 0", rv == 0, repr(rv))
         for name, ch in (("U+2028", " "), ("U+2029", " "), ("U+0085", "\x85")):
             bf.write_bytes(f"home\trefs/heads/a{ch}b\t沒家\ndoctor\t-\t健檢\n".encode("utf-8"))
             r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "2",

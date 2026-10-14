@@ -29391,7 +29391,8 @@ def _strip_string_literals(code):
 # 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
 # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
 # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
-_BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+_TEST_DURATIONS_REL = "governance/test-durations.json"   # 分片用的測試耗時表:資料,表錯只會分得不平均、不會漏跑(推送與CI提速)
+_BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
                       # 本機帳(被忽略)萬一被 git add -A 提交,也只是簿記、不讓代碼審留痕失效(治理帳例行紀錄分流_計劃)
                       "docs/" + GOV_LOCAL_LOG_NAME, "docs/" + USAGE_LOCAL_LOG_NAME,
                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
@@ -49438,6 +49439,181 @@ def cmd_push_summary(repo, blocks_file, count, refs):
     return 0
 
 
+def _duration_ok(v):
+    """耗時表的一筆秒數合不合法:非負的有限數字;布林不算,轉不成浮點的超大整數也不算。
+    測試執行器透過 _read_durations_table 用的也是這一支(刷新寫得出來的表,執行器一定讀得進)。"""
+    import math
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(v)) and v >= 0
+    except OverflowError:
+        return False
+
+
+def _read_durations_table(path):
+    """讀測試耗時表:回 (tests, 雜湊前 8 碼);路徑不存在回 (None, None);存在但讀不進、不是一般檔(資料夾、斷掉的符號連結)、
+    格式不對 → ValueError 說明哪裡不對。格式 {"version": 1, "tests": {測試名: 非負有限秒數}},tests 不能是空的。
+    測試執行器分片與 test-durations refresh 共用這一支(代碼審 r2 架構對齊席:原本兩邊各寫一套、嚴格度不同)。"""
+    import hashlib
+    p = Path(path)
+    if not os.path.lexists(p):
+        return None, None
+    if not p.is_file():
+        raise ValueError("不是一般檔")
+    try:
+        raw = p.read_bytes()
+    except OSError as e:
+        raise ValueError(f"讀不進來:{e}") from e
+    try:
+        d = json.loads(raw)
+    except (ValueError, RecursionError) as e:
+        raise ValueError("不是合法的 JSON") from e
+    if not isinstance(d, dict) or not isinstance(d.get("tests"), dict) or not d["tests"]:
+        raise ValueError("要是 {\"version\": 1, \"tests\": {測試名: 秒數}} 而且 tests 不是空的")
+    for k, v in d["tests"].items():
+        if not _duration_ok(v):
+            raise ValueError(f"{k} 的秒數不是非負的有限數字:{v!r}")
+    return d["tests"], hashlib.sha256(raw).hexdigest()[:8]
+
+
+def cmd_test_durations_refresh(repo):
+    """lumos test-durations refresh:把測試執行器寫在 .lumos/test-durations-run*.json 的各支實測秒數合進
+    governance/test-durations.json(分片照耗時分的依據,Projects/推送與CI提速_計劃 S3)。同一支取檔案時間最新的那筆
+    (存到小數三位),沒跑到的保留舊值,寫完刪掉那些 run 檔(讀完之後又被改寫的留給下次);run 檔讀不懂的略過(照樣刪),
+    裡面不合法的秒數那一筆不收;run 檔標成紅的那幾支,只在比舊值大時才收(紅或逾時只能讓一支看起來更慢,環境壞掉時一堆瞬間紅
+    不能把表拉小;代碼審 r3 通才席)。舊表照執行器同一支 _read_durations_table 讀,讀不懂 → rc2、不覆蓋(要重建就先刪掉它)。
+    run 檔是執行器寫在它自己所在 repo 的 .lumos/,這裡讀的是 git 根(或 --repo)的 .lumos/,兩者在來源 repo 是同一個地方。
+    同一時間只准一個刷新(.lumos/ 裡的獨佔鎖檔;兩個同時跑,後寫的會蓋掉先寫的那份合併結果)。
+    沒有 run 檔、另一個刷新正在跑、沒給 --repo 又不在 git 專案 → rc2;寫不進去 → rc1。耗時表在簿記檔清單裡,刷新它不會讓代碼審留痕失效。"""
+    root = _note_audit_root(repo)
+    if root is None:
+        print("擋下:這裡不是 git 專案", file=sys.stderr)
+        return 2
+    if not (Path(root) / ".lumos").is_dir():   # 先看有沒有東西可刷,不為了拿鎖平白建出 .lumos/
+        print("擋下:.lumos/ 裡沒有測試執行器留下的實測秒數(test-durations-run*.json);先跑一次測試", file=sys.stderr)
+        return 2
+    lock = Path(root) / ".lumos" / "test-durations-refresh.lock"
+    ident = []
+    try:
+        got_lock = _excl_lock_try(lock, 0, identity_out=ident)
+    except OSError as e:
+        print(f"擋下:建不了刷新鎖 {lock}:{e}", file=sys.stderr)
+        return 2
+    if not got_lock:
+        print(f"擋下:另一個刷新正在跑(鎖檔 {lock});等它跑完再刷新。確定沒有在跑(例如上次被中斷)就刪掉那個鎖檔", file=sys.stderr)
+        return 2
+    try:
+        return _test_durations_refresh_locked(root)
+    finally:
+        try:
+            if ident and _excl_lock_is_mine(lock, ident[0]):
+                lock.unlink()
+        except OSError:
+            pass
+
+
+def _durations_list_runs(root):
+    """列 .lumos/ 裡的 run 檔,照檔案時間由舊到新(同時間比檔名)。列出之後才消失的、斷掉的符號連結略過,
+    不讓排序崩潰(代碼審 r2 併發資源席);斷掉的連結會一直留著,講一聲(r3 邊界輸入席)。"""
+    stamped = []
+    for p in (Path(root) / ".lumos").glob("test-durations-run*.json"):
+        try:
+            stamped.append((p.stat().st_mtime, p.name, p))
+        except OSError:
+            if p.is_symlink():
+                print(f"  略過斷掉的符號連結 {p.name}(指向的檔不在;不要了就刪掉它)", file=sys.stderr)
+    return [p for _, _, p in sorted(stamped)]
+
+
+def _durations_read_run(p):
+    """讀一份 run 檔,回 (tests, 紅的那幾支);讀不懂回 None。"""
+    try:
+        d = json.loads(p.read_bytes())
+        tests = d["tests"]
+        if not isinstance(tests, dict):
+            raise TypeError
+        failed = d.get("failed")
+    except (OSError, ValueError, RecursionError, TypeError, KeyError, AttributeError):
+        return None
+    return tests, set(x for x in failed if isinstance(x, str)) if isinstance(failed, list) else set()
+
+
+def _durations_merge_runs(runs, table):
+    """把 run 檔依序合進 table(後面的蓋前面的)。回 (合進幾筆, 讀之前記下的檔案狀態)。
+    不合法的秒數不收;標成紅的那幾支只在比舊值大時才收(代碼審 r3 通才席)。"""
+    got, seen = 0, {}
+    for p in runs:
+        try:
+            st = p.stat()
+            seen[p] = (st.st_mtime_ns, st.st_size)   # 刪之前對一次:讀完之後被改寫的留給下次(代碼審 r1 併發資源席)
+        except OSError:
+            pass
+        parsed = _durations_read_run(p)
+        if parsed is None:
+            print(f"  略過讀不懂的 {p.name}", file=sys.stderr)
+            continue
+        tests, red = parsed
+        for k, v in tests.items():
+            if not _duration_ok(v):
+                continue
+            v = round(float(v), 3)
+            if k in red and k in table and v <= table[k]:
+                continue
+            table[k] = v
+            got += 1
+    return got, seen
+
+
+def _durations_delete_runs(runs, seen):
+    """刪掉讀過的 run 檔;讀完之後又被改寫的留著。回 (留著幾個, 刪掉幾個, 刪不掉的檔名)。"""
+    kept, removed, stuck = 0, 0, []
+    for p in runs:
+        try:
+            st = p.stat()
+            if p in seen and (st.st_mtime_ns, st.st_size) != seen[p]:
+                kept += 1
+                continue
+            p.unlink()
+            removed += 1
+        except OSError:
+            stuck.append(p.name)
+    return kept, removed, stuck
+
+
+def _test_durations_refresh_locked(root):
+    runs = _durations_list_runs(root)
+    if not runs:
+        print("擋下:.lumos/ 裡沒有測試執行器留下的實測秒數(test-durations-run*.json);先跑一次測試", file=sys.stderr)
+        return 2
+    table_path = Path(root) / _TEST_DURATIONS_REL
+    try:
+        tests = _read_durations_table(table_path)[0]
+    except ValueError as e:
+        print(f"擋下:舊耗時表 {_TEST_DURATIONS_REL} 讀不懂({e}),這次不覆蓋;修好它,或刪掉它再刷新(刪掉就只用這次的實測重建)",
+              file=sys.stderr)
+        return 2
+    table = dict(tests or {})
+    before = len(table)
+    got, seen = _durations_merge_runs(runs, table)
+    if not table:
+        print("擋下:run 檔裡一筆可用的秒數都沒有", file=sys.stderr)
+        return 2
+    try:
+        table_path.parent.mkdir(parents=True, exist_ok=True)
+        _write_lf(table_path, json.dumps({"version": 1, "tests": dict(sorted(table.items()))}, ensure_ascii=False, indent=1) + "\n")
+    except OSError as e:
+        print(f"擋下:寫不進耗時表:{e}", file=sys.stderr)
+        return 1
+    kept, removed, stuck = _durations_delete_runs(runs, seen)
+    if kept:
+        print(f"  有 {kept} 個 run 檔在讀完之後又被改寫,留著給下次刷新", file=sys.stderr)
+    if stuck:
+        print(f"  有 {len(stuck)} 個刪不掉,留在原地:{'、'.join(stuck[:5])}", file=sys.stderr)
+    print(f"✓ 耗時表更新:{_TEST_DURATIONS_REL}(原有 {before} 支 → 現在 {len(table)} 支;這次合進 {got} 筆,讀完刪掉 {removed} 個 run 檔)")
+    return 0
+
+
 def cmd_push_range(repo, diff_range, push_remote, pushed_ref):
     """lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>:印 _push_range_start 算出的範圍一行,
     給推送前掛鉤在新分支首推時用(Projects/新分支首推會擋的閘改用真起點_計劃)。頂端已在主線 → `頂端..頂端`;判不了或起點是空樹 →
@@ -54718,6 +54894,7 @@ HELP_WHEN = {
     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審);--stage <階段> 只列計劃那一階段的需求風險面。",
     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
     "push-summary": "推送前掛鉤在全套測試之前有擋下時叫:印這次推送全部擋下原因的彙總(幾筆、幾道閘、逐筆一行),記一筆治理帳;手動不用叫。",
+    "test-durations": "CI 各份測試又不平均時、或每月一次:把測試執行器記下的實測秒數合進耗時表(分片照耗時分的依據)。",
     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
     "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
     "updated-sync": "doctor 說有筆記的 updated 落後 git 最後改動時:lumos updated-sync --stale 一次改成今天(或給節點名只改那幾篇);先看加 --dry-run。",
@@ -54752,6 +54929,7 @@ HELP_WHEN = {
     "note-audit record": "判定者交回報告後:照信任方向逐行收進判定檔(重的照收、輕的要來源對、上下文沒變才收)。",
     "note-audit check": "推之前自己先查一次:這段推送新寫的筆記行是不是都被已提交的判定涵蓋了(沒有就 rc1)。",
     "note-audit skip": "真的來不及審時:把從沒被判過的行記成略過(要理由、會留帳;判過推得出的不能略過)。",
+    "test-durations refresh": "CI 各份測試又不平均時、或每月一次:把 .lumos/test-durations-run*.json 的實測秒數合進 governance/test-durations.json,讀完刪掉。",
     "note-audit reread-prepare": "推送前回頭重讀守檔筆記:這次改到的程式檔的家、而且這次也改過的筆記,每篇出一份項目檔給判定者問「哪幾行被這次改動弄得不成立了」。",
     "note-audit reread-record": "判定者交回報告後:把點出的行記成對照紀錄(governance/reread-verdicts/,提交才算)。",
     "note-audit reread-check": "推送前掛鉤與 CI 呼叫:還沒對照過這一版程式的守檔筆記、判定點出又沒處理的規則類條目;帶 --gate(掛鉤)時照 note_reread.gate 擋,不帶(CI、手動)只印、回 0。",
@@ -55658,6 +55836,10 @@ def main():
     psm.add_argument("--count", dest="psm_count", type=int, required=True, metavar="筆數")
     psm.add_argument("--refs", dest="psm_refs", type=int, default=1, metavar="推送行數")
     psm.add_argument("--repo", dest="psm_repo", default=None)
+    tdu = sub.add_parser("test-durations", help="測試耗時表:refresh 把執行器記下的各支實測秒數合進 governance/test-durations.json(分片照耗時分)")
+    tdusub = tdu.add_subparsers(dest="tducmd", required=True)
+    tdur = tdusub.add_parser("refresh", help="合併 .lumos/test-durations-run*.json 進耗時表,讀完刪掉")
+    tdur.add_argument("--repo", dest="tdu_repo", default=None)
     prg = sub.add_parser("push-range", help="推送前掛鉤用:印這次推送真正的新改動範圍(跟主線的分岔點..頂端)")
     prg.add_argument("--diff", dest="prg_diff", required=True, metavar="舊值..頂端")
     prg.add_argument("--push-remote", dest="prg_remote", default=None, metavar="遠端名")
@@ -56128,6 +56310,8 @@ def main():
         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
     if args.cmd == "push-summary":
         return cmd_push_summary(repo=args.psm_repo, blocks_file=args.psm_file, count=args.psm_count, refs=args.psm_refs)
+    if args.cmd == "test-durations" and args.tducmd == "refresh":
+        return cmd_test_durations_refresh(repo=args.tdu_repo)
     if args.cmd == "push-range":
         return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
                               pushed_ref=args.prg_ref)

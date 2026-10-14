@@ -11,6 +11,12 @@ on:
 #   工作之間不共用機器:每個工作各自 checkout(完整歷史)、補本機 main、裝 Python。
 permissions:
   contents: read
+# 2026-10-14(Projects/推送與CI提速_計劃):同一個 PR 有新推送就取消舊的 CI;推到 main 每個提交各自一組。
+# 群組鍵 PR 用編號(不用分支名,不同來源的同名分支才不會互相取消)、推送用提交編號——GitHub 會把同組「排隊中」的
+# 舊 run 換成新的(cancel-in-progress 只管進行中的),主線若共用一組,連推時中間那個提交會一次 CI 都沒跑。
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   prep:
     runs-on: ubuntu-latest
@@ -113,7 +119,9 @@ jobs:
           set -u
           rc=0
           for i in $MY_SHARDS; do
-            python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL" > "/tmp/shard-$i.log" 2>&1 &
+            # 每份印開始時間與「第 i 份耗時 N 秒」:看分片平不平均用;撤除條件量的是每台(兩份)的耗時,看這個工作的總時間(推送與CI提速 RETIRE-IF)
+            # 子殼層裡先 set +e:預設 bash -e 會在測試紅時直接結束子殼層,紅的那份就印不出耗時(代碼審 r1 通才、合約圖譜席)
+            ( set +e; s=$(date +%s); echo "第 $i 份開始 $(date -u +%H:%M:%S)"; python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"; rc=$?; echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"; exit $rc ) > "/tmp/shard-$i.log" 2>&1 &
           done
           for job in $(jobs -p); do wait "$job" || rc=1; done
           for i in $MY_SHARDS; do
@@ -136,6 +144,7 @@ jobs:
               done || true
               echo "--- 以下是該片尾端 ---"
             fi
+            grep -m1 "份開始" "/tmp/shard-$i.log" || true   # 開始時間在日誌最前面,尾端 25 行看不到(代碼審 r3 合約圖譜席)
             tail -25 "/tmp/shard-$i.log"
           done
           exit $rc

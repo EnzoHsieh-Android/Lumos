@@ -1,0 +1,1230 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2d24dfb4..15df1240 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -4,20 +4,26 @@ name: CI
+ on:
+   push:
+     branches: [main]
+   pull_request:
+ 
+ # 2026-10-06 拆成三個工作(Projects/CI加速_計劃):全套在 CI 一台機器切 4 片已跑到 32–38.5 分、逼近 45 分上限——
+ #   prep(編譯類檢查、決定範圍、純文件子集)→ shards(全套分給多台同時跑)與 gates(後盾)同時跑。
+ #   工作之間不共用機器:每個工作各自 checkout(完整歷史)、補本機 main、裝 Python。
+ permissions:
+   contents: read
++# 2026-10-14(Projects/推送與CI提速_計劃):同一個 PR 有新推送就取消舊的 CI;推到 main 每個提交各自一組。
++# 群組鍵 PR 用編號(不用分支名,不同來源的同名分支才不會互相取消)、推送用提交編號——GitHub 會把同組「排隊中」的
++# 舊 run 換成新的(cancel-in-progress 只管進行中的),主線若共用一組,連推時中間那個提交會一次 CI 都沒跑。
++concurrency:
++  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
++  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+ jobs:
+   prep:
+     runs-on: ubuntu-latest
+     timeout-minutes: 15
+     outputs:
+       suite: ${{ steps.suite.outputs.suite }}
+       graph: ${{ steps.suite.outputs.graph }}
+     steps:
+       - uses: actions/checkout@v4
+         with:
+@@ -106,21 +112,23 @@ jobs:
+       - uses: actions/setup-python@v5
+         with:
+           python-version: "3.14"   # 2026-09-29 工具最低版本改 3.14(Projects/最低Python版本改3.14_計劃)
+       - name: 全套的這幾份(${{ matrix.shards }} / 共 ${{ env.SHARD_TOTAL }} 份)
+         env:
+           MY_SHARDS: ${{ matrix.shards }}
+         run: |
+           set -u
+           rc=0
+           for i in $MY_SHARDS; do
+-            python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL" > "/tmp/shard-$i.log" 2>&1 &
++            # 每份印開始時間與「第 i 份耗時 N 秒」:看分片平不平均用;撤除條件量的是每台(兩份)的耗時,看這個工作的總時間(推送與CI提速 RETIRE-IF)
++            # 子殼層裡先 set +e:預設 bash -e 會在測試紅時直接結束子殼層,紅的那份就印不出耗時(代碼審 r1 通才、合約圖譜席)
++            ( set +e; s=$(date +%s); echo "第 $i 份開始 $(date -u +%H:%M:%S)"; python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"; rc=$?; echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"; exit $rc ) > "/tmp/shard-$i.log" 2>&1 &
+           done
+           for job in $(jobs -p); do wait "$job" || rc=1; done
+           for i in $MY_SHARDS; do
+             echo "===== 第 $i 片 ====="
+             # 紅的時候先把失敗那幾行撈出來——tail 只看得到尾巴,而紅的那支通常在中間,
+             # 以前紅了要靠猜是哪一支(2026-09-15 實際踩到:CI 紅、本機全綠、查不出名字)
+             if grep -qE "^  ✗|, [1-9][0-9]* failed" "/tmp/shard-$i.log"; then
+               echo "--- 這一片紅了,以下是失敗的斷言與所在測試 ---"
+               grep -nE "^  ✗|EXCEPTION" "/tmp/shard-$i.log" | tail -40 || true
+               echo "--- 失敗處前後文 ---"
+diff --git a/.gitignore b/.gitignore
+index 1c58b2b0..4c6a90d5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -26,16 +26,17 @@ governance/eval/ablation-lumos-first/
+ # 之後收貨改用 codex exec --output-last-message 直接拿結論,不再存全程。
+ governance/review-reports/**/*.err
+ governance/review-reports/**/*.raw
+ governance/review-reports/**/*-stderr.txt
+ governance/review-reports/**/*.stderr
+ # loop replay --freeze 的暫存檔:正常會被換上位或清掉,舊版擋下時會留下(2026-10-07 修)
+ governance/replay/*/.verdict*.tmp
+ 
+ # 測試 runner 的失敗快取(--ff 用;每輪重寫,不進版控)
+ .lumos/test-cache*.json
++.lumos/test-durations-run*.json
+ governance/runtime/
+ # 推播漏網週跑的零命中查詢字串:agent 當下打的自由文字,只留本機、不進公開 repo(Projects/推播miss量測_計劃 S4)
+ governance/eval/lens-utilization/local/
+ 
+ # 新增告警閘解出來的兩份快照(每次隨機名、跑完即刪;強殺時會留殘骸,下次開跑會清超過一天的)
+ .lumos/lintbase-*/
+diff --git a/ARCHITECTURE.md b/ARCHITECTURE.md
+index 1c220dd8..1d1855fd 100644
+--- a/ARCHITECTURE.md
++++ b/ARCHITECTURE.md
+@@ -98,25 +98,25 @@ flowchart LR
+     end
+ 
+     classDef boot fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
+     classDef upd fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
+     classDef new fill:#3a2a1b,stroke:#dcab3d,color:#fff5e0
+     class BOOT,B1,B2,B3,B4,B5 boot
+     class UPD,U1,U2,U3,U4,U5 upd
+     class NEW,N1,N2,N3,N4 new
+ ```
+ 
+-## 3. CLI 子命令家族 (89 個頂層命令)
++## 3. CLI 子命令家族 (90 個頂層命令)
+ 
+ ```mermaid
+ flowchart TB
+-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 89 個頂層命令)"]
++    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 90 個頂層命令)"]
+ 
+     ROOT --> READ["讀取 / 導航"]
+     ROOT --> HEALTH["巡檢 / 治理"]
+     ROOT --> WRITE["寫入"]
+     ROOT --> GUARD["合約守衛 (guard*)"]
+     ROOT --> LOOP["對抗審計 loop"]
+     ROOT --> INTEG["完整性 / 影響"]
+     ROOT --> SARIF["社群 linter 橋"]
+     ROOT --> CI["CI 回流觀測"]
+     ROOT --> LIFE["安裝 / 生命週期"]
+@@ -132,21 +132,21 @@ flowchart TB
+     LIFE --> L["install · uninstall · update<br/>bootstrap · init · deinit · teardown"]
+ 
+     classDef root fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
+     classDef cat fill:#2a3142,stroke:#5a9bd6,color:#e0f0ff
+     classDef leaf fill:#222,stroke:#666,color:#ddd
+     class ROOT root
+     class READ,HEALTH,WRITE,GUARD,LOOP,INTEG,SARIF,CI,LIFE cat
+     class R,H,W,G,LP,I,ST,C,L leaf
+ ```
+ 
+-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 89 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
++> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 90 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+ 
+ ## 4. 筆記不腐爛,靠的是五段接力
+ 
+ **工作進行中,系統在四個時點主動把東西推到你眼前**(這些只提醒,不擋):(更正 2026-10-12:「只提醒不擋」對前三個時點成立;第四個收工時點會擋一次,同一個會談第二次才放行,跟下面清單那句一致,這句以清單為準)
+ 
+ - 一進場:提醒程式碼為主、筆記補脈絡
+ - 改檔之前:「你要改的這個檔會波及哪幾篇」
+ - 派審查員之前:把牽連到的規則和事故自動附上去
+ - 收工時:改了程式卻沒動筆記,擋一次要你補或說明
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Projects/推送與CI提速_計劃.md b/docs/lumos-toolchain-knowledge/Projects/推送與CI提速_計劃.md
+new file mode 100644
+index 00000000..7514013f
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/推送與CI提速_計劃.md
+@@ -0,0 +1,83 @@
++---
++type: project
++status: doing
++created: 2026-10-14
++updated: 2026-10-14
++tags:
++  - type/project
++  - status/doing
++  - scope/guards-gates
++related:
++  - "[[Projects/CI加速_計劃]]"
++  - "[[Projects/世界解重新註解2026-10_總覽_調研]]"
++lands_in:
++  - Systems/bound-tests-gate
++  - Systems/測試假綠形態
++---
++# 推送與CI提速_計劃
++
++> 白話:一個功能從推送到能合併常要 25–40 分鐘。等最久的是本機推送前的全套(5–10 分)和 PR 的 CI(約 12 分);CI 的 16 份測試照名字輪流分、不看耗時,最慢的機器要等到 12.4–14.3 分。這篇分兩階段:第一階段讓 CI 各份照耗時分平均、同一個 PR 有新推送就取消舊的 CI;第二階段(等另一個會談改完推送前掛鉤)讓推功能分支時本機不跑全套。
++
++PRIOR-ART: 世界上的共識是「便宜的子集擋大多數錯、完整測試每個提交只跑一次」:Google TAP 提交前跑受影響的、提交後跑完整(https://abseil.io/resources/swe-book/html/ch23.html);Meta 預測式選測只跑約三分之一仍抓到 99.9% 有問題的改動(https://engineering.fb.com/2018/11/21/developer-tools/predictive-test-selection/)。依耗時分片同 pytest-split 的做法(一份各測試耗時表、讓每片總耗時接近,https://pypi.org/project/pytest-split/);同 PR 新推送取消舊 CI 用 GitHub 原生的 `concurrency` + `cancel-in-progress`(https://docs.github.com/en/actions/concepts/workflows-and-actions/concurrency)。來源整理見 2026-10-14 兩路調研(Claude 與 Codex 各一份,結論一致)。本 repo 既有的 [[Projects/CI加速_計劃]] 已把全套分到多台機器;這篇在它之上動分法與觸發,不改測試內容。
++
++RETIRE-IF: 依耗時分片上線後連續 20 次全套 CI,各台 shards 機器耗時的最大值與最小值之差,沒有比上線前(抽樣 6.1–14.3 分,差約 8 分)縮小一半以上,就刪掉耗時表、退回照名字輪流分。
++
++## 現況(2026-10-14 量)
++
++- CI(`.github/workflows/ci.yml`)有三個工作:prep(編譯檢查、判這次跑全套還是文件子集)、shards(全套分 16 份給 8 台機器,每台同時跑 2 份)、gates(後盾閘)。最近 300 次:推到 main 206 次、PR 94 次;成功 287 次,整次中位數 12.2 分。抽 4 次成功的 CI,每台 shards 機器跑完兩份要 6.1–14.3 分,最慢的一台每次都在 12.4–14.3 分;差這麼多是因為照名字輪流分、不看耗時。CI 目前只印每台的總時間,每份的時間量不到。
++- 每個功能,改到程式而且不是輕量改動時:本機全套(推送前掛鉤切 4 片,掛鉤提示寫約 4–5 分,實測常到 5–10 分)+ PR 的 CI 約 12 分 + 合併後主線的 CI 約 12 分(主線那次在背景跑,不會讓人等)。只改文件或判成輕量的推送,本機只跑子集。
++
++## 範圍
++
++- 第一階段(這篇交付):①依耗時分片(本機推送前與 CI 共用測試執行器的同一支分片函式);②同一個 PR 有新推送時取消舊的 CI(主線每個提交都跑完,不取消、不取代);③CI 印出每一份的耗時,讓撤除條件量得到。
++- 第二階段(不在這篇交付,另開條款):推功能分支時本機不跑全套。推送前掛鉤正被另一個會談大改,等它合併後再做。
++- 不做:主線略過全套與快轉合併(設計審 r1 三席指出 PR 與主線的 git 環境對不齊、主線排隊中的 CI 會被取代、查詢條件與權限難以寫死;它只省 GitHub 機器時間、不縮短人的等待,使用者 2026-10-14 裁定拿掉);縮小 CI 的測試範圍(要先讓選測器陪跑、證明不漏抓,另案);合併佇列(單人加兩三個會談,搶合併的情況少);快取(零依賴,沒有可快取的建置產物)。
++
++## 做法
++
++- **耗時表**:新檔 `governance/test-durations.json`,格式 `{"version": 1, "tests": {"測試名": 秒數, …}}`,進版控,本機與 CI 讀同一份。放 `governance/`:那裡已有進版控的資料檔(防竄改基準線),而且只改它的推送會被判成文件改動、只跑文件子集;另加進代碼審的簿記檔清單,刷新它不會讓已過的代碼審留痕失效。耗時表錯了只會分得不平均,不會漏跑(見下面的聯集保證),所以可以當資料看。
++- **記錄實測秒數**:測試執行器(`scripts/test_lumos.py`)每支測試跑完都記秒數,不論過、紅、逾時或丟例外(逾時記到逾時那一刻;跳過的不記)。跑完寫進 `.lumos/test-durations-run*.json`(分片時檔名帶 `shard1of4` 這種片號,同快取的命名;本機、加進 `.gitignore`,只在來源 repo 寫,同既有 `test-cache` 快取的條件與先寫暫存再換名的寫法)。
++- **刷新耗時表**:新增子指令 `lumos test-durations refresh`(改寫進版控的檔,所以放在 lumos 主程式、不放在執行器的「這次怎麼跑」旗標裡):讀 `.lumos/test-durations-run*.json`,同一支測試取檔案時間最新的那一筆,沒跑到的保留舊值,寫回 `governance/test-durations.json`(秒數存到小數三位),讀完刪掉那些 run 檔。run 檔讀不懂就略過、裡面不合法的秒數那一筆不收;舊表讀不懂或有一筆不合法就擋下(rc 2)、不覆蓋,要重建先刪掉它——刷新與執行器讀表用主程式同一支函式(執行器載入主程式來呼叫,不另寫一份),刷新寫得出來的表執行器一定讀得進。寫檔用主程式既有的原子寫入(暫存檔名每次不同)。什麼時候刷新:人或代理覺得 CI 各台又不平均時手動跑,或每月一次(下面的回頭條件)。
++- **分片(`--shard i/n`)**:
++  - 執行順序照現行:`--suite` 先篩,再分片,再 `--ff` 重排、`--seed` 打亂,最後 `-k`。
++  - 讀耗時表:檔案不存在 → 照名字輪流分,印一行「沒有耗時表,照名字輪流分」(消費專案就是這條)。檔案存在但讀不進或不是上面的格式(不是一般檔、不是物件、`tests` 不是物件、秒數不是非負有限數字、`tests` 是空的)→ 每一份都以 rc 2 擋下並說明哪裡不對;因為同一個提交的每一份讀到的是同一個檔,所以每一份會得出同一個結論,不會一份退回、一份照表分。
++  - 分法:每支測試的權重 = 表裡的秒數,表裡沒有的用全表中位數;權重下限 0.05 秒(避免一堆 0 秒的測試全擠進同一份)。權重由大到小、同權重照名字排序,逐支丟給「總權重最小」的那一份,同總權重取「已分到支數最少」的,再相同取編號最小的。同一份表、同一份測試清單,每一份算出來的分法完全一樣,各份聯集等於全部、沒有重複。
++  - 每一份印一行「分法:耗時表 <表的 SHA-256 前 8 碼>,共 <總支數> 支,這份分到 <支數> 支」,事後核對各份是不是讀到同一份表。
++  - 每一份跑完再讀一次耗時表,雜湊跟開頭不同(被刪、被改、從無到有)就以 rc 2 擋下:各份同時啟動、各跑幾分鐘,有人在各份啟動之間換表時,先啟動的那份結尾一定讀到新表。
++  - 片數比測試多時照樣會有空片,空片照舊擋下;分法只算到測試數那麼多份,不照片數配置;帶 `--suite`(只跑文件子集或關鍵字子集)時,子集比片數少造成的空片照舊算過。
++- **取消過期 CI**:`ci.yml` 加 `concurrency`:群組鍵 PR 事件用 PR 編號(`github.event.pull_request.number`,不用分支名,避免不同來源的同名分支互相取消)、推到 main 用提交編號(`github.sha`,每個提交各自一組,所以排隊中的主線 CI 不會被後來的推送取代);`cancel-in-progress` 只對 PR 事件為真。被取消的舊 run 結論是 cancelled;`lumos ci-wait` 等的是目前頂端提交的 run,舊提交被取消不影響它的判定。
++- **CI 印每份耗時**:shards 工作在每一份的日誌開頭印開始時間、結尾印「第 i 份耗時 N 秒」;測試紅了也要印,所以那個子殼層先 `set +e`(Actions 預設 bash -e 會在測試紅時直接結束子殼層)。
++
++## 驗收條款
++
++- [S1] 當耗時表存在且格式正確時(以下測試與子指令都是這篇新增),`--shard i/n` 應 依權重由大到小分給總權重最小的那一份(同總權重取支數少的、再取編號小的),權重下限 0.05 秒、表裡沒有的用全表中位數;各份聯集 應 等於全部且不重複,而且每份的總權重 應 比照名字輪流分時更接近;每一份 應 印出表的 SHA-256 前 8 碼與總支數 [test:t_runner_shard_by_duration]
++- [S2] 當耗時表不存在時 應 照名字輪流分並印一行說明;當耗時表存在但格式不對(不是物件、`tests` 不是物件或是空的、秒數不是非負有限數字)時 每一份 應 以 rc 2 擋下並說明;片數比測試多時 應 照舊有空片並擋下,帶 `--suite` 的子集空片 應 照舊算過 [test:t_runner_shard_by_duration]
++- [S3] 當測試跑完時(過、紅、逾時、例外都算,跳過的不算),執行器 應 在來源 repo 的 `.lumos/test-durations-run*.json` 記下各支秒數;`lumos test-durations refresh` 應 取每支最新的一筆寫回 `governance/test-durations.json`、沒跑到的保留舊值、讀完刪掉 run 檔 [test:t_test_durations_refresh]
++- [S4] 當 `ci.yml` 被讀時,應 有 `concurrency`:PR 事件以 PR 編號分組且取消進行中的工作,推到 main 以提交編號分組且不取消;shards 工作 應 印出每一份的耗時 [test:t_ci_yml_speed_shape]
++- [S5] 當只改 `governance/test-durations.json` 時,代碼審留痕 應 不失效(它在簿記檔清單裡) [test:t_test_durations_refresh] [test:t_codeloop_pass_survives_bookkeeping_commits]
++- [S6] 當一份跑的期間耗時表被換掉(被刪、被改、從無到有)時,那一份 應 以 rc 2 擋下;表沒換 應 照常 [test:t_test_durations_refresh]
++
++## 回退
++
++- 依耗時分片:刪掉 `governance/test-durations.json` 就退回照名字輪流分,不用改程式。
++- 取消過期 CI、印每份耗時:把 `ci.yml` 這幾段還原。
++
++## 實務隱患
++
++- 已排除:金流:只動測試分片與 CI 觸發,不碰任何付款或計費。
++- 已排除:對外送出:不寄信、不發通知,也不新增任何對外呼叫。
++- 已排除:不可逆:耗時表與 CI 設定都能直接還原,不改資料也不刪東西。
++- 已排除:守衛面:不少跑任何測試(各份聯集等於全部由分法本身保證,表錯只會不平均),主線每個提交照舊跑全套與後盾;取消只作用在同一個 PR 被新推送取代的舊工作。
++- 耗時表過期或量自 macOS:新測試以中位數計、刪掉的測試忽略,最壞是分得不平均,不會漏跑。
++- 本機推送前四份同時跑時,若耗時表在跑的當下被改(切分支、rebase),各份可能讀到不同的表、聯集不再等於全部;所以每一份跑完再讀一次表,跟開頭不同就擋下([S6])。只在依序手動跑各份、中間換表時擋不到(那時沒有哪一份跨過換表那一刻),推送前掛鉤與 CI 都是同時啟動,不會這樣跑。
++- 併發:取消只作用在同一個 PR 的舊工作;主線每個提交各自一組,不會被取代。
++
++REVISIT:2026-11-14 跑一次 `lumos test-durations refresh` 並看最近 20 次 CI 各台耗時的最大最小差,決定要不要固定刷新頻率
++REVISIT:2026-11-14 推送前掛鉤的大改合併後,開第二階段(本機推功能分支不跑全套)
++
++## 審計修正紀錄
++
++- r1(2026-10-14,4 席:通才、邊界失效、平台語意、架構對齊,皆 sonnet):31 條,blocking 14 條,全部折入。主線略過全套與快轉合併整段拿掉(三席指出 PR 與主線的 git 環境對不齊、主線排隊中的 CI 會被取代、查詢條件與權限寫不死;它只省機器時間不省人的等待,使用者裁定拿掉),連帶解掉跟它綁在一起的 14 條;其餘:耗時表格式不對時每份一致擋下、權重下限與同總權重比支數、記錄涵蓋紅與逾時、刷新改成 lumos 子指令並放 `governance/`、主線每個提交各自一組不被取代、PR 以編號分組、CI 印每份耗時、撤除條件改量每台差距、第一階段不宣稱全套只跑一次。卷證見 `governance/review-reports/推送與CI提速/`。
++- 代碼審 r1(2026-10-14,8 席:正確性、併發資源、邊界輸入、合約圖譜、通才、架構對齊、資安、規格符合,皆 sonnet):28 條,blocking 2 條(合約圖譜席:CI 耗時那支測試被註解騙綠、分片四條規則拿掉任一條測試照綠),27 條折入、1 條重現不到(說壞表會溜過純文件推送;實測文件子集也分片讀表,當下就擋)。按根因統一修:秒數合不合法刷新與執行器同一條規則、同一種讀法(超大整數、巢狀過深、BOM、tests 形狀不對都不再崩或默默清表);刷新改用主程式既有的原子寫入、刪 run 檔前核對沒被改寫;每片跑完再讀一次耗時表、跟開頭不同就擋;CI 子殼層先 set +e 並印開始時間;份數上限取測試數;測試改成每條規則各一組會翻紅的輸入、記秒數改在臨時 repo 驗;還原被重定基底誤刪的指令索引用法提示
++  - 卷證:governance/review-reports/code-推送與CI提速/
++- 代碼審 r2(2026-10-14,7 席:正確性、併發資源、邊界輸入、合約圖譜、通才、架構對齊、資安,皆 sonnet;只審修補差異加完整改動):20 條,blocking 4 條(讀表規則在執行器與主程式各一份、份數極大時照份數配置吃光記憶體、CI 子殼層離開碼沒測試守、取最新的測試分不出檔名與時間),全部折入。讀表規則收成主程式一支、執行器載入它;份數只配到測試數;資料夾當壞表;測試補到每條條款改壞都翻紅,分片測試 59 秒降到 24 秒;新增 [S6]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index 07ca8e21..7dd57673 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -7,20 +7,22 @@ about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
+ self_audit: sonnet/2026-08-30
+ aliases:
+   - 受波及合約測試真跑閘
+   - bound tests
+   - 合約測試閘
+ tags:
+   - type/system
+   - status/done
+   - scope/guards-gates
+ summary: |-
++  WHY:全套分片改照耗時分:執行器讀 `governance/test-durations.json`,權重由大到小丟給總耗時最少的一份(下限 0.05 秒、平手比支數);沒有表照名字輪流分,表格式不對每一份都擋;同一個 PR 有新推送就取消舊 CI,推到 main 每個提交各自一組不被取代 [出處:[[Projects/推送與CI提速_計劃]]] [因:照名字輪流分時 CI 各台 6.1–14.3 分不等,最慢那台決定整次時間] [不選:主線同一提交略過全套與快轉合併(設計審 r1 三席指出 PR 與主線環境對不齊、排隊中的主線 CI 會被取代,只省機器時間不省人的等待,使用者裁定拿掉);讀表失敗各份自行退回輪流分(各份可能混用兩種分法、聯集出錯)] [test:t_runner_shard_by_duration] [test:t_ci_yml_speed_shape]
++  PITFALL:CI 分片那一步的子殼層繼承 Actions 預設的 bash -e,測試一紅子殼層就直接結束,紅的那份印不出耗時(離開碼照樣保留,判定不受影響) [出處:2026-10-14 推送與CI提速 代碼審 r1 通才席、合約圖譜席] [根因:errexit 會被子殼層繼承,rc=$? 與之後的 echo 沒機會跑] [修法:子殼層開頭 set +e] [test:t_ci_yml_speed_shape]
+   WHY:[2026-10-06 [[Projects/CI加速_計劃]]]CI 拆成三個工作:prep(編譯類檢查、決定範圍、純文件子集)→ shards(全套用 matrix 分給多台機器、每台背景跑自己那幾份 `--shard i/$SHARD_TOTAL`)與 gates(自主迴圈測試、健檢、代碼審留痕閘、筆記形狀閘、存量漂移檢查、回頭重讀提醒、錨點驗證)同時跑;每個工作各自抓完整歷史、補本機 main、裝 Python;後盾步驟的指令逐字照搬(`t_ci_yml_matrix_and_gates_shape` 用拆分前的指紋守),全套跟後盾不再有先後——全套紅了後盾照跑 [出處:Enzo 2026-10-06「CI 好慢,拖慢整個開發速度」] [因:一台機器切 4 片已跑到 32–38.5 分、離 45 分上限只剩約 7 分] [不選:主線推送在同一棵檔案樹已於合併請求跑綠時不重跑全套(看提交歷史的測試在合併請求與主線結果會不同,見 [[Systems/測試假綠形態]] 鏡頭逾時暖快取那條;Enzo 改裁不做);本機全綠就不等 CI(要改全域規則)] [test:t_ci_yml_matrix_and_gates_shape]
+   WHY:CI 在 pull_request 事件多一步建出追蹤 origin/main 的本機 main(git branch --track main origin/main),讓 PR 跟推到 main 時是同一種環境 [出處:2026-10-03 第一個 PR(EnzoHsieh-Android/Lumos#1)CI 紅] [因:PR 取出的是不在分支上的合併提交、本機沒有 main,t_lens_timeout_keeps_warming_cache 與 t_codex_s1_lens_arm_claim 以 main@{upstream} 找主線而整支紅;容器重現:沒本機 main 紅、補上就綠] [不選:改兩支測試各自退回 origin/main(dispatch-lens 認主線的規則也要跟著改,範圍更大)]
+   WHY:_classify_test_refs 多一個呼叫者:note-shape 的筆記測試綁定第①道,名稱逐一重包成 `[test:名]` 再交(同修正關卡),判 real 才算指得到 [出處:2026-10-03 [[Projects/筆記測試綁定要存在_計劃]]] [因:判存在不另寫第二套] [test:t_note_shape_test_refs_touched_note]
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]「`[test:]` → resolve_test_refs → 白名單 → real/fake/dangling/bad-name」抽成 `_classify_test_refs`(修正關卡第 3 項也用),判定不變;修正關卡在自己建的隔離工作樹裡呼叫 `_bound_tests_check`(帳與測試快取落在樹裡、跟著刪)
+   KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法/★證不出跑過(unfilterable)★ → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]
+   KEY:★閘不得把「指令回成功」當「測試跑過」★(2026-09-09 消費專案接入靜默失效 [F];r1 代碼審把判準整條換掉):主力證據是★逐支看測試工具自己的輸出有沒有說「執行了 N 支(N≥1)」★(_RAN_EVIDENCE,只填實測過「跑 1 支」與「跑 0 支」兩種輸出的 profile:swift-xctest/csharp-xunit/node-jest/python);沒有樣式可比的 profile 才退回過濾能力冒煙測試(拿不存在的測試名跑一次看回不回 0)。任一支證不出來 → 狀態 unfilterable、不報綠,擋的路徑上跟紅一樣擋 [test:t_bound_tests_unproven_blocks_push]
+   KEY:為什麼不是只用冒煙測試(同上,r1 實測推翻第一版):★大多數測試工具都分不出「測試不存在」與「測試通過」★——xcodebuild 三段 -only-testing 但方法名打錯回 0、dotnet test --filter 對不到回 0、jest -t 對不到回 0;只有 pytest(回 5)分得出來。只靠冒煙測試等於把最常見的幾種棧全判成不可信,不是擋錯人就是等於沒擋 [test:t_bound_tests_rejects_unfilterable_cmd]
+   KEY:★xcodebuild 帶 -quiet 時跑 1 支跟跑 0 支的輸出一模一樣★(2026-09-09 在 calc-ios 實測,逐字比對過兩份輸出):所以 swift 骨架指令刻意不帶 -quiet,unfilterable 的訊息也直接點名這件事;dotnet 的解法是尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`(實測對不到回 1、對到回 0),已寫進骨架
+   KEY:★「擋」跟「講」是兩個地方★(2026-09-09 代碼審 r2 blocker):判定在 _codeloop_guard_verdict、但印給人看的在 cmd_code_loop,後者原本只認 green/red——低風險推送因此在假綠上一個字都不印就放行,高風險擋下時也看不到逃生指令。動判定一定要回頭看列印分流 [test:t_code_loop_check_speaks_about_unproven]
+   KEY:證據行不得被輸出截斷砍掉(同上 r2):輸出超過 256KB 取頭尾各半時,符合證據樣式的行要從中段撈回來(_kill_cap 的 keep_re);★審查席舉的 jest 實例實測不成立(jest 29 摘要仍在最後一行),這是防禦性修法★——沒有它等於押注「所有測試工具都把摘要印在最後」
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+index f3a6e6c8..1dcc4caf 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試假綠形態.md
+@@ -8,20 +8,23 @@ related:
+   - "[[Systems/canary-audit]]"
+   - "[[Projects/skill寫法學借鑒與design-loop剪枝]]"
+   - "[[Projects/檢索多詞回退_計劃]]"
+   - "[[Issues/loop-next吐不可宣告的tier]]"
+   - Systems/review-convergence-eval
+ tags:
+   - type/system
+   - status/done
+   - scope/ux-docs-hygiene
+ summary: |-
++  SEE:[[Projects/推送與CI提速_計劃]]
++  PITFALL:比對設定檔字串的測試被同一段的註解騙綠:要找的字樣在註解裡也有,把真的那行指令刪掉測試照綠 [出處:2026-10-14 推送與CI提速 代碼審 r1 合約圖譜席] [根因:只問字樣在不在那一段,沒排除註解行(第③型驗寫法不驗行為)] [修法:先濾掉註解行再比,能真跑就把那行換成會紅的指令真跑一次、看外層收到的離開碼] [test:t_ci_yml_speed_shape]
++  PITFALL:測試資料的檔名順序剛好跟檔案時間順序一樣,「取時間最新的那筆」被改成「取檔名排最後的」測試照綠 [出處:2026-10-14 推送與CI提速 代碼審 r2 合約圖譜席] [根因:fixture 產不出有鑑別力的值(第⑤型)] [修法:造檔名與時間相反的資料,加一條前置斷言證明兩種排序真的不同] [test:t_test_durations_refresh]
+   PITFALL:替身讓解析一律丟 RecursionError、斷言兩個讀法都「回空」,但其中一個讀法給的是空字串當筆記內容,那一半不換替身也回空——「例外被接住」只驗到一半,讀法不接例外也照綠 [出處:2026-10-09 舊句兩道轉擋代碼審修補時發現] [根因:期望值(空)跟「輸入本來就比不到」的結果重疊,沒有前置斷言證明不換替身時算得到] [修法:餵真的筆記內容,另加前置斷言:不換替身時兩個讀法都算得到] [test:t_reread_wt_records_guarded]
+   PITFALL:殼裡設了 FORCE_COLOR 時推送前全套假紅:Python 3.14 把子程序 traceback 上色,`RuntimeError` 被 ANSI 碼切開,比對錯誤名稱的斷言比不到,CI 沒設所以綠 [出處:2026-10-07 另一個會談推送前全套 t_canary_carrier_invalid_snapshot_encoding 6 條紅,乾淨主線同樣紅] [根因:測試起子程序直接繼承殼的環境,沒中和顏色變數] [修法:測試程式 main() 唯一進入點設 PYTHON_COLORS=0、拿掉 FORCE_COLOR,同清 GIT_* 的位置與理由;守衛測試先用前置斷言證明不中和時真的會上色(現場排除殼裡的 NO_COLOR,只吃自己造的環境);個別測試不再自帶 NO_COLOR] [test:t_runner_disables_child_colors]
+   PITFALL:照推送前掛鉤的逃生段 `LUMOS_SKIP_REREAD_CHECK=1 git push` 推送,掛鉤跑的全套測試反而紅:行程內直接呼叫工具函式的測試被繼承來的單次略過變數改了行為,逃生寫法讓推送改被「測試有紅」擋下 [出處:2026-10-09 舊句兩道轉擋代碼審] [根因:測試直接繼承殼的環境,LUMOS_SKIP_* 讓被測指令提早回 0;起子行程的那幾條各自清了,行程內呼叫那條漏掉] [修法:測試程式唯一進入點(main() 呼叫的 _isolate_environment,在它把 LUMOS_SKIP_CLAUDE_PLUGIN 設回 1 之前)用前綴清掉繼承來的整族 LUMOS_SKIP_*,不列名單,要用的測試自己設;CI、GITHUB_ACTIONS 不清(CI 平台的變數,第三方工具也照它決定要不要互動)] [防回歸:測試帶 REREAD_CHECK、NOTE_SHAPE、DRIFT_CHECK 三個同族變數各跑一支會被它改掉行為的測試,清除範圍縮成只清一個就紅] [test:t_runner_drops_inherited_skip_env]
+   PITFALL:t_prepush_docs_and_light_run_subset 本機約 105 秒,CI 機器慢約一倍就超過全域 180 秒上限被砍,斷言全過卻判紅,而且重跑一樣紅 [出處:2026-10-05 PR #7、#8 的 CI] [根因:測試本身要跑真的推送閘子流程,天生慢,全域上限對它只剩不到 2 倍餘裕] [修法:放進 TIMEOUT_OVERRIDE 給 360 秒,同 t_ci_wait 的做法,不拉高全域上限] [防回歸:測試總檔收尾印的最慢五支會標「餘裕不足 3 倍」,看到同一支反覆上榜就照這樣處理] [同族:[[Systems/bound-tests-gate]]]
+   FLOW:寫測試/審測試時逐條對照本清單 → 命中哪一型就照該型的「怎麼接住」處理 → 修 bug 收尾跑「還原翻紅釘」時★必須同時放一條「現場成立」前置斷言★(否則對第④型全瞎)
+   PITFALL:[2026-09-23 CI 實踩,假紅不是假綠]★對 pty 只讀一次就斷言內容★:測試先往 master 寫 "y\n",pty 立刻回顯成 b"y\r\n";只讀一次的話,在快的機器上只拿到回顯、被測程式寫的 prompt 還沒到,斷言就紅——跟被測程式對不對無關。本機五次都綠、前兩次 CI 也綠,重跑就過,是典型的時序競態。接法:讀到看見要的內容為止(select 加截止時間),不要信單次 read。重現:`python3 scripts/test_lumos.py -k t_confirm_tty_unit`(修前在快的 CI 機器上偶發紅) [test:t_confirm_tty_unit]
+   PITFALL: 2026-10-04 消融入口的模組載入測試全綠，卻因 helper 定義在 __main__ 呼叫之後，真 CLI 寫第一份 meta 前必定 NameError；對 CLI 的承諾至少有一條測試須用子程序從入口啟動。出處 [[Verification/2026-10-04_探針停派與失敗留痕]]。[test:t_probe_boundary_postreview_cli_entry_and_modes]
+   PITFALL:鏡頭逾時暖快取那支測試在主線合併一個大 PR 之後 CI 假紅(背景 60 秒內算不完快取) [出處:2026-10-04 PR #2 合併後主線與 PR #3 的 CI] [根因:測試範圍取主線 tip 與 tip~1,一般合併時 tip~1 是合併前的主線,範圍等於整個 PR(那次 6279 行)——仍是拿範圍大小當開關] [修法:改在主線最近 30 個非合併提交裡挑改動最小的 X,範圍取 X~1..X] [test:t_lens_timeout_keeps_warming_cache] [同族:2026-10-06 `t_codex_s1_lens_arm_claim`、`t_codex_s1_r1_fixes` 拿「主線..HEAD」當範圍,合併請求只改一篇計劃筆記、鏡頭算 3 分多就逾時,改用同一支 `_lens_smallest_commit`,並加 `t_lens_tests_avoid_branch_dependent_range` 擋同族再長出來,見 [[Projects/鏡頭測試範圍固定_計劃]]] [test:t_lens_tests_avoid_branch_dependent_range]
+   PITFALL:用唯讀權限造「寫不進去」的測試在 root 身分下假紅(root 不受唯讀限制,寫入照樣成功) [出處:[[Projects/雲端環境跑綠全套測試_計劃]]] [根因:現場靠權限造,而雲端容器以 root 執行] [修法:用 _break_for_write 把檔換成同名資料夾,root 也寫不進去;repo 裡其他在 root 下直接略過的同類測試可照改] [test:t_gate_ledger_write_failure_does_not_change_verdict]
+   PITFALL:同一支測試跑兩次檢查、用「兩本帳合併後的最後一筆」取第二次的紀錄,機器忙時偶爾拿到第一次的那筆而假紅 [出處:2026-10-05 推送 README 更新時推送閘全套只紅 t_drift_m1_review_r3_long_lines_narrowed ③、單獨跑綠] [根因:放行記本機帳、擋下記版控帳,時間只到秒;兩筆落在同一秒時合併排序版控帳在前,[-1] 變成先前那次放行] [修法:先存跑之前的事件,用 _gov_since 取這次多出來的那筆;同檔其他十多處 _m1_events(root)[-1] 只在同一支測試前後兩次分寫不同本帳時才會中] [test:t_drift_m1_review_r3_long_lines_narrowed]
+diff --git a/scripts/lumos b/scripts/lumos
+index 88cb9bc2..28ce188a 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -29360,21 +29360,22 @@ _PITFALL_STRLIT_RE = re.compile(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:\\.|[^
+ 
+ def _strip_string_literals(code):
+     """把一行代碼裡的字串字面挖空(保留引號),讓 pitfalls 的 open(/UPDATE 正則只看真代碼——
+     print("…open(…") 這種訊息文字不算資源風險(#7)。單行粗剝,跨行字串不處理(剝不掉就照掃,寧誤傷不漏)。"""
+     return _PITFALL_STRLIT_RE.sub('""', code)
+ 
+ # 簿記檔白名單(單一源,兩個消費者:pitfalls --diff 掃描排除 + code-loop 留痕失效豁免)。
+ # 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
+ # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
+ # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
+-_BOOKKEEPING_FILES = ("docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
++_TEST_DURATIONS_REL = "governance/test-durations.json"   # 分片用的測試耗時表:資料,表錯只會分得不平均、不會漏跑(推送與CI提速)
++_BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+                       # 本機帳(被忽略)萬一被 git add -A 提交,也只是簿記、不讓代碼審留痕失效(治理帳例行紀錄分流_計劃)
+                       "docs/" + GOV_LOCAL_LOG_NAME, "docs/" + USAGE_LOCAL_LOG_NAME,
+                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
+                       "docs/.bypass-log.jsonl", "docs/.escape-log.jsonl",
+                       "docs/.kill-log.jsonl", "docs/.signoff-log.jsonl",
+                       "governance/anchor-baseline.json",
+                       # 存量漂移守衛的表態檔:跟判定檔一樣是人對發現的回應,不是程式改動(存量漂移防線 [S3])
+                       "governance/drift-acks.jsonl",
+                       # 存量漂移的修復帳(drift fix 每改一筆記一行稽核紀錄;同表態檔,是人對發現的處理紀錄;存量漂移改法 第 7 節)
+                       "governance/drift-fixes.jsonl")
+@@ -48579,20 +48580,126 @@ def cmd_push_summary(repo, blocks_file, count, refs):
+         say.append(f"  共 {n} 筆擋下,其中有 {lost} 筆的原因沒寫進暫存檔,細節看上面各段。")
+     say.append("每一道怎麼處理看上面那一段;全套測試這次沒跑(便宜的閘先擋下了),修好之後重推會再從頭跑一次。")
+     print("\n".join(say), file=sys.stderr)
+     extra = {"blocks": n, "gates_n": len(gates), "gates": gates, "refs": refs}
+     if lost > 0:
+         extra["lost"] = lost
+     _gate_event_or_warn(root, "prepush-summary", "blocked", f"推送前擋下 {n} 筆({len(gates)} 道閘)", hard=True, extra=extra)
+     return 0
+ 
+ 
++def _duration_ok(v):
++    """耗時表的一筆秒數合不合法:非負的有限數字;布林不算,轉不成浮點的超大整數也不算。
++    測試執行器透過 _read_durations_table 用的也是這一支(刷新寫得出來的表,執行器一定讀得進)。"""
++    import math
++    if isinstance(v, bool) or not isinstance(v, (int, float)):
++        return False
++    try:
++        return math.isfinite(float(v)) and v >= 0
++    except OverflowError:
++        return False
++
++
++def _read_durations_table(path):
++    """讀測試耗時表:回 (tests, 雜湊前 8 碼);路徑不存在回 (None, None);存在但讀不進、不是一般檔(資料夾、斷掉的符號連結)、
++    格式不對 → ValueError 說明哪裡不對。格式 {"version": 1, "tests": {測試名: 非負有限秒數}},tests 不能是空的。
++    測試執行器分片與 test-durations refresh 共用這一支(代碼審 r2 架構對齊席:原本兩邊各寫一套、嚴格度不同)。"""
++    import hashlib
++    p = Path(path)
++    if not os.path.lexists(p):
++        return None, None
++    if not p.is_file():
++        raise ValueError("不是一般檔")
++    try:
++        raw = p.read_bytes()
++    except OSError as e:
++        raise ValueError(f"讀不進來:{e}") from e
++    try:
++        d = json.loads(raw)
++    except (ValueError, RecursionError) as e:
++        raise ValueError("不是合法的 JSON") from e
++    if not isinstance(d, dict) or not isinstance(d.get("tests"), dict) or not d["tests"]:
++        raise ValueError("要是 {\"version\": 1, \"tests\": {測試名: 秒數}} 而且 tests 不是空的")
++    for k, v in d["tests"].items():
++        if not _duration_ok(v):
++            raise ValueError(f"{k} 的秒數不是非負的有限數字:{v!r}")
++    return d["tests"], hashlib.sha256(raw).hexdigest()[:8]
++
++
++def cmd_test_durations_refresh(repo):
++    """lumos test-durations refresh:把測試執行器寫在 .lumos/test-durations-run*.json 的各支實測秒數合進
++    governance/test-durations.json(分片照耗時分的依據,Projects/推送與CI提速_計劃 S3)。同一支取檔案時間最新的那筆
++    (存到小數三位),沒跑到的保留舊值,寫完刪掉那些 run 檔(讀完之後又被改寫的留給下次);run 檔讀不懂的略過(照樣刪),裡面不合法的秒數那一筆不收。
++    舊表照執行器同一支 _read_durations_table 讀,讀不懂 → rc2、不覆蓋(要重建就先刪掉它);run 檔也照位元組讀(BOM 也吃)。
++    沒有 run 檔、沒給 --repo 又不在 git 專案 → rc2;寫不進去 → rc1。耗時表在簿記檔清單裡,刷新它不會讓代碼審留痕失效。"""
++    root = _note_audit_root(repo)
++    if root is None:
++        print("擋下:這裡不是 git 專案", file=sys.stderr)
++        return 2
++    stamped = []
++    for p in (Path(root) / ".lumos").glob("test-durations-run*.json"):
++        try:
++            stamped.append((p.stat().st_mtime, p.name, p))
++        except OSError:
++            pass   # 列出之後才消失的(另一個刷新剛刪掉):略過,不讓排序崩潰(代碼審 r2 併發資源席)
++    runs = [p for _, _, p in sorted(stamped)]
++    if not runs:
++        print("擋下:.lumos/ 裡沒有測試執行器留下的實測秒數(test-durations-run*.json);先跑一次測試", file=sys.stderr)
++        return 2
++    table_path = Path(root) / _TEST_DURATIONS_REL
++    try:
++        tests = _read_durations_table(table_path)[0]
++    except ValueError as e:
++        print(f"擋下:舊耗時表 {_TEST_DURATIONS_REL} 讀不懂({e}),這次不覆蓋;修好它,或刪掉它再刷新(刪掉就只用這次的實測重建)",
++              file=sys.stderr)
++        return 2
++    table = dict(tests or {})
++    before, got, seen = len(table), 0, {}
++    for p in runs:
++        try:
++            st = p.stat()
++            seen[p] = (st.st_mtime_ns, st.st_size)   # 刪之前對一次:讀完之後被改寫的留給下次(代碼審 r1 併發資源席)
++            tests = json.loads(p.read_bytes())["tests"]
++            if not isinstance(tests, dict):
++                raise TypeError
++        except (OSError, ValueError, RecursionError, TypeError, KeyError):
++            print(f"  略過讀不懂的 {p.name}", file=sys.stderr)
++            continue
++        for k, v in tests.items():
++            if _duration_ok(v):
++                table[k] = round(float(v), 3)
++                got += 1
++    if not table:
++        print("擋下:run 檔裡一筆可用的秒數都沒有", file=sys.stderr)
++        return 2
++    try:
++        table_path.parent.mkdir(parents=True, exist_ok=True)
++        _write_lf(table_path, json.dumps({"version": 1, "tests": dict(sorted(table.items()))}, ensure_ascii=False, indent=1) + "\n")
++    except OSError as e:
++        print(f"擋下:寫不進耗時表:{e}", file=sys.stderr)
++        return 1
++    kept = 0
++    for p in runs:
++        try:
++            st = p.stat()
++            if p in seen and (st.st_mtime_ns, st.st_size) != seen[p]:
++                kept += 1
++                continue
++            p.unlink()
++        except OSError:
++            pass
++    if kept:
++        print(f"  有 {kept} 個 run 檔在讀完之後又被改寫,留著給下次刷新", file=sys.stderr)
++    print(f"✓ 耗時表更新:{_TEST_DURATIONS_REL}(原有 {before} 支 → 現在 {len(table)} 支;這次合進 {got} 筆,讀完刪掉 {len(runs) - kept} 個 run 檔)")
++    return 0
++
++
+ def cmd_push_range(repo, diff_range, push_remote, pushed_ref):
+     """lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>:印 _push_range_start 算出的範圍一行,
+     給推送前掛鉤在新分支首推時用(Projects/新分支首推會擋的閘改用真起點_計劃)。頂端已在主線 → `頂端..頂端`;判不了或起點是空樹 →
+     這個 repo 自己的空樹(SHA-256 的 repo 也對)`..頂端`(寧可多擋);其他 `起點..頂端`。說明印 stderr。唯讀、不寫治理帳。
+     參數錯、少帶推送參數(值可以是空字串)、不在 git 專案 → rc2。"""
+     if push_remote is None or pushed_ref is None:
+         print("擋下:--push-remote 與 --pushed-ref 都要給(值可以是空字串)", file=sys.stderr)
+         return 2
+     root = _note_audit_root(repo)
+     if root is None:
+@@ -53838,20 +53945,21 @@ HELP_WHEN = {
+     "deinit": "專案不用了,拆掉專案層(hooks / 工具組 / CLAUDE.md 注入),圖譜保留。",
+     "teardown": "連機器全域一起拆(CLI / skills / hooks),圖譜保留。",
+     "fold-check": "一份文件前後寫的數字 / 設定對不對得上(折入審查結果後用)。",
+     "report-normalize": "席報告收進來、記帳之前:看嚴重度寫法有沒有照規定(檔首檔級行、每條一行獨立 severity),--write 只搬格式不改內容。",
+     "prose-lint": "spec 動筆後的白話健檢:掃中文模糊措辭,只提醒不擋(設計審排乾步驟用)。",
+     "refcheck": "文件裡引的 檔案:行號 還存不存在。",
+     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
+     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審);--stage <階段> 只列計劃那一階段的需求風險面。",
+     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+     "push-summary": "推送前掛鉤在全套測試之前有擋下時叫:印這次推送全部擋下原因的彙總(幾筆、幾道閘、逐筆一行),記一筆治理帳;手動不用叫。",
++    "test-durations": "CI 各份測試又不平均時、或每月一次:把測試執行器記下的實測秒數合進耗時表(分片照耗時分的依據)。",
+     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
+     "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
+     "updated-sync": "doctor 說有筆記的 updated 落後 git 最後改動時:lumos updated-sync --stale 一次改成今天(或給節點名只改那幾篇);先看加 --dry-run。",
+     "ci-status": "只看上次 CI 結果,不打網路。",
+     "events": "這幾場 Claude 會談做了什麼(回合、工具呼叫、子代理),讀 lumos-ledger 外掛寫的事件帳;唯讀。",
+     "testmap": "檔案↔測試的依賴地圖:build 挖一次,affected 依 diff 推薦該跑哪些測試。",
+     "build": "挖掘檔案↔測試的關係,存成地圖。",
+     "affected": "改了這些檔,具體該跑哪幾個測試(建議,不擋)。",
+     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
+     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+@@ -53872,20 +53980,21 @@ HELP_WHEN = {
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
+     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
+     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
+     "note-audit prepare": "推送前要審新寫的筆記時:算出這段範圍還沒被判定涵蓋的行,切成清單檔(每份最多 150 行)給判定者。",
+     "note-audit record": "判定者交回報告後:照信任方向逐行收進判定檔(重的照收、輕的要來源對、上下文沒變才收)。",
+     "note-audit check": "推之前自己先查一次:這段推送新寫的筆記行是不是都被已提交的判定涵蓋了(沒有就 rc1)。",
+     "note-audit skip": "真的來不及審時:把從沒被判過的行記成略過(要理由、會留帳;判過推得出的不能略過)。",
++    "test-durations refresh": "CI 各份測試又不平均時、或每月一次:把 .lumos/test-durations-run*.json 的實測秒數合進 governance/test-durations.json,讀完刪掉。",
+     "note-audit reread-prepare": "推送前回頭重讀守檔筆記:這次改到的程式檔的家、而且這次也改過的筆記,每篇出一份項目檔給判定者問「哪幾行被這次改動弄得不成立了」。",
+     "note-audit reread-record": "判定者交回報告後:把點出的行記成對照紀錄(governance/reread-verdicts/,提交才算)。",
+     "note-audit reread-check": "推送前掛鉤與 CI 呼叫:還沒對照過這一版程式的守檔筆記、判定點出又沒處理的規則類條目;帶 --gate(掛鉤)時照 note_reread.gate 擋,不帶(CI、手動)只印、回 0。",
+     "drift": "已經寫進去的句子因為別處狀態變了而過期:check 推送時擋、scan 健檢全圖譜、fix 用工具改掉一筆、ack 表態照留、exam 拿考卷考。",
+     "drift check": "推之前查這段推送讓哪些筆記跟狀態對不上(轉正了還留著預告句就擋,其他只列出);同一次也跑舊句檢查 m1:"
+                    "這次刪掉或改名的程式名稱,筆記還在講的句子——開關另一個 drift_check.old_sentence(沒寫就照總開關 drift_check.gate:預設擋,gate 寫 warn 只提醒、寫 off 不跑;明寫的值不受 gate 影響)。",
+     "drift scan": "健檢整份圖譜(或某個提交)跟狀態對不上的地方,產待修清單;不擋、不寫帳。",
+     "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;回頭條件與撤除條件的照留要嘛 --tracked-in 綁一篇開著的 Issue 或計劃(那篇收尾就失效),要嘛 30 天後失效,這次新寫就已成立的推送只認綁了去處的。",
+     "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
+     "drift exam": "拿考卷在被考 repo 的歷史上重放,算擋到、點到、漏、誤報與噪音;--history 對最近 N 個提交重放。",
+@@ -54778,20 +54887,24 @@ def main():
+     evp.add_argument("--session", dest="ev_session", default=None)
+     evp.add_argument("--repo", dest="ev_repo", default=None)
+     evp.add_argument("--json", dest="ev_json", action="store_true")
+     evp.add_argument("--prune", dest="ev_prune", action="store_true", help="刪舊會談資料夾(會刪檔)")
+     evp.add_argument("--days", dest="ev_days", default="30")
+     psm = sub.add_parser("push-summary", help="推送前掛鉤用:印這次推送全部擋下原因的彙總並記一筆治理帳")
+     psm.add_argument("--blocks-file", dest="psm_file", required=True, metavar="檔")
+     psm.add_argument("--count", dest="psm_count", type=int, required=True, metavar="筆數")
+     psm.add_argument("--refs", dest="psm_refs", type=int, default=1, metavar="推送行數")
+     psm.add_argument("--repo", dest="psm_repo", default=None)
++    tdu = sub.add_parser("test-durations", help="測試耗時表:refresh 把執行器記下的各支實測秒數合進 governance/test-durations.json(分片照耗時分)")
++    tdusub = tdu.add_subparsers(dest="tducmd", required=True)
++    tdur = tdusub.add_parser("refresh", help="合併 .lumos/test-durations-run*.json 進耗時表,讀完刪掉")
++    tdur.add_argument("--repo", dest="tdu_repo", default=None)
+     prg = sub.add_parser("push-range", help="推送前掛鉤用:印這次推送真正的新改動範圍(跟主線的分岔點..頂端)")
+     prg.add_argument("--diff", dest="prg_diff", required=True, metavar="舊值..頂端")
+     prg.add_argument("--push-remote", dest="prg_remote", default=None, metavar="遠端名")
+     prg.add_argument("--pushed-ref", dest="prg_ref", default=None, metavar="遠端ref")
+     prg.add_argument("--repo", dest="prg_repo", default=None)
+     cs = sub.add_parser("ci-status", help="[CI回流閉環] 唯讀查最後一次 CI 結果(不打網路)")
+     cs.add_argument("--repo-dir", dest="cs_repo", default=None)
+     cs.add_argument("--json", dest="cs_json", action="store_true")
+     tm = sub.add_parser("testmap", help="檔案↔測試依賴地圖(vault-free):build 三路訊號挖 file↔test 邊存 .lumos/testmap.json;affected 依 diff 推薦該跑測試(advisory 恆 rc0)")
+     tmsub = tm.add_subparsers(dest="tmcmd", required=True)
+@@ -55248,20 +55361,22 @@ def main():
+                                                  push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref,
+                                                  all_=args.na_all)
+         if args.nacmd == "reread-record":
+             return cmd_note_audit_reread_record(repo=args.na_repo, prepared=args.na_prepared, report=args.na_report)
+         if args.nacmd == "reread-check":
+             return cmd_note_audit_reread_check(repo=args.na_repo, diff_range=args.na_diff,
+                                                push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref, gate=args.na_gate)
+         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
+     if args.cmd == "push-summary":
+         return cmd_push_summary(repo=args.psm_repo, blocks_file=args.psm_file, count=args.psm_count, refs=args.psm_refs)
++    if args.cmd == "test-durations":
++        return cmd_test_durations_refresh(repo=args.tdu_repo)
+     if args.cmd == "push-range":
+         return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
+                               pushed_ref=args.prg_ref)
+     if args.cmd == "drift" and args.drcmd in ("check", "exam"):
+         if args.drcmd == "check":
+             return cmd_drift_check(repo=args.dr_repo, diff_range=args.dr_diff, push_remote=args.dr_push_remote,
+                                    pushed_ref=args.dr_pushed_ref)
+         if not args.dr_history and not args.dr_exam:
+             print("擋下:lumos drift exam 要給考卷,或帶 --history N", file=sys.stderr)
+             return 2
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index da986cb6..c7f47329 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -19066,28 +19066,32 @@ def t_codeloop_pass_survives_bookkeeping_commits():
+         (Path(d) / "docs").mkdir(exist_ok=True)   # 假 repo 為了答表態題已經先建過
+         run_lumos(["code-loop", "pass", "--note", "done", "--repo", d])
+         branch = _git_branch(d)
+         pass_sha = (_codeloop_read(d, branch) or {}).get("head_sha", "")
+         g = lambda *a: _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+         # 簿記 commit:pass 剛 append 的治理帳行(+留痕 json,同屬白名單)
+         # ★canary-log/bypass-log 也算簿記(2026-08-27 死結根治):審計記帳在 loop 中發生,
+         #   pass 後提交它們原本會失效擋推——補進白名單後不失效(Issues/簿記白名單漏canary與bypass帳)
+         (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"x"}\n', encoding="utf-8")
+         (Path(d) / "docs" / ".bypass-log.jsonl").write_text('{"ts":"t"}\n', encoding="utf-8")
++        # 測試耗時表也是簿記(推送與CI提速 代碼審 r1 合約圖譜席:原本只驗它在清單裡,沒驗留痕真的不失效)
++        (Path(d) / "governance").mkdir(exist_ok=True)
++        (Path(d) / "governance" / "test-durations.json").write_text('{"version": 1, "tests": {"t_x": 1.0}}\n', encoding="utf-8")
+         g("add", "-A")
+         g("commit", "-qm", "gov bookkeeping")
+         check("★前置★ 現場成立:pass 後 HEAD 真的前進了(≠留痕 sha)",
+               bool(pass_sha) and _git_head(d) != pass_sha, f"pass_sha={pass_sha[:8]}")
+         chg = g("diff", "--name-only", pass_sha, "HEAD").stdout.splitlines()
+         check("★前置★ 現場成立:該 commit 只動簿記檔(含 canary/bypass)",
+               chg and all(f.startswith(("docs/.governance", "docs/.usage", "docs/.canary",
+-                                        "docs/.bypass", "governance/code-loop/")) for f in chg), str(chg))
++                                        "docs/.bypass", "governance/code-loop/", "governance/test-durations.json")) for f in chg)
++              and "governance/test-durations.json" in chg, str(chg))
+         r = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+                     capture_output=True, text=True)
+         check("★pass 後純簿記 commit → 留痕仍有效 rc0(原:sha 過時追尾)★", r.returncode == 0,
+               f"rc={r.returncode}\n{r.stdout[:200]}")
+         # 收緊釘①:code commit → 豁免不外溢,照樣 blocked
+         (Path(d) / "app2.py").write_text("import requests\nrequests.post('http://y')\n",
+                                          encoding="utf-8")
+         g("add", "app2.py")
+         g("commit", "-qm", "more code")
+         r2 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
+@@ -21795,20 +21799,339 @@ def t_runner_shard_partitions_completely():
+     out = Path(tempfile.mkdtemp(prefix="gctl-shardsum-")) / "s.json"
+     _sp.run([sys.executable, runner, "-k", "no_zero_assertion_return_paths",
+              "--json-summary", str(out)], capture_output=True, text=True, timeout=120)
+     import json as _j
+     d = _j.loads(out.read_text(encoding="utf-8"))
+     check("分片: 機讀摘要有過/紅/跳過三個數字", all(k in d for k in ("passed", "failed", "skipped")), str(d))
+     check("分片: 機讀摘要列得出紅的是哪幾支", "failed_names" in d, str(d))
+ 
+ 
+ 
++def t_runner_shard_by_duration():
++    """[推送與CI提速 S1、S2]有耗時表就照耗時分(由大到小丟給總權重最小的一份);沒表照名字輪流分;表壞了每一份都擋。"""
++    import subprocess as _sp, json as _j, shutil as _sh, statistics as _st
++    # ① 分法本身:照權重由大到小、丟給總權重最小的一份,聯集等於全部、不重複
++    names = [f"t_{i:03d}" for i in range(40)]
++    table = {n: (30.0 if i % 4 == 0 and i < 16 else 1.0) for i, n in enumerate(names)}   # 四支 30 秒照名字輪流分會落在同一份
++    buckets = _shard_by_duration(names, table, 4)
++    flat = [n for b in buckets for n in b]
++    check("耗時分片:聯集等於全部、不重複", sorted(flat) == sorted(names) and len(flat) == len(set(flat)), (len(flat), len(set(flat))))
++    check("耗時分片:四支 30 秒的各落一份(由大到小丟給最輕的)", [sum(1 for n in b if table[n] == 30.0) for b in buckets] == [1, 1, 1, 1], buckets)
++    loads = [sum(max(table[n], 0.05) for n in b) for b in buckets]
++    rr = [[n for k, n in enumerate(names) if k % 4 == j] for j in range(4)]
++    rr_loads = [sum(table[n] for n in b) for b in rr]
++    check("★前置★ 現場成立:照名字輪流分在這組資料下確實不平均", max(rr_loads) - min(rr_loads) > 50, rr_loads)
++    check("耗時分片:各份總權重比照名字輪流分時更接近", max(loads) - min(loads) < max(rr_loads) - min(rr_loads), (loads, rr_loads))
++    # ② 權重下限與平手比支數:一堆 0 秒的測試不能全擠進同一份(r1 邊界失效席 F4)
++    zeros = {n: (0.0 if i else 5.0) for i, n in enumerate(names)}   # 一支 5 秒、其餘 0 秒
++    zb = _shard_by_duration(names, zeros, 4)
++    holders = [b for b in zb if any(zeros[n] == 0.0 for n in b)]
++    check("耗時分片:0 秒的測試不會全擠進同一份(有下限、平手比支數)", len(holders) >= 3, [len(b) for b in zb])
++    # ③ 表裡沒有的用全表中位數
++    part = {n: table[n] for n in names[:20]}
++    med = _st.median(part.values())
++    b2 = _shard_by_duration(names, part, 4)
++    check("耗時分片:表裡沒有的測試也分得到(用中位數)", sorted(n for b in b2 for n in b) == sorted(names) and med > 0, med)
++    # ④ 確定性:同一份表、同一份清單,兩次算出來一模一樣
++    check("耗時分片:同輸入同結果(各份獨立算也一致)", _shard_by_duration(names, table, 4) == buckets, "")
++    # ⑤ 每條規則各一組小輸入,拿掉那條規則結果就會變(代碼審 r1 合約圖譜席:原本四條規則拿掉任一條測試照綠)。
++    #    輸入是照「拿掉該條規則會不會改結果」搜出來的;期望值照 docstring 的規則手算得到
++    rules = (
++        ("權重下限 0.05", ["t_g", "t_f", "t_e", "t_d", "t_c", "t_b", "t_a"], 2,
++         {"t_a": 0.5, "t_b": 0.5, "t_c": 0.0, "t_d": 2.0, "t_e": 0.0, "t_f": 1.0, "t_g": 2.0},
++         [["t_d", "t_f", "t_c"], ["t_g", "t_a", "t_b", "t_e"]]),
++        ("表裡沒有的用全表中位數", ["t_g", "t_f", "t_e", "t_d", "t_c", "t_b", "t_a"], 2,
++         {"t_b": 0.25, "t_d": 2.0, "t_e": 1.0, "t_g": 0.5},
++         [["t_d", "t_f", "t_b"], ["t_e", "t_a", "t_c", "t_g"]]),
++        ("中位數取全表(含這次清單外的舊條目),不是只算清單裡的", ["t_a", "t_b", "t_c", "t_d", "t_e"], 2,
++         {"t_a": 0.5, "t_c": 2.0, "t_d": 0.5, "t_e": 2.0, "t_gone": 9.0, "t_gone2": 9.0},
++         [["t_b", "t_e"], ["t_c", "t_a", "t_d"]]),
++        ("同權重照名字排(跟傳入順序無關)", ["t_d", "t_c", "t_b", "t_a"], 2,
++         {"t_a": 1.0, "t_b": 1.0, "t_c": 0.25, "t_d": 0.0},
++         [["t_a", "t_c"], ["t_b", "t_d"]]),
++        ("同總權重取支數少的", ["t_a", "t_b", "t_c", "t_d", "t_e", "t_f", "t_g", "t_h", "t_i"], 2,
++         {"t_a": 0.0, "t_b": 0.7, "t_c": 0.7, "t_d": 1.0, "t_e": 1.0, "t_f": 0.3, "t_g": 0.0, "t_h": 1.0, "t_i": 0.1},
++         [["t_d", "t_h", "t_f", "t_i", "t_g"], ["t_e", "t_b", "t_c", "t_a"]]),
++    )
++    for label, nm, n, tb, want in rules:
++        check("耗時分片規則:%s" % label, _shard_by_duration(nm, tb, n) == want, _shard_by_duration(nm, tb, n))
++    # ⑥ 份數遠多於測試數:只回傳測試數那麼多份(多出來的編號就是空片),不照份數配置
++    #    (代碼審 r1 邊界輸入席:比較次數隨份數長;r2 四席:配置也隨份數長,1/100000000 要 7.7GB)
++    import time as _tm
++    t0 = _tm.time()
++    huge = _shard_by_duration(names, table, 10 ** 7)
++    took = _tm.time() - t0
++    check("耗時分片:份數一千萬時只回傳測試數那麼多份、每支各一份", len(huge) == len(names) and sorted(n for b in huge for n in b) == sorted(names)
++          and all(len(b) == 1 for b in huge), len(huge))
++    check("耗時分片:份數一千萬也在 0.5 秒內算完(照份數配置要一秒多、近 1GB)", took < 0.5, took)
++    # ⑦ 整支執行器:沒表照名字輪流分;表格式不對每一份都 rc2;有表時印表雜湊與總支數
++    base = Path(tempfile.mkdtemp(prefix="gctl-durshard-"))
++    try:
++        (base / "scripts").mkdir()
++        (base / "governance").mkdir()
++        runner = base / "scripts" / "test_lumos.py"
++        _sh.copy(Path(__file__).resolve(), runner)
++        _sh.copy(GRAPHCTL, base / "scripts" / "lumos")   # 讀表規則在主程式,執行器載入它來用
++        def run(*a):
++            return _sp.run([sys.executable, str(runner), *a], capture_output=True, text=True, timeout=180)
++        r = run("--shard", "1/3", "--list")
++        check("沒有耗時表:照名字輪流分並說明", r.returncode == 0 and "沒有耗時表" in (r.stdout + r.stderr), (r.returncode, r.stderr[-200:]))
++        tbl = base / "governance" / "test-durations.json"
++        # 各種壞表在行程內直接驗讀表那一支(r2 通才席:原本每種壞表起三個子行程,整支 59 秒、只剩 3 倍逾時餘裕)
++        read = _load_lumos_inproc()._read_durations_table
++        for label, bad in (("不是 JSON", "{nope"), ("不是物件", "[]"), ("tests 是空的", '{"version": 1, "tests": {}}'),
++                           ("秒數是字串", '{"version": 1, "tests": {"t_x": "1"}}'), ("秒數是負數", '{"version": 1, "tests": {"t_x": -1}}'),
++                           ("秒數是 NaN", '{"version": 1, "tests": {"t_x": NaN}}'), ("tests 不是物件", '{"version": 1, "tests": []}'),
++                           ("秒數是 Infinity", '{"version": 1, "tests": {"t_x": Infinity}}'),
++                           ("秒數是轉不成浮點的超大整數", '{"version": 1, "tests": {"t_x": 1%s}}' % ("0" * 400)),
++                           ("巢狀過深", "[" * 1000000 + "]" * 1000000)):
++            tbl.write_text(bad, encoding="utf-8")
++            try:
++                read(tbl)
++                why = None
++            except ValueError as e:
++                why = str(e)
++            check("耗時表%s:讀表擋下並說明" % label, bool(why), why)
++        tbl.unlink()
++        tbl.mkdir()
++        try:
++            read(tbl)
++            why = None
++        except ValueError as e:
++            why = str(e)
++        check("耗時表位置是資料夾:當成壞表擋下,不當成沒有表(r2 邊界輸入席)", why == "不是一般檔", why)
++        tbl.rmdir()
++        tbl.symlink_to(base / "nowhere.json")
++        try:
++            read(tbl)
++            why = None
++        except ValueError as e:
++            why = str(e)
++        check("耗時表是斷掉的符號連結:當成壞表擋下", why == "不是一般檔", why)
++        tbl.unlink()
++        # 子行程:各份對同一張壞表得出同一結論(rc2),不各自退回輪流分
++        for label, make in (("不是 JSON", lambda: tbl.write_text("{nope", encoding="utf-8")), ("位置是資料夾", tbl.mkdir)):
++            make()
++            rcs = [run("--shard", f"{i}/3", "--list").returncode for i in (1, 2, 3)]
++            check("耗時表%s:每一份都 rc2 擋下(不各自退回)" % label, rcs == [2, 2, 2], rcs)
++            tbl.rmdir() if tbl.is_dir() else tbl.unlink()
++        tbl.write_text("{nope", encoding="utf-8")
++        # 純文件推送也是分片跑文件子集(CI 與推送前掛鉤都是):表壞了那時就擋,不會等到下一次全套(r1 正確性席)
++        r = run("--shard", "1/3", "--suite", "docs", "--list")
++        check("耗時表壞了:分片跑文件子集也 rc2 擋下", r.returncode == 2 and "耗時表" in r.stderr, (r.returncode, r.stderr[-200:]))
++        tbl.write_text(_j.dumps({"version": 1, "tests": {"t_runner_shard_by_duration": 9.0}}), encoding="utf-8")
++        outs = [run("--shard", f"{i}/3", "--list") for i in (1, 2, 3)]
++        got = [l for o in outs for l in o.stdout.splitlines() if l.startswith("t_")]
++        allnames = sorted(k for k in globals() if k.startswith("t_"))
++        check("有耗時表:三份聯集等於全部、不重複", sorted(got) == allnames and len(got) == len(set(got)), (len(got), len(allnames)))
++        heads = {l.split("耗時表", 1)[1].split(",", 1)[0].strip() for o in outs for l in (o.stdout + o.stderr).splitlines() if "分法:耗時表" in l}
++        import hashlib as _hl
++        check("有耗時表:每一份印的是表的 SHA-256 前 8 碼", heads == {_hl.sha256(tbl.read_bytes()).hexdigest()[:8]}, heads)
++        totals = {l.split("共 ", 1)[1].split(" 支", 1)[0] for o in outs for l in o.stdout.splitlines() if "分法:耗時表" in l}
++        check("有耗時表:每一份印總支數", totals == {str(len(allnames))}, totals)
++        big = len(allnames) + 1
++        r = run("--shard", f"{big}/{big}")
++        check("有耗時表時片數比測試多:空片照舊擋 rc1", r.returncode == 1 and "一支測試都沒分到" in r.stderr, (r.returncode, r.stderr[-200:]))
++    finally:
++        _sh.rmtree(base, ignore_errors=True)
++    print("  ✓ t_runner_shard_by_duration")
++
++
++def t_test_durations_refresh():
++    """[推送與CI提速 S3、S5]執行器記下各支實測秒數(過、紅、逾時、例外都記,跳過的不記,只在來源 repo 寫);
++    `lumos test-durations refresh` 取每支最新一筆合進耗時表、沒跑到的保留舊值、讀完刪 run 檔;
++    舊表讀不懂就擋、不覆蓋;兩邊的秒數規則與表路徑同一份;只改耗時表的提交算簿記、推送判成文件改動。"""
++    import subprocess as _sp, json as _j, os as _os, time as _tm, shutil as _sh
++    base = Path(tempfile.mkdtemp(prefix="gctl-durref-"))
++    try:
++        def git(*a):
++            return _sp.run(["git", "-C", str(base), *a], capture_output=True, text=True, check=True)
++        git("init", "-q")
++        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
++        def lumos(*a):
++            return _sp.run([sys.executable, GRAPHCTL, *a], capture_output=True, text=True, timeout=120, cwd=str(base))
++        r = lumos("test-durations", "refresh", "--repo", str(base))
++        check("沒有 run 檔 → rc2 說明要先跑測試", r.returncode == 2 and "test-durations-run" in r.stderr, (r.returncode, r.stderr[-200:]))
++        gov, lum = base / "governance", base / ".lumos"
++        gov.mkdir()
++        lum.mkdir()
++        tbl = gov / "test-durations.json"
++        # 舊表開頭帶 BOM:執行器讀得進,刷新也要讀得進、不清空(r1 邊界輸入席)
++        tbl.write_bytes(b"\xef\xbb\xbf" + _j.dumps({"version": 1, "tests": {"t_old": 7.0, "t_a": 1.0}}).encode())
++        # 檔名順序跟時間順序相反:舊的叫 shard2of2、新的叫 shard1of2,照檔名排會讓舊值蓋掉新值(r2 合約圖譜席)
++        older, newer = lum / "test-durations-run-shard2of2.json", lum / "test-durations-run-shard1of2.json"
++        older.write_text(_j.dumps({"version": 1, "tests": {"t_a": 2.0, "t_b": 3.14159}}), encoding="utf-8")
++        newer.write_text(_j.dumps({"version": 1, "tests": {"t_a": 5.0, "t_bad": "x", "t_huge": 10 ** 400}}), encoding="utf-8")
++        # run 檔的 tests 形狀不對:當成讀不懂的略過,不讓整支崩潰、也不擋其他好的檔(r1 正確性、邊界輸入席)
++        odd = [lum / ("test-durations-run-%s.json" % k) for k in ("str", "list", "top")]
++        for p, body in zip(odd, ('{"tests": "abc"}', '{"tests": [1, 2]}', "[1]")):
++            p.write_text(body, encoding="utf-8")
++        # 列得出來、卻讀不到檔案資訊的 run 檔(斷掉的符號連結;等同列出之後被另一個刷新刪掉):略過,不讓排序崩潰(r2 併發資源席)
++        (lum / "test-durations-run-gone.json").symlink_to(base / "gone.json")
++        # 舊的固定暫存檔名被放成符號連結:刷新不能跟著它寫到別處(r1 資安席)
++        victim = base / "victim.txt"
++        victim.write_text("原樣", encoding="utf-8")
++        (gov / "test-durations.json.lumos-tmp").symlink_to(victim)
++        now = _tm.time()
++        _os.utime(older, (now - 100, now - 100))
++        _os.utime(newer, (now, now))
++        r = lumos("test-durations", "refresh", "--repo", str(base))
++        got = _j.loads(tbl.read_text(encoding="utf-8"))["tests"]
++        check("refresh rc0", r.returncode == 0, (r.returncode, r.stderr[-300:]))
++        check("★前置★ 現場成立:檔名排序跟時間排序相反", sorted([older.name, newer.name])[-1] == older.name, "")
++        check("同一支取檔案時間最新的那筆(不是檔名排最後的)", got.get("t_a") == 5.0, got)
++        check("只在舊 run 檔出現的也合進來,秒數存到小數三位", got.get("t_b") == 3.142, got)
++        check("沒跑到的保留舊值(舊表帶 BOM 也讀得進)", got.get("t_old") == 7.0, got)
++        check("秒數不合法的那筆不收(字串、轉不成浮點的超大整數)", "t_bad" not in got and "t_huge" not in got, got)
++        check("tests 形狀不對的 run 檔略過並說明", r.stderr.count("略過讀不懂的") == 3, r.stderr[-300:])
++        (lum / "test-durations-run-gone.json").unlink()
++        check("讀完刪掉 run 檔", not any(lum.glob("test-durations-run*.json")), list(lum.iterdir()))
++        check("舊的固定暫存檔名是符號連結時不跟著寫", victim.read_text(encoding="utf-8") == "原樣", victim.read_text(encoding="utf-8"))
++        check("寫完沒留下暫存檔", not [p for p in gov.iterdir() if p.name.endswith(".tmp-wlf")], list(gov.iterdir()))
++        # 舊表讀不懂或有不合法的秒數:擋下、不覆蓋、run 檔留著(r1 架構對齊、規格符合、邊界輸入席)
++        for label, body in (("不是 JSON", b"{nope"), ("巢狀過深", b"[" * 1000000 + b"]" * 1000000), ("有轉不成浮點的超大整數", ('{"version": 1, "tests": {"t_x": 1%s}}' % ("0" * 400)).encode())):
++            tbl.write_bytes(body)
++            older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.0}}), encoding="utf-8")
++            r = lumos("test-durations", "refresh", "--repo", str(base))
++            check("舊表%s:rc2 擋下、說明怎麼辦" % label, r.returncode == 2 and r.stderr.startswith("擋下:") and "刪掉它再刷新" in r.stderr, (r.returncode, r.stderr[-200:]))
++            check("舊表%s:舊表原樣、run 檔留著" % label, tbl.read_bytes() == body and older.exists(), "")
++        # 刷新讀完到刪檔之間有一片剛好寫了新內容:那個 run 檔留著給下次,不跟著刪(r1 併發資源席)。在寫表那一步插進一次改寫來模擬
++        tbl.unlink()
++        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.0}}), encoding="utf-8")
++        newer.write_text(_j.dumps({"version": 1, "tests": {"t_d": 1.0}}), encoding="utf-8")
++        mm = _load_lumos_module()
++        orig_write = mm._write_lf
++        def racing_write(path, text):
++            newer.write_text(_j.dumps({"version": 1, "tests": {"t_d": 1.0, "t_late": 2.0}}), encoding="utf-8")
++            return orig_write(path, text)
++        mm._write_lf = racing_write
++        try:
++            rv = mm.cmd_test_durations_refresh(str(base))
++        finally:
++            mm._write_lf = orig_write
++        check("★前置★ 現場成立:刷新本身成功", rv == 0 and tbl.exists(), rv)
++        check("讀完沒被改過的 run 檔照樣刪", not older.exists(), "")
++        check("讀完之後被改寫的 run 檔留著給下次", newer.exists() and "t_late" in newer.read_text(encoding="utf-8"), "")
++        newer.unlink()
++        # 寫不進去:rc1、訊息照慣例「擋下:」開頭(r1 架構對齊席)
++        tbl.unlink()
++        older.write_text(_j.dumps({"version": 1, "tests": {"t_c": 1.0}}), encoding="utf-8")
++        _os.chmod(gov, 0o555)
++        try:
++            r = lumos("test-durations", "refresh", "--repo", str(base))
++        finally:
++            _os.chmod(gov, 0o755)
++        check("寫不進耗時表:rc1 且說明以「擋下:」開頭", r.returncode == 1 and r.stderr.startswith("擋下:寫不進耗時表"), (r.returncode, r.stderr[-200:]))
++        # 讀表規則與路徑只有主程式一份,執行器載入它來用(r2 架構對齊席:本檔慣例是讀活的常數,不抄第二份)
++        m = _load_lumos_inproc()
++        import inspect as _insp, re as _re
++        own = Path(__file__).read_text(encoding="utf-8")
++        check("執行器沒有自己的一份秒數規則或讀表規則", not _re.search(r"^def (_duration_ok|_read_durations_table)\b", own, _re.M)
++              and "_load_lumos_inproc()._read_durations_table" in _insp.getsource(_load_durations_table), "")
++        check("執行器讀的耗時表路徑就是主程式的常數",
++              _durations_table_path() == Path(GRAPHCTL).resolve().parent.parent / m._TEST_DURATIONS_REL
++              and "_load_lumos_inproc()._TEST_DURATIONS_REL" in _insp.getsource(_durations_table_path), str(_durations_table_path()))
++        # 只改耗時表 → 簿記檔、推送判成文件改動
++        m = _load_lumos_module()
++        check("耗時表在簿記檔清單裡(刷新不讓代碼審留痕失效)", "governance/test-durations.json" in m._BOOKKEEPING_FILES, "")
++        tbl.write_text(_j.dumps({"version": 1, "tests": {"t_a": 1.0}}), encoding="utf-8")
++        for p in lum.glob("test-durations-run*.json"):   # 上面擋下的情境留著的 run 檔,不帶進這個提交
++            p.unlink()
++        victim.unlink()
++        (gov / "test-durations.json.lumos-tmp").unlink()
++        git("add", "-A")
++        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "durations")
++        r = lumos("pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--json", "--repo", str(base))
++        try:
++            suite = _j.loads(r.stdout).get("suite")
++        except ValueError:
++            suite = None
++        check("只改耗時表的推送判成文件改動(CI 只跑文件子集)", suite == "docs", (suite, r.stdout[-300:], r.stderr[-200:]))
++    finally:
++        _sh.rmtree(base, ignore_errors=True)
++    # 執行器記秒數:在臨時 repo 放一份執行器加幾支會過、紅、例外、逾時、跳過的小測試,不碰真 repo 的 .lumos/(r1 正確性、合約圖譜席)
++    box = Path(tempfile.mkdtemp(prefix="gctl-durrun-"))
++    try:
++        (box / "scripts").mkdir()
++        _sh.copy(GRAPHCTL, box / "scripts" / "lumos")   # 讀表規則在主程式,執行器載入它來用
++        src = Path(__file__).resolve().read_text(encoding="utf-8")
++        tail = '\n\nif __name__ == "__main__":'
++        extra = ('\n\ndef t_zzdur_ok():\n    check("ok", True, "")\n'
++                 '\n\ndef t_zzdur_red():\n    check("紅", False, "")\n'
++                 '\n\ndef t_zzdur_exc():\n    raise RuntimeError("boom")\n'
++                 '\n\ndef t_zzdur_slow():\n    import time\n    time.sleep(5)\n'
++                 '\n\ndef t_zzdur_skip():\n    raise _SrcOnly("跳過")\n'
++                 '\n\ndef t_zzswap_table():\n    p = Path(GRAPHCTL).resolve().parent.parent / "governance"\n'
++                 '    p.mkdir(exist_ok=True)\n    (p / "test-durations.json").write_text(\'{"version": 1, "tests": {"t_x": 1.0}}\', encoding="utf-8")\n'
++                 '    check("寫了表", True, "")\n')
++        check("★前置★ 現場成立:執行器檔尾的進入點只有一處", src.count(tail) == 1, src.count(tail))
++        (box / "scripts" / "test_lumos.py").write_text(src.replace(tail, extra + tail), encoding="utf-8")
++        env = dict(_os.environ, LUMOS_TEST_TIMEOUT="2")
++        def run_box():
++            return _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "-k", "t_zzdur_"],
++                           capture_output=True, text=True, timeout=120, env=env)
++        rr = run_box()
++        check("★前置★ 現場成立:五支小測試都跑到了", all(k in rr.stdout for k in ("t_zzdur_red", "t_zzdur_exc", "TIMEOUT t_zzdur_slow", "skip t_zzdur_skip")), rr.stdout[-500:])
++        check("消費專案(沒有 skills/lumos-project-notes)不寫 run 檔", not (box / ".lumos").exists() or not any((box / ".lumos").glob("test-durations-run*.json")), "")
++        (box / "skills" / "lumos-project-notes").mkdir(parents=True)
++        rr = run_box()
++        run_file = box / ".lumos" / "test-durations-run.json"
++        got = _j.loads(run_file.read_text(encoding="utf-8"))["tests"] if run_file.is_file() else {}
++        check("來源 repo:過、紅、例外、逾時都記秒數", all(k in got for k in ("t_zzdur_ok", "t_zzdur_red", "t_zzdur_exc", "t_zzdur_slow")), (sorted(got), rr.stdout[-300:]))
++        check("來源 repo:跳過的不記", "t_zzdur_skip" not in got, sorted(got))
++        # 一片跑的期間耗時表換了(開頭沒有表、結尾有):擋下 rc2(r1 併發資源席:各片照不同的表分,聯集不再等於全部)
++        rs = _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "--shard", "1/1", "-k", "t_zzswap_table"],
++                     capture_output=True, text=True, timeout=120, env=env)
++        check("★前置★ 現場成立:那支小測試真的寫出了耗時表", (box / "governance" / "test-durations.json").is_file(), rs.stdout[-300:])
++        check("分片跑的期間耗時表換了 → rc2 擋下", rs.returncode == 2 and "耗時表換了" in rs.stderr, (rs.returncode, rs.stderr[-300:]))
++        rs = _sp.run([sys.executable, str(box / "scripts" / "test_lumos.py"), "--shard", "1/1", "-k", "t_zzswap_table"],
++                     capture_output=True, text=True, timeout=120, env=env)
++        check("表沒換(開頭結尾同一張)→ 照常 rc0", rs.returncode == 0, (rs.returncode, rs.stderr[-300:]))
++    finally:
++        _sh.rmtree(box, ignore_errors=True)
++    print("  ✓ t_test_durations_refresh")
++
++
++def t_ci_yml_speed_shape():
++    """[推送與CI提速 S4]ci.yml 有 concurrency:PR 用編號分組且取消舊的,推到 main 用提交編號分組不取消;shards 印每份耗時。"""
++    y = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
++    top = y.split("\njobs:", 1)[0]
++    check("ci.yml 頂層有 concurrency", "\nconcurrency:" in top, top[-400:])
++    check("concurrency 群組:PR 用編號、推送用提交編號", "github.event.pull_request.number || github.sha" in top, top[-400:])
++    check("只有 PR 事件取消進行中的工作", "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in top, top[-400:])
++    shards = y.split("\n  shards:", 1)[1].split("\n  gates:", 1)[0]
++    code = [l for l in shards.splitlines() if not l.lstrip().startswith("#")]   # 註解裡也有「份耗時」字樣,只看指令行(r1 合約圖譜席)
++    run = [l for l in code if "test_lumos.py --shard" in l]
++    check("★前置★ 現場成立:找得到跑分片的那一行", len(run) == 1, run)
++    line = run[0] if run else ""
++    check("shards 每一份開頭印開始時間", 'echo "第 $i 份開始' in line, line)
++    check("shards 每一份結尾印耗時", 'echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"' in line, line)
++    check("測試紅了也印耗時:子殼層先 set +e(預設 bash -e 會跳過後面)", line.lstrip().startswith("( set +e;"), line)
++    # 真的跑一次:把跑測試那一段換成會紅/會綠的指令,照 Actions 預設的 bash -e 跑,外層要收到同一個離開碼
++    # (r2 合約圖譜席:拿掉子殼層結尾的 exit $rc,紅的分片會被吞成綠,只比字串的斷言抓不到)
++    import subprocess as _sp, tempfile as _tf, shutil as _sh
++    wait_line = [l for l in code if "wait" in l and "jobs -p" in l]
++    check("★前置★ 現場成立:找得到收各份離開碼的那一行", len(wait_line) == 1, wait_line)
++    d = _tf.mkdtemp(prefix="gctl-ciyml-")
++    try:
++        for want, cmd in ((1, "false"), (0, "true")):
++            body = line.strip().replace('python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"', cmd).replace('"/tmp/shard-$i.log"', f'"{d}/s$i.log"')
++            script = f"set -u\nrc=0\nSHARD_TOTAL=1\nfor i in 1; do\n{body}\ndone\n{wait_line[0].strip() if wait_line else ''}\necho \"outer=$rc\"\n"
++            r = _sp.run(["bash", "-e", "-c", script], capture_output=True, text=True, timeout=30)
++            log = Path(d, "s1.log").read_text(encoding="utf-8") if Path(d, "s1.log").exists() else ""
++            check(f"子殼層裡測試{'紅' if want else '綠'}:外層收到 {want}、日誌有開始時間與耗時",
++                  f"outer={want}" in r.stdout and "份開始" in log and "份耗時" in log, (r.stdout, r.stderr[-200:], log))
++    finally:
++        _sh.rmtree(d, ignore_errors=True)
++    print("  ✓ t_ci_yml_speed_shape")
++
++
+ def t_shard_partition_survives_ff_and_seed():
+     """★分片的聯集必須永遠等於全部,不受 --ff / --seed 影響★(2026-09-06 代碼審 r1)。
+ 
+     出身:我第一版把「上次紅過的排最前面」做在分片之前。各片是獨立行程,讀到的失敗快取
+     可能不一樣(某片先跑完就把快取覆蓋掉了),於是「第 k 支」對不同片指的不是同一支——
+     **各片聯集不再等於全部:有些測試跑兩次、有些一次都沒跑,而全套照樣印綠**。
+     外家審查席用「兩個執行者各自帶不同快取」的情境推出來的。
+ 
+     修法:分片先做(在穩定的排序清單上切),重排只影響片內順序。這支就是釘住這件事。"""
+     import subprocess as _sp, os as _os, json as _j
+@@ -38808,20 +39131,51 @@ def t_vendored_consumer_srconly_skip_regression():
+ # 用 SIGALRM:單進程、零依賴、不影響既有測試。沒有 SIGALRM 的平台(Windows)自動
+ # 退回「不設限」,行為與加這條之前完全一致。
+ import os as _os_timeout
+ import time as _time_slow
+ 
+ TEST_TIMEOUT_SEC = int(_os_timeout.environ.get("LUMOS_TEST_TIMEOUT", "180"))
+ # 每支耗時,收尾印最慢五支。★這不是效能監控,是超時上限的校準依據★:
+ # 上限要對「現在最慢那支」有足夠餘裕,否則慢一點的機器(CI)會假紅,
+ # 然後下一步就是有人把 LUMOS_TEST_TIMEOUT 設 0 繞過——閘變裝飾。
+ SLOWEST = []
++_DURATIONS = {}          # 這一輪每支測試的實測秒數(過、紅、逾時、例外都記;跳過的不記),跑完寫給耗時表刷新用
++_DURATION_FLOOR = 0.05   # 權重下限:一堆 0 秒的測試不能全擠進同一份(推送與CI提速 r1 邊界失效席)
++
++
++def _durations_table_path():
++    # 路徑與讀表規則只在 scripts/lumos 一份(本檔慣例:_load_lumos_inproc 讀活的常數,不抄第二份;代碼審 r2 架構對齊席)
++    return Path(GRAPHCTL).resolve().parent.parent / _load_lumos_inproc()._TEST_DURATIONS_REL
++
++
++def _load_durations_table():
++    """讀耗時表,回 (表, 雜湊前 8 碼);沒有表回 (None, None);讀不懂丟 ValueError。規則在 scripts/lumos 的 _read_durations_table,
++    刷新指令用的是同一支。同一個提交的每一份讀到的是同一個檔,所以格式不對時每一份都會擋——不各自退回輪流分,免得混用兩種分法、聯集出錯。"""
++    return _load_lumos_inproc()._read_durations_table(_durations_table_path())
++
++
++def _shard_by_duration(names, table, n):
++    """照耗時把 names 分成 n 份:權重 = 表裡秒數(沒有的用全表中位數,下限 0.05 秒),由大到小、同權重照名字,
++    逐支丟給總權重最小的一份(同總權重取支數少的、再取編號小的)。同輸入同結果,各份聯集等於全部、不重複。
++    份數比測試多時,多出來的份一定是空的:只回傳前 min(n, len(names)) 份,呼叫端取不到的編號就是空片
++    (代碼審 r1、r2 邊界輸入與併發資源席:原本照份數配置,打錯成 1/100000000 要 7.7GB)。"""
++    import statistics as _sd
++    med = _sd.median(table.values())
++    w = {nm: max(float(table.get(nm, med)), _DURATION_FLOOR) for nm in names}
++    live = min(n, len(names))
++    loads, counts, buckets = [0.0] * live, [0] * live, [[] for _ in range(live)]
++    for nm in sorted(names, key=lambda x: (-w[x], x)):
++        k = min(range(live), key=lambda j: (loads[j], counts[j], j))
++        loads[k] += w[nm]
++        counts[k] += 1
++        buckets[k].append(nm)
++    return buckets
+ SKIPPED_NAMES = []   # r1 代碼審折入:跳過只記總數的話,「換掉哪一支」看不出來;把名字也留著
+ # 天生就慢的測試(輪詢 CI 這種)給自己的上限。
+ # ★不要為了遷就最慢那支把全域上限拉高★——那會讓真的卡死也要等到那個上限才被打斷,
+ # 等於把偵測能力送掉。實測(2026-08-22 本機):t_ci_wait 132.3s、次慢 25.8s,
+ # 所以全域 180s 對「一般測試」有 7x 餘裕,只有 t_ci_wait 需要單獨放寬。
+ TIMEOUT_OVERRIDE = {"t_ci_wait": 450,          # 132.3s → 餘裕 3.4x
+                     # 本機約 105s;CI 機器慢約一倍,PR #7、#8 都在 CI 超過 180s 被砍(斷言全過),連重跑也紅
+                     "t_prepush_docs_and_light_run_subset": 360}
+ 
+ 
+@@ -39268,21 +39622,35 @@ def main():
+             # 跟 --seed 打不打亂無關(打亂只影響片內順序)。
+             try:
+                 _i, _n = (int(x) for x in _args.shard.split("/", 1))
+             except ValueError:
+                 print(f"擋下:--shard 要寫成「第幾片/共幾片」,例如 2/4;收到的是 {_args.shard!r}",
+                       file=sys.stderr)
+                 return 2
+             if _n < 1 or not (1 <= _i <= _n):
+                 print(f"擋下:--shard {_args.shard} 不合理(第幾片要在 1 到共幾片之間)", file=sys.stderr)
+                 return 2
+-            tests = [t for k, t in enumerate(tests) if k % _n == _i - 1]
++            try:
++                _table, _thash = _load_durations_table()
++            except (OSError, ValueError) as _e:
++                print(f"擋下:耗時表 {_durations_table_path()} 格式不對({_e});修好或刪掉它(刪掉就照名字輪流分)",
++                      file=sys.stderr)
++                return 2
++            _total = len(tests)
++            if _table is None:
++                print("沒有耗時表,照名字輪流分")
++                tests = [t for k, t in enumerate(tests) if k % _n == _i - 1]
++            else:
++                _buckets = _shard_by_duration([t.__name__ for t in tests], _table, _n)
++                _mine = set(_buckets[_i - 1]) if _i <= len(_buckets) else set()
++                tests = [t for t in tests if t.__name__ in _mine]
++                print(f"分法:耗時表 {_thash},共 {_total} 支,這份分到 {len(tests)} 支")
+             print(f"這是第 {_i} 片(共 {_n} 片),分到 {len(tests)} 支")
+             if not tests and _args.suite:
+                 # 子集配分片(r2 正確性席 blocker):關鍵字子集常常只選中一兩支,切 4 片必有空片;子集整體非空(上面 rc3 那關已過),
+                 # 空片是「沒分到」不是「跑了個寂寞」,回 0 讓掛鉤把其他片的結果當數
+                 print(f"第 {_i} 片沒分到(子集比片數少,別片有跑),這片算過")
+                 return 0
+             if not tests:
+                 print(f"擋下:第 {_i} 片一支測試都沒分到——片數比測試數還多,或切法寫錯了;"
+                       f"跑了個寂寞不算通過", file=sys.stderr)
+                 return 1
+@@ -39340,20 +39708,21 @@ def main():
+             # 假綠洞修補:-k 選中 0 案例 ≠ 全綠——「跑了個寂寞」必須紅,
+             # 否則消費 rc 的一方(hook/CI 等機制)會把「沒驗」當「驗過」。
+             # ★這條只管「要真的跑」的路★:上面 --list 是查詢,不適用。
+             print(f"✗ -k '{_args.keyword}' 選中 0 個測試(t_ 名單無此子字串)——視為失敗", file=sys.stderr)
+             return 1
+         print(f"lumos 測試({len(tests)} 案例)")
+         global FAIL, SKIP
+         _failed_names = []
+         for t in tests:
+             _round_fail_before = FAIL
++            _dur_start = _time_slow.time()
+             try:
+                 # ★單一處的自動規則,不往每支測試塞一行★:`t_slim_*` 整族驗的是「交付包」
+                 # (slim/ 底下的產物 + slim-gen/slim-scan),那是來源 repo 專用。用前綴在
+                 # 這裡一次涵蓋,★新增的 t_slim_* 自動繼承★——往 40 個函式各插一行才是
+                 # 會漏的分支簿記(本專案 2026-08-01 剛因同型簿記漏一條被代碼審抓到)。
+                 # 判定仍是狀態驅動:`slim/` 真的在(來源 repo)就照跑,零行為改變。
+                 if t.__name__.startswith("t_slim_"):
+                     _need_src("slim")
+                 _fail_before, _pass_before = FAIL, PASS
+                 _t_start = _time_slow.time()
+@@ -39376,20 +39745,22 @@ def main():
+                 SKIPPED_NAMES.append(t.__name__)   # r1:只記總數的話,「換了一支跳過」量不到
+                 print(f"  - skip {t.__name__}: {e}")
+             except TestTimeout as e:
+                 # ★判紅不判 skip★:沒跑完 = 沒驗過。名字印出來,才知道要去修哪一支。
+                 FAIL += 1
+                 print(f"  ✗ TIMEOUT {t.__name__}: {e}"
+                       f"(調整:LUMOS_TEST_TIMEOUT=<秒>,0=不設限)")
+             except Exception as e:
+                 FAIL += 1
+                 print(f"  ✗ {t.__name__} EXCEPTION: {e}")
++            if t.__name__ not in SKIPPED_NAMES:
++                _DURATIONS[t.__name__] = round(_time_slow.time() - _dur_start, 3)
+             # 這一支有沒有紅,決定要不要進「上次紅過」的快取,以及 -x 要不要停在這裡
+             if FAIL > _round_fail_before:
+                 _failed_names.append(t.__name__)
+                 if _args.exitfirst:
+                     print(f"  停在第一支紅的({t.__name__});"
+                           f"修完用 --ff -x 重跑,它會先跑這幾支")
+                     if _args.seed is not None:
+                         print(f"  這輪是打亂順序跑的,要原樣重現請帶 --seed {_args.seed}")
+                     break
+         # 把紅的名字留下來給 --ff 用(全綠就清空,免得舊名字一直排前面)
+@@ -39401,20 +39772,36 @@ def main():
+                 _cache.parent.mkdir(parents=True, exist_ok=True)
+                 _tmpc = _cache.with_suffix(_cache.suffix + ".lumos-tmp")
+                 _tmpc.write_text(_jc2.dumps({"failed": _failed_names}, ensure_ascii=False),
+                                  encoding="utf-8")
+                 _osc.replace(_tmpc, _cache)
+             except OSError:
+                 try:
+                     _tmpc.unlink()
+                 except (OSError, NameError):
+                     pass
++            # 各支實測秒數:給 `lumos test-durations refresh` 合進耗時表(推送與CI提速 S3);同快取的位置、條件與原子寫法
++            if _DURATIONS:
++                _dur = _cache_dir / (f"test-durations-run-shard{_args.shard.replace('/', 'of')}.json"
++                                     if _args.shard else "test-durations-run.json")
++                try:
++                    import json as _jd2, os as _osd
++                    _dur.parent.mkdir(parents=True, exist_ok=True)
++                    _tmpd = _dur.with_suffix(_dur.suffix + ".lumos-tmp")
++                    _tmpd.write_text(_jd2.dumps({"version": 1, "tests": _DURATIONS}, ensure_ascii=False, sort_keys=True),
++                                     encoding="utf-8")
++                    _osd.replace(_tmpd, _dur)
++                except OSError:
++                    try:
++                        _tmpd.unlink()
++                    except (OSError, NameError):
++                        pass
+         if SLOWEST:
+             top = sorted(SLOWEST, reverse=True)[:5]
+             print(f"\n最慢 5 支(超時上限 {TEST_TIMEOUT_SEC}s;餘裕 = 上限 / 最慢):")
+             for sec, name in top:
+                 lim = TIMEOUT_OVERRIDE.get(name, TEST_TIMEOUT_SEC)
+                 ratio = (lim / sec) if sec > 0 else float("inf")
+                 flag = "  ⚠ 餘裕不足 3 倍" if ratio < 3 else ""
+                 lim_note = f"/上限 {lim}s" if name in TIMEOUT_OVERRIDE else ""
+                 print(f"  {sec:6.1f}s  {name}{lim_note}  (餘裕 {ratio:.0f}x){flag}")
+         if _args.json_summary:
+@@ -39446,20 +39833,31 @@ def main():
+             # ——兩邊相減淨額一樣。所以把名字列出來,人一眼看得出換的是誰。
+             print(f"  跳過的是:{', '.join(SKIPPED_NAMES)}")
+             if _baseline_applies:
+                 FAIL += 1
+                 print(f"  ✗ 判紅:這台是來源 repo 又不是 Windows,所有跳過通道的條件本來都不成立"
+                       f"——多出來的跳過幾乎一定是現場被弄壞了(例如某個環境變數設錯,害測試找不到它要的東西)。")
+                 print(f"  確認過而且合理的話,把 EXPECTED_SKIP_MAX 調成 {SKIP} 並在旁邊寫一句為什麼,"
+                       f"或設 LUMOSEXPECTED_SKIP_MAX=<數字> 暫時放行。")
+             else:
+                 print(f"  (這台不是來源 repo 或是 Windows,跳過本來就會多,所以只記不判紅)")
++        if _args.shard:
++            # ★跑完再讀一次耗時表,跟開頭讀到的比★(代碼審 r1 併發資源席):各片各自讀表,有人在各片啟動之間換了表
++            # (刷新、切分支、git pull),各片就照不同的表分,聯集不再等於全部、卻全綠。先啟動的那片結尾一定讀到新表,在這裡擋下。
++            try:
++                _thash_end = _load_durations_table()[1]
++            except (OSError, ValueError):
++                _thash_end = "讀不懂"
++            if _thash_end != _thash:
++                print(f"擋下:這一片跑的期間耗時表換了(開頭 {_thash or '沒有表'}、結尾 {_thash_end or '沒有表'});"
++                      f"各片可能照不同的表分,聯集不保證等於全部,重跑一次", file=sys.stderr)
++                return 2
+         return 1 if FAIL else 0
+     finally:
+         # ★收尾一定要跑到★(r1 外家席抓到):原本寫在 return 之前,所以 `-k` 打錯字的早退、
+         # Ctrl-C、以及測試迴圈外的例外通通會繞過它,把整個現場留在系統暫存目錄裡等一天後
+         # 才被下一輪修剪掉。改成 finally:不管從哪條路離開都收尾。
+         import shutil as _sh
+         if FAIL or _args.keep_tmp:
+             print(f"  這一輪的暫存現場留著沒刪(有紅或 --keep-tmp):{_run_root}")
+         else:
+             try:
+@@ -68011,20 +68409,23 @@ def t_push_summary_anchor_note_and_separators():
+     try:
+         bf = d / "blocks"
+         bf.write_text("anchor\t-\t裁判檔沒簽名那筆\nhome\trefs/heads/x\t沒家\n", encoding="utf-8")
+         r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "1",
+                     "--repo", str(d)], capture_output=True, text=True)
+         check("①有 anchor 那筆 → 印提示句", r.returncode == 0 and _PPC_ANCHOR_NOTE in r.stderr, r.stderr[-400:])
+         bf.write_text("home\trefs/heads/x\t沒家\n", encoding="utf-8")
+         r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "1", "--refs", "1",
+                     "--repo", str(d)], capture_output=True, text=True)
+         check("①沒有 anchor 那筆 → 不印提示句", r.returncode == 0 and "裁判檔沒簽名" not in r.stderr, r.stderr[-400:])
++        # 行程內呼叫也回 0(不是 None):sys.exit(None) 也是 0,只看離開碼抓不到函式結尾的 return 被吃掉(推送與CI提速 代碼審 r1 通才席)
++        rv = _load_lumos_module().cmd_push_summary(str(d), str(bf), 1, 1)
++        check("①行程內呼叫 cmd_push_summary 回 0", rv == 0, repr(rv))
+         for name, ch in (("U+2028", " "), ("U+2029", " "), ("U+0085", "\x85")):
+             bf.write_bytes(f"home\trefs/heads/a{ch}b\t沒家\ndoctor\t-\t健檢\n".encode("utf-8"))
+             r = sp.run([sys.executable, GRAPHCTL, "push-summary", "--blocks-file", str(bf), "--count", "2", "--refs", "2",
+                         "--repo", str(d)], capture_output=True, text=True)
+             # 只照 \n 切輸出(印出的 ref 名裡那個字元原樣留著,用 splitlines 讀輸出會把這一列自己切斷)
+             import re as _re
+             rows = [mm.group(1) for mm in (_re.match(r"^\s+\d+\. (\S+?)(?: \[|:)", ln) for ln in r.stderr.split("\n")) if mm]
+             check(f"②ref 名帶 {name} → 2 筆 2 道閘、兩列都在、沒有「沒寫進暫存檔」",
+                   r.returncode == 0 and _ppc_header(r.stderr) == (2, 2) and rows == ["home", "doctor"]
+                   and "沒寫進暫存檔" not in r.stderr, f"{rows} {r.stderr[-400:]!r}")
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index 4b45c39e..0da756c2 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -27,20 +27,21 @@
+ | 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add --try`(當場只跑新的那條),提交後跑 `lumos guard kill <節點> --id <短身分>` | 移除前印出那條完整內容與範本(--old、--new 都要照現在的程式重填,原樣貼待填字樣會被擋);短身分至少 8 字元,對到不同的多條會擋下;不帶 --id 跑一次列出這篇每條的短身分,guard kill 每條結果行的 id= 也是 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
+ | 「`lumos doctor` 的 P2 段說有配方最近一次真跑判 survived」 | 照那行的 `lumos guard kill <節點> --id <短身分>` 重跑;確定那條壞法本來就殺不掉(不是測試漏洞)才照第二個指令 kill-rm | 只看每條配方最近一次的結果,原文對不上的那段列過的不重複列;行尾寫「證據弱」或「之後改過」的先重跑;之後補強過測試的也先重跑(這種情況工具判不出來) | 原文對得上卻殺不掉,P2 原本看不出來,只有跑整篇 guard kill 才發現 |
+ | 「配方驗的測試不在合約的測試清單上(kill-add 提醒、`lumos doctor` 的 P2 段)」 | 照提醒的修法:要讓推送閘也守它就貼那行 `lumos guard bind`;清單外那支不該用就 kill-rm 後改用清單上那支重新 kill-add;講平台不同的,kill-rm 後帶 `--platform` 重新 kill-add | 綁上後這條合約有多支測試,之後 kill-add 不帶 `--test` 會要你指明;方法名不是識別字(反引號名、含點)的 bind 綁不了;清單外那支是不是刻意更細的測試由人判 | 合約清單是推送前會真跑的測試,配方驗的是另一支時,殺傷力證明的不是推送閘守的那支 |
+ | 「表態說併發/N+1 沒問題,想要有背書」 | 寫次數或併發測試 → 合約 ★INVARIANT★ → `lumos guard bind` → `lumos guard kill-add <節點> "<片段>" … --covers <題目id>` → 提交 → `lumos guard kill <節點>` → 重表態 | 寫表態時工具在本機算背書存進記錄;推送前沒有背書只提醒一行 | 「已處理」只有檔案行號,等於說看過了沒問題 |
+ | 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(不寫 HEAD:它在會談的專案目錄解讀),hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;hook 拿會談的專案目錄算,範圍在那裡算不出來會附一行 `LUMOS-LENS:` 說明、不附節點;內容從 base 讀;自由文字只有帶 `[來源:外部]` 的外部事實行,在框內;例外是「這次新增的殘留」段從頂端讀推送者寫的殘留決策與問答列,防護是注入框、字數上限、消毒,當可反駁的資料看) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線或範圍算不出來→附一行 `LUMOS-LENS:` 說明、不附節點 | 鏡頭不是閘,不擋 |
+ | 「這次改到前端還是後端?正確性席要不要多看哪幾題?」 | 正確性席派工詞在 `LUMOS-IMPACT:` 之外再留一行 `LUMOS-ROLE-CARDS: on`,hook 依改到前端或後端在框外附角色鏡頭卡;手動看 `lumos dispatch-lens <base>..HEAD --role-cards`;推送前 `lumos pitfalls --diff` 的人讀輸出有一行角色統計 | 圖譜那段超時或沒圖譜時卡照附;判不出就不附;專案可在 `.lumos/config.json` 的 `review_roles` 宣告路徑角色(讀改動起點版本) | 只給正確性席,架構對齊與資安席不放;Codex 編排目前不附 |
+ | 「新模組要照 DDD 這類目標架構寫,不想被架構對齊席判成跟舊鄰居不一樣?」 | `.lumos/config.json` 加 `arch_targets`:有序清單,每條恰好 `{"path": "app/Domain/**", "node": "Systems/<目標架構節點>"}`,第一條命中算數,要切出舊碼就在前面放一條 `"node": "none"`;目標節點用 `lumos new system <名> --responsibility "…"` 開(不帶 --code),規則寫成摘要的 `RULE:` 行(DDD 可直接抄 [target-arch-ddd-template.md](target-arch-ddd-template.md) 的九條範本);架構對齊席範本已有 `LUMOS-ARCH-TARGET: on`,hook 附規則原文 | 只讀改動起點版的宣告(分支自己改宣告下次推送才生效);第一段是萬用字元的樣式(`**`、`**/*.php`、`*.cs`)整份不用;`lumos doctor` 列每條宣告命中幾支檔 | 推送前 `pitfalls --diff` 只標哪些檔用目標基準、不貼規則;設計審讀 HEAD 版宣告,計劃提到還不存在的檔也算 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 只有結論 green 才算過;red 要處理;timeout/no-run/unavailable/undetermined 都不算綠,rc0 不等於 CI 成功 | 紅了沒人知道 |
+ | 「推送被擋,這次到底有幾個原因?」 | 不用手動叫:推送前掛鉤把全套測試之前那幾道閘(裁判簽名、簽名檔沒提交、圖譜健檢、每支檔有家、筆記形狀、雙向門放行、代碼審判定、存量漂移、回頭重讀)全部跑完,有擋下就在最後叫 `lumos push-summary` 印彙總 | 最後一段「這次推送共有 N 筆擋下(M 道閘)」逐筆一行,各道的處理方式在上面各自那一段;全套測試這次沒跑;記一筆 `prepush-summary` 治理帳;舊版 lumos 沒有這個指令時掛鉤自己印簡版 | 修好一個原因、重推等幾分鐘才看到下一個 |
++| 「CI 各份測試又不平均了?」 | `lumos test-durations refresh`(先跑過一次測試,執行器會把各支秒數留在 `.lumos/`) | 把實測秒數合進 `governance/test-durations.json`,分片照耗時分;沒跑到的保留舊值 | 照名字輪流分時,最慢的機器要等到 12–14 分 |
+ | 「推新分支時,推送前的閘拿哪一段當這次的改動?」 | 推送前掛鉤自動叫;手動查 `lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <遠端 ref>` | 印一行範圍:跟主線的分岔點..頂端;頂端已在主線印頂端..頂端;判不了印空樹..頂端(多擋) | 新分支首推把整個 repo 當新改動誤擋 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句> --sha <提交>`(沒有佐證就改給 `--missing-defect-ref "<為什麼沒有>"`);看全帳 `lumos loop escape --list`;記錯撤回 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>`;各類別漏網率 `lumos loop escape-stats` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
+ | 「這輪代碼審修完了,派下一輪前驗一下修法」 | 修完先提交,寫 `governance/review-reports/<編號>/rN-fix.json`(骨架 `lumos loop fix-check <編號> --round rN --record-template`),再在背景跑 `lumos loop fix-check <編號> --round rN`;跳過用 `LUMOS_SKIP_FIX_CHECK=1`(會記帳) | 0 過/1 沒過(列哪一項)/2 輸入錯;約 5 分鐘 | 修補自己弄出的新 bug 留到下一輪審查員才看到;只提醒不擋,只驗修正後是綠的 |
+ | 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 | 沒問閘就推,pre-push 與 CI 會擋(tier high 無留痕=紅燈) |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+ 
+ ## 筆記內容審:新寫的筆記是不是程式碼推得出來(推送前)
+ 
+ 白話:推之前,把這段範圍裡新寫、而且還留著的筆記行一行一行交給一位判定者,問它「這句只看程式碼就能確認嗎」。判成推得出來(CODE)或一半一半(MIXED)的要刪、改,或申訴;判成脈絡(CONTEXT)的才算過。計劃收尾(status 改成 done 或 superseded)那次,整篇再判一次。只防疏忽,不防存心繞過。設計與取捨:[[Projects/筆記內容審_計劃]]。
+ 
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 7d45e0ed..5c66a219 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -28,19 +28,19 @@
+ 
+ ## 二、九類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff / events |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 寫／掃測試、寫回圖譜(品質、分類、Issue、決策) | `commands/03-寫回圖譜.md` | new / set / summary-line / updated-sync / append / remove / decision-add / decision-supersede / decision-reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh / test-quality |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots(診斷;啟用看07) / doctor / stale / gov / drift-history / drift exam(工具鏈考卷重放) / drift scan·fix·ack(存量漂移:列出、工具改、照留;舊句 m1 用 ack --name、回頭重讀用 ack --kind reread) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status / push-range / push-summary / 離線收斂評測 |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / note-audit prepare·record·check·skip(筆記內容審) / note-audit reread-prepare·reread-record·reread-check(推送前回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait / ci-status / push-range / test-durations refresh / push-summary / 離線收斂評測 |
+ | 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼,再查脈絡**(理由、限制、事故)。改 code 前跑 `lumos impact --file <檔>`;不解釋可以,不查不行。筆記與程式衝突怎麼裁,照專案 CLAUDE.md／AGENTS.md 的紀律區塊。
+ 2. 改了會影響行為、決策、驗證的 code,當次寫回圖譜。**先問程式碼推不推得出來**:推得出來的別抄;程式碼答不了的現況同一行帶 `[來源:…]`;理由用 `WHY:`、限制用 `RULE:`(退場條件)、事故用 `PITFALL:`(防回歸)。刪除的測試改 `[test-gone:名稱]`。詳見 `commands/03-寫回圖譜.md`。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 7e551439..6c4723cd 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -107,21 +107,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ 
+ **安裝 / 生命週期**（操作工具鏈本身,不碰圖譜資料;唯一源 = 公開 repo `EnzoHsieh-Android/Lumos`，預設 clone 到 `~/harness/lumos-toolchain`）：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 全域安裝 lumos（symlink → `~/.local/bin`） | `python3 scripts/lumos install [--force]` | 裝完任何專案子目錄直接 `lumos <cmd>`,免打 `python3 scripts/lumos`;`--force` 覆寫既有 symlink |
+ | 移除全域 lumos | `lumos uninstall` | 移除 `~/.local/bin/lumos` symlink（不動 vendored copy） |
+ | 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull] [--dry-run]`(`--dry-run`:用目前的工具來源先印會改哪些規範檔與工具檔,不拉、不改動;照它結尾印的指令套用同一份) | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
+ | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
+ 
+-> **子命令全覽（89 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `rejections` `stale` `recent` `stats` `handoff` `events`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers` `test-quality` scan·capabilities·capture·check(測試品質候選掃描與收證核對)）+ 寫入（`set` `summary-line` `updated-sync` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend` `question-add` `question-set`）+ 合約守衛（`guard` list/scaffold/bind/audit/residual-ask/residual/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 推送範圍（`push-range` 推送前掛鉤在新分支首推時取跟主線的分岔點；`push-summary` 推送前掛鉤在全套測試之前有擋下時印全部擋下原因的彙總並記帳）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
++> **子命令全覽（90 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `rejections` `stale` `recent` `stats` `handoff` `events`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers` `test-quality` scan·capabilities·capture·check(測試品質候選掃描與收證核對)）+ 寫入（`set` `summary-line` `updated-sync` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend` `question-add` `question-set`）+ 合約守衛（`guard` list/scaffold/bind/audit/residual-ask/residual/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 推送範圍（`push-range` 推送前掛鉤在新分支首推時取跟主線的分岔點；`push-summary` 推送前掛鉤在全套測試之前有擋下時印全部擋下原因的彙總並記帳） + 測試分片（`test-durations` 把實測秒數合進耗時表，分片照耗時分）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
+ >
+ > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
+ 
+ ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
+ 
+ ### ⛔ 禁用工具：notesmd-cli 的 `frontmatter` 指令
+ 
+ 第三方 `notesmd-cli`（原 Yakitrak/obsidian-cli，Go 單檔）**只准用 `move`**（rename 連結改寫含 frontmatter 字串,2026-06-13 驗收通過;即上方 `graph-rename.sh` 封的那層）。**`frontmatter --edit` 嚴禁對真實 vault 使用**：實測會把整篇 frontmatter 鍵序重排成字母序、縮排 2→4、**日期加引號（property 型別 date→text 靜默損傷）**——一碰整篇 diff 不可審,且 pre-commit 污染指紋會擋。frontmatter 寫入合法路徑只有：lumos T1（純量/list/decisions）、obsidian `processFrontMatter` eval（白名單外）。驗收證據：MyApp vault 的 `2026-06-13_Yakitrak三題驗收`。
+ 
+ 
+@@ -1250,21 +1250,21 @@ MOC 是索引筆記，彙整某個主題下的所有相關筆記。
+ 6. **隨 git 版控**：所有變更被 git 追蹤，commit 時一起提交
+ 7. **衝突處理**：圖譜、記憶、程式碼對不上時，照 CLAUDE.md〈怎麼用〉第 3 條裁；記憶不能當依據
+ 8. **Verification 豁免**：Verification 筆記不需要 `summary` 和 `updated` 欄位（有 `feature` + `date` 已足夠），**但 `valid_under` + `revalidate_when` 是必填**
+ 9. **避免假 Tag**：內文中的 `#` 會被 Obsidian 解析為 tag，顏色值用 backtick 包裹（如 `` `#FFF3E0` ``），編號用 `1~3` 不要用 `#1-3`
+ 10. **ADR 不可編造**：`decisions` 的 `context` / `alternatives_considered` / `why_chosen` / `trade_offs` 若無法從對話/code/commit 推得，**問使用者**，不可生成似是而非的內容污染學習資產
+ 11. **Verification 巡檢時機**：開工前、commit 圖譜更新前、重大環境/依賴/schema 變更後，跑健康檢查 eval 指令掃 `status: stale` 和過期 `valid_until`
+ 12. **verified_by 雙向同步**：新增/廢棄 Verification 時，**必須同步**更新對應 Systems 的 `verified_by`；改 Systems 時優先讀 `verified_by` 而非跑 backlinks（backlinks 含 Issues/Sessions 雜訊）
+ 
+ ### 指令怎麼找(別憑記憶,開索引)
+ 
+-**`commands/INDEX.md`**(本 skill 目錄下)是 88 個指令的總目錄:先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一(進場查脈絡 / 動手前算波及 / 寫回圖譜 / 自檢與健康 / 設計審查迴圈 / 代碼審與推送 / 安裝維運 / 自動跑的 / 節點還原)。每個子檔都短,只開需要的那一個。
++**`commands/INDEX.md`**(本 skill 目錄下)是 90 個指令的總目錄:先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一(進場查脈絡 / 動手前算波及 / 寫回圖譜 / 自檢與健康 / 設計審查迴圈 / 代碼審與推送 / 安裝維運 / 自動跑的 / 節點還原)。每個子檔都短,只開需要的那一個。
+ 
+ 最常用六條(其餘開索引):
+ | 你在想… | 敲 |
+ |---|---|
+ | 這件事為什麼這樣 / 圖譜記了嗎 | `lumos search <詞>` → `lumos context <節點>` |
+ | 動這段有什麼不能碰 | `lumos contracts <節點>` |
+ | 改這個會波及什麼 | `lumos impact --file <檔>` 或 `--diff <範圍>` |
+ | 改狀態 / 加驗證紀錄 / 記決策 | `lumos set` / `lumos append` / `lumos decision-add` |
+ | 寫完一篇 | `lumos lint <節點>` |
+ | 收工 | `lumos doctor` |
