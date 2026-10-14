@@ -224,7 +224,9 @@ REVISIT:2027-01-31 `--stage` 目前不列待決問題:開頭欄位版上線後�
 
 WHY:手動 `code-loop check` 不帶範圍時,起點改成「主線候選合起來跟 HEAD 的最近共同祖先」:候選沿用推送閘的 `_push_mainlines`(遠端取這條分支上游所在的遠端,沒有就用 origin),只多加本機 main/master(手動檢查在推送前跑,本機主線可能有還沒推的提交);不再照「先本機 main、再 master」的固定順序取第一個 [出處:2026-10-13 本會談實測:本機 main 落後遠端 52 個提交,範圍把別人已合併的高風險改動算進來、印出 tier=high] [因:推送閘的起點早就因同一個理由改成全部候選一起算,候選清單與挑法(`_push_pick_base`)都重用,不另立第三套主線判法(代碼審 r1 架構對齊席)] [不選:掃全部遠端(過期 fork 的 main 若含 HEAD,整條分支會被當成沒有改動而少擋,r1 單審席)、改成優先遠端 main(遠端可能落後本機未推的主線提交,一樣是固定順序)] [test:t_codeloop_default_base_prefers_newest_mainline]
 
-REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍用 `_mainline_ref`(固定順序取第一個),本機 main 落後或有多個遠端時可能跟上面算分級的範圍不同;到期在一個本機 main 落後的工作樹各跑一次兩種範圍,不同就改成共用 `_codeloop_default_base`,相同就刪這行(代碼審 r2 架構對齊席)
+2026-10-14 起算法本體搬到推送起點那一區成為共用的 `_lens_default_base(repo_root, tip=None, include_local=True, deadline=None)`,`_codeloop_default_base` 留成呼叫它的薄包裝(行為不變);第二個消費者是回頭重讀 v2 指紋在沒有遠端舊值時的分岔點(傳解析好的頂端、不加本機 main/master;推主線時推送前掛鉤給了遠端舊值,分岔點直接取頂端與遠端舊值的 merge-base,不經它),理由見 [[Projects/回頭重讀指紋不因主線前進失效_計劃]]〈做法〉3。改這支的候選或挑法時兩邊一起跑 `-k codeloop_default_base` 與 `-k reread_fp`。
+
+REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍用 `_mainline_ref`(固定順序取第一個),本機 main 落後或有多個遠端時可能跟上面算分級的範圍不同;到期在一個本機 main 落後的工作樹各跑一次兩種範圍,不同就改成共用 `_lens_default_base`(`_codeloop_default_base` 是它的薄包裝;回頭重讀沒有遠端舊值時的分岔點也走它,改的時候 `-k reread_fp` 要一起綠),相同就刪這行(代碼審 r2 架構對齊席)
 
 ## code-loop check --keep-going(2026-10-14,[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5)
 

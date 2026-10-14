@@ -1,0 +1,1178 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/回頭重讀指紋不因主線前進失效_計劃.md b/docs/lumos-toolchain-knowledge/Projects/回頭重讀指紋不因主線前進失效_計劃.md
+index e6d1bfd6..519f0625 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/回頭重讀指紋不因主線前進失效_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/回頭重讀指紋不因主線前進失效_計劃.md
+@@ -29,48 +29,52 @@ related:
+ 
+ PRIOR-ART: git 自己的 `git patch-id --stable` 就是為了「rebase 之後認出同一個改動」而設計(`git cherry`、`git rebase` 判斷哪些提交已經在上游都靠它):把 diff 去掉行號後雜湊。借它「去掉行號、`index` 行」的想法,但不借它「忽略所有空白」那一半——本 repo 以 Python 為主,縮排就是語意,忽略空白會把縮排不同的改動當成同一個(前掃實測:把 `return y` 搬進迴圈與只縮成兩格,patch-id 相同);正規化重用本 repo 既有的逐檔改動指紋函式 `_patch_file_changes`(資安席用來認「rebase 之後同一版改動」),不另跑 `git patch-id`、不另寫第二套。主線分岔點借本 repo 既有的手動代碼審預設起點算法(主線候選與推送閘共用);同一次 check 裡候選範圍與指紋用不同的起點函式,理由見〈做法〉3。
+ RETIRE-IF: 上線 8 週內,`note-reread` 事件裡「靠 `v2` 命中」的篇數是 0(新指紋沒有省下任何一次重讀),或從「靠 `v2` 命中、`v1` 不會命中」那一群抽查到一次該重讀卻被當成已對照——撤回成只認 `v1`。
+ REVISIT:2026-12-15 照 RETIRE-IF 數一次 `note-reread` 事件的 `covered_by` 與 `fp_counts` 欄位,並從「靠 `v2` 命中」那一群抽 5 篇,人工比對判定者當時讀的 diff 與頂端的程式,看舊句有沒有該點出卻沒點出的。
+ 
+ ## 做法
+ 
+ 1. **新指紋(`v2`)認「這條分支對每支檔的改動」**:雜湊(筆記路徑、範本版本、一行 `指紋算法 v2`、那篇 about_code 每一項配上「它在分岔點..頂端的改動指紋」)。舊指紋(`v1`)= 現在的頂端 blob 指紋,雜湊輸入一字不改、不加版本字樣。
+    - **先拿清單、不靠路徑比對**:跑一次 `git diff --raw -z --no-renames <分岔點> <頂端>`(不帶 pathspec),得到這條分支改過的每支檔(git 原樣路徑的位元組、兩邊的物件編號與 mode、狀態)。原樣路徑經 `_nodehome_key` 換成 NFC 鍵,跟 about_code 的鍵比;「未改」的意思是「不在這份清單裡」(那一項寫成固定字樣 `<鍵>\t未改`,主線怎麼改它都不影響指紋),不是「diff 沒有輸出」——樹裡存的是 NFD 檔名、或 about_code 的鍵當成 pathspec 比不到,都不會被誤記成未改(r1 正確性席、邊界席實測過這個洞)。about_code 的某一項在分岔點與頂端兩邊的樹裡都找不到(拼錯、是資料夾),整篇退回 `v1`。
+    - **文字檔**:對清單裡的每一支,單獨跑一次 diff(全域開 `--literal-pathspecs`,路徑用 git 原樣路徑、前面加 `--` 分隔,**不加** `:(literal)` 前綴——兩者併用時 git 會把前綴當成檔名的一部分、輸出變空,r2 三席實測);清單裡有這支檔、diff 卻是空的,那篇退回 `v1`。輸出交給既有的逐檔改動指紋函式 `_patch_file_changes`——它本來就是「rebase 之後還認得同一版改動」的指紋(資安席在用),會去掉行號與文字檔的 `index` 行、處理引號路徑、mode 與新增刪除。它預設連 `@@` 後面 git 印的段落標頭一起算;本計劃給它加三個參數 `headers`、`lf_only`、`hunk_tag`,預設都不變(資安席照舊),回頭重讀這邊都打開:`headers=False` 不算 git 印的段落標頭——那是 hunk 之前最近一行頂格的整行,主線在上方新增頂格的一行,作者的改動一字未變它也會變(r1 三席實測),而且 git 依屬性檔挑標頭規則;`hunk_tag` 給每個 hunk 一個我們自己算的標籤(縮排鏈,見下一點)代替它;`lf_only=True` 只用 `\n` 切行——它預設用 `splitlines()`,會在換頁符號(`\x0c`)、U+2028 等字元處多切一刀,切出來的後半段不以 `+`、`-`、空白開頭而被丟掉,同一行換頁符號之後的改動就不進指紋(r2 兩席實測)。(2026-10-14 代碼審 r2 合約席更正:原本寫「加兩個參數」「不算函式名標頭」,跟後來加的 `hunk_tag` 讀起來互相打架。)
+-     - **但每段改動上面那幾層要算——縮排鏈的原文**(2026-10-14 代碼審 r1 資安席 major、正確性席 1;r2 六席):整個標頭拿掉之後,同一段改動搬到同檔另一個前後三行相同的函式(`-check(user)/+allow(user)` 從公開端點搬到管理員端點),指紋不變,`v1` 會擋的這裡不擋。每個 hunk 帶一個標籤(`_note_reread_hunk_tags`,核心是 `_note_reread_hunk_nodes`),我們自己從頂端版本的內容算、不靠 git 依屬性檔選的規則:**起點**是這段在頂端版本的範圍裡第一個不是空白的行;**鏈**是從起點往上,縮排比起點淺的最近一行(空行、只有空白的行跳過;縮排把 tab 照 8 欄展開後比欄寬),記那行去掉頭尾空白的原文,再從那行往上找比它更淺的,一路到縮排 0——起點本身縮排 0 就沒有鏈,範圍裡全是空白就當成無限深(鏈從它上面最近的非空白行起算)。鏈由外到內串起來雜湊成標籤。**不分語言、不猜名字**:Kotlin 的 `fun pub` 與 `fun adm`、Java/Kotlin 類別裡的兩個方法、C 的 `int pub(...)` 與 `int adm(...)`、TS 的 `export const a = () =>` 與 `b`、Go 不同接收者的同名方法、Rust 兩個 `impl` 區塊的同名方法、Python 的 `m1/helper` 與 `m2/helper`、`A.X.f` 與 `A.Y.f`,那幾行的原文本來就不同(S20)。頂格的賦值行不在任何改動的鏈上(除非改動縮排在它底下),主線在上方插頂格行、改了上方另一個函式,都不影響(S8)。新側行數是 0 的 hunk 沒有鏈:指紋的 diff 帶 3 行上下文,新側只要還有一行,hunk 就帶到上下文,所以新側 0 行只在頂端那一版是空的(刪檔、清空)時出現,那時舊側從第 1 行起、上面沒有任何一行,鏈本來就是空的,不必另讀分岔點那一版(派工詞原本說「純刪除用舊側起點在分岔點版本找」,實作時查到結果必然是空、省掉那次讀)。**代價**:主線改了外層那一行(例如這段改動所在函式的簽名、所在類別那一行),指紋會變、要多重讀一次,方向是多擋(S22;2026-10-14 前這裡說「參數與簽名不算」——那是 r1 猜函式名的做法,好幾種語言兩個不同函式拿到同一個名字,r2 六席實測,由縮排鏈取代)。
++     - **但每段改動上面那幾層要算——縮排鏈的原文**(2026-10-14 代碼審 r1 資安席 major、正確性席 1;r2 六席):整個標頭拿掉之後,同一段改動搬到同檔另一個前後三行相同的函式(`-check(user)/+allow(user)` 從公開端點搬到管理員端點),指紋不變,`v1` 會擋的這裡不擋。每個 hunk 帶一個標籤(`_note_reread_hunk_tags`,核心是 `_note_reread_hunk_nodes`),我們自己從頂端版本的內容算、不靠 git 依屬性檔選的規則:**跳過的行**是空行、只有空白、只有 ASCII 標點與括號的行(`{`、`}`、`):`、`];`;非 ASCII 的字元算有字;2026-10-14 代碼審 r3 正確性 1、邊界 1:black 風格多行簽名的收尾 `):`、Allman 另起一行的 `{` 原本是「縮排較淺的最近一行」,整個檔的函式拿到同一條鏈、搬到另一個函式指紋不變);**起點**是這段在頂端版本的範圍裡第一個不跳過的行;**鏈**是從起點往上,縮排比起點淺的最近一行(跳過的行不算;縮排把 tab 照 8 欄展開後比欄寬),記那行去掉頭尾空白的原文,再從那行往上找比它更淺的,一路到縮排 0——起點本身縮排 0 就沒有鏈,範圍裡全是跳過的行就當成無限深(鏈從它上面最近的不跳過的行起算)。鏈的計算看指紋這一步的截止時間,到了那支檔退回 `v1`、原因「逾時」(第 5 點)。鏈由外到內串起來雜湊成標籤。**不分語言、不猜名字**:Kotlin 的 `fun pub` 與 `fun adm`、Java/Kotlin 類別裡的兩個方法、C 的 `int pub(...)` 與 `int adm(...)`、TS 的 `export const a = () =>` 與 `b`、Go 不同接收者的同名方法、Rust 兩個 `impl` 區塊的同名方法、Python 的 `m1/helper` 與 `m2/helper`、`A.X.f` 與 `A.Y.f`,那幾行的原文本來就不同(S20)。頂格的賦值行不在任何改動的鏈上(除非改動縮排在它底下),主線在上方插頂格行、改了上方另一個函式,都不影響(S8)。新側行數是 0 的 hunk 沒有鏈:指紋的 diff 帶 3 行上下文,新側只要還有一行,hunk 就帶到上下文,所以新側 0 行只在頂端那一版是空的(刪檔、清空)時出現,那時舊側從第 1 行起、上面沒有任何一行,鏈本來就是空的,不必另讀分岔點那一版(派工詞原本說「純刪除用舊側起點在分岔點版本找」,實作時查到結果必然是空、省掉那次讀)。**代價**:主線改了外層那一行(例如這段改動所在函式的簽名、所在類別那一行),指紋會變、要多重讀一次,方向是多擋(black 風格的多行簽名只有 `def f(` 那一行在鏈上,參數行的縮排跟本體一樣、不在鏈上;S22;2026-10-14 前這裡說「參數與簽名不算」——那是 r1 猜函式名的做法,好幾種語言兩個不同函式拿到同一個名字,r2 六席實測,由縮排鏈取代)。
+    - **不讀工作樹的屬性檔**(2026-10-14 代碼審 r1 邊界席 1):`-diff` 這類屬性原本取自當下簽出的 `.gitattributes`,簽出 main 與簽出分支算出的指紋不同。本機 git 2.39 沒有 `--attr-source`,實測裸庫模式(`--git-dir` 加 `--bare`)仍從「目前目錄」讀 `.gitattributes`,所以 git 呼叫的目前目錄設成 git 目錄本身(裡面不會有這個檔);git 2.42 起裸庫改讀 `attr.tree`(預設 HEAD),另把它指到空樹,使用者全域的屬性檔指到 `/dev/null`。結果是指紋只看樹裡的內容:被設成 `-diff` 的文字檔照文字比,真的二進位檔(內容有 NUL)照 git 自己的偵測記物件編號。給判定者的 diff 走同一支,判定者也讀得到這種檔的內容。`$GIT_DIR/info/attributes` 照舊讀(本機設定,兩台機器不同只會多列)。
+    - **二進位檔、子模組**(被設成 `-diff` 的文字檔 2026-10-14 起照文字比,見下面「不讀工作樹的屬性檔」):diff 帶 `--full-index`;`_patch_file_changes` 本來就對「Binary files … differ」改記 `index` 行裡改後那一邊的物件編號(帶 `--full-index` 才是完整編號),子模組的「Subproject commit」行是一般增刪行,照算。所以不另外判二進位。這些檔主線改了也會讓指紋變,方向是多列。型別變更(`--raw` 狀態 `T`,例如一般檔變符號連結)那篇退回 `v1`。
+    - **選項的來源**:「釘住 hunk 切法」的兩個旗標(`--inter-hunk-context=0 --diff-algorithm=myers`)抽成一個常數,筆記形狀閘那兩份既有的 diff 選項與這裡共用;指紋用的這組在現有給判定者組 diff 的 `_NOTE_REREAD_DIFF_ARGS` 旁定義、由它延伸;git 呼叫用 `_lens_git`(它有逾時參數,`_ns_git` 沒有)。全域選項放在 `diff` 之前(`--literal-pathspecs`、`-c core.quotePath=false`、`-c core.precomposeunicode=false`、`-c diff.suppressBlankEmpty=false`、`-c diff.indentHeuristic=true`——放在 `diff` 之後 git 會回 129,r1 兩席實測),diff 選項是 `--no-ext-diff --no-textconv --no-color --no-renames --full-index --submodule=short --ignore-submodules=none --diff-algorithm=myers --inter-hunk-context=0 -U3` 加已釘的前綴(`--raw` 那次也帶 `--submodule=short --ignore-submodules=none`)。`core.precomposeunicode=false` 讓 git 照原樣位元組比對路徑:macOS 預設會把路徑轉成 NFC,樹裡存 NFD 時傳原樣路徑也會得到空 diff,Linux 沒有這個轉換,不釘的話兩個平台算出不同指紋(r3 邊界席實測)。`.git/info/attributes` 讓某支檔在一台機器上變成 `-diff` 的情形照樣會讓兩台機器算出不同指紋,只會多列,不另處理(使用者全域的 `core.attributesFile` 2026-10-14 起指到 `/dev/null`,見下面「不讀工作樹的屬性檔」)。
+    - **位元組原樣**:git 輸出以位元組讀、用 `surrogateescape` 解碼再編碼回去雜湊,不用 `errors="replace"`(那會把不同的非 UTF-8 位元組變成同一個字)。
+    - **大小上限**:跑 diff 之前,用 `git cat-file --batch-check` 一次看清單裡每支檔兩邊的物件大小(新增檔的舊側、刪除檔的新側是全零編號,跳過;子模組的編號在本 repo 查不到,也跳過),任一邊超過 32 MB 那篇退回 `v1`、不跑 diff。上限看的是檔案大小:本 repo 最大的兩支是 `scripts/test_lumos.py` 約 5.5 MB、`scripts/lumos` 約 3.2 MB,對它們跑 diff 約 0.05 秒,所以上限要留足空間,只擋真的異常的大檔(r3 邊界席:原本的 4 MB 會讓 `test_lumos.py` 的 9 篇筆記永遠退回 `v1`)。`--raw` 加 `--no-abbrev`,物件編號是完整的。
+    - **快取**:逐檔結果放進那一次掃描的 `scan` 裡,鍵是(分岔點、頂端、原樣路徑);一次推送多個 ref、測試在同一個程序裡跑很多暫存 repo,都不會互相污染。
+ 2. **全部「未改」就退回 `v1`**:候選是用範圍起點算的,指紋是用分岔點算的,兩者可能不同,會有「是候選、但 about_code 每一項在分岔點..頂端都未改」的筆記(這次把某檔移出 about_code、分支先改又改回、手動給的範圍很寬)。這種筆記的 `v2` 會是一個跟程式版本無關的常數,一旦記過一次,之後任何同形狀的分支都會被當成已對照——所以整篇改用 `v1`(r1 邊界席)。
+ 3. **分岔點只有一種算法,跟推送參數無關**(回應舊否決理由):手動代碼審的預設起點那支函式 `_codeloop_default_base`(主線候選照推送閘的 `_push_mainlines`,外加本機 main/master;多個共同祖先照 `_push_pick_base` 取歷史最長的)的本體,搬到推送起點那一區成為共用函式 `_lens_default_base(repo_root, tip=None, include_local=True)`,`_codeloop_default_base(repo_root)` 留成呼叫它的薄包裝(行為不變,代碼審判定唯一的呼叫點與 7 支既有測試照舊):
+    - `tip=None`:跟現在一樣看 HEAD 與目前簽出的分支;
+    - **回頭重讀傳 `include_local=False`**:主線候選只收遠端那幾個,不加本機 main/master。本機 main 上還沒推出去的提交沒有任何一次推送替它重讀過,把它算進主線,那段改動就沒人對照(r2 正確性席);只有本機主線、沒有遠端主線時,算不出分岔點,退回 `v1`。因此「推本機 main、上面有還沒推出去的提交」時,分岔點是遠端主線,那幾個提交照樣算成要對照的改動、走 `v2`——它們就是作者自己的改動;只有頂端已經在遠端主線上時,分岔點才等於頂端、退回 `v1`;
+    - `tip` 是一個提交編號時,「這條分支的上游遠端」改成看「指向這個提交的本機分支」:恰好一條就用它登記的上游遠端;零條或多條就跟現在沒有分支時一樣(有 origin 用 origin、只有一個遠端用它)——不看目前簽出的是哪條,這樣結果只取決於 refs 與頂端,跟在哪個工作樹、簽出什麼無關。`merge-base --all` 也改對 `tip` 算。
+    - 回頭重讀一律傳解析好的提交編號。所以手動 prepare 與推送前 check 在同一份 refs 狀態、同一個頂端下算出的分岔點必然相同。舊理由說的「起點算法可能不同」是指範圍起點:兩個子指令都經 `_note_audit_start` 取起點,不帶推送參數走 `_lens_push_base`(給定的起點在本機找得到就原樣用),帶推送參數走 `_push_range_start`;那個起點照舊只決定「誰是候選」,不進指紋。
+    - 為什麼不用 `_push_range_start`:它吃 `--push-remote`、`--pushed-ref`,手動 prepare 沒有這兩個值,正是舊理由說的分歧來源。這個新消費者登記進 [[Issues/推送前其他閘的範圍在合過主線時會多算]] 的收斂清單;那篇 Issue 與 [[Issues/預設起點與名冊人數收尾小問題]] 講的是同一支函式,`--short` 與分支、標籤同名的問題照那篇 Issue 的條件另修,本計劃不併入,在兩篇 Issue 互相連結。
+    - 已知會變的情形(都是多列方向,不擋正確性):fetch 之後沒 rebase,分岔點不變;遠端追蹤 ref 比分支裡含的主線舊時,分岔點落在舊的追蹤 ref,別人的改動被算進來、指紋跟著變,只是多列;交叉合併有多個共同祖先時照歷史最長取。
+    - CI:CI 的 reread-check 不擋、只印(見 [[Systems/筆記內容審]] 的 WHY 行)。CI 沒有本機 main/master、也可能是淺層 clone,算出的分岔點可能不同或算不出而退回 `v1`;結果只會多列。
++   - **推主線時核對分岔點**(2026-10-14 代碼審 r3 資安 2):分岔點取自本機的遠端追蹤 ref,本機把 `refs/remotes/origin/main` 指到藏了改動的提交(`git update-ref`),分岔點就落在它上面、`v2` 看不到那段,記下的紀錄照樣命中。推送前 check 帶了推送參數、被推的是算分岔點用的那條主線(`refs/remotes/<--push-remote>/<被推分支>` 是主線候選之一)、範圍起點(pre-push 給的遠端值)不是全 0 而且本機找得到時,分岔點必須是它的祖先或相等,不是就判不了(block 加 `--gate` 擋、講明要先 `git fetch`;`_note_reread_bp_vs_remote`);核對的 git 逾時那次不用 `v2`(原因「逾時」,照第 5 點擋)。只核對推主線:功能分支 rebase 到前進了的主線後強推、或把主線合進分支,分岔點本來就不是遠端舊頂端的祖先,套上去會誤擋。功能分支這條由 CI 補驗:CI 那一步(`.github/workflows/ci.yml` 的 note reread reminder,push 事件都跑)用 checkout 抓下來的真遠端主線重算指紋,本機照偽造的分岔點記的紀錄在那裡對不上、會被列出(只印不擋)。本機沒有網路,核對不了遠端主線的真值,這是本機能做到的上限。
+ 4. **新舊兩種指紋都認**:check 判一篇「已對照」照這個順序:先看 `v1`——有一筆已提交、來源核對過的紀錄,檔名開頭是這篇的 `v1` 指紋;`v1` 不中,再看 `v2`——有一筆這樣的紀錄,檔名開頭是這篇的 `v2` 指紋,**而且是這條分支自己新增的**:分岔點的樹裡沒有那支紀錄檔(對分岔點跑一次既有的列紀錄檔名函式 `_note_reread_tip_names`,失敗就當成不是分支自己的)、紀錄內容的對照指紋等於檔名前 16 字、紀錄內容的範圍終點不是分岔點的祖先(擋住把主線舊紀錄複製改名、或 cherry-pick 別人的紀錄進來)。`v1` 相符代表 about_code 每支檔在頂端逐位元組相同,比 `v2` 嚴格,認它不會漏判。
+    - **為什麼 `v2` 只認分支自己的紀錄**:`v2` 只含改動本文與前後三行,不綁檔案其他部分。紀錄合進主線後永遠留著,之後別的分支只要做出逐字相同的改動(例:有人把預設值改回去、之後又有人再改一次),就會命中多年前那筆紀錄,筆記卻已經不是當時那樣(r2 正確性席)。分支自己的紀錄在 rebase 之後仍是分支自己新增的,所以 rebase 的好處照樣拿得到。
+    - prepare 能算 `v2` 時紀錄檔名用 `v2`,算不出時用 `v1`。分支本機快轉進 main 再推 main 時,分岔點仍是遠端主線(第 3 點),分支上記的 `v2` 紀錄照樣命中,不需要另外在紀錄裡記 `v1`(r3 邊界席指出原本為這個情形加的內容欄位沒有資料來源,正確性席指出它可被手改繞過分支限制,拿掉)。
+    - 好處:升級那天進行中分支的舊紀錄照舊算數,不用重派判定者、不用重新表態;回退時 `v2` 紀錄只是不再命中的檔,`v1` 紀錄照舊可用。
+    - 第二層(規則類條目要表態)按筆記路徑讀紀錄、表態以判定紀錄的指紋為鍵;因為不必重新 prepare,升級本身不會產生要重新表態的條目。
+ 5. **算不出就退回 `v1`**:分岔點算不出(沒有主線候選、沒有共同祖先、git 失敗)、分岔點就是頂端本身(頂端已經在遠端主線上)、about_code 有一項兩邊的樹都找不到、全部未改(第 2 點)、單檔 diff 超過上限、或 git 呼叫逾時——那一篇用 `v1`。退回只會讓已對照的被多列,不會漏判。
+-   - **逾時吃剩餘預算**:reread-check 有約 30 秒的軟上限。指紋這一步的每次 git 呼叫,逾時取「20 秒」與「整體剩餘預算減 3 秒」的較小者;剩不到 3 秒就不跑,剩下的候選直接用 `v1`。所以這一步不會把後面第二層的預算吃光、變成整次判不了。這跟掃描那一段既有的做法(在呼叫點之間看截止時間、過了就停下判不了)刻意不同:指紋這一步有安全的退路(`v1`),所以降級、不停。prepare 沒有整體預算,會算出 `v2`、而 check 逾時退回 `v1`,比不到 prepare 記的 `v2` 紀錄——每次都一樣、重跑也不會好。所以**因逾時沒算出新版指紋的那幾篇,check 照實列出、記帳,但不擋**(block 加 `--gate` 也不擋;只有真的算出指紋而對不上的才擋):清單那篇旁邊講明「這篇因為逾時沒算新版指紋,這次不擋」,事件記退回原因「逾時」(第 7 點)與 `late` 篇數、`layer1_fps` 那幾筆帶 `late`(2026-10-14 代碼審 r1 通才 1、併發 3 要講明;r2 併發 1、通才 3 指出原本照擋會讓大改動的分支每次推送都被擋、只剩跳過環境變數可繞)。這條退路不會被拿來繞:逾時只在指紋這一步花掉約 27 秒時才發生(r2 併發席實測:上千支被候選 about_code 列到的小檔、或幾百支接近 1 MB 的檔),帳上每次都記,而且那幾篇照舊列在清單上;整次掃描逾時(還沒走到指紋那一步)照舊是判不了、照擋。判「分支自己的紀錄」那次列分岔點紀錄檔名的 git 也吃同一個截止時間(併發席 2)。
++   - **逾時吃剩餘預算**:reread-check 有約 30 秒的軟上限。指紋這一步的每次 git 呼叫,逾時取「20 秒」與「整體剩餘預算減 3 秒」的較小者;剩不到 3 秒就不跑,剩下的候選直接用 `v1`。所以這一步不會把後面第二層的預算吃光、變成整次判不了。這跟掃描那一段既有的做法(在呼叫點之間看截止時間、過了就停下判不了)刻意不同:指紋這一步有安全的退路(`v1`),所以降級、不停。prepare 沒有整體預算,會算出 `v2`、而 check 逾時退回 `v1`,比不到 prepare 記的 `v2` 紀錄——每次都一樣、重跑也不會好。**因逾時沒算出新版指紋的那幾篇照舊版判、照擋**(block 加 `--gate` 擋,warn 只提醒;跟其他退回 `v1` 的原因一樣,只會多列):清單那篇旁邊講明「這篇因為逾時沒算出新版指紋,照舊版判」,擋下時下面一行講明「改動極大、確定都對照過時,可以用 `LUMOS_SKIP_REREAD_CHECK=1 git push` 單次跳過(跳過會留帳)」——用回頭重讀既有的單次跳過,不另開一條;事件記退回原因「逾時」(第 7 點)與 `late` 篇數、`layer1_fps` 那幾筆帶 `late`。2026-10-14 代碼審 r2 併發 1、通才 3 曾改成這幾篇不擋(理由是重跑也一樣、只剩跳過可繞),r3 資安 1 實測 about_code 是作者自己寫的、列上三千支垃圾檔撐到逾時就整篇放行(rc0、沒有任何紀錄),所以改回照擋、訊息只講事實(r3 通才 1:原本擋下的標頭跟「這次不擋」同時印)。指紋這一步的批次讀照算指紋實際走的順序讀(r3 併發 1:原本照全部鍵排序,反序的候選每支各讀一批、把時間耗到逾時),縮排鏈的計算看截止時間(r3 併發 2:32 MB 的檔掃到檔尾要幾秒,原本不看)。整次掃描逾時(還沒走到指紋那一步)照舊是判不了、照擋。判「分支自己的紀錄」那次列分岔點紀錄檔名的 git 也吃同一個截止時間(併發席 2)。
+    - **查大小失敗退回 `v1`**(2026-10-14 代碼審 r1 併發席 1):`cat-file --batch-check` 失敗或某個物件查不到時,原本當成大小 0、32 MB 上限整個失效;現在那篇退回 `v1`、原因記「查大小失敗」(沒時間記「逾時」)。
+ 6. **判定者讀的範圍跟指紋同一個基準**:用 `v2` 時,prepare 給判定者的 diff 改成「分岔點..頂端、只含那篇 about_code 裡出現在 `--raw` 清單上的檔」(不是用推送範圍改到的檔取交集),跟指紋證明的範圍一致;給判定者的 diff 有任何一支檔的內容被截掉(輸出裡出現「[截斷:」標記)時,那篇改用 `v1`、重組一份範圍 diff 給判定者——判定者沒讀完整,不能替整份改動背書(2026-10-14 代碼審 r1 正確性席 2、通才 1:這個判斷原本只在 prepare 組完材料才做,check 不知道、照用 `v2`,印的指紋與 prepare 的紀錄對不上;改成在算指紋那一步就判「0 行上下文仍超過上限」——那時一定有檔被截掉——prepare 與 check 都算得出、口徑一致);只是把上下文從 3 行縮到 1 或 0 行、改動行都還在,不算截掉(r3 邊界席)。順序是先組 `v2` 的 diff,看有沒有截掉,再決定用哪一版(r1 邊界席:原本手動 `--diff HEAD~1..HEAD` 只讓判定者讀最後一個提交,記下的紀錄卻讓整條分支都算已對照)。退回 `v1` 時照現在用範圍 diff。材料指紋的算法不變(仍含給判定者的 diff 全文)。
+ 7. **事件記得到要量的東西**:`note-reread` 事件(reminded、blocked、covered、none 都算)在 `extra` 裡多四個欄位(不用 `ref` 欄,免得被代碼審留痕的讀者誤讀):`branch`(推送前 check 用被推的 ref,手動用目前簽出的分支,detached 寫空)、`fp_counts`(這次候選裡 `v2`、`v1` 各幾篇,`v1` 的再按退回原因分:無遠端主線、在主線上、樹裡找不到、全部未改、太大、查大小失敗、型別變更、diff 空、判定者材料被縮短、逾時、git 失敗)、`covered_by`(已對照的篇數裡,靠 `v1` 命中、靠 `v2` 命中各幾篇——先判 `v1`,所以「靠 `v2`」就是新指紋放寬的那一群)、`v2_only`(靠 `v2` 命中的那幾篇的筆記路徑與兩種指紋,最多 20 篇)。既有的 `layer1_fps` 每筆多一個 `ver`。covered 與 none 這兩種事件也改走既有的單行長度收斂函式 `_gate_event_fit`,`v2_only` 加進它可丟棄的欄位清單(20 筆約 3.4 KB,加上其他欄位可能超過 4096 位元組)。RETIRE-IF 的漏判抽查從 `v2_only` 抽。
+ 8. **呼叫點與函式**:現在的 `_note_reread_contrast_fp` 保留原名原簽名當 `v1`(直接呼叫它的兩支既有測試不用改);新增 `v2` 那一支;`_note_reread_fps` 與 prepare 單篇那個呼叫改成先算 `v2`、算不出用 `v1`,`_note_reread_covered` 收兩種指紋。
+ 
++9. **git 不吃替身物件**(2026-10-14 代碼審 r3 資安 3):`git replace <真提交> <誠實提交>` 之後,git 讀那個真提交時讀到的是誠實那個,推出去的卻是真提交——指紋、給判定者的 diff 都看錯。
++WHY:在 lumos 主程式入口 `main()` 最前面強制設 `GIT_NO_REPLACE_OBJECTS=1`,lumos 自己與所有子行程的 git 都不吃替身 [出處:2026-10-14 代碼審 code-回頭重讀指紋 r3 資安 3;另外兩個分支的資安席各自找到同一族] [因:替身影響每一支讀起點版本、檔名清單的閘,一處統一比各閘各補 `--no-replace-objects` 穩,新加的 git 呼叫也不會漏;強制設值而不是 setdefault——另一個分支的架構對齊席指出 setdefault 會讓使用者設的 0 蓋過防護,四個分支用逐字同一行] [不選:只在 `_note_reread_git` 與 `_lens_git_dl` 加旗標——漏掉其他閘與以後新加的呼叫] [test:t_reread_fp_ignores_replace_refs]
++
+ ## 要一起改的說法
+ 
+ 照 [[Projects/舊句兩道轉擋_計劃]]〈要一起改的說法〉的先例,現況句就地改成新事實,舊理由留一行帶日期的歷史(「2026-10-14 前不含 diff,理由是……,由 [[Projects/回頭重讀指紋不因主線前進失效_計劃]]〈做法〉3 取代」):
+ - 程式:回頭重讀第一層擋下時印的那句「對照指紋含這篇 about_code 列的程式在頂端的版本——合併主線帶進別人對同一支程式的改動、筆記改名、about_code 增減都算」改成新說法(主線帶進的改動不再算,作者自己的改動、筆記改名、about_code 增減照算);`_note_reread_contrast_fp` 的 docstring 標成 `v1` 並說明何時用。
+ - 手冊 `skills/lumos-project-notes/commands/06-代碼審與推送.md` 講「程式改了(含合併主線帶進別人對同一支程式的改動、rebase……)就要重判」那句,與消費專案 CI 那段。
+ - [[Systems/筆記內容審]] 講「不含範圍與 diff」那段與 CI 的 WHY 行;[[Systems/pitfalls-code-loop]] 講 `_codeloop_default_base` 的 WHY 行與它的 REVISIT(多一個消費者)。
+ - [[Projects/守檔筆記對照改動_計劃]] 講「兩邊起點可能不同,但對照指紋不含範圍」「只用 `git ls-tree` 就能算」、誠實界線的盲區、設計審 r1 紀錄、S6;[[Projects/舊句兩道轉擋_計劃]] 講「不改對照指紋的組成」「對照指紋照舊含筆記路徑與程式 blob」的兩句。
+ - 測試 `t_note_audit_reread_check_reminds` 裡「翻紅釘:把範圍或 diff 算進去 → 紅」那段:改成釘 `v1` 那支函式(`v1` 仍不准含 diff),另加 `v2` 的釘。不改的話,下一個人會把它當守衛、把 `v2` 修回不含 diff。
+ - `t_reread_block_layer1` 釘的那句子字串跟著改。
+ - CHANGELOG 不加:它的檔頭規定只記對外放出去的版本、還沒發版的變更不進那份;這次版號不升(沒有改掛鉤、紀律區塊或範本,消費專案 `lumos update` 就拿得到),所以說明寫在提交訊息與本計劃。(2026-10-14 實作時更正,原本寫「加一筆」)
+@@ -90,60 +94,67 @@ REVISIT:2026-12-15 照 RETIRE-IF 數一次 `note-reread` 事件的 `covered_by`
+ - [S10] about_code 用 NFC 寫、樹裡存的是 NFD 檔名、分支改了那支檔時,那一項不應被記成未改。[test: t_reread_fp_nfd_path_not_unchanged]
+ - [S11] 候選筆記的 about_code 每一項在分岔點..頂端都未改時,應用 `v1`。[test: t_reread_fp_all_unchanged_uses_v1]
+ - [S12] 升級前用 `v1` 記的紀錄,升級後同一頂端的 check 應照舊認得已對照;只有 `v2` 紀錄、改用 `v1` 判的情形(回退,或頂端已在遠端主線上)不應被當成已對照。[test: t_reread_fp_accepts_v1_records]
+ - [S13] reread-check 的 `note-reread` 事件應帶 `branch`、`fp_counts`、`covered_by`、`v2_only`,`layer1_fps` 每筆帶 `ver`。[test: t_reread_fp_event_fields]
+ - [S14] 整體預算剩不到 3 秒時,指紋這一步不應再跑 git,剩下的候選應用 `v1`,check 不應因此判成「判不了」。[test: t_reread_fp_respects_budget]
+ - [S15] 用 `v2` 時,prepare 給判定者的 diff 應是分岔點..頂端、只含那篇 about_code 裡分支改過的檔,即使手動給的 `--diff` 範圍只有最後一個提交;給判定者的 diff 被縮短時,那篇應用 `v1`。[test: t_reread_prepare_material_matches_fp]
+ - [S16] 同一行在換頁符號之後的內容不同的兩種改動,`v2` 指紋應不同;清單裡有某支檔、diff 卻是空的,那篇應用 `v1`。[test: t_reread_fp_split_and_empty_diff]
+ - [S17] 主線上已有一筆 `v2` 紀錄,另一條分支做出逐字相同的改動時,不應被那筆紀錄判成已對照;同一條分支 rebase 之後,自己的 `v2` 紀錄應照樣命中。[test: t_reread_fp_v2_only_own_records]
+ - [S18] 本機 main 有還沒推出去、改到 about_code 檔的提交,分支從它開出時,那支檔不應被記成未改(分岔點只看遠端主線)。[test: t_reread_fp_ignores_local_mainline]
+ - [S19] 分支記了 `v2` 紀錄、本機快轉進 main 後推 main 時,分岔點應仍是遠端主線、照樣靠那筆 `v2` 紀錄判已對照;把主線上的舊紀錄複製改名成新檔名時,不應算分支自己的紀錄。[test: t_reread_fp_ff_main_uses_branch_record]
+-- [S20] 同一段改動從公開端點搬到同檔另一個前後三行逐字相同的管理員端點時,指紋應不同——Kotlin 頂層 `fun pub`/`fun adm`、Kotlin 與 Java 類別裡的兩個方法、C 的 `int pub(...)`/`int adm(...)`、TS 的 `export const a = () =>`/`b`、Go 不同接收者的同名方法、Rust 兩個 `impl` 區塊的同名方法、Python 巢狀函式 `m1/helper`/`m2/helper`、Python 巢狀類別 `A.X.f`/`A.Y.f` 都一樣。[test: t_reread_fp_hunk_moved_between_functions]
+-- [S21] 每段改動的縮排鏈應照〈做法〉1 的規則取:起點縮排 0 沒有鏈、起點是空行時從範圍裡第一個非空白行起算、範圍全是空白時當無限深、tab 照 8 欄、行尾的 `\r` 不進原文、巢狀的每一層都在。[test: t_reread_fp_hunk_chain_rule]
+-- [S22] 主線改了作者那段所在函式的 `def` 那一行時,指紋應改變(代價:多要求一次重讀)。[test: t_reread_fp_chain_stable_on_other_edits]
++- [S20] 同一段改動從公開端點搬到同檔另一個前後三行逐字相同的管理員端點時,指紋應不同——Kotlin 頂層 `fun pub`/`fun adm`、Kotlin 與 Java 類別裡的兩個方法、C 的 `int pub(...)`/`int adm(...)`、TS 的 `export const a = () =>`/`b`、Go 不同接收者的同名方法、Rust 兩個 `impl` 區塊的同名方法、Python 巢狀函式 `m1/helper`/`m2/helper`、Python 巢狀類別 `A.X.f`/`A.Y.f`,以及收尾符號行到處重複的 black 風格多行簽名、Allman 的 C# 與 Java、C 函式另起一行的大括號,都一樣。[test: t_reread_fp_hunk_moved_between_functions,t_reread_fp_moved_past_punct_lines]
++- [S21] 每段改動的縮排鏈應照〈做法〉1 的規則取:起點縮排 0 沒有鏈、起點是空行時從範圍裡第一個非空白行起算、範圍全是空白時當無限深、tab 照 8 欄、行尾的 `\r` 不進原文、巢狀的每一層都在;只有標點與括號的行跟空行一樣跳過(當起點、進鏈都不算),有字的頂格行(`#endif`)照舊算一層;挑起點的縮排算法與熱迴圈內聯的那份,同一批輸入結果相同。[test: t_reread_fp_hunk_chain_rule,t_reread_fp_chain_skips_punct_lines,t_reread_fp_indent_inline_same]
++- [S22] 主線改了作者那段所在函式的 `def` 那一行(或 Allman 的 C# 方法那一行、black 風格的 `def f(` 那一行)時,指紋應改變(代價:多要求一次重讀);只改了另一個方法的簽名時不應改變。[test: t_reread_fp_chain_stable_on_other_edits,t_reread_fp_outer_line_changes_fp]
+ - [S23] 給判定者的材料會不會被截掉,prepare 與 check 應用同一套規則判(會截掉的那篇兩邊都用 `v1`、check 印的對照指紋就是 prepare 項目檔的那個);把規則改成只試 3 行上下文時,兩邊應跟著一起改。[test: t_reread_fp_cut_same_in_prepare_and_check,t_reread_fp_cut_rule_shared]
+ - [S24] 指紋與判定者的 diff 不應讀工作樹的屬性檔:在分支上簽出、在 main 上簽出、工作樹的屬性檔改了沒提交,三種情形的指紋與判定者的 diff 應相同。[test: t_reread_fp_ignores_checkout_attributes]
+ - [S25] 查物件大小那次 git 失敗時,那篇應退回 `v1`、事件記「查大小失敗」(不是把大小當 0)。[test: t_reread_fp_size_query_fail_uses_v1]
+-- [S26] 算縮排鏈要讀頂端內容時,一次批次讀回來的內容合計不應超過總量上限,超過的改逐支讀、指紋不變。[test: t_reread_fp_prefetch_total_cap]
+-- [S27] check 因逾時沒算出新版指紋的篇,block 加 `--gate` 時不應擋,清單那篇應講明「這篇因為逾時沒算新版指紋,這次不擋」、事件記 `late`;同一次有真的算出指紋而對不上的篇時照擋。[test: t_reread_fp_timeout_not_blocking,t_reread_fp_timeout_says_so]
+-- [S28] 判「分支自己的紀錄」那次列分岔點紀錄檔名的 git,逾時不應超過指紋這一步剩下的時間。[test: t_reread_fp_tip_names_deadline]
++- [S26] 算縮排鏈要讀頂端內容時,一次批次讀回來的內容合計不應超過總量上限,超過的改逐支讀、指紋不變;批次應照算指紋實際走的順序讀(候選走的順序跟檔名排序相反時,批次數仍是「總篇數 ÷ 一批裝幾支」)。[test: t_reread_fp_prefetch_total_cap,t_reread_fp_prefetch_walk_order]
++- [S27] check 因逾時沒算出新版指紋的篇(含 about_code 列了大量垃圾檔撐到逾時),block 加 `--gate` 時應照舊版判、擋下,清單那篇應講明「這篇因為逾時沒算出新版指紋,照舊版判」、給單次跳過的寫法、事件記 `late`,而且不應同時印「這次不擋」;warn 時只提醒、不給跳過的寫法。(2026-10-14 代碼審 r3 改寫:原本是「不應擋」,綁 `t_reread_fp_timeout_not_blocking`,那支改名改寫成下面的 `t_reread_fp_timeout_labels_each`)[test: t_reread_fp_timeout_blocks,t_reread_fp_timeout_labels_each,t_reread_fp_timeout_says_so]
++- [S28] 判「分支自己的紀錄」那次列分岔點紀錄檔名的 git,逾時不應超過指紋這一步剩下的時間;縮排鏈的計算在截止時間到了時應停下、那支檔退回 `v1`(原因「逾時」)。[test: t_reread_fp_tip_names_deadline,t_reread_fp_chain_deadline]
+ - [S29] 單檔與整篇退回 `v1` 的原因應各記對(太大、型別變更、樹裡找不到;符號連結與子模組、新增與刪除檔、檔名含萬用字元與引號都照原樣路徑算)。[test: t_reread_fp_fallback_reasons,t_reread_fp_symlink_submodule_kinds,t_reread_fp_added_deleted_files,t_reread_fp_literal_pathspec_names]
+ - [S30] 範圍終點在本機找不到的手寫 `v2` 紀錄,效力不應多過手寫的 `v1` 紀錄(作者的改動一變就不再命中、來源核對沒過的不算)。[test: t_reread_fp_forged_record_no_more_than_v1]
++- [S31] 用 `git replace` 把藏了改動的提交換成誠實的提交時,指紋應照真提交算(〈做法〉9)。[test: t_reread_fp_ignores_replace_refs]
++- [S32] 推主線時,本機的遠端追蹤 ref 被指到藏了改動的提交(分岔點不是遠端舊值的祖先)應擋下、講明要先 fetch;沒偽造時照常放行;功能分支 rebase 後強推不應因這條擋(〈做法〉3)。[test: t_reread_fp_forged_tracking_ref_blocks]
+ 
+ - 測試怎麼搭:現有的回頭重讀測試夾具只有一個沒有遠端的 repo,分岔點等於頂端,一律走 `v1`;S1–S3、S5–S11、S13–S19 要另搭「有遠端、遠端 main 在頂端之前、分支在上面」的夾具(`remote add` 加 `update-ref refs/remotes/origin/main`,照 `t_codeloop_default_base_prefers_newest_mainline` 的搭法)。S10 的 NFD 檔名要用 `-c core.precomposeunicode=false` 加 `hash-object`、`update-index --cacheinfo` 這類底層指令造;S2 用 `commit-tree` 手造兩個提交,不跑真的 rebase 衝突;S9 用內容有 NUL 的檔(原本提交一支 `.gitattributes` 設 `*.dat -diff`;2026-10-14 起指紋不讀屬性檔,那樣造的檔改成照文字比);S14 把模組全域的 `_NOTE_REREAD_BUDGET_SEC` 設成小於 3 的正數(照既有測試的覆寫手法;設成負數會先在掃描那一步逾時,走不到指紋);S3 的「不同工作樹」用 `git worktree add`。S1 要斷言命中的是 `v2`(不是碰巧 `v1` 也相同)。S4、S7、S12 對現行程式本來就是綠的,是守衛,要用變異驗證(例如把空白正規化掉、把 `v1` 的雙認拿掉)證明會紅。
+ - 既有測試:`t_codeloop_default_base_prefers_newest_mainline` 照舊呼叫單參數、要照舊綠;`t_note_audit_reread_check_reminds` 與 `t_reread_block_layer1` 照〈要一起改的說法〉改。
+ 
+ ## 實務隱患
+ 
+ - 守衛面:這是推送前會擋的閘(`note_reread.gate` 是 block 時)。風險是「該重讀的被當成已對照」。新指紋比舊指紋寬的地方只有兩種:主線改了作者沒碰的檔(第 1 點「未改」)、主線改了作者碰過的檔但不在作者那段的前後三行內且不是那段的內容。這兩種在舊指紋下會重派,但重派時判定者讀的也只是作者自己的 diff(rebase 後範圍起點是新主線),舊指紋並沒有讓判定者看到主線的改動——所以新指紋沒有拿掉任何真的審查。主線那邊的改動照常由它自己那次推送(以它自己的候選)處理;那條推送走 `--no-verify` 或閘設成不擋時沒有人重讀,這在舊指紋下也一樣。全部未改、樹裡找不到、二進位檔、NFD 路徑四個洞由第 1、2 點與 S9–S11 守。
+ - 偽造紀錄(代碼審 r1 資安席 2):判「分支自己新增的 `v2` 紀錄」的三道檢查都看紀錄自己填的欄位,範圍終點在本機找不到(rebase 前的舊頂端被 gc、另一台機器)時算分支自己的——所以手寫一份 `provenance_ok: true`、範圍終點填不存在的提交、檔名與內容是這篇 `v2` 指紋的紀錄就會命中。這跟手寫一份 `v1` 紀錄效力相同(算 `v1` 也不需要任何秘密):兩種都只替檔名那一個指紋背書、作者自己的改動一變就不再命中、來源核對沒過的都不算,不多給權力;「分支自己的」這道檢查擋的是不小心沿用主線上的舊紀錄,不是惡意。測試 `t_reread_fp_forged_record_no_more_than_v1` 釘住「範圍終點找不到的紀錄最多等同 `v1` 紀錄」。
+ - 已排除:金流:不碰。
+ - 已排除:對外送出:只跑本機 git。
+ - 已排除:不可逆:紀錄檔格式不變;新舊兩種指紋都認,升級與回退都不會讓既有紀錄失效(回退後 `v2` 紀錄只是不再命中)。
+-- 縮排鏈的盲區:函式本體裡頂格的行(C 的 `#if`、頂格的註解、多行字串的續行)會被當成外一層、鏈截在那一行;兩個函式只有在這種行逐字相同、而且前後三行也逐字相同時才會撞,方向是少列。
++- 縮排鏈的盲區:函式本體裡有字的頂格行(C 的 `#if`/`#endif`、頂格的註解、多行字串的續行)會被當成外一層、鏈截在那一行(只有標點與括號的頂格行 2026-10-14 起跳過,見〈做法〉1);兩個函式只有在這種行逐字相同、而且前後三行也逐字相同時才會撞,方向是少列。代碼審 r3 邊界席量過:對 `scripts/lumos` 每個縮排行算鏈,最外層不是 def、class 或裝飾器的約 2.9%,多數是頂層語句(`_START_TEMPLATE = (` 這類),真的落在函式本體頂格行底下的更少。
+ REVISIT:2026-12-15 照 RETIRE-IF 抽查「靠 `v2` 命中」那 5 篇時,順便看抽到的改動有沒有落在函式本體裡頂格的行底下;有的話改成跳過頂格而且不像定義開頭的行,或把起點那一行到鏈最內層之間的行數算進標籤
++- 本機偽造遠端追蹤 ref:推功能分支時本機核對不了(〈做法〉3),由 CI 那一步用真遠端重算、只印。
++REVISIT:2026-12-15 照 RETIRE-IF 數 `note-reread` 事件那次,順便數 CI(來源 ci)列出、但同一個頂端在本機推送前那筆已對照的篇數;不是 0 就逐筆查是不是本機遠端追蹤 ref 被改過,要的話把 CI 那一步改成擋
+ - 時間:check 多一次 `git diff --raw` 與每支改到的 about_code 檔一次 diff(只對分支改過的檔,通常幾支),在剩餘預算內跑(第 5 點);耗時實作時在本 repo 量一次寫進實作紀錄。
+ 
+ ## 回退
+ 
+ - 還原提交即回到只認 `v1`;升級期間記的 `v2` 紀錄不再命中,那幾篇在進行中的分支上要重 prepare 一次(只限升級後才 prepare 的那幾篇)。事件多出的欄位舊讀者不讀,無害。消費專案 `lumos update` 取回舊版。
+ 
+ ## 實作紀錄(2026-10-14)
+ 
+ 現況與實作細節在 [[Systems/筆記內容審]]〈回頭重讀指紋不因主線前進失效:實作紀錄〉(含本 repo 量到的耗時)、[[Systems/pitfalls-code-loop]](共用的 `_lens_default_base`)。這裡只記條款怎麼驗的。
+ 
+ - 條款各綁測試(S1–S19 各一支,名字照條款;S20–S30 是代碼審 r1、r2 補的行為,2026-10-14 代碼審 r2 合約席指出它們原本只寫在測試說明裡、沒進條款),夾具是「有遠端、`refs/remotes/origin/main` 指在分支起點、分支開在上面」(`_rfp_repo`)。先紅:改動前的程式跑 `-k reread_fp` 與 `-k reread_prepare_material`,23 條斷言紅(大多是「用的是 v2」「事件帶 fp_counts/covered_by」那幾條,v1 照舊列出);S4 三條、S7 與 S16 的「指紋不同」那條、S3 的「起點不同指紋相同」幾條對舊程式本來就綠。
+ - S7 與 S16、S9 的「兩次指紋不同」對舊程式也綠(v1 的 blob 本來就不同),所以各加一條前置「兩邊都用 v2」,不然守不到 v2;S12 的第二、三條(只有 v2 紀錄、改用 v1 判)要先有 v2 紀錄,對舊程式是紅的——計劃原本預估 S12 整支對舊程式綠,實際只有第一條綠。
+-- 變異驗證(每條改一處、跑那支測試、還原後再跑一次綠):S4 把 v1 的雜湊輸入多加一行 → 三條全紅;S7 指紋前把空白正規化 → ②紅;S12 拿掉 v1 那一關 → ①紅;另外對關鍵守衛各做一次:算函式名標頭(S8 ③紅)、改回 splitlines(S16 ②紅)、不看分支自己的紀錄(S17 ②紅)、不看範圍終點祖先(S19 ③紅)、分岔點加本機 main(S18 紅)、拿掉全部未改退回(S11 兩條紅)、不看剩餘預算(S14 兩條紅)、未改那項記頂端 blob(S6 紅)、不記 post-blob(S9 ②紅)、拿掉 `--full-index`(S9 ③紅,這條是變異驗證時發現原本守不到才補的:縮寫編號也會不同,要靠 `core.abbrev` 才看得出完整編號的差別)、不釘 precompose(S10 紅)、指紋 diff 拿掉 hunk 釘(S5 紅)、截掉不退回(S15 ③紅)、判定者 diff 用範圍起點(S15 ①②紅)、v2 用範圍起點當分岔點(`t_note_audit_reread_check_reminds` ⑧⑩紅)。
++- 變異驗證(每條改一處、跑那支測試、還原後再跑一次綠):S4 把 v1 的雜湊輸入多加一行 → 三條全紅;S7 指紋前把空白正規化 → ②紅;S12 拿掉 v1 那一關 → ①紅;另外對關鍵守衛各做一次:指紋改回算 git 印的段落標頭(S8 ②紅:主線在上方插頂格賦值;2026-10-14 代碼審 r3 合約 1 更正,原本寫「算函式名標頭(S8 ③紅)」,是 r2 刪掉的舊測試的斷言,r3 修正時照現在的測試重跑過)、改回 splitlines(S16 ②紅)、不看分支自己的紀錄(S17 ②紅)、不看範圍終點祖先(S19 ③紅)、分岔點加本機 main(S18 紅)、拿掉全部未改退回(S11 兩條紅)、不看剩餘預算(S14 兩條紅)、未改那項記頂端 blob(S6 紅)、不記 post-blob(S9 ②紅)、拿掉 `--full-index`(S9 ③紅,這條是變異驗證時發現原本守不到才補的:縮寫編號也會不同,要靠 `core.abbrev` 才看得出完整編號的差別)、不釘 precompose(S10 紅)、指紋 diff 拿掉 hunk 釘(S5 紅)、截掉不退回(S15 ③紅)、判定者 diff 用範圍起點(S15 ①②紅)、v2 用範圍起點當分岔點(`t_note_audit_reread_check_reminds` ⑧⑩紅)。
+ - S16 的「清單有、diff 卻是空的」用替身攔下指紋那次 git diff 造(會讓它變空的兩種真實成因都是我們自己的旗標寫錯,本機重現要靠刻意寫錯旗標);其他條款都是真的 git 情境。
+ - 縮排鏈(代碼審 r2):先紅是改動前的程式跑 S20、S8、S22、S21 的四支,S20 九種寫法全紅(兩條分支指紋相同)、S8 插頂格賦值那條紅、S22 紅、S21 缺函式;S23 的共用規則、S26 的總量上限、S27 的不擋也都先紅。變異驗證(清 `__pycache__` 後跑、還原後再綠):標籤整個拿掉 → S20 九條全紅;鏈只留最內層 → S20 的 Rust、Python 巢狀函式、巢狀類別三條紅、S21 四條紅;tab 當 4 欄 → S21 三條紅;逾時的篇照算進擋 → S27 ①紅;有逾時的篇就整次不擋 → S27 ②紅。
++- 代碼審 r3 修正(收尾符號行、逾時照擋、替身物件、偽造遠端追蹤 ref、兩份縮排算法):先紅是改動前的程式跑新的九支——S21 標點行六條紅(black 風格兩個函式都是 `('):',)`、Allman 都是 `('{', '{')`)、S20 收尾符號四種寫法全紅、S22 外層那行那條紅、兩份縮排算法對 `}`、`    ):` 等四種輸入跟手算不同、S27 照擋兩條紅(資安席情境縮小成 40 支垃圾檔、算到第 6 支把截止時間改成已過:rc0、印「這次不擋」)、S26 反序候選批次 8 次(該 4 次)、S28 鏈的截止時間(函式還沒有那個參數)、S31 替身那條紅(指紋等於誠實那條)、S32 偽造 ref 那條紅(rc0、已對照)。變異驗證(清 `__pycache__` 後跑、還原後再綠):跳過集合縮回只有空白 → S21 六條、S20 四條、S22 一條、縮排一致性四條紅;只改內聯或只改獨立那份 → 縮排一致性四條紅(另各紅 S21 六條、兩條);逾時的篇排除在擋之外 → S27 兩支各一條、S28 鏈那支一條紅;批次照全部鍵排序 → S26 反序那條紅;拿掉鏈的截止時間 → S28 兩條紅;拿掉入口的 `GIT_NO_REPLACE_OBJECTS` → S31 紅;拿掉分岔點核對 → S32 ①紅;核對套到功能分支 → S32 ③紅。
+ - 跟計劃字面不同的小決定:`_note_reread_covered` 照舊回「來源核對過的指紋集合」,兩種指紋的判法另開 `_note_reread_hits`(〈做法〉8 說「收兩種指紋」,拆成兩支是為了不改既有回傳型別);退回原因多一種「git 失敗」;事件的 `branch` 記 `refs/heads/…` 全名;判不了而擋下那筆也帶四個欄位;CHANGELOG 不加(見〈要一起改的說法〉,2026-10-14 代碼審 r1 合約席指出這裡原本寫「放在 v1.3 底下」跟那裡矛盾,這次也沒動 `CHANGELOG.md`)。
+ 
+ ## 審計修正紀錄
+ 
++- 代碼審 r3(2026-10-14,7 席,只看 r2 修補):14 條/major 4/全數折入,分五組:縮排鏈被收尾符號行截斷(只有標點的行跳過,〈做法〉1、S20–S22)、逾時不擋被堆垃圾檔拿來繞(改回照擋、訊息只講事實、批次照走的順序讀、鏈看截止時間,〈做法〉5、S26–S28)、git 替身物件(入口統一設 `GIT_NO_REPLACE_OBJECTS`,〈做法〉9、S31)、本機偽造遠端追蹤 ref(推主線時核對分岔點、功能分支由 CI 補驗,〈做法〉3、S32)、文件(〈實作紀錄〉變異驗證那句、兩份縮排算法綁一致)。席報告與修正紀錄在 `governance/review-reports/code-回頭重讀指紋/`。`v2` 的雜湊格式又變了(收尾符號行不再進鏈);這條分支還沒推,不做相容。
++
+ - 代碼審 r2(2026-10-14,7 席,只看 r1 修補):16 條/major 6/六席各自實測重現同一個洞——r1 給每段改動帶的「所在函式名」只認 `def/class/function/func/fn`、認不到取第一個識別字,Kotlin、Java、C、TS 箭頭函式、Go 接收者、Rust impl、Python 巢狀的兩個不同函式拿到同一個名字;全數折入,分五組:不猜名字、改成縮排鏈的原文(〈做法〉1、S8 改寫、S20–S22)、批次讀頂端改走有單支與總量上限的共用讀法(S26)、逾時沒算出新版指紋的篇不擋(〈做法〉5、S27)、段落標頭正規式與截斷規則各只留一份(S23)、文件與條款(`_patch_file_changes` 參數那句、S20–S30、耗時基準重量)。席報告與修正紀錄在 `governance/review-reports/code-回頭重讀指紋/`。`v2` 的雜湊格式又變了(每個 hunk 的標籤換成縮排鏈);這條分支還沒推、主線上沒有任何 `v2` 紀錄,不做相容。
+ 
+ - 代碼審 r1(2026-10-14,7 席:正確性、併發、邊界、合約、通才、架構對齊、資安):15 條/major 1(資安席:同一段改動搬到同檔另一個前後三行相同的函式,`v2` 指紋不變)/全數折入,分六組:段落所在函式的識別名放回指紋(〈做法〉1)、截斷判斷搬到 prepare 與 check 共用的那一步並在逾時時講明(〈做法〉5、6)、git 輸入固定(不讀工作樹屬性檔、查大小失敗退回、列紀錄檔名吃截止時間、截止時間與 git 選項共用既有寫法)、文件與測試名改正(S19 測試改名 `t_reread_fp_ff_main_uses_branch_record`、手冊補前後三行與搬函式的例外、〈實作紀錄〉的 CHANGELOG 句)、補八種檔案與檔名的測試、偽造紀錄的界線寫進〈實務隱患〉。席報告與修正紀錄在 `governance/review-reports/code-回頭重讀指紋/`。`v2` 的雜湊格式因此變了(每個 hunk 多一個名字);這條分支還沒推、主線上沒有任何 `v2` 紀錄,所以不做相容。
+ 
+ - r1(2026-10-14,6 席):35 條/blocking 12/改動指紋有四個會漏判的洞(函式名標頭、二進位檔、NFC/NFD 路徑、全部未改成常數)、選項位置照字面做會整個失效、升級會讓所有紀錄一次失效、撤除條件量不到、要一起改的說法沒列、跟既有逐檔改動指紋另寫一套;全數折入:先用 `--raw -z` 拿清單、文字檔重用 `_patch_file_changes` 並關掉函式名標頭、二進位改記物件編號、全部未改退回 `v1`、新舊兩種指紋都認、事件加欄位、判定者讀的 diff 跟指紋同基準、新增〈要一起改的說法〉與 S8–S15。席報告在 `governance/review-reports/回頭重讀指紋不因主線前進失效/`。
+ - r2(2026-10-14,3 席:正確性、邊界、架構對齊,只看 r1 折入後的改動):18 條/blocking 6/`:(literal)` 前綴與全域旗標併用會讓 diff 變空、重用的函式在換頁符號處切錯、`v2` 不綁檔案版本使主線上的舊紀錄能替之後相同的改動背書、本機 main 上沒推的提交被當成主線、快轉進 main 後推 main 用不到分支紀錄、事件量不出放寬那一群;全數折入:只留全域旗標、`_patch_file_changes` 加只用換行切行的參數、`v2` 只認分支自己新增的紀錄、分岔點只看遠端主線、紀錄同時記 `v1`、先判 `v1` 再判 `v2` 並記 `v2_only`、共用起點函式搬到推送起點區。新增 S16–S19。
+ - r3(2026-10-14,2 席:正確性、邊界,上限輪,只看 r2 折入後的改動):14 條/blocking 5/4 MB 上限會讓 5.5 MB 的測試檔永遠用舊指紋、macOS 預設設定讓 NFD 路徑 diff 變空、「材料被縮短」沒定義、紀錄裡另記舊指紋的欄位沒有資料來源且可被手改、「分岔點只看遠端主線」與幾處舊說法矛盾;全數折入:上限改 32 MB 並列實測檔案大小、釘 `core.precomposeunicode=false` 與子模組選項、只把真的截掉內容算縮短、拿掉另記舊指紋的欄位(遠端主線當分岔點後快轉推 main 照樣命中)、分支自己的紀錄多驗內容指紋與範圍終點、改正舊說法。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md b/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md
+index cec9bcf7..4393334a 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md
++++ b/docs/lumos-toolchain-knowledge/Systems/筆記內容審.md
+@@ -106,25 +106,25 @@ REVISIT:2026-10-21 照計劃〈做法〉5 抽 30 行量準度(上線日晚於 20
+ - **v2 指紋那幾支**:`_note_reread_fp_info`(一篇的兩種指紋與退回原因,記在 scan 裡)、`_note_reread_fp_base`(一次掃描算一次分岔點與 `--raw` 清單)、`_note_reread_fp_file`(逐檔改動指紋,鍵是分岔點、頂端、原樣路徑)、`_note_reread_contrast_fp_v2`;判已對照走 `_note_reread_hits`(先 v1、再 `_note_reread_own_fps` 認分支自己的 v2 紀錄)。v1 還是 `_note_reread_contrast_fp`,原名原簽名。
+ - **耗時(計劃〈實務隱患〉要量的)**:2026-10-14 在本 repo、這次改動還沒提交時的樹(相對分岔點 32 支檔、`scripts/lumos` 改了五百多行)量:候選 2 篇、兩篇都用 v2、逐檔 diff 1 支(`scripts/lumos`);指紋這一步 5 次中位數 0.24 秒(v1 只要 ls-tree 已經讀好的編號,幾乎是 0),整次判定約 3.0 秒,離 30 秒軟上限很遠。量法是在暫存索引上組一個不掛 ref 的提交,對它跑 `_note_reread_scan` 與 `_note_reread_fps`。**基準重量**(2026-10-14 代碼審 r2 合約席:0.24 秒是 r1 修補前量的,修補後每篇多一次判截斷的 diff 與頂端內容的批次讀):同一量法、同一個樹(相對分岔點 71 支檔、候選 2 篇都用 v2),r2 修正前的程式 5 次中位數 0.41 秒(0.407–0.434),修正後 0.39 秒(0.383–0.412)。
+ 
+ REVISIT:2026-12-15 照計劃的 RETIRE-IF 數 note-reread 事件那次,在本 repo 對一條改到 `scripts/lumos` 的分支重量一次指紋這一步的耗時(同一量法、5 次中位數),超過 4 秒(0.39 秒的十倍)就查是哪支 git 呼叫或縮排鏈那一趟變慢
+ - **給判定者的 diff 跟指紋走同一支 git 呼叫**:`_note_reread_diff` 原本沒釘 `core.precomposeunicode=false`,macOS 上樹裡存 NFD 檔名時傳原樣路徑也會得到空 diff(v1 那條路本來就有這個洞;S10 要判定者讀得到那支檔的改動)。代碼審 r1 架構對齊席 2 指出它另寫了一份設定,現在給判定者的 diff(`_note_reread_diff_once`)與指紋的 `--raw`、逐檔 diff 都走 `_note_reread_git`,全域選項只有 `_NOTE_REREAD_FP_GIT` 一份,另釘 hunk 切法(`_DIFF_PIN_HUNK_ARGS`)。
+ - **「判定者的 diff 會被截掉」在算指紋那一步判、不找字樣**(代碼審 r1 正確性席 2、通才 1):原本 prepare 組完材料才知道(`cuts` 旗標),check 不組材料、照用 v2,印的指紋與 prepare 的紀錄、prepare 的「只差提交」都對不上。現在 `_note_reread_fp_info` 算出 v2 之後問 `_note_reread_v2_cut`:同一份參數跑一次 0 行上下文的 diff,超過 `_NOTE_REREAD_DIFF_CAP` 就是會截掉(那時平均截斷一定截到某支檔),兩邊都改用 v1。不找「[截斷:」字樣:改動本文自己可能含這幾個字(`scripts/lumos` 就有)。代價是 check 每篇用 v2 的多跑一次 diff(量測見下一條)。
+ - **大檔與多檔的耗時**(2026-10-14 代碼審 r1 修正後量,本機 macOS、git 2.39):一條分支改了一支 33 MB(一百萬行、一半的行被改)與 200 支小檔,A 管大檔、B 管 200 支小檔。reread-prepare `--all` 10.9 秒、最大常駐記憶體約 780 MB;reread-check 8.5 秒、約 780 MB(修正前同一份 repo:prepare 11.7 秒、739 MB,check 7.0 秒、657 MB)。check 多出的主要是判截斷那次 diff(大檔約 0.8 秒);兩邊印的對照指紋一致(A 因截斷用 v1、B 用 v2),修正前 check 對 A 印的是 v2。算函式名要頂端內容:原本每支小檔各開一次 cat-file,200 支多花約 4 秒,改成不超過 1 MB 的一次批次讀(`_note_reread_fp_prefetch`)。**代碼審 r2 修正後重量**(同一台機器,reread-check 各 3 次):33 MB 大檔加 200 支小檔那份,修正前 8.28–8.47 秒、730–736 MB,修正後 7.99–8.11 秒、748–757 MB(prepare 一次 9.7 → 10.5 秒;兩邊印的對照指紋一致);另造 400 支約 800 KB 的檔(每支改 1/50 的行,兩篇各管 200 支),修正前 20.1–20.6 秒、1029–1069 MB,修正後 19.9–20.7 秒、559–593 MB(prepare 25.2 秒、1361 MB → 26.1 秒、709 MB)。第一版修正讓這份慢了 5 秒(超過總量上限的 320 支逐支開 git、加上縮排鏈每支約 12 毫秒),改成「缺的那支起再讀下一批、手上只留一批」並把縮排鏈的迴圈內聯之後追平。
+ - **截止時間一路傳進主線候選的查詢**:`_push_rev`、`_push_mainline_full`、`_push_mainlines`、`_push_pick_base` 多一個選配的 `deadline`,經 `_lens_git_dl`(單次上限取 20 秒與剩下秒數的較小者;沒時間就不跑);其他呼叫端不傳,行為不變。
+ - **範圍終點在本機找不到算分支自己的紀錄**:rebase 前的舊頂端被 gc、或在另一台機器上,它不可能是分岔點的祖先;祖先判不了(git 失敗、逾時)才當不是。
+ - **退回原因多兩種「git 失敗」「查大小失敗」**:`--raw` 或逐檔 diff 的 git 有跑完但回非 0 時記「git 失敗」,跟逾時分開;`cat-file --batch-check` 失敗或某個物件查不到記「查大小失敗」(代碼審 r1 併發席 1:原本當成大小 0、32 MB 上限整個失效)。「判定者材料被縮短」兩邊都會出現。
+-- **每段改動的縮排鏈**(代碼審 r1 資安席 major;r2 六席:r1 改成猜「所在函式名」,只認 def/class 等幾個關鍵字,好幾種語言兩個不同函式撞名):`_note_reread_hunk_nodes` 從頂端版本的內容一趟往下掃,用縮排遞增的堆疊找每段改動的外層那幾行;`_note_reread_hunk_tags` 把鏈雜湊成標籤(每個節點的雜湊接外一層的雜湊,共用的外層只算一次,深層巢狀與很多段改動都是線性),經 `_patch_file_changes` 的 `hunk_tag` 參數代替 git 的段落標頭進指紋(資安席那邊不傳、照舊);`_note_reread_hunk_chains` 回原文給人看與測試。hunk 標頭用共用的 `_NOTELINES_HUNK_RE`(r2 架構對齊 2:原本多抄一份)。規則、代價與盲區寫在計劃〈做法〉1 與〈實務隱患〉。
+-- **頂端內容的批次讀有總量上限**(代碼審 r2 架構對齊 1、併發 2):`_note_reread_fp_prefetch` 與逐支那一條(`_note_reread_fp_blob`)都走 `_nodehome_cat_blobs_capped`,單支 1 MB(批次)或 32 MB(逐支)、批次總量 64 MB,大小用指紋那一步已查好的(`_nodehome_cat_blobs_capped` 多一個選填的 `sizes`,給了就不再問一次);超過總量的,算到它時從它起再讀下一批、換掉上一批(手上只留一批),超過單支 1 MB 的直接單支讀、不換批,指紋照算。原本自己比單支大小、再呼叫沒上限的批次讀,400 支約 800 KB 的檔常駐 1.09 GB。
++- **每段改動的縮排鏈**(代碼審 r1 資安席 major;r2 六席:r1 改成猜「所在函式名」,只認 def/class 等幾個關鍵字,好幾種語言兩個不同函式撞名):`_note_reread_hunk_nodes` 從頂端版本的內容一趟往下掃,用縮排遞增的堆疊找每段改動的外層那幾行;`_note_reread_hunk_tags` 把鏈雜湊成標籤(每個節點的雜湊接外一層的雜湊,共用的外層只算一次,深層巢狀與很多段改動都是線性),經 `_patch_file_changes` 的 `hunk_tag` 參數代替 git 的段落標頭進指紋(資安席那邊不傳、照舊);`_note_reread_hunk_chains` 回原文給人看與測試。hunk 標頭用共用的 `_NOTELINES_HUNK_RE`(r2 架構對齊 2:原本多抄一份)。規則、代價與盲區寫在計劃〈做法〉1 與〈實務隱患〉。只有空白與 ASCII 標點的行(`_NOTE_REREAD_SKIP`)跟空行一樣跳過(代碼審 r3 正確性 1、邊界 1:black 風格的 `):`、Allman 的 `{` 原本是「最近一行較淺的」,整個檔的函式拿到同一條鏈);縮排算法有兩份——挑起點用的 `_note_reread_indent` 與熱迴圈內聯的那份,`t_reread_fp_indent_inline_same` 綁住兩邊一樣(r3 架構對齊 1)。鏈的計算看指紋這一步的截止時間(切行前、每段改動的起點、每 8192 行),到了那支檔退回 v1、原因「逾時」(r3 併發 2)。
++- **頂端內容的批次讀有總量上限**(代碼審 r2 架構對齊 1、併發 2):`_note_reread_fp_prefetch` 與逐支那一條(`_note_reread_fp_blob`)都走 `_nodehome_cat_blobs_capped`,單支 1 MB(批次)或 32 MB(逐支)、批次總量 64 MB,大小用指紋那一步已查好的(`_nodehome_cat_blobs_capped` 多一個選填的 `sizes`,給了就不再問一次);超過總量的,算到它時從它起再讀下一批、換掉上一批(手上只留一批),超過單支 1 MB 的直接單支讀、不換批,指紋照算。原本自己比單支大小、再呼叫沒上限的批次讀,400 支約 800 KB 的檔常駐 1.09 GB。批次的順序就是算指紋走的順序(候選照順序、每篇裡照 `_note_reread_fp_walk_keys`,`_note_reread_contrast_fp_v2` 也用它;r3 併發 1:原本照全部鍵排序,反序的候選每支各讀一批)。
+ - **截斷規則一份**(代碼審 r2 架構對齊 3):上下文依序試哪幾種(`_NOTE_REREAD_DIFF_CTX`)與「放不放得下」(`_note_reread_diff_fits`)由 `_note_reread_diff` 與 `_note_reread_v2_cut` 共用。
+ - **不讀工作樹的屬性檔**(代碼審 r1 邊界席 1):`_note_reread_git` 用 `--git-dir` 加 `--bare`、目前目錄設成 git 目錄本身;為什麼這樣能擋(git 2.39 裸庫仍從目前目錄讀 `.gitattributes`)與 2.42 起的 `attr.tree` 寫在那支函式的說明。git 目錄記在模組層的快取裡(鍵是 repo 根)。
+-- **逾時講明、不擋、列紀錄檔名吃截止時間**(代碼審 r1 通才 1、併發 2、3;r2 併發 1、通才 3):check 預算不夠、某篇沒算 v2 時,清單那篇旁邊與下面一行講明「這篇因為逾時沒算新版指紋,這次不擋」,擋不擋由 `_note_reread_blocking` 判(那幾篇記在 `res["late"]`,不算進擋;帳上 `late` 篇數、`layer1_fps` 那幾筆帶 `late`);`_note_reread_tip_names` 收 deadline(判分支自己的紀錄那次、讀已提交紀錄那次都傳)。`_nodehome_cat_blobs_capped` 的單次逾時改用共用的 `_git_timeout`(架構對齊席 1,行為不變)。
++- **逾時講明、照擋、列紀錄檔名吃截止時間**(代碼審 r1 通才 1、併發 2、3;r2 併發 1、通才 3 改成不擋;r3 資安 1 實測堆垃圾檔撐到逾時就放行,改回照擋):check 預算不夠、某篇沒算出 v2 時,清單那篇旁邊講明「這篇因為逾時沒算出新版指紋,照舊版判」,擋下時下面一行另給單次跳過 `LUMOS_SKIP_REREAD_CHECK=1`(跳過會留帳);擋不擋由 `_note_reread_blocking` 判,逾時的篇照算進擋(記在 `res["late"]` 只用來講明與記帳;帳上 `late` 篇數、`layer1_fps` 那幾筆帶 `late`);`_note_reread_tip_names` 收 deadline(判分支自己的紀錄那次、讀已提交紀錄那次都傳)。`_nodehome_cat_blobs_capped` 的單次逾時改用共用的 `_git_timeout`(架構對齊席 1,行為不變)。
+ 
+ ## 回頭重讀守檔筆記的量測腳本(2026-09-30)
+ 
+ [[Projects/守檔筆記對照改動_計劃]] 的依據。都是唯讀、一次性,數字與結論在 `governance/eval/home-check/report-2026-09-30.md`;判定者用 `claude -p`,rtb 用唯讀 clone。
+ 
+ - **實驗一(調問法)**:`governance/eval/home-check/tune/scripts/build_prompt.py` 組五種問法的 prompt;`governance/eval/home-check/tune/scripts/common.py` 共用的 git 讀取與家的對照;`governance/eval/home-check/tune/scripts/select_cases.py`、`governance/eval/home-check/tune/scripts/pick_control.py` 挑案例與對照組;`governance/eval/home-check/tune/scripts/run_judge.sh` 呼叫判定者;`governance/eval/home-check/tune/scripts/parse.py` 解析回覆;`governance/eval/home-check/tune/scripts/needles.py`、`governance/eval/home-check/tune/scripts/case_recall.py` 判有沒有點中已知漂移;`governance/eval/home-check/tune/scripts/score.py` 彙總;`governance/eval/home-check/tune/scripts/home_stats.py`、`governance/eval/home-check/tune/scripts/sizes.py`、`governance/eval/home-check/tune/scripts/show.py` 統計家篇數、材料大小與檢視單筆。
+ - **實驗二(沒看過的資料)**:`governance/eval/home-check/validate/scripts/pick_commits.py` 抽提交;`governance/eval/home-check/validate/scripts/vcommon.py` 共用讀取與組 prompt(逐字重建實驗一的 V3);`governance/eval/home-check/validate/scripts/build_all.py` 產全部 prompt;`governance/eval/home-check/validate/scripts/run_judge.sh` 呼叫判定者;`governance/eval/home-check/validate/scripts/vparse.py` 解析;`governance/eval/home-check/validate/scripts/build_review.py`、`governance/eval/home-check/validate/scripts/run_review.sh` 不知情複判;`governance/eval/home-check/validate/scripts/score.py` 重算全部數字。
+ 
+ ## 回頭重讀那幾支函式的複雜度放行(2026-10-01)
+ 
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index fae00012..0a959b26 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "bac353d5e0ef2d39f7e1239c4ea27d85d547ab7837777b755ad85864be5c793b",
++    "scripts/test_lumos.py": "77eb5077c6ecd787005c28b24327dd6e8f4eff4ccc59e50c57bb1a8b32faff66",
+     "scripts/test_autonomous_loop.py": "b360429f2d41bb32d0b21b125f482f7694fefa828f2be7020902382f9f3c9e9c",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+     "scripts/hooks/pre-push": "de4344912099b4ea123470be2c3d431671965df2d70bd8365b1292f6bf8d87fb",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "a3494328d4df22fd7ad8c28bb34a8bef5edd8dd8ab14a3118c9d3f4f44b022bc",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "b21d8133174b2b0ea9d8abad973fdcb430dc0d79d7b3591cf5764e1847838dff",
+     "scripts/hooks/claude/check-graph-sync.py": "24b58d13eac5211823d7e7f3125ff6db81212a43351ae0dd2585ef0d4c247485",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-10-14T06:04:40+08:00",
+-  "note": "代碼審 code-回頭重讀指紋 r2 修正:縮排鏈、批次讀上限、逾時不擋、截斷規則共用的測試"
++  "approved_at": "2026-10-14T07:01:02+08:00",
++  "note": "代碼審 code-回頭重讀指紋 r3 修正:縮排鏈跳過標點行、逾時照擋、替身物件、偽造遠端追蹤 ref、兩份縮排算法一致的測試;timeout_not_blocking 改名改寫成 timeout_labels_each"
+ }
+diff --git a/scripts/lumos b/scripts/lumos
+index abfcf93b..79c2c3cf 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -36360,21 +36360,21 @@ def _note_reread_fps(scan, deadline=None):
+     return {rel: _note_reread_fp_info(scan, rel, deadline)["fp"] for rel in scan["cands"]}
+ 
+ 
+ def _note_reread_fp_info(scan, rel, deadline=None):
+     """一篇候選的兩種對照指紋 → {"v1", "v2"(算不出是 None), "why"(v2 算不出的原因), "fp"(這次用的), "ver", "files"
+     (v2 時那篇 about_code 裡出現在 --raw 清單上的檔,git 原樣路徑), "keys"(同一批的 NFC 鍵)};結果記在 scan["fpinfo"]。
+     deadline 是整體截止時間(check 傳、prepare 不傳),指紋這一步只用到它減 _NOTE_REREAD_FP_RESERVE 秒那一刻。
+     ★用哪一版,prepare 與 check 走同一套規則★(代碼審 r1 正確性席 2、通才 1、併發 3):「給判定者的 diff 會不會被截掉」也在這裡判
+     (_note_reread_v2_cut,兩邊都算得出),截掉就用 v1、原因「判定者材料被縮短」——原本只有 prepare 組完材料才知道,check 照用 v2,
+     印的指紋與 prepare 的紀錄對不上。只剩預算一項會讓兩邊分岔(check 有 30 秒上限、prepare 沒有):退回原因記「逾時」,
+-    check 清單那篇另講明(_note_reread_print_layer1),不靜默換版,而且那篇不擋(_note_reread_blocking)。"""
++    check 清單那篇另講明(_note_reread_print_layer1),不靜默換版;那篇照舊版判、照擋(_note_reread_blocking,代碼審 r3 資安 1)。"""
+     cache = scan.setdefault("fpinfo", {})
+     if rel not in cache:
+         pre = scan["vault_rel"] + "/"
+         about = _note_reread_about(scan, rel)
+         v1 = _note_reread_contrast_fp(pre + rel, about, scan["oids"])
+         v2, why, files, keys = _note_reread_contrast_fp_v2(scan, pre + rel, about, deadline)
+         if v2:
+             why = _note_reread_v2_cut(scan, files)
+             if why:
+                 v2, files, keys = None, [], []
+@@ -36555,21 +36555,23 @@ def _note_reread_fp_tags(scan, base, ent, text):
+             m = _NOTELINES_HUNK_RE.match(ln)
+             if m:
+                 keys.append(m.groups())
+     spans = [(int(k[2]), int(k[3] if k[3] is not None else 1)) for k in keys]
+     want = [i for i, (_c, d) in enumerate(spans) if d > 0]
+     data = None
+     if want and not _NOTE_REREAD_FP_ZERO.fullmatch(ent["noid"]) and ent["nmode"] != "160000":
+         data, why = _note_reread_fp_blob(scan, base, ent["noid"])
+         if why:
+             return None, why
+-    got = _note_reread_hunk_tags(data, [spans[i] for i in want])
++    got = _note_reread_hunk_tags(data, [spans[i] for i in want], base["dl"])
++    if got is None:
++        return None, "逾時"
+     tags = dict.fromkeys(keys, "")
+     tags.update((keys[i], g) for i, g in zip(want, got))
+ 
+     def tag(ln):
+         m = _NOTELINES_HUNK_RE.match(ln)
+         return tags.get(m.groups(), "") if m else ""
+     return tag, None
+ 
+ 
+ def _note_reread_fp_blob(scan, base, oid):
+@@ -36590,126 +36592,147 @@ def _note_reread_fp_blob(scan, base, oid):
+     return got[0], None
+ 
+ 
+ _NOTE_REREAD_FP_PREFETCH_MAX = 1024 * 1024         # 頂端內容一次批次讀進來的單支上限;更大的逐支讀(讀完就丟)
+ # 一次批次讀的總量上限:批次讀把整批輸出收進記憶體再切片,常駐約是內容的兩到三倍(代碼審 r2 併發席:400 支約 800 KB、合計約 320 MB
+ # 的檔,沒有總量上限時常駐 1.09 GB)。64 MB 是「200 支 100 KB 的一般原始檔一批裝得下」的量級,常駐約一兩百 MB;超過的下一批再讀
+ # (手上只留一批),指紋照算,不會因此退回舊版或少提醒
+ _NOTE_REREAD_FP_PREFETCH_TOTAL = 64 * 1024 * 1024
+ 
+ 
++def _note_reread_fp_walk_keys(about):
++    """算一篇 v2 指紋時依序走的 about_code 鍵(_note_reread_contrast_fp_v2 與批次讀的順序共用這一支)。"""
++    return sorted({k for k in (_nodehome_key(v) for v in about) if k})
++
++
+ def _note_reread_fp_prefetch(scan, base, start):
+     """候選 about_code 列到、這條分支改過的檔,從物件 start 起照算指紋的順序往後,頂端內容不超過 _NOTE_REREAD_FP_PREFETCH_MAX 的、
+     合計不超過 _NOTE_REREAD_FP_PREFETCH_TOTAL 的,一次 cat-file 批次讀進來 → {物件編號: bytes}。
+     算縮排鏈要頂端內容;逐支各開一次 git 在 200 支小檔時多花約 4 秒(2026-10-14 量測),所以小檔一次讀。★走有上限的共用讀法★
+     (代碼審 r2 架構對齊 1、併發 2:原本自己比單支大小、再呼叫沒有上限的 _nodehome_cat_blobs,而且沒有總量上限):
+     _nodehome_cat_blobs_capped 帶單支上限、總量上限 _NOTE_REREAD_FP_PREFETCH_TOTAL、截止時間與已查好的大小;超過總量的、讀不了的
+-    不放進來:超過總量的等算到它時再從它起讀下一批,其餘由 _note_reread_fp_blob 逐支讀。"""
++    不放進來:超過總量的等算到它時再從它起讀下一批,其餘由 _note_reread_fp_blob 逐支讀。
++    ★順序就是算指紋實際走的順序★(候選照順序、每篇裡照 _note_reread_fp_walk_keys;代碼審 r3 併發 1:原本照全部鍵的排序,候選 A 列到
++    排序靠後的檔、候選 B 列到靠前的檔時,每支都缺、每支各讀一批,實測 120 支 1 MB 的檔讀了 120 批、7.5 秒)。"""
+     sizes = base.get("sizes") or {}
+     if base.get("blob_order") is None:
+-        keys = set()
+-        for rel in scan["cands"]:
+-            keys |= _note_reread_about(scan, rel)
+-        base["blob_order"] = list(dict.fromkeys(e["noid"] for k in sorted(keys) for e in base["raw"].get(k, ())
++        base["blob_order"] = list(dict.fromkeys(e["noid"] for rel in scan["cands"]
++                                                for k in _note_reread_fp_walk_keys(_note_reread_about(scan, rel))
++                                                for e in base["raw"].get(k, ())
+                                                 if e["nmode"] != "160000" and not _NOTE_REREAD_FP_ZERO.fullmatch(e["noid"])))
+     order = base["blob_order"]
+     oids = order[order.index(start):] if start in order else [start]   # 上限由 _nodehome_cat_blobs_capped 判,這裡不另算
+     got = _nodehome_cat_blobs_capped(scan["root"], oids, _NOTE_REREAD_FP_PREFETCH_MAX, timeout=20,
+                                      max_total_bytes=_NOTE_REREAD_FP_PREFETCH_TOTAL, deadline=base["dl"],
+                                      sizes=[sizes.get(o) for o in oids])
+     return {o: b for o, b in zip(oids, got or []) if b is not None}
+ 
+ 
++# 縮排鏈當成空白跳過的位元組:ASCII 空白與 ASCII 標點。一行去掉這些什麼都不剩(空行、只有空白、只有括號與標點,例如 `{`、`}`、`):`、`];`)
++# 就跳過,跟空行一樣——既不當起點、也不進鏈、也不截斷鏈(代碼審 r3 正確性 1、邊界 1:black 風格的多行簽名收尾 `):`、Allman 的 `{`
++# 是「往上第一行縮排較淺的」,整個檔的函式拿到同一條鏈)。非 ASCII 位元組(中文識別名等)算有字;有字的頂格行(`#endif`)照舊截斷。
++_NOTE_REREAD_SKIP = b" \t\r\n\x0b\x0c!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
++
++
+ def _note_reread_indent(ln):
+-    """一行(bytes)的縮排欄寬:開頭的空白與 tab,tab 照 _NOTE_REREAD_TAB 欄展開;空行或只有空白的行回 None。"""
+-    if not ln or ln.isspace():
++    """一行(bytes)的縮排欄寬:開頭的空白與 tab,tab 照 _NOTE_REREAD_TAB 欄展開;縮排鏈要跳過的行(_NOTE_REREAD_SKIP:空行、只有空白、
++    只有標點)回 None。_note_reread_hunk_nodes 的熱迴圈內聯了同一套算法(t_reread_fp_indent_inline_same 綁住兩邊一樣)。"""
++    if not ln.strip(_NOTE_REREAD_SKIP):
+         return None
+     c = ln[:1]
+     if c != b" " and c != b"\t":
+         return 0
+     pre = ln[:len(ln) - len(ln.lstrip(b" \t"))]
+     return len(pre) if b"\t" not in pre else len(pre.expandtabs(_NOTE_REREAD_TAB))
+ 
+ 
+-def _note_reread_hunk_nodes(data, spans):
+-    """縮排鏈的核心 → 跟 spans 同順序的「鏈最內層那一行」節點(沒有鏈是 None)。節點是 (那一行去掉頭尾空白的原文 bytes, 外一層節點)。
+-    data 是那一版的內容(bytes;None → 全部沒有鏈),spans 是 [(起點行號 s, 行數 n)…](從 1 起)。
+-    ① 起點:範圍 s..s+n-1 裡第一個不是空白的行;範圍裡全是空白(或 n=0)就當成在 s+n 那個位置、無限深(鏈從它上面最近的非空白行起算)。
+-    ② 鏈:從起點往上,縮排比起點淺的最近一行(空行、只有空白的行跳過),再從那行往上找比它更淺的,一路到縮排 0;起點縮排 0 就沒有鏈。
++def _note_reread_hunk_nodes(data, spans, deadline=None):
++    """縮排鏈的核心 → 跟 spans 同順序的「鏈最內層那一行」節點(沒有鏈是 None);deadline 到了回 None(整批不算)。
++    節點是 (那一行去掉頭尾空白的原文 bytes, 外一層節點)。data 是那一版的內容(bytes;None → 全部沒有鏈),spans 是 [(起點行號 s, 行數 n)…]
++    (從 1 起)。「跳過的行」= 空行、只有空白、只有標點(_NOTE_REREAD_SKIP)。
++    ① 起點:範圍 s..s+n-1 裡第一個不跳過的行;範圍裡全是跳過的行(或 n=0)就當成在 s+n 那個位置、無限深(鏈從它上面最近的不跳過的行起算)。
++    ② 鏈:從起點往上,縮排比起點淺的最近一行(跳過的行不算),再從那行往上找比它更淺的,一路到縮排 0;起點縮排 0 就沒有鏈。
+     一趟往下掃、用一個縮排遞增的堆疊(每行先彈掉不比它淺的,剩下的頂端就是它的外一層),只掃到最大的那個起點,深層巢狀與很多段改動都是
+-    線性的。"""
++    線性的。★看截止時間★(代碼審 r3 併發 2:32 MB 的檔掃到檔尾要幾秒,原本完全不看):切行之前、每到一段改動的起點、每 8192 行
++    看一次,到了就回 None,呼叫端那支檔退回 v1、原因記「逾時」。"""
+     if not spans:
+         return []
+     if data is None:
+         return [None] * len(spans)
++    if _note_reread_fp_expired(deadline):
++        return None
+     mx = max(s + max(n, 0) for s, n in spans)
+     lines = data.split(b"\n", mx)[:mx]
+     anchor, inf = {}, {}
+     for qi, (s, n) in enumerate(spans):
+         k = next((i for i in range(max(s - 1, 0), min(s - 1 + n, len(lines))) if _note_reread_indent(lines[i]) is not None),
+                  None)
+         if k is None:
+             inf.setdefault(min(max(s - 1 + max(n, 0), 0), len(lines)), []).append(qi)
+         else:
+             anchor.setdefault(k, []).append(qi)
+     last = max(list(anchor) + list(inf))
+     out, stack = [None] * len(spans), []     # stack:[(縮排, 節點)…],縮排嚴格遞增
+     marks = set(anchor) | set(inf)
+-    sp, tb = b" ", b"\t"
++    sp, tb, skip = b" ", b"\t", _NOTE_REREAD_SKIP
+     for k in range(min(last + 1, len(lines))):   # 這個迴圈是熱路徑(40 萬行的改動要掃完):_note_reread_indent 內聯
+         if k in marks:
++            if _note_reread_fp_expired(deadline):
++                return None
+             for qi in inf.get(k, ()):
+                 out[qi] = stack[-1][1] if stack else None
++        elif not k & 8191 and _note_reread_fp_expired(deadline):
++            return None
+         ln = lines[k]
++        if not ln.strip(skip):
++            continue
+         c = ln[:1]
+         if c == sp or c == tb:
+-            rest = ln.lstrip(b" \t")
+-            if not rest or rest.isspace():
+-                continue
+-            pre = ln[:len(ln) - len(rest)]
++            pre = ln[:len(ln) - len(ln.lstrip(b" \t"))]
+             ind = len(pre) if tb not in pre else len(pre.expandtabs(_NOTE_REREAD_TAB))
+-        elif not ln or ln.isspace():
+-            continue
+         else:
+             ind = 0
+         while stack and stack[-1][0] >= ind:
+             stack.pop()
+         if k in marks:
+             for qi in anchor.get(k, ()):
+                 out[qi] = stack[-1][1] if stack else None
+         if k < last:
+             stack.append((ind, (ln.strip(), stack[-1][1] if stack else None)))
+     for qi in inf.get(len(lines), ()) if last >= len(lines) else ():
+         out[qi] = stack[-1][1] if stack else None
+     return out
+ 
+ 
+ def _note_reread_hunk_chains(data, spans):
+     """每段改動的縮排鏈原文(由外到內的字串 tuple;給人看與測試用,指紋用 _note_reread_hunk_tags)。規則見 _note_reread_hunk_nodes。"""
+     res = []
+-    for node in _note_reread_hunk_nodes(data, spans):
++    for node in _note_reread_hunk_nodes(data, spans) or ():
+         chain = []
+         while node is not None:
+             chain.append(node[0].decode("utf-8", "surrogateescape"))
+             node = node[1]
+         res.append(tuple(reversed(chain)))
+     return res
+ 
+ 
+-def _note_reread_hunk_tags(data, spans):
++def _note_reread_hunk_tags(data, spans, deadline=None):
+     """每段改動的標籤(代碼審 r2 六席:原本猜「所在函式名」,好幾種語言兩個不同函式撞名;r1 資安席 major:整個拿掉時同一段改動搬到
+     同檔另一個前後三行相同的函式指紋不變)→ 跟 spans 同順序的字串:縮排鏈的原文(_note_reread_hunk_nodes)由外到內串起來的雜湊,
+     沒有鏈是空字串。每個節點的雜湊 = sha256(外一層的雜湊 32 位元組 + 這一行原文的位元組),共用的外層只算一次,
+-    深層巢狀也不會每段改動各串一次整條鏈。不分語言:兩個函式那一行的原文本來就不同。"""
++    深層巢狀也不會每段改動各串一次整條鏈。不分語言:兩個函式那一行的原文本來就不同。deadline 到了回 None(_note_reread_hunk_nodes)。"""
+     import hashlib
++    nodes = _note_reread_hunk_nodes(data, spans, deadline)
++    if nodes is None:
++        return None
+     memo, res = {}, []
+-    for node in _note_reread_hunk_nodes(data, spans):
++    for node in nodes:
+         if node is None:
+             res.append("")
+             continue
+         path = []
+         while node is not None and id(node) not in memo:
+             path.append(node)
+             node = node[1]
+         h = memo[id(node)][0] if node is not None else bytes(32)
+         for nd in reversed(path):
+             h = hashlib.sha256(h + nd[0]).digest()
+@@ -36721,21 +36744,21 @@ def _note_reread_hunk_tags(data, spans):
+ def _note_reread_contrast_fp_v2(scan, note_full, about, deadline=None):
+     """v2 對照指紋(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉1、2、5)→ (指紋, None, 檔, 鍵) 或 (None, 退回原因, [], [])。
+     16 個十六進位字 = 雜湊(筆記路徑(NFC、含圖譜前綴)、範本版本、一行「指紋算法 v2」、那篇頂端 about_code 每一項配上
+     「它在分岔點..頂端的改動指紋」(不在 --raw 清單裡記「未改」——主線怎麼改它都不影響指紋))。
+     退回 v1 的情形:分岔點算不出或就是頂端、about_code 有一項兩邊的樹都找不到(拼錯、是資料夾;不在清單裡就是兩邊相同,
+     所以只看頂端的樹)、全部未改(v2 會是跟程式版本無關的常數,r1 邊界席)、單檔退回(_note_reread_fp_file)。"""
+     import hashlib
+     base = _note_reread_fp_base(scan, deadline)
+     if base["why"]:
+         return None, base["why"], [], []
+-    keys = sorted({k for k in (_nodehome_key(v) for v in about) if k})
++    keys = _note_reread_fp_walk_keys(about)   # 批次讀照同一個順序讀(_note_reread_fp_prefetch)
+     parts = [nfc(note_full), f"範本版本 {_NOTE_REREAD_PROMPT_VERSION}", "指紋算法 v2"]
+     files, hit = [], []
+     for k in keys:
+         ents = base["raw"].get(k)
+         if not ents:
+             if k not in scan["tip_paths"]:
+                 return None, "樹裡找不到", [], []
+             parts.append(f"{k}\t未改")
+             continue
+         fps = []
+@@ -37591,29 +37614,72 @@ def _note_reread_judge(root, diff_range, push_remote, pushed_ref, res):
+     if res["state"] is not None:
+         return
+     scan = _note_reread_scan(root, base, tip, vault_rel, deadline=deadline)
+     res.update(scan=scan, tip=tip, push=push)
+     if not scan["cands"]:
+         res.update(state="none", why="沒有候選")
+         return
+     if _t.monotonic() > deadline:
+         raise _NoteRereadStop(f"逾時(超過 {_NOTE_REREAD_BUDGET_SEC} 秒)")
+     vs = _note_reread_verdicts(root, tip, deadline)
++    if push is not None:
++        _note_reread_bp_vs_remote(root, scan, diff_range, push, deadline)
+     fps = _note_reread_fps(scan, deadline)
+     hits = _note_reread_hits(root, scan, vs, deadline)
+     left = [rel for rel in scan["cands"] if not hits[rel]]
+     infos = scan.get("fpinfo") or {}
+     res.update(state="judged", fps=fps, left=left, hits=hits, late=[r for r in left if (infos.get(r) or {}).get("why") == "逾時"], badprov={fp for _n, fp, d in vs if d.get("provenance_ok") is not True},
+                wip=_note_reread_wip_left(root, tip, {fps[r] for r in left}),
+                layer2=_note_reread_layer2(root, tip, scan, vs, deadline))
+ 
+ 
++def _note_reread_bp_vs_remote(root, scan, diff_range, push, deadline):
++    """推主線時核對分岔點(代碼審 r3 資安 2):分岔點取自本機的遠端追蹤 ref,本機把 refs/remotes/origin/main 指到藏了改動的提交,
++    分岔點就落在它上面、新版指紋看不到那段。pre-push 給的「被推那條 ref 在遠端現在的值」(範圍起點)是唯一從遠端來的值:
++    被推的是算分岔點用的那條主線(refs/remotes/<--push-remote>/<被推分支> 是主線候選之一)、遠端值不是全 0 而且本機找得到時,
++    分岔點必須是它的祖先(或相等),不是就丟 _NoteRereadStop(block 加 --gate 擋、講明要 fetch)。核對的 git 逾時 → 這次不用新版指紋
++    (分岔點記成算不出、原因「逾時」,照舊版判)。
++    ★只核對推主線★:功能分支 rebase 到前進了的主線後強推、或把主線合進分支,分岔點本來就不是遠端舊頂端的祖先,核對會誤擋;
++    功能分支這條由 CI 補驗——CI 那一步用 fetch 下來的真遠端主線重算指紋,本機偽造的分岔點記下的紀錄在那裡對不上、會被列出
++    (CI 只印不擋,見 Systems/筆記內容審 的 WHY 行)。本機沒有網路,核對不了遠端主線的真值,這是能做到的上限。"""
++    base = _note_reread_fp_base(scan, deadline)
++    bp, dl = base["bp"], base["dl"]
++    remote, pushed_ref = push
++    rg = _lens_range_ok(diff_range)
++    if bp is None or rg is None or _ZERO_SHA_RE.fullmatch(rg[0]) or not (pushed_ref or "").startswith("refs/heads/"):
++        return
++    old = _lens_full_sha(root, rg[0])
++    if old is None:
++        return
++    target = f"refs/remotes/{remote}/{pushed_ref[len('refs/heads/'):]}"
++    mls, err = _push_mainlines(root, _lens_default_remote(root, scan["tip"], dl), None, deadline=dl)
++    hit = False
++    for cand, _sha in ([] if err else mls):
++        full, failed = _push_mainline_full(root, cand, deadline=dl)
++        if failed:
++            err = "解主線候選失敗"
++            break
++        if full == target:
++            hit = True
++            break
++    if not hit and not err:
++        return
++    r = None if err else _lens_git_dl(root, "merge-base", "--is-ancestor", bp, old, deadline=dl)
++    if r is None or r.returncode not in (0, 1):
++        base.update(bp=None, raw={}, why="逾時" if _git_timeout(dl) <= 0 else "git 失敗")
++        return
++    if r.returncode == 1:
++        raise _NoteRereadStop(f"分岔點 {bp[:12]} 不是遠端 {_note_reread_show(pushed_ref)} 現在的值 {old[:12]} 的祖先:本機的遠端追蹤 ref"
++                              f"({_note_reread_show(target)})可能被改過、或遠端主線被改寫過,照它算的新版指紋不可信;"
++                              f"先 git fetch {_note_reread_show(remote)} 再推")
++
++
+ def _note_reread_branch(root, pushed_ref):
+     """事件的 branch 欄(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉7):推送前 check 記被推的 ref,手動記目前簽出的分支
+     (refs/heads/… 全名),detached 或查不到寫空。"""
+     if pushed_ref is not None:
+         return _note_reread_show(pushed_ref)
+     r = _lens_git(root, "symbolic-ref", "-q", "HEAD")
+     return _note_reread_show(r.stdout.strip()) if r is not None and r.returncode == 0 else ""
+ 
+ 
+ def _note_reread_wip_left(root, tip, left_fps):
+@@ -37664,29 +37730,27 @@ def _note_reread_rc(res, gate, hard):
+     if not gate:
+         return 0
+     if st == "param":
+         return 2
+     if st == "undecidable":
+         return 1 if hard else 0
+     return 1 if (st == "judged" and _note_reread_blocking(res, hard)) else 0
+ 
+ 
+ def _note_reread_blocking(res, hard):
+-    """判完了的這次擋不擋:hard(帶 --gate 而且 block)、而且第一層有「真的算出指紋而對不上」的篇或第二層有要處理的條目。
+-    ★因逾時沒算出新版指紋的篇不擋★(res["late"];代碼審 r2 併發 1、通才 3):prepare 沒有截止時間、一定算得出新版並記新版紀錄,
+-    check 有 _NOTE_REREAD_BUDGET_SEC 上限,大改動下逾時退回舊版、對不上那筆新版紀錄——每次都一樣、重跑也不會好,擋下去只剩跳過
+-    環境變數可繞。所以那幾篇照實列出、記帳(late 欄),不擋。這條退路不會被拿來繞:逾時只在指紋這一步花掉約 27 秒時才發生
+-    (要改到上千支被候選 about_code 列到的檔,實測 1000 支時 38 篇逾時),帳上每次都記,而且那幾篇照舊列在清單上要人對照。"""
++    """判完了的這次擋不擋:hard(帶 --gate 而且 block)、而且第一層有沒對照的篇或第二層有要處理的條目。
++    ★因逾時沒算出新版指紋的篇照舊版判、照擋★(res["late"] 只用來講明原因與記帳;代碼審 r3 資安 1:原本這幾篇不擋,about_code 是作者
++    自己寫的,列上三千支垃圾檔撐到逾時就整篇放行、rc0)。代價是改動極大、指紋這一步在 _NOTE_REREAD_BUDGET_SEC 內算不完的分支,
++    prepare 記的新版紀錄比不到、每次都擋——清單講明原因並給既有的單次跳過(LUMOS_SKIP_REREAD_CHECK=1,跳過會留帳)。"""
+     if not hard or res.get("state") != "judged":
+         return False
+-    late = set(res.get("late") or ())
+-    return bool([r for r in res["left"] if r not in late] or res["layer2"]["must"])
++    return bool(res["left"] or res["layer2"]["must"])
+ 
+ 
+ def _note_reread_report(root, res, gate, pushed):
+     """印出與記帳 → rc。rc 先由 _note_reread_rc 定好;印到一半出錯只講一句、照樣記帳,記帳出錯也只講一句——兩步都不改判定
+     (同 _drift_retire_report)。hard = 帶 --gate 而且設定是 block。"""
+     hard = gate and res["mode"] == "block"
+     rc = _note_reread_rc(res, gate, hard)
+     try:
+         _note_reread_print(res, gate, hard, pushed)
+     except Exception as ex:
+@@ -37754,42 +37818,43 @@ def _note_reread_print_judged(res, hard):
+     if res["left"]:
+         _note_reread_print_layer1(res, blocking, stream)
+     if l2["must"]:
+         _note_reread_print_layer2(res, blocking, stream)
+     if not blocking:
+         print(_NOTE_REREAD_TAIL)
+ 
+ 
+ def _note_reread_print_layer1(res, hard, stream):
+     """第一層:沒對照的篇分「沒有紀錄」與「有紀錄但來源核對沒過」列;講程式改了就要重判;印 prepare 指令(工具印每一層的改法,
+-    掛鉤印通用逃生段——照存量漂移的分工)。hard 是這次真的擋(_note_reread_blocking);因逾時沒算新版指紋的篇那一行講明這次不擋。"""
++    掛鉤印通用逃生段——照存量漂移的分工)。hard 是這次真的擋(_note_reread_blocking);因逾時沒算出新版指紋的篇那一行講明照舊版判,
++    擋下時另給單次跳過的寫法(只講事實,不跟標頭的「擋下」矛盾:代碼審 r3 通才 1)。"""
+     fps, left = res["fps"], res["left"]
+     pre = res["scan"]["vault_rel"] + "/"
+     head = "擋下:回頭重讀:" if hard else "回頭重讀提醒:"
+     print(f"{head}這次改到的程式,有 {len(left)} 篇守檔筆記這次也改了、還沒對照過這一版程式(已對照 {len(fps) - len(left)} 篇)"
+           "——前面的舊句可能被這次改動弄得不成立:", file=stream)
+     bad = [r for r in left if fps[r] in res["badprov"]]
+     late = set(res.get("late") or ())
+     for label, rows in (("沒有紀錄", [r for r in left if r not in bad]), ("有紀錄但來源核對沒過(要重派判定者)", bad)):
+         if rows:
+             print(f"  {label} {len(rows)} 篇:", file=stream)
+         for rel in rows[:_NOTE_REREAD_LIST_MAX]:
+-            why = ";這篇因為逾時沒算新版指紋,這次不擋" if rel in late else ""
++            why = ";這篇因為逾時沒算出新版指紋,照舊版判" if rel in late else ""
+             print(f"    {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]}{why})", file=stream)
+         if len(rows) > _NOTE_REREAD_LIST_MAX:
+             print(f"    …另外 {len(rows) - _NOTE_REREAD_LIST_MAX} 篇", file=stream)
+     if late:
+-        # 預算不夠時不靜默換版(代碼審 r1 通才 1、併發 3);也不擋(r2 併發 1、通才 3:prepare 沒有預算、會記新版的紀錄,check 逾時
+-        # 每次都比不到它,重跑也一樣)。原本這裡說「再跑一次通常就認得」,是錯的
++        # 預算不夠時不靜默換版(代碼審 r1 通才 1、併發 3);照擋(r3 資安 1:不擋會被堆垃圾檔撐到逾時拿來繞)。prepare 沒有預算、會記新版
++        # 的紀錄,check 逾時每次都比不到它,重跑也一樣,所以擋下時講明可以單次跳過
++        skip = (";改動極大、確定都對照過時,可以用 LUMOS_SKIP_REREAD_CHECK=1 git push 單次跳過(跳過會留帳)" if hard else "")
+         print(f"  其中 {len(late)} 篇因為推送前檢查的 {_NOTE_REREAD_BUDGET_SEC} 秒上限逾時、沒算出新版指紋(只認作者自己改動的那一版),"
+-              "改用看頂端版本的舊版判、比不到 prepare 記的新版紀錄——重跑也一樣,所以這幾篇這次不擋、已記帳;"
+-              "還沒對照過的,照下面的指令對照", file=stream)
++              f"照舊版判(看頂端版本,比不到 prepare 記的新版紀錄,重跑也一樣){skip}", file=stream)
+     if res["wip"]:
+         print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:"
+               + _note_reread_add_cmd({n for ns in res["wip"].values() for n in ns}), file=stream)
+     print("  程式改了就要重判:對照指紋含這條分支對這篇 about_code 列的程式的改動(算不出跟遠端主線的分岔點時,改看程式在頂端的版本)"
+           "——主線帶進別人對同一支程式的改動不再算,你自己的改動(含 rebase 解衝突改到的)、筆記改名、about_code 增減照算;"
+           "改筆記不用重判。", file=stream)
+     print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」,reread-record 記下、把紀錄提交進去;"
+           "做法見 lumos-project-notes 的代碼審與推送子檔):\n    " + _note_reread_cmdline(res["diff_range"], res["push"]), file=stream)
+ 
+ 
+@@ -37807,21 +37872,21 @@ def _note_reread_print_layer2(res, hard, stream):
+         for h in _drift_fix_hint("reread", f["path"], f["line"]):
+             print(f"    {_esc_clean(h, 4000)}", file=stream)
+     if len(must) > _NOTE_REREAD_LIST_MAX:
+         print(f"  …還有 {len(must) - _NOTE_REREAD_LIST_MAX} 條", file=stream)
+     print("  提醒:改筆記會讓已過的代碼審留痕失效;已過代碼審的推送,優先用照留表態。", file=stream)
+ 
+ 
+ def _note_reread_ledger(root, res, hard):
+     """記一筆帳:off 不記;參數錯、環境查不了記 skipped;判不了不擋記 skipped、擋下記 blocked(hard),兩筆都帶 state undecidable
+     (跟舊句檢查的帳一樣用 state 字串記;代碼審發現原本只有擋下那筆帶);沒新東西 none;判完兩層都沒有 covered,
+-    有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字;判完了的擋不擋照 _note_reread_blocking,只剩逾時的篇記 reminded)。head_sha 一律記被推頂端(算得出來時;算不出來 _gate_event 補 HEAD),
++    有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字;判完了的擋不擋照 _note_reread_blocking)。head_sha 一律記被推頂端(算得出來時;算不出來 _gate_event 補 HEAD),
+     跟舊句檢查、筆記形狀擋的帳一樣。"""
+     st, tip = res["state"], res.get("tip")
+     if st == "off":
+         return
+     hard = _note_reread_blocking(res, hard) if st == "judged" else hard
+     if st in ("param", "skipped"):
+         _gate_event_or_warn(root, "note-reread", "skipped", res["why"], head_sha=tip)
+     elif st == "undecidable":
+         kind, note = ("blocked", f"判不了:{res['why']}") if hard else ("skipped", res["why"])
+         extra = {"state": "undecidable", **(_note_reread_fp_extra(res) if hard else {})}
+@@ -37865,21 +37930,21 @@ def _note_reread_ledger_fit(root, kind, note, extra, tip, hard=False):
+ def _note_reread_ledger_found(root, res, hard):
+     """有東西的那一筆:note 只記兩層篇數、範圍終點與來源;第一層沒對照的前 50 篇(路徑與對照指紋)記 layer1_fps,第二層要處理的前 50 行
+     (路徑、條目前 80 字、紀錄指紋)記 rows。路徑一律過 _note_reread_show(非 UTF-8 檔名寫帳會編碼失敗,邊界席 F1)。
+     整行超過 4096 位元組時跟舊句檢查、筆記形狀擋的放寬帳一樣走 _gate_event_fit:先從尾端丟 rows、再丟 layer1_fps,各記自己的
+     _truncated,還超過再把 nodes 截到 20(筆數欄照記全數);再超過照寫(_gate_event_fit 的約定)。量與寫都帶被推頂端當 head_sha。
+     ★清單不放 note★:note 會原樣再寫一份到 detail、而且 _gate_event_fit 截不到它——原本「路徑=指紋」清單放在 note,
+     30 篇沒對照時 rows 丟光、nodes 截到 20 整行仍有 5886 位元組(代碼審發現)。"""
+     fps, left, must, tip = res["fps"], res["left"], res["layer2"]["must"], res["tip"]
+     pre = res["scan"]["vault_rel"] + "/"
+     nlate = len(res.get("late") or ())
+-    note = (f"沒對照 {len(left)} 篇" + (f"(其中 {nlate} 篇逾時沒算新版指紋、不擋)" if nlate else "")
++    note = (f"沒對照 {len(left)} 篇" + (f"(其中 {nlate} 篇逾時沒算出新版指紋、照舊版判)" if nlate else "")
+             + f"、已對照 {len(fps) - len(left)} 篇;規則類條目要處理 {len(must)} 條;"
+             f"範圍終點 {tip};來源 {'ci' if _in_ci() else 'hook'}")
+     rows = [{"path": _note_reread_show(pre + f["path"]), "line": f["line"], "quote": _note_reread_show(f["text"])[:80],
+              "verdicts": sorted(f["verdicts"])} for f in must[:50]]
+     infos = res["scan"].get("fpinfo") or {}
+     late = set(res.get("late") or ())
+     extra = {"layer1": len(left), "rejudge": len(left), "late": len(late), "layer2_notes": len({f["path"] for f in must}),
+              "layer2_rows": len(must), "rows": rows,
+              "layer1_fps": [{"path": _note_reread_show(pre + r), "fp": fps[r], "ver": (infos.get(r) or {}).get("ver", "v1"),
+                              **({"late": True} if r in late else {})} for r in left[:50]], **_note_reread_fp_extra(res)}
+@@ -53188,20 +53253,22 @@ def _test_quality_load_bundle():
+         for name, module in previous.items():
+             if module is missing:
+                 sys.modules.pop(name, None)
+             else:
+                 sys.modules[name] = module
+         return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
+     return None
+ 
+ 
+ def main():
++    # git replace 能讓讀起點版本、檔名清單的閘看到替身(代碼審三個分支的資安席各自找到);入口統一關掉,所有子行程繼承
++    os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
+     quality_deployment_error = _test_quality_load_bundle()
+     class _LumosParser(argparse.ArgumentParser):
+         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+ 
+         出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+         usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+         用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+ 
+         放在 main() 裡面(全檔唯一一個巢狀 class,2026-09-07 代碼審 r1 架構席問過):
+         它只有 main() 建 parser 時用得到,而且訊息內容綁著 main() 底下那份三步入口的措辭;
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c4d9045b..9e6d93b9 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -70976,41 +70976,44 @@ _RFP_LANGS = {
+ }
+ 
+ 
+ def t_reread_fp_hunk_moved_between_functions():
+     """[S20] 同一段改動(check(u) → allow(u))從公開端點搬到管理員端點、前後三行逐字相同 → v2 指紋不同,九種寫法各一篇筆記:
+     Kotlin 頂層 fun、Kotlin 類別方法、Java 類別方法、C 的 int 函式、TS 的 export const 箭頭函式、Go 不同接收者的同名方法、
+     Rust 兩個 impl 區塊的同名方法、Python 巢狀函式 m1/helper 與 m2/helper、Python 巢狀類別 A.X.f 與 A.Y.f。兩條分支都先確認用 v2。
+     判準來源:代碼審 r2 六席實測(正確性 1、邊界 1、合約 1、通才 1、資安 1;r1 資安席 major 同一個洞)。
+     應抓到的錯:標籤猜名字(取第一個識別字、只認 def/class 等關鍵字、只留最近一層)→ 對應那幾種寫法紅;標籤整個拿掉 → 全紅。"""
+     print("t_reread_fp_hunk_moved_between_functions")
+-    m = _load_lumos_inproc()
++    _rfp_moved_check(_load_lumos_inproc(), _RFP_LANGS)
++
+ 
++def _rfp_moved_check(m, langs):
++    """langs 每種寫法一篇筆記:兩條分支各把第一個、第二個函式裡的 check(u) 改成 allow(u),斷言兩條都用 v2、兩條的指紋不同。"""
+     def setup(r):
+-        for (name, rel), lines in _RFP_LANGS.items():
++        for (name, rel), lines in langs.items():
+             _nh_file(r, rel, "\n".join(lines) + "\n")
+             _nh_node(r, name, about=[rel], body=f"{name} 的第一行")
+     root, base = _rfp_repo(setup)
+ 
+     def branch(bname, target):
+         _nh_git(root, "checkout", "-q", "-b", bname, base)
+-        for (name, rel), lines in _RFP_LANGS.items():
++        for (name, rel), lines in langs.items():
+             idx = [i for i, t in enumerate(lines) if "check(u)" in t][target]
+             _rfp_line(root, rel, idx + 1, lines[idx].replace("check(u)", "allow(u)"))
+             _rr_touch(root, _rr_note(name), f"{name} 追加")
+         _nh_commit(root, bname)
+         fps, _f, _o = _rfp_items(root, f"{base}..HEAD")
+-        v1 = {name: _rfp_v1(m, root, _rr_note(name), [rel]) for name, rel in _RFP_LANGS}
++        v1 = {name: _rfp_v1(m, root, _rr_note(name), [rel]) for name, rel in langs}
+         return fps, v1
+     pub, pv1 = branch("pub", 0)
+     adm, av1 = branch("adm", 1)
+-    for name, rel in _RFP_LANGS:
++    for name, rel in langs:
+         n = _rr_note(name)
+         check(f"{name} {rel}:兩條都用 v2、搬到另一個函式 → 指紋不同",
+               pub.get(n) and adm.get(n) and pub[n] != pv1[name] and adm[n] != av1[name] and pub[n] != adm[n],
+               f"{pub.get(n)} {adm.get(n)}")
+ 
+ 
+ def t_reread_fp_chain_stable_on_other_edits():
+     """[S8] 縮排鏈只看改動上面那幾層的原文,主線改了別處不影響:分支改了頂格賦值區的 V12 與函式 g 裡的 g10;主線在 V12 那段的
+     起點正上方插一行頂格的賦值、在 def g 上方插一行頂格的賦值、改了上方另一個函式 f 的 def 行與本體(都離作者改動超過三行)、
+     作者 rebase 上去 → v2 指紋不變。[S22] 代價:主線改了作者那段所在函式 g 的 def 那一行 → 指紋會變(多要求一次重讀,方向是多擋)。
+@@ -71077,73 +71080,73 @@ def t_reread_fp_cut_same_in_prepare_and_check():
+     v2n, why = _rfp_why(ev)
+     check("②check 也用 v1:印的對照指紋就是 prepare 的那個、事件記「判定者材料被縮短」",
+           f"對照指紋 {v1}" in o and v2n == 0 and why.get("判定者材料被縮短") == 1, f"{o[-600:]}\n{_rfp_ev(ev)}")
+     for f in files:
+         _rr(root, "reread-record", "--prepared", str(f), "--report", str(_rr_report(tmp / f"{f.stem}.md", f, [])))
+     rc, out2, files2 = _rr_prepare(root, f"{base}..HEAD")
+     check("③紀錄記了還沒提交:再跑 prepare 認得只差提交、不重派", not files2 and "記得提交" in out2, out2[-600:])
+ 
+ 
+ def t_reread_fp_timeout_says_so():
+-    """[S27] check 的預算不夠、那篇沒算新版指紋時,不靜默換版:清單那篇旁邊講明「因為逾時沒算新版指紋」,事件照記退回原因「逾時」。
++    """[S27] check 的預算不夠、那篇沒算出新版指紋時,不靜默換版:清單那篇旁邊講明「因為逾時沒算出新版指紋」,事件照記退回原因「逾時」。
+     判準來源:代碼審 r1 通才 1、併發 3。翻紅釘:拿掉那句 → ①紅。"""
+     print("t_reread_fp_timeout_says_so")
+     m = _load_lumos_inproc()
+     root, base = _rfp_repo()
+     _rfp_line(root, "src/a.py", 15, "a15 = 150")
+     _rr_touch(root, _rr_note("A"), "A 追加")
+     _nh_commit(root, "feat")
+     rc, o, ev = _rfp_inproc(m, m.cmd_note_audit_reread_check, root, f"{base}..HEAD", {"_NOTE_REREAD_BUDGET_SEC": 2.5})
+     v2n, why = _rfp_why(ev)
+-    check("①清單那篇講明因為逾時沒算新版指紋、事件記「逾時」",
+-          "Systems/A.md" in o and "因為逾時沒算新版指紋" in o and why.get("逾時") == 1, f"{o[-800:]}\n{_rfp_ev(ev)}")
++    check("①清單那篇講明因為逾時沒算出新版指紋、事件記「逾時」",
++          "Systems/A.md" in o and "因為逾時沒算出新版指紋" in o and why.get("逾時") == 1, f"{o[-800:]}\n{_rfp_ev(ev)}")
+     rc, o, ev = _rfp_check(root, f"{base}..HEAD")
+-    check("②對照組:預算夠時不印那句", "因為逾時沒算新版指紋" not in o and _rfp_why(ev)[0] == 1, o[-600:])
++    check("②對照組:預算夠時不印那句", "因為逾時沒算出新版指紋" not in o and _rfp_why(ev)[0] == 1, o[-600:])
+ 
+ 
+-def t_reread_fp_timeout_not_blocking():
+-    """[S27] check 因逾時沒算出新版指紋的篇,block 加 --gate 也不擋:照實列出「這篇因為逾時沒算新版指紋,這次不擋」、記帳(late 欄);
+-    只有真的算出指紋而對不上的才擋。①兩篇都逾時(預算設 2.5 秒,指紋這一步一開始就沒時間)→ rc0、reminded、late=2;
+-    ②A 算得出、B 逾時(替身只讓 B 那支檔的逐檔指紋回「逾時」)→ 照擋(rc1、blocked、late=1),B 那一行標「這次不擋」、A 那一行沒有;
+-    ③對照組:預算夠、沒有紀錄 → rc1、blocked、late=0。
+-    判準來源:代碼審 r2 併發 1、通才 3(prepare 沒有截止時間、一定算出新版,check 逾時退回舊版,大改動下每次都擋、重跑也一樣)。
+-    應抓到的錯:回傳碼照舊把逾時的篇算進去 → ①紅;逾時的篇整個不擋(連算得出的也放)→ ②紅;不記帳 → ①②紅。"""
+-    print("t_reread_fp_timeout_not_blocking")
++def t_reread_fp_timeout_labels_each():
++    """[S27] check 因逾時沒算出新版指紋的篇照舊版判、照擋,清單逐篇標明:①兩篇都逾時(預算設 2.5 秒,指紋這一步一開始就沒時間)、
++    block 加 --gate → 擋下(rc1、blocked、late=2),兩篇都標「這篇因為逾時沒算出新版指紋,照舊版判」;②A 算得出、B 逾時(替身只讓 B
++    那支檔的逐檔指紋回「逾時」)→ 擋下、late=1,B 那一行標、A 那一行沒有;③對照組:預算夠、沒有紀錄 → rc1、blocked、late=0、不標。
++    三種都不出現「這次不擋」(擋下與不擋同時出現是代碼審 r3 通才 1)。2026-10-14 前叫 t_reread_fp_timeout_not_blocking,釘的是「逾時的篇
++    不擋」(r2 併發 1、通才 3),r3 資安 1 實測可被堆垃圾檔撐到逾時拿來繞,改回照擋。
++    應抓到的錯:逾時的篇排除在擋之外 → ①紅;每篇都標(不分有沒有逾時)→ ②紅;不記帳 → ①②紅。"""
++    print("t_reread_fp_timeout_labels_each")
+     m = _load_lumos_inproc()
+     root, base = _rfp_repo()
+     _rfp_line(root, "src/a.py", 15, "a15 = 150")
+     _rfp_line(root, "src/b.py", 15, "b15 = 150")
+     _rr_touch(root, _rr_note("A"), "A 追加")
+     _rr_touch(root, _rr_note("B"), "B 追加")
+     _nh_commit(root, "feat")
+     rng = f"{base}..HEAD"
+     chk = m.cmd_note_audit_reread_check
+     rc, o, ev = _rfp_inproc(m, chk, root, rng, {"_NOTE_REREAD_BUDGET_SEC": 2.5}, gate=True)
+     e = _rfp_ev(ev)
+-    check("①兩篇都逾時、block 加 --gate → 不擋(rc0)、兩篇都列出並講明這次不擋、記 reminded 帶 late=2",
+-          rc == 0 and "擋下" not in o and o.count("這篇因為逾時沒算新版指紋,這次不擋") == 2 and e.get("kind") == "reminded"
+-          and e.get("late") == 2 and _rfp_why(ev)[1].get("逾時") == 2, f"rc={rc}\n{o[-900:]}\n{e}")
++    check("①兩篇都逾時、block 加 --gate → 擋下(rc1)、兩篇都標照舊版判、記 blocked 帶 late=2、不說這次不擋",
++          rc == 1 and "擋下" in o and o.count("這篇因為逾時沒算出新版指紋,照舊版判") == 2 and e.get("kind") == "blocked"
++          and e.get("late") == 2 and _rfp_why(ev)[1].get("逾時") == 2 and "這次不擋" not in o, f"rc={rc}\n{o[-900:]}\n{e}")
+     real = m._note_reread_fp_file
+ 
+     def fake(scan, fbase, ent):
+         return (None, "逾時") if ent["path"] == "src/b.py" else real(scan, fbase, ent)
+     rc, o, ev = _rfp_inproc(m, chk, root, rng, {"_note_reread_fp_file": fake}, gate=True)
+     e = _rfp_ev(ev)
+     la = [x for x in o.splitlines() if "Systems/A.md" in x]
+     lb = [x for x in o.splitlines() if "Systems/B.md" in x]
+-    check("②A 算出指紋沒對照、B 逾時 → 照擋(rc1、blocked、late=1);B 那一行標這次不擋、A 那一行沒有",
++    check("②A 算出指紋沒對照、B 逾時 → 照擋(rc1、blocked、late=1);B 那一行標照舊版判、A 那一行沒有",
+           rc == 1 and "擋下:" in o and e.get("kind") == "blocked" and e.get("late") == 1
+-          and la and lb and "這次不擋" in lb[0] and "這次不擋" not in la[0], f"rc={rc}\n{o[-900:]}\n{e}")
++          and la and lb and "照舊版判" in lb[0] and "照舊版判" not in la[0] and "這次不擋" not in o, f"rc={rc}\n{o[-900:]}\n{e}")
+     rc, o, ev = _rfp_inproc(m, chk, root, rng, gate=True)
+     e = _rfp_ev(ev)
+-    check("③對照組:預算夠、兩篇都沒紀錄 → rc1、blocked、late=0、不印這次不擋",
+-          rc == 1 and e.get("kind") == "blocked" and e.get("late") == 0 and "這次不擋" not in o, f"rc={rc}\n{o[-600:]}\n{e}")
++    check("③對照組:預算夠、兩篇都沒紀錄 → rc1、blocked、late=0、不標照舊版判",
++          rc == 1 and e.get("kind") == "blocked" and e.get("late") == 0 and "照舊版判" not in o, f"rc={rc}\n{o[-600:]}\n{e}")
+ 
+ 
+ def t_reread_fp_prefetch_total_cap():
+     """[S26] 算縮排鏈要讀頂端內容:一次批次讀走有上限的共用讀法(_nodehome_cat_blobs_capped),單支上限之外另有總量上限;
+     超過總量的那幾支改成逐支讀,指紋不變。夾具:A 管六支約 2 KB 的小檔、分支六支都改;總量上限設成 5000 位元組。
+     斷言:①上限之下,每一次讀物件編號的 cat-file 回來的內容合計都不超過 5000 位元組、而且不止一次(其餘逐支讀);
+     ②指紋跟不設上限時相同、仍是 v2。判準來源:代碼審 r2 架構對齊 1、併發 2(原本自己比單支大小再呼叫沒上限的批次讀、沒有總量上限;
+     400 支約 800 KB 的檔實測常駐記憶體 1.09 GB)。應抓到的錯:批次讀不帶總量上限 → ①紅;超過總量的直接當讀不到 → ②紅。"""
+     print("t_reread_fp_prefetch_total_cap")
+     m = _load_lumos_inproc()
+@@ -71451,20 +71454,334 @@ def t_reread_fp_forged_record_no_more_than_v1():
+     bad1, _o = forge(v1, ok=False)
+     check("③來源核對沒過的兩種都不算", bad2 == {"v1": 0, "v2": 0} and bad1 == {"v1": 0, "v2": 0}, f"{bad2} {bad1}")
+     forge(v2)
+     _rfp_line(root, "src/a.py", 15, "a15 = 151")
+     _nh_commit(root, "作者的改動變了")
+     rc, o, ev = _rfp_check(root, f"{base}..HEAD")
+     check("④作者自己的改動一變,手寫的 v2 紀錄不再命中(只替檔名那一個指紋背書)",
+           _rfp_ev(ev).get("covered_by") == {"v1": 0, "v2": 0} and "Systems/A.md" in o, f"{o[-400:]}\n{_rfp_ev(ev)}")
+ 
+ 
++# ── 代碼審 code-回頭重讀指紋 r3 修正(2026-10-14):收尾符號行、逾時照擋、替身物件、偽造遠端追蹤 ref、兩份縮排算法 ─────────────
++def t_reread_fp_chain_skips_punct_lines():
++    """[S21] 縮排鏈(與起點)跳過「沒有任何字母或數字的行」(只有括號、標點、空白,例如 `{`、`}`、`):`、`];`),跟空行一樣:
++    black 風格的多行簽名、Allman 大括號、C 函式另起一行的大括號,鏈都落在函式那一行,不是收尾符號。期望值照規則逐行手算。
++    判準來源:代碼審 r3 正確性 1、邊界 1(實測 Allman 的 C# 兩個方法鏈都是 ('{', '{')、black 風格兩個函式都是 ('):',))。
++    應抓到的錯:不跳過標點行 → ①②③④⑤紅;起點不跳過標點行 → ④紅;有字的頂格行(#endif)也跳過 → ⑥紅(那是另一條規則)。"""
++    print("t_reread_fp_chain_skips_punct_lines")
++    m = _load_lumos_inproc()
++    py_lines = [
++        "def f(",          # 1
++        "    a,",          # 2
++        "    b,",          # 3
++        "):",              # 4
++        "    x1 = 1",      # 5
++        "",                # 6
++        "def g(",          # 7
++        "    a,",          # 8
++        "):",              # 9
++        "    x1 = 1",      # 10
++    ]
++    cs_lines = [
++        "class A",         # 1
++        "{",               # 2
++        "    void F()",    # 3
++        "    {",           # 4
++        "        a();",    # 5
++        "    }",           # 6
++        "    void G()",    # 7
++        "    {",           # 8
++        "        a();",    # 9
++        "    });",         # 10 只有標點
++        "}",               # 11
++    ]
++    c_lines = [
++        "int pub(struct user *u)",   # 1
++        "{",                         # 2
++        "    a();",                  # 3
++        "#endif",                    # 4 有字的頂格行照舊截斷
++        "    b();",                  # 5
++        "}",                         # 6
++    ]
++    py, cs, c = ("\n".join(x).encode("utf-8") for x in (py_lines, cs_lines, c_lines))
++    cases = [
++        ("①black 風格:f 的本體 → def f(", py, (5, 1), ["def f("]),
++        ("②black 風格:g 的本體 → def g(", py, (10, 1), ["def g("]),
++        ("③Allman:F 的本體 → class A、void F()", cs, (5, 1), ["class A", "void F()"]),
++        ("④Allman:範圍從 `    {` 起 → 起點是下一行 a();、鏈是 class A、void G()", cs, (8, 2), ["class A", "void G()"]),
++        ("⑤C 另起一行的大括號 → int pub(...)", c, (3, 1), ["int pub(struct user *u)"]),
++        ("⑥有字的頂格行(#endif)照舊算一層", c, (5, 1), ["#endif"]),
++        ("⑦範圍只有標點行 → 當成無限深,從上面最近有字的行起整條鏈", cs, (10, 1), ["class A", "void G()", "a();"]),
++    ]
++    for label, data, span, want in cases:
++        got = list(m._note_reread_hunk_chains(data, [span])[0])
++        check(label, got == want, f"{got!r} != {want!r}")
++
++
++# 每種寫法兩個結構相同的函式,收尾符號行在整個檔裡到處重複(代碼審 r3 正確性 1、邊界 1、邊界 2)
++_RFP_LANGS_R3 = {
++    ("P1", "src/black.py"): (["def pub(", "    u,", "    v,", "):"] + _rfp_body("    ") + ["", "", "def adm(", "    u,",
++                             "    v,", "):"] + _rfp_body("    ")),
++    ("P2", "src/Svc.cs"): (["class Svc", "{", "    void Pub(User u)", "    {"] + _rfp_body("        ", ";")
++                           + ["    }", "", "    void Adm(User u)", "    {"] + _rfp_body("        ", ";") + ["    }", "}"]),
++    ("P3", "src/brace.c"): (["int pub(struct user *u)", "{"] + _rfp_body("    ", ";") + ["}", "", "int adm(struct user *u)", "{"]
++                            + _rfp_body("    ", ";") + ["}"]),
++    ("P4", "src/Allman.java"): (["public class Svc", "{", "    public void pub(User u)", "    {"] + _rfp_body("        ", ";")
++                                + ["    }", "", "    public void adm(User u)", "    {"] + _rfp_body("        ", ";")
++                                + ["    }", "}"]),
++}
++
++
++def t_reread_fp_moved_past_punct_lines():
++    """[S20] 同一段改動搬到同檔另一個結構相同的函式、前後三行逐字相同 → v2 指紋不同,收尾符號行到處重複的寫法:black 風格的多行
++    簽名(`):`)、Allman 的 C# 與 Java(`{` 另起一行)、C 函式另起一行的大括號。兩條分支都先確認用 v2。
++    判準來源:代碼審 r3 正確性 1(實測)。應抓到的錯:鏈不跳過標點行 → 四種寫法全紅(兩個函式的鏈都是收尾符號)。"""
++    print("t_reread_fp_moved_past_punct_lines")
++    _rfp_moved_check(_load_lumos_inproc(), _RFP_LANGS_R3)
++
++
++def t_reread_fp_outer_line_changes_fp():
++    """[S22] 代價:縮排鏈含外層那一行的原文,主線改了作者那段所在函式的簽名(Allman 的 C# 方法那一行、black 風格的 def 那一行),
++    作者 rebase 上去 → 指紋會變(多要求一次重讀,方向是多擋);主線只改了另一個函式的簽名 → 指紋不變。改動都離作者那段超過三行。
++    判準來源:代碼審 r3 邊界 2(原本只測了一行寫完的 Python def)。應抓到的錯:鏈不含外層那一行(只看收尾符號或只看改動本身)→ ③紅;
++    鏈含整個檔的頂格行 → ②紅。"""
++    print("t_reread_fp_outer_line_changes_fp")
++    m = _load_lumos_inproc()
++    cs = _RFP_LANGS_R3[("P2", "src/Svc.cs")]
++    py = _RFP_LANGS_R3[("P1", "src/black.py")]
++
++    def setup(r):
++        _nh_file(r, "src/Svc.cs", "\n".join(cs) + "\n")
++        _nh_file(r, "src/black.py", "\n".join(py) + "\n")
++        _nh_node(r, "A", about=["src/Svc.cs", "src/black.py"], body="A 的第一行")
++    root, base = _rfp_repo(setup)
++    for rel, lines in (("src/Svc.cs", cs), ("src/black.py", py)):
++        idx = [i for i, t in enumerate(lines) if "check(u)" in t][1]
++        _rfp_line(root, rel, idx + 1, lines[idx].replace("check(u)", "allow(u)"))
++    _rr_touch(root, _rr_note("A"), "A 追加")
++    _nh_commit(root, "feat")
++    fp0 = _rfp_items(root, f"{base}..HEAD")[0].get(_rr_note("A"))
++    check("①前置:用 v2", fp0 and fp0 != _rfp_v1(m, root, _rr_note("A"), ["src/Svc.cs", "src/black.py"]), str(fp0))
++
++    def sub(rel, old, new):
++        def edit(r):
++            p = r / rel
++            p.write_text(p.read_text(encoding="utf-8").replace(old, new, 1), encoding="utf-8")
++        return edit
++    rb = _rfp_main_advance(root, sub("src/Svc.cs", "void Pub(User u)", "void Pub(User u, int n)"))
++    fp1 = _rfp_items(root, f"{_RFP_ZERO}..HEAD", *_rfp_push())[0].get(_rr_note("A"))
++    check("②主線只改另一個方法 Pub 的簽名 → 指紋不變", rb.returncode == 0 and fp1 == fp0, f"{rb.stderr}\n{fp1} {fp0}")
++    rb = _rfp_main_advance(root, sub("src/Svc.cs", "void Adm(User u)", "void Adm(User u, int n)"))
++    fp2 = _rfp_items(root, f"{_RFP_ZERO}..HEAD", *_rfp_push())[0].get(_rr_note("A"))
++    rb2 = _rfp_main_advance(root, sub("src/black.py", "def adm(", "def adm2("))
++    fp3 = _rfp_items(root, f"{_RFP_ZERO}..HEAD", *_rfp_push())[0].get(_rr_note("A"))
++    v1 = _rfp_v1(m, root, _rr_note("A"), ["src/Svc.cs", "src/black.py"])
++    check("③主線改了作者那段所在方法 Adm 的簽名、再改所在函式 def adm( → 指紋各變一次(仍是 v2)",
++          rb.returncode == 0 and rb2.returncode == 0 and fp2 not in (None, fp0) and fp3 not in (None, fp0, fp2) and fp3 != v1,
++          f"{rb.stderr}{rb2.stderr}\n{fp0} {fp2} {fp3}")
++
++
++def t_reread_fp_indent_inline_same():
++    """縮排算法有兩份:獨立的 _note_reread_indent(挑起點用)與 _note_reread_hunk_nodes 熱迴圈裡內聯的那份。同一批輸入兩邊要一樣:
++    內聯那份的縮排從外面量——那一行下面放一行縮排 j 的探針、起點設在探針,那一行進鏈 ⇔ 它不被跳過而且縮排 < j,所以「最小的 j」減 1
++    就是內聯那份算出的縮排;從來不進鏈就是被跳過(None)。另有幾個手算的期望值(tab 8 欄、空白加 tab、標點行與空白行跳過、頂格 0)。
++    判準來源:代碼審 r3 架構對齊 1(兩份各改一邊會漂移)。應抓到的錯:只改一邊的 tab 欄寬或跳過規則 → 對應那幾行紅。"""
++    print("t_reread_fp_indent_inline_same")
++    m = _load_lumos_inproc()
++    want = {b"x": 0, b"    x": 4, b"\tx": 8, b"  \tx": 8, b"\t  x": 10, b"   ": None, b"": None, b"\t": None, b"}": None,
++            b"    ):": None, b"  ];": None, b"#endif": 0, b"  \xe4\xb8\xad": 2, b"\x0cx": 0, b"x\r": 0, b"  }\r": None,
++            b" \t \x0b": None, b"        y = 2": 8}
++    for ln, exp in want.items():
++        alone = m._note_reread_indent(ln)
++        inline = None
++        for j in range(1, 40):
++            chain = m._note_reread_hunk_chains(ln + b"\n" + b" " * j + b"p", [(2, 1)])[0]
++            if chain:
++                inline = j - 1
++                break
++        check(f"{ln!r}:獨立函式 {alone!r}、內聯 {inline!r}、手算 {exp!r} 三者相同", alone == inline == exp, f"{alone} {inline} {exp}")
++
++
++def t_reread_fp_timeout_blocks():
++    """[S27] check 因逾時沒算出新版指紋的篇照舊版判、照擋(代碼審 r3 資安 1:堆三千個垃圾檔撐到逾時,原本整篇放行、rc0)。
++    縮小規模重現資安席的情境:A 的 about_code 列了 40 支這條分支新增的垃圾檔,真的算指紋、算到第 6 支時截止時間到(替身
++    把指紋這一步的截止時間改成已過,模擬 27 秒用完,後面走真的逾時路徑);block 加 --gate → ①擋下(rc1、blocked、late=1),那篇講明
++    「這篇因為逾時沒算出新版指紋,照舊版判」、給跳過的環境變數與「跳過會留帳」,而且不出現「這次不擋」;②warn 加 --gate → rc0、
++    只提醒、不印跳過那句也不印「擋下」;③對照組:預算夠、真的算出指紋 → 擋下但不提逾時。
++    判準來源:代碼審 r3 資安 1、正確性 2、併發 3、通才 1(擋下與不擋同時出現)、合約 2。
++    應抓到的錯:逾時的篇照舊排除在擋之外 → ①紅;訊息照舊說這次不擋 → ①紅;warn 也擋 → ②紅。"""
++    print("t_reread_fp_timeout_blocks")
++    import time as _t
++    m = _load_lumos_inproc()
++    junk = [f"junk/f{i}.txt" for i in range(40)]
++    root, base = _rfp_repo(lambda r: _nh_node(r, "A", about=["src/a.py", *junk], body="A 的第一行"))
++    for rel in junk:
++        _nh_file(root, rel, f"junk {rel}\n")
++    _rfp_line(root, "src/a.py", 15, "a15 = 150")
++    _rr_touch(root, _rr_note("A"), "A 追加")
++    _nh_commit(root, "feat")
++    rng, chk = f"{base}..HEAD", m.cmd_note_audit_reread_check
++    real, calls = m._note_reread_fp_file, []
++
++    def late(scan, fbase, ent):    # 算到第 6 支檔時把指紋這一步的截止時間改成已過,後面照真的逾時路徑走
++        calls.append(ent["path"])
++        if len(calls) >= 6:
++            fbase["dl"] = _t.monotonic() - 1
++        return real(scan, fbase, ent)
++    rc, o, ev = _rfp_inproc(m, chk, root, rng, {"_note_reread_fp_file": late}, gate=True)
++    e = _rfp_ev(ev)
++    check("①逾時沒算出新版指紋 → 照舊版判、擋下(rc1、blocked、late=1)、講明原因與跳過指令、不說這次不擋",
++          rc == 1 and e.get("kind") == "blocked" and e.get("late") == 1 and _rfp_why(ev)[1].get("逾時") == 1
++          and "這篇因為逾時沒算出新版指紋,照舊版判" in o and "LUMOS_SKIP_REREAD_CHECK=1" in o and "跳過會留帳" in o
++          and "不擋" not in o, f"rc={rc}\n{o[-1200:]}\n{e}")
++    _nh_file(root, ".lumos/config.json", '{"note_reread": {"gate": "warn"}}\n')
++    _nh_commit(root, "warn")
++    calls.clear()
++    rc, o, ev = _rfp_inproc(m, chk, root, f"{base}..HEAD", {"_note_reread_fp_file": late}, gate=True)
++    check("②warn 模式 → rc0、只提醒(講明照舊版判)、不印擋下也不印跳過指令",
++          rc == 0 and "擋下" not in o and "照舊版判" in o and "LUMOS_SKIP_REREAD_CHECK=1" not in o and _rfp_ev(ev).get("late") == 1,
++          f"rc={rc}\n{o[-900:]}")
++    _nh_git(root, "reset", "-q", "--hard", "HEAD~1")
++    rc, o, ev = _rfp_inproc(m, chk, root, rng, gate=True)
++    check("③對照組:預算夠 → 擋下、late=0、不提逾時", rc == 1 and _rfp_ev(ev).get("late") == 0 and "逾時" not in o,
++          f"rc={rc}\n{o[-600:]}")
++
++
++def t_reread_fp_prefetch_walk_order():
++    """[S26] 批次讀照算指紋實際走的順序讀:候選照筆記路徑排序走、每篇裡照 about_code 鍵排序走。八篇筆記 N0..N7 各管一支檔,
++    N_i 管 src/f{7-i}.py(走的順序是 f7、f6…f0,剛好跟檔名排序相反);每支檔約 1500 位元組、總量上限 4500(一批裝兩支)→
++    批次讀應是 ceil(8/2)=4 次,指紋跟不設上限時相同。判準來源:代碼審 r3 併發 1(實測反序 120 支 1 MB 的檔讀了 120 批、7.5 秒,
++    照順序 2 批)。應抓到的錯:批次讀照全部 about_code 鍵的排序讀 → 8 次(每支都缺、從它起往後讀到底只剩它與它後面已讀過的)。"""
++    print("t_reread_fp_prefetch_walk_order")
++    m = _load_lumos_inproc()
++    n = 8
++
++    def setup(r):
++        for i in range(n):
++            rel = f"src/f{n - 1 - i}.py"
++            _nh_file(r, rel, "".join(f"v{j} = {j}  # f{n - 1 - i}\n" for j in range(100)))
++            _nh_node(r, f"N{i}", about=[rel], body=f"N{i} 的第一行")
++    root, base = _rfp_repo(setup)
++    for i in range(n):
++        _rfp_line(root, f"src/f{i}.py", 50, f"v49 = {i}")
++        _rr_touch(root, _rr_note(f"N{i}"), "追加")
++    _nh_commit(root, "feat")
++    size = len((root / "src" / "f0.py").read_bytes())
++    rng, chk = f"{base}..HEAD", m.cmd_note_audit_reread_check
++    _rc, _o, ev = _rfp_inproc(m, chk, root, rng)
++    ref = {x["path"]: x["fp"] for x in (_rfp_ev(ev).get("layer1_fps") or [])}
++    real, seen = m._nodehome_cat_blobs, []
++
++    def spy(repo_root, specs, *a, **k):
++        got = real(repo_root, specs, *a, **k)
++        if specs and all(":" not in s for s in specs):
++            seen.append(len(specs))
++        return got
++    _rc, _o, ev = _rfp_inproc(m, chk, root, rng, {"_nodehome_cat_blobs": spy, "_NOTE_REREAD_FP_PREFETCH_TOTAL": 2 * size + 500})
++    got = {x["path"]: x["fp"] for x in (_rfp_ev(ev).get("layer1_fps") or [])}
++    check("前置:八篇都用 v2、每支檔約 1500 位元組", _rfp_why(ev)[0] == n and 1000 < size < 2500, f"{_rfp_why(ev)} {size}")
++    check("①反序的候選:批次讀 4 次(一批兩支)", len(seen) == 4, str(seen))
++    check("②指紋跟不設上限時相同", got == ref and len(got) == n, f"{got} {ref}")
++
++
++def t_reread_fp_chain_deadline():
++    """[S28] 縮排鏈的計算看截止時間(代碼審 r3 併發 2:32 MB 的檔掃到檔尾要幾秒,原本完全不看截止時間):①直接呼叫,截止時間已過
++    → 不算(回 None);同一份輸入不給截止時間 → 算得出;②截止時間在算鏈的時候到(替身只在 _note_reread_hunk_nodes 裡回 True)→ 那支檔
++    退回舊版、原因記「逾時」、block 加 --gate 照擋。應抓到的錯:鏈的計算不看截止時間 → ①②紅。"""
++    print("t_reread_fp_chain_deadline")
++    import sys as _s
++    import time as _t
++    m = _load_lumos_inproc()
++    data = b"def f():\n" + b"    x = 1\n" * 50000
++    check("①截止時間已過 → 不算(None);不給截止時間 → 算得出",
++          m._note_reread_hunk_tags(data, [(50000, 1)], deadline=_t.monotonic() - 1) is None
++          and m._note_reread_hunk_tags(data, [(50000, 1)]) not in (None, [""]), "")
++    root, base = _rfp_repo()
++    _rfp_line(root, "src/a.py", 15, "a15 = 150")
++    _rr_touch(root, _rr_note("A"), "A 追加")
++    _nh_commit(root, "feat")
++    real = m._note_reread_fp_expired
++
++    def in_chain(dl):
++        return True if _s._getframe(1).f_code.co_name == "_note_reread_hunk_nodes" else real(dl)
++    rc, o, ev = _rfp_inproc(m, m.cmd_note_audit_reread_check, root, f"{base}..HEAD", {"_note_reread_fp_expired": in_chain},
++                            gate=True)
++    check("②截止時間在算鏈時到 → 退回舊版、原因「逾時」、照擋", rc == 1 and _rfp_why(ev) == (0, {"逾時": 1}), f"rc={rc}\n{o[-600:]}")
++
++
++def _rfp_two_branches(root, base, extra=None):
++    """從 base 開兩條分支,都把 src/a.py 第 15 行改成 a15 = 150、A 追加一行;attack 那條先多一個改第 5 行的提交(extra 給了就用它)。
++    回 (honest 頂端, attack 那個多出來的提交, attack 頂端)。"""
++    _nh_git(root, "checkout", "-q", "-b", "honest", base)
++    _rfp_line(root, "src/a.py", 15, "a15 = 150")
++    _rr_touch(root, _rr_note("A"), "A 追加")
++    _nh_commit(root, "honest")
++    honest = _na_head(root)
++    _nh_git(root, "checkout", "-q", "-b", "attack", base)
++    _rfp_line(root, "src/a.py", 5, extra or "a5 = 'evil'")
++    _nh_commit(root, "evil")
++    evil = _na_head(root)
++    _rfp_line(root, "src/a.py", 15, "a15 = 150")
++    _rr_touch(root, _rr_note("A"), "A 追加")
++    _nh_commit(root, "honest again")
++    return honest, evil, _na_head(root)
++
++
++def t_reread_fp_ignores_replace_refs():
++    """git replace 的替身物件不影響指紋(代碼審 r3 資安 3):attack 分支多藏一個改第 5 行的提交,再 `git replace <attack 頂端> <honest 頂端>`,
++    git 讀 attack 頂端時讀到的是 honest 那個提交(推出去的卻是真的 attack 提交)。reread-prepare(走 lumos 主程式入口)算出的 attack 指紋
++    應跟 honest 的不同、跟沒設替身時一樣。判準來源:資安席實測(替身讓指紋與 honest 相同);統一規則在主程式入口設
++    GIT_NO_REPLACE_OBJECTS=1。應抓到的錯:入口不設 → ②紅。"""
++    print("t_reread_fp_ignores_replace_refs")
++    root, base = _rfp_repo()
++    honest, _evil, attack = _rfp_two_branches(root, base)
++    fh = _rfp_items(root, f"{base}..{honest}")[0].get(_rr_note("A"))
++    fa = _rfp_items(root, f"{base}..{attack}")[0].get(_rr_note("A"))
++    check("①前置:沒設替身時 attack 與 honest 的指紋不同", fh and fa and fh != fa, f"{fh} {fa}")
++    r = _nh_git(root, "replace", attack, honest)
++    fr = _rfp_items(root, f"{base}..{attack}")[0].get(_rr_note("A"))
++    check("②設了替身 → attack 的指紋照舊是真提交的那個、不等於 honest", r.returncode == 0 and fr == fa and fr != fh,
++          f"{r.stderr} {fr} {fa} {fh}")
++
++
++def t_reread_fp_forged_tracking_ref_blocks():
++    """推主線時,分岔點要是被推那條遠端 ref 現在的值(pre-push 給的遠端 sha)的祖先(代碼審 r3 資安 2):本機把
++    refs/remotes/origin/main 指到 attack 分支上藏了改動的那個提交,分岔點就落在它上面、指紋看不到那段;記了紀錄之後
++    reread-check --gate 推 refs/heads/main(遠端舊值是真的主線 base)→ ①擋下、講明本機的遠端追蹤 ref 不是遠端那個值的後代、
++    要 fetch;②對照組:origin/main 沒被動過、同一套流程 → 照常放行;③對照組:功能分支 rebase 到前進了的主線後強推(遠端舊值是 rebase
++    前的頂端,分岔點不是它的祖先)→ 不因這條擋(功能分支由 CI 用真的遠端重算)。
++    判準來源:資安席實測(偽造之後指紋與 honest 相同、紀錄照樣命中)。應抓到的錯:不核對 → ①紅;核對套到功能分支 → ③紅。"""
++    print("t_reread_fp_forged_tracking_ref_blocks")
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-rfp-"))
++    root, base = _rfp_repo()
++    _honest, evil, _attack = _rfp_two_branches(root, base)
++    _nh_git(root, "update-ref", "refs/remotes/origin/main", evil)
++    _rfp_record(root, f"{evil}..HEAD", tmp)
++    rc, o, e = _rr(root, "reread-check", "--gate", "--diff", f"{base}..HEAD", "--push-remote", "origin",
++                   "--pushed-ref", "refs/heads/main")
++    check("①偽造的遠端追蹤 ref → 擋下、講明原因與 fetch", rc == 1 and "擋下" in e and "refs/remotes/origin/main" in e
++          and "git fetch" in e, f"rc={rc}\n{o[-400:]}\n{e[-800:]}")
++    root2, base2 = _rfp_repo()
++    _rfp_line(root2, "src/a.py", 15, "a15 = 150")
++    _rr_touch(root2, _rr_note("A"), "A 追加")
++    _nh_commit(root2, "honest")
++    _rfp_record(root2, f"{base2}..HEAD", tmp)
++    rc, o, e = _rr(root2, "reread-check", "--gate", "--diff", f"{base2}..HEAD", "--push-remote", "origin",
++                   "--pushed-ref", "refs/heads/main")
++    check("②對照組:沒偽造、推主線 → 放行", rc == 0 and "擋下" not in e, f"rc={rc}\n{o[-400:]}\n{e[-400:]}")
++    old = _na_head(root2)
++    rb = _rfp_main_advance(root2, lambda r: _rfp_line(r, "src/b.py", 3, "b3 = 30"))
++    rc, o, e = _rr(root2, "reread-check", "--gate", "--diff", f"{old}..HEAD", *_rfp_push())
++    check("③對照組:功能分支 rebase 後強推 → 不因分岔點核對擋(紀錄照樣命中)", rb.returncode == 0 and rc == 0 and "擋下" not in e,
++          f"rc={rc}\n{o[-400:]}\n{e[-400:]}")
++
++
+ def t_drift_ack_reread_kind():
+     """[S20][S21][S22] drift ack --kind reread:非規則類、沒有判定點出、不是條目開頭 → rc2 不寫帳;
+     有判定點出的規則類條目開頭 → 記 kind、path、整條 text、reason、verdicts;drift scan 種類計數不出現 reread。
+ 
+     翻紅釘:不驗工作目錄有判定點出 → ②紅;不看紀錄的 note 欄 → ②b 紅;text 記實體行不記整條 → ④紅。"""
+     print("t_drift_ack_reread_kind")
+     import json as _j, subprocess as sp
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-rrb4-"))
+     summ = "\n".join([_RRB_RULE, "WHY:之所以這樣選是因為比較快 [出處:討論] [因:速度]",
+                       "RULE:沒有被點出的另一條規則 [依據:人] [since:2026-10-01]\n  接續行在這裡 [retire:人裁] [until:2026-12-01]"])
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index 23e4e3a3..6ee0c47d 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -65,21 +65,21 @@
+    lumos note-audit record --diff <範圍> --prepared <新清單> --report <申訴報告> --dispute --disputes <被申訴的判定檔名>
+    ```
+    申訴只換掉它指名的那一份判定;被好幾份申訴指名時取最重的。
+ 6. **真的來不及**:`lumos note-audit skip --diff <範圍> --note "<理由>"`——只略過從沒被判過的行,會留帳;已判推得出的不能略過。
+ 7. **提交判定檔**:`git add governance/note-verdicts && git commit`。check 只認被推送頂端提交裡的判定檔;判定檔屬於簿記,不會讓代碼審留痕失效,所以順序是先過筆記內容審、再做代碼審留痕、再推。
+ 8. **自己先查一次**:`lumos note-audit check --diff <範圍>`(沒涵蓋 rc1)。誤擋單次 `LUMOS_SKIP_NOTE_AUDIT=1`(留帳);整個專案先只提醒 `.lumos/config.json` 寫 `{"note_audit": {"gate": "warn"}}`,關掉寫 `off`(doctor 會一直唸)。
+ 
+ ## 推送前回頭重讀守檔筆記
+ 
+ 白話:改了程式、同一次也改了管那支程式的筆記,卻只在後面追加、前面的舊句沒回頭看——這是筆記過期最常見的一種。推送前,把「這次改到的程式檔的家、而且這次也被改過」的每篇筆記,連同這次的程式 diff 交給一位判定者,問「哪幾行被這次改動弄得不成立了」。**本機推送前預設擋**(推送前掛鉤帶 `--gate`,`note_reread.gate` 沒寫就是 block),擋兩層:
+-- **第一層:還沒對照過這一版程式**——候選沒有來源核對過的已提交紀錄。對照只看程式那一半,而且只認「這條分支對 about_code 那幾支檔的改動」(跟遠端主線的分岔點..頂端):你自己的改動變了(含 rebase 解衝突改到的那一段)、筆記改名、about_code 增減就要重判;主線往前、rebase 上去而你的改動沒變,不用重判——例外是主線改到你那段改動前後三行之內(那三行跟著改動一起算),或改到你那段改動外層那幾行(從改動往上、每一層縮排比它淺的那一行原文都算——所在函式的簽名、所在類別那一行;所以你那段改動搬到另一個函式裡也要重判,主線改了你那段所在函式的簽名也要重判一次);改筆記不用。算不出分岔點(沒有遠端主線、推的就是主線上的提交)或改動太大、判定者的 diff 會被截掉時,退回看程式在頂端的版本——那時主線帶進別人對同一支程式的改動也算;推送前檢查的時間不夠、沒算出新版指紋的篇,清單會講明「這篇因為逾時沒算新版指紋,這次不擋」、記進治理帳,但不擋(prepare 沒有時間上限、記的是新版紀錄,推送前檢查逾時比不到它,擋下去重跑也一樣)(2026-10-14 前一律這樣算,由 [[Projects/回頭重讀指紋不因主線前進失效_計劃]] 取代)。
++- **第一層:還沒對照過這一版程式**——候選沒有來源核對過的已提交紀錄。對照只看程式那一半,而且只認「這條分支對 about_code 那幾支檔的改動」(跟遠端主線的分岔點..頂端):你自己的改動變了(含 rebase 解衝突改到的那一段)、筆記改名、about_code 增減就要重判;主線往前、rebase 上去而你的改動沒變,不用重判——例外是主線改到你那段改動前後三行之內(那三行跟著改動一起算),或改到你那段改動外層那幾行(從改動往上、每一層縮排比它淺的那一行原文都算,只有括號、標點的行(`{`、`):`)跳過——所在函式的簽名、所在類別那一行;所以你那段改動搬到另一個函式裡也要重判,主線改了你那段所在函式的簽名也要重判一次);改筆記不用。算不出分岔點(沒有遠端主線、推的就是主線上的提交)或改動太大、判定者的 diff 會被截掉時,退回看程式在頂端的版本——那時主線帶進別人對同一支程式的改動也算;推送前檢查的時間不夠、沒算出新版指紋的篇,清單會講明「這篇因為逾時沒算出新版指紋,照舊版判」、照擋、記進治理帳(prepare 沒有時間上限、記的是新版紀錄,推送前檢查逾時比不到它,重跑也一樣——改動極大、確定都對照過時用 `LUMOS_SKIP_REREAD_CHECK=1 git push` 單次跳過,會留帳);推主線時,本機的遠端追蹤 ref 不是遠端那條主線現在的值的祖先(被改過或遠端改寫過)會擋下、要你先 `git fetch`(2026-10-14 前一律這樣算,由 [[Projects/回頭重讀指紋不因主線前進失效_計劃]] 取代)。
+ - **第二層:判定點出的規則類條目沒處理**——判定紀錄點出的行落在摘要的規則類條目(`RULE:`、`★INVARIANT★`、帶 `[test:]` 的摘要條目;標了 `[status:superseded]` 的不算)、那句還在、也沒有照留表態。點出的一般行(正文、`WHY:` 這類沒帶測試綁定的條目)只提醒。
+ CI 那一步不帶 `--gate`,照舊只提醒、恆回 0。設計與取捨:[[Projects/舊句兩道轉擋_計劃]](原版 [[Projects/守檔筆記對照改動_計劃]])。
+ 
+ 一串做完的順序:
+ 1. **出項目檔**(看到推送前的擋下或提醒就照它印的指令貼,或自己先跑):
+    ```
+    lumos note-audit reread-prepare --diff <起點>..<終點> --orchestrator claude|codex
+    ```
+    每篇一份項目檔(放 `.lumos/note-audit/`,不進版控、14 天自動清);沒有要對照的筆記就不產生檔。已經有來源核對過的對照紀錄提交進去、對得上這一版程式的那幾篇會略過(跟推送前列的篇數一致),要全部重產加 `--all`。`.lumos` 或 `.lumos/note-audit` 是符號連結時整個拒用(rc2),刪掉連結再跑。
+ 2. **派判定者**:每份項目檔派一席(可平行),派工詞是項目檔裡「---本文---」之後的全部。

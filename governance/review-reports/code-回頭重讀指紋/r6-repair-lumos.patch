@@ -1,0 +1,350 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 28cbfda1..7d587c22 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -26023,33 +26023,39 @@ def _git_unquote_path(s):
+         except Exception:
+             return s[1:-1]
+     return s
+ 
+ 
+ def _patch_files_from_text(text):
+     """凍結 patch 改到哪些檔(集合)。檔名判法見 _patch_file_changes。"""
+     return set(_patch_file_changes(text))
+ 
+ 
++def _diff_git_starts(d):
++    """多支檔的 diff 每段的起點(行首 `diff --git `)→ [位置…];str 與 bytes 都收(回頭重讀切段與給判定者的截斷共用,代碼審 r5 架構對齊 1)。"""
++    return [m.start() for m in re.finditer(rb"(?m)^diff --git " if isinstance(d, bytes) else r"(?m)^diff --git ", d)]
++
++
+ def _patch_file_changes(text, headers=True, lf_only=False, hunk_tag=None):
+     """凍結 patch 裡每支檔的「改動指紋」:{檔名: sha256}。
+     三個參數預設不變(資安席照舊);回頭重讀的改動指紋(_note_reread_fp_file)都打開
+     (Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉1):
+     headers=False:`@@` 後面 git 印的段落標頭不算——標頭取自 hunk 之前最近一行頂格的整行(含參數),主線改了封閉函式的簽名
+     它也會變(設計審 r1 三席實測),而且 git 依屬性檔挑標頭規則,簽出不同分支結果不同;
+     hunk_tag(只在 headers=False 時用):給一支函式「`@@` 那一行 → 字串」,那個字串代替段落標頭算進指紋——回頭重讀給的是
+     那段改動的縮排鏈原文的雜湊(_note_reread_hunk_tags;代碼審 r1 資安席 major:整個拿掉時,同一段改動搬到同檔另一個前後三行
+     相同的函式指紋不變;r2 六席:改成猜函式名時好幾種語言撞名);
+     lf_only=True:只用 `\n` 切行——splitlines() 會在換頁符號(\x0c)、U+2028 等字元處多切一刀,切出來的後半段不以
+     +、-、空白開頭而被丟掉,同一行換頁符號之後的改動就不進指紋(設計審 r2 兩席實測)。
+     檔名:每段 `diff --git` 在第一個 `@@` 之前依序取 `+++ b/…`(不是 /dev/null)→ `rename to …` → `--- a/…`(刪檔)
+-    → `diff --git` 行本身 b/ 那側;hunk 內容裡剛好長得像檔頭的行不算。既有的 _delguard_parse_diff 只用
++    → `diff --git` 行本身 b/ 那側(兩半相同時照 _diff_git_same_name 取,路徑含「 b/」也取得對;代碼審 r5 正確性 1、邊界 1);
++    hunk 內容裡剛好長得像檔頭的行不算。既有的 _delguard_parse_diff 只用
+     「 b/(.+)$」抓、不處理引號,所以不能直接拿來用。
+     ★指紋算 hunk 的內容,不算位置★(代碼審 r1 通才 A1/資安 C1;r3 外家否決改):hunk 裡的增刪行與上下文行、
+     `@@` 後面的段落標頭(函式名),加上 mode/新增刪除/改名/二進位這幾種檔頭;不算 `@@` 的行號與 `index` 那行——
+     只差行號(rebase 常見)還算同一版。原本只比檔名,同一支檔換成含後門的內容照樣算「資安席看過」;
+     r1 改成只算增刪行之後,同一段 `-check(user)/+allow(user)` 從公開端點搬到管理員端點指紋完全相同(r3 外家 Codex 實測),
+     所以上下文與段落標頭也要算。代價:rebase 之後這段附近的程式也變了,資安席要對最新版再看一次(誤擋方向)。
+     ★二進位檔例外★(代碼審 r2 通才 F1):二進位檔沒有增刪行,內容變化只在 `index 舊..新` 的「新」那一半
+     (改動後的版本雜湊)與 `GIT binary patch` 資料行——這兩樣要算進去,否則換掉整個二進位檔指紋也不變。
+     文字檔不算 index,因為 rebase 會讓它變、改動本身卻沒變。"""
+     import hashlib
+@@ -26070,22 +26076,26 @@ def _patch_file_changes(text, headers=True, lf_only=False, hunk_tag=None):
+         if cur:
+             name = cur.get("plus") or cur.get("rename") or cur.get("minus") or cur.get("hdr")
+             if name:
+                 chg = cur["chg"] + ([f"post-blob {cur['post']}"] if cur.get("bin") and cur.get("post") else [])
+                 h = hashlib.sha256("\n".join(chg).encode("utf-8", "surrogateescape")).hexdigest()
+                 files[name] = h
+ 
+     for ln in (text.split("\n") if lf_only else text.splitlines()):
+         if ln.startswith("diff --git "):
+             _flush()
+-            rest, hdr = ln[len("diff --git "):], None
+-            if rest.endswith('"'):
++            # 兩半相同(`a/X b/X`)就照它取;路徑本身含「 b/」時取最後一個「 b/」之後會取錯(代碼審 r5 正確性 1、邊界 1),只有改名、
++            # 複製這種兩半不同的才退回原本的取法(那時後面有 `+++`/`rename to` 蓋過它)
++            rest, hdr = ln[len("diff --git "):], _diff_git_same_name(ln)
++            if hdr is not None:
++                pass
++            elif rest.endswith('"'):
+                 k = rest.rfind(' "b/')
+                 if k >= 0:
+                     hdr = _strip(rest[k + 1:], "b/")
+             else:
+                 k = rest.rfind(" b/")
+                 if k >= 0:
+                     hdr = rest[k + 3:]
+             cur, in_hunk = {"hdr": hdr, "chg": [], "bin": False, "post": None, "binpatch": False}, False
+             continue
+         if cur is None:
+@@ -36549,83 +36559,120 @@ def _note_reread_fp_file(scan, base, ent):
+     return res
+ 
+ 
+ _NOTE_REREAD_FP_DIFF_BATCH = 64 * 1024 * 1024    # 一次 git diff 帶的檔,兩邊物件大小合計上限(同批次讀 _NOTE_REREAD_FP_PREFETCH_TOTAL 的量級)
+ _NOTE_REREAD_FP_DIFF_ARGLEN = 100 * 1024         # 一次帶的路徑參數合計位元組上限(命令列長度;macOS 的 ARG_MAX 約 1 MB、含環境變數)
+ 
+ 
+ def _note_reread_fp_diff(scan, base, path):
+     """一支改過的檔的逐檔 diff → (bytes, None) 或 (None, 退回原因)。★一次 git diff 帶一批路徑★(代碼審 r4 併發 1:原本每支檔各開一次,
+     每次約 27 毫秒,約一千支檔就撞 30 秒上限):缺了就從這支起、照算指紋實際走的順序(候選照順序、每篇照 _note_reread_fp_walk_keys)
+-    往後收一批——兩邊大小合計不超過 _NOTE_REREAD_FP_DIFF_BATCH、路徑參數不超過 _NOTE_REREAD_FP_DIFF_ARGLEN(至少一支)——
+-    一次跑 `git diff … <分岔點> <頂端> -- <路徑…>`、照 `diff --git` 檔頭切開(_note_reread_split_diff;檔名照 _patch_file_changes 的
+-    引號規則還原);手上只留一批(原始輸出加每支的起訖位置,用到才切出那一支)。批裡切不出這支(檔名對不上)就單支再問一次,
+-    結果跟逐支各開一次逐位元組相同(t_reread_fp_one_diff_for_all_files)。"""
++    往後收一批(_note_reread_fp_diff_batch)——兩邊大小合計不超過 _NOTE_REREAD_FP_DIFF_BATCH、路徑參數不超過
++    _NOTE_REREAD_FP_DIFF_ARGLEN(至少一支)——一次跑 `git diff … <分岔點> <頂端> -- <路徑…>`、照 `diff --git` 檔頭切開
++    (_note_reread_split_diff);手上只留一批(原始輸出、每支的起訖位置、問了哪幾支,用到才切出那一支)。批裡切不出這支就單支再問一次;
++    只問這一支還切不出就整段給它。★跟逐支各問一次的關係★(代碼審 r5 通才 1 收窄):切得出的檔取的是它自己那段,跟逐支問時那段
++    逐位元組相同(t_reread_fp_one_diff_for_all_files);只有檔案換成同名資料夾時不同——`git diff -- a` 會連 `a/b` 一起印,r4 以前
++    逐支問、整段直接用會把 `a/b` 算進 `a`,現在只取 `a` 那段(較精確,批次與單支問結果一致,t_reread_fp_file_replaced_by_dir)。"""
+     got = base.get("diffs")
+-    if got is None or path not in got[1]:
+-        sizes = base.get("sizes") or {}
+-        if base.get("diff_order") is None:
+-            base["diff_order"] = list(dict.fromkeys(e["path"] for rel in scan["cands"]
+-                                                    for k in _note_reread_fp_walk_keys(_note_reread_about(scan, rel))
+-                                                    for e in base["raw"].get(k, ()) if e["status"] != "T"))
+-            base["diff_cost"] = {e["path"]: sum(sizes.get(o, 0) for o in _note_reread_fp_oids(e))
+-                                 for ents in base["raw"].values() for e in ents}
+-        order, cost = base["diff_order"], base["diff_cost"]
+-        batch, total, arglen = [], 0, 0
+-        for p in (order[order.index(path):] if path in order else [path]):
+-            n, a = cost.get(p, 0), len(os.fsencode(p)) + 1
+-            if batch and (total + n > _NOTE_REREAD_FP_DIFF_BATCH or arglen + a > _NOTE_REREAD_FP_DIFF_ARGLEN):
+-                break
+-            batch.append(p)
+-            total, arglen = total + n, arglen + a
++    if got is None or path not in got[2]:     # 看這批問了誰、不看切出了誰(切不出的不重收一批;切錯名的段不會被別支誤取)
++        batch = _note_reread_fp_diff_batch(scan, base, path)
+         got = _note_reread_fp_diff_run(scan, base, batch)
+         if got[0] is None:
+             return None, got[1]
+         base["diffs"] = got
+-        if path not in got[1] and len(batch) > 1:     # 批裡切不出這支:單支再問一次(檔名在檔頭裡還原不出來的少見寫法)
+-            one = _note_reread_fp_diff_run(scan, base, [path])
+-            if one[0] is None:
+-                return None, one[1]
+-            return (one[0][slice(*one[1][path])] if path in one[1] else b""), None
+-    raw, spans = got
+-    return (raw[slice(*spans[path])] if path in spans else b""), None
++    raw, spans, asked = got
++    if path in spans:
++        return raw[slice(*spans[path])], None
++    if len(asked) > 1:     # 批裡切不出這支:單支再問一次(檔名在檔頭裡還原不出來的少見寫法)
++        got = _note_reread_fp_diff_run(scan, base, [path])
++        if got[0] is None:
++            return None, got[1]
++        raw, spans, asked = got
++        if path in spans:
++            return raw[slice(*spans[path])], None
++    # ★只問這一支時切不出就整段給它★(代碼審 r5 邊界 1、正確性 1):輸出只可能是這支(或它底下同名資料夾的檔),跟 r4 以前逐支問時一樣,
++    # 不因檔名還原不出來就當 diff 空。切得出時照樣只取它那段(檔案換成同名資料夾時不把資料夾裡的檔算進來,跟批次切的結果一致)
++    return raw, None
++
++
++def _note_reread_fp_diff_batch(scan, base, path):
++    """從 path 起收一批要一起 diff 的路徑 → [路徑…](第一支一定是 path)。
++    ★只收真的會被要求 diff 的檔★(代碼審 r5 併發 1):型別變更、任一邊大小超過 _NOTE_REREAD_FP_MAX 或大小缺漏的檔,
++    _note_reread_fp_file 在 diff 之前就退回 v1,不放進順序;原本照收,單側新增的 40 MB 檔只算一側成本塞得進批次上限,
++    8 支就白白 diff 掉十幾秒預算。★已算過的不重算★(r5 併發 2):手上只留一批,被要求的那支不在這批時從它起往後收,
++    scan["fpfile"] 已經有結果的跳過(原本照收,要求順序跟批次順序相反時每批都重 diff 上一批算過的,最壞二次方)。"""
++    sizes = base.get("sizes") or {}
++    if base.get("diff_order") is None:
++        def wanted(e):
++            oids = _note_reread_fp_oids(e)
++            return e["status"] != "T" and all(o in sizes and sizes[o] <= _NOTE_REREAD_FP_MAX for o in oids)
++        base["diff_order"] = list(dict.fromkeys(e["path"] for rel in scan["cands"]
++                                                for k in _note_reread_fp_walk_keys(_note_reread_about(scan, rel))
++                                                for e in base["raw"].get(k, ()) if wanted(e)))
++        base["diff_cost"] = {e["path"]: sum(sizes.get(o, 0) for o in _note_reread_fp_oids(e))
++                             for ents in base["raw"].values() for e in ents}
++    order, cost, done = base["diff_order"], base["diff_cost"], scan.get("fpfile", {})
++    batch, total, arglen = [], 0, 0
++    for p in ([path] + [q for q in order[order.index(path) + 1:] if (base["bp"], scan["tip"], q) not in done]
++              if path in order else [path]):
++        n, a = cost.get(p, 0), len(os.fsencode(p)) + 1
++        if batch and (total + n > _NOTE_REREAD_FP_DIFF_BATCH or arglen + a > _NOTE_REREAD_FP_DIFF_ARGLEN):
++            break
++        batch.append(p)
++        total, arglen = total + n, arglen + a
++    return batch
+ 
+ 
+ def _note_reread_fp_diff_run(scan, base, paths):
+-    """跑一次逐檔 diff → (原始輸出 bytes, {路徑: (起, 訖)}) 或 (None, 退回原因)。"""
++    """跑一次逐檔 diff → (原始輸出 bytes, {路徑: (起, 訖)}, 問了哪幾支) 或 (None, 退回原因)。"""
+     r = _note_reread_git(scan["root"], "diff", *_NOTE_REREAD_FP_DIFF_ARGS, base["bp"], scan["tip"], "--", *paths, deadline=base["dl"])
+     if r is None or r.returncode != 0:
+         return None, ("逾時" if (r is None and _note_reread_fp_expired(base["dl"])) else "git 失敗")
+-    return r.stdout, _note_reread_split_diff(r.stdout)
++    return r.stdout, _note_reread_split_diff(r.stdout), list(paths)
+ 
+ 
+ def _note_reread_split_diff(raw):
+     """多支檔的 diff(bytes)→ {檔名: (起, 訖)}。每段從行首的 `diff --git ` 起(內容行一定帶 +、-、空白、\\ 前綴,GIT binary patch 的
+     base85 資料行沒有空白,不會被當成檔頭);檔名交給 _patch_file_changes 只看那段的檔頭(第一個 `@@` 或 GIT binary patch 之前),
+     跟單支 diff 用同一套引號還原。認不出、或同一個檔名出現兩次的段不放(呼叫端單支再問)。"""
+-    starts = [m.start() for m in re.finditer(rb"(?m)^diff --git ", raw)]
++    starts = _diff_git_starts(raw)
+     out, dup = {}, set()
+     for i, a in enumerate(starts):
+         b = starts[i + 1] if i + 1 < len(starts) else len(raw)
+         cut = [j for j in (raw.find(b"\n@@ ", a, b), raw.find(b"\nGIT binary patch\n", a, b)) if j >= 0]
+         head = raw[a:min(cut) + 1 if cut else b]
+         names = list(_patch_file_changes(head.decode("utf-8", "surrogateescape"), headers=False, lf_only=True))
+         if len(names) != 1:
+             continue
+         if names[0] in out:
+             dup.add(names[0])
+         out[names[0]] = (a, b)
+     for n in dup:
+         del out[n]
+     return out
+ 
+ 
++def _diff_git_same_name(line):
++    """`diff --git a/X b/X` 那一行兩半相同時的檔名 X(引號照 git 的規則還原)→ str 或 None(兩半不同、找不到切點)。
++    沒有 `---`/`+++` 的段(二進位、只改權限、空檔新增刪除)只能從這一行取名;路徑本身含「 b/」時取最後一個「 b/」之後會取錯
++    (`src/x b/y2` 取成 `y2`,代碼審 r5 正確性 1、邊界 1)。兩半一樣長、中間一個空白,切點只有一個,不用猜。"""
++    rest = line[len("diff --git "):] if line.startswith("diff --git ") else None
++    if rest is None or len(rest) % 2 == 0 or rest[len(rest) // 2] != " ":
++        return None
++    left, right = rest[:len(rest) // 2], rest[len(rest) // 2 + 1:]
++    for q in ("", '"'):
++        if left.startswith(q + "a/") and right.startswith(q + "b/") and left[len(q) + 2:] == right[len(q) + 2:]:
++            p = _git_unquote_path(right) if q else right
++            return p[2:] if p.startswith("b/") else None
++    return None
++
++
+ def _note_reread_fp_tags(scan, base, ent, text):
+     """逐檔 diff 每個 hunk 的縮排鏈標籤 → (給 _patch_file_changes 的 hunk_tag, None) 或 (None, 退回原因)。
+     hunk 標頭用共用的 _NOTELINES_HUNK_RE 解析(只看以 `@@ ` 開頭的行;內容行一定帶 +、-、空白前綴,不會被當成標頭)。
+     鏈從頂端版本的內容自己算(_note_reread_hunk_tags),不靠 git 依屬性檔選的段落標頭規則。
+     ★新側行數是 0 的 hunk 沒有鏈★:指紋的 diff 帶 3 行上下文,新側只要還有任何一行,hunk 就一定帶到上下文,所以新側行數 0
+     只會出現在頂端那一版是空的(刪檔、清空)——那時舊側從第 1 行起,第 1 行之上沒有任何一行,鏈本來就是空的,不必另讀分岔點那一版。
+     刪檔、子模組沒有頂端內容,鏈也是空的。沒有 hunk(二進位、只改 mode)不讀內容。"""
+     keys = []
+     for ln in text.split("\n"):
+         if ln.startswith("@@ "):
+@@ -36998,21 +37045,23 @@ def _note_reread_diff(root, base, tip, raws, cap=None):
+         return "(無)", False, 0, ctx[0]
+     total, d = None, ""
+     for u in ctx:
+         d = _note_reread_diff_once(root, base, tip, raws, u)
+         if d is None:
+             return None
+         if total is None:
+             total = len(d)
+         if _note_reread_diff_fits(d, cap):
+             return d, u != ctx[0], total, u
+-    parts = [p for p in re.split(r"(?m)^(?=diff --git )", d) if p.strip()]
++    import itertools
++    cuts = sorted({0, *_diff_git_starts(d), len(d)})
++    parts = [p for p in (d[a:b] for a, b in itertools.pairwise(cuts)) if p.strip()]
+     order = sorted(range(len(parts)), key=lambda i: len(parts[i]))
+     got, remaining, left = [None] * len(parts), cap, len(parts)
+     for i in order:
+         share = remaining // left
+         p = parts[i]
+         if len(p) <= share:
+             got[i] = p
+         else:
+             cut = p[:share]
+             cut = cut[:cut.rfind("\n") + 1]
+@@ -37685,21 +37734,21 @@ def cmd_note_audit_reread_check(repo=None, diff_range=None, push_remote=None, pu
+     原版見 Projects/守檔筆記對照改動_計劃〈做法〉4)。★擋只在帶 --gate 而且 note_reread.gate 是 block 時生效★:只有推送前掛鉤帶;
+     CI 與手動跑不帶,不論設定都照舊只印(標準輸出)、回 0、記既有事件——合併後主線 CI 用整個 PR 的累計範圍重算,候選與指紋跟作者
+     本機最後一次推送看到的不同,設計審前兩輪的 CI 誤擋情境(合併讓指紋變、分次推送、兩條分支各自表態)全出在那一步。
+     本體照 _drift_m1_guarded、_drift_retire_guarded 的先例拆成判定(_note_reread_judge)、兜底(_note_reread_guarded)、
+     印出記帳(_note_reread_report)三段,回傳碼在印出前定好。最外層只接 Exception、不接 BaseException:Ctrl-C 照常中斷。"""
+     root = _note_audit_root(repo)
+     if root is None or not _note_reread_is_git(root):
+         print("回頭重讀提醒:這次沒提醒:這裡不是 git 專案")
+         return 0
+     if os.environ.get("LUMOS_SKIP_REREAD_CHECK") == "1":        # 只認 1;只管本機(照另外兩道的單次略過慣例)
+-        print("回頭重讀提醒:LUMOS_SKIP_REREAD_CHECK 設了,這次不跑(已記進本機治理帳;CI 用真遠端重算時會再列出)")
++        print("回頭重讀提醒:LUMOS_SKIP_REREAD_CHECK 設了,這次不跑(已記進 docs/.governance-log.jsonl:有進版控,跟著帳本提交送出)")
+         _gate_event_or_warn(root, "note-reread", "skipped-env", "LUMOS_SKIP_REREAD_CHECK")
+         return 0
+     res = _note_reread_guarded(root, diff_range, push_remote, pushed_ref)
+     return _note_reread_report(root, res, gate, push_remote is not None)
+ 
+ 
+ def _note_reread_is_git(root):
+     """--repo 指到的資料夾是不是 git 專案(不是就跟找不到專案一樣講一句、回 0,不當成「範圍終點找不到」的參數錯)。"""
+     r = _lens_git(root, "rev-parse", "--git-dir")
+     return r is not None and r.returncode == 0
+@@ -37779,21 +37828,23 @@ def _note_reread_mainline_names(root, tip, deadline=None):
+ 
+ def _note_reread_push_old(root, scan, diff_range, push, deadline=None):
+     """推主線時記下 pre-push 給的遠端舊值(scan["push_old"]),分岔點改用它算(_note_reread_fp_base:`merge-base <頂端> <遠端舊值>`);
+     check 與 prepare 在算指紋之前各呼叫一次(prepare 照 check 印的指令帶同一組推送參數,兩邊同一個分岔點)。
+     ★為什麼推主線不用本機追蹤 ref★(代碼審 r3 資安 2、r4 資安 1、正確性 1、通才 1):本機把 refs/remotes/origin/main 指到藏了改動的
+     提交,照它算的分岔點就落在那個提交上、新版指紋看不到那段;遠端舊值是 pre-push 從遠端拿來的,本機改不了。r3 的做法是照本機追蹤 ref
+     算、再核對分岔點是不是遠端舊值的祖先,但核對綁在遠端名上(換遠端名、推網址就不核對)、遠端舊值找不到時靜默放行、fork 工作流
+     (本機 main 追蹤正本)會誤擋——直接用遠端舊值算,三個洞一起消失,也不用核對。
+     不算推主線(scan["push_old"] 留 None,分岔點照舊用本機主線候選):沒有推送參數、遠端舊值全 0(新建主線)、被推的不是 refs/heads/、
+     分支名不在 _note_reread_mainline_names 裡(功能分支:rebase 後強推、合過主線時遠端舊值就是自己上次推的頂端,拿它當分岔點會把
+-    主線帶進來的改動算成自己的;功能分支這條由 CI 用 fetch 下來的真遠端主線重算補驗)。
++    主線帶進來的改動算成自己的)。★功能分支的分岔點信任本機追蹤 ref★:刻意偽造它(update-ref 指到藏了改動的提交、再推功能分支、
++    在網站上合併)屬範圍外天花板——單人本機工具,系統其他審查同樣信任本機 ref(使用者 2026-10-14 裁定;代碼審 r5 資安 1);
++    CI 那一步只印、不擋,不是補驗。
+     遠端舊值本機找不到(沒 fetch)→ 丟 _NoteRereadStop、請先 git fetch <遠端>(check 在 block 加 --gate 時擋、prepare 回 2)。"""
+     scan["push_old"] = None
+     if push is None:
+         return
+     remote, pushed_ref = push
+     rg = _lens_range_ok(diff_range)
+     if rg is None or _ZERO_SHA_RE.fullmatch(rg[0]) or not (pushed_ref or "").startswith("refs/heads/"):
+         return
+     dl = None if deadline is None else deadline - _NOTE_REREAD_FP_RESERVE
+     if pushed_ref[len("refs/heads/"):] not in _note_reread_mainline_names(root, scan["tip"], dl):
+@@ -37866,21 +37917,21 @@ def _note_reread_rc(res, gate, hard):
+     if st == "undecidable":
+         return 1 if hard else 0
+     return 1 if (st == "judged" and _note_reread_blocking(res, hard)) else 0
+ 
+ 
+ def _note_reread_blocking(res, hard):
+     """判完了的這次擋不擋:hard(帶 --gate 而且 block)、而且第一層有沒對照的篇或第二層有要處理的條目。
+     ★因逾時沒算出新版指紋的篇照舊版判、照擋★(res["late"] 只用來講明原因與記帳;代碼審 r3 資安 1:原本這幾篇不擋,about_code 是作者
+     自己寫的,列上三千支垃圾檔撐到逾時就整篇放行、rc0)。代價是指紋這一步在 _NOTE_REREAD_BUDGET_SEC 內算不完的分支,prepare 記的新版紀錄
+     比不到、這次擋——逾時看當下機器負載:機器忙時重推可能就會過;一直擋就是改動太大,用既有的單次跳過(LUMOS_SKIP_REREAD_CHECK=1;
+-    跳過只留在本機帳,CI 用真遠端重算時會再列出)。清單照這樣講明(代碼審 r4 通才 2:原本寫「重跑也一樣」,邊緣大小的分支重推會過)。"""
++    跳過記進有進版控的 docs/.governance-log.jsonl、跟著帳本提交送出)。清單照這樣講明(代碼審 r4 通才 2:原本寫「重跑也一樣」,邊緣大小的分支重推會過)。"""
+     if not hard or res.get("state") != "judged":
+         return False
+     return bool(res["left"] or res["layer2"]["must"])
+ 
+ 
+ def _note_reread_report(root, res, gate, pushed):
+     """印出與記帳 → rc。rc 先由 _note_reread_rc 定好;印到一半出錯只講一句、照樣記帳,記帳出錯也只講一句——兩步都不改判定
+     (同 _drift_retire_report)。hard = 帶 --gate 而且設定是 block。"""
+     hard = gate and res["mode"] == "block"
+     rc = _note_reread_rc(res, gate, hard)
+@@ -37970,24 +38021,25 @@ def _note_reread_print_layer1(res, hard, stream):
+     for label, rows in (("沒有紀錄", [r for r in left if r not in bad]), ("有紀錄但來源核對沒過(要重派判定者)", bad)):
+         if rows:
+             print(f"  {label} {len(rows)} 篇:", file=stream)
+         for rel in rows[:_NOTE_REREAD_LIST_MAX]:
+             why = ";這篇因為逾時沒算出新版指紋,照舊版判" if rel in late else ""
+             print(f"    {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]}{why})", file=stream)
+         if len(rows) > _NOTE_REREAD_LIST_MAX:
+             print(f"    …另外 {len(rows) - _NOTE_REREAD_LIST_MAX} 篇", file=stream)
+     if late:
+         # 預算不夠時不靜默換版(代碼審 r1 通才 1、併發 3);照擋(r3 資安 1:不擋會被堆垃圾檔撐到逾時拿來繞)。prepare 沒有預算、會記新版
+-        # 的紀錄,check 逾時那次比不到它;逾時看機器負載(r4 通才 2),所以照實講重推可能會過、一直擋才用單次跳過(r4 資安 4:跳過的帳
+-        # 只寫在本機工作目錄)
++        # 的紀錄,check 逾時那次比不到它;逾時看機器負載(r4 通才 2),所以照實講重推可能會過、一直擋才用單次跳過。跳過的帳照實講:
++        # skipped-env 不在 _GOV_LOCAL_PAIRS,寫進有進版控的治理帳、這次推送不帶它(r4 資安 4 原本寫「會留帳」;r5 合約 1:r4 改寫成
++        # 「只留在本機帳」又說錯)
+         skip = (";一直擋就是改動太大,確定都對照過時可以用 LUMOS_SKIP_REREAD_CHECK=1 git push 單次跳過"
+-                "(跳過只留在本機帳;CI 用真遠端重算時會再列出)" if hard else "")
++                ";跳過記進 docs/.governance-log.jsonl(有進版控,跟著帳本提交送出)" if hard else "")
+         print(f"  其中 {len(late)} 篇因為推送前檢查的 {_NOTE_REREAD_BUDGET_SEC} 秒上限逾時、沒算出新版指紋(只認作者自己改動的那一版),"
+               f"照舊版判(看頂端版本,比不到 prepare 記的新版紀錄);逾時看當下機器負載,機器忙時重推可能就會過{skip}", file=stream)
+     if res["wip"]:
+         print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:"
+               + _note_reread_add_cmd({n for ns in res["wip"].values() for n in ns}), file=stream)
+     print("  程式改了就要重判:對照指紋含這條分支對這篇 about_code 列的程式的改動(算不出跟遠端主線的分岔點時,改看程式在頂端的版本)"
+           "——主線帶進別人對同一支程式的改動不再算,你自己的改動(含 rebase 解衝突改到的)、筆記改名、about_code 增減照算;"
+           "改筆記不用重判。", file=stream)
+     print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」,reread-record 記下、把紀錄提交進去;"
+           "做法見 lumos-project-notes 的代碼審與推送子檔):\n    " + _note_reread_cmdline(res["diff_range"], res["push"]), file=stream)
