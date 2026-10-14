@@ -1,0 +1,2325 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md b/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md
+new file mode 100644
+index 00000000..46214691
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md
+@@ -0,0 +1,182 @@
++---
++type: project
++status: doing
++created: 2026-10-14
++updated: 2026-10-14
++tags:
++  - type/project
++  - status/doing
++  - scope/guards-gates
++related:
++  - "[[Projects/世界解重新註解2026-10_總覽_調研]]"
++  - "[[Projects/世界解重新註解2026-10_守衛閘門_調研]]"
++  - "[[Projects/enforcement可觀測性_計劃]]"
++lands_in:
++  - Systems/代理繞閘問人
++  - Systems/lumos-cli-lifecycle
++  - Systems/掛鉤存活事件
++decisions:
++  - content: 分類邏輯放在掛鉤檔內,不叫 lumos 主程式;有意偏離「掛鉤是薄殼、邏輯進 lumos」(派工鏡頭注入 r3)。考慮過:①薄殼叫 lumos 子指令判斷(每條 Bash 多一次主程式啟動,數百毫秒級);②只做預篩在殼、分類進 lumos(過預篩一週約 371 次仍要叫主程式)。代價:掛鉤檔較厚,分類函式只能在掛鉤測試裡驗
++    id: d1
++    context: 這支掛鉤每條 Bash 都會被叫,啟動成本遠大於判斷本身
++    why_chosen: impact-hook 的檔案過濾與 memory-sweep 已是厚掛鉤先例;延遲直接加在每條 Bash 上
++    decided: 2026-10-14
++    valid: true
++  - content: 主會談的繞閘偵測採逐段解析、寧可漏問,拋棄式豁免只給確定不是真 repo 的情形;不比照審查席唯讀隔離 d4 的粗擋寧可誤擋。考慮過:①照字面比對就問(一週一百多次,訓練人反射按允許);②暫存目錄一律豁免(暫存目錄裡有真工作副本對真遠端推送,r1 設計審實測)。代價:有心改寫的寫法攔不到,列在範圍
++    id: d2
++    context: 代理被擋時會順手加 --no-verify 或關掉掛鉤,Lumos 執行前不問人
++    why_chosen: d4 管審查席、動作是擋,誤擋代價小;這條管主會談、動作是問人,誤問代價是使用者失去警覺
++    decided: 2026-10-14
++    valid: true
++  - content: 拋棄式豁免只認判斷當下就存在、而且用 git 確認過的事實(目錄存在、共用 git 目錄或推送位址在暫存根底下),同一條指令裡的推論一概不認(同指令建的目錄、mktemp、同指令 remote add/set-url);指令裡出現 GIT_DIR 一族或 --git-dir、或前面動過遠端設定,就不豁免。考慮過:①逐條補推論的洞(r1、r2 兩輪各席都在推論上找到新繞法:mktemp -p、ln -s、set-url --add,同一類第二次出現);②保留同指令建目錄但限完全相同路徑(仍擋不住刪掉重建成連結)。代價:同一條指令裡建實驗 repo 再繞閘的審查席實驗改成問人,事件帳重放約一週 6 次
++    id: d3
++    context: 代碼審 r1、r2 都在拋棄式推論上找到繞法
++    why_chosen: 同類發現第二次出現就換形狀:整類推論拿掉,只剩判斷當下可核對的事實,攻擊面從無限的寫法收成封閉的幾條規則
++    decided: 2026-10-14
++    valid: true
++  - content: 修正 d3 的範圍說法:d3 拿掉的是「同一條指令裡的推論」(同指令建目錄、mktemp、同指令加遠端),不宣稱攻擊面封閉;同一條指令裡改寫判斷當下已存在的路徑(把實驗目錄刪掉或搬走換成指回真 repo 的連結、寫 .git 檔指回真 repo)屬有心改寫,在〈範圍〉承認攔不到。考慮過:①同指令出現 ln/mv/rm/cp 就不豁免(要列舉會動檔案系統的指令,列不完,又回到列舉的老路);②每個子指令執行前重新判斷(掛鉤只在整條指令執行前叫一次,做不到)。代價:要刻意構造路徑的繞法攔不到
++    id: d4
++    context: 代碼審 r3 資安席、通才席指出 d3 的否決理由對出貨版同樣成立
++    why_chosen: 掛鉤只能看到判斷當下的檔案系統;這類寫法需要兩步刻意構造,屬計劃明列不防的有心改寫
++    decided: 2026-10-14
++    valid: true
++---
++# 代理繞閘字樣問人
++
++> 白話:代理在推送被擋、使用者又在催的時候,會順手在指令上加 `--no-verify` 或用環境變數把檢查關掉,而 Lumos 目前在執行前完全不攔、不問人。這篇在 Claude Code 的「Bash 執行前」掛一道檢查:指令真的在對一個非拋棄式的 repo 做繞過(推送或提交帶 `--no-verify`、提交帶 `-n`、用 `-c core.hooksPath=` 或 `git config core.hooksPath` 改掉或拆掉掛鉤、在 git 或 lumos 前設 `LUMOS_SKIP_*`),就回「問人」,讓使用者按允許才執行。只是在引號裡或 heredoc 內容裡提到這些字樣(搜尋、說明文字),或在拋棄式實驗 repo 裡做實驗,一律放行不問;沒加引號的字面(例如 `echo git push --no-verify`)會被當成指令而問一次,這是刻意接受的誤問方向。來源是世界解總覽〈跨類優先順序〉第 7 名。
++
++PRIOR-ART: 世界解 W09 spec-gates(代理邊界的 Bash 指令遇到 `--no-verify`、`git commit -n`、`core.hooksPath`、`HUSKY=0` 就問人)與 TDD Guard 同形;Claude Code 官方的 PreToolUse 掛鉤 `permissionDecision: "ask"`。本 repo 既有的工具前掛鉤(`scripts/hooks/claude/impact-hook.py`、`dispatch-lens-hook.py`)由 `scripts/merge-claude-settings.py` 註冊、讀 stdin 事件、印 JSON、用 `_hookevent.guard` 記「活著沒」;這支照同一套註冊、讀寫與記事件方式。**有意偏離「掛鉤是薄殼、邏輯進 lumos」**(`Projects/派工鏡頭注入_計劃` r3 裁定;`impact-hook.py` 的檔案過濾與 `memory-sweep.py` 是既有的厚掛鉤先例):這支每條 Bash 都會被叫,叫一次 lumos 主程式的啟動成本遠大於判斷本身,所以分類邏輯放在掛鉤內,以 `lumos decision-add` 記進本篇 decisions。與總覽第 7 名原句的差異:只做 Claude Code(Codex 另見 REVISIT);不新增任何寫帳入口,存活事件照既有界線只記「活著沒」、不記問了幾次(`_hookevent.py` 檔頭與 `Projects/enforcement可觀測性_計劃` 明定不記成效),事後量測拿 Claude 事件帳重跑同一支分類函式;不列 `LUMOS_STOP_BLOCK_OFF` 與 `HUSKY=0`(理由見〈範圍〉)。自寫一套切段器、不重用收工圖譜同步檢查那支掛鉤裡的 `_segment_command` 加 `shlex.split`:那套不追蹤引號、heredoc、`cd` 與子殼層(作者自註「Quote-aware 不嚴格」),而且兩支掛鉤檔名帶連字號、各自獨立安裝,不能互相 import(代碼審 r2 架構對齊席要求寫明)。審查席的推送已由 `mods/claude/lumos-guard` 擋下,那支外掛依 `Projects/審查席唯讀隔離_計劃` d4 不跑外部指令、只對審查席生效,所以不放進它。對照該計劃 d3、d4(d4 取代 d3 的事後查部分,保留審查席 Bash 粗擋、不逐詞解析 git 指令、寧可誤擋):那條管審查席、動作是擋,誤擋只讓審查席少做一個實驗;這條管主會談、動作是問人,誤問的代價是把使用者訓練成反射按允許(〈量測〉照字面比對一週問一百多次),所以這裡選逐段解析、寧可漏問——兩條不衝突。這個取捨同樣以 `lumos decision-add` 記進本篇 decisions。
++RETIRE-IF: 上線滿 8 週,拿 Claude 事件帳(每條 Bash 存前 500 字、有執行才有紀錄)重跑本篇的分類函式,判「會問」而且帳上有執行紀錄(=使用者按了允許)的指令裡,人工抽看判定為正當用途的比例超過八成(問了也只是被反射性按掉),就改成只記錄不問;或 Claude Code 原生提供同等的「繞閘指令確認」,就拆掉這支、改用原生。
++
++REVISIT:2026-11-14 上線後一個月:先手動在互動會談對一條命中指令按一次拒絕,看 Claude 事件帳有沒有留紀錄(決定「有執行紀錄=按了允許」這個口徑成不成立);再用 scratchpad 一次性腳本拿事件帳近 30 天的 Bash 原文重跑 `bypass_reasons`,數判「會問」幾次、其中有執行紀錄幾次、真正繞閘幾次,寫回〈量測〉;同時對照使用者有沒有回報「在互動加略過權限模式下沒跳出提示」
++REVISIT:2026-12-14 決定要不要接 Codex 適配(Codex 的 Bash 前事件與回覆形狀不同,本篇第一版只做 Claude Code)
++
++## 量測(2026-10-14,拿 Claude 事件帳用一次性腳本量)
++
++- 範圍:`/Users/enzo/harness/lumos-toolchain/governance/runtime/events` 近 30 天(實際最早 2026-10-07)2363 個檔、27689 條 Bash 指令原文(事件帳每條只存前 500 字)。
++- 只比對字面(`--no-verify`、`git commit … -n`、`core.hooksPath`、`LUMOS_SKIP_*`、`LUMOS_STOP_BLOCK_OFF`、`HUSKY=0` 出現在指令裡):命中 175 次。抽看前 20 筆幾乎全是用 `grep` 搜尋這些字樣,或審查席在 `/tmp/lumos-seat-work/` 的拋棄式 repo 做實驗——照字面比對會一週問一百多次,把人訓練成反射按允許。
++- 照指令結構判(只看 git 的推送或提交帶 `--no-verify`、`-c core.hooksPath=` 接推送或提交、`git config core.hooksPath <值>`、`LUMOS_SKIP_*` 或 `HUSKY=0` 設在 git 推送或提交前):標記 38 次。
++- 再排除拋棄式目標(`cd` 或 `git -C` 指到 `/tmp/`、`/private/tmp/`、`/var/folders/`,或指令裡用 `mktemp`):剩 4 次,4 次都是真的在工作樹裡繞閘——一次對 Lumos 遠端推送加 `--no-verify`,三次 wip 提交加 `--no-verify`。這個排除口徑比本篇最後定的寬(r1 設計審指出暫存目錄裡也有真工作副本對真遠端推送,例如 `/tmp/lumos-readme-oct-audit` 一週 5 次一般推送),定案的豁免規則見〈做法〉。
++- 豁免規則的依據(r1 設計審後補量,同一本帳約一週 28152 條):`git config` 改 `core.hooksPath` 在暫存目錄 16 次、全是審查席新開的實驗 repo;在真目錄 7 次、全是讀值(不帶值);推送帶 `--no-verify` 在暫存目錄 5 次、多數推到同在暫存目錄的本機空遠端,在真目錄 3 次。
++- 預篩規模(r1 後照〈做法〉的定案預篩重量,同一本帳約一週 28480 條):三個字樣(`--no-veri`、`hookspath`、`lumos_skip_`,不分大小寫)279 次;另外同時有 `git`、`commit` 與含 `n` 的短旗標而沒有前三字樣的 92 次(多半是 `sed -n` 讀 `pre-commit` 檔再跑 git),合計約 371 次一週。
++- 實作後實跑(2026-10-14,同一本帳 28652 條,用掛鉤本身的 `bypass_reasons`):過預篩 375 條;判「會問」的扣掉 8 條被事件帳截成前 500 字(heredoc 結束字與引號被截掉才走字面判,實際掛鉤拿得到全文)後剩 3 條,3 條都是在真工作樹加 `--no-verify` 提交或推送,沒有誤問。全部跑完 0.6 秒,最慢單條 0.02 秒。
++- 代碼審 r1 修完後重跑(2026-10-14,同一本帳 29006 條):過預篩 387 條;判「會問」的扣掉被截斷的剩 10 條,3 條是真繞閘,另 7 條都是當年在審查席暫存實驗目錄(`/tmp/lumos-seat-work/…`、`gctl-run-*`)裡的提交或改掛鉤設定——那些目錄現在已刪,重放時判成「不存在、又不是這條指令建的」而問;實際執行當下目錄存在,掛鉤會用 git 確認是實驗 repo 而豁免。重放歷史量不到「當時目錄在不在」,第一條 REVISIT 改看上線後的真實問人事件。
++- 代碼審 r2 修完、拋棄式判定換成只認判斷當下事實後重跑(2026-10-14,同一本帳 29884 條):過預篩 408 條,未截斷的會問 16 條——3 條是真繞閘;約 6 條是同一條指令裡建實驗 repo 再加 `--no-verify` 提交或改掛鉤設定(換形狀刻意付的代價,當時會問);其餘是當年在審查席暫存實驗目錄裡的操作,目錄現在已刪、重放時查不到,實際執行當下會用 git 確認後豁免。
++- 事件帳沒有「確認框按了允許或拒絕」的欄位(`denied` 欄由事件帳外掛在工具執行層記,確認框被拒時會不會寫進來未驗),所以 RETIRE-IF 用「重跑分類函式」加「有沒有執行紀錄」兩個量得到的訊號,口徑在第一條 REVISIT 先驗。
++
++## 範圍
++
++- 只做 Claude Code 的 Bash 工具前事件;Codex 適配另見 REVISIT,安裝 Codex 時這條註冊要跳過(見〈做法〉)。
++- 只看指令文字;以下攔不到,這篇防「代理順手繞」、不防有心改寫(spec-gates 與 TDD Guard 都同樣自承):變數拼接(`F=--no-verify; git push $F`)、shell 別名與函式、自寫腳本裡藏繞過、`bash -c "…"`/`sh -c` 包起來的字串、`$(…)` 與反引號指令替換、`eval`、餵給 shell 執行的 heredoc(`bash <<EOF`、`sh <<EOF`、`ssh 主機 <<EOF` 的內文照字面看、不當指令)、xargs 組出來的指令。另外這些也攔不到、在這裡承認(代碼審 r1 通才席):直接改 `.git/config` 檔(`sed -i`、`>>` 寫入)、`git config --edit`;用 Edit、Write 等不是 Bash 的工具改 `.git/config`、`scripts/hooks/` 的閘或 `~/.claude/settings.json`(這支只掛 Bash;`scripts/hooks/` 的閘在錨點名單裡,事後 `anchor verify` 抓得到);不經 `git push` 的送出(`git send-pack`、`git commit-tree` 加 `git update-ref`、`git fast-import`);git 自己的別名(`alias.p='push --no-verify'`)。
++- 同一條指令裡改寫判斷當下已存在的路徑——把實驗目錄刪掉或搬走再換成指回真 repo 的連結、在已存在的暫存目錄裡寫 `.git` 檔或連結指回真 repo——攔不到:掛鉤只能看到判斷當下的檔案系統,這種寫法要刻意構造路徑,屬「有心改寫」(代碼審 r3 資安席、通才席;決策 d4 修正 d3 對「封閉」的說法)。
++- 刻意不攔:`merge`、`rebase`、`am`、`cherry-pick`、`pull` 帶 `--no-verify` 或 `-c core.hooksPath=` 只影響 pre-merge-commit、commit-msg、pre-rebase 這類本 repo 沒裝的掛鉤,不影響 Lumos 的提交前閘與推送前閘(`scripts/hooks/` 只有提交前、推送前、提交後三支);`LUMOS_SKIP_*` 只有推送前閘與 lumos 指令在讀,接在 merge、cherry-pick 等前面不關任何閘。安裝時這支也會被複製到 Codex 的掛鉤目錄(兩邊共用同一份複製名單),但 Codex 不註冊它、不會被執行。
++- `LUMOS_STOP_BLOCK_OFF` 不列:它關的是 Claude Code 自己的收工掛鉤,在 Bash 指令裡 export 只影響那條指令的子程序,關不到掛鉤。
++- `HUSKY=0` 不列:它是 W09 針對 husky 的通用字樣,Lumos 的推送前閘與提交前閘走 `core.hooksPath` 指向的 `scripts/hooks/`,`HUSKY=0` 關不到;本 repo 不用 husky,列了只會在消費專案對無關的閘問人。
++- 無人值守的執行(`claude -p`、每天的自主迭代迴圈)遇到命中時沒有人能按允許,指令不會執行、代理收到理由——這正是要的效果(無人看顧時不該繞閘),不另開例外。
++
++## 做法
++
++- 新增 `scripts/hooks/claude/bypass-ask-hook.py`。
++- **讀輸入與預篩(在 `_hookevent.guard` 之外)**:
++  - 從 stdin 讀一次原始文字(位元組以 UTF-8 解碼、錯字元替換),之後傳給 `main`,不再讀第二次;進入點是 `entry(stdin 位元組)`,進場就開始算逾時預算。
++  - 預篩看解碼後的指令本身(先解析 JSON 取 `tool_input.command`;解析不了才看原始文字,讓壞事件照樣進記失敗的路):換行與 Tab 在原始 JSON 裡是 `\n`、`\t`,直接看原文會把頂在續行開頭的 `-n` 擋掉(代碼審 r1)。先拿掉引號與反斜線(`--no-ver''ify`、`-"n"` 這種拆字也認得),再不分大小寫找 `--no-veri`、`hookspath`、`lumos_skip_` 任一個;或同時有 `git`、`commit` 與一個以單一 `-` 開頭、含 `n` 的短旗標。都沒有就直接結束:不輸出、**不記任何事件、不跑任何子程序**。絕大多數 Bash 呼叫走這條。
++  - 預篩自己包一層 try/except,任何例外都直接結束、不輸出(放行;這一層不記事件,因為記事件要先跑 git 子程序)。這個入口形狀跟鄰居掛鉤不同(鄰居在 `main` 裡讀 stdin),原因就是預篩要在 `guard` 之外,程式註解寫明。
++  - 理由:`guard` 每次都會跑一次 `git rev-parse` 並寫一筆存活事件,存活事件檔滿 512KB 會修剪成最後 2000 行、而且總大小在上限一半以內;每條 Bash 都記會一天灌數千筆,把其他掛鉤的存活紀錄擠出去,讓 `lumos enforcement` 對它們判過期。
++- **過了預篩**才進 `guard("pretooluse-bypass-ask-hook", __file__, main, swallow=True)`:
++  - 事件名跟 `enforcement_status` 的列名同字串,鄰居都這樣(`_hook_recent_ok` 拿列名比對事件的 hook 欄)。
++  - `swallow=True` 讓任何例外都放行(這道是問人層,不是安全邊界),例外由 `guard` 記成 error。`main` 內部若自己吞了例外,要 `mark("error", …)`,不能記成 ok。
++  - 存活事件不加任何「問了」的備註(只記活著沒,見 PRIOR-ART)。
++- **逾時預算**:照抄鄰居掛鉤從 `_BUDGET_RATIO` 到 `return max(_BUDGET_FLOOR,…)` 的逐字複本(有測試要求各份一模一樣),吃安裝時附的 `--budget 5`;下面查遠端、查工作樹的 git 子程序用 `_inner_budget()` 當逾時,逾時或失敗當「判不出」處理。一次判斷最多跑 4 個 git 子程序(`MAX_GIT_CALLS`),同樣的查詢只跑一次;跑滿之後一律當「查不到」(=不豁免、照問)。任何一次逾時或起不來,這次判斷就不再跑 git(git 卡住時連續等滿會把整支推過 5 秒,代碼審 r2 實測 6.5 秒);預算從進場就開始算。只用共用的 `_inner_budget`,不另寫一套預算算法(代碼審 r3 架構對齊席)。沒有上限時,幾百段都要查 git 的指令會超過 5 秒外層預算、被砍掉而放行(代碼審 r1 實測 262 段約 7 秒)。
++- **長度上限**:指令超過 2 萬字就不做結構分類,直接走下面的「字面判」。2 萬字內各種最壞形狀(深層 `$(`、大量引號、未閉合 heredoc、ANSI 引號、反斜線、大量 cd 與 mkdir)實測都在 0.11 秒、1MB 內(2026-10-14)。
++- **一趟前處理**(在切段之前,自己逐字掃、追蹤引號狀態;`$(` 裡重開一層引號狀態——訊息用 `"$(cat <<'EOF' … don't … EOF)"` 寫時,內文的撇號不能算進外層,代碼審 r1):
++  - 註解:只有引號外、詞首的 `#`(前一個字是空白、換行或 `;&|()`)才把到行尾當註解拿掉;`fix#1` 這種詞中間的 `#` 是普通字(bash 同),切詞器自己的註解處理關掉。
++  - 引號遮罩:引號裡的 `();|&<>`、換行、`#`、反引號先換成私用區字元,切完詞再還原——引號裡的括號、分號不會被當成分段;切詞當下就標好哪些詞是分隔符。
++  - ANSI 引號 `$'…'` 解出內容(`\n`、`\'`、`\xHH`、`\uHHHH`、`\UHHHHHHHH`、八進位 `\NNN`、`\cX`)後當成引號裡的字(`git commit -$'n'` 就是 `-n`);`$"…"`(語系翻譯字串)照雙引號看;被反斜線跳脫的字元一律當普通字遮罩(跳脫的反引號、分號都不是結構)。
++  - 續行:引號外與雙引號裡的「反斜線加換行」照 bash 直接拿掉、前後接起來(`--no-\⏎verify` 就是 `--no-verify`),在這一趟裡做——另開一趟只追引號的話,註解或 heredoc 裡的撇號會讓它判錯(代碼審 r2)。
++  - 導向前的檔案代號(`2>` 的 2、`{fd}>` 的 {fd})在前處理就標記,切詞後連同導向剔除——不靠「是不是數字」猜(`git commit -m 1 >x -n` 的 1 是 `-m` 的值,代碼審 r3 正確性席);`)>`、`;>` 這種黏在一起的標點拆成分隔與導向。
++  - 預篩用同一套前處理(接續行、解 ANSI 引號)後的文字再比字樣,分類器認得的寫法不會在入口就被放行(代碼審 r3 邊界輸入席、規格符合席)。
++  - 分隔符與導向在切詞當下看原始字元認定(`_Sep`、`_Redir`),所以指令本身就含私用區字元也只會還原成普通字,不會變成結構。
++  - heredoc:
++  - 只認不在引號裡的 `<<WORD`、`<<-WORD`、`<<'WORD'`、`<<"WORD"`;`<<<`(here-string)與 `$((…<<…))` 算式不算。
++  - 同一行有多個 heredoc,依出現順序在下一個換行之後逐一配對內文。
++  - 結束字必須獨佔一行;`<<-` 允許前置 Tab。
++  - 找不到結束字就不剝(內文留著當指令看,寧可多問),而且之後不再找(避免每個換行都重掃到尾、變成平方時間)。
++  - 剝掉的是內文與結束字那一行,heredoc 運算子本身留著。
++- **切詞與切段**:
++  - 續行已在前處理接好。
++  - 指令替換 `$(…)`、`$((…))`、反引號換成判不出的佔位詞:括號配對一次掃完(線性時間;代碼審 r2 量到逐個找配對在大量沒配對的 `$(` 下要 3 秒),找不到配對的保留原樣,相鄰的替換併成一個佔位詞。
++  - 用 `shlex`(posix、`punctuation_chars`、`whitespace_split=True`、關掉註解),並把換行從空白字元裡拿掉、改當標點,讓換行成為分隔(引號裡的換行已遮罩,留在詞裡)。
++  - 由標點字元組成的詞(`;`、`&&`、`||`、`|`、`&`、`);`、`(`、`)` 等)一律當分段界線;括號另用來追蹤子殼層範圍。
++- **找 git 指令**:不看「段首程式名」,而是段裡任何一個詞的檔名部分等於 `git`(引號裡的整串不會是單獨的 `git` 詞),就從那裡開始解析一條 git 指令到段尾。所以 `env`、`timeout 60`、`time`、`nohup`、`command`、`then`、`do`、`!`、`{` 這類前綴不必列舉。
++  - 全域選項:子指令之前所有以 `-` 開頭的詞都跳過;`-c`、`-C`、`--git-dir`、`--work-tree`、`--namespace`、`--super-prefix`、`--config-env` 分開寫時再多吃一個詞;黏著的 `--git-dir=X` 不多吃。記下 `-C` 的目錄(可多次,後者相對前者)、`-c` 與 `--config-env` 的鍵,以及有沒有 `--git-dir`、`--work-tree`。
++  - 判長選項 `--no-verify`:詞以 `--no-veri` 開頭、而且是 `--no-verify` 的前綴(git 接受長選項的唯一縮寫)。
++- **命中規則**(都在「非拋棄式」時才算,拋棄式見下一條):
++  - 子指令是 commit 或 push,後面有 `--no-verify`(含縮寫)→ 理由代號 `no-verify`。Lumos 的閘只有提交前與推送前兩道;`merge`、`rebase`、`am`、`cherry-pick`、`pull` 跳過的是本 repo 沒裝的掛鉤,不問(代碼審 r2 合約圖譜席指出〈範圍〉與命中規則對 merge 互相矛盾,收成這一句)。
++  - 子指令是 commit,短旗標組逐字看,遇到吃值的旗標(`-m -F -C -c -t`,值可黏著也可在下一個詞;`-S -u` 的值只會黏著)就停,停之前出現 `n` → `commit-n`。`-n`、`-qn`、`-m x -n` 命中;`-mnote`、`-m -n`(`-n` 是訊息)、`-F -n` 不命中。
++  - 全域 `-c core.hooksPath=…` 或 `--config-env core.hooksPath=…`(鍵不分大小寫),或同段在 git 之前設了 `GIT_CONFIG_KEY_<n>=core.hooksPath`、`GIT_CONFIG_PARAMETERS` 帶 `core.hooksPath`(含先前 export 的),而且子指令是 commit 或 push → `c-hookspath`(這幾種是 git 原生的同義寫法,代碼審 r1)。
++  - 子指令是 `config`,詞裡有 `core.hooksPath`(不分大小寫),而且是寫入:帶值(含空字串值)、或帶 `--unset`/`--unset-all`/`--replace-all`/`--add` → `config-hookspath`。新語法 `git config set core.hooksPath …`、`git config unset core.hooksPath`,以及 `--remove-section core`、`--rename-section core …`(整段 core 拆掉或改名,hooksPath 跟著沒了)同樣命中。導向(`>`、`2>&1`、`&>`、`<` 連同目標檔與前面的檔案代號數字)在解析參數前先剔除——切詞當下就認定哪些詞是導向,引號裡的 `>` 不算(代碼審 r2:推送的導向目標曾被當成遠端、讀值加 `2>/dev/null` 曾被當成寫入)。`--get`、`--get-all`、`--list`、只給鍵不給值(讀)不命中。commit 的長選項 `--message`、`--file` 等會吃下一個詞當值,`--` 之後不再看旗標。
++  - `LUMOS_SKIP_*=`(含 `+=`)以「指令前綴」身分出現——段首的賦值,或 `env` 後面的賦值——而且這一段的 git commit/push 或 lumos 指令在它後面 → `lumos-skip`。當成一般參數出現的不算(`grep -n "LUMOS_SKIP_X=1" scripts/lumos` 是搜尋,代碼審 r2 通才席)。lumos 指令跟 git 一樣在段裡任何位置都認(`timeout`、`sudo`、`env -i …` 等前綴不必列舉):段裡有檔名為 `lumos` 的詞(lumos 本身,或 `python3 scripts/lumos`、`bash scripts/lumos` 的腳本參數都是這個詞)。`LUMOS_SKIP_*` 有幾個是 lumos 自己的閘在讀(修正關卡、筆記內容審、新增告警等),直接跑 lumos 指令時設它一樣會關掉閘。
++  - `export LUMOS_SKIP_*=`、先賦值再 `export 名稱`、`declare -x`/`typeset -x` 之後,同一條指令後面有上一條所說的 git 或 lumos 指令 → `lumos-skip`;`export -n`(取消匯出)不算。
++- **拋棄式判定**(只決定命中算不算,不決定命中與否;★只認判斷當下就存在、而且用 git 確認過的事實★,同一條指令裡的推論一概不認——代碼審 r1、r2 兩輪都在「同指令建的目錄」「mktemp」「同指令加的遠端」這類推論上找到繞法(`mktemp -p 真repo`、在建好的目錄底下 `ln -s` 回真 repo、`remote set-url --add` 追加真遠端),換形狀見 d3):
++  - 先定每段的「生效目錄」:有 `git -C` 就以它為準(多個依序相對解析);否則用目前追蹤到的 `cd` 目錄;一個都沒有就用事件的 `cwd`。
++  - 設過 `GIT_DIR`、`GIT_WORK_TREE`、`GIT_COMMON_DIR`(段首賦值、`env`、`export`、`declare -x`、先賦值再 `export 名稱` 都算;一般詞只認 `名稱=` 的賦值形式,`grep GIT_DIR` 不算),或任何 git 帶 `--git-dir`、`--work-tree`,在那之後的命中一律不給豁免——commit、config、push 都一樣(動的不一定是生效目錄那個 repo)。
++  - 路徑不做純文字化簡:`連結/..` 在 `git -C` 與作業系統是先進連結再往上一層,文字化簡會走到別處(代碼審 r3 資安席);存在與否、在不在暫存根底下,一律對實際路徑(`realpath`)判。
++  - 換行跟 `;` 一樣是結束 `&&` 鏈的分隔。`cd` 追蹤:依序處理,後一個覆蓋前一個;相對路徑接在目前的追蹤目錄之後;括號子殼層裡的 `cd` 在右括號後恢復原值;管線(`|`、`|&`)兩側與背景 `&` 的段落在子殼層跑,裡面的 `cd` 不影響後面;接在 `&&` 或 `||` 後面的條件式 `cd`,只有後面緊接 `&&` 時在那條 `&&` 鏈裡算數,鏈一斷就變「判不出」;`cd` 不帶參數、`cd ~…`、`cd -`、`pushd`/`popd`、目標含指令替換、反引號或展開不了的變數 → 目前目錄變成「判不出」。
++  - 變數展開只認同一條指令裡先出現的 `VAR=值`,展開後超過 4096 字就判不出(`A=$A$A` 連續翻倍會指數膨脹,代碼審 r3 實測 250 字的指令吃掉 14GB);指令替換(含 `$(mktemp …)`)一律判不出。
++  - 條件式與子殼層的 `cd` 一律保守:`||` 左右兩側的 `cd`、`if`/`while`/`until`/`!` 條件裡的 `cd` 都變成判不出;大括號群組放在管線或背景裡時(`{ cd X; } | cat`),群組裡的 `cd` 不影響後面。
++  - 生效目錄判不出,或事件的 `cwd` 缺欄、不是字串 → 非拋棄式。
++  - 暫存根由 `_temp_roots()` 給出:`/tmp`、`/private/tmp`、`/var/tmp`、`/private/var/tmp`、`/var/folders`、`/private/var/folders`(與 `mods/claude/lumos-guard` 的暫存根取聯集),加上 `tempfile.gettempdir()`(一律加,與 `scripts/lumos` 判暫存目錄的做法一致);比對前兩邊都 `os.path.realpath`(會解開 `..` 與符號連結,所以指回真 repo 的連結不算)。
++  - commit、只寫 repo 本身的 `config`:生效目錄要在判斷當下**已存在**、在暫存根底下,跑 `git -C 目錄 rev-parse --git-common-dir` 得到的共用 git 目錄也在暫存根底下(暫存目錄可能是真 repo 的工作樹),而且沒有任何網路遠端(`remote.*.url`、`remote.*.pushurl` 都是明確的本機路徑;暫存目錄裡的真工作副本不算實驗 repo,代碼審 r3 通才席)才算拋棄式;git 失敗時只有錯誤訊息明說「不是 git repository」才算(不在任何 repo 裡,之後建的只會是新的),其他失敗(擁有者不同被拒、逾時、git 跑不起來)都不算。
++  - `config` 帶 `--global`、`--system`、`--file`/`-f`、`--blob` 時寫的不是生效目錄那個 repo(使用者層設定會關掉所有 repo 的閘)→ 不給豁免。
++  - push:推送目標是明確的本機路徑(`/`、`./`、`../`、`file://` 開頭)而且判斷當下存在、落在暫存根底下 → 拋棄式;是遠端名稱時,生效目錄要已存在且在暫存根底下,跑 `git -C 目錄 remote get-url --push 名稱` 查到的**推送**位址是明確的本機路徑而且存在、落在暫存根底下才算(`host:path` 這種沒有斜線開頭的一律當網路位址)。同一條指令前面動過遠端設定(`git remote` 的寫入子指令、`git config` 寫入 `remote.*`、`url.*` 的鍵——讀值不算),或這次推送本身用 `-c remote.*`/`-c url.*`、`GIT_CONFIG_KEY_n=remote.*`/`url.*`(含先前 export 的)改了位址時不給豁免——判斷當下查到的是改之前的位址。推送帶 `--repo` 時目的地是 `--repo` 的值,位置參數只是 refspec。沒寫遠端、查不到都不算。
++  - 其他命中類型(`lumos-skip` 接 lumos 指令)不給拋棄式豁免,一律照問:lumos 指令讀的是 lumos 自己的閘,不看所在目錄。
++  - 代價(2026-10-14 事件帳重放):一週約 6 次「同一條指令裡建實驗 repo 再加 `--no-verify` 提交或改掛鉤設定」從放行變成問人(審查席做實驗時),一天不到 1 次;換來的是這一整類推論繞法消失。
++- **字面判**(切不動、或超過長度上限):`shlex` 失敗(引號不成對等)或指令超過 2 萬字時,含 `git` 或 `lumos`,而且有 `--no-veri`、`hookspath`、`lumos_skip_` 任一個、或有 `commit` 加含 `n` 的短旗標,就算命中(理由代號 `literal`),其他放行。
++- **命中**:印 `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "<三段式>"}}`。三段式:發生什麼(這條指令會跳過 Lumos 的閘:<命中理由的固定說明>)、為什麼在意(閘被跳過就沒人檢查這次推送或提交,代理順手繞過是已知模式)、怎麼做(確定要跳過就按允許;不確定就拒絕,讓代理改成修好被擋的原因)。理由只用理由代號對應的固定文字,不嵌入指令內容。
++- 決策邏輯放在 `decide(event) -> dict | None`(回要印的 JSON 物件或 None),分類放在 `bypass_reasons(command, cwd) -> list`;`main` 只負責解析已讀的文字、叫 `decide`、印出——測試直接呼叫這兩支。
++- `scripts/merge-claude-settings.py`:
++  - PreToolUse 加一條 `matcher: "Bash"` 指向這支;`HOOK_BUDGET` 加 `"bypass-ask-hook.py": 5`(實際應在幾十毫秒內)。
++  - `_codex_entries` 遇到 `matcher: "Bash"` 的 PreToolUse 一律跳過、不寫進 Codex 註冊表:Codex 的 Bash 前事件回覆形狀不同,原樣寫過去會讓 Codex 收到它看不懂的 ask。
++- `scripts/lumos`:
++  - `_GLOBAL_CLAUDE_HOOKS` 加 `bypass-ask-hook.py`:沒加的話安裝不會把檔複製到 `~/.claude/hooks/`,`_prune_dangling` 還會把註冊當懸空剪掉——測試照綠、實際整支不生效。`_own_hook_scripts` 由它推出,不必另改。
++  - `enforcement_status` 的 Claude 掛鉤列舉加 `("pretooluse-bypass-ask-hook", "bypass-ask-hook.py")`;釘住列數的測試(原為 24 列)已同步改成 25。Codex 側不加列(本篇不註冊 Codex)。七天內沒過預篩、沒成功跑過時,這列照既有規則顯示過期(stale)或事件檔不存在時不確定(unknown),兩者都不算進分母,不會假紅。
++  - `_VENDORED_TREE_FILES` 與 `ANCHOR_FILES` 加 `scripts/hooks/claude/bypass-ask-hook.py`,並 `lumos anchor approve` 把新檔簽進 `governance/anchor-baseline.json`(兩份名單有測試要求鍵集合相等)。
++- 新 Systems 節點 `Systems/代理繞閘問人` 管這支掛鉤檔(每支檔有家,與 `Systems/改檔前推播`、`Systems/記憶過期清掃` 一支掛鉤一篇的慣例同);`scripts/lumos` 與 `merge-claude-settings.py` 的改動寫進 [[Systems/lumos-cli-lifecycle]]。
++- 實測(2026-10-14,**非互動模式**):`claude -p --dangerously-skip-permissions` 加一支回 ask 的測試掛鉤,`echo` 指令沒有執行,模型收到說明後表示要等使用者核准——非互動的略過權限模式不會跳過掛鉤的問人。互動加略過權限模式會不會真的跳出確認框,官方文件沒寫,由下面人工條款驗。
++
++## 驗收條款
++
++- [S1] 當指令在非拋棄式目錄對 git 做 push 或 commit 並帶 `--no-verify` 或其唯一縮寫、commit 帶含 `n` 的短旗標組、用 `-c core.hooksPath=`/`--config-env`/`GIT_CONFIG_*` 改掛鉤目錄接 commit 或 push、用 `git config` 寫入或拆掉 `core.hooksPath`(含 `--unset`、`--unset-all`、`--replace-all`、`--add`、空值、`set`/`unset` 新語法、`--remove-section core`、`--rename-section core`)、以指令前綴在 git commit/push 或 lumos 指令前設 `LUMOS_SKIP_*=`(含 `export`、`declare -x`、`env`、先賦值再 `export 名稱`、`+=`),或上述指令前面有 `env`/`timeout`/`sudo`/`command`/`then`/`!`/括號這類前綴、跨行與續行寫(含續行切開長選項、註解或 heredoc 有撇號之後的續行)、詞中間有 `#`、訊息用 `$(cat <<'EOF' …)` 且內文有撇號、引號裡有括號分號管線符或 `>`/`<`、`$'…'`(含八進位、`\u`)之後或包住旗標、`$"…"`、跳脫的反引號夾著指令、輸出導向暫存檔、數字參數後面接導向、`{fd}>`、`sudo git`、`! git`、`--repo` 指到網路、指令裡已有私用區字元、變數連續翻倍時,掛鉤 應 回 `permissionDecision: "ask"` 並附三段式理由 [test:t_bypass_ask_flags_real_bypass]
++- [S2] 當指令只是字面提到這些字樣(`grep`/`rg`/`echo`/`sed` 的參數、引號裡的說明文字含提交訊息、heredoc 內容含多個 heredoc 與 `<<-`)、commit 的吃值旗標帶含 `n` 的值、不是 `--no-verify` 前綴的長選項、`git config` 讀值(含 `--get`/`--get-all`/`--list`/只給鍵,以及加了 `2>/dev/null`、`> 檔` 的讀值)、`HUSKY=0 git commit`、`LUMOS_SKIP_*` 設在 git 與 lumos 以外的程式前或當成一般參數出現、`merge`/`rebase`/`cherry-pick` 帶 `--no-verify` 或 `-c core.hooksPath=`、`grep GIT_DIR` 這種沒賦值的 `GIT_DIR` 字樣、詞首的 `#` 註解(含註解裡有撇號)時,掛鉤 應 不輸出、放行 [test:t_bypass_ask_ignores_mentions]
++- [S3] 當 commit 或改掛鉤設定的生效目錄在判斷當下已存在、在暫存根底下、共用 git 目錄也在暫存根底下(或 git 明說不在任何 repo 裡),或 push 的目標(路徑參數或用 `get-url --push` 查到的位址)是明確的本機路徑、判斷當下存在且在暫存根底下時,掛鉤 應 放行(暫存根以 `_temp_roots()` 為準,不替換時預設暫存目錄底下的實驗 repo 也放行);當目錄只在同一條指令裡才建(`mkdir`、`git init`、`$(mktemp …)`、同指令 `remote add` 的遠端)、`mktemp -p` 指到真 repo、在那之前設過 `GIT_DIR` 一族(含 `GIT_COMMON_DIR`)或用了 `--git-dir`/`--work-tree`(推送也算)、經符號連結的 `..` 繞出暫存根、暫存目錄是有網路遠端的工作副本、`-c remote.*`/`-c url.*`/`GIT_CONFIG_KEY_n=remote.*` 改了推送位址、`--repo` 指到網路、`||` 兩側或 `if !` 條件裡的 `cd`、`&&` 鏈接換行之後、大括號群組在管線或背景裡、`(cd X)>/dev/null`、事件 cwd 不是字串、`cd` 到暫存目錄後又 `git -C` 指回真目錄、子殼層或管線或背景裡的 `cd`、接在 `||` 或 `&&` 後面而沒緊接 `&&` 的條件式 `cd`、`cd -`/`cd ~`/`pushd`、路徑以 `..` 繞出暫存根、暫存目錄裡用符號連結指回真 repo、暫存目錄是真 repo 的工作樹、`config --global`/`--system`/`--file`、git 查不到 repo 而原因不是「不是 repo」、推到非暫存遠端或 `host:path` 位址或沒寫遠端、同指令前面動過遠端設定、或暫存目錄裡帶 `LUMOS_SKIP_*` 跑 lumos 指令時,掛鉤 應 照樣問人 [test:t_bypass_ask_throwaway_targets]
++- [S4] 當指令引號不成對或超過 2 萬字時(切不動),含 `git` 或 `lumos`,而且有 `--no-veri`、`hookspath`、`lumos_skip_` 任一個或有 `commit` 加含 `n` 的短旗標 應 問人,其他 應 放行;掛鉤內部丟例外時 應 放行並記一筆 error 事件;預篩階段丟例外、輸入不是 UTF-8、`command` 不是字串時 應 放行、不印 traceback;沒過預篩的指令 應 不寫任何存活事件;過了預篩的事件名 應 是 `pretooluse-bypass-ask-hook`;10 萬字單詞,以及 2 萬字內的大量分段、大量未閉合 `<<EOF`、大量指令替換、大量含換行的 heredoc、每行一個未閉合 heredoc、大量沒配對的 `$(` 與 `$((`、大量相鄰反引號 應 各在 0.5 秒內判完;幾百段都要查 git 的指令 應 在 1 秒內判完且照問;git 卡住時整支 應 在 5 秒外層預算內結束且照問;續行後頂在行首或 Tab 後的 `-n`、引號或反斜線拆開的 `--no-verify` 與 `-n`、`$'…'` 包住的旗標、續行切開的 `--no-verify` 與 `core.hooksPath` 應 過預篩照問;目錄唯讀修剪失敗 應 印提示、不需要修剪時 應 也清掉舊殘檔;帶 `--budget 5` 參數執行 應 正常運作 [test:t_bypass_ask_fallbacks_and_budget]
++- [S5] 當執行 `merge-claude-settings.py` 時,PreToolUse 應 有一條 `matcher: "Bash"` 指向 `bypass-ask-hook.py`,逾時 應 是 5 秒;以 Codex 為目標安裝時 應 沒有任何指向 `bypass-ask-hook.py` 的註冊;`_GLOBAL_CLAUDE_HOOKS` 應 含這支、`enforcement_status` 應 有 `pretooluse-bypass-ask-hook` 一列 [test:t_bypass_ask_registered]
++- [S6] 當使用者在互動加略過權限模式的會談裡遇到第一次命中時,Claude Code 應 跳出確認框讓使用者按允許或拒絕 [manual:使用者第一次遇到時回報有沒有跳出確認框;沒跳就改成回 deny,理由寫明要代理在對話裡問人,使用者確定要跳過時自己在提示列用驚嘆號前綴執行那條指令(那是使用者自己的 shell,不經工具前掛鉤),改 deny 前先重讀 RETIRE-IF]
++
++## 回退
++
++- 要整支撤掉:同時做三件事(另把 `_VENDORED_TREE_FILES`、`ANCHOR_FILES` 的那一行與 `t_bypass_ask_*` 測試一併拿掉、`lumos anchor approve` 重簽)——拿掉 `merge-claude-settings.py` 那條 Bash matcher、把檔名從 `scripts/lumos` 的 `_GLOBAL_CLAUDE_HOOKS` 移到 `_RETIRED_STUB_CLAUDE_HOOKS`(相容期換成空殼,下一版再移到 `_RETIRED_CLAUDE_HOOKS` 真刪)、從 `enforcement_status` 列舉拿掉那一列,再重跑安裝。只拿掉 matcher 不夠:合併器只新增、不移除已寫進 settings.json 的條目,檔案還在就不算懸空、不會被剪,每次命中仍會問(代碼審 r1 合約圖譜席實測)。中間狀態(代碼審 r2 合約圖譜席隔離 HOME 實測):移到空殼名單那一版重跑安裝後,掛鉤檔換成直接放行的空殼、不再問,但 settings.json 裡的註冊還在;要到下一版移到真刪名單,檔案刪掉、註冊變懸空,才被 `_prune_dangling` 剪掉。
++- 誤問太多:先調分類函式(加拋棄式目錄、收窄命中形狀),不必整條拿掉。
++- 不可逆的部分:無。掛鉤只回「問人」、不改指令、不寫治理帳(只在過了預篩時寫 `_hookevent` 的存活事件)。
++
++## 實務隱患
++
++- 每條 Bash 指令都多一次 Python 啟動(約幾十毫秒):過去「每次 Bash 都觸發」的掛鉤被撤,是因為每次付高成本且核心邏輯跑不到;這支預篩在掛鉤內、`guard` 之外完成,不叫主程式、不跑 git 子程序,命中預篩才做結構分類與記事件。
++- 存活事件檔共用:只有過了預篩才寫,量到一週約 371 次,修剪後保留最多 2000 行、總大小在上限一半以內,不會擠掉其他掛鉤的紀錄。
++- 逾時與壞掉都放行:Claude Code 對逾時的掛鉤照常放行工具呼叫,逾時時 Python 被砍、`guard` 寫不出事件,所以逾時不留痕;預篩階段的例外放行且不記事件(記事件要先跑 git);過了預篩之後丟例外會記 error,在 `lumos gov --stats` 的掛鉤段看得到(`lumos enforcement` 那張表只認成功事件)。不採用官方的「失敗即擋」選項:掛鉤自己壞掉會讓每條 Bash 都卡住,跟「問人層不是安全邊界」相反。長度上限與三種最壞形狀的計時測試讓逾時不容易發生。
++- 誤問:暫存目錄的豁免只給「確定不是真 repo」的情形,其餘照問;推送與真工作樹的設定改動照問。新的寫法可能誤問或漏問,RETIRE-IF 與第一條 REVISIT 盯著。
++- 子程序:只有在命中而且生效目錄落在暫存根底下時才跑 git(查共用目錄或遠端位址),用內部預算當逾時,失敗當「非拋棄式」。
++- 問人只擋「順手繞」:有心改寫攔不到(見〈範圍〉)。
++- 已排除:正式環境不可逆:掛鉤只回「問人」、不改指令也不寫治理帳,拿掉註冊即完全還原(見〈回退〉)
++- 已排除:金流:不碰任何金流或扣款相關程式
++- 已排除:對外送出:只讀本機 Bash 事件,不送任何東西到外部服務
++- 自我治理:這是守衛本身;掛鉤壞掉時放行(問人層不是安全邊界),過了預篩之後丟例外會記 error 事件。
++- 刻意接受的誤問:沒加引號的字面(`echo git push --no-verify`)、把 `core.hooksPath` 重設回 Lumos 自己的掛鉤目錄(安裝由 lumos 程式設定,不經 Bash,代理手動重設很少見)——兩者都只是多問一次。
++
++## 審計修正紀錄
++
++- r1(2026-10-14,通才、邊界、資安、架構對齊四席,sonnet):33 條,blocking 18 條,全部折入;實作期用事件帳實跑另補兩條放寬(同指令 `git remote add` 的本機遠端、mktemp 變數的子路徑),都在代碼審範圍內(鏡像核對另補:條款涵蓋對齊〈做法〉、mktemp 與 push 的關係、其他命中類型不豁免、預篩加 `git` 並重量為 371 次、兩項刻意接受的誤問寫明、兩條 decision-add):切段改成「任何不在引號裡的 git 詞開始一條 git 指令」、拋棄式判定定義生效目錄並以 git 子程序確認不是真 repo、補拆閘形狀、事件名對齊列名、存活事件不記問人、補逾時預算複本與錨點簽名、heredoc 與預篩邊界、長度上限。卷證在 `governance/review-reports/代理繞閘字樣問人/`。
++- code r1(2026-10-14,八席:正確性、併發資源、邊界輸入、合約圖譜、通才、架構對齊、資安、規格符合,sonnet):30 條(去掉一句被搬成 severity 行的總結句),blocking 9 條,全部折入;依根因九組:前處理(詞首才算註解、`$(` 重開引號層、引號遮罩、ANSI 引號)、生效目錄(--git-dir/GIT_DIR、config 全域層、mktemp `..`、同指令建過才算、背景 cd、set-url、推送位址)、環境變數與 lumos(段裡任何位置、export 名稱、declare -x、--config-env、GIT_CONFIG_*)、預篩先解 JSON、git 子程序上限與快取、heredoc 找不到就停、存活事件修剪暫存檔獨立名字、回退步驟改寫、〈範圍〉承認的攔不到寫法;改壞檢查 22 種全翻紅。卷證在 `governance/review-reports/code-代理繞閘字樣問人/`。
++- code r2(2026-10-14,九席:程式組正確性、併發資源、邊界輸入、通才、架構對齊、資安,文件註冊組合約圖譜、資安-文件、規格符合,sonnet;材料 1927 行拆兩組):39 條,blocking 7 條,全部折入;其中 7 條有證據是 r1 修補造成的回歸(同指令 set-url、平方時間、修剪殘檔、grep 誤問、跳脫反引號)。拋棄式推論第二次被找到繞法,換形狀成「只認判斷當下的事實」(d3),其餘見卷證 `r2-intake.md`。
++- code r3(2026-10-14,九席同 r2 編制,材料 2105 行拆三組):32 條,blocking 9 條,全部折入(人裁破例第四輪,見 `governance/review-reports/code-代理繞閘字樣問人/`):預篩與分類器同一套前處理、`..` 不做文字化簡、變數展開上限、條件式與大括號群組的 `cd`、`-c remote.*`/`GIT_CONFIG_*`/`--repo` 改推送位址、檔案代號在前處理標記(修掉 r2 的數字參數回歸)、預算只用共用的 `_inner_budget`、實驗 repo 另要求沒有網路遠端;同指令改寫既有路徑承認為有心改寫(d4)。
++- 實作期(2026-10-14):分類器照專案的複雜度規則拆成單一職責的小函式(引號追蹤共用一個小類別、逐段走訪改成一個類別),新增告警只剩逐字複製的逾時預算段裡那個減號(鄰居各份同字,測試要求逐字一致)。改壞檢查:故意改壞 18 種(暫存判定、heredoc、工作樹、換行分隔、預篩、事件名、吞例外、推送目標、吃值旗標、子殼層、config 讀寫、段首程式名、同指令遠端、mktemp 子路徑、rebase 豁免、找不到結束字等),17 種有測試翻紅;沒翻紅的是「預篩階段的 try 不吞例外」——預篩讀的是已經以替換方式解碼的文字,正常輸入造不出例外,這層只防 stdin 讀不到這類環境故障,刻意不釘。改壞腳本與結果留在代碼審卷證。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index 8030b6ed..4b583862 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -7,20 +7,21 @@ self_audit: sonnet/2026-08-21
+ about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
+ responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
+ tags:
+   - type/system
+   - status/done
+   - risk/不可逆
+   - scope/platform
+ summary: |-
+   WHY:update --dry-run 用目前的工具來源預覽、不拉來源、不寫任何檔,結尾教人帶 --source 與 --no-pull 套用同一份 [出處:[[Projects/update預覽規範檔變更_計劃]]] [因:rtb 規定規範檔改動要先經使用者同意;預覽若先拉來源,會跑拉之前載入的舊程式算、且換掉全機共用工具] [不選:預覽時拉來源再算;每次 update 停下來問] [test:t_update_dry_run_writes_nothing]
+   WHY:紀律範本〈寫筆記時〉改成格子寫法(前綴、核心一句、[鍵:值]),只放表與一個例子,細節搬進 skill 的 reference.md〈格子的細節〉 [出處:2026-10-01 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 0 步] [因:範本每回合注入每個專案,已超過瘦身提醒門檻,細節放範本只會再長] [test:t_slots_single_table]
++  WHY:Bash 工具前的繞閘問人掛鉤只註冊給 Claude,轉 Codex 註冊表時跳過 matcher 為 Bash 的那條;掛鉤檔進安裝名單、防護狀態列、工具自裝檔與錨點名單 [出處:[[Projects/代理繞閘字樣問人_計劃]]] [因:Codex 的 Bash 前事件回覆形狀不同,原樣寫過去會收到看不懂的 ask;漏進安裝名單的話檔不會被複製、註冊會被當懸空剪掉] [不選:Codex 也照註冊] [test:t_bypass_ask_registered]
+   KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vault 的來源-repo 分支照樣刷 CLAUDE.md 紀律區塊(原:「跳過 vendor/hooks」連 reinject 一起跳,範本更新後來源 repo 自己永不刷新,2026-08-04 實戰缺口) [test:t_source_repo_reinject_path]
+   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
+   KEY:兩層分工——機器層(install/uninstall)只動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);★bootstrap 跨兩層(2026-08-21 程式碼實證):機器層之外 step3 會動當前 repo 的 core.hooksPath/vault/CLAUDE.md(見下行四分流)★;專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)
+   KEY:bootstrap 一鍵對稱(2026-07-25)=step3 升級專案層四分流:有vault+vendored→接hooks｜中間態(有vault無vendored,_vault_in 只看名稱防假陽性疊動作)→提示補齊不自動動｜無vault→_confirm_tty 確認(印完整路徑+預設N)y 才 cmd_init(--init 免確認;一律 force=False+no_pull=True,LUMOS_HOME env 傳導自訂 home)｜非git→只機器層。get.sh 迴圈解析 --pull/--init 後整段委派 bootstrap;各步查 rc 失敗尾端彙報 rc1 不吞錯。與 teardown 成鏡像(bootstrap 不刪vault、teardown 不建vault,圖譜兩邊不碰)。設計 [[Projects/bootstrap一鍵對稱_計劃]]、驗證 [[Verification/2026-07-25_bootstrap一鍵對稱]]
+   KEY:_confirm_tty(curl|bash 安全確認)三階=①stdin.isatty→input(),EOFError 落②非當 False ②os.open('/dev/tty',O_RDWR) 低階 fd(r+ 對 tty 炸 not seekable,Codex 真機實證)+os.write+select timeout 30s+os.read(有控制終端≠有人回答) ③None=跳過;答案嚴格 y/yes 預設 N;測試接縫 LUMOS_TTY/LUMOS_TTY_TIMEOUT
+   KEY:teardown(2026-07-24)=一鍵反安裝,跨兩層:全域hook清理→deinit(keep_graph=True)→uninstall,★永遠保留圖譜文件★;範圍=當前 repo+機器全域(非全機所有 repo,deinit 只吃當前 toplevel)。順序「全域先」因 deinit 會刪 vendored merge-claude-settings.py 而 _teardown_global_claude 要用它;全域清理走 merge --prune-only(只剪懸空不 re-add)+壞 settings JSON 先驗跳過不刪 .py。設計/審計 [[Projects/teardown一鍵拆機_計劃]]、[[Verification/2026-07-24_teardown一鍵拆機]]
+   KEY:★2026-08-01 teardown 的 Windows 兩處補洞★——①確認提示的 `input()` 是裸的,而 `cmd_deinit`(6766)與 `_confirm_tty`(7373)早就包了 `try/except EOFError`(Windows 真機踩過:某些終端 `isatty()` 回 True 但 stdin 實為 EOF);teardown 漏補 → 那種終端下吃到未接的 traceback。修法對齊既有硬化:讀不到確認=安全預設拒絕 rc2,★不得拿 `--yes` 當解法★(那等於跳過確認直接執行破壞性操作)。②新增 `_selfdelete_risk()` pre-flight:Windows 上若跑的就是 root 底下那份 vendored lumos → mutation 前 rc2 拒絕並指路改用全域 `lumos`——`_deinit_remove_vendored` 最後刪 `scripts/lumos`,POSIX 刪執行中的檔無妨(故刻意排最後)但 Windows 會 PermissionError,走 teardown 時①全域 hook 已清②CLAUDE.md 已剝才炸,③uninstall 沒機會跑=★拆一半★;這條路很好走到(Windows 裝完要重開 session 才吃得到 PATH)。守衛只在 Windows 生效(POSIX 自刪是刻意支援,不得誤擋),`LUMOS_SIMULATE_WINDOWS` 是只給這道守衛用的測試接縫、不動全域 `_IS_WIN`。★2026-08-02 代碼審 r2 再補兩條(都在這道守衛上)★:(a)**不得用 `Path.is_relative_to()`**——那是 Python 3.9+,本專案宣告 ≥3.8(同檔 `_write_lf` 為同一理由避開 3.10 的 `write_text(newline=)`);改用 `parts` 前綴比對 `len(me) > len(r) and me[:len(r)] == r`。(b)★**守衛的 except 絕不能寫成寬 `except Exception`**★:這道守衛的失敗模式是「回 False／放行」,寬 except 會把自己的程式錯誤(3.8 上的 `AttributeError`)一起吞掉 → **守衛靜默地等於不存在**,不報錯不留痕;收窄成 `except OSError`。(c)`--dry-run` 例外:純預覽零 mutation、走不到刪自己那一步,擋它只是誤傷合法唯讀操作。 [test:t_selfdelete_risk_python_floor_compatible_and_dryrun_exempt](翻紅釘:突變A 改回 is_relative_to+寬 except → 模擬 3.8 下『在裡面』那條斷言得 False 翻紅,正好演示『寬 except 把錯誤吞成永遠放行』;突變B 拿掉 dry_run 例外 → dry-run 被擋 rc2 翻紅)③同批把 `_deinit_remove_vendored` 頂層白名單的裸 `p.unlink()` 包成 try/except OSError:刪不掉印警告並繼續走完,沒刪掉的檔★不進 removed 清單★(不靜默);理由同上——半做+traceback 比少刪一個檔糟得多 [test:t_teardown_isatty_lies_eof_refuses,t_deinit_teardown_refuse_self_delete_on_windows,t_deinit_vendored_unlink_failure_does_not_abort] [audit:opus/2026-08-01](三處各自綁還原翻紅釘:拿掉 teardown 守衛→Windows 案例翻紅;守衛改成不分平台→POSIX 反誤傷案例翻紅;改回裸 unlink→例外逸出案例翻紅。★誠實天花板★:本機無 Windows,以上皆靠 `LUMOS_SIMULATE_WINDOWS` 接縫驗邏輯分支,★未真機驗證★——EOFError 那條的現場描述來自 2026-07 deinit 的真機回報)
+   KEY:安全守衛(2026-07-24,改共用函式故 deinit/uninstall 直呼也受惠)——_deinit_unbar_gate 只在 core.hooksPath 指向本 repo scripts/hooks 才 unset(不誤殺使用者 githooks)｜cmd_uninstall 只移 symlink 不刪 ~/.local/bin/lumos 同名一般檔。繼承殘留(deinit 老 bug,teardown help 明列):F9 scripts/hooks|templates 整夾 rmtree 刪使用者檔=★已修 2026-07-24★(逐檔白名單,見 [[Issues/deinit整夾刪使用者檔]]);未修=F4 剝 CLAUDE.md 正規化 sentinel 外空白/CRLF、F12 uninstall 移全部 skills 非只 lumos-*(影響更小,未開票)
+   KEY:全域 lumos 與 skills 走 symlink/junction 指向來源 clone(非 copy)→ git pull 來源即吃到 CLI+skills 更新;graph-discipline.md 是 per-project 注入,重跑 init/update 會刷新 CLAUDE.md 紀律區塊(2026-07-06 起真的成真:注入已與 _scaffold_project 的 vault-skip 解耦、無條件 re-inject;見 [[2026-07-06_CLAUDE注入re-sync]])
+   KEY:★INVARIANT★ re-inject 只覆蓋 sentinel 之間 body、sentinel 之外 CLAUDE.md 內容 byte-equal 保留(改=毀使用者手寫內容=breaking) [test:t_reinject_preserves_outside] [audit:sonnet/2026-07-06]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md b/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
+new file mode 100644
+index 00000000..41ab0b2d
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
+@@ -0,0 +1,44 @@
++---
++type: system
++status: doing
++created: 2026-10-14
++updated: 2026-10-14
++responsibility: Claude Code 每條 Bash 執行前判斷是不是在對非拋棄式 repo 繞過 Lumos 的閘(--no-verify、commit -n、core.hooksPath、LUMOS_SKIP_*),命中回 permissionDecision ask 讓人按允許;不擋、不改指令、不記問了幾次、不管 Codex、不防有心改寫
++aliases: []
++about_code:
++  - scripts/hooks/claude/bypass-ask-hook.py
++tags:
++  - type/system
++  - status/doing
++  - scope/guards-gates
++summary: |-
++  WHY:分類邏輯放在掛鉤檔內、不叫 lumos 主程式,有意偏離「掛鉤是薄殼」 [出處:[[Projects/代理繞閘字樣問人_計劃]] d1] [因:每條 Bash 都會叫這支,主程式啟動成本遠大於判斷本身] [不選:薄殼叫 lumos 子指令;只把預篩留在殼裡]
++  WHY:寧可漏問;暫存目錄只在確定不是真 repo 時豁免,推送改看遠端位址 [出處:[[Projects/代理繞閘字樣問人_計劃]] d2] [因:誤問會把人訓練成反射按允許;暫存目錄裡也有真工作副本對真遠端推送] [不選:照字面比對就問;暫存目錄一律豁免]
++  PITFALL:預篩若放進 guard 之內,每條 Bash 都會跑一次 git 並寫一筆存活事件,一天數千筆會把其他掛鉤的存活紀錄擠出 2000 行的窗,讓 lumos enforcement 對它們判過期 [出處:代理繞閘字樣問人設計審首輪前掃] [根因:guard 每次執行都記事件] [test:t_bypass_ask_fallbacks_and_budget]
++  PITFALL:存活事件的 hook 名必須等於 enforcement 那列的列名,不然那列永遠不是 active、測試還會把錯綠掉 [出處:代理繞閘字樣問人設計審 r1 架構對齊席、邊界席] [根因:列名直接拿來比對事件的 hook 欄] [test:t_bypass_ask_fallbacks_and_budget]
++  PITFALL:shlex 預設把詞中間的 # 當註解,`git checkout -b fix#1 && git push --no-verify` 整段被吞而漏問;bash 只在詞首才算註解 [出處:代碼審 code-代理繞閘字樣問人 r1 邊界輸入席] [根因:切詞器自己的註解處理] [test:t_bypass_ask_flags_real_bypass]
++  PITFALL:訊息寫成 "$(cat <<'EOF' … don't … EOF)" 時,撇號若算進外層引號狀態,括號配不到、後面的 -n 與其他指令整段漏判 [出處:代碼審 code-代理繞閘字樣問人 r1 正確性席] [根因:`$(` 裡沒有重開一層引號狀態] [test:t_bypass_ask_flags_real_bypass]
++  PITFALL:預篩直接看 stdin 的 JSON 原文時,續行後頂在行首的 -n 前面是跳脫字母 n,「前面不能是字母」的判斷不成立而整條放行 [出處:代碼審 code-代理繞閘字樣問人 r1 通才席、正確性席] [根因:沒先解出指令本身] [test:t_bypass_ask_fallbacks_and_budget]
++  WHY:拋棄式豁免只認判斷當下就存在、用 git 確認過的事實,同一條指令裡的推論一概不認 [出處:[[Projects/代理繞閘字樣問人_計劃]] d3] [因:代碼審兩輪都在同指令建目錄、mktemp、同指令加遠端這類推論上找到繞法] [不選:逐條補推論的洞;只留完全相同路徑的同指令建目錄] [代價:同指令建實驗 repo 再繞閘改成問人,一週約 6 次] [test:t_bypass_ask_throwaway_targets]
++  PITFALL:暫存目錄豁免要確定動的就是那個目錄:--git-dir、GIT_DIR(含 export)、config --global、cd 到不存在的目錄、背景或管線裡的 cd、條件式 cd、同指令前面動過遠端設定,都會讓「在暫存目錄」不等於「動的是暫存 repo」 [出處:代碼審 code-代理繞閘字樣問人 r1、r2 資安席、正確性席、邊界輸入席] [根因:生效目錄只看 cd 與 -C] [test:t_bypass_ask_throwaway_targets]
++  PITFALL:導向符號的目標檔被當成 git 參數:`git push --no-verify > /tmp/x.log` 的檔名被當成推送目標而放行,讀值加 2>/dev/null 被當成寫入;引號裡的 > 也被當成導向 [出處:代碼審 code-代理繞閘字樣問人 r2 正確性席、邊界輸入席] [根因:只丟運算子不丟目標,而且看的是還原後的字] [test:t_bypass_ask_flags_real_bypass]
++  PITFALL:查遠端與工作樹的 git 子程序沒有次數上限時,幾百段的指令會超過外層預算、被砍掉而放行 [出處:代碼審 code-代理繞閘字樣問人 r1 併發資源席] [根因:內部預算只限單次] [test:t_bypass_ask_fallbacks_and_budget]
++  PITFALL:預篩跟分類器各用一套前處理時,分類器認得的 `$'…'` 包住的旗標、續行切開的 `--no-verify` 會在入口就被放行 [出處:代碼審 code-代理繞閘字樣問人 r3 邊界輸入席、規格符合席] [根因:預篩只拿掉引號與反斜線,沒接續行、沒解 ANSI] [test:t_bypass_ask_fallbacks_and_budget]
++  PITFALL:變數展開沒有長度上限時,`A=$A$A` 連續翻倍三十幾次就吃掉十幾 GB 記憶體,記憶體耗盡不是一般例外、「失敗就放行」接不住 [出處:代碼審 code-代理繞閘字樣問人 r3 併發資源席] [根因:_expand 照代不設上限] [test:t_bypass_ask_flags_real_bypass]
++  SEE:[[Projects/代理繞閘字樣問人_計劃]] [[Systems/lumos-cli-lifecycle]] [[Systems/改檔前推播]]
++---
++# 代理繞閘問人
++
++> 白話:代理要繞過 Lumos 的閘(推送或提交帶 `--no-verify`、提交帶 `-n`、改掉或拆掉掛鉤目錄、設 `LUMOS_SKIP_*`)時,Claude Code 執行那條 Bash 之前先跳確認框問人。只是在引號或 heredoc 裡提到這些字樣、或在拋棄式實驗 repo 裡做實驗,不問。
++
++## 管什麼
++
++- `scripts/hooks/claude/bypass-ask-hook.py`:讀一次 stdin、在記事件之外先做便宜的預篩;過了預篩才進共用的存活事件包裝,解析指令(剝 heredoc、換掉指令替換、`shlex` 切段、任何不在引號裡的 git 詞開始一條 git 指令),判命中與拋棄式,命中回 `permissionDecision: "ask"`。
++- 註冊、安裝名單、防護狀態那一列、錨點與工具自裝檔名單在 [[Systems/lumos-cli-lifecycle]] 那邊。
++
++## 不管什麼
++
++- 不擋、不改指令、不記問了幾次(存活事件只記活著沒)。
++- 不管 Codex(Codex 的 Bash 前事件回覆形狀不同,適配另見計劃 REVISIT)。
++- 不防有心改寫:變數拼接、別名(shell 與 git 的)、腳本、`bash -c`、指令替換、`eval`、餵給 shell 的 heredoc、直接改 `.git/config`、不經 `git push` 的送出、用 Edit/Write 工具改設定都攔不到。
++- 自己寫一套切段器,不重用收工圖譜同步檢查那支掛鉤([[Systems/graph-sync-coverage]])裡的切段函式:那支不追蹤引號與 heredoc、作者自註「Quote-aware 不嚴格」,而且檔名帶連字號、各自獨立安裝,不能互相 import。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/掛鉤存活事件.md b/docs/lumos-toolchain-knowledge/Systems/掛鉤存活事件.md
+new file mode 100644
+index 00000000..26871b8c
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/掛鉤存活事件.md
+@@ -0,0 +1,25 @@
++---
++type: system
++status: doing
++created: 2026-10-14
++updated: 2026-10-14
++responsibility: lumos 自家掛鉤共用的「跑過/逾時/失敗」事件寫入器:在掛鉤成功完成點記一筆到 repo 的 governance/runtime/hook-events.jsonl、超過上限時修剪;不記成效(注入幾次、問了幾次)、不判斷掛鉤該不該跑、不讀事件(讀側在 lumos enforcement 與 gov --stats)
++aliases: []
++about_code:
++  - scripts/hooks/claude/_hookevent.py
++tags:
++  - type/system
++  - status/doing
++  - scope/platform
++summary: |-
++  WHY:只記「活著沒」(跑過、逾時、失敗),不記成效;記在成功完成點,不記在進入點 [出處:[[Projects/enforcement可觀測性_計劃]]] [因:記在進入點會讓每次起手就當機的掛鉤穩定顯示跑過 N 次;成效量測由派工鏡頭 d1 明令不做] [不選:進入點記一筆開始;記注入或問人次數]
++  PITFALL:存活事件檔超過上限要修剪時,暫存檔原本固定叫 hook-events.jsonl.tmp,多個會談同時修剪會寫同一個暫存檔、那個名字被佔住時修剪永遠失敗、檔案無限長大;現在每次用 mkstemp 取獨立名字,權限用 copymode 照抄原檔(不然會從 0644 變 0600),每次記事件都清掉超過一分鐘的殘留暫存檔(中途被砍留下的;不等下一次修剪),修剪失敗印提示(目錄唯讀時原本靜默、檔案一路長大),保留量同時受 2000 行與上限一半的位元組限制(長行時不會修完還超過、每次都再修) [出處:代碼審 code-代理繞閘字樣問人 r1、r2 併發資源席、架構對齊席、正確性席] [根因:固定暫存檔名與只用行數限制] [test:t_hook_event_trim_tmp_unique]
++  SEE:[[Systems/代理繞閘問人]] [[Systems/hook信任邊界]] [[Issues/hook事件帳順著連結寫到repo外]]
++---
++# 掛鉤存活事件
++
++> 白話:lumos 自己裝進 Claude Code 與 Codex 的掛鉤,跑完時共用這支記一筆「跑過/逾時/失敗」,讓 `lumos enforcement` 答得出「它最近有沒有真的跑過」。
++
++- 管:`scripts/hooks/claude/_hookevent.py` 的 `record`、`mark`、`guard`。
++- 不管:讀事件與判斷活著沒(在主程式的防護狀態與治理統計那邊)。
++- 已知未修:repo 裡的 `governance` 是指到 repo 外的連結時會順著寫出去,見 [[Issues/hook事件帳順著連結寫到repo外]]。
+diff --git a/scripts/hooks/claude/_hookevent.py b/scripts/hooks/claude/_hookevent.py
+index cd8b5ae4..ee976d10 100755
+--- a/scripts/hooks/claude/_hookevent.py
++++ b/scripts/hooks/claude/_hookevent.py
+@@ -72,33 +72,80 @@ def record(repo_root, hook_name, kind, note="", hook_file=None):
+             "repo": str(root.resolve()),
+             "fp": _fingerprint(Path(hook_file)) if hook_file else "",
+         }
+         if note:
+             ev["note"] = str(note)[:200]
+         line = json.dumps(ev, ensure_ascii=False) + "\n"
+         # 原子寫入:單行 append 在 POSIX 上小於 PIPE_BUF 是原子的;
+         # 這裡再加一道上限修剪,修剪走暫存→改名(這個 repo 對共用檔的既有教訓)。
+         with open(f, "a", encoding="utf-8") as fh:
+             fh.write(line)
++        _clear_stale_trims(d)
+         try:
+             if f.stat().st_size > MAX_BYTES:
+-                keep = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
+-                tmp = f.with_suffix(".jsonl.tmp")
+-                tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+-                os.replace(tmp, f)
+-        except OSError:
+-            pass
++                _trim(d, f)
++        except OSError as e:
++            # 修剪失敗(例如目錄唯讀)不影響本業,但要講一聲:不講的話事件檔會一路長大、沒有任何訊號(r3 併發資源席)
++            print(f"  ⚠ hook 事件檔修剪失敗({type(e).__name__}),檔案會繼續長大:{f}", file=__import__("sys").stderr)
+         return True
+     except Exception:
+         return False
+ 
+ 
++def _trim(d: Path, f: Path):
++    """存活事件檔超過上限時修剪:留最後 2000 行,而且總大小壓在上限一半以內(長行時不會修完還超過、每次都再修)。
++
++    ★暫存檔各用獨立名字★(代碼審 code-代理繞閘字樣問人 r1 併發資源席):固定叫 .jsonl.tmp 時,
++    兩個會談同時修剪會寫同一個暫存檔,那個名字被佔住時修剪永遠失敗、檔案無限長大。
++    ★權限照原檔★(r2 架構對齊席、併發資源席):mkstemp 建的是 0600,不照抄的話修剪一次權限就變了。
++    ★殘檔★由 _clear_stale_trims 在每次記事件時清(r2、r3 併發資源席)。
++    ★已知接受★:讀檔到換入之間別的程序追加的那一行會遺失(r3 併發資源席);這是存活紀錄,
++    掉一行最多讓某支掛鉤短暫顯示過期,不值得為它加鎖。
++    """
++    import shutil
++    import tempfile
++    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
++    budget, keep = MAX_BYTES // 2, []
++    for ln in reversed(lines):
++        budget -= len(ln.encode("utf-8")) + 1
++        if budget < 0:
++            break
++        keep.append(ln)
++    keep.reverse()
++    fd, tmp = tempfile.mkstemp(dir=str(d), prefix="hook-events.", suffix=".trim")
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as th:
++            th.write("\n".join(keep) + "\n")
++        shutil.copymode(f, tmp)              # 跟 scripts/lumos 的 _write_lf 同一種照抄權限的做法
++        os.replace(tmp, f)
++    except BaseException:
++        try:
++            os.unlink(tmp)
++        except OSError:
++            pass
++        raise
++
++
++def _clear_stale_trims(d: Path):
++    """清掉超過一分鐘的修剪暫存檔(修剪中途被砍留下的;正在寫的那份不碰)。每次記事件都順手清,
++    不等下一次修剪——下一次修剪可能要很久才來(r3 併發資源席)。只清自己命名規則的檔,連結不碰。"""
++    try:
++        for old in d.glob("hook-events.*.trim"):
++            try:
++                if not old.is_symlink() and time.time() - old.stat().st_mtime > 60:
++                    old.unlink()
++            except OSError:
++                pass
++    except OSError:
++        pass
++
++
+ def _root_from_cwd():
+     """★逾時砍到 3 秒★(r1 外家席 major):這支跑在每支 hook 的本業之前,
+     正常態實測約 13 毫秒,但最壞態原本設 10 秒——跟 hook 的整體預算同量級,
+     git 卡住時會先把預算吃完,讓本業根本沒機會跑。觀測絕不能排擠本業。"""
+     import subprocess
+     try:
+         r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                            capture_output=True, text=True, timeout=3)
+         return r.stdout.strip() or None
+     except Exception:
+diff --git a/scripts/hooks/claude/bypass-ask-hook.py b/scripts/hooks/claude/bypass-ask-hook.py
+new file mode 100755
+index 00000000..f6292b46
+--- /dev/null
++++ b/scripts/hooks/claude/bypass-ask-hook.py
+@@ -0,0 +1,1064 @@
++#!/usr/bin/env python3
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++# MIT licensed. Full text: scripts/lumos header, or LICENSE at
++# https://github.com/EnzoHsieh-Android/Lumos
++"""PreToolUse hook(matcher Bash):代理要繞過 Lumos 的閘時,先問人。
++
++單源:Projects/代理繞閘字樣問人_計劃(d1 厚掛鉤偏離、d2 寧可漏問)。
++
++流程:
++  1. 讀一次 stdin 原文 → 便宜的預篩(在 guard 之外,不跑子程序、不記事件;絕大多數 Bash 停在這)。
++  2. 過了預篩才進 `_hookevent.guard`:解析事件 → `decide` → 命中就印 permissionDecision "ask"。
++  3. 任何例外都放行(這是問人層,不是安全邊界)。
++
++★存活事件只記「活著沒」★:不記問了幾次(_hookevent.py 檔頭的界線);事後量測拿 Claude 事件帳
++重跑 `bypass_reasons`。
++"""
++from __future__ import annotations
++
++import json
++import os
++import re
++import shlex
++import subprocess
++import sys
++import tempfile
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++try:
++    from _hookevent import guard as _guard, mark
++except Exception:          # 共用模組缺席也不能讓 Bash 卡住
++    _guard = None
++
++    def mark(kind, note=""):
++        return None
++
++
++# ── 逾時預算(逐字複本,見 impact-hook.py;有測試要求各份一模一樣)──────
++#
++# 天花板由註冊表 HOOK_BUDGET 一處生成,用 --budget 傳進來;這支只拿它當查遠端、查工作樹的 git 子程序逾時。
++_BUDGET_RATIO = 0.7
++_BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
++
++
++def _outer_budget(default=10.0):
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
++    import sys as _s
++    argv = _s.argv
++    got = None
++    for i, a in enumerate(argv):
++        if a == "--budget" and i + 1 < len(argv):
++            try:
++                got = float(argv[i + 1])
++            except ValueError:
++                got = None
++            break
++        if a.startswith("--budget="):
++            try:
++                got = float(a.split("=", 1)[1])
++            except ValueError:
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
++
++
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
++
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
++# ── ★逾時預算結束★ ──────────────────────────────────────────────────
++
++MAX_LEN = 20000                     # 超過就不做結構分類,走字面判(把要掃的字數壓在幾萬步以內)
++MAX_EXPAND = 4096                   # 變數展開後的長度上限;超過就當判不出
++MAX_GIT_CALLS = 4                   # 一次判斷最多跑幾個 git 子程序;超過就當「查不到」(=不豁免、照問)
++_PRE_WORDS = ("--no-veri", "hookspath", "lumos_skip_")
++_PRE_SHORT_N = re.compile(r"(?<![\w-])-[a-z]*n[a-z]*\b")
++_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
++_SKIP_ASSIGN = re.compile(r"^LUMOS_SKIP_[A-Za-z0-9_]*\+?=")
++_GITDIR_NAME = re.compile(r"^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(\+?=|$)")       # export/declare 的名稱
++_GITDIR_ASSIGN = re.compile(r"^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)\+?=")           # 一般詞只認賦值形式
++_CFG_ENV_ASSIGN = re.compile(r"^GIT_CONFIG_(KEY_[0-9]+|PARAMETERS)=(.*)$", re.S)
++_KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "time", "exec", "command", "nohup", "builtin"}
++_GATED_SUBS = ("commit", "push")    # Lumos 的閘只有提交前與推送前;其他子指令跳過的掛鉤本 repo 沒裝(計劃〈範圍〉)
++_GIT_VALUE_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
++_GIT_DIR_OPTS = ("--git-dir", "--work-tree")
++_COMMIT_VALUE_LONG = {"--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message",
++                      "--fixup", "--squash", "--cleanup", "--trailer", "--pathspec-from-file"}
++_PUSH_VALUE_OPTS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
++_CONFIG_VALUE_OPTS = {"-f", "--file", "--blob", "--default", "--type", "--comment"}
++_CONFIG_WRITE_FLAGS = {"--unset", "--unset-all", "--replace-all", "--add"}
++_CONFIG_READ_FLAGS = {"--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch"}
++_CONFIG_SECTION_FLAGS = {"--remove-section", "--rename-section"}
++_CONFIG_GLOBAL_FLAGS = {"--global", "--system", "--file", "-f", "--blob"}
++_UNKNOWN = ("unknown",)
++_MASK_CHARS = "();|&<>\n#`'\" \t$\\"  # 引號裡與被跳脫的這些字元先換成私用區字元,切詞時才不會被當成結構
++_MASK_BASE = 0xE000
++_FD_MARK = "\ue0ff"                 # 導向前的檔案代號(`2>` 的 2、`{fd}>` 的 {fd})的標記,不在遮罩範圍內
++_FD_REDIR = re.compile(r"(\d+|\{[A-Za-z_][A-Za-z0-9_]*\})(?=[<>])")
++_ANSI_ESC = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "v": "\v",
++             "\\": "\\", "'": "'", '"': '"', "?": "?"}
++_REASON_TEXT = {
++    "no-verify": "推送或提交帶了 --no-verify,推送前閘與提交前閘不會跑",
++    "commit-n": "提交帶了 -n(就是 --no-verify),提交前閘不會跑",
++    "c-hookspath": "用 -c、--config-env 或 GIT_CONFIG_* 把這次的掛鉤目錄換掉,Lumos 的閘不會跑",
++    "config-hookspath": "改寫或拆掉 core.hooksPath,之後每次提交與推送都不再經過 Lumos 的閘",
++    "lumos-skip": "設了 LUMOS_SKIP_* 環境變數,會關掉 Lumos 的一道閘",
++    "literal": "指令切不開或太長,照字面看是在跳過 Lumos 的閘",
++}
++
++
++def _command_text(raw: str) -> str:
++    """stdin 原文 → 指令本身;解不開 JSON 就回原文(壞事件照樣交給後面記失敗)。"""
++    try:
++        ev = json.loads(raw)
++        cmd = ev.get("tool_input", {}).get("command") if isinstance(ev, dict) else None
++        return cmd if isinstance(cmd, str) else ""
++    except Exception:
++        return raw
++
++
++def prefilter(raw: str) -> bool:
++    """看解碼後的指令(引號與反斜線先拿掉,`--no-ver''ify` 這種拆字也認得):三個字樣任一個,
++    或同時有 git、commit 與含 n 的短旗標(續行與 Tab 不會擋住 -n)。"""
++    text = _command_text(raw)
++    try:
++        norm = _unmask(_Normalizer(text).run())     # 跟分類器同一套:接續行、解 ANSI 引號、拿掉註解與 heredoc 內文
++    except Exception:
++        norm = ""
++    low = re.sub(r"['\"\\]", "", text + "\n" + norm).lower()
++    if any(w in low for w in _PRE_WORDS):
++        return True
++    return "git" in low and re.search(r"\bcommit\b", low) is not None and _PRE_SHORT_N.search(low) is not None
++
++
++def _temp_roots():
++    """暫存根:與審查席外掛的暫存根取聯集,再加上本機的暫存目錄(同 scripts/lumos 的做法,一律加)。"""
++    return ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders",
++            tempfile.gettempdir()]
++
++
++def _under_temp(path: str) -> bool:
++    rp = os.path.realpath(path)
++    for root in _temp_roots():
++        rr = os.path.realpath(root).rstrip("/")
++        if rr and (rp == rr or rp.startswith(rr + "/")):
++            return True
++    return False
++
++
++# ── 前處理:續行、註解、heredoc、引號遮罩、指令替換 ─────────────────
++
++def _skip_arith(cmd: str, i: int) -> int:
++    """i 指在 `$((` 上;回傳配對的 `))` 之後的位置(算式裡不會有引號,直接數括號)。"""
++    depth, j = 0, i + 1
++    while j < len(cmd):
++        if cmd[j] == "(":
++            depth += 1
++        elif cmd[j] == ")":
++            depth -= 1
++            if depth == 0:
++                return j + 1
++        j += 1
++    return len(cmd)
++
++
++def _read_delim(cmd: str, i: int):
++    """從 i 讀 heredoc 結束字;回 (字, 新位置),讀不到回 ("", i)。"""
++    while i < len(cmd) and cmd[i] in " \t":
++        i += 1
++    word = []
++    while i < len(cmd) and cmd[i] not in " \t\n;&|<>()":
++        ch = cmd[i]
++        if ch in "'\"":
++            j = cmd.find(ch, i + 1)
++            if j == -1:
++                return "", i
++            word.append(cmd[i + 1:j])
++            i = j + 1
++        elif ch == "\\" and i + 1 < len(cmd):
++            word.append(cmd[i + 1])
++            i += 2
++        else:
++            word.append(ch)
++            i += 1
++    return "".join(word), i
++
++
++def _find_terminator(cmd: str, pos: int, word: str, dash: bool):
++    """從 pos 那一行起找獨佔一行的結束字(<<- 允許前置 Tab);回結束字那一行之後的位置,找不到回 None。"""
++    n = len(cmd)
++    while pos <= n:
++        k = cmd.find("\n", pos)
++        line = cmd[pos:k if k != -1 else n]
++        if (line.lstrip("\t") if dash else line) == word:
++            return k + 1 if k != -1 else n
++        if k == -1:
++            return None
++        pos = k + 1
++    return None
++
++
++_ANSI_NUMERIC = (("x", r"[0-9A-Fa-f]{1,2}", 16), ("u", r"[0-9A-Fa-f]{1,4}", 16), ("U", r"[0-9A-Fa-f]{1,8}", 16))
++
++
++def _ansi_escape(cmd: str, k: int):
++    """`$'…'` 裡反斜線後面(位置 k)的數字跳脫:\\xHH、\\uHHHH、\\UHHHHHHHH、\\NNN(八進位)、\\cX(控制字元)。
++    回 (解出的字, 下一個位置);不是數字跳脫回 None。"""
++    ch = cmd[k]
++    for lead, pat, base in _ANSI_NUMERIC:
++        if ch == lead:
++            m = re.match(pat, cmd[k + 1:])
++            if m:
++                code = int(m.group(0), base)
++                return (chr(code) if code < 0x110000 else ""), k + 1 + len(m.group(0))
++    m = re.match(r"[0-7]{1,3}", cmd[k:])
++    if m:
++        return chr(int(m.group(0), 8)), k + len(m.group(0))
++    if ch == "c" and k + 1 < len(cmd):
++        return chr(ord(cmd[k + 1]) & 0x1F), k + 2
++    return None
++
++
++def _ansi_decode(cmd: str, i: int):
++    """i 指在 `$'` 上;回 (解出來的字串, 結尾單引號之後的位置)。"""
++    out, j = [], i + 2
++    while j < len(cmd):
++        ch = cmd[j]
++        if ch == "'":
++            return "".join(out), j + 1
++        if ch == "\\" and j + 1 < len(cmd):
++            dec = _ansi_escape(cmd, j + 1)
++            if dec is not None:
++                out.append(dec[0])
++                j = dec[1]
++                continue
++            out.append(_ANSI_ESC.get(cmd[j + 1], "\\" + cmd[j + 1]))
++            j += 2
++            continue
++        out.append(ch)
++        j += 1
++    return "".join(out), len(cmd)
++
++
++def _mask(ch: str) -> str:
++    k = _MASK_CHARS.find(ch)
++    return chr(_MASK_BASE + k) if k >= 0 and ch else ch
++
++
++def _has_mask_range(text: str) -> bool:
++    return any(_MASK_BASE <= ord(c) < _MASK_BASE + len(_MASK_CHARS) for c in text)
++
++
++def _unmask(tok: str) -> str:
++    if not _has_mask_range(tok):
++        return tok
++    return "".join(_MASK_CHARS[ord(c) - _MASK_BASE] if _MASK_BASE <= ord(c) < _MASK_BASE + len(_MASK_CHARS) else c
++                   for c in tok)
++
++
++class _Normalizer:
++    """一趟掃過指令:追蹤引號(`$(` 裡重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
++    結構字元換成遮罩字元、ANSI 引號解出內容後當成引號裡的字。heredoc 找不到結束字就停止剝(寧可多問)。
++    整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。"""
++
++    def __init__(self, cmd: str):
++        self.cmd = cmd
++        self.out = []
++        self.ctx = [[False, False, 0]]       # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度]
++        self.pending = []
++        self.heredoc_ok = True
++
++    def run(self) -> str:
++        i = 0
++        while i < len(self.cmd):
++            i = self.step(i)
++        return "".join(self.out)
++
++    def step(self, i: int) -> int:
++        cur = self.ctx[-1]
++        if cur[0]:
++            return self._in_single(i, cur)
++        ch = self.cmd[i]
++        if ch == "\\":
++            return self._backslash(i, cur)
++        if self.cmd.startswith("$(", i) and not self.cmd.startswith("$((", i):
++            self.ctx.append([False, False, 0])
++            self.out.append("$(")
++            return i + 2
++        if cur[1]:
++            return self._in_double(i, cur, ch)
++        return self._bare(i, cur, ch)
++
++    def _backslash(self, i: int, cur) -> int:
++        nxt = self.cmd[i + 1:i + 2]
++        if nxt == "\n":
++            return i + 2                     # 續行:bash 連反斜線帶換行一起拿掉
++        self.out.append(_mask(nxt))          # 被跳脫的字元就是普通字(引號外與雙引號裡都一樣)
++        return i + 2
++
++    def _in_single(self, i: int, cur) -> int:
++        ch = self.cmd[i]
++        if ch == "'":
++            cur[0] = False
++            self.out.append(ch)
++        else:
++            self.out.append(_mask(ch))
++        return i + 1
++
++    def _in_double(self, i: int, cur, ch: str) -> int:
++        if ch == '"':
++            cur[1] = False
++            self.out.append(ch)
++        else:
++            self.out.append(_mask(ch))
++        return i + 1
++
++    def _bare(self, i: int, cur, ch: str) -> int:
++        special = self._bare_special(i, cur, ch)
++        if special is not None:
++            return special
++        if ch == "'":
++            cur[0] = True
++        elif ch == '"':
++            cur[1] = True
++        self.out.append(ch)
++        return i + 1
++
++    def _bare_special(self, i: int, cur, ch: str):
++        """引號外的結構:算式、ANSI 引號、括號層、註解、heredoc、換行剝內文;都不是回 None。"""
++        cmd = self.cmd
++        if cmd.startswith("$((", i):
++            j = _skip_arith(cmd, i + 1)
++            self.out.append(cmd[i:j])
++            return j
++        if cmd.startswith('$"', i):
++            return i + 1                     # $"…"(語系翻譯字串)內容照雙引號看
++        fd = _FD_REDIR.match(cmd, i) if (i == 0 or cmd[i - 1] in " \t\n;&|()") else None
++        if fd:
++            self.out.append(_FD_MARK + "".join(_mask(c) for c in fd.group(1)))
++            return fd.end(1)                 # `2>`、`{fd}>` 的檔案代號:標記起來,切詞後連同導向剔除
++        if cmd.startswith("$'", i):
++            text, j = _ansi_decode(cmd, i)
++            self.out.append("".join(_mask(c) for c in text) or "''")
++            return j
++        if ch in "()" and len(self.ctx) > 1:
++            return self._paren(i, cur, ch)
++        if ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
++            k = cmd.find("\n", i)
++            return len(cmd) if k == -1 else k
++        if self.heredoc_ok and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (i == 0 or cmd[i - 1] != "<"):
++            return self._heredoc_op(i)
++        if ch == "\n" and self.pending:
++            return self._drop_bodies(i)
++        return None
++
++    def _paren(self, i: int, cur, ch: str) -> int:
++        if ch == "(":
++            cur[2] += 1
++        elif cur[2] == 0:
++            self.ctx.pop()
++        else:
++            cur[2] -= 1
++        self.out.append(ch)
++        return i + 1
++
++    def _heredoc_op(self, i: int):
++        dash = self.cmd.startswith("<<-", i)
++        word, k = _read_delim(self.cmd, i + 2 + int(dash))
++        if not word:
++            return None
++        self.pending.append((word, dash))
++        self.out.append(self.cmd[i:k])
++        return k
++
++    def _drop_bodies(self, i: int) -> int:
++        self.out.append("\n")
++        pos = i + 1
++        for word, dash in self.pending:
++            end = _find_terminator(self.cmd, pos, word, dash)
++            if end is None:
++                self.heredoc_ok = False      # 找不到結束字:這個與之後都不剝,也不再找(避免每行重掃到尾)
++                break
++            pos = end
++        self.pending = []
++        return pos
++
++
++def _paren_pairs(text: str) -> dict:
++    """一次掃完,回 {左括號位置: 配對的右括號位置}(引號裡的括號已遮罩,直接數;線性時間)。"""
++    pairs, stack = {}, []
++    for j, ch in enumerate(text):
++        if ch == "(":
++            stack.append(j)
++        elif ch == ")" and stack:
++            pairs[stack.pop()] = j
++    return pairs
++
++
++def _replace_cmdsubs(text: str) -> str:
++    """$(…)、$((…))、反引號換成判不出的佔位詞(裡面跑的指令攔不到,計劃〈範圍〉);找不到配對的保留原樣。"""
++    pairs = _paren_pairs(text)
++    out, i = [], 0
++    while i < len(text):
++        end = None
++        if text.startswith("$(", i) and (i + 1) in pairs:
++            end = pairs[i + 1] + 1
++        elif text[i] == "`":
++            close = text.find("`", i + 1)
++            end = None if close == -1 else close + 1
++        if end is None:
++            out.append(text[i])
++            i += 1
++            continue
++        if not (out and out[-1] == "__LUMOS_CMDSUB__"):
++            out.append("__LUMOS_CMDSUB__")   # 相鄰的替換併成一個佔位詞,不拼出超長的詞
++        i = end
++    return "".join(out)
++
++
++class _Sep(str):
++    """切詞時就認定的分隔符(`;`、`&&`、`|`、換行、括號…)。引號裡還原回來的同樣字元是一般 str,不會被當成分隔。
++    這個 repo 沒有同形先例;用 str 子類別是為了讓「是不是結構」在切詞當下定下來,之後不再看字面猜。"""
++
++
++class _Redir(str):
++    """切詞時就認定的導向運算子(`>`、`>>`、`&>`、`2>&1` 的 `>&`…);引號裡的 `>` 不會變成這個。"""
++
++
++def _tokens(text: str):
++    lex = shlex.shlex(text, posix=True, punctuation_chars="();<>|&\n")
++    lex.whitespace = " \t\r"
++    lex.whitespace_split = True
++    lex.commenters = ""
++    out = []
++    for t in lex:
++        if _is_sep(t):
++            out.append(_Sep(t))
++        elif _is_redirect(t):
++            out.append(_Redir(t))
++        elif all(c in "();<>|&\n" for c in t):
++            k = min(t.index(c) for c in "<>" if c in t)   # `)>`、`;>`:前面是分隔、後面是導向
++            if t[:k]:
++                out.append(_Sep(t[:k]))
++            out.append(_Redir(t[k:]))
++        else:
++            out.append(_unmask(t))
++    return out
++
++
++def _is_sep(tok: str) -> bool:
++    return bool(tok) and all(c in "();|&\n" for c in tok)
++
++
++def _is_redirect(tok: str) -> bool:
++    return bool(tok) and all(c in "<>&|" for c in tok) and any(c in "<>" for c in tok)
++
++
++def _strip_redirects(words):
++    """拿掉導向:運算子、它的目標,以及運算子前面的檔案代號(前處理標記過的 `2>` 的 2)。"""
++    out, skip = [], False
++    for w in words:
++        if skip:
++            skip = False
++            continue
++        if isinstance(w, _Redir):
++            skip = True
++            continue
++        if w.startswith(_FD_MARK):
++            continue                         # 檔案代號(前處理就標好,不靠「是不是數字」猜:`-m 1 >x` 的 1 是參數)
++        out.append(w)
++    return out
++
++
++# ── 目錄與變數 ──────────────────────────────────────────────────────
++
++def _expand(word: str, variables: dict):
++    """展開同一條指令裡先賦值的變數;判不出(含指令替換、~、沒賦值過的變數)回 _UNKNOWN。"""
++    if word.startswith("~") or "__LUMOS_CMDSUB_" in word:
++        return _UNKNOWN
++    names = re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", word)
++    if any(not isinstance(variables.get(a or b), str) for a, b in names):
++        return _UNKNOWN
++    if len(word) + sum(len(variables[a or b]) for a, b in names) > MAX_EXPAND:
++        return _UNKNOWN              # `A=$A$A` 連續翻倍會指數膨脹(r3 併發資源席實測三十幾次吃掉十幾 GB)
++    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
++                  lambda m: variables[m.group(1) or m.group(2)], word)
++
++
++def _join(base, rel):
++    """接路徑但不做純文字化簡:`連結/..` 在 git -C 與作業系統是先進連結再往上一層,文字化簡會走錯地方
++    (r3 資安席);要比較時一律交給 realpath。"""
++    if rel is _UNKNOWN:
++        return rel
++    if rel.startswith("/"):
++        return rel
++    if isinstance(base, str):
++        return os.path.join(base, rel)
++    return _UNKNOWN
++
++
++_GIT_STATE = {"calls": 0, "cache": {}, "dead": False}
++_IN_HOOK = {"on": False}
++
++
++def _git_out(d: str, *args):
++    """在 d 跑 git;回 (rc, stdout, stderr)。逾時、起不來、這次判斷已跑滿 MAX_GIT_CALLS 次、或先前已逾時回 (None, "", "")。
++    同樣的查詢只跑一次;逾時用共用的 _inner_budget(從進場算起)。"""
++    key = (d, *args)
++    if key in _GIT_STATE["cache"]:
++        return _GIT_STATE["cache"][key]
++    if _GIT_STATE["calls"] >= MAX_GIT_CALLS or _GIT_STATE["dead"]:
++        return None, "", ""
++    _GIT_STATE["calls"] += 1
++    try:
++        r = subprocess.run(["git", "-C", d, *args], capture_output=True, text=True,
++                           timeout=_inner_budget(default=5.0))
++        res = (r.returncode, r.stdout.strip(), r.stderr)
++    except Exception:
++        _GIT_STATE["dead"] = True    # 逾時或起不來:這次判斷不再跑 git(git 卡住時每次都等滿會撐破外層預算)
++        res = (None, "", "")
++    _GIT_STATE["cache"][key] = res
++    return res
++
++
++def _existing_temp_dir(eff) -> bool:
++    return isinstance(eff, str) and os.path.isdir(eff) and _under_temp(eff)
++
++
++def _not_real_repo(eff) -> bool:
++    """生效目錄確定不是真 repo(拋棄式):判斷當下就存在、在暫存根底下(解開符號連結後),
++    而且共用 git 目錄也在暫存根底下;或 git 明說它不在任何 repo 裡。不靠同一條指令裡的推論
++    (同指令建的目錄、mktemp、remote add 都不算——兩輪審查都在這類推論上找到繞法,計劃 d3)。"""
++    if not _existing_temp_dir(eff):
++        return False
++    rc, out, err = _git_out(eff, "rev-parse", "--git-common-dir")
++    if rc != 0:
++        return rc is not None and "not a git repository" in err.lower()
++    if not _under_temp(os.path.join(eff, out)):
++        return False
++    rc, urls, _err = _git_out(eff, "config", "--get-regexp", r"^remote\..*\.(url|pushurl)$")
++    if rc is None or rc not in (0, 1):
++        return False
++    # 有網路遠端的就不是實驗 repo(暫存目錄裡的真工作副本,r3 通才席)
++    return all(_local_url(line.split(" ", 1)[-1]) is not None for line in urls.splitlines() if line.strip())
++
++
++def _local_url(url: str):
++    """遠端位址是明確的本機路徑(/、./、../、file://)就回路徑,否則回 None(`host:path` 這種一律當網路位址)。"""
++    if url.startswith("file://"):
++        return url[len("file://"):]
++    return url if url.startswith(("/", "./", "../")) else None
++
++
++def _push_remote_arg(args):
++    """push 的目的地:有 `--repo` 就是它的值(這時位置參數是 refspec),否則第一個位置參數;沒有回 None。"""
++    for k, a in enumerate(args):
++        if a.startswith("--repo="):
++            return a.split("=", 1)[1]
++        if a == "--repo":
++            return args[k + 1] if k + 1 < len(args) else None
++    skip = False
++    for a in args:
++        if skip:
++            skip = False
++        elif a in _PUSH_VALUE_OPTS:
++            skip = True
++        elif not a.startswith("-"):
++            return a
++    return None
++
++
++def _temp_target(eff, path: str) -> bool:
++    p = _join(eff, path)
++    return isinstance(p, str) and os.path.exists(p) and _under_temp(p)
++
++
++def _push_target_temp(eff, args) -> bool:
++    """push 的目標確定在暫存根底下才算拋棄式:路徑參數要在判斷當下存在;遠端名稱要在已存在的暫存目錄裡、
++    用 `git remote get-url --push` 查到明確的本機路徑。沒寫遠端、查不到、網路位址都不算。"""
++    remote = _push_remote_arg(args)
++    if remote is None:
++        return False
++    local = _local_url(remote)
++    if local is not None:
++        return _temp_target(eff, local)
++    if not _existing_temp_dir(eff):
++        return False
++    rc, url, _err = _git_out(eff, "remote", "get-url", "--push", remote)
++    local = _local_url(url) if rc == 0 and url else None
++    return local is not None and _temp_target(eff, local)
++
++
++# ── git 指令解析 ────────────────────────────────────────────────────
++
++def _short_flags_n(flags: str):
++    """commit 的一組短旗標(不含開頭 -):回 (有沒有 n, 下一個詞是不是這組旗標吃的值)。"""
++    for idx, ch in enumerate(flags):
++        if ch == "n":
++            return True, False
++        if ch in "mFCct":
++            return False, idx == len(flags) - 1
++        if ch in "Su":
++            return False, False
++    return False, False
++
++
++def _commit_short_n(args) -> bool:
++    skip = False
++    for a in args:
++        if skip:
++            skip = False
++        elif a == "--":
++            return False
++        elif a in _COMMIT_VALUE_LONG:
++            skip = True
++        elif a.startswith("-") and not a.startswith("--") and len(a) > 1:
++            hit, skip = _short_flags_n(a[1:])
++            if hit:
++                return True
++    return False
++
++
++def _config_split(args):
++    """config 參數拆成 (旗標集合, 位置參數清單)。"""
++    flags, pos, skip = set(), [], False
++    for a in args:
++        if skip:
++            skip = False
++        elif a in _CONFIG_VALUE_OPTS:
++            flags.add(a)
++            skip = True
++        elif a.startswith("-") and a != "-":
++            flags.add(a.split("=", 1)[0])
++        else:
++            pos.append(a)
++    return flags, pos
++
++
++def _config_writes_hookspath(args) -> bool:
++    flags, pos = _config_split(args)
++    if flags & _CONFIG_SECTION_FLAGS:
++        return bool(pos) and pos[0].lower() == "core"     # 拆掉或改名整個 core 區段,hooksPath 跟著沒了
++    if pos and pos[0] in ("set", "unset"):
++        return len(pos) >= 2 and pos[1].lower() == "core.hookspath"
++    if pos and pos[0] in ("remove-section", "rename-section"):
++        return len(pos) >= 2 and pos[1].lower() == "core"
++    if not pos or pos[0].lower() != "core.hookspath":
++        return False
++    if flags & _CONFIG_WRITE_FLAGS:
++        return True
++    if flags & _CONFIG_READ_FLAGS:
++        return False
++    return len(pos) >= 2
++
++
++def _parse_git(words, gi):
++    """words[gi] 是 git;回 (子指令, 參數, -C 目錄們, 設定鍵們, 有沒有 --git-dir/--work-tree);沒有子指令回 None。"""
++    j, gdirs, cfgs, moved, n = gi + 1, [], [], False, len(words)
++    while j < n and words[j].startswith("-"):
++        w = words[j]
++        name, eq, val = w.partition("=")
++        if name in _GIT_DIR_OPTS:
++            moved = True
++        if name == "--config-env" and eq:
++            cfgs.append(val)
++        if w in _GIT_VALUE_OPTS and j + 1 < n:
++            if w in ("-c", "--config-env"):
++                cfgs.append(words[j + 1])
++            elif w == "-C":
++                gdirs.append(words[j + 1])
++            j += 1
++        j += 1
++    if j >= n:
++        return None
++    return words[j], words[j + 1:], gdirs, cfgs, moved
++
++
++def _env_cfg_hookspath(words) -> bool:
++    """GIT_CONFIG_KEY_n=core.hooksPath 或 GIT_CONFIG_PARAMETERS 裡帶 core.hooksPath。"""
++    for w in words:
++        m = _CFG_ENV_ASSIGN.match(w)
++        if m and "core.hookspath" in m.group(2).lower():
++            return True
++    return False
++
++
++def _hit_codes(sub, args, cfgs, skip):
++    """這條 git 指令命中哪些繞閘形狀(還沒扣拋棄式)。"""
++    hits = []
++    if sub in _GATED_SUBS and any(a.startswith("--no-veri") and "--no-verify".startswith(a) for a in args):
++        hits.append("no-verify")
++    if sub == "commit" and _commit_short_n(args):
++        hits.append("commit-n")
++    if sub in _GATED_SUBS and any(c.split("=", 1)[0].lower() == "core.hookspath" for c in cfgs):
++        hits.append("c-hookspath")
++    if sub == "config" and _config_writes_hookspath(args):
++        hits.append("config-hookspath")
++    if sub in _GATED_SUBS and skip:
++        hits.append("lumos-skip")
++    return hits
++
++
++def _exempt(sub, eff, args, remotes_dirty=False, gitdir_seen=False) -> bool:
++    """命中算不算拋棄式:push 看推送目標(同一條指令前面動過遠端設定就不算——判斷當下查到的是改之前的位址);
++    commit 與只寫 repo 本身的 config 看是不是實驗 repo;寫使用者或系統層設定的 config 一律不算。"""
++    if sub == "push":
++        return not remotes_dirty and not gitdir_seen and _push_target_temp(eff, args)
++    if sub == "config":
++        flags, _ = _config_split(args)
++        return not (flags & _CONFIG_GLOBAL_FLAGS) and _not_real_repo(eff)
++    if sub == "commit":
++        return _not_real_repo(eff)
++    return False
++
++
++def _prefix_skip(seg, i, upto) -> bool:
++    """這一段在位置 upto 之前、以「指令前綴」身分設了 LUMOS_SKIP_*:段首的賦值,或 env 後面的賦值。
++    當成一般參數出現的(`grep LUMOS_SKIP_X=1 檔`)不算。"""
++    if any(_SKIP_ASSIGN.match(w) for w in seg[:i]):
++        return True
++    for k in range(i, upto):
++        if os.path.basename(seg[k]) != "env":
++            continue
++        j = k + 1
++        while j < upto and (seg[j].startswith("-") or _ASSIGN.match(seg[j])):
++            if _SKIP_ASSIGN.match(seg[j]):
++                return True
++            j += 1
++    return False
++
++
++class _Walker:
++    """逐段走過切好的詞:追蹤 cd 目錄(子殼層、背景、管線各自隔開,條件式 cd 只在緊接 && 時算數)、
++    變數、export,收集命中代號。任何地方設過 GIT_DIR 這一族或用了 --git-dir/--work-tree,整條都不給拋棄式豁免。"""
++
++    def __init__(self, cwd):
++        start = os.path.normpath(cwd) if isinstance(cwd, str) and cwd.startswith("/") else _UNKNOWN
++        self.stack = [start]
++        self.variables = {}
++        self.exported_skip = False
++        self.exported_cfg = False
++        self.gitdir_seen = False
++        self.remotes_dirty = False
++        self.exported_remote = False
++        self.cond_pending = False
++        self.brace_stack = []
++        self.brace_close = None
++        self.seg_conditional = False
++        self.found = []
++
++    def run(self, toks):
++        seg, prev = [], ""
++        for t in toks:
++            if not isinstance(t, _Sep):
++                seg.append(t)
++                continue
++            self._finish(seg, prev, t)
++            seg, prev = [], t
++        self._finish(seg, prev, "")
++        return list(dict.fromkeys(self.found))
++
++    def _finish(self, seg, prev, nxt):
++        """跑完一段,再依前後的分隔符決定這段的 cd 算不算數,最後處理括號層。"""
++        before = self.stack[-1]
++        self.seg_conditional = False
++        changed = self.segment(seg)
++        p, q = _sep_core(prev), _sep_core(nxt)
++        bg = _is_pipe(q) or (q.startswith("&") and not q.startswith("&&"))
++        if changed:
++            self._scope_cd(before, p, q, bg)
++        if self.brace_close is not None:
++            if bg:
++                self.stack[-1] = self.brace_close   # `{ cd X; } | cat`、`{ …; } &`:群組在子殼層跑
++            self.brace_close = None
++        if self.cond_pending and q and not q.startswith("&&"):
++            self.stack[-1] = _UNKNOWN        # && 鏈結束後,不知道條件式 cd 有沒有跑
++            self.cond_pending = False
++        for c in nxt:
++            if c == "(":
++                self.stack.append(self.stack[-1])
++            elif c == ")" and len(self.stack) > 1:
++                self.stack.pop()
++
++    def _scope_cd(self, before, p, q, bg):
++        """這一段改了目錄:依前後分隔符決定改動算不算數。"""
++        if _is_pipe(p) or bg:
++            self.stack[-1] = before          # 管線與背景執行的段在子殼層跑,cd 不影響後面
++        elif self.seg_conditional or p.endswith("||") or q.startswith("||"):
++            self.stack[-1] = _UNKNOWN        # if/while 條件裡、|| 兩側的 cd:跑沒跑到判不出
++        elif p.endswith("&&"):
++            if q.startswith("&&"):
++                self.cond_pending = True     # && 之後的 cd 再緊接 &&:這條 && 鏈裡 cd 一定跑過
++            else:
++                self.stack[-1] = _UNKNOWN
++
++    def _assign(self, w):
++        name, val = w.split("=", 1)
++        name = name.rstrip("+")
++        self.variables[name] = _expand(val, self.variables)
++        return name
++
++    def segment(self, seg) -> bool:
++        """處理一段;回這段有沒有改變目前目錄(cd、pushd、popd)。"""
++        seg = _strip_redirects(seg)
++        self._note_markers(seg)
++        i = 0
++        while i < len(seg) and (seg[i] in _KEYWORDS or _ASSIGN.match(seg[i])):
++            i += 1
++        if i >= len(seg):            # 只有賦值:設 shell 變數(沒有 export,子程序看不到)
++            for w in seg:
++                if _ASSIGN.match(w):
++                    self._assign(w)
++            return False
++        cmd = os.path.basename(seg[i])
++        if cmd in ("cd", "pushd", "popd"):
++            self._dir_change(cmd, seg, i)
++            return True
++        builtin = {"export": self._export, "declare": self._declare, "typeset": self._declare}.get(cmd)
++        if builtin:
++            builtin(seg[i + 1:])
++        else:
++            self._command(seg, i)
++        return False
++
++    def _note_markers(self, seg):
++        """大括號群組的開合與 GIT_DIR 一族的賦值(export、declare 的名稱在 _mark_exported)。"""
++        if seg and seg[0] == "{":
++            self.brace_stack.append(self.stack[-1])
++        if seg and seg[0] == "}":
++            self.brace_close = self.brace_stack.pop() if self.brace_stack else None
++        if any(_GITDIR_ASSIGN.match(w) for w in seg):
++            self.gitdir_seen = True
++
++    def _dir_change(self, cmd, seg, i):
++        if cmd == "cd":
++            self._cd(seg[i + 1:])
++            self.seg_conditional = any(w in ("if", "elif", "while", "until", "!") for w in seg[:i])
++        else:
++            self.stack[-1] = _UNKNOWN
++
++    def _cd(self, rest):
++        rest = [a for a in rest if not (a.startswith("-") and a != "-")]
++        if not rest or rest[0] == "-":
++            self.stack[-1] = _UNKNOWN
++        else:
++            self.stack[-1] = _join(self.stack[-1], _expand(rest[0], self.variables))
++
++    def _mark_exported(self, name):
++        if name.startswith("LUMOS_SKIP_"):
++            self.exported_skip = True
++        val = str(self.variables.get(name, "")).lower()
++        if name.startswith("GIT_CONFIG_") and "core.hookspath" in val:
++            self.exported_cfg = True
++        if name.startswith("GIT_CONFIG_") and ("remote." in val or "url." in val):
++            self.exported_remote = True
++        if _GITDIR_NAME.match(name):
++            self.gitdir_seen = True
++
++    def _export_names(self, rest):
++        for w in rest:
++            if _ASSIGN.match(w):
++                self._mark_exported(self._assign(w))
++            elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", w) and w in self.variables:
++                self._mark_exported(w)
++
++    def _export(self, rest):
++        if "-n" in rest:
++            return                   # export -n:取消匯出
++        self._export_names(rest)
++
++    def _declare(self, rest):
++        if any(a.startswith("-") and "x" in a for a in rest):
++            self._export_names(rest)
++
++    def _command(self, seg, i):
++        """一般指令:段裡的 lumos 指令前以前綴身分帶 LUMOS_SKIP_*、或段裡第一個 git 詞開始的 git 指令。"""
++        lk = next((k for k in range(i, len(seg)) if os.path.basename(seg[k]) == "lumos"), None)
++        if lk is not None and (self.exported_skip or _prefix_skip(seg, i, lk)):
++            self.found.append("lumos-skip")
++        gi = next((k for k in range(i, len(seg)) if os.path.basename(seg[k]) == "git"), None)
++        if gi is not None:
++            self._git(seg, i, gi)
++
++    def _git(self, seg, i, gi):
++        parsed = _parse_git(seg, gi)
++        if parsed is None:
++            return
++        sub, args, gdirs, cfgs, moved = parsed
++        eff = self.stack[-1]
++        for d in gdirs:
++            eff = _join(eff, _expand(d, self.variables))
++        if moved:
++            self.gitdir_seen = True
++        if self.gitdir_seen:
++            eff = _UNKNOWN           # 動的不一定是生效目錄那個 repo
++        if self.exported_cfg or _env_cfg_hookspath(seg[:gi]):
++            cfgs = [*cfgs, "core.hooksPath"]
++        env_vals = _env_cfg_values(seg[:gi])
++        if _cfg_touches_remotes(cfgs) or any("remote." in v.lower() or "url." in v.lower() for v in env_vals):
++            self.remotes_dirty = True    # `-c remote.*.pushurl=`、`GIT_CONFIG_KEY_n=url.*` 這次就改了推送位址
++        skip = self.exported_skip or _prefix_skip(seg, i, gi)
++        for code in _hit_codes(sub, args, cfgs, skip):
++            if not _exempt(sub, eff, args, self.remotes_dirty or self.exported_remote, self.gitdir_seen):
++                self.found.append(code)
++        if _changes_remotes(sub, args):
++            self.remotes_dirty = True
++
++
++def _changes_remotes(sub, args) -> bool:
++    """這條 git 指令會不會改到推送位址:`git remote` 的寫入子指令,或 `git config` 碰到 remote.* / url.* 的鍵。"""
++    if sub == "remote":
++        return bool(args) and args[0] not in ("-v", "--verbose", "show", "get-url")
++    if sub == "config":
++        flags, pos = _config_split(args)
++        if flags & _CONFIG_READ_FLAGS:
++            return False
++        if pos and pos[0] in ("set", "unset", "remove-section", "rename-section"):
++            pos = pos[1:]
++            return bool(pos) and pos[0].lower().startswith(("remote", "url"))
++        if not pos or not pos[0].lower().startswith(("remote.", "url.")):
++            return bool(flags & _CONFIG_SECTION_FLAGS) and bool(pos) and pos[0].lower().startswith(("remote", "url"))
++        return bool(flags & _CONFIG_WRITE_FLAGS) or len(pos) >= 2
++    return False
++
++
++def _cfg_touches_remotes(keys) -> bool:
++    return any(str(k).lower().startswith(("remote.", "url.")) for k in keys)
++
++
++def _env_cfg_values(words):
++    """同段 git 之前的 GIT_CONFIG_KEY_n= 與 GIT_CONFIG_PARAMETERS= 的值。"""
++    return [m.group(2) for m in (_CFG_ENV_ASSIGN.match(w) for w in words) if m]
++
++
++def _sep_core(sep: str) -> str:
++    """分隔符的語意核心:換行等同 `;`(`a && b⏎c` 的換行跟分號一樣會結束 && 鏈)。"""
++    core = sep.replace("\n", ";")
++    if not core.strip(";"):
++        return ";" if core else ""
++    return core
++
++
++def _is_pipe(sep: str) -> bool:
++    return (sep.startswith("|") and not sep.startswith("||")) or (sep.endswith("|") and not sep.endswith("||")) or "|&" in sep
++
++
++def bypass_reasons(command: str, cwd) -> list:
++    """回這條指令的命中代號清單(去重、保序);空清單=放行。"""
++    global _BUDGET_START
++    _GIT_STATE["calls"] = 0
++    _GIT_STATE["cache"] = {}
++    _GIT_STATE["dead"] = False
++    if not _IN_HOOK["on"]:
++        _BUDGET_START = None         # 不是掛鉤進場(例如拿事件帳批次重跑):每次判斷重新起算預算
++    if len(command) > MAX_LEN:
++        return _literal(command)      # 太長:只看字面
++    text = _replace_cmdsubs(_Normalizer(command).run())
++    try:
++        toks = _tokens(text)
++    except ValueError:
++        return _literal(command)
++    return _Walker(cwd).run(toks)
++
++
++def _literal(command: str) -> list:
++    """切不動或太長時只看字面:有 git 或 lumos,而且看起來在跳過閘(--no-verify、改掛鉤目錄、LUMOS_SKIP、提交 -n)就問。"""
++    low = re.sub(r"['\"\\]", "", command).lower()
++    if "git" not in low and "lumos" not in low:
++        return []
++    if any(w in low for w in _PRE_WORDS):
++        return ["literal"]
++    if re.search(r"\bcommit\b", low) and _PRE_SHORT_N.search(low):
++        return ["literal"]
++    return []
++
++
++def _reason_text(codes) -> str:
++    what = ";".join(_REASON_TEXT.get(c, c) for c in codes)
++    return ("發生什麼:這條指令會跳過 Lumos 的閘(" + what + ")。\n"
++            "為什麼在意:閘被跳過就沒人檢查這次推送或提交;代理被擋時順手繞過是已知模式。\n"
++            "怎麼做:確定要跳過就按允許;不確定就拒絕,讓代理改成修好被擋的原因。")
++
++
++def decide(event):
++    """回要印的 JSON 物件,或 None(放行)。內部例外一律放行並 mark error。"""
++    try:
++        if not isinstance(event, dict):
++            return None
++        ti = event.get("tool_input")
++        if not isinstance(ti, dict):
++            return None
++        cmd = ti.get("command")
++        if not isinstance(cmd, str) or not cmd:
++            return None
++        cwd = event.get("cwd")
++        codes = bypass_reasons(cmd, cwd if isinstance(cwd, str) else None)
++    except Exception as e:
++        mark("error", type(e).__name__ + ":" + str(e)[:120])
++        return None
++    if not codes:
++        return None
++    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
++                                   "permissionDecisionReason": _reason_text(codes)}}
++
++
++def main(raw: str) -> int:
++    out = decide(json.loads(raw))
++    if out:
++        print(json.dumps(out, ensure_ascii=False))
++    return 0
++
++
++def entry(stdin_bytes: bytes) -> int:
++    """掛鉤進入點。跟鄰居掛鉤不同:讀 stdin 與預篩放在 guard 之外——guard 每次都跑 git 並寫存活事件,
++    每條 Bash 都進 guard 會擠掉其他掛鉤的存活紀錄(計劃〈做法〉、Systems/代理繞閘問人 的 PITFALL)。
++    共用模組在模組頂層載入(鄰居在 `__main__` 裡載),因為 `decide` 的 `mark` 在測試直接呼叫時也要有。"""
++    _IN_HOOK["on"] = True
++    _inner_budget(default=5.0)       # 預算從進場就開始算,不是從第一次跑 git 才算
++    try:
++        raw = stdin_bytes.decode("utf-8", "replace")
++        go = prefilter(raw)
++    except Exception:
++        return 0
++    if not go:
++        return 0
++    if _guard:
++        return _guard("pretooluse-bypass-ask-hook", __file__, lambda: main(raw), swallow=True)
++    try:
++        return main(raw)
++    except Exception:
++        return 0
++
++
++if __name__ == "__main__":
++    try:
++        _stdin = sys.stdin.buffer.read()
++    except Exception:
++        sys.exit(0)
++    sys.exit(entry(_stdin))
+diff --git a/scripts/lumos b/scripts/lumos
+index abb4774c..e91b9289 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -23883,20 +23883,21 @@ _VENDORED_TREE_DIRS = ("scripts/hooks", "scripts/templates")   # 安裝時整個
+ # scripts/templates 的程式會被當成工具的檔,推送閘的風險分級被降、逃過代碼審。
+ # 表要跟工具鏈 repo 裡那兩個目錄底下受版控的檔一模一樣:有一支測試逐檔比對,少登記或多登記都會翻紅。
+ _VENDORED_TREE_FILES = (
+     "scripts/hooks/claude/_hookevent.py",
+     "scripts/hooks/claude/check-graph-sync.py",
+     "scripts/hooks/claude/ci-status-hook.py",
+     "scripts/hooks/claude/memory-sweep.py",
+     "scripts/hooks/claude/dispatch-lens-hook.py",
+     "scripts/hooks/claude/impact-hook.py",
+     "scripts/hooks/claude/lumos-entry-hook.py",
++    "scripts/hooks/claude/bypass-ask-hook.py",
+     "scripts/hooks/post-commit",
+     "scripts/hooks/pre-commit",
+     "scripts/hooks/pre-push",
+     "scripts/templates/graph-discipline.md",
+     "scripts/templates/note-audit-judge.md",
+     "scripts/templates/note-audit-reread.md",     # 回頭重讀守檔筆記的派工詞範本(lumos update 才發得到消費專案)
+ )
+ _VENDORED_ALL = frozenset(_VENDORED_TOOLKIT + _VENDORED_TREE_FILES)
+ 
+ 
+@@ -24890,21 +24891,21 @@ def _init_config_skeleton(root):
+             body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄;偵測得到的語言全部列出來了,不需要的平台整段刪掉就好",
+                     "default_platform": next(iter(plats)), "platforms": plats,
+                     "symbol_profile": guess[ranked[0][0]]["symbol"]}
+     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+     body = {"_請先確認": note, **body}
+     _write_lf(cfg_path, _j.dumps(body, ensure_ascii=False, indent=2) + "\n")
+     print(f"  ✓ 設定骨架 {cfg_path}(★技術棧是推測的,請開檔確認★——猜錯會讓測試掃描與符號檢查靜默失效)")
+ 
+ 
+ _GLOBAL_CLAUDE_HOOKS = ("check-graph-sync.py", "impact-hook.py", "ci-status-hook.py", "lumos-entry-hook.py", "dispatch-lens-hook.py",
+-                        "memory-sweep.py",
++                        "memory-sweep.py", "bypass-ask-hook.py",
+                         # ★共用模組也要複製★(2026-09-08 code-enforcement-obs r1 外家席 blocker):
+                         # 五支 hook 都 `from _hookevent import guard`。沒複製它 → 安裝副本 import 失敗
+                         # → 退回不記事件 → enforcement 對那五列永遠 unknown。★裝了等於沒裝★,
+                         # 而且來源樹的測試照樣全綠(測的是來源樹,不是安裝副本)。
+                         "_hookevent.py")
+ _GLOBAL_HOOKS = _GLOBAL_CLAUDE_HOOKS   # 兩家共用同一批檔(Claude→~/.claude/hooks、Codex→~/.codex/hooks;Projects/Codex完全支援_計劃 d2);舊名留給既有呼叫/測試
+ _SKILL_MARKER = ".lumos-managed"       # fallback 複製出的 skill 目錄帶此標記檔;開放共用目錄只重建帶標記的(r2 邊界 N1)
+ _HARNESS_HOME = {"claude": (".claude", "settings.json"), "codex": (".codex", "hooks.json")}
+ # ★撤除 hook 要分兩階段,不能一刀刪檔★(2026-08-22 立;症狀真實發生過)
+ #
+@@ -25754,20 +25755,21 @@ ANCHOR_FILES = [
+     "scripts/hooks/post-commit",
+     "scripts/hooks/claude/dispatch-lens-hook.py",   # 2026-09-03 派工鏡頭注入:會改寫子代理派工詞的 hook,硬約束進錨點
+     # ★2026-09-06 全 repo 審視 #6:其餘四支 hook 補進來★
+     # 它們跟上面那支一樣是「你一打開資料夾就自動跑」的程式,以前完全沒有東西盯著:
+     # 內容被改、或偷偷多一支,anchor verify 一句話都不說。
+     "scripts/hooks/claude/lumos-entry-hook.py",     # 進場時注入紀律提醒 + 查各層防護
+     "scripts/hooks/claude/impact-hook.py",          # 改檔前把牽連的合約推到眼前
+     "scripts/hooks/claude/check-graph-sync.py",     # 收工檢查圖譜有沒有跟上
+     "scripts/hooks/claude/ci-status-hook.py",       # 推送後回報 CI 狀態
+     "scripts/hooks/claude/memory-sweep.py",         # 開場檢查記憶有沒有在說謊(它會改記憶檔,更要盯)
++    "scripts/hooks/claude/bypass-ask-hook.py",      # 每條 Bash 執行前判斷是不是在繞閘,命中就問人
+     # ★2026-09-08 #19 S4:五支 hook 共用的事件寫入器★——它被那五支 import、
+     # 而且會跟著複製到 ~/.claude/hooks/,所以它也是「一打開資料夾就自動跑」的程式的一部分。
+     # 漏登記的話 anchor verify 會直接擋推送(r1 架構對齊席當場重現),而那道★永遠不可跳★。
+     "scripts/hooks/claude/_hookevent.py",
+ ]
+ _ANCHOR_BASELINE_REL = "governance/anchor-baseline.json"
+ 
+ 
+ def _anchor_repo_root(repo):
+     """--repo 顯式優先;省略時 cwd 逐層向上找 .git(同 refcheck 慣例)。失敗印錯回 None。"""
+@@ -27407,21 +27409,23 @@ def enforcement_status(root=None, home=None):
+     # 2026-07-07 事故)。★r1 審:_GLOBAL_CLAUDE_HOOKS 有 4 支,原本漏檢 ci-status(CI 紅燈後備網)★。
+     hookdir = home / ".claude" / "hooks"
+     for layer, needle in (("session-entry-hook", "lumos-entry-hook.py"),
+                           ("pretooluse-impact-hook", "impact-hook.py"),
+                           ("stop-graph-sync-hook", "check-graph-sync.py"),
+                           ("sessionstart-ci-status-hook", "ci-status-hook.py"),
+                           ("pretooluse-dispatch-lens-hook", "dispatch-lens-hook.py"),
+                           # ★這份清單是寫死列舉的,加 hook 一定要回來加一行★
+                           # (2026-09-14 代碼審 r1 架構對齊席 major:記憶清掃那支漏登記,
+                           #  於是它逾時、出錯、靜默失效,整個工具鏈都不會有任何感知)
+-                          ("sessionstart-memory-sweep", "memory-sweep.py")):
++                          ("sessionstart-memory-sweep", "memory-sweep.py"),
++                          # 繞閘問人(Projects/代理繞閘字樣問人_計劃):只在預篩命中時記事件,七天沒命中顯示 stale、不進分母
++                          ("pretooluse-bypass-ask-hook", "bypass-ask-hook.py")):
+         if reg is None:
+             add(layer, "unknown", "~/.claude/settings.json 讀不到")
+             continue
+         registered = any(needle in cmd for cmd in reg)
+         file_ok = (hookdir / needle).exists()
+         if registered and file_ok:
+             # ★生效 ≠ 有註冊★(#19 S4):還要「現在的這個版本最近真的成功跑完過」。
+             # 沒有近期成功不標 inactive——那可能只是七天內沒被觸發。
+             _lv, _why = _hook_recent_ok(root, layer, hookdir / needle)
+             if _lv == "ok":
+diff --git a/scripts/merge-claude-settings.py b/scripts/merge-claude-settings.py
+index 1c6ee560..1b5ef3a1 100755
+--- a/scripts/merge-claude-settings.py
++++ b/scripts/merge-claude-settings.py
+@@ -115,20 +115,22 @@ HOOK_BUDGET = {
+     # ★從 10 提到 40★(2026-09-07;r1 通才席指出提到 30 還是不夠):
+     # 它內層要跑圖譜同步檢查,實測需要 25 秒。內層公式是「外層×0.7」,
+     # 所以外層 30 只給到 21 秒——★還是撐不完那 25 秒,天花板提了等於沒提★,
+     # 使用者只是多等 20 秒拿到同一個「查不到」。40×0.7=28 才真的夠。
+     # 代價誠實講:這支掛在收工事件,使用者最壞情況要多等到 28 秒。
+     # REVISIT:2026-12-07 量一次這段實際耗時分布;若多數遠低於 25 秒,把天花板調回去
+     "check-graph-sync.py": 40,
+     # 記憶過期清掃:多數檢查是本機指令(毫秒),慢的是要連遠端問「推了沒」那幾條。
+     # 預算用完會明說「還有幾條沒驗到」,不會假裝驗過。
+     "memory-sweep.py": 12,
++    # 繞閘問人:每條 Bash 都會叫,實際幾十毫秒;只有命中且落在暫存目錄時才跑 git 查遠端或工作樹。
++    "bypass-ask-hook.py": 5,
+ }
+ 
+ # 有些 hook 除了 --budget 還要別的旗標。★寫在這裡而不是散在下面的註冊表裡★,
+ # 理由同 HOOK_BUDGET:天花板與旗標都只能有一個來源,否則改一個地方會漏另一個。
+ HOOK_ARGS = {
+     # --quiet 讓它沒事完全不出聲、有話說時走 JSON 通道加安全框。
+     # ★不帶 --write★:2026-09-14 代碼審三輪之後改成唯讀——三輪 blocker 全在寫檔上。
+     "memory-sweep.py": "--quiet",
+ }
+ 
+@@ -226,20 +228,33 @@ HOOK_ENTRIES = {
+             # 外層 60 > 內層 45(dispatch-lens-hook.py INNER_TIMEOUT)。
+             "matcher": "Agent",
+             "hooks": [
+                 {
+                     "type": "command",
+                     "command": _hook_cmd("dispatch-lens-hook.py"),
+                     "timeout": HOOK_BUDGET["dispatch-lens-hook.py"],
+                 }
+             ],
+         },
++        {
++            # 繞閘問人(Projects/代理繞閘字樣問人_計劃):Bash 指令真的在對非拋棄式 repo 繞過 Lumos 的閘
++            # (--no-verify、commit -n、core.hooksPath、LUMOS_SKIP_*)就回 permissionDecision "ask"。
++            # 預篩不中=不跑子程序、不記事件;任何失敗放行。只給 Claude(_codex_entries 跳過這條)。
++            "matcher": "Bash",
++            "hooks": [
++                {
++                    "type": "command",
++                    "command": _hook_cmd("bypass-ask-hook.py"),
++                    "timeout": HOOK_BUDGET["bypass-ask-hook.py"],
++                }
++            ],
++        },
+     ],
+     # NOTE(2026-08-21 體檢 #8):verification-rot-check(PostToolUse/Bash,每次 Bash 都觸發、
+     # 逐候選 claude -p 25s)撤除——docs/.rot-check-cache.json 與 .rot-queue.jsonl 從未被建立,
+     # 核心邏輯從沒跑到卻每次付啟動成本;且註冊曾重複兩份。要復活先修到核心可觸發再接回。
+     "PostToolUse": [],
+     "Stop": [
+         {
+             "hooks": [
+                 {
+                     "type": "command",
+@@ -255,26 +270,30 @@ HOOK_ENTRIES = {
+ }
+ 
+ 
+ def _codex_entries(entries: dict) -> dict:
+     """Claude 註冊表 → Codex 註冊表(Projects/Codex完全支援_計劃 S0-2 對照表,2026-09-04 實測 0.144.1):
+     · SessionStart / Stop:同名同形。
+     · PreToolUse `Edit|Write|MultiEdit` → matcher `apply_patch`(Codex 改檔工具;Edit/Write 只是它的別名,
+       tool_name 仍回 apply_patch;tool_input 是 patch 全文沒有 file_path——S1 適配 impact-hook)。
+     · PreToolUse `Agent`(派工鏡頭)→ 改掛 `SubagentStart`(無 matcher):spawn_agent 的 message 對 hook
+       是密文改不了(實驗 A),子代理開場的 additionalContext 才到得了子代理(實驗 5)。
++    · PreToolUse `Bash`(繞閘問人)→ 不註冊:Codex 的 Bash 前事件回覆形狀不同,原樣寫過去會收到它看不懂的 ask
++      (Projects/代理繞閘字樣問人_計劃,Codex 適配另見該篇 REVISIT)。
+     其餘事件原樣。"""
+     out = {}
+     for event, arr in entries.items():
+         for e in arr:
+             ne = dict(e)
+             ev = event
++            if event == "PreToolUse" and e.get("matcher") == "Bash":
++                continue
+             if event == "PreToolUse" and e.get("matcher") == "Edit|Write|MultiEdit":
+                 ne["matcher"] = "apply_patch"
+             elif event == "PreToolUse" and e.get("matcher") == "Agent":
+                 ev = "SubagentStart"
+                 ne.pop("matcher", None)
+             out.setdefault(ev, []).append(ne)
+     return out
+ 
+ 
+ if TARGET == "codex":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2615ef8f..f46bcb37 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -36596,21 +36596,21 @@ def t_enforcement_summary_excludes_unknown():
+     check("enforcement: total = 非unknown列數", n_total == len(rows) - n_unknown, f"total={n_total} rows={len(rows)}")
+ 
+ 
+ def t_enforcement_never_raises_on_missing():
+     m = _load_lumos_inproc()
+     # 完全不存在的 root/home 也不該炸(fail-open 自身可觀測)
+     bad = Path(tempfile.mkdtemp(prefix="gctl-enf-bad-")) / "nope"
+     rows = m.enforcement_status(root=bad, home=bad)
+     # r1 審:別留 >=8 的鬆口,釘死列數(5 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 12;2026-09-03 加 dispatch-lens;
+     # 2026-09-04 Codex完全支援 S0 加 9 列:codex-hook×5+codex-cli+claude-skills+codex-skills+agents-md = 21)
+-    check("enforcement: 缺目錄不炸、回恰 24 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger)", isinstance(rows, list) and len(rows) == 24, f"{len(rows)}: {[r['layer'] for r in rows]}")
++    check("enforcement: 缺目錄不炸、回恰 25 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger;10-14 加繞閘問人)", isinstance(rows, list) and len(rows) == 25, f"{len(rows)}: {[r['layer'] for r in rows]}")
+ 
+ 
+ def _isolate_environment():
+     """★把整輪測試關進拋棄式的家目錄與暫存目錄★(2026-09-06 全 repo 審視 #11)。
+ 
+     出身:兩支 install 測試直接跑 `lumos install --force` 而且沒帶任何環境隔離,
+     所以★每跑一次全套,開發機真正的 ~/.claude 與 ~/.agents 底下的 skill 連結就被
+     刪掉重建一次★(實測:連結的 inode 從 37184038 變成 37197577)。同型事故發生過兩次
+     ——2026-08-01 刪掉真機的 hook、2026-09-02 重連真 skills——兩次之後「假 HOME 是
+     最低門檻」都只寫在事故筆記裡,沒有任何機制擋住。
+@@ -41340,20 +41340,561 @@ def t_codex_r1_reviewer_fixes():
+ def _load_hook_mod(name, fname):
+     import importlib.util
+     from importlib.machinery import SourceFileLoader
+     hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / fname)
+     loader = SourceFileLoader(name, hook_path)
+     spec = importlib.util.spec_from_loader(name, loader)
+     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+     return m
+ 
+ 
++def _bypass_hook():
++    return _load_hook_mod("bypass_ask", "bypass-ask-hook.py")
++
++
++_BYPASS_REAL = "/Users/someone/work/repo"
++
++
++def _bypass_asks(m, cmd, cwd=_BYPASS_REAL):
++    out = m.decide({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd})
++    return ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecision") == "ask", out
++
++
++def t_bypass_ask_flags_real_bypass():
++    """[代理繞閘字樣問人 S1]非拋棄式目錄裡真的在繞閘 → 回 ask 並附三段式理由;前綴、跨行、續行也要認得。"""
++    m = _bypass_hook()
++    cases = (
++        ("推送 --no-verify", "git push --no-verify origin feat"),
++        ("推送縮寫 --no-veri", "git push --no-veri origin feat"),
++        ("提交 --no-verify", 'cd /Users/someone/work/repo && git commit -q -m "wip" --no-verify'),
++        ("提交 -qn", "git commit -qn -m x"),
++        ("提交 -n 單獨", "git commit -n -m x"),
++        ("提交 -n 在訊息之後", "git commit -m x -n"),
++        ("全域 -c 關掛鉤接 commit", "git -c core.hooksPath=/dev/null commit -m x"),
++        ("-c 大小寫", "git -c core.HooksPath=/dev/null push"),
++        ("config 設掛鉤路徑", "git config core.hooksPath /nowhere"),
++        ("config 設成空值", 'git config core.hooksPath ""'),
++        ("config --unset 拆閘", "git config --unset core.hooksPath"),
++        ("config --local --unset-all", "git config --local --unset-all core.hooksPath"),
++        ("LUMOS_SKIP 接推送", "LUMOS_SKIP_REREAD_CHECK=1 git push Lumos feat"),
++        ("LUMOS_SKIP 接 lumos 指令", "LUMOS_SKIP_FIX_CHECK=1 lumos code-loop check"),
++        ("LUMOS_SKIP 接 python 跑 lumos", "LUMOS_SKIP_LINT_NEW=1 python3.14 scripts/lumos code-loop check"),
++        ("env 設 LUMOS_SKIP", "env LUMOS_SKIP_DRIFT_CHECK=1 git push"),
++        ("export 後推送", "export LUMOS_SKIP_DRIFT_CHECK=1; git push"),
++        ("git 帶路徑", "/usr/bin/git push --no-verify"),
++        ("timeout 前綴", "timeout 600 git push --no-verify"),
++        ("command 前綴", "command git commit -n -m x"),
++        ("then 之後", "if ! git push; then git push --no-verify; fi"),
++        ("子殼層括號", "( cd /Users/someone/work/repo && git push --no-verify )"),
++        ("括號接分號", "(true); git push --no-verify"),
++        ("全域選項 --no-pager", "git --no-pager commit -n -m x"),
++        ("全域選項 -p", "git -p push --no-verify"),
++        ("跨行第二行繞閘", "git status\ngit push --no-verify"),
++        ("續行", "git push \\\n  --no-verify origin feat"),
++        ("config --add", "git config --add core.hooksPath /x"),
++        ("config --replace-all", "git config --replace-all core.hooksPath /x"),
++        ("export 後跑 lumos", "export LUMOS_SKIP_NOTE_AUDIT=1\nlumos code-loop check"),
++        ("引號裡多行訊息之後 -n", 'git commit -m "標題\n\n內文" -n'),
++        ("here-string 之後", "cat <<< \"x\"\ngit push --no-verify\nx"),
++        ("引號裡的 << 之後", 'echo "<<EOF"\ngit push --no-verify\nEOF'),
++        ("訊息裡有 <<EOF 字樣", "git commit -m \"doc: explain <<EOF handling\" --no-verify"),
++        ("找不到結束字的 heredoc", "cat <<EOF > a.md\ngit push --no-verify"),
++        ("結束字縮排但不是 <<-", "cat <<EOF > a.md\nhi\n  EOF\ngit push --no-verify"),
++        ("詞中間的 # 不是註解", "git checkout -b fix#1 && git push --no-verify"),
++        ("詞中間的 # 之後提交 -n", "echo a#b; git commit -n -m x"),
++        ("訊息 heredoc 有撇號之後 -n", 'git commit -m "$(cat <<\'EOF\'\ndon\'t do it\nEOF\n)" -n'),
++        ("訊息 heredoc 有撇號之後推送", 'git commit -m "$(cat <<\'EOF\'\nit\'s\nEOF\n)" && LUMOS_SKIP_X=1 git push'),
++        ("訊息 heredoc 有撇號之後 -c 關掛鉤", 'git commit -m "$(cat <<\'EOF\'\nwon\'t\nEOF\n)" && git -c core.hooksPath=/dev/null push'),
++        ("引號裡的括號之後 -n", 'git commit -m "(" -n'),
++        ("引號裡的分號之後 -n", 'git commit -m ";" -n'),
++        ("引號裡的管線符之後 -n", 'git commit -m "a|b" -n'),
++        ("ANSI 引號之後 -n", "git commit -m $'it\\'s' -n"),
++        ("LUMOS_SKIP 接 timeout lumos", "LUMOS_SKIP_FIX_CHECK=1 timeout 600 lumos code-loop check"),
++        ("LUMOS_SKIP 接 sudo lumos", "LUMOS_SKIP_X=1 sudo lumos code-loop check"),
++        ("timeout env 接 lumos", "timeout 600 env LUMOS_SKIP_X=1 lumos code-loop check"),
++        ("env 多個賦值接 lumos", "env -i A=1 B=2 LUMOS_SKIP_X=1 lumos x"),
++        ("LUMOS_SKIP 接 bash 跑 lumos", "LUMOS_SKIP_X=1 bash scripts/lumos x"),
++        ("LUMOS_SKIP 接 python 帶值旗標", "LUMOS_SKIP_X=1 python3 -X dev scripts/lumos doctor"),
++        ("先賦值再 export 名稱", "LUMOS_SKIP_X=1; export LUMOS_SKIP_X; git push"),
++        ("declare -x", "declare -x LUMOS_SKIP_X=1; git push"),
++        ("+= 賦值", "LUMOS_SKIP_X+=1 git push"),
++        ("--config-env 黏著", "git --config-env=core.hooksPath=H push"),
++        ("--config-env 分開", "git --config-env core.hooksPath=H push"),
++        ("GIT_CONFIG_KEY 環境變數", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push"),
++        ("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/dev/null'\" git push"),
++        ("git config 新語法 set", "git config set core.hooksPath /x"),
++        ("引號裡的指令替換裡又有引號與分號", 'git commit -m "$(echo "a;b")" -n'),
++        ("註解有撇號之後的續行", "# don't skip\ngit commit -m x \\\n  --no-verify"),
++        ("heredoc 內文有撇號之後的續行", "cat <<EOF\nit's\nEOF\ngit push \\\n --no-verify"),
++        ("ANSI 引號之後的續行", "echo $'it\\'s'; git push \\\n --no-verify"),
++        ("續行切開長選項", "git push --no-\\\nverify origin"),
++        ("ANSI 引號包旗標", "git commit -$'n' -m x"),
++        ("跳脫的反引號夾指令", "echo \\`; git push --no-verify; echo \\`"),
++        ("引號裡剛好是 > 的訊息", "git commit -m '>' -n"),
++        ("引號裡剛好是 < 的訊息", 'git commit -m "<" -n'),
++        ("-F 引號裡是 >", "git commit -F '>' -n"),
++        ("推送導向暫存檔", "git push --no-verify > /tmp/x.log"),
++        ("推送導向暫存檔含 2>&1", "git push --no-verify >/tmp/x.log 2>&1"),
++        ("推送 &> 暫存檔", "git push --no-verify &> /tmp/x.log"),
++        ("導向在旗標前", "git push > /tmp/p.log --no-verify"),
++        ("輸入導向", "git push --no-verify < /tmp/in"),
++        ("config --remove-section core", "git config --remove-section core"),
++        ("config --rename-section core", "git config --rename-section core x"),
++        ("指令裡已有私用區字元", "git commit -m '\ue006' -n"),
++        ("ANSI 八進位", "git push $'\\055\\055no-verify' o"),
++        ("ANSI \\u", "git push $'\\u002d\\u002dno-verify' o"),
++        ("$\"…\" 字串", 'git push $"--no-verify" o'),
++        ("數字參數加空格導向", "git commit -m 1 >/dev/null -n"),
++        ("config 值是數字加導向", "git config core.hooksPath 0 >/dev/null"),
++        ("{fd}> 導向在子指令前", "git {fd}>log commit -n"),
++        ("git config unset 新語法", "git config unset core.hooksPath"),
++        ("sudo git", "sudo git push --no-verify"),
++        ("! git", "! git commit -n -m x"),
++        ("--repo 指到網路", "git push --repo https://github.com/a/b --no-verify ./x"),
++        ("變數翻倍十幾次", "A=xx;" + "A=$A$A;" * 18 + " git commit -n"),
++        ("字面判:hookspath", 'git config core.hooksPath x "未閉合'),
++        ("字面判:LUMOS_SKIP 接 lumos", 'lumos x LUMOS_SKIP_A=1 "未閉合'),
++        ("字面判:commit -n", 'git commit -m "未閉合 -n'),
++    )
++    for label, cmd in cases:
++        asked, out = _bypass_asks(m, cmd)
++        reason = ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason", "")
++        check("繞閘問人 S1:%s → ask,理由三段式" % label,
++              asked and ((out or {}).get("hookSpecificOutput") or {}).get("hookEventName") == "PreToolUse"
++              and "發生什麼" in reason and "為什麼在意" in reason and "怎麼做" in reason, (cmd, out))
++    # 變數展開設長度上限(r3 併發資源席:`A=$A$A` 連續翻倍會指數膨脹,三十幾次就吃掉十幾 GB;這裡只驗上限,不真的去膨脹)
++    check("繞閘問人 S1:展開結果太長 → 判不出,不往下翻倍", m._expand("$A$A", {"A": "x" * 3000}) is m._UNKNOWN,
++          len(str(m._expand("$A$A", {"A": "x" * 3000}))))
++    _, out = _bypass_asks(m, "git commit -m $'it\\'s' -n")
++    check("繞閘問人 S1:ANSI 引號之後的 -n 是結構分類判出來的(不是切不動才走的字面判)",
++          "提交帶了 -n" in ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason", ""), out)
++    _, out = _bypass_asks(m, "git push --no-verify '\x1b]0;pwned\x07'")
++    reason = ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason", "")
++    check("繞閘問人 S1:理由只用固定文字,不嵌入指令內容", "pwned" not in reason and "\x1b" not in reason, reason)
++    print("  ✓ t_bypass_ask_flags_real_bypass")
++
++
++def t_bypass_ask_ignores_mentions():
++    """[代理繞閘字樣問人 S2]只是字面提到、讀設定、吃值旗標、或 LUMOS_SKIP 設在 git 與 lumos 以外的程式前 → 不輸出、放行。"""
++    m = _bypass_hook()
++    cases = (
++        'grep -rn "--no-verify" scripts/hooks/pre-push',
++        "grep -n 'core.hooksPath\\|LUMOS_SKIP_' scripts/lumos | head",
++        'echo "不要用 git push --no-verify"',
++        'git commit -m "docs: 說明 --no-verify 與 core.hooksPath 的風險"',
++        "sed -n 1,40p scripts/install-hooks.sh; git config core.hooksPath",
++        "git config --get core.hooksPath",
++        "git config --get-all core.hooksPath",
++        "LUMOS_SKIP_REREAD_CHECK=1 python3.14 scripts/test_lumos.py -k reread",
++        "git log --grep=no-verify --oneline",
++        "sed -n 1,20p scripts/hooks/pre-commit; git commit -m x",
++        "cat <<'EOF' > note.md\ngit push --no-verify\nEOF",
++        'cat <<-"END" > n.md\n\tgit commit -n -m x\n\tEND\ngit status',
++        "cat <<EOF | tee a.md\nLUMOS_SKIP_X=1 git push\nEOF\necho done",
++        "cat <<A <<B\ngit push --no-verify\nA\ngit commit -n -m x\nB\necho ok",
++        "git commit -mnote",
++        "git commit -m -n",
++        "git commit -F -n",
++        "git merge --no-verify main",
++        "git -c core.hooksPath=/dev/null rebase main",
++        "git -c core.hooksPath= cherry-pick abc",
++        "LUMOS_SKIP_CODE_LOOP=1 git merge feat",
++        'grep -n "LUMOS_SKIP_NOTE_SHAPE=1" scripts/lumos',
++        'rg "LUMOS_SKIP_X=1" scripts/lumos',
++        "grep -c LUMOS_SKIP_X= scripts/lumos",
++        "git config core.hooksPath 2>/dev/null",
++        "git config core.hooksPath 2>&1",
++        "git config core.hooksPath > /tmp/h.txt",
++        "grep GIT_DIR scripts/lumos",
++        "git commit -Sn -m x",
++        "HUSKY=0 git commit -m x",
++        "git commit -cnote",
++        "git commit -t n.txt -m x",
++        "git commit -unormal -m x",
++        "git commit -C main",
++        "git push --no-verified origin x",
++        "git config --list",
++        'git commit -m "第一行\n--no-verify 只是說明"',
++        "echo $((1<<2)); git status",
++        "git status 2>&1 | head",
++        "# git commit -n -m x",
++        "echo a #; git commit -n -m x",
++        "# it's fine\ngit commit -F - <<EOF\nnever use git push --no-verify\nEOF",
++        "echo hi # it's\ncat <<EOF\ngit push --no-verify\nEOF",
++        'git commit -m "第一行\n第二行" && git status',
++        "lumos search LUMOS_SKIP_X=1 foo",
++        "export -n LUMOS_SKIP_X=1; git push",
++        "LUMOS_SKIP_X=1 echo lumos-not-a-command",
++        "ls -la",
++    )
++    for cmd in cases:
++        asked, out = _bypass_asks(m, cmd)
++        check("繞閘問人 S2:放行 %r" % cmd[:50], out is None, (cmd, out))
++    print("  ✓ t_bypass_ask_ignores_mentions")
++
++
++def t_bypass_ask_throwaway_targets():
++    """[代理繞閘字樣問人 S3]拋棄式目標放行;cd 與 -C 的生效目錄、子殼層、mktemp、真 repo 工作樹、推送遠端照規則判。"""
++    import subprocess as _sp, tempfile as _tf, shutil as _sh, os as _os
++    m = _bypass_hook()
++    base = Path(_tf.mkdtemp(prefix="gctl-bypass-tw-")).resolve()
++    tmp_root, real_root = base / "tmproot", base / "realroot"
++    tmp_root.mkdir(); real_root.mkdir()
++    orig_roots = m._temp_roots
++    m._temp_roots = lambda: [str(tmp_root)]
++    try:
++        def git(*a):
++            _sp.run(["git", *a], check=True, capture_output=True, text=True)
++        real = real_root / "repo"
++        git("init", "-q", str(real))
++        git("-C", str(real), "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "i")
++        wt = tmp_root / "wt"
++        git("-C", str(real), "worktree", "add", "-q", str(wt))
++        exp = tmp_root / "exp"
++        git("init", "-q", str(exp))
++        bare = tmp_root / "remote.git"
++        git("init", "-q", "--bare", str(bare))
++        git("-C", str(exp), "remote", "add", "local", str(bare))
++        expnet = tmp_root / "expnet"        # 有網路遠端的暫存 repo:不算實驗 repo(r3 起)
++        git("init", "-q", str(expnet))
++        git("-C", str(expnet), "remote", "add", "local", str(bare))
++        git("-C", str(expnet), "remote", "add", "real", "git@github.com:org/real.git")
++        git("-C", str(expnet), "remote", "add", "aliasr", "aliashost:Org/Repo.git")
++        T, R, W, E, EN = str(tmp_root), str(real), str(wt), str(exp), str(expnet)
++        allow = (
++
++            f"cd {E} && git config core.hooksPath h",
++            f"git -C {E} commit -qm x --no-verify",
++            f"W={E}; cd $W && git -c core.hooksPath=/dev/null commit -m x",
++            f"cd {E} && git push --no-verify local main",
++            f"cd {E} && git push --no-verify {bare} main",
++            f"cd {E} && git push --no-verify ../remote.git main",
++
++            f"cd {T} && git -C exp commit -qm x --no-verify",
++            f"cd {E} && git push --no-verify file://{bare} main",
++        )
++        for cmd in allow:
++            asked, out = _bypass_asks(m, cmd)
++            check("繞閘問人 S3:拋棄式目標放行 %r" % cmd[-50:], out is None, (cmd, out))
++        asked, out = _bypass_asks(m, "git commit -qm x --no-verify", cwd=E)
++        check("繞閘問人 S3:沒有 cd/-C 時看事件 cwd,cwd 是暫存實驗 repo → 放行", out is None, out)
++        E2 = tmp_root / "exp2"
++        git("init", "-q", str(E2))
++        git("-C", str(E2), "remote", "add", "local", str(bare))
++        git("-C", str(E2), "config", "remote.local.pushurl", "git@github.com:org/real.git")
++        more_ask = (
++            f"cd {T}/nonexist && git --git-dir={R}/.git --work-tree={R} commit --no-verify -m x",
++            f"cd {T}/nonexist && GIT_DIR={R}/.git git commit --no-verify -m x",
++            f"cd {T}/nonexist && git --git-dir {R}/.git commit --no-verify -m x",
++            f"cd {T}/nonexist && env GIT_DIR={R}/.git git commit --no-verify -m x",
++            f"cd {E} && git --work-tree={R} commit -n -m x",
++            f"cd {E} && git config --global core.hooksPath /dev/null",
++            f"cd {E} && git config --system core.hooksPath /dev/null",
++            f"cd {E} && git config --file ~/.gitconfig core.hooksPath /dev/null",
++            f"cd {E} && git config -f ~/.gitconfig core.hooksPath /dev/null",
++            "S=$(mktemp -d); cd $S/../../Users/x && git commit -n -m x",
++            "S=$(mktemp -d); cd $S/.. && git commit -n -m x",
++            f"cd {T}/nonexist; git commit -n -m x",
++            f"cd {E} & git commit -n -m x",
++            f"cd {E} && git remote set-url local git@github.com:org/real.git && git push --no-verify local main",
++            f"cd {E2} && git push --no-verify local main",
++        )
++        for cmd in more_ask:
++            asked, out = _bypass_asks(m, cmd)
++            check("繞閘問人 S3:非拋棄式照問 %r" % cmd[-60:], asked, (cmd, out))
++        ask = (
++            f"cd {T} && git -C {R} push --no-verify",
++            f"cd {T}/x; cd {R}; git push --no-verify",
++            f"(cd {T}/x && true); git push --no-verify",
++            f"(cd {T}/x && true); git commit -qm x --no-verify",
++            f"cd {T}/x && cd - && git push --no-verify",
++            f"cd {T}/x && cd ~ && git commit -n -m x",
++            f"cd {T}/../realroot/repo && git commit -n -m x",
++            "msg=$(mktemp); printf wip > $msg; git commit -F $msg --no-verify",
++            "mktemp -d >/dev/null; git push --no-verify",
++            f"cd {W} && git commit -qm x --no-verify",
++            f"cd {W} && git config core.hooksPath /dev/null",
++            f"cd {EN} && git push --no-verify real main",
++            f"cd {E} && git push --no-verify",
++            f"git clone git@github.com:org/real.git {T}/c && cd {T}/c && git push --no-verify",
++            "d=$(mktemp -d); git -C $d push --no-verify",
++            f"cd {T}/n6 && git init -q && git remote add origin git@github.com:org/real.git && git push origin main --no-verify",
++            f"cd {T}/n7 && git init -q && git remote add -t main origin https://github.com/org/real.git && git push --no-verify origin",
++            f"cd {T}/x && pushd {R} && git push --no-verify",
++            f"cd {T}/x && cd && git commit -n -m x",
++            f"cd {T}/x && cd $(git rev-parse --show-toplevel) && git commit -n -m x",
++            f"cd {E} && LUMOS_SKIP_FIX_CHECK=1 lumos code-loop check",
++        )
++        for cmd in ask:
++            asked, out = _bypass_asks(m, cmd)
++            check("繞閘問人 S3:非拋棄式照問 %r" % cmd[-60:], asked, (cmd, out))
++        new_ask = (
++            f"mkdir -p {T}/new/repo && cd {T}/new/repo && git init -q && git commit -qm probe --no-verify",
++            "d=$(mktemp -d); git -C $d init -q; git -C $d commit -qm x --no-verify",
++            "cd $(mktemp -d) && git init -q && git commit -n -m x",
++            f"cd {T} && mkdir n4 && cd n4 && git init -q && git init -q --bare ../r.git && git remote add origin ../r.git && git push origin main --no-verify",
++            f"cd $(mktemp -d -p {R}) && git commit --no-verify -m x",
++            f"export GIT_DIR={R}/.git; cd {E}; git commit --no-verify -m x",
++            f"cd {E} && GIT_DIR={R}/.git git commit -n -m x",
++            f"cd {E} && env GIT_WORK_TREE={R} git commit -n -m x",
++            f"declare -x GIT_WORK_TREE={R}; cd {E}; git commit -n -m x",
++            f"GIT_DIR={R}/.git; export GIT_DIR; cd {E}; git commit -n -m x",
++            f"mkdir {T}/zz9 && ln -s {R} {T}/zz9/r && cd {T}/zz9/r && git commit --no-verify -m x",
++            f"cd {E} && git remote set-url --add --push local git@github.com:org/real.git && git push --no-verify local",
++            f"cd {E} && git remote set-url local {T}/zz && git push --no-verify local",
++            f"cd {E} | cat; git commit -n -m x",
++            f"cd /nope-real || cd {E}; git commit -n -m x",
++            f"[ -d /nope ] && cd {E}; git commit -n -m x",
++            f"cd {EN} && git push --no-verify aliasr main",
++            f"cd {E} && git push --no-verify > {T}/x.log",
++        )
++        for cmd in new_ask:
++            asked, out = _bypass_asks(m, cmd)
++            check("繞閘問人 S3:執行當下不能確認是實驗 repo → 照問 %r" % cmd[-60:], asked, (cmd, out))
++        (real / "sub").mkdir()
++        _os.symlink(str(real / "sub"), str(tmp_root / "lnk"))
++        _os.symlink(str(R), str(tmp_root / "realln"))
++        realclone = tmp_root / "realclone"
++        git("init", "-q", str(realclone))
++        git("-C", str(realclone), "remote", "add", "origin", "git@github.com:org/real.git")
++        r3_ask = (
++            f"git -C {T}/lnk/.. commit -n -m x",
++            f"cd {T}/realln && git commit -n -m x",
++            f"false && cd {E} && true\ngit commit -n -m x",
++            f"true || cd {E} && git commit -n -m x",
++            f"cd {E} || git commit -n -m x",
++            f"if ! cd {E}; then git commit -n -m x; fi",
++            f"{{ cd {E}; }} | cat; git commit -n -m x",
++            f"{{ cd {E}; }} & git commit -n -m x",
++            f"(cd {E})>/dev/null; git commit -n -m x",
++            f"cd {E} && git -c remote.local.pushurl=git@github.com:a/b.git push --no-verify local",
++            f"cd {E} && git -c url.git@github.com:a/b.git.pushInsteadOf={bare} push --no-verify local",
++            f"cd {E} && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.local.pushurl GIT_CONFIG_VALUE_0=git@github.com:a/b.git git push --no-verify local",
++            f"cd {E} && git config remote.local.pushurl git@github.com:a/b.git && git push --no-verify local",
++            f"git push --repo https://github.com/a/b --no-verify {bare}",
++            f"GIT_DIR={R}/.git git push --no-verify {bare}",
++            f"cd {E} && GIT_COMMON_DIR={R}/.git git commit -n -m x",
++            f"cd {realclone} && git commit -n -m x",
++            f"cd {realclone} && git config core.hooksPath /dev/null",
++        )
++        for cmd in r3_ask:
++            asked, out = _bypass_asks(m, cmd)
++            check("繞閘問人 S3:r3 邊界照問 %r" % cmd[-60:], asked, (cmd, out))
++        r3_allow = (
++            f"[ -d {E} ] && cd {E} && git commit -n -m x",
++            f"cd {E} && git config --get remote.local.url; git push --no-verify local main",
++            f"cd {E} && git config --get remote.local.url remote; git push --no-verify local main",
++            f"cd {E} && grep -rn GIT_DIR . ; git commit -n -m x",
++            f"cd {E} && git push --no-verify ./../remote.git main",
++        )
++        for cmd in r3_allow:
++            asked, out = _bypass_asks(m, cmd)
++            check("繞閘問人 S3:r3 實驗 repo 照放行 %r" % cmd[-60:], out is None, (cmd, out))
++        asked, out = _bypass_asks(m, "git commit -n -m x", cwd=123)
++        check("繞閘問人 S3:事件 cwd 不是字串 → 照問", asked, out)
++        orig_git = m._git_out
++        try:
++            m._git_out = lambda d, *a: (128, "", "fatal: detected dubious ownership in repository")
++            asked, out = _bypass_asks(m, f"cd {E} && git commit -n -m x")
++            check("繞閘問人 S3:git 查不到 repo 但原因不是「不是 repo」(擁有者不同被拒等)→ 照問", asked, out)
++            m._git_out = lambda d, *a: (128, "", "fatal: not a git repository (or any of the parent directories): .git")
++            asked, out = _bypass_asks(m, f"cd {E} && git commit -n -m x")
++            check("繞閘問人 S3:git 明說不在任何 repo 裡的暫存目錄 → 放行", out is None, out)
++        finally:
++            m._git_out = orig_git
++        asked, out = _bypass_asks(m, f"[ -d {E} ] && cd {E} && git commit -n -m x")
++        check("繞閘問人 S3:條件式 cd 之後緊接 && 的提交照豁免", out is None, out)
++        mixed = f"cd {T}/x && git commit -qm a --no-verify; cd {R} && git push --no-verify"
++        asked, out = _bypass_asks(m, mixed)
++        check("繞閘問人 S3:同一條另一段對真 repo 繞過 → 照樣問", asked, out)
++        asked, out = _bypass_asks(m, "git push --no-verify", cwd=None)
++        check("繞閘問人 S3:事件 cwd 缺欄 → 非拋棄式照問", asked, out)
++    finally:
++        m._temp_roots = orig_roots
++        _sh.rmtree(base, ignore_errors=True)
++    exp_default = Path(_tf.mkdtemp(prefix="gctl-bypass-default-"))
++    try:
++        _sp.run(["git", "init", "-q", str(exp_default)], check=True)
++        asked, out = _bypass_asks(m, f"cd {exp_default} && git commit -qm x --no-verify")
++        check("繞閘問人 S3:預設暫存根(不替換)底下已存在的實驗 repo → 放行", out is None, out)
++    finally:
++        _sh.rmtree(exp_default, ignore_errors=True)
++    asked, out = _bypass_asks(m, "mkdir -p /Users/someone/x && cd /Users/someone/x && git commit -n -m x")
++    check("繞閘問人 S3:暫存根以外同指令建的目錄 → 照問", asked, out)
++    print("  ✓ t_bypass_ask_throwaway_targets")
++
++
++def t_bypass_ask_fallbacks_and_budget():
++    """[代理繞閘字樣問人 S4]切不動或太長時退回字面判;例外放行並記失敗;預篩不寫事件;事件名對齊列名;三種最壞形狀 0.5 秒內。"""
++    import subprocess as _sp, sys as _sys, time as _t, json as _j, os as _os
++    m = _bypass_hook()
++    asked, out = _bypass_asks(m, 'git push --no-verify "未閉合')
++    check("繞閘問人 S4:引號不成對且含 git、push、--no-verify → ask", asked, out)
++    asked, out = _bypass_asks(m, 'grep "未閉合 --no-verify')
++    check("繞閘問人 S4:引號不成對但沒有 git → 放行", out is None, out)
++    long_cmd = "echo " + " ".join(["x"] * 15000) + " && git push --no-verify"
++    asked, out = _bypass_asks(m, long_cmd)
++    check("繞閘問人 S4:超過 2 萬字走字面判,含 git、push、--no-verify → ask", asked, out)
++    asked, out = _bypass_asks(m, "echo " + " ".join(["x"] * 15000) + " && git status")
++    check("繞閘問人 S4:超過 2 萬字、字面判不命中 → 放行", out is None, out)
++    hook = str(Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "bypass-ask-hook.py")
++    import tempfile as _tf, shutil as _sh
++    rp = Path(_tf.mkdtemp(prefix="gctl-bypass-ev-"))
++    try:
++        _sp.run(["git", "init", "-q", str(rp)], check=True)
++        evf = rp / "governance" / "runtime" / "hook-events.jsonl"
++        def _run(inp, *extra):
++            return _sp.run([_sys.executable, hook, *extra], input=inp, capture_output=True, text=True, timeout=30, cwd=str(rp))
++        def _evs():
++            return [_j.loads(l) for l in evf.read_text(encoding="utf-8").splitlines() if l.strip()] if evf.exists() else []
++        r3 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "ls -la && git status"}, "cwd": str(rp)}))
++        check("繞閘問人 S4:沒過預篩 → 不輸出、不寫任何存活事件", r3.returncode == 0 and not r3.stdout.strip() and not evf.exists(),
++              (r3.stdout[:200], evf.exists()))
++        r4 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --no-verify"}, "cwd": "/Users/someone/work/repo"}), "--budget", "5")
++        evs = _evs()
++        check("繞閘問人 S4:帶 --budget 5 照常判、命中印 ask", '"ask"' in r4.stdout, (r4.returncode, r4.stdout[:200], r4.stderr[-200:]))
++        check("繞閘問人 S4:過了預篩的存活事件名是 pretooluse-bypass-ask-hook、kind ok、不帶問人備註",
++              len(evs) == 1 and evs[0].get("hook") == "pretooluse-bypass-ask-hook" and evs[0].get("kind") == "ok"
++              and not evs[0].get("note"), evs)
++        r5 = _run("{壞掉的事件 git push --no-verify")
++        evs = _evs()
++        check("繞閘問人 S4:壞事件過了預篩 → 放行(rc 0、不輸出)並記一筆 error 事件",
++              r5.returncode == 0 and not r5.stdout.strip() and len(evs) == 2 and evs[-1].get("kind") == "error", (r5.returncode, r5.stdout[:200], evs))
++        r6 = _sp.run([_sys.executable, hook], input=b"\xff\xfe--no-verify\x00", capture_output=True, timeout=30, cwd=str(rp))
++        check("繞閘問人 S4:輸入不是 UTF-8 → rc 0、不輸出、沒有 traceback", r6.returncode == 0 and not r6.stdout.strip() and b"Traceback" not in r6.stderr,
++              (r6.returncode, r6.stdout[:200], r6.stderr[-300:]))
++        r8 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x \\\n-n"}, "cwd": "/Users/someone/work/repo"}))
++        check("繞閘問人 S4:續行後頂在行首的 -n 也過預篩、照問", '"ask"' in r8.stdout, (r8.returncode, r8.stdout[:200], r8.stderr[-200:]))
++        r9 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x \\\n\t-n"}, "cwd": "/Users/someone/work/repo"}))
++        check("繞閘問人 S4:續行後 Tab 接 -n 也過預篩、照問", '"ask"' in r9.stdout, (r9.returncode, r9.stdout[:200], r9.stderr[-200:]))
++        for cmd in ("git push --no-ver''ify origin", 'git commit -"n" -m x', "git push --no-ver\\ify origin",
++                    "git commit -$'n' -m x", "git push --no-ver\\\nify origin", "git config core.hooks\\\nPath x",
++                    "git push $'\\055\\055no-verify' o"):
++            rq = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": "/Users/someone/work/repo"}))
++            check("繞閘問人 S4:引號或反斜線拆字也過預篩、照問 %r" % cmd, '"ask"' in rq.stdout, (cmd, rq.stdout[:200]))
++        fake = Path(_tf.mkdtemp(prefix="gctl-bypass-fakegit-"))
++        dirs = [Path(_tf.mkdtemp(prefix="gctl-bypass-slow-")) for _ in range(5)]
++        try:
++            (fake / "git").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
++            (fake / "git").chmod(0o755)
++            cmd = "; ".join("git -C %s commit -n -m x" % d for d in dirs)
++            env = dict(_os.environ, PATH=str(fake) + ":" + _os.environ.get("PATH", ""))
++            t0 = _t.perf_counter()
++            rs = _sp.run([_sys.executable, hook, "--budget", "5"], input=_j.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(dirs[0])}),
++                         capture_output=True, text=True, timeout=60, cwd=str(dirs[0]), env=env)
++            dt = _t.perf_counter() - t0
++            check("繞閘問人 S4:git 卡住時整支在 5 秒外層預算內結束且照問", dt < 4.8 and '"ask"' in rs.stdout, (round(dt, 2), rs.stdout[:200], rs.stderr[-200:]))
++        finally:
++            for d in [fake, *dirs]:
++                _sh.rmtree(d, ignore_errors=True)
++        r7 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": ["git", "push", "--no-verify"]}, "cwd": str(rp)}))
++        check("繞閘問人 S4:command 不是字串 → rc 0、不輸出", r7.returncode == 0 and not r7.stdout.strip(), (r7.returncode, r7.stdout[:200], r7.stderr[-300:]))
++    finally:
++        _sh.rmtree(rp, ignore_errors=True)
++    orig = m.bypass_reasons
++    try:
++        def _boom(*a, **k):
++            raise RuntimeError("boom")
++        m.bypass_reasons = _boom
++        r = None
++        try:
++            r = m.decide({"tool_name": "Bash", "tool_input": {"command": "git push --no-verify"}, "cwd": _BYPASS_REAL})
++            raised = False
++        except Exception:
++            raised = True
++        check("繞閘問人 S4:分類丟例外 → decide 不往外丟、放行", not raised and r is None, (raised, r))
++        marks = []
++        orig_mark = m.mark
++        m.mark = lambda kind, note="": marks.append(kind)
++        try:
++            m.decide({"tool_name": "Bash", "tool_input": {"command": "git push --no-verify"}, "cwd": _BYPASS_REAL})
++        finally:
++            m.mark = orig_mark
++        check("繞閘問人 S4:decide 吞掉的例外要 mark(\"error\"),不能被記成 ok", marks == ["error"], marks)
++    finally:
++        m.bypass_reasons = orig
++    orig_pre = m.prefilter
++    try:
++        def _pre_boom(raw):
++            raise RuntimeError("boom")
++        m.prefilter = _pre_boom
++        import io as _io
++        from unittest.mock import patch as _patch
++        buf = _io.StringIO()
++        with _patch.object(m.sys, "stdout", buf):
++            rc = m.entry(b'{"tool_input": {"command": "git push --no-verify"}}')
++        check("繞閘問人 S4:預篩階段丟例外 → rc 0、不輸出(放行)", rc == 0 and not buf.getvalue().strip(), (rc, buf.getvalue()[:200]))
++    finally:
++        m.prefilter = orig_pre
++    many_dirs = [Path(tempfile.mkdtemp(prefix="gctl-bypass-cap-")) for _ in range(12)]
++    try:
++        cmd = ";".join("git -C %s commit --no-verify -m x" % many_dirs[k % 12] for k in range(300))
++        t0 = _t.perf_counter()
++        asked, out = _bypass_asks(m, cmd[:19000])
++        dt = _t.perf_counter() - t0
++        check("繞閘問人 S4:幾百段都要查 git 的指令 → 子程序有上限、1 秒內判完且照問", dt < 1.0 and asked, (round(dt, 3), out))
++    finally:
++        for d in many_dirs:
++            _sh.rmtree(d, ignore_errors=True)
++    for label, big in (("10 萬字單詞", "echo " + "x" * 100000 + " && git push --no-verify"),
++                       ("近兩萬字的分段", "a;" * 9400 + " git push --no-verify"),
++                       ("近兩萬字的未閉合 heredoc", "cat <<EOF " * 1900 + "\n git push --no-verify"),
++                       ("近兩萬字的指令替換", "echo $(a) " * 1900 + "; git push --no-verify"),
++                       ("近兩萬字含換行的 heredoc", "cat <<A\nx\nA\n" * 1500 + "git push --no-verify"),
++                       ("每行一個未閉合 heredoc", "<<E\n" * 4800 + "git push --no-verify"),
++                       ("大量沒配對的 $(", "git commit -n; " + "$(" * 9990),
++                       ("大量沒配對的 $((", "git commit -n; " + "$((" * 6600),
++                       ("大量相鄰反引號", "`" * 19900 + " git push --no-verify")):
++        t0 = _t.perf_counter()
++        asked, out = _bypass_asks(m, big)
++        dt = _t.perf_counter() - t0
++        check("繞閘問人 S4:%s 0.5 秒內判完且照問" % label, dt < 0.5 and asked, (label, round(dt, 3), out))
++    print("  ✓ t_bypass_ask_fallbacks_and_budget")
++
++
++def t_bypass_ask_registered():
++    """[代理繞閘字樣問人 S5]merge-claude-settings 在 PreToolUse 註冊 matcher Bash → bypass-ask-hook.py,逾時 5 秒;Codex 不註冊;安裝名單與 enforcement 有它。"""
++    import subprocess as _sp, sys as _sys, json as _j, tempfile as _tf, os as _os, shutil as _sh
++    home = Path(_tf.mkdtemp(prefix="gctl-bypass-home-"))
++    try:
++        (home / ".claude").mkdir()
++        env = dict(_os.environ, HOME=str(home), USERPROFILE=str(home))
++        merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
++        _sp.run([_sys.executable, merge], env=env, capture_output=True, text=True, timeout=60)
++        d = _j.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
++        pre = d.get("hooks", {}).get("PreToolUse", [])
++        hit = [(e, h) for e in pre if e.get("matcher") == "Bash" for h in e.get("hooks", []) if "bypass-ask-hook.py" in h.get("command", "")]
++        check("繞閘問人 S5:PreToolUse 有 matcher Bash 指向 bypass-ask-hook.py、逾時 5 秒",
++              len(hit) == 1 and hit[0][1].get("timeout") == 5, pre)
++        # Codex 為目標:Codex 的 Bash 前事件回覆形狀不同,這條不得原樣寫過去
++        (home / ".codex").mkdir()
++        rc = _sp.run([_sys.executable, merge, "--target", "codex"], env=dict(env, CODEX_HOME=str(home / ".codex")),
++                     capture_output=True, text=True, timeout=60)
++        cj = home / ".codex" / "hooks.json"
++        ctext = cj.read_text(encoding="utf-8") if cj.exists() else ""
++        check("繞閘問人 S5:以 Codex 為目標安裝 → 有寫出註冊表、但沒有任何指向 bypass-ask-hook.py 的註冊",
++              "impact-hook.py" in ctext and "bypass-ask-hook.py" not in ctext, (rc.returncode, rc.stderr[-300:], ctext[:300]))
++    finally:
++        _sh.rmtree(home, ignore_errors=True)
++    lumos = _load_lumos_inproc()
++    check("繞閘問人 S5:安裝名單含 bypass-ask-hook.py(沒加就不會被複製、註冊會被當懸空剪掉)",
++          "bypass-ask-hook.py" in lumos._GLOBAL_CLAUDE_HOOKS and "bypass-ask-hook.py" in lumos._own_hook_scripts(), lumos._GLOBAL_CLAUDE_HOOKS)
++    _home2 = Path(_tf.mkdtemp(prefix="gctl-bypass-enf-"))
++    try:
++        rows = lumos.enforcement_status(root=_home2, home=_home2)
++        check("繞閘問人 S5:enforcement 有 pretooluse-bypass-ask-hook 一列",
++              any(r.get("layer") == "pretooluse-bypass-ask-hook" for r in rows), [r.get("layer") for r in rows])
++    finally:
++        _sh.rmtree(_home2, ignore_errors=True)
++    print("  ✓ t_bypass_ask_registered")
++
++
+ def t_codex_s1_impact_apply_patch():
+     """impact-hook 吃 Codex apply_patch:tool_input.command 是 patch 全文、沒 file_path——解 Add/Update/Delete/Move to 標頭;
+     多檔最多 5 檔其餘列名;Claude 單檔路徑不變;main 多檔合併成一個 additionalContext。"""
+     import io as _io, json as _j, os as _os, tempfile as _tf
+     from unittest.mock import patch
+     m = _load_hook_mod("impact_hook_s1", "impact-hook.py")
+     patch_txt = "*** Begin Patch\n*** Add File: a.py\n+x\n*** Update File: src/b.py\n*** Move to: src/c.py\n@@\n-1\n+2\n*** Delete File: d.py\n*** Update File: docs/n.md\n*** End Patch"
+     ps = m.extract_patch_paths(patch_txt)
+     check("s1-impact: patch 標頭四種都抽到、保序去重", ps == ["a.py", "src/b.py", "src/c.py", "d.py", "docs/n.md"], str(ps))
+     check("s1-impact: 不是 patch 文字 → []", m.extract_patch_paths("echo hi") == [] and m.extract_patch_paths(None) == [], "")
+@@ -47090,20 +47631,91 @@ def t_hook_liveness_is_not_just_recently_ran():
+               lm._hook_recent_ok(root, "H", hookf)[0] == "ok", log.read_text())
+ 
+         log.write_text("這不是 json\n" + _j.dumps(dict(base, ts=ts(hours=1))) + "\n", encoding="utf-8")
+         check("★夾雜壞行不能整支炸掉★(fail-open 但仍要讀得到好的那筆)",
+               lm._hook_recent_ok(root, "H", hookf)[0] == "ok", log.read_text())
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+     print("  ✓ t_hook_liveness_is_not_just_recently_ran")
+ 
+ 
++def t_hook_event_trim_tmp_unique():
++    """存活事件檔超過上限要修剪時,暫存檔用各自獨立的名字(代碼審 code-代理繞閘字樣問人 r1 併發資源席):
++    固定叫 hook-events.jsonl.tmp 時,兩個會談同時修剪會寫同一個暫存檔;那個名字被別的東西佔住(這裡放一個資料夾)時,
++    修剪永遠失敗、檔案無限長大。"""
++    import tempfile as _tf, shutil as _sh
++    m = _load_hook_mod("hookevent_trim", "_hookevent.py")
++    root = Path(_tf.mkdtemp(prefix="gctl-hookevent-trim-"))
++    try:
++        rt = root / "governance" / "runtime"
++        rt.mkdir(parents=True)
++        f = rt / "hook-events.jsonl"
++        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
++        (rt / "hook-events.jsonl.tmp").mkdir()
++        ok = m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        lines = f.read_text(encoding="utf-8").splitlines()
++        check("存活事件修剪:固定暫存檔名被佔住時照樣修剪(2000 行以內、大小在上限一半以內)、新事件在最後",
++              ok and 0 < len(lines) <= 2000 and f.stat().st_size <= m.MAX_BYTES // 2 + 1024
++              and "pretooluse-bypass-ask-hook" in lines[-1], (ok, len(lines), f.stat().st_size))
++        left = [x.name for x in rt.iterdir() if x.name not in ("hook-events.jsonl", "hook-events.jsonl.tmp")]
++        check("存活事件修剪:沒有留下殘餘暫存檔", left == [], left)
++        # 權限照舊(r2 架構對齊席、併發資源席:mkstemp 會把 0644 換成 0600)
++        import os as _os, stat as _st, time as _tm
++        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
++        _os.chmod(f, 0o644)
++        m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        check("存活事件修剪:修剪後權限照原檔(0644)", _st.S_IMODE(f.stat().st_mode) == 0o644, oct(_st.S_IMODE(f.stat().st_mode)))
++        # 被砍在修剪中途留下的舊暫存檔,下次修剪會清掉(超過一分鐘的才清,不碰正在寫的)
++        old_trim = rt / "hook-events.abc123.trim"
++        old_trim.write_text("殘檔", encoding="utf-8")
++        _os.utime(old_trim, (_tm.time() - 600, _tm.time() - 600))
++        fresh_trim = rt / "hook-events.def456.trim"
++        fresh_trim.write_text("寫到一半", encoding="utf-8")
++        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
++        m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        check("存活事件修剪:超過一分鐘的殘留暫存檔被清掉、剛建的不碰", not old_trim.exists() and fresh_trim.exists(),
++              (old_trim.exists(), fresh_trim.exists()))
++        fresh_trim.unlink()
++        # 長行:修剪後大小要落在上限以下,不能每次都再修一次(r2 正確性席)
++        f.write_text(("y" * 600 + "\n") * 3000, encoding="utf-8")
++        m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        check("存活事件修剪:長行時修剪後小於位元組上限", f.stat().st_size <= m.MAX_BYTES, f.stat().st_size)
++        # 換入失敗時暫存檔要清掉(失敗清理分支)
++        from unittest.mock import patch as _patch
++        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
++        with _patch.object(m.os, "replace", side_effect=OSError("boom")):
++            m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        left = [x.name for x in rt.iterdir() if x.name.endswith(".trim")]
++        check("存活事件修剪:換入失敗時不留下暫存檔", left == [], left)
++        # 檔案還小、不需要修剪時,舊殘檔也要清(r3 併發資源席:下一次修剪可能要很久才來)
++        f.write_text("x\n", encoding="utf-8")
++        stale = rt / "hook-events.zz9999.trim"
++        stale.write_text("殘檔", encoding="utf-8")
++        _os.utime(stale, (_tm.time() - 600, _tm.time() - 600))
++        m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        check("存活事件修剪:不需要修剪時也清掉超過一分鐘的殘檔", not stale.exists(), stale.exists())
++        # 目錄唯讀、檔案可寫:修剪失敗要印一行提示(r3 併發資源席:原本靜默、檔案一路長大)
++        import io as _io, contextlib as _cl
++        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
++        _os.chmod(rt, 0o555)
++        err = _io.StringIO()
++        try:
++            with _cl.redirect_stderr(err):
++                m.record(root, "pretooluse-bypass-ask-hook", "ok")
++        finally:
++            _os.chmod(rt, 0o755)
++        check("存活事件修剪:目錄唯讀修剪失敗時印提示", "修剪失敗" in err.getvalue(), err.getvalue()[:200])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_hook_event_trim_tmp_unique")
++
++
+ def t_hook_event_recorded_only_on_success():
+     """★「跑過」只記在成功完成點,不記在進入點★(2026-09-08 #19 S4,r1 通才席)。
+ 
+     如果實作圖省事把寫入放在 hook 進入點(常見寫法:先記一筆「開始」再做事),
+     就會出現一種新的假綠——hook 每次都在起手式就當機,儀表板卻穩定顯示「近期跑過 N 次」。
+ 
+     ★同型前例就在隔壁★:`Systems/hook逾時預算` 記的正是「寫在 except 分支裡的清理動作
+     結構上永遠跑不到,而且沒人發現」,時間是 2026-09-07——前一天。
+     """
+     import json as _j, shutil as _sh, tempfile as _tf, subprocess as _sp

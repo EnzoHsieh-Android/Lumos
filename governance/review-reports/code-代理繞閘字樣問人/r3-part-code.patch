@@ -1,0 +1,1037 @@
+diff --git a/scripts/hooks/claude/_hookevent.py b/scripts/hooks/claude/_hookevent.py
+index cd8b5ae4..d701537b 100755
+--- a/scripts/hooks/claude/_hookevent.py
++++ b/scripts/hooks/claude/_hookevent.py
+@@ -74,31 +74,68 @@ def record(repo_root, hook_name, kind, note="", hook_file=None):
+         }
+         if note:
+             ev["note"] = str(note)[:200]
+         line = json.dumps(ev, ensure_ascii=False) + "\n"
+         # 原子寫入:單行 append 在 POSIX 上小於 PIPE_BUF 是原子的;
+         # 這裡再加一道上限修剪,修剪走暫存→改名(這個 repo 對共用檔的既有教訓)。
+         with open(f, "a", encoding="utf-8") as fh:
+             fh.write(line)
+         try:
+             if f.stat().st_size > MAX_BYTES:
+-                keep = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
+-                tmp = f.with_suffix(".jsonl.tmp")
+-                tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
+-                os.replace(tmp, f)
++                _trim(d, f)
+         except OSError:
+             pass
+         return True
+     except Exception:
+         return False
+ 
+ 
++def _trim(d: Path, f: Path):
++    """存活事件檔超過上限時修剪:留最後 2000 行,而且總大小壓在上限一半以內(長行時不會修完還超過、每次都再修)。
++
++    ★暫存檔各用獨立名字★(代碼審 code-代理繞閘字樣問人 r1 併發資源席):固定叫 .jsonl.tmp 時,
++    兩個會談同時修剪會寫同一個暫存檔,那個名字被佔住時修剪永遠失敗、檔案無限長大。
++    ★權限照原檔★(r2 架構對齊席、併發資源席):mkstemp 建的是 0600,不照抄的話修剪一次權限就變了。
++    ★清殘檔★(r2 併發資源席):修剪中途被砍會留下獨立名字的暫存檔,不會被下次覆蓋;
++    修剪前順手清掉超過一分鐘的(正在寫的那份不碰)。
++    """
++    import stat as _stat
++    import tempfile
++    for old in d.glob("hook-events.*.trim"):
++        try:
++            if time.time() - old.stat().st_mtime > 60:
++                old.unlink()
++        except OSError:
++            pass
++    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
++    budget, keep = MAX_BYTES // 2, []
++    for ln in reversed(lines):
++        budget -= len(ln.encode("utf-8")) + 1
++        if budget < 0:
++            break
++        keep.append(ln)
++    keep.reverse()
++    mode = _stat.S_IMODE(f.stat().st_mode)
++    fd, tmp = tempfile.mkstemp(dir=str(d), prefix="hook-events.", suffix=".trim")
++    try:
++        with os.fdopen(fd, "w", encoding="utf-8") as th:
++            th.write("\n".join(keep) + "\n")
++        os.chmod(tmp, mode)
++        os.replace(tmp, f)
++    except OSError:
++        try:
++            os.unlink(tmp)
++        except OSError:
++            pass
++        raise
++
++
+ def _root_from_cwd():
+     """★逾時砍到 3 秒★(r1 外家席 major):這支跑在每支 hook 的本業之前,
+     正常態實測約 13 毫秒,但最壞態原本設 10 秒——跟 hook 的整體預算同量級,
+     git 卡住時會先把預算吃完,讓本業根本沒機會跑。觀測絕不能排擠本業。"""
+     import subprocess
+     try:
+         r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                            capture_output=True, text=True, timeout=3)
+         return r.stdout.strip() or None
+     except Exception:
+diff --git a/scripts/hooks/claude/bypass-ask-hook.py b/scripts/hooks/claude/bypass-ask-hook.py
+new file mode 100755
+index 00000000..e3f724d5
+--- /dev/null
++++ b/scripts/hooks/claude/bypass-ask-hook.py
+@@ -0,0 +1,954 @@
++#!/usr/bin/env python3
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++# MIT licensed. Full text: scripts/lumos header, or LICENSE at
++# https://github.com/EnzoHsieh-Android/Lumos
++"""PreToolUse hook(matcher Bash):代理要繞過 Lumos 的閘時,先問人。
++
++單源:Projects/代理繞閘字樣問人_計劃(d1 厚掛鉤偏離、d2 寧可漏問)。
++
++流程:
++  1. 讀一次 stdin 原文 → 便宜的預篩(在 guard 之外,不跑子程序、不記事件;絕大多數 Bash 停在這)。
++  2. 過了預篩才進 `_hookevent.guard`:解析事件 → `decide` → 命中就印 permissionDecision "ask"。
++  3. 任何例外都放行(這是問人層,不是安全邊界)。
++
++★存活事件只記「活著沒」★:不記問了幾次(_hookevent.py 檔頭的界線);事後量測拿 Claude 事件帳
++重跑 `bypass_reasons`。
++"""
++from __future__ import annotations
++
++import json
++import os
++import re
++import shlex
++import subprocess
++import sys
++import tempfile
++
++sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
++try:
++    from _hookevent import guard as _guard, mark
++except Exception:          # 共用模組缺席也不能讓 Bash 卡住
++    _guard = None
++
++    def mark(kind, note=""):
++        return None
++
++
++# ── 逾時預算(逐字複本,見 impact-hook.py;有測試要求各份一模一樣)──────
++#
++# 天花板由註冊表 HOOK_BUDGET 一處生成,用 --budget 傳進來;這支只拿它當查遠端、查工作樹的 git 子程序逾時。
++_BUDGET_RATIO = 0.7
++_BUDGET_FLOOR = 1.0          # 再怎麼扣也留 1 秒,不要算出 0 或負數
++_BUDGET_START = None         # 這支 hook 開始跑的時刻(第一次用到時記)
++
++
++def _outer_budget(default=10.0):
++    """從 argv 讀 --budget <秒>;沒有就回 default(保守值,不是猜大的)。
++    ★上限夾住★:異常大的值會讓內層跟著失控放大,等於整個 fail-open 形同虛設。"""
++    import sys as _s
++    argv = _s.argv
++    got = None
++    for i, a in enumerate(argv):
++        if a == "--budget" and i + 1 < len(argv):
++            try:
++                got = float(argv[i + 1])
++            except ValueError:
++                got = None
++            break
++        if a.startswith("--budget="):
++            try:
++                got = float(a.split("=", 1)[1])
++            except ValueError:
++                got = None
++            break
++    if got is None or got <= 0:
++        got = default
++    return min(float(got), 600.0)
++
++
++def _inner_budget(elapsed=None, default=10.0):
++    """內層某一段還能用幾秒:天花板 × 0.7 − 這支 hook 到目前為止已經花掉的時間,下限 1 秒。
++
++    ★已耗時間自己算,不靠呼叫端記得傳★(2026-09-07 代碼審 r1 通才席抓到):
++    第一版的 elapsed 預設 0,而六個呼叫點裡只有一個真的傳了值——於是同一支 hook
++    只要依序呼叫兩次,理論上限就是 2 × 0.7 × 外層 = 1.4 倍外層,**結構性地超過天花板**。
++    實測:進場提醒那支 7+7=14 秒 vs 外層 10;CI 狀態那支 10.5+10.5=21 秒 vs 外層 15。
++    ★這正是這批改動宣稱要修掉的問題,只是換個地方重新發生。★
++
++    ★★這是「還剩多少」不是「每段配額」★★——很容易誤解,所以講清楚:
++    回傳的是「從現在到預算用完還有幾秒」。所以連續呼叫兩次拿到的兩個數字**不該相加**:
++    第一次拿到 7 秒、真的用掉 5 秒之後,第二次會拿到 2 秒。
++    只有在「第一段其實沒用多久」時第二次才會拿到接近 7 秒——那也是對的,因為時間真的還在。
++    ★守衛要驗的是「真的用掉時間之後,下一次拿到的會變少,而且總和不超過天花板」★,
++    不是「兩次的數字相加小於天花板」(那個判準本身就錯,會逼出錯誤的修法)。
++
++    ★誠實邊界★:天花板小於約 1.43 秒時,下限 1 秒會反過來大於外層。目前註冊表最小值是 10,
++    離這個門檻很遠;真要調到那麼小的話這個假設就不成立了。
++    """
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
++    return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
++# ── ★逾時預算結束★ ──────────────────────────────────────────────────
++
++MAX_LEN = 20000                     # 超過就不做結構分類,走字面判(把要掃的字數壓在幾萬步以內)
++MAX_GIT_CALLS = 4                   # 一次判斷最多跑幾個 git 子程序;超過就當「查不到」(=不豁免、照問)
++_PRE_WORDS = ("--no-veri", "hookspath", "lumos_skip_")
++_PRE_SHORT_N = re.compile(r"(?<![\w-])-[a-z]*n[a-z]*\b")
++_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
++_SKIP_ASSIGN = re.compile(r"^LUMOS_SKIP_[A-Za-z0-9_]*\+?=")
++_GITDIR_NAME = re.compile(r"^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR)(\+?=|$)")
++_CFG_ENV_ASSIGN = re.compile(r"^GIT_CONFIG_(KEY_[0-9]+|PARAMETERS)=(.*)$", re.S)
++_KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{", "}", "time", "exec", "command", "nohup", "builtin"}
++_GATED_SUBS = ("commit", "push")    # Lumos 的閘只有提交前與推送前;其他子指令跳過的掛鉤本 repo 沒裝(計劃〈範圍〉)
++_GIT_VALUE_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env"}
++_GIT_DIR_OPTS = ("--git-dir", "--work-tree")
++_COMMIT_VALUE_LONG = {"--message", "--file", "--author", "--date", "--template", "--reuse-message", "--reedit-message",
++                      "--fixup", "--squash", "--cleanup", "--trailer", "--pathspec-from-file"}
++_PUSH_VALUE_OPTS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec"}
++_CONFIG_VALUE_OPTS = {"-f", "--file", "--blob", "--default", "--type", "--comment"}
++_CONFIG_WRITE_FLAGS = {"--unset", "--unset-all", "--replace-all", "--add"}
++_CONFIG_READ_FLAGS = {"--get", "--get-all", "--get-regexp", "--list", "-l", "--get-urlmatch"}
++_CONFIG_SECTION_FLAGS = {"--remove-section", "--rename-section"}
++_CONFIG_GLOBAL_FLAGS = {"--global", "--system", "--file", "-f", "--blob"}
++_UNKNOWN = ("unknown",)
++_MASK_CHARS = "();|&<>\n#`'\" \t$\\"  # 引號裡與被跳脫的這些字元先換成私用區字元,切詞時才不會被當成結構
++_MASK_BASE = 0xE000
++_ANSI_ESC = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "e": "\x1b", "E": "\x1b", "f": "\f", "v": "\v",
++             "\\": "\\", "'": "'", '"': '"', "?": "?"}
++_REASON_TEXT = {
++    "no-verify": "推送或提交帶了 --no-verify,推送前閘與提交前閘不會跑",
++    "commit-n": "提交帶了 -n(就是 --no-verify),提交前閘不會跑",
++    "c-hookspath": "用 -c、--config-env 或 GIT_CONFIG_* 把這次的掛鉤目錄換掉,Lumos 的閘不會跑",
++    "config-hookspath": "改寫或拆掉 core.hooksPath,之後每次提交與推送都不再經過 Lumos 的閘",
++    "lumos-skip": "設了 LUMOS_SKIP_* 環境變數,會關掉 Lumos 的一道閘",
++    "literal": "指令切不開或太長,照字面看是在跳過 Lumos 的閘",
++}
++
++
++def _command_text(raw: str) -> str:
++    """stdin 原文 → 指令本身;解不開 JSON 就回原文(壞事件照樣交給後面記失敗)。"""
++    try:
++        ev = json.loads(raw)
++        cmd = ev.get("tool_input", {}).get("command") if isinstance(ev, dict) else None
++        return cmd if isinstance(cmd, str) else ""
++    except Exception:
++        return raw
++
++
++def prefilter(raw: str) -> bool:
++    """看解碼後的指令(引號與反斜線先拿掉,`--no-ver''ify` 這種拆字也認得):三個字樣任一個,
++    或同時有 git、commit 與含 n 的短旗標(續行與 Tab 不會擋住 -n)。"""
++    low = re.sub(r"['\"\\]", "", _command_text(raw)).lower()
++    if any(w in low for w in _PRE_WORDS):
++        return True
++    return "git" in low and re.search(r"\bcommit\b", low) is not None and _PRE_SHORT_N.search(low) is not None
++
++
++def _temp_roots():
++    """暫存根:與審查席外掛的暫存根取聯集,再加上本機的暫存目錄(同 scripts/lumos 的做法,一律加)。"""
++    return ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders",
++            tempfile.gettempdir()]
++
++
++def _under_temp(path: str) -> bool:
++    rp = os.path.realpath(path)
++    for root in _temp_roots():
++        rr = os.path.realpath(root).rstrip("/")
++        if rr and (rp == rr or rp.startswith(rr + "/")):
++            return True
++    return False
++
++
++# ── 前處理:續行、註解、heredoc、引號遮罩、指令替換 ─────────────────
++
++def _skip_arith(cmd: str, i: int) -> int:
++    """i 指在 `$((` 上;回傳配對的 `))` 之後的位置(算式裡不會有引號,直接數括號)。"""
++    depth, j = 0, i + 1
++    while j < len(cmd):
++        if cmd[j] == "(":
++            depth += 1
++        elif cmd[j] == ")":
++            depth -= 1
++            if depth == 0:
++                return j + 1
++        j += 1
++    return len(cmd)
++
++
++def _read_delim(cmd: str, i: int):
++    """從 i 讀 heredoc 結束字;回 (字, 新位置),讀不到回 ("", i)。"""
++    while i < len(cmd) and cmd[i] in " \t":
++        i += 1
++    word = []
++    while i < len(cmd) and cmd[i] not in " \t\n;&|<>()":
++        ch = cmd[i]
++        if ch in "'\"":
++            j = cmd.find(ch, i + 1)
++            if j == -1:
++                return "", i
++            word.append(cmd[i + 1:j])
++            i = j + 1
++        elif ch == "\\" and i + 1 < len(cmd):
++            word.append(cmd[i + 1])
++            i += 2
++        else:
++            word.append(ch)
++            i += 1
++    return "".join(word), i
++
++
++def _find_terminator(cmd: str, pos: int, word: str, dash: bool):
++    """從 pos 那一行起找獨佔一行的結束字(<<- 允許前置 Tab);回結束字那一行之後的位置,找不到回 None。"""
++    n = len(cmd)
++    while pos <= n:
++        k = cmd.find("\n", pos)
++        line = cmd[pos:k if k != -1 else n]
++        if (line.lstrip("\t") if dash else line) == word:
++            return k + 1 if k != -1 else n
++        if k == -1:
++            return None
++        pos = k + 1
++    return None
++
++
++def _ansi_decode(cmd: str, i: int):
++    """i 指在 `$'` 上;回 (解出來的字串, 結尾單引號之後的位置)。"""
++    out, j = [], i + 2
++    while j < len(cmd):
++        ch = cmd[j]
++        if ch == "'":
++            return "".join(out), j + 1
++        if ch == "\\" and j + 1 < len(cmd):
++            nxt = cmd[j + 1]
++            if nxt == "x":
++                m = re.match(r"[0-9A-Fa-f]{1,2}", cmd[j + 2:])
++                if m:
++                    out.append(chr(int(m.group(0), 16)))
++                    j += 2 + len(m.group(0))
++                    continue
++            out.append(_ANSI_ESC.get(nxt, "\\" + nxt))
++            j += 2
++            continue
++        out.append(ch)
++        j += 1
++    return "".join(out), len(cmd)
++
++
++def _mask(ch: str) -> str:
++    k = _MASK_CHARS.find(ch)
++    return chr(_MASK_BASE + k) if k >= 0 and ch else ch
++
++
++def _has_mask_range(text: str) -> bool:
++    return any(_MASK_BASE <= ord(c) < _MASK_BASE + len(_MASK_CHARS) for c in text)
++
++
++def _unmask(tok: str) -> str:
++    if not _has_mask_range(tok):
++        return tok
++    return "".join(_MASK_CHARS[ord(c) - _MASK_BASE] if _MASK_BASE <= ord(c) < _MASK_BASE + len(_MASK_CHARS) else c
++                   for c in tok)
++
++
++class _Normalizer:
++    """一趟掃過指令:追蹤引號(`$(` 裡重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
++    結構字元換成遮罩字元、ANSI 引號解出內容後當成引號裡的字。heredoc 找不到結束字就停止剝(寧可多問)。
++    整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。"""
++
++    def __init__(self, cmd: str):
++        self.cmd = cmd
++        self.out = []
++        self.ctx = [[False, False, 0]]       # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度]
++        self.pending = []
++        self.heredoc_ok = True
++
++    def run(self) -> str:
++        i = 0
++        while i < len(self.cmd):
++            i = self.step(i)
++        return "".join(self.out)
++
++    def step(self, i: int) -> int:
++        cur = self.ctx[-1]
++        if cur[0]:
++            return self._in_single(i, cur)
++        ch = self.cmd[i]
++        if ch == "\\":
++            return self._backslash(i, cur)
++        if self.cmd.startswith("$(", i) and not self.cmd.startswith("$((", i):
++            self.ctx.append([False, False, 0])
++            self.out.append("$(")
++            return i + 2
++        if cur[1]:
++            return self._in_double(i, cur, ch)
++        return self._bare(i, cur, ch)
++
++    def _backslash(self, i: int, cur) -> int:
++        nxt = self.cmd[i + 1:i + 2]
++        if nxt == "\n":
++            return i + 2                     # 續行:bash 連反斜線帶換行一起拿掉
++        self.out.append(_mask(nxt))          # 被跳脫的字元就是普通字(引號外與雙引號裡都一樣)
++        return i + 2
++
++    def _in_single(self, i: int, cur) -> int:
++        ch = self.cmd[i]
++        if ch == "'":
++            cur[0] = False
++            self.out.append(ch)
++        else:
++            self.out.append(_mask(ch))
++        return i + 1
++
++    def _in_double(self, i: int, cur, ch: str) -> int:
++        if ch == '"':
++            cur[1] = False
++            self.out.append(ch)
++        else:
++            self.out.append(_mask(ch))
++        return i + 1
++
++    def _bare(self, i: int, cur, ch: str) -> int:
++        special = self._bare_special(i, cur, ch)
++        if special is not None:
++            return special
++        if ch == "'":
++            cur[0] = True
++        elif ch == '"':
++            cur[1] = True
++        self.out.append(ch)
++        return i + 1
++
++    def _bare_special(self, i: int, cur, ch: str):
++        """引號外的結構:算式、ANSI 引號、括號層、註解、heredoc、換行剝內文;都不是回 None。"""
++        cmd = self.cmd
++        if cmd.startswith("$((", i):
++            j = _skip_arith(cmd, i + 1)
++            self.out.append(cmd[i:j])
++            return j
++        if cmd.startswith("$'", i):
++            text, j = _ansi_decode(cmd, i)
++            self.out.append("".join(_mask(c) for c in text) or "''")
++            return j
++        if ch in "()" and len(self.ctx) > 1:
++            return self._paren(i, cur, ch)
++        if ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
++            k = cmd.find("\n", i)
++            return len(cmd) if k == -1 else k
++        if self.heredoc_ok and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (i == 0 or cmd[i - 1] != "<"):
++            return self._heredoc_op(i)
++        if ch == "\n" and self.pending:
++            return self._drop_bodies(i)
++        return None
++
++    def _paren(self, i: int, cur, ch: str) -> int:
++        if ch == "(":
++            cur[2] += 1
++        elif cur[2] == 0:
++            self.ctx.pop()
++        else:
++            cur[2] -= 1
++        self.out.append(ch)
++        return i + 1
++
++    def _heredoc_op(self, i: int):
++        dash = self.cmd.startswith("<<-", i)
++        word, k = _read_delim(self.cmd, i + 2 + int(dash))
++        if not word:
++            return None
++        self.pending.append((word, dash))
++        self.out.append(self.cmd[i:k])
++        return k
++
++    def _drop_bodies(self, i: int) -> int:
++        self.out.append("\n")
++        pos = i + 1
++        for word, dash in self.pending:
++            end = _find_terminator(self.cmd, pos, word, dash)
++            if end is None:
++                self.heredoc_ok = False      # 找不到結束字:這個與之後都不剝,也不再找(避免每行重掃到尾)
++                break
++            pos = end
++        self.pending = []
++        return pos
++
++
++def _paren_pairs(text: str) -> dict:
++    """一次掃完,回 {左括號位置: 配對的右括號位置}(引號裡的括號已遮罩,直接數;線性時間)。"""
++    pairs, stack = {}, []
++    for j, ch in enumerate(text):
++        if ch == "(":
++            stack.append(j)
++        elif ch == ")" and stack:
++            pairs[stack.pop()] = j
++    return pairs
++
++
++def _replace_cmdsubs(text: str) -> str:
++    """$(…)、$((…))、反引號換成判不出的佔位詞(裡面跑的指令攔不到,計劃〈範圍〉);找不到配對的保留原樣。"""
++    pairs = _paren_pairs(text)
++    out, i = [], 0
++    while i < len(text):
++        end = None
++        if text.startswith("$(", i) and (i + 1) in pairs:
++            end = pairs[i + 1] + 1
++        elif text[i] == "`":
++            close = text.find("`", i + 1)
++            end = None if close == -1 else close + 1
++        if end is None:
++            out.append(text[i])
++            i += 1
++            continue
++        if not (out and out[-1] == "__LUMOS_CMDSUB__"):
++            out.append("__LUMOS_CMDSUB__")   # 相鄰的替換併成一個佔位詞,不拼出超長的詞
++        i = end
++    return "".join(out)
++
++
++class _Sep(str):
++    """切詞時就認定的分隔符(`;`、`&&`、`|`、換行、括號…)。引號裡還原回來的同樣字元是一般 str,不會被當成分隔。
++    這個 repo 沒有同形先例;用 str 子類別是為了讓「是不是結構」在切詞當下定下來,之後不再看字面猜。"""
++
++
++class _Redir(str):
++    """切詞時就認定的導向運算子(`>`、`>>`、`&>`、`2>&1` 的 `>&`…);引號裡的 `>` 不會變成這個。"""
++
++
++def _tokens(text: str):
++    lex = shlex.shlex(text, posix=True, punctuation_chars="();<>|&\n")
++    lex.whitespace = " \t\r"
++    lex.whitespace_split = True
++    lex.commenters = ""
++    out = []
++    for t in lex:
++        if _is_sep(t):
++            out.append(_Sep(t))
++        elif _is_redirect(t):
++            out.append(_Redir(t))
++        else:
++            out.append(_unmask(t))
++    return out
++
++
++def _is_sep(tok: str) -> bool:
++    return bool(tok) and all(c in "();|&\n" for c in tok)
++
++
++def _is_redirect(tok: str) -> bool:
++    return bool(tok) and all(c in "<>&|" for c in tok) and any(c in "<>" for c in tok)
++
++
++def _strip_redirects(words):
++    """拿掉導向:運算子、它的目標,以及運算子前面的檔案代號數字(`2>`)。"""
++    out, skip = [], False
++    for k, w in enumerate(words):
++        if skip:
++            skip = False
++            continue
++        if isinstance(w, _Redir):
++            skip = True
++            continue
++        if w.isdigit() and k + 1 < len(words) and isinstance(words[k + 1], _Redir):
++            continue
++        out.append(w)
++    return out
++
++
++# ── 目錄與變數 ──────────────────────────────────────────────────────
++
++def _expand(word: str, variables: dict):
++    """展開同一條指令裡先賦值的變數;判不出(含指令替換、~、沒賦值過的變數)回 _UNKNOWN。"""
++    if word.startswith("~") or "__LUMOS_CMDSUB_" in word:
++        return _UNKNOWN
++    names = re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)", word)
++    if any(not isinstance(variables.get(a or b), str) for a, b in names):
++        return _UNKNOWN
++    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
++                  lambda m: variables[m.group(1) or m.group(2)], word)
++
++
++def _join(base, rel):
++    if rel is _UNKNOWN:
++        return rel
++    if rel.startswith("/"):
++        return os.path.normpath(rel)
++    if isinstance(base, str):
++        return os.path.normpath(os.path.join(base, rel))
++    return _UNKNOWN
++
++
++_GIT_STATE = {"calls": 0, "cache": {}}
++
++
++def _remaining_budget() -> float:
++    """從進場算起還剩幾秒能跑 git(外層預算 × 0.7 減掉已耗);不像 _inner_budget 有 1 秒下限,用完就是 0。"""
++    import time as _tm
++    global _BUDGET_START
++    if _BUDGET_START is None:
++        _BUDGET_START = _tm.monotonic()
++    return _outer_budget(5.0) * _BUDGET_RATIO - (_tm.monotonic() - _BUDGET_START)
++
++
++def _git_out(d: str, *args):
++    """在 d 跑 git;回 (rc, stdout, stderr)。逾時、起不來、這次判斷已跑滿 MAX_GIT_CALLS 次、或總預算用完回 (None, "", "")。
++    同樣的查詢只跑一次。"""
++    key = (d, *args)
++    if key in _GIT_STATE["cache"]:
++        return _GIT_STATE["cache"][key]
++    left = _remaining_budget()
++    if _GIT_STATE["calls"] >= MAX_GIT_CALLS or left <= 0.05:
++        return None, "", ""
++    _GIT_STATE["calls"] += 1
++    try:
++        r = subprocess.run(["git", "-C", d, *args], capture_output=True, text=True, timeout=left)
++        res = (r.returncode, r.stdout.strip(), r.stderr)
++    except Exception:
++        res = (None, "", "")
++    _GIT_STATE["cache"][key] = res
++    return res
++
++
++def _existing_temp_dir(eff) -> bool:
++    return isinstance(eff, str) and os.path.isdir(eff) and _under_temp(eff)
++
++
++def _not_real_repo(eff) -> bool:
++    """生效目錄確定不是真 repo(拋棄式):判斷當下就存在、在暫存根底下(解開符號連結後),
++    而且共用 git 目錄也在暫存根底下;或 git 明說它不在任何 repo 裡。不靠同一條指令裡的推論
++    (同指令建的目錄、mktemp、remote add 都不算——兩輪審查都在這類推論上找到繞法,計劃 d3)。"""
++    if not _existing_temp_dir(eff):
++        return False
++    rc, out, err = _git_out(eff, "rev-parse", "--git-common-dir")
++    if rc == 0:
++        return _under_temp(os.path.join(eff, out))
++    return rc is not None and "not a git repository" in err.lower()
++
++
++def _local_url(url: str):
++    """遠端位址是明確的本機路徑(/、./、../、file://)就回路徑,否則回 None(`host:path` 這種一律當網路位址)。"""
++    if url.startswith("file://"):
++        return url[len("file://"):]
++    return url if url.startswith(("/", "./", "../")) else None
++
++
++def _push_remote_arg(args):
++    """push 參數裡的第一個位置參數(遠端名稱或位址);沒有回 None。"""
++    skip = False
++    for a in args:
++        if skip:
++            skip = False
++        elif a in _PUSH_VALUE_OPTS:
++            skip = True
++        elif not a.startswith("-"):
++            return a
++    return None
++
++
++def _temp_target(eff, path: str) -> bool:
++    p = _join(eff, path)
++    return isinstance(p, str) and os.path.exists(p) and _under_temp(p)
++
++
++def _push_target_temp(eff, args) -> bool:
++    """push 的目標確定在暫存根底下才算拋棄式:路徑參數要在判斷當下存在;遠端名稱要在已存在的暫存目錄裡、
++    用 `git remote get-url --push` 查到明確的本機路徑。沒寫遠端、查不到、網路位址都不算。"""
++    remote = _push_remote_arg(args)
++    if remote is None:
++        return False
++    local = _local_url(remote)
++    if local is not None:
++        return _temp_target(eff, local)
++    if not _existing_temp_dir(eff):
++        return False
++    rc, url, _err = _git_out(eff, "remote", "get-url", "--push", remote)
++    local = _local_url(url) if rc == 0 and url else None
++    return local is not None and _temp_target(eff, local)
++
++
++# ── git 指令解析 ────────────────────────────────────────────────────
++
++def _short_flags_n(flags: str):
++    """commit 的一組短旗標(不含開頭 -):回 (有沒有 n, 下一個詞是不是這組旗標吃的值)。"""
++    for idx, ch in enumerate(flags):
++        if ch == "n":
++            return True, False
++        if ch in "mFCct":
++            return False, idx == len(flags) - 1
++        if ch in "Su":
++            return False, False
++    return False, False
++
++
++def _commit_short_n(args) -> bool:
++    skip = False
++    for a in args:
++        if skip:
++            skip = False
++        elif a == "--":
++            return False
++        elif a in _COMMIT_VALUE_LONG:
++            skip = True
++        elif a.startswith("-") and not a.startswith("--") and len(a) > 1:
++            hit, skip = _short_flags_n(a[1:])
++            if hit:
++                return True
++    return False
++
++
++def _config_split(args):
++    """config 參數拆成 (旗標集合, 位置參數清單)。"""
++    flags, pos, skip = set(), [], False
++    for a in args:
++        if skip:
++            skip = False
++        elif a in _CONFIG_VALUE_OPTS:
++            flags.add(a)
++            skip = True
++        elif a.startswith("-") and a != "-":
++            flags.add(a.split("=", 1)[0])
++        else:
++            pos.append(a)
++    return flags, pos
++
++
++def _config_writes_hookspath(args) -> bool:
++    flags, pos = _config_split(args)
++    if flags & _CONFIG_SECTION_FLAGS:
++        return bool(pos) and pos[0].lower() == "core"     # 拆掉或改名整個 core 區段,hooksPath 跟著沒了
++    if pos and pos[0] in ("set", "unset"):
++        return len(pos) >= 2 and pos[1].lower() == "core.hookspath"
++    if pos and pos[0] in ("remove-section", "rename-section"):
++        return len(pos) >= 2 and pos[1].lower() == "core"
++    if not pos or pos[0].lower() != "core.hookspath":
++        return False
++    if flags & _CONFIG_WRITE_FLAGS:
++        return True
++    if flags & _CONFIG_READ_FLAGS:
++        return False
++    return len(pos) >= 2
++
++
++def _parse_git(words, gi):
++    """words[gi] 是 git;回 (子指令, 參數, -C 目錄們, 設定鍵們, 有沒有 --git-dir/--work-tree);沒有子指令回 None。"""
++    j, gdirs, cfgs, moved, n = gi + 1, [], [], False, len(words)
++    while j < n and words[j].startswith("-"):
++        w = words[j]
++        name, eq, val = w.partition("=")
++        if name in _GIT_DIR_OPTS:
++            moved = True
++        if name == "--config-env" and eq:
++            cfgs.append(val)
++        if w in _GIT_VALUE_OPTS and j + 1 < n:
++            if w in ("-c", "--config-env"):
++                cfgs.append(words[j + 1])
++            elif w == "-C":
++                gdirs.append(words[j + 1])
++            j += 1
++        j += 1
++    if j >= n:
++        return None
++    return words[j], words[j + 1:], gdirs, cfgs, moved
++
++
++def _env_cfg_hookspath(words) -> bool:
++    """GIT_CONFIG_KEY_n=core.hooksPath 或 GIT_CONFIG_PARAMETERS 裡帶 core.hooksPath。"""
++    for w in words:
++        m = _CFG_ENV_ASSIGN.match(w)
++        if m and "core.hookspath" in m.group(2).lower():
++            return True
++    return False
++
++
++def _hit_codes(sub, args, cfgs, skip):
++    """這條 git 指令命中哪些繞閘形狀(還沒扣拋棄式)。"""
++    hits = []
++    if sub in _GATED_SUBS and any(a.startswith("--no-veri") and "--no-verify".startswith(a) for a in args):
++        hits.append("no-verify")
++    if sub == "commit" and _commit_short_n(args):
++        hits.append("commit-n")
++    if sub in _GATED_SUBS and any(c.split("=", 1)[0].lower() == "core.hookspath" for c in cfgs):
++        hits.append("c-hookspath")
++    if sub == "config" and _config_writes_hookspath(args):
++        hits.append("config-hookspath")
++    if sub in _GATED_SUBS and skip:
++        hits.append("lumos-skip")
++    return hits
++
++
++def _exempt(sub, eff, args, remotes_dirty=False) -> bool:
++    """命中算不算拋棄式:push 看推送目標(同一條指令前面動過遠端設定就不算——判斷當下查到的是改之前的位址);
++    commit 與只寫 repo 本身的 config 看是不是實驗 repo;寫使用者或系統層設定的 config 一律不算。"""
++    if sub == "push":
++        return not remotes_dirty and _push_target_temp(eff, args)
++    if sub == "config":
++        flags, _ = _config_split(args)
++        return not (flags & _CONFIG_GLOBAL_FLAGS) and _not_real_repo(eff)
++    if sub == "commit":
++        return _not_real_repo(eff)
++    return False
++
++
++def _prefix_skip(seg, i, upto) -> bool:
++    """這一段在位置 upto 之前、以「指令前綴」身分設了 LUMOS_SKIP_*:段首的賦值,或 env 後面的賦值。
++    當成一般參數出現的(`grep LUMOS_SKIP_X=1 檔`)不算。"""
++    if any(_SKIP_ASSIGN.match(w) for w in seg[:i]):
++        return True
++    for k in range(i, upto):
++        if os.path.basename(seg[k]) != "env":
++            continue
++        j = k + 1
++        while j < upto and (seg[j].startswith("-") or _ASSIGN.match(seg[j])):
++            if _SKIP_ASSIGN.match(seg[j]):
++                return True
++            j += 1
++    return False
++
++
++class _Walker:
++    """逐段走過切好的詞:追蹤 cd 目錄(子殼層、背景、管線各自隔開,條件式 cd 只在緊接 && 時算數)、
++    變數、export,收集命中代號。任何地方設過 GIT_DIR 這一族或用了 --git-dir/--work-tree,整條都不給拋棄式豁免。"""
++
++    def __init__(self, cwd):
++        start = os.path.normpath(cwd) if isinstance(cwd, str) and cwd.startswith("/") else _UNKNOWN
++        self.stack = [start]
++        self.variables = {}
++        self.exported_skip = False
++        self.exported_cfg = False
++        self.gitdir_seen = False
++        self.remotes_dirty = False
++        self.cond_pending = False
++        self.found = []
++
++    def run(self, toks):
++        seg, prev = [], ""
++        for t in toks:
++            if not isinstance(t, _Sep):
++                seg.append(t)
++                continue
++            self._finish(seg, prev, t)
++            seg, prev = [], t
++        self._finish(seg, prev, "")
++        return list(dict.fromkeys(self.found))
++
++    def _finish(self, seg, prev, nxt):
++        """跑完一段,再依前後的分隔符決定這段的 cd 算不算數,最後處理括號層。"""
++        before = self.stack[-1]
++        changed = self.segment(seg)
++        p, q = prev.replace("\n", ""), nxt.replace("\n", "")
++        if changed and (_is_pipe(p) or _is_pipe(q) or (q.startswith("&") and not q.startswith("&&"))):
++            self.stack[-1] = before          # 管線與背景執行的段在子殼層跑,cd 不影響後面
++        elif changed and (p.endswith("&&") or p.endswith("||")):
++            if q.startswith("&&"):
++                self.cond_pending = True     # 條件式 cd 之後緊接 &&:這條 && 鏈裡 cd 一定跑過
++            else:
++                self.stack[-1] = _UNKNOWN
++        if self.cond_pending and q and not q.startswith("&&"):
++            self.stack[-1] = _UNKNOWN        # && 鏈結束後,不知道條件式 cd 有沒有跑
++            self.cond_pending = False
++        for c in nxt:
++            if c == "(":
++                self.stack.append(self.stack[-1])
++            elif c == ")" and len(self.stack) > 1:
++                self.stack.pop()
++
++    def _assign(self, w):
++        name, val = w.split("=", 1)
++        name = name.rstrip("+")
++        self.variables[name] = _expand(val, self.variables)
++        return name
++
++    def segment(self, seg) -> bool:
++        """處理一段;回這段有沒有改變目前目錄(cd、pushd、popd)。"""
++        seg = _strip_redirects(seg)
++        if any(_GITDIR_NAME.match(w) for w in seg):
++            self.gitdir_seen = True          # 賦值、export、declare、env 前綴都算
++        i = 0
++        while i < len(seg) and (seg[i] in _KEYWORDS or _ASSIGN.match(seg[i])):
++            i += 1
++        if i >= len(seg):            # 只有賦值:設 shell 變數(沒有 export,子程序看不到)
++            for w in seg:
++                if _ASSIGN.match(w):
++                    self._assign(w)
++            return False
++        cmd = os.path.basename(seg[i])
++        if cmd == "cd":
++            self._cd(seg[i + 1:])
++            return True
++        if cmd in ("pushd", "popd"):
++            self.stack[-1] = _UNKNOWN
++            return True
++        if cmd == "export":
++            self._export(seg[i + 1:])
++            return False
++        if cmd in ("declare", "typeset"):
++            self._declare(seg[i + 1:])
++            return False
++        self._command(seg, i)
++        return False
++
++    def _cd(self, rest):
++        rest = [a for a in rest if not (a.startswith("-") and a != "-")]
++        if not rest or rest[0] == "-":
++            self.stack[-1] = _UNKNOWN
++        else:
++            self.stack[-1] = _join(self.stack[-1], _expand(rest[0], self.variables))
++
++    def _mark_exported(self, name):
++        if name.startswith("LUMOS_SKIP_"):
++            self.exported_skip = True
++        if name.startswith("GIT_CONFIG_") and "core.hookspath" in str(self.variables.get(name, "")).lower():
++            self.exported_cfg = True
++        if _GITDIR_NAME.match(name):
++            self.gitdir_seen = True
++
++    def _export_names(self, rest):
++        for w in rest:
++            if _ASSIGN.match(w):
++                self._mark_exported(self._assign(w))
++            elif re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", w) and w in self.variables:
++                self._mark_exported(w)
++
++    def _export(self, rest):
++        if "-n" in rest:
++            return                   # export -n:取消匯出
++        self._export_names(rest)
++
++    def _declare(self, rest):
++        if any(a.startswith("-") and "x" in a for a in rest):
++            self._export_names(rest)
++
++    def _command(self, seg, i):
++        """一般指令:段裡的 lumos 指令前以前綴身分帶 LUMOS_SKIP_*、或段裡第一個 git 詞開始的 git 指令。"""
++        lk = next((k for k in range(i, len(seg)) if os.path.basename(seg[k]) == "lumos"), None)
++        if lk is not None and (self.exported_skip or _prefix_skip(seg, i, lk)):
++            self.found.append("lumos-skip")
++        gi = next((k for k in range(i, len(seg)) if os.path.basename(seg[k]) == "git"), None)
++        if gi is not None:
++            self._git(seg, i, gi)
++
++    def _git(self, seg, i, gi):
++        parsed = _parse_git(seg, gi)
++        if parsed is None:
++            return
++        sub, args, gdirs, cfgs, moved = parsed
++        eff = self.stack[-1]
++        for d in gdirs:
++            eff = _join(eff, _expand(d, self.variables))
++        if moved:
++            self.gitdir_seen = True
++        if self.gitdir_seen:
++            eff = _UNKNOWN           # 動的不一定是生效目錄那個 repo
++        if self.exported_cfg or _env_cfg_hookspath(seg[:gi]):
++            cfgs = [*cfgs, "core.hooksPath"]
++        skip = self.exported_skip or _prefix_skip(seg, i, gi)
++        for code in _hit_codes(sub, args, cfgs, skip):
++            if not _exempt(sub, eff, args, self.remotes_dirty):
++                self.found.append(code)
++        if _changes_remotes(sub, args):
++            self.remotes_dirty = True
++
++
++def _changes_remotes(sub, args) -> bool:
++    """這條 git 指令會不會改到推送位址:`git remote` 的寫入子指令,或 `git config` 碰到 remote.* / url.* 的鍵。"""
++    if sub == "remote":
++        return bool(args) and args[0] not in ("-v", "--verbose", "show", "get-url")
++    if sub == "config":
++        return any(a.lower().startswith(("remote.", "url.")) for a in args)
++    return False
++
++
++def _is_pipe(sep: str) -> bool:
++    return (sep.startswith("|") and not sep.startswith("||")) or (sep.endswith("|") and not sep.endswith("||")) or "|&" in sep
++
++
++def bypass_reasons(command: str, cwd) -> list:
++    """回這條指令的命中代號清單(去重、保序);空清單=放行。"""
++    _GIT_STATE["calls"] = 0
++    _GIT_STATE["cache"] = {}
++    if len(command) > MAX_LEN:
++        return _literal(command)      # 太長:只看字面
++    text = _replace_cmdsubs(_Normalizer(command).run())
++    try:
++        toks = _tokens(text)
++    except ValueError:
++        return _literal(command)
++    return _Walker(cwd).run(toks)
++
++
++def _literal(command: str) -> list:
++    """切不動或太長時只看字面:有 git 或 lumos,而且看起來在跳過閘(--no-verify、改掛鉤目錄、LUMOS_SKIP、提交 -n)就問。"""
++    low = re.sub(r"['\"\\]", "", command).lower()
++    if "git" not in low and "lumos" not in low:
++        return []
++    if any(w in low for w in _PRE_WORDS):
++        return ["literal"]
++    if re.search(r"\bcommit\b", low) and _PRE_SHORT_N.search(low):
++        return ["literal"]
++    return []
++
++
++def _reason_text(codes) -> str:
++    what = ";".join(_REASON_TEXT.get(c, c) for c in codes)
++    return ("發生什麼:這條指令會跳過 Lumos 的閘(" + what + ")。\n"
++            "為什麼在意:閘被跳過就沒人檢查這次推送或提交;代理被擋時順手繞過是已知模式。\n"
++            "怎麼做:確定要跳過就按允許;不確定就拒絕,讓代理改成修好被擋的原因。")
++
++
++def decide(event):
++    """回要印的 JSON 物件,或 None(放行)。內部例外一律放行並 mark error。"""
++    try:
++        if not isinstance(event, dict):
++            return None
++        ti = event.get("tool_input")
++        if not isinstance(ti, dict):
++            return None
++        cmd = ti.get("command")
++        if not isinstance(cmd, str) or not cmd:
++            return None
++        cwd = event.get("cwd")
++        codes = bypass_reasons(cmd, cwd if isinstance(cwd, str) else None)
++    except Exception as e:
++        mark("error", type(e).__name__ + ":" + str(e)[:120])
++        return None
++    if not codes:
++        return None
++    return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
++                                   "permissionDecisionReason": _reason_text(codes)}}
++
++
++def main(raw: str) -> int:
++    out = decide(json.loads(raw))
++    if out:
++        print(json.dumps(out, ensure_ascii=False))
++    return 0
++
++
++def entry(stdin_bytes: bytes) -> int:
++    """掛鉤進入點。跟鄰居掛鉤不同:讀 stdin 與預篩放在 guard 之外——guard 每次都跑 git 並寫存活事件,
++    每條 Bash 都進 guard 會擠掉其他掛鉤的存活紀錄(計劃〈做法〉、Systems/代理繞閘問人 的 PITFALL)。
++    共用模組在模組頂層載入(鄰居在 `__main__` 裡載),因為 `decide` 的 `mark` 在測試直接呼叫時也要有。"""
++    _remaining_budget()              # 預算從進場就開始算,不是從第一次跑 git 才算
++    try:
++        raw = stdin_bytes.decode("utf-8", "replace")
++        go = prefilter(raw)
++    except Exception:
++        return 0
++    if not go:
++        return 0
++    if _guard:
++        return _guard("pretooluse-bypass-ask-hook", __file__, lambda: main(raw), swallow=True)
++    try:
++        return main(raw)
++    except Exception:
++        return 0
++
++
++if __name__ == "__main__":
++    try:
++        _stdin = sys.stdin.buffer.read()
++    except Exception:
++        sys.exit(0)
++    sys.exit(entry(_stdin))

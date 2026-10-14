@@ -122,6 +122,8 @@ HOOK_BUDGET = {
     # 記憶過期清掃:多數檢查是本機指令(毫秒),慢的是要連遠端問「推了沒」那幾條。
     # 預算用完會明說「還有幾條沒驗到」,不會假裝驗過。
     "memory-sweep.py": 12,
+    # 繞閘問人:每條 Bash 都會叫,實際幾十毫秒;只有命中且落在暫存目錄時才跑 git 查遠端或工作樹。
+    "bypass-ask-hook.py": 5,
 }
 
 # 有些 hook 除了 --budget 還要別的旗標。★寫在這裡而不是散在下面的註冊表裡★,
@@ -233,6 +235,19 @@ HOOK_ENTRIES = {
                 }
             ],
         },
+        {
+            # 繞閘問人(Projects/代理繞閘字樣問人_計劃):Bash 指令真的在對非拋棄式 repo 繞過 Lumos 的閘
+            # (--no-verify、commit -n、core.hooksPath、LUMOS_SKIP_*)就回 permissionDecision "ask"。
+            # 預篩不中=不跑子程序、不記事件;任何失敗放行。只給 Claude(_codex_entries 跳過這條)。
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("bypass-ask-hook.py"),
+                    "timeout": HOOK_BUDGET["bypass-ask-hook.py"],
+                }
+            ],
+        },
     ],
     # NOTE(2026-08-21 體檢 #8):verification-rot-check(PostToolUse/Bash,每次 Bash 都觸發、
     # 逐候選 claude -p 25s)撤除——docs/.rot-check-cache.json 與 .rot-queue.jsonl 從未被建立,
@@ -262,12 +277,16 @@ def _codex_entries(entries: dict) -> dict:
       tool_name 仍回 apply_patch;tool_input 是 patch 全文沒有 file_path——S1 適配 impact-hook)。
     · PreToolUse `Agent`(派工鏡頭)→ 改掛 `SubagentStart`(無 matcher):spawn_agent 的 message 對 hook
       是密文改不了(實驗 A),子代理開場的 additionalContext 才到得了子代理(實驗 5)。
+    · PreToolUse `Bash`(繞閘問人)→ 不註冊:Codex 的 Bash 前事件回覆形狀不同,原樣寫過去會收到它看不懂的 ask
+      (Projects/代理繞閘字樣問人_計劃,Codex 適配另見該篇 REVISIT)。
     其餘事件原樣。"""
     out = {}
     for event, arr in entries.items():
         for e in arr:
             ne = dict(e)
             ev = event
+            if event == "PreToolUse" and e.get("matcher") == "Bash":
+                continue
             if event == "PreToolUse" and e.get("matcher") == "Edit|Write|MultiEdit":
                 ne["matcher"] = "apply_patch"
             elif event == "PreToolUse" and e.get("matcher") == "Agent":
