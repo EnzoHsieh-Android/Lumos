@@ -96312,6 +96312,76 @@ def t_seat_templates_carry_marker():
         check(f"S11 {rel} 不再寫「先存檔放著」(決策 d5 收齊前不落地)", "先存檔放著" not in txt, "")
 
 
+# 派工詞刪檔紀律(Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃 做法 9、S9):規則原文逐字寫在這裡當獨立基準,不從範本抽
+_RM_LITERAL_RULE = ("刪檔一律寫成不含變數的字面絕對路徑:不准先 cd 到變數路徑再用相對路徑刪、"
+                    "不准 `目錄/*` 萬用字元、不准 `\"$S/tmp\"` 這種變數接路徑")
+_RM_LITERAL_BANNED = ("先 cd 到變數路徑再用相對路徑刪", "`目錄/*` 萬用字元", "`\"$S/tmp\"` 這種變數接路徑")
+
+
+def _tpl_dispatch_fences(text):
+    """範本裡要帶刪檔紀律的派工詞:每一份第一行是 LUMOS-SEAT: 的圍欄,加上 §5、§6 兩份(以節標題找緊接的第一個圍欄)。
+    回 [(標籤, 圍欄內各行)];圍欄以行首 ``` 開關。"""
+    lines = text.split("\n")
+    fences, i, sec = [], 0, ""
+    while i < len(lines):
+        ln = lines[i]
+        if ln.startswith("## "):
+            sec = ln
+        if ln.startswith("```"):
+            j = next((k for k in range(i + 1, len(lines)) if lines[k].startswith("```")), len(lines))
+            fences.append((sec, lines[i + 1:j]))
+            i = j + 1
+            continue
+        i += 1
+    out, seen = [], set()
+    for sec, body in fences:
+        first = next((b for b in body if b.strip()), "")
+        if first.startswith("LUMOS-SEAT:"):
+            out.append((sec[:24], body))
+        elif sec.startswith(("## 5. SDD implementer", "## 6. SDD task reviewer")) and sec not in seen:
+            seen.add(sec)
+            out.append((sec[:24], body))
+    return out
+
+
+def _rm_literal_missing(text):
+    """回缺刪檔紀律的派工詞標籤:第二行沒寫規則原文(三個禁用寫法任一不在也算缺)。"""
+    miss = []
+    for label, body in _tpl_dispatch_fences(text):
+        second = body[1] if len(body) > 1 else ""
+        if _RM_LITERAL_RULE not in second or not all(b in second for b in _RM_LITERAL_BANNED):
+            miss.append(label)
+    return miss
+
+
+def t_templates_rm_literal_absolute_path():
+    """[鏡頭範圍計劃 S9]templates.md §0 有一條刪檔一律用字面絕對路徑、點名三種禁用寫法;每份第一行是 LUMOS-SEAT: 的派工詞
+    與 §5、§6 兩份派工詞,第二行都寫進同一句規則原文(子代理看不到 §0,只寫「照 §0」它解不開)。
+    變異:拿掉其中一份的那句 → 點名那一份;拿掉其中一個禁用寫法 → 也點名。"""
+    _need_src("skills/lumos-design-loop/templates.md")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    t = (repo / "skills" / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8")
+    s0 = t.split("## 0. ", 1)[-1].split("\n## ", 1)[0] if "## 0. " in t else ""
+    bullet = next((ln for ln in s0.split("\n") if ln.startswith("- ") and "字面絕對路徑" in ln), "")
+    check("①§0 有一條刪檔一律用字面絕對路徑", bool(bullet), s0[:200])
+    check("②§0 那條點名三種禁用寫法", all(b in bullet for b in _RM_LITERAL_BANNED), bullet[:300])
+    fences = _tpl_dispatch_fences(t)
+    seat_n = sum(1 for _l, b in fences if next((x for x in b if x.strip()), "").startswith("LUMOS-SEAT:"))
+    labels = [l for l, _b in fences]
+    check("★前置★ 找得到 6 份 LUMOS-SEAT 派工詞與 §5、§6 兩份",
+          seat_n == 6 and any(l.startswith("## 5.") for l in labels) and any(l.startswith("## 6.") for l in labels), str(labels))
+    check("③每份派工詞第二行都寫進規則原文", _rm_literal_missing(t) == [], str(_rm_literal_missing(t)))
+    # 變異:拿掉第一份 LUMOS-SEAT 派工詞第二行的那句、拿掉 §6 那句的一個禁用寫法
+    first_at = t.find("```\nLUMOS-SEAT:")
+    cut = t[:first_at] + t[first_at:].replace(_RM_LITERAL_RULE, "", 1)
+    check("④變異:拿掉第一份那句 → 點名 §1", _rm_literal_missing(cut)[:1] == [labels[0]] and len(_rm_literal_missing(cut)) == 1,
+          str(_rm_literal_missing(cut)))
+    s6_at = t.find("## 6. SDD task reviewer")
+    hollow = t[:s6_at] + t[s6_at:].replace("`目錄/*` 萬用字元", "萬用字元", 1)
+    check("⑤變異:§6 那句少一個禁用寫法 → 點名 §6", [l for l in _rm_literal_missing(hollow)] == [l for l in labels if l.startswith("## 6.")],
+          str(_rm_literal_missing(hollow)))
+
+
 def t_lumos_plugin_install_edge_cases():
     """外掛清單的邊角(從審查席唯讀隔離分支搬來,那邊代碼審 r1 的修正):裝完確認的第一次查詢出錯也交給等待重查;來源沒有市集檔的訊息走共用函式;
     移除失敗時只有市集是我們的才叫人移除它;市集檔 plugins 欄位怪或檔首有 BOM 不丟例外。"""
