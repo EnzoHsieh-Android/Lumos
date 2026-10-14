@@ -79,17 +79,65 @@ def record(repo_root, hook_name, kind, note="", hook_file=None):
         # 這裡再加一道上限修剪,修剪走暫存→改名(這個 repo 對共用檔的既有教訓)。
         with open(f, "a", encoding="utf-8") as fh:
             fh.write(line)
+        _clear_stale_trims(d)
         try:
             if f.stat().st_size > MAX_BYTES:
-                keep = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
-                tmp = f.with_suffix(".jsonl.tmp")
-                tmp.write_text("\n".join(keep) + "\n", encoding="utf-8")
-                os.replace(tmp, f)
-        except OSError:
-            pass
+                _trim(d, f)
+        except OSError as e:
+            # 修剪失敗(例如目錄唯讀)不影響本業,但要講一聲:不講的話事件檔會一路長大、沒有任何訊號(r3 併發資源席)
+            print(f"  ⚠ telemetry-write-failed:hook 事件檔修剪失敗({type(e).__name__}),檔案會繼續長大:{f}",
+                  file=__import__("sys").stderr)
         return True
     except Exception:
         return False
+
+
+def _trim(d: Path, f: Path):
+    """存活事件檔超過上限時修剪:留最後 2000 行,而且總大小壓在上限一半以內(長行時不會修完還超過、每次都再修)。
+
+    ★暫存檔各用獨立名字★(代碼審 code-代理繞閘字樣問人 r1 併發資源席):固定叫 .jsonl.tmp 時,
+    兩個會談同時修剪會寫同一個暫存檔,那個名字被佔住時修剪永遠失敗、檔案無限長大。
+    ★權限照原檔★(r2 架構對齊席、併發資源席):mkstemp 建的是 0600,不照抄的話修剪一次權限就變了。
+    ★殘檔★由 _clear_stale_trims 在每次記事件時清(r2、r3 併發資源席)。
+    ★已知接受★:讀檔到換入之間別的程序追加的那一行會遺失(r3 併發資源席);這是存活紀錄,
+    掉一行最多讓某支掛鉤短暫顯示過期,不值得為它加鎖。
+    """
+    import shutil
+    import tempfile
+    lines = f.read_text(encoding="utf-8", errors="replace").splitlines()[-2000:]
+    budget, keep = MAX_BYTES // 2, []
+    for ln in reversed(lines):
+        budget -= len(ln.encode("utf-8")) + 1
+        if budget < 0:
+            break
+        keep.append(ln)
+    keep.reverse()
+    fd, tmp = tempfile.mkstemp(dir=str(d), prefix="hook-events.", suffix=".trim")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as th:
+            th.write("\n".join(keep) + "\n")
+        shutil.copymode(f, tmp)              # 跟 scripts/lumos 的 _write_lf 同一種照抄權限的做法
+        os.replace(tmp, f)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _clear_stale_trims(d: Path):
+    """清掉超過一分鐘的修剪暫存檔(修剪中途被砍留下的;正在寫的那份不碰)。每次記事件都順手清,
+    不等下一次修剪——下一次修剪可能要很久才來(r3 併發資源席)。只清自己命名規則的檔,連結不碰。"""
+    try:
+        for old in d.glob("hook-events.*.trim"):
+            try:
+                if not old.is_symlink() and time.time() - old.stat().st_mtime > 60:
+                    old.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
 
 
 def _root_from_cwd():

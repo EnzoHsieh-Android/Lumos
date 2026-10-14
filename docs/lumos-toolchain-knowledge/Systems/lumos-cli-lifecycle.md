@@ -14,6 +14,7 @@ tags:
 summary: |-
   WHY:update --dry-run 用目前的工具來源預覽、不拉來源、不寫任何檔,結尾教人帶 --source 與 --no-pull 套用同一份 [出處:[[Projects/update預覽規範檔變更_計劃]]] [因:rtb 規定規範檔改動要先經使用者同意;預覽若先拉來源,會跑拉之前載入的舊程式算、且換掉全機共用工具] [不選:預覽時拉來源再算;每次 update 停下來問] [test:t_update_dry_run_writes_nothing]
   WHY:紀律範本〈寫筆記時〉改成格子寫法(前綴、核心一句、[鍵:值]),只放表與一個例子,細節搬進 skill 的 reference.md〈格子的細節〉 [出處:2026-10-01 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 0 步] [因:範本每回合注入每個專案,已超過瘦身提醒門檻,細節放範本只會再長] [test:t_slots_single_table]
+  WHY:Bash 工具前的繞閘問人掛鉤只註冊給 Claude,轉 Codex 註冊表時跳過 matcher 為 Bash 的那條;掛鉤檔進安裝名單、防護狀態列、工具自裝檔與錨點名單 [出處:[[Projects/代理繞閘字樣問人_計劃]]] [因:Codex 的 Bash 前事件回覆形狀不同,原樣寫過去會收到看不懂的 ask;漏進安裝名單的話檔不會被複製、註冊會被當懸空剪掉] [不選:Codex 也照註冊] [test:t_bypass_ask_registered]
   KEY:[2026-08-05]來源 repo 自身的 reinject 路徑補齊——update 在來源 repo 改走 reinject-only(原:ERROR 拒跑);init 既有 vault 的來源-repo 分支照樣刷 CLAUDE.md 紀律區塊(原:「跳過 vendor/hooks」連 reinject 一起跳,範本更新後來源 repo 自己永不刷新,2026-08-04 實戰缺口) [test:t_source_repo_reinject_path]
   FLOW:機器層一次裝(bootstrap=clone Lumos源→install全域lumos+user-scope skills→repo hooks｜或單獨 install/uninstall)→專案層每repo(init 建vault+vendor工具組+裝閘｜update 刷新vendored｜deinit 對稱反安裝)
   KEY:兩層分工——機器層(install/uninstall)只動 ~/.local/bin + ~/.claude(全域lumos、user-scope skills、Claude hooks);★bootstrap 跨兩層(2026-08-21 程式碼實證):機器層之外 step3 會動當前 repo 的 core.hooksPath/vault/CLAUDE.md(見下行四分流)★;專案層(init/update/deinit)只動本 repo(docs/<slug>-knowledge、scripts/ vendored、CLAUDE.md 注入、core.hooksPath)

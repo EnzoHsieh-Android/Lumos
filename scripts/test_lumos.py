@@ -36603,7 +36603,7 @@ def t_enforcement_never_raises_on_missing():
     rows = m.enforcement_status(root=bad, home=bad)
     # r1 審:別留 >=8 的鬆口,釘死列數(5 hook+pre-commit+pre-push+python+vendored+ci+anchor+required = 12;2026-09-03 加 dispatch-lens;
     # 2026-09-04 Codex完全支援 S0 加 9 列:codex-hook×5+codex-cli+claude-skills+codex-skills+agents-md = 21)
-    check("enforcement: 缺目錄不炸、回恰 24 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger)", isinstance(rows, list) and len(rows) == 24, f"{len(rows)}: {[r['layer'] for r in rows]}")
+    check("enforcement: 缺目錄不炸、回恰 25 列(d6 加 codex-agent;09-14 加記憶過期清掃;10-05 加 claude-event-ledger;10-14 加繞閘問人)", isinstance(rows, list) and len(rows) == 25, f"{len(rows)}: {[r['layer'] for r in rows]}")
 
 
 def _isolate_environment():
@@ -41345,6 +41345,662 @@ def _load_hook_mod(name, fname):
     spec = importlib.util.spec_from_loader(name, loader)
     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
     return m
+
+
+def _bypass_hook():
+    return _load_hook_mod("bypass_ask", "bypass-ask-hook.py")
+
+
+_BYPASS_REAL = "/Users/someone/work/repo"
+
+
+def _bypass_asks(m, cmd, cwd=_BYPASS_REAL):
+    out = m.decide({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": cwd})
+    return ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecision") == "ask", out
+
+
+def t_bypass_ask_flags_real_bypass():
+    """[代理繞閘字樣問人 S1]非拋棄式目錄裡真的在繞閘 → 回 ask 並附三段式理由;前綴、跨行、續行也要認得。"""
+    import json
+    m = _bypass_hook()
+    cases = (
+        ("推送 --no-verify", "git push --no-verify origin feat"),
+        ("推送縮寫 --no-veri", "git push --no-veri origin feat"),
+        ("提交 --no-verify", 'cd /Users/someone/work/repo && git commit -q -m "wip" --no-verify'),
+        ("提交 -qn", "git commit -qn -m x"),
+        ("提交 -n 單獨", "git commit -n -m x"),
+        ("提交 -n 在訊息之後", "git commit -m x -n"),
+        ("全域 -c 關掛鉤接 commit", "git -c core.hooksPath=/dev/null commit -m x"),
+        ("-c 大小寫", "git -c core.HooksPath=/dev/null push"),
+        ("config 設掛鉤路徑", "git config core.hooksPath /nowhere"),
+        ("config 設成空值", 'git config core.hooksPath ""'),
+        ("config --unset 拆閘", "git config --unset core.hooksPath"),
+        ("config --local --unset-all", "git config --local --unset-all core.hooksPath"),
+        ("LUMOS_SKIP 接推送", "LUMOS_SKIP_REREAD_CHECK=1 git push Lumos feat"),
+        ("LUMOS_SKIP 接 lumos 指令", "LUMOS_SKIP_FIX_CHECK=1 lumos code-loop check"),
+        ("LUMOS_SKIP 接 python 跑 lumos", "LUMOS_SKIP_LINT_NEW=1 python3.14 scripts/lumos code-loop check"),
+        ("env 設 LUMOS_SKIP", "env LUMOS_SKIP_DRIFT_CHECK=1 git push"),
+        ("export 後推送", "export LUMOS_SKIP_DRIFT_CHECK=1; git push"),
+        ("git 帶路徑", "/usr/bin/git push --no-verify"),
+        ("timeout 前綴", "timeout 600 git push --no-verify"),
+        ("command 前綴", "command git commit -n -m x"),
+        ("then 之後", "if ! git push; then git push --no-verify; fi"),
+        ("子殼層括號", "( cd /Users/someone/work/repo && git push --no-verify )"),
+        ("括號接分號", "(true); git push --no-verify"),
+        ("全域選項 --no-pager", "git --no-pager commit -n -m x"),
+        ("全域選項 -p", "git -p push --no-verify"),
+        ("跨行第二行繞閘", "git status\ngit push --no-verify"),
+        ("續行", "git push \\\n  --no-verify origin feat"),
+        ("config --add", "git config --add core.hooksPath /x"),
+        ("config --replace-all", "git config --replace-all core.hooksPath /x"),
+        ("export 後跑 lumos", "export LUMOS_SKIP_NOTE_AUDIT=1\nlumos code-loop check"),
+        ("引號裡多行訊息之後 -n", 'git commit -m "標題\n\n內文" -n'),
+        ("here-string 之後", "cat <<< \"x\"\ngit push --no-verify\nx"),
+        ("引號裡的 << 之後", 'echo "<<EOF"\ngit push --no-verify\nEOF'),
+        ("訊息裡有 <<EOF 字樣", "git commit -m \"doc: explain <<EOF handling\" --no-verify"),
+        ("找不到結束字的 heredoc", "cat <<EOF > a.md\ngit push --no-verify"),
+        ("結束字縮排但不是 <<-", "cat <<EOF > a.md\nhi\n  EOF\ngit push --no-verify"),
+        ("詞中間的 # 不是註解", "git checkout -b fix#1 && git push --no-verify"),
+        ("詞中間的 # 之後提交 -n", "echo a#b; git commit -n -m x"),
+        ("訊息 heredoc 有撇號之後 -n", 'git commit -m "$(cat <<\'EOF\'\ndon\'t do it\nEOF\n)" -n'),
+        ("訊息 heredoc 有撇號之後推送", 'git commit -m "$(cat <<\'EOF\'\nit\'s\nEOF\n)" && LUMOS_SKIP_X=1 git push'),
+        ("訊息 heredoc 有撇號之後 -c 關掛鉤", 'git commit -m "$(cat <<\'EOF\'\nwon\'t\nEOF\n)" && git -c core.hooksPath=/dev/null push'),
+        ("引號裡的括號之後 -n", 'git commit -m "(" -n'),
+        ("引號裡的分號之後 -n", 'git commit -m ";" -n'),
+        ("引號裡的管線符之後 -n", 'git commit -m "a|b" -n'),
+        ("ANSI 引號之後 -n", "git commit -m $'it\\'s' -n"),
+        ("LUMOS_SKIP 接 timeout lumos", "LUMOS_SKIP_FIX_CHECK=1 timeout 600 lumos code-loop check"),
+        ("LUMOS_SKIP 接 sudo lumos", "LUMOS_SKIP_X=1 sudo lumos code-loop check"),
+        ("timeout env 接 lumos", "timeout 600 env LUMOS_SKIP_X=1 lumos code-loop check"),
+        ("env 多個賦值接 lumos", "env -i A=1 B=2 LUMOS_SKIP_X=1 lumos x"),
+        ("LUMOS_SKIP 接 bash 跑 lumos", "LUMOS_SKIP_X=1 bash scripts/lumos x"),
+        ("LUMOS_SKIP 接 python 帶值旗標", "LUMOS_SKIP_X=1 python3 -X dev scripts/lumos doctor"),
+        ("先賦值再 export 名稱", "LUMOS_SKIP_X=1; export LUMOS_SKIP_X; git push"),
+        ("declare -x", "declare -x LUMOS_SKIP_X=1; git push"),
+        ("+= 賦值", "LUMOS_SKIP_X+=1 git push"),
+        ("--config-env 黏著", "git --config-env=core.hooksPath=H push"),
+        ("--config-env 分開", "git --config-env core.hooksPath=H push"),
+        ("GIT_CONFIG_KEY 環境變數", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git push"),
+        ("GIT_CONFIG_PARAMETERS", "GIT_CONFIG_PARAMETERS=\"'core.hooksPath=/dev/null'\" git push"),
+        ("git config 新語法 set", "git config set core.hooksPath /x"),
+        ("引號裡的指令替換裡又有引號與分號", 'git commit -m "$(echo "a;b")" -n'),
+        ("註解有撇號之後的續行", "# don't skip\ngit commit -m x \\\n  --no-verify"),
+        ("heredoc 內文有撇號之後的續行", "cat <<EOF\nit's\nEOF\ngit push \\\n --no-verify"),
+        ("ANSI 引號之後的續行", "echo $'it\\'s'; git push \\\n --no-verify"),
+        ("續行切開長選項", "git push --no-\\\nverify origin"),
+        ("ANSI 引號包旗標", "git commit -$'n' -m x"),
+        ("跳脫的反引號夾指令", "echo \\`; git push --no-verify; echo \\`"),
+        ("引號裡剛好是 > 的訊息", "git commit -m '>' -n"),
+        ("引號裡剛好是 < 的訊息", 'git commit -m "<" -n'),
+        ("-F 引號裡是 >", "git commit -F '>' -n"),
+        ("推送導向暫存檔", "git push --no-verify > /tmp/x.log"),
+        ("推送導向暫存檔含 2>&1", "git push --no-verify >/tmp/x.log 2>&1"),
+        ("推送 &> 暫存檔", "git push --no-verify &> /tmp/x.log"),
+        ("導向在旗標前", "git push > /tmp/p.log --no-verify"),
+        ("輸入導向", "git push --no-verify < /tmp/in"),
+        ("config --remove-section core", "git config --remove-section core"),
+        ("config --rename-section core", "git config --rename-section core x"),
+        ("指令裡已有私用區字元", "git commit -m '\ue006' -n"),
+        ("ANSI 八進位", "git push $'\\055\\055no-verify' o"),
+        ("ANSI \\u", "git push $'\\u002d\\u002dno-verify' o"),
+        ("$\"…\" 字串", 'git push $"--no-verify" o'),
+        ("數字參數加空格導向", "git commit -m 1 >/dev/null -n"),
+        ("config 值是數字加導向", "git config core.hooksPath 0 >/dev/null"),
+        ("{fd}> 導向在子指令前", "git {fd}>log commit -n"),
+        ("git config unset 新語法", "git config unset core.hooksPath"),
+        ("sudo git", "sudo git push --no-verify"),
+        ("! git", "! git commit -n -m x"),
+        ("--repo 指到網路", "git push --repo https://github.com/a/b --no-verify ./x"),
+        ("變數翻倍十幾次", "A=xx;" + "A=$A$A;" * 18 + " git commit -n"),
+        # r4:各席找到的漏問形狀,同族一次列齊
+        ("算術 (( << )) 不是 heredoc", "(( 1<<EOF ))\ngit commit --no-verify -m x\nEOF"),
+        ("程序替換 <() 裡提交", "cat <(git commit --no-verify -m x)"),
+        ("程序替換 >() 裡推送", "diff <(true) >(git push --no-verify origin main)"),
+        ("程序替換之後的旗標", "git push <(echo x) --no-verify"),
+        ("指令替換裡提交", "x=$(git commit -n -m x)"),
+        ("引號裡的指令替換裡推送", 'echo "$(git push --no-verify)"'),
+        ("反引號裡推送", "echo `git push --no-verify`"),
+        ("巢狀指令替換裡推送", "echo $(echo $(git push --no-verify))"),
+        ("ANSI \\c 之後推送", "git push $'\\c' --no-verify"),
+        ("ANSI \\c 之後 -n", "git commit $'\\c' -n"),
+        ("ANSI \\c 分號之後", "echo $'\\c'; git push --no-verify"),
+        ("ANSI \\c 換行之後", "echo $'\\c'\ngit push --no-verify"),
+        ("空字串參數之後 ANSI -n", "git commit -m '' -$'n'"),
+        ("空字串參數之後續行切開旗標", "git commit -m '' --no-\\\nverify"),
+        ("空字串參數 -n", 'git commit -m "" -n'),
+        ("config 設成空字串(單引號)", "git config core.hooksPath ''"),
+        ("推送選項縮寫吃掉暫存路徑", "git push --no-verify --push-o /tmp origin main"),
+        ("--repo 縮寫指網路", "git push --rep https://github.com/a/b --no-verify /tmp"),
+        ("git-commit 執行檔", "/usr/libexec/git-core/git-commit --no-verify -qm x"),
+        ("git-push 執行檔", "git-push --no-verify origin"),
+        ("-c include.path 接提交", "git -c include.path=/tmp/inc.cfg commit -m y"),
+        ("-c includeIf 接推送", "git -c includeIf.gitdir:/.path=/tmp/inc.cfg push"),
+        ("GIT_CONFIG_KEY include.path", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=include.path GIT_CONFIG_VALUE_0=/tmp/i git push"),
+        ("config 寫 include.path", "git config include.path /tmp/inc.cfg"),
+        ("全域 --attr-source 帶值", "git --attr-source HEAD commit --no-verify -m x"),
+        ("env -u 之後的 LUMOS_SKIP", "env -u FOO LUMOS_SKIP_PUSH_GATE=1 git push"),
+        ("env -C 之後的 LUMOS_SKIP", "env -C /tmp LUMOS_SKIP_PUSH_GATE=1 git push"),
+        ("段裡有名為 lumos 的詞就算 lumos 指令(計劃〈做法〉)", "LUMOS_SKIP_X=1 cat scripts/lumos"),
+        ("字面判:hookspath", 'git config core.hooksPath x "未閉合'),
+        ("字面判:LUMOS_SKIP 接 lumos", 'lumos x LUMOS_SKIP_A=1 "未閉合'),
+        ("字面判:commit -n", 'git commit -m "未閉合 -n'),
+    )
+    for label, cmd in cases:
+        asked, out = _bypass_asks(m, cmd)
+        reason = ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason", "")
+        check("繞閘問人 S1:%s → ask,理由三段式" % label,
+              asked and ((out or {}).get("hookSpecificOutput") or {}).get("hookEventName") == "PreToolUse"
+              and "發生什麼" in reason and "為什麼在意" in reason and "怎麼做" in reason, (cmd, out))
+        # 整支掛鉤從預篩進場:分類器會問的,預篩不能先放行(r4 正確性席:預篩漏了 --remove-section core)
+        check("繞閘問人 S1:%s → 過得了預篩" % label, m.prefilter(json.dumps({"tool_input": {"command": cmd}})), cmd)
+        # 不是靠「切不動才走的字面判」問到的(r4 合約圖譜席:空字串參數讓結構分類整條失效,只看 ask 會掩蓋)
+        if not label.startswith("字面判"):
+            check("繞閘問人 S1:%s → 結構分類判出(不是字面判)" % label, "切不開或太長" not in reason, (cmd, reason))
+    # 變數展開設長度上限(r3 併發資源席:`A=$A$A` 連續翻倍會指數膨脹,三十幾次就吃掉十幾 GB;這裡只驗上限,不真的去膨脹)
+    check("繞閘問人 S1:展開結果太長 → 判不出,不往下翻倍", m._expand("$A$A", {"A": "x" * 3000}) is m._UNKNOWN,
+          len(str(m._expand("$A$A", {"A": "x" * 3000}))))
+    _, out = _bypass_asks(m, "git commit -m $'it\\'s' -n")
+    check("繞閘問人 S1:ANSI 引號之後的 -n 是結構分類判出來的(不是切不動才走的字面判)",
+          "提交帶了 -n" in ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason", ""), out)
+    _, out = _bypass_asks(m, "git push --no-verify '\x1b]0;pwned\x07'")
+    reason = ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecisionReason", "")
+    check("繞閘問人 S1:理由只用固定文字,不嵌入指令內容", "pwned" not in reason and "\x1b" not in reason, reason)
+    print("  ✓ t_bypass_ask_flags_real_bypass")
+
+
+def t_bypass_ask_ignores_mentions():
+    """[代理繞閘字樣問人 S2]只是字面提到、讀設定、吃值旗標、或 LUMOS_SKIP 設在 git 與 lumos 以外的程式前 → 不輸出、放行。"""
+    m = _bypass_hook()
+    cases = (
+        'grep -rn "--no-verify" scripts/hooks/pre-push',
+        "grep -n 'core.hooksPath\\|LUMOS_SKIP_' scripts/lumos | head",
+        'echo "不要用 git push --no-verify"',
+        'git commit -m "docs: 說明 --no-verify 與 core.hooksPath 的風險"',
+        "sed -n 1,40p scripts/install-hooks.sh; git config core.hooksPath",
+        "git config --get core.hooksPath",
+        "git config --get-all core.hooksPath",
+        "LUMOS_SKIP_REREAD_CHECK=1 python3.14 scripts/test_lumos.py -k reread",
+        "git log --grep=no-verify --oneline",
+        "sed -n 1,20p scripts/hooks/pre-commit; git commit -m x",
+        "cat <<'EOF' > note.md\ngit push --no-verify\nEOF",
+        'cat <<-"END" > n.md\n\tgit commit -n -m x\n\tEND\ngit status',
+        "cat <<EOF | tee a.md\nLUMOS_SKIP_X=1 git push\nEOF\necho done",
+        "cat <<A <<B\ngit push --no-verify\nA\ngit commit -n -m x\nB\necho ok",
+        "git commit -mnote",
+        "git commit -m -n",
+        "git commit -F -n",
+        "git merge --no-verify main",
+        "git -c core.hooksPath=/dev/null rebase main",
+        "git -c core.hooksPath= cherry-pick abc",
+        "LUMOS_SKIP_CODE_LOOP=1 git merge feat",
+        'grep -n "LUMOS_SKIP_NOTE_SHAPE=1" scripts/lumos',
+        'rg "LUMOS_SKIP_X=1" scripts/lumos',
+        "grep -c LUMOS_SKIP_X= scripts/lumos",
+        "git config core.hooksPath 2>/dev/null",
+        "git config core.hooksPath 2>&1",
+        "git config core.hooksPath > /tmp/h.txt",
+        "grep GIT_DIR scripts/lumos",
+        "git commit -Sn -m x",
+        "HUSKY=0 git commit -m x",
+        "git commit -cnote",
+        "git commit -t n.txt -m x",
+        "git commit -unormal -m x",
+        "git commit -C main",
+        "git push --no-verified origin x",
+        "git config --list",
+        'git commit -m "第一行\n--no-verify 只是說明"',
+        "echo $((1<<2)); git status",
+        "git status 2>&1 | head",
+        "# git commit -n -m x",
+        "echo a #; git commit -n -m x",
+        "# it's fine\ngit commit -F - <<EOF\nnever use git push --no-verify\nEOF",
+        "echo hi # it's\ncat <<EOF\ngit push --no-verify\nEOF",
+        'git commit -m "第一行\n第二行" && git status',
+        "lumos search LUMOS_SKIP_X=1 foo",
+        "export -n LUMOS_SKIP_X=1; git push",
+        "LUMOS_SKIP_X=1 echo lumos-not-a-command",
+        "sed -i '' 's/hooksPath/x/' scripts/lumos",
+        "sed -i '' 's/--no-verify/x/' docs/lumos-toolchain-knowledge/Projects/a.md",
+        'sed -i "" "s/LUMOS_SKIP_X/LUMOS_SKIP_Y/" scripts/lumos',
+        "git commit -m --no-verify",
+        "git commit --message --no-verify",
+        "git push -o --no-verify origin",
+        "git push -- --no-verify",
+        "echo $'\\c'",
+        "printf '%s' $'a\\c' && git status",
+        "git commit -m '' -m x",
+        "x=$(git rev-parse HEAD) && git status",
+        'git commit -m "$(cat <<\'EOF\'\nnever --no-verify\nEOF\n)"',
+        "ls -la",
+    )
+    for cmd in cases:
+        asked, out = _bypass_asks(m, cmd)
+        check("繞閘問人 S2:放行 %r" % cmd[:50], out is None, (cmd, out))
+    print("  ✓ t_bypass_ask_ignores_mentions")
+
+
+def t_bypass_ask_throwaway_targets():
+    """[代理繞閘字樣問人 S3]拋棄式目標放行;cd 與 -C 的生效目錄、子殼層、mktemp、真 repo 工作樹、推送遠端照規則判。"""
+    import subprocess as _sp, tempfile as _tf, shutil as _sh, os as _os
+    m = _bypass_hook()
+    base = Path(_tf.mkdtemp(prefix="gctl-bypass-tw-")).resolve()
+    tmp_root, real_root = base / "tmproot", base / "realroot"
+    tmp_root.mkdir(); real_root.mkdir()
+    orig_roots = m._temp_roots
+    m._temp_roots = lambda: [str(tmp_root)]
+    try:
+        def git(*a):
+            _sp.run(["git", *a], check=True, capture_output=True, text=True)
+        real = real_root / "repo"
+        git("init", "-q", str(real))
+        git("-C", str(real), "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-q", "--allow-empty", "-m", "i")
+        wt = tmp_root / "wt"
+        git("-C", str(real), "worktree", "add", "-q", str(wt))
+        exp = tmp_root / "exp"
+        git("init", "-q", str(exp))
+        bare = tmp_root / "remote.git"
+        git("init", "-q", "--bare", str(bare))
+        git("-C", str(exp), "remote", "add", "local", str(bare))
+        expnet = tmp_root / "expnet"        # 有網路遠端的暫存 repo:不算實驗 repo(r3 起)
+        git("init", "-q", str(expnet))
+        git("-C", str(expnet), "remote", "add", "local", str(bare))
+        git("-C", str(expnet), "remote", "add", "real", "git@github.com:org/real.git")
+        git("-C", str(expnet), "remote", "add", "aliasr", "aliashost:Org/Repo.git")
+        T, R, W, E, EN = str(tmp_root), str(real), str(wt), str(exp), str(expnet)
+        allow = (
+
+            f"cd {E} && git config core.hooksPath h",
+            f"git -C {E} commit -qm x --no-verify",
+            f"W={E}; cd $W && git -c core.hooksPath=/dev/null commit -m x",
+            f"cd {E} && git push --no-verify local main",
+            f"cd {E} && git push --no-verify {bare} main",
+            f"cd {E} && git push --no-verify ../remote.git main",
+
+            f"cd {T} && git -C exp commit -qm x --no-verify",
+            f"cd {E} && git push --no-verify file://{bare} main",
+        )
+        for cmd in allow:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:拋棄式目標放行 %r" % cmd[-50:], out is None, (cmd, out))
+        asked, out = _bypass_asks(m, "git commit -qm x --no-verify", cwd=E)
+        check("繞閘問人 S3:沒有 cd/-C 時看事件 cwd,cwd 是暫存實驗 repo → 放行", out is None, out)
+        E2 = tmp_root / "exp2"
+        git("init", "-q", str(E2))
+        git("-C", str(E2), "remote", "add", "local", str(bare))
+        git("-C", str(E2), "config", "remote.local.pushurl", "git@github.com:org/real.git")
+        more_ask = (
+            f"cd {T}/nonexist && git --git-dir={R}/.git --work-tree={R} commit --no-verify -m x",
+            f"cd {T}/nonexist && GIT_DIR={R}/.git git commit --no-verify -m x",
+            f"cd {T}/nonexist && git --git-dir {R}/.git commit --no-verify -m x",
+            f"cd {T}/nonexist && env GIT_DIR={R}/.git git commit --no-verify -m x",
+            f"cd {E} && git --work-tree={R} commit -n -m x",
+            f"cd {E} && git config --global core.hooksPath /dev/null",
+            f"cd {E} && git config --system core.hooksPath /dev/null",
+            f"cd {E} && git config --file ~/.gitconfig core.hooksPath /dev/null",
+            f"cd {E} && git config -f ~/.gitconfig core.hooksPath /dev/null",
+            "S=$(mktemp -d); cd $S/../../Users/x && git commit -n -m x",
+            "S=$(mktemp -d); cd $S/.. && git commit -n -m x",
+            f"cd {T}/nonexist; git commit -n -m x",
+            f"cd {E} & git commit -n -m x",
+            f"cd {E} && git remote set-url local git@github.com:org/real.git && git push --no-verify local main",
+            f"cd {E2} && git push --no-verify local main",
+        )
+        for cmd in more_ask:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:非拋棄式照問 %r" % cmd[-60:], asked, (cmd, out))
+        ask = (
+            f"cd {T} && git -C {R} push --no-verify",
+            f"cd {T}/x; cd {R}; git push --no-verify",
+            f"(cd {T}/x && true); git push --no-verify",
+            f"(cd {T}/x && true); git commit -qm x --no-verify",
+            f"cd {T}/x && cd - && git push --no-verify",
+            f"cd {T}/x && cd ~ && git commit -n -m x",
+            f"cd {T}/../realroot/repo && git commit -n -m x",
+            "msg=$(mktemp); printf wip > $msg; git commit -F $msg --no-verify",
+            "mktemp -d >/dev/null; git push --no-verify",
+            f"cd {W} && git commit -qm x --no-verify",
+            f"cd {W} && git config core.hooksPath /dev/null",
+            f"cd {EN} && git push --no-verify real main",
+            f"cd {E} && git push --no-verify",
+            f"git clone git@github.com:org/real.git {T}/c && cd {T}/c && git push --no-verify",
+            "d=$(mktemp -d); git -C $d push --no-verify",
+            f"cd {T}/n6 && git init -q && git remote add origin git@github.com:org/real.git && git push origin main --no-verify",
+            f"cd {T}/n7 && git init -q && git remote add -t main origin https://github.com/org/real.git && git push --no-verify origin",
+            f"cd {T}/x && pushd {R} && git push --no-verify",
+            f"cd {T}/x && cd && git commit -n -m x",
+            f"cd {T}/x && cd $(git rev-parse --show-toplevel) && git commit -n -m x",
+            f"cd {E} && LUMOS_SKIP_FIX_CHECK=1 lumos code-loop check",
+        )
+        for cmd in ask:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:非拋棄式照問 %r" % cmd[-60:], asked, (cmd, out))
+        new_ask = (
+            f"mkdir -p {T}/new/repo && cd {T}/new/repo && git init -q && git commit -qm probe --no-verify",
+            "d=$(mktemp -d); git -C $d init -q; git -C $d commit -qm x --no-verify",
+            "cd $(mktemp -d) && git init -q && git commit -n -m x",
+            f"cd {T} && mkdir n4 && cd n4 && git init -q && git init -q --bare ../r.git && git remote add origin ../r.git && git push origin main --no-verify",
+            f"cd $(mktemp -d -p {R}) && git commit --no-verify -m x",
+            f"export GIT_DIR={R}/.git; cd {E}; git commit --no-verify -m x",
+            f"cd {E} && GIT_DIR={R}/.git git commit -n -m x",
+            f"cd {E} && env GIT_WORK_TREE={R} git commit -n -m x",
+            f"declare -x GIT_WORK_TREE={R}; cd {E}; git commit -n -m x",
+            f"GIT_DIR={R}/.git; export GIT_DIR; cd {E}; git commit -n -m x",
+            f"mkdir {T}/zz9 && ln -s {R} {T}/zz9/r && cd {T}/zz9/r && git commit --no-verify -m x",
+            f"cd {E} && git remote set-url --add --push local git@github.com:org/real.git && git push --no-verify local",
+            f"cd {E} && git remote set-url local {T}/zz && git push --no-verify local",
+            f"cd {E} | cat; git commit -n -m x",
+            f"cd /nope-real || cd {E}; git commit -n -m x",
+            f"[ -d /nope ] && cd {E}; git commit -n -m x",
+            f"cd {EN} && git push --no-verify aliasr main",
+            f"cd {E} && git push --no-verify > {T}/x.log",
+        )
+        for cmd in new_ask:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:執行當下不能確認是實驗 repo → 照問 %r" % cmd[-60:], asked, (cmd, out))
+        (real / "sub").mkdir()
+        _os.symlink(str(real / "sub"), str(tmp_root / "lnk"))
+        _os.symlink(str(R), str(tmp_root / "realln"))
+        realclone = tmp_root / "realclone"
+        git("init", "-q", str(realclone))
+        git("-C", str(realclone), "remote", "add", "origin", "git@github.com:org/real.git")
+        r3_ask = (
+            f"git -C {T}/lnk/.. commit -n -m x",
+            f"cd {T}/realln && git commit -n -m x",
+            f"false && cd {E} && true\ngit commit -n -m x",
+            f"true || cd {E} && git commit -n -m x",
+            f"cd {E} || git commit -n -m x",
+            f"if ! cd {E}; then git commit -n -m x; fi",
+            f"{{ cd {E}; }} | cat; git commit -n -m x",
+            f"{{ cd {E}; }} & git commit -n -m x",
+            f"(cd {E})>/dev/null; git commit -n -m x",
+            f"cd {E} && git -c remote.local.pushurl=git@github.com:a/b.git push --no-verify local",
+            f"cd {E} && git -c url.git@github.com:a/b.git.pushInsteadOf={bare} push --no-verify local",
+            f"cd {E} && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=remote.local.pushurl GIT_CONFIG_VALUE_0=git@github.com:a/b.git git push --no-verify local",
+            f"cd {E} && git config remote.local.pushurl git@github.com:a/b.git && git push --no-verify local",
+            f"git push --repo https://github.com/a/b --no-verify {bare}",
+            f"GIT_DIR={R}/.git git push --no-verify {bare}",
+            f"cd {E} && GIT_COMMON_DIR={R}/.git git commit -n -m x",
+            f"cd {realclone} && git commit -n -m x",
+            f"cd {realclone} && git config core.hooksPath /dev/null",
+        )
+        for cmd in r3_ask:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:r3 邊界照問 %r" % cmd[-60:], asked, (cmd, out))
+        r4_ask = (
+            f"false &&\ncd {E}\ngit commit -n -m x",
+            f"true ||\ncd {E}\ngit commit -n -m x",
+            f"false &&\n{{ cd {E}; }}\ngit commit -n -m x",
+            f"if [ -d /nope ]; then cd {E}; fi; git commit -n -m x",
+            f"for d in /nonexistent; do cd {E}; done; git commit -n -m x",
+            f"while false; do cd {E}; done\ngit commit -n -m x",
+            f"case x in y) cd {E};; esac; git commit -n -m x",
+            f"f() {{ cd {E}; }}; git commit -n -m x",
+            f"D={E}; cd '$D'; git commit -n -m x",
+            f"D={E}; cd \\$D; git commit -n -m x",
+            f"cd {E} && x=$(git commit -n -m x)",
+            f"cd {E} && cat <(git commit -n -m x)",
+        )
+        for cmd in r4_ask:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:r4 邊界照問 %r" % cmd[-60:], asked, (cmd, out))
+        r4_allow = (
+            f"cd {E} && git commit -m '' -n",
+            f"cd {E}; echo \"GIT_DIR=x\"; git commit -n -m x",
+            f"cd {E} && git commit -m \"GIT_DIR=x\" -n",
+            f"cd {E} && grep -rn GIT_DIR=x . ; git commit -n -m x",
+            f"cd {E} && git remote -vv; git push --no-verify local main",
+            f"cd {E} && git remote prune local; git push --no-verify local main",
+            f"cd {E} && git remote update; git push --no-verify local main",
+            f'D="{E}"; cd "$D" && git commit -n -m x',
+            f"if [ -d {E} ]; then cd {E}; git commit -n -m x; fi",
+            f"{{ cd {E}; git commit -n -m x; }}",
+            f"cd {E} && git commit -n -m x 2>&1 | tail -3",
+        )
+        for cmd in r4_allow:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:r4 實驗 repo 照放行 %r" % cmd[-60:], out is None, (cmd, out))
+        r3_allow = (
+            f"[ -d {E} ] && cd {E} && git commit -n -m x",
+            f"cd {E} && git config --get remote.local.url; git push --no-verify local main",
+            f"cd {E} && git config --get remote.local.url remote; git push --no-verify local main",
+            f"cd {E} && grep -rn GIT_DIR . ; git commit -n -m x",
+            f"cd {E} && git push --no-verify ./../remote.git main",
+        )
+        for cmd in r3_allow:
+            asked, out = _bypass_asks(m, cmd)
+            check("繞閘問人 S3:r3 實驗 repo 照放行 %r" % cmd[-60:], out is None, (cmd, out))
+        asked, out = _bypass_asks(m, "git commit -n -m x", cwd=123)
+        check("繞閘問人 S3:事件 cwd 不是字串 → 照問", asked, out)
+        orig_git = m._git_out
+        try:
+            m._git_out = lambda d, *a: (128, "", "fatal: detected dubious ownership in repository")
+            asked, out = _bypass_asks(m, f"cd {E} && git commit -n -m x")
+            check("繞閘問人 S3:git 查不到 repo 但原因不是「不是 repo」(擁有者不同被拒等)→ 照問", asked, out)
+            m._git_out = lambda d, *a: (128, "", "fatal: not a git repository (or any of the parent directories): .git")
+            asked, out = _bypass_asks(m, f"cd {E} && git commit -n -m x")
+            check("繞閘問人 S3:git 明說不在任何 repo 裡的暫存目錄 → 放行", out is None, out)
+        finally:
+            m._git_out = orig_git
+        asked, out = _bypass_asks(m, f"[ -d {E} ] && cd {E} && git commit -n -m x")
+        check("繞閘問人 S3:條件式 cd 之後緊接 && 的提交照豁免", out is None, out)
+        mixed = f"cd {T}/x && git commit -qm a --no-verify; cd {R} && git push --no-verify"
+        asked, out = _bypass_asks(m, mixed)
+        check("繞閘問人 S3:同一條另一段對真 repo 繞過 → 照樣問", asked, out)
+        asked, out = _bypass_asks(m, "git push --no-verify", cwd=None)
+        check("繞閘問人 S3:事件 cwd 缺欄 → 非拋棄式照問", asked, out)
+    finally:
+        m._temp_roots = orig_roots
+        _sh.rmtree(base, ignore_errors=True)
+    exp_default = Path(_tf.mkdtemp(prefix="gctl-bypass-default-"))
+    try:
+        _sp.run(["git", "init", "-q", str(exp_default)], check=True)
+        asked, out = _bypass_asks(m, f"cd {exp_default} && git commit -qm x --no-verify")
+        check("繞閘問人 S3:預設暫存根(不替換)底下已存在的實驗 repo → 放行", out is None, out)
+    finally:
+        _sh.rmtree(exp_default, ignore_errors=True)
+    asked, out = _bypass_asks(m, "mkdir -p /Users/someone/x && cd /Users/someone/x && git commit -n -m x")
+    check("繞閘問人 S3:暫存根以外同指令建的目錄 → 照問", asked, out)
+    print("  ✓ t_bypass_ask_throwaway_targets")
+
+
+def t_bypass_ask_fallbacks_and_budget():
+    """[代理繞閘字樣問人 S4]切不動或太長時退回字面判;例外放行並記失敗;預篩不寫事件;事件名對齊列名;三種最壞形狀 0.5 秒內。"""
+    import subprocess as _sp, sys as _sys, time as _t, json as _j, os as _os
+    m = _bypass_hook()
+    asked, out = _bypass_asks(m, 'git push --no-verify "未閉合')
+    check("繞閘問人 S4:引號不成對且含 git、push、--no-verify → ask", asked, out)
+    asked, out = _bypass_asks(m, 'grep "未閉合 --no-verify')
+    check("繞閘問人 S4:引號不成對但沒有 git → 放行", out is None, out)
+    long_cmd = "echo " + " ".join(["x"] * 15000) + " && git push --no-verify"
+    asked, out = _bypass_asks(m, long_cmd)
+    check("繞閘問人 S4:超過 2 萬字走字面判,含 git、push、--no-verify → ask", asked, out)
+    asked, out = _bypass_asks(m, "echo " + " ".join(["x"] * 15000) + " && git status")
+    check("繞閘問人 S4:超過 2 萬字、字面判不命中 → 放行", out is None, out)
+    hook = str(Path(GRAPHCTL).resolve().parent / "hooks" / "claude" / "bypass-ask-hook.py")
+    import tempfile as _tf, shutil as _sh
+    rp = Path(_tf.mkdtemp(prefix="gctl-bypass-ev-"))
+    try:
+        _sp.run(["git", "init", "-q", str(rp)], check=True)
+        evf = rp / "governance" / "runtime" / "hook-events.jsonl"
+        def _run(inp, *extra):
+            return _sp.run([_sys.executable, hook, *extra], input=inp, capture_output=True, text=True, timeout=30, cwd=str(rp))
+        def _evs():
+            return [_j.loads(l) for l in evf.read_text(encoding="utf-8").splitlines() if l.strip()] if evf.exists() else []
+        r3 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "ls -la && git status"}, "cwd": str(rp)}))
+        check("繞閘問人 S4:沒過預篩 → 不輸出、不寫任何存活事件", r3.returncode == 0 and not r3.stdout.strip() and not evf.exists(),
+              (r3.stdout[:200], evf.exists()))
+        r4 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "git push --no-verify"}, "cwd": "/Users/someone/work/repo"}), "--budget", "5")
+        evs = _evs()
+        check("繞閘問人 S4:帶 --budget 5 照常判、命中印 ask", '"ask"' in r4.stdout, (r4.returncode, r4.stdout[:200], r4.stderr[-200:]))
+        check("繞閘問人 S4:過了預篩的存活事件名是 pretooluse-bypass-ask-hook、kind ok、不帶問人備註",
+              len(evs) == 1 and evs[0].get("hook") == "pretooluse-bypass-ask-hook" and evs[0].get("kind") == "ok"
+              and not evs[0].get("note"), evs)
+        r5 = _run("{壞掉的事件 git push --no-verify")
+        evs = _evs()
+        check("繞閘問人 S4:壞事件過了預篩 → 放行(rc 0、不輸出)並記一筆 error 事件",
+              r5.returncode == 0 and not r5.stdout.strip() and len(evs) == 2 and evs[-1].get("kind") == "error", (r5.returncode, r5.stdout[:200], evs))
+        r6 = _sp.run([_sys.executable, hook], input=b"\xff\xfe--no-verify\x00", capture_output=True, timeout=30, cwd=str(rp))
+        check("繞閘問人 S4:輸入不是 UTF-8 → rc 0、不輸出、沒有 traceback", r6.returncode == 0 and not r6.stdout.strip() and b"Traceback" not in r6.stderr,
+              (r6.returncode, r6.stdout[:200], r6.stderr[-300:]))
+        r8 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x \\\n-n"}, "cwd": "/Users/someone/work/repo"}))
+        check("繞閘問人 S4:續行後頂在行首的 -n 也過預篩、照問", '"ask"' in r8.stdout, (r8.returncode, r8.stdout[:200], r8.stderr[-200:]))
+        r9 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": "git commit -m x \\\n\t-n"}, "cwd": "/Users/someone/work/repo"}))
+        check("繞閘問人 S4:續行後 Tab 接 -n 也過預篩、照問", '"ask"' in r9.stdout, (r9.returncode, r9.stdout[:200], r9.stderr[-200:]))
+        for cmd in ("git push --no-ver''ify origin", 'git commit -"n" -m x', "git push --no-ver\\ify origin",
+                    "git commit -$'n' -m x", "git push --no-ver\\\nify origin", "git config core.hooks\\\nPath x",
+                    "git push $'\\055\\055no-verify' o"):
+            rq = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": "/Users/someone/work/repo"}))
+            check("繞閘問人 S4:引號或反斜線拆字也過預篩、照問 %r" % cmd, '"ask"' in rq.stdout, (cmd, rq.stdout[:200]))
+        fake = Path(_tf.mkdtemp(prefix="gctl-bypass-fakegit-"))
+        dirs = [Path(_tf.mkdtemp(prefix="gctl-bypass-slow-")) for _ in range(5)]
+        try:
+            (fake / "git").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+            (fake / "git").chmod(0o755)
+            cmd = "; ".join("git -C %s commit -n -m x" % d for d in dirs)
+            env = dict(_os.environ, PATH=str(fake) + ":" + _os.environ.get("PATH", ""))
+            t0 = _t.perf_counter()
+            rs = _sp.run([_sys.executable, hook, "--budget", "5"], input=_j.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}, "cwd": str(dirs[0])}),
+                         capture_output=True, text=True, timeout=60, cwd=str(dirs[0]), env=env)
+            dt = _t.perf_counter() - t0
+            check("繞閘問人 S4:git 卡住時整支在 5 秒外層預算內結束且照問", dt < 4.8 and '"ask"' in rs.stdout, (round(dt, 2), rs.stdout[:200], rs.stderr[-200:]))
+        finally:
+            for d in [fake, *dirs]:
+                _sh.rmtree(d, ignore_errors=True)
+        r7 = _run(_j.dumps({"tool_name": "Bash", "tool_input": {"command": ["git", "push", "--no-verify"]}, "cwd": str(rp)}))
+        check("繞閘問人 S4:command 不是字串 → rc 0、不輸出", r7.returncode == 0 and not r7.stdout.strip(), (r7.returncode, r7.stdout[:200], r7.stderr[-300:]))
+    finally:
+        _sh.rmtree(rp, ignore_errors=True)
+    orig = m.bypass_reasons
+    try:
+        def _boom(*a, **k):
+            raise RuntimeError("boom")
+        m.bypass_reasons = _boom
+        r = None
+        try:
+            r = m.decide({"tool_name": "Bash", "tool_input": {"command": "git push --no-verify"}, "cwd": _BYPASS_REAL})
+            raised = False
+        except Exception:
+            raised = True
+        check("繞閘問人 S4:分類丟例外 → decide 不往外丟、放行", not raised and r is None, (raised, r))
+        marks = []
+        orig_mark = m.mark
+        m.mark = lambda kind, note="": marks.append(kind)
+        try:
+            m.decide({"tool_name": "Bash", "tool_input": {"command": "git push --no-verify"}, "cwd": _BYPASS_REAL})
+        finally:
+            m.mark = orig_mark
+        check("繞閘問人 S4:decide 吞掉的例外要 mark(\"error\"),不能被記成 ok", marks == ["error"], marks)
+    finally:
+        m.bypass_reasons = orig
+    orig_pre = m.prefilter
+    try:
+        def _pre_boom(raw):
+            raise RuntimeError("boom")
+        m.prefilter = _pre_boom
+        import io as _io
+        from unittest.mock import patch as _patch
+        buf = _io.StringIO()
+        with _patch.object(m.sys, "stdout", buf):
+            rc = m.entry(b'{"tool_input": {"command": "git push --no-verify"}}')
+        check("繞閘問人 S4:預篩階段丟例外 → rc 0、不輸出(放行)", rc == 0 and not buf.getvalue().strip(), (rc, buf.getvalue()[:200]))
+    finally:
+        m.prefilter = orig_pre
+    many_dirs = [Path(tempfile.mkdtemp(prefix="gctl-bypass-cap-")) for _ in range(12)]
+    try:
+        cmd = ";".join("git -C %s commit --no-verify -m x" % many_dirs[k % 12] for k in range(300))
+        t0 = _t.perf_counter()
+        asked, out = _bypass_asks(m, cmd[:19000])
+        dt = _t.perf_counter() - t0
+        check("繞閘問人 S4:幾百段都要查 git 的指令 → 子程序有上限、1 秒內判完且照問", dt < 1.0 and asked, (round(dt, 3), out))
+    finally:
+        for d in many_dirs:
+            _sh.rmtree(d, ignore_errors=True)
+    for label, big in (("10 萬字單詞", "echo " + "x" * 100000 + " && git push --no-verify"),
+                       ("近兩萬字的分段", "a;" * 9400 + " git push --no-verify"),
+                       ("近兩萬字的未閉合 heredoc", "cat <<EOF " * 1900 + "\n git push --no-verify"),
+                       ("近兩萬字的指令替換", "echo $(a) " * 1900 + "; git push --no-verify"),
+                       ("近兩萬字含換行的 heredoc", "cat <<A\nx\nA\n" * 1500 + "git push --no-verify"),
+                       ("每行一個未閉合 heredoc", "<<E\n" * 4800 + "git push --no-verify"),
+                       ("大量沒配對的 $(", "git commit -n; " + "$(" * 9990),
+                       ("大量沒配對的 $((", "git commit -n; " + "$((" * 6600),
+                       ("大量相鄰反引號", "`" * 19900 + " git push --no-verify"),
+                       ("三千層巢狀指令替換", "$(" * 3300 + "git push --no-verify" + ")" * 3300),
+                       ("三千層巢狀程序替換", "<(" * 3300 + "git push --no-verify" + ")" * 3300)):
+        t0 = _t.perf_counter()
+        asked, out = _bypass_asks(m, big)
+        dt = _t.perf_counter() - t0
+        check("繞閘問人 S4:%s 0.5 秒內判完且照問" % label, dt < 0.5 and asked, (label, round(dt, 3), out))
+    # 預篩對超長指令不跑前處理(r4 併發資源席:ANSI 跳脫逐個切片是平方時間,1.4MB 撐破 5 秒預算)
+    # 6MB:超長還照跑前處理要 1.5 秒以上(就算前處理是線性),不跑只要約 0.25 秒
+    for label, big in (("超長 $'\\n' 串", "git commit -n -m x; echo $'" + "\\n" * 3000000 + "'"),
+                       ("超長 $'\\x41' 串", "echo $'" + "\\x41" * 1500000 + "'; git push --no-verify")):
+        t0 = _t.perf_counter()
+        hit = m.prefilter(_j.dumps({"tool_input": {"command": big}}))
+        dt = _t.perf_counter() - t0
+        check("繞閘問人 S4:預篩 %s 0.8 秒內判完且照過" % label, dt < 0.8 and hit, (label, round(dt, 3)))
+    # 30 萬個跳脫:線性約 0.15 秒;逐個切片(平方時間)約 2 秒
+    t0 = _t.perf_counter()
+    m._Normalizer("echo $'" + "\\n" * 300000 + "'").run()
+    check("繞閘問人 S4:ANSI 解碼是線性時間(30 萬個跳脫 0.8 秒內)", _t.perf_counter() - t0 < 0.8, round(_t.perf_counter() - t0, 3))
+    # 預算用到下限就不再跑 git(r4 併發資源席:找 repo 根那 3 秒算在預算外,下限 1 秒讓每次 git 都還能等滿)
+    from unittest.mock import patch as _patch2
+    calls = []
+    try:
+        m._IN_HOOK["on"] = True
+        m._BUDGET_START = _t.monotonic() - 100
+        with _patch2.object(m.subprocess, "run", lambda *a, **k: calls.append(a) or _sp.CompletedProcess(a, 0, "", "")):
+            m._GIT_STATE.update(calls=0, cache={}, dead=False)
+            res = m._git_out("/tmp", "rev-parse", "--git-common-dir")
+        check("繞閘問人 S4:預算已用到下限 → 不再跑 git、當查不到", res == (None, "", "") and not calls, (res, len(calls)))
+    finally:
+        m._IN_HOOK["on"] = False
+        m._BUDGET_START = None
+    # 掛鉤進場結束後要復位(r4 併發資源席:同行程之後的批次判斷會繼承過期的預算起點)
+    import io as _io2
+    with _patch2.object(m.sys, "stdout", _io2.StringIO()):
+        m.entry(_j.dumps({"tool_input": {"command": "git push --no-verify"}, "cwd": _BYPASS_REAL}).encode())
+    check("繞閘問人 S4:entry 結束後不再是掛鉤進場狀態", m._IN_HOOK["on"] is False, m._IN_HOOK)
+    m._BUDGET_START = _t.monotonic() - 100
+    m.bypass_reasons("git status", _BYPASS_REAL)
+    check("繞閘問人 S4:不是掛鉤進場時每次判斷重新起算預算", m._inner_budget(default=5.0) > 3.0, m._inner_budget(default=5.0))
+    print("  ✓ t_bypass_ask_fallbacks_and_budget")
+
+
+def t_bypass_ask_registered():
+    """[代理繞閘字樣問人 S5]merge-claude-settings 在 PreToolUse 註冊 matcher Bash → bypass-ask-hook.py,逾時 5 秒;Codex 不註冊;安裝名單與 enforcement 有它。"""
+    import subprocess as _sp, sys as _sys, json as _j, tempfile as _tf, os as _os, shutil as _sh
+    home = Path(_tf.mkdtemp(prefix="gctl-bypass-home-"))
+    try:
+        (home / ".claude").mkdir()
+        env = dict(_os.environ, HOME=str(home), USERPROFILE=str(home))
+        merge = str(Path(GRAPHCTL).resolve().parent / "merge-claude-settings.py")
+        _sp.run([_sys.executable, merge], env=env, capture_output=True, text=True, timeout=60)
+        d = _j.loads((home / ".claude" / "settings.json").read_text(encoding="utf-8"))
+        pre = d.get("hooks", {}).get("PreToolUse", [])
+        hit = [(e, h) for e in pre if e.get("matcher") == "Bash" for h in e.get("hooks", []) if "bypass-ask-hook.py" in h.get("command", "")]
+        check("繞閘問人 S5:PreToolUse 有 matcher Bash 指向 bypass-ask-hook.py、逾時 5 秒",
+              len(hit) == 1 and hit[0][1].get("timeout") == 5, pre)
+        # Codex 為目標:Codex 的 Bash 前事件回覆形狀不同,這條不得原樣寫過去
+        (home / ".codex").mkdir()
+        rc = _sp.run([_sys.executable, merge, "--target", "codex"], env=dict(env, CODEX_HOME=str(home / ".codex")),
+                     capture_output=True, text=True, timeout=60)
+        cj = home / ".codex" / "hooks.json"
+        ctext = cj.read_text(encoding="utf-8") if cj.exists() else ""
+        check("繞閘問人 S5:以 Codex 為目標安裝 → 有寫出註冊表、但沒有任何指向 bypass-ask-hook.py 的註冊",
+              "impact-hook.py" in ctext and "bypass-ask-hook.py" not in ctext, (rc.returncode, rc.stderr[-300:], ctext[:300]))
+    finally:
+        _sh.rmtree(home, ignore_errors=True)
+    lumos = _load_lumos_inproc()
+    check("繞閘問人 S5:安裝名單含 bypass-ask-hook.py(沒加就不會被複製、註冊會被當懸空剪掉)",
+          "bypass-ask-hook.py" in lumos._GLOBAL_CLAUDE_HOOKS and "bypass-ask-hook.py" in lumos._own_hook_scripts(), lumos._GLOBAL_CLAUDE_HOOKS)
+    _home2 = Path(_tf.mkdtemp(prefix="gctl-bypass-enf-"))
+    try:
+        rows = lumos.enforcement_status(root=_home2, home=_home2)
+        check("繞閘問人 S5:enforcement 有 pretooluse-bypass-ask-hook 一列",
+              any(r.get("layer") == "pretooluse-bypass-ask-hook" for r in rows), [r.get("layer") for r in rows])
+    finally:
+        _sh.rmtree(_home2, ignore_errors=True)
+    print("  ✓ t_bypass_ask_registered")
 
 
 def t_codex_s1_impact_apply_patch():
@@ -47095,6 +47751,78 @@ def t_hook_liveness_is_not_just_recently_ran():
     finally:
         _sh.rmtree(root, ignore_errors=True)
     print("  ✓ t_hook_liveness_is_not_just_recently_ran")
+
+
+def t_hook_event_trim_tmp_unique():
+    """存活事件檔超過上限要修剪時,暫存檔用各自獨立的名字(代碼審 code-代理繞閘字樣問人 r1 併發資源席):
+    固定叫 hook-events.jsonl.tmp 時,兩個會談同時修剪會寫同一個暫存檔;那個名字被別的東西佔住(這裡放一個資料夾)時,
+    修剪永遠失敗、檔案無限長大。"""
+    import tempfile as _tf, shutil as _sh
+    m = _load_hook_mod("hookevent_trim", "_hookevent.py")
+    root = Path(_tf.mkdtemp(prefix="gctl-hookevent-trim-"))
+    try:
+        rt = root / "governance" / "runtime"
+        rt.mkdir(parents=True)
+        f = rt / "hook-events.jsonl"
+        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
+        (rt / "hook-events.jsonl.tmp").mkdir()
+        ok = m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        lines = f.read_text(encoding="utf-8").splitlines()
+        check("存活事件修剪:固定暫存檔名被佔住時照樣修剪(2000 行以內、大小在上限一半以內)、新事件在最後",
+              ok and 0 < len(lines) <= 2000 and f.stat().st_size <= m.MAX_BYTES // 2 + 1024
+              and "pretooluse-bypass-ask-hook" in lines[-1], (ok, len(lines), f.stat().st_size))
+        left = [x.name for x in rt.iterdir() if x.name not in ("hook-events.jsonl", "hook-events.jsonl.tmp")]
+        check("存活事件修剪:沒有留下殘餘暫存檔", left == [], left)
+        # 權限照舊(r2 架構對齊席、併發資源席:mkstemp 會把 0644 換成 0600)
+        import os as _os, stat as _st, time as _tm
+        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
+        _os.chmod(f, 0o644)
+        m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        check("存活事件修剪:修剪後權限照原檔(0644)", _st.S_IMODE(f.stat().st_mode) == 0o644, oct(_st.S_IMODE(f.stat().st_mode)))
+        # 被砍在修剪中途留下的舊暫存檔,下次修剪會清掉(超過一分鐘的才清,不碰正在寫的)
+        old_trim = rt / "hook-events.abc123.trim"
+        old_trim.write_text("殘檔", encoding="utf-8")
+        _os.utime(old_trim, (_tm.time() - 600, _tm.time() - 600))
+        fresh_trim = rt / "hook-events.def456.trim"
+        fresh_trim.write_text("寫到一半", encoding="utf-8")
+        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
+        m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        check("存活事件修剪:超過一分鐘的殘留暫存檔被清掉、剛建的不碰", not old_trim.exists() and fresh_trim.exists(),
+              (old_trim.exists(), fresh_trim.exists()))
+        fresh_trim.unlink()
+        # 長行:修剪後大小要落在上限以下,不能每次都再修一次(r2 正確性席)
+        f.write_text(("y" * 600 + "\n") * 3000, encoding="utf-8")
+        m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        check("存活事件修剪:長行時修剪後小於位元組上限", f.stat().st_size <= m.MAX_BYTES, f.stat().st_size)
+        # 換入失敗時暫存檔要清掉(失敗清理分支)
+        from unittest.mock import patch as _patch
+        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
+        with _patch.object(m.os, "replace", side_effect=OSError("boom")):
+            m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        left = [x.name for x in rt.iterdir() if x.name.endswith(".trim")]
+        check("存活事件修剪:換入失敗時不留下暫存檔", left == [], left)
+        # 檔案還小、不需要修剪時,舊殘檔也要清(r3 併發資源席:下一次修剪可能要很久才來)
+        f.write_text("x\n", encoding="utf-8")
+        stale = rt / "hook-events.zz9999.trim"
+        stale.write_text("殘檔", encoding="utf-8")
+        _os.utime(stale, (_tm.time() - 600, _tm.time() - 600))
+        m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        check("存活事件修剪:不需要修剪時也清掉超過一分鐘的殘檔", not stale.exists(), stale.exists())
+        # 目錄唯讀、檔案可寫:修剪失敗要印一行提示(r3 併發資源席:原本靜默、檔案一路長大)
+        import io as _io, contextlib as _cl
+        f.write_text(("x" * 300 + "\n") * 4000, encoding="utf-8")
+        _os.chmod(rt, 0o555)
+        err = _io.StringIO()
+        try:
+            with _cl.redirect_stderr(err):
+                m.record(root, "pretooluse-bypass-ask-hook", "ok")
+        finally:
+            _os.chmod(rt, 0o755)
+        check("存活事件修剪:目錄唯讀修剪失敗時印提示(帶 telemetry-write-failed 關鍵字,跟其他記帳失敗同一種)",
+              "修剪失敗" in err.getvalue() and "telemetry-write-failed" in err.getvalue(), err.getvalue()[:200])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_hook_event_trim_tmp_unique")
 
 
 def t_hook_event_recorded_only_on_success():
