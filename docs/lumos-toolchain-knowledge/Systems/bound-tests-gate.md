@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-10-14
+updated: 2026-10-15
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 aliases:
@@ -146,6 +146,6 @@ PITFALL:整組只送一發 TERM 時,送的那一刻正在 fork 的片(或它的�
 
 PITFALL:在原生 Windows 的 Python 上推送時,全套測試每一片一起跑就 AttributeError、被判成有紅,推送永遠被擋,「紅的是這幾支」又是空的 [出處:第四輪代碼審正確性席、併發席、通才席] [根因:換群組那段無條件呼叫 `os.setpgid`,Windows 的 Python 沒有它;就算繞過,Windows 的 `os.execv` 是起新行程後讓舊的立刻回 0,測試沒跑完就判綠] [修法:有 `setpgid` 才換群組再 `exec`(`setpgid` 失敗就不換、照樣 `exec`);沒有就在同一個行程裡用 `runpy` 跑測試檔,離開碼照實傳出] [test:t_prepush_interrupt_launcher_without_setpgid]
 
-WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓換群組那段與其他每個 `$PY` 閘一啟動就回 0;掛鉤不為這件事加機制 [出處:第四輪代碼審資安席] [因:要先能控制推送行程的環境變數才做得到,屬刻意設定環境的手法,在工具鏈的資安範圍外(工具鏈本身的資安只看提示注入、讀寫越界、非刻意的一步繞過;2026-10-14 使用者確認);而且每個 `$PY` 閘都一樣,不是換群組那段獨有、修補前就有] [不選:整支掛鉤統一給 `$PY` 加 `-I` 或清掉 PYTHONPATH——改動面是每一支閘,換到的只是「已經能改環境的人」多走一步]
+WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓換群組那段與其他每個 `$PY` 閘一啟動就回 0;掛鉤不為這件事加機制 [出處:第四輪代碼審資安席] [因:要先刻意放一支 sitecustomize、再讓推送行程的環境指過去才成立,屬刻意設定環境的手法,在工具鏈的資安範圍外(工具鏈本身的資安只看提示注入、讀寫與執行越界、非刻意的一步繞過;見 Systems/pitfalls-code-loop 工具鏈資安範圍 RULE);非刻意殘留、別的程序帶進來的 PYTHONPATH 屬那條 RULE 的第 ③ 類、照審;而且每個 `$PY` 閘都一樣,不是換群組那段獨有、修補前就有] [不選:整支掛鉤統一給 `$PY` 加 `-I` 或清掉 PYTHONPATH——改動面是每一支閘,換到的只是「已經能改環境的人」多走一步]
 
 找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的四道怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。

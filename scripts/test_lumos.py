@@ -96319,28 +96319,34 @@ _RM_LITERAL_BANNED = ("先 cd 到變數路徑再用相對路徑刪", "`目錄/*`
 
 
 def _tpl_dispatch_fences(text):
-    """範本裡要帶刪檔紀律的派工詞:每一份第一行是 LUMOS-SEAT: 的圍欄,加上 §5、§6 兩份(以節標題找緊接的第一個圍欄)。
-    回 [(標籤, 圍欄內各行)];圍欄以行首 ``` 開關。"""
+    """範本裡要帶刪檔紀律的派工詞:每一份第一行是 LUMOS-SEAT: 的圍欄,加上 §5、§6、§9 三節與 §3.1 小節各自緊接的第一個圍欄
+    (§3.1 修補鏡頭追加段、§9 跑滿回顧起草者也是給子代理的派工詞,代碼審 r1 合5)。
+    回 [(標籤, 圍欄內各行)];圍欄以行首 ``` 開關;§3.1 的標籤是小節標題。"""
     lines = text.split("\n")
-    fences, i, sec = [], 0, ""
+    fences, i, sec, sub = [], 0, "", ""
     while i < len(lines):
         ln = lines[i]
         if ln.startswith("## "):
-            sec = ln
+            sec, sub = ln, ""
+        elif ln.startswith("### "):
+            sub = ln
         if ln.startswith("```"):
             j = next((k for k in range(i + 1, len(lines)) if lines[k].startswith("```")), len(lines))
-            fences.append((sec, lines[i + 1:j]))
+            fences.append((sec, sub, lines[i + 1:j]))
             i = j + 1
             continue
         i += 1
     out, seen = [], set()
-    for sec, body in fences:
+    for sec, sub, body in fences:
         first = next((b for b in body if b.strip()), "")
         if first.startswith("LUMOS-SEAT:"):
             out.append((sec[:24], body))
-        elif sec.startswith(("## 5. SDD implementer", "## 6. SDD task reviewer")) and sec not in seen:
+        elif sec.startswith(("## 5. SDD implementer", "## 6. SDD task reviewer", "## 9. 跑滿回顧起草")) and sec not in seen:
             seen.add(sec)
             out.append((sec[:24], body))
+        elif sub.startswith("### §3.1 ") and sub not in seen:
+            seen.add(sub)
+            out.append((sub[:24], body))
     return out
 
 
@@ -96356,7 +96362,8 @@ def _rm_literal_missing(text):
 
 def t_templates_rm_literal_absolute_path():
     """[鏡頭範圍計劃 S9]templates.md §0 有一條刪檔一律用字面絕對路徑、點名三種禁用寫法;每份第一行是 LUMOS-SEAT: 的派工詞
-    與 §5、§6 兩份派工詞,第二行都寫進同一句規則原文(子代理看不到 §0,只寫「照 §0」它解不開)。
+    與 §5、§6、§3.1 修補鏡頭、§9 跑滿回顧四份派工詞,第二行都寫進同一句規則原文(子代理看不到 §0,只寫「照 §0」它解不開;
+    §3.1、§9 是代碼審 r1 合5 補的)。
     變異:拿掉其中一份的那句 → 點名那一份;拿掉其中一個禁用寫法 → 也點名。"""
     _need_src("skills/lumos-design-loop/templates.md")
     repo = Path(GRAPHCTL).resolve().parent.parent
@@ -96368,8 +96375,9 @@ def t_templates_rm_literal_absolute_path():
     fences = _tpl_dispatch_fences(t)
     seat_n = sum(1 for _l, b in fences if next((x for x in b if x.strip()), "").startswith("LUMOS-SEAT:"))
     labels = [l for l, _b in fences]
-    check("★前置★ 找得到 6 份 LUMOS-SEAT 派工詞與 §5、§6 兩份",
-          seat_n == 6 and any(l.startswith("## 5.") for l in labels) and any(l.startswith("## 6.") for l in labels), str(labels))
+    check("★前置★ 找得到 6 份 LUMOS-SEAT 派工詞與 §5、§6、§3.1、§9 四份",
+          seat_n == 6 and len(labels) == 10
+          and all(any(l.startswith(h) for l in labels) for h in ("## 5.", "## 6.", "### §3.1 ", "## 9.")), str(labels))
     check("③每份派工詞第二行都寫進規則原文", _rm_literal_missing(t) == [], str(_rm_literal_missing(t)))
     # 變異:拿掉第一份 LUMOS-SEAT 派工詞第二行的那句、拿掉 §6 那句的一個禁用寫法
     first_at = t.find("```\nLUMOS-SEAT:")
@@ -96380,6 +96388,154 @@ def t_templates_rm_literal_absolute_path():
     hollow = t[:s6_at] + t[s6_at:].replace("`目錄/*` 萬用字元", "萬用字元", 1)
     check("⑤變異:§6 那句少一個禁用寫法 → 點名 §6", [l for l in _rm_literal_missing(hollow)] == [l for l in labels if l.startswith("## 6.")],
           str(_rm_literal_missing(hollow)))
+    for head in ("### §3.1 ", "## 9. "):
+        at = t.find("\n" + head)
+        gone = t[:at] + t[at:].replace(_RM_LITERAL_RULE, "", 1)
+        check(f"⑥變異:拿掉 {head.strip()} 那句 → 只點名那一份", _rm_literal_missing(gone) == [l for l in labels if l.startswith(head)],
+              str(_rm_literal_missing(gone)))
+
+
+# ── 工具鏈代碼審資安與資源鏡頭範圍(Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃 S1–S6、S10)──
+# 預期字串逐字取自計劃〈做法〉,不從產品碼或範本抽(獨立基準)
+# 改動前 §7.8 圍欄裡「逐類想過」底下那段原文(36dab5aa 版逐字複製),〈消費專案六類〉要跟它一字不差
+_SEC_SIX_CLASSES_ORIG = (
+    "1. 不可信輸入流到危險操作:SQL / NoSQL / 命令 / 路徑 / 模板注入、XXE(XML 外部實體注入)、反序列化、eval 類\n"
+    "2. 登入與權限:繞過、越權、session / token / JWT(JSON Web Token 登入憑證)處理\n"
+    "3. 密鑰與個資:寫死在程式裡、進 log / repo / 錯誤訊息、能認出特定個人的資料(PII)外洩\n"
+    "4. 加密與傳輸:弱演算法、關掉憑證驗證、可預測的隨機數\n"
+    "5. 執行邊界:hook、安裝腳本、CI 會不會執行不可信位置的檔;shell 插值;寫進使用者全域設定;授權範圍被放寬\n"
+    "6. 行動端:本機明文儲存、網路安全設定放寬、WebView / 深層連結、剪貼簿\n"
+    "另看這次新加的依賴:沒鎖版本、來源不明。\n")
+_SEC_FILL_CLASSES = ("{逐類清單:消費專案貼〈消費專案六類〉;工具鏈本 repo 貼〈工具鏈三類〉——看 lumos loop next 印的「鏡頭範圍」那一行;"
+                     "跨 repo 派工看被審 repo 的根;這一行整行換成貼上的那一段}")
+_SEC_FILL_OUT = "{範圍外:工具鏈本 repo 整行換成〈工具鏈範圍外〉那一段;消費專案整行刪掉}"
+# 「不報」段第一條的原句(改動前逐字):工具鏈本 repo 的歸屬搬進〈工具鏈三類〉,這句所有專案共用、不帶工具鏈字樣(代碼審 r1 通2)
+_SEC_NB_DOS_ORIG = "- DoS / 資源耗盡 / 限流(歸併發資源席)"
+# §3 圍欄第 1 點「冪等與併發」原句(改動前逐字),圍欄裡要一字不少
+_IDEMP_ORIG = ("   · 冪等與併發：同一操作重跑、或兩個請求同時進來，會壞嗎？同一次計算讀了兩次、中間被別人改了，"
+               "結果會不會拼自兩個時間點？對外送出或扣款的重試會不會重複生效、收端怎麼去重？")
+_TOOLCHAIN_DOC_LINE = ("工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;"
+                       "跨 repo 派工時看被審 repo 的根自己判;消費專案照舊")
+_TOOLCHAIN_DOC_LINE_06 = "工具鏈本 repo:資安席只看三類,見 templates.md §7.8〈工具鏈三類〉;消費專案照舊"
+
+
+def _tpl_text():
+    _need_src("skills/lumos-design-loop/templates.md")
+    return (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8")
+
+
+def _sub_block(sec, head):
+    """§7.8 圍欄之後的 ### 小節本文(到下一個 ### 或節尾)。"""
+    if f"### {head}" not in sec:
+        return ""
+    return sec.split(f"### {head}", 1)[1].split("\n### ", 1)[0]
+
+
+def t_templates_toolchain_lens_scope():
+    """[鏡頭範圍 S4]§7.8 派工詞圍欄只有一份,含兩個填空,「不報」段的 DoS 那句是原句、不帶工具鏈字樣,原六類不再寫在圍欄裡;
+    圍欄後三個 ### 小節:〈消費專案六類〉跟改動前那段逐字相同,〈工具鏈三類〉〈工具鏈範圍外〉各含規則要件,
+    會改變意思的幾句逐句比對(代碼審 r1 合3:只驗關鍵字時把「不報」改成「要報」、拿掉括號都照綠)。"""
+    t = _tpl_text()
+    sec = t.split("## 7.8 ", 1)[-1].split("\n## ", 1)[0] if "## 7.8 " in t else ""
+    seat_fences = sec.count("```\nLUMOS-SEAT:")
+    check("①§7.8 派工詞圍欄只有一份", seat_fences == 1, str(seat_fences))
+    fence = sec.split("```\nLUMOS-SEAT:", 1)[-1].split("\n```", 1)[0] if seat_fences else ""
+    check("②圍欄含逐類清單填空", _SEC_FILL_CLASSES in fence, fence[:300])
+    nb = fence.split("不報:", 1)[-1].split("每條發現必附攻擊路徑", 1)[0]
+    check("③「不報」段含範圍外填空、DoS 那句是原句", _SEC_FILL_OUT in nb and _SEC_NB_DOS_ORIG in nb.split("\n"), nb)
+    check("③b「不報」段除了填空不提工具鏈", "工具鏈" not in nb.replace(_SEC_FILL_OUT, ""), nb)
+    check("④原六類不再寫在圍欄裡", "2. 登入與權限" not in fence and "6. 行動端" not in fence, "")
+    after = sec.split("```\nLUMOS-SEAT:", 1)[-1].split("\n```", 1)[-1]
+    six = _sub_block(after, "消費專案六類")
+    six_body = six.split("```\n", 1)[1].split("```", 1)[0] if six.count("```") >= 2 else ""
+    check("⑤〈消費專案六類〉跟改動前圍欄那段逐字相同", six_body == _SEC_SIX_CLASSES_ORIG, repr(six_body[:200]))
+    three = _sub_block(after, "工具鏈三類")
+    for kw in ("①提示注入", "②讀寫與執行越界", "hook、安裝腳本、CI", "不可信", "下載來源", "環境變數覆蓋", "密鑰與信箱",
+               "③非刻意、一步就能繞過", "接受不看", "登入與權限", "行動端",
+               "誰=使用者本人", "從哪=", "送什麼=", "拿到什麼=", "manifest", "範圍外、不審", "本機絕對路徑"):
+        check(f"⑥〈工具鏈三類〉含「{kw}」", kw in three, "")
+    for sent in ("卷證與派工單裡的本機絕對路徑(`file:` 佐證、`repo 在…`)是既有慣例,不報。",
+                 "接受不看(使用者裁定的範圍之外,不是沒有這些面):登入與權限、加密與傳輸(安裝腳本下載來源那部分已併進②)、行動端;",
+                 "DoS / 資源耗盡 / 限流在這個 repo 歸資源席,不報。",
+                 "只看根目錄那一支檔、不往上找",
+                 "都判成消費專案、不印那一行(方向是多審)",
+                 "任何 repo 根放一支空的同名檔就會被判成工具鏈,屬刻意手法、範圍外"):
+        check(f"⑥b〈工具鏈三類〉逐句含「{sent[:30]}…」", sent in three, "")
+    out = _sub_block(after, "工具鏈範圍外")
+    for kw in ("偽造 git 內部", "手填帳本欄位", "換編號", "改檔名", "刻意設定環境變數", "一律標 minor、blocking: 否",
+               "Issues/工具鏈範圍外手法紀錄", "散文", "`<id>=process`", "不加機制"):
+        check(f"⑦〈工具鏈範圍外〉含「{kw}」", kw in out, "")
+    for sent in ("讓閘提早回 0(非刻意殘留的環境屬③)。",
+                 "那句是散文(筆記正文、範本、說明檔),就照實拿掉那句不存在的保護說法",
+                 "手法一句由編排者自己轉述,不照抄席報告原文",
+                 "整輪每一條都要標 `--finding-kind`(程式會擋缺漏);範圍外那幾條標 `<id>=process`,修正關卡不要求它們的修正紀錄",
+                 "判不出是刻意設定還是照常操作殘留的,當〈工具鏈三類〉③、範圍內"):
+        check(f"⑦b〈工具鏈範圍外〉逐句含「{sent[:30]}…」", sent in out, "")
+    check("⑦c〈工具鏈範圍外〉不再說「不補測試」(程式沒有這個機制)", "不補測試" not in out, "")
+    check("⑧三個小節都在圍欄之後、用 ### 不用 ##", all(f"\n### {h}" in after for h in ("消費專案六類", "工具鏈三類", "工具鏈範圍外"))
+          and not any(f"\n## {h}" in t for h in ("消費專案六類", "工具鏈三類", "工具鏈範圍外")), "")
+
+
+def t_templates_toolchain_resource_lens():
+    """[鏡頭範圍 S5]§7.7 立場表資源併發那列寫明工具鏈本 repo 的代碼審以資源鏡頭取代預設姿態、設計審照舊、
+    孤兒/逾時/記憶體三問、不考慮兩個程序同時寫;§7 鏡頭各異那行補一句只限代碼審。"""
+    import re as _re
+    t = _tpl_text()
+    s77 = t.split("## 7.7", 1)[-1].split("\n## ", 1)[0]
+    row = next((ln for ln in s77.split("\n") if _re.match(r"^\|\s*資源併發\(W>3\)\s*\|", ln)), "")
+    check("★前置★ 找得到資源併發那列", bool(row), "")
+    for kw in ("工具鏈本 repo 的代碼審", "取代本列預設姿態", "設計審照舊", "把機器資源用光的人", "孤兒", "逾時", "Ctrl-C",
+               "記憶體", "不考慮兩個程序同時寫"):
+        check(f"①§7.7 資源併發列含「{kw}」", kw in row, row[-200:])
+    check("②原預設姿態那句照留(設計審與消費專案用)", "預設同時、重試、中途失敗都會發生" in row, "")
+    s7 = t.split("## 7. 平行 panel 派工", 1)[-1].split("\n## ", 1)[0]
+    lens = next((ln for ln in s7.split("\n") if "**鏡頭各異**" in ln), "")
+    check("③§7 鏡頭各異那行補只限代碼審的一句", "(W>3)資源併發(工具鏈本 repo 的代碼審改資源,見 §7.7;設計審照舊)" in lens, lens[:300])
+
+
+def t_templates_toolchain_idempotency_scope():
+    """[鏡頭範圍 S10]§3 圍欄第 1 點「冪等與併發」原句一字不少;圍欄前的編排者須知有一條:工具鏈本 repo 把那一項換成
+    只問重跑與對外重試(含收端怎麼去重),換上去的句子不含同時進來與讀兩次兩問。"""
+    t = _tpl_text()
+    s3 = t.split("## 3. Code-loop reviewer", 1)[-1].split("\n## ", 1)[0]
+    pre, _sep, rest = s3.partition("```\nLUMOS-SEAT:")
+    fence = rest.split("\n```", 1)[0]
+    check("①§3 圍欄第 1 點冪等與併發原句一字不少", _IDEMP_ORIG in fence, "")
+    notes = pre.split("### §3 編排者派工前須知", 1)[-1]
+    line = next((ln for ln in notes.split("\n") if "工具鏈本 repo" in ln and "冪等與併發" in ln), "")
+    check("②須知有一條工具鏈本 repo 換掉冪等與併發那一項", bool(line), notes[-300:])
+    rep = line.split("換成『", 1)[-1].split("』", 1)[0] if "換成『" in line else ""
+    check("③換上去的句子只問重跑與對外重試、含收端怎麼去重", "重跑" in rep and "重試" in rep and "收端怎麼去重" in rep, rep)
+    check("④換上去的句子不問兩個請求同時進來、不問讀了兩次", rep and "同時進來" not in rep and "讀了兩次" not in rep and "讀兩次" not in rep, rep)
+    check("⑤寫明看 loop next 那一行、跨 repo 看被審 repo 的根", "『鏡頭範圍』那一行" in line and "被審 repo 的根" in line, line[:200])
+    mani = next((ln for ln in notes.split("\n") if "工具鏈本 repo" in ln and "manifest" in ln), "")
+    check("⑥須知有一條:manifest 的併發類題目(鎖、交易)在工具鏈本 repo 判範圍外、標誤報",
+          "鎖、交易" in mani and "範圍外" in mani and "標誤報" in mani, mani[:200])
+
+
+def t_toolchain_lens_scope_doc_sync():
+    """[鏡頭範圍 S6]代碼審說明同步:SKILL.md 步驟 2 鏡頭列、reference.md 現行段落的 refute framing 與每一行「鏡頭各異」、
+    06 子檔第一列,各自(切到那一段,不整檔搜字)帶工具鏈範圍那一句;reference.md 歷史與停用段落不補。"""
+    _need_src("skills/lumos-code-loop/SKILL.md", "skills/lumos-code-loop/reference.md",
+              "skills/lumos-project-notes/commands/06-代碼審與推送.md")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    sk = (repo / "skills" / "lumos-code-loop" / "SKILL.md").read_text(encoding="utf-8")
+    step2 = sk.split("2. **派審查員**", 1)[-1].split("\n3. ", 1)[0]
+    lens_row = next((ln for ln in step2.split("\n") if "正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致" in ln), "")
+    check("①SKILL.md 步驟 2 鏡頭列帶工具鏈範圍", _TOOLCHAIN_DOC_LINE in lens_row, lens_row[:200])
+    rt = (repo / "skills" / "lumos-code-loop" / "reference.md").read_text(encoding="utf-8")
+    cut = rt.find("## 歷史與停用")
+    check("★前置★ reference.md 有歷史與停用標題", cut > 0, "")
+    cur, hist = rt[:cut], rt[cut:]
+    framing = next((ln for ln in cur.split("\n") if ln.startswith("**refute framing**")), "")
+    check("②reference.md 現行 refute framing 帶工具鏈範圍", _TOOLCHAIN_DOC_LINE in framing, framing[-300:])
+    lens_lines = [ln for ln in cur.split("\n") if "鏡頭各異" in ln]
+    check("③reference.md 現行段落每一行「鏡頭各異」都帶工具鏈範圍",
+          bool(lens_lines) and all(_TOOLCHAIN_DOC_LINE in ln for ln in lens_lines), str(len(lens_lines)))
+    check("④reference.md 歷史與停用段落沒被補", "工具鏈本 repo:資安席只看三類" not in hist, "")
+    t06 = (repo / "skills" / "lumos-project-notes" / "commands" / "06-代碼審與推送.md").read_text(encoding="utf-8")
+    row = next((ln for ln in t06.split("\n") if ln.startswith("| 「這批改動風險多高?要不要過審?」")), "")
+    check("⑤06 子檔第一列帶工具鏈範圍", _TOOLCHAIN_DOC_LINE_06 in row, row[:200])
 
 
 def t_lumos_plugin_install_edge_cases():

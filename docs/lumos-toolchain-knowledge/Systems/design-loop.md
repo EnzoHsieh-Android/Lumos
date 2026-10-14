@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-14
+updated: 2026-10-15
 self_audit: sonnet/2026-08-30
 about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
 tags:
@@ -255,3 +255,7 @@ PITFALL:[2026-10-06 快照拒收設計R1 logic-F1]驗句讀取遇一次性I/O失
 PITFALL:2026-10-06 R2故障注入把_quote_rows改為OSError，會被快照讀取try誤報成材料讀不到；原報major，辯方判minor診斷錯誤，原報保持。只讓read/decode留在try，parser在外呼叫；成功帳不可因未知parser例外追加。出處：R2 alignment-F1、state-defender及parser48/2→50/0；防回歸t_canary_carrier_invalid_snapshot_encoding同時保留RuntimeError與OSError普通/-O控制。
 
 WHY:計劃在別的工作樹時,手冊第 1 步的工作副本與指紋改用 spec-freeze 寫出的快照,派工單記 `spec_commit` [出處:代碼審 code-派工鏡頭可指定目標repo r1 合約席] [因:第 2 步修過真檔後,工作副本、快照、指紋三者會各是一個版本,席位引到修前的句子在快照上錨不到;撤除條件與回頭檢查數的就是派工單的 `spec_commit`,手冊主入口沒寫就會數到 0] [不選:只寫在 reference.md]
+
+## 工具鏈本 repo 的鏡頭範圍只改代碼審(2026-10-15)
+
+WHY:工具鏈本 repo 的代碼審把資安席收窄到三類、原併發與資源席改成資源鏡頭,設計審不跟著收窄——§1 審計員第 5 點的併發題與 §7 設計審 panel 的資源併發席照舊;範本 §7、§7.7 是兩種審查共用的段落,這次補進去的句子都寫明只限代碼審 [出處:[[Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃]] d1;規則在 [[Systems/pitfalls-code-loop]] d8] [因:使用者原話只講代碼審;先讓代碼審新範圍跑一季,有實際數字再議設計審] [test:t_templates_toolchain_resource_lens]

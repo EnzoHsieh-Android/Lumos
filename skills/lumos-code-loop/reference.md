@@ -71,7 +71,7 @@ cp /tmp/code-<topic>-diff.patch /tmp/code-<topic>-rN.patch
 ### 3 · 派乾淨 reviewer
 Agent tool、`model: sonnet`(升級條件單源見 design-loop 護欄:引句大面積錨不到/通用回應 → 升 opus;★Codex 側改成點名另一席★:程式碼審點 `lumos_reviewer_code`(sol+xhigh),tier=high 點 `lumos_reviewer_max`(sol+xhigh);散文審才用預設的 `lumos_reviewer`(sol+medium)——2026-09-07 實測席位 TOML 的 model 欄位有效,舊的「不能逐席指定模型」已作廢)、指向工作副本。
 
-**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來/同次計算讀兩次/對外送出重試會壞嗎;資料狀態:新舊互讀、寫一半、衍生資料、時間、不可逆;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(2026-09-29 補資料狀態五問,[[Projects/代碼審資料狀態鏡頭_計劃]];多席時只留給正確性席,見 templates.md §7)
+**refute framing**(★完整鏡頭以 `../lumos-design-loop/templates.md` §3 為準;2026-08-28 升級=正確性鏡頭從名詞清單改成帶例子的問句+「挑具體輸入走一遍別用名字猜」,借 Meta 半形式推理免費半截★):「你是外部第三方審別人投稿的 diff。逐 hunk 找洞——正確性(邊界:空/單一/溢位;資源:錯誤路徑釋放了嗎;例外/None 接了嗎;冪等併發:重跑/同時進來/同次計算讀兩次/對外送出重試會壞嗎;資料狀態:新舊互讀、寫一半、衍生資料、時間、不可逆;每條講清哪個輸入走到哪行出錯)、逐條標 severity(clean/minor/major/blocker)。附 pitfalls manifest 當鏡頭,命中位置逐條判真隱患/誤報。風格與架構一致性歸架構對齊席;能被利用的洞歸資安席(high 必派、問閘會擋,templates.md §7.8)。」(2026-09-29 補資料狀態五問,[[Projects/代碼審資料狀態鏡頭_計劃]];多席時只留給正確性席,見 templates.md §7)(工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;跨 repo 派工時看被審 repo 的根自己判;消費專案照舊)
 
 **抑噪紀律(逐字進 prompt)**:
 - 「低嚴重度疑慮,給不出具體失敗場景就不要標。」
@@ -253,7 +253,7 @@ lumos code-loop pass --note "<收斂理由/loop-id>"       # pre-push blocking:�
 
 - **一輪 = 平行派 W 個多樣 reviewer**(W=`difficulty.params(tier)['panel_width']`,standard=3/high=5),各讀一份 diff 工作副本:
   - **bug canary 型別跨 slot 輪替** `[(slot) mod 4]`=邊界off-by-one / 資源未釋放 / None例外路徑 / 冪等併發(code-loop 的四型,非 design-loop 的 a/b/c/d);canary hunk 仍落**真改動集之外**、走三道防污染(步驟 2.5)。
-  - **鏡頭各異**:bug/邊界 / 資源與例外 / 冪等併發 /(W>3)migration 正確性、測試種子清理。
+  - **鏡頭各異**:bug/邊界 / 資源與例外 / 冪等併發 /(W>3)migration 正確性、測試種子清理。(工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;跨 repo 派工時看被審 repo 的根自己判;消費專案照舊)
   - **跨家族(2026-07-18 S5,取代舊「qwen 只否決」;★2026-09-30 起外家兩席改條件席、預設不派,finder 名額由同門鏡頭5 補★)**:tier=high 雙 Codex 角色——1 席帶餌正式 finder 佔 W(受注意力檢查,計入重疊帳)+1 席無餌否決席不佔 W(外掛;findings 與帶餌席同池進辯方,存活 ≥major 依帳模式落閘:M2=記 disputed-major cluster 記錄/舊帳=計存活 max);standard=1 席無餌否決。fail 分級:standard fail-open 退同門+註記/high fail-closed(第三家族替補→延期→外家缺席不得收斂攤人)。qwen 轉列第三家族替補。
 - **spec-conformance slot(2026-07-10,調研裁定③)**:tier=high 且該分支有收斂 spec(計劃節點)→ panel **追加**一個對答案審查員(不帶 canary、不佔 W 配額,地位同 Codex 無餌否決位):輸入=收斂 spec+diff,鏡頭=**逐條款對照**「說好的做了嗎/縮水/多做/未實作」四類;縮水與未實作視同 finding 進辯方流程。無 spec 的分支跳過並記一句。派工模板見 templates.md §7.5。
 - **判讀/記錄/收斂**:同 design-loop panel(步驟 4 辯方 + 步驟 5 記錄)——一輪 W 筆共享 round-id:
@@ -290,7 +290,7 @@ lumos loop capture-counts \
 機械原語 loop-agnostic,直接可用;差別:跑 diff 文字檔、無 G1。
 
 - **★編制數字單源=`lumos loop next` 吐的 roster 欄(`_TIER_ROSTER`,2026-08-18 派工編制資料化)★**——本段散文為解說,與 roster 打架時以 roster 為準;收斂時可跑 `loop status <id> --roster --repo <root>(全史回放;問閘 --disposal 偵測到席位異常會自動轉述當輪。settle 結清模式的席位對帳需手動 --roster——其記錄結構無輪次欄,自動對帳做不到,詳 Issues/settle路徑席位對帳無輪次可對)` 對帳「應派 vs 實派」(advisory 恆不影響 rc;循序 code/standard v1 不涵蓋)。
-- **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:鏡頭各異(bug/資源例外/冪等併發/…)(~~canary 型別輪替/帶餌無餌之分~~已隨協議停用——全部席同規則,Codex 席照佔 W 或外掛否決)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**正式 finder,佔 W 之一**(findings 計入重疊帳)+1 席**否決席,不佔 W**(外掛,同 spec-conformance 慣例)。standard=1 席否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
+- **一輪 = 平行 W 個 reviewer**(W＝panel_width:standard 3/high 5),各讀一份工作副本:鏡頭各異(bug/資源例外/冪等併發/…;工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;跨 repo 派工時看被審 repo 的根自己判;消費專案照舊)(~~canary 型別輪替/帶餌無餌之分~~已隨協議停用——全部席同規則,Codex 席照佔 W 或外掛否決)。**跨家族(2026-07-18 S5,取代舊「qwen 只否決」)**——tier=high 雙 Codex 角色:1 席**正式 finder,佔 W 之一**(findings 計入重疊帳)+1 席**否決席,不佔 W**(外掛,同 spec-conformance 慣例)。standard=1 席否決。**否決席落閘路徑**:其 findings 與帶餌席同池進辯方;存活 ≥major——M2 cluster 帳模式必須記為該輪 `<名>=disputed-major` cluster 記錄(severity 欄該模式僅顯示不裁決)/無-cluster 舊帳計入存活 max。**fail 分級**:standard=Codex 不可用退同門+留痕;**tier=high=fail-closed**——第三家族(qwen 有 cross_audit 整合;gemini 候選未驗)替補→延期→皆不可則**不得收斂攤人裁**(人可明示豁免留痕),不分金流與否。qwen 轉列第三家族替補與 finder 輪替候選。
 - **spec-conformance slot**(tier=high 且有收斂 spec):追加一個對答案審查員(不佔 W、地位同 qwen),逐條款對照「做了/縮水/多做/未實作」,縮水與未實作進辯方。**含合約候選兌現**(2026-07-29):spec 計劃節點若列「合約候選清單」,逐條驗落地有沒有標 ★INVARIANT★ 綁 [test:]——該綁沒綁=縮水 finding。
 - **判讀/辯方/記錄** 同循序(步驟 4-5,含可疑席 repro triage 與留痕/quote-check 慣例),一輪 W 筆共享 `--round <rid>`。
 - **收斂**(★2026-08-25 甲裁([[Projects/probe輪退場_計劃]] d3):多席 code-loop 亦走處置閘(彙總記帳),panel 僅供 2026-08-25 前定錨的舊迴圈回放,本段僅回放判讀用★;現行=--disposal+code 迴圈 major 必折[d2]):舊迴圈回放:`loop status --gate --panel` 兩條合取(記帳席≥2 且 0 missed[none 制] ∧ 存活 max≤minor;capture-recapture 殘餘=advisory 觀測不進合取[2026-08-14 降級,鑑別力≈0 見 Projects/收斂閘殘餘估計降級_計劃];--min-seats/G3 帶旗標才啟用;cluster 帳=兩條合取,詳 design-loop SKILL panel 節);★**2026-08-06 起新 loop=最後兩輪各自全過(K=2)+PASS 印抽查判定**★(A案;舊 loop 沿 K=1——gate 依首筆日期自動判,不用記);存活≥major → 只重審 delta,cap=3(K=2 的第二乾淨輪計入 cap;cap 頂未湊滿照攤人)。
