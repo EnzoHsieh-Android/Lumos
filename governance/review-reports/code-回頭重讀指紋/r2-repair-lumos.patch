@@ -1,0 +1,676 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 80089fc8..4774402e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -26023,26 +26023,29 @@ def _git_unquote_path(s):
+         except Exception:
+             return s[1:-1]
+     return s
+ 
+ 
+ def _patch_files_from_text(text):
+     """凍結 patch 改到哪些檔(集合)。檔名判法見 _patch_file_changes。"""
+     return set(_patch_file_changes(text))
+ 
+ 
+-def _patch_file_changes(text, headers=True, lf_only=False):
++def _patch_file_changes(text, headers=True, lf_only=False, hunk_tag=None):
+     """凍結 patch 裡每支檔的「改動指紋」:{檔名: sha256}。
+-    兩個參數預設不變(資安席照舊);回頭重讀的改動指紋(_note_reread_fp_file)兩個都打開
++    三個參數預設不變(資安席照舊);回頭重讀的改動指紋(_note_reread_fp_file)都打開
+     (Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉1):
+-    headers=False:`@@` 後面的段落標頭(函式名)不算——標頭取自 hunk 之前最近一行頂格的行,主線改了封閉函式的簽名、
+-    或在上方新增頂格的一行,作者的改動一字未變它也會變(設計審 r1 三席實測);
++    headers=False:`@@` 後面 git 印的段落標頭不算——標頭取自 hunk 之前最近一行頂格的整行(含參數),主線改了封閉函式的簽名
++    它也會變(設計審 r1 三席實測),而且 git 依屬性檔挑標頭規則,簽出不同分支結果不同;
++    hunk_tag(只在 headers=False 時用):給一支函式「`@@` 那一行 → 字串」,那個字串代替段落標頭算進指紋——回頭重讀給的是
++    hunk 所在函式的識別名(_note_reread_hunk_tags,參數不算;代碼審 r1 資安席 major:整個拿掉時,同一段改動搬到同檔另一個前後三行
++    相同的函式指紋不變);
+     lf_only=True:只用 `\n` 切行——splitlines() 會在換頁符號(\x0c)、U+2028 等字元處多切一刀,切出來的後半段不以
+     +、-、空白開頭而被丟掉,同一行換頁符號之後的改動就不進指紋(設計審 r2 兩席實測)。
+     檔名:每段 `diff --git` 在第一個 `@@` 之前依序取 `+++ b/…`(不是 /dev/null)→ `rename to …` → `--- a/…`(刪檔)
+     → `diff --git` 行本身 b/ 那側;hunk 內容裡剛好長得像檔頭的行不算。既有的 _delguard_parse_diff 只用
+     「 b/(.+)$」抓、不處理引號,所以不能直接拿來用。
+     ★指紋算 hunk 的內容,不算位置★(代碼審 r1 通才 A1/資安 C1;r3 外家否決改):hunk 裡的增刪行與上下文行、
+     `@@` 後面的段落標頭(函式名),加上 mode/新增刪除/改名/二進位這幾種檔頭;不算 `@@` 的行號與 `index` 那行——
+     只差行號(rebase 常見)還算同一版。原本只比檔名,同一支檔換成含後門的內容照樣算「資安席看過」;
+     r1 改成只算增刪行之後,同一段 `-check(user)/+allow(user)` 從公開端點搬到管理員端點指紋完全相同(r3 外家 Codex 實測),
+     所以上下文與段落標頭也要算。代價:rebase 之後這段附近的程式也變了,資安席要對最新版再看一次(誤擋方向)。
+@@ -26051,20 +26054,25 @@ def _patch_file_changes(text, headers=True, lf_only=False):
+     文字檔不算 index,因為 rebase 會讓它變、改動本身卻沒變。"""
+     import hashlib
+     files, cur, in_hunk = {}, None, False
+     _HDR_KEEP = ("old mode ", "new mode ", "new file mode ", "deleted file mode ", "rename from ", "rename to ",
+                  "Binary files ", "copy from ", "copy to ")
+ 
+     def _strip(p, pre):
+         p = _git_unquote_path(p.split("\t", 1)[0])
+         return p[len(pre):] if p.startswith(pre) else p
+ 
++    def _hunk(ln):
++        if headers:
++            return "@@" + ln.split("@@", 2)[-1]
++        return "@@" + (hunk_tag(ln) if hunk_tag else "")
++
+     def _flush():
+         if cur:
+             name = cur.get("plus") or cur.get("rename") or cur.get("minus") or cur.get("hdr")
+             if name:
+                 chg = cur["chg"] + ([f"post-blob {cur['post']}"] if cur.get("bin") and cur.get("post") else [])
+                 h = hashlib.sha256("\n".join(chg).encode("utf-8", "surrogateescape")).hexdigest()
+                 files[name] = h
+ 
+     for ln in (text.split("\n") if lf_only else text.splitlines()):
+         if ln.startswith("diff --git "):
+@@ -26082,25 +26090,25 @@ def _patch_file_changes(text, headers=True, lf_only=False):
+             continue
+         if cur is None:
+             continue
+         if cur["binpatch"]:
+             cur["chg"].append(ln)   # GIT binary patch 的資料行就是內容
+             continue
+         if in_hunk:
+             if ln[:1] in ("+", "-", " ", "\\"):
+                 cur["chg"].append(ln)   # 增刪行、上下文行、「\ No newline」都是內容
+             elif ln.startswith("@@"):
+-                cur["chg"].append("@@" + ln.split("@@", 2)[-1] if headers else "@@")   # 行號不算、段落標頭(函式名)預設算
++                cur["chg"].append(_hunk(ln))   # 行號不算、段落標頭(函式名)預設算
+             continue
+         if ln.startswith("@@"):
+             in_hunk = True
+-            cur["chg"].append("@@" + ln.split("@@", 2)[-1] if headers else "@@")   # 第一段的段落標頭也算(headers=False 不算)
++            cur["chg"].append(_hunk(ln))   # 第一段的段落標頭也算(headers=False 改算 hunk_tag 給的名字)
+         elif ln.startswith("index ") and ".." in ln:
+             cur["post"] = ln[len("index "):].split("..", 1)[1].split(" ", 1)[0]
+         elif ln == "GIT binary patch":
+             cur["bin"] = cur["binpatch"] = True
+         elif ln.startswith(_HDR_KEEP):
+             if ln.startswith("Binary files "):
+                 cur["bin"] = True
+             cur["chg"].append(ln)
+             if ln.startswith("rename to "):
+                 cur["rename"] = _git_unquote_path(ln[len("rename to "):])
+@@ -31347,23 +31355,22 @@ def _nodehome_cat_sizes(repo_root, specs, timeout=60):
+         parts = heads[i].split(b" ") if i < len(heads) else []
+         out.append(int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else None)
+     return out
+ 
+ 
+ def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60, max_total_bytes=None, deadline=None):
+     """_nodehome_cat_blobs 加大小上限:先用 _nodehome_cat_sizes 問大小,超過 max_bytes 的回 None、不讀進記憶體
+     (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。
+     max_total_bytes 選填，限制整批宣告內容大小；deadline 選填，大小／內容兩趟共用剩餘時間。
+     未指定時保留既有逐物件上限與每趟 timeout 語意。回同順序 bytes|None；失敗或截止期耗盡回 None。"""
+-    import time as _t
+     def left():
+-        return timeout if deadline is None else min(timeout, deadline - _t.monotonic())
++        return _git_timeout(deadline, cap=timeout)
+     remaining = left()
+     if remaining <= 0:
+         return None
+     sizes = _nodehome_cat_sizes(repo_root, specs, remaining)
+     if sizes is None:
+         return None
+     ok, total = [], 0
+     for i, n in enumerate(sizes):
+         if n is None or n > max_bytes or (max_total_bytes is not None and total + n > max_total_bytes):
+             continue
+@@ -36202,31 +36209,42 @@ _NOTE_REREAD_VERDICT_MAX = 256 * 1024         # 第二層讀判定紀錄:單份
+ _NOTE_REREAD_VERDICTS_TOTAL = 8 * 1024 * 1024  # 第二層讀判定紀錄:全部合計上限(紀錄只增不減;保留與清理另案)
+ _NOTE_REREAD_MATCH_MIN = 6                    # 比對字串至少幾個字(少於這個點不出任何行:空白行不會比中整篇)
+ _NOTE_REREAD_BUDGET_SEC = 30        # reread-check 的軟上限(同舊句檢查 _DRIFT_M1_BUDGET_SEC 的量級,不吃別道檢查的時間)
+ _NOTE_REREAD_DIFF_CAP = 100000       # 給判定者的 diff 字元上限(照實驗)
+ _NOTE_REREAD_OTHERS_MAX = 40         # 「另外改到的程式檔」只列前幾支(照實驗)
+ _NOTE_REREAD_TEXT_MAX = 500          # 報告裡每項的原句與理由各截到幾個字
+ _NOTE_REREAD_LIST_MAX = 10           # reread-check 最多列幾篇
+ _NOTE_REREAD_COST_NOTES = 15         # 候選超過這個篇數時 reread-prepare 另印成本估計
+ _NOTE_REREAD_DIFF_ARGS = ("--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/")
+ # ── v2 對照指紋(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉1)──
+-# 全域選項放在 diff 之前(放在 diff 之後 git 回 129,設計審 r1 兩席實測);★不加 :(literal) 前綴★——跟 --literal-pathspecs
+-# 併用時 git 把前綴當成檔名的一部分、輸出變空(r2 三席實測)。core.precomposeunicode=false 讓 git 照原樣位元組比對路徑:
+-# macOS 預設把參數轉成 NFC,樹裡存 NFD 時傳原樣路徑也會得到空 diff(r3 邊界席實測)。
++# ★回頭重讀問 git 的 diff 一律用這組全域選項★(指紋的 --raw 與逐檔 diff、給判定者的 diff 都走 _note_reread_git;代碼審 r1
++# 架構對齊席 2:原本給判定者那份另寫一份 precomposeunicode)。全域選項放在 diff 之前(放在 diff 之後 git 回 129,設計審 r1 兩席實測);
++# ★不加 :(literal) 前綴★——跟 --literal-pathspecs 併用時 git 把前綴當成檔名的一部分、輸出變空(r2 三席實測)。
++# core.precomposeunicode=false 讓 git 照原樣位元組比對路徑:macOS 預設把參數轉成 NFC,樹裡存 NFD 時傳原樣路徑也會得到空 diff
++# (r3 邊界席實測)。屬性檔:attr.tree 指空樹(git 2.42 起裸庫預設讀 HEAD 的屬性檔,指空樹才不看簽出的是哪條)、
++# core.attributesFile 指 /dev/null(使用者全域的屬性檔);工作樹的 .gitattributes 由 _note_reread_git 擋(見那裡)。
+ _NOTE_REREAD_FP_GIT = ("--literal-pathspecs", "-c", "core.quotePath=false", "-c", "core.precomposeunicode=false",
+-                       "-c", "diff.suppressBlankEmpty=false", "-c", "diff.indentHeuristic=true")
++                       "-c", "diff.suppressBlankEmpty=false", "-c", "diff.indentHeuristic=true",
++                       "-c", "attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-c", f"core.attributesFile={os.devnull}")
+ _NOTE_REREAD_FP_SUBMOD = ("--submodule=short", "--ignore-submodules=none")
+ _NOTE_REREAD_FP_DIFF_ARGS = _NOTE_REREAD_DIFF_ARGS + ("--no-renames", "--full-index", *_NOTE_REREAD_FP_SUBMOD,
+                                                       *_DIFF_PIN_HUNK_ARGS, "-U3")
+ _NOTE_REREAD_FP_MAX = 32 * 1024 * 1024   # 單檔任一邊超過就退回 v1(本 repo 最大的 test_lumos.py 約 5.5 MB,r3 邊界席)
+ _NOTE_REREAD_FP_RESERVE = 3              # 指紋這一步留給後面(讀紀錄、第二層)的秒數:剩不到就不跑、直接用 v1
+ _NOTE_REREAD_FP_ZERO = re.compile(r"0+")
++# hunk 所在函式的識別名(_note_reread_hunk_tags):頂格行照 git 預設段落標頭的規則(第一個字是英文字母、底線或 $),
++# 名字取 def/class/function/func/fn 後面那個(前面可帶 async/export/pub 這類修飾字,Go 的方法接收者跳過),都沒有就取第一個識別字
++_NOTE_REREAD_TOP_BYTES = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_$")
++_NOTE_REREAD_DEF_RE = re.compile(r"(?:(?:pub|export|default|async|static|public|private|protected)\s+)*"
++                                 r"(?:def|class|function|func|fn)\b\s*(?:\([^)]*\)\s*)?([A-Za-z_$][\w$]*)")
++_NOTE_REREAD_IDENT_RE = re.compile(r"[A-Za-z_$][\w$]*")
++_NOTE_REREAD_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", re.M)
+ _NOTE_REREAD_HEAD = ("編排者", "判定者模型", "範本版本", "材料指紋", "對照指紋", "筆記路徑", "筆記 blob", "筆記行數", "範圍終點")
+ _NOTE_REREAD_TAIL = "這只是提醒、不擋,忽略照推也可以"
+ # ★路徑/名稱裡「要當特殊字元處理」的 Unicode 類別只有這一份★(回頭重讀代碼審 r3 架構對齊席 F1:原本回頭重讀與存量漂移
+ # 舊句檢查各寫一組,日後補類別要改兩處)。Cc 控制字元、Cf 方向控制與零寬、Zl/Zp 行段分隔(str.splitlines 會在這裡切行)、
+ # Cs 無損解碼留下的替身字元(不是 UTF-8)。要不要算 Cs 各處自己決定,用 _path_special_chars 的 surrogate 參數表達,不另抄一組。
+ _PATH_SPECIAL_CATS = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs"))
+ 
+ 
+ def _path_special_chars(s, surrogate=True):
+     """字串帶 _PATH_SPECIAL_CATS 那幾類的字元 → True;surrogate=False 不算 Cs(非 UTF-8 的路徑照常處理)。"""
+@@ -36338,31 +36356,50 @@ def _note_reread_ctrl_line(scan):
+ 
+ def _note_reread_fps(scan, deadline=None):
+     """每篇候選這次用的對照指紋 {圖譜相對路徑: 指紋}(check 與 prepare 用同一支,略過已對照的口徑才一致):
+     算得出 v2 用 v2,算不出用 v1(_note_reread_fp_info;Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉8)。"""
+     return {rel: _note_reread_fp_info(scan, rel, deadline)["fp"] for rel in scan["cands"]}
+ 
+ 
+ def _note_reread_fp_info(scan, rel, deadline=None):
+     """一篇候選的兩種對照指紋 → {"v1", "v2"(算不出是 None), "why"(v2 算不出的原因), "fp"(這次用的), "ver", "files"
+     (v2 時那篇 about_code 裡出現在 --raw 清單上的檔,git 原樣路徑), "keys"(同一批的 NFC 鍵)};結果記在 scan["fpinfo"]。
+-    deadline 是整體截止時間(check 傳、prepare 不傳),指紋這一步只用到它減 _NOTE_REREAD_FP_RESERVE 秒那一刻。"""
++    deadline 是整體截止時間(check 傳、prepare 不傳),指紋這一步只用到它減 _NOTE_REREAD_FP_RESERVE 秒那一刻。
++    ★用哪一版,prepare 與 check 走同一套規則★(代碼審 r1 正確性席 2、通才 1、併發 3):「給判定者的 diff 會不會被截掉」也在這裡判
++    (_note_reread_v2_cut,兩邊都算得出),截掉就用 v1、原因「判定者材料被縮短」——原本只有 prepare 組完材料才知道,check 照用 v2,
++    印的指紋與 prepare 的紀錄對不上。只剩預算一項會讓兩邊分岔(check 有 30 秒上限、prepare 沒有):退回原因記「逾時」,
++    check 清單那篇另講明(_note_reread_print_layer1),不靜默換版。"""
+     cache = scan.setdefault("fpinfo", {})
+     if rel not in cache:
+         pre = scan["vault_rel"] + "/"
+         about = _note_reread_about(scan, rel)
+         v1 = _note_reread_contrast_fp(pre + rel, about, scan["oids"])
+         v2, why, files, keys = _note_reread_contrast_fp_v2(scan, pre + rel, about, deadline)
++        if v2:
++            why = _note_reread_v2_cut(scan, files)
++            if why:
++                v2, files, keys = None, [], []
+         cache[rel] = {"v1": v1, "v2": v2, "why": why, "fp": v2 or v1, "ver": "v2" if v2 else "v1", "files": files, "keys": keys}
+     return cache[rel]
+ 
+ 
++def _note_reread_v2_cut(scan, files):
++    """用 v2 時給判定者的 diff(分岔點..頂端、只含 files)會不會被截掉 → None(不會)或退回原因。
++    跟 _note_reread_diff 同一份 diff 參數(_note_reread_diff_once):0 行上下文仍超過 _NOTE_REREAD_DIFF_CAP 才會走到各檔平均截斷
++    (那時一定有檔被截掉);只縮上下文不算截掉(計劃〈做法〉6、r3 邊界席)。截止時間跟指紋這一步同一個(scan["fpbase"]["dl"])。"""
++    base = scan["fpbase"]
++    d = _note_reread_diff_once(scan["root"], base["bp"], scan["tip"], files, 0, deadline=base["dl"])
++    if d is None:
++        return "逾時" if _note_reread_fp_expired(base["dl"]) else "git 失敗"
++    return "判定者材料被縮短" if len(d) > _NOTE_REREAD_DIFF_CAP else None
++
++
+ def _note_reread_fp_expired(dl):
+     import time as _t
+     return dl is not None and _t.monotonic() >= dl
+ 
+ 
+ def _note_reread_fp_base(scan, deadline=None):
+     """這次掃描的分岔點與「這條分支改過的檔」清單,一次掃描只算一次 → scan["fpbase"] =
+     {"bp", "raw": {NFC 鍵: [項目…]}, "why"(算不出的原因或 None), "dl"(指紋這一步的截止時間), "sizes"}。
+     分岔點:_lens_default_base(頂端是解析好的提交編號、只看遠端主線)——跟推送參數無關,手動 prepare 與推送前 check 在同一份
+     refs、同一個頂端下必然相同(計劃〈做法〉3)。清單:`git diff --raw -z --no-renames <分岔點> <頂端>`(不帶 pathspec),
+@@ -36376,98 +36413,218 @@ def _note_reread_fp_base(scan, deadline=None):
+         out["why"] = "逾時"
+         return out
+     root, tip = scan["root"], scan["tip"]
+     bp = _lens_default_base(root, tip=tip, include_local=False, deadline=dl)
+     if bp is None:
+         out["why"] = "逾時" if _note_reread_fp_expired(dl) else "無遠端主線"
+         return out
+     if bp == tip:
+         out["why"] = "在主線上"
+         return out
+-    r = _lens_git_dl(root, *_NOTE_REREAD_FP_GIT, "diff", "--raw", "-z", "--no-renames", "--no-abbrev", *_NOTE_REREAD_FP_SUBMOD,
+-                     bp, tip, binary=True, deadline=dl)
++    r = _note_reread_git(root, "diff", "--raw", "-z", "--no-renames", "--no-abbrev", *_NOTE_REREAD_FP_SUBMOD, bp, tip,
++                         deadline=dl)
+     if r is None or r.returncode != 0:
+         out["why"] = "逾時" if (r is None and _note_reread_fp_expired(dl)) else "git 失敗"
+         return out
+     out["raw"], out["bp"] = _note_reread_fp_parse_raw(r.stdout), bp
+     return out
+ 
+ 
++_NOTE_REREAD_GITDIR = {}
++
++
++def _note_reread_git(root, *args, deadline=None):
++    """回頭重讀問 git 的 diff(指紋的 --raw 與逐檔 diff、給判定者的 diff)都走這一支:全域選項 _NOTE_REREAD_FP_GIT、位元組照回、
++    截止時間(_lens_git_dl)→ CompletedProcess 或 None(git 跑不起來、逾時、沒時間)。
++    ★不讀工作樹的屬性檔★(代碼審 r1 邊界席 1:原本 -diff 這類屬性取自當下簽出的 .gitattributes,簽出 main 與簽出分支算出的指紋不同):
++    用 --git-dir 加 --bare、目前目錄設成 git 目錄本身。本機 git 2.39 沒有 --attr-source;實測 2.39 在裸庫模式下仍從「目前目錄」讀
++    .gitattributes(-C 到工作樹就讀到工作樹那份),git 目錄裡不會有這個檔,所以讀不到;git 2.42 起裸庫改讀 attr.tree(預設 HEAD),
++    _NOTE_REREAD_FP_GIT 把它指到空樹。剩下 $GIT_DIR/info/attributes(本機設定,兩台機器不同只會多列)照舊讀。
++    git 目錄查不到時退回在工作樹跑(結果可能吃到屬性檔,方向是多列)。"""
++    key = str(root)
++    if key not in _NOTE_REREAD_GITDIR:
++        r = _lens_git_dl(root, "rev-parse", "--absolute-git-dir", deadline=deadline)
++        gd = r.stdout.strip() if r is not None and r.returncode == 0 else ""
++        if r is None:
++            return None
++        _NOTE_REREAD_GITDIR[key] = gd if gd and os.path.isdir(gd) else None
++    gd = _NOTE_REREAD_GITDIR[key]
++    if gd is None:
++        return _lens_git_dl(root, *_NOTE_REREAD_FP_GIT, *args, binary=True, deadline=deadline)
++    return _lens_git_dl(gd, "--git-dir", gd, "--bare", *_NOTE_REREAD_FP_GIT, *args, binary=True, deadline=deadline)
++
++
+ def _note_reread_fp_parse_raw(raw):
+     """`git diff --raw -z --no-renames` 的輸出 → {NFC 鍵(_nodehome_key): [{"path"(git 原樣路徑), "omode", "nmode", "ooid", "noid",
+     "status"}…]};同一個鍵對到好幾支(樹裡 NFC 與 NFD 各一支)時照原樣位元組排序、全部算進那一項。"""
+     toks, out, i = raw.split(b"\0"), {}, 0
+     while i + 1 < len(toks):
+         parts = toks[i][1:].decode("ascii", "replace").split(" ") if toks[i].startswith(b":") else None
+         if parts is None:
+             i += 1
+             continue
+         path, i = os.fsdecode(toks[i + 1]), i + 2
+         k = _nodehome_key(path) if len(parts) >= 5 else ""
+         if k:
+             out.setdefault(k, []).append({"path": path, "omode": parts[0], "nmode": parts[1], "ooid": parts[2],
+                                           "noid": parts[3], "status": parts[4][:1]})
+     for ents in out.values():
+         ents.sort(key=lambda e: os.fsencode(e["path"]))
+     return out
+ 
+ 
++def _note_reread_fp_oids(ent):
++    """一支改過的檔要查大小的物件編號:新增檔的舊側、刪除檔的新側是全零編號,子模組的編號在本 repo 查不到,都跳過。"""
++    return [oid for oid, mode in ((ent["ooid"], ent["omode"]), (ent["noid"], ent["nmode"]))
++            if not _NOTE_REREAD_FP_ZERO.fullmatch(oid) and mode != "160000"]
++
++
+ def _note_reread_fp_sizes(scan, base):
+-    """清單裡、候選的 about_code 列到的檔兩邊的物件大小 {物件編號: 位元組數}(一次 cat-file --batch-check;
+-    新增檔的舊側、刪除檔的新側是全零編號,子模組的編號在本 repo 查不到,都跳過)。查不到的不放;git 失敗回空 dict。"""
++    """清單裡、候選的 about_code 列到的檔兩邊的物件大小 → ({物件編號: 位元組數}, 失敗原因或 None)(一次 cat-file --batch-check)。
++    ★查不了就整批退回 v1★(代碼審 r1 併發席 1:原本 git 失敗回空 dict、每個大小當 0,32 MB 上限整個失效不報錯):
++    沒時間或逾時記「逾時」,其他失敗記「查大小失敗」;個別物件查不到的不放,_note_reread_fp_file 看到缺了也記「查大小失敗」。"""
+     if base["sizes"] is not None:
+-        return base["sizes"]
++        return base["sizes"], base.get("sizes_why")
+     keys = set()
+     for rel in scan["cands"]:
+         keys |= _note_reread_about(scan, rel)
+-    oids = []
+-    for k in sorted(keys):
+-        for e in base["raw"].get(k, ()):
+-            for oid, mode in ((e["ooid"], e["omode"]), (e["noid"], e["nmode"])):
+-                if not _NOTE_REREAD_FP_ZERO.fullmatch(oid) and mode != "160000":
+-                    oids.append(oid)
+-    oids = list(dict.fromkeys(oids))
+-    t = _git_timeout(base["dl"])
+-    got = _nodehome_cat_sizes(scan["root"], oids, timeout=t) if (oids and t > 0) else None
+-    base["sizes"] = {o: n for o, n in zip(oids, got or []) if n is not None}
+-    return base["sizes"]
++    oids = list(dict.fromkeys(o for k in sorted(keys) for e in base["raw"].get(k, ()) for o in _note_reread_fp_oids(e)))
++    t, got, why = _git_timeout(base["dl"]), [], None
++    if oids:
++        got = _nodehome_cat_sizes(scan["root"], oids, timeout=t) if t > 0 else None
++        if got is None:
++            why = "逾時" if (t <= 0 or _note_reread_fp_expired(base["dl"])) else "查大小失敗"
++    base["sizes"], base["sizes_why"] = {o: n for o, n in zip(oids, got or []) if n is not None}, why
++    return base["sizes"], why
+ 
+ 
+ def _note_reread_fp_file(scan, base, ent):
+     """一支改過的檔的改動指紋 → (指紋, None) 或 (None, 退回原因);結果記在 scan["fpfile"],鍵是(分岔點、頂端、原樣路徑)。
+     文字檔交給 _patch_file_changes(headers=False, lf_only=True):去掉行號與 index 行、不算函式名標頭、只用 \n 切行;
+     二進位與 -diff 的檔,_patch_file_changes 本來就改記 index 行裡改後那一邊的物件編號(帶 --full-index 才是完整編號)。
+     型別變更(T)、任一邊超過 _NOTE_REREAD_FP_MAX、清單有它 diff 卻是空的、git 失敗或逾時都退回 v1(〈做法〉1、5)。"""
+     cache = scan.setdefault("fpfile", {})
+     key = (base["bp"], scan["tip"], ent["path"])
+     if key in cache:
+         return cache[key]
+     res = None
+     if ent["status"] == "T":
+         res = (None, "型別變更")
+     else:
+-        sizes = _note_reread_fp_sizes(scan, base)
+-        if any(sizes.get(o, 0) > _NOTE_REREAD_FP_MAX for o in (ent["ooid"], ent["noid"])):
++        sizes, why = _note_reread_fp_sizes(scan, base)
++        oids = _note_reread_fp_oids(ent)
++        if why or any(o not in sizes for o in oids):
++            res = (None, why or "查大小失敗")
++        elif any(sizes[o] > _NOTE_REREAD_FP_MAX for o in oids):
+             res = (None, "太大")
+     if res is None:
+-        r = _lens_git_dl(scan["root"], *_NOTE_REREAD_FP_GIT, "diff", *_NOTE_REREAD_FP_DIFF_ARGS, base["bp"], scan["tip"],
+-                         "--", ent["path"], binary=True, deadline=base["dl"])
++        r = _note_reread_git(scan["root"], "diff", *_NOTE_REREAD_FP_DIFF_ARGS, base["bp"], scan["tip"], "--", ent["path"],
++                             deadline=base["dl"])
+         if r is None or r.returncode != 0:
+             res = (None, "逾時" if (r is None and _note_reread_fp_expired(base["dl"])) else "git 失敗")
+         else:
+             # 位元組原樣:surrogateescape 解碼、_patch_file_changes 再編回去雜湊(errors="replace" 會把不同的非 UTF-8 位元組變成同一個字)
+-            got = _patch_file_changes(r.stdout.decode("utf-8", "surrogateescape"), headers=False, lf_only=True)
+-            res = (" ".join(sorted(got.values())), None) if got else (None, "diff 空")
++            text = r.stdout.decode("utf-8", "surrogateescape")
++            tags, why = _note_reread_fp_tags(scan, base, ent, text)
++            if why:
++                res = (None, why)
++            else:
++                got = _patch_file_changes(text, headers=False, lf_only=True, hunk_tag=tags)
++                res = (" ".join(sorted(got.values())), None) if got else (None, "diff 空")
+     cache[key] = res
+     return res
+ 
+ 
++def _note_reread_fp_tags(scan, base, ent, text):
++    """逐檔 diff 每個 hunk 所在函式的識別名 → (給 _patch_file_changes 的 hunk_tag, None) 或 (None, 退回原因)。
++    名字從頂端版本的內容自己算(_note_reread_hunk_tags),不靠 git 依屬性檔選的段落標頭規則;刪檔、子模組沒有頂端內容,名字是空的。
++    沒有 hunk(二進位、只改 mode)不讀內容。"""
++    hunks = [(int(m.group(1)), int(m.group(2) or 1)) for m in _NOTE_REREAD_HUNK_RE.finditer(text)]
++    data = None
++    if hunks and not _NOTE_REREAD_FP_ZERO.fullmatch(ent["noid"]) and ent["nmode"] != "160000":
++        if base.get("blobs") is None:
++            base["blobs"] = _note_reread_fp_prefetch(scan, base)
++        data = base["blobs"].get(ent["noid"])
++        if data is None:
++            t = _git_timeout(base["dl"])
++            got = _nodehome_cat_blobs(scan["root"], [ent["noid"]], timeout=t) if t > 0 else None
++            if not got or got[0] is None:
++                return None, ("逾時" if (t <= 0 or _note_reread_fp_expired(base["dl"])) else "git 失敗")
++            data = got[0]
++    tags = dict(zip(hunks, _note_reread_hunk_tags(data, hunks)))
++
++    def tag(ln):
++        m = _NOTE_REREAD_HUNK_RE.match(ln)
++        return tags.get((int(m.group(1)), int(m.group(2) or 1)), "") if m else ""
++    return tag, None
++
++
++_NOTE_REREAD_FP_PREFETCH_MAX = 1024 * 1024   # 頂端內容一次批次讀進來的單支上限;更大的照舊逐支讀(不一次佔滿記憶體)
++
++
++def _note_reread_fp_prefetch(scan, base):
++    """候選 about_code 列到、這條分支改過的檔,頂端內容不超過 _NOTE_REREAD_FP_PREFETCH_MAX 的,一次 cat-file 批次讀進來 → {物件編號: bytes}。
++    算 hunk 所在函式的名字要頂端內容;逐支各開一次 git 在 200 支小檔時多花約 4 秒(2026-10-14 量測),所以小檔一次讀。讀不了回空 dict
++    (照舊逐支讀)。"""
++    sizes = base.get("sizes") or {}
++    keys = set()
++    for rel in scan["cands"]:
++        keys |= _note_reread_about(scan, rel)
++    oids = list(dict.fromkeys(e["noid"] for k in sorted(keys) for e in base["raw"].get(k, ())
++                              if e["nmode"] != "160000" and not _NOTE_REREAD_FP_ZERO.fullmatch(e["noid"])
++                              and sizes.get(e["noid"], _NOTE_REREAD_FP_PREFETCH_MAX + 1) <= _NOTE_REREAD_FP_PREFETCH_MAX))
++    t = _git_timeout(base["dl"])
++    got = _nodehome_cat_blobs(scan["root"], oids, timeout=t) if (oids and t > 0) else None
++    return {o: b for o, b in zip(oids, got or []) if b is not None}
++
++
++def _note_reread_hunk_tags(data, hunks):
++    """每個 hunk 所在函式的識別名(代碼審 r1 資安席 major、正確性席 1:原本 v2 連段落標頭一起拿掉,同一段改動搬到同檔另一個
++    前後三行相同的函式指紋不變)→ 跟 hunks 同順序的字串清單。data 是頂端版本的內容(bytes;刪檔給 None → 全是空字串),
++    hunks 是 [(新側起點 c, 新側行數 d)…](`@@ -a,b +c,d @@`)。
++    ① 頂格行:hunk 起點之前(d>0 是第 c 行之前,d=0 是第 c 行之後的位置、含第 c 行)最近一行第一個字是英文字母、底線或 $
++       ——跟 git 預設段落標頭同一條規則,但不靠 git 依屬性檔(diff=python 這類)選規則,簽出什麼都一樣;
++    ② 名字:那一行 def/class/function/func/fn 後面那個識別字(可帶 async、export、pub 這類修飾字;Go 的方法接收者跳過),
++       都沒有就取第一個識別字——★參數與簽名不算★:主線改了函式的參數列,作者的改動一字未變,名字不變(S8);
++    ③ 方法:頂格那行之後、hunk 之前若有縮排的定義行(同②的關鍵字),接「/方法名」——類別裡兩個前後三行相同的方法也分得開。
++    只看到最大的那個起點為止;一次往前掃,各區間不重複掃。"""
++    if not hunks:
++        return []
++    if data is None:
++        return [""] * len(hunks)
++    needs = [c if d == 0 else c - 1 for c, d in hunks]
++    mx = max(needs)
++    lines = data.split(b"\n", mx)[:mx] if mx > 0 else []
++    at, top, inner, prev = {}, "", "", 0
++    for need in sorted(set(needs)):
++        end = min(need, len(lines))
++        t_new = i_new = None
++        for k in range(end - 1, prev - 1, -1):
++            ln = lines[k]
++            if ln[:1] and ln[0] in _NOTE_REREAD_TOP_BYTES:
++                s = ln.decode("utf-8", "surrogateescape")
++                m = _NOTE_REREAD_DEF_RE.match(s)
++                t_new = m.group(1) if m else _NOTE_REREAD_IDENT_RE.match(s).group(0)
++                break
++            if i_new is None and ln[:1] in (b" ", b"\t"):
++                m = _NOTE_REREAD_DEF_RE.match(ln.decode("utf-8", "surrogateescape").lstrip(" \t"))
++                if m:
++                    i_new = m.group(1)
++        if t_new is not None:
++            top, inner = t_new, i_new or ""
++        elif i_new is not None:
++            inner = i_new
++        prev = max(prev, end)
++        at[need] = top + ("/" + inner if inner else "")
++    return [at[n] for n in needs]
++
++
+ def _note_reread_contrast_fp_v2(scan, note_full, about, deadline=None):
+     """v2 對照指紋(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉1、2、5)→ (指紋, None, 檔, 鍵) 或 (None, 退回原因, [], [])。
+     16 個十六進位字 = 雜湊(筆記路徑(NFC、含圖譜前綴)、範本版本、一行「指紋算法 v2」、那篇頂端 about_code 每一項配上
+     「它在分岔點..頂端的改動指紋」(不在 --raw 清單裡記「未改」——主線怎麼改它都不影響指紋))。
+     退回 v1 的情形:分岔點算不出或就是頂端、about_code 有一項兩邊的樹都找不到(拼錯、是資料夾;不在清單裡就是兩邊相同,
+     所以只看頂端的樹)、全部未改(v2 會是跟程式版本無關的常數,r1 邊界席)、單檔退回(_note_reread_fp_file)。"""
+     import hashlib
+     base = _note_reread_fp_base(scan, deadline)
+     if base["why"]:
+         return None, base["why"], [], []
+@@ -36569,58 +36726,64 @@ def _note_reread_given(scan, rel, codeish):
+     for f in sorted(ch):
+         if f in mine or f in listed or _nodehome_code_kind(f) is None or not _nodehome_is_test(f, scan["layout"]):
+             continue
+         d = f.rsplit("/", 1)[0] if "/" in f else ""
+         if d in dirs or (f.startswith("tests/") and f.count("/") >= 2 and f.split("/")[1] in pkgs):
+             orphans.append(f)
+     given = mine | set(orphans)
+     return sorted(mine), orphans, [f for f in sorted(ch) if f not in given and f in codeish]
+ 
+ 
+-def _note_reread_diff(root, base, tip, raws, cap=None, cuts=None):
++def _note_reread_diff_once(root, base, tip, raws, u, deadline=None):
++    """給判定者的 diff 跑一次(上下文 u 行)→ 字串或 None(git 失敗或逾時)。_note_reread_diff 試三種上下文、_note_reread_v2_cut
++    判會不會截掉都用這一支,參數只有一份。走 _note_reread_git(全域選項與指紋共用、不讀工作樹的屬性檔:截不截斷 prepare 與 check
++    要算得一樣,代碼審 r1 正確性席 2)。另釘 hunk 切法(_DIFF_PIN_HUNK_ARGS):本機的 diff.interHunkContext、diff.algorithm 會改變長度。"""
++    r = _note_reread_git(root, "diff", *_NOTE_REREAD_DIFF_ARGS, *_DIFF_PIN_HUNK_ARGS, f"-U{u}", "-M",
++                         base or _drift_empty_tree(root), tip, "--", *raws, deadline=deadline)
++    if r is None or r.returncode != 0:
++        return None
++    return r.stdout.decode("utf-8", errors="replace")
++
++
++def _note_reread_diff(root, base, tip, raws, cap=None):
+     """給判定者的程式 diff(算法照實驗 governance/eval/home-check/validate/scripts/vcommon.py 的 truncated_diff)
+     → (diff, 截斷了沒, 原始字元數, 上下文行數) 或 None(git 失敗或逾時)。
+     上下文照 3、1、0 行依序試,哪一種不超過上限就用哪一種;0 行仍超過,把各檔 diff 由小到大分配剩下的字數,
+     超過分到的在行界截掉並接一行「[截斷:本檔 diff 另有 N 行未列出]」。
+-    組法固定參數:作者本機的 diff 設定(外部 diff、轉文字、顏色、前綴)不影響材料;pathspec 是 git 原樣路徑、帶 --literal-pathspecs
+-    (檔名含 [id]、* 這類字元時不當萬用字元,不會把別支檔的改動混進來;設計審 r2 邊界席實測),另釘 core.precomposeunicode=false
+-    (macOS 預設把參數轉成 NFC,樹裡存 NFD 的檔會比不到、diff 變空;Projects/回頭重讀指紋不因主線前進失效_計劃 r3 邊界席)。
+-    cuts 給一個 list 時,有任何一支檔的內容被截掉(走到平均截斷、接了「[截斷:」那行)就在裡面放一個 True——只縮上下文不算
+-    (v2 指紋要知道判定者有沒有讀完整份改動,計劃〈做法〉6;不從輸出找「[截斷:」字樣:改動本文自己可能就含這幾個字)。"""
++    組法固定參數(_note_reread_diff_once):作者本機的 diff 設定(外部 diff、轉文字、顏色、前綴、hunk 切法)與工作樹的屬性檔不影響材料;
++    pathspec 是 git 原樣路徑、帶 --literal-pathspecs(檔名含 [id]、* 這類字元時不當萬用字元,不會把別支檔的改動混進來;
++    設計審 r2 邊界席實測),釘 core.precomposeunicode=false(macOS 預設把參數轉成 NFC,樹裡存 NFD 的檔會比不到、diff 變空)。
++    v2 那篇會不會走到截斷由 _note_reread_v2_cut 事先判(check 也判得出,兩邊一致),這裡不另回報。"""
+     cap = _NOTE_REREAD_DIFF_CAP if cap is None else cap
+     if not raws:
+         return "(無)", False, 0, 3
+     total, d = None, ""
+     for u in (3, 1, 0):
+-        out = _ns_git(root, "--literal-pathspecs", "-c", "core.precomposeunicode=false", "diff", "--no-ext-diff",
+-                      *_NOTE_REREAD_DIFF_ARGS, f"-U{u}", "-M", base or _drift_empty_tree(root), tip, "--", *raws)
+-        if out is None:
++        d = _note_reread_diff_once(root, base, tip, raws, u)
++        if d is None:
+             return None
+-        d = out.decode("utf-8", errors="replace")
+         if total is None:
+             total = len(d)
+         if len(d) <= cap:
+             return d, u != 3, total, u
+     parts = [p for p in re.split(r"(?m)^(?=diff --git )", d) if p.strip()]
+     order = sorted(range(len(parts)), key=lambda i: len(parts[i]))
+     got, remaining, left = [None] * len(parts), cap, len(parts)
+     for i in order:
+         share = remaining // left
+         p = parts[i]
+         if len(p) <= share:
+             got[i] = p
+         else:
+             cut = p[:share]
+             cut = cut[:cut.rfind("\n") + 1]
+             got[i] = cut + f"[截斷:本檔 diff 另有 {p[len(cut):].count(chr(10))} 行未列出]\n"
+-            if cuts is not None:
+-                cuts.append(True)
+         remaining -= len(got[i])
+         left -= 1
+     return "".join(got), True, total, 0
+ 
+ 
+ def _note_reread_numbered(text):
+     """筆記全文加行號(照實驗):照 text.split("\\n") 切,檔尾換行造成的最後一個空字串也算一行;行號從 1 起、含開頭欄位,
+     靠右補滿 4 格、接「| 」、再接內容。"""
+     return "\n".join(f"{i:4d}| {ln}" for i, ln in enumerate(text.split("\n"), 1))
+ 
+@@ -36632,32 +36795,27 @@ def _note_reread_item(root, scan, rel, orchestrator, base, tip, codeish):
+     note_full = pre + rel
+     oid = scan["oids"].get(note_full)
+     blobs = _nodehome_cat_blobs(root, [oid]) if oid else None
+     if not blobs or blobs[0] is None:
+         return None, "讀不到這篇在頂端的那一版"
+     text = blobs[0].decode("utf-8", errors="replace")
+     info = _note_reread_fp_info(scan, rel)
+     got, cfp = None, info["v1"]
+     if info["ver"] == "v2":
+         # 用 v2 時判定者讀的範圍跟指紋同一個基準:分岔點..頂端、只含那篇 about_code 裡出現在 --raw 清單上的檔(〈做法〉6);
+-        # 先組這份、看有沒有截掉,截掉了判定者沒讀完整,不能替整份改動背書 → 改用 v1、照舊組範圍 diff
+-        cuts = []
+-        got = _note_reread_diff(root, scan["fpbase"]["bp"], tip, info["files"], cuts=cuts)
++        # 會被截掉的那篇在 _note_reread_fp_info 就已經改用 v1(判定者沒讀完整,不能替整份改動背書;check 也判得出)
++        got = _note_reread_diff(root, scan["fpbase"]["bp"], tip, info["files"])
+         if got is None:
+             return None, "組 diff 的 git 失敗或逾時,這篇不產項目檔"
+-        if cuts:
+-            info.update(why="判定者材料被縮短", fp=info["v1"], ver="v1")
+-            got = None
+-        else:
+-            cfp = info["v2"]
+-            given = set(info["keys"])
+-            orphans, others = [], [f for f in sorted(scan["changed"]) if f not in given and f in codeish]
++        cfp = info["v2"]
++        given = set(info["keys"])
++        orphans, others = [], [f for f in sorted(scan["changed"]) if f not in given and f in codeish]
+     if got is None:
+         mine, orphans, others = _note_reread_given(scan, rel, codeish)
+         got = _note_reread_diff(root, base, tip, [scan["changed"][f] for f in mine + orphans])
+     if got is None:
+         return None, "組 diff 的 git 失敗或逾時,這篇不產項目檔"
+     diff, trunc, total, ctx = got
+     show = _note_reread_show
+     trunc_s = ""
+     if orphans:
+         trunc_s += ",另加同套件目錄裡沒有家的測試檔(" + "、".join(show(f) for f in orphans) + ")"
+@@ -36759,35 +36917,37 @@ def _note_reread_rows(items, nlines):
+             dropped.append(f"第 {k} 項的行號 {ln} 不在 1 到 {nlines} 之間")
+             continue
+         if ln in seen:
+             dropped.append(f"第 {k} 項的行號 {ln} 重複,只留第一次")
+             continue
+         seen.add(ln)
+         keep.append({"line": ln, "quote": _s(it.get("quote", "")), "why": _s(it.get("why", ""))})
+     return keep, dropped
+ 
+ 
+-def _note_reread_tip_names(root, tip):
+-    """被推頂端提交的樹裡紀錄資料夾的檔名(只收合正規式的,.tmp-wlf 殘檔與其他雜檔不算)→ set 或 None(git 失敗)。
++def _note_reread_tip_names(root, tip, deadline=None):
++    """被推頂端提交的樹裡紀錄資料夾的檔名(只收合正規式的,.tmp-wlf 殘檔與其他雜檔不算)→ set 或 None(git 失敗、逾時、沒時間)。
+     ★頂端沒有這個資料夾 = 還沒有任何紀錄★(空集合、不是 git 失敗;設計審 r2 兩席:原稿當 git 失敗,新專案永遠 skipped 自我鎖死)——
+-    ls-tree 對不存在的路徑回 0、輸出空,所以回非 0 只會是真的 git 失敗。"""
+-    raw = _ns_git(root, "--literal-pathspecs", "ls-tree", "-z", "--name-only", tip, "--", _NOTE_REREAD_VERDICT_DIR + "/")
+-    if raw is None:
++    ls-tree 對不存在的路徑回 0、輸出空,所以回非 0 只會是真的 git 失敗。deadline 見 _lens_git_dl(代碼審 r1 併發席 2:
++    判「分支自己的紀錄」那次原本走 20 秒預設,會吃掉留給後面的預算)。"""
++    r = _lens_git_dl(root, "--literal-pathspecs", "ls-tree", "-z", "--name-only", tip, "--", _NOTE_REREAD_VERDICT_DIR + "/",
++                     quote=True, binary=True, deadline=deadline)
++    if r is None or r.returncode != 0:
+         return None
+-    return {n for n in (p.rsplit("/", 1)[-1] for p in _nodehome_split_z(raw)) if _NOTE_REREAD_VERDICT_NAME_RE.match(n)}
++    return {n for n in (p.rsplit("/", 1)[-1] for p in _nodehome_split_z(r.stdout)) if _NOTE_REREAD_VERDICT_NAME_RE.match(n)}
+ 
+ 
+ def _note_reread_verdicts(root, tip, deadline=None):
+     """頂端提交裡檔名合規的所有判定紀錄 → [(檔名, 對照指紋, 內容 dict)],依檔名排序;讀不了或讀不懂丟 _NoteRereadStop
+     (說是哪個檔、怎麼修)。用 _nodehome_cat_blobs_capped 一次讀完(單份與合計各有上限,超過的不讀進記憶體),共用 reread 的截止時間。
+     「已對照」(_note_reread_covered)與第二層都從這一支拿,同一次 check 只讀一次。"""
+-    names = _note_reread_tip_names(root, tip)
++    names = _note_reread_tip_names(root, tip, deadline)
+     if names is None:
+         raise _NoteRereadStop(_note_reread_fail(deadline, "列不出已提交的對照紀錄"))
+     names = sorted(names)
+     specs = [f"{tip}:{_NOTE_REREAD_VERDICT_DIR}/{n}" for n in names]
+     blobs = (_nodehome_cat_blobs_capped(root, specs, _NOTE_REREAD_VERDICT_MAX, max_total_bytes=_NOTE_REREAD_VERDICTS_TOTAL,
+                                         deadline=deadline) if specs else [])
+     if blobs is None:
+         raise _NoteRereadStop(_note_reread_fail(deadline, "讀不了已提交的判定紀錄"))
+     if any(b is None for b in blobs):
+         raise _NoteRereadStop(_note_reread_unread_why(root, specs, names, blobs))
+@@ -36888,21 +37048,21 @@ def _note_reread_hits(root, scan, verdicts, deadline=None):
+ 
+ def _note_reread_own_fps(root, scan, verdicts, want):
+     """want 裡哪些 v2 指紋有「這條分支自己新增的」紀錄(〈做法〉4)→ set。三項都要成立:分岔點的樹裡沒有那支紀錄檔
+     (_note_reread_tip_names 對分岔點跑,失敗就當成都不是分支自己的)、紀錄內容的對照指紋等於檔名前 16 字、紀錄內容的範圍終點
+     不是分岔點的祖先(擋住把主線舊紀錄複製改名、或 cherry-pick 別人的紀錄進來)。範圍終點在本機找不到(rebase 前的舊頂端被
+     gc、另一台機器)時不可能是分岔點的祖先,算分支自己的;祖先判不了(git 失敗、逾時)當不是。"""
+     base = scan.get("fpbase") or {}
+     bp, dl = base.get("bp"), base.get("dl")
+     if not bp or _note_reread_fp_expired(dl):
+         return set()
+-    names = _note_reread_tip_names(root, bp)
++    names = _note_reread_tip_names(root, bp, dl)
+     if names is None:
+         return set()
+     own, anc = set(), {}
+     for name, fp, doc in verdicts:
+         if fp not in want or name in names or doc.get("provenance_ok") is not True or doc.get("contrast_fp") != fp:
+             continue
+         t = doc.get("tip")
+         if not isinstance(t, str) or not _LENS_SHA_RE.fullmatch(t):
+             continue
+         if t not in anc:
+@@ -37486,27 +37646,34 @@ def _note_reread_print_judged(res, hard):
+ 
+ def _note_reread_print_layer1(res, hard, stream):
+     """第一層:沒對照的篇分「沒有紀錄」與「有紀錄但來源核對沒過」列;講程式改了就要重判;印 prepare 指令(工具印每一層的改法,
+     掛鉤印通用逃生段——照存量漂移的分工)。"""
+     fps, left = res["fps"], res["left"]
+     pre = res["scan"]["vault_rel"] + "/"
+     head = "擋下:回頭重讀:" if hard else "回頭重讀提醒:"
+     print(f"{head}這次改到的程式,有 {len(left)} 篇守檔筆記這次也改了、還沒對照過這一版程式(已對照 {len(fps) - len(left)} 篇)"
+           "——前面的舊句可能被這次改動弄得不成立:", file=stream)
+     bad = [r for r in left if fps[r] in res["badprov"]]
++    infos = res["scan"].get("fpinfo") or {}
++    late = [r for r in left if (infos.get(r) or {}).get("why") == "逾時"]
+     for label, rows in (("沒有紀錄", [r for r in left if r not in bad]), ("有紀錄但來源核對沒過(要重派判定者)", bad)):
+         if rows:
+             print(f"  {label} {len(rows)} 篇:", file=stream)
+         for rel in rows[:_NOTE_REREAD_LIST_MAX]:
+-            print(f"    {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]})", file=stream)
++            why = ";這篇因為逾時沒算新版指紋,用的是看頂端版本的舊版" if rel in late else ""
++            print(f"    {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]}{why})", file=stream)
+         if len(rows) > _NOTE_REREAD_LIST_MAX:
+             print(f"    …另外 {len(rows) - _NOTE_REREAD_LIST_MAX} 篇", file=stream)
++    if late:
++        # 預算不夠時不靜默換版(代碼審 r1 通才 1、併發 3):prepare 沒有預算、會記新版的紀錄,這次 check 比不到它
++        print(f"  其中 {len(late)} 篇因為逾時沒算新版指紋(只認作者自己改動的那一版),這次改用舊版判;"
++              "已經記過新版紀錄的,再跑一次推送前檢查或手動 reread-check 通常就認得", file=stream)
+     if res["wip"]:
+         print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:"
+               + _note_reread_add_cmd({n for ns in res["wip"].values() for n in ns}), file=stream)
+     print("  程式改了就要重判:對照指紋含這條分支對這篇 about_code 列的程式的改動(算不出跟遠端主線的分岔點時,改看程式在頂端的版本)"
+           "——主線帶進別人對同一支程式的改動不再算,你自己的改動(含 rebase 解衝突改到的)、筆記改名、about_code 增減照算;"
+           "改筆記不用重判。", file=stream)
+     print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」,reread-record 記下、把紀錄提交進去;"
+           "做法見 lumos-project-notes 的代碼審與推送子檔):\n    " + _note_reread_cmdline(res["diff_range"], res["push"]), file=stream)
+ 
+ 

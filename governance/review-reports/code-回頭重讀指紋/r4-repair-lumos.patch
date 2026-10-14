@@ -1,0 +1,474 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index abfcf93b..79c2c3cf 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -36360,21 +36360,21 @@ def _note_reread_fps(scan, deadline=None):
+     return {rel: _note_reread_fp_info(scan, rel, deadline)["fp"] for rel in scan["cands"]}
+ 
+ 
+ def _note_reread_fp_info(scan, rel, deadline=None):
+     """一篇候選的兩種對照指紋 → {"v1", "v2"(算不出是 None), "why"(v2 算不出的原因), "fp"(這次用的), "ver", "files"
+     (v2 時那篇 about_code 裡出現在 --raw 清單上的檔,git 原樣路徑), "keys"(同一批的 NFC 鍵)};結果記在 scan["fpinfo"]。
+     deadline 是整體截止時間(check 傳、prepare 不傳),指紋這一步只用到它減 _NOTE_REREAD_FP_RESERVE 秒那一刻。
+     ★用哪一版,prepare 與 check 走同一套規則★(代碼審 r1 正確性席 2、通才 1、併發 3):「給判定者的 diff 會不會被截掉」也在這裡判
+     (_note_reread_v2_cut,兩邊都算得出),截掉就用 v1、原因「判定者材料被縮短」——原本只有 prepare 組完材料才知道,check 照用 v2,
+     印的指紋與 prepare 的紀錄對不上。只剩預算一項會讓兩邊分岔(check 有 30 秒上限、prepare 沒有):退回原因記「逾時」,
+-    check 清單那篇另講明(_note_reread_print_layer1),不靜默換版,而且那篇不擋(_note_reread_blocking)。"""
++    check 清單那篇另講明(_note_reread_print_layer1),不靜默換版;那篇照舊版判、照擋(_note_reread_blocking,代碼審 r3 資安 1)。"""
+     cache = scan.setdefault("fpinfo", {})
+     if rel not in cache:
+         pre = scan["vault_rel"] + "/"
+         about = _note_reread_about(scan, rel)
+         v1 = _note_reread_contrast_fp(pre + rel, about, scan["oids"])
+         v2, why, files, keys = _note_reread_contrast_fp_v2(scan, pre + rel, about, deadline)
+         if v2:
+             why = _note_reread_v2_cut(scan, files)
+             if why:
+                 v2, files, keys = None, [], []
+@@ -36555,21 +36555,23 @@ def _note_reread_fp_tags(scan, base, ent, text):
+             m = _NOTELINES_HUNK_RE.match(ln)
+             if m:
+                 keys.append(m.groups())
+     spans = [(int(k[2]), int(k[3] if k[3] is not None else 1)) for k in keys]
+     want = [i for i, (_c, d) in enumerate(spans) if d > 0]
+     data = None
+     if want and not _NOTE_REREAD_FP_ZERO.fullmatch(ent["noid"]) and ent["nmode"] != "160000":
+         data, why = _note_reread_fp_blob(scan, base, ent["noid"])
+         if why:
+             return None, why
+-    got = _note_reread_hunk_tags(data, [spans[i] for i in want])
++    got = _note_reread_hunk_tags(data, [spans[i] for i in want], base["dl"])
++    if got is None:
++        return None, "逾時"
+     tags = dict.fromkeys(keys, "")
+     tags.update((keys[i], g) for i, g in zip(want, got))
+ 
+     def tag(ln):
+         m = _NOTELINES_HUNK_RE.match(ln)
+         return tags.get(m.groups(), "") if m else ""
+     return tag, None
+ 
+ 
+ def _note_reread_fp_blob(scan, base, oid):
+@@ -36590,126 +36592,147 @@ def _note_reread_fp_blob(scan, base, oid):
+     return got[0], None
+ 
+ 
+ _NOTE_REREAD_FP_PREFETCH_MAX = 1024 * 1024         # 頂端內容一次批次讀進來的單支上限;更大的逐支讀(讀完就丟)
+ # 一次批次讀的總量上限:批次讀把整批輸出收進記憶體再切片,常駐約是內容的兩到三倍(代碼審 r2 併發席:400 支約 800 KB、合計約 320 MB
+ # 的檔,沒有總量上限時常駐 1.09 GB)。64 MB 是「200 支 100 KB 的一般原始檔一批裝得下」的量級,常駐約一兩百 MB;超過的下一批再讀
+ # (手上只留一批),指紋照算,不會因此退回舊版或少提醒
+ _NOTE_REREAD_FP_PREFETCH_TOTAL = 64 * 1024 * 1024
+ 
+ 
++def _note_reread_fp_walk_keys(about):
++    """算一篇 v2 指紋時依序走的 about_code 鍵(_note_reread_contrast_fp_v2 與批次讀的順序共用這一支)。"""
++    return sorted({k for k in (_nodehome_key(v) for v in about) if k})
++
++
+ def _note_reread_fp_prefetch(scan, base, start):
+     """候選 about_code 列到、這條分支改過的檔,從物件 start 起照算指紋的順序往後,頂端內容不超過 _NOTE_REREAD_FP_PREFETCH_MAX 的、
+     合計不超過 _NOTE_REREAD_FP_PREFETCH_TOTAL 的,一次 cat-file 批次讀進來 → {物件編號: bytes}。
+     算縮排鏈要頂端內容;逐支各開一次 git 在 200 支小檔時多花約 4 秒(2026-10-14 量測),所以小檔一次讀。★走有上限的共用讀法★
+     (代碼審 r2 架構對齊 1、併發 2:原本自己比單支大小、再呼叫沒有上限的 _nodehome_cat_blobs,而且沒有總量上限):
+     _nodehome_cat_blobs_capped 帶單支上限、總量上限 _NOTE_REREAD_FP_PREFETCH_TOTAL、截止時間與已查好的大小;超過總量的、讀不了的
+-    不放進來:超過總量的等算到它時再從它起讀下一批,其餘由 _note_reread_fp_blob 逐支讀。"""
++    不放進來:超過總量的等算到它時再從它起讀下一批,其餘由 _note_reread_fp_blob 逐支讀。
++    ★順序就是算指紋實際走的順序★(候選照順序、每篇裡照 _note_reread_fp_walk_keys;代碼審 r3 併發 1:原本照全部鍵的排序,候選 A 列到
++    排序靠後的檔、候選 B 列到靠前的檔時,每支都缺、每支各讀一批,實測 120 支 1 MB 的檔讀了 120 批、7.5 秒)。"""
+     sizes = base.get("sizes") or {}
+     if base.get("blob_order") is None:
+-        keys = set()
+-        for rel in scan["cands"]:
+-            keys |= _note_reread_about(scan, rel)
+-        base["blob_order"] = list(dict.fromkeys(e["noid"] for k in sorted(keys) for e in base["raw"].get(k, ())
++        base["blob_order"] = list(dict.fromkeys(e["noid"] for rel in scan["cands"]
++                                                for k in _note_reread_fp_walk_keys(_note_reread_about(scan, rel))
++                                                for e in base["raw"].get(k, ())
+                                                 if e["nmode"] != "160000" and not _NOTE_REREAD_FP_ZERO.fullmatch(e["noid"])))
+     order = base["blob_order"]
+     oids = order[order.index(start):] if start in order else [start]   # 上限由 _nodehome_cat_blobs_capped 判,這裡不另算
+     got = _nodehome_cat_blobs_capped(scan["root"], oids, _NOTE_REREAD_FP_PREFETCH_MAX, timeout=20,
+                                      max_total_bytes=_NOTE_REREAD_FP_PREFETCH_TOTAL, deadline=base["dl"],
+                                      sizes=[sizes.get(o) for o in oids])
+     return {o: b for o, b in zip(oids, got or []) if b is not None}
+ 
+ 
++# 縮排鏈當成空白跳過的位元組:ASCII 空白與 ASCII 標點。一行去掉這些什麼都不剩(空行、只有空白、只有括號與標點,例如 `{`、`}`、`):`、`];`)
++# 就跳過,跟空行一樣——既不當起點、也不進鏈、也不截斷鏈(代碼審 r3 正確性 1、邊界 1:black 風格的多行簽名收尾 `):`、Allman 的 `{`
++# 是「往上第一行縮排較淺的」,整個檔的函式拿到同一條鏈)。非 ASCII 位元組(中文識別名等)算有字;有字的頂格行(`#endif`)照舊截斷。
++_NOTE_REREAD_SKIP = b" \t\r\n\x0b\x0c!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
++
++
+ def _note_reread_indent(ln):
+-    """一行(bytes)的縮排欄寬:開頭的空白與 tab,tab 照 _NOTE_REREAD_TAB 欄展開;空行或只有空白的行回 None。"""
+-    if not ln or ln.isspace():
++    """一行(bytes)的縮排欄寬:開頭的空白與 tab,tab 照 _NOTE_REREAD_TAB 欄展開;縮排鏈要跳過的行(_NOTE_REREAD_SKIP:空行、只有空白、
++    只有標點)回 None。_note_reread_hunk_nodes 的熱迴圈內聯了同一套算法(t_reread_fp_indent_inline_same 綁住兩邊一樣)。"""
++    if not ln.strip(_NOTE_REREAD_SKIP):
+         return None
+     c = ln[:1]
+     if c != b" " and c != b"\t":
+         return 0
+     pre = ln[:len(ln) - len(ln.lstrip(b" \t"))]
+     return len(pre) if b"\t" not in pre else len(pre.expandtabs(_NOTE_REREAD_TAB))
+ 
+ 
+-def _note_reread_hunk_nodes(data, spans):
+-    """縮排鏈的核心 → 跟 spans 同順序的「鏈最內層那一行」節點(沒有鏈是 None)。節點是 (那一行去掉頭尾空白的原文 bytes, 外一層節點)。
+-    data 是那一版的內容(bytes;None → 全部沒有鏈),spans 是 [(起點行號 s, 行數 n)…](從 1 起)。
+-    ① 起點:範圍 s..s+n-1 裡第一個不是空白的行;範圍裡全是空白(或 n=0)就當成在 s+n 那個位置、無限深(鏈從它上面最近的非空白行起算)。
+-    ② 鏈:從起點往上,縮排比起點淺的最近一行(空行、只有空白的行跳過),再從那行往上找比它更淺的,一路到縮排 0;起點縮排 0 就沒有鏈。
++def _note_reread_hunk_nodes(data, spans, deadline=None):
++    """縮排鏈的核心 → 跟 spans 同順序的「鏈最內層那一行」節點(沒有鏈是 None);deadline 到了回 None(整批不算)。
++    節點是 (那一行去掉頭尾空白的原文 bytes, 外一層節點)。data 是那一版的內容(bytes;None → 全部沒有鏈),spans 是 [(起點行號 s, 行數 n)…]
++    (從 1 起)。「跳過的行」= 空行、只有空白、只有標點(_NOTE_REREAD_SKIP)。
++    ① 起點:範圍 s..s+n-1 裡第一個不跳過的行;範圍裡全是跳過的行(或 n=0)就當成在 s+n 那個位置、無限深(鏈從它上面最近的不跳過的行起算)。
++    ② 鏈:從起點往上,縮排比起點淺的最近一行(跳過的行不算),再從那行往上找比它更淺的,一路到縮排 0;起點縮排 0 就沒有鏈。
+     一趟往下掃、用一個縮排遞增的堆疊(每行先彈掉不比它淺的,剩下的頂端就是它的外一層),只掃到最大的那個起點,深層巢狀與很多段改動都是
+-    線性的。"""
++    線性的。★看截止時間★(代碼審 r3 併發 2:32 MB 的檔掃到檔尾要幾秒,原本完全不看):切行之前、每到一段改動的起點、每 8192 行
++    看一次,到了就回 None,呼叫端那支檔退回 v1、原因記「逾時」。"""
+     if not spans:
+         return []
+     if data is None:
+         return [None] * len(spans)
++    if _note_reread_fp_expired(deadline):
++        return None
+     mx = max(s + max(n, 0) for s, n in spans)
+     lines = data.split(b"\n", mx)[:mx]
+     anchor, inf = {}, {}
+     for qi, (s, n) in enumerate(spans):
+         k = next((i for i in range(max(s - 1, 0), min(s - 1 + n, len(lines))) if _note_reread_indent(lines[i]) is not None),
+                  None)
+         if k is None:
+             inf.setdefault(min(max(s - 1 + max(n, 0), 0), len(lines)), []).append(qi)
+         else:
+             anchor.setdefault(k, []).append(qi)
+     last = max(list(anchor) + list(inf))
+     out, stack = [None] * len(spans), []     # stack:[(縮排, 節點)…],縮排嚴格遞增
+     marks = set(anchor) | set(inf)
+-    sp, tb = b" ", b"\t"
++    sp, tb, skip = b" ", b"\t", _NOTE_REREAD_SKIP
+     for k in range(min(last + 1, len(lines))):   # 這個迴圈是熱路徑(40 萬行的改動要掃完):_note_reread_indent 內聯
+         if k in marks:
++            if _note_reread_fp_expired(deadline):
++                return None
+             for qi in inf.get(k, ()):
+                 out[qi] = stack[-1][1] if stack else None
++        elif not k & 8191 and _note_reread_fp_expired(deadline):
++            return None
+         ln = lines[k]
++        if not ln.strip(skip):
++            continue
+         c = ln[:1]
+         if c == sp or c == tb:
+-            rest = ln.lstrip(b" \t")
+-            if not rest or rest.isspace():
+-                continue
+-            pre = ln[:len(ln) - len(rest)]
++            pre = ln[:len(ln) - len(ln.lstrip(b" \t"))]
+             ind = len(pre) if tb not in pre else len(pre.expandtabs(_NOTE_REREAD_TAB))
+-        elif not ln or ln.isspace():
+-            continue
+         else:
+             ind = 0
+         while stack and stack[-1][0] >= ind:
+             stack.pop()
+         if k in marks:
+             for qi in anchor.get(k, ()):
+                 out[qi] = stack[-1][1] if stack else None
+         if k < last:
+             stack.append((ind, (ln.strip(), stack[-1][1] if stack else None)))
+     for qi in inf.get(len(lines), ()) if last >= len(lines) else ():
+         out[qi] = stack[-1][1] if stack else None
+     return out
+ 
+ 
+ def _note_reread_hunk_chains(data, spans):
+     """每段改動的縮排鏈原文(由外到內的字串 tuple;給人看與測試用,指紋用 _note_reread_hunk_tags)。規則見 _note_reread_hunk_nodes。"""
+     res = []
+-    for node in _note_reread_hunk_nodes(data, spans):
++    for node in _note_reread_hunk_nodes(data, spans) or ():
+         chain = []
+         while node is not None:
+             chain.append(node[0].decode("utf-8", "surrogateescape"))
+             node = node[1]
+         res.append(tuple(reversed(chain)))
+     return res
+ 
+ 
+-def _note_reread_hunk_tags(data, spans):
++def _note_reread_hunk_tags(data, spans, deadline=None):
+     """每段改動的標籤(代碼審 r2 六席:原本猜「所在函式名」,好幾種語言兩個不同函式撞名;r1 資安席 major:整個拿掉時同一段改動搬到
+     同檔另一個前後三行相同的函式指紋不變)→ 跟 spans 同順序的字串:縮排鏈的原文(_note_reread_hunk_nodes)由外到內串起來的雜湊,
+     沒有鏈是空字串。每個節點的雜湊 = sha256(外一層的雜湊 32 位元組 + 這一行原文的位元組),共用的外層只算一次,
+-    深層巢狀也不會每段改動各串一次整條鏈。不分語言:兩個函式那一行的原文本來就不同。"""
++    深層巢狀也不會每段改動各串一次整條鏈。不分語言:兩個函式那一行的原文本來就不同。deadline 到了回 None(_note_reread_hunk_nodes)。"""
+     import hashlib
++    nodes = _note_reread_hunk_nodes(data, spans, deadline)
++    if nodes is None:
++        return None
+     memo, res = {}, []
+-    for node in _note_reread_hunk_nodes(data, spans):
++    for node in nodes:
+         if node is None:
+             res.append("")
+             continue
+         path = []
+         while node is not None and id(node) not in memo:
+             path.append(node)
+             node = node[1]
+         h = memo[id(node)][0] if node is not None else bytes(32)
+         for nd in reversed(path):
+             h = hashlib.sha256(h + nd[0]).digest()
+@@ -36721,21 +36744,21 @@ def _note_reread_hunk_tags(data, spans):
+ def _note_reread_contrast_fp_v2(scan, note_full, about, deadline=None):
+     """v2 對照指紋(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉1、2、5)→ (指紋, None, 檔, 鍵) 或 (None, 退回原因, [], [])。
+     16 個十六進位字 = 雜湊(筆記路徑(NFC、含圖譜前綴)、範本版本、一行「指紋算法 v2」、那篇頂端 about_code 每一項配上
+     「它在分岔點..頂端的改動指紋」(不在 --raw 清單裡記「未改」——主線怎麼改它都不影響指紋))。
+     退回 v1 的情形:分岔點算不出或就是頂端、about_code 有一項兩邊的樹都找不到(拼錯、是資料夾;不在清單裡就是兩邊相同,
+     所以只看頂端的樹)、全部未改(v2 會是跟程式版本無關的常數,r1 邊界席)、單檔退回(_note_reread_fp_file)。"""
+     import hashlib
+     base = _note_reread_fp_base(scan, deadline)
+     if base["why"]:
+         return None, base["why"], [], []
+-    keys = sorted({k for k in (_nodehome_key(v) for v in about) if k})
++    keys = _note_reread_fp_walk_keys(about)   # 批次讀照同一個順序讀(_note_reread_fp_prefetch)
+     parts = [nfc(note_full), f"範本版本 {_NOTE_REREAD_PROMPT_VERSION}", "指紋算法 v2"]
+     files, hit = [], []
+     for k in keys:
+         ents = base["raw"].get(k)
+         if not ents:
+             if k not in scan["tip_paths"]:
+                 return None, "樹裡找不到", [], []
+             parts.append(f"{k}\t未改")
+             continue
+         fps = []
+@@ -37591,29 +37614,72 @@ def _note_reread_judge(root, diff_range, push_remote, pushed_ref, res):
+     if res["state"] is not None:
+         return
+     scan = _note_reread_scan(root, base, tip, vault_rel, deadline=deadline)
+     res.update(scan=scan, tip=tip, push=push)
+     if not scan["cands"]:
+         res.update(state="none", why="沒有候選")
+         return
+     if _t.monotonic() > deadline:
+         raise _NoteRereadStop(f"逾時(超過 {_NOTE_REREAD_BUDGET_SEC} 秒)")
+     vs = _note_reread_verdicts(root, tip, deadline)
++    if push is not None:
++        _note_reread_bp_vs_remote(root, scan, diff_range, push, deadline)
+     fps = _note_reread_fps(scan, deadline)
+     hits = _note_reread_hits(root, scan, vs, deadline)
+     left = [rel for rel in scan["cands"] if not hits[rel]]
+     infos = scan.get("fpinfo") or {}
+     res.update(state="judged", fps=fps, left=left, hits=hits, late=[r for r in left if (infos.get(r) or {}).get("why") == "逾時"], badprov={fp for _n, fp, d in vs if d.get("provenance_ok") is not True},
+                wip=_note_reread_wip_left(root, tip, {fps[r] for r in left}),
+                layer2=_note_reread_layer2(root, tip, scan, vs, deadline))
+ 
+ 
++def _note_reread_bp_vs_remote(root, scan, diff_range, push, deadline):
++    """推主線時核對分岔點(代碼審 r3 資安 2):分岔點取自本機的遠端追蹤 ref,本機把 refs/remotes/origin/main 指到藏了改動的提交,
++    分岔點就落在它上面、新版指紋看不到那段。pre-push 給的「被推那條 ref 在遠端現在的值」(範圍起點)是唯一從遠端來的值:
++    被推的是算分岔點用的那條主線(refs/remotes/<--push-remote>/<被推分支> 是主線候選之一)、遠端值不是全 0 而且本機找得到時,
++    分岔點必須是它的祖先(或相等),不是就丟 _NoteRereadStop(block 加 --gate 擋、講明要 fetch)。核對的 git 逾時 → 這次不用新版指紋
++    (分岔點記成算不出、原因「逾時」,照舊版判)。
++    ★只核對推主線★:功能分支 rebase 到前進了的主線後強推、或把主線合進分支,分岔點本來就不是遠端舊頂端的祖先,核對會誤擋;
++    功能分支這條由 CI 補驗——CI 那一步用 fetch 下來的真遠端主線重算指紋,本機偽造的分岔點記下的紀錄在那裡對不上、會被列出
++    (CI 只印不擋,見 Systems/筆記內容審 的 WHY 行)。本機沒有網路,核對不了遠端主線的真值,這是能做到的上限。"""
++    base = _note_reread_fp_base(scan, deadline)
++    bp, dl = base["bp"], base["dl"]
++    remote, pushed_ref = push
++    rg = _lens_range_ok(diff_range)
++    if bp is None or rg is None or _ZERO_SHA_RE.fullmatch(rg[0]) or not (pushed_ref or "").startswith("refs/heads/"):
++        return
++    old = _lens_full_sha(root, rg[0])
++    if old is None:
++        return
++    target = f"refs/remotes/{remote}/{pushed_ref[len('refs/heads/'):]}"
++    mls, err = _push_mainlines(root, _lens_default_remote(root, scan["tip"], dl), None, deadline=dl)
++    hit = False
++    for cand, _sha in ([] if err else mls):
++        full, failed = _push_mainline_full(root, cand, deadline=dl)
++        if failed:
++            err = "解主線候選失敗"
++            break
++        if full == target:
++            hit = True
++            break
++    if not hit and not err:
++        return
++    r = None if err else _lens_git_dl(root, "merge-base", "--is-ancestor", bp, old, deadline=dl)
++    if r is None or r.returncode not in (0, 1):
++        base.update(bp=None, raw={}, why="逾時" if _git_timeout(dl) <= 0 else "git 失敗")
++        return
++    if r.returncode == 1:
++        raise _NoteRereadStop(f"分岔點 {bp[:12]} 不是遠端 {_note_reread_show(pushed_ref)} 現在的值 {old[:12]} 的祖先:本機的遠端追蹤 ref"
++                              f"({_note_reread_show(target)})可能被改過、或遠端主線被改寫過,照它算的新版指紋不可信;"
++                              f"先 git fetch {_note_reread_show(remote)} 再推")
++
++
+ def _note_reread_branch(root, pushed_ref):
+     """事件的 branch 欄(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉7):推送前 check 記被推的 ref,手動記目前簽出的分支
+     (refs/heads/… 全名),detached 或查不到寫空。"""
+     if pushed_ref is not None:
+         return _note_reread_show(pushed_ref)
+     r = _lens_git(root, "symbolic-ref", "-q", "HEAD")
+     return _note_reread_show(r.stdout.strip()) if r is not None and r.returncode == 0 else ""
+ 
+ 
+ def _note_reread_wip_left(root, tip, left_fps):
+@@ -37664,29 +37730,27 @@ def _note_reread_rc(res, gate, hard):
+     if not gate:
+         return 0
+     if st == "param":
+         return 2
+     if st == "undecidable":
+         return 1 if hard else 0
+     return 1 if (st == "judged" and _note_reread_blocking(res, hard)) else 0
+ 
+ 
+ def _note_reread_blocking(res, hard):
+-    """判完了的這次擋不擋:hard(帶 --gate 而且 block)、而且第一層有「真的算出指紋而對不上」的篇或第二層有要處理的條目。
+-    ★因逾時沒算出新版指紋的篇不擋★(res["late"];代碼審 r2 併發 1、通才 3):prepare 沒有截止時間、一定算得出新版並記新版紀錄,
+-    check 有 _NOTE_REREAD_BUDGET_SEC 上限,大改動下逾時退回舊版、對不上那筆新版紀錄——每次都一樣、重跑也不會好,擋下去只剩跳過
+-    環境變數可繞。所以那幾篇照實列出、記帳(late 欄),不擋。這條退路不會被拿來繞:逾時只在指紋這一步花掉約 27 秒時才發生
+-    (要改到上千支被候選 about_code 列到的檔,實測 1000 支時 38 篇逾時),帳上每次都記,而且那幾篇照舊列在清單上要人對照。"""
++    """判完了的這次擋不擋:hard(帶 --gate 而且 block)、而且第一層有沒對照的篇或第二層有要處理的條目。
++    ★因逾時沒算出新版指紋的篇照舊版判、照擋★(res["late"] 只用來講明原因與記帳;代碼審 r3 資安 1:原本這幾篇不擋,about_code 是作者
++    自己寫的,列上三千支垃圾檔撐到逾時就整篇放行、rc0)。代價是改動極大、指紋這一步在 _NOTE_REREAD_BUDGET_SEC 內算不完的分支,
++    prepare 記的新版紀錄比不到、每次都擋——清單講明原因並給既有的單次跳過(LUMOS_SKIP_REREAD_CHECK=1,跳過會留帳)。"""
+     if not hard or res.get("state") != "judged":
+         return False
+-    late = set(res.get("late") or ())
+-    return bool([r for r in res["left"] if r not in late] or res["layer2"]["must"])
++    return bool(res["left"] or res["layer2"]["must"])
+ 
+ 
+ def _note_reread_report(root, res, gate, pushed):
+     """印出與記帳 → rc。rc 先由 _note_reread_rc 定好;印到一半出錯只講一句、照樣記帳,記帳出錯也只講一句——兩步都不改判定
+     (同 _drift_retire_report)。hard = 帶 --gate 而且設定是 block。"""
+     hard = gate and res["mode"] == "block"
+     rc = _note_reread_rc(res, gate, hard)
+     try:
+         _note_reread_print(res, gate, hard, pushed)
+     except Exception as ex:
+@@ -37754,42 +37818,43 @@ def _note_reread_print_judged(res, hard):
+     if res["left"]:
+         _note_reread_print_layer1(res, blocking, stream)
+     if l2["must"]:
+         _note_reread_print_layer2(res, blocking, stream)
+     if not blocking:
+         print(_NOTE_REREAD_TAIL)
+ 
+ 
+ def _note_reread_print_layer1(res, hard, stream):
+     """第一層:沒對照的篇分「沒有紀錄」與「有紀錄但來源核對沒過」列;講程式改了就要重判;印 prepare 指令(工具印每一層的改法,
+-    掛鉤印通用逃生段——照存量漂移的分工)。hard 是這次真的擋(_note_reread_blocking);因逾時沒算新版指紋的篇那一行講明這次不擋。"""
++    掛鉤印通用逃生段——照存量漂移的分工)。hard 是這次真的擋(_note_reread_blocking);因逾時沒算出新版指紋的篇那一行講明照舊版判,
++    擋下時另給單次跳過的寫法(只講事實,不跟標頭的「擋下」矛盾:代碼審 r3 通才 1)。"""
+     fps, left = res["fps"], res["left"]
+     pre = res["scan"]["vault_rel"] + "/"
+     head = "擋下:回頭重讀:" if hard else "回頭重讀提醒:"
+     print(f"{head}這次改到的程式,有 {len(left)} 篇守檔筆記這次也改了、還沒對照過這一版程式(已對照 {len(fps) - len(left)} 篇)"
+           "——前面的舊句可能被這次改動弄得不成立:", file=stream)
+     bad = [r for r in left if fps[r] in res["badprov"]]
+     late = set(res.get("late") or ())
+     for label, rows in (("沒有紀錄", [r for r in left if r not in bad]), ("有紀錄但來源核對沒過(要重派判定者)", bad)):
+         if rows:
+             print(f"  {label} {len(rows)} 篇:", file=stream)
+         for rel in rows[:_NOTE_REREAD_LIST_MAX]:
+-            why = ";這篇因為逾時沒算新版指紋,這次不擋" if rel in late else ""
++            why = ";這篇因為逾時沒算出新版指紋,照舊版判" if rel in late else ""
+             print(f"    {_note_reread_show(pre + rel)}  (對照指紋 {fps[rel]}{why})", file=stream)
+         if len(rows) > _NOTE_REREAD_LIST_MAX:
+             print(f"    …另外 {len(rows) - _NOTE_REREAD_LIST_MAX} 篇", file=stream)
+     if late:
+-        # 預算不夠時不靜默換版(代碼審 r1 通才 1、併發 3);也不擋(r2 併發 1、通才 3:prepare 沒有預算、會記新版的紀錄,check 逾時
+-        # 每次都比不到它,重跑也一樣)。原本這裡說「再跑一次通常就認得」,是錯的
++        # 預算不夠時不靜默換版(代碼審 r1 通才 1、併發 3);照擋(r3 資安 1:不擋會被堆垃圾檔撐到逾時拿來繞)。prepare 沒有預算、會記新版
++        # 的紀錄,check 逾時每次都比不到它,重跑也一樣,所以擋下時講明可以單次跳過
++        skip = (";改動極大、確定都對照過時,可以用 LUMOS_SKIP_REREAD_CHECK=1 git push 單次跳過(跳過會留帳)" if hard else "")
+         print(f"  其中 {len(late)} 篇因為推送前檢查的 {_NOTE_REREAD_BUDGET_SEC} 秒上限逾時、沒算出新版指紋(只認作者自己改動的那一版),"
+-              "改用看頂端版本的舊版判、比不到 prepare 記的新版紀錄——重跑也一樣,所以這幾篇這次不擋、已記帳;"
+-              "還沒對照過的,照下面的指令對照", file=stream)
++              f"照舊版判(看頂端版本,比不到 prepare 記的新版紀錄,重跑也一樣){skip}", file=stream)
+     if res["wip"]:
+         print(f"  其中 {len(res['wip'])} 篇在工作目錄有對照紀錄、還沒提交:"
+               + _note_reread_add_cmd({n for ns in res["wip"].values() for n in ns}), file=stream)
+     print("  程式改了就要重判:對照指紋含這條分支對這篇 about_code 列的程式的改動(算不出跟遠端主線的分岔點時,改看程式在頂端的版本)"
+           "——主線帶進別人對同一支程式的改動不再算,你自己的改動(含 rebase 解衝突改到的)、筆記改名、about_code 增減照算;"
+           "改筆記不用重判。", file=stream)
+     print("對照一次(每篇一份項目檔,派判定者問「哪幾行被這次改動弄得不成立了」,reread-record 記下、把紀錄提交進去;"
+           "做法見 lumos-project-notes 的代碼審與推送子檔):\n    " + _note_reread_cmdline(res["diff_range"], res["push"]), file=stream)
+ 
+ 
+@@ -37807,21 +37872,21 @@ def _note_reread_print_layer2(res, hard, stream):
+         for h in _drift_fix_hint("reread", f["path"], f["line"]):
+             print(f"    {_esc_clean(h, 4000)}", file=stream)
+     if len(must) > _NOTE_REREAD_LIST_MAX:
+         print(f"  …還有 {len(must) - _NOTE_REREAD_LIST_MAX} 條", file=stream)
+     print("  提醒:改筆記會讓已過的代碼審留痕失效;已過代碼審的推送,優先用照留表態。", file=stream)
+ 
+ 
+ def _note_reread_ledger(root, res, hard):
+     """記一筆帳:off 不記;參數錯、環境查不了記 skipped;判不了不擋記 skipped、擋下記 blocked(hard),兩筆都帶 state undecidable
+     (跟舊句檢查的帳一樣用 state 字串記;代碼審發現原本只有擋下那筆帶);沒新東西 none;判完兩層都沒有 covered,
+-    有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字;判完了的擋不擋照 _note_reread_blocking,只剩逾時的篇記 reminded)。head_sha 一律記被推頂端(算得出來時;算不出來 _gate_event 補 HEAD),
++    有東西時擋下記 blocked、只提醒記 reminded(沿用既有 18 筆的名字;判完了的擋不擋照 _note_reread_blocking)。head_sha 一律記被推頂端(算得出來時;算不出來 _gate_event 補 HEAD),
+     跟舊句檢查、筆記形狀擋的帳一樣。"""
+     st, tip = res["state"], res.get("tip")
+     if st == "off":
+         return
+     hard = _note_reread_blocking(res, hard) if st == "judged" else hard
+     if st in ("param", "skipped"):
+         _gate_event_or_warn(root, "note-reread", "skipped", res["why"], head_sha=tip)
+     elif st == "undecidable":
+         kind, note = ("blocked", f"判不了:{res['why']}") if hard else ("skipped", res["why"])
+         extra = {"state": "undecidable", **(_note_reread_fp_extra(res) if hard else {})}
+@@ -37865,21 +37930,21 @@ def _note_reread_ledger_fit(root, kind, note, extra, tip, hard=False):
+ def _note_reread_ledger_found(root, res, hard):
+     """有東西的那一筆:note 只記兩層篇數、範圍終點與來源;第一層沒對照的前 50 篇(路徑與對照指紋)記 layer1_fps,第二層要處理的前 50 行
+     (路徑、條目前 80 字、紀錄指紋)記 rows。路徑一律過 _note_reread_show(非 UTF-8 檔名寫帳會編碼失敗,邊界席 F1)。
+     整行超過 4096 位元組時跟舊句檢查、筆記形狀擋的放寬帳一樣走 _gate_event_fit:先從尾端丟 rows、再丟 layer1_fps,各記自己的
+     _truncated,還超過再把 nodes 截到 20(筆數欄照記全數);再超過照寫(_gate_event_fit 的約定)。量與寫都帶被推頂端當 head_sha。
+     ★清單不放 note★:note 會原樣再寫一份到 detail、而且 _gate_event_fit 截不到它——原本「路徑=指紋」清單放在 note,
+     30 篇沒對照時 rows 丟光、nodes 截到 20 整行仍有 5886 位元組(代碼審發現)。"""
+     fps, left, must, tip = res["fps"], res["left"], res["layer2"]["must"], res["tip"]
+     pre = res["scan"]["vault_rel"] + "/"
+     nlate = len(res.get("late") or ())
+-    note = (f"沒對照 {len(left)} 篇" + (f"(其中 {nlate} 篇逾時沒算新版指紋、不擋)" if nlate else "")
++    note = (f"沒對照 {len(left)} 篇" + (f"(其中 {nlate} 篇逾時沒算出新版指紋、照舊版判)" if nlate else "")
+             + f"、已對照 {len(fps) - len(left)} 篇;規則類條目要處理 {len(must)} 條;"
+             f"範圍終點 {tip};來源 {'ci' if _in_ci() else 'hook'}")
+     rows = [{"path": _note_reread_show(pre + f["path"]), "line": f["line"], "quote": _note_reread_show(f["text"])[:80],
+              "verdicts": sorted(f["verdicts"])} for f in must[:50]]
+     infos = res["scan"].get("fpinfo") or {}
+     late = set(res.get("late") or ())
+     extra = {"layer1": len(left), "rejudge": len(left), "late": len(late), "layer2_notes": len({f["path"] for f in must}),
+              "layer2_rows": len(must), "rows": rows,
+              "layer1_fps": [{"path": _note_reread_show(pre + r), "fp": fps[r], "ver": (infos.get(r) or {}).get("ver", "v1"),
+                              **({"late": True} if r in late else {})} for r in left[:50]], **_note_reread_fp_extra(res)}
+@@ -53188,20 +53253,22 @@ def _test_quality_load_bundle():
+         for name, module in previous.items():
+             if module is missing:
+                 sys.modules.pop(name, None)
+             else:
+                 sys.modules[name] = module
+         return "測試品質工具未完整部署:" + str(exc) + "；請 lumos update。"
+     return None
+ 
+ 
+ def main():
++    # git replace 能讓讀起點版本、檔名清單的閘看到替身(代碼審三個分支的資安席各自找到);入口統一關掉,所有子行程繼承
++    os.environ["GIT_NO_REPLACE_OBJECTS"] = "1"
+     quality_deployment_error = _test_quality_load_bundle()
+     class _LumosParser(argparse.ArgumentParser):
+         """打錯指令時給人話 + 近名候選,不要吐一長串英文。
+ 
+         出身(2026-09-07 全 repo 審視 #9):打錯一個字母(例如 doctorr),argparse 預設會印
+         usage 那行(把 66 個指令名擠成一串)再加一句英文 invalid choice,後面又把 66 個名字
+         用引號逐個列一遍——**畫面上出現三次同一份清單,而使用者要的只是「你是不是想打 doctor」**。
+ 
+         放在 main() 裡面(全檔唯一一個巢狀 class,2026-09-07 代碼審 r1 架構席問過):
+         它只有 main() 建 parser 時用得到,而且訊息內容綁著 main() 底下那份三步入口的措辭;
