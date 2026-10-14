@@ -1,0 +1,875 @@
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 0822e7e2..3776d479 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -63,26 +63,24 @@ LENS_FAIL_REASONS = {
+     "spec_rev_missing": "提交編號要寫完整的 40 或 64 碼,而且要在這個專案的物件庫裡找得到",
+     "spec_missing": "計劃不存在、不是一般檔或讀不到",
+     "spec_outside_repo": "計劃路徑不在這個專案裡,或提交寫法的路徑不在 docs/<名>-knowledge/ 底下、寫法不合規則",
+     "spec_too_large": "計劃超過 1MB",
+     "no_knowledge": "這個專案沒有計劃路徑指的那個圖譜資料夾",
+ }
+ # 計劃版說明(設計審的 LUMOS-SPEC:)。{what} 是計劃值過 _clean_field,不用範圍專用的 _SAFE_RANGE_RE(計劃路徑一定不合它)。
+ SPEC_FAIL_NOTE = ("LUMOS-LENS:這次沒附固定席節點(計劃 {what} 在會談專案 {repo} 讀不到:{why})。{hint}"
+                   "照派工詞審查即可。")
+ # 工作樹寫法讀不到時的繞法:計劃多半在別的工作樹(寫成絕對路徑會落在 spec_outside_repo,所以兩個代碼都給)
+-SPEC_FREEZE_HINT = ("計劃在別的工作樹時,在那個工作樹跑 `lumos spec-freeze <計劃> --out <快照>`,"
+-                    "把它印的那行 `LUMOS-SPEC:` 貼進派工詞。")
+-# 計劃類代碼由 LENS_FAIL_REASONS 推導(鍵減去只屬範圍的那幾個),不另抄一份;要等於 lumos 的 _LENS_SPEC_FAIL_CODES
+-# (t_dispatch_lens_fail_codes_match_hook 一起比;代碼審 code-派工鏡頭可指定目標repo r1 架構4)
+-_RANGE_ONLY_FAIL_CODES = frozenset({"commit_missing", "base_not_mainline", "no_mainline", "sha_unresolved", "empty_range"})
+-_SPEC_FAIL_CODES = frozenset(LENS_FAIL_REASONS) - _RANGE_ONLY_FAIL_CODES
++SPEC_FREEZE_HINT = ("計劃在別的工作樹時,在那個工作樹跑 `lumos spec-freeze <計劃>`(不帶 --out,不在那裡留檔),"
++                    "把它印的那行 `LUMOS-SPEC:` 貼進派工詞;快照回會談目錄用 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md` 寫。")
++# 哪些代碼算計劃類不在這裡抄清單:lumos 只在設計審的失敗列帶 spec_source,掛鉤照它判(代碼審 code-派工鏡頭可指定目標repo r2 架構2:
++# 原本手抄一份「只屬範圍」的代碼推導,跟 lumos 的 _LENS_RANGE_FAIL_CODES 是兩份)
+ FAIL_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what} 在會談專案 {repo} 算不出來:{why})。"
+              "掛鉤拿會談的專案目錄算,標記終點寫 HEAD 時也在那裡解讀——在別的專案或工作目錄做事,"
+              "終點要寫完整提交編號,或從開在目標專案的會談派席;也可以派工前在目標專案跑 "
+              "`lumos impact --diff {what}`,把固定席內容貼進派工詞。照派工詞審查即可。")
+ # 說明行只准固定字彙與已驗證欄位(代碼審 r1 兩席):範圍不合保守的 ref 字元集就以 <範圍> 代替,不轉述原文
+ _SAFE_RANGE_RE = re.compile(r"^[A-Za-z0-9._/~^-]{1,200}\.\.[A-Za-z0-9._/~^-]{1,200}$")
+ 
+ # ★認領席位那條路要用不同的說明★(2026-09-07 代碼審 r1 通才席抓到)
+ # 超時說明原本在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
+ # 就武裝好的檔案裡原子領一席,**全程不寫任何快取**。對這條路講快取是每次都錯,
+@@ -275,21 +273,22 @@ def _mark_event(kind, note) -> None:
+     except Exception:
+         return
+ 
+ 
+ def _spec_fail_note(r, spec, repo) -> str:
+     """設計審讀不到計劃(lumos 印了計劃類 lens_fail 與 spec_source)→ 回計劃版說明並記一筆事件;其他情況(舊 lumos、不認得的代碼)回空字串。
+     note 一律 `spec_<spec_source> <代碼>`(固定字彙,不給讀端解析)。kind:提交寫法的計劃類代碼與工作樹寫法的 spec_missing/spec_outside_repo
+     記 ok——使用者輸入錯不是掛鉤壞掉,記 error 會拉高 enforcement 的錯誤數;工作樹寫法的 no_knowledge 與兩種寫法的 not_git 記 error。"""
+     d = _last_json(r)
+     code, src = d.get("lens_fail"), d.get("spec_source")
+-    if code not in _SPEC_FAIL_CODES or src not in ("commit", "worktree") or code not in LENS_FAIL_REASONS:
++    # 先判型別再查表:串列、物件拿去查 dict 會丟 TypeError(unhashable),整支掛鉤崩出去(代碼審 code-派工鏡頭可指定目標repo r2 邊界3)
++    if not isinstance(code, str) or not isinstance(src, str) or src not in ("commit", "worktree") or code not in LENS_FAIL_REASONS:
+         return ""
+     kind = "error" if code == "not_git" or (src == "worktree" and code == "no_knowledge") else "ok"
+     _debug(f"lumos dispatch-lens rc={r.returncode}、計劃讀不到({src} {code}),附說明行")
+     _mark_event(kind, f"spec_{src} {code}")   # 只在失敗時記(成功不記事件:Projects/派工鏡頭注入_計劃「不擋不驗不記不量」)
+     hint = SPEC_FREEZE_HINT if src == "worktree" and code in ("spec_missing", "spec_outside_repo") else ""
+     return SPEC_FAIL_NOTE.format(what=_clean_field(spec), repo=_clean_field(repo), why=LENS_FAIL_REASONS[code], hint=hint)
+ 
+ 
+ def _fail_note(r, rng, repo, spec=None) -> str:
+     """範圍算不出來(lumos 印了認得的 lens_fail)→ 回一行固定說明並記一筆掛鉤事件;設計審讀不到計劃走計劃版(_spec_fail_note);
+diff --git a/scripts/lumos b/scripts/lumos
+index 1415d347..ee98d69f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48947,21 +48947,21 @@ def _dispatch_lens_role_text(diff_range, repo, deadline):
+     # ★角色是附加提示,出任何錯都當沒有角色,不准拖垮圖譜那段★(代碼審 r1 正確性 F3)——這裡寬接是刻意的
+     try:
+         return _review_role_text(_review_roles(root, b, h, budget=_role_budget(deadline)))
+     except Exception as e:
+         print(f"提醒:角色鏡頭算不出來({e.__class__.__name__}),這次不附卡;圖譜那段照常", file=sys.stderr)
+         return ""
+ 
+ 
+ # 派工鏡頭印得出的失敗代碼(十一種:範圍六種、設計審的計劃新增五種,not_git 兩邊共用)。掛鉤 LENS_FAIL_REASONS 的鍵要等於這份
+ # (t_dispatch_lens_fail_codes_match_hook 守;Projects/派工鏡頭可指定目標repo_計劃 做法 7)。
+-# 計劃類那六個另立一份(代碼審 code-派工鏡頭可指定目標repo r1 架構4):掛鉤的 _SPEC_FAIL_CODES 要等於它,同一支守衛一起比。
++# 計劃類那六個另立一份(代碼審 code-派工鏡頭可指定目標repo r1 架構4);掛鉤不另抄子集,照 lumos 失敗列帶的 spec_source 判(r2 架構2)。
+ _LENS_RANGE_FAIL_CODES = frozenset({"commit_missing", "not_git", "base_not_mainline", "no_mainline", "sha_unresolved", "empty_range"})
+ _LENS_SPEC_FAIL_CODES = frozenset({"spec_rev_missing", "spec_missing", "spec_outside_repo", "spec_too_large", "no_knowledge", "not_git"})
+ _LENS_FAIL_CODES = _LENS_RANGE_FAIL_CODES | _LENS_SPEC_FAIL_CODES
+ 
+ 
+ def _dispatch_lens_fail(as_json, code, rc, extra=None):
+     """範圍或計劃算不出來(十一種:範圍六種、計劃新增五種,not_git 兩邊共用;代碼見 _LENS_FAIL_CODES 與掛鉤的 LENS_FAIL_REASONS)時,
+     --json 印一行只帶固定字彙原因代碼的 JSON,掛鉤據此附一句說明、不再靜默放空
+     (Projects/派工鏡頭跨repo不再靜默_計劃:會談開在別的專案時範圍找不到,rtb 四輪派工全沒附)。錯誤原文照舊只進 stderr。
+     extra:選填的附帶欄位(設計審帶 spec_source;Projects/派工鏡頭可指定目標repo_計劃),值也只准固定字彙或已驗過的編號。
+@@ -49172,20 +49172,31 @@ _LENS_SPEC_CODE_BT_RE = re.compile(r"`((?:" + "|".join(_LENS_SPEC_CODE_DIRS) + r
+ _LENS_SPEC_MAX_FILES = 5
+ _LENS_SPEC_BUDGET = 30.0   # 秒:hook 內層 45 秒總帳,留 15 秒印輸出
+ _LENS_SPEC_MAX_PER_FILE = 40   # 一個檔牽超過這麼多篇=太泛(單檔 CLI、總測試檔),整檔略過改口頭說明
+ # ── 設計審的提交寫法(Projects/派工鏡頭可指定目標repo_計劃):LUMOS-SPEC: <完整提交編號>:<計劃路徑> ──
+ _LENS_SPEC_COMMIT_RE = re.compile(r"[0-9a-fA-F]{7,}")   # 冒號前全是十六進位、至少 7 碼 → 提交寫法(長度不對回 spec_rev_missing)
+ _LENS_SPEC_MAX_BYTES = 1048576   # 提交寫法與 spec-freeze 的計劃上限;剛好 1MB 照讀
+ _LENS_SPEC_LINK_RE = re.compile(r"\[\[((?:Systems|Issues)/[^\]|#]+)")
+ # 只在提交裡的節點名要整段合這個字元集才列名(做法 6):ASCII 字母數字、中日韓文字、- _ . / 與半形空白,1–80 字。
+ # 換行、控制字元、方向覆寫、反引號都不在裡面(_clean_field 會清的每一類),所以作者寫不進派工詞。
+ _LENS_SPEC_NODE_NAME_RE = re.compile("[A-Za-z0-9぀-ヿ㐀-䶿一-鿿가-힯豈-﫿_./ -]{1,80}")
++# 計劃路徑(「計劃來源」那行)另用自己的規則,不套節點名的 80 字與字元集(代碼審 code-派工鏡頭可指定目標repo r2 邊界4/通才4:
++# 本 repo 有 15 篇筆記完整路徑超過 80 字,全形括號也是合法檔名);整段再交給 _lens_visible 照既有做法消毒。
++_LENS_SPEC_PATH_SHOW_MAX = 300
++_LENS_SPEC_PATH_BAD_CATS = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})   # 控制、格式(含方向覆寫、零寬)、代理、私用、未指派、行段分隔
++
++
++def _lens_spec_path_showable(rel):
++    """「計劃來源」那行印不印得出計劃路徑:長度 1–300、不含反引號、不含控制/格式/行段分隔這幾類字元(換行、NUL、方向覆寫都在裡面)。"""
++    import unicodedata as _ud
++    rel = str(rel)
++    return 0 < len(rel) <= _LENS_SPEC_PATH_SHOW_MAX and "`" not in rel and not any(_ud.category(ch) in _LENS_SPEC_PATH_BAD_CATS for ch in rel)
+ 
+ 
+ def _spec_commit_path_bad(path):
+     """提交寫法的計劃路徑字串規則(做法 2):正規的 posix 相對路徑、至少三段、docs/<slug>-knowledge/ 開頭(大小寫照字面比),
+     不含 . .. 空段、反斜線與任何 str.isspace() 為真的字元。回 True=不合。
+     ★只做字串檢查、不先正規化★:不復用 _posix_norm——正規化會把 a/./b、a//b 改寫成合法路徑,這裡要拒絕而不是改寫。"""
+     if not path or path.startswith("/") or "\\" in path or any(ch.isspace() for ch in path):
+         return True
+     segs = path.split("/")
+     if len(segs) < 3 or any(sg in ("", ".", "..") for sg in segs):
+@@ -49279,120 +49290,205 @@ def _dispatch_lens_read_spec_worktree(root, spec_value, fail):
+     try:   # 外家 r1 M3:計劃筆記必須在 repo 內(/etc/hosts 這種 rc0 讀進來是專案邊界破口)
+         sp.resolve().relative_to(root.resolve())
+     except (ValueError, OSError):
+         return fail("spec_outside_repo", 2, f"擋下:計劃筆記不在這個 repo 裡 {spec_value}")
+     if not sp.is_file():
+         return fail("spec_missing", 2, f"擋下:計劃筆記不存在 {spec_value}")
+     try:
+         text = sp.read_text(encoding="utf-8", errors="replace")
+     except OSError as e:
+         return fail("spec_missing", 2, f"擋下:計劃筆記讀不到({e.__class__.__name__})")
+-    slugs = sorted(p.name for p in (root / "docs").glob("*-knowledge") if p.is_dir()) if (root / "docs").is_dir() else []
++    # 符號連結的 *-knowledge 不算(代碼審 code-派工鏡頭可指定目標repo r2 資安1:glob 會跟著連結走,排第一的那個指到圖譜外就整個讀外面)
++    slugs = sorted(p.name for p in (root / "docs").glob("*-knowledge") if p.is_dir() and not p.is_symlink()) if (root / "docs").is_dir() else []
+     if not slugs:
+         return fail("no_knowledge", 3, "擋下:repo 裡沒有 docs/*-knowledge")
+     return {"root": root, "text": text, "spec_source": "worktree", "commit": None, "blob": None,
+             "vault_rel": f"docs/{slugs[0]}/", "rel": str(spec_value)}
+ 
+ 
++def _repo_walk_lstat(root, segs):
++    """從 repo 根往下逐段 lstat(不跟符號連結):最後一段之前、已存在的每一段都要是資料夾而且不是符號連結,碰到第一段不存在就停。
++    回 (ok, 最後一段的 lstat;走到不存在的那段就是 None)。上層有符號連結、不是資料夾或 lstat 出錯回 (False, None);
++    最後一段本身是什麼由呼叫端判。spec-freeze 的計劃路徑與 --out、派工鏡頭的圖譜資料夾共用這一支(代碼審 code-派工鏡頭可指定目標repo r2 架構3)。"""
++    import stat as _st
++    cur, st = Path(root), None
++    for i, sg in enumerate(segs):
++        cur = cur / sg
++        try:
++            st = os.lstat(cur)
++        except FileNotFoundError:
++            return True, None
++        except OSError:
++            return False, None
++        if i < len(segs) - 1 and (_st.S_ISLNK(st.st_mode) or not _st.S_ISDIR(st.st_mode)):
++            return False, None
++    return True, st
++
++
++def _vault_dir_ok(root, vault_rel):
++    """圖譜資料夾 `<root>/<vault_rel>` 本身與它在 repo 裡的每一段上層都是真的資料夾(不是符號連結)、寫法正規(沒有 . .. 空段)。"""
++    import stat as _st
++    segs = str(vault_rel).rstrip("/").split("/")
++    if any(sg in ("", ".", "..") or "\\" in sg or "\0" in sg for sg in segs):
++        return False
++    ok, st = _repo_walk_lstat(root, segs)
++    return ok and st is not None and _st.S_ISDIR(st.st_mode)
++
++
+ def _vault_node_path(root, vault_rel, node):
+-    """圖譜節點 `<vault>/<node>.md` 的路徑:寫法正規(不是絕對路徑、沒有 . .. 空段、反斜線、NUL)而且解析後(跟著符號連結走)
+-    仍在圖譜資料夾裡才回 Path,否則回 None。落點(lands_in)與計劃連結共用這一支(代碼審 code-派工鏡頭可指定目標repo r1 資安1:
+-    連結那條原本沒檢查,`[[Systems/../../x]]` 或指到圖譜外的捷徑檔,會把圖譜外的 .md 與它的合約行讀進派工詞;工作樹寫法原本就有這個洞)。"""
++    """圖譜節點 `<vault>/<node>.md` 的路徑:節點名整段合 _LENS_SPEC_NODE_NAME_RE(不收換行、控制字元、反斜線、NUL)、沒有 . .. 空段、
++    不是絕對路徑;圖譜資料夾本身與上層每一段都不是符號連結、在 repo 根底下;節點檔解析後(跟著符號連結走)仍在圖譜資料夾裡,才回 Path,
++    否則回 None。落點(lands_in)與計劃連結共用這一支。
++    代碼審 code-派工鏡頭可指定目標repo r1 資安1:連結那條原本沒檢查,`[[Systems/../../x]]` 或指到圖譜外的捷徑檔會把圖譜外的 .md 讀進派工詞;
++    r2 資安1:原本拿解析後的節點路徑比「解析後的圖譜資料夾」,圖譜資料夾本身是指到外面的符號連結時兩邊都在外面、照樣通過——
++    改成比 repo 根(解析一次)接上已驗過的圖譜路徑;r2 資安2:會談目錄裡存在的節點原本不驗名字,檔名裡的換行會變成派工詞框內的一行。"""
+     node = str(node)
+-    if not node or "\0" in node or "\\" in node or node.startswith("/") or any(sg in ("", ".", "..") for sg in node.split("/")):
++    if not _LENS_SPEC_NODE_NAME_RE.fullmatch(node) or node.startswith("/") or any(sg in ("", ".", "..") for sg in node.split("/")):
++        return None
++    if not _vault_dir_ok(root, vault_rel):
+         return None
+-    vbase = Path(root) / vault_rel
+-    p = vbase / f"{node}.md"
+     try:
+-        p.resolve().relative_to(vbase.resolve())
++        vbase = Path(root).resolve() / str(vault_rel).rstrip("/")
++        p = vbase / f"{node}.md"
++        p.resolve().relative_to(vbase)
+     except (ValueError, OSError):
+         return None
+     return p
+ 
+ 
+-def _spec_commit_index(root, commit, vault_rel, deadline):
+-    """提交寫法:一次 `ls-tree -r -z` 列出提交裡程式檔那幾個目錄與計劃那個 vault 底下的一般檔(路徑 → mode),之後在記憶體比對。
+-    代碼審 code-派工鏡頭可指定目標repo r1 邊界2/正確性2/併發1:原本每個找不到的候選、連結、落點各跑一次 git,
+-    1500 個就拖過掛鉤預算(席位實測 28 到 99 秒)。時間不到 1 秒、git 失敗或逾時回 None,呼叫端當成「算到一半」。"""
++def _spec_commit_present(root, commit, paths, deadline):
++    """提交寫法:候選路徑裡哪些在提交裡是一般檔(100644/100755 的 blob)。回 set(NFC)|None(時間不到 1 秒、git 失敗或逾時;呼叫端當「算到一半」)。
++    只查候選、不列整棵樹(代碼審 code-派工鏡頭可指定目標repo r2 併發2:原本一次 `ls-tree -r` 列出整個目錄,50 萬檔的 repo 輸出 51.6MB、
++    峰值 RSS 約 368MB,成本隨 repo 檔數長):①一次 `cat-file --batch-check` 送全部候選(`<提交>:<路徑>` 一行一個),只留型別是 blob 的;
++    ②這些再用 `ls-tree`(只帶它們當路徑)看 mode——cat-file 分不出符號連結(120000 也是 blob),本機 git 2.39 也沒有 %(objectmode)。
++    路徑先 NFC(正確性2:計劃內文的 NFD 名在 macOS 存成 NFC 的提交裡比不到);含換行、NUL、. .. 空段或絕對路徑的候選不問、當沒有。"""
++    import subprocess as _sp
+     import time as _time
++    import unicodedata as _ud
++    q, seen = [], set()
++    for x in paths:
++        x = _ud.normalize("NFC", str(x))
++        if x in seen:
++            continue
++        seen.add(x)
++        if (x and "\n" not in x and "\0" not in x and not x.startswith("/")
++                and not any(sg in ("", ".", "..") for sg in x.split("/"))):
++            q.append(x)
++    if not q:
++        return set()
+     rem = deadline - _time.monotonic()
+     if rem < 1:
+         return None
+-    r = _lens_git(root, "--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree", commit, "--",
+-                  *_LENS_SPEC_CODE_DIRS, vault_rel.rstrip("/"), quote=True, timeout=min(20.0, rem))
+-    if r is None or r.returncode != 0:
++    try:
++        r = _sp.run(["git", "-C", str(root), "cat-file", "--batch-check"],
++                    input="".join(f"{commit}:{x}\n" for x in q).encode("utf-8", "surrogateescape"),
++                    capture_output=True, timeout=min(20.0, rem), check=False)
++    except (OSError, ValueError, _sp.TimeoutExpired):
+         return None
+-    idx = {}
+-    for rec in r.stdout.split("\0"):
+-        meta, tab, path = rec.partition("\t")
+-        parts = meta.split()
+-        if tab and len(parts) == 3 and parts[1] == "blob" and parts[0] in ("100644", "100755"):
+-            idx[path] = parts[0]
+-    return idx
++    if r.returncode != 0:
++        return None
++    heads = r.stdout.split(b"\n")
++    ok_line = re.compile(rb"[0-9a-f]{40}(?:[0-9a-f]{24})? blob [0-9]+")
++    blobs = [x for i, x in enumerate(q) if i < len(heads) and ok_line.fullmatch(heads[i])]
++    present = set()
++    for i in range(0, len(blobs), 200):   # 一批最多 200 個路徑參數,不碰命令列長度上限
++        rem = deadline - _time.monotonic()
++        if rem < 1:
++            return None
++        r2 = _lens_git(root, "--literal-pathspecs", "ls-tree", "-z", "--full-tree", commit, "--", *blobs[i:i + 200],
++                       quote=True, timeout=min(20.0, rem))
++        if r2 is None or r2.returncode != 0:
++            return None
++        for rec in r2.stdout.split("\0"):
++            meta, tab, path = rec.partition("\t")
++            parts = meta.split()
++            if tab and len(parts) == 3 and parts[1] == "blob" and parts[0] in ("100644", "100755"):
++                present.add(_ud.normalize("NFC", path))
++    return present
++
++
++def _lens_spec_landing_items(plan_text):
++    """計劃 lands_in 的每一項(去空白、去空項)。"""
++    fm_lines, _b = split_frontmatter(plan_text)
++    fields = parse_frontmatter(fm_lines)[0] if fm_lines is not None else {}
++    return [str(x).strip() for x in as_list(fields.get("lands_in")) if str(x).strip()]
++
++
++def _lens_spec_code_cands(text):
++    """計劃提到的程式檔候選(照出現順序、去重、不含 .md 與 NUL;兩條正規式共用,_lens_spec_code_files 與提交寫法的候選清單都用這份)。"""
++    out = {}
++    for m in list(_LENS_SPEC_CODE_RE.findall(text)) + _LENS_SPEC_CODE_BT_RE.findall(text):
++        cand = m.rstrip(".,;:)」』】")
++        if not cand.endswith(".md") and "\0" not in cand:
++            out.setdefault(cand, None)
++    return list(out)
++
++
++def _lens_spec_commit_cands(vault_rel, text):
++    """提交寫法要問「提交裡有沒有」的全部候選:程式檔候選、連結節點與落點(節點名不合字元集的不問,一律只計數)。"""
++    nodes = [m.strip() for m in _LENS_SPEC_LINK_RE.findall(text)] + _lens_spec_landing_items(text)
++    return _lens_spec_code_cands(text) + [f"{vault_rel}{n}.md" for n in nodes if _LENS_SPEC_NODE_NAME_RE.fullmatch(n)]
+ 
+ 
+ def _nodehome_landing_sizes(root, vault_rel, plan_text, commit=None, cidx=None, deadline=float("inf")):
+     """[S22] 計劃 lands_in 每一篇的現況(給設計審的審查員看:落點那篇已經多大、該不該另開一篇)。回 (要印的行, 有沒有算到一半)
+     (沒寫落點回 ([], False))。
+     commit:設計審的提交寫法傳完整編號——會談目錄沒有的落點,只在那個提交裡有、名字合嚴格字元集才列名,
+     名字不合只計數,兩邊都沒有只印筆數(Projects/派工鏡頭可指定目標repo_計劃 做法 6);工作樹寫法照舊印「還不存在」。
+-    cidx:_spec_commit_index 的結果(提交裡有沒有在記憶體查,不逐篇跑 git;None 表示沒查到,只在提交裡的不列也不數)。
+-    deadline:跟程式檔候選、連結節點、impact 共用的時間預算,過了就停、回「算到一半」。"""
++    cidx:_spec_commit_present 的結果(提交裡有沒有的集合;None 表示沒查到,只在提交裡的不列也不數)。
++    deadline:跟程式檔候選、連結節點、impact 共用的時間預算,過了就停、回「算到一半」。
++    名字不合節點名字元集的一律只計數、不印名字也不讀(兩種寫法都是;代碼審 code-派工鏡頭可指定目標repo r2 資安2);
++    只有標題、沒有任何一項(預算一開始就用完)時不印標題(r2 正確性1)。"""
+     import time as _time
+-    fm_lines, _b = split_frontmatter(plan_text)
+-    fields = parse_frontmatter(fm_lines)[0] if fm_lines is not None else {}
+-    items = [str(x).strip() for x in as_list(fields.get("lands_in")) if str(x).strip()]
++    items = _lens_spec_landing_items(plan_text)
+     if not items:
+         return [], False
+     out = ["落點現況(計劃的 lands_in;判斷該寫進既有那篇,還是另開一篇):"]
+     n_bad, n_gone, truncated = 0, 0, False
+     for it in items:
+         if _time.monotonic() > deadline:
+             truncated = True
+             break
+-        name_ok = bool(_LENS_SPEC_NODE_NAME_RE.fullmatch(it))
++        if not _LENS_SPEC_NODE_NAME_RE.fullmatch(it):
++            n_bad += 1
++            continue
+         # 寫法先驗、路徑不准出圖譜:原本沒驗就拼路徑讀檔,../ 或捷徑檔能讀到圖譜外面的檔(代碼審 r1 資安席)
+         if _lands_in_bad([it]):
+-            if commit and not name_ok:
+-                n_bad += 1
+-                continue
+             out.append(f"  - {it}:寫法看不懂(要寫 Systems/<名>),沒去讀")
+             continue
+         p = _vault_node_path(root, vault_rel, it)
+         if p is None:
+             out.append(f"  - {it}:指到圖譜外面(捷徑檔),沒去讀")
+             continue
+         if not p.is_file():
+-            kind = _nodehome_landing_missing(commit, cidx, f"{vault_rel}{it}.md", name_ok)
++            kind = _nodehome_landing_missing(commit, cidx, f"{vault_rel}{it}.md")
+             n_gone += kind == "gone"
+-            n_bad += kind == "bad"
+             if kind in ("new", "only"):
+                 out.append(f"  - {it}:" + ("還不存在(要新開)" if kind == "new" else "只在那個提交裡,會談目錄還沒有這篇"))
+             continue
+         out.append(_nodehome_landing_existing(root, it, p))
+     if n_bad:
+-        out.append(f"  另有 {n_bad} 篇落點只在那個提交裡、名字含不收的字元,沒列名")
++        out.append(f"  另有 {n_bad} 篇落點的節點名含不收的字元,沒列名也沒讀")
+     if n_gone:
+         out.append(f"  {n_gone} 個落點在會談目錄與凍結提交裡都找不到(可能是要新開的節點或錯字)")
+-    return out, truncated
++    return (out if len(out) > 1 else []), truncated
+ 
+ 
+-def _nodehome_landing_missing(commit, cidx, rel, name_ok):
+-    """會談目錄沒有的落點歸哪一類:工作樹寫法 new(要新開);提交寫法看 cidx——不在 gone、在而且名字合字元集 only、名字不合 bad;
++def _nodehome_landing_missing(commit, cidx, rel):
++    """會談目錄沒有的落點歸哪一類(名字已先驗過字元集):工作樹寫法 new(要新開);提交寫法看 cidx——不在 gone、在 only(比之前先 NFC);
+     cidx 是 None(沒查到,呼叫端會印「算到一半」)回 None、不列也不數。"""
++    import unicodedata as _ud
+     if not commit:
+         return "new"
+     if cidx is None:
+         return None
+-    if rel not in cidx:
+-        return "gone"
+-    return "only" if name_ok else "bad"
++    return "only" if _ud.normalize("NFC", rel) in cidx else "gone"
+ 
+ 
+ def _nodehome_landing_existing(root, it, p):
+     """落點那篇已存在時要印的那一行(掛幾份計劃、幾行 KEY、幾條合約、管幾支檔、有沒有寫負責範圍);讀不到印「讀不到」。"""
+     try:
+         t = p.read_text(encoding="utf-8-sig", errors="replace")
+     except OSError:
+         return f"  - {it}:讀不到"
+     n = _nodehome_parse_note(t)
+     fl, _bd = split_frontmatter(t)
+@@ -49401,124 +49497,127 @@ def _nodehome_landing_existing(root, it, p):
+     summ = f2.get("summary") if isinstance(f2.get("summary"), str) else ""
+     keys = sum(1 for l in summ.splitlines() if l.strip().startswith("KEY:") and l.strip() != "KEY:")
+     contracts = len(_lens_contract_lines(summ, cap=10 ** 6))   # 同派工鏡頭的合約行判法,不另寫一條(代碼審 r1 架構席)
+     files = len([a for a in n["about"] if (Path(root) / a).is_file()])
+     return (f"  - {it}:已存在;掛 {plans} 份計劃、{keys} 行 KEY、{contracts} 條合約、管 {files} 支檔、"
+             + ("有寫負責範圍" if _nodehome_resp_ok(n["resp"]) else "沒寫負責範圍"))
+ 
+ 
+ def _lens_spec_notes(rd, vault_rel, scan_truncated, n_out, only_files, only_nodes, n_bad, n_gone):
+     """設計審附加段開頭的說明行:回 (接在標頭後的來源行, 其他說明行)。兩種寫法都印「算到一半」與「連結指到圖譜外」;
+-    提交寫法另印來源行(路徑過節點名同一套嚴格字元集才印——代碼審 code-派工鏡頭可指定目標repo r1 資安3:計劃檔名是作者寫的自由文字)、
+-    只在提交裡的檔與節點、名字不合與兩邊都找不到的筆數。"""
++    兩種寫法都印「連結的節點名含不收的字元」的筆數;提交寫法另印來源行(路徑過 _lens_spec_path_showable 才印——代碼審 code-派工鏡頭可指定目標repo
++    r1 資安3:計劃檔名是作者寫的自由文字;r2 邊界4:不套節點名的 80 字上限)、只在提交裡的檔與節點、兩邊都找不到的筆數。"""
+     full, pre, extra = rd["commit"], [], []
+     if scan_truncated:
+         extra.append("程式檔、連結節點與落點只算到一半(超過時間預算),沒列到的不代表不存在")
+     if n_out:
+         extra.append(f"{n_out} 個連結寫法不合或指到圖譜外面,沒去讀")
++    if n_bad:
++        extra.append(f"另有 {n_bad} 篇連結的節點名含不收的字元,沒列名也沒讀")
+     if not full:
+         return pre, extra
+-    shown_rel = f" {rd['rel']}" if _LENS_SPEC_NODE_NAME_RE.fullmatch(rd["rel"]) else "(路徑含不收的字元)"
++    shown_rel = f" {rd['rel']}" if _lens_spec_path_showable(rd["rel"]) else "(路徑含不收的字元)"
+     pre += [f"計劃來源:提交 {full[:12]} 的{shown_rel}(blob {rd['blob'][:12]})", "節點內容是會談目錄的版本(提交裡改過的版本不附)"]
+     if only_files:
+         extra.append(f"只在提交 {full[:12]} 裡、會談目錄沒有,沒算牽連:{', '.join(only_files)}")
+     extra += [f"- {vault_rel}{n}.md [計劃連結]:只在那個提交裡,會談目錄還沒有這篇" for n in only_nodes]
+-    if n_bad:
+-        extra.append(f"另有 {n_bad} 篇只在那個提交裡的節點名含不收的字元,沒列名")
+     if n_gone:
+         extra.append(f"{n_gone} 個連結在會談目錄與凍結提交裡都找不到(可能是還沒提交的新節點或錯字)")
+     return pre, extra
+ 
+ 
+ def _lens_spec_code_files(root, text, commit, cidx=None, deadline=float("inf")):
+     """計劃提到的程式檔:會談目錄 is_file() 的進 code_files(最多 5 個,照跑 impact);提交寫法另收「會談目錄沒有、只在那個提交裡有」的,
+-    在 cidx(一次 ls-tree 的結果)裡查、不逐檔跑 git,最多 5 個,不跑 impact(做法 5)。含 NUL 的候選直接略過。
+-    回 (code_files, only_in_commit, 有沒有算到一半)。"""
++    在 cidx(_spec_commit_present 的集合)裡查、不逐檔跑 git,比之前先 NFC、列的是 NFC 名,最多 5 個,不跑 impact(做法 5)。
++    含 NUL 的候選直接略過。回 (code_files, only_in_commit, 有沒有算到一半)。"""
+     import time as _time
+-    code_files, seen, only, truncated = [], set(), [], False
++    import unicodedata as _ud
++    code_files, only, truncated = [], [], False
+     root_r = root.resolve()
+-    for m in list(_LENS_SPEC_CODE_RE.findall(text)) + _LENS_SPEC_CODE_BT_RE.findall(text):
++    for cand in _lens_spec_code_cands(text):
+         if _time.monotonic() > deadline:
+             truncated = True
+             break
+-        cand = m.rstrip(".,;:)」』】")
+-        if cand in seen or cand.endswith(".md") or "\0" in cand:
+-            continue
+-        seen.add(cand)
+         p = root / cand
+         try:   # 外家 r1 M3:scripts/../../x 這種穿越不收
+             inside = p.resolve().relative_to(root_r) is not None
+         except (ValueError, OSError):
+             inside = False
+         if inside and p.is_file():
+             code_files.append(cand)
+-        elif commit and cidx is not None and len(only) < _LENS_SPEC_MAX_FILES and cand in cidx:
+-            only.append(cand)
++        elif commit and cidx is not None and len(only) < _LENS_SPEC_MAX_FILES and _ud.normalize("NFC", cand) in cidx:
++            only.append(_ud.normalize("NFC", cand))
+         if len(code_files) >= _LENS_SPEC_MAX_FILES:
+             break
+     return code_files, only, truncated
+ 
+ 
+ def _lens_spec_linked(root, vault_rel, text, commit, cidx=None, deadline=float("inf")):
+     """計劃直接連結的 Systems/Issues 節點分三種(做法 6):會談目錄有(照附內容)、只在那個提交裡有且名字合嚴格字元集(只列名)、
+-    其餘只計數。工作樹寫法只認會談目錄有的。路徑檢查跟落點共用 _vault_node_path(寫法不正規或解析後出了圖譜的不讀、只計數)。
+-    提交裡有沒有在 cidx 裡查(None=沒查到,只在提交裡的不列也不數)。
++    其餘只計數。工作樹寫法只認會談目錄有的。名字不合節點名字元集的兩種寫法都先只計數(不讀、不列名;代碼審 code-派工鏡頭可指定目標repo
++    r2 資安2:會談目錄有的節點原本不驗名字,檔名裡的換行變成派工詞框內的一行);路徑檢查跟落點共用 _vault_node_path。
++    提交裡有沒有在 cidx 裡查(比之前先 NFC;None=沒查到,只在提交裡的不列也不數)。
+     回 (會談目錄有的, 只在提交裡的, 名字不合的篇數, 兩邊都沒有的筆數, 指到圖譜外的筆數, 有沒有算到一半)。"""
+     import time as _time
++    import unicodedata as _ud
+     linked, only, n_bad, n_gone, n_out, seen, truncated = [], [], 0, 0, 0, set(), False
+     for m in _LENS_SPEC_LINK_RE.findall(text):
+         if _time.monotonic() > deadline:
+             truncated = True
+             break
+         node = m.strip()
+         if node in seen:
+             continue
+         seen.add(node)
++        if not _LENS_SPEC_NODE_NAME_RE.fullmatch(node):
++            n_bad += 1
++            continue
+         p = _vault_node_path(root, vault_rel, node)
+         if p is None:
+             n_out += 1
+         elif p.is_file():
+             linked.append(node)
+         elif not commit or cidx is None:
+             continue
+-        elif f"{vault_rel}{node}.md" not in cidx:
++        elif _ud.normalize("NFC", f"{vault_rel}{node}.md") not in cidx:
+             n_gone += 1
+-        elif _LENS_SPEC_NODE_NAME_RE.fullmatch(node):
+-            only.append(node)
+         else:
+-            n_bad += 1
++            only.append(_ud.normalize("NFC", node))
+     return linked, only, n_bad, n_gone, n_out, truncated
+ 
+ 
+ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines=400, read=None):
+     """設計審的派工鏡頭(2026-09-05 第二輪審視六修 d2):設計審沒有 diff 範圍,改從計劃筆記本身算——
+     ①計劃提到的程式檔(存在的,最多 5 個)各跑一次 impact 取固定席節點;②計劊直接 [[連結]] 的 Systems/Issues 節點。
+     計劃有兩種寫法(Projects/派工鏡頭可指定目標repo_計劃):工作樹路徑(從工作樹讀),或 <完整提交編號>:<計劃路徑>
+     (lumos spec-freeze 印的那行;在會談 repo 從物件庫讀那個提交裡的計劃,程式檔與節點照會談目錄判)。讀法收斂在 _dispatch_lens_read_spec;
+     read:外層已經讀過就傳進來(同一份計劃只讀一次)。不快取(計劃常改)。手貼那條路實測 209 份派工詞只有 14 份有貼,所以機器來。"""
+     import json as _json
+     import time as _time
+     _t0 = _time.monotonic()
+     rd = read if read is not None else _dispatch_lens_read_spec(Path(repo) if repo else Path.cwd(), spec_path)
+     if rd.get("fail"):
+         print(rd["msg"], file=sys.stderr)
+         return _dispatch_lens_fail(as_json, rd["fail"], rd["rc"], {"spec_source": rd["spec_source"]})
+     root, text, vault_rel, full = rd["root"], rd["text"], rd["vault_rel"], rd["commit"]
+-    # 程式檔候選、連結節點、落點與 impact 共用同一個時間預算(代碼審 code-派工鏡頭可指定目標repo r1 G3);
+-    # 提交寫法「提交裡有沒有」一次 ls-tree 列出來在記憶體查,不逐筆跑 git
++    # 程式檔候選、連結節點、落點與 impact 共用同一個時間預算(代碼審 code-派工鏡頭可指定目標repo r1 G3);便宜的(候選、連結、落點)先算,
++    # 最貴的 impact 最後用剩的(r2 正確性1:impact 排前面時會把預算吃光,落點只剩空標題)。
++    # 提交寫法「提交裡有沒有」只查候選:一次 cat-file --batch-check(r2 併發2:原本 ls-tree -r 列整棵樹)
+     deadline = _t0 + _LENS_SPEC_BUDGET
+-    cidx = _spec_commit_index(root, full, vault_rel, deadline) if full else None
++    cidx = _spec_commit_present(root, full, _lens_spec_commit_cands(vault_rel, text), deadline) if full else None
+     # ① 計劃提到的程式檔(存在照會談目錄判,跟 impact 一致)
+     code_files, only_files, tr_code = _lens_spec_code_files(root, text, full, cidx, deadline)
+     # ② 計劃直接連結的節點
+     linked, only_nodes, n_bad_nodes, n_gone_nodes, n_out_nodes, tr_link = _lens_spec_linked(root, vault_rel, text, full, cidx, deadline)
+-    # ③ impact 取固定席(有預算)
++    # ③ 落點每一篇現在多大 [S22]
++    landing, tr_land = _nodehome_landing_sizes(root, vault_rel, text, commit=full, cidx=cidx, deadline=deadline)
++    # ④ impact 取固定席(用剩的預算)
+     pinned = {}
+     skipped_files, too_generic = [], []
+     for f in code_files:
+         if _time.monotonic() > deadline:
+             skipped_files.append(f); continue
+         remain = deadline - _time.monotonic()
+         try:   # 外家 r1 M1:預算不能只在呼叫前看——單次 impact 也可能 31 秒;子行程帶剩餘秒數 timeout
+             import subprocess as _sp
+             rr = _sp.run([sys.executable, str(Path(__file__).resolve()), "impact", "--file", f, "--repo", str(root), "--json"],
+                          capture_output=True, text=True, timeout=max(1.0, remain))
+@@ -49546,21 +49645,20 @@ def cmd_dispatch_lens_spec(spec_path, repo=None, as_json=False, cap=8, max_lines
+     def _rank(v):
+         # 事故 → 家 → 帶合約 → 直接相依 → 其餘(推筆記認家 [S6]);
+         # 家排前面是因為後面只有前幾篇會貼內容,排到後面等於只列個名字。
+         if v.get("kind") == _LENS_KIND["incident"]:
+             return 0
+         if v.get("kind") == _LENS_KIND["home"]:
+             return 1
+         return 2 if v.get("contract") else 3 if v.get("kind") == _LENS_KIND["direct"] else 4
+     listed = [{"node": n, **{"kind": "計劃連結", "contract": None, "files": []}, **pinned.get(n, {}), "kind": "計劃連結" + (f"+{pinned[n]['kind']}" if n in pinned and pinned[n].get("kind") else "")} for n in linked]   # 相容:不用 dict |(那是 3.9+,寫這行時專案宣告 ≥3.8;2026-09-06 宣告訂正為 ≥3.9,此寫法保留可用)
+     listed += [{"node": n, **v} for n, v in sorted(pinned.items(), key=lambda kv: _rank(kv[1])) if n not in linked]
+-    landing, tr_land = _nodehome_landing_sizes(root, vault_rel, text, commit=full, cidx=cidx, deadline=deadline)   # [S22] 落點每一篇現在多大
+     scan_truncated = bool(tr_code or tr_link or tr_land or (full and cidx is None))
+     bound_status, _bidx = "ok", None
+     try:
+         _bidx = _platform_test_index(root)
+     except Exception:
+         bound_status = "skipped-no-config"
+     # 提交寫法:開頭印來源(席位對得上 spec-freeze 那行),只在提交裡的檔與節點另列,名字只列過嚴格字元集的
+     pre_src, extra = _lens_spec_notes(rd, vault_rel, scan_truncated, n_out_nodes, only_files, only_nodes, n_bad_nodes, n_gone_nodes)
+     pre = [_LENS_SPEC_HEADER_COMMIT if full else _LENS_SPEC_HEADER, *pre_src]
+     lines = []
+@@ -49643,22 +49741,24 @@ def _dispatch_lens_spec_arch_text(root, vault_rel, text):
+ # ★這是 lumos 第一個寫 git 物件的子命令,而且刻意落懸空物件★,跟 _replay_git_blob「只引用已被 tree 引用的物件、不用 hash-object -w
+ # 落兩週會被 gc 的懸空 blob」取向相反:replay 的凍結要長期回放,設計迴圈只活一晚;要長期回放的東西不用 spec-freeze。
+ # 不動任何 ref、真的 index 與分支;工作樹裡其他沒提交的改動不進這個提交(tree 只比 HEAD 多這份計劃)。
+ # ---------------------------------------------------------------------------
+ # 每個 git 呼叫都帶:指向暫存 index 時 read-tree 與 update-index 會跑 post-index-change 掛鉤,core.fsmonitor 也會執行外部程式
+ _SPEC_FREEZE_GIT_C = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
+ _SPEC_FREEZE_ENV = {"GIT_AUTHOR_NAME": "lumos spec-freeze", "GIT_AUTHOR_EMAIL": "spec-freeze@lumos.invalid",
+                     "GIT_COMMITTER_NAME": "lumos spec-freeze", "GIT_COMMITTER_EMAIL": "spec-freeze@lumos.invalid"}
+ # spec-freeze 印得出的失敗代碼(--json 的 freeze_fail;代碼先登記才印得出去,同 dispatch-lens 的 _LENS_FAIL_CODES——
+ # 代碼審 code-派工鏡頭可指定目標repo r1 架構5;t_spec_freeze_fail_codes_registered 守)
+-_SPEC_FREEZE_FAIL_CODES = frozenset({"not_git", "no_head", "spec_outside_repo", "spec_missing", "spec_too_large",
++# spec_rev_missing 是提交寫法(<完整提交編號>:<路徑>)的編號解不到(代碼審 code-派工鏡頭可指定目標repo r2 G3)
++_SPEC_FREEZE_FAIL_CODES = frozenset({"not_git", "no_head", "spec_rev_missing", "spec_outside_repo", "spec_missing", "spec_too_large",
+                                      "out_outside_repo", "out_conflict", "git_failed"})
++_SPEC_FREEZE_OUT_DIR = ("governance", "review-reports")   # --out 只收執行所在 repo 的這個資料夾底下
+ 
+ 
+ def _spec_freeze_fail(as_json, code, msg):
+     """spec-freeze 擋下:stderr 一行說明,--json 另印 {"freeze_fail": 代碼};rc 一律 2。沒登記的代碼丟 ValueError。"""
+     if code not in _SPEC_FREEZE_FAIL_CODES:
+         raise ValueError(f"spec-freeze 失敗代碼沒登記:{code}")
+     print(f"spec-freeze:{msg}", file=sys.stderr)
+     if as_json:
+         import json as _json
+         print(_json.dumps({"freeze_fail": code}, ensure_ascii=False))
+@@ -49687,58 +49787,47 @@ def _spec_freeze_rel(top, prefix, plan):
+     前綴對不上回 None。"""
+     if os.path.isabs(plan):
+         return plan[len(top) + 1:] if plan.startswith(top + "/") else None
+     return prefix + plan
+ 
+ 
+ def _spec_freeze_lstat(root, rel):
+     """從 repo 根往下逐段 lstat:任何一段是符號連結、最終不是一般檔、resolve() 後不在 repo 根底下都回 None;否則回最終檔的 lstat。
+     不用 Path.is_file():它與 hash-object 都跟著符號連結走,會把 repo 外的檔凍進物件庫與快照。"""
+     import stat as _st
+-    cur, st = Path(root), None
++    ok, st = _repo_walk_lstat(root, rel.split("/"))   # 上層逐段不准是符號連結(跟 --out、圖譜資料夾共用)
++    if not ok or st is None or not _st.S_ISREG(st.st_mode):   # lstat 的結果:最後一段是符號連結就不是 S_ISREG
++        return None
+     try:
+-        for sg in rel.split("/"):
+-            cur = cur / sg
+-            st = os.lstat(cur)
+-            if _st.S_ISLNK(st.st_mode):
+-                return None
+-        if st is None or not _st.S_ISREG(st.st_mode):
+-            return None
+-        cur.resolve().relative_to(Path(root).resolve())
++        (Path(root) / rel).resolve().relative_to(Path(root).resolve())
+     except (OSError, ValueError):
+         return None
+     return st
+ 
+ 
+ def _spec_freeze_out_path(root, cwd, out):
+-    """--out 的位置(代碼審 code-派工鏡頭可指定目標repo r1 資安2:原本寫得到任何位置——自動建多層目錄、寫進 .git、跟著符號連結上層走)。
+-    照字面接成絕對路徑、去掉 . 與 ..(不跟符號連結),找出路徑裡解析後等於 repo 根的那一段;它底下到 --out 為止的每一段上層,
+-    已存在的都要是資料夾、不准是符號連結,也不准進 .git(大小寫不拘)。回要寫的路徑,不合回 None。"""
+-    import stat as _st
++    """--out 的位置。照字面接成絕對路徑、去掉 . 與 ..(不跟符號連結),找出路徑裡解析後等於 repo 根(執行所在的 repo)的那一段;
++    它底下要以 governance/review-reports/ 開頭、底下至少還有一段,不准有 .git 段(大小寫不拘),每一段上層已存在的都要是資料夾、
++    不准是符號連結(逐段檢查跟計劃路徑共用 _repo_walk_lstat)。回要寫的路徑,不合回 None。
++    代碼審 code-派工鏡頭可指定目標repo r1 資安2:原本寫得到任何位置(自動建多層目錄、寫進 .git、跟著符號連結上層走);
++    r2 資安3:repo 裡任何還不存在的位置都建得出來(.lumos/、.claude/settings.json),改成只收卷證資料夾。"""
+     raw = out if os.path.isabs(out) else os.path.join(str(cwd), out)
+     parts = os.path.normpath(raw).split(os.sep)
+     real_root = os.path.realpath(str(root))
+     k = next((i for i in range(1, len(parts) + 1) if os.path.realpath(os.sep.join(parts[:i]) or os.sep) == real_root), None)
+     segs = parts[k:] if k is not None else []
+-    if not segs or any(sg.lower() == ".git" for sg in segs):
++    if (len(segs) <= len(_SPEC_FREEZE_OUT_DIR) or tuple(segs[:len(_SPEC_FREEZE_OUT_DIR)]) != _SPEC_FREEZE_OUT_DIR
++            or any(sg.lower() == ".git" for sg in segs)):
+         return None
+-    cur = os.sep.join(parts[:k])
+-    for i, sg in enumerate(segs):
+-        cur = os.path.join(cur, sg)
+-        try:
+-            st = os.lstat(cur)
+-        except FileNotFoundError:
+-            break
+-        except OSError:
+-            return None
+-        if i < len(segs) - 1 and (_st.S_ISLNK(st.st_mode) or not _st.S_ISDIR(st.st_mode)):
+-            return None   # --out 本身是符號連結或不是一般檔,交給 _spec_freeze_out_ok 回 out_conflict(照原本)
++    ok, _st_last = _repo_walk_lstat(os.sep.join(parts[:k]), segs)
++    if not ok:
++        return None   # --out 本身是符號連結或不是一般檔,交給 _spec_freeze_out_ok 回 out_conflict(照原本)
+     return Path(os.sep.join(parts))
+ 
+ 
+ def _spec_freeze_out_ok(outp, data):
+     """--out 檢查(做法 9 第 5 步):不存在可寫;已存在而且是一般檔、位元組與計劃相同視為重建同一份;其他(內容不同、不是一般檔、
+     符號連結、上層不是資料夾)都不行。"""
+     import stat as _st
+     try:
+         ost = os.lstat(outp)
+     except FileNotFoundError:
+@@ -49771,40 +49860,105 @@ def _spec_freeze_build(root, head, rel, mode):
+         blob = g("hash-object", "-w", "--no-filters", "--", rel)
+         if not blob or g("update-index", "--add", "--cacheinfo", f"{mode},{blob},{rel}") is None:
+             return None
+         tree = g("write-tree")
+         commit = g("commit-tree", tree, "-p", head, "--no-gpg-sign", "-m", "lumos spec-freeze") if tree else None
+         return (commit, blob) if commit and _LENS_SHA_RE.match(commit) else None
+     finally:
+         _sh.rmtree(tmpd, ignore_errors=True)
+ 
+ 
++def _spec_freeze_check_out(root, cwd, out, data, fail):
++    """--out 的兩道檢查(位置 out_outside_repo、內容 out_conflict)。回 (要寫的路徑, None) 或 (None, fail 的 rc)。out 是 None 回 (None, None)。"""
++    if out is None:
++        return None, None
++    outp = _spec_freeze_out_path(root, cwd, str(out))
++    if outp is None:
++        return None, fail("out_outside_repo", f"{out} 要在這個 repo(執行 spec-freeze 的那個)的 governance/review-reports/ 底下,"
++                          "路徑上不能有符號連結或 .git(例如 governance/review-reports/<編號>/rN-snapshot.md;絕對路徑要以 repo 根開頭,對不上時改用相對路徑)")
++    if not _spec_freeze_out_ok(outp, data):
++        return None, fail("out_conflict", f"{out} 已存在而且內容跟要凍的計劃不同(或不是一般檔);要凍新的一輪就換新的 --out,不覆寫已凍的快照")
++    return outp, None
++
++
++def _spec_freeze_finish(root, outp, out, commit, blob, rel, data, as_json, fail):
++    """寫 --out(有給才寫)、全域 lumos 不同支就警告、印那一行。"""
++    import json as _json
++    if outp is not None:
++        try:   # 原子寫入走 _write_lf 的位元組核心(任何例外都刪暫存檔);上層資料夾在 repo 裡、已驗過沒有符號連結才建
++            outp.parent.mkdir(parents=True, exist_ok=True)
++            outp.parent.resolve().relative_to(Path(root).resolve())
++            _write_bytes_atomic(outp, data)
++        except (OSError, ValueError):
++            return fail("out_conflict", f"{out} 寫不進去")
++    found_hook, hook_lumos = _spec_freeze_hook_lumos()
++    if found_hook and (hook_lumos is None or Path(hook_lumos).resolve() != Path(__file__).resolve()):
++        print(f"提醒:這支 lumos 不是掛鉤會叫的那支({hook_lumos or '找不到掛鉤會叫的 lumos'}),"
++              "那支若是舊版,貼上的提交寫法會被當成工作樹路徑、靜默不附", file=sys.stderr)
++    line = f"LUMOS-SPEC: {commit}:{rel}"
++    print(f"快照寫到 {outp}" if outp is not None else "沒給 --out:只建提交、印那一行,沒寫快照", file=sys.stderr)
++    if as_json:
++        print(_json.dumps({"line": line, "spec_commit": commit, "spec_blob": blob, "spec_path": rel,
++                           "out": str(outp) if outp is not None else None}, ensure_ascii=False))
++    else:
++        print(line)
++    return 0
++
++
++def _spec_freeze_from_commit(root, cwd, value, out, as_json, fail):
++    """提交寫法 `<完整提交編號>:<路徑>`(代碼審 code-派工鏡頭可指定目標repo r2 G3):在執行所在的 repo(會談目錄)從共用物件庫讀那個提交裡的計劃,
++    不進計劃所在的工作樹、不建新提交;寫 --out、印同一行。檢查與 dispatch-lens 的提交寫法同一套:編號只收 40/64 碼而且解出等於輸入
++    (spec_rev_missing)→ 路徑字串(spec_outside_repo)→ NFC(spec_missing)→ 一般檔與大小、讀內容(spec_missing、spec_too_large)→ --out。"""
++    import unicodedata as _ud
++    head, _c, rel = str(value).partition(":")
++    low = head.lower()
++    if len(low) not in (40, 64) or _lens_full_sha(root, low) != low:
++        return fail("spec_rev_missing", "提交編號要寫完整的 40 或 64 碼,而且要在這個 repo 的物件庫裡找得到")
++    if _spec_commit_path_bad(rel):
++        return fail("spec_outside_repo", "提交寫法的路徑要在 docs/<名>-knowledge/ 底下、不含空白與 . .. 段")
++    if not _ud.is_normalized("NFC", rel):
++        return fail("spec_missing", "計劃路徑不是 NFC")
++    code, blob, data = _spec_commit_blob(root, low, rel, pre=_SPEC_FREEZE_GIT_C)
++    if code:
++        return fail(code, "那個提交裡沒有這份計劃、不是一般檔或讀不到" if code == "spec_missing" else f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
++    outp, rc = _spec_freeze_check_out(root, cwd, out, data, fail)
++    if rc is not None:
++        return rc
++    return _spec_freeze_finish(root, outp, out, low, blob, rel, data, as_json, fail)
++
++
+ def cmd_spec_freeze(plan, out, as_json=False):
+-    """lumos spec-freeze <計劃> --out <rN-snapshot.md>。檢查照編號做,同時違反回第一個(全部 rc 2,--json 印 {"freeze_fail": 代碼}):
++    """lumos spec-freeze <計劃> [--out <governance/review-reports/<編號>/rN-snapshot.md>]。兩種寫法:
++    - 路徑寫法(在計劃所在的工作樹跑):把工作樹上的計劃凍成不掛分支的提交;有給 --out 才寫快照(只收執行所在 repo 的
++      governance/review-reports/ 底下;計劃在別的工作樹時不帶 --out,不在那個工作樹留任何檔)。
++    - 提交寫法 `<完整提交編號>:<路徑>`(在會談目錄跑):從共用物件庫讀那個提交裡的計劃寫快照,不建新提交(_spec_freeze_from_commit)。
++    路徑寫法的檢查照編號做,同時違反回第一個(全部 rc 2,--json 印 {"freeze_fail": 代碼}):
+     ①形狀(not_git、no_head)②路徑字串(spec_outside_repo)③逐段 lstat(spec_missing)④大小(spec_too_large)
+     ⑤--out(位置 out_outside_repo、內容 out_conflict)⑥建提交與讀回(git_failed)。第 1–5 步都在建任何物件之前,拒絕時不建提交、不寫 --out。
+     代碼表見 _SPEC_FREEZE_FAIL_CODES。"""
+-    import json as _json
+     import stat as _st
+     import unicodedata as _ud
+     cwd = Path.cwd()
+ 
+     def fail(code, msg):
+         return _spec_freeze_fail(as_json, code, msg)
+ 
+     def g(*a):
+         r = _lens_git(cwd, *_SPEC_FREEZE_GIT_C, *a)
+         return r.stdout if r is not None and r.returncode == 0 else None
+     top = (g("rev-parse", "--show-toplevel") or "").strip()
+     if not top:
+         return fail("not_git", "目前目錄不在 git 專案裡")
+     root = Path(top)
++    chead, colon, _cpath = str(plan).partition(":")
++    if colon and _LENS_SPEC_COMMIT_RE.fullmatch(chead):   # 提交寫法:冒號前全是十六進位、至少 7 碼(同 dispatch-lens 的分界)
++        return _spec_freeze_from_commit(root, cwd, plan, out, as_json, fail)
+     head = (g("rev-parse", "--verify", "-q", "--end-of-options", "HEAD^{commit}") or "").strip()
+     if not _LENS_SHA_RE.match(head):
+         return fail("no_head", "這個 repo 還沒有提交(HEAD 解不到)")
+     prefix = g("rev-parse", "--show-prefix")
+     rel = _spec_freeze_rel(top, (prefix or "").rstrip("\n"), str(plan)) if prefix is not None else None
+     if rel is None or _spec_commit_path_bad(rel):
+         return fail("spec_outside_repo", "計劃要在 docs/<名>-knowledge/ 底下、路徑不含空白與 . .. 段"
+                     "(絕對路徑要以 repo 根開頭;macOS /tmp 對 /private/tmp 這類連結前綴對不上時改用相對路徑)")
+     st = _spec_freeze_lstat(root, rel) if _ud.is_normalized("NFC", rel) else None
+     if st is None:
+@@ -49812,50 +49966,31 @@ def cmd_spec_freeze(plan, out, as_json=False):
+     if st.st_size > _LENS_SPEC_MAX_BYTES:
+         return fail("spec_too_large", f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
+     try:
+         fd = os.open(root / rel, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+         with os.fdopen(fd, "rb") as fh:
+             data = fh.read(_LENS_SPEC_MAX_BYTES + 1)
+     except OSError:
+         return fail("spec_missing", "計劃讀不到")
+     if len(data) > _LENS_SPEC_MAX_BYTES:
+         return fail("spec_too_large", f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
+-    outp = _spec_freeze_out_path(root, cwd, str(out))
+-    if outp is None:
+-        return fail("out_outside_repo", f"{out} 不在這個 repo 裡、路徑上有符號連結或在 .git 底下;快照放 repo 裡"
+-                    "(例如 governance/review-reports/<編號>/rN-snapshot.md;絕對路徑要以 repo 根開頭,對不上時改用相對路徑)")
+-    if not _spec_freeze_out_ok(outp, data):
+-        return fail("out_conflict", f"{out} 已存在而且內容跟工作樹上的計劃不同(或不是一般檔);要凍新的一輪就換新的 --out,不覆寫已凍的快照")
++    outp, rc = _spec_freeze_check_out(root, cwd, out, data, fail)
++    if rc is not None:
++        return rc
+     built = _spec_freeze_build(root, head, rel, "100755" if st.st_mode & _st.S_IXUSR else "100644")
+     if built is None:
+         return fail("git_failed", "建提交時 git 失敗(可能已留下懸空物件,gc 會清)")
+     commit, blob = built
+     code, blob2, got = _spec_commit_blob(root, commit, rel, pre=_SPEC_FREEZE_GIT_C)   # 用 dispatch-lens 同一支讀法讀回
+     if code or blob2 != blob or got != data:
+         return fail("git_failed", "從剛建的提交讀回的計劃跟工作樹上的不同")
+-    try:   # 原子寫入走 _write_lf 的位元組核心(任何例外都刪暫存檔);上層資料夾在 repo 裡、已驗過沒有符號連結才建
+-        outp.parent.mkdir(parents=True, exist_ok=True)
+-        outp.parent.resolve().relative_to(Path(root).resolve())
+-        _write_bytes_atomic(outp, got)
+-    except (OSError, ValueError):
+-        return fail("out_conflict", f"{out} 寫不進去")
+-    found_hook, hook_lumos = _spec_freeze_hook_lumos()
+-    if found_hook and (hook_lumos is None or Path(hook_lumos).resolve() != Path(__file__).resolve()):
+-        print(f"提醒:這支 lumos 不是掛鉤會叫的那支({hook_lumos or '找不到掛鉤會叫的 lumos'}),"
+-              "那支若是舊版,貼上的提交寫法會被當成工作樹路徑、靜默不附", file=sys.stderr)
+-    line = f"LUMOS-SPEC: {commit}:{rel}"
+-    print(f"快照寫到 {outp}", file=sys.stderr)
+-    if as_json:
+-        print(_json.dumps({"line": line, "spec_commit": commit, "spec_blob": blob, "spec_path": rel, "out": str(outp)}, ensure_ascii=False))
+-    else:
+-        print(line)
+-    return 0
++    return _spec_freeze_finish(root, outp, out, commit, blob, rel, got, as_json, fail)
+ 
+ 
+ def _codeloop_git_head(repo_root):
+     """取 HEAD full sha。"""
+     import subprocess
+     r = subprocess.run(["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+     return r.stdout.strip()
+ 
+ 
+@@ -51569,21 +51704,21 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+             ok2, why2 = _dispositions_check_issue(repo_root, at_sha, str(ent.get("issue") or ""))
+             return None if ok2 else f"{qid} 待辦對不上:{why2}"
+         if st == "na":
+             return None if _dispositions_reason_ok(ent.get("reason")) else f"{qid} na 的理由太短"
+         return f"{qid} status {st!r} 不合法"
+ 
+     for _stk, rows in meta.items():
+         for row in rows:
+             if not row.get("applicable"):
+                 continue
+-            if _time.monotonic() > deadline:
++            if deadline is not None and _time.monotonic() > deadline:
+                 # 半途超時(r3 邊界席 B4):已經查出的違規不能丟——有問題就照擋、註明沒查完;一題都還沒查出問題才 fail-open
+                 out["over_budget"] = True
+                 if out["problems"]:
+                     out["problems"].append("(表態核對超過時間預算,後面的題沒查完;上面已查出的照擋)")
+                     out["blocked"] = True
+                 else:
+                     out["blocked"] = False
+                 return out
+             qid = row["id"]
+             try:
+@@ -52913,21 +53048,21 @@ HELP_WHEN = {
+     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
+     "lint-waive": "新增告警閘擋下來的那條是誤報?帶指紋和理由放行,會留痕被統計。--list 看放行過什麼。",
+     "rule-check": "自寫規則每條都有會翻紅的樣本嗎。沒樣本的規則可能是死的。",
+     "rule-gap": "逃逸帳標了該抓卻還沒寫的規則,列成待辦。",
+     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+     "stylelint-sarif": "把 stylelint 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
+     "dart-sarif": "把 dart analyze 的 JSON 輸出轉成 SARIF,接進 lint 適配器;讀不懂就失敗、不吐空結果。",
+     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
+     "python-path": "git 掛鉤用來挑直譯器:印一支 Python 3.14 以上的絕對路徑;有設 LUMOS_PYTHON 就只認它,不合格回 2 並說明。",
+     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
+-    "spec-freeze": "設計審派工前,在計劃所在的工作樹敲 `lumos spec-freeze <計劃> --out <rN-snapshot.md>`:把計劃凍成不掛分支的提交、寫出凍結快照,印一行 `LUMOS-SPEC: <完整提交編號>:<路徑>` 貼進派工詞(會談開在別的工作樹時,掛鉤從共用物件庫讀得到;只對 Claude 編排有效)。不動分支、ref 與 index;--out 已存在而且內容不同就拒絕。",
++    "spec-freeze": "設計審派工前凍結計劃:計劃在會談目錄時敲 `lumos spec-freeze <計劃> --out governance/review-reports/<編號>/rN-snapshot.md`;計劃在別的工作樹時,先在那裡敲 `lumos spec-freeze <計劃>`(不帶 --out,只建不掛分支的提交、印那一行),再回會談目錄敲 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md`。印的那行 `LUMOS-SPEC: <完整提交編號>:<路徑>` 貼進派工詞(只對 Claude 編排有效)。不動分支、ref 與 index;--out 只收執行所在 repo 的 governance/review-reports/ 底下,已存在而且內容不同就拒絕。",
+     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀,合約行原文附上、隱藏字元轉成看得見的寫法;base 不在主線→rc4 放行)。",
+     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
+     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
+     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
+     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
+     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
+@@ -53761,22 +53896,25 @@ def main():
+     p.add_argument("--repo", dest="lens_repo", help="repo 內任一路徑(會自己找 repo 根)")
+     p.add_argument("--json", dest="lens_json", action="store_true", help="JSON 輸出 {text,pinned,listed,omitted_nodes,omitted_files,mainline,cache_hit}")
+     p.add_argument("--no-cache", dest="lens_nocache", action="store_true", help="不讀不寫 20 分鐘快取")
+     p.add_argument("--deadline", dest="lens_deadline", type=float, default=None, metavar="秒",
+                    help="最多等幾秒:快取沒有就派一個脫離的行程去算,這邊等到時間就回 rc5 並讓那支算完(下一次同範圍直接命中)。hook 用")
+     p.add_argument("--role-cards", dest="lens_role_cards", action="store_true",
+                    help="代碼審正確性席用:依改到前端或後端附角色鏡頭卡(hook 看到派工詞有 LUMOS-ROLE-CARDS: on 才傳)")
+     p.add_argument("--arch-target", dest="lens_arch_target", action="store_true",
+                    help="架構對齊席用:改動檔落在 .lumos/config.json arch_targets 宣告範圍內時,附目標架構節點的 RULE 行(hook 看到 LUMOS-ARCH-TARGET: on 才傳)")
+     p = sub.add_parser("spec-freeze", help="設計審派工前:把計劃凍成不掛分支的提交並寫出凍結快照,印出要貼進派工詞的 LUMOS-SPEC: <完整提交編號>:<路徑>")
+-    p.add_argument("freeze_plan", help="計劃筆記路徑(相對目前目錄,或以 repo 根開頭的絕對路徑;要在 docs/<名>-knowledge/ 底下、不含空白)")
+-    p.add_argument("--out", dest="freeze_out", required=True, help="凍結快照寫到哪(rN-snapshot.md);已存在而且內容不同就拒絕,要凍新的一輪換新的檔名")
++    p.add_argument("freeze_plan", help="計劃筆記路徑(在計劃所在的工作樹跑;相對目前目錄,或以 repo 根開頭的絕對路徑;要在 docs/<名>-knowledge/ 底下、不含空白),"
++                   "或 <完整提交編號>:<路徑>(在會談目錄跑,從共用物件庫讀那個提交裡的計劃、不建新提交)")
++    p.add_argument("--out", dest="freeze_out", default=None,
++                   help="凍結快照寫到哪:只收執行所在 repo 的 governance/review-reports/ 底下(例:governance/review-reports/<編號>/rN-snapshot.md);"
++                        "已存在而且內容不同就拒絕,要凍新的一輪換新的檔名。計劃在別的工作樹時,在那裡不帶 --out(只建提交、印那一行),回會談目錄用提交寫法帶 --out")
+     p.add_argument("--json", dest="freeze_json", action="store_true", help="JSON:{line,spec_commit,spec_blob,spec_path,out};失敗印 {freeze_fail}")
+     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
+     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
+     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
+     p.add_argument("--diff", dest="impact_diff", help="diff range(如 main..HEAD):聚合各改動檔的 ranked impact 成受影響功能面 manifest(code-loop 審計鏡頭)")
+     p.add_argument("--from-json", dest="impact_from_json", default=None,
+                    help="吃一份已經算好的結果(搭 --sync-only;推送關卡一次推送只算一次)")
+     p.add_argument("--sync-only", action="store_true", dest="impact_sync_only",
+                    help="配 --sync-check:只印「該動卻沒動」的點名(hooks 用),不印受影響功能面")
+     p.add_argument("--sync-check", action="store_true", dest="impact_sync",

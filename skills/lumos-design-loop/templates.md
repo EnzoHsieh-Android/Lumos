@@ -35,9 +35,9 @@ LUMOS-SEAT: {loop}/{rN}/{席名}
 對新增段落要跟原文同等嚴格。」；後期輪加「越成熟的稿子，殘留的洞越傾向藏在
 工具指令引用、旗標、收尾動作這類不顯眼處。」}
 
-Spec 檔案：{工作副本路徑 /tmp/<id>-rN.md}
+Spec 檔案：{spec-freeze 寫出的 governance/review-reports/<id>/rN-snapshot.md（設計審派工前先 spec-freeze;席位材料、rN-snapshot、--reviewed 都用它產生的那份;派工單記 spec_commit）}
 對照的程式碼 repo：{repo 根}（{技術棧一句話；重點檔案 3-5 個}）
-圖譜鏡頭：原樣留一行 `LUMOS-SPEC: {計劃筆記路徑}`——派工那一刻 hook 會把「計劃提到的程式檔牽連的合約/事故節點」與「計劃直接連結的節點」附在尾端。附上的固定席逐條判：這份設計會不會破壞該節點宣稱的行為或合約？判「不影響」也寫一句為什麼。
+圖譜鏡頭：派工前凍結計劃——計劃在會談目錄時跑 `lumos spec-freeze {計劃筆記路徑} --out governance/review-reports/{id}/rN-snapshot.md`；計劃在別的工作樹時先在那裡跑 `lumos spec-freeze {計劃筆記路徑}`（不帶 --out，不在那裡留檔），再回會談目錄跑 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/{id}/rN-snapshot.md`（--out 只收執行所在 repo 的 governance/review-reports/ 底下）。把它印的那一行 `LUMOS-SPEC: <完整提交編號>:<路徑>` 原樣貼在這裡（不手寫提交編號；派工單 rN-dispatch.json 加記 `spec_commit`＝那一行的完整提交編號；提交編號寫法只對 Claude 編排有效）——派工那一刻 hook 會把「計劃提到的程式檔牽連的合約/事故節點」與「計劃直接連結的節點」附在尾端。附上的固定席逐條判：這份設計會不會破壞該節點宣稱的行為或合約？判「不影響」也寫一句為什麼。
 
 審查要求：
 1. 逐節讀完整份 spec，不要跳段。文件內部的每個交叉引用（指向本文件某節/某表的）
@@ -66,7 +66,7 @@ inline-code,漏了連存在性都驗不到）,不得用引句格式主張審材�
 ```
 
 > **light 檔用法(單席通才,M0 2026-07-21;M1包 機械化)**:light 路徑用本 §1 模板派**單一**審計員——{輪次語境}省略、審查鏡頭改「**無鏡頭通才**:全份逐節挑洞」。收斂=`loop status <id> --light --gate --spec ..`(**K=1 機械謂詞,不再人裁**;FAIL 分因 retryable/ratchet)見 SKILL〈light 檔〉。
-> **記帳模板預設帶雙 hash(M1包)**:`canary record ... --spec <計劃節點.md> --reviewed <派工時 sha256sum 快照> [--tier <t>]`——帶 --spec 問 gate 即聲明要驗,偷懶要主動刪旗標;下一動作/輪數/型別問 `lumos loop next`(settle loop 例外:認不得 settle,直接問 gate)。
+> **記帳模板預設帶雙 hash(M1包)**:`canary record ... --spec <計劃節點.md> --reviewed <sha256sum rN-snapshot.md> [--tier <t>]`——帶 --spec 問 gate 即聲明要驗,偷懶要主動刪旗標;下一動作/輪數/型別問 `lumos loop next`(settle loop 例外:認不得 settle,直接問 gate)。
 
 ## 2. Design-loop 辯方（**2026-09-30 起預設同門**：另開 opus 對話；要另一家視角時才派 Codex `codex exec --sandbox read-only`——取代 2026-07-18 S5 的「預設 Codex」；**路由制 2026-07-16 M1**：機械證實/多席一致者免辯方直接折入，僅**低共識** finding 才開庭各派一個，乾淨脈絡、不傳審計員報告全文）
 
@@ -339,10 +339,10 @@ LUMOS-SEAT: {loop}/{rN}/{席名}
 你是架構對齊審查員。你唯一的工作:判這份 diff(或設計)有沒有「跟這個專案既有的做法不一樣」。
 不找 bug(別的審查員管),不評風格好壞——只管「一不一致」。
 
-被審材料:{工作副本路徑}
+被審材料:{代碼迴圈:工作副本路徑;設計迴圈:spec-freeze 寫出的 governance/review-reports/<id>/rN-snapshot.md}
 同層最相似的既有檔(對照用,這些代表專案現在的寫法):{鄰居檔清單,pitfalls --diff 會吐}
 這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / swift-idioms / node-idioms / python-idioms / java-idioms / dart-idioms,依副檔名;.ts/.js 看 package.json 分前後端}
-圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..{head 完整提交編號}`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:留一行 `LUMOS-SPEC: <計劃.md>`,hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
+圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..{head 完整提交編號}`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:設計審派工前先 spec-freeze;席位材料、rN-snapshot、--reviewed 都用它產生的那份;派工單記 spec_commit(怎麼凍見 §1 圖譜鏡頭那一格),原樣貼它印的那一行 `LUMOS-SPEC: <完整提交編號>:<路徑>`(提交編號寫法只對 Claude 編排有效),hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
 LUMOS-ARCH-TARGET: on
 
 三問(設計審多第四問),逐問答、每問附對照的 file:line:
@@ -367,7 +367,7 @@ severity 照本席錨(最多 minor,除非引入第二種做法或跨層直呼)�
 - 段裡列到的檔:三問的「跟鄰居檔一樣嗎」改成「跟段裡的規則、跟範圍內其他新寫法一樣嗎」;段外的檔照舊比鄰居。兩組分開答,不把某節點的規則套到別組的檔。
 - 依賴方向兩頭都問:範圍內直接依賴範圍外、而規則禁止的;範圍外的檔繞過規則指定的入口(例:繞過聚合根)直接碰範圍內的內部。
 - 範圍內的既有舊檔只判這次新增或改到的行,不要求順手重構沒動的舊碼。
-- 違反一條規則=major,finding 必附一行「目標規則:「<規則原文 ≥10 字>」」(不用編號);範圍內的寫法跟範圍外鄰居不同,不算 finding。
+- 違反一條規則=major,finding 必附一行「目標規則:「<規則原文 ≥10 字>」」(不用編號;引段裡那條規則 ‹ › 之間的字,不含 ‹ › 本身,跳脫序列 `\uXXXX` 照印出來的字抄、不要自己還原;反斜線照原字印,所以規則原文裡也可能本來就寫著 `\uXXXX` 字樣,跟工具跳脫的分不出來時,開那篇節點筆記看原文再判);範圍內的寫法跟範圍外鄰居不同,不算 finding。段裡寫「規則沒附」的節點,開那篇節點筆記看規則再判。
 - 表態記錄裡的 tension 若 existing 指向目標節點的規則行,就開那一行對照;段裡寫「讀不到規則」的檔照鄰居判。
 
 輸出:三問(設計審四問)各一段(對齊 / 不對齊 + 對照 file:line),最後「不對齊共 N 條,其中 major M 條」。

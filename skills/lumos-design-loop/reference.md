@@ -57,7 +57,7 @@
   - 忘了判 → **預設走完整 loop**(fail-safe,永不更少)。
   - ⚠ 硬否決目前靠**你自核(honor-system)**,不比你誠實更可靠——**別當它已自動擋**。
   - 跑什麼見下方〈light 檔〉。設計脈絡 `[[design-loop輕量檔_計劃]]`。
-- **★真相入口★**:被審 spec 的**唯一可寫真檔＝圖譜計劃節點**(`docs/{project}-knowledge/Projects/<主題>_計劃.md`),與 CLAUDE.md「計劃／設計也歸圖譜」對齊。**`docs/design/` 已降唯讀歷史,不再新增、不再折入。** loop 全程:工作副本從計劃節點複製、折入只回寫計劃節點、gate `--spec` 指計劃節點路徑。
+- **★真相入口★**:被審 spec 的**唯一可寫真檔＝圖譜計劃節點**(`docs/{project}-knowledge/Projects/<主題>_計劃.md`),與 CLAUDE.md「計劃／設計也歸圖譜」對齊。**`docs/design/` 已降唯讀歷史,不再新增、不再折入。** loop 全程:席位材料是 spec-freeze 從計劃節點凍出的 rN-snapshot.md、折入只回寫計劃節點、gate `--spec` 指計劃節點路徑。
 - **loop id** ＝ 計劃節點檔名去 `_計劃`／`_調研` 後綴、轉 kebab(`Projects/design-loop輕量檔_計劃.md` → `design-loop輕量檔`)。
 
 ## light 檔(輕量路徑,小 spec)
@@ -99,7 +99,7 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
 
 > ### ⚠ 一輪能丟多少:軟上限 1800 行(≈30K token)
 >
-> **派工前先量** `wc -l <工作副本/patch>`。超過就**拆開審**——切成多輪，或拆給多席各審一段。
+> **派工前先量** `wc -l <計劃節點/patch>`。超過就**拆開審**——切成多輪，或拆給多席各審一段。
 >
 > **為什麼**：審查員的任務是「在 N 行裡找出那個植入的錯」，而**脈絡越長注意力越差**是已發表的實測（有效脈絡約標稱值 60–70%，**退化在 32K token 就量得到**，報告退化幅度 13.9%–85%）。
 >
@@ -111,21 +111,21 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
 
 
 
-1. **複製**計劃節點 → 工作副本 `/tmp/<id>-rN.md`。
+1. **準備**:被審材料不另外複製工作副本——步驟 2.5–2.7 直接排乾計劃節點真檔,排乾完才在步驟 3 凍結快照。
    - **N／型別／席數／記帳模板一律問** `lumos loop next <id> [--tier ..] [--spec ..]`——帳本吐唯一下一動作,不靠記憶手算。`phase=escalate` 表 light 已 ratchet 須升級;`gate-pending` 表資訊不足要補參數。
-   - 同時 `sha256sum <計劃節點>` 留存本輪 reviewed hash(記帳 `--reviewed` 用,雙 hash 鏈的派工快照)。
+   - 本輪 reviewed hash(記帳 `--reviewed` 用,雙 hash 鏈的派工快照)=`sha256sum <rN-snapshot.md>`,在步驟 3 凍完才算。
 
 2. ~~植 canary~~ **⛔ 已停用(2026-08-14,見頁頂告示)**——本步驟不執行,直接進 2.5。舊型別清單/生成硬化(reference §A)僅供回放歷史帳時判讀。
 
-2.5. **機械核對(refcheck,對工作副本)**:`lumos refcheck /tmp/<id>-rN.md --repo <repo根> --json`。missing／line_out_of_range ＝機械 finding,直接修**真檔 spec**(記入審計修正紀錄、標「機械 refcheck」);manifest(ok 宣稱＋excerpts)留存、步驟 3 餵審計員。refcheck **只驗 spec→repo 指涉、不驗 spec 內部一致性**——內部一致性是審計員責任田。
+2.5. **機械核對(refcheck,對計劃節點真檔)**:`lumos refcheck <計劃節點.md> --repo <repo根> --json`。missing／line_out_of_range ＝機械 finding,直接修**真檔 spec**(記入審計修正紀錄、標「機械 refcheck」);manifest(ok 宣稱＋excerpts)留存、步驟 3 餵審計員。refcheck **只驗 spec→repo 指涉、不驗 spec 內部一致性**——內部一致性是審計員責任田。
 
 2.6. **pitfalls 核對**:`lumos pitfalls <計劃節點.md> --check`;rc 1(缺「## 實務隱患」節)→ 先在**真檔 spec** 補該節再繼續。不帶 `--check` 跑一次,提問清單附給步驟 3 的審計員當鏡頭之一。
 
 2.7. **pre-flight 排乾(首輪前跑一次,r2+ 不重跑)**:派 1 個便宜 agent 拿固定 checklist 掃**真檔 spec**——未定義旗標／欄位／檔名、章節交叉引用、**範圍刀自違**(「明確不做」被其他段偷偷違反)、CLI touchpoint(白名單／Check 字母撞名／函式簽名)、測試策略與本文條目一一對應。命中直接修真檔(記入審計修正紀錄標「pre-flight」,**不算 loop findings**)。
    理由:實測 r1 大宗是清單型缺陷(某案 r1 九條裡五條此型),先機械排乾讓 panel 從高起點審,一輪收斂(K=1)才從理論變可能(cascade:便宜先掃、貴的審剩下)。
 
-3. **派乾淨審計員**:Agent tool、`model: sonnet`(升級條件見護欄)、指向工作副本(Codex 編排:spawn_agent 點名席位——★2026-09-08 實測:席位 TOML 的 `model` / `model_reasoning_effort` 有效,舊的「不能逐席指定模型」已作廢★;設計審(散文)點 `lumos_reviewer`(sol + medium);程式碼審點 `lumos_reviewer_code`(sol + xhigh);tier=high 才點 `lumos_reviewer_max`(sol + xhigh;2026-09-11 起三席都用 gpt-5.6-sol);父代理唯讀沙盒,框架寫進派工詞。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]])。
-   - **refute framing**:把工作副本當**外部第三方的投稿**審,不是你／本系統寫的——挑出投稿者沒看到的洞。逐節讀、主動找洞(未定義詞／壞引用／不一致／矛盾／可執行性 gap),逐條標 severity。
+3. **派乾淨審計員**:**設計審派工前先 spec-freeze;席位材料、rN-snapshot、--reviewed 都用它產生的那份;派工單記 spec_commit**(怎麼凍見下方〈一輪怎麼跑〉第 3 步);Agent tool、`model: sonnet`(升級條件見護欄)、指向 rN-snapshot.md(Codex 編排:spawn_agent 點名席位——★2026-09-08 實測:席位 TOML 的 `model` / `model_reasoning_effort` 有效,舊的「不能逐席指定模型」已作廢★;設計審(散文)點 `lumos_reviewer`(sol + medium);程式碼審點 `lumos_reviewer_code`(sol + xhigh);tier=high 才點 `lumos_reviewer_max`(sol + xhigh;2026-09-11 起三席都用 gpt-5.6-sol);父代理唯讀沙盒,框架寫進派工詞。單源 [[Verification/2026-09-08_Codex席位可指定模型_兩席分流]])。
+   - **refute framing**:把快照當**外部第三方的投稿**審,不是你／本系統寫的——挑出投稿者沒看到的洞。逐節讀、主動找洞(未定義詞／壞引用／不一致／矛盾／可執行性 gap),逐條標 severity。
    - **附步驟 2.5 的 refcheck manifest**:manifest 內宣稱的存在性／行號已機械驗訖,查證力氣聚焦語意;**manifest 非宣稱全集**,散文裡的現況假設仍要自己查。
    - **加碼 framing**(席報告疑似通用回應/引句錨定大面積失敗的下一輪用):「逐節讀,你一定找得到至少一個未定義的詞／壞引用／不一致;沒找到就是你沒讀仔細」。
 
@@ -156,7 +156,7 @@ light 檔 spec 的**下游逃逸率該留意**（逃逸帳＝調價器）：偏�
    ```
    - **時序**:有折入的輪,record 移到步驟 7 收尾**之後**——「fold → fold-check → record」連續序列,使 `--reviewed` 的 hash ＝ post-fold 版。空手輪(存活 0)當場 record 即收尾。
    - `<worst>` ＝ ④ 辯方重算後的存活 max(**非 ② 原評**);`<M>` ＝ ④ 裁決後存活折入的真 finding 條數——供收斂閘 G2 枯竭錨機械讀取。
-   - **`--scope-lines`**(純 telemetry,不進 gate):這輪被審材料幾行。**東西越多越抓不到**是外部實測裡最主導的因素——不記就答不出「規模有沒有在灌水乾淨輪」。`wc -l <工作副本>`。
+   - **`--scope-lines`**(純 telemetry,不進 gate):這輪被審材料幾行。**東西越多越抓不到**是外部實測裡最主導的因素——不記就答不出「規模有沒有在灌水乾淨輪」。`wc -l <rN-snapshot.md>`。
    - **`--tokens` / `--wallclock-min`**(純 telemetry,不進 gate,2026-08-22 接上):派席的子代理跑完時,結束通知本來就帶 token 數與秒數——**眼前就有,以前沒人往帳裡塞**,結果這兩個欄自建成以來零筆。**消費者只有一個**:Enzo 在週報看「本週派席共花多少錢、多少小時」,據以決定要不要砍週抽題數、或把某 tier 的席數降一級。★量不到就不要送 0 冒充量過★——少一個參數,帳上是空的,一眼看得出沒量。
    - **中斷恢復(第二帳)**:log 無該輪 record 但 spec 審計修正紀錄有該輪條目(d4 兩行格式後=該輪兩行摘要的「N 條/blocking N」行)→ **人工補 record 再繼續**(防「折了沒記」窗:重派已折輪＋ratchet 訊號蒸發)。
 
@@ -508,9 +508,9 @@ golden 語料是 **auditor 校準的時間資產**：累到 10+ 份即可做 rep
 - 進場前一行 `lumos loop next <編號> --tier standard|high|light --orchestrator claude|codex --spec <計劃.md>`,第一次一定帶 `--tier` 與 `--orchestrator`(誰在編排;外家席=不是編排者那一家,d4),之後它會吐「第幾輪、幾個人、派誰、記帳範本」。首輪還會印「主題既有節點」(圖譜入口栓:近名或已翻案的先讀它的 decisions 再開案,重複開案的成本在後頭)。
 
 ### 一輪怎麼跑(照這個順序)
-1. **準備材料**:複製計劃筆記到工作副本 `/tmp/<編號>-rN.md`,`sha256sum <計劃筆記>` 留下這輪的指紋。`wc -l` 超過 1800 行就拆開審(外部研究:材料太多審查員看不完;本專案自己量不到這效應,但照做)。
-2. **先機械排乾**(每輪):`lumos refcheck <副本> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**——存在性抓到壞行號、語意誤宣稱要靠這條)。分流:①②③與存在類命中=直接修真檔不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。★跑完把 `preflight-4: ran` 頂格寫進 rN-intake.md(宣告行,2026-08-30 intake守衛 d1;處置閘與 doctor [I] 段機械讀它——沒有那行=機器判定沒跑;記帳可帶選配 `--intake`)★
-3. **派審查員**:派工詞留一行 `LUMOS-SPEC: <計劃筆記.md>`(2026-09-05 起 hook 自動附上計劃牽連的合約/事故節點與直接連結節點,免手貼——手貼實測 209 份只有 14 份做);Agent、`model: sonnet`、指向工作副本(★Codex 編排時的完整做法★:**單源見 `templates.md` §3 ④,不在此複述**——2026-09-06 起把原本抄在這裡的一整段搬走。外家席換 `claude -p`;首輪 `loop next … --orchestrator codex`)。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`,凍結快照存 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
+1. **準備材料**:`wc -l <計劃筆記>` 超過 1800 行就拆開審(外部研究:材料太多審查員看不完;本專案自己量不到這效應,但照做)。被審材料不另外複製工作副本、也不對計劃真檔算指紋:第 2 步直接排乾真檔,排乾完才在第 3 步凍結快照(先複製的副本會比第 2 步修過的真檔舊,席位引句在快照上錨不到)。
+2. **先機械排乾**(每輪):`lumos refcheck <計劃筆記.md> --repo <根> --json`——引的檔案/行號不存在直接修真檔;`lumos prose-lint <計劃.md>`——中文模糊措辭掃描(只提醒不擋,rc 恆 0);掃出的類別歸編排者排乾,派工詞明寫「此掃描可及類別,席位不得報」;`lumos pitfalls <計劃.md> --check`——沒有「實務隱患」節先補;它反問的每個風險類都要逐類答進去,判「不碰」也要寫「已排除:理由」,不准靜默略過(排除理由也是審查對象)。**首輪再多一步**:派一個便宜 agent 拿固定清單掃①未定義的詞②壞引用③範圍自相矛盾④**機械宣稱驗語意**(spec 每句「某函式/機制會做 X」,開檔讀該段碼驗語意,**不只驗存在**——存在性抓到壞行號、語意誤宣稱要靠這條)。分流:①②③與存在類命中=直接修真檔不算 findings;**語意類命中=修真檔+逐條(含修改前→後對照)寫進 rN-intake.md 留痕;動到「核心裁定」節的=升級為正式 finding 交席位審,前掃不得自行改裁定**。★跑完把 `preflight-4: ran` 頂格寫進 rN-intake.md(宣告行,2026-08-30 intake守衛 d1;處置閘與 doctor [I] 段機械讀它——沒有那行=機器判定沒跑;記帳可帶選配 `--intake`)★
+3. **派審查員**:**設計審派工前先 spec-freeze;席位材料、rN-snapshot、--reviewed 都用它產生的那份;派工單記 spec_commit**。計劃在會談目錄時跑 `lumos spec-freeze <計劃筆記.md> --out governance/review-reports/<編號>/rN-snapshot.md`;計劃在別的工作樹時,先在那個工作樹跑 `lumos spec-freeze <計劃筆記.md>`(不帶 `--out`:只建不掛分支的提交、印那一行,不在那裡留任何檔),再回會談目錄跑 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md`(從共用物件庫讀、不建新提交)。`--out` 只收執行所在 repo 的 `governance/review-reports/` 底下,已存在而且內容不同會被拒(要凍新的一輪換新檔名)。把它印的那行 `LUMOS-SPEC: <完整提交編號>:<路徑>` 原樣貼進派工詞(2026-09-05 起 hook 自動附上計劃牽連的合約/事故節點與直接連結節點,免手貼——手貼實測 209 份只有 14 份做;lumos 在會談 repo 從共用物件庫讀那個提交裡的計劃,程式檔與連結節點照會談目錄判、只在提交裡的另外列名,不碰標記指到的任何目錄。**提交編號寫法只對 Claude 編排有效**(Codex 的派工訊息對掛鉤是密文)。spec-freeze 不動分支、ref 與 index;詳見 [[Projects/派工鏡頭可指定目標repo_計劃]]);席位指向那份 rN-snapshot.md,記帳 `--reviewed` 填 `sha256sum <rN-snapshot.md>`。Agent、`model: sonnet`(★Codex 編排時的完整做法★:**單源見 `templates.md` §3 ④,不在此複述**——2026-09-06 起把原本抄在這裡的一整段搬走。外家席換 `claude -p`;首輪 `loop next … --orchestrator codex`)。另派一席「架構對齊」(不佔人數,`templates.md` §7.6):判設計有沒有照既有模組邊界與做法走、有沒有引入專案裡原本沒有的第二種做法。框架是「這是外部第三方投稿,找出作者沒看到的洞」;每條 finding 必附逐字引句 ≥10 字和 severity。派工當下把 `{round, seat, lens, materials, auditor, spec_commit}` 寫成 `governance/review-reports/<編號>/rN-dispatch.json`(`spec_commit` 是 spec-freeze 印的那行裡的完整提交編號),凍結快照就是 spec-freeze 寫出的 `rN-snapshot.md`,席報告存 `rN-<席>.md`。
 4. **收貨三道(全機械,錨不到的不採信)**。★**所有席收齊之前不要動被審材料或工作目錄**★(2026-09-06 code-loop 實際踩到,設計審同理):某席先回來就開始折,後到的席會讀到已經改過的東西、甚至讀到先到那席的報告,**席就不獨立了**——而「多席獨立一致→直接折、不用派辯方」正是靠獨立性成立的。先到的席報告先留在對話裡、不寫到硬碟,收齊再一次寫進卷證(2026-10-06 決策 d5,單源 templates.md §0:硬碟上有別席報告,審查席用 Bash 就讀得到)。存席報告先做兩個正規化(2026-08-26 起,收貨 SOP——不是 code 裡的既有步驟,漏做的機械後果=記帳時 rc2 擋):引句轉成「引句:「…」」同行格式;表頭型嚴重度(### id / 等級 / 標題)補一行獨立「severity: <值>」,乾淨輪也要一行 severity: clean(record 寫側 2026-08-26 起硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高)。★2026-09-09 起寫側再擋一道「沒正規化」(審查有沒有用記帳 S1/S4;理由:「報了幾條」要由機器從報告數,格式不對數出來就是假的):①檔首第一個非空行=檔級 `severity: <值>`(來源註記放它後面;HTML 註解不跳過)②每條 finding 恰一行獨立 `severity: <值>`——列表項、粗體、標題嵌等級(`## F1 — MAJOR`)、方括號 `[major]`、`Severity:`/`sev:`/「嚴重度:」全算殘留,rc2 印行號③驗收輪留前輪已折平的舊項時★不留任何 severity 字樣★;引句行、blockquote、``` 圍欄、總結句不算。機械那一半:`lumos report-normalize <席報告>` 先印會改什麼,`--write` 只搬格式(把行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不動引句與圍欄;轉不了的印行號要人改)——動的是宣告放在哪一行,不是宣告了什麼,這就是跟「不改證據」的界線。「報了幾條」機器數進帳上 `reported` 欄,沒有旗標可填,`--findings` 不得多於它。★然後:
    - `lumos quote-check <席報告> --spec <凍結快照>`:引句對不回快照的條目丟掉(比對對象是派工當下的快照,不是現檔)。
    - `lumos refcheck <席報告> --repo <根>`:報告引的 file:line 要存在。

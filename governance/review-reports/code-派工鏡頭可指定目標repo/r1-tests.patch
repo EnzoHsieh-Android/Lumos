@@ -1,0 +1,742 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2615ef8f..68601285 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -42566,20 +42566,737 @@ def t_dispatch_lens_hook_retries_without_role_flag_on_old_lumos():
+     payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": "/tmp",
+                "tool_input": {"prompt": "審查。\nLUMOS-IMPACT: main..HEAD\nLUMOS-ROLE-CARDS: on\n"}}
+     out = _io.StringIO()
+     with patch.object(hm.subprocess, "run", fake_run), patch.object(hm, "_find_lumos_script", lambda: "/x/lumos"), \
+          patch.object(hm.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(hm.sys, "stdout", out):
+         hm.main()
+     check("舊 lumos 不認旗標 → 不帶旗標重叫一次、圖譜段照附",
+           len(seen) == 2 and "--role-cards" in seen[0] and "--role-cards" not in seen[1] and "GRAPH-SEAT" in out.getvalue(), str(seen)[:300] + out.getvalue()[:200])
+ 
+ 
++# ---------------------------------------------------------------------------
++# 派工鏡頭可指定目標repo(Projects/派工鏡頭可指定目標repo_計劃,2026-10-14):
++# 設計審的 LUMOS-SPEC: 收「完整提交編號:計劃路徑」,lumos 在會談 repo 從共用物件庫讀;spec-freeze 產生那個提交與快照。
++# 搭法:會談目錄是主工作樹、停在不含計劃提交的分支;計劃放在 git worktree add 造的第二個工作樹。
++# ---------------------------------------------------------------------------
++_LR_PLAN = "docs/kg-knowledge/Projects/甲_計劃.md"
++
++
++def _lr_repo():
++    """會談 repo(主工作樹)+ 第二個工作樹(lr-plan 分支)。會談目錄有 src/pay.py 與管它的 Systems/計價規則、
++    Systems/已有節點(兩篇摘要都帶可辨認的合約行)。回 (root, wt)。"""
++    root = _nh_repo()
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "計價規則", about=["src/pay.py"], body="計價在 `src/pay.py`。",
++             summary="KEY:★INVARIANT★ 計價不得為負 LR-PAY-CONTRACT")
++    _nh_node(root, "已有節點", summary="KEY:★INVARIANT★ 會談目錄版本的合約 LR-SESSION-BODY")
++    _nh_commit(root, "base")
++    wt = Path(tempfile.mkdtemp(prefix="gctl-lr-wt-")) / "wt2"
++    _nh_git(root, "worktree", "add", "-q", "-b", "lr-plan", str(wt))
++    return root, wt
++
++
++def _lr_write(base, files):
++    for rel, v in files.items():
++        p = Path(base) / rel
++        p.parent.mkdir(parents=True, exist_ok=True)
++        if isinstance(v, bytes):
++            p.write_bytes(v)
++        else:
++            p.write_text(v, encoding="utf-8")
++
++
++def _lr_commit(wt, files, msg="plan"):
++    """在第二個工作樹寫檔(值是 str 或 bytes)並提交,回完整提交編號。"""
++    _lr_write(wt, files)
++    _nh_commit(wt, msg)
++    return _nh_git(wt, "rev-parse", "HEAD").stdout.strip()
++
++
++def _lr_lens(root, spec, *extra, env=None, cwd=None):
++    """用子行程跑被測 repo 的 scripts/lumos dispatch-lens --spec <值> --json;回 (結果, 最後一行 JSON 物件或 {})。"""
++    import json as _j
++    r = subprocess.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec", spec, "--repo", str(root), "--json", *extra],
++                       capture_output=True, text=True, cwd=str(cwd or root), env=env, check=False)
++    try:
++        d = _j.loads(r.stdout.strip().splitlines()[-1])
++    except (ValueError, IndexError):
++        d = {}
++    return r, (d if isinstance(d, dict) else {})
++
++
++def t_dispatch_lens_spec_commit_from_other_worktree():
++    """[S1] 計劃只在另一個工作樹的提交裡:提交寫法 rc0、附會談目錄的固定席節點、JSON 帶 spec_source/spec_commit/spec_blob、
++    開頭印提交與 blob 前 12 碼;沒有任何固定席內容也照印來源行。判準來源:計劃做法 7 與條款 S1;blob 用 git 自己算(獨立於被測程式)。"""
++    root, wt = _lr_repo()
++    full = _lr_commit(wt, {_LR_PLAN: "---\ntype: project\nstatus: doing\n---\n# 甲\n\n要改 `src/pay.py`,連到 [[Systems/已有節點]]。\n"})
++    blob = _nh_git(root, "rev-parse", f"{full}:{_LR_PLAN}").stdout.strip()
++    check("S1 前置:計劃不在會談目錄,會談目錄的 HEAD 不含那個提交",
++          not (root / _LR_PLAN).exists() and _nh_git(root, "merge-base", "--is-ancestor", full, "HEAD").returncode == 1, "")
++    r, d = _lr_lens(root, f"{full}:{_LR_PLAN}")
++    t = d.get("text", "")
++    check("S1: rc0、spec_source=commit、spec_commit 等於輸入、spec_blob 等於那個提交裡計劃的 blob",
++          r.returncode == 0 and d.get("spec_source") == "commit" and d.get("spec_commit") == full
++          and d.get("spec_blob") == blob and len(blob) == 40, f"rc={r.returncode} {r.stderr[-300:]} {str(d)[:300]}")
++    check("S1: 附會談目錄的固定席節點(計劃提到的檔的家、計劃直接連結的節點與它的合約行)",
++          "Systems/計價規則.md" in t and "Systems/已有節點.md" in t and "LR-SESSION-BODY" in t, t[:700])
++    check("S1: 附加段開頭印提交與 blob 的前 12 碼",
++          f"計劃來源:提交 {full[:12]} 的 {_LR_PLAN}(blob {blob[:12]})" in t, t[:400])
++    full2 = _lr_commit(wt, {_LR_PLAN: "# 甲\n只有散文,沒提任何檔也沒連結。\n"}, "plan2")
++    r2, d2 = _lr_lens(root, f"{full2}:{_LR_PLAN}")
++    check("S1: 計劃沒有任何固定席內容 → 仍 rc0、印「計劃來源:提交 <12碼>」那一行",
++          r2.returncode == 0 and f"計劃來源:提交 {full2[:12]}" in d2.get("text", ""), f"rc={r2.returncode} {str(d2)[:300]}")
++
++
++def t_dispatch_lens_spec_commit_shape():
++    """[S2] 提交寫法只收 40/64 碼完整編號、解出要等於輸入;6 碼十六進位照工作樹路徑、7 碼起是提交寫法;大小寫不拘;
++    SHA-256 repo 的 64 碼照常成功(git 不支援就跳過並印原因)。判準來源:計劃做法 1。"""
++    root, wt = _lr_repo()
++    full = _lr_commit(wt, {_LR_PLAN: "# 甲\n連到 [[Systems/已有節點]]。\n"})
++    P = _LR_PLAN
++    resolves = _nh_git(root, "rev-parse", "--verify", "-q", full[:7] + "^{commit}").stdout.strip() == full
++    check("S2 前置:7 碼短編號 git 自己解得到(不是因為解不到才回錯)", resolves, "")
++    for label, spec in (("7 碼短編號", f"{full[:7]}:{P}"), ("39 碼", f"{full[:39]}:{P}"), ("41 碼", f"{full}a:{P}"),
++                        ("65 碼", f"{full}{'a' * 25}:{P}"), ("不存在的 40 碼", f"{'0' * 40}:{P}"),
++                        ("SHA-1 repo 寫 64 碼", f"{full}{'0' * 24}:{P}")):
++        r, d = _lr_lens(root, spec)
++        check(f"S2: {label} → spec_rev_missing、rc2、spec_source=commit、不附節點",
++              r.returncode == 2 and d.get("lens_fail") == "spec_rev_missing" and d.get("spec_source") == "commit"
++              and "已有節點" not in d.get("text", ""), f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"abcdef:{P}")
++    check("S2: 冒號前恰好 6 碼十六進位 → 照工作樹路徑(spec_source=worktree)",
++          d.get("spec_source") == "worktree" and d.get("lens_fail") == "spec_missing" and r.returncode == 2, f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"abcdef0:{P}")
++    check("S2: 恰好 7 碼 → 提交寫法(spec_rev_missing)",
++          d.get("spec_source") == "commit" and d.get("lens_fail") == "spec_rev_missing", f"rc={r.returncode} {str(d)[:200]}")
++    mixed = "".join(ch.upper() if i % 2 else ch for i, ch in enumerate(full))
++    for label, spec in (("全大寫", full.upper()), ("大小寫混用", mixed)):
++        r, d = _lr_lens(root, f"{spec}:{P}")
++        check(f"S2: {label}的 40 碼 → 照常成功,spec_commit 是小寫完整編號",
++              r.returncode == 0 and d.get("spec_commit") == full and "LR-SESSION-BODY" in d.get("text", ""), f"rc={r.returncode} {str(d)[:200]}")
++    import subprocess as _sp
++    s2 = Path(tempfile.mkdtemp(prefix="gctl-lr-256-"))
++    if _sp.run(["git", "init", "-q", "--object-format=sha256", str(s2)], capture_output=True, check=False).returncode != 0:
++        print("  - 跳過 SHA-256 那筆:這版 git 不支援 --object-format=sha256")
++        return
++    for k, v in (("user.email", "t@t.t"), ("user.name", "t"), ("commit.gpgsign", "false")):
++        _nh_git(s2, "config", k, v)
++    _lr_write(s2, {"docs/kg-knowledge/Systems/已有節點.md": "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ SHA256-BODY\n---\n# x\n",
++                   P: "# 甲\n連到 [[Systems/已有節點]]。\n"})
++    _nh_commit(s2, "c")
++    f256 = _nh_git(s2, "rev-parse", "HEAD").stdout.strip()
++    r, d = _lr_lens(s2, f"{f256}:{P}")
++    check("S2: SHA-256 repo 寫 64 碼完整編號 → 照常成功", len(f256) == 64 and r.returncode == 0 and d.get("spec_commit") == f256
++          and "SHA256-BODY" in d.get("text", ""), f"rc={r.returncode} {r.stderr[-200:]} {str(d)[:200]}")
++    r, d = _lr_lens(s2, f"{f256[:40]}:{P}")
++    check("S2: SHA-256 repo 寫 40 碼 → spec_rev_missing", r.returncode == 2 and d.get("lens_fail") == "spec_rev_missing", f"rc={r.returncode} {str(d)[:200]}")
++
++
++def t_dispatch_lens_spec_commit_path_rules():
++    """[S3] 提交寫法的路徑只做字串檢查:不合規則回 spec_outside_repo;slug 在會談目錄 docs/ 沒有名字正好相同的目錄回 no_knowledge rc3;
++    NFD 回 spec_missing;第一個冒號切開(檔名可再含冒號);同時違反回檢查順序裡較前的代碼。判準來源:計劃做法 2。"""
++    import unicodedata as _ud
++    root, wt = _lr_repo()
++    nfc_name = "docs/kg-knowledge/Projects/café_計劃.md"
++    full = _lr_commit(wt, {_LR_PLAN: "# 甲\n連到 [[Systems/已有節點]]。\n",
++                           "docs/kg-knowledge/Projects/a:b_計劃.md": "# 乙\n連到 [[Systems/已有節點]]。\n",
++                           nfc_name: "# 丙\n連到 [[Systems/已有節點]]。\n",
++                           "docs/zz-knowledge/Projects/乙_計劃.md": "# 只在提交裡的 vault\n"})
++    bad = ["", "/docs/kg-knowledge/Projects/甲_計劃.md", "docs/kg-knowledge/./Projects/甲_計劃.md",
++           "docs/kg-knowledge/Projects/../Projects/甲_計劃.md", "docs//kg-knowledge/Projects/甲_計劃.md",
++           "docs/kg-knowledge/", "docs\\kg-knowledge\\Projects\\甲_計劃.md", "docs/kg-knowledge/Projects/甲 計劃.md",
++           "docs/kg-knowledge/Projects/甲\t計劃.md", "docs/kg-knowledge/Projects/甲　計劃.md",
++           "docs/kg-knowledge/Projects/甲 計劃.md", "docs/kg-knowledge", "docs/-knowledge/Projects/甲_計劃.md",
++           "Docs/kg-knowledge/Projects/甲_計劃.md", "docs/kg-Knowledge/Projects/甲_計劃.md", "./docs/kg-knowledge/Projects/甲_計劃.md",
++           "src/pay.py"]
++    for p in bad:
++        r, d = _lr_lens(root, f"{full}:{p}")
++        check(f"S3: 路徑 {p!r} → spec_outside_repo、rc2", r.returncode == 2 and d.get("lens_fail") == "spec_outside_repo",
++              f"rc={r.returncode} {str(d)[:200]}")
++    for p in ("docs/zz-knowledge/Projects/乙_計劃.md", "docs/KG-knowledge/Projects/甲_計劃.md", "docs/yy-knowledge/Projects/沒有.md"):
++        r, d = _lr_lens(root, f"{full}:{p}")
++        check(f"S3: {p} 的 slug 在會談目錄 docs/ 沒有名字正好相同的目錄 → no_knowledge、rc3",
++              r.returncode == 3 and d.get("lens_fail") == "no_knowledge", f"rc={r.returncode} {str(d)[:200]}")
++    nfd = _ud.normalize("NFD", nfc_name)
++    check("S3 前置:NFD 輸入跟夾具檔名不同字串", nfd != nfc_name, "")
++    r, d = _lr_lens(root, f"{full}:{nfd}")
++    check("S3: 路徑是 NFD → spec_missing", r.returncode == 2 and d.get("lens_fail") == "spec_missing", f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"{full}:{nfc_name}")
++    check("S3: 同一份檔用 NFC 寫照常讀到", r.returncode == 0 and "LR-SESSION-BODY" in d.get("text", ""), f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"{full}:docs/kg-knowledge/Projects/a:b_計劃.md")
++    check("S3: 檔名含第二個冒號 → 以第一個冒號切開、照常讀到", r.returncode == 0 and "LR-SESSION-BODY" in d.get("text", ""),
++          f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"{full[:7]}:/etc/hosts")
++    check("S3: 短編號加壞路徑 → 回較前的 spec_rev_missing", d.get("lens_fail") == "spec_rev_missing", str(d)[:200])
++    r, d = _lr_lens(root, f"{full}:docs/yy-knowledge/Projects/沒有.md")
++    check("S3: 合規路徑、slug 不存在、提交裡也沒有 → 回較前的 no_knowledge(不是 spec_missing)",
++          d.get("lens_fail") == "no_knowledge", str(d)[:200])
++
++
++def t_dispatch_lens_spec_commit_regular_blob_only():
++    """[S4] 提交裡的路徑是目錄、符號連結、子模組 → spec_missing;1048577 位元組 → spec_too_large;剛好 1048576 照讀;
++    含 NUL 與非 UTF-8 位元組照讀。判準來源:計劃做法 3;前置用 git ls-tree 確認夾具真的是那種 mode。"""
++    root, wt = _lr_repo()
++    base = _nh_git(wt, "rev-parse", "HEAD").stdout.strip()
++    _lr_write(wt, {"docs/kg-knowledge/Projects/目錄/x.md": "# x\n", "docs/kg-knowledge/Projects/剛好.md": b"#" * 1048576,
++                   "docs/kg-knowledge/Projects/太大.md": b"#" * 1048577,
++                   "docs/kg-knowledge/Projects/二進位.md": b"# bin\n\x00\xff\xfe\x80 [[Systems/\xe5\xb7\xb2\xe6\x9c\x89\xe7\xaf\x80\xe9\xbb\x9e]]\n"})
++    _os_mod.symlink("../../../../../../../../etc/hosts", wt / "docs/kg-knowledge/Projects/連結.md")
++    _nh_commit(wt, "kinds")
++    _nh_git(wt, "update-index", "--add", "--cacheinfo", f"160000,{base},docs/kg-knowledge/Projects/子模組.md")
++    _nh_git(wt, "commit", "-qm", "gitlink", "--no-verify")
++    full = _nh_git(wt, "rev-parse", "HEAD").stdout.strip()
++    modes = {}
++    for line in _nh_git(wt, "-c", "core.quotePath=false", "ls-tree", full, "docs/kg-knowledge/Projects/").stdout.splitlines():
++        meta, _t, path = line.partition("\t")
++        modes[path.rsplit("/", 1)[-1]] = meta.split(" ")[0]
++    check("S4 前置:提交裡真的有目錄、符號連結、子模組", modes.get("目錄") == "040000" and modes.get("連結.md") == "120000"
++          and modes.get("子模組.md") == "160000", str(modes))
++    for label, p in (("目錄", "目錄"), ("符號連結", "連結.md"), ("子模組", "子模組.md")):
++        r, d = _lr_lens(root, f"{full}:docs/kg-knowledge/Projects/{p}")
++        check(f"S4: {label} → spec_missing、rc2", r.returncode == 2 and d.get("lens_fail") == "spec_missing", f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"{full}:docs/kg-knowledge/Projects/太大.md")
++    check("S4: 1048577 位元組 → spec_too_large、rc2", r.returncode == 2 and d.get("lens_fail") == "spec_too_large", f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"{full}:docs/kg-knowledge/Projects/剛好.md")
++    check("S4: 剛好 1048576 位元組 → 照讀、rc0、提交寫法", r.returncode == 0 and d.get("spec_source") == "commit" and not d.get("lens_fail"),
++          f"rc={r.returncode} {str(d)[:200]}")
++    r, d = _lr_lens(root, f"{full}:docs/kg-knowledge/Projects/二進位.md")
++    check("S4: 含 NUL 與非 UTF-8 位元組 → 照讀、rc0、連結照附", r.returncode == 0 and "LR-SESSION-BODY" in d.get("text", ""),
++          f"rc={r.returncode} {r.stderr[-200:]} {str(d)[:200]}")
++
++
++def t_dispatch_lens_spec_commit_vault_from_path():
++    """[S5] repo 有 a-knowledge 與 b-knowledge,提交寫法的計劃在 b:連結節點、落點、目標架構段都到 b 找,不到排序第一的 a。
++    判準來源:計劃做法 2、4;兩個 vault 放同名節點、內容不同,看附的是哪一份。"""
++    root = _nh_repo(cfg={"arch_targets": [{"path": "app/Domain/**", "node": _ARCH_NODE}]})
++    _lr_write(root, {"docs/a-knowledge/Systems/B連結.md": "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ A-VAULT-BODY\n---\n# a\n",
++                     "docs/b-knowledge/Systems/B連結.md": "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:★INVARIANT★ B-VAULT-BODY\n---\n# b\n",
++                     "docs/b-knowledge/Systems/B落點.md": "---\ntype: system\nstatus: doing\nsummary: |-\n  KEY:x\n---\n# b\n",
++                     f"docs/b-knowledge/{_ARCH_NODE}.md": _arch_node_text()})
++    _nh_commit(root, "base")
++    wt = Path(tempfile.mkdtemp(prefix="gctl-lr-wt-")) / "wt2"
++    _nh_git(root, "worktree", "add", "-q", "-b", "lr-plan", str(wt))
++    plan = "docs/b-knowledge/Projects/丙_計劃.md"
++    full = _lr_commit(wt, {plan: "---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/B落點\n---\n# 丙\n\n要新增 `app/Domain/Pay.py`,連到 [[Systems/B連結]]。\n"})
++    r, d = _lr_lens(root, f"{full}:{plan}", "--arch-target")
++    t = d.get("text", "")
++    check("S5: 連結節點到 b-knowledge 找(附 b 的內容,不附 a 的)", "docs/b-knowledge/Systems/B連結.md" in t and "B-VAULT-BODY" in t
++          and "A-VAULT-BODY" not in t, f"rc={r.returncode} {r.stderr[-200:]} {t[:500]}")
++    check("S5: 落點到 b-knowledge 找(已存在)", "Systems/B落點:已存在" in t, t[-600:])
++    check("S5: 目標架構段的節點到 b-knowledge 找(附得出規則)", "Domain 層不依賴框架與資料庫型別" in d.get("arch_text", ""),
++          str(d.get("arch_text"))[:400])
++
++
++def t_dispatch_lens_spec_commit_file_only_in_commit():
++    """[S6] 計劃提到的程式檔只在那個提交裡:另列「只在提交 <12碼> 裡、會談目錄沒有,沒算牽連」那一行,不對它跑 impact,
++    不出現「沒牽到任何家、合約或事故的節點」;壞候選 scripts/../../x 不影響中文檔名那個。判準來源:計劃做法 5。"""
++    root, wt = _lr_repo()
++    _nh_node(root, "提到only", body="這篇講 `src/only.py`(會談目錄沒有這支檔)。", summary="KEY:★INVARIANT★ ONLY-IMPACT-HIT")
++    _nh_commit(root, "node mentions only.py")
++    full = _lr_commit(wt, {"src/only.py": "x = 1\n", "src/中文檔.py": "y = 2\n",
++                           _LR_PLAN: "# 甲\n會動 scripts/../../x,還有 `src/中文檔.py` 與 src/only.py。\n"})
++    r, d = _lr_lens(root, f"{full}:{_LR_PLAN}")
++    t = d.get("text", "")
++    line = next((ln for ln in t.splitlines() if "只在提交" in ln), "")
++    check("S6: 列「只在提交 <12碼> 裡、會談目錄沒有,沒算牽連」那一行,中文檔名與 src/only.py 都在、壞候選不在",
++          r.returncode == 0 and f"只在提交 {full[:12]} 裡、會談目錄沒有,沒算牽連" in line and "src/中文檔.py" in line
++          and "src/only.py" in line and "scripts/../../x" not in line, f"rc={r.returncode} {r.stderr[-200:]} {t[:500]}")
++    check("S6: 沒對只在提交裡的檔跑 impact(提到它的節點沒進固定席)", "ONLY-IMPACT-HIT" not in t and "Systems/提到only" not in t, t[:500])
++    check("S6: 不出現「沒牽到任何家、合約或事故的節點」", "沒牽到任何家、合約或事故的節點" not in t, t[:500])
++
++
++def t_dispatch_lens_spec_commit_linked_three_kinds():
++    """[S7] 連結四篇:會談目錄有(附內容)、只在提交裡且名字合字元集(列名並標)、只在提交裡但名字含換行或反引號(只計數)、
++    兩邊都沒有(只印筆數);lands_in 寫同樣的節點時落點段照同一條規則。判準來源:計劃做法 6。"""
++    root, wt = _lr_repo()
++    full = _lr_commit(wt, {"docs/kg-knowledge/Systems/提交才有.md": "---\ntype: system\nstatus: doing\n---\n# x\n",
++                           "docs/kg-knowledge/Systems/壞`名.md": "---\ntype: system\nstatus: doing\n---\n# x\n",
++                           "docs/kg-knowledge/Systems/壞\n行名.md": "---\ntype: system\nstatus: doing\n---\n# x\n",
++                           _LR_PLAN: ("---\ntype: project\nstatus: doing\nlands_in:\n  - Systems/已有節點\n  - Systems/提交才有\n"
++                                      "  - Systems/壞`名\n  - Systems/都沒有\n---\n# 甲\n\n"
++                                      "[[Systems/已有節點]] [[Systems/提交才有]] [[Systems/壞`名]] [[Systems/壞\n行名]] [[Systems/都沒有]]\n")})
++    r, d = _lr_lens(root, f"{full}:{_LR_PLAN}")
++    t = d.get("text", "")
++    check("S7: rc0、第一篇(會談目錄有)附內容,並寫明節點內容是會談目錄的版本",
++          r.returncode == 0 and "LR-SESSION-BODY" in t and "節點內容是會談目錄的版本" in t, f"rc={r.returncode} {r.stderr[-200:]} {t[:500]}")
++    check("S7: 第二篇只列名並標「只在那個提交裡,會談目錄還沒有這篇」",
++          any("Systems/提交才有" in ln and "只在那個提交裡,會談目錄還沒有這篇" in ln for ln in t.splitlines()), t[:900])
++    check("S7: 第三類(名字含換行或反引號)不出現名字、只計數", "壞" not in t and "另有 2 篇只在那個提交裡的節點名含不收的字元,沒列名" in t, t[:900])
++    check("S7: 第四篇不出現名字、只印筆數", "都沒有" not in t and "1 個連結在會談目錄與凍結提交裡都找不到" in t, t[:900])
++    check("S7: 落點段照同一條規則分開", "Systems/已有節點:已存在" in t
++          and any("Systems/提交才有" in ln and "只在那個提交裡,會談目錄還沒有這篇" in ln and ln.lstrip().startswith("- ") for ln in t.splitlines())
++          and "1 個落點在會談目錄與凍結提交裡都找不到" in t and "另有 1 篇落點只在那個提交裡、名字含不收的字元,沒列名" in t, t[-900:])
++
++
++def t_dispatch_lens_spec_commit_arch_text():
++    """[S8] 提交寫法帶 --arch-target:目標架構段照提交裡的計劃文字算(計劃提到的路徑只在提交裡寫到),不靜默變空。判準來源:計劃做法 4。"""
++    root = _nh_repo(cfg={"arch_targets": [{"path": "app/Domain/**", "node": _ARCH_NODE}]})
++    _lr_write(root, {f"docs/kg-knowledge/{_ARCH_NODE}.md": _arch_node_text()})
++    _nh_commit(root, "base")
++    wt = Path(tempfile.mkdtemp(prefix="gctl-lr-wt-")) / "wt2"
++    _nh_git(root, "worktree", "add", "-q", "-b", "lr-plan", str(wt))
++    full = _lr_commit(wt, {_LR_PLAN: "# 甲\n要新增 `app/Domain/只在提交.py` 管付款。\n"})
++    r, d = _lr_lens(root, f"{full}:{_LR_PLAN}", "--arch-target")
++    a = d.get("arch_text", "")
++    check("S8: 目標架構段照提交裡的計劃文字算出(附規則與只在提交裡寫到的路徑)",
++          r.returncode == 0 and "Domain 層不依賴框架與資料庫型別" in a and "app/Domain/只在提交.py" in a, f"rc={r.returncode} {r.stderr[-200:]} {str(d)[:400]}")
++
++
++def t_dispatch_lens_spec_commit_git_only_in_session():
++    """[S9] 讀提交裡的計劃時,lumos(含 impact 子行程與目標架構段)只在會談 repo 跑 git。PATH 上前置一支假 git 記下
++    -C、工作目錄、GIT_DIR,再 exec 真 git;斷言有 rev-parse/ls-tree/cat-file 各至少一筆,而且每一筆都落在會談 repo 根底下。"""
++    import shutil as _sh
++    import stat as _st
++    root = _nh_repo(cfg={"arch_targets": [{"path": "app/Domain/**", "node": _ARCH_NODE}]})
++    _nh_file(root, "src/pay.py")
++    _nh_node(root, "計價規則", about=["src/pay.py"], body="計價在 `src/pay.py`。", summary="KEY:★INVARIANT★ LR-PAY-CONTRACT")
++    _lr_write(root, {f"docs/kg-knowledge/{_ARCH_NODE}.md": _arch_node_text()})
++    _nh_commit(root, "base")
++    wt = Path(tempfile.mkdtemp(prefix="gctl-lr-wt-")) / "wt2"
++    _nh_git(root, "worktree", "add", "-q", "-b", "lr-plan", str(wt))
++    full = _lr_commit(wt, {_LR_PLAN: "# 甲\n要改 `src/pay.py`,新增 `app/Domain/Pay.py`。\n"})
++    real = _sh.which("git")
++    fk = Path(tempfile.mkdtemp(prefix="gctl-lr-fakegit-"))
++    log = fk / "log.txt"
++    (fk / "git").write_text(
++        "#!/bin/sh\nC=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  if [ \"$prev\" = \"-C\" ]; then C=\"$a\"; fi\n  prev=\"$a\"\ndone\n"
++        f"printf '%s\\t%s\\t%s\\t%s\\n' \"$C\" \"$(pwd -P)\" \"${{GIT_DIR:-}}\" \"$*\" >> '{log}'\n"
++        f"exec '{real}' \"$@\"\n", encoding="utf-8")
++    (fk / "git").chmod(_st.S_IRWXU)
++    env = dict(_os_mod.environ, PATH=f"{fk}{_os_mod.pathsep}{_os_mod.environ.get('PATH', '')}")
++    r, d = _lr_lens(root, f"{full}:{_LR_PLAN}", "--arch-target", env=env)
++    rows = [ln.split("\t", 3) for ln in (log.read_text(encoding="utf-8").splitlines() if log.exists() else []) if ln.count("\t") >= 3]
++    sess, other = root.resolve(), wt.resolve()
++    def where(row):
++        c, cwd, gd = row[0], row[1], row[2]
++        if c:
++            p = Path(c) if _os_mod.path.isabs(c) else Path(cwd) / c
++        elif gd:
++            p = Path(gd) if _os_mod.path.isabs(gd) else Path(cwd) / gd
++        else:
++            p = Path(cwd)
++        return p.resolve()
++    def under(p, base):
++        return p == base or base in p.parents
++    bad = [r_ for r_ in rows if not under(where(r_), sess) or under(where(r_), other)]
++    subs = " ".join(r_[3] for r_ in rows)
++    check("S9: rc0、輸出含預期的固定席節點與目標架構段", r.returncode == 0 and "Systems/計價規則.md" in d.get("text", "")
++          and "Domain 層不依賴框架" in d.get("arch_text", ""), f"rc={r.returncode} {r.stderr[-300:]} {str(d)[:300]}")
++    check("S9: 假 git 有記到 rev-parse、ls-tree、cat-file 各至少一筆",
++          all(k in subs for k in ("rev-parse", "ls-tree", "cat-file")), subs[:600])
++    check("S9: 每一筆 git 都落在會談 repo 根底下,沒有一筆落在計劃所在的另一個工作樹", rows and not bad, str(bad)[:600])
++
++
++def t_dispatch_lens_spec_worktree_unchanged_plus_code():
++    """[S10] 工作樹路徑那條路檢查不變(絕對路徑、不在 docs 底下、超過 1MB 照讀,rc 與 stderr 不變),失敗時 --json 多印
++    lens_fail 與 spec_source=worktree;會談目錄不在 git 專案時兩種寫法都回 not_git、rc2。判準來源:計劃做法 2 末條、7;
++    stderr 原文照實作前的固定句。"""
++    root, _wt = _lr_repo()
++    _lr_write(root, {"notes/不在docs底下.md": "連到 [[Systems/已有節點]]。\n", "notes/大計劃.md": "連到 [[Systems/已有節點]]。\n" + "#" * 1100000})
++    r, d = _lr_lens(root, str((root / "notes/不在docs底下.md").resolve()))
++    check("S10: 絕對路徑、不在 docs/*-knowledge 底下的計劃照讀、rc0", r.returncode == 0 and "LR-SESSION-BODY" in d.get("text", ""),
++          f"rc={r.returncode} {r.stderr[-200:]}")
++    r, d = _lr_lens(root, "notes/大計劃.md")
++    check("S10: 超過 1MB 的計劃照讀、rc0", r.returncode == 0 and "LR-SESSION-BODY" in d.get("text", ""), f"rc={r.returncode} {r.stderr[-200:]}")
++    r, d = _lr_lens(root, "docs/kg-knowledge/Projects/沒有這篇.md")
++    check("S10: 計劃不存在 → rc2、stderr 照舊、lens_fail=spec_missing、spec_source=worktree",
++          r.returncode == 2 and "擋下:計劃筆記不存在" in r.stderr and d == {"lens_fail": "spec_missing", "spec_source": "worktree"},
++          f"rc={r.returncode} {r.stderr[-200:]} {d}")
++    r, d = _lr_lens(root, "/etc/hosts")
++    check("S10: repo 外 → rc2、stderr 照舊、lens_fail=spec_outside_repo",
++          r.returncode == 2 and "擋下:計劃筆記不在這個 repo 裡" in r.stderr and d.get("lens_fail") == "spec_outside_repo"
++          and d.get("spec_source") == "worktree", f"rc={r.returncode} {r.stderr[-200:]} {d}")
++    bare = _nh_repo()
++    import shutil as _sh
++    _sh.rmtree(bare / "docs")
++    _lr_write(bare, {"plan.md": "# p\n"})
++    r, d = _lr_lens(bare, "plan.md")
++    check("S10: 沒有 docs/*-knowledge → rc3、stderr 照舊、lens_fail=no_knowledge",
++          r.returncode == 3 and "擋下:repo 裡沒有 docs/*-knowledge" in r.stderr and d.get("lens_fail") == "no_knowledge"
++          and d.get("spec_source") == "worktree", f"rc={r.returncode} {r.stderr[-200:]} {d}")
++    nd = Path(tempfile.mkdtemp(prefix="gctl-lr-nogit-"))
++    for label, spec, src in (("工作樹寫法", "plan.md", "worktree"), ("提交寫法", f"{'a' * 40}:{_LR_PLAN}", "commit")):
++        r, d = _lr_lens(nd, spec, cwd=nd)
++        check(f"S10: 會談目錄不在 git 專案({label})→ rc2、not_git、spec_source={src}、stderr 照舊",
++              r.returncode == 2 and d.get("lens_fail") == "not_git" and d.get("spec_source") == src and "不在 git 專案裡" in r.stderr,
++              f"rc={r.returncode} {r.stderr[-200:]} {d}")
++
++
++def t_dispatch_lens_fail_codes_match_hook():
++    """[S11] lumos 的 _LENS_FAIL_CODES 等於掛鉤 LENS_FAIL_REASONS 的鍵集合(十一個);_dispatch_lens_fail 不收清單外的代碼。"""
++    m = _load_lumos_inproc()
++    hm = _load_hook_mod("dlens_codes_match", "dispatch-lens-hook.py")
++    codes = set(getattr(m, "_LENS_FAIL_CODES", ()) or ())
++    check("S11: lumos 與掛鉤的失敗代碼集合相同,十一個", codes == set(hm.LENS_FAIL_REASONS) and len(codes) == 11,
++          f"lumos={sorted(codes)} hook={sorted(hm.LENS_FAIL_REASONS)}")
++    raised = False
++    try:
++        m._dispatch_lens_fail(False, "not_a_code", 2)
++    except ValueError:
++        raised = True
++    check("S11: _dispatch_lens_fail 收到清單外的代碼會丟 ValueError(不讓沒登記的代碼漏到掛鉤)", raised, "")
++
++
++def _lr_hook_fire(hm, body, rc_=2, spec="docs/kg-knowledge/Projects/甲_計劃.md", raise_timeout=False):
++    """照既有 fire() 的做法:替換 subprocess.run 回假的 lumos 輸出、替換 _hookevent 記下 mark;回 (stdout, 呼叫紀錄, mark 紀錄)。"""
++    import io as _io
++    import json as _j
++    import types as _ty
++    from unittest.mock import patch
++    calls, marks = [], []
++    def fake_run(argv, *a, **k):
++        calls.append(list(argv))
++        if raise_timeout:
++            raise subprocess.TimeoutExpired("lumos", 1)
++        class R:
++            returncode = rc_
++            stdout = _j.dumps(body) if body is not None else ""
++            stderr = ""
++        return R()
++    fake_ev = _ty.ModuleType("_hookevent")
++    fake_ev.mark = lambda kind, note="": marks.append((kind, note))
++    payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": "/tmp/payload-cwd",
++               "tool_input": {"prompt": f"你是審稿人。\nLUMOS-SPEC: {spec}\n"}}
++    out = _io.StringIO()
++    with patch.dict(_os_mod.environ, {"CLAUDE_PROJECT_DIR": "/tmp/會談專案"}), patch.dict(sys.modules, {"_hookevent": fake_ev}), \
++            patch.object(hm, "_find_lumos_script", lambda: "/x/lumos"), patch.object(hm.subprocess, "run", fake_run), \
++            patch.object(hm.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(hm.sys, "stdout", out):
++        rc = hm.main()
++    return rc, out.getvalue(), calls, marks
++
++
++def _lr_note(o):
++    import json as _j
++    if "updatedInput" not in o:
++        return ""
++    p = _j.loads(o)["hookSpecificOutput"]["updatedInput"]["prompt"]
++    return p.split("LUMOS-LENS:", 1)[-1] if "LUMOS-LENS:" in p else ""
++
++
++def t_dispatch_lens_hook_spec_commit_event():
++    """[S12] lumos 回提交寫法成功列:掛鉤不呼叫 _hookevent.mark(成功不記事件)、只叫一次 lumos、標記值原樣傳過去、不呼叫 git。"""
++    hm = _load_hook_mod("dlens_spec_commit_ev", "dispatch-lens-hook.py")
++    sha = "0123456789abcdef0123456789abcdef01234567"
++    val = f"{sha}:docs/kg-knowledge/Projects/甲_計劃.md"
++    body = {"text": "lumos 自動附加(設計審):LR-OK-TEXT", "mode": "spec", "spec_source": "commit", "spec_commit": sha,
++            "spec_blob": "f" * 40, "listed": 1, "pinned": 0, "shown": 1}
++    rc, o, calls, marks = _lr_hook_fire(hm, body, rc_=0, spec=val)
++    argv = calls[0] if calls else []
++    check("S12: rc0、成功內容附進派工詞", rc == 0 and "LR-OK-TEXT" in o and "updatedInput" in o, o[:300])
++    check("S12: 只叫一次 lumos、標記值原樣傳過去", len(calls) == 1 and "--spec" in argv and argv[argv.index("--spec") + 1] == val, str(calls)[:300])
++    check("S12: 不呼叫 git", not any(_os_mod.path.basename(str(c[0])) == "git" or "git" in c[:2] for c in calls), str(calls)[:300])
++    check("S12: 成功不記事件(沒呼叫 _hookevent.mark)", marks == [], str(marks))
++    rc, o, calls, marks = _lr_hook_fire(hm, dict(body, spec_source="worktree"), rc_=0)
++    check("S12: 工作樹寫法成功也不記事件", marks == [] and "LR-OK-TEXT" in o, str(marks))
++
++
++def t_dispatch_lens_hook_spec_worktree_fail_notice():
++    """[S13] 工作樹寫法的 spec_missing / spec_outside_repo:計劃版說明帶 spec-freeze 繞法、不出現「範圍」;記 kind ok、
++    note `spec_worktree <代碼>`;no_knowledge 記 kind error、note `spec_worktree no_knowledge`。判準來源:計劃做法 8。"""
++    hm = _load_hook_mod("dlens_spec_wt_fail", "dispatch-lens-hook.py")
++    for code in ("spec_missing", "spec_outside_repo"):
++        rc, o, _c, marks = _lr_hook_fire(hm, {"lens_fail": code, "spec_source": "worktree"})
++        n = _lr_note(o)
++        check(f"S13: worktree {code} → 計劃版說明(計劃路徑、會談專案)、帶 spec-freeze 繞法、不出現「範圍」",
++              rc == 0 and n and "docs/kg-knowledge/Projects/甲_計劃.md" in n and "/tmp/會談專案" in n
++              and "lumos spec-freeze" in n and "LUMOS-SPEC:" in n and "範圍" not in n, n[:400])
++        check(f"S13: worktree {code} → 記 kind ok、note spec_worktree {code}", marks == [("ok", f"spec_worktree {code}")], str(marks))
++    rc, o, _c, marks = _lr_hook_fire(hm, {"lens_fail": "no_knowledge", "spec_source": "worktree"}, rc_=3)
++    n = _lr_note(o)
++    check("S13: worktree no_knowledge → 記 kind error、note spec_worktree no_knowledge;說明不帶繞法",
++          marks == [("error", "spec_worktree no_knowledge")] and n and "spec-freeze" not in n and "範圍" not in n, f"{marks} {n[:300]}")
++
++
++def t_dispatch_lens_hook_spec_commit_fail_notice():
++    """[S14] 提交寫法的五個計劃類代碼:計劃版說明、不帶繞法,記 kind ok、note `spec_commit <代碼>`;not_git 記 error;
++    逾時記 timeout、note 不帶 spec_ 字首。判準來源:計劃做法 8。"""
++    hm = _load_hook_mod("dlens_spec_commit_fail", "dispatch-lens-hook.py")
++    val = "0123456789abcdef0123456789abcdef01234567:docs/kg-knowledge/Projects/甲_計劃.md"
++    for code, rc_ in (("spec_rev_missing", 2), ("spec_missing", 2), ("spec_outside_repo", 2), ("spec_too_large", 2), ("no_knowledge", 3)):
++        rc, o, _c, marks = _lr_hook_fire(hm, {"lens_fail": code, "spec_source": "commit"}, rc_=rc_, spec=val)
++        n = _lr_note(o)
++        check(f"S14: commit {code} → 計劃版說明(計劃值與原因句)、不帶繞法、不出現「範圍」",
++              rc == 0 and n and val in n and hm.LENS_FAIL_REASONS.get(code, "\0") in n and "spec-freeze" not in n and "範圍" not in n, n[:400])
++        check(f"S14: commit {code} → 記 kind ok、note spec_commit {code}", marks == [("ok", f"spec_commit {code}")], str(marks))
++    rc, o, _c, marks = _lr_hook_fire(hm, {"lens_fail": "not_git", "spec_source": "commit"}, spec=val)
++    n = _lr_note(o)
++    check("S14: commit not_git → 計劃版說明用既有原因句、記 kind error", marks == [("error", "spec_commit not_git")]
++          and hm.LENS_FAIL_REASONS["not_git"] in n and "範圍" not in n, f"{marks} {n[:300]}")
++    rc, o, _c, marks = _lr_hook_fire(hm, None, spec=val, raise_timeout=True)
++    check("S14: 逾時 → 記 timeout、note 不帶 spec_ 字首", len(marks) == 1 and marks[0][0] == "timeout"
++          and not marks[0][1].startswith("spec_") and "鏡頭計算超時" in o, str(marks))
++
++
++_LR_PRE_IMPL_HOOK_COMMIT = "30238fbd9d98b803285d6d6f7c3f7fd9f25f3744"   # 本計劃實作前最後一次改掛鉤的提交(在主線上)
++
++
++def _lr_new_lumos_rows():
++    """用被測 repo 的 lumos 真的跑出提交寫法的成功列與每一種計劃類失敗列(不手寫假 JSON:舊掛鉤要吃的是新 lumos 真的印的東西)。
++    回 [(標籤, rc, stdout)]。"""
++    root, wt = _lr_repo()
++    full = _lr_commit(wt, {_LR_PLAN: "# 甲\n連到 [[Systems/已有節點]]。\n", "docs/kg-knowledge/Projects/太大.md": b"#" * 1048577})
++    nd = Path(tempfile.mkdtemp(prefix="gctl-lr-nogit-"))
++    out = []
++    for label, base, spec in (("成功", root, f"{full}:{_LR_PLAN}"), ("spec_rev_missing", root, f"{full[:7]}:{_LR_PLAN}"),
++                              ("spec_outside_repo", root, f"{full}:/etc/hosts"), ("spec_missing", root, f"{full}:docs/kg-knowledge/Projects/沒有.md"),
++                              ("spec_too_large", root, f"{full}:docs/kg-knowledge/Projects/太大.md"),
++                              ("no_knowledge", root, f"{full}:docs/zz-knowledge/Projects/x.md"), ("not_git", nd, f"{full}:{_LR_PLAN}"),
++                              ("worktree spec_missing", root, "docs/kg-knowledge/Projects/沒有.md")):
++        r = subprocess.run([sys.executable, GRAPHCTL, "dispatch-lens", "--spec", spec, "--repo", str(base), "--json"],
++                           capture_output=True, text=True, cwd=str(base), check=False)
++        out.append((label, r.returncode, r.stdout))
++    return out
++
++
++def t_dispatch_lens_hook_old_with_new_lumos():
++    """[S19] 本計劃實作前的掛鉤收新 lumos 的提交寫法成功列與每一種計劃類失敗列:rc0、成功列照附、失敗列不附說明行、不丟例外。"""
++    import importlib.util
++    import io as _io
++    import json as _j
++    import types as _ty
++    from importlib.machinery import SourceFileLoader
++    from unittest.mock import patch
++    root = Path(GRAPHCTL).resolve().parent.parent
++    g = subprocess.run(["git", "-C", str(root), "show", f"{_LR_PRE_IMPL_HOOK_COMMIT}:scripts/hooks/claude/dispatch-lens-hook.py"],
++                       capture_output=True, check=False)
++    if g.returncode != 0:
++        raise _SrcOnly("需要來源 repo 的歷史才拿得到實作前的掛鉤")
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-lr-oldhook-")) / "dispatch-lens-hook.py"
++    tmp.write_bytes(g.stdout)
++    loader = SourceFileLoader("dlens_old_hook", str(tmp))
++    spec = importlib.util.spec_from_loader("dlens_old_hook", loader)
++    old = importlib.util.module_from_spec(spec)
++    loader.exec_module(old)
++    rows = _lr_new_lumos_rows()
++    def last(s):
++        try:
++            return _j.loads(s.strip().splitlines()[-1])
++        except (ValueError, IndexError):
++            return {}
++    check("S19 前置:新 lumos 每一列都帶 spec_source,失敗列帶認得的計劃類代碼",
++          all(isinstance(last(s), dict) and last(s).get("spec_source") for _l, _rc, s in rows)
++          and [last(s).get("lens_fail") for l, _rc, s in rows[1:7]] == [l for l, _rc, _s in rows[1:7]], str([(l, rc, s[-120:]) for l, rc, s in rows]))
++    for label, rc_, stdout in rows:
++        class R:
++            returncode = rc_
++            stderr = ""
++        R.stdout = stdout
++        payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": "/tmp",
++                   "tool_input": {"prompt": "審稿。\nLUMOS-SPEC: x\n"}}
++        out, err = _io.StringIO(), None
++        fake_ev = _ty.ModuleType("_hookevent")
++        fake_ev.mark = lambda *a, **k: None
++        with patch.dict(sys.modules, {"_hookevent": fake_ev}), patch.object(old, "_find_lumos_script", lambda: "/x/lumos"), \
++                patch.object(old.subprocess, "run", lambda *a, **k: R()), patch.object(old.sys, "stdin", _io.StringIO(_j.dumps(payload))), \
++                patch.object(old.sys, "stdout", out):
++            try:
++                rc = old.main()
++            except Exception as e:   # noqa: BLE001 — 要的就是「不丟例外」
++                rc, err = None, e
++        o = out.getvalue()
++        if label == "成功":
++            check("S19: 舊掛鉤收新 lumos 的成功列 → rc0、照附內容", err is None and rc == 0 and "計劃來源:提交" in o, repr(err) + o[:200])
++        else:
++            check(f"S19: 舊掛鉤收新 lumos 的 {label} 失敗列 → rc0、不附說明行、不丟例外", err is None and rc == 0 and "updatedInput" not in o,
++                  repr(err) + o[:200])
++
++
++def t_dispatch_lens_hook_new_with_old_lumos():
++    """[S20] 新掛鉤收舊 lumos 的回應(stdout 空、rc2,沒有 spec_source):rc0、不附說明行、不記 spec_ 字首的 note、不丟例外。"""
++    hm = _load_hook_mod("dlens_new_old", "dispatch-lens-hook.py")
++    for val in ("0123456789abcdef0123456789abcdef01234567:docs/kg-knowledge/Projects/甲_計劃.md", "docs/kg-knowledge/Projects/甲_計劃.md"):
++        err = None
++        try:
++            rc, o, _calls, marks = _lr_hook_fire(hm, None, rc_=2, spec=val)
++        except Exception as e:   # noqa: BLE001 — 要的就是「不丟例外」
++            rc, o, _calls, marks, err = None, "", [], [], e
++        check(f"S20: 舊 lumos 回 rc2 空輸出({val[:12]}…)→ rc0、不附說明行、不記 spec_ note",
++              err is None and rc == 0 and "updatedInput" not in o and not any(str(n).startswith("spec_") for _k, n in marks),
++              f"{err!r} {o[:200]} {marks}")
++
++
++def _lr_freeze(cwd, plan, out, *extra, env=None):
++    import json as _j
++    r = subprocess.run([sys.executable, GRAPHCTL, "spec-freeze", plan, "--out", str(out), *extra],
++                       capture_output=True, text=True, cwd=str(cwd), env=env, check=False)
++    d = {}
++    if "--json" in extra:
++        try:
++            d = _j.loads(r.stdout.strip().splitlines()[-1])
++        except (ValueError, IndexError):
++            d = {}
++    return r, d
++
++
++def _lr_objects(repo):
++    return _nh_git(repo, "cat-file", "--batch-all-objects", "--batch-check").stdout
++
++
++def t_spec_freeze_snapshot_matches_commit():
++    """[S15] spec-freeze 的快照、提交裡的 blob、工作樹上的計劃三者位元組相同;印的那行是 LUMOS-SPEC: <提交>:<路徑>;
++    父提交是 HEAD;餵給 dispatch-lens 回的 spec_blob 等於快照的 blob;絕對路徑、子目錄相對路徑給法結果相同。"""
++    root, wt = _lr_repo()
++    rel = "docs/kg-knowledge/Projects/丁_計劃.md"
++    _lr_write(wt, {rel: "# 丁\n還沒提交的草稿,連到 [[Systems/已有節點]]。\n"})
++    snap_dir = Path(tempfile.mkdtemp(prefix="gctl-lr-snap-"))
++    out = snap_dir / "r1-snapshot.md"
++    r, _ = _lr_freeze(wt, rel, out)
++    line = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
++    import re as _re
++    m_ = _re.fullmatch(r"LUMOS-SPEC: ([0-9a-f]{40}):(.+)", line)
++    c = m_.group(1) if m_ else ""
++    plan_bytes = (wt / rel).read_bytes()
++    blob_bytes = subprocess.run(["git", "-C", str(wt), "cat-file", "blob", f"{c}:{rel}"], capture_output=True, check=False).stdout if c else b""
++    check("S15: rc0、印的那行是 LUMOS-SPEC: <完整提交編號>:<相對 repo 根的路徑>", r.returncode == 0 and m_ and m_.group(2) == rel,
++          f"rc={r.returncode} {r.stdout[-200:]} {r.stderr[-300:]}")
++    check("S15: 快照、提交裡的 blob、工作樹上的計劃三者位元組相同", out.exists() and out.read_bytes() == plan_bytes == blob_bytes, "")
++    check("S15: 那個提交的父提交是 HEAD", c and _nh_git(wt, "rev-parse", f"{c}^").stdout.strip() == _nh_git(wt, "rev-parse", "HEAD").stdout.strip(), "")
++    snap_blob = _nh_git(wt, "hash-object", "--no-filters", str(out)).stdout.strip()
++    r2, d2 = _lr_lens(root, f"{c}:{rel}")
++    check("S15: 把那一行餵給 dispatch-lens(在會談目錄)回的 spec_blob 等於快照的 blob 編號",
++          r2.returncode == 0 and d2.get("spec_blob") == snap_blob and "LR-SESSION-BODY" in d2.get("text", ""), f"rc={r2.returncode} {str(d2)[:300]}")
++    r3, d3 = _lr_freeze(wt, _os_mod.path.realpath(str(wt / rel)), out, "--json")
++    r4, d4 = _lr_freeze(wt / "docs" / "kg-knowledge", "Projects/丁_計劃.md", out, "--json")
++    check("S15: 絕對路徑與子目錄相對路徑給法 → 路徑、blob 與相對 repo 根的給法相同",
++          r3.returncode == 0 and r4.returncode == 0 and d3.get("spec_path") == d4.get("spec_path") == rel
++          and d3.get("spec_blob") == d4.get("spec_blob") == snap_blob, f"{r3.stderr[-200:]} {r4.stderr[-200:]} {d3} {d4}")
++
++
++def t_spec_freeze_leaves_refs_and_index():
++    """[S16] spec-freeze 前後 for-each-ref、真的 index 位元組、HEAD 與目前分支都不變;工作樹另一個沒提交的改動不進提交。"""
++    _root, wt = _lr_repo()
++    rel = "docs/kg-knowledge/Projects/丁_計劃.md"
++    _lr_write(wt, {rel: "# 丁\n草稿\n", "src/pay.py": "x = 2  # 沒提交的改動\n", "src/staged.py": "z = 1\n"})
++    _nh_git(wt, "add", "src/staged.py")
++    idx = Path(_nh_git(wt, "rev-parse", "--path-format=absolute", "--git-path", "index").stdout.strip())
++    def snap():
++        return (_nh_git(wt, "for-each-ref").stdout, idx.read_bytes(), _nh_git(wt, "rev-parse", "HEAD").stdout,
++                _nh_git(wt, "symbolic-ref", "HEAD").stdout)
++    check("S16 前置:index 是工作樹自己的那份(.git/worktrees/<名>/index)", "worktrees" in idx.parts and idx.exists(), str(idx))
++    before = snap()
++    r, _ = _lr_freeze(wt, rel, Path(tempfile.mkdtemp(prefix="gctl-lr-snap-")) / "r1-snapshot.md")
++    after = snap()
++    line = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
++    c = line.split(" ", 1)[-1].split(":", 1)[0] if line.startswith("LUMOS-SPEC: ") else ""
++    check("S16: rc0", r.returncode == 0 and c, f"rc={r.returncode} {r.stderr[-300:]}")
++    check("S16: for-each-ref、真的 index 位元組、HEAD、目前分支都不變", before == after, "")
++    changed = [x for x in _nh_git(wt, "diff-tree", "-r", "-z", "--name-only", "--no-commit-id", "HEAD", c).stdout.split("\0") if x] if c else ["?"]
++    check("S16: 提交的 tree 只比 HEAD 多這份計劃(沒提交的改動與暫存的新檔都不進)", changed == [rel], str(changed))
++
++
++def t_spec_freeze_runs_no_hooks_or_filters():
++    """[S17] repo 裝了會留記號的 pre-commit、commit-msg、post-commit、post-index-change 掛鉤、clean 過濾器與 fsmonitor 時,
++    spec-freeze 跑完記號都不存在。前置:先用一般的 git 操作證明這些掛鉤真的會被觸發。"""
++    _root, wt = _lr_repo()
++    rel = "docs/kg-knowledge/Projects/丁_計劃.md"
++    _lr_write(wt, {rel: "# 丁\n草稿\n"})
++    marks = Path(tempfile.mkdtemp(prefix="gctl-lr-marks-"))
++    hooks = Path(_nh_git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()) / "hooks"
++    hooks.mkdir(exist_ok=True)
++    for h in ("pre-commit", "commit-msg", "post-commit", "post-index-change"):
++        p = hooks / h
++        p.write_text(f"#!/bin/sh\ntouch '{marks}/{h}'\nexit 0\n", encoding="utf-8")
++        p.chmod(0o755)
++    fsm = marks.parent / (marks.name + "-fsmonitor.sh")
++    fsm.write_text(f"#!/bin/sh\ntouch '{marks}/fsmonitor'\nexit 1\n", encoding="utf-8")
++    fsm.chmod(0o755)
++    _nh_git(wt, "config", "filter.lrmark.clean", f"sh -c 'touch {marks}/clean; cat'")
++    _lr_write(wt, {".gitattributes": "*.md filter=lrmark\n"})
++    probe = Path(tempfile.mkdtemp(prefix="gctl-lr-probe-")) / "idx"
++    subprocess.run(["git", "-C", str(wt), "read-tree", "HEAD"], env=dict(_os_mod.environ, GIT_INDEX_FILE=str(probe)), capture_output=True, check=False)
++    subprocess.run(["git", "-C", str(wt), "hash-object", rel], capture_output=True, check=False)
++    check("S17 前置:暫存 index 的 read-tree 會跑 post-index-change、hash-object 會跑 clean 過濾器",
++          (marks / "post-index-change").exists() and (marks / "clean").exists(), str(sorted(x.name for x in marks.iterdir())))
++    for x in marks.iterdir():
++        x.unlink()
++    _nh_git(wt, "config", "core.fsmonitor", str(fsm))
++    r, _ = _lr_freeze(wt, rel, Path(tempfile.mkdtemp(prefix="gctl-lr-snap-")) / "r1-snapshot.md")
++    left = sorted(x.name for x in marks.iterdir())
++    check("S17: rc0 且掛鉤、過濾器、fsmonitor 的記號都不存在", r.returncode == 0 and r.stdout.startswith("LUMOS-SPEC: ") and left == [],
++          f"rc={r.returncode} {r.stderr[-300:]} 留下 {left}")
++
++
++def t_spec_freeze_rejects_bad_path():
++    """[S18] 路徑含空白、不合規則、本身是符號連結、中間目錄是符號連結、是目錄、1048577 位元組、repo 沒有 HEAD、不在 git 專案:
++    rc2 與對應代碼、不寫 --out、物件清單(cat-file --batch-all-objects)前後相同。判準來源:計劃做法 9 的檢查順序。"""
++    _root, wt = _lr_repo()
++    pj = "docs/kg-knowledge/Projects"
++    _lr_write(wt, {f"{pj}/有 空白.md": "# x\n", "notes/x.md": "# x\n", f"{pj}/太大.md": b"#" * 1048577, f"{pj}/真檔/x.md": "# x\n",
++                   "outside_big.md": b"#" * 1048577})
++    _os_mod.symlink("/etc/hosts", wt / pj / "連結.md")
++    _os_mod.symlink("真檔", wt / pj / "連到目錄")
++    _os_mod.symlink("../../../outside_big.md", wt / pj / "連到大檔.md")
++    cases = [("路徑含空白", wt, f"{pj}/有 空白.md", "spec_outside_repo"), ("不在 docs/<slug>-knowledge 底下", wt, "notes/x.md", "spec_outside_repo"),
++             ("本身是符號連結", wt, f"{pj}/連結.md", "spec_missing"), ("中間目錄是符號連結", wt, f"{pj}/連到目錄/x.md", "spec_missing"),
++             ("是目錄", wt, f"{pj}/真檔", "spec_missing"), ("1048577 位元組", wt, f"{pj}/太大.md", "spec_too_large"),
++             ("符號連結指到大檔(lstat 先於大小)", wt, f"{pj}/連到大檔.md", "spec_missing")]
++    nohead = Path(tempfile.mkdtemp(prefix="gctl-lr-nohead-"))
++    subprocess.run(["git", "init", "-q", str(nohead)], capture_output=True, check=False)
++    _lr_write(nohead, {f"{pj}/x.md": "# x\n"})
++    cases.append(("repo 沒有 HEAD", nohead, f"{pj}/x.md", "no_head"))
++    nogit = Path(tempfile.mkdtemp(prefix="gctl-lr-nogit-"))
++    _lr_write(nogit, {f"{pj}/x.md": "# x\n"})
++    cases.append(("不在 git 專案", nogit, f"{pj}/x.md", "not_git"))
++    for label, cwd, plan, want in cases:
++        out = Path(tempfile.mkdtemp(prefix="gctl-lr-snap-")) / "r1-snapshot.md"
++        repo = cwd if cwd != nogit else None
++        before = _lr_objects(repo) if repo else ""
++        r, d = _lr_freeze(cwd, plan, out, "--json")
++        after = _lr_objects(repo) if repo else ""
++        check(f"S18: {label} → rc2、freeze_fail={want}、不寫 --out、物件清單前後相同",
++              r.returncode == 2 and d.get("freeze_fail") == want and not out.exists() and before == after,
++              f"rc={r.returncode} {d} {r.stderr[-200:]}")
++
++
++def t_spec_freeze_refuses_overwrite_frozen_snapshot():
++    """[S21] --out 已存在而且內容跟工作樹上的計劃不同 → rc2、out_conflict、--out 位元組不變、物件清單前後相同;內容相同 → rc0 照常印那一行;
++    --out 是符號連結也拒絕。"""
++    _root, wt = _lr_repo()
++    rel = "docs/kg-knowledge/Projects/丁_計劃.md"
++    _lr_write(wt, {rel: "# 丁\n第二版(已折進修正)\n"})
++    d0 = Path(tempfile.mkdtemp(prefix="gctl-lr-snap-"))
++    out = d0 / "r1-snapshot.md"
++    out.write_bytes(b"# \xe4\xb8\x81\n\xe7\xac\xac\xe4\xb8\x80\xe7\x89\x88\n")
++    old = out.read_bytes()
++    before = _lr_objects(wt)
++    r, d = _lr_freeze(wt, rel, out, "--json")
++    check("S21: 內容不同 → rc2、out_conflict、--out 位元組不變、物件清單前後相同",
++          r.returncode == 2 and d.get("freeze_fail") == "out_conflict" and out.read_bytes() == old and _lr_objects(wt) == before,
++          f"rc={r.returncode} {d} {r.stderr[-200:]}")
++    out.write_bytes((wt / rel).read_bytes())
++    r, d = _lr_freeze(wt, rel, out)
++    check("S21: 內容相同 → rc0、照常印那一行", r.returncode == 0 and r.stdout.strip().startswith("LUMOS-SPEC: "), f"rc={r.returncode} {r.stderr[-200:]}")
++    lnk = d0 / "r2-snapshot.md"
++    _os_mod.symlink(str(wt / rel), lnk)
++    r, d = _lr_freeze(wt, rel, lnk, "--json")
++    check("S21: --out 是符號連結(就算指到同內容)→ out_conflict", r.returncode == 2 and d.get("freeze_fail") == "out_conflict", f"rc={r.returncode} {d}")
++
++
++def t_spec_freeze_warns_untrusted_self():
++    """[S22] PATH 上的 lumos 指到另一支檔 → stderr 印「不是掛鉤會叫的那支」、仍 rc0;指到自己時不印。只改 PATH、不換 HOME。"""
++    _root, wt = _lr_repo()
++    rel = "docs/kg-knowledge/Projects/丁_計劃.md"
++    _lr_write(wt, {rel: "# 丁\n草稿\n"})
++    other = Path(tempfile.mkdtemp(prefix="gctl-lr-pathother-"))
++    (other / "lumos").write_text("#!/usr/bin/env python3\nprint('舊版')\n", encoding="utf-8")
++    (other / "lumos").chmod(0o755)
++    selfd = Path(tempfile.mkdtemp(prefix="gctl-lr-pathself-"))
++    _os_mod.symlink(str(Path(GRAPHCTL).resolve()), selfd / "lumos")
++    path0 = _os_mod.environ.get("PATH", "")
++    r1, _ = _lr_freeze(wt, rel, Path(tempfile.mkdtemp(prefix="gctl-lr-snap-")) / "a.md", env=dict(_os_mod.environ, PATH=f"{other}{_os_mod.pathsep}{path0}"))
++    check("S22: PATH 上的 lumos 是另一支 → stderr 印警告、仍 rc0", r1.returncode == 0 and "不是掛鉤會叫的那支" in r1.stderr
++          and str(other / "lumos") in r1.stderr, f"rc={r1.returncode} {r1.stderr[-300:]}")
++    r2, _ = _lr_freeze(wt, rel, Path(tempfile.mkdtemp(prefix="gctl-lr-snap-")) / "b.md", env=dict(_os_mod.environ, PATH=f"{selfd}{_os_mod.pathsep}{path0}"))
++    check("S22: PATH 上的 lumos 指到自己 → 不印警告、rc0", r2.returncode == 0 and "不是掛鉤會叫的那支" not in r2.stderr,
++          f"rc={r2.returncode} {r2.stderr[-300:]}")
++
++
+ def t_review_role_cap_counts_files_not_candidates():
+     """[代碼審 r1 外家 F4] 上限數的是要讀內容的檔,不是往上找 package.json 的候選(缺檔的候選不佔名額)。"""
+     m = _load_lumos()
+     m._ROLE_READ_CAP = 3
+     files = [(f"d{i}/sub/a.ts", "H") for i in range(3)]
+     want, capped = m._review_role_wanted(files, [])
+     check("3 支 .ts、上限 3 → 沒有截斷,而且每支的最近 package.json 都在清單裡",
+           capped == 0 and all(f"H:d{i}/sub/package.json" in want for i in range(3)), str((capped, want)))
+     want, capped = m._review_role_wanted(files + [("d9/a.ts", "H")], [])
+     check("第 4 支才截斷", capped == 1 and "H:d9/package.json" not in want, str((capped, want)))
