@@ -3255,12 +3255,14 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 if _by.get(_dr):
                     print(f"    逃逸({'風險低計劃' if _dr == 'low' else '風險高計劃' if _dr == 'high' else '風險不明'})按階段:" + "、".join(f"{_esc_clean(k, 40)} {v}" for k, v in sorted(_by[_dr].items())))
             _tw_esc = [_e for _e in _esc if ((_rec_plan_risk(_e) if (_e.get("plan_risk") or _e.get("door")) else _door_for_loop(env, str(_e.get("loop", "")))) == "low") and _e.get("precision") != "round"]
-            _first30 = set(sorted(_two, key=lambda lp: str(_two[lp].get("ts", "")))[:30])
+            # 門判定規則改版 → 前 30 份從零重數(雙向門放行_計劃裁定):先篩 door_rule 等於現行版本(缺欄位或不是整數的算不符)再排序取前 30;blocker 那條照看全部
+            _cur = [lp for lp, r in _two.items() if type(r.get("door_rule")) is int and r.get("door_rule") == _DOOR_RULE_VERSION]
+            _first30 = set(sorted(_cur, key=lambda lp: str(_two[lp].get("ts", "")))[:30])
             _n_blocker = len({str(_e.get("loop")) for _e in _tw_esc if _e.get("severity") == "blocker"})
             _n_major = len({str(_e.get("loop")) for _e in _tw_esc if _e.get("severity") in ("major", "blocker") and str(_e.get("loop")) in _first30})
             _n_unrev = len({str(_e.get("loop")) for _e in _tw_esc if _e.get("stage") == "push-gate-unreviewed"})
             _round_only = sum(1 for _e in _esc if _e.get("precision") == "round")
-            print(f"    撤除條件分子(只數 precision≠round 與手動記的列;輪級粗判 {_round_only} 列另計不入):blocker 級逃逸 {_n_blocker} 份 / 前 30 份裡 major 以上 {_n_major} 份 / push-gate-unreviewed {_n_unrev} 份")
+            print(f"    撤除條件分子(只數 precision≠round 與手動記的列;輪級粗判 {_round_only} 列另計不入):blocker 級逃逸 {_n_blocker} 份 / 前 30 份裡 major 以上 {_n_major} 份 / push-gate-unreviewed {_n_unrev} 份(前 30 份只數門規則版本 {_DOOR_RULE_VERSION} 的留痕)")
             print("    門檻(拍的,結果出來前不改):①blocker ≥1 份 → 立刻退回風險低計劃放行 ②前 30 份 major 以上 ≥3 份 → 退回 ③push-gate-unreviewed ≥2 份 → 門判定規則重審")
             if _two:
                 _rows = [f"{lp}:條款 {r.get('n_clauses', '?')}/紅 {r.get('n_red', '?')}/keeps {r.get('n_keeps', 0)}(留痕 {str(r.get('ts', ''))[:10]})" for lp, r in sorted(_two.items())]
@@ -4747,7 +4749,8 @@ def _search_region(lineno, line, fm_end):
 # ── 檢索排序核心(BM25F,borrow Whoosh 公式+Robertson BM25F tf 加權;spec:檢索優化_計劃) ──
 
 _RANK_ASCII_RE = re.compile(r"[a-z0-9][a-z0-9_\-]*")
-_RANK_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]+")
+_CJK_HAN_RANGE = r"\u4e00-\u9fff\u3400-\u4dbf"   # 漢字範圍(基本區+擴充 A)的唯一一份:檢索切詞與門的漢字間空白(_DOOR_HAN_GAP_RE)都由它組出(代碼審 code-規格閘不做節 r11 架2)
+_RANK_CJK_RE = re.compile(f"[{_CJK_HAN_RANGE}]+")
 _RANK_FIELD_W = {"title": 4.0, "aliases": 3.5, "summary": 2.5, "tags": 1.5, "body": 1.0, "type": 0.5}   # aliases=同義詞欄(2026-08-05,詞面落空最便宜解;權重略低於標題)
 
 
@@ -4917,6 +4920,19 @@ def _strip_code_text(text, include_code=False):
     return "\n".join(pr for _no, _raw, pr in _search_visible_lines(text.split("\n"), include_code))
 
 
+def _note_lines(text):
+    """計劃正文逐行的切法(規格閘這一族的唯一一份):只認 \\n、\\r\\n、\\r,規則跟帳檔的 _ledger_lines 同一支正則;
+    行尾的換行不多算一行(一般文字上跟 str.splitlines 切得一模一樣)。
+    ★為什麼不用 splitlines★(代碼審 code-規格閘不做節 r10 G1):splitlines 還在 \\x0b、\\x0c、\\x1c–\\x1e、\\x85、U+2028、U+2029 切,
+    條款定義(clause_bindings)卻用 split("\\n"),同一份計劃兩邊行號不同,條款指紋會取到別的行;那幾個字留在同一行裡,比對時由 _is_invisible 拿掉。
+    用的人:門的關鍵字掃描、不做清單、找節(_h2_section_lines)、條款定義與條款指紋、[keeps]、條款檢查、spec-gate 條目與準備、計劃連結
+    (t_note_lines_spec_gate_family 用語法樹守著這一族不再自己切)。"""
+    parts = _ledger_lines(text or "")   # 切行只剩 _ledger_lines 一個入口,這裡只多丟掉尾端的空段(代碼審 r11 架1)
+    if parts and parts[-1] == "":
+        parts.pop()
+    return parts
+
+
 def _visible_lines(lines, keep_fenced=False):
     """★全檔唯一的 fenced-code 判定實作★:逐行 toggle,回 (行號從1起, 原始行)。
 
@@ -5013,15 +5029,73 @@ _CJK_LOOSE_MIN_RUN = 4
 _CJK_LOOSE_MAX_PAIRS = 50
 
 
+# ★路徑/名稱裡「要當特殊字元處理」的 Unicode 類別只有這一份★(回頭重讀代碼審 r3 架構對齊席 F1:原本回頭重讀與存量漂移
+# 舊句檢查各寫一組,日後補類別要改兩處)。Cc 控制字元、Cf 方向控制與零寬、Zl/Zp 行段分隔(str.splitlines 會在這裡切行)、
+# Cs 無損解碼留下的替身字元(不是 UTF-8)。要不要算 Cs 各處自己決定,用 _path_special_chars 的 surrogate 參數表達,不另抄一組。
+_PATH_SPECIAL_CATS = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs"))
+
+
+# 比對時當成看不見、整個拿掉的 Unicode 類別(代碼審 code-規格閘不做節 r9 G1;r10 G1 加 Zl、Zp、拿掉「空白字元一律保留」):控制 Cc(tab 與換行 \n \r 除外)、
+# 格式 Cf、未指派 Cn、私用 Co、代理 Cs、不佔位的組合記號 Mn、圍繞記號 Me、行分隔 Zl(U+2028)、段分隔 Zp(U+2029)。另兩個來源:預設可忽略碼位全表
+# (_pq_is_default_ignorable,Unicode 官方衍生屬性,同一支檔案的唯一一份)與空白圖形 _PQ_BLANK_LOOKALIKES(盲文空白 U+2800、物件替代 U+FFFC、
+# 音樂空音符 U+1D159——類別是 So 這類「看得見」的符號,畫面上卻是一格空白)。
+# ★跟同一支檔案其他「看不見」判法的分工★(代碼審 r10 架2):這裡只管「比對時拿掉」(門的關鍵字比對、搜尋的字對回退與有沒有空白);
+# 寫入端的擋與跳脫各有自己的用途,不併進來——_pq_bad_char/_pq_blank(題目欄位:看不見的字擋在不允許的位置並給具體訊息,_pq_blank 只判有沒有可見基底)、
+# _PATH_SPECIAL_CATS 與 _esc_clean(輸出跳脫)、_lens_hidden_char(派工鏡頭輸出跳脫,跟這裡共用底座 _invisible_base)、_residual_claim_fp(指紋穩定,改了既有指紋全變)。
+_INVISIBLE_CATS = _PATH_SPECIAL_CATS | frozenset(("Co", "Cn", "Mn", "Me"))   # = Cc Cf Cn Co Cs Mn Me Zl Zp;底座類別見 _invisible_base
+_VISIBLE_CONTROLS = frozenset("\t\n\r")   # Cc 裡真的看得見的分隔:tab 與真的換行(門逐行切只認 \n、\r,見 _note_lines)
+
+
+def _is_invisible(ch):
+    """一個字元在比對時算不算看不見(_strip_zero_width 的判準;「比對時拿掉」這種用途的唯一一份,跟其他判法的分工見 _INVISIBLE_CATS 上方)。
+    看得見的分隔只留 tab、\n、\r 與空白類 Zs(一般空白、NBSP、全形空白;夾一般空白的「pay ment」本來就比不到,是已知天花板)。
+    ★不再用 str.isspace 保留★(代碼審 r10 邊1、正1):isspace 為真的還有 \x0b、\x0c、\x1c–\x1f、\x85、U+2028、U+2029,畫面上看不見,
+    \x1f 連 splitlines 都不切,夾在危險詞中間就判風險低(同一族第五次);現在這幾個一律拿掉。
+    建在 _invisible_base 上:底座之外多不佔位的組合記號 Mn、圍繞記號 Me,放過 tab 與換行(規格閘不做節與派工鏡頭兩支分支合併時收斂成同一份底座)。"""
+    if ch in _VISIBLE_CONTROLS:
+        return False
+    return _invisible_base(ch) or unicodedata.category(ch) in ("Mn", "Me")
+
+
+def _invisible_base(c):
+    """「看不見或會改顯示」的共同底座,同一支檔案只有這一份:類別 _PATH_SPECIAL_CATS(Cc、Cf、Zl、Zp、Cs)加私用 Co、未指派 Cn,
+    Unicode 官方的預設可忽略全表(_pq_is_default_ignorable)與畫面上像空白的 _PQ_BLANK_LOOKALIKES。
+    兩種用途各在它上面加差額:輸出跳脫(_lens_hidden_char)就是它本身;比對時拿掉(_is_invisible)多 Mn、Me、放過 tab 與換行。
+    (代碼審 code-派工鏡頭可指定目標repo r8 架構2、code-規格閘不做節 r11 架構3:兩支分支各寫一份,後合的一方收斂。)"""
+    cat = unicodedata.category(c)
+    return cat in _PATH_SPECIAL_CATS or cat in ("Co", "Cn") or _pq_is_default_ignorable(c) or c in _PQ_BLANK_LOOKALIKES
+
+
 def _strip_zero_width(s):
-    """拿掉肉眼看不見的零寬字元(常見於手機輸入法與網頁複製貼上)。
+    """拿掉肉眼看不見的字元(常見於手機輸入法與網頁複製貼上):判準是 _is_invisible——Unicode 類別屬 Cc(tab、\\n、\\r 除外)、Cf、Cn、Co、Cs、Mn、Me、Zl、Zp,
+    或是預設可忽略碼位(_pq_is_default_ignorable),或是空白圖形(_PQ_BLANK_LOOKALIKES)。
+    ★為什麼按類別、不列碼位★(代碼審 code-規格閘不做節 r9 正1、邊1、合1、架1、通1、資2):「危險詞夾隱形字元就判風險低」已被打穿四次
+    (r6 圍欄、r7 反引號、r8 零寬只補一半、r9 Cf 加手列表仍漏蒙古文變體選擇符 U+180B、高棉固有母音 U+17B4、盲文空白、組合重音、控制字元、未指派碼位),
+    每次補一份碼位表就漏另一批;r8 還另抄了一份 _INVISIBLE_EXTRA,成了同一支檔案第三種「什麼算看不見」的定義,這次拿掉、改用既有的全表。
+    ★範圍與上限★(照實寫,不是「全部」):①只顧中英文(專案威脅模型)——Mn 整類刪除會拿掉其他文字的母音記號與聲調(印地文、泰文、越南文的組合寫法),
+    那些文字的詞在這裡比對得不準,中英文不受影響;其他文字佔位的看得見記號 Mc 不刪。②看得見的分隔(tab、\\n、\\r、空白類 Zs)不刪(見 _is_invisible;
+    r10 起 \\x0b、\\x0c、\\x1c–\\x1f、\\x85、U+2028、U+2029 這幾個 isspace 為真卻看不見的改成刪)。③同形字(西里爾 а 冒充拉丁 a)
+    不管——那是看得見的另一個字。④「未指派」跟著執行這支的 Python 的 Unicode 版本(unicodedata.unidata_version);預設可忽略全表另釘 Unicode 16。
+    窮舉測試 t_zero_width_strip_all_invisible 對每個碼位驗「沒拿掉的都看得見、看得見的都沒拿掉」。
+
+    ★呼叫者都要這套刪法★(r9 G1 逐一確認過,四處都只拿去掉後的字串做比對或判斷,不拿去改寫使用者的文字,行雜湊照用原文):
+    門的關鍵字比對(_door_scan_text);搜尋的字對回退(_cjk_bigrams,夾隱形字元會把漢字段切斷——組合記號與控制字元刪掉後漢字段接回來,
+    日文濁點 U+3099 這類 Mn 也會被刪,只影響字對回退的比對,假名本來就不切字對);「加空白」提示與字對回退的有沒有空白判斷
+    (_cjk_nospace_hint、cmd_search;tab 與空白類 Zs 不刪,判斷不變;控制字元、行段分隔與組合記號都不是分詞意圖)。
 
     ★為什麼需要★(2026-09-07 代碼審 r1 通才席實測):一串中文裡夾一個 U+200B 時,
     Python 的 split() 不把它當空白(所以多詞回退不會退),而「有沒有空白」的判斷
     如果把它算成空白,字對回退的閘又會被擋掉——★兩條路同時失效,而且完全沒有訊息★,
     使用者拿到的是沉默的 0 筆。它也會把連續漢字段切斷,讓字對切不出來。
     """
-    return re.sub(r"[\u200b-\u200f\ufeff]", "", s or "")
+    s = s or ""
+    if s.isascii():   # ASCII 只有控制字元會被拿掉,用一次 translate 省掉逐字查表(表由 _is_invisible 推出來,見 _ASCII_INVISIBLE)
+        return s.translate(_ASCII_INVISIBLE)
+    return "".join(ch for ch in s if not _is_invisible(ch))
+
+
+# REVISIT:2026-12-31 看 t_zero_width_strip_all_invisible 在新版 Python(Unicode 17 起)還綠不綠、預設可忽略全表要不要跟著升版;
+# 若有人回報非中英文計劃的危險詞被組合記號刪除誤判,再評估改成「只刪 Mn 裡的預設可忽略與變體選擇」
 
 
 def _cjk_bigrams(term):
@@ -7019,6 +7093,11 @@ def _pq_is_default_ignorable(c):
     return i >= 0 and cp <= _PQ_DICP_RANGES[i][1]
 
 
+# _strip_zero_width 的 ASCII 快路徑表:由 _is_invisible 推出來,不另寫一份「Cc 且非空白」(代碼審 r10 架1);
+# 放在這裡是因為 _is_invisible 要用上面的預設可忽略全表,模組載入時那張表要先在
+_ASCII_INVISIBLE = dict.fromkeys(c for c in range(128) if _is_invisible(chr(c)))
+
+
 def _pq_is_letterish(c):
     return unicodedata.category(c)[:1] in ("L", "M")
 
@@ -7185,7 +7264,9 @@ def _pq_is_tag(c):
 
 
 def _pq_blank(v):
-    """去掉空白、DICP、補充空白字與 Mn/Me/Sk 修飾類後沒有可見基底就算空值。"""
+    """去掉空白、DICP、補充空白字與 Mn/Me/Sk 修飾類後沒有可見基底就算空值。
+    ★不改用 _is_invisible★(代碼審 code-規格閘不做節 r10 架2,分工):那支管「比對時拿掉」;這裡是寫入端的空值判斷,控制字元、私用區、未指派碼位
+    不算空、留給 _pq_bad_char 給具體訊息(哪個碼位、為什麼不收),所有空白與修飾符號 Sk 則算空(比對時它們看得見)。t_pq_blank_division_from_invisible 釘著。"""
     return not any(not (ch.isspace() or _pq_is_default_ignorable(ch) or ch in _PQ_BLANK_LOOKALIKES
                         or unicodedata.category(ch) in ("Mn", "Me", "Sk")) for ch in v)
 
@@ -7876,7 +7957,7 @@ def _h2_section_lines(text, h2_re):
     fence 內不算;沒有那一節回 None。回退節與實務隱患節共用(雙向門放行_計劃 S9;r4 架構對齊席:找節邏輯不准長出第三套)。
     只認 ATX 標題(代碼審 r2:自建 Setext 判定是第二套標題邏輯,還有 fence 錯配與 H1/H2 不分兩個洞)。"""
     out, found, inside = [], False, False
-    for no, ln in _visible_lines(text.splitlines()):
+    for no, ln in _visible_lines(_note_lines(text)):
         if ln.startswith("#"):
             if h2_re.match(ln.strip()):
                 found, inside = True, True
@@ -7956,11 +8037,40 @@ def _note_plan_risk_flag(note):
     return _plan_risk_norm(v) if v is not None else None
 
 
-_DOOR_RULE_VERSION = 1   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 合約行掃描任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅)
+_DOOR_RULE_VERSION = 11   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 實務隱患節標題 / 合約行掃描 / 不做節(_NOGO_H2_RE、_NOGO_ITEM_RE、_NOGO_NEG_PREFIX_RE、_NOGO_NEG_HEADER_RE、_NOGO_CLAUSE_SPLIT_RE、_NOGO_REF_TOKEN_RE、_NOGO_SKIP_LOGIC_VERSION)/ 關鍵字掃描判法(_DOOR_SCAN_LOGIC_VERSION;原始碼由 t_door_scan_logic_version_pin 釘)任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅);2=2026-10-14 起跳過「## 不做」標題下緊接的清單;3=同日不做清單逐句判放寬(剝粗體、括號不切、也不做/亦不算否定);4=同日關鍵字掃描連程式碼圍欄一起看;5=同日關鍵字掃描看每一行原文(圍欄標記行、行內程式碼也算);6=同日關鍵字比對前先 NFKC、去零寬字元(全形英數、夾零寬的危險詞也算);7=同日去掉的隱形字元擴成 Unicode 類別 Cf 全部、變體選擇符、U+034F 與韓文填充字(代碼審 r8 G2;_strip_zero_width);8=同日看不見改按類別判(Cc 空白除外、Cf、Cn、Co、Cs、Mn、Me、預設可忽略全表、空白圖形;代碼審 r9 G1;_is_invisible);9=同日逐行只在 \n、\r\n、\r 切(_note_lines)、isspace 為真卻看不見的控制字元與行段分隔也拿掉、比對前壓連續空白並拿掉漢字之間的空白(代碼審 r10 G1;既有 879 篇筆記沒有一篇含那幾個切行字元,行號與條款指紋不變);10=同日畫面上是空白或換行的控制字元與行段分隔換成空格再比(另比一份刪掉的寫法)、連字號變體換成 -、英文詞界改成前後不是英文字母或數字、LINE 與推送之間空格可有可無(代碼審 r11 G1);11=同日跟派工鏡頭分支合併:看不見的判定建在共用底座 _invisible_base 上,像空白的字取兩邊聯集(多 U+303F、U+13441、U+13442 三個在比對時拿掉);2–10 沒上過主線
+# (Projects/規格閘不把不做節的詞算進風險_計劃)
 _DOOR_CLASS_ZH = {"payment": "金流", "external-send": "對外送出", "prod-irreversible": "不可逆", "self-governance": "守衛面"}   # 四類正式中文名(=lint 的 _RISK_ENUM)
 _EXCL_LEAD_RE = re.compile(r"^[\s>*+•—·\-\d.、)]*")   # 已排除行的前綴:跟條款定義行同一組清單/引用符號
 _EXCLUDED_RE = re.compile(r"^已排除\s*[:：]\s*([^:：]+?)\s*[:：]\s*(.*)$")
 _HAZARD_H2_RE = re.compile(r"^##\s+(?:[(（]?[一二三四五六七八九十\d]+[)）.、]?\s*)?實務隱患\s*(?:[(（][^)）]*[)）])?\s*$")
+# 不做節標題:寫法照 _HAZARD_H2_RE,核心字只認「不做」(使用者 2026-10-14 裁:精準不放寬;「## 不做的事」「## 範圍外」「## 本版不做」都不認)
+_NOGO_H2_RE = re.compile(r"^##\s+(?:[(（]?[一二三四五六七八九十\d]+[)）.、]?\s*)?不做\s*(?:[(（][^)）]*[)）])?\s*$")
+# 不做清單的項目:標記後一定要有空白(`**粗體**`、`-退款`、`3.14 版`、`2026.10` 都不是項目)
+_NOGO_ITEM_RE = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
+# 不做清單判斷邏輯(_nogo_skip_lines 與它依賴的函式、下面幾支正則)的版本:改了判斷就 +1(t_nogo_skip_logic_version_pin 釘原始碼雜湊)
+# 1=整行出現否定字樣就跳(代碼審 r1);2=逐句判、每句都要以否定片語開頭、子項目與續行各自判(代碼審 r2:整行子字串太寬,「不可逆」替自己作保);
+# 3=剝粗體、括號不切子句(只有編號的括號整段拿掉)、「也不做/亦不」開頭算否定(代碼審 r3:外層改由推送前的輕量設計審看門之後,逐句判只剩降噪,典型合法寫法放寬)
+# 兩層怎麼連動(代碼審 r2 架3、合2):改判斷邏輯→t_nogo_skip_logic_version_pin 紅→升這個版本→它進門判定規則指紋→t_door_rule_version_pin 紅→升 _DOOR_RULE_VERSION→舊留痕全部重數。防線在測試時段(兩支都在推送前全套裡),執行時不讀原始碼;漏升版號的推送會被全套擋下,不會帶著舊留痕上線
+# 4=逐行只在 \n、\r\n、\r 切(_note_lines;之前 splitlines 還在 \x0b、\x0c、\x1c–\x1e、\x85、U+2028、U+2029 切,跟條款定義的 split("\n") 行號對不上;代碼審 r10 G1)
+# 5=_note_lines 改成內部叫 _ledger_lines(切行規則不變,只是原始碼改了;代碼審 r11 架1)
+_NOGO_SKIP_LOGIC_VERSION = 5
+# 不做清單逐句判(代碼審 r2):一行剝掉行內標記與清單標記後,照標點與轉折詞切成子句,每一句都要以否定片語開頭,這一行才跳過。
+# ★它只是降噪,不是防線★(代碼審 r3:字面判斷連三輪被沒列到的連接詞與藉口前綴打穿):略過了任何危險詞的風險低計劃,推送前要一筆輕量設計審(_spec_gate_push_light),
+# 所以這裡寫錯的代價是「多審一席」不是「漏審」;別再為了擋夾帶往字表裡補詞。
+# 不共用既有的否定字表:NEG_LEXICONS 認的是「節點正確記錄某符號已不存在」(已移除、改名…)、筆記形狀的 _NS_NEG_* 認的是「還沒做」的待定詞、
+# _REJ_NOGO_RE 只要子句裡出現「不做/停案」就算否決(子字串、不看開頭)——這裡要的是「整句以否定開頭」,而且放過的是風險判定,字表要更窄;
+# 切點也不共用 _NS_NEG_SEG_CUT_RE:那支切「、」與破折號、不切轉折詞,這裡要切「但、而是、and、but」這些能把要做的事接在不做後面的詞。
+# 否定片語只定義這一次(代碼審 r3 架1:兩支正則各抄一份會漂),句首比對與「片語+冒號」標頭都由它組出
+_NOGO_NEG_PHRASES = (r"不做|不支援|不提供|不處理|不含|不包含|不實作|不開發|暫不|本期不|本版不|這一版不|不在本期|排除|也不做|亦不"
+                     r"|out of scope|not doing|won't|will not")
+_NOGO_NEG_PREFIX_RE = re.compile(r"^(?:" + _NOGO_NEG_PHRASES + r")", re.I)
+# 「out of scope: refunds」這種「否定片語+冒號」開頭:冒號後的第一個子句算在否定裡(片語本身要完整等於上面某一個,「Do not forget:」不算)
+_NOGO_NEG_HEADER_RE = re.compile(r"^(?:" + _NOGO_NEG_PHRASES + r")\s*[:：]", re.I)
+# 括號不切(代碼審 r3 邊2:「不做退款(含部分退款)」是補充說明不是另一句);括號裡的轉折詞照切,所以「不做退款(但本版實作扣款)」照掃
+_NOGO_CLAUSE_SPLIT_RE = re.compile(r"[,，;；。:：]|但是|但|而是|只有|只|另外|同時|並且|改成|改為|還要|也要"
+                                   r"|\b(?:and|but|instead|also)\b", re.I)
+# 括號裡只有決策或條款編號(d2、S3、r1)的那一段整段拿掉再判——它不可能藏危險詞(字母最多三個)
+_NOGO_REF_TOKEN_RE = re.compile(r"[(（\[【]\s*[A-Za-z]{0,3}\d{1,4}\s*[)）\]】]")
 _KEEPS_RE = re.compile(r"\[keeps\]")
 _KEEPS_VARIANT_RE = re.compile(r"[\[［【]\s*keeps\s*[\]］】]", re.I)
 _DOOR_STALE_DAYS = 30   # 健檢:風險低 doing 計劃多少天沒新留痕就提醒(不擋)
@@ -8022,23 +8132,65 @@ def _door_linked_signals(env, note, text):
     return out
 
 
+def _nogo_line_says_nogo(ln):
+    """這一行是不是每一句都在說不做:剝行內標記、清單標記、粗體記號與只有編號的括號,照 _NOGO_CLAUSE_SPLIT_RE 切子句,
+    每個非空子句都以 _NOGO_NEG_PREFIX_RE 開頭;開頭是「否定片語+冒號」時冒號後第一句算在否定裡。只是降噪:判錯由推送前的輕量設計審兜。"""
+    s = re.sub(r"^\s*(?:[-*+]|\d{1,9}[.)])[ \t\u3000]+", "", _strip_inline_markup(ln)[0])
+    s = _NOGO_REF_TOKEN_RE.sub("", s.replace("**", "").replace("__", "")).strip()
+    h = _NOGO_NEG_HEADER_RE.match(s)
+    clauses = [c.strip() for c in _NOGO_CLAUSE_SPLIT_RE.split(s[h.end():] if h else s)]
+    clauses = [c for c in clauses if c]
+    if not clauses:
+        return bool(h)
+    if h:
+        clauses = clauses[1:]
+    return all(_NOGO_NEG_PREFIX_RE.match(c) for c in clauses)
+
+
+def _nogo_skip_lines(text):
+    """「## 不做」標題下緊接的那段連續清單裡、每一句都在說不做的行(_nogo_line_says_nogo;項目、子項目、續行各自判)的行號集合。
+    候選行由 _h2_section_lines 取;行號斷開、註解符號、空行後不是項目、不是空行/項目/續行的行都會停。"""
+    lines = _note_lines(text)
+    skip, prev = set(), None   # prev=正在走的清單上一行行號;None=不在清單裡
+    for no, ln in _h2_section_lines(text, _NOGO_H2_RE) or []:
+        if prev is None or no != prev + 1:   # 只從緊接在標題下面的那一行開始(被略過的 ### 標題、圍欄、第二個標題都會讓行號斷開)
+            above = lines[no - 2] if no >= 2 else ""
+            if not (above.startswith("#") and _NOGO_H2_RE.match(above.strip())):
+                prev = None
+                continue
+            col, blank = None, False
+        s = ln.strip()
+        if "<!--" in ln or "-->" in ln:
+            prev = None
+            continue
+        if not s:
+            blank, prev = True, no
+            continue
+        m = _NOGO_ITEM_RE.match(ln)
+        indent = _ns_indent(ln, fullwidth=True)
+        if m and not re.match(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$", ln):
+            col = _ns_indent(re.sub(r"\S", " ", ln[:m.end() - 1]) + "x", fullwidth=True)   # 內容起點=「標記+空白」前綴的寬度
+        elif blank or col is None or indent < col or s[0] in "#<>|" or re.match(r"^(?:=+|-+)$", s):
+            prev = None   # 空行後只准接項目;續行要縮排到項目內容起點、而且是純文字
+            continue
+        blank, prev = False, no
+        if _nogo_line_says_nogo(ln):   # 每一行各自逐句判,子項目與續行不繼承父項目(代碼審 r2);沒過只照掃這一行,清單照舊往下
+            skip.add(no)
+    return skip
+
+
 def _door_judge(env, note, text):
-    """門怎麼判(機械;★預設單向,雙向要證明★):回 {door, signals, missing, exclusions, linked}。
-    硬風險高(任一命中):①四類關鍵字表命中——掃全文可見行,只跳過實務隱患節內合格的已排除行 ②連到的節點帶不可逆/檢查點合約或 risk/ 標籤
+    """門怎麼判(機械;★預設單向,雙向要證明★):回 {door, signals, missing, exclusions, linked, nogo_skipped}。
+    硬風險高(任一命中):①四類關鍵字表命中——掃全文的每一行原文(2026-10-14 版本 5 起含程式碼圍欄、圍欄標記行與行內程式碼,版本 6 起比對前先 NFKC、去零寬字元,版本 7 起 Cf 加手列碼位,版本 8 起看不見的字元按類別判(_is_invisible),版本 9 起逐行只在 \\n、\\r\\n、\\r 切(_note_lines)、isspace 為真卻看不見的字也拿掉、比對前壓連續空白並拿掉漢字之間的空白;_door_keyword_hits、_door_scan_text),跳過實務隱患節內合格的已排除行,以及「## 不做」標題下緊接的那段清單裡每一句都以否定片語開頭的行(_nogo_skip_lines;
+    2026-10-14 起,Projects/規格閘不把不做節的詞算進風險_計劃)——被跳過的行裡本來會命中的記進 nogo_skipped([類, 詞, 該行雜湊前 16 字],進條款區塊指紋)
+    ②連到的節點帶不可逆/檢查點合約或 risk/ 標籤
     ③自帶 risk/ 標籤 ④開頭欄位 door: one-way。都沒命中、且四類各有一行合格已排除 → 風險低;缺哪一類列出來。door: two-way 沒有意義。
     ★這四行通常是 AI 自己寫的=自我認證(Enzo 裁不補人簽),唯一糾錯是逃逸帳與撤除條件★。"""
     exclusions, skip = _door_exclusions(text)
-    signals = []
-    for no, ln in _visible_lines(text.splitlines()):
-        if no in skip:
-            continue
-        vis = _strip_inline_markup(ln)[0]
-        for cls, pats in _PITFALL_COMPILED.items():
-            for rx in pats:
-                m = rx.search(vis)
-                if m:
-                    signals.append(f"關鍵字「{m.group(0)}」(第 {no} 行,{_DOOR_CLASS_ZH[cls]})")
-                    break
+    nogo = _nogo_skip_lines(text)
+    hits = _door_keyword_hits(text, skip)
+    signals = [f"關鍵字「{word}」(第 {no} 行,{cls})" for no, cls, word, _vis in hits if no not in nogo]
+    nogo_skipped = _nogo_skipped_rows(text, nogo, hits=hits)
     linked = _door_linked_signals(env, note, text)
     signals += [f"連到 {lk}({why})" for lk, why in linked]
     if note is not None:
@@ -8047,24 +8199,109 @@ def _door_judge(env, note, text):
             signals.append("開頭欄位 plan_risk: high(作者自己標)")
     missing = [z for z in _DOOR_CLASS_ZH.values() if z not in exclusions]
     return {"door": "high" if (signals or missing) else "low", "signals": signals, "missing": missing,
-            "exclusions": exclusions, "linked": linked}
+            "exclusions": exclusions, "linked": linked, "nogo_skipped": nogo_skipped}
+
+
+_DOOR_SCAN_LOGIC_VERSION = 7   # 門的關鍵字掃描判法(_door_keyword_hits、_door_scan_text)的版本,進門判定規則指紋;兩支的原始碼雜湊由 t_door_scan_logic_version_pin 釘,
+# 改了掃法沒升這個版號那支測試會紅(代碼審 code-規格閘不做節 r7 合3:原本的 _DOOR_SCAN_RAW 是寫死的標記,改掃法指紋不會跟著變)。
+# 1=看每一行原文(門規則版本 5;代碼審 r5 資3、r6 資2、邊1);2=原文先 NFKC、去零寬字元再比(門規則版本 6;代碼審 r7 邊2);3=去掉的隱形字元擴成整類(Cf、變體選擇符、U+034F、韓文填充字;門規則版本 7;代碼審 r8 G2);4=看不見改按類別判(Cc 空白除外、Cf、Cn、Co、Cs、Mn、Me、預設可忽略全表、空白圖形),NFKC 前後各拿一次(門規則版本 8;代碼審 r9 G1);5=逐行只在 \n、\r\n、\r 切(_note_lines),isspace 為真卻看不見的控制字元與行段分隔(\x0b、\x0c、\x1c–\x1f、\x85、U+2028、U+2029)拿掉,比對前壓連續空白、拿掉漢字之間的空白(門規則版本 9;代碼審 r10 G1);6=畫面上是空白或換行的那幾個(_DOOR_SPACE_LIKE)換成空格再比、另比一份刪掉的寫法,連字號變體換成 -,四類詞表的英文詞界改成前後不是英文字母或數字、LINE 與推送之間的空格可有可無(門規則版本 10;代碼審 r11 G1)
+
+
+def _door_scan_text(ln, space_like=" "):
+    """關鍵字比對前的那一行:拿掉看不見的字元(共用 _strip_zero_width,判準見 _is_invisible),再 NFKC(全形英數 ｐａｙｍｅｎｔ 折成 payment、相容字元折回本字),
+    NFKC 之後再拿一次(相容分解可能拆出組合記號)。「退\u200b款」「退\u180b款」「pay\u0301ment」才比得到。
+    ★先拿再 NFKC★(代碼審 r9 G1):組合重音 U+0301 夾在 pay 之後,先 NFKC 會跟 y 合成 ý,之後再刪 Mn 也拆不回來,payment 就比不到。
+    只用在比對;回給呼叫端的那一行(行雜湊用)照舊是原文(代碼審 r7 邊2:之前比原文,全形與零寬就繞過四類)。
+    ★畫面上是空白或換行的那幾個先換成 space_like★(代碼審 r11 合1、通1、邊1):_DOOR_SPACE_LIKE(\x0b Word 手動換行、\x0c、\x1c–\x1f、\x85、
+    U+2028 網頁貼上、U+2029)在 _is_invisible 眼中是看不見(搜尋那邊照刪),但當詞間分隔時 r10 把它們刪掉,兩個詞黏住:
+    DROP\x0bTABLE、deploy to\u2028prod、send\x85mail 都比不到,是 r10 引進的回歸。預設換成空格(之後壓空白併掉;夾在漢字詞中間的「退\x0b款」
+    靠下面拿掉漢字間空白那一步接回來);_door_keyword_hits 對含這幾個字的行另用 space_like="" 比一份刪掉的寫法,夾在英文詞中間的 pay\x1fment 照舊命中。
+    ★連字號變體換成 -★(r11 邊1):NFKC 把 U+2011 折成 U+2010、U+2013 這類不折,pre‑push hook 比不到;NFKC 之後把 _DOOR_DASH_FOLD 的換成 -。
+    ★最後壓空白★(代碼審 r10 資1):連續空白(空格、tab、NBSP 等空白類 Zs)壓成一個空格,兩個漢字中間的空白拿掉——
+    多字危險詞(DROP TABLE、DELETE FROM、pre-push hook)寫死單一空格,兩個空格或 tab 就比不到;中文詞裡本來不用空白分詞
+    (「收斂\u3000判準」「退 款」)。★代價(r11 正1 實測,照實寫)★:兩個詞之間的空白也一起拿掉,前一詞最後一字加後一詞第一字會拼出危險詞——
+    「針對 外部」「面對 外部」→對外、「折扣 款式」→扣款、「以上 架構」「向上 架構」→上架、「不可 逆向」→不可逆、「配送 出貨」→送出、
+    「精簡 訊息」→簡訊、「郵寄 送達」→寄送、「搬遷 移除」→遷移、「資金 流向」→金流;同樣是兩個漢字中間一個空白,不斷詞分不出「退 款」與「折扣 款式」,
+    方向是多判高(t_door_scan_han_gap_known_overflag 兩組一起釘;回頭條件在下面)。英文詞中間的一個空白不併(「pay ment」是兩個字)。
+    ★跨行切開的詞比不到★(資2,天花板):掃描一次看一行,編輯器硬換行把「退\n款」或「DROP\nTABLE」切在詞中間就不命中(計劃〈實務隱患〉)。"""
+    s = ln.translate(_DOOR_SPACE_LIKE_MAP[space_like])
+    s = _strip_zero_width(unicodedata.normalize("NFKC", _strip_zero_width(s))).translate(_DOOR_DASH_FOLD)
+    return _DOOR_HAN_GAP_RE.sub("", _DOOR_SPACE_RUN_RE.sub(" ", s))
+
+
+# 畫面上是空白或換行、比對時卻算看不見的字(isspace 為真且 _is_invisible 為真的全部;t_door_scan_space_like_as_space 對全碼位驗這張表)。
+# 先換再 NFKC:NFKC 不會從別的字生出這幾個(2026-10-14 對全碼位量過),所以換一次就夠
+_DOOR_SPACE_LIKE = "\x0b\x0c\x1c\x1d\x1e\x1f\x85\u2028\u2029"
+_DOOR_SPACE_LIKE_MAP = {" ": dict.fromkeys(map(ord, _DOOR_SPACE_LIKE), " "), "": {}}   # "":不換,交給 _strip_zero_width 刪(另比的那一份)
+# 連字號變體 → -:U+2010–U+2015、減號 U+2212、小型破折號 U+FE58(NFKC 後是 U+2014,列著表明意圖);U+FE63、U+FF0D 本來就由 NFKC 折成 -
+_DOOR_DASH_FOLD = dict.fromkeys(map(ord, "\u2010\u2011\u2012\u2013\u2014\u2015\u2212\ufe58"), "-")
+_DOOR_SPACE_RUN_RE = re.compile(r"\s+")   # _door_scan_text 壓空白用;看不見的拿掉之後,一行裡剩下的空白只有 tab、空白類 Zs 與換成空格的 _DOOR_SPACE_LIKE
+_DOOR_HAN_GAP_RE = re.compile(rf"(?<=[{_CJK_HAN_RANGE}]) (?=[{_CJK_HAN_RANGE}])")   # 兩個漢字中間的那一個空格(漢字範圍跟 _RANK_CJK_RE 同一份常數)
+# REVISIT:2027-01-15 對 Projects 底下的計劃各跑一次 _door_keyword_hits,再用拿掉 _DOOR_HAN_GAP_RE 那一步的版本跑一次,數「只因漢字間空白拿掉才命中、命中的詞跨在兩個詞之間」(人工看)的份數;超過 3 份就開計劃改成只在危險詞本身被拆開時才併(要斷詞表或逐詞白名單,先寫出不會被拿來藏危險詞的認法);2026-10-14 量 0 份(代碼審 r11 正1)
+# REVISIT:2026-12-31 數 Projects 計劃裡「一行以漢字結尾、下一行同一段以漢字開頭」的硬換行段落有幾份;超過 5 份就開計劃讓門掃描把同一段相鄰兩行接起來再比(代碼審 r10 資2)
+
+
+def _door_keyword_hits(text, skip=(), only=None):
+    """門判定訊號 ① 的掃描(唯一一份):行號不在 skip(合格已排除行)的行,每一行每一類取第一個命中。回 [(行號, 類中文名, 命中的詞, 那一行原文)]。
+    ★每一行都掃、看原文★(2026-10-14 起;版本 4 起含程式碼圍欄裡的行,版本 5 起連圍欄標記行本身、成對反引號裡的字、落單反引號之後的字都算):
+    危險詞放進圍欄、圍欄開頭那一行、或反引號裡就判風險低是盲區(代碼審 r5 資3、r6 資2、邊1),寧可多判高——範例請改用「」引號或寫成已排除。
+    比對前先過 _door_scan_text(版本 6 起:NFKC、去零寬字元;版本 7 起 Cf 與手列碼位;版本 8 起看不見的字元按類別判——見 _is_invisible;版本 9 起壓連續空白、拿掉漢字之間的空白;版本 10 起畫面上是空白或換行的字換成空格、含這幾個字的行另比一份刪掉的寫法,連字號變體換成 -;命中的詞是折過之後的寫法)。
+    逐行切法是 _note_lines(只認 \\n、\\r\\n、\\r,跟條款定義與條款指紋同一套行號;代碼審 r10 G1)。跨行切開的詞比不到,是天花板(計劃〈實務隱患〉)。代價:網址、路徑、指令旗標裡的英文詞也會命中(計劃〈實務隱患〉)。
+    只有這條路看原文:條款、[[連結]]、已排除行、不做清單照舊只認圍欄外、剝掉行內標記的文字(行號跟它們一致,skip 照用)。
+    only=行號集合時只掃那幾行(_nogo_skipped_rows 只要不做清單那幾行;結果跟掃全文再篩一樣,少掃其餘的行)。"""
+    out = []
+    for no, ln in enumerate(_note_lines(text), 1):
+        if no in skip or (only is not None and no not in only):
+            continue
+        scans = (_door_scan_text(ln), _door_scan_text(ln, "")) if any(c in _DOOR_SPACE_LIKE for c in ln) else (_door_scan_text(ln),)
+        for cls, pats in _PITFALL_COMPILED.items():
+            m = next((mm for rx in pats for sc in scans if (mm := rx.search(sc))), None)
+            if m:
+                out.append((no, _DOOR_CLASS_ZH[cls], m.group(0), ln))
+    return out
+
+
+def _nogo_line_key(vis):
+    """被略過那一行的雜湊(前 16 字):先 NFC、去掉全部空白,再 sha256。用在兩處:條款區塊指紋(留痕之後改了被略過那一行就過期)
+    與推送前「輕量審綁定的快照裡被略過的行跟現在同不同」(_nogo_review_unbound)。去空白:編輯器去行尾空白不該讓留痕過期、要重審(代碼審 r1 邊界);
+    NFC:é 的兩種寫法是同一個字。標點、符號、零寬字元照算(代碼審 r7 邊1:r6 為內容比對 ratchet 改成只留文字與數字,🚫 換 ✅、負號拿掉都算沒改;
+    那套 ratchet 拿掉之後沒有理由放寬,審過的那一版要一字不差)。"""
+    import hashlib
+    return hashlib.sha256(re.sub(r"\s+", "", unicodedata.normalize("NFC", vis)).encode("utf-8")).hexdigest()[:16]
+
+
+def _nogo_skipped_rows(text, nogo=None, hits=None):
+    """不做清單裡被跳過、本來會命中的危險詞:[類, 詞, 該行的 _nogo_line_key],排序後回。
+    規格閘留痕(進條款區塊指紋)與推送前比對輕量審的凍結快照(_nogo_review_unbound)共用這一支——快照與現況用同一套算法算,才比得了。
+    nogo/hits 沒給就自己從 text 算(_nogo_skip_lines、跳過合格已排除行的 _door_keyword_hits);_door_judge 傳它已經算好的。"""
+    nogo = _nogo_skip_lines(text) if nogo is None else nogo
+    # 自己算時只掃不做清單那幾行、不另算已排除行:已排除行只在「## 實務隱患」節、不做清單只在「## 不做」節,同一行不會同屬兩節,
+    # 跳不跳過結果都一樣(代碼審 r6 併2:推送前對每份快照各算一次,省掉一整份全文掃描)
+    hits = _door_keyword_hits(text, (), only=nogo) if hits is None else hits
+    return sorted([cls, word, _nogo_line_key(vis)] for no, cls, word, vis in hits if no in nogo)
 
 
 def _door_rule_fingerprint():
-    """門判定規則的輸入指紋(四類關鍵字表、已排除行規則、實務隱患節標題、合約行掃描、四類中文名):改了任一支要 bump _DOOR_RULE_VERSION。"""
+    """門判定規則的輸入指紋(四類關鍵字表、已排除行規則、實務隱患節標題、合約行掃描、四類中文名、不做節標題/項目/否定片語/子句切點規則、不做清單判斷邏輯版本、關鍵字掃描判法版本):
+    改了任一支要 bump _DOOR_RULE_VERSION。不做清單的判斷邏輯(_nogo_skip_lines 與它依賴的函式)只收版本號 _NOGO_SKIP_LOGIC_VERSION、
+    關鍵字掃描(_door_keyword_hits、_door_scan_text)只收 _DOOR_SCAN_LOGIC_VERSION——執行時不取原始碼(代碼審 r1 架2);原始碼雜湊各釘在
+    t_nogo_skip_logic_version_pin 與 t_door_scan_logic_version_pin,改了邏輯沒升版號那支會紅(代碼審 r7 合3)。"""
     import hashlib
     import json as _j
     parts = [_j.dumps(PITFALL_CLASSES, ensure_ascii=False, sort_keys=True), _EXCLUDED_RE.pattern, _EXCL_LEAD_RE.pattern, _HAZARD_H2_RE.pattern,
-             IRREVERSIBLE_RE.pattern, CHECKPOINT_RE.pattern, _j.dumps(_DOOR_CLASS_ZH, ensure_ascii=False, sort_keys=True)]
+             IRREVERSIBLE_RE.pattern, CHECKPOINT_RE.pattern, _j.dumps(_DOOR_CLASS_ZH, ensure_ascii=False, sort_keys=True),
+             _NOGO_H2_RE.pattern, _NOGO_ITEM_RE.pattern, _NOGO_NEG_PREFIX_RE.pattern, _NOGO_NEG_HEADER_RE.pattern,
+             _NOGO_CLAUSE_SPLIT_RE.pattern, _NOGO_REF_TOKEN_RE.pattern, f"nogo_logic={_NOGO_SKIP_LOGIC_VERSION}", f"scan_logic={_DOOR_SCAN_LOGIC_VERSION}"]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def _clause_block_sha(text, rows_b, linked, exclusions=None):
+def _clause_block_sha(text, rows_b, linked, exclusions=None, nogo_skipped=None):
     """條款區塊指紋(留痕綁的是它,不是整檔——r3 邊界席:整檔會被 updated: 這種維護弄成過期):
-    每條 [S] 定義行剝行內程式碼、去 [keeps]、壓空白,按編號排序;再加門判定訊號 2 的輸入(連結節點+原因)與四行已排除理由。
+    每條 [S] 定義行剝行內程式碼、去 [keeps]、壓空白,按編號排序;再加門判定訊號 2 的輸入(連結節點+原因)與四行已排除理由;
+    nogo_skipped(不做清單裡被跳過的危險詞,_door_judge 回的)非空才併進來——空的時候指紋跟加這個參數之前一模一樣,舊留痕照舊成立。
     ★它不是門的全部輸入★(代碼審 r1 F1 blocker:正文事後塞金流敘述、條款不動,指紋照樣相同)——推送前另外用 _door_judge 把門整個重判一次,指紋只管「條款與理由有沒有被改」。"""
     import hashlib
-    lines_all = text.splitlines()
+    lines_all = _note_lines(text)
     parts = []
     for b in sorted((b for b in rows_b if b.get("defined")), key=lambda b: int(b["id"][1:])):
         seg = lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else ""
@@ -8072,6 +8309,7 @@ def _clause_block_sha(text, rows_b, linked, exclusions=None):
     parts += [f"link|{lk}|{why}" for lk, why in linked]
     for k, v in sorted((exclusions or {}).items()):   # 壓空白算在 f-string 外面:3.12 前 f-string 運算式不准有反斜線(全套在系統 3.9 上翻紅抓到)
         parts.append("excl|" + k + "|" + re.sub(r"\s+", "", v))
+    parts += ["nogo|" + "|".join(str(x) for x in row) for row in sorted(nogo_skipped or [])]
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -8096,7 +8334,7 @@ def _clause_check_twoway(P, clauses):
 
 def _spec_gate_keeps_rows(text, clauses):
     """回 (標了 [keeps] 的條款 id 集合, 疑似變體([Keeps]/全形括號)的條款 id 清單)——變體一律當沒標。"""
-    lines_all = text.splitlines()
+    lines_all = _note_lines(text)
     keeps, variant = set(), []
     for b in clauses:
         seg = lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else ""
@@ -8184,10 +8422,13 @@ def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, cou
     tests = sorted({m for b in clauses for m in names.get(b["id"], [])})
     rec = {"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"), "kind": "spec-gate", "token": "SPEC-" + _sec.token_hex(4),
            "loop": _loop_id_for_plan(rel), "plan": rel, "plan_risk": judged["door"], "door_rule": _DOOR_RULE_VERSION,
-           "clause_sha": _clause_block_sha(text, rows_b, judged["linked"], judged["exclusions"]), "tests": tests,
+           "clause_sha": _clause_block_sha(text, rows_b, judged["linked"], judged["exclusions"], judged["nogo_skipped"]), "tests": tests,
            "n_clauses": len(clauses), "n_red": counts.get("red", 0), "n_keeps": len(keeps),
            "n_manual": sum(1 for b in clauses if b["state"] == "manual"), "manual_only": not tests,
-           "small_change_rule": _SMALL_CHANGE_RULE_VERSION if not tests else None}
+           "small_change_rule": _SMALL_CHANGE_RULE_VERSION if not tests else None,
+           "nogo_skipped_n": len(judged["nogo_skipped"]), "nogo_skipped": judged["nogo_skipped"][:8],
+           "inputs_sha": _door_rule_fingerprint(),
+           "needs_light_review": judged["door"] == "low" and bool(judged["nogo_skipped"])}   # 門仍是 low;推送前 _spec_gate_push_light 讀現況重算,不只信這一欄
     if judged["door"] == "low":
         rec["exclusions"] = judged["exclusions"]
     else:
@@ -8210,9 +8451,42 @@ def _spec_gate_print_rejections(env):
     print(f"[spec-gate] 舊否決: 圖譜寫下的有 {n} 筆;動手前跑 lumos rejections 讀完、按概念比對,撞到先問人")
 
 
-def _spec_gate_print_door(judged):
+def _nogo_words(sk, n=6):
+    """被略過的危險詞去重後前 n 個(給人看;同一個詞出現在很多行只列一次)。"""
+    uniq = list(dict.fromkeys(w for _c, w, _h in sk))
+    return "、".join(uniq[:n]) + ("" if len(uniq) <= n else f"…等 {len(uniq)} 種")
+
+
+def _nogo_spec_arg(env, rel):
+    """印給人照貼的 --spec 參數:repo 相對路徑(在 repo 根敲)、加 shell 引號;不在 repo 底下就給 vault 底下的路徑。"""
+    try:
+        spec = (env.vault.resolve() / rel).relative_to(_vault_repo_root(env)).as_posix()
+    except ValueError:
+        spec = str(env.vault / rel)
+    return _sh_quote(spec)
+
+
+def _nogo_light_cmd(env, rel, std=False):
+    """不做清單略過了危險詞時要敲的設計審指令(編號=_loop_id_for_plan;--spec 給 repo 相對路徑,在 repo 根敲)。std=True 給輕量審失效之後的
+    完整設計審:編號加 -std、--tier standard(設計審手冊的 light 升級規則;代碼審 r7 換形狀)。
+    編號與路徑加 shell 引號(代碼審 r4 邊1:檔名含空白、引號或分號,照貼會被拆成多個參數或多跑一條指令;走既有的 _sh_quote,中文名字也會加單引號)。"""
+    lid, tier = (_loop_id_for_plan(rel) + "-std", "standard") if std else (_loop_id_for_plan(rel), "light")
+    return f"lumos loop next {_sh_quote(lid)} --tier {tier} --orchestrator claude --spec {_nogo_spec_arg(env, rel)}"
+
+
+def _spec_gate_print_door(judged, env=None, rel=None):
     if judged["door"] == "low":
-        print("[spec-gate] 計劃風險: 低(硬訊號都沒命中;四類已排除:" + "、".join(f"{k}={v[:12]}" for k, v in judged["exclusions"].items()) + ")")
+        # 已排除理由是計劃作者寫的字:過 _plan_quote(清控制字元、換掉「」與括號)、用「」包並標明出處(代碼審 r10 資3、r11 資2)
+        print("[spec-gate] 計劃風險: 低(硬訊號都沒命中;四類已排除,「」裡是計劃裡寫的字:"
+              + "、".join(f"{k}=「{_plan_quote(v[:12], 12)}」" for k, v in judged["exclusions"].items()) + ")")
+        sk = judged.get("nogo_skipped")
+        if sk:   # 外層看門(代碼審 r3):逐句判認不認得夾帶,字面做不到;略過了危險詞就要一席輕量審看那幾行是不是真的不做
+            print(f"[spec-gate] 風險低,但不做清單略過了 {len(sk)} 個危險詞({_nogo_words(sk)}):推送前要有一筆輕量設計審通過"
+                  "(審查席逐行看被略過的那幾行是不是真的不做;派工當下凍結一份計劃副本,記帳帶 --auditor、--spec 這份計劃、--snapshot 那份副本);"
+                  "推送前檢查會擋沒審、沒過、審在這筆留痕之前、或沒綁到這份計劃被略過那幾行的;"
+                  "輕量審抓到 major 以上就改開 -std 完整設計審(編號加 -std、--tier standard,過了處置閘才放行)")   # 代碼審 code-規格閘不做節 r9 合4
+            if env is not None and rel is not None:
+                print(f"    {_nogo_light_cmd(env, rel)}")
         return
     why = judged["signals"][:6]
     if judged["missing"]:
@@ -8233,7 +8507,7 @@ def _clause_check(text, rows_b, grammar=True, tag="disposal", door=None):
     early = _clause_structure_verdict(P, clauses, undef)
     if early:
         return early
-    lines_all = text.splitlines()
+    lines_all = _note_lines(text)
     out = []
     if grammar:
         bad = _clauses_grammar_bad(clauses, lines_all)
@@ -8282,7 +8556,7 @@ def clause_bindings(text, split, default, methods_for, hay_for):
     同一行同時有 [test:] 與 [manual:] → 以 [test:] 為準(靠人只在沒測試時成立)。回 list[dict] 依 id 排序。"""
     defined, fallback, dup, listlike_extra = {}, {}, {}, {}
     # ★哪些字看得見=沿用全檔唯一那兩份實作★:_visible_lines(行層級:fence、跨行註解)+ _strip_inline_markup(行內:註解、反引號 span、未閉合反引號之後不信)。
-    for no, raw in _visible_lines(text.split("\n"), keep_fenced=False):
+    for no, raw in _visible_lines(_note_lines(text), keep_fenced=False):
         line, truncated = _strip_inline_markup(raw)
         ms = list(SPEC_CLAUSE_RE.finditer(line))
         if truncated:
@@ -8410,11 +8684,11 @@ def _plan_system_links(note, text=None, systems_only=True):
     links = [link_target(x) for x in as_list(note.fields.get("lands_in")) + as_list(note.fields.get("related"))] if note is not None else []
     summ = note.fields.get("summary") if note is not None else None
     if isinstance(summ, str):
-        for ln in summ.split("\n"):
+        for ln in _note_lines(summ):
             if ln.strip().startswith(("DEP:", "SEE:")):   # SEE=只放連結的 DEP(筆記格子 0a)
                 links += re.findall(r"\[\[([^\]|#]+)", ln)
     if text:   # 正文只看可見行、剝行內程式碼(代碼審 r2:圍欄裡示範語法的 [[連結]] 不是真連結,會把合格的風險低打成風險高)
-        for _no, ln in _visible_lines(text.splitlines()):
+        for _no, ln in _visible_lines(_note_lines(text)):
             links += [link_target(m) for m in WIKILINK_RE.findall(_strip_inline_markup(ln)[0])]
     out, seen = [], set()
     for lk in links:
@@ -8531,7 +8805,7 @@ def _spec_gate_verdict(n, skipped, verdict, detail, declared=None):
 
 def _spec_gate_items(text, clauses, split, default):
     """綁了測試的條款 → _run_bound_tests 的 items[(條款 id, 平台, 方法, real)]。"""
-    lines_all = text.splitlines()
+    lines_all = _note_lines(text)
     items = []
     for b in clauses:
         if b["state"] != "bound":
@@ -8708,7 +8982,7 @@ def _spec_gate_front(env, node, no_run):
         return 2
     rr = _vault_repo_root(env)
     judged = _door_judge(env, env.notes.get(rel), text)
-    _spec_gate_print_door(judged)
+    _spec_gate_print_door(judged, env, rel)
     _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
     pq_rc = _spec_gate_pending(env, rel, text)   # 待決問題:判門之後、條款與 --no-run 之前(待決問題改存開頭欄位_計劃 S1)
     if pq_rc is not None:
@@ -8739,7 +9013,7 @@ def _spec_gate_prepare(rr, text, clauses):
     except (ValueError, OSError) as e:
         print(f"[spec-gate] 跑: —(平台設定讀不動:{e};略過)")
         return None
-    lines_all = text.splitlines()
+    lines_all = _note_lines(text)
     names = {b["id"]: [m for _pl, m in resolve_test_refs(lines_all[b["line"] - 1] if 0 < b["line"] <= len(lines_all) else "", split, default)] for b in clauses}
     return split, default, methods_for, plats, names, loose_for
 
@@ -8785,7 +9059,7 @@ def _spec_gate_print_twoway(clauses, keeps, verdicts):
 def cmd_spec_gate(env, node, no_run=False):
     """規格閘:⓪門(單向/雙向,機械判)①句式 ②綁定+回退節 ③把綁的測試真跑一次 ④相依回歸(全綠才過)⑤匯總+留痕。
     風險高(半套語意):紅綠只印不擋,接著走 lumos loop next。風險低(雙向門放行_計劃):至少一條新行為、每條沒標 keeps 的各自紅、
-    keeps 的既存且綠、弱證據不算 → PASS(風險低):直接實作、不派審;留痕 kind=spec-gate 進審查帳(推送閘讀它)。
+    keeps 的既存且綠、弱證據不算 → PASS(風險低):直接實作、不派審(不做清單略過了危險詞時改講推送前要一筆輕量設計審);留痕 kind=spec-gate 進審查帳(推送閘讀它)。
     判定走跟處置閘第五步同一支 _clause_check;句式與回退節只對首筆帳晚於 _SPEC_GATE_SINCE 的迴圈驗。rc:擋下 1;其餘 0。"""
     front = _spec_gate_front(env, node, no_run)
     if isinstance(front, int):
@@ -8807,7 +9081,10 @@ def cmd_spec_gate(env, node, no_run=False):
     summ = _clause_summary(clauses)
     print(f"[spec-gate] 匯總: 條款 {len(clauses)}/綁了 {summ['bound']}/靠人 {summ['manual']}/紅 {counts['red']}/綠 {counts['green']}/弱證據 {counts['weak']}/相依回歸 {reg_ok} 支綠" + (f"/keeps {len(keeps)}" if keeps else ""))
     if door == "low":
-        print("[spec-gate] PASS(風險低):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
+        if judged["nogo_skipped"]:
+            print("[spec-gate] PASS(風險低):可以實作;不做清單略過了危險詞,推送前要一筆輕量設計審通過(指令見上;抓到 major 改開 -std 完整設計審)。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
+        else:
+            print("[spec-gate] PASS(風險低):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
     else:
         print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;風險高只印不擋。接著走:\n    lumos loop next")
     _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts)
@@ -8817,28 +9094,26 @@ def cmd_spec_gate(env, node, no_run=False):
     return 0
 
 
-def _spec_gate_latest_records(env):
-    """審查帳裡每條迴圈最後一筆 kind=spec-gate 留痕 {loop: rec}(append 序)。"""
-    import json as _j
-    path = env.vault.parent / ".canary-log.jsonl"
+def _spec_gate_latest_records(env, index=None):
+    """審查帳裡每條迴圈(NFC)最後一筆 kind=spec-gate 留痕 {loop: rec}(append 序)。讀帳走 _spec_gate_ledger_index;
+    index=_nogo_ctx 已讀好的表(推送前檢查共用,不再讀一次帳)。"""
+    index = _spec_gate_ledger_index(env) if index is None else index
     latest = {}
-    if not path.exists():
-        return latest
-    for ln in _ledger_lines(path.read_text(encoding="utf-8", errors="replace")):
-        if not ln.strip():
-            continue
-        try:
-            d = _j.loads(ln)
-        except ValueError:
-            continue
-        if isinstance(d, dict) and d.get("kind") == "spec-gate" and d.get("loop"):
-            latest[nfc(str(d["loop"]))] = d
+    for loop, rows in index.items():
+        gates = [d for d in rows if d.get("kind") == "spec-gate"]
+        if gates:
+            latest[loop] = gates[-1]
     return latest
+
+
+def _spec_gate_touched_plans(vrel, touched):
+    """推送範圍的檔名清單裡、圖譜 Projects/ 底下的 .md(圖譜內相對路徑)。git diff --name-only 對改名印新路徑,所以改名後的新檔也在裡面。"""
+    return {t[len(vrel) + 1:] for t in touched if t.startswith(vrel + "/Projects/") and t.endswith(".md")}
 
 
 def _spec_gate_push_candidates(env, rr, vrel, touched):
     """推送前要查哪些計劃:範圍碰到的計劃檔,加上 lands_in/related/正文連結指向「被碰到的 Systems 節點或被改程式檔的家」的 doing 計劃。"""
-    plans = {t[len(vrel) + 1:] for t in touched if t.startswith(vrel + "/Projects/") and t.endswith(".md")}
+    plans = set(_spec_gate_touched_plans(vrel, touched))
     systems = {t[len(vrel) + 1:-3] for t in touched if t.startswith(vrel + "/Systems/") and t.endswith(".md")}
     code = [t for t in touched if not t.startswith(vrel + "/")]
     if code:   # 實作提交常只動程式檔不動筆記(編排者實測 E2):被改的檔的家也算被碰到——家對照表走唯一算法 _impact_home_map(代碼審 r2 架構席:自己掃 about_code 會漏掉 status 過濾與路徑正規化)
@@ -9036,28 +9311,389 @@ def _small_change_check(env, rr, git_range, prel, note):
 
 
 def _spec_gate_push_stale(env, rr, prel, n, rec):
-    """推送前先驗留痕還算不算數:讀得到、綁得到、門重判仍是雙向、條款指紋沒變。回原因或 None。"""
+    """推送前先驗留痕還算不算數:讀得到、綁得到、門重判仍是雙向、條款指紋沒變。回 (原因或 None, 重判結果或 None)。"""
     try:
         text = (env.vault / prel).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
-        return f"{prel}:讀不成文字({e.__class__.__name__})"
+        return f"{prel}:讀不成文字({e.__class__.__name__})", None
     rows_b, err = _clause_bindings_for(env, text, root=rr)
     if err:
-        return f"{prel}:測試索引建不起來({err})"
+        return f"{prel}:測試索引建不起來({err})", None
     now = _door_judge(env, n, text)   # ★門整個重判★(代碼審 r1 F1 blocker):指紋只蓋條款與理由,正文塞進關鍵字、補 risk/ 標籤、改 door 欄位都要在這裡被抓到
     if now["door"] != "low":
-        return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {Path(prel).stem}"
-    if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"]) != rec.get("clause_sha"):
-        return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {Path(prel).stem}"
+        dr = rec.get("door_rule")
+        newer = (f";留痕用的是較新的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION},先更新 lumos 再推"
+                 if isinstance(dr, int) and not isinstance(dr, bool) and dr > _DOOR_RULE_VERSION else "")   # 新版留痕、舊版重判會把新規則判低的判高(規格閘不做節計劃〈做法〉4)
+        older = (f";留痕用的是較舊的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION}:判高可能是新規則的結果(例:版本 4 起程式碼圍欄裡的危險詞也算;版本 5 起行內反引號、圍欄開頭那一行、落單反引號之後的字也算;版本 6 起全形英數與夾零寬字元的危險詞也算;版本 7 起夾軟連字號、詞連接符、雙向控制字元、變體選擇符這類隱形字元的也算;版本 8 起夾組合記號、控制字元、未指派碼位、盲文空白這類看不見字元的也算;版本 9 起多字詞中間兩個空格或 tab、兩個漢字中間夾空白、夾 \\x1f 或 U+2028 這類行段分隔的也算;版本 10 起中英緊貼(部署到prod環境)、底線識別名(send_email)、透過LINE推送、連字號變體(pre‑push hook)、用 \\x0b 或 U+2028 隔開的多字詞也算)"
+                 if isinstance(dr, int) and not isinstance(dr, bool) and dr < _DOOR_RULE_VERSION else "")
+        return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}{newer}{older}", now
+    if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"], now["nogo_skipped"]) != rec.get("clause_sha"):
+        return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、不做清單裡被跳過的危險詞、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}", now
+    return None, now
+
+
+def _same_file_path(a, b):
+    """兩條路徑是不是同一個檔:先問檔案系統(os.path.samefile;macOS 預設不分大小寫、NFC/NFD 都認得,代碼審 r5 邊1),
+    任一邊不存在或丟例外(含路徑有 NUL 的 ValueError)就退回 resolve 後的 NFC 字串比;那也算不出來就當不是。"""
+    try:
+        return os.path.samefile(a, b)
+    except (OSError, ValueError):
+        try:
+            return nfc(str(Path(a).resolve())) == nfc(str(Path(b).resolve()))
+        except (OSError, ValueError):
+            return False
+
+
+# 推送前檢查讀帳只留的欄位(代碼審 r6 併1:整本帳每列全留,5 萬筆帶長備註時峰值記憶體是帳的好幾倍):
+# 留痕判定(_spec_gate_push_stale、_spec_gate_push_one、_rec_plan_risk)、light 謂詞(_light_gate_fails、_hash_chain_check)、
+# 輕量審綁定(_nogo_review_unbound)與席位判法(_nogo_seat_ok)用到的。要讀新欄位就加進來,不然讀到的永遠是 None。
+# 完整設計審的列(_spec_gate_full_row:不是 code- 開頭的編號、帶輪次或編號以 -std 結尾)整列留:(b) 出口的處置閘要讀處置清單、留痕、引句判章等
+# 一長串欄位,直接吃這張表(代碼審 r8 併1:之前 (b) 叫 cmd_loop_status 再整本讀一次帳)。
+_SPEC_GATE_PUSH_FIELDS = frozenset({
+    "ts", "kind", "loop", "round", "auditor", "severity", "findings", "reviewed_sha256", "result_sha256",
+    "spec_path", "snapshot_path", "snapshot_sha256", "plan", "plan_risk", "door", "door_rule", "clause_sha", "tests"})
+
+
+def _spec_gate_full_row(lp, d):
+    """推送前讀帳時這一列要不要整列留:完整設計審那一族((b) 出口的處置閘要讀,_nogo_full_review_gate)——編號不是 code- 開頭(代碼審的列
+    推送前用不到,也是帳裡最多的一族),而且帶輪次、或編號以 -std 結尾。其餘照 fields 只留幾欄。"""
+    return not lp.startswith("code-") and ("round" in d or lp.endswith("-std"))
+
+
+def _spec_gate_ledger_index(env, fields=None, bad=None):
+    """規格閘這一族讀審查帳:照迴圈編號(NFC)分組 {編號: [列…]}(帳的 append 序),保留 kind=spec-gate 留痕。推送前檢查開頭讀一次(_nogo_ctx)、
+    _spec_gate_latest_records 沒給表時也走這支。逐行核心跟審查輪那一族(_canary_ledger_scan)共用 _canary_ledger_rows,只是篩法不同
+    (代碼審 code-規格閘不做節 r7 架1:不再讓一支函式帶兩種模式);非 UTF-8 的位元組換成替代字元照讀(一列壞字不讓整本帳讀不到)。
+    fields=欄位名集合時每列只留這幾欄(推送前檢查用,代碼審 r6 併1),完整設計審的列例外整列留(_spec_gate_full_row,代碼審 r8 併1)。
+    帶輪次的列照留:輕量審那一頭跟 loop status --light 一樣,看到就判不了(代碼審 r7 資3:r6 讀帳時整筆跳過,major 用 --round 記就看不到)。
+    bad=串列時讀不懂的行號加進去(_canary_ledger_rows)。檔讀不到 → OSError 往上丟。"""
+    path = env.vault.parent / ".canary-log.jsonl"
+    by = {}
+    if not path.exists():
+        return by
+    for d in _canary_ledger_rows(path, errors="replace", bad=bad):
+        lp = d.get("loop")
+        if not isinstance(lp, str) or not lp:
+            continue
+        lp = nfc(lp)
+        keep = fields is None or _spec_gate_full_row(lp, d)
+        by.setdefault(lp, []).append(d if keep else {k: v for k, v in d.items() if k in fields})
+    return by
+
+
+def _nogo_ctx(env):
+    """推送前檢查共用的查表(代碼審 r5 併1、架3):審查帳讀一次(_spec_gate_ledger_index,只留 _SPEC_GATE_PUSH_FIELDS)、照迴圈編號(NFC)分組;
+    snap 是凍結快照(路徑、帳上雜湊)算過的結果,同一份快照只讀一次。讀不到帳的 OSError 記在 err:推送前檢查開頭就擋下並講原因(_spec_gate_push_scan;代碼審 r6 G2)。
+    bad=讀不懂的行號(壞行、超深巢狀、不是物件的行),skipped=它的行數:(a) 照跳過的接法判、擋下時訊息帶一句(代碼審 r8 合2、正2);
+    (b) 把行號交給處置閘,跟 loop status --disposal 一樣 fail-closed(代碼審 r9 正2、合3、通2:之前 (b) 也跳過,帳尾截斷的 major 會被當成不存在)。
+    治理帳的人裁紀錄不在這裡讀:第一次走到 (b) 才由 _nogo_ctx_gov 讀、存進 ctx["gov"],多份計劃共用(代碼審 r9 併2;r11 併1:r10 改成在這裡無條件讀,
+    只走輕量審、根本沒有略過行的計劃也要整本讀一次本庫約 20MB 的帳)。"""
+    bad = []
+    try:
+        return {"by_loop": _spec_gate_ledger_index(env, _SPEC_GATE_PUSH_FIELDS, bad=bad), "err": None, "snap": {}, "skipped": len(bad), "bad": tuple(bad)}
+    except OSError as e:
+        return {"by_loop": {}, "err": e, "snap": {}, "skipped": 0, "bad": ()}
+
+
+def _nogo_ctx_gov(env, ctx):
+    """(b) 出口要的治理帳人裁紀錄 (events, err)(_retro_gov_events 不帶編號):第一次叫才讀,之後從 ctx["gov"] 拿(多份計劃只讀一次)。"""
+    if "gov" not in ctx:
+        ctx["gov"] = _retro_gov_events(_vault_repo_root(env))
+    return ctx["gov"]
+
+
+def _under_root(root, p):
+    """帳上記的路徑 → 要讀的路徑:相對路徑接在 root(repo 根)底下;絕對路徑照用;root 是 None 就照原樣。不 resolve(要的呼叫端自己做)。
+    ★名字只說相對路徑接在哪,不是「限在 repo 內」的邊界檢查★(代碼審 r7 架2):絕對路徑、`..` 照樣指到 repo 外,單人依序操作的威脅模型下不擋。
+    處置閘的留痕重驗、輕量審的審材路徑與凍結快照、-std 的審材路徑、問閘結束後的 spec 路徑都走這一支(代碼審 r6 架2、r7 架2:原本各寫一份);
+    r8 合5 再收六處另一種拼法的:席報告路徑(_severity_check_row)、loop next 印的在審材料(reviewed_spec)、core.hooksPath(_hooks_path_dir)、
+    worktree 的 gitdir(_events_main_trusted,根是 gitdir 檔所在目錄)、lint 規則樣本(cmd_rule_check)、派工鏡頭的計劃路徑(_dispatch_lens_read_spec_worktree)。
+    r9 架3 再收兩處 os.path.isabs 拼法的:跑滿回顧檢查的席報告是否還在(_cap_retro_check)、impact 讀被碰檔的內容(cmd_impact)。
+    t_nogo_shared_helpers_used 用語法樹找「is_absolute() 或 os.path.isabs() 判斷後接一個根目錄」的寫法,只准出現在這裡。"""
+    q = Path(p)
+    return q if q.is_absolute() or root is None else Path(root) / q
+
+
+def _nogo_snapshot_rows(env, snp, snsha, ctx):
+    """凍結快照算出的被略過那幾行:回 (原因或 None, 列)。快照只讀一次,同一份位元組既驗指紋也取行(代碼審 r6 併2:之前驗一次、解碼再讀一次),
+    缺/讀不到/事後被改三種狀態走共用的 _prov_read(跟處置閘的 _prov_check 同一支);帳上路徑接 repo 根(_under_root)。
+    結果照 (路徑, 帳上雜湊) 快取在 ctx["snap"]。"""
+    key = (snp, snsha)
+    if key in ctx["snap"]:
+        return ctx["snap"][key]
+    root = _vault_repo_root(env)
+    st, _p, raw = _prov_read({"snapshot_path": snp, "snapshot_sha256": snsha}, "snapshot_path", lambda v: _under_root(root, v).resolve())
+    if st == "unreadable" or st == "missing":
+        out = (f"凍結快照 {_esc_clean(snp, 80)} 讀不到或路徑解析不了,當成沒綁到", None)
+    elif st == "mismatch":
+        out = (f"凍結快照 {_esc_clean(snp, 80)} 在記帳之後被改過", None)
+    else:
+        try:
+            out = (None, _nogo_skipped_rows(raw.decode("utf-8-sig")))
+        except ValueError as e:   # UnicodeDecodeError 是 ValueError 的子類
+            out = (f"凍結快照 {_esc_clean(snp, 80)} 讀不成 UTF-8 文字({e.__class__.__name__}),當成沒綁到", None)
+    ctx["snap"][key] = out
+    return out
+
+
+def _nogo_review_unbound(env, prel, r, nogo_skipped, ctx=None):
+    """一筆輕量審有沒有綁到這份計劃與現在被略過的那幾行(代碼審 r4 G1:資1、正1——之前只比那筆審查自己的雜湊,審哪個檔都過):
+    帳上的審材路徑(spec_path)要是這份計劃(_same_file_path);凍結快照(snapshot_path)讀得到、內容雜湊等於記帳時存的(snapshot_sha256);
+    派工指紋(reviewed_sha256)就是那份快照的;快照用同一支 _nogo_skipped_rows 算出的被略過那幾行,跟現在的一模一樣(行雜湊 _nogo_line_key)。
+    手改帳的路徑解析不了(含 NUL 的 ValueError,代碼審 r5 通1、邊2)當成沒綁到並講原因。回沒綁上的原因或 None。
+    天花板:手寫一行假帳加一份假快照仍做得到,跟偽造任何審查留痕一樣(計劃 d1)。"""
+    ctx = ctx if ctx is not None else {"snap": {}}
+    root = _vault_repo_root(env)
+    sp, snp, snsha = r.get("spec_path"), r.get("snapshot_path"), r.get("snapshot_sha256")
+    if not isinstance(sp, str) or not sp.strip():
+        return "帳上沒記審材路徑(記帳要帶 --spec <這份計劃>)"
+    if not _same_file_path(_under_root(root, sp), env.vault / prel):
+        return f"審的是 {_esc_clean(sp, 80)},不是這份計劃(或路徑解析不了),當成沒綁到"
+    if not isinstance(snp, str) or not snp.strip() or not isinstance(snsha, str):
+        return "帳上沒記凍結快照(記帳要帶 --snapshot <派工當下這份計劃的副本>)"
+    why, rows = _nogo_snapshot_rows(env, snp, snsha, ctx)
+    if why:
+        return why
+    if r.get("reviewed_sha256") != snsha:
+        return "派工指紋(--reviewed)不是那份凍結快照的雜湊,審的不是快照那一版"
+    if rows != nogo_skipped:
+        return ("快照裡被略過的那幾行跟現在的不一樣(審的是別的版本:審完又改了不做清單,或審到一半計劃被改)——"
+                "請重跑規格閘(沒有風險低留痕的計劃不用)並在現在這一版上重審")
     return None
 
 
-def _spec_gate_push_one(env, rr, prel, n, rec, idx):
-    """推送前查一份風險低計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range, loose_for)。"""
+def _nogo_light_window(rows):
+    """這個迴圈編號的紀錄(append 序,不比 ts——同秒會並列)裡、最近一筆規格閘留痕之後的那段。沒有留痕就是整本帳(代碼審 r5 G2)。
+    回 (窗口, 留痕之前有沒有別的紀錄)。窗口只用來要求「最後一筆輕量審記在這筆留痕之後」與找架構對齊以外的一席;
+    major 不在這裡判:light 謂詞看這個編號全部的紀錄,曾有 major 就永久失效(_nogo_light_gate;代碼審 r7 換形狀)。"""
+    window, before = [], False
+    for d in rows:
+        if d.get("kind") == "spec-gate":
+            before = before or bool(window)
+            window = []   # 每遇到一筆規格閘留痕就重開窗口:舊的審查不再算(代碼審 r4 G3)
+            continue
+        window.append(d)
+    return window, before
+
+
+def _nogo_light_gate(env, prel, nogo_skipped, ctx, loop_id):
+    """出口 (a):這個計劃編號的輕量審閘過了。回 (原因或 None, 要不要直接指 -std)。
+    判法照 lumos loop status --light,不另寫(代碼審 r7 換形狀:拿掉 r6 的內容比對 ratchet):這個編號帳上全部的審查紀錄(不含規格閘留痕)
+    有帶輪次的(多人審格式)→ 判不了;任一筆 caught/none 抓到 major 以上 → light 永久失效(_light_gate_fails 的預設判法;重跑規格閘、
+    改了被略過的行、再一筆乾淨審都洗不回來,出口只剩 -std——設計審手冊的升級規則);其餘看最後一筆。
+    推送前另加三條既有的綁定:最後一筆記在最近一筆規格閘留痕之後(_nogo_light_window,代碼審 r4 G3)、綁到這份計劃與現在被略過的那幾行
+    (_nogo_review_unbound,代碼審 r4 G1)、窗口裡有一席不是架構對齊的審查席(代碼審 r4 G4)。跟 loop status --light 的兩處差別也是既有的:
+    不比整份計劃的雜湊(cur_sha_override=最後一筆的 result;只改散文不必重審,綁定改比快照裡被略過的行),迴圈編號 NFC 後比。"""
+    rows = [d for d in ctx["by_loop"].get(loop_id, []) if d.get("kind") != "spec-gate"]
+    if not rows:
+        return "帳上沒有這個編號的輕量審", False
+    if any("round" in d for d in rows):
+        return (f"迴圈 {_esc_clean(loop_id, 60)} 帳上有帶輪次的紀錄(多人審格式),輕量審判不了(跟 loop status --light 一樣;"
+                "完整設計審要記在原編號加 -std 的編號)"), True
+    verdict, fails = _light_gate_fails(rows, env.vault / prel, cur_sha_override=rows[-1].get("result_sha256"))
+    if verdict == "ratchet":
+        return (f"迴圈 {_esc_clean(loop_id, 60)} 帳上有一筆輕量審抓到 major 以上,light 從此永久失效(ratchet,跟 loop status --light 同一條;"
+                "重跑規格閘、改了被略過的行、再一筆乾淨審都洗不回來)"), True
+    if verdict != "judged":   # bad:最後一筆欄位型別不對(代碼審 r4 邊2);empty 在 rows 非空時不會出現,出現就當判不了
+        return "最後一筆輕量審判不了:" + ";".join(fails or [f"light 謂詞回 {verdict}"]), False
+    window, _before = _nogo_light_window(ctx["by_loop"].get(loop_id, []))
+    if not window:
+        return "帳上的輕量審都早於這筆規格閘留痕(重跑規格閘之後要再審一次)", False
+    if fails:
+        return "最後一筆輕量審沒過:" + ";".join(fails), False
+    why = _nogo_review_unbound(env, prel, window[-1], nogo_skipped, ctx)
+    if why:
+        return "最後一筆輕量審沒綁到這份計劃被略過的那幾行:" + why, False
+    if not any(_nogo_seat_ok(env, prel, r, nogo_skipped, ctx) and r.get("severity") in ("clean", "minor") for r in window):
+        return "這筆規格閘留痕之後沒有架構對齊以外的審查席(要有一席通才逐行看被略過的那幾行;記帳要帶 --auditor,空席名不算一席)", False
+    return None, False
+
+
+def _nogo_seat_ok(env, prel, r, nogo_skipped, ctx):
+    """這一筆算不算「有人逐行看過被略過的那幾行」的一席((a)(b) 兩條出口共用;代碼審 r4 G4 起 (a) 用,r8 資1 起 (b) 也用):
+    有席名、不是架構對齊席(_nogo_is_arch_seat)、是審查紀錄(caught/none),而且綁到這份計劃與現在被略過的那幾行(_nogo_review_unbound)。
+    只有架構對齊席、或沒寫席名,就沒有人逐行看。(a) 另要那一席判 clean/minor(輕量審的過關條件);(b) 的過關由處置閘判,不另看嚴重度。"""
+    return bool(_nogo_has_named_seat(r) and r.get("kind") in ("caught", "none")
+                and _nogo_review_unbound(env, prel, r, nogo_skipped, ctx) is None)
+
+
+def _nogo_has_named_seat(r):
+    """這一筆有沒有架構對齊以外、有寫席名的一席(_nogo_seat_ok 的前兩個條件;(b) 擋下時另用它找「有席但沒綁到」的那一筆,
+    兩處共用這一支,改席位規則只改這裡——代碼審 code-規格閘不做節 r9 架4)。"""
+    a = r.get("auditor")
+    return isinstance(a, str) and bool(a.strip()) and not _nogo_is_arch_seat(a)
+
+
+def _nogo_full_review_shape(rows):
+    """(b) 出口要的完整設計審形狀(代碼審 code-規格閘不做節 r9 資1):回不符合的原因或 ""。三條,照順序:
+    ①這個編號帳上每一筆審查紀錄都帶輪次,而且是非空字串(只看鍵在不在的寫法——呼叫端判「原編號自己帶輪次」那種——在這裡不夠:
+      整數、空字串、清單都會讓處置閘分輪出錯,刻意更嚴;代碼審 r10 架3、邊3);
+    ②定錨分級(_loop_anchor_tier:帳上第一筆 tier 為真值的那筆,跟 loop next 與處置閘同一支;代碼審 r10 架3)是設計審的 standard 或 high,
+      沒有任何一筆帶 tier 就是「沒記分級」;
+    ③另列一條:沒有任何一筆記成 light(定錨之後才記一筆輕量審也擋)。定錨之後其他非 light 的怪值不另擋(寫入端 canary record、loop next 的 --tier
+      只收 light、standard、high;手改帳是天花板,同計劃 d1)。
+    為什麼要:處置閘對「沒輪次、零發現」的列當全處置放行——輕量審抓到 major 之後,照輕量審的寫法(漏帶 --round)在 -std 記一筆乾淨審,
+    一步就繞過 ratchet(資安席實測 rc0)。只看形狀,不看是誰記的(天花板同計劃 d1:帳是記帳的人自己填的)。"""
+    for i, r in enumerate(rows, 1):
+        rid = r.get("round")
+        if rid is None or (isinstance(rid, str) and not rid.strip()):
+            return f"第 {i} 筆沒帶輪次"
+        if not isinstance(rid, str):
+            return f"第 {i} 筆的輪次不是字串({type(rid).__name__})"
+    anchor = _loop_anchor_tier(rows)
+    if anchor is None:
+        return "沒記分級"
+    if anchor not in ("standard", "high"):
+        return f"分級是 {_esc_clean(str(anchor), 20)},不是設計審的 standard/high"
+    light = next((i for i, r in enumerate(rows, 1) if r.get("tier") == "light"), None)
+    if light is not None:
+        return f"第 {light} 筆記成 light(輕量審),完整設計審的每一筆都不是 light"
+    return ""
+
+
+def _nogo_full_review_gate(env, prel, lid, ctx, nogo_skipped):
+    """出口 (b):編號 lid(原編號加 -std;或原編號自己帶輪次的完整設計審,代碼審 r8 正4)的完整設計審過了處置閘,而且綁到這份計劃現在被略過的那幾行。
+    回 None=過了、""=帳上一筆這個編號的審查紀錄都沒有(呼叫端只講怎麼開)、其餘=沒過的原因。跟 (a) 同一套判法(代碼審 r8 G1):
+    ① 帳列從推送前讀好的索引拿(ctx["by_loop"],NFC 分組;不再叫 cmd_loop_status 自己重讀整本帳——r8 併1、邊2、邊3、正2、合2);
+    ② 每一筆帶審材路徑的紀錄審的都是這份計劃(_same_file_path;內容一模一樣的另一個檔過得了 hash 鏈);
+    ③ 處置閘判定走唯一的 _disposal_judge(r8 架1),第一步 G3 跟 (a) 一樣不比整份計劃現在的雜湊(g3_sha_override=最後一筆的 result;
+       實作後照鐵則把 lands_in、status 寫回計劃,整份雜湊一定對不上——r8 正1),條款綁定、落點、跑滿回顧照讀活檔;
+    ④ 最後一輪要有一席 _nogo_seat_ok(架構對齊以外、綁到這份計劃與凍結快照,快照裡被略過的那幾行跟現在一樣;r8 資1、正1)。
+    ⑤ 讀帳讀不懂的行(ctx["bad"])交給處置閘,跟 loop status --disposal 一樣 fail-closed(代碼審 r9 正2、合3、通2:之前跳過,
+       帳尾截斷的 major 被當成不存在,同一本帳 loop status 判 rc2、推送前卻放行);⑥ 每一筆都要有完整設計審的形狀(_nogo_full_review_shape,r9 資1)。
+    天花板跟處置閘本身一樣:帳與留痕是記帳的人自己填的。"""
+    import contextlib
+    import io
+    rows = [r for r in ctx["by_loop"].get(lid, []) if r.get("kind") != "spec-gate"]
+    if not rows:
+        return ""
+    name = _esc_clean(lid, 60)
+    shape = _nogo_full_review_shape(rows)
+    if shape:
+        return (f"{name} 這不是完整設計審({shape}):完整設計審每一筆都要照 {_nogo_light_cmd(env, prel, std=True)} 印的範本記"
+                "(帶 --round rN 與 --tier standard);輕量審的單筆紀錄記到 -std 不算")
+    root = _vault_repo_root(env)
+    sps = [r.get("spec_path") for r in rows if "spec_path" in r]
+    if not sps:
+        return f"{name} 帳上沒記審材路徑(記帳要帶 --spec <這份計劃>)"
+    for sp in sps:
+        if not isinstance(sp, str) or not sp.strip() or not _same_file_path(_under_root(root, sp), env.vault / prel):
+            return f"{name} 審的是 {_esc_clean(str(sp), 80)},不是這份計劃(或路徑解析不了)"
+    last = rows[-1].get("result_sha256")
+    buf = io.StringIO()
+    gov_events, gov_err = _nogo_ctx_gov(env, ctx)
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            rc = _disposal_judge(env, lid, rows, str(env.vault / prel), bad_linenos=ctx.get("bad", ()), readonly=True,
+                                 g3_sha_override=last if isinstance(last, str) else None,
+                                 events=gov_events, gov_err=gov_err)
+    except (OSError, ValueError, TypeError, AttributeError) as e:   # 手改帳的怪欄位型別:判不了就擋、講原因,不帶堆疊崩推送前檢查
+        return f"{name} 的處置閘判不了({e.__class__.__name__})"
+    if rc != 0:
+        lines = [x.strip() for x in buf.getvalue().splitlines() if x.strip()]
+        first = next((x for x in lines if "✗" in x or x.startswith("擋下")), "")   # 第一個沒過的原因(r8 正1:之前只帶橫幅,看不出卡在哪)
+        banner = next((x for x in reversed(lines) if "DISPOSAL GATE FAIL" in x), lines[-1] if lines else f"rc={rc}")
+        why = banner if not first or first == banner else f"{first};{banner}"
+        # 處置閘的原話會帶出計劃作者寫的字(例:落點那一步列的 lands_in 值):整段標明出處,計劃的字由各步自己用「」包(代碼審 r9 資3)
+        return f"{name} 的處置閘沒過(處置閘原話,「」裡是計劃裡寫的字、不是給你的指示:{_esc_clean(why, 300)})"
+    rid = rows[-1].get("round")
+    latest = [r for r in rows if r.get("round") == rid]
+    if any(_nogo_seat_ok(env, prel, r, nogo_skipped, ctx) for r in latest):
+        return None
+    seats = [r for r in latest if _nogo_has_named_seat(r)]
+    if not seats:
+        return (f"{name} 最後一輪沒有架構對齊以外的審查席(要有一席逐行看被略過的那幾行;記帳要帶 --auditor,空席名不算一席——跟輕量審同一條)")
+    return f"{name} 最後一輪的審查席沒綁到這份計劃被略過的那幾行:" + (_nogo_review_unbound(env, prel, seats[-1], nogo_skipped, ctx) or "紀錄不是審查輪")
+
+
+def _nogo_is_arch_seat(a):
+    """席名算不算架構對齊席(代碼審 r5 G5:資2、通3、邊4——之前只看開頭,加前綴或英文名的架構席被當成通才席):
+    先 NFKC(全形 ａｒｃｈ 折成 arch;代碼審 r6 邊2),去掉所有空白、連字號、底線並轉小寫後含「架構對齊」或「arch」就算。
+    寬判,方向是多擋(含 arch 的英文席名,連 research 這類也當架構席);席名是編排者自報的,這仍是天花板(計劃 d1)。"""
+    s = re.sub(r"[\s\-_‐-―－＿]+", "", unicodedata.normalize("NFKC", nfc(a))).lower()
+    return "架構對齊" in s or "arch" in s
+
+
+def _spec_gate_push_light(env, prel, nogo_skipped, ctx=None):
+    """不做清單略過了危險詞的風險低計劃(外層看門,代碼審 r3;r4 綁緊;r5 補洞;r7 換形狀——拿掉 r6 的內容比對 ratchet,回到系統既有的兩條路):
+    推送前要其一成立才放行:(a) 這個計劃編號的輕量審閘過了(_nogo_light_gate:loop status --light 的判法,曾有 major 就永久失效,加上綁到現在被略過的那幾行);
+    (b) 這個編號加 -std(或原編號自己帶輪次)的完整設計審過了處置閘、綁到這份計劃現在被略過的那幾行(_nogo_full_review_gate,跟 (a) 同一套判法;代碼審 r8 G1)。兩條都不成立就擋,訊息講兩條出口;(a) 因為曾抓到 major
+    或帶輪次而失效的,直接指 (b)。改檔名、換編號、自填輪次欄位這類手法跟系統其他審查同一個天花板(帳上的編號、輪次、快照、席名都是記帳的人自己填的),
+    這裡不另做比整套審查系統更強的比對(代碼審 r4–r7 連四輪被自填欄位繞過;計劃〈實務隱患〉)。
+    不比整份計劃的雜湊(只改散文或空白不必重審);綁定改比凍結快照裡被略過的那幾行。ctx=_nogo_ctx(推送前檢查讀一次帳共用);回沒過的原因或 None。"""
+    if not nogo_skipped:
+        return None
+    ctx = ctx if ctx is not None else _nogo_ctx(env)
+    loop_id = nfc(_loop_id_for_plan(prel))
+    std_id = loop_id + "-std"
+    head = f"{prel}:不做清單略過了 {len(nogo_skipped)} 個危險詞({_nogo_words(nogo_skipped)}),推送前要一筆輕量設計審通過、或 -std 完整設計審過了處置閘——"
+    if ctx["err"] is not None:
+        return head + f"審查帳讀不到({ctx['err']})"
+    why, to_std = _nogo_light_gate(env, prel, nogo_skipped, ctx, loop_id)
+    if why is None:
+        return None
+    std = _nogo_full_review_gate(env, prel, std_id, ctx, nogo_skipped)
+    if std is None:
+        return None
+    own = [r for r in ctx["by_loop"].get(loop_id, []) if r.get("kind") != "spec-gate"]
+    if own and any("round" in r for r in own):   # 原編號自己就是帶輪次的完整設計審:它過了處置閘也算(代碼審 r8 正4)
+        mine = _nogo_full_review_gate(env, prel, loop_id, ctx, nogo_skipped)
+        if mine is None:
+            return None
+        if not std:
+            std = mine
+    if ctx.get("skipped"):   # 兩條出口對壞行的接法不同,照實講(代碼審 r10 合1:之前一律說「已跳過」,(b) 因壞行擋下時像是壞行沒影響判定)
+        why += (f"(審查帳有 {ctx['skipped']} 行讀不懂:輕量審那條照 loop status --light 跳過它們判,-std 完整設計審那條遇到就擋下"
+                "——跟 loop status --disposal 一樣;修好或搬走壞行再推)")
+    std_exit = (f"開 -std 完整設計審:{_nogo_light_cmd(env, prel, std=True)},照設計審手冊走完,"
+                f"處置閘(lumos loop status {_sh_quote(std_id)} --disposal --spec {_nogo_spec_arg(env, prel)})過了才放行")
+    std_now = f"(-std 那條現在:{std})" if std else ""
+    if to_std:
+        return head + why + ";出口是" + std_exit + std_now
+    light_exit = (f"先敲 {_nogo_light_cmd(env, prel)},派工當下把計劃凍結一份副本,照它印的範本記帳(帶 --auditor、--spec 這份計劃、"
+                  "--snapshot 那份副本、--reviewed 副本的 sha256)")
+    return head + why + f";兩條出口:①{light_exit};②輕量審抓到 major 以上就{std_exit}" + std_now
+
+
+def _nogo_light_block_event(env, prel, why):
+    """推送前因為輕量審擋下:記一筆治理事件(不是逃逸:沒審是流程沒走完,跟留痕過期同類;gov 數得到擋了幾次,撤除條件要用)。記帳失敗不改判定。"""
+    try:
+        _append_governance_log(env.vault, [{"gate": "spec-gate", "kind": "nogo-light-review-missing", "hard": True, "nodes": [prel],
+                                            "note": why[len(prel) + 1:][:200]}])
+    except (OSError, ValueError) as e:   # 記帳失敗不改判定(照樣擋),但要看得見
+        print(f"[spec-gate 推送前] 治理事件寫不進去({e}),照樣擋", file=sys.stderr)
+
+
+def _spec_gate_push_nogo_only(env, prel, n, rec, ctx=None):
+    """推送範圍改到、但不走風險低全套檢查的計劃(不是 doing、沒有規格閘留痕、或留痕不是風險低;代碼審 r4 G2 資2:改狀態、改檔名就能讓計劃不被挑中):
+    重判一次門,判風險低而且不做清單略過了危險詞 → 走同一套輕量審檢查(_spec_gate_push_light)。沒有風險低留痕也不強迫先跑規格閘
+    (代碼審 r5 G2 合1:做完、全綠的計劃跑規格閘過不了也不留痕,叫人跑等於沒有出口)——這個編號的輕量審閘過了(綁到這份計劃與現在被略過那幾行、
+    有一席不是架構對齊)就放行,輕量審曾抓到 major 的出口是 -std 完整設計審過處置閘(代碼審 r6 正1、r7 換形狀);窗口是最近一筆規格閘留痕之後,
+    沒有留痕就是整本帳。回沒過的原因或 None。
+    判風險高的照舊不在這道檢查裡(要走設計審);檔案不在磁碟上(這次刪掉的)不查。"""
+    p = env.vault / prel
+    if not p.is_file():
+        return None
+    try:
+        text = p.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as e:
+        return f"{prel}:讀不成文字({e.__class__.__name__}),判不了不做清單有沒有略過危險詞"
+    now = _door_judge(env, n, text)
+    if now["door"] != "low" or not now["nogo_skipped"]:
+        return None
+    return _spec_gate_push_light(env, prel, now["nogo_skipped"], ctx)
+
+
+def _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx=None):
+    """推送前查一份風險低計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range, loose_for);ctx=_nogo_ctx。"""
     P = "[spec-gate 推送前]"
-    stale = _spec_gate_push_stale(env, rr, prel, n, rec)
+    stale, now = _spec_gate_push_stale(env, rr, prel, n, rec)
     if stale:
         return stale, None
+    light = _spec_gate_push_light(env, prel, now["nogo_skipped"], ctx)
+    if light:
+        _nogo_light_block_event(env, prel, light)
+        return light, None
     tests = [str(t) for t in (rec.get("tests") or [])]
     loop_id = _loop_id_for_plan(prel)
     if not tests:   # 全靠人驗:沒有測試可跑,改跑小改動閘(四維度全過才放行)
@@ -9084,37 +9720,49 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx):
     return None, f"{P} ✓ {Path(prel).stem}:留痕裡的 {len(tests)} 支測試全綠({'、'.join(tests)})"
 
 
-def _spec_gate_push_scan(env, rr, plans, git_range):
-    """逐份查有風險低留痕的 doing 計劃;回 (沒過的原因清單, 過了的 [(計劃, 全靠人驗)]),全綠的當場印一行;平台設定讀不動印一句回 (None, [])(放行)。"""
-    latest = _spec_gate_latest_records(env)
+def _spec_gate_push_scan(env, rr, plans, git_range, touched_plans=()):
+    """逐份查有風險低留痕的 doing 計劃;回 (沒過的原因清單, 過了的 [(計劃, 全靠人驗)]),全綠的當場印一行;平台設定讀不動印一句、測試不跑,輕量審沒擋就回 (None, [])(放行)。
+    推送範圍改到的計劃(touched_plans)不論狀態、不論有沒有留痕,不走全套的也要重判一次不做清單(_spec_gate_push_nogo_only;代碼審 r4 G2)。
+    審查帳在開頭讀一次(_nogo_ctx),留痕與輕量審都查同一張表(代碼審 r5 併1、架3)。
+    ★審查帳讀不到就擋★(代碼審 r6 G2:讀不到被吞成空表,所有風險低計劃的留痕檢查與測試真跑被靜默跳過):跟讀一次帳之前一樣失敗就擋,講原因。"""
+    ctx = _nogo_ctx(env)
+    if ctx["err"] is not None:
+        return [f"審查帳讀不到({ctx['err']}),規格閘推送前檢查判不了(風險低留痕與不做清單的輕量審都在帳上);修好帳檔權限或路徑再推"], []
+    latest = _spec_gate_latest_records(env, ctx["by_loop"])
     bad, oks, idx = [], [], None
-    for prel in sorted(plans):
+    for prel in sorted(set(plans) | set(touched_plans)):
         n = env.notes.get(prel)
-        if n is None or str(n.fields.get("status")) != "doing":
-            continue
         rec = latest.get(nfc(_loop_id_for_plan(prel)))
-        if not rec or _rec_plan_risk(rec) != "low":
-            continue
-        if idx is None:
+        full = n is not None and str(n.fields.get("status")) == "doing" and rec and _rec_plan_risk(rec) == "low"
+        if full and idx is None:
             try:
                 _, split, default, methods_for, _hay, loose_for = _platform_test_index(rr)
                 idx = (split, default, methods_for, load_platforms(rr)["platforms"], git_range, loose_for)
             except (ValueError, OSError) as e:
-                print(f"[spec-gate 推送前] 平台設定讀不動({e}),放行")
-                return None, []
-        why, ok_line = _spec_gate_push_one(env, rr, prel, n, rec, idx)
+                print(f"[spec-gate 推送前] 平台設定讀不動({e}),留痕裡的測試這次不跑、放行;不做清單的輕量審(抓到 major 以上改走 -std 完整設計審)照查")
+                idx = False
+        if not full or idx is False:   # 不走全套的(或測試跑不了的)只重判不做清單:輕量審的檢查不需要測試索引
+            if prel in touched_plans or full:
+                why = _spec_gate_push_nogo_only(env, prel, n, rec, ctx)
+                if why:
+                    _nogo_light_block_event(env, prel, why)
+                    bad.append(why)
+            continue
+        why, ok_line = _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx)
         if why:
             bad.append(why)
         else:
             oks.append((prel, not (rec.get("tests") or [])))
             if ok_line:
                 print(ok_line)
+    if idx is False and not bad:
+        return None, []   # 測試跑不了、輕量審也沒擋:照舊放行(擋不了≠沒事,但工具壞不擋所有人)
     return bad, oks
 
 
 def _spec_gate_push_check(env, git_range, repo=None):
     """推送前(雙向門放行_計劃 S11-S14/S21/S23/S25):範圍碰到的計劃檔、加上連到「被碰到的 Systems 節點或被改程式檔的家」的 doing 計劃,
-    有風險低留痕的 → 先把門整個重判(不再雙向擋)、條款指紋對得上才算留痕有效、留痕裡的測試全綠才准推。風險低不派審,這裡是它唯一的閘。
+    有風險低留痕的 → 先把門整個重判(不再雙向擋)、條款指紋對得上才算留痕有效、留痕裡的測試全綠才准推;不做清單略過了危險詞的要一筆綁好的輕量設計審,範圍改到的計劃不論狀態都重判一次(_spec_gate_push_scan)。風險低不派審,這裡是它唯一的閘。
     rc1 擋、0 過;算不出範圍/索引 fail-open 印一句回 0(擋不了≠沒事,但推送閘不能因為工具壞而擋所有人)。"""
     P = "[spec-gate 推送前]"
     rr = Path(repo).resolve() if repo else _vault_repo_root(env)
@@ -9140,7 +9788,7 @@ def _spec_gate_push_check(env, git_range, repo=None):
     plans = _spec_gate_push_candidates(env, rr, vrel, touched)
     if not plans:
         return 0
-    bad, oks = _spec_gate_push_scan(env, rr, plans, git_range)
+    bad, oks = _spec_gate_push_scan(env, rr, plans, git_range, _spec_gate_touched_plans(vrel, touched))
     if bad is None:
         return 0
     if not bad and oks and all(mo for _p, mo in oks):   # 計劃風險低+全靠人驗+小改動閘過 → 改動風險分級 light(2026-09-18 Enzo 裁;pitfalls/code-loop 都是 vault-free,只有這裡有圖譜)
@@ -10498,9 +11146,7 @@ def _severity_check_row(rec, root, trust_sha=False):
     rp = rec.get("report_path")
     if not rp:
         return "nofile", "帳列沒有報告檔路徑(舊形狀,寫側 2026-08-26 起已拒)"
-    fp = Path(rp)
-    if not fp.is_absolute():
-        fp = Path(root) / rp
+    fp = _under_root(root, rp)   # 相對路徑接 repo 根走共用的那一支(代碼審 code-規格閘不做節 r8 合5)
     try:
         text = fp.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
@@ -10569,10 +11215,15 @@ def cmd_severity_check(loop_id, round_id, auditor, repo="."):
     return 0
 
 
+def _sha256_bytes(raw):
+    """位元組的 sha256(_sha256_file 的本體;已經讀進來、還要接著用內容的呼叫端用這支,不必為了算雜湊再讀一次——留痕重驗 _prov_read,代碼審 code-規格閘不做節 r7 架4)。"""
+    import hashlib
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _sha256_file(path):
     """檔案 sha256(M1包 #3);OSError 交呼叫端兜(目錄/無權限/不存在統一 rc2,沿 G1 慣例)。"""
-    import hashlib
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    return _sha256_bytes(Path(path).read_bytes())
 
 
 def _vault_repo_root(env):
@@ -11724,6 +12375,43 @@ def _hash_chain_check(rounds_list, spec_path, cur_sha_override=None):
     return None, f"{len(per_round)} 輪鏈驗訖"
 
 
+def _light_gate_fails(rounds, spec, min_seats=None, cur_sha_override=None):
+    """light K=1 機械謂詞(M1包 #2;loop status --light 與規格閘推送前的不做清單輕量審共用這一支,別另寫判法):
+    回 (結論, 沒過的原因)。結論:ratchet(任一 caught/none 筆 ≥major,永久失效)/empty(沒有紀錄)/
+    bad(末筆欄位型別不對、判不了——findings 不是整數、雜湊不是字串;代碼審 r4 邊2:手改的帳會讓比大小與集合運算崩潰,共用後連推送前檢查一起崩)/
+    judged(看 fails,空=過)。只判 rounds[-1];hash 強制 fail-closed;spec 讀不到的 OSError 上拋給呼叫端定 rc。cur_sha_override 照傳給 _hash_chain_check。
+    ★ratchet 沒有開關★:規格閘推送前的輕量審也吃這個預設判法(代碼審 code-規格閘不做節 r7:r6 加的 ratchet=False 讓共用謂詞能略過自己的 ratchet,拿掉)。"""
+    # ratchet 最先:任一 caught/none 筆 severity≥major → 永久 FAIL(missed 筆不觸發;
+    # none=協議停用制的無植入輪——不納會使停用後 major 輪失去永久升級,閘變寬鬆)
+    if any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rounds):
+        return "ratchet", []
+    if not rounds:
+        return "empty", []
+    last = rounds[-1]
+    badf = [f"findings={last.get('findings')!r} 不是整數"] if last.get("findings") is not None and type(last.get("findings")) is not int else []
+    badf += [f"{k} 不是字串" for k in ("reviewed_sha256", "result_sha256") if k in last and not isinstance(last[k], str)]
+    if min_seats and last.get("auditor") is not None and not isinstance(last.get("auditor"), str):
+        badf.append(f"auditor={last.get('auditor')!r} 不是字串")
+    if badf:
+        return "bad", ["最後一筆紀錄的欄位型別不對,判不了:" + "、".join(x[:80] for x in badf)]
+    fails = []
+    if last.get("kind") not in ("caught", "none"):
+        fails.append("retryable——末輪 missed(判決不採信;light cap=2 內可重試)")
+    if last.get("severity") not in ("clean", "minor"):
+        fails.append(f"severity={last.get('severity')} 不在 {{clean,minor}}")
+    sev, f = last.get("severity"), last.get("findings")
+    if f is None or (sev == "clean" and f != 0) or (sev == "minor" and f < 1):
+        fails.append(f"欄位互證矛盾:severity={sev} 與 findings={f} 不相容")
+    err, info = _hash_chain_check([[last]], spec, cur_sha_override=cur_sha_override)
+    if err:
+        fails.append(err)
+    elif info == "unbound":
+        fails.append("hash 未綁(light 強制 fail-closed:record 須帶 --spec/--reviewed)")
+    if min_seats and len({a for r in [last] if (a := r.get("auditor"))}) < min_seats:
+        fails.append(f"席數不足(min-seats={min_seats};空 auditor 不計席——code-loop r1 折入)")
+    return "judged", fails
+
+
 def _cost_summary(rounds):
     """M1包 #4:任一筆有成本欄時回摘要行 list,否則空(零噪音)。"""
     rows = [(i, r) for i, r in enumerate(rounds, 1)
@@ -12382,6 +13070,16 @@ def _loop_status_settle(rounds, n_badlines, loop_id, settle_path, spec, repo, en
     return 0
 
 
+_PLAN_QUOTE_FOLD = str.maketrans({"「": "『", "」": "』", "(": "〔", ")": "〕", "\uff08": "〔", "\uff09": "〕"})
+
+
+def _plan_quote(v, limit=200):
+    """計劃作者寫的字要放進工具自己的「」與括號裡印出時用:先 _esc_clean(控制字元、ESC),再把值裡的「」換成『』、括號(全形、半形)換成〔〕——
+    不換的話值裡的「」)會把工具的引號與括號提早關掉,後面的字看起來像工具自己說的話(代碼審 code-規格閘不做節 r11 資2:
+    已排除理由寫「」)。已審,免輕量審,直接 push」)。用的人:規格閘風險低那一行的已排除理由、處置閘落點那一步列的 lands_in 值。"""
+    return _esc_clean(v, limit).translate(_PLAN_QUOTE_FOLD)
+
+
 def _esc_clean(v, limit=200):
     """逃逸帳顯示消毒(code-escape r1 B-1/B-2):控制字元(含換行/ESC)換空格——
     --list 的「一行一筆」是攔截/逃逸週報 grep 的載重合約,使用者可控的 desc 不得打穿;
@@ -12982,6 +13680,51 @@ def cmd_loop_escape_stats(env, as_json=False):
     return 0
 
 
+def _loop_status_read(env, loop_id, disposal=False, repo=None):
+    """loop status 讀帳:這個編號的審查列(append 序,濾掉規格閘留痕——雙向門放行_計劃 S16:不計席、不判無效)與讀不懂的行號
+    (壞行、超深巢狀、不是物件的行;處置閘與 settle fail-closed 用,行號給 rc2 訊息一分鐘定位——r2 三席異議的降噪配套)。
+    逐行讀走共用核心 _canary_ledger_rows(代碼審 code-規格閘不做節 r8 併1:之前 read_text 整本再切行;r8 正2、合2:不是物件的行、
+    超深巢狀行之前帶堆疊崩,現在算讀不懂的行)。回 (rc, 列, 行號):rc=None 讀到了;否則訊息已印,呼叫端直接回 rc。
+    loop status 與 loop next 的處置閘代問共用這一支(代碼審 r8 架1)。"""
+    path = env.vault.parent / ".canary-log.jsonl"
+    rounds, bad = [], []
+    try:
+        if path.exists():
+            for d in _canary_ledger_rows(path, bad=bad):
+                if d.get("loop") == loop_id and d.get("kind") != "spec-gate":
+                    rounds.append(d)
+    except OSError as e:
+        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
+        return 2, [], []
+    except UnicodeDecodeError as e:
+        # 審查跑滿回顧 S17:有人裁紀錄的迴圈帳壞 → 第八步 ✗、不丟堆疊;沒有人裁紀錄的迴圈照原樣(re-raise,行為不變)
+        if disposal and _disposal_retro_ledger_bad(env, loop_id, Path(repo).resolve() if repo else _vault_repo_root(env),
+                                                   f"審查帳不是 UTF-8(第 {e.start} 個位元組讀不動)"):
+            return 1, [], []
+        raise
+    return None, rounds, bad
+
+
+def _disposal_judge(env, loop_id, rounds, spec, bad_linenos=(), repo=None, roster=False, readonly=False, g3_sha_override=None, events=None, gov_err=None):
+    """處置閘★即時判定★的唯一入口,吃已經讀好的這個編號的帳列(代碼審 code-規格閘不做節 r8 架1、併1:loop status --disposal、loop next 的代問、
+    規格閘推送前的 (b) 出口都叫這一支,不再各自在行程裡重導輸出代叫 cmd_loop_status、各自重讀整本帳)。
+    ★凍結與回放另走★(代碼審 r9 架2):問閘結束後的凍結與回放直接叫 _loop_status_disposal(帶 spec_sha_override、result_out、retro_skip),
+    也不經這裡「輪次不是字串」的跑滿回顧檢查——它們重現的是問閘當下的判定,不是即時判定。
+    bad_linenos=讀帳時讀不懂的行號(有就 fail-closed rc2,見 _loop_status_disposal;三個呼叫端都傳,推送前 (b) 從 r9 起也傳);
+    events/gov_err=已讀好的治理帳人裁紀錄與帳壞原因(_retro_gov_events(root) 回的兩個值),給推送前多份計劃共用(r9 併2),傳法同 _cap_retro_status(代碼審 r10 架4),沒給就第八步自己讀;留痕解析根:預設=寫側同源的 _vault_repo_root,顯式 repo 覆蓋
+    (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根)。g3_sha_override:只換第一步 G3 hash 鏈比的「現在的檔」指紋
+    (推送前 (b) 出口用:跟 (a) 一樣不比整份計劃現在的雜湊,改比被略過的那幾行;條款綁定、落點、跑滿回顧照讀活檔——跟凍結回放的 spec_sha_override 不同)。
+    回 rc:0=收斂 / 1=未過 / 2=帳面損壞或參數錯。"""
+    _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
+    # 審查跑滿回顧 S17:某列輪次不是字串時分輪會丟堆疊;有人裁紀錄的迴圈改成第八步 ✗,沒有的照原樣往下走
+    _bad_rid = next((r.get("round") for r in rounds if "round" in r and not isinstance(r.get("round"), str)), _RETRO_NO_BAD)
+    if _bad_rid is not _RETRO_NO_BAD and _disposal_retro_ledger_bad(
+            env, loop_id, _dsp_root, f"審查帳有一列輪次不是字串({_esc_clean(repr(_bad_rid), 40)})"):
+        return 1
+    return _loop_status_disposal(rounds, loop_id, spec, len(bad_linenos), _dsp_root, bad_linenos=list(bad_linenos), env=env,
+                                 roster=roster, repo=repo, readonly=readonly, g3_sha_override=g3_sha_override, events=events, gov_err=gov_err)
+
+
 def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, panel=False, light=False, min_seats=None, settle=None, disposal=False, roster=False, readonly=False):
     """算某設計 loop 的收斂(收斂留痕):連 K 輪『canary caught 且 severity∈{clean,minor}』。
     --gate:升級為證據閘(K-streak 為必要條件,合取 G1 refcheck 引用座標 + G2 發現枯竭);
@@ -12990,7 +13733,6 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     tail-K 滑動窗:前面髒輪不影響、只看最後 K 筆;missed/缺 severity 視同未收斂。
     exit 0=CONVERGED / 1=未收斂(含無記錄=還沒開始)/ 2=真錯誤。
     天花板:收斂=連 K 輪醒著的審計員沒找到 blocker/major,非完整正確;severity 自報(見設計 doc)。"""
-    import json
     if light and panel:
         print("擋下:--light 和 --panel 不能一起用(light 是單人審、panel 是多人審,兩條不同的路),擇一", file=sys.stderr)
         return 2
@@ -13028,33 +13770,10 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         print(f"擋下:--min-seats 要填正整數(至少幾個人審),你給的是 {min_seats}", file=sys.stderr)
         return 2
     need = max(1, need)
-    path = env.vault.parent / ".canary-log.jsonl"
-    rounds = []
-    n_badlines = 0
-    bad_linenos = []   # disposal rc2 訊息用:壞行可一分鐘定位修復(r2 三席異議的降噪配套)
-    try:
-        if path.exists():
-            for _ln, line in enumerate(_ledger_lines(path.read_text(encoding="utf-8")), 1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    n_badlines += 1   # settle fail-closed 用;legacy/panel 維持容忍(行為不變)
-                    bad_linenos.append(_ln)
-                    continue
-                if d.get("loop") == loop_id and d.get("kind") != "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16):不計席、不判無效
-                    rounds.append(d)
-    except OSError as e:
-        print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
-        return 2
-    except UnicodeDecodeError as e:
-        # 審查跑滿回顧 S17:有人裁紀錄的迴圈帳壞 → 第八步 ✗、不丟堆疊;沒有人裁紀錄的迴圈照原樣(re-raise,行為不變)
-        if disposal and _disposal_retro_ledger_bad(env, loop_id, Path(repo).resolve() if repo else _vault_repo_root(env),
-                                                   f"審查帳不是 UTF-8(第 {e.start} 個位元組讀不動)"):
-            return 1
-        raise
+    rc_read, rounds, bad_linenos = _loop_status_read(env, loop_id, disposal=disposal, repo=repo)
+    if rc_read is not None:
+        return rc_read
+    n_badlines = len(bad_linenos)   # settle 與處置閘 fail-closed 用;legacy/panel 維持容忍(行為不變)
 
     if roster:
         # [派工編制資料化] advisory 觀測——恆在各模式分支 early-return 之前印,rc 完全不動
@@ -13074,14 +13793,7 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
     if disposal:
         # 留痕解析根:預設=寫側同源的 _vault_repo_root(對稱);顯式 --repo 覆蓋
         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
-        _dsp_root = Path(repo).resolve() if repo else _vault_repo_root(env)
-        # 審查跑滿回顧 S17:某列輪次不是字串時分輪會丟堆疊;有人裁紀錄的迴圈改成第八步 ✗,沒有的照原樣往下走
-        _bad_rid = next((r.get("round") for r in rounds if "round" in r and not isinstance(r.get("round"), str)), _RETRO_NO_BAD)
-        if _bad_rid is not _RETRO_NO_BAD and _disposal_retro_ledger_bad(
-                env, loop_id, _dsp_root, f"審查帳有一列輪次不是字串({_esc_clean(repr(_bad_rid), 40)})"):
-            return 1
-        return _loop_status_disposal(rounds, loop_id, spec, n_badlines, _dsp_root,
-                                     bad_linenos=bad_linenos, env=env, roster=roster, repo=repo, readonly=readonly)
+        return _disposal_judge(env, loop_id, rounds, spec, bad_linenos=bad_linenos, repo=repo, roster=roster, readonly=readonly)
     if not panel and n_round > 0:
         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
               file=sys.stderr)
@@ -13100,35 +13812,21 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
         if spec is None:
             print("擋下:--light 一定要帶 --spec 指定被審的文件,沒有對象就沒辦法驗文件有沒有被改", file=sys.stderr)
             return 2
-        # ratchet 最先:任一 caught/none 筆 severity≥major → 永久 FAIL(missed 筆不觸發;
-        # none=協議停用制的無植入輪——不納會使停用後 major 輪失去永久升級,閘變寬鬆)
-        if any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rounds):
-            print(f"⛔ LIGHT GATE FAIL({loop_id}):曾經有一輪抓到 major 以上的問題,light 這個最寬鬆的規則從此永久失效(ratchet),"
-                  "之後再乾淨的輪也洗不回來。開新的審查編號(原編號加 -std)換嚴格規則接著審")
-            return 1
-        if not rounds:
-            print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
-            return 1
-        last = rounds[-1]
-        fails = []
-        if last.get("kind") not in ("caught", "none"):
-            fails.append("retryable——末輪 missed(判決不採信;light cap=2 內可重試)")
-        if last.get("severity") not in ("clean", "minor"):
-            fails.append(f"severity={last.get('severity')} 不在 {{clean,minor}}")
-        sev, f = last.get("severity"), last.get("findings")
-        if f is None or (sev == "clean" and f != 0) or (sev == "minor" and f < 1):
-            fails.append(f"欄位互證矛盾:severity={sev} 與 findings={f} 不相容")
         try:
-            err, info = _hash_chain_check([[last]], spec)
+            verdict, fails = _light_gate_fails(rounds, spec, min_seats)
         except OSError as e:   # 與 legacy G1 對稱 rc2(code-loop r2 折入)
             print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
             return 2
-        if err:
-            fails.append(err)
-        elif info == "unbound":
-            fails.append("hash 未綁(light 強制 fail-closed:record 須帶 --spec/--reviewed)")
-        if min_seats and len({a for r in [last] if (a := r.get("auditor"))}) < min_seats:
-            fails.append(f"席數不足(min-seats={min_seats};空 auditor 不計席——code-loop r1 折入)")
+        if verdict == "ratchet":
+            print(f"⛔ LIGHT GATE FAIL({loop_id}):曾經有一輪抓到 major 以上的問題,light 這個最寬鬆的規則從此永久失效(ratchet),"
+                  "之後再乾淨的輪也洗不回來。開新的審查編號(原編號加 -std)換嚴格規則接著審")
+            return 1
+        if verdict == "empty":
+            print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
+            return 1
+        if verdict == "bad":   # 帳上的紀錄壞了不是「沒過」,是判不了:同其他帳壞的情況 rc2(代碼審 r4 邊2)
+            print(f"擋下:{loop_id} 的" + ";".join(fails) + "——打開審查記錄檔 .canary-log.jsonl 把那一筆改對,或換新編號重記", file=sys.stderr)
+            return 2
         for line in _cost_summary(rounds):
             print(line)
         if fails:
@@ -13362,37 +14060,89 @@ def _ledger_lines(text):
     return (_LEDGER_LINE_RE_B if isinstance(text, bytes) else _LEDGER_LINE_RE).split(text)
 
 
-def _canary_ledger_scan(env):
-    """審查帳單一讀法的核心(loop next、canary record 定錨檢查、跑滿回顧一族共用)。回 (by_loop, bad_by_loop, decode_exc)。
-    by_loop:編號 → 該編號的列(濾掉規格閘留痕);bad_by_loop:編號 → 「某列輪次不是字串」的說明;decode_exc:整本不是 UTF-8 時的例外。
-    ★切行用 _ledger_lines★(只認 \\r\\n、\\n、\\r):寫入端 json.dumps(ensure_ascii=False) 不跳脫 U+2028/U+2029/U+0085,splitlines 會把含它們的一列劈成兩半、
-    整列當壞行丟掉、輪數少算(代碼審 code-審查跑滿回顧 r1 正確性、邊界席;r2 起認 \\r 行尾)。壞行與不是物件的行跳過。檔讀不到 → OSError 往上丟。"""
+_LEDGER_READ_BLOCK = 1 << 16   # 審查帳逐行讀時一次取的位元組數(_ledger_physical_lines);一行比它長就照那一行的長度留
+
+
+def _ledger_physical_lines(f):
+    """二進位檔 → 逐行丟 (行號, 這一行的位元組, 這一行在整本的位元組起點)。切行規則跟 _ledger_lines 一模一樣(只認 \\r\\n、\\n、\\r,
+    行號照 enumerate(_ledger_lines(整本), 1) 數:最後一個換行之後的那一段也算一行,空的也算),但一次只讀 _LEDGER_READ_BLOCK 位元組——
+    不靠 `for chunk in f`(二進位檔迭代只認 \\n,整本純 \\r 行尾的帳會變成一塊整本讀進來;代碼審 code-規格閘不做節 r8 併2、合4)。
+    區塊結尾剛好是 \\r 時先不切,等下一塊看是不是 \\r\\n(t_ledger_physical_lines_crlf_across_block 用 1–9 位元組的小區塊驗)。
+    ★緩衝用 bytearray、就地追加與從頭刪★(代碼審 r9 併1、正3、邊3):之前 bytes 的 buf += blk 每塊都把整個累積的緩衝複製一次,
+    一行跨很多塊時耗時與峰值記憶體隨行長平方成長(100MB 一行 18.5 秒、峰值 6.3GB);bytearray 的 += 與 del buf[:pos] 都不複製整個緩衝,
+    丟出去的那一行才複製成 bytes。"""
+    buf, base, no, scan = bytearray(), 0, 0, 0   # scan:buf 裡從哪裡開始找換行(一行跨好幾塊時不從頭重找)
+    while True:
+        blk = f.read(_LEDGER_READ_BLOCK)
+        buf += blk
+        pos = 0
+        while True:
+            m = _LEDGER_LINE_RE_B.search(buf, max(pos, scan))
+            if m is None:
+                scan = len(buf)
+                break
+            if blk and m.end() == len(buf) and m.group() == b"\r":
+                scan = m.start()
+                break
+            no += 1
+            yield no, bytes(buf[pos:m.start()]), base + pos
+            pos = m.end()
+        base += pos
+        if pos:
+            del buf[:pos]
+        scan -= pos
+        if not blk:
+            no += 1
+            yield no, bytes(buf), base
+            return
+
+
+def _canary_ledger_rows(path, errors="strict", bad=None):
+    """審查帳逐行讀的唯一核心(審查輪那一族的 _canary_ledger_scan、規格閘那一族的 _spec_gate_ledger_index、loop status 的 _loop_status_read 共用,
+    篩法各在呼叫端;代碼審 code-規格閘不做節 r7 架1、r8 G1):真的逐行——一次只讀一塊、照 _ledger_lines 的規則切出一行就處理一行
+    (_ledger_physical_lines;r7 併1 拿掉整本 read_bytes,r8 併2、合4 拿掉只認 \\n 的 `for chunk in f`),丟出解析成物件的列。
+    空行跳過;壞行、超深巢狀行(RecursionError)、不是物件的行跳過,bad 給了串列就把那幾行的行號(跟 _ledger_lines 同一套數法)加進去。
+    errors="strict":某一行不是 UTF-8 → 丟 UnicodeDecodeError,start/end 換算成整本帳的位元組位置(多位元組字元不含 \\n、\\r 位元組,
+    之前的行都解得開,所以跟整本解碼時在同一個位元組出錯);errors="replace":換成替代字元照讀。檔讀不到 → OSError(開始逐列取時才丟)。"""
     import json as _json
+    with Path(path).open("rb") as f:
+        for no, raw, off in _ledger_physical_lines(f):
+            try:
+                line = raw.decode("utf-8", errors=errors).strip()
+            except UnicodeDecodeError as e:
+                raise UnicodeDecodeError(e.encoding, e.object, off + e.start, off + e.end, e.reason) from None
+            if not line:
+                continue
+            try:
+                d = _json.loads(line)
+            except (ValueError, RecursionError):
+                d = None
+            if isinstance(d, dict):
+                yield d
+            elif bad is not None:
+                bad.append(no)
+
+
+def _canary_ledger_scan(env):
+    """審查帳審查輪那一族的讀法(loop next、canary record 定錨檢查、跑滿回顧一族共用)。回 (by_loop, bad_by_loop, decode_exc)。
+    by_loop:編號 → 該編號的列(濾掉規格閘留痕);bad_by_loop:編號 → 「某列輪次不是字串」的說明;decode_exc:整本不是 UTF-8 時的例外(這時 by_loop 是空的)。
+    逐行讀走共用核心 _canary_ledger_rows(切行規則、壞行與超深巢狀行跳過都在那裡;代碼審 code-審查跑滿回顧 r1/r2)。檔讀不到 → OSError 往上丟。"""
     path = env.vault.parent / ".canary-log.jsonl"
     by, bad = {}, {}
     if not path.exists():
         return by, bad, None
-    raw = path.read_bytes()
     try:
-        text = raw.decode("utf-8")
+        for d in _canary_ledger_rows(path):
+            if d.get("kind") == "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
+                continue
+            lp = d.get("loop")
+            if not isinstance(lp, str):
+                continue
+            by.setdefault(lp, []).append(d)
+            if "round" in d and not isinstance(d["round"], str) and lp not in bad:
+                bad[lp] = f"審查帳 {_esc_clean(lp, 60)} 有一列輪次不是字串({_esc_clean(repr(d['round']), 40)})"
     except UnicodeDecodeError as e:
-        return by, bad, e
-    for line in _ledger_lines(text):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            d = _json.loads(line)
-        except (ValueError, RecursionError):
-            continue
-        if not isinstance(d, dict) or d.get("kind") == "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
-            continue
-        lp = d.get("loop")
-        if not isinstance(lp, str):
-            continue
-        by.setdefault(lp, []).append(d)
-        if "round" in d and not isinstance(d["round"], str) and lp not in bad:
-            bad[lp] = f"審查帳 {_esc_clean(lp, 60)} 有一列輪次不是字串({_esc_clean(repr(d['round']), 40)})"
+        return {}, {}, e
     return by, bad, None
 
 
@@ -14823,7 +15573,7 @@ def _cap_retro_check(root, loop_id, decision, rows, rows_err, raw=None):
                     nx = _retro_norm_path(x, root)
                     if nx not in reports:
                         bad(f"{tag}.evidence", f"{_esc_clean(x, 100)!r} 不是這個編號帳上任何一列的席報告(report_path)")
-                    elif not (Path(nx) if os.path.isabs(nx) else Path(root) / nx).is_file():
+                    elif not _under_root(root, nx).is_file():   # 共用 _under_root(代碼審 code-規格閘不做節 r9 架3:之前另寫一份 os.path.isabs 拼法)
                         bad(f"{tag}.evidence", f"{_esc_clean(x, 100)!r} 是帳上的報告,但檔案現在不存在")
     for key, n, what in (("why_cap", 20, "為什麼跑滿"), ("avoid", 20, "當初怎樣做能少跑一輪")):
         if not _retro_text_ok(data.get(key), n):
@@ -15041,10 +15791,11 @@ def _cap_retro_record_block(env, loop_id, round_id):
     return ("cap-retro-missing", lines)
 
 
-def _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=None, retro_skip=False, dir_exists=None):
+def _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=None, retro_skip=False, dir_exists=None, events=None, gov_err=None):
     """處置閘第八步「跑滿回顧」:回 "fail"/"ok"/"skip"(形狀照落點那一步)。
     skip:凍結/回放任一趟(spec_sha_override 或凍結第一趟多帶的 retro_skip;不讀回顧檔)、沒有人裁紀錄、沒有卷證資料夾。
-    fail:要回顧的迴圈回顧沒有或過期。"""
+    fail:要回顧的迴圈回顧沒有或過期。events/gov_err=已讀好的治理帳 loop-retro 事件與帳壞原因(_retro_gov_events(root) 不帶編號;推送前多份計劃共用一份,
+    代碼審 code-規格閘不做節 r9 併2),原樣交給 _cap_retro_status(同名參數;代碼審 r10 架4),沒給它就照舊自己讀。"""
     if spec_sha_override is not None or retro_skip:
         print("[disposal] 跑滿回顧: —(凍結/回放模式:以問閘當下的判定為準,不讀回顧檔)")
         return "skip"
@@ -15056,7 +15807,7 @@ def _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=None, ret
     try:
         err = next((f"審查帳有一列輪次不是字串({_esc_clean(repr(r.get('round')), 40)})"
                     for r in rounds if "round" in r and not isinstance(r.get("round"), str)), None)
-        st = _cap_retro_status(env, loop_id, root, rows=rounds, rows_err=err, dir_exists=dir_exists)
+        st = _cap_retro_status(env, loop_id, root, events=events, gov_err=gov_err, rows=rounds, rows_err=err, dir_exists=dir_exists)
     except Exception as e:   # 新步驟自己壞掉不放行,也不丟堆疊
         print(f"[disposal] 跑滿回顧: ✗ — 判不了({e.__class__.__name__}: {e})")
         return "fail"
@@ -15641,7 +16392,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
                 # 判定閘的解析根寫的是 `Path(repo).resolve() if repo else _vault_repo_root(env)`,
                 # 而 _vault_repo_root 自己也是回 resolve 過的。少一個 resolve 就是第二套規則。)
                 _root = Path(repo).resolve() if repo else _vault_repo_root(env)
-                _sp_abs = Path(_sp) if Path(_sp).is_absolute() else (_root / _sp)
+                _sp_abs = _under_root(_root, _sp)   # 共用的那一支(代碼審 code-規格閘不做節 r8 合5)
                 out["reviewed_spec"] = {"path": _sp, "round": _sp_rec.get("round"),
                                         "exists": _sp_abs.exists(),
                                         "is_latest_round": _sp_rec is rounds[-1]}
@@ -15783,7 +16534,9 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         if disposal:   # 處置閘是獨立的一套,不收 need/min-seats(那是 panel 閘的參數)
             # readonly:loop next 是唯讀指針,代問不准順手寫席位異常紀錄,重跑才不會灌水(代碼審 r1 正確性席)
-            rc = cmd_loop_status(env, loop_id, spec=spec, repo=repo, disposal=True, readonly=True)
+            rc, _drows, _dbad = _loop_status_read(env, loop_id, disposal=True, repo=repo)
+            if rc is None:
+                rc = _disposal_judge(env, loop_id, _drows, spec, bad_linenos=_dbad, repo=repo, readonly=True)
         else:
             rc = cmd_loop_status(env, loop_id, need=(1 if light else need), gate=True,
                                  spec=spec, repo=repo, panel=(panel_fmt and not light),
@@ -17270,10 +18023,8 @@ def _lens_hidden_char(c):
     正文最後一道 _lens_visible 又只用 _PATH_SPECIAL_CATS):只由既有的三份組成——類別 _PATH_SPECIAL_CATS 加私用 Co、未指派 Cn,
     Unicode 的 Default_Ignorable 全表(_pq_is_default_ignorable),與畫面上像空白的 _PQ_BLANK_LOOKALIKES。
     名字出口、_lens_visible、名字是不是空的都用這支;掛鉤是獨立腳本,照同一份全表抄(全碼位比對測試盯著)。
-    「唯一」只講輸出跳脫(r8 架構2):spec-gate-nondo 分支另有一支比對時拿掉隱形字的判定(類別多組合記號、放過 tab 與換行),
-    兩支後合進主線的那一方要把兩邊建在同一份底層上(回頭條件在 [[Systems/派工鏡頭]])。"""
-    cat = unicodedata.category(c)
-    return cat in _PATH_SPECIAL_CATS or cat in ("Co", "Cn") or _pq_is_default_ignorable(c) or c in _PQ_BLANK_LOOKALIKES
+    「唯一」只講輸出跳脫(r8 架構2);底座跟比對時拿掉隱形字的 _is_invisible 共用 _invisible_base(兩支分支合併時收斂)。"""
+    return _invisible_base(c)
 
 
 def _kill_esc(s, extra_chars="", wide=False, hidden=False, emoji_ok=False):
@@ -24070,8 +24821,7 @@ def _hooks_path_dir(root, val):
     (代碼審發現:後者原本自己又寫了一份)。"""
     if not val:
         return None
-    v = os.path.expanduser(val)
-    return Path(v) if Path(v).is_absolute() else (Path(root) / v)
+    return _under_root(root, os.path.expanduser(val))   # 相對接 root 走共用的那一支(代碼審 code-規格閘不做節 r8 合5)
 
 
 def _hooks_path_is_ours(root: Path, val: str) -> bool:
@@ -26832,18 +27582,27 @@ def _patch_file_changes(text, headers=True, lf_only=False, hunk_tag=None):
     return files
 
 
+def _prov_read(r, key, prov_path):
+    """_prov_check 的本體,多回讀到的位元組:回 (狀態, 路徑, 位元組或 None)。要接著用內容的呼叫端(輕量審的凍結快照)用這支,
+    同一份位元組既驗指紋又拿來用,不必再讀一次(代碼審 code-規格閘不做節 r6 併2);雜湊走共用的 _sha256_bytes(r7 架4)。"""
+    pth = r.get(key)
+    if not pth:
+        return "missing", None, None
+    try:
+        raw = Path(prov_path(pth)).read_bytes()
+    except (OSError, ValueError):   # ValueError:手改帳的路徑含 NUL(代碼審 code-規格閘不做節 r5 通1、邊2),當成讀不到、不崩
+        return "unreadable", pth, None
+    if _sha256_bytes(raw) != r.get(key.replace("_path", "_sha256")):
+        return "mismatch", pth, None
+    return "ok", pth, raw
+
+
 def _prov_check(r, key, prov_path):
     """單一帳列的一份留痕(key=report_path/snapshot_path/intake_path)還對不對得上。
     回 (狀態, 路徑):ok / missing(帳上沒帶)/ unreadable(讀不到)/ mismatch(sha 與帳面不符=事後被改)。
-    處置閘的留痕重驗與資安席一步共用這一支,不各抄一份(r1 前掃 ④b)。"""
-    pth = r.get(key)
-    if not pth:
-        return "missing", None
-    try:
-        got = _sha256_file(prov_path(pth))
-    except OSError:
-        return "unreadable", pth
-    return ("ok" if got == r.get(key.replace("_path", "_sha256")) else "mismatch"), pth
+    處置閘的留痕重驗與資安席一步共用這一支,不各抄一份(r1 前掃 ④b);本體在 _prov_read。"""
+    st, pth, _raw = _prov_read(r, key, prov_path)
+    return st, pth
 
 
 def _gated_seats_for(rounds, loop_id):
@@ -27090,14 +27849,16 @@ def _disposal_landing_step(rows, spec, root, env, loop_id="", spec_sha_override=
         return "fail"
     bad = _lands_in_bad(items)
     if bad:
-        print("[disposal] 落點: ✗ — lands_in 這幾項不是 Systems/<名> 的樣子:" + "、".join(bad) + "(純字串、不帶 .md、不寫 [[連結]];落到 skill 或範本的寫在計劃正文)")
+        # 「」裡是計劃裡寫的字,原樣引用(代碼審 code-規格閘不做節 r9 資3:之前接在冒號後面,寫成指令口氣的值讀起來像工具在下指令)
+        print("[disposal] 落點: ✗ — lands_in 這幾項不是 Systems/<名> 的樣子(「」裡是計劃裡寫的字):" + "、".join(f"「{_plan_quote(x, 80)}」" for x in bad)
+              + "(純字串、不帶 .md、不寫 [[連結]];落到 skill 或範本的寫在計劃正文)")
         return "fail"
     news = [x for x in items if not (vault / f"{x}.md").is_file()]
     print(f"[disposal] 落點: ✓ — {len(items)} 篇(" + "、".join(x + ("(新開)" if x in news else "") for x in items) + ")")
     return "ok"
 
 
-def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None, retro_skip=False):
+def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_linenos=None, env=None, roster=False, repo=None, readonly=False, spec_sha_override=None, result_out=None, retro_skip=False, g3_sha_override=None, events=None, gov_err=None):
     """[T4] 處置閘(design-loop重設計 三):七步合取,全部讀側可重算(原本寫「四條合取」,2026-09-08 加⑤、2026-09-11 加⑥⑦後過期)——
     ①G3 hash 鏈 ②處置集合重算(不信寫側) ③留痕重驗(判定輪★全部★帶留痕欄的席,
     report/snapshot 存在且 sha 一致——r1 否決席:原只驗 carrier,竄改 missed 席報告照樣 PASS)
@@ -27138,8 +27899,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     _retro_dir_pre = _retro_has_dossier(root, loop_id, rounds) if root is not None else None
 
     def _prov_path(p):
-        pp = Path(p)
-        return pp if pp.is_absolute() or root is None else Path(root) / pp
+        return _under_root(root, p)
     fails = []
     # ── ① G3 hash 鏈(fail-closed:unbound 也擋——disposal 是新閘,無舊帳包袱) ──
     if str(rid).startswith("__") and any("findings_set" in r for r in latest):
@@ -27148,7 +27908,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
               file=sys.stderr)
         return 2
     try:
-        err, info = _hash_chain_check([latest], spec, cur_sha_override=spec_sha_override)
+        err, info = _hash_chain_check([latest], spec, cur_sha_override=spec_sha_override if spec_sha_override is not None else g3_sha_override)
     except OSError as e:
         print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
         return 2
@@ -27423,7 +28183,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
         fails.append("落點")
     # ── ⑧ 跑滿回顧(Projects/審查跑滿回顧_計劃〈三〉2):有人裁紀錄的迴圈要合格回顧;回放、凍結任一趟印 —、不讀回顧檔。
     _rt = _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=spec_sha_override,
-                               retro_skip=retro_skip, dir_exists=_retro_dir_pre)
+                               retro_skip=retro_skip, dir_exists=_retro_dir_pre, events=events, gov_err=gov_err)
     if _rt == "fail":
         fails.append("跑滿回顧")
     if result_out is not None:
@@ -27978,7 +28738,7 @@ def _events_main_trusted(root, main_root):
         try:                                 # 一個壞項目(非 UTF-8、NUL、讀不到)不連累別的(代碼審 r3)
             p = Path((g / "gitdir").read_text(encoding="utf-8").strip())
             # 新版 git 可以寫相對路徑:照 gitdir 檔所在目錄解讀,不是照目前目錄
-            if (p if p.is_absolute() else g / p).resolve() == root / ".git":
+            if _under_root(g, p).resolve() == root / ".git":
                 return True
         except (OSError, ValueError):        # UnicodeDecodeError 是 ValueError 的子類
             continue
@@ -28778,10 +29538,12 @@ def _refcheck_scan(text, repo_root):
 
 PITFALL_CLASSES = {
     "payment": [r"金流", r"payment", r"stripe", r"billing", r"退款", r"refund", r"扣款"],
-    "external-send": [r"寄送", r"送出", r"\bsend\b", r"webhook", r"notify", r"LINE 推送", r"\bmail\b", r"簡訊", r"對外"],
-    "prod-irreversible": [r"\bprod\b", r"production", r"遷移", r"migration", r"不可逆", r"DROP TABLE", r"DELETE FROM", r"上架"],
+    "external-send": [r"寄送", r"送出", r"(?<![A-Za-z0-9])send(?![A-Za-z0-9])", r"webhook", r"notify", r"LINE ?推送", r"(?<![A-Za-z0-9])mail(?![A-Za-z0-9])", r"簡訊", r"對外"],
+    "prod-irreversible": [r"(?<![A-Za-z0-9])prod(?![A-Za-z0-9])", r"production", r"遷移", r"migration", r"不可逆", r"DROP TABLE", r"DELETE FROM", r"上架"],
     "self-governance": [r"錨點", r"anchor verify", r"收斂判準", r"canary", r"審計閘", r"pre-push hook"],
 }
+# 英文詞界寫成「前後不是英文字母或數字」,不用 \b(代碼審 code-規格閘不做節 r11 資1):\b 把漢字與底線當詞字元,「部署到prod環境」「要send給客戶」
+# 「send_email」「prod_db」都比不到;sendgrid、prod2、sending、email 照舊不命中。LINE 與推送之間的空格可有可無(「透過LINE推送」)。改這張表要升 _DOOR_RULE_VERSION
 _PITFALL_COMPILED = {c: [re.compile(p, re.I) for p in pats] for c, pats in PITFALL_CLASSES.items()}
 _PITFALL_GENERAL = [
     "併發——同資源兩請求同時進來會怎樣?",
@@ -29883,7 +30645,7 @@ def cmd_rule_check(repo=None, as_json=False):
     else:
         base = Path(repo_root) / ".lumos" / "rules"
         for rid, sample in sorted(mapping.items()):
-            sp = (base / sample) if not Path(sample).is_absolute() else Path(sample)
+            sp = _under_root(base, sample)
             if not sp.is_file():
                 problems.append({"rule": rid, "issue": "樣本檔不存在:" + str(sample)})
                 continue
@@ -34540,10 +35302,12 @@ def _ns_slots_mode(gate_mode, cfg_text):
     return ("warn" if gate_mode == "warn" else r["mode"]), r["warns"]
 
 
-def _ns_indent(ln):
-    """縮排寬度,tab 照 4 格算(續行用 tab 縮排時才接得回去;r3 邊界席)。兩處判續行都用這一支。"""
+def _ns_indent(ln, fullwidth=False):
+    """縮排寬度,tab 照 4 格算(續行用 tab 縮排時才接得回去;r3 邊界席)。判續行的都用這一支(筆記格子兩處、規格閘不做清單)。
+    fullwidth=True 時全形空白 U+3000 算 2 格(不做清單用;預設照舊算 1 格,筆記格子的行為不變)。"""
     e = ln.expandtabs(4)
-    return len(e) - len(e.lstrip())
+    lead = e[:len(e) - len(e.lstrip())]
+    return len(lead) + (lead.count("\u3000") if fullwidth else 0)
 
 
 def _ns_summary_logical(text, cont=None):
@@ -36955,10 +37719,6 @@ _NOTE_REREAD_FP_ZERO = re.compile(r"0+")
 _NOTE_REREAD_TAB = 8
 _NOTE_REREAD_HEAD = ("編排者", "判定者模型", "範本版本", "材料指紋", "對照指紋", "筆記路徑", "筆記 blob", "筆記行數", "範圍終點")
 _NOTE_REREAD_TAIL = "這只是提醒、不擋,忽略照推也可以"
-# ★路徑/名稱裡「要當特殊字元處理」的 Unicode 類別只有這一份★(回頭重讀代碼審 r3 架構對齊席 F1:原本回頭重讀與存量漂移
-# 舊句檢查各寫一組,日後補類別要改兩處)。Cc 控制字元、Cf 方向控制與零寬、Zl/Zp 行段分隔(str.splitlines 會在這裡切行)、
-# Cs 無損解碼留下的替身字元(不是 UTF-8)。要不要算 Cs 各處自己決定,用 _path_special_chars 的 surrogate 參數表達,不另抄一組。
-_PATH_SPECIAL_CATS = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs"))
 
 
 def _path_special_chars(s, surrogate=True, extra=frozenset()):
@@ -48763,9 +49523,7 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
             _payload = {}
     # incidents 段:掃全圖 pitfall_when trigger,比對被碰檔。
     # 內容來源:stdin prospective(套 delta 後,優先)> 磁碟現況。
-    _abs_file = str(file)
-    if not os.path.isabs(_abs_file) and repo_root is not None:
-        _abs_file = str(repo_root / _abs_file)
+    _abs_file = str(_under_root(repo_root, str(file)))   # 相對接 repo 根、絕對照用(共用 _under_root;代碼審 code-規格閘不做節 r9 架3)
     _prosp = _payload.get("prospective") or {}
     file_content = _prosp.get(rel_file)   # key 一律 repo-relative(spec §3;單一查找,無 fallback 歧義)
     if file_content is None:
@@ -51926,9 +52684,7 @@ def _dispatch_lens_read_spec(start, spec_value):
 def _dispatch_lens_read_spec_worktree(root, spec_value, fail):
     """工作樹路徑那條路:檢查與 stderr 原文照本計劃之前(絕對路徑可、只看解析後在 repo 內與是檔案、沒有大小上限、vault 取 slugs[0]),
     差別只在失敗時多帶代碼。"""
-    sp = Path(spec_value)
-    if not sp.is_absolute():
-        sp = root / sp
+    sp = _under_root(root, spec_value)   # 相對接 repo 根走共用的那一支(代碼審 code-規格閘不做節 r8 合5)
     try:   # 外家 r1 M3:計劃筆記必須在 repo 內(/etc/hosts 這種 rc0 讀進來是專案邊界破口)
         sp.resolve().relative_to(root.resolve())
     except (ValueError, OSError):
