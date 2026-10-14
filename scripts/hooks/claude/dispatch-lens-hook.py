@@ -10,7 +10,9 @@ Claude 路徑只做三件事:①派工詞裡逐行找 `LUMOS-IMPACT: <base>..<he
 有 `LUMOS-ARCH-TARGET: on` 就多傳 --arch-target,`LUMOS-SPEC:` 那條路也傳)
 ②subprocess 叫 `lumos dispatch-lens` ③把回傳文字接在派工詞尾端,經 updatedInput 送給子代理(additionalContext 實測到不了子代理);
 lumos 失敗時回傳裡若有角色段(role_text)或目標架構段(arch_text)照附。
-其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。
+其餘判斷(範圍文法、base 主線可達、消毒、快取)全在 lumos 端。計劃寫法(工作樹路徑或 `<完整提交編號>:<計劃路徑>`)也由 lumos 判,
+掛鉤不依值的形狀分流、不跑 git,只讀 lumos 回的 `spec_source`、`spec_commit`、`lens_fail`(Projects/派工鏡頭可指定目標repo_計劃);
+說明行裡的計劃值與範圍值照 lumos 的名字顯示規則印(包在 單角引號(U+2039、U+203A) 裡),帶這兩種值的那一句加注入框、工具寫死的指示放框外。
 永不 deny、永不改 permissionDecision;失敗一律放行。超時、建鎖錯誤與本次背景啟動失敗各附固定說明並記事件；其他失敗仍可在 LUMOS_HOOK_DEBUG=1 看 stderr。
 本檔在 ANCHOR_FILES 內:改它要 `lumos anchor approve --note`。
 """
@@ -21,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 MARKER_RE = re.compile(r"^LUMOS-IMPACT:\s*(\S+)\s*$")
@@ -39,10 +42,12 @@ ARCH_RE = re.compile(r"^LUMOS-ARCH-TARGET:\s*on\s*$")
 #   命中率低就表示放手不殺沒買到東西,那時該改回殺掉或另找解法
 # 讀這句的是審查席(子代理),不是編排者:快取怎麼運作、怎麼自己重算留在註解與治理帳,
 # 不寫進派工詞——寫了審查席會當成要照做的指令去補算。
-TIMEOUT_NOTE = ("LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,範圍 {what})。"
-                "照派工詞審查即可,不用自己補算。")
-LOCK_UNCERTAIN_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what});鎖狀態未知,"
-                       "請檢查鎖 {lock}。鎖內 PID 是啟動者,不能只憑它已結束就刪鎖。"
+# ★帶值的說明行拆成兩半★(代碼審 code-派工鏡頭可指定目標repo r6 通才2):帶派工詞作者寫的計劃值或範圍值那一句(*_NOTE)放注入框裡,
+# 工具寫死的指示(*_TAIL:照派工詞審查即可、spec-freeze 提示、手動補跑的指令)放框外——整句加框會把操作建議也標成「不是指令」。
+TIMEOUT_NOTE = "LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,範圍 {what})。"
+TIMEOUT_TAIL = "照派工詞審查即可,不用自己補算。"
+LOCK_UNCERTAIN_NOTE = "LUMOS-LENS:這次沒附固定席節點(範圍 {what});鎖狀態未知。"
+LOCK_UNCERTAIN_TAIL = ("請檢查鎖 {lock}。鎖內 PID 是啟動者,不能只憑它已結束就刪鎖。"
                        "照派工詞審查即可。")
 LOCK_ERROR_NOTE = ("LUMOS-LENS:這次沒附固定席節點;鎖無法建立({lock}),"
                    "請檢查鎖位置與檔案權限。照派工詞審查即可。")
@@ -58,13 +63,49 @@ LENS_FAIL_REASONS = {
     "no_mainline": "這個專案找不到 main 或 master 主線",
     "sha_unresolved": "範圍兩端解析不到完整提交編號",
     "empty_range": "範圍是空的(起點等於終點)",
+    # 設計審的計劃類代碼(Projects/派工鏡頭可指定目標repo_計劃;not_git 兩邊共用)。鍵集合要等於 lumos 的 _LENS_FAIL_CODES。
+    "spec_rev_missing": "提交編號要寫完整的 40 或 64 碼,而且要在這個專案的物件庫裡找得到",
+    "spec_missing": "計劃不存在、不是一般檔或讀不到",
+    "spec_outside_repo": "計劃路徑不在這個專案裡,或提交寫法的路徑不在 docs/<名>-knowledge/ 底下、寫法不合規則",
+    "spec_too_large": "計劃超過 1MB",
+    "no_knowledge": "這個專案沒有計劃路徑指的那個圖譜資料夾",
 }
-FAIL_NOTE = ("LUMOS-LENS:這次沒附固定席節點(範圍 {what} 在會談專案 {repo} 算不出來:{why})。"
-             "掛鉤拿會談的專案目錄算,標記終點寫 HEAD 時也在那裡解讀——在別的專案或工作目錄做事,"
+# 計劃版說明(設計審的 LUMOS-SPEC:)。{what} 是計劃值過 _spec_what(跟 lumos 同一套名字顯示規則),不用範圍專用的 _SAFE_RANGE_RE
+# (計劃路徑一定不合它)。
+SPEC_FAIL_NOTE = "LUMOS-LENS:這次沒附固定席節點(計劃 {what} 在會談專案 {repo} 讀不到:{why})。"
+SPEC_FAIL_TAIL = "{hint}照派工詞審查即可。"
+# 工作樹寫法讀不到時的繞法:計劃多半在別的工作樹(寫成絕對路徑會落在 spec_outside_repo,所以兩個代碼都給)
+SPEC_FREEZE_HINT = ("計劃在別的工作樹時,在那個工作樹跑 `lumos spec-freeze <計劃>`(不帶 --out,不在那裡留檔),"
+                    "把它印的那行 `LUMOS-SPEC:` 貼進派工詞;快照回會談目錄用 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md` 寫。")
+# 哪些代碼算計劃類不在這裡抄清單:lumos 只在設計審的失敗列帶 spec_source,掛鉤照它判(代碼審 code-派工鏡頭可指定目標repo r2 架構2:
+# 原本手抄一份「只屬範圍」的代碼推導,跟 lumos 的 _LENS_RANGE_FAIL_CODES 是兩份)
+FAIL_NOTE = "LUMOS-LENS:這次沒附固定席節點(範圍 {what} 在會談專案 {repo} 算不出來:{why})。"
+# 手動指令不帶範圍值(值是派工詞作者寫的,照抄進框外就是裸印;r6 通才4:原本「上面那段範圍」在值不合時指不到東西),改講明去哪拿
+FAIL_TAIL = ("掛鉤拿會談的專案目錄算,標記終點寫 HEAD 時也在那裡解讀——在別的專案或工作目錄做事,"
              "終點要寫完整提交編號,或從開在目標專案的會談派席;也可以派工前在目標專案跑 "
-             "`lumos impact --diff {what}`,把固定席內容貼進派工詞。照派工詞審查即可。")
+             "`lumos impact --diff <範圍>`(<範圍> 換成派工詞裡 `LUMOS-IMPACT:` 那行冒號後面的值),"
+             "把固定席內容貼進派工詞。照派工詞審查即可。")
 # 說明行只准固定字彙與已驗證欄位(代碼審 r1 兩席):範圍不合保守的 ref 字元集就以 <範圍> 代替,不轉述原文
 _SAFE_RANGE_RE = re.compile(r"^[A-Za-z0-9._/~^-]{1,200}\.\.[A-Za-z0-9._/~^-]{1,200}$")
+# ★名字顯示規則:跟 scripts/lumos 的 _lens_author_name_show 同一套的最小抄本★(掛鉤是複製進使用者目錄的獨立腳本,不 import lumos;
+# t_dispatch_lens_hook_name_show_matches_lumos 拿同一批樣本比對兩邊輸出,分岔就紅)。包在 單角引號(U+2039、U+203A) 裡;控制、格式、行段分隔、替身、私用、
+# 未指派類與 單角引號、反斜線、框線字元與反引號 跳脫成 \uXXXX;超過上限截斷標明原長;空字串與純空白印「(空名字)」。
+# 代碼審 code-派工鏡頭可指定目標repo r4 資安2:說明行的計劃值原本只過 _clean_field;r5 換形狀:字元白名單分不出名字與指令,改成照印但包標記、加框。
+SPEC_NAME_MAX = 300
+SPEC_NAME_ESC_CATS = frozenset(("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn"))
+# ★看不見的字照 lumos 的 _lens_hidden_char 同一份全表抄★(代碼審 r7 架構1:r6 抄的是手選九段子集):類別之外,
+# Unicode 16 Default_Ignorable_Code_Point 全表(= lumos 的 _PQ_DICP_RANGES)與畫面上像空白的字(= _PQ_BLANK_LOOKALIKES)。
+# t_dispatch_lens_hidden_chars_every_codepoint 拿全部碼位比對兩邊與測試獨立抄的表,分岔就紅。
+SPEC_NAME_DICP_RANGES = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160),
+    (0x17B4, 0x17B5), (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E),
+    (0x2060, 0x206F), (0x3164, 0x3164), (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3), (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+SPEC_NAME_BLANK_LOOKALIKES = frozenset(("\u2800", "\ufffc", "\U0001d159", "\u303f", "\U00016fe4", "\U00013441", "\U00013442"))
+SPEC_NAME_ESC_CHARS = "\u2039\u203a\\─`"
+_SPEC_HEX_RE = re.compile(r"[0-9a-fA-F]{7,64}")
 
 # ★認領席位那條路要用不同的說明★(2026-09-07 代碼審 r1 通才席抓到)
 # 超時說明原本在講「背景會把快取算完」——但認領走的是完全不同的機制:它只是從派工前
@@ -74,8 +115,7 @@ _SAFE_RANGE_RE = re.compile(r"^[A-Za-z0-9._/~^-]{1,200}\.\.[A-Za-z0-9._/~^-]{1,2
 # 超時說明原本在講「背景會把快取算完」,但設計審模式(LUMOS-SPEC:)★本來就不快取★
 # (計劃常改,快取會給過期答案),所以也沒有背景暖快取這回事——超時就是這次沒有,
 # 下一次還是要重算。對這條路講快取是每次都錯。
-SPEC_TIMEOUT_NOTE = ("LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,計劃 {what})。"
-                     "照派工詞審查即可,不用自己補算。")
+SPEC_TIMEOUT_NOTE = "LUMOS-LENS:這次沒附固定席節點(鏡頭計算超時,計劃 {what})。"
 
 CLAIM_TIMEOUT_NOTE = ("LUMOS-LENS:領席超時,這次沒附節點(Codex 席:--claim)。"
                       "★這條路不會有背景暖快取★——認領是從派工前武裝好的檔案裡領一席,"
@@ -222,7 +262,7 @@ def _plain_label(raw, cap=120):
 
 
 def _clean_field(s) -> str:
-    """說明行裡的路徑欄位(會談專案、鎖路徑)一律這樣清:先過上面正典的 _plain_label(單行化、去框線與控制字元、截長),
+    """說明行裡的鎖路徑這樣清(會談專案路徑改走名字顯示規則 _spec_name_show,同計劃值與範圍值;代碼審 r7 資安1):先過上面正典的 _plain_label(單行化、去框線與控制字元、截長),
     再多清兩類——反引號(說明行裡有一段可照抄的反引號指令)與 Unicode 換行類 U+2028/U+2029/U+0085(正典只濾 32 以下)。
     ★不改正典那兩支函式★:它們在幾支 hook 之間逐字相同、有守衛盯著不准漂;多清的寫在外面,同 memory-sweep 的 _clean。
     (代碼審 r2 架構對齊席:原本兩處各寫一版;r3 架構對齊席:別另寫第二套清理;r3 正確性席:換行類字元要擋)"""
@@ -230,6 +270,47 @@ def _clean_field(s) -> str:
     for ch in "\u2028\u2029\x85":
         s = s.replace(ch, " ")
     return _plain_label(s, cap=300)
+
+
+def _spec_name_show(s, limit=SPEC_NAME_MAX) -> str:
+    """一段名字以資料形式印:單角引號包住的跳脫後名字,超過 limit 字截斷標明原長;只由空白與隱形字組成的回「(空名字)」;
+    超出基本平面的字跳脫成 8 碼 \\UXXXXXXXX(同 lumos 的 _lens_author_name_show)。"""
+    s = str(s)
+    if all(c.isspace() or _spec_hidden(c) for c in s):
+        return "(空名字)"
+    body = "".join(_spec_esc_one(c) if (c in SPEC_NAME_ESC_CHARS or _spec_hidden(c)) else c for c in s[:limit])
+    return f"\u2039{body}\u203a" + (f"…(截斷,原長 {len(s)} 字)" if len(s) > limit else "")
+
+
+def _spec_hidden(c) -> bool:
+    """看不見或會改顯示的字(同 lumos 的 _lens_hidden_char):類別、Default_Ignorable 全表、像空白的字。"""
+    cp = ord(c)
+    return (unicodedata.category(c) in SPEC_NAME_ESC_CATS or c in SPEC_NAME_BLANK_LOOKALIKES
+            or any(a <= cp <= b for a, b in SPEC_NAME_DICP_RANGES))
+
+
+def _spec_esc_one(c) -> str:
+    o = ord(c)
+    return f"\\U{o:08x}" if o > 0xFFFF else f"\\u{o:04x}"
+
+
+def _framed_note(note, tail) -> str:
+    """帶值的那一句加注入框,工具寫死的指示接在框外(r6 通才2)。"""
+    return _frame_injected(note) + "\n" + tail
+
+
+def _spec_what(spec) -> str:
+    """說明行裡的計劃值一律走這支:冒號前是 7 到 64 碼十六進位(看起來是提交寫法)時,十六進位照印、冒號後的路徑過名字顯示規則;
+    其他整段過名字顯示規則。只決定怎麼顯示,寫法本身仍由 lumos 判(掛鉤不依形狀分流:做法 8)。"""
+    head, colon, path = str(spec).partition(":")
+    if colon and _SPEC_HEX_RE.fullmatch(head):
+        return f"{head}:{_spec_name_show(path)}"
+    return _spec_name_show(spec)
+
+
+def _range_what(rng) -> str:
+    """說明行裡的範圍值:合保守的 ref 字元集時過名字顯示規則(包在 單角引號(U+2039、U+203A) 裡),不合印 <範圍>(逾時、鎖狀態未知、算不出三種說明行共用)。"""
+    return _spec_name_show(rng) if _SAFE_RANGE_RE.match(str(rng)) else "<範圍>"
 
 
 def _last_json(r) -> dict:
@@ -247,21 +328,46 @@ def _lens_fail_why(r) -> str | None:
     return LENS_FAIL_REASONS.get(code) if isinstance(code, str) else None
 
 
-def _fail_note(r, rng, repo) -> str:
-    """範圍算不出來(lumos 印了認得的 lens_fail)→ 回一行固定說明並記一筆掛鉤事件;其他情況回空字串。"""
-    why = _lens_fail_why(r) if rng else None
+def _mark_event(kind, note) -> None:
+    """吞掉失敗的地方自己記一筆掛鉤事件(_hookevent.mark);記不到不影響掛鉤本業(fail-open)。
+    本檔記事件只走這一支(逾時、鎖錯誤、背景未啟動、範圍與計劃讀不到);★寬接 Exception 是刻意的★——記帳是附帶的,
+    什麼錯都不准拖垮說明行(代碼審 code-派工鏡頭可指定目標repo r1 通才1/架構3:第一版列舉型別,RuntimeError 會跑出掛鉤)。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _hookevent import mark
+        mark(kind, note)
+    except Exception:
+        return
+
+
+def _spec_fail_note(r, spec, repo) -> str:
+    """設計審讀不到計劃(lumos 印了計劃類 lens_fail 與 spec_source)→ 回計劃版說明並記一筆事件;其他情況(舊 lumos、不認得的代碼)回空字串。
+    note 一律 `spec_<spec_source> <代碼>`(固定字彙,不給讀端解析)。kind:提交寫法的計劃類代碼與工作樹寫法的 spec_missing/spec_outside_repo
+    記 ok——使用者輸入錯不是掛鉤壞掉,記 error 會拉高 enforcement 的錯誤數;工作樹寫法的 no_knowledge 與兩種寫法的 not_git 記 error。"""
+    d = _last_json(r)
+    code, src = d.get("lens_fail"), d.get("spec_source")
+    # 先判型別再查表:串列、物件拿去查 dict 會丟 TypeError(unhashable),整支掛鉤崩出去(代碼審 code-派工鏡頭可指定目標repo r2 邊界3)
+    if not isinstance(code, str) or not isinstance(src, str) or src not in ("commit", "worktree") or code not in LENS_FAIL_REASONS:
+        return ""
+    kind = "error" if code == "not_git" or (src == "worktree" and code == "no_knowledge") else "ok"
+    _debug(f"lumos dispatch-lens rc={r.returncode}、計劃讀不到({src} {code}),附說明行")
+    _mark_event(kind, f"spec_{src} {code}")   # 只在失敗時記(成功不記事件:Projects/派工鏡頭注入_計劃「不擋不驗不記不量」)
+    hint = SPEC_FREEZE_HINT if src == "worktree" and code in ("spec_missing", "spec_outside_repo") else ""
+    return _framed_note(SPEC_FAIL_NOTE.format(what=_spec_what(spec), repo=_spec_name_show(repo), why=LENS_FAIL_REASONS[code]),
+                        SPEC_FAIL_TAIL.format(hint=hint))
+
+
+def _fail_note(r, rng, repo, spec=None) -> str:
+    """範圍算不出來(lumos 印了認得的 lens_fail)→ 回一行固定說明並記一筆掛鉤事件;設計審讀不到計劃走計劃版(_spec_fail_note);
+    其他情況回空字串。"""
+    if not rng:
+        return _spec_fail_note(r, spec, repo) if spec else ""
+    why = _lens_fail_why(r)
     if not why:
         return ""
     _debug(f"lumos dispatch-lens rc={r.returncode}、範圍算不出來,附說明行")
-    try:   # 同超時那條:吞掉失敗的地方自己記一筆,不然會被記成成功跑完
-        import sys as _s2, pathlib as _p2
-        _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
-        from _hookevent import mark as _mark
-        _mark("error", "lumos dispatch-lens 範圍算不出來,附了說明行")
-    except Exception:
-        pass
-    what = rng if _SAFE_RANGE_RE.match(rng) else "<範圍>"
-    return FAIL_NOTE.format(what=what, repo=_clean_field(repo), why=why)
+    _mark_event("error", "lumos dispatch-lens 範圍算不出來,附了說明行")   # 同超時那條:吞掉失敗的地方自己記一筆,不然會被記成成功跑完
+    return _framed_note(FAIL_NOTE.format(what=_range_what(rng), repo=_spec_name_show(repo), why=why), FAIL_TAIL)
 
 
 def _extra_text(r) -> str:
@@ -419,6 +525,11 @@ def main() -> int:
     spec = find_spec_marker(prompt) if rng is None else None
     if rng is None and spec is None:
         return 0
+    if "\0" in (rng or spec):
+        # 標記值含 NUL 當成寫歪的標記、不算(子行程參數放不進 NUL,叫下去會丟 ValueError 崩出掛鉤;
+        # 代碼審 code-派工鏡頭可指定目標repo r1 邊界1 同族)
+        _debug("標記值含 NUL,當成寫歪的標記,放行")
+        return 0
     repo = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd", "")
     if not repo:
         _debug("沒有 CLAUDE_PROJECT_DIR 也沒有 cwd,放行")
@@ -477,54 +588,37 @@ def main() -> int:
         _emit_updated(tool_input, prompt, SPAWN_ERROR_NOTE.format(lock=lock_path)
                       + ("\n\n" + _extra if _extra else ""))
         _debug("lumos dispatch-lens 本次背景未啟動,已附錯誤說明")
-        try:
-            import sys as _s2, pathlib as _p2
-            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
-            from _hookevent import mark as _mark
-            _mark("error", "lumos dispatch-lens 本次背景未啟動,附了說明行")
-        except Exception:
-            pass
+        _mark_event("error", "lumos dispatch-lens 本次背景未啟動,附了說明行")
         return 0
     if lock_status.get("lock_error") is True:
         _extra = _extra_text(r)
         _emit_updated(tool_input, prompt, LOCK_ERROR_NOTE.format(lock=lock_path)
                       + ("\n\n" + _extra if _extra else ""))
         _debug("lumos dispatch-lens 鎖無法建立,已附錯誤說明")
-        try:
-            import sys as _s2, pathlib as _p2
-            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
-            from _hookevent import mark as _mark
-            _mark("error", "lumos dispatch-lens 鎖無法建立,附了說明行")
-        except Exception:
-            pass
+        _mark_event("error", "lumos dispatch-lens 鎖無法建立,附了說明行")
         return 0
     if r is None or r.returncode == 5:
         # 2026-09-05 第二輪審視 d1:超時不再靜默——今天 39 次派工 21 次放空,編排者完全不知道。附一行固定句(零自由文字)。
-        what = rng or spec
+        # 範圍與計劃值都過說明行的出口(代碼審 code-派工鏡頭可指定目標repo r4 資安2:這兩行原本連 _clean_field 都沒過)
+        what = _range_what(rng) if rng else _spec_what(spec)
         # 兩條路的機制不同,說明也要不同(r2 通才席:共用那句對設計審是假話)
-        _note = (LOCK_UNCERTAIN_NOTE.format(what=what, lock=lock_path)
+        _note = (_framed_note(LOCK_UNCERTAIN_NOTE.format(what=what), LOCK_UNCERTAIN_TAIL.format(lock=lock_path))
                  if lock_status.get("lock_uncertain") is True else
-                 TIMEOUT_NOTE.format(what=what, cmd=rng, n=10) if rng else
-                 SPEC_TIMEOUT_NOTE.format(what=what))
+                 _framed_note((TIMEOUT_NOTE if rng else SPEC_TIMEOUT_NOTE).format(what=what), TIMEOUT_TAIL))
         _extra = _extra_text(r) if r is not None else ""
+        # 說明行帶派工詞作者寫的計劃值或範圍值:那一句加注入框(代碼審 r5 資安2),工具寫死的指示在框外(r6 通才2)
         _emit_updated(tool_input, prompt, _note + ("\n\n" + _extra if _extra else ""))
         _debug("lumos dispatch-lens 超時或鎖狀態未知,已附對應說明行")
         # ★吞掉逾時的地方要自己講一聲★(#19 r1 外家否決席 blocker):
         # 這一條是「捕捉逾時 → 附說明 → 正常 return 0」,而 guard() 只看得到有沒有丟例外,
         # 所以不講的話這次會被記成「成功跑完」——一支每次都逾時的 hook 會穩定顯示
         # 「近期跑過 N 次」,正是這一批要防的假綠。
-        try:
-            import sys as _s2, pathlib as _p2
-            _s2.path.insert(0, str(_p2.Path(__file__).resolve().parent))
-            from _hookevent import mark as _mark
-            _mark("timeout", "lumos dispatch-lens 逾時,附了說明行")
-        except Exception:
-            pass
+        _mark_event("timeout", "lumos dispatch-lens 逾時,附了說明行")
         return 0
 
     if r.returncode != 0:
         _extra = _extra_text(r)
-        _note = _fail_note(r, rng, repo)   # 範圍算不出來才有;說明在前、角色卡在後
+        _note = _fail_note(r, rng, repo, spec)   # 範圍算不出來或計劃讀不到才有;說明在前、角色卡在後
         if _note or _extra:   # 圖譜那段失敗,角色卡照附(角色不需要圖譜)
             _emit_updated(tool_input, prompt, "\n\n".join(x for x in (_note, _extra) if x))
         _debug(f"lumos dispatch-lens rc={r.returncode}:{r.stderr.strip()[:200]},附了 {bool(_note) + bool(_extra)} 段(說明/角色卡;0=放行)")

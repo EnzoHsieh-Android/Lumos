@@ -1,0 +1,598 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 7798c420..8f5c63d5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -15107,23 +15107,24 @@ def t_arch_target_dispatch_lens_attaches_rules():
+     w("app/Domain/Payment/Payment.py", "def pay():\n    return 1\n")
+     c("new module")
+     r, data = _arch_lens(d, "main..HEAD")
+     check("S5: 沒開 --arch-target 不附目標段", "arch_text" not in data and "Domain 層不依賴" not in data.get("text", ""), str(data)[:300])
+     r, data = _arch_lens(d, "main..HEAD", "--arch-target")
+     t = data.get("arch_text", "")
+     check("S5: 附有效 RULE 原文與命中檔名", "Domain 層不依賴框架與資料庫型別" in t and "app/Domain/Payment/Payment.py" in t, f"rc={r.returncode} {t[:600]}")
+     check("S5: 不附標了 superseded 的 RULE", "舊規則已經作廢" not in t, t[:600])
+     check("S5: 超過 30 條印另有 2 條", "另有 2 條" in t and "第30條目標規則" in t and "第31條目標規則" not in t, t[-400:])
+     check("S5: 回傳 text 本身也含目標段(舊掛鉤照附)", t and t in data.get("text", ""), data.get("text", "")[-300:])
+-    # 代碼審 code-派工鏡頭可指定目標repo r6 資安1:代碼審這條也走名字出口、整段加框(輸出格式跟設計審那條相同)
+-    check("S5: 目標段自己有注入框、檔名與節點名包在單角引號裡", t.startswith("───── 以下是機器附加的參考資料") and t.rstrip().endswith("─────")
+-          and "\u2039app/Domain/Payment/Payment.py\u203a" in t and f"\u2039{_ARCH_NODE}\u203a" in t, t[:400])
++    # 代碼審 code-派工鏡頭可指定目標repo r6 資安1:代碼審這條也走名字出口、加框(輸出格式跟設計審那條相同);r7 邊界4:寫死的段首與尾句在框外
++    _fa, _fb = t.find("───── 以下是機器附加的參考資料"), t.find("───── 參考資料結束")
++    check("S5: 目標段自己有注入框(段首在框前、尾句在框後)、檔名與節點名包在單角引號裡、在框內", t.startswith("[目標架構]") and 0 < _fa < _fb
++          and "違反一條規則=major" in t[_fb:] and "\u2039app/Domain/Payment/Payment.py\u203a" in t[_fa:_fb] and f"\u2039{_ARCH_NODE}\u203a" in t[_fa:_fb], t[:400])
+     d2, g2, w2, c2, base2 = _arch_target_repo(_arch_cfg(("app/Domain/**", "Systems/不存在的目標")), None)
+     w2("app/Domain/Payment/Payment.py", "def pay():\n    return 1\n")
+     c2("new module")
+     r2, data2 = _arch_lens(d2, "main..HEAD", "--arch-target")
+     t2 = data2.get("arch_text", "")
+     check("S5: 節點讀不到 → 印照鄰居審那一句與檔名", "讀不到規則" in t2 and "照鄰居審" in t2 and "app/Domain/Payment/Payment.py" in t2, f"rc={r2.returncode} {t2[:400]}")
+     print("  ✓ t_arch_target_dispatch_lens_attaches_rules")
+ 
+ 
+ def t_arch_target_hook_retries_without_flag():
+@@ -45650,22 +45651,24 @@ def t_dispatch_lens_hook_fail_reason_notice():
+         prompt = f"審查。\nLUMOS-IMPACT: {rng}\n" + ("LUMOS-ROLE-CARDS: on\n" if roles else "")
+         payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": "/tmp/payload-cwd",
+                    "tool_input": {"prompt": prompt}}
+         with patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": proj}), \
+                 patch.object(hm.subprocess, "run", lambda *a, **k: R()), patch.object(hm.sys, "stdin", _io.StringIO(_j.dumps(payload))), \
+                 patch.object(hm.sys, "stdout", out):
+             hm.main()
+         return out.getvalue()
+     for rc_, code in ((2, "commit_missing"), (2, "not_git"), (4, "base_not_mainline"), (4, "no_mainline"), (2, "sha_unresolved"), (2, "empty_range")):
+         o = fire(rc_, {"lens_fail": code})
+-        ok = "updatedInput" in o and "LUMOS-LENS:" in o and "ce2a961f..HEAD" in o and "/tmp/會談專案 第二行" in o and "lumos impact --diff" in o
+-        check(f"S2: {code} → 附一行說明(範圍、會談專案路徑去換行、繞法)", ok, o[:400])
++        # 代碼審 r7 資安1:會談專案路徑改走名字顯示規則(包標記、換行跳脫成看得見的 \u000a;原本只過 _clean_field 換成空白)
++        ok = ("updatedInput" in o and "LUMOS-LENS:" in o and "ce2a961f..HEAD" in o and "\u2039/tmp/會談專案\\\\u000a第二行\u203a" in o
++              and "lumos impact --diff" in o)
++        check(f"S2: {code} → 附一行說明(範圍、會談專案路徑照名字顯示、繞法)", ok, o[:400])
+     o = fire(2, {"lens_fail": "empty_range"})
+     check("S2: 說明講明標記終點要寫完整提交編號(HEAD 在會談專案解讀)", "完整提交編號" in o, o[:400])
+     # 代碼審 r1 兩席:說明行只准固定字彙與已驗證欄位——範圍不合保守字元集就不帶進說明;路徑去掉反引號、換行並截長
+     o = fire(2, {"lens_fail": "not_git"}, rng="x`id`$(id)..HEAD", proj="/tmp/a`b`" + "長" * 400)
+     note = _j.loads(o)["hookSpecificOutput"]["updatedInput"]["prompt"].split("LUMOS-LENS:", 1)[-1] if "LUMOS-LENS:" in o else ""
+     check("S2: 範圍帶反引號或 $( → 說明裡以 <範圍> 代替,路徑去反引號並截長(只看附加的說明,原派工詞照留)",
+           bool(note) and "<範圍>" in note and "$(id)" not in note and "`id`" not in note and "a`b`" not in note and "長" * 300 not in note, note[:500])
+     # 代碼審 r3 架構對齊席:路徑欄位(會談專案、鎖路徑)先過同層掛鉤共用的正典 _plain_label(控制字元、框線、截長),
+     # 再多清反引號與 Unicode 換行類(U+2028/2029/0085;r3 正確性席)——不另寫第二套清理
+     cf = getattr(hm, "_clean_field", None)
+@@ -46078,43 +46081,44 @@ def t_dispatch_lens_fail_codes_match_hook():
+           spec_codes == {"spec_rev_missing", "spec_missing", "spec_outside_repo", "spec_too_large", "no_knowledge", "not_git"}
+           and spec_codes <= set(hm.LENS_FAIL_REASONS), f"lumos={sorted(spec_codes)}")
+     raised = False
+     try:
+         m._dispatch_lens_fail(False, "not_a_code", 2)
+     except ValueError:
+         raised = True
+     check("S11: _dispatch_lens_fail 收到清單外的代碼會丟 ValueError(不讓沒登記的代碼漏到掛鉤)", raised, "")
+ 
+ 
+-def _lr_hook_fire(hm, body, rc_=2, spec="docs/kg-knowledge/Projects/甲_計劃.md", raise_timeout=False, prompt=None, mark=None):
++def _lr_hook_fire(hm, body, rc_=2, spec="docs/kg-knowledge/Projects/甲_計劃.md", raise_timeout=False, prompt=None, mark=None,
++                  proj="/tmp/會談專案"):
+     """照既有 fire() 的做法:替換 subprocess.run 回假的 lumos 輸出、替換 _hookevent 記下 mark;回 (stdout, 呼叫紀錄, mark 紀錄)。
+-    prompt:另給整段派工詞(預設是帶 LUMOS-SPEC 的那段);mark:另給 _hookevent.mark 的替身(測記事件壞掉時用)。"""
++    prompt:另給整段派工詞(預設是帶 LUMOS-SPEC 的那段);mark:另給 _hookevent.mark 的替身(測記事件壞掉時用);proj:會談專案目錄。"""
+     import io as _io
+     import json as _j
+     import types as _ty
+     from unittest.mock import patch
+     calls, marks = [], []
+     def fake_run(argv, *a, **k):
+         calls.append(list(argv))
+         if raise_timeout:
+             raise subprocess.TimeoutExpired("lumos", 1)
+         class R:
+             returncode = rc_
+             stdout = _j.dumps(body) if body is not None else ""
+             stderr = ""
+         return R()
+     fake_ev = _ty.ModuleType("_hookevent")
+     fake_ev.mark = mark or (lambda kind, note="": marks.append((kind, note)))
+     payload = {"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": "/tmp/payload-cwd",
+                "tool_input": {"prompt": prompt or f"你是審稿人。\nLUMOS-SPEC: {spec}\n"}}
+     out = _io.StringIO()
+-    with patch.dict(_os_mod.environ, {"CLAUDE_PROJECT_DIR": "/tmp/會談專案"}), patch.dict(sys.modules, {"_hookevent": fake_ev}), \
++    with patch.dict(_os_mod.environ, {"CLAUDE_PROJECT_DIR": proj}), patch.dict(sys.modules, {"_hookevent": fake_ev}), \
+             patch.object(hm, "_find_lumos_script", lambda: "/x/lumos"), patch.object(hm.subprocess, "run", fake_run), \
+             patch.object(hm.sys, "stdin", _io.StringIO(_j.dumps(payload))), patch.object(hm.sys, "stdout", out):
+         rc = hm.main()
+     return rc, out.getvalue(), calls, marks
+ 
+ 
+ def _lr_note(o):
+     import json as _j
+     if "updatedInput" not in o:
+         return ""
+@@ -47745,21 +47749,28 @@ _LR4_CLAUSE_TESTS = ("t_spec_freeze_commit_rev_full_and_resolves", "t_design_loo
+                      "t_dispatch_lens_spec_unpunctuated_sentence_shown_in_frame",
+                      "t_dispatch_lens_spec_commit_cands_cap_exact", "t_dispatch_lens_spec_nfc_nfd_listed_once",
+                      "t_design_loop_manuals_spec_freeze_old_step_any_placeholder",
+                      "t_dispatch_lens_spec_name_shown_as_data_edges", "t_dispatch_lens_hook_name_show_matches_lumos",
+                      "t_dispatch_lens_spec_author_names_e2e_sentinels", "t_dispatch_lens_hook_notes_e2e_sentinels",
+                      "t_dispatch_lens_spec_punct_names_read_and_attached", "t_dispatch_lens_spec_only_nodes_and_landing_capped",
+                      "t_dispatch_lens_spec_text_total_cap", "t_dispatch_lens_spec_nfd_first_nfc_on_disk_found",
+                      "t_dispatch_lens_arch_target_code_path_e2e_sentinels", "t_dispatch_lens_spec_sentinels_every_output_point",
+                      "t_dispatch_lens_sentinel_marks_paired", "t_arch_target_text_total_capped", "t_arch_target_lens_split_budget_and_caps",
+                      "t_dispatch_lens_name_show_invisible_and_wide", "t_spec_freeze_line_shown_through_name_exit",
+-                     "t_dispatch_lens_spec_cap_by_node_and_json_counts", "t_dispatch_lens_hook_fixed_hints_outside_frame")
++                     "t_dispatch_lens_spec_cap_by_node_and_json_counts", "t_dispatch_lens_hook_fixed_hints_outside_frame",
++                     "t_dispatch_lens_hidden_chars_every_codepoint", "t_dispatch_lens_name_show_blank_lookalikes",
++                     "t_dispatch_lens_visible_hidden_after_contract", "t_dispatch_lens_hook_repo_field_name_show",
++                     "t_arch_target_text_long_filenames_keep_rules", "t_arch_target_text_rules_not_attached_said",
++                     "t_arch_target_text_fixed_lines_outside_frame", "t_arch_target_split_no_rules_no_cut",
++                     "t_arch_target_rule_show_code_text_kept", "t_design_loop_manuals_target_rule_quote",
++                     "t_dispatch_lens_spec_backtick_paths_linear", "t_dispatch_lens_residual_refs_capped",
++                     "t_dispatch_lens_diff_text_total_cap")
+ _LR5_PLAN_REVISIT = "框內名字"   # 名字防線(框與標記)的回頭條件行要帶的字樣
+ 
+ 
+ def _lr4_sec(plan, n):
+     """計劃做法第 n 段的文字(到下一段開頭為止)。"""
+     return plan.split(f"\n{n}. ", 1)[-1].split(f"\n{n + 1}. ", 1)[0]
+ 
+ 
+ def _lr4_plan_problems(plan):
+     """計劃這幾輪該有的東西(代碼審 r4 合約1/合約4/合約5、正確性1;r5 合約2/合約3、邊界1),缺的回問題清單。"""
+@@ -47788,21 +47799,25 @@ def _lr4_plan_problems(plan):
+ def _lr4_line_has(text, prefixes, word, test):
+     return any(ln.lstrip("- ").startswith(prefixes) and word in ln and f"[test:{test}]" in ln for ln in text.splitlines())
+ 
+ 
+ _LR5_LENS_WANT = (("PITFALL:", "不帶標點", "t_dispatch_lens_spec_unpunctuated_sentence_shown_in_frame", "派工鏡頭缺「不帶標點的整句仍印得出」那行"),
+                   ("WHY:", "只看路徑安全", "t_dispatch_lens_spec_punct_names_read_and_attached", "派工鏡頭缺「讀不讀只看路徑安全」那行"),
+                   ("WHY:", "_lens_author_name_show", "t_dispatch_lens_spec_name_shown_as_data_edges", "派工鏡頭缺「名字一律以資料形式印」那行"),
+                   ("WHY:", "端到端", "t_dispatch_lens_spec_author_names_e2e_sentinels", "派工鏡頭缺「守衛是端到端」那行"),
+                   ("PITFALL:", "_LENS_SPEC_MAX_NAMED", "t_dispatch_lens_spec_only_nodes_and_landing_capped", "派工鏡頭缺「每類只列前 N 篇」那行"),
+                   ("PITFALL:", "_arch_target_text", "t_dispatch_lens_arch_target_code_path_e2e_sentinels", "派工鏡頭缺「目標架構段兩條路都經出口」那行"),
+-                  ("PITFALL:", "_lens_spec_render_listed", "t_dispatch_lens_spec_cap_by_node_and_json_counts", "派工鏡頭缺「字數上限先按節點分配」那行"))
++                  ("PITFALL:", "_lens_spec_render_listed", "t_dispatch_lens_spec_cap_by_node_and_json_counts", "派工鏡頭缺「字數上限先按節點分配」那行"),
++                  ("PITFALL:", "_lens_hidden_char", "t_dispatch_lens_visible_hidden_after_contract", "派工鏡頭缺「看不見只有一份判定」那行"),
++                  ("PITFALL:", "規則沒附", "t_arch_target_text_rules_not_attached_said", "派工鏡頭缺「目標架構段分配含標題行」那行"),
++                  ("PITFALL:", "_arch_target_spec_bt_paths", "t_dispatch_lens_spec_backtick_paths_linear", "派工鏡頭缺「反引號路徑不回溯」那行"),
++                  ("PITFALL:", "_lens_text_cap", "t_dispatch_lens_diff_text_total_cap", "派工鏡頭缺「整段總量上限」那行"))
+ 
+ 
+ def _lr4_notes_problems(plan, lens, codex):
+     """計劃、派工鏡頭節點與 codex-harness 這幾輪該有的東西,缺的回問題清單。"""
+     probs = _lr4_plan_problems(plan)
+     probs += [f"{msg}(綁 {test})" for pre, word, test, msg in _LR5_LENS_WANT if not _lr4_line_has(lens, (pre,), word, test)]
+     if not _lr4_line_has(codex, ("WHY:",), "_spec_what", "t_dispatch_lens_hook_name_show_matches_lumos"):
+         probs.append("codex-harness 缺「掛鉤說明行過 _spec_what」那行(綁 t_dispatch_lens_hook_name_show_matches_lumos)")
+     if not any(ln.startswith("REVISIT:") and _LR5_PLAN_REVISIT in ln for ln in lens.splitlines()):
+         probs.append("派工鏡頭沒有名字防線(框與標記)的 REVISIT 行")
+@@ -48287,22 +48302,23 @@ def t_arch_target_text_total_capped():
+     每條截在 _ARCH_TARGET_RULE_SHOW 字並標原長、三個節點的標題都在、整段在上限內。三種都在注入框裡、尾句照印。
+     判準來源:資源席實測 4.6MB 與 9MB;應抓到的錯:列名行不限、規則原文不截、整段不套上限、照分配不保後面節點的標題。"""
+     m = _load_lumos_inproc()
+     room = m._LENS_SPEC_TEXT_MAX + len(m._FRAME_OPEN) + len(m._FRAME_CLOSE) + 200
+     d, _g, w, c, _base = _arch_target_repo(None, None)
+     t1 = m._arch_target_text(d, "HEAD", "docs/t-knowledge/", {f"Systems/N{i}": [f"app/x{i}.py"] for i in range(3000)}, [])
+     rows = [ln for ln in t1.splitlines() if "節點太多,規則沒貼" in ln]
+     check("①列名行只列上限那麼多、其餘只計數", len(rows) == m._ARCH_TARGET_LENS_NAMED
+           and f"另有 {3000 - m._ARCH_TARGET_LENS_NODES - m._ARCH_TARGET_LENS_NAMED} 個目標節點沒列名" in t1, f"{len(rows)} {t1[-300:]}")
+     t2 = m._arch_target_text(d, "HEAD", "docs/t-knowledge/", {f"Systems/{'`' * 250}{i}": [f"app/x{i}.py"] for i in range(3000)}, [])
+-    check("②長名字:整段在上限內、講明截了", len(t2) <= room and "附加段超過" in t2 and t2.startswith(m._FRAME_OPEN)
+-          and t2.endswith(m._FRAME_CLOSE), f"{len(t2)} {t2[-300:]}")
++    # 代碼審 r7:列名行照剩下的字數放,放不下的併進「另有 M 個沒列名」(原本靠最後一道整段截斷);寫死的段首與尾句在框外
++    check("②長名字:整段在上限內、放不下的列名行講明沒列", len(t2) <= room and "個目標節點沒列名" in t2 and m._FRAME_OPEN in t2
++          and m._FRAME_CLOSE in t2 and t2.startswith("[目標架構]"), f"{len(t2)} {t2[-300:]}")
+     big = "x" * 10000
+     node = ("---\ntype: system\nstatus: doing\nresponsibility: 目標架構\nsummary: |-\n"
+             + "\n".join(f"  RULE:第{i}條 {big} [依據:人] [since:2026-10-09] [retire:人裁] [until:2099-10-09]" for i in range(40)) + "\n---\n# x\n")
+     for k in range(3):
+         w(f"docs/t-knowledge/Systems/大{k}.md", node)
+     c("big rules")
+     t3 = m._arch_target_text(d, "HEAD", "docs/t-knowledge/", {f"Systems/大{k}": [f"app/y{k}.py"] for k in range(3)}, [])
+     check("③三個節點的標題都在", all(f"\u2039Systems/大{k}\u203a(1 支檔)" in t3 for k in range(3)), t3[:600])
+     rule_rows = [ln for ln in t3.splitlines() if ln.startswith("  - ")]
+     check("③每條規則截在上限、標明原長", rule_rows and all(len(ln) < m._ARCH_TARGET_RULE_SHOW + 60 and "原長" in ln for ln in rule_rows),
+@@ -48320,21 +48336,22 @@ def t_arch_target_lens_split_budget_and_caps():
+     rules = [(f"lib/d{i}/**", f"Systems/N{i}") for i in range(nr + 100)] + [("app/hit/**", "Systems/Hit")]
+     files = [f"app/miss/f{i}.py" for i in range(nf + 50)] + ["app/hit/x.py"]
+     t, cut = m._arch_target_lens_split(files, rules)
+     check("改動檔與宣告超過上限:只比前面那些、原因照實回", t == {} and any(f"{nf + 51} 支只比了前 {nf} 支" in x for x in cut)
+           and any(f"{nr + 101} 條只用前 {nr} 條" in x for x in cut), str(cut))
+     check("推送前分級那條不帶上限:照舊全算", m._arch_target_split(files, rules) == {"Systems/Hit": ["app/hit/x.py"]}, "")
+     with patch.object(m, "_ARCH_TARGET_LENS_BUDGET", -1.0):
+         t2, cut2 = m._arch_target_lens_split(["app/hit/x.py"], [("app/hit/**", "Systems/Hit")])
+     check("超過時間預算:停下、回原因", t2 == {} and any("時間預算" in x for x in cut2), str(cut2))
+     txt = m._arch_target_text(Path(tempfile.mkdtemp(prefix="gctl-lr6-")), "HEAD", "", {}, [], cut)
+-    check("只算到一半(沒有命中)也印一行、在框內", "只算到一半" in txt and "照鄰居審" in txt and txt.startswith(m._FRAME_OPEN), txt[:300])
++    _fa, _fb = txt.find(m._FRAME_OPEN), txt.find(m._FRAME_CLOSE)
++    check("只算到一半(沒有命中)也印一行、在框內", "只算到一半" in txt[_fa:_fb] and "照鄰居審" in txt and 0 < _fa < _fb, txt[:300])
+ 
+ 
+ def _lr6_name_cases():
+     """r6 補的名字樣本(期望值照計劃做法 6 手寫,不從被測程式算):行段分隔、孤立代理、NEL、超出基本平面(8 碼,跟「U+E004 加 1」分得開)、
+     兩區變體選擇符、U+034F、U+17B4到17B5、U+180B到180F、五個填充字、只由隱形字與空白組成 → (空名字);emoji 不是隱形字照印。"""
+     o, c_ = "\u2039", "\u203a"
+     return [("行分隔 U+2028", "a\u2028b", 80, f"{o}a\\u2028b{c_}"), ("段分隔 U+2029", "a\u2029b", 80, f"{o}a\\u2029b{c_}"),
+             ("孤立代理 U+D800", "a\ud800b", 80, f"{o}a\\ud800b{c_}"), ("NEL U+0085", "a\x85b", 80, f"{o}a\\u0085b{c_}"),
+             ("標籤字元 U+E0041(8 碼)", "a\U000e0041", 80, f"{o}a\\U000e0041{c_}"),
+             ("私用 U+E004 後接 1(跟上一筆分得開)", "a1", 80, f"{o}a\\ue0041{c_}"),
+@@ -48440,20 +48457,383 @@ def t_dispatch_lens_hook_fixed_hints_outside_frame():
+     for label, kw, fixed in cases:
+         rc, o, _c, _m = _lr_hook_fire(hm, **kw)
+         n = _lr_note(o)
+         a, b = n.find(hm._FRAME_CLOSE), len(n)
+         inside, outside = n[:a], n[a:b]
+         check(f"{label}:帶值那句在框內、框有收尾", rc == 0 and a > 0 and "這次沒附固定席節點" in inside, n[:400])
+         check(f"{label}:工具寫死的指示在框外", all(x in outside and x not in inside for x in fixed), n[:600])
+         check(f"{label}:不再寫「上面那段範圍」", "上面那段範圍" not in n, "")
+ 
+ 
++# ---------------------------------------------------------------------------
++# 派工鏡頭可指定目標repo 代碼審 r7 修正(governance/review-reports/code-派工鏡頭可指定目標repo/r7-fix.json):
++# G1「看不見」只有一份定義(_lens_hidden_char)、名字出口與正文最後一道 _lens_visible 都用它;G2 目標架構段的字數分配含標題行、
++# 寫死的指示在框外、規則沒附要明說;G3 規則原文可抄;G4 反引號路徑不回溯、殘留指標與 diff 模式整段有上限。
++# ---------------------------------------------------------------------------
++# 規格手寫的「畫面上像空白、但不是 Default_Ignorable」的字(計劃 [S45]):點字空白、物件替代字元、音樂空符頭(r6 資安席),
++# 加 r7 邊界席列的半形填充空白 U+303F、契丹小字填充 U+16FE4、象形文字空白 U+13441、U+13442
++_LR7_BLANK_LOOKALIKES = ("⠀", "￼", "\U0001d159", "〿", "\U00016fe4", "\U00013441", "\U00013442")
++_LR7_HIDDEN_CATS = ("Cc", "Cf", "Zl", "Zp", "Cs", "Co", "Cn")
++
++
++def _lr7_hidden_oracle():
++    """測試端獨立的「看不見或會改顯示」判定:Unicode 類別(規格列的七類)、測試自己抄的 Unicode 16 DICP 全表、上面那份手寫清單。
++    不呼叫被測程式的任何表。回一個 cp → bool 的函式。"""
++    import bisect as _bi
++    import unicodedata as _ud
++    rngs = _qfm_unicode16_dicp_ranges()
++    starts = [a for a, _b in rngs]
++    extra = {ord(c) for c in _LR7_BLANK_LOOKALIKES}
++
++    def hidden(cp):
++        i = _bi.bisect_right(starts, cp) - 1
++        return (_ud.category(chr(cp)) in _LR7_HIDDEN_CATS or (i >= 0 and cp <= rngs[i][1]) or cp in extra)
++    return hidden
++
++
++def _lr7_esc(cp):
++    return f"\\U{cp:08x}" if cp > 0xFFFF else f"\\u{cp:04x}"
++
++
++def t_dispatch_lens_hidden_chars_every_codepoint():
++    """[代碼審 r7 架1/邊2/邊3] 全部 0x110000 個碼位:名字出口(lumos)、掛鉤抄本、正文最後一道 _lens_visible 三道出口對「看不見或會改顯示」
++    的判定都等於測試獨立組的判準(七個 Unicode 類別 + Unicode 16 DICP 全表 + 手寫的像空白清單);名字出口多跳脫標記、反斜線、框線與反引號,
++    _lens_visible 照留換行。只由這些字(與空白)組成的單字名字印「(空名字)」。
++    判準來源:架構對齊席(手選子集是第二份定義)、邊界席(_lens_visible 只跳 _PATH_SPECIAL_CATS,變體選擇符與填充字照進派工詞)。
++    應抓到的錯:任一道出口少一類、少一段 DICP、少一個像空白的字、掛鉤與 lumos 分岔。"""
++    hm = _load_hook_mod("dlens_r7_cp", "dispatch-lens-hook.py")
++    m = _load_lumos_inproc()
++    hidden = _lr7_hidden_oracle()
++    marks = {0x2039, 0x203A, 0x5C, 0x2500, 0x60}
++    bad_show, bad_hook, bad_vis, bad_blank = [], [], [], []
++    step = 2048
++    for a in range(0, 0x110000, step):
++        cps = [cp for cp in range(a, min(a + step, 0x110000))]
++        name = "a" + "".join(map(chr, cps))
++        want_show = "‹a" + "".join(_lr7_esc(cp) if (hidden(cp) or cp in marks) else chr(cp) for cp in cps) + "›"
++        got = m._lens_author_name_show(name, len(name) + 1)
++        if got != want_show:
++            bad_show.append(f"U+{a:04X}區")
++        if hm._spec_name_show(name, len(name) + 1) != want_show:
++            bad_hook.append(f"U+{a:04X}區")
++        body = "".join(chr(cp) for cp in cps if cp != 0x0A)
++        want_vis = "".join(_lr7_esc(ord(c)) if hidden(ord(c)) else c for c in body)
++        if m._lens_visible(body) != want_vis:
++            bad_vis.append(f"U+{a:04X}區")
++    for cp in range(0x110000):
++        c = chr(cp)
++        if (c.isspace() or hidden(cp)) and (m._lens_author_name_show(c, 80) != _LR5_EMPTY or hm._spec_name_show(c, 80) != _LR5_EMPTY):
++            bad_blank.append(f"U+{cp:04X}")
++    check("名字出口(lumos)每個碼位都照判準跳脫", not bad_show, bad_show[:12])
++    check("掛鉤抄本每個碼位都照判準跳脫(跟 lumos 同一份全表)", not bad_hook, bad_hook[:12])
++    check("正文最後一道 _lens_visible 每個碼位都照判準跳脫、換行照留", not bad_vis and m._lens_visible("a\nb") == "a\nb", bad_vis[:12])
++    check("只由看不見的字組成的單字名字:兩邊都印「(空名字)」", not bad_blank, bad_blank[:12])
++    check("_kill_esc 不帶新參數時照舊:變體選擇符不跳脫、補充平面跳 5 碼", m._kill_esc("a\U000e0041️") == "a\\ue0041️",
++          repr(m._kill_esc("a\U000e0041️")))
++
++
++def t_dispatch_lens_name_show_blank_lookalikes():
++    """[代碼審 r7 邊3] 名字是 U+1D159(音樂空符頭)或 U+303F(半形填充空白)時:單獨一個印「(空名字)」,夾在字中間跳脫成看得見的寫法;
++    掛鉤與 lumos 一樣。期望值照規格手寫。判準來源:邊界席實測輸出 ‹𝅙›、‹〿›(看起來是空的卻沒跳脫)。"""
++    hm = _load_hook_mod("dlens_r7_blank", "dispatch-lens-hook.py")
++    m = _load_lumos_inproc()
++    o, c_ = "‹", "›"
++    cases = [("只有 U+1D159", "\U0001d159", _LR5_EMPTY), ("只有 U+303F", "〿", _LR5_EMPTY),
++             ("一串 U+303F 加空白", "〿 〿〿", _LR5_EMPTY),
++             ("U+1D159 夾在中間", "a\U0001d159b", f"{o}a\\U0001d159b{c_}"), ("U+303F 夾在中間", "a〿b", f"{o}a\\u303fb{c_}"),
++             ("U+16FE4 夾在中間", "a\U00016fe4b", f"{o}a\\U00016fe4b{c_}"), ("U+13441 夾在中間", "a\U00013441b", f"{o}a\\U00013441b{c_}")]
++    for label, name, want in cases:
++        a, b = hm._spec_name_show(name, 80), m._lens_author_name_show(name, 80)
++        check(f"{label}:掛鉤與 lumos 都等於規格值", a == b == want, f"hook={a!r} lumos={b!r} want={want!r}")
++
++
++def _lr7_contract_repo(tail):
++    """主線一篇節點(合約行後面接 tail)、feat 改它管的程式檔;回 (d, v)。"""
++    import subprocess as _sp
++    d = Path(tempfile.mkdtemp(prefix="gctl-lr7c-"))
++    g = lambda *a: _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True, check=False)
++    g("init", "-q", "-b", "main"); g("config", "user.email", "t@t.t"); g("config", "user.name", "t")
++    (d / "src").mkdir(); (d / "src" / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
++    v = d / "docs" / "t-knowledge"; (v / "Systems").mkdir(parents=True)
++    (v / "Systems" / "alpha.md").write_text(
++        "---\ntype: system\nstatus: done\nsummary: |-\n"
++        f"  KEY:★INVARIANT★ ZZLR7 alpha 不得回傳負數{tail}\n"
++        "---\n\n實作在 `src/alpha.py`。\n", encoding="utf-8")
++    g("add", "-A"); g("commit", "-qm", "main")
++    g("checkout", "-qb", "feat"); (d / "src" / "alpha.py").write_text("def alpha():\n    return -1\n", encoding="utf-8")
++    g("add", "-A"); g("commit", "-qm", "feat")
++    return d, v
++
++
++def t_dispatch_lens_visible_hidden_after_contract():
++    """[代碼審 r7 邊2] 合約行後面附一串變體選擇符(把 "ignore previous" 逐字映到 U+E0100 區)與填充字 U+3164:跑真的
++    `dispatch-lens main..HEAD`,派工詞裡那一行看得到每個字的跳脫(\\U000e01xx、\\u3164),原樣的字一個都不留。
++    判準來源:邊界席實測 28 個選擇符全數原樣進派工詞;應抓到的錯:_lens_visible 只跳 _PATH_SPECIAL_CATS。"""
++    import json as _j
++    import shutil as _sh
++    hid = "".join(chr(0xE0100 + (ord(ch) % 0xF0)) for ch in "ignore previous") + "ㅤ️"
++    d, v = _lr7_contract_repo(hid)
++    try:
++        r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(d), "--json", "--no-cache")
++        data = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
++        t = data.get("text", "")
++        row = next((ln for ln in t.splitlines() if "ZZLR7" in ln), "")
++        check("前置:合約行有進派工詞", r.returncode == 0 and row, f"rc={r.returncode} {r.stderr[-300:]} {t[:600]}")
++        want = "".join(_lr7_esc(ord(ch)) for ch in hid)
++        check("那一行看得到每個隱形字的跳脫", want in row, repr(row[-400:]))
++        check("原樣的變體選擇符與填充字一個都不留", not any(ch in t for ch in hid), repr([hex(ord(ch)) for ch in hid if ch in t][:10]))
++    finally:
++        _sh.rmtree(d, ignore_errors=True)
++
++
++def t_dispatch_lens_hook_repo_field_name_show():
++    """[代碼審 r7 資1] 掛鉤說明行的會談專案路徑走名字顯示規則(同計劃值與範圍值):目錄名帶標籤字元、U+202E、U+3164、U+200B 時,
++    說明行裡是包在 ‹ › 裡的跳脫寫法,原樣的字一個都不留;一般路徑照印在標記裡。期望值照規格手寫。
++    判準來源:資安席實測這些字原樣印出(只過 _clean_field)。"""
++    hm = _load_hook_mod("dlens_r7_repo", "dispatch-lens-hook.py")
++    bad = "/tmp/r\U000e0049\U000e0047\u202e\u3164\u200b"
++    want = "‹/tmp/r\\U000e0049\\U000e0047\\u202e\\u3164\\u200b›"
++    for label, kw in (("範圍算不出", {"body": {"lens_fail": "commit_missing"}, "prompt": "審查。\nLUMOS-IMPACT: main..HEAD\n"}),
++                      ("計劃讀不到", {"body": {"lens_fail": "spec_missing", "spec_source": "worktree"}})):
++        rc, o, _c, _m = _lr_hook_fire(hm, proj=bad, **kw)
++        n = _lr_note(o)
++        check(f"{label}:會談專案路徑照名字顯示規則印", rc == 0 and want in n, repr(n[:400]))
++        check(f"{label}:原樣的隱形字一個都不留", n and not any(ch in n for ch in bad[6:]), repr(n[:300]))
++    rc, o, _c, _m = _lr_hook_fire(hm, proj="/tmp/一般專案", body={"lens_fail": "commit_missing"}, prompt="審查。\nLUMOS-IMPACT: main..HEAD\n")
++    check("一般路徑照印在標記裡", "‹/tmp/一般專案›" in _lr_note(o), repr(_lr_note(o)[:300]))
++
++
++
++
++def _lr7_node_blocks(t, nodes):
++    """目標架構段裡每個節點那一塊:{節點: [標題行, 規則行…]};標題行以「基準:目標架構 ‹節點›」開頭,下一個「基準:」或框尾結束。"""
++    out, cur = {}, None
++    for ln in t.splitlines():
++        hit = next((nd for nd in nodes if ln.startswith(f"基準:目標架構 ‹{nd}›")), None)
++        if hit is not None:
++            cur = hit
++            out[cur] = [ln]
++        elif ln.startswith(("基準:", "─────")):
++            cur = None
++        elif cur is not None:
++            out[cur].append(ln)
++    return out
++
++
++def _lr7_rules_node(tag, n, width):
++    """n 條有效 RULE,每條帶 tag、正文約 width 字。"""
++    rules = [f"  RULE:{tag}第{i}條 " + "規" * width + " [依據:人] [since:2026-10-09] [retire:人裁] [until:2099-10-09]" for i in range(1, n + 1)]
++    return "---\ntype: system\nstatus: doing\nresponsibility: 目標架構\nsummary: |-\n" + "\n".join(rules) + "\n---\n# x\n"
++
++
++def _lr7_block_ok(blk, tag):
++    """這一塊:標題在、至少一條帶 tag 的規則行,或明說「規則沒附」。"""
++    rules = [ln for ln in blk[1:] if ln.startswith("  - ") and tag in ln]
++    return bool(blk) and (bool(rules) or any("規則沒附" in ln for ln in blk[1:]))
++
++
++def t_arch_target_text_long_filenames_keep_rules():
++    """[代碼審 r7 邊界1/通才1/正確性1/資源3] 標題行的命中檔清單算進字數分配、規則優先:①一個節點、20 支檔名是 200 個反引號(跳脫後每支 1200 多字);
++    ②一個節點、20 支檔名各帶 300 個 U+F0000(跳脫後每支 3000 多字);③三個節點、各 20 支 250 字的檔名、各 30 條約 150 字的規則。
++    三種都要:每個節點的標題在、至少一條規則在(或明說「規則沒附」),檔名清單放不下的印「另有 N 支」,整段在上限內。
++    判準來源:通才席實跑 arch_text 只剩 241 字(規則全沒附)、邊界席 U+F0000 重現、正確性席三節點第三篇整篇消失。"""
++    m = _load_lumos_inproc()
++    room = m._LENS_SPEC_TEXT_MAX + len(m._FRAME_OPEN) + len(m._FRAME_CLOSE) + 600
++    nd = "Systems/LR7甲"
++    d, _g, w, c, _base = _arch_target_repo(None, None)
++    w(f"docs/t-knowledge/{nd}.md", _lr7_rules_node("ZZLR7A", 3, 40))
++    for k in range(3):
++        w(f"docs/t-knowledge/Systems/LR7長{k}.md", _lr7_rules_node(f"ZZLR7L{k}", 30, 150))
++    c("lr7 nodes")
++    for label, files in (("①反引號檔名", [f"app/Domain/{'`' * 200}{i}.py" for i in range(20)]),
++                         ("②U+F0000 檔名", [f"app/Domain/{chr(0xF0000) * 300}{i}.py" for i in range(20)])):
++        t = m._arch_target_text(d, "HEAD", "docs/t-knowledge/", {nd: files}, [])
++        blk = _lr7_node_blocks(t, [nd]).get(nd, [])
++        check(f"{label}:標題與至少一條規則都在", _lr7_block_ok(blk, "ZZLR7A") and any("ZZLR7A" in ln for ln in blk[1:]), t[:600])
++        check(f"{label}:檔名清單放不下的印「另有 N 支」、整段在上限內", bool(blk) and "另有" in blk[0] and "支" in blk[0] and len(t) <= room,
++              f"{len(t)} {blk[0][:200] if blk else ''}")
++    nodes = [f"Systems/LR7長{k}" for k in range(3)]
++    tg = {nodes[k]: [f"app/m{k}/{'x' * 240}{i:02d}.py" for i in range(20)] for k in range(3)}
++    t = m._arch_target_text(d, "HEAD", "docs/t-knowledge/", tg, [])
++    blocks = _lr7_node_blocks(t, nodes)
++    for k in range(3):
++        check(f"③第 {k + 1} 個節點:標題與至少一條規則都在(或明說規則沒附)", _lr7_block_ok(blocks.get(nodes[k], []), f"ZZLR7L{k}"),
++              str(blocks.get(nodes[k], [])[:3])[:500])
++    check("③整段在上限內、靠分配就放得下(沒用到最後一道整段截斷)", len(t) <= room and "附加段超過" not in t, f"{len(t)} {t[-200:]}")
++
++
++def t_arch_target_text_rules_not_attached_said():
++    """[代碼審 r7 通才1/邊界1] 字數分配放不下任何一條規則時明說「規則沒附」:三個節點各有規則、上限壓到放不下第一條;每個節點的標題在、
++    那一塊寫「規則沒附」,框後先講幾篇規則沒附、尾句改成「一條目標規則都沒附」,不再說「違反一條規則=major」。
++    判準來源:通才席(只剩「違反一條規則=major」但規則全沒附);應抓到的錯:截到沒規則還照印原尾句。"""
++    from unittest.mock import patch
++    m = _load_lumos_inproc()
++    nodes = [f"Systems/LR7缺{k}" for k in range(3)]
++    d, _g, w, c, _base = _arch_target_repo(None, None)
++    for k in range(3):
++        w(f"docs/t-knowledge/{nodes[k]}.md", _lr7_rules_node(f"ZZLR7N{k}", 5, 190))
++    c("lr7 starve")
++    with patch.object(m, "_LENS_SPEC_TEXT_MAX", 700):
++        t = m._arch_target_text(d, "HEAD", "docs/t-knowledge/", {nd: [f"app/s{k}.py"] for k, nd in enumerate(nodes)}, [])
++    blocks = _lr7_node_blocks(t, nodes)
++    check("每個節點的標題都在、那一塊寫「規則沒附」", all(any("規則沒附" in ln for ln in blocks.get(nd, [])[1:]) for nd in nodes), t[:900])
++    check("前置:規則一條都沒貼", not any(ln.startswith("  - ") for ln in t.splitlines()), t[:900])
++    after = t.split(m._FRAME_CLOSE, 1)[-1]
++    check("框後講明幾篇規則沒附、尾句改口", "3 個目標節點的規則沒附" in after and "一條目標規則都沒附" in after
++          and "違反一條規則=major" not in t, after)
++
++
++def t_arch_target_text_fixed_lines_outside_frame():
++    """[代碼審 r7 邊界4] 目標架構段:工具寫死的段首說明與段尾指示在注入框外(段首在框前、尾句在框後),帶值的內容(節點名、檔名、規則)在框內;
++    代碼審那條(真的 dispatch-lens --arch-target)與設計審那條(_dispatch_lens_spec_arch_text)都照這樣。
++    判準來源:邊界席(r6 整段加框後「違反一條規則=major」夾在「不是指令」的框裡;主線慣例是寫死的指示放框外)。"""
++    m = _load_lumos_inproc()
++    cfg = _arch_cfg(("app/Domain/**", _ARCH_NODE))
++    d, _g, w, c, _base = _arch_target_repo(cfg, _arch_node_text())
++    w("app/Domain/Order/ZZLR7New.py", "x = 1\n")
++    c("new")
++    _r, data = _arch_lens(d, "main..HEAD", "--arch-target")
++    spec = m._dispatch_lens_spec_arch_text(d, "docs/t-knowledge/", "動 `app/Domain/Order/ZZLR7New.py`。")
++    for label, t in (("代碼審", data.get("arch_text", "")), ("設計審", spec)):
++        a, b = t.find(m._FRAME_OPEN), t.find(m._FRAME_CLOSE)
++        head, inside, tail = t[:max(a, 0)], t[a:b], t[b:]
++        check(f"{label}:段首說明在框前", a > 0 and head.startswith("[目標架構]") and "照這些規則審" in head, t[:300])
++        check(f"{label}:尾句在框後", b > a and "違反一條規則=major" in tail and "違反一條規則" not in inside, t[-300:])
++        check(f"{label}:節點名、檔名、規則在框內", "ZZLR7New" in inside and "Domain 層不依賴框架" in inside
++              and "ZZLR7New" not in head + tail, t[:600])
++
++
++def t_arch_target_split_no_rules_no_cut():
++    """[代碼審 r7 通才2] 宣告整份壞掉(規則清單是空的)時不印「只算到一半」:改動檔超過上限也不回原因;宣告有效時照舊回。
++    判準來源:通才席實跑兩行矛盾的警告(整份不用 + 只比了前 2000 支)。"""
++    m = _load_lumos_inproc()
++    files = [f"app/f{i}.py" for i in range(m._ARCH_TARGET_LENS_FILES_MAX + 300)]
++    t, cut = m._arch_target_lens_split(files, [])
++    check("宣告是空的:沒有命中、也沒有「只算到一半」的原因", t == {} and cut == [], str(cut))
++    _t2, cut2 = m._arch_target_lens_split(files, [("lib/**", "Systems/X")])
++    check("宣告有效:照舊回原因", any("只比了前" in x for x in cut2), str(cut2))
++
++
++def t_arch_target_rule_show_code_text_kept():
++    """[代碼審 r7 正確性2/邊界5/通才3] 規則原文照原字印:反引號與反斜線不跳脫(審查席抄得回原文),尾端的 [鍵:值] 欄位先剝掉再套
++    每條 _ARCH_TARGET_RULE_SHOW 字的上限;看不見的字、‹ ›、框線字元照樣跳脫,整條仍包在 ‹ › 裡。期望值照規格手寫。
++    判準來源:正確性席與邊界席實測 `ViewModel` 印成 \\u0060ViewModel\\u0060;正確性席:欄位吃掉 200 字裡的 90 字。"""
++    m = _load_lumos_inproc()
++    o, c_ = "‹", "›"
++    lim = m._ARCH_TARGET_RULE_SHOW
++    tail = " [依據:人] [since:2026-10-09] [retire:人裁] [until:2099-10-09]"
++    long_rule = "RULE:" + "長" * (lim - 5)
++    cases = [("反引號與反斜線照原字", "RULE:`ViewModel` 不得 import `android.view`,路徑寫 a\\b" + tail,
++              f"{o}RULE:`ViewModel` 不得 import `android.view`,路徑寫 a\\b{c_}"),
++             ("欄位剝掉後剛好在上限內、不截", long_rule + tail, f"{o}{long_rule}{c_}"),
++             ("欄位剝掉後仍超過上限:截斷標原長", long_rule + "多" + tail, f"{o}{long_rule}{c_}…(截斷,原長 {lim + 1} 字)"),
++             ("中間的 [連結] 與方括號不剝", "RULE:見 [[Systems/x]] 的 [a:b] 寫法,例外照舊" + tail, f"{o}RULE:見 [[Systems/x]] 的 [a:b] 寫法,例外照舊{c_}"),
++             ("標記、框線、看不見的字照樣跳脫", "RULE:a›b‹c─d️eㅤf" + tail, f"{o}RULE:a\\u203ab\\u2039c\\u2500d\\ufe0fe\\u3164f{c_}")]
++    for label, raw, want in cases:
++        got = m._arch_target_rule_show(raw)
++        check(f"{label}", got == want, f"got={got[-160:]!r} want={want[-160:]!r}")
++
++
++def t_design_loop_manuals_target_rule_quote():
++    """[代碼審 r7 通才3] 派工範本 §7.6 講明引「目標規則」時:引 ‹ › 之間的字、不含 ‹ ›,跳脫序列照印出來的字抄。
++    判準來源:通才席(範本要求逐字抄,沒提 ‹ › 與跳脫,席位抄法兩種都對不上原文)。"""
++    tpl = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8")
++    sec = tpl.split("## 7.6", 1)[-1].split("\n## ", 1)[0]
++    row = next((ln for ln in sec.splitlines() if "目標規則:「" in ln), "")
++    check("§7.6 引目標規則那行講明不含 ‹ ›、跳脫序列照印出來的字抄", "不含 ‹ ›" in row and "跳脫序列" in row, row)
++
++
++
++def t_dispatch_lens_spec_backtick_paths_linear():
++    """[代碼審 r7 資源1] 設計審目標架構段找計劃裡反引號包住的程式檔:4 萬段沒收尾的 `a/a/a… 在 1 秒內(舊正規式實測 13 秒);
++    形狀照舊(X/Y.副檔名,斜線前後都有字、副檔名是 ASCII 英數字),期望值照規則手寫;計劃超過 _ARCH_TARGET_SPEC_SCAN_MAX 字只掃前面、
++    段裡講明只掃了前多少字。判準來源:資源席實測 2 萬段 2.6 秒、4 萬段 10.3 秒,擋在 5 秒預算之前。"""
++    import time as _time
++    m = _load_lumos_inproc()
++    text = "`" + "a/" * 40000 + "a"
++    t0 = _time.perf_counter()
++    got = m._arch_target_spec_bt_paths(text)
++    dt = _time.perf_counter() - t0
++    check("4 萬段沒收尾的反引號路徑:1 秒內掃完、沒有候選", dt < 1.0 and got == [], f"{dt:.2f}s {got[:3]}")
++    sample = "動 `app/a/b.py`、`lib/x.tar.gz`、`/abs.py`、`a/.py`、`ab.py`、`a/b.c-d`、`c d/e.py`、`src/甲/乙.kt`。"
++    want = ["app/a/b.py", "lib/x.tar.gz", "src/甲/乙.kt"]
++    got = m._arch_target_spec_bt_paths(sample)
++    check("形狀照舊:X/Y.副檔名才算", got == want, str(got))
++    cfg = _arch_cfg(("app/Domain/**", _ARCH_NODE))
++    d, _g, _w, _c, _base = _arch_target_repo(cfg, _arch_node_text())
++    late = "x" * m._ARCH_TARGET_SPEC_SCAN_MAX + " `app/Domain/Order/ZZLR7Late.py`"
++    at = m._dispatch_lens_spec_arch_text(d, "docs/t-knowledge/", late)
++    check("超過掃描上限:後面的不算、段裡講明只掃了前多少字", "ZZLR7Late" not in at and f"只掃了前 {m._ARCH_TARGET_SPEC_SCAN_MAX} 字" in at, at[:500])
++    t0 = _time.perf_counter()
++    at2 = m._dispatch_lens_spec_arch_text(d, "docs/t-knowledge/", "`" + "a/" * 90000 + "a `app/Domain/Order/ZZLR7Hit.py`")
++    dt2 = _time.perf_counter() - t0
++    check("設計審那條整段:9 萬段(18 萬字,在掃描上限內)的計劃 2 秒內、後面的路徑照樣命中", dt2 < 2.0 and "ZZLR7Hit" in at2, f"{dt2:.2f}s {at2[:300]}")
++
++
++def t_dispatch_lens_residual_refs_capped():
++    """[代碼審 r7 資源2] 新增殘留段每條合約的殘留指標有筆數上限:300 筆指標(奇數筆是這次新增)只列 _LENS_RESIDUAL_REFS_MAX 筆、
++    有原因的先列、其餘印「另有 N 筆殘留指標未列」,決策內容也只讀列出的那幾筆。判準來源:資源席實測 2 萬筆指標 text 1.17MB。"""
++    from unittest.mock import patch
++    m = _load_lumos_inproc()
++    cap = m._LENS_RESIDUAL_REFS_MAX
++    refs = [(f"Projects/a#d{i}", "這次新增" if i % 2 else "", None) for i in range(300)]
++    reads = []
++    def fake(_root, _sha, _vault, ref, path=None, deadline=None):
++        reads.append(ref)
++        return "x"
++    with patch.object(m, "_lens_residual_decision", fake):
++        out = m._lens_residual_contract_lines(Path("."), "0" * 40, "docs/t-knowledge/", ("Systems/x", "fp"), refs, [])
++    rows = [ln for ln in out if ln.startswith("  殘留 [residual:")]
++    check("只列上限那麼多筆、決策內容只讀這幾筆", len(rows) == cap and len(reads) == cap, f"{len(rows)} {len(reads)}")
++    check("有原因的(這次新增)先列", all("(這次新增)" in ln for ln in rows), rows[:3])
++    check("其餘印另有幾筆未列", any(f"另有 {300 - cap} 筆殘留指標未列" in ln for ln in out), out[-2:])
++    few = [("Projects/a#d1", "", None)]
++    with patch.object(m, "_lens_residual_decision", fake):
++        out2 = m._lens_residual_contract_lines(Path("."), "0" * 40, "docs/t-knowledge/", ("Systems/x", "fp"), few, [])
++    check("沒超過:照列、不印另有", sum(1 for ln in out2 if ln.startswith("  殘留 [residual:")) == 1 and not any("未列" in ln for ln in out2), out2)
++
++
++def t_dispatch_lens_diff_text_total_cap():
++    """[代碼審 r7 資源2] 代碼審派工鏡頭整段 text 有總字數上限:超過時在行界截、截點在注入框裡先補框尾(每個框都有收尾)、最後一行講明
++    截了與原本多少字;沒超過原樣回。真跑一次 dispatch-lens(上限壓小)看 text 照這樣、--json 帶 text_truncated。
++    判準來源:資源席實測殘留段把 text 撐到 1.17MB;應抓到的錯:不截、截在框中間不補框尾、沒講明。"""
++    import contextlib as _cl
++    import io as _io
++    import json as _j
++    import shutil as _sh
++    from unittest.mock import patch
++    m = _load_lumos_inproc()
++    o, c_ = m._FRAME_OPEN, m._FRAME_CLOSE
++    body = "\n".join(f"第{i}行 " + "字" * 40 for i in range(2000))
++    text = f"開頭\n{o}\n{body}\n{c_}\n框外的尾句"
++    got = m._lens_text_cap(text, 5000)
++    lines = got.split("\n")
++    check("截在上限內、最後一行講明截了與原長", len(got) <= 5000 and lines[-1].startswith("(已截:") and f"原本 {len(text)} 字" in lines[-1],
++          f"{len(got)} {lines[-1][:120]}")
++    check("截點在框裡:先補框尾", got.count(o) == got.count(c_) == 1 and lines[-2] == c_, lines[-3:])
++    orig = set(text.split("\n"))
++    check("在行界截:留下的每一行都是原本的整行", all(ln in orig for ln in lines[:-1]), "")
++    check("沒超過:原樣回", m._lens_text_cap(text, len(text)) == text, "")
++    d, _v = _lr7_contract_repo("")
++    try:
++        buf = _io.StringIO()
++        with patch.object(m, "_LENS_TEXT_MAX", 300), _cl.redirect_stdout(buf):
++            rc = m.cmd_dispatch_lens("main..HEAD", repo=str(d), as_json=True, no_cache=True)
++        data = _j.loads(buf.getvalue().strip().splitlines()[-1])
++        t = data.get("text", "")
++        check("真跑:text 截在上限內、框有收尾、講明截了、text_truncated 是 true",
++              rc == 0 and len(t) <= 300 and t.count(o) == t.count(c_) and "(已截:" in t and data.get("text_truncated") is True,
++              f"rc={rc} {len(t)} {t[-200:]!r} {data.get('text_truncated')}")
++    finally:
++        _sh.rmtree(d, ignore_errors=True)
++
++
+ def t_review_role_cap_counts_files_not_candidates():
+     """[代碼審 r1 外家 F4] 上限數的是要讀內容的檔,不是往上找 package.json 的候選(缺檔的候選不佔名額)。"""
+     m = _load_lumos()
+     m._ROLE_READ_CAP = 3
+     files = [(f"d{i}/sub/a.ts", "H") for i in range(3)]
+     want, capped = m._review_role_wanted(files, [])
+     check("3 支 .ts、上限 3 → 沒有截斷,而且每支的最近 package.json 都在清單裡",
+           capped == 0 and all(f"H:d{i}/sub/package.json" in want for i in range(3)), str((capped, want)))
+     want, capped = m._review_role_wanted(files + [("d9/a.ts", "H")], [])
+     check("第 4 支才截斷", capped == 1 and "H:d9/package.json" not in want, str((capped, want)))
