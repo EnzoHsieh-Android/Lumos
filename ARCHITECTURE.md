@@ -105,11 +105,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (89 個頂層命令)
+## 3. CLI 子命令家族 (90 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 89 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 90 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航"]
     ROOT --> HEALTH["巡檢 / 治理"]
@@ -139,7 +139,7 @@ flowchart TB
     class R,H,W,G,LP,I,ST,C,L leaf
 ```
 
-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 89 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 90 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
 ## 4. 筆記不腐爛,靠的是五段接力
 
@@ -151,6 +151,8 @@ flowchart TB
 - 收工時:改了程式卻沒動筆記,擋一次要你補或說明
 
 **真正硬擋的關卡有兩個**:提交時、推送時。
+
+**全套測試怎麼分給各台**:測試執行器的 `--shard i/n` 照 `governance/test-durations.json`(各支實測秒數)把測試分成總耗時接近的幾份,沒有這張表就照名字輪流分;`lumos test-durations refresh` 把本機跑出的秒數合進那張表(詳見 [[Projects/推送與CI提速_計劃]])。
 
 **推上去之後**,`lumos ci-wait` 把雲端測試的結論拉回同一輪工作裡修(要專案在 `.lumos/config.json` 宣告 `ci` 區塊才啟用)。
 
