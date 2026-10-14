@@ -1,0 +1,305 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index bab8a492..19715fcd 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -64312,26 +64312,31 @@ elif c == 'pitfalls' and '--json' in a:
+     print(json.dumps({'tier': 'standard'}))
+ sys.exit(0)
+ '''
+ 
+ _PPC_SUITE = r'''import pathlib, os, subprocess, signal, time, sys
+ LOG = __LOG__
+ pathlib.Path(LOG).open('a').write('SUITE\n')
+ _sig = os.environ.get('FAKE_SUITE_SIG')
+ if _sig:
+     # 先記下自己的 pid(測試拿它查「掛鉤結束後這一片還活著沒」),再送訊號:
+-    # 1/TERM:只對掛鉤送 TERM(被砍);HUP:只對掛鉤送 SIGHUP(掛斷);INT:對整個行程群組送 SIGINT(Ctrl-C 的樣子;測試把掛鉤開在自己的群組裡)
+-    pathlib.Path(LOG).open('a').write('SUITE-PID %d\n' % os.getpid())
++    # 1/TERM:只對掛鉤送 TERM(被砍);HUP:只對掛鉤送 SIGHUP(掛斷);INT:對掛鉤所在的行程群組送 SIGINT(Ctrl-C 的樣子:
++    # 終端機只送給前景群組,也就是掛鉤那一組;測試把掛鉤開在自己的群組裡);SUBHUP:只對跑測試的子殼(這一片的父行程)送 SIGHUP。
++    # 送之前先起一個孫行程(片自己的子行程,像測試裡的 git、子行程),記下 pid,測試查它有沒有跟著被收掉(代碼審 r3 併發席 2)
++    kid = subprocess.Popen(['sleep', str(float(os.environ.get('FAKE_SUITE_LINGER', '30')))])
++    pathlib.Path(LOG).open('a').write('SUITE-PID %d\nSUITE-KID %d\n' % (os.getpid(), kid.pid))
++    gp = int(subprocess.run(['ps', '-o', 'ppid=', '-p', str(os.getppid())], capture_output=True, text=True).stdout.strip())
+     if _sig == 'INT':
+-        os.killpg(os.getpgrp(), signal.SIGINT)
++        os.killpg(os.getpgid(gp), signal.SIGINT)
++    elif _sig == 'SUBHUP':
++        os.kill(os.getppid(), signal.SIGHUP)
+     else:
+-        gp = int(subprocess.run(['ps', '-o', 'ppid=', '-p', str(os.getppid())], capture_output=True, text=True).stdout.strip())
+         os.kill(gp, signal.SIGHUP if _sig == 'HUP' else signal.SIGTERM)
+     # 沒被收掉的話會在這裡睡很久(遠長於測試等它消失的時限),孤兒一定抓得到;測試收尾會把它砍掉
+     time.sleep(float(os.environ.get('FAKE_SUITE_LINGER', '30')))
+     pathlib.Path(LOG).open('a').write('SUITE-END\n')
+ if os.environ.get('FAKE_SUITE_RED'):
+     print('  ✗ t_fake_red_case')
+     print('0 passed, 1 failed')
+     sys.exit(1)
+ print('1 passed, 0 failed')
+ '''
+@@ -64561,27 +64566,103 @@ def t_prepush_touched_file_write_fails_quietly():
+         pr = [i for i, ln in enumerate(lines) if ln.startswith("push-range ")]
+         dr = [i for i, ln in enumerate(lines) if ln.startswith("doctor ")]
+         check("①前置:清單那支的 push-range 在圖譜健檢之前跑(暫存目錄就是在那一刻被刪的)、圖譜健檢沒拿到清單",
+               bool(pr) and bool(dr) and pr[0] < dr[0] and "--touched-from" not in lines[dr[0]], str(lines))
+         check("②追加寫入失敗不印開檔雜訊", "No such file or directory" not in out, out[-800:])
+         check("③後面的擋下照算(暫存目錄沒了,彙總只能講筆數)、掛鉤回 1、全套沒跑",
+               rc == 1 and "SUITE" not in lines and "這次推送共有 1 筆擋下" in out, f"rc={rc} {out[-400:]}")
+     finally:
+         _ppc_cleanup(root)
+     # 同族一次掃完:掛鉤裡「寫進檔案、丟掉 stderr」的重導向一律包成一組(不是只修被點名的那一處)
+-    import re
++    # 掃描器本身先用手寫的例子驗(預期值是人判的,不是掃描器算的):代碼審 r3 邊界席列的漏抓三種、誤擋一種,加兩個不該抓的對照
++    for src, want, what in (
++            ('printf x >> $_f 2>/dev/null\n', [1], "路徑沒加引號"),
++            ('printf x >> "$_f"  2>/dev/null\n', [1], "中間兩個空格"),
++            ('true\nprintf x >> "$_f" \\\n    2>/dev/null\n', [2], "2>/dev/null 寫在 \\ 續行之後"),
++            ('echo "# 不是註解" >> $_f 2>/dev/null\n', [1], "引號裡的 # 不是註解"),
++            ('cmd   # a > "x" 2>/dev/null\n', [], "行尾註解裡的字樣"),
++            ('{ printf x >> $_f; } 2>/dev/null\n', [], "包成一組"),
++            ('grep -q x "$f" >/dev/null 2>/dev/null\n', [], "寫的是 /dev/null")):
++        got = _ppc_loose_quiet_writes(src)
++        check(f"④前置:掃描器 {what} → {want}", got == want, f"{got} ← {src!r}")
+     hook_txt = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+-    loose = [i for i, ln in enumerate(hook_txt.splitlines(), 1)
+-             if not ln.lstrip().startswith("#") and re.search(r"[^&0-9]>>? *\"[^\"]*\" 2>/dev/null", ln)]
++    loose = _ppc_loose_quiet_writes(hook_txt)
+     check("④掛鉤裡沒有「> 檔 2>/dev/null」沒包組的寫法(開檔失敗的訊息會漏出來)", not loose, f"行:{loose}")
+ 
+ 
++def _ppc_bash_logical_lines(text):
++    """bash 原始碼 → [(起始行號, 邏輯行)]:去掉註解(不在引號裡、出現在字首的 #)、接起 \\ 續行;
++    引號裡的內容換成 x(引號本身留著),免得引號裡的 #、>、; 被當成語法。不處理 here-doc 本文(掛鉤只用 <<< 單行)。"""
++    out, buf, start, ln, q, i, n = [], [], None, 1, None, 0, len(text)
++    while i < n:
++        c = text[i]
++        if start is None:
++            start = ln
++        if c == "\n":
++            ln += 1
++        if q:   # 引號裡:找收尾的引號;雙引號裡的 \\ 跳脫下一個字
++            if c == q:
++                q = None
++                buf.append(c)
++            elif q == '"' and c == "\\" and i + 1 < n:
++                buf.append("xx")
++                ln += text[i + 1] == "\n"
++                i += 1
++            else:
++                buf.append(" " if c == "\n" else "x")
++            i += 1
++            continue
++        if c == "\\" and i + 1 < n:
++            if text[i + 1] == "\n":   # 續行:兩個字都吃掉,邏輯行繼續
++                ln += 1
++            else:
++                buf.append("xx")
++            i += 2
++            continue
++        if c in "'\"":
++            q = c
++            buf.append(c)
++        elif c == "#" and (not buf or buf[-1] in " \t;&|()<>"):
++            while i < n and text[i] != "\n":
++                i += 1
++            continue
++        elif c == "\n":
++            out.append((start, "".join(buf)))
++            buf, start = [], None
++        else:
++            buf.append(c)
++        i += 1
++    if buf:
++        out.append((start, "".join(buf)))
++    return out
++
++
++def _ppc_loose_quiet_writes(text):
++    """bash 原始碼裡「寫進檔案(> 或 >>,目標不是 /dev/null)、同一個命令後面再 2>/dev/null」沒包組的地方 → 起始行號清單。
++    包成一組({ …; } 2>/dev/null)時 2>/dev/null 在 } 後面、屬於另一段,不算。先去註解、接續行(_ppc_bash_logical_lines)。"""
++    import re
++    bad = []
++    for start, line in _ppc_bash_logical_lines(text):
++        prev = None
++        while prev != line:   # ${…}、$(…) 先收成一個字,免得下面按 {}() 切段時把它們切開
++            prev, line = line, re.sub(r"\$\{[^{}]*\}|\$\([^()]*\)", "$x", line)
++        for seg in re.split(r"&&|\|\||(?<![>&0-9])&(?!>)|[;|(){}]", line):
++            for mm in re.finditer(r"(?<![0-9&<>])1?>{1,2}(?!&)[ \t]*([^ \t]+)", seg):
++                if mm.group(1) != "/dev/null" and re.search(r"(?<![0-9])2>[ \t]*/dev/null", seg[mm.end():]):
++                    bad.append(start)
++                    break
++            else:
++                continue
++            break
++    return bad
++
++
+ def t_prepush_mixed_versions():
+     """[S7] 新掛鉤配上不認得 --keep-going、也沒有 push-summary 的舊 lumos,代碼審判定會擋 → 掛鉤回 1(不是放行)、印簡版彙總;
+     掛鉤沒把 --keep-going 塞給它(舊版會回 2,而 2 在掛鉤裡是放行)。新版 lumos 則帶 --keep-going。
+     ①前置:舊 lumos 收到 --keep-going 會回 2——不然「沒塞旗標」這條驗不出東西。
+     翻紅釘:掛鉤不探測、一律帶 --keep-going → ②紅(rc0 放行);改回執行 --help 判版本 → ②b紅;push-summary 失敗不印簡版 → ③紅。"""
+     print("t_prepush_mixed_versions")
+     import subprocess as sp
+     _need_src("scripts/hooks/pre-push")
+     root, base, head = _ppc_repo()
+     try:
+@@ -64601,21 +64682,22 @@ def t_prepush_mixed_versions():
+         check("④舊 lumos、沒有一道擋 → 照舊放行跑全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-300:]}")
+         rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1")
+         cl = [ln for ln in lines if ln.startswith("code-loop check --diff")]
+         check("⑤新 lumos → 帶 --keep-going、彙總由 push-summary 印(不是簡版)",
+               rc == 1 and cl and all("--keep-going" in ln for ln in cl) and "簡版彙總" not in out and _ppc_header(out) == (1, 1),
+               f"rc={rc} {cl} {out[-400:]}")
+     finally:
+         _ppc_cleanup(root)
+ 
+ 
+-# 掛鉤對照表每種原因句的預期值:照計劃〈做法〉5 的例句與 r1 收貨定稿逐字寫在這裡(不從掛鉤或 scripts/lumos 讀,免得跟著一起錯)
++# 掛鉤對照表每種原因句的預期值:照計劃 Projects/推送前一次列出全部擋下原因_計劃〈做法〉5「對照表四句的正本在這裡」那段逐字寫
++# (不從掛鉤或 scripts/lumos 讀,免得跟著一起錯;要改句子先改計劃那段)
+ _PPC_KIND_SENTENCES = {"bound_tests": "受波及合約的測試沒過(或證不出跑過)", "dispositions": "棧別檢核題表態不完整",
+                        "lint_new": "這次改動帶進了新的告警", "review": "高風險改動沒有有效的代碼審留痕"}
+ _PPC_ANCHOR_NOTE = "裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑"
+ 
+ 
+ def t_prepush_block_kinds_each_recorded():
+     """代碼審判定一次擋兩個以上原因時,掛鉤照 LUMOS-BLOCKS: 行每個種類各記一筆、閘數只算一道,原因用對照表那一句;
+     那一行有兩行時只取最後一行;逗號後的空白、空元素略過。(代碼審 r1 邊界席 3、合約席 2)
+     判準:計劃〈做法〉5「每個 reason_kind 各記一筆、M 只算一道、有多行時取最後一行」;預期句子是 _PPC_KIND_SENTENCES 逐字寫的。
+     翻紅釘:記帳迴圈只記第一個種類 → ①②紅;對照表兩句對調 → ②紅;取第一行而不是最後一行 → ④紅;空元素也記 → ③紅。"""
+@@ -64829,21 +64911,25 @@ def t_prepush_summary_records_event():
+ 
+ def t_prepush_interrupt_stops_every_gate():
+     """[S10] 掛鉤註解區塊「中斷就停」列舉的每一支 lumos 呼叫被訊號殺掉(回傳碼 128 以上)→ 掛鉤以該回傳碼結束、印「<閘名>被中斷」、
+     不再開始後面的閘(被殺掉的那支就是最後一次呼叫)、不跑全套;掛鉤自己收到 INT/TERM → 手上那支結束後就結束(130/143)、
+     不再開始下一道;等全套測試時被砍(只對掛鉤送 TERM)、按 Ctrl-C(對整個行程群組送 SIGINT)或掛斷(只對掛鉤送 HUP)→ 立刻結束,
+     ★全套測試的各片(掛鉤的孫行程)也要收掉★,不留下繼續跑的孤兒、TMPDIR 底下不留東西;裁判簽名與圖譜健檢回 2 照舊記成擋下。
+     清單與程式要對得上:非註解的 pp_stop_if_signaled 呼叫行數 = 清單筆數。(併入原 t_prepush_gates_stop_on_signal。)
+     對照組:把掛鉤裡的停下全拿掉,同一支被殺掉的呼叫就不會以那個回傳碼結束。
+     翻紅釘(2026-10-14 逐條變異實測):拿掉任一支後面的 pp_stop_if_signaled → 那一支紅;門檻改成只認 130 → 全紅;
+     陷阱裡不 exit(舊寫法)→ ④⑤⑥⑦紅;跑測試的子殼不收它起的各片(代碼審 r1 併發席 1)→ ⑥⑦⑨紅;裁判簽名改成只有 rc1 才擋 → ⑧紅;
+-    主殼或子殼不接 HUP(代碼審 r2 併發席 2)→ ⑨紅。⑥⑦⑨看那一片的 pid 有沒有消失,不靠計時窗口(代碼審 r2 邊界席:負載下會假綠)。"""
++    主殼或子殼不接 HUP(代碼審 r2 併發席 2)→ ⑨紅。⑥⑦⑨看那一片的 pid 有沒有消失,不靠計時窗口(代碼審 r2 邊界席:負載下會假綠)。
++    ★片自己起的孫行程也要收★(代碼審 r3 併發席 2):各片各自一個行程群組、收的時候整組收;⑩看假全套起的那個 sleep 有沒有消失。
++    ⑪只對跑測試的子殼送 HUP(代碼審 r3 邊界席 2、合約席 3:原本只有主殼收到訊號的情境,子殼的 HUP 陷阱拿掉照綠)。
++    翻紅釘(2026-10-14 變異實測):拿掉子殼的 HUP 陷阱 → ⑪紅;_pp_kill_jobs 改回只送給本人 → ⑩⑪紅;起片時不換群組 → ⑩⑪紅。
++    啟動後毫秒級隨機送訊號的壓力實測跑一輪要幾分鐘,不放進這支,數字記在代碼審 r3-fix.json。"""
+     print("t_prepush_interrupt_stops_every_gate")
+     import re, subprocess as sp, time as _time
+     _need_src("scripts/hooks/pre-push")
+     hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+     txt = hook.read_text(encoding="utf-8")
+     entries = re.findall(r"^# 中斷就停:([a-z-]+)\|([^|\n]+)\|(.+)$", txt, flags=re.M)
+     calls = [ln for ln in txt.splitlines() if re.match(r"^\s*pp_stop_if_signaled \"", ln)]
+     check("①清單在、而且跟程式裡的 pp_stop_if_signaled 呼叫行數一樣多", len(entries) >= 9 and len(entries) == len(calls),
+           f"清單 {len(entries)} 筆、呼叫 {len(calls)} 行")
+     check("①刻意不接的也列在同一個區塊、各附理由", len(re.findall(r"^# 中斷不停:[^|\n]+\|.{4,}$", txt, flags=re.M)) >= 4, "")
+@@ -64878,61 +64964,73 @@ def t_prepush_interrupt_stops_every_gate():
+             import os as _os
+             try:
+                 _os.kill(pid, 0)
+             except ProcessLookupError:
+                 return False
+             except PermissionError:
+                 return True
+             return True
+ 
+         def _suite_run(sig, new_session):
+-            """起掛鉤、讓假全套在跑的時候送訊號 → (rc, 起掛鉤到掛鉤結束的秒數, 輸出, 假全套那片的 pid 或 None, 那片在時限內消失沒)。
++            """起掛鉤、讓假全套在跑的時候送訊號 → (rc, 起掛鉤到掛鉤結束的秒數, 輸出, 假全套那片的 pid 或 None, 那片在時限內消失沒,
++            那片自己起的孫行程在時限內消失沒)。
+             ★孤兒判準不靠計時窗口★(代碼審 r2 邊界席):直接看那一片的 pid——掛鉤結束後 10 秒內還在就是孤兒。
+             原本靠「假全套睡 4 秒後記 SUITE-END、測試在起掛鉤後第 5 秒讀」,負載下餘裕只剩約 0.3 秒,拿掉收片陷阱也照綠。"""
+             (root / "argv.log").unlink(missing_ok=True)
+             kw = dict(start_new_session=True, preexec_fn=_ppc_sigint_default) if new_session else {}
+             with open(outf, "w") as fh:
+                 t0 = _time.monotonic()
+                 p = sp.Popen(["/bin/bash", str(hook)], cwd=str(root), stdin=sp.PIPE, stdout=fh, stderr=fh, text=True,
+                              env=_ppc_env(root, {"FAKE_NEW": "1", "FAKE_SUITE_SIG": sig, "FAKE_SUITE_LINGER": str(linger)}), **kw)
+                 p.communicate(normal, timeout=120)
+                 took = _time.monotonic() - t0
+             log_txt = (root / "argv.log").read_text(encoding="utf-8") if (root / "argv.log").exists() else ""
+             mm = re.search(r"^SUITE-PID (\d+)$", log_txt, flags=re.M)
+             pid = int(mm.group(1)) if mm else None
+-            gone = False
+-            if pid is not None:
+-                _pids_seen.append(pid)
++            mk = re.search(r"^SUITE-KID (\d+)$", log_txt, flags=re.M)
++            kid = int(mk.group(1)) if mk else None
++            gone = kid_gone = False
++            if pid is not None and kid is not None:
++                _pids_seen.extend((pid, kid))
+                 dl = _time.monotonic() + 10.0
+-                while _alive(pid) and _time.monotonic() < dl:
++                while (_alive(pid) or _alive(kid)) and _time.monotonic() < dl:
+                     _time.sleep(0.05)
+-                gone = not _alive(pid)
+-            return p.returncode, took, outf.read_text(encoding="utf-8", errors="replace"), pid, gone
++                gone, kid_gone = not _alive(pid), not _alive(kid)
++            return p.returncode, took, outf.read_text(encoding="utf-8", errors="replace"), pid, gone, kid_gone
+ 
+         def _tmp_left():
+             return sorted(x.name for x in tmp.glob("lumos-prepush*"))
+         try:
+             # took 的上限是相對量:掛鉤要是等那一片跑完才結束,至少要 linger 秒;取一半當界線,負載下前面幾道閘慢幾秒也不會假紅
+-            rc, took, bg, pid, gone = _suite_run("1", False)
++            rc, took, bg, pid, gone, kid_gone = _suite_run("1", False)
+             check("⑤等全套測試時收到 TERM → 掛鉤立刻以 143 結束(不等背景那支跑完、不印測試結果)",
+                   rc == 143 and pid is not None and took < linger / 2 and "條斷言過" not in bg and "測試有紅" not in bg,
+                   f"rc={rc} took={took:.1f}s pid={pid} {bg[-300:]}")
+             check("⑥被砍(TERM)之後,全套測試那一片也被收掉(掛鉤結束後 10 秒內那個 pid 就不在了)、TMPDIR 底下沒留 lumos-prepush 開頭的東西",
+                   pid is not None and gone and not _tmp_left(), f"pid={pid} gone={gone} {_tmp_left()}")
+-            rc, took, bg, pid, gone = _suite_run("INT", True)
++            check("⑩被砍(TERM)之後,那一片自己起的孫行程也跟著收掉(各片自成一個行程群組、整組收)", kid_gone, f"pid={pid} kid_gone={kid_gone}")
++            rc, took, bg, pid, gone, kid_gone = _suite_run("INT", True)
+             check("⑦等全套測試時按 Ctrl-C(整個行程群組收到 SIGINT)→ 掛鉤以 130 結束,全套那一片也被收掉、TMPDIR 底下沒留東西",
+                   rc == 130 and pid is not None and took < linger / 2 and gone and not _tmp_left(),
+                   f"rc={rc} took={took:.1f}s pid={pid} gone={gone} {_tmp_left()} {bg[-300:]}")
+-            rc, took, bg, pid, gone = _suite_run("HUP", False)
++            check("⑩按 Ctrl-C 之後,那一片自己起的孫行程也跟著收掉", kid_gone, f"pid={pid} kid_gone={kid_gone}")
++            rc, took, bg, pid, gone, kid_gone = _suite_run("HUP", False)
+             check("⑨等全套測試時只對掛鉤送 SIGHUP(ssh、編輯器掛斷)→ 掛鉤以 129 結束,全套那一片也被收掉、TMPDIR 底下沒留東西",
+                   rc == 129 and pid is not None and took < linger / 2 and gone and not _tmp_left(),
+                   f"rc={rc} took={took:.1f}s pid={pid} gone={gone} {_tmp_left()} {bg[-300:]}")
++            check("⑩掛斷之後,那一片自己起的孫行程也跟著收掉", kid_gone, f"pid={pid} kid_gone={kid_gone}")
++            # 只對跑測試的子殼送 HUP(代碼審 r3 邊界席 2、合約席 3):主殼沒收到訊號,只能靠子殼自己的 HUP 陷阱收片;
++            # 子殼結束碼非零,掛鉤當成測試沒過擋下(不能放行;擋下時照設計把測試 log 複製一份到 TMPDIR 給人看,所以不驗 TMPDIR 乾淨)
++            rc, took, bg, pid, gone, kid_gone = _suite_run("SUBHUP", False)
++            check("⑪跑測試的子殼自己收到 SIGHUP → 那一片與它的孫行程都收掉、掛鉤不放行",
++                  rc not in (0, None) and pid is not None and took < linger / 2 and gone and kid_gone,
++                  f"rc={rc} took={took:.1f}s pid={pid} gone={gone} kid_gone={kid_gone} {bg[-300:]}")
+         finally:
+             import os as _os, signal as _signal
+             for _pid in _pids_seen:   # 沒被收掉的孤兒(紅的時候)由這裡砍掉,不留給機器
+                 if _alive(_pid):
+                     try:
+                         _os.kill(_pid, _signal.SIGKILL)
+                     except OSError:
+                         pass
+         for gate, cmd in (("anchor", "anchor"), ("doctor", "doctor")):
+             rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_RCS=f"{cmd}:2")
+@@ -65250,21 +65348,21 @@ def _cl_reason_kind_sites(src):
+     return kinds, nonlit
+ 
+ 
+ # 查不到種類時的通用句:照計劃〈做法〉5 逐字寫在這裡(不從掛鉤讀)
+ _PPC_KIND_FALLBACK = "代碼審判定擋下(細節在上面)"
+ 
+ 
+ def t_prepush_cl_reason_table_matches_lumos():
+     """漂移守衛(結構測試,行為另由 t_prepush_block_kinds_each_recorded 驗):scripts/lumos 會產生的 reason_kind 集合,
+     跟掛鉤 pp_cl_reason 對照表的種類集合要一樣(雙向:掛鉤少一種,新種類的彙總會退成通用句;掛鉤多一種,是沒人產生的死條目);
+-    每種的句子與查不到時的通用句照 _PPC_KIND_SENTENCES / _PPC_KIND_FALLBACK 逐字(計劃與 r1 收貨定稿,不從掛鉤讀)。
++    每種的句子與查不到時的通用句照 _PPC_KIND_SENTENCES / _PPC_KIND_FALLBACK 逐字(正本是計劃〈做法〉5「對照表四句的正本在這裡」那段,不從掛鉤讀)。
+     ★設定 reason_kind 的值一律要是字面字串★(代碼審 r2 合約席 4):種類若經變數或組字串產生,上面抽集合的那步抽不到,守衛會照綠;
+     只有收集分流與收尾兩處轉手(_CL_REASON_KIND_CARRIERS)可以不是字面,而且各只准一處。
+     原本 scripts/lumos 也存一份句子表(_CODELOOP_BLOCK_KIND_REASONS)給 JSON 的 summary 欄位用,沒有任何程式讀它,r2 拿掉。
+     翻紅釘:掛鉤加一種或刪一種 → ①紅;lumos 新增一種 reason_kind 沒補掛鉤 → ①紅;掛鉤改一句 → ②紅;
+     產生種類改成變數傳入 → ③紅。"""
+     print("t_prepush_cl_reason_table_matches_lumos")
+     import re
+     _need_src("scripts/hooks/pre-push")
+     hook = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+     mm = re.search(r"^pp_cl_reason\(\) \{\n(.*?)^\}", hook, flags=re.M | re.S)

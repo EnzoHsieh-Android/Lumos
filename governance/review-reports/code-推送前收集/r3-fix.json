@@ -1,0 +1,151 @@
+{
+ "base": "157b1bf3ca8cceb9c82e8ae40431ecaf9b85f244",
+ "groups": [
+  {
+   "id": "G1",
+   "category": "concurrency",
+   "findings": [
+    "併1",
+    "併2",
+    "邊2",
+    "合3"
+   ],
+   "prior": {
+    "why_failed": "r2 只把子殼收片改成 jobs -p、對直接子行程送 TERM,以為空窗就此關上;沒處理片自己起的子行程,也只測了主殼收到訊號的情境,子殼自己收到 HUP 沒有測試守",
+    "new_approach": "每片起的時候經一層 Python setpgid 再 exec,自成一個行程群組;_pp_kill_jobs 對每個工作整組送 TERM、不是組長才退回送本人,主殼子殼共用;測試加孫行程與只對子殼送 HUP 兩種情境"
+   },
+   "paths": [
+    {
+     "at": "scripts/hooks/pre-push:_pp_kill_jobs",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/hooks/pre-push:_PP_OWN_PGRP",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/hooks/pre-push:trap '_pp_kill_jobs; exit 129' HUP",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:_PPC_SUITE",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:t_prepush_interrupt_stops_every_gate",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:**各片各自一個行程群組,整組收**",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:各片起的時候先換到自己的行程群組",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_interrupt_stops_every_gate"
+     ]
+    }
+   ],
+   "note": "/bin/bash 3.2.57 模擬(主殼+兩個子殼×4 片,每片 sh -c 'sleep & sleep' 帶一個孫行程),啟動後 4–12 毫秒隨機送訊號,數殘留(ppid=1):改前 TERM 300 次 298 次有殘留(共 4482 個)、HUP 150 次 149 次(2316 個);子殼 set -m 做法 TERM 300 次 47 次(72 個)、HUP 150 次 28 次(51 個);採用的 setpgid 做法 TERM 共 1600 次 1 次(1 個,第一批跑的時候機器同時在跑變異測試)、HUP 共 800 次 1 次(1 個),後兩批 1000+500 次 0。只對子殼送 HUP 各 50 次:改前每次 16 個孫行程殘留,改後 0。pty 裡按 Ctrl-C(寫入 \\x03)各 10 次:三種做法都 130 結束、0 殘留,前景群組都是掛鉤那組(子殼 set -m 沒搶走終端機)。實驗後 ps 無殘留。測試加 ⑩(三種訊號下孫行程都收掉)、⑪(只對子殼送 HUP),改前 ⑩×3、⑪ 紅;變異:拿掉子殼 HUP 陷阱→⑪紅;_pp_kill_jobs 改回只送本人→⑩⑪紅;起片不換群組→⑩⑪紅。壓力實測一輪要數分鐘,不進測試。"
+  },
+  {
+   "id": "G2",
+   "category": "boundary",
+   "findings": [
+    "邊1"
+   ],
+   "prior": {
+    "why_failed": "r2 的全檔掃描只用一條逐行正則認「同一行、引號路徑、恰好一個空格」,沒去註解、沒接續行,換個寫法就漏、註解裡的字樣又誤擋",
+    "new_approach": "先用小掃描器照引號狀態去掉註解、接起反斜線續行,再按命令分段判「寫檔重導向後面同一段有 2>/dev/null」;掃描器本身用手寫例子驗漏抓與誤擋"
+   },
+   "paths": [
+    {
+     "at": "scripts/test_lumos.py:_ppc_bash_logical_lines",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_touched_file_write_fails_quietly"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:_ppc_loose_quiet_writes",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_touched_file_write_fails_quietly"
+     ]
+    }
+   ],
+   "note": "新增 7 條掃描器前置斷言(沒加引號、兩個空格、續行、引號裡的 #、行尾註解、包成一組、寫 /dev/null),改前 5 條紅。變異:掛鉤加一行 printf x >> $_f 2>/dev/null → ④紅(行 162);把清單檔那處包組拆掉改成續行寫法 → ④紅(行 170);還原後綠。"
+  },
+  {
+   "id": "G3",
+   "category": "other",
+   "findings": [
+    "合1",
+    "合2",
+    "合4"
+   ],
+   "prior": {
+    "why_failed": "r2 只改了被點名的那幾句(bound-tests-gate 的控制字元、計劃 S13),同一件事在計劃〈做法〉1、實作清單、pitfalls-code-loop 的 WHY 還有舊說法,句子正本也只有一句在計劃",
+    "new_approach": "同一個說法改動時把計劃、Systems 筆記、測試常數一起掃;四句原因句收進計劃〈做法〉5 當唯一正本,測試常數註解指回那段"
+   },
+   "paths": [
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:不含 ASCII 控制字元",
+     "status": "fixed",
+     "tests": [
+      "t_push_summary_anchor_note_and_separators"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:先寫第 S1–S18 的紅測試",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_test_logs_inside_tmp"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md:緊接在判它非空的 `if <那個變數>:` 底下",
+     "status": "fixed",
+     "tests": [
+      "t_code_loop_keep_going_pass_sites_keep_blocks"
+     ]
+    },
+    {
+     "at": "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md:**對照表四句的正本在這裡**",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_cl_reason_table_matches_lumos",
+      "t_prepush_block_kinds_each_recorded"
+     ]
+    },
+    {
+     "at": "scripts/test_lumos.py:_PPC_KIND_SENTENCES",
+     "status": "fixed",
+     "tests": [
+      "t_prepush_cl_reason_table_matches_lumos"
+     ]
+    }
+   ],
+   "note": "純文件與註解;lumos lint 三篇 0 問題。四句與掛鉤 pp_cl_reason、測試常數逐字一致。"
+  }
+ ]
+}

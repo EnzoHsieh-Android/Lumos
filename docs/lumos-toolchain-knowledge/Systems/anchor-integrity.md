@@ -53,7 +53,7 @@ related:
 方法論最底層退路「CI 跑真測試、綠才算數」把測試結果當不可造假真值,但 runner/評分器本身可被悄悄改寫(外部實證:八大權威評測被 conftest 鉤子全破)。lumos 自主 loop 的 agent 摸得到整個 repo,同樣風險。
 
 ## 接線
-- `scripts/hooks/pre-push`:環境檢查後、vault 閘門前(repo 層,無 vault 也跑);rc1 擋 push,訊息三選一(還原/approve/--no-verify 留痕)。
+- `scripts/hooks/pre-push`:環境檢查後、vault 閘門前(repo 層,無 vault 也跑);rc1 擋 push,訊息三選一(還原/approve/--no-verify 留痕)。2026-10-14 起「擋」的意思是收集:印完訊息、記下這一筆,後面的閘照跑,全套測試之前統一 exit 1、一次列出全部原因(非零一律記成擋下,128 以上照中斷停下;見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉)。
 - `governance/autonomous-loop.sh`:每輪 gap 派 orchestrator 前(污染可能發生在當天中途);errexit-safe;missing baseline 硬擋。
 - 改錨點的合法路徑=`lumos anchor approve --note`(重算寫回 + 治理帳 `anchor-approve` 事件,note 進 `lumos gov` 顯示)。
 

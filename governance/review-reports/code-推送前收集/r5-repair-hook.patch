@@ -1,0 +1,97 @@
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 0ce67b78..9374e1a5 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -168,20 +168,22 @@ pp_touched_file() {
+     _n=$((_n + 1))
+     # 重導向包成一組(跟 pp_record_block 同一族,代碼審 r2 架構對齊席):清單檔寫不進去(暫存目錄被刪)時不印開檔雜訊
+     { git diff --no-ext-diff --no-textconv --name-only "$_PP_BR" >> "$_f"; } 2>/dev/null || _ok=0
+   done
+   if [[ "$_ok" -eq 1 && ( -s "$_f" || "$_n" -gt 0 ) ]]; then printf '%s' "$_f"; else rm -f "$_f"; fi
+ }
+ 
+ # 沒有 scripts/lumos → 降級放行(不為缺環境 brick push,CI 兜底);有 lumos 卻找不到 Python 3.14 → 擋下
+ # (Projects/最低Python版本改3.14_計劃 做法第 3 點;PY 在下面讀完設定後才決定)
+ GRAPHCTL="$REPO_ROOT/scripts/lumos"
++# 天花板(代碼審 r4 資安席):推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓下面每個 "$PY" 閘(含全套測試的換群組那段)
++# 一啟動就回 0。要先能控制推送行程的環境才做得到,屬刻意設定環境的手法,在工具鏈的資安範圍外,不加機制(Systems/bound-tests-gate)。
+ PY=""
+ # ── python-launcher begin(三支 git 掛鉤與四支安裝腳本內嵌同一段,t_python_launcher_blocks_agree 逐字守一致)──
+ # 只負責找一支任何版本的 python 把 lumos 叫起來;版本判斷全交給 lumos(Systems/python直譯器選擇)。
+ # 固定位置排在 python3 前面:圖形用戶端的 PATH 很短,先執行 /usr/bin/python3 會在沒裝開發工具的 Mac 跳安裝對話框。
+ # LUMOS_PYTHON_SEARCH_DIRS(冒號分隔)有設就換掉固定位置——測試接縫,跟 lumos 內部那份同一個。
+ # LUMOS_PYTHON 有設就先試它:找不到時的說明叫人設它,第一步就不能不認。只收絕對路徑、而且真的是 python
+ # (post-commit 直接把程式交給它跑,不經 lumos 驗;設成 /usr/bin/true 會假成功、漏寫跳過帳);不合格就記下原因往下找,
+ # 版本夠不夠仍由 lumos 判。LUMOS_PYTHON 被略過、改用別支時當場印原因與後果:lumos 自己只認 LUMOS_PYTHON,
+ # 之後的檢查會因同一個值擋下(代碼審 r3、r4;印在這段裡,七個呼叫端不必各寫一份)。
+ _lumos_any_python() {
+@@ -296,24 +298,30 @@ _PP_TMP="$(mktemp -d "${TMPDIR:-/tmp}/lumos-prepush-XXXXXX" 2>/dev/null || true)
+ if [[ -z "$_PP_TMP" || ! -d "$_PP_TMP" ]]; then
+   echo "擋下:推送前檢查需要一個暫存目錄,但 ${TMPDIR:-/tmp} 建不出來(不存在或不可寫);修好 TMPDIR 再推。" >&2
+   exit 1
+ fi
+ # 陷阱拆開(計劃〈做法〉2):EXIT 收拾;INT/TERM 先收掉自己的背景工作再結束(結束時再走 EXIT 那支)。
+ # 原本三個共用一支、裡面不結束:掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測)。
+ # bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是指那支結束之後、不再開始下一道。
+ # ★整組收★(代碼審 r3 併發席):全套測試的各片各自在一個行程群組裡(見下面 run_group),所以對每個工作先整組送 TERM
+ # (連片自己起的子行程一起收);那個工作不是群組組長(跑測試的子殼、片剛起還沒換群組的那一瞬)就退回只送給它本人。
+ # 群組號就是組長的 pid,組長活著時不會有別的群組用同一個號,所以整組送不會打到別人。
++# ★短等後對每個群組再送第二發★(代碼審 r4 併發席):訊號是逐一投遞給群組當下的成員,送的那一刻正在 fork 的成員被殺時,
++# 剛生出來的孩子已經在群組裡、卻沒收到那一發,變成孤兒(/bin/bash 3.2.57 模擬,掛鉤啟動後 20–45 毫秒送 TERM:只送一發 150 次 32 次留孤兒)。
++# 第二發只送整組:組長已結束、群組還有成員時組號仍有效;群組已空或不是組長(子殼)會失敗,錯誤吞掉。
+ _pp_kill_jobs() {
+   local _j _p
+   _j="$(jobs -p 2>/dev/null)"
+   for _p in $_j; do kill -TERM -- "-$_p" 2>/dev/null || kill -TERM "$_p" 2>/dev/null; done
++  [ -n "$_j" ] || return 0
++  sleep 0.2 2>/dev/null || true
++  for _p in $_j; do kill -TERM -- "-$_p" 2>/dev/null || true; done
+   return 0
+ }
+ trap 'impact_done; rm -rf "$_PP_TMP"' EXIT
+ trap '_pp_kill_jobs; exit 130' INT
+ trap '_pp_kill_jobs; exit 143' TERM
+ # HUP 也接(代碼審 r2 併發席):ssh 或編輯器只對掛鉤送掛斷時,沒接的話掛鉤直接死、EXIT 照跑刪掉暫存目錄,
+ # 跑測試的子殼與各片全部繼續跑(/bin/bash 3.2.57 實測 8 片全活著)。129 = 128 + SIGHUP。
+ trap '_pp_kill_jobs; exit 129' HUP
+ # (2026-09-11 起「該動哪篇」的點名改由每支檔有家照家算——下面 home check --diff 會印;原本這裡以反引號為種子的
+ #  impact --sync-only 會把人推回寫了一堆別人檔名的大雜燴節點,拿掉。Projects/每支檔有家_計劃 [S15]。impact_once 留給合約測試閘用。)
+@@ -804,22 +812,36 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
+   # light 的關鍵字子集跟文件子集一起分片、平行跑(r1 併發席:原本等分片收完才串行跑一趟);
+   # 一支都沒對到(每片都 rc3)不擋,只把話講清楚:CI 會跑全套當後盾。有紅照擋。
+   _keys_args=()
+   if [[ "$_suite_mode" == "light" && -n "$_SUITE_KEYS" ]]; then
+     _keys_args=(--suite keys --keys "$_SUITE_KEYS")
+   elif [[ "$_suite_mode" == "light" ]]; then
+     echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;CI 會跑全套當後盾。" >&2
+   fi
+   _sdir="$_PP_TMP/shards"; mkdir -p "$_sdir"
+   _rc=0; _krc_all3=1
+-  # 換到自己的行程群組再 exec 成真正要跑的程式(argv[1:]);bash 3.2 沒有 setsid,macOS 也沒附 setsid 指令,這裡本來就有 Python
+-  _PP_OWN_PGRP='import os, sys; os.setpgid(0, 0); os.execv(sys.argv[1], sys.argv[1:])'
++  # 換到自己的行程群組再 exec 成真正要跑的程式(argv[1:]);bash 3.2 沒有 setsid,macOS 也沒附 setsid 指令,這裡本來就有 Python。
++  # ★沒有 os.setpgid 就不換群組、在同一個行程裡照舊跑測試檔★(代碼審 r4 正確性席、併發席、通才席):原生 Windows 的 Python 沒有 setpgid
++  # (每片 AttributeError、推送永遠被擋),它的 os.execv 又是起新行程後讓舊的立刻回 0(測試沒跑完就判綠),所以那邊不走 execv、改用 runpy;
++  # setpgid 本身失敗(不准換群組的環境)就不換群組、照樣 execv。離開碼一律是測試檔自己的(t_prepush_interrupt_launcher_without_setpgid)。
++  _PP_OWN_PGRP='import os, sys
++p = sys.argv[1:]
++if hasattr(os, "setpgid"):
++    try:
++        os.setpgid(0, 0)
++    except OSError:
++        pass
++    os.execv(p[0], p)
++import runpy
++sys.argv = p[1:]
++sys.path[0] = os.path.dirname(os.path.abspath(p[1]))
++runpy.run_path(p[1], run_name="__main__")'
+   run_group() {   # $1=log 前綴,其餘=執行器參數;每片一個子行程,回傳 0=全綠、3=每片都選中 0 支、1=有紅
+     local _pfx="$1"; shift
+     local _pids=() _i _p _r _any3=0 _bad=0
+     # ★各片是掛鉤的孫行程,要由這個子殼自己收★(代碼審 r1 併發席,/bin/bash 3.2.57 實測):掛鉤的 INT/TERM/HUP 陷阱只對 jobs -p 列出的
+     # 直接子行程(這個子殼)送 TERM;而非互動 bash 用 & 起的背景命令忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到各片。
+     # 不收的話被砍或按 Ctrl-C 之後各片變孤兒繼續跑(最多八分鐘、佔 CPU、輸出寫進已刪的資料夾)。子殼收到 TERM 或 HUP 就把各片收掉再結束。
+     # ★收片用同一支 _pp_kill_jobs(jobs -p),不要自己記 pid 收★(代碼審 r2 併發席、架構對齊席):子殼裡 jobs -p 列的就是它起的各片;
+     # 自己記的話,「& 起片」與「記下 pid」是兩個敘述,訊號落在中間時剛起的那片不在清單上、漏收。下面的 _pids 只拿來 wait 收離開碼。
+     # ★每片各自一個行程群組(_PP_OWN_PGRP 先 setpgid 再 exec),收的時候整組收★(代碼審 r3 併發席,/bin/bash 3.2.57 實測):
+     # 只收片本人的話,片自己起的子行程(測試裡的 git、子行程)全變孤兒,而且訊號落在起片後幾毫秒內時連片本人都會漏。

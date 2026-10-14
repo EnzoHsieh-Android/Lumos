@@ -1,0 +1,101 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md b/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
+index 5a28b44f..041bbb5c 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
+@@ -34,20 +34,23 @@ REVISIT:2026-12-15 數一次 `prepush-summary` 事件裡兩道以上不同閘的
+    - **暫存檔一行的格式**:`printf '%s\t%s\t%s\n'`,三欄是閘名、ref、原因。ref 空的時候寫 `-`(bash 用 tab 當分隔讀回時,連續兩個 tab 會被合成一個,空欄會被吃掉——`/bin/bash` 3.2.57 實測)。原因一律是掛鉤裡寫死的一句(不放工具輸出),ref 名照 git 規則不含 ASCII 控制字元(0x00–0x1f、0x7f;U+0085、U+2028、U+2029 這類 Unicode 斷行字元 git 仍放行,見 [[Systems/bound-tests-gate]]);函式仍先把三個欄位裡的 tab、換行換成空白再寫。
+    - **裁判簽名也收集,不再立刻停**:裁判簽名管的是測試檔與掛鉤(錨點清單),不管 `scripts/lumos`。被改的若是掛鉤本身,它在這一刻已經在跑,停不停都由它決定,提早結束換不到可信度。後面的閘大多是 `scripts/lumos` 在判,不經過測試檔;例外是代碼審那一道的受波及合約測試與雙向門放行,它們會在全套之前跑 `scripts/test_lumos.py` 裡的測試——這兩道的綠燈這次用的是沒簽名的測試檔。不論結果,這次推送都已經因為裁判簽名被擋,所以不會變成放行;彙總裡有裁判簽名那筆時,最前面加一行「裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑」。
+    - **裁判簽名與圖譜健檢維持「非零就擋」**:這兩道現在用 `if ! …` 寫,非零一律擋。改成取回傳碼之後,128 以上照第 2 點停下,其他非零照舊記成擋下(不能變成「只有 1 才擋」,否則回 2 的工具錯誤會變放行)。
+    - **刪除與 tag 照舊**:逐 ref 迴圈遇到刪除照舊跳過、tag 照舊不跑代碼審判定,只把原本的擋下換成記下。
+    - **跟 pre-commit 的關係**:pre-commit 的 Gate PY、Gate H、Gate NS 之間仍是遇錯就停,本計劃不改。理由:那幾道合計幾秒,修完重提交的代價是幾秒;推送這邊每重推一次要幾分鐘,這才是要解的痛。
+ 2. **中斷一律結束**:
+    - **列舉,不逐行**:判斷點之前要接 `pp_stop_if_signaled` 的,是 9 道裡的 8 支 lumos 呼叫(簽名檔沒提交那道是 git)加上新分支首推起點(`push-range`)與這次推送改到哪些檔那一支;清單寫在掛鉤一個註解區塊裡,守衛測試照清單逐支驗。刻意不接的照列在同一個註解區塊、各附一句理由:`|| true` 寫法的盡力而為呼叫(逃逸自動記帳、該補哪層測試、低風險合約測試提醒、`pitfalls`)與管線裡的呼叫——被中斷時它們本來就走放行,不會把擋下變成放行;中斷照樣會由下一支在清單上的呼叫或第 2 點的陷阱接住。現有的 `t_prepush_gates_stop_on_signal` 數 8 行的寫法改成照這份清單驗。
+    - **陷阱拆開**:`EXIT` 負責 `impact_done`、刪 `$_PP_TMP`,以及在預演模式下刪掉驗過的那張票(第 7 點);`INT` 改成「先 `kill` 掛鉤自己的背景工作(`jobs -p`),再 `exit 130`」,`TERM` 同樣但 `exit 143`,`HUP` 同樣但 `exit 129`(結束時再走 `EXIT` 那支收拾;HUP 是代碼審第二輪併發席補的:ssh 或編輯器只對掛鉤送掛斷時,沒接的話掛鉤直接死、各片全變孤兒)。現在 `trap … EXIT INT TERM` 共用一支、裡面不結束,掛鉤自己收到中斷時會刪掉暫存目錄後繼續往下跑(`/bin/bash` 3.2.57 實測:陷阱跑完印出下一行);這是現有的缺陷,收集模式會讓它更常踩到,一起修。
+    - **全套測試的各片也要收掉**(代碼審第一輪併發席):`jobs -p` 只列得到掛鉤的直接子行程,也就是跑測試的那個子殼;各片是子殼用 `&` 起的孫行程。而且非互動 bash 用 `&` 起的背景命令忽略 SIGINT,按 Ctrl-C 時整個行程群組收到的 INT 也殺不到各片。所以子殼(`run_group`)自己接 TERM 與 HUP:收到就把它起的各片收掉再結束。掛鉤的 INT/TERM/HUP 陷阱送給子殼的 TERM 由它往下傳。子殼收片用主殼同一支 `_pp_kill_jobs`(子殼裡 `jobs -p` 列的就是它自己起的各片),不自己記 pid 收:「`&` 起片」與「記下 pid」是兩個敘述,訊號落在中間時剛起的那片不在清單上(代碼審第二輪併發席、架構對齊席);記下的 pid 只拿來 `wait` 收各片的離開碼。`/bin/bash` 3.2.57 實測:改之前被砍或按 Ctrl-C 後,四片都變成 ppid=1 的孤兒;改之後一片都不剩。
+      - **各片各自一個行程群組,整組收**(代碼審第三輪併發席):只收片本人的話,片自己起的子行程(測試裡的 git、子行程)全變孤兒,訊號落在起片後幾毫秒內時連片本人都會漏。所以起片時先經一層 Python 換到自己的行程群組(`setpgid` 後 `exec` 成測試執行器;bash 3.2 沒有 `setsid`),`_pp_kill_jobs` 對每個工作先整組送 TERM,那個工作不是群組組長(跑測試的子殼、剛起還沒換群組的片)才退回只送給它本人;主殼與子殼共用這一支。不選子殼裡 `set -m`:同一個模擬下它留下孤兒的次數多得多(數字在代碼審第三輪修正紀錄)。終端機按 Ctrl-C 只送到前景群組(掛鉤那一組),各片不在裡面,靠掛鉤的 INT 陷阱經子殼收;子殼直接收到 HUP 時由它自己的 HUP 陷阱收。測試自己用 `start_new_session` 起的子行程不在片的群組裡,整組收也收不到,由那支測試自己負責。
++     - **只有子殼收到 HUP 時掛鉤回 1**:子殼收掉各片後以 129 結束,主殼把非零的子殼結束碼一律當成測試沒過,印「test_lumos.py 有紅」、回 1 擋下。這時「紅的是這幾支」底下是空的:沒有任何一支測試真的紅,是跑測試的子殼被掛斷了。不另外分辨:這種情形只在有人只掛斷子殼時發生,擋下是安全的方向,重推就會重跑。
++     - **整組送 TERM 之後短等再送第二發**(代碼審第四輪併發席):訊號是逐一投遞給群組當下的成員,送的那一刻正在 fork 的成員被殺時,剛生出來的孩子已經在群組裡,卻沒收到那一發。所以 `_pp_kill_jobs` 送完第一發後等 0.2 秒,再對每個群組送一次 TERM,群組已空的錯誤吞掉。只送一發時,掛鉤啟動後 20–45 毫秒送 TERM 會留下孤兒,補第二發後實測沒有(`/bin/bash` 3.2.57 模擬,數字在代碼審第四輪修正紀錄)。
++     - **沒有 `os.setpgid` 的 Python 不換群組**(代碼審第四輪正確性席、併發席、通才席):原生 Windows 的 Python 沒有 `setpgid`,它的 `os.execv` 又是起新行程後讓舊的立刻回 0。所以換群組那段只在有 `setpgid` 時才換、再 `exec`;沒有就在同一個行程裡用 `runpy` 跑測試檔。`setpgid` 本身失敗時不換群組、照樣 `exec`。離開碼一律是測試檔自己的。[test: t_prepush_interrupt_launcher_without_setpgid]
+    - **時機**:bash 要等前景子程序結束才跑陷阱。按 Ctrl-C 時整個前景程序組都會收到 INT,子程序自己會先停;只對掛鉤送 TERM 時,掛鉤會等手上那支子程序跑完才結束——S10 寫的「立刻」是指「目前那支子程序結束之後,不再開始下一道」。
+ 3. **全套測試之前統一判**:判斷點放在建 `_AUTOLOOP_LOG`、`_TESTS_LOG` 那兩個 log 檔之前。兩個 log 都放在 `$_PP_TMP` 裡,正常結束、擋下、中斷時都由 `EXIT` 陷阱一起清。原本它們用 `mktemp` 建在 `$_PP_TMP` 外,中斷與全綠時都會留下(代碼審第一輪併發席)。測試紅時要指給人看的那一份,先複製到暫存資料夾外,再印複製出去那份的路徑(S18)。
+    - `_PP_BLOCKED` 是 1 時,呼叫 `lumos push-summary --blocks-file "$_PP_TMP/blocks" --count "$_PP_NBLK" --refs <這次非刪除的推送行數>`:由它印「這次推送共有 N 筆擋下(M 道閘)」的彙總(N 是筆數,同一道被多個 ref 擋或代碼審內部擋兩個原因都各算一筆;M 是不同閘名的個數),逐筆一行:閘名、ref、原因,詳細處理方式看上面那一段。ref 欄在 `--refs` 大於 1 時印。它同時落一筆治理帳(閘名 `prepush-summary`、kind `blocked`、hard、帶 `LUMOS_PUSH_ATTEMPT`、`extra` 裡放 N、M、不同閘名的清單與推送行數)。`prepush-summary` 要登記進已知閘名清單 `_KNOWN_GATES`,不然事件會被拒寫。
+    - 不論 `push-summary` 成不成功,掛鉤接著一律 `exit 1`,不跑自主迴圈測試與全套測試。`push-summary` 回非零或不存在(舊版 lumos)時,掛鉤自己用 `while IFS=$'\t' read -r` 逐行印一份簡版彙總——觀測失效不得改變擋下。
+    - `_PP_BLOCKED` 不是 1 才照舊往下跑測試。
+    - 為什麼由掛鉤呼叫一支會記帳的子命令:先例是掛鉤呼叫 `loop escape --auto`,把掛鉤算好的內容交給它記帳。彙總必須在所有閘之後才算得出來,只有掛鉤知道全部結果;印彙總與記這一筆是 `push-summary` 自己的工作,不是開一個任意寫帳的入口(它只收這一種格式的檔)。
+    - 連帶擋下照實列:圖譜健檢擋下時,依賴圖譜索引的閘(每支檔有家、雙向門放行、回頭重讀)可能跟著擋。彙總照實列出,不去猜哪道是連帶;這會讓 RETIRE-IF 的筆數偏多,方向是「更不容易撤」,可以接受。
+ 4. **前提壞掉的照舊立刻停**:找不到 Python 3.14、暫存目錄建不起來(掛鉤開頭的總暫存目錄,與測試前建 log 檔那一步)、使用者中斷(第 2 點)——這幾種後面什麼都跑不了或不該再跑,維持立刻結束。找不到 `scripts/lumos` 照舊是「提醒後放行」(`exit 0`),不在收集範圍。
+ 5. **代碼審判定內部也全部判完**:`lumos code-loop check` 新增 `--keep-going`(名字照 PRIOR-ART 的 `make -k`):
+    - 四道判定(合約測試、表態、新增告警、代碼審留痕)都跑完,每道擋下各印各的訊息(原本的擋下句一字不改),最後只要有一道擋下就 rc1。
+@@ -95,21 +98,21 @@ REVISIT:2026-12-15 數一次 `prepush-summary` 事件裡兩道以上不同閘的
+ - [S5] 當執行 `lumos push-preview` 時,不應推送、不應跑全套與自主迴圈測試,應印出各道結果;有擋下時回 1、全過時回 0 並說明全套測試沒跑;遠端沒有這個分支時,照 git 給的推送行當成新分支首推處理;回傳碼只依結果檔判,結果檔不在、解析不出、或推送行數是 0 時回 2。[test: t_push_preview_runs_gates_without_suite]
+ - [S6] 9 道閘逐道各讓它單獨擋一次,掛鉤每次都應回 1、全套沒被跑到、彙總列出那一道。[test: t_prepush_each_gate_blocks_alone]
+ - [S13] `code-loop check --keep-going` 已記下一筆擋下之後,走到 8 個放行站點的每一個(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)都應仍回 1;判定函式原始碼裡的每個回傳都應是 `_fin(...)`,或緊接在 `if <變數>:` 底下回傳由 `kg.hit(...)` 指派的那個變數;pitfalls 失敗時新增告警閘應照跑。[test: t_code_loop_keep_going_pass_sites_keep_blocks]
+ - [S14] 一次推兩個 ref、兩個都被同一道擋下時,彙總應列兩筆(ref 欄有值)、閘數算 1;推的是刪除時照舊跳過、推 tag 時照舊不跑代碼審判定,不應因此多記或漏記。[test: t_prepush_multi_ref_blocks]
+ - [S15] `code-loop check` 回 1 但輸出沒有 `LUMOS-BLOCKS:` 行、那一行是空的、或 `reason_kind` 不在對照表時,掛鉤應仍回 1;任何一道擋下後暫存檔寫不進去時,掛鉤也應仍回 1。[test: t_prepush_block_survives_lost_record]
+ - [S16] 預演模式下,即使 git 沒有照預演跑(用一支會忽略 `--dry-run` 的假 git 驗),也不應有任何物件被推出去:掛鉤在預演模式一律回 1。[test: t_push_preview_hook_never_lets_git_push]
+ - [S17] 環境變數 `LUMOS_PUSH_PREVIEW` 的值不是 32 個十六進位字(例:`*`、`../x`)時,掛鉤應照真推送跑,且不應刪除票資料夾裡的任何檔;`push-preview` 開始時只應刪掉建立者行程已不在的票。[test: t_push_preview_token_required]
+ - [S7] 當新掛鉤配上不認得 `--keep-going`、也沒有 `push-summary` 的舊 lumos,而代碼審判定會擋時,掛鉤應回 1(不是放行),並印簡版彙總。[test: t_prepush_mixed_versions]
+ - [S8] 當環境裡有 `LUMOS_PUSH_PREVIEW` 但沒有對應的票(或票檔裡的隨機值不符)時,真推送應照常跑到全套測試,並印那句「忽略」;`push-preview` 遇到沒有預演標記的掛鉤時應回 2 且不跑掛鉤。[test: t_push_preview_token_required]
+ - [S9] 預演擋下前後,`git status --porcelain` 對受版控的檔應沒有差異,本機帳應多出帶 `preview: true` 的事件,`lumos gov` 的統計不應算進這些事件。[test: t_push_preview_no_tracked_ledger_writes]
+-- [S10] 掛鉤註解區塊列舉的每一支 lumos 呼叫被訊號中斷(回傳碼 128 以上)時,掛鉤應以該回傳碼結束、不再開始後面的閘;掛鉤自己收到 INT、TERM 或 HUP 時,應在手上那支子程序結束後結束(130、143、129)、收掉自己的背景工作(含全套測試的各片,不留 ppid=1 的孤兒、TMPDIR 底下不留東西),不應刪掉暫存目錄後繼續跑;裁判簽名與圖譜健檢回 2 時應照舊記成擋下。[test: t_prepush_interrupt_stops_every_gate]
++- [S10] 掛鉤註解區塊列舉的每一支 lumos 呼叫被訊號中斷(回傳碼 128 以上)時,掛鉤應以該回傳碼結束、不再開始後面的閘;掛鉤自己收到 INT、TERM 或 HUP 時,應在手上那支子程序結束後結束(130、143、129)、收掉自己的背景工作(含全套測試的各片,不留 ppid=1 的孤兒、TMPDIR 底下不留東西),不應刪掉暫存目錄後繼續跑;裁判簽名與圖譜健檢回 2 時應照舊記成擋下。各片自己起的孫行程(含送訊號那一刻才生出來的)也應一併收掉。只有跑測試的子殼收到 HUP 時,應收掉各片與它們的孫行程,掛鉤應回 1 擋下。[test: t_prepush_interrupt_stops_every_gate]
+ - [S18] 全套測試與自主迴圈那支的 log 應放在掛鉤的暫存目錄內:全綠時 TMPDIR 底下不應留下任何 `lumos-prepush` 開頭的東西;任一支紅時掛鉤應回 1,紅時印出的 log 路徑在掛鉤結束後應還在、檔裡有紅的那支,而且 TMPDIR 底下只留那一份。[test:t_prepush_test_logs_inside_tmp]
+ - [S11] `push-preview` 在 detached HEAD 沒給參數、沒有追蹤分支又沒給參數、git 連不上遠端、本機落後遠端(非快轉)時,都應回 2 並說明原因,不應回 0 或 1。[test: t_push_preview_edges]
+ - [S12] 有擋下時,版控治理帳應多一筆 `prepush-summary` 事件,帶筆數、閘名清單與這次推送的識別碼;`push-summary` 失敗時掛鉤仍回 1。[test: t_prepush_summary_records_event]
+ 
+ - 測試怎麼搭:S6、S7、S10 用一支假的 `scripts/lumos`(小 Python 腳本,照子命令與環境變數決定回傳碼與輸出;`--help` 輸出可選擇帶不帶 `--keep-going`),放進測試搭的假 repo,讓每一道都能單獨擋、單獨被中斷;S1、S2 用真的 lumos(圖譜健檢壞連結加簽名檔改過沒提交,沿用 `t_prepush_cheap_gates_run_before_expensive_suite` 的搭法)。現有範本餵的推送行是假的提交編號,逐 ref 那幾道走不到,所以逐道驗一律用假 lumos。
+ - 既有守衛要一起更新:`t_prepush_cheap_gates_run_before_expensive_suite`(便宜的閘擋下時不跑全套)行為不變、照舊要綠;`t_prepush_gates_stop_on_signal` 現在數 `pp_stop_if_signaled` 的行數(8 行),改成第 2 點的逐行規則,併進 S10 那支。
+ 
+ ## 實作清單(照順序)
+ 
+ 1. 盤點斷言「某道擋下後,後面的閘沒被叫」的既有接線測試(漂移檢查、雙向門放行、回頭重讀各自的接線測試等),收集模式下這類斷言會翻紅,逐支改成「擋下時全套沒跑」。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index 6cfdefa8..07ca8e21 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -132,11 +132,17 @@ WHY:代碼審判定那一道,掛鉤在逐 ref 迴圈之前讀一次 `scripts/lum
+ WHY:每種擋下的一句話原因只存在掛鉤 `pp_cl_reason` 那一份;它的種類要跟 `scripts/lumos` 判定會產生的 `reason_kind` 一樣多、一樣名(雙向),而產生 `reason_kind` 的地方一律寫字面字串 [出處:第一輪代碼審架構對齊席、邊界席;第二輪代碼審通才席、架構對齊席、合約席] [因:掛鉤要能配舊版 lumos 跑,不能向 lumos 要這份表;新加一種擋下卻沒補掛鉤的表,彙總會退成通用句;種類若經變數產生,守衛從原始碼抽不到、會照綠] [不選:`scripts/lumos` 也存一份句子表、`--json` 的 blocks 每筆帶 `summary`——第一輪折入時加的,沒有任何程式讀,只為了給漂移測試一個比對對象,第二輪拿掉] [test:t_prepush_cl_reason_table_matches_lumos]
+ 
+ WHY:同一個 ref 的代碼審判定同時印出「受波及合約的測試沒過」與「tier=high 且…缺留痕」兩句時,逃逸自動記帳只記一筆,而且是合約測試紅那一筆 [出處:第一輪代碼審通才席] [因:原本遇錯就停時只會印第一句;收集模式兩句都印,兩筆都記的話,修好測試重推時缺留痕那筆又記一次,`push-gate-unreviewed` 的筆數會比實際抓到的漏多] [test:t_prepush_escape_records_once]
+ 
+ WHY:裁判簽名也改成收集:它管的是測試檔與掛鉤,不管 `scripts/lumos`;被改的若是掛鉤本身,它這一刻已經在跑,提早結束換不到可信度。這次推送反正已經因它被擋,不會變成放行;彙總裡有它時最前面多一行講明代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔;`push-summary` 印的與掛鉤簡版彙總印的都有這一行 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉1] [因:兩道會在全套之前跑 scripts/test_lumos.py 裡的測試,它們的綠燈這次不算數] [test:t_prepush_each_gate_blocks_alone] [test:t_prepush_plain_summary_anchor_note] [test:t_push_summary_anchor_note_and_separators]
+ 
+ WHY:中斷一律結束:清單上的每一支呼叫被訊號殺掉(128 以上)就以那個回傳碼停下;陷阱拆開,EXIT 只收拾,INT/TERM/HUP 先收掉自己的背景工作再以 130/143/129 結束 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉2] [因:原本 EXIT、INT、TERM 共用一支陷阱、裡面不結束,掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測),收集模式會更常踩到;bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是那支結束之後不再開始下一道] [test:t_prepush_interrupt_stops_every_gate]
+ 
+ PITFALL:掛鉤被砍或按 Ctrl-C 之後,全套測試的各片變成 ppid=1 的孤兒繼續跑(最多八分鐘,輸出寫進已刪的資料夾),兩個測試 log 也留在 TMPDIR [出處:第一輪代碼審併發席,/bin/bash 3.2.57 實測四片全成孤兒;第二輪代碼審併發席、架構對齊席:只對掛鉤送 HUP 時 8 片全活著;第三輪代碼審併發席、邊界席:片的子行程沒收、子殼的 HUP 陷阱沒測試守] [根因:掛鉤的陷阱只對 `jobs -p` 列出的直接子行程(跑測試的子殼)送 TERM,各片是孫行程;非互動 bash 用 & 起的背景命令又忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到;主殼與子殼原本都沒接 HUP;兩個 log 用 mktemp 建在 `$_PP_TMP` 外] [修法:跑測試的子殼 `run_group` 自己接 TERM 與 HUP,用主殼同一支 `_pp_kill_jobs`(`jobs -p`)收掉它起的各片——不自己記 pid 收,「& 起片」與「記下 pid」之間有空窗,訊號落在中間會漏收剛起的那片;各片起的時候先換到自己的行程群組,`_pp_kill_jobs` 對每個工作整組送 TERM(不是組長才退回只送本人),連片自己起的子行程一起收(第三輪代碼審併發席:只收片本人時,片的子行程全成孤兒,起片後幾毫秒內收到訊號時連片也會漏);主殼也接 HUP(129);測試看那一片的 pid 在掛鉤結束後有沒有消失,不靠「睡幾秒再看有沒有寫下結束標記」的計時窗口(負載下會假綠);兩個 log 改放 `$_PP_TMP` 內,紅時要給人看的那份先複製到外面再印路徑;測試起掛鉤時先把 SIGINT 裝回預設,不然測試跑在推送前閘的背景分片裡、繼承「忽略 SIGINT」,bash 的 INT 陷阱裝不上,測 Ctrl-C 的斷言會假紅] [test:t_prepush_interrupt_stops_every_gate] [test:t_prepush_test_logs_inside_tmp]
+ 
++PITFALL:整組只送一發 TERM 時,送的那一刻正在 fork 的片(或它的子行程)生出來的孩子變成 ppid=1 的孤兒 [出處:第四輪代碼審併發席,/bin/bash 3.2.57 模擬掛鉤啟動後 20–45 毫秒送 TERM] [根因:訊號是逐一投遞給群組當下的成員,剛生出來的孩子已經在群組裡、卻沒收到那一發;之後沒人再送] [修法:`_pp_kill_jobs` 送完第一發後短等 0.2 秒,再對每個群組送第二發,群組已空的錯誤吞掉;測試用「收到 TERM 才生孫行程」的假片讓這個情形每次都成立] [test:t_prepush_interrupt_stops_every_gate]
++
++PITFALL:在原生 Windows 的 Python 上推送時,全套測試每一片一起跑就 AttributeError、被判成有紅,推送永遠被擋,「紅的是這幾支」又是空的 [出處:第四輪代碼審正確性席、併發席、通才席] [根因:換群組那段無條件呼叫 `os.setpgid`,Windows 的 Python 沒有它;就算繞過,Windows 的 `os.execv` 是起新行程後讓舊的立刻回 0,測試沒跑完就判綠] [修法:有 `setpgid` 才換群組再 `exec`(`setpgid` 失敗就不換、照樣 `exec`);沒有就在同一個行程裡用 `runpy` 跑測試檔,離開碼照實傳出] [test:t_prepush_interrupt_launcher_without_setpgid]
++
++WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓換群組那段與其他每個 `$PY` 閘一啟動就回 0;掛鉤不為這件事加機制 [出處:第四輪代碼審資安席] [因:要先能控制推送行程的環境變數才做得到,屬刻意設定環境的手法,在工具鏈的資安範圍外(工具鏈本身的資安只看提示注入、讀寫越界、非刻意的一步繞過;2026-10-14 使用者確認);而且每個 `$PY` 閘都一樣,不是換群組那段獨有、修補前就有] [不選:整支掛鉤統一給 `$PY` 加 `-I` 或清掉 PYTHONPATH——改動面是每一支閘,換到的只是「已經能改環境的人」多走一步]
++
+ 找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的四道怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 2ae5768c..7ab1c9a7 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "635d1d1eafb80c7ff3a6326c9204a27dd07d464c6e3933c7c1e834a7b2d8e16e",
++    "scripts/test_lumos.py": "65db555d4edbca6de190ff1411cbcaff459fbc79224259fa548c2d8f93eea6cc",
+     "scripts/test_autonomous_loop.py": "b360429f2d41bb32d0b21b125f482f7694fefa828f2be7020902382f9f3c9e9c",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+-    "scripts/hooks/pre-push": "e225d71791ab5c94431455e4dec2d9dca87cbf99bf905b6f854be8c6b11b8bb3",
++    "scripts/hooks/pre-push": "ae6e5d17948f3ee5492b6cad3b13b2a09f8db8a8ca1f7bac31f7218b144dc1b8",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "a3494328d4df22fd7ad8c28bb34a8bef5edd8dd8ab14a3118c9d3f4f44b022bc",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "b21d8133174b2b0ea9d8abad973fdcb430dc0d79d7b3591cf5764e1847838dff",
+     "scripts/hooks/claude/check-graph-sync.py": "24b58d13eac5211823d7e7f3125ff6db81212a43351ae0dd2585ef0d4c247485",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-10-14T09:00:26+08:00",
+-  "note": "推送前掛鉤:全套測試各片自成行程群組、整組收;全檔掃描守衛先去註解接續行(代碼審 r3)"
++  "approved_at": "2026-10-14T09:55:42+08:00",
++  "note": "代碼審推送前收集第四輪修補:換群組啟動器沒有 setpgid 時照舊跑、整組收補第二發、掃描器補 $(…) 與 &>、計劃四句守衛"
+ }

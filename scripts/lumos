@@ -9416,7 +9416,9 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 # 2026-10-14 審查收斂規則:第二個獨立代理對合約審計反例的判定(guard residual-ask;同一反例只准問一次,是方便不是保證)
                 "residual-ask",
                 # 2026-10-14 審查收斂規則(代碼審 r3 G5):guard audit 每次蓋 [audit:] 記一筆,guard residual --add 比它跟問答的先後
-                "guard-audit")
+                "guard-audit",
+                # 2026-10-14 推送前一次列出全部擋下原因:掛鉤在全套測試之前統一判的那一筆彙總(Projects/推送前一次列出全部擋下原因_計劃)
+                "prepush-summary")
 
 # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
 # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
@@ -48532,6 +48534,58 @@ def _push_range_start(repo_root, old, tip, remote, pushed_ref):
     return _push_pick_base(repo_root, bases, old_sha, names, "新分支首推" if zero else "遠端舊值在本機找不到")
 
 
+_PUSH_SUMMARY_ANCHOR_NOTE = "裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑"
+
+
+def cmd_push_summary(repo, blocks_file, count, refs):
+    """lumos push-summary --blocks-file <檔> --count <N> --refs <推送行數>:推送前掛鉤在全套測試之前統一判的那一刻叫它
+    (Projects/推送前一次列出全部擋下原因_計劃〈做法〉3)——印「這次推送共有 N 筆擋下(M 道閘)」的彙總、逐筆一行,
+    並落一筆 prepush-summary 治理帳。★它不決定擋不擋★:掛鉤不論這裡回什麼都 exit 1;這裡只負責讓人一眼看到總數、讓撤除條件數得到。
+    只收掛鉤寫的那一種檔(一行三欄 tab 分隔:閘名、ref(空寫 -)、原因),不是一個任意寫帳的入口。
+    N 以 --count 為準(掛鉤記在記憶體裡的筆數):暫存檔讀不到或少幾行時照樣算進去,並講明有幾筆沒寫進暫存檔。
+    回 0;參數不合法、或沒帶 --repo 又不在 git 專案裡回 2(找 repo 根跟 push-range 同一支 _note_audit_root)。"""
+    if count < 0 or refs < 0:
+        print("擋下:--count 與 --refs 要是 0 以上的整數", file=sys.stderr)
+        return 2
+    root = _note_audit_root(repo)   # 跟 push-range 同一支找 repo 根(代碼審 r1 架構對齊席)
+    if root is None:
+        print("擋下:這裡不是 git 專案", file=sys.stderr)
+        return 2
+    rows = []
+    try:
+        raw = Path(blocks_file).read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        raw = ""
+    # ★只照換行字元切★(代碼審 r1 邊界席):splitlines 也會在 U+2028、U+0085、跳頁這類字元斷行,ref 名(git 允許帶)含它們時
+    # 那一筆被切成兩段、整筆被丟;掛鉤的簡版彙總照換行讀,兩邊要一致
+    for ln in raw.split("\n"):
+        parts = ln.split("\t")
+        if len(parts) != 3:
+            continue
+        g, r, w = (x.strip() for x in parts)
+        rows.append((g, "" if r == "-" else r, w))
+    n = max(count, len(rows))
+    gates = list(dict.fromkeys(g for g, _r, _w in rows))
+    lost = n - len(rows)
+    say = []
+    say.append("")
+    say.append(f"══ 這次推送共有 {n} 筆擋下({len(gates)} 道閘)══")
+    if "anchor" in gates:
+        say.append(_PUSH_SUMMARY_ANCHOR_NOTE)
+    for i, (g, r, w) in enumerate(rows, 1):
+        ref = f" [{_esc_clean(r, 200)}]" if refs > 1 and r else ""
+        say.append(f"  {i}. {_esc_clean(g, 40)}{ref}:{_esc_clean(w, 200)}")
+    if lost > 0:
+        say.append(f"  共 {n} 筆擋下,其中有 {lost} 筆的原因沒寫進暫存檔,細節看上面各段。")
+    say.append("每一道怎麼處理看上面那一段;全套測試這次沒跑(便宜的閘先擋下了),修好之後重推會再從頭跑一次。")
+    print("\n".join(say), file=sys.stderr)
+    extra = {"blocks": n, "gates_n": len(gates), "gates": gates, "refs": refs}
+    if lost > 0:
+        extra["lost"] = lost
+    _gate_event_or_warn(root, "prepush-summary", "blocked", f"推送前擋下 {n} 筆({len(gates)} 道閘)", hard=True, extra=extra)
+    return 0
+
+
 def cmd_push_range(repo, diff_range, push_remote, pushed_ref):
     """lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端名> --pushed-ref <遠端 ref>:印 _push_range_start 算出的範圍一行,
     給推送前掛鉤在新分支首推時用(Projects/新分支首推會擋的閘改用真起點_計劃)。頂端已在主線 → `頂端..頂端`;判不了或起點是空樹 →
@@ -52420,9 +52474,115 @@ def _codeloop_default_base(repo_root):
     return _push_pick_base(repo_root, bases, None, "主線", "")[0]
 
 
-def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False):
+# 每種擋下的一句話原因只有推送前掛鉤 pp_cl_reason 那一份(掛鉤要能配舊版 lumos 跑,不向這裡要);這裡產生的 reason_kind
+# 一律寫字面字串,t_prepush_cl_reason_table_matches_lumos 拿它跟掛鉤的對照表比種類(代碼審 r2:原本這裡另存一份句子表給
+# JSON blocks 的 summary 欄位用,沒有任何程式讀,拿掉)。
+
+
+class _CodeloopKg:
+    """code-loop check 判定函式的收集模式分流(Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):
+    fin 是唯一的收尾;hit 是「這一道擋下」——不帶 keep_going 時回收尾後的結果(呼叫端直接回傳),帶的話記進清單、回 None(繼續下一道)。
+    從判定函式抽出來,讓它的分支數回到改動前的量(代碼審 r1 通才席:新增告警閘把複雜度 35→40 當成新告警擋下)。"""
+
+    def __init__(self, keep_going):
+        self.keep_going = keep_going
+        self.blocks = []        # 記下的擋下(每筆是原本會直接回傳的那個擋下 dict)
+        self.tier = "unknown"   # keep_going 回傳時的 tier 一律是算出來的分級(pitfalls 沒算出來是 unknown)
+
+    def fin(self, v):
+        return _codeloop_kg_finish(v, self.blocks, self.keep_going, self.tier)
+
+    def hit(self, v, reason_kind=None):
+        """v 是擋下 dict 或 None(這一道過了)。reason_kind:收集模式下替它補上的種類(不帶旗標時原樣交回,輸出一字不變)。"""
+        if v is None:
+            return None
+        if not self.keep_going:
+            return self.fin(v)
+        self.blocks.append(dict(v, reason_kind=reason_kind) if reason_kind else v)
+        return None
+
+    def lint_on_pf_fail(self, step):
+        """pitfalls 失敗時:收集模式下新增告警閘只看範圍、照跑(比不帶旗標時嚴,計劃〈做法〉5);不帶旗標照舊整個 fail-open。"""
+        if self.keep_going:
+            self.hit(step())
+
+
+def _codeloop_kg_finish(v, blocks, keep_going, tier):
+    """code-loop check 判定函式唯一的收尾(Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):
+    不帶 keep_going 原樣交回;帶的話,v 是擋下就併進清單,清單非空回擋下(第一筆的欄位、blocks 清單、tier 是算出來的分級)。
+    放行站點走到這裡的意思是「這一道過了」,不能蓋掉前面記下的擋下。"""
+    if not keep_going:
+        return v
+    if v.get("blocked") and v not in blocks:
+        blocks.append(v)
+    if not blocks:
+        return dict(v, blocks=[])
+    out = dict(blocks[0])
+    out["blocked"] = True
+    out["tier"] = tier
+    out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", "")} for b in blocks]
+    for b in blocks:   # 各道的明細照原本的鍵放著,印訊息那段各取各的
+        for k in ("bound_tests", "dispositions", "lint_new"):
+            if k in b:
+                out[k] = b[k]
+    return out
+
+
+def _codeloop_lint_new_step(repo_root, diff_range, tier):
+    """3.6 新增告警閘(Projects/新增告警閘_計劃,2026-09-13):只看改動範圍、不需要 pitfalls 的資料。回這一道的擋下 dict 或 None(放行)。"""
+    lv = None
+    try:
+        import time as _time2
+        lv = _lint_new_verdict(repo_root, diff_range,
+                               deadline=_time2.monotonic() + _lint_new_config(repo_root)["budget_sec"])
+    except Exception as e:
+        _gate_failopen(repo_root, "lint-new", f"新增告警閘出例外,這次放行:{str(e)[:120]}")
+        lv = None
+    _codeloop_guard_verdict.last_lint_new = lv
+    if lv:
+        for _w in lv.get("warnings") or []:
+            print(f"提醒:{_w}", file=sys.stderr)
+        if lv.get("autopass"):
+            _gate_failopen(repo_root, "lint-new", lv.get("reason") or "有檢查命令跑不動")
+        if lv.get("blocked"):
+            return {"blocked": True, "reason_kind": "lint_new",
+                    "reason": lv.get("reason") or "有新增的告警",
+                    "tier": tier, "lint_new": lv}
+    return None
+
+
+def _codeloop_pitfalls_tier(repo_root, diff_range):
+    """code-loop check 判定的第 3 步:跑 pitfalls --diff <range> --no-lint --json 取分級 → (pitfalls 的資料, tier, pf_fail)。
+    pf_fail 不是 None 表示 pitfalls 失敗(回非零、沒有 JSON、例外),內容是 fail-open 的那個放行 dict,並已記一筆 fail-open 帳。"""
+    import json as _json
+    import subprocess as _sp
+    import sys as _sys
+    try:
+        r = _sp.run([_sys.executable, str(Path(__file__).resolve()), "pitfalls",
+                     "--diff", diff_range, "--no-lint", "--json",
+                     "--repo", str(repo_root)],
+                    capture_output=True, text=True, cwd=str(repo_root))
+        if r.returncode != 0:
+            _gate_failopen(repo_root, "pitfalls", f"pitfalls 回非零:{r.stderr.strip()[:120]}")
+            return None, "unknown", {"blocked": False, "reason": f"pitfalls 失敗(fail-open): {r.stderr.strip()[:120]}", "tier": "unknown"}
+        lines = [ln for ln in r.stdout.splitlines() if ln.strip().startswith("{")]
+        if not lines:
+            _gate_failopen(repo_root, "pitfalls", "pitfalls 沒有 JSON 輸出")
+            return None, "unknown", {"blocked": False, "reason": "pitfalls 無 JSON 輸出(fail-open)", "tier": "unknown"}
+        data = _json.loads(lines[0])
+        return data, data.get("tier", "standard"), None
+    except Exception as e:
+        _gate_failopen(repo_root, "pitfalls", f"pitfalls 例外:{str(e)[:120]}")
+        return None, "unknown", {"blocked": False, "reason": f"pitfalls 例外(fail-open): {e}", "tier": "unknown"}
+
+
+def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False,
+                            keep_going=False):
     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
     AND 無有效 pass/skip 留痕 → blocked=True。
+    keep_going(code-loop check --keep-going,Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):四道判定(合約測試、表態、新增告警、
+    代碼審留痕)都跑完,擋下累積進 blocks;★所有 return 都經過收尾函式 _fin★——清單非空就回擋下,放行站點不能蓋掉前面記下的擋下。
+    不帶時 _fin 原樣交回,行為與回傳一字不變。
     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
     local_sha 與 remote_ref 分支),否則讀當前 checkout HEAD/branch(向後相容)。
     diff_range 給了則跳 merge-base 推導直接算 tier;否則沿 merge-base..HEAD 現行為。
@@ -52441,19 +52601,22 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     marker_branch = branch or _codeloop_git_branch(repo_root)
     raw_range = diff_range        # 改寫全零起點之前的原值:合併提交認合進來那一側要拿它比第一個母
     merge_cache = {}
+    kg = _CodeloopKg(keep_going)  # 收集模式的分流(記下的擋下、算出來的分級)
+    _fin = kg.fin                 # 唯一的收尾:所有 return 都經過它(本體在 _codeloop_kg_finish)
+
     if not marker_sha:
         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
-        return {"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"}
+        return _fin({"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"})
 
     if diff_range is None:
         # 現行為:merge-base..HEAD 推導(向後相容)
         head_sha = _codeloop_git_head(repo_root)
         mb = _codeloop_default_base(repo_root)
         if mb and mb == head_sha:
-            return {"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"}
+            return _fin({"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"})
         if not mb:
             _gate_failopen(repo_root, "code-loop", "算不出 merge-base")
-            return {"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"}
+            return _fin({"blocked": False, "reason": "無 merge-base(fail-open)", "tier": "unknown"})
         diff_range = f"{mb}..HEAD"
     else:
         # 起點是 40 個 0(新分支首推)或本機找不到(force-push 後)時,照筆記形狀擋與每支檔有家共用的判法換成真的起點;
@@ -52466,7 +52629,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                 if tip is not None:
                     base, _why = _lens_push_base(repo_root, a, tip)
                     if base is None:
-                        return {"blocked": False, "reason": _why, "tier": "standard"}
+                        return _fin({"blocked": False, "reason": _why, "tier": "standard"})
                     diff_range = f"{base}..{tip}"
 
     # 2.5 受波及合約測試真跑(不分 tier;紅就擋)
@@ -52484,30 +52647,22 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     # 高風險擋、低風險比照紅只提醒(那是 2026-09-07 的人裁,理由是擋下去人會改走 --no-verify)。
     # 真的修不動的話逃生門跟紅共用:--skip-bound-tests --note "<理由>",會留痕。
     if bt["status"] in ("red", "unfilterable") and not bound_advisory:
-        return {"blocked": True, "reason": bt["reason"], "tier": "unknown", "bound_tests": bt}
+        # keep_going:記下、照樣算分級與後面幾道(合約測試先紅時照樣算風險分級)
+        _stop = kg.hit({"blocked": True, "reason": bt["reason"], "tier": "unknown", "bound_tests": bt}, reason_kind="bound_tests")
+        if _stop:
+            return _stop
     # bound_advisory(表態閘 S7 之後 pre-push 對每個分支 ref 都叫 check):低風險推送的合約測試維持 2026-09-07 人裁的
     # 「只提醒不擋」——紅了照樣印(呼叫端讀 last_bound),但不在這裡擋;高風險那條 pre-push 不帶這旗標,照舊擋。
 
-    # 3. 跑 pitfalls --diff <range> --no-lint --json 取 tier
-    try:
-        import sys as _sys
-        graphctl = Path(__file__).resolve()
-        r = _sp.run([_sys.executable, str(graphctl), "pitfalls",
-                     "--diff", diff_range, "--no-lint", "--json",
-                     "--repo", str(repo_root)],
-                    capture_output=True, text=True, cwd=str(repo_root))
-        if r.returncode != 0:
-            _gate_failopen(repo_root, "pitfalls", f"pitfalls 回非零:{r.stderr.strip()[:120]}")
-            return {"blocked": False, "reason": f"pitfalls 失敗(fail-open): {r.stderr.strip()[:120]}", "tier": "unknown"}
-        lines = [l for l in r.stdout.splitlines() if l.strip().startswith("{")]
-        if not lines:
-            _gate_failopen(repo_root, "pitfalls", "pitfalls 沒有 JSON 輸出")
-            return {"blocked": False, "reason": "pitfalls 無 JSON 輸出(fail-open)", "tier": "unknown"}
-        data = _json.loads(lines[0])
-        tier = data.get("tier", "standard")
-    except Exception as e:
-        _gate_failopen(repo_root, "pitfalls", f"pitfalls 例外:{str(e)[:120]}")
-        return {"blocked": False, "reason": f"pitfalls 例外(fail-open): {e}", "tier": "unknown"}
+    # 3. 跑 pitfalls --diff <range> --no-lint --json 取 tier(本體在 _codeloop_pitfalls_tier)
+    # keep_going 下 pitfalls 失敗:表態要它的資料、代碼審留痕要 tier,照現在 fail-open 不判;新增告警閘只看範圍,照跑;前面記下的擋下照算
+    import sys as _sys
+    graphctl = Path(__file__).resolve()
+    data, tier, pf_fail = _codeloop_pitfalls_tier(repo_root, diff_range)
+    if pf_fail is not None:
+        kg.lint_on_pf_fail(lambda: _codeloop_lint_new_step(repo_root, diff_range, "unknown"))
+        return _fin(pf_fail)
+    kg.tier = tier
 
     # advisory 只准用在低風險(r1 外家 finder f4/否決 f3):pre-push 那邊 pitfalls 暫時失敗會空著 tier 而帶旗標,
     # 這裡自己算出 high 就不認旗標——紅測試重跑一次硬的,紅了照擋。
@@ -52515,10 +52670,14 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note, payload=payload, advisory=False)
         _codeloop_guard_verdict.last_bound = bt
         if bt["status"] in ("red", "unfilterable"):
-            return {"blocked": True, "reason": bt["reason"] + "(tier=high,--bound-tests-advisory 不適用)", "tier": tier, "bound_tests": bt}
+            _stop = kg.hit({"blocked": True, "reason": bt["reason"] + "(tier=high,--bound-tests-advisory 不適用)", "tier": tier,
+                            "bound_tests": bt}, reason_kind="bound_tests")
+            if _stop:
+                return _stop
 
     # 3.5 表態閘(Projects/棧別提問表態閘_計劃,2026-09-09):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。
-    # 判定順序=合約測試(2.5)→表態(3.5)→審查留痕(4/5):序列早退,先中的先報、修完再跑(r3 架構對齊席 A1 要求講明)。
+    # 判定順序=合約測試(2.5)→表態(3.5)→新增告警(3.6)→審查留痕(4/5)。兩種模式:不帶 keep_going 是序列早退,先中的先報、修完再跑
+    # (r3 架構對齊席 A1 要求講明);帶 keep_going(推送前掛鉤用)四道都判完、擋下全記進 blocks,所有回傳經 _fin 一處判。
     dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": []}
     # 適用範圍(r3 邊界席 B1):算「哪些題適用」用 merge-base(主線, at_sha)..at_sha——把主線合進分支再推分支,
     # 推送範圍(remote..local)會把主線帶進來的碼算成本次要表態;推主線本身、或算不出主線/merge-base 才用推送範圍。tier 照舊用推送範圍。
@@ -52561,34 +52720,21 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": [], "error": str(e)[:120]}
     _codeloop_guard_verdict.last_dispositions = dv
     if dv["blocked"]:
-        return {"blocked": True, "reason_kind": "dispositions",
-                "reason": f"有 {dv['applicable']} 題適用,表態不完整({len(dv['problems'])} 處)",
-                "tier": tier, "dispositions": dv}
+        _stop = kg.hit({"blocked": True, "reason_kind": "dispositions",
+                        "reason": f"有 {dv['applicable']} 題適用,表態不完整({len(dv['problems'])} 處)",
+                        "tier": tier, "dispositions": dv})
+        if _stop:
+            return _stop
 
-    # 3.6 新增告警閘(Projects/新增告警閘_計劃,2026-09-13):這次改動有沒有帶進新的告警。
+    # 3.6 新增告警閘:這次改動有沒有帶進新的告警(本體在 _codeloop_lint_new_step)。
     # ★跟表態一樣不看 tier★——願景是「覆蓋每一次提交」,只在高風險跑就不成立;
     # 既有的 tier 計算維持原樣(照舊 --no-lint 快算),這是獨立的一條路。
-    lv = None
-    try:
-        import time as _time2
-        lv = _lint_new_verdict(repo_root, diff_range,
-                               deadline=_time2.monotonic() + _lint_new_config(repo_root)["budget_sec"])
-    except Exception as e:
-        _gate_failopen(repo_root, "lint-new", f"新增告警閘出例外,這次放行:{str(e)[:120]}")
-        lv = None
-    _codeloop_guard_verdict.last_lint_new = lv
-    if lv:
-        for _w in lv.get("warnings") or []:
-            print(f"提醒:{_w}", file=sys.stderr)
-        if lv.get("autopass"):
-            _gate_failopen(repo_root, "lint-new", lv.get("reason") or "有檢查命令跑不動")
-        if lv.get("blocked"):
-            return {"blocked": True, "reason_kind": "lint_new",
-                    "reason": lv.get("reason") or "有新增的告警",
-                    "tier": tier, "lint_new": lv}
+    _stop = kg.hit(_codeloop_lint_new_step(repo_root, diff_range, tier))
+    if _stop:
+        return _stop
 
     if tier != "high":
-        return {"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier}
+        return _fin({"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier})
 
     # 4. 讀留痕,pass/skip 且 sha == marker_sha → 有效(marker_sha/marker_branch 綁被推送 ref 或 checkout)
     rec = _codeloop_read(repo_root, marker_branch)
@@ -52597,7 +52743,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
         rec_status = rec.get("status", "")
         if rec_sha == marker_sha and rec_status in ("passed", "skipped"):
             _src = "治理帳" if rec.get("_source") == "ledger" else "marker"
-            return {"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]},來源 {_src})", "tier": tier}
+            return _fin({"blocked": False, "reason": f"有效留痕({rec_status}@{marker_sha[:8]},來源 {_src})", "tier": tier})
         # 簿記白名單豁免([[Issues/code-loop-pass自失效追尾]] 2026-08-04):pass 自己會往
         # tracked 的治理帳 append 一行,照「先 commit 再 push」直覺把它 commit 進去,
         # HEAD 前進 → pass 自失效 → 追尾。豁免=留痕 sha 之後的 commit ★只動簿記檔★
@@ -52609,9 +52755,9 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
             _vok, _vwhy = _codeloop_record_valid(repo_root, rec_sha, marker_sha)
             if _vok:
                 _src = "治理帳" if rec.get("_source") == "ledger" else "marker"
-                return {"blocked": False,
-                        "reason": f"有效留痕({rec_status}@{rec_sha[:8]},來源 {_src}+{_vwhy})",
-                        "tier": tier}
+                return _fin({"blocked": False,
+                             "reason": f"有效留痕({rec_status}@{rec_sha[:8]},來源 {_src}+{_vwhy})",
+                             "tier": tier})
         # 留痕存在但 sha 不符或狀態不對
         if rec_sha != marker_sha:
             # ★把判有效性那支講的原因接過來★(2026-09-22 代碼審 r1 架構席):這條是推送前真正會擋的路,
@@ -52620,11 +52766,11 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                       f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)")
         else:
             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
-        return _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason)
+        return _fin(_codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason))
 
     # 5. 無留痕
-    return _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier,
-                                  "tier=high 且無留痕(尚未跑 code-loop pass/skip)")
+    return _fin(_codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier,
+                                       "tier=high 且無留痕(尚未跑 code-loop pass/skip)"))
 
 
 def _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason):
@@ -52916,13 +53062,15 @@ def _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note):
     return 0
 
 
-def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None, disp_file=None, qid=None, bound_advisory=False):
+def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None, disp_file=None, qid=None, bound_advisory=False,
+                  keep_going=False):
     """code-loop 留痕讀寫。
     pass  → status=passed(綁 HEAD sha);
     skip  → status=skipped(綁 HEAD sha,留逃生痕);
     dispositions <檔> → 棧別提問表態(表態閘 2026-09-09;派審查員之前寫,skip 也要先表態);
     recall-miss <id> → 審查席抓到未觸發題的問題時登記一筆;
     check → 跑判定式回報 verdict(blocked=合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕);--json 輸出 verdict dict。
+    check --keep-going(推送前掛鉤用)→ 四道判定都跑完、每道擋下各印各的訊息,最後多印一行 LUMOS-BLOCKS:<種類,…>(掛鉤唯一的機讀通道)。
     rc: 0=OK / 1=check:blocked / 2=參數錯。
     """
     # resolve repo root
@@ -52987,7 +53135,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
                                           at_sha=at_sha, branch=marker_branch,
                                           skip_bound=skip_bound, skip_note=note or "",
                                           payload=_impact_payload_read(from_json) if from_json else None,
-                                          bound_advisory=bound_advisory)
+                                          bound_advisory=bound_advisory, keep_going=keep_going)
         bt = getattr(_codeloop_guard_verdict, "last_bound", None)
         if bt is not None and "bound_tests" not in verdict:
             verdict["bound_tests"] = bt
@@ -52999,128 +53147,179 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
         blocked = verdict["blocked"]
         reason = verdict["reason"]
         tier = verdict["tier"]
+        _kinds = [b.get("reason_kind") or "?" for b in verdict.get("blocks") or []] if keep_going else []
+        # 合約測試狀態那幾句照「合約測試有沒有記成擋下」選(keep_going);不帶時照舊看整體 blocked,輸出一字不變
+        _bt_blk = ("bound_tests" in _kinds) if keep_going else blocked
         if as_json:
             print(_cljson.dumps(verdict, ensure_ascii=False))
         else:
-            if blocked and verdict.get("reason_kind") == "dispositions":
-                # 三段式:發生什麼 → 為何在意 → 指令獨立一行;最多列 10 問,其餘一句(r2 邊界席 B12)
-                _pr = (dv or {}).get("problems") or []
-                print(f"擋下:這次改動有 {(dv or {}).get('applicable', 0)} 題效能檢核適用,但表態不完整({len(_pr)} 處)——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
-                for _x in _pr[:10]:
-                    print(f"  - {_x}", file=sys.stderr)
-                _rng = (dv or {}).get("range") or diff_range or "<範圍>"
-                if len(_pr) > 10:
-                    print(f"  …另有 {len(_pr) - 10} 問,全量看:", file=sys.stderr)
-                    print(f"    lumos code-loop check --diff {diff_range or '<範圍>'} --json", file=sys.stderr)
-                print("在意的原因:題目推到眼前不等於有人回答;推送前每一題要有機器讀得懂的交代(做到了附證據/不適用附理由/待辦連 Issue),這不是審查,跟 tier 無關。", file=sys.stderr)
-                print(f"接下來(適用題算在 {_rng},樣板用同一個範圍):", file=sys.stderr)
-                print(f"    lumos pitfalls --diff {_rng} --dispositions-template --carry > /tmp/disp.json   # 填完:", file=sys.stderr)
-                _bflag = f" --branch {marker_branch}" if marker_branch and marker_branch != branch else ""
-                if at_sha and at_sha != head_sha:
-                    _bflag += f" --at-sha {at_sha}"   # 推的不是 checkout 的版本:表態要綁被推的 sha(r1 外家 finder f5)
-                print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
-            elif blocked and verdict.get("reason_kind") == "lint_new":
-                # 三段式:發生什麼 → 為何在意 → 指令獨立一行
-                _lv = verdict.get("lint_new") or {}
-                print(f"擋下:這次改動帶進了新的問題({reason})——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
-                for _c in (_lv.get("new") or [])[:8]:
-                    _wk = "(弱比對:工具沒給程式碼片段,只能用訊息比)" if _c.get("weak") else ""
-                    print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:70]}{_wk}", file=sys.stderr)
-                if len(_lv.get("new") or []) > 8:
-                    print(f"  …另有 {len(_lv['new']) - 8} 條", file=sys.stderr)
-                for _o in (_lv.get("oversize") or [])[:5]:
-                    print(f"  - {_o['file']}:這支檔 {_o['lines']} 行、{_o['bytes']} 位元組,超過{_o['over']}上限,沒被檢查"
-                          f"(要讓它一直算過就登記:{_o.get('key')})", file=sys.stderr)
-                for _u in _lv.get("undone") or []:
-                    if _u.get("kind") != "env":
-                        print(f"  - 沒跑到:{_u.get('detail')}｜{_u.get('cmd')}", file=sys.stderr)
-                print("在意的原因:這道閘只擋你這次帶進來的問題,舊的一概不管;放著不處理,下一個人就分不出哪些是新欠的。", file=sys.stderr)
-                print("接下來(確認是誤報就放行,會留下紀錄並被統計;指紋、規則、檔名都填好了,補上理由照抄):", file=sys.stderr)
-                for _c in (_lv.get("new") or [])[:8]:
-                    print(f"    {_lint_waive_cmd(_c)}", file=sys.stderr)
-                if not _lv.get("new"):
-                    print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
+            def _say(kind, reason):
+                """印一道擋下的訊息(原本的擋下句一字不改;不帶 keep_going 時只對第一道叫一次)。"""
+                _cl_say_block(kind, reason, verdict, dv, branch, head_sha, diff_range, marker_branch, at_sha)
+            if blocked and keep_going:
+                for _b in verdict.get("blocks") or []:
+                    _say(_b.get("reason_kind"), _b.get("reason", ""))
             elif blocked:
-                print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
-                      file=sys.stderr)
+                _say(verdict.get("reason_kind"), reason)
             else:
                 print(f"✅ code-loop check: OK——可以推(分支 {branch},版本 {head_sha[:8]},tier={tier}):{reason}")
-                if dv and dv.get("applicable"):
-                    print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
-                _lv = getattr(_codeloop_guard_verdict, "last_lint_new", None)
-                if _lv and _lv.get("status") not in ("off", "no-config", "no-files"):
-                    _bits = [f"跑了 {len(_lv.get('ran') or [])} 條檢查命令"]
-                    if _lv.get("waived"):
-                        _bits.append(f"{_lv['waived']} 條先前放行過")
-                    if _lv.get("report_only"):
-                        _bits.append(f"{len(_lv['report_only'])} 條命令沒有檔案清單佔位、只報不擋")
-                    if _lv.get("oversize_waived"):
-                        _bits.append(f"{len(_lv['oversize_waived'])} 支檔太大沒檢查(已登記)")
-                    if _lv.get("autopass"):
-                        # ★講真正的原因,不要一律寫成「有命令跑不動」★:放行檔讀不了、版本代號解析不出
-                        # 都會走自動放行,含糊帶過會讓人以為是工具的問題、不去修真正壞掉的東西
-                        _bits.append(f"自動放行並記帳({_lv.get('reason') or '原因不明'})")
-                    _st = _lv.get("status")
-                    _head = {"env-unavailable": "沒能完整檢查",
-                             "not-checked": "★這次改動沒有被檢查★"}.get(_st, "沒有新增的告警")
-                    print(f"  新增告警閘:{_head}({'、'.join(_bits)})")
-            for _w in ((dv or {}).get("warnings") or []):
-                print(f"  提醒:{_w}")
-            # 張力(2026-09-09 Projects/兩席相反時端出張力_計劃):合法的 tension 不擋,但要讓人看見——OK 與 BLOCKED 都印,走 stderr(提醒慣例)
-            _tens = (dv or {}).get("tensions") or []
-            if _tens:
-                print(f"⚠ 張力 {len(_tens)} 則(兩個審查角度相反——沿用既有寫法還是改用建議做法——工具只端上來、不裁):", file=sys.stderr)
-                for _t in _tens:
-                    _seen, _first = set(), []
-                    for _x in _t.get("existing") or []:
-                        _p = _dispositions_split_path_line(str(_x))[0] or str(_x)   # 同一支切分函式(code-loop r1 架構對齊席 A2);切不開的整串當 key
-                        if _p not in _seen:
-                            _seen.add(_p); _first.append(str(_x))
-                    _side = "沿用既有" if _t.get("chosen") == "existing" else "改用建議"
-                    print(f"  {_t['id']} 選了{_side}:既有寫法在 {', '.join(_first[:3])}(共 {_t.get('files', 0)} 檔)", file=sys.stderr)
-                    print(f"    隱患:{_t.get('hazard', '')}", file=sys.stderr)
-                    print(f"    建議:{_t.get('suggestion', '')}", file=sys.stderr)
-                print("  在意的原因:兩邊都留下來才看得見矛盾;誰讓誰由人定,這裡不擋。", file=sys.stderr)
-            for _x in getattr(_codeloop_guard_verdict, "last_arch", None) or []:
-                print(f"  {_x}")
-            if bt is not None:
-                _st = bt.get("status")
-                if _st == "unfilterable":
-                    # ★這一段是 2026-09-09 代碼審 r2 的 blocker★:判定那邊已經把「證不出跑過」
-                    # 併進擋的條件,但真正把訊息印給人看的是這裡,而這裡只認 green/red
-                    # ——低風險推送因此在假綠上★一個字都不印★就放行,高風險擋下時也看不到逃生指令。
-                    # 決定擋不擋跟決定講什麼,是兩個地方;改了前者一定要回頭看後者。
-                    print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr)
-                    if not blocked:
-                        print("  (低風險推送只提醒不擋——比照紅測試的 2026-09-07 人裁;證不出跑過的還是去修測試指令)", file=sys.stderr)
-                    else:
-                        print("  這代表閘會報「全綠」而其實一支都沒跑——你會以為合約被守著,其實沒有。", file=sys.stderr)
-                        print("  設定檔在 .lumos/config.json 的 test.run_cmd(多平台在 platforms.<平台>.run_cmd)。", file=sys.stderr)
-                        print("  真的修不動、這次要先過(會留痕):\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
-                elif _st in ("green", "red"):
-                    print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr if _st == "red" else sys.stdout)
-                    if _st == "red" and not blocked:
-                        print("  (低風險推送的合約測試只提醒不擋——2026-09-07 人裁;紅的還是去修)", file=sys.stderr)
-                    elif _st == "red" and verdict.get("reason_kind") == "dispositions":
-                        print("  (合約測試也紅了——低風險只提醒不擋;這次擋的是表態,先補表態,紅的測試還是去修)", file=sys.stderr)
-                    elif _st == "red":
-                        print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
-                elif _st == "no-config":
-                    # 說明由合約測試閘給(多平台時點名平台、講最上層 test.run_cmd 不生效);原本這裡寫死一句,多平台時會講錯
-                    print(f"  提醒:{bt.get('reason')}")
+                _cl_say_ok_extras(dv)
+            _cl_say_tail(verdict, dv, bt, _bt_blk)
         if blocked:
             # #19 S1:擋人的那一刻落一筆 hard 帳,由做判定的這一方寫,不是 hook 寫。
             # #19 S6:逐 ref 的事件要帶那一行真正的 sha(at_sha),不是盲取 HEAD
             # ——pre-push 是逐 ref 迴圈,同次推多個 ref 時 HEAD 會歸錯。
+            _ex = {"tier": tier}
+            if keep_going:
+                _ex["blocks"] = _kinds   # 一次判定照舊一筆(統計的筆數意義不變),多放這次記下的種類
             _gate_event_or_warn(repo_root, "code-loop", "blocked",
                                 f"tier={tier}:{reason}", hard=True,
                                 head_sha=at_sha or head_sha, ref=marker_branch,
-                                extra={"tier": tier})
+                                extra=_ex)
+        if keep_going and not as_json:
+            print("LUMOS-BLOCKS: " + ",".join(_kinds))
         return 1 if blocked else 0
 
     print(f"擋下:沒有 {subcmd!r} 這個子命令", file=sys.stderr)
     return 2
 
+
+def _cl_say_block(kind, reason, verdict, dv, branch, head_sha, diff_range, marker_branch, at_sha):
+    """code-loop check 印一道擋下的訊息(從 cmd_code_loop 搬出來、內容不變;--keep-going 時每道各叫一次)。"""
+    if kind == "dispositions":
+        _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha)
+    elif kind == "lint_new":
+        _cl_say_lint_block(reason, verdict, branch, head_sha)
+    else:
+        print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
+              file=sys.stderr)
+
+
+def _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha):
+    """表態不完整那一道的擋下訊息。"""
+    # 三段式:發生什麼 → 為何在意 → 指令獨立一行;最多列 10 問,其餘一句(r2 邊界席 B12)
+    _pr = (dv or {}).get("problems") or []
+    print(f"擋下:這次改動有 {(dv or {}).get('applicable', 0)} 題效能檢核適用,但表態不完整({len(_pr)} 處)——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
+    for _x in _pr[:10]:
+        print(f"  - {_x}", file=sys.stderr)
+    _rng = (dv or {}).get("range") or diff_range or "<範圍>"
+    if len(_pr) > 10:
+        print(f"  …另有 {len(_pr) - 10} 問,全量看:", file=sys.stderr)
+        print(f"    lumos code-loop check --diff {diff_range or '<範圍>'} --json", file=sys.stderr)
+    print("在意的原因:題目推到眼前不等於有人回答;推送前每一題要有機器讀得懂的交代(做到了附證據/不適用附理由/待辦連 Issue),這不是審查,跟 tier 無關。", file=sys.stderr)
+    print(f"接下來(適用題算在 {_rng},樣板用同一個範圍):", file=sys.stderr)
+    print(f"    lumos pitfalls --diff {_rng} --dispositions-template --carry > /tmp/disp.json   # 填完:", file=sys.stderr)
+    _bflag = f" --branch {marker_branch}" if marker_branch and marker_branch != branch else ""
+    if at_sha and at_sha != head_sha:
+        _bflag += f" --at-sha {at_sha}"   # 推的不是 checkout 的版本:表態要綁被推的 sha(r1 外家 finder f5)
+    print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
+
+
+def _cl_say_lint_block(reason, verdict, branch, head_sha):
+    """新增告警那一道的擋下訊息。"""
+    # 三段式:發生什麼 → 為何在意 → 指令獨立一行
+    _lv = verdict.get("lint_new") or {}
+    print(f"擋下:這次改動帶進了新的問題({reason})——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
+    for _c in (_lv.get("new") or [])[:8]:
+        _wk = "(弱比對:工具沒給程式碼片段,只能用訊息比)" if _c.get("weak") else ""
+        print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:70]}{_wk}", file=sys.stderr)
+    if len(_lv.get("new") or []) > 8:
+        print(f"  …另有 {len(_lv['new']) - 8} 條", file=sys.stderr)
+    for _o in (_lv.get("oversize") or [])[:5]:
+        print(f"  - {_o['file']}:這支檔 {_o['lines']} 行、{_o['bytes']} 位元組,超過{_o['over']}上限,沒被檢查"
+              f"(要讓它一直算過就登記:{_o.get('key')})", file=sys.stderr)
+    for _u in _lv.get("undone") or []:
+        if _u.get("kind") != "env":
+            print(f"  - 沒跑到:{_u.get('detail')}｜{_u.get('cmd')}", file=sys.stderr)
+    print("在意的原因:這道閘只擋你這次帶進來的問題,舊的一概不管;放著不處理,下一個人就分不出哪些是新欠的。", file=sys.stderr)
+    print("接下來(確認是誤報就放行,會留下紀錄並被統計;指紋、規則、檔名都填好了,補上理由照抄):", file=sys.stderr)
+    for _c in (_lv.get("new") or [])[:8]:
+        print(f"    {_lint_waive_cmd(_c)}", file=sys.stderr)
+    if not _lv.get("new"):
+        print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
+
+
+def _cl_say_ok_extras(dv):
+    """code-loop check 放行時印的表態閘與新增告警閘小結(從 cmd_code_loop 搬出來、內容不變)。"""
+    if dv and dv.get("applicable"):
+        print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
+    _lv = getattr(_codeloop_guard_verdict, "last_lint_new", None)
+    if _lv and _lv.get("status") not in ("off", "no-config", "no-files"):
+        _bits = [f"跑了 {len(_lv.get('ran') or [])} 條檢查命令"]
+        if _lv.get("waived"):
+            _bits.append(f"{_lv['waived']} 條先前放行過")
+        if _lv.get("report_only"):
+            _bits.append(f"{len(_lv['report_only'])} 條命令沒有檔案清單佔位、只報不擋")
+        if _lv.get("oversize_waived"):
+            _bits.append(f"{len(_lv['oversize_waived'])} 支檔太大沒檢查(已登記)")
+        if _lv.get("autopass"):
+            # ★講真正的原因,不要一律寫成「有命令跑不動」★:放行檔讀不了、版本代號解析不出
+            # 都會走自動放行,含糊帶過會讓人以為是工具的問題、不去修真正壞掉的東西
+            _bits.append(f"自動放行並記帳({_lv.get('reason') or '原因不明'})")
+        _st = _lv.get("status")
+        _head = {"env-unavailable": "沒能完整檢查",
+                 "not-checked": "★這次改動沒有被檢查★"}.get(_st, "沒有新增的告警")
+        print(f"  新增告警閘:{_head}({'、'.join(_bits)})")
+
+
+def _cl_say_tail(verdict, dv, bt, bt_blocked):
+    """code-loop check 擋下與放行都印的尾段:表態警告、張力、目標架構、合約測試狀態(從 cmd_code_loop 搬出來、內容不變;
+    合約測試那幾句照 bt_blocked 選:不帶 --keep-going 時它就是 blocked,帶的話是「合約測試有沒有記成擋下」)。"""
+    _cl_say_tensions(dv)
+    for _x in getattr(_codeloop_guard_verdict, "last_arch", None) or []:
+        print(f"  {_x}")
+    if bt is not None:
+        _cl_say_bound(bt, verdict, bt_blocked)
+
+
+def _cl_say_tensions(dv):
+    """表態警告與張力(擋下與放行都印)。"""
+    for _w in ((dv or {}).get("warnings") or []):
+        print(f"  提醒:{_w}")
+    # 張力(2026-09-09 Projects/兩席相反時端出張力_計劃):合法的 tension 不擋,但要讓人看見——OK 與 BLOCKED 都印,走 stderr(提醒慣例)
+    _tens = (dv or {}).get("tensions") or []
+    if _tens:
+        print(f"⚠ 張力 {len(_tens)} 則(兩個審查角度相反——沿用既有寫法還是改用建議做法——工具只端上來、不裁):", file=sys.stderr)
+        for _t in _tens:
+            _seen, _first = set(), []
+            for _x in _t.get("existing") or []:
+                _p = _dispositions_split_path_line(str(_x))[0] or str(_x)   # 同一支切分函式(code-loop r1 架構對齊席 A2);切不開的整串當 key
+                if _p not in _seen:
+                    _seen.add(_p)
+                    _first.append(str(_x))
+            _side = "沿用既有" if _t.get("chosen") == "existing" else "改用建議"
+            print(f"  {_t['id']} 選了{_side}:既有寫法在 {', '.join(_first[:3])}(共 {_t.get('files', 0)} 檔)", file=sys.stderr)
+            print(f"    隱患:{_t.get('hazard', '')}", file=sys.stderr)
+            print(f"    建議:{_t.get('suggestion', '')}", file=sys.stderr)
+        print("  在意的原因:兩邊都留下來才看得見矛盾;誰讓誰由人定,這裡不擋。", file=sys.stderr)
+
+
+def _cl_say_bound(bt, verdict, bt_blocked):
+    """受波及合約測試狀態那幾句。"""
+    _st = bt.get("status")
+    if _st == "unfilterable":
+        # ★這一段是 2026-09-09 代碼審 r2 的 blocker★:判定那邊已經把「證不出跑過」
+        # 併進擋的條件,但真正把訊息印給人看的是這裡,而這裡只認 green/red
+        # ——低風險推送因此在假綠上★一個字都不印★就放行,高風險擋下時也看不到逃生指令。
+        # 決定擋不擋跟決定講什麼,是兩個地方;改了前者一定要回頭看後者。
+        print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr)
+        if not bt_blocked:
+            print("  (低風險推送只提醒不擋——比照紅測試的 2026-09-07 人裁;證不出跑過的還是去修測試指令)", file=sys.stderr)
+        else:
+            print("  這代表閘會報「全綠」而其實一支都沒跑——你會以為合約被守著,其實沒有。", file=sys.stderr)
+            print("  設定檔在 .lumos/config.json 的 test.run_cmd(多平台在 platforms.<平台>.run_cmd)。", file=sys.stderr)
+            print("  真的修不動、這次要先過(會留痕):\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
+    elif _st in ("green", "red"):
+        print(f"  受波及合約測試:{bt.get('reason')}", file=sys.stderr if _st == "red" else sys.stdout)
+        if _st == "red" and not bt_blocked:
+            print("  (低風險推送的合約測試只提醒不擋——2026-09-07 人裁;紅的還是去修)", file=sys.stderr)
+        elif _st == "red" and verdict.get("reason_kind") == "dispositions":
+            print("  (合約測試也紅了——低風險只提醒不擋;這次擋的是表態,先補表態,紅的測試還是去修)", file=sys.stderr)
+        elif _st == "red":
+            print("  真的跑不了(外部 DB 不在、環境缺)→ 留痕跳過:\n    lumos code-loop check --diff <範圍> --skip-bound-tests --note \"<為什麼>\"", file=sys.stderr)
+    elif _st == "no-config":
+        # 說明由合約測試閘給(多平台時點名平台、講最上層 test.run_cmd 不生效);原本這裡寫死一句,多平台時會講錯
+        print(f"  提醒:{bt.get('reason')}")
 
 
 # ── 每個子指令「這是幹嘛 / 什麼時候用」(Projects/工具鏈補強十件_計劃 #3)──────────
@@ -53645,6 +53844,7 @@ HELP_WHEN = {
     "impact": "動手前:改這個檔 / 這段 diff 會波及哪些筆記、驗證、決策。--sync-check 查波及的筆記有沒有同步。",
     "pitfalls": "這份 spec 或這段改動有什麼實務隱患、風險分級多高(tier: high 要過代碼審);--stage <階段> 只列計劃那一階段的需求風險面。",
     "ci-wait": "push 後等 CI 結論,綠 rc0 紅 rc1;結果進治理帳。別用 gh run list。",
+    "push-summary": "推送前掛鉤在全套測試之前有擋下時叫:印這次推送全部擋下原因的彙總(幾筆、幾道閘、逐筆一行),記一筆治理帳;手動不用叫。",
     "push-range": "推送前掛鉤在新分支首推時用:印跟主線的分岔點..頂端(頂端已在主線印頂端..頂端,判不了印空樹..頂端),會擋的閘照這個範圍查。",
     "summary-line": "改摘要裡的一行:給舊片段與新片段,換掉唯一對上的那一處(對到好幾處會列出來,用 --nth 指定);新片段給空字串就是刪掉那段。",
     "updated-sync": "doctor 說有筆記的 updated 落後 git 最後改動時:lumos updated-sync --stale 一次改成今天(或給節點名只改那幾篇);先看加 --dry-run。",
@@ -54580,6 +54780,11 @@ def main():
     evp.add_argument("--json", dest="ev_json", action="store_true")
     evp.add_argument("--prune", dest="ev_prune", action="store_true", help="刪舊會談資料夾(會刪檔)")
     evp.add_argument("--days", dest="ev_days", default="30")
+    psm = sub.add_parser("push-summary", help="推送前掛鉤用:印這次推送全部擋下原因的彙總並記一筆治理帳")
+    psm.add_argument("--blocks-file", dest="psm_file", required=True, metavar="檔")
+    psm.add_argument("--count", dest="psm_count", type=int, required=True, metavar="筆數")
+    psm.add_argument("--refs", dest="psm_refs", type=int, default=1, metavar="推送行數")
+    psm.add_argument("--repo", dest="psm_repo", default=None)
     prg = sub.add_parser("push-range", help="推送前掛鉤用:印這次推送真正的新改動範圍(跟主線的分岔點..頂端)")
     prg.add_argument("--diff", dest="prg_diff", required=True, metavar="舊值..頂端")
     prg.add_argument("--push-remote", dest="prg_remote", default=None, metavar="遠端名")
@@ -54851,6 +55056,8 @@ def main():
                               help="吃一份已經算好的波及結果(推送關卡一次推送只算一次)")
             _clp.add_argument("--bound-tests-advisory", dest="cl_bound_advisory", action="store_true",
                               help="受波及合約測試紅了只提醒不擋(pre-push 對低風險推送用;高風險不帶,照擋)")
+            _clp.add_argument("--keep-going", dest="cl_keep_going", action="store_true",
+                              help="四道判定都跑完、每道擋下各印各的,最後多印一行 LUMOS-BLOCKS:(推送前掛鉤用;不帶時第一道擋下就停)")
         _clp.add_argument("--repo", dest="cl_repo", default=None,
                           help="repo root(預設 cwd 逐層向上找 .git)")
 
@@ -55046,6 +55253,8 @@ def main():
             return cmd_note_audit_reread_check(repo=args.na_repo, diff_range=args.na_diff,
                                                push_remote=args.na_push_remote, pushed_ref=args.na_pushed_ref, gate=args.na_gate)
         return cmd_note_audit_skip(repo=args.na_repo, diff_range=args.na_diff, note=args.na_note)
+    if args.cmd == "push-summary":
+        return cmd_push_summary(repo=args.psm_repo, blocks_file=args.psm_file, count=args.psm_count, refs=args.psm_refs)
     if args.cmd == "push-range":
         return cmd_push_range(repo=args.prg_repo, diff_range=args.prg_diff, push_remote=args.prg_remote,
                               pushed_ref=args.prg_ref)
@@ -55089,7 +55298,8 @@ def main():
                              disp_file=getattr(args, "cl_disp_file", None),
                              qid=getattr(args, "cl_qid", None),
                              from_json=getattr(args, "cl_from_json", None),
-                             bound_advisory=getattr(args, "cl_bound_advisory", False))
+                             bound_advisory=getattr(args, "cl_bound_advisory", False),
+                             keep_going=getattr(args, "cl_keep_going", False))
     if args.cmd == "loop" and args.lcmd == "capture-counts":
         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
         return cmd_loop_capture_counts(None, args.finders,

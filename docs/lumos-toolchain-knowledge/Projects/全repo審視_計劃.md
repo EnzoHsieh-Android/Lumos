@@ -338,6 +338,7 @@ aliases:
 - **為什麼**:pre-push 把 8-10 分鐘的全套排在最前面,anchor(0.19 秒)、doctor(0.93 秒)、pitfalls(0.25 秒)排在後面——被便宜的閘擋下時,全套已經白跑完了,而註解還寫著 2026-07-07 的「~32s」。runner 又用寬鬆解析:--help、打錯旗標、甚至情境錄音裡真實出現過的裸測試名,全部被靜默丟掉當成沒帶 -k,直接跑滿全套(Codex 就因為跑全套超時過)。沒有 -x、沒有失敗優先、沒有分片,也沒有隨機序探針——順序相依從來沒被打過一拳。
 - **做什麼**:①重排 pre-push 成 anchor→doctor→pitfalls/code-loop/test-layers→全套;注意「沒有 vault 就 exit 0」要改成只跳過 doctor 段,否則 t_prepush_test_gate 情境 B 會翻紅。②runner 改嚴格解析並開 help、裸位置參數當 -k 同義(情境錄音就是這樣敲的)、加 --list 印名單。③加 -x 與 --ff,快取落 .lumos/test-cache.json(既有 gitignored 快取慣例,不要放 .git/)。④加 --shard I/N 與 --json-summary,pre-push 起 N 個子進程彙總;前置是上一批的 TMPDIR/HOME 隔離,還要蓋掉固定路徑 /tmp/pwned-* 與 GH_STATE、8 處 os.chdir。⑤加 --seed 隨機序,預設關、只給每日治理跑、紅了印 seed,不進 pre-push。順手把 pre-push:64 註解改成實測數字並印預估。兩支檔都是 anchor,改完 anchor approve。誠實記:-x 只縮短「有紅」那一次,全綠推送仍要跑滿,真正壓時間的是分片。
 - **PRIOR-ART**:最小解在 runner 的參數與 hook 的段落順序;世界解=pytest -x/--lf/--ff 與 cacheprovider、Bazel test sharding(TEST_SHARD_INDEX/TEST_TOTAL_SHARDS)、pytest-split 按歷史耗時均衡、Go test -shuffle 印 seed、lefthook 的 priority/piped;裁定=borrow-design(fail_fast 不借——本 repo 已裁每道閘本來就 exit 1)
+  - 2026-10-14 註記:「每道閘本來就 exit 1、不借 fail_fast」這半句被 [[Projects/推送前一次列出全部擋下原因_計劃]] 取代——推送前全套之前的閘改成全部跑完、一次列出擋下原因再統一擋(那句當時沒評估過一次列出)。
 
 ### #13 假綠:把偽裝成通過的 skip 改走 SKIP 通道
 
