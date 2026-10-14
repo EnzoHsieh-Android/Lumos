@@ -1,0 +1,178 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md b/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
+index c7dd97b2..d500cf02 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
++++ b/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
+@@ -36,12 +36,12 @@ summary: |-
+ 
+ ## 管什麼
+ 
+ - `scripts/hooks/claude/bypass-ask-hook.py`:讀一次 stdin、在記事件之外先做便宜的預篩;過了預篩才進共用的存活事件包裝,解析指令(剝 heredoc、換掉指令替換、`shlex` 切段、任何不在引號裡的 git 詞開始一條 git 指令),判命中與拋棄式,命中回 `permissionDecision: "ask"`。
+ - 註冊、安裝名單、防護狀態那一列、錨點與工具自裝檔名單在 [[Systems/lumos-cli-lifecycle]] 那邊。
+ 
+ ## 不管什麼
+ 
+ - 不擋、不改指令、不記問了幾次(存活事件只記活著沒)。
+ - 不管 Codex(Codex 的 Bash 前事件回覆形狀不同,適配另見計劃 REVISIT)。
+-- 不防有心改寫:變數拼接、別名(shell 與 git 的)、腳本、`bash -c`、`eval`、餵給 shell 的 heredoc、直接改 `.git/config`、不經 `git push` 的送出、用 Edit/Write 工具改設定都攔不到。指令替換(`$(…)`、反引號,含雙引號裡的反引號)與程序替換裡的指令會抽出來另外判,但目錄一律當判不出、不給拋棄式豁免。
++- 不防有心改寫:變數拼接、別名(shell 與 git 的)、腳本、`bash -c`、`eval`、餵給 shell 的 heredoc、直接改 `.git/config`、不經 `git push` 的送出、用 Edit/Write 工具改設定都攔不到。指令替換(`$(…)`、反引號,含雙引號裡的反引號)與程序替換裡的指令會抽出來另外判,但目錄一律當判不出、不給拋棄式豁免;bash 在反引號裡會先把「反斜線接反斜線、反引號、錢字號」還原掉一個反斜線再解析,這一步沒做,所以靠它藏起來的寫法(例如反引號裡用跳脫反引號再包一層)攔不到,引號內外都一樣。
+ - 自己寫一套切段器,不重用收工圖譜同步檢查那支掛鉤([[Systems/graph-sync-coverage]])裡的切段函式:那支不追蹤引號與 heredoc、作者自註「Quote-aware 不嚴格」,而且檔名帶連字號、各自獨立安裝,不能互相 import。
+diff --git a/scripts/hooks/claude/bypass-ask-hook.py b/scripts/hooks/claude/bypass-ask-hook.py
+index 4d42f35c..3eb9e8ae 100755
+--- a/scripts/hooks/claude/bypass-ask-hook.py
++++ b/scripts/hooks/claude/bypass-ask-hook.py
+@@ -296,46 +296,56 @@ def _has_mask_range(text: str) -> bool:
+ 
+ def _unmask(tok: str) -> str:
+     """遮罩字元還原成原字;被保護的 `$` 還原成 _LIT_DOLLAR(不會被當成變數展開)。"""
+     if not _has_mask_range(tok):
+         return tok
+     return "".join(_MASK_CHARS[ord(c) - _MASK_BASE] if _MASK_BASE <= ord(c) < _MASK_BASE + len(_MASK_CHARS) else c
+                    for c in tok).replace("$", _LIT_DOLLAR)
+ 
+ 
+ class _Normalizer:
+-    """一趟掃過指令:追蹤引號(`$(` 裡重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
++    """一趟掃過指令:追蹤引號(`$(` 與雙引號裡的反引號各重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
+     結構字元換成遮罩字元、ANSI 引號解出內容後當成引號裡的字。heredoc 找不到結束字就停止剝(寧可多問)。
+-    整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。"""
++    整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。
++    雙引號裡的反引號一樣會執行(bash 實測 echo "`git status`"),原本跟其他字一起遮掉、裡面的繞閘看不到
++    (2026-10-14 原生 /code-review 實跑 echo "`git commit --no-verify`" 回空清單)。現在跟 `$(` 同一套:開一層反引號層,
++    裡面照引號外的規則走,遇到第一個沒被跳脫的反引號收掉(不論那時在不在內層引號裡,同 bash);反引號層沒有括號深度可數,
++    層內的右括號只照字輸出、不收層。輸出保留成對反引號,交給 _split_cmdsubs 抽出另外判;層內被跳脫的反引號已遮罩,
++    那邊用 find 找結尾不會誤切。沒處理 bash 在反引號裡先把「反斜線接反斜線、反引號、錢字號」還原掉一個反斜線的那一步(引號外的反引號也一樣),
++    屬有心改寫的範圍。"""
+ 
+     def __init__(self, cmd: str):
+         self.cmd = cmd
+         self.out = []
+-        self.ctx = [[False, False, 0]]       # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度]
++        self.ctx = [[False, False, 0, False]]   # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度, 是反引號層]
+         self.pending = []
+         self.heredoc_ok = True
+ 
+     def run(self) -> str:
+         i = 0
+         while i < len(self.cmd):
+             i = self.step(i)
+         return "".join(self.out)
+ 
+     def step(self, i: int) -> int:
+         cur = self.ctx[-1]
++        ch = self.cmd[i]
++        if cur[3] and ch == "`":
++            self.ctx.pop()                   # 反引號層:第一個沒被跳脫的反引號收層
++            self.out.append(ch)
++            return i + 1
+         if cur[0]:
+             return self._in_single(i, cur)
+-        ch = self.cmd[i]
+         if ch == "\\":
+             return self._backslash(i, cur)
+         if self.cmd.startswith("$(", i) and not self.cmd.startswith("$((", i):
+-            self.ctx.append([False, False, 0])
++            self.ctx.append([False, False, 0, False])
+             self.out.append("$(")
+             return i + 2
+         if cur[1]:
+             return self._in_double(i, cur, ch)
+         return self._bare(i, cur, ch)
+ 
+     def _backslash(self, i: int, cur) -> int:
+         nxt = self.cmd[i + 1:i + 2]
+         if nxt == "\n":
+             return i + 2                     # 續行:bash 連反斜線帶換行一起拿掉
+@@ -349,39 +359,26 @@ class _Normalizer:
+             self.out.append(ch)
+         else:
+             self.out.append(_mask(ch))
+         return i + 1
+ 
+     def _in_double(self, i: int, cur, ch: str) -> int:
+         if ch == '"':
+             cur[1] = False
+             self.out.append(ch)
+         elif ch == "`":
+-            return self._double_tick(i)
++            self.ctx.append([False, False, 0, True])
++            self.out.append(ch)
+         else:
+             self.out.append(ch if ch == "$" else _mask(ch))    # 雙引號裡的 $ 照常展開("$D")
+         return i + 1
+ 
+-    def _double_tick(self, i: int) -> int:
+-        """雙引號裡的反引號一樣會執行(bash 實測 echo "`git status`");原本跟其他字一起遮掉,裡面的繞閘就看不到
+-        (/code-review 實跑 echo "`git commit --no-verify`" 回空清單)。找到沒被跳脫的結尾反引號,中間那段當成
+-        新指令重整一趟,原樣包回反引號交給 _split_cmdsubs 抽出另外判;找不到結尾就照普通字遮掉(bash 本身也會報錯)。
+-        每段只重整一次,整趟仍是線性的。"""
+-        cmd, k = self.cmd, i + 1
+-        while k < len(cmd) and cmd[k] != "`":
+-            k += 2 if cmd[k] == "\\" else 1
+-        if k >= len(cmd):
+-            self.out.append(_mask("`"))
+-            return i + 1
+-        self.out.append("`" + _Normalizer(cmd[i + 1:k]).run() + "`")
+-        return k + 1
+-
+     def _bare(self, i: int, cur, ch: str) -> int:
+         special = self._bare_special(i, cur, ch)
+         if special is not None:
+             return special
+         if ch == "'":
+             cur[0] = True
+         elif ch == '"':
+             cur[1] = True
+         self.out.append(ch)
+         return i + 1
+@@ -415,21 +412,22 @@ class _Normalizer:
+         if self.heredoc_ok and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (i == 0 or cmd[i - 1] != "<"):
+             return self._heredoc_op(i)
+         if ch == "\n" and self.pending:
+             return self._drop_bodies(i)
+         return None
+ 
+     def _paren(self, i: int, cur, ch: str) -> int:
+         if ch == "(":
+             cur[2] += 1
+         elif cur[2] == 0:
+-            self.ctx.pop()
++            if not cur[3]:                   # 反引號層不靠括號收
++                self.ctx.pop()
+         else:
+             cur[2] -= 1
+         self.out.append(ch)
+         return i + 1
+ 
+     def _heredoc_op(self, i: int):
+         dash = self.cmd.startswith("<<-", i)
+         word, k = _read_delim(self.cmd, i + 2 + int(dash))
+         if not word:
+             return None
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f874cfeb..eddafc23 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -44445,20 +44445,23 @@ def t_bypass_ask_flags_real_bypass():
+         ("程序替換 <() 裡提交", "cat <(git commit --no-verify -m x)"),
+         ("程序替換 >() 裡推送", "diff <(true) >(git push --no-verify origin main)"),
+         ("程序替換之後的旗標", "git push <(echo x) --no-verify"),
+         ("指令替換裡提交", "x=$(git commit -n -m x)"),
+         ("引號裡的指令替換裡推送", 'echo "$(git push --no-verify)"'),
+         ("反引號裡推送", "echo `git push --no-verify`"),
+         ("雙引號裡的反引號推送", 'echo "`git push --no-verify`"'),
+         ("雙引號裡的反引號提交 -n", 'git commit -m "wip `git commit -n -m y`"'),
+         ("雙引號裡的反引號夾在字中間", 'echo "a`LUMOS_SKIP_X=1 git push`b"'),
+         ("雙引號裡的反引號內有引號", 'echo "`git push --no-verify \'x y\'`"'),
++        ("雙引號裡的反引號內有子殼層括號", 'echo "`(true); git push --no-verify`"'),
++        ("指令替換裡雙引號裡的反引號", 'echo "$(echo "`git push --no-verify`")"'),
++        ("雙引號裡的反引號收掉後外層還有 -n", 'git commit -m "a `date` b" -n'),
+         ("巢狀指令替換裡推送", "echo $(echo $(git push --no-verify))"),
+         ("ANSI \\c 之後推送", "git push $'\\c' --no-verify"),
+         ("ANSI \\c 之後 -n", "git commit $'\\c' -n"),
+         ("ANSI \\c 分號之後", "echo $'\\c'; git push --no-verify"),
+         ("ANSI \\c 換行之後", "echo $'\\c'\ngit push --no-verify"),
+         ("空字串參數之後 ANSI -n", "git commit -m '' -$'n'"),
+         ("空字串參數之後續行切開旗標", "git commit -m '' --no-\\\nverify"),
+         ("空字串參數 -n", 'git commit -m "" -n'),
+         ("config 設成空字串(單引號)", "git config core.hooksPath ''"),
+         ("推送選項縮寫吃掉暫存路徑", "git push --no-verify --push-o /tmp origin main"),

@@ -1,0 +1,148 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md b/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md
+index 56b0f9e1..fe5a1ba8 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/代理繞閘字樣問人_計劃.md
+@@ -83,21 +83,21 @@ REVISIT:2026-12-14 決定要不要接 Codex 適配(Codex 的 Bash 前事件與
+   - 預篩自己包一層 try/except,任何例外都直接結束、不輸出(放行;這一層不記事件,因為記事件要先跑 git 子程序)。這個入口形狀跟鄰居掛鉤不同(鄰居在 `main` 裡讀 stdin),原因就是預篩要在 `guard` 之外,程式註解寫明。
+   - 理由:`guard` 每次都會跑一次 `git rev-parse` 並寫一筆存活事件,存活事件檔滿 512KB 會修剪成最後 2000 行、而且總大小在上限一半以內;每條 Bash 都記會一天灌數千筆,把其他掛鉤的存活紀錄擠出去,讓 `lumos enforcement` 對它們判過期。
+ - **過了預篩**才進 `guard("pretooluse-bypass-ask-hook", __file__, main, swallow=True)`:
+   - 事件名跟 `enforcement_status` 的列名同字串,鄰居都這樣(`_hook_recent_ok` 拿列名比對事件的 hook 欄)。
+   - `swallow=True` 讓任何例外都放行(這道是問人層,不是安全邊界),例外由 `guard` 記成 error。`main` 內部若自己吞了例外,要 `mark("error", …)`,不能記成 ok。
+   - 存活事件不加任何「問了」的備註(只記活著沒,見 PRIOR-ART)。
+ - **逾時預算**:照抄鄰居掛鉤從 `_BUDGET_RATIO` 到 `return max(_BUDGET_FLOOR,…)` 的逐字複本(有測試要求各份一模一樣),吃安裝時附的 `--budget 5`;下面查遠端、查工作樹的 git 子程序用 `_inner_budget()` 當逾時,逾時或失敗當「判不出」處理。一次判斷最多跑 4 個 git 子程序(`MAX_GIT_CALLS`),同樣的查詢只跑一次;跑滿之後一律當「查不到」(=不豁免、照問)。任何一次逾時或起不來、或共用預算已經用到下限(例如找 repo 根就花掉大半,代碼審 r4 併發資源席),這次判斷就不再跑 git(git 卡住時連續等滿會把整支推過 5 秒,代碼審 r2 實測 6.5 秒);預算從進場就開始算。只用共用的 `_inner_budget`,不另寫一套預算算法(代碼審 r3 架構對齊席)。沒有上限時,幾百段都要查 git 的指令會超過 5 秒外層預算、被砍掉而放行(代碼審 r1 實測 262 段約 7 秒)。
+ - **長度上限**:指令超過 2 萬字就不做結構分類,直接走下面的「字面判」。2 萬字內各種最壞形狀(深層 `$(`、大量引號、未閉合 heredoc、ANSI 引號、反斜線、大量 cd 與 mkdir)實測都在 0.11 秒、1MB 內(2026-10-14)。
+ - **一趟前處理**(在切段之前,自己逐字掃、追蹤引號狀態;`$(` 裡重開一層引號狀態——訊息用 `"$(cat <<'EOF' … don't … EOF)"` 寫時,內文的撇號不能算進外層,代碼審 r1):
+   - 註解:只有引號外、詞首的 `#`(前一個字是空白、換行或 `;&|()`)才把到行尾當註解拿掉;`fix#1` 這種詞中間的 `#` 是普通字(bash 同),切詞器自己的註解處理關掉。
+-  - 引號遮罩:引號裡的 `();|&<>`、換行、`#`、反引號先換成私用區字元,切完詞再還原——引號裡的括號、分號不會被當成分段;切詞當下就標好哪些詞是分隔符。(更正 2026-10-15:反引號只在單引號裡該遮;雙引號裡的反引號 bash 照樣執行,改成找到結尾反引號、中間那段重整後抽出來另外判,見家筆記的事故行)
++  - 引號遮罩:引號裡的 `();|&<>`、換行、`#`、反引號先換成私用區字元,切完詞再還原——引號裡的括號、分號不會被當成分段;切詞當下就標好哪些詞是分隔符。(更正 2026-10-15:反引號只在單引號裡該遮;雙引號裡的反引號 bash 照樣執行,改成跟 `$(` 一樣開一層反引號層、照引號外規則解析,收層後抽出來另外判,見家筆記的事故行)
+   - ANSI 引號 `$'…'` 解出內容(`\n`、`\'`、`\xHH`、`\uHHHH`、`\UHHHHHHHH`、八進位 `\NNN`、`\cX`)後當成引號裡的字(`git commit -$'n'` 就是 `-n`);`$"…"`(語系翻譯字串)照雙引號看;被反斜線跳脫的字元一律當普通字遮罩(跳脫的反引號、分號都不是結構)。
+   - 續行:引號外與雙引號裡的「反斜線加換行」照 bash 直接拿掉、前後接起來(`--no-\⏎verify` 就是 `--no-verify`),在這一趟裡做——另開一趟只追引號的話,註解或 heredoc 裡的撇號會讓它判錯(代碼審 r2)。
+   - ANSI 解碼原地比對、不切片(線性時間);`\c` 後面緊接結尾單引號時照字面留下,不吃掉那個引號(代碼審 r4 邊界輸入席:吃掉會讓引號一路開到指令尾、後面全被當成字串)。
+   - 單引號裡與被跳脫的 `$` 是字面,不展開變數(`cd '$D'` 進的是名叫 `$D` 的目錄,代碼審 r4 正確性席);雙引號裡的 `"$D"` 照常展開。
+   - 導向前的檔案代號(`2>` 的 2、`{fd}>` 的 {fd})在前處理就標記,切詞後連同導向剔除——不靠「是不是數字」猜(`git commit -m 1 >x -n` 的 1 是 `-m` 的值,代碼審 r3 正確性席);`)>`、`;>` 這種黏在一起的標點拆成分隔與導向。
+   - 預篩與「切不動時的字面判」共用同一個字樣比對;預篩比對原文加上前處理後的文字,超過 2 萬字只看原文(代碼審 r4 併發資源席:超長指令的前處理撐破預算);字樣另認拆掉或改名 `core` 區段與引入設定檔(代碼審 r4 正確性席:分類器會問的 `--remove-section core` 原本過不了預篩)。
+   - 預篩用同一套前處理(接續行、解 ANSI 引號)後的文字再比字樣,分類器認得的寫法不會在入口就被放行(代碼審 r3 邊界輸入席、規格符合席)。
+   - 分隔符與導向在切詞當下看原始字元認定(`_Sep`、`_Redir`),所以指令本身就含私用區字元也只會還原成普通字,不會變成結構。
+   - heredoc:
+   - 只認不在引號裡的 `<<WORD`、`<<-WORD`、`<<'WORD'`、`<<"WORD"`;`<<<`(here-string)、`$((…<<…))` 算式與指令位置的 `(( 1<<EOF ))` 算術命令不算(後者被當 heredoc 會把下一行的真指令當內文剝掉,代碼審 r4 資安席)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md b/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
+index d500cf02..754997c3 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
++++ b/docs/lumos-toolchain-knowledge/Systems/代理繞閘問人.md
+@@ -36,12 +36,12 @@ summary: |-
+ 
+ ## 管什麼
+ 
+ - `scripts/hooks/claude/bypass-ask-hook.py`:讀一次 stdin、在記事件之外先做便宜的預篩;過了預篩才進共用的存活事件包裝,解析指令(剝 heredoc、換掉指令替換、`shlex` 切段、任何不在引號裡的 git 詞開始一條 git 指令),判命中與拋棄式,命中回 `permissionDecision: "ask"`。
+ - 註冊、安裝名單、防護狀態那一列、錨點與工具自裝檔名單在 [[Systems/lumos-cli-lifecycle]] 那邊。
+ 
+ ## 不管什麼
+ 
+ - 不擋、不改指令、不記問了幾次(存活事件只記活著沒)。
+ - 不管 Codex(Codex 的 Bash 前事件回覆形狀不同,適配另見計劃 REVISIT)。
+-- 不防有心改寫:變數拼接、別名(shell 與 git 的)、腳本、`bash -c`、`eval`、餵給 shell 的 heredoc、直接改 `.git/config`、不經 `git push` 的送出、用 Edit/Write 工具改設定都攔不到。指令替換(`$(…)`、反引號,含雙引號裡的反引號)與程序替換裡的指令會抽出來另外判,但目錄一律當判不出、不給拋棄式豁免;bash 在反引號裡會先把「反斜線接反斜線、反引號、錢字號」還原掉一個反斜線再解析,這一步沒做,所以靠它藏起來的寫法(例如反引號裡用跳脫反引號再包一層)攔不到,引號內外都一樣。
++- 不防有心改寫:變數拼接、別名(shell 與 git 的)、腳本、`bash -c`、`eval`、餵給 shell 的 heredoc、直接改 `.git/config`、不經 `git push` 的送出、用 Edit/Write 工具改設定都攔不到。指令替換(`$(…)`、反引號,含雙引號裡的反引號)與程序替換裡的指令會抽出來另外判,但目錄一律當判不出、不給拋棄式豁免;bash 在反引號裡會先把「反斜線接反斜線、反斜線接反引號」還原掉一個反斜線再解析,這一步沒做,所以靠它藏起來的寫法(例如反引號裡用跳脫反引號再包一層)攔不到,引號內外都一樣;反斜線接錢字號遮罩後仍是錢字號,攔得到。
+ - 自己寫一套切段器,不重用收工圖譜同步檢查那支掛鉤([[Systems/graph-sync-coverage]])裡的切段函式:那支不追蹤引號與 heredoc、作者自註「Quote-aware 不嚴格」,而且檔名帶連字號、各自獨立安裝,不能互相 import。
+diff --git a/scripts/hooks/claude/bypass-ask-hook.py b/scripts/hooks/claude/bypass-ask-hook.py
+index 3eb9e8ae..5ad5d9c9 100755
+--- a/scripts/hooks/claude/bypass-ask-hook.py
++++ b/scripts/hooks/claude/bypass-ask-hook.py
+@@ -303,21 +303,21 @@ def _unmask(tok: str) -> str:
+ 
+ 
+ class _Normalizer:
+     """一趟掃過指令:追蹤引號(`$(` 與雙引號裡的反引號各重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
+     結構字元換成遮罩字元、ANSI 引號解出內容後當成引號裡的字。heredoc 找不到結束字就停止剝(寧可多問)。
+     整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。
+     雙引號裡的反引號一樣會執行(bash 實測 echo "`git status`"),原本跟其他字一起遮掉、裡面的繞閘看不到
+     (2026-10-14 原生 /code-review 實跑 echo "`git commit --no-verify`" 回空清單)。現在跟 `$(` 同一套:開一層反引號層,
+     裡面照引號外的規則走,遇到第一個沒被跳脫的反引號收掉(不論那時在不在內層引號裡,同 bash);反引號層沒有括號深度可數,
+     層內的右括號只照字輸出、不收層。輸出保留成對反引號,交給 _split_cmdsubs 抽出另外判;層內被跳脫的反引號已遮罩,
+-    那邊用 find 找結尾不會誤切。沒處理 bash 在反引號裡先把「反斜線接反斜線、反引號、錢字號」還原掉一個反斜線的那一步(引號外的反引號也一樣),
++    那邊用 find 找結尾不會誤切。層內註解只吃到下一個反引號為止。沒處理 bash 在反引號裡先把「反斜線接反斜線、反斜線接反引號」還原掉一個反斜線的那一步(引號外的反引號也一樣),
+     屬有心改寫的範圍。"""
+ 
+     def __init__(self, cmd: str):
+         self.cmd = cmd
+         self.out = []
+         self.ctx = [[False, False, 0, False]]   # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度, 是反引號層]
+         self.pending = []
+         self.heredoc_ok = True
+ 
+     def run(self) -> str:
+@@ -400,21 +400,24 @@ class _Normalizer:
+         if fd:
+             self.out.append(_FD_MARK + "".join(_mask(c) for c in fd.group(1)))
+             return fd.end(1)                 # `2>`、`{fd}>` 的檔案代號:標記起來,切詞後連同導向剔除
+         if cmd.startswith("$'", i):
+             text, j = _ansi_decode(cmd, i)
+             self.out.append("".join(_mask(c) for c in text) or "''")
+             return j
+         if ch in "()" and len(self.ctx) > 1:
+             return self._paren(i, cur, ch)
+         if ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
+-            k = cmd.find("\n", i)
++            t = cmd.find("`", i) if cur[3] else -1   # 反引號層:bash 先找到結尾反引號才解析裡面,註解吃不到它(r2 單reviewer)
++            k = cmd.find("\n", i, t) if t != -1 else cmd.find("\n", i)   # 換行只找到結尾反引號為止,不然每個註解都掃到尾
++            if k == -1:
++                k = t
+             return len(cmd) if k == -1 else k
+         if self.heredoc_ok and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (i == 0 or cmd[i - 1] != "<"):
+             return self._heredoc_op(i)
+         if ch == "\n" and self.pending:
+             return self._drop_bodies(i)
+         return None
+ 
+     def _paren(self, i: int, cur, ch: str) -> int:
+         if ch == "(":
+             cur[2] += 1
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index eddafc23..5703b1ad 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -44448,20 +44448,22 @@ def t_bypass_ask_flags_real_bypass():
+         ("指令替換裡提交", "x=$(git commit -n -m x)"),
+         ("引號裡的指令替換裡推送", 'echo "$(git push --no-verify)"'),
+         ("反引號裡推送", "echo `git push --no-verify`"),
+         ("雙引號裡的反引號推送", 'echo "`git push --no-verify`"'),
+         ("雙引號裡的反引號提交 -n", 'git commit -m "wip `git commit -n -m y`"'),
+         ("雙引號裡的反引號夾在字中間", 'echo "a`LUMOS_SKIP_X=1 git push`b"'),
+         ("雙引號裡的反引號內有引號", 'echo "`git push --no-verify \'x y\'`"'),
+         ("雙引號裡的反引號內有子殼層括號", 'echo "`(true); git push --no-verify`"'),
+         ("指令替換裡雙引號裡的反引號", 'echo "$(echo "`git push --no-verify`")"'),
+         ("雙引號裡的反引號收掉後外層還有 -n", 'git commit -m "a `date` b" -n'),
++        ("雙引號裡的反引號內 case 的單邊右括號", 'echo "`case a in a) git push --no-verify;; esac`"'),
++        ("雙引號裡的反引號內有註解", 'echo "`echo a # c`" ; git push --no-verify'),
+         ("巢狀指令替換裡推送", "echo $(echo $(git push --no-verify))"),
+         ("ANSI \\c 之後推送", "git push $'\\c' --no-verify"),
+         ("ANSI \\c 之後 -n", "git commit $'\\c' -n"),
+         ("ANSI \\c 分號之後", "echo $'\\c'; git push --no-verify"),
+         ("ANSI \\c 換行之後", "echo $'\\c'\ngit push --no-verify"),
+         ("空字串參數之後 ANSI -n", "git commit -m '' -$'n'"),
+         ("空字串參數之後續行切開旗標", "git commit -m '' --no-\\\nverify"),
+         ("空字串參數 -n", 'git commit -m "" -n'),
+         ("config 設成空字串(單引號)", "git config core.hooksPath ''"),
+         ("推送選項縮寫吃掉暫存路徑", "git push --no-verify --push-o /tmp origin main"),
+@@ -44504,21 +44506,21 @@ def t_bypass_ask_flags_real_bypass():
+ 
+ 
+ def t_bypass_ask_ignores_mentions():
+     """[代理繞閘字樣問人 S2]只是字面提到、讀設定、吃值旗標、或 LUMOS_SKIP 設在 git 與 lumos 以外的程式前 → 不輸出、放行。"""
+     m = _bypass_hook()
+     cases = (
+         'grep -rn "--no-verify" scripts/hooks/pre-push',
+         "grep -n 'core.hooksPath\\|LUMOS_SKIP_' scripts/lumos | head",
+         'echo "不要用 git push --no-verify"',
+         'echo "\\`git push --no-verify\\`"',     # 雙引號裡被跳脫的反引號只是字面字
+-        'echo "反引號沒關 `git status"',             # 沒有結尾反引號:照普通字看(bash 本身也會報錯)
++        'echo "反引號沒關 `git status"',             # 沒有結尾反引號:反引號層開到指令尾,裡面沒有繞閘就不問(bash 本身也會報錯)
+         'git commit -m "docs: 說明 --no-verify 與 core.hooksPath 的風險"',
+         "sed -n 1,40p scripts/install-hooks.sh; git config core.hooksPath",
+         "git config --get core.hooksPath",
+         "git config --get-all core.hooksPath",
+         "LUMOS_SKIP_REREAD_CHECK=1 python3.14 scripts/test_lumos.py -k reread",
+         "git log --grep=no-verify --oneline",
+         "sed -n 1,20p scripts/hooks/pre-commit; git commit -m x",
+         "cat <<'EOF' > note.md\ngit push --no-verify\nEOF",
+         'cat <<-"END" > n.md\n\tgit commit -n -m x\n\tEND\ngit status',
+         "cat <<EOF | tee a.md\nLUMOS_SKIP_X=1 git push\nEOF\necho done",
