@@ -96397,6 +96397,8 @@ def t_templates_rm_literal_absolute_path():
 
 # ── 工具鏈代碼審資安與資源鏡頭範圍(Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃 S1–S6、S10)──
 # 預期字串逐字取自計劃〈做法〉,不從產品碼或範本抽(獨立基準)
+_LENS_SCOPE_LINE = ("  鏡頭範圍: 帳本所在 repo 是工具鏈本 repo——被審分支也在這個 repo 時,派資安席照 templates.md §7.8〈工具鏈三類〉、"
+                    "派併發與資源鏡頭改資源、§3 第 1 點併發兩問不問;審別的 repo 的分支時看那個 repo 的根自己判(消費專案照舊)")
 # 改動前 §7.8 圍欄裡「逐類想過」底下那段原文(36dab5aa 版逐字複製),〈消費專案六類〉要跟它一字不差
 _SEC_SIX_CLASSES_ORIG = (
     "1. 不可信輸入流到危險操作:SQL / NoSQL / 命令 / 路徑 / 模板注入、XXE(XML 外部實體注入)、反序列化、eval 類\n"
@@ -96417,6 +96419,130 @@ _IDEMP_ORIG = ("   · 冪等與併發：同一操作重跑、或兩個請求同�
 _TOOLCHAIN_DOC_LINE = ("工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;"
                        "跨 repo 派工時看被審 repo 的根自己判;消費專案照舊")
 _TOOLCHAIN_DOC_LINE_06 = "工具鏈本 repo:資安席只看三類,見 templates.md §7.8〈工具鏈三類〉;消費專案照舊"
+
+
+def _lens_next(vault, loop, *extra):
+    """跑 loop next 一次,回 (rc, 人讀各行(去掉每次隨機抽的 canary_type 行), JSON)。"""
+    import json as _j
+    rt = run(vault, "loop", "next", loop, "--orchestrator", "claude", *extra)
+    rj = run(vault, "loop", "next", loop, "--orchestrator", "claude", "--json", *extra)
+    lines = [ln for ln in rt.stdout.splitlines() if not ln.startswith("  canary_type:")]
+    return rt.returncode, lines, _j.loads(rj.stdout.strip().splitlines()[-1])
+
+
+def _mk_lens_dirs():
+    root = Path(tempfile.mkdtemp(prefix="gctl-lens-"))
+    tc, cons = root / "tc", root / "cons"
+    (tc / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (tc / "skills" / "lumos-project-notes" / "SKILL.md").write_text("# s\n", encoding="utf-8")
+    cons.mkdir()
+    return tc, cons
+
+
+def t_loop_next_lens_scope_toolchain_vs_consumer():
+    """[鏡頭範圍 S1]code- 編號帶 --repo 指到放了 skills/lumos-project-notes/SKILL.md 的目錄:人讀多一行固定的「鏡頭範圍」、
+    緊接在應派席位之後;--json 的 lens_scope=toolchain。同一夾具換成沒有那支檔的目錄:不印、lens_scope=default,
+    而且兩份人讀輸出拿掉那一行之後完全相同(消費專案輸出逐字不變)。"""
+    vault = mkvault()
+    tc, cons = _mk_lens_dirs()
+    rc_t, lt, jt = _lens_next(vault, "code-x", "--tier", "high", "--repo", str(tc))
+    rc_c, lc, jc = _lens_next(vault, "code-x", "--tier", "high", "--repo", str(cons))
+    hits = [ln for ln in lt if ln.strip().startswith("鏡頭範圍:")]
+    check("①工具鏈本 repo:印一行固定的鏡頭範圍(含 §7.8)", hits == [_LENS_SCOPE_LINE] and "§7.8" in hits[0] if hits else False, str(hits))
+    seat_idx = [i for i, ln in enumerate(lt) if ln.startswith("  應派:")]
+    check("②那一行緊接在最後一席應派之後", bool(seat_idx) and hits and lt.index(_LENS_SCOPE_LINE) == seat_idx[-1] + 1,
+          "\n".join(lt[:20]))
+    check("③--json lens_scope=toolchain", jt.get("lens_scope") == "toolchain", str(jt.get("lens_scope")))
+    check("④消費專案:不印鏡頭範圍、lens_scope=default", not any("鏡頭範圍" in ln for ln in lc) and jc.get("lens_scope") == "default",
+          str(jc.get("lens_scope")))
+    check("⑤兩份人讀輸出拿掉那一行之後完全相同、退出碼相同", [ln for ln in lt if ln != _LENS_SCOPE_LINE] == lc and rc_t == rc_c,
+          f"rc {rc_t}/{rc_c}")
+
+
+def t_loop_next_lens_scope_design_untouched():
+    """[鏡頭範圍 S2]工具鏈本 repo 裡,設計審編號與沒連字號的舊 code… 編號都不印鏡頭範圍、lens_scope=default;
+    對照組 code- 編號在同一個目錄會印(證明夾具真的是工具鏈本 repo)。"""
+    vault = mkvault()
+    tc, _cons = _mk_lens_dirs()
+    _rc, l0, j0 = _lens_next(vault, "code-lensctl", "--tier", "high", "--repo", str(tc))
+    check("★前置★ 同目錄的 code- 編號會印", _LENS_SCOPE_LINE in l0 and j0.get("lens_scope") == "toolchain", str(j0.get("lens_scope")))
+    for loop, tier in (("dz-lens", "standard"), ("codelens9", "standard")):
+        _rc, ln, jn = _lens_next(vault, loop, "--tier", tier, "--repo", str(tc))
+        check(f"{loop}:不印鏡頭範圍、lens_scope=default", not any("鏡頭範圍" in x for x in ln) and jn.get("lens_scope") == "default",
+              str(jn.get("lens_scope")))
+
+
+def t_loop_next_lens_scope_loose_code_ids():
+    """[鏡頭範圍 r1 邊2]釘住現況:編號只看開頭是不是 `code-`,所以 `code-`(後面空)、`code- x`(半形空白)、
+    `code-　x`(全形空白)都當代碼審——工具鏈本 repo 印那一行、lens_scope=toolchain。將來收緊編號格式要改這支。"""
+    vault = mkvault()
+    tc, _cons = _mk_lens_dirs()
+    for loop in ("code-", "code- x", "code-　x"):
+        _rc, ln, jn = _lens_next(vault, loop, "--tier", "high", "--repo", str(tc))
+        check(f"{loop!r}:印鏡頭範圍那一行、lens_scope=toolchain", _LENS_SCOPE_LINE in ln and jn.get("lens_scope") == "toolchain",
+              str(jn.get("lens_scope")))
+
+
+def t_loop_next_lens_scope_marker_odd_kinds():
+    """[鏡頭範圍 r1 邊3]判別要那支檔是一般檔:SKILL.md 是目錄、是壞掉的符號連結、--repo 指到不存在的路徑,
+    三種都不印那一行、lens_scope=default、退出碼跟消費專案相同、不吐 traceback。對照組是同一夾具的正常 SKILL.md。"""
+    vault = mkvault()
+    tc, cons = _mk_lens_dirs()
+    rc_c, _lc, _jc = _lens_next(vault, "code-odd", "--tier", "high", "--repo", str(cons))
+    _rc, l0, j0 = _lens_next(vault, "code-odd", "--tier", "high", "--repo", str(tc))
+    check("★前置★ 正常 SKILL.md 判成 toolchain", _LENS_SCOPE_LINE in l0 and j0.get("lens_scope") == "toolchain", str(j0.get("lens_scope")))
+    root = tc.parent
+    as_dir = root / "as-dir"
+    (as_dir / "skills" / "lumos-project-notes" / "SKILL.md").mkdir(parents=True)
+    dangling = root / "dangling"
+    (dangling / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (dangling / "skills" / "lumos-project-notes" / "SKILL.md").symlink_to(root / "沒有這支檔.md")
+    for name, target in (("SKILL.md 是目錄", as_dir), ("SKILL.md 是壞掉的符號連結", dangling), ("--repo 不存在", root / "不存在")):
+        rt = run(vault, "loop", "next", "code-odd", "--orchestrator", "claude", "--tier", "high", "--repo", str(target))
+        rc, ln, jn = _lens_next(vault, "code-odd", "--tier", "high", "--repo", str(target))
+        check(f"{name}:不印那一行、lens_scope=default、退出碼同消費專案、無 traceback",
+              not any("鏡頭範圍" in x for x in ln) and jn.get("lens_scope") == "default" and rc == rc_c
+              and "Traceback" not in rt.stderr, f"{jn.get('lens_scope')} rc {rc}/{rc_c}")
+
+
+def t_loop_next_lens_scope_fail_open():
+    """[鏡頭範圍 S3]同一行程內把取 repo 根那一步換成丟例外的版本:不印鏡頭範圍、lens_scope=default,
+    退出碼與其他輸出跟沒丟例外的消費專案相同(文字與 JSON 兩種模式)。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _j
+    m = _load_lumos_inproc()
+    vault = mkvault()
+    env = m.Env(vault)
+    skill = vault.parent / "skills" / "lumos-project-notes" / "SKILL.md"
+
+    def go(as_json):
+        buf = _io.StringIO()
+        with _ctx.redirect_stdout(buf), _ctx.redirect_stderr(_io.StringIO()):
+            rc = m.cmd_loop_next(env, "code-lensfo", tier="high", as_json=as_json, orchestrator="claude")
+        if as_json:
+            d = _j.loads(buf.getvalue().strip().splitlines()[-1])
+            d.pop("canary_type", None)
+            return rc, d
+        return rc, [ln for ln in buf.getvalue().splitlines() if not ln.startswith("  canary_type:")]
+    base_t, base_j = go(False), go(True)   # 消費專案(vault 上層沒有 SKILL.md)
+    skill.parent.mkdir(parents=True)
+    skill.write_text("# s\n", encoding="utf-8")
+    ok_t, ok_j = go(False), go(True)
+    check("★前置★ 不丟例外時,vault 上層是工具鏈本 repo → 印鏡頭範圍、toolchain",
+          _LENS_SCOPE_LINE in ok_t[1] and ok_j[1].get("lens_scope") == "toolchain", str(ok_j[1].get("lens_scope")))
+
+    def boom(*_a, **_k):
+        raise RuntimeError("注錯:取 repo 根炸掉")
+    keep = m._vault_repo_root
+    m._vault_repo_root = boom
+    try:
+        bad_t, bad_j = go(False), go(True)
+    finally:
+        m._vault_repo_root = keep
+    check("①丟例外:文字輸出與退出碼跟消費專案相同(不印鏡頭範圍、無 traceback)", bad_t == base_t, f"{bad_t[0]}/{base_t[0]}")
+    check("②丟例外:JSON 與退出碼跟消費專案相同(lens_scope=default)", bad_j == base_j and bad_j[1].get("lens_scope") == "default",
+          str(bad_j[1].get("lens_scope")))
 
 
 def _tpl_text():
@@ -96536,6 +96662,29 @@ def t_toolchain_lens_scope_doc_sync():
     t06 = (repo / "skills" / "lumos-project-notes" / "commands" / "06-代碼審與推送.md").read_text(encoding="utf-8")
     row = next((ln for ln in t06.split("\n") if ln.startswith("| 「這批改動風險多高?要不要過審?」")), "")
     check("⑤06 子檔第一列帶工具鏈範圍", _TOOLCHAIN_DOC_LINE_06 in row, row[:200])
+
+
+def t_toolchain_lens_scope_note_pointers():
+    """[鏡頭範圍 r1 合4、合6]筆記的指標跟規則對得上:bound-tests-gate 那條 sitecustomize WHY 的括號寫「讀寫與執行越界」、
+    寫明要先刻意放檔才成立、非刻意殘留的 PYTHONPATH 照審;兩條 KEY 句尾指 d8 不寫「新決策」(會隨時間失去指向);
+    範本說明的家 Systems/每輪修補差異派工 的 about_code 列了 skills/lumos-code-loop/reference.md。"""
+    kb = "docs/lumos-toolchain-knowledge/"
+    _need_src(kb + "Systems/bound-tests-gate.md", kb + "Systems/pitfalls-code-loop.md", kb + "Projects/代碼審資安席_計劃.md",
+              kb + "Systems/每輪修補差異派工.md")
+    repo = Path(GRAPHCTL).resolve().parent.parent
+
+    def rd(rel):
+        return (repo / kb / rel).read_text(encoding="utf-8")
+    why = next((ln for ln in rd("Systems/bound-tests-gate.md").split("\n") if ln.startswith("WHY:") and "sitecustomize" in ln), "")
+    check("①sitecustomize 那條 WHY:括號寫讀寫與執行越界", "提示注入、讀寫與執行越界、非刻意的一步繞過" in why, why[:300])
+    check("②那條 WHY:寫明要先刻意放一支 sitecustomize、非刻意殘留的 PYTHONPATH 屬第 ③ 類",
+          "要先刻意放一支 sitecustomize" in why and "非刻意殘留、別的程序帶進來的 PYTHONPATH 屬那條 RULE 的第 ③ 類" in why, why[:300])
+    for rel in ("Systems/pitfalls-code-loop.md", "Projects/代碼審資安席_計劃.md"):
+        t = rd(rel)
+        check(f"③{rel} 的 KEY 句尾指 d8", "(工具鏈本 repo 的派工範圍見 Systems/pitfalls-code-loop d8 與 RULE)" in t
+              and "新決策與 RULE)" not in t, "")
+    fm = rd("Systems/每輪修補差異派工.md").split("\n---", 1)[0]
+    check("④每輪修補差異派工 的 about_code 列了 reference.md", "\n  - skills/lumos-code-loop/reference.md" in fm, "")
 
 
 def t_lumos_plugin_install_edge_cases():
