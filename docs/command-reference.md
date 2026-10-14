@@ -63,7 +63,7 @@ lumos guard scaffold / bind / audit    # scaffold a test → bind it → indepen
 lumos guard kill <node>          # break it for real in a sandbox and check the test goes red
 lumos signoff <node> --note ".." # a human sign-off, for the half a tool can't answer
 lumos spec-trace <plan node>     # per clause: bound to a test / manual / untagged / dangling (legacy claim column kept for reference)
-lumos spec-gate <plan node>      # run this once a design is written: clause grammar, bindings, rollback section (blocks); runs the bound tests once: for low-risk plans red/green is a pass condition (blocks if unmet), high-risk only prints; red contract tests of dependent features always block
+lumos spec-gate <plan node>      # run this once a design is written: clause grammar, bindings, rollback section (blocks); runs the bound tests once: for low-risk plans red/green is a pass condition (blocks if unmet), high-risk only prints; red contract tests of dependent features always block; a low-risk plan whose not-doing list skipped a risky word needs one light design review before push (if it finds a major: a full `<id>-std` design review that passes the disposal gate)
 ```
 
 Test quality (read-only scans and evidence collection; it does not judge business answers):

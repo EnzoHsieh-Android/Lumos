@@ -17,7 +17,7 @@ summary: |-
   KEY:審查強度跟風險面走——RISK_CLASSES 四類(payment/external-send/prod-irreversible/self-governance)零參數二值分級;high=K3/cap≥8/關 fail-open(degraded 不放行、endorsed-after-refute 不算綠燈,只剩乾淨 endorsed 一條自動路);standard 行為分毫不變
   KEY:機械脊椎=收檔不信 orchestrator 自報 converged——wrapper 自算 tier 重驗 gate,謊報低 tier 拉不低門檻;SPEC 空/不存在有前置守衛(errexit-safe 走 requeue 非 rc1 暴死)
   KEY:assess_spec=## 切分→黑名單剝除(方案評比/canary 相容性/誠實天花板/審計修正紀錄;前提節保留)→防呆(節數<2 或字元<200 回退全文偏嚴)→剝 inline-code+檔名→assess
-  KEY:誠實天花板——分級量表面類別非難度(純內部難 gap 漏到 standard,靠 canary/cross/人兜底);ratchet/high 條文是 prompt 層散文自律(機械兜底=收檔重驗);escalate 輪 cap 不可投遞(誠實收窄);偽造 canary log 可穿(同 evidence-gate 天花板);\b 詞界對中文緊鄰 false negative(prod環境不命中,保守方向)
+  KEY:誠實天花板——分級量表面類別非難度(純內部難 gap 漏到 standard,靠 canary/cross/人兜底);ratchet/high 條文是 prompt 層散文自律(機械兜底=收檔重驗);escalate 輪 cap 不可投遞(誠實收窄);偽造 canary log 可穿(同 evidence-gate 天花板);英文危險詞的詞界不把漢字與底線算詞字元,中文緊鄰也命中(2026-10-14 規格閘代碼審 r11 起;以程式碼為準)
   KEY:對 RHB 病灶(難題上審計員放水)只買到更多次揮棒,不降單輪放水率——縱深非解藥
   DEP:[[convergence-evidence-gate]](收檔重驗消費 --gate)｜[[lumos-refcheck]]｜gap_select.requeue_unconverged
   TEST:TestDifficulty 11 + TestPromptPlaceholders 1 + TestConfidenceReportTier 1(unittest)+ t_loop_gate_need3(CLI);44+353 全綠
