@@ -1,0 +1,588 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 7bc86da5..6c7fbb42 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -2159,33 +2159,35 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+             warn(dangling, f"有 {len(dangling)} 條合約綁的測試在程式碼裡找不到(懸空):",
+                  "建立該測試,或修正 [test:] 名稱")
+         if unaudited:
+             warn([f"{r}: {first_line(c, 70)}" for r, c in unaudited],
+                  f"發現 {len(unaudited)} 條 ★INVARIANT★ 綁了測試但合法性未經獨立審計 "
+                  "(『是不是真鐵則 / 綁的測試夠不夠格』仍由提出者自評 → maker/checker 破口):",
+                  "派一個無對話脈絡的乾淨 agent 判合法性(別餵你的結論),過了用 "
+                  "`lumos guard audit <node> \"<KEY 行子字串>\"` 留痕")
+     # 殘留(Projects/審查收斂規則_計劃〈做法〉3、5):[residual:] 指到的決策要還在、沒被翻案;殘留索引要跟圖譜一致(pitfalls 分級讀它)
+     try:
+-        _res_bad, _res_chk, _res_idx = _doctor_residual_lines(env, notes)
++        _res_bad, _res_chk, _res_idx, _res_old = _doctor_residual_lines(env, notes)
+     except Exception as _re_ex:   # 這段算不出來不讓整支 doctor 中斷,但要講(不是靜默當沒問題)
+-        _res_bad, _res_chk, _res_idx = [], [], [f"殘留檢查算不出來({_re_ex.__class__.__name__})"]
++        _res_bad, _res_chk, _res_idx, _res_old = [], [], [f"殘留檢查算不出來({_re_ex.__class__.__name__})"], []
+     if _res_bad:
+         warn(_res_bad, f"有 {len(_res_bad)} 個 [residual:] 殘留標記指到的決策不在了(找不到或已被翻案)——那幾型壞法沒有依據可看:",
+              "照每行說的去那篇補回決策,或用 lumos guard residual --remove 拿掉標記後重審這條合約")
+     if _res_chk:
+         # 跟 guard residual --add 寫入當下同一套驗法(_residual_check,代碼審 code-審查收斂規則 r1 G3):手寫標記、沒問過第二個代理的都在這裡現形
+         warn(_res_chk, f"有 {len(_res_chk)} 個帶殘留的合約不合格(沒經過第二個代理的問答、決策沒寫 checker:、或合約沒審計)——殘留本身沒有依據:",
+              "照每行補問答(lumos guard residual-ask)、補決策的 checker:、補審計;做不到就用 lumos guard residual --remove 拿掉標記後重審")
+     if _res_idx:
+         warn(_res_idx, f"殘留索引({_RESIDUAL_INDEX_REL})跟圖譜對不上 {len(_res_idx)} 處——pitfalls 讀它決定要不要升 high,對不上就可能漏升:",
+              "lumos guard residual --reindex 重建後提交")
++    if _res_old:
++        warn(_res_old, "殘留索引是舊格式(升級前產生的,不是內容對不上):", "lumos guard residual --reindex 補上 notes 欄後提交")
+     print()
+ 
+     # Check R: 可逆性回退綁定(★IRREVERSIBLE★ 動手前要有實質回退;★CHECKPOINT★ 軟提醒)
+     section("R", "標成「做了就回不去」的動作,有沒有寫清楚怎麼回退或怎麼防")
+     rev_err, rev_soft = [], []
+     for rel, nnote in sorted(notes.items()):
+         for marker, clean, ref, guard_ref in extract_reversibility(nnote):
+             t_ = nnote.fields.get("type")
+             if t_ != "system":
+                 rev_err.append(f"{rel}: {marker} 標在非 Systems(type={t_!r})")
+@@ -19157,41 +19159,43 @@ def _residual_test_files(repo_root, inv_bodies):
+                 try:
+                     files.add(Path(fpath).resolve().relative_to(rr).as_posix())
+                 except ValueError:
+                     pass
+         out[body] = sorted(files)
+     return out
+ 
+ 
+ def _residual_index_entries(env):
+     """圖譜裡每條帶 [residual:] 的合約 → 索引一筆(node、fp、residuals(正規形)、about_code、test_files、notes),依節點與指紋排序。
+-    notes = {殘留指標: 存著那筆決策的筆記的 repo 相對路徑}(指標解不出、筆記不在 repo 裡的不記):pitfalls 不載圖譜,
+-    靠它知道「改到這篇就是改到殘留決策」(代碼審 r5 G1)。
++    notes = {殘留指標: 存著那筆決策的筆記的 repo 相對路徑,或 {"unresolved": 原因}}:pitfalls 不載圖譜,
++    靠它知道「改到這篇就是改到殘留決策」(代碼審 r5 G1)。指標解不出、筆記不在 repo 裡的記明確的「解不出」與原因,不靜默不記
++    (代碼審 r6 G2:原本不記,分級把它當舊索引、理由叫人跑 --reindex,跑了索引不變、下次照升)。
+     pitfalls 把 about_code 與 test_files 都整檔算命中。上一輪多記的 tests 欄(綁定測試名,拿來把測試檔收窄成「diff 碰到測試名才算」)
+     拿掉了:git 的 hunk 標頭只帶頂格的行,縮排在 class 裡的測試方法改本體、改輔助函式都判不到(代碼審 r2 G1,四席實測);舊索引帶著 tests 欄照樣讀得進來、不看它。"""
+     rows, cache = [], {}
+     root = _vault_repo_root(env)
+     def note_path(ref):
+         st, node, _did = _pq_decision_target(env, "", ref, cache=cache)
+         if st is not None or not node:
+-            return None
++            return {"unresolved": {"missing": "殘留指標指的筆記在圖譜裡找不到",
++                                   "bad": "殘留指標格式不合,或不只一篇對得上"}.get(st, "殘留指標解不出")}
+         rp = Path(os.path.relpath(env.vault.resolve() / node, root)).as_posix()
+-        return None if rp.startswith("../") else rp
++        return {"unresolved": "決策所在筆記不在這個 repo 裡"} if rp.startswith("../") else rp
+     for rel, n in sorted(env.notes.items()):
+         invs, _ = extract_contracts(n)
+         for body in invs:
+             refs = invariant_residual_refs(body)
+             if not refs:
+                 continue
+             ac = sorted({_posix_norm(strip_quotes(str(x).strip())) for x in as_list(n.fields.get("about_code")) if str(x).strip()})
+             keys = {_residual_ref_key(env, r, cache=cache): r for r in refs}
+-            notes = {k: p for k, p in ((k, note_path(r)) for k, r in sorted(keys.items())) if p}
++            notes = {k: note_path(r) for k, r in sorted(keys.items())}
+             rows.append((body, {"node": rel[:-3], "fp": _residual_claim_fp(body),
+                                 "residuals": sorted(keys), "about_code": ac, "notes": notes}))
+     if rows:
+         tf = _residual_test_files(_vault_repo_root(env), [b for b, _e in rows])
+         for b, e in rows:
+             e["test_files"] = tf.get(b) or []
+     return sorted((e for _b, e in rows), key=lambda e: (e["node"], e["fp"]))
+ 
+ 
+ def _residual_index_write(env):
+@@ -19328,24 +19332,26 @@ def _cmd_guard_residual_locked(env, node, substr, ref, adding, cases):
+         print("  新增殘留的推送會被判高風險,要過代碼審(審查席看這筆殘留決策與第二個代理的問答);"
+               "之後改到這條合約守的程式(about_code、綁定測試),pitfalls 也會把分級升 high")
+     else:
+         print(f"✓ 拿掉 [residual:{key}] ← {rel[:-3]};殘留索引 {n} 條")
+         print("  拿掉殘留的推送會被判高風險,要過代碼審;這條合約的第 3 問也要重新審計(補測試後 lumos guard audit 重審)")
+     return 0
+ 
+ 
+ def _residual_index_row_key(e):
+     """一筆索引條目 → 比對用的鍵(節點, 指紋, 殘留指標, about_code, test_files, notes),清單欄位排序成 tuple。缺節點或指紋丟 KeyError(呼叫端當讀不出)。
+-    notes(殘留決策所在筆記)也比:手改成指到別篇,pitfalls 就看不到改決策(代碼審 r5 G1)。"""
++    notes(殘留決策所在筆記)也比:手改成指到別篇,pitfalls 就看不到改決策(代碼審 r5 G1);值是 {"unresolved": 原因} 的照 JSON 正規形比(r6 G2)。"""
++    import json as _j
+     res, ac, tf = (tuple(sorted(str(x) for x in (e.get(f) or []))) for f in ("residuals", "about_code", "test_files"))
+     nm = e.get("notes") if isinstance(e.get("notes"), dict) else {}
+-    return (str(e["node"]), str(e["fp"]), res, ac, tf, tuple(sorted((str(k), str(v)) for k, v in nm.items())))
++    val = lambda v: v if isinstance(v, str) else _j.dumps(v, ensure_ascii=False, sort_keys=True)
++    return (str(e["node"]), str(e["fp"]), res, ac, tf, tuple(sorted((str(k), val(v)) for k, v in nm.items())))
+ 
+ 
+ def _residual_index_mismatch(want, got):
+     """圖譜重算的索引鍵 vs 檔案裡的索引鍵 → 給人看的不一致清單。★比多重集合★(collections.Counter),鍵帶殘留指標
+     (代碼審 r4 G1 資安席:原本拿(節點、指紋)當字典鍵,同一篇插一條同句合約指新決策、手寫索引只留舊的那筆,後者蓋掉前者、兩邊對得上)。
+     多出來與少掉的先按(節點、指紋、殘留)配對,配得上的報哪幾欄不同;配不上的報「不在索引裡」或「對不到圖譜」。"""
+     from collections import Counter
+     miss, extra = list((Counter(want) - Counter(got)).elements()), list((Counter(got) - Counter(want)).elements())
+     out = []
+     names = ("residuals", "about_code", "test_files", "notes")
+@@ -19358,49 +19364,54 @@ def _residual_index_mismatch(want, got):
+         extra.remove(pair)
+         diff = [n for n, a, b in zip(names, w[2:], pair[2:]) if a != b]
+         out.append(f"{_kill_esc(w[0])} 帶殘留的合約(指紋 {_kill_esc(w[1])}、殘留 {_kill_esc(res)})索引的 {'、'.join(diff)} 跟圖譜不同")
+     for g in sorted(extra):
+         out.append(f"索引裡的 {_kill_esc(g[0])}(指紋 {_kill_esc(g[1])}、殘留 {_kill_esc('、'.join(g[2]) or '無')})對不到圖譜裡任何帶 [residual:] 的合約行"
+                    "(或同一條合約在索引裡重複)")
+     return out
+ 
+ 
+ def _doctor_residual_lines(env, notes):
+-    """doctor 的殘留檢查(〈做法〉3、5)→ (決策壞的行, 不合格的行, 索引不一致的行)。放在 Check T 未審那一段旁邊。
++    """doctor 的殘留檢查(〈做法〉3、5)→ (決策壞的行, 不合格的行, 索引不一致的行, 舊格式的行)。放在 Check T 未審那一段旁邊。
++    舊格式 = 索引條目沒有 notes 欄(升級前產生的):另報一行叫人 --reindex 補上,那幾筆的 notes 不算進內容不一致(代碼審 r6 G2 通才席)。
+     不合格 = _residual_check 的問題(跟 --add 寫入當下同一套,代碼審 r1 G3);索引比對連 test_files 一起比(舊索引的 tests 欄不比,r2 G1 拿掉了),
+     整份比多重集合、鍵帶殘留指標(_residual_index_mismatch,r4 G1)。"""
+     import json as _j
+     bad_ref, bad_chk = [], []
+     for rel, body, ref, st, probs in _residual_scan(env, notes):
+         head = first_line(INV_TAG_RE.sub("", body).strip(), 30)
+         if st != "ok":
+             what = {"missing": "找不到", "superseded": "已被翻案"}.get(st, "解析不明")
+             pr = _dref_parse(ref)
+             where = pr[0] if pr else ref
+             bad_ref.append(f"{_kill_esc(rel)}: [residual:{_kill_esc(ref)}] 指到的決策{what}——去 {_kill_esc(where)} 補回那筆決策,"
+                            f"或用 lumos guard residual {_kill_esc(rel[:-3])} \"{_kill_esc(head)}\" --remove {_kill_esc(ref)} 拿掉標記並重審")
+         elif probs:
+             bad_chk.append(f"{_kill_esc(rel)}「{_kill_esc(head)}」[residual:{_kill_esc(ref)}]:{_kill_esc(';'.join(probs))}")
+     want = _residual_index_entries(env)
+     path = _vault_repo_root(env) / _RESIDUAL_INDEX_REL
+     bad_idx = []
+     if not path.exists():
+         if want:
+             bad_idx.append(f"圖譜有 {len(want)} 條帶 [residual:] 的合約,卻沒有 {_RESIDUAL_INDEX_REL}")
+-        return bad_ref, bad_chk, bad_idx
++        return bad_ref, bad_chk, bad_idx, []
+     try:
+         got_raw = _j.loads(path.read_text(encoding="utf-8")).get("entries")
+         got = [_residual_index_row_key(e) for e in got_raw]
++        legacy = {k[:3] for e, k in zip(got_raw, got) if "notes" not in e}
+     except (OSError, ValueError, AttributeError, TypeError, KeyError) as ex:
+-        return bad_ref, bad_chk, [f"{_RESIDUAL_INDEX_REL} 讀不出({ex.__class__.__name__})"]
+-    bad_idx.extend(_residual_index_mismatch([_residual_index_row_key(e) for e in want], got))
+-    return bad_ref, bad_chk, bad_idx
++        return bad_ref, bad_chk, [f"{_RESIDUAL_INDEX_REL} 讀不出({ex.__class__.__name__})"], []
++    wk = [k[:5] + ((),) if k[:3] in legacy else k for k in (_residual_index_row_key(e) for e in want)]
++    bad_idx.extend(_residual_index_mismatch(wk, got))
++    old = ([f"{_RESIDUAL_INDEX_REL} 是舊格式:{len(legacy)} 筆沒有 notes 欄(不知道殘留決策在哪篇,改到任何圖譜的檔都會升 high)"
++            "——跑 lumos guard residual --reindex 補上"] if legacy else [])
++    return bad_ref, bad_chk, bad_idx, old
+ 
+ 
+ def cmd_guard_trace(env, node=None):
+     """合約 → 守衛測試 → Verification 證據 的鏈(reverse lookup)。
+     用途:改某模組前,看它的 ★INVARIANT★ 各綁哪個測試、哪篇 Verification 背書 →
+     breaking change 的爆炸半徑可查(grep 輸出某測試名即反查)。"""
+     rel = None
+     if node:
+         rel = env.find(node)
+         if rel is None:
+@@ -44501,22 +44512,23 @@ def _residual_tier_reasons(res):
+                    + ";舊問答對不上新句子,記殘留得對新句子重問)")
+     if res.get("asks_untestable_added"):
+         why.append("這次推送新增了判測不到的問答(記殘留的來源),要過高風險代碼審"
+                    f"({res['asks_untestable_added']} 筆判 untestable 的 residual-ask;同一筆決策追加反例不動殘留索引,看問答才看得到)")
+     if res.get("notes"):
+         ns = res["notes"]
+         why.append("改到存著已登記殘留的筆記(" + "、".join(ns[:3]) + (f" 等 {len(ns)} 篇" if len(ns) > 3 else "")
+                    + "),要過高風險代碼審(殘留決策與反例清單寫在那篇,改哪一段都算)")
+     if res.get("notes_unknown"):
+         nu = res["notes_unknown"]
+-        why.append("改到圖譜的檔,而起點殘留索引沒記這筆殘留的決策在哪篇(" + "、".join(nu[:3]) + (f" 等 {len(nu)} 筆" if len(nu) > 3 else "")
+-                   + ";舊索引,跑 lumos guard residual --reindex 補上),當成改到存著已登記殘留的筆記,要過高風險代碼審")
++        nw = res.get("notes_unknown_why") or []
++        why.append("改到圖譜的檔,而起點殘留索引不知道這筆殘留的決策在哪篇(" + "、".join(nu[:3]) + (f" 等 {len(nu)} 筆" if len(nu) > 3 else "")
++                   + (";" + ";".join(nw[:3]) if nw else "") + "),當成改到存著已登記殘留的筆記,要過高風險代碼審")
+     if res.get("notes_moved"):
+         nm = res["notes_moved"]
+         why.append("殘留索引記的決策所在筆記換了(" + "、".join(nm[:3]) + (f" 等 {len(nm)} 筆" if len(nm) > 3 else "")
+                    + ";換了之後就看不出之後改的是不是那篇),要過高風險代碼審")
+     if res.get("files"):
+         fs = res["files"]
+         why.append("改到帶殘留合約守的程式(" + "、".join(fs[:3]) + (f" 等 {len(fs)} 支" if len(fs) > 3 else "") + ";那幾型壞法測試抓不到,要靠代碼審)")
+     if res.get("removed"):
+         rm = res["removed"]
+         why.append("推送範圍裡拿掉殘留(" + "、".join(rm[:3]) + (f" 等 {len(rm)} 筆" if len(rm) > 3 else "") + ";拿掉殘留要過代碼審)")
+@@ -44617,62 +44629,93 @@ def _residual_index_view(ents):
+     strs = lambda v: [x.strip() for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
+     files, guard = set(), {}
+     for e in ents:
+         fs = {_posix_norm(x) for x in strs(e.get("about_code")) + strs(e.get("test_files"))}
+         files |= fs
+         for r in strs(e.get("residuals")):
+             guard.setdefault((str(e.get("node")), str(e.get("fp")), r), set()).update(fs)
+     return files, guard
+ 
+ 
++_RESIDUAL_NOTE_LEGACY = "舊格式索引沒有 notes 欄,跑 lumos guard residual --reindex 補上"
++
++
+ def _residual_index_notes(ents):
+-    """索引條目 → {(節點, 合約指紋, 殘留指標): 存著那筆殘留決策的筆記(repo 相對路徑)或 None}。None = 不知道在哪
+-    (舊索引沒有 notes 欄、那個指標沒記、同一把鍵兩筆記的不一樣)——呼叫端當成「改到任何圖譜檔都算改到它」(代碼審 r5 G1)。"""
++    """索引條目 → ({(節點, 合約指紋, 殘留指標): 存著那筆殘留決策的筆記(repo 相對路徑)或 None}, {同一把鍵: 為什麼不知道在哪}))。
++    None = 不知道在哪——呼叫端當成「改到任何圖譜檔都算改到它」(代碼審 r5 G1),理由句照第二個值講(代碼審 r6 G2:原本一律說「舊索引,跑 --reindex」,
++    解不出的那筆跑了也修不好):舊格式沒有 notes 欄 → 叫人 --reindex;notes 記 {"unresolved": 原因}(--add/--reindex 解不出時寫的)→ 照講原因、
++    講重建修不好;notes 有欄但沒記這筆或形狀不對、同一把鍵兩筆記的不一樣 → 叫人 --reindex 重建。"""
+     strs = lambda v: [x.strip() for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
+-    out = {}
++    conflict = "同一筆殘留在索引裡記了不同的筆記,跑 lumos guard residual --reindex 重建"
++    out, why = {}, {}
+     for e in ents:
+         nm = e.get("notes") if isinstance(e.get("notes"), dict) else {}
+         for r in strs(e.get("residuals")):
+-            p = nm.get(r)
+-            p = _posix_norm(p.strip()) if isinstance(p, str) and p.strip() else None
++            v = nm.get(r)
++            p, w = None, ""
++            if isinstance(v, str) and v.strip():
++                p = _posix_norm(v.strip())
++            elif isinstance(v, dict) and isinstance(v.get("unresolved"), str):
++                w = (f"解不出決策所在筆記:{_plain_label(v['unresolved'], 80)};重建索引修不好,"
++                     "修好殘留指標或用 lumos guard residual --remove 拿掉")
++            elif "notes" not in e:
++                w = _RESIDUAL_NOTE_LEGACY
++            else:
++                w = "索引的 notes 沒記這筆或形狀不對(手改過?),跑 lumos guard residual --reindex 重建"
+             k = (str(e.get("node")), str(e.get("fp")), r)
+-            out[k] = p if out.get(k, p) == p else None
+-    return out
+-
+-
+-def _residual_graph_file(rel, folders=()):
+-    """不載圖譜時判「這支是不是圖譜的檔」(只給「舊索引不知道決策在哪篇」那條用,寧可多算):在 docs/<名>-knowledge/ 或 docs/knowledge/ 底下,
+-    或是 .md 而路徑裡有殘留指標的頂層資料夾(例 Projects/;圖譜放在別處的專案靠它)。README 這類不在圖譜資料夾的 .md 不算。"""
+-    if _vault_slug_of(rel) is not None or rel.startswith("docs/knowledge/"):
+-        return True
+-    segs = rel.split("/")[:-1]
+-    return rel.lower().endswith(".md") and any(f in segs for f in folders)
++            if k in out and out[k] != p:
++                p, w = None, conflict
++            out[k] = p
++            if p is None and (w == conflict or k not in why):
++                why[k] = w
++    return out, why
++
++
++def _residual_tree_paths(repo_root, rev, deadline=None):
++    """rev 那一版樹裡所有檔的路徑(git 存的字串、NFC)→ 集合;git 讀不出或時間不夠回 None。
++    分級確認起點索引記的 notes 路徑真的在樹裡用(代碼審 r6 G2:寫成 ../x.md、不存在、大小寫跟 git 不同的,原本靜默判 light)。"""
++    t = 60 if deadline is None else min(60.0, deadline - time.monotonic())
++    r = _lens_git(repo_root, "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, binary=True, timeout=t) if t >= 1 else None
++    if r is None or r.returncode != 0:
++        return None
++    return {nfc(x.decode("utf-8", "replace")) for x in r.stdout.split(b"\0") if x}
+ 
+ 
+-def _residual_note_hits(bnotes, hnotes, names):
+-    """起點索引的殘留 → 這次推送碰到存著它決策的筆記的那幾筆 → (改到的 [(鍵, 路徑)], 不知道在哪而改到圖譜檔的 [鍵], 索引記的筆記換了的 [(鍵, 起點路徑, 頂端路徑)])。
++def _residual_note_hits(bnotes, hnotes, names, why=None, base_paths=None):
++    """起點索引的殘留 → 這次推送碰到存著它決策的筆記的那幾筆 → (改到的 [(鍵, 路徑)], 不知道在哪而改到圖譜檔的 [(鍵, 為什麼不知道)],
++    索引記的筆記換了的 [(鍵, 起點路徑, 頂端路徑)], 這次改到的圖譜檔 [路徑])。
+     ★外層看門,刻意的粗粒度★(代碼審 r5 G1):反例清單寫在決策內容裡,逐種比對內容被不同手法連續打穿;改到那篇的哪一段都算。
+-    hnotes:頂端索引的同一欄(頂端讀不出時傳 {});同一筆殘留頂端記的筆記跟起點不同 = 換了位置,也算(不然先改索引、下次推送再改決策就躲得掉)。"""
++    hnotes:頂端索引的同一欄(頂端讀不出時傳 {});同一筆殘留頂端記的筆記跟起點不同 = 換了位置,也算(不然先改索引、下次推送再改決策就躲得掉)。
++    why:_residual_index_notes 的第二個值。base_paths:起點樹的路徑集合(_residual_tree_paths;None = 列不出):起點記的路徑不在裡面
++    (../x.md、不存在、大小寫跟 git 不同)當成不知道在哪(代碼審 r6 G2)。
++    「圖譜的檔」= 圖譜資料夾底下的 .md,資料夾照 _vault_slug_of(bare=True,認 docs/<名>-knowledge/ 與 docs/knowledge/;代碼審 r6 G3:
++    原本另寫一套,非 .md、任何層級叫 Projects 的資料夾也算,圖譜根目錄的指標算不進來)。"""
+     changed = {nfc(_posix_norm(f)) for f in names}
+-    folders = {k[2].split("/", 1)[0] for k, p in bnotes.items() if p is None and "/" in k[2]}
+-    graph = any(_residual_graph_file(_posix_norm(f), folders) for f in names)
++    gfiles = sorted(f for f in changed if f.lower().endswith(".md") and _vault_slug_of(f, bare=True) is not None)
++    why = why or {}
+     touched, unknown, moved = [], [], []
+     for k, p in sorted(bnotes.items(), key=lambda kv: kv[0]):
++        w = why.get(k, "起點索引沒記這筆殘留的決策在哪篇")
++        if p is not None and base_paths is None:
++            p, w = None, "列不出起點版本的檔案清單,確認不了索引記的路徑"
++        elif p is not None and nfc(p) not in base_paths:
++            p, w = None, (f"索引記的 {_plain_label(p, 120)} 在起點版本裡沒有這支檔(路徑寫錯、大小寫跟 git 不同或已搬走),"
++                          "跑 lumos guard residual --reindex 重建")
+         if p is None:
+-            if graph:
+-                unknown.append(k)
++            if gfiles:
++                unknown.append((k, w))
+             continue
+         if nfc(p) in changed:
+             touched.append((k, p))
+         elif k in hnotes and hnotes[k] != p:
+             moved.append((k, p, hnotes[k]))
+-    return touched, unknown, moved
++    return touched, unknown, moved, gfiles
+ 
+ 
+ def _residual_ask_rows_at(repo_root, rev, deadline=None):
+     """某個版本的版控治理帳裡 residual-ask 的列 → (狀態, Counter{整列去頭尾空白的位元組: 出現幾次})。狀態 "ok" / "missing"(那個版本確定沒有帳檔)/
+     "unreadable"(git 讀不出,或工作目錄那份不是一般檔、讀不動)。rev=None 讀工作目錄那份,其餘走 _residual_blob_at。
+     算次數不算集合(代碼審 r4 G5 邊界席:同一列逐位元組相同出現兩次、頂端只刪一份,集合相減數不到)。
+     含閘名字串、JSON 讀不出的那列當成是 residual-ask(帶著閘名,寧可多算);讀得出而 gate 是別的閘就不算。"""
+     import json as _j
+     from collections import Counter
+     try:
+@@ -44746,21 +44789,22 @@ def _residual_tier_hits(repo_root, diff_range):
+     - removed:起點索引有、頂端索引沒有的殘留——拿掉殘留本身要過代碼審,分兩次推送也躲不掉(r1 G4)。
+     - shrunk:同一筆殘留起點守的檔(about_code、測試檔)頂端少了——等於拿掉那一部分殘留;不然先縮守備範圍、下一次推送再改程式就躲得掉(r2 G4)。
+     - head_bad:頂端索引讀不出或形狀不對,而起點有殘留、或這次推送動過索引(或列不出改了哪些檔)——看不出這次碰了或加了什麼,當成有(r1 G4、r3 G1)。
+     - base_bad:起點索引 git 讀不出(git show 失敗、不是路徑不存在)——看不出原本有什麼殘留,當成有(r2 G5)。
+     - files_unknown:檔名清單的 git diff 失敗、而起點或頂端有殘留——列不出改了什麼,當成碰到(r2 G5;原本當成沒改)。
+     - asks_dropped:起點版本治理帳的 residual-ask 列頂端少了幾筆——刪掉判過 testable 那列就能重問(r2 G3);
+       比兩版的列、計數相減、不看 diff 文字;治理帳在檔名清單裡、或檔名清單失敗時都比(r3 G2、r4 G5)。
+     - asks_unknown:"起點" 或 "頂端"——那一版的治理帳讀不出(git 讀不出,或工作目錄那份是捷徑、不是一般檔),看不出刪了或加了什麼,當成有;
+       理由句跟 asks_dropped 分開講(r5 G2 通才席:原本記成 asks_dropped=-1,起點根本沒有問答時理由也寫「刪掉」)。
+     - notes:改到起點索引記的、存著殘留決策的那篇筆記(整篇算,改哪一段都升)——反例清單寫在決策內容裡,直接改決策文字追加反例,
+-      索引的鍵、問答、守的檔都看不到(r5 G1 資安席);notes_unknown:起點索引那筆沒記決策在哪篇(舊索引)而這次改到圖譜的檔;
++      索引的鍵、問答、守的檔都看不到(r5 G1 資安席);notes_unknown:起點索引不知道那筆的決策在哪篇(舊格式、解不出、記的路徑不在起點的樹裡)
++      而這次改到圖譜的檔,notes_unknown_why 是各自的原因(r6 G2:理由句照實講,解不出的不叫人跑 --reindex);
+       notes_moved:同一筆殘留頂端索引記的筆記跟起點不同(先改索引、下次推送再改決策就躲得掉)。
+     - asks_untestable_added:頂端治理帳新增了幾筆判 untestable 的 residual-ask 列(讀不出判定的也算)——殘留的來源是問答,
+       同一筆決策追加反例不動索引的鍵,看問答比看可手改的索引貼近要擋的動作(r4 G1 正確性席、資安席)。
+     git replace 由主程式入口統一關掉(r5 G5)。"""
+     if not diff_range:
+         return {}
+     base, head = _diff_range_ends(repo_root, diff_range)
+     bst, bents = _residual_index_read_at(repo_root, base) if base else ("missing", [])
+     hst, hents = _residual_index_read_at(repo_root, head) if head else _residual_index_read_at(repo_root, None)
+     bfiles, bguard = _residual_index_view(bents)
+@@ -44780,22 +44824,25 @@ def _residual_tier_hits(repo_root, diff_range):
+     elif hst not in ("bad", "unreadable"):
+         out.update(_residual_index_changes(bguard, hguard))
+     whole = bfiles | hfiles
+     if names is None:
+         if whole or bguard or hguard:
+             out["files_unknown"] = True
+     else:
+         hits = sorted(f for f in names if _posix_norm(f) in whole)
+         if hits:
+             out["files"] = hits
+-        nt, nu, nm = _residual_note_hits(_residual_index_notes(bents), _residual_index_notes(hents) if hst == "ok" else {}, names)
+-        for name, ks in (("notes", sorted({p for _k, p in nt})), ("notes_unknown", [f"{k[0]} [residual:{k[2]}]" for k in nu]),
++        bnotes, bwhy = _residual_index_notes(bents)
++        tree = _residual_tree_paths(repo_root, base) if base and any(p is not None for p in bnotes.values()) else None
++        nt, nu, nm, _gf = _residual_note_hits(bnotes, _residual_index_notes(hents)[0] if hst == "ok" else {}, names, why=bwhy, base_paths=tree)
++        for name, ks in (("notes", sorted({p for _k, p in nt})), ("notes_unknown", [f"{k[0]} [residual:{k[2]}]" for k, _w in nu]),
++                         ("notes_unknown_why", list(dict.fromkeys(w for _k, w in nu))),
+                          ("notes_moved", [f"{k[0]} [residual:{k[2]}] {a} → {b or '沒記'}" for k, a, b in nm])):
+             if ks:
+                 out[name] = ks
+     if touched(GOV_LOG_REL):
+         dropped, added, bad = _residual_ask_rows_delta(repo_root, base, head)
+         if bad:
+             out["asks_unknown"] = bad
+         else:
+             if dropped:
+                 out["asks_dropped"] = dropped
+@@ -44835,26 +44882,28 @@ def _residual_index_changes(bguard, hguard):
+ def _ledger_has_manual_only(repo_root):
+     """便宜前置(不載圖譜):審查帳裡有沒有全靠人驗的風險低留痕。找不到 vault 或讀不動=沒有。"""
+     try:
+         vault = find_vault(Path(repo_root))
+         ledger = vault.parent / ".canary-log.jsonl" if vault else None
+         return bool(ledger and ledger.exists() and '"manual_only": true' in ledger.read_text(encoding="utf-8", errors="replace"))
+     except OSError:
+         return False
+ 
+ 
+-def _vault_slug_of(path):
++def _vault_slug_of(path, bare=False):
+     """git 路徑字串(不是檔案系統路徑)落在 docs/<名>-knowledge/ 底下就回 <名>-knowledge,否則 None。
+-    三個讀者共用(推送前家的檢查、刪除守衛、推送測試範圍);2026-09-18 代碼審 code-文件子集收緊 r2 架構席:原本兩處各寫一次、第三處又換正則。"""
++    三個讀者共用(推送前家的檢查、刪除守衛、推送測試範圍);2026-09-18 代碼審 code-文件子集收緊 r2 架構席:原本兩處各寫一次、第三處又換正則。
++    bare=True 另認 docs/knowledge/(_vault_in 認的另一種專案佈局,回 "knowledge"):殘留分級判「改到圖譜的檔」用它(代碼審 code-審查收斂規則 r6 G3:
++    原本另寫一小段判定)。既有讀者不帶——它們拿結果判「這個專案有沒有圖譜」並拼 docs/<slug>,加認會讓 docs/knowledge 的專案開始跑原本跳過的檢查。"""
+     if path.startswith("docs/") and path.count("/") >= 2:
+         slug = path.split("/", 2)[1]
+-        if slug.endswith("-knowledge"):
++        if slug.endswith("-knowledge") or (bare and slug == "knowledge"):
+             return slug
+     return None
+ 
+ 
+ # 純文件推送只跑文件子集(2026-09-18 Enzo 裁「像這種改動 CI 可以跳過吧,跟程式碼無關」):
+ # 兩層白名單都要過才算純文件:★路徑★在 _DOCS_ONLY_PATHS 裡(不在的——scripts/、skills/、.github/、slim/…——一律跑全套;
+ # skills/ 的 markdown 是 lumos 自己讀進去用的、被幾十支測試驗,不算文件),而且★副檔名★在 _DOCS_ONLY_EXTS 裡(比對不分大小寫)。
+ # 第一版是「路徑在白名單、且副檔名不在程式清單」——代碼審 r1 邊界席(blocker)與正確性席各繞過一次:governance/ 底下放 .rb/.dart(清單沒收的語言)
+ # 或 .PY(大小寫)就被當文件。反過來列「什麼才算文件」才擋得住不認得的東西;沒副檔名的(Makefile、無名腳本)一律不算文件。
+ # 執行器那邊 `--suite docs` 直接讀這兩個常數挑「原始碼提到這些路徑」的測試(架構席 r1:別抄第二份)。
+@@ -48891,23 +48940,28 @@ def _lens_residual_decision(root, head_sha, vault_rel, ref, path=None, deadline=
+         return "(頂端版本讀不到這篇)" if t >= 1 else "(時間預算用完,沒去讀)"
+     fm_lines, _b = split_frontmatter(sh.stdout)
+     d = next((x for x in (parse_decisions(fm_lines) if fm_lines is not None else []) if str(x.get("id", "")).strip() == pr[1]), None)
+     if d is None:
+         return "(頂端版本這篇沒有這筆決策)"
+     return _plain_label(d.get("content"), cap=_LENS_RESIDUAL_CONTENT_CAP)
+ 
+ 
+ def _lens_residual_wanted(new_rows, keyed, index_keys):
+     """新增的問答列、真的殘留索引變化 → ({(NFC 節點, 指紋): 排序級}, 讀不出判定的新增列筆數, {合約: 標註})。判 testable 的新增問答不列。
+-    排序級(r5 G3 資安席:合約原本照節點名排、取前 5 條,假節點問答能把真殘留擠出清單):
+-    0 = 真的殘留索引變化(新增、合約改字、改到存著殘留決策的筆記);1 = 問答指到殘留索引裡有的合約;2 = 問答指到的不在殘留索引(標出來)。"""
+-    want, marks, unread = {(nfc(k[0]), k[1]): 0 for k in keyed}, {}, 0
++    keyed:{殘留鍵: (標註, 決策所在筆記, 排序級)}。排序級(r5 G3 資安席:合約原本照節點名排、取前 5 條,假節點問答能把真殘留擠出清單;
++    r6 G1 併發席:改到筆記與位置未知的也排 0,舊索引加改一篇圖譜,5000 筆位置未知把真正新增的那條擠掉):
++    0 = 這次新增的殘留(含合約改字);1 = 改到存著殘留決策的筆記、索引記的筆記換了、問答指到殘留索引裡有的合約;
++    2 = 問答指到的不在殘留索引(標出來)。位置未知的不進這裡,呼叫端彙總成一行。"""
++    want, marks, unread = {}, {}, 0
++    for k, (_why, _path, rank) in keyed.items():
++        ck = (nfc(k[0]), k[1])
++        want[ck] = min(want.get(ck, rank), rank)
+     inodes = {nfc(k[0]) for k in index_keys}
+     icks = {(nfc(k[0]), k[1]) for k in index_keys}
+     for row, c in new_rows.items():
+         if not _residual_ask_row_untestable(row):
+             continue
+         d = _residual_ask_row(row)
+         if d is None:
+             unread += c
+             continue
+         ck = (nfc(str(d.get("node") or "")), str(d.get("fp") or ""))
+@@ -48945,84 +48999,110 @@ def _lens_residual_contract_lines(root, head_sha, vault_rel, ck, refs, rows, mar
+                    + ":決策內容:" + _lens_residual_decision(root, head_sha, vault_rel, ref, path=path, deadline=deadline))
+     shown, hidden, hidden_new = _lens_residual_asks_shown(rows)
+     for is_new, d in shown:
+         out.append(f"  問答 {_plain_label(d.get('case'), 40)} {_plain_label(d.get('verdict'), 20)} checker:{_plain_label(d.get('checker'), 60)}"
+                    f" ts:{_plain_label(d.get('ts'), 40)}" + ("(這次新增)" if is_new else ""))
+     if hidden:
+         out.append(f"  (另有 {hidden} 筆問答未列" + (f",其中 {hidden_new} 筆是這次新增" if hidden_new else ",較早或時間讀不出的") + ")")
+     return out
+ 
+ 
++def _lens_residual_absent(root, base_sha, head_sha):
++    """兩版都確定沒有殘留索引、這次也沒改治理帳 → True(這個 repo 沒有殘留可列);任一個 git 呼叫失敗回 False(講不準就當有)。
++    每次呼叫固定 3 秒上限:時間預算用完時才用,先判有沒有、再決定要不要印「算不出來」(代碼審 r6 G4 正確性席)。"""
++    for rev in (base_sha, head_sha):
++        r = _lens_git(root, "ls-tree", "-z", rev, "--", _RESIDUAL_INDEX_REL, binary=True, timeout=3)
++        if r is None or r.returncode != 0 or r.stdout.strip(b"\0"):
++            return False
++    r = _lens_git(root, "diff", "--quiet", "--no-ext-diff", base_sha, head_sha, "--", GOV_LOG_REL, timeout=3)
++    return r is not None and r.returncode == 0
++
++
++def _lens_residual_unknown_line(nu, gfiles):
++    """位置未知的殘留 [(鍵, 原因)] 與這次改到的圖譜檔 → 彙總成一行(不逐條展開;代碼審 r6 G1:逐條列會把真正新增的擠出上限)。"""
++    whys = list(dict.fromkeys(w for _k, w in nu))
++    fs = "、".join(_plain_label(f) for f in gfiles[:3]) + (f" 等 {len(gfiles)} 支" if len(gfiles) > 3 else "")
++    return (f"- 另有 {len(nu)} 筆殘留起點索引不知道決策在哪篇(" + ";".join(_plain_label(w, 160) for w in whys[:3])
++            + f"),這次改了圖譜的 {fs}:不逐條展開,自己對照 diff 與 {_RESIDUAL_INDEX_REL} 看改的是不是那幾筆的決策")
++
++
+ def _lens_residual_new_lines(root, base_sha, head_sha, vault_rel, deadline):
+     """範圍內新增的殘留(索引頂端有、起點沒有的(節點、指紋、殘留指標))、改到存著已登記殘留決策的筆記(r5 G1,跟分級同一支 _residual_note_hits)
+     與新增的判 untestable 問答 → 框內要印的行;都沒有回 []。讀法跟 pitfalls 分級同一套(_residual_index_read_at、_residual_ask_rows_delta)。
+-    任一邊的索引或治理帳讀不出、列不出改了哪些檔、時間不夠 → 第一行印「算不出來」那句講哪一邊(其餘算得出的照列;r5 G2、G4)。
++    任一邊的索引或治理帳讀不出、列不出改了哪些檔、時間不夠 → 第一行印「算不出來」那句講哪一邊(其餘算得出的照列;r5 G2、G4);
++    時間不夠而兩版都沒有殘留索引、也沒改治理帳 → 回 [](r6 G4)。起點索引不知道決策在哪篇的那幾筆彙總成一行(r6 G1)。
+     每條合約印:殘留指標(標這次為什麼列)、決策內容、那條合約在頂端帳裡的問答列(編號、判定、checker、ts,標這次新增)。"""
+     def left():
+         return deadline - time.monotonic()
+     if left() < 1:
++        if _lens_residual_absent(root, base_sha, head_sha):
++            return []
+         return [f"{_LENS_RESIDUAL_UNKNOWN}(派工鏡頭的時間預算用完):自己翻 diff 裡的 {_RESIDUAL_INDEX_REL} 與 {GOV_LOG_REL}"]
+     unknown = []
+     bst, bents = _residual_index_read_at(root, base_sha, deadline=deadline)
+     hst, hents = _residual_index_read_at(root, head_sha, deadline=deadline)
+     for side, st in (("起點", bst), ("頂端", hst)):
+         if st in ("bad", "unreadable"):
+             unknown.append(f"{side}的殘留索引讀不出")
+     bguard = _residual_index_view(bents if bst == "ok" else [])[1]
+     hguard = _residual_index_view(hents if hst == "ok" else [])[1]
+-    hnotes = _residual_index_notes(hents) if hst == "ok" else {}
+-    keyed = {}   # 殘留鍵 → (標註, 決策所在筆記)
++    hnotes = _residual_index_notes(hents)[0] if hst == "ok" else {}
++    keyed = {}   # 殘留鍵 → (標註, 決策所在筆記, 排序級)
+     if bst in ("ok", "missing") and hst == "ok":
+         for k in set(hguard) - set(bguard):
+-            keyed[k] = ("這次新增", hnotes.get(k))
+-    bnotes = _residual_index_notes(bents) if bst == "ok" else {}
++            keyed[k] = ("這次新增", hnotes.get(k), 0)
++    bnotes, bwhy = _residual_index_notes(bents) if bst == "ok" else ({}, {})
++    summary = []
+     if bnotes:
+         nr = _lens_git(root, "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-renames", base_sha, head_sha, "--",
+                        timeout=min(20.0, left())) if left() >= 1 else None
+         if nr is None or nr.returncode != 0:
+             unknown.append("列不出這次改了哪些檔")
+         else:
+-            nt, nu, nm = _residual_note_hits(bnotes, hnotes, [f for f in nr.stdout.split("\0") if f.strip()])
++            tree = _residual_tree_paths(root, base_sha, deadline=deadline) if any(p is not None for p in bnotes.values()) else None
++            nt, nu, nm, gfiles = _residual_note_hits(bnotes, hnotes, [f for f in nr.stdout.split("\0") if f.strip()], why=bwhy, base_paths=tree)
+             for k, p in nt:
+-                keyed.setdefault(k, (f"這次改了存著這筆殘留決策的筆記 {_plain_label(p)}", p))
+-            for k in nu:
+-                keyed.setdefault(k, ("起點索引沒記這筆殘留的決策在哪篇,這次改了圖譜的檔", None))
++                keyed.setdefault(k, (f"這次改了存著這筆殘留決策的筆記 {_plain_label(p)}", p, 1))
+             for k, a, b in nm:
+-                keyed.setdefault(k, (f"索引記的決策所在筆記換了:{_plain_label(a)} → {_plain_label(b or '沒記')}", a))
++                keyed.setdefault(k, (f"索引記的決策所在筆記換了:{_plain_label(a)} → {_plain_label(b or '沒記')}", a, 1))
++            nu = [(k, w) for k, w in nu if k not in keyed]
++            if nu:
++                summary.append(_lens_residual_unknown_line(nu, gfiles))
+     _dropped, new_rows, bad_side = _residual_ask_rows_delta(root, base_sha, head_sha, deadline=deadline)
+     if bad_side:
+         unknown.append(f"{bad_side}的治理帳讀不出")
+         new_rows = {}
+     want, unread, marks = _lens_residual_wanted(new_rows, keyed, set(hguard) | set(bguard))
+     out = []
+     if unknown:
+         why = "、".join(unknown) + (";派工鏡頭的時間預算用完" if left() < 1 else "")
+         out.append(f"{_LENS_RESIDUAL_UNKNOWN}({why}):自己翻 diff 裡的 {_RESIDUAL_INDEX_REL} 與 {GOV_LOG_REL}")
+     if not want and not unread:
+-        return out
++        return out + summary
+     asks = {}
+     if new_rows or want:
+         for row in _residual_ask_rows_at(root, head_sha, deadline=deadline)[1]:
+             d = _residual_ask_row(row)
+             if d is not None:
+                 asks.setdefault((nfc(str(d.get("node") or "")), str(d.get("fp") or "")), []).append((row in new_rows, d))
+     order = sorted(want, key=lambda ck: (want[ck], ck))
+     for i, ck in enumerate(order):
+         if i >= _LENS_RESIDUAL_MAX:
+             out.append(f"(另有 {len(order) - i} 條合約未列,自己翻 diff 裡的 {_RESIDUAL_INDEX_REL} 與 {GOV_LOG_REL})")
+             break
+         refs = []
+         for k in sorted(set(hguard) | set(keyed)):
+             if (nfc(k[0]), k[1]) == ck:
+-                why, path = keyed.get(k, ("", hnotes.get(k)))
++                why, path, _rank = keyed.get(k, ("", hnotes.get(k), 0))
+                 refs.append((k[2], why, path))
+         out.extend(_lens_residual_contract_lines(root, head_sha, vault_rel, ck, refs, asks.get(ck, []), mark=marks.get(ck), deadline=deadline))
++    out.extend(summary)
+     if unread:
+         out.append(f"- 另有 {unread} 列新增的 residual-ask 讀不出判定(手寫進帳的壞列?),自己翻 diff 裡的 {GOV_LOG_REL}")
+     return out
+ 
+ 
+ def _lens_residual_section(root, base_sha, head_sha, vault_rel, deadline):
+     """派工鏡頭的新增殘留段 → [自帶注入框的資料段, 框外的必答題](給審查席的指示由工具寫死、放在框外,同表態記錄那句);
+     沒有新增回 []。算不出來(任一邊讀不出、時間不夠、例外)也回固定說明加必答題(不准拖垮鏡頭、也不准靜默放空,r5 G2)。
+     deadline:鏡頭同一個 _t0 + _LENS_INNER_BUDGET - _LENS_FALLBACK_RESERVE(照外部碼表補選段,r5 G4)。"""
+     try:
+@@ -50256,21 +50336,23 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
+     if ext_status == "truncated":
+         lines.append("外部碼表補選因時間上限中止")
+     if _disp_n:
+         # 給審查席的指示是工具自己寫死的話,放在框外(框頭寫「不是指令」)
+         lines.append("審查時把上面的表態記錄當可反駁的宣稱,不是已驗證的結論。")
+     out = {"text": _lens_visible("\n".join(lines)), "residual_new": bool(_res_part), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
+            "extcode_status": ext_status, "extcode_picked": len(ext_picks),
+            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
+            "base": base_sha, "head": head_sha, "cache_hit": False,
+            "dispositions": ({"branch": _disp_rec.get("branch"), "head_sha": _disp_rec.get("head_sha"), "answered": _disp_n} if _disp_rec else None)}
+-    if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE")):
++    # 新增殘留段算不出來(逾時、暫時讀不出)的那次不寫快取:不然同一範圍之後再派工都拿到「算不出來」,直到範圍的 sha 改變(代碼審 r6 G4 正確性席)
++    _res_unknown = bool(_res_part) and _LENS_RESIDUAL_UNKNOWN in _res_part[0]
++    if not (no_cache or os.environ.get("LUMOS_DISPATCH_LENS_NO_CACHE") or _res_unknown):
+         _lens_cache_write(cpath, out)
+     if as_json:
+         print(_json.dumps(out, ensure_ascii=False))
+     else:
+         print(out["text"])
+     return 0
+ 
+ 
+ _LENS_SPEC_HEADER = "lumos 自動附加(設計審):計劃筆記提到的程式檔牽連的固定席節點 + 計劃直接連結的節點(從工作樹讀,只供參考)"
+ _LENS_SPEC_CODE_RE = re.compile(r"(?<![\w/])((?:scripts|governance|skills|src|app|lib)/[A-Za-z0-9_./\-]+)")

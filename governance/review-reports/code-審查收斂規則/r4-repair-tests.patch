@@ -1,0 +1,483 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8b8bf878..85892dc5 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -4580,22 +4580,29 @@ def _rc_gov(root, gate="residual-ask"):
+     for ln in p.read_text(encoding="utf-8").splitlines():
+         try:
+             d = _j.loads(ln)
+         except ValueError:
+             continue
+         if isinstance(d, dict) and d.get("gate") == gate:
+             out.append(d)
+     return out
+ 
+ 
+-def _rc_ask(v, case, verdict="untestable", checker="sonnet/2026-10-14", substr=_RC_CONTRACT):
+-    return run(v, "guard", "residual-ask", "Systems/S", substr, "--case", case, "--checker", checker, "--verdict", verdict)
++def _rc_ask(v, case, verdict="untestable", checker="sonnet/2026-10-14", substr=_RC_CONTRACT, reaudit=True):
++    """記一筆 residual-ask;reaudit(預設)時問答成功後照手冊順序重審那條合約(guard audit,戳記照舊是 _RC_AUDIT),
++    --add 才驗得過「最近一次 guard audit 事件晚於問答」(代碼審 r3 G5)。未審那條(_RC_UNAUDITED)不重審,它要維持沒有 [audit:]。
++    要測順序被擋的傳 reaudit=False。"""
++    r = run(v, "guard", "residual-ask", "Systems/S", substr, "--case", case, "--checker", checker, "--verdict", verdict)
++    if r.returncode == 0 and reaudit and substr != _RC_UNAUDITED:
++        model, date = _RC_AUDIT.split("/")
++        run(v, "guard", "audit", "Systems/S", substr, "--model", model, "--date", date, expect_rc=0)
++    return r
+ 
+ 
+ def t_guard_residual_write():
+     """[審查收斂規則 S1] guard residual --add 寫標記並更新索引;每一種不合格各自回 2 不寫(理由對得上);同一個標記再寫回 0 不重複。"""
+     import json as _j, shutil as _sh
+     root, v, g = _rc_repo("rc-s1")
+     s = v / "Systems" / "S.md"
+     try:
+         check("★前置★ c1 問過且判 untestable", _rc_ask(v, "c1").returncode == 0, "")
+         check("★前置★ c3 問過但判 testable", _rc_ask(v, "c3", verdict="testable").returncode == 0, "")
+@@ -4852,21 +4859,28 @@ def t_reference_audit_q3_rules():
+     root_ = Path(GRAPHCTL).resolve().parent.parent
+     for rel_ in ("docs/methodology/圖譜即合約.md", "docs/lumos-toolchain-knowledge/Projects/審查收斂規則_計劃.md",
+                  "skills/lumos-project-notes/commands/06-代碼審與推送.md"):
+         txt_ = (root_ / rel_).read_text(encoding="utf-8")
+         check(f"G5 {rel_} 也寫同一個順序", _order_ok(txt_), "")
+     # r2 G8(代碼審合約席):06 手冊與 design-loop 講第 3 問的 KEY 行也要同一個順序;手冊說寫入時驗的是 [audit:] 日期不早於問答,不是只驗存在
+     dl_ = (root_ / "docs/lumos-toolchain-knowledge/Systems/design-loop.md").read_text(encoding="utf-8")
+     kl_ = "\n".join(l for l in dl_.splitlines() if l.strip().startswith("KEY:") and "第 3 問" in l)
+     check("G8 design-loop 講第 3 問的 KEY 行寫同一個順序", _order_ok(kl_), kl_[:300])
+     ord_ = next((l for l in sec.splitlines() if "**記殘留**" in l), "")
+-    check("G8 手冊說第 ④ 步驗 [audit:] 日期不早於問答(早於就擋)", "不早於" in ord_ and "驗前三步都做了" not in ord_, ord_[:300])
++    check("G8 手冊說第 ④ 步驗最近一次 guard audit 晚於問答(r3 G5:比治理帳事件、不比戳記日期)",
++          "最近一次 `guard audit` 晚於" in ord_ and "找不到審計紀錄" in ord_ and "不早於" not in ord_ and "驗前三步都做了" not in ord_, ord_[:300])
++    # r3 G1:「只准問一次」是方便不是保證,把關在新增殘留的推送要過高風險代碼審——手冊、06、方法論、計劃都要這樣講
++    for rel_ in ("skills/lumos-project-notes/reference.md", "skills/lumos-project-notes/commands/06-代碼審與推送.md",
++                 "docs/methodology/圖譜即合約.md", "docs/lumos-toolchain-knowledge/Projects/審查收斂規則_計劃.md"):
++        txt_ = (root_ / rel_).read_text(encoding="utf-8")
++        check(f"r3 G1 {rel_} 寫明只准問一次是方便、把關在新增殘留的推送過高風險代碼審",
++              _re.search(r"只准問一次[^。\n]{0,20}方便", txt_) is not None and "新增殘留的推送要過高風險代碼審" in txt_, "")
+ 
+ 
+ def t_guard_residual_ask_once():
+     """[審查收斂規則 S9] 同一條合約同一個反例只准問一次;問答記治理帳(residual-ask);doctor 在索引跟圖譜不一致時報錯並給 --reindex。"""
+     import json as _j, shutil as _sh
+     m = _load_lumos()
+     check("S9 閘名 residual-ask 在 _KNOWN_GATES", "residual-ask" in m._KNOWN_GATES, "")
+     root, v, g = _rc_repo("rc-s9")
+     try:
+         r = _rc_ask(v, "c1")
+@@ -4923,21 +4937,22 @@ def t_residual_identity_normalized():
+         for var in ("C1", "c1."):
+             r = _rc_ask(v, var)
+             check(f"G1 同一個反例換寫法 {var} 重問 → 回 2、帳上仍只有一筆 c1", r.returncode == 2 and "已經問過" in r.stderr
+                   and len(_rc_gov(root)) == 1, f"rc={r.returncode} {r.stderr[-200:]}")
+         txt = s.read_text(encoding="utf-8")
+         s.write_text(txt.replace(f"{_RC_CONTRACT} [test:", f"{_RC_CONTRACT}。 [test:"), encoding="utf-8")
+         r = _rc_ask(v, "c1")
+         check("G1 宣稱尾端加句號 → 還是同一條合約,c1 不准再問", r.returncode == 2 and "已經問過" in r.stderr, r.stderr[-200:])
+         s.write_text(txt.replace(f"{_RC_CONTRACT} [test:", f"{_RC_CONTRACT}且不得負庫存 [test:"), encoding="utf-8")
+         r = _rc_ask(v, "c1", verdict="untestable")
+-        check("G1 宣稱改了字詞 → 另一條合約;但 c1 判過 testable,換了指紋也不准改判 untestable(r2 G3)", r.returncode == 2 and "判過 testable" in r.stderr, r.stderr[-200:])
++        check("G1 宣稱改了字詞 → 另一條合約,c1 問得到(改字重問交給推送分級的「新增了殘留」,r3 G1;t_pitfalls_residual_added_needs_review)",
++              r.returncode == 0, r.stderr[-200:])
+         check("G1 宣稱改了字詞 → 另一條合約,沒判過 testable 的 c5 可以問", _rc_ask(v, "c5", verdict="untestable").returncode == 0, "")
+         s.write_text(txt, encoding="utf-8")
+         for bad in ("x/２０２６-１０-１４", "sonnet/9999-99-99", "sonnet/2026-02-30", "sonnet/2026-1-4"):
+             r = _rc_ask(v, "c7", checker=bad)
+             check(f"G1 --checker {bad} → 回 2", r.returncode == 2 and "--checker" in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+         check("★前置★ c2 問過判 untestable", _rc_ask(v, "c2").returncode == 0, "")
+         r = run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "projects/A_計劃#d12", "--case", "C2")
+         line = next(l for l in s.read_text(encoding="utf-8").splitlines() if _RC_CONTRACT in l)
+         check("G1 大小寫變體的指標與反例 → 寫成正式路徑", r.returncode == 0 and line.endswith("[residual:Projects/a_計劃#d12]"),
+               f"rc={r.returncode} {r.stderr[-300:]}\n{line}")
+@@ -5273,49 +5288,54 @@ def t_residual_identity_keeps_meaningful_punct():
+         s.write_text(txt.replace(f"{_RC_CONTRACT} [test:", "重試上限 1.5 倍 [test:")
+                         .replace(f"{_RC_UNAUDITED} [test:test_rc_guard]", f"重試上限 15 倍 [test:test_rc_guard] [audit:{_RC_AUDIT}]"), encoding="utf-8")
+         check("★前置★ 1.5 倍那條問過 c1 判 untestable", _rc_ask(v, "c1", substr="重試上限 1.5 倍").returncode == 0, "")
+         r = run(v, "guard", "residual", "Systems/S", "重試上限 15 倍", "--add", "Projects/a_計劃#d12", "--case", "c1")
+         check("G2 15 倍那條沒問過 c1 → --add 回 2", r.returncode == 2 and "沒有 residual-ask" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_residual_testable_sticks_to_case():
+-    """[r2 G3] 判過 testable 的反例以(節點、反例編號)記、不看指紋:合約改一個字換掉指紋,同一個反例也不准改判 untestable;
+-    手寫一筆新指紋的 untestable 進帳,--add、--reindex 照樣擋。判準來源:r2 資安席 F3 步驟 a。"""
++    """[r2 G3 → r3 G1] 判過 testable 的反例記在(節點、合約指紋、反例編號)上:同一條合約不准改判 untestable、不准記殘留
++    (寫法變體與手寫進帳的 untestable 都一樣);同節點別條合約的同名反例不受牽連;合約改字換指紋後問得到,
++    但記成殘留的那次推送升 high(外層看門)。判準來源:r2 資安席 F3、r3 合約席與通才席(同節點別條合約的 c1 被牽連)。"""
+     import json as _j
+     import shutil as _sh
+-    root, v, _g = _rc_repo("rc-r2g3")
++    root, v, g = _rc_repo("rc-r2g3")
+     s = v / "Systems" / "S.md"
+     gp = root / "docs" / ".governance-log.jsonl"
+     try:
+         check("★前置★ c9 判 testable", _rc_ask(v, "c9", verdict="testable").returncode == 0, "")
+-        txt = s.read_text(encoding="utf-8")
+-        s.write_text(txt.replace(f"{_RC_CONTRACT} [test:", f"{_RC_CONTRACT}且目前不得負庫存 [test:"), encoding="utf-8")
+-        for var in ("c9", "C9."):
++        for var in ("c9", "C9.", "c-9"):
+             r = _rc_ask(v, var)
+-            check(f"G3 改字換指紋後 {var} 改判 untestable → 回 2、說判過 testable", r.returncode == 2 and "testable" in r.stderr
+-                  and len([d for d in _rc_gov(root) if d.get("case") in ("c9", "C9.")]) == 1, f"rc={r.returncode} {r.stderr[-300:]}")
+-        check("★前置★ 新句子的 c8 判 untestable", _rc_ask(v, "c8").returncode == 0, "")
+-        row = dict([d for d in _rc_gov(root) if d.get("case") == "c8"][-1], case="c9")
++            check(f"G3 同一條合約的 {var} 改判 untestable → 回 2、說判過 testable", r.returncode == 2 and "testable" in r.stderr
++                  and len(_rc_gov(root)) == 1, f"rc={r.returncode} {r.stderr[-300:]}")
++        row = dict(_rc_gov(root)[-1], verdict="untestable", case="C9")
+         with gp.open("a", encoding="utf-8") as fh:
+             fh.write(_j.dumps(row, ensure_ascii=False) + "\n")   # 繞過指令直接進帳的一筆
+         r = run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c9")
+-        check("G3 手寫的新指紋 untestable → --add 回 2、說判過 testable", r.returncode == 2 and "testable" in r.stderr
++        check("G3 手寫的 untestable → --add 回 2、說判過 testable", r.returncode == 2 and "testable" in r.stderr
+               and "[residual:" not in s.read_text(encoding="utf-8"), f"rc={r.returncode} {r.stderr[-300:]}")
+-        check("G3 沒判過 testable 的 c8 照樣能記", run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12",
+-                                                      "--case", "c8").returncode == 0, "")
+-        r = run(v, "guard", "residual", "--reindex")
+-        check("G3 --reindex 報 c9 判過 testable 又判 untestable → 回 1", r.returncode == 1 and "c9" in r.stderr and "testable" in r.stderr,
+-              f"rc={r.returncode} {r.stderr[-300:]}")
+-        s.write_text(s.read_text(encoding="utf-8").replace("且目前不得負庫存", "且現在不得負庫存"), encoding="utf-8")   # 再改一次字:第三個指紋
+-        check("G3 判過 testable 的反例在改字後再判 testable → 照樣記(往嚴的方向不擋)", _rc_ask(v, "c9", verdict="testable").returncode == 0, "")
++        txt = s.read_text(encoding="utf-8")
++        s.write_text(txt.replace(f"{_RC_UNAUDITED} [test:test_rc_guard]", f"{_RC_UNAUDITED} [test:test_rc_guard] [audit:{_RC_AUDIT}]"), encoding="utf-8")
++        r = _rc_ask(v, "c9", substr=_RC_UNAUDITED, reaudit=False)
++        check("G3 同節點別條合約的 c9 不受牽連 → 問得到", r.returncode == 0, r.stderr[-300:])
++        s.write_text(txt, encoding="utf-8")
++        g("add", "-A"); g("commit", "-qm", "c9 testable"); g("checkout", "-qb", "feat")
++        s.write_text(txt.replace(f"{_RC_CONTRACT} [test:", f"{_RC_CONTRACT}且目前不得負庫存 [test:"), encoding="utf-8")
++        r = _rc_ask(v, "c9")
++        check("G3 合約改字換指紋 → 另一條合約,c9 問得到(只准問一次是方便不是保證)", r.returncode == 0, r.stderr[-300:])
++        r = run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c9")
++        check("★前置★ 新句子的 c9 記成殘留", r.returncode == 0, r.stderr[-300:])
++        g("add", "-A"); g("commit", "-qm", "改字重問後記殘留")
++        d = _rc_pitfalls_tier(v, root)
++        check("G3 改字重問後記殘留的推送 → high、理由說新增了殘留要過高風險代碼審", d["tier"] == "high" and "新增了殘留" in d.get("tier_reason", ""), repr(d)[:400])
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_pitfalls_residual_ask_rows_dropped():
+     """[r2 G3] 推送範圍刪掉或改掉治理帳裡 residual-ask 的列 → high(刪帳列重問躲不掉);新增問答、刪別的閘的列不升。
+     判準來源:r2 資安席 F3 步驟 b(刪掉 testable 那列再問 untestable)。只讀 git diff,不載圖譜。"""
+     import json as _j
+     import shutil as _sh
+     ask = {"ts": "2026-10-14T10:00:00+08:00", "gate": "residual-ask", "kind": "asked", "node": "Systems/S", "fp": "abc",
+@@ -5351,30 +5371,36 @@ def t_pitfalls_residual_guard_shrunk():
+     """[r2 G4] 同一筆殘留(節點、殘留指標)起點有、頂端沒有的 about_code 或測試檔 → 算拿掉殘留、high(分兩次推送先縮守備範圍躲不掉);
+     守備範圍變大、只換指紋不升。判準來源:r2 資安席 F1 的函式層實驗(推送 1 只清空 about_code 與測試檔)。"""
+     import json as _j
+     import shutil as _sh
+     ent = {"node": "Systems/S", "fp": "x", "residuals": ["Projects/a_計劃#d12"], "about_code": ["src/a.py"], "test_files": ["tests/test_a.py"]}
+     roots = []
+     try:
+         for name, head, want in (("about_code 清空", dict(ent, about_code=[]), True),
+                                  ("測試檔清空", dict(ent, test_files=[]), True),
+                                  ("about_code 換成別支檔", dict(ent, about_code=["src/c.py"]), True),
+-                                 ("守備範圍變大", dict(ent, about_code=["src/a.py", "src/b.py"]), False),
+-                                 ("合約改字只換指紋", dict(ent, fp="y"), False)):
++                                 ("守備範圍變大", dict(ent, about_code=["src/a.py", "src/b.py"]), False)):
+             root, v, g = _rc_with_index(f"rc-r2g4-{len(roots)}", {"version": 1, "entries": [ent]}, roots)
+             (root / "governance" / "residual-index.json").write_text(_j.dumps({"version": 1, "entries": [head]}, ensure_ascii=False), encoding="utf-8")
+             g("commit", "-qam", name)
+             d = _rc_pitfalls_tier(v, root)
+             if want:
+                 check(f"G4 {name} → high、理由說縮小殘留守的範圍", d["tier"] == "high" and "守的範圍" in d.get("tier_reason", ""), repr(d)[:400])
+             else:
+                 check(f"G4 {name} → 不升 high", d["tier"] != "high", repr(d)[:400])
++        # 代碼審 r3 G3:殘留身分帶合約指紋——合約改字只換指紋,起點那筆算拿掉、頂端那筆算新增(原本判成不升)
++        root, v, g = _rc_with_index(f"rc-r2g4-{len(roots)}", {"version": 1, "entries": [ent]}, roots)
++        (root / "governance" / "residual-index.json").write_text(_j.dumps({"version": 1, "entries": [dict(ent, fp="y")]}), encoding="utf-8")
++        g("commit", "-qam", "改字換指紋")
++        d = _rc_pitfalls_tier(v, root)
++        check("G4 合約改字只換指紋 → high、理由說新增了殘留也拿掉了殘留(r3 G3)", d["tier"] == "high" and "新增了殘留" in d.get("tier_reason", "")
++              and "拿掉殘留" in d.get("tier_reason", ""), repr(d)[:400])
+     finally:
+         for r_ in roots:
+             _sh.rmtree(r_, ignore_errors=True)
+ 
+ 
+ def t_pitfalls_residual_git_failures():
+     """[r2 G5] git 出錯一律往多升 high 的方向:起點索引讀不出(物件遺失,不是路徑不存在)→ high;
+     檔名清單的 git diff 失敗而索引有殘留 → high;沒有任何殘留時檔名清單失敗照舊不升。判準來源:r2 併發席。"""
+     import json as _j
+     import shutil as _sh
+@@ -5481,32 +5507,279 @@ def t_residual_unknown_verdict_ignored():
+ def t_residual_add_audit_after_ask():
+     """[r2 G8] --add 驗手冊的順序:合約行 [audit:] 的日期不早於那筆 untestable 問答的日期(早於就擋,叫人照順序重審);
+     照順序重審之後就過。判準來源:r2 合約席(手冊說驗了前三步的順序,實際只驗存在)。"""
+     import datetime as _dt
+     import shutil as _sh
+     root, v, _g = _rc_repo("rc-r2g8")
+     s = v / "Systems" / "S.md"
+     add = ("guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c1")
+     try:
+         run(v, "guard", "audit", "Systems/S", _RC_CONTRACT, "--date", "2026-01-01", expect_rc=0)
+-        check("★前置★ c1 今天問、判 untestable", _rc_ask(v, "c1").returncode == 0, "")
++        check("★前置★ c1 今天問、判 untestable", _rc_ask(v, "c1", reaudit=False).returncode == 0, "")
+         r = run(v, *add)
+         check("G8 [audit:] 日期早於問答 → 回 2、叫人照順序重審、沒寫標記", r.returncode == 2 and "早於" in r.stderr and "guard audit" in r.stderr
+               and "[residual:" not in s.read_text(encoding="utf-8"), f"rc={r.returncode} {r.stderr[-300:]}")
+         today = _dt.datetime.now(_dt.timezone.utc).astimezone().date().isoformat()   # 跟治理帳 ts 同一個口徑(本機時區的日期)
+         run(v, "guard", "audit", "Systems/S", _RC_CONTRACT, "--date", today, expect_rc=0)
+         r = run(v, *add)
+         check("G8 問答之後重審(同一天)→ 回 0", r.returncode == 0 and "[residual:" in s.read_text(encoding="utf-8"), f"rc={r.returncode} {r.stderr[-300:]}")
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
++# ── 代碼審 code-審查收斂規則 r3 的修正(六組;r3-intake.md〈根因分組與處置〉)──
++# 換形狀:「只准問一次」靠字面身分(編號、指紋、節點名)擋不住換一個名字重問;改成外層看門——推送新增了殘留就升 high,
++# 審查席看得到殘留決策與問答,「挑到想要的答案」成為被審查的事件。預期值都是手寫的固定例子,不呼叫被測函式產生 expected。
++
++def _rc_ent(fp="A", node="Systems/S", ref="Projects/a_計劃#d12", ac=("src/a.py",), tf=("tests/test_a.py",)):
++    return {"node": node, "fp": fp, "residuals": [ref], "about_code": list(ac), "test_files": list(tf)}
++
++
++def t_pitfalls_residual_added_needs_review():
++    """[r3 G1] 推送範圍新增了殘留(頂端索引有、起點沒有的(節點、合約指紋、殘留指標))本身升 high,理由說要過高風險代碼審;
++    只加殘留標記與決策、沒改任何程式也升;同一推送加了又拿掉不升;換節點名、同節點另一條合約指同一筆決策、換反例編號重問後記殘留都算新增。
++    判準來源:r3 資安席 F2(換編號、改節點名重問,推送照樣 light)、合約席與通才席(黑名單整個節點共用)。"""
++    import json as _j
++    import shutil as _sh
++    roots = []
++    WHY = "這次推送新增了殘留"
++    try:
++        # 端對端:主線上 c1 已判 testable;分支換個編號 c2 重問判 untestable、照手冊順序記殘留,只動筆記、索引與治理帳
++        root, v, g = _rc_repo("rc-r3g1-e2e"); roots.append(root)
++        check("★前置★ 主線上 c1 判 testable", _rc_ask(v, "c1", verdict="testable").returncode == 0, "")
++        g("add", "-A"); g("commit", "-qm", "c1 testable"); g("checkout", "-qb", "feat")
++        check("★前置★ 換編號 c2 重問、判 untestable(字面身分擋不住)", _rc_ask(v, "c2").returncode == 0, "")
++        r = run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c2")
++        check("★前置★ --add 成功", r.returncode == 0, r.stderr[-300:])
++        g("add", "-A"); g("commit", "-qm", "只記殘留")
++        names = [n for n in g("diff", "--name-only", "main..HEAD").stdout.split("\n") if n]
++        check("★前置★ 這次推送沒有任何程式檔", names and not any(n.endswith(".py") for n in names), repr(names))
++        d = _rc_pitfalls_tier(v, root)
++        check("G1 只加殘留標記與決策、沒改程式 → high、理由說新增了殘留要過高風險代碼審",
++              d["tier"] == "high" and WHY in d.get("tier_reason", "") and "高風險代碼審" in d.get("tier_reason", ""), repr(d)[:400])
++        check("G1 --add 當場提示新增殘留的推送會被判高風險", "新增殘留的推送會被判高風險" in r.stdout, r.stdout[-300:])
++        # 手寫起點與頂端兩份索引
++        for name, base, head, want in (
++                ("同一推送加了又拿掉", None, None, False),
++                ("換節點名(同一條合約搬到 Systems/S2)", [_rc_ent()], [_rc_ent(node="Systems/S2")], True),
++                ("同節點另一條合約指同一筆決策", [_rc_ent(fp="A")], [_rc_ent(fp="A"), _rc_ent(fp="B")], True),
++                ("同一條合約多指一筆決策", [_rc_ent()], [_rc_ent(), _rc_ent(ref="Projects/a_計劃#d14")], True),
++                ("索引只改排版、殘留沒變", [_rc_ent()], [_rc_ent()], False),
++                ("起點沒有索引、頂端索引沒有殘留", None, [], False)):
++            root, v, g = _rc_repo(f"rc-r3g1-{len(roots)}"); roots.append(root)
++            ip = root / "governance" / "residual-index.json"
++            if base is not None:
++                (root / "governance").mkdir(); ip.write_text(_j.dumps({"version": 1, "entries": base}), encoding="utf-8")
++                g("add", "-A"); g("commit", "-qm", "base")
++            g("checkout", "-qb", "feat")
++            ip.parent.mkdir(exist_ok=True)
++            if head is None:   # 加了又拿掉:第一個提交加、第二個提交清空
++                ip.write_text(_j.dumps({"version": 1, "entries": [_rc_ent()]}), encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "加")
++                head = []
++            ip.write_text(_j.dumps({"version": 1, "entries": head}, indent=1), encoding="utf-8")
++            g("add", "-A"); g("commit", "-qm", name)
++            d = _rc_pitfalls_tier(v, root)
++            if want:
++                check(f"G1 {name} → high、理由說新增了殘留", d["tier"] == "high" and WHY in d.get("tier_reason", ""), repr(d)[:400])
++            else:
++                check(f"G1 {name} → 不升 high", d["tier"] != "high", repr(d)[:400])
++        # 頂端索引讀不出、起點沒有殘留:這次推送動過索引 → 看不出新增了什麼,當成新增;沒動過索引 → 照舊(S6)
++        root, v, g = _rc_repo("rc-r3g1-headbad"); roots.append(root)
++        g("checkout", "-qb", "feat"); (root / "governance").mkdir()
++        (root / "governance" / "residual-index.json").write_text("{壞掉", encoding="utf-8"); g("add", "-A"); g("commit", "-qm", "壞索引")
++        d = _rc_pitfalls_tier(v, root)
++        check("G1 這次推送放進一份讀不出的索引 → high、理由說讀不出", d["tier"] == "high" and "讀不出" in d.get("tier_reason", ""), repr(d)[:400])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_pitfalls_residual_ask_rows_compare_versions():
++    """[r3 G2] 刪帳偵測比起點與頂端兩版帳檔裡 residual-ask 的列(整列去頭尾空白):頂端少了任何一列就 high;
++    .gitattributes 標 -diff、帳裡塞 NUL 讓 git 把帳當二進位檔都躲不掉;讀不出 JSON 的 residual-ask 列被刪也算;
++    帳尾沒換行時續寫、重新排序、整本改 CRLF 不升;檔名清單失敗時照樣比帳;起點帳 git 讀不出往升 high 的方向。
++    判準來源:r3 資安席 F1(-diff 與 NUL 兩種手法實測 light)、通才席(帳尾沒換行續寫誤判)、邊界席 F3(讀不出的刪除列沒測試)、併發席(檔名清單失敗早退)。"""
++    import json as _j
++    import shutil as _sh
++    import types as _ty
++    m = _load_lumos()
++    ask = {"ts": "2026-10-14T10:00:00+08:00", "gate": "residual-ask", "kind": "asked", "node": "Systems/S", "fp": "abc",
++           "case": "c9", "verdict": "testable", "checker": "sonnet/2026-10-14"}
++    ask2 = dict(ask, case="c10", verdict="untestable")
++    other = {"ts": "2026-10-14T10:00:00+08:00", "gate": "code-loop", "kind": "passed", "note": "x"}
++    L = lambda *ds: "".join(_j.dumps(d, ensure_ascii=False) + "\n" for d in ds)
++    broken = '{"gate": "residual-ask", "case": "c3", 壞掉\n'
++    roots = []
++    def prep(tag, base):
++        root, v, g = _rc_repo(tag, commit=False); roots.append(root)
++        (root / "docs" / ".governance-log.jsonl").write_bytes(base.encode("utf-8"))
++        g("add", "-A"); g("commit", "-qm", "init"); g("checkout", "-qb", "feat")
++        return root, v, g
++    real = m.subprocess
++    try:
++        for name, base, head, extra, want in (
++                ("標 -diff 屬性後刪掉 testable 那列", L(other, ask, ask2), L(other, ask2), {".gitattributes": "docs/.governance-log.jsonl -diff\n"}, True),
++                ("帳裡塞 NUL 位元組後刪掉 testable 那列", L(other, ask, ask2), L(other) + "\0\n" + L(ask2), {}, True),
++                ("刪掉讀不出 JSON 的 residual-ask 列", L(other, ask) + broken, L(other, ask), {}, True),
++                ("帳尾沒換行時續寫一筆", L(other) + _j.dumps(ask, ensure_ascii=False), L(other, ask, ask2), {}, False),
++                ("重新排序", L(other, ask, ask2), L(ask2, other, ask), {}, False),
++                ("整本改成 CRLF", L(other, ask, ask2), L(other, ask, ask2).replace("\n", "\r\n"), {}, False)):
++            root, v, g = prep(f"rc-r3g2-{len(roots)}", base)
++            (root / "docs" / ".governance-log.jsonl").write_bytes(head.encode("utf-8"))
++            for rel, txt in extra.items():
++                (root / rel).write_text(txt, encoding="utf-8")
++            g("add", "-A"); g("commit", "-qm", name)
++            if name.startswith(("標 -diff", "帳裡塞 NUL")):
++                hd = g("diff", "-U0", "main..HEAD", "--", "docs/.governance-log.jsonl").stdout
++                check(f"★前置★ {name}:git diff 把帳當二進位檔、沒有刪除行(情境成立)", "Binary files" in hd
++                      and not any(ln.startswith("-") and not ln.startswith("---") for ln in hd.splitlines()), hd[-300:])
++            d = _rc_pitfalls_tier(v, root)
++            if want:
++                check(f"G2 {name} → high、理由說刪改了治理帳的問答", d["tier"] == "high" and "residual-ask" in d.get("tier_reason", ""), repr(d)[:400])
++            else:
++                check(f"G2 {name} → 不升 high", d["tier"] != "high", repr(d)[:400])
++        # 起點帳的物件遺失(git 讀不出,不是路徑不存在)→ 判不出,當成有
++        root, v, g = prep("rc-r3g2-lost", L(other, ask))
++        (root / "docs" / ".governance-log.jsonl").write_bytes(L(other, ask, ask2).encode("utf-8")); g("commit", "-qam", "續寫")
++        blob = g("rev-parse", "main:docs/.governance-log.jsonl").stdout.strip()
++        (root / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
++        res = m._residual_tier_hits(root, "main..HEAD")
++        check("G2 起點帳 git 讀不出 → asks_dropped 記成判不出(-1)", res.get("asks_dropped") == -1, repr(res))
++        # 檔名清單失敗、索引沒有殘留:照樣比帳(併發席:原本早退跳過)
++        root, v, g = prep("rc-r3g2-names", L(other, ask))
++        (root / "docs" / ".governance-log.jsonl").write_bytes(L(other).encode("utf-8")); g("commit", "-qam", "刪列")
++        def fake(args, *a, **kw):
++            if "--name-only" in args:
++                return real.CompletedProcess(args, 128, "", "fatal: 模擬失敗")
++            return real.run(args, *a, **kw)
++        m.subprocess = _ty.SimpleNamespace(run=fake, TimeoutExpired=real.TimeoutExpired, CompletedProcess=real.CompletedProcess, PIPE=real.PIPE)
++        try:
++            res = m._residual_tier_hits(root, "main..HEAD")
++        finally:
++            m.subprocess = real
++        check("G2 檔名清單失敗、索引沒有殘留、刪了 residual-ask 列 → 照樣記 asks_dropped", res.get("asks_dropped") == 1, repr(res))
++    finally:
++        m.subprocess = real
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_pitfalls_residual_key_has_contract():
++    """[r3 G3] 拿掉殘留與縮小守備以(節點、合約指紋、殘留指標)比:同節點兩條合約指同一筆決策、守同一批檔,
++    拿掉其中一條的標記 → high;其中一條的守備範圍縮小、另一條照舊 → high。判準來源:r3 正確性席 F1(實跑只得 asks_dropped)。"""
++    import json as _j
++    import shutil as _sh
++    roots = []
++    try:
++        for name, head, what in (("拿掉其中一條合約的標記", [_rc_ent(fp="A")], "拿掉殘留"),
++                                 ("其中一條合約的測試檔清空、另一條照舊", [_rc_ent(fp="A"), _rc_ent(fp="B", tf=())], "守的範圍")):
++            root, v, g = _rc_with_index(f"rc-r3g3-{len(roots)}", {"version": 1, "entries": [_rc_ent(fp="A"), _rc_ent(fp="B")]}, roots)
++            (root / "governance" / "residual-index.json").write_text(_j.dumps({"version": 1, "entries": head}, ensure_ascii=False), encoding="utf-8")
++            g("commit", "-qam", name)
++            d = _rc_pitfalls_tier(v, root)
++            check(f"G3 同節點兩條合約指同一筆決策,{name} → high、理由說{what}", d["tier"] == "high" and what in d.get("tier_reason", ""), repr(d)[:400])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_residual_case_key_joins_letter_digit():
++    """[r3 G4] 反例編號:夾在字母與數字之間的單一分隔符號也拿掉(c-1、c_1、C1 跟 c1 同一個);夾在兩個數字或兩個字母之間的照留
++    (c1.1 = c1-1 ≠ c11;a-bc ≠ ab-c)。判準來源:r3 正確性席 F2(c-1 與 c1 被分成兩個)。"""
++    import shutil as _sh
++    m = _load_lumos()
++    ck = m._residual_case_key
++    for a, b in (("c-1", "c1"), ("c_1", "c1"), ("C1", "c1"), ("c 1", "c1"), ("c--1", "c1"), ("1-a", "1a"), ("c1.1", "c1-1"), ("Ｃ－１", "c1")):
++        check(f"G4 反例編號 {a!r} 與 {b!r} 是同一個", ck(a) == ck(b), f"{ck(a)!r} {ck(b)!r}")
++    for a, b in (("c1.1", "c11"), ("c1-1", "c11"), ("a-bc", "ab-c"), ("c1-2", "c12"), ("c1", "c2")):
++        check(f"G4 反例編號 {a!r} 與 {b!r} 不同", ck(a) != ck(b), f"{ck(a)!r} {ck(b)!r}")
++    root, v, _g = _rc_repo("rc-r3g4")
++    try:
++        check("★前置★ c1 判 testable", _rc_ask(v, "c1", verdict="testable").returncode == 0, "")
++        for var in ("c_1", "c-1"):
++            r = _rc_ask(v, var)
++            check(f"G4 {var} 跟 c1 是同一個反例 → 不准再問、帳上仍只有一筆", r.returncode == 2 and "已經問過" in r.stderr and len(_rc_gov(root)) == 1,
++                  f"rc={r.returncode} {r.stderr[-200:]}")
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_residual_add_audit_event_order():
++    """[r3 G5] --add 比治理帳的完整時間戳記:這條合約最近一次 guard audit 事件要晚於那筆 untestable 問答(同一秒看帳裡先後);
++    guard audit 會記一筆治理帳;沒有 guard audit 事件(舊審計、手寫戳記)擋下叫人照順序重審;--date 填將來的日期頂替不了;
++    多筆問答取最晚;問答 ts 讀不出也擋。判準來源:r3 正確性席 F3、合約席 F2、邊界席 F1、F4(只比到日、--date 可任填、取最晚沒測試)。"""
++    import datetime as _dt
++    import json as _j
++    import shutil as _sh
++    m = _load_lumos()
++    check("G5 閘名 guard-audit 在 _KNOWN_GATES", "guard-audit" in m._KNOWN_GATES, "")
++    add = lambda c="c1": ("guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", c)
++    roots = []
++    try:
++        # 審計在問答之前、戳記日期填將來:擋;問答之後重審(戳記日期填得比問答早也一樣)就過
++        root, v, _g = _rc_repo("rc-r3g5-order"); roots.append(root)
++        s = v / "Systems" / "S.md"
++        r = run(v, "guard", "audit", "Systems/S", _RC_CONTRACT, "--model", "opus", "--date", "2099-12-31")
++        ev = _rc_gov(root, "guard-audit")
++        check("G5 guard audit 記一筆治理帳(閘名 guard-audit、節點、合約指紋、戳記)",
++              r.returncode == 0 and len(ev) == 1 and ev[0].get("node") == "Systems/S" and ev[0].get("stamp") == "opus/2099-12-31" and ev[0].get("fp"),
++              f"{r.stderr[-200:]} {ev}")
++        check("★前置★ c1 判 untestable(在審計之後)", _rc_ask(v, "c1", reaudit=False).returncode == 0, "")
++        check("G5 審計事件的指紋跟問答的是同一條合約", ev and ev[0].get("fp") == _rc_gov(root)[-1].get("fp"), "")
++        r = run(v, *add())
++        check("G5 最近一次審計早於問答(戳記日期 2099 頂替不了)→ 回 2、叫人照順序重審、沒寫標記",
++              r.returncode == 2 and "早於" in r.stderr and "guard audit" in r.stderr and "[residual:" not in s.read_text(encoding="utf-8"),
++              f"rc={r.returncode} {r.stderr[-300:]}")
++        run(v, "guard", "audit", "Systems/S", _RC_CONTRACT, "--model", "opus", "--date", "2026-01-01", expect_rc=0)
++        r = run(v, *add())
++        check("G5 問答之後重審(同一秒也照帳裡先後;戳記日期比問答早也一樣)→ 回 0", r.returncode == 0 and "[residual:" in s.read_text(encoding="utf-8"),
++              f"rc={r.returncode} {r.stderr[-300:]}")
++        # 沒有 guard audit 事件:合約行的 [audit:] 是手寫的(固定例子),治理帳裡沒有審計紀錄
++        root, v, _g = _rc_repo("rc-r3g5-none"); roots.append(root)
++        check("★前置★ c1 判 untestable、帳上沒有 guard audit", _rc_ask(v, "c1", reaudit=False).returncode == 0 and not _rc_gov(root, "guard-audit"), "")
++        r = run(v, *add())
++        check("G5 找不到這條合約的 guard audit 事件 → 回 2、叫人照順序重審", r.returncode == 2 and "找不到" in r.stderr and "guard audit" in r.stderr,
++              f"rc={r.returncode} {r.stderr[-300:]}")
++        # 多筆問答取最晚:問答 → 審計 → 帳上另有一筆同反例、比審計晚的 untestable(手寫進帳)
++        root, v, _g = _rc_repo("rc-r3g5-latest"); roots.append(root)
++        gp = root / "docs" / ".governance-log.jsonl"
++        check("★前置★ c1 判 untestable 再照順序審計", _rc_ask(v, "c1").returncode == 0, "")
++        later = (_dt.datetime.now().astimezone() + _dt.timedelta(hours=1)).isoformat(timespec="seconds")
++        row = dict(_rc_gov(root)[-1], ts=later, checker="opus/2026-10-14")
++        with gp.open("a", encoding="utf-8") as fh:
++            fh.write(_j.dumps(row, ensure_ascii=False) + "\n")
++        r = run(v, *add())
++        check("G5 同反例另有一筆比審計晚的問答 → 取最晚那筆、回 2", r.returncode == 2 and "早於" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++        # 問答 ts 讀不出
++        row = dict(_rc_gov(root)[-1], ts="昨天", case="c2")
++        with gp.open("a", encoding="utf-8") as fh:
++            fh.write(_j.dumps(row, ensure_ascii=False) + "\n")
++        run(v, "guard", "audit", "Systems/S", _RC_CONTRACT, "--model", "sonnet", "--date", "2099-01-01", expect_rc=0)
++        r = run(v, *add("c2"))
++        check("G5 問答的 ts 讀不出 → 回 2、說判不了先後", r.returncode == 2 and "讀不出" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_residual_claim_fp_strips_invisible():
++    """[r3 G5] 宣稱指紋多剝格式與控制字元(Unicode 類別 Cf、Cc:零寬空白、軟連字號、BOM、響鈴字元);空白類的控制字元(tab、換行)照舊當空白。
++    判準來源:r3 邊界席 F2(a\\u200bb 與 ab 指紋不同,肉眼看是同一句)。"""
++    m = _load_lumos()
++    fp = m._residual_claim_fp
++    for a, b in (("a\u200bb", "ab"), ("x。 \u200b", "x"), ("下單\u00ad不得超賣", "下單不得超賣"), ("\ufeff下單不得超賣", "下單不得超賣"),
++                 ("下單\x07不得超賣", "下單不得超賣"), ("下單\u200d不得超賣。", "下單不得超賣"), ("a\tb", "a b")):
++        check(f"G5 指紋:{a!r} 與 {b!r} 是同一句", fp(a) == fp(b), "")
++    for a, b in (("ab", "a b"), ("上限 1.5 倍", "上限 15 倍")):
++        check(f"G5 指紋:{a!r} 與 {b!r} 照樣不同", fp(a) != fp(b), "")
++
++
+ def t_lint():
+     # 單檔快檢:乾淨節點過、各種寫入當下的錯被抓
+     v = mkvault()
+     # 乾淨 system(無合約)→ 0 問題
+     write(v, "Systems/Clean.md",
+           "type: system\nstatus: doing\nsummary: |-\n  FLOW:a→b\n  KEY:某關鍵", body="# Clean\n")
+     r = run(v, "lint", "Systems/Clean")
+     check("lint: 乾淨節點 rc0", r.returncode == 0 and "0 問題" in r.stdout, r.stdout)
+     # 裸 ★INVARIANT★ → error rc1
+     write(v, "Systems/Naked.md",
