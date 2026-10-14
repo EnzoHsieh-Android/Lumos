@@ -58,11 +58,12 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 
 **合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
 ```
-KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
+KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes] [residual:<資料夾>/<節點>#dN]
 KEY:★DEBT★ <偶然行為,可改>
 KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
 ```
 - 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
+- `[residual:]` 是審計第 3 問的殘留(測試守不住、交給代碼審),只用 `lumos guard residual` 寫、先過 `guard residual-ask` 第二個代理;三種去向與規則見 reference.md〈[audit:] 獨立合法性審計〉。
 - 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
 - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
 

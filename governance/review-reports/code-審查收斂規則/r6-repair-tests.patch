@@ -1,0 +1,640 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 791ad149..fd5b7bcc 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -4533,27 +4533,37 @@ _RC_PLAN_DECISIONS = (
+     "  - content: 殘留:多節點程式內互斥屬繞過設計(反例 c1、c3);第 3 輪審計收斂 checker:sonnet/2026-10-14\n"
+     "    id: d12\n    decided: 2026-10-14\n"
+     "  - content: 已被翻案的殘留 checker:sonnet/2026-10-14\n"
+     "    id: d13\n    decided: 2026-10-14\n    valid: false\n    superseded_by: Projects/a_計劃#d12\n    ended: 2026-10-14\n"
+     "  - content: 沒寫第二個代理是誰的殘留\n"
+     "    id: d14\n    decided: 2026-10-14\n"
+     "  - content: \"\"\n"
+     "    id: d15\n    decided: 2026-10-14\n")
+ 
+ 
++_RC_GIT_ENV_DROP = ("GIT_NO_REPLACE_OBJECTS", "GIT_GRAFT_FILE", "GIT_DIFF_OPTS", "GIT_EXTERNAL_DIFF")
++
++
++def _rc_git_env():
++    """測試自己叫 git 用的乾淨環境:拿掉 lumos 入口會設的那幾個變數(代碼審 r5 G5)。測試經 lumos 跑時(fix-check、bound-tests)
++    會繼承入口設的值,證明「替身、grafts、差異選項會生效」的前置檢查就不成立;被測的 lumos 端照樣走入口。"""
++    import os as _os
++    return {k: x for k, x in _os.environ.items() if k not in _RC_GIT_ENV_DROP}
++
++
+ def _rc_repo(tag="rc", residual_line=None, commit=True, vault="kg"):
+     """git 專案(.git 在 root)+ docs/<vault> 圖譜;Systems/S 兩條合約(一條已審、一條未審),about_code=src/a.py;
+     Projects/a_計劃 帶 d12 到 d15;tests/test_a.py 有 test_rc_guard。residual_line 給了就直接寫在已審那條行尾(不經指令)。
+     派工鏡頭只認 docs/*-knowledge,測鏡頭的傳 vault="rc-knowledge"。"""
+     import subprocess as _sp, json as _j
+     root = Path(tempfile.mkdtemp(prefix=f"gctl-{tag}-"))
+-    g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
++    g = lambda *a: _sp.run(["git", "-C", str(root), *a], capture_output=True, text=True, env=_rc_git_env())
+     g("init", "-q", "-b", "main"); g("config", "user.email", "t@t"); g("config", "user.name", "t")
+     (root / ".lumos").mkdir()
+     (root / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "python"}), encoding="utf-8")
+     (root / "src").mkdir()
+     (root / "src" / "a.py").write_text("def a():\n    return 1\n", encoding="utf-8")
+     (root / "src" / "b.py").write_text("def b():\n    return 2\n", encoding="utf-8")
+     (root / "tests").mkdir()
+     (root / "tests" / "test_a.py").write_text("def test_rc_guard():\n    assert True\n", encoding="utf-8")
+     v = root / "docs" / vault
+     for sub in ("Systems", "Verification", "Projects", "MOC"):
+@@ -5089,23 +5099,28 @@ def t_residual_test_files_skip_comments():
+         (root / "test" / "a.test.js").write_text("test('rc_guard', () => { expect(1).toBe(1) })\n", encoding="utf-8")
+         (root / "test" / "b.test.js").write_text("// test('rc_guard', () => {})\n/* test('rc_guard', () => {}) */\n", encoding="utf-8")
+         body = "下單不得超賣 [test:rc_guard]"
+         got = m._residual_test_files(root, [body]).get(body)
+         files = got["files"] if isinstance(got, dict) else got
+         check("G3 只列真的宣告了測試的那支檔(註解掉的不算)", files == ["test/a.test.js"], repr(got))
+     finally:
+         _sh.rmtree(root, ignore_errors=True)
+ 
+ 
++def _rc_run(v, *args):
++    """跑 lumos,但環境拿掉入口會設的那幾個 git 變數(_rc_git_env):攻擊測試證明的是「入口自己會設」,不靠父行程剛好帶著。"""
++    return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), *args], capture_output=True, text=True, env=_rc_git_env(), check=False)
++
++
+ def _rc_pitfalls_tier(v, root, rng="main..HEAD"):
+     import json as _j
+-    r = run(v, "pitfalls", "--diff", rng, "--no-lint", "--json", "--repo", str(root))
++    r = _rc_run(v, "pitfalls", "--diff", rng, "--no-lint", "--json", "--repo", str(root))
+     try:
+         return _j.loads(r.stdout)
+     except ValueError:
+         return {"tier": None, "tier_reason": r.stdout[-200:] + r.stderr[-200:]}
+ 
+ 
+ def _rc_with_index(tag, idx, roots):
+     import json as _j
+     root, v, g = _rc_repo(tag); roots.append(root)
+     (root / "governance").mkdir()
+@@ -5660,21 +5675,22 @@ def t_pitfalls_residual_ask_rows_compare_versions():
+             if want:
+                 check(f"G2 {name} → high、理由說刪改了治理帳的問答", d["tier"] == "high" and "residual-ask" in d.get("tier_reason", ""), repr(d)[:400])
+             else:
+                 check(f"G2 {name} → 不升 high", d["tier"] != "high", repr(d)[:400])
+         # 起點帳的物件遺失(git 讀不出,不是路徑不存在)→ 判不出,當成有
+         root, v, g = prep("rc-r3g2-lost", L(other, ask))
+         (root / "docs" / ".governance-log.jsonl").write_bytes(L(other, ask, ask2).encode("utf-8")); g("commit", "-qam", "續寫")
+         blob = g("rev-parse", "main:docs/.governance-log.jsonl").stdout.strip()
+         (root / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+         res = m._residual_tier_hits(root, "main..HEAD")
+-        check("G2 起點帳 git 讀不出 → asks_dropped 記成判不出(-1)", res.get("asks_dropped") == -1, repr(res))
++        check("G2 起點帳 git 讀不出 → 記成起點帳讀不出(asks_unknown,r5 G2:不再借 asks_dropped=-1)", res.get("asks_unknown") == "起點"
++              and "asks_dropped" not in res, repr(res))
+         # 檔名清單失敗、索引沒有殘留:照樣比帳(併發席:原本早退跳過)
+         root, v, g = prep("rc-r3g2-names", L(other, ask))
+         (root / "docs" / ".governance-log.jsonl").write_bytes(L(other).encode("utf-8")); g("commit", "-qam", "刪列")
+         def fake(args, *a, **kw):
+             if "--name-only" in args:
+                 return real.CompletedProcess(args, 128, "", "fatal: 模擬失敗")
+             return real.run(args, *a, **kw)
+         m.subprocess = _ty.SimpleNamespace(run=fake, TimeoutExpired=real.TimeoutExpired, CompletedProcess=real.CompletedProcess, PIPE=real.PIPE)
+         try:
+             res = m._residual_tier_hits(root, "main..HEAD")
+@@ -5989,21 +6005,21 @@ def t_pitfalls_residual_ignores_git_replace():
+         check("★前置★ 沒有 replace 時 → high、理由說新增了殘留", d["tier"] == "high" and "新增了殘留" in d.get("tier_reason", ""), repr(d)[:400])
+         tree = g("rev-parse", "HEAD^{tree}").stdout.strip()
+         fake = g("commit-tree", tree, "-m", "假的主線").stdout.strip()
+         main = g("rev-parse", "main").stdout.strip()
+         g("replace", main, fake)
+         check("★前置★ replace 生效:主線讀起來跟頂端一樣、git diff 列不出任何檔",
+               g("replace", "-l").stdout.strip() == main and g("diff", "--name-only", "main..HEAD").stdout.strip() == ""
+               and "residual-index.json" in g("ls-tree", "-r", "--name-only", "main").stdout, g("diff", "--name-only", "main..HEAD").stdout)
+         d = _rc_pitfalls_tier(v, root)
+         check("G3 git replace 換掉主線 → 照樣 high、理由說新增了殘留", d["tier"] == "high" and "新增了殘留" in d.get("tier_reason", ""), repr(d)[:400])
+-        r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(root), "--json", "--no-cache")
++        r = _rc_run(v, "dispatch-lens", "main..HEAD", "--repo", str(root), "--json", "--no-cache")
+         try:
+             t = _j.loads(r.stdout.strip().splitlines()[-1]).get("text", "")
+         except (ValueError, IndexError):
+             t = r.stdout[-300:] + r.stderr[-300:]
+         check("G3 git replace 換掉主線 → 派工鏡頭照樣附這次新增的殘留", "這次新增的殘留" in t and "[residual:Projects/a_計劃#d12]" in t, t[-800:])
+     finally:
+         for r_ in roots:
+             _sh.rmtree(r_, ignore_errors=True)
+ 
+ 
+@@ -6127,20 +6143,496 @@ def t_pitfalls_residual_ask_rows_counted():
+             g("commit", "-qam", name)
+             if attr:
+                 check("★前置★ textconv 生效(git show --textconv 讀到的是換過的字)", "看不到" in g("show", "--textconv", "main:docs/.governance-log.jsonl").stdout, "")
+             d = _rc_pitfalls_tier(v, root)
+             check(f"G5 {name} → high、理由說刪改了 residual-ask 的列", d["tier"] == "high" and "residual-ask" in d.get("tier_reason", ""), repr(d)[:400])
+     finally:
+         for r_ in roots:
+             _sh.rmtree(r_, ignore_errors=True)
+ 
+ 
++# ── 代碼審 code-審查收斂規則 r5 的修正(七組;r5-intake.md〈根因分組與處置〉)──
++# 預期值都是手寫的固定例子(只改 d12 內容尾端加反例、頂端索引寫成 {bad、偽造 ts 的新增列、假節點問答、已過的 deadline),
++# 不呼叫被測函式產生 expected。
++
++_RC_R5_Q1 = "這筆殘留的問答有沒有換編號或改字重問"
++_RC_R5_HEAD = "這次新增的殘留"
++_RC_R5_UNKNOWN = "⚠ 這次新增的殘留算不出來"
++
++
++def _rc_r5_rev(root, rev):
++    import subprocess as _sp
++    return _sp.run(["git", "-C", str(root), "rev-parse", rev], capture_output=True, text=True, env=_rc_git_env(), check=False).stdout.strip()
++
++
++def _rc_r5_section(root, deadline=None, m=None):
++    """直接呼叫鏡頭的新增殘留段(in-process,main..HEAD,圖譜 docs/rc-knowledge/)→ 整段文字。deadline 預設 60 秒後。"""
++    import time as _t
++    m = m or _load_lumos()
++    dl = _t.monotonic() + 60 if deadline is None else deadline
++    return "\n".join(m._lens_residual_section(root, _rc_r5_rev(root, "main"), _rc_r5_rev(root, "HEAD"), "docs/rc-knowledge/", dl))
++
++
++def _rc_r5_lens_cli(v, root):
++    import json as _j
++    r = run(v, "dispatch-lens", "main..HEAD", "--repo", str(root), "--json", "--no-cache")
++    try:
++        return _j.loads(r.stdout.strip().splitlines()[-1]).get("text", "")
++    except (ValueError, IndexError):
++        return f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}"
++
++
++def _rc_r5_rebase_main(g, fn):
++    """在 main 上多做一個提交(fn 改檔),feat 重設到新的 main。"""
++    g("checkout", "-q", "main")
++    fn()
++    g("add", "-A")
++    g("commit", "-qm", "主線補")
++    g("checkout", "-q", "feat")
++    g("reset", "-q", "--hard", "main")
++
++
++def t_pitfalls_residual_decision_note_touched():
++    """[r5 G1] 外層看門:推送改到存著已登記殘留決策的那篇筆記(起點殘留索引記的決策所在檔)本身升 high,
++    理由「改到存著已登記殘留的筆記(<節點>),要過高風險代碼審」:①只改 d12 內容尾端加反例(不動索引、不動治理帳)→ high;
++    ②改同一篇別的段落 → 也 high(刻意的粗粒度);③沒碰那篇(改別篇筆記)→ 照舊 light;
++    ④舊索引沒記決策在哪篇 → 改到任何圖譜檔都 high、理由說沒記在哪篇;只改程式不因這條升;
++    ⑤派工鏡頭把①這種也列進新增殘留段(殘留指標、標明改了存著決策的筆記、決策內容從頂端讀)。
++    判準來源:r5 資安席 F1(只改 d12 內容尾端加 c2 c3 c4,分級 light、鏡頭沒附段)。應抓到的錯:分級不看決策所在筆記 → ①②⑤紅;
++    看全部筆記 → ③紅;舊索引當成沒有殘留 → ④紅。"""
++    import json as _j
++    import shutil as _sh
++    WHY = "改到存著已登記殘留的筆記"
++    APPEND = "另 c2 c3 c4 整個刪帳繞過也殺不掉"
++    roots = []
++    try:
++        root, v, g = _rc_r4_main_with_residual("rc-r5g1-tail", roots, vault="rc-knowledge")
++        p = v / "Projects" / "a_計劃.md"
++        p.write_text(p.read_text(encoding="utf-8").replace("第 3 輪審計收斂 checker:", f"第 3 輪審計收斂;{APPEND} checker:"), encoding="utf-8")
++        g("commit", "-qam", "只改 d12 內容")
++        names = [n for n in g("-c", "core.quotePath=false", "diff", "--name-only", "main..HEAD").stdout.split("\n") if n]
++        check("★前置★ ①只改了 a_計劃.md(索引、治理帳、程式都沒動)", names == ["docs/rc-knowledge/Projects/a_計劃.md"], repr(names))
++        d = _rc_pitfalls_tier(v, root)
++        why = d.get("tier_reason", "")
++        check("G1 ①只改 d12 內容尾端加反例 → high、理由說改到存著已登記殘留的筆記並點名那篇",
++              d["tier"] == "high" and WHY in why and "Projects/a_計劃" in why, repr(d)[:500])
++        t = _rc_r5_lens_cli(v, root)
++        line = [ln for ln in t.splitlines() if "[residual:Projects/a_計劃#d12]" in ln]
++        check("G1 ⑤鏡頭的新增殘留段列出這筆(殘留指標、標明改了存著決策的筆記、頂端的決策內容)、附必答題",
++              _RC_R5_HEAD in t and len(line) == 1 and "存著這筆殘留決策的筆記" in line[0] and APPEND in line[0] and _RC_R5_Q1 in t, t[-1500:])
++        g("reset", "-q", "--hard", "main")
++        p.write_text(p.read_text(encoding="utf-8").replace("# a\n", "# a\n\n正文多一段,跟 d12 無關。\n"), encoding="utf-8")
++        g("commit", "-qam", "改同一篇別的段落")
++        d = _rc_pitfalls_tier(v, root)
++        check("G1 ②改同一篇別的段落 → 也 high(刻意的粗粒度)", d["tier"] == "high" and WHY in d.get("tier_reason", ""), repr(d)[:400])
++        g("reset", "-q", "--hard", "main")
++        (v / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n\n多一行\n", encoding="utf-8")
++        g("commit", "-qam", "改別篇")
++        d = _rc_pitfalls_tier(v, root)
++        check("G1 ③沒碰那篇(只改別篇筆記)→ 照舊 light", d["tier"] == "light" and WHY not in d.get("tier_reason", ""), repr(d)[:400])
++        # ④舊索引:主線那份索引的條目沒記決策在哪篇
++        idx = root / "governance" / "residual-index.json"
++        def strip_notes():
++            doc = _j.loads(idx.read_text(encoding="utf-8"))
++            for e in doc["entries"]:
++                e.pop("notes", None)
++            idx.write_text(_j.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
++        g("reset", "-q", "--hard", "main")
++        _rc_r5_rebase_main(g, strip_notes)
++        check("★前置★ ④主線索引沒有 notes 欄", all("notes" not in e for e in _j.loads(idx.read_text(encoding="utf-8"))["entries"]), "")
++        (v / "MOC" / "idx.md").write_text("---\ntype: moc\n---\n# idx\n\n多一行\n", encoding="utf-8")
++        g("commit", "-qam", "改別篇")
++        d = _rc_pitfalls_tier(v, root)
++        why = d.get("tier_reason", "")
++        check("G1 ④舊索引沒記決策在哪篇、改到任何圖譜檔 → high、理由說沒記在哪篇並點名殘留",
++              d["tier"] == "high" and "沒記這筆殘留的決策在哪篇" in why and "Projects/a_計劃#d12" in why, repr(d)[:500])
++        g("reset", "-q", "--hard", "main")
++        (root / "src" / "b.py").write_text("def b():\n    return 9\n", encoding="utf-8")
++        g("commit", "-qam", "只改程式")
++        d = _rc_pitfalls_tier(v, root)
++        check("G1 ④舊索引、只改不在索引裡的程式 → 不因這條升(standard)", d["tier"] == "standard", repr(d)[:400])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_guard_residual_index_records_decision_note():
++    """[r5 G1] 殘留索引每筆記下殘留決策所在筆記的 repo 相對路徑(notes 欄,--add 寫入時一起記);doctor 比對連這欄一起比:
++    手改成指到別篇 → doctor 報那筆索引的 notes 跟圖譜不同;同一次推送把 notes 改指別篇 → pitfalls high(換了之後看不出改的是不是那篇)。
++    判準來源:r5 G1 派工補充(推不出決策在哪篇就讓 --add 寫入時一起記)。"""
++    import json as _j
++    import shutil as _sh
++    roots = []
++    try:
++        root, v, g = _rc_r4_main_with_residual("rc-r5g1-idx", roots, vault="rc-knowledge")
++        idx = root / "governance" / "residual-index.json"
++        ents = _j.loads(idx.read_text(encoding="utf-8"))["entries"]
++        check("G1 --add 寫的索引記了決策所在筆記", len(ents) == 1
++              and ents[0].get("notes") == {"Projects/a_計劃#d12": "docs/rc-knowledge/Projects/a_計劃.md"}, repr(ents))
++        check("★前置★ 索引跟圖譜一致時 doctor 不報索引", "殘留索引" not in run(v, "doctor").stdout, "")
++        doc = _j.loads(idx.read_text(encoding="utf-8"))
++        doc["entries"][0]["notes"] = {"Projects/a_計劃#d12": "docs/rc-knowledge/MOC/idx.md"}
++        idx.write_text(_j.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
++        r = run(v, "doctor")
++        check("G1 手改 notes 指到別篇 → doctor 報那筆索引的 notes 跟圖譜不同", "殘留索引" in r.stdout and "notes" in r.stdout, r.stdout[-1200:])
++        g("commit", "-qam", "notes 改指別篇")
++        d = _rc_pitfalls_tier(v, root)
++        check("G1 推送把 notes 改指別篇 → high、理由說決策所在筆記換了", d["tier"] == "high" and "決策所在筆記換了" in d.get("tier_reason", ""), repr(d)[:400])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_dispatch_lens_residual_unreadable_says_so():
++    """[r5 G2] 鏡頭的新增殘留段在治理帳或殘留索引任一邊讀不出時,一律回「⚠ 這次新增的殘留算不出來」固定說明加必答題,不准回空:
++    ①起點治理帳的物件遺失(git 讀不出)+ 分支新增一筆判 untestable 的問答(正確性席);②頂端索引寫成 {bad、同時在圖譜加殘留(資安席 F2);
++    ③對照組:兩邊都讀得出、只改程式 → 回空。判準來源:r5 正確性席、資安席 F2(分級升 high、鏡頭卻沒附段也沒必答題)。"""
++    import shutil as _sh
++    roots = []
++    try:
++        root, v, g = _rc_r4_main_with_residual("rc-r5g2-lost", roots, vault="rc-knowledge")
++        check("★前置★ 分支上 c2 判 untestable", _rc_ask(v, "c2").returncode == 0, "")
++        g("add", "-A")
++        g("commit", "-qm", "追加 c2")
++        blob = g("rev-parse", "main:docs/.governance-log.jsonl").stdout.strip()
++        (root / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
++        check("★前置★ ①起點帳 git 讀不出", g("cat-file", "-e", "main:docs/.governance-log.jsonl").returncode != 0, "")
++        t = _rc_r5_section(root)
++        check("G2 ①起點帳讀不出、新增了 untestable 問答 → 算不出來的固定說明(講是治理帳)加必答題",
++              _RC_R5_UNKNOWN in t and "治理帳" in t and _RC_R5_Q1 in t, t[-800:])
++        root, v, g = _rc_repo("rc-r5g2-bad", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        check("★前置★ c1 判 untestable", _rc_ask(v, "c1").returncode == 0, "")
++        run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c1", expect_rc=0)
++        (root / "governance" / "residual-index.json").write_text("{bad", encoding="utf-8")
++        g("add", "-A")
++        g("commit", "-qm", "加殘留、索引寫壞")
++        d = _rc_pitfalls_tier(v, root)
++        check("★前置★ ②分級升 high(頂端索引讀不出)", d["tier"] == "high" and "殘留索引讀不出" in d.get("tier_reason", ""), repr(d)[:400])
++        t = _rc_r5_lens_cli(v, root)
++        check("G2 ②頂端索引 {bad → 鏡頭照樣附段:算不出來(講是頂端的殘留索引)加必答題",
++              _RC_R5_UNKNOWN in t and "頂端的殘留索引" in t and _RC_R5_Q1 in t, t[-1200:])
++        root, v, g = _rc_r4_main_with_residual("rc-r5g2-none", roots, vault="rc-knowledge")
++        (root / "src" / "b.py").write_text("def b():\n    return 7\n", encoding="utf-8")
++        g("commit", "-qam", "只改程式")
++        check("G2 ③對照組:都讀得出、只改程式 → 回空", _rc_r5_section(root) == "", _rc_r5_section(root)[-400:])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_pitfalls_residual_ask_unreadable_reason():
++    """[r5 G2] 分級把「治理帳讀不出」跟「刪掉或改掉問答」分成兩種理由句:①起點帳沒有任何 residual-ask 列、頂端(工作目錄)那份是捷徑讀不出
++    → high,理由說讀不出、不說刪掉;②起點有一列、頂端真的少了那列 → 理由說刪掉或改掉、不說讀不出。
++    判準來源:r5 通才席(起點沒問答、頂端讀不出時理由寫成「刪掉或改掉」,與事實不符)。"""
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import tempfile as _tf
++    m = _load_lumos()
++    other = {"ts": "2026-10-14T10:00:00+08:00", "gate": "code-loop", "kind": "passed", "note": "x"}
++    ask = {"ts": "2026-10-14T10:00:00+08:00", "gate": "residual-ask", "kind": "asked", "node": "Systems/S", "fp": "abc",
++           "case": "c9", "verdict": "testable", "checker": "sonnet/2026-10-14"}
++    L = lambda *ds: "".join(_j.dumps(d, ensure_ascii=False) + "\n" for d in ds)
++    roots = []
++    try:
++        root, _v, g = _rc_repo("rc-r5g2-why", commit=False)
++        roots.append(root)
++        gp = root / "docs" / ".governance-log.jsonl"
++        gp.write_text(L(other), encoding="utf-8")
++        g("add", "-A")
++        g("commit", "-qm", "init")
++        outside = Path(_tf.mkdtemp(prefix="gctl-rc-r5g2-out-"))
++        roots.append(outside)
++        (outside / "real.jsonl").write_text(L(other, dict(ask, verdict="untestable")), encoding="utf-8")
++        gp.unlink()
++        _os.symlink(outside / "real.jsonl", gp)
++        why = ";".join(m._residual_tier_reasons(m._residual_tier_hits(root, "main")))
++        check("G2 ①起點沒有問答、頂端帳是捷徑讀不出 → 有理由(升 high)、說讀不出、不說刪掉", why and "讀不出" in why and "刪掉" not in why, why)
++        root, _v, g = _rc_repo("rc-r5g2-drop", commit=False)
++        roots.append(root)
++        gp = root / "docs" / ".governance-log.jsonl"
++        gp.write_text(L(other, ask), encoding="utf-8")
++        g("add", "-A")
++        g("commit", "-qm", "init")
++        g("checkout", "-qb", "feat")
++        gp.write_text(L(other), encoding="utf-8")
++        g("commit", "-qam", "刪問答")
++        why = ";".join(m._residual_tier_reasons(m._residual_tier_hits(root, "main..HEAD")))
++        check("G2 ②頂端真的少了一列 → 理由說刪掉或改掉、不說讀不出", "刪掉或改掉" in why and "讀不出" not in why, why)
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_dispatch_lens_residual_new_rows_first():
++    """[r5 G3] 鏡頭排序:問答列這次新增的先列、其餘照 _gov_ts 排(讀不出的排最後);合約清單真的殘留索引變化排最前,
++    問答指到的節點不在殘留索引的標「節點不在殘留索引」排後面。①邊界席:同一條合約主線已有 12 筆正常 ts 的問答,
++    分支手寫 3 筆 ts 偽造成「0000-x」的 untestable 新增列 → 3 筆新增都列出;②資安席 F3:分支手寫 5 筆指到假節點 A0–A4 的 untestable 問答,
++    同時真的新增一筆殘留 → 真殘留列出、假節點標「節點不在殘留索引」。應抓到的錯:照 ts 原始字串排、取最後 12 筆 → ①紅;合約照節點名排、取前 5 條 → ②紅。"""
++    import shutil as _sh
++    roots = []
++    try:
++        root, v, g = _rc_r4_main_with_residual("rc-r5g3-ts", roots, vault="rc-knowledge")
++        base_row = [x for x in _rc_gov(root) if x.get("verdict") == "untestable"][-1]
++        _rc_r5_rebase_main(g, lambda: _rc_r4_append(root, *[dict(base_row, case=f"c{20 + i}", ts=f"2026-10-{i + 1:02d}T10:00:00+08:00") for i in range(12)]))
++        _rc_r4_append(root, *[dict(base_row, case=f"n{i}", ts="0000-x") for i in (1, 2, 3)])
++        g("commit", "-qam", "三筆偽造 ts 的新增列")
++        t = _rc_r5_section(root)
++        shown = [c for c in ("n1", "n2", "n3") if any(f"問答 {c} " in ln and "這次新增" in ln for ln in t.splitlines())]
++        check("G3 ①12 筆正常列 + 3 筆偽造 ts 的新增列 → 3 筆新增都列出、標這次新增", shown == ["n1", "n2", "n3"], t[-2000:])
++        root, v, g = _rc_repo("rc-r5g3-fake", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        check("★前置★ c1 判 untestable", _rc_ask(v, "c1").returncode == 0, "")
++        run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c1", expect_rc=0)
++        row = [x for x in _rc_gov(root) if x.get("verdict") == "untestable"][-1]
++        _rc_r4_append(root, *[dict(row, node=f"A/A{i}", fp=f"f{i}", case="c1") for i in range(5)])
++        g("add", "-A")
++        g("commit", "-qm", "真殘留 + 五筆假節點問答")
++        t = _rc_r5_section(root)
++        fake = [ln for ln in t.splitlines() if ln.startswith("- A/A")]
++        check("G3 ②五筆假節點問答 + 一條真殘留 → 真殘留列出", "[residual:Projects/a_計劃#d12]" in t, t[-2000:])
++        check("G3 ②假節點標「節點不在殘留索引」、排在真殘留後面", fake and all("節點不在殘留索引" in ln for ln in fake)
++              and t.find("[residual:Projects/a_計劃#d12]") < t.find("- A/A"), t[-2000:])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_dispatch_lens_residual_deadline():
++    """[r5 G4] 鏡頭的新增殘留段接鏡頭的時間預算:deadline 已過 → 不讀 git、回算不出來(講時間預算用完)加必答題;
++    同一範圍給足時間 → 正常列出殘留。判準來源:r5 併發席、架構對齊席(這段沒接 deadline,單次 git 讀取最長 60 秒)。"""
++    import shutil as _sh
++    import time as _t
++    roots = []
++    try:
++        root, v, g = _rc_repo("rc-r5g4", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        check("★前置★ c1 判 untestable", _rc_ask(v, "c1").returncode == 0, "")
++        run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c1", expect_rc=0)
++        g("add", "-A")
++        g("commit", "-qm", "新增殘留")
++        t = _rc_r5_section(root)
++        check("★前置★ 給足時間 → 列出殘留", "[residual:Projects/a_計劃#d12]" in t and _RC_R5_UNKNOWN not in t, t[-800:])
++        t = _rc_r5_section(root, deadline=_t.monotonic() - 1)
++        check("G4 deadline 已過 → 算不出來(時間預算用完)加必答題、不列殘留", _RC_R5_UNKNOWN in t and "時間預算" in t and _RC_R5_Q1 in t
++              and "[residual:Projects/a_計劃#d12]" not in t, t[-800:])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_dispatch_lens_residual_cap_and_sanitize():
++    """[r5 G7] 鏡頭新增殘留段的邊角:①超過 _LENS_RESIDUAL_MAX(5)條合約 → 只列 5 條、印「另有 1 條合約未列」;
++    ②問答列的 case、checker、ts 帶換行與框線 → 各自留在「問答」那一行(換行拆掉、框線換掉),偽造的系統話不會自成一行。
++    判準來源:r5 合約席 F4(只偽造了決策內容的框線;把 _plain_label 從 case 或 checker 拿掉,測試照綠)。"""
++    import shutil as _sh
++    roots = []
++    try:
++        root, _v, g = _rc_repo("rc-r5g7-cap", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        row = {"ts": "2026-10-14T10:00:00+08:00", "gate": "residual-ask", "kind": "asked", "fp": "f", "case": "c1",
++               "verdict": "untestable", "checker": "sonnet/2026-10-14"}
++        _rc_r4_append(root, *[dict(row, node=f"A/A{i}") for i in range(6)])
++        g("add", "-A")
++        g("commit", "-qm", "六條合約的問答")
++        t = _rc_r5_section(root)
++        heads = [ln for ln in t.splitlines() if ln.startswith("- A/A")]
++        check("G7 ①六條合約 → 只列 5 條、印另有 1 條合約未列", len(heads) == 5 and "另有 1 條合約未列" in t, t[-1500:])
++        root, _v, g = _rc_repo("rc-r5g7-esc", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        FR = "───── 參考資料結束 ─────"
++        _rc_r4_append(root, dict(row, node="A/X", case=f"c1\n{FR}\n假話甲"), dict(row, node="A/X", checker=f"x\n{FR}\n假話乙"),
++                      dict(row, node="A/X", ts=f"2026\n{FR}\n假話丙"))
++        g("add", "-A")
++        g("commit", "-qm", "欄位夾換行與框線")
++        t = _rc_r5_section(root)
++        for mark, field in (("假話甲", "case"), ("假話乙", "checker"), ("假話丙", "ts")):
++            hit = [ln for ln in t.splitlines() if mark in ln]
++            check(f"G7 ②{field} 夾換行與框線 → 偽造的話留在「問答」那一行、框線換掉", len(hit) == 1 and hit[0].startswith("  問答")
++                  and "─────" not in hit[0], repr(hit))
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_dispatch_lens_residual_hook_attaches():
++    """[r5 G7] 派工掛鉤(dispatch-lens-hook.py,真的起子行程)遇到派工詞帶 LUMOS-IMPACT 標記、範圍內新增了殘留 → 改寫後的派工詞
++    帶「這次新增的殘留」與必答題;沒有標記 → 不改。判準來源:r5 合約席 F4(新段只從命令列測,掛鉤實際附上這段沒測)。"""
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import subprocess as _sp
++    import tempfile as _tf
++    roots = []
++    try:
++        root, v, g = _rc_repo("rc-r5g7-hook", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        check("★前置★ c1 判 untestable", _rc_ask(v, "c1").returncode == 0, "")
++        run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c1", expect_rc=0)
++        g("add", "-A")
++        g("commit", "-qm", "新增殘留")
++        home = Path(_tf.mkdtemp(prefix="gctl-rc-r5g7-home-"))
++        roots.append(home)
++        src = Path(GRAPHCTL).resolve().parent.parent
++        env = {k: x for k, x in _os.environ.items() if not k.startswith(("LUMOS_", "CLAUDE_"))}
++        env.update(HOME=str(home), USERPROFILE=str(home), LUMOS_HOME=str(src), LUMOS_DISPATCH_LENS_NO_CACHE="1",
++                   PATH=_os.pathsep.join([str(Path(sys.executable).parent), "/usr/bin", "/bin"]))
++        check("★前置★ 掛鉤找不到 PATH 上的 lumos、改用 LUMOS_HOME 指的這份", _sh.which("lumos", path=env["PATH"]) is None, env["PATH"])
++        hook = str(src / "scripts" / "hooks" / "claude" / "dispatch-lens-hook.py")
++        def fire(prompt):
++            pl = _j.dumps({"hook_event_name": "PreToolUse", "tool_name": "Agent", "cwd": str(root), "tool_input": {"prompt": prompt}})
++            r = _sp.run([sys.executable, hook], input=pl, env=env, capture_output=True, text=True, timeout=120, check=False)
++            try:
++                o = _j.loads(r.stdout.strip()) if r.stdout.strip() else {}
++            except ValueError:
++                o = {}
++            return o.get("hookSpecificOutput", {}).get("updatedInput", {}).get("prompt", ""), r
++        out, r = fire("審查這段。\nLUMOS-IMPACT: main..HEAD\n")
++        check("G7 掛鉤改寫的派工詞帶這次新增的殘留、殘留指標與必答題", _RC_R5_HEAD in out and "[residual:Projects/a_計劃#d12]" in out
++              and _RC_R5_Q1 in out, f"rc={r.returncode} {out[-800:]} {r.stderr[-600:]}")
++        out, r = fire("審查這段,沒有標記。\n")
++        check("G7 沒有標記 → 掛鉤不改派工詞", out == "" and r.returncode == 0, r.stdout[-300:])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_guard_audit_residual_hardlink_ledger():
++    """[r5 G7] guard audit 遇到治理帳有別的硬連結:讀帳的一律拒收,所以不寫那筆審計紀錄、印「這次審計沒記進治理帳」並講硬連結;
++    戳記照蓋、帳檔內容不變。判準來源:r5 合約席 F4(guard-kill 筆記寫「捷徑或有別的硬連結時不寫」,硬連結沒有測)。"""
++    import os as _os
++    import shutil as _sh
++    roots = []
++    try:
++        root, v, _g = _rc_repo("rc-r5g7-hard")
++        roots.append(root)
++        gp = root / "docs" / ".governance-log.jsonl"
++        gp.write_text("", encoding="utf-8")
++        _os.link(gp, root / "other-link.jsonl")
++        check("★前置★ 帳檔有兩個硬連結", gp.stat().st_nlink == 2, str(gp.stat().st_nlink))
++        r = run(v, "guard", "audit", "Systems/S", _RC_CONTRACT, "--model", "opus", "--date", "2026-10-20")
++        check("G7 帳有別的硬連結 → 審計照樣蓋戳記(回 0)", r.returncode == 0
++              and "[audit:opus/2026-10-20]" in (v / "Systems" / "S.md").read_text(encoding="utf-8"), f"rc={r.returncode} {r.stderr[-300:]}")
++        check("G7 帳有別的硬連結 → 講這次審計沒記進治理帳、講硬連結", "沒記進治理帳" in r.stderr and "硬連結" in r.stderr, r.stderr[-400:])
++        check("G7 帳有別的硬連結 → 帳檔沒被寫", gp.read_text(encoding="utf-8") == "", gp.read_text(encoding="utf-8")[:200])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_pitfalls_residual_ignores_git_grafts():
++    """[r5 G5] 主程式入口關掉 grafts(GIT_GRAFT_FILE 指到不存在的路徑):主線多一個提交 M2,分支新增殘留;再寫 .git/info/grafts
++    把 M2 的父提交改成分支頂端 → git merge-base 變成頂端本身、main...HEAD 看起來是空範圍。走入口的 pitfalls --diff main...HEAD
++    照樣看到真歷史:high、理由說新增了殘留。判準來源:協調者轉述另一分支資安席實測(git 2.39 在 GIT_NO_REPLACE_OBJECTS=1 下仍讀 grafts)。
++    應抓到的錯:入口不設 GIT_GRAFT_FILE → 紅。"""
++    import shutil as _sh
++    roots = []
++    try:
++        root, v, g = _rc_repo("rc-r5g5-graft", vault="rc-knowledge")
++        roots.append(root)
++        g("checkout", "-qb", "feat")
++        check("★前置★ c1 判 untestable", _rc_ask(v, "c1").returncode == 0, "")
++        run(v, "guard", "residual", "Systems/S", _RC_CONTRACT, "--add", "Projects/a_計劃#d12", "--case", "c1", expect_rc=0)
++        g("add", "-A")
++        g("commit", "-qm", "新增殘留")
++        head = _rc_r5_rev(root, "HEAD")
++        g("checkout", "-q", "main")
++        (root / "src" / "b.py").write_text("def b():\n    return 3\n", encoding="utf-8")
++        g("commit", "-qam", "主線另一個提交")
++        m2 = _rc_r5_rev(root, "HEAD")
++        g("checkout", "-q", "feat")
++        d = _rc_pitfalls_tier(v, root, "main...HEAD")
++        check("★前置★ 沒有 grafts 時 main...HEAD → high、新增了殘留", d["tier"] == "high" and "新增了殘留" in d.get("tier_reason", ""), repr(d)[:400])
++        (root / ".git" / "info").mkdir(exist_ok=True)
++        (root / ".git" / "info" / "grafts").write_text(f"{m2} {head}\n", encoding="utf-8")
++        check("★前置★ grafts 生效:git merge-base main HEAD 變成頂端本身", g("merge-base", "main", "HEAD").stdout.strip() == head, "")
++        d = _rc_pitfalls_tier(v, root, "main...HEAD")
++        check("G5 grafts 改寫祖先關係 → 照樣 high、理由說新增了殘留", d["tier"] == "high" and "新增了殘留" in d.get("tier_reason", ""), repr(d)[:400])
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_pitfalls_ignores_git_diff_opts_env():
++    """[r5 G5] 主程式入口拿掉 GIT_DIFF_OPTS(它會蓋掉程式裡明寫的 -U0/-U3):環境帶 GIT_DIFF_OPTS=-u0 或 -u40 跑 pitfalls --diff,
++    結果(分級、挑出的測試關鍵字)跟沒帶時相同。固定例子:src/a.py 前面一個 30 多行的 first()、後面 second() 裡改一行 →
++    關鍵字是 second(-u40 時 git 的區塊標頭會變成 first)。判準來源:協調者轉述另一分支資安席實測。應抓到的錯:入口不拿掉 GIT_DIFF_OPTS → 紅。"""
++    import json as _j
++    import shutil as _sh
++    import subprocess as _sp
++    roots = []
++    try:
++        root, v, g = _rc_repo("rc-r5g5-dopts")
++        roots.append(root)
++        body = "def first():\n" + "".join(f"    x{i} = {i}\n" for i in range(30)) + "    return 0\n\n\ndef second():\n    y = 1\n    return y\n"
++        (root / "src" / "b.py").write_text(body, encoding="utf-8")
++        g("commit", "-qam", "b.py 兩個函式")
++        g("checkout", "-qb", "feat")
++        (root / "src" / "b.py").write_text(body.replace("    y = 1", "    y = 2"), encoding="utf-8")
++        g("commit", "-qam", "改 second")
++        env0 = _rc_git_env()
++        def tier(extra):
++            env = dict(env0, **extra)
++            r = _sp.run([sys.executable, GRAPHCTL, "--vault", str(v), "pitfalls", "--diff", "main..HEAD", "--no-lint", "--json", "--repo", str(root)],
++                        capture_output=True, text=True, env=env, check=False)
++            try:
++                d = _j.loads(r.stdout)
++            except ValueError:
++                return ("?", r.stdout[-200:] + r.stderr[-200:])
++            return (d.get("tier"), d.get("affected_keys"))
++        base = tier({})
++        check("★前置★ 沒帶 GIT_DIFF_OPTS → 關鍵字是 second", base[1] and "second" in base[1] and "first" not in base[1], repr(base))
++        hdr = _sp.run(["git", "-C", str(root), "diff", "-U0", "main..HEAD"], capture_output=True, text=True, env=dict(env0, GIT_DIFF_OPTS="-u40"), check=False).stdout
++        check("★前置★ GIT_DIFF_OPTS=-u40 蓋得掉明寫的 -U0(情境成立)", "@@ -1," in hdr, hdr[:200])
++        for val in ("-u0", "-u40"):
++            got = tier({"GIT_DIFF_OPTS": val})
++            check(f"G5 環境帶 GIT_DIFF_OPTS={val} → 結果跟沒帶時相同", got == base, f"{got!r} vs {base!r}")
++    finally:
++        for r_ in roots:
++            _sh.rmtree(r_, ignore_errors=True)
++
++
++def t_reference_residual_lens_docs():
++    """[r5 G6] 手冊照實寫新增殘留段(結構檢查,守的是說法不跟程式打架):①templates §3 與 06 那列講「內容從 base 讀」的地方寫明例外
++    ——新增殘留段從頂端讀推送者寫的字,防護是注入框、字數上限、消毒;②code-loop SKILL.md 不再說「沒答的席照漏答固定席處理」
++    (沒有對應機制),照實寫把關是推送升 high、要過一輪高風險代碼審,審查席有沒有答沒有機械核對,並列鏡頭附段的前提
++    (LUMOS-IMPACT 標記、base 在主線、沒逾時、已提交);③reference.md、06、圖譜即合約.md 寫明新增判 untestable 的問答也升 high,
++    改到存著已登記殘留決策的筆記也升 high。判準來源:r5 合約席 F1–F3。"""
++    import re as _re
++    root = Path(GRAPHCTL).resolve().parent.parent
++    rd = lambda rel: (root / rel).read_text(encoding="utf-8")
++    tpl = rd("skills/lumos-design-loop/templates.md")
++    s3 = tpl[tpl.find("### §3 編排者派工前須知"):]
++    s3 = s3[:s3.find("\n### ", 10)] if "\n### " in s3[10:] else s3
++    six = rd("skills/lumos-project-notes/commands/06-代碼審與推送.md")
++    row = next((ln for ln in six.splitlines() if "固定席節點自動附進派工詞了嗎" in ln), "")
++    for name, txt in (("templates §3", s3), ("06 固定席那列", row)):
++        check(f"G6 {name} 寫明新增殘留段是從頂端讀的例外、附防護(注入框、字數上限、消毒)",
++              _re.search(r"這次新增的殘留[^\n]{0,80}頂端", txt) is not None and "注入框" in txt and "字數上限" in txt and "消毒" in txt, txt[:300])
++    sk = rd("skills/lumos-code-loop/SKILL.md")
++    check("G6 code-loop SKILL.md 不再說沒答的席照漏答固定席處理", "漏答固定席處理" not in sk, "")
++    ln = next((x for x in sk.splitlines() if "這次新增的殘留" in x), "")
++    check("G6 code-loop SKILL.md 照實寫把關強度(推送升 high、審查席有沒有答沒有機械核對)與附段前提",
++          "沒有機械核對" in ln and "LUMOS-IMPACT" in ln and "base 在主線" in ln and "逾時" in ln and "已提交" in ln, ln[:400])
++    for rel in ("skills/lumos-project-notes/reference.md", "skills/lumos-project-notes/commands/06-代碼審與推送.md", "docs/methodology/圖譜即合約.md"):
++        t = rd(rel)
++        check(f"G6 {rel} 寫明新增判 untestable 的問答也升 high", _re.search(r"新增[^。\n]{0,12}判[^。\n]{0,6}(untestable|測不到)[^。\n]{0,8}問答[^。\n]{0,30}(升 high|高風險)", t) is not None, "")
++        check(f"G6 {rel} 寫明改到存著已登記殘留決策的筆記也升 high", "存著已登記殘留" in t, "")
++
++
+ def t_lint():
+     # 單檔快檢:乾淨節點過、各種寫入當下的錯被抓
+     v = mkvault()
+     # 乾淨 system(無合約)→ 0 問題
+     write(v, "Systems/Clean.md",
+           "type: system\nstatus: doing\nsummary: |-\n  FLOW:a→b\n  KEY:某關鍵", body="# Clean\n")
+     r = run(v, "lint", "Systems/Clean")
+     check("lint: 乾淨節點 rc0", r.returncode == 0 and "0 問題" in r.stdout, r.stdout)
+     # 裸 ★INVARIANT★ → error rc1
+     write(v, "Systems/Naked.md",
+@@ -42647,21 +43139,21 @@ def t_lens_loaders_cfg_param_and_budget():
+     m = _load_lumos_inproc()
+     d = Path(_tf.mkdtemp(prefix="lenscfg-")); (d / ".lumos").mkdir()
+     (d / ".lumos" / "config.json").write_text(_json.dumps({"test_profile": "python"}), encoding="utf-8")
+     p_disk = m.load_test_profile(d); p_cfg = m.load_test_profile(d, cfg={"test_profile": "csharp-xunit"})
+     check("loader: load_test_profile 無 cfg 讀磁碟(python)、有 cfg 不讀磁碟(csharp)", p_disk["scaffold_ext"] == ".py" and p_cfg["scaffold_ext"] == ".cs", f"{p_disk['scaffold_ext']} {p_cfg['scaffold_ext']}")
+     (d / ".lumos" / "cochange.json").write_text(_json.dumps({"min_support": 5}), encoding="utf-8")
+     c_disk, _ = m._cochange_load_config(d); c_cfg, _ = m._cochange_load_config(d, cfg={"min_support": 1})
+     check("loader: _cochange_load_config 無 cfg 讀磁碟(5)、有 cfg 不讀磁碟且硬底線 2 照走", c_disk["min_support"] == 5 and c_cfg["min_support"] == 2, f"{c_disk['min_support']} {c_cfg['min_support']}")
+     pl = m.load_platforms(d, cfg={"test_profile": "python"}); check("loader: load_platforms 吃 cfg", pl["default_platform"] and not pl["multiplatform"], str(pl)[:120])
+     k1 = m._lens_cache_path(d, "a" * 40, "b" * 40)
+-    check("cache: 鍵含 schema 版本(常數存在且進鍵)", getattr(m, "_LENS_SCHEMA", None) == 4 and "dispatch-lens" in str(k1), str(k1))
++    check("cache: 鍵含 schema 版本(常數存在且進鍵)", getattr(m, "_LENS_SCHEMA", None) == 5 and "dispatch-lens" in str(k1), str(k1))
+     lines, status, meta = m._lens_fallback(d, "a" * 40, "b" * 40, [], set(), {}, _time.monotonic() - 1)
+     check("budget: deadline 已過→skipped-timeout、印固定字串", status == "skipped-timeout" and any("預算不足" in l for l in lines), f"{status} {lines}")
+     import inspect
+     check("cochange: _cochange_transactions 有 timeout 參數", "timeout" in inspect.signature(m._cochange_transactions).parameters)
+ 
+ 
+ 
+ # ── Codex完全支援 S0(2026-09-04,Projects/Codex完全支援_計劃 d1–d2)──────────────────────────
+ def _codex_run(home, code):
+     """假 HOME 隔離載入 lumos 模組跑一段碼(印結果到 stdout)。"""

@@ -1,0 +1,699 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/審查收斂規則_計劃.md b/docs/lumos-toolchain-knowledge/Projects/審查收斂規則_計劃.md
+new file mode 100644
+index 00000000..d050acf4
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/審查收斂規則_計劃.md
+@@ -0,0 +1,126 @@
++---
++type: project
++status: doing
++created: 2026-10-14
++updated: 2026-10-14
++tags:
++  - type/project
++  - status/doing
++  - scope/guards-gates
++  - risk/守衛面
++lands_in:
++  - Systems/guard-kill
++  - Systems/design-loop
++  - Systems/loop-convergence-recording
++  - Systems/pitfalls-code-loop
++related:
++  - "[[Projects/代碼審資安席_計劃]]"
++  - "[[Verification/2026-10-13_後端示範交付]]"
++---
++# 審查收斂規則_計劃
++
++> 白話:合約審計的第 3 問「構造一個違反保證、但綁的測試照過的壞法」沒有終點——審計員只要肯重寫設計,永遠構造得出來,只能靠人喊停。改成:照 2026-10-13 那次人裁的判準,把反例分成「局部退化」(一定要被測試殺掉)與「繞過設計」(記成殘留、交給代碼審),而且分類不由想收斂的那一方說了算;殘留用一個獨立標記寫在合約行上,派工鏡頭看得到、碰到它的改動一律走高風險代碼審。原本也想讓資安席修補輪只看變過的檔,審查後決定不做(見〈不做〉)。
++
++## 緣起
++
++- 2026-10-13 後端示範:合約審計連三輪都推翻三條合約,第 3 問每輪補完測試又構造得出新的壞法,最後由需求方人裁收尾(示範計劃決策 d12:修 bug、補實際會發生的三類,刻意繞過設計的三種寫法列為已知殘留)。同一次示範,代碼審第三輪資安席把整份 35 支檔重讀一遍,只因為第二輪修補動了 6 支。出處:使用者 2026-10-14 問「這次示範有什麼 lumos 可以改進」時列的第 5 條;[[Verification/2026-10-13_後端示範交付]] 改進候選第 7 條。
++- d12 的人裁:「實際可能發生的退化都補測試;刻意繞過設計的改法屬於代碼審要擋的範圍」。本計劃把它寫成照做的規則,同時守住本 repo「提出的人不准自己認證」的規矩(`skills/lumos-project-notes/reference.md` 審計段:讓提出者自己評必手下留情)。
++
++PRIOR-ART: 變異測試(mutation testing)的業界做法是只用局部改動當壞法,並承認「等價變異」(改了但行為不變)殺不掉、要人工排除;本 repo 的 `guard kill` 破壞配方是同一類工具,借它記錄並真跑局部退化。殘留標記照本 repo 行內標記「一個方括號一個欄位、一個正規式」的慣例(`[test:]`、`[audit:]`、`[kill:]`、`[rollback:]`)另立 `[residual:]`;解析「節點#決策」重用既有的決策指標解析與「節點在、決策在、沒被標無效」的判斷。
++RETIRE-IF: 上線後 8 週內,有一次逃逸帳記錄的 `residual_ref` 指到某筆殘留決策、而那個缺陷其實是一個保留設計機制、只是用錯的局部退化——撤回 B 規則,第 3 問回到「構造得出就不合格」。
++REVISIT:2026-12-15 數一次:圖譜裡帶 `[residual:]` 的合約行幾條、各指到哪幾筆殘留決策;逃逸帳裡帶 `residual_ref` 的幾筆;照 RETIRE-IF 判。
++WHY:「同一反例只准問一次」降為方便,真正的把關改成新增殘留的推送升 high、走高風險代碼審(派工鏡頭把殘留決策與問答附給審查席;只保證跑一輪高風險代碼審,審查席有沒有答沒有機械核對) [出處:代碼審 r3] [因:反例編號是編排者自己取的標籤,r1 換大小寫標點、r2 改字換指紋與刪帳列、r3 換編號與改節點名,字面身分怎麼比都擋不住換一個新名字;把挑答案的那次推送送進一輪高風險代碼審才擋得住] [不選:繼續加字面身分檢查]
++
++## 不做
++
++- 不做「資安席修補輪只看變過的檔」。理由:處置閘判資安席涵蓋,看的是帳上掛的凍結 patch,不是席位實際讀了哪幾支;若派工叫資安席只讀清單、清單又以「帳上看過」推下一輪,就會出現一支檔從頭到尾沒有資安席真的讀過、閘卻判涵蓋的情形——這正是 [[Projects/代碼審資安席_計劃]] 第一輪用「同檔名內容改掉」實測出來、改成比內容才堵上的洞(r1 整合席)。現行「每輪整份重讀」是那道防線的代價,保留。上限輪資安席抓到問題、折掉之後,判定的仍是那一輪的凍結 patch,不會卡住,所以也沒有要解的收斂問題。
++
++## 做法
++
++1. **反例分三種去向**(寫進 `lumos-project-notes` 的〈[audit:] 獨立合法性審計〉五問段;派工時照那一段的防應試化規則改述措辭,不逐字貼):
++   - **局部退化,殺得掉**:保留設計點名的機制(鎖、約束、冪等鍵查詢、交易邊界……),只是用錯或漏用——漏呼叫、條件寫反、範圍或順序錯、錯誤處理吞掉、少了一條約束、新增的一條路徑沒經過那個機制。審計員附一條 `lumos guard kill-add` 的配方(先提交,`kill-add --try` 的試跑是弱證據),補測試直到 `lumos guard kill` 對它是 `killed`;`survived` 繼續補,`drifted` 先改寫配方。這是預設去向:分不清的都先當這一類。
++   - **局部退化,殺不掉**:努力補過測試,配方仍是 `survived`、`killed_unattributed` 或 `timed_out_weak`,而原因是行為其實等價、只在特定交錯時序才出事而現有測試設施跑不穩、或要多檔多處才寫得出(`kill-add` 一條配方只收一處替換)。記成殘留。
++   - **繞過設計**:要改架構或部署形態才做得到(例:把單一資料庫換成多節點並改用程式內互斥、改成另一種儲存的分桶查詢)。記成殘留。
++   - 後兩種要記殘留時,一律照第 2 點過第二個獨立代理。殘留決策用 `lumos decision-add` 記(四欄齊),內容逐型列出殘留、每型標明是「殺不掉」還是「繞過設計」與反例編號、寫「第幾輪審計收斂」,尾端寫 `checker:<第二個代理的模型>/<日期>`(決策欄位是單行文字)。
++   - **d12 那三型照新判準重分**:「庫存多時另開不加鎖的快路徑」與「拿掉資料庫約束」是局部退化(併發壓測打所有下單入口、檢查資料庫結構都測得到),先補測試;「改用程式內互斥並跑多個節點」屬繞過設計。示範 repo 的 d12 依此修訂是那個 repo 的事,本計劃只在手冊裡用這三型當例子。
++2. **分類不由想收斂的一方決定**:分類由審計員(無對話脈絡的獨立代理)做;編排者可以把審計員判成要記殘留的改成「局部退化,殺得掉」(更嚴),不准反過來。要記殘留的每一條,另派一個沒看過審計報告結論的獨立代理,只給那條反例、合約行與它綁的測試,問「這能不能在現有測試設施下穩定測到」。
++   - **問過就留痕,而且只准問一次**:新指令 `lumos guard residual-ask <合約節點> "<KEY 子字串>" --case <反例編號> --checker <模型>/<日期> --verdict testable|untestable` 把這次的問答記一筆治理帳事件(閘名 `residual-ask`,帶合約節點、合約行的指紋、反例編號、checker、結論)。同一條合約、同一個反例編號已經有一筆,第二次 `residual-ask` 回 2;判過 `testable` 的反例記在同一把鍵(節點、合約指紋、反例編號)上。**只准問一次是方便,不是保證**:反例編號是編排者自己取的,換編號、改節點名、改合約一個字都問得到第二次。**真正的把關是新增殘留的推送要過高風險代碼審**(第 5 點):派工鏡頭把殘留決策與那幾筆問答附給審查席,換代理重問到想要的答案的那次推送要過一輪高風險代碼審(代碼審 r3;只保證跑一輪審,審查席有沒有答沒有機械核對)。結論是 `testable` 就照它說的方法補測試(回到第一種去向)。
++   - 跟既有的穩定性探針不衝突:探針管的是「這條合約合不合法」的判決,這裡管的是反例的分類;兩邊不一致時這裡一律取嚴的那一邊,不另交人裁。這一步寫進審計派工流程(`lumos-project-notes` 審計段),理由引 maker≠checker。
++3. **殘留用獨立標記**:合約行尾加 `[residual:<節點>#<決策 id>]`(放在既有標記之後;可以多個,一筆殘留決策一個;節點寫圖譜相對路徑、不帶 `.md`;決策指標的解析重用既有的 `_dref_parse`/`_dref_norm`,格式是它們認得的 `<節點>#d<數字>`)。
++   - **新增 `RESIDUAL_REF_RE`,並把 `residual` 加進共用的剝標記正規式 `INV_TAG_RE`**:乾淨宣稱文字、合約定位(`_kill_find_contract`)、家筆記正式行比對(`_guard_formal_line`)、`guard list`、contracts、lint 訊息都經過它;不加的話,帶殘留的合約行跟計劃裡預告的原句比對不相等,轉正與漂移檢查會誤報(r2 正確性席實測)。實作時照 `INV_TAG_RE` 上方註解列的呼叫點逐一確認。
++   - **新指令** `lumos guard residual <合約節點> "<KEY 子字串>" --add <節點>#<決策 id> --case <反例編號>…`(加),或 `--remove <節點>#<決策 id>`(拿掉一個);兩者擇一。決策指標只收帶資料夾的全名(例 `Projects/a_計劃#d12`),不收短名(短名日後可能撞名)。寫入流程照 `guard audit` 的形狀:外層拿筆記庫寫入鎖、用 `_kill_find_contract` 定位(子字串對到兩條以上就拒絕)、寫後用 `atomic_write_verify` 自驗。同一個標記已在就回 0 說「已經有了」;`--remove` 找不到那個標記回 2。
++   - **寫入當下就驗**:決策指標的狀態用既有的 `_pq_decision_state`,不是 `ok` 就不寫、回 2(找不到、已被翻案、名稱解析不明都算);決策內容要非空;`--case` 列的每個反例編號都要在治理帳裡有一筆這條合約的 `residual-ask`、結論是 `untestable`,而且決策內容裡要出現那一筆的 `checker:<模型>/<日期>`(決策四欄是單行文字,`checker:` 寫在 content 的尾端,用 `decision-add` 寫得進去);合約行要已經有 `[audit:]`(殘留是審計的產物)。
++   - **第 3 問的放行與記殘留的順序**:這一問過 = 每個反例都殺掉,或經第二個代理確認測不到(不是「已記成殘留」——記殘留要先有 `[audit:]`,兩句會互卡,代碼審 r1 合約席)。順序:`guard residual-ask` 記問答(判 untestable)→ 五問其餘也過了,`guard audit` 蓋 `[audit:]` → `decision-add` 記殘留決策 → `guard residual <節點> "<KEY 子字串>" --add …`;最後一步寫入當下驗:問答判 untestable、這條合約最近一次 `guard audit` 晚於那個反例最晚一筆問答(比治理帳上兩筆事件的完整時間戳記,`guard audit` 每次都記一筆 `guard-audit`;早於或帳上找不到審計紀錄就擋、叫人照順序重審,代碼審 r2、r3)、決策在且內容含那筆 `checker:`。
++   - `[audit:]` 照舊,`guard audit` 重審只換 `[audit:]` 那一段、不碰 `[residual:]`,所以重審不會抹掉殘留。
++   - **doctor**:放在既有的「綁了測試卻沒審計」那一段,多驗每個 `[residual:]` 指到的決策狀態仍是 `ok`;找不到時報錯並印「去 <節點> 補回那筆決策,或用 `guard residual --remove` 拿掉標記並重審」。決策跨節點(殘留可以記在計劃節點),doctor 本來就載入整個圖譜,不增加依賴。
++4. **派工鏡頭看得到**:鏡頭印合約行時只印前 200 字,戳記常在後半(r1 整合席數過:36 條帶 `[audit:]` 的合約行有 22 條的戳記在第 200 字之後),所以「帶殘留」放進接在後面的徽章(「⚠帶殘留 N 筆」,N 是不同決策的個數),而且不依賴綁定測試徽章的計算(平台設定讀不到時那個徽章不顯示,殘留徽章照樣顯示)。鏡頭讀的是主線版的合約行,同一個分支裡才加的殘留看不到——那種情形殘留決策本身就在這次的 diff 裡,審查席照樣看得到。代碼審派工範本加一句:看到帶殘留徽章,去讀那幾筆殘留決策,那幾型壞法測試抓不到、要靠你看。範圍內新增了殘留或判測不到的問答時,鏡頭另附「這次新增的殘留」一小節與一題逐條必答(代碼審 r4,見〈實作時定下的細節〉)。
++5. **碰到帶殘留的合約一律走高風險代碼審**:用一份進版控的小索引 `governance/residual-index.json`(由 `guard residual` 每次加或拿掉標記時重寫:每條帶殘留的合約一筆,記合約節點、合約行指紋、殘留決策指標,與那篇節點當下的 about_code 檔清單,加上合約綁定測試所在的檔)。`pitfalls --diff <起點>..<頂端>` 算風險分級時,讀**起點與頂端兩個版本**的索引(`git show <提交>:governance/residual-index.json`,不載入圖譜,`pitfalls` 分級不讀圖譜的既有決策不動),取聯集;這次改到的檔(含改名的舊路徑與新路徑——檔案清單用 `--no-renames` 取)只要有一支在聯集裡,分級升 high,說明寫「改到帶殘留合約守的程式」(代碼審 r1–r3 補強:綁定測試所在的檔也整檔算;新增殘留、拿掉殘留、縮小殘留守的範圍、索引或檔名清單讀不出、刪改治理帳的 `residual-ask` 列也升 high——見〈實作時定下的細節〉)。
++   - 讀起點版本,所以同一個提交把標記拿掉、改程式也躲不掉;直推主線時,起點是遠端上原本的主線,同樣在。讀頂端版本,所以這次推送才加的殘留也算。索引不存在(新專案、沒有任何殘留)就什麼都不做;起點版本的索引 git 讀不出(不是不存在)當成有殘留、升 high(代碼審 r2)。
++   - 升成 high 之後,用的是既有的整套機制:`code-loop check` 要求代碼審留痕、推送前掛鉤與 CI 都跑它(`--no-verify` 跳過本機掛鉤,CI 照樣擋);不另寫一道閘,也不碰推送前規格閘。
++   - doctor 驗索引跟圖譜一致(每筆對得到一條帶 `[residual:]` 的合約行、about_code 清單與綁定測試所在的檔相同;圖譜裡每個 `[residual:]` 都在索引裡);不一致時報錯並給 `lumos guard residual --reindex` 重建。
++   - 過度的那一面(節點管很多檔、跟那條合約無關的小改動也要代碼審)接受:帶殘留的合約本來就是測試守不住的地方。
++6. **逃逸能歸因到殘留**:`lumos loop escape` 加選填 `--residual-ref <節點>#<決策 id>`,用同一支 `_pq_decision_state` 驗格式與存在,記進逃逸帳的 `residual_ref` 欄;它加進撤回路徑與 `--list` 的「不准混用」檢查,`--auto` 不支援(自動記帳沒有歸因來源)。`loop escape-stats` 印帶 `residual_ref` 的筆數。RETIRE-IF 靠它量。
++7. **要一起改的說法**:`skills/lumos-project-notes/SKILL.md` 的合約行範本、`reference.md` 的五問段與 `[audit:]` 說明與標記清單、`commands/06-代碼審與推送.md` 的 `guard` 指令表(加 `guard residual`)、`docs/methodology/圖譜即合約.md` 講第 3 問、maker≠checker、未審合約檢查的幾處、[[Systems/design-loop]] 講五問與防應試化的 KEY 行、[[Systems/pitfalls-code-loop]] 講風險分級的段落、`skills/lumos-design-loop/templates.md` 代碼審派工段(徽章那句)。防應試化的「定期無表抽考」照舊;抽考時不帶這套分類,比較兩邊結論時把「帶殘留通過」當成「不合格」看,落差才不會被系統性拉大(r1 整合席)。
++
++## 驗收條款
++
++- [S1] `guard residual <節點> "<KEY 子字串>" --add Projects/a_計劃#d12 --case c1` 應在那條合約行尾加 `[residual:Projects/a_計劃#d12]` 並更新殘留索引;決策找不到、被翻案、內容空白、`c1` 沒有結論為 `untestable` 的 `residual-ask`、決策內容沒有那一筆的 `checker:`、指標是短名、合約行還沒有 `[audit:]`、或這條合約最近一次 `guard audit` 的治理帳紀錄早於那筆問答(或找不到)時,應不寫並回 2(問答或審計事件的 ts 是沒帶時區的極端日期時,照樣回 2、不崩出堆疊);治理帳是捷徑時 `guard audit` 照樣蓋戳記,但不往捷徑寫那筆審計紀錄、印「這次審計沒記進治理帳」,帳有別的硬連結時也一樣(不寫、照實講硬連結);同一個標記再寫一次應回 0 不重複加,索引本來就對時不改檔。[test: t_guard_residual_write] [test: t_residual_add_audit_after_ask] [test: t_residual_add_audit_event_order] [test: t_guard_residual_noop_keeps_index] [test: t_residual_ev_order_extreme_ts] [test: t_guard_audit_residual_symlink_ledger] [test: t_guard_audit_residual_hardlink_ledger]
++- [S2] 對帶 `[residual:]` 的合約重跑 `guard audit` 時,`[residual:]` 應保留不變(把 `guard audit` 改成整行重組的變異下,這支測試應翻紅)。[test: t_guard_audit_keeps_residual]
++- [S3] `[residual:]` 指到的決策事後被翻案或被刪時,doctor 應報錯並指出去哪裡補。[test: t_doctor_checks_residual_ref]
++- [S4] 帶 `[residual:]` 的合約行,在合約定位、家筆記正式行比對與 `guard list` 的乾淨文字裡,應跟沒有標記時一樣。[test: t_inv_tag_strips_residual]
++- [S5] 派工鏡頭印帶 `[residual:]` 的合約行時,徽章應標出帶殘留與筆數;合約行超過 200 字、或平台設定讀不到時也一樣。範圍內新增了殘留或新增了判 untestable 的問答時,應在固定席之後附「這次新增的殘留」一小節(殘留指標、單行且有長度上限的決策內容、那條合約的問答列帶編號、判定、checker、ts),框外附一題逐條必答(換編號或改字重問、第二個代理是不是另一個代理);只改程式時不應出現;改到存著已登記殘留決策的筆記也應列;任一邊的索引或治理帳讀不出、時間預算用完時應印「算不出來」那句並照附必答題,不應放空;新增的問答列與真的殘留應排在偽造 ts 的舊列與假節點問答之前;這次新增的殘留應排在改到筆記的那幾筆之前,起點索引不知道決策在哪篇的那幾筆應彙總成一行、不逐條展開(大批舊格式殘留時新增那條照樣列出);時間預算用完而兩版都沒有殘留索引、也沒改治理帳時不應出段;段裡算不出來的那次不應寫進鏡頭快取。[test: t_dispatch_lens_badge_shows_residual] [test: t_dispatch_lens_residual_new_section] [test: t_dispatch_lens_residual_unreadable_says_so] [test: t_dispatch_lens_residual_new_rows_first] [test: t_dispatch_lens_residual_deadline] [test: t_dispatch_lens_residual_cap_and_sanitize] [test: t_dispatch_lens_residual_hook_attaches] [test: t_dispatch_lens_residual_new_not_crowded] [test: t_dispatch_lens_residual_no_index_no_section] [test: t_dispatch_lens_residual_unknown_not_cached]
++- [S6] 推送範圍改到殘留索引(起點或頂端版本)裡列的檔時,`pitfalls --diff` 應判 high——about_code 與綁定測試所在的檔都整檔算,縮排在 class 裡的測試方法只改本體、只改輔助函式也算;同一個提交把標記拿掉、或把那支檔改名時也應判 high;頂端有、起點沒有的殘留(新增殘留,只動筆記與索引也算),起點有、頂端沒有的殘留,與同一筆殘留起點守的檔頂端少了,應判 high——殘留的身分是(節點、合約指紋、殘留指標),同一推送加了又拿掉不升;同一篇同一筆殘留只換了合約指紋時理由應寫「合約句子改了(舊的拿掉、新的加入),要過代碼審」;頂端治理帳新增了判 untestable 的 `residual-ask` 列(同一筆決策追加反例、索引沒變也算;讀不出判定的列也算)應判 high,只新增判 testable 的不升;本機 `git replace` 把起點換成假提交時照樣判 high;起點索引 git 讀不出(不是不存在)、或檔名清單失敗而索引有殘留時應判 high;改到起點索引記的、存著殘留決策的那篇筆記(改哪一段都算)、起點索引不知道在哪篇(舊格式、解不出、記的路徑不在起點的樹裡——寫成 `../x.md`、不存在、大小寫跟 git 不同都算)而改到圖譜資料夾底下的 `.md`(圖譜在 `docs/knowledge/`、指標在圖譜根目錄也算;圖譜資料夾底下的非 `.md`、圖譜外的不算)、或頂端索引記的那篇跟起點不同時應判 high,沒碰那篇不升,notes 寫成 NFD 時照樣認得是那篇;解不出時理由應照講原因、不叫人跑 `--reindex`;本機 grafts 改寫祖先關係、環境帶 `GIT_DIFF_OPTS` 或會改輸出的 `GIT_EXTERNAL_DIFF` 時結果照舊,lumos 起的子行程看不到 `GIT_EXTERNAL_DIFF`;治理帳讀不出時理由應寫讀不出、不寫刪掉;索引不存在時分級應跟現在一樣。[test: t_pitfalls_tier_high_on_residual_index] [test: t_pitfalls_residual_test_file_whole] [test: t_pitfalls_tier_high_on_residual_removed] [test: t_pitfalls_residual_guard_shrunk] [test: t_pitfalls_residual_git_failures] [test: t_pitfalls_residual_added_needs_review] [test: t_pitfalls_residual_key_has_contract] [test: t_pitfalls_residual_new_untestable_ask] [test: t_pitfalls_residual_ignores_git_replace] [test: t_pitfalls_residual_decision_note_touched] [test: t_pitfalls_residual_ask_unreadable_reason] [test: t_pitfalls_residual_ignores_git_grafts] [test: t_pitfalls_ignores_git_diff_opts_env] [test: t_guard_residual_index_records_decision_note] [test: t_pitfalls_residual_note_unresolved_reason] [test: t_pitfalls_residual_note_path_checked] [test: t_pitfalls_residual_note_nfd_path] [test: t_pitfalls_residual_graph_file_any_vault] [test: t_pitfalls_ignores_git_external_diff_env]
++- [S7] `loop escape --residual-ref Projects/a_計劃#d12` 應把 `residual_ref` 記進逃逸帳;指到找不到的決策時應回 2;跟 `--list` 或撤回一起用時應回 2;`loop escape-stats` 應印帶 `residual_ref` 的筆數。[test: t_loop_escape_residual_ref]
++- [S8] `lumos-project-notes` 的審計五問段應寫著三種去向、「分不清先當殺得掉的局部退化」、第二個獨立代理與 `checker:` 行、三輪上限,而且不應要求派工時逐字貼;手冊、06、方法論、本計劃、design-loop、guard-kill、pitfalls-code-loop 與 lumos 的提示文字裡,凡提到「只准問一次」的那一行都應寫明是方便、不應寫成擋得住換代理、換人重問的口氣,每一處都應寫明把關在高風險代碼審;templates §3、06、code-loop SKILL.md、reference.md、方法論與本計劃講新增殘留段時,應寫明它是從頂端讀的例外與防護、只改存著殘留決策的筆記也升 high,把關強度照實寫「只保證跑一輪高風險代碼審,審查席有沒有答沒有機械核對」。[test: t_reference_audit_q3_rules] [test: t_reference_residual_lens_docs]
++- [S9] 同一條合約、同一個反例編號已經有一筆 `residual-ask` 時,第二次 `residual-ask` 應回 2,訊息與 `--help` 應照實講「這個編號已問過;換編號仍問得到,把關在推送時的高風險代碼審」;同一條合約判過 testable 的反例改判 untestable 應回 2、`--add` 也應擋,同節點別條合約的同名反例不受牽連;合約改字換指紋後問得到,但記成殘留的那次推送應判 high;反例編號 `c-1`、`c_1`、`C1` 應跟 `c1` 是同一個;起點版本治理帳的 `residual-ask` 列頂端少了時 `pitfalls --diff` 應判 high(`.gitattributes` 標 `-diff`、掛 textconv、塞 NUL 讓 git 當二進位檔也一樣,同一列重複兩次只刪一份也算),帳尾沒換行時續寫、重新排序不應升;doctor 應在殘留索引跟圖譜不一致時報錯(整份比多重集合:同句第二條合約、索引少一筆或多一筆重複的都算),沒有 notes 欄的舊格式索引應另報「舊格式,跑 `lumos guard residual --reindex` 補上」、不當成內容不一致。[test: t_guard_residual_ask_once] [test: t_residual_testable_sticks_to_case] [test: t_pitfalls_residual_ask_rows_dropped] [test: t_pitfalls_residual_ask_rows_compare_versions] [test: t_residual_case_key_joins_letter_digit] [test: t_residual_ask_block_message_honest] [test: t_pitfalls_residual_ask_rows_counted] [test: t_doctor_residual_index_multiset] [test: t_doctor_residual_index_legacy_format]
++
++## 實務隱患
++
++- 守衛面:B 放寬了「第 3 問構造得出就不合格」。風險是把測得到的退化說成殺不掉或繞過設計。對策:預設去向是「殺得掉的局部退化」;編排者只能往嚴的方向改分類;記殘留要第二個獨立代理同意、它說測得到就照它補測試,它的模型與日期寫進殘留決策並由寫入指令檢查;殘留在徽章上看得到;改到帶殘留合約守的程式時分級升 high、走既有的代碼審留痕要求(CI 也擋);逃逸可以歸因到殘留,RETIRE-IF 量得到。第二個代理的問答有留痕、同一反例只准問一次(方便,不是保證;把關在新增殘留的推送要過高風險代碼審);新增殘留或新增判測不到的問答時,派工鏡頭把殘留決策與問答附給審查席、列一題逐條必答(代碼審 r4;只保證跑一輪高風險代碼審,審查席有沒有答沒有機械核對,收貨時編排者自己看);仍擋不住的是編排者偽造那一筆問答——那跟偽造任何審查留痕一樣,靠留痕可回溯與逃逸帳事後量,單人使用的威脅模型下接受。
++- 殘餘風險(代碼審 r1 資安席、合約席,r2 資安席):反例編號是編排者自己取的,換編號、改節點名、改字都問得到第二次;這些重問最後都要記成殘留才有用,而新增殘留的推送升 high、交給高風險代碼審看那幾筆問答,推送裡刪改 `residual-ask` 帳列也會升 high(代碼審 r3)。剩下五項各一行回頭條件:
++  - REVISIT:2027-01-15 換編號重問:數治理帳裡同一節點先有反例判 testable、之後出現別的編號判 untestable 的筆數,逐筆對審計報告看是不是同一個壞法;有一筆是,就把反例編號綁到審計報告列的反例上
++  - REVISIT:2027-01-15 改字重問:數同一節點、指紋不同的兩條合約各有 untestable 問答的筆數,逐筆看新句子是不是只為換掉指紋而改;有一筆是,就把問答改綁到審計報告的合約身分(不靠宣稱文字)
++  - REVISIT:2027-01-15 第二個代理只靠 --checker 自報:抽三筆殘留決策的 checker,對派工紀錄看那一場是不是真的另派了沒看過審計結論的代理;有一筆對不上,就讓 residual-ask 改收派工紀錄的編號、寫入時驗得到那一場
++  - REVISIT:2027-01-15 新增殘留段的必答題:數這段期間帶「這次新增的殘留」段的代碼審席報告,逐份看有沒有答那題;有一份沒答而照樣放行,就讓 code-loop 收貨時機械核對那題有答
++  - REVISIT:2027-01-15 殺不掉沒核對 kill 帳:數記成「殺不掉」的殘留決策,逐筆查 kill 帳上那條配方是不是真的 survived;有一筆不是,就讓 --add 讀 kill 帳、配方沒 survived 的不准記成殺不掉
++- 已排除:金流:不碰付款或點數。
++- 已排除:對外送出:只改本機的審計留痕、風險分級、鏡頭與手冊。
++- 已排除:不可逆:還原提交即回到原規則;`[residual:]` 標記在舊版工具下只是一段不認得的行內文字(不影響 `[audit:]` 的判讀)。
++
++## 回退
++
++照順序:
++1. 還原提交。
++2. 在圖譜搜 `[residual:`,逐條處理帶殘留的合約:舊規則下它們的第 3 問不算過,要嘛補測試後重審,要嘛把 `[audit:]` 拿掉、合約回到未審(推送前會被未審檢查擋,這是對的)。
++3. 殘留決策留在節點上當歷史;逃逸帳的 `residual_ref` 欄舊版讀者不讀,無害。
++
++## 實作時定下的細節(設計沒寫到的)
++
++- 「同一條合約」= 節點 + 合約指紋;指紋是去掉整個標記家族(`INV_TAG_RE`)→ NFKC → 連續空白壓成一個 → 剝掉看不見的格式與控制字元(Unicode 類別 Cf、Cc:零寬空白、軟連字號、BOM;代碼審 r3)→ 去掉頭尾空白與句尾標點(`。.;,!?` 與全形的 `;,!?`)之後的宣稱文字 sha256 前 16 碼。標記增減(加殘留、重審換戳記)、句尾多一個句號、多幾個空白都不改指紋;句中的符號照留(代碼審 r2:原本去掉所有標點,「上限 1.5 倍」與「上限 15 倍」、「回傳 -1」與「回傳 1」撞成同一條);改了字詞指紋就變——宣稱變了就是另一條合約,舊問答對不上新句子,要記殘留就得對新句子重問、重審(設計如此,代價寫在〈實務隱患〉)。
++- 身分一律比正規形(代碼審 r1):反例編號 NFKC → casefold → 連續的非字母數字合成一個 `-` → 去掉頭尾的 `-` → 再拿掉一邊是字母、另一邊是數字的那個 `-`(`c1`、`C1`、`c1.`、`c-1`、`c_1` 是同一個,`c1.1` 與 `c1-1` 是同一個,`c11` 是另一個,`a-bc` 與 `ab-c` 不同;代碼審 r2:原本只留字母數字,`c1.1` 與 `c11` 撞在一起;r3:保留分隔之後 `c-1` 與 `c1` 又被分開。「只准問一次」(方便)「有沒有問過」「判過 testable」都比它);殘留指標比 `_pq_decision_target`(跟待決問題共用的那份路徑解析)解出的正式路徑 + `#dN`,`--add` 寫進合約行的也是正規形,`--remove` 用大小寫變體也拿得掉;`--checker` 的日期要是半形、真的日期。`--add` 時已經有同一個指標,這次的 `--case` 照樣驗問答,驗過才回「已經有了」。
++- 驗法只有一份 `_residual_check`:`--add` 寫入當下(帶 `--case`)、`--reindex` 與 doctor 事後(不帶,改成「至少一個反例只有判 untestable 的問答、沒有任何反例同時判過 testable、決策內容有其中一筆的 `checker:`」)都呼叫它。`--reindex` 遇到不合格的殘留照樣寫進索引(索引是給分級用的,寧可多升 high),但逐條印出問題、回 1;doctor 報「帶殘留的合約不合格」。
++- `guard residual` 每條路(含「已經有了」「沒有這個標記」)結束前都重算索引,但索引跟重算結果相同(含「檔不在、圖譜也沒有殘留」)就不碰檔案;不同才寫,沒事可做的那兩條路寫了會印「索引原本沒跟上,已補好」(代碼審 r2:原本每條路都重寫,打錯字的指令在工作樹留下沒要求的改動)。索引寫不進去(捷徑、不是一般檔、建資料夾失敗)回 1,訊息照實說「合約行已寫(或已拿掉)、索引沒更新,跑 `lumos guard residual --reindex`」。
++- 判過 testable 的反例跟「只准問一次」(方便,不是保證)同一把鍵(節點、合約指紋、反例編號):代碼審 r2 改成整個節點共用、不看指紋,r3 合約席與通才席指出同節點別條合約的同名反例(編號慣例每條從 c1 起)被牽連;改字換指紋重問改由推送分級看門(合約改字時索引那筆換了指紋,同一篇同一筆殘留一邊拿掉一邊加入,配成「合約句子改了(舊的拿掉、新的加入),要過代碼審」升 high;代碼審 r4 通才席:原本理由寫成拿掉殘留,誤導審查席)。治理帳裡判定值不是 testable / untestable 的那筆(手改、舊格式)當成沒有這筆問答,不當掉(代碼審 r2)。
++- 決策指標除了不收短名,也不收帶 `.md` 的寫法(同一個殘留不會因為兩種拼法變成兩個標記);`loop escape --residual-ref` 用同一支檢查,所以也只收全名。
++- 殘留索引每筆記 `fp`(合約指紋),doctor 把圖譜重算的索引跟檔案裡的整份比多重集合,鍵是節點、指紋、殘留決策、about_code、綁定測試所在的檔(代碼審 r1:原本不比測試檔,測試搬家後漏升 high 看不出來;r4 資安席:原本拿「節點 + 指紋」當字典鍵,同一篇插一條同句合約指新決策、手寫索引只留舊的那筆,後者蓋掉前者、兩邊對得上)。上一輪多記的 `tests` 欄(綁定測試名)隨收窄一起拿掉,舊索引帶著它照樣讀得進來、不看它。
++- 分級(`pitfalls`)用索引的方式:about_code 與綁定測試所在的檔都整檔命中。代價:本 repo 的測試全在 `scripts/test_lumos.py` 一支檔,帶殘留的合約一多,改到那支檔的推送常常升 high、要過代碼審。不收窄的理由:代碼審 r1 試過「這次 diff 的增刪行或 hunk 標頭出現綁定測試名才算」,r2 四席各自實測判不到兩種最該擋的改法——git 的 hunk 標頭只帶頂格的那一行,縮排在 class 裡的測試方法(Kotlin、Java、Swift、class 式 pytest)只改本體時標頭只有 class 名;只改綁定測試呼叫的輔助函式時,diff 根本不含測試名。要收窄得逐語言解析方法本體並追呼叫,超出分級 vault-free 又便宜的範圍,所以整檔算。代碼審 r3 通才席再提一次(本 repo 一旦有帶殘留、綁 `test_lumos.py` 測試的合約,碰那支檔的推送幾乎都升 high),照留:這是寧可多升 high 的方向,代價是代碼審的次數,不是漏擋。
++- 另外幾種情形本身升 high,理由各寫一句、印在 `pitfalls` 的 tier 那行(殘留的身分是(節點、合約指紋、殘留指標),代碼審 r3:原本只比(節點、指標),同節點兩條合約指同一筆決策時拿掉其中一條被另一條蓋住):頂端索引有、起點沒有的殘留(新增殘留本身要過高風險代碼審,只動筆記、索引與治理帳也算——代價:每記一筆殘留、改一次帶殘留合約的字,那次推送都要過代碼審;這正是要的,記殘留就是要有人看);起點索引有、頂端沒有的殘留(拿掉殘留——原本分兩次推送就躲得掉);同一筆殘留(節點、殘留指標)起點守的 about_code 或測試檔頂端少了(縮小守備範圍等於拿掉那一部分殘留——不然先縮範圍、下一次推送再改程式就躲得掉,代碼審 r2);頂端索引讀不出或形狀不對、而起點有殘留或這次推送動過索引(原本靜默回原分級;r3:放進一份壞索引就看不出新增了什麼);起點索引 git 讀不出(git show 失敗,再用 ls-tree 確認不是「路徑不存在」——淺層 clone、物件遺失、逾時;內容壞掉的起點索引照舊不升,那一版推送時 doctor 就報過);檔名清單的 git diff 失敗而起點或頂端有殘留(代碼審 r2:原本當成沒改);起點版本 `docs/.governance-log.jsonl` 裡 `residual-ask` 的列頂端少了(代碼審 r2:刪掉判過 testable 那列就能重問;r3:原本只看 -U0 diff 的刪除行,`.gitattributes` 標 `-diff` 或塞一個 NUL 就沒有刪除行可數,帳尾沒換行時續寫、重新排序又被算成刪除——改成讀兩版原始位元組(`git show --no-textconv`,跟讀索引同一支;代碼審 r4 架構對齊席:原本一支 show、一支 cat-file)、比 residual-ask 列的計數(整列去頭尾空白;JSON 讀不出但帶閘名的列也算;r4:重複的整列各算一筆,集合相減數不到只刪一份),刪帳不看新增的問答;治理帳在檔名清單裡、或檔名清單失敗時都比,任一版讀不出當成有)。
++- 綁定測試所在的檔:照合約行的 `[test:]` 解平台,走跟測試方法掃描同一支的測試檔篩選(`_walk_test_files`)、先剝註解(跟測試方法掃描同一支 `_strip_test_comments`),找得到方法宣告的檔就列;設定讀不到或測試根在 repo 外的不列(只少升 high,不影響既有分級)。
++- 治理帳讀取:從跑滿回顧那支抽出共用的「版控帳裡某個閘名的事件」讀者,`residual-ask` 與 `loop-retro` 共用同一套路徑守衛與切行;可以一次讀一組閘名、照檔內順序混在一起回(`residual-ask` 與 `guard-audit` 要比先後)。帳的 repo 相對路徑只有一個常數 `GOV_LOG_REL`,這支讀者、pitfalls 比兩版帳與既有的帳路徑檢查、提示文字共用(代碼審 r3、r4)。
++- `guard audit` 每次蓋 `[audit:]` 都記一筆治理帳(閘名 `guard-audit`,帶節點、合約指紋、戳記),`guard residual --add` 用它的 ts 跟那個反例最晚一筆 untestable 問答比先後;ts 只到秒,同一秒的兩筆看帳裡的先後。代碼審 r2 原本比 `[audit:]` 戳記的日期:只到「天」(同一天先審計後問答照過)、`--date` 能任填(填將來永遠不早於),r3 改比事件;舊審計沒有事件,擋下叫人照順序重審一次。ts 解析走共用的 `_gov_ts`(代碼審 r4:原本自寫一套只接 ValueError,沒帶時區的 0001、9999 年崩出堆疊);帳是捷徑或有別的硬連結時 `guard audit` 不寫這筆、印「這次審計沒記進治理帳」(寫入端會跟著捷徑寫到別處、讀帳的一律拒收,原本照寫不警告)。
++- 三輪上限寫進手冊:第 3 問的補測試—重審最多三輪,第三輪之後還有沒歸好類的反例就攤人裁(照 d12 的收法);工具不機械計輪數。
++- 推送範圍新增了判 untestable 的 `residual-ask` 列(起點帳沒有、頂端帳有,計數相減;讀不出判定的列也算)本身升 high,理由寫「這次推送新增了判測不到的問答(記殘留的來源),要過高風險代碼審」(代碼審 r4 正確性席、資安席:同一筆決策追加反例 c2,`--add` 走「已經有了」不動索引的鍵,新增殘留那條比不出來;殘留的來源是問答,看它比看可手改的索引貼近要擋的動作)。
++WHY:改到存著已登記殘留決策的那篇筆記(起點殘留索引每筆的 `notes` 欄記的 repo 相對路徑)本身升 high,改哪一段都算;起點索引不知道在哪篇的那筆(舊格式、解不出、記的路徑不在起點的樹裡),推送改到任何圖譜檔(圖譜資料夾 `docs/*-knowledge/`、`docs/knowledge/` 底下的 `.md`,資料夾判定走 `_vault_slug_of(bare=True)`;README 這類不算,代碼審 r6)就升 high;同一筆殘留頂端索引記的筆記跟起點不同也升 high [出處:代碼審 r5 資安席 F1(只改 d12 內容尾端加 c2 c3 c4,不動索引與帳,分級 light)] [因:同族連續打穿,外層看門繞不過——反例清單寫在決策內容裡,r1–r5 每輪換一種手法(換編號、改字、刪帳、同決策追加、直接改內容)] [不選:逐種比對決策內容(下一種手法又會繞過)] [代價:碰到那篇筆記的推送,就算只改錯字也要過一輪高風險代碼審] [test:t_pitfalls_residual_decision_note_touched] [test:t_guard_residual_index_records_decision_note]
++- 殘留索引每筆多記 `notes`({殘留指標: 存著那筆決策的筆記的 repo 相對路徑},`guard residual` 寫索引時一起算);doctor 的索引比對連這欄一起比(手改成指到別篇會報)。pitfalls 不載圖譜,只認索引記的路徑(代碼審 r5 G1)。代碼審 r6 補三件:指標解不出(指的筆記找不到、格式不合或撞名、筆記在 repo 外)記 `{"unresolved": "<原因>"}`,不再靜默不記——分級理由照講原因、講重建索引修不好,不叫人跑 `--reindex`(正確性席:原本跑了索引不變、下次照升);分級讀起點的 notes 時確認那條路徑在起點的樹裡(`git ls-tree -r` 的路徑字串、NFC 後比,大小寫不同算不在),不在就當成不知道在哪(邊界席:寫成 `../x.md`、不存在、大小寫不同時原本靜默 light);doctor 對沒有 notes 欄的舊格式另報一行「舊格式,跑 `lumos guard residual --reindex` 補上」,那幾筆的 notes 不算進內容不一致(通才席)。
++- 派工鏡頭新增殘留段排序分級(代碼審 r6 併發席:舊格式索引加改一篇圖譜,5000 筆位置未知跟新增同排級 0、照節點名排、只取 5 條,新增那條出現 0 次):這次新增與合約改字排 0;改到存著殘留決策的筆記、索引記的筆記換了排 1;問答指到不在殘留索引的排 2;起點索引不知道在哪篇的那幾筆不逐條展開,彙總成一行(幾筆、原因、這次改了哪幾篇圖譜)。時間預算用完時先判兩版有沒有殘留索引、這次有沒有改治理帳,都沒有就不出段(正確性席:沒殘留的 repo 多一題沒對象的必答題);段裡「算不出來」的那次不寫鏡頭快取(正確性席:暫時讀不出被快取到範圍改變)。
++- 派工鏡頭在固定席之後附「這次新增的殘留」一小節:範圍內新增的殘留或新增的判 untestable 問答,每條合約列殘留指標、決策內容(單行、拆框線、300 字上限)與頂端帳裡那條合約的問答列(編號、判定、checker、ts,標這次新增),框外一題逐條必答「這筆殘留的問答有沒有換編號或改字重問?第二個代理是不是另一個代理?」(代碼審 r4 合約席:文件說審查席看殘留決策與問答,派工卻沒有任何一席被要求去看)。內容從頂端讀:新增的殘留只在這次的提交裡,主線版沒有。代碼審 r5 補四件:改到存著已登記殘留決策的筆記那幾筆也列(標明改了哪篇);兩版索引或兩版帳任一邊讀不出、列不出改了哪些檔、時間不夠,第一行印「⚠ 這次新增的殘留算不出來(哪一邊)」、必答題照附,不准放空(正確性席、資安席);合約清單真的殘留索引變化排最前,問答指到的合約不在殘留索引的標「節點不在殘留索引」排後面,每條合約的問答列這次新增的先列、其餘照 `_gov_ts` 由新到舊、讀不出的 ts 排最後(邊界席、資安席:偽造 ts、假節點問答能把要看的擠出上限);接鏡頭同一個時間預算,每次 git 呼叫夾進剩餘秒數(併發席、架構對齊席)。分級的理由句把「治理帳讀不出」跟「刪掉或改掉問答」分成兩句(通才席:起點沒有問答、頂端讀不出時原本寫成刪掉)。
++WHY:lumos 主程式入口(`main()` 開頭)統一關掉 git replace、grafts 與差異選項環境變數:強制設 `GIT_NO_REPLACE_OBJECTS=1`、`GIT_GRAFT_FILE` 指到不存在的路徑、拿掉 `GIT_DIFF_OPTS` 與 `GIT_EXTERNAL_DIFF`,所有子行程繼承(lumos 自己產生差異的 `git diff` 都已帶 `--no-ext-diff`,`GIT_EXTERNAL_DIFF` 那行實際管的是 lumos 起的子行程) [出處:代碼審 r4、r5 資安席(本機 `git replace` 把主線換成內容等於頂端的假提交、新增殘留判成 light;git 2.39 不吃替身時仍讀 `.git/info/grafts`;`GIT_DIFF_OPTS` 蓋得掉明寫的 -U)、r5 架構對齊席(逐呼叫帶環境與入口兩種做法並存),見 governance/review-reports/code-審查收斂規則/] [因:殘留相關的讀取散在好幾種寫法,逐呼叫帶環境漏一處就能偽造那一處的起點;入口設一次,lumos 裡所有 git 呼叫都不認] [不選:逐呼叫帶 env(r4 的做法,兩種並存讀的人判斷不了某支靠哪層);`setdefault`(不蓋使用者自己設的值);`GIT_GRAFT_FILE=/dev/null`(git 會印棄用提示)] [代價:lumos 起的所有子行程都繼承,含 bound-tests、fix-check 跑的使用者專案測試;使用者自己設的 GIT_DIFF_OPTS/GIT_EXTERNAL_DIFF 在 lumos 底下不生效] [test:t_pitfalls_residual_ignores_git_replace] [test:t_pitfalls_residual_ignores_git_grafts] [test:t_pitfalls_ignores_git_diff_opts_env] [test:t_pitfalls_ignores_git_external_diff_env]
++- 範圍外:入口不清 `GIT_DIR`、`GIT_WORK_TREE`(代碼審 r6 資安席:設 `GIT_DIR` 指到一個 bare clone、把它的 main 指到分支頂端,本機分級讀成 light)。理由:git 跑掛鉤時本來就會設它們(lumos 在推送前掛鉤裡被叫時就帶著),清掉等於改變每條掛鉤路徑「讀哪個 repo」的行為,影響面遠超過這一條;同一個設定也讓真正的 `git push` 推到那個假 repo,不是一條推得進主線的路;CI 在乾淨環境重算分級。
++REVISIT:2026-12-15 查 lumos 之外直接叫 git 的掛鉤(scripts/hooks/ 底下的殼層與 python 掛鉤)讀起點版本、差異時是否也該關掉替身、grafts 與差異選項環境變數
++
++## 審計修正紀錄
++
++- r1 前掃(2026-10-14):12 條,依前掃整份改寫一次(資安席接力涵蓋所需的帳欄位不存在;一處替換不是機械界線)。前掃紀錄在 `governance/review-reports/審查收斂規則/r1-intake.md`。
++- r1(2026-10-14,6 席):38 條/blocking 16/資安席只看變過的檔會把「帳上看過≠真的讀過」的舊洞挖回來;殘留塞在 `[audit:]` 值裡是第二種行內寫法、重審會抹掉;分類由想收斂的編排者做,違反提出者不准自認證;例子把對外測得到的退化歸成繞過設計;鏡頭只印前 200 字看不到戳記;分級不看合約;撤除條件量不到。全數折入:A 半改成不做並寫理由;殘留改獨立標記與專用指令、寫入當下就驗;判準改成對外入口測不測得到、編排者只能往嚴改、殘留要第二個獨立代理同意;徽章標殘留;碰到帶殘留合約升高風險;逃逸帳加 `residual_ref`。席報告在 `governance/review-reports/審查收斂規則/`。
++- r2(2026-10-14,4 席:正確性、邊界、整合、架構對齊,只看 r1 折入後的改動):22 條/blocking 9/升高風險放在 `pitfalls` 會推翻「分級不讀圖譜」的既有決策、新標記沒進剝標記正規式會讓定位與轉正比對壞掉、「時序型」退化沒有出口、第二個代理的同意沒有留痕可被繞過、寫入流程與互斥檢查沒寫;全數折入:升高風險改放推送前規格閘並讀主線版圖譜、`residual` 進 `INV_TAG_RE`、殺不掉的出口合併三種情形、`checker:` 行與寫入時驗、寫入照 `guard audit` 的形狀、逃逸參數的驗證與互斥。席報告在 `governance/review-reports/審查收斂規則/`。
++- r3(2026-10-14,2 席:正確性、邊界,上限輪,只看 r2 折入後的改動):12 條/blocking 7/放在推送前規格閘那一步拿不到分支與被推的提交、會被既有的提前返回跳過、CI 不跑它、直推主線時主線版就是頂端、改名可繞過;`checker:` 放不進多行;不准重問沒有痕跡;全數折入:改用進版控的殘留索引,風險分級讀起點與頂端兩版(不載圖譜),升 high 後交給既有的代碼審留痕要求(CI 也擋);檔案清單不偵測改名;`checker:` 寫在決策內容尾端;新增 `guard residual-ask` 留痕且同一反例只准問一次(後來代碼審 r3 降為方便)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/design-loop.md b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+index e83e265b..3b49402b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/design-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/design-loop.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+-updated: 2026-10-12
++updated: 2026-10-14
+ self_audit: sonnet/2026-08-30
+ about_code_stamp: claude/2026-09-03/4cd5c56bb0bd
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/loop-engineering
+ verified_by:
+   - "[[Verification/2026-06-19_design-loop]]"
+   - "[[Verification/2026-07-09_loop三輪壓縮]]"
+@@ -59,39 +59,40 @@ summary: |-
+   KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席循序一輪一筆處置帳→--disposal;多席 panel 每席各記→--gate --panel --min-seats 3(08-06 後 K=2);兩閘互斥,問錯 CLI 會擋下並指路(指令獨立行);漂移守衛 t_loop_status_disposal_panel_routing
+   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/判定/抽樣分權/漏抓懲罰全停;輪記帳改 `canary record none`(純處置帳載體),panel 輪有效=記帳席≥2;skill 頁頂掛告示、植入步驟標停用;「審計員有沒有讀」由 quote-check 引句錨定把關;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
+   KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);★(2026-08-21 程式碼實證)更正:三合一「退場」不準確——只有 capture-recapture 降 advisory;panel 的「輪有效∧存活≤minor」仍是必要合取,且 2026-08-05 起新 loop 加嚴為 K=2(連兩輪各自過);「K-streak」在程式碼專指 legacy 模式(K=2∧G1∧G2),與 panel 合取是兩套;「1/38」全庫查無出處★ capture-recapture 降 advisory(封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop——★2026-08-08 撤銷:code-loop 亦改走處置閘(Enzo 具名推翻防浮動條款,見[[Projects/驗證層去模型化_計劃]];A 案機制碼保留供舊帳重放)★
+   KEY:[2026-08-06 收貨三道,plan:[[Projects/驗證層自證三件_計劃]]]收貨=quote-check(引句↔凍結快照)+refcheck(finding file:line↔repo 實在性)+★seat-check★(有講沒做對帳:dispatch manifest rN-dispatch.json 宣告 materials→unreported/out_of_scope,越界另記 out-of-scope.jsonl 不進收斂帳;lens 觀測不判定/空 materials vacuous 豁免/恆 rc0 觀測)[test:t_s1_seat_check];派工慣例同步=派工當下落 dispatch manifest;新機制準入三問(Growth test,borrow evidra)入 skill 護欄後段
+   KEY:★定位★[2026-07-18 使用者裁定,見 decisions d4]——design-loop=抬 spec 質量,非保 spec 正確:一輪 panel 抓便宜的(矛盾/未定義詞/缺失敗路徑)就放行,正確性歸下游 code-loop+測試+驗證、漏網進逃逸帳;**前置加重一律拒**(日報 2026-07-18『保留題接閘』已拒收勿重提——保留題留離線 replay 校準,不進閘)
+   KEY:[2026-07-18]S5 跨家族落地(見[[Projects/code階段強化_計劃]])——辯方預設 Codex(成本中性替換,d4 合規;不可用退 opus 註記)+≥3-run 多數決至少 1 run Codex+家族否決保護(外家 blocker 不得僅被同門多數推翻,須執行反證或第二外家);換手效應列 [[Projects/loop數據收集_計劃]] 觀察項(收斂輪數/辯方降級率)(更正 2026-10-12：「辯方預設 Codex」已由本篇 d11 在 2026-09-30 改成預設同門,外家席改條件席)
+   KEY:★經濟學★[2026-07-20 使用者裁定,見 decisions d5]——spec 品質目標=成本平衡非精確度漸近線:缺陷分層定價(清單型→pre-flight/撞自家現實型→圖譜接地/語意矛盾→一輪panel/深層錯→下游執行接地)+邊際遞減止損+反偏誤排序(執行接地>機械查>異家族>同家族多取樣,信號種類>家族)+標記不確定比消滅不確定便宜;逃逸帳=調價器。**精確度軍備競賽類提案(更強判官/更多輪/更細spec)一律先過此教義裁**
+   KEY:[2026-07-16]提效 M1 落地(見[[Projects/design-loop提效_計劃]])——pre-flight 排乾(panel 前便宜 agent 掃清單型缺陷,cascade)/R2+ 嚴格 delta-scoped(物理只餵 diff+受影響合約+前輪爭議,留全局哨兵;解非定態目標病)/辯方路由制(機械證實與多席一致免辯方,低共識才開庭)/fold 迷你核對/severity 錨句(防 framing 通膨);M2 risk-cluster 帳未做(動 gate code,先過 loop)
+   KEY:[2026-07-21]★真相入口收編★(外審 blocker,見[[Projects/全盤外審2026-07_調研]])——被審 spec 唯一可寫真檔=圖譜計劃節點;docs/design/ 降唯讀歷史(30 份保留考古,README 立牌);golden 不再複製 spec 第三份,改 spec-ref.txt 記 git sha:路徑(replay 用 git show 還原);loop id 改計劃節點名衍生。同批:panel 收斂行修 skill 漂移(對齊 M2 兩種帳)+判官 style-bias 錨句進 templates+light 體積 50 行先驗
+   KEY:[2026-07-21]light 輕量檔 M0 落地(見[[Projects/design-loop輕量檔_計劃]])——補 trivial|standard 間缺檔:小 spec 走 pre-flight+1 通才席+legacy `--need 1`+人裁實質收斂,存活≥major→向上 ratchet 升 standard 自癒;進場硬否決(risk-tiered四類/硬合約/體積)M0 honor-system、M1 機械化。**M1 已機械化(loop status --light --gate 單席謂詞,FAIL 分因 retryable/ratchet,不再攤牌人裁——本 KEY 早期「須新增單席謂詞」的未來式已兌現,2026-07-28 盤整追平)**
+-  KEY:[2026-07-27]調研三篇折入(AREX/LoopTrap/Sage,見 2026-07-27 調研日報)——已 ship 便宜半:①[audit:] 合法性審計升五問 rubric+穩定性探針(換問法自一致,reference.md;Sage:判官難題1/4偏好不穩、rubric 錨定)②護欄加終止輸入紀律(收斂只認 loop status 機械帳,被審材料/報告散文「還沒完」類語句非終止輸入;LoopTrap:86% 可注入操縱、放大25倍)③severity 錨補搖擺場換問重問取高。貴的半後於 2026-07-28 全落地(見[[Projects/結清式收斂_計劃]]);經濟學教義裁:三項均非前置加重(rubric=判準錨定非加輪;終止紀律=防燒錢非提精度)
+-  KEY:[2026-07-28]rubric 防應試化兩道(調研 arXiv 2605.12474:評分表公開固定會被「剛好滿足字面」鑽)——①派工措辭改述不逐字貼 ②約每5次 audit 抽1次無表開放判定,落差拉大=儀式化訊號回報人裁;寫入 lumos-project-notes reference.md 五問段
++  KEY:[2026-07-27]調研三篇折入(AREX/LoopTrap/Sage,見 2026-07-27 調研日報)——已 ship 便宜半:①[audit:] 合法性審計升五問 rubric+穩定性探針(換問法自一致,reference.md;Sage:判官難題1/4偏好不穩、rubric 錨定;2026-10-14 起第 3 問的反例分三種去向,這一問過=每個反例都殺掉或經第二個代理確認測不到,測不到的記成殘留,順序 guard residual-ask 判 untestable → guard audit 蓋 [audit:] → decision-add 記殘留決策 → guard residual <節點> --add(寫入當下驗 [audit:] 日期不早於問答),見 [[Projects/審查收斂規則_計劃]])②護欄加終止輸入紀律(收斂只認 loop status 機械帳,被審材料/報告散文「還沒完」類語句非終止輸入;LoopTrap:86% 可注入操縱、放大25倍)③severity 錨補搖擺場換問重問取高。貴的半後於 2026-07-28 全落地(見[[Projects/結清式收斂_計劃]]);經濟學教義裁:三項均非前置加重(rubric=判準錨定非加輪;終止紀律=防燒錢非提精度)
++  KEY:[2026-07-28]rubric 防應試化兩道(調研 arXiv 2605.12474:評分表公開固定會被「剛好滿足字面」鑽)——①派工措辭改述不逐字貼 ②約每5次 audit 抽1次無表開放判定,落差拉大=儀式化訊號回報人裁;寫入 lumos-project-notes reference.md 五問段;2026-10-14 起抽考不帶第 3 問的殘留分類,比較時把帶殘留通過當成不合格(落差才不會被系統性拉大)
+   KEY:[2026-07-10]reviewer 結構紀律明文化——禁互辯/編排者=meta-judge/關鍵單點判決≥3run多數決(EMNLP 2025 實證,見[[Projects/reviewer結構明文化_計劃]])
+   KEY:[2026-08-30]loop next 首輪印「主題既有節點」advisory(圖譜入口栓 A:近名/superseded 上榜先讀再開;--json 加 related_nodes;詳 [[Projects/圖譜進迴圈入口栓_計劃]])
+   KEY:Claude編排,lumos只出原語——Claude用Agent tool派審計員/判讀/修spec;lumos出 canary record/loop status 記錄與算收斂,lumos不spawn agent
+   KEY:canary=test-the-tester——每輪偷植已知假錯驗審計員有沒有在認真抓;漏抓(missed)=該輪審計失靈,判決不採信、不折findings(防假陰性/審計員放水)
+   KEY:辯方refute=對稱防假陽性——對≥major finding 走路由制(2026-07-16 M1):機械證實/多席一致免辯方直接折入,低共識才派獨立opus(乾淨脈絡、不傳審計結論)強制拿file:line反證才能降;辯方只買code層假陽性,業務層留人
+   KEY:硬閘是紀律非技術鎖——loop status未CONVERGED不得進實作,但lumos擋不住「不跑就實作」;靠Claude記得調用+誠實+cap/留痕兜底
+   KEY:收斂判準K=2——連2輪 caught 且 severity∈{clean,minor};max cap=6筆record,到頂未收斂則停、攤給人
+   KEY:實質收斂 early-exit(2026-07-07 Landmark 實戰調參)——連K輪 caught 無 blocker/major 且新 findings 全為文件精度級 minor → 編排者可提前攤牌請人裁「實質收斂」不跑滿 cap(「你一定找得到」framing 使 G2 數字枯竭壓不到底的誠實出口;僅手動 loop,自主 loop 走 unconverged requeue)
+   KEY:★08-25 改制的遲到對照證據(2026-08-26 補齊,[[Verification/2026-08-26_新舊制同料對照_v0]])★:45 個舊制迴圈——26 可比中零「舊擋新放」、1 個「舊放新擋」(歷史已收斂但 d5 處置集合會擋),d5 嚴格度≥舊制實證;收斂後新增凍結步驟(loop replay --freeze,判定入 governance/replay/ 供週跑回放)
+   KEY:派工模板權威=skills/lumos-design-loop/templates.md(6角色 dispatch prompt+編排者判讀規則,Landmark 實戰抽取;SKILL 內嵌 framing 是摘要,漂移以模板為準)
+   KEY:平行 panel 模式(2026-07-09,≤3輪壓縮,見 [[loop三輪壓縮_計劃]])——買獨立廣度非相關深度:一輪平行 W 個多樣審計員(tier→panel_width);收斂判準改結構信號(無-cluster 兩條合取:輪有效∧存活max≤minor;★(2026-08-21 程式碼實證)2026-08-05 起 cutoff 後的新 loop 為 K=2——最後**兩輪**各自過此合取(`_panel_k2_active`,scripts/lumos:3557-3563、3705-3708);今日所有新 panel loop 皆走 K=2★;capture-recapture 殘餘★2026-08-14 降 advisory 不進合取(鑑別力≈0:殘餘<1 組下輪 major+ 67% vs ≥1 對照組 79%,p≈0.25;f1≤1 公式退化;見[[Projects/收斂閘殘餘估計降級_計劃]])★;M2 cluster 帳=兩條合取,詳[[Systems/loop-convergence-recording]])取代 K-streak∧G2 序列;`loop status --gate --panel`;混用守衛防 None phantom 輪;legacy(無--panel)完全不變
+   FLOW:brainstorming產spec→[trivial?跳並註明]→前置排乾(refcheck機械核對spec→repo指涉+pitfalls --check補實務隱患節+pre-flight便宜agent掃清單型缺陷;首輪前一次,cascade便宜先掃)→每輪{複製spec→/tmp/<id>-rN(**N/型別/席數問 `lumos loop next`**,2026-07-21 M1包;並 sha256sum 真檔留 reviewed 快照)→植1canary(類型=清單[(N−1)mod4],只進工作副本)→派乾淨審計員(sonnet,連2missed升opus,不告知canary,refute framing)→判讀(canary抓到?+真finding max severity)→辯方路由(機械證實/多席一致直接折入,僅低共識才派獨立opus構造反證file:line;2026-07-16 M1)→該輪severity=辯方存活max→**caught輪:折真finding進真檔+fold迷你核對+grep canary=0 之後才 record(--spec/--reviewed 雙hash;M1包 時序裁定,原 record-先-fold 會使 hash 恆失配);missed輪:當場record**/漏抓不折直接下輪}→loop status --gate exit0(模式擇一:legacy --need 2 K-streak∧G1∧G2∧G3/panel/light/settle 結清)→收斂+天花板提醒+golden凍結→writing-plans｜平行panel模式(現行推薦,一輪W席≤3輪)見下方KEY
+   DEP:lumos canary record --loop/--severity｜lumos loop status --need(Component A 原語)｜skills/lumos-design-loop/SKILL.md
+   TEST:Component A 原語有 test_lumos.py 覆蓋;B 是 skill 非 code,以 design-loop 自跑收斂為驗證
+   VERIFY:[[Verification/2026-06-19_design-loop]]
+   WHY:[2026-09-29 [[Projects/代碼審資料狀態鏡頭_計劃]]]範本 §3 代碼審派工詞第 1 點再擴一次(承 d6 的帶例子問句):加資料狀態五問,邊界填空範例拿掉時區改由時間子題固定問;§7 平行 panel 加分流句(五問只留給正確性席)
+   WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]範本 §3 代碼審派工詞加第 5 點角色鏡頭與 `LUMOS-ROLE-CARDS: on` 標記行,卡片內容不複製進範本(範本不知道改到哪一邊,只能由程式看改動決定);§7 分流句比照資料狀態五問,標記只留給正確性席,§7.6/§7.8 不放(有守衛測試)
++  WHY:合約審計第 3 問的反例分三種去向(局部退化殺得掉=預設、補測試到 killed;局部退化殺不掉、繞過設計=記殘留,要第二個獨立代理同意、同一反例只准問一次(方便不是保證,把關在新增殘留的推送要過高風險代碼審);編排者只能往嚴改分類;三輪上限後攤人裁),寫在 reference.md 五問段;防應試化的定期無表抽考照舊、不帶這套分類,比較兩邊結論時「帶殘留通過」當「不合格」看 [出處:[[Projects/審查收斂規則_計劃]]] [因:有了殘留這條出口,有表的一邊會系統性比無表寬,要照原口徑量落差才看得出儀式化] [test:t_reference_audit_q3_rules]
+ decisions:
+   - content: 收斂判準 K=2(連 2 輪 caught 且 severity∈{clean,minor}),寫進 spec 本體與 loop_status --need 預設;漏抓(missed)仍是一筆 record、仍算進 cap,判決不採信但不消失
+     id: d1
+     context: design-loop r2 canary 護審計揪出真 BLOCKER:K=2 未敘明於 spec 本體;MAJOR:「作廢」vs「算進 cap」矛盾——漏抓那輪到底算不算一輪定義不一致
+     why_chosen: 「輪」「cap」「連續漏抓」全以 canary-log 記錄為準才定義一致,不存在「不記錄的 inline 重跑」;K=2 讓收斂=連 2 輪醒著的審計員沒找到 blocker/major,可觀測且有摩擦
+     decided: 2026-06-19
+     valid: true
+   - content: canary 類型由輪序 N 決定 type=清單[(N−1) mod 4](a 壞§ref／b 未定義旗標／c 未定義欄位／d 未定義產物),無需 state 欄;missed 重跑時 N 已+1 故自動換新類型
+     id: d2
+     context: design-loop r2 MAJOR:rotation 無 state——若 type 要記憶/查 log 的 type 欄,植入者得自管狀態、易錯且不可審
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index c1c2cf3b..9772df1a 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-07-10
+-updated: 2026-10-12
++updated: 2026-10-14
+ self_audit: gpt-5.6-sol/2026-10-07
+ about_code_stamp: batch-2026-08-23/2026-08-23/2faf3eec082c
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/guards-gates
+ summary: |-
+   WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]建、收隔離工作樹那段抽成共用的 `_isolated_worktree`(with 區塊,寫法照 _vault_write_lock;修正關卡也用);guard kill 照舊在平台根下 `git -C` 建樹、測試在樹的最上層跑、建樹失敗記 error 繼續下一個平台、--keep-worktree 的「現場保留」由 guard kill 自己印(--json 時印到標準錯誤),行為不變 [test:t_isolated_worktree_shared]
+   RULE:[since:2026-09-22][confirmed:2026-09-22][retire:連續兩季沒有任何專案用 guard plan,或誤擋多過真擋]合約可以「預告」:`lumos guard plan … --name <短名>` 一次寫好預告標記(`★INVARIANT-PLANNED★`,既有合約抓取撈不到它)與一個待完成的守衛驗證節點並雙向連好;查那篇功能節點時預告會另起一段印出來(還沒有測試在守、最遲哪天);逾期讓自檢出 issue(推送與 CI 靠它擋)、七天內先唸不擋、**到期當天不算過期**、**不准延期**;★本機推送只擋「這次改動碰到的」那幾條★(靠守衛節點→家節點→about_code 兩跳算交集;算不出來本機放行、CI 仍擋),別人的逾期會列出來但不擋你的推送;做完 `guard settle` 就地轉正,不做了 `guard abandon` 立墓碑(要先 `signoff --ref`)。★威脅模型是防忘記不防繞過★:改日期、改型別、刪節點檔都繞得過,刻意不補,寫在計劃的誠實界線。單源 [[Projects/必要合約清單_計劃]] [test:t_guard_plan_creates_marker_and_node]
+@@ -32,20 +32,23 @@ summary: |-
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]改句、前提、轉正日期推導放 guard 這邊,drift fix 往下呼叫、guard 不呼叫 drift;settle 句下一個非空行已經是人手補的「已轉正」段時刪掉 settle 句、不再疊一行,待完成的轉正與補改走同一支——同一種句子不因入口不同而結果不同
+   WHY:[2026-10-01 [[Projects/併發與效能表態要合約背書_計劃]]]kill-add 多 --covers(驗過的題目 id,只收標了 needs_backing 的題;同一條配方只多帶 covers 就只更新 covers);配方身分改由共用函式 _kill_recipe_key 判(同筆記、invariant、file、old 的 json 序列化雜湊)——kill-add 判重、kill-log 的 recipe_id、寫表態分組三處共用
+   WHY:[2026-10-01 同上]kill-log 每筆多 covers、recipe_id、head_sha(沙盒實際檢出的完整 sha,先取 sha 再用它建沙盒)、weak(整套一起跑、flaky 平台、配方所在筆記有未提交改動、寫檔後修改時間沒能錯開任一成立;最後一項 2026-10-02 加,見 [[Projects/殺傷力驗證編譯快取誤判_計劃]]);既有 commit 欄語意不變;kill-log 現在有兩個讀者(gov 統計、寫表態算背書),都走 repo 既有的 errors=replace 逐行容錯讀(代碼審 r1 架構席:原本另寫的位元組讀法與寫入前補殘行換行是第二種做法,已拿掉);guard 層的 kill-add 因 --covers 多了一條對題目表(_stack_spec_by_id)的依賴
+   WHY:[2026-10-01 [[Projects/殺傷力配方失配提醒_計劃]]]配方失配(程式重構後原文找不到或出現好幾次)原本只有手動跑 guard kill 才看得到(rtb 2026-10-01 巡檢一次 10 條)。現在三處補上:kill-add 寫入時驗「這次要寫進去的那一條」,不是恰好一次就在標準錯誤多印一行提醒、照舊寫入(保留「宣告不擋、跑時擋」,既有測試刻意用失配配方測 guard kill);doctor P2 每次逐條數(只提醒,--ci 記 check-p2);kill-rm 給失配配方一條修法(身分含原文,不先移掉舊的就改不了)。guard kill 的判法不改,判斷函式重演它的走法(2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]] 只給它加了挑配方與交回結果的選用參數) [test:t_guard_kill_add_warns_drifted_recipe] [test:t_doctor_kill_recipe_drift] [test:t_guard_kill_rm]
+   WHY:[2026-10-06 [[Projects/殺傷力配方綁的測試要在合約清單_計劃]]]配方綁的測試不在合約行的 `[test:]` 清單上時提醒(kill-add 寫入當下一行、doctor P2 第三則):合約清單是推送前會真跑的綁定測試,配方驗的是清單外另一支時,殺傷力證明的不是推送閘守的那支(rtb 一條 F7 合約就是)。比的是 guard kill 實際的跑法,方法名在清單上而平台不同另講(清單寫 `ios:Foo`、kill-add 沒帶 --test/--platform 時配方存成帶前綴字串、會在預設平台跑) [出處:rtb 第三輪提案 D3、設計審 r1 六席] [因:kill-add 帶 --test 時完全不比對] [不選:擋下(清單外可能是刻意更細的測試,要人判)] [test:t_kill_add_warns_test_not_bound] [test:t_doctor_kill_test_not_bound]
+   WHY:[2026-10-02 [[Projects/殺傷力配方當場試跑_計劃]]]rtb 修配方時重加一條要跑整篇才知道殺不殺得掉,P2 也看不出「原文對得上卻殺不掉」。guard kill 加 --id(對整篇比對、規則跟 kill-rm 同一支,在合約片段過濾之前;對到格式壞的回 2 叫人先 kill-rm,判法跟 P2 同一支 _kill_recipe_judge,不讓人照列表抄短身分踩進既有的崩潰;代碼審 r1 抓到原本只擋不是物件、r2 抓到另寫一支判法跟 P2 結論不同);kill-add --try 寫完只跑那一條,回傳碼照 guard kill、★不看 weak★(筆記剛寫沒提交、weak 一定是 true,看它的話回傳碼分不出殺不殺得掉),另印背書不採信;doctor P2 另列最近一次真跑判 survived 的配方,閘名另開 check-p2s(照 check-s/check-s2 先例,kind 用 warned 治理帳的多日沒人理與折疊才算得到) [test:t_guard_kill_only_ids] [test:t_guard_kill_add_try] [test:t_doctor_p2_lists_survived]
+   WHY:[2026-10-02 同上 設計審 r1 正確性席]P2 的 survived 清單取每條配方「最近一筆」比 ts、不比檔內順序:本 repo 的 kill-log 進版控,多個會談各自追加再合併後檔內順序可能倒。跟合約背書刻意不同——背書判 survived 看這版任何一筆、跟順序無關;同 ts 取先出現的,跟背書取最新那筆同一個規則。ts 是當地時間不帶時區,guard kill 寫 ts 那句改成帶時區時一起改
+   PITFALL:[2026-10-02 同上 代碼審 r1–r3]guard kill --id 擋格式壞的配方,同一類問題連三輪:r1 只擋不是物件、r2 另寫一套判法跟 P2 結論不同、r3 改用 P2 判法但它在 file 不是正式寫法時停在 path、不看 old/new。第三次換形狀:guard kill 在當掉的兩步原地擋(數原文前、原文恰好一次之後,記 error「配方欄位格式不對」),第四輪(另開一輪)發現原地擋只抄了判法的一部分,改成判法與 guard kill 共用 _kill_old_issue/_kill_new_issue 兩支——同一個判斷只寫一次;落單替身字元那一類試過讓寫 kill-log 與印 --json 經 _kill_esc,上限輪發現壞字元會寫進進版控的帳、讓 lumos gov 當掉,撤回、整類留在 [[Issues/guard kill遇到格式壞的配方整支崩潰]];--id 只擋判法說的 malformed;對照測試把「配方欄位格式不對」也算 malformed ↔ error [test:t_guard_kill_only_ids] [test:t_kill_recipe_check_matches_guard_kill]
+   PITFALL:[2026-10-02 同上 設計審 r1 三席實測]「原文那段已列過的不重複列」原本收所有不是 ok 的配方,設定檔壞時每條都判「設定讀不了」→ survived 清單整段變空;只收真的逐條列出的狀態碼,cfg 與 noroot 不收 [test:t_doctor_p2_lists_survived]
+   PITFALL:[2026-10-01 設計審 r2–r3 正確性席實跑]在工作目錄用 realpath 前綴判圍欄,跟 guard kill 判得不一樣:它的工作樹是「暫存資料夾/wt」、從 HEAD 檢出,所以 `../wt/x` 爬回來算在內、解析到 repo 頂本身算逃逸、連結迴圈是開檔失敗不是逃逸、沒提交/被忽略/子模組裡的檔它沒有。判斷函式原本照這些重演,代碼審四輪都被抓到新的對不上(大小寫、Unicode 寫法、檔案連結還原、記憶體),2026-10-01 改成規定 `file` 必須是提交裡的正式路徑、其他一律提醒改寫不預測;對照測試每一格用獨立 repo 真跑 guard kill(同一組的格子會被 guard kill 的還原互相污染) [test:t_kill_recipe_check_matches_guard_kill]
++  WHY:合約審計第 3 問的反例可以記成「殘留」:`lumos guard residual-ask` 記第二個獨立代理的判定(治理帳閘名 residual-ask;同一條合約——節點加去標記、NFKC、空白壓成一個、剝零寬與控制字元(Unicode 類別 Cf、Cc)、去頭尾空白與句尾標點後的宣稱文字指紋(句尾加句號不算新合約,改字詞、改句中的小數點負號括號都算)——同一個反例只准一筆(編號比正規形:NFKC、casefold、連續非字母數字合成一個 -、去頭尾 -、再拿掉夾在字母與數字之間的 -,c1/C1/c-1/c_1 同一個、c1.1 與 c1-1 同一個、c11 不同);判過 testable 的反例記在同一把鍵(節點、指紋、編號)上——只准問一次是方便不是保證,換編號、改節點名、改字重問,靠推送分級的「新增了殘留」升 high 給高風險代碼審看([[Systems/pitfalls-code-loop]]);判定值不認得的帳列當成沒問過),`lumos guard residual --add/--remove/--reindex` 在合約行尾寫 `[residual:<資料夾>/<節點>#dN]` 並重寫殘留索引(每條帶殘留的合約一筆:節點、指紋、殘留決策、about_code、綁定測試所在的檔、殘留決策所在筆記 notes——解不出時記 {"unresolved": 原因},代碼審 r5、r6)。寫入當下驗:決策在且沒翻案(跟待決問題共用 _pq_decision_state)、內容非空且含每個 --case 那筆問答的 checker:、問答判 untestable、只收帶資料夾全名、合約行已有 [audit:];殘留指標比正規形(_pq_decision_target 解出的正式路徑+#dN;寫進合約行的也是正規形);--checker 只收半形真日期;已有同一個指標也照驗這次 --case 的問答;驗法只有一份 _residual_check(--add、--reindex、doctor 共用);寫入形狀照 guard audit(鎖、_contract_locate——guard audit、kill-add 也走它——、atomic_write_verify);每條路(含已經有了、沒有這個標記)結束前都重算索引、跟重算結果相同就不碰檔案(沒事可做的路補好了印「索引原本沒跟上,已補好」),索引寫不進去回 1、照實說合約行已改、跑 --reindex;--add 另驗這條合約最近一次 guard audit 的治理帳事件(閘名 guard-audit,guard audit 每次蓋戳記都記一筆;帳是捷徑或有別的硬連結時不寫、印「這次審計沒記進治理帳」——寫入端會跟著捷徑寫到別處、讀帳的一律拒收,代碼審 r4)晚於那個反例最晚一筆 untestable 問答(比完整時間戳記、ts 解析走共用的 _gov_ts、同一秒看帳裡先後;找不到事件或問答時間讀不出就擋;手冊順序 問答 → guard audit → decision-add → --add);residual 進 INV_TAG_RE,guard audit 重審只換 [audit:] 那段 [出處:[[Projects/審查收斂規則_計劃]]] [因:第 3 問只要肯重寫設計永遠構造得出壞法,2026-10-13 後端示範只能靠人喊停;分類與同意要由想收斂以外的一方做、而且留痕可回溯] [不選:把殘留塞在 [audit:] 值裡(第二種行內寫法、重審會抹掉,設計審 r1)] [test:t_guard_residual_write]
++  WHY:doctor 在 Check T 未審那段旁多驗三件事:每個 [residual:] 過 _residual_check(問答、checker:、[audit:],手寫的標記在這裡現形);每個 [residual:] 指到的決策還在、沒被翻案(錯了印「去 <節點> 補回那筆決策,或 guard residual --remove」);殘留索引跟圖譜一致(整份比多重集合,鍵是節點、指紋、殘留決策、about_code、綁定測試所在的檔、殘留決策所在筆記(notes 欄,代碼審 r5)——代碼審 r4:原本拿節點加指紋當字典鍵,同一篇插一條同句合約、手寫索引只留舊的那筆就對得上;舊索引的 tests 欄不比;找測試所在的檔先剝註解,跟 discover_test_methods 同一支 _strip_test_comments),對不上給 guard residual --reindex;條目沒有 notes 欄的舊格式另報一行「舊格式,跑 --reindex 補上」,那幾筆的 notes 不算進不一致(代碼審 r6 通才席) [出處:[[Projects/審查收斂規則_計劃]]〈做法〉3、5] [因:pitfalls 分級只讀索引不載圖譜,索引漂掉就會漏升 high] [test:t_doctor_checks_residual_ref] [test:t_doctor_residual_index_legacy_format]
++  TEST:殘留那一套另有 t_guard_residual_ask_once(只准問一次這個方便、索引一致性)+t_guard_residual_index_records_decision_note(索引記決策所在筆記、doctor 比這欄)+t_guard_audit_residual_hardlink_ledger(帳有硬連結不寫)+t_doctor_residual_index_multiset(索引比多重集合)+t_residual_ev_order_extreme_ts(極端 ts 不崩)+t_guard_audit_residual_symlink_ledger(捷徑帳不寫)+t_residual_ask_block_message_honest(擋下訊息照實講)+t_guard_audit_keeps_residual(重審不抹殘留)+t_inv_tag_strips_residual(剝標記)+t_residual_identity_normalized(身分正規形)+t_guard_residual_index_write_failure(索引寫一半)+t_residual_check_shared(三處同一套驗法)+t_residual_test_files_skip_comments+t_residual_decision_shared_resolve+t_guard_audit_and_kill_add_share_contract_locate+t_contracts_shows_residual+t_residual_identity_keeps_meaningful_punct(句中符號與編號分隔符不抹)+t_residual_testable_sticks_to_case(同一條合約判過 testable 不准改判,改字重問交給推送分級)+t_guard_residual_noop_keeps_index(沒事可做不碰索引)+t_residual_unknown_verdict_ignored+t_residual_add_audit_after_ask(審計在問答之後)+t_residual_add_audit_event_order(比 guard-audit 事件的時間戳記、取最晚一筆問答)+t_residual_case_key_joins_letter_digit(c-1 與 c1 同一個)+t_residual_claim_fp_strips_invisible(指紋剝零寬與控制字元)
+ related:
+   - "[[Projects/guard殺傷力驗證_計劃]]"
+   - "[[Systems/check-t-sentinel]]"
+   - "[[Systems/test-profile-multiplatform]]"
+   - "[[Verification/2026-07-10_guard殺傷力驗證]]"
+   - "[[Projects/併發與效能表態要合約背書_計劃]]"
+   - "[[Projects/殺傷力配方失配提醒_計劃]]"
+ aliases:
+   - 殺傷力驗證
+ decisions:
+diff --git a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+index ec6796a2..96160efd 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
++++ b/docs/lumos-toolchain-knowledge/Systems/loop-convergence-recording.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+-updated: 2026-10-06
++updated: 2026-10-14
+ self_audit: sonnet/2026-08-26
+ about_code_stamp: claude/2026-08-30/be0e9557e400
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/loop-engineering
+ verified_by:
+   - "[[Verification/2026-06-19_loop-convergence-recording]]"
+   - "[[Verification/2026-07-16_dloop提效M2_cluster帳]]"
+@@ -48,20 +48,21 @@ summary: |-
+   KEY:missed 輪 ×tail-K 自然重置——一個 missed 落在窗內就擋收斂,直到隨新輪滑出;無需特例(dogfood R6 逼出)
+   KEY:缺 severity 視同未收斂(逼明確宣告、不得當 clean);exit 0=CONVERGED｜1=未收斂(含無記錄=還沒開始)｜2=真錯誤(argparse/IO)
+   KEY:★(2026-08-26 嚴重度綁定案落地,舊「severity 自報無寫入端驗證」天花板已拆一半)★寫側硬擋:審查席帳列(loop+auditor;結局帳 --outcome 豁免——★cb3 折入:原 loop+round+auditor 三者齊備觸發=漏打 round 即繞道,已放寬;處置帳另必綁輪次+讀側 round-less 處置帳拒判★)必附 --report,報告要有獨立「severity: <值>」行(逐行 fullmatch,引句/blockquote/跨行天生排除),帳面低於報告最高=拒帳 rc2、高報=放行+提醒;record 並落 spec_path 欄。殘餘天花板(誠實):報告與帳同出編排者之手,擋疏忽不擋共謀,對抗歸 [audit:];severity-check 第四道收貨+問閘尾巴(觀測不進合取,留痕併 roster-alerts.log)當縱深第二層
+   PITFALL:`loop replay --freeze` 重凍沒帶 --note 被擋時,governance/replay/<編號>/.verdict.tmp 留在原地,`git add governance` 會把它一起提交(主線上兩個編號帶著它,其中「筆記格子寫法與過期檢查」那份是被擋下的 r3 判定、正式檔仍是 r2);現在 --note 檢查移到跑處置閘、寫暫存檔之前,擋下訊息開頭講明「判定檔沒有更新」與現行是第幾輪,被擋時不印任何 [disposal] 與 GATE PASS(原本擋下訊息走 stderr、PASS 走 stdout,接管線或只看尾端時最後一行是 PASS;代碼審 r2),寫完暫存檔後任何一步失敗都在 finally 清掉;暫存檔名照 _write_lf 每次不同(帶行程編號與隨機尾碼),不然兩個重凍同時跑時先結束的那邊會刪掉另一邊的暫存檔(代碼審 r1);寫檔三步抽成 _replay_write_verdict(歸檔前再判一次 --note:兩個第一次凍結同時跑時開頭判的那一刻還沒有判定檔,t_loop_replay_freeze_race_needs_note),歸檔檔名的時間改用帶時區的取法、值照舊是本地時間;.gitignore 另忽略 .verdict*.tmp [出處:2026-10-07 工具鏈會談回報、本會談重現] [根因:先寫暫存檔才判擋不擋,擋下的提早 return 沒清] [test:t_loop_replay_freeze_leaves_no_tmp] [test:t_loop_replay_freeze_race_needs_note]
+   KEY:★判定回放(2026-08-26 改制回測案)★:`loop replay --freeze/--golden`——收斂即凍完整輸入閉包(全列帳原文+逐行 sha 集+spec 窗末 sha+卷證 HEAD blob+engine_rev)入 governance/replay/;回放唯讀(治理帳零寫入、無觀測尾巴),差異四分類:邏輯漂移/帳被動/凍結檔被動=紅,帳本長大/golden 過期(engine_rev 分流)=列出不紅;重凍比照 anchor approve 留痕+歸檔不覆寫;週跑 run_replay 補漏+輪替抽查(便宜自動升全跑);CONVERGED 仍非防竄改正確性證明,但「同輸入同判定」自此可每週機械重問
+   KEY:[2026-09-17]逃逸帳多了自動模式:lumos loop escape --auto --range a..b(碰到的計劃各記一筆、對不回不記、去重鍵=迴圈/階段/sha);三個來源自動掛——代碼審 code-<主題> 記到 major 以上、推送閘擋下(fail-open)、CI 紅(範圍=上一個綠..這次紅)。歸因守衛在自動模式放寬成「迴圈在審查帳或計劃檔存在」,帳上 attribution 標 ledger|plan-file;door 欄由規格閘留痕填、上線前一律 unknown。單源:[[Projects/規格落成可驗收條件_計劃]] 第五節
+   KEY:[2026-09-17]逃逸自動記(三來源掛勾、--auto、precision 欄、CI 步驟名判準)的單源改成 [[Projects/逃逸自動記_計劃]](從規格落成可驗收條件_計劃拆出);上一行提到的「第五節」已搬走
+   DEP:scripts/lumos cmd_canary(+loop/+severity)｜cmd_loop_status｜cmd_gov canary mapper(detail 附 loop/sev 放最前)｜.canary-log.jsonl(複用,不新增 log)
+   TEST:t_loop_status + t_canary_loop_fields;258 passed
+   VERIFY:[[Verification/2026-06-19_loop-convergence-recording]]
++  WHY:逃逸帳可以歸因到殘留:loop escape 加選填 --residual-ref <資料夾>/<節點>#dN(驗法跟 guard residual 寫標記同一支:全名、存在、沒翻案),記進 residual_ref 欄;跟 --list、撤回、--auto 一起用回 2(自動記帳沒有歸因來源);escape-stats 印歸因到殘留的列數(撤回的不算,JSON 是 totals.residual_ref) [出處:[[Projects/審查收斂規則_計劃]]〈做法〉6] [因:審查收斂規則的撤除條件靠它量——殘留裡的缺陷其實是測得到的局部退化,就撤回殘留這條出口] [test:t_loop_escape_residual_ref]
+ decisions:
+   - content: 收斂用 tail-K 滑動窗(append 序最後 K 筆全 caught+clean/minor),非「每輪都得乾淨」;排序用檔案 append 序而非 ts
+     id: d1
+     context: 設計 loop r2 真 major(R2-MAJOR-1):「最後 K 輪」原文義含糊,可讀成全程乾淨;且 ts 只到秒、同秒兩輪會並列無法定序
+     why_chosen: tail-K 讓前面髒輪(早期被審計揪出的 blocker)不永久汙染收斂,符合「修了就該往前」;append 序唯一且即時間序,免 ts 秒級碰撞
+     decided: 2026-06-19
+     valid: true
+   - content: 機制定位誠實校正為「可觀測性+摩擦+一個地板」而非「機械自我終止 oracle」;severity 是忠實轉錄審計員 max finding、無寫入端驗證
+     id: d2
+     context: r1 深層 blocker(R1-BLOCKER-2):原宣稱「機械自我終止」過度;severity 自報、想早收工的編排者可記假 clean——這跟 canary「植入者忠實判定」是同一個沒閉合的迴歸
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index c600af36..f6b06b3d 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-07-04
+-updated: 2026-10-12
++updated: 2026-10-14
+ self_audit: gpt-5.6-sol/2026-10-03
+ about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/loop-engineering
+ verified_by:
+   - "[[Verification/2026-07-04_pitfalls-code-loop]]"
+   - "[[Verification/2026-07-05_code-loop必用守衛]]"
+@@ -48,29 +48,35 @@ summary: |-
+   KEY:[2026-08-04]pass/skip 留痕的簿記白名單豁免([[Issues/code-loop-pass自失效追尾]])——留痕 sha 之後的 commit 只動簿記檔(治理帳/usage-log/anchor-baseline/code-loop 留痕)且留痕 sha 為目標祖先 → 留痕仍有效;其他檔一動照樣失效、改寫史拒認。「HEAD 移動→作廢」原意=pass 不得蓋到新代碼,此為精化非放寬(原嚴格等值下 pass 自己 append 的治理帳行被 commit 即自失效→追尾) [test:t_codeloop_pass_survives_bookkeeping_commits]
+   KEY:[2026-07-18]codestage S1/S5 落地(設計[[Projects/code階段強化_計劃]],4輪審計30條折入+實質收斂人裁)——S1 真跑優先(綁約合約 pass 前必真跑綁定測試,解析三順位不得靜默跳過;紀律層)+確定性驗證器三通道參與(不佔canary席;M2帳下capture advisory裁決歸機械證實通道)/S5 辯方預設Codex+tier-high雙Codex角色(帶餌finder佔W+無餌否決席外掛,落閘=M2記disputed-major)+家族否決保護+fail分級(high外家缺席不得收斂攤人)(更正 2026-10-12：辯方預設 Codex 與 high 雙外家席已在 2026-09-30 改成辯方預設同門、外家席條件派,見 [[Systems/design-loop]] d11)
+   KEY:[2026-07-10]panel 追加 spec-conformance slot(tier=high 且有收斂 spec→對答案審查員,四類:已實作/縮水/多做/未實作;templates §7.5)
+   FLOW:pitfalls spec 模式(剝除對齊 assess_spec+防呆→掃 PITFALL_CLASSES 四類→印通用 4 問(3 固定+1 風險類反問,2026-08-08 追加;★原記 3(2026-08-21 程式碼實證)★)+命中類追問)｜--check(命中類且無「## 實務隱患」節→rc1)｜--diff(掃新增行 Check H 骨架+代碼形態 pattern→manifest(★(2026-08-21 程式碼實證)欄位依來源而異:內建 regex 類={file,line,class,pattern,question};lint 來源={file,line,source,rule,message}★)+stack_questions(命中 kt/cs/vue/sql 附該棧效能問,源=[[效能檢核目錄]])+尾行 tier;line 由 @@ 推導;rc 恆0)→ 尾行 tier 分流:trivial 跳(commit 註明)/standard 走單 reviewer 終審/high 觸發 lumos-code-loop 終審對抗審(bug canary 四型+辯方+K-streak∧G2 收斂,loop status --gate 無 --spec G1 skip);★2026-09-09 起另一條不看 tier 的分支:stack_questions_applicable(增刪行觸發到的棧題)有題 → 推送前每題表態(code-loop dispositions),check 擋;見[[Systems/棧別提問表態閘]]★
+   KEY:兩層隱患兩錨點——設計決策級(冪等鍵/重試策略)錨 spec 層 pitfalls --check;代碼級(N+1/race/資源洩漏)錨終審 --diff+code-loop。補審計火力頭重腳輕(spec 有整套對抗機器、代碼原只兩道普通眼)
+   KEY:三道防污染(不可違反)——真代碼永不含(fix 錨真 diff file:line、canary hunk 不在真 diff)｜低耦合植入(canary 座標在真改動集外=pillar-1 機械前提)｜溯源排除(含間接聯想幻影,未顯式引用亦排;偏多排)
+   KEY:PITFALL_CLASSES 四類名 ≡ difficulty.RISK_CLASSES、_PITFALL_BLACKLIST ≡ difficulty._BLACKLIST——漂移守衛落 test_autonomous_loop.py(toolchain-only、非 vendored);詞表/pattern 表自帶 scripts/lumos(difficulty.py 不 vendored)
+   KEY:diff class 用代碼形態類軸(併發/效能/資源)非四業務類;pattern 去重疊(SELECT→效能 N+1、INSERT/UPDATE/DELETE→併發交易);過濾繼承 Check H 全套(skip .md/.txt/.rst+測試檔+註解行)
+   KEY:★[2026-09-11 d6 取代 d5]高風險代碼審一律必派一席「資安」★(Enzo 裁;所有專案,工具鏈自己也算;只在 tier high,不改風險掃描觸發)——處置閘加「資安席」一步(第六步,第五步是條款綁定):整個迴圈要有資安席帳列、報告 sha 對、看過的檔涵蓋最後一版;編制表新值 required-gated;生效日 2026-09-12(2026-09-11 落地,驗證 [[Verification/2026-09-11_代碼審資安席落地]];代碼審待跑) [test:t_disposal_security_seat_required] [test:t_roster_code_high_has_security_seat];單源 [[Projects/代碼審資安席_計劃]]。舊 d5(2026-08-27 刻意排除,理由單人私有 repo)前提已不成立:repo 公開、一行安裝、09-06 hook 信任邊界事件
+   KEY:誠實天花板——pattern 提示器非偵測器(單行掃描,跨行語境小行窗啟發為限)｜canary 校準+溯源排除靠自律｜--check 只驗節存在不驗內容｜mutation 冒煙抽樣非覆蓋｜code-loop 少一道 G1(--spec 可選、G1 skip)｜事故語料進圖譜留 v2
+-  KEY:[2026-09-18 Enzo 裁]改動風險分級單一算法 _pitfall_tier(★維持 vault-free★,代碼審 r1 兩席):命中風險型樣/新告警 → high;改動裡沒有「需要有家的程式檔」(_is_code_file:副檔名清單或首行 #!)→ light;其餘 standard,審查帳有全靠人驗留痕時多印一句「跑 spec-gate --push-check 看是不是 light」;「計劃風險低且全靠人驗且小改動閘過 → light」由 spec-gate --push-check 印(只有它有圖譜、本來就在 pre-push 跑,不重跑測試)。JSON 多 tier_reason [test:t_pitfalls_tier_light_sources]
++  KEY:[2026-09-18 Enzo 裁]改動風險分級單一算法 _pitfall_tier(★維持 vault-free★,代碼審 r1 兩席):殘留索引升 high 最先判(2026-10-14 [[Projects/審查收斂規則_計劃]]:改到索引列的 about_code 或綁定測試所在的檔(都整檔)、推送範圍裡新增殘留(頂端有起點沒有)、拿掉殘留(起點有頂端沒有)或縮小同一筆殘留守的檔(殘留身分=節點、合約指紋、殘留指標)、頂端索引讀不出而起點有殘留或這次動過索引、起點索引 git 讀不出、檔名清單失敗而索引有殘留、起點版本治理帳的 residual-ask 列頂端少了,理由各寫一句);命中風險型樣/新告警 → high;改動裡沒有「需要有家的程式檔」(_is_code_file:副檔名清單或首行 #!)→ light;其餘 standard,審查帳有全靠人驗留痕時多印一句「跑 spec-gate --push-check 看是不是 light」;「計劃風險低且全靠人驗且小改動閘過 → light」由 spec-gate --push-check 印(只有它有圖譜、本來就在 pre-push 跑,不重跑測試)。JSON 多 tier_reason [test:t_pitfalls_tier_light_sources]
+   KEY:[2026-09-17 小改動閘 r2]簿記目錄單一源 _BOOKKEEPING_DIR 擴成 _BOOKKEEPING_DIRS(governance/code-loop、review-reports、replay):三個消費者(pitfalls --diff 掃描排除、code-loop 留痕失效豁免、小改動閘的擴散量)共用;效果=卷證/凍結判定的提交不再讓 pass 留痕失效 [test:t_prepush_small_change_gate]
+   KEY:[2026-09-18 純文件推送不跑全套]`pitfalls --diff --json` 多五欄:`suite`(docs|full)、`suite_reason`、`affected_keys`、`light_ok`、`suite_graph`(docs 且範圍碰到 docs/<名>-knowledge/ → 執行器加 --graph 跑讀真圖譜的測試)。docs=改到的每一支都過兩層白名單:路徑(README/根目錄 .md/LICENSE/docs/assets/diagrams/governance)★且★副檔名在文件清單 _DOCS_ONLY_EXTS(不分大小寫);沒副檔名、.rb/.PY 這種一律不算文件(代碼審 r1 邊界席 blocker+正確性席:第一版「路徑對且不在程式清單」被繞兩次,改成反過來列文件)。scripts/skills/.github 任一支、從 scripts/ 搬進 docs/(--no-renames 看成刪程式檔)都 full;★守衛本身★(governance/anchor-baseline.json、governance/code-loop/)碰到就 full(r3 資安席:只推基準線會跳過 t_anchor);其餘簿記帳不算;範圍算不出 → full。affected_keys=改到的程式檔裡動到的★頂層★函式名(cmd_x 也給子命令 x;縮排的 def 不算,check 會選中全部)與檔名,只留 [A-Za-z0-9_.-]{3,}。light_ok=非文件檔全是程式檔(資安席:測試檔/skills 這種既非文件也非程式的不准跟著 light 少跑全套)。三點範圍起點用 merge-base(_range_base)。執行器 `--suite docs` 直接讀 _DOCS_ONLY_PATHS,不抄第二份
+   DEP:[[risk-tiered-review]](分級哲學延伸到 diff 層)｜[[convergence-evidence-gate]](gate --spec 改可選)｜[[lumos-refcheck]]｜doctor Check H(diff 掃描骨架)
+   TEST:t_pitfalls_spec(9)+t_pitfalls_diff(截至 2026-08-21 為 12;★原記 11(2026-08-21 程式碼實證)★,含行號值+併發寫入)+TestPitfallsDrift(2,類名+黑名單)+t_loop_gate 案14翻契約+t_loop_gate_no_spec;當時 374 passed(★全量數字已漂,以 CI 為準★)
+   VERIFY:[[2026-07-04_pitfalls-code-loop]]
+   WHY:[2026-09-29 [[Projects/代碼審資料狀態鏡頭_計劃]]]代碼審派工詞正確性鏡頭加 DDIA 資料狀態五問(新舊互讀/寫一半/衍生資料/時間/不可逆),冪等與併發擴寫同次讀兩次與對外送出重試;只寫進審查員鏡頭、不做推送前表態閘——推送前表態版經設計審 r1 撤案(會在 60–85% 推送上亮、放大無圖譜死結),小實驗只量到鏡頭形式多抓一次已知 bug([[Projects/代碼審鏡頭對照DDIA_調研]]);多席時五問只留給正確性席(靠編排者照做);範本內容由 t_data_state_lens_in_code_template 等三支測試釘住
+   WHY:[2026-09-29 [[Projects/代碼審前後端角色鏡頭_計劃]]]代碼審正確性席派工詞加 `LUMOS-ROLE-CARDS: on` 時,依改到前端或後端附角色鏡頭卡(前端 6 題、後端 2 題,題號 fe-/be- 不得改:撤除條件靠它計數);判定建立在既有題組鍵上不另造分類,宣告讀起點版本(被審分支不能自己關卡);推送前分級只在人讀輸出多一行角色統計、不進 JSON。只接 Claude 通道,Codex 領席每席同一份文字做不到只給正確性席(d4)
+   PITFALL:[2026-09-29 代碼審角色鏡頭 r1 正確性席與外家席各自重現]角色段放在「參考資料」框外(框外=審查員照做的指令區),壞宣告的警告若回填專案寫的 role/path 值,被審專案就能往指令區塞字;警告只准寫第幾條與固定原因 [test:t_review_role_warning_never_echoes_config_values]
++  WHY:風險分級多一條升 high:這次改到的檔(git diff --no-renames,改名的舊路徑也算)落在殘留索引起點或頂端版本(git show 讀;頂端是工作目錄就讀工作目錄那份)列的 about_code 或綁定測試所在的檔(兩種都整檔)裡 → high,理由寫「改到帶殘留合約守的程式」;頂端有、起點沒有的殘留(節點、合約指紋、殘留指標)→ high,理由寫「這次推送新增了殘留,要過高風險代碼審(派工鏡頭把殘留決策與問答附給審查席逐條答)」——「同一反例只准問一次」只是方便,靠字面身分擋不住換編號、改節點名、改字重問(代碼審 r1–r3 同類三次),改成外層看門:挑答案的那次推送要過一輪高風險代碼審(只保證跑一輪高風險代碼審,審查席有沒有答沒有機械核對);起點有、頂端沒有的殘留 → high(拿掉殘留,分兩次推送也躲不掉);同一筆殘留起點守的檔頂端少了 → high(先縮守備範圍、下次再改程式也躲不掉);頂端索引讀不出或形狀不對、而起點有殘留或這次推送動過索引 → high;起點索引 git 讀不出(不是路徑不存在)→ high;檔名清單失敗而索引有殘留 → high;起點版本 docs/.governance-log.jsonl 的 residual-ask 列頂端少了 → high(刪掉 testable 那列就能重問;比兩版帳檔用 git show --no-textconv 讀出的列、以整列去頭尾空白為單位計數相減(重複的整列各算一筆,代碼審 r4),不看 diff 文字——代碼審 r3:.gitattributes 標 -diff 或塞一個 NUL 就沒有刪除行可數,帳尾續寫、重排、改 CRLF 又誤升;檔名清單失敗時照比、任一版讀不出當成有);頂端帳新增了判 untestable 的 residual-ask 列(讀不出判定的也算)→ high,理由寫「這次推送新增了判測不到的問答(記殘留的來源),要過高風險代碼審」(代碼審 r4:同一筆決策追加反例不動索引的鍵,殘留的來源是問答,看問答比看可手改的索引貼近要擋的動作);同一篇、同一筆殘留,起點那條合約的指紋頂端沒了、頂端多一條新指紋 → high,理由寫「合約句子改了(舊的拿掉、新的加入),要過代碼審」(不再寫成拿掉殘留);git replace 由主程式入口統一關掉(main 開頭設 GIT_NO_REPLACE_OBJECTS,所有子行程繼承;代碼審 r4 資安席找到、r5 從逐呼叫帶環境改成入口一次),本機偽造不了起點;起點也沒有殘留就什麼都不做。仍不載圖譜(分級 vault-free 不動),升 high 後交給既有的代碼審留痕要求 [出處:[[Projects/審查收斂規則_計劃]]〈做法〉5] [因:帶殘留的合約是測試守不住的地方,只能靠人看;讀起點版本才擋得住同一提交拿掉標記又改程式] [不選:放在推送前規格閘讀主線版圖譜(拿不到被推的提交、CI 不跑、直推主線時主線版就是頂端,設計審 r3)] [不選:測試檔只在 diff 增刪行或 hunk 標頭碰到綁定測試名才算(代碼審 r1 試過;r2 四席實測縮排在 class 裡的測試方法只改本體、只改輔助函式都判不到——hunk 標頭只帶頂格的 class 名)] [代價:節點管很多檔時,跟那條合約無關的小改動也要代碼審;本 repo 的測試全在 scripts/test_lumos.py 一支檔,改到它的推送常升 high] [test:t_pitfalls_tier_high_on_residual_index] [test:t_pitfalls_residual_test_file_whole] [test:t_pitfalls_residual_guard_shrunk] [test:t_pitfalls_residual_git_failures] [test:t_pitfalls_residual_ask_rows_dropped] [test:t_pitfalls_residual_added_needs_review] [test:t_pitfalls_residual_ask_rows_compare_versions] [test:t_pitfalls_residual_key_has_contract] [test:t_pitfalls_residual_new_untestable_ask] [test:t_pitfalls_residual_ignores_git_replace] [test:t_pitfalls_residual_ask_rows_counted]
++  WHY:派工鏡頭的合約行徽章多一格「⚠帶殘留 N 筆」(N=不同殘留決策數),不依賴綁定測試徽章(平台設定讀不到時照樣標);範本 §3 代碼審派工詞第 3 點加一句:看到徽章去讀那幾筆殘留決策、逐型答 [出處:[[Projects/審查收斂規則_計劃]]〈做法〉4] [因:鏡頭只印合約行前 200 字,戳記常在後半(設計審 r1 數過 36 條有 22 條),放在行文字裡審查席看不到] [test:t_dispatch_lens_badge_shows_residual]
++  WHY:派工鏡頭在固定席之後多附一段自帶框的「這次新增的殘留」:範圍內新增的殘留(索引頂端有、起點沒有)或新增的判 untestable 問答,每條合約列殘留指標、決策內容(單行、拆框線、300 字上限)與那條合約在頂端帳的問答列(編號、判定、checker、ts,標這次新增),框外一題逐條必答「這筆殘留的問答有沒有換編號或改字重問?第二個代理是不是另一個代理?」;內容從頂端版本讀(新增的殘留只在這次的提交裡),讀法跟分級同一套(git replace、grafts 與差異選項環境變數由主程式入口統一關掉,代碼審 r5);lumos-code-loop 派審查員那步與範本 §3 各補一句 [出處:代碼審 code-審查收斂規則 r4 合約席] [因:文件說把關是審查席看殘留決策與問答,手冊與派工卻沒有任何一席被要求去看,升 high 只保證跑一輪審] [不選:只在文件改口說「把關是要跑一輪審」(那等於承認換編號重問沒人看)] [test:t_dispatch_lens_residual_new_section]
++  WHY:風險分級再多一條升 high:改到起點殘留索引 notes 欄記的、存著殘留決策的那篇筆記(整篇算,改哪一段都升);那筆沒記在哪篇(舊索引)而這次改到圖譜的檔 → 也升;頂端索引記的那篇跟起點不同 → 也升。派工鏡頭把這幾筆也列進「這次新增的殘留」;兩版索引或帳任一邊讀不出、時間不夠時印「算不出來」並照附必答題;合約清單真的殘留變化排最前、不在殘留索引的問答標出來排後面,問答列這次新增的先列;這段接鏡頭的時間預算。治理帳讀不出跟刪改問答分成兩句理由 [出處:代碼審 code-審查收斂規則 r5 資安席 F1、正確性席、通才席、邊界席、併發席] [因:反例清單寫在決策內容裡,逐種比對內容被不同手法連續打穿,改成看「動了那篇沒有」的外層看門] [不選:比對決策內容有沒有變(下一種手法又繞過)] [代價:碰到那篇筆記就要過一輪高風險代碼審] [test:t_pitfalls_residual_decision_note_touched] [test:t_dispatch_lens_residual_unreadable_says_so]
++  WHY:「不知道殘留決策在哪篇」分成講得出原因的幾種:索引 notes 欄解不出時記 {"unresolved": 原因}(--add/--reindex 寫,指標指的筆記找不到、格式不合或撞名、筆記在 repo 外),理由句照講原因、不叫人跑 --reindex;舊格式(沒有 notes 欄)叫人 --reindex;起點記的路徑不在起點的樹裡(照 git 存的字串比,大小寫不同也算不在)當成不知道在哪;doctor 把舊格式另報一行、不算成內容不一致。「改到圖譜的檔」只認 _vault_slug_of(bare=True,docs/<名>-knowledge/ 與 docs/knowledge/)底下的 .md [出處:代碼審 code-審查收斂規則 r6 正確性席、邊界席、通才席、架構對齊席] [因:解不出的那筆原本每次改圖譜都升 high、理由叫人跑一次修不好的指令;notes 寫錯路徑或大小寫時靜默判 light;圖譜檔判定另寫一套,非 .md 與任何層級叫 Projects 的資料夾都算、圖譜根目錄的指標算不進來] [不選:解不出就不記(跟舊格式分不開);notes 用不分大小寫比(macOS 上對、git 與 CI 上錯)] [代價:圖譜放在 docs/ 以外(獨立 vault)的專案,舊格式或解不出的那筆改了決策筆記判不到,要靠 --reindex 記下路徑] [test:t_pitfalls_residual_note_unresolved_reason] [test:t_pitfalls_residual_note_path_checked] [test:t_pitfalls_residual_note_nfd_path] [test:t_doctor_residual_index_legacy_format] [test:t_pitfalls_residual_graph_file_any_vault]
++  WHY:派工鏡頭新增殘留段排序拆級——這次新增(含合約改字)排 0,改到存著殘留決策的筆記與索引記的筆記換了排 1,問答指到不在殘留索引的排 2;起點索引不知道決策在哪篇的那幾筆不逐條展開,彙總成一行(幾筆、原因、這次改了哪幾篇圖譜);時間預算用完時先判兩版有沒有殘留索引、這次有沒有改治理帳,都沒有就不出段;段裡「算不出來」的那次不寫鏡頭快取 [出處:代碼審 code-審查收斂規則 r6 併發席(5000 筆舊格式殘留加 1 筆新增,新增那條出現 0 次)、正確性席] [因:鏡頭一次只列 5 條合約,同排級照節點名排,位置未知的大批舊殘留把真正新增的擠掉;沒殘留的 repo 多一題沒對象的必答題;暫時讀不出被快取到範圍改變] [不選:提高 5 條上限(大索引照樣擠掉)] [test:t_dispatch_lens_residual_new_not_crowded] [test:t_dispatch_lens_residual_no_index_no_section] [test:t_dispatch_lens_residual_unknown_not_cached]
+ decisions:
+   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+     id: d1
+     context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
+     why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
+     decided: 2026-07-04
+     valid: true
+   - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+     id: d2
+     context: 使用者質疑代碼 canary 污染風險比 spec 嚴重(假 hunk 改變語意、reviewer 推導衍生幻影 findings)
+diff --git a/docs/methodology/圖譜即合約.md b/docs/methodology/圖譜即合約.md
+index 0c3c8645..8853bb98 100644
+--- a/docs/methodology/圖譜即合約.md
++++ b/docs/methodology/圖譜即合約.md
+@@ -85,21 +85,22 @@ flowchart LR
+ **圖例:檔頭欄位與標記**
+ 
+ | 標籤 | 放在哪 | 白話含義 |
+ |------|--------|----------|
+ | `summary` | 每篇檔頭 | 結構化摘要,AI 掃一眼懂全貌。`FLOW:`流程、`KEY:`關鍵事實、`DEP:`依賴誰、`TEST:`測試狀態 |
+ | `★INVARIANT★` | Systems 的 KEY 行前綴 | **業務合約**:改這個行為 = breaking change,動之前必須翻決策紀錄 |
+ | `★DEBT★` | 同上 | **已知偶然**:暫定值、寫死的常數,改了不算 breaking |
+ | (未標的 KEY 行) | — | 合約性未聲明,動之前自行判斷。紀律:不確定就不標,嚴禁從現況反推「應該是合約」 |
+ | `[test:測試名]` | ★INVARIANT★ 行尾 | **合約即測試**(2026-06-14):鐵則綁一個真實會跑的測試當可執行證據；doctor Check T 偵測裸合約/偽證據/懸空——**預設軟提醒(doctor 仍 exit 0)、pre-push `--ci` 才硬擋**(非無條件擋)。驗「綁了沒、綁的存不存在」這層形式,不驗測試跑得動 |
+ | `★COMBO★` | ★INVARIANT★ 行尾(marker 之後) | **組合覆蓋**(2026-06-23):最重的 money-path 鐵則標這個=該有組合情境測試兜底、別只測 happy-path；doctor Check K **軟提醒**(只綁 1 個 [test:] → 建議補,不擋)。天花板:只數標記個數、`[test:a,b]` 算 1 個免逗號繞過、CI 跑才是錨點（錨點自身完整性由 anchor baseline 守,2026-07-02） |
+-| `[audit:模型/日期]` | 同上 | **獨立合法性審計**留痕(2026-06-18）：「是不是真合約 / 綁的測試夠不夠格」這種沒標準答案的判斷，經無脈絡的乾淨 agent 判過（maker≠checker，別讓提鐵則的人自己認證）；缺=doctor 報未審 |
++| `[audit:模型/日期]` | 同上 | **獨立合法性審計**留痕(2026-06-18）：「是不是真合約 / 綁的測試夠不夠格」這種沒標準答案的判斷，經無脈絡的乾淨 agent 判過（maker≠checker，別讓提鐵則的人自己認證）；缺=doctor 報未審。第 3 問「構造一個違反保證、但綁的測試照過的壞法」(2026-10-14 起)：反例分三種去向——保留設計機制只是用錯的**局部退化**一定要補測試殺掉(分不清的先當這一類)；補過仍殺不掉、或要改架構才做得到的**繞過設計**才記成殘留，而且要第二個獨立代理同意(`guard residual-ask`，同一反例只准問一次——這是方便不是保證，編號是自己取的、換一個就是新的；真正的把關是新增殘留的推送要過高風險代碼審，派工鏡頭把殘留決策與問答附給審查席——只保證跑一輪高風險代碼審，審查席有沒有答沒有機械核對；新增判 untestable 的問答、改到存著已登記殘留決策的那篇筆記也升 high——後者是刻意的粗粒度，改到那篇就算，只改錯字也要過一輪高風險代碼審)、編排者只能往嚴改分類。這一問過＝每個反例都殺掉，或經第二個代理確認測不到；順序：`guard residual-ask` 記問答 → `guard audit` 蓋 `[audit:]` → `decision-add` 記殘留決策 → `guard residual <節點> … --add` 加標記(記殘留要先有 `[audit:]`，所以放行不等「已記成殘留」) |
++| `[residual:<資料夾>/<節點>#dN]` | 同上（既有標記之後） | **審計殘留**(2026-10-14)：第 3 問記成殘留的那幾型壞法，指到殘留決策(內容帶第二個代理的 `checker:`)；只由 `lumos guard residual` 寫(寫入當下驗)，重審不抹掉。派工鏡頭顯示「⚠帶殘留 N 筆」，改到它守的程式時 `pitfalls` 分級升 high、走代碼審；doctor 驗決策還在、殘留索引跟圖譜一致。單源 [[Projects/審查收斂規則_計劃]] |
+ | `★IRREVERSIBLE★` / `★CHECKPOINT★` | Systems KEY 行前綴 | **可逆性**(2026-06-19）：收不回的動作（prod 遷移/上架）標 `★IRREVERSIBLE★`、改了難救標 `★CHECKPOINT★`；未標=可逆 |
+ | `[rollback:decisions]` | ★IRREVERSIBLE★ 行尾 | **回退路徑指針**（事後補償）→ decisions 的回退 SQL/補償步驟；doctor Check R 強制（★IRREVERSIBLE★ 沒帶實質回退=擋）。天花板：證「有寫下 undo」≠「驗過能跑」 |
+ | `[guard:decisions]` | ★IRREVERSIBLE★ 行尾 | **事前預防路徑指針**（2026-06-24）→ decisions 的冪等鍵/核可閘。外部真不可逆（信已送出/下游已消費）回退沒用，改驗事前守衛。Check R **兩軌任一合規**：`[rollback:]`（事後補償）**或** `[guard:]`（事前預防）；`[guard:]` 僅 ★IRREVERSIBLE★，屬可逆性軸（與 ★INVARIANT★ 的 `lumos guard bind` 同名但正交） |
+ | `decisions[]` | Systems 檔頭 | ADR 決策紀錄:當時背景/考慮過哪些方案/為何選這個/犧牲了什麼;被推翻的標 `valid: false` 留作學習資產 |
+ | `verified_by` | Systems 檔頭 | 反向索引:這模組被哪些驗證背書過 |
+ | `valid_under` | Verification 檔頭 | 條件式有效期:這份結論在什麼前提下才算數(前提變了才需重驗,比「過期 N 天」精準) |
+ | `revalidate_when` | Verification 檔頭 | 什麼條件改變時要重新驗證 |
+ | `plan_refs` | Verification 檔頭 | 意圖鏈:這份驗證在落地/迭代哪個計劃(單向指針,計劃側不留鏡像欄位) |
+ | `status` | 全部 | 生命狀態:`doing` 進行中 / `done`、`pass` 結案 / `stale` 已腐需重驗 / `superseded` 被取代 |
+ 
+@@ -313,21 +314,21 @@ vault 跟 codebase 同 repo 版控,圖譜變更跟 commit 綁定。Team 拉同
+ |----|------|--------|
+ | `lumos doctor`(self-contained python,2026-06-13 起取代依賴 Obsidian app 的 graph-doctor.sh) | orphans + unresolved + verified_by 同步 + plan_refs 意圖鏈 + 同名守衛 + Check T/R + Check P 失效檔案認領 + lint | 動 graph 後立即跑 / pre-push / CI |
+ | `lumos archive`(2026-06-13 起取代 Obsidian 依賴的 archive-old-verifications.sh) | 半年滾動歸檔(`--days N --apply`,dry-run by default,單遍移檔+連結正規化) | 季度 / 半年 |
+ | `lumos gov --since 7` | weekly review rot finding + L2 bypass 率(★原寫 rot-queue-digest.sh,從未存在★) | weekly |
+ 
+ ### 合約即測試 / 獨立審計 / 可逆性(doctor Check T + Check R)
+ 
+ | 屬性 | 值 |
+ |------|-----|
+ | 定義/實作 | `lumos doctor` 的 Check T（★INVARIANT★→`[test:]`→`[audit:]`）與 Check R（★IRREVERSIBLE★/★CHECKPOINT★→`[rollback:]`）；單檔快檢走 `lumos lint <節點>` |
+-| Check T | 每條 ★INVARIANT★ 必綁存在於 code 的 `[test:]`（裸/偽證據/懸空皆擋）→ 再經無脈絡乾淨 agent 蓋 `[audit:]`（maker≠checker，缺=未審擋） |
++| Check T | 每條 ★INVARIANT★ 必綁存在於 code 的 `[test:]`（裸/偽證據/懸空皆擋）→ 再經無脈絡乾淨 agent 蓋 `[audit:]`（maker≠checker，缺=未審擋）；帶 `[residual:]` 的另驗殘留決策還在(找不到或已翻案=擋)、`governance/residual-index.json` 跟圖譜一致(對不上=擋，`lumos guard residual --reindex` 重建) |
+ | Check R | ★IRREVERSIBLE★ **兩軌任一合規**（2026-06-24）：`[rollback:decisions]`（事後補償）**或** `[guard:decisions]`（事前冪等鍵/核可閘，給寄信/已消費遷移這類回退沒用的）——decisions 須有對應非空內容，兩者皆無才擋；★CHECKPOINT★ 缺回退=軟提醒（不讀 guard、行為不變）。v1 手寫進 KEY 行、`lumos lint` 檢查。注意：此 `[guard:]` 屬**可逆性軸**，與 ★INVARIANT★ 合約軸的 `lumos guard bind` 同名但正交（兩層 namespace 不相交，是既有命名範式） |
+ | Check H（2026-06-25） | doctor `--ci` 掃 git diff 的 `+` 行（staged 優先、fallback `HEAD~1..HEAD`），碰 prod/外部 API/寄送/破壞性 DB pattern → `warn_soft` 提示「是否漏標 ★IRREVERSIBLE★」。純加法、不擋、不計 issues；pattern 是 syntactic（有 false positive，軟提示成本近零）。與 Check R 互補：R 守「標了要合規」、H 提醒「沒標但可能需要」 |
+ | 天花板 | 證「形式」(測試存在、回退有寫、乾淨 agent 審過)，不證「validation」(規則對不對業務、回退跑不跑得動)——後者留給人 |
+ | 綁定指令 | `lumos guard list/scaffold/bind/audit/trace`（對談驅動，斷言由人確認意圖後填，非 code 反推） |
+ 
+ ### 治理事件帳(`lumos gov`)
+ 
+ | 屬性 | 值 |
+ |------|-----|
+ | 用途 | 唯讀彙整 `.bypass-log`(L2 繞過)/`.rot-queue`(L3 腐化)/`.governance-log`(doctor --ci 的 **Check R**,Check T 只進 stdout 不進帳)/`.canary-log`(canary 審計可靠度史)→ 查「某節點歷來被哪幾道閘攔過、硬擋 vs 軟」 |
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index b25366d5..94e6e059 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,19 +1,19 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "15d1eebbe6371747899c2ff40fdeb2cf7e194f15dd71efc39b44b8caf782e8ed",
++    "scripts/test_lumos.py": "dd9a212dcc98e9912b4e2924899482effcf45bba9b762c09b61cce258eb9d3b0",
+     "scripts/test_autonomous_loop.py": "b360429f2d41bb32d0b21b125f482f7694fefa828f2be7020902382f9f3c9e9c",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+     "scripts/hooks/pre-push": "de4344912099b4ea123470be2c3d431671965df2d70bd8365b1292f6bf8d87fb",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "a3494328d4df22fd7ad8c28bb34a8bef5edd8dd8ab14a3118c9d3f4f44b022bc",
+     "scripts/hooks/claude/lumos-entry-hook.py": "57697cd0e456ffd0ff27dba052999e8aef16fea61d935d0eada51b8ead43e8ba",
+     "scripts/hooks/claude/impact-hook.py": "b21d8133174b2b0ea9d8abad973fdcb430dc0d79d7b3591cf5764e1847838dff",
+     "scripts/hooks/claude/check-graph-sync.py": "24b58d13eac5211823d7e7f3125ff6db81212a43351ae0dd2585ef0d4c247485",
+     "scripts/hooks/claude/ci-status-hook.py": "63e8dc1081e87f87be7fb1add9dc752f1c765853535d5d0ce61cd14a678094d4",
+     "scripts/hooks/claude/memory-sweep.py": "6bc21768296f6b858e0f5965206ad8c487500c79c7fd5a02bab2396105f9c634",
+     "scripts/hooks/claude/_hookevent.py": "e6585e38235b33fe309d3921b0d5ccccaa79b8bbda90a082ef16443ea054072f"
+   },
+-  "approved_at": "2026-10-14T01:46:15+08:00",
+-  "note": "合併主線後重新核可:引句錨定整段比對第一階段改的測試檔"
++  "approved_at": "2026-10-14T08:59:04+08:00",
++  "note": "代碼審 code-審查收斂規則 r6 修正:新增九支殘留相關測試、擴充手冊守衛測試"
+ }
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index ca8d43c2..5ec9b9f3 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -22,21 +22,21 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
+    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
+    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
+    **修訂輪先準備修補鏡頭**：上一輪有修補時，按共用派工範本 §3.1 固定兩端版本、產生 `rN-repair.patch` 與 `rN-repair-binding.json`；完整改動與上下文仍在審材內。先核對上一輪派工單與 fix-check 的起點，缺漏或不同就記材料不可得、釐清後再比較。材料不可得不等於沒有回歸；不改現有閘結果與輪數。
+ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill(專案在 `.lumos/config.json` 的 `arch_targets` 宣告了目標架構的目錄改標目標節點,規則由範本裡的 `LUMOS-ARCH-TARGET: on` 讓 hook 附上),派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
+    - **high 另必派一席「資安」**(不佔人數):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。擋在問閘、不在 `code-loop pass`:pass 本身不回頭驗問閘有沒有過(既有天花板);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。
+-   - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(★不要寫 HEAD★:掛鉤在會談的專案目錄解讀它,你在另一個工作目錄做事時會算到別的提交);派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差→靜默放行;★範圍在會談專案算不出來(提交不存在、不是 git 專案、base 不在主線)→附一行 `LUMOS-LENS:` 說明★——會談開在別的專案、審另一個專案的分支時會這樣,照說明從開在目標專案的會談派席,或手動 `lumos impact --diff` 貼固定席;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
++   - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(★不要寫 HEAD★:掛鉤在會談的專案目錄解讀它,你在另一個工作目錄做事時會算到別的提交);派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差→靜默放行;★範圍在會談專案算不出來(提交不存在、不是 git 專案、base 不在主線)→附一行 `LUMOS-LENS:` 說明★——會談開在別的專案、審另一個專案的分支時會這樣,照說明從開在目標專案的會談派席,或手動 `lumos impact --diff` 貼固定席;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。★範圍內新增了殘留、判測不到的問答,或改到存著已登記殘留的筆記(`pitfalls` 理由寫「新增了殘留」「新增了判測不到的問答」「改到存著已登記殘留的筆記」)時,鏡頭另附「這次新增的殘留」一小節(殘留決策內容與那條合約的問答列,從頂端讀、自帶注入框)和一題逐條必答「這筆殘留的問答有沒有換編號或改字重問、第二個代理是不是另一個代理」;讀不出或時間不夠時附「算不出來」那句,題目照附。附得上的前提:派工詞有 `LUMOS-IMPACT` 標記、base 在主線、鏡頭沒逾時、殘留已提交(鏡頭照頂端提交讀,不讀工作目錄)。把關強度照實講:推送升 high、要過一輪高風險代碼審;審查席有沒有答這題沒有機械核對,收貨時編排者自己看★([[Projects/審查收斂規則_計劃]])。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
+    - **角色鏡頭**:正確性席(standard 單席就是那一席)派工詞另留一行 `LUMOS-ROLE-CARDS: on`,hook 依這次改到前端或後端在框外附角色鏡頭卡(範本 §3 第 5 點;其他席不放這行;Codex 編排的代碼審目前不附,見 [[Projects/代碼審前後端角色鏡頭_計劃]] d4)。
+    - 另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。
+    - **席報告格式**以 lumos-design-loop `templates.md` 的卷證規則為唯一來源,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(反引號必加,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。派工詞照範本寫,收貨就不需要臨場轉格式。
+    - 允許席位做 git 實驗時,派工詞寫明一律 `git -C <臨時目錄>`、不准在 repo 根跑 commit / reset / restore / checkout / stash。
+    派工單落 `rN-dispatch.json`,頂層加 `"base_commit": "<git rev-parse HEAD 的 40 碼>"`(修正關卡的修正紀錄從這裡帶入 `base`)。
+ 3. **收貨**:**所有席收齊之前不要動工作目錄**——先到的席報告先留在對話裡、不寫到硬碟,同輪全部交回才一次寫進卷證(lumos-design-loop templates.md §0)。先折會讓後到的席讀到已改過的碼、甚至讀到先到那席的報告,「多席獨立一致可直接折、不用派辯方」就不成立。全部到齊、寫進卷證之後,第一個動作是 `ls` 確認檔真的在;席位提到動過 git 的,先 `git reflog -5` 核對。
+    - 席報告原樣存檔,不臨場寫腳本轉格式(卷證目錄不准放腳本,有測試擋)。格式不對退回該席重寫,不要自己動手改它的報告——編排者改席報告等於改證據。唯一例外是 `lumos report-normalize --write` 的純格式搬移(行內/標題/列表式的等級搬成獨立行、補檔級行=最高值;不補值、不改等級、不碰引句):動的是宣告放在哪一行,不是宣告了什麼;轉不了的它印行號,那就退回該席。
+    - 記帳寫側硬擋:審查席記帳必附報告、帳面不得低於報告宣告最高;讀不到任何 `severity:` 獨立宣告行、或沒正規化(檔首一行檔級 severity、每條 finding 恰一行獨立 `severity: <值>`、驗收輪留舊項不留 severity 字樣;引句/blockquote/圍欄/總結句不算)都 rc2。`lumos report-normalize <席報告>` 不帶 --write 先看差在哪。「報了幾條」由機器從正規化後的報告數進 `reported`,`--findings` 不得多於它。
+    - 可疑席(引句大面積錨不到、答得空泛)的 findings 不准直接丟——先機械重現,跑得出來才撈回。
+    - `lumos quote-check <席報告> --spec <凍結 patch>`、`lumos refcheck <席報告> --repo <根>`、`lumos seat-check <席報告> --dispatch <rN-dispatch.json>` 同設計迴圈;錨不到的不採信。不設 findings 上限,但泛泛而談的席報告要升級或重派。
+diff --git a/skills/lumos-design-loop/templates.md b/skills/lumos-design-loop/templates.md
+index ad4d156b..6f632cef 100644
+--- a/skills/lumos-design-loop/templates.md
++++ b/skills/lumos-design-loop/templates.md
+@@ -102,23 +102,26 @@ Finding（{原評 severity}）：「{finding 全文，含審計員引的座標}
+ 
+ ## 3. Code-loop reviewer（sonnet;blocker/major 須附翻紅重現,已寫進下方派工詞）
+ 
+ ### §3 編排者派工前須知(不貼進派工詞)
+ 
+ 圖譜鏡頭(派工詞第 3 點)的標記行與 hook 行為:
+ 
+ ★派工詞第 3 點的 `LUMOS-IMPACT:` 那行原樣留在派工詞裡(換成真實範圍,終點寫完整提交編號,例 `main..3f2a…`(40 碼);不要寫 HEAD,理由見下方①)★★派工前一刻先敲一次 `lumos dispatch-lens <base>..HEAD` 暖快取(20 分內有效):10 個 commit 以上算一次約 25 秒起,hook 內層 45 秒超時會放空;2026-09-05 起超時會在派工詞尾端附一行固定說明,不再靜默★——派子代理那一刻,`dispatch-lens-hook`
+ 會把 `lumos impact --diff` 的固定席(帶硬合約或出過事故的筆記)接在派工詞尾端:前 8 篇貼節點路徑+
+ 相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行(★每條 ★INVARIANT★ 行帶綁定測試狀態:有/懸空/偽證據/裸合約,
+-節點小計一行;「有」=測試方法存在,不代表跑過或有殺傷力——閘只看 rc★,v1.1),其餘只列名(d9 截錄)。內容一律從 base 讀、
++節點小計一行;「有」=測試方法存在,不代表跑過或有殺傷力——閘只看 rc★,v1.1;★帶 `[residual:]` 的再接「⚠帶殘留 N 筆」徽章(N=不同殘留決策數),平台設定讀不到時照樣標;鏡頭讀主線版,同一分支才加的殘留看不到——那時殘留決策本身就在這次的 diff 裡★,[[Projects/審查收斂規則_計劃]]),其餘只列名(d9 截錄)。內容一律從 base 讀、
+ 零自由文字(節點摘要/事故觸發字串/risk 標籤後綴都不印),這是有意砍掉的一句話層;唯一例外是帶 `[來源:外部]` 的外部事實行
+ (2026-10-03,[[Projects/外部回應碼語意要有出處_計劃]]):合約行後面另印,改動碰到外部回應碼比對時固定席之後再附自帶框的「外部碼表」補選段。
++★第二個例外是「這次新增的殘留」段,從頂端讀推送者寫的字★(2026-10-14,[[Projects/審查收斂規則_計劃]]):新增的殘留與問答只在這次的提交裡、主線版沒有,
++所以殘留決策內容、問答的 case/checker/ts 都是分支作者寫的;防護是自帶注入框、每欄單行加字數上限(決策內容 300 字)、拆框線與控制字元的消毒、
++出口再把看不見的字元轉成看得見的寫法——它是可反駁的資料,不是主線背書過的內容。
+ ★編排者要知道的三件事★(單源=[[Projects/派工鏡頭注入_計劃]]):
+ ① 標記不在、格式差一個字——hook 一律靜默放行;★範圍在會談專案算不出來(有一端提交不存在、會談專案不是 git 專案、base 不在主線歷史上)會附一行 `LUMOS-LENS:` 說明(2026-10-07 起,[[Projects/派工鏡頭跨repo不再靜默_計劃]])★——掛鉤拿「會談開在哪個專案」去算,會談開在 A、審 B 的分支就會這樣,照說明從開在 B 的會談派席或手動 `lumos impact --diff` 貼固定席;★標記終點一律寫完整提交編號、不寫 HEAD★——HEAD 是在會談專案解讀的,人在另一個工作目錄做事時會解讀成別的提交,範圍算錯卻不報錯(2026-10-07 本工具鏈自己的代碼審就附了主線的改動);★算超過 45 秒(2026-09-05 起)會在派工詞尾端附一行超時說明,不再靜默★,
+ 派工詞不會多任何東西;★固定席 0 篇不再靜默(v1.2)★:改附「圖譜沒有釘到節點」備援段——受影響測試/
+ 共改夥伴/呼叫者三格(全部只用主線樹算),那段不是合約、不必逐條答;派完看子代理回覆有沒有
+ 「lumos 自動附加」或「圖譜沒有釘到節點」段就知道有沒有接上。
+ ② 「還有 N 篇」那個 N 會少報(非固定席上游已截成 8,真數在 `meta.free_total`)。
+ ③ 審計證物(`governance/review-reports/**` 的凍結快照)已由機器剔掉,不必再手剔。
+ ④ ★Codex 當編排者時(Projects/Codex完全支援_計劃 d3,2026-09-04)★:spawn_agent 的派工訊息對 hook 是密文、改不了,
+ 標記行沒用;改成派工前一刻敲 `lumos dispatch-lens --arm <base>..HEAD --seats N`(N=這輪要派幾席),
+ 子代理開場(SubagentStart)由 hook 原子領一席、經 additionalContext 附上(首行 `LUMOS-LENS range=… 第 k/N 席`
+@@ -159,20 +162,27 @@ repo 在 {repo 根}（可 Read/Grep 真代碼查證 diff 上下文）。
+ 2. pitfalls manifest（{N} 條 claims）：{manifest 檔路徑}——source:"pitfalls-builtin"
+    的讀 question 欄逐條判「真隱患/誤報」（真隱患必答對應提問）；source:"lint:..."
+    的讀 message。manifest 命中位置是注意力導引，不是全部——散文外的 hunk 也要自己看。
+ 3. **圖譜鏡頭——這次改動牽連到的筆記**:
+ LUMOS-IMPACT: {base}..{head 完整提交編號}
+    派工時 hook 會在尾端附上固定席筆記(帶硬合約或出過事故的節點)。
+    逐條判:這份 diff 會不會破壞該節點宣稱的行為或合約?**固定席必答**(可分組摘要,
+    判「不影響」也要寫一句為什麼)。這些筆記記的是「為什麼這樣設計、哪裡不能碰、以前
+    在這裡出過什麼包」——**是 code 本身讀不出來的東西**。
+    若尾端是「圖譜沒有釘到節點」備援段,那段不是合約、不必逐條答。
++   合約行帶「⚠帶殘留 N 筆」徽章的,去讀那幾筆殘留決策(合約行尾 `[residual:<節點>#dN]` 指的那幾筆):
++   那幾型壞法測試抓不到、要靠你看——這份 diff 有沒有走進其中一型,逐型答。
++   尾端有「這次新增的殘留」段的(這次推送新增了殘留或判測不到的問答;只改了存著已登記殘留決策的筆記、沒新增殘留也會附這一段),
++   對著段裡的殘留決策與問答列(編號、判定、checker、ts)逐條必答:這筆殘留的問答有沒有換編號或改字重問?第二個代理是不是另一個代理?
++   答「沒有」也寫一句憑什麼。(把關強度照實講:只保證跑一輪高風險代碼審,審查席有沒有答沒有機械核對,收貨時編排者自己看。)
++   段裡「另有 N 筆殘留起點索引不知道決策在哪篇」那一行不逐條展開,自己對照 diff 看改的是不是那幾筆的決策。
++   段裡寫「算不出來」的(索引或治理帳讀不出、時間不夠),自己翻 diff 裡的殘留索引與治理帳,照樣答這題。
+ 4. {本案特定鏡頭：如 migration SQL 正確性、測試種子清理完整性、controller 錯誤映射}
+ 5. **角色鏡頭——依改到前端或後端附的卡**:
+ LUMOS-ROLE-CARDS: on
+    派工時 hook 依這次改到前端還是後端,在尾端「參考資料」框外附前端卡或後端卡(全端兩張都附、判不出就不附;
+    卡片內容單源在 lumos 本體 `_ROLE_CARDS`,這裡不複製)。照卡上的題逐一挑一個具體輸入走一遍;
+    對上的發現在標題附題號(fe-/be- 開頭)。沒附卡就略過這點。
+ 
+ 錨定紀律（硬性；2026-08-04 重設計）：
+ - 每條 finding 必附一段**從文件逐字複製的原文引句（≥10 字）**——編不出引句的疑慮不要交。
+   （收貨端跑 `lumos quote-check` 逐條驗；錨不到＝該條不採信。）
+diff --git a/skills/lumos-project-notes/SKILL.md b/skills/lumos-project-notes/SKILL.md
+index 0b8a2574..efcdee0c 100644
+--- a/skills/lumos-project-notes/SKILL.md
++++ b/skills/lumos-project-notes/SKILL.md
+@@ -51,25 +51,26 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—
+ | 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
+ | 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
+ | 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+ | 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
+ | 正文段落 | Edit;寫完 `lumos lint <節點>` |
+ 
+ **四條血換的開頭欄位鐵則**:① 多個連結一行一項,擠成一串會長假筆記 ② `summary: |` 區塊裡的 `[[連結]]` 不算連結,要關聯另放 list 欄位 ③ 值含「冒號+空格」要引號或區塊 ④ 同層不能重複鍵。用指令寫天生避開;手改才會踩。
+ 
+ **合約標記(動筆前掃一眼;不確定就不標,嚴禁看 code 反推)**:
+ ```
+-KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes]
++KEY:★INVARIANT★ <業務合約,改=破壞性> [test:測試名] [audit:模型/日期] [kill:recipes] [residual:<資料夾>/<節點>#dN]
+ KEY:★DEBT★ <偶然行為,可改>
+ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPOINT★ <改了難救>(建議補 [rollback:])
+ ```
+ - 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
++- `[residual:]` 是審計第 3 問的殘留(測試守不住、交給代碼審),只用 `lumos guard residual` 寫、先過 `guard residual-ask` 第二個代理;三種去向與規則見 reference.md〈[audit:] 獨立合法性審計〉。
+ - 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+ - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
+ 
+ **摘要區塊**(Systems/Issues 必有):
+ 
+ **分類規則不在這裡**:摘要行怎麼分類(`WHY:` / `RULE:` / `PITFALL:` / `FACT:`)、每類同一行還要有什麼,**唯一來源是紀律範本 `scripts/templates/graph-discipline.md` 的〈寫筆記時〉那一節**,它會被注入每個專案的 CLAUDE.md,動筆時本來就在你眼前,直接看那份。
+ 這裡刻意不放複本——複本前面被插一段唱反調的「快速版」、複本被藏進註解、複本標點跟本尊分岔,2026-09-21 一天之內被三種手法各繞過一次;守衛改成「不准有第二份定義」,比「複本要一字不差」穩。
+ 
+ 
+ `TEST:` `VERIFY:` `DECISION:` `AUTH:` 照舊;Issues 另有 `FLAG:`(只收 TECHNICAL/DECISION/ORIGIN)。
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index c956871a..d8210dfe 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -9,31 +9,33 @@
+ | 「推送被『碰到的筆記裡有指不到真測試的綁定』擋下」 | 照它印的改法修那篇筆記(改成真的測試名;測試已刪寫 `[test-gone:名稱]`;作廢的條目把綁定移走)再推;擋不擋看 `.lumos/config.json` 的 `note_shape.test_refs`(沒設是 warn 只提醒、設 block 才擋),只關這組設 warn;誤擋單次 `LUMOS_SKIP_NOTE_SHAPE=1`(留帳) | 碰到的筆記整篇都要乾淨,舊行上的也算;簽出的不是推送終點、或測試檔與設定有沒提交的改動時只提醒、交給 CI | 指不到的 `[test:]` 是假的守衛,讀的人會以為有測試守著 |
+ | 「新增告警閘擋下來,那條是誤報」 | `lumos lint-waive <指紋> --note "<為什麼放行>"`;看放行過什麼 `--list` | 放行綁指紋不綁版本,寫進 `.lumos/lint-waivers.json`(要一起提交)並記一筆治理帳 | 不放行就推不上去;健檢會數這個專案放行了幾條 |
+ | 「把一個坑固化成每次提交都會跑的規則」 | 規則放 `.lumos/rules/`、會被它抓到的樣本放 `.lumos/rules/samples/`,登記進 `index.json`,再 `lumos rule-check` | 每條規則都要有一支真的翻紅的樣本;沒樣本或樣本不翻紅 rc1 | 沒有會翻紅的樣本的規則可能是死的,跟沒有規則一樣 |
+ | 「漏網的問題本來哪條規則該抓」 | 記逃逸帳時帶 `--rule <規則id\|none>`;看待辦 `lumos rule-gap` | 列出「標了該抓、但規則還沒寫」的,附漏過幾次 | 逃逸帳只記漏掉了,不標規則就不會長出新守衛 |
+ | 「這次改動有沒有打破哪條硬合約?」 | `lumos bound-tests --diff <範圍> [--advisory]` | green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕** | ★2026-09-07 起低風險推送也跑★,紅了印出來記帳但不擋;高風險照舊擋。預設一支一支跑;要同時跑見安裝維運的 `bound_tests.parallel` |
+ | 「受波及合約的測試真的跑不了(外部 DB 不在)」 | `lumos code-loop check … --skip-bound-tests --note "<為什麼>"` 或 `lumos bound-tests --skip --note "<為什麼>"`;CI 用環境變數 `LUMOS_SKIP_BOUND_TESTS=1` | 留痕進治理帳,被統計(旗標記 `skipped-flag`、環境變數記 `skipped-env`,分開數) | 沒理由拒絕 |
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |
++| 「審計第 3 問的反例,審計員判要記殘留(殺不掉或繞過設計),先問第二個代理」 | 另派沒看過審計結論的獨立代理,只給那條反例、合約行與綁的測試,問能不能穩定測到;當場 `lumos guard residual-ask <節點> "<KEY 片段>" --case <反例編號> --checker <模型>/<日期> --verdict testable\|untestable` | 記一筆治理帳(閘名 residual-ask);同一條合約同一個反例只准問一次(已經問過回 2)——這是方便不是保證(換編號、改節點名、改字都問得到),真正的把關是新增殘留的推送要過高風險代碼審;判 testable 就照它說的補測試 | 換代理重問直到聽見想要的答案,殘留就變成想收斂的人自己說了算 |
++| 「反例確認測不到,記成殘留」 | 順序:`guard residual-ask` 判 untestable → `guard audit` 蓋 `[audit:]` → `decision-add` 記殘留決策 → `guard residual <節點> … --add`。先 `lumos decision-add` 記殘留決策(內容尾端寫 `checker:<模型>/<日期>`),再 `lumos guard residual <節點> "<KEY 片段>" --add <資料夾>/<節點>#dN --case <反例編號>…`;拿掉用 `--remove <資料夾>/<節點>#dN`;doctor 說殘留索引對不上用 `lumos guard residual --reindex` | 合約行尾加 `[residual:…]`,重寫 `governance/residual-index.json`(跟筆記一起提交);決策不在、被翻案、內容空白或沒有那筆 `checker:`、問答不是 untestable(或這條合約判過 testable)、短名、合約行沒有 `[audit:]`、或這條合約最近一次 `guard audit` 的治理帳紀錄早於問答(帳上找不到也算)都回 2;新增殘留的那次推送 `pitfalls` 升 high、要過高風險代碼審(新增判 untestable 的問答也升 high:同一筆決策追加反例不動索引;改到存著已登記殘留決策的那篇筆記也升 high,改哪一段都算——刻意的粗粒度,只改錯字也要過一輪高風險代碼審;只保證跑一輪審,審查席有沒有答沒有機械核對);同一個標記再加回 0(索引本來就對就不改檔,沒跟上才補、印「索引原本沒跟上,已補好」) | 不留標記的話,派工鏡頭看不到殘留徽章,改到它守的程式時 pitfalls 也不會升 high |
+ | 「這條合約之後才會做,先預告起來別忘了」 | `lumos guard plan <節點> "<一句話合約>" --plan <計劃> --phase <階段> --due <YYYY-MM-DD> --why <為什麼還不做> --owner <誰負責> --name <短名>` | 一次寫好預告標記+建待完成守衛節點+雙向連好;短名當檔名(自動加日期,24 字內,例 `事故F2_確認前當機不重複副作用`) | 沒人追,預告就變成圖譜裡的死字 |
+ | 「預告的那條做完了」 | `lumos guard settle <守衛節點> --test <測試方法名>`(`--test` 只在守衛節點還是待完成時要);已經 pass 但預告句還在就不用 `--test`,可加 `--date <轉正日期>` | 預告行換成正式合約行並綁測試,節點轉已通過;已 pass 的只補改預告句(前提不符回 2,要先看改法或要修復帳用 `lumos drift fix --kind c1`) | 兩邊並存,查節點的人看不出到底做了沒 |
+ | 「預告的那條決定不做了」 | 先 `lumos signoff <守衛節點> --ref <守衛節點> --note "<為什麼>"`,再 `lumos guard abandon <守衛節點> --why "<為什麼>"` | 立墓碑而不是刪掉 | 悄悄刪掉,下一個人不知道曾經打算做什麼 |
+ | 「看現在有幾條預告沒做完、有沒有逾期」 | `lumos guard required` | 列待完成/逾期/快到期;有逾期回非零 | 逾期了才被推送前的閘擋,而且不准延期 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"`;只想驗剛加的那條:kill-add 加 `--try` 當場只跑它,或 `lumos guard kill <節點> --id <短身分>` | 相關有效壞法後須由目標行為斷言翻紅；仍綠只證未偵測此錯誤，等價／未跑／無效錯誤不能直接推論測試無效；判讀詳本頁末尾指向的§3.1第0步;`--try` 的結果是弱證據(筆記還沒提交),合約背書不採信,提交後照它印的那行再跑一次 | — |
+ | 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add --try`(當場只跑新的那條),提交後跑 `lumos guard kill <節點> --id <短身分>` | 移除前印出那條完整內容與範本(--old、--new 都要照現在的程式重填,原樣貼待填字樣會被擋);短身分至少 8 字元,對到不同的多條會擋下;不帶 --id 跑一次列出這篇每條的短身分,guard kill 每條結果行的 id= 也是 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
+ | 「`lumos doctor` 的 P2 段說有配方最近一次真跑判 survived」 | 照那行的 `lumos guard kill <節點> --id <短身分>` 重跑;確定那條壞法本來就殺不掉(不是測試漏洞)才照第二個指令 kill-rm | 只看每條配方最近一次的結果,原文對不上的那段列過的不重複列;行尾寫「證據弱」或「之後改過」的先重跑;之後補強過測試的也先重跑(這種情況工具判不出來) | 原文對得上卻殺不掉,P2 原本看不出來,只有跑整篇 guard kill 才發現 |
+ | 「配方驗的測試不在合約的測試清單上(kill-add 提醒、`lumos doctor` 的 P2 段)」 | 照提醒的修法:要讓推送閘也守它就貼那行 `lumos guard bind`;清單外那支不該用就 kill-rm 後改用清單上那支重新 kill-add;講平台不同的,kill-rm 後帶 `--platform` 重新 kill-add | 綁上後這條合約有多支測試,之後 kill-add 不帶 `--test` 會要你指明;方法名不是識別字(反引號名、含點)的 bind 綁不了;清單外那支是不是刻意更細的測試由人判 | 合約清單是推送前會真跑的測試,配方驗的是另一支時,殺傷力證明的不是推送閘守的那支 |
+ | 「表態說併發/N+1 沒問題,想要有背書」 | 寫次數或併發測試 → 合約 ★INVARIANT★ → `lumos guard bind` → `lumos guard kill-add <節點> "<片段>" … --covers <題目id>` → 提交 → `lumos guard kill <節點>` → 重表態 | 寫表態時工具在本機算背書存進記錄;推送前沒有背書只提醒一行 | 「已處理」只有檔案行號,等於說看過了沒問題 |
+-| 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(不寫 HEAD:它在會談的專案目錄解讀),hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;hook 拿會談的專案目錄算,範圍在那裡算不出來會附一行 `LUMOS-LENS:` 說明、不附節點;內容從 base 讀;自由文字只有帶 `[來源:外部]` 的外部事實行,在框內) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線或範圍算不出來→附一行 `LUMOS-LENS:` 說明、不附節點 | 鏡頭不是閘,不擋 |
++| 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(不寫 HEAD:它在會談的專案目錄解讀),hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;hook 拿會談的專案目錄算,範圍在那裡算不出來會附一行 `LUMOS-LENS:` 說明、不附節點;內容從 base 讀;自由文字只有帶 `[來源:外部]` 的外部事實行,在框內;例外是「這次新增的殘留」段從頂端讀推送者寫的殘留決策與問答列,防護是注入框、字數上限、消毒,當可反駁的資料看) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線或範圍算不出來→附一行 `LUMOS-LENS:` 說明、不附節點 | 鏡頭不是閘,不擋 |
+ | 「這次改到前端還是後端?正確性席要不要多看哪幾題?」 | 正確性席派工詞在 `LUMOS-IMPACT:` 之外再留一行 `LUMOS-ROLE-CARDS: on`,hook 依改到前端或後端在框外附角色鏡頭卡;手動看 `lumos dispatch-lens <base>..HEAD --role-cards`;推送前 `lumos pitfalls --diff` 的人讀輸出有一行角色統計 | 圖譜那段超時或沒圖譜時卡照附;判不出就不附;專案可在 `.lumos/config.json` 的 `review_roles` 宣告路徑角色(讀改動起點版本) | 只給正確性席,架構對齊與資安席不放;Codex 編排目前不附 |
+ | 「新模組要照 DDD 這類目標架構寫,不想被架構對齊席判成跟舊鄰居不一樣?」 | `.lumos/config.json` 加 `arch_targets`:有序清單,每條恰好 `{"path": "app/Domain/**", "node": "Systems/<目標架構節點>"}`,第一條命中算數,要切出舊碼就在前面放一條 `"node": "none"`;目標節點用 `lumos new system <名> --responsibility "…"` 開(不帶 --code),規則寫成摘要的 `RULE:` 行(DDD 可直接抄 [target-arch-ddd-template.md](target-arch-ddd-template.md) 的九條範本);架構對齊席範本已有 `LUMOS-ARCH-TARGET: on`,hook 附規則原文 | 只讀改動起點版的宣告(分支自己改宣告下次推送才生效);第一段是萬用字元的樣式(`**`、`**/*.php`、`*.cs`)整份不用;`lumos doctor` 列每條宣告命中幾支檔 | 推送前 `pitfalls --diff` 只標哪些檔用目標基準、不貼規則;設計審讀 HEAD 版宣告,計劃提到還不存在的檔也算 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 只有結論 green 才算過;red 要處理;timeout/no-run/unavailable/undetermined 都不算綠,rc0 不等於 CI 成功 | 紅了沒人知道 |
+ | 「推新分支時,推送前的閘拿哪一段當這次的改動?」 | 推送前掛鉤自動叫;手動查 `lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <遠端 ref>` | 印一行範圍:跟主線的分岔點..頂端;頂端已在主線印頂端..頂端;判不了印空樹..頂端(多擋) | 新分支首推把整個 repo 當新改動誤擋 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句> --sha <提交>`(沒有佐證就改給 `--missing-defect-ref "<為什麼沒有>"`);看全帳 `lumos loop escape --list`;記錯撤回 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>`;各類別漏網率 `lumos loop escape-stats` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
+ | 「這輪代碼審修完了,派下一輪前驗一下修法」 | 修完先提交,寫 `governance/review-reports/<編號>/rN-fix.json`(骨架 `lumos loop fix-check <編號> --round rN --record-template`),再在背景跑 `lumos loop fix-check <編號> --round rN`;跳過用 `LUMOS_SKIP_FIX_CHECK=1`(會記帳) | 0 過/1 沒過(列哪一項)/2 輸入錯;約 5 分鐘 | 修補自己弄出的新 bug 留到下一輪審查員才看到;只提醒不擋,只驗修正後是綠的 |
+ | 「這輪代碼審過了沒?」 | 單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`(多席=彙總記帳,處置清單只掛一席;code 迴圈輪內有 major 席則 accepted 必空);`--gate --panel` 僅 2026-08-25 前定錨的舊迴圈回放(新迴圈問了會被拒並指路) | ✅/⛔+卡在哪一關 | 沒問閘就推,pre-push 與 CI 會擋(tier high 無留痕=紅燈) |
+ | 派工前暖鏡頭快取 | `lumos dispatch-lens <base>..HEAD` | 大範圍算一次 25 秒起,hook 45 秒超時會放空(2026-09-05 起超時附一行說明);先算一次快取 20 分有效 | 派工詞仍要留 `LUMOS-IMPACT:` 標記行 |
+ 
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index c955d4df..ec1a8f1d 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -107,21 +107,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ 
+ **安裝 / 生命週期**（操作工具鏈本身,不碰圖譜資料;唯一源 = 公開 repo `EnzoHsieh-Android/Lumos`，預設 clone 到 `~/harness/lumos-toolchain`）：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 全域安裝 lumos（symlink → `~/.local/bin`） | `python3 scripts/lumos install [--force]` | 裝完任何專案子目錄直接 `lumos <cmd>`,免打 `python3 scripts/lumos`;`--force` 覆寫既有 symlink |
+ | 移除全域 lumos | `lumos uninstall` | 移除 `~/.local/bin/lumos` symlink（不動 vendored copy） |
+ | 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull] [--dry-run]`(`--dry-run`:用目前的工具來源先印會改哪些規範檔與工具檔,不拉、不改動;照它結尾印的指令套用同一份) | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
+ | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
+ 
+-> **子命令全覽（88 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `rejections` `stale` `recent` `stats` `handoff` `events`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers` `test-quality` scan·capabilities·capture·check(測試品質候選掃描與收證核對)）+ 寫入（`set` `summary-line` `updated-sync` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend` `question-add` `question-set`）+ 合約守衛（`guard` list/scaffold/bind/audit/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 推送範圍（`push-range` 推送前掛鉤在新分支首推時取跟主線的分岔點）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
++> **子命令全覽（88 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `rejections` `stale` `recent` `stats` `handoff` `events`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers` `test-quality` scan·capabilities·capture·check(測試品質候選掃描與收證核對)）+ 寫入（`set` `summary-line` `updated-sync` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend` `question-add` `question-set`）+ 合約守衛（`guard` list/scaffold/bind/audit/residual-ask/residual/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 推送範圍（`push-range` 推送前掛鉤在新分支首推時取跟主線的分岔點）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
+ >
+ > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
+ 
+ ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
+ 
+ ### ⛔ 禁用工具：notesmd-cli 的 `frontmatter` 指令
+ 
+ 第三方 `notesmd-cli`（原 Yakitrak/obsidian-cli，Go 單檔）**只准用 `move`**（rename 連結改寫含 frontmatter 字串,2026-06-13 驗收通過;即上方 `graph-rename.sh` 封的那層）。**`frontmatter --edit` 嚴禁對真實 vault 使用**：實測會把整篇 frontmatter 鍵序重排成字母序、縮排 2→4、**日期加引號（property 型別 date→text 靜默損傷）**——一碰整篇 diff 不可審,且 pre-commit 污染指紋會擋。frontmatter 寫入合法路徑只有：lumos T1（純量/list/decisions）、obsidian `processFrontMatter` eval（白名單外）。驗收證據：MyApp vault 的 `2026-06-13_Yakitrak三題驗收`。
+ 
+ 
+@@ -538,26 +538,34 @@ lumos guard kill <node> [--id <短身分>]   # 沙盒(worktree)真弄壞 → 綁
+ ```
+ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,扣點前擋下 ... [test:InsufficientPointsRejected] [audit:sonnet/2026-06-18]
+ ```
+ 
+ **「乾淨」與「範圍」兩條件(缺一不算第三方驗證)**:
+ 
+ 1. **乾淨脈絡**:審計 agent **只拿到圖譜 + 程式**,**不餵你的結論、不餵你的理由、prompt 必須中立(用「試圖反駁」而非「請確認這條合法」**——後者是帶風向,等於自己改自己的考卷)。它若繼承了 maker 的框架,只是換個分身蓋章,不算外人。
+ 2. **範圍=五問 rubric,逐條打勾**(2026-07-27 升級,borrow Sage arXiv 2512.16041:判官難題約 1/4 偏好前後不一、無明確準則時同模型因情境飄移——rubric 錨定把「情境偏好」變準則判斷。原兩問保留為 ②③):
+    - ① **意圖證據**:decisions[]/緣起讀得到「這是刻意設計」嗎?讀不到意圖=候選不合格(可能是 code 反推)。
+    - ② **合約 vs 偶然**:只讀圖譜,這是『不可改的合約』還是『現在剛好這樣實作』被誤標?
+-   - ③ **測試夠格**:構造一個違反這條保證、但綁的測試**仍會過**的情形——構造得出=同源/套套邏輯,不合格。**必須實際去看測試碰了什麼**,不能只讀。
++   - ③ **測試夠格**:構造一個違反這條保證、但綁的測試**仍會過**的情形——構造得出的反例照下面〈第 3 問的反例分三種去向〉處理:**這一問過 = 每個反例都殺掉(補測試到 `killed`),或經第二個獨立代理確認測不到(`residual-ask` 判 untestable)**;測不到的那幾型在蓋 `[audit:]` 之後才記成殘留(`[residual:]`,順序見下面〈記殘留〉——記殘留要先有 `[audit:]`,所以放行不能等「已記成殘留」)。**必須實際去看測試碰了什麼**,不能只讀。
+    - ④ **可證偽性**:宣稱有沒有可觀測的「違反長什麼樣」?「應該要好/要穩」型散文=不合格。
+    - ⑤ **爆炸半徑**:改掉它,說得出具體 breaking 什麼下游(誰依賴這個行為)?說不出=可能不是合約。
+    - **判決=五項全過才 legal**;任一不過=不合格並指出項次。逐項要「過/不過+一句證據」,不收整體印象分。
+    - **穩定性探針(選配,難判場觸發)**:審計員判得猶疑/勉強過 → 同材料**換問法重問一次**(「試圖反駁」→「這條若降級為 ★DEBT★,會有什麼實害?」),兩問判決不一致=**unstable,不蓋章、記 note 交人裁**。理由(Sage):可靠度別拿小量人工標註當金標準(人標本身不一致),換序自一致是更便宜誠實的代理。
+    - **防應試化兩道(2026-07-28,borrow arXiv 2605.12474:評分表公開固定→被評方學會剛好滿足字面,分數漲實質沒變好;強評分者只能減輕不能根除)**:① 派工時**五問語意不變、措辭改述**(每次審計換句式,勿逐字貼本節文字——固定考卷會被背熟);② **定期無表抽考**:約每 5 次 audit 抽 1 次不帶 rubric 的開放式獨立判定,兩邊結論落差記 note——落差拉大=五問正被寫合約方「照著填」,評分表儀式化訊號,回報人裁。
++   - **第 3 問的反例分三種去向**(2026-10-14,[[Projects/審查收斂規則_計劃]];起因:後端示範連三輪推翻合約,第 3 問只要肯重寫設計永遠構造得出新壞法,只能靠人喊停)。派工時照上面防應試化的規則改述措辭,語意不變:
++     - **局部退化,殺得掉**(預設):保留設計點名的機制(鎖、約束、冪等鍵查詢、交易邊界……),只是用錯或漏用——漏呼叫、條件寫反、範圍或順序錯、錯誤處理吞掉、少一條約束、新增的路徑沒經過那個機制。審計員附一條 `lumos guard kill-add` 配方(先提交;`--try` 的試跑是弱證據),補測試直到 `lumos guard kill` 對它是 `killed`;`survived` 繼續補,`drifted` 先改寫配方。**分不清是哪一種的,一律先當殺得掉的局部退化。**
++     - **局部退化,殺不掉**:努力補過測試,配方仍是 `survived`/`killed_unattributed`/`timed_out_weak`,原因是行為其實等價、只在特定交錯時序才出事而現有測試設施跑不穩、或要多檔多處才寫得出(一條配方只收一處替換)。記成殘留。
++     - **繞過設計**:要改架構或部署形態才做得到(例:單一資料庫換成多節點並改用程式內互斥)。記成殘留。例:「庫存多時另開不加鎖的快路徑」「拿掉資料庫約束」是局部退化(併發壓測打所有下單入口、檢查資料庫結構都測得到),先補測試;「改用程式內互斥並跑多個節點」才是繞過設計。
++     - **分類不由想收斂的一方決定**(maker≠checker):分類由審計員(無脈絡獨立代理)做;編排者只能把審計員判成要記殘留的改成「殺得掉」——只准往嚴改,不准反過來。要記殘留的每一條,另派**第二個獨立代理**(沒看過審計報告結論,只給那條反例、合約行與它綁的測試)問「這能不能在現有測試設施下穩定測到」,當場用 `lumos guard residual-ask <節點> "<KEY 子字串>" --case <反例編號> --checker <模型>/<日期> --verdict testable|untestable` 記下;**同一條合約同一個反例只准問一次**(第二次回 2;同一條合約 = 節點加合約宣稱的指紋,判過 `testable` 的反例也記在這把鍵上)——**這是方便,不是保證**:反例編號是編排者自己取的,換一個編號、改節點名、改合約一個字都問得到第二次,字面身分怎麼比都擋不住。**真正的把關是新增殘留的推送要過高風險代碼審**:推送範圍新增了殘留(殘留索引頂端有、起點沒有),`pitfalls` 分級升 high,派工鏡頭把那筆殘留決策與第二個代理的問答附給審查席、列一題必答——**只保證跑一輪高風險代碼審,審查席有沒有答沒有機械核對**(收貨時編排者自己看);新增判 untestable 的問答也升 high(同一筆決策追加反例不動索引的鍵);改到存著已登記殘留決策的那篇筆記也升 high(反例清單寫在決策內容裡,改哪一段都算——刻意的粗粒度);推送裡刪改治理帳的 `residual-ask` 列也會被判高風險。判 `testable` 就照它說的補測試(回到第一種)。跟穩定性探針不衝突:探針管合約合不合法,這裡管反例分類;兩邊不一致時這裡取嚴的那一邊。
++     - **記殘留**(順序:① `lumos guard residual-ask` 記第二個代理的問答(判 untestable)→ ② 五問其餘也過了,`lumos guard audit` 蓋 `[audit:]` → ③ `lumos decision-add` 記殘留決策 → ④ `lumos guard residual <節點> "<KEY 子字串>" --add …`;第 ④ 步寫入當下驗:問答判 untestable、這條合約沒判過 testable、這條合約最近一次 `guard audit` 晚於那個反例最晚一筆問答(比治理帳上兩筆事件的完整時間戳記——`guard audit` 每次都記一筆 `guard-audit`;早於、或帳上找不到審計紀錄(舊審計、手寫的 `[audit:]`)就擋,照順序重審)、決策在且內容含那筆 `checker:`):`lumos decision-add` 記一筆殘留決策(四欄齊),內容逐型列殘留、每型標「殺不掉」或「繞過設計」與反例編號、寫第幾輪審計收斂,尾端寫 `checker:<第二個代理的模型>/<日期>`(決策欄位是單行文字);再 `lumos guard residual <節點> "<KEY 子字串>" --add <資料夾>/<節點>#dN --case <反例編號>…` 在合約行尾加 `[residual:…]`(寫入當下驗決策在、沒翻案、內容含那筆 `checker:`、問答判 untestable、合約行已有 `[audit:]`)。殘留在派工鏡頭顯示成「⚠帶殘留 N 筆」徽章;新增殘留的那次推送、之後改到它守的程式的推送,`pitfalls` 分級都升 high、走高風險代碼審。
++     - **三輪上限**:第 3 問的補測試—重審最多跑三輪;第三輪之後還有沒歸好類的反例,不開第四輪,攤給人裁(後端示範 d12 的收法)。
++     - **定期無表抽考照舊**,抽考時不帶這套分類;比較兩邊結論時把「帶殘留通過」當成「不合格」看,落差才不會被系統性拉大。
+    - ⚠ 一個節點**通過第四道自足性審計(讀得懂、還原得出)** ≠ 這五問被覆核過——是不同的問題,別混為一談。
+ 
+ **天花板(再乾淨也跨不過)**:`[audit:]` 只買到 verification 那一半;它**證不了 validation**——「這條金流規則**現在還符不符合真實業務**」要對著業務現實的人來確認(見下節 `decisions`/最高層鐵則的『上次對業務確認』)。**別讓「乾淨 agent 過了」被誤讀成「業務上也對」**;不可逆動作與業務正確性,該擋的閘仍留給人。
+ 
+ **模型選擇**:預設 `sonnet`(`--model` 可改)。刻意用較弱模型是為了讓它**不腦補補洞**——圖譜真的自我解釋得通、測試真的擋得住,才過得了關;強模型太會「替你圓場」。
+ 
+ **留痕**:`lumos guard audit <node> "<KEY 行子字串>" [--model sonnet] [--date YYYY-MM-DD]`(寫後自驗,重審覆蓋舊日期)。**工具只記留痕,不證明審計真的乾淨**——那靠上面兩條件的誠實自律,同 §「防帶風向鐵則」。
+ 
+ ### ★CHECKPOINT★ / ★IRREVERSIBLE★ → `[rollback:]` 可逆性綁定（2026-06-19;doctor Check R）
+ 
+@@ -572,21 +580,23 @@ KEY:★INVARIANT★ 點數不足 → INSUFFICIENT_POINTS,扣點前擋下 ... [te
+ ### `lumos guard`：對談驅動的守衛 scaffold（2026-06-15)
+ 
+ 把「★INVARIANT★ → 寫守衛 → 綁 [test:]」這條手抄苦工交給 lumos 的機械部分,**斷言本體仍由你經對談向人確認後填**。三步:
+ 
+ ```bash
+ lumos guard list [--unbound]        # 列所有 ★INVARIANT★ 綁定狀態(real/dangling/fake/naked);--unbound 只列未綁
+ lumos guard scaffold --node <Systems/X> --invariant "<KEY行子字串>" \
+     --method <測試名> --type pure|behavioral|state --claim "<向人確認過的可測斷言>" \
+     [--out <測試專案目錄>] [--template <路徑>] [--class <類別名>]
+ lumos guard bind <node> "<KEY行子字串>" <測試名>   # 把 [test:測試名] 綁回 KEY 行(寫後自驗)
+-lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節)
++lumos guard audit <node> "<KEY行子字串>" [--model sonnet] [--date YYYY-MM-DD]   # 合法性經無脈絡獨立 agent 審計過 → 留痕 [audit:](見上節);每次記一筆治理帳 guard-audit,記殘留時比它跟問答的先後
++lumos guard residual-ask <node> "<KEY行子字串>" --case c1 --checker <模型>/<日期> --verdict testable|untestable   # 第二個獨立代理對第 3 問反例的判定(記治理帳;同一反例只准問一次是方便,把關在新增殘留的推送要過高風險代碼審)
++lumos guard residual <node> "<KEY行子字串>" --add <資料夾>/<節點>#dN --case c1 [c2…] | --remove <資料夾>/<節點>#dN | --reindex   # 合約行尾加/拿掉 [residual:](寫入當下驗),重寫 governance/residual-index.json
+ lumos guard trace [<node>]          # 合約→守衛測試→Verification 證據鏈(reverse:改某模組會動到哪些守衛/驗證)
+ lumos guard kill-add <node> "<KEY子字串>" --file F --old X --new Y [--test 名] [--note "業務上壞了什麼"] [--covers 題目id,…] [--try]   # 宣告壞法配方(kill_recipes+[kill:recipes]);--try 寫完當場只跑這一條(弱證據)
+ lumos guard kill-rm <node> [--id <短身分>]   # 移除一條配方(原文失配時先移舊的再照印出的範本 kill-add);不帶 --id 列出這篇每條的短身分
+ lumos guard kill <node> ["<KEY子字串>"] [--json] [--id <短身分> …]   # 殺傷力驗證:worktree 隔離→baseline 綠→套壞法→綁定測試必須翻紅;survived=稻草人 rc1;--id 只跑那幾條
+ ```
+ 
+ **改某模組前查爆炸半徑**:`lumos guard trace Systems/X` 列出該節點每條 ★INVARIANT★ → 綁的測試方法 → 哪篇 Verification 背書(grep 輸出某測試名即反查「這守衛紅了會牽動誰」)。
+ 
+ **補 verified_by 漏寫**(doctor Check 3 的零判斷項自動修):
+ ```bash
+@@ -654,30 +664,31 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
+ **升級路徑**:推測→查證後補 [src:]/[git:];或業務面人工確認走 `lumos signoff`。**天花板**:J-c 只驗「指針可解析」不驗「內容真支持 claim」(語意層靠對抗審/人);佚失的 why 永久佚失,正確輸出是「佚失:」——嚴禁編一個合理的(把「不知道」渲染成「知道」正是 code 衍生 wiki 的原罪,見 `Systems/外部對照-code衍生wiki`)。
+ 
+ 
+ > （以下為 2026-08-22 搬入版，精簡重述以上 ★INVARIANT★/★DEBT★/[test:]/[audit:]/[kill:]/[rollback:]/重生標記各節；兩版並存）
+ 
+ ### 合約性標記(合約 vs 偶然;最重要,動筆前掃一眼)
+ 
+ Systems 記的是「現在長怎樣」,分不出哪些是**合約**(改=breaking)哪些是**偶然**(可改)。用 KEY 行前綴聲明:
+ 
+ ```
+-KEY:★INVARIANT★ <業務合約,改=breaking> [test:測試名] [audit:模型/日期] [kill:recipes]
++KEY:★INVARIANT★ <業務合約,改=breaking> [test:測試名] [audit:模型/日期] [kill:recipes] [residual:<資料夾>/<節點>#dN]
+ KEY:★DEBT★ <已知偶然行為,可改不算 breaking>
+ ```
+ - **未標 = 未聲明**;**不確定就不標**(寧漏勿錯)。**嚴禁從現況 code 反推「應該是合約吧」**——把偶然合約化會鎖死重構,比沒標更毒。只有業務語意明確或 decisions[] 載明意圖才配 ★INVARIANT★。
+ - 跨專案級不變量不在這標 → 走 `lumos-core-knowledge` 升格,KEY 留 `CORE:` 指針。
+ 
+ **合約鏈(行尾指針,遞增嚴格;深度規格見 `reference.md`)**:
+ - `[test:方法名]` — 綁一個真實測試(doctor Check T 強制,裸合約擋)。**綁定走指令**:`lumos guard bind <node> "<KEY子字串>" <測試名>`。
+ - `[audit:模型/日期]` — 綁測試後,合法性須經**無脈絡獨立 agent** 審過(prompt 中立「試圖反駁」,不帶風向;**判準=五問 rubric 逐條打勾,五項全過才 legal**——意圖證據/合約vs偶然/測試夠格/可證偽/爆炸半徑,含穩定性探針與防應試化兩道,完整規格見 reference.md〈[audit:] 獨立合法性審計〉段)。`lumos guard audit <node> "<KEY子字串>"`。
+ - `[kill:recipes]`(選配,金流建議)— 沙盒真弄壞、綁定測試必翻紅。`lumos guard kill-add` / `kill`。
++- `[residual:<資料夾>/<節點>#dN]`(審計產物,可以多個)— 第 3 問的反例經第二個獨立代理確認測不到、蓋了 `[audit:]`、記成殘留決策後才加;放在既有標記之後,只用 `lumos guard residual` 寫(寫入當下驗決策、問答與 `[audit:]`);重審 `guard audit` 只換 `[audit:]`、不碰它;doctor 驗決策還在、殘留索引跟圖譜一致。新增殘留的推送、之後改到帶殘留合約守的程式的推送,`pitfalls` 都升 high。完整規則見 reference.md〈[audit:] 獨立合法性審計〉段的第 3 問三種去向。
+ - **綁 `[test:]` 前對照 [[Systems/測試假綠形態]] 八型清單**——綁上去的測試若中了其中一型,合約鏈看起來完整、實際什麼都沒守住(★最隱蔽的是「現場走不到被測分支」★:把修法還原回去測試照樣全綠)。修 bug 的翻紅釘★必須配一條「現場成立」前置斷言★。
+ - **天花板**:[test:] 只買 verification;「這規則現在還符不符合真實業務」是 validation,要對業務現實的人確認(`lumos signoff`)。
+ 
+ **可逆性(危險動作動手前先寫好收回,僅 Systems)**:
+ ```
+ KEY:★IRREVERSIBLE★ <收不回:上架/prod遷移> [rollback:decisions]   # 必綁,否則 doctor Check R 擋
+ KEY:★CHECKPOINT★   <改了難救>                                     # 建議補 [rollback:],缺=提醒不擋
+ ```
+ 外部不可逆(信已送/下游已消費)→ 改用 `[guard:decisions]`(事前冪等鍵/核可閘)。`[rollback:]` 證「有寫 undo」≠「驗過能跑」。
+ 

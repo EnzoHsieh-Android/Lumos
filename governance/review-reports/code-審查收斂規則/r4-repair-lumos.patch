@@ -1,0 +1,647 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index f535463a..448edaa3 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1355,20 +1355,21 @@ def _gate_event_build(repo_root, gate, kind, note, *, hard=False, head_sha=None,
+     return ev
+ 
+ 
+ # ── 治理帳例行紀錄分流(Projects/治理帳例行紀錄分流_計劃)──
+ # 「檢查自動跑出來的觀察」改寫進被忽略的本機帳,讓例行的提交、推送、查筆記之後版控檔一個位元組都不動;
+ # 主動決定、擋人、略過、繞道、自動放行的紀錄照舊進版控帳(CI 與別台機器只讀得到那本)。
+ # ★白名單★:只有下面明列的「閘名+種類」、而且 hard 恰好是 False 的事件才進本機帳;
+ # 新增的閘或種類沒加進來就照舊進版控帳——分錯只會偏吵,不會偏丟(設計審 r2 四席指出黑名單會漏)。
+ # ★code-loop、fix-check、design-loop 永遠不准出現在這裡★:判定類讀者只讀版控帳,讀不到就擋推或判錯迴圈狀態。
+ GOV_LOG_NAME = ".governance-log.jsonl"          # 版控帳(新碼用;舊碼的字面值照留)
++GOV_LOG_REL = "docs/" + GOV_LOG_NAME            # 版控帳的 repo 相對路徑:_gov_vc_gate_events 讀檔、pitfalls 比兩版 residual-ask 列共用(代碼審 code-審查收斂規則 r3 G6)
+ GOV_LOCAL_LOG_NAME = ".governance-local.jsonl"
+ USAGE_LOCAL_LOG_NAME = ".usage-local.jsonl"
+ _LOCAL_LOG_IGNORE_LINES = (GOV_LOCAL_LOG_NAME, USAGE_LOCAL_LOG_NAME)
+ _GOV_LOCAL_PAIRS = frozenset(
+     [("doctor-run", "ran"), ("ledger-growth", "fast"),
+      ("nodehome-check", "passed"), ("drift-check", "passed"),
+      ("note-shape", "hinted"), ("delguard", "ok"), ("spec-gate", "spec-gate-run")]
+     + [("daily-wrapper", k) for k in ("unreadable", "stale", "step-failed", "watchdog-absent", "watchdog-stale")]
+     + [("note-reread", k) for k in ("reminded", "covered", "none")]
+     # doctor 各段真的會寫 warned 的 check-* 閘(照 run_doctor 的寫入點逐一列,不用前綴比對;
+@@ -9403,22 +9404,24 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
+                 "note-reread",
+                 # 2026-10-01 殺傷力配方的原文還對不對得上程式(doctor P2,只提醒不擋;Projects/殺傷力配方失配提醒_計劃)
+                 "check-p2",
+                 # 2026-10-02 殺傷力配方最近一次真跑判 survived(doctor P2 第二個提醒,只提醒不擋;Projects/殺傷力配方當場試跑_計劃)
+                 "check-p2s",
+                 # 2026-10-05 審查跑滿回顧:人裁紀錄、回顧已記、跳過(Projects/審查跑滿回顧_計劃;不在 design-loop/code-loop 底下,不影響 loop list 關門判定)
+                 "loop-retro",
+                 # 2026-10-06 殺傷力配方驗的測試不在合約的測試清單上(doctor P2 第三個提醒,只提醒不擋;
+                 # Projects/殺傷力配方綁的測試要在合約清單_計劃)
+                 "check-p2t",
+-                # 2026-10-14 審查收斂規則:第二個獨立代理對合約審計反例的判定(guard residual-ask;同一反例只准問一次)
+-                "residual-ask")
++                # 2026-10-14 審查收斂規則:第二個獨立代理對合約審計反例的判定(guard residual-ask;同一反例只准問一次,是方便不是保證)
++                "residual-ask",
++                # 2026-10-14 審查收斂規則(代碼審 r3 G5):guard audit 每次蓋 [audit:] 記一筆,guard residual --add 比它跟問答的先後
++                "guard-audit")
+ 
+ # 未出現清單旁的限制聲明。★單一常數★——測試比對此常數,不在測試裡複製字串
+ # (逐字重複的斷言等於沒斷言)。另有一條斷言釘它含哪幾個子句,防被掏空只留殼。
+ _STATS_ABSENT_DISCLAIMER = (
+     "  未出現 ≠ 無用。本帳看不到硬擋事件(anchor verify 擋下 push 時不寫任何帳),也分不出四種\n"
+     "  「沒出現」:跑了沒事／接了帳但沒被觸發／守的功能從沒被用過／本次執行根本沒載入該來源\n"
+     "  (ci 帳是條件載入)。要拿這份清單談退場,先確認該閘在本帳的 gate 名單之內、且來源本次有載入。"
+ )
+ 
+ 
+@@ -14571,42 +14574,44 @@ def _retro_gov_events(root, loop_id=None):
+     ★不共用 _gov_ledger_rows_by_time★:那支把兩本帳合起來依時間排序(給度量用),這裡要的是版控帳的檔內順序(「最新一筆人裁之後」靠它),
+     依時間排會讓同一秒的人裁與回顧前後顛倒。開檔照既有守衛只讀一般檔(走 _retro_read_bytes → _regular_own_fd,管線不卡住);切行用 _ledger_lines。"""
+     out, err = _gov_vc_gate_events(root, "loop-retro")
+     if loop_id is not None:
+         out = [d for d in out if d.get("loop") == loop_id]
+     return out, err
+ 
+ 
+ def _gov_vc_gate_events(root, gate):
+     """版控治理帳(docs/.governance-log.jsonl)裡 gate=<gate> 的事件 → (事件清單, 帳壞原因或 None),檔內順序。
++    gate 可以是一個閘名或一組閘名(tuple):一組時照檔內順序混在一起回,呼叫端要比兩種事件的先後(residual-ask 與 guard-audit,代碼審 r3 G5)。
+     從 _retro_gov_events 抽出(審查收斂規則的 residual-ask 也要讀同一本帳、同一套路徑守衛與切行);規則跟那支說明寫的一樣:
+     帳不存在 = ([], None);路徑不合或讀不動 = ([], 原因),呼叫端當帳壞(fail-closed);壞行跳過。只讀版控帳——呼叫端的閘名要不在 _GOV_LOCAL_PAIRS 裡。"""
+     import json as _j
+     gerr = _retro_gov_path_err(root)
+     if gerr:
+         return [], gerr
+-    gp = Path(root) / "docs" / GOV_LOG_NAME
++    gp = Path(root) / GOV_LOG_REL
+     if not os.path.lexists(gp):
+         return [], None
+     raw, rerr = _retro_read_bytes(gp, limit=None)
+     if raw is None:
+-        return [], _esc_clean(f"治理帳 docs/{GOV_LOG_NAME} {rerr}", 300)
++        return [], _esc_clean(f"治理帳 {GOV_LOG_REL} {rerr}", 300)
+     out = []
+-    needle = gate.encode("utf-8")
++    gates = (gate,) if isinstance(gate, str) else tuple(gate)
++    needles = [x.encode("utf-8") for x in gates]
+     for ln in _ledger_lines(raw):
+-        if needle not in ln:
++        if not any(n in ln for n in needles):
+             continue
+         try:
+             d = _j.loads(ln.decode("utf-8"))
+         except (UnicodeDecodeError, ValueError, RecursionError):
+             continue
+-        if not isinstance(d, dict) or d.get("gate") != gate:
++        if not isinstance(d, dict) or d.get("gate") not in gates:
+             continue
+         out.append(d)
+     return out, None
+ 
+ 
+ def _retro_is_decision(e):
+     return (e.get("kind") == "cap-decision" and e.get("decision") in _RETRO_DECISIONS
+             and isinstance(e.get("rounds"), list))
+ 
+ 
+@@ -18818,68 +18823,83 @@ def _cmd_guard_audit_locked(env, node, invariant_substr, model="sonnet", date=No
+             mi = INVARIANT_RE.match(l.strip())
+             if mi and invariant_substr in INV_TAG_RE.sub("", l):
+                 return stamp in invariant_audit_refs(mi.group(1))
+         return False
+ 
+     try:
+         atomic_write_verify(path, new_lines, f"[audit:{stamp}]", check)
+     except (ValueError, RuntimeError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
++    # 記一筆治理帳(版控帳):guard residual --add 比「這條合約最近一次審計晚於那筆 untestable 問答」用它的 ts(代碼審 code-審查收斂規則 r3 G5:
++    # [audit:] 戳記的日期只到「天」、--date 又能任填,比不出先後)。寫不進去不改這次審計的結果,講一句(_gate_event 回傳值的約定)。
++    ok = _gate_event(_vault_repo_root(env), "guard-audit", "stamped", f"{rel[:-3]} {stamp}", hard=False, nodes=[rel[:-3]],
++                     extra={"node": rel[:-3], "fp": _residual_claim_fp(_body), "stamp": stamp})
+     print(f"✓ 留痕 [audit:{stamp}] → {rel} 的 ★INVARIANT★")
++    if ok is False:
++        print("  ⚠ 這次審計沒記進治理帳(帳檔唯讀或是捷徑);這條合約之後要記殘留時 guard residual --add 會擋,修好帳再重審一次", file=sys.stderr)
+     print("  前提:這條合法性已由無脈絡的獨立 agent 判過(maker≠checker)。doctor Check T 不再報『未審』。")
+     return 0
+ 
+ 
+ # ── 審查收斂規則(Projects/審查收斂規則_計劃〈做法〉2、3、5):合約審計第 3 問的反例記成殘留 ──
+-# residual-ask:第二個獨立代理的問答留痕(同一條合約、同一個反例只准問一次;判過 testable 的反例看整個節點、不看指紋,r2 G3);
+-# residual:把 [residual:<節點>#dN] 寫上合約行(寫入當下驗決策、問答、checker 行與 [audit:]),並重寫殘留索引給 pitfalls 分級讀。
++# residual-ask:第二個獨立代理的問答留痕。同一條合約(節點 + 指紋)、同一個反例(正規形)只准問一次——這是★方便★,不是保證:
++#   編號是編排者自己取的標籤,換一個編號、改節點名、改合約一個字就是「另一個」,字面身分怎麼比都擋不住(代碼審 r1–r3 同類三次)。
++#   ★真正的把關在外層★:推送範圍新增了殘留(頂端索引有、起點沒有),pitfalls 分級升 high、要過高風險代碼審,
++#   審查席看得到殘留決策與那幾筆問答,「挑到想要的答案」成為被審查的事件(_residual_tier_hits 的 added,r3 G1)。
++# residual:把 [residual:<節點>#dN] 寫上合約行(寫入當下驗決策、問答、checker 行與審計先後),並重寫殘留索引給 pitfalls 分級讀。
+ # 身分一律比正規形(代碼審 r1 G1):反例編號 _residual_case_key、殘留指標 _residual_ref_key、合約 _residual_claim_fp。
+ # 驗法只有一份 _residual_check(r1 G3):--add 寫入當下、--reindex、doctor 事後都呼叫它。
+ _RESIDUAL_INDEX_REL = "governance/residual-index.json"
+-_RESIDUAL_GOV_REL = "docs/" + GOV_LOG_NAME   # residual-ask 問答記在版控治理帳(_gov_vc_gate_events 讀的那本)
+ _RESIDUAL_CASE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}")
+ _RESIDUAL_CHECKER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,59}/([0-9]{4}-[0-9]{2}-[0-9]{2})")   # 只收半形([0-9] 不像 \d 會吃全形數字)
+ 
+ 
+ def _residual_checker_ok(checker):
+     """--checker 要是 <模型>/<YYYY-MM-DD>,而且日期是真的日期(9999-99-99、2026-02-30 都不收)。"""
+     import datetime
+     m = _RESIDUAL_CHECKER_RE.fullmatch(checker or "")
+     if not m:
+         return False
+     try:
+         datetime.date.fromisoformat(m.group(1))
+     except ValueError:
+         return False
+     return True
+ 
+ 
+ def _residual_case_key(case):
+-    """反例編號的正規形:NFKC → casefold → 連續的非字母數字合成一個 - → 去掉頭尾的 -。
+-    c1、C1、c1. 是同一個;c1.1 與 c1-1 是同一個;c11 是另一個(代碼審 r2 G2:原本只留字母數字,c1.1 與 c11、a-bc 與 ab-c 撞在一起)。
+-    「只准問一次」「有沒有問過」「判過 testable」都比它。"""
++    """反例編號的正規形:NFKC → casefold → 連續的非字母數字合成一個 - → 去掉頭尾的 - → 再拿掉一邊是字母、另一邊是數字的那個 -。
++    c1、C1、c1.、c-1、c_1 是同一個;c1.1 與 c1-1 是同一個(- 夾在兩個數字之間照留);c11 是另一個;a-bc 與 ab-c 不同(夾在兩個字母之間照留)。
++    代碼審 r2 G2:原本只留字母數字,c1.1 與 c11 撞在一起;r3 G4:改成保留分隔之後 c-1 跟 c1 又被分開。
++    「只准問一次」「有沒有問過」「判過 testable」都比它(這些都只是方便,把關在推送分級,見本段開頭)。"""
+     s = unicodedata.normalize("NFKC", str(case or "")).casefold()
+-    return re.sub(r"-+", "-", "".join(ch if ch.isalnum() else "-" for ch in s)).strip("-")
++    s = re.sub(r"-+", "-", "".join(ch if ch.isalnum() else "-" for ch in s)).strip("-")
++    keep = [ch for i, ch in enumerate(s)
++            if not (ch == "-" and ((s[i - 1].isalpha() and s[i + 1].isdigit()) or (s[i - 1].isdigit() and s[i + 1].isalpha())))]
++    return "".join(keep)
+ 
+ 
+ _RESIDUAL_CLAIM_TAIL = " 。.;,!?\uff1b\uff0c\uff01\uff1f"   # 句尾可以去掉的標點;全形的 ;,!? 在 NFKC 之後已是半形,列著只為一眼看懂
+ 
+ 
+ def _residual_claim_fp(inv_body):
+-    """一條合約的指紋:INVARIANT_RE 抓到的內文剝掉整個標記家族(INV_TAG_RE)→ NFKC → 連續空白壓成一個空白 → 去掉頭尾空白與句尾標點(。.;,!?)
++    """一條合約的指紋:INVARIANT_RE 抓到的內文剝掉整個標記家族(INV_TAG_RE)→ NFKC → 連續空白壓成一個空白 → 剝掉看不見的格式與控制字元
++    (Unicode 類別 Cf、Cc:零寬空白、軟連字號、BOM、響鈴……;代碼審 r3 G5:貼上時留的零寬字元讓肉眼同一句換了指紋)→ 去掉頭尾空白與句尾標點(。.;,!?)
+     之後的 sha256 前 16 碼。標記增減(加殘留、重審換戳記)、句尾多一個句號、多幾個空白都不改指紋;句中的符號照留——
+     「上限 1.5 倍」與「上限 15 倍」、「回傳 -1」與「回傳 1」、「(a 或 b) 且 c」與「a 或 (b 且 c)」是不同的合約(代碼審 r2 G2:原本去掉所有標點)。
+-    改了字詞指紋就變,舊問答對不上新句子要重問;但判過 testable 的反例不看指紋(_residual_testable_cases),改字換指紋也不准改判。"""
++    改了字詞指紋就變,舊問答對不上新句子要重問;改字換指紋重問到想要的答案,靠推送分級的「新增了殘留」升 high 給代碼審看(r3 G1)。"""
+     import hashlib
+     s = unicodedata.normalize("NFKC", INV_TAG_RE.sub("", str(inv_body)))
+-    s = re.sub(r"\s+", " ", s).strip().rstrip(_RESIDUAL_CLAIM_TAIL).strip()
++    s = re.sub(r"\s+", " ", s)   # 空白類的控制字元(tab、換行)先當空白,再剝其餘的 Cc
++    s = "".join(ch for ch in s if unicodedata.category(ch) not in ("Cf", "Cc"))
++    s = re.sub(r" +", " ", s).strip().rstrip(_RESIDUAL_CLAIM_TAIL).strip()
+     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
+ 
+ 
+ def _residual_ref_key(env, ref, cache=None):
+     """殘留指標的正規形:_pq_decision_target 解出的正式節點路徑(不帶 .md)+ #dN;解不出(找不到、撞名、格式不合)就回 NFC 原文。
+     「已經有了」、--remove 找標記、索引的 residuals 都比它——projects/A_計劃#d12 跟 Projects/a_計劃#d12 是同一筆。
+     跟決策引用的 _dref_norm 分工不同(那支走 env.resolve、撞名取第一篇):殘留指標撞名時回原文、不取第一篇(代碼審 r2 架構席)。"""
+     st, node, did = _pq_decision_target(env, "", ref, cache=cache)
+     if st is None and node:
+         return f"{node[:-3]}#{did}"
+@@ -18904,50 +18924,57 @@ def _contract_locate(env, node, substr, rel=None):
+     if why == "many":
+         print(f"擋下:『{_esc_clean(substr, 200)}』同時對到好幾條 KEY 行,分不清是哪條,請給更長、更精確的片段", file=sys.stderr)
+         return None
+     if idx is None:
+         print(f"擋下:{rel} 裡找不到內容含『{_esc_clean(substr, 200)}』的合約 KEY 行", file=sys.stderr)
+         return None
+     return rel, path, lines, idx, INVARIANT_RE.match(lines[idx].strip()).group(1), e
+ 
+ 
+ class _ResidualAsks(dict):
+-    """治理帳的 residual-ask 問答:{(NFC 節點, 指紋): [事件…]};.testable = {NFC 節點: {判過 testable 的反例正規形}}(不看指紋,代碼審 r2 G3)。"""
+-    testable = None
++    """治理帳的 residual-ask 問答:{(NFC 節點, 指紋): [事件…]};.audits = {(NFC 節點, 指紋): [guard-audit 事件…]}。
++    每筆事件多帶 _seq(帳裡的先後,同一秒的兩筆靠它分先後;ts 只到秒)。
++    判過 testable 的黑名單跟「只准問一次」同一把鍵(節點、指紋、反例正規形)——代碼審 r2 G3 改成整個節點共用,
++    r3 合約席、通才席實測同節點別條合約的 c1 被牽連;改字換指紋重問改由推送分級的「新增了殘留」看門(r3 G1)。"""
++    audits = None
+ 
+ 
+ def _residual_ask_index(root):
+-    """治理帳的 residual-ask 事件 → (_ResidualAsks, 帳壞原因或 None)。一次讀整本,doctor 與 --reindex 逐條查時不重讀。
++    """治理帳的 residual-ask 與 guard-audit 事件 → (_ResidualAsks, 帳壞原因或 None)。一次讀整本,doctor 與 --reindex 逐條查時不重讀。
+     判定值不是 testable / untestable 的那筆(手改、舊格式)當成沒有這筆問答(代碼審 r2 G7:原本留著讓驗法取空清單第一項當掉)。"""
+-    evs, err = _gov_vc_gate_events(root, "residual-ask")
++    evs, err = _gov_vc_gate_events(root, ("residual-ask", "guard-audit"))
+     out = _ResidualAsks()
+-    out.testable = {}
+-    for d in evs:
+-        verdict = d.get("verdict")
+-        if verdict not in ("testable", "untestable"):
+-            continue
+-        node = nfc(str(d.get("node") or ""))
+-        out.setdefault((node, str(d.get("fp") or "")), []).append(d)
+-        if verdict == "testable":
+-            out.testable.setdefault(node, set()).add(_residual_case_key(d.get("case")))
++    out.audits = {}
++    for seq, d in enumerate(evs):
++        key = (nfc(str(d.get("node") or "")), str(d.get("fp") or ""))
++        d["_seq"] = seq
++        if d.get("gate") == "guard-audit":
++            out.audits.setdefault(key, []).append(d)
++        elif d.get("verdict") in ("testable", "untestable"):
++            out.setdefault(key, []).append(d)
+     return out, err
+ 
+ 
+-def _residual_testable_cases(asks, node):
+-    """這個節點判過 testable 的反例正規形(不看指紋:合約改一個字換掉指紋,判過測得到的反例也不准改判 untestable、不准記殘留,代碼審 r2 G3)。"""
+-    return (getattr(asks, "testable", None) or {}).get(nfc(node), set())
++def _residual_ev_order(d):
++    """治理帳事件的先後 → (帶時區的 ts, 帳裡的序號) 或 None(ts 讀不出)。沒帶時區的 ts 當本機時間(_gate_event_build 寫的都帶)。"""
++    import datetime
++    try:
++        t = datetime.datetime.fromisoformat(str(d.get("ts") or ""))
++    except ValueError:
++        return None
++    return (t if t.tzinfo else t.astimezone()), d.get("_seq", -1)
+ 
+ 
+ def cmd_guard_residual_ask(env, node, substr, case, checker, verdict):
+     """記第二個獨立代理對一條反例的判定(能不能在現有測試設施下穩定測到);同一條合約、同一個反例只准問一次(〈做法〉2)。
+-    「同一個反例」比正規形(c1、C1、c1. 同一個;c1.1 與 c11 不同),「同一條合約」比指紋(句尾加句號不算新合約,句中符號算);
+-    判過 testable 的反例在整個節點都記著,改字換指紋也不准再判 untestable(代碼審 r2 G3)。"""
++    「同一個反例」比正規形(c1、C1、c-1 同一個;c1.1 與 c11 不同),「同一條合約」比節點 + 指紋(句尾加句號不算新合約,句中符號算)。
++    只准問一次是方便、不是保證:換編號、改節點名、改字換指紋都問得到;真正的把關是新增殘留的推送要過高風險代碼審(代碼審 r3 G1)。"""
+     case, checker = (case or "").strip(), (checker or "").strip()
+     if not _RESIDUAL_CASE_RE.fullmatch(case):
+         print("擋下:--case 要是反例編號(英數字開頭,可帶 _ . -,40 字以內),例:c1", file=sys.stderr)
+         return 2
+     if not _residual_checker_ok(checker):
+         print("擋下:--checker 要寫成 <模型>/<YYYY-MM-DD>(第二個代理用的模型與日期,半形、真的日期),例:sonnet/2026-10-14", file=sys.stderr)
+         return 2
+     if verdict not in ("testable", "untestable"):
+         print("擋下:--verdict 只能是 testable 或 untestable", file=sys.stderr)
+         return 2
+@@ -18959,27 +18986,24 @@ def cmd_guard_residual_ask(env, node, substr, case, checker, verdict):
+     root = _vault_repo_root(env)
+     key = _residual_case_key(case)
+     with _vault_write_lock(env.vault):   # 「查有沒有問過」與「寫一筆」之間不讓另一個程序插進來
+         asks, err = _residual_ask_index(root)
+         if err:
+             print(f"擋下:{err};判不了這個反例問過沒,沒有寫帳", file=sys.stderr)
+             return 2
+         prev = [d for d in asks.get((nfc(rel[:-3]), fp), []) if _residual_case_key(d.get("case")) == key]
+         if prev:
+             p = prev[0]
++            tail = ";它判過 testable(測得到),照它說的方法補測試" if any(d.get("verdict") == "testable" for d in prev) else ""
+             print(f"擋下:{rel[:-3]} 這條合約的反例 {_esc_clean(case, 40)} 已經問過了(記成 {_esc_clean(p.get('case'), 40)},"
+                   f"{_esc_clean(p.get('checker'), 60)} 判 {_esc_clean(p.get('verdict'), 20)})"
+-                  "——同一個反例只准問一次(編號不分大小寫、分隔符與頭尾標點),不能換代理重問到聽見想要的答案", file=sys.stderr)
+-            return 2
+-        if verdict == "untestable" and key in _residual_testable_cases(asks, rel[:-3]):
+-            print(f"擋下:{rel[:-3]} 的反例 {_esc_clean(case, 40)} 判過 testable(測得到)——判過測得到的反例不看合約宣稱改沒改字,"
+-                  "不准改判 untestable;照第二個代理說的方法補測試(同一節點的別條合約要用別的反例編號)", file=sys.stderr)
++                  f"——同一個反例只准問一次(編號不分大小寫、分隔符與頭尾標點),不能換代理重問到聽見想要的答案{tail}", file=sys.stderr)
+             return 2
+         clean = INV_TAG_RE.sub("", body).strip()
+         ok = _gate_event(root, "residual-ask", "asked", f"{rel[:-3]} {case} {verdict}", hard=False, nodes=[rel[:-3]],
+                          extra={"node": rel[:-3], "fp": fp, "case": case, "checker": checker, "verdict": verdict, "claim": clean[:80]})
+     if ok is not True:
+         print("沒記到:問答寫不進治理帳(docs/ 不存在、帳檔唯讀或是捷徑)——這次問答沒有留痕,修好再記一次", file=sys.stderr)
+         return 1
+     print(f"✓ 已記 residual-ask:{rel[:-3]} 反例 {case} → {verdict}(checker:{checker})")
+     if verdict == "testable":
+         print("  第二個代理說測得到:照它說的方法補測試,回到「局部退化,殺得掉」那一種去向(lumos guard kill-add 配方 + 補到 killed)")
+@@ -19009,72 +19033,77 @@ def _residual_ref_problem(env, rel, ref, cache=None):
+         return f"決策 {_esc_clean(ref, 80)} 找不到(節點不在或沒有這個編號)"
+     if st == "superseded":
+         return f"決策 {_esc_clean(ref, 80)} 已被翻案(valid:false),殘留要指到現行的決策"
+     if st != "ok":
+         return f"決策指標 {_esc_clean(ref, 80)} 解析不明(格式不合或名稱撞名)"
+     return None
+ 
+ 
+ def _residual_check(env, rel, body, ref, cases=None, asks=None, ask_err=None, cache=None):
+     """一個 [residual:] 標記合不合格 → 問題清單(空 = 合格)。--add(寫入當下,帶 cases)、--reindex 與 doctor(事後,不帶)共用(代碼審 r1 G3)。
+-    都驗:合約行有 [audit:];決策指標是全名、狀態 ok;決策內容非空。問答比「這條合約」(節點 + 指紋)與反例正規形:
+-    「判過 testable」另外看整個節點、不看指紋(代碼審 r2 G3:改一個字換掉指紋就能重問)。
++    都驗:合約行有 [audit:];決策指標是全名、狀態 ok;決策內容非空。問答與「判過 testable」都比「這條合約」(節點 + 指紋)與反例正規形
++    (代碼審 r3 G1:r2 改成整個節點共用,同節點別條合約的同名反例被牽連;改字換指紋重問改由推送分級的「新增了殘留」看門)。
+     帶 cases → 每個反例都要有判 untestable 的問答、沒有同反例判過 testable、決策內容有那一筆的 checker:、
+-    合約行 [audit:] 的日期不早於那筆問答(手冊順序:問答 → guard audit → decision-add → --add,代碼審 r2 G8);
++    這條合約最近一次 guard audit 事件晚於那個反例最晚一筆 untestable 問答(比治理帳的完整時間戳記,同一秒看帳裡先後;
++    手冊順序:問答 → guard audit → decision-add → --add。代碼審 r2 G8 原本比 [audit:] 戳記的日期,只到「天」、--date 又能任填,r3 G5 改比事件);
+     不帶 → 至少一個反例只有判 untestable 的問答、沒有任何反例同時判過 testable、決策內容有其中一筆的 checker:(順序只在寫入當下驗)。
+     asks/ask_err:呼叫端先讀好的治理帳(_residual_ask_index),逐條查時不重讀整本帳。"""
+     probs = []
+     if not invariant_audit_refs(body):
+         probs.append("這條合約行還沒有 [audit:]——殘留是審計的產物,先審計(lumos guard audit)再記殘留")
+     why = _residual_ref_problem(env, rel, ref, cache=cache)
+     if why:
+         return probs + [why]
+     d = _residual_decision(env, ref) or {}
+     content = str(d.get("content") or "").strip()
+     if not content or content in ('""', "''"):
+         return probs + [f"決策 {_esc_clean(ref, 80)} 的內容是空的;殘留決策要逐型列出殘留、標殺不掉或繞過設計、反例編號與 checker:<模型>/<日期>"]
+     if cases is not None and not cases:
+         return probs + ["--add 要帶 --case <反例編號>…(每個都要先有一筆判 untestable 的 lumos guard residual-ask)"]
+     if asks is None:
+         asks, ask_err = _residual_ask_index(_vault_repo_root(env))
+     if ask_err:
+         return probs + [f"{ask_err};查不到第二個代理的問答"]
++    ckey = (nfc(rel[:-3]), _residual_claim_fp(body))
+     by = {}
+-    for x in asks.get((nfc(rel[:-3]), _residual_claim_fp(body)), []):
++    for x in asks.get(ckey, []):
+         by.setdefault(_residual_case_key(x.get("case")), []).append(x)
+-    hard = _residual_testable_cases(asks, rel[:-3])   # 這個節點判過 testable 的反例,不看指紋(代碼審 r2 G3)
+-    verdicts = lambda k: {str(x.get("verdict")) for x in by.get(k, [])} | ({"testable"} if k in hard else set())
++    verdicts = lambda k: {str(x.get("verdict")) for x in by.get(k, [])}
+     checkers = lambda k: [f"checker:{x.get('checker')}" for x in by.get(k, []) if x.get("verdict") == "untestable"]
+     if cases:
+-        audit_day = max((m.group(1) for a in invariant_audit_refs(body) for m in [re.search(r"([0-9]{4}-[0-9]{2}-[0-9]{2})\s*$", a)] if m), default=None)
++        audits = [o for o in (_residual_ev_order(a) for a in (getattr(asks, "audits", None) or {}).get(ckey, [])) if o]
++        last_audit = max(audits, default=None)
+         for c in cases:
+             k = _residual_case_key(c)
+             ck = checkers(k)
+             if "testable" in verdicts(k):
+-                probs.append(f"反例 {_esc_clean(c, 40)} 第二個代理判過 testable(測得到;同一節點判過就算,合約宣稱改字前的也算):照它說的補測試,不能記殘留")
++                probs.append(f"反例 {_esc_clean(c, 40)} 第二個代理判過 testable(測得到):照它說的補測試,不能記殘留")
+             elif not ck:
+                 probs.append(f"反例 {_esc_clean(c, 40)} 在治理帳裡沒有 residual-ask(這條合約的);先派第二個獨立代理問、用 lumos guard residual-ask 記下")
+             elif not any(n in content for n in ck):
+                 probs.append(f"決策 {_esc_clean(ref, 80)} 的內容裡沒有 {_esc_clean(ck[0], 80)}(反例 {_esc_clean(c, 40)} 那一筆問答的第二個代理);寫在決策內容尾端")
+-            if ck and audit_day:
+-                days = [str(x.get("ts") or "")[:10] for x in by.get(k, []) if x.get("verdict") == "untestable"]
+-                if not all(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", d) for d in days):
+-                    probs.append(f"反例 {_esc_clean(c, 40)} 那筆問答沒有可讀的日期(ts),判不了是不是先問答、再審計")
+-                elif audit_day < max(days):
+-                    # 手冊的順序是 問答 → guard audit → decision-add → --add;只驗 [audit:] 存在的話,上一輪的舊戳記就能頂替這一輪的審計(代碼審 r2 G8)
+-                    probs.append(f"合約行的 [audit:] 日期 {audit_day} 早於反例 {_esc_clean(c, 40)} 那筆問答的日期 {max(days)}——照順序重審:"
+-                                 "問答之後再跑一次 lumos guard audit 蓋新的 [audit:],再 --add")
++            if ck:
++                # 手冊的順序是 問答 → guard audit → decision-add → --add;只驗 [audit:] 存在的話,上一輪的舊戳記就能頂替這一輪的審計(代碼審 r2 G8)
++                orders = [_residual_ev_order(x) for x in by.get(k, []) if x.get("verdict") == "untestable"]
++                if any(o is None for o in orders):
++                    probs.append(f"反例 {_esc_clean(c, 40)} 有一筆問答的時間戳記(ts)讀不出,判不了是不是先問答、再審計")
++                elif last_audit is None:
++                    probs.append(f"治理帳裡找不到這條合約的 guard audit 紀錄(舊審計或手寫的 [audit:] 沒有記帳),判不了是不是在反例 {_esc_clean(c, 40)} "
++                                 "的問答之後才審計——照順序重審:lumos guard audit 蓋新的 [audit:],再 --add")
++                elif last_audit <= max(orders):
++                    probs.append(f"這條合約最近一次 guard audit({last_audit[0].isoformat()})早於反例 {_esc_clean(c, 40)} 最晚那筆問答"
++                                 f"({max(orders)[0].isoformat()})——照順序重審:問答之後再跑一次 lumos guard audit,再 --add")
+         return probs
+     for k in sorted(k for k in by if "testable" in verdicts(k)):
+         if "untestable" in verdicts(k):
+             probs.append(f"反例 {_esc_clean(k, 40)} 同時有判 testable 與 untestable 的 residual-ask(同一個反例只准問一次;"
+-                         "判過 testable 的不准改判,合約宣稱改字前的也算;測得到就該補測試)")
++                         "判過 testable 的不准改判;測得到就該補測試)")
+     ok = [k for k in by if verdicts(k) == {"untestable"}]
+     if not ok:
+         probs.append("治理帳裡沒有這條合約判 untestable 的 residual-ask(標記沒經過第二個代理;合約宣稱改過字也要重問)")
+     elif "checker:" not in content:
+         probs.append(f"決策 {_esc_clean(ref, 80)} 的內容沒有 checker:<模型>/<日期>(第二個代理是誰)")
+     elif not any(n in content for k in ok for n in checkers(k)):
+         probs.append(f"決策 {_esc_clean(ref, 80)} 的 checker: 跟判 untestable 那幾筆問答的第二個代理都對不上")
+     return probs
+ 
+ 
+@@ -19274,21 +19303,22 @@ def _cmd_guard_residual_locked(env, node, substr, ref, adding, cases):
+     try:
+         atomic_write_verify(path, new_lines, f"[residual:{key}]", check)
+     except (ValueError, RuntimeError, OSError) as ex:
+         print(f"擋下:{ex}", file=sys.stderr)
+         return 2
+     rc, n = _residual_reindex_tail(env, "已寫" if adding else "已拿掉")
+     if rc:
+         return rc
+     if adding:
+         print(f"✓ 殘留 [residual:{key}] → {rel[:-3]} 的 ★INVARIANT★(反例 {', '.join(cases)});殘留索引 {n} 條")
+-        print("  之後改到這條合約守的程式(about_code、綁定測試),pitfalls 會把分級升 high、走代碼審")
++        print("  新增殘留的推送會被判高風險,要過代碼審(審查席看這筆殘留決策與第二個代理的問答);"
++              "之後改到這條合約守的程式(about_code、綁定測試),pitfalls 也會把分級升 high")
+     else:
+         print(f"✓ 拿掉 [residual:{key}] ← {rel[:-3]};殘留索引 {n} 條")
+         print("  拿掉殘留的推送會被判高風險,要過代碼審;這條合約的第 3 問也要重新審計(補測試後 lumos guard audit 重審)")
+     return 0
+ 
+ 
+ def _doctor_residual_lines(env, notes):
+     """doctor 的殘留檢查(〈做法〉3、5)→ (決策壞的行, 不合格的行, 索引不一致的行)。放在 Check T 未審那一段旁邊。
+     不合格 = _residual_check 的問題(跟 --add 寫入當下同一套,代碼審 r1 G3);索引比對連 test_files 一起比(舊索引的 tests 欄不比,r2 G1 拿掉了)。"""
+     import json as _j
+@@ -44416,36 +44446,40 @@ def _stack_changed_ok(cur_file, skip=frozenset()):
+     return (ext not in _PITFALL_DIFF_SKIP_EXT
+             and not cur_file.startswith("governance/review-reports/")
+             and cur_file not in _BOOKKEEPING_FILES
+             and not cur_file.startswith(_BOOKKEEPING_DIRS)
+             and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
+             and not (skip and _posix_norm(cur_file) in skip))
+ 
+ 
+ def _pitfall_tier(claims, files, repo_root, diff_range):
+     """改動風險分級(單一算法;★vault-free★,pitfalls 在 pre-push 熱路徑上不載圖譜——代碼審 r1 架構席):
+-    殘留索引與問答帳(_residual_tier_hits:改到殘留守的檔、拿掉或縮小殘留、索引或檔名清單讀不出、刪改 residual-ask 帳列)→ high,最先判;命中風險型樣或新告警 → high;改動裡沒有任何「需要有家的程式檔」(_is_code_file,每支檔有家同一套定義)→ light;其餘 standard。
++    殘留索引與問答帳(_residual_tier_hits:新增殘留、改到殘留守的檔、拿掉或縮小殘留、索引或檔名清單讀不出、刪改 residual-ask 帳列)→ high,最先判;命中風險型樣或新告警 → high;改動裡沒有任何「需要有家的程式檔」(_is_code_file,每支檔有家同一套定義)→ light;其餘 standard。
+     「計劃風險低且小改動閘過 → light」那一層要讀圖譜,由 spec-gate --push-check(本來就有圖譜、本來就在 pre-push 跑)印;這裡只用審查帳字串便宜提示一句。回 (tier, 一句為什麼)。"""
+     res = _residual_tier_hits(repo_root, diff_range)
+     why = []
++    if res.get("added"):
++        ad = res["added"]
++        why.append("這次推送新增了殘留(" + "、".join(ad[:3]) + (f" 等 {len(ad)} 筆" if len(ad) > 3 else "")
++                   + "),要過高風險代碼審(審查席看殘留決策與問答)")
+     if res.get("files"):
+         fs = res["files"]
+         why.append("改到帶殘留合約守的程式(" + "、".join(fs[:3]) + (f" 等 {len(fs)} 支" if len(fs) > 3 else "") + ";那幾型壞法測試抓不到,要靠代碼審)")
+     if res.get("removed"):
+         rm = res["removed"]
+         why.append("推送範圍裡拿掉殘留(" + "、".join(rm[:3]) + (f" 等 {len(rm)} 筆" if len(rm) > 3 else "") + ";拿掉殘留要過代碼審)")
+     if res.get("shrunk"):
+         sh = res["shrunk"]
+         why.append("推送範圍裡縮小殘留守的範圍(" + "、".join(sh[:3]) + (f" 等 {len(sh)} 筆" if len(sh) > 3 else "")
+                    + ";起點守的檔頂端沒列了,等於拿掉那部分殘留,先縮範圍、下次再改程式就躲得掉,所以這次就要過代碼審)")
+     if res.get("head_bad"):
+-        why.append("頂端版本的殘留索引讀不出或形狀不對、起點有殘留(看不出這次碰了什麼,當成碰到;修好索引:lumos guard residual --reindex)")
++        why.append("頂端版本的殘留索引讀不出或形狀不對、起點有殘留或這次推送動過索引(看不出這次碰了或加了什麼,當成有;修好索引:lumos guard residual --reindex)")
+     if res.get("base_bad"):
+         why.append("起點版本的殘留索引讀不出(git show 失敗、不是檔案不存在:淺層 clone、物件遺失或逾時;看不出原本有什麼殘留,當成有)")
+     if res.get("files_unknown"):
+         why.append("列不出這次改了哪些檔(git diff --name-only 失敗)、索引裡有殘留(看不出有沒有改到它守的程式,當成改到)")
+     if res.get("asks_dropped"):
+         k = res["asks_dropped"]
+         why.append("推送範圍刪掉或改掉治理帳裡 residual-ask 的列" + (f" {k} 筆" if k > 0 else "(git 讀不出那段差異,當成有)")
+                    + "(刪掉判過 testable 的問答就能重問到想要的答案;第二個代理的問答只准增不准減)")
+     if why:
+         return "high", ";".join(why) + (";另命中風險型樣或新告警" if claims else "")
+@@ -44484,104 +44518,142 @@ def _residual_index_read_at(repo_root, rev):
+         return "unreadable", []
+     except (OSError, ValueError, UnicodeDecodeError, RecursionError):
+         return "bad", []
+     ents = d.get("entries") if isinstance(d, dict) else None
+     if not isinstance(ents, list):
+         return "bad", []
+     return "ok", [e for e in ents if isinstance(e, dict)]
+ 
+ 
+ def _residual_index_view(ents):
+-    """索引條目 → (守的檔:about_code 與 test_files 的聯集, {(節點, 殘留指標): 那筆殘留守的檔})。
++    """索引條目 → (守的檔:about_code 與 test_files 的聯集, {(節點, 合約指紋, 殘留指標): 那筆殘留守的檔})。
+     兩種檔都整檔算命中(代碼審 r2 G1:上一輪把測試檔收窄成「diff 碰到綁定測試名才算」,縮排的測試方法與輔助函式判不到,拿掉);
+-    舊索引帶的 tests 欄不看。第二個值給「同一筆殘留守的範圍變小」用(r2 G4)。"""
++    舊索引帶的 tests 欄不看。第二個值給「新增、拿掉殘留」與「同一筆殘留守的範圍變小」用;鍵帶合約指紋(代碼審 r3 G3:
++    原本只有(節點, 指標),同節點兩條合約指同一筆決策時,拿掉其中一條的標記、或縮小其中一條的守備都被另一條蓋住)。"""
+     strs = lambda v: [x.strip() for x in v if isinstance(x, str) and x.strip()] if isinstance(v, list) else []
+     files, guard = set(), {}
+     for e in ents:
+         fs = {_posix_norm(x) for x in strs(e.get("about_code")) + strs(e.get("test_files"))}
+         files |= fs
+         for r in strs(e.get("residuals")):
+-            guard.setdefault((str(e.get("node")), r), set()).update(fs)
++            guard.setdefault((str(e.get("node")), str(e.get("fp")), r), set()).update(fs)
+     return files, guard
+ 
+ 
+-def _residual_ask_rows_dropped(repo_root, diff_range):
+-    """這段範圍刪掉或改掉治理帳(docs/.governance-log.jsonl)裡 residual-ask 的列幾筆 → 筆數;git 失敗 → None(呼叫端當成有,寧可多升 high)。
+-    只看 -U0 diff 的刪除行(改一列 = 刪一行加一行);新增的問答不算。只讀 git,不載圖譜(代碼審 r2 G3:刪掉 testable 那列就能重問)。"""
++def _residual_ask_rows_at(repo_root, rev):
++    """某個版本的版控治理帳裡 residual-ask 的列 → (狀態, {整列去頭尾空白的位元組})。狀態 "ok" / "missing"(那個版本確定沒有帳檔)/
++    "unreadable"(git 讀不出:物件遺失、版本不存在、逾時;或工作目錄那份不是一般檔、讀不動)。rev=None 讀工作目錄那份。
++    用 git cat-file blob 讀原始位元組:不經 diff,所以 .gitattributes 標 -diff、textconv、帳裡的 NUL 位元組都影響不了(代碼審 r3 G2)。
++    含閘名字串、JSON 讀不出的那列當成是 residual-ask(帶著閘名,寧可多算);讀得出而 gate 是別的閘就不算。"""
+     import json as _j
+     try:
+-        r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff",
+-                            diff_range, "--", _RESIDUAL_GOV_REL], capture_output=True, timeout=60, check=False)
++        if rev is None:
++            p = Path(repo_root) / GOV_LOG_REL
++            if not os.path.lexists(p):
++                return "missing", set()
++            if p.is_symlink() or not p.is_file():
++                return "unreadable", set()
++            raw = p.read_bytes()
++        else:
++            r = subprocess.run(["git", "-C", str(repo_root), "cat-file", "blob", f"{rev}:{GOV_LOG_REL}"], capture_output=True, timeout=60, check=False)
++            if r.returncode != 0:
++                t = subprocess.run(["git", "-C", str(repo_root), "ls-tree", "-z", rev, "--", GOV_LOG_REL], capture_output=True, timeout=20, check=False)
++                if t.returncode == 0 and not t.stdout.strip(b"\0"):
++                    return "missing", set()
++                return "unreadable", set()
++            raw = r.stdout
+     except (OSError, subprocess.TimeoutExpired):
+-        return None
+-    if r.returncode != 0:
+-        return None
+-    n = 0
+-    for ln in r.stdout.split(b"\n"):
+-        if not ln.startswith(b"-") or ln.startswith(b"---") or b"residual-ask" not in ln:
++        return "unreadable", set()
++    rows = set()
++    for ln in raw.split(b"\n"):
++        if b"residual-ask" not in ln:
+             continue
++        ln = ln.strip()
+         try:
+-            d = _j.loads(ln[1:].decode("utf-8"))
++            d = _j.loads(ln.decode("utf-8"))
+         except (UnicodeDecodeError, ValueError, RecursionError):
+-            n += 1   # 讀不出的那列帶著閘名,當成是
++            rows.add(ln)   # 讀不出的那列帶著閘名,當成是
+             continue
+         if not isinstance(d, dict) or d.get("gate") == "residual-ask":
+-            n += 1
+-    return n
++            rows.add(ln)
++    return "ok", rows
++
++
++def _residual_ask_rows_dropped(repo_root, base, head):
++    """起點版本的治理帳有、頂端版本沒有的 residual-ask 列幾筆 → 筆數;任一版讀不出 → None(呼叫端當成有,寧可多升 high)。
++    比兩版的列集合(整列去頭尾空白),不看 diff 文字(代碼審 r3 G2:原本讀 git diff 的刪除行,.gitattributes 標 -diff 或塞一個 NUL
++    就沒有刪除行可數;帳尾沒換行時續寫、重新排序、改 CRLF 又被算成刪除)。新增的問答不算。只讀 git,不載圖譜。head=None 讀工作目錄。"""
++    bst, brows = _residual_ask_rows_at(repo_root, base)
++    if bst == "unreadable":
++        return None
++    if not brows:
++        return 0
++    hst, hrows = _residual_ask_rows_at(repo_root, head)
++    if hst == "unreadable":
++        return None
++    return len(brows - hrows)
+ 
+ 
+ def _residual_tier_hits(repo_root, diff_range):
+-    """殘留索引與問答帳讓這段範圍升 high 的理由 → dict(沒有的鍵不放;空 dict = 不升)。鍵:
++    """殘留索引與問答帳讓這段範圍升 high 的理由 → dict(沒有的鍵不放;空 dict = 不升)。殘留的身分是(節點、合約指紋、殘留指標)(r3 G3)。鍵:
+     - files:改到的檔落在索引(起點與頂端兩個版本取聯集;頂端是工作目錄就讀工作目錄那份)列的 about_code 或綁定測試所在的檔——都整檔算(r2 G1)。
+       讀起點:同一個提交把標記拿掉、改程式也躲不掉;讀頂端:這次推送才加的殘留也算。檔案清單用 --no-renames:改名的舊路徑在索引裡就算改到。
+-    - removed:起點索引有、頂端索引沒有的殘留(節點 + 殘留指標)——拿掉殘留本身要過代碼審,分兩次推送也躲不掉(r1 G4)。
++    - added:頂端索引有、起點沒有的殘留——★新增殘留本身要過高風險代碼審★,審查席看殘留決策與第二個代理的問答。
++      「同一個反例只准問一次」靠字面身分擋不住換編號、改節點名、改字換指紋重問(r1–r3 同類三次),這是外層看門(r3 G1)。
++    - removed:起點索引有、頂端索引沒有的殘留——拿掉殘留本身要過代碼審,分兩次推送也躲不掉(r1 G4)。
+     - shrunk:同一筆殘留起點守的檔(about_code、測試檔)頂端少了——等於拿掉那一部分殘留;不然先縮守備範圍、下一次推送再改程式就躲得掉(r2 G4)。
+-    - head_bad:頂端索引讀不出或形狀不對、起點又有殘留——看不出這次碰了什麼,當成碰到(r1 G4)。
++    - head_bad:頂端索引讀不出或形狀不對,而起點有殘留、或這次推送動過索引(或列不出改了哪些檔)——看不出這次碰了或加了什麼,當成有(r1 G4、r3 G1)。
+     - base_bad:起點索引 git 讀不出(git show 失敗、不是路徑不存在)——看不出原本有什麼殘留,當成有(r2 G5)。
+     - files_unknown:檔名清單的 git diff 失敗、而起點或頂端有殘留——列不出改了什麼,當成碰到(r2 G5;原本當成沒改)。
+-    - asks_dropped:刪掉或改掉治理帳裡 residual-ask 的列(筆數;git 失敗記 -1 = 判不出,當成有)——刪掉判過 testable 那列就能重問(r2 G3)。"""
++    - asks_dropped:起點版本治理帳的 residual-ask 列頂端少了幾筆(git 讀不出記 -1 = 判不出,當成有)——刪掉判過 testable 那列就能重問(r2 G3);
++      比兩版的列集合、不看 diff 文字;治理帳在檔名清單裡、或檔名清單失敗時都比(r3 G2)。"""
+     if not diff_range:
+         return {}
+     base, head = _diff_range_ends(repo_root, diff_range)
+     bst, bents = _residual_index_read_at(repo_root, base) if base else ("missing", [])
+     hst, hents = _residual_index_read_at(repo_root, head) if head else _residual_index_read_at(repo_root, None)
+     bfiles, bguard = _residual_index_view(bents)
+     hfiles, hguard = _residual_index_view(hents)
++    try:
++        r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "--name-only", "-z",
++                            "--no-renames", diff_range, "--"], capture_output=True, text=True, errors="replace", timeout=60)
++        names = [f for f in r.stdout.split("\0") if f.strip()] if r.returncode == 0 else None
++    except (OSError, subprocess.TimeoutExpired):
++        names = None
++    touched = lambda rel: names is None or any(_posix_norm(f) == rel for f in names)
+     out = {}
+     if bst == "unreadable":
+         out["base_bad"] = True   # 內容壞掉(bad)的起點索引照舊不升:那一版推送時 doctor 就報過索引讀不出(S6)
+-    if bguard and hst in ("bad", "unreadable"):
++    if hst in ("bad", "unreadable") and (bguard or touched(_RESIDUAL_INDEX_REL)):
+         out["head_bad"] = True
+-    else:
++    elif hst not in ("bad", "unreadable"):
++        fmt = lambda k: f"{k[0]} [residual:{k[2]}]"
++        added = set(hguard) - set(bguard)
++        if added:
++            out["added"] = sorted(fmt(k) for k in added)
+         gone = set(bguard) - set(hguard)
+         if gone:
+-            out["removed"] = sorted(f"{n} [residual:{r}]" for n, r in gone)
+-        shr = sorted(f"{p[0]} [residual:{p[1]}] 少了 " + "、".join(sorted(bguard[p] - hguard[p])[:3])
+-                     for p in set(bguard) & set(hguard) if bguard[p] - hguard[p])
++            out["removed"] = sorted(fmt(k) for k in gone)
++        shr = sorted(fmt(k) + " 少了 " + "、".join(sorted(bguard[k] - hguard[k])[:3])
++                     for k in set(bguard) & set(hguard) if bguard[k] - hguard[k])
+         if shr:
+             out["shrunk"] = shr
+     whole = bfiles | hfiles
+-    try:
+-        r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "--name-only", "-z",
+-                            "--no-renames", diff_range, "--"], capture_output=True, text=True, errors="replace", timeout=60)
+-        names = [f for f in r.stdout.split("\0") if f.strip()] if r.returncode == 0 else None
+-    except (OSError, subprocess.TimeoutExpired):
+-        names = None
+     if names is None:
+         if whole or bguard or hguard:
+             out["files_unknown"] = True
+-        return out
+-    hits = sorted(f for f in names if _posix_norm(f) in whole)
+-    if hits:
+-        out["files"] = hits
+-    if any(_posix_norm(f) == _RESIDUAL_GOV_REL for f in names):
+-        n = _residual_ask_rows_dropped(repo_root, diff_range)
++    else:
++        hits = sorted(f for f in names if _posix_norm(f) in whole)
++        if hits:
++            out["files"] = hits
++    if touched(GOV_LOG_REL):
++        n = _residual_ask_rows_dropped(repo_root, base, head)
+         if n is None or n > 0:
+             out["asks_dropped"] = -1 if n is None else n
+     return out
+ 
+ 
+ def _ledger_has_manual_only(repo_root):
+     """便宜前置(不載圖譜):審查帳裡有沒有全靠人驗的風險低留痕。找不到 vault 或讀不動=沒有。"""
+     try:
+         vault = find_vault(Path(repo_root))
+         ledger = vault.parent / ".canary-log.jsonl" if vault else None
