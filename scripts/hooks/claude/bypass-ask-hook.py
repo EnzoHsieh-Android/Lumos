@@ -285,6 +285,30 @@ def _ansi_decode(cmd: str, i: int):
     return "".join(out), len(cmd)
 
 
+def _unescaped_tick(cmd: str, i: int) -> int:
+    """從 i 起第一個沒被跳脫的反引號位置(前面連續反斜線是偶數個),找不到回 -1。
+    註解裡的 \\` 不是結尾(r3 單reviewer:拿它當結尾會提早收層,換行後的繞閘落進雙引號字面而漏問)。"""
+    j = cmd.find("`", i)
+    while j != -1:
+        k = j
+        while k > i and cmd[k - 1] == "\\":
+            k -= 1
+        if (j - k) % 2 == 0:
+            return j
+        j = cmd.find("`", j + 1)
+    return -1
+
+
+def _comment_end(cmd: str, i: int, in_tick: bool) -> int:
+    """位置 i 的 # 註解吃到哪裡(回下一個要讀的位置)。反引號層裡:bash 先找到結尾反引號才解析裡面,
+    註解吃不到它(r2 單reviewer);換行只找到結尾反引號為止,不然每個註解都掃到尾。"""
+    t = _unescaped_tick(cmd, i) if in_tick else -1
+    k = cmd.find("\n", i, t) if t != -1 else cmd.find("\n", i)
+    if k == -1:
+        k = t
+    return len(cmd) if k == -1 else k
+
+
 def _mask(ch: str) -> str:
     k = _MASK_CHARS.find(ch)
     return chr(_MASK_BASE + k) if k >= 0 and ch else ch
@@ -303,14 +327,20 @@ def _unmask(tok: str) -> str:
 
 
 class _Normalizer:
-    """一趟掃過指令:追蹤引號(`$(` 裡重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
+    """一趟掃過指令:追蹤引號(`$(` 與雙引號裡的反引號各重開一層)、接起續行、拿掉註解與 heredoc 內文、引號裡與被跳脫的
     結構字元換成遮罩字元、ANSI 引號解出內容後當成引號裡的字。heredoc 找不到結束字就停止剝(寧可多問)。
-    整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。"""
+    整趟是線性的;續行在這裡接(不另開一趟),才不會被註解或 heredoc 裡的撇號騙。
+    雙引號裡的反引號一樣會執行(bash 實測 echo "`git status`"),原本跟其他字一起遮掉、裡面的繞閘看不到
+    (2026-10-14 原生 /code-review 實跑 echo "`git commit --no-verify`" 回空清單)。現在跟 `$(` 同一套:開一層反引號層,
+    裡面照引號外的規則走,遇到第一個沒被跳脫的反引號收掉(不論那時在不在內層引號裡,同 bash);反引號層沒有括號深度可數,
+    層內的右括號只照字輸出、不收層。輸出保留成對反引號,交給 _split_cmdsubs 抽出另外判;層內被跳脫的反引號已遮罩,
+    那邊用 find 找結尾不會誤切。層內註解只吃到下一個反引號為止。沒處理 bash 在反引號裡先把「反斜線接反斜線、反斜線接反引號」還原掉一個反斜線的那一步(引號外的反引號也一樣),
+    屬有心改寫的範圍。"""
 
     def __init__(self, cmd: str):
         self.cmd = cmd
         self.out = []
-        self.ctx = [[False, False, 0]]       # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度]
+        self.ctx = [[False, False, 0, False]]   # 每層:[在單引號裡, 在雙引號裡, 這層 `$(` 裡的括號深度, 是反引號層]
         self.pending = []
         self.heredoc_ok = True
 
@@ -322,13 +352,17 @@ class _Normalizer:
 
     def step(self, i: int) -> int:
         cur = self.ctx[-1]
+        ch = self.cmd[i]
+        if cur[3] and ch == "`":
+            self.ctx.pop()                   # 反引號層:第一個沒被跳脫的反引號收層
+            self.out.append(ch)
+            return i + 1
         if cur[0]:
             return self._in_single(i, cur)
-        ch = self.cmd[i]
         if ch == "\\":
             return self._backslash(i, cur)
         if self.cmd.startswith("$(", i) and not self.cmd.startswith("$((", i):
-            self.ctx.append([False, False, 0])
+            self.ctx.append([False, False, 0, False])
             self.out.append("$(")
             return i + 2
         if cur[1]:
@@ -354,6 +388,9 @@ class _Normalizer:
     def _in_double(self, i: int, cur, ch: str) -> int:
         if ch == '"':
             cur[1] = False
+            self.out.append(ch)
+        elif ch == "`":
+            self.ctx.append([False, False, 0, True])
             self.out.append(ch)
         else:
             self.out.append(ch if ch == "$" else _mask(ch))    # 雙引號裡的 $ 照常展開("$D")
@@ -394,8 +431,7 @@ class _Normalizer:
         if ch in "()" and len(self.ctx) > 1:
             return self._paren(i, cur, ch)
         if ch == "#" and (i == 0 or cmd[i - 1] in " \t\n;&|()"):
-            k = cmd.find("\n", i)
-            return len(cmd) if k == -1 else k
+            return _comment_end(cmd, i, cur[3])
         if self.heredoc_ok and cmd.startswith("<<", i) and not cmd.startswith("<<<", i) and (i == 0 or cmd[i - 1] != "<"):
             return self._heredoc_op(i)
         if ch == "\n" and self.pending:
@@ -406,7 +442,8 @@ class _Normalizer:
         if ch == "(":
             cur[2] += 1
         elif cur[2] == 0:
-            self.ctx.pop()
+            if not cur[3]:                   # 反引號層不靠括號收
+                self.ctx.pop()
         else:
             cur[2] -= 1
         self.out.append(ch)
