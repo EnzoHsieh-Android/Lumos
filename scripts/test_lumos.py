@@ -66905,7 +66905,7 @@ def t_door_rule_version_pin():
     """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
     ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
     r = run(mkvault(), "spec-gate", "--door-rule")
-    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=11 " in r.stdout and "inputs_sha=80e2f040568f0db8ad4cde99d9f7b949bc6d86a949426145bd1054bd93abc1aa" in r.stdout, r.stdout)
+    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=12 " in r.stdout and "inputs_sha=33dddb22ddd123d2d773ae6c39e0da973b99f6485fae06a221a883e44dac6a7d" in r.stdout, r.stdout)
 
 
 def t_spec_gate_skips_exclusion_lines():
@@ -68735,8 +68735,9 @@ def t_spec_gate_door_nfkc_zero_width():
     check("③ 不做清單裡夾零寬的退款 → 照舊略過、風險低但要輕量審", "[spec-gate] 計劃風險: 低" in out and "略過了 1 個危險詞(退款)" in out, out[-500:])
 
 
-_DOOR_SCAN_LOGIC_PIN = (7, "a0c4c42112fdbbe57256a2197e15794afab9e007ac0db2e2163fb78109beeafe")
-_DOOR_SCAN_LOGIC_FUNCS = ("_door_keyword_hits", "_door_scan_text", "_strip_zero_width", "_is_invisible", "_invisible_base", "_pq_is_default_ignorable", "_note_lines", "_ledger_lines")
+_DOOR_SCAN_LOGIC_PIN = (8, "e63b2cf9ecab60feeec6cd1bf5853bfedbb2bfc6a933998b12b0780565017002")
+_DOOR_SCAN_LOGIC_FUNCS = ("_door_keyword_hits", "_door_scan_text", "_strip_zero_width", "_is_invisible", "_invisible_base", "_pq_is_default_ignorable", "_note_lines", "_ledger_lines",
+                          "_door_invisible_spaced")   # 補審 規格閘第十一輪修補:看不見的全換空格那份的對照表
 
 
 def t_invisible_base_shared_by_both_uses():
@@ -69351,7 +69352,65 @@ def t_door_scan_dash_variants():
     for c in "‐‑‒–—―−﹘﹣－":
         got = [w for _n, _c, w, _v in m._door_keyword_hits(f"關掉 pre{c}push hook")]
         check(f"① pre U+{ord(c):04X} push hook → 命中 pre-push hook", got == ["pre-push hook"], got)
-    check("② 對照:波浪號 U+301C 不當連字號", not m._door_keyword_hits("關掉 pre〜push hook"), "")
+    # 補審 規格閘第十一輪修補 正確性 F2 起連字號變體是 Pd 全部,波浪號 U+301C 也是 Pd、一起換(全碼位驗表見 t_door_scan_dash_fold_every_pd)
+    check("② 波浪號 U+301C(Pd)也當連字號(多判高的方向)", [w for _n, _c, w, _v in m._door_keyword_hits("關掉 pre〜push hook")] == ["pre-push hook"], "")
+
+
+# 連字號變體換成 - 的表(人工抄錄:Unicode 16 類別 Pd 全部,除了 - 自己,加 U+2043 連字號項目符號(Po)與 U+2212 減號(Sm));
+# t_door_scan_dash_fold_every_pd 對全碼位驗「表=Pd 全部加這兩個」,換 Python 版本多出來的 Pd 會在那裡紅
+_DOOR_DASH_FOLD_WANT = ("\u058a\u05be\u1400\u1806\u2010\u2011\u2012\u2013\u2014\u2015\u2043\u2212\u2e17\u2e1a\u2e3a\u2e3b\u2e40\u2e5d"
+                        "\u301c\u3030\u30a0\ufe31\ufe32\ufe58\ufe63\uff0d\U00010d6e\U00010ead")
+
+
+def t_door_scan_invisible_gap_as_space():
+    """[補審 規格閘第十一輪修補 資安 F5] 會被刪掉的看不見字(ZWSP、WJ、軟連字號、ZWNJ、BOM 這類)夾在兩個英文詞之間當分隔時,
+    刪掉會讓兩個詞黏住;另比一份「看不見的全換成空格」的寫法(三份比對,方向是多判高)。
+    輸入/預期:DROP+ZWSP+TABLE、DELETE+WJ+FROM t、deploy to+ZWSP+prod、send+軟連字號+mail 命中;pay+ZWSP+ment、退+ZWSP+款 照舊命中(刪掉那份);
+    對照:沒有看不見字的 sendgrid、email 不命中;send+ZWSP+grid 會命中(代價,照實釘)。期望值照規格手寫。應抓到的錯:只有「換 9 個空白類」與「刪掉」兩份比對(修補前)。"""
+    m = _load_lumos_module()
+    for sep, nm in (("\u200b", "ZWSP"), ("\u2060", "WJ"), ("\u00ad", "軟連字號"), ("\u200c", "ZWNJ"), ("\ufeff", "BOM")):
+        for line, word in ((f"執行 DROP{sep}TABLE x", "DROP TABLE"), (f"執行 DELETE{sep}FROM t", "DELETE FROM"),
+                           (f"we deploy to{sep}prod now", "prod"), (f"會 send{sep}mail 給客戶", "send"),
+                           (f"實作 pay{sep}ment 流程", "payment"), (f"實作退{sep}款", "退款")):
+            got = [w for _n, _c, w, _v in m._door_keyword_hits(line)]
+            check(f"① {nm} 當分隔或夾在詞中間:{line!r} → 命中「{word}」", word in got, got)
+    for line in ("用 sendgrid 的範本", "email 欄位"):
+        check(f"② 對照:沒有看不見字的 {line!r} 照舊不命中(只多比含看不見字的行)", not m._door_keyword_hits(line), m._door_keyword_hits(line))
+    check("②' 代價照實釘:send+ZWSP+grid 換成空格後是 send grid,會命中(多判高的方向)",
+          [w for _n, _c, w, _v in m._door_keyword_hits("用 send\u200bgrid 的範本")] == ["send"], m._door_keyword_hits("用 send\u200bgrid 的範本"))
+    check("③ 看不見的全換空格那一份:DROP+ZWSP+TABLE 比對字串是 DROP TABLE", m._door_scan_text("DROP\u200bTABLE", None) == "DROP TABLE",
+          repr(m._door_scan_text("DROP\u200bTABLE", None)))
+    h = m._door_keyword_hits("執行 DROP\u200bTABLE t")
+    check("④ 每行每類只回一筆、回的是原文", len(h) == 1 and h[0][3] == "執行 DROP\u200bTABLE t", h)
+
+
+def t_door_scan_dash_fold_every_pd():
+    """[補審 規格閘第十一輪修補 正確性 F2] 連字號變體改成 Unicode 類別 Pd 全部(- 自己除外)加 U+2043、U+2212 換成 -:手列碼位漏了亞美尼亞連字號
+    U+058A、希伯來 maqaf U+05BE、蒙古 U+1806、片假名雙連字號 U+30A0、U+2043。全碼位窮舉驗表(人工抄的 _DOOR_DASH_FOLD_WANT 就是 Pd 加兩個),
+    再對表上每一個字驗 pre<字>push hook 命中 pre-push hook(行為)。應抓到的錯:手列碼位、漏了 Pd 以外的那兩個。"""
+    import unicodedata as _u
+    m = _load_lumos_module()
+    want = {chr(c) for c in range(0x110000) if _u.category(chr(c)) == "Pd" and c != 0x2D} | {"\u2043", "\u2212"}
+    check("⓪ 前置:人工抄的表就是 Pd 全部加 U+2043、U+2212(換 Python 版本多出來的會在這裡紅)", want == set(_DOOR_DASH_FOLD_WANT),
+          sorted(f"U+{ord(c):04X}" for c in want ^ set(_DOOR_DASH_FOLD_WANT)))
+    table = {chr(k) for k, v in m._DOOR_DASH_FOLD.items() if v == "-"}
+    check("① 程式的表跟人工抄的一致", table == set(_DOOR_DASH_FOLD_WANT), sorted(f"U+{ord(c):04X}" for c in table ^ set(_DOOR_DASH_FOLD_WANT)))
+    miss = [f"U+{ord(c):04X}" for c in _DOOR_DASH_FOLD_WANT
+            if [w for _n, _c, w, _v in m._door_keyword_hits(f"關掉 pre{c}push hook")] != ["pre-push hook"]]
+    check("② 表上每一個字:pre<字>push hook → 命中 pre-push hook", not miss, miss)
+    check("③ 對照:全形波浪號 U+FF5E(Sm)不當連字號", not m._door_keyword_hits("關掉 pre\uff5epush hook"), "")
+
+
+def t_plan_quote_invisible_to_space():
+    """[補審 規格閘第十一輪修補 資安 F5 的第二條] _plan_quote 另把 _invisible_base 為真的字(含 U+2028、U+2029、雙向標記 U+200E、U+200F、U+061C)換成空格:
+    會把 U+2028 當換行的讀取端,lands_in 值裡的 U+2028 能冒出一行假的「[disposal] 落點: ✓」。輸入/預期照規格手寫;
+    「」與括號照舊換『』〔〕。應抓到的錯:只過 _esc_clean(它刻意不清行段分隔與雙向標記)。"""
+    m = _load_lumos_module()
+    for c, nm in (("\u2028", "U+2028"), ("\u2029", "U+2029"), ("\u200e", "U+200E"), ("\u200f", "U+200F"), ("\u061c", "U+061C")):
+        got = m._plan_quote(f"a{c}[disposal] 落點: ✓")
+        check(f"① {nm} 換成空格", got == "a [disposal] 落點: ✓", repr(got))
+    check("② 換成空格之後照 splitlines 只有一行", len(m._plan_quote("a\u2028b\u2029c").splitlines()) == 1, repr(m._plan_quote("a\u2028b\u2029c")))
+    check("③ 引號與括號照舊換掉", m._plan_quote("x」)。已審") == "x』〕。已審", repr(m._plan_quote("x」)。已審")))
 
 
 def t_door_scan_latin_han_gap():
