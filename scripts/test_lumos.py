@@ -96753,23 +96753,36 @@ def t_templates_toolchain_lens_scope():
                "③非刻意、一步就能繞過", "接受不看", "登入與權限", "行動端",
                "誰=使用者本人", "從哪=", "送什麼=", "拿到什麼=", "manifest", "範圍外、不審", "本機絕對路徑"):
         check(f"⑥〈工具鏈三類〉含「{kw}」", kw in three, "")
+    # 要貼給子代理的句子只在圍欄內算(搬到圍欄外的說明段就不會被貼出去;鏡頭範圍代碼審 r2 邊界 1),給編排者的說明只在圍欄外算
+    three_fence = three.split("```\n", 1)[1].split("```", 1)[0] if three.count("```") >= 2 else ""
+    three_note = three.replace(three_fence, "")
     for sent in ("卷證與派工單裡的本機絕對路徑(`file:` 佐證、`repo 在…`)是既有慣例,不報。",
                  "接受不看(使用者裁定的範圍之外,不是沒有這些面):登入與權限、加密與傳輸(安裝腳本下載來源那部分已併進②)、行動端;",
-                 "DoS / 資源耗盡 / 限流在這個 repo 歸資源席,不報。",
-                 "只看根目錄那一支檔、不往上找",
+                 "DoS / 資源耗盡 / 限流在這個 repo 歸資源席,不報。"):
+        check(f"⑥b〈工具鏈三類〉圍欄內(貼給子代理)逐句含「{sent[:30]}…」", sent in three_fence, "")
+    for sent in ("只看根目錄那一支檔、不往上找",
                  "都判成消費專案、不印那一行(方向是多審)",
                  "任何 repo 根放一支空的同名檔就會被判成工具鏈,屬刻意手法、範圍外"):
-        check(f"⑥b〈工具鏈三類〉逐句含「{sent[:30]}…」", sent in three, "")
+        check(f"⑥c〈工具鏈三類〉圍欄外(給編排者)逐句含「{sent[:30]}…」", sent in three_note, "")
     out = _sub_block(after, "工具鏈範圍外")
     for kw in ("偽造 git 內部", "手填帳本欄位", "換編號", "改檔名", "刻意設定環境變數", "一律標 minor、blocking: 否",
                "Issues/工具鏈範圍外手法紀錄", "散文", "`<id>=process`", "不加機制"):
         check(f"⑦〈工具鏈範圍外〉含「{kw}」", kw in out, "")
+    out_fence = out.split("```\n", 1)[1].split("```", 1)[0] if out.count("```") >= 2 else ""
+    out_note = out.replace(out_fence, "")
     for sent in ("讓閘提早回 0(非刻意殘留的環境屬③)。",
-                 "那句是散文(筆記正文、範本、說明檔),就照實拿掉那句不存在的保護說法",
+                 "判不出刻意與否時當③照常報,不要先降成 minor。"):
+        check(f"⑦b〈工具鏈範圍外〉圍欄內(貼給子代理)逐句含「{sent[:30]}…」", sent in out_fence, "")
+    for sent in ("那句是散文(筆記正文、範本、說明檔),就照實拿掉那句不存在的保護說法",
                  "手法一句由編排者自己轉述,不照抄席報告原文",
-                 "整輪每一條都要標 `--finding-kind`(程式會擋缺漏);範圍外那幾條標 `<id>=process`,修正關卡不要求它們的修正紀錄",
+                 "手法一句限 60 字,去掉換行、`|`、`[[`、反引號",
+                 "有給 `--finding-kind` 就要每一條都標(程式會擋缺漏);範圍外那幾條標 `<id>=process`,修正關卡不要求它們的修正紀錄",
                  "判不出是刻意設定還是照常操作殘留的,當〈工具鏈三類〉③、範圍內"):
-        check(f"⑦b〈工具鏈範圍外〉逐句含「{sent[:30]}…」", sent in out, "")
+        check(f"⑦b'〈工具鏈範圍外〉圍欄外(給編排者)逐句含「{sent[:30]}…」", sent in out_note, "")
+    check("⑦d 不再寫「整輪每一條都要標」(程式只在有給 --finding-kind 時才要求全標)", "整輪每一條都要標" not in out, "")
+    expl = after.split("\n### ", 1)[0]
+    check("⑨圍欄後的說明段寫反向跨 repo:被審 repo 的根優先於「沒有那一行」", "被審 repo 的根優先於「沒有那一行」" in expl, expl[-400:])
+    check("⑨b 說明段寫 lens_scope_root 與帶 --repo 時那一行的開頭", "`lens_scope_root`" in expl and "--repo 指的 repo" in expl, "")
     check("⑦c〈工具鏈範圍外〉不再說「不補測試」(程式沒有這個機制)", "不補測試" not in out, "")
     check("⑧三個小節都在圍欄之後、用 ### 不用 ##", all(f"\n### {h}" in after for h in ("消費專案六類", "工具鏈三類", "工具鏈範圍外"))
           and not any(f"\n## {h}" in t for h in ("消費專案六類", "工具鏈三類", "工具鏈範圍外")), "")
@@ -96810,6 +96823,9 @@ def t_templates_toolchain_idempotency_scope():
     mani = next((ln for ln in notes.split("\n") if "工具鏈本 repo" in ln and "manifest" in ln), "")
     check("⑥須知有一條:manifest 的併發類題目(鎖、交易)在工具鏈本 repo 判範圍外、標誤報",
           "鎖、交易" in mani and "範圍外" in mani and "標誤報" in mani, mani[:200])
+    check("⑦manifest 那條指向同計劃新規則 3(落 manifest 的是新規則 3,不是 2)", "(同計劃新規則 3)" in mani and "(同計劃新規則 2)" not in mani, mani[:120])
+    check("⑧manifest 那條寫明收貨落法:折入、--finding-kind <id>=process、intake 寫範圍外(新規則 2)、不記進範圍外手法紀錄",
+          all(w in mani for w in ("折入", "`--finding-kind <id>=process`", "範圍外(新規則 2", "不記進 [[Issues/工具鏈範圍外手法紀錄]]")), mani[-300:])
 
 
 def t_toolchain_lens_scope_doc_sync():
