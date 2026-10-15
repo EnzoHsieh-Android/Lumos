@@ -9079,6 +9079,510 @@ def t_panel_probe_retired():
     print("  ✓ t_panel_probe_retired")
 
 
+# ── 代碼審minor解綁(Projects/代碼審minor解綁_計劃):放行的每條都指回席報告原條 ──
+_MR_SNAP = "+引句素材行,長度超過十個字元。\n+第二行素材,長度也超過十個字元。\n"
+_MR_Q = "引句:「引句素材行,長度超過十個字元。」\n"
+_MR_ORDER = {"clean": 0, "minor": 1, "major": 2, "blocker": 3}
+
+
+def _mr_rep(items, top=None):
+    """已正規化的席報告:檔級行(預設=各條最高)+ 每條一段 ## Fn、一行 severity、一句錨得到快照的引句。"""
+    top = top or max(items, key=_MR_ORDER.get)
+    return f"severity: {top}\n" + "".join(f"## F{i}\nseverity: {s}\n{_MR_Q}" for i, s in enumerate(items, 1))
+
+
+def _mr_project(prefix):
+    """臨時 git 專案:docs/kg 圖譜、docs 帳、governance/review-reports/mr 底下一份凍結 patch。回 (root, vault, 卷證目錄, 快照)。"""
+    import subprocess as _sp
+    root, v = _stats_fixture(prefix, [])
+    _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+    rr = root / "governance" / "review-reports" / "mr"
+    rr.mkdir(parents=True)
+    snap = rr / "r1-snapshot.patch"
+    snap.write_text(_MR_SNAP, encoding="utf-8")
+    return root, v, rr, snap
+
+
+def _mr_files(rr, sub, **reports):
+    """在卷證目錄的 sub 子目錄寫幾份席報告;值是等級 tuple,或 (等級 tuple, 檔級) 。回 {名: 路徑}。"""
+    d = rr / sub
+    d.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for name, spec in reports.items():
+        items, top = (spec, None) if isinstance(spec[0], str) else spec
+        p = d / f"{name}.md"
+        p.write_text(_mr_rep(items, top), encoding="utf-8")
+        out[name] = p
+    return out
+
+
+def _mr_seat(v, lid, auditor, sev, rpt, snap, rnd="r1"):
+    return run(v, "canary", "record", "none", "--loop", lid, "--round", rnd, "--auditor", auditor,
+               "--severity", sev, "--report", str(rpt), "--snapshot", str(snap),
+               "--spec", str(snap), "--reviewed", _sha256_of(snap))
+
+
+def _mr_carrier(v, lid, rpt, snap, sev, fset, folded="", accepted="", sources=(), extra=(), refuted="none", cwd=None):
+    args = ["canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "載體-sonnet",
+            "--severity", sev, "--report", str(rpt), "--snapshot", str(snap), "--spec", str(snap),
+            "--reviewed", _sha256_of(snap), "--findings-set", fset, "--folded-set", folded,
+            "--accepted-set", accepted, "--refuted-set", refuted]
+    for a in [x for x in accepted.split(",") if x]:
+        args += ["--accept-reason", f"{a}=原報 minor 措辭問題不修"]
+    for s in sources:
+        args += ["--finding-source", s]
+    args += list(extra)
+    if cwd is None:
+        return run(v, *args)
+    return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), *args], capture_output=True, text=True, cwd=str(cwd))
+
+
+def _mr_ledger_n(root):
+    led = root / "docs" / ".canary-log.jsonl"
+    return len(led.read_text(encoding="utf-8").splitlines()) if led.exists() else 0
+
+
+def _mr_rows(root, lid):
+    import json as _j
+    led = root / "docs" / ".canary-log.jsonl"
+    return [r for r in (_j.loads(x) for x in led.read_text(encoding="utf-8").splitlines() if x.strip()) if r.get("loop") == lid]
+
+
+def _mr_append(root, base_loop, dst_loop, carrier, **fields):
+    """把 base_loop 的載體列(或最後一筆席位列)複製到 dst_loop、改欄位後直接附進帳本。
+    寫側會擋的帳列(手改帳、竄改)透過現行指令造不出來,閘端那一半只能這樣造。"""
+    import json as _j, secrets as _s
+    src = [r for r in _mr_rows(root, base_loop) if ("findings_set" in r) == carrier][-1]
+    new = dict(src, loop=dst_loop, token="CANARY-" + _s.token_hex(4))
+    new.update(fields)
+    with open(root / "docs" / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+        f.write(_j.dumps(new, ensure_ascii=False) + "\n")
+
+
+def _mr_rel(root, p):
+    return str(Path(p).resolve().relative_to(root.resolve()))
+
+
+def _mr_gate(v, root, lid, snap):
+    return run(v, "loop", "status", lid, "--disposal", "--spec", str(snap), "--repo", str(root))
+
+
+def _mr_line(out):
+    """處置閘輸出裡「逐條放行」那一步的全部行(含接在後面的縮排說明)。"""
+    lines = out.splitlines()
+    for i, ln in enumerate(lines):
+        if ln.startswith("[disposal] 逐條放行"):
+            j = i + 1
+            while j < len(lines) and lines[j].startswith("  "):
+                j += 1
+            return "\n".join(lines[i:j])
+    return ""
+
+
+def t_disposal_code_minor_release():
+    """[代碼審minor解綁 S1 到 S9、S13 到 S17、S20 到 S22] 處置閘:代碼審 major 輪,載體帶逐條來源時,原報 minor 可放行;
+    原報 major 一律只能被折入的 id 指到;寫側會擋的情境用手改帳造,驗閘端照樣擋。"""
+    import shutil as _sh, json as _j, subprocess as _sp
+    root, v, rr, snap = _mr_project("gctl-mr-")
+    try:
+        f = _mr_files(rr, "s1", A=("major", "minor"), B=("minor", "clean"))
+        A, B = f["A"], f["B"]
+        # 手改帳的底:一個只帶折入的合法載體(報告=B),之後複製改欄位
+        check("minor解綁 前置:底載體寫得進", _mr_carrier(v, "code-mr-base", B, snap, "minor", "z", folded="z").returncode == 0)
+
+        def seats(lid, *pairs):
+            for aud, sev, rpt in pairs:
+                r = _mr_seat(v, lid, aud, sev, rpt, snap)
+                check(f"minor解綁 前置:{lid} {aud} 席帳寫得進", r.returncode == 0, r.stderr[-300:])
+
+        def hand(lid, fset, folded, accepted, sources, **kw):
+            _mr_append(root, "code-mr-base", lid, True, findings_set=fset, folded_set=folded, accepted_set=accepted,
+                       accept_reasons={a: "原報 minor 措辭問題不修" for a in accepted}, finding_sources=sources, **kw)
+
+        rA, rB = _mr_rel(root, A), _mr_rel(root, B)
+        # S1:原報 major 只被折入的 id 指到、放行的都指原報 minor → 判過
+        seats("code-mr-s1", ("正確性-sonnet", "major", A))
+        r = _mr_carrier(v, "code-mr-s1", B, snap, "minor", "a1,a2,b1", folded="a1", accepted="a2,b1",
+                        sources=(f"a1={A}#1", f"a2={A}#2", f"b1={B}#1"))
+        check("S1 寫側:合法逐條來源記得進", r.returncode == 0, r.stderr[-400:])
+        g = _mr_gate(v, root, "code-mr-s1", snap)
+        check("S1 閘:判過且逐條放行那一步打勾", g.returncode == 0 and "✓" in _mr_line(g.stdout), g.stdout[-800:])
+        check("S1 閘:沒走舊的「major 一律折」分支", "major 一律折" not in g.stdout, g.stdout[-400:])
+        car = [x for x in _mr_rows(root, "code-mr-s1") if "findings_set" in x][-1]
+        check("S1 帳上存正規化後的完整路徑", car.get("finding_sources") == {"a1": [f"{rA}#1"], "a2": [f"{rA}#2"], "b1": [f"{rB}#1"]},
+              car.get("finding_sources"))
+
+        # S2:放行的 id 也指到原報 major
+        seats("code-mr-s2", ("正確性-sonnet", "major", A))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s2", B, snap, "minor", "a1,a2", folded="a1", accepted="a2",
+                        sources=(f"a1={A}#1", f"a2={A}#1", f"a2={A}#2"))
+        check("S2 寫側:放行的 id 指到原報 major → rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s2", ["a1", "a2"], ["a1"], ["a2"], {"a1": [f"{rA}#1"], "a2": [f"{rA}#1", f"{rA}#2"]})
+        g = _mr_gate(v, root, "code-mr-s2", snap)
+        check("S2 閘:判不過並點名 a2", g.returncode == 1 and "✗" in _mr_line(g.stdout) and "a2" in _mr_line(g.stdout), g.stdout[-800:])
+
+        # S3:原報 major 沒有任何 id 指到
+        seats("code-mr-s3", ("正確性-sonnet", "major", A))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s3", B, snap, "minor", "a2,b1", accepted="a2,b1", sources=(f"a2={A}#2", f"b1={B}#1"))
+        check("S3 寫側:原報 major 沒人指 → rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s3", ["a2", "b1"], [], ["a2", "b1"], {"a2": [f"{rA}#2"], "b1": [f"{rB}#1"]})
+        g = _mr_gate(v, root, "code-mr-s3", snap)
+        ln = _mr_line(g.stdout)
+        check("S3 閘:判不過並點名那份報告的第 1 條", g.returncode == 1 and "✗" in ln and rA in ln and "第 1 條" in ln, g.stdout[-800:])
+
+        # S4:沒帶逐條來源 → 照舊判不過,訊息原句
+        seats("code-mr-s4", ("正確性-sonnet", "major", A))
+        r = _mr_carrier(v, "code-mr-s4", B, snap, "minor", "a1,a2", folded="a1", accepted="a2")
+        check("S4 前置:沒帶來源的載體照舊記得進", r.returncode == 0, r.stderr[-300:])
+        g = _mr_gate(v, root, "code-mr-s4", snap)
+        check("S4 閘:照舊判不過,訊息含「major 一律折」", g.returncode == 1 and "major 一律折" in g.stdout, g.stdout[-600:])
+
+        # S5:輪內有 blocker 席 → 不論來源照舊判不過
+        fd = _mr_files(rr, "s5", D=("blocker",))
+        rD = _mr_rel(root, fd["D"])
+        seats("code-mr-s5", ("正確性-sonnet", "blocker", fd["D"]))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s5", B, snap, "minor", "d1,b1", folded="d1", accepted="b1",
+                        sources=(f"d1={fd['D']}#1", f"b1={B}#1"))
+        check("S5 寫側:有 blocker 席帶來源 → rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s5", ["d1", "b1"], ["d1"], ["b1"], {"d1": [f"{rD}#1"], "b1": [f"{rB}#1"]})
+        g = _mr_gate(v, root, "code-mr-s5", snap)
+        check("S5 閘:blocker 輪 accepted 非空照舊判不過", g.returncode == 1 and "blocker" in g.stdout, g.stdout[-600:])
+
+        # S6:原報 major 列進重現不到清單、其餘 minor 全放行
+        intake = rr / "s6-intake.md"
+        intake.write_text("| a1 | MISS | 照報告步驟重現不到 |\n", encoding="utf-8")
+        seats("code-mr-s6", ("正確性-sonnet", "major", A))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s6", B, snap, "minor", "a2,b1", accepted="a2,b1", sources=(f"a2={A}#2", f"b1={B}#1"),
+                        refuted="a1=照報告步驟重現不到", extra=("--intake", str(intake)))
+        check("S6 寫側:原報 major 列進重現不到 → rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s6", ["a2", "b1"], [], ["a2", "b1"], {"a2": [f"{rA}#2"], "b1": [f"{rB}#1"]},
+             refuted_set=["a1"], refuted_reasons={"a1": "照報告步驟重現不到"})
+        g = _mr_gate(v, root, "code-mr-s6", snap)
+        ln = _mr_line(g.stdout)
+        check("S6 閘:判不過並點名那份報告的第 1 條", g.returncode == 1 and rA in ln and "第 1 條" in ln, g.stdout[-800:])
+
+        # S7:檔級 major、各條沒有 major 的報告 → 整輪不能走逐條放行
+        fc = _mr_files(rr, "s7", C=(("minor",), "major"))
+        rC = _mr_rel(root, fc["C"])
+        seats("code-mr-s7", ("正確性-sonnet", "major", fc["C"]))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s7", B, snap, "minor", "c1,b1", folded="c1", accepted="b1",
+                        sources=(f"c1={fc['C']}#1", f"b1={B}#1"))
+        check("S7 寫側:報告形狀不符 → rc2、帳本不變、指路全折",
+              r.returncode == 2 and _mr_ledger_n(root) == n0 and "不帶" in r.stderr and "全折" in r.stderr, r.stderr[-400:])
+        hand("code-mr-s7", ["c1", "b1"], ["c1"], ["b1"], {"c1": [f"{rC}#1"], "b1": [f"{rB}#1"]})
+        g = _mr_gate(v, root, "code-mr-s7", snap)
+        ln = _mr_line(g.stdout)
+        check("S7 閘:判不過並指路全折", g.returncode == 1 and "不帶" in ln and "全折" in ln, g.stdout[-800:])
+
+        # S8:同一席重記,新報告只剩 minor、舊報告有 major
+        fa2 = _mr_files(rr, "s8", A2=("minor",))
+        seats("code-mr-s8", ("正確性-sonnet", "major", A), ("正確性-sonnet", "minor", fa2["A2"]))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s8", B, snap, "minor", "x1,b1", accepted="x1,b1", sources=(f"x1={fa2['A2']}#1", f"b1={B}#1"))
+        check("S8 寫側:舊報告的 major 沒人指 → rc2", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s8", ["x1", "b1"], [], ["x1", "b1"], {"x1": [f"{_mr_rel(root, fa2['A2'])}#1"], "b1": [f"{rB}#1"]})
+        g = _mr_gate(v, root, "code-mr-s8", snap)
+        check("S8 閘:重記洗不掉原報 major", g.returncode == 1 and rA in _mr_line(g.stdout), g.stdout[-800:])
+
+        # S9:放行的 id 只指到 clean 條
+        seats("code-mr-s9", ("正確性-sonnet", "major", A))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s9", B, snap, "minor", "a1,b2", folded="a1", accepted="b2", sources=(f"a1={A}#1", f"b2={B}#2"))
+        check("S9 寫側:放行只指 clean 條 → rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s9", ["a1", "b2"], ["a1"], ["b2"], {"a1": [f"{rA}#1"], "b2": [f"{rB}#2"]})
+        g = _mr_gate(v, root, "code-mr-s9", snap)
+        check("S9 閘:判不過並點名 b2", g.returncode == 1 and "b2" in _mr_line(g.stdout), g.stdout[-800:])
+
+        # S13:不同目錄同名報告,用完整路徑各自對到
+        fx = _mr_files(rr, "s13x", R=("major",))
+        fy = _mr_files(rr, "s13y", R=("minor",))
+        seats("code-mr-s13", ("正確性-sonnet", "major", fx["R"]))
+        r = _mr_carrier(v, "code-mr-s13", fy["R"], snap, "minor", "x1,y1", folded="x1", accepted="y1",
+                        sources=(f"x1={fx['R']}#1", f"y1={fy['R']}#1"))
+        check("S13 寫側:同名報告用完整路徑記得進", r.returncode == 0, r.stderr[-400:])
+        g = _mr_gate(v, root, "code-mr-s13", snap)
+        check("S13 閘:各自對到正確那份、判過", g.returncode == 0, g.stdout[-800:])
+
+        # S14:載體記完後同輪又有一席入帳(手寫),它的 major 沒人指
+        fe = _mr_files(rr, "s14", E=("major",))
+        seats("code-mr-s14", ("正確性-sonnet", "major", A))
+        r = _mr_carrier(v, "code-mr-s14", B, snap, "minor", "a1,a2", folded="a1", accepted="a2", sources=(f"a1={A}#1", f"a2={A}#2"))
+        check("S14 前置:載體記得進", r.returncode == 0, r.stderr[-300:])
+        seats("code-mr-s14-base", ("邊界-sonnet", "major", fe["E"]))
+        _mr_append(root, "code-mr-s14-base", "code-mr-s14", False)
+        g = _mr_gate(v, root, "code-mr-s14", snap)
+        check("S14 閘:後記那席的 major 沒人指 → 判不過並點名", g.returncode == 1 and _mr_rel(root, fe["E"]) in _mr_line(g.stdout), g.stdout[-800:])
+
+        # S15:自填逐條嚴重度低於原報
+        seats("code-mr-s15", ("正確性-sonnet", "major", A))
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mr-s15", B, snap, "minor", "a1,a2", folded="a1", accepted="a2", sources=(f"a1={A}#1", f"a2={A}#2"),
+                        extra=("--finding-severity", "a1=major", "--finding-severity", "a2=clean"))
+        check("S15 寫側:自填低於原報 → rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+        hand("code-mr-s15", ["a1", "a2"], ["a1"], ["a2"], {"a1": [f"{rA}#1"], "a2": [f"{rA}#2"]},
+             finding_severities={"a1": "major", "a2": "clean"})
+        g = _mr_gate(v, root, "code-mr-s15", snap)
+        check("S15 閘:判不過並點名 a2", g.returncode == 1 and "a2" in _mr_line(g.stdout), g.stdout[-800:])
+
+        # S16:報告讀不到、sha 不符、型別壞掉 → 判不過、不噴例外
+        for tag, mut in (("讀不到", "rm"), ("sha 不符", "edit")):
+            fs = _mr_files(rr, f"s16{mut}", A=("major", "minor"))
+            lid = f"code-mr-s16{mut}"
+            seats(lid, ("正確性-sonnet", "major", fs["A"]))
+            r = _mr_carrier(v, lid, B, snap, "minor", "a1,a2", folded="a1", accepted="a2", sources=(f"a1={fs['A']}#1", f"a2={fs['A']}#2"))
+            check(f"S16 前置({tag}):載體記得進", r.returncode == 0, r.stderr[-300:])
+            if mut == "rm":
+                fs["A"].unlink()
+            else:
+                fs["A"].write_text(_mr_rep(("minor", "minor")), encoding="utf-8")
+            g = _mr_gate(v, root, lid, snap)
+            check(f"S16 閘({tag}):新步驟判不過、不噴例外", g.returncode == 1 and "✗" in _mr_line(g.stdout)
+                  and "Traceback" not in g.stderr, g.stdout[-600:] + g.stderr[-300:])
+        for i, (tag, bad) in enumerate((("不是 dict", "a1"), ("值不是清單", {"a1": f"{rA}#1"}), ("清單裡不是字串", {"a1": [1]}))):
+            lid = f"code-mr-s16t-{i}"
+            seats(lid, ("正確性-sonnet", "major", A))
+            hand(lid, ["a1", "a2"], ["a1"], ["a2"], bad)
+            g = _mr_gate(v, root, lid, snap)
+            check(f"S16 閘(型別壞掉:{tag}):判不過、不噴例外", g.returncode == 1 and "Traceback" not in g.stderr
+                  and "✗" in _mr_line(g.stdout), g.stdout[-600:] + g.stderr[-300:])
+
+        # S20:重複給同一條、兩個折入 id 指同一條原報 major → 合法;兩個放行指同一條、折入放行共用 → 擋
+        seats("code-mr-s20ok", ("正確性-sonnet", "major", A))
+        r = _mr_carrier(v, "code-mr-s20ok", B, snap, "minor", "a1,a1b,a2", folded="a1,a1b", accepted="a2",
+                        sources=(f"a1={A}#1", f"a1={A}#1", f"a1b={A}#1", f"a2={A}#2"))
+        check("S20 寫側:重複給同一條、兩個折入指同一條 major → 記得進", r.returncode == 0, r.stderr[-400:])
+        g = _mr_gate(v, root, "code-mr-s20ok", snap)
+        check("S20 閘:合法情況判過", g.returncode == 0, g.stdout[-800:])
+        for tag, fset, folded, accepted, srcs, culprit in (
+                ("兩個放行指同一條 minor", "a1,a2,a3", "a1", "a2,a3", (f"a1={A}#1", f"a2={A}#2", f"a3={A}#2"), "a3"),
+                ("折入與放行共用一條", "a1,a2", "a1", "a2", (f"a1={A}#1", f"a1={A}#2", f"a2={A}#2"), "a2")):
+            lid = "code-mr-s20-" + ("dup" if "兩個放行" in tag else "share")
+            seats(lid, ("正確性-sonnet", "major", A))
+            n0 = _mr_ledger_n(root)
+            r = _mr_carrier(v, lid, B, snap, "minor", fset, folded=folded, accepted=accepted, sources=srcs)
+            check(f"S20 寫側({tag}):rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
+            fsrc = {}
+            for s in srcs:
+                k, _, p = s.partition("=")
+                path, _, no = p.rpartition("#")
+                fsrc.setdefault(k, [])
+                if f"{_mr_rel(root, path)}#{no}" not in fsrc[k]:
+                    fsrc[k].append(f"{_mr_rel(root, path)}#{no}")
+            hand(lid, fset.split(","), folded.split(","), accepted.split(","), fsrc)
+            g = _mr_gate(v, root, lid, snap)
+            check(f"S20 閘({tag}):判不過並點名", g.returncode == 1 and culprit in _mr_line(g.stdout), g.stdout[-800:])
+
+        # S21:共用核對函式——同一份報告兩列帳、一列沒帶報告,結果跟只給一列相同
+        m = _load_lumos_inproc()
+        texts = {"x/A.md": _mr_rep(("major", "minor")), "x/B.md": _mr_rep(("minor",))}
+
+        def _reader(row):
+            return "ok", texts[row["report_path"]]
+        seat = {"severity": "major", "report_path": "x/A.md"}
+        carr = {"severity": "minor", "report_path": "x/B.md", "findings_set": ["a1", "a2"], "folded_set": ["a1"],
+                "accepted_set": ["a2"], "finding_sources": {"a1": ["x/A.md#1"], "a2": ["x/A.md#2"]}}
+        one = m._minor_release_check("code-x", [seat, carr], _reader)
+        many = m._minor_release_check("code-x", [seat, dict(seat), {"severity": "major"}, carr], _reader)
+        check("S21 共用核對:同報告兩列、一列沒報告 → 結果跟只給一列相同", one == many and one[0] == "ok", (one, many))
+        bad_one = m._minor_release_check("code-x", [seat, dict(carr, finding_sources={"a2": ["x/A.md#2"]})], _reader)
+        bad_many = m._minor_release_check("code-x", [seat, dict(seat), {"severity": "major"}, dict(carr, finding_sources={"a2": ["x/A.md#2"]})], _reader)
+        check("S21 共用核對:同一條沒指到的 major 只交代一次", bad_one == bad_many and bad_one[0] == "fail"
+              and sum("第 1 條" in x for x in bad_one[1]) == 1, (bad_one, bad_many))
+        # 手改帳的怪值(序號剛好多一條、超長數字、逐條等級或席位等級是清單):共用核對一律判不過或照常判、不噴例外
+        weird = (("序號剛好多一條", [seat, dict(carr, finding_sources={"a1": ["x/A.md#1"], "a2": ["x/A.md#3"]})], "fail"),
+                 ("序號是超長數字", [seat, dict(carr, finding_sources={"a1": ["x/A.md#1"], "a2": ["x/A.md#" + "9" * 5000]})], "fail"),
+                 ("逐條等級是清單", [seat, dict(carr, finding_severities={"a1": "major", "a2": ["minor"]})], "ok"),
+                 ("席位等級是清單", [dict(seat, severity=["major"]), dict(carr, severity="major")], "ok"))
+        for tag, rows_, want in weird:
+            try:
+                got = m._minor_release_check("code-x", rows_, _reader)
+            except Exception as e:   # noqa: BLE001 —— 斷言的就是不噴例外
+                got = ("EXC", [f"{type(e).__name__}: {e}"[:200]])
+            check(f"S16/S22 共用核對({tag}):判 {want}、不噴例外", got[0] == want, got)
+
+        # S22:手改帳的來源指到不在本輪的報告、序號超出、格式不對 → 判不過並點名、不噴例外
+        fo = _mr_files(rr, "s22", O=("minor",))
+        for i, (tag, src) in enumerate((("不在本輪的報告", f"{_mr_rel(root, fo['O'])}#1"), ("序號超出", f"{rA}#9"),
+                                        ("序號剛好多一條", f"{rA}#3"), ("序號是超長數字", f"{rA}#" + "9" * 5000),
+                                        ("沒有井號", rA), ("序號為 0", f"{rA}#0"), ("非數字", f"{rA}#x"))):
+            lid = f"code-mr-s22-{i}"
+            seats(lid, ("正確性-sonnet", "major", A))
+            hand(lid, ["a1", "a2"], ["a1"], ["a2"], {"a1": [f"{rA}#1"], "a2": [src]})
+            g = _mr_gate(v, root, lid, snap)
+            ln = _mr_line(g.stdout)
+            check(f"S22 閘({tag}):判不過並點名、不噴例外", g.returncode == 1 and "a2" in ln and "Traceback" not in g.stderr,
+                  g.stdout[-600:] + g.stderr[-300:])
+
+        # S17:凍結後回放判定相同(沒帶來源的 major 輪放行=判不過;帶來源判過)
+        for a in (["add", "-A"], ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "卷證"]):
+            _sp.run(["git", "-C", str(root), *a], capture_output=True)
+        for lid, want in (("code-mr-s4", 1), ("code-mr-s1", 0)):
+            fr = run(v, "loop", "replay", lid, "--freeze", "--spec", str(snap), "--repo", str(root))
+            golden = root / "governance" / "replay" / lid / "verdict.json"
+            vd = _j.loads(golden.read_text(encoding="utf-8")).get("verdict", {}) if golden.exists() else {}
+            check(f"S17 凍結({lid}):凍結成功且判定 rc={want}", fr.returncode == 0 and vd.get("rc") == want,
+                  (fr.stdout[-300:], fr.stderr[-200:], vd))
+            rp = run(v, "loop", "replay", lid, "--golden", str(golden), "--spec", str(snap), "--repo", str(root))
+            check(f"S17 回放({lid}):判定跟凍結時相同", rp.returncode == 0, rp.stdout[-400:] + rp.stderr[-200:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_disposal_code_minor_release")
+
+
+def t_canary_record_finding_source():
+    """[代碼審minor解綁 S10、S11、S19、S23 到 S26、S28] 記帳寫側:--finding-source 的格式、範圍、正規化,
+    記帳當下就跑完整核對(錯了不寫帳)、載體最後記、gov 收合法值並略過壞值。"""
+    import shutil as _sh
+    root, v, rr, snap = _mr_project("gctl-mrw-")
+    try:
+        f = _mr_files(rr, "w", A=("major", "minor"), B=("minor",), M=("minor",))
+        A, B = f["A"], f["B"]
+        rA = _mr_rel(root, A)
+        lid = "code-mrw"
+        check("前置:major 席帳寫得進", _mr_seat(v, lid, "正確性-sonnet", "major", A, snap).returncode == 0)
+
+        def bad(tag, *srcs, fset="a1,a2", folded="a1", accepted="a2", extra=(), want=None):
+            n0 = _mr_ledger_n(root)
+            r = _mr_carrier(v, lid, B, snap, "minor", fset, folded=folded, accepted=accepted, sources=srcs, extra=extra)
+            check(f"{tag}:rc2 且帳本不變" + (f"、訊息含「{want}」" if want else ""),
+                  r.returncode == 2 and _mr_ledger_n(root) == n0 and (want is None or want in r.stderr), r.stderr[-400:])
+
+        # S10:格式與範圍
+        bad("S10 id 不在 findings-set", f"a1={A}#1", f"a2={A}#2", f"zz={A}#2")
+        bad("S10 路徑不是本輪的報告", f"a1={A}#1", f"a2={f['M']}#1")
+        for no in ("+1", "01", "\uff11", "0", "9", "3", "9" * 5000):   # \uff11=全形 1;A.md 只有 2 條,3=剛好多一條
+            bad(f"S10 序號 {no!r}", f"a1={A}#1", f"a2={A}#{no}")
+        bad("S10 沒有井號", f"a1={A}#1", f"a2={A}")
+        n0 = _mr_ledger_n(root)
+        r = run(v, "canary", "record", "none", "--loop", lid, "--round", "r1", "--auditor", "載體-sonnet", "--severity", "minor",
+                "--report", str(B), "--snapshot", str(snap), "--spec", str(snap), "--reviewed", _sha256_of(snap),
+                "--finding-source", f"a1={A}#1")
+        check("S10 沒帶 --findings-set:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0 and "--findings-set" in r.stderr, r.stderr[-300:])
+        # S11:核對規則第 4、5 點
+        bad("S11 原報 major 沒人指", f"a2={A}#2", fset="a2", folded="", accepted="a2")
+        bad("S11 放行的 id 指到原報 major", f"a1={A}#1", f"a2={A}#1", f"a2={A}#2")
+        # S28:不需要逐條來源的情況;D1:同輪有 blocker 席也擋
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "prose-mrw", B, snap, "minor", "b1", accepted="b1", sources=(f"b1={B}#1",))
+        check("S28 非代碼審帶 --finding-source:rc2 且說明", r.returncode == 2 and _mr_ledger_n(root) == n0 and "代碼審" in r.stderr, r.stderr[-300:])
+        check("前置:沒有 major 席的迴圈", _mr_seat(v, "code-mrw-nomajor", "正確性-sonnet", "minor", f["M"], snap).returncode == 0)
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mrw-nomajor", B, snap, "minor", "b1", accepted="b1", sources=(f"b1={B}#1",))
+        check("S28 本輪沒有 major 席:rc2 且說明不需要", r.returncode == 2 and _mr_ledger_n(root) == n0 and "不需要逐條來源" in r.stderr, r.stderr[-300:])
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, lid, B, snap, "minor", "a1,a2", folded="a1,a2", sources=(f"a1={A}#1", f"a2={A}#2"))
+        check("S28 accepted 為空:rc2 且說明不需要", r.returncode == 2 and _mr_ledger_n(root) == n0 and "不需要逐條來源" in r.stderr, r.stderr[-300:])
+        fd = _mr_files(rr, "wd", D=("blocker",))
+        check("前置:blocker 席", _mr_seat(v, "code-mrw-blk", "正確性-sonnet", "blocker", fd["D"], snap).returncode == 0)
+        check("前置:major 席", _mr_seat(v, "code-mrw-blk", "邊界-sonnet", "major", A, snap).returncode == 0)
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mrw-blk", B, snap, "minor", "d1,a1,a2", folded="d1,a1", accepted="a2",
+                        sources=(f"d1={fd['D']}#1", f"a1={A}#1", f"a2={A}#2"))
+        check("S28/D1 同輪有 blocker 席:rc2 且說明", r.returncode == 2 and _mr_ledger_n(root) == n0 and "blocker" in r.stderr, r.stderr[-300:])
+        # S24:本筆自己算進本輪——前面都是 minor、本筆 major 且它自己的 major 沒人指
+        fs = _mr_files(rr, "w24", S=("major", "minor"))
+        check("前置:只有 minor 席", _mr_seat(v, "code-mrw-self", "正確性-sonnet", "minor", f["M"], snap).returncode == 0)
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mrw-self", fs["S"], snap, "major", "s2", accepted="s2", sources=(f"s2={fs['S']}#2",))
+        check("S24 本筆 major、自己的 major 沒人指:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-300:])
+        # S24:既有某列報告 sha 跟帳上不符
+        fm = _mr_files(rr, "w24b", A=("major", "minor"))
+        check("前置:major 席", _mr_seat(v, "code-mrw-sha", "正確性-sonnet", "major", fm["A"], snap).returncode == 0)
+        fm["A"].write_text(_mr_rep(("major", "minor", "minor")), encoding="utf-8")
+        n0 = _mr_ledger_n(root)
+        r = _mr_carrier(v, "code-mrw-sha", B, snap, "minor", "a1,a2", folded="a1", accepted="a2", sources=(f"a1={fm['A']}#1", f"a2={fm['A']}#2"))
+        check("S24 既有列報告 sha 不符:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-300:])
+        # S26:./、絕對路徑、子目錄相對路徑都存成跟 report_path 一樣的正規化路徑;S19:合法值 gov 收
+        sub = rr / "w"   # 在報告所在的子目錄執行:./A.md、A.md 都是相對這裡
+        r = _mr_carrier(v, lid, B, snap, "minor", "a1,a2,a3", folded="a1,a3", accepted="a2",
+                        sources=("a1=./A.md#1", f"a3={A}#1", "a2=A.md#2"), cwd=sub)
+        check("S26 前置:三種寫法都記得進(子目錄執行)", r.returncode == 0, r.stderr[-400:])
+        car = [x for x in _mr_rows(root, lid) if "findings_set" in x]
+        fsrc = car[-1].get("finding_sources") if car else None
+        check("S26 帳上三種寫法都存成跟 report_path 相同的正規化路徑",
+              fsrc == {"a1": [f"{rA}#1"], "a2": [f"{rA}#2"], "a3": [f"{rA}#1"]}, fsrc)
+        g = _mr_gate(v, root, lid, snap)
+        check("S26 閘:字串相等比得上、判過", g.returncode == 0, g.stdout[-600:])
+        out = run(v, "gov", "--since", "9999", "--full").stdout
+        check("S19 gov:帶合法 finding_sources 的那一列照常出現", "載體-sonnet" in out and lid in out, out[-600:])
+        # S25:載體(帶來源)之後再記同輪審查席 → rc2 指路載體最後記
+        n0 = _mr_ledger_n(root)
+        r = _mr_seat(v, lid, "邊界-sonnet", "minor", f["M"], snap)
+        check("S25 載體之後再記同輪席帳:rc2、帳本不變、指路載體最後記", r.returncode == 2 and _mr_ledger_n(root) == n0
+              and "載體最後記" in r.stderr, r.stderr[-300:])
+        r = _mr_seat(v, lid, "邊界-sonnet", "minor", f["M"], snap, rnd="r2")
+        check("S25 下一輪照常記", r.returncode == 0, r.stderr[-300:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    # S23:gov 略過 finding_sources 是字串的列,清單或沒有的照收
+    rows = ['{"ts":"2026-06-04T09:00:00","kind":"none","token":"T1","auditor":"壞值席","loop":"code-g","finding_sources":"x#1"}\n',
+            '{"ts":"2026-06-04T09:00:00","kind":"none","token":"T2","auditor":"清單席","loop":"code-g","finding_sources":{"a":["x#1"]}}\n',
+            '{"ts":"2026-06-04T09:00:00","kind":"none","token":"T3","auditor":"沒欄席","loop":"code-g"}\n',
+            '{"ts":"2026-06-04T09:00:00","kind":"none","token":"T4","auditor":"值字串席","loop":"code-g","finding_sources":{"a":"x#1"}}\n']
+    groot, gvault = _stats_fixture("gctl-mrg-", [], {".canary-log.jsonl": "".join(rows)})
+    try:
+        out = run(gvault, "gov", "--since", "9999", "--full", expect_rc=0).stdout
+        check("S23 gov:finding_sources 是字串的列被略過", "壞值席" not in out, out[-600:])
+        check("S23 gov:值是字串(不是清單)的列被略過", "值字串席" not in out, out[-600:])
+        check("S23 gov:字串清單或沒有欄位的列照收", "清單席" in out and "沒欄席" in out, out[-600:])
+    finally:
+        _sh.rmtree(groot, ignore_errors=True)
+    print("  ✓ t_canary_record_finding_source")
+
+
+def t_report_normalize_items():
+    """[代碼審minor解綁 S18、S27] report-normalize --items:序號跟 _report_severities 去掉檔級行後的順序一致(clean 也佔序號、
+    圍欄內不算),每條 major 印一行範本;檔級 major 而各條沒有 major 的報告被標出;沒正規化、repo 外、跟 --write 一起、
+    沒帶 --items 卻給多份 → rc2。"""
+    import re
+    import shutil as _sh, subprocess as _sp, tempfile as _tf
+    root, _v, rr, _snap = _mr_project("gctl-mri-")
+    outside = Path(_tf.mkdtemp(prefix="gctl-mri-out-"))
+    try:
+        p = rr / "R.md"
+        txt = ("severity: major\n## F1\nseverity: major\n" + _MR_Q + "## F2 已驗過\nseverity: clean\n"
+               "```\nseverity: blocker\n```\n## F3\nseverity: minor\n" + _MR_Q + "## F4\nseverity: major\n" + _MR_Q)
+        p.write_text(txt, encoding="utf-8")
+        c = rr / "C.md"
+        c.write_text(_mr_rep(("minor",), "major"), encoding="utf-8")
+
+        def rn(*a, cwd=root):
+            return _sp.run([sys.executable, GRAPHCTL, "report-normalize", *a], capture_output=True, text=True, cwd=str(cwd))
+        r = rn("--items", str(p), str(c))
+        rel = _mr_rel(root, p)
+        m = _load_lumos_inproc()
+        want = m._report_severities(txt)[1:]
+        got = re.findall(r"^\s*#(\d+)\s+(clean|minor|major|blocker)\b", r.stdout, re.M)
+        check("S18:rc0", r.returncode == 0, r.stdout[-400:] + r.stderr[-300:])
+        check("S18:R.md 的序號與等級跟 _report_severities 去掉檔級行後一致(clean 佔序號、圍欄不算)",
+              [lv for _n, lv in got[:len(want)]] == want and [int(n) for n, _ in got[:len(want)]] == list(range(1, len(want) + 1)),
+              (got, want))
+        tmpl = re.findall(r"--finding-source <填 id>=(\S+)", r.stdout)
+        check("S18:每條原報 major 印一行範本(路徑是正規化後的 repo 相對路徑)", tmpl[:2] == [f"{rel}#1", f"{rel}#4"], tmpl)
+        check("S18:檔級 major 而各條沒有 major 的報告被標出", "各條沒有 major" in r.stdout and _mr_rel(root, c) in r.stdout, r.stdout[-600:])
+        u = rr / "U.md"
+        u.write_text("## F1\n- severity: major\n", encoding="utf-8")
+        r = rn("--items", str(u))
+        check("S27:沒正規化 → rc2 並指路 --write", r.returncode == 2 and "--write" in r.stderr, r.stderr[-300:])
+        r = rn("--items", str(p), cwd=outside)
+        check("S27:repo 外執行 → rc2", r.returncode == 2 and "repo" in r.stderr, r.stderr[-300:])
+        r = rn("--items", "--write", str(p))
+        check("S27:跟 --write 一起給 → rc2", r.returncode == 2 and "--write" in r.stderr, r.stderr[-300:])
+        r = rn(str(p), str(c))
+        check("S27/D2:沒帶 --items 卻給多份報告 → rc2 並指路", r.returncode == 2 and "--items" in r.stderr, r.stderr[-300:])
+        r = rn(str(p))
+        check("既有用法:一份報告不帶 --items 照舊", r.returncode == 0, r.stdout[-300:] + r.stderr[-300:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+        _sh.rmtree(outside, ignore_errors=True)
+    print("  ✓ t_report_normalize_items")
+
+
 def t_gov_stats_rewrite_bucket():
     """d3(設計審收斂重定義 2026-08-25):rewrite 收尾獨立計數——只有 rewrite 的編號
     不再悄悄掉出 conv/capped 兩桶讓放行率失真。"""

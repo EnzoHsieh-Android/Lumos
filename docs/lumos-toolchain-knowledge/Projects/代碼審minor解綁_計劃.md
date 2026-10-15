@@ -40,7 +40,7 @@ RETIRE-IF: REVISIT 抽查時,放行的原報 minor 經人判定其實是 major �
   - `--finding-source` 加進「要跟 `--findings-set` 一起給」的旗標清單(單獨給就擋,不靜默忽略)。
   - `_GOV_FIELD_TYPES` 加 `finding_sources`(`(dict, type(None))`,取值寫 `(d.get(k) or {})`,同 `finding_kinds`);`_gov_event_types_ok` 另寫一個分支驗「值是字串清單」(不能照抄進驗字串值的那個清單,會把合法值判錯)。
 - **核對規則**(一支共用函式,寫側與處置閘都呼叫同一支;輸入是「本輪各列帳的報告」加載體帳列):
-  1. **適用條件**:迴圈是代碼審(`code-` 開頭)、本輪有 major 席、沒有 blocker 席、accepted 非空、載體帶非空的 `finding_sources`(空 dict 視為沒帶)。不符就不走這裡(blocker 輪與沒帶的照舊判)。寫側前置檢查(共用函式之外的唯一一道,先於核對):非代碼審迴圈帶 `--finding-source` → rc 2(散文設計審本來就能放行,不需要這條路);帶了旗標但本輪(含本筆)沒有 major 席、或 accepted 為空 → rc 2 並說明「這輪不需要逐條來源」(免得帶了沒用的欄位進帳)。
+  1. **適用條件**:迴圈是代碼審(`code-` 開頭)、本輪有 major 席、沒有 blocker 席、accepted 非空、載體帶非空的 `finding_sources`(空 dict 視為沒帶)。不符就不走這裡(blocker 輪與沒帶的照舊判)。寫側前置檢查(共用函式之外的唯一一道,先於核對):非代碼審迴圈帶 `--finding-source` → rc 2(散文設計審本來就能放行,不需要這條路);帶了旗標而共用核對回「不適用」(本輪含本筆沒有 major 席、accepted 為空、或同輪另有 blocker 席)→ 一律 rc 2 並印出不適用的原因(免得帶了沒用的欄位進帳;r4 D1:不另寫一份前置判斷,早退理由由共用函式給)。
   2. **報告形狀**:本輪任一份報告檔級是 major,但去掉檔級行後沒有任何一條是 major → 這輪不能走逐條放行(這類報告的 major 寫在散文或標題裡,工具看不到,無從核對;真帳約兩成 major 席報告長這樣)。訊息指路:不帶 `--finding-source`、全折。
   3. **來源存在**:每個來源的路徑是本輪某列帳的報告、序號沒超出那份報告的宣告數。
   4. **原報 major 都折了**:每份報告的每一條原報 major,都至少被一個 id 指到,而且指到它的每個 id 都在 folded。沒被指到、或有任一個指到它的 id 在 accepted,點名判不過。
@@ -55,7 +55,7 @@ RETIRE-IF: REVISIT 抽查時,放行的原報 minor 經人判定其實是 major �
   - 讀報告:一次讀位元組、算 sha 跟帳上 `report_sha256` 比,再解碼(`errors="replace"`);讀不到或 sha 不符判不過。`finding_sources` 型別不對(不是 dict、值不是字串清單)判不過,不噴例外。
   - 接線照既有獨立步驟:不適用時印一行「—(原因)」並回 skip;失敗名稱加進 `fails`;加進成功橫幅的步驟清單;更新 `_loop_status_disposal` 的步驟說明;接在既有獨立步驟序列最後,不插進中間改動既有編號。訊息照既有「現象、為什麼在意、接下來怎麼做」三段。
   - 這一步只讀判定輪帳列的報告檔,這些檔本來就收在凍結閉包裡,回放能重算。
-- **序號清單**(`report-normalize --items <報告…>`,唯讀):位置參數改成可收多份;`--items` 與 `--write` 互斥。對每份報告印序號、等級、該條附近的標題或引句(截短),並標出「檔級 major 但各條沒有 major」的報告;最後印一段範本:每條原報 major 一行 `--finding-source <填 id>=<路徑>#<序號>`,路徑用跟 `canary record` 同一套 repo 根算出的正規化路徑(要在 repo 裡跑,算不出 repo 根就 rc 2)。報告還沒正規化就拒印、rc 2 並指路先跑 `report-normalize --write`(否則序號會跟記帳時讀到的不同)。全部印成功 rc 0。要印「該條附近的標題」需要行號:把 `_report_severities` 的解析抽成一支回傳(行號, 等級)的共用函式,`_report_severities` 改成取它的等級欄,維持單一解析實作。載體記帳前就能對各席報告和載體自己的報告用。
+- **序號清單**(`report-normalize --items <報告…>`,唯讀):位置參數改成可收多份;`--items` 與 `--write` 互斥;沒帶 `--items` 時只收一份,給多份 rc 2 並指路(r4 D2)。對每份報告印序號、等級、該條附近的標題或引句(截短),並標出「檔級 major 但各條沒有 major」的報告;最後印一段範本:每條原報 major 一行 `--finding-source <填 id>=<路徑>#<序號>`,路徑用跟 `canary record` 同一套 repo 根算出的正規化路徑(要在 repo 裡跑,算不出 repo 根就 rc 2)。報告還沒正規化就拒印、rc 2 並指路先跑 `report-normalize --write`(否則序號會跟記帳時讀到的不同)。全部印成功 rc 0。要印「該條附近的標題」需要行號:把 `_report_severities` 的解析抽成一支回傳(行號, 等級)的共用函式,`_report_severities` 改成取它的等級欄,維持單一解析實作。載體記帳前就能對各席報告和載體自己的報告用。
 - **放行理由與去向**:放行的 minor 理由除了既有的「至少 4 字含實字」,手冊要求寫明去向——不修的理由,或延後到哪個 Issue。機械只驗既有條件,去向靠人;載體帳上的 `accept_reasons` 與 `finding_sources` 足以事後列出「哪幾輪放行了哪些原報 minor、理由是什麼」,REVISIT 從帳上列。
 - **嚴重度判準**(寫在審查席讀得到的地方:`skills/lumos-design-loop/templates.md` §3 代碼審派工詞的輸出格式那段;`skills/lumos-code-loop/SKILL.md` 第 4 步 severity 那一句後面接一句指向它;〈編排者判讀規則〉只留一句指針):
   - 測試抓不住錯:能指出一個具體、合理的改壞而測試照綠,而且被保護的是必要行為——合約或驗收條款、修補本身宣稱要擋的那個錯、或守衛類(程序清理、唯讀、權限、防誤刪)的唯一驗證 → major;有沒有 `[test:]` 綁定只是佐證,不是必要條件。只是覆蓋面可以更完整、講不出具體改壞 → minor。
@@ -72,7 +72,7 @@ RETIRE-IF: REVISIT 抽查時,放行的原報 minor 經人判定其實是 major �
   - [[Systems/loop-convergence-recording]] 記帳旗標與 `report-normalize` 的說明,補 `--finding-source` 與 `--items`;
   - `scripts/lumos` 處置閘舊訊息保留原句(走舊規則時印),新步驟的訊息另寫。
   - 不改:散文設計審的 blocker 句(各處「輪內有 blocker 席,accepted 必須為空」照舊有效)。
-- **與另一個會談的程式衝突**(以對方合併後的程式為準,實作前重新確認處置集合區塊位置):它把處置閘入口抽成 `_disposal_judge`,但那只是轉呼叫 `_loop_status_disposal` 的入口;accepted 判斷仍在 `_loop_status_disposal` 的處置集合區塊,回放也直接呼叫 `_loop_status_disposal`。本計劃改的是處置集合區塊,新步驟接在 `_loop_status_disposal` 的步驟序列裡,不碰 `_disposal_judge`。實作排在它合併之後。
+- **與另一個會談的程式衝突**(已確認:2026-10-15 照主線 9d9eb5dc 的程式實作,處置集合區塊仍在 `_loop_status_disposal`):它把處置閘入口抽成 `_disposal_judge`,但那只是轉呼叫 `_loop_status_disposal` 的入口;accepted 判斷仍在 `_loop_status_disposal` 的處置集合區塊,回放也直接呼叫 `_loop_status_disposal`。本計劃改的是處置集合區塊,新步驟接在 `_loop_status_disposal` 的步驟序列裡,不碰 `_disposal_judge`。實作排在它合併之後。
 - **回放**:`loop replay` 跟 `loop status --disposal` 用同一支處置判定,新規則上線就套到回放。新規則只在載體帶 `finding_sources` 時生效,現有帳上沒有任何載體帶這個欄位,所以所有既有凍結判定都走舊分支,判定不變。`_REPLAY_ENGINE_REV` 旁的慣例是「判定語意改版就 bump」,這次刻意不 bump:舊輸入的判定不變,bump 只會讓全部凍結判定變成過期、跳過重算,反而失去回放保護。新步驟只讀凍結閉包裡的報告檔,上線後新凍結的判定也能重算。附帶:凍結判定裡「判定輪有 major 席、accepted 非空」的只有兩份(`code-待決問題改存開頭欄位` r9、`code-審查跑滿回顧` r4,都判不過、載體都沒帶逐條欄位);`code-純文件子集` r3、`code-prose-conv-impl` r1、`code-規格閘半套` r1 也有 major 輪放行,但都不是判定輪。
 
 ## 驗收條款
@@ -102,10 +102,10 @@ RETIRE-IF: REVISIT 抽查時,放行的原報 minor 經人判定其實是 major �
 - [S22] 當帳本裡載體的 `finding_sources` 指到本輪帳上沒有的報告、序號超出宣告數、或來源字串格式不對(沒有 `#`、序號為 0、非數字)時(手改帳),處置閘 應 判不過並點名,不噴例外 [test:t_disposal_code_minor_release]
 - [S23] 當治理帳裡某列的 `finding_sources` 值是字串而不是字串清單時,`lumos gov` 應 略過那一列(那一列不出現);值是字串清單或欄位不存在時 應 照常收 [test:t_canary_record_finding_source]
 - [S24] 當載體帶 `--finding-source` 記帳時,寫側 應 把本筆自己算進本輪帳列:前面各席都是 minor、本筆是 major 且本筆報告的 major 沒被指到時 應 以 rc 2 擋下;既有某列報告 sha 跟帳上不符時 應 以 rc 2 擋下 [test:t_canary_record_finding_source]
-- [S28] 當非代碼審迴圈的載體帶 `--finding-source`、或代碼審載體帶了但本輪(含本筆)沒有 major 席或 accepted 為空時,`canary record` 應 以 rc 2 擋下並說明 [test:t_canary_record_finding_source]
+- [S28] 當非代碼審迴圈的載體帶 `--finding-source`、或代碼審載體帶了但本輪(含本筆)沒有 major 席、accepted 為空、或同輪另有 blocker 席時,`canary record` 應 以 rc 2 擋下並說明 [test:t_canary_record_finding_source]
 - [S25] 當本輪已有帶 `finding_sources` 的載體、再記同輪審查席帳時,`canary record` 應 以 rc 2 擋下並指路「載體最後記」 [test:t_canary_record_finding_source]
 - [S26] 當用 `./`、絕對路徑或子目錄相對路徑寫 `--finding-source` 時,帳上 應 存成跟 `report_path` 相同的正規化路徑,處置閘用字串相等比得上 [test:t_canary_record_finding_source]
-- [S27] 當 `report-normalize --items` 遇到沒正規化的報告、或在 repo 外執行時,它 應 以 rc 2 拒印並指路;跟 `--write` 一起給 應 以 rc 2 擋下 [test:t_report_normalize_items]
+- [S27] 當 `report-normalize --items` 遇到沒正規化的報告、或在 repo 外執行時,它 應 以 rc 2 拒印並指路;跟 `--write` 一起給 應 以 rc 2 擋下;沒帶 `--items` 卻給多份報告時 應 以 rc 2 擋下並指路 `--items` [test:t_report_normalize_items]
 
 測試造帳提醒(給實作者):同輪至少兩列帳(一列 major 席、一列載體),兩份報告內容不同、都已正規化;沿用 `t_panel_probe_retired` 的造帳方式(迴圈名 `code-` 開頭、帶 `--snapshot`/`--spec`/`--reviewed`)。寫側會擋的情境(S2、S3、S6、S7、S9、S15、S20 的閘端那一半,S14、S16 的 sha 不符那一支,S22)用手寫帳列直接附進帳本造;寫側那一半走 `canary record` 驗 rc 2 且帳本行數不變。S17 的「判過後凍結再回放」要在臨時 git repo 裡提交報告檔才能凍結。回退時另加一條測試釘「寫側對 `--finding-source` 回 rc 2 並指路」(見〈回退〉)。回放條款用造好的假帳,不用真帳本(真帳會長大)。
 
@@ -127,8 +127,7 @@ RETIRE-IF: REVISIT 抽查時,放行的原報 minor 經人判定其實是 major �
 - 負擔:放行任何 minor 都要替同輪每條原報 major 寫一個來源(真帳的 major 輪 2 到 18 條),靠 `--items` 印範本減輕;負擔仍太重、大家照舊全折,RETIRE-IF 的使用量條件會抓到。
 - 量測:這個改動預期只讓修補縮小、折入條數變少;原報 major 照舊必折,第三輪仍有 major 的比率不一定會降。帳本裡「這輪 minor 多、下一輪更容易有 major」看不出差別(r1 判準證據席重算:minor 較多的 11 輪下一輪有 major 10 輪,major 較多的 49 輪是 43 輪)。
 
-REVISIT:[when-symbol:scripts/lumos::_disposal_judge][by:2026-11-14] 另一個會談的處置閘重構合併進主線後,照合併後的程式重新確認處置集合區塊位置再開工實作本計劃
-REVISIT:2026-11-14 若屆時上線未滿 28 天(實作排在另一會談合併之後,上線日未定),把這個日期改成上線日加 28 天;到期時從載體帳列出上線後 major 輪中帶 `finding_sources` 的輪數與比例(不到 3 輪即觸發 RETIRE-IF)、放行原報 minor 的輪與理由,抽查是否其實該是 major、去向有沒有寫;同時比上線前後「有 major 的輪下一輪仍有 major 的比率」與「跑滿三輪的比率」,交使用者裁留或撤
+REVISIT:2026-11-12 (上線日 2026-10-15 加 28 天)從載體帳列出上線後 major 輪中帶 `finding_sources` 的輪數與比例(不到 3 輪即觸發 RETIRE-IF)、放行原報 minor 的輪與理由,抽查是否其實該是 major、去向有沒有寫;同時比上線前後「有 major 的輪下一輪仍有 major 的比率」與「跑滿三輪的比率」,交使用者裁留或撤
 
 ## 審計修正紀錄
 

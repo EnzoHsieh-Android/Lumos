@@ -3,12 +3,12 @@ type: project
 summary: |-
   FLAG:DECISION
   KEY:★Enzo 裁甲(2026-08-25,r1 攤牌後;decisions d1)★——多席 code-loop(含 high)收斂閘統一走處置閘(d5 型記帳),panel 轉純歷史回放;probe 抽查輪隨宿主退場(義務拔除、判定碼保留降觀測);防浮動條款具名處置:凍結句留(回放語意)、「20 筆抽查帳」通道正式作廢。程序=先裁後動(r1 五席 19 審項/blocking 15 攤牌在前)
-  KEY:★d2(Enzo 第二裁)★:code-* 迴圈處置閘輪級加嚴——輪內任一席 severity ≥ major 則 accepted 必空(major 一律折),與 panel「max≤minor」同嚴度;散文維持 d5 現制。d4「防線不降級」由此成立
+  KEY:★d2(Enzo 第二裁,2026-10-15 起由 d4 取代字面範圍)★:code-* 迴圈原報 major 一律折;原報 minor 經逐條指回原報(--finding-source)可附理由放行,沒帶照舊 accepted 必空;blocker 輪照舊全折;散文維持 d5 現制。d4「防線不降級」由原報 major 必折成立([[Projects/代碼審minor解綁_計劃]])
   KEY:r1 打穿 v1 前提——panel 非「僅舊帳回放」:多席現役唯一通閘(08-24 互斥案實據)且無 quote-check(收貨比處置閘薄),probe 為其唯一 PASS 後複核;教義互斥(08-08 被翻紀錄 vs SKILL 步驟7);本版=v2,範圍擴為路由統一+退場
   DEP:[[Issues/probe輪三參數只在散文]]｜[[Systems/convergence-evidence-gate]]
 status: done
 created: 2026-08-25
-updated: 2026-08-25
+updated: 2026-10-15
 tags:
   - type/project
   - status/done
@@ -27,12 +27,20 @@ decisions:
     context: 外家 v2 否決席指出 panel 要求 max≤minor 而處置閘允許 major 附理由放行,路由統一未處理此差=實質放寬;攤牌後 Enzo 裁「code 迴圈加嚴,散文維持」
     why_chosen: code major=照字面會做出錯行為的實碼缺陷,必修不可談;散文 major 偶有正當接受場景且 d5 已裁,不回翻
     decided: 2026-08-25
-    valid: true
+    valid: false
+    superseded_by: d4
+    ended: 2026-10-15
   - content: Enzo 裁甲(2026-08-25,r1 攤牌後;本條=d1 佐證更正版,裁定本文逐字同 d1):多席 code-loop(含 high)收斂閘統一走處置閘(d5 型記帳),panel 閘轉純歷史回放;probe 抽查輪隨宿主退場(義務拔除、判定碼保留降觀測)。防浮動條款具名處置:凍結句保留(回放語意),「攢 20 筆抽查帳」通道正式作廢。程序=先裁後動(v2 r1 治理席以 git log 親驗:裁前零落地動作)
     id: d3
     context: 更正 d1 的佐證句:今日三個多席 code-loop 實為各兩輪(r1 折入+r2 delta)於上限內以處置閘收斂——d1 曾誤記「單輪收斂」,治理帳 governance-log 原文自證為兩輪,v2 r1 機械席逐帳抓回(「必逐檔數」又一犯);裁定實質不變
     why_chosen: 同 d1;佐證的正確版本:處置閘對多席 code-loop 三案皆在 cap 內收斂且引句紀律有效,非「單輪」
     decided: 2026-08-25
+    valid: true
+  - content: 使用者裁(2026-10-14,代碼審minor解綁):取代 d2 的字面範圍——代碼審原報 major 一律折;原報 minor 經逐條指回席報告原條(--finding-source,工具讀原報等級)後可附理由放行;blocker 輪照舊全折;散文設計審不變
+    id: d4
+    context: d2 把同輪 minor 也一起綁死,minor 修補進入當輪、修補膨脹又帶出新的驗證義務;d2 要補的是「major 可附理由放行」這個洞,新規則原報 major 仍一律只能折,洞沒重開
+    why_chosen: 放行的每條指回原報、工具讀原報等級,擋得住把 major 標成 minor 與指錯條;單源見 [[Projects/代碼審minor解綁_計劃]]
+    decided: 2026-10-14
     valid: true
 ---
 
@@ -51,7 +59,7 @@ PRIOR-ART:借用=①d5(散文審回歸處置閘,2026-08-25)之延伸——同一
 - **c1 路由統一(=decisions d3 前半)**:多席 code-loop(含 high)一律 d5 型記帳(各席一筆留痕無 set+一輪一筆彙總 carrier)問 `--disposal`;panel 閘(--gate --panel)轉**純歷史回放**(判定碼、K=2、兩條合取原樣保留供舊帳重放)。高風險 high 分級的「多席不同鏡頭」編制不變——變的只是記帳型態與問閘指令。
 - **c2 probe 退場(=decisions d3 後半)**:義務拔除(skill 不再要求 PASS 後加開 probe-* 輪);判定碼保留降觀測——**「應抽」分支整句改寫**(非追加,r1 三席同抓自我矛盾風險):「本輪落在應抽樣(觀測;2026-08-25 起 panel 僅回放、不再加開 probe 輪,詳 Issues/probe輪三參數只在散文)」;「免抽」分支同步加(觀測)註記。歷史回放時 probe-* 輪 major 使 K=2 窗 FAIL 的機械語意不動(不依賴三參數,r1 s2 席行為級驗證)。
 - **c3 防浮動條款(具名處置,見 decisions d3 原文)**:「判準凍結」句保留(語意=回放判準不漂);「唯一翻案通道=攢滿 20 筆抽查帳」正式作廢——由 Enzo 本裁定具名處置,非本案自行剪線;因果誠實版:feeder 實質停擺始於多席實務轉處置閘,本裁定將其正式化(r1 arch 席時點修正)。
-- **c4 防線不降級(v3,以 decisions d2 為地基)**:嚴重度門檻——處置閘原制允許 major 附理由放行(panel 要求存活 max≤minor),路由統一若不處理=實質放寬(ext 席否決點)→**d2 已裁:code-* 迴圈輪內任一席 ≥ major 則 accepted 必空**,與 panel 同嚴度,「不降級」由裁定兌現而非論證話術。收貨密度——處置閘逐輪全查(quote-check+留痕 sha 重驗+refcheck+intake 機械重現),panel 連 quote-check 都沒有;不宣稱兩者為等價 oracle。**誠實承認一項真實變化(r1 s1 席 D)**:panel 的 K=2「連續兩輪乾淨」完整性要求對多席一併消失,處置閘一輪清空即過——部分補償=d2 使 major 必折+r2 delta 回歸實務慣行(今日三案皆自發跑了第二輪);回頭條件:下一個真實 high 迴圈若單輪收斂、事後(CI/生產/後續審)抓到該輪漏網 ≥major→開 Issue 重估「多席最低輪數」。
+- **c4 防線不降級(v3,以 decisions d2 為地基)**:嚴重度門檻——處置閘原制允許 major 附理由放行(panel 要求存活 max≤minor),路由統一若不處理=實質放寬(ext 席否決點)→**d2 已裁:code-* 迴圈輪內任一席 ≥ major 則 accepted 必空**,與 panel 同嚴度,「不降級」由裁定兌現而非論證話術(2026-10-15 起 d2 字面範圍由決策 d4 取代:原報 major 照舊必折,原報 minor 逐條指回原報後可放行,見 [[Projects/代碼審minor解綁_計劃]])。收貨密度——處置閘逐輪全查(quote-check+留痕 sha 重驗+refcheck+intake 機械重現),panel 連 quote-check 都沒有;不宣稱兩者為等價 oracle。**誠實承認一項真實變化(r1 s1 席 D)**:panel 的 K=2「連續兩輪乾淨」完整性要求對多席一併消失,處置閘一輪清空即過——部分補償=d2 使 major 必折+r2 delta 回歸實務慣行(今日三案皆自發跑了第二輪);回頭條件:下一個真實 high 迴圈若單輪收斂、事後(CI/生產/後續審)抓到該輪漏網 ≥major→開 Issue 重估「多席最低輪數」。
 
 ## 落地件
 
