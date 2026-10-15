@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-10-14
+updated: 2026-10-15
 self_audit: gpt-5.6-sol/2026-10-03
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
@@ -54,7 +54,9 @@ summary: |-
   KEY:三道防污染(不可違反)——真代碼永不含(fix 錨真 diff file:line、canary hunk 不在真 diff)｜低耦合植入(canary 座標在真改動集外=pillar-1 機械前提)｜溯源排除(含間接聯想幻影,未顯式引用亦排;偏多排)
   KEY:PITFALL_CLASSES 四類名 ≡ difficulty.RISK_CLASSES、_PITFALL_BLACKLIST ≡ difficulty._BLACKLIST——漂移守衛落 test_autonomous_loop.py(toolchain-only、非 vendored);詞表/pattern 表自帶 scripts/lumos(difficulty.py 不 vendored)
   KEY:diff class 用代碼形態類軸(併發/效能/資源)非四業務類;pattern 去重疊(SELECT→效能 N+1、INSERT/UPDATE/DELETE→併發交易);過濾繼承 Check H 全套(skip .md/.txt/.rst+測試檔+註解行)
-  KEY:★[2026-09-11 d6 取代 d5]高風險代碼審一律必派一席「資安」★(Enzo 裁;所有專案,工具鏈自己也算;只在 tier high,不改風險掃描觸發)——處置閘加「資安席」一步(第六步,第五步是條款綁定):整個迴圈要有資安席帳列、報告 sha 對、看過的檔涵蓋最後一版;編制表新值 required-gated;生效日 2026-09-12(2026-09-11 落地,驗證 [[Verification/2026-09-11_代碼審資安席落地]];代碼審待跑) [test:t_disposal_security_seat_required] [test:t_roster_code_high_has_security_seat];單源 [[Projects/代碼審資安席_計劃]]。舊 d5(2026-08-27 刻意排除,理由單人私有 repo)前提已不成立:repo 公開、一行安裝、09-06 hook 信任邊界事件
+  KEY:★[2026-09-11 d6 取代 d5]高風險代碼審一律必派一席「資安」★(Enzo 裁;所有專案,工具鏈自己也算;只在 tier high,不改風險掃描觸發)——處置閘加「資安席」一步(第六步,第五步是條款綁定):整個迴圈要有資安席帳列、報告 sha 對、看過的檔涵蓋最後一版;編制表新值 required-gated;生效日 2026-09-12(2026-09-11 落地,驗證 [[Verification/2026-09-11_代碼審資安席落地]];代碼審待跑) [test:t_disposal_security_seat_required] [test:t_roster_code_high_has_security_seat];單源 [[Projects/代碼審資安席_計劃]]。舊 d5(2026-08-27 刻意排除,理由單人私有 repo)前提已不成立:repo 公開、一行安裝、09-06 hook 信任邊界事件(工具鏈本 repo 的派工範圍見 Systems/pitfalls-code-loop d8 與 RULE)
+  RULE:工具鏈本 repo(根有 skills/lumos-project-notes/SKILL.md;判別只看根目錄那一支檔、不往上找:沒有 .git 的副本、子目錄、從 repo 外跑都判成消費專案,方向是多審;任何 repo 放一支空檔就會被判成工具鏈,屬刻意手法、範圍外)的代碼審,資安席只看提示注入、讀寫與執行越界(含 hook、安裝腳本、CI 執行不可信的檔、安裝腳本下載來源,新寫進程式範本公開文件的密鑰與信箱;卷證的本機路徑不報)、非刻意一步就能繞過三類;刻意多步偽造(git 內部物件或 ref、手填帳本欄位、換編號或改檔名重來、為繞過刻意設環境變數)是系統天花板,資安席標 minor,編排者記進 Issues/工具鏈範圍外手法紀錄、只在散文才拿掉不存在的保護說法,不加機制;消費專案照舊 [依據:人] [since:2026-10-14] [retire:人裁] [until:2027-04-14] [confirmed:2026-10-14]
+  RULE:工具鏈本 repo 的代碼審,原併發與資源席改成資源鏡頭,只看孤兒行程、逾時誤擋、記憶體與大輸入耗時,§3 第 1 點只問重跑與對外重試,不審多人或多會談同時寫入的競態;消費專案照舊 [依據:人] [since:2026-10-14] [retire:人裁] [until:2027-04-14] [confirmed:2026-10-14]
   KEY:誠實天花板——pattern 提示器非偵測器(單行掃描,跨行語境小行窗啟發為限)｜canary 校準+溯源排除靠自律｜--check 只驗節存在不驗內容｜mutation 冒煙抽樣非覆蓋｜code-loop 少一道 G1(--spec 可選、G1 skip)｜事故語料進圖譜留 v2
   KEY:[2026-09-18 Enzo 裁]改動風險分級單一算法 _pitfall_tier(★維持 vault-free★,代碼審 r1 兩席):殘留索引升 high 最先判(2026-10-14 [[Projects/審查收斂規則_計劃]]:改到索引列的 about_code 或綁定測試所在的檔(都整檔)、推送範圍裡新增殘留(頂端有起點沒有)、拿掉殘留(起點有頂端沒有)或縮小同一筆殘留守的檔(殘留身分=節點、合約指紋、殘留指標)、頂端索引讀不出而起點有殘留或這次動過索引、起點索引 git 讀不出、檔名清單失敗而索引有殘留、起點版本治理帳的 residual-ask 列頂端少了,理由各寫一句;這裡只列主要幾種,完整觸發另含合約改字、改到存著殘留決策的筆記、新增判 untestable 的問答、治理帳讀不出,見下面講分級理由與 notes 欄的兩行);命中風險型樣/新告警 → high;改動裡沒有「需要有家的程式檔」(_is_code_file:副檔名清單或首行 #!)→ light;其餘 standard,審查帳有全靠人驗留痕時多印一句「跑 spec-gate --push-check 看是不是 light」;「計劃風險低且全靠人驗且小改動閘過 → light」由 spec-gate --push-check 印(只有它有圖譜、本來就在 pre-push 跑,不重跑測試)。JSON 多 tier_reason [test:t_pitfalls_tier_light_sources]
   KEY:[2026-09-17 小改動閘 r2]簿記目錄單一源 _BOOKKEEPING_DIR 擴成 _BOOKKEEPING_DIRS(governance/code-loop、review-reports、replay):三個消費者(pitfalls --diff 掃描排除、code-loop 留痕失效豁免、小改動閘的擴散量)共用;效果=卷證/凍結判定的提交不再讓 pass 留痕失效 [test:t_prepush_small_change_gate]
@@ -120,6 +122,12 @@ decisions:
     why_chosen: 速度那條用機制回應而不是無視:只跑改動檔、只解那幾支檔的兩份快照、整條閘有時間預算、單檔有行數與位元組雙門檻,數字是實測訂的(843 行 1.8 秒、26718 行 105 秒)。品質面那條是前提變了——這道閘只擋「這次新增的」,舊債一概不管,所以它擋的不是品質分數,是你這次帶進來的新問題
     trade_offs: "檢查工具太慢會直接擋人(預算用完、沒跑到的命令判擋不判放行);環境不可用(工具沒裝、逾時、拉不到規則)走自動放行,所以它防疏忽不防惡意——把工具移掉或弄慢就能繞過,配套是健檢會數自動放行次數。零真專案實證,這個 repo 自己也還沒宣告檢查工具"
     decided: 2026-09-13
+    valid: true
+  - content: 工具鏈本 repo 代碼審的資安與併發鏡頭收窄:資安席只看提示注入、讀寫與執行越界、非刻意一步就能繞過三類,原併發與資源席改成資源鏡頭;必派與處置閘照舊(不取代 d6),消費專案照舊
+    id: d8
+    context: 使用者 2026-10-14 原話:「工具開發的併發鏡頭和資安鏡頭到底該不該存在,這工具是讓人在本機使用,並不是雲端系統,也需要這兩個鏡頭,耗費過度設計在這些防範上嗎」;裁定:「先照新範圍收尾手上五項,再開一份計劃把規則正式改掉。但消費專案用舊規則」;更早 2026-10-13:「先不用過度設計,只要思考中英文、一個人使用,全權讓AI操作的時候也沒什麼併發問題」。單源 [[Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃]]
+    why_chosen: 工具是一個人在本機、讓 AI 依序操作;刻意多步偽造要先能改帳本與程式,改得動的人也改得動閘,追著加機制沒有盡頭;多會談同時寫入不是這個工具的使用情境。不選(alternatives):①照舊(每輪被偽造類發現拖著加輪)②整個拿掉資安席(使用者要留)③所有專案一起收窄(使用者指定消費專案照舊)④只留使用者講的三類字面、不含執行邊界(d6 的起因是 hook 執行陌生 repo 的程式,不能拿掉)。代價(trade_offs):工具鏈本 repo 不再有人找刻意偽造與多會談競態;登入與權限、加密與傳輸(安裝腳本下載來源那部分併進讀寫與執行越界)、行動端三類照使用者裁定的範圍不看;範圍靠編排者照 loop next 那一行選逐類清單,資安席一步看不出貼的是哪一份
+    decided: 2026-10-14
     valid: true
 related:
   - "[[Projects/impact-diff橋接_計劃]]"
@@ -239,3 +247,7 @@ WHY:keep-going 下 pitfalls 失敗時,表態(要 pitfalls 的資料)與代碼審
 WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitfalls 失敗時照跑新增告警閘)集中在 `_CodeloopKg`;跑 pitfalls 取分級那一步拆成 `_codeloop_pitfalls_tier`。判定函式的複雜度 40→32(改動前 35) [出處:第一輪代碼審通才席:新增告警閘把這支的 C901 當成新告警擋下] [因:放行站點不經收尾的守衛照舊成立(每個回傳是 `_fin(...)`,或 `hit` 指派的變數、而且緊接在判它非空的 `if <那個變數>:` 底下——不帶旗標時 `hit` 回的就是 `fin(v)`,帶旗標時回 None,無條件 `return` 那個變數會讓整個判定函式回 None、下游 `.get` 崩);函式定義那一行多了參數,指紋已經變了,所以另用 lint-waive 附理由留痕] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
 
 輸出契約:文字模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`(沒有擋下時是空的),是推送前掛鉤唯一的機讀通道;`--json` 不印這一行,改多一個 `blocks` 清單(每筆 `reason_kind`、`reason`),`blocked`、`reason`(第一筆)照舊。合約測試狀態那幾句照「合約測試有沒有記成擋下」選:沒記成擋下(低風險只提醒)就照印「只提醒不擋」。治理帳照舊一次判定一筆 `code-loop` `blocked`(統計的筆數意義不變),`extra` 多一個 `blocks` 種類清單。掛鉤那一頭怎麼讀見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉。
+
+## 工具鏈本 repo 的代碼審鏡頭範圍(2026-10-15,[[Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃]],決策 d8)
+
+`lumos loop next` 對 `code-` 開頭的編號,在帳本所在 repo(或 `--repo`)根有 skills/lumos-project-notes/SKILL.md 時,緊接在「應派」席位之後多印一行固定的「鏡頭範圍: 帳本所在 repo 是工具鏈本 repo——被審分支也在這個 repo 時,派資安席照 templates.md §7.8〈工具鏈三類〉、派併發與資源鏡頭改資源、§3 第 1 點併發兩問不問;審別的 repo 的分支時看那個 repo 的根自己判(消費專案照舊)」(條件語氣是代碼審 r1 改的:那一行看的是帳本所在 repo,命令語氣會讓審消費專案分支的人照貼、少審);`--json` 常駐一欄 `lens_scope`(`toolchain` 或 `default`,讀 JSON 的人不必分辨沒欄位與預設)。設計審編號、沒連字號的舊 `code…` 編號、算 root 或判別丟例外時都不印、取 `default`;編號只看開頭是不是 `code-`,所以 `code-`、`code- x`、`code-　x` 也當代碼審;判別只看那一個根目錄上的那支檔是不是一般檔、不往上找,SKILL.md 是目錄、壞符號連結、`--repo` 不存在都取 `default`;退出碼與其他輸出不變。跨 repo 派工時這一行看的是帳本所在 repo,被審 repo 由編排者自己看(範本的填空寫明,範本的家見 [[Systems/每輪修補差異派工]]);不要為了這一行帶 `--repo`,它也是在審材料等的解析根。測試 t_loop_next_lens_scope_toolchain_vs_consumer、t_loop_next_lens_scope_design_untouched、t_loop_next_lens_scope_fail_open、t_loop_next_lens_scope_loose_code_ids、t_loop_next_lens_scope_marker_odd_kinds。
