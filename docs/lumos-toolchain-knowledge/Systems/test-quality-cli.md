@@ -3,7 +3,7 @@ type: system
 status: doing
 created: 2026-10-08
 updated: 2026-10-08
-responsibility: 測試品質CLI的明示本機命令收證與JUnit一致性核對；不裁決業務答案或驗證報告真實性
+responsibility: 測試品質CLI的明示本機命令收證與JUnit一致性核對,另含 lumos-project-notes 的測試品質接入標準文件(各棧撰寫補充);不裁決業務答案或驗證報告真實性
 self_audit: GPT-6-Codex-clean-agent/2026-10-08
 aliases: []
 about_code:
@@ -66,3 +66,7 @@ WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整�
 PITFALL: test-quality 三支 bundle 檔加進隨工具安裝的清單、又新增 test-quality 子指令後，四道同步守衛在分支上一直是紅的，直到推送前跑全套才發現：文件寫的頂層指令數、每個子指令 --help 的「什麼時候用」、指令總目錄字數上限、提交前與提交後掛鉤的豁免清單 [出處:2026-10-09 測試品質分支推送前全套] [根因:分支開發期間只跑相關子集，這幾道守衛不在子集裡] [防回歸:t_precommit_whitelist_drift_guard、t_every_subcommand_has_when、t_docs_command_count、t_command_index_complete]。新增子指令或 vendored 檔時，連同這四處一起改；豁免在來源 repo 本身照樣不生效。
 
 PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器排第一、頂層 import 共用 runner，被依賴者還沒從已驗 bytes 登記，標準 import 就從磁碟另載一份並吃同時間戳同大小的舊 bytecode；指紋檢查回報全部合格，scan --semgrep 卻跑舊判讀 [出處:governance/review-reports/測試品質部署配套校驗/r1-通才-sonnet.md、r1-邊界-sonnet.md、r1-接手-sonnet.md 三席獨立重現] [根因:載入順序沒照依賴、載入後沒核對引用來源] [防回歸:test_semgrep_adapter_uses_verified_runner_not_stale_bytecode、test_fifo_sidecar_does_not_hang_other_commands、test_sidecar_runtime_error_only_blocks_test_quality]。改成依賴順序 `_TEST_QUALITY_LOAD_ORDER` 載入，載入後以物件身分核對每支 sidecar 引用的配套模組與其函式、類別都是已驗那份（不靠名字比對，包過一層的函式、工廠產物、取別名的實例才不會誤報）；數字與字串常數沒有來源資訊，核對看不到，靠依賴順序那道擋。順序改錯時守衛單獨回部署不完整（test_bundle_reference_guard_rejects_wrong_load_order）。用 `_regular_own_fd` 非阻塞開檔後判一般檔，任何載入例外只讓 test-quality 回不完整。
+
+## 測試品質接入標準的前端節(2026-10-15,[[Projects/前端知識與風險詞_計劃]] 做法 8)
+
+- lumos-project-notes 的 `commands/test-quality-standard.md` 加〈網頁前端(Vitest／Jest + Testing Library)的撰寫補充〉:假計時器下 user-event 要設 `advanceTimers`、fetch 替身要能控制先後、同輪連點用同步的 `fireEvent.click` 兩次;`03-寫回圖譜.md`〈實作測試品質〉加一句指過去。綁的測試 `t_test_quality_standard_frontend_section`。

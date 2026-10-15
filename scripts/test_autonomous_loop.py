@@ -449,7 +449,9 @@ class TestPitfallsDrift(unittest.TestCase):
         import re as _re
         m = _re.search(r"^PITFALL_CLASSES = \{.*?^\}", src, _re.S | _re.M)
         self.assertIsNotNone(m, "PITFALL_CLASSES 未找到")
-        exec("import re\n" + m.group(0), ns)
+        # 詞表引用的 _PITFALL_*_WHEN 字串常數(例:金流參數名例外)先一起載入
+        consts = _re.findall(r"^_PITFALL_\w+_WHEN = \(.*?\)\n(?=\S)", src, _re.S | _re.M)
+        exec("import re\n" + "".join(consts) + m.group(0), ns)
         self.assertEqual(set(ns["PITFALL_CLASSES"].keys()), set(difficulty.RISK_CLASSES.keys()),
                          "pitfalls 類名集合 != difficulty.RISK_CLASSES(漂移)")
 

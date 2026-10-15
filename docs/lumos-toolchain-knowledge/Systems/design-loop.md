@@ -259,3 +259,9 @@ WHY:計劃在別的工作樹時,手冊第 1 步的工作副本與指紋改用 sp
 ## 工具鏈本 repo 的鏡頭範圍只改代碼審(2026-10-15)
 
 WHY:工具鏈本 repo 的代碼審把資安席收窄到三類、原併發與資源席改成資源鏡頭,設計審不跟著收窄——§1 審計員第 5 點的併發題與 §7 設計審 panel 的資源併發席照舊;範本 §7、§7.7 是兩種審查共用的段落,這次補進去的句子都寫明只限代碼審 [出處:[[Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃]] d1;規則在 [[Systems/pitfalls-code-loop]] d8] [因:使用者原話只講代碼審;先讓代碼審新範圍跑一季,有實際數字再議設計審] [test:t_templates_toolchain_resource_lens]
+
+## 前端補充與網頁前端資安類(2026-10-15,[[Projects/前端知識與風險詞_計劃]] 做法 4–5)
+
+- templates.md §7.7〈前端補充〉:被審計劃要改前端檔時(看 lands_in 與要改的檔,不看正文提不提前端),席位照 A 表原立場再加問前端一句,語意規格、每輪改述;§1 審查要求第 5 點多一個指到它的填空。綁的測試 `t_templates_frontend_lens_supplement`。
+- templates.md §7.8〈網頁前端類〉(XSS、CSRF、開放式轉址、CSP、storage 權杖、postMessage、第三方腳本、開發代理):被審改動含網頁前端檔時接在〈消費專案六類〉後面貼;逐類清單填空行與填法說明段都寫了這一句,圍欄另有 infra- 題的選配材料行。〈消費專案六類〉逐字不動。綁的測試 `t_templates_security_web_frontend_class`、`t_templates_security_fill_line_mentions_web_class`。
+- templates.md 的家是 [[Systems/每輪修補差異派工]],但那篇的負責範圍是修補差異材料,這兩段的說明寫在設計審流程這篇。

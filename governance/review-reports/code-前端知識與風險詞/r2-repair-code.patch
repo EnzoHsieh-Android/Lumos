@@ -1,0 +1,378 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index b3273c95dce3b64b088dedb63f72614fd3b89ef1..fd19017033b272a69e59c07f05fa0e988eaf0c23 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -29898,30 +29898,38 @@ def _refcheck_scan(text, repo_root):
+             claim["dir"] = True
+         claims.append(claim)
+ 
+     n_missing = sum(1 for c in claims if c["status"] == "missing")
+     n_oor = sum(1 for c in claims if c["status"] == "line_out_of_range")
+     n_ok = sum(1 for c in claims if c["status"] == "ok")
+     return claims, n_missing, n_oor, n_ok
+ 
+ 
+ # 「送出」與「payment」的例外(2026-10-15 [[Projects/前端知識與風險詞_計劃]] d1,門規則版本 13;只會比裸字少命中):
+-# 送出——同一子句(到下一個 , . ; ! ? 。 、 或行尾;掃描前已 NFKC,全形標點折成半形)後面寫了去處「給」「至」「往」就照算;沒寫去處時,
+-# 前面是請求/表單、後面接請求/表單、後面接「第二個請求」「第二次請求」(數字可寫兩、2)三種前端語境不算;「到」只認緊貼(收到、拿到會誤中)。
+-# payment——只有全大寫識別字以調整參數結尾(ORDER_PAYMENT_TIMEOUT、PAYMENT_RETRY_COUNT)時不算;PAYMENT_API_KEY、ENABLE_PAYMENT、小寫照算。
+-_PITFALL_SEND_RE = (r"送出(?=[^,.;!?。、\n]*[給至往])|(?<=請求|表單)送出(?=到)|送出(?=(?:請求|表單)到)"
+-                    r"|(?<!請求|表單)送出(?!請求|表單|第[二兩2][個次]請求)")
+-_PITFALL_PAYMENT_RE = (r"payment(?!(?<=(?-i:PAYMENT))(?-i:(?:_[A-Z0-9]+)*_(?:TIMEOUT|TTL|SECONDS|SECS|SEC|MS|MINUTES|MINS|DELAY|INTERVAL"
+-                       r"|LIMIT|COUNT|RETRIES|WINDOW))(?![A-Za-z0-9_]))")
++# 送出——前端語境(前面是請求/表單、後面接請求/表單/「第二個請求」「第二次請求」,數字可寫兩、2)才可能不算,而且同一子句(半形或全形的
++# , . ; : ! ? 與 。 、 或行尾為界;門先 NFKC、pitfalls --check 不 NFKC,兩種標點都列才一致)前後 80 字內都沒有去處——去處字「給 至 往 向 對 予」、
++# 去處詞「外部 第三方 客戶(不含客戶端) 廠商 銀行 物流 partner external」,以及後面的「到」(收到、拿到、做到…不算);有去處就照算。
++# 前後只看 80 字:一行十萬字、兩萬個送出也是線性(代碼審 r1 資1:不設上限時 8 秒)。
++# payment——只有全大寫識別字裡 PAYMENT 緊接時間或重試參數尾碼(_TIMEOUT _TTL _DELAY _INTERVAL,可再接 _MS 這類單位;單位本身;_RETRIES
++# _RETRY_COUNT _MAX_RETRIES)時不算:ORDER_PAYMENT_TIMEOUT、PAYMENT_RETRY_COUNT。額度、次數、窗口(PAYMENT_AMOUNT_LIMIT、PAYMENT_COUNT、
++# PAYMENT_WINDOW)、中間夾別的段(PAYMENT_GATEWAY_TIMEOUT)、PAYMENT_API_KEY、ENABLE_PAYMENT、小寫照算(代碼審 r1 安2、邊3、通3、正6)。
++# 這兩個是字串(PITFALL_CLASSES 統一編譯),所以照 _EXTCODE_WHEN 的慣例叫 _WHEN、不叫 _RE(代碼審 r1 架1)。
++_PITFALL_SEND_CLAUSE = r"[^,.;:!?。、，；：！？\n]{0,80}?"
++_PITFALL_SEND_DEST = r"(?:[給至往向對予]|外部|第三方|客戶(?!端)|廠商|銀行|物流|partner|external)"
++_PITFALL_SEND_WHEN = (_PITFALL_SEND_DEST + _PITFALL_SEND_CLAUSE + r"送出"
++                      r"|送出(?=" + _PITFALL_SEND_CLAUSE + r"(?:" + _PITFALL_SEND_DEST + r"|(?<![收拿做直等遇得想看找達])到))"
++                      r"|(?<!請求|表單)送出(?!請求|表單|第[二兩2][個次]請求)")
++_PITFALL_PAYMENT_WHEN = (r"payment(?!(?<=(?-i:PAYMENT))(?-i:_(?:(?:TIMEOUT|TTL|DELAY|INTERVAL)(?:_(?:SECONDS|SECS|SEC|MS|MINUTES|MINS))?"
++                         r"|SECONDS|SECS|SEC|MS|MINUTES|MINS|RETRIES|RETRY_COUNT|MAX_RETRIES))(?![A-Za-z0-9_]))")
+ PITFALL_CLASSES = {
+-    "payment": [r"金流", _PITFALL_PAYMENT_RE, r"stripe", r"billing", r"退款", r"refund", r"扣款"],
+-    "external-send": [r"寄送", _PITFALL_SEND_RE, r"(?<![A-Za-z0-9])send(?![A-Za-z0-9])", r"webhook", r"notify", r"LINE ?推送", r"(?<![A-Za-z0-9])mail(?![A-Za-z0-9])", r"簡訊", r"對外"],
++    "payment": [r"金流", _PITFALL_PAYMENT_WHEN, r"stripe", r"billing", r"退款", r"refund", r"扣款"],
++    "external-send": [r"寄送", _PITFALL_SEND_WHEN, r"(?<![A-Za-z0-9])send(?![A-Za-z0-9])", r"webhook", r"notify", r"LINE ?推送", r"(?<![A-Za-z0-9])mail(?![A-Za-z0-9])", r"簡訊", r"對外"],
+     "prod-irreversible": [r"(?<![A-Za-z0-9])prod(?![A-Za-z0-9])", r"production", r"遷移", r"migration", r"不可逆", r"DROP TABLE", r"DELETE FROM", r"上架"],
+     "self-governance": [r"錨點", r"anchor verify", r"收斂判準", r"canary", r"審計閘", r"pre-push hook"],
+ }
+ # 英文詞界寫成「前後不是英文字母或數字」,不用 \b(代碼審 code-規格閘不做節 r11 資1):\b 把漢字與底線當詞字元,「部署到prod環境」「要send給客戶」
+ # 「send_email」「prod_db」都比不到;sendgrid、prod2、sending、email 照舊不命中。LINE 與推送之間的空格可有可無(「透過LINE推送」)。改這張表要升 _DOOR_RULE_VERSION;這張表也是 `lumos pitfalls <計劃> [--check]`(_pitfall_scan_classes)的詞表,兩條路一起變(補審 規格閘第十一輪修補 正確性 F3:r11 放寬詞界後 pitfalls --check 也多命中 send_email、prod_db)
+ _PITFALL_COMPILED = {c: [re.compile(p, re.I) for p in pats] for c, pats in PITFALL_CLASSES.items()}
+ _PITFALL_GENERAL = [
+     "併發——同資源兩請求同時進來會怎樣?",
+     "效能——這段會進熱路徑/大資料量嗎?",
+     "資源——連線/檔案/鎖有沒有確定釋放?",
+@@ -29944,24 +29952,25 @@ _REQUIREMENT_FACETS = [
+     {"id": "impl-failure", "stage": "實作", "q": "中途失敗、外部系統沒回應、逾時的時候,資料會停在什麼狀態?怎麼補?", "when": [r"寄|通知|外部|第三方|非同步|呼叫|事件|訊息|物流"]},
+     {"id": "verify-evidence", "stage": "驗證", "q": "要用什麼證據證明做對了?哪幾條要能自動重跑?", "when": [r"."]},
+     {"id": "perf-target", "stage": "效能", "q": "流量與延遲目標是多少?在什麼負載下、用什麼口徑量?", "when": [r"(?i)高併發|大量|流量|延遲|毫秒|\bms\b|rps|qps|效能|壓測"]},
+     {"id": "deliver-ops", "stage": "交付", "q": "出事時怎麼知道、怎麼排查、怎麼回復?", "when": [r"."]},
+     {"id": "deliver-security", "stage": "交付", "q": "誰能做這件事?有哪些敏感資料?邊界在哪?", "when": [r"會員|使用者|帳號|權限|個資|付款|登入|管理員"]},
+     # 本機基礎設施腳本(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 6):後端專案的 e2e 一樣適用,不帶 role
+     {"id": "verify-infra-script", "stage": "驗證", "q": "要起本機服務的測試腳本:埠與容器怎麼避開別份工作樹、外部指令的逾時、中斷時怎麼收、殺程序前怎麼確認是自己的、路徑先實體化、macOS 與 Linux 差異,各怎麼定?",
+      "when": [r"(?i)(?<![a-z0-9])e2e(?![a-z0-9])|end-to-end|端到端|playwright|cypress|docker[ -]?compose|起後端|起資料庫"]},
+ ]
+ # 前端面(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 1 到 3):計劃全文提到前端字樣就多列,只決定「多列幾題」,不決定審查方向。
+-# 框架名跟 _NODE_FRONTEND_MARKERS 對齊(多一個 vite);那份比 package.json 的套件名、這份比計劃散文,所以不共用同一個集合。
++# 框架名跟 _NODE_FRONTEND_MARKERS 對齊(多一個 vite;t_req_fe_when_covers_node_frontend_markers 守兩處同步);那份比 package.json 的套件名、這份比計劃散文,所以不共用同一個集合。
+ # 字串(不是編譯好的物件):--stage --json 會把整列序列化。整條不分大小寫,react-query、vite.config 也算。
+-_REQ_FE_WHEN = (r"(?i)\.(?:tsx|jsx|vue|svelte)(?![a-z0-9])|(?<![a-z0-9])(?:react|vue|svelte|angular|next\.js|nuxt|vite|solid-js|preact)(?![a-z0-9])"
+-                r"|前端|瀏覽器")
++_REQ_FE_WHEN = (r"(?i)\.(?:tsx|jsx|vue|svelte)(?![a-z0-9])"
++                r"|(?<![a-z0-9])(?:react(?:js)?|vue(?:js)?|svelte|angular(?:js)?|next\.?js|nuxt|vite|solid-?js|preact)(?![a-z])"   # 後面可緊貼版本號(Vue3、React18;代碼審 r1 正4、邊2)
++                r"|front-?end|前端|瀏覽器")
+ _REQUIREMENT_FACETS += [{**_f, "role": "frontend", "when": [_REQ_FE_WHEN]} for _f in (
+     {"id": "req-fe-states", "stage": "需求", "q": "載入中、空資料、失敗、結果不確定(逾時、斷線、送了沒回)四種狀態各長什麼樣?使用者在每種狀態能做什麼、不能做什麼?"},
+     {"id": "req-fe-device", "stage": "需求", "q": "支援哪些裝置、瀏覽器與螢幕寬度?無障礙做到哪(只用鍵盤、螢幕報讀、對比)?哪些瀏覽器的鍵盤行為不同(例:macOS Safari 預設 Tab 不停在按鈕)?"},
+     {"id": "arch-fe-clock", "stage": "架構", "q": "倒數、期限、「現在能不能按」用誰的時間?瀏覽器時鐘偏快或偏慢幾分鐘時畫面會怎樣?要不要用伺服器回應的時間校正?"},
+     {"id": "arch-fe-stale", "stage": "架構", "q": "畫面上的資料多舊算過期?過期時怎麼讓使用者看得出來、什麼時候重抓?"},
+     {"id": "arch-fe-origin", "stage": "架構", "q": "前端跟 API 是不是同一個來源?跨來源時 CORS、cookie、CSRF 誰設定?開發時的代理跟正式環境差在哪?"},
+     {"id": "arch-fe-poll", "stage": "架構", "q": "輪詢多久一次、失敗時怎麼退避(間隔拉長、上限、背景分頁暫停)?同時開著的使用者數乘上頻率,後端與連線池扛不扛得住?"},
+     {"id": "impl-fe-race", "stage": "實作", "q": "同一畫面連發兩次請求、舊的比新的晚回來,會不會蓋掉新資料?離開畫面或換使用者時,在途請求的結果怎麼丟掉?"},
+     {"id": "impl-fe-lifecycle", "stage": "實作", "q": "計時器、輪詢、訂閱在元件卸載時有沒有收掉?重複掛載時會不會跑兩份(React StrictMode 開發模式會故意掛兩次)?"},
+     {"id": "impl-fe-idem", "stage": "實作", "q": "連點、重新整理、重送時的冪等鍵由誰產生、存在哪?換使用者、換商品或上一筆已成功時要不要換新的?"},
+@@ -30199,34 +30208,34 @@ _STACK_QUESTION_SPECS = {
+                   'sqflite', 'openDatabase', 'rawQuery', 'Hive\\.']},
+     ],
+ }
+ # 本機基礎設施腳本(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 6;示範 order-web 的 e2e 腳本那一族換了三次形狀才收斂):
+ # 起停後端、資料庫、容器的 shell 腳本與 e2e 設定程式。觸發寫法兩條統一規則——
+ # ①看字串內容的(/tmp/、localhost:埠、--name、.pid、realpath)放 when_raw:shell 裡多半寫在引號內,when 會先剝字串;
+ # ②英文觸發字前後不是英文字母、數字、底線(wait 不中 await、date 不中 updated);太普通的指令字另要在指令位置(行首、; & | ( ` ! { $( 之後,或 if/then/do 這類關鍵字之後)。
+ # 不是語言,不配慣例 skill。鍵由 _stack_key_for_file 的第一條規則給(.sh 與 _TEST_INFRA_PATH_RE 裡的程式檔)。
+ _INFRA_B = r"(?<![A-Za-z0-9_])"
+ _INFRA_E = r"(?![A-Za-z0-9_])"
+-_INFRA_CMD = r"(?:^|[;&|(`!{]|\$\(|(?<![A-Za-z0-9_])(?:if|then|do|else|elif|while|until|sudo|exec)\s)\s*"
++_INFRA_CMD = r"(?:^|[;&|(`!{]|\$\(|(?<![A-Za-z0-9_])(?:if|then|do|else|elif|while|until|sudo|exec)\s|(?<![A-Za-z0-9_])xargs\s+(?:-\S+\s+)*)\s*"
+ _STACK_QUESTION_SPECS["infra"] = [
+     {"id": "infra-shared", "q": "埠、容器名、compose 專案名、/tmp 底下的檔與鎖,會不會跟另一份工作樹或另一次執行撞?能不能每份工作樹各自挑、放回工作樹裡?",
+-     "when": [_INFRA_B + r"COMPOSE_PROJECT_NAME" + _INFRA_E, r"-p\s+\d{2,5}:\d{2,5}", _INFRA_B + r"PORT\s*="],
++     "when": [_INFRA_B + r"COMPOSE_PROJECT_NAME" + _INFRA_E, r"-p\s+\d{2,5}:\d{2,5}", r"(?:(?<![A-Za-z0-9_])|_)PORT\s*="],
+      "when_raw": [r"/tmp/", _INFRA_B + r"mktemp" + _INFRA_E, r"--name[\s=]", _INFRA_B + r"container_name" + _INFRA_E,
+                   r"localhost:\d{2,5}", r"127\.0\.0\.1:\d{2,5}"]},
+     {"id": "infra-timeout", "q": "外部指令與外呼(curl、docker、資料庫用戶端、建置工具、等待迴圈、e2e 程式裡的 fetch)有沒有逾時?macOS 沒有 timeout 指令,用什麼替代?",
+      "when": [_INFRA_B + r"(?:curl|wget|docker|psql|mysql|gradlew)" + _INFRA_E, _INFRA_CMD + r"(?:until|sleep)" + _INFRA_E,
+               _INFRA_B + r"fetch\(", _INFRA_B + r"waitForServer" + _INFRA_E, _INFRA_B + r"setTimeout\("]},
+     {"id": "infra-signal", "q": "Ctrl-C、kill、腳本中途失敗時,起的程序與容器怎麼收?trap 有沒有涵蓋結束與中斷、TERM 之後有沒有 KILL 兜底、收不乾淨時會不會照樣回報「收尾完成」?",
+      "when": [_INFRA_B + r"trap" + _INFRA_E, r"(?<![&|])&\s*$", _INFRA_B + r"(?:nohup|setsid)" + _INFRA_E, _INFRA_CMD + r"(?:kill|wait)" + _INFRA_E,
+-              r"child_process", _INFRA_B + r"spawn\(", r"process\.on\("]},
++              r"child_process", _INFRA_B + r"spawn\(", r"process\.on\(", r"process\.kill\("]},
+     {"id": "infra-pid", "q": "收尾殺程序前,有沒有確認那個 pid 還是自己起的那支(pid 檔可能被別人預放、pid 可能被重用;0 與 -1 會打到整個程序群組)?",
+-     "when": [_INFRA_CMD + r"(?:kill|pkill)" + _INFRA_E, _INFRA_B + r"pgrep" + _INFRA_E, r"\$!"],
++     "when": [_INFRA_CMD + r"(?:kill|pkill)" + _INFRA_E, _INFRA_B + r"pgrep" + _INFRA_E, r"\$!", r"process\.kill\("],
+      "when_raw": [r"\.pid" + _INFRA_E]},
+     {"id": "infra-path", "q": "比對或刪除前有沒有先把路徑實體化(realpath、pwd -P)?symlink 或別名路徑會不會讓檢查放行、刪錯地方?",
+      "when": [_INFRA_CMD + r"rm\s+-", _INFRA_CMD + r"cd" + _INFRA_E, _INFRA_CMD + r"ln\s+-s", _INFRA_B + r"readlink" + _INFRA_E],
+      "when_raw": [_INFRA_B + r"realpath" + _INFRA_E, r"pwd\s+-P"]},
+     {"id": "infra-portable", "q": "macOS 與 Linux 的差異(timeout、setsid、sed -i、date、ps 欄位、readlink -f、stat)有沒有處理?只在一邊跑過要寫明",
+      "when": [_INFRA_CMD + r"sed\s+-i", _INFRA_CMD + r"(?:date|ps|stat|timeout)" + _INFRA_E, r"readlink\s+-f",
+               _INFRA_B + r"setsid" + _INFRA_E, _INFRA_B + r"uname" + _INFRA_E]},
+ ]
+ # 外部回應碼題(八棧各一):shape_only=只看形狀——不因「改動超過行數門檻就整組適用」而亮,也不進下面的舊語意整組清單
+ for _stk in _EXTCODE_STACKS:
+@@ -30304,27 +30313,24 @@ def _node_flavor_at(file_rel, reader):
+ 
+ 
+ _NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
+ 
+ 
+ def _stack_key_for_file(file_rel, repo_root, reader=None):
+     """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看 package.json——
+     後端回 "node",前端回 "vue"(.vue 檔本來就命中 vue 鍵;純 .ts 前端檔目前無獨立題組,回 None)。
+     兩個消費者(pitfalls --diff / impact hook)都走這一支,別各自抄副檔名邏輯。"""
+     ext = Path(file_rel).suffix.lstrip(".").lower()
+-    # ★第一條規則★(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 6、7):.sh 與測試基礎設施路徑裡的程式檔 → infra;
+-    # 樣式內的資料檔(.sql .json .yml…)→ None(造資料的 SQL 不拿 sql 題,資料檔也不撐爆 infra 的行數門檻)。
+-    # 前端框架分流([[Projects/前端框架從vue分出_計劃]])排在這條之後。
+-    if ext == "sh":
++    # ★第一條規則★(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 6、7):.sh 與測試基礎設施路徑裡的 sh/py/ts/js 家族 → infra;
++    # 樣式內的其他副檔名照下面原本的判法(kt、java 照拿棧別題;.json 這類資料檔本來就沒有鍵)。前端框架分流([[Projects/前端框架從vue分出_計劃]])排在這條之後。
++    if ext == "sh" or (ext in _INFRA_CODE_EXTS and _TEST_INFRA_PATH_RE.search(file_rel)):
+         return "infra"
+-    if _TEST_INFRA_PATH_RE.search(file_rel):
+-        return "infra" if ext in _INFRA_CODE_EXTS else None
+     if ext in _NODE_EXTS:
+         # 2026-09-09(表態閘 r2 邊界席 B4):前端 .ts/.js 原本回 None=零覆蓋零稽核;改歸 vue 棧(watch/ref/await 那幾題有觸發)。
+         _fl = _node_flavor(file_rel, repo_root, reader=reader)
+         return "node" if _fl == "node" else ("vue" if _fl == "vue" else None)
+     return ext if ext in _STACK_PERF_QUESTIONS else None
+ 
+ 
+ # ── 代碼審角色鏡頭(Projects/代碼審前後端角色鏡頭_計劃,2026-09-29)──────────────────────────
+ # 派正確性那一席時,依改到前端或後端附一張「該往哪看」的卡。不是閘:只影響審查員看哪裡。
+ # 題庫形狀照棧別題庫(每題有語意題號);★題號不要改★——撤除條件靠席報告裡的 fe-/be- 題號計數,改了等於量測歸零。
+@@ -30683,25 +30689,26 @@ _BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.
+ # ↑ kill-log/signoff-log 2026-09-06 補([[Projects/全repo審視_計劃]] #5):兩本同樣是工具自己
+ # 寫的 append-only 帳(kill-log 由 guard kill 寫、signoff-log 由 signoff 寫),而這次替
+ # _pull_source_or_abort 加「來源只髒簿記帳就聯集合併不擋人」時,漏了它們就等於那條路對這兩本
+ # 失效——有人在來源 clone 跑過 guard kill 或 signoff,更新照樣被擋。
+ _BOOKKEEPING_DIRS = ("governance/code-loop/", "governance/review-reports/", "governance/replay/",
+                      "governance/note-verdicts/",   # 2026-09-17 小改動閘 r2:卷證目錄也是紀錄不是碼(三個消費者共用這一組)
+                      # 2026-10-01 回頭重讀的對照紀錄:理由同筆記內容審判定檔——紀錄不是碼,提交它不該讓代碼審留痕失效
+                      # (Projects/守檔筆記對照改動_計劃 [S8];整案回退時要同一個 revert 提交裡 git rm -r 這個資料夾)
+                      "governance/reread-verdicts/")
+ _PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
+-# 測試基礎設施路徑(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 7):跟上面那支分工——那支把測試檔整支排除(而且四個消費者都先用它擋),
+-# 這支把 e2e 腳本與測試資料改歸 infra、掃代碼型樣時跳過(不問交易包裹、N+1 這類產品題)。三種形狀:資料夾恰好是 e2e/fixture(s)/seed(s);
+-# 檔名帶 .e2e.;.sh 檔名以 e2e/seed(s)/fixture(s) 開頭或結尾、用 . - _ 隔開。非 shell 檔只認前兩種:src/crypto/e2e.ts 這種端對端加密程式不算。
+-_TEST_INFRA_PATH_RE = re.compile(r"(?:^|/)(?:e2e|fixtures?|seeds?)/|\.e2e\.|(?:^|/)(?:[^/]*[._-])?(?:e2e|seeds?|fixtures?)(?:[._-][^/]*)?\.sh$", re.I)
+-_INFRA_CODE_EXTS = {"sh", "py"} | {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}   # 測試基礎設施路徑裡算程式、給 infra 鍵的副檔名
++# 測試基礎設施路徑(2026-10-15 [[Projects/前端知識與風險詞_計劃]] 做法 7):跟上面那支分工——那支把測試檔整支排除(四個消費者都先用它擋;
++# 它比的是 /tests?/,根目錄的 tests/e2e/… 沒有前導斜線、擋不到,會落到這支),這支把 e2e 腳本改歸 infra、掃代碼型樣時跳過(不問交易包裹、N+1)。
++# 三種形狀:路徑裡有一段資料夾恰好是 e2e(而且不在 src/、lib/ 底下——那是產品程式,例如端對端加密模組);檔名帶 .e2e.;.sh 檔名以 e2e 開頭或結尾、
++# 用 . - _ 隔開。seeds/、fixtures/ 不收:Rails 的 db/seeds 會在正式環境跑(代碼審 r1 安1、通2、邊4)。
++_TEST_INFRA_PATH_RE = re.compile(r"^(?!(?:[^/]+/)*?(?:src|lib)/)(?:[^/]+/)*?e2e/|\.e2e\.|(?:^|/)(?:[^/]*[._-])?e2e(?:[._-][^/]*)?\.sh$", re.I)
++_INFRA_CODE_EXTS = {"sh", "py"} | _NODE_EXTS   # 測試基礎設施路徑裡算程式、給 infra 鍵的副檔名;其他副檔名照原本的棧(kt、java 不變成沒題)
+ LINT_CMD_TIMEOUT = 180
+ 
+ 
+ def _diff_added_lines(diff_text):
+     """從 git diff -U3 輸出建 {file: set(new_line_numbers)} 對應所有新增行(+ 開頭)。
+     使用與 _pitfall_diff_mode 相同的 @@ 標頭推導邏輯。"""
+     added = {}
+     cur_file, new_ln = "", 0
+     for line in diff_text.splitlines():
+         if line.startswith("+++ b/"):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f45f7d882ad9062edf4deb48d4e0060de068e7be..19ff92edd515405e72c9c627b22cffa706112233 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -67404,21 +67404,21 @@ def t_spec_gate_records_exclusions():
+     check("① 四類理由都在", sorted(ex) == ["不可逆", "守衛面", "對外送出", "金流"] and "收費" in ex["金流"], str(rec)[:500])
+     check("② 測試清單、指紋、規則版本、計劃路徑", rec.get("tests") == ["t_red"] and len(str(rec.get("clause_sha", ""))) == 64 and isinstance(rec.get("door_rule"), int) and rec.get("plan", "").endswith("甲_計劃.md"), str(rec)[:500])
+     r = run(kg, "spec-gate", "--door-rule")
+     check("③ 留痕的 door_rule 等於程式常數", f"door_rule={rec.get('door_rule')}" in r.stdout, r.stdout)
+ 
+ 
+ def t_door_rule_version_pin():
+     """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
+     ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
+     r = run(mkvault(), "spec-gate", "--door-rule")
+-    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=13 " in r.stdout and "inputs_sha=e015e62a674619289eb7b92bcdea40cf5fbf7eaaa2ddf2bbbdca197e8920b15b" in r.stdout, r.stdout)
++    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=13 " in r.stdout and "inputs_sha=faad1de4c7eef64278efa73ce2dd0b79103d2aed2e71e36b6e11591e2a8a0edf" in r.stdout, r.stdout)
+ 
+ 
+ # ── 前端知識與風險詞 做法 9(d1):「送出」的前端語境與 PAYMENT 調整參數識別字例外 ──
+ # 判準來源:計劃 Projects/前端知識與風險詞_計劃 做法 9 列的「照算/不算」例句(設計審 r1 正確性、邊界、整合三席的失敗情境)。
+ 
+ def _fe_door_classes(line):
+     """一行計劃文字經門的關鍵字掃描,回命中的類中文名集合。"""
+     m = _load_lumos_inproc()
+     return {cls for _no, cls, _w, _v in m._door_keyword_hits(line)}
+ 
+@@ -67767,33 +67767,31 @@ def t_test_infra_path_skips_e2ee_source():
+         _infra_repo(d, {"src/crypto/e2e.ts": "export const key = 1\n",
+                         "lib/e2e_encryption.py": "import requests\nr = requests.get(url)\n"})
+         m._NODE_FLAVOR_CACHE.clear()
+         check("① src/crypto/e2e.ts 不是 infra", m._stack_key_for_file("src/crypto/e2e.ts", d) != "infra", "")
+         check("② lib/e2e_encryption.py 是 py", m._stack_key_for_file("lib/e2e_encryption.py", d) == "py", str(m._stack_key_for_file("lib/e2e_encryption.py", d)))
+         data = _infra_collect(d)
+         check("③ e2e_encryption.py 的 requests.get 照樣產生 claim", any(c["file"] == "lib/e2e_encryption.py" for c in data["claims"]), str(data["claims"]))
+ 
+ 
+ def t_test_infra_data_files_no_stack_key():
+-    """[前端知識與風險詞 S25] 樣式內的資料檔(seeds 的 .sql、fixtures 的 .json)棧別鍵是 None,不出任何棧別題;樣式內的程式檔才是 infra。"""
++    """[前端知識與風險詞 S25] e2e 資料夾裡的資料檔(.json)沒有棧別鍵、不出棧別題,也不產生 claims;同資料夾的程式檔(.ts)才是 infra。
++    (代碼審 r1 改:seeds、fixtures 資料夾不再特別處理,見 t_test_infra_path_tightened)"""
+     m = _load_lumos_inproc()
+     with tempfile.TemporaryDirectory() as d:
+-        _infra_repo(d, {"db/seeds/orders.sql": "INSERT INTO orders VALUES (1);\nSELECT * FROM orders WHERE id = 1;\n",
+-                        "e2e/fixtures/data.json": "{}\n"})
++        _infra_repo(d, {"e2e/fixtures/data.json": "{\"sql\": \"DELETE FROM orders\"}\n", "e2e/fixtures/make.ts": "export const x = 1\n"})
+         m._NODE_FLAVOR_CACHE.clear()
+-        check("① db/seeds/orders.sql → None", m._stack_key_for_file("db/seeds/orders.sql", d) is None, str(m._stack_key_for_file("db/seeds/orders.sql", d)))
+-        check("② e2e/fixtures/data.json → None", m._stack_key_for_file("e2e/fixtures/data.json", d) is None, "")
+-        check("③ 對照:e2e/fixtures/make.ts → infra", m._stack_key_for_file("e2e/fixtures/make.ts", d) == "infra", "")
++        check("① e2e/fixtures/data.json → None", m._stack_key_for_file("e2e/fixtures/data.json", d) is None, str(m._stack_key_for_file("e2e/fixtures/data.json", d)))
++        check("② 對照:e2e/fixtures/make.ts → infra", m._stack_key_for_file("e2e/fixtures/make.ts", d) == "infra", "")
+         data = _infra_collect(d)
+-        check("④ diff 不出 sql 題組、seeds 的 SQL 不產生 claims", "sql" not in (data.get("stack_questions") or {})
+-              and not any(c["file"] == "db/seeds/orders.sql" for c in data["claims"]), f"{list(data.get('stack_questions') or {})} {data['claims']}")
+-
++        check("③ diff 沒有 json 題組、資料檔不產生 claims", not any(c["file"] == "e2e/fixtures/data.json" for c in data["claims"])
++              and set(data.get("stack_questions") or {}) <= {"infra"}, f"{list(data.get('stack_questions') or {})} {data['claims']}")
+ 
+ def t_disposition_gate_covers_infra_questions():
+     """[前端知識與風險詞 S26] .sh 改動命中 infra 題、分支沒有表態記錄 → 表態閘擋下(d2:infra 題進推送前表態閘)。對照:只改 README 不擋。"""
+     m = _load_lumos_inproc()
+     with tempfile.TemporaryDirectory() as d:
+         sha = _infra_repo(d, {"scripts/e2e.sh": "#!/bin/sh\nLOCK=\"/tmp/e2e.lock\"\nkill \"$(cat \"$PIDFILE\")\"\n"}, pkg=None)
+         data = _infra_collect(d)
+         out = m._dispositions_verdict(d, data, sha, "feat/x", sha, data["tier"])
+         check("① 有 infra 適用題、沒有表態記錄 → 擋下", "infra" in (data.get("stack_questions_applicable") or {}) and out["blocked"]
+               and any("表態記錄" in p for p in out["problems"]), str(out)[:400])
+@@ -67815,20 +67813,126 @@ def t_arch_alignment_skips_vendored_siblings():
+         sib = ((data.get("arch_alignment") or {}).get("files") or {}).get("scripts/e2e.sh", [])
+         check("① 對照檔有 build.sh、沒有 graph-rename.sh", "scripts/build.sh" in sib and "scripts/graph-rename.sh" not in sib, str(sib))
+     with tempfile.TemporaryDirectory() as d:
+         _infra_repo(d, {"scripts/e2e.sh": "#!/bin/sh\necho e2e\n", "scripts/graph-rename.sh": "#!/bin/sh\necho changed\n"}, pkg=None,
+                     vendored={"scripts/graph-rename.sh": "#!/bin/sh\necho tool\n"})
+         data = _infra_collect(d)
+         sib = ((data.get("arch_alignment") or {}).get("files") or {}).get("scripts/e2e.sh", [])
+         check("② 對照:被改過的自帶檔照列", "scripts/graph-rename.sh" in sib, str(data.get("arch_alignment"))[:300])
+ 
+ 
++# ── 代碼審 code-前端知識與風險詞 r1 修正:判準來源=七席報告的失敗輸入(正確性、邊界、資源、通才、架構對齊、資安各席的條目) ──
++
++def t_door_keyword_send_destination_variants_still_hit():
++    """[前端知識與風險詞 S45] 送出的去處寫成向、對、予、隔字的到,或寫在送出前面、寫外部/第三方/partner → 照算對外送出
++    (代碼審 r1 通1 major、邊1、正5、安3)。對照:前端語境且同一子句沒有去處 → 不算。"""
++    hits = ("系統會向客戶送出請求", "後端送出請求向第三方物流", "對第三方送出請求", "送出請求予客戶", "送出表單資料到外部客服系統",
++            "系統送出請求內容到第三方物流", "送出第二個請求到物流商", "送出請求 POST 到外部", "送出請求 to partner API", "排程會送出請求打外部 API")
++    for s in hits:
++        check(f"①「{s}」照回對外送出", "對外送出" in _fe_door_classes(s), str(_fe_door_classes(s)))
++    for s in ("按鈕再按也不會送出第二個請求", "請求送出時刻與收到時刻的中點", "表單送出後,結果顯示給使用者看"):
++        check(f"②對照:「{s}」不算", "對外送出" not in _fe_door_classes(s), str(_fe_door_classes(s)))
++
++
++def t_door_keyword_send_fullwidth_comma_both_paths():
++    """[前端知識與風險詞 S46] 全形逗號當子句邊界:門(先 NFKC)與 pitfalls --check(不 NFKC)兩條路結論相同(代碼審 r1 正7)。"""
++    m = _load_lumos_inproc()
++    s = "表單送出後，畫面顯示給使用者"
++    check("① 門不回對外送出", "對外送出" not in _fe_door_classes(s), str(_fe_door_classes(s)))
++    check("② pitfalls --check 的詞表也不含 external-send", "external-send" not in m._pitfall_scan_classes(s), str(m._pitfall_scan_classes(s)))
++
++
++def t_door_keyword_send_long_line_linear():
++    """[前端知識與風險詞 S47] 一行十萬字、兩萬個「請求送出」:門的關鍵字掃描兩秒內跑完(子句往前往後只看有限長度;代碼審 r1 資1 實測原寫法 8 秒)。"""
++    import time as _t
++    m = _load_lumos_inproc()
++    for line in ("請求送出 " * 20000, "表單送出" * 20000):
++        t0 = _t.monotonic()
++        m._door_keyword_hits(line)
++        m._pitfall_scan_classes(line)
++        dt = _t.monotonic() - t0
++        check(f"① {line[:4]}×20000:{dt:.2f}s < 2s", dt < 2.0, f"{dt:.2f}")
++
++
++def t_door_keyword_payment_suffix_each():
++    """[前端知識與風險詞 S48] PAYMENT 只在緊接時間或重試參數尾碼時不算金流,每個尾碼各測一次;額度、次數、窗口、中間夾別的段照算
++    (代碼審 r1 安2、邊3、通3、正6)。"""
++    exempt = ["PAYMENT_TIMEOUT", "PAYMENT_TTL", "PAYMENT_DELAY", "PAYMENT_INTERVAL", "PAYMENT_SECONDS", "PAYMENT_SECS", "PAYMENT_SEC",
++              "PAYMENT_MS", "PAYMENT_MINUTES", "PAYMENT_MINS", "PAYMENT_RETRIES", "PAYMENT_RETRY_COUNT", "PAYMENT_MAX_RETRIES",
++              "PAYMENT_TIMEOUT_MS", "PAYMENT_DELAY_SECONDS", "ORDER_PAYMENT_TIMEOUT", "ORDER_PAYMENT_RETRY_COUNT"]
++    for s in exempt:
++        check(f"①「{s}」不回金流", "金流" not in _fe_door_classes(s), str(_fe_door_classes(s)))
++    for s in ("PAYMENT_LIMIT", "PAYMENT_AMOUNT_LIMIT", "PAYMENT_DAILY_LIMIT", "PAYMENT_COUNT", "PAYMENT_ID_COUNT", "PAYMENT_WINDOW",
++              "PAYMENT_GATEWAY_TIMEOUT", "PAYMENT_CHARGE_LIMIT", "MAX_PAYMENT_AMOUNT_LIMIT", "PAYMENT_TIMEOUTX"):
++        check(f"②「{s}」照回金流", "金流" in _fe_door_classes(s), str(_fe_door_classes(s)))
++
++
++def t_stack_key_plain_shell_is_infra():
++    """[前端知識與風險詞 S49] 檔名不含 e2e 的一般 shell 腳本(scripts/setup.sh、deploy.sh)棧別鍵也是 infra——守 `.sh` 那條規則本身
++    (代碼審 r1 正1 major:原本的測試都用 scripts/e2e.sh,拿掉 .sh 規則照綠)。"""
++    m = _load_lumos_inproc()
++    with tempfile.TemporaryDirectory() as d:
++        for f in ("scripts/setup.sh", "deploy.sh", "tools/run-backend.sh"):
++            check(f"① {f} → infra", m._stack_key_for_file(f, d) == "infra", str(m._stack_key_for_file(f, d)))
++
++
++def t_test_infra_path_tightened():
++    """[前端知識與風險詞 S50] 測試基礎設施路徑只認 e2e 資料夾(不在 src/ lib/ 底下)、.e2e. 檔名與 e2e 字樣的 .sh;seeds、fixtures 不再特別處理,
++    樣式內非 infra 副檔名照原棧(代碼審 r1 安1、通2、邊4、整4)。"""
++    m = _load_lumos_inproc()
++    with tempfile.TemporaryDirectory() as d:
++        _infra_repo(d, {"db/seeds/prod_cleanup.sql": "DELETE FROM users WHERE 1=1;\n",
++                        "scripts/seed-prod.sh": "#!/bin/sh\npsql \"$PROD_URL\" -c \"DELETE FROM users\"\n",
++                        "src/e2e/cipher.py": "import requests\nr = requests.get(url)\n"})
++        m._NODE_FLAVOR_CACHE.clear()
++
++        def k(f):
++            return m._stack_key_for_file(f, d)
++        check("① src/e2e/cipher.py → py(產品程式裡的 e2e 資料夾不算)", k("src/e2e/cipher.py") == "py", str(k("src/e2e/cipher.py")))
++        check("② lib/e2e/keys.kt、e2e/app/Main.kt → kt(非 infra 副檔名照原棧,不變 None)", k("lib/e2e/keys.kt") == "kt" and k("e2e/app/Main.kt") == "kt", f"{k('lib/e2e/keys.kt')} {k('e2e/app/Main.kt')}")
++        check("③ db/seeds/x.sql → sql", k("db/seeds/x.sql") == "sql", str(k("db/seeds/x.sql")))
++        check("④ 根目錄 tests/e2e/a.ts、apps/web/e2e/x.ts → infra", k("tests/e2e/a.ts") == "infra" and k("apps/web/e2e/x.ts") == "infra", f"{k('tests/e2e/a.ts')} {k('apps/web/e2e/x.ts')}")
++        data = _infra_collect(d)
++        files = {c["file"] for c in data["claims"]}
++        check("⑤ seeds 的 SQL、seed-prod.sh 的 DELETE、src/e2e 的 requests 都照產生 claims、tier high",
++              {"db/seeds/prod_cleanup.sql", "scripts/seed-prod.sh", "src/e2e/cipher.py"} <= files and data["tier"] == "high", f"{files} {data['tier']}")
++
++
++def t_infra_trigger_variants():
++    """[前端知識與風險詞 S51] 常見寫法要亮:帶前綴的埠變數(E2E_PORT=、export BACKEND_PORT=)→ infra-shared;xargs kill、process.kill → infra-pid
++    (代碼審 r1 正2、正3、邊5)。對照:EXPORT=1、REPORT=x 不亮 infra-shared。"""
++    for ln in ("E2E_PORT=5173", "WEB_PORT=${WEB_PORT:-5173}", "export BACKEND_PORT=8080"):
++        check(f"①「{ln}」→ infra-shared", "infra-shared" in _infra_hits([ln]), str(_infra_hits([ln])))
++    for ln in ("lsof -ti:3000 | xargs kill", "cat pidfile | xargs kill -9", "  process.kill(pid)"):
++        check(f"②「{ln}」→ infra-pid", "infra-pid" in _infra_hits([ln]), str(_infra_hits([ln])))
++    for ln in ("EXPORT=1", "REPORT=x"):
++        check(f"③對照:「{ln}」不亮 infra-shared", "infra-shared" not in _infra_hits([ln]), str(_infra_hits([ln])))
++
++
++def t_pitfalls_stage_frontend_version_glued():
++    """[前端知識與風險詞 S52] 框架名緊貼版本號(Vue3、React18、Nuxt3、Vite5)、ReactJS、nextjs、英文 frontend/front-end 也算前端字樣
++    (代碼審 r1 正4、邊2)。對照:reactive 照舊不算。"""
++    m = _load_lumos_inproc()
++    for s in ("畫面改用 Vue3", "升級 React18", "ReactJS 元件", "Nuxt3", "Vite5", "nextjs", "the frontend team", "front-end build"):
++        check(f"①「{s}」算前端字樣", m._req_frontend_hit(s) is not None, str(m._req_frontend_hit(s)))
++    check("②對照:reactive streams 不算", m._req_frontend_hit("後端改成 reactive streams") is None, "")
++
++
++def t_req_fe_when_covers_node_frontend_markers():
++    """[前端知識與風險詞 S53] 前端框架名兩處同步的守衛(代碼審 r1 架3):_NODE_FRONTEND_MARKERS 每個套件名照散文寫法(去掉 @ 與 /core)都要被 _REQ_FE_WHEN 認得。
++    翻紅:在 _NODE_FRONTEND_MARKERS 加一個新框架、沒同步 _REQ_FE_WHEN。"""
++    m = _load_lumos_inproc()
++    for mk in m._NODE_FRONTEND_MARKERS:
++        name = {"next": "next.js"}.get(mk.lstrip("@").split("/")[0], mk.lstrip("@").split("/")[0])   # 散文寫 Next.js;單獨的 next 是英文常用字
++        check(f"①「{name}」(來自 {mk})被前端字樣認得", m._req_frontend_hit(f"改用 {name} 寫") is not None, "")
++
++
+ def t_spec_gate_skips_exclusion_lines():
+     """[雙向門放行 S8] 實務隱患節內合格的四類已排除行本身含類別名甚至關鍵字,不計入命中(不跳過就機制自我否決)。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "tw8")
+     ex = list(_SG_EXCL_ALL); ex[2] = "已排除:不可逆:沒有 DELETE FROM 也沒有遷移,只動本機檔"
+     _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]"], excl=ex)
+     r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
+     check("① 已排除行裡的 DELETE FROM 不算命中 → 風險低", "風險低" in r.stdout, r.stdout[-600:])
+ 
+ 
+ def t_spec_gate_scans_unqualified_exclusion():
