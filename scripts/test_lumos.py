@@ -96534,6 +96534,9 @@ def t_templates_rm_literal_absolute_path():
 # 預期字串逐字取自計劃〈做法〉,不從產品碼或範本抽(獨立基準)
 _LENS_SCOPE_LINE = ("  鏡頭範圍: 帳本所在 repo 是工具鏈本 repo——被審分支也在這個 repo 時,派資安席照 templates.md §7.8〈工具鏈三類〉、"
                     "派併發與資源鏡頭改資源、§3 第 1 點併發兩問不問;審別的 repo 的分支時看那個 repo 的根自己判(消費專案照舊)")
+# 帶 --repo 時判的是 --repo 那個目錄,開頭照實寫(鏡頭範圍代碼審 r2 邊界 2;計劃 S1、做法 5)
+_LENS_SCOPE_LINE_REPO = ("  鏡頭範圍: --repo 指的 repo 是工具鏈本 repo——被審分支也在這個 repo 時,派資安席照 templates.md §7.8〈工具鏈三類〉、"
+                         "派併發與資源鏡頭改資源、§3 第 1 點併發兩問不問;審別的 repo 的分支時看那個 repo 的根自己判(消費專案照舊)")
 # 改動前 §7.8 圍欄裡「逐類想過」底下那段原文(36dab5aa 版逐字複製),〈消費專案六類〉要跟它一字不差
 _SEC_SIX_CLASSES_ORIG = (
     "1. 不可信輸入流到危險操作:SQL / NoSQL / 命令 / 路徑 / 模板注入、XXE(XML 外部實體注入)、反序列化、eval 類\n"
@@ -96583,14 +96586,15 @@ def t_loop_next_lens_scope_toolchain_vs_consumer():
     rc_t, lt, jt = _lens_next(vault, "code-x", "--tier", "high", "--repo", str(tc))
     rc_c, lc, jc = _lens_next(vault, "code-x", "--tier", "high", "--repo", str(cons))
     hits = [ln for ln in lt if ln.strip().startswith("鏡頭範圍:")]
-    check("①工具鏈本 repo:印一行固定的鏡頭範圍(含 §7.8)", hits == [_LENS_SCOPE_LINE] and "§7.8" in hits[0] if hits else False, str(hits))
+    check("①工具鏈本 repo:印一行固定的鏡頭範圍(含 §7.8)", hits == [_LENS_SCOPE_LINE_REPO] and "§7.8" in hits[0] if hits else False, str(hits))
     seat_idx = [i for i, ln in enumerate(lt) if ln.startswith("  應派:")]
-    check("②那一行緊接在最後一席應派之後", bool(seat_idx) and hits and lt.index(_LENS_SCOPE_LINE) == seat_idx[-1] + 1,
+    check("②那一行緊接在最後一席應派之後", bool(seat_idx) and hits and lt.index(_LENS_SCOPE_LINE_REPO) == seat_idx[-1] + 1,
           "\n".join(lt[:20]))
-    check("③--json lens_scope=toolchain", jt.get("lens_scope") == "toolchain", str(jt.get("lens_scope")))
+    check("③--json lens_scope=toolchain、lens_scope_root=--repo", jt.get("lens_scope") == "toolchain" and jt.get("lens_scope_root") == "--repo",
+          str((jt.get("lens_scope"), jt.get("lens_scope_root"))))
     check("④消費專案:不印鏡頭範圍、lens_scope=default", not any("鏡頭範圍" in ln for ln in lc) and jc.get("lens_scope") == "default",
           str(jc.get("lens_scope")))
-    check("⑤兩份人讀輸出拿掉那一行之後完全相同、退出碼相同", [ln for ln in lt if ln != _LENS_SCOPE_LINE] == lc and rc_t == rc_c,
+    check("⑤兩份人讀輸出拿掉那一行之後完全相同、退出碼相同", [ln for ln in lt if ln != _LENS_SCOPE_LINE_REPO] == lc and rc_t == rc_c,
           f"rc {rc_t}/{rc_c}")
 
 
@@ -96600,7 +96604,7 @@ def t_loop_next_lens_scope_design_untouched():
     vault = mkvault()
     tc, _cons = _mk_lens_dirs()
     _rc, l0, j0 = _lens_next(vault, "code-lensctl", "--tier", "high", "--repo", str(tc))
-    check("★前置★ 同目錄的 code- 編號會印", _LENS_SCOPE_LINE in l0 and j0.get("lens_scope") == "toolchain", str(j0.get("lens_scope")))
+    check("★前置★ 同目錄的 code- 編號會印", _LENS_SCOPE_LINE_REPO in l0 and j0.get("lens_scope") == "toolchain", str(j0.get("lens_scope")))
     for loop, tier in (("dz-lens", "standard"), ("codelens9", "standard")):
         _rc, ln, jn = _lens_next(vault, loop, "--tier", tier, "--repo", str(tc))
         check(f"{loop}:不印鏡頭範圍、lens_scope=default", not any("鏡頭範圍" in x for x in ln) and jn.get("lens_scope") == "default",
@@ -96614,7 +96618,7 @@ def t_loop_next_lens_scope_loose_code_ids():
     tc, _cons = _mk_lens_dirs()
     for loop in ("code-", "code- x", "code-　x"):
         _rc, ln, jn = _lens_next(vault, loop, "--tier", "high", "--repo", str(tc))
-        check(f"{loop!r}:印鏡頭範圍那一行、lens_scope=toolchain", _LENS_SCOPE_LINE in ln and jn.get("lens_scope") == "toolchain",
+        check(f"{loop!r}:印鏡頭範圍那一行、lens_scope=toolchain", _LENS_SCOPE_LINE_REPO in ln and jn.get("lens_scope") == "toolchain",
               str(jn.get("lens_scope")))
 
 
@@ -96625,7 +96629,7 @@ def t_loop_next_lens_scope_marker_odd_kinds():
     tc, cons = _mk_lens_dirs()
     rc_c, _lc, _jc = _lens_next(vault, "code-odd", "--tier", "high", "--repo", str(cons))
     _rc, l0, j0 = _lens_next(vault, "code-odd", "--tier", "high", "--repo", str(tc))
-    check("★前置★ 正常 SKILL.md 判成 toolchain", _LENS_SCOPE_LINE in l0 and j0.get("lens_scope") == "toolchain", str(j0.get("lens_scope")))
+    check("★前置★ 正常 SKILL.md 判成 toolchain", _LENS_SCOPE_LINE_REPO in l0 and j0.get("lens_scope") == "toolchain", str(j0.get("lens_scope")))
     root = tc.parent
     as_dir = root / "as-dir"
     (as_dir / "skills" / "lumos-project-notes" / "SKILL.md").mkdir(parents=True)
@@ -96638,6 +96642,40 @@ def t_loop_next_lens_scope_marker_odd_kinds():
         check(f"{name}:不印那一行、lens_scope=default、退出碼同消費專案、無 traceback",
               not any("鏡頭範圍" in x for x in ln) and jn.get("lens_scope") == "default" and rc == rc_c
               and "Traceback" not in rt.stderr, f"{jn.get('lens_scope')} rc {rc}/{rc_c}")
+
+
+def t_loop_next_lens_scope_root_kind():
+    """[鏡頭範圍 S13;代碼審 r2 資安 1、通才 3、邊界 2] loop next 講明判別用的是哪一個根:--json 多一欄 lens_scope_root,
+    帶 --repo 是 "--repo"、沒帶是 "ledger"(帳本所在 repo);人讀那一行開頭跟著寫「--repo 指的 repo」或「帳本所在 repo」。
+    沒帶 --repo 的那一半在同一行程內做(vault 上層放 SKILL.md 就是帳本所在 repo 是工具鏈)。消費專案也有這一欄(常駐)。
+    期望值照計劃字面手寫。應抓到的錯:帶 --repo 仍說「帳本所在 repo」、JSON 沒有根的種類。"""
+    import contextlib as _ctx
+    import io as _io
+    import json as _j
+    vault = mkvault()
+    tc, cons = _mk_lens_dirs()
+    _rc, lt, jt = _lens_next(vault, "code-rk", "--tier", "high", "--repo", str(tc))
+    check("①帶 --repo、工具鏈:lens_scope_root=--repo、那一行開頭是「--repo 指的 repo」",
+          jt.get("lens_scope_root") == "--repo" and _LENS_SCOPE_LINE_REPO in lt and _LENS_SCOPE_LINE not in lt, str(jt.get("lens_scope_root")))
+    _rc, lc, jc = _lens_next(vault, "code-rk", "--tier", "high", "--repo", str(cons))
+    check("②帶 --repo、消費專案:lens_scope_root=--repo(常駐)、不印那一行", jc.get("lens_scope_root") == "--repo" and not any("鏡頭範圍" in x for x in lc),
+          str(jc.get("lens_scope_root")))
+    m = _load_lumos_inproc()
+    v2 = mkvault()
+    env = m.Env(v2)
+    skill = v2.parent / "skills" / "lumos-project-notes" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text("# s\n", encoding="utf-8")
+    outs = {}
+    for as_json in (False, True):
+        buf = _io.StringIO()
+        with _ctx.redirect_stdout(buf), _ctx.redirect_stderr(_io.StringIO()):
+            m.cmd_loop_next(env, "code-rk", tier="high", as_json=as_json, orchestrator="claude")
+        outs[as_json] = buf.getvalue()
+    j = _j.loads(outs[True].strip().splitlines()[-1])
+    check("③沒帶 --repo、帳本所在 repo 是工具鏈:lens_scope_root=ledger、那一行開頭是「帳本所在 repo」",
+          j.get("lens_scope_root") == "ledger" and j.get("lens_scope") == "toolchain" and _LENS_SCOPE_LINE in outs[False].splitlines()
+          and _LENS_SCOPE_LINE_REPO not in outs[False].splitlines(), str((j.get("lens_scope_root"), j.get("lens_scope"))))
 
 
 def t_loop_next_lens_scope_fail_open():
