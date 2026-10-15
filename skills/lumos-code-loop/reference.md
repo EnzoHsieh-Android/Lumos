@@ -189,6 +189,38 @@ rc0 = 通過,去留痕;rc1 = 照逐錨明細修,回第 1 步。
 3. mutation 3-5 個是抽樣非覆蓋;死光≠測試充分;flaky 污染訊號。
 4. code-loop 的處置閘不驗引用座標(代碼沒有 spec 座標可錨);mutation 全滅這類機械錨還沒進閘。
 
+### major 輪放行原報 minor(逐條來源)
+
+2026-10-15 起([[Projects/代碼審minor解綁_計劃]]):代碼審某輪有 major 席時,原報 major 照舊一律折;原報 minor 可以附理由放行,但載體要帶 `--finding-source`,把每個 id 指回席報告原條,工具直接讀原報等級、不信自填。沒帶就照舊整輪 accepted 必空;輪內有 blocker 席照舊全折。
+
+1. **拿序號**:`lumos report-normalize --items <本輪各席報告…>`(要在 repo 裡跑、報告要先正規化)。序號=檔首那一行檔級宣告之後第幾個 `severity:` 宣告,**clean 也佔序號**、圍欄內的不算——跟「報了幾條」(不數 clean)口徑不同,別拿 `reported` 對。它最後替每條原報 major 印一行範本。
+2. **寫來源**:每條原報 major 都要有一個**折入**的 id 指它(可多個折入 id 指同一條);每個放行的 id 要指到至少一條原報 minor、不能指到原報 major 或只指 clean 條;一條原報只撐一個放行,折入與放行不能共用同一條原報。同一件事多席都報了,同一個 id 可以指多條。
+3. **載體最後記**:同輪各席先記,載體最後記。載體帶 `--finding-source` 記完後,再記同輪的席帳 rc2(指路記到下一輪)。
+4. **記帳當下就核對**:寫側把本輪帳上各列加這一筆組起來,跟處置閘跑同一支核對;不過就 rc2、不寫帳,改正後重記同一輪即可。這輪不需要逐條來源(非代碼審、本輪含這筆沒有 major 席、沒放行任何一條、或有 blocker 席)帶了也 rc2。
+5. **去向**:放行理由除了既有的「至少 4 字含實字」,寫明不修的理由,或延後到哪個 Issue——機械不驗,靠人。
+
+不能走逐條放行、要照舊全折的情況:
+- 本輪某份報告檔級是 major、但各條宣告裡沒有 major(major 寫在散文或標題裡,工具看不到;`--items` 會標出來)。
+- 有原報 major 列進重現不到清單(`--refuted-set`):它不在發現清單、沒人指得到,核對第 4 點會擋。
+- 席位交了更正版、撤回某條 major:舊報告那條照樣要被一個折入的 id 指到;做不到就這輪全折(刻意不改成「只看最新版」,不然重記就能洗掉原報 major)。
+
+閘端才失敗(載體已入帳之後,報告被改、sha 不符或帳被手改):一輪只能有一筆載體、帳撤不掉,這輪照舊全折,下一輪記帳不帶 `--finding-source`,會多用一輪。
+
+完整範例(正確性席報 2 條:第 1 條 major、第 2 條 minor;載體是邊界席,報 1 條 minor):
+
+```bash
+lumos report-normalize --items governance/review-reports/code-x/r1-正確性-sonnet.md governance/review-reports/code-x/r1-邊界-sonnet.md
+lumos canary record none --loop code-x --round r1 --auditor 邊界-sonnet --severity minor --findings 1 \
+  --findings-set c1,c2,b1 --folded-set c1 --accepted-set c2,b1 \
+  --accept-reason c2=錯字不影響行為,不修 --accept-reason b1=延後到 Issues/某議題 \
+  --finding-source c1=governance/review-reports/code-x/r1-正確性-sonnet.md#1 \
+  --finding-source c2=governance/review-reports/code-x/r1-正確性-sonnet.md#2 \
+  --finding-source b1=governance/review-reports/code-x/r1-邊界-sonnet.md#1 \
+  --refuted-set none --report governance/review-reports/code-x/r1-邊界-sonnet.md --snapshot … --spec … --reviewed …
+```
+
+處置閘第九步「逐條放行」會對判定輪全部帳列再核一次(讀報告、驗 sha);沒帶來源的輪印「—」不判。
+
 ### 留痕與 CI 判讀
 
 
@@ -593,7 +625,7 @@ canary hunk 的 file:line 必須落在**真改動集之外**(合成新 hunk 於�
    severity 以「會做出錯的行為 / 破壞合約 / 資料損壞」為 major 以上;存活 ≥major 的低共識條目派辯方(2026-09-30 起預設同門 opus;要另一家視角才派 Codex `codex exec --sandbox read-only`;不可用退 opus 並於 note 註記偏離。`scripts/external-seat.sh`(Gemini)只當備援、其 ≥major 不算否決票——2026-08-23 裁)反駁,要附 file:line 才能降。辯方只殺 code 層假陽性,業務層留人。**high 缺外家辯方(替補也湊不齊)**:不硬擋(Enzo 2026-08-22 裁,成本考量),但收斂結論要降級成「單家族視角下未發現」、留痕 note 寫明缺席,外家未派時問閘(`--disposal`)**不會**提醒(外家是條件席,缺席不算異常;測試釘住不印),這個措辭要編排者自己照做;問閘只在其他席位異常時轉述當輪;全史核對用 `loop status --roster`。diff 碰到綁了 `[test:]` 的 ★INVARIANT★ 節點:**那些綁定測試會被自動真跑**(2026-08-22 起機械化,不靠自律)。★2026-09-07 起分兩條路(人裁)★:高風險走 `code-loop check`,紅/懸空/方法名不合法就**擋**推送;低風險 pre-push 直接呼叫 `lumos bound-tests --advisory`,紅了**印出來、記帳,但不擋**——不選「低風險也擋」是因為擋下去最可能的結果不是人去修測試,是人改走 `--no-verify`(零留痕)。跑不了要 `--skip-bound-tests --note`(或 `bound-tests --skip --note`)留痕。★紅了是要修測試,不是補審查留痕★:補一筆 `code-loop pass` 修不好一支紅掉的測試。
 5. **修與釘**:真問題修進真碼;每個 bug 先寫一條「現場成立 + 翻紅」的測試再修(先紅後綠);修完可續談「發現那條的席」驗收這一條,但收斂前仍派全新席掃 delta 回歸。
 6. **記帳**:★多席同輪時,處置清單(--findings-set/--folded-set/--accepted-set)只掛**一席**(彙整全輪 findings),其餘席只記 --severity/--findings/--report——處置閘看到同輪兩筆帶處置清單就擋,且帳本不能撤銷,只能換編號重記(2026-08-24 第三次踩)★。`lumos canary record none --loop <編號> --round rN --auditor <席> --severity … --findings … --findings-set/--folded-set/--accepted-set/--accept-reason … --refuted-set <id=理由串|none> [--intake <rN-intake.md>] --report … --snapshot … --spec <patch> --reviewed <sha256> --scope-lines … --tokens <該席 tokens> --wallclock-min <該席分鐘>`。每個發現都有去向,blocker 只能折。★2026-09-09 起載體席必帶 `--refuted-set`(編排者機械重現不到、沒折也沒放行的;none=0 條;非 none 帶 --intake,id 要在 intake 重現表同一列整字出現並有 HIT/MISS 字樣;id 不得同時在 findings-set)——缺了 rc2,而且被擋會留 blocked 事件在治理帳★。
-7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內任一席 severity ≥ major 則 accepted 必空(major 一律折,d2 裁;散文設計審不受此限)★。架構對齊席與棧別檢核題對同一段給相反意見時,**兩邊的發現都留、不挑邊**:minor 可 accepted,理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折(2026-09-09,[[Projects/兩席相反時端出張力_計劃]])。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾★不印★「審查有沒有用」那行(它只在設計審印;code 迴圈的數字照樣進 `lumos gov --stats` 那一段)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
+7. **問閘**:單席循序與多席(2026-08-25 甲裁後)一律 `lumos loop status <編號> --disposal --spec <patch> --repo <根>`——多席照步驟 6 的彙總記帳(處置清單只掛一席);★code 迴圈輪內有 major 席時,原報 major 一律折;原報 minor 要放行,載體得帶 `--finding-source` 逐條指回席報告原條(做法見 `reference.md`〈major 輪放行原報 minor〉),沒帶就照舊整輪 accepted 必空;輪內有 blocker 席一律 accepted 必空;散文設計審不受此限([[Projects/代碼審minor解綁_計劃]])★。架構對齊席與棧別檢核題對同一段給相反意見時,**兩邊的發現都留、不挑邊**:minor 可 accepted(同輪有 major 席時要帶逐條來源),理由寫「張力已在表態 `<題目id>` 記錄(tension),人裁」——這不算壓掉;major 照舊只能折(2026-09-09,[[Projects/兩席相反時端出張力_計劃]])。`--gate --panel` 僅供 2026-08-25 前已定錨 panel 帳的舊迴圈回放(新迴圈問了會被拒並指路);沒過回第 1 步。code 迴圈問閘尾★不印★「審查有沒有用」那行(它只在設計審印;code 迴圈的數字照樣進 `lumos gov --stats` 那一段)。diff 命中宣告「UI 驗收」層的棧 → 用 Playwright MCP / claude-in-chrome 真開頁面跑驗收條款並截圖存證;起不了環境要明記原因,不得靜默跳過。
 8. **過了留痕**:先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳)。★凍結判定在留痕之前做★(2026-09-10 [[Projects/提交推送規範_計劃]]):程式、筆記、卷證、帳本放進同一個功能提交之後,`lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定(週跑回放抽查用),產出的 verdict 併進同一個功能提交(還沒推可以改寫那個提交)——凍結記的是檔案內容指紋不是提交編號,併進去不影響回放;原本「推完才凍」會在推送後多出一個提交。再 `lumos code-loop pass --note "<審了什麼、幾席、幾條折入>"`;決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
 
 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句> --sha <提交>`(佐證必附:`--sha <提交>` 或 `--defect-ref <Issue/報告>`,真的沒有就 `--missing-defect-ref "<為什麼沒有>"`;記錯了用 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>` 撤回(追加一筆、統計不算、清單標已撤回);各類別放行後漏了多少看 `lumos loop escape-stats`。)(逃逸帳=審查系統的漏網紀錄,append-only 不進閘;`lumos gov --stats`「審查有沒有用」段印累計筆數與最重等級)。

@@ -10403,12 +10403,12 @@ _GOV_FIELD_TYPES = {
     "nodes": (list,),
     **dict.fromkeys(("findings", "reported"), (int, type(None))),
     **dict.fromkeys(("pairs", "findings_set", "refuted_set", "folded_set", "accepted_set"), (list, type(None))),
-    **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions"), (dict, type(None))),
+    **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions", "finding_sources"), (dict, type(None))),
 }
 
 
 def _gov_event_types_ok(d):
-    """治理事件物件的欄位型別合不合 _GOV_FIELD_TYPES(外加 pairs 每項成對、finding_kinds/refute_verdicts 的值是字串)。"""
+    """治理事件物件的欄位型別合不合 _GOV_FIELD_TYPES(外加 pairs 每項成對、finding_kinds/refute_verdicts 的值是字串、finding_sources 的值是字串清單)。"""
     for k, types in _GOV_FIELD_TYPES.items():
         if k in d and not isinstance(d[k], types):
             return False
@@ -10417,6 +10417,8 @@ def _gov_event_types_ok(d):
     for k in ("finding_kinds", "refute_verdicts"):
         if any(not isinstance(v, str) for v in (d.get(k) or {}).values()):
             return False
+    if not _finding_sources_typed(d.get("finding_sources") or {}):   # 值要是字串清單(代碼審minor解綁),不能併進上面那組
+        return False
     return True
 
 
@@ -10744,20 +10746,26 @@ def _intake_dir_status(repo_root, loop_id):
 _SEV_DECL_LINE_RE = re.compile(r"severity:[ \t]*(clean|minor|major|blocker)[ \t]*")   # ★獨立宣告行的唯一定義★(code-review-yield r1 架構席 a2:原本逐字複製了五處,值域改一字要改五處)
 
 
-def _report_severities(text):
-    """[嚴重度綁定機械掃 S1] 報告檔 severity 宣告的★單一 parse 實作★(寫側+severity-check 共用)。
+def _report_severity_lines(text):
+    """[嚴重度綁定機械掃 S1] 報告檔 severity 宣告的★單一 parse 實作★:回 list[(行號, 等級)](出現序)。
+    _report_severities 取等級欄(寫側+severity-check 共用);report-normalize --items 要行號找該條附近的標題(代碼審minor解綁)。
     逐行 fullmatch、空白只認水平空白(反斜線s 會吞換行讓標籤與值跨行黏上,r2 ext);
     行首錨定天生排掉引句行(以標籤起頭)與 blockquote(以 > 起頭)兩型逃逸(r1 s1/s2);
-    大小寫、全形冒號、行首雜字一律不認(fixture 釘)。回 list[str](出現序)。"""
+    大小寫、全形冒號、行首雜字一律不認(fixture 釘)。"""
     out = []
     text = text.lstrip("\ufeff")   # BOM 不算內容(codex r1 f4)
     # 圍欄內不算(2026-09-09,審查有沒有用記帳 S1):reported 由這支數、拒收偵測走 _visible_lines 不看圍欄,
     # 兩邊可見性要同一套——不然席位在 ``` 裡示範一行 severity: blocker 會灌進 reported 與帳面下限。
-    for _no, line in _visible_lines(text.splitlines(), keep_fenced=False):
+    for no, line in _visible_lines(text.splitlines(), keep_fenced=False):
         m = _SEV_DECL_LINE_RE.fullmatch(line)
         if m:
-            out.append(m.group(1))
+            out.append((no, m.group(1)))
     return out
+
+
+def _report_severities(text):
+    """報告檔 severity 宣告的等級清單(出現序);解析本體在 _report_severity_lines。"""
+    return [lv for _no, lv in _report_severity_lines(text)]
 
 
 _SEV_RESIDUE_RE = re.compile(r"(?i)(?:\bsev(?:erity)?(?:\*\*|__)?\s*[:：]|嚴重度(?:\*\*|__)?\s*[:：]|\[(?:clean|minor|major|blocker)\]|[—–-]\s*(?:BLOCKER|MAJOR|MINOR)\b(?=\s*(?:$|[:：,，;；/|(（—–-])))")   # (?:\*\*|__)? = 粗體只包字不包冒號(**severity**: major);破折號型只在等級字後面接結尾或分隔符才算——「- minor 問題:…」「non-major 的調整」是散文(code-review-yield r1 f1),「- major / blocking: 是」「- MAJOR」才是殘留
@@ -10898,10 +10906,20 @@ def normalize_report_text(text):
     return new, changed, _report_normalize_issues(new)
 
 
-def cmd_report_normalize(path, write=False):
+def cmd_report_normalize(paths, write=False, items=False):
     """`lumos report-normalize <席報告.md> [--write]`:收貨正規化的機械那一半。不帶 --write 只印會改什麼與還剩什麼;帶了才原子覆寫。
-    vault-free(跟 fold-check/prose-lint/quote-check 同層:只吃一個 markdown 路徑,不碰圖譜;r1 架構席 a1——原本接在 canary 那組後面,沒圖譜的 repo 跑不了)。
-    rc:0=已正規化或改完沒殘留;1=改完仍有殘留(印行號,要人改);2=檔讀不到。"""
+    `--items <報告…>` 改走唯讀的序號清單(_report_items;代碼審minor解綁),可給多份;跟 --write 互斥;不帶 --items 只收一份。
+    vault-free(跟 fold-check/prose-lint/quote-check 同層:只吃 markdown 路徑,不碰圖譜;r1 架構席 a1——原本接在 canary 那組後面,沒圖譜的 repo 跑不了)。
+    rc:0=已正規化或改完沒殘留;1=改完仍有殘留(印行號,要人改);2=檔讀不到或參數不合。"""
+    if items and write:
+        print("擋下:--items 只讀、列序號用,不能跟 --write 一起給;先 --write 正規化好,再另外跑 --items", file=sys.stderr)
+        return 2
+    if items:
+        return _report_items(paths)
+    if len(paths) != 1:
+        print(f"擋下:正規化一次只收一份報告(你給了 {len(paths)} 份);要一次列多份報告的序號,加 --items", file=sys.stderr)
+        return 2
+    path = paths[0]
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
     except OSError as e:
@@ -10925,6 +10943,56 @@ def cmd_report_normalize(path, write=False):
             print(f"    第 {no} 行:{why}\n      {ln[:100]}")
         return 1
     return 0
+
+
+def _report_items(paths):
+    """`lumos report-normalize --items <報告…>`(唯讀;代碼審minor解綁):列每份報告的逐條序號、等級、該條附近的標題,
+    最後替每條原報 major 印一行 --finding-source 範本。序號=_report_severity_lines 去掉檔首檔級行後的第幾個(clean 也佔、圍欄內不算),
+    跟記帳與處置閘讀到的同一套;路徑用 canary record 落帳那一套(_ledger_rel_path,從 repo 根算)。
+    報告沒正規化就整批拒印(序號會跟記帳時讀到的不同)。rc:0=全部印出;2=讀不到、沒正規化或不在 repo 裡跑。"""
+    root = _cochange_repo_root(None)
+    if root is None:
+        print("擋下:--items 要在 repo 裡跑——印出的路徑要跟 canary record 存的一樣,從 repo 根算;從目前目錄往上找不到 git repo", file=sys.stderr)
+        return 2
+    root = root.resolve()
+    parsed = []
+    for p in paths:
+        try:
+            text = Path(p).read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            print(f"擋下:讀不到 {p}({e})", file=sys.stderr)
+            return 2
+        if _report_normalize_issues(text):
+            print(f"擋下:{p} 還沒正規化,序號會跟記帳時讀到的不同;先跑:\n    lumos report-normalize --write {p}", file=sys.stderr)
+            return 2
+        parsed.append((_ledger_rel_path(p, root), text.lstrip("\ufeff").splitlines(), _report_severity_lines(text)))
+    tmpl, odd = [], []
+    for rel, lines, decl in parsed:
+        tmpl += _report_items_print(rel, lines, decl)
+        if decl and _SEV_ORDER[decl[0][1]] >= _SEV_ORDER["major"] and not any(_SEV_ORDER[lv] >= _SEV_ORDER["major"] for _no, lv in decl[1:]):
+            odd.append(rel)
+    for rel in odd:
+        print(f"⚠ {_esc_clean(rel, 160)} 檔級是 major,但各條沒有 major——major 寫在散文或標題裡,工具無從逐條核對;"
+              "有這種報告的輪不能走逐條放行:不帶 --finding-source、全折")
+    if tmpl:
+        print("範本(每條原報 major 一行,<填 id> 換成載體帳裡折入那條的 id;放行的原報 minor 照同樣格式另加):")
+        for t in tmpl:
+            path_, _sep, no = t.rpartition("#")   # 路徑那段照鄰居一樣過 _drift_sh;# 與序號接在後面(# 在字中間殼層不當註解)
+            print(f"  --finding-source <填 id>={_drift_sh(path_)}#{no}")
+    return 0
+
+
+def _report_items_print(rel, lines, decl):
+    """--items 印一份報告:檔級與條數一行,接著每條「#序號 等級 該條上方最近的標題」;回這份報告每條原報 major 的「路徑#序號」。"""
+    its = decl[1:]
+    print(f"{_esc_clean(rel, 160)}(檔級 {decl[0][1] if decl else '?'},{len(its)} 條)")
+    out = []
+    for n, (no, lv) in enumerate(its, 1):
+        head = next((lines[i].strip() for i in range(no - 2, -1, -1) if lines[i].lstrip().startswith("#")), "")
+        print(f"  #{n} {lv:<7} {_esc_clean(head, 50)}")
+        if _SEV_ORDER[lv] >= _SEV_ORDER["major"]:
+            out.append(f"{rel}#{n}")
+    return out
 
 
 def _report_reported_count(text):
@@ -11264,7 +11332,18 @@ def _vault_repo_root(env):
     return env.vault.parent.resolve()
 
 
-def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None, finding_severities=None, regression_set=None):
+def _ledger_rel_path(p, root):
+    """審查帳存路徑的唯一寫法:resolve 後在 root(repo 根)底下存相對路徑、之外存絕對路徑。
+    留痕(--report/--snapshot/--intake/--spec)、逐條來源(--finding-source)與 report-normalize --items 印的範本都走這支,
+    處置閘拿帳上字串直接比對,不再正規化(代碼審minor解綁)。"""
+    pr = Path(p).resolve()
+    try:
+        return str(pr.relative_to(root))
+    except ValueError:
+        return str(pr)
+
+
+def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None, finding_severities=None, regression_set=None, finding_sources=None):
     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
@@ -11340,11 +11419,7 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         # 改制回測 [S2]①(2026-08-26):spec 路徑一併入帳——replay --freeze 補漏靠它反查
         # 該 loop 的被審文件(r2 delta d-f1:帳裡只存內容 sha 從沒存路徑,自動凍第一步就跑不動)。
         # 同 report/snapshot 落帳正規化:repo root 底下存相對路徑、之外存絕對。舊帳無此欄不溯及。
-        _spr = Path(spec).resolve()
-        try:
-            rec["spec_path"] = str(_spr.relative_to(_vault_repo_root(env)))
-        except ValueError:
-            rec["spec_path"] = str(_spr)
+        rec["spec_path"] = _ledger_rel_path(spec, _vault_repo_root(env))
     # ── M1包 #4 成本選配欄:非負整數,不給不寫鍵(同 --findings 慣例) ──
     # ★scope_lines(2026-08-02)★:這輪「被審材料有多少行」。
     # 為什麼要記——canary 抓到只證審查員醒著,但★東西越多越抓不到★是外部實測裡
@@ -11421,8 +11496,8 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
     def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
         return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
     f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
-    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds, regression_set)) and f_set is None:
-        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind/--regression-set 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
+    if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds, regression_set, finding_sources)) and f_set is None:
+        print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind/--regression-set/--finding-source 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
         return 2
     if f_set is not None:
         if not f_set:
@@ -11560,6 +11635,28 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
                 print(f"擋下:--finding-severity 要每條發現各標一個(發現有 {sorted(F)},標了 {sorted(sevs)})", file=sys.stderr)
                 return 2
             rec["finding_severities"] = sevs
+        # 逐條來源(Projects/代碼審minor解綁_計劃):代碼審 major 輪要放行原報 minor 時,每個 id 指回席報告原條(路徑#序號)。
+        # 這裡只驗形式並存正規化後的路徑;指的條對不對、等級夠不夠,等留痕路徑算好後跑跟處置閘同一支的完整核對。
+        if finding_sources:
+            if not str(loop or "").startswith("code-"):
+                print("擋下:--finding-source 只給代碼審(code- 開頭的迴圈)用——散文設計審本來就能附理由放行,不需要逐條來源", file=sys.stderr)
+                return 2
+            srcs = {}
+            for item in finding_sources:
+                k, sep, val = item.partition("=")
+                k, val = k.strip(), val.strip()
+                path_, sep2, no = val.rpartition("#")
+                if not sep or not k or not sep2 or not path_ or not _FINDING_SOURCE_NO_RE.fullmatch(no):
+                    print(f"擋下:--finding-source 要寫成 id=<報告路徑>#<序號>(序號是 1 起的整數,不收 +1、前導 0、全形數字),你給的是 {item!r};"
+                          "序號用 lumos report-normalize --items <報告> 列", file=sys.stderr)
+                    return 2
+                if k not in F:
+                    print(f"擋下:--finding-source 的 {k} 不在發現清單(--findings-set)裡", file=sys.stderr)
+                    return 2
+                ent = f"{_ledger_rel_path(path_, _vault_repo_root(env))}#{no}"
+                if ent not in srcs.setdefault(k, []):
+                    srcs[k].append(ent)
+            rec["finding_sources"] = srcs
         # 辯方明確表態(2026-08-27,Systems/finding-refute):辯方對它判過的每條發現表態三選一——
         # agree(同意是真的→維持折入)/ evidence(拿反證降級,須附 file:line→放行)/ concern(只存疑無反證→維持折入)。
         # ★純記帳,不改降級規則★:降級去向仍由 folded/accepted 決定,本欄只記辯方怎麼表態、不回頭改判閘。
@@ -11745,12 +11842,28 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
         # 原樣存呼叫者字串=相對 cwd,換目錄跑 gate 留痕假失蹤(合法 loop 永久 FAIL)。
         # root 判定=_vault_repo_root(向上找 .git;r2 否決席:vault.parent 在 docs/ 兩層
         # 布局=docs/ 非 repo root,governance/ 留痕永遠落絕對路徑,可攜性假賣點)。
-        _pr = Path(_p).resolve()
-        try:
-            _stored = str(_pr.relative_to(_vault_repo_root(env)))
-        except ValueError:
-            _stored = str(_pr)
-        rec[_k + "_path"], rec[_k + "_sha256"] = _stored, _h
+        rec[_k + "_path"], rec[_k + "_sha256"] = _ledger_rel_path(_p, _vault_repo_root(env)), _h
+    # ── 代碼審minor解綁:載體最後記、記帳當下就把逐條放行核對完(錯了不寫帳) ──
+    if loop and round_id and outcome is None:
+        _same, _lerr = _loop_records_checked(env, loop)
+        if _lerr is None:
+            _same = [r for r in _same if r.get("round") == round_id]
+            if any(r.get("finding_sources") for r in _same):
+                print(f"擋下:第 {round_id} 輪已經有帶逐條來源(--finding-source)的載體——規矩是「載體最後記」:之後再記同輪的帳,"
+                      "處置閘會拿新進來的報告重新核對,這輪就可能判不過而且帳撤不掉。要補的席位請記到下一輪", file=sys.stderr)
+                return 2
+            if rec.get("finding_sources"):
+                _st, _msgs = _minor_release_check(loop, [*_same, rec], _report_reader(lambda v: _under_root(_vault_repo_root(env), v)))
+                if _st != "ok":
+                    print("擋下:" + ("這輪用不上 --finding-source——" if _st == "skip" else "逐條來源對不上,這筆沒有寫進帳(改正後重記同一輪即可):"), file=sys.stderr)
+                    for _m in _msgs[:20]:
+                        print(f"  - {_m}", file=sys.stderr)
+                    if _st == "skip":
+                        print("  拿掉 --finding-source 再記", file=sys.stderr)
+                    return 2
+        elif rec.get("finding_sources"):
+            print(f"擋下:讀不到這個迴圈的審查帳({_lerr}),沒辦法核對逐條來源", file=sys.stderr)
+            return 2
     path = env.vault.parent / ".canary-log.jsonl"
     # ── 代碼審從第一筆就要留痕(2026-09-22 rtb-production-agent-demo 回報)──
     # 下面那道「定錨後才強制」對代碼審太晚:代碼審的慣例是先記非載體席、再記載體席,
@@ -27811,6 +27924,187 @@ def _disposal_security_step(rounds, rid, loop_id, prov_path):
     return verdict
 
 
+_FINDING_SOURCE_NO_RE = re.compile(r"[1-9][0-9]*")   # 逐條來源的序號:不收 +1、前導 0、全形數字(代碼審minor解綁)
+
+
+def _finding_sources_typed(fs):
+    """帳上 finding_sources 的型別對不對:dict,每個值是字串清單。寫側、處置閘、gov 讀帳共用這一支。"""
+    return isinstance(fs, dict) and all(isinstance(v, list) and all(isinstance(x, str) for x in v) for v in fs.values())
+
+
+def _report_reader(prov_path):
+    """逐條放行核對讀席報告用:回一支 read(帳列) → (狀態, 文字或 None)。一次讀位元組、驗帳上 sha(走 _prov_read)、
+    再以 errors="replace" 解碼;寫側與處置閘同一支,只差路徑接在哪個根。"""
+    def read(r):
+        st, _p, raw = _prov_read(r, "report_path", prov_path)
+        return st, (raw.decode("utf-8", errors="replace") if raw is not None else None)
+    return read
+
+
+def _minor_release_check(loop_id, rows, read_report):
+    """[代碼審minor解綁] 逐條放行的共用核對——記帳寫側與處置閘第九步呼叫同一支。
+    rows=本輪全部帳列(含載體;寫側是帳上已有各列加這一筆),read_report 見 _report_reader。
+    回 ("skip", [原因]) 不適用 / ("ok", [摘要]) / ("fail", [點名…])。規則照計劃〈核對規則〉第 1 到 7 點:
+    適用=代碼審、恰一筆載體帶非空 finding_sources、本輪有 major 席、沒有 blocker 席、accepted 非空(型別壞掉不論適不適用都判不過);
+    報告形狀(檔級 major 而各條沒有 major 的整輪不能走)、來源存在、原報 major 都只被折入的 id 指到、
+    放行的都指原報 minor 且一條原報只撐一個放行(折入與放行不共用)、自填逐條等級不得低於原報、來源字串格式。
+    同一路徑多列帳只讀一次宣告(每列各自驗 sha);沒帶報告的列跳過。"""
+    st, msgs, car = _mr_applicable(loop_id, rows)
+    if st != "apply":
+        return st, msgs
+    decls, errs = _mr_read_decls(rows, read_report)
+    if errs:
+        return "fail", errs
+    for p, decl in decls.items():
+        if decl and _SEV_ORDER[decl[0]] >= _SEV_ORDER["major"] and not any(_SEV_ORDER[x] >= _SEV_ORDER["major"] for x in decl[1:]):
+            return "fail", [f"{_esc_clean(p, 120)} 檔級是 {decl[0]},但各條宣告裡沒有 major——這種報告的 major 寫在散文或標題裡,"
+                            "工具看不到、無從逐條核對;這輪不能走逐條放行:不帶 --finding-source、全折"]
+    refs, errs = _mr_refs(car["finding_sources"], set(car.get("findings_set") or []), decls)
+    if errs:
+        return "fail", errs
+    FO, AC = set(car.get("folded_set") or []), set(car.get("accepted_set") or [])
+    by_item = {}
+    for fid, items in refs.items():
+        for it in items:
+            by_item.setdefault(it, set()).add(fid)
+    n_major, errs = _mr_major_errs(decls, by_item, FO)
+    errs += _mr_accept_errs(decls, refs, by_item, FO, AC)
+    errs += _mr_own_sev_errs(decls, refs, car.get("finding_severities"))
+    if errs:
+        return "fail", errs
+    return "ok", [f"放行 {len(AC)} 條都指回原報 minor,原報 major {n_major} 條都只被折入的 id 指到"]
+
+
+def _mr_applicable(loop_id, rows):
+    """核對規則第 1 點:回 (狀態, 訊息, 載體);狀態 apply=要核、skip=不適用、fail=載體的 finding_sources 型別壞掉。"""
+    if not str(loop_id).startswith("code-"):
+        return "skip", ["不是代碼審迴圈(散文設計審本來就能附理由放行)"], None
+    carriers = [r for r in rows if "findings_set" in r]
+    if len(carriers) != 1:
+        return "skip", [f"本輪有 {len(carriers)} 筆帶處置清單的帳,要恰好一筆載體"], None
+    car = carriers[0]
+    fs = car.get("finding_sources")
+    if not fs:
+        return "skip", ["載體沒帶逐條來源"], car
+    if not _finding_sources_typed(fs):
+        return "fail", ["帳上 finding_sources 的型別不對(要是 {id: [\"路徑#序號\", …]}),手改過或寫壞了"], car
+    sevs = [r.get("severity") for r in rows]   # 清單不是集合:手改帳的 severity 可能是清單,放進集合會丟 TypeError(代碼審 r1 正確性席)
+    if "blocker" in sevs:
+        return "skip", ["輪內有 blocker 席:blocker 輪 accepted 必須為空、只能全折,逐條放行不適用"], car
+    if "major" not in sevs:
+        return "skip", ["本輪(含這一筆)沒有 major 席,原本就能附理由放行,不需要逐條來源"], car
+    if not car.get("accepted_set"):
+        return "skip", ["這輪沒有放行任何一條,不需要逐條來源"], car
+    return "apply", [], car
+
+
+def _mr_read_decls(rows, read_report):
+    """讀本輪各列的席報告:每列各自驗 sha,同一路徑只解析一次宣告。回 ({路徑: 宣告清單(含檔級)}, [讀不到或被改的點名])。"""
+    errs, decls = [], {}
+    for r in rows:
+        p = r.get("report_path")
+        if not p:
+            continue
+        st, text = read_report(r)
+        if st != "ok":
+            errs.append(f"{_esc_clean(p, 120)}:" + {"missing": "帳上沒記報告", "unreadable": "讀不到",
+                                                   "mismatch": "sha256 跟帳上不符(記帳後被改過)"}.get(st, st))
+        elif p not in decls:
+            decls[p] = _report_severities(text)
+    return decls, errs
+
+
+def _mr_refs(fs, F, decls):
+    """核對規則第 3、7 點:來源字串拆成 (路徑, 序號),id 要在發現清單、路徑要是本輪的報告、序號不超出宣告數。回 ({id: {(路徑, 序號)}}, [點名])。"""
+    errs, refs = [], {}
+    for fid, lst in fs.items():
+        if fid not in F:
+            errs.append(f"{_esc_clean(fid, 40)} 不在發現清單(findings-set)裡")
+            continue
+        for src in lst:
+            path, sep, no = src.rpartition("#")
+            if not sep or not path or not _FINDING_SOURCE_NO_RE.fullmatch(no):
+                errs.append(f"{_esc_clean(fid, 40)} 的來源 {_esc_clean(src, 160)!r} 格式不對(要寫成 路徑#序號,序號是 1 起的整數)")
+            elif path not in decls:
+                errs.append(f"{_esc_clean(fid, 40)} 指到的 {_esc_clean(path, 120)} 不是本輪帳上的席報告")
+            elif len(no) > 9 or int(no) > len(decls[path]) - 1:   # 先比長度:超過 4300 位的字串 int() 會丟 ValueError(代碼審 r1 正確性席)
+                errs.append(f"{_esc_clean(fid, 40)} 指到 {_esc_clean(path, 120)} 第 {_esc_clean(no, 12)} 條,但那份報告只有 {len(decls[path]) - 1} 條宣告")
+            else:
+                refs.setdefault(fid, set()).add((path, int(no)))
+    return refs, errs
+
+
+def _mr_major_errs(decls, by_item, FO):
+    """核對規則第 4 點:每條原報 major 都至少被一個 id 指到,而且指到它的都是折入的 id。回 (原報 major 條數, [點名])。"""
+    errs, n_major = [], 0
+    for p, decl in decls.items():
+        for n, v in enumerate(decl[1:], 1):
+            if _SEV_ORDER[v] < _SEV_ORDER["major"]:
+                continue
+            n_major += 1
+            who = by_item.get((p, n), set())
+            if not who:
+                errs.append(f"{_esc_clean(p, 120)} 第 {n} 條是原報 {v},沒有任何 id 指到它——原報 major 一律只能折,要有一個折入的 id 指它")
+            elif who - FO:
+                errs.append(f"{_esc_clean(p, 120)} 第 {n} 條是原報 {v},卻被放行的 {'、'.join(sorted(who - FO))} 指到——只能被折入的 id 指")
+    return n_major, errs
+
+
+def _mr_accept_errs(decls, refs, by_item, FO, AC):
+    """核對規則第 5 點:放行的每個 id 都有來源、所指至少一條原報 minor(指到原報 major 的第 4 點已點名);
+    一條原報只撐一個放行,折入與放行不共用同一條原報。"""
+    errs = []
+    for fid in sorted(AC):
+        lvs = [decls[p][n] for p, n in refs.get(fid, ())]
+        if not lvs:
+            errs.append(f"放行的 {_esc_clean(fid, 40)} 沒附來源——放行的每條都要指回席報告原條")
+        elif "minor" not in lvs and all(_SEV_ORDER[x] < _SEV_ORDER["major"] for x in lvs):
+            errs.append(f"放行的 {_esc_clean(fid, 40)} 只指到 clean 條——放行要指回一條原報 minor")
+    for (p, n), who in sorted(by_item.items()):
+        acc = sorted(who & AC)
+        if len(acc) > 1:
+            errs.append(f"{_esc_clean(p, 120)} 第 {n} 條同時撐著 {'、'.join(acc)} {len(acc)} 個放行——一條原報只能撐一個放行")
+        if acc and who & FO and _SEV_ORDER[decls[p][n]] < _SEV_ORDER["major"]:
+            errs.append(f"{_esc_clean(p, 120)} 第 {n} 條同時被折入的 {'、'.join(sorted(who & FO))} 和放行的 {'、'.join(acc)} 指到——折入與放行不能共用一條原報")
+    return errs
+
+
+def _mr_own_sev_errs(decls, refs, own):
+    """核對規則第 6 點:載體帶 finding_severities 時,每個 id 自填的等級不得低於它所指原報的最高值。"""
+    if not isinstance(own, dict):
+        return []
+    errs = []
+    for fid, items in sorted(refs.items()):
+        mine, top = own.get(fid), max((decls[p][n] for p, n in items), key=_SEV_ORDER.get)
+        if isinstance(mine, str) and mine in _SEV_ORDER and _SEV_ORDER[mine] < _SEV_ORDER[top]:   # 手改帳的值可能是清單(r1 正確性席)
+            errs.append(f"{_esc_clean(fid, 40)} 自填等級 {mine} 低於它所指原報的最高值 {top}")
+    return errs
+
+
+def _disposal_minor_release_step(rows, carrier, loop_id, prov_path):
+    """處置閘第九步「逐條放行」(代碼審minor解綁):載體帶逐條來源時,對判定輪全部帳列再跑一次寫側那支共用核對
+    (防手改帳、報告事後被改或 sha 不符;載體之後再記席帳寫側已擋)。回 "fail" / "ok" / "skip",自己印 [disposal] 逐條放行 那幾行。
+    只讀判定輪帳列的報告檔,這些檔本來就收在凍結閉包裡,回放能重算。"""
+    if carrier is None or not carrier.get("finding_sources"):
+        print("[disposal] 逐條放行: —(載體沒帶逐條來源,處置集合照第二步判)")
+        return "skip"
+    st, msgs = _minor_release_check(loop_id, rows, _report_reader(prov_path))
+    if st == "skip":
+        print(f"[disposal] 逐條放行: —({msgs[0]})")
+        return "skip"
+    if st == "ok":
+        print(f"[disposal] 逐條放行: ✓ — {msgs[0]}")
+        return "ok"
+    print(f"[disposal] 逐條放行: ✗ — {len(msgs)} 處對不上")
+    for m in msgs[:20]:
+        print(f"  - {m}")
+    if len(msgs) > 20:
+        print(f"  …還有 {len(msgs) - 20} 處")
+    print("  在意的原因:代碼審 major 輪只准放行原報 minor,而且每條都要指回席報告原條;對不上就可能把 major 當 minor 放掉。")
+    print("  接下來:一輪只能有一筆載體、帳不能撤——這輪照舊全折:下一輪記帳不帶 --finding-source;報告或帳被改過的先還原再問閘。")
+    return "fail"
+
+
 def _disposal_clause_step(rows, spec, root, env, loop_id="", spec_sha_override=None):
     """處置閘第五步(條款綁測試算進度 [S3]):回 "fail" / "ok" / "skip",自己印一行 [disposal] 條款綁定。
     skip 四種:①凍結/回放模式(spec_sha_override 有值,對凍結 sha 判、不重讀活檔)②迴圈類型是 code(loop id 前綴 code-,同 _roster_kind;
@@ -27934,7 +28228,8 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
     ⑥資安席(定錨 high 的代碼審,required-gated 席出席+留痕+涵蓋最後一版;見 _disposal_security_step)
     ⑦落點(設計審計劃要寫明 lands_in;代碼審 skip,見 _disposal_landing_step)
     ⑧跑滿回顧(有人裁紀錄又有卷證資料夾的迴圈要合格回顧;回放、凍結任一趟印 —,見 _disposal_retro_step;
-      retro_skip=凍結第一趟多帶的參數,它跟 loop next 一樣用唯讀模式呼叫,不能只靠唯讀旗標區分)。
+      retro_skip=凍結第一趟多帶的參數,它跟 loop next 一樣用唯讀模式呼叫,不能只靠唯讀旗標區分)
+    ⑨逐條放行(代碼審 major 輪載體帶 finding_sources 時,放行的每條指回原報 minor、原報 major 只被折入的 id 指到;見 _disposal_minor_release_step)。
     ★canary caught/missed 不進合取(d4:觀測非閘;missed 不作廢 findings)★。
     壞行 fail-closed(r1 四席重疊:原壞行靜默跳過→latest 判錯輪可偽 PASS);
     round-id 非連續重現 rc2(reuse panel 守衛;原 OrderedDict 首現序拿錯輪)。
@@ -28039,7 +28334,9 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             bad = "accepted 理由缺席或空"
         elif AC and any(r.get("severity") == "blocker" for r in latest):
             bad = "★輪內有 blocker 席,accepted 必須為空(d1;輪級重算,不信寫側單席視角)★"
-        elif AC and str(loop_id).startswith("code-") and any(r.get("severity") in ("major", "blocker") for r in latest):
+        elif (AC and str(loop_id).startswith("code-") and any(r.get("severity") in ("major", "blocker") for r in latest)
+              and not (carrier.get("finding_sources") and _finding_sources_typed(carrier.get("finding_sources")))):
+            # 代碼審minor解綁:載體帶非空、型別正確的逐條來源時不在這裡判,交給第九步逐條核對;沒帶、空的、型別壞掉的照舊判不過(訊息原句保留)
             bad = "★code 迴圈輪內有 major 以上的席,accepted 必須為空——major 一律折,不得附理由放行(probe輪退場 d2,Enzo 2026-08-25 裁:與 panel 時代 max≤minor 同嚴度;散文設計審不受此限)★"
         if bad:
             print(f"[disposal] 處置集合: ✗ — {bad}")
@@ -28253,6 +28550,10 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
                                retro_skip=retro_skip, dir_exists=_retro_dir_pre, events=events, gov_err=gov_err)
     if _rt == "fail":
         fails.append("跑滿回顧")
+    # ── ⑨ 逐條放行(Projects/代碼審minor解綁_計劃):代碼審 major 輪載體帶逐條來源時,原報 minor 才准放行;跟寫側同一支核對再跑一次。
+    _mr = _disposal_minor_release_step(latest, carrier, loop_id, _prov_path)
+    if _mr == "fail":
+        fails.append("逐條放行")
     if result_out is not None:
         result_out["rid"] = rid
         result_out["fails"] = list(fails)
@@ -28262,7 +28563,7 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
             _cap_hint_print(rounds, gate={"passed": False, "fails": list(fails)}, loop_id=loop_id, env=env, repo=root)
         return 1
     # 橫幅只列這次真的跑過而且過了的步驟(代碼審 r3 編排者自找:加了⑤⑥之後橫幅還寫死四項);skip 的不列、不宣稱
-    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld), ("跑滿回顧", _rt)) if st == "ok")
+    _extra = "".join(f" ∧ {n}" for n, st in (("條款綁定", _cl), ("資安席", _sec), ("落點", _ld), ("跑滿回顧", _rt), ("逐條放行", _mr)) if st == "ok")
     if vacuous and carrier is None:
         print(f"✅ DISPOSAL GATE PASS ({loop_id} 輪 {rid}: G3 ∧ 0 發現空輪 ∧ 留痕可重算{_extra};引句無可驗不宣稱)")
     else:
@@ -57188,6 +57489,9 @@ def main():
 
     cr.add_argument("--regression-set", dest="regression_set",
                     help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
+    cr.add_argument("--finding-source", dest="finding_sources", action="append",
+                    help="[代碼審minor解綁] 代碼審 major 輪要放行原報 minor 時,每個 id 指回席報告原條:id=<報告路徑>#<序號>(可重複;序號用 report-normalize --items 列);"
+                         "記帳當下就核對:放行的都要指原報 minor、每條原報 major 都只被折入的 id 指到,錯了 rc2 不寫帳。載體最後記")
     cr.add_argument("--refuted-set", dest="refuted_set",
                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
 
@@ -57201,8 +57505,10 @@ def main():
         _tq_parser(sub)
 
     rn = sub.add_parser("report-normalize", help="[審查有沒有用記帳 S4] 席報告收貨正規化:把行內/列表/標題式的 severity 轉成獨立宣告行、補檔級行;不帶 --write 只印")
-    rn.add_argument("path", help="要正規化的席報告 markdown 檔路徑")
+    rn.add_argument("path", nargs="+", help="要正規化的席報告 markdown 檔路徑(不帶 --items 只收一份)")
     rn.add_argument("--write", action="store_true", help="真的寫回(原子覆寫);不帶只印會改什麼、還剩什麼")
+    rn.add_argument("--items", action="store_true",
+                    help="[代碼審minor解綁] 唯讀:列各份報告的逐條序號與等級,替每條原報 major 印 --finding-source 範本;可給多份,要在 repo 裡跑、報告要已正規化")
 
     lp = sub.add_parser("loop", help="審計 loop 收斂查詢(消費 canary-log 的 --loop 記錄)")
     lsub = lp.add_subparsers(dest="lcmd", required=True)
@@ -58082,7 +58388,7 @@ def main():
         from test_quality import dispatch as _tq_dispatch   # 配套已從驗過的 bytes 登記;缺檔在上面已回結構化錯誤
         return _tq_dispatch(args)
     if args.cmd == "report-normalize":   # vault-free(r1 架構席 a1)
-        return cmd_report_normalize(args.path, write=args.write)
+        return cmd_report_normalize(args.path, write=args.write, items=args.items)
     if args.cmd == "fold-check":
         return cmd_fold_check(args.path, as_json=args.as_json)
     if args.cmd == "refcheck":
@@ -58394,7 +58700,8 @@ def main():
                           finding_severities=getattr(args, 'finding_severities', None),
                           refute_verdicts=getattr(args, 'refute_verdicts', None),
                           refuted_set=getattr(args, 'refuted_set', None),
-                          regression_set=getattr(args, 'regression_set', None))
+                          regression_set=getattr(args, 'regression_set', None),
+                          finding_sources=getattr(args, 'finding_sources', None))
 
 
     if args.cmd == "handoff":
