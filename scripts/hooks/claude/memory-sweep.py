@@ -79,9 +79,19 @@ def _frame_injected(text):
         return text
     safe = "\n".join(
         ln for ln in str(text).split("\n")
-        if "─────" not in ln
+        if "─────" not in _frame_rule_view(ln)
     )
     return f"{_FRAME_OPEN}\n{safe}\n{_FRAME_CLOSE}"
+
+
+def _frame_rule_view(ln):
+    """比對偽造框線用的那一份:剝掉看不見的字(類別 C* 控制與格式、M* 附加記號含變體選擇符,加四個韓文填充字)再比。
+    補審 派工鏡頭第八輪修補 正確性 F1、資安 F1:每兩個 ─ 之間夾 U+200D、U+FE0F、U+200B 就躲得過「連續 5 個 ─」,畫面上跟框尾同形。
+    沒有 ─ 的行直接回原字(快路徑)。同形的別的線字(例 ━)不在這裡防:能寫筆記的人本來就能寫看得見的注入句。"""
+    if "─" not in ln:
+        return ln
+    import unicodedata as _ud
+    return "".join(c for c in ln if _ud.category(c)[0] not in "CM" and c not in "\u115f\u1160\u3164\uffa0")
 
 
 def _plain_label(raw, cap=120):

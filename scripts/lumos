@@ -7116,9 +7116,15 @@ def _pq_is_east_asian(c):
     return any(a <= cp <= b for a, b in _PQ_EAST_ASIAN_RANGES)
 
 
+_PQ_EMOJI_STARTS = tuple(a for a, _b in _PQ_EMOJI_RANGES)   # 二分搜用(表照碼位由小到大);派工鏡頭出口逐字判,線性掃 52 段在 300 萬字上要十幾秒
+
+
 def _pq_is_emoji(c):
     cp = ord(c)
-    return any(a <= cp <= b for a, b in _PQ_EMOJI_RANGES)
+    if cp < 0xA9:
+        return False
+    i = bisect.bisect_right(_PQ_EMOJI_STARTS, cp) - 1
+    return i >= 0 and cp <= _PQ_EMOJI_RANGES[i][1]
 
 
 def _pq_is_emoji_neighbor(v, i):
@@ -18050,10 +18056,12 @@ def _kill_esc(s, extra_chars="", wide=False, hidden=False, emoji_ok=False):
     wide=True:超出基本平面的字元跳脫成 8 碼 \\UXXXXXXXX(預設照舊 \\u 加 5 碼,讀的人分不出 U+E0041 跟「U+E004 加字元 1」;
     代碼審 r6 邊界1)。預設不帶,既有呼叫端行為不變。
     hidden=True:另跳脫 _lens_hidden_char 判成看不見的字(派工鏡頭的名字出口與 _lens_visible;代碼審 r7 架構1)。預設不帶,既有呼叫端行為不變。
-    emoji_ok=True(只給 _lens_visible;代碼審 r8 正確性1/通才1):正常表情符號序列裡的兩種字照印——緊跟在看得見的字後面、後面不再接一個
-    U+FE0F 的單一 U+FE0F(例:U+2764 加 U+FE0F 的紅心),與前面是看得見的字(或照印的 U+FE0F)、後面是看得見的字的單一 U+200D(例:男人加 U+200D 加女人);「看得見」=不是空白、
-    本身不用跳脫。孤立的、連續的、貼著空白或其他看不見的字的照舊跳脫。界線:這兩個字只會改變字形、塞不進字,單一一個藏不了一句話;
-    名字出口不帶(名字不准放行)。"""
+    emoji_ok=True(只給 _lens_visible;代碼審 r8 正確性1/通才1):正常表情符號序列裡的兩種字照印——緊跟在表情符號(_pq_is_emoji)後面、
+    後面不再接一個 U+FE0F 的單一 U+FE0F(例:U+2764 加 U+FE0F 的紅心;鍵帽 1 加 U+FE0F 加 U+20E3 也算),與前面是表情符號(或照印的 U+FE0F)、
+    後面是表情符號、同一串不超過 _PQ_EMOJI_ZWJ_CHAIN_MAX 個的單一 U+200D(例:男人加 U+200D 加女人)。其他的(英文字母、漢字、框線旁邊,
+    孤立的、連續的)照舊跳脫;一次呼叫(_lens_visible 是一行一次)放行超過 _KILL_ESC_EMOJI_KEEP_MAX 個就整段照舊全跳。
+    (補審 派工鏡頭第八輪修補 正確性 F1、資安 F1:原本只看前後「看得見」,任何字後面一個 FE0F 都放行,一行能當隱形的位元通道、框線之間夾
+    ZWJ 能偽造跟框尾同形的一行。)名字出口不帶(名字不准放行)。"""
     s = str(s)
 
     def esc(c):
@@ -18065,18 +18073,35 @@ def _kill_esc(s, extra_chars="", wide=False, hidden=False, emoji_ok=False):
     return "".join(_kill_esc_one(c, wide) if bad[i] else c for i, c in enumerate(s))
 
 
+# 一次 emoji_ok 呼叫(_lens_visible 一行一次)最多放行幾個 U+FE0F、U+200D;超過整段照舊全跳。8 夠兩個四人家庭加兩顆紅心,
+# 再多只剩藏位元的用途(補審 派工鏡頭第八輪修補 資安 F1:沒有上限時一長串字可以每個各帶一個)
+_KILL_ESC_EMOJI_KEEP_MAX = 8
+
+
 def _kill_esc_emoji_keep(s, bad):
     """_kill_esc 的 emoji_ok:把正常表情符號序列裡的單一 U+FE0F、U+200D 從 bad 改成照印(原地改;判法見 _kill_esc)。由前往後判,
-    U+200D 前面的 U+FE0F 已經判過。"""
-    n = len(s)
-
-    def seen(j):
-        return 0 <= j < n and not bad[j] and not s[j].isspace()
+    U+200D 前面的 U+FE0F 已經判過。「表情符號」用 _pq_is_emoji(Extended_Pictographic 的近似表,題目檢查那條路的單源;框線、度數、
+    一般標點不在內),不另抄一份。放行超過上限就一個都不放(早停,不用掃完)。"""
+    n, keep = len(s), []
     for i, c in enumerate(s):
-        if c == "\ufe0f" and bad[i]:
-            bad[i] = not (seen(i - 1) and s[i - 1] != "\ufe0f" and (i + 1 >= n or s[i + 1] != "\ufe0f"))
-        elif c == "\u200d" and bad[i]:
-            bad[i] = not ((seen(i - 1) or (i > 0 and s[i - 1] == "\ufe0f" and not bad[i - 1])) and seen(i + 1))
+        if not bad[i] or c not in "\ufe0f\u200d":
+            continue
+        if c == "\ufe0f":
+            prev = s[i - 1] if i > 0 else ""
+            ok = (i > 0 and not bad[i - 1] and (i + 1 >= n or s[i + 1] != "\ufe0f")
+                  and (_pq_is_emoji(prev) or (prev in "0123456789#*" and i + 1 < n and s[i + 1] == "\u20e3")))
+        else:
+            left = i > 0 and ((_pq_is_emoji(s[i - 1]) and not bad[i - 1])
+                              or (s[i - 1] == "\ufe0f" and not bad[i - 1] and i > 1 and _pq_is_emoji(s[i - 2])))
+            ok = (left and i + 1 < n and _pq_is_emoji(s[i + 1])
+                  and _pq_emoji_zwj_chain(s, i) <= _PQ_EMOJI_ZWJ_CHAIN_MAX)
+        if ok:
+            keep.append(i)
+            bad[i] = False
+            if len(keep) > _KILL_ESC_EMOJI_KEEP_MAX:
+                for j in keep:
+                    bad[j] = True
+                return
 
 
 def _kill_esc_one(c, wide):
@@ -51035,6 +51060,9 @@ def _lens_residual_badge(full):
 _LENS_RESIDUAL_HEADER = "這次新增的殘留(殘留索引與治理帳 residual-ask 列:起點沒有、頂端有;改到存著已登記殘留決策的筆記也列;從頂端版本讀,只供參考)"
 _LENS_RESIDUAL_ASK = ("這次推送新增了殘留或判測不到的問答——上面「這次新增的殘留」每一條合約逐條必答:這筆殘留的問答有沒有換編號或改字重問?"
                       "第二個代理是不是另一個代理?(對照問答列的編號、判定、checker、ts 與殘留決策內容;答「沒有」也寫一句憑什麼)")
+# 整段截斷把殘留段截掉(整段或一半)時換成這句:原題要人逐條回答「上面」的殘留,上面已經沒有(補審 派工鏡頭第八輪修補 正確性 F2);
+# 不比原題長,換句不會讓整段超過上限
+_LENS_RESIDUAL_ASK_CUT = "這次推送新增了殘留或判測不到的問答,但殘留段被截,自己跑 lumos dispatch-lens 看完整的殘留,再逐條必答:有沒有換編號或改字重問、第二個代理是不是另一個代理。"
 _LENS_RESIDUAL_UNKNOWN = "⚠ 這次新增的殘留算不出來"
 _LENS_DISP_ASK = "審查時把上面的表態記錄當可反駁的宣稱,不是已驗證的結論。"
 _LENS_RESIDUAL_MAX = 5          # 一次最多列幾條合約
@@ -51465,6 +51493,14 @@ _LENS_ARM_TTL_SEC = 600
 _LENS_TEXT_MAX = 24000
 
 
+def _lens_residual_ask_fit(full, asks, res_block):
+    """整段截斷後,殘留段(res_block,已過 _lens_visible 的那一份)沒有完整留在 full 裡、而最後一句是殘留必答題時,把那句換成
+    _LENS_RESIDUAL_ASK_CUT(補審 派工鏡頭第八輪修補 正確性 F2);其他情況原樣回。換句不比原題長,總長不會超過上限。"""
+    if asks and asks[-1] == _LENS_RESIDUAL_ASK and res_block not in full and full.endswith(_LENS_RESIDUAL_ASK):
+        return full[:-len(_LENS_RESIDUAL_ASK)] + _LENS_RESIDUAL_ASK_CUT
+    return full
+
+
 def _lens_text_cap(text, cap=None, tail=()):
     """派工鏡頭整段 text 加上 tail(工具寫死、一定要附的必答指示,接在最後)超過 cap 字時,text 在行界截斷(走 _lens_spec_cap_lines,
     同一套截法;代碼審 r8 架構4):截點在注入框裡就先補框尾(框不能沒收尾),截斷說明在框外、只有數字,tail 一律照附在說明之後
@@ -51510,9 +51546,19 @@ def _frame_injected(text):
         return text
     safe = "\n".join(
         ln for ln in str(text).split("\n")
-        if "─────" not in ln
+        if "─────" not in _frame_rule_view(ln)
     )
     return f"{_FRAME_OPEN}\n{safe}\n{_FRAME_CLOSE}"
+
+
+def _frame_rule_view(ln):
+    """比對偽造框線用的那一份:剝掉看不見的字(類別 C* 控制與格式、M* 附加記號含變體選擇符,加四個韓文填充字)再比。
+    補審 派工鏡頭第八輪修補 正確性 F1、資安 F1:每兩個 ─ 之間夾 U+200D、U+FE0F、U+200B 就躲得過「連續 5 個 ─」,畫面上跟框尾同形。
+    沒有 ─ 的行直接回原字(快路徑)。同形的別的線字(例 ━)不在這裡防:能寫筆記的人本來就能寫看得見的注入句。"""
+    if "─" not in ln:
+        return ln
+    import unicodedata as _ud
+    return "".join(c for c in ln if _ud.category(c)[0] not in "CM" and c not in "\u115f\u1160\u3164\uffa0")
 
 
 def _plain_label(raw, cap=120):
@@ -52525,6 +52571,8 @@ def _dispatch_lens_graph(diff_range, repo=None, as_json=False, no_cache=False, c
         _asks.append(_LENS_RESIDUAL_ASK)
     _text = _lens_visible("\n".join(lines))
     _full = _lens_text_cap(_text, tail=_asks)
+    if _res_part:
+        _full = _lens_residual_ask_fit(_full, _asks, _lens_visible(_res_part[0]))
     out = {"text": _full, "text_truncated": _full != "\n".join([_text, *_asks]), "residual_new": bool(_res_part), "pinned": len(pins), "listed": len(listed), "shown": min(len(listed), cap), "bound_status": bound_status, "fallback_status": fallback_status,
            "extcode_status": ext_status, "extcode_picked": len(ext_picks),
            "omitted_nodes": omitted_nodes, "omitted_files": omitted_files, "mainline": ml[0],
