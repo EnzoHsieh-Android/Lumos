@@ -98271,5 +98271,38 @@ def t_test_quality_handbook_controls():
           output[-5000:])
 
 
+def _run_unfamiliar_stack_brief_test(name):
+    _need_src("governance/eval/test_unfamiliar_stack_brief.py")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "governance/eval/test_unfamiliar_stack_brief.py", name],
+        cwd=root, capture_output=True, text=True, timeout=60,
+    )
+    output = result.stdout + result.stderr
+    check(f"陌生棧評測儀器 {name}", result.returncode == 0 and "Ran 1 test" in output, output[-5000:])
+
+
+def t_unfamiliar_stack_brief_manifest_hashes():
+    """凍結材料改一個位元組就拒絕，防止審查後偷改題目。"""
+    _run_unfamiliar_stack_brief_test("ManifestTests.test_manifest_hashes")
+
+
+def t_unfamiliar_stack_brief_preflight_rejects_invalid_inputs():
+    """開跑前拒絕已存在輸出、少案、少臂、模型漂移與答案洩漏。"""
+    _run_unfamiliar_stack_brief_test(
+        "ManifestTests.test_preflight_rejects_invalid_inputs_without_touching_existing_output"
+    )
+
+
+def t_unfamiliar_stack_brief_summary_decisions():
+    """命中、假陽性、正常反例與 invalid 分開報，只用事前線決定是否擴大。"""
+    _run_unfamiliar_stack_brief_test("SummaryTests.test_summary_decisions_keep_metrics_separate")
+
+
+def t_unfamiliar_stack_brief_u4_oracle():
+    """Node 四格 oracle 同時驗容量與回傳結果，不讓修復丟掉正常行為。"""
+    _run_unfamiliar_stack_brief_test("ManifestTests.test_u4_result_preservation_and_capacity")
+
+
 if __name__ == "__main__":
     sys.exit(main())

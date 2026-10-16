@@ -1,0 +1,708 @@
+diff --git a/governance/eval/test_unfamiliar_stack_brief.py b/governance/eval/test_unfamiliar_stack_brief.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..4db3bd42565d0e2fbbe6ff257929861c566fa147
+--- /dev/null
++++ b/governance/eval/test_unfamiliar_stack_brief.py
+@@ -0,0 +1,196 @@
++import hashlib
++import importlib.util
++import json
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++
++MODULE_PATH = Path(__file__).with_name("unfamiliar_stack_brief.py")
++SPEC = importlib.util.spec_from_file_location("unfamiliar_stack_brief", MODULE_PATH)
++MODULE = importlib.util.module_from_spec(SPEC)
++SPEC.loader.exec_module(MODULE)
++
++
++def digest(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def valid_manifest(root):
++    cases = []
++    sessions = []
++    for number in range(1, 6):
++        case_id = f"U{number}"
++        source = root / f"cases/{case_id}/buggy.txt"
++        source.parent.mkdir(parents=True, exist_ok=True)
++        source.write_text(f"fixture {case_id}\n", encoding="utf-8")
++        brief = source.with_name("brief.json")
++        brief.write_text('{"rules": []}', encoding="utf-8")
++        cases.append({
++            "id": case_id,
++            "language": f"language-{number}",
++            "files": [{"path": str(p.relative_to(root)), "sha256": digest(p)}
++                      for p in (source, brief)],
++            "dispatch_common": [str(source.relative_to(root))],
++            "dispatch_brief": str(brief.relative_to(root)),
++            "oracle": {"command": ["true"], "expected": "target-failure"},
++            "primary_defect": f"defect-{number}",
++            "normal_counterexample": f"normal-{number}",
++        })
++        for arm in ("control", "brief"):
++            sessions.append({
++                "case_id": case_id,
++                "arm": arm,
++                "model": "fixed-model",
++                "effort": "fixed-effort",
++                "materials": [str(source.relative_to(root))] + (
++                    [str(brief.relative_to(root))] if arm == "brief" else []),
++            })
++    return {"version": "v1", "cases": cases, "sessions": sessions}
++
++
++def t_unfamiliar_stack_brief_manifest_hashes(test):
++    frozen = Path(__file__).with_name("unfamiliar-stack-brief") / "qualification-v1.json"
++    qualified = MODULE.verify_manifest(frozen)
++    test.assertEqual(5, len(qualified["cases"]))
++    test.assertEqual(21, sum(len(case["files"]) for case in qualified["cases"]))
++    revised = MODULE.verify_manifest(frozen.with_name("qualification-v2.json"))
++    test.assertEqual(5, len(revised["cases"]))
++    with tempfile.TemporaryDirectory() as td:
++        root = Path(td)
++        manifest = valid_manifest(root)
++        path = root / "manifest.json"
++        path.write_text(json.dumps(manifest), encoding="utf-8")
++        test.assertEqual(manifest, MODULE.preflight_run(path, root / "new-output"))
++        test.assertFalse((root / "new-output").exists())
++        MODULE.verify_manifest(path)
++        (root / manifest["cases"][0]["files"][0]["path"]).write_text("tampered\n", encoding="utf-8")
++        with test.assertRaisesRegex(MODULE.ManifestError, "sha256"):
++            MODULE.verify_manifest(path)
++
++
++def t_unfamiliar_stack_brief_preflight_rejects_invalid_inputs(test):
++    with tempfile.TemporaryDirectory() as td:
++        root = Path(td)
++        path = root / "manifest.json"
++        manifest = valid_manifest(root)
++        path.write_text(json.dumps(manifest), encoding="utf-8")
++        output = root / "existing-output"
++        output.mkdir()
++        sentinel = output / "sentinel.bin"
++        sentinel.write_bytes(b"do-not-touch")
++        before = digest(sentinel)
++        with test.assertRaisesRegex(MODULE.ManifestError, "output"):
++            MODULE.preflight_run(path, output)
++        test.assertEqual(before, digest(sentinel))
++
++        for mutator, message in (
++            (lambda m: m["cases"].pop(), "five cases"),
++            (lambda m: m["sessions"].pop(), "ten sessions"),
++            (lambda m: m["sessions"][0].update(model="other"), "same model"),
++            (lambda m: m["sessions"][0]["materials"].append("answer-key.json"), "answer key"),
++            (lambda m: m["cases"][0].pop("oracle"), "oracle"),
++            (lambda m: m["cases"][0].pop("primary_defect"), "primary_defect"),
++            (lambda m: m["cases"][0].pop("normal_counterexample"), "normal_counterexample"),
++            (lambda m: m["sessions"][0]["materials"].append("cases/U1/brief.json"), "materials"),
++            (lambda m: m["sessions"][0]["materials"].append("cases/U1/fixed.cs"), "materials"),
++            (lambda m: m["sessions"][1].update(materials=[]), "materials"),
++            (lambda m: m["cases"][0].update(dispatch_common=["missing.txt"]), "frozen"),
++            (lambda m: m["sessions"][0].update(case_id=[]), "case"),
++        ):
++            broken = valid_manifest(root)
++            mutator(broken)
++            path.write_text(json.dumps(broken), encoding="utf-8")
++            with test.assertRaisesRegex(MODULE.ManifestError, message):
++                MODULE.preflight_run(path, root / "new-output")
++
++
++class ManifestTests(unittest.TestCase):
++    def test_u4_result_preservation_and_capacity(self):
++        # Shared task: return all results in input order, including an empty input.
++        root = Path(__file__).with_name("unfamiliar-stack-brief")
++        for version, scenario, expected in (
++            ("buggy", "target", 1), ("buggy", "normal", 0),
++            ("fixed", "target", 0), ("fixed", "normal", 0),
++        ):
++            result = subprocess.run(
++                ["node", str(root / f"cases/U4/{version}-v2.js"), scenario],
++                capture_output=True, text=True, timeout=10, check=False,
++            )
++            self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
++
++    def test_manifest_hashes(self):
++        t_unfamiliar_stack_brief_manifest_hashes(self)
++
++    def test_preflight_rejects_invalid_inputs_without_touching_existing_output(self):
++        t_unfamiliar_stack_brief_preflight_rejects_invalid_inputs(self)
++
++
++def receipts(control_hits=0, brief_hits=0, brief_false_positives=0, brief_normal_harms=0):
++    rows = []
++    for number in range(1, 6):
++        for arm in ("control", "brief"):
++            rows.append({
++                "case_id": f"U{number}",
++                "arm": arm,
++                "valid": True,
++                "primary_hit": number <= (control_hits if arm == "control" else brief_hits),
++                "evidence_grounded": True,
++                "false_positives": brief_false_positives if arm == "brief" and number == 1 else 0,
++                "normal_counterexample_harmed": arm == "brief" and number <= brief_normal_harms,
++                "familiarity": "unfamiliar",
++                "elapsed_seconds": 10,
++                "tokens": 100,
++            })
++    return rows
++
++
++def t_unfamiliar_stack_brief_summary_decisions(test):
++    proceed = MODULE.summarize_receipts(receipts(control_hits=1, brief_hits=3, brief_false_positives=1))
++    test.assertEqual("proceed-to-historical", proceed["decision"])
++    test.assertEqual(2, proceed["additional_primary_hits"])
++    test.assertEqual(1, proceed["brief_false_positives"])
++
++    all_hit = MODULE.summarize_receipts(receipts(control_hits=5, brief_hits=5))
++    test.assertEqual("stop", all_hit["decision"])
++    test.assertEqual(0, all_hit["additional_primary_hits"])
++
++    all_miss = MODULE.summarize_receipts(receipts())
++    test.assertEqual("stop", all_miss["decision"])
++    test.assertEqual(0, all_miss["control_primary_hits"])
++    test.assertEqual(0, all_miss["brief_primary_hits"])
++
++    noisy = MODULE.summarize_receipts(receipts(control_hits=0, brief_hits=2, brief_false_positives=2))
++    test.assertEqual("stop", noisy["decision"])
++    test.assertEqual(2, noisy["brief_false_positives"])
++
++    invalid = receipts(control_hits=1, brief_hits=3)
++    invalid[0]["valid"] = False
++    incomplete = MODULE.summarize_receipts(invalid)
++    test.assertEqual("incomplete", incomplete["decision"])
++    test.assertEqual(1, len(incomplete["invalid_sessions"]))
++
++    # S5: only actual booleans and non-negative finite metrics are scored.
++    for field, value in (
++        ("valid", "false"), ("primary_hit", "false"), ("evidence_grounded", "false"),
++        ("normal_counterexample_harmed", "false"), ("tokens", -100),
++        ("tokens", True), ("elapsed_seconds", "bad"), ("elapsed_seconds", float("inf")),
++        ("false_positives", "bad"), ("case_id", []), ("arm", {}),
++    ):
++        rows = receipts(control_hits=1, brief_hits=3)
++        rows[1][field] = value
++        with test.subTest(field=field, value=value):
++            summary = MODULE.summarize_receipts(rows)
++            test.assertEqual("incomplete", summary["decision"])
++            test.assertTrue(summary["invalid_sessions"])
++            test.assertIn(rows[1], summary["raw_receipts"])
++
++
++class SummaryTests(unittest.TestCase):
++    def test_summary_decisions_keep_metrics_separate(self):
++        t_unfamiliar_stack_brief_summary_decisions(self)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/governance/eval/unfamiliar-stack-brief/README.md b/governance/eval/unfamiliar-stack-brief/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..8eee2c64fd418b0ffae3f3a013061607fde2e023
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/README.md
+@@ -0,0 +1,53 @@
++# Unfamiliar-stack Invariant Brief pilot
++
++This directory contains five synthetic, executable code-review cases. They test
++whether a short, change-specific invariant brief helps a reviewer working in an
++unfamiliar language. They are not evidence about production review quality.
++
++Each case has a buggy and fixed source, a normal-path control, a hidden answer
++key, and a brief assembled from existing Lumos idiom rule IDs. Qualification
++must show this matrix before any model session:
++
++| version | target scenario | normal scenario |
++|---|---|---|
++| buggy | non-zero for the intended defect | zero |
++| fixed | zero | zero |
++
++The answer keys and fixed sources are grader-only material. They must never be
++listed in a model session's `materials` field.
++
++## Qualification versions and dispatch boundary
++
++qualification-v1 and its result receipt are immutable historical evidence.
++Its U4 oracle checked concurrency but missed lost worker results; it is not a
++complete S2 qualification. qualification-v2 replaces only U4 sources with
++buggy-v2.js/fixed-v2.js, checking returned values, input order, empty input and
++the concurrency bound. Other case hashes are unchanged, not newly rerun.
++
++Before a formal run, each case must declare dispatch_common (a nonempty list
++of frozen reviewer-safe paths) and dispatch_brief (one distinct frozen path).
++Each session must exactly match common, plus the Brief only for the brief arm.
++The allowlist needs independent S3 review: declaring a path does not prove its
++content is answer-free. Qualification manifests intentionally lack dispatch
++allowlists and sessions and cannot start a formal run.
++
++## 選材與壓縮候選版
++
++`candidates/v2/U1.json` 至 `U5.json` 是重新核對 idiom 原文後的候選
++Brief，每案 1–2 條；最多 12 條是上限，不是需要湊滿的配額。
++原本的 `cases/*/brief.json` 與 qualification-v1 凍結材料保持原樣。
++
++選材理由（本節只供編輯者閱讀，不放入 reviewer 材料）：
++
++- U1 保留 R7 的資源有效期間及 R6 的釋放責任；兩者分別檢查過早釋放與清理路徑。
++- U2 把 R5 的重複提醒合併，另選實際存在的 controller 關閉責任 R6；移除未由 R5 原文充分支持的「所有 teardown 都必須 await」概括。
++- U3 保留 R5；刪除 R2 的 UI／Task 擁有者延伸，案例未提供該生命週期。
++- U4 保留 R2；刪除針對長活快取的 R10，避免把短期輸入集合當成長活集合。
++- U5 保留 R22 的交易入口概念；刪除過寬的角色卡引用，原子性要求由兩組共用的任務契約提供。
++
++每條只提供規則、適用結構與待查問題；不給缺陷位置或修法。容量、
++結果先後與原子性等成功條件，必須放在兩組共用材料，不能藏在 Brief。
++這些候選是本次 assistant 編輯結果，未另派 Astra 執行。
++
++採用前須另做 S3 獨立洩題審查並升版凍結 manifest。編輯者已知五案
++主題，不能自行宣告通過盲審；格式與來源 ID 核對不證明沒有語意洩題。
+diff --git a/governance/eval/unfamiliar-stack-brief/cases/U4/answer-key.json b/governance/eval/unfamiliar-stack-brief/cases/U4/answer-key.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..bd542964852974803fc6e90451d6398558a21960
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/cases/U4/answer-key.json
+@@ -0,0 +1 @@
++{"primary_defect":"Promise.all starts all 20 workers and violates the explicit peak concurrency limit of three.","required_evidence":["items.map creates every promise eagerly","peak active work can reach input size"],"normal_counterexample":"Two inputs are within the fixed capacity and should remain accepted."}
+diff --git a/governance/eval/unfamiliar-stack-brief/cases/U4/brief.json b/governance/eval/unfamiliar-stack-brief/cases/U4/brief.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..3514523cd15c4d55b76738a9930328494f40a624
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/cases/U4/brief.json
+@@ -0,0 +1,8 @@
++{
++  "case_id": "U4",
++  "items": [
++    {"id": "bounded-fanout", "invariant": "Promise.all is aggregation, not a concurrency limit.", "applies_because": "The change maps an input collection directly into asynchronous work.", "challenge": "Choose an input much larger than the downstream capacity and calculate peak in-flight work.", "source": "node-idioms#R2"},
++    {"id": "collection-bound", "invariant": "Long-lived or input-sized work sets need an explicit bound.", "applies_because": "The number of promises is controlled by caller input.", "challenge": "State where backpressure occurs and what prevents all tasks from starting together.", "source": "node-idioms#R10"}
++  ],
++  "unknowns": ["The real downstream pool size and service rate are not provided; the case contract fixes the limit at three."]
++}
+diff --git a/governance/eval/unfamiliar-stack-brief/cases/U4/buggy-v2.js b/governance/eval/unfamiliar-stack-brief/cases/U4/buggy-v2.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..77176e4eacc38a28116e423f84a8e786128c401f
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/cases/U4/buggy-v2.js
+@@ -0,0 +1,26 @@
++import assert from 'node:assert/strict';
++const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
++
++async function processAll(items, worker) {
++  return Promise.all(items.map(worker));
++}
++
++async function run(count) {
++  let active = 0;
++  let peak = 0;
++  const items = Array.from({ length: count }, (_, index) => index + 1);
++  const result = await processAll(items, async value => {
++    active += 1;
++    peak = Math.max(peak, active);
++    await delay(value % 2 ? 8 : 1);
++    active -= 1;
++    return value * 2;
++  });
++  assert.deepEqual(result, items.map(value => value * 2));
++  assert.deepEqual(await processAll([], async value => value), []);
++  return peak;
++}
++
++const normal = process.argv[2] === 'normal';
++const peak = await run(normal ? 2 : 20);
++process.exit(normal ? (peak <= 3 ? 0 : 3) : (peak <= 3 ? 0 : 1));
+diff --git a/governance/eval/unfamiliar-stack-brief/cases/U4/buggy.js b/governance/eval/unfamiliar-stack-brief/cases/U4/buggy.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..80d89202209881ea0bc24f17fc7ad2f4a0e5c8b8
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/cases/U4/buggy.js
+@@ -0,0 +1,21 @@
++const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
++
++async function processAll(items, worker) {
++  return Promise.all(items.map(worker));
++}
++
++async function run(count) {
++  let active = 0;
++  let peak = 0;
++  await processAll(Array.from({ length: count }), async () => {
++    active += 1;
++    peak = Math.max(peak, active);
++    await delay(5);
++    active -= 1;
++  });
++  return peak;
++}
++
++const normal = process.argv[2] === 'normal';
++const peak = await run(normal ? 2 : 20);
++process.exit(normal ? (peak <= 3 ? 0 : 3) : (peak <= 3 ? 0 : 1));
+diff --git a/governance/eval/unfamiliar-stack-brief/cases/U4/fixed-v2.js b/governance/eval/unfamiliar-stack-brief/cases/U4/fixed-v2.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..ba7b3e9d05e44529df8b1b2c729d1d822ac0022d
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/cases/U4/fixed-v2.js
+@@ -0,0 +1,35 @@
++import assert from 'node:assert/strict';
++const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
++
++async function processAll(items, worker, limit = 3) {
++  let next = 0;
++  const results = new Array(items.length);
++  async function consume() {
++    while (next < items.length) {
++      const index = next++;
++      results[index] = await worker(items[index]);
++    }
++  }
++  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
++  return results;
++}
++
++async function run(count) {
++  let active = 0;
++  let peak = 0;
++  const items = Array.from({ length: count }, (_, index) => index + 1);
++  const result = await processAll(items, async value => {
++    active += 1;
++    peak = Math.max(peak, active);
++    await delay(value % 2 ? 8 : 1);
++    active -= 1;
++    return value * 2;
++  });
++  assert.deepEqual(result, items.map(value => value * 2));
++  assert.deepEqual(await processAll([], async value => value), []);
++  return peak;
++}
++
++const normal = process.argv[2] === 'normal';
++const peak = await run(normal ? 2 : 20);
++process.exit(normal ? (peak <= 3 ? 0 : 3) : (peak <= 3 ? 0 : 1));
+diff --git a/governance/eval/unfamiliar-stack-brief/cases/U4/fixed.js b/governance/eval/unfamiliar-stack-brief/cases/U4/fixed.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..6c450a834291a9f711067c8db0e6e23849b2881b
+--- /dev/null
++++ b/governance/eval/unfamiliar-stack-brief/cases/U4/fixed.js
+@@ -0,0 +1,28 @@
++const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
++
++async function processAll(items, worker, limit = 3) {
++  let next = 0;
++  async function consume() {
++    while (next < items.length) {
++      const index = next++;
++      await worker(items[index]);
++    }
++  }
++  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, consume));
++}
++
++async function run(count) {
++  let active = 0;
++  let peak = 0;
++  await processAll(Array.from({ length: count }), async () => {
++    active += 1;
++    peak = Math.max(peak, active);
++    await delay(5);
++    active -= 1;
++  });
++  return peak;
++}
++
++const normal = process.argv[2] === 'normal';
++const peak = await run(normal ? 2 : 20);
++process.exit(normal ? (peak <= 3 ? 0 : 3) : (peak <= 3 ? 0 : 1));
+diff --git a/governance/eval/unfamiliar_stack_brief.py b/governance/eval/unfamiliar_stack_brief.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..0f2042dd299c97572222f92948057eb4977bcc90
+--- /dev/null
++++ b/governance/eval/unfamiliar_stack_brief.py
+@@ -0,0 +1,236 @@
++#!/usr/bin/env python3
++"""Unfamiliar-stack Invariant Brief evaluation helpers.
++
++This module freezes evaluation materials and summarizes already-scored receipts.
++It deliberately does not dispatch models or decide whether a review finding is true.
++"""
++
++import hashlib
++import json
++import math
++from pathlib import Path
++
++
++class ManifestError(ValueError):
++    """The frozen evaluation manifest is unsafe or inconsistent."""
++
++
++def _load_manifest(manifest_path):
++    path = Path(manifest_path)
++    try:
++        data = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise ManifestError(f"manifest unreadable: {exc.__class__.__name__}") from exc
++    if not isinstance(data, dict):
++        raise ManifestError("manifest must be a JSON object")
++    return path, data
++
++
++def _material_path(root, relative):
++    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
++        raise ManifestError("material path must be a non-empty relative path")
++    candidate = root / relative
++    try:
++        resolved = candidate.resolve(strict=True)
++        resolved.relative_to(root.resolve())
++    except (OSError, ValueError) as exc:
++        raise ManifestError(f"material path escapes or is missing: {relative}") from exc
++    if candidate.is_symlink() or not resolved.is_file():
++        raise ManifestError(f"material path must be a regular non-symlink file: {relative}")
++    return resolved
++
++
++def verify_manifest(manifest_path):
++    path, data = _load_manifest(manifest_path)
++    cases = data.get("cases")
++    if not isinstance(cases, list):
++        raise ManifestError("manifest cases must be a list")
++    root = path.parent
++    seen = set()
++    for case in cases:
++        if not isinstance(case, dict) or not isinstance(case.get("id"), str) or not case["id"]:
++            raise ManifestError("each case needs a non-empty id")
++        if case["id"] in seen:
++            raise ManifestError(f"duplicate case id: {case['id']}")
++        seen.add(case["id"])
++        _case_metadata(case)
++        files = case.get("files")
++        if not isinstance(files, list) or not files:
++            raise ManifestError(f"case {case['id']} needs frozen files")
++        for item in files:
++            if not isinstance(item, dict) or set(item) != {"path", "sha256"}:
++                raise ManifestError(f"case {case['id']} file entry must contain path and sha256")
++            material = _material_path(root, item["path"])
++            actual = hashlib.sha256(material.read_bytes()).hexdigest()
++            if actual != item["sha256"]:
++                raise ManifestError(f"sha256 mismatch: {item['path']}")
++    return data
++
++
++def _case_metadata(case):
++    for field in ("language", "primary_defect", "normal_counterexample"):
++        if not isinstance(case.get(field), str) or not case[field].strip():
++            raise ManifestError(f"case needs {field}")
++    oracle = case.get("oracle")
++    if not isinstance(oracle, dict) or not oracle.get("expected"):
++        raise ManifestError("case needs oracle expected results")
++    if not (oracle.get("command") or oracle.get("command_template")):
++        raise ManifestError("case needs oracle command")
++
++
++def _dispatch_materials(case):
++    # Declared allowlist is reviewed with S3; filenames are not a semantic oracle.
++    common, brief = case.get("dispatch_common"), case.get("dispatch_brief")
++    if not isinstance(common, list) or not common or not all(isinstance(p, str) for p in common):
++        raise ManifestError("case needs dispatch_common materials")
++    if not isinstance(brief, str) or brief in common or len(set(common)) != len(common):
++        raise ManifestError("case needs distinct dispatch_brief materials")
++    frozen = {item["path"] for item in case["files"]}
++    if not set([*common, brief]) <= frozen:
++        raise ManifestError("dispatch materials must be frozen in this case")
++    for path in [*common, brief]:
++        name = Path(path).name.lower()
++        if any(word in name for word in ("fixed", "answer-key", "answer_key", "oracle")):
++            raise ManifestError("grader-only materials cannot be dispatched")
++    return common, brief
++
++
++def _session_fields(session):
++    if not isinstance(session, dict):
++        raise ManifestError("each session must be an object")
++    model, effort = session.get("model"), session.get("effort")
++    if not isinstance(model, str) or not model or not isinstance(effort, str) or not effort:
++        raise ManifestError("each session needs model and effort")
++    materials = session.get("materials")
++    if not isinstance(materials, list) or not all(isinstance(item, str) for item in materials):
++        raise ManifestError("session materials must be a list of paths")
++    if any("answer-key" in item.lower() or "answer_key" in item.lower() for item in materials):
++        raise ManifestError("answer key must not appear in dispatched materials")
++    if not isinstance(session.get("case_id"), str) or not isinstance(session.get("arm"), str):
++        raise ManifestError("session case and arm must be strings")
++    return model, effort
++
++
++def preflight_run(manifest_path, output_dir):
++    output = Path(output_dir)
++    if output.exists():
++        raise ManifestError(f"output directory already exists: {output}")
++    data = verify_manifest(manifest_path)
++    cases = data.get("cases")
++    sessions = data.get("sessions")
++    if len(cases) != 5:
++        raise ManifestError("experiment requires exactly five cases")
++    if not isinstance(sessions, list) or len(sessions) != 10:
++        raise ManifestError("experiment requires exactly ten sessions")
++    case_ids = {case["id"] for case in cases}
++    allowed = {case["id"]: _dispatch_materials(case) for case in cases}
++    expected = {(case_id, arm) for case_id in case_ids for arm in ("control", "brief")}
++    observed = set()
++    models, efforts = set(), set()
++    for session in sessions:
++        model, effort = _session_fields(session)
++        pair = (session.get("case_id"), session.get("arm"))
++        if pair not in expected or pair in observed:
++            raise ManifestError("sessions must contain one control and one brief arm per case")
++        common, brief = allowed[pair[0]]
++        if session["materials"] != common + ([brief] if pair[1] == "brief" else []):
++            raise ManifestError("session materials must match the frozen arm allowlist")
++        observed.add(pair)
++        models.add(model)
++        efforts.add(effort)
++    if observed != expected:
++        raise ManifestError("sessions must contain one control and one brief arm per case")
++    if len(models) != 1:
++        raise ManifestError("all sessions must use the same model")
++    if len(efforts) != 1:
++        raise ManifestError("all sessions must use the same effort")
++    return data
++
++
++def _receipt_invalid_reason(row):
++    for field in ("valid", "primary_hit", "evidence_grounded", "normal_counterexample_harmed"):
++        if type(row[field]) is not bool:
++            return f"{field} must be boolean"
++    for field in ("false_positives", "tokens"):
++        if type(row[field]) is not int or row[field] < 0:
++            return f"{field} must be a non-negative integer"
++    elapsed = row["elapsed_seconds"]
++    if (type(elapsed) not in (int, float) or elapsed < 0
++            or (type(elapsed) is float and not math.isfinite(elapsed))):
++        return "elapsed_seconds must be finite and non-negative"
++    if not row["valid"]:
++        return row.get("invalid_reason") or "session marked invalid"
++    if row["familiarity"] != "unfamiliar":
++        return "reviewer is not unfamiliar with this stack"
++    return None
++
++
++def summarize_receipts(receipts):
++    if not isinstance(receipts, list):
++        raise ManifestError("receipts must be a list")
++    expected = {(f"U{number}", arm) for number in range(1, 6) for arm in ("control", "brief")}
++    by_pair = {}
++    seen = set()
++    invalid = []
++    required = {
++        "case_id", "arm", "valid", "primary_hit", "evidence_grounded", "false_positives",
++        "normal_counterexample_harmed", "familiarity", "elapsed_seconds", "tokens",
++    }
++    for index, row in enumerate(receipts):
++        if not isinstance(row, dict) or not required <= set(row):
++            invalid.append({"index": index, "reason": "missing receipt fields"})
++            continue
++        pair = (row["case_id"], row["arm"])
++        if not all(isinstance(value, str) for value in pair) or pair not in expected:
++            invalid.append({"index": index, "reason": "unknown case or arm"})
++            continue
++        if pair in seen:
++            invalid.append({"index": index, "reason": "duplicate case arm"})
++            continue
++        seen.add(pair)
++        reason = _receipt_invalid_reason(row)
++        if reason:
++            invalid.append({"index": index, "reason": reason})
++        else:
++            by_pair[pair] = row
++    for pair in sorted(expected - seen):
++        invalid.append({"case_id": pair[0], "arm": pair[1], "reason": "missing session"})
++
++    def confirmed(row):
++        return bool(row and row["valid"] and row["familiarity"] == "unfamiliar"
++                    and row["primary_hit"] and row["evidence_grounded"])
++
++    per_case = []
++    additional = 0
++    for number in range(1, 6):
++        case_id = f"U{number}"
++        control = by_pair.get((case_id, "control"))
++        brief = by_pair.get((case_id, "brief"))
++        control_hit, brief_hit = confirmed(control), confirmed(brief)
++        additional += int(brief_hit and not control_hit)
++        per_case.append({"case_id": case_id, "control": control, "brief": brief,
++                         "control_confirmed_hit": control_hit, "brief_confirmed_hit": brief_hit})
++    control_hits = sum(row["control_confirmed_hit"] for row in per_case)
++    brief_hits = sum(row["brief_confirmed_hit"] for row in per_case)
++    brief_fp = sum(row.get("false_positives", 0) for (case_id, arm), row in by_pair.items() if arm == "brief")
++    control_fp = sum(row.get("false_positives", 0) for (case_id, arm), row in by_pair.items() if arm == "control")
++    brief_harms = sum(bool(row.get("normal_counterexample_harmed")) for (case_id, arm), row in by_pair.items() if arm == "brief")
++    control_harms = sum(bool(row.get("normal_counterexample_harmed")) for (case_id, arm), row in by_pair.items() if arm == "control")
++    decision = "incomplete" if invalid else (
++        "proceed-to-historical"
++        if additional >= 2 and brief_fp <= control_fp + 1 and brief_harms <= control_harms
++        else "stop"
++    )
++    return {
++        "decision": decision,
++        "control_primary_hits": control_hits,
++        "brief_primary_hits": brief_hits,
++        "additional_primary_hits": additional,
++        "control_false_positives": control_fp,
++        "brief_false_positives": brief_fp,
++        "control_normal_counterexample_harms": control_harms,
++        "brief_normal_counterexample_harms": brief_harms,
++        "invalid_sessions": invalid,
++        "per_case": per_case,
++        "raw_receipts": receipts,
++    }
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 070fd42e7981a3a9644f9bfe6504171e98995bb7..f354de59c2f17ff3fafa09b7a8f84f02dbc79bf0 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -98264,12 +98264,45 @@ def t_test_quality_handbook_controls():
+     _need_src("governance/eval/test_test_quality_handbook.py")
+     root = Path(GRAPHCTL).resolve().parent.parent
+     run = subprocess.run([sys.executable, "governance/eval/test_test_quality_handbook.py"],
+                          cwd=root, capture_output=True, text=True, timeout=60)
+     output = run.stdout + run.stderr
+     check("手冊實驗判讀與模型程序清理獨立控制", run.returncode == 0 and
+           re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+           output[-5000:])
+ 
+ 
++def _run_unfamiliar_stack_brief_test(name):
++    _need_src("governance/eval/test_unfamiliar_stack_brief.py")
++    root = Path(GRAPHCTL).resolve().parent.parent
++    result = subprocess.run(
++        [sys.executable, "governance/eval/test_unfamiliar_stack_brief.py", name],
++        cwd=root, capture_output=True, text=True, timeout=60,
++    )
++    output = result.stdout + result.stderr
++    check(f"陌生棧評測儀器 {name}", result.returncode == 0 and "Ran 1 test" in output, output[-5000:])
++
++
++def t_unfamiliar_stack_brief_manifest_hashes():
++    """凍結材料改一個位元組就拒絕，防止審查後偷改題目。"""
++    _run_unfamiliar_stack_brief_test("ManifestTests.test_manifest_hashes")
++
++
++def t_unfamiliar_stack_brief_preflight_rejects_invalid_inputs():
++    """開跑前拒絕已存在輸出、少案、少臂、模型漂移與答案洩漏。"""
++    _run_unfamiliar_stack_brief_test(
++        "ManifestTests.test_preflight_rejects_invalid_inputs_without_touching_existing_output"
++    )
++
++
++def t_unfamiliar_stack_brief_summary_decisions():
++    """命中、假陽性、正常反例與 invalid 分開報，只用事前線決定是否擴大。"""
++    _run_unfamiliar_stack_brief_test("SummaryTests.test_summary_decisions_keep_metrics_separate")
++
++
++def t_unfamiliar_stack_brief_u4_oracle():
++    """Node 四格 oracle 同時驗容量與回傳結果，不讓修復丟掉正常行為。"""
++    _run_unfamiliar_stack_brief_test("ManifestTests.test_u4_result_preservation_and_capacity")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
