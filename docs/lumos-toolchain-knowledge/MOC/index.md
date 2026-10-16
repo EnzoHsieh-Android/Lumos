@@ -76,6 +76,12 @@ Lumos 工具鏈(`scripts/lumos` + skills + governance 自動化)自身的知識�
 
 研究題:怎麼量這些機制到底有沒有用
 
+- [[Systems/陌生棧不變量簡報評測]] — 五案短 Brief 的資格與成對評測。
+- [[Systems/陌生棧案例U1_CSharp]]
+- [[Systems/陌生棧不變量簡報評測]] — 同時管 U2 Dart 合成生命週期案例。
+- [[Systems/陌生棧案例U3_Swift]]
+- [[Systems/陌生棧案例U4_Node]]
+- [[Systems/陌生棧案例U5_Java]]
 - [[Systems/ablation-lumos-first]] — 消融結果檔的整批有效性、缺場與合併邊界。
 - [[Systems/review-convergence-eval]]
 - [[Systems/drift-history]]
