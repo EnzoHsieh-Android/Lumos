@@ -51,6 +51,18 @@
 
 來源（本次核對Laravel12.x作例子，消費專案須換成自己的版本）：[Laravel testing](https://laravel.com/docs/12.x/testing)、[database testing](https://laravel.com/docs/12.x/database-testing)、[mocking](https://laravel.com/docs/12.x/mocking)、[Event fake 與factory限制](https://laravel.com/docs/12.x/events#testing)、[Pest mutation testing](https://pestphp.com/docs/mutation-testing)、[Infection supported frameworks](https://infection.github.io/guide/supported-test-frameworks.html)、[Composer platform](https://getcomposer.org/doc/06-config.md#platform)。
 
+### 網頁前端(Vitest／Jest + Testing Library)的撰寫補充
+
+沿共用規範驗需求答案與相關故障;前端畫面測試另有三個常見的假綠或卡死來源(2026-10-15 order-web 示範踩到;單源=[[Projects/前端知識與風險詞_計劃]] 做法 8)。
+
+- **假計時器與 user-event**:`vi.useFakeTimers()`(或 `jest.useFakeTimers()`)之後,user-event 在連續輸入之間加的延遲等不到、測試逾時。用 `userEvent.setup({ advanceTimers: vi.advanceTimersByTime })` 把延遲交給假計時器推進(user-event v14.1 起的建議寫法;不要改用 `delay: null`,官方說會有非預期行為),或只假 `setTimeout`/`setInterval`。Vitest 的假計時器預設連 `Date` 一起假(依安裝版本核對 `toFake` 預設):測倒數、時鐘偏移時用 `vi.setSystemTime` 明寫「現在」,不要讓真時間與假時間混在同一支測試。測完 `vi.useRealTimers()`,切回前先跑完待執行的計時器。
+- **fetch 替身要能控制先後**:用 `vi.stubGlobal('fetch', …)` 或 MSW 回可控的 Promise,由測試決定哪個請求先回,才測得到「舊回應晚回來不會蓋掉新資料」;只回固定成功值的替身證明不了亂序處理。斷言畫面最後顯示的是新資料,不只斷言 fetch 被呼叫幾次。測完還原(`vi.unstubAllGlobals()`)。
+- **同輪連點**:user-event 的兩次 `click` 之間會等畫面更新,第二下按到的已經是 disabled 的按鈕,測不到「同一輪事件裡連點兩次」。要測防重送的守衛(例如用 ref 記住送出中),在同一個同步區塊連發兩次 `fireEvent.click`,再斷言只送出一個請求;只用 user-event 連點得綠,不代表守衛有效。
+
+故障挑本次需求:拿掉亂序判斷(舊回應照寫)、拿掉送出中守衛、讓計時器卸載時不清,確認對應斷言翻紅。
+
+來源(核對時的版本要記下):[user-event options:advanceTimers](https://testing-library.com/docs/user-event/options#advancetimers)、[Using Fake Timers](https://testing-library.com/docs/using-fake-timers)、[Vitest vi.useFakeTimers / setSystemTime / stubGlobal](https://vitest.dev/api/vi.html)。
+
 ### C#、Android、iOS 的原生收證接入
 
 沿已安裝 `lumos test-quality capture/check` 保存 JUnit；原生 runner 必須實際執行、report 全新、`--target` 指向真正案例。reporter／橋接腳本、設定、runtime 及 lock 用 `--context` 綁定，原始報告與退出碼一起歸檔。以下是固定消費案例的部分原生資格，完整考卷仍逐項驗，不自動升格整棧 synthetic-verified。

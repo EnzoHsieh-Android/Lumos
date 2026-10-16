@@ -274,7 +274,6 @@ def t_canary_findings():
     check("findings: 非整數 rc!=0", r.returncode != 0, f"rc={r.returncode}")
 
 
-
 def t_canary_negative_findings_rejected():
     """發現數量錯寫成負數，不能把無法判定的帳追加進去。"""
     import json as _j
@@ -504,7 +503,6 @@ def t_scaffold_project():
     check("scaffold: 治理帳沒有被忽略(進得了版控,CI 才讀得到)", ci2.returncode != 0, f"rc={ci2.returncode}")
 
 
-
 def t_runner_disables_child_colors():
     """測試進程裡子程序的錯誤追蹤一律不上色(2026-10-07:殼裡 FORCE_COLOR=3 讓 Python 3.14 把 traceback 上色,
     比對錯誤名稱的斷言被 ANSI 碼切開而假紅,CI 沒設所以綠)。進入點設 PYTHON_COLORS=0、拿掉 FORCE_COLOR;
@@ -559,7 +557,6 @@ def t_runner_isolates_real_home_and_tmp():
     # CODEX_HOME 若沒清掉,會繞過假家目錄直接打到真的 ~/.codex
     check("隔離: CODEX_HOME 已清掉(它會繞過假家目錄)",
           "CODEX_HOME" not in os.environ, str(os.environ.get("CODEX_HOME")))
-
 
 
 def t_runner_isolation_r1_fixes():
@@ -17563,7 +17560,6 @@ def t_stylelint_sarif_bridge():
     check("空 stdin 不崩", r2.returncode == 0 and '"results": []' in r2.stdout, r2.stdout[:80])
 
 
-
 def t_dart_sarif_bridge():
     """dart analyze --format=json → lumos dart-sarif → SARIF → _lint_run_and_parse(Dart/Flutter 進 lint-adapter)。
     ★跟另外兩支橋接不一樣的地方:讀不懂就失敗,不吐空結果★——照宣告寫法(錯誤訊息丟掉),dart 沒裝或
@@ -20373,7 +20369,6 @@ def t_codeloop_guard_hook_registration():
           f"code-loop-guard 被加回註冊(違反 2026-07-06 ADR):{mcs.HOOK_ENTRIES!r}")
 
 
-
 def t_hooks_never_run_code_from_opened_folder():
     """★hook 不准執行「你剛打開那個資料夾」裡的程式★(2026-09-06 全 repo 審視 #6)。
 
@@ -20450,7 +20445,6 @@ def t_hooks_never_run_code_from_opened_folder():
                or _re.search(r'parent\s*/\s*"scripts"\s*/\s*"lumos"', l)
                or _re.search(r'\.parent(\.parent)+\s*/\s*"scripts"', l)]
         check(f"信任邊界: {name} 沒有再從被打開的資料夾組 lumos 路徑", not bad, str(bad))
-
 
 
 def t_private_dir_trust_shared_across_four_sites():
@@ -20559,7 +20553,6 @@ def t_private_dir_trust_shared_across_four_sites():
               site)
 
 
-
 def t_anchor_covers_all_auto_running_hooks():
     """★會自動跑的 hook 檔,一支都不能沒人盯著★(2026-09-06 全 repo 審視 #6)。
 
@@ -20646,7 +20639,6 @@ def t_anchor_covers_all_auto_running_hooks():
           r5.returncode == 0, f"rc={r5.returncode} {r5.stdout[-300:]}")
 
 
-
 def t_trusted_lumos_rejects_untrusted_locations():
     """★光是「在 PATH 上找到」不算可信★(2026-09-07 外家審查席補的一刀)。
 
@@ -20708,7 +20700,6 @@ def t_trusted_lumos_rejects_untrusted_locations():
         if m:
             sigs.add(_hl.sha256(m.group(0).encode()).hexdigest())
     check("可信來源: 各 hook 的複本仍逐字相同", len(sigs) == 1, f"{len(sigs)} 種版本")
-
 
 
 def t_all_injection_paths_are_framed_and_unified():
@@ -20825,7 +20816,6 @@ def t_all_injection_paths_are_framed_and_unified():
           lag_rets and lag_const, [_ast.unparse(v)[:60] for v in lag_rets])
 
 
-
 def t_hook_inner_timeout_always_below_outer():
     """★內層逾時必須明顯小於外層天花板★(2026-09-07 全 repo 審視 #14)。
 
@@ -20934,7 +20924,6 @@ def t_hook_inner_timeout_always_below_outer():
           sum(len(v2) for v2 in _sigs.values()) >= 5, str(_sigs))
     check("★複本不准漂★: 各 hook 的逾時預算那段逐字相同(碼裡宣稱有守衛,這就是那個守衛)",
           len(_sigs) == 1, f"{len(_sigs)} 種版本:{ {k[:8]: v2 for k, v2 in _sigs.items()} }")
-
 
 
 def t_lens_tests_avoid_branch_dependent_range():
@@ -21089,7 +21078,6 @@ def t_lens_timeout_keeps_warming_cache():
           "_lens_wait_or_warm" in lumos_src and "DEVNULL" in lumos_src, "")
 
 
-
 def t_no_vault_same_answer_everywhere():
     """★找不到圖譜這件事,每條路要給同一個答案,而且不准回成功★(2026-09-07 全 repo 審視 #9)。
 
@@ -21146,7 +21134,6 @@ def t_no_vault_same_answer_everywhere():
           r.returncode == 0, f"rc={r.returncode} {(r.stderr or r.stdout)[:150]}")
 
 
-
 def t_toplevel_help_has_no_handwritten_command_list():
     """★頂層說明段不准再手抄一份子命令清單★(2026-09-07 全 repo 審視 #9)。
 
@@ -21191,7 +21178,6 @@ def t_toplevel_help_has_no_handwritten_command_list():
     _with_when = [n for n in actual if n in names]
     check("說明段/反面: 頂層每個子命令都有一句「什麼時候用」(清單沒被弄不見)",
           len(_with_when) >= len(actual) * 0.9, f"有說明的 {len(_with_when)}/{len(actual)}")
-
 
 
 def t_node_not_found_gives_candidates_not_write_side_message():
@@ -21248,7 +21234,6 @@ def t_node_not_found_gives_candidates_not_write_side_message():
     src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
     check("★用詞★: 全檔不再有「找不到筆記 + 決策沒地方掛」這種混用",
           "的筆記,決策沒地方掛" not in src, "")
-
 
 
 def t_bad_command_gives_near_name_not_wall_of_text():
@@ -21649,7 +21634,6 @@ def t_prepush_range_scan():
         check("prepush tag high → advisory 放行(非硬擋)", r.returncode == 0 and "advisory" in r.stderr, f"rc={r.returncode}\n{r.stderr[-200:]}")
 
 
-
 # ── 新分支首推會擋的閘改用真起點(Projects/新分支首推會擋的閘改用真起點_計劃)────────────────────────
 _FP_HIGH = "import requests\ndef f():\n    requests.post('http://x')\n"
 
@@ -21918,7 +21902,6 @@ def t_prepush_cheap_gates_run_before_expensive_suite():
           m2.exists(), f"rc={r2.returncode} stderr={r2.stderr[-300:]}")
 
 
-
 def t_prepush_falls_back_when_runner_lacks_shard():
     """★推送閘不能因為 runner 舊就把人擋死★(2026-09-06 全 repo 審視 #12)。
 
@@ -22081,7 +22064,6 @@ def t_prepush_test_gate():
               f"rc={r.returncode}\nstderr={r.stderr}")
 
 
-
 def t_runner_parses_args_strictly():
     """★執行器的參數要嚴格解析,不認得的不准靜默丟掉★(2026-09-06 全 repo 審視 #12)。
 
@@ -22178,7 +22160,6 @@ def t_runner_parses_args_strictly():
           f"rc={r.returncode} {r.stderr[:150]}")
 
 
-
 def t_runner_exitfirst_and_failfirst():
     """★有紅就停、上次紅的先跑、隨機序探順序相依★(2026-09-06 全 repo 審視 #12)。
 
@@ -22259,7 +22240,6 @@ def t_runner_exitfirst_and_failfirst():
         check(f"真 runner: {flag} 有掛上而且說明講得出用途", word in r.stdout, r.stdout[:400])
 
 
-
 def t_runner_shard_partitions_completely():
     """★分片必須不重不漏★(2026-09-06 全 repo 審視 #12)。
 
@@ -22311,7 +22291,6 @@ def t_runner_shard_partitions_completely():
     d = _j.loads(out.read_text(encoding="utf-8"))
     check("分片: 機讀摘要有過/紅/跳過三個數字", all(k in d for k in ("passed", "failed", "skipped")), str(d))
     check("分片: 機讀摘要列得出紅的是哪幾支", "failed_names" in d, str(d))
-
 
 
 def t_runner_shard_by_duration():
@@ -27862,7 +27841,6 @@ def t_impact_diff_review_artifacts():
         shutil.rmtree(root, ignore_errors=True)
 
 
-
 def t_impact_diff_special_paths():
     """真 Git 特殊檔名不能被引號化成假種子；家與事故仍可查到。"""
     import json, shutil
@@ -29599,7 +29577,6 @@ def t_quote_check_normalization_and_verdict():
     check("★單一實作:全檔 `def _quote_norm` 恰一處★", src.count("def _quote_norm") == 1, "")
 
 
-
 # ⛔ t_calibration_smoke 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃)
 
 
@@ -30217,7 +30194,6 @@ def t_disposal_gate_r3_panel_hardening():
           r3.returncode == 1, f"rc={r3.returncode}\n{r3.stdout[:200]}{r3.stderr[:150]}")
 
 
-
 # ⛔ t_calibration_readback_hardening 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃)
 
 
@@ -30704,7 +30680,6 @@ def t_disposal_snapshot_provenance():
           last.get("snapshot_sha256") == _sha256_of(snap), str(last)[:200])
 
 
-
 def t_canary_record_carrier_must_be_fully_anchored():
     """帶處置清單的那一席(全輪帳本載體)引句必須全錨,記帳當下就擋(2026-09-06,第三次踩)。
 
@@ -31012,7 +30987,6 @@ def t_canary_carrier_snapshot_io_recovery_rejected():
                   result.stdout + result.stderr)
             check(f"快照IO/{optimized}/{label}:成功帳逐位元不變",
                   ledger.read_bytes() == before, result.stdout + result.stderr)
-
 
 
 def t_canary_carrier_invalid_report_encoding():
@@ -31551,8 +31525,6 @@ def t_show():
     (v / "Systems" / "裸檔.md").write_bytes("# 裸檔標題\n純內文無fm\n".encode("utf-8"))
     r = run(v, "show", "裸檔", "--body-only", expect_rc=0)
     check("無 frontmatter --body-only 印整檔", "# 裸檔標題" in r.stdout and "純內文無fm" in r.stdout)
-
-
 
 
 def t_docs_enumeration_drift():
@@ -32533,8 +32505,6 @@ def t_testmap_rc():
         r = _testmap_run(["testmap", "build", "--repo", td, "--json"], td)
         check("寫檔失敗 rc2+json error", r.returncode == 2 and "error" in _json.loads(r.stdout),
               f"{r.returncode} {r.stdout!r}")
-
-
 
 
 def t_slim_scan():
@@ -36548,7 +36518,6 @@ def t_eval_cross_arm_same_question_set():
     print("  ✓ t_eval_cross_arm_same_question_set")
 
 
-
 def _src_of(mod, needle):
     """數 needle 在模組原始碼裡出現幾次,跳過檔頭說明段(那裡提到檔名是敘述不是路徑)。"""
     import inspect
@@ -36629,7 +36598,6 @@ def t_eval_unjudged_check_honours_cli_k():
     check("★每一次未標判定拿到的視窗都是 CLI 給的 12,不是預設 8★",
           all(k == 12 for k in seen), f"觀察到的 k={seen}——有 8 就是沒把 args.k 傳下去")
     print("  ✓ t_eval_unjudged_check_honours_cli_k")
-
 
 
 def t_symbol_vocab_single_source_and_reach():
@@ -40502,8 +40470,6 @@ def main():
                 pass
 
 
-
-
 # ═══ 驗證層自證三件 S1/S2 落地(2026-08-06,plan:Projects/驗證層自證三件_計劃)═══
 
 def t_s2_loop_next_random_type_draw():
@@ -40606,7 +40572,6 @@ def t_s1_seat_check():
     check("dispatch 缺檔=rc2", r.returncode == 2, str(r.returncode))
 
 
-
 def t_s1_seat_check_bad_dispatch():
     """合法 JSON 不等於可用派工單；普通／最佳化 CLI 都在讀材料前回 rc2。"""
     print("t_s1_seat_check_bad_dispatch")
@@ -40680,7 +40645,6 @@ def t_s1_seat_check_valid_dispatch():
           and row["quote"] == out["out_of_scope"][0])
 
 
-
 def t_s1_seat_check_surrogateescape_dispatch():
     """可編碼 surrogateescape 路徑依舊只觀測；材料缺失不升成輸入錯誤。"""
     print("t_s1_seat_check_surrogateescape_dispatch")
@@ -40711,7 +40675,6 @@ def t_s1_seat_check_surrogateescape_dispatch():
               result.returncode == 0 and out.get("vacuous") is False, repr(result.stderr[-180:]))
         check(f"可編碼 surrogateescape optimized={optimized} 真實材料錨定",
               out.get("unreported") == [str(material)] and out.get("out_of_scope") == [], repr(stdout[-180:]))
-
 
 
 def t_s1_seat_check_preflight_order():
@@ -40753,7 +40716,6 @@ def t_s1_seat_check_preflight_order():
                   "materials[1]" in stderr.getvalue() and not stdout.getvalue(), stderr.getvalue()[-200:])
 
 
-
 # ⛔ t_s2_snr_synthetic 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃;共用 fixture 保留)
 
 def _hk_impact(repo, file, query, extra_env=None, top="8"):
@@ -40767,7 +40729,6 @@ def _hk_impact(repo, file, query, extra_env=None, top="8"):
                        capture_output=True, text=True, env=env,
                        input=_j.dumps({"query": query, "prospective": {}}))
     return _j.loads(r.stdout.strip().splitlines()[-1])
-
 
 
 def _hk_fixture(tmp_prefix="gctl-hk-"):
@@ -40794,7 +40755,6 @@ def _hk_fixture(tmp_prefix="gctl-hk-"):
         "quokka wombat quokka wombat quokka wombat(第二組特徵詞,供水位測試撐閾)。\n",
         encoding="utf-8")
     return repo, vault
-
 
 
 def t_impact_direct_rescue():
@@ -40886,8 +40846,6 @@ def t_impact_basename_match():
           not any("D裸名" in x["node"] for x in dng["results"]), str(dng["results"])[:200])
 
 
-
-
 def t_s2_waterline_rescue():
     """[連結缺失補全 S2]水位謂詞:free direct<N 補至水位(need=N-count),非零 direct 特例。
     ①1 direct 存活+N=2 → 補恰 1 席 ②1 direct 存活+N=1 → 不觸發(向下相容=舊零 direct 語意)
@@ -40977,9 +40935,6 @@ def t_link_candidates():
     check("無參數=rc2", r2.returncode == 2, str(r2.returncode))
 
 
-
-
-
 # ⛔ t_mutate_diff 已隨機制退場(2026-08-26 詳 Projects/建了沒人跑批次裁定_計劃;共用 fixture 保留)
 
 def _mk_roster_fixture():
@@ -40999,7 +40954,6 @@ def _mk_roster_fixture():
         d.mkdir(parents=True, exist_ok=True)
         (d / name).write_text(_j.dumps(obj, ensure_ascii=False), encoding="utf-8")
     return vault, repo, spec, rec, disp
-
 
 
 def t_tier_roster_table():
@@ -41264,8 +41218,6 @@ def t_loop_status_roster_check():
     check("status-roster: --settle 模式觀測有印", "[roster]" in rs.stdout, rs.stdout[:400] + rs.stderr[:200])
 
 
-
-
 # ── 循序codeloop-tier錨定(Projects/循序codeloop-tier錨定_計劃):守衛 kind-aware+seq 樣式 ──
 def _seq_rec(vault, loop, tier=None, rid=None, sev="minor"):
     import json as _j
@@ -41372,8 +41324,6 @@ def t_seq_tier_hint_warning():
     d2 = _j.loads(r2.stdout.strip())
     check("tier-hint: ★前置★ design 端 hint 也有吐(非 vacuous)", bool(d2.get("tier_hint")), str(d2.get("phase")))
     check("tier-hint: design legacy loop 措辭不含該警告", "整批計入" not in d2.get("tier_hint", ""), d2.get("tier_hint", "")[:300])
-
-
 
 
 # ── 精簡版update指令(Projects/精簡版update指令_計劃):生成期拼接+_slim_update 行為 ──
@@ -41564,8 +41514,6 @@ def t_slim_update_textpins():
         check(f"textpin: README 不含「{kw}」", kw not in readme, "")
         check(f"textpin: install.py 不含「{kw}」", kw not in inst, "")
     check("textpin: install.py 含 --tool-only 穩定介面", "--tool-only" in inst, "")
-
-
 
 
 def t_bootstrap_url_self_origin():
@@ -43351,7 +43299,6 @@ def t_entry_latch_advisories():
           f"rc {rc_b} out {buf_b.getvalue()[:150]}")
 
 
-
 def _esc_auto_repo():
     """受控:git repo + vault + 一份計劃筆記已提交。回 (root, vault, plan)。"""
     import subprocess
@@ -43688,7 +43635,6 @@ def t_loop_escape_ledger():
           "3 行壞損" in rl2.stderr and "3 筆" in rl2.stdout, (rl2.stderr + rl2.stdout)[:300])
 
 
-
 def t_metric_criteria_drift_guard():
     """[換尺可比切片](spec:Projects/loop數據收集_計劃「換尺可比與自動回饋隔離」節,r1 五席縮案+r2 收斂)
     三數字治理帳的兩道機械守衛:
@@ -43733,7 +43679,6 @@ def t_metric_criteria_drift_guard():
             hits.add(str(q.relative_to(root)))
     check("★引用點漂移:三帳記號在執行面的引用檔全數在允許清單內(新引用=先人判再放行)★",
           hits <= ALLOWED, f"清單外新引用:{sorted(hits - ALLOWED)}——讀側/文件就加進本測試的允許清單;是拿數字值當閘條件就立事故(spec C 節禁令)")
-
 
 
 def t_doctor_revisit_reminder():
@@ -43800,8 +43745,6 @@ def t_doctor_revisit_reminder():
     rn = run(v, "gov", "--nags", "14")
     check("★紅釘⑦(外家複判條件):連喊 ≥14 天→nags 升級清單列出該篇(牙有電)★",
           rn.returncode == 1 and "check-revisit" in rn.stdout and "回訪甲_計劃" in rn.stdout, rn.stdout[:500])
-
-
 
 
 def t_gist_layer():
@@ -44533,7 +44476,6 @@ def t_lens_loaders_cfg_param_and_budget():
     check("budget: deadline 已過→skipped-timeout、印固定字串", status == "skipped-timeout" and any("預算不足" in l for l in lines), f"{status} {lines}")
     import inspect
     check("cochange: _cochange_transactions 有 timeout 參數", "timeout" in inspect.signature(m._cochange_transactions).parameters)
-
 
 
 # ── Codex完全支援 S0(2026-09-04,Projects/Codex完全支援_計劃 d1–d2)──────────────────────────
@@ -48628,7 +48570,6 @@ def t_spec_freeze_commit_rev_full_and_resolves():
     check("替身把縮寫解回原樣:spec-freeze 仍回 spec_rev_missing", codes[:1] == ["spec_rev_missing"], str(codes))
 
 
-
 # ---------------------------------------------------------------------------
 # 派工鏡頭可指定目標repo 代碼審 r4 修正(governance/review-reports/code-派工鏡頭可指定目標repo/r4-fix.json)
 # ---------------------------------------------------------------------------
@@ -49629,8 +49570,6 @@ def t_dispatch_lens_hook_repo_field_name_show():
     check("一般路徑照印在標記裡", "‹/tmp/一般專案›" in _lr_note(o), repr(_lr_note(o)[:300]))
 
 
-
-
 def _lr7_node_blocks(t, nodes):
     """目標架構段裡每個節點那一塊:{節點: [標題行, 規則行…]};標題行以「基準:目標架構 ‹節點›」開頭,下一個「基準:」或框尾結束。"""
     out, cur = {}, None
@@ -49769,7 +49708,6 @@ def t_design_loop_manuals_target_rule_quote():
     check("§7.6 引目標規則那行講明不含 ‹ ›、跳脫序列照印出來的字抄", "不含 ‹ ›" in row and "跳脫序列" in row, row)
 
 
-
 def t_dispatch_lens_spec_backtick_paths_linear():
     """[代碼審 r7 資源1] 設計審目標架構段找計劃裡反引號包住的程式檔:4 萬段沒收尾的 `a/a/a… 在 1 秒內(舊正規式實測 13 秒);
     形狀照舊(X/Y.副檔名,斜線前後都有字、副檔名是 ASCII 英數字),期望值照規則手寫;計劃超過 _ARCH_TARGET_SPEC_SCAN_MAX 字只掃前面、
@@ -49852,7 +49790,6 @@ def t_dispatch_lens_diff_text_total_cap():
               f"rc={rc} {len(t)} {t[-200:]!r} {data.get('text_truncated')}")
     finally:
         _sh.rmtree(d, ignore_errors=True)
-
 
 
 # ---------------------------------------------------------------------------
@@ -53518,7 +53455,6 @@ def t_update_unions_bookkeeping_instead_of_blocking():
           n_dup == 3, f"實際 {n_dup} 份;rc={r2.returncode}")
 
 
-
 def t_prepush_blocks_uncommitted_anchor_baseline():
     """簽名檔改過沒提交就推 → 推送前的閘要擋(2026-09-06,CI 真的因此紅過一次)。
 
@@ -53666,7 +53602,6 @@ def t_skill_single_source_not_duplicated():
     _fake = "# X\n本檔只指路、單一來源在別處\ncodex-cli 0.153.2 選得中自訂席\n"
     check("單源紀律/反面: 版本事實抄進入口檔會被抓到",
           bool(_codex_version_lines(_fake)) and any(k in _fake for k in src_note), _fake)
-
 
 
 def t_no_zero_assertion_return_paths():
@@ -55943,7 +55878,6 @@ def t_loop_list_open_loops():
         shutil.rmtree(root, ignore_errors=True)
 
 
-
 def t_handoff_view():
     """`lumos handoff <計劃節點>`:唯讀接手視圖(Projects/接手視圖_計劃 的驗收線)。
 
@@ -56211,8 +56145,6 @@ def t_handoff_view():
         shutil.rmtree(root, ignore_errors=True)
 
 
-
-
 _HOOK_PURE_PROBE = r'''
 import importlib.util as u, sys, os, json, sysconfig
 hook = os.path.realpath(sys.argv[1])
@@ -56447,7 +56379,9 @@ def t_stack_question_triggers():
                        "dart-build", "dart-list", "dart-dispose", "dart-async", "dart-isolate", "dart-platform",
                        # 外部回應碼(2026-10-03 Projects/外部回應碼語意要有出處_計劃):sql 以外八棧各一題
                        "kt-extcode", "cs-extcode", "vue-extcode", "swift-extcode", "node-extcode", "py-extcode",
-                       "java-extcode", "dart-extcode"}, str(sorted(ids)))
+                       "java-extcode", "dart-extcode",
+                       # 本機基礎設施腳本(2026-10-15 Projects/前端知識與風險詞_計劃 做法 6)
+                       "infra-shared", "infra-timeout", "infra-signal", "infra-pid", "infra-path", "infra-portable"}, str(sorted(ids)))
     # [外部回應碼 S5]命中樣本亮 extcode、不命中不亮;超過行數門檻不因門檻而亮;不進舊語意整組清單
     _xa, _xm = m._stack_applicability({"py": ['if resp_code == "2000":']}, 300)
     _xb, _xmb = m._stack_applicability({"py": ['if year == "2026":']}, 300)
@@ -57618,7 +57552,6 @@ def t_doctor_profile_mismatch_hint():
               any(".swift" in x for x in m._profile_stack_mismatch(root)), str(m._profile_stack_mismatch(root)))
 
 
-
 def t_bound_tests_unproven_blocks_push():
     """[消費專案接入靜默失效 S7 · 2026-09-09 r1 折入]★「指令回成功但證不出跑過」要跟紅一樣擋★。
 
@@ -57676,7 +57609,6 @@ def t_bound_tests_unproven_blocks_push():
           m._ran_evidence_check("python", capped)[0] is True, capped[:120] + " … " + capped[-120:])
     check("⑥沒帶樣式時行為不變(截斷仍會砍掉中段)",
           m._ran_evidence_check("python", m._kill_cap(big))[0] is False, "沒帶 keep_re 卻留住了")
-
 
 
 def t_code_loop_check_speaks_about_unproven():
@@ -63496,7 +63428,6 @@ def t_lint_oversize():
     check("S8 但照樣列出來讓人知道那支沒被檢查", len(v4["oversize_waived"]) == 1, str(v4["oversize_waived"]))
 
 
-
 def t_lint_undone_classes():
     """[S9] 兩類失敗分開:環境不可用自動放行+記帳;放行檔讀不了不可以當成沒有放行紀錄。"""
     m = _lng_module()
@@ -64714,7 +64645,6 @@ def mw_rank_order(script, vault, q):
     return mod.search_files(str(vault), q, any_terms=True)
 
 
-
 def t_mw_pool_three_sources_all_contribute():
     """三個來源各自都要真的貢獻候選,少一個要看得出來。
 
@@ -64890,7 +64820,6 @@ def t_mw_bad_input_says_what_is_wrong():
     print("  ✓ t_mw_bad_input_says_what_is_wrong")
 
 
-
 def t_mw_escape_hatch_cannot_reach_rebuild():
     """那個逃生旗標不得用在重組候選池,而且用在量測時要印在報告本體裡。
 
@@ -64979,7 +64908,6 @@ def t_mw_atomic_write_does_not_widen_perms():
     print("  ✓ t_mw_atomic_write_does_not_widen_perms")
 
 
-
 def t_rel_cascade_visited_only_for_empty():
     """★空的連鎖待辦單要能銷帳,但有待辦的不准用這個動詞閉嘴★
     (Issues/空連鎖單巡過無法銷帳;2026-09-01 Enzo 委任裁辦,2026-09-16 做)。
@@ -65055,7 +64983,6 @@ def t_rel_cascade_visited_only_for_empty():
     print("  ✓ t_rel_cascade_visited_only_for_empty")
 
 
-
 def t_lint_warns_empty_revalidate_when():
     """★驗證紀錄的「什麼時候要回頭重驗」欄位空著,lint 要出聲★
     (Issues/lint不守驗證紀錄空回頭條件;2026-09-01 Enzo 委任裁辦,2026-09-16 做)。
@@ -65114,7 +65041,6 @@ def t_lint_warns_empty_revalidate_when():
     check("其他型別不適用這條(它們沒有這兩個欄位)",
           "重驗" not in r.stdout, r.stdout[:200])
     print("  ✓ t_lint_warns_empty_revalidate_when")
-
 
 
 # ─── 規格落成可驗收條件_計劃(半套):lumos spec-gate + 處置閘第五步共用檢查器 ───
@@ -67409,7 +67335,545 @@ def t_door_rule_version_pin():
     """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
     ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
     r = run(mkvault(), "spec-gate", "--door-rule")
-    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=12 " in r.stdout and "inputs_sha=33dddb22ddd123d2d773ae6c39e0da973b99f6485fae06a221a883e44dac6a7d" in r.stdout, r.stdout)
+    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=13 " in r.stdout and "inputs_sha=621d0313526e74aefcdd6566d187a2097ed3a1da8ccb14adeab984c79b7e366b" in r.stdout, r.stdout)
+
+
+# ── 前端知識與風險詞 做法 9(d1):「送出」的前端語境與 PAYMENT 調整參數識別字例外 ──
+# 判準來源:計劃 Projects/前端知識與風險詞_計劃 做法 9 列的「照算/不算」例句(設計審 r1 正確性、邊界、整合三席的失敗情境)。
+
+def _fe_door_classes(line):
+    """一行計劃文字經門的關鍵字掃描,回命中的類中文名集合。"""
+    m = _load_lumos_inproc()
+    return {cls for _no, cls, _w, _v in m._door_keyword_hits(line)}
+
+
+def t_door_keyword_caps_identifier_payment_exempt():
+    """[前端知識與風險詞 S36] 全大寫識別字以調整參數結尾的 PAYMENT 不算金流。對照:同一行另寫「金流」照算。"""
+    for s in ("ORDER_PAYMENT_TIMEOUT", "環境變數 PAYMENT_TIMEOUT 設 300", "ORDER_PAYMENT_RETRY_COUNT"):
+        check(f"①「{s}」不回金流", "金流" not in _fe_door_classes(s), str(_fe_door_classes(s)))
+    check("②對照:同一行寫金流照算", "金流" in _fe_door_classes("ORDER_PAYMENT_TIMEOUT 是金流逾時"), "")
+
+
+def t_door_keyword_payment_api_key_still_hits():
+    """[前端知識與風險詞 S37] 接金流的設定名照算(設計審 r1 三席:緊貼底線就不算會放掉這些)。"""
+    for s in ("PAYMENT_API_KEY", "新增 PAYMENT_GATEWAY_URL", "PAYMENT_SECRET", "MY_PAYMENT_ENABLED", "PAYMENT_TIMEOUT_URL"):
+        check(f"①「{s}」照回金流", "金流" in _fe_door_classes(s), str(_fe_door_classes(s)))
+
+
+def t_door_keyword_enable_payment_still_hits():
+    """[前端知識與風險詞 S38] PAYMENT 在識別字結尾(後面沒有參數尾碼)照算。"""
+    for s in ("ENABLE_PAYMENT", "order_PAYMENT"):
+        check(f"①「{s}」照回金流", "金流" in _fe_door_classes(s), str(_fe_door_classes(s)))
+
+
+def t_door_keyword_payment_lowercase_identifier_still_hits():
+    """[前端知識與風險詞 S39] 小寫、混合大小寫、單獨大寫、中文句子裡的 payment 照算——例外只認全大寫。"""
+    for s in ("payment_service", "payment_timeout", "Payment_Gateway", "PAYMENT 流程", "串接 payment"):
+        check(f"①「{s}」照回金流", "金流" in _fe_door_classes(s), str(_fe_door_classes(s)))
+
+
+def t_pitfalls_check_shares_send_exemption():
+    """[前端知識與風險詞 S40] pitfalls --check 跟門用同一張詞表:PAYMENT 參數名例外兩條路一樣;「送出」兩條路都照算
+    (代碼審 r3 撤回送出的前端例外後,名字沿用、只留共用詞表這件事)。"""
+    m = _load_lumos_inproc()
+    check("① ORDER_PAYMENT_TIMEOUT 不含 payment、PAYMENT_API_KEY 含", "payment" not in m._pitfall_scan_classes("ORDER_PAYMENT_TIMEOUT")
+          and "payment" in m._pitfall_scan_classes("PAYMENT_API_KEY"), "")
+    check("② 「請求送出時刻記錄」兩條路都算對外送出", "external-send" in m._pitfall_scan_classes("請求送出時刻記錄")
+          and "對外送出" in _fe_door_classes("請求送出時刻記錄"), "")
+
+
+def t_spec_gate_push_stale_lists_rule_13():
+    """[前端知識與風險詞 S42] 留痕記的是版本 12、現在判成風險高時,「較舊的門判定規則」訊息列出版本 13 的規則變化。"""
+    import json as _j
+    d, kg, p = _sg_push_setup("fe13a")
+    (d / "tests" / "flip.ok").write_text("")
+    led = kg.parent / ".canary-log.jsonl"
+    rows = led.read_text(encoding="utf-8").splitlines()
+    i = max(k for k, x in enumerate(rows) if x.strip() and _j.loads(x).get("kind") == "spec-gate")
+    rows[i] = _j.dumps(dict(_j.loads(rows[i]), door_rule=12), ensure_ascii=False)
+    led.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    p.write_text(p.read_text(encoding="utf-8") + "\n範例:`stripe` 只是舉例。\n", encoding="utf-8")
+    _sg_commit(d, "inline word")
+    r = _ngl_push(kg, d)
+    ln = next((x for x in r.stdout.splitlines() if "現在判成風險高" in x), "")
+    check("① 判高、講留痕用的是較舊的門判定規則(版本 12)、列出版本 13", r.returncode == 1 and "較舊的門判定規則(版本 12)" in ln and "版本 13 起" in ln, r.stdout[-700:])
+
+
+# ── 前端知識與風險詞 做法 1 到 3:前端字樣只多列提醒(需求風險面的 role 為 frontend 那幾列) ──
+
+_FE_FACET_IDS = {"req-fe-states", "req-fe-device", "arch-fe-clock", "arch-fe-stale", "arch-fe-origin", "arch-fe-poll",
+                 "impl-fe-race", "impl-fe-lifecycle", "impl-fe-idem", "perf-fe-budget"}
+
+
+def _fe_plan(tag, body):
+    """寫一份暫存計劃(足夠長、兩節以上,免得計劃模式回退全文時印警告),回路徑。"""
+    d = Path(tempfile.mkdtemp(prefix=f"gctl-fe-{tag}-"))
+    p = d / "甲_計劃.md"
+    p.write_text("---\ntype: project\nstatus: todo\n---\n# 甲_計劃\n\n## 做法\n\n" + body + "\n\n"
+                 + "## 驗收條款\n\n- [S1] 當輸入合法時,系統應回傳結果。[test: t_x]\n\n" + "說明文字。" * 60 + "\n", encoding="utf-8")
+    return p
+
+
+def _fe_pf(*args):
+    return subprocess.run([sys.executable, GRAPHCTL, "pitfalls", *[str(a) for a in args]], capture_output=True, text=True)
+
+
+def _fe_ids(out):
+    import re
+    return {i for i in re.findall(r"\[([a-z]+(?:-[a-z0-9]+)+)\]", out)}
+
+
+def t_pitfalls_stage_frontend_facets_listed():
+    """[前端知識與風險詞 S1] 計劃提到 .tsx → --stage 需求列 req-fe-states、req-fe-device。"""
+    r = _fe_pf("--stage", "需求", _fe_plan("s1", "改 src/App.tsx 的下單按鈕。"))
+    check("① 列出 req-fe-states 與 req-fe-device", r.returncode == 0 and {"req-fe-states", "req-fe-device"} <= _fe_ids(r.stdout), r.stdout[-600:])
+
+
+def t_pitfalls_stage_no_frontend_facets_for_backend_plan():
+    """[前端知識與風險詞 S2] 沒有任何前端字樣的後端計劃 → 不列任何 role 為 frontend 的面(每個階段都看)。"""
+    p = _fe_plan("s2", "新增 GET /orders API,資料表加 status 欄位,改 OrderService.kt。")
+    for st in ("需求", "架構", "實作", "驗證", "效能", "交付"):
+        r = _fe_pf("--stage", st, p)
+        check(f"① {st}:不列前端面", r.returncode == 0 and not (_fe_ids(r.stdout) & _FE_FACET_IDS), r.stdout[-400:])
+
+
+def t_pitfalls_stage_frontend_arch_facets():
+    """[前端知識與風險詞 S3] 計劃提到 React → --stage 架構列四項前端面。"""
+    r = _fe_pf("--stage", "架構", _fe_plan("s3", "畫面用 React 寫。"))
+    check("① 列出 arch-fe-clock/stale/origin/poll", {"arch-fe-clock", "arch-fe-stale", "arch-fe-origin", "arch-fe-poll"} <= _fe_ids(r.stdout), r.stdout[-600:])
+
+
+def t_pitfalls_stage_frontend_impl_facets():
+    """[前端知識與風險詞 S4] 計劃提到「前端」→ --stage 實作列三項,lifecycle 題目含 StrictMode。"""
+    r = _fe_pf("--stage", "實作", _fe_plan("s4", "這次只改前端的下單頁。"))
+    check("① 列出 impl-fe-race/lifecycle/idem", {"impl-fe-race", "impl-fe-lifecycle", "impl-fe-idem"} <= _fe_ids(r.stdout), r.stdout[-600:])
+    ln = next((x for x in r.stdout.splitlines() if "[impl-fe-lifecycle]" in x), "")
+    check("② impl-fe-lifecycle 題目含 StrictMode", "StrictMode" in ln, ln)
+
+
+def t_pitfalls_stage_frontend_perf_facet():
+    """[前端知識與風險詞 S5] 計劃提到 .vue → --stage 效能列 perf-fe-budget。"""
+    r = _fe_pf("--stage", "效能", _fe_plan("s5", "改 Order.vue。"))
+    check("① 列出 perf-fe-budget", "perf-fe-budget" in _fe_ids(r.stdout), r.stdout[-600:])
+
+
+def t_pitfalls_stage_frontend_when_case_insensitive():
+    """[前端知識與風險詞 S6] 全小寫的 react-query、vite.config 也算(設計審 r1 邊界 F7);「reactive」不算(詞界)。"""
+    for body in ("資料層換成 react-query。", "調整 vite.config 的代理。"):
+        r = _fe_pf("--stage", "需求", _fe_plan("s6", body))
+        check(f"①「{body}」列出 req-fe-states", "req-fe-states" in _fe_ids(r.stdout), r.stdout[-400:])
+    r = _fe_pf("--stage", "需求", _fe_plan("s6b", "後端改成 reactive streams。"))
+    check("② 對照:reactive 不算前端", "req-fe-states" not in _fe_ids(r.stdout), r.stdout[-400:])
+
+
+def t_pitfalls_stage_infra_facet():
+    """[前端知識與風險詞 S7] 「E2E 測試腳本要起後端」(大寫 E2E)→ --stage 驗證列 verify-infra-script;docker-compose 也算;沒提到不列。"""
+    for body in ("E2E 測試腳本要起後端。", "用 docker-compose 起資料庫。"):
+        r = _fe_pf("--stage", "驗證", _fe_plan("s7", body))
+        check(f"①「{body}」列出 verify-infra-script", "verify-infra-script" in _fe_ids(r.stdout), r.stdout[-400:])
+    r = _fe_pf("--stage", "驗證", _fe_plan("s7b", "只改 API 回應格式。"))
+    check("② 對照:沒提到就不列", "verify-infra-script" not in _fe_ids(r.stdout), r.stdout[-400:])
+
+
+def t_pitfalls_frontend_three_entries_agree():
+    """[前端知識與風險詞 S8] 前端字樣只在行內程式碼裡(`src/App.tsx`)→ --stage、計劃模式、--check 三個入口都判成有(都比全文,不是剝過的 corpus)。"""
+    p = _fe_plan("s8", "改 `src/App.tsx`。\n\n## 實務隱患\n\n無。")
+    a = _fe_pf("--stage", "需求", p)
+    b = _fe_pf(p)
+    c = _fe_pf(p, "--check")
+    check("① --stage 列前端面", "req-fe-states" in _fe_ids(a.stdout), a.stdout[-300:])
+    check("② 計劃模式有前端面段", "前端面" in b.stdout and "req-fe-states" in _fe_ids(b.stdout), b.stdout[-300:])
+    check("③ --check 印前端提醒", "提醒:計劃提到前端字樣" in c.stdout, c.stdout[-300:])
+
+
+def t_pitfalls_spec_mode_lists_frontend_facets():
+    """[前端知識與風險詞 S9] 計劃模式對提到前端的計劃多一段「前端面」,列出全部十個前端題號;後端計劃沒有這段。"""
+    r = _fe_pf(_fe_plan("s9", "下單頁用 React。"))
+    check("① 有前端面段、十個題號都在", "前端面(" in r.stdout and _FE_FACET_IDS <= _fe_ids(r.stdout), r.stdout[-900:])
+    r2 = _fe_pf(_fe_plan("s9b", "改 OrderService.kt。"))
+    check("② 對照:後端計劃沒有前端面段", "前端面(" not in r2.stdout, r2.stdout[-300:])
+
+
+def t_pitfalls_spec_json_frontend_facets():
+    """[前端知識與風險詞 S10] 計劃模式 --json 對提到前端的計劃多 frontend_facets 鍵、整份可解析;後端計劃沒有這個鍵。--stage --json 的前端列帶 role。"""
+    import json as _j
+    r = _fe_pf(_fe_plan("s10", "下單頁用 React。"), "--json")
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = None
+    check("① 合法 JSON、frontend_facets 十列", isinstance(d, dict) and {f["id"] for f in d.get("frontend_facets", [])} == _FE_FACET_IDS, r.stdout[-400:])
+    r2 = _fe_pf(_fe_plan("s10b", "改 OrderService.kt。"), "--json")
+    check("② 對照:後端計劃沒有 frontend_facets", "frontend_facets" not in _j.loads(r2.stdout), r2.stdout[-300:])
+    r3 = _fe_pf("--stage", "實作", _fe_plan("s10c", "下單頁用 React。"), "--json")
+    d3 = _j.loads(r3.stdout)
+    check("③ --stage --json 的前端列帶 role=frontend", any(f.get("role") == "frontend" and f["id"] == "impl-fe-race" for f in d3["facets"]), r3.stdout[-300:])
+
+
+def t_pitfalls_check_frontend_hint_keeps_rc():
+    """[前端知識與風險詞 S11] --check 對提到前端、有實務隱患節的計劃:多一行「提醒:」開頭的前端提醒、不寫「這份計劃是前端」、rc 0;後端計劃沒有提醒。"""
+    r = _fe_pf(_fe_plan("s11", "下單頁用 React,送出訂單給客戶。\n\n## 實務隱患\n\n無。"), "--check")
+    hint = [x for x in r.stdout.splitlines() if "前端" in x]
+    check("① rc 0、一行以「提醒:」開頭的前端提醒", r.returncode == 0 and len(hint) == 1 and hint[0].startswith("提醒:"), r.stdout)
+    check("② 提醒不說「這份計劃是前端」、指到 §7.7〈前端補充〉", "這份計劃是前端" not in r.stdout and "前端補充" in r.stdout, r.stdout)
+    r2 = _fe_pf(_fe_plan("s11b", "改 OrderService.kt,送出訂單給客戶。\n\n## 實務隱患\n\n無。"), "--check")
+    check("③ 對照:後端計劃 rc 0 且沒有前端提醒", r2.returncode == 0 and "前端" not in r2.stdout, r2.stdout)
+
+
+def t_pitfalls_check_fail_branch_frontend_hint():
+    """[前端知識與風險詞 S12] --check 的 ✗ 那條路(命中風險類卻缺實務隱患節)也印前端提醒,rc 仍是 1。"""
+    r = _fe_pf(_fe_plan("s12", "下單頁用 React,送出訂單給客戶。"), "--check")
+    check("① rc 1、印 ✗ 也印前端提醒", r.returncode == 1 and "✗ pitfalls --check" in r.stdout and "提醒:計劃提到前端字樣" in r.stdout, r.stdout)
+
+
+# ── 前端知識與風險詞 做法 6、7:本機基礎設施腳本題組(infra)與測試基礎設施路徑 ──
+# 判準來源:計劃做法 6 的兩條觸發規則(看字串的放 when_raw;詞界與指令位置)、做法 7 的路徑樣式例子,示範 order-web 的 e2e 腳本寫法。
+
+def _infra_hits(lines):
+    m = _load_lumos_inproc()
+    _app, meta = m._stack_applicability({"infra": list(lines)}, 300)
+    return {r["id"] for r in meta.get("infra", []) if r["applicable"]}
+
+
+def _infra_repo(d, files, pkg='{"dependencies": {"react": "^18"}}', vendored=None):
+    """main 一個初始提交、feat 一個提交寫進 files({相對路徑: 內容});pkg 寫在根目錄的 package.json(None=不寫)。
+    vendored={相對路徑: 內容}:放在初始提交、並寫安裝指紋(原封不動的工具自帶檔)。回 feat 的 sha。"""
+    import json as _j, subprocess as _sp
+    m = _load_lumos_inproc()
+
+    def g(*a):
+        return _sp.run(["git", *a], cwd=d, capture_output=True, text=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    P = Path(d)
+    (P / "README.md").write_text("init\n", encoding="utf-8")
+    if pkg is not None:
+        (P / "package.json").write_text(pkg, encoding="utf-8")
+    for rel, body in (vendored or {}).items():
+        (P / rel).parent.mkdir(parents=True, exist_ok=True)
+        (P / rel).write_text(body, encoding="utf-8")
+    if vendored:
+        (P / ".lumos").mkdir(exist_ok=True)
+        (P / m._VENDORED_MANIFEST).write_text(_j.dumps({"files": {k: m._vendored_digest(v.encode("utf-8")) for k, v in vendored.items()}}), encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    g("checkout", "-q", "-b", "feat/x")
+    for rel, body in files.items():
+        (P / rel).parent.mkdir(parents=True, exist_ok=True)
+        (P / rel).write_text(body, encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "change")
+    return g("rev-parse", "HEAD").stdout.strip()
+
+
+def _infra_collect(d):
+    m = _load_lumos_inproc()
+    m._NODE_FLAVOR_CACHE.clear()
+    return m._pitfall_diff_collect("main..HEAD", d, no_lint=True)
+
+
+def t_stack_key_e2e_path_is_infra():
+    """[前端知識與風險詞 S16] React 依賴的前端專案:e2e/global-setup.ts 的棧別鍵是 infra(順序接錯、先走框架分流就紅);
+    scripts/e2e.sh 也是 infra;對照:src/App.tsx 不是 infra。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"e2e/global-setup.ts": "export default async () => {}\n"})
+        m._NODE_FLAVOR_CACHE.clear()
+        check("① e2e/global-setup.ts → infra", m._stack_key_for_file("e2e/global-setup.ts", d) == "infra", str(m._stack_key_for_file("e2e/global-setup.ts", d)))
+        check("② scripts/e2e.sh → infra", m._stack_key_for_file("scripts/e2e.sh", d) == "infra", "")
+        check("③ 對照:src/App.tsx 不是 infra", m._stack_key_for_file("src/App.tsx", d) not in ("infra", None), str(m._stack_key_for_file("src/App.tsx", d)))
+
+
+def t_infra_fetch_triggers_timeout_not_signal():
+    """[前端知識與風險詞 S17] e2e 程式的 await fetch(url) → infra-timeout 亮、infra-signal 不亮(await 不是 wait);
+    走 pitfalls --diff:適用題有 infra、沒有 vue-reactive。"""
+    h = _infra_hits(["  const r = await fetch(url)"])
+    check("① 單行:infra-timeout 亮、infra-signal 不亮", "infra-timeout" in h and "infra-signal" not in h, str(h))
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"e2e/global-setup.ts": "export default async () => {\n  const r = await fetch(url)\n}\n"})
+        data = _infra_collect(d)
+        app = data.get("stack_questions_applicable") or {}
+        meta = {r["id"] for r in (data.get("stack_questions_meta") or {}).get("infra", []) if r["applicable"]}
+        check("② diff:infra 適用題含 infra-timeout、沒有 vue 題組", "infra-timeout" in meta and "vue" not in app, str(app)[:300])
+
+
+def t_infra_shared_quoted_tmp_path():
+    """[前端知識與風險詞 S18] 寫在引號裡的 /tmp/ 與 localhost:埠 → infra-shared 亮(字串觸發放 when_raw;設計審 r1 四席)。"""
+    for ln in ('LOCK="/tmp/e2e.lock"', 'curl -sf "http://localhost:5173/health"', 'docker run --name "web-$X" pg'):
+        check(f"①「{ln}」→ infra-shared", "infra-shared" in _infra_hits([ln]), str(_infra_hits([ln])))
+
+
+def t_infra_pid_kill_command():
+    """[前端知識與風險詞 S19] kill 帶引號的 pid、pid 檔寫在引號裡 → infra-pid 亮。"""
+    for ln in ('kill "$(cat "$PIDFILE")"', 'PIDFILE="/tmp/e2e.pid"', 'if kill -0 "$PID"; then'):
+        check(f"①「{ln}」→ infra-pid", "infra-pid" in _infra_hits([ln]), str(_infra_hits([ln])))
+
+
+def t_infra_no_trigger_on_unrelated_shell_lines():
+    """[前端知識與風險詞 S20] 只改輸出文字的 .sh 行 → 不亮任何 infra 題(詞界:updated 不中 date、steps 不中 ps)。"""
+    lines = ['echo "steps updated"', "echo steps updated", 'printf "%s\\n" "$MSG"', "# kill the server later", "NAME=candidate"]
+    check("① 無關行零觸發", not _infra_hits(lines), str(_infra_hits(lines)))
+
+
+def t_infra_word_boundary_no_false_trigger():
+    """[前端知識與風險詞 S21] e2e 程式裡的 await、skill、killed 不中 wait/kill:infra-signal、infra-pid 不亮。"""
+    h = _infra_hits(["const skill = await page.goto(url)", "const killed = true", "await page.waitForSelector('#ok')"])
+    check("① infra-signal、infra-pid 不亮", "infra-signal" not in h and "infra-pid" not in h, str(h))
+
+
+def t_pitfalls_diff_e2e_sql_not_product_claim():
+    """[前端知識與風險詞 S22] scripts/e2e.sh 的 INSERT INTO 造資料:claims 不含交易包裹題、分級不因它變 high。"""
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"scripts/e2e.sh": "#!/bin/sh\npsql -c \"INSERT INTO orders VALUES (1)\"\n"})
+        data = _infra_collect(d)
+        qs = [c["question"] for c in data["claims"]]
+        check("① 沒有交易包裹題、tier 不是 high", not any("交易包裹" in q for q in qs) and data["tier"] != "high", f"{qs} {data['tier']}")
+
+
+def t_pitfalls_diff_plain_shell_sql_still_claimed():
+    """[前端知識與風險詞 S23] 不在測試基礎設施樣式內的 scripts/deploy.sh 的 DELETE FROM:claims 照舊含交易包裹題。"""
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"scripts/deploy.sh": "#!/bin/sh\npsql -c \"DELETE FROM orders WHERE id = 1\"\n"})
+        data = _infra_collect(d)
+        check("① 有交易包裹題、tier high", any("交易包裹" in c["question"] for c in data["claims"]) and data["tier"] == "high", str(data["claims"]))
+
+
+def t_test_infra_path_skips_e2ee_source():
+    """[前端知識與風險詞 S24] 端對端加密的產品檔(src/crypto/e2e.ts、lib/e2e_encryption.py)不算測試基礎設施:棧別鍵不是 infra,claims 照掃。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"src/crypto/e2e.ts": "export const key = 1\n",
+                        "lib/e2e_encryption.py": "import requests\nr = requests.get(url)\n"})
+        m._NODE_FLAVOR_CACHE.clear()
+        check("① src/crypto/e2e.ts 不是 infra", m._stack_key_for_file("src/crypto/e2e.ts", d) != "infra", "")
+        check("② lib/e2e_encryption.py 是 py", m._stack_key_for_file("lib/e2e_encryption.py", d) == "py", str(m._stack_key_for_file("lib/e2e_encryption.py", d)))
+        data = _infra_collect(d)
+        check("③ e2e_encryption.py 的 requests.get 照樣產生 claim", any(c["file"] == "lib/e2e_encryption.py" for c in data["claims"]), str(data["claims"]))
+
+
+def t_test_infra_data_files_no_stack_key():
+    """[前端知識與風險詞 S25] e2e 資料夾裡的資料檔(.json)沒有棧別鍵、不出棧別題,也不產生 claims;同資料夾的程式檔(.ts)才是 infra。
+    (代碼審 r1 改:seeds、fixtures 資料夾不再特別處理,見 t_test_infra_path_tightened)"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"e2e/fixtures/data.json": "{\"sql\": \"DELETE FROM orders\"}\n", "e2e/fixtures/make.ts": "export const x = 1\n"})
+        m._NODE_FLAVOR_CACHE.clear()
+        check("① e2e/fixtures/data.json → None", m._stack_key_for_file("e2e/fixtures/data.json", d) is None, str(m._stack_key_for_file("e2e/fixtures/data.json", d)))
+        check("② 對照:e2e/fixtures/make.ts → infra", m._stack_key_for_file("e2e/fixtures/make.ts", d) == "infra", "")
+        data = _infra_collect(d)
+        check("③ diff 沒有 json 題組、資料檔不產生 claims", not any(c["file"] == "e2e/fixtures/data.json" for c in data["claims"])
+              and set(data.get("stack_questions") or {}) <= {"infra"}, f"{list(data.get('stack_questions') or {})} {data['claims']}")
+
+
+def t_disposition_gate_covers_infra_questions():
+    """[前端知識與風險詞 S26] .sh 改動命中 infra 題、分支沒有表態記錄 → 表態閘擋下(d2:infra 題進推送前表態閘)。對照:只改 README 不擋。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        sha = _infra_repo(d, {"scripts/e2e.sh": "#!/bin/sh\nLOCK=\"/tmp/e2e.lock\"\nkill \"$(cat \"$PIDFILE\")\"\n"}, pkg=None)
+        data = _infra_collect(d)
+        out = m._dispositions_verdict(d, data, sha, "feat/x", sha, data["tier"])
+        check("① 有 infra 適用題、沒有表態記錄 → 擋下", "infra" in (data.get("stack_questions_applicable") or {}) and out["blocked"]
+              and any("表態記錄" in p for p in out["problems"]), str(out)[:400])
+    with tempfile.TemporaryDirectory() as d:
+        sha = _infra_repo(d, {"README.md": "改說明\n"}, pkg=None)
+        data = _infra_collect(d)
+        out = m._dispositions_verdict(d, data, sha, "feat/x", sha, data["tier"])
+        check("② 對照:只改 README 不擋", not out["blocked"], str(out)[:300])
+
+
+def t_arch_alignment_skips_vendored_siblings():
+    """[前端知識與風險詞 S27] 消費專案改 scripts/e2e.sh,同資料夾有原封不動的工具自帶檔 graph-rename.sh 與自己的 build.sh:
+    對照檔只列 build.sh,不列 graph-rename.sh。對照:自帶檔被專案改過(指紋對不上)就照列。"""
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"scripts/e2e.sh": "#!/bin/sh\necho e2e\n"}, pkg=None,
+                    vendored={"scripts/graph-rename.sh": "#!/bin/sh\necho tool\n", "scripts/build.sh.keep": ""})
+        (Path(d) / "scripts" / "build.sh").write_text("#!/bin/sh\necho build\n", encoding="utf-8")
+        data = _infra_collect(d)
+        sib = ((data.get("arch_alignment") or {}).get("files") or {}).get("scripts/e2e.sh", [])
+        check("① 對照檔有 build.sh、沒有 graph-rename.sh", "scripts/build.sh" in sib and "scripts/graph-rename.sh" not in sib, str(sib))
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"scripts/e2e.sh": "#!/bin/sh\necho e2e\n", "scripts/graph-rename.sh": "#!/bin/sh\necho changed\n"}, pkg=None,
+                    vendored={"scripts/graph-rename.sh": "#!/bin/sh\necho tool\n"})
+        data = _infra_collect(d)
+        sib = ((data.get("arch_alignment") or {}).get("files") or {}).get("scripts/e2e.sh", [])
+        check("② 對照:被改過的自帶檔照列", "scripts/graph-rename.sh" in sib, str(data.get("arch_alignment"))[:300])
+
+
+# ── 代碼審 code-前端知識與風險詞 r1 修正:判準來源=七席報告的失敗輸入(正確性、邊界、資源、通才、架構對齊、資安各席的條目) ──
+
+def t_door_keyword_payment_suffix_each():
+    """[前端知識與風險詞 S48] PAYMENT 只在緊接時間或重試參數尾碼時不算金流,每個尾碼各測一次;額度、次數、窗口、中間夾別的段照算
+    (代碼審 r1 安2、邊3、通3、正6)。"""
+    exempt = ["PAYMENT_TIMEOUT", "PAYMENT_TTL", "PAYMENT_DELAY", "PAYMENT_INTERVAL", "PAYMENT_SECONDS", "PAYMENT_SECS", "PAYMENT_SEC",
+              "PAYMENT_MS", "PAYMENT_MINUTES", "PAYMENT_MINS", "PAYMENT_RETRIES", "PAYMENT_RETRY_COUNT", "PAYMENT_MAX_RETRIES",
+              "PAYMENT_TIMEOUT_MS", "PAYMENT_DELAY_SECONDS", "ORDER_PAYMENT_TIMEOUT", "ORDER_PAYMENT_RETRY_COUNT"]
+    for s in exempt:
+        check(f"①「{s}」不回金流", "金流" not in _fe_door_classes(s), str(_fe_door_classes(s)))
+    for s in ("PAYMENT_LIMIT", "PAYMENT_AMOUNT_LIMIT", "PAYMENT_DAILY_LIMIT", "PAYMENT_COUNT", "PAYMENT_ID_COUNT", "PAYMENT_WINDOW",
+              "PAYMENT_GATEWAY_TIMEOUT", "PAYMENT_CHARGE_LIMIT", "MAX_PAYMENT_AMOUNT_LIMIT", "PAYMENT_TIMEOUTX"):
+        check(f"②「{s}」照回金流", "金流" in _fe_door_classes(s), str(_fe_door_classes(s)))
+
+
+def t_stack_key_plain_shell_is_infra():
+    """[前端知識與風險詞 S49] 檔名不含 e2e 的一般 shell 腳本(scripts/setup.sh、deploy.sh)棧別鍵也是 infra——守 `.sh` 那條規則本身
+    (代碼審 r1 正1 major:原本的測試都用 scripts/e2e.sh,拿掉 .sh 規則照綠)。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        for f in ("scripts/setup.sh", "deploy.sh", "tools/run-backend.sh"):
+            check(f"① {f} → infra", m._stack_key_for_file(f, d) == "infra", str(m._stack_key_for_file(f, d)))
+
+
+def t_test_infra_path_tightened():
+    """[前端知識與風險詞 S50] 測試基礎設施路徑只認 e2e 資料夾(不在 src/ lib/ 底下)、.e2e. 檔名與 e2e 字樣的 .sh;seeds、fixtures 不再特別處理,
+    樣式內非 infra 副檔名照原棧(代碼審 r1 安1、通2、邊4、整4)。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"db/seeds/prod_cleanup.sql": "DELETE FROM users WHERE 1=1;\n",
+                        "scripts/seed-prod.sh": "#!/bin/sh\npsql \"$PROD_URL\" -c \"DELETE FROM users\"\n",
+                        "src/e2e/cipher.py": "import requests\nr = requests.get(url)\n"})
+        m._NODE_FLAVOR_CACHE.clear()
+
+        def k(f):
+            return m._stack_key_for_file(f, d)
+        check("① src/e2e/cipher.py → py(產品程式裡的 e2e 資料夾不算)", k("src/e2e/cipher.py") == "py", str(k("src/e2e/cipher.py")))
+        check("② lib/e2e/keys.kt、e2e/app/Main.kt → kt(非 infra 副檔名照原棧,不變 None)", k("lib/e2e/keys.kt") == "kt" and k("e2e/app/Main.kt") == "kt", f"{k('lib/e2e/keys.kt')} {k('e2e/app/Main.kt')}")
+        check("③ db/seeds/x.sql → sql", k("db/seeds/x.sql") == "sql", str(k("db/seeds/x.sql")))
+        check("④ 根目錄 tests/e2e/a.ts、apps/web/e2e/x.ts → infra", k("tests/e2e/a.ts") == "infra" and k("apps/web/e2e/x.ts") == "infra", f"{k('tests/e2e/a.ts')} {k('apps/web/e2e/x.ts')}")
+        data = _infra_collect(d)
+        files = {c["file"] for c in data["claims"]}
+        check("⑤ seeds 的 SQL、seed-prod.sh 的 DELETE、src/e2e 的 requests 都照產生 claims、tier high",
+              {"db/seeds/prod_cleanup.sql", "scripts/seed-prod.sh", "src/e2e/cipher.py"} <= files and data["tier"] == "high", f"{files} {data['tier']}")
+
+
+def t_infra_trigger_variants():
+    """[前端知識與風險詞 S51] 常見寫法要亮:帶前綴的埠變數(E2E_PORT=、export BACKEND_PORT=)→ infra-shared;xargs kill、process.kill → infra-pid
+    (代碼審 r1 正2、正3、邊5)。對照:EXPORT=1、REPORT=x 不亮 infra-shared。"""
+    for ln in ("E2E_PORT=5173", "WEB_PORT=${WEB_PORT:-5173}", "export BACKEND_PORT=8080"):
+        check(f"①「{ln}」→ infra-shared", "infra-shared" in _infra_hits([ln]), str(_infra_hits([ln])))
+    for ln in ("lsof -ti:3000 | xargs kill", "cat pidfile | xargs kill -9", "  process.kill(pid)"):
+        check(f"②「{ln}」→ infra-pid", "infra-pid" in _infra_hits([ln]), str(_infra_hits([ln])))
+    for ln in ("EXPORT=1", "REPORT=x"):
+        check(f"③對照:「{ln}」不亮 infra-shared", "infra-shared" not in _infra_hits([ln]), str(_infra_hits([ln])))
+
+
+def t_pitfalls_stage_frontend_version_glued():
+    """[前端知識與風險詞 S52] 框架名緊貼版本號(Vue3、React18、Nuxt3、Vite5)、ReactJS、nextjs、英文 frontend/front-end 也算前端字樣
+    (代碼審 r1 正4、邊2)。對照:reactive 照舊不算。"""
+    m = _load_lumos_inproc()
+    for s in ("畫面改用 Vue3", "升級 React18", "ReactJS 元件", "Nuxt3", "Vite5", "nextjs", "the frontend team", "front-end build"):
+        check(f"①「{s}」算前端字樣", m._req_frontend_hit(s) is not None, str(m._req_frontend_hit(s)))
+    check("②對照:reactive streams 不算", m._req_frontend_hit("後端改成 reactive streams") is None, "")
+
+
+def t_req_fe_when_covers_node_frontend_markers():
+    """[前端知識與風險詞 S53] 前端框架名兩處同步的守衛(代碼審 r1 架3):_NODE_FRONTEND_MARKERS 每個套件名照散文寫法(去掉 @ 與 /core)都要被 _REQ_FE_WHEN 認得。
+    翻紅:在 _NODE_FRONTEND_MARKERS 加一個新框架、沒同步 _REQ_FE_WHEN。"""
+    m = _load_lumos_inproc()
+    for mk in m._NODE_FRONTEND_MARKERS:
+        name = {"next": "next.js"}.get(mk.lstrip("@").split("/")[0], mk.lstrip("@").split("/")[0])   # 散文寫 Next.js;單獨的 next 是英文常用字
+        check(f"①「{name}」(來自 {mk})被前端字樣認得", m._req_frontend_hit(f"改用 {name} 寫") is not None, "")
+
+
+# ── 代碼審 code-前端知識與風險詞 r2 修正:判準來源=r2 七席報告的失敗輸入 ──
+
+
+def t_infra_kill_variants():
+    """[前端知識與風險詞 S59] xargs 帶有參數的選項(-I {}、-n 1、-P 4、-L 1、-r --)與 .kill( 的各種寫法 → infra-pid 亮(代碼審 r2 通4、邊6、正5)。"""
+    for ln in ("git ls | xargs -I {} kill {}", "echo $PIDS | xargs -r -n 1 kill", "xargs -P 4 kill", "xargs -L 1 kill",
+               "xargs -I % kill %", "  process.kill (pid)", "  os.kill(pid, 9)", "  child.kill()"):
+        check(f"①「{ln}」→ infra-pid", "infra-pid" in _infra_hits([ln]), str(_infra_hits([ln])))
+
+
+def t_infra_xargs_many_spaces_linear():
+    """[前端知識與風險詞 S60] 「xargs」後面接兩萬個空白:infra 觸發比對一秒內跑完(代碼審 r2 資1:原寫法 3.7 秒,二次方)。"""
+    import time as _t
+    ln = "xargs" + " " * 20000 + "x"
+    t0 = _t.monotonic()
+    _infra_hits([ln])
+    dt = _t.monotonic() - t0
+    check(f"① {dt:.2f}s < 1s", dt < 1.0, f"{dt:.2f}")
+
+
+def t_test_infra_path_e2e_inner_lib_src():
+    """[前端知識與風險詞 S61] e2e 資料夾底下自己的 lib/、src/ 還是 infra;e2e 在 src/、lib/ 底下才不算(代碼審 r2 通1、邊2、正1,三席 major 修復回歸)。
+    claims 跳過與棧別鍵用同一支判斷:e2e/lib/h.ts 不產生 claims;e2e/app/Main.kt(非 infra 副檔名)照掃 claims(代碼審 r2 通3)。"""
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        _infra_repo(d, {"e2e/lib/h.ts": "export async function f(db) {\n  await db.query('DELETE FROM users WHERE id = 1')\n}\n",
+                        "e2e/app/Main.kt": "fun main() { db.execute(\"DELETE FROM orders WHERE id = 1\") }\n"})
+        m._NODE_FLAVOR_CACHE.clear()
+        for f in ("e2e/lib/x.ts", "e2e/src/x.ts", "tests/e2e/lib/util.ts", "apps/web/e2e/support/lib/x.ts", "e2e/lib/db.py"):
+            check(f"① {f} → infra", m._stack_key_for_file(f, d) == "infra", str(m._stack_key_for_file(f, d)))
+        for f in ("src/e2e/cipher.py", "packages/x/lib/e2e/a.ts"):
+            check(f"② 對照:{f} 不是 infra", m._stack_key_for_file(f, d) != "infra", str(m._stack_key_for_file(f, d)))
+        data = _infra_collect(d)
+        files = {c["file"] for c in data["claims"]}
+        check("③ e2e/lib/h.ts 不產生 claims、e2e/app/Main.kt 照產生", "e2e/lib/h.ts" not in files and "e2e/app/Main.kt" in files, str(files))
+
+
+def t_pitfalls_stage_frontend_sveltekit():
+    """[前端知識與風險詞 S62] SvelteKit 也算前端字樣(代碼審 r2 邊7)。"""
+    m = _load_lumos_inproc()
+    for s in ("改用 SvelteKit", "sveltekit 路由"):
+        check(f"①「{s}」算前端字樣", m._req_frontend_hit(s) is not None, "")
+
+
+# ── 代碼審 code-前端知識與風險詞 r3 修正:判準來源=r3 七席報告與編排者裁定(送出前端例外撤回) ──
+
+def t_door_keyword_send_always_hits():
+    """[前端知識與風險詞 S63] 「送出」回到裸字一律算對外送出:原本的前端例外句、前端日常句、詞表外的真對外送出(Slack、Salesforce)
+    門與 pitfalls --check 兩條路都命中(代碼審 r3 安1、通1、架1;編排者裁撤回)。"""
+    m = _load_lumos_inproc()
+    for s in ("請求送出時刻記錄", "按鈕再按也不會送出第二個請求", "當送出表單", "表單送出後把資料傳給父元件", "表單送出後顯示對應的結果",
+              "表單送出到 Slack 頻道", "請求送出至 Salesforce CRM", "表單送出後，畫面顯示給使用者", "向 api.vendor.com 送出請求"):
+        check(f"①「{s}」門回對外送出", "對外送出" in _fe_door_classes(s), str(_fe_door_classes(s)))
+        check(f"①「{s}」pitfalls --check 含 external-send", "external-send" in m._pitfall_scan_classes(s), "")
+    check("② 送出的例外常數都拿掉了", not any(hasattr(m, n) for n in ("_PITFALL_SEND_WHEN", "_PITFALL_SEND_DEST", "_PITFALL_SEND_CLAUSE", "_PITFALL_SEND_STOPS")), "")
+
+
+def t_test_infra_e2e_non_code_no_claims():
+    """[前端知識與風險詞 S64] e2e 樣式內的檔不掃產品型樣,唯一例外是有自己語言檢核題的程式檔(kt、java、cs、swift、dart)照掃:
+    e2e/seed.sql、e2e/db/schema.sql、docker-compose.e2e.yml、e2e/helper.go、app/x.e2e.sql 不產生 claims,e2e/Helper.java 照產生(代碼審 r3 邊1 major、通3、正3)。"""
+    with tempfile.TemporaryDirectory() as d:
+        dele = "DELETE FROM users WHERE id = 1;\n"
+        _infra_repo(d, {"e2e/seed.sql": dele, "e2e/db/schema.sql": dele, "docker-compose.e2e.yml": "x: \"DELETE FROM users\"\n",
+                        "e2e/helper.go": "db.Exec(\"DELETE FROM users WHERE id = 1\")\n", "app/x.e2e.sql": dele,
+                        "e2e/Helper.java": "class H { void f() { db.execute(\"DELETE FROM orders WHERE id = 1\"); } }\n"}, pkg=None)
+        data = _infra_collect(d)
+        files = {c["file"] for c in data["claims"]}
+        check("① sql、yml、go 不產生 claims", not files & {"e2e/seed.sql", "e2e/db/schema.sql", "docker-compose.e2e.yml", "e2e/helper.go", "app/x.e2e.sql"}, str(files))
+        check("② e2e/Helper.java 照產生 claims", "e2e/Helper.java" in files, str(files))
+
+
+def t_infra_xargs_option_chain_linear():
+    """[前端知識與風險詞 S65] 一行「xargs -a 」重複四千次:infra 觸發比對一秒內跑完(代碼審 r3 資1 major:選項加參數的重複沒上限,三十多 KB 要二十幾秒)。"""
+    import time as _t
+    ln = "xargs -a " * 4000 + "z"
+    t0 = _t.monotonic()
+    _infra_hits([ln])
+    dt = _t.monotonic() - t0
+    check(f"① {dt:.2f}s < 1s", dt < 1.0, f"{dt:.2f}")
+
+
+def t_infra_xargs_flag_no_swallow():
+    """[前端知識與風險詞 S66] 不帶參數的 xargs 旗標(-t、-r)不吞指令名:「xargs -t echo kill」「xargs -r grep -l kill」不亮 infra-pid;
+    帶參數的(-I {}、-n 1、--max-args 1、-a file)照亮(代碼審 r3 邊3)。"""
+    for ln in ("xargs -t echo kill", "xargs -r grep -l kill", "xargs -n1 echo kill the process", "xargs -I{} echo kill"):
+        check(f"①「{ln}」不亮 infra-pid", "infra-pid" not in _infra_hits([ln]), str(_infra_hits([ln])))
+    for ln in ("xargs -I {} kill {}", "xargs -n 1 kill", "xargs --max-args 1 kill", "xargs -a pids.txt kill", "xargs -r kill", "xargs -n1 -r kill -9"):
+        check(f"②「{ln}」亮 infra-pid", "infra-pid" in _infra_hits([ln]), str(_infra_hits([ln])))
+
+
+def t_infra_killpg():
+    """[前端知識與風險詞 S67] Python 打整個程序群組的 os.killpg( 也亮 infra-pid(代碼審 r3 邊4)。"""
+    check("① os.killpg(pgid, 15) → infra-pid", "infra-pid" in _infra_hits(["os.killpg(pgid, 15)"]), str(_infra_hits(["os.killpg(pgid, 15)"])))
+
+
+def t_pitfalls_stage_frontend_sveltejs_kit():
+    """[前端知識與風險詞 S68] 套件名 @sveltejs/kit 也算前端字樣(代碼審 r3 正4)。"""
+    m = _load_lumos_inproc()
+    check("① @sveltejs/kit", m._req_frontend_hit("@sveltejs/kit 路由") is not None, "")
 
 
 def t_spec_gate_skips_exclusion_lines():
@@ -70127,9 +70591,6 @@ def t_lint_door_field():
     check("② plan_risk: sideways 軟提醒", "plan_risk" in r.stdout and "sideways" in r.stdout, r.stdout[-400:])
 
 
-
-
-
 # ── 收工點名改問版本控制(Projects/收工點名問版本控制_計劃) ────────────────────
 # 出身:收工那句「這一輪改了 N 個程式碼檔」靠列舉工具名算清單,用 shell 改的檔一支都不算。
 # 實測一輪改三支只報一支;最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。
@@ -70329,7 +70790,6 @@ def t_sync_nudge_lists_untracked_dir_files_individually():
     print("  ✓ t_sync_nudge_lists_untracked_dir_files_individually")
 
 
-
 def t_sync_nudge_handles_non_ascii_filenames():
     """[代碼審 r1 外家備援 blocker] 中文檔名不准被轉義成八進位當路徑用。
 
@@ -70356,7 +70816,6 @@ def t_sync_nudge_handles_non_ascii_filenames():
     _, out = _run_stop(root, _turn(("Bash", {"command": "echo 'y = 1' > scripts/收工點名.py"})))
     check("④ 提醒裡也要印得出中文檔名", "收工點名.py" in out, out[-400:])
     print("  ✓ t_sync_nudge_handles_non_ascii_filenames")
-
 
 
 def t_sync_nudge_model_message_lists_shell_written_files():
@@ -70454,7 +70913,6 @@ def t_sync_nudge_git_call_disables_fsmonitor():
     print("  ✓ t_sync_nudge_git_call_disables_fsmonitor")
 
 
-
 def t_sync_nudge_hardens_git_for_all_subprocesses():
     """[代碼審 r2 驗收席 blocker] 防護要涵蓋這支 hook 開出去的★所有★子行程。
 
@@ -70498,7 +70956,6 @@ def t_sync_nudge_hardens_git_for_all_subprocesses():
     check("③ ★整支 hook 跑完,攻擊者的指令都不准執行★(含它去呼叫主程式那條路)",
           not proof.exists(), "證據檔被建出來了:%s" % proof)
     print("  ✓ t_sync_nudge_hardens_git_for_all_subprocesses")
-
 
 
 def t_sync_nudge_blocks_every_listed_unsafe_git_config():
@@ -70545,7 +71002,6 @@ def t_sync_nudge_blocks_every_listed_unsafe_git_config():
         check("清單項「%s」:★攻擊者的指令不准執行★" % key, not proof.exists(),
               "證據檔被建出來了:%s" % proof)
     print("  ✓ t_sync_nudge_blocks_every_listed_unsafe_git_config")
-
 
 
 def t_lumos_content_diffs_all_disable_external_drivers():
@@ -70824,7 +71280,6 @@ def t_prepush_and_ci_wired_for_docs_suite():
     _r = _sp.run([sys.executable, str(root / "scripts" / "test_autonomous_loop.py"), "-k", "real_claude_md"], capture_output=True, text=True)
     check("那條 -k 真的選得到東西(改名就紅,不會變成零支回綠)", _r.returncode == 0 and "Ran 1 test" in _r.stderr, _r.stderr[-200:])
     check("CI:push 事件用 before..sha 問 lumos,docs 才帶 --suite docs,其餘全套;起點寫法跟同檔既有步驟一致(^{commit})", all(x in ci for x in ("pitfalls --diff \"$BEFORE..$SHA\"", "--suite docs", "[ \"$suite\" = docs ] || suite=full", "0000000000000000000000000000000000000000", 'git cat-file -e "$BEFORE^{commit}"')), "")
-
 
 
 # ── 筆記形狀擋(Projects/筆記形狀擋_計劃,2026-09-27)──────────────────────────────────────────
@@ -72080,7 +72535,6 @@ def t_note_shape_new_code_file_wakes_old_refs():
     check("③既有檔加了 #! 變成程式檔也喚醒", rc == 1 and "tool:2" in out, out[-500:])
 
 
-
 def t_note_shape_code_review_r1_regressions():
     """代碼審 r1 抓到的洞各一條:中文與含空白檔名、只排除主線已有的提交、骨架與純連結的前綴行、檔名含 @、
     單一檔名的釘版本、同一行合法釘版本不吃掉未釘的、BOM、同名非程式檔、[src:] 出處標記、不存在路徑的壞釘法、
@@ -72171,7 +72625,6 @@ def t_note_shape_code_review_r1_regressions():
     ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     step = ci[ci.index("note-shape gate"):ci.index("Anchor verify")]
     check("⑫CI 那一步擋下時有 ::error:: 標註並保留 rc", "::error::" in step and "rc=$?" in step, step[-400:])
-
 
 
 def t_note_shape_code_review_r2_regressions():
@@ -72631,7 +73084,6 @@ def t_note_shape_acceptance_regressions():
     q.write_text(f"---\ntype: system\n---\n# Q\n見 `lib/Foo.cs@{sha[:12]}:2`\n", encoding="utf-8")
     rr = sp.run([sys.executable, GRAPHCTL, "refcheck", str(q), "--repo", str(r), "--json"], capture_output=True, text=True)
     check("⑥refcheck:頂層目錄刪掉的釘版本照驗(行號超出報出來)", not (r / "lib").exists() and '"out_of_range": 1' in rr.stdout, rr.stdout[-300:])
-
 
 
 # ── 筆記內容審(Projects/筆記內容審_計劃,2026-09-28)──────────────────────────────────────────
@@ -73390,7 +73842,6 @@ def t_note_audit_template_vendored():
         check("③消費專案的派工詞讀得到、路徑是消費專案的", prm is not None and str(tgt.resolve()) in prm, "")
 
 
-
 def t_note_audit_code_review_r1_regressions():
     """代碼審 r1(四席)抓到的問題各一條回歸:同編號多處都列、只改名的已收尾計劃不重審、CRLF 筆記收得下脈絡判定、
     範圍終點找不到回 rc2、略過開關只認 1、decision-amend(有空行的多行值、清單欄、還沒提交的改名)、證據驗證、非 UTF-8、
@@ -73508,7 +73959,6 @@ def t_note_audit_code_review_r1_regressions():
     check("⑩c 推上遠端後算進去", any("被刪過 1 次" in l for l in m._note_audit_doctor_lines(root, root / _NA_VAULT)), "")
 
 
-
 def t_note_audit_code_review_r2_regressions():
     """代碼審 r2(三席)抓到的問題各一條回歸:decision-amend 的一行式清單與同層縮排清單、只暫存新檔的搬檔、
     沒有遠端或全新筆記准改;CI 抓完整歷史要看同一個工作項目(兩層);同編號超過 150 處不破上限;
@@ -73607,7 +74057,6 @@ def t_note_audit_code_review_r2_regressions():
           f"{[len(_na_rows(f)) for f in fs]}")
 
 
-
 def t_note_audit_code_review_r3_regressions():
     """代碼審 r3(三席)抓到的問題各一條回歸:CI 工作項目切分認得行尾註解、加引號的名字、jobs: 帶註解;
     第一層 doctor 走同一支、整行註解掉的那步算沒呼叫、訊息指名工作項目並講還有幾個;
@@ -73676,7 +74125,6 @@ def t_note_audit_code_review_r3_regressions():
                        (["note-audit", "check", "--diff"], "筆記內容審")):
         r = sp.run([sys.executable, GRAPHCTL, *cmd, "HEAD.." + "0" * 64, "--repo", str(root)], capture_output=True, text=True)
         check(f"④{label}:終點 64 個 0 → 跳過 rc0", r.returncode == 0, r.stderr[-200:])
-
 
 
 def t_note_audit_acceptance_regressions():
@@ -85579,7 +86027,6 @@ def t_drift_c6_detects_pending_clause_to_settled_note():
     check("③來源本身已收尾的不列", _df_find(v, "c6", "Projects/Old_計劃.md") == [], "")
 
 
-
 def t_drift_c6_ignores_link_title_words():
     """[c6 不看連結標題 S1] 連到標題含待定詞(「還沒做」)的已收尾筆記、連結外沒寫待定詞 → 不列;連結外寫了 → 照列;
     別名裡的待定詞也不算(2026-10-06 rtb 盤點 1-1 的兩條誤報)。翻紅釘:判待定詞不遮連結 → ①③紅。"""
@@ -86496,7 +86943,6 @@ def t_drift_fix_c5_completes_settle():
     check("③家節點同時有預告行與正式行:回 2、說先手動刪預告行", fs2 and rc == 2 and "先手動刪掉預告行" in out
           and (V / "G2.md").read_bytes() == raw2 and (v / "Systems" / "Pay.md").read_bytes() == pay, out)
     check("④跟 settle 第二步同一支算內容(_guard_settle_record_lines)", len(calls) == 1, str(len(calls)))
-
 
 
 # ═══ 舊句檢查 m1(Projects/舊句檢查_計劃;條款 [S1] 到 [S18] 一條一支)═══
@@ -87734,7 +88180,6 @@ def t_drift_m1_long_names():
         check("④照提示表態 rc 0", r2.returncode == 0, r2.stdout + r2.stderr)
 
 
-
 # ═══ 舊句檢查 m1 代碼審 r1 折入(每支對一組發現;家 Systems/存量漂移守衛)═══
 
 def _m1_git_b(root, *args, stdin=None):
@@ -88068,7 +88513,6 @@ def t_drift_m1_review_r1_spec_gaps():
           r.stdout[:600])
 
 
-
 # ═══ 舊句檢查 m1 代碼審 r2 折入(家 Systems/存量漂移守衛)═══
 
 def t_drift_m1_review_r2_entry_guard():
@@ -88308,7 +88752,6 @@ def t_drift_m1_review_r2_strict_home_dirs():
             signal.signal(signal.SIGALRM, prev)
     check("③留痕檔是 FIFO:不卡住、拒絕寫", not hung and ok is False,
           f"hung={hung} ok={ok} fifo={_st.S_ISFIFO((h3 / '.cache' / 'lumos' / 'drift-m1' / 'ledger-miss.jsonl').stat().st_mode)}")
-
 
 
 # ═══ 舊句檢查 m1 代碼審 r3 折入(家 Systems/存量漂移守衛)═══
@@ -90956,7 +91399,6 @@ def t_contract_backing_cases():
           data["java-concurrency"]["backing"]["status"] == "strong", str(data))
 
 
-
 def t_contract_backing_note_recipes():
     """[S9 補] kill-log 行要對回筆記現有的配方(代碼審 r3 資安席):對不上的略過;covers 與說明取筆記那條、不信帳檔那一行;
     node 欄指到知識庫外或不是 .md 的略過。翻紅釘:拿掉 `_backing_note_recipes` 的 rec is None 略過 → ①紅;covers 改回取帳檔 → ②紅。"""
@@ -91171,7 +91613,6 @@ def t_gov_stats_contract_backing():
           line and "背書分母 3(有背書 1、做到了但沒有背書 1、不適用/待辦/張力 1)" in line[0], "\n".join(line) or r.stdout[-600:])
 
 
-
 def t_isolated_worktree_shared():
     """[S11] 共用隔離工作樹函式(Projects/代碼審修正關卡第0步_計劃):guard kill 建樹失敗時記成 error、繼續下一個平台;
     多平台時在平台根下 `git -C` 建樹、測試在樹的最上層跑(跟抽函式之前一樣);--keep-worktree 時現場留著、路徑印到標準錯誤(--json)。"""
@@ -91221,7 +91662,6 @@ def t_isolated_worktree_shared():
     check("⑨不到一天的、別的前綴的不動", new_fc.exists() and old_kill.exists(), "")
 
 
-
 def t_canary_regression_set():
     """[S9] 載體席選填 --regression-set(這輪哪些發現是上一輪修補造成的;Projects/代碼審修正關卡第0步_計劃):
     id 不在 --findings-set、沒帶 --findings-set、沒帶 --loop、迴圈第一輪帶非空、空字串或只有逗號 → rc2;
@@ -91259,7 +91699,6 @@ def t_canary_regression_set():
     check("⑦沒帶 --loop rc2", r.returncode == 2 and "--loop" in r.stderr, f"rc={r.returncode} {r.stderr[:160]}")
     r = rec("r2", *car, "--regression-set", "f2, f1,f2")
     check("⑧合法:落帳排過序去重", r.returncode == 0 and last().get("regression_set") == ["f1", "f2"], f"rc={r.returncode} {str(last())[:200]}")
-
 
 
 # ── 代碼審修正關卡第0步(Projects/代碼審修正關卡第0步_計劃)的測試夾具與條款測試 ──
@@ -92336,7 +92775,6 @@ def t_note_shape_test_refs_class_method():
     check("②方法不存在 → 擋", rc == 1, out[-500:])
 
 
-
 def t_note_shape_test_refs_line_attribution():
     """代碼審 r1 通才席 F1、F2(行號歸屬一族):帳上的 new 看名稱實際所在的行(續行新加、只改第一行兩個方向);
     單行 summary 只改那一行也算碰到。翻紅釘:new 改回比條目第一行 → ①②紅;拿掉 summary 鍵行那條判法 → ③紅。"""
@@ -92475,7 +92913,6 @@ def t_doctor_s20_escape_and_memory_env():
     e = m.Env.from_texts(vault, {"Systems/M.md": "---\ntype: system\nstatus: doing\nsummary: |-\n  WHY:死 [test:test_dead_mem]\n---\n# M\n"})
     cats = m._doctor_test_ref_lines(e, root)
     check("②記憶體 Env 也讀得到全文", any("test_dead_mem" in x for x in cats["dead"]), str(cats))
-
 
 
 def t_doctor_s20_prose_retire_by_verdict_verb():
@@ -92661,7 +93098,6 @@ def t_doctor_s20_prose_retire_manual():
     got = m._doctor_test_ref_lines(e, root)["prose"]
     check("⑪開頭欄位摘要裡長得像條款的行:不列", got == [], str(got))
     print("  ✓ t_doctor_s20_prose_retire_manual")
-
 
 
 # ── 驗收紀錄寫明驗了哪些功能(Projects/驗收紀錄寫明驗了哪些功能_計劃,2026-10-03)────────────────────
@@ -92873,7 +93309,6 @@ def t_doctor_orphan_suggest_system_refs():
     check("③沒宣告:照原本推正文連到的 B", "推薦 Systems/B.md" in sec, sec)
 
 
-
 def t_doctor_check3_extra_hint_shell_quoted():
     """代碼審 r1 通才席 F1:「多掛」提醒印的 lumos remove 改法要照 _drift_sh 加 shell 引號、清控制字元——
     登記裡藏 $(…) 照貼不執行;功能檔名有空白照貼不失敗。翻紅釘:改法字串不加引號 → ①②紅。"""
@@ -92915,7 +93350,6 @@ def sp_run_env(vault, extra_env, *args):
     e = dict(_os_k2.environ)
     e.update(extra_env)
     return sp.run([sys.executable, GRAPHCTL, "--vault", str(vault), *args], capture_output=True, text=True, env=e)
-
 
 
 def t_doctor_check3_long_name_hint_intact():
@@ -93466,7 +93900,6 @@ def t_lens_cache_read_without_getuid():
                       foreign is None and writable is None, f"foreign={foreign} writable={writable}")
 
 
-
 def t_lens_cache_read_rejects_untrusted_path_without_getuid():
     """沒有 getuid 時，連結到私有快取外的目錄或檔案也不能進派工詞。"""
     import json as _json
@@ -93509,7 +93942,6 @@ def t_lens_cache_read_rejects_untrusted_path_without_getuid():
         check("無 getuid 快取:不把非文字 JSON 當派工內容", invalid is None, str(invalid))
 
 
-
 def t_lens_untrusted_cache_never_creates_external_lock():
     """讀取端拒絕外部連結時，背景等待端也不能沿該路徑建鎖。"""
     import contextlib as _ctx
@@ -93544,7 +93976,6 @@ def t_lens_untrusted_cache_never_creates_external_lock():
               rc1 == rc2 == 2 and spawn.call_count == 0 and not outside_lock.exists()
               and len(lines) == 2 and all(row.get("lock_error") is True for row in lines),
               f"rc={rc1},{rc2} spawn={spawn.call_count} lock={outside_lock.exists()} out={lines}")
-
 
 
 def t_lens_trusted_cache_still_spawns_warmer():
@@ -93763,7 +94194,6 @@ def t_lens_warmer_cleanup_runs_once():
               f"rc={rc} removed={removed} lock={lock.exists()} output={out.getvalue()[:100]}")
 
 
-
 def t_lens_spawn_failure_reports_error():
     """建子程序失敗要即時分流；清鎖再失敗不能被可用快取掩蓋。"""
     import contextlib as _ctx
@@ -93945,7 +94375,6 @@ def t_lens_no_cache_bypasses_warmer():
               rc == 0 and warm_call.call_count == 0 and spawn.call_count == 0
               and not list(root.rglob("*.warming")),
               f"rc={rc} warm={warm_call.call_count} spawn={spawn.call_count}")
-
 
 
 # ── 審查跑滿回顧(Projects/審查跑滿回顧_計劃)──
@@ -95098,7 +95527,6 @@ def t_cap_retro_r2_gov_not_regular():
           "逾時" if r is None else r.stderr[-300:])
 
 
-
 # ── 審查跑滿回顧:代碼審第三輪修正(governance/review-reports/code-審查跑滿回顧/r3-*)──
 def _cr_gov_link(c, target):
     """把治理帳換成指向 target 的符號連結(target 先放治理帳現在的內容)。"""
@@ -95400,7 +95828,6 @@ def t_cap_retro_r3_one_way():
     check("7 骨架 JSON 跳脫用 _PATH_SPECIAL_CATS", hasattr(m, "_json_text_escaped") and "_PATH_SPECIAL_CATS" in inspect.getsource(m._json_text_escaped), "")
 
 
-
 def _cr_ask_count(out):
     """輸出裡叫人記人裁的指令出現幾次(只數指令本身,不數「已有人裁紀錄」這類狀態句)。"""
     return out.count("lumos loop cap-decision")
@@ -95647,7 +96074,6 @@ def t_fix_check_preflight_not_run_is_durable():
               values.get(events[0]["token"]) == wanted and values.get(legacy["token"]) is None, str(values))
 
 
-
 def _physical_ref_fixture(root, text):
     """真實 Git 來源；所有變動只在呼叫者的臨時目錄。"""
     (root / "src").mkdir(exist_ok=True)
@@ -95859,7 +96285,6 @@ def t_events_reader_from_worktree():
     check("S12 列得出主 checkout 的會談", "S9" in sess, r.stdout[-300:])
 
 
-
 def t_events_prune_only_old_sessions():
     """S11:只刪早於 N 天且 24 小時內沒動過的會談資料夾;不跟符號連結;N 不合法回 2 不刪。"""
     import os as _os
@@ -95896,7 +96321,6 @@ def t_events_prune_only_old_sessions():
     check("S11 --days 1:24 小時內動過的會談一律不刪", new.is_dir(), r.stdout)
     check("S11 不跟符號連結:連結指到的資料夾與內容都還在", (outside / "keep.txt").exists())
     check("S11 印刪了幾個", "刪" in r.stdout, r.stdout)
-
 
 
 def t_enforcement_ledger_row():
@@ -95941,7 +96365,6 @@ def t_enforcement_ledger_row():
         patcher.stop()
 
 
-
 def t_runner_isolates_claude_plugin():
     """S10:測試執行器建拋棄式家目錄時,同時關掉外掛指令並清掉 CLAUDE_CONFIG_DIR,
     使既有的 install / uninstall 測試不會碰到真的 claude 與使用者的設定。"""
@@ -95950,7 +96373,6 @@ def t_runner_isolates_claude_plugin():
           str(_os.environ.get("LUMOS_SKIP_CLAUDE_PLUGIN")))
     check("S10 CLAUDE_CONFIG_DIR 已清掉", "CLAUDE_CONFIG_DIR" not in _os.environ,
           str(_os.environ.get("CLAUDE_CONFIG_DIR")))
-
 
 
 _FAKE_CLAUDE = r"""#!/usr/bin/env python3
@@ -96153,7 +96575,6 @@ def t_teardown_removes_ledger_plugin():
     check("S7⑤ LUMOS_PROBE → 整個被擋(rc 2)且不呼叫 claude", r.returncode == 2 and calls(log) == [], f"rc={r.returncode} {calls(log)}")
 
 
-
 def t_ledger_plugin_bad_json_and_races():
     """代碼審 r1(正確性 F1、邊界 F1、併發 F2 F3、合約 F5、資安 F4):claude 吐壞 JSON 不得讓 install / uninstall 崩;
     另一支先做完導致 add/install 回錯時以最終狀態為準;移除舊市集後加新的失敗要教怎麼救;
@@ -96349,7 +96770,6 @@ def t_events_prune_edge_cases():
     r = subprocess.run([sys.executable, GRAPHCTL, "events", "--prune", "--days", "1"], cwd=root2,
                        capture_output=True, text=True, check=False)
     check("事件帳路徑上層是符號連結 → 不刪 repo 外的東西", old.exists(), r.stdout + r.stderr[-200:])
-
 
 
 def t_events_reader_hostile_lines():
@@ -97050,7 +97470,7 @@ _SEC_SIX_CLASSES_ORIG = (
     "5. 執行邊界:hook、安裝腳本、CI 會不會執行不可信位置的檔;shell 插值;寫進使用者全域設定;授權範圍被放寬\n"
     "6. 行動端:本機明文儲存、網路安全設定放寬、WebView / 深層連結、剪貼簿\n"
     "另看這次新加的依賴:沒鎖版本、來源不明。\n")
-_SEC_FILL_CLASSES = ("{逐類清單:消費專案貼〈消費專案六類〉;工具鏈本 repo 貼〈工具鏈三類〉——看 lumos loop next 印的「鏡頭範圍」那一行;"
+_SEC_FILL_CLASSES = ("{逐類清單:消費專案貼〈消費專案六類〉,被審改動含網頁前端檔再接著貼〈網頁前端類〉;工具鏈本 repo 貼〈工具鏈三類〉——看 lumos loop next 印的「鏡頭範圍」那一行;"
                      "跨 repo 派工看被審 repo 的根;這一行整行換成貼上的那一段}")
 _SEC_FILL_OUT = "{範圍外:工具鏈本 repo 整行換成〈工具鏈範圍外〉那一段;消費專案整行刪掉}"
 # 「不報」段第一條的原句(改動前逐字):工具鏈本 repo 的歸屬搬進〈工具鏈三類〉,這句所有專案共用、不帶工具鏈字樣(代碼審 r1 通2)
@@ -97232,6 +97652,54 @@ def _sub_block(sec, head):
     if f"### {head}" not in sec:
         return ""
     return sec.split(f"### {head}", 1)[1].split("\n### ", 1)[0]
+
+
+def t_templates_frontend_lens_supplement():
+    """[前端知識與風險詞 S13] templates.md §7.7〈前端補充〉:在三條硬性配套之後、### C 之前;寫明看要改的檔決定、加問不取代、語意規格每輪改述;
+    五個設計審鏡頭各一列;§1 審查要求第 5 點有指到它的填空。"""
+    t = _tpl_text()
+    sec = t.split("## 7.7 ", 1)[-1].split("\n## ", 1)[0]
+    i_pact, i_fe, i_c = sec.find("三條硬性配套"), sec.find("### 前端補充"), sec.find("### C ")
+    check("① 位置:配套之後、### C 之前", 0 <= i_pact < i_fe < i_c, f"{i_pact} {i_fe} {i_c}")
+    body = sec[i_fe:i_c]
+    check("② 寫明看要改的檔決定、加問不取代、語意規格", all(x in body for x in ("要改的檔", "加問、不取代", "語意規格")), body[:300])
+    rows = [ln.split("|")[1].strip() for ln in body.splitlines() if ln.startswith("| ") and not ln.startswith("| 鏡頭")]
+    check("③ 五個設計審鏡頭各一列", rows == ["正確性/邏輯", "邊界可執行", "整合/知識同步", "資源併發", "回滾"], str(rows))
+    s1 = t.split("## 1. ", 1)[-1].split("\n## ", 1)[0]
+    check("④ §1 有指到〈前端補充〉的填空", "{這份計劃要改前端檔時:" in s1 and "§7.7〈前端補充〉" in s1, "")
+
+
+def t_templates_security_web_frontend_class():
+    """[前端知識與風險詞 S14] §7.8〈消費專案六類〉逐字不動;其後有〈網頁前端類〉列八項,在〈工具鏈三類〉之前。"""
+    t = _tpl_text()
+    sec = t.split("## 7.8 ", 1)[-1].split("\n## ", 1)[0]
+    six = _sub_block(sec, "消費專案六類")
+    check("① 六類那節仍含原文", _SEC_SIX_CLASSES_ORIG in six, six[:200])
+    web = _sub_block(sec, "網頁前端類")
+    check("② 網頁前端類八項都在", all(x in web for x in ("XSS", "CSRF", "開放式轉址", "CSP", "localStorage", "postMessage", "第三方腳本", "開發代理")), web[:300])
+    check("③ 順序:六類 → 網頁前端類 → 工具鏈三類", 0 <= sec.find("### 消費專案六類") < sec.find("### 網頁前端類") < sec.find("### 工具鏈三類"), "")
+
+
+def t_templates_security_fill_line_mentions_web_class():
+    """[前端知識與風險詞 S15] §7.8 圍欄的逐類清單填空行與圍欄後的填法說明段,都寫明含網頁前端檔時再接著貼〈網頁前端類〉;圍欄有 infra- 選配行。"""
+    t = _tpl_text()
+    sec = t.split("## 7.8 ", 1)[-1].split("\n## ", 1)[0]
+    fill = next((ln for ln in sec.splitlines() if ln.startswith("{逐類清單:")), "")
+    check("① 填空行提到〈網頁前端類〉", "再接著貼〈網頁前端類〉" in fill, fill)
+    how = next((ln for ln in sec.splitlines() if ln.startswith("上面圍欄的兩個填空怎麼填")), "")
+    check("② 填法說明段也提到", "再接著貼〈網頁前端類〉" in how, how[-300:])
+    check("③ 圍欄有 infra- 選配行", "(選配)pitfalls 清單裡 infra- 開頭的題" in sec, "")
+
+
+def t_test_quality_standard_frontend_section():
+    """[前端知識與風險詞 S28] test-quality-standard.md 有網頁前端節,含 advanceTimers、fetch 替身、同輪連點三條;03〈實作測試品質〉有一句指過去。"""
+    root = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands"
+    std = (root / "test-quality-standard.md").read_text(encoding="utf-8")
+    sec = std.split("### 網頁前端", 1)[-1].split("\n### ", 1)[0] if "### 網頁前端" in std else ""
+    check("① 網頁前端節三條都在", all(x in sec for x in ("advanceTimers: vi.advanceTimersByTime", "fetch 替身", "同輪連點", "fireEvent.click")), sec[:200])
+    w = (root / "03-寫回圖譜.md").read_text(encoding="utf-8")
+    impl = w.split("## 實作測試品質", 1)[-1].split("\n## ", 1)[0]
+    check("② 03〈實作測試品質〉指到網頁前端節", "〈網頁前端〉節" in impl and "test-quality-standard.md" in impl, "")
 
 
 def t_templates_toolchain_lens_scope():
@@ -97575,7 +98043,6 @@ def t_ledger_rules_match_reader():
         check(f"主 checkout 判定 {c} 讀取端一致", Path(got).resolve() == want.resolve(), f"{got} != {want}")
 
 
-
 def _review_convergence_unit_group(group):
     _need_src("governance/eval/test_review_convergence.py")
     root = Path(GRAPHCTL).resolve().parent.parent
@@ -97790,7 +98257,6 @@ def t_test_quality_scan_cli():
     check("測試品質掃描的獨立反例與不完整狀態", run.returncode == 0 and
           re.search(r"Ran [1-9][0-9]* tests", output) is not None,
           output[-5000:])
-
 
 
 def t_test_quality_handbook_controls():

@@ -255,3 +255,11 @@ WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitf
 工具鏈資安範圍那條 RULE 的判別邊界(照程式行為寫的說明,不是使用者裁定的內容,不帶那條 RULE 的效力):判別看的就是上一段那支檔,所以沒有 `.git` 的副本、`--repo` 指到子目錄、從 repo 外跑都判成消費專案,方向是多審;反過來,任何 repo 根放一支同名空檔就會被判成工具鏈,這屬刻意手法,照那條 RULE 的「刻意多步偽造不防」歸範圍外,不為它加機制。
 
 測試 t_loop_next_lens_scope_toolchain_vs_consumer、t_loop_next_lens_scope_design_untouched、t_loop_next_lens_scope_fail_open、t_loop_next_lens_scope_loose_code_ids、t_loop_next_lens_scope_marker_odd_kinds、t_loop_next_lens_scope_root_kind。
+
+## 前端面、infra 題組與測試基礎設施路徑(2026-10-15,[[Projects/前端知識與風險詞_計劃]])
+
+- `pitfalls --stage` 與計劃模式:計劃全文提到前端字樣(`_REQ_FE_WHEN`)時多列 role 為 frontend 的十個需求風險面;計劃模式多印一段「前端面」、`--json` 多一個 `frontend_facets` 鍵;`--check` 在 ✓ 與 ✗ 兩條路都多印一行「提醒:」開頭的前端提醒,回傳碼不變。前端字樣只決定多列題,不決定設計審方向。內容源在 [[Systems/情境出題]]。
+- `_stack_key_for_file` 第一條規則:`.sh` 與 `_TEST_INFRA_PATH_RE`(`e2e/` 資料夾而且那個 e2e 不在 src、lib 底下,或 `.e2e.` 檔名)裡的 sh/py/ts/js 家族 → `infra`(`_is_test_infra_file`;題目見 [[Systems/效能檢核目錄]]),其他副檔名照原本的棧;前端框架分流排在它之後。根目錄的 `tests/e2e/…` 沒被 `_PITFALL_DIFF_TEST_PAT` 擋(它比 `/tests?/`),也落在這條。
+- `_pitfall_diff_collect` 掃代碼型樣時問 `_skip_product_claims`:e2e 樣式內的檔都不掃,只有 kt、java、cs、swift、dart 這類有自己語言題的程式檔照掃(e2e 腳本與種子 SQL、compose 不問交易包裹、分級不因它變 high;`db/seeds`、`scripts/seed-prod.sh` 不在樣式內,照掃);只跳 claims 那一圈,`_stack_changed_ok` 不動(它也給棧別觸發用)。`scripts/deploy.sh` 這種不在樣式內的腳本照掃。
+- 架構對齊對照檔排除原封不動的工具自帶檔(見 [[Systems/arch-alignment-lens]])。
+- 綁的測試:`t_pitfalls_stage_frontend_facets_listed`、`t_pitfalls_spec_mode_lists_frontend_facets`、`t_pitfalls_check_frontend_hint_keeps_rc`、`t_stack_key_e2e_path_is_infra`、`t_pitfalls_diff_e2e_sql_not_product_claim`、`t_pitfalls_diff_plain_shell_sql_still_claimed`、`t_test_infra_path_skips_e2ee_source`、`t_test_infra_data_files_no_stack_key`。
