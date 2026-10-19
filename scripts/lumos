@@ -6416,16 +6416,29 @@ def _walk_test_files(repo_root, profile, with_path=False):
 # @ 加雙引號(C# 逐字字串,可跨行,兩個雙引號是跳脫)。JS 沒有這幾種寫法(三個雙引號在 JS 是空字串接一個引號,極少見)。
 # 量詞一律用佔有式(*+、++,Python 3.11 起有;本專案最低 3.14):每一段的字元類互斥,佔有與否比中的結果相同,但不留回溯狀態——
 # 群組加星號即使是展開式,每個迭代(孤立引號、跳脫字元)仍推一格狀態,8MB 塞滿孤立引號的三個雙引號字串要 350MB 以上(代碼審 r3 邊界席)。
-_C_STRIP_RE = re.compile(r'"""[^"]*+(?:"(?!"")[^"]*+)*+(?:"""|\Z)' r"|'''[^']*+(?:'(?!'')[^']*+)*+(?:'''|\Z)"
-                         r'|@"[^"]*+(?:""[^"]*+)*+"?'
-                         r"|'[^'\\\n]*+(?:\\.[^'\\\n]*+)*+'?|\"[^\"\\\n]*+(?:\\.[^\"\\\n]*+)*+\"?|`[^`\\]*+(?:\\.[^`\\]*+)*+`?"
-                         r"|//[^\n]*+|/\*[^*]*+(?:\*++[^*/][^*]*+)*+(?:\*++/)?", re.S)
+# ★佔有式的正規式不在模組載入時編★:舊版 Python(3.9)載入本檔時就編會丟 re.error,連「請改用 3.14」的說明都印不出來;
+# 一律寫成 pattern 字串、經 _lazy_re 第一次用到才編(t_lumos_module_level_regex_loads_on_old_python 掃模組層的 re.compile)。
+_LAZY_RE_CACHE = {}
+
+
+def _lazy_re(pattern, flags=0):
+    """第一次用到才編的正規式(給 3.11 起才有的寫法用;只有寫死在原始碼裡的幾支 pattern 會進來,快取不會長)。"""
+    r = _LAZY_RE_CACHE.get((pattern, flags))
+    if r is None:
+        r = _LAZY_RE_CACHE[(pattern, flags)] = re.compile(pattern, flags)
+    return r
+
+
+_C_STRIP_PAT = (r'"""[^"]*+(?:"(?!"")[^"]*+)*+(?:"""|\Z)' r"|'''[^']*+(?:'(?!'')[^']*+)*+(?:'''|\Z)"
+                r'|@"[^"]*+(?:""[^"]*+)*+"?'
+                r"|'[^'\\\n]*+(?:\\.[^'\\\n]*+)*+'?|\"[^\"\\\n]*+(?:\\.[^\"\\\n]*+)*+\"?|`[^`\\]*+(?:\\.[^`\\]*+)*+`?"
+                r"|//[^\n]*+|/\*[^*]*+(?:\*++[^*/][^*]*+)*+(?:\*++/)?")   # 用時加 re.S
 
 
 def _strip_c_comments(txt, blank_strings=False):
     """剝 C 式註解(字串裡的 // 與 /* 不算),全庫只有這一支(測試檔剝註解、Kotlin 建置檔剝註解都呼叫它;合併主線 r3 G1 與
-    測試名收自由字串的 _C_STRIP_RE,不留兩套掃描)。blank_strings=True 時把字串內容清空、保留引號(java 的 c-style+strings:
-    測試方法掃描不被字串裡的假簽章騙)。掃描本體是 _C_STRIP_RE(多行字串、反引號、佔有式量詞,見上)。"""
+    測試名收自由字串的 _C_STRIP_PAT,不留兩套掃描)。blank_strings=True 時把字串內容清空、保留引號(java 的 c-style+strings:
+    測試方法掃描不被字串裡的假簽章騙)。掃描本體是 _C_STRIP_PAT(多行字串、反引號、佔有式量詞,見上)。"""
     def _one(mo):
         tok = mo.group(0)
         if tok[:2] in ("//", "/*"):
@@ -6436,7 +6449,7 @@ def _strip_c_comments(txt, blank_strings=False):
             if tok.startswith(q):
                 return q + (q if q != '@"' else '"')
         return tok[0] * 2
-    return _C_STRIP_RE.sub(_one, txt)
+    return _lazy_re(_C_STRIP_PAT, re.S).sub(_one, txt)
 
 
 def _anchor_migration_hint(pentry, name):
@@ -8364,7 +8377,7 @@ def _note_plan_risk_flag(note):
     return _plan_risk_norm(v) if v is not None else None
 
 
-_DOOR_RULE_VERSION = 13   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 實務隱患節標題 / 合約行掃描 / 不做節(_NOGO_H2_RE、_NOGO_ITEM_RE、_NOGO_NEG_PREFIX_RE、_NOGO_NEG_HEADER_RE、_NOGO_CLAUSE_SPLIT_RE、_NOGO_REF_TOKEN_RE、_NOGO_SKIP_LOGIC_VERSION)/ 關鍵字掃描判法(_DOOR_SCAN_LOGIC_VERSION;原始碼由 t_door_scan_logic_version_pin 釘)任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅);2=2026-10-14 起跳過「## 不做」標題下緊接的清單;3=同日不做清單逐句判放寬(剝粗體、括號不切、也不做/亦不算否定);4=同日關鍵字掃描連程式碼圍欄一起看;5=同日關鍵字掃描看每一行原文(圍欄標記行、行內程式碼也算);6=同日關鍵字比對前先 NFKC、去零寬字元(全形英數、夾零寬的危險詞也算);7=同日去掉的隱形字元擴成 Unicode 類別 Cf 全部、變體選擇符、U+034F 與韓文填充字(代碼審 r8 G2;_strip_zero_width);8=同日看不見改按類別判(Cc 空白除外、Cf、Cn、Co、Cs、Mn、Me、預設可忽略全表、空白圖形;代碼審 r9 G1;_is_invisible);9=同日逐行只在 \n、\r\n、\r 切(_note_lines)、isspace 為真卻看不見的控制字元與行段分隔也拿掉、比對前壓連續空白並拿掉漢字之間的空白(代碼審 r10 G1;既有 879 篇筆記沒有一篇含那幾個切行字元,行號與條款指紋不變);10=同日畫面上是空白或換行的控制字元與行段分隔換成空格再比(另比一份刪掉的寫法)、連字號變體換成 -、英文詞界改成前後不是英文字母或數字、LINE 與推送之間空格可有可無(代碼審 r11 G1);11=同日跟派工鏡頭分支合併:看不見的判定建在共用底座 _invisible_base 上,像空白的字取兩邊聯集(多 U+303F、U+13441、U+13442 三個在比對時拿掉);12=2026-10-15 含看不見字的行另比一份看不見的全換空格、連字號變體改成 Pd 全部加 U+2043、U+2212(_DOOR_SCAN_LOGIC_VERSION 8;補審 規格閘第十一輪修補 資安 F5、正確性 F2);13=2026-10-15 詞表的 PAYMENT 緊接時間或重試參數尾碼不算(只會少命中;[[Projects/前端知識與風險詞_計劃]] d1;同日一度加的「送出」前端語境例外已撤回);2-10 沒上過主線
+_DOOR_RULE_VERSION = 14   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 實務隱患節標題 / 合約行掃描 / 不做節(_NOGO_H2_RE、_NOGO_ITEM_RE、_NOGO_NEG_PREFIX_RE、_NOGO_NEG_HEADER_RE、_NOGO_CLAUSE_SPLIT_RE、_NOGO_REF_TOKEN_RE、_NOGO_SKIP_LOGIC_VERSION)/ 關鍵字掃描判法(_DOOR_SCAN_LOGIC_VERSION;原始碼由 t_door_scan_logic_version_pin 釘)任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅);2=2026-10-14 起跳過「## 不做」標題下緊接的清單;3=同日不做清單逐句判放寬(剝粗體、括號不切、也不做/亦不算否定);4=同日關鍵字掃描連程式碼圍欄一起看;5=同日關鍵字掃描看每一行原文(圍欄標記行、行內程式碼也算);6=同日關鍵字比對前先 NFKC、去零寬字元(全形英數、夾零寬的危險詞也算);7=同日去掉的隱形字元擴成 Unicode 類別 Cf 全部、變體選擇符、U+034F 與韓文填充字(代碼審 r8 G2;_strip_zero_width);8=同日看不見改按類別判(Cc 空白除外、Cf、Cn、Co、Cs、Mn、Me、預設可忽略全表、空白圖形;代碼審 r9 G1;_is_invisible);9=同日逐行只在 \n、\r\n、\r 切(_note_lines)、isspace 為真卻看不見的控制字元與行段分隔也拿掉、比對前壓連續空白並拿掉漢字之間的空白(代碼審 r10 G1;既有 879 篇筆記沒有一篇含那幾個切行字元,行號與條款指紋不變);10=同日畫面上是空白或換行的控制字元與行段分隔換成空格再比(另比一份刪掉的寫法)、連字號變體換成 -、英文詞界改成前後不是英文字母或數字、LINE 與推送之間空格可有可無(代碼審 r11 G1);11=同日跟派工鏡頭分支合併:看不見的判定建在共用底座 _invisible_base 上,像空白的字取兩邊聯集(多 U+303F、U+13441、U+13442 三個在比對時拿掉);12=2026-10-15 含看不見字的行另比一份看不見的全換空格、連字號變體改成 Pd 全部加 U+2043、U+2212(_DOOR_SCAN_LOGIC_VERSION 8;補審 規格閘第十一輪修補 資安 F5、正確性 F2);13=2026-10-15 詞表的 PAYMENT 緊接時間或重試參數尾碼不算(只會少命中;[[Projects/前端知識與風險詞_計劃]] d1;同日一度加的「送出」前端語境例外已撤回);14=2026-10-20 只因不做清單判法版本升 6(原始碼改了、判法不變,判高判低都跟 13 一樣);2-10 沒上過主線
 # (Projects/規格閘不把不做節的詞算進風險_計劃)
 _DOOR_CLASS_ZH = {"payment": "金流", "external-send": "對外送出", "prod-irreversible": "不可逆", "self-governance": "守衛面"}   # 四類正式中文名(=lint 的 _RISK_ENUM)
 _EXCL_LEAD_RE = re.compile(r"^[\s>*+•—·\-\d.、)]*")   # 已排除行的前綴:跟條款定義行同一組清單/引用符號
@@ -8380,7 +8393,8 @@ _NOGO_ITEM_RE = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
 # 兩層怎麼連動(代碼審 r2 架3、合2):改判斷邏輯→t_nogo_skip_logic_version_pin 紅→升這個版本→它進門判定規則指紋→t_door_rule_version_pin 紅→升 _DOOR_RULE_VERSION→舊留痕全部重數。防線在測試時段(兩支都在推送前全套裡),執行時不讀原始碼;漏升版號的推送會被全套擋下,不會帶著舊留痕上線
 # 4=逐行只在 \n、\r\n、\r 切(_note_lines;之前 splitlines 還在 \x0b、\x0c、\x1c–\x1e、\x85、U+2028、U+2029 切,跟條款定義的 split("\n") 行號對不上;代碼審 r10 G1)
 # 5=_note_lines 改成內部叫 _ledger_lines(切行規則不變,只是原始碼改了;代碼審 r11 架1)
-_NOGO_SKIP_LOGIC_VERSION = 5
+# 6=_strip_inline_markup 多一個預設關閉的 keep_test_fields 參數(條款行用;不做清單照舊不帶,判法不變,只是原始碼改了;[[Projects/測試名收自由字串_計劃]])
+_NOGO_SKIP_LOGIC_VERSION = 6
 # 不做清單逐句判(代碼審 r2):一行剝掉行內標記與清單標記後,照標點與轉折詞切成子句,每一句都要以否定片語開頭,這一行才跳過。
 # ★它只是降噪,不是防線★(代碼審 r3:字面判斷連三輪被沒列到的連接詞與藉口前綴打穿):略過了任何危險詞的風險低計劃,推送前要一筆輕量設計審(_spec_gate_push_light),
 # 所以這裡寫錯的代價是「多審一席」不是「漏審」;別再為了擋夾帶往字表裡補詞。
@@ -9817,7 +9831,7 @@ def _spec_gate_push_stale(env, rr, prel, n, rec):
         dr = rec.get("door_rule")
         newer = (f";留痕用的是較新的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION},先更新 lumos 再推"
                  if isinstance(dr, int) and not isinstance(dr, bool) and dr > _DOOR_RULE_VERSION else "")   # 新版留痕、舊版重判會把新規則判低的判高(規格閘不做節計劃〈做法〉4)
-        older = (f";留痕用的是較舊的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION}:判高可能是新規則的結果(例:版本 4 起程式碼圍欄裡的危險詞也算;版本 5 起行內反引號、圍欄開頭那一行、落單反引號之後的字也算;版本 6 起全形英數與夾零寬字元的危險詞也算;版本 7 起夾軟連字號、詞連接符、雙向控制字元、變體選擇符這類隱形字元的也算;版本 8 起夾組合記號、控制字元、未指派碼位、盲文空白這類看不見字元的也算;版本 9 起多字詞中間兩個空格或 tab、兩個漢字中間夾空白、夾 \\x1f 或 U+2028 這類行段分隔的也算;版本 10 起中英緊貼(部署到prod環境)、底線識別名(send_email)、透過LINE推送、連字號變體(pre-push hook)、用 \\x0b 或 U+2028 隔開的多字詞也算;版本 12 起用零寬空格、詞連接符這類看不見的字隔開的多字詞,與亞美尼亞連字號、片假名雙連字號這類連字號變體也算;版本 13 起 ORDER_PAYMENT_TIMEOUT 這類 PAYMENT 緊接時間或重試參數的識別字不算金流——這一版只會少判高)"
+        older = (f";留痕用的是較舊的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION}:判高可能是新規則的結果(例:版本 4 起程式碼圍欄裡的危險詞也算;版本 5 起行內反引號、圍欄開頭那一行、落單反引號之後的字也算;版本 6 起全形英數與夾零寬字元的危險詞也算;版本 7 起夾軟連字號、詞連接符、雙向控制字元、變體選擇符這類隱形字元的也算;版本 8 起夾組合記號、控制字元、未指派碼位、盲文空白這類看不見字元的也算;版本 9 起多字詞中間兩個空格或 tab、兩個漢字中間夾空白、夾 \\x1f 或 U+2028 這類行段分隔的也算;版本 10 起中英緊貼(部署到prod環境)、底線識別名(send_email)、透過LINE推送、連字號變體(pre-push hook)、用 \\x0b 或 U+2028 隔開的多字詞也算;版本 12 起用零寬空格、詞連接符這類看不見的字隔開的多字詞,與亞美尼亞連字號、片假名雙連字號這類連字號變體也算;版本 13 起 ORDER_PAYMENT_TIMEOUT 這類 PAYMENT 緊接時間或重試參數的識別字不算金流——這一版只會少判高;版本 14 判法跟 13 一樣)"
                  if isinstance(dr, int) and not isinstance(dr, bool) and dr < _DOOR_RULE_VERSION else "")
         return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}{newer}{older}", now
     if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"], now["nogo_skipped"]) != rec.get("clause_sha"):
@@ -56129,10 +56143,10 @@ _TITLED_FILTERS = ("regex", "regex_tail", "plain")   # 字串標題型(名字是
 _REGEX_FILTERS = ("regex", "regex_tail")              # 篩選是正規式,名字要跳脫
 # 撞名要數「名稱篩選選得到的全部標題」,不只數可綁定的(代碼審 code-測試名收自由字串 r1 三席):it.skip、帶 ${ 的樣板、.each、
 # 含逗號或方括號、沒還原的跳脫、超過 200 字的標題,掃描不收、但 -t/-g 照樣選得到。這支刻意放寬:寧可多數(只會比較嚴)。
-_RAW_TITLE_RE = re.compile(
+_RAW_TITLE_PAT = (
     r"(?<![.\w$])(it|test|describe|testWidgets|group|xit|fit|xtest|xdescribe|fdescribe)((?:\.\w+)*)\s*"
     r"(?:\((?:[^()\n]|\([^()\n]*\)){0,400}\)\s*)?\(\s*"
-    r"(?:'([^'\\\n]*+(?:\\.[^'\\\n]*+)*+)|\"([^\"\\\n]*+(?:\\.[^\"\\\n]*+)*+)|`([^`\\]*+(?:\\.[^`\\]*+)*+))")   # 佔有式:同 _C_STRIP_RE
+    r"(?:'([^'\\\n]*+(?:\\.[^'\\\n]*+)*+)|\"([^\"\\\n]*+(?:\\.[^\"\\\n]*+)*+)|`([^`\\]*+(?:\\.[^`\\]*+)*+))")   # 佔有式:同 _C_STRIP_PAT(用時才編)
 
 
 def _raw_test_titles(root, profile):
@@ -56140,7 +56154,7 @@ def _raw_test_titles(root, profile):
     strip = profile.get("comment_strip", "c-style")
     out = []
     for fpath, txt in _walk_test_files(root, profile, with_path=True):
-        for m in _RAW_TITLE_RE.finditer(_strip_test_comments(txt, strip)):
+        for m in _lazy_re(_RAW_TITLE_PAT).finditer(_strip_test_comments(txt, strip)):
             head, mods = m.group(1), m.group(2) or ""
             if ".step" in mods:
                 continue

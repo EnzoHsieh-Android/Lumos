@@ -67362,7 +67362,7 @@ def t_door_rule_version_pin():
     """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
     ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
     r = run(mkvault(), "spec-gate", "--door-rule")
-    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=13 " in r.stdout and "inputs_sha=621d0313526e74aefcdd6566d187a2097ed3a1da8ccb14adeab984c79b7e366b" in r.stdout, r.stdout)
+    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=14 " in r.stdout and "inputs_sha=bae268879227c03ee75d31ee07697ab9e5377887df57ce5376116d4fb7e95e39" in r.stdout, r.stdout)
 
 
 # ── 前端知識與風險詞 做法 9(d1):「送出」的前端語境與 PAYMENT 調整參數識別字例外 ──
@@ -68490,7 +68490,7 @@ def t_spec_gate_nogo_tab_fullwidth_continuation():
         check(f"③ {k} → 停下照掃、風險高", "[spec-gate] 計劃風險: 高" in out and "扣款" in out, (k, out[-400:]))
 
 
-_NOGO_SKIP_LOGIC_PIN = (5, "1a0d814790003e49d8bccf1ca170f36335deb4916f6fec486fe008348f024699")
+_NOGO_SKIP_LOGIC_PIN = (6, "751bfa04190fcc6a51f9c6af08dc9db7bab8b72bcb41fff58b61037b3592b030")
 _NOGO_SKIP_LOGIC_FUNCS = ("_nogo_skip_lines", "_nogo_line_says_nogo", "_ns_indent", "_h2_section_lines", "_visible_lines", "_strip_inline_markup", "_inline_hidden", "_note_lines")
 _NOGO_SKIP_LOGIC_PATS = ("_NOGO_H2_RE", "_NOGO_ITEM_RE", "_NOGO_NEG_PREFIX_RE", "_NOGO_NEG_HEADER_RE", "_NOGO_CLAUSE_SPLIT_RE", "_NOGO_REF_TOKEN_RE")
 
@@ -77614,6 +77614,59 @@ def t_lumos_old_python_reexec_or_explain():
     r = _sp.run([old, "-c", "import runpy,sys; runpy.run_path(sys.argv[1], run_name='lm'); print('LOADED')", GRAPHCTL],
                 capture_output=True, text=True, env=dict(base, **none), timeout=120)
     check("⑤被 import 載入時不觸發檢查", r.returncode == 0 and "LOADED" in r.stdout, r.stderr[-300:])
+
+
+def _re_has_new_syntax(pattern):
+    """這支 pattern 剖出來有沒有 3.11 才有的節點(佔有式量詞、原子群組);剖不動回 None。"""
+    from re import _parser as _sp, _constants as _sc
+    try:
+        stack = [_sp.parse(pattern)]
+    except Exception:
+        return None
+    bad = {_sc.POSSESSIVE_REPEAT, _sc.ATOMIC_GROUP}
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, _sp.SubPattern):
+            for op, av in cur:
+                if op in bad:
+                    return True
+                stack.append(av)
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+    return False
+
+
+def _module_level_re_compiles(tree):
+    """模組載入時就會跑的 re.compile(字面 pattern)→ [(行號, pattern)];函式與 lambda 本體不算(呼叫時才跑)。"""
+    import ast as _ast
+    out, stack = [], [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef, _ast.Lambda)):
+            continue
+        f = getattr(node, "func", None)
+        if (isinstance(node, _ast.Call) and isinstance(f, _ast.Attribute) and f.attr == "compile"
+                and isinstance(f.value, _ast.Name) and f.value.id == "re" and node.args
+                and isinstance(node.args[0], _ast.Constant) and isinstance(node.args[0].value, str)):
+            out.append((node.lineno, node.args[0].value))
+        stack.extend(_ast.iter_child_nodes(node))
+    return out
+
+
+def t_lumos_module_level_regex_loads_on_old_python():
+    """[最低 Python 3.14 S2 的前提] 舊版 Python 要能把 scripts/lumos 載入到印出「請改用 3.14」那一步,所以模組載入時就會執行的
+    re.compile 不能用 3.11 才有的寫法(佔有式量詞 *+ ++ ?+ {m,n}+、原子群組 (?>…));那種正規式要等第一次用到才編(_lazy_re)。
+    這條不靠機器上有沒有舊版直譯器(t_lumos_old_python_reexec_or_explain 在沒有舊版的機器與 CI 上驗不到):直接解析原始碼,
+    把模組層(函式本體以外)每一支字面 re.compile 的 pattern 交給正規式剖析器,看裡面有沒有那兩種節點。
+    應抓到的錯:模組層直接 re.compile 一支佔有式量詞的 pattern(2026-10-20 _C_STRIP_RE、_RAW_TITLE_RE 就是)→ ①紅。"""
+    import ast as _ast
+    # 剖析器真的認得出新寫法(不然 ① 永遠綠);字元類裡的 *+ 不算
+    check("⓪剖析器認得佔有式量詞與原子群組", _re_has_new_syntax(r"a*+") and _re_has_new_syntax(r"(?>a)")
+          and _re_has_new_syntax(r"(?:x|[^y]++)z") and _re_has_new_syntax(r"(a{1,3}+)") is True
+          and _re_has_new_syntax(r"^[-*+]\s+(a|b)*") is False, "")
+    found = _module_level_re_compiles(_ast.parse(Path(GRAPHCTL).read_text(encoding="utf-8")))
+    offenders = [f"第 {ln} 行" for ln, pat in found if _re_has_new_syntax(pat)]
+    check("①模組層的 re.compile 沒有 3.11 才有的寫法", len(found) > 50 and not offenders, f"掃到 {len(found)} 支;違規:{offenders}")
 
 
 def _py314_sysbin(tmp, keep_python=False):
@@ -98894,7 +98947,7 @@ def t_comment_strip_keeps_strings_all_c_style():
 
 def t_comment_strip_big_string_memory():
     """[S56] 一個 8MB 的字串字面(內嵌 fixture)剝註解時額外記憶體 < 300MB、2 秒內(群組加星號的寫法要 1GB 以上)。
-    應抓到的錯:_C_STRIP_RE 改回群組加星號的寫法 → ①紅。Windows 沒有 resource 模組,不量。"""
+    應抓到的錯:_C_STRIP_PAT 改回群組加星號的寫法 → ①紅。Windows 沒有 resource 模組,不量。"""
     if sys.platform == "win32":
         raise _SrcOnly("Windows 沒有 resource 模組量最大常駐記憶體(這條只在 POSIX 量)")
     # 在子程序裡量最大常駐記憶體(正規式引擎的狀態堆疊 tracemalloc 看不到);同一支子程序先量「只載入不剝」當基準

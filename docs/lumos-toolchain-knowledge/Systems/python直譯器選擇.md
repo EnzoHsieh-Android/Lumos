@@ -24,7 +24,8 @@ summary: |-
   PITFALL:[2026-09-29 代碼審 r1 核心席]lumos update 在同一個行程裡先拉新來源再複製,執行的是拉新之前就載進記憶體的舊程式——新版才加的更新期提示,第一個專案一定印不出來;要讓人知道的事改在失敗現場講(CI 裡找不到 3.14 的說明自帶 setup-python 那一行) [test:t_update_prints_python314_notice_and_slim_strips_floor]
   PITFALL:[2026-09-29 代碼審 r1 資安席]Windows 找指令會先看目前目錄,git 掛鉤的目前目錄是 repo 根:用裸指令名探直譯器,陌生 repo 放一支 python3.14.exe 就會被執行;一律先解析成絕對路徑、落在目前目錄本身的不收、PATH 相對路徑項找到的不收(r2:擋整棵子樹的話,目前目錄是家目錄或磁碟根時正常安裝也消失;r3:位置只解析所在目錄那一層,整條解析會讓 repo 根指進子目錄的符號連結逃過比對) [test:t_python_resolver_order_and_floor]
   PITFALL:[2026-09-29 推上主線後 CI 紅]經符號連結啟動的 Python 回報的 sys.executable,在 macOS(Homebrew)會解到真實路徑、在 Linux 就是連結本身;測試或程式要比「是不是同一支直譯器」,兩邊都先 realpath 再比,只在本機跑綠不代表 CI 綠 [test:t_python_resolver_order_and_floor]
-  TEST:t_python_resolver_order_and_floor、t_lumos_old_python_reexec_or_explain、t_hooks_block_without_python314、t_installers_require_python314、t_hook_cmd_uses_running_python、t_ci_runs_python314_and_old_syntax_check、t_lumos_parses_under_old_grammar、t_test_run_cmd_uses_running_python、t_update_prints_python314_notice_and_slim_strips_floor、t_doctor_flags_stale_hook_python、t_python_launcher_blocks_agree
+  PITFALL:模組載入時就編的正規式用了 3.11 才有的佔有式量詞,3.9 載入 scripts/lumos 當場丟 re.error,開頭的版本檢查跑不到、印不出改用 3.14 的說明 [出處:2026-10-20 測試名收自由字串推送前全套紅] [根因:剝註解與撞名掃描的兩支正規式在模組層 re.compile] [修法:那種正規式寫成 pattern 字串、經 _lazy_re 第一次用到才編] [test:t_lumos_module_level_regex_loads_on_old_python]
+  TEST:t_python_resolver_order_and_floor、t_lumos_module_level_regex_loads_on_old_python、t_lumos_old_python_reexec_or_explain、t_hooks_block_without_python314、t_installers_require_python314、t_hook_cmd_uses_running_python、t_ci_runs_python314_and_old_syntax_check、t_lumos_parses_under_old_grammar、t_test_run_cmd_uses_running_python、t_update_prints_python314_notice_and_slim_strips_floor、t_doctor_flags_stale_hook_python、t_python_launcher_blocks_agree
 related:
   - "[[Projects/最低Python版本改3.14_計劃]]"
   - "[[Issues/蘋果內建Python3.9跑全套仍紅]]"

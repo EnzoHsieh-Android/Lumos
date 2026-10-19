@@ -61,7 +61,7 @@ about_code:
 
 ## 剝註解改成認字串(2026-10-15,[[Projects/前端框架從vue分出_計劃]] 代碼審 r3 G1)
 
-`_strip_test_comments` 的 c-style 與 c-style+strings 兩種模式改走共用的 `_strip_c_comments`(Kotlin 建置檔判平台也用它,不留第二套):一條從左到右的掃描,字串裡的 `//` 與 `/*` 不再被當成註解(原本先剝註解再清字串,字串裡的網址會被截斷、`"/*"` 會吃掉後面一大段);c-style+strings 照舊把字串內容清空、保留引號。掃描本體跟測試名收自由字串那支 `_C_STRIP_RE` 合成一套(合併主線時收掉主線原本另一套掃描樣式,已移除):多認三個雙引號、三個單引號、C# 的 @ 加雙引號與反引號字串,量詞用佔有式。沒閉合的字串吃到行尾(多行字串與區塊註解吃到檔尾),不回溯,`"\` 重複這種 512KB 輸入也在毫秒級。python profile 照舊不剝。測試 t_strip_c_comments_shared_and_linear、t_strip_test_comments_strings_mode_kept。
+`_strip_test_comments` 的 c-style 與 c-style+strings 兩種模式改走共用的 `_strip_c_comments`(Kotlin 建置檔判平台也用它,不留第二套):一條從左到右的掃描,字串裡的 `//` 與 `/*` 不再被當成註解(原本先剝註解再清字串,字串裡的網址會被截斷、`"/*"` 會吃掉後面一大段);c-style+strings 照舊把字串內容清空、保留引號。掃描本體跟測試名收自由字串那支 `_C_STRIP_PAT` 合成一套(原本叫 `_C_STRIP_RE`,已移除;2026-10-20 起寫成 pattern 字串、用時才編,理由見 [[Systems/python直譯器選擇]])(合併主線時收掉主線原本另一套掃描樣式,已移除):多認三個雙引號、三個單引號、C# 的 @ 加雙引號與反引號字串,量詞用佔有式。沒閉合的字串吃到行尾(多行字串與區塊註解吃到檔尾),不回溯,`"\` 重複這種 512KB 輸入也在毫秒級。python profile 照舊不剝。測試 t_strip_c_comments_shared_and_linear、t_strip_test_comments_strings_mode_kept。
 
 ## 相關系統
 - [[Systems/check-t-sentinel]]（Check T/K 機制；本機制擴充其 discover 面為多平台多根）
