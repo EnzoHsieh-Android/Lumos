@@ -1,0 +1,843 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_實作計畫.md b/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_實作計畫.md
+index d11719e2..cf30024c 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_實作計畫.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_實作計畫.md
+@@ -29,21 +29,21 @@ verified_by:
+ **Goal:** 把 [[Android側UI測試綁圖譜工作流_計劃]]（已收斂）落地成兩件事——本 repo 的慣例／skill／節點補齊，mOrangePos 的 maestro 綁定真的接上並跑通一次。
+ 
+ **Architecture:** 全部是**接既有機制**，零新機制：`[test:maestro:名]` 綁定用既有多平台 profile；終審通道補進既有 UI 層驗收慣例散文；時機觸發掛既有 skill 退場段；沒裝置走既有 `code-loop skip --note`。
+ 
+ **Tech Stack:** markdown（圖譜節點／skill 散文）、`.lumos/config.json`、maestro YAML flow、既有 lumos CLI（`guard bind/audit`、`doctor`、`lint`）。
+ 
+ ## Global Constraints（每個 task 隱含遵守；值抄自 spec，不得偏離）
+ 
+ - **證據路徑一律 `governance/review-reports/<loop-id>/ui-evidence/`**——前綴不可省（少了會漏掉 `pitfalls --diff` 的排除，歸檔證物被當代碼掃）。
+ - **flow 的 `name:`**：識別字、**等於檔名去副檔名轉底線**、**該行不得有其他內容**（含行尾 `#` 註解）、**必須在 `---` 之前的 config 區塊**（放步驟區 Check T 照樣綠但 flow 壞）。
+-- **要綁合約的 Kotlin 測試函式名必須是識別字**——反引號中文名綁不上（`IDENT_RE` 拒收、`KOTLIN_TEST_RE` 抽的是原名）。
++- **要綁合約的 Kotlin 測試函式名必須是識別字**——反引號中文名綁不上（`IDENT_RE` 拒收、`KOTLIN_TEST_RE` 抽的是原名）。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名與反引號名,只有 `guard scaffold` 仍要識別字)
+ - **`platforms` 是全域開關**：宣告即 legacy `test_profile` 失效；必須同時宣告 android＋maestro 並指定 `default_platform: android`；maestro 的 `root` 指 `.maestro/`。
+ - **金流全局約束**：測試門店未確認前，任何 flow 只能標「僅手動、不進回歸集」；終審 agent 不得自動 `run` 未標可自動的 flow。
+ - **沒裝置的終審**：走 `lumos code-loop skip --note "無可用 Android 裝置，UI 合約未驗"`——不是綠燈，是誠實留痕。
+ - A 段測試跑法：`python3 scripts/test_lumos.py`（全量，尾行判綠）；圖譜改動 `lumos lint <節點>` → `lumos doctor`。
+ 
+ ## 檔案結構
+ 
+ **A 段（lumos-toolchain）**
+ - Modify `docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md`：證據路徑補前綴＋UI 驗收慣例補 Android 通道
+ - Modify `scripts/test_lumos.py`：`t_precommit_whitelist_drift_guard` 加一條路徑同源斷言
+@@ -157,21 +157,21 @@ git commit -m "feat(skill): 退場自問加第 4 問(UI 面→補可重放 flow
+ 
+ **1 · 斷言要驗「使用者看到什麼」**
+ ```yaml
+ - assertVisible: "折扣超過上限。.*"
+ - assertNotVisible: "請輸入員工編號.*"   # 回歸釘：不可再退回誤用的字串
+ ```
+ 只斷言「流程有沒有被擋」等於白做——回傳值對、UI 拿它去換錯的字串，單元測試結構上測不到。
+ 
+ **2 · 命名與位置（錯了會「Check T 綠但 flow 壞」）**
+ - `name:` ＝檔名去副檔名轉底線（`smoke-05-x.yaml` → `smoke_05_x`），**識別字**、**該行無其他內容**（不得有行尾 `#` 註解）、**放在 `---` 之前的 config 區塊**。
+-- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。
++- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名與反引號名,只有 `guard scaffold` 仍要識別字)
+ 
+ **3 · 七個會「沉默地做錯事」的坑（回報成功但做的是別的事，比紅燈危險）**
+ | 坑 | 症狀 |
+ |---|---|
+ | 同畫面兩個鍵盤共用同一組 `resource-id` | 用 `text:`／`id:` 選會打到另一個，不報錯 |
+ | Maestro 的 `text:` 是**全字串正則** | `tapOn: "."` 匹配任意單一字元（實測把 3.25 打成 3125） |
+ | 選付款方式會自動帶入金額 | 再自己輸入反而算錯 |
+ | SeekBar 要 `swipe` 不能 `tap` | 起點落在元件外會靜默無效 |
+ | `name:` 行帶行尾註解 | discover 抓不到 → Check T 判懸空（紅在 doctor，人會找錯方向） |
+ | 人與 agent 同時操作同一台裝置 | 每個 `tapOn` 都點到「某個東西」→ 綠燈但畫面狀態已亂 |
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md
+index 082593be..f99e6f45 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android側UI測試綁圖譜工作流_計劃.md
+@@ -113,38 +113,38 @@ aliases:
+ 
+ 所以正確寫法是綁**流程名**，不是檔案路徑：
+ 
+ ```
+ KEY:★INVARIANT★ 手動折扣百分比不得超過 100% [test:manualDiscountOver100Blocked,maestro:smoke_05_manual_discount_over_100] [audit:opus/2026-08-11]
+ ```
+ 
+ ★三個照抄就壞的地方（r1 三席抓到，逐條釘死）★：
+ 
+ 1. **同一行、同一個中括號、逗號分隔**——不能寫成兩行兩括號。`INVARIANT_RE` 要求行首是 `KEY:★INVARIANT★`，續行對 Check T／`contracts`／`lint` **全部隱形**（不報錯、也不顯示成綁定）；`guard bind` 實際也是把新 ref 逗號併進同一括號。
+-2. **測試名必須是合法識別字**——`IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]*$`（`scripts/lumos:4335`），`Class.方法` 的點號、中文都會被 `guard bind` 當場 rc2 拒收；kotlin profile 抽出的也只有函式名不含類別。原稿示範的 `ManualDiscountValidatorTest.百分比超過100必須擋下` 照抄會直接失敗。
++2. **測試名必須是合法識別字**——`IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]*$`（`scripts/lumos:4335`），`Class.方法` 的點號、中文都會被 `guard bind` 當場 rc2 拒收；kotlin profile 抽出的也只有函式名不含類別。原稿示範的 `ManualDiscountValidatorTest.百分比超過100必須擋下` 照抄會直接失敗。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名,`IDENT_RE` 只留給 `guard scaffold`)
+ 3. **`[audit:]` 不能省**——見下方「三階鏈在 UI 層的實況」。
+ 
+ ★r2 補的第四條（兩席一致抓到，且原稿示範自己犯了）★：**Kotlin 慣用的反引號中文測試名綁不上**。mOrangePos 實際的測試叫 `` `百分比超過 100 必須擋下` ``，`KOTLIN_TEST_RE` 抽出來的就是含空白的中文原名——`IDENT_RE` 一樣拒收。**要綁合約的測試，函式名必須先改成識別字**（本例：`manualDiscountOver100Blocked`）。這是綁定路線的實質前置成本，原稿與 r1 折入都漏了。
+ 
+ ```yaml
+ # .maestro/smoke-05-manual-discount-over-100.yaml
+ appId: com.example.morangepos
+ name: smoke_05_manual_discount_over_100
+ ```
+ 
+ ★`name:` 行不得有任何其他內容★（含行尾 `#` 註解）——`MAESTRO_NAME_RE` 行尾是 `\s*$` 硬錨，而 maestro profile 沒覆寫 `comment_strip`（預設 c-style 只剝 `//`、`/* */`，**不剝 YAML 的 `#`**）。帶註解 → discover 抓不到 → `guard bind` 仍寫得進去、但 Check T 判懸空。這是「綠燈但做錯」的第五型，且紅在 doctor 而非 maestro，人會找錯方向。
+ 
+ ```bash
+ lumos guard bind <節點> "<KEY子字串>" smoke_05_manual_discount_over_100 --platform maestro
+ ```
+ 
+-**為什麼不能改成吃檔案路徑**：`cmd_guard_bind` 第一件事就是擋非識別字，旁邊註解白紙黑字「多平台：平台另帶（method 維持識別字、不含冒號），寫成 `[test:平台:方法]`。**IDENT_RE 不放寬**」（`scripts/lumos:4479-4482`）；profile 註解也寫「綁 `name:` 欄位（**識別字安全**）」。檔案路徑含 `/`、`.`、`-`，一旦放寬，`[test:平台:名]` 的冒號解析與識別字保證會一起鬆掉。這是當初刻意的設計選擇，不是沒想到。
++**為什麼不能改成吃檔案路徑**：`cmd_guard_bind` 第一件事就是擋非識別字，旁邊註解白紙黑字「多平台：平台另帶（method 維持識別字、不含冒號），寫成 `[test:平台:方法]`。**IDENT_RE 不放寬**」（`scripts/lumos:4479-4482`）；profile 註解也寫「綁 `name:` 欄位（**識別字安全**）」。檔案路徑含 `/`、`.`、`-`，一旦放寬，`[test:平台:名]` 的冒號解析與識別字保證會一起鬆掉。這是當初刻意的設計選擇，不是沒想到。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名,`IDENT_RE` 只留給 `guard scaffold`)
+ 
+ **剩下的是消費端設定——但它比一行 JSON 複雜（r1-F1，本輪最重的一條）**：
+ 
+ ★`platforms` 是全域模式開關，不是「多加一個平台」★。`load_platforms`（`scripts/lumos:1875-1907`）一看到這個鍵就進 multiplatform、**legacy `test_profile` 整個失效**；`resolve_test_refs` 把所有不帶冒號的舊 ref 歸給 `default_platform`。mOrangePos 現況是 `{"test_profile": "kotlin-junit"}`，圖譜有 **5 條已綁裸名的 ★INVARIANT★**（r2 兩席獨立實測：`lumos guard list` → 「合約 5 條 — 真綁 5 / 懸空 0」；★r1 折入時寫的 19 條是錯的，我當時信了席位的數字沒自核，r2 兩席各自實跑抓回★）——照原稿只宣告 maestro 一個平台，這 5 條會全部拿去 maestro 的 name 集合裡找，**Check T 全報懸空、doctor 直接紅**。
+ 
+ 正確設定要**同時宣告兩個平台並指定 default**（`Systems/test-profile-multiplatform` 早寫明「平台前綴≠profile 名」「default_platform 缺省即報錯，不猜」，原稿引用了該節點卻沒帶到這兩條）：
+ 
+ ```json
+ {
+   "default_platform": "android",
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Web示範前端缺口_調研.md b/docs/lumos-toolchain-knowledge/Projects/Web示範前端缺口_調研.md
+new file mode 100644
+index 00000000..9bc449ca
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Web示範前端缺口_調研.md
+@@ -0,0 +1,97 @@
++---
++type: project
++status: doing
++created: 2026-10-15
++updated: 2026-10-15
++tags:
++  - type/project
++  - status/doing
++  - scope/ux-docs-hygiene
++---
++# Web示範前端缺口_調研
++
++> 白話:一次 React 前端示範(order-web,Vite + React + Vitest + Playwright)走完整套 lumos 流程,沿路記下工具不合前端的地方。三份流水帳共 55 條(前端示範 F1–F31、後端回顧 B1–B12、Web 收尾 W1–W12),逐條到主線程式重現或讀碼確認後合併成下面 45 列,每列標出要落到哪篇計劃。這篇只是比對表與分流,不含做法;做法與驗收條款在各計劃裡。
++
++PRIOR-ART: 沿用既有「示範回饋 → 比對表 → 分組開計劃」的做法([[Projects/示範回饋小修_計劃]] 那次是後端示範);不另建流程。
++RETIRE-IF: 表上所有「仍存在」的列都在對應計劃裡結案或明講不做之後,這篇改 done,只留作歷史比對。
++
++## 怎麼讀這張表
++
++- 「主線現況」以 2026-10-15 主線程式為準;「重現」是在臨時的 Vite + React 骨架(跑過 `lumos init`)實跑指令得到的,「讀碼」是讀程式推得的。原始流水帳與重現用的臨時骨架不進 repo。
++- 原表的程式行號引用已拿掉(行號會漂;要定位請照函式名去 `scripts/lumos` 找)。
++- 「組」:A 測試名比對、B 前端技術棧、C 前端知識、D 風險關鍵字誤判、E 記帳與迴圈工具、F 筆記指令、G 健檢與家、H 規格閘、I 跨 repo、J 不改。
++- 落點:A → [[Projects/測試名收自由字串_計劃]];B → [[Projects/前端框架從vue分出_計劃]](該篇 todo,開工條件「有 React 專案真的要接」這次已滿足);C、D → [[Projects/前端知識與風險詞_計劃]];E → [[Projects/記帳與迴圈工具小修_計劃]];F、G、H → [[Projects/筆記指令健檢與規格閘小修_計劃]];I、J 不改,理由寫在該列。
++
++## 比對表(45 列)
++
++| 編號 | 一句現象 | 既有記錄(節點、status) | 主線現況 | 組 | 落到哪篇計劃 |
++|---|---|---|---|---|---|
++| W1 | `[test: 中文句子]` 懸空,規格閘仍印「條款綁定 ✓」 | 多平台合約測試綁定_計劃(done)與 `Systems/test-profile-multiplatform`(done):定為「識別字名才可綁,含空白 NO MATCH」,是刻意設計 | 仍存在(部分緩解)。重現:兩條條款其中一條寫中文,印出「✓ 2 條全標(…懸空 1 只提醒不擋…)」,有顯示懸空數。逃生口 `test.method_regex` 只在單平台設定有效;`load_platforms`的多平台路徑不收,而 `init` 骨架預設就是多平台格式。2026-10-15 已由本列落點的計劃處理(句子名可綁、懸空印 ⚠、多平台逃生口) | A | [[Projects/測試名收自由字串_計劃]] |
++| F1 + W7 | `init` 推測棧:vitest 沒有、eslint 沒偵測 | 消費專案接入靜默失效_計劃(doing):已做 init 寫設定骨架;沒有 vitest/eslint 專屬記錄 | `.tsx` 已算進推測,重現印「看到 3 個 .tsx 檔(TypeScript / React)」。run_cmd 仍是 `npx jest -t {method}`(`node-vitest` 只是別名)。`doctor` 仍說「沒接 linter」,不認 `eslint.config.js` | B | [[Projects/前端框架從vue分出_計劃]] |
++| F2 + W2(+F10 後半) | 沒有 React 慣例 skill;`.tsx` 被當 vue,拿到 vue 效能題與 vue-idioms | 前端框架從vue分出_計劃(**todo**)。開工條件「有 React 專案真的要接」,這次示範已滿足;REVISIT 2026-12-29。代碼審前後端角色鏡頭_計劃(doing)d3 也把 React 另案 | 仍存在。`ls skills` 無 react-idioms。`_stack_key_for_file("src/App.tsx")` 回 `vue`(`_NODE_FRONTEND_MARKERS` 含 react,都歸 vue);`pitfalls` 實測列出 `[vue 效能檢核]` | B | [[Projects/前端框架從vue分出_計劃]] |
++| F3 | `new project` 名稱沒有 `_計劃` 後綴,工具不提醒 | 示範回饋小修_計劃(doing)S1;測試 `t_new_project_warns_missing_plan_suffix`(`scripts/test_lumos.py`) | **已修**。重現:`lumos new project 搶購2` 印「提醒:計劃筆記的慣例是 Projects/<主題>_計劃…」與重建指令。該計劃雖 doing,程式已落地 | F | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F4 | 需求風險面全是後端角度,前端狀態、裝置、無障礙、前端效能預算都沒有 | 示範回饋小修_計劃(doing)S2 只補後端向的 req-scale、arch-sync;`Systems/情境出題`(doing) | 仍存在。`_REQUIREMENT_FACETS`無前端面。只有代碼審角色卡有 fe-states、fe-a11y,不在需求或設計階段 | C | [[Projects/前端知識與風險詞_計劃]] |
++| F5 + W3 | 「送出」「PAYMENT」被判金流、對外送出,風險高 | 雙向門放行_計劃(doing)已記「關鍵字表粗,『當送出表單』被判對外送出,不改表」;規格閘不把不做節的詞算進風險_計劃(doing)只排除「## 不做」節;`Issues/門掃描詞表沒收常見寫法`(open,反向:漏判) | 仍存在。`_door_keyword_hits`對「請求送出時刻記錄」「按鈕再按也不會送出第二個請求」都回 `對外送出`,「ORDER_PAYMENT_TIMEOUT」回 `金流`。規格閘實測判高 | D | [[Projects/前端知識與風險詞_計劃]] |
++| W4 | pitfalls 不對題:e2e 腳本的 SQL 問交易包裹,fetch 當成 vue-reactive | 無專屬記錄(`Systems/效能檢核目錄` done 為題庫說明) | 仍存在。實測 `scripts/e2e.sh` 含 INSERT 被問「[併發] 寫入有沒有交易包裹?」,`src/api.ts` 的 `fetch(` 被標「這是 vue-reactive 那題的做法」。graph-rename.sh 當對照這條沒重現(判不出,屬示範專案環境) | D | [[Projects/前端知識與風險詞_計劃]] |
++| F6 | `已排除:金流(理由)` 寫錯格式,lint 沒先唸 | 無 | 仍存在。重現:寫 `已排除:對外送出(只呼叫自家 API)`,`lumos lint` 完全不唸,到 `spec-gate` 才說「缺已排除行」 | H | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F7 | 目標架構只有 DDD 範本,前端無 | DDD目標架構範本_計劃(done) | 仍存在。`skills/lumos-project-notes/commands/` 只有 `target-arch-ddd-template.md` | B | [[Projects/前端框架從vue分出_計劃]] |
++| F8 + B6 + W8 | `summary-line` 不能新增摘要行,新節點樣板只四個佔位行 | 改摘要單行的指令_計劃(done)明列「不做:插行、改前綴」;`Systems/lumos-cli-write` | 仍存在(刻意不做)。`lumos summary-line --help` 只有換片段或刪片段,新片段不准含換行 | F | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F9 | refcheck 把計劃要新建的路徑判 missing | `Systems/lumos-refcheck`(done)只核對存在 | 仍存在。重現:`refcheck` 對 `src/api/orders.ts`、`src/api/` 回 `✗ missing`,無「將新增」寫法 | G | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F10 + F19 | 設計審五鏡頭是後端語彙,lumos 自己預先指出 0 條前端發現 | 代碼審前後端角色鏡頭_計劃(doing):角色卡只進**代碼審**正確性席 | 仍存在。`skills/lumos-design-loop/templates.md` 的角色卡在 §3 代碼審,設計審 §1 沒有;同檔設計審的席位立場段仍是後端語彙 | C | [[Projects/前端知識與風險詞_計劃]] |
++| F11 | `spec-freeze` 順序(先前掃排乾再凍),`loop next` 首輪不提醒 | 無 | 仍存在。重現:`loop next` 對新編號首輪(`--tier standard`)輸出無任何順序提醒 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F12 | hook 只看會談目錄,審別的 repo 時固定席附不上 | 派工鏡頭可指定目標repo_計劃(doing,2026-10-14);派工鏡頭跨repo不再靜默_計劃(done) | **部分已修**。同 repo 的另一工作樹已可用 `lumos spec-freeze` + `<完整sha>:<路徑>`(`spec-freeze` 指令說明、`spec_commit` 在主程式共 23 處)。完全不同的 repo 刻意不支援,仍只附說明行,本次示範情境(會談在 A、審 B)仍存在 | I | 不改:同 repo 另一工作樹已可用 spec-freeze 加完整提交編號附上固定席;完全不同的 repo 是刻意不支援(派工鏡頭可指定目標repo_計劃),示範情境(會談在 A、審 B)屬這一類 |
++| F13 | 回應亂序、卸載後計時器、時鐘偏快、輪詢壓力、冪等鍵歸屬,lumos 都沒提示 | 同 F10 | 部分。`_ROLE_CARDS`有 fe-race(亂序)、fe-unmount、fe-states,但只進代碼審。時鐘偏快、輪詢退避、換使用者冪等歸屬沒有;設計審與需求面都沒有 | C | [[Projects/前端知識與風險詞_計劃]] |
++| B1 + B11 | 風險低計劃實作後才跑規格閘會擋;`doctor` 規格閘欄一直顯示紅 2/綠 0 | 雙向門放行_計劃(doing)定義「新行為各自紅」 | 仍存在。`_spec_gate_print_twoway`對風險低要求至少一條紅;風險高只印不擋。`doctor` S14 取「最近一次跑的結果」(起),不重跑就停在紅 | H | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B2 | 計劃改 done 後,推送閘不再重跑留痕測試 | 無 | 仍存在。`_spec_gate_push_scan`只對 `status == "doing"` 且有風險低留痕的走全套 | H | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B3 | 規格閘留痕在被 gitignore 的本機帳,乾淨 clone 沒有 | `Systems/loop-convergence-recording`(done)記了 kind=spec-gate 寫進 canary 帳 | 仍存在(未做乾淨 clone 實跑)。`init` 產的 `docs/.gitignore` 忽略 `.canary-log.jsonl`(`vtest/docs/.gitignore` 實證);推送掃描「沒留痕就不跑」 | H | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B4 + B5 | 查不到檔的家;`impact --file` 對 about_code 檔回 0 筆 | 推筆記認家_計劃(doing)、每支檔有家_計劃(doing) | **已修**(用 impact)。`lumos impact --file scripts/hooks/pre-push` 印「這支檔的家 (5)」。沒有專用「查家」子命令,`home` 只有 `check` | G | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B7 | `set` 說明沒列可改欄位(含 responsibility) | 無 | 仍存在(輕微)。`lumos set --help` 無欄位清單;錯誤訊息才列 `SCALAR_KEYS`(含 responsibility) | F | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B8 | 只改 about_code 或負責範圍,`home check` 仍說「家沒動」 | 每支檔有家_計劃(doing);只換測試綁定不算寫說明_計劃(done)只豁免測試綁定 | 仍存在。重現:改 `src/App.tsx` 並 `set 畫面 responsibility`,`home check --staged` 仍印「它的家 Systems/畫面 這次沒動」。「一檔兩聚合只能一個家」沒測 | G | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B9 | `home check` 不帶參數沒預設 | 無 | 仍存在。實跑印「擋下:lumos home check 要帶 --staged 或 --diff」 | G | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| B10 | Kotlin/Spring 後端被問 Compose、Android 冷啟動題,角色「後端 0 支」 | 代碼審前後端角色鏡頭_計劃(doing):Kotlin 後端判不出為**刻意**(「寧可不附」);Java補棧_計劃(done)只處理 Java | 仍存在。實測 Spring 的 `.kt` 檔 pitfalls 列出 `[kt 效能檢核]` 的 Compose、洩漏、啟動題,角色「後端 0 支、判不出 1 支」。棧別題只看副檔名,與 W2 同根 | B | [[Projects/前端框架從vue分出_計劃]] |
++| B12 | `set`/`append` 不更新 `updated` | 提交時自動更新筆記日期_計劃(done):Enzo 先裁自動改,設計審後改裁「健檢列出加一鍵修」 | 已決定不自動(`lumos updated-sync` 與 `doctor` U 段存在)。`_cmd_set_locked` 只改指定欄位 | J | 不改:已裁定不自動更新 updated(提交時自動更新筆記日期_計劃:先裁自動改,設計審後改裁健檢列出加一鍵修),lumos updated-sync 與 doctor U 段已有 |
++| F14 | `append lands_in "[[Systems/x]]"` 照收 | 筆記欄位關卡補齊_計劃(done)S10 | 部分已修。重現:`append` 仍收,`lumos lint` 現在警告「lands_in 這幾項不是 Systems/<名稱> 的純字串」(warn 不擋);寫入端仍不擋 | F | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F15 | 條款「當…時應已有…;之後…」被處置閘判缺「應」,規格閘放行 | 規格落成可驗收條件_計劃 | 判不出。兩道共用 `_clause_check`,差別只在 `grammar` 旗標。比對時造的同型句 `_clause_grammar` 全回 True,未重現 | H | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F16 | `--accepted-set none` 被當 id「none」 | design-loop重設計_實作計畫、`Systems/finding-refute` 只描述集合語意 | 仍存在。`_ids`只把空字串當空集合;只有 `--refuted-set`與 `--regression-set`認 `none` | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F17 + W9 | 「還沒/尚未」現況句提醒把 UI 狀態句當成會過期的現況 | 筆記形狀擋_計劃(done) | 仍存在。重現:`FACT:載入中(第一次還沒回來)時…` 與 `畫面還沒重繪前…` 都被印「提醒:…新寫了 2 行『還沒有/尚未…』」(`note_shape.negation=warn`,不擋,可關) | F | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F18 | e2e 一族(埠、程序、Vite 重用、收尾)沒有任何檢核題 | test-layers軟提醒_計劃(done)只分單元、整合、UI | 仍存在。`skills/` 與 `test-quality-standard.md` 無 e2e 起停段 | C | [[Projects/前端知識與風險詞_計劃]] |
++| F20 | 設計審帶 `--regression-set none`,工具不擋也不提醒 | 代碼審修正關卡第0步_計劃(done):代碼審 2 輪起選填;`Systems/代碼審修正關卡`(doing) | 仍存在。對任何迴圈都收 `none`;設計審手冊不要求,工具也不問 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F21 | `code-loop dispositions` 的 evidence 給清單,錯誤訊息看不出型別 | 無 | 仍存在。`str(ent.get("evidence"))` 把清單變字串,再被當 `path:line` 切,訊息是「evidence '[…]' 切不開」 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F22 | 記帳後改 intake,指紋不符,記帳時沒提醒不能改 | `Issues/記帳後改留痕格式讓回放永久紅`(open,相鄰但不同:談格式) | 仍存在。`canary record` 收 `--intake` 時無任何「之後不能改」提醒 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F23 + F24 | standard 代碼審的 `record_cmd` 不帶 `--round`,處置帳卻硬要,一筆無輪次帳毒到整個迴圈 | `Issues/代碼審next把新處置帳誤判舊panel`(open,同根鄰近);`Issues/輕量設計審手冊叫人記處置帳但工具不收`(done,light 版同形) | 仍存在。重現:`loop next code-X --tier standard` 的 `record_cmd` 無 `--round`;`_tpl_flags`對循序單審省略;記處置帳的那段程式要求處置帳必須綁 `--round` | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F25 | pitfalls 輸出沒講 standard 也要審 | 無 | 仍存在。實測只印「tier: standard(有程式檔改動、沒命中風險型樣)」,無「仍須一席加架構對齊」 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F26 | macOS 沒有 `timeout` 指令,與 lumos 無關 | 不適用 | 不是 lumos 的問題;lumos 目前也沒有 e2e 範本 | J | 不改:macOS 沒有 timeout 指令,不是 lumos 的問題;lumos 也沒有 e2e 範本 |
++| F27 | 資安席〈消費專案六類〉沒有網頁前端類別 | 代碼審資安席_計劃(doing)d6 定六類;工具鏈代碼審資安與資源鏡頭範圍_計劃(done)只管本 repo | 仍存在。`skills/lumos-design-loop/templates.md` 六類只有第 6 類行動端。代碼審角色卡有 fe-xss,但不進資安席 | C | [[Projects/前端知識與風險詞_計劃]] |
++| F28 | 拆包審時 `--scope-lines`/`--snapshot` 填整份,八席被標 scope_oversize | 無 | 仍存在。只看自填的 `scope_lines`,不拿 dispatch.json 的 materials 比對;`record_cmd` 只寫「<這輪審了幾行>」 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| F29 | `REVISIT:[when-file:…]` 寫下就成立,推送才被擋 | 回頭條件寫下時就成立_計劃(done):推送擋新寫的、`drift scan` 標 born;回頭條件消失式與生來成立_計劃(doing) | 部分。推送擋已有;寫入端沒擋,只在提交時由 note-shape 提醒(可關) | F | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| F30 | e2e 腳本的鎖、pid、`/tmp`、symlink 沒有檢核題 | 工具鏈代碼審資安與資源鏡頭範圍_計劃(done)限工具鏈本 repo;`Issues/跑測試被中斷時子行程變孤兒`(open)只管測試 | 仍存在。消費專案六類無「本機基礎設施腳本」 | C | [[Projects/前端知識與風險詞_計劃]] |
++| F31 | 資安包必須含全部改到的檔、最後一次修補後要再派,`loop next` 不提醒 | 代碼審資安席_計劃(doing);閘訊息已寫 | 仍存在。`loop next` 只列「資安 必派(問閘會擋)」(實測 1 行);事後閘才擋 | E | [[Projects/記帳與迴圈工具小修_計劃]] |
++| W5 | `doctor` 路徑檢查把「`scripts/e2e.sh --cleanup`」整串當檔名,且 gitignore 的執行期檔判不存在 | 無 | 仍存在(三小項中兩項重現)。`[P]` 印「scripts/e2e.sh --cleanup(已不存在)」「e2e/.run-state(已不存在)」。另一個 repo 的路徑那項沒重現(`../other-repo/...` 未被列出,判不出) | G | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| W6 | `doctor` 每支檔有家只看已提交,提交前一直唸 | 每支檔有家_計劃(doing) | 仍存在。重現:`new system 畫面 --code src/App.tsx` 後(新節點未提交),`doctor` S8 仍列 `src/App.tsx`。另 `eslint.config.js` 這類設定檔也被列進去(雜訊) | G | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| W10 | `spec-gate` 同一句 root 不存在警告印三次 | 無 | 仍存在。重現:設平台 root 為不存在目錄,`spec-gate` 輸出三行相同 | H | [[Projects/筆記指令健檢與規格閘小修_計劃]] |
++| W11 | 測試品質沒提 Vitest 假計時器與 user-event | `Systems/test-quality-cli`、`historical-test-quality`(doing) | 仍存在。`skills` 與 `commands/` 搜不到 fake timers、user-event、Testing Library | C | [[Projects/前端知識與風險詞_計劃]] |
++| W12 | 設計審抓不到「只用 Tab」這類前端可執行性 gap | 無 | 設計審的天花板,靠實作才知道;不是工具缺陷 | J | 不改:設計審抓不到「只用 Tab」這類前端可執行性缺口,是設計審本身的天花板,靠實作才知道,不是工具缺陷 |
++
++## 各組條數
++
++括號內是「編號數 / 合併後列數」;「部分」算仍存在。
++
++| 組 | 仍存在(編號 / 列) | 其他 | 落點 |
++|---|---|---|---|
++| A 測試名比對 | 0 / 0(W1 比對當時部分存在,2026-10-15 已由落點計劃處理) | 已處理 1(W1) | 測試名收自由字串_計劃 |
++| B 前端技術棧 | 6 / 4(F1、W7、F2、W2、F7、B10) | | 前端框架從vue分出_計劃 |
++| C 前端知識 | 8 / 7(F4、F10、F19、F13、F18、F27、F30、W11) | | 前端知識與風險詞_計劃 |
++| D 風險關鍵字誤判 | 3 / 2(F5、W3、W4) | | 前端知識與風險詞_計劃 |
++| E 記帳與迴圈工具 | 10 / 9(F11、F16、F20、F21、F22、F23、F24、F25、F28、F31) | | 記帳與迴圈工具小修_計劃 |
++| F 筆記指令 | 8 / 5(F8、B6、W8、B7、F14 部分、F17、W9、F29 部分) | 已修 1(F3) | 筆記指令健檢與規格閘小修_計劃 |
++| G 健檢與家 | 5 / 4(F9、B8、B9、W5、W6) | 已修 1 列(B4、B5) | 筆記指令健檢與規格閘小修_計劃 |
++| H 規格閘 | 6 / 5(F6、B1、B11、B2、B3、W10) | 判不出 1(F15) | 筆記指令健檢與規格閘小修_計劃 |
++| I 跨 repo | F12 部分(同 repo 工作樹已修;跨 repo 刻意不支援) | | 不改 |
++| J 不改 | 0 | 3(F26、W12、B12) | 不改 |
++
++## 比對時要一起看的
++
++- **跨組要一起改的**:F5 與 W3 同一張詞表,改了要升門判定規則版本,並跟 [[Issues/門掃描詞表沒收常見寫法]](反向:漏判)一起量。
++- **C 組證據只來自一次示範**:F19 顯示 96 條發現全靠手寫的前端鏡頭找到。C 組是新增知識內容,不是修 bug。
++- **未重現而判不出的**:F15、W5 的跨 repo 路徑、W4 的 graph-rename.sh 對照、B3 的乾淨 clone 實跑,要實際造情境才能定。
++- **W1 寫計劃時多查到的**(2026-10-15 讀碼與實跑,以下是當時的現況,已由 [[Projects/測試名收自由字串_計劃]] 處理):[test:] 名稱的切法當時有兩份不一致——note-shape 與 doctor S20 用的那支連全形逗號也切、全形冒號也當平台前綴,條款綁定與合約閘用的那支不會;標記邊界一邊「到第一個 `]`」、一邊數括號層數;推送前合約測試閘與 guard kill 的名稱白名單不收括號、冒號;歸檔「還護著存活合約的驗證紀錄」用 ASCII 的詞界包名稱,中文名稱永遠配不到。細節在 [[Projects/測試名收自由字串_計劃]] 做法 6。寫那篇計劃時跑它自己的規格閘,也當場印出「✓ — 25 條全標(…懸空 24 只提醒不擋…)」,就是 W1 本身。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md b/docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md
+index 3d7fd5c7..0640988f 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/多平台合約測試綁定_計劃.md
+@@ -98,23 +98,26 @@ tags: [checkout]
+       "file_must_match": re.compile(r"(?m)^appId:"),   # 見下
+       "attr_hint": "Maestro flow name:", "fail_hint": "assertVisible(不存在的哨兵)",
+       "dirs": {"pure": ([], []), "behavioral": ([".maestro"], []), "state": ([".maestro"], [])},
+   }
+   ```
+ - **新增 discover knob `file_must_match`（選填，`re.Pattern` 或 None）**：只認內容**行首**含 marker 的檔（Maestro = `(?m)^appId:`），否則 Android repo 一堆 `.yml`（GitHub Actions 的 `name: Build and Deploy`）會被誤收成測試名。**用錨行首 regex 而非純字串 `in`**（審計 r2：純 `"appId:" in content` 會被歷史註解 `# appId: ...` 誤觸）。實作 = `discover_test_methods` 主迴圈讀檔**後、去 C 註解之前**插一次 `file_must_match.search(txt)`（審計 r4：明定插在去註解前，對 `^appId:` 兩處結果同、但釘死免未來 profile 依賴隱含順序）；不符即 `continue` 跳該檔。**現有 `csharp-xunit`/`kotlin-junit` profile dict 無此欄位** → 實作用 `profile.get("file_must_match")`（審計 r4：直接 `profile["file_must_match"]` 會 KeyError），None 即不過濾、行為不變、向後相容。
+ - ⚠ **行尾錨 `\s*$` 消假陽性（審計 r3）**：原 `["']?` 為選填閉合引號，`name: should checkout flow` 會**部分捕獲** `should`（比 Playwright 更寬鬆、製造假陽性 `[test:maestro:should]` 被誤判 real）。加 `\s*$` 要求 title 後即行尾 → 多字 name **NO MATCH**（與 D4 Playwright 對稱），`name: checkout_flow`（含/不含引號）仍正常 MATCH。多字 `name:` 不可綁定即設計意圖。
+ - ⚠ **已知 trade-off（審計 r2）**：`discover_test_methods` 現行去 C-style 註解（`//…`、`/* */`，`scripts/lumos:1206`）對 YAML 不完美——YAML 值域的 `//`（如 `url: https://…`）會被誤刪。Maestro `name:` 行不含 URL 故不影響擷取，但這是「discover 對 YAML 非 100% 乾淨」的已知限制，非隱性正確；v1 接受（`name:` 擷取安全），未來要掃 YAML 其他欄位再議是否 profile-aware 去註解。
+ - ⚠ **釐清 `dirs` vs discover 範圍**（審計 r1 指出的易誤解點）：`profile["dirs"]` 只被 `_detect_test_dir` 讀（scaffold 輸出目錄偵測），**`discover_test_methods` 不讀 `dirs`**——它 `os.walk` 全 repo、只靠 `CODE_SKIP_DIRS`＋副檔名＋（本次新增的）`file_must_match` 過濾。所以限縮 Maestro 掃描範圍**只能靠 `file_must_match`**，`dirs.behavioral=[".maestro"]` 對 discovery 無效（僅影響 scaffold 落點）。
+ - 慣例代價：guard-bound flow 的 `name:` 必須是識別字（配合 `IDENT_RE`／`guard scaffold --method` 限制，同 Kotlin 反引號名的既有限制）。
++- (2026-10-15 補)Playwright 已改收句子名,這裡的「與 D4 對稱」不再成立;Maestro 刻意不跟,理由見 [[Projects/測試名收自由字串_計劃]]〈不做〉(Maestro 跑測試是指定檔案、不靠名稱篩選)。
+ 
+ ### D4. 新增內建 profile：`playwright`（網頁 E2E，先內建不接線）
+ 
++> 本段的識別字限制已被 [[Projects/測試名收自由字串_計劃]] 取代(2026-10-15):Playwright、Jest/Vitest、Dart 改收句子名、標題整串比對。以下是當時的設計,不是現況。
++
+ - Playwright 測試：`.spec.ts`/`.test.ts`，`test('title', async ({page})=>{})` / `test.describe(...)`；識別子 = title 字串（自由文字、可含空白）。
+ - profile：`exts:{.ts,.tsx,.js,.jsx}`、`scaffold_ext:.spec.ts`、`method_re = \btest(?:\.describe)?\(\s*["']([A-Za-z_]\w*)["']`（抓 `test(`/`test.describe(` 第一參數，**只認識別字安全的 title**——見下）。
+ - **⚠ title 自由文字 vs `IDENT_RE` 的結構性死結，及其乾淨解（審計 r1 提出、r2 追問矛盾）**：Playwright/Maestro 識別子天生可含空白（如 `test('should show menu')`），但 `guard scaffold/bind` 用 `IDENT_RE=^[A-Za-z_]\w*$`、且 `[test:]` 綁定名也需識別字。本計劃**不改 `IDENT_RE`**（牽動 C#/Kotlin 既有守衛），取一致的明確界線：
+   - **guard-bound 的 E2E 測試，其 title/`name:` 必須是識別字安全 token（無空白）**——寫進 docs 的可測性慣例。`method_re` 的 capture group `([A-Za-z_]\w*)` 據此設計：只擷取識別字 title。
+   - **含空白 title（如 `'should show menu'`）= 明確不支援 guard 綁定**（與 Kotlin backtick 名同限制）。此時 `method_re` 對它**完全不匹配（NO MATCH）**（capture group `([A-Za-z_]\w*)` 吃完 `should` 後需緊接閉合引號卻遇空白，回溯也接不上 → 整體不匹配；經 opus 辯方 python 實測確認，非「抓到 should」）→ 不會污染 method set、也對不起任何手寫 `[test:]` → **設計上就不該綁**。要綁就把該測試 title 改成識別字。此 NO MATCH **恰是設計要的行為**（多字 title 不可綁），非 bug。
+ - **無 web repo → 本輪只定義 profile + 單元測試 fixture，不進任何 config**；待 web repo 出現再接線。
+ - **撰寫 workflow 註記（Playwright MCP，與 D5 Maestro MCP 對稱）**：官方 `@playwright/mcp`（微軟）可讓 Claude Code 用瀏覽器 accessibility snapshot 探索網站、產 `.spec.ts`、跑綠——即「把紅燈 stub 填到綠」的工具。定位同 Maestro MCP：**開發/撰寫期工具、非合約守門**（Check T／CI 才守門）。接 web repo 時採用。（此註記為收斂後 additive，與 D5 已審過的 Maestro MCP 註記同款、非規範性。）
+ 
+ ### D5. guard-templates（scaffold 紅燈 stub）
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md b/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md
+new file mode 100644
+index 00000000..8ef80c23
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md
+@@ -0,0 +1,311 @@
++---
++type: project
++status: doing
++created: 2026-10-15
++updated: 2026-10-15
++tags:
++  - type/project
++  - status/doing
++  - scope/guards-gates
++lands_in:
++  - Systems/test-profile-multiplatform
++  - Systems/規格閘
++  - Systems/bound-tests-gate
++  - Systems/筆記內容閘
++  - Systems/guard-kill
++  - Systems/lumos-cli-write
++related:
++  - "[[Projects/多平台合約測試綁定_計劃]]"
++decisions:
++  - content: 測試綁定收自由字串測試名:Vitest/Jest/Playwright(連帶 Dart)的 it/test/describe 標題整串比對,含中文與空白;條款懸空時規格閘不再印 ✓,改印警示並逐條列出。推翻 Projects/多平台合約測試綁定_計劃 D4 與 Systems/test-profile-multiplatform「識別字名才可綁、含空白 NO MATCH」的設計(那是正文設計,不是該篇的決策紀錄;該篇 d1 多根多 profile 照樣成立、不作廢)
++    id: d1
++    context: Web 示範前端(order-web)15 條條款全懸空:前端慣例是句子名,lumos 掃描只收識別字,規格閘卻印「條款綁定 ✓」讓人以為綁好了;多平台設定下 test.method_regex 逃生口也收不到。舊設計當時的理由:不動 IDENT_RE 免得牽動 C#/Kotlin 守衛、避免部分擷取的假證據、當時沒有網頁 repo。替代方案:①維持舊設計,要求前端測試改識別字名(違反前端生態慣例,示範證明不會有人照做);②只修規格閘的 ✓ 顯示、不收句子名(懸空照舊,綁定機制對前端等於不存在);③加引號包名的新語法收任意字元(同類新語法先前被否決,舊筆記讀不懂)
++    why_chosen: 使用者 2026-10-15 裁。舊理由只剩第一條要處理,改成 IDENT_RE 只留給產程式碼的 guard scaffold、綁定另用一條名稱規則;部分擷取的問題靠擷取整個字串字面解掉;沒有網頁 repo 的前提已經不在。不加新語法,舊筆記一字不改照讀
++    decided: 2026-10-15
++    valid: true
++pending_questions:
++  - id: Q1
++    text: 風險高的計劃有懸空條款時,規格閘要不要從只警示改成擋下?(建議:先只警示,上線 4 週看警示後有沒有人補綁,沒有再改擋)
++    class: 守衛強度
++    stage: 實作
++    status: 延後
++    reason: 使用者這次只要求懸空要明顯標出,沒有要求擋;先看警示有沒有效
++---
++# 測試名收自由字串_計劃
++
++> 白話:前端的測試習慣用一句話當名字(`it('下單後按鈕會停用')`),lumos 目前只認得 `pay_guard` 這種「識別字」名,句子名一律掃不到,條款綁上去全部懸空,規格閘卻還印「✓」。這份計劃讓測試綁定收整串句子(含中文與空白),懸空時規格閘改印明顯的警示,跑測試時把句子安全地交給測試工具的名稱篩選。來源:Web 示範前端(order-web)15 條條款全懸空,比對表見 [[Projects/Web示範前端缺口_調研]] 的 W1。
++
++PRIOR-ART: 不新建機制、不加新語法。①名稱照原樣整串比對,沿用 Kotlin 反引號測試名早已收空白名的做法(KOTLIN_TEST_RE 收 `` `名` ``、`_kill_norm_method` 拆殼);②測試工具那邊:Jest 的 `-t`、Vitest 的 `-t`、Playwright 的 `-g` 都是拿正規式比對「完整名稱」的子字串,flutter 的 `--plain-name` 是純文字子字串——所以跳脫只對前三者做,跳脫字元集照 MDN 的 escapeRegExp(`.*+?^${}()|[]\`);③平台逃生口沿用單平台已有的 `test.method_regex` 與 `_safe_user_regex`,只是讓多平台也讀得到。曾被否決的 `[test:名稱(理由)]` 新語法(Projects/測試綁定一行一支提醒_計劃)本計劃不碰:舊寫法一字不改照讀,只放寬「名字裡可以有什麼字」。
++RETIRE-IF: 上線 8 週內,自由字串綁定造成的假綠(綁定判成綁好、測試工具卻跑了別支或零支而閘報綠)出現 2 次以上,而同期它幫忙抓到的懸空與紅燈少於這個數——照〈回退〉的範圍收回(掃描與寫入路徑一起收),規格閘的懸空警示保留。
++
++## 舊決策與為何翻案
++
++舊設計在 [[Projects/多平台合約測試綁定_計劃]] 的 D4 與 [[Systems/test-profile-multiplatform]] 的摘要:「識別字名才可綁,含空白的 title NO MATCH,是刻意設計」。當時三個理由:
++
++1. 不改 `IDENT_RE`,免得牽動 C#/Kotlin 既有守衛;
++2. 擷取群組 `([A-Za-z_]\w*)` 後面要緊接閉合引號,多字 title 整個不匹配,不會「抓到前半個字」製造假證據;
++3. 當時沒有任何網頁 repo,Playwright profile「先內建、不接線」。
++
++為何翻案(使用者 2026-10-15 裁):
++
++- 理由 3 不在了:這次示範就是真的網頁專案,15 條條款全懸空,前端的慣例就是句子名——要求改成識別字等於要求整個前端生態改寫法。
++- 理由 2 照樣守得住:新的掃描擷取「整個字串字面」,而且字面後面要緊接逗號或右括號才收(做法 2),只拿得到一部分的寫法一律不收;部分擷取的假證據不會出現。
++- 理由 1 改成分開處理:`IDENT_RE` 只留給會「產生程式碼與檔名」的 `guard scaffold`,綁定名稱另用一條名稱規則(做法 1),C#/Kotlin/Python 的識別字名照樣合法、判法不變。
++- 舊設計還有一個沒寫出來的代價:掃不到的句子名在規格閘只算「懸空、只提醒」,而那一行仍印「✓」,作者以為綁好了。
++
++舊計劃的決策 d1(設定改成多根多 profile)跟這件事無關、照樣成立,不作廢;被推翻的是 D4 那段正文設計與 Systems 節點的兩行摘要,實作時在那兩處標明被這篇取代(做法 7)。
++
++## 做法
++
++### 1. 一條名稱規則、一套切法
++
++- **名稱合法性只有一支函式** `_test_name_ok(name)`:去頭尾空白後不是空的、至多 200 字、不以 `-` 開頭、不含 `[` `]` `,`(半形逗號),也不含 `_PATH_SPECIAL_CATS` 那幾類字元(控制字元、格式字元、行分隔與段分隔;用既有的 `_path_special_chars` 判,不另寫第三份控制字元定義)。中文、空白(中間的空白原樣保留、不壓縮)、括號、冒號、引號、全形標點都可以。Windows 上另外不收 `& | < > ^ % " !`(cmd.exe 不認單引號,shell 引號包不住;代碼審 r1 資安席)。擋下訊息的白話收成一句 `_TEST_NAME_RULE_ZH`。
++- 取代目前分散的三種判法:`_KILL_METHOD_OK_RE`(`^[\w .]+$`,不收括號、冒號、引號)、綁定路徑上的 `IDENT_RE`、`_NsTrJudge._plat` 自己寫的「含方括號就壞名」。
++- **反引號拆殼只有一條規則**:整串剛好被一對反引號包住(Kotlin 的 `` `名` ``)才拆,其他位置的反引號是名稱的一部分。`discover_test_methods` 現在的 `.strip("`")`、`_kill_norm_method`、`_test_names_of` 都改用這條,不然 `` `useFoo` 回傳 x `` 這種標題兩邊拆的深度不一樣,比對不上。
++- **「一格 `[test:]` 的值 → (平台, 名稱)」只有一支函式** `_split_test_ref(seg, platforms, default)`,`resolve_test_refs`、`_test_names_of`、`_kill_method_name`、`_dispositions_split_test` 都改呼叫它。這四支現在各切各的:`_kill_method_name` 多平台時見冒號就丟掉前面;`_dispositions_split_test` 單平台見冒號就拒收;`_test_names_of` 不管平台都剝前綴、還把冒號後的空白吃掉(`API: 逾時` 變成 `API:逾時`)。統一規則:
++  - 單平台(沒有 `platforms`):整串就是名稱,不切冒號。處置帳那邊原本「單平台帶前綴就明講沒開多平台」的提示改成:名稱找不到、而且冒號前面那段長得像平台名時,找不到的訊息加一句「這個專案沒開多平台」。
++  - 多平台:第一個冒號(半形或全形)前面那段如果是已定義的平台,就是前綴,名稱是冒號後面那段、只去頭尾空白。不是已定義平台時:半形冒號而且前面那段只有英數、底線、連字號(長得像平台名),照舊判壞名,不猜(擋 `wbe:x` 這種打錯字);其他情況整串都是名稱。所以名字本身有冒號(`API: 逾時顯示重試`)時要寫平台前綴(`[test:web:API: 逾時顯示重試]`),壞名訊息補一句這個寫法。
++  - 多支用半形逗號分開;**全形逗號是名稱的一部分**(中文句子常有「，」)。`_test_names_of` 原本兩種逗號都切,改成跟 `resolve_test_refs` 一樣只切半形。全形冒號照舊當前綴,但只限前面是已定義平台:note-shape 那組刻意收的全形冒號容錯(既有測試 `[test:py：test_alive]`)保留,而且條款綁定、合約閘這兩條路也跟著收。
++- 標記的邊界:`TEST_REF_RE` 用「到第一個 `]`」,`slot_parse` 數方括號層數,兩者對含方括號的值切法不同。名稱規則不收方括號之後,合法名稱兩邊切出來一樣,含方括號的兩邊都判壞名。這兩支本身不改。
++- 名字比對一律整串相等(去頭尾空白後),不做大小寫或空白正規化。既有的「`類別.方法` 寫法拿最後一段比」(`_classify_test_refs`、`_NsTrJudge._judge`)只在點號兩邊都是識別字時才用,句子名裡的點號照整串比。
++
++### 2. 掃描收整個字串字面
++
++- **剝註解的做法**(r1 五席同報的根因;下面第一段是 r1 前的說法,現行做法以緊接的子項為準——不另開模式,`c-style` 本身換掉):`_strip_test_comments` 的 c-style 用 `//[^\n]*` 與 `/\*.*?\*/` 直接刪,不認字串。句子名裡的網址(`http://…`)會被從 `//` 截斷,`/*`(`GET /api/*`)會一路吃到檔內下一個 `*/`,中間的真測試整支消失;沒有結尾 `*/` 的 `/*` 每一個都掃到檔尾,是二次方時間(資源併發席實測 8000 行 11 秒)。改法:新增 `comment_strip: "c-style-strings-kept"`,一趟由左往右的交替比對,依序認字串字面(單引號、雙引號、反引號,含跳脫)、`//` 註解、`/* */` 註解;字串原樣留下,只刪註解。沒有結尾的 `/*` 一路刪到檔尾,所以每個位置只走一次,是線性時間。node-jest(含 node-vitest)、playwright、dart 改用它;java 的 `c-style+strings`、其餘 profile 不動。正規式寫的 JS 正規表示式字面(`/'/`)可能被當成字串開頭,這是已知限制,寫進 Systems 節點。
++  - (代碼審 r2 後改)多行字串也要認得:三個雙引號(Kotlin、Swift、C# 11、Dart)、三個單引號(Dart)、C# 的 @ 加雙引號,不然字串裡單獨一個 `/*` 會被當成沒收尾的註解、刪掉後面全部測試。
++  - (代碼審 r1 後改,編排者裁)不另開新模式:直接把 `c-style` 換成這種認得字串的剝法,所有用 c-style 的語言(Kotlin、Swift、C#、Maestro 也是)一起改——字串裡的 // 或 /* 在每種語言都會截斷或吞掉測試;java 的 `c-style+strings`(刻意清空字串)保留,剝法從三種變兩種。正規式用展開式寫法,32MB 字串不再要 4GB 記憶體。
++- `JEST_TEST_RE`、`PLAYWRIGHT_TEST_RE`、`DART_TEST_RE` 改成收第一個引數的完整字串字面:單引號、雙引號、不含 `${` 的反引號樣板三種。字面主體限 200 字(名稱上限本來就是 200),每個起點最多走 200 字,所以一行塞很多個 `it('` 的壓縮檔也是線性。收之前還要滿足:
++  - 字面後面緊接(可夾空白)`,` 或 `)`:`it('下單' + suffix, …)`、`it('a'.repeat(3))` 這種只拿得到一部分的不收。這就是舊設計理由 2 要防的部分擷取。
++  - 呼叫前面不能是 `.`、英數、底線或 `$`:`/\d/.test('hello world')`、`foo.it('x')` 這種別的物件的方法不收。
++  - 字面裡只認 `\'`、`\"`、`\\`、反引號、`$` 五種跳脫並還原(反引號與 `$` 是樣板字串與 Dart 會用到的);出現其他跳脫(`\n`、`\u4e2d`、`\x41`)就不收,免得收到的跟測試工具看到的標題不一樣。Dart 字面裡有沒跳脫的 `$`(插值)也不收;`.each` 與帶 `${` 的樣板照舊不收(名字跑的時候才算得出來)。Playwright 的宣告字面後面要接逗號(本體那個引數一定有;測試本體裡的 `test.skip('原因')` 不算宣告,代碼審 r1 邊界席)。
++- **含半形逗號或方括號的標題不收進測試集合**(編排者 2026-10-15 定:這兩種名字不收,見〈不做〉)。掃描照樣比對到,但還原出來的名稱過不了 `_test_name_ok` 就丟掉,不進 `discover_test_methods` 的結果,所以不管怎麼綁都是懸空,不會因為被逗號切成兩半而各自配到別支。**這條只套在字串標題型的 profile**(JS 三家與 Dart,即做法 4 的 `name_filter` 是 `regex` 或 `plain` 的那幾家):Kotlin 反引號名 `` `when offline, shows banner` `` 現在就收得到,照舊收、判法不變。條款綁定列懸空時,如果那一格 `[test:]` 的值裡有半形逗號、切出來的幾段又都不是真測試,那一行多印一句提示:含逗號或方括號的測試名綁不了,請改測試名或寫 [manual:]。
++- 修飾:Jest/Vitest 收 `.only/.skip/.concurrent/.todo/.fails`;Playwright 收 `test(`、`test.only/skip/fixme/fail(`、`test.describe(`(含 `.serial/.parallel/.only/.skip`);`test.step(` 不是測試,不收。
++- Playwright profile 補檔名錨 `file_name_match: ["*.spec.*", "*.test.*"]`(Playwright 預設也只收這兩種檔名):現在它掃整個 repo 的 `.ts/.tsx/.js/.jsx`,連建置產物和一般程式碼裡的 `test(` 都會被看到。
++- 一個正規式裡三種引號是三個分支,擷取群組不只一個:新增 `_test_name_of_match(m)`(回第一個有值的群組並還原跳脫),`discover_test_methods`、`_residual_test_files`、派工鏡頭備援段的受影響測試都改用它;使用者自訂的 `method_regex` 也走它,只有一個群組的舊寫法結果不變。
++- Maestro(`name:` 欄位)不在這次範圍,見〈不做〉。
++
++### 3. 懸空要明顯標出
++
++- `_clause_check`(規格閘與處置閘第五步共用)目前懸空時仍印 `條款綁定: ✓ — N 條全標(…懸空 k 只提醒不擋…)`。改成:有懸空就印 `條款綁定: ⚠ — N 條全標(綁了…/靠人…),懸空 k 只提醒不擋(綁的測試找不到,逐條見下…)`,「懸空 k 只提醒不擋」照舊保留,讀的人知道這行不擋;下面逐條一行列出編號、名稱與懸空種類,最多 15 行、其餘講總數;沒懸空才印 `✓`。懸空種類的意思:
++  - 寫錯:程式碼裡完全找不到這個名字;
++  - 設定認不到:檔裡有這個名字的宣告,掃描設定不收;
++  - 只被提到:名字在程式碼文字裡出現過,但不是掃描認得的測試宣告,例如寫在註解或一般字串裡;
++  - 壞名:平台前綴未定義,或名稱不合法。
++- 擋不擋不變:風險高照舊只提醒,回傳狀態照舊是 ok,rc 不變——印 ⚠ 但狀態 ok 是刻意的,⚠ 的意思就是「提醒、不擋」。呼叫端(處置閘第五步、規格閘)判過不過看回傳狀態,不比對 `✓` 字樣(2026-10-15 grep 主程式沒有比對這個字樣的地方,只有測試會比)。風險低本來就要求測試存在(`_clause_check_twoway`),照舊擋。要不要讓懸空在風險高也擋,記成待決問題 Q1,不在這次改。
++- `_spec_gate_runnable` 在條款全都懸空時目前印「沒有綁 [test:] 的條款,沒東西可跑」,會讓人以為根本沒綁;改成「k 條綁了測試但全懸空,沒東西可跑」。
++- 新增或改寫的訊息(含冒號的壞名、含逗號的提示、`guard scaffold` 擋下)照既有三段式寫:發生什麼、為何在意、下一步的指令獨立一行。
++
++### 4. 跑測試時名字怎麼交給測試工具
++
++- profile 加一個鍵 `name_filter`:`regex`(node-jest、node-vitest、playwright)、`plain`(dart)、`ident`(其餘;名字本來就是識別字,行為不變)。多平台每個平台跟著它的 profile 走。
++  - (代碼審 r1 後改)playwright 改成 `regex_tail`:2026-10-15 再實跑 1.64.1,`-g` 比的是「專案名 檔名 describe 標題」整串(`-g login` 連 login.spec.ts 整檔、`-g chromium` 整個專案都選中),所以名字跳脫後錨在結尾,實跑確認只選中標題結尾是這個名字的測試;撞名也只數這種標題。代價:Playwright 綁 describe 標題會選到零支,測試工具印 No tests found 並回 1,判紅(擋推送)。
++  - (代碼審 r2 後改)錨定式改成 `\s<跳脫後>(?:\s@\S+)*$`:Playwright 把 tag(含 describe 繼承來的)接在標題後面比,`(?:^|\s)…$` 會讓帶 tag 的測試必紅;前面用 `\s` 不用 `(?:^|\s)`——-g 比的字串以檔名開頭,標題前面總有空白,而且不用 `|`、`^`(Windows 的 cmd.exe 會當管線與跳脫)。撞名比之前拿掉標題尾巴的 @tag;自己那支只由「種類是測試、文字相同」的第一個佔用(describe 同名不搶);describe 結尾加測試標題拼起來等於這個名字的也算撞名(只看一層)。標題頭尾有空白的不收(Playwright 不修剪標題,收成修剪過的名字會對不到)。以上 2026-10-15 在 order-web 副本實跑 1.64.1 確認。
++- `_run_cmd_expand(run_cmd, method, name_filter="ident")`:`regex` 時先跳脫 `.*+?^${}()|[]\/`,再照舊 `shlex.quote`。斜線也要跳:Playwright 會把頭尾都是斜線的字串當成正規式字面(`/…/旗標`),跳掉就不會。`plain` 與 `ident` 只做 `shlex.quote`。呼叫端都已經拿得到平台設定,各自傳那個平台的 `name_filter`:
++  - `_run_bound_tests`(規格閘跑紅綠、相依回歸、推送前合約測試閘、修正關卡第 4 項共用這支);
++  - `guard kill` 跑配方那段;
++  - 過濾探針 `_FILTER_PROBE_NAME` 是識別字,跳不跳脫一樣,照傳。
++- **撞名靠事前的靜態檢查,不靠讀輸出**(r1 三席同報的根因):前一版說既有的「篩到幾支」判法會把選到兩支以上判成弱證據,這不成立——`_RAN_EVIDENCE` 只有 python 讀得出支數,node-jest 只讀得出有沒有跑過,node-vitest、playwright、dart 連這個都沒有;推送前合約測試閘也根本不呼叫那兩支。改成一條跟輸出格式無關的規則 `_name_filter_collisions(name, methods, name_filter)`:`regex` 與 `plain` 的平台,數這個平台的宣告名稱(測試標題與 describe 標題都算)裡有幾個「含有這個名稱」,`regex` 不分大小寫數(Jest 的 `-t` 與 Playwright 的 `-g` 不分大小寫,多數一點只會比較嚴),兩個以上就是撞名。撞名的那支:
++  - (代碼審 r1 後改,三席同報)數的是「篩選選得到的全部標題」(`_raw_test_titles`:it.skip、帶 ${ 的樣板、.each、含逗號或方括號、沒還原的跳脫、超過 200 字的都算),不是只數可綁定的;判定收成一支 `_name_collision_reason`,推送前閘、規格閘、guard kill 共用。
++  - 規格閘、相依回歸、修正關卡第 4 項(都走 `_spec_gate_judge_items`)判弱證據,原因寫「篩選會同時選中 N 支:…,換一個不會被別的標題包含的名字」;
++  - 推送前合約測試閘(`_run_bound_tests` 之後)判成「證不出」(既有的 unproven,不是綠)。
++  - 綁的是 describe 標題時(Jest、Vitest),底下的測試標題通常不含它,數出來是 1,照常跑整組;那是作者要的語意。Playwright 例外:錨在結尾後選到零支、判紅(見上一條)。
++  - 跨標題的比對(Jest 拿「describe 標題 + 空白 + 測試標題」整串比,綁的名稱剛好橫跨兩段)數不到,寫進 Systems 節點當已知天花板。
++- 零支:跳脫寫錯或名稱對不上時會選中零支。python、node-jest 由既有的「跑過的證據」判沒證明;node-vitest、playwright、dart 沒有證據樣式,靠測試工具自己找不到就回非零,或靠過濾探針(指令對不存在的名字也回 0 時,整個平台的指令被判成不可信)。實作時在示範專案(Vitest 與 Playwright)各實跑一次「跑 1 支」與「跑 0 支」,把輸出樣式補進 `_RAN_EVIDENCE`,能讀出支數就補 `count_re`;Dart 本機沒有環境,不補。
++
++### 5. 多平台的 method_regex 逃生口
++
++- 把 `load_test_profile` 裡套用 `exts`、`scaffold_ext`、`method_regex` 覆蓋的那段抽成 `_apply_test_overrides(prof, ov, where)`,單平台照舊傳 `cfg["test"]`;`load_platforms` 的多平台分支對每個平台傳那個平台的設定物件(跟 `run_cmd` 同一層),警告訊息帶平台名。`init` 骨架的多平台格式不用改,沒寫就沿用內建。
++
++### 6. 其他讀 [test:] 的路徑,逐條交代
++
++| 路徑 | 怎麼處理 |
++|---|---|
++| 條款綁定 `clause_bindings`(spec-trace、接手視圖、處置閘第五步、doctor S5 都用它) | 走 `resolve_test_refs` 與掃描結果;做法 1、2 改完就收得到,不另改 |
++| doctor Check T、`guard list`、`classify_invariants`(`_classify_one`) | 同上,不另改 |
++| 推送前合約測試閘與修正關卡第 3 項(`_classify_test_refs`) | `_KILL_METHOD_OK_RE` 換成 `_test_name_ok`;點號後綴比對照做法 1 收窄;撞名照做法 4 |
++| note-shape 的測試綁定要存在、doctor S20(`_test_names_of`、`_NsTrJudge._plat`) | 切法改呼叫 `_split_test_ref`(做法 1);`_test_names_of` 加平台設定參數,呼叫端已有 `self.split`;壞名判法換成 `_test_name_ok` |
++| note-shape 一行一支提醒(`_ns_wd_binding_hit`) | 用同一支 `_test_names_of`,跟著對齊;「整個被引號包住的名稱算舉例」照舊 |
++| `guard bind`(`_cmd_guard_bind_locked`) | `IDENT_RE` 換成 `_test_name_ok`,名稱照原樣寫進 `[test:平台:名]` |
++| `guard settle --test`(守衛紀錄轉正,`cmd_guard_settle` 直接用 `IDENT_RE` 判、`_guard_settle_locked` 直接寫 `[test:{名}]`,不走 `resolve_test_refs`) | `IDENT_RE` 換成 `_test_name_ok`,寫法不變;失敗時印的補救指令 `lumos guard settle … --test …` 的名稱改經 `_kill_cmd_arg` 加引號 |
++| `guard scaffold` | 保留 `IDENT_RE`(它拿名字產程式碼和檔名);擋下訊息改講「句子名先自己寫好測試,再用 guard bind 綁」 |
++| `guard kill`、`kill-add`、doctor P2 的配方檢查(`_kill_method_name` 之後的 `_KILL_METHOD_OK_RE`) | `_kill_method_name` 改呼叫 `_split_test_ref`(做法 1);白名單換成 `_test_name_ok`;跑的時候照做法 4 跳脫 |
++| 配方不在合約清單時的提醒(`_kill_binding_msg`) | 名稱放寬之後,這裡兩處 `IDENT_RE`(顯示名稱、判「guard bind 綁不了」)換成 `_test_name_ok`;建議貼上的 `lumos guard bind … <名>` 指令,名稱改經 `_kill_cmd_arg`(專門處理「貼進指令的字」的那支),不再原樣接上。手冊 `commands/06-代碼審與推送.md` 那句「方法名不是識別字…綁不了」跟著改 |
++| 歸檔時「還護著存活合約的驗證紀錄不歸檔」(`cmd_archive`) | 現在用 ASCII 模式的 `\b` 包名稱,中文開頭或結尾的名稱永遠配不到,驗證紀錄會被當成沒人護而歸檔;改用做法 6 末段的邊界函式 |
++| `guard trace`(`cmd_guard_trace`:`strip_test_refs` 取名後,用 ASCII 模式的 `\b…\b` 在驗證紀錄全文找) | 跟歸檔同一個病,改用同一支邊界函式 |
++| 待決問題「已驗」的測試名(`_pq_clause_tests`)、漂移 C5(`_drift_c5_test`) | 都走 `resolve_test_refs`,不另改 |
++| 代碼審處置帳 `test:<名>` 證據(`_dispositions_split_test`) | 改呼叫 `_split_test_ref`(做法 1:單平台整串當名稱);一筆證據就是一支名稱,不切逗號;加 `_test_name_ok`,含半形逗號或方括號的判不合法 |
++| 每支檔有家「只換測試綁定不算寫說明」(`_nodehome_test_tag_value_ok`、`_NODEHOME_TAG_NAME_RE`) | 不改,見〈不做〉;它間接呼叫 `_test_names_of`,但只在值先通過 ASCII 白名單之後,全形逗號那條改動不影響它 |
++| 派工鏡頭備援段的受影響測試 | 改用 `_test_name_of_match` 取名;列出時照舊只列識別字名,句子名只算進「沒列出」的數字,見〈不做〉 |
++
++- **邊界函式** `_test_name_boundary_re(names)`:名稱頭尾是英數底線才在那一端加「前後不是英數底線」,否則那一端不加。只給歸檔與 `guard trace` 這兩處比對測試名用,函式註解寫明適用範圍;主程式裡其他用 `\b` 的地方(比對符號、詞表)不動。
++
++### 7. 文件、手冊與舊筆記
++
++改完要同步的舊說法,全部列出來(條款 S25 照這張清單逐處 grep):
++
++- `TEST_PROFILES` 的 `attr_hint`:node-jest(node-vitest 共用)寫「識別字名才可綁,含空白 NO MATCH」、dart 寫「識別字名才可綁,同 playwright」,改成新規則;playwright 那條本來沒寫限制,補一句「標題整串比對,不收半形逗號與方括號」。node 與 playwright 的提示另補一句耗時:每支綁定都會起一次測試工具,綁得多可以開 `bound_tests.parallel`。
++- 主程式裡 `PLAYWRIGHT_TEST_RE`、`DART_TEST_RE`、`JEST_TEST_RE` 上方與 `TEST_PROFILES` playwright 項目的註解(寫「含空白 NO MATCH」「識別字名才可綁」那幾段)改寫;Maestro 那段註解照留,補一句「Playwright 已改收句子名,這裡刻意不跟」。
++- `skills/lumos-project-notes/reference.md` 測試棧 profile 那段:playwright「含空白 title 不可綁」、node-jest 只講 `'id'`、「`--method` 維持識別字」三處改寫;`method_regex` 逃生口補一句多平台也能寫在平台設定裡。
++- `skills/lumos-project-notes/commands/06-代碼審與推送.md` 配方不在合約清單那一列(見做法 6)。
++- [[Systems/test-profile-multiplatform]]:摘要裡 maestro 與 playwright 寫在同一行的 NO MATCH,拆開改,只改 playwright 那半;dart 那行改寫;「guard bind/scaffold --platform——method 維持識別字」那行改成「bind 收句子名、scaffold 維持識別字」。都指到這篇。
++- [[Projects/多平台合約測試綁定_計劃]]:D4 那段開頭加一行「本段的識別字限制已被 Projects/測試名收自由字串_計劃 取代(2026-10-15)」;Maestro 那段「與 D4 Playwright 對稱」「name: 必須是識別字」旁補一句:Playwright 已改,Maestro 刻意不跟(理由見本篇〈不做〉)。
++- [[Projects/Web示範前端缺口_調研]] 的 W1 列,落點欄已指向本篇;實作完成時把「主線現況」補一句「已由本計劃處理」。
++- **現況說明落在哪一篇**(每支檔有家,說明寫進那段程式的家;本計劃改的全在 `scripts/lumos`):
++  - 名稱規則、切法、掃描、`name_filter`、多平台逃生口,以及 `guard bind`、`guard scaffold`、`guard trace`(現有「method 維持識別字」那行就寫在這裡) → [[Systems/test-profile-multiplatform]];
++  - 規格閘的 ⚠ 與撞名 → [[Systems/規格閘]];推送前合約測試閘的撞名與證不出 → [[Systems/bound-tests-gate]];
++  - note-shape 與 doctor S20 → [[Systems/筆記內容閘]];
++  - `guard kill`、`kill-add`、`guard settle`、配方提醒 → [[Systems/guard-kill]](已有 `guard settle` 的 WHY 行);
++  - 歸檔 → [[Systems/lumos-cli-write]](archive 那列)。
++  - 前一版寫的 Systems/lumos-guard 是錯的:那篇管的是審查席隔離外掛(`mods/claude/lumos-guard/` 的 TypeScript),跟 `lumos guard` 子命令無關,已從 lands_in 拿掉。
++
++### 8. 實作時要一起改的既有測試
++
++這些既有測試會因新行為紅掉或意思反過來,實作時逐支處理(改 `scripts/test_lumos.py` 要先 `anchor approve`):
++
++- `t_node_jest_profile_discovery` 的「多字 title 不可綁」、`t_dart_profile_discovery` 的「含空白名不可綁」:斷言反過來,改成收得到。
++- `t_playwright_profile_discover`:說明與註解寫「多字 title NO MATCH」;改成 'should show menu' 收進集合,`[test:should]` 照舊不是真測試(整串比對)。
++- `t_note_shape_test_refs_lenient_syntax`:全形逗號那格(`test_alive，test_dead3`)新規則下整串是一支、找不到,照樣擋,期望不變,但註解要改成「整串當一支」;全形冒號前綴那格(`py：test_alive`)照新規則仍收,期望不變。`_ns_tr_is_new` 那格(`x：t_pre`)要確認 x 不是平台時,照新規則整串當名稱後期望還對。
++- 處置閘條款綁定的「真索引懸空 → 只提醒照過」斷言 `懸空 2 只提醒不擋`:新的 ⚠ 行保留這幾個字,應照過;同檔「全標 → 那一步 ✓」那格的夾具沒有懸空,照舊印 ✓。
++- 其餘有測試名斷言的(Kotlin 反引號、guard bind 的識別字錯誤訊息)照條款 S24 的固定輸入核對。
++
++## 驗收條款
++
++- [S1] 當 Vitest/Jest 測試檔有 `it('下單後 按鈕會停用')`、`test("shows error (500)")`、`describe('訂單 表單')` 時,`discover_test_methods` 應收到這三個完整字串;同一支檔裡的 `it.each` 與帶 `${` 的樣板字串不應收。[test: t_js_free_string_test_names_discovered]
++- [S2] 當 Playwright 測試檔有 `test('登入後 看得到訂單')`、`test.describe("結帳 流程")` 時,掃描應收到這兩個完整字串;同一支檔裡的 `test.step('…')` 不應收。[test: t_playwright_free_string_names_discovered]
++- [S3] 當 Dart 測試檔有 `testWidgets('下單 鈕 停用')` 時,掃描應收到完整字串。[test: t_dart_profile_discovery_titles]
++- [S4] 當條款綁的名稱是 `下單後 按鈕會停用`、測試檔有同名的 `it` 時,條款綁定應判綁了。[test: t_clause_binds_free_string]
++- [S5] 當條款綁的名稱只是測試標題的前半 `下單後` 時,條款綁定應判懸空。[test: t_clause_binds_free_string]
++- [S6] 當多平台設定寫 `[test:web:API: 逾時 顯示重試]` 時,應解成平台 web、名稱 `API: 逾時 顯示重試`。[test: t_test_ref_split_rules]
++- [S7] 當多平台設定寫 `[test:API: 逾時]` 而 API 不是平台時,應判壞名,訊息應講名稱有冒號要寫平台前綴。[test: t_test_ref_split_rules]
++- [S8] 當標記值是 `甲 乙,丙` 時,`resolve_test_refs` 與 `_test_names_of` 都應切成 `甲 乙`、`丙` 兩支。[test: t_test_ref_split_rules]
++- [S9] 當標記值是 `甲，乙`(全形逗號)時,`resolve_test_refs` 與 `_test_names_of` 都應當成一支名稱。[test: t_test_ref_split_rules]
++- [S10] 當名稱含方括號、控制字元或以減號開頭時,推送前合約測試閘應判壞名。[test: t_test_name_ok_rules]
++- [S11] 當計劃有懸空條款時,規格閘與處置閘第五步的條款綁定那一行不應出現 ✓,應印 ⚠ 與「懸空 k 只提醒不擋」並逐條列出懸空的編號與名稱,回傳碼應跟改前一樣。[test: t_clause_check_marks_hanging]
++- [S12] 當計劃的條款全都懸空時,規格閘跑測試那一行應講「綁了測試但全懸空」。[test: t_clause_check_marks_hanging]
++- [S13] 當 node-jest 平台展開名稱 `shows error (500) + retry?` 時,指令應是 `npx jest -t 'shows error \(500\) \+ retry\?'`。[test: t_run_cmd_name_filter_escape]
++- [S14] 當 dart 平台展開同一個名稱時,指令應只加 shell 引號、不跳脫正規式字元。[test: t_run_cmd_name_filter_escape]
++- [S15] 當名稱含單引號、`$`、反引號、分號時,展開後的指令交給 shell 應剛好切出一個名稱引數。[test: t_run_cmd_name_filter_escape]
++- [S16] 當多平台設定某個平台寫了 `method_regex` 時,那個平台的掃描應用它。[test: t_multiplatform_method_regex_override]
++- [S17] 當多平台設定某個平台的 `method_regex` 寫成巢狀量詞時,應印帶平台名的警告並沿用內建。[test: t_multiplatform_method_regex_override]
++- [S18] 當 `guard bind` 給含空白的中文名稱而那支測試存在時,應寫出 `[test:web:下單後 按鈕會停用]`。[test: t_guard_bind_free_string_name]
++- [S19] 當 `guard scaffold` 給含空白的中文名稱時,應擋下並指去 `guard bind`。[test: t_guard_scaffold_rejects_free_string_name]
++- [S20] 當殺傷力配方綁的是句子名時,`guard kill` 應照平台跳脫後去跑,不應再判「test 名不合法」。[test: t_kill_free_string_name_paths]
++- [S21] 當驗證紀錄提到存活合約綁的中文句子名時,歸檔應把它列為仍受護、不歸檔。[test: t_archive_and_trace_free_string_names]
++- [S22] 當筆記綁的句子名指得到真測試時,推送前的筆記測試綁定檢查(跟 doctor S20 同一支判法)應放行。[test: t_note_test_refs_free_string]
++- [S23] 當筆記綁的句子名找不到測試時,推送前的筆記測試綁定檢查(跟 doctor S20 同一支判法)應列出它並擋下。[test: t_note_test_refs_free_string]
++- [S24] 當綁定是既有的識別字名(C# `PayGuardTests.Rejects_Zero`、Kotlin `` `rejects zero amount` ``、Python `t_pay_guard`)時,判定結果與展開的測試指令應跟改前一樣。[test: t_identifier_test_bindings_unchanged]
++- [S25] 當讀做法 7 列的提示文字、程式註解、手冊與筆記時,應看不到「識別字名才可綁、含空白 NO MATCH」的舊說法。[manual: 照做法 7 的清單逐處 grep「NO MATCH」「識別字名才可綁」「method 維持識別字」「必須是識別字」「識別字名」,只剩 Maestro 那幾處與 scaffold 的識別字限制,且各處指到本篇]
++- [S26] 當測試檔有 `it('when offline, shows banner')` 或 `it('顯示 [草稿] 標籤')` 時,掃描不應把它收進測試集合。[test: t_js_free_string_test_names_discovered]
++- [S27] 當條款綁 `when offline, shows banner` 這一格而切出來的兩段都不是真測試時,條款綁定應判懸空,並印出含逗號的測試名綁不了的提示。[test: t_clause_binds_free_string]
++- [S28] 當驗證紀錄提到存活合約綁的中文句子名時,`guard trace` 應列出那篇驗證紀錄。[test: t_archive_and_trace_free_string_names]
++- [S29] 當 Jest 測試檔依序有 `it('開啟 http://localhost:3000 首頁')`、`it('GET /api/* 回 200')`、一行 `/** 說明 */`、`it('結帳')` 時,掃描應收到全部三支測試。[test: t_js_comment_strip_keeps_strings]
++- [S30] 當 JS 測試檔有 8000 行各帶一個沒有結尾的 `/*` 時,掃描應在 1 秒內做完。[test: t_js_comment_strip_linear]
++- [S31] 當測試檔有 `it('下單' + suffix, () => {})` 時,掃描不應收 `下單`。[test: t_js_title_partial_or_member_not_collected]
++- [S32] 當測試檔有 `expect(/\d/.test('hello world'))` 時,掃描不應收 `hello world`。[test: t_js_title_partial_or_member_not_collected]
++- [S33] 當標題字面含 `中` 這類跳脫,或 Dart 標題含 `$name` 插值時,掃描不應收。[test: t_js_title_partial_or_member_not_collected]
++- [S34] 當 Kotlin 測試是 `` fun `when offline, shows banner`() `` 時,掃描應照舊收到這個名稱。[test: t_kotlin_backtick_comma_name_still_collected]
++- [S35] 當 JS 標題是 `` `useFoo` 回傳 x `` 時,掃描收到的名稱與 `[test:]` 解出的名稱應一字不差。[test: t_backtick_strip_only_full_wrap]
++- [S36] 當 node-jest 平台綁 `登入`、程式裡另有 `登入後 看得到訂單` 時,規格閘應判這支弱證據並列出撞到的標題。[test: t_name_filter_collision_not_green]
++- [S37] 當同一個撞名綁定走推送前合約測試閘時,應判證不出、不判綠。[test: t_name_filter_collision_not_green]
++- [S38] 當 node-jest 平台宣告了 `Login` 與 `login` 兩支時,綁 `Login` 應算撞名。[test: t_name_filter_collision_not_green]
++- [S39] 當 playwright 平台展開名稱 `/api/` 時,斜線應被跳脫。[test: t_run_cmd_name_filter_escape]
++- [S40] 當多平台的殺傷力配方 test 欄是 `API: 逾時 顯示重試`、platform 欄是 web 時,guard kill 跑的名稱應是整串 `API: 逾時 顯示重試`。[test: t_kill_free_string_name_paths]
++- [S41] 當單平台專案的處置帳證據寫 `test:API: 逾時 顯示重試` 時,應整串當名稱去查。[test: t_dispositions_free_string_names]
++- [S42] 當單平台筆記綁 `API: 逾時` 時,`_test_names_of`(doctor S20 與 note-shape 用的那支)應回原樣的 `API: 逾時`。[test: t_test_ref_split_rules]
++- [S43] 當多平台設定寫 `[test:py：test_alive]`(全形冒號,py 是平台)時,條款綁定與 note-shape 都應解成平台 py、名稱 test_alive。[test: t_test_ref_split_rules]
++- [S44] 當配方不在合約清單、合約綁的是含空白與單引號的句子名時,提醒印出的 `lumos guard bind` 指令交給 shell 應切出正確的引數。[test: t_kill_free_string_name_paths]
++- [S45] 當名稱長度是 200、201 字或全是空白時,`_test_name_ok` 應依序判合法、壞名、壞名。[test: t_test_name_ok_rules]
++- [S46] 當條款綁 `購物車.下單後 按鈕會停用` 而程式裡只有 `下單後 按鈕會停用` 時,條款綁定應判懸空。[test: t_clause_binds_free_string]
++- [S47] 當 playwright 平台的 `src/app.ts`(不是測試檔名)裡有 `test('x', …)` 時,掃描不應收。[test: t_playwright_free_string_names_discovered]
++- [S48] 當條款行在反引號裡寫了 `[test:…]` 範例時,規格閘要跑的測試應只取看得見的那幾支,跟條款綁定判狀態用同一份文字。[test: t_spec_gate_items_ignore_inline_code]
++- [S49] 當綁的名字被跳過、另有一支掃描不收(skip、帶 ${ 的樣板、.each、含逗號或方括號、沒還原的跳脫)但篩選選得到的標題含這個名字時,推送前合約測試閘應判證不出、不判綠。[test: t_name_collision_sees_skipped_titles]
++- [S50] 當 playwright 平台展開名稱時,`-g` 應錨在結尾 `(?:^|\s)<跳脫後>$`。[test: t_playwright_name_filter_anchored]
++- [S51] 當 playwright 平台另有標題結尾是這個名字的測試時,應算撞名;describe 標題、檔名、開頭相同的標題(relogin)不算。[test: t_playwright_name_filter_anchored]
++- [S52] 當 vitest 或 playwright 的輸出是對到測試或對不到測試的實測樣式時,跑過的證據應各自判跑過與沒跑過;vitest 樣式在 256KB 單行上應在 1 秒內。[test: t_ran_evidence_vitest_playwright]
++- [S53] 當名稱是「`a` and `b`」、多平台寫 `wbe：x`(全形冒號)或處置帳寫 `test:wbe:x` 時,應依序不拆殼、整串歸預設、判不在 platforms。[test: t_test_ref_split_edges]
++- [S54] 當懸空條款超過 15 條時,條款綁定應列 15 行、另一行講還有幾條。[test: t_clause_hang_list_capped]
++- [S55] 當 Kotlin、Swift 的字串裡有 `/*` 時,c-style 剝註解應保留字串、不吞掉後面的測試。[test: t_comment_strip_keeps_strings_all_c_style]
++- [S56] 當測試檔有 8MB 的字串字面時,剝註解的額外記憶體應小於 300MB、2 秒內。[test: t_comment_strip_big_string_memory]
++- [S57] 當 guard kill 的配方名稱會撞名時,應跟推送前閘用同一支判定、不跑並記撞名。[test: t_guard_kill_shares_collision_check]
++- [S58] 當 guard settle 或 guard bind 收到前後帶空白、或多平台裡帶冒號又沒有平台的名稱時,應去頭尾空白、擋冒號名。[test: t_bind_name_problem_shared]
++- [S59] 當 Playwright 舊綁定的測試宣告在不合檔名錨的檔裡時,doctor 應講檔名錨與 file_name_match;寫了 file_name_match 應掃得到。[test: t_playwright_file_anchor_hint]
++- [S60] 當被推版本的原始碼把標題寫成跳脫過的 `don\'t submit` 時,找名稱 `don't submit` 應找得到。[test: t_test_in_tree_escaped_title]
++- [S61] 當條款的 `[test:]` 值裡有行內反引號時,應照字面綁,反引號包住的 `[test:]` 範例照舊不算。[test: t_clause_test_tag_keeps_inline_code]
++- [S62] 當 Playwright 測試本體裡寫 `test.skip('原因')` 時,掃描不應把它當成宣告。[test: t_playwright_runtime_skip_not_collected]
++- [S63] 當殺傷力配方 test 欄寫 `android:Foo`(未定義平台、冒號後緊接名稱)時,應照舊剝掉前綴;冒號後有空白時應整串保留。[test: t_kill_method_name_prefix_rules]
++- [S64] 當在 Windows 上名稱含 `&`、`|`、`<`、`>`、`^`、`%`、`"`、`!` 這幾個 cmd.exe 特殊字元時,名稱應判不合法。[test: t_test_name_ok_windows_shell_chars]
++- [S65] 當 Playwright 平台展開名稱時,`-g` 應是 `\s<跳脫後>(?:\s@\S+)*$`,包裝字元裡不應有 Windows cmd.exe 的特殊字元與 `<`。[test: t_playwright_tail_tags_and_own]
++- [S66] 當 Playwright 測試帶 tag、或跟它所在的 describe 同名時,推送前合約測試閘應照常跑、判綠,不判撞名。[test: t_playwright_tail_tags_and_own]
++- [S67] 當另一支測試的標題自己寫著尾巴的 @tag(login @smoke)時,對 login 應算撞名。[test: t_playwright_tail_tags_and_own]
++- [S68] 當 describe 標題加測試標題拼起來等於綁的名字時,Jest 與 Playwright 都應算撞名。[test: t_name_collision_describe_plus_test]
++- [S69] 當字串標題頭尾有空白時,掃描不應收。[test: t_titled_names_with_edge_spaces_not_collected]
++- [S70] 當 Kotlin、Swift、C#、Dart 的多行字串裡有單獨一個 `/*` 時,剝註解不應吃掉後面的測試。[test: t_comment_strip_multiline_strings]
++- [S71] 當 guard kill 實跑、配方名稱會撞名時,那條配方應不跑、記錯誤並講撞名。[test: t_guard_kill_collision_cli]
++- [S72] 當 guard settle 實跑收到不合法名稱時,應回 2、守衛紀錄不動;收到前後帶空白的名稱時應去空白後寫入。[test: t_guard_settle_name_checks_cli]
++- [S73] 當多平台寫入名稱是 `web:下單 停用`、`API：逾時`(全形)時應放行,是 `API: 逾時` 時應擋,跟讀取端同一支判法。[test: t_bind_name_problem_pass_and_fullwidth]
++- [S74] 當條款行有幾萬字沒收尾的測試綁定標記時,算看得見的字應在 1 秒內。[test: t_clause_visible_linear]
++- [S75] 當同一個平台有好幾條懸空綁定時,檔名錨提示應只掃一次這個平台的測試檔。[test: t_anchor_hint_scans_once]
++- [S76] 當讀擋下訊息的白話規則時,應講到 200 字與 Windows 那幾個字元。[test: t_test_name_rule_text_complete]
++
++
++## 實務隱患
++
++- 已排除:金流:不碰付款、點數或任何金額。
++- 已排除:對外送出:不寄信、不呼叫外部服務,跑的測試指令照舊只在本機。
++- 已排除:不可逆:不刪不搬任何資料,還原提交程式就回到舊行為;但還原後新寫的句子名綁定會被舊版擋推送,收拾辦法寫在〈回退〉。
++- 守衛面:會碰。綁定合法性、推送前合約測試閘、規格閘、guard kill 的「拒注入」白名單都在這次範圍:
++  - 放寬白名單之後,指令安全靠 `shlex.quote`(本來就有)加「不以減號開頭」;所有印給人貼的指令(配方提醒、settle 補救指令)一律經 `_kill_cmd_arg`。測試要造含單引號、`$`、反引號、分號的名稱,確認展開後 shell 切出來剛好一個引數(S15、S44)。
++  - 假綠,選中多支:靠做法 4 的事前撞名檢查,兩道閘都做(S36–S38)。選中零支:python 與 node-jest 靠「跑過的證據」;vitest、playwright、dart 靠測試工具回非零或過濾探針,實作時實跑補證據樣式(做法 4)。
++  - 掃描放寬可能把字串裡剛好長得像 `it('…')` 的東西收成測試:字串照留(名字就在字串裡),只靠「呼叫前不能是點號或識別字」「字面後要接逗號或右括號」兩條收窄。
++- REVISIT:2026-12-15 查消費專案有沒有「字串裡的假 it(…) 被當成真測試、讓綁定判成綁好」的案例,有就改成只認行首或分號後的呼叫。
++- 效能:剝註解改成一趟線性(S30 的 8000 行沒結尾 `/*`,現行要 11 秒);字面主體限 200 字,一行塞滿 `it('` 的壓縮檔也是線性;Playwright 補檔名錨,不再掃整個 repo。實作後另量一次 order-web 整個 repo 跑 `lumos doctor` 的總時間,跟改前比,寫進驗證紀錄。
++- 耗時:原本因為懸空而不會真跑的綁定,上線後每支都會起一次測試工具(示範的 15 條就是 15 次 `npx …`,`bound_tests.parallel` 預設 1、序列跑)。不改閘的做法,只在提示文字講清楚(做法 7),綁得多就開並行。
++- 相容:本 repo 的筆記一字不改照讀(2026-10-15 grep 本 repo 的 docs、skills、範本,`[test:` 值用全形逗號或全形冒號的 0 處)。消費專案的筆記沒有掃:用全形逗號分開兩支的寫法(`[test:登入成功，登入失敗]`)新規則下會變成一支、找不到,doctor S20 會列出,改成半形逗號即可;全形冒號前綴只要前面是已定義平台就照舊收。
++
++## 不做
++
++- 名字含半形逗號或方括號的測試不收:那要新語法(引號包名),先前同類的新語法被否決過(要改解析、索引、doctor 好幾處,舊筆記也讀不懂)。這種測試改名,或條款寫 `[manual:]`。
++- REVISIT:2026-12-15 數消費專案的筆記與測試檔:有沒有因為名稱含逗號或方括號而綁不上的,有 3 筆以上就另開計劃談引號包名。
++- Maestro 的 `name:` 多字名不收:Maestro 跑測試是指定檔案、不靠名稱篩選,而 `\s*$` 行尾錨是為了擋部分擷取的假證據才加的,這次沒有它的真專案可驗。
++- `guard scaffold` 不收句子名(它拿名字產程式碼和檔名)。
++- 「只換測試綁定不算寫說明」的豁免不放寬到句子名:句子名剛好等於一句說明,就能把說明藏進綁定繞過寫回落點([[Projects/只換測試綁定不算寫說明_計劃]] 的撤除條件講的就是這個)。它的判法(`_NODEHOME_TAG_NAME_RE`)只收單一識別字,所以不只中文,英文句子名(`shows error (500)`)也不豁免:換一個句子名會被當成寫了說明,要寫進那支檔的家,方向是多擋,安全。
++- 派工鏡頭備援段只列識別字名(餵給審查席的文字,句子名不轉印),句子名只算數字。
++- Kotlin 反引號名經 Gradle `--tests` 跑的跳脫不在這次範圍(那是 Gradle 的萬用字元,不是正規式)。
++- 不在 `CODE_SKIP_DIRS` 補 `.next`、`coverage`、`out`:那張表全程式共用,Playwright 補了檔名錨之後已經不掃建置產物。
++- 不做「跨 describe 邊界的撞名」偵測(做法 4 已寫進天花板)。
++- 懸空在風險高時要不要擋,這次不改(待決問題 Q1)。
++
++## 回退
++
++- 一個功能一個提交,還原那個提交即可,程式回到舊行為。**還原後的殘局**:新版寫下的句子名,在舊版下會判懸空或壞名,而且不只提醒,有三條路會擋:
++  1. ★INVARIANT★ 合約行綁的句子名(`guard bind`、`guard settle` 或手寫):舊版推送前合約測試閘判紅,碰到那些節點的推送被擋;修正關卡第 3 項也不過。
++  2. 代碼審處置帳裡 `test:<句子名>` 的證據:舊版判不在測試集合裡,擋推送。
++  3. 多平台每個平台設定裡寫的 `method_regex`:舊版默默不讀、不警告,那個平台的綁定跟著靜默懸空。
++- 找出殘局:還原前先跑 `lumos guard list`(列出綁了哪些名字)與 `grep -rn "test:" governance/`(處置帳),挑出名稱含空白、中文或標點的;設定檔看 `platforms` 底下有沒有 `method_regex`。處置:合約行的句子名改回識別字測試名,或拿掉綁定改寫 `[manual:]`;處置帳在途的那筆重記;`method_regex` 搬回單平台的 `test` 欄位,或接受懸空。
++- 部分收回要寫端與讀端一起收:寫入名稱的路徑(`guard bind`、`guard settle`、手寫)和判定名稱的路徑(掃描、`_test_name_ok`、`_split_test_ref`、做法 6 表格各入口)共用同一支規則。只把其中一處(例如 guard kill)改回舊白名單,會變成寫得進、判不過。要收就一起收;只收掃描時,`guard bind` 要同時改成先查測試存在才寫。
++- RETIRE-IF 觸發時收回的範圍也是這樣:JS 三家與 Dart 的掃描收回只認識別字,同時 `guard bind`、`guard settle` 收回 `IDENT_RE`;`_test_name_ok`、`_split_test_ref`、剝註解的新做法、撞名檢查、規格閘的懸空警示保留(放寬前後都正確);已綁的句子名照上面「找出殘局」處理。
++
++## 實作紀錄(2026-10-15)
++
++- FACT:名稱篩選都是拿正規式比對完整名稱的子字串。Jest 30.5.2 的 -t 不分大小寫、describe 與測試標題用空白連;Vitest 5.0.4 的 -t 分大小寫、用「 > 」連,對不到也回 0、印「Tests  2 skipped (2)」;Playwright 1.64.1 的 -g 不分大小寫、標題路徑用空白連,頭尾都是斜線的字串當正規式字面(跳脫斜線後照字面比),對不到印 No tests found 並回 1;-g 比的字串含專案名、檔名、describe 與標題(-g login 連 login.spec.ts 整檔都選中、-g chromium 選中整個專案),錨在結尾只選中標題結尾是它的;比的字串在標題後面接上 tag(含 describe 繼承的),標題頭尾的空白不修剪,describe 與測試同名時錨定只選中那支測試 [來源:外部] [confirmed:2026-10-15] [查:order-web 的副本實跑 -t/-g;Jest 用 npx 快取裡的 30.5.2]
++- 撞名照計劃一律不分大小寫數(Vitest 其實分,多數一點只會比較嚴)。跑過的證據補了 node-vitest、playwright 兩筆(樣式照上面實測的輸出);Dart 本機沒有環境,沒補。
++- 跟計劃不一樣的地方:
++  - 條款綁的測試名改成實際寫的 22 支(一支測試涵蓋幾條條款);S22、S23 用推送前的筆記測試綁定檢查驗(跟 doctor S20 同一支判法);S20 驗的是 guard kill 判名稱與展開指令的那幾支函式,沒有開沙盒整個跑一次。
++  - 處置帳單平台寫成 `識別字:識別字`(沒有空白)時,照舊回「沒開多平台」(保留既有測試鎖的提示);句子名整串照收。
++  - `guard bind` 在多平台專案、名稱有冒號、沒帶 `--platform` 時擋下(不然寫進去的 `[test:API: x]` 會被當成平台前綴、判壞名)。
++  - 既有測試 `t_dart_profile_discovery` 有兩支同名,前一支被後一支蓋掉、從沒跑過;前一支的內容改寫成 `t_dart_profile_discovery_titles`。
++  - 做法 8 之外還翻了四支既有測試的期望:殺傷力配方提醒兩支(`foo bar` 從「綁不了」改成給加引號的 bind 指令)、配方判壞名那支(`a;b` 改成 `a[b`:分號在名稱規則下合法,安全靠 shell 引號)、note-shape 行歸屬那支(`_test_names_of` 改回原字串後名稱是 `x：t_pre`)。一行一支提醒的去重另加 `_ns_wd_binding_norm`(`t_one` 與反引號包住的同一支照舊算一支)。
++  - 實作時跑這篇的規格閘抓到一個既有的洞:要跑的測試是從條款原行取 [test:],反引號裡的範例也被拿去跑、判紅(條款綁定判狀態時本來就會略過反引號)。改成兩處都只取看得見的字,補條款 S48。
++  - ⚠ 那一行照舊寫「N 條全標」(既有處置閘測試鎖這幾個字),後面接「懸空 k 只提醒不擋」。
++  - `[test:]` 解析加上「整串被一對反引號包住才拆殼」之後,條款與合約裡寫 `` [test:`Kotlin 名`] `` 從判壞名變成配得到(原本反引號沒拆、過不了白名單)。
++- 改動前跑新測試(舊程式):22 支裡 20 支紅;兩支綠的是不變性守衛(Kotlin 反引號名照收、識別字名照舊)。故障變體 13 個(剝註解改回、撞名拿掉、跳脫拿掉、懸空照印 ✓、過濾套所有 profile、邊界改回 ASCII 的 `\b`、kill 見冒號就切、`_test_names_of` 吃空白、字面不要求接逗號、點號後綴不收窄、單平台處置帳見冒號拒、bind 留識別字、多平台不套覆蓋)各自讓對應測試翻紅。
++
++## 合約候選
++
++(空)
++
++## 審計修正紀錄
++
++- r1(2026-10-15,六席):38 條,major 17、minor 21/blocking 17/根因集中在三處:剝註解不認字串(五席同報)、撞名防線不存在(三席)、冒號切法四處各寫一份;另有落點寫錯、回退殘局沒交代。全部折入,無駁回。卷證:`governance/review-reports/測試名收自由字串/`
++- 代碼審 r1(2026-10-15,七席):34 條,major 8、minor 26/blocking 7/根因:撞名只看可綁定的標題、Playwright -g 比整串路徑、幾道守衛沒有測試守、切法與剝註解另寫一套;全部折入(改法見卷證 r1-intake),無駁回。卷證:`governance/review-reports/code-測試名收自由字串/`
++- 代碼審 r2(2026-10-15,七席):31 條,major 11、minor 20/blocking 10/根因:Playwright 結尾錨定沒算到 tag 與 describe 同名、多行字串裡的 /* 被當註解、切法與欄位掃描又各寫一份、guard kill 與 settle 的測試只比結構;全部折入(改法見卷證 r2-intake),無駁回。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index 4f97a94a..f74953a7 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -142,10 +142,16 @@ WHY:中斷一律結束:清單上的每一支呼叫被訊號殺掉(128 以上)就
+ 
+ PITFALL:掛鉤被砍或按 Ctrl-C 之後,全套測試的各片變成 ppid=1 的孤兒繼續跑(最多八分鐘,輸出寫進已刪的資料夾),兩個測試 log 也留在 TMPDIR [出處:第一輪代碼審併發席,/bin/bash 3.2.57 實測四片全成孤兒;第二輪代碼審併發席、架構對齊席:只對掛鉤送 HUP 時 8 片全活著;第三輪代碼審併發席、邊界席:片的子行程沒收、子殼的 HUP 陷阱沒測試守] [根因:掛鉤的陷阱只對 `jobs -p` 列出的直接子行程(跑測試的子殼)送 TERM,各片是孫行程;非互動 bash 用 & 起的背景命令又忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到;主殼與子殼原本都沒接 HUP;兩個 log 用 mktemp 建在 `$_PP_TMP` 外] [修法:跑測試的子殼 `run_group` 自己接 TERM 與 HUP,用主殼同一支 `_pp_kill_jobs`(`jobs -p`)收掉它起的各片——不自己記 pid 收,「& 起片」與「記下 pid」之間有空窗,訊號落在中間會漏收剛起的那片;各片起的時候先換到自己的行程群組,`_pp_kill_jobs` 對每個工作整組送 TERM(不是組長才退回只送本人),連片自己起的子行程一起收(第三輪代碼審併發席:只收片本人時,片的子行程全成孤兒,起片後幾毫秒內收到訊號時連片也會漏);主殼也接 HUP(129);測試看那一片的 pid 在掛鉤結束後有沒有消失,不靠「睡幾秒再看有沒有寫下結束標記」的計時窗口(負載下會假綠);兩個 log 改放 `$_PP_TMP` 內,紅時要給人看的那份先複製到外面再印路徑;測試起掛鉤時先把 SIGINT 裝回預設,不然測試跑在推送前閘的背景分片裡、繼承「忽略 SIGINT」,bash 的 INT 陷阱裝不上,測 Ctrl-C 的斷言會假紅] [test:t_prepush_interrupt_stops_every_gate] [test:t_prepush_test_logs_inside_tmp]
+ 
+ PITFALL:整組只送一發 TERM 時,送的那一刻正在 fork 的片(或它的子行程)生出來的孩子變成 ppid=1 的孤兒 [出處:第四輪代碼審併發席,/bin/bash 3.2.57 模擬掛鉤啟動後 20–45 毫秒送 TERM] [根因:訊號是逐一投遞給群組當下的成員,剛生出來的孩子已經在群組裡、卻沒收到那一發;之後沒人再送] [修法:`_pp_kill_jobs` 送完第一發後短等 0.2 秒,再對每個群組送第二發,群組已空的錯誤吞掉;測試用「收到 TERM 才生孫行程」的假片讓這個情形每次都成立] [test:t_prepush_interrupt_stops_every_gate]
+ 
+ PITFALL:在原生 Windows 的 Python 上推送時,全套測試每一片一起跑就 AttributeError、被判成有紅,推送永遠被擋,「紅的是這幾支」又是空的 [出處:第四輪代碼審正確性席、併發席、通才席] [根因:換群組那段無條件呼叫 `os.setpgid`,Windows 的 Python 沒有它;就算繞過,Windows 的 `os.execv` 是起新行程後讓舊的立刻回 0,測試沒跑完就判綠] [修法:有 `setpgid` 才換群組再 `exec`(`setpgid` 失敗就不換、照樣 `exec`);沒有就在同一個行程裡用 `runpy` 跑測試檔,離開碼照實傳出] [test:t_prepush_interrupt_launcher_without_setpgid]
+ 
+ WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓換群組那段與其他每個 `$PY` 閘一啟動就回 0;掛鉤不為這件事加機制 [出處:第四輪代碼審資安席] [因:要先刻意放一支 sitecustomize、再讓推送行程的環境指過去才成立,屬刻意設定環境的手法,在工具鏈的資安範圍外(工具鏈本身的資安只看提示注入、讀寫與執行越界、非刻意的一步繞過;見 Systems/pitfalls-code-loop 工具鏈資安範圍 RULE);非刻意殘留、別的程序帶進來的 PYTHONPATH 屬那條 RULE 的第 ③ 類、照審;而且每個 `$PY` 閘都一樣,不是換群組那段獨有、修補前就有] [不選:整支掛鉤統一給 `$PY` 加 `-I` 或清掉 PYTHONPATH——改動面是每一支閘,換到的只是「已經能改環境的人」多走一步]
+ 
+ 找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的四道怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
++
++## 名稱篩選的跳脫與撞名(2026-10-15)
++
++- `_run_cmd_expand` 依平台 `name_filter` 跳脫:regex(Jest/Vitest -t)跳脫正規式字元與斜線再加 shell 引號;regex_tail(Playwright -g)跳脫後錨在結尾 `(?:^|\s)<名字>$`(-g 比專案名、檔名、describe、標題整串);plain(dart)與 ident 只加引號。Windows 上名稱含 `& | < > ^ % " !` 判不合法(cmd.exe 不認單引號)。 [test:t_run_cmd_name_filter_escape]
++- `_run_bound_tests` 對名稱篩選型平台先做靜態撞名檢查(`_name_collision_reason`,guard kill 也用):數「篩選選得到的全部標題」(含 it.skip、帶 ${ 的樣板、.each、含逗號的標題),別的標題含這個名字(不分大小寫)就不跑、記證不出(不是綠),規格閘與推送前閘一致。跑過的證據補了 node-vitest 與 playwright 兩筆實測樣式。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_name_filter_collision_not_green]
++- 推送前合約測試閘的名稱合法性改用 `_test_name_ok`;`類別.方法` 拿最後一段比,只在點號兩邊都是識別字時才用。 [test:t_test_name_ok_rules] [test:t_clause_binds_free_string]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+index 4dd60bef..0b3d6d4f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
++++ b/docs/lumos-toolchain-knowledge/Systems/guard-kill.md
+@@ -129,10 +129,15 @@ about_code:
+ 
+ ## 實作位置
+ 
+ `scripts/lumos`：`_kill_read_recipes`/`cmd_guard_kill_add`/`_kill_run`/`cmd_guard_kill` + INV_TAG_RE 擴 kill + KILL_REF_RE + gov/gitignore/cochange 三處同步。測試 `t_guard_kill`。挑配方 `_guard_kill_pick`(共用 `_kill_norm_prefix`、`_kill_match_prefix`、`_guard_kill_rm_rows`)、試跑 `_kill_add_try`、P2 第二個提醒 `_kill_p2_survived`/`_kill_log_latest`/`_kill_file_changed_since`、跳過規則 `_kill_note_skipped`、測試清單比對 `_kill_test_binding`/`_kill_binding_msg`/`_kill_find_contract`(kill-add 與 guard audit 經共用的 `_contract_locate` 間接用它)/`_kill_add_warn_binding`/`_kill_p2_unbound`/`_doctor_p2_unbound`。
+ 
+ ## 相關模組
+ 
+ - [[Projects/guard殺傷力驗證_計劃]]
+ - [[Systems/check-t-sentinel]]
+ - [[Systems/test-profile-multiplatform]]
++
++## 句子名的配方(2026-10-15)
++
++- 配方的名稱合法性改用 `_test_name_ok`(句子名不再判「test 名不合法」),跑的時候照平台 `name_filter` 跳脫;跑之前跟推送前閘共用撞名判定(`_name_collision_reason`),撞名的配方不跑、記錯誤——篩選連帶選中別支時,壞法打紅的可能是別支,殺傷力證不出 [test:t_guard_kill_shares_collision_check];未定義、長得像平台名、冒號後緊接名稱的前綴(`android:Foo`)照舊版剝掉 [test:t_kill_method_name_prefix_rules];`_kill_method_name` 改走 `_split_test_ref`,多平台 test 欄的前綴是已定義平台才剝(`API: 逾時 顯示重試` 整串保留)。 [test:t_kill_free_string_name_paths]
++- 配方不在合約清單的提醒:印的 `lumos guard bind` 指令名稱經 `_kill_cmd_arg` 加引號;`guard settle` 收句子名,失敗時印的補救指令同樣加引號。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_kill_free_string_name_paths]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+index 9d3eefaf..800e722b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
++++ b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+@@ -143,21 +143,21 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開
+ | linter | 用途 | 備註 |
+ |---|---|---|
+ | **sqlfluff** | 多方言(含 T-SQL)靜態解析 + auto-fix,免連 DB | LandmarkMember/KDS 的 `.sql` 適用;經 `lumos sqlfluff-sarif` 橋接進 lint-adapter |
+ 
+ ## Flutter/Dart（registry: `pub:<pkg>`；2026-07-26 補，taroko_app 接入調研）
+ 
+ - **flutter_lints**（官方推薦基線,Effective Dart 對齊）→ 進階嚴格版 **very_good_analysis**（企業級,強制 const/顯式型別）。
+ - **custom_lint**:自建規則框架(riverpod_lint 等生態基座)。**DCM**:複雜度/程式碼度量(商用)。
+ - **架構軸(import 邊界,Dart 3.10+ 才可用)**:`import_rules`(2026/02,YAML 宣告 import 約束進 dart analyze)｜`import_lint`(2026/04)｜`barrel_file_lints`(feature 分層/barrel 規則)。
+ - ⚠ **SDK 門檻實錘(taroko_app)**:Dart 2.19(pre-Dart 3)上述架構套件與新版 VGA 全裝不了——舊 SDK 專案的架構軸=升級 Flutter 後解鎖;過渡期用 analysis_options 手開嚴格規則(零依賴不受版本卡)。
+-- **Check T**:dart profile 已內建(test('id')/testWidgets('id') 識別字名錨+*_test.dart 檔名錨)——Dart 測試可正式綁 [test:] 走合約鏈。
++- **Check T**:dart profile 已內建(test('名')/testWidgets('名') 標題整串比對(2026-10-15 起收句子名,見 [[Projects/測試名收自由字串_計劃]])+*_test.dart 檔名錨)——Dart 測試可正式綁 [test:] 走合約鏈。
+ - SARIF 橋:`dart analyze` 無原生 SARIF → 2026-09-14 起用 `lumos dart-sarif` 轉(`dart analyze --format=json {LINT_FILES} 2>/dev/null | python3 scripts/lumos dart-sarif --out {LINT_SARIF_OUT}`),Dart 3.13.3 實跑過閘。
+ 
+ ## Swift/iOS（registry: `github:<owner>/<repo>`；2026-09-08 補，★尚無 Swift 消費端，未實裝跑過★）
+ | linter | 用途 | 備註 |
+ |---|---|---|
+ | **SwiftLint** | 風格＋最佳實踐（200+ 規則，含 force_unwrap/force_try/implicitly_unwrapped 等安全類與 cyclomatic_complexity） | `github:realm/SwiftLint`；★內建 `swiftlint --reporter sarif --output <檔>`★，可直接進 `.lumos/lint.json`；已知 SARIF 小坑：uri 曾輸出絕對路徑、startColumn 型別（issue #5698/#5699），接進去先拿一份 SARIF 對照 diff 行號對不對 |
+ | **SwiftFormat**（或 Apple **swift-format**） | 格式；二選一 | `github:nicklockwood/SwiftFormat`；swift-format 自 Swift 6 隨 toolchain 附帶，零安裝但規則少 |
+ | **Periphery** | 死碼（未用的型別/函式/參數；SwiftPM 與 Xcode 專案都吃） | `github:peripheryapp/periphery`；社群公認 Swift 死碼首選；輸出格式為 xcode/json/csv，無 SARIF→要進 lint.json 得自寫小橋（同 sqlfluff-sarif 模式），未做 |
+ | Xcode 內建 **Static Analyzer**／**Strict Concurrency**（`-strict-concurrency=complete`） | 併發軸主力：資料競爭、Sendable 違規在編譯期抓 | 隨 toolchain；不是獨立 linter，但 Swift 6 語言模式把大半「idioms 不可機檢」條目變成編譯錯誤——新專案優先開 |
+ | Harmonize | 架構 lint（見下方架構 lint 品類） | 已列 |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-write.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-write.md
+index 5a786380..5126f808 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-write.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-write.md
+@@ -156,10 +156,14 @@ about_code:
+ - WHY:兩支指令整段讀—改—寫都包 `_vault_write_lock`(decision-add 當時沒鎖;2026-10-12 起所有讀改寫開頭欄位的入口都先拿同一把寫入鎖,見下一行) [出處:設計審 待決問題改存開頭欄位 r1 四席] [因:decision-add 同時起跑 8 個實測只留下 6 條;題號是「最大號加 1」,沒鎖會重號,重號在嚴格讀法下整份讀不懂、規格閘整份擋] [不選:照抄 decision-add] [test:t_qfm_commands_write_and_verify]
+ - WHY:讀改寫開頭欄位的入口一律先拿寫入鎖(照鄰居「`cmd_*` 拿鎖再叫 `_*_locked`」的寫法;r2 曾用裝飾器,r3 架構席指出是第二種寫法而改回),`atomic_write_verify` 沒拿這個筆記庫的鎖就不寫 [出處:代碼審 code-待決問題改存開頭欄位 r1、r2 併發、正確性、合約圖譜、通才四席] [因:第一輪只補決策三支,第二輪又漏了 reindex --all、amend、決策引用、守衛綁定,逐支補會一直漏;改成寫入函式本身檢查,漏包的在測試裡就紅] [不選:逐支加鎖、保留後寫蓋先寫] [代價:鎖殘留時這些指令會等 60 秒才回「擋下」rc2(守衛子指令在分派層統一接,讀寫失敗也一併回擋下 rc2,只有解碼錯誤照舊 rc1);decision-amend 只鎖讀改寫那段,git fetch 與遠端比對在鎖外;讀取符號連結照常，直到真正寫入才由共用原語拒絕符號連結與硬連結(原子換名會把連結換成一般檔,一篇悄悄分成兩份;代碼審 r5、r7 G1/C6),判在不在庫裡只解析它所在的資料夾] [test:t_qfm_frontmatter_writers_take_lock,t_qfm_r8_signoff_and_write_refusal]
+ - WHY:`blocking`/`irreversible` 照字面寫 true/false,不經 `_yaml_plain_ok`/`_yaml_quote` [出處:設計審 r1 正確性與整合兩席] [因:格式化函式會把 true 加成 "true",嚴格讀法只收不加引號的布林,自己寫的會自己擋] [不選:讀法放寬收 "true"(標準 YAML 讀成字串)] [test:t_qfm_commands_write_and_verify]
+ - WHY:`question-set` 用位置參數 `鍵=值`,不用 `--field/--text` 或一次一鍵 [出處:設計審 r1 架構對齊席] [因:「改成已決要附決策」這類跨鍵規則要一次改完才驗得過;`decision=#d3` 的 # 在字中間,shell 不會當註解] [不選:一次一鍵(中間態必附不齊會被擋)] [test:t_qfm_commands_write_and_verify]
+ - 兩支指令跟其他寫入原語一樣拒寫 CRLF/BOM 的檔(`load_raw_for_edit`);讀法照樣讀得懂那種檔,所以規格閘看得到、指令寫不進去,訊息會講怎麼轉。
+ - 在 `pending_questions: []` 上加題會先把那行改成區塊起頭(decision-add 在 `decisions: []` 上會寫壞而被擋,沒照抄);定位項目沿用 `decisions_items`(加了欄位名參數);嚴格讀法是這個欄位專用的 `_pq_scan`(決策清單收多行值與子清單,文法不同,不硬掛在 `parse_decisions` 底下)。
+ 
+ ## 建計劃筆記沒有後綴時提醒(2026-10-13)
+ 
+ - WHY:`lumos new project <名>` 的名稱完全沒有底線後綴時照原名建檔,建好後提醒慣例與重建指令,不擋、不改名 [出處:[[Projects/示範回饋小修_計劃]] 代碼審 r1] [因:後端示範時照直覺只打主題,建出不合慣例的檔名;既有計劃筆記另有 _調研、_草案 等後綴] [不選:自動補「_計劃」(會改壞既有寫法,而且接著用原名下指令的人找不到這篇;建檔指令從沒改過使用者給的名字)] [test:t_new_project_warns_missing_plan_suffix]
++
++## 歸檔護欄認得句子名(2026-10-15)
++
++- `cmd_archive` 的「還護著存活合約的驗證紀錄不歸檔」改用 `_test_name_boundary_re`:名稱頭尾是英數底線才加邊界,中文頭尾的句子名也配得到(原本 ASCII 的 \b 對中文頭尾永遠配不到,護著中文名合約的驗證紀錄會被誤歸檔)。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_archive_and_trace_free_string_names]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md b/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md
+index 97acb89e..67dbbc71 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-07-02
+-updated: 2026-07-30
++updated: 2026-10-15
+ self_audit: sonnet/2026-08-21
+ about_code_stamp: batch-2026-08-23/2026-08-23/082e219ba898
+ related:
+   - "[[Systems/check-t-sentinel]]"
+ verified_by:
+   - "[[Verification/2026-07-02_multiplatform-test-binding]]"
+   - "[[Verification/2026-07-25_CheckT-Python-profile]]"
+   - "[[Verification/2026-08-21_L4交叉審計30節點清帳]]"
+   - "[[Verification/2026-09-08_iOS與Node補棧合成樣本測試]]"
+   - "[[Verification/2026-09-12_Java補棧合成樣本測試]]"
+@@ -17,42 +17,59 @@ plan_refs:
+   - "[[Projects/多平台合約測試綁定_計劃]]"
+ tags:
+   - type/system
+   - status/done
+   - scope/guards-gates
+ summary: |-
+   FLOW:load_platforms 讀 .lumos/config→{multiplatform,default_platform,platforms:{plat:{profile,root}}}→resolve_test_refs 把 [test:plat:name] 逐段解析為 (plat,name)→_platform_test_index 惰性建每平台 root+profile 的 method set/haystack→Check T/classify_invariants/cmd_archive 各 ref 對其平台判 real/fake/dangling(跨 repo)
+   KEY:單一圖譜跨平台綁測試——config 從單 test_profile 擴為 platforms 多根多 profile map;[test:plat:name] 的**平台前綴**(android/backend/maestro/playwright)★注意:平台前綴≠profile 名★——profile 名截至 2026-09-12 共 10 個鍵(csharp-xunit/kotlin-junit/java-junit/maestro/playwright/dart/python/swift-xctest/node-jest/node-vitest,其中 node-vitest 是 node-jest 的別名)——★這串每次補棧都要跟著改★:2026-09-08 加 swift/node、2026-09-11 加 python 時都漏了,2026-09-12 補回;兩者同名的只有 maestro/playwright,android 對應 kotlin-junit、backend 對應 csharp-xunit
+   KEY:向後相容以「config 有無 platforms 鍵」為信號(multiplatform bool)——無 platforms=legacy,resolve 不切分整串當方法名,舊 test_profile/裸 [test:X] 照舊
+   KEY:default_platform 規則——多平台缺省即報錯(不猜);未定義平台前綴 [test:foo:X] Check T 明確報錯(不 fallback)
+-  KEY:新增內建 profile maestro(綁 flow name:,file_must_match=^appId: 濾非flow yaml,\s*$ 錨多字 name NO MATCH)/ playwright(綁 test('id'),多字 title NO MATCH)
++  KEY:新增內建 profile maestro(綁 flow name:,file_must_match=^appId: 濾非flow yaml,\s*$ 錨多字 name NO MATCH)/ playwright(2026-10-15 起改收句子名:標題整串比對,見 [[Projects/測試名收自由字串_計劃]];maestro 刻意不跟)
+   KEY:file_must_match 是 discover 選填 knob(讀檔後去註解前過濾,.get() 相容無此鍵的舊 profile)
+-  KEY:guard bind/scaffold --platform 旗標——method 維持識別字、平台另帶,bind 寫 [test:plat:method] 去重/verify 比完整 ref;scaffold 範本/scaffold_ext/測試目錄偵測跟平台 root 走
++  KEY:guard bind/scaffold --platform 旗標——平台另帶(2026-10-15 起 bind 收句子名、名稱有冒號時必帶 --platform;scaffold 拿名字產程式碼,維持識別字,見 [[Projects/測試名收自由字串_計劃]]),bind 寫 [test:plat:method] 去重/verify 比完整 ref;scaffold 範本/scaffold_ext/測試目錄偵測跟平台 root 走
+   KEY:天花板——Check T 只驗測試識別子存在,不驗跑綠(CI 的事);E2E 要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫
+-  KEY:swift-xctest / node-jest(=node-vitest 別名) profile(2026-09-08,[[Projects/iOS與Node後端補棧_計劃]];★尚無真專案跑過,只有合成樣本測試★)=第 7、8 個 profile:SWIFT_TEST_RE 兩代並收(XCTest `func test*` 靠 lookahead 限前綴、Swift Testing `@Test` 巨集任意名,修飾詞可夾中間)+suffix 目錄模式(頂層 *Tests,pure/state 排除 *UITests,behavioral 只認 *UITests);JEST_TEST_RE 認 test/it/describe('id') 含 .only/.skip/.concurrent+檔名錨 *.test.*/*.spec.*(`__tests__/` 下無後綴檔不在錨內=天花板)+scaffold_name {m}.test [test:t_swift_profile_discovery] [test:t_node_jest_profile_discovery]
+-  KEY:dart profile(2026-07-26,taroko_app Flutter 接入)=第 6 個 profile:DART_TEST_RE 認 test('id')/testWidgets('id')(識別字名才可綁,含空白 NO MATCH 同 playwright 設計)+檔名錨 *_test.dart+comment_strip=c-style(Dart 有雙式註解)+scaffold_name={m}_test;dirs pure=test/、behavioral 含 integration_test/ [test:t_dart_profile_discovery]
++  KEY:swift-xctest / node-jest(=node-vitest 別名) profile(2026-09-08,[[Projects/iOS與Node後端補棧_計劃]];★尚無真專案跑過,只有合成樣本測試★)=第 7、8 個 profile:SWIFT_TEST_RE 兩代並收(XCTest `func test*` 靠 lookahead 限前綴、Swift Testing `@Test` 巨集任意名,修飾詞可夾中間)+suffix 目錄模式(頂層 *Tests,pure/state 排除 *UITests,behavioral 只認 *UITests);JEST_TEST_RE 認 test/it/describe('名') 含 .only/.skip/.concurrent(2026-10-15 起標題整串比對)+檔名錨 *.test.*/*.spec.*(`__tests__/` 下無後綴檔不在錨內=天花板)+scaffold_name {m}.test [test:t_swift_profile_discovery] [test:t_node_jest_profile_discovery]
++  KEY:dart profile(2026-07-26,taroko_app Flutter 接入)=第 6 個 profile:DART_TEST_RE 認 test('名')/testWidgets('名')(2026-10-15 起標題整串比對,$ 插值不收,見 [[Projects/測試名收自由字串_計劃]])+檔名錨 *_test.dart+comment_strip=c-style(Dart 有雙式註解;2026-10-15 起 c-style 剝註解認得字串)+scaffold_name={m}_test;dirs pure=test/、behavioral 含 integration_test/ [test:t_dart_profile_discovery]
+   KEY:python profile(2026-07-25,[[Projects/CheckT-Python-profile_計劃]])=第 5 個 profile:行首錨 PYTHON_TEST_RE+檔名錨 file_name_match(basename fnmatch,新欄位,與 maestro file_must_match 內容錨是兩機制)+comment_strip="none"+scaffold_name 模板;discover_test_methods 的註解剝離改語言感知(c-style 預設向後相容)——根因:原對所有語言剝 /*..*/,Python 檔中文註解/字串的巧合配對會吃掉大段內容(本 repo 實測 260→94)。新欄位放 TEST_PROFILES dict 靜態值(multiplatform 路徑繞過 load_test_profile,dict 直達兩路徑都吃到)
+   KEY:★[2026-09-12 代碼審 r1 三席同報]JAVA_TEST_RE 原本的無界中段是個洞,不是取捨★——①資安席造出可用的假證據:掛註解的誘餌方法不是 void、後面一支完全沒掛註解的空方法被 discover_test_methods 收成真測試,合約閘照樣放行(打穿 bound-tests-gate 的核心保證) ②正確性席:@DisplayName 這類帶字串的註解裡若出現 void 某某( ,真測試整支消失 ③外家席與邊界席各自量到 1MB 的檔要 43 秒,而這支掃描每次健檢與推送前都跑。修法三件一起:中段改成括號感知且不准跨 ; 與方法體大括號、上限 600 字元;java-junit profile 的 comment_strip 改 "c-style+strings"(掃描前連字串字面一起剝,新模式,其他 profile 不受影響);方法名首字允許非 ASCII。★KOTLIN_TEST_RE 同病(席位量到兩萬個註解 11 秒)也加了上限★ [test:t_java_profile_discovery,t_test_regex_scan_bounded]
+   KEY:[2026-09-12 Java 補棧]加內建 profile java-junit(exts=.java、目錄慣例照抄 kotlin-junit 的 test/androidTest)。★方法正則不能照抄 Kotlin 那條★——Kotlin 版用 [^{]*? 擋住跨方法體,但 Java 的參數化註解自己帶大括號(@ValueSource(ints = {1, 2, 3})),照抄會整支漏掉;JAVA_TEST_RE 改用非貪婪 .*?,靠「JUnit 規定測試方法必須回傳 void」收斂成「註解之後最近的一個 void 方法名」。代價:@Test 標在非 void 方法上(JUnit 會拒跑)會抓到下一個 void 方法名。補上這支 profile 的副作用是 .java 的 symbol_profile 不再被標「猜得很弱」(反查的搭檔判定找得到同語言的測試 profile 了) [test:t_java_profile_discovery]
+   DEP:[[Systems/check-t-sentinel]]
+   TEST:t_maestro_profile_discover｜t_playwright_profile_discover｜t_load_platforms｜t_resolve_test_refs｜t_multiplatform_guard_list｜t_multiplatform_doctor_check_t｜t_archive_live_guard_multiplatform｜t_guard_trace_multiplatform｜t_guard_bind_scaffold_platform(全綠(★「333」為當時全量口徑,已漂;相關 9 支測試現合計 25 斷言全過(2026-08-21 程式碼實證)★))
+   VERIFY:[[Verification/2026-07-02_multiplatform-test-binding]]
+ aliases:
+   - 多平台合約測試綁定
+ about_code:
+   - scripts/lumos
+ ---
+ # 多平台合約測試綁定（test-profile multiplatform）
+ 
+ 讓**單一知識圖譜**把 ★INVARIANT★ 的 `[test:]` 綁到**不同平台**的測試（C# xunit / Kotlin JUnit / Maestro E2E / Playwright），解決舊機制「一 repo 一 profile、只掃自己 repo」的三道牆。設計與審計全紀錄見計劃節點 [[Projects/多平台合約測試綁定_計劃]]（design-loop 4 輪收斂）。
+ 
+ ## 核心元件（scripts/lumos）
+ 
+ - `load_platforms(repo_root)`：讀 `.lumos/config.json` 的 `platforms` map（多根多 profile）。回 `{multiplatform, default_platform, platforms:{plat:{profile,root}}}`。無 `platforms` 鍵 → legacy 單一條目（向後相容）。
+-- `resolve_test_refs(inv_text, platforms, default_platform)`：`[test:...]` → `[(platform, name)]`。`platforms` 空（legacy）不切分；非空則含冒號段前綴須為已定義平台（否則 raise）、無冒號段歸 default。
++- `resolve_test_refs(inv_text, platforms, default_platform)`：`[test:...]` → `[(platform, name)]`。(2026-10-15 起每一格交給 `_split_test_ref`,規則見下面〈測試名收自由字串〉那段:單平台整串是名稱;多平台冒號前是已定義平台才是前綴,只有「半形冒號而且前面長得像平台名」的未定義前綴才 raise,其他整串是名稱。)
+ - `_platform_test_index(repo_root)`：惰性建「平台 → (method set, code haystack)」索引，Check T / `classify_invariants` / `cmd_archive` 共用（haystack 也跨 repo）。
+ - 新內建 profile `maestro` / `playwright`（見 `TEST_PROFILES`），`discover_test_methods` 新增 `file_must_match` 選填 knob。
+ - **本節點亦為 `test_profile` 機制（原 P5，`csharp-xunit`/`kotlin-junit`）的權威說明**——P5 當初未建 Systems 節點，此處一併涵蓋四 profile，不另建重複節點（L4 審計 2026-07-02 決策）。`csharp-xunit`=預設（`.cs`/`[Fact]`/頂層 `*Tests` suffix）、`kotlin-junit`=Android 單元（`.kt`/`@Test`/`src/` 下 rglob）。
+ - `guard bind` / `guard scaffold` 新增 `--platform` 旗標。
+ 
+ ## 相關系統
+ - [[Systems/check-t-sentinel]]（Check T/K 機制；本機制擴充其 discover 面為多平台多根）
++
++## 測試名收自由字串(2026-10-15)
++
++前端慣例是用一句話當測試名,舊設計「識別字名才可綁」讓示範專案 15 條條款全懸空。改法與理由在 [[Projects/測試名收自由字串_計劃]](推翻本篇原本 playwright 與 dart 的 NO MATCH 設計;多根多 profile 那條決策照樣成立)。
++
++- 名稱規則一支 `_test_name_ok`:不空、至多 200 字、不以減號開頭、不含方括號與半形逗號、沒有控制或格式字元;中文、空白、括號、冒號、引號、全形標點都可以。Windows 上另外不收 `& | < > ^ % " !`(cmd.exe 不認單引號);擋下訊息的白話是 `_TEST_NAME_RULE_ZH` 一句。 [test:t_test_name_ok_rules]
++- 一格 `[test:]` → (平台, 名稱) 一支 `_split_test_ref`(`resolve_test_refs`、`_test_names_of`、`_kill_method_name`、`_dispositions_split_test` 都改呼叫它):單平台整串是名稱;多平台第一個冒號(半形或全形)前是已定義平台才是前綴,長得像平台名的未定義前綴照擋(不猜),其他整串是名稱;只切半形逗號;反引號整串包住才拆殼。 [test:t_test_ref_split_rules]
++- 字串標題型 profile(node-jest/node-vitest、playwright、dart;`name_filter` 是 regex、regex_tail 或 plain)收第一個引數的完整字面:後面要接逗號或右括號、前面不能是點號或識別字、只認 \' \" \\ \` \$ 跳脫、Dart 的 $ 插值不收、字面限 200 字;過不了名稱規則的(含逗號、方括號)不收進集合。Kotlin 反引號名照舊。 [test:t_js_free_string_test_names_discovered] [test:t_js_title_partial_or_member_not_collected] [test:t_kotlin_backtick_comma_name_still_collected]
++- 剝註解的 `c-style`(所有用它的語言,不只這幾家;代碼審 code-測試名收自由字串 r1 編排者裁)改成一趟認字串(原樣留)與註解(刪掉),展開式正規式、沒結尾的 `/*` 刪到檔尾,時間與記憶體都線性;java 的 `c-style+strings`(刻意清空字串)不變。已知限制:JS 的正規表示式字面(`/'/`)會被當成字串開頭。 [test:t_js_comment_strip_keeps_strings] [test:t_js_comment_strip_linear]
++- playwright 補檔名錨 `*.spec.*`/`*.test.*`;自訂測試檔名的專案在設定寫 `file_name_match`(單平台 `test` 裡,多平台寫在那個平台),舊綁定在不合錨的檔裡時 doctor 會講。Playwright 的宣告字面後面要接逗號(測試本體裡的 `test.skip('原因')` 不算宣告)。 [test:t_playwright_file_anchor_hint] [test:t_playwright_free_string_names_discovered]
++- 多平台每個平台設定(跟 run_cmd 同一層)也收 `exts`/`scaffold_ext`/`method_regex` 覆蓋(`_apply_test_overrides`)。 [test:t_multiplatform_method_regex_override]
++- `guard bind` 收句子名,多平台名稱有冒號時必帶 `--platform`;`guard scaffold` 拿名字產程式碼,維持識別字,擋下時指去 guard bind;`guard trace` 找驗證紀錄改用 `_test_name_boundary_re`(英數頭尾才加邊界)。 [test:t_guard_bind_free_string_name] [test:t_guard_scaffold_rejects_free_string_name] [test:t_archive_and_trace_free_string_names]
++- 撞名(`_name_collision_reason`,推送前閘、規格閘、guard kill 共用)數的是「篩選選得到的全部標題」(`_raw_test_titles`,含掃描不收的 skip、樣板、逗號名),不只可綁定的。Playwright 的 `-g` 比「專案名 檔名 describe 標題」整串,所以 name_filter 是 regex_tail:名字錨在結尾 `\s<名字>(?:\s@\S+)*$`(容許 Playwright 接在標題後面的 tag;不用 `|`、`^`,Windows cmd.exe 會當管線),撞名只數結尾是這個名字的測試標題(比之前拿掉尾巴的 @tag;describe 同名不搶自己那支;describe 加測試拼起來等於這個名字也算);綁 describe 標題在 Playwright 上會選到零支,印 No tests found 並回 1,判紅。標題頭尾有空白的不收。剝註解另認多行字串(三個雙引號、三個單引號、C# 的 @ 加雙引號)。 [test:t_playwright_tail_tags_and_own] [test:t_comment_strip_multiline_strings] [test:t_name_collision_sees_skipped_titles]
++- 撞名的已知天花板:跨標題的比對(Jest 拿「describe 標題 + 空白 + 測試標題」整串比、Vitest 用「 > 」連,綁的名稱剛好橫跨兩段)數不到。
++- FACT:名稱篩選都是拿正規式比對完整名稱的子字串;Jest 30.5.2 的 -t 不分大小寫、describe 與測試標題用空白連;Vitest 5.0.4 的 -t 分大小寫、用「 > 」連,對不到也回 0;Playwright 1.64.1 的 -g 不分大小寫、標題路徑用空白連,頭尾都是斜線的字串當正規式字面,對不到印 No tests found 並回 1;-g 比的字串含專案名、檔名、describe 與標題(-g login 連 login.spec.ts 整檔都選中、-g chromium 選中整個專案),錨在結尾只選中標題結尾是它的;比的字串在標題後面接上 tag(含 describe 繼承的),標題頭尾的空白不修剪,describe 與測試同名時錨定只選中那支測試 [來源:外部] [confirmed:2026-10-15] [查:order-web 的副本實跑 -t/-g,Jest 用 npx 快取裡的 30.5.2]
++- REVISIT:2026-12-15 查消費專案的測試檔有沒有「單引號的正規表示式字面(`/'/`)後面接著被註解掉的測試」讓假名字被收進測試集合的案例;有就給 c-style 剝法加正規表示式字面的辨認(代碼審 code-測試名收自由字串 r1 資安席)。
++- REVISIT:2027-01-15 查消費專案有沒有單一測試檔裡幾十 MB、滿是跳脫字元的字串(c-style 剝註解的展開式正規式對跳脫字元每個仍佔一格狀態,45MB 全是跳脫要 2GB 以上;代碼審 code-測試名收自由字串 r2 資源席);有就把跳脫也併進同一段字元類或改手寫掃描。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+index d8ccfe82..6566098f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/筆記內容閘.md
+@@ -64,10 +64,15 @@ verified_by:
+ 
+ 另管否定現況句提醒([[Projects/否定現況句配回頭條件_計劃]]):提交前(`--staged`)對新寫的正文與摘要行判「還沒有/尚未…」這類會過期的現況句,印一段提醒,教人把那一句搬成獨立一行回頭條件;只提醒、不擋、不算違規,推送前、CI 與 doctor 事後掃描都不算。子開關是 `.lumos/config.json` 的 `note_shape.negation`(warn/off,預設 warn),關掉時 doctor 唸一行。判定照量測程式 `governance/eval/negation-revisit/neg_revisit_measure.py` 的第三版,字眼表抄自它;上線前在工具鏈 300 個、rtb 182 個提交重跑過,兩邊逐行相同。上線第 8 週由人用量測程式重產被提醒的行、抽樣判準度,不到三成就撤掉(那篇計劃的 RETIRE-IF)。
+ 
+ 另管新寫句子寫法提醒([[Projects/新寫句子的數量與位置提醒_計劃]]):同樣只在提交前、只提醒,子開關 `note_shape.wording`(warn/off)。兩條規則:新寫的句子點名一個 Python 具名集合、寫的數字剛好等於它的成員數、卻沒掛 `[count:]`,就印出要貼的標記;新寫的更正括號裡用「第 N 項/最後一個/倒數第 N」指清單位置,就提醒改成引那一項的名稱。引號裡的字兩條都不看,所以只是在舉例時用引號包起來就不會被提醒。數量那條要讀被檢查版本的 Python 檔,有上限(64 MB、50 個名稱),超過就印一句沒跑完。第三條規則([[Projects/測試綁定一行一支提醒_計劃]]):新寫的一行一次綁兩支以上測試,就提醒拆成一支一行、每行寫那支守什麼。
+ 
+ REVISIT:2026-11-27 照計劃的 RETIRE-IF 量三個數:被擋後繞過的比例、上線後新增行的抽樣、零觸發;同一天在 rtb 重做一次漂移抽樣
+ 
+ ## 結案時摘要沒跟著改的提醒(2026-10-07)
+ 
+ 提交前(只在 `--staged`)多一則只提醒、不改回傳碼的檢查:這次暫存的筆記裡,開頭 `status` 從不是收尾值改成收尾值(存量漂移守衛的收尾值集合)、摘要內容跟上一版逐字相同,就列出那篇的摘要行(最多 5 行,含待定詞的排前面、標「還寫待定」)與 `lumos summary-line` 形狀;新建的筆記不算,改名同時結案的照算。只看這次狀態那一行有動的筆記(`git diff --cached -G ^status:`)、最多 50 篇,新舊兩版一次批次讀(第一版每篇兩次 git,400 篇 78 秒,改後 2.4 秒);判定交給存量漂移那層的一支入口 `_drift_close_summary_untouched(上一版全文, 這一版全文)`——收尾值、摘要切法(跟 c7 同一套,單行摘要與沒前綴的行照算)、待定判定、WHY 與 PITFALL 不算現況,都只在那層寫一份,這邊不碰存量漂移的其他函式。記一筆 note-shape hinted(check=close-summary);關掉用 `note_shape.close_summary=off`,關掉或值寫錯時 doctor 開頭講一句,值寫錯提交時也講。路徑含換行的筆記批次讀表達不了,挑掉算進沒看的篇數。不靠待定詞表——rtb 那篇「等某階段一起做」不在表裡,只能靠結案那一刻抓。出錯只印一句。單源 [[Projects/結案時摘要跟正文只改一邊_計劃]];已結案舊帳由 [[Systems/存量漂移守衛]] 的 c7 列。
++
++## 句子名的測試綁定(2026-10-15)
++
++- `_test_names_of` 只切半形逗號、不再自己剝平台前綴(原本單平台時把 `API: 逾時` 變成 `API:逾時`),回那一格原字串,交給 `resolve_test_refs`/`_split_test_ref` 解;全形冒號前綴只在前面是已定義平台時照收。`_NsTrJudge._plat` 的壞名判法改用 `_test_name_ok`。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_test_ref_split_rules] [test:t_note_test_refs_free_string]
++- 「只換測試綁定不算寫說明」的豁免不放寬:句子名(中文或英文)不豁免,換一個句子名算寫了說明。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/規格閘.md b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+index 68726d47..ac214ad1 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/規格閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+@@ -144,10 +144,16 @@ WHY:規格閘在印完計劃風險那一行後,多印一行圖譜寫下的舊否
+ 
+ ## 待決問題的擋法(2026-10-12 正文版撤出,同日改讀開頭欄位)
+ 
+ - WHY:規格閘不讀計劃正文的〈待決問題〉一節 [出處:代碼審 code-後端情境出題 三輪、使用者裁先拆出] [因:正文解析每輪都在同一處換形狀——圍欄沒關、標題與旗標寫法變體漏擋,一般敘述誤擋,長行平方級回溯] [不選:繼續列舉寫法補正則] [test:t_backend_qo_question_section_not_parsed]
+ REVISIT:2027-01-31 規格閘目前不擋阻塞的待決問題:看 [[Projects/待決問題改存開頭欄位_計劃]] 有沒有上線,上線就接回擋法、換掉 t_backend_qo_question_section_not_parsed;還沒做就決定續做或撤案 [closed:2026-10-12 開頭欄位版上線:規格閘讀 pending_questions 擋阻塞沒結的需求與架構題,--stage 接回題目清單,見 [[Projects/待決問題改存開頭欄位_計劃]]](t_backend_qo_question_section_not_parsed 保留:正文照樣不讀)
+ - 前段(判門之後、條款與 `--no-run` 之前,風險高低都一樣)讀開頭欄位 `pending_questions`:清單讀不懂回 1;有題標阻塞、在需求或架構階段、還沒結(已決或已驗並指到存在且有效的決策才算結;延後、自答都算沒結)回 1 並列出那幾題。這道擋法風險高低都回 1,跟「風險高紅綠只印不擋」是兩回事。[test:t_qfm_gate_holds_blocking]
+ - WHY:「結了」要指到的決策,連結比法比決策引用養成(`_dref_norm`)嚴:帶路徑整條對上、只寫短名而撞名當格式不合(不分大小寫、先做 NFC,短名查共用 `by_stem`) [出處:代碼審 code-待決問題改存開頭欄位 r1 邊界席、r2 架構與通才席] [因:這裡決定規格閘放不放行,`env.resolve` 對不上就退回比短名、撞名取第一篇,指錯篇等於假決策過關;養成那邊是建議清單,寬一點只多列候選] [不選:沿用 env.resolve] [test:t_qfm_r2_folds]
+ - 清單文法表外的每一種寫法(縮排、引號、拼錯欄位名、`[]` 後接題等)都判無法判定、回 1;註解、行尾空白、CRLF 與 BOM 不算。[test:t_qfm_strict_parse_fail_closed]
+ - 推送前(`--push-check`)對這次改到的計劃只印提醒、不改回傳碼:阻塞沒結的題、舊版有這版不見的題號、同題號題目文字變了。舊版=兩點範圍 `a..b` 的 a、三點範圍 `a...b` 的合併基準;整份計劃被刪的不比;兩版用共用的 `_nodehome_cat_blobs` 一次讀(有逾時,讀不到印一句跳過);改名過來的計劃跟舊路徑那一版比(`_pq_renames` 用 -z 與共用 `_nodehome_name_status` 解析);範圍左端空著當 HEAD;兩端要是 git 認得的提交,認不得或以 - 開頭就講一句跳過(推送前檢查入口也擋 - 開頭的範圍,免得被當成 git 選項)。決策是不是有效:本篇用被推那一版,別篇用工作樹。 [test:t_qfm_push_remind_ranges]
+ REVISIT:2027-04-12 推送前對阻塞沒結與題號不見只提醒:上線滿半年看這兩種提醒出現幾次、有沒有人回頭補,決定要不要改成擋([[Projects/待決問題改存開頭欄位_計劃]])
++
++## 懸空要明顯標出、撞名不判綠(2026-10-15)
++
++- 條款綁定有懸空時不印 ✓,印 ⚠ 與「懸空 k 只提醒不擋」並逐條列出編號、名稱、懸空種類(最多 15 行);回傳狀態照舊 ok,擋不擋不變。處置閘第五步共用 `_clause_check`,一起改。全懸空時跑那一行改講「綁了測試但全懸空」。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_clause_check_marks_hanging]
++- 一格 `[test:]` 的值有半形逗號、切出來的幾段都不是真測試時,多印一句「含逗號或方括號的測試名綁不了」。 [test:t_clause_binds_free_string]
++- 名稱篩選型平台(regex、regex_tail、plain)跑之前先數撞名(`_name_collision_reason`,推送前閘、guard kill 共用):數「篩選選得到的全部標題」(`_raw_test_titles`,含掃描不收的 skip、樣板、.each),regex 系不分大小寫、plain(dart)分;撞名不跑、判弱證據並列出撞到的標題。 [test:t_name_filter_collision_not_green]
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index ca71eb54..48f6e0e1 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -19,21 +19,21 @@
+ | 「審計第 3 問的反例,審計員判要記殘留(殺不掉或繞過設計),先問第二個代理」 | 另派沒看過審計結論的獨立代理,只給那條反例、合約行與綁的測試,問能不能穩定測到;當場 `lumos guard residual-ask <節點> "<KEY 片段>" --case <反例編號> --checker <模型>/<日期> --verdict testable\|untestable` | 記一筆治理帳(閘名 residual-ask);同一條合約同一個反例只准問一次(已經問過回 2)——這是方便不是保證(換編號、改節點名、改字都問得到),真正的把關是新增殘留的推送要過高風險代碼審;判 testable 就照它說的補測試 | 換代理重問直到聽見想要的答案,殘留就變成想收斂的人自己說了算 |
+ | 「反例確認測不到,記成殘留」 | 順序:`guard residual-ask` 判 untestable → `guard audit` 蓋 `[audit:]` → `decision-add` 記殘留決策 → `guard residual <節點> … --add`。先 `lumos decision-add` 記殘留決策(內容尾端寫 `checker:<模型>/<日期>`),再 `lumos guard residual <節點> "<KEY 片段>" --add <資料夾>/<節點>#dN --case <反例編號>…`;拿掉用 `--remove <資料夾>/<節點>#dN`;doctor 說殘留索引對不上用 `lumos guard residual --reindex` | 合約行尾加 `[residual:…]`,重寫 `governance/residual-index.json`(跟筆記一起提交);決策不在、被翻案、內容空白或沒有那筆 `checker:`、問答不是 untestable(或這條合約判過 testable)、短名、合約行沒有 `[audit:]`、或這條合約最近一次 `guard audit` 的治理帳紀錄早於問答(帳上找不到也算)都回 2;新增殘留的那次推送 `pitfalls` 升 high、要過高風險代碼審(新增判 untestable 的問答也升 high:同一筆決策追加反例不動索引;改到存著已登記殘留決策的那篇筆記也升 high,改哪一段都算——刻意的粗粒度,只改錯字也要過一輪高風險代碼審;只保證跑一輪審,審查席有沒有答沒有機械核對);同一個標記再加回 0(索引本來就對就不改檔,沒跟上才補、印「索引原本沒跟上,已補好」) | 不留標記的話,派工鏡頭看不到殘留徽章,改到它守的程式時 pitfalls 也不會升 high |
+ | 「這條合約之後才會做,先預告起來別忘了」 | `lumos guard plan <節點> "<一句話合約>" --plan <計劃> --phase <階段> --due <YYYY-MM-DD> --why <為什麼還不做> --owner <誰負責> --name <短名>` | 一次寫好預告標記+建待完成守衛節點+雙向連好;短名當檔名(自動加日期,24 字內,例 `事故F2_確認前當機不重複副作用`) | 沒人追,預告就變成圖譜裡的死字 |
+ | 「預告的那條做完了」 | `lumos guard settle <守衛節點> --test <測試方法名>`(`--test` 只在守衛節點還是待完成時要);已經 pass 但預告句還在就不用 `--test`,可加 `--date <轉正日期>` | 預告行換成正式合約行並綁測試,節點轉已通過;已 pass 的只補改預告句(前提不符回 2,要先看改法或要修復帳用 `lumos drift fix --kind c1`) | 兩邊並存,查節點的人看不出到底做了沒 |
+ | 「預告的那條決定不做了」 | 先 `lumos signoff <守衛節點> --ref <守衛節點> --note "<為什麼>"`,再 `lumos guard abandon <守衛節點> --why "<為什麼>"` | 立墓碑而不是刪掉 | 悄悄刪掉,下一個人不知道曾經打算做什麼 |
+ | 「看現在有幾條預告沒做完、有沒有逾期」 | `lumos guard required` | 列待完成/逾期/快到期;有逾期回非零 | 逾期了才被推送前的閘擋,而且不准延期 |
+ | 「這條合約→守衛測試→驗證紀錄的證據鏈」 | `lumos guard trace <節點>` | 反向可查爆炸半徑 | — |
+ | 「綁的測試真的守得住嗎?」 | 先 `lumos guard kill-add <節點> "<片段>" --file … --old … --new …` 宣告壞法,再 `lumos guard kill <節點> "<片段>"`;只想驗剛加的那條:kill-add 加 `--try` 當場只跑它,或 `lumos guard kill <節點> --id <短身分>` | 相關有效壞法後須由目標行為斷言翻紅；仍綠只證未偵測此錯誤，等價／未跑／無效錯誤不能直接推論測試無效；判讀詳本頁末尾指向的§3.1第0步;`--try` 的結果是弱證據(筆記還沒提交),合約背書不採信,提交後照它印的那行再跑一次 | — |
+ | 「配方的原文在程式裡找不到或不只一處(kill-add 提醒、`lumos doctor` 的 P2 段說失配)」 | 照提醒貼的 `lumos guard kill-rm <節點> --id <短身分>` 移掉舊的,照它印的範本填現在的原文再 `kill-add --try`(當場只跑新的那條),提交後跑 `lumos guard kill <節點> --id <短身分>` | 移除前印出那條完整內容與範本(--old、--new 都要照現在的程式重填,原樣貼待填字樣會被擋);短身分至少 8 字元,對到不同的多條會擋下;不帶 --id 跑一次列出這篇每條的短身分,guard kill 每條結果行的 id= 也是 | 失配的配方 guard kill 跑到只會判 drifted,那條合約的殺傷力驗證等於斷線 |
+ | 「`lumos doctor` 的 P2 段說有配方最近一次真跑判 survived」 | 照那行的 `lumos guard kill <節點> --id <短身分>` 重跑;確定那條壞法本來就殺不掉(不是測試漏洞)才照第二個指令 kill-rm | 只看每條配方最近一次的結果,原文對不上的那段列過的不重複列;行尾寫「證據弱」或「之後改過」的先重跑;之後補強過測試的也先重跑(這種情況工具判不出來) | 原文對得上卻殺不掉,P2 原本看不出來,只有跑整篇 guard kill 才發現 |
+-| 「配方驗的測試不在合約的測試清單上(kill-add 提醒、`lumos doctor` 的 P2 段)」 | 照提醒的修法:要讓推送閘也守它就貼那行 `lumos guard bind`;清單外那支不該用就 kill-rm 後改用清單上那支重新 kill-add;講平台不同的,kill-rm 後帶 `--platform` 重新 kill-add | 綁上後這條合約有多支測試,之後 kill-add 不帶 `--test` 會要你指明;方法名不是識別字(反引號名、含點)的 bind 綁不了;清單外那支是不是刻意更細的測試由人判 | 合約清單是推送前會真跑的測試,配方驗的是另一支時,殺傷力證明的不是推送閘守的那支 |
++| 「配方驗的測試不在合約的測試清單上(kill-add 提醒、`lumos doctor` 的 P2 段)」 | 照提醒的修法:要讓推送閘也守它就貼那行 `lumos guard bind`;清單外那支不該用就 kill-rm 後改用清單上那支重新 kill-add;講平台不同的,kill-rm 後帶 `--platform` 重新 kill-add | 綁上後這條合約有多支測試,之後 kill-add 不帶 `--test` 會要你指明;名稱過不了名稱規則(含方括號、半形逗號、減號開頭、控制字元)的 bind 綁不了,句子名可以綁;清單外那支是不是刻意更細的測試由人判 | 合約清單是推送前會真跑的測試,配方驗的是另一支時,殺傷力證明的不是推送閘守的那支 |
+ | 「表態說併發/N+1 沒問題,想要有背書」 | 寫次數或併發測試 → 合約 ★INVARIANT★ → `lumos guard bind` → `lumos guard kill-add <節點> "<片段>" … --covers <題目id>` → 提交 → `lumos guard kill <節點>` → 重表態 | 寫表態時工具在本機算背書存進記錄;推送前沒有背書只提醒一行 | 「已處理」只有檔案行號,等於說看過了沒問題 |
+ | 「派審查員時,固定席節點自動附進派工詞了嗎?」 | 派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(不寫 HEAD:它在會談的專案目錄解讀),hook 派子代理那一刻自動附;手動看內容 `lumos dispatch-lens <base>..HEAD --repo <根>`(base 必須在主線歷史上;hook 拿會談的專案目錄算,範圍在那裡算不出來會附一行 `LUMOS-LENS:` 說明、不附節點;內容從 base 讀;自由文字只有帶 `[來源:外部]` 的外部事實行,在框內;例外是「這次新增的殘留」段從頂端讀推送者寫的殘留決策與問答列,防護是注入框、字數上限、消毒,當可反駁的資料看) | 固定席前 8 篇貼內容、其餘列名;★0 篇→附 code 層既有相依備援段(受影響測試/共改/呼叫者,只用主線樹)★;超時→附一行說明;base 不在主線或範圍算不出來→附一行 `LUMOS-LENS:` 說明、不附節點 | 鏡頭不是閘,不擋 |
+ | 「這次改到前端還是後端?正確性席要不要多看哪幾題?」 | 正確性席派工詞在 `LUMOS-IMPACT:` 之外再留一行 `LUMOS-ROLE-CARDS: on`,hook 依改到前端或後端在框外附角色鏡頭卡;手動看 `lumos dispatch-lens <base>..HEAD --role-cards`;推送前 `lumos pitfalls --diff` 的人讀輸出有一行角色統計 | 圖譜那段超時或沒圖譜時卡照附;判不出就不附;專案可在 `.lumos/config.json` 的 `review_roles` 宣告路徑角色(讀改動起點版本) | 只給正確性席,架構對齊與資安席不放;Codex 編排目前不附 |
+ | 「新模組要照 DDD 這類目標架構寫,不想被架構對齊席判成跟舊鄰居不一樣?」 | `.lumos/config.json` 加 `arch_targets`:有序清單,每條恰好 `{"path": "app/Domain/**", "node": "Systems/<目標架構節點>"}`,第一條命中算數,要切出舊碼就在前面放一條 `"node": "none"`;目標節點用 `lumos new system <名> --responsibility "…"` 開(不帶 --code),規則寫成摘要的 `RULE:` 行(DDD 可直接抄 [target-arch-ddd-template.md](target-arch-ddd-template.md) 的九條範本);架構對齊席範本已有 `LUMOS-ARCH-TARGET: on`,hook 附規則原文 | 只讀改動起點版的宣告(分支自己改宣告下次推送才生效);第一段是萬用字元的樣式(`**`、`**/*.php`、`*.cs`)整份不用;`lumos doctor` 列每條宣告命中幾支檔 | 推送前 `pitfalls --diff` 只標哪些檔用目標基準、不貼規則;設計審讀 HEAD 版宣告,計劃提到還不存在的檔也算 |
+ | 「我是在 Codex 裡編排代碼審,鏡頭怎麼附?」 | 派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`;子代理開場 hook 自動領一席附上;派完 `lumos dispatch-lens --disarm`;看剩幾席 `--status`(Codex 的派工訊息 hook 改不了,所以不用標記行) | 子代理開場自帶「lumos 自動附加」段;`--status` 印剩幾席 | Codex 編排時整輪沒有圖譜鏡頭,審查席判不了爆炸半徑 |
+ | 「推了,等 CI 結果」 | `lumos ci-wait`;只看上次結果 `lumos ci-status` | 只有結論 green 才算過;red 要處理;timeout/no-run/unavailable/undetermined 都不算綠,rc0 不等於 CI 成功 | 紅了沒人知道 |
+ | 「推送被擋,這次到底有幾個原因?」 | 不用手動叫:推送前掛鉤把全套測試之前那幾道閘(裁判簽名、簽名檔沒提交、圖譜健檢、每支檔有家、筆記形狀、雙向門放行、代碼審判定、存量漂移、回頭重讀)全部跑完,有擋下就在最後叫 `lumos push-summary` 印彙總 | 最後一段「這次推送共有 N 筆擋下(M 道閘)」逐筆一行,各道的處理方式在上面各自那一段;全套測試這次沒跑;記一筆 `prepush-summary` 治理帳;舊版 lumos 沒有這個指令時掛鉤自己印簡版 | 修好一個原因、重推等幾分鐘才看到下一個 |
+ | 「CI 各份測試又不平均了?」 | `lumos test-durations refresh`(先跑過一次測試,執行器會把各支秒數留在 `.lumos/`) | 把實測秒數合進 `governance/test-durations.json`,分片照耗時分;沒跑到的保留舊值 | 照名字輪流分時,最慢的機器要等到 12–14 分 |
+ | 「推新分支時,推送前的閘拿哪一段當這次的改動?」 | 推送前掛鉤自動叫;手動查 `lumos push-range --diff <遠端舊值>..<頂端> --push-remote <遠端> --pushed-ref <遠端 ref>` | 印一行範圍:跟主線的分岔點..頂端;頂端已在主線印頂端..頂端;判不了印空樹..頂端(多擋) | 新分支首推把整個 repo 當新改動誤擋 |
+ | 「已放行的東西在下游炸了,要記漏網帳」 | `lumos loop escape <迴圈編號> --stage <實作\|code-loop\|CI\|prod\|使用者回報> --severity <minor\|major\|blocker> --desc <一句> --sha <提交>`(沒有佐證就改給 `--missing-defect-ref "<為什麼沒有>"`);看全帳 `lumos loop escape --list`;記錯撤回 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>`;各類別漏網率 `lumos loop escape-stats` | 逃逸入帳(append-only 不進閘;歸因人工判斷,編號必須實存於審查帳) | 審查系統的漏網率無帳可查,不知道哪一類缺陷一直溜過去 |
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 0cbec302..a8beffc7 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -610,26 +610,26 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
+ 
+ **⛔ 防帶風向鐵則(leading the witness)**:這套指令存在的前提是「claim 的真來自**人確認的意圖**,不是 code 反推」。Claude 用它時必須:
+ 
+ 1. **先問「這裡什麼必須永遠為真」,再去看 code 怎麼實作**——不可先讀 code 反推出斷言、再包裝成「請確認」讓人蓋章(那是假 validation,繞回 Check T 在打的套套邏輯)。
+ 2. **誠實標記每條斷言的來源**:是「你(人)講的意圖」還是「我從 code 猜的、請你裁示」——後者必須明講、等人確認才寫進 `--claim`。
+ 3. **重大 invariant 的 claim 等同重大決策**:確認時順手把 `decisions[]` 的 context/why 補上(見下節),別只留一句斷言。
+ 4. **殘餘誠實**:人可能確認一條錯的 invariant——這是 validation 的天花板,工具只保證 claim 被攤開+明確確認,不保證人一定對。別吹過頭。
+ 
+ > scaffold/bind 只省「打字」,不省「確認」。doctor Check T + 誠實鐵則(上節)照舊兜底:stub 不填(留 Assert.Fail)= 紅;綁了不存在的方法 = 懸空被擋。
+ >
+-> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 profile(以 `TEST_PROFILES` 為準):**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android/iOS E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('id')`/`test.describe('id')`;含空白 title 不可綁)、**`dart`**(Flutter,檔名錨 `*_test.dart`)、**`python`**(行首 `def test_*`+檔名錨)、**`swift-xctest`**(iOS:XCTest `func test*` 與 Swift Testing `@Test func` 兩代並收;頂層 `*Tests` 目錄,pure 排除 `*UITests`;2026-09-08 補,★尚無真專案跑過★)、**`node-jest`** / **`node-vitest`**(Node 後端,同一份設定:`test/it/describe('id')` 含 `.only/.skip`;檔名錨 `*.test.*`/`*.spec.*`,`__tests__/` 下無後綴的檔不在錨內;2026-09-08 補,★尚無真專案跑過★)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
++> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 profile(以 `TEST_PROFILES` 為準):**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android/iOS E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('名')`/`test.describe('名')`,標題整串比對,中文與空白都可以;不收半形逗號與方括號;檔名錨 `*.spec.*`/`*.test.*`)、**`dart`**(Flutter,檔名錨 `*_test.dart`)、**`python`**(行首 `def test_*`+檔名錨)、**`swift-xctest`**(iOS:XCTest `func test*` 與 Swift Testing `@Test func` 兩代並收;頂層 `*Tests` 目錄,pure 排除 `*UITests`;2026-09-08 補,★尚無真專案跑過★)、**`node-jest`** / **`node-vitest`**(Node 後端,同一份設定:`test/it/describe('名')` 含 `.only/.skip`,標題整串比對(句子名可綁,2026-10-15 起,見 [[Projects/測試名收自由字串_計劃]]);檔名錨 `*.test.*`/`*.spec.*`,`__tests__/` 下無後綴的檔不在錨內;2026-09-08 補,★尚無真專案跑過★)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`;多平台時寫在那個平台的設定裡(跟 `run_cmd` 同一層)。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
+ > ```json
+ > // 單平台:Android 專案 .lumos/config.json
+ > { "test_profile": "kotlin-junit" }
+ > ```
+-> **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(`--method` 維持識別字、平台另帶,bind 寫 `[test:平台:方法]`)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
++> **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(平台另帶,bind 寫 `[test:平台:名稱]`;bind 收句子名,名稱有冒號時必帶 `--platform`;scaffold 拿名字產程式碼,`--method` 維持識別字)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
+ > ```json
+ > // 多平台:<圖譜所在 repo>/.lumos/config.json(平台名/profile/root 依專案自訂)
+ > { "default_platform": "app",
+ >   "platforms": {
+ >     "app":     {"profile": "kotlin-junit", "root": "."},          // 前端 App(同 repo)
+ >     "e2e":     {"profile": "maestro",      "root": "."},          // 同 repo 的 E2E flow
+ >     "backend": {"profile": "csharp-xunit", "root": "../<後端 repo>"}  // 後端 API(另一 repo)
+ >   } }
+ > ```
+ > 天花板:Check T 只驗測試識別子存在、不驗跑綠(CI 的事);E2E(maestro/playwright)要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫。**撰寫期用 Maestro MCP / Playwright MCP** 把 scaffold 的紅燈 stub 填到綠(開發工具、非合約守門)。
+@@ -1186,21 +1186,21 @@ python3 scripts/lumos doctor
+ 
+ **1 · 斷言要驗「使用者看到什麼」**
+ ```yaml
+ - assertVisible: "折扣超過上限。.*"
+ - assertNotVisible: "請輸入員工編號.*"   # 回歸釘：不可再退回誤用的字串
+ ```
+ 只斷言「流程有沒有被擋」等於白做——回傳值對、UI 拿它去換錯的字串，單元測試結構上測不到。
+ 
+ **2 · 命名與位置（錯了會「Check T 綠但 flow 壞」）**
+ - `name:` ＝檔名去副檔名轉底線（`smoke-05-x.yaml` → `smoke_05_x`），**識別字**、**該行無其他內容**（不得有行尾 `#` 註解）、**放在 `---` 之前的 config 區塊**。
+-- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。
++- 要綁的 Kotlin 反引號測試名(含中文、空白)寫進 `[test:]` 時照原樣寫、反引號可留可去(整串被一對反引號包住會拆殼);不收半形逗號與方括號(2026-10-15 起,見 [[Projects/測試名收自由字串_計劃]])。`guard scaffold --method` 仍要識別字(它拿名字產程式碼)。
+ 
+ **3 · 七個會「沉默地做錯事」的坑（回報成功但做的是別的事，比紅燈危險）**
+ | 坑 | 症狀 |
+ |---|---|
+ | 同畫面兩個鍵盤共用同一組 `resource-id` | 用 `text:`／`id:` 選會打到另一個，不報錯 |
+ | Maestro 的 `text:` 是**全字串正則** | `tapOn: "."` 匹配任意單一字元（實測把 3.25 打成 3125） |
+ | 選付款方式會自動帶入金額 | 再自己輸入反而算錯 |
+ | SeekBar 要 `swipe` 不能 `tap` | 起點落在元件外會靜默無效 |
+ | `name:` 行帶行尾註解 | discover 抓不到 → Check T 判懸空（紅在 doctor，人會找錯方向） |
+ | 人與 agent 同時操作同一台裝置 | 每個 `tapOn` 都點到「某個東西」→ 綠燈但畫面狀態已亂 |

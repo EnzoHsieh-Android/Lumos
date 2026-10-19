@@ -1,0 +1,522 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 44f8c70dc1a3deacf81f86140ae4254c9eedc3d8..c0d03366625a8ed3471597125ae154df5bfdbda0 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -365,54 +365,51 @@ ReInjectResult = namedtuple("ReInjectResult", "status diff")
+ #   ①圍欄成對(未閉合就看不見) ②標記在第 0 欄(收尾縮排會與下一個區塊錯配、
+ #   把中間的真散文整段吞掉)。這兩個假設在 code-loop r2/r4 各造成實測的靜默錯答:
+ #   幽靈圖譜邊、假合約佐證、G1 硬閘對壞引用放行、impact hook 漏掉合約節點。
+ # ★一律改用 `_visible_lines`(全檔唯一的 fence 判定)★:
+ #   要「剝圍欄 + 剝 inline code」→ `_strip_code_text`
+ #   要「只剝圍欄、★保留 inline code★」→ `_strip_fences_text`(refcheck 家族要這個)
+ INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+ _DOUBLE_BACKTICK_RE = re.compile(r"``.+?``")
+ 
+ 
+-def _strip_inline_markup(line):
++def _strip_inline_markup(line, keep_test_fields=False):
+     """行內層級的「哪些字看得見」——跟 `_visible_lines`(行層級)配成一對,★全檔唯一★,別在別處自寫第二份
+     (條款綁定 -b r2 架構席:三條規則散在 clause_bindings 裡就是第二份)。
+     剝:雙反引號 span、單反引號 span(INLINE_CODE_RE);★未閉合的反引號之後一律不信★(程式碼範例裡的 [test:]/[manual:] 不能當證據,寧可少認)。
+     ★不碰 HTML 註解★:-b r3 兩席證明「偵測註解」本身就是洞(先關再開、註解正則不認反引號邊界),註解裡的 [SN] 一律走「認不得→擋」。
+     ★判定本體在 _inline_hidden★(2026-10-04 抽出,這支與位置不動的 _inline_visible_mask 都從它導出;別在別處再寫一份)。
+-    回 (看得見的文字, 有沒有因未閉合反引號截掉東西)。search 的 probe 刻意只用 INLINE_CODE_RE 不走這裡:搜尋寧可多看見,截掉=靜默看不見(2026-08-03 那個坑)。"""
++    回 (看得見的文字, 有沒有因未閉合反引號截掉東西)。search 的 probe 刻意只用 INLINE_CODE_RE 不走這裡:搜尋寧可多看見,截掉=靜默看不見(2026-08-03 那個坑)。
++    keep_test_fields=True(條款行用,_clause_visible):看得見的 [test:…] 欄位(欄位邊界走全檔唯一的 _slot_scan)裡面的行內反引號
++    照字面留下——標題 uses `foo` flag works 要照字面綁;反引號包住的整段 [test:範例] _slot_scan 本來就不當欄位,照舊看不見。"""
+     hidden, cut = _inline_hidden(line)
++    if keep_test_fields and hidden:
++        fields = [(a, b) for kind, a, b, key, _v, err in _slot_scan(line) if kind == "field" and key == "test" and err is None]
++        if fields:
++            spans, k = [], 0
++            for x, y in hidden:   # 兩邊都由左到右、不重疊:一趟走完(代碼審 r2 邊界席:原本每段各掃一次=平方級)
++                while k < len(fields) and fields[k][1] <= x:
++                    k += 1
++                if not (k < len(fields) and fields[k][0] <= x and y <= fields[k][1]):
++                    spans.append((x, y))
++            cut = cut and bool(spans) and spans[-1] == hidden[-1]
++            hidden = spans
+     keep, at = [], 0
+     for a, b in hidden:
+         keep.append(line[at:a])
+         at = b
+     return "".join(keep) + line[at:], cut
+ 
+ 
+ def _clause_visible(line):
+-    """條款行的「看得見的字」:同 _strip_inline_markup,但看得見的 [test:…] 欄位裡面的行內反引號照字面留下
+-    (標題 uses `foo` flag works 要照字面綁;反引號包住的整段 [test:範例] 照舊看不見)。條款綁定、規格閘要跑的測試、
+-    待決問題的條款測試名共用這一支(代碼審 code-測試名收自由字串 r1 邊界席)。回 (文字, 有沒有因未閉合反引號截掉東西)。"""
+-    hidden, cut = _inline_hidden(line)
+-    keep = []
+-    for m in re.finditer(r"\[test\s*:", line):
+-        a = m.start()
+-        if any(x <= a < y for x, y in hidden):
+-            continue
+-        end = _slot_value_end(line, m.end())
+-        if end < len(line):
+-            keep.append((a, end + 1))
+-    spans = [(x, y) for x, y in hidden if not any(ka <= x and y <= kb for ka, kb in keep)]
+-    out, at = [], 0
+-    for x, y in spans:
+-        out.append(line[at:x])
+-        at = y
+-    return "".join(out) + line[at:], bool(cut and hidden and hidden[-1] in spans)
++    """條款行的「看得見的字」:_strip_inline_markup 加 keep_test_fields(條款綁定、規格閘要跑的測試、待決問題的條款測試名共用)。"""
++    return _strip_inline_markup(line, keep_test_fields=True)
+ 
+ 
+ def _inline_visible_mask(line):
+     """_strip_inline_markup 的位置不動版本:看不見的字換成 \\0、長度跟原行一樣。要知道看得見的字在原行哪個位置的呼叫端
+     (數量標記的 drift fix)用這支,其餘照用 _strip_inline_markup。"""
+     return _inline_blank(line, _inline_hidden(line)[0])
+ 
+ 
+ def _inline_blank(line, spans):
+     """把這幾段換成 \\0(位置不動)。"""
+@@ -5823,21 +5820,21 @@ TEST_PROFILES = {
+     "maestro": {
+         "exts": {".yaml", ".yml"}, "method_re": MAESTRO_NAME_RE, "scaffold_ext": ".yaml",
+         "dir_mode": "rglob", "rglob_under": None, "file_must_match": MAESTRO_FLOW_RE,
+         "attr_hint": "Maestro flow name:", "fail_hint": "assertVisible(哨兵)",
+         "dirs": {"pure": ([], []),
+                  "behavioral": ([".maestro"], []),
+                  "state": ([".maestro"], [])},
+     },
+     # Playwright(web E2E):test('名')/test.describe('名'),標題整串收(2026-10-15 起收句子名,Projects/測試名收自由字串_計劃)。
+     # 檔名錨 *.spec.* / *.test.*(Playwright 預設也只收這兩種;沒有錨時會掃整個 repo,連建置產物裡的 test( 都看到)。
+-    # name_filter=regex:跑單支用 -g,名字要跳脫(_run_cmd_expand);comment_strip 認得字串(標題裡的 // 與 /* 不當註解)。
++    # name_filter=regex_tail:跑單支用 -g,名字跳脫後錨在結尾、容許後面接 tag(_name_filter_escape);剝註解是認得字串的 c-style。
+     "playwright": {
+         "exts": {".ts", ".tsx", ".js", ".jsx"}, "method_re": PLAYWRIGHT_TEST_RE,
+         "scaffold_ext": ".spec.ts", "dir_mode": "rglob", "rglob_under": None,
+         "name_filter": "regex_tail",
+         "file_name_match": ["*.spec.*", "*.test.*"],
+         "attr_hint": ("test('名')/test.describe('名')(標題整串比對,中文與空白都可以;不收半形逗號與方括號。"
+                       "每支綁定推送前都會起一次 playwright,綁得多可以開 bound_tests.parallel)"),
+         "fail_hint": "expect(哨兵).toBe(...)",
+         "dirs": {"pure": ([], []),
+                  "behavioral": (["tests", "e2e"], []),
+@@ -6081,42 +6078,58 @@ def _unwrap_backticks(name):
+ 
+ class _TestRefPrefixError(ValueError):
+     """_split_test_ref 判「長得像平台名、卻沒定義」的前綴;prefix 帶那段字,呼叫端要自己講訊息時用(仍是 ValueError,舊呼叫端照接)。"""
+ 
+     def __init__(self, prefix, msg):
+         super().__init__(msg)
+         self.prefix = prefix
+ 
+ 
+ def _split_test_ref(seg, platforms, default_platform):
+-    """一格 [test:] 的值 → (平台, 名稱)。
++    """一格 [test:] 的值 → (平台, 名稱)。規則見 _split_test_ref_ex。"""
++    plat, name, _explicit = _split_test_ref_ex(seg, platforms, default_platform)
++    return plat, name
++
++
++def _split_test_ref_ex(seg, platforms, default_platform, lenient=False):
++    """一格 [test:] 的值 → (平台, 名稱, 有沒有明寫前綴)。全庫切法只有這一支(呼叫端不再自己切冒號,代碼審 r2 架構席)。
+     - 單平台(platforms 空):整串就是名稱,不切冒號。
+     - 多平台:第一個冒號(半形或全形)前面是已定義的平台 → 前綴,名稱是後面那段去頭尾空白;
+-      不是已定義平台時,半形冒號而且前面只有英數、底線、連字號(長得像平台名)→ ValueError(擋 wbe:x 這種打錯字,不猜);
++      不是已定義平台時,半形冒號而且前面只有英數、底線、連字號(長得像平台名)→ _TestRefPrefixError(擋 wbe:x 這種打錯字,不猜);
++      lenient=True(殺傷力配方:平台另有欄位)時改成冒號後緊接名稱(android:Foo)就剝掉前綴、冒號後有空白整串保留,不丟例外;
+       其他情況(前面含空白、中文,或用的是全形冒號)整串都是名稱。名稱照 _unwrap_backticks 拆 Kotlin 反引號。"""
+     s = str(seg or "").strip()
+     if platforms:
+         m = re.match(r"([^:：]*)([:：])", s)
+         if m:
+             pre = m.group(1).strip()
+             if pre in platforms:
+-                return pre, _unwrap_backticks(s[m.end():])
++                return pre, _unwrap_backticks(s[m.end():]), True
+             if m.group(2) == ":" and _TEST_PLAT_LIKE_RE.fullmatch(pre):
++                rest = s[m.end():]
++                if lenient:
++                    return (default_platform, _unwrap_backticks(rest), True) if rest[:1] and not rest[:1].isspace() \
++                        else (default_platform, _unwrap_backticks(s), False)
+                 raise _TestRefPrefixError(pre,
+                     f"[test:{s}] 的平台前綴 '{pre}' 未定義於 platforms({', '.join(platforms)});不猜,免得綁錯平台。"
+                     f"名稱本身有冒號時要寫平台前綴,例如 [test:{default_platform}:{s}]")
+-    return default_platform, _unwrap_backticks(s)
++    return default_platform, _unwrap_backticks(s), False
++
++
++_TEST_NAME_RULE_ZH = ("不能是空的、不能超過 200 字、不能以減號開頭、不能含方括號或半形逗號、不能有控制字元;"
++                      "Windows 上也不能含 & | < > ^ % \" !")   # _test_name_ok 的白話,擋下訊息全部用這一句(代碼審 r2 架構席)
+ 
+ 
+ def _test_name_ok(name):
+-    """測試名合不合法(綁定、推送前合約測試閘、guard bind/settle/kill、處置帳都用這一支):
+-    去頭尾空白後不空、至多 200 字、不以減號開頭、不含 [ ] 與半形逗號、沒有控制或格式字元(_path_special_chars)。"""
++    """測試名合不合法(綁定、推送前合約測試閘、guard bind/settle/kill、處置帳都用這一支;白話在 _TEST_NAME_RULE_ZH):
++    去頭尾空白後不空、至多 200 字、不以減號開頭、不含 [ ] 與半形逗號、沒有控制或格式字元(_path_special_chars);
++    Windows 上另外不收 _WIN_CMD_SPECIAL。"""
+     s = str(name if name is not None else "").strip()
+     return (bool(s) and len(s) <= _TEST_NAME_MAX and not s.startswith("-")
+             and not any(c in s for c in "[],") and not _path_special_chars(s)
+             and not (_IS_WIN and any(c in s for c in _WIN_CMD_SPECIAL)))
+ 
+ 
+ def _test_name_boundary_re(names):
+     """歸檔與 guard trace 在驗證紀錄全文找測試名用:名稱頭尾是英數底線才在那一端加「前後不是英數底線」,否則那一端不加。
+     ★只給比對測試名用★,其他 \\b 的地方不動(ASCII 的 \\b 對中文頭尾永遠配不到,Projects/測試名收自由字串_計劃 做法 6)。"""
+     def one(n):
+@@ -6354,51 +6367,70 @@ def _walk_test_files(repo_root, profile, with_path=False):
+                 continue
+             # file_must_match:讀檔後、去註解前先過濾(如 .yaml 一堆,只認真 Maestro flow;
+             # 濾掉 CI yaml 的 name: 被誤收)。現有 profile 無此鍵→.get() 回 None→不過濾。
+             if must is not None and not must.search(txt):
+                 continue
+             yield ((str(Path(dp) / f), txt) if with_path else txt)
+ 
+ 
+ # 展開式寫法(普通字元一段一段吃、跳脫一個一個吃):群組加星號的寫法每走一個字元就多推一格狀態,
+ # 32MB 的字串要 4GB 記憶體(代碼審 code-測試名收自由字串 r1 資源席實測);展開式只要字串本身那麼多。
+-_C_STRIP_RE = re.compile(r"'[^'\\\n]*(?:\\.[^'\\\n]*)*'?|\"[^\"\\\n]*(?:\\.[^\"\\\n]*)*\"?|`[^`\\]*(?:\\.[^`\\]*)*`?"
++# 多行字串放在最前面(代碼審 r2 邊界席:沒認得的話,多行字串裡單獨一個 /* 會被當成沒收尾的註解、刪掉後面全部測試):
++# 三個雙引號(Kotlin、Swift、C# 11、Dart;Swift 前後帶 # 的寫法,# 留在程式碼裡無妨)、三個單引號(Dart)、
++# @ 加雙引號(C# 逐字字串,可跨行,兩個雙引號是跳脫)。JS 沒有這幾種寫法(三個雙引號在 JS 是空字串接一個引號,極少見)。
++_C_STRIP_RE = re.compile(r'"""[^"]*(?:"(?!"")[^"]*)*(?:"""|\Z)' r"|'''[^']*(?:'(?!'')[^']*)*(?:'''|\Z)"
++                         r'|@"[^"]*(?:""[^"]*)*"?'
++                         r"|'[^'\\\n]*(?:\\.[^'\\\n]*)*'?|\"[^\"\\\n]*(?:\\.[^\"\\\n]*)*\"?|`[^`\\]*(?:\\.[^`\\]*)*`?"
+                          r"|//[^\n]*|/\*[^*]*(?:\*+[^*/][^*]*)*(?:\*+/)?", re.S)
+ 
+ 
+ def _anchor_migration_hint(pentry, name):
+     """綁定找不到時,這個名字是不是在「副檔名對、檔名不合測試檔名錨」的檔裡宣告(Playwright 2026-10-15 起只掃 *.spec.*/*.test.*,
+-    自訂 testMatch 的專案舊綁定會變懸空,代碼審 code-測試名收自由字串 r1 正確性席)→ 一句提示,或空字串。只在綁定已經不是真測試時才掃。"""
++    自訂 testMatch 的專案舊綁定會變懸空,代碼審 code-測試名收自由字串 r1 正確性席)→ 一句提示,或空字串。只在綁定已經不是真測試時才查。
++    「名字 → 檔」對照依 (平台根, profile 名, 檔名錨) 掃一次快取(代碼審 r2:原本每條懸空重掃整個 repo);取名同 discover_test_methods。"""
+     import fnmatch
+     prof = (pentry or {}).get("profile") or {}
+     globs = prof.get("file_name_match")
+     if not globs or not name:
+         return ""
+-    loose = {**prof, "file_name_match": None}
+-    titled = prof.get("name_filter") in _TITLED_FILTERS
+-    for fpath, txt in _walk_test_files(pentry.get("root"), loose, with_path=True):
+-        if any(fnmatch.fnmatch(Path(fpath).name, g) for g in globs):
+-            continue
+-        for m in prof["method_re"].finditer(_strip_test_comments(txt, prof.get("comment_strip", "c-style"))):
+-            if _test_name_of_match(m, unescape=titled) == name:
+-                return (f"——這個名字宣告在 {_kill_esc(Path(fpath).name)},檔名不合測試檔名錨({_kill_esc('、'.join(globs))});"
+-                        "測試檔用別的命名時,在設定的 test(多平台是那個平台)寫 file_name_match")
+-    return ""
++    key = (str(pentry.get("root")), pentry.get("profile_name"), tuple(globs))
++    if key not in _ANCHOR_MAP_CACHE:
++        loose = {**prof, "file_name_match": None}
++        titled = prof.get("name_filter") in _TITLED_FILTERS
++        where = {}
++        for fpath, txt in _walk_test_files(pentry.get("root"), loose, with_path=True):
++            if any(fnmatch.fnmatch(Path(fpath).name, g) for g in globs):
++                continue
++            for m in prof["method_re"].finditer(_strip_test_comments(txt, prof.get("comment_strip", "c-style"))):
++                nm = _test_name_of_match(m, unescape=titled)
++                if nm is not None:
++                    where.setdefault(nm, Path(fpath).name)
++        _ANCHOR_MAP_CACHE[key] = where
++    fname = _ANCHOR_MAP_CACHE[key].get(name)
++    if fname is None:
++        return ""
++    return (f"——這個名字宣告在 {_kill_esc(fname)},檔名不合測試檔名錨({_kill_esc('、'.join(globs))});"
++            "測試檔用別的命名時,在設定的 test(多平台是那個平台)寫 file_name_match")
++
++
++_ANCHOR_MAP_CACHE = {}   # 一次指令內有效(CLI 每次重新啟動)
+ 
+ 
+ def _test_name_of_match(m, unescape=False):
+     """測試掃描正規式的一個比對結果 → 名稱或 None。回第一個有值的擷取群組(字串標題型一個正規式有三種引號三個群組);
+     Kotlin 那種整串被一對反引號包住的拆殼。unescape=True(字串標題型)時只還原 \\' \\" \\\\ \\` \\$,
+     出現其他跳脫(\\n、\\u4e2d…)回 None——收到的名字要跟測試工具看到的標題一樣。"""
+     name = next((g for g in m.groups() if g is not None), None) if m.groups() else m.group(0)
+     if name is None:
+         return None
++    if unescape and name != name.strip():
++        return None   # 字串標題頭尾有空白:Playwright 不修剪標題(2026-10-15 實跑),收成修剪過的名字會對不到;不收(代碼審 r2 邊界席)
+     if unescape and "\\" in name:
+         out, i = [], 0
+         while i < len(name):
+             c = name[i]
+             if c == "\\":
+                 nx = name[i + 1:i + 2]
+                 if nx not in ("'", '"', "\\", "`", "$"):
+                     return None
+                 out.append(nx)
+                 i += 2
+@@ -6412,29 +6444,33 @@ def _test_name_of_match(m, unescape=False):
+ def _strip_test_comments(txt, strip):
+     """測試檔內容去註解(語言感知):discover_test_methods 與殘留索引找測試所在的檔(_residual_test_files)共用這一份(代碼審 r1 G3;
+     r2 架構席:放在主要呼叫者 discover_test_methods 旁邊,找剝註解邏輯的人會先來這一帶找)。
+     剝法兩種(加 python 的 "none" 不剝,理由見 discover_test_methods):
+     - c-style:一趟由左往右,先認字串字面(原樣留下——字串標題型的名字就在裡面),再認 // 與 /*..*/ 註解(刪掉);
+       沒有結尾的 /* 刪到檔尾,每個位置只走一次=線性。2026-10-15 起所有 c-style 的語言都走這種(代碼審 code-測試名收自由字串 r1
+       編排者裁):舊的兩段式不認字串,字串裡的 // 或 /* 在每種語言都會截斷或吞掉後面的測試,沒結尾的 /* 還是二次方。
+       已知限制:JS 的正規表示式字面(/'/)會被當成字串開頭(回頭條件寫在 Systems/test-profile-multiplatform)。
+     - c-style+strings(java):刻意把字串內容清空,字串裡寫著方法簽章才不會被當成真測試;剝註解仍是舊的兩段式。"""
+     if strip == "c-style":
+-        return _C_STRIP_RE.sub(lambda m: m.group(0) if m.group(0)[0] in "'\"`" else "", txt)
++        return _C_STRIP_RE.sub(lambda m: m.group(0) if m.group(0)[0] in "'\"`@" else "", txt)
+     if strip == "c-style+strings":
+         txt = re.sub(r"//[^\n]*", "", txt)
+         txt = re.sub(r"/\*.*?\*/", "", txt, flags=re.S)
+         txt = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', txt)
+         txt = re.sub(r"'(?:\\.|[^'\\\n])*'", "''", txt)
+     return txt
+ 
+ 
++# ★列舉測試名有兩條路,分工不同★(代碼審 r2 架構席,編排者裁:允許兩條並存):
++#   discover_test_methods —— 可綁定的名字(照各 profile 的 method_re、名稱規則、跳脫規則,寧可少收);
++#   _raw_test_titles     —— 只給撞名用,刻意放寬(寫死 it/test/describe… 的呼叫形狀,skip、樣板、.each、含逗號都收,寧可多數)。
++#   兩條都走 _walk_test_files 與 _strip_test_comments,走檔與剝註解不各寫一份。
+ def discover_test_methods(repo_root, profile=None):
+     """掃 repo 內測試檔,回傳「真實測試方法名」集合(被測試框架註解標註者)。
+     測試棧 profile 決定掃哪些副檔名 + 用哪條方法 regex(預設 csharp-xunit;P5 語言可插拔)。
+     Check T 用此集合驗證 ★INVARIANT★ 綁定的是『可執行證據』而非散文裡的字面巧合(B6 審計)。"""
+     profile = profile or load_test_profile(repo_root)
+     mre = profile["method_re"]
+     strip = profile.get("comment_strip", "c-style")  # 預設 c-style 向後相容;python="none"
+     titled = profile.get("name_filter") in _TITLED_FILTERS   # 字串標題型(JS 三家與 Dart)
+     methods = set()
+     for txt in _walk_test_files(repo_root, profile):
+@@ -18130,42 +18166,39 @@ def cmd_guard_required(env, as_json=False):
+             print(f"  · 待完成 {due}(負責人 {owner}):{claim}")
+     return 1 if overdue else 0
+ 
+ 
+ def cmd_guard_bind(env, node, invariant_substr, method, platform=None):
+     """拿這個筆記庫的寫入鎖再做 _cmd_guard_bind_locked(讀—改—寫開頭欄位;代碼審 待決問題改存開頭欄位 r2、r3:決策與守衛的寫入沒鎖會蓋掉同一份開頭欄位)。"""
+     with _vault_write_lock(env.vault):
+         return _cmd_guard_bind_locked(env, node, invariant_substr, method, platform=platform)
+ 
+ 
+-_TEST_NAME_RULE_ZH = "不能是空的、不能以減號開頭、不能含方括號或半形逗號、不能有控制字元"   # _test_name_ok 的白話,擋下訊息共用
+ 
+ 
+ def _bind_name_problem(repo_root, method, platform):
+     """guard bind 與 guard settle 寫進 [test:] 之前的名稱檢查(兩條寫入路共用,代碼審 code-測試名收自由字串 r1)→ (去頭尾空白的名稱, 擋下原因或 None)。
+-    名稱過 _test_name_ok;多平台、沒另帶平台、名稱有冒號時,冒號前面要是已定義的平台(寫成 平台:名稱),
+-    不然寫進去的 [test:API: x] 之後會被當成平台前綴、判壞名。"""
++    名稱過 _test_name_ok;多平台、沒另帶平台時,照讀取端同一支(_split_test_ref_ex)判:讀取端會擋的(半形冒號、
++    前面長得像平台名卻沒定義,例 API: x)寫入端就擋;明寫已定義前綴(web:名稱)、全形冒號、冒號前不像平台名的照收
++    (讀取端整串當名稱,寫入端跟著收,代碼審 r2 通才席)。"""
+     m = str(method if method is not None else "").strip()
+     if not _test_name_ok(m):
+         return m, f"測試名『{_kill_esc(m)}』不合法({_TEST_NAME_RULE_ZH})"
+-    if platform is None and re.search(r"[:：]", m):
++    if platform is None:
+         try:
+             pd = load_platforms(repo_root)
+         except (ValueError, OSError):
+             pd = {}
+         if pd.get("multiplatform"):
+             try:
+-                plat, _nm = _split_test_ref(m, pd["platforms"], pd["default_platform"])
+-                explicit = re.match(r"\s*" + re.escape(str(plat)) + r"\s*[:：]", m) is not None
+-            except ValueError:
+-                explicit = False
+-            if not explicit:
++                _split_test_ref_ex(m, pd["platforms"], pd["default_platform"])
++            except _TestRefPrefixError:
+                 return m, (f"測試名『{_kill_esc(m)}』有冒號,多平台專案裡冒號前面會被當成平台前綴——"
+                            "寫成 <平台>:<名稱>,或(guard bind)帶 --platform 指明平台")
+     return m, None
+ 
+ 
+ def _cmd_guard_bind_locked(env, node, invariant_substr, method, platform=None):
+     # 名稱規則全庫一支(_test_name_ok,Projects/測試名收自由字串_計劃 做法 1):句子名可以綁,原樣寫進 [test:]。
+     method, why = _bind_name_problem(_repo_root_from_env(env), method, platform)
+     if why:
+         print(f"擋下:{why}", file=sys.stderr)
+@@ -18272,27 +18305,22 @@ def _kill_recipe_key(node, invariant, file, old):
+     # surrogatepass:欄位帶落單替身字元時不崩潰,其他配方的身分不變(Projects/殺傷力配方修補體驗_計劃)
+     return hashlib.sha256(json.dumps([node, invariant, file, old], ensure_ascii=False)
+                           .encode("utf-8", "surrogatepass")).hexdigest()
+ 
+ 
+ def _kill_method_name(test, pdata):
+     """配方 test 欄 → 實際跑的方法名。kill 與算背書共用。切法走 _split_test_ref(全庫唯一那支):多平台時冒號前面是
+     已定義平台才當前綴,其餘整串是名稱(配方的平台另有 platform 欄,所以前綴未定義也不擋、整串照用——
+     `API: 逾時 顯示重試` 不會被切成 ` 逾時 顯示重試`);未定義、長得像平台名、冒號後緊接名稱(`android:Foo`)照舊版剝掉前綴
+     (舊版多平台見冒號就剝,配方這樣寫的照舊跑得到);Kotlin 反引號整串包住才拆殼。pdata 是 load_platforms 的結果。"""
+-    t = str(test or "").strip()
+     plats = (pdata.get("platforms") or {}) if isinstance(pdata, dict) and pdata.get("multiplatform") else {}
+-    try:
+-        return _split_test_ref(t, plats, None)[1]
+-    except _TestRefPrefixError:
+-        rest = t.split(":", 1)[1] if ":" in t else ""   # _TestRefPrefixError 只在半形冒號時丟
+-        return _unwrap_backticks(rest) if rest[:1] and not rest[:1].isspace() else _unwrap_backticks(t)
++    return _split_test_ref_ex(test, plats, None, lenient=True)[1]
+ 
+ 
+ # ── 殺傷力配方失配提醒(Projects/殺傷力配方失配提醒_計劃,三輪設計審)──
+ # 配方是人寫的宣告式壞法,程式重構後原文找不到(或出現好幾次)就靜靜失效——原本只有手動跑 guard kill 才看得到。
+ # 這一組給三個地方共用:kill-add 寫入時提醒、doctor P2 每次逐條數、kill-rm 用同一個身分找配方。
+ # ★判法逐項對齊 cmd_guard_kill,但不改它的判法★(它的圍欄、錯誤說明、回傳碼有既有合約與測試;抽共用會改到它的行為;
+ # 殺傷力配方當場試跑只給它加了挑配方的 --id 與交回結果的選用參數):
+ #   基準 = 配方平台根所在 repo 的最上層;路徑照 guard kill 在「暫存資料夾/wt」裡 os.path.realpath 的走法重演;
+ #   檔要在 HEAD 的提交裡(工作樹是從提交檢出的);文字模式 UTF-8 讀、原文恰好一次。
+ # 兩邊不分家靠 t_kill_recipe_check_matches_guard_kill:一格一格真跑 guard kill 對照,日後誰改了判法這條先紅。
+@@ -18544,21 +18572,21 @@ def _kill_recipe_judge(ctx, r):
+         out.update(status="cfg", detail=f"設定檔讀不了:{ctx['cfg_err']}")
+         return out
+     pdata = ctx["pdata"]
+     plat = plat0 or pdata["default_platform"]
+     out["plat"] = plat
+     pentry = pdata["platforms"].get(plat)
+     if pentry is None:
+         out.update(status="noplat", detail=f"平台 {_kill_show(plat)} 不在設定裡")
+         return out
+     if not _test_name_ok(_kill_method_name(r.get("test", ""), pdata)):
+-        out["detail"] = f"配方欄位格式不對(test 名 {_kill_show(r.get('test', ''))} 不合法,guard kill 會拒跑)"
++        out["detail"] = f"配方欄位格式不對(test 名 {_kill_show(r.get('test', ''))} 不合法({_TEST_NAME_RULE_ZH}),guard kill 會拒跑)"
+         return out
+     # file 的型別放在分平台、test 白名單之後才判(guard kill 走到組路徑才會出錯;代碼審第 3 輪正確性席)
+     if not isinstance(file, str) or "\0" in file:
+         out["detail"] = "配方欄位格式不對(file 不是字串或含 NUL 字元,guard kill 會程式出錯)"
+         return out
+     top, why = _kill_plat_top(ctx, pentry["root"])
+     if top is None:
+         out.update(status="noroot", detail=f"平台 {_kill_show(plat)} 的根找不到({_kill_show(pentry['root'])}:{why})")
+         return out
+     modes, why = _kill_tree(ctx, top)
+@@ -19460,24 +19488,26 @@ def _kill_rm_check(node, before, full):
+ 
+ 
+ _JS_REGEX_SPECIAL = set(".*+?^${}()|[]\\/")
+ 
+ 
+ def _name_filter_escape(name, name_filter):
+     """名字交給測試工具的名稱篩選前的跳脫:regex(Jest -t、Vitest -t)跳脫 .*+?^${}()|[]\\ 與 /;
+     regex_tail(Playwright -g)同樣跳脫後錨在結尾 (?:^|\\s)<名字>$——-g 比的是「專案名 檔名 describe 標題」整串,
+     不錨的話 -g login 會選中 login.spec.ts 整檔(2026-10-15 實測 1.64.1);跳掉斜線則頭尾是斜線的名字不會被當正規式字面。
+     plain(flutter --plain-name)與 ident 不動。"""
+-    if name_filter not in ("regex", "regex_tail"):
++    if name_filter not in _REGEX_FILTERS:
+         return name
+     esc = "".join("\\" + c if c in _JS_REGEX_SPECIAL else c for c in str(name))
+-    return r"(?:^|\s)" + esc + "$" if name_filter == "regex_tail" else esc
++    # regex_tail:前面一定是空白(-g 比的字串以檔名開頭,標題前面總有空白),後面容許 Playwright 接上的 tag。
++    # 不用 (?:^|\s)…:| 與 ^ 在 Windows 的 cmd.exe 是管線與跳脫字元(代碼審 r2 邊界席),< 是轉向,這三個都不用。
++    return r"\s" + esc + r"(?:\s@\S+)*$" if name_filter == "regex_tail" else esc
+ 
+ 
+ def _run_cmd_expand(run_cmd, method=None, name_filter="ident"):
+     """測試指令的佔位符換成實際值 → 字串。{python} = 執行中的這支 lumos 用的直譯器(依平台加引號,路徑含空白照樣可執行);
+     {method} = 測試名(照舊用 shell 引號)。讀 run_cmd 的三處(guard kill、合約測試閘本體、過濾探針)都經這一支
+     ——原本三處各自代換 {method},新佔位符漏補一處就會把字面 {python} 交給 shell(Projects/最低Python版本改3.14_計劃 做法第 6 點)。"""
+     import shlex as _shlex
+     import subprocess as _sp
+     cmd = str(run_cmd)
+     if "{python}" in cmd:
+@@ -19807,21 +19837,21 @@ def cmd_guard_kill(env, node, invariant_substr=None, platform_override=None,
+                                     "detail": f"worktree add 失敗: {_iw.err}"})
+                 continue
+             wt_real = os.path.realpath(wt)
+             baselines = {}
+             # 上一次寫檔讀回的秒、上一次跑測試結束的秒;unsure=還原後修改時間沒錯開、之後也還沒成功重寫的檔(編譯快取誤判_計劃)
+             mstate = {"w": 0, "r": 0, "unsure": set()}
+             for r in plist:
+                 method = _kill_method_name(r.get("test", ""), pdata)   # 去平台前綴、Kotlin 反引號拆殼後進名稱規則
+                 if not _test_name_ok(method):
+                     results.append({**r, "platform": plat, "verdict": "error",
+-                                    "detail": f"test 名不合法(拒注入): {method!r}"})
++                                    "detail": f"test 名不合法(拒注入;{_TEST_NAME_RULE_ZH}): {method!r}"})
+                     continue
+                 # 撞名跟推送前閘共用同一支判定(_name_collision_reason):篩選連帶選中別支時,壞法打紅的可能是別支,殺傷力證不出
+                 _coll = _name_collision_reason(method, pentry, pentry["root"], coll_cache) if "{method}" in run_cmd else None
+                 if _coll:
+                     results.append({**r, "platform": plat, "verdict": "error", "detail": _coll})
+                     continue
+                 cmd = _run_cmd_expand(run_cmd, method, name_filter=pentry["profile"].get("name_filter", "ident"))
+                 note_ws = "" if "{method}" in run_cmd else " whole-suite"
+                 if cmd not in baselines:
+                     b_rc, b_tail, b_elapsed, b_to = _kill_run(cmd, wt, max(600.0, floor))
+@@ -54666,49 +54696,78 @@ def _bound_tests_filter_probe(root, run_cmd, timeout=600):
+     except OSError:
+         pass
+     return ok, why
+ 
+ 
+ _NAME_COLLISION_TAG = "撞名:"
+ 
+ 
+ def _name_filter_collisions(name, titles, name_filter):
+     """名稱篩選會連帶選中的「別的」標題清單(排序)。titles 是 _raw_test_titles 的 (種類, 標題, 小寫) 或單純字串(當測試標題)。
+-    自己那一支(第一個完全相同的)不算;同名的第二支照算(兩個 describe 底下各有一支同名測試,篩選會兩支都選)。
++    同名的第二支照算(兩個 describe 底下各有一支同名測試,篩選會兩支都選)。
+     - regex(Jest/Vitest -t):標題(含 describe)含這個名字就算,不分大小寫(Jest 不分、Vitest 分,2026-10-15 實測;一律不分=只會比較嚴);
+     - regex_tail(Playwright -g,名字錨在結尾):只數結尾是這個名字、前面隔空白或整串相等的「測試」標題,不分大小寫
+       (-g 比的是「專案名 檔名 describe 標題」整串,錨在結尾後檔名、專案名、describe 都碰不到);
+-    - plain(flutter --plain-name):標題含這個名字就算,分大小寫。ident 平台不查(名字是識別字,照舊)。"""
++    - plain(flutter --plain-name):標題含這個名字就算,分大小寫。ident 平台不查(名字是識別字,照舊)。
++    自己那一支只由「種類是測試、文字相同」的第一個佔用(describe 與測試同名時 describe 不搶,代碼審 r2 正確性席)。
++    regex_tail 比之前先拿掉標題尾巴的 @tag(Playwright 把 tag 接在標題後面比,2026-10-15 實跑)。
++    describe 加測試拼起來等於這個名字的(describe('Foo'){test('Bar')} 對 Foo Bar)也算:regex 看名字能不能從某個空白切成
++    「某個 describe 的結尾 + 某支測試的開頭」,regex_tail 看「某個 describe 的結尾 + 某支測試的整個標題」(只看一層,更深的巢狀數不到)。"""
+     if name_filter not in _TITLED_FILTERS:
+         return []
+     n = str(name or "").strip()
+     if not n:
+         return []
+     fold = name_filter != "plain"
++    tail = name_filter == "regex_tail"
+     nl = n.lower() if fold else n
+-    out, own = [], False
++    tests, groups, out, own = [], [], [], False
+     for t in titles or ():
+         kind, text, low = ("test", t, t.lower()) if isinstance(t, str) else (t[0], t[1], t[2] if len(t) > 2 else t[1].lower())
+-        if text == n and not own:
++        cmp = low if fold else text
++        if tail:
++            cmp = _PW_TAG_TAIL_RE.sub("", cmp)
++        if kind == "test" and text == n and not own:
+             own = True
+             continue
+-        cmp = low if fold else text
+-        if name_filter == "regex_tail":
++        (tests if kind == "test" else groups).append((text, cmp))
++        if tail:
+             hit = kind == "test" and (cmp == nl or (cmp.endswith(nl) and cmp[-len(nl) - 1].isspace()))
+         else:
+             hit = nl in cmp
+         if hit:
+             out.append(text)
+-    return sorted(out)
++    return sorted(out + _name_collisions_across(nl, groups, tests, tail, set(out)))
++
++
++def _name_collisions_across(nl, groups, tests, tail, already):
++    """describe 結尾 + 測試開頭(regex)或整個測試標題(regex_tail)拼起來等於名字的 → ["describe > 測試", …](只看一層)。"""
++    out = []
++    for k in [i for i, c in enumerate(nl) if c == " "]:
++        left, right = nl[:k], nl[k + 1:]
++        if not left or not right:
++            continue
++        g = next((gt for gt, gc in groups if gc.endswith(left) and (not tail or gc == left or gc[-len(left) - 1].isspace())), None)
++        if g is None:
++            continue
++        for tt, tc in tests:
++            if tt not in already and ((tc == right) if tail else tc.startswith(right)):
++                out.append(f"{g} > {tt}")
++                already.add(tt)
++    return out
++
++
++_PW_TAG_TAIL_RE = re.compile(r"(?:\s@\S+)+$")
+ 
+ 
+-_TITLED_FILTERS = ("regex", "regex_tail", "plain")
++_TITLED_FILTERS = ("regex", "regex_tail", "plain")   # 字串標題型(名字是一句話,跑單支靠名稱篩選)
++_REGEX_FILTERS = ("regex", "regex_tail")              # 篩選是正規式,名字要跳脫
+ # 撞名要數「名稱篩選選得到的全部標題」,不只數可綁定的(代碼審 code-測試名收自由字串 r1 三席):it.skip、帶 ${ 的樣板、.each、
+ # 含逗號或方括號、沒還原的跳脫、超過 200 字的標題,掃描不收、但 -t/-g 照樣選得到。這支刻意放寬:寧可多數(只會比較嚴)。
+ _RAW_TITLE_RE = re.compile(
+     r"(?<![.\w$])(it|test|describe|testWidgets|group|xit|fit|xtest|xdescribe|fdescribe)((?:\.\w+)*)\s*"
+     r"(?:\((?:[^()\n]|\([^()\n]*\)){0,400}\)\s*)?\(\s*"
+     r"(?:'([^'\\\n]*(?:\\.[^'\\\n]*)*)|\"([^\"\\\n]*(?:\\.[^\"\\\n]*)*)|`([^`\\]*(?:\\.[^`\\]*)*))")
+ 
+ 
+ def _raw_test_titles(root, profile):
+     """這個平台全部測試檔裡看得到的標題 → [(種類 test|group, 標題原字, 小寫)](小寫先做好,每平台一次)。只給撞名用。"""

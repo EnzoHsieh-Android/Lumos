@@ -1,0 +1,238 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 715924aa2d93c93916df71bbe3575d8a628c7293..3973409b41ecb02e6e50788c715d0cbd804c442c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -98231,25 +98231,25 @@ def t_name_collision_sees_skipped_titles():
+         check(f"①[{label}] 被掃描丟掉的標題也算撞名 → 證不出、不判綠", res and res[0][3] == "unproven" and "撞名" in res[0][4],
+               repr(res) + str(err))
+     root = _fs_bt_repo("node-jest", {"src/a.test.ts": "it('login', () => {})\nit('結帳', () => {})\n"},
+                        "echo 'Tests:       1 passed, 2 total' {method}")
+     res, _ = m._run_bound_tests(root, [("S1", "node-jest", "login", "real")])
+     check("②沒撞名照常跑、證據對得上 → 綠", res and res[0][3] == "green", repr(res))
+ 
+ 
+ def t_playwright_name_filter_anchored():
+     """[S50][S51] Playwright 的 -g 比對「專案名 檔名 describe 標題」整串(2026-10-15 實測 1.64.1:-g login 連 login.spec.ts
+-    整檔都選中)→ 名稱錨在結尾:(?:^|\\s)<跳脫後>$;撞名只數「結尾是這個名字」的測試標題(describe、檔名不算)。
++    整檔都選中)→ 名稱錨在結尾:\\s<跳脫後>(?:\\s@\\S+)*$(代碼審 r2 起容許後面接 tag);撞名只數「結尾是這個名字」的測試標題(describe、檔名不算)。
+     應抓到的錯:不加錨 → ①紅;撞名改回子字串 → ③紅。"""
+     m = _load_lumos_inproc()
+     check("①-g 展開成錨定式", m._run_cmd_expand("npx playwright test -g {method}", "a (b) login", name_filter="regex_tail")
+-          == "npx playwright test -g '(?:^|\\s)a \\(b\\) login$'",
++          == "npx playwright test -g '\\sa \\(b\\) login(?:\\s@\\S+)*$'",
+           m._run_cmd_expand("npx playwright test -g {method}", "a (b) login", name_filter="regex_tail"))
+     check("②playwright profile 用 regex_tail", m.TEST_PROFILES["playwright"]["name_filter"] == "regex_tail", "")
+     titles = [("test", "login"), ("test", "logout works"), ("test", "relogin"), ("group", "login"), ("test", "a (b) LOGIN")]
+     check("③只數結尾是這個名字、前面隔空白的測試標題(不分大小寫)",
+           m._name_filter_collisions("login", titles, "regex_tail") == ["a (b) LOGIN"],
+           repr(m._name_filter_collisions("login", titles, "regex_tail")))
+     root = _fs_bt_repo("playwright", {"e2e/login.spec.ts": ("test.skip('login', async () => {})\n"
+                                                            "test('a (b) login', async () => {})\n"
+                                                            "test('logout works', async () => {})\n")},
+                        "echo '  1 skipped' && echo '  1 passed (1s)' {method}")
+@@ -98340,22 +98340,24 @@ def t_comment_strip_keeps_strings_all_c_style():
+     check("①Kotlin 字串裡的 /* 不吞掉後面的測試", "keptTest" in k, repr(k))
+     s = _fs_discover("swift-xctest", {"AppTests/A.swift": (
+         "class A: XCTestCase {\n  let u = \"a/*b\"\n  func testKept() {}\n  let v = \"*/\"\n}\n")})
+     check("②Swift 同上", "testKept" in s, repr(s))
+     m = _load_lumos_inproc()
+     check("③剝法只剩 c-style、c-style+strings、none", {p.get("comment_strip", "c-style") for p in m.TEST_PROFILES.values()}
+           <= {"c-style", "c-style+strings", "none"}, "")
+ 
+ 
+ def t_comment_strip_big_string_memory():
+-    """[S56] 一個 8MB 的字串字面(內嵌 fixture)剝註解時額外記憶體 < 200MB、2 秒內(群組加星號的寫法要 1GB 以上)。
+-    應抓到的錯:_JS_STRIP_RE 改回 (?:[^'\\\\\\n]|\\\\.)* → ①紅。"""
++    """[S56] 一個 8MB 的字串字面(內嵌 fixture)剝註解時額外記憶體 < 300MB、2 秒內(群組加星號的寫法要 1GB 以上)。
++    應抓到的錯:_C_STRIP_RE 改回群組加星號的寫法 → ①紅。Windows 沒有 resource 模組,不量。"""
++    if sys.platform == "win32":
++        raise _SrcOnly("Windows 沒有 resource 模組量最大常駐記憶體(這條只在 POSIX 量)")
+     # 在子程序裡量最大常駐記憶體(正規式引擎的狀態堆疊 tracemalloc 看不到);同一支子程序先量「只載入不剝」當基準
+     code = ("import importlib.machinery as M, importlib.util as U, resource, sys, time\n"
+             "l = M.SourceFileLoader('lm', sys.argv[1]); s = U.spec_from_loader('lm', l); m = U.module_from_spec(s); l.exec_module(m)\n"
+             "txt = \"it('x', () => {})\\nconst d = '\" + 'A' * (8 * 1024 * 1024) + \"'\\n\"\n"
+             "r0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss; t0 = time.monotonic()\n"
+             "m._strip_test_comments(txt, sys.argv[2])\n"
+             "print(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - r0, time.monotonic() - t0)\n")
+     r = subprocess.run([sys.executable, "-c", code, GRAPHCTL, "c-style"], capture_output=True, text=True, timeout=120)
+     try:
+         grow, secs = r.stdout.split()
+@@ -98464,15 +98466,177 @@ def t_kill_method_name_prefix_rules():
+ def t_test_name_ok_windows_shell_chars():
+     """[S64] Windows 的 cmd.exe 不認單引號:名稱含 & | < > ^ % " ! 時判不合法(POSIX 照收,安全靠 shell 引號)。
+     應抓到的錯:Windows 不額外擋 → ①紅。"""
+     m = _load_lumos_inproc()
+     old = m._IS_WIN
+     try:
+         m._IS_WIN = True
+         check("①Windows:x & calc & y 不合法", not m._test_name_ok("x & calc & y") and m._test_name_ok("下單後 按鈕會停用"), "")
+     finally:
+         m._IS_WIN = old
+-    check("②POSIX:照收", m._test_name_ok("x & calc & y") or old, "")
++    if old:
++        raise _SrcOnly("這台就是 Windows,POSIX 照收那半驗不到")
++    check("②POSIX:照收", m._test_name_ok("x & calc & y"), "")
++
++
++# ── 測試名收自由字串 代碼審 r2 的修正 ──
++
++def t_playwright_tail_tags_and_own():
++    """[S65][S66][S67] Playwright 結尾錨定(2026-10-15 實跑 1.64.1):-g 比的字串在標題後面接 tag(test('login', {tag:'@smoke'}) 是
++    「… login @smoke」),錨要容許後面的 tag;不用 | ^ <(Windows cmd.exe 會當管線、跳脫、轉向);自己那支只由「測試」佔用
++    (describe 與測試同名時 describe 不搶);標題裡寫的 @tag 也算尾巴。應抓到的錯:錨改回 (?:^|\\s)…$ → ①②紅;own 不看種類 → ③紅。"""
++    m = _load_lumos_inproc()
++    got = m._run_cmd_expand("npx playwright test -g {method}", "login", name_filter="regex_tail")
++    check("①-g 展開成 \\s<名>(?:\\s@\\S+)*$", got == "npx playwright test -g '\\slogin(?:\\s@\\S+)*$'", got)
++    check("②包裝字元沒有 Windows 特殊字元與 <", not any(c in got for c in m._WIN_CMD_SPECIAL + "<"), got)
++    titles = [("group", "checkout"), ("test", "checkout"), ("test", "pay")]
++    check("③describe 與測試同名、describe 在前 → 不算撞名", m._name_filter_collisions("checkout", titles, "regex_tail") == [], "")
++    check("④標題自己寫了 @tag(login @smoke)→ 對 login 算撞名",
++          m._name_filter_collisions("login", [("test", "login"), ("test", "login @smoke")], "regex_tail") == ["login @smoke"], "")
++    root = _fs_bt_repo("playwright", {"e2e/a.spec.ts": ("test('login', { tag: '@smoke' }, async () => {})\n"
++                                                       "test.describe('checkout', () => {\n  test('checkout', async () => {})\n})\n")},
++                       "echo '  1 passed (1s)' {method}")
++    res, _ = m._run_bound_tests(root, [("S1", "playwright", "login", "real"), ("S2", "playwright", "checkout", "real")])
++    check("⑤帶 tag 的測試、與 describe 同名的測試 → 綠", res and [x[3] for x in res] == ["green", "green"], repr(res))
++
++
++def t_name_collision_describe_plus_test():
++    """[S68] describe 標題加測試標題拼起來等於另一支名字(describe('Foo'){test('Bar')} 與 test('Foo Bar'))→ 算撞名;
++    Jest(regex,子字串)與 Playwright(regex_tail)都是。應抓到的錯:拼接那段拿掉 → ①②紅。"""
++    m = _load_lumos_inproc()
++    pw = [("group", "Foo"), ("test", "Bar"), ("test", "Foo Bar")]
++    check("①Playwright:Foo Bar 撞到 Foo > Bar", m._name_filter_collisions("Foo Bar", pw, "regex_tail") == ["Foo > Bar"],
++          repr(m._name_filter_collisions("Foo Bar", pw, "regex_tail")))
++    check("②Jest:子字串跨 describe 與測試(oo Ba)也算", m._name_filter_collisions("Foo Bar", pw, "regex") == ["Foo > Bar"], "")
++    check("③沒有可拼的 describe → 不算", m._name_filter_collisions("Foo Bar", [("test", "Bar"), ("test", "Foo Bar")], "regex_tail") == [], "")
++
++
++def t_titled_names_with_edge_spaces_not_collected():
++    """[S69] 標題頭尾有空白(test('trail '))不收:Playwright 不修剪標題(2026-10-15 實跑),收成 trail 會對不到。
++    應抓到的錯:頭尾空白照收 → ①紅。"""
++    got = _fs_discover("playwright", {"e2e/a.spec.ts": "test('trail ', async () => {})\ntest('ok', async () => {})\n"})
++    check("①頭尾有空白的標題不收", got == {"ok"}, repr(got))
++    got2 = _fs_discover("node-jest", {"src/a.test.ts": "it(' lead', () => {})\nit('ok', () => {})\n"})
++    check("②Jest 同一條規則", got2 == {"ok"}, repr(got2))
++
++
++def t_comment_strip_multiline_strings():
++    """[S70] 剝註解認得多行字串:Kotlin/Swift 的 \"\"\"、Swift 的 #\"\"\"、C# 的 @\"(跨行)、Dart 的 '''——裡面單獨一個 /* 不吃掉後面的測試。
++    應抓到的錯:拿掉多行字串那幾種 → ①到④紅。"""
++    k = _fs_discover("kotlin-junit", {"src/test/kotlin/A.kt": (
++        "class A {\n  val s = \"\"\"\n  a /* b\n  \"\"\"\n  @Test fun after4() {}\n}\n")})
++    check("①Kotlin \"\"\"", "after4" in k, repr(k))
++    s = _fs_discover("swift-xctest", {"AppTests/A.swift": (
++        "class A: XCTestCase {\n  let s = #\"\"\"\n  body /* open\n  \"\"\"#\n  func testAfter6() {}\n}\n")})
++    check("②Swift #\"\"\"", "testAfter6" in s, repr(s))
++    c = _fs_discover("csharp-xunit", {"App.Tests/A.cs": (
++        "public class A {\n  string s = @\"line1\n  /* open\n  line3\";\n  [Fact]\n  public void After8() { }\n}\n")})
++    check("③C# @\"", "After8" in c, repr(c))
++    d = _fs_discover("dart", {"test/a_test.dart": "void main() {\n  var s = '''\n  x /* y\n  ''';\n  test('after dart', () {});\n}\n"})
++    check("④Dart '''", "after dart" in d, repr(d))
++
++
++def t_guard_kill_collision_cli():
++    """[S71] guard kill 實跑:配方綁的名字會撞名 → 那條配方不跑、verdict error、原因講撞名(不只看原始碼有沒有呼叫)。
++    應抓到的錯:guard kill 的撞名分支關掉 → ①紅。"""
++    import json as _j, subprocess as sp
++    root = Path(tempfile.mkdtemp(prefix="gctl-fskill-"))
++    def g(*a):
++        sp.run(["git", "-C", str(root), *a], capture_output=True, text=True)
++    g("init", "-q")
++    g("config", "user.email", "t@t.t")
++    g("config", "user.name", "t")
++    _fs_write(root, "prod.js", "const LIMIT = 5\n")
++    _fs_write(root, "src/a.test.ts", "it('登入', () => {})\nit('登入後 看得到訂單', () => {})\n")
++    _fs_write(root, ".lumos/config.json", _j.dumps({"test_profile": "node-jest", "test": {"run_cmd": "echo 'Tests: 1 passed' {method}"}}))
++    v = root / "docs" / "kg-knowledge"
++    (v / "Systems").mkdir(parents=True)
++    (v / "MOC").mkdir()
++    (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
++    (v / "Systems" / "Limit.md").write_text(
++        "---\ntype: system\nstatus: done\nsummary: |-\n  KEY:★INVARIANT★ 上限恆為5 [test:登入]\n---\n# Limit\n", encoding="utf-8")
++    g("add", "-A")
++    g("commit", "-qm", "init")
++    r = _kr_lum(root, v, "guard", "kill-add", "Systems/Limit", "上限恆為5", "--file", "prod.js",
++                "--old", "LIMIT = 5", "--new", "LIMIT = 99", "--test", "登入")
++    g("add", "-A")
++    g("commit", "-qm", "recipe")
++    r = _kr_lum(root, v, "guard", "kill", "Systems/Limit", "--json")
++    try:
++        data = _j.loads(r.stdout)
++        rows = data.get("results") if isinstance(data, dict) else data
++    except ValueError:
++        rows = []
++    check("①撞名的配方:verdict error、原因講撞名", bool(rows) and rows[0].get("verdict") == "error"
++          and "撞名" in str(rows[0].get("detail")), r.stdout[-800:] + r.stderr[-400:])
++
++
++def t_guard_settle_name_checks_cli():
++    """[S72] guard settle 實跑:不合法的名字 rc 2、守衛紀錄不動;前後空白去掉後寫進 [test:]。
++    應抓到的錯:settle 不走共用名稱檢查 → ①②紅。"""
++    v = mkvault()
++    write(v, "Systems/Pay.md", "type: system\nstatus: doing\nsummary: |-\n  FLOW:a", body="# Pay\n")
++    write(v, "Projects/退款_計劃.md", "type: project\nstatus: doing", body="# 退款\n")
++    _gp(v, "guard", "plan", "Systems/Pay", "大額退費要人工核可", "--plan", "Projects/退款_計劃", "--phase", "Phase 4",
++        "--due", "2099-12-31", "--why", "下游介面還沒定案", "--owner", "enzo")
++    gn = next(iter((v / "Verification").glob("*.md")))
++    before = gn.read_text(encoding="utf-8")
++    r = run(v, "guard", "settle", "Verification/" + gn.stem, "--test", "有 [括號]")
++    check("①不合法名字 → rc 2、守衛紀錄不動", r.returncode == 2 and gn.read_text(encoding="utf-8") == before, r.stderr)
++    r2 = run(v, "guard", "settle", "Verification/" + gn.stem, "--test", "  退費 要人工核可  ")
++    pay = (v / "Systems" / "Pay.md").read_text(encoding="utf-8")
++    check("②前後空白去掉後寫進 [test:]", r2.returncode == 0 and "[test:退費 要人工核可]" in pay, r2.stderr + pay)
++
++
++def t_bind_name_problem_pass_and_fullwidth():
++    """[S73] 寫入端跟讀取端同一套:多平台寫成 web:下單 停用(已定義前綴)→ 放行;全形冒號 API：逾時(讀取端整串當名稱)→ 放行;
++    API: 逾時(半形、長得像平台名、未定義)→ 擋。應抓到的錯:「明寫前綴」判斷恆假 → ①紅;冒號一律擋 → ②紅。"""
++    m = _load_lumos_inproc()
++    root, _vault = _fs_bind_vault({"default_platform": "web", "platforms": {"web": {"profile": "node-jest", "root": "web"}}})
++    check("①web:下單 停用 → 放行", m._bind_name_problem(root, "web:下單 停用", None)[1] is None, "")
++    check("②API：逾時(全形)→ 放行", m._bind_name_problem(root, "API：逾時 顯示重試", None)[1] is None, "")
++    check("③API: 逾時 → 擋", m._bind_name_problem(root, "API: 逾時", None)[1] is not None, "")
++
++
++def t_clause_visible_linear():
++    """[S74] 條款行看得見的字:4 萬字、全是沒收尾的 [test:(或反引號包住的)也在 1 秒內(舊版平方級要 4.5 秒以上)。
++    應抓到的錯:每個 [test: 各自掃到行尾 → ①紅。"""
++    import time as _t
++    m = _load_lumos_inproc()
++    for label, line in (("沒收尾", "[S1] " + "[test:x " * 5000), ("反引號", "[S1] " + "`[test:x` " * 4000)):
++        t0 = _t.monotonic()
++        m._clause_visible(line)
++        secs = _t.monotonic() - t0
++        check(f"①{label}:< 1 秒", secs < 1.0, f"{secs:.2f}s")
++
++
++def t_anchor_hint_scans_once():
++    """[S75] 懸空綁定的檔名錨提示:同一個平台的「名字 → 檔」對照只掃一次(原本每條懸空重掃整個 repo)。
++    應抓到的錯:不快取 → ①紅。"""
++    m = _load_lumos_inproc()
++    root = Path(tempfile.mkdtemp(prefix="gctl-fshint-"))
++    _fs_write(root, "e2e/a.e2e.ts", "test('loginWorks', async () => {})\n")
++    pentry = {"profile": dict(m.TEST_PROFILES["playwright"]), "root": root, "profile_name": "playwright"}
++    calls = []
++    orig = m._walk_test_files
++    def counting(*a, **k):
++        calls.append(1)
++        return orig(*a, **k)
++    m._walk_test_files = counting
++    try:
++        m._ANCHOR_MAP_CACHE.clear()
++        hints = [m._anchor_migration_hint(pentry, n) for n in ("loginWorks", "nope1", "nope2")]
++    finally:
++        m._walk_test_files = orig
++    check("①三條懸空只掃一次", len(calls) == 1, f"{len(calls)}")
++    check("②提示照舊講檔名錨", "file_name_match" in hints[0] and hints[1] == "", repr(hints))
++
++
++def t_test_name_rule_text_complete():
++    """[S76] 擋下訊息的白話規則收成一句,講齊 200 字與 Windows 那幾個字元。應抓到的錯:常數漏寫 → ①紅。"""
++    m = _load_lumos_inproc()
++    s = m._TEST_NAME_RULE_ZH
++    check("①講到 200 字、Windows 與每個字元", "200" in s and "Windows" in s and all(c in s for c in m._WIN_CMD_SPECIAL), s)
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())

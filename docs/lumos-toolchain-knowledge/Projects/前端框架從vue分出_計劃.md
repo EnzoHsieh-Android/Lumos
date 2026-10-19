@@ -12,6 +12,7 @@ related:
   - "[[Systems/效能檢核目錄]]"
   - "[[Projects/前端知識與風險詞_計劃]]"
   - "[[Projects/逾期回頭條件立案清單2026-10_計劃]]"
+  - "[[Projects/測試名收自由字串_計劃]]"
 tags:
   - type/project
   - status/doing

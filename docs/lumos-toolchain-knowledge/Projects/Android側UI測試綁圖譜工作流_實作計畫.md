@@ -36,7 +36,7 @@ verified_by:
 
 - **證據路徑一律 `governance/review-reports/<loop-id>/ui-evidence/`**——前綴不可省（少了會漏掉 `pitfalls --diff` 的排除，歸檔證物被當代碼掃）。
 - **flow 的 `name:`**：識別字、**等於檔名去副檔名轉底線**、**該行不得有其他內容**（含行尾 `#` 註解）、**必須在 `---` 之前的 config 區塊**（放步驟區 Check T 照樣綠但 flow 壞）。
-- **要綁合約的 Kotlin 測試函式名必須是識別字**——反引號中文名綁不上（`IDENT_RE` 拒收、`KOTLIN_TEST_RE` 抽的是原名）。
+- **要綁合約的 Kotlin 測試函式名必須是識別字**——反引號中文名綁不上（`IDENT_RE` 拒收、`KOTLIN_TEST_RE` 抽的是原名）。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名與反引號名,只有 `guard scaffold` 仍要識別字)
 - **`platforms` 是全域開關**：宣告即 legacy `test_profile` 失效；必須同時宣告 android＋maestro 並指定 `default_platform: android`；maestro 的 `root` 指 `.maestro/`。
 - **金流全局約束**：測試門店未確認前，任何 flow 只能標「僅手動、不進回歸集」；終審 agent 不得自動 `run` 未標可自動的 flow。
 - **沒裝置的終審**：走 `lumos code-loop skip --note "無可用 Android 裝置，UI 合約未驗"`——不是綠燈，是誠實留痕。
@@ -164,7 +164,7 @@ git commit -m "feat(skill): 退場自問加第 4 問(UI 面→補可重放 flow 
 
 **2 · 命名與位置（錯了會「Check T 綠但 flow 壞」）**
 - `name:` ＝檔名去副檔名轉底線（`smoke-05-x.yaml` → `smoke_05_x`），**識別字**、**該行無其他內容**（不得有行尾 `#` 註解）、**放在 `---` 之前的 config 區塊**。
-- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。
+- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名與反引號名,只有 `guard scaffold` 仍要識別字)
 
 **3 · 七個會「沉默地做錯事」的坑（回報成功但做的是別的事，比紅燈危險）**
 | 坑 | 症狀 |
@@ -232,7 +232,7 @@ Run：`python3 -c "import sys; sys.path.insert(0,'scripts'); import test_lumos a
 
 ### Task 6：測試名／flow name 改識別字 → `guard bind` → `guard audit`
 
-- [ ] **Step 1：把要綁合約的 Kotlin 測試函式改成識別字名**（例：`` `百分比超過 100 必須擋下` `` → `manualDiscountOver100Blocked`），跑該模組測試確認仍綠
+- [ ] **Step 1：把要綁合約的 Kotlin 測試函式改成識別字名**（例：`` `百分比超過 100 必須擋下` `` → `manualDiscountOver100Blocked`），跑該模組測試確認仍綠(2026-10-15 起不必:已被 [[Projects/測試名收自由字串_計劃]] 取代,反引號名照字面綁得上;照做也不會壞)
 - [ ] **Step 2：三支 flow 的 config 區塊加 `name:`**（識別字、無行尾註解、＝檔名轉底線）：
   - `common-login.yaml` → `name: common_login`
   - `smoke-01-cash-checkout.yaml` → `name: smoke_01_cash_checkout`

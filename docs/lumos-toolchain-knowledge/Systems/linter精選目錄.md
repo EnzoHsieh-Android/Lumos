@@ -161,7 +161,7 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
 - **custom_lint**:自建規則框架(riverpod_lint 等生態基座)。**DCM**:複雜度/程式碼度量(商用)。
 - **架構軸(import 邊界,Dart 3.10+ 才可用)**:`import_rules`(2026/02,YAML 宣告 import 約束進 dart analyze)｜`import_lint`(2026/04)｜`barrel_file_lints`(feature 分層/barrel 規則)。
 - ⚠ **SDK 門檻實錘(taroko_app)**:Dart 2.19(pre-Dart 3)上述架構套件與新版 VGA 全裝不了——舊 SDK 專案的架構軸=升級 Flutter 後解鎖;過渡期用 analysis_options 手開嚴格規則(零依賴不受版本卡)。
-- **Check T**:dart profile 已內建(test('id')/testWidgets('id') 識別字名錨+*_test.dart 檔名錨)——Dart 測試可正式綁 [test:] 走合約鏈。
+- **Check T**:dart profile 已內建(test('名')/testWidgets('名') 標題整串比對(2026-10-15 起收句子名,見 [[Projects/測試名收自由字串_計劃]])+*_test.dart 檔名錨)——Dart 測試可正式綁 [test:] 走合約鏈。
 - SARIF 橋:`dart analyze` 無原生 SARIF → 2026-09-14 起用 `lumos dart-sarif` 轉(`dart analyze --format=json {LINT_FILES} 2>/dev/null | python3 scripts/lumos dart-sarif --out {LINT_SARIF_OUT}`),Dart 3.13.3 實跑過閘。
 
 ## Swift/iOS（registry: `github:<owner>/<repo>`；2026-09-08 補，★尚無 Swift 消費端，未實裝跑過★）
