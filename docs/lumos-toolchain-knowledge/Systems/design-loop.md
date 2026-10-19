@@ -57,7 +57,7 @@ summary: |-
   KEY:★d5 落地(2026-08-25,[[Projects/設計審收斂重定義_計劃]] 處置閘單輪 PASS)★——散文設計審回歸處置閘為正閘:新迴圈一律 --disposal,單輪「每發現折掉或附理由接受」即收斂(輪級規則:同輪有 blocker 席→accepted 必空);panel/K=2=舊制帳僅存已定錨 panel 記帳的舊迴圈(code-loop 自 08-08 亦處置閘——d5 原行文「留給 code-loop」誤標,同日 d2 訂正,教訓:下筆前沒回查本篇 08-08 KEY);記帳型態=各席一筆留痕(無 findings_set)+一輪僅一筆彙總 carrier;★首例實證=本案自己:pc-v2 r1 五席 27 審項/缺陷 21 全折,單輪機械收斂★;配套:prose-lint 子命令(排乾,頂層命令 62→63)/blocking↔severity 綁定+判準句入 templates/審計紀錄兩行瘦身/治理帳 rewrite 值獨立分桶;[S6] 實測=下一個真實設計迴圈,d1 升級條件(末輪 ≥major 席數≥2)屆時判
   KEY:★問世界:散文收斂(2026-08-25,調研歸檔 governance/review-reports/prose-convergence/)★——四傳統(Fagan-Gilb 密度門檻/需求工程機器前移/期刊兩輪上限+IETF 粗共識/Google Nit 不擋)零一家用「連續乾淨」審散文;2026 受控實驗:多輪重審散文全劣於單輪(FP+62%,false positive pressure);折入候選:閘改殘餘 blocking 密度+non-blocking 不擋/「新發現全 non-blocking」=收斂成功/weak-word lint 前移+行為斷言配例——動閘語意,已立案並過閘([[Projects/設計審收斂重定義_計劃]]):便宜半全落地(見 d5 落地 KEY),B 軌閘語意改造暫緩掛升級條件
   KEY:★收斂實證(2026-08-25,節點還原案 6 輪+代碼審對照)★——散文 spec 設計審 6 輪全未機械收斂(153 條全折;每折平均新生 1-2 處措辭面,「半改句」單日五發),同日 code 側一輪 minor 收斂+實作後驗證全過:再證「便宜初篩網/正確性歸下游」定位,散文無 oracle;跑滿攤人=panel K=2 下的正常出口非失敗;待加強:①cluster 分群帳(現有機制,首輪就開,「文件精度」群 accepted-minor 不擋收斂)②被審 spec 瘦身(審計史外移)
-  KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席循序一輪一筆處置帳→--disposal;多席 panel 每席各記→--gate --panel --min-seats 3(08-06 後 K=2);兩閘互斥,問錯 CLI 會擋下並指路(指令獨立行);漂移守衛 t_loop_status_disposal_panel_routing
+  KEY:★問閘雙軌(2026-08-24,[[Issues/設計迴圈問閘指令與panel記帳互斥]] d1 落地)★——記帳型態決定閘:單席一輪一筆處置帳→--disposal(2026-10-15 起新的一般代碼審每筆帶輪次,見 [[Projects/記帳與迴圈工具小修_計劃]] d1);多席 panel 每席各記→--gate --panel --min-seats 3(08-06 後 K=2);兩閘互斥,問錯 CLI 會擋下並指路(指令獨立行);漂移守衛 t_loop_status_disposal_panel_routing
   KEY:★[2026-08-14]canary 協議停用(單源=[[Systems/canary-audit]] d5)★——植入/判定/抽樣分權/漏抓懲罰全停;輪記帳改 `canary record none`(純處置帳載體),panel 輪有效=記帳席≥2;skill 頁頂掛告示、植入步驟標停用;「審計員有沒有讀」由 quote-check 引句錨定把關;落地驗證=[[Verification/2026-08-14_canary協議停用none制落地]]
   KEY:[2026-08-04 重設計]★收斂改走處置閘★(--disposal;完整設計=[[Projects/design-loop重設計]],r1 panel 自審收斂+人裁放行)——定位修訂「閘便宜,審不淺」(前提層錯誤明列本層職責:TDD/E2E 對 spec 理解本身無 oracle);★(2026-08-21 程式碼實證)更正:三合一「退場」不準確——只有 capture-recapture 降 advisory;panel 的「輪有效∧存活≤minor」仍是必要合取,且 2026-08-05 起新 loop 加嚴為 K=2(連兩輪各自過);「K-streak」在程式碼專指 legacy 模式(K=2∧G1∧G2),與 panel 合取是兩套;「1/38」全庫查無出處★ capture-recapture 降 advisory(封閉母體前提不成立);canary 降級觀測(d4);錨定紀律=finding 必附逐字引句、quote-check 對凍結快照機械驗。舊 panel 閘保留給 code-loop——★2026-08-08 撤銷:code-loop 亦改走處置閘(Enzo 具名推翻防浮動條款,見[[Projects/驗證層去模型化_計劃]];A 案機制碼保留供舊帳重放)★
   KEY:[2026-08-06 收貨三道,plan:[[Projects/驗證層自證三件_計劃]]]收貨=quote-check(引句↔凍結快照)+refcheck(finding file:line↔repo 實在性)+★seat-check★(有講沒做對帳:dispatch manifest rN-dispatch.json 宣告 materials→unreported/out_of_scope,越界另記 out-of-scope.jsonl 不進收斂帳;lens 觀測不判定/空 materials vacuous 豁免/恆 rc0 觀測)[test:t_s1_seat_check];派工慣例同步=派工當下落 dispatch manifest;新機制準入三問(Growth test,borrow evidra)入 skill 護欄後段
@@ -259,6 +259,10 @@ WHY:計劃在別的工作樹時,手冊第 1 步的工作副本與指紋改用 sp
 ## 工具鏈本 repo 的鏡頭範圍只改代碼審(2026-10-15)
 
 WHY:工具鏈本 repo 的代碼審把資安席收窄到三類、原併發與資源席改成資源鏡頭,設計審不跟著收窄——§1 審計員第 5 點的併發題與 §7 設計審 panel 的資源併發席照舊;範本 §7、§7.7 是兩種審查共用的段落,這次補進去的句子都寫明只限代碼審 [出處:[[Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃]] d1;規則在 [[Systems/pitfalls-code-loop]] d8] [因:使用者原話只講代碼審;先讓代碼審新範圍跑一季,有實際數字再議設計審] [test:t_templates_toolchain_resource_lens]
+
+## 首輪先排乾再凍結的提醒(2026-10-15,[[Projects/記帳與迴圈工具小修_計劃]] 第 9 節)
+
+WHY:設計審 `loop next` 在派工階段印「先排乾再 spec-freeze、才派工」,第一輪多一句先跑前掃;`spec-freeze --out` 撞到內容不同的既有快照照舊拒絕,訊息多半句「還沒派給任何席就可以刪掉重凍」[出處:前端示範先凍了快照才做前掃修補,要 git rm 舊快照才能重凍] [因:手冊有順序、工具沒提醒] [test:t_loop_next_design_first_round_freeze_order]
 
 ## 前端補充與網頁前端資安類(2026-10-15,[[Projects/前端知識與風險詞_計劃]] 做法 4–5)
 

@@ -256,6 +256,10 @@ WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitf
 
 測試 t_loop_next_lens_scope_toolchain_vs_consumer、t_loop_next_lens_scope_design_untouched、t_loop_next_lens_scope_fail_open、t_loop_next_lens_scope_loose_code_ids、t_loop_next_lens_scope_marker_odd_kinds、t_loop_next_lens_scope_root_kind。
 
+## 每個分級都講要派誰(2026-10-15,[[Projects/記帳與迴圈工具小修_計劃]] 第 6 節)
+
+WHY:`pitfalls` 的人可讀輸出在 `tier:` 那行下面多印「這級仍要代碼審:<席位(要求)>」與開審指令,席位從應派名冊 `_TIER_ROSTER[("code", tier)]` 讀(`_pitfall_tier_review_lines`),`--json` 不動 [出處:後端示範代理把 standard 讀成不用審,補審抓到 1 major] [因:輸出只講分級、沒講分級的意思] [test:t_pitfalls_tier_prints_review_seats]
+
 ## 角色鏡頭認得 React(2026-10-15,[[Projects/前端框架從vue分出_計劃]])
 
 `.ts/.js` 的棧鍵多了 `react`(依賴只有 react 家族的前端),`_review_role_for` 把 vue 與 react 兩個棧鍵都判前端(`_ROLE_FRONT_KEYS`),所以 React 專案裡沒有 `.tsx` 副檔名兜底的 `.ts` 也拿得到前端卡。`.tsx/.jsx` 仍先靠副檔名判前端,行為不變。測試 t_review_role_react_ts_frontend。

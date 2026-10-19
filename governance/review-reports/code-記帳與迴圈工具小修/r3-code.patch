@@ -1,0 +1,2608 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index bcb9c015..d486099e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -1079,21 +1079,21 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
+         try:
+             for line in _ledger_lines(ledger.read_text(encoding="utf-8", errors="replace")):
+                 if not line.strip():
+                     continue
+                 try:
+                     d = json.loads(line)
+                 except ValueError:
+                     continue
+                 # 規格閘留痕不是審查輪(雙向門放行_計劃 S16);處置閘本來就略過,凍結與回放要同一種讀法,
+                 # 不然整個迴圈被判成「有的帶輪次有的不帶」而拒凍(2026-09-26 兩份設計審過閘後凍結被擋)
+-                if isinstance(d, dict) and d.get("loop") == loop_id and d.get("kind") != "spec-gate":
++                if isinstance(d, dict) and d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d):
+                     raw.append(line)
+                     parsed.append(d)
+         except OSError as e:
+             print(f"擋下:帳本讀不到({e}): {ledger}", file=sys.stderr)
+             return None, None
+         return raw, parsed
+ 
+     def _sha(s):
+         return hashlib.sha256(s.encode("utf-8")).hexdigest()
+ 
+@@ -1552,21 +1552,21 @@ def _gate_event(repo_root, gate, kind, note, *, hard=False, head_sha=None,
+     try:
+         with open(path, "a", encoding="utf-8") as f:
+             f.write(line)
+         return True
+     except (OSError, UnicodeEncodeError):   # 帶不能編碼的字串(孤立代理字元)也算寫不進去,不丟堆疊(r2 併發、邊界席)
+         return False
+ 
+ 
+ def _ledger_tail_needs_newline(path):
+     """帳檔非空而且最後一個位元組不是換行(上一次寫一半)→ True。追加前先補一個換行,新事件才不會黏在半行後面、整行被讀側丟掉
+-    (代碼審 code-審查跑滿回顧 r1 併發席)。★帳尾檢查只有這一支★:_gate_event、_append_governance_log 與 _drift_ledger_append 呼叫它(r2 架構對齊席);★不是所有追加寫入器★——code-loop 的 _codeloop_gov_log、_codeloop_dispositions_gov_log 與審查帳的 _jsonl_append_verified 還沒接(r4 併發席,本分支沒改,見 Issues/治理帳與審查帳其他讀寫函式的硬化缺口)。
++    (代碼審 code-審查跑滿回顧 r1 併發席)。★帳尾檢查只有這一支★:_gate_event、_append_governance_log 與 _drift_ledger_append 呼叫它(r2 架構對齊席);★不是所有追加寫入器★——code-loop 的 _codeloop_gov_log、_codeloop_dispositions_gov_log 還沒接(r4 併發席,見 Issues/治理帳與審查帳其他讀寫函式的硬化缺口);審查帳的 _jsonl_append_verified 2026-10-15 接上(記帳與迴圈工具小修 代碼審 r2 邊界 4)。
+     開檔走 _regular_own_fd(一次開檔、管線不卡住、開檔後才判一般檔;不先 stat 再 open,r2 併發席);不是一般檔或讀不到 → False(不碰)。
+     ★跟隨捷徑(follow=True)★:版控治理帳的寫入器跟隨捷徑追加,帳尾要看同一個檔,不然捷徑帳缺換行時新事件照樣黏行(r3 合約、邊界席);
+     不跟隨捷徑的寫入器(_local_ledger_append 開檔就擋捷徑、_drift_ledger_append 先過 _drift_ledger_path_err)遇到捷徑本來就不寫,跟不跟隨不影響它們。
+     讀最後一個位元組用 os.lseek + os.read(os.pread 只有 Unix 有,r3 邊界席)。"""
+     fd = _regular_own_fd(path, os.O_RDONLY, require_owner=False, follow=True)
+     if fd is None:
+         return False
+     try:
+         size = os.fstat(fd).st_size
+         if size <= 0:
+@@ -9393,21 +9393,21 @@ def _spec_gate_ledger_index(env, fields=None, bad=None):
+     (代碼審 code-規格閘不做節 r7 架1:不再讓一支函式帶兩種模式);非 UTF-8 的位元組換成替代字元照讀(一列壞字不讓整本帳讀不到)。
+     fields=欄位名集合時每列只留這幾欄(推送前檢查用,代碼審 r6 併1),完整設計審的列例外整列留(_spec_gate_full_row,代碼審 r8 併1)。
+     帶輪次的列照留:輕量審那一頭跟 loop status --light 一樣,看到就判不了(代碼審 r7 資3:r6 讀帳時整筆跳過,major 用 --round 記就看不到)。
+     bad=串列時讀不懂的行號加進去(_canary_ledger_rows)。檔讀不到 → OSError 往上丟。"""
+     path = env.vault.parent / ".canary-log.jsonl"
+     by = {}
+     if not path.exists():
+         return by
+     for d in _canary_ledger_rows(path, errors="replace", bad=bad):
+         lp = d.get("loop")
+-        if not isinstance(lp, str) or not lp:
++        if not isinstance(lp, str) or not lp or _is_outcome_row(d):   # 結局帳不是審查輪(_is_outcome_row)
+             continue
+         lp = nfc(lp)
+         keep = fields is None or _spec_gate_full_row(lp, d)
+         by.setdefault(lp, []).append(d if keep else {k: v for k, v in d.items() if k in fields})
+     return by
+ 
+ 
+ def _nogo_ctx(env):
+     """推送前檢查共用的查表(代碼審 r5 併1、架3):審查帳讀一次(_spec_gate_ledger_index,只留 _SPEC_GATE_PUSH_FIELDS)、照迴圈編號(NFC)分組;
+     snap 是凍結快照(路徑、帳上雜湊)算過的結果,同一份快照只讀一次。讀不到帳的 OSError 記在 err:推送前檢查開頭就擋下並講原因(_spec_gate_push_scan;代碼審 r6 G2)。
+@@ -11047,21 +11047,21 @@ def _cap_hint(rows, gate=None):
+     breaker = ({"total": total, "unrecorded_rounds": unrecorded} if total > _CAP_HINT_BREAKER else None)
+     if not at_cap and not breaker:
+         return None
+     return {"cap": cap, "tier": tier, "at_cap": at_cap, "rounds": out_rounds, "hint": _cap_hint_advice(out_rounds),
+             "breaker": breaker, "gate_status": gate}
+ 
+ 
+ def _cap_hint_scope(rows):
+     """跑滿上限提示的適用範圍:回 (分級, 上限) 或 None(不印)。"""
+     # 只給多席格式:每一列都帶輪次(循序單審與 light 不帶)
+-    if not rows or any("round" not in r for r in rows):
++    if _loop_round_format(rows) != "all":
+         return None
+     if not _panel_retired_for(rows):      # 2026-08-26 以前開的舊迴圈
+         return None
+     tier = _loop_anchor_tier(rows) or "standard"   # 沒定錨照 loop next 的退路
+     if tier == "light":
+         return None
+     cap = (_TIER_PARAMS.get(tier) or (None, None))[1]
+     return (tier, cap) if cap else None
+ 
+ 
+@@ -11336,59 +11336,176 @@ def _ledger_rel_path(p, root):
+     """審查帳存路徑的唯一寫法:resolve 後在 root(repo 根)底下存相對路徑、之外存絕對路徑。
+     留痕(--report/--snapshot/--intake/--spec)、逐條來源(--finding-source)與 report-normalize --items 印的範本都走這支,
+     處置閘拿帳上字串直接比對,不再正規化(代碼審minor解綁)。"""
+     pr = Path(p).resolve()
+     try:
+         return str(pr.relative_to(root))
+     except ValueError:
+         return str(pr)
+ 
+ 
++def _is_outcome_row(d):
++    """結局帳列(--outcome;結構上不能帶輪次、不帶報告)。它不是審查輪:讀審查列的入口一處濾掉——_canary_ledger_scan(loop next、
++    canary record、跑滿回顧、修正關卡)、_loop_status_read(loop status 各模式與處置閘)、loop replay 的讀帳、_spec_gate_ledger_index
++    (推送前的規格閘一族)——跟規格閘留痕同一個位置濾;呼叫端不再各自重濾(記帳與迴圈工具小修 代碼審 r1 通才 1、r2 正確性 1/4、架構席)。"""
++    return isinstance(d, dict) and "outcome" in d
++
++
++def _loop_round_format(rows):
++    """一個迴圈的帳列輪次格式:empty(零筆)/ all(每筆帶 round)/ none(都不帶)/ mixed(有的帶有的不帶)。
++    rows 是讀帳入口給的審查列(結局帳與規格閘留痕已濾掉,見 _is_outcome_row)。canary record 寫側、loop next、
++    loop status --panel、處置閘與跑滿上限提示的範圍都用這一支(記帳與迴圈工具小修_計劃 d1;代碼審 r1 架構 1、通才 4)。"""
++    if not rows:
++        return "empty"
++    n = sum(1 for r in rows if "round" in r)
++    return "all" if n == len(rows) else "none" if n == 0 else "mixed"
++
++
++_RF_RENUMBER = "  接下來:這個編號記不了這筆,換新編號重記:lumos loop next <新編號> --tier <分級> --orchestrator <claude|codex>"
++
++
++def _none_reserved_lines(findings_set, folded_set, accepted_set, regression_set, refuted_set):
++    """none 是保留字(記帳與迴圈工具小修_計劃 d3):--findings-set 裡出現 none、其他清單把 none 跟別的 id 並列、--refuted-set 的 id 叫 none
++    → 回擋下訊息行;都沒有回 []。整串只寫 none 是「一條都沒有」,不在這裡擋。"""
++    def items(raw):
++        return [] if raw is None else [x.strip() for x in str(raw).split(",") if x.strip()]
++    bad = None
++    if any(x.casefold() == "none" for x in items(findings_set)):
++        bad = ("--findings-set", findings_set)
++    else:
++        for flag, raw in (("--folded-set", folded_set), ("--accepted-set", accepted_set), ("--regression-set", regression_set)):
++            its = items(raw)
++            if len(its) > 1 and any(x.casefold() == "none" for x in its):
++                bad = (flag, raw)
++                break
++        if bad is None and str(refuted_set or "").strip().casefold() != "none":
++            if any(x.partition("=")[0].strip().casefold() == "none" for x in items(refuted_set)):
++                bad = ("--refuted-set", refuted_set)
++    if bad is None:
++        return []
++    return [f"擋下:{bad[0]} 裡有叫 none 的發現 id({_esc_clean(repr(bad[1]), 120)})——none 是保留字",
++            "  在意的原因:整串寫 none 的意思是「一條都沒有」;拿它當發現 id,其他清單寫 none 就分不清是空的還是指這一條,帳又撤不掉。",
++            "  接下來:這輪一條都沒有就別帶處置清單(或整串只寫 none);真有這一條就換一個 id(例如 n1)再記"]
++
++
++def _rf_qloop(loop):
++    """擋下訊息裡印給人照抄的編號:照鄰居做法先 shell quote 再清控制字元(_esc_clean),不截斷——截掉的編號照抄會開出另一個迴圈
++    (記帳與迴圈工具小修 代碼審 r2 邊界 2、架構 1:原本先清再截 80 字才 quote,同函式另一處又截 60 字)。"""
++    import shlex as _shlex
++    s = _shlex.quote(str(loop))
++    return _esc_clean(s, len(s))
++
++
++def _round_format_bad_lines(lerr, whole_ledger_bad):
++    """帳壞時的擋下訊息(輪次規則與 --orchestrator、--regression-set 讀帳共用這一句;代碼審 r2 邊界 3、架構 2)。"""
++    head = (f"擋下:審查帳讀不懂({lerr}),沒辦法確認輪次格式——整本判不了,任何編號都先不記" if whole_ledger_bad
++            else f"擋下:這個審查編號的帳有一列讀不懂({lerr}),沒辦法確認輪次格式(別的編號不受影響)")
++    return [head,
++            "  在意的原因:照零筆處理會把第二、三席誤當第一筆;帳本只能追加,記錯撤不掉。",
++            "  接下來:先修好帳裡那一行(檔案有 git 版控,對照上一版就找得到),再記"]
++
++
++def _rf_mixed_next(cur, has, rec):
++    """混用擋下的「接下來」那一行:照既有格式與這筆是不是處置帳,講唯一走得通的出路。"""
++    if cur == "mixed":
++        return _RF_RENUMBER + "(這個編號的帳已經混用、判不了)"
++    if not has:
++        return "  接下來:補上 --round(跟同輪其他席同一個輪次)再記"
++    if "findings_set" in rec:
++        return _RF_RENUMBER + "(處置帳一定要輪次,既有的又都不帶)"
++    return "  接下來:拿掉 --round 再記(既有的都不帶)"
++
++
++def _round_format_write_block(loop, rows, lerr, rec, tier, whole_ledger_bad=False):
++    """canary record 寫側的輪次規則(記帳與迴圈工具小修_計劃 d1):這筆寫進去會不會毒到整個迴圈。
++    回 None=放行,或 (事件標籤, [訊息行…])。這筆是結局帳(--outcome)由呼叫端整段跳過;既有列裡的結局帳不算(_loop_round_format)。
++    規則:①帳讀不懂就擋——整本不是 UTF-8 時任何編號都擋(讀側也整本判不了),這個編號自己有壞列時只擋這個編號;
++    ②寫進去會「有的帶輪次、有的不帶」就擋;③帳上零筆、或既有列都沒定分級時,有效分級(帳上定錨,沒有就取這筆 --tier)
++    是 standard/high 而這筆沒帶 --round 就擋(已定錨的迴圈照混用規則判;帳上全無輪次的舊循序代碼審補 standard 照舊放行);
++    ④code- 的第一筆沒帶 --tier 也沒帶 --round 就擋。light 不規定格式(待決問題 Q1)。"""
++    q = _rf_qloop(loop)
++    if lerr is not None:
++        return ("bad-ledger", _round_format_bad_lines(lerr, whole_ledger_bad))
++    rv = rows
++    has = "round" in rec
++    cur = _loop_round_format(rv)
++    if _loop_round_format([*rv, rec]) == "mixed":
++        a = sum(1 for r in rv if "round" in r)
++        head = (f"擋下:這個審查編號既有 {len(rv)} 筆裡 {a} 筆帶輪次、{len(rv) - a} 筆不帶,這筆{'帶' if has else '不帶'} --round")
++        why = "  在意的原因:寫進去之後 loop next 和處置閘會判「有的帶輪次、有的不帶」,整個迴圈判不了,帳本撤不掉。"
++        return ("mixed", [head, why, _rf_mixed_next(cur, has, rec)])
++    if has:
++        return None
++    anchor = _loop_anchor_tier(rv)
++    eff = anchor or tier
++    is_code = str(loop).startswith("code-")
++    if not rv and eff is None and is_code:
++        return ("code-first-no-tier", [f"擋下:代碼審({q})的第一筆沒帶 --tier 也沒帶 --round",
++                                       "  在意的原因:第一筆定下這個迴圈的格式;之後的處置帳一定要輪次,這筆不帶就會讓整個迴圈混用、判不了。",
++                                       f"  接下來:照 loop next 印的範本記,第一筆帶 --tier 與 --round,例如 lumos canary record none --loop {q} --round r1 --tier <分級> …"])
++    if eff in ("standard", "high") and (not rv or anchor is None):
++        if rv and cur == "none" and eff == "standard" and is_code:
++            return None   # 帳上全無輪次的舊循序代碼審,補定錨 standard 照舊是循序(t_seq_code_std_anchor)
++        if rv:   # 既有都不帶輪次:補上輪次會被混用擋、不補又不合分級,唯一出路是換編號(代碼審 r1 正確性 1)
++            return ("first-no-round", [f"擋下:分級 {eff} 的迴圈每筆都要帶 --round,但這個編號既有 {len(rv)} 筆都不帶輪次、還沒定分級",
++                                       "  在意的原因:這筆不帶就不合分級;補上輪次又會讓迴圈「有的帶、有的不帶」,整個迴圈判不了、帳撤不掉。",
++                                       _RF_RENUMBER])
++        return ("first-no-round", [f"擋下:分級 {eff} 的迴圈每筆都要帶 --round,這筆沒帶(這是第一筆)",
++                                   "  在意的原因:處置帳一定要輪次;這筆不帶,之後載體帶輪次寫進來就會「有的帶、有的不帶」,整個迴圈判不了、帳撤不掉。",
++                                   f"  接下來:補上輪次再記,例如 lumos canary record none --loop {q} --round r1 --tier {eff} …"])
++    return None
++
++
+ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severity=None, findings=None, round_id=None, capture_counts=None, clusters=None, spec=None, reviewed=None, tokens=None, wallclock_min=None, tier=None, scope_lines=None, report=None, snapshot=None, intake=None, findings_set=None, folded_set=None, accepted_set=None, accept_reasons=None, canary_type=None, probe=None, finding_kinds=None, refute_verdicts=None, outcome=None, usd=None, orchestrator=None, refuted_set=None, finding_severities=None, regression_set=None, finding_sources=None):
+     """記一筆審計輪留痕。kind=caught|missed 是 canary 植入判定(★協議 2026-08-14 停用,
+     僅歷史帳;見 Systems/canary-audit d5★);kind=none = 無植入輪的純處置帳載體——
+     停用後每輪照記(severity/findings/disposal 欄位是 loop status --disposal 的讀取源)。
+     record-only、本機;漏抓(missed)= 該輪審計員放水的訊號,經 lumos gov 可查詢。
+     --loop/--severity:把這輪歸進某設計 loop(供 lumos loop status 算收斂)。
+     --clusters(M2):該輪 risk-cluster 三態帳(每輪至多一筆帶;讀側 loop status --panel 消費)。
+     天花板:這只證明「審計員有沒有醒著讀」,不證明它抓到所有真問題(見設計 doc)。"""
+     import json
+     import datetime
+     import secrets
+     if not token:
+         token = "CANARY-" + secrets.token_hex(4)   # 隨機,非時間戳(同秒不撞)
+     rec = {"ts": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
+            "kind": kind, "auditor": auditor or "", "token": token, "note": note or ""}
+     if loop:
+         rec["loop"] = loop
++    if round_id is not None and not str(round_id).strip():
++        round_id = None   # --round 純空白當沒帶(代碼審 code-記帳與迴圈工具小修 r1 邊界 4:原本能滿足「每筆要帶輪次」)
++    # 整本帳最多讀一次、用到才讀(參數先驗):--orchestrator、--regression-set、跑滿回顧、輪次規則、載體最後記、定錨留痕共用
++    # (記帳與迴圈工具小修_計劃;代碼審 r1 資源 1、r2 資源 1 到 3:原本預設路徑讀三次、被擋的呼叫也先讀)。只留這個編號的列,不留整本掃描結果。
++    _lcache = {}
++
++    def _lread():
++        if "v" not in _lcache:
++            _lcache["v"] = _loop_records_checked_ex(env, loop) if loop else ([], None, False)
++        return _lcache["v"]
++
++    def _lbad_lines():
++        _r, _e, _w = _lread()
++        return _round_format_bad_lines(_e, _w)
+     # D 前置(2026-08-05):植入型別/探針結果結構化——原散文 note 不可重算;
+     # 不給不寫鍵(T1 相容慣例)。D 本體開工條件=帶型別記錄攢滿 15 筆(canary-stats 可數)。
+     if canary_type:
+         rec["canary_type"] = canary_type
+     if probe:
+         rec["probe"] = probe
+     if round_id:
+         if round_id.startswith("__"):
+             # r3 終審修(3 席重疊):__ 為讀側內部鍵保留字首(round-less 逐筆 __seqN)——
+             # 使用者 round-id 撞鍵可讓新輪併入舊輪、舊 carrier 冒充最新處置帳偽 PASS
+             print(f"擋下:輪次編號不能用 __ 開頭(工具內部保留這個字首),換一個: {round_id!r}", file=sys.stderr)
+             return 2
+         rec["round"] = round_id   # panel 一輪 W 筆共享 round-id(loop status --panel 分組)
+-        # 審查跑滿回顧〈三〉1:人裁之後再記新一輪——要記的列輪次不在帳上而且這個迴圈要回顧時才讀治理帳;沒有人裁紀錄的迴圈放行(行為不變)
+-        if loop:
+-            _crb = _cap_retro_record_block(env, loop, round_id)
+-            if _crb:
+-                if _crb[0] != "cap-gov-bad":   # 治理帳本身不能碰(捷徑、管線…)時不往裡寫擋下事件(代碼審 code-審查跑滿回顧 r3 資安席)
+-                    _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked", f"{_crb[0]} loop={loop} id={uuid.uuid4().hex[:8]}", hard=True)
+-                for _ln in _crb[1]:
+-                    print(_ln, file=sys.stderr)
+-                return 2
+     if capture_counts:
+         try:
+             rec["capture_counts"] = [int(x) for x in str(capture_counts).split(",") if x.strip()]
+         except ValueError:
+             print(f"擋下:--capture-counts 要用逗號分隔的整數(像 2,1,1),你給的是 {capture_counts!r}", file=sys.stderr)
+             return 2
+     if severity:
+         rec["severity"] = severity
+     if findings is not None:
+         if findings < 0:
+@@ -11436,20 +11553,21 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+             if _val < 0:
+                 print(f"擋下:--{_name.replace('_', '-')} 只能填 0 或正整數,你給的是 {_val}", file=sys.stderr)
+                 return 2
+             rec[_name] = _val
+     if scope_lines is not None and scope_lines > _CANARY_SCOPE_SOFT_CAP_LINES:
+         rec["scope_oversize"] = True
+         print(f"提醒:這輪要審的東西有 {scope_lines} 行,超過建議的軟上限 {_CANARY_SCOPE_SOFT_CAP_LINES} 行"
+               f"(外部研究認為材料太多審查員容易看不完、漏審)。", file=sys.stderr)
+         print("  不擋你記錄,但帳上已標成 scope_oversize,這一輪抓到的結果算弱證據——"
+               "審查員可能是「看不完」而不是「沒問題」;收斂結論講保守一點,下一輪拆開審。", file=sys.stderr)
++        print("  拆包審時 --scope-lines 與 --snapshot 要填這一席那一包,不是整份(記帳與迴圈工具小修_計劃 第 7 節)", file=sys.stderr)
+     # ── 自主迴圈結局帳(2026-08-26 auto-loop-repair-v2):outcome/usd 結構化欄 ──
+     # 為什麼開新欄——[S4] 七天彙總要機器回讀「這輪怎麼收+花多少」;塞 note 散文是
+     # 專案明文放棄的舊路(note 在讀側一律丟棄防散文注入)。不給不寫鍵,舊列=舊格式桶。
+     if outcome is not None:
+         # 封閉列舉(code-r1 s4-f1:細類值域也要鎖——只驗主類會讓未宣告的分類靜默進帳,
+         # 讀側的彙總桶就對不上);新增細類=先改這裡+spec 分類節,逼兩邊同步。
+         _OUTCOMES = ("converged", "skipped",
+                      "unconverged:cap", "unconverged:disputed", "unconverged:degraded-high",
+                      "tier-blocked:spec", "tier-blocked:gate", "tier-blocked:cross",
+                      "pipeline_fail:api_error", "pipeline_fail:truncated",
+@@ -11474,35 +11592,52 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         rec["tier"] = tier
+     # ── d4 編排者定錨欄(選配;首個帶 orchestrator 的記錄定錨;帳面已定錨就不能中途換) ──
+     if orchestrator is not None:
+         if orchestrator not in LOOP_ORCHESTRATORS:
+             print(f"擋下:--orchestrator 只能是 {'/'.join(LOOP_ORCHESTRATORS)} 之一,你給的是 {orchestrator!r}", file=sys.stderr)
+             return 2
+         if not loop:
+             print("擋下:--orchestrator 是「誰在編排這個迴圈」,要跟 --loop 一起給;沒 --loop 的記錄定錨不到任何迴圈(孤兒欄)", file=sys.stderr)
+             return 2
+         if loop:
+-            _recs = _loop_records(env, loop)
++            _recs, _rerr, _rwhole = _lread()
++            if _rerr is not None:   # 帳壞:跟輪次規則同一句(代碼審 r2 邊界 3:原本退回會丟例外的舊讀法)
++                for _ln in _round_format_bad_lines(_rerr, _rwhole):
++                    print(_ln, file=sys.stderr)
++                return 2
+             _prev = _loop_orchestrator(_recs)
+             if _prev and _prev != orchestrator:
+                 print(f"擋下:這個審查編號第一筆就定成 {_prev} 編排,中途換成 {orchestrator} 帳就對不上——要換請開新編號", file=sys.stderr)
+                 return 2
+             if _recs and _prev is None and orchestrator != "claude":   # 舊帳(沒欄)第一次帶旗標會回溯改分家(code-codex-s2 r1 單reviewer F1)
+                 print(f"擋下:這個審查編號已有 {len(_recs)} 筆沒記編排者的舊記錄,讀側一律視為 claude;現在補 {orchestrator} 會把前幾輪的外家判定全翻掉——要用 {orchestrator} 編排請開新編號", file=sys.stderr)
+                 return 2
+         rec["orchestrator"] = orchestrator
+     # ── T1 相容雙讀(design-loop重設計 實作計畫):處置帳六選配欄——★全部不給=行為與今日相同★ ──
+     # 集合核對而非總數核對(r1 Codex:只核總數可被重複計數/虛構項配平);
+     # 「不給不寫鍵」同 --findings 慣例;違反一律 rc2(寫側就擋,不留到 gate)。
+     def _ids(raw):   # None=未給;""=明示空集合(兩者語意不同)
+         return None if raw is None else [x.strip() for x in raw.split(",") if x.strip()]
+-    f_set, fo_set, ac_set = _ids(findings_set), _ids(folded_set), _ids(accepted_set)
++    # 記帳與迴圈工具小修_計劃 第 2 節(d3,代碼審 r2 編排者裁定 G2):none 是保留字——整串只寫 none(不分大小寫)=「一條都沒有」(空集合);
++    # 任何清單裡出現叫 none 的發現 id 一律擋(原本發現清單有 none 時 --regression-set none 第一輪死路、之後記成回歸;代碼審 r2 邊界 1、正確性 3)。
++    _rsv = _none_reserved_lines(findings_set, folded_set, accepted_set, regression_set, refuted_set)
++    if _rsv:
++        for _ln in _rsv:
++            print(_ln, file=sys.stderr)
++        return 2
++
++    def _set_or_none(raw):
++        items = _ids(raw)
++        if items is not None and len(items) == 1 and items[0].casefold() == "none":
++            return []
++        return items
++    f_set, fo_set, ac_set = _ids(findings_set), _set_or_none(folded_set), _set_or_none(accepted_set)
+     if any(x is not None for x in (fo_set, ac_set, accept_reasons, refute_verdicts, finding_kinds, regression_set, finding_sources)) and f_set is None:
+         print("擋下:--folded-set/--accepted-set/--accept-reason/--refute-verdict/--finding-kind/--regression-set/--finding-source 要跟 --findings-set 一起給(先列出發現了什麼,才能說各自怎麼處置)", file=sys.stderr)
+         return 2
+     if f_set is not None:
+         if not f_set:
+             print("擋下:--findings-set 不能是空的;這輪沒有任何發現的話,處置那幾個選項就別帶", file=sys.stderr)
+             return 2
+         if len(set(f_set)) != len(f_set):
+             print(f"擋下:--findings-set 裡有重複 id: {f_set}", file=sys.stderr)
+             return 2
+@@ -11571,31 +11706,38 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+                     # 圍欄內不算(r1 f3):intake 裡示範格式的 ``` 範例列不能當真重現紀錄——可見性跟拒收偵測同一套 _visible_lines
+                     if not any(_pat.search(ln) and any(w in ln for w in _kw) for _no, ln in _visible_lines(_itext.splitlines(), keep_fenced=False)):
+                         print(f"擋下:--refuted-set 的 {k} 在 intake 裡找不到「同一列含整字 {k} 與 HIT/MISS/重現/採信」的重現表列——重現不到要有機械重現留痕(整字比對,{k}0 不算 {k})", file=sys.stderr)
+                         return 2
+         # 上一輪修補造成的(Projects/代碼審修正關卡第0步_計劃):選填;none=判過、沒有(大小寫不拘,同 --refuted-set);
+         # 由編排者標、辯方不推翻;只當修正關卡撤除條件的輔助指標(主指標是收斂輪數)
+         if regression_set is not None:
+             if not loop:
+                 print("擋下:--regression-set 要帶 --loop(要看這個迴圈有沒有更早的輪)", file=sys.stderr)
+                 return 2
+-            if str(regression_set).strip().lower() == "none":
+-                rg = []
+-            else:
+-                rg = sorted(set(_ids(regression_set)))
+-                if not rg:
+-                    print("擋下:--regression-set 是空的——這輪判過、一條都不是上一輪修補造成的,就明寫 none", file=sys.stderr)
+-                    return 2
++            if not str(loop).startswith("code-"):   # 判法同 --finding-source(記帳與迴圈工具小修_計劃 d2)
++                print("擋下:--regression-set 只給代碼審(code- 開頭的迴圈)用", file=sys.stderr)
++                print("  在意的原因:讀這欄的只有代碼審修正關卡;設計審記了也不會被用到,帳又撤不掉。", file=sys.stderr)
++                print("  接下來:拿掉 --regression-set 再記", file=sys.stderr)
++                return 2
++            if not _ids(regression_set):   # 全空白(含 Tab)、只有逗號都算空(代碼審 r1 邊界 1)
++                print("擋下:--regression-set 是空的——這輪判過、一條都不是上一輪修補造成的,就明寫 none", file=sys.stderr)
++                return 2
++            rg = sorted(set(_set_or_none(regression_set)))   # none 的判法與切法跟折入、放行同一支(代碼審 r1 通才 3)
++            if rg:
+                 if not set(rg) <= F:
+                     print(f"擋下:--regression-set 有 id 不在 --findings-set 裡: {sorted(set(rg) - F)}", file=sys.stderr)
+                     return 2
+-                if not any(str(d.get("round") or "") != str(round_id or "") for d in _loop_records(env, loop)):
++                if _lread()[1] is not None:
++                    for _ln in _lbad_lines():
++                        print(_ln, file=sys.stderr)
++                    return 2
++                if not any(str(d.get("round") or "") != str(round_id or "") for d in _lread()[0]):
+                     print("擋下:這是這個迴圈的第一輪,沒有「上一輪修補」;--regression-set 只能寫 none", file=sys.stderr)
+                     return 2
+             rec["regression_set"] = rg
+         rec["findings_set"], rec["folded_set"], rec["accepted_set"] = f_set, fo, ac
+         rec["refuted_set"] = sorted(rreasons)
+         if rreasons:
+             rec["refuted_reasons"] = rreasons
+         if reasons:
+             rec["accept_reasons"] = reasons
+         # 流程自產工作量(Issues/流程自產工作量未量測 的入口,2026-08-22):每條發現標它在修什麼——
+@@ -11836,28 +11978,53 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         import os as _os
+         if _os.path.getsize(_p) == 0:
+             print(f"擋下:{_flag} 指的是空檔,留痕最少要有內容({_p})", file=sys.stderr)
+             return 2
+         _k = _flag.lstrip("-")
+         # [r1 終審修+r2 修] 落帳路徑正規化:repo root 底下存相對路徑、之外存絕對——
+         # 原樣存呼叫者字串=相對 cwd,換目錄跑 gate 留痕假失蹤(合法 loop 永久 FAIL)。
+         # root 判定=_vault_repo_root(向上找 .git;r2 否決席:vault.parent 在 docs/ 兩層
+         # 布局=docs/ 非 repo root,governance/ 留痕永遠落絕對路徑,可攜性假賣點)。
+         rec[_k + "_path"], rec[_k + "_sha256"] = _ledger_rel_path(_p, _vault_repo_root(env)), _h
++    # 審查跑滿回顧〈三〉1:人裁之後再記新一輪——要記的列輪次不在帳上而且這個迴圈要回顧時才讀治理帳;沒有人裁紀錄的迴圈放行(行為不變)。
++    # 參數都驗過才判(要讀帳;記帳與迴圈工具小修 代碼審 r2 資源 3:原本排在參數檢查前,被擋的呼叫也先讀帳),帳用共用的那一次
++    if loop and round_id:
++        _lr0, _le0, _lw0 = _lread()
++        _crb = _cap_retro_record_block(env, loop, round_id, rows=_lr0, rows_err=_le0)
++        if _crb:
++            if _crb[0] != "cap-gov-bad":   # 治理帳本身不能碰(捷徑、管線…)時不往裡寫擋下事件(代碼審 code-審查跑滿回顧 r3 資安席)
++                _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked", f"{_crb[0]} loop={loop} id={uuid.uuid4().hex[:8]}", hard=True)
++            for _ln in _crb[1]:
++                print(_ln, file=sys.stderr)
++            return 2
++    # ── 記帳與迴圈工具小修_計劃 d1:輪次一條規則(寫進去會毒到整個迴圈就當場擋)——用共用的那一次讀帳;
++    #    獨立成段:這筆沒帶 --round 正是要擋的主情境,不能放進只有帶 --round 才進的那段 ──
++    _lrows, _lerr, _lwhole = _lread() if loop else ([], None, False)
++    if loop and outcome is None:
++        _rfb = _round_format_write_block(loop, _lrows, _lerr, rec, tier, whole_ledger_bad=_lwhole)
++        if _rfb:
++            _gate_event_or_warn(_vault_repo_root(env), "canary", "blocked", f"round-format:{_rfb[0]} loop={loop} id={uuid.uuid4().hex[:8]}", hard=True)
++            for _ln in _rfb[1]:
++                print(_ln, file=sys.stderr)
++            return 2
+     # ── 代碼審minor解綁:載體最後記、記帳當下就把逐條放行核對完(錯了不寫帳) ──
+     if loop and round_id and outcome is None:
+-        _same, _lerr = _loop_records_checked(env, loop)
++        _same = _lrows
+         if _lerr is None:
+             _same = [r for r in _same if r.get("round") == round_id]
+             if any(r.get("finding_sources") for r in _same):
+                 print(f"擋下:第 {round_id} 輪已經有帶逐條來源(--finding-source)的載體——規矩是「載體最後記」:之後再記同輪的帳,"
+                       "處置閘會拿新進來的報告重新核對,這輪就可能判不過而且帳撤不掉。要補的席位請記到下一輪", file=sys.stderr)
++                if _auditor_matches_slot(auditor, "資安"):   # 記帳與迴圈工具小修_計劃 第 8 節:只多一句提示,判斷不動
++                    _m = re.fullmatch(r"([A-Za-z]*)(\d+)", str(round_id))
++                    _nx = f"(例如 {_m.group(1)}{int(_m.group(2)) + 1})" if _m else ""
++                    print(f"  要補的是資安席:記到下一輪{_nx},那一輪只派資安、對最新的凍結 patch;已到上限先記 lumos loop cap-decision", file=sys.stderr)
+                 return 2
+             if rec.get("finding_sources"):
+                 _st, _msgs = _minor_release_check(loop, [*_same, rec], _report_reader(lambda v: _under_root(_vault_repo_root(env), v)))
+                 if _st != "ok":
+                     print("擋下:" + ("這輪用不上 --finding-source——" if _st == "skip" else "逐條來源對不上,這筆沒有寫進帳(改正後重記同一輪即可):"), file=sys.stderr)
+                     for _m in _msgs[:20]:
+                         print(f"  - {_m}", file=sys.stderr)
+                     if _st == "skip":
+                         print("  拿掉 --finding-source 再記", file=sys.stderr)
+                     return 2
+@@ -11883,48 +12050,38 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+         _miss = [f for f, v in (("--report", report), ("--snapshot", snapshot)) if not v]
+         _what = (f"代碼審({loop})" if _rk == "code"
+                  else f"迴圈 {loop}(編號 code 開頭卻不是 code-,看不出是哪一種審查,照最嚴的當代碼審)")
+         print(f"擋下:{_what}的每一筆記帳都要帶 {' 與 '.join(_miss)}——"
+               "現在不擋的話,要到問處置閘才會發現,而那時帳本已經不能撤銷,只能整輪換編號重記", file=sys.stderr)
+         print("  --report <這一席的報告>  --snapshot <這一輪凍結的 patch>", file=sys.stderr)
+         return 2
+     # ── T6 收緊(design-loop重設計 實作計畫):disposal 定錨後留痕轉強制 ──
+     # 定錨=該 loop 帳面已有任一筆帶 findings_set(同 M2 cluster「首個有效輪定錨」前例)。
+     # 定錨後每筆 record 必帶 report+snapshot;未定錨/舊 loop 完全不受影響(相容鐵則)。
+-    if loop and path.exists() and not (report and snapshot):
+-        _anchored = False
+-        try:
+-            import json as _json6
+-            # [r1 終審修] 逐行容錯:壞行只跳該行——原整包 try 被 any() 短路順序玩死
+-            # (壞行排在定錨行前→先炸→整包 fail-open,T6 強制被繞過;4 席重疊 finding)。
+-            # 殘餘天花板:定錨行★自己★損毀仍偵測不到(讀側 disposal 閘壞行 rc2 兜底)。
+-            for _l in _ledger_lines(path.read_text(encoding="utf-8")):
+-                if not _l.strip():
+-                    continue
+-                try:
+-                    _d6 = _json6.loads(_l)
+-                except ValueError:
+-                    continue
+-                if _d6.get("loop") == loop and "findings_set" in _d6:
+-                    _anchored = True
+-                    break
+-        except OSError:
+-            _anchored = False   # 整檔讀不到=環境層問題,寫側不因此誤擋
++    # 讀帳用 canary record 共用的那一次(代碼審 code-記帳與迴圈工具小修 r2 資源 1:原本這裡另外整檔 read_text);
++    # 結局帳結構上不帶留痕,不受這條限制(同上面「代碼審從第一筆就要留痕」那道的排除;r2 修正時實測帶處置帳的迴圈寫不進結局帳)
++    if loop and outcome is None and path.exists() and not (report and snapshot):
++        _anchored = any("findings_set" in _d6 for _d6 in _lread()[0])
+         if _anchored:
+             print(f"擋下:{loop!r} 這個審查編號已經走「每個發現都要處置」的嚴格模式(之前的記錄帶了發現清單),"
+                   "之後每筆記錄都要帶 --report(審查報告)和 --snapshot(凍結快照)留痕", file=sys.stderr)
+             return 2
+     rc = _jsonl_append_verified(path, rec, "token", token)
+     if rc != 0:
+         return rc
+     print(f"✓ 這筆審查結果({kind})記下來了,憑證 {token}" + (f" (審查員 {auditor})" if auditor else "")
+           + f"\n    寫入 {path.resolve()}")
++    # 記帳與迴圈工具小修_計劃 第 5 節:帶指紋入帳的留痕,記完提醒之後別改(改一個字處置閘就判不過);只提醒、不改回傳碼
++    _fp = [Path(str(v)).name for v in (report, snapshot, intake) if v]
++    if _fp:
++        print(f"提醒:{'、'.join(_esc_clean(n, 80) for n in _fp)} 的指紋已經寫進帳,之後改一個字處置閘就判不過;"
++              "要更正請另開一份檔(例如 rN-intake-更正.md)放在卷證裡,不要改這幾份", file=sys.stderr)
+     # 逃逸自動記(規格落成可驗收條件_計劃 第五節):代碼審(code-<主題>)記到 major 以上,
+     # 對回 <主題> 那條設計迴圈/計劃就記一筆。永遠不影響審查帳本身(任何失敗只印一行)。
+     _kinds = rec.get("finding_kinds") if isinstance(rec.get("finding_kinds"), dict) else None
+     _sevs = rec.get("finding_severities") if isinstance(rec.get("finding_severities"), dict) else None
+     if _sevs is not None:
+         # 逐條判(r2 回滾席):code 型那條自己要是 major 以上;沒標型別的那條當分不出、保守算
+         _hit = any(v in ("major", "blocker") and (_kinds is None or _kinds.get(k) == "code") for k, v in _sevs.items())
+         _precision = "finding" if _kinds is not None else "round"   # 沒標型別=分不出是不是 code 型,不能謊報成逐條精度(r3 邊界席)
+     else:
+         _has_code = (_kinds is None) or any(str(v) == "code" for v in _kinds.values())   # 沒標型別=分不出,保守記;標了就只收 code 型
+@@ -11941,37 +12098,48 @@ def cmd_canary(env, kind, auditor=None, token=None, note=None, loop=None, severi
+             _escape_auto_failed(env, str(loop), "code-loop", str(_ex))
+     return 0
+ 
+ 
+ def _jsonl_append_verified(path, rec, key_field, key_value):
+     """[S1 oracle品質包] append 一行 JSONL + 讀回自驗(成功宣稱與證據綁死)。
+     caller 給唯一鍵欄名與值——不寫死欄名(record 用 token、second 用自身 token)。
+     寫入 OSError → rc2(既有訊息);寫成功但重開檔讀不回該鍵 → rc2「落盤自驗失敗」。
+     出身:2026-07-28 record 回報成功未落盤事故([[Issues/canary-record未落盤事件]])。"""
+     import json
++    # 最後一列沒換行(截斷的壞列)先補一個換行,不讓新記錄黏在壞列後面(同治理帳寫入的 _ledger_tail_needs_newline;
++    # 記帳與迴圈工具小修 代碼審 r2 邊界 4)。讀回自驗只讀這次寫進去的那一段(從寫入前的檔尾開始),不再整本重讀(r2 資源 1)。
++    try:
++        start = path.stat().st_size
++    except OSError:
++        start = 0
++    line = json.dumps(rec, ensure_ascii=False) + "\n"
++    if _ledger_tail_needs_newline(path):
++        line = "\n" + line
+     try:
+         with open(path, "a", encoding="utf-8") as f:
+-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
++            f.write(line)
+     except OSError as e:
+         print(f"擋下:寫不進記錄檔({e}):\n    {path}", file=sys.stderr)
+         return 2
+     try:
+-        with open(path, encoding="utf-8", errors="replace") as f:   # 獨立重開檔(非同 fd)
+-            for line in f:
+-                if not line.strip():
+-                    continue
+-                try:
+-                    d = json.loads(line)
+-                except (ValueError, RecursionError):   # 別筆是超深巢狀行也只跳過;否則已寫進去卻報沒記成功(code-逃逸帳 r3 邊界席)
+-                    continue
+-                if isinstance(d, dict) and d.get(key_field) == key_value:
+-                    return 0
++        with open(path, "rb") as fb:   # 獨立重開檔(非同 fd)
++            fb.seek(start)
++            tail = fb.read().decode("utf-8", errors="replace")
++        for line in tail.splitlines():
++            if not line.strip():
++                continue
++            try:
++                d = json.loads(line)
++            except (ValueError, RecursionError):   # 別筆是超深巢狀行也只跳過;否則已寫進去卻報沒記成功(code-逃逸帳 r3 邊界席)
++                continue
++            if isinstance(d, dict) and d.get(key_field) == key_value:
++                return 0
+     except (OSError, ValueError) as e:
+         print(f"canary record: 落盤自驗失敗——寫完讀回來檢查時讀不到({e}),這筆不算記成功:\n    {path.resolve()}", file=sys.stderr)
+         return 2
+     print(f"canary record: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\n    {path.resolve()}",
+           file=sys.stderr)
+     return 2
+ 
+ 
+ def cmd_canary_second(env, ref_id=None, verdict=None, auditor=None, note=None):
+     """[S2 oracle品質包] canary 判定的第二判者留痕(抽樣分權,telemetry-only)。
+@@ -13826,21 +13994,21 @@ def _loop_status_read(env, loop_id, disposal=False, repo=None):
+     """loop status 讀帳:這個編號的審查列(append 序,濾掉規格閘留痕——雙向門放行_計劃 S16:不計席、不判無效)與讀不懂的行號
+     (壞行、超深巢狀、不是物件的行;處置閘與 settle fail-closed 用,行號給 rc2 訊息一分鐘定位——r2 三席異議的降噪配套)。
+     逐行讀走共用核心 _canary_ledger_rows(代碼審 code-規格閘不做節 r8 併1:之前 read_text 整本再切行;r8 正2、合2:不是物件的行、
+     超深巢狀行之前帶堆疊崩,現在算讀不懂的行)。回 (rc, 列, 行號):rc=None 讀到了;否則訊息已印,呼叫端直接回 rc。
+     loop status 與 loop next 的處置閘代問共用這一支(代碼審 r8 架1)。"""
+     path = env.vault.parent / ".canary-log.jsonl"
+     rounds, bad = [], []
+     try:
+         if path.exists():
+             for d in _canary_ledger_rows(path, bad=bad):
+-                if d.get("loop") == loop_id and d.get("kind") != "spec-gate":
++                if d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d):   # 結局帳不是審查輪
+                     rounds.append(d)
+     except OSError as e:
+         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
+         return 2, [], []
+     except UnicodeDecodeError as e:
+         # 審查跑滿回顧 S17:有人裁紀錄的迴圈帳壞 → 第八步 ✗、不丟堆疊;沒有人裁紀錄的迴圈照原樣(re-raise,行為不變)
+         if disposal and _disposal_retro_ledger_bad(env, loop_id, Path(repo).resolve() if repo else _vault_repo_root(env),
+                                                    f"審查帳不是 UTF-8(第 {e.start} 個位元組讀不動)"):
+             return 1, [], []
+         raise
+@@ -13920,30 +14088,30 @@ def cmd_loop_status(env, loop_id, need=None, gate=False, spec=None, repo=None, p
+     if roster:
+         # [派工編制資料化] advisory 觀測——恆在各模式分支 early-return 之前印,rc 完全不動
+         try:
+             _roster_observe(env, loop_id, rounds, repo)
+         except Exception as e:   # 觀測絕不擋閘:任何意外只降級為警告
+             print(f"[roster] 提醒:派工名單對帳失敗,不影響過不過關: {e}")
+ 
+     # 混用守衛(R2-F1 footgun):panel 記錄(有 round 欄)與 legacy 模式不可混用。
+     # 用 all/any 而非單向 any:partial-mix(部分有 round、部分沒)也擋——否則 round-less
+     # 記錄在 panel 模式會形成 None phantom 組、可能成「最新輪」偽過(review I1)。
+-    n_round = sum(1 for r in rounds if "round" in r)
+-    if panel and rounds and n_round != len(rounds):
++    _rfmt = _loop_round_format(rounds)
++    if panel and rounds and _rfmt != "all":
+         print("擋下:--panel 模式要求這個編號的每筆記錄都帶輪次,現在有記錄沒帶(混用或舊格式),不讀——不然會多算出一個不存在的 phantom 輪",
+               file=sys.stderr)
+         return 2
+     if disposal:
+         # 留痕解析根:預設=寫側同源的 _vault_repo_root(對稱);顯式 --repo 覆蓋
+         # (r3 s2 席:git-less 部署副本裡 .git 不在,向上找會落錯根——給使用者一條明路)
+         return _disposal_judge(env, loop_id, rounds, spec, bad_linenos=bad_linenos, repo=repo, roster=roster, readonly=readonly)
+-    if not panel and n_round > 0:
++    if not panel and _rfmt in ("all", "mixed"):
+         print("擋下:這個編號的記錄帶了輪次(多人審格式),但你沒加 --panel;不加的話一輪裡 W 個人的記錄會被當成 W 輪,所以不算",
+               file=sys.stderr)
+         return 2
+     if settle is not None:
+         return _loop_status_settle(rounds, n_badlines, loop_id, settle, spec, repo, env=env)
+     if panel:
+         try:
+             return _loop_status_panel(rounds, loop_id, min_seats=min_seats, spec=spec, env=env)
+         except OSError as e:   # G3 --spec 不可讀:與 legacy G1 對稱 rc2(code-loop r2 折入)
+             print(f"擋下:--spec 指的文件讀不到({e}),確認路徑對不對:\n    {spec}", file=sys.stderr)
+@@ -14145,21 +14313,21 @@ _TIER_ROSTER = {
+         _rseat("鏡頭2", "claude", True, "required"),
+         _rseat("鏡頭3", "claude", True, "required"),
+         _rseat("鏡頭4", "claude", True, "required"),
+         _rseat("鏡頭5", "claude", True, "required"),
+         _rseat("架構對齊", "claude", False, "required", "2026-08-22:設計有沒有照既有模組邊界與做法;不佔 W"),
+         _rseat("外家否決", "external", False, "conditional", "2026-09-30 使用者裁:外家預設不派(省成本),需要另一家視角時才加派")]},
+     # ★code/light 以前沒有編制(loop next 印「無編制宣告」、skill 寫「可跳」)★——2026-09-17 Enzo 裁:架構對齊每個分級都派,
+     # 小改動也不能脫離原有架構亂加。light=只派這一席、算進人數(width 1)。
+     ("code", "light"): {"mode": "single", "seats": [
+         _rseat("架構對齊", "claude", True, "required", "2026-09-17:light 唯一的一席;這寫法跟專案既有的一不一樣")]},
+-    ("code", "standard"): {"mode": "sequential", "seats": [
++    ("code", "standard"): {"mode": "single", "seats": [   # 一位審查員、每筆帶輪次(2026-10-15 記帳與迴圈工具小修_計劃 d1;舊名 sequential)
+         _rseat("單reviewer", "claude", True, "required"),
+         _rseat("架構對齊", "claude", False, "required", "2026-08-22:這寫法跟專案既有的一不一樣;不佔 W"),
+         _rseat("外家否決", "external", False, "conditional", "2026-09-30 使用者裁:外家預設不派(省成本),需要另一家視角時才加派")]},
+     ("code", "high"): {"mode": "panel", "seats": [
+         _rseat("鏡頭1", "claude", True, "required"),
+         _rseat("鏡頭2", "claude", True, "required"),
+         _rseat("鏡頭3", "claude", True, "required"),
+         _rseat("鏡頭4", "claude", True, "required"),
+         _rseat("鏡頭5", "claude", True, "required", "2026-09-30 使用者裁:原外家 finder 的名額改由同門通才補,寬度維持 5;2026-10-14 使用者裁:通才照 Claude Code /code-review 八角度審法(templates.md §7.9)"),
+         _rseat("外家finder", "external", False, "conditional", "2026-09-30 使用者裁:外家預設不派(省成本),需要另一家視角時才加派"),
+@@ -14268,21 +14436,21 @@ def _canary_ledger_rows(path, errors="strict", bad=None):
+ def _canary_ledger_scan(env):
+     """審查帳審查輪那一族的讀法(loop next、canary record 定錨檢查、跑滿回顧一族共用)。回 (by_loop, bad_by_loop, decode_exc)。
+     by_loop:編號 → 該編號的列(濾掉規格閘留痕);bad_by_loop:編號 → 「某列輪次不是字串」的說明;decode_exc:整本不是 UTF-8 時的例外(這時 by_loop 是空的)。
+     逐行讀走共用核心 _canary_ledger_rows(切行規則、壞行與超深巢狀行跳過都在那裡;代碼審 code-審查跑滿回顧 r1/r2)。檔讀不到 → OSError 往上丟。"""
+     path = env.vault.parent / ".canary-log.jsonl"
+     by, bad = {}, {}
+     if not path.exists():
+         return by, bad, None
+     try:
+         for d in _canary_ledger_rows(path):
+-            if d.get("kind") == "spec-gate":   # 規格閘留痕不是審查輪(雙向門放行_計劃 S16)
++            if d.get("kind") == "spec-gate" or _is_outcome_row(d):   # 規格閘留痕(雙向門放行_計劃 S16)與結局帳都不是審查輪
+                 continue
+             lp = d.get("loop")
+             if not isinstance(lp, str):
+                 continue
+             by.setdefault(lp, []).append(d)
+             if "round" in d and not isinstance(d["round"], str) and lp not in bad:
+                 bad[lp] = f"審查帳 {_esc_clean(lp, 60)} 有一列輪次不是字串({_esc_clean(repr(d['round']), 40)})"
+     except UnicodeDecodeError as e:
+         return {}, {}, e
+     return by, bad, None
+@@ -14299,31 +14467,38 @@ def _loop_records(env, loop_id, strict=False):
+             raise
+         return []
+     if exc is not None:
+         raise exc
+     return by.get(loop_id, [])
+ 
+ 
+ def _loop_records_checked(env, loop_id, scan=None):
+     """同 _loop_records 那一套讀法,但帳壞不丟例外:回 (列, 帳壞原因或 None)。帳壞=讀不到、整本不是 UTF-8、這個編號某列輪次不是字串。
+     scan=_canary_ledger_scan 的結果(統計一次讀完共用)。跑滿回顧一族用它(計劃〈實務隱患〉帳壞:新路徑不讓解碼錯誤冒成堆疊)。"""
++    rows, err, _whole = _loop_records_checked_ex(env, loop_id, scan=scan)
++    return rows, err
++
++
++def _loop_records_checked_ex(env, loop_id, scan=None):
++    """_loop_records_checked 多回一個「是不是整本帳壞」(讀不到、整本不是 UTF-8),訊息同一句;canary record 據此分「整本」與「這個編號」
++    (記帳與迴圈工具小修_計劃;代碼審 r2 架構 2:原本 cmd_canary 另寫一份同樣的 try/except 與文案)。"""
+     if scan is None:
+         if env is None:
+-            return [], "沒有審查帳可對"
++            return [], "沒有審查帳可對", True
+         try:
+             scan = _canary_ledger_scan(env)
+         except OSError as e:
+-            return [], f"審查帳讀不到({e.__class__.__name__})"
++            return [], f"審查帳讀不到({e.__class__.__name__})", True
+     by, bad, exc = scan
+     if exc is not None:
+-        return [], f"審查帳不是 UTF-8(第 {exc.start} 個位元組讀不動)"
+-    return by.get(loop_id, []), bad.get(loop_id)
++        return [], f"審查帳不是 UTF-8(第 {exc.start} 個位元組讀不動)", True
++    return by.get(loop_id, []), bad.get(loop_id), False
+ 
+ 
+ def _loop_orchestrators(rounds):
+     """帳面出現過的編排者值集合(矛盾偵測用)。"""
+     return {r.get("orchestrator") for r in rounds if r.get("orchestrator") in LOOP_ORCHESTRATORS}
+ 
+ 
+ def _loop_orchestrator(rounds):
+     """帳面編排者定錨:首個帶 orchestrator 的記錄;舊帳沒有 → None(讀側視為 claude 並印一句,不給新呼叫預設——
+     Projects/Codex完全支援_計劃 d4:預設 claude 會讓 Codex 編排漏旗標時靜默套錯家族)。"""
+@@ -15882,26 +16057,27 @@ def _cap_retro_scan(env, root):
+     for lp in order:
+         try:
+             rows, err = _loop_records_checked(env, lp, scan=cache)
+             out.append((lp, _cap_retro_status(env, lp, root, events=per[lp], rows=rows, rows_err=err)))
+         except Exception as e:   # 一個迴圈判壞了只標它(計劃 S9)
+             d = next((x for x in reversed(per[lp]) if _retro_is_decision(x)), {})
+             out.append((lp, {"error": f"{e.__class__.__name__}: {e}", "decision": d, "applies": True, "state": None, "problems": []}))
+     return out, None
+ 
+ 
+-def _cap_retro_record_block(env, loop_id, round_id):
++def _cap_retro_record_block(env, loop_id, round_id, rows=None, rows_err=None):
+     """canary record 的擋點(計劃〈三〉1):要記的列是新的一輪(輪次 id 不在帳上)而且這個迴圈要回顧時才讀治理帳。
+-    回 None=放行;否則 (原因碼, 要印到 stderr 的幾行)。沒有人裁紀錄的迴圈一律放行(行為與現狀相同)。"""
++    回 None=放行;否則 (原因碼, 要印到 stderr 的幾行)。沒有人裁紀錄的迴圈一律放行(行為與現狀相同)。
++    rows/rows_err:呼叫端已讀好的這個編號的列(canary record 共用一次讀帳;記帳與迴圈工具小修 代碼審 r2 資源 1)。"""
+     import shlex as _shlex
+     root = _vault_repo_root(env)
+-    rows, err = _loop_records_checked(env, loop_id)
++    rows, err = (rows, rows_err) if rows is not None else _loop_records_checked(env, loop_id)
+     if err is None and round_id in _retro_ledger_rounds(rows):
+         return None          # 同一輪第二席以後:只讀審查帳就知道,不碰治理帳
+     st = _cap_retro_status(env, loop_id, root, rows=rows, rows_err=err)
+     if not st["applies"]:
+         return None
+     if st["state"] == "gov-bad":   # 原因碼 cap-gov-bad:呼叫端不把這筆擋下寫進治理帳(帳本身就是不能碰的那個)
+         return ("cap-gov-bad", [
+             f"擋下:{_esc_clean(loop_id, 60)} 帳上已到上限、有卷證,但{st['problems'][0]}——判不了有沒有人裁紀錄,所以先不記。",
+             f"  出口:{_cap_retro_fix_cmd(root, loop_id, 'gov-bad')}"])
+     q = _esc_clean(_shlex.quote(loop_id), 200)
+@@ -16292,40 +16468,61 @@ def cmd_loop_retro_stats(env, as_json=False, repo=None):
+     return 0
+ 
+ 
+ # loop next 在工具鏈本 repo 的代碼審多印的那一行(固定字串,不帶編號、路徑或帳上自由文字);{root} 照判別用的根換成下面兩種之一
+ # (帶 --repo 判的是 --repo 那個目錄,開頭照實寫;鏡頭範圍代碼審 r2 邊界 2)
+ _LENS_SCOPE_TOOLCHAIN_LINE = ("  鏡頭範圍: {root} 是工具鏈本 repo——被審分支也在這個 repo 時,派資安席照 templates.md §7.8〈工具鏈三類〉、"
+                               "派併發與資源鏡頭改資源、§3 第 1 點併發兩問不問;審別的 repo 的分支時看那個 repo 的根自己判(消費專案照舊)")
+ _LENS_SCOPE_ROOT_LABEL = {"ledger": "帳本所在 repo", "--repo": "--repo 指的 repo"}
+ 
+ 
++# 記帳範本的兩個佔位字(記帳與迴圈工具小修_計劃 第 7 節):拆包審時填該席那一包,不是整份——填整份會被標 scope_oversize(弱證據,撤不掉)
++_SNAP_PLACEHOLDER = "<這一席審的那份凍結材料(拆包審時填該席那一包)>"
++_SCOPE_PLACEHOLDER = "<這一席那份的行數(拆包審時填該席那一包)>"
++
++
++def _loop_next_hints(loop_id, eff_tier, n_next):
++    """loop next 在派工階段(plant-canary)印的提示清單(記帳與迴圈工具小修_計劃 第 8、9 節):只講順序與範圍,不判定。
++    高風險代碼審:資安包與記帳順序;設計審:先排乾再凍結(首輪多一句前掃)。看不出種類的編號照最嚴當代碼審。"""
++    kind = _roster_kind(str(loop_id))
++    out = []
++    if kind != "design" and eff_tier == "high":
++        out.append("資安包要含這輪凍結 patch 改到的全部檔(含筆記與文件),不要拆掉;最後一次修補之後要對最新的凍結 patch 再派一次資安")
++        out.append("記帳順序:資安與其他席先記,載體最後記;載體帶了 --finding-source(major 輪逐條放行 minor)的話,記完以後同輪任何一席都不能再補,"
++                   "補資安只能記到下一輪,已到上限要先 lumos loop cap-decision")
++    if kind == "design":
++        out.append("順序:先排乾(refcheck、prose-lint、pitfalls --check)再 spec-freeze 凍這輪快照、才派工;凍了以後才修真檔,席位會審到舊版")
++        if n_next == 1:
++            out.append("首輪還要先跑前掃(手冊步驟 2 的四項),前掃排乾之後才凍")
++    return out
++
++
+ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, repo=None, orchestrator=None):
+     """M1包 #1(loop機械脊椎M1包_計劃):帳本吐唯一下一動作。唯讀指針——lumos 不 spawn agent,
+     編排仍是 Claude(Systems/design-loop 分工)。phase 五值:escalate/gate-pending/converged/
+     cap-reached/plant-canary;判定優先序=escalate→gate-pending(資訊不足,先於 cap)→converged
+     (僅 full-basis)→cap-reached→plant-canary。converged=rc0/其餘 phase=rc1/錯誤=rc2。
+     tier 定錨優先:帳面首個帶 tier 記錄定錨;僅無定錨舊帳按格式推導;零記錄 rc2 要 --tier。"""
+     import json as _json
+     import io
+     import contextlib
+     path = env.vault.parent / ".canary-log.jsonl"
+     try:
+         rounds = _loop_records(env, loop_id, strict=True)   # 單一讀法(架構席 s2 r1 major:曾與 helper 逐行重複)
+     except OSError as e:
+         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
+         return 2
+-    n_round = sum(1 for r in rounds if "round" in r)
+-    if rounds and n_round not in (0, len(rounds)):
++    _rfmt = _loop_round_format(rounds)
++    if _rfmt == "mixed":
+         print("擋下:這個審查編號的記錄有的帶輪次、有的不帶,格式前後不一致,沒辦法判斷收斂。打開審查記錄檔 .canary-log.jsonl,把這個編號的每一筆格式改一致", file=sys.stderr)
+         return 2
+-    panel_fmt = n_round > 0
++    panel_fmt = _rfmt == "all"
+     if panel_fmt:   # 讀側損壞守衛不得因缺 --spec 提前 return 而繞過(code-loop r2 折入)
+         seen, cur_rid = set(), None
+         for r in rounds:
+             rid = r["round"]
+             if rid != cur_rid:
+                 if rid in seen:
+                     print(f"擋下:第 {rid!r} 輪的記錄被別的輪次隔開後又出現(非連續重現),這本帳只能照時間往後加,順序亂了就沒辦法判斷收斂。檢查 .canary-log.jsonl 裡這個編號的寫入順序",
+                           file=sys.stderr)
+                     return 2
+                 seen.add(rid)
+@@ -16358,21 +16555,23 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+     eff_orch = orch_anchor or orchestrator or "claude"
+     if eff_tier is None:
+         if not rounds:
+             print("擋下:這是全新的審查編號,還沒有任何記錄,工具不會幫你猜分級(猜錯之後格式兜不起來反而卡住)。第一次呼叫請加 --tier 指定分級", file=sys.stderr)
+             return 2
+         eff_tier = "standard" if panel_fmt else "legacy"   # 無定錨舊帳 fallback
+     width, cap = _TIER_PARAMS[eff_tier]
+     light = eff_tier == "light"
+     # seq=循序 code loop(skill 設計行為:code 的 standard 走單 reviewer 循序;
+     # 2026-08-18 循序codeloop-tier錨定案——not panel_fmt 是硬規格,code+standard 的 panel 帳照 panel 樣式走)
+-    seq = (eff_tier == "standard" and _roster_kind(loop_id) == "code" and not panel_fmt)
++    # 2026-10-15 記帳與迴圈工具小修_計劃 d1:全新編號(帳上零筆)不再走循序——處置帳必綁輪次,新的 standard 代碼審一律帶輪次;
++    # 只有帳上已有記錄而且全部不帶輪次的舊循序迴圈照舊(t_seq_code_std_anchor)
++    seq = (eff_tier == "standard" and _roster_kind(loop_id) == "code" and not panel_fmt and bool(rounds))
+     if seq:
+         width = 1   # 單 reviewer;cap 沿 _TIER_PARAMS["standard"][1]=3(分量本就正確,不另覆寫)
+     # ★人數以應派名冊為準★(名冊是編制數字的單一來源,見 _TIER_ROSTER 上方註解):佔人數的必派席有幾個就是幾人審。
+     # 2026-10-13 踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),這裡照 _TIER_PARAMS 印 3 人,名冊卻只列一位審查員。
+     # ★人數以應派名冊為準,但已退役 panel 閘的舊迴圈除外★(名冊是編制數字的單一來源,見 _TIER_ROSTER 上方註解)。
+     # 新迴圈(首筆帳在 panel 閘退役日之後)代問的是處置閘,處置閘不收最少人數,印名冊的人數不會改到任何判定;
+     # 舊 panel 迴圈代問的是 panel 閘,它拿這個數字當每輪最少人數,印的跟閘要的都維持 _TIER_PARAMS 原值——
+     # 第一版只改印的數字,代碼審 r2 單審席實跑出「印 1 人、閘要 3 人」;再前一版連閘一起改,r1 單審席抓到會放寬舊迴圈的閘。
+     # 2026-10-13 踩到:一般分級代碼審記帳帶了 --round(帳變成多人審格式),這裡照 _TIER_PARAMS 印 3 人,名冊卻只列一位審查員。
+     gate_width = width
+@@ -16415,22 +16614,23 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                     "" if (light or eff_tier == "legacy" or seq) else f" --round r{n_next}",
+                     f" --tier {eff_tier}" if eff_tier in LOOP_TIERS else "")
+ 
+         def _disposal_tpl():
+             """載體席記帳範本(處置閘);第 2 輪起的代碼審多帶 --regression-set(Projects/代碼審修正關卡第0步_計劃)。"""
+             _q, _rm, _tf = _tpl_flags()
+             cmd = (f"lumos canary record none --loop {_q}{_rm}"
+                    f" --auditor <席> --severity <s>"
+                    f" --findings-set <id串> --folded-set <id串> --accepted-set <id串>"
+                    f" --accept-reason <id=理由> --refuted-set none"
+-                   f" --report <席報告.md> --snapshot <凍結快照.md>"
+-                   f" --spec <計劃節點.md> --reviewed <sha256>{_tf} --orchestrator {eff_orch}")
++                   f" --report <席報告.md> --snapshot {_SNAP_PLACEHOLDER}"
++                   f" --spec <計劃節點.md> --reviewed <sha256>{_tf} --orchestrator {eff_orch}"
++                   f" --scope-lines {_SCOPE_PLACEHOLDER}")
+             if _rm and n_next >= 2 and str(loop_id).startswith("code-"):
+                 cmd += " --regression-set <id串|none>"
+             return cmd
+         # 代碼審第 2 輪起 loop next 多半停在 gate-pending(沒帶 --spec),範本也要給,不然 --regression-set 永遠看不到
+         if phase == "gate-pending" and not light and eff_tier in LOOP_TIERS and n_next >= 2 and str(loop_id).startswith("code-"):
+             out["disposal_cmd"] = _disposal_tpl()
+         if phase == "plant-canary":
+             # 型別派工當下隨機抽(2026-08-06 S2 同場補,plan:驗證層自證三件):固定輪替
+             # =可猜=答案印在考卷背面(該 plan r1 審計語);同輪 slot 間仍不重複(width≤4 時
+             # 全 distinct;width>4 以重洗批次延續,重複最少化)——冗餘 canary 不算獨立注意力票。
+@@ -16451,23 +16651,26 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+             # ★這個 bug 自己維持自己★:2026-08 三個走循序的 loop(code-slim-python /
+             # code-teardown-windows / code-slim-handoff)全數 tier=None,即此循環的產物;
+             # 其中 code-slim-python 吃到 legacy 的 cap 6(standard 是 3)才被逼停。
+             # ★編號加 shell 引號★(代碼審 r3 資安 G1):loop_id 是自由字串,`code-x; touch … #` 原樣塞進
+             # 這幾條每輪都印、照慣例原樣照抄的指令,`;` 之後就被當成指令跑;一般編號 shlex.quote 不加引號
+             _orch_flag = f" --orchestrator {eff_orch}"
+             # ★用現行類別 none★:caught|missed 是 canary 植入協議的類別,2026-08-14 已停用(Systems/canary-audit d5),
+             # 照抄舊模板等於教人記一筆已停用的帳;--snapshot:代碼審記帳從第一筆就要附審材,沒帶會被擋
+             out["record_cmd"] = (f"lumos canary record none --loop {_qid}{rmode}"
+                                  f" --auditor <席> --severity <s> --findings <M>"
+-                                 f" --report <席報告.md> --snapshot <凍結快照.md>"
++                                 f" --report <席報告.md> --snapshot {_SNAP_PLACEHOLDER}"
+                                  f" --spec <計劃節點.md> --reviewed <sha256>{_tier_flag}{_orch_flag}"
+-                                 f" --scope-lines <這輪審了幾行>")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
++                                 f" --scope-lines {_SCOPE_PLACEHOLDER}")   # cb3 s3-f1:寫側 2026-08-26 起審查席必附報告,模板同步
++            _hints = _loop_next_hints(loop_id, eff_tier, n_next)
++            if _hints:
++                out["hints"] = _hints
+             # [T5 design-loop重設計] 處置閘模板(選用;record_cmd 原樣保留給 code-loop/舊流程)
+             if not light and eff_tier != "legacy":
+                 out["disposal_cmd"] = _disposal_tpl()
+                 out["disposal_gate"] = f"lumos loop status {_qid} --disposal --spec <計劃節點.md> --repo <root>"
+             if eff_tier == "legacy":
+                 if _roster_kind(loop_id) == "code":
+                     # 循序codeloop-tier錨定案:standard 對 code 循序已格式相容,但補標=cap 陷阱——警告式,不邀請
+                     out["tier_hint"] = (
+                         "提醒:這個審查編號從沒指定過分級,現在用最寬鬆的舊規則在跑(單人審、最多 6 輪;正式的 standard 只給 3 輪)。"
+                         "想中途改嚴:補 --tier high 會因格式不合直接被擋;補 --tier standard 格式相容,"
+@@ -16609,23 +16812,25 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
+                     # 會同時印「停掉這個編號」和「下一輪要自己凍一份新的」,兩句直接打架)。
+                     print("      要判上一輪過不過關就用它;★下一輪要自己凍一份新的★,不是沿用這一份")
+                 else:
+                     print("      這個編號沒有下一輪了(看下面的狀態說明),這一份留著當卷證")
+             elif _sp_degraded:
+                 print(f"  帳上記了審查材料但讀不動({_sp_degraded})——不是「沒記」,是這本帳的那個欄位壞了")
+             elif rounds:
+                 # ★沒有就明講,不要靜默省略★:省略的話接手的人分不出是「帳上沒記」
+                 # 還是「工具沒印」。spec_path 是後來才加的欄位,舊帳本來就沒有。
+                 print("  帳上沒記這個迴圈在審什麼(spec_path 是後來才加的欄位,舊帳沒有)")
+-            for k in ("canary_type", "record_cmd", "scope_cap", "cluster_hint", "note"):
++            for k in ("canary_type", "record_cmd", "disposal_cmd", "scope_cap", "cluster_hint", "note"):
+                 if k in out:
+                     print(f"  {k}: {out[k]}")
++            for _h in out.get("hints") or []:
++                print(f"  提醒: {_h}")
+             # 圖譜入口栓 A 文字段(spec EL-1/EL-16:專屬多行段,不塞五鍵白名單;三分支唯一化)
+             try:
+                 if "related_nodes" in out:
+                     _rn = out["related_nodes"]
+                     if not _rn["queried"]:
+                         _lt, _ = _el_query_tokens(_rn["query"])
+                         if _lt:   # r1 正確性席 C-1:dref-v4 型「單字+版號」可查卻被閘掉——給出手動查詢的一行,不靜默丟失
+                             print(f"  圖譜:編號主題訊號不足(清洗後只剩 {' '.join(_lt)}),沒自動查;要查自己跑:")
+                             print(f"      lumos search \"{' '.join(_lt)}\"")
+                         else:
+@@ -28237,22 +28442,21 @@ def _loop_status_disposal(rounds, loop_id, spec, n_badlines=0, root=None, bad_li
+     exit 0=收斂 / 1=未過 / 2=帳面損壞或參數錯。"""
+     if n_badlines:
+         print(f"擋下:審查記錄檔有 {n_badlines} 行讀不懂,沒辦法確定「最後一輪」是哪輪,先不判"
+               "(修好或搬走壞行再問)"
+               + (f"——壞行行號: {bad_linenos}" if bad_linenos else "")
+               + "(檔案有 git 版控,對照上一版找出壞行一分鐘就能修)",
+               file=sys.stderr)
+         return 2
+     # r3 修:round 與 round-less 混用=rc2(同 panel 混用守衛精神;原樣混排會落進
+     # 「非連續重現」的誤導訊息,或與內部 __seq 鍵互動出偽輪)
+-    n_round_ = sum(1 for r in rounds if "round" in r)
+-    if rounds and 0 < n_round_ < len(rounds):
++    if _loop_round_format(rounds) == "mixed":
+         print("擋下:這個審查編號的記錄有的帶輪次、有的不帶,分不出哪輪是判定輪;"
+               "統一補 --round,或全部不帶", file=sys.stderr)
+         return 2
+     groups, _gerr = _disposal_round_groups(rounds)
+     if _gerr:
+         print(_gerr, file=sys.stderr)
+         return 2
+     if not groups:
+         print(f"⏳ 無記錄({loop_id} 目前一筆記錄都還沒有)")
+         return 1
+@@ -46712,20 +46916,31 @@ def _residual_tier_reasons_bad(res):
+         why.append("列不出這次改了哪些檔(git diff --name-only 失敗)、索引裡有殘留(看不出有沒有改到它守的程式,當成改到)")
+     if res.get("asks_dropped"):
+         why.append(f"推送範圍刪掉或改掉治理帳裡 residual-ask 的列 {res['asks_dropped']} 筆"
+                    "(刪掉判過 testable 的問答就能重問到想要的答案;第二個代理的問答只准增不准減)")
+     if res.get("asks_unknown"):
+         why.append(f"{res['asks_unknown']}版本的治理帳讀不出(git 讀不出,或工作目錄那份是捷徑、不是一般檔;"
+                    "看不出這次有沒有改動 residual-ask 的問答,當成有)")
+     return why
+ 
+ 
++def _pitfall_tier_review_lines(tier):
++    """pitfalls 人可讀輸出在 tier 那行下面印的「這級仍要代碼審:派誰」——席位清單從應派名冊 _TIER_ROSTER[("code", tier)] 讀,
++    標示照 loop next 的 _REQUIREMENT_LABEL(沒有的就印原值),不在這裡另寫一份。名冊沒有這個分級就不印。"""
++    ros = _TIER_ROSTER.get(("code", tier)) if tier else None
++    if not ros:
++        return []
++    seats = "、".join(f"{s['slot']}({_REQUIREMENT_LABEL.get(s['requirement'], s['requirement'])})" for s in ros["seats"])
++    return [f"  這級仍要代碼審:{seats}",
++            f"  開審:lumos loop next code-<編號> --tier {tier} --orchestrator claude"]
++
++
+ def _pitfall_tier(claims, files, repo_root, diff_range):
+     """改動風險分級(單一算法;★vault-free★,pitfalls 在 pre-push 熱路徑上不載圖譜——代碼審 r1 架構席):
+     殘留索引與問答帳(_residual_tier_hits:新增殘留、合約改字、改到殘留守的檔、拿掉或縮小殘留、索引或檔名清單讀不出、刪改 residual-ask 帳列、新增判 untestable 的問答、改到存著殘留決策的筆記)→ high,最先判;命中風險型樣或新告警 → high;改動裡沒有任何「需要有家的程式檔」(_is_code_file,每支檔有家同一套定義)→ light;其餘 standard。
+     「計劃風險低且小改動閘過 → light」那一層要讀圖譜,由 spec-gate --push-check(本來就有圖譜、本來就在 pre-push 跑)印;這裡只用審查帳字串便宜提示一句。回 (tier, 一句為什麼)。"""
+     why = _residual_tier_reasons(_residual_tier_hits(repo_root, diff_range))
+     if why:
+         return "high", ";".join(why) + (";另命中風險型樣或新告警" if claims else "")
+     if claims:
+         return "high", "命中風險型樣或新告警"
+     base = _range_base(repo_root, diff_range)
+@@ -47427,20 +47642,22 @@ def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+                 print(f"    慣例 skill:{', '.join(arch['idiom_skills'])}(審查員派工時一併附上)")
+             _cands = arch.get("tension_candidates") or []
+             for c in _cands[:6]:   # 比照上面對照檔清單的 [:6](r1 通才 G7)
+                 print(f"    可能撞:{_kill_esc(c['file'])} 新增的 {'/'.join(c['patterns'])} 在對照的 {len(c['siblings'])} 個檔裡都沒出現(這是 {c['question']} 那題的做法)"
+                       "——沿用既有或改用新做法都用 tension 表態,審查席會查兩邊")
+             if len(_cands) > 6:
+                 print(f"    …另有 {len(_cands) - 6} 條可能撞,--json 看全量(arch_alignment.tension_candidates)")
+             if arch.get("candidates_truncated"):
+                 print(f"    改動檔太多,候選只算了前 {_TENSION_MAX_FILES} 個檔(--json 的 candidates_truncated)")
+         print(f"tier: {data['tier']}" + (f"({data['tier_reason']})" if data.get("tier_reason") else ""))
++        for _ln in _pitfall_tier_review_lines(data.get("tier")):   # 記帳與迴圈工具小修_計劃 第 6 節:每個分級都講要派誰(只在人可讀輸出)
++            print(_ln)
+         # 角色鏡頭統計(Projects/代碼審前後端角色鏡頭_計劃):只給人看、不進 JSON、不是檢核題,不改變分級
+         _rs, _re_ = _diff_range_ends(repo_root, diff_range)
+         try:   # 同派工那邊:角色是附加提示(寬接是刻意的),出錯就不印這行,不拖垮分級輸出
+             _rr = _review_roles(repo_root, _rs, _re_) if (_rs and _re_) else None
+         except Exception as e:
+             _rr = None
+             print(f"提醒:角色統計算不出來({e.__class__.__name__}),這次不印角色行", file=sys.stderr)
+         if _rr:
+             for _w in _rr["warnings"]:
+                 # 印法照棧別題組設定警告(「提醒:」、錯誤輸出);內容刻意不回填設定值,見 _review_roles_config
+@@ -53812,21 +54029,22 @@ def _spec_freeze_build(root, head, rel, mode):
+ 
+ def _spec_freeze_check_out(root, cwd, out, data, fail):
+     """--out 的兩道檢查(位置 out_outside_repo、內容 out_conflict)。回 (要寫的路徑, None) 或 (None, fail 的 rc)。out 是 None 回 (None, None)。"""
+     if out is None:
+         return None, None
+     outp = _spec_freeze_out_path(root, cwd, str(out))
+     if outp is None:
+         return None, fail("out_outside_repo", f"{out} 要在這個 repo(執行 spec-freeze 的那個)的 governance/review-reports/ 底下,"
+                           "路徑上不能有符號連結或 .git(例如 governance/review-reports/<編號>/rN-snapshot.md;絕對路徑要以 repo 根開頭,對不上時改用相對路徑)")
+     if not _spec_freeze_out_ok(outp, data):
+-        return None, fail("out_conflict", f"{out} 已存在而且內容跟要凍的計劃不同(或不是一般檔);要凍新的一輪就換新的 --out,不覆寫已凍的快照")
++        return None, fail("out_conflict", f"{out} 已存在而且內容跟要凍的計劃不同(或不是一般檔);要凍新的一輪就換新的 --out,不覆寫已凍的快照"
++                          ";這份快照還沒派給任何席的話,刪掉它再凍同一個檔名也可以")
+     return outp, None
+ 
+ 
+ def _spec_freeze_finish(root, outp, out, commit, blob, rel, data, as_json, fail):
+     """寫 --out(有給才寫)、全域 lumos 不同支就警告、印那一行。"""
+     import json as _json
+     if outp is not None:
+         try:   # 原子寫入走 _write_lf 的位元組核心(任何例外都刪暫存檔);上層資料夾在 repo 裡、已驗過沒有符號連結才建
+             outp.parent.mkdir(parents=True, exist_ok=True)
+             outp.parent.resolve().relative_to(Path(root).resolve())
+@@ -54983,37 +55201,64 @@ def _dispositions_split_test(ev, platforms, default_platform):
+         if not platforms:
+             return None, f"這個專案沒開多平台(.lumos/config.json 沒有 platforms),不支援平台前綴 {plat!r}"
+         if plat not in platforms:
+             return None, f"平台 {plat!r} 不在 platforms 裡({', '.join(sorted(platforms))})"
+         return plat, name
+     if not body:
+         return None, "test: 後面要有測試名"
+     return default_platform, body
+ 
+ 
++_DISP_TYPE_NAMES = {list: "清單", tuple: "清單", dict: "物件", int: "數字", float: "數字", bool: "真假值"}
++
++
++def _disp_type_err(ent, key, what="evidence"):
++    """表態欄位有給、不是 None、又不是字串 → 型別錯的那句話;否則 None(記帳與迴圈工具小修_計劃 第 4 節)。
++    含 []、{}、0——原本被 `or ""` 當成「沒附」或被 str() 轉成「[…]」再切 path:line,訊息看不出是型別錯。寫側讀側共用。"""
++    if key not in ent:
++        return None
++    return _disp_value_type_err(ent[key], what)
++
++
++_DISP_EVIDENCE_FMT = ("path:line 或 test:<名>", ";多個證據挑最直接的一個,其餘寫進 reason")
++
++
++def _disp_value_type_err(v, what, fmt=_DISP_EVIDENCE_FMT, none_ok=True):
++    """一個值不是字串時的那句話;是字串回 None。fmt=(格式說明, 句尾補充),各欄位自己給(代碼審 r1 架構 2:原本事後 .replace 改句子)。
++    none_ok:頂層 evidence 的 null 等於沒附(交給「要附」那條講);清單裡的一項是 null 就是型別錯(代碼審 r1 邊界 3)。"""
++    if isinstance(v, str) or (v is None and none_ok):
++        return None
++    tn = "null" if v is None else _DISP_TYPE_NAMES.get(type(v), type(v).__name__)
++    return f"{what} 要是一個字串({fmt[0]}),你給的是{tn}{fmt[1]}"
++
++
+ def _dispositions_validate(d, platforms=None, default_platform=None):
+     """驗表態 JSON 形狀(S4)。回 [錯誤句…],空=合法。"""
+     errs = []
+     if not isinstance(d, dict):
+         return ["表態檔最外層要是物件 {題目id: {...}}"]
+     for qid, ent in d.items():
+         _stk, spec = _stack_spec_by_id(qid)
+         if spec is None:
+             errs.append(f"{qid}:不是題目表裡的 id"); continue
+         if not isinstance(ent, dict):
+             errs.append(f"{qid}:值要是物件"); continue
+         st = ent.get("status")
+         if st not in _DISP_STATUSES:
+             errs.append(f"{qid}:status={st!r} 不合法(只認小寫 satisfied/na/todo/tension)"); continue
+         if not str(ent.get("question") or "").strip():
+             errs.append(f"{qid}:question 空(樣板會帶原文,別刪)")
+         if st == "satisfied":
++            _te = _disp_type_err(ent, "evidence")
++            if _te:
++                errs.append(f"{qid}:{_te}")
++                continue
+             ev = str(ent.get("evidence") or "")
+             if not ev:
+                 errs.append(f"{qid}:satisfied 要附 evidence(path:line 或 test:<名>)")
+             elif ev.startswith("test:"):
+                 ok, why = _dispositions_split_test(ev, platforms or {}, default_platform)
+                 if ok is None:
+                     errs.append(f"{qid}:{why}")
+             else:
+                 p, why = _dispositions_split_path_line(ev)
+                 if p is None:
+@@ -55038,34 +55283,41 @@ def _dispositions_tension_shape(ent, platforms=None, default_platform=None, chec
+     ch = ent.get("chosen")
+     if ch not in _DISP_CHOSEN:
+         errs.append(f"tension 的 chosen={ch!r} 不合法(只認小寫 existing/suggested:這次改動沿用既有寫法還是改用建議)")
+     ex = ent.get("existing")
+     if not isinstance(ex, list) or not ex:
+         errs.append(f"tension 要附 existing(既有寫法的 path:line 清單,1–{_DISP_EXISTING_MAX} 項;空的等於沒指出既有寫法在哪)")
+     else:
+         if len(ex) > _DISP_EXISTING_MAX:
+             errs.append(f"existing 有 {len(ex)} 項,上限 {_DISP_EXISTING_MAX}(推送前每項都要開 git 樹驗)")
+         for i, item in enumerate(ex[:_DISP_EXISTING_MAX], 1):
++            _te = _disp_value_type_err(item, f"existing 第 {i} 項", fmt=("path:line", ""), none_ok=False)
++            if _te:
++                errs.append(_te)
++                continue
+             s = str(item)
+             if len(s) > _DISP_ITEM_MAX:
+                 errs.append(f"existing 第 {i} 項超過 {_DISP_ITEM_MAX} 字")
+                 continue
+             p, why = _dispositions_split_path_line(s)
+             if p is None:
+                 errs.append(f"existing 第 {i} 項 {s!r} 切不開——{why}")
+     for fld in ("hazard", "suggestion"):
+         txt = ent.get(fld)
+         if not _dispositions_reason_ok(txt):
+             errs.append(f"tension 的 {fld} 缺或太短(去空白標點後 CJK ≥10 字或總長 ≥25 字)")
+         elif len(str(txt)) > _DISP_TEXT_MAX:
+             errs.append(f"tension 的 {fld} 超過 {_DISP_TEXT_MAX} 字")
+-    if ch == "suggested":
++    _te = _disp_type_err(ent, "evidence") if ch == "suggested" else None
++    if _te:
++        errs.append(_te)
++    elif ch == "suggested":
+         ev = str(ent.get("evidence") or "")
+         if not ev:
+             errs.append("chosen=suggested 要附 evidence(這次改動裡採新做法的那一行 path:line,或 test:<名>)")
+         elif not check_evidence:
+             pass   # 讀側:evidence 的切分與存在性交給跟 satisfied 同一條 _ev(有平台索引),這裡只驗有沒有附
+         elif ev.startswith("test:"):
+             ok, why = _dispositions_split_test(ev, platforms or {}, default_platform)
+             if ok is None:
+                 errs.append(why)
+         else:
+@@ -55622,20 +55874,23 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+                     except Exception as e:
+                         return False, f"無法驗證 test: 證據:.lumos/config.json 的 platforms 不合法({str(e)[:80]})——先修設定檔"
+                 return _dispositions_check_test(repo_root, at_sha, ev, pidx)
+             return _dispositions_check_path_line(repo_root, at_sha, ev)
+ 
+         def _ev_msg(prefix, why2):
+             """設定檔壞掉那幾條 why 本身就是「無法驗證…」,不再外包「對不上」(code-loop r1 單reviewer R1:包了會變雙重否定)。"""
+             return f"{qid} {why2}" if why2.startswith("無法驗證") else f"{qid} {prefix}:{why2}"
+ 
+         if st == "satisfied":
++            _te = _disp_type_err(ent, "evidence")   # 讀側:治理帳重建的紀錄不信形狀(記帳與迴圈工具小修_計劃 第 4 節)
++            if _te:
++                return f"{qid} {_te}"
+             ok2, why2 = _ev(str(ent.get("evidence") or ""))
+             if ok2:
+                 _backing_warn(qid, ent)
+             return None if ok2 else _ev_msg("證據對不上", why2)
+         if st == "tension":
+             # 形狀再驗一次(治理帳重建來的紀錄不信形狀;缺欄 → 該題無法驗證,不炸整份),再對樹驗每個 existing
+             shape = _dispositions_tension_shape(ent, check_evidence=False)
+             if shape:
+                 return f"{qid} tension 形狀不對:{shape[0]}"
+             paths = []
+@@ -57468,34 +57723,34 @@ def main():
+                     help="[自主迴圈結局帳] 這一輪實際花的美元(claude -p 回傳,非估算;非負,選配)")
+     cr.add_argument("--tier", dest="rec_tier", choices=("light", "standard", "high"),
+                     help="M1包 tier 定錨欄:該 loop 首個帶 tier 的記錄定錨 loop tier(loop next/gate 讀取)")
+     cr.add_argument("--orchestrator", dest="rec_orch", choices=("claude", "codex"),
+                     help="d4 編排者定錨欄:誰在編排這個迴圈(外家席=不是編排者那一家);首筆定錨,之後要一致")
+     cr.add_argument("--report", help="[T1 處置帳] 審查員報告檔路徑(存 path+sha256;檔案須存在且非空)")
+     cr.add_argument("--snapshot", help="[T1 處置帳] 派工凍結快照檔路徑(quote-check 的比對對象;存 path+sha256)")
+     cr.add_argument("--intake", help="首輪前掃留痕檔(rN-intake.md;選配——給了就存 path+sha256 且處置閘會全輪重驗,不給不擋。intake守衛案 2026-08-30)")
+     cr.add_argument("--findings-set", dest="findings_set",
+                     help="[T1 處置帳] 逐條 finding id 逗號串(集合核對的全集;與 folded/accepted 配套)")
+-    cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集")
++    cr.add_argument("--folded-set", dest="folded_set", help="[T1 處置帳] 折入計劃節點的 id 子集;一條都沒有寫 none(=空集合;--findings-set 真有叫 none 的 id 時照字面),none 不能跟其他 id 並列")
+     cr.add_argument("--accepted-set", dest="accepted_set",
+-                    help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空)")
++                    help="[T1 處置帳] 附理由放行的 id 子集(與 folded 互斥;聯集須=全集;blocker 輪必空);一條都沒有寫 none(規則同 --folded-set)")
+     cr.add_argument("--accept-reason", dest="accept_reasons", action="append",
+                     help="[T1 處置帳] id=理由(可重複;鍵集合須=accepted-set,理由非空)")
+     cr.add_argument("--finding-kind", dest="finding_kinds", action="append",
+                     help="每條發現在修什麼:id=code(程式缺陷)|spec(被審文件缺陷)|process(流程要求的文件/留痕/範本);選填,給了要全集對得上——量「流程自產工作量」用")
+     cr.add_argument("--finding-severity", dest="finding_severities", action="append",
+                     help="每條發現自己的嚴重度:id=clean|minor|major|blocker;選填,給了要每條各標一個——逃逸自動記靠它判「code 型那條是不是 major 以上」,沒給就退回輪級判準並在逃逸帳標 precision=round")
+     cr.add_argument("--refute-verdict", dest="refute_verdicts", action="append",
+                     help="辯方對某條發現的明確表態:id=agree(同意是真的,維持)|evidence(拿反證降級,須附 file:line)|concern(只存疑無反證,維持);選填,鍵是辯方判過的子集(⊆全集,辯方只判低共識≥major)——純記帳不改判閘,供日後偵測『辯方降級的後來證明是真的』(2026-08-22 三分類裁定的重啟條件)")
+ 
+     cr.add_argument("--regression-set", dest="regression_set",
+-                    help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none(Projects/代碼審修正關卡第0步_計劃)")
++                    help="這輪的發現裡,編排者判斷是上一輪修補造成的:id 逗號串,或 none(判過、沒有);選填,只能跟 --findings-set 一起給、id 要在裡面;迴圈第一輪只能 none;只收 code- 開頭的編號(Projects/代碼審修正關卡第0步_計劃、記帳與迴圈工具小修_計劃 d2)")
+     cr.add_argument("--finding-source", dest="finding_sources", action="append",
+                     help="[代碼審minor解綁] 代碼審 major 輪要放行原報 minor 時,每個 id 指回席報告原條:id=<報告路徑>#<序號>(可重複;序號用 report-normalize --items 列);"
+                          "記帳當下就核對:放行的都要指原報 minor、每條原報 major 都只被折入的 id 指到,錯了 rc2 不寫帳。載體最後記")
+     cr.add_argument("--refuted-set", dest="refuted_set",
+                     help="[審查有沒有用記帳 S2] 編排者機械重現不到、沒折也沒放行的發現:id=理由 逗號串,或 none(這輪 0 條);帶 --findings-set 就必帶;id 不得在 findings-set 裡、要對得上 --intake 的重現表列(整字+HIT/MISS)、理由 ≥4 字含實字")
+ 
+     if quality_deployment_error:
+         quality = sub.add_parser("test-quality", add_help=False,
+                                  help="測試品質工具未完整部署，請更新來源與vendor")
+         quality.add_argument("quality_args", nargs=argparse.REMAINDER)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 175dc25c..e0defe6f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -202,20 +202,33 @@ def _ledger_patch_last(ledger, loop, **fields):
+     idx = max(i for i, l in enumerate(lines) if l.strip() and _j.loads(l).get("loop") == loop)
+     rec = _j.loads(lines[idx])
+     for k, v in fields.items():
+         rec[k] = str(v)
+         if k in ("report_path", "snapshot_path"):
+             rec[k.replace("_path", "_sha256")] = hashlib.sha256(Path(v).read_bytes()).hexdigest()
+     lines[idx] = _j.dumps(rec, ensure_ascii=False)
+     ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
+ 
+ 
++def _ledger_rows_edit(ledger, loop, fn):
++    """把帳本裡某個迴圈的每一列交給 fn(dict) 改(測試專用;造現行寫側已經產不出的舊帳形狀,例如全無輪次的高風險迴圈、輪次混用)。"""
++    import json as _j
++    lines = ledger.read_text(encoding="utf-8").splitlines()
++    for i, ln in enumerate(lines):
++        if ln.strip():
++            rec = _j.loads(ln)
++            if rec.get("loop") == loop:
++                fn(rec)
++                lines[i] = _j.dumps(rec, ensure_ascii=False)
++    ledger.write_text("\n".join(lines) + "\n", encoding="utf-8")
++
++
+ def _sevrep(dirp, sev="clean", n=0):
+     """[嚴重度綁定機械掃 S1] 寫側強制(2026-08-26)後,審查席 CLI 記帳必附含宣告行的報告——
+     測試共用最小報告。clean=值序最低,任何帳面等級都不構成低報(高報僅 stderr 提醒不擋)。
+     n=報幾條(2026-09-09 審查有沒有用記帳 S1:--findings 不得多於報告裡的獨立宣告行數,所以帶 --findings ≥1 的記帳要 n≥findings)。"""
+     p = Path(dirp) / (f"sev-ok-{sev}.md" if not n else f"sev-ok-{sev}-{n}.md")
+     if not p.exists():
+         p.write_text(f"severity: {sev}\n" + "".join(f"## f{i}\nseverity: {sev}\n" for i in range(1, n + 1)), encoding="utf-8")
+     return str(p)
+ 
+ 
+@@ -22967,21 +22980,24 @@ def t_loop_panel_gate():
+         r = _gate(d, "--panel")
+         check("panel: 無 capture_counts → advisory 缺席提示不擋 rc0",
+               r.returncode == 0, f"rc={r.returncode}\n{r.stdout}")
+         check("panel: 缺席提示行存在", "沒有重疊數據" in r.stdout, r.stdout)
+ 
+     # I1 partial-mix:同 loop 有 round 欄記錄 + 無 round 欄記錄混用 → rc2(防 None phantom 輪)
+     with tempfile.TemporaryDirectory() as d:
+         _mkvault(d)
+         _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "A", "--severity", "major")
+         _rec(d, "caught", "--loop", "PL", "--round", "r1", "--token", "B", "--severity", "major")
+-        _rec(d, "caught", "--loop", "PL", "--token", "C", "--severity", "clean")  # 無 round(legacy 混入)
++        rc_ = _rec(d, "caught", "--loop", "PL", "--token", "C", "--severity", "clean")  # 無 round(legacy 混入)
++        check("panel: 前置:同編號混用輪次寫側先擋(記帳與迴圈工具小修 d1)", rc_.returncode == 2, rc_.stderr[-200:])
++        with open(Path(d) / "docs" / ".canary-log.jsonl", "a", encoding="utf-8") as _f:   # 讀側要防的舊帳形狀改直寫
++            _f.write('{"ts": "2026-08-01T00:00:00+08:00", "kind": "caught", "auditor": "", "token": "C", "note": "", "loop": "PL", "severity": "clean"}\n')
+         r = _gate(d, "--panel")
+         check("panel: partial-mix(有/無 round 混用) → rc2 拒讀",
+               r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
+ 
+ 
+ def t_capture_advisory():
+     """capture-recapture 降 advisory(2026-08-14,Projects/收斂閘殘餘估計降級_計劃 S1/S2)。
+     ①超門檻→rc0+advisory 行 ②無 counts→rc0+缺席提示(t_loop_panel_gate 已覆蓋,此處驗互補面)
+     ③存活 major 照樣 rc1(只降 capture 沒鬆別條) ④低殘餘印無鑑別力警語
+     ⑤PASS 橫幅不含「capture-recapture 枯竭」 ⑥K=2 前一輪摘要行內附殘餘觀測值"""
+@@ -23230,21 +23246,21 @@ def t_canary_round_field():
+ 
+         def _rec(*extra):
+             return subprocess.run([sys.executable, GRAPHCTL, "canary", "record", *extra],
+                                   cwd=str(Path(d)), capture_output=True, text=True)
+ 
+         r = _rec("caught", "--loop", "L", "--round", "r1", "--token", "T1")
+         check("canary_round: rc0", r.returncode == 0, f"rc={r.returncode} err={r.stderr}")
+         recs = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+         check("canary_round: 帶 --round 記錄含 round 欄",
+               recs[-1].get("round") == "r1", f"rec={recs[-1]}")
+-        _rec("missed", "--loop", "L", "--token", "T2")
++        _rec("missed", "--loop", "L2", "--token", "T2")   # 另一個編號:同編號混用輪次會被寫側擋(記帳與迴圈工具小修 d1)
+         recs = [_json.loads(l) for l in log.read_text(encoding="utf-8").splitlines()]
+         check("canary_round: 不帶 --round 無此欄(向後相容)",
+               "round" not in recs[-1], f"rec={recs[-1]}")
+ 
+ 
+ def t_capture_counts_from_finders():
+     """異質 panel 接線:多 finder(LLM/linter/測試/mutation)的 finding-key → capture_counts。
+     各 distinct key 被幾個 finder 找到;finder 內去重、key 正規化(大小寫/空白)。"""
+     m = _load_lm()
+     f = m._capture_counts_from_finders
+@@ -29616,30 +29632,30 @@ def t_loop_next_disposal_cmd_actually_runs():
+     rpt.write_text("severity: minor\nseverity: minor\n引句：「規則甲:這是一段足夠長的內容當引句。」\n", encoding="utf-8")
+     lid = f"t5-{_M1U}"
+     d = _j.loads(run(v, "loop", "next", lid, "--tier", "standard", "--orchestrator", "claude", "--json").stdout)
+     check("★前置★ 現場成立:panel tier 吐 disposal_cmd+disposal_gate",
+           "disposal_cmd" in d and "disposal_gate" in d and "record_cmd" in d, str(d)[:200])
+     filled = (d["disposal_cmd"].replace("caught|missed", "caught").replace("<席>", "s1")
+               .replace("<s>", "minor").replace("<id串>", "F1", 1)          # findings-set
+               .replace("--folded-set <id串>", "--folded-set F1")
+               .replace(" --accepted-set <id串>", "")     # accepted 缺省=空集合(argv 手切,'' 會變字面引號)
+               .replace(" --accept-reason <id=理由>", "")
+-              .replace("<席報告.md>", str(rpt)).replace("<凍結快照.md>", str(spec))
++              .replace("<席報告.md>", str(rpt)).replace("<這一席審的那份凍結材料(拆包審時填該席那一包)>", str(spec)).replace("<這一席那份的行數(拆包審時填該席那一包)>", "10")
+               .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h))
+     argv = filled.split()
+     check("★前置★ 填完無殘留佔位符", "<" not in filled and argv[0] == "lumos", filled)
+     # cb3 s3-f1:record_cmd 同樣真跑——寫側新規曾讓它照跑必 rc2,模板已補 --report,這釘防回歸
+     rec_filled = (d["record_cmd"].replace("caught|missed", "caught").replace("<席>", "s9")
+                   .replace("<s>", "minor").replace("<M>", "0")
+                   .replace("<席報告.md>", _sevrep(v.parent, "minor"))
+                   .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
+-                  .replace("<凍結快照.md>", str(spec)).replace("<這輪審了幾行>", "10"))
++                  .replace("<這一席審的那份凍結材料(拆包審時填該席那一包)>", str(spec)).replace("<這一席那份的行數(拆包審時填該席那一包)>", "10"))
+     check("★前置★ record_cmd 填完無殘留佔位符", "<" not in rec_filled, rec_filled)
+     rrec = run(v, *rec_filled.split()[1:])
+     check("★record_cmd 模板真的跑得動(rc0)★", rrec.returncode == 0, f"rc={rrec.returncode} {rrec.stderr[:200]}")
+     rr = run(v, *argv[1:])
+     check("★disposal_cmd 模板真的跑得動(rc0)★", rr.returncode == 0,
+           f"rc={rr.returncode} {rr.stderr[:200]}")
+     g = (d["disposal_gate"].replace("<計劃節點.md>", str(spec)).replace("<root>", str(v.parent)))
+     rg = run(v, *g.split()[1:])
+     check("★disposal_gate 模板跑得動且對剛記的帳給出判定(rc0/1 非 rc2)★", rg.returncode in (0, 1),
+           f"rc={rg.returncode} {rg.stderr[:200]}")
+@@ -29692,24 +29708,24 @@ def t_disposal_loop_requires_provenance():
+     v = mkvault()
+     d = v / "Projects"
+     rpt = d / "t6r.md"; rpt.write_text("severity: clean\n引句：「這是一段足夠長的快照內容」\n", encoding="utf-8")
+     snap = d / "t6s.md"; snap.write_text("這是一段足夠長的快照內容 後面還有\n", encoding="utf-8")
+     lid = f"t6-{_M1U}"
+     # 首筆帶 findings_set+留痕 → 定錨
+     run(v, "canary", "record", "caught", "--round", "r1", "--loop", lid, "--auditor", "s1", "--severity", "minor",
+         "--findings-set", "a", "--refuted-set", "none", "--folded-set", "a", "--report", str(rpt), "--snapshot", str(snap),
+         expect_rc=0)
+     # 定錨後缺留痕 → rc2
+-    rr = run(v, "canary", "record", "caught", "--loop", lid, "--auditor", "s2", "--severity", "minor")
++    rr = run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--auditor", "s2", "--severity", "minor")
+     check("★定錨後缺 --report/--snapshot 必 rc2(留痕轉強制)★", rr.returncode == 2, f"rc={rr.returncode} {rr.stderr[:150]}")
+     # 帶齊就過
+-    run(v, "canary", "record", "missed", "--loop", lid, "--auditor", "s3", "--severity", "major",
++    run(v, "canary", "record", "missed", "--loop", lid, "--round", "r1", "--auditor", "s3", "--severity", "major",
+         "--report", str(rpt), "--snapshot", str(snap), expect_rc=0)
+     # ★相容:未定錨 loop 照舊自由★
+     run(v, "canary", "record", "caught", "--report", _sevrep(v.parent), "--loop", f"t6free-{_M1U}", "--auditor", "s1",
+         "--severity", "minor", expect_rc=0)
+     check("★前置★ 現場成立:定錨 loop 與自由 loop 同庫共存", True, "")
+ 
+ 
+ def t_code_loop_record_requires_provenance_from_first_row():
+     """代碼審的每一筆記帳,從第一筆起就要帶 --report 與 --snapshot,缺了當場擋。
+ 
+@@ -30194,23 +30210,29 @@ def t_disposal_gate_r3_panel_hardening():
+     import json as _j
+     import hashlib as _hl3
+     with open(v.parent / ".canary-log.jsonl", "a", encoding="utf-8") as _f:
+         _f.write(_j.dumps({"ts": "2026-08-20T10:00:00+08:00", "kind": "caught", "loop": lid2,
+                            "auditor": "s1", "severity": "minor", "token": "CANARY-R3B1",
+                            "findings_set": ["F1"], "folded_set": ["F1"], "accepted_set": [],
+                            "result_sha256": h, "reviewed_sha256": h,
+                            "report_path": str(rpt.resolve()), "report_sha256": _hl3.sha256(rpt.read_bytes()).hexdigest(),
+                            "snapshot_path": str(snap.resolve()), "snapshot_sha256": _hl3.sha256(snap.read_bytes()).hexdigest()},
+                           ensure_ascii=False) + "\n")
+-    run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s2",
++    rr = run(v, "canary", "record", "caught", "--loop", lid2, "--round", "r1", "--auditor", "s2",
++             "--severity", "minor", "--report", str(rpt), "--snapshot", str(snap),
++             "--spec", str(spec), "--reviewed", h)
++    check("★寫側先擋混用(記帳與迴圈工具小修 d1)★", rr.returncode == 2 and "有的帶" in rr.stderr, rr.stderr[-200:])
++    # 寫側擋了之後混用帳只可能來自舊帳:用另一個編號記一筆帶輪次的,再改成 lid2,造讀側要防的現場
++    run(v, "canary", "record", "caught", "--loop", lid2 + "-src", "--round", "r1", "--auditor", "s2",
+         "--severity", "minor", "--report", str(rpt), "--snapshot", str(snap),
+         "--spec", str(spec), "--reviewed", h, expect_rc=0)
++    _ledger_rows_edit(v.parent / ".canary-log.jsonl", lid2 + "-src", lambda r: r.__setitem__("loop", lid2))
+     r2 = run(v, "loop", "status", lid2, "--disposal", "--spec", str(spec), "--repo", str(v.parent))
+     check("★前置★ 現場成立:同 loop 混有 round-less 與帶 round 記錄", r2.returncode == 2, f"rc={r2.returncode}")
+     check("★混用=rc2 明確訊息(不再落進「非連續重現」誤導)★",
+           "有的帶輪次、有的不帶" in r2.stderr, r2.stderr[:200])
+ 
+     # ── ③ 開閉引號型態不符→格式 miss(不得靜默消失) ──
+     bad = d / "r3bad.md"
+     bad.write_text("引句：「規則丁:保留字首不得外用,引號要成對。』\n", encoding="utf-8")
+     r3 = run(v, "quote-check", str(bad), "--spec", str(snap))
+     check("★不成對引句(「…』)以格式 miss 入列 rc1(原:整條靜默消失→零引句 rc2 或漏驗)★",
+@@ -30765,32 +30787,38 @@ def t_canary_carrier_zero_quote_rejected():
+     import os as _os
+     v = mkvault()
+     snap = v / "Projects" / "snapshot.patch"
+     snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+     clean = v / "Projects" / "clean.md"
+     clean.write_text("severity: clean\n# 沒有問題\n本席沒有發現。\n", encoding="utf-8")
+     minor = v / "Projects" / "minor.md"
+     minor.write_text("severity: minor\n## F1\nseverity: minor\n報了一條但沒有引句。\n", encoding="utf-8")
+     ledger = v.parent / ".canary-log.jsonl"
+     # 先建成功前綴，逐位元比較證明失敗沒有追加；不是只看最後一行。
+-    run(v, "canary", "record", "none", "--loop", f"code-zq-prefix-{_M1U}", "--auditor", "通才-codex",
++    run(v, "canary", "record", "none", "--loop", f"code-zq-prefix-{_M1U}", "--round", "r1", "--auditor", "通才-codex",
+         "--severity", "clean", "--findings", "0", "--report", str(clean), "--snapshot", str(snap), expect_rc=0)
+     seed = _j.loads(ledger.read_text(encoding="utf-8").splitlines()[-1])
+     check("載體零引句前置：loop 審查席報告解析路徑成立", seed.get("reported") == 0, str(seed))
+-    cases = (("none", clean, "clean", ["--findings", "0"]),
+-             ("F1", clean, "clean", ["--findings", "0"]),
++    # none 那個案例(現場的原形)2026-10-15 起由保留字規則先擋,另外驗(記帳與迴圈工具小修 d3);這裡只留一般 ID
++    cases = (("F1", clean, "clean", ["--findings", "0"]),
+              ("F1", minor, "minor", ["--findings", "1"]),
+              ("F1", minor, "minor", []))
+     for optimized in (False, True):
+         prefix = [sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
+                   "--vault", str(v), "canary", "record", "none", "--round", "r1",
+                   "--auditor", "通才-codex", "--snapshot", str(snap)]
++        before = ledger.read_bytes()
++        r = subprocess.run([*prefix, "--loop", f"code-zq-{_M1U}-{optimized}-none", "--report", str(clean), "--severity", "clean",
++                            "--findings", "0", "--findings-set", "none", "--folded-set", "none", "--refuted-set", "none"],
++                           capture_output=True, text=True, env={**_os.environ})
++        check(f"載體零引句/{optimized}/none:現場原形改由保留字規則先擋、帳逐位元不變",
++              r.returncode == 2 and "保留字" in r.stderr and ledger.read_bytes() == before, r.stderr[-200:])
+         for index, (fid, report, severity, count_args) in enumerate(cases):
+             before = ledger.read_bytes()
+             r = subprocess.run([*prefix, "--loop", f"code-zq-{_M1U}-{optimized}-{index}",
+                                 "--report", str(report), "--severity", severity,
+                                 *count_args, "--findings-set", fid, "--folded-set", fid,
+                                 "--refuted-set", "none"], capture_output=True, text=True,
+                                env={**_os.environ})
+             label = f"載體零引句/{optimized}/{fid}/{count_args}"
+             check(label + " rc2 且明確拒收", r.returncode == 2 and "沒有引句" in r.stderr,
+                   f"rc={r.returncode} {r.stdout[-150:]} {r.stderr[-200:]}")
+@@ -30823,22 +30851,21 @@ def t_canary_carrier_quote_positive_controls():
+     snap = v / "Projects" / "snapshot.patch"
+     snap.write_text("這是凍結材料裡可以核對的一整段文字\n", encoding="utf-8")
+     rpt = v / "Projects" / "quoted.md"
+     rpt.write_text("severity: minor\n## F1\nseverity: minor\n"
+                    "引句:「這是凍結材料裡可以核對的一整段文字」\n", encoding="utf-8")
+     for optimized in (False, True):
+         newline = "\r\n" if optimized else "\n"
+         snap.write_bytes(("這是凍結材料裡可以核對的一整段文字" + newline).encode("utf-8"))
+         rpt.write_bytes(("severity: minor\n## F1\nseverity: minor\n"
+                          "引句:「這是凍結材料裡可以核對的一整段文字」\n").replace("\n", newline).encode("utf-8"))
+-        for index, (fid, count_args) in enumerate((("none", ["--findings", "1"]),
+-                                                ("F1", []), ("F1,F2", ["--findings", "1"]))):
++        for index, (fid, count_args) in enumerate((("F1", []), ("F1,F2", ["--findings", "1"]))):   # none 改成保留字(d3),不再是合法 ID
+             r = subprocess.run([sys.executable, *(["-O"] if optimized else []), GRAPHCTL,
+                                 "--vault", str(v), "canary", "record", "none", "--round", "r1",
+                                 "--loop", f"code-zq-positive-{_M1U}-{optimized}-{index}",
+                                 "--auditor", "通才-codex", "--report", str(rpt), "--snapshot", str(snap),
+                                 "--severity", "minor", *count_args, "--findings-set", fid,
+                                 "--folded-set", fid, "--refuted-set", "none"], capture_output=True, text=True)
+             check(f"載體全錨/{optimized}/{fid}/{count_args} 成功", r.returncode == 0,
+                   f"rc={r.returncode} {r.stderr[-200:]}")
+             rows = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines()
+             last = _j.loads(rows[-1])
+@@ -31115,22 +31142,23 @@ def t_canary_record_disposal_fields_optional():
+     v = mkvault()
+     lid = f"dsp-{_M1U}"
+     rpt = v / "Projects" / "rpt.md"
+     # 引句要夠長才過得了引句下限(短引句在閘那邊本來就算錨不到;2026-09-06 載體全錨檢查
+     # 往前挪到記帳端之後,這份假資料的三字元引句會被擋,改成像樣的長度)
+     rpt.write_text("severity: minor\nseverity: minor\nx\nseverity: minor\ny\n引句：「這是被審文件裡的一整句話 拿來當錨點」\n", encoding="utf-8")
+     snap = v / "Projects" / "snap.md"
+     snap.write_text("凍結快照 這是被審文件裡的一整句話 拿來當錨點 後面還有別的\n", encoding="utf-8")
+ 
+     # ★相容鐵則★:零新參的舊呼叫 rc0,且記錄裡無任何新鍵
+-    r0 = run(v, "canary", "record", "caught", "--report", str(rpt), "--loop", lid, "--severity", "minor",
+-             "--findings", "2", "--auditor", "s1", expect_rc=0)
++    # 不帶輪次的舊呼叫記在另一個編號:同一個編號之後要記帶輪次的處置帳,混用會被寫側擋(記帳與迴圈工具小修_計劃 d1)
++    run(v, "canary", "record", "caught", "--report", str(rpt), "--loop", lid + "-legacy", "--severity", "minor",
++        "--findings", "2", "--auditor", "s1", expect_rc=0)
+     log = (v.parent / ".canary-log.jsonl").read_text(encoding="utf-8").strip().splitlines()
+     last = _j.loads(log[-1])
+     check("★T1 六欄不給不寫★(2026-08-26 起 report 為審查席必附,不在此列)",
+           not any(k in last for k in ("snapshot_path", "findings_set",
+                                       "folded_set", "accepted_set", "accept_reasons")), str(last)[:200])
+ 
+     # 完整合法寫入:全欄落帳且 sha256 可重算
+     r1 = run(v, "canary", "record", "caught", "--loop", lid, "--round", "r1", "--severity", "major",
+              "--auditor", "s1", "--report", str(rpt), "--snapshot", str(snap),
+              "--findings-set", "a,b,c", "--refuted-set", "none", "--folded-set", "a,b", "--accepted-set", "c",
+@@ -31211,21 +31239,21 @@ def t_loop_next_legacy_emits_a_command_that_actually_runs():
+ 
+     cmd = d["record_cmd"]
+     check("★legacy 不得出現在 record_cmd 的 --tier★(它不是可宣告值)",
+           "--tier legacy" not in cmd, cmd)
+ 
+     # ★真跑★:填掉佔位符,原樣執行 next 給的指令
+     filled = (cmd.replace("caught|missed", "caught").replace("<席>", "s2")
+                  .replace("<s>", "clean").replace("<M>", "0")
+                  .replace("<席報告.md>", _sevrep(v.parent))
+                  .replace("<計劃節點.md>", str(spec)).replace("<sha256>", h)
+-                 .replace("<凍結快照.md>", str(spec)).replace("<這輪審了幾行>", "10"))
++                 .replace("<這一席審的那份凍結材料(拆包審時填該席那一包)>", str(spec)).replace("<這一席那份的行數(拆包審時填該席那一包)>", "10"))
+     argv = filled.split()
+     check("★前置★ 現場成立:填完沒有殘留佔位符(不然是在跑別的東西)",
+           "<" not in filled and argv[0] == "lumos", filled)
+     rr = run(v, *argv[1:])
+     check("★next 吐的指令必須真的跑得動★(rc0)", rr.returncode == 0,
+           f"rc={rr.returncode} cmd={filled}\n{rr.stderr[:300]}")
+ 
+     check("★要講清楚這個 loop 補標不了、得開新 id★(不然人只會困惑地把旗標拿掉)",
+           "開新的審查編號" in d.get("tier_hint", "") and "最多 6 輪" in d.get("tier_hint", ""),
+           d.get("tier_hint", "")[:200])
+@@ -41003,22 +41031,22 @@ def _mk_roster_fixture():
+ 
+ 
+ def t_tier_roster_table():
+     """S1 防雙真相釘:panel 條目佔 W 席數==width、single=1;requirement 恆裸枚舉;無 code/standard。"""
+     m = _load_lumos_module()
+     tbl = m._TIER_ROSTER
+     check("roster: 表存在且含六組合(2026-09-17 加 code/light)", set(tbl.keys()) ==
+           {("design", "light"), ("design", "standard"), ("design", "high"), ("code", "high"), ("code", "light"),
+            ("code", "standard")},
+           str(sorted(tbl.keys())))
+-    check("roster: code/standard 補列(循序 tier 錨定案 supersede v1 範圍釘)",
+-          tbl.get(("code", "standard"), {}).get("mode") == "sequential", str(tbl.get(("code", "standard"))))
++    check("roster: code/standard 補列,mode=single(一位審查員、每筆帶輪次;2026-10-15 記帳與迴圈工具小修_計劃 d1 取代循序)",
++          tbl.get(("code", "standard"), {}).get("mode") == "single", str(tbl.get(("code", "standard"))))
+     # required-gated=必派而且處置閘會擋(2026-09-11 代碼審資安席 d6,只有人裁能用);值域刻意加一個,不讓 required 有兩種意思
+     allowed_req = {"required", "required-fail-closed", "note-if-absent", "conditional", "required-gated"}
+     for (kind, tier), entry in tbl.items():
+         seats = entry["seats"]
+         w = sum(1 for s in seats if s["occupies_w"])
+         if entry["mode"] == "panel":
+             check(f"roster: {kind}/{tier} 佔W=={m._TIER_PARAMS[tier][0]}",
+                   w == m._TIER_PARAMS[tier][0], f"got {w}")
+         else:
+             check(f"roster: {kind}/{tier} single 佔W=1", w == 1, f"got {w}")
+@@ -58244,28 +58272,30 @@ def t_disposal_security_seat_roundless_and_banner():
+     _need_src("scripts/lumos")
+     v = mkvault()
+     d = v / "Projects"; d.mkdir(exist_ok=True)
+     lid = f"code-sec-rl-{_M1U}"
+     spec = d / f"{lid}.patch"; spec.write_text(_sec_patch(["app/login.py"]), encoding="utf-8")
+     h = _sha256_of(spec)
+     ledger = v.parent / ".canary-log.jsonl"
+     r_sec = d / f"{lid}-sec.md"; r_sec.write_text("severity: clean\n已讀,無 finding\n", encoding="utf-8")
+     run(v, "canary", "record", "none", "--loop", lid, "--auditor", "資安-sonnet", "--severity", "clean", "--findings", "0",
+         "--report", str(r_sec), "--snapshot", str(spec), "--spec", str(spec), "--reviewed", h,
+-        "--tier", "high", "--orchestrator", "claude", expect_rc=0)
++        "--tier", "high", "--orchestrator", "claude", "--round", "r1", expect_rc=0)
+     _ledger_patch_last(ledger, lid, ts=_SEC_NEW)
+     # 不分輪的處置帳寫側就擋(沒有輪次的處置清單不收);走得到問閘的是「零發現、不帶處置清單」的不分輪迴圈
+     r_car = d / f"{lid}-car.md"; r_car.write_text("severity: clean\n已讀,無 finding\n", encoding="utf-8")
+     run(v, "canary", "record", "none", "--loop", lid, "--auditor", "正確性-sonnet", "--severity", "clean", "--findings", "0",
+         "--report", str(r_car), "--snapshot", str(spec), "--spec", str(spec), "--reviewed", h,
+-        "--tier", "high", "--orchestrator", "claude", expect_rc=0)
++        "--tier", "high", "--orchestrator", "claude", "--round", "r1", expect_rc=0)
+     _ledger_patch_last(ledger, lid, ts=_SEC_NEW)
++    # 高風險迴圈不帶輪次的帳寫側已經擋(記帳與迴圈工具小修 d1),讀側要防的舊帳形狀改成記完拿掉輪次來造
++    _ledger_rows_edit(ledger, lid, lambda r: r.pop("round", None))
+     r = _sec_gate(v, lid, spec)
+     tail = _sec_after(r.stdout)
+     check("不分輪①:高風險、零發現、不帶 --round,資安席看過同一份材料 → 資安席那一步過", tail.startswith(": ✓"), r.stdout[-900:])
+     check("不分輪①:不會講成「材料放錯了」", "材料放錯" not in r.stdout, r.stdout[-600:])
+     check("橫幅②:資安席這步過了 → PASS 橫幅列出資安席", "PASS" in r.stdout and "資安席" in r.stdout.split("DISPOSAL GATE PASS", 1)[-1],
+           r.stdout[-300:])
+     lid2 = f"code-sec-bn-{_M1U}"
+     sp2 = _sec_loop(v, lid2, [("r1", ["app/login.py"], ["正確性-sonnet"], "正確性-sonnet")], tier="standard")
+     r2 = _sec_gate(v, lid2, sp2)
+     check("橫幅②:資安席這步沒跑(standard 不要求)→ 橫幅不列資安席", r2.returncode == 0
+@@ -68356,23 +68386,24 @@ def t_prepush_nogo_light_window_after_gate():
+     why = _ngl_last_reason(r)
+     check("① 修好、重跑規格閘、再審乾淨 → 照擋、ratchet、指 -std(舊窗口的 major 照算)", r.returncode == 1 and "ratchet" in why and "-std" in why, r.stdout[-700:])
+     d2, kg2, p2 = _sg_push_setup("ngw2", body=_NGL_BODY)
+     (d2 / "tests" / "flip.ok").write_text("")
+     rep = _ngl_report(p2, "minor", 1, "panel")
+     run(kg2, "canary", "record", "none", "--loop", "甲-std", "--round", "r1", "--auditor", "鏡頭1", "--severity", "minor", "--findings", "1",
+         "--report", str(rep), expect_rc=0)
+     _ngl_review(kg2, p2)
+     r = _ngl_push(kg2, d2)
+     check("② 帶輪次的紀錄記在 -std 編號、原編號有一筆綁好的乾淨輕量審 → rc0", r.returncode == 0, r.stdout[-700:])
+-    run(kg2, "canary", "record", "none", "--loop", "甲", "--round", "r1", "--auditor", "鏡頭1", "--severity", "minor", "--findings", "1",
++    # 2026-10-15 起同一個編號混用輪次在寫側就擋(記帳與迴圈工具小修 d1):帶輪次的那筆先記到另一個編號再改回「甲」,造讀側要防的舊帳
++    run(kg2, "canary", "record", "none", "--loop", "甲-tmp", "--round", "r1", "--auditor", "鏡頭1", "--severity", "minor", "--findings", "1",
+         "--report", str(rep), expect_rc=0)
+-    _ngl_review(kg2, p2)
++    _ledger_rows_edit(kg2.parent / ".canary-log.jsonl", "甲-tmp", lambda r: r.__setitem__("loop", "甲"))
+     r = _ngl_push(kg2, d2)
+     why = _ngl_last_reason(r)
+     check("③ 原編號帳上有帶輪次的紀錄 → 輕量審判不了、rc1、指 -std", r.returncode == 1 and "帶輪次" in why and "-std" in why, r.stdout[-700:])
+     lr = run(kg2, "loop", "status", "甲", "--light", "--spec", str(p2))
+     check("③ 對照:loop status --light 對同一本帳也判不了(rc2、講帶了輪次)", lr.returncode == 2 and "帶了輪次" in lr.stderr, (lr.stdout[-300:], lr.stderr[-300:]))
+ 
+ 
+ def t_prepush_nogo_light_needs_non_arch_seat():
+     """[規格閘不做節 代碼審 r4 G4:正2] 窗口裡要有一席不是架構對齊的審查席(有席名、不以「架構對齊」開頭、綁好、沒出事):
+     只有架構對齊席 → 擋;沒寫席名 → 擋(空席名不算一席,跟 light 的人數規則一樣);補一席通才 → 放行;通才在前、架構對齊排最後 → 照樣放行。"""
+@@ -68853,24 +68884,30 @@ def t_prepush_nogo_light_major_points_to_std():
+     p.write_text(p.read_text(encoding="utf-8").replace("- 不做退款\n", "- 不做退款與部分退款\n"), encoding="utf-8")
+     _ngl_regate(kg, d)
+     _sg_commit(d, "fix nogo")
+     _ngl_review(kg, p)
+     r = _ngl_push(kg, d)
+     why = _ngl_last_reason(r)
+     check("② 改了被略過那一行、重跑規格閘、新快照審乾淨 → 照擋、指 -std", r.returncode == 1 and "ratchet" in why and "-std" in why, r.stdout[-900:])
+     d2, kg2, p2 = _sg_push_setup("ngr7b", body=_NGL_BODY)
+     (d2 / "tests" / "flip.ok").write_text("")
+     snap = _ngl_freeze(p2, "round")
+-    run(kg2, "canary", "record", "none", "--loop", "甲", "--round", "r1", "--auditor", "通才-sonnet", "--severity", "major", "--findings", "1",
++    _ngl_review(kg2, p2)
++    # 2026-10-15 起同一個編號混用輪次在寫側就擋(記帳與迴圈工具小修 d1):帶輪次的那筆先記到另一個編號再改回「甲」,造讀側要防的舊帳
++    rr = run(kg2, "canary", "record", "none", "--loop", "甲", "--round", "r1", "--auditor", "通才-sonnet", "--severity", "major", "--findings", "1",
++             "--report", str(_ngl_report(p2, "major", 1, "round")), "--snapshot", str(snap), "--spec", str(p2),
++             "--reviewed", _h.sha256(snap.read_bytes()).hexdigest(), "--tier", "light")
++    check("③ 前置:同編號混用輪次寫側先擋", rr.returncode == 2 and "有的帶" in rr.stderr, rr.stderr[-300:])
++    run(kg2, "canary", "record", "none", "--loop", "甲-tmp", "--round", "r1", "--auditor", "通才-sonnet", "--severity", "major", "--findings", "1",
+         "--report", str(_ngl_report(p2, "major", 1, "round")), "--snapshot", str(snap), "--spec", str(p2),
+         "--reviewed", _h.sha256(snap.read_bytes()).hexdigest(), "--tier", "light", expect_rc=0)
+-    _ngl_review(kg2, p2)
++    _ledger_rows_edit(kg2.parent / ".canary-log.jsonl", "甲-tmp", lambda r: r.__setitem__("loop", "甲"))
+     r = _ngl_push(kg2, d2)
+     why = _ngl_last_reason(r)
+     check("③ major 用 --round 記成多人審格式、再一筆乾淨輕量審 → rc1、講明帶輪次判不了、指 -std",
+           r.returncode == 1 and "帶輪次" in why and "lumos loop next '甲-std' --tier standard" in why, r.stdout[-900:])
+ 
+ 
+ def t_prepush_nogo_std_review_exit():
+     """[規格閘不做節 代碼審 r7 換形狀 ②③] 輕量審抓到 major 之後的出口是 -std 完整設計審(設計審手冊的升級規則):
+     -std 那一輪有發現、沒有處置清單(處置閘沒過)→ 照擋,講 -std 的處置閘沒過;下一輪零發現、處置閘過了 → 放行。
+     -std 審的材料不是這份計劃(--spec 指到一份內容一模一樣的副本)→ 照擋,講審的不是這份計劃。"""
+@@ -69466,21 +69503,24 @@ def t_prepush_nogo_std_needs_full_review_shape():
+     snap = _ngl_freeze(p2, "light-std")
+     run(kg2, "canary", "record", "none", "--loop", "甲-std", "--round", "r1", "--auditor", "通才-sonnet", "--severity", "clean", "--findings", "0",
+         "--report", str(_ngl_report(p2, "clean", 0, "light-std")), "--snapshot", str(snap), "--spec", str(p2),
+         "--reviewed", _h.sha256(snap.read_bytes()).hexdigest(), "--tier", "light", expect_rc=0)
+     r = _ngl_push(kg2, d2)
+     why = _ngl_last_reason(r)
+     check("② 甲-std 帶 --round 但 --tier light → rc1、講不是完整設計審", r.returncode == 1 and "不是完整設計審" in why and "light" in why, r.stdout[-900:])
+     d3, kg3, p3 = _ngl_std_passed("ngr9c")
+     r = _ngl_push(kg3, d3)
+     check("③ 對照:照範本記的完整設計審 → rc0", r.returncode == 0 and not _ngl_last_reason(r), r.stdout[-900:])
+-    _ngl_review(kg3, p3, loop="甲-std")
++    rr = _ngl_review(kg3, p3, loop="甲-std", expect_rc=None)
++    check("④ 前置:同編號混用輪次寫側先擋(記帳與迴圈工具小修 d1)", rr.returncode == 2 and "有的帶" in rr.stderr, rr.stderr[-300:])
++    _ngl_review(kg3, p3, loop="甲-std-tmp")   # 讀側要防的舊帳形狀:另一個編號記好再改回「甲-std」
++    _ledger_rows_edit(kg3.parent / ".canary-log.jsonl", "甲-std-tmp", lambda d: d.__setitem__("loop", "甲-std"))
+     r = _ngl_push(kg3, d3)
+     why = _ngl_last_reason(r)
+     check("④ 完整設計審之後混進一筆沒輪次的列 → rc1、講不是完整設計審", r.returncode == 1 and "不是完整設計審" in why, r.stdout[-900:])
+     d5, kg5, p5 = _sg_push_setup("ngr10t", body=_NGL_BODY, fm=_NGL_LANDS)   # 代碼審 r10 合3:帶 --round 卻沒記 --tier
+     (d5 / "tests" / "flip.ok").write_text("")
+     _ngl_review(kg5, p5, severity="major", findings=1)
+     snap = _ngl_freeze(p5, "notier-std")
+     run(kg5, "canary", "record", "none", "--loop", "甲-std", "--round", "r1", "--auditor", "通才-sonnet", "--severity", "clean", "--findings", "0",
+         "--report", str(_ngl_report(p5, "clean", 0, "notier-std")), "--snapshot", str(snap), "--spec", str(p5),
+         "--reviewed", _h.sha256(snap.read_bytes()).hexdigest(), expect_rc=0)
+@@ -91228,21 +91268,21 @@ def t_canary_regression_set():
+     合法時落帳排過序去重,none(大小寫不拘)存空清單;沒帶就不寫這個鍵。"""
+     import json as _j, subprocess as _sp
+     root, v = _stats_fixture("gctl-rgs-", [])
+     _sp.run(["git", "-C", str(root), "init", "-q"], capture_output=True)
+     d = root / "docs"
+     rep = d / "rep.md"
+     rep.write_text("severity: major\n## f1\nseverity: major\n## f2\nseverity: minor\n引句:「這是測試載體可核對的完整凍結材料」\n", encoding="utf-8")
+     snap = d / "snap.patch"
+     snap.write_text("這是測試載體可核對的完整凍結材料\n", encoding="utf-8")
+ 
+-    def rec(rnd, *extra, loop=("--loop", "rgs")):
++    def rec(rnd, *extra, loop=("--loop", "code-rgs")):   # --regression-set 只收代碼審(記帳與迴圈工具小修 d2)
+         return run(v, "canary", "record", "none", *loop, "--round", rnd, "--auditor", "s1-sonnet",
+                    "--severity", "major", "--findings", "2", "--report", str(rep), "--snapshot", str(snap), *extra)
+     car = ("--findings-set", "f1,f2", "--folded-set", "f1,f2", "--refuted-set", "none")
+ 
+     def last():
+         return [_j.loads(l) for l in (d / ".canary-log.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()][-1]
+     r = rec("r1", *car, "--regression-set", "f1")
+     check("①第一輪帶非空清單 rc2", r.returncode == 2 and "第一輪" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+     r = rec("r1", *car, "--regression-set", "NONE")
+     check("②第一輪 none(大小寫不拘)照收、存空清單", r.returncode == 0 and last().get("regression_set") == [], f"rc={r.returncode} {r.stderr[:200]}")
+@@ -91761,21 +91801,21 @@ def t_loop_next_fix_check_reminder():
+     check("⑩文字模式印「已跳過」", "已跳過" in rt.stdout, rt.stdout[-300:])
+     _fc_ledger(root, v, loop="design-x")
+     r = nxt("design-x")
+     check("⑪設計審迴圈不出 fix_check", fcj(r) is None, r.stdout[-300:])
+     r = nxt()
+     dc = _j.loads(r.stdout.strip().splitlines()[-1]).get("disposal_cmd") or ""
+     check("⑫第 2 輪範本含 --regression-set", "--regression-set" in dc, dc)
+     filled = (dc.replace("<席>", "s2-sonnet").replace("<s>", "major").replace("<id串|none>", "none")
+               .replace("--findings-set <id串>", "--findings-set z1").replace("--folded-set <id串>", "--folded-set z1")
+               .replace("--accepted-set <id串>", "").replace("--accept-reason <id=理由>", "")
+-              .replace("<席報告.md>", str(root / "docs" / "rep-r1.md")).replace("<凍結快照.md>", str(root / "docs" / "snap-r1.patch"))
++              .replace("<席報告.md>", str(root / "docs" / "rep-r1.md")).replace("<這一席審的那份凍結材料(拆包審時填該席那一包)>", str(root / "docs" / "snap-r1.patch")).replace("<這一席那份的行數(拆包審時填該席那一包)>", "10")
+               .replace("--spec <計劃節點.md>", "").replace("--reviewed <sha256>", ""))
+     argv = shlex.split(filled)
+     rr = _fc_lum(root, v, *argv[1:])
+     check("⑬第 2 輪範本填 none 真跑成功", rr.returncode == 0, f"{filled}\n{rr.stderr[-300:]}")
+ 
+ 
+ def t_fix_check_record_template():
+     """[S10] --record-template:骨架 JSON 印到標準輸出(base 取自派工單 base_commit、每條要修正紀錄的折入一組),
+     提示只在標準錯誤、不寫檔;派工單沒有或壞掉時 base 留空並在標準錯誤說明。"""
+     import json as _j
+@@ -94562,42 +94602,49 @@ def t_cap_retro_existing_gate_steps_unchanged():
+                t_loop_replay_ignores_spec_gate_rows):
+         try:
+             fn()
+         except Exception as e:
+             check(f"S15 {fn.__name__} 沒有例外", False, repr(e))
+     check("S15 既有處置閘測試全綠", FAIL == before, f"多了 {FAIL - before} 條紅")
+ 
+ 
+ @_cap_real_cutoff
+ def t_cap_retro_bad_ledger_fail_closed():
+-    """[S17] 有人裁紀錄的迴圈審查帳讀不動 → canary record 新一輪回 2、印帳壞在哪、落 cap-ledger-bad;處置閘第八步 ✗;不丟堆疊;沒人裁的不受影響。"""
++    """[S17] 有人裁紀錄的迴圈審查帳讀不動 → canary record 新一輪回 2、印帳壞在哪、落 cap-ledger-bad;處置閘第八步 ✗;不丟堆疊;
++    沒人裁、這個編號自己也有壞列的迴圈改由輪次規則擋(不落 cap-ledger-bad;2026-10-15 記帳與迴圈工具小修 d1);
++    「跑滿回顧只擋有人裁紀錄的迴圈」由 t_cap_retro_only_blocks_decided_loops 用健康的迴圈守。"""
+     import json as _j
+     c = _cr_repo()
+     _cr_loop(c)
+     _cr_loop(c, loop="cry")
+     _cr_decide(c)
+     with open(c["docs"] / ".canary-log.jsonl", "a", encoding="utf-8") as f:
+         f.write(_j.dumps({"ts": "2026-09-20T11:00:00+08:00", "kind": "none", "loop": "crx", "round": 5, "auditor": "x", "token": "BAD"}) + "\n")
+         f.write(_j.dumps({"ts": "2026-09-20T11:00:00+08:00", "kind": "none", "loop": "cry", "round": 5, "auditor": "x", "token": "BAD2"}) + "\n")
+     n0 = _cr_canary_n(c)
+     r = _cr_record(c, "r4")
+     check("S17 輪次不是字串 → 新一輪回 2、不寫帳", r.returncode == 2 and _cr_canary_n(c) == n0, f"rc={r.returncode} {r.stderr[-300:]}")
+     check("S17 印帳壞在哪、不丟堆疊", "輪次" in r.stderr and "Traceback" not in r.stderr, r.stderr[-400:])
+     check("S17 落 cap-ledger-bad", len(_cr_blocked(c, "cap-ledger-bad")) == 1, str(_cr_gov(c, "canary")))
+     g = _cr_gate(c)
+     s8 = _cr_step8(g.stdout)
+     check("S17 處置閘第八步 ✗ 並印原因、不丟堆疊", "✗" in s8 and "Traceback" not in g.stderr and g.returncode != 0, s8 + g.stdout[-300:] + g.stderr[-300:])
+     r = _cr_record(c, "r4", loop="cry")
+-    check("S17 沒有人裁紀錄的迴圈不受影響(照常寫帳、不落擋下)", r.returncode == 0 and len(_cr_blocked(c, "cap-ledger-bad")) == 1, r.stderr[-300:])
++    # ★有意改變(2026-10-15 記帳與迴圈工具小修 d1)★:cry 這個編號自己有一列輪次不是字串,輪次規則判不了它的格式也擋(跟跑滿回顧無關,
++    # 所以不落 cap-ledger-bad)。「跑滿回顧只擋有人裁紀錄的迴圈」改由 t_cap_retro_only_blocks_decided_loops 用健康的迴圈守。
++    # 出口那條也因此要先把壞列修好:壞列在,輪次規則就擋,跟 --skip 無關。
++    check("S17 沒有人裁紀錄、這個編號自己有壞列的迴圈:被輪次規則擋(rc2、講讀不懂),不落 cap-ledger-bad",
++          r.returncode == 2 and len(_cr_blocked(c, "cap-ledger-bad")) == 1 and "讀不懂" in r.stderr, r.stderr[-300:])
+     _cr_retro(c, "--skip", "--note", "人裁說帳壞了先跳過回顧再開一輪")
++    _ledger_rows_edit(c["docs"] / ".canary-log.jsonl", "crx", lambda d: d.update(round="r3") if d.get("token") == "BAD" else None)
+     r = _cr_record(c, "r4")
+-    check("S17 出口:--skip 之後照常寫帳", r.returncode == 0, r.stderr[-300:])
++    check("S17 出口:--skip、把壞的那一列修好之後照常寫帳", r.returncode == 0, r.stderr[-300:])
+     c2 = _cr_repo()
+     _cr_loop(c2)
+     _cr_decide(c2)
+     with open(c2["docs"] / ".canary-log.jsonl", "ab") as f:
+         f.write(b"\xff\xfe broken line\n")
+     r = _cr_record(c2, "r4")
+     check("S17 帳不是 UTF-8 → 回 2、印帳壞在哪、落 cap-ledger-bad、不丟堆疊",
+           r.returncode == 2 and "UTF-8" in r.stderr and "Traceback" not in r.stderr and len(_cr_blocked(c2, "cap-ledger-bad")) == 1,
+           f"rc={r.returncode} {r.stderr[-300:]}")
+     g = _cr_gate(c2)
+@@ -97798,12 +97845,870 @@ def t_test_quality_handbook_controls():
+     _need_src("governance/eval/test_test_quality_handbook.py")
+     root = Path(GRAPHCTL).resolve().parent.parent
+     run = subprocess.run([sys.executable, "governance/eval/test_test_quality_handbook.py"],
+                          cwd=root, capture_output=True, text=True, timeout=60)
+     output = run.stdout + run.stderr
+     check("手冊實驗判讀與模型程序清理獨立控制", run.returncode == 0 and
+           re.search(r"Ran [1-9][0-9]* tests", output) is not None,
+           output[-5000:])
+ 
+ 
++# ── 記帳與迴圈工具小修(Projects/記帳與迴圈工具小修_計劃):輪次一條規則、集合 none、regression-set 只收代碼審、
++#    表態證據型別、留痕提醒、pitfalls 分級要派誰、拆包文字、資安與順序提示 ──
++def _rf_fix(prefix):
++    """臨時 git 專案 + 一份已正規化的 minor 席報告。回 (root, vault, 快照, 報告)。"""
++    root, v, rr, snap = _mr_project(prefix)
++    rpt = _mr_files(rr, "rf", A=("minor",))["A"]
++    return root, v, snap, rpt
++
++
++def _rf_rec(v, lid, rpt, snap, *extra, rnd=None, auditor="正確性-sonnet", sev="minor"):
++    args = ["canary", "record", "none", "--loop", lid, "--auditor", auditor, "--severity", sev,
++            "--report", str(rpt), "--snapshot", str(snap)]
++    if rnd:
++        args += ["--round", rnd]
++    return run(v, *args, *extra)
++
++
++def _rf_row(root, **row):
++    """直接往帳裡追加一列(造舊帳形狀用;現行寫側已產不出的形狀才這樣造)。"""
++    import json as _j
++    base = {"ts": "2026-10-01T12:00:00+08:00", "kind": "none", "auditor": "舊席-sonnet", "token": "T-" + _j.dumps(row)[:12], "note": ""}
++    base.update(row)
++    with open(root / "docs" / ".canary-log.jsonl", "a", encoding="utf-8") as f:
++        f.write(_j.dumps(base, ensure_ascii=False) + "\n")
++
++
++def _rf_carrier_args(fset="a1", rnd="r1"):
++    return ["--round", rnd, "--findings-set", fset, "--folded-set", fset, "--accepted-set", "", "--refuted-set", "none"]
++
++
++def t_canary_record_round_format_mix_needs_round():
++    """[記帳與迴圈工具小修 S5] 既有都帶輪次、這筆不帶 → rc2、帳本不變,訊息講既有帶輪次與補上 --round。
++    判準來源:計劃 d1(寫進去會讓迴圈混用就擋)。抓的錯:寫側不檢查,混用帳寫進去之後 loop next 與處置閘整個判不了。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf5-")
++    try:
++        check("S5 前置:第一筆帶輪次寫得進", _rf_rec(v, "code-rf5", rpt, snap, "--tier", "standard", rnd="r1").returncode == 0)
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf5", rpt, snap, auditor="架構對齊-sonnet")
++        check("S5 不帶 --round:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S5 訊息講既有 1 筆都帶輪次、這筆不帶,下一步補上 --round",
++              "1 筆裡 1 筆帶輪次" in r.stderr and "這筆不帶" in r.stderr and "補上 --round" in r.stderr, r.stderr[-400:])
++        r = _rf_rec(v, "code-rf5", rpt, snap, auditor="架構對齊-sonnet", rnd="r1")
++        check("S5 對照:補上 --round 就寫得進", r.returncode == 0, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_round_format_mix_needs_round")
++
++
++def t_canary_record_round_check_runs_without_round():
++    """[記帳與迴圈工具小修 S6] 輪次檢查不得依賴這筆帶 --round(「載體最後記」那段只有帶 --round 才進)。
++    既有列是帶輪次的設計審、沒有定錨分級,這筆不帶 --tier 也不帶 --round → 只有輪次檢查會擋(其他守衛都放行),理由要是輪次。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf6-")
++    try:
++        _rf_row(root, loop="prose-rf6", round="r1", severity="minor")
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "prose-rf6", rpt, snap)
++        check("S6 不帶 --round、也不碰載體最後記:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S6 擋下理由是輪次混用(不是別道守衛代打)", "有的帶" in r.stderr and "--round" in r.stderr and "載體最後記" not in r.stderr, r.stderr[-400:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_round_check_runs_without_round")
++
++
++def t_canary_record_blocks_round_format_mix_reverse():
++    """[記帳與迴圈工具小修 S7] 既有都不帶輪次(舊循序)、這筆是一般席卻帶 --round → rc2,下一步「拿掉 --round」。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf7-")
++    try:
++        _rf_row(root, loop="code-rf7", tier="standard", severity="minor")
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf7", rpt, snap, rnd="r1")
++        check("S7 帶 --round:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S7 下一步是拿掉 --round", "拿掉 --round" in r.stderr and "換新編號" not in r.stderr, r.stderr[-400:])
++        r = _rf_rec(v, "code-rf7", rpt, snap)
++        check("S7 對照:舊循序迴圈照舊不帶輪次寫得進(S2 相容)", r.returncode == 0, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_blocks_round_format_mix_reverse")
++
++
++def t_canary_record_round_mix_disposal_says_renumber():
++    """[記帳與迴圈工具小修 S8] 既有都不帶輪次、這筆是處置帳(必帶 --round)→ rc2,下一步換新編號,不叫人拿掉 --round(拿掉會被「處置帳必綁輪次」擋,兩邊來回)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf8-")
++    try:
++        _rf_row(root, loop="code-rf8", tier="standard", severity="minor")
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf8", rpt, snap, *_rf_carrier_args(), auditor="載體-sonnet")
++        check("S8 處置帳寫進全無輪次的迴圈:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S8 下一步是換新編號,不叫人拿掉 --round", "換新編號" in r.stderr and "拿掉 --round" not in r.stderr, r.stderr[-400:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_round_mix_disposal_says_renumber")
++
++
++def t_canary_record_round_check_bad_ledger_blocks():
++    """[記帳與迴圈工具小修 S9] 這個編號有一列輪次不是字串(帳讀不懂)→ rc2,不照零筆處理(照零筆會把這筆當第一筆放行)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf9-")
++    try:
++        _rf_row(root, loop="code-rf9", round=5, severity="minor")
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf9", rpt, snap, "--tier", "standard", rnd="r1")
++        check("S9 帳壞:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S9 訊息講帳讀不懂、要先修那一行", "讀不懂" in r.stderr and "修好" in r.stderr, r.stderr[-400:])
++        r = _rf_rec(v, "code-rf9-ok", rpt, snap, "--tier", "standard", rnd="r1")
++        check("S9 對照:別的編號不受影響", r.returncode == 0, r.stderr[-300:])
++        check("S9 這個編號自己壞:訊息講這個審查編號", "這個審查編號" in _rf_rec(v, "code-rf9", rpt, snap, "--tier", "standard", rnd="r1").stderr)
++        led = root / "docs" / ".canary-log.jsonl"
++        with open(led, "ab") as f:
++            f.write(b"\xff\xfe junk\n")
++        b0 = led.read_bytes()
++        r = _rf_rec(v, "code-rf9-new", rpt, snap, "--tier", "standard", rnd="r1")
++        check("S9 整本帳不是 UTF-8:照擋、帳本不變", r.returncode == 2 and led.read_bytes() == b0, r.stderr[-300:])
++        check("S9 整本帳壞:訊息講審查帳讀不懂(整本),不說成這個審查編號", "審查帳讀不懂" in r.stderr and "這個審查編號" not in r.stderr, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_round_check_bad_ledger_blocks")
++
++
++def t_canary_record_first_row_needs_round():
++    """[記帳與迴圈工具小修 S10] 零筆、--tier standard 或 high 卻沒帶 --round → rc2,訊息含 --round r1 的示意指令(F23 的原始事故形狀)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf10-")
++    try:
++        for t, lid in (("standard", "code-rf10s"), ("high", "code-rf10h"), ("standard", "prose-rf10")):
++            n0 = _mr_ledger_n(root)
++            r = _rf_rec(v, lid, rpt, snap, "--tier", t)
++            check(f"S10 {lid} 第一筆 --tier {t} 不帶輪次:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++            check(f"S10 {lid} 訊息含 --round r1 與分級", "--round r1" in r.stderr and t in r.stderr, r.stderr[-400:])
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf10w", rpt, snap, "--tier", "standard", rnd="  ")
++        check("S10 --round 純空白當沒帶:rc2、帳本不變(代碼審 r1 邊界 4)", r.returncode == 2 and _mr_ledger_n(root) == n0 and "--round r1" in r.stderr, r.stderr[-300:])
++        r = _rf_rec(v, "code-rf10\x1b[2J\nx", rpt, snap, "--tier", "standard")
++        check("S10 編號帶 ESC 與換行:訊息裡的範例指令過 _esc_clean", r.returncode == 2 and "\x1b" not in r.stderr, repr(r.stderr[-200:]))
++        r = _rf_rec(v, "code-rf10s", rpt, snap, "--tier", "standard", rnd="r1")
++        check("S10 對照:補上 --round r1 就寫得進", r.returncode == 0, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_first_row_needs_round")
++
++
++def t_canary_record_light_first_row_any_format():
++    """[記帳與迴圈工具小修 S11] light 不規定第一筆格式:帶不帶 --round 都寫得進(light 代碼審有發現時載體必帶輪次;待決問題 Q1)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf11-")
++    try:
++        r1 = _rf_rec(v, "code-rf11a", rpt, snap, "--tier", "light")
++        r2 = _rf_rec(v, "code-rf11b", rpt, snap, "--tier", "light", rnd="r1")
++        check("S11 light 第一筆不帶輪次寫得進", r1.returncode == 0, r1.stderr[-300:])
++        check("S11 light 第一筆帶輪次寫得進", r2.returncode == 0, r2.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_light_first_row_any_format")
++
++
++def t_canary_record_unanchored_tier_from_this_row():
++    """[記帳與迴圈工具小修 S12] 既有列沒定錨(舊設計審,全無輪次無分級),這筆 --tier standard 不帶 --round → rc2(有效分級取這筆)。
++    代碼審的舊循序迴圈補 --tier standard 是相容格(t_seq_code_std_anchor),不擋。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf12-")
++    try:
++        _rf_row(root, loop="prose-rf12", severity="minor")
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "prose-rf12", rpt, snap, "--tier", "standard")
++        check("S12 沒定錨的舊設計審補 --tier standard 不帶輪次:rc2", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S12 訊息講這個編號還沒定分級", "還沒定分級" in r.stderr, r.stderr[-400:])
++        check("S12 既有都不帶輪次:下一步是換新編號,不叫人補上輪次(補了會被混用擋,代碼審 r1 正確性 1)",
++              "換新編號" in r.stderr and "接下來:補上輪次" not in r.stderr, r.stderr[-400:])
++        _rf_row(root, loop="code-rf12", severity="minor")
++        r = _rf_rec(v, "code-rf12", rpt, snap, "--tier", "standard")
++        check("S12 對照:舊循序代碼審補 --tier standard 照舊寫得進", r.returncode == 0, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_unanchored_tier_from_this_row")
++
++
++def t_canary_record_code_first_row_without_tier():
++    """[記帳與迴圈工具小修 S13] code- 第一筆沒帶 --tier 也沒帶 --round → rc2;設計審同形狀照舊寫得進(舊制 legacy,不溯及)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf13-")
++    try:
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf13", rpt, snap)
++        check("S13 code- 第一筆不帶 tier 與輪次:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S13 訊息講第一筆要帶 --tier 與 --round", "--tier" in r.stderr and "--round" in r.stderr and "第一筆" in r.stderr, r.stderr[-400:])
++        r = _rf_rec(v, "prose-rf13", rpt, snap)
++        check("S13 對照:設計審同形狀寫得進", r.returncode == 0, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_code_first_row_without_tier")
++
++
++def t_canary_record_outcome_exempt_round_format():
++    """[記帳與迴圈工具小修 S14] 結局帳(--outcome,結構上不能帶 --round)寫進每筆帶輪次的迴圈 → 照舊寫得進。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf14-")
++    try:
++        check("S14 前置:帶輪次的審查席", _rf_rec(v, "code-rf14", rpt, snap, "--tier", "standard", rnd="r1").returncode == 0)
++        r = run(v, "canary", "record", "none", "--loop", "code-rf14", "--auditor", "auto", "--outcome", "converged")
++        check("S14 結局帳寫得進", r.returncode == 0, r.stderr[-300:])
++        # 代碼審 r1 通才 1(major):結局帳寫進去之後迴圈不能卡死——讀側判混用一律不算結局帳列
++        rn = run(v, "loop", "next", "code-rf14", "--spec", str(snap), "--repo", str(root))
++        check("S14 結局帳之後 loop next 照常吐狀態(正向:有「現在狀態」、rc1),不判混用", rn.returncode == 1 and "現在狀態" in rn.stdout and "有的帶輪次" not in rn.stderr, rn.stdout[-200:] + rn.stderr[-300:])
++        rd = run(v, "loop", "status", "code-rf14", "--disposal", "--spec", str(snap), "--repo", str(root))
++        check("S14 結局帳之後處置閘照常逐步判(正向:印出 [disposal] 各步),不判混用", "[disposal]" in rd.stdout and "有的帶輪次" not in rd.stderr and "分不出哪輪" not in rd.stderr, rd.stdout[-200:] + rd.stderr[-300:])
++        rp = run(v, "loop", "status", "code-rf14", "--gate", "--panel")
++        check("S14 結局帳之後 --panel 不判有記錄沒帶輪次", "現在有記錄沒帶" not in rp.stderr, rp.stderr[-300:])
++        r2 = _rf_rec(v, "code-rf14", rpt, snap, rnd="r2", auditor="架構對齊-sonnet")
++        check("S14 結局帳之後再記 --round r2 照常寫得進", r2.returncode == 0, r2.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_outcome_exempt_round_format")
++
++
++def t_canary_record_round_ignores_outcome_rows():
++    """[記帳與迴圈工具小修 S15] 既有列只有結局帳(結構上不帶輪次),這筆帶 --round → 照常寫得進:判混用一律不算結局帳列
++    (代碼審 r1 通才 1 之後的裁定;原版把結局帳算成不帶輪次,寫完結局帳整個迴圈就判不了)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf15-")
++    try:
++        r = run(v, "canary", "record", "none", "--loop", "code-rf15", "--auditor", "auto", "--outcome", "skipped")
++        check("S15 前置:結局帳先寫進", r.returncode == 0, r.stderr[-300:])
++        r = _rf_rec(v, "code-rf15", rpt, snap, "--tier", "standard", rnd="r1")
++        check("S15 結局帳之後記帶輪次的帳照常寫得進", r.returncode == 0, r.stderr[-400:])
++        r = _rf_rec(v, "code-rf15", rpt, snap, auditor="架構對齊-sonnet")
++        check("S15 對照:之後不帶輪次的審查帳照樣被混用擋,筆數不算結局帳", r.returncode == 2 and "1 筆裡 1 筆帶輪次" in r.stderr and "結局帳" not in r.stderr, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_round_ignores_outcome_rows")
++
++
++def t_canary_record_round_format_blocked_event():
++    """[記帳與迴圈工具小修 S16] 輪次規則擋下時,治理帳多一筆 canary blocked 事件、說明含 round-format(RETIRE-IF 數的就是它)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf16-")
++    try:
++        gov = root / "docs" / ".governance-log.jsonl"
++        def _n():
++            return sum(1 for ln in gov.read_text(encoding="utf-8").splitlines() if '"blocked"' in ln and "round-format" in ln) if gov.exists() else 0
++        before = _n()
++        r = _rf_rec(v, "code-rf16", rpt, snap, "--tier", "standard")
++        check("S16 前置:這筆被擋", r.returncode == 2, r.stderr[-300:])
++        check("S16 治理帳多一筆 round-format 的 blocked 事件", _n() == before + 1, gov.read_text(encoding="utf-8")[-300:] if gov.exists() else "")
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_round_format_blocked_event")
++
++
++def t_canary_record_set_none_is_empty():
++    """[記帳與迴圈工具小修 S17] --accepted-set / --folded-set 寫 none(大小寫不拘)= 空集合,帳上是空清單(F16:原本被當成 id「none」擋)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf17-")
++    try:
++        r = _rf_rec(v, "code-rf17", rpt, snap, "--tier", "standard", "--round", "r1", "--findings-set", "a1",
++                    "--folded-set", "a1", "--accepted-set", "None", "--refuted-set", "none", auditor="載體-sonnet")
++        check("S17 --accepted-set None 寫得進", r.returncode == 0, r.stderr[-400:])
++        car = [x for x in _mr_rows(root, "code-rf17") if "findings_set" in x]
++        check("S17 帳上 accepted_set 是空清單", car and car[-1].get("accepted_set") == [] and car[-1].get("folded_set") == ["a1"], str(car[-1:])[:300])
++        r = _rf_rec(v, "code-rf17b", rpt, snap, "--tier", "standard", "--round", "r1", "--findings-set", "a1",
++                    "--folded-set", "NONE", "--accepted-set", "a1", "--accept-reason", "a1=措辭小事不修這輪", "--refuted-set", "none", auditor="載體-sonnet")
++        car = [x for x in _mr_rows(root, "code-rf17b") if "findings_set" in x]
++        check("S17 --folded-set NONE 也是空清單", r.returncode == 0 and car and car[-1].get("folded_set") == [], r.stderr[-300:])
++        r = _rf_rec(v, "code-rf17c", rpt, snap, "--tier", "standard", "--round", "r1", "--findings-set", "none",
++                    "--folded-set", "none", "--accepted-set", "", "--refuted-set", "none", auditor="載體-sonnet")
++        car = [x for x in _mr_rows(root, "code-rf17c") if "findings_set" in x]
++        check("S17 對照:--findings-set 叫 none 的 id → 擋(none 是保留字,d3;代碼審 r2 G2 取代載體零引句案「照字面」的裁定)",
++              r.returncode == 2 and not car and "保留字" in r.stderr, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_set_none_is_empty")
++
++
++def t_canary_record_set_none_mixed_rejected():
++    """[記帳與迴圈工具小修 S18] none 跟其他 id 寫在同一串 → rc2、帳本不變。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf18-")
++    try:
++        n0 = _mr_ledger_n(root)
++        r = _rf_rec(v, "code-rf18", rpt, snap, "--tier", "standard", "--round", "r1", "--findings-set", "a1",
++                    "--folded-set", "a1,none", "--accepted-set", "", "--refuted-set", "none", auditor="載體-sonnet")
++        check("S18 a1,none:rc2 且帳本不變、訊息講 none 不能跟其他 id 並列",
++              r.returncode == 2 and _mr_ledger_n(root) == n0 and "none" in r.stderr and "--folded-set" in r.stderr, r.stderr[-400:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_set_none_mixed_rejected")
++
++
++def t_canary_record_regression_set_code_only():
++    """[記帳與迴圈工具小修 S19] 編號不是 code- 開頭(設計審、codeX)帶 --regression-set → rc2;code- 照舊收(判法同 --finding-source)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf19-")
++    try:
++        for lid in ("prose-rf19", "codex19"):
++            n0 = _mr_ledger_n(root)
++            r = _rf_rec(v, lid, rpt, snap, "--tier", "standard", *_rf_carrier_args(), "--regression-set", "none", auditor="載體-sonnet")
++            check(f"S19 {lid} 帶 --regression-set:rc2 且帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0 and "只給代碼審" in r.stderr, r.stderr[-400:])
++        for bad in ("\t", " , ,\t"):
++            n0 = _mr_ledger_n(root)
++            r = _rf_rec(v, "code-rf19", rpt, snap, "--tier", "standard", *_rf_carrier_args(), "--regression-set", bad, auditor="載體-sonnet")
++            check(f"S19 全空白 {bad!r} 照空值擋(代碼審 r1 邊界 1)", r.returncode == 2 and _mr_ledger_n(root) == n0 and "是空的" in r.stderr, r.stderr[-300:])
++        r = _rf_rec(v, "code-rf19", rpt, snap, "--tier", "standard", *_rf_carrier_args(), "--regression-set", "none,", auditor="載體-sonnet")
++        car = [x for x in _mr_rows(root, "code-rf19") if "findings_set" in x]
++        check("S19 code- 照舊收;none 的切法跟折入放行同一支(\"none,\" 也是空清單,代碼審 r1 通才 3)",
++              r.returncode == 0 and car and car[-1].get("regression_set") == [], r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_regression_set_code_only")
++
++
++def t_dispositions_satisfied_evidence_type_error():
++    """[記帳與迴圈工具小修 S20] satisfied 的 evidence 是清單/物件/數字(含空清單、空物件、0)→ rc2、講要是一個字串與實際型別,
++    不說切不開、也不說沒附(F21:原本 str() 成「[…]」再切 path:line;空值被 or "" 當沒附)。"""
++    import json as _j
++    with tempfile.TemporaryDirectory() as d:
++        _disp_repo(d)
++        f = Path(d) / "disp.json"
++        for label, val, tn in (("清單", ["app/Screen.kt:3", "app/Screen.kt:1"], "清單"), ("空清單", [], "清單"),
++                               ("物件", {"a": 1}, "物件"), ("空物件", {}, "物件"), ("數字 0", 0, "數字")):
++            f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": "x", "evidence": val}}, ensure_ascii=False), encoding="utf-8")
++            r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
++            check(f"S20 evidence 是{label} → rc2、講要是一個字串與「{tn}」",
++                  r.returncode == 2 and "要是一個字串" in r.stderr and f"你給的是{tn}" in r.stderr, r.stderr[-300:])
++            check(f"S20 evidence 是{label} → 不說切不開、也不說要附", "切不開" not in r.stderr and "要附 evidence" not in r.stderr, r.stderr[-300:])
++        f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": "x", "evidence": "app/Screen.kt:3"}}, ensure_ascii=False), encoding="utf-8")
++        r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
++        check("S20 對照:字串 evidence 照收", r.returncode == 0, r.stderr[-300:])
++    print("  ✓ t_dispositions_satisfied_evidence_type_error")
++
++
++def t_dispositions_evidence_type_error_read_side():
++    """[記帳與迴圈工具小修 S21] 讀側:marker 裡 satisfied 的 evidence 被改成清單 → code-loop check 擋下,problems 講型別錯(不信寫側形狀)。"""
++    import json as _j
++    with tempfile.TemporaryDirectory() as d:
++        sha = _disp_repo(d)
++        f = Path(d) / "disp.json"
++        f.write_text(_j.dumps({"kt-coroutines": {"status": "satisfied", "question": "x", "evidence": "app/Screen.kt:3"}}, ensure_ascii=False), encoding="utf-8")
++        check("S21 前置:合法表態寫得進", _disp_run(["code-loop", "dispositions", str(f), "--repo", d]).returncode == 0)
++        mk = Path(d) / "governance" / "code-loop" / "feat__disp.dispositions.json"
++        rec = _j.loads(mk.read_text(encoding="utf-8"))
++        rec["dispositions"]["kt-coroutines"]["evidence"] = ["app/Screen.kt:3"]
++        mk.write_text(_j.dumps(rec, ensure_ascii=False), encoding="utf-8")
++        r = _disp_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/disp", "--repo", d, "--json"])
++        v = _j.loads(r.stdout.strip().splitlines()[-1])
++        probs = (v.get("dispositions") or {}).get("problems") or []
++        check("S21 讀側擋下、problems 講要是一個字串", r.returncode == 1 and any("要是一個字串" in p for p in probs), r.stdout[-400:])
++    print("  ✓ t_dispositions_evidence_type_error_read_side")
++
++
++def t_dispositions_existing_item_type_error():
++    """[記帳與迴圈工具小修 S22] tension 的 existing 某一項不是字串 → rc2、講第幾項型別錯(原本 str() 後再切 path:line)。"""
++    import json as _j
++    with tempfile.TemporaryDirectory() as d:
++        _disp_repo(d)
++        f = Path(d) / "disp.json"
++        f.write_text(_j.dumps({"kt-coroutines": _tension_good(existing=["app/Screen.kt:3", ["app/Screen.kt:1"]])}, ensure_ascii=False), encoding="utf-8")
++        r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
++        check("S22 existing 第 2 項是清單 → rc2、講第 2 項要是一個字串",
++              r.returncode == 2 and "existing 第 2 項 要是一個字串(path:line)" in r.stderr and "切不開" not in r.stderr, r.stderr[-300:])
++        _ln = next((x for x in r.stderr.splitlines() if "existing 第 2 項" in x), "")
++        check("S22 existing 那一句不帶 evidence 那段的 test: 與 reason 說明(格式說明由參數給,代碼審 r1 架構 2)",
++              _ln and "test:<名>" not in _ln and "寫進 reason" not in _ln, _ln)
++        f.write_text(_j.dumps({"kt-coroutines": _tension_good(existing=[None])}, ensure_ascii=False), encoding="utf-8")
++        r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
++        check("S22 existing 第 1 項是 null → 講型別錯,不說切不開(代碼審 r1 邊界 3)",
++              r.returncode == 2 and "existing 第 1 項 要是一個字串" in r.stderr and "切不開" not in r.stderr, r.stderr[-300:])
++    print("  ✓ t_dispositions_existing_item_type_error")
++
++
++def t_canary_record_fingerprint_reminder():
++    """[記帳與迴圈工具小修 S23] 帶 --report/--snapshot/--intake 寫帳成功 → stderr 一行「指紋已經寫進帳、更正另開檔」,rc 照舊 0;
++    沒帶任何留痕的(非審查席)不印。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf23-")
++    try:
++        intake = root / "governance" / "review-reports" / "mr" / "r1-intake.md"
++        intake.write_text("preflight-4: ran\n", encoding="utf-8")
++        r = _rf_rec(v, "code-rf23", rpt, snap, "--tier", "standard", "--intake", str(intake), rnd="r1")
++        check("S23 寫帳成功 rc0", r.returncode == 0, r.stderr[-300:])
++        check("S23 提醒點名三份留痕、講指紋已入帳與另開檔",
++              "指紋已經寫進帳" in r.stderr and "另開一份檔" in r.stderr and "A.md" in r.stderr and "r1-snapshot.patch" in r.stderr and "r1-intake.md" in r.stderr, r.stderr[-400:])
++        r = run(v, "canary", "record", "none", "--auditor", "x")
++        check("S23 對照:沒帶留痕的不印", r.returncode == 0 and "指紋已經寫進帳" not in r.stderr, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_fingerprint_reminder")
++
++
++def t_pitfalls_tier_prints_review_seats():
++    """[記帳與迴圈工具小修 S24] pitfalls 判 standard → 人可讀輸出在 tier 行下面印「這級仍要代碼審」與名冊必派席(單reviewer、架構對齊);
++    --json 的鍵跟沒這行時一樣(不加欄位)。F25:後端代理把 standard 讀成不用審。"""
++    import json as _j
++    d, kg, _p = _sc_setup("sc-rf24")
++    (d / "app").mkdir()
++    mp = d / "app" / "main.py"
++    mp.write_text("x = 1\n")
++    (kg / "Systems" / "Home.md").write_text((kg / "Systems" / "Home.md").read_text(encoding="utf-8").replace("  - tests/test_x.py\n", "  - tests/test_x.py\n  - app/main.py\n"), encoding="utf-8")
++    _sg_commit(d, "add app")
++    mp.write_text(mp.read_text() + "y = 2\n")
++    _sg_commit(d, "small code")
++    rj = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--json", "--repo", str(d))
++    dd = _j.loads(rj.stdout)
++    check("S24 前置:判 standard", dd["tier"] == "standard", rj.stdout[:300])
++    check("S24 --json 不含新欄位", not any("review" in k and "seat" in k for k in dd) and "這級仍要代碼審" not in rj.stdout, sorted(dd)[:40])
++    r = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--repo", str(d))
++    lines = r.stdout.splitlines()
++    i = next((k for k, ln in enumerate(lines) if ln.startswith("tier: standard")), None)
++    nxt = lines[i + 1] if i is not None and i + 1 < len(lines) else ""
++    check("S24 tier 行下一行:仍要代碼審、單reviewer 與架構對齊", "這級仍要代碼審" in nxt and "單reviewer" in nxt and "架構對齊" in nxt, "\n".join(lines[-12:]))
++    check("S24 附開審指令", "lumos loop next code-<編號> --tier standard" in r.stdout, r.stdout[-400:])
++    print("  ✓ t_pitfalls_tier_prints_review_seats")
++
++
++def t_loop_next_record_cmd_split_package_hint():
++    """[記帳與迴圈工具小修 S25] loop next 的 record_cmd 與 disposal_cmd:--snapshot 與 --scope-lines 的佔位字寫明拆包審時填該席那一包(F28)。"""
++    import json as _j
++    v = mkvault()
++    r = run(v, "loop", "next", "code-rf25", "--tier", "high", "--orchestrator", "claude", "--json")
++    d = _j.loads(r.stdout.strip())
++    for k in ("record_cmd", "disposal_cmd"):
++        c = d.get(k, "")
++        check(f"S25 {k} 的 --snapshot 與 --scope-lines 都講拆包審時填該席那一包",
++              "--snapshot <這一席審的那份凍結材料(拆包審時填該席那一包)>" in c and "--scope-lines <這一席那份的行數(拆包審時填該席那一包)>" in c, c[-300:])
++    print("  ✓ t_loop_next_record_cmd_split_package_hint")
++
++
++def t_canary_record_scope_oversize_split_hint():
++    """[記帳與迴圈工具小修 S26] --scope-lines 超過軟上限 → 照舊寫帳並標 scope_oversize,提醒多一句拆包審時填該席那一包。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf26-")
++    try:
++        r = _rf_rec(v, "code-rf26", rpt, snap, "--tier", "standard", "--scope-lines", "5000", rnd="r1")
++        rows = _mr_rows(root, "code-rf26")
++        check("S26 照舊寫帳、標 scope_oversize", r.returncode == 0 and rows and rows[-1].get("scope_oversize") is True, r.stderr[-300:])
++        check("S26 提醒講拆包審時填該席那一包", "拆包審時 --scope-lines 與 --snapshot 要填這一席那一包" in r.stderr, r.stderr[-400:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_scope_oversize_split_hint")
++
++
++def t_loop_next_high_code_security_hints():
++    """[記帳與迴圈工具小修 S27] high 代碼審在 plant-canary 印兩條提示(資安包含全部改到的檔、最後修補後再派;載體帶 --finding-source 記完同輪不能補、
++    補資安記下一輪);standard 代碼審不印這兩條;非 plant-canary 階段不印。"""
++    import json as _j
++    v = mkvault()
++    r = run(v, "loop", "next", "code-rf27", "--tier", "high", "--orchestrator", "claude")
++    check("S27 high:印資安包要含全部改到的檔、最後修補後再派", "提醒: 資安包要含這輪凍結 patch 改到的全部檔" in r.stdout and "最後一次修補之後" in r.stdout, r.stdout[-800:])
++    check("S27 high:印載體帶 --finding-source 記完同輪不能補、補資安記下一輪", "--finding-source" in r.stdout and "補資安只能記到下一輪" in r.stdout, r.stdout[-800:])
++    r = run(v, "loop", "next", "code-rf27s", "--tier", "standard", "--orchestrator", "claude")
++    check("S27 standard:不印資安提示", "資安包要含" not in r.stdout, r.stdout[-400:])
++    sp = v.parent / "rf27-spec.md"
++    sp.write_text("# s\n", encoding="utf-8")
++    for i in (1, 2, 3):
++        _seq_rec(v, "code-rf27c", tier="high", rid=f"r{i}", sev="major")
++    r = run(v, "loop", "next", "code-rf27c", "--spec", str(sp), "--json")
++    dd = _j.loads(r.stdout.strip()) if r.stdout.strip().startswith("{") else {}
++    check("S27 前置:三輪之後不是派工階段", dd.get("phase") not in (None, "plant-canary"), r.stdout[-300:] + r.stderr[-300:])
++    check("S27 非派工階段不印 hints", "hints" not in dd, str(dd.get("hints")))
++    print("  ✓ t_loop_next_high_code_security_hints")
++
++
++def t_canary_record_carrier_last_security_hint():
++    """[記帳與迴圈工具小修 S28] 同輪已有帶 --finding-source 的載體,又要記資安席 → 照舊 rc2,多一句記到下一輪(例如 r2)與 cap-decision;
++    別的席被擋時不印這句。"""
++    import shutil as _sh
++    root, v, rr, snap = _mr_project("gctl-rf28-")
++    try:
++        f = _mr_files(rr, "w", A=("major", "minor"), B=("minor",), M=("minor",))
++        A, B = f["A"], f["B"]
++        check("S28 前置:major 席", _mr_seat(v, "code-rf28", "正確性-sonnet", "major", A, snap).returncode == 0)
++        r = _mr_carrier(v, "code-rf28", B, snap, "minor", "a1,a2", folded="a1", accepted="a2", sources=(f"a1={A}#1", f"a2={A}#2"))
++        check("S28 前置:帶 --finding-source 的載體寫得進", r.returncode == 0, r.stderr[-400:])
++        n0 = _mr_ledger_n(root)
++        r = _mr_seat(v, "code-rf28", "資安-sonnet", "minor", f["M"], snap)
++        check("S28 資安席被擋 rc2、帳本不變", r.returncode == 2 and _mr_ledger_n(root) == n0, r.stderr[-400:])
++        check("S28 多一句記到下一輪(例如 r2)與 cap-decision", "要補的是資安席" in r.stderr and "r2" in r.stderr and "cap-decision" in r.stderr, r.stderr[-400:])
++        r = _mr_seat(v, "code-rf28", "邊界-sonnet", "minor", f["M"], snap)
++        check("S28 對照:別的席被擋不印資安那句", r.returncode == 2 and "要補的是資安席" not in r.stderr, r.stderr[-400:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_carrier_last_security_hint")
++
++
++def t_loop_next_design_first_round_freeze_order():
++    """[記帳與迴圈工具小修 S29] 設計審第一輪派工印「先排乾再 spec-freeze」與前掃提醒;代碼審不印(F11)。"""
++    v = mkvault()
++    r = run(v, "loop", "next", "rf29-plan", "--tier", "standard", "--orchestrator", "claude")
++    check("S29 設計審首輪:印先排乾再凍結", "提醒: 順序:先排乾" in r.stdout and "spec-freeze" in r.stdout, r.stdout[-800:])
++    check("S29 設計審首輪:印前掃", "首輪還要先跑前掃" in r.stdout, r.stdout[-800:])
++    r = run(v, "loop", "next", "code-rf29", "--tier", "standard", "--orchestrator", "claude")
++    check("S29 代碼審不印這條", "先排乾" not in r.stdout and "前掃" not in r.stdout, r.stdout[-400:])
++    print("  ✓ t_loop_next_design_first_round_freeze_order")
++
++
++def t_loop_next_new_code_standard_emits_round():
++    """[記帳與迴圈工具小修 S1] 全新 code- 編號 --tier standard:record_cmd 與 disposal_cmd 都帶 --round r1,canary_type 是 slot 形狀(F23 的禍首範本)。"""
++    import json as _j
++    v = mkvault()
++    r = run(v, "loop", "next", "code-rf1", "--tier", "standard", "--orchestrator", "claude", "--json")
++    d = _j.loads(r.stdout.strip())
++    check("S1 record_cmd 帶 --round r1", " --round r1 " in d.get("record_cmd", ""), d.get("record_cmd", "")[:300])
++    check("S1 disposal_cmd 帶 --round r1", " --round r1 " in d.get("disposal_cmd", ""), d.get("disposal_cmd", "")[:300])
++    check("S1 canary_type 是 {slot1: …}", isinstance(d.get("canary_type"), dict) and "slot1" in d["canary_type"], str(d.get("canary_type")))
++    check("S1 人數照名冊一位", d.get("width") == 1, str(d.get("width")))
++    print("  ✓ t_loop_next_new_code_standard_emits_round")
++
++
++def t_loop_next_text_prints_disposal_cmd():
++    """[記帳與迴圈工具小修 S4] 文字輸出印 disposal_cmd(原本只在 --json 看得到,人照文字走只看到不帶處置清單的那條)。"""
++    v = mkvault()
++    r = run(v, "loop", "next", "code-rf4", "--tier", "standard", "--orchestrator", "claude")
++    line = next((ln for ln in r.stdout.splitlines() if ln.strip().startswith("disposal_cmd:")), "")
++    check("S4 文字輸出有 disposal_cmd 行、帶 --findings-set 與 --round r1", "--findings-set" in line and "--round r1" in line, r.stdout[-800:])
++    print("  ✓ t_loop_next_text_prints_disposal_cmd")
++
++
++def t_loop_next_code_standard_round_not_panel():
++    """[記帳與迴圈工具小修 S3] 新的 standard 代碼審每筆帶輪次、第一輪一筆處置載體:loop next(退役日之後的新迴圈)不 rc2、不走退役 panel 閘。"""
++    import os as _os
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf3-")
++    try:
++        check("S3 前置:審查席帶輪次", _rf_rec(v, "code-rf3", rpt, snap, "--tier", "standard", "--orchestrator", "claude", rnd="r1").returncode == 0)
++        r = _rf_rec(v, "code-rf3", rpt, snap, *_rf_carrier_args(), "--spec", str(snap), "--reviewed", _sha256_of(snap), auditor="載體-sonnet")
++        check("S3 前置:處置載體帶輪次", r.returncode == 0, r.stderr[-300:])
++        env = dict(_os.environ, LUMOS_PANEL_RETIRE_CUTOFF="2000-01-01")
++        r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), "loop", "next", "code-rf3", "--spec", str(snap), "--repo", str(root)],
++                           capture_output=True, text=True, env=env, check=False)
++        check("S3 loop next 不 rc2、不提退役 panel 閘", r.returncode != 2 and "panel 閘" not in r.stderr, f"rc={r.returncode} {r.stderr[-400:]}")
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_loop_next_code_standard_round_not_panel")
++
++
++def t_spec_freeze_out_conflict_hint():
++    """[記帳與迴圈工具小修 S30] spec-freeze --out 撞到內容不同的既有快照:照舊 rc2 拒絕,訊息多「還沒派給任何席就可以刪掉重凍」。"""
++    _root, wt = _lr_repo()
++    rel = "docs/kg-knowledge/Projects/戊_計劃.md"
++    _lr_write(wt, {rel: "# 戊\n第二版\n"})
++    out = _lr_out(wt).parent / "r1-snapshot.md"
++    out.write_text("# 戊\n第一版\n", encoding="utf-8")
++    r, _d = _lr_freeze(wt, rel, out)
++    check("S30 照舊 rc2 拒絕", r.returncode == 2, r.stderr[-300:])
++    check("S30 訊息多「還沒派給任何席就可以刪掉重凍」", "刪掉它再凍同一個檔名也可以" in (r.stdout + r.stderr), r.stdout[-300:] + r.stderr[-300:])
++    print("  ✓ t_spec_freeze_out_conflict_hint")
++
++
++def t_dispositions_suggested_evidence_type_error():
++    """[記帳與迴圈工具小修 S32] tension 的 chosen=suggested、evidence 是清單/物件/數字 → rc2、講要是一個字串(代碼審 r1 邊界 2:拿掉這段照綠)。"""
++    import json as _j
++    with tempfile.TemporaryDirectory() as d:
++        _disp_repo(d)
++        f = Path(d) / "disp.json"
++        for val, tn in ((["app/Screen.kt:3"], "清單"), ({}, "物件"), (0, "數字")):
++            f.write_text(_j.dumps({"kt-coroutines": _tension_good(chosen="suggested", evidence=val)}, ensure_ascii=False), encoding="utf-8")
++            r = _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
++            check(f"S32 suggested 的 evidence 是{tn} → rc2、講要是一個字串", r.returncode == 2 and "要是一個字串" in r.stderr and f"你給的是{tn}" in r.stderr, r.stderr[-300:])
++    print("  ✓ t_dispositions_suggested_evidence_type_error")
++
++
++@_cap_real_cutoff
++def t_cap_retro_only_blocks_decided_loops():
++    """[記帳與迴圈工具小修 S33] 跑滿回顧只擋有人裁紀錄的迴圈:A 有人裁、帳有壞列 → A 新一輪被擋(cap-ledger-bad);
++    健康、沒有人裁的 B 照常寫帳、不多落 cap-ledger-bad(代碼審 r1 通才 2:原本守這條的斷言被輪次規則代打)。"""
++    import json as _j
++    c = _cr_repo()
++    _cr_loop(c)
++    _cr_loop(c, loop="crb")
++    _cr_decide(c)
++    with open(c["docs"] / ".canary-log.jsonl", "a", encoding="utf-8") as f:
++        f.write(_j.dumps({"ts": "2026-09-20T11:00:00+08:00", "kind": "none", "loop": "crx", "round": 5, "auditor": "x", "token": "BAD"}) + "\n")
++    r = _cr_record(c, "r4")
++    check("S33 前置:有人裁、帳有壞列的 A 被擋並落 cap-ledger-bad", r.returncode == 2 and len(_cr_blocked(c, "cap-ledger-bad")) == 1, r.stderr[-300:])
++    n0 = _cr_canary_n(c)
++    r = _cr_record(c, "r4", loop="crb")
++    check("S33 健康、沒有人裁的 B 照常寫帳", r.returncode == 0 and _cr_canary_n(c) == n0 + 1, r.stderr[-300:])
++    check("S33 B 不多落 cap-ledger-bad", len(_cr_blocked(c, "cap-ledger-bad")) == 1, str(_cr_gov(c, "canary"))[-300:])
++    print("  ✓ t_cap_retro_only_blocks_decided_loops")
++
++
++# ── 代碼審 code-記帳與迴圈工具小修 r2 的修正:結局帳在讀帳入口一處濾掉、none 是保留字、每筆記帳只讀一次帳、
++#    示意指令不截斷、帳壞的出口與帳尾換行 ──
++_OUTCOME_ROW = '{"ts": "2026-10-01T12:00:00+08:00", "kind": "none", "auditor": "auto", "token": "OUT-1", "note": "", "loop": "%s", "outcome": "converged"}\n'
++
++
++def _append_outcome(ledger, loop):
++    with open(ledger, "a", encoding="utf-8") as f:
++        f.write(_OUTCOME_ROW % loop)
++
++
++def t_outcome_row_loop_next_counts_review_rounds():
++    """[記帳與迴圈工具小修 S34] 帶輪次的迴圈有一輪審查、之後一筆結局帳:loop next --json 照常解析,下一輪是第 2 輪(結局帳不算一輪)。
++    拿掉讀帳入口的結局帳過濾:混用 rc2 或 KeyError,這條會紅(代碼審 r2 正確性 1)。"""
++    import json as _j, shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf34-")
++    try:
++        check("S34 前置:第一輪審查席", _rf_rec(v, "code-rf34", rpt, snap, "--tier", "standard", "--orchestrator", "claude", rnd="r1").returncode == 0)
++        _append_outcome(root / "docs" / ".canary-log.jsonl", "code-rf34")
++        r = run(v, "loop", "next", "code-rf34", "--json")
++        d = _j.loads(r.stdout.strip()) if r.stdout.strip().startswith("{") else {}
++        check("S34 loop next --json 照常吐、下一輪是第 2 輪", d.get("round") == 2 and "Traceback" not in r.stderr, r.stdout[-200:] + r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_outcome_row_loop_next_counts_review_rounds")
++
++
++def t_outcome_row_panel_gate_same_verdict():
++    """[記帳與迴圈工具小修 S35] 舊 panel 帳加一筆結局帳:loop status --gate --panel 的輸出與回傳碼跟沒有結局帳時一模一樣。"""
++    import subprocess as _sp
++    with tempfile.TemporaryDirectory() as d:
++        v = Path(d) / "docs" / "y-knowledge"
++        (v / "MOC").mkdir(parents=True)
++        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
++
++        def rec(*extra):
++            return _sp.run([sys.executable, GRAPHCTL, "canary", "record", *extra], cwd=d, capture_output=True, text=True)
++
++        def gate():
++            return _sp.run([sys.executable, GRAPHCTL, "loop", "status", "PO", "--gate", "--panel"], cwd=d, capture_output=True, text=True)
++        rec("caught", "--loop", "PO", "--round", "r1", "--token", "A", "--severity", "minor")
++        rec("caught", "--loop", "PO", "--round", "r1", "--token", "B", "--severity", "minor")
++        g0 = gate()
++        _append_outcome(Path(d) / "docs" / ".canary-log.jsonl", "PO")
++        g1 = gate()
++        check("S35 前置:panel 閘判得出結果", "[panel]" in g0.stdout, g0.stdout[-300:] + g0.stderr[-300:])
++        check("S35 加結局帳前後輸出與回傳碼一模一樣", (g0.returncode, g0.stdout) == (g1.returncode, g1.stdout), g1.stdout[-300:] + g1.stderr[-300:])
++    print("  ✓ t_outcome_row_panel_gate_same_verdict")
++
++
++def t_outcome_row_disposal_gate_passes():
++    """[記帳與迴圈工具小修 S36] 處置閘判過的代碼審迴圈,記一筆結局帳之後照樣判過(PASS 橫幅、rc0)。"""
++    import shutil as _sh
++    root, v, rr, snap = _mr_project("gctl-rf36-")
++    try:
++        f = _mr_files(rr, "w", A=("minor",))
++        check("S36 前置:審查席", _mr_seat(v, "code-rf36", "正確性-sonnet", "minor", f["A"], snap).returncode == 0)
++        check("S36 前置:載體全折", _mr_carrier(v, "code-rf36", f["A"], snap, "minor", "a1", folded="a1").returncode == 0)
++        g0 = _mr_gate(v, root, "code-rf36", snap)
++        check("S36 前置:結局帳之前判過", g0.returncode == 0 and "DISPOSAL GATE PASS" in g0.stdout, g0.stdout[-400:])
++        r = run(v, "canary", "record", "none", "--loop", "code-rf36", "--auditor", "auto", "--outcome", "converged")
++        check("S36 前置:結局帳寫得進", r.returncode == 0, r.stderr[-300:])
++        g1 = _mr_gate(v, root, "code-rf36", snap)
++        check("S36 結局帳之後處置閘照樣判過", g1.returncode == 0 and "DISPOSAL GATE PASS" in g1.stdout, g1.stdout[-400:] + g1.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_outcome_row_disposal_gate_passes")
++
++
++@_cap_real_cutoff
++def t_outcome_row_cap_hint_still_printed():
++    """[記帳與迴圈工具小修 S37] 到上限的迴圈加一筆結局帳,loop next 末尾的 [cap-hint] 照印(跑滿提示的範圍不算結局帳)。"""
++    rows = _cap_rows([(5, "major", [5]), (3, "major", [3]), (1, "major", [1])])
++    v, _spec = _cap_vault(rows)
++    r0 = run(v, "loop", "next", "caphint")
++    check("S37 前置:沒有結局帳時印 [cap-hint]", "[cap-hint]" in r0.stdout, r0.stdout[-300:])
++    _append_outcome(v.parent / ".canary-log.jsonl", "caphint")
++    r1 = run(v, "loop", "next", "caphint")
++    check("S37 結局帳之後 [cap-hint] 照印、階段照舊", "[cap-hint]" in r1.stdout and "現在狀態 gate-pending" in r1.stdout, r1.stdout[-400:] + r1.stderr[-300:])
++    print("  ✓ t_outcome_row_cap_hint_still_printed")
++
++
++def t_outcome_row_replay_freeze_and_golden():
++    """[記帳與迴圈工具小修 S38] 帳上同一個編號有結局帳:凍結照樣凍得起來,回放照樣對得上(同規格閘留痕那支的寫法)。"""
++    import json as _j, hashlib as _h, subprocess as _sp, tempfile as _tf
++    v = mkvault()
++    for _c in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"],
++               ["commit", "-qm", "init", "--allow-empty"]):
++        _sp.run(["git", "-C", str(v.parent), *_c], capture_output=True)
++    repo = Path(_tf.mkdtemp(prefix="gctl-replay-oc-"))
++    for _c in (["init", "-q"], ["config", "user.email", "t@t"], ["config", "user.name", "t"]):
++        _sp.run(["git", "-C", str(repo), *_c], capture_output=True)
++    d = repo / "governance" / "review-reports" / "oc"
++    d.mkdir(parents=True)
++    spec = repo / "oc-spec.md"
++    spec.write_text("規則甲:回放要決定論,十個字以上。\n", encoding="utf-8")
++    hsp = _h.sha256(spec.read_bytes()).hexdigest()
++    rpt = d / "r1-s1.md"
++    rpt.write_text("severity: minor\n引句:「回放要決定論,十個字以上」\n", encoding="utf-8")
++    snap = d / "r1-snapshot.md"
++    snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
++    row = {"ts": "2026-09-20T10:00:00+08:00", "kind": "none", "loop": "oc", "round": "r1",
++           "auditor": "s1", "token": "OC1", "severity": "minor", "findings": 1,
++           "findings_set": ["f1"], "folded_set": ["f1"], "accepted_set": [],
++           "result_sha256": hsp, "reviewed_sha256": hsp,
++           "report_path": "governance/review-reports/oc/r1-s1.md", "report_sha256": _h.sha256(rpt.read_bytes()).hexdigest(),
++           "snapshot_path": "governance/review-reports/oc/r1-snapshot.md", "snapshot_sha256": _h.sha256(snap.read_bytes()).hexdigest()}
++    (v.parent / ".canary-log.jsonl").write_text(_j.dumps(row) + "\n" + (_OUTCOME_ROW % "oc"), encoding="utf-8")
++    _sp.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
++    _sp.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
++    r = run(v, "loop", "replay", "oc", "--freeze", "--spec", str(spec), "--repo", str(repo))
++    check("S38 帳上有結局帳照樣凍得起來", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
++    r = run(v, "loop", "replay", "oc", "--golden", str(repo / "governance" / "replay" / "oc" / "verdict.json"), "--repo", str(repo))
++    check("S38 回放照樣對得上凍結判定", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
++    print("  ✓ t_outcome_row_replay_freeze_and_golden")
++
++
++def t_outcome_row_readers_skip_it():
++    """[記帳與迴圈工具小修 S39] 讀帳入口一處濾結局帳:規格閘那一族的讀帳(_nogo_full_review_shape 拿到的列)與修正關卡的分輪
++    (_fix_round_rows)都看不到結局帳(代碼審 r2 正確性 4:原本完整設計審形狀判「第 2 筆沒帶輪次」、分輪多出 __seq)。"""
++    import json as _j, types as _ty
++    m = _load_lumos_inproc()
++    v = mkvault()
++    led = v.parent / ".canary-log.jsonl"
++    base = {"ts": "2026-10-01T10:00:00+08:00", "kind": "none", "auditor": "s1", "severity": "minor"}
++    rows = [dict(base, loop="dz-std", round="r1", tier="standard", token="X1"),
++            dict(base, loop="code-fx", round="r1", token="F1"), dict(base, loop="code-fx", round="r2", token="F2")]
++    led.write_text("".join(_j.dumps(r) + "\n" for r in rows[:2]) + (_OUTCOME_ROW % "dz-std") + (_OUTCOME_ROW % "code-fx")
++                   + _j.dumps(rows[2]) + "\n", encoding="utf-8")
++    env = _ty.SimpleNamespace(vault=v)
++    idx = m._spec_gate_ledger_index(env)
++    check("S39 規格閘那一族讀帳看不到結局帳、完整設計審形狀成立",
++          len(idx.get("dz-std", [])) == 1 and m._nogo_full_review_shape(idx["dz-std"]) == "", repr(idx.get("dz-std")))
++    _rows, groups = m._fix_round_rows(env, "code-fx")
++    check("S39 修正關卡的分輪是 r1、r2,沒有結局帳變出來的 __seq", groups is not None and list(groups) == ["r1", "r2"], repr(list(groups or {})))
++    print("  ✓ t_outcome_row_readers_skip_it")
++
++
++def t_canary_record_none_is_reserved_id():
++    """[記帳與迴圈工具小修 S40] none 是保留字:--findings-set 裡出現 none、--refuted-set 的 id 叫 none → rc2、帳本不變、講原因
++    (編排者裁定 G2;代碼審 r2 邊界 1、正確性 3:原本發現清單有 none 時 --regression-set none 第一輪死路、之後記錯)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf40-")
++    try:
++        cases = (("findings 只有 none", ["--findings-set", "none", "--folded-set", "none", "--accepted-set", "", "--refuted-set", "none"]),
++                 ("findings 有 none 也有別的", ["--findings-set", "none,a1", "--folded-set", "a1", "--accepted-set", "", "--refuted-set", "none"]),
++                 ("findings 寫 NONE", ["--findings-set", "NONE", "--folded-set", "", "--accepted-set", "", "--refuted-set", "none"]),
++                 ("refuted 的 id 叫 none", ["--findings-set", "a1", "--folded-set", "a1", "--accepted-set", "", "--refuted-set", "none=重現三次都對不上那一行"]))
++        for label, extra in cases:
++            n0 = _mr_ledger_n(root)
++            r = _rf_rec(v, "code-rf40", rpt, snap, "--tier", "standard", "--round", "r1", *extra, auditor="載體-sonnet")
++            check(f"S40 {label}:rc2、帳本不變、講 none 是保留字", r.returncode == 2 and _mr_ledger_n(root) == n0 and "保留字" in r.stderr, r.stderr[-300:])
++        r = _rf_rec(v, "code-rf40", rpt, snap, "--tier", "standard", "--round", "r1", "--findings-set", "a1", "--folded-set", "a1",
++                    "--accepted-set", "none", "--refuted-set", "none", "--regression-set", "none", auditor="載體-sonnet")
++        car = [x for x in _mr_rows(root, "code-rf40") if "findings_set" in x]
++        check("S40 對照:none 當「一條都沒有」照常收", r.returncode == 0 and car and car[-1].get("accepted_set") == [] and car[-1].get("regression_set") == [], r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_none_is_reserved_id")
++
++
++def _rf_count_ledger_reads(v, args, cwd=None):
++    """在同一個程序裡跑 lumos,數整本審查帳被逐行讀了幾次(_canary_ledger_rows)與整檔讀(read_text)幾次。回 (rc, 逐行次數, 整檔次數)。"""
++    import io, contextlib, os as _os
++    m = _load_lumos_inproc()
++    n = {"rows": 0, "text": 0}
++    orig_rows, orig_text = m._canary_ledger_rows, m.Path.read_text
++
++    def rows_wrap(*a, **k):
++        n["rows"] += 1
++        return orig_rows(*a, **k)
++
++    def text_wrap(self, *a, **k):
++        if self.name == ".canary-log.jsonl":
++            n["text"] += 1
++        return orig_text(self, *a, **k)
++    old_argv, old_cwd = sys.argv, _os.getcwd()
++    m._canary_ledger_rows, m.Path.read_text = rows_wrap, text_wrap
++    sys.argv = [GRAPHCTL, "--vault", str(v), *args]
++    rc = None
++    try:
++        if cwd:
++            _os.chdir(cwd)
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            try:
++                rc = m.main()
++            except SystemExit as e:
++                rc = e.code
++    finally:
++        m._canary_ledger_rows, m.Path.read_text = orig_rows, orig_text
++        sys.argv = old_argv
++        _os.chdir(old_cwd)
++    return rc, n["rows"], n["text"]
++
++
++def t_canary_record_reads_ledger_once():
++    """[記帳與迴圈工具小修 S41] 每條記帳路徑整本帳只讀一次:預設路徑(帶 --round/--report/--snapshot)、帶 --orchestrator、帶 --regression-set、
++    沒帶留痕的舊式記帳都是 1 次;參數一開始就錯(--capture-counts 不是整數)是 0 次(代碼審 r2 資源 1、3)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf41-")
++    try:
++        _rf_row(root, loop="other-rf41", round="r1", severity="minor")   # 帳要先存在,不然「沒有帳」直接不讀,數不出差別
++        base = ["canary", "record", "none", "--auditor", "正確性-sonnet", "--severity", "minor", "--report", str(rpt), "--snapshot", str(snap)]
++        cases = (("預設路徑", [*base, "--loop", "code-rf41a", "--round", "r1", "--tier", "standard"], 0),
++                 ("帶 --orchestrator", [*base, "--loop", "code-rf41b", "--round", "r1", "--tier", "standard", "--orchestrator", "claude"], 0),
++                 ("帶 --regression-set", [*base, "--loop", "code-rf41c", "--round", "r1", "--tier", "standard", "--findings-set", "a1",
++                                                 "--folded-set", "a1", "--refuted-set", "none", "--regression-set", "none"], 0),
++                 ("沒帶留痕的設計審", ["canary", "record", "none", "--loop", "prose-rf41"], 0))
++        for label, args, want_rc in cases:
++            rc, nr, nt = _rf_count_ledger_reads(v, args)
++            check(f"S41 {label}:整本帳只讀一次", nr + nt == 1 and (want_rc is None or rc == want_rc), f"rc={rc} 逐行={nr} 整檔={nt}")
++        rc, nr, nt = _rf_count_ledger_reads(v, [*base, "--loop", "code-rf41d", "--round", "r1", "--capture-counts", "x"])
++        check("S41 參數一開始就錯:rc2、一次都不讀帳", rc == 2 and nr + nt == 0, f"rc={rc} 逐行={nr} 整檔={nt}")
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_reads_ledger_once")
++
++
++def t_canary_record_hint_quotes_full_loop_id():
++    """[記帳與迴圈工具小修 S42] 擋下訊息裡印給人照抄的指令:編號先 quote、不截斷(超過 80 字照樣完整),控制字元清掉;
++    每個印指令的分支都驗(第一筆沒帶輪次、代碼審第一筆沒帶 --tier)(代碼審 r2 邊界 2、通才 3、架構 1)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf42-")
++    try:
++        long_id = "code-" + "長" * 100
++        r = _rf_rec(v, long_id, rpt, snap, "--tier", "standard")
++        import shlex as _shq
++        check("S42 長編號:指令裡是完整編號、沒有截斷符號", r.returncode == 2 and f"--loop {_shq.quote(long_id)} " in r.stderr and "長…" not in r.stderr, r.stderr[-400:])
++        for label, extra in (("第一筆沒帶輪次", ["--tier", "standard"]), ("代碼審第一筆沒帶 --tier", [])):
++            r = _rf_rec(v, "code-rf42\x1b[2J", rpt, snap, *extra)
++            check(f"S42 {label}:編號帶 ESC → 訊息裡沒有 ESC、指令照樣印", r.returncode == 2 and "\x1b" not in r.stderr and "--loop " in r.stderr, repr(r.stderr[-300:]))
++        r = _rf_rec(v, "code-x'; touch /tmp/p #", rpt, snap, "--tier", "standard")
++        check("S42 編號帶引號與分號:指令照 shell 規則 quote", "--loop 'code-x'\"'\"'; touch /tmp/p #'" in r.stderr, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_hint_quotes_full_loop_id")
++
++
++def t_canary_record_orchestrator_bad_ledger_message():
++    """[記帳與迴圈工具小修 S43] 整本帳不是 UTF-8、記帳帶 --orchestrator:rc2、跟輪次規則同一句「審查帳讀不懂」,不丟堆疊(代碼審 r2 邊界 3)。"""
++    import shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf43-")
++    try:
++        led = root / "docs" / ".canary-log.jsonl"
++        with open(led, "ab") as f:
++            f.write(b'{"loop": "x", "note": "\xff"}\n')
++        b0 = led.read_bytes()
++        r = _rf_rec(v, "code-rf43", rpt, snap, "--tier", "standard", "--orchestrator", "claude", rnd="r1")
++        check("S43 rc2、帳本不變、訊息是審查帳讀不懂、沒有堆疊",
++              r.returncode == 2 and led.read_bytes() == b0 and "審查帳讀不懂" in r.stderr and "Traceback" not in r.stderr, r.stderr[-300:])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_orchestrator_bad_ledger_message")
++
++
++def t_canary_record_tail_without_newline():
++    """[記帳與迴圈工具小修 S44] 帳最後一列是沒有換行的壞列:新記錄寫在新的一行(照治理帳 _ledger_tail_needs_newline 的做法先補換行),
++    記帳成功、新列讀得回來(代碼審 r2 邊界 4:原本黏在壞列後面、報落盤自驗失敗)。"""
++    import json as _j, shutil as _sh
++    root, v, snap, rpt = _rf_fix("gctl-rf44-")
++    try:
++        led = root / "docs" / ".canary-log.jsonl"
++        with open(led, "a", encoding="utf-8") as f:
++            f.write('{"loop": "code-rf44", "rou')
++        r = _rf_rec(v, "code-rf44", rpt, snap, "--tier", "standard", rnd="r1")
++        last = led.read_text(encoding="utf-8").splitlines()[-1]
++        ok = False
++        try:
++            ok = _j.loads(last).get("loop") == "code-rf44"
++        except ValueError:
++            pass
++        check("S44 記帳成功、新列自成一行讀得回來", r.returncode == 0 and ok, r.stderr[-300:] + last[:120])
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++    print("  ✓ t_canary_record_tail_without_newline")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
