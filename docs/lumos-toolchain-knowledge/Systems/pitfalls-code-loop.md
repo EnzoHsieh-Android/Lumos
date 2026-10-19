@@ -256,10 +256,28 @@ WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitf
 
 測試 t_loop_next_lens_scope_toolchain_vs_consumer、t_loop_next_lens_scope_design_untouched、t_loop_next_lens_scope_fail_open、t_loop_next_lens_scope_loose_code_ids、t_loop_next_lens_scope_marker_odd_kinds、t_loop_next_lens_scope_root_kind。
 
+## 角色鏡頭認得 React(2026-10-15,[[Projects/前端框架從vue分出_計劃]])
+
+`.ts/.js` 的棧鍵多了 `react`(依賴只有 react 家族的前端),`_review_role_for` 把 vue 與 react 兩個棧鍵都判前端(`_ROLE_FRONT_KEYS`),所以 React 專案裡沒有 `.tsx` 副檔名兜底的 `.ts` 也拿得到前端卡。`.tsx/.jsx` 仍先靠副檔名判前端,行為不變。測試 t_review_role_react_ts_frontend。
+
+## 角色鏡頭認得 Kotlin 伺服端(2026-10-15,[[Projects/前端框架從vue分出_計劃]] 決策 d2)
+
+`.kt` 檔沒有畫面匯入時,改用跟棧別題同一支判定(見 [[Systems/棧別提問表態閘]] 的 Kotlin 那段)看建置檔外掛:判成伺服端就給後端卡,其他照舊判不出。派工路徑讀的是起點版:建置檔候選併進批次讀取清單,受同一個檔數上限與時間預算管。這翻掉 [[Projects/代碼審前後端角色鏡頭_計劃]]〈已知限制〉裡「Kotlin 後端判不出」的設計取捨。`.java` 維持「沒有 android 匯入就判後端」、不看建置檔:Java 那邊沒有誤判回報,而 Kotlin 在 Android 的資料層、ViewModel 大量沒有 android 匯入,不能照抄 Java——兩套判法是刻意的。建置檔超過讀取上限時停在那一層判不出(見下面 r2 那段;r3 起只對建置檔與 package.json 這樣做,被審的原始檔沒讀照舊判不出)。測試 t_review_role_kt_spring_backend。
+
+## 測試檔判定認得 *.test.* 與 __tests__/(2026-10-15,[[Projects/前端框架從vue分出_計劃]] S43)
+
+推送前分級、棧別題、角色鏡頭與架構對齊共用的測試檔判定(`_PITFALL_DIFF_TEST_PAT`)多認 JS/TS 的兩種主流寫法:檔名帶 `.test.` 與 `__tests__/` 目錄(Jest/Vitest 預設的比對)。原本只認 `.spec.`,React 專案的 `App.test.tsx` 會被當成產品程式拿題目與風險型樣。點號與目錄斜線都要在,`latest`、`contest`、`attest` 這類名字不受影響;這個 repo 與 order-web 裡命中新樣式的檔全是真測試(2026-10-15 用 git ls-files 核對)。測試 t_pitfalls_test_pat_js_conventions。
+
+代碼審 r1(2026-10-15)折入:角色路的分類迴圈也算進預算——超時就停用讀到的內容,剩下的照既有規則退回只看副檔名並標 `timed_out`(每支檔的讀檔函式把當下那份讀取結果綁進參數,迴圈中途換掉也不會讀錯);時間來源是 `_review_roles` 的 `now=` 參數(預設真實時鐘,照 `_drift_old_sentence_check` 的先例),測試傳虛擬時鐘,預算判定的測試才不會在高負載下時紅時綠;一份建置檔的判定以文字記憶,不每支 `.kt` 重掃;批次讀取帶整批 16MB 上限(`_ROLE_MAX_TOTAL_BYTES`)。不可逆提示那份掃描(`_scan_diff_for_irreversible_hints`)改用同一個測試檔判定,不再留一份舊副本;判定另認檔名本身就是 `test.*`/`spec.*` 的檔。測試 t_review_roles_kt_build_verdict_memo、t_review_roles_classify_loop_respects_budget、t_review_roles_batch_total_bytes_capped、t_test_pat_bare_names_and_irreversible_shared。
+
+代碼審 r2(2026-10-15)折入:角色路的批次讀取對「物件在、但超過單檔或整批上限沒讀」的檔回空字串(在但讀不了,停在那一層判不出),跟工作樹路徑同語意——原本回 None 會被當成沒有這個檔往上找,Android 子模組建置檔超限、根是 Spring 時被判成後端;角色與 Kotlin 判定用的匯入樣式行首空白只收空格與 tab(`^\s*` 搭多行旗標一大段空行會二次方回溯,全檔由 t_no_multiline_caret_whitespace_star 守);測試檔判定裡「檔名本身是 test/spec」只認小寫加 JS/TS 副檔名(`Test.tsx` 元件、`test.py` 正式檔不算),repo 根的 `tests/`、`test/` 也算。測試 t_review_roles_oversize_build_stops_not_climbs、t_review_roles_total_cap_stops_not_climbs、t_role_import_regexes_blank_lines_fast、t_test_pat_lowercase_test_ext_only。
+
+代碼審 r3(2026-10-15)折入:批次讀取「在但沒讀 → 空字串」只給建置檔與 package.json(`_role_marker_file`);被審的原始檔(.java、.kt…)超過單檔或整批上限沒讀時維持 None、判不出——空字串會讓 .java 走到「沒有 android 匯入 → 後端」。問大小的 `_nodehome_cat_sizes` 遇到含換行的路徑整批回 None(跟 `_nodehome_cat_blobs` 一樣,避免輸出行數錯位)。測試檔判定的 `test_` 只認檔名開頭或 / 之後(contest_form.tsx 不算)。測試 t_review_roles_huge_source_stays_unknown、t_review_roles_total_cap_source_stays_unknown、t_nodehome_cat_sizes_newline_path_whole_batch_none、t_test_pat_test_underscore_anchored。
+
 ## 前端面、infra 題組與測試基礎設施路徑(2026-10-15,[[Projects/前端知識與風險詞_計劃]])
 
 - `pitfalls --stage` 與計劃模式:計劃全文提到前端字樣(`_REQ_FE_WHEN`)時多列 role 為 frontend 的十個需求風險面;計劃模式多印一段「前端面」、`--json` 多一個 `frontend_facets` 鍵;`--check` 在 ✓ 與 ✗ 兩條路都多印一行「提醒:」開頭的前端提醒,回傳碼不變。前端字樣只決定多列題,不決定設計審方向。內容源在 [[Systems/情境出題]]。
-- `_stack_key_for_file` 第一條規則:`.sh` 與 `_TEST_INFRA_PATH_RE`(`e2e/` 資料夾而且那個 e2e 不在 src、lib 底下,或 `.e2e.` 檔名)裡的 sh/py/ts/js 家族 → `infra`(`_is_test_infra_file`;題目見 [[Systems/效能檢核目錄]]),其他副檔名照原本的棧;前端框架分流排在它之後。根目錄的 `tests/e2e/…` 沒被 `_PITFALL_DIFF_TEST_PAT` 擋(它比 `/tests?/`),也落在這條。
+- `_stack_key_for_file` 第一條規則:`.sh` 與 `_TEST_INFRA_PATH_RE`(`e2e/` 資料夾而且那個 e2e 不在 src、lib 底下,或 `.e2e.` 檔名)裡的 sh/py/ts/js 家族 → `infra`(`_is_test_infra_file`;題目見 [[Systems/效能檢核目錄]]),其他副檔名照原本的棧;前端框架分流排在它之後。根目錄的 `tests/e2e/…` 沒被 `_PITFALL_DIFF_TEST_PAT` 擋(它比 `/tests?/`),也落在這條。(2026-10-15 起根目錄的 tests/ 也算測試目錄,根目錄 tests/e2e/… 跟巢狀的一樣整支當測試檔排除;直接問 _stack_key_for_file 仍回 infra)
 - `_pitfall_diff_collect` 掃代碼型樣時問 `_skip_product_claims`:e2e 樣式內的檔都不掃,只有 kt、java、cs、swift、dart 這類有自己語言題的程式檔照掃(e2e 腳本與種子 SQL、compose 不問交易包裹、分級不因它變 high;`db/seeds`、`scripts/seed-prod.sh` 不在樣式內,照掃);只跳 claims 那一圈,`_stack_changed_ok` 不動(它也給棧別觸發用)。`scripts/deploy.sh` 這種不在樣式內的腳本照掃。
 - 架構對齊對照檔排除原封不動的工具自帶檔(見 [[Systems/arch-alignment-lens]])。
 - 綁的測試:`t_pitfalls_stage_frontend_facets_listed`、`t_pitfalls_spec_mode_lists_frontend_facets`、`t_pitfalls_check_frontend_hint_keeps_rc`、`t_stack_key_e2e_path_is_infra`、`t_pitfalls_diff_e2e_sql_not_product_claim`、`t_pitfalls_diff_plain_shell_sql_still_claimed`、`t_test_infra_path_skips_e2ee_source`、`t_test_infra_data_files_no_stack_key`。

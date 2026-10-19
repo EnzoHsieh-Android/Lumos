@@ -44204,18 +44204,18 @@ def t_lens_extcode_pick():
 
 
 def t_extcode_single_source():
-    """[外部回應碼 S4]八題的題目文字、when、when_raw 都是同一組常數;鏡頭編譯的是同兩組字串;
+    """[外部回應碼 S4]九題(2026-10-15 加 react)的題目文字、when、when_raw 都是同一組常數;鏡頭編譯的是同兩組字串;
     鏡頭取改動行用同一支過濾(_stack_changed_ok+_vendored_skip)與同一支正規化(_stack_norm_line)。"""
     import inspect as _insp
     m = _load_lumos_inproc()
-    stacks = ("kt", "cs", "vue", "swift", "node", "py", "java", "dart")
+    stacks = ("kt", "cs", "vue", "react", "swift", "node", "py", "java", "dart")
     bad = []
     for stk in stacks:
         sp = [s for s in m._STACK_QUESTION_SPECS[stk] if s["id"] == f"{stk}-extcode"]
         if not (len(sp) == 1 and sp[0]["q"] is m._EXTCODE_Q and list(sp[0]["when"]) == list(m._EXTCODE_WHEN)
                 and list(sp[0]["when_raw"]) == list(m._EXTCODE_WHEN_RAW) and sp[0].get("shape_only") is True):
             bad.append(stk)
-    check("S4 八個棧的 extcode 題都引用同一組常數且帶 shape_only", not bad, str(bad))
+    check("S4 九個棧的 extcode 題都引用同一組常數且帶 shape_only", not bad, str(bad))
     check("S4 sql 沒有 extcode 題", not any(s["id"].endswith("-extcode") for s in m._STACK_QUESTION_SPECS["sql"]), "")
     check("S4 鏡頭編譯的正規式就是同兩組字串", [p.pattern for p in m._EXTCODE_RX_PLAIN] == list(m._EXTCODE_WHEN) and [p.pattern for p in m._EXTCODE_RX_RAW] == list(m._EXTCODE_WHEN_RAW), "")
     src = _insp.getsource(m._lens_changed_lines) + _insp.getsource(m._extcode_hit)
@@ -46251,7 +46251,7 @@ def t_stack_key_broken_package_json_no_node():
     d = Path(tempfile.mkdtemp(prefix="gctl-pkjbad-"))
     (d / "bad").mkdir(); (d / "bad" / "package.json").write_text('{"dependencies": {"fastify": "5"},}', encoding="utf-8")
     (d / "bom").mkdir(); (d / "bom" / "package.json").write_text('﻿{"dependencies": {"fastify": "5"}}', encoding="utf-8")
-    m._NODE_FLAVOR_CACHE.clear()
+    m._WORKTREE_TEXT_CACHE.clear()
     check("S5: 壞 package.json 底下的 .ts 題組鍵 None(不出 node 題)", m._stack_key_for_file("bad/a.ts", str(d)) is None, "")
     check("S5: 帶 BOM 的照常判 node", m._stack_key_for_file("bom/a.ts", str(d)) == "node", "")
 
@@ -50078,7 +50078,7 @@ def t_node_flavor_unreadable_nearest_package_json_is_none():
     d = Path(tempfile.mkdtemp(prefix="gctl-pkj16-"))
     (d / "package.json").write_text('{"dependencies": {"express": "4"}}', encoding="utf-8")
     (d / "pkg").mkdir(); (d / "pkg" / "package.json").write_bytes('{"dependencies": {"vue": "3"}}'.encode("utf-16"))
-    m._NODE_FLAVOR_CACHE.clear()
+    m._WORKTREE_TEXT_CACHE.clear()
     check("工作樹:最近那份是 UTF-16 → 判不出(不是往上判成 node)", m._node_flavor("pkg/a.ts", str(d)) is None, str(m._node_flavor("pkg/a.ts", str(d))))
 
 
@@ -56359,7 +56359,8 @@ def t_stack_questions_kotlin_spring_triggers():
 
 def t_stack_question_triggers():
     """[表態閘 S2]每題有唯一 id 與非空 when、id 集合釘住(改 id=刻意動作,r3 正確性席 C1);
-    比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;前端 .ts 歸 vue。
+    比對對增行與刪行、剝字串、跳註解行;stack_questions 語意不變、另有 applicable/meta;依賴有 vue 的前端 .ts 歸 vue
+    (只有 react 家族的歸 react,見 t_react_stack_key_from_package_json)。
     翻紅釘:拔掉 _stack_norm_line 的註解跳過 → ③翻紅;把 changed_lines 只收 + 行 → ⑥「純刪除 diff 也觸發」翻紅(r1 合約測試席 f5 訂正編號)。"""
     import json as _j
     m = _load_lumos_inproc()
@@ -56370,6 +56371,8 @@ def t_stack_question_triggers():
                        "kt-springdata", "kt-springhttp",   # 2026-10-12 Kotlin 寫 Spring 後端(後端工程提問與證據擴充 S4)
                        "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
+                       # 2026-10-15 React 補棧(Projects/前端框架從vue分出_計劃 d1)
+                       "react-effect", "react-race", "react-render", "react-key", "react-strict", "react-bundle", "react-parallel",
                        "sql-nplus1", "sql-index", "sql-transaction", "sql-sargable",
                        "swift-main", "swift-swiftui", "swift-leaks", "swift-startup", "swift-concurrency", "swift-energy",
                        "node-eventloop", "node-parallel", "node-data", "node-external", "node-memory",
@@ -56378,7 +56381,7 @@ def t_stack_question_triggers():
                        "java-collections", "java-android",
                        "dart-build", "dart-list", "dart-dispose", "dart-async", "dart-isolate", "dart-platform",
                        # 外部回應碼(2026-10-03 Projects/外部回應碼語意要有出處_計劃):sql 以外八棧各一題
-                       "kt-extcode", "cs-extcode", "vue-extcode", "swift-extcode", "node-extcode", "py-extcode",
+                       "kt-extcode", "cs-extcode", "vue-extcode", "react-extcode", "swift-extcode", "node-extcode", "py-extcode",
                        "java-extcode", "dart-extcode",
                        # 本機基礎設施腳本(2026-10-15 Projects/前端知識與風險詞_計劃 做法 6)
                        "infra-shared", "infra-timeout", "infra-signal", "infra-pid", "infra-path", "infra-portable"}, str(sorted(ids)))
@@ -57669,8 +57672,10 @@ def t_stack_guess_derived_from_canonical_tables():
     # ★這條的舉例換過一次(2026-09-13)★:原本拿 `.dart` 當「正典沒認領」的例子,而 Flutter 補棧
     # 之後 `.dart` 有自己的符號 profile 了,例子失效——**這不是測試寫錯,是純新增動到了邊界**。
     # 換成當下仍未被認領的 `.jsx`;斷言的意思沒變:沒人認領就留空,不准硬湊一個表裡沒有的名字。
+    # ★又換一次(2026-10-15)★:React 補棧讓 typescript 收了 `.jsx`,符號那邊已經沒有沒人認領的副檔名,
+    # 改看測試那邊:`.vue` 沒有任何測試 profile 認領,test 要留空。
     check("②正典沒認領就留空,不硬湊一個不存在的值",
-          g[".vue"]["symbol"] in m.SYMBOL_PROFILES and g[".jsx"]["symbol"] == "", str((g[".vue"], g[".jsx"])))
+          g[".vue"]["symbol"] in m.SYMBOL_PROFILES and g[".vue"]["test"] == "", str(g[".vue"]))
     check("②被補上 profile 的副檔名就要指到正典裡真的有的那個(Flutter 補棧 2026-09-13)",
           g[".dart"]["symbol"] == "dart" and "dart" in m.SYMBOL_PROFILES, str(g[".dart"]))
     check("③`.js` 挑到跟它的測試 profile 同語言的那個符號 profile(不是清單裡碰巧排前面的)",
@@ -67569,7 +67574,7 @@ def _infra_repo(d, files, pkg='{"dependencies": {"react": "^18"}}', vendored=Non
 
 def _infra_collect(d):
     m = _load_lumos_inproc()
-    m._NODE_FLAVOR_CACHE.clear()
+    m._WORKTREE_TEXT_CACHE.clear()
     return m._pitfall_diff_collect("main..HEAD", d, no_lint=True)
 
 
@@ -67579,7 +67584,7 @@ def t_stack_key_e2e_path_is_infra():
     m = _load_lumos_inproc()
     with tempfile.TemporaryDirectory() as d:
         _infra_repo(d, {"e2e/global-setup.ts": "export default async () => {}\n"})
-        m._NODE_FLAVOR_CACHE.clear()
+        m._WORKTREE_TEXT_CACHE.clear()
         check("① e2e/global-setup.ts → infra", m._stack_key_for_file("e2e/global-setup.ts", d) == "infra", str(m._stack_key_for_file("e2e/global-setup.ts", d)))
         check("② scripts/e2e.sh → infra", m._stack_key_for_file("scripts/e2e.sh", d) == "infra", "")
         check("③ 對照:src/App.tsx 不是 infra", m._stack_key_for_file("src/App.tsx", d) not in ("infra", None), str(m._stack_key_for_file("src/App.tsx", d)))
@@ -67645,7 +67650,7 @@ def t_test_infra_path_skips_e2ee_source():
     with tempfile.TemporaryDirectory() as d:
         _infra_repo(d, {"src/crypto/e2e.ts": "export const key = 1\n",
                         "lib/e2e_encryption.py": "import requests\nr = requests.get(url)\n"})
-        m._NODE_FLAVOR_CACHE.clear()
+        m._WORKTREE_TEXT_CACHE.clear()
         check("① src/crypto/e2e.ts 不是 infra", m._stack_key_for_file("src/crypto/e2e.ts", d) != "infra", "")
         check("② lib/e2e_encryption.py 是 py", m._stack_key_for_file("lib/e2e_encryption.py", d) == "py", str(m._stack_key_for_file("lib/e2e_encryption.py", d)))
         data = _infra_collect(d)
@@ -67658,7 +67663,7 @@ def t_test_infra_data_files_no_stack_key():
     m = _load_lumos_inproc()
     with tempfile.TemporaryDirectory() as d:
         _infra_repo(d, {"e2e/fixtures/data.json": "{\"sql\": \"DELETE FROM orders\"}\n", "e2e/fixtures/make.ts": "export const x = 1\n"})
-        m._NODE_FLAVOR_CACHE.clear()
+        m._WORKTREE_TEXT_CACHE.clear()
         check("① e2e/fixtures/data.json → None", m._stack_key_for_file("e2e/fixtures/data.json", d) is None, str(m._stack_key_for_file("e2e/fixtures/data.json", d)))
         check("② 對照:e2e/fixtures/make.ts → infra", m._stack_key_for_file("e2e/fixtures/make.ts", d) == "infra", "")
         data = _infra_collect(d)
@@ -67732,7 +67737,7 @@ def t_test_infra_path_tightened():
         _infra_repo(d, {"db/seeds/prod_cleanup.sql": "DELETE FROM users WHERE 1=1;\n",
                         "scripts/seed-prod.sh": "#!/bin/sh\npsql \"$PROD_URL\" -c \"DELETE FROM users\"\n",
                         "src/e2e/cipher.py": "import requests\nr = requests.get(url)\n"})
-        m._NODE_FLAVOR_CACHE.clear()
+        m._WORKTREE_TEXT_CACHE.clear()
 
         def k(f):
             return m._stack_key_for_file(f, d)
@@ -67802,7 +67807,7 @@ def t_test_infra_path_e2e_inner_lib_src():
     with tempfile.TemporaryDirectory() as d:
         _infra_repo(d, {"e2e/lib/h.ts": "export async function f(db) {\n  await db.query('DELETE FROM users WHERE id = 1')\n}\n",
                         "e2e/app/Main.kt": "fun main() { db.execute(\"DELETE FROM orders WHERE id = 1\") }\n"})
-        m._NODE_FLAVOR_CACHE.clear()
+        m._WORKTREE_TEXT_CACHE.clear()
         for f in ("e2e/lib/x.ts", "e2e/src/x.ts", "tests/e2e/lib/util.ts", "apps/web/e2e/support/lib/x.ts", "e2e/lib/db.py"):
             check(f"① {f} → infra", m._stack_key_for_file(f, d) == "infra", str(m._stack_key_for_file(f, d)))
         for f in ("src/e2e/cipher.py", "packages/x/lib/e2e/a.ts"):
@@ -98271,6 +98276,1282 @@ def t_test_quality_handbook_controls():
           output[-5000:])
 
 
+# ── React 補棧(2026-10-15,Projects/前端框架從vue分出_計劃;★只在 order-web 一個專案取材★)──
+def _react_repo(deps, files, extra=None):
+    """臨時 git repo:根 package.json 的 dependencies=deps;先提交一版空殼,再寫 files 提交成 HEAD。回 root。"""
+    import json as _j, subprocess as _sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-react-"))
+    def g(*a):
+        return _sp.run(["git", *a], cwd=root, capture_output=True, text=True)
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    (root / "package.json").write_text(_j.dumps({"name": "x", "dependencies": deps}), encoding="utf-8")
+    for rel, txt in (extra or {}).items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(txt, encoding="utf-8")
+    (root / "README.txt").write_text("x\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    for rel, txt in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(txt, encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "change")
+    return root
+
+
+def _pitfalls_json(root):
+    import json as _j
+    r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(root)])
+    return _j.loads(next(ln for ln in r.stdout.splitlines() if ln.startswith("{")))
+
+
+def t_react_stack_key_from_package_json():
+    """[S12]依賴只有 react 家族(react/next/preact)的 .tsx/.ts/.jsx → react 棧鍵。
+    判準來源:計劃〈做法〉F2——只有 react 家族、沒有其他前端框架才判 react。翻紅:_node_flavor_of 拿掉 react 分支 → 全回 vue。"""
+    m = _load_lumos_inproc()
+    for deps in ('{"dependencies": {"react": "^19"}}', '{"devDependencies": {"next": "15"}}', '{"peerDependencies": {"preact": "10"}}'):
+        rd = {"web/package.json": deps}.get
+        got = [m._stack_key_for_file(f"web/src/{n}", "/nonexistent", reader=rd) for n in ("App.tsx", "api.ts", "Old.jsx")]
+        check(f"S12:{deps} 底下 .tsx/.ts/.jsx 都是 react", got == ["react"] * 3, str(got))
+
+
+def t_vue_stack_key_kept():
+    """[S13]依賴有 vue 或 nuxt → 照舊 vue;.vue 檔本來就是 vue。"""
+    m = _load_lumos_inproc()
+    for deps in ('{"dependencies": {"vue": "^3"}}', '{"dependencies": {"nuxt": "3"}}'):
+        rd = {"web/package.json": deps}.get
+        check(f"S13:{deps} 的 .ts 照舊 vue", m._stack_key_for_file("web/a.ts", "/nonexistent", reader=rd) == "vue", "")
+    check("S13:.vue 檔是 vue", m._stack_key_for_file("web/A.vue", "/nonexistent") == "vue", "")
+
+
+def t_other_frontend_frameworks_stay_vue():
+    """[S14]只有 svelte、@angular/core、solid-js → 照舊 vue(使用者 2026-10-15 裁:之後有專案再各自補)。"""
+    m = _load_lumos_inproc()
+    for dep in ("svelte", "@angular/core", "solid-js"):
+        rd = {"package.json": '{"dependencies": {"%s": "1"}}' % dep}.get
+        check(f"S14:只有 {dep} → vue", m._stack_key_for_file("src/a.ts", "/nonexistent", reader=rd) == "vue", "")
+    rd = {"package.json": '{"dependencies": {"fastify": "5"}}'}.get
+    check("S14 對照:沒前端框架 → node", m._stack_key_for_file("src/a.ts", "/nonexistent", reader=rd) == "node", "")
+
+
+def t_mixed_react_other_framework_stays_vue():
+    """[S38]react 跟其他前端框架並存 → 照舊 vue,不猜成 react。翻紅:把 _node_flavor_of 先判 react → 這條紅。"""
+    m = _load_lumos_inproc()
+    for dep in ("svelte", "@angular/core", "solid-js", "vue"):
+        rd = {"package.json": '{"dependencies": {"react": "19"}, "devDependencies": {"%s": "1"}}' % dep}.get
+        check(f"S38:react + {dep} → vue", m._stack_key_for_file("src/a.ts", "/nonexistent", reader=rd) == "vue", "")
+
+
+def t_react_stack_wiring():
+    """[S15]pitfalls --diff 改 React 專案的非測試 .tsx:stack_questions 只有 react 鍵、meta 沒有任何 vue- 題;
+    只改測試檔不附題;react 整組題數 = 八題扣掉 shape_only 的外部回應碼題 = 7。"""
+    m = _load_lumos_inproc()
+    check("S15:react 題組八題(六專屬+parallel+extcode)", [s["id"] for s in m._STACK_QUESTION_SPECS["react"]] ==
+          ["react-effect", "react-race", "react-render", "react-key", "react-strict", "react-bundle", "react-parallel", "react-extcode"],
+          str([s["id"] for s in m._STACK_QUESTION_SPECS.get("react", [])]))
+    root = _react_repo({"react": "^19"}, {"src/App.tsx": "export function App() {\n  const [n, setN] = useState(0)\n  return <div/>\n}\n"})
+    data = _pitfalls_json(root)
+    sq = data.get("stack_questions") or {}
+    meta_ids = [r["id"] for v in (data.get("stack_questions_meta") or {}).values() for r in v]
+    check("S15:stack_questions 只有 react、整組 7 題", set(sq) == {"react"} and len(sq["react"]) == 7, str({k: len(v) for k, v in sq.items()}))
+    check("S15:meta 沒有任何 vue- 題、useState 讓 react-render 適用",
+          not [i for i in meta_ids if i.startswith("vue-")] and m._STACK_QUESTION_SPECS["react"][2]["q"] in (data.get("stack_questions_applicable") or {}).get("react", []),
+          str(meta_ids))
+    root2 = _react_repo({"react": "^19"}, {"src/App.spec.tsx": "it('x', () => { useState(0) })\n"})
+    check("S15:純測試檔 diff 不附 react 題", (_pitfalls_json(root2).get("stack_questions") or {}) == {}, "")
+
+
+def t_react_idiom_skill_mapping():
+    """[S16]React 專案的 .ts/.tsx → react-idioms;Node 後端 .ts → node-idioms;找不到 package.json → vue-idioms(現況);
+    skills/react-idioms/SKILL.md 存在。翻紅:_ARCH_IDIOM_SKILL 拿掉 "react" 列 → 前兩條紅。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-reactidiom-"))
+    (d / "web").mkdir()
+    (d / "web" / "package.json").write_text('{"dependencies": {"react": "19"}}', encoding="utf-8")
+    (d / "api").mkdir()
+    (d / "api" / "package.json").write_text('{"dependencies": {"fastify": "5"}}', encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    check("S16:React 的 .tsx → react-idioms", m._idiom_skill_for("tsx", "web/src/App.tsx", str(d)) == "react-idioms", str(m._idiom_skill_for("tsx", "web/src/App.tsx", str(d))))
+    check("S16:React 的 .ts → react-idioms", m._idiom_skill_for("ts", "web/src/api.ts", str(d)) == "react-idioms", "")
+    check("S16:Node 後端 .ts → node-idioms", m._idiom_skill_for("ts", "api/a.ts", str(d)) == "node-idioms", "")
+    check("S16:找不到 package.json → vue-idioms(現況)", m._idiom_skill_for("ts", "lone.ts", str(d)) == "vue-idioms", "")
+    skills_dir = Path(__file__).resolve().parent.parent / "skills"
+    if not skills_dir.is_dir():
+        raise _SrcOnly("消費端沒有 skills/(非來源 repo),react-idioms 存在性這段沒驗到")
+    check("S16:skills/react-idioms/SKILL.md 存在", (skills_dir / "react-idioms" / "SKILL.md").is_file(), "")
+
+
+def t_review_role_react_ts_frontend():
+    """[S18]React 專案的 .ts(沒有 .tsx 副檔名兜底)判前端;Node 後端 .ts 照舊判後端。翻紅:_ROLE_FRONT_KEYS 拿掉 react → 第一條紅(判不出)。"""
+    m = _load_lumos_inproc()
+    rd = {"web/package.json": '{"dependencies": {"react": "19"}}', "api/package.json": '{"dependencies": {"fastify": "5"}}'}.get
+    check("S18:React 的 .ts → frontend", m._review_role_for("web/src/api.ts", "/nonexistent", reader=rd) == "frontend", "")
+    check("S18 對照:Node 的 .ts → backend", m._review_role_for("api/a.ts", "/nonexistent", reader=rd) == "backend", "")
+
+
+def t_impact_stack_questions_react():
+    """[S19]改檔前推播(impact --file --json --stdin-payload)替 React 的 .tsx 附 react 題組;delta 有 useEffect → react-effect 適用。"""
+    import json as _j, subprocess as _sp
+    root = _react_repo({"react": "19"}, {"src/App.tsx": "export const App = () => null\n"},
+                       extra={"docs/x-knowledge/MOC/index.md": "---\ntype: moc\n---\n# i\n"})
+    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", str(root / "src" / "App.tsx"), "--repo", str(root), "--ranked", "--stdin-payload", "--json"],
+                input=_j.dumps({"query": "useEffect", "prospective": {}, "delta_text": "useEffect(() => { const t = setInterval(tick, 1000) }, [])\n", "delta_truncated": False}),
+                capture_output=True, text=True)
+    out = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    ids = [x["id"] for x in (out.get("stack_questions_meta") or {}).get("react", []) if x["applicable"]]
+    check("S19:附 react 全表、react-effect 適用、沒有 vue 鍵", set(out.get("stack_questions") or {}) == {"react"} and "react-effect" in ids, str(list(out.get("stack_questions") or {})) + str(ids) + r.stderr[-300:])
+
+
+def t_react_parallel_two_awaits_trigger():
+    """[S40]兩行賦值式 await → react-parallel 亮(min_lines=2)。來源:react-idioms ①串聯等待的壞例。"""
+    m = _load_lumos_inproc()
+    _a, meta = m._stack_applicability({"react": ["const user = await fetchUser()", "  const prices = await fetchPrices()"]}, 300)
+    check("S40:兩行賦值式 await → react-parallel 適用", any(r["id"] == "react-parallel" and r["applicable"] for r in meta["react"]), str(meta["react"][-2]))
+
+
+def t_react_parallel_single_await_quiet():
+    """[S41]只有一行賦值式 await、其他行沒有 react-parallel 的觸發詞 → 不亮。翻紅:拿掉 min_lines 判斷 → 這條紅。"""
+    m = _load_lumos_inproc()
+    _a, meta = m._stack_applicability({"react": ["const user = await fetchUser()", "return user.name"]}, 300)
+    row = next(r for r in meta["react"] if r["id"] == "react-parallel")
+    check("S41:單一 await 不亮 react-parallel", not row["applicable"] and row["triggered_by"] == [], str(row))
+    _a2, meta2 = m._stack_applicability({"react": ["await fetchUser()"]}, 300)
+    check("S41:裸 await 不算 react-parallel 的觸發寫法", not next(r for r in meta2["react"] if r["id"] == "react-parallel")["applicable"], "")
+
+
+def t_stack_min_lines_default_unchanged():
+    """[S42]沒帶 min_lines 的題一行命中就亮(既有行為);超過整組門檻時 react-parallel 照整組規則亮。"""
+    m = _load_lumos_inproc()
+    check("S42:全表只有 react-parallel 帶 min_lines", [s["id"] for v in m._STACK_QUESTION_SPECS.values() for s in v if "min_lines" in s] == ["react-parallel"], "")
+    _a, meta = m._stack_applicability({"react": ["useEffect(() => {}, [])"]}, 300)
+    check("S42:react-effect 一行命中就亮", next(r for r in meta["react"] if r["id"] == "react-effect")["applicable"], "")
+    _a2, meta2 = m._stack_applicability({"react": ["const a = 1"] * 301}, 300)
+    check("S42:超過門檻 react-parallel 照整組亮", next(r for r in meta2["react"] if r["id"] == "react-parallel")["applicable"], "")
+
+
+def t_react_idioms_rule_names_known():
+    """[S29]react-idioms 寫到的 eslint 規則代號只能是固定名單裡的(已實跑兩條、未實跑兩條),而且未實跑的那兩條要標「未實跑」。
+    判準來源:2026-10-15 在 order-web 用 eslint 9.39.5 + eslint-plugin-react-hooks 5.2.0 對違規樣本實跑,只報 rules-of-hooks 與 exhaustive-deps。
+    翻紅:skill 裡寫一個名單外的代號(例如 react-hooks/no-deps)→ 紅。"""
+    import re
+    p = Path(__file__).resolve().parent.parent / "skills" / "react-idioms" / "SKILL.md"
+    if not p.is_file():
+        raise _SrcOnly("消費端沒有 skills/,react-idioms 機檢代號這段沒驗到")
+    txt = p.read_text(encoding="utf-8")
+    got = set(re.findall(r"\b(react(?:-hooks)?/[a-z][a-z-]*)", txt))
+    ran = {"react-hooks/rules-of-hooks", "react-hooks/exhaustive-deps"}
+    unran = {"react/jsx-key", "react/no-array-index-key"}
+    check("S29:skill 裡的規則代號都在固定名單內", got and got <= ran | unran, str(sorted(got - (ran | unran))))
+    for name in unran & got:
+        lines = [ln for ln in txt.splitlines() if name in ln]
+        check(f"S29:{name} 出現的地方標了未實跑", all("未實跑" in ln for ln in lines), str(lines)[:300])
+
+
+# ── vitest 骨架與跑過證據(2026-10-15,Projects/前端框架從vue分出_計劃 F1;吸收逾期清單第 10 節)──
+# 判準來源:vitest 5.0.4 在 order-web 實跑的原始輸出(governance/review-reports/前端框架從vue分出/r1-intake.md 附錄),
+# jest 29 摘要沿用 _RAN_EVIDENCE 既有 measured 欄的實測字樣。
+_VITEST_ONE = (" RUN  v5.0.4 /x\n\n\n Test Files  1 passed | 8 skipped (9)\n      Tests  1 passed | 33 skipped (34)\n"
+               "   Start at  17:06:22\n   Duration  760ms (environment 78%, setup 14%)\n")
+_VITEST_ZERO = (" RUN  v5.0.4 /x\n\n\n Test Files  9 skipped (9)\n      Tests  34 skipped (34)\n"
+                "   Start at  17:06:23\n   Duration  650ms (environment 81%, setup 14%)\n")
+
+
+def _init_skel(files):
+    import json as _j
+    d = Path(tempfile.mkdtemp(prefix="gctl-vitest-"))
+    for rel, txt in files.items():
+        p = d / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(txt, encoding="utf-8")
+    m = _load_lumos_inproc()
+    m._init_config_skeleton(d)
+    return _j.loads((d / ".lumos" / "config.json").read_text(encoding="utf-8"))
+
+
+def t_init_skeleton_vitest_from_vite_config():
+    """[S1]根目錄有 vite.config.ts 的 TS 專案:骨架寫 node-vitest、run_cmd 是 vitest 那條;多平台骨架的 node 平台同樣換。
+    翻紅:拿掉 _init_config_skeleton 的 vitest 判定 → 寫回 node-jest。"""
+    files = {f"src/C{n}.tsx": "export const C = 1\n" for n in range(4)}
+    files["vite.config.ts"] = "export default {}\n"
+    data = _init_skel(files)
+    check("S1:test_profile=node-vitest", data.get("test_profile") == "node-vitest", str(data))
+    check("S1:run_cmd=npx vitest run -t {method}", (data.get("test") or {}).get("run_cmd") == "npx vitest run -t {method}", str(data.get("test")))
+    check("S1:推測說明講了看到 vite/vitest", "vitest" in data.get("_推測", ""), data.get("_推測", ""))
+    multi = {f"src/C{n}.tsx": "x\n" for n in range(4)}
+    multi.update({f"app/M{n}.swift": "x\n" for n in range(4)})
+    multi["vite.config.mts"] = "export default {}\n"
+    dm = _init_skel(multi)
+    node = (dm.get("platforms") or {}).get("node") or {}
+    check("S1:多平台的 node 平台也換成 vitest", node.get("profile") == "node-vitest" and node.get("run_cmd") == "npx vitest run -t {method}", str(dm.get("platforms")))
+
+
+def t_init_skeleton_vitest_from_package_dep():
+    """[S2]沒有 vite 設定、根 package.json 的 devDependencies 有 vitest → vitest 那條。"""
+    files = {f"src/u{n}.ts": "x\n" for n in range(4)}
+    files["package.json"] = '{"devDependencies": {"vitest": "^5.0.4"}}'
+    data = _init_skel(files)
+    check("S2:run_cmd=vitest", (data.get("test") or {}).get("run_cmd") == "npx vitest run -t {method}", str(data))
+
+
+def t_init_skeleton_jest_default_kept():
+    """[S3]沒有任何 vite 或 vitest 跡象 → 照舊 node-jest 與 jest 指令(子目錄的 vite.config 不算,只看根)。"""
+    files = {f"src/u{n}.ts": "x\n" for n in range(4)}
+    files["package.json"] = '{"devDependencies": {"jest": "29"}}'
+    files["tools/vite.config.ts"] = "export default {}\n"
+    data = _init_skel(files)
+    check("S3:test_profile=node-jest、jest 指令", data.get("test_profile") == "node-jest" and (data.get("test") or {}).get("run_cmd") == "npx jest -t {method}", str(data))
+
+
+def t_ran_evidence_vitest_one_passed():
+    """[S4]vitest 跑到 1 支的摘要判跑過(node-vitest 有自己的樣式,不再退回冒煙探針)。翻紅:node-vitest 不進 _RAN_EVIDENCE → (None, "")。"""
+    m = _load_lumos_inproc()
+    check("S4:vitest 1 passed → 跑過", m._ran_evidence_check("node-vitest", _VITEST_ONE) == (True, ""), str(m._ran_evidence_check("node-vitest", _VITEST_ONE)))
+    colored = _VITEST_ONE.replace("1 passed | 33", "\x1b[32m1 passed\x1b[39m | 33")
+    check("S4:帶色碼也認得", m._ran_evidence_check("node-vitest", colored)[0] is True, "")
+
+
+def t_ran_evidence_vitest_all_skipped():
+    """[S5]vitest 全部被跳過的摘要判沒跑過,並回修法提示(不能把沒跑的當跑過=假綠)。"""
+    m = _load_lumos_inproc()
+    ok, hint = m._ran_evidence_check("node-vitest", _VITEST_ZERO)
+    check("S5:全部被跳過的摘要 → 沒跑過、有修法提示", ok is False and "vitest" in hint, f"{ok} {hint}")
+
+
+def t_ran_evidence_node_jest_accepts_vitest():
+    """[S6]設定寫 node-jest、實際用 vitest 跑(order-web 現況)也認得 vitest 摘要。翻紅:樣式留著 jest 的冒號 → 紅。"""
+    m = _load_lumos_inproc()
+    check("S6:node-jest + vitest 摘要 → 跑過", m._ran_evidence_check("node-jest", _VITEST_ONE)[0] is True, "")
+    check("S6:node-jest + vitest 全部被跳過 → 沒跑過", m._ran_evidence_check("node-jest", _VITEST_ZERO)[0] is False, "")
+
+
+def t_ran_evidence_jest_summary_kept():
+    """[S7]jest 29 的摘要照舊:1 passed 判跑過、-t 對不到的 1 skipped 判沒跑過(既有 measured 欄的實測字樣)。"""
+    m = _load_lumos_inproc()
+    one = "Test Suites: 1 passed, 1 total\nTests:       1 passed, 1 total\nSnapshots:   0 total\n"
+    zero = "Test Suites: 1 skipped, 0 of 1 total\nTests:       1 skipped, 1 total\nSnapshots:   0 total\n"
+    check("S7:jest 1 passed → 跑過", m._ran_evidence_check("node-jest", one)[0] is True, "")
+    check("S7:jest -t 對不到的摘要 → 沒跑過", m._ran_evidence_check("node-jest", zero)[0] is False, "")
+    check("S7:Test Files / Test Suites 那行不會被當成 Tests", m._ran_evidence_check("node-jest", " Test Files  1 passed (1)\n")[0] is False, "")
+
+
+def t_ran_evidence_long_line_fast():
+    """[S35]一行 `Tests:` 開頭接 8 萬個數字:3 秒內回沒跑過(最初的樣式中段不限長,8 萬字實測約 45 秒);逐行讀者 _kill_cap 同一條樣式也要快。"""
+    import re, time as _t
+    m = _load_lumos_inproc()
+    big = "Tests: " + "9" * 80000 + "\n"   # 舊樣式在 8 萬字約 44 秒;門檻 3 秒跟負載無關(r1 fix-check)
+    t0 = _t.monotonic()
+    ok, _h = m._ran_evidence_check("node-jest", big)
+    dt = _t.monotonic() - t0
+    check("S35:8 萬字長行 3 秒內回沒跑過", ok is False and dt < 3.0, f"{ok} {dt:.2f}s")
+    t1 = _t.monotonic()
+    for ln in big.splitlines():
+        re.search(m._ran_evidence_re("node-jest"), ln)
+    dt2 = _t.monotonic() - t1
+    check("S35:逐行套同一條樣式也在 3 秒內", dt2 < 3.0, f"{dt2:.2f}s")
+
+
+def t_init_skeleton_jsx_symbol_profile():
+    """[S28]只有 .jsx 的專案:symbol_profile 猜成 typescript(以前沒有 profile 收 .jsx,留空)。翻紅:typescript 的 code_exts 拿掉 .jsx。"""
+    data = _init_skel({f"src/C{n}.jsx": "export const C = 1\n" for n in range(4)})
+    check("S28:.jsx 專案 symbol_profile=typescript", data.get("symbol_profile") == "typescript", str(data))
+
+
+# ── init 與 doctor 認得 eslint 設定(2026-10-15,Projects/前端框架從vue分出_計劃 W7)──
+def _lint_hint_repo(files):
+    """repo/docs/proj-knowledge 佈局(同 t_doctor_lint_declaration 的 Landmark 形狀),根目錄放 files。回 (repo_root, vault)。"""
+    import shutil as _sh
+    src = mkvault()
+    repo_root = Path(tempfile.mkdtemp(prefix="gctl-eslinthint-")) / "repo"
+    vault = repo_root / "docs" / "proj-knowledge"
+    vault.parent.mkdir(parents=True)
+    _sh.copytree(src, vault)
+    (repo_root / ".git").mkdir()
+    for rel, txt in files.items():
+        p = repo_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(txt, encoding="utf-8")
+    return repo_root, vault
+
+
+def _doctor_f_section(vault):
+    r = run(vault, "doctor", "--ci")
+    out = r.stdout
+    i = out.rfind("[F]")
+    return r, (out[i:] if i >= 0 else "")
+
+
+def t_doctor_lint_detects_eslint_flat_config():
+    """[S8]根目錄有 eslint.config.js、沒有 lint.json:[F] 段寫出檔名與可貼範本(含 @microsoft/sarif 與兩個佔位符),
+    不再說「沒有接 linter」;仍只提醒不擋。翻紅:[F] 段不查偵測表 → 照舊印沒有接 linter。"""
+    _root, vault = _lint_hint_repo({"eslint.config.js": "export default []\n"})
+    r, f = _doctor_f_section(vault)
+    check("S8:[F] 指出 eslint.config.js", "eslint.config.js" in f, f[:400])
+    check("S8:[F] 印可貼的 lint.json 範本", "@microsoft/sarif" in f and "{LINT_SARIF_OUT}" in f and "{LINT_FILES}" in f and '"tsx"' in f, f[:600])
+    check("S8:[F] 不再說沒有接 linter", "沒有接 linter" not in f, f[:300])
+    check("S8:仍只提醒不擋(rc0)", r.returncode == 0, f"rc={r.returncode}")
+
+
+def t_doctor_lint_detects_eslintrc():
+    """[S9]根目錄只有舊式 .eslintrc.json:[F] 段同樣認得。"""
+    _root, vault = _lint_hint_repo({".eslintrc.json": "{}\n"})
+    _r, f = _doctor_f_section(vault)
+    check("S9:[F] 指出 .eslintrc.json", ".eslintrc.json" in f and "沒有接 linter" not in f, f[:400])
+
+
+def t_doctor_lint_eslintrc_template_legacy_flag():
+    """[S36]只有舊式設定時範本指令帶 ESLINT_USE_FLAT_CONFIG=false(eslint 9 不設就不讀舊式設定);兩種都有時列全部、給新式那份。"""
+    _root, vault = _lint_hint_repo({".eslintrc.cjs": "module.exports = {}\n"})
+    _r, f = _doctor_f_section(vault)
+    check("S36:只有 .eslintrc → 範本帶 ESLINT_USE_FLAT_CONFIG=false", "ESLINT_USE_FLAT_CONFIG=false" in f, f[:600])
+    _root2, vault2 = _lint_hint_repo({".eslintrc.json": "{}\n", "eslint.config.mjs": "export default []\n"})
+    _r2, f2 = _doctor_f_section(vault2)
+    check("S36:兩種都有 → 列出兩個檔名、範本不帶舊式旗標", ".eslintrc.json" in f2 and "eslint.config.mjs" in f2 and "ESLINT_USE_FLAT_CONFIG=false" not in f2, f2[:600])
+
+
+def t_doctor_lint_no_config_message_kept():
+    """[S10]根目錄沒有 eslint 設定、也沒有 lint.json:照舊說沒有接 linter;子目錄的 eslint.config.js 不算(只看根)。"""
+    _root, vault = _lint_hint_repo({"tools/eslint.config.js": "export default []\n"})
+    _r, f = _doctor_f_section(vault)
+    check("S10:照舊說沒有接 linter", "沒有接 linter" in f, f[:300])
+
+
+def t_init_mentions_eslint_without_writing_lint_json():
+    """[S11]init 在根目錄有 eslint 設定的專案:印 ⚠ 一行指出檔名、下一行獨立印 lumos doctor;不建立 .lumos/lint.json。"""
+    import contextlib, io
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-initeslint-"))
+    (d / "eslint.config.js").write_text("export default []\n", encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m._init_lint_hint(d)
+    out = buf.getvalue().splitlines()
+    check("S11:印 ⚠ 行指出 eslint.config.js", any(ln.strip().startswith("⚠") and "eslint.config.js" in ln for ln in out), str(out))
+    check("S11:指令獨立一行", any(ln.strip() == "lumos doctor" for ln in out), str(out))
+    check("S11:不建立 .lumos/lint.json", not (d / ".lumos" / "lint.json").exists(), "")
+
+
+def t_init_eslint_hint_skipped_when_declared():
+    """[S37]已有 .lumos/lint.json:init 不再印 eslint 提醒。"""
+    import contextlib, io
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-initeslint2-"))
+    (d / "eslint.config.js").write_text("export default []\n", encoding="utf-8")
+    (d / ".lumos").mkdir()
+    (d / ".lumos" / "lint.json").write_text('{"ts": ["x {LINT_SARIF_OUT}"]}', encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m._init_lint_hint(d)
+    check("S37:已宣告 → 不印", "eslint" not in buf.getvalue(), buf.getvalue())
+
+
+# ── 前端分層目標架構範本(2026-10-15,Projects/前端框架從vue分出_計劃 F7;形狀照 DDD 範本那三支)──
+_FE_TEMPLATE = "skills/lumos-project-notes/commands/target-arch-frontend-template.md"
+
+
+def _fe_template_block():
+    _need_src(_FE_TEMPLATE)
+    text = (Path(GRAPHCTL).resolve().parent.parent / _FE_TEMPLATE).read_text(encoding="utf-8")
+    section = text.split("\n## 範本\n", 1)[1].split("\n## ", 1)[0] if "\n## 範本\n" in text else ""
+    body = section.split("```markdown\n", 1)[1].split("\n```", 1)[0] if "```markdown\n" in section else ""
+    check("前置:「## 範本」那一節有一個 markdown 圍欄", bool(body), section[:200])
+    return body
+
+
+def t_arch_target_frontend_template_valid():
+    """[S20]前端範本日期佔位換成實際日期存成節點:lint 0 問題、目標架構規則讀法讀到五條有效 RULE 行;沒換佔位照抄時 lint 印日期格式警告。
+    翻紅:範本任一條 RULE 少了必有鍵 → 規則數或 lint 翻紅。"""
+    import datetime as _dt
+    block = _fe_template_block()
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()
+    filled = block.replace("<採用日>", today.isoformat()).replace("<回頭日>", (today + _dt.timedelta(days=365)).isoformat())
+    v = mkvault()
+    (v / "Systems" / "前端分層目標架構.md").write_text(filled, encoding="utf-8")
+    r = run(v, "lint", "Systems/前端分層目標架構")
+    check("S20:換好日期後 lint 0 問題", r.returncode == 0 and "0 問題" in r.stdout, r.stdout[-500:])
+    m = _load_lumos_inproc()
+    rules = m._arch_target_note_rules(m._note_from_text("Systems/前端分層目標架構.md", filled))
+    check("S20:讀到五條有效規則、沒有一條算過期", len(rules) == 5 and not any(e for _t, e in rules), str(rules)[:300])
+    (v / "Systems" / "前端分層目標架構.md").write_text(block, encoding="utf-8")
+    r2 = run(v, "lint", "Systems/前端分層目標架構")
+    check("S20:沒換佔位照抄 → 印日期格式警告", "[since:<採用日>] 日期要寫成 YYYY-MM-DD" in r2.stdout, r2.stdout[-400:])
+
+
+def t_arch_target_frontend_template_linked_from_usage():
+    """[S21]使用說明 06 的 arch_targets 那一列同時提到 DDD 與前端兩份範本;技能首頁也指到前端範本。"""
+    _need_src("skills/lumos-project-notes/commands/06-代碼審與推送.md", "skills/lumos-project-notes/SKILL.md")
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes"
+    six = (base / "commands" / "06-代碼審與推送.md").read_text(encoding="utf-8")
+    rows = [ln for ln in six.split("\n") if ln.startswith("|") and "arch_targets" in ln]
+    check("S21:06 的 arch_targets 那一列兩份範本都提到",
+          any("target-arch-ddd-template.md" in ln and "target-arch-frontend-template.md" in ln for ln in rows), str(rows)[:300])
+    check("S21:技能首頁指到前端範本", "target-arch-frontend-template.md" in (base / "SKILL.md").read_text(encoding="utf-8"), "")
+
+
+# ── Kotlin 伺服端不列 Android 題(2026-10-15,Projects/前端框架從vue分出_計劃 B10、決策 d2)──
+_KT_SPRING_GRADLE = 'plugins {\n    id("org.springframework.boot") version "3.3.0"\n    kotlin("jvm")\n}\n'
+_KT_ANDROID_ALIAS_GRADLE = 'plugins {\n    alias(libs.plugins.android.application)\n}\ndependencies {\n    implementation("io.ktor:ktor-client-android:2.3.0")\n}\n'
+# 判準來源:t_stack_question_triggers 已確認過的 Spring 寫法(@Transactional 亮 kt-springdata);`val view =` 與 `init {` 不分大小寫會撞到
+# kt-leaks 的 \bView\b 與 kt-startup 的 \binit\s*\{(2026-10-15 計劃〈現況〉B10 的實測)。
+_KT_SPRING_SVC = ("package shop\n\nimport org.springframework.stereotype.Service\n\n@Service\nclass OrderService(private val repo: OrderRepo) {\n"
+                  "    init { require(true) }\n    @Transactional\n    fun place(id: Long): Order {\n        val view = repo.findById(id)\n        return view\n    }\n}\n")
+_KT_ANDROID_VM = "package app\n\nclass HomeViewModel(private val repo: Repo) {\n    init { load() }\n    fun load() { val view = repo.get() }\n}\n"
+
+
+def _kt_repo(files_init, files_change):
+    return _react_repo({}, files_change, extra=files_init)
+
+
+def _kt_meta_ids(data):
+    return {r["id"] for r in (data.get("stack_questions_meta") or {}).get("kt", [])}
+
+
+def _kt_app_ids(data):
+    return {r["id"] for r in (data.get("stack_questions_meta") or {}).get("kt", []) if r["applicable"]}
+
+
+_ANDROID3 = {"kt-compose", "kt-leaks", "kt-startup"}
+
+
+def t_kt_spring_android_questions_gone_on_triggers():
+    """[S22]改動的 .kt 全是 Spring 伺服端(建置檔有 org.springframework.boot、檔內沒有 android 匯入),
+    撞到 kt-leaks、kt-startup 觸發詞也不列;kt-springdata 照亮。翻紅:拿掉 _stack_applicability 的 exclude → 兩題回來。"""
+    root = _kt_repo({"build.gradle.kts": _KT_SPRING_GRADLE}, {"src/main/kotlin/shop/OrderService.kt": _KT_SPRING_SVC})
+    data = _pitfalls_json(root)
+    check("S22:Android 三題整列不出", not (_kt_meta_ids(data) & _ANDROID3), str(_kt_meta_ids(data)))
+    check("S22:kt-springdata 照亮", "kt-springdata" in _kt_app_ids(data), str(_kt_app_ids(data)))
+
+
+def t_kt_spring_drops_android_questions_over_threshold():
+    """[S23]伺服端 .kt 改動超過整組門檻:Android 三題不列;協程、Dispatchers、Flow、集合四題整組亮;shape_only 三題不因門檻亮。"""
+    big = _KT_SPRING_SVC + "\n".join(f"val x{i} = {i}" for i in range(320)) + "\n"
+    root = _kt_repo({"build.gradle.kts": _KT_SPRING_GRADLE}, {"src/main/kotlin/shop/Big.kt": big})
+    data = _pitfalls_json(root)
+    app = _kt_app_ids(data)
+    check("S23:Android 三題不列", not (_kt_meta_ids(data) & _ANDROID3), str(_kt_meta_ids(data)))
+    check("S23:四題整組亮", {"kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections"} <= app, str(app))
+    check("S23:kt-springhttp、kt-extcode 不因門檻亮", not ({"kt-springhttp", "kt-extcode"} & app), str(app))
+    sq = (data.get("stack_questions") or {}).get("kt", [])
+    check("S23:整組清單是四題(沒有 Android 三題)", len(sq) == 4, str(len(sq)))
+
+
+def t_pitfalls_stack_questions_kt_spring():
+    """[S32]只改伺服端 .kt:JSON 的 stack_questions 整組欄位不含 Android 三題的原文。翻紅:stack_qs 改回 _STACK_PERF_QUESTIONS → 紅。"""
+    m = _load_lumos_inproc()
+    root = _kt_repo({"build.gradle.kts": _KT_SPRING_GRADLE}, {"src/main/kotlin/shop/OrderService.kt": _KT_SPRING_SVC})
+    sq = (_pitfalls_json(root).get("stack_questions") or {}).get("kt", [])
+    android_q = [sp["q"] for sp in m._STACK_QUESTION_SPECS["kt"] if sp["id"] in _ANDROID3]
+    check("S32:整組欄不含 Android 三題", sq and not (set(sq) & set(android_q)), str(len(sq)))
+
+
+def t_kt_mixed_keeps_android_questions():
+    """[S24]同一次改動有 Android 與伺服端的 .kt:Android 三題照現況依觸發詞判(`val view`/`init {` 讓 kt-leaks、kt-startup 亮)。"""
+    root = _kt_repo({"server/build.gradle.kts": _KT_SPRING_GRADLE, "app/build.gradle.kts": 'plugins {\n    id("com.android.application")\n}\n'},
+                    {"server/src/OrderService.kt": _KT_SPRING_SVC, "app/src/HomeViewModel.kt": _KT_ANDROID_VM})
+    app = _kt_app_ids(_pitfalls_json(root))
+    check("S24:混合改動 kt-leaks、kt-startup 照亮", {"kt-leaks", "kt-startup"} <= app, str(app))
+
+
+def t_kt_android_alias_with_ktor_client_stays_android():
+    """[S31]版本目錄寫 alias(libs.plugins.android.application)、依賴有 ktor 客戶端、檔內沒有 android 匯入 → 判 Android,三題照舊判。
+    判準來源:r1 設計審正確性與邊界兩席各舉的反例。翻紅:伺服端訊號改回一般 io.ktor、Android 只認 com.android. → 判成伺服端。"""
+    m = _load_lumos_inproc()
+    rd = {"app/build.gradle.kts": _KT_ANDROID_ALIAS_GRADLE}.get
+    check("S31:判 Android", m._kt_flavor_at("app/src/Repo.kt", "package app\nclass Repo\n", rd) == "android", "")
+    root = _kt_repo({"app/build.gradle.kts": _KT_ANDROID_ALIAS_GRADLE}, {"app/src/HomeViewModel.kt": _KT_ANDROID_VM})
+    app = _kt_app_ids(_pitfalls_json(root))
+    check("S31:kt-leaks、kt-startup 照亮", {"kt-leaks", "kt-startup"} <= app, str(app))
+
+
+def t_kt_unknown_flavor_unchanged():
+    """[S25]找不到建置檔、或建置檔沒有 Android 跡象也沒有伺服端外掛(例:只有 kotlin("jvm")、Kotlin Multiplatform)→ 判不出,題目跟現況一樣。"""
+    m = _load_lumos_inproc()
+    content = "package x\nclass A\n"
+    check("S25:沒有建置檔 → 判不出", m._kt_flavor_at("a/A.kt", content, {}.get) is None, "")
+    check("S25:只有 kotlin(jvm) → 判不出", m._kt_flavor_at("a/A.kt", content, {"build.gradle.kts": 'plugins { kotlin("jvm") }\n'}.get) is None, "")
+    check("S25:KMP 加 ktor 客戶端 → 判不出", m._kt_flavor_at("a/A.kt", content, {"build.gradle.kts": 'plugins { kotlin("multiplatform") }\ndependencies { implementation("io.ktor:ktor-client-core:2") }\n'}.get) is None, "")
+    root = _kt_repo({}, {"src/OrderService.kt": _KT_SPRING_SVC})
+    app = _kt_app_ids(_pitfalls_json(root))
+    check("S25:沒有建置檔的 Spring 檔照舊亮 kt-leaks、kt-startup", {"kt-leaks", "kt-startup"} <= app, str(app))
+
+
+def t_kt_flavor_cap_keeps_android_questions():
+    """[S34]一次改動超過 300 支 .kt:判定在上限處收手(不讀檔),Android 三題照舊列出。翻紅:拿掉上限檢查 → 全部判伺服端而拿掉三題。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-ktcap-"))
+    (d / "build.gradle.kts").write_text(_KT_SPRING_GRADLE, encoding="utf-8")
+    files = []
+    for i in range(301):
+        p = d / "src" / f"S{i}.kt"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("package s\nclass S\n", encoding="utf-8")
+        files.append(f"src/S{i}.kt")
+    m._WORKTREE_TEXT_CACHE.clear()
+    check("S34:301 支 → 不排除任何題", m._stack_platform_excluded(files, str(d)) == frozenset(), "")
+    check("S34 對照:300 支 → 排除 Android 三題", m._stack_platform_excluded(files[:300], str(d)) == frozenset(_ANDROID3), "")
+
+
+def t_tension_candidates_skip_android_only():
+    """[S33]張力候選處理伺服端 .kt:不產生 Android 三題的候選(那三題已不在表態表,沒人能答)。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-kttension-"))
+    (d / "src").mkdir()
+    (d / "src" / "Other.kt").write_text("package s\nclass Other\n", encoding="utf-8")
+    arch = {"files": {"src/OrderService.kt": ["src/Other.kt"]}}
+    added = {"src/OrderService.kt": ["    val view = repo.findById(id)", "    init { require(true) }"]}
+    m._tension_candidates_into(arch, added, str(d), applicable_ids=frozenset({"kt-coroutines"}))
+    qs = {c["question"] for c in arch.get("tension_candidates", [])}
+    check("S33:排除後沒有 Android 三題的候選", not (qs & _ANDROID3), str(qs))
+    arch2 = {"files": {"src/OrderService.kt": ["src/Other.kt"]}}
+    m._tension_candidates_into(arch2, added, str(d))
+    check("S33 對照:不排除時 kt-leaks 有候選(證明樣本真的撞得到)", "kt-leaks" in {c["question"] for c in arch2.get("tension_candidates", [])}, str(arch2))
+
+
+def t_review_role_kt_spring_backend():
+    """[S26]派工路徑:伺服端 .kt 的建置檔經批次讀取從版本讀到 → 判後端;Android 模組的 .kt 照舊判不出。
+    翻紅:_review_role_wanted 不把建置檔候選加進批次讀取 → 第一條紅(讀不到建置檔、判不出)。"""
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    w("server/build.gradle.kts", _KT_SPRING_GRADLE)
+    w("app/build.gradle.kts", 'plugins {\n    id("com.android.application")\n}\n')
+    w("server/src/OrderService.kt", "package s\nclass OrderService\n")
+    w("app/src/Repo.kt", "package a\nclass Repo\n")
+    base = c("base")
+    w("server/src/OrderService.kt", _KT_SPRING_SVC)
+    w("app/src/Repo.kt", "package a\nclass Repo { fun x() = 1 }\n")
+    head = c("head")
+    (d / "server" / "build.gradle.kts").write_text('plugins {\n    id("com.android.application")\n}\n', encoding="utf-8")   # 工作樹改了、沒提交:不能影響
+    res = m._review_roles(d, base, head, budget=30)
+    check("S26:伺服端 .kt → backend(讀的是版本裡的建置檔,不是工作樹)", res["roles"].get("server/src/OrderService.kt") == "backend", str(res))
+    check("S26:Android 模組的 .kt → 判不出", res["roles"].get("app/src/Repo.kt") is None, str(res))
+
+
+def t_impact_stack_questions_kt_spring():
+    """[S27]改檔前推播替伺服端 .kt 印整組題:不含 Android 三題;applicable 也不含。"""
+    import json as _j, subprocess as _sp
+    m = _load_lumos_inproc()
+    root = _kt_repo({"build.gradle.kts": _KT_SPRING_GRADLE, "docs/x-knowledge/MOC/index.md": "---\ntype: moc\n---\n# i\n"},
+                    {"src/OrderService.kt": _KT_SPRING_SVC})
+    r = _sp.run([sys.executable, GRAPHCTL, "impact", "--file", str(root / "src" / "OrderService.kt"), "--repo", str(root), "--ranked", "--stdin-payload", "--json"],
+                input=_j.dumps({"query": "view", "prospective": {}, "delta_text": "val view = repo.findById(id)\ninit { x() }\n", "delta_truncated": False}),
+                capture_output=True, text=True)
+    out = _j.loads(r.stdout.strip().splitlines()[-1]) if r.stdout.strip() else {}
+    android_q = {sp["q"] for sp in m._STACK_QUESTION_SPECS["kt"] if sp["id"] in _ANDROID3}
+    sq = set((out.get("stack_questions") or {}).get("kt", []))
+    ids = {x["id"] for x in (out.get("stack_questions_meta") or {}).get("kt", [])}
+    check("S27:整組不含 Android 三題、meta 也沒有", sq and not (sq & android_q) and not (ids & _ANDROID3), f"{len(sq)} {ids} {r.stderr[-200:]}")
+
+
+def t_dispositions_hint_when_stack_switched():
+    """[S39]帳上舊表態的題號屬於這次沒有出題的棧(例:題組從 vue 換成 react)時,擋下訊息多一行講明題組換了、舊題號不帶過,指到 --dispositions-template。
+    判準來源:r1 設計審回滾席——order-web 的舊表態全是 vue- 題,升級後只看到一排「缺表態」,會以為帳壞了。
+    對照:舊表態跟這次同一棧時不多這行。翻紅:拿掉那段提示 → ①紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    with tempfile.TemporaryDirectory() as d:
+        sha = _disp_repo(d)
+        f = Path(d) / "disp.json"
+        f.write_text(_j.dumps({"vue-parallel": {"status": "na", "question": "q", "reason": "這段只有一個請求,沒有可以並行的等待"}}, ensure_ascii=False), encoding="utf-8")
+        _disp_run(["code-loop", "dispositions", str(f), "--repo", d])
+        pf = {"stack_questions_applicable": {"react": ["q"]}, "stack_questions_meta": {"react": [{"id": "react-effect", "applicable": True}]}}
+        out = m._dispositions_verdict(d, pf, sha, "feat/disp", sha, "standard")
+        hint = [p for p in out["problems"] if "題組" in p]
+        check("①擋下,而且多一行講題組換了、指到 --dispositions-template",
+              out["blocked"] and "react-effect 缺表態" in out["problems"] and hint and "--dispositions-template" in hint[0] and "vue-parallel" in hint[0], str(out["problems"]))
+        pf2 = {"stack_questions_applicable": {"vue": ["q"]}, "stack_questions_meta": {"vue": [{"id": "vue-parallel", "applicable": False}, {"id": "vue-watch", "applicable": True}]}}
+        out2 = m._dispositions_verdict(d, pf2, sha, "feat/disp", sha, "standard")
+        check("②對照:同一棧只是缺題 → 不多題組那行", out2["blocked"] and not [p for p in out2["problems"] if "題組" in p], str(out2["problems"]))
+
+
+
+def t_pitfalls_test_pat_js_conventions():
+    """[S43]JS/TS 兩種主流測試檔寫法(*.test.* 與 __tests__/ 目錄)被認成測試檔;名字裡剛好有 test 字樣的產品檔不算。
+    判準來源:Jest/Vitest 的預設測試檔比對(testMatch 預設 **/__tests__/**/*.[jt]s?(x) 與 **/?(*.)+(spec|test).[jt]s?(x)),
+    反例是會被寬鬆樣式誤吃的常見英文字(latest、contest、attest)。翻紅:樣式拿掉 \\.test\\. 或 __tests__ → 前兩條紅。"""
+    m = _load_lumos_inproc()
+    pat = m._PITFALL_DIFF_TEST_PAT
+    for f in ("src/App.test.tsx", "src/__tests__/Cart.tsx", "__tests__/x.ts", "src/a.test.ts", "src/b.spec.jsx"):
+        check(f"S43:{f} 是測試檔", bool(pat.search(f)), "")
+    for f in ("src/latest.tsx", "src/contest/x.ts", "src/attest.ts", "src/testing/helpers.ts", "src/protests.ts"):
+        check(f"S43:{f} 不是測試檔", not pat.search(f), "")
+    root = _react_repo({"react": "^19"}, {"src/__tests__/Cart.tsx": "it('x', () => { useState(0) })\n", "src/App.test.tsx": "it('y', () => { useEffect(() => {}) })\n"})
+    check("S43:只改這兩種測試檔的 diff 不附 react 題", (_pitfalls_json(root).get("stack_questions") or {}) == {}, "")
+
+
+# ── 代碼審 code-前端框架從vue分出 r1 折入(2026-10-15)──
+def t_kt_build_android_regex_blank_lines_fast():
+    """[r1 資1]建置檔裡一大段空行,判 Android 的樣式不能二次方回溯:6.5 萬個空行 0.5 秒內判完;縮排的 `android {` 照樣認。
+    判準來源:資源席重現(舊樣式 ^\\s*android 搭多行旗標,6.5 萬空行 7.5 秒)。翻紅:樣式改回 ^\\s*android\\s*\\{。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    # 門檻放到 3 秒、輸入放到 13 萬空行:舊樣式(二次方)在這個量是 30 秒以上,線性版本在高負載下也只要幾十毫秒(r1 fix-check:別讓門檻貼著機器快慢)
+    big = 'plugins { kotlin("jvm") }\n' + "\n" * 131072 + "dependencies {}\n"
+    t0 = _t.monotonic()
+    got = m._kt_flavor_at("a/A.kt", "package a\nclass A\n", {"build.gradle.kts": big}.get)
+    dt = _t.monotonic() - t0
+    check("資1:13 萬空行 3 秒內判完(判不出)", got is None and dt < 3.0, f"{got} {dt:.2f}s")
+    check("資1:縮排的 android { 照樣判 Android", m._kt_flavor_at("a/A.kt", "package a\n", {"build.gradle.kts": "plugins { }\n\n    android {\n    }\n"}.get) == "android", "")
+
+
+def t_review_roles_kt_build_verdict_memo():
+    """[r1 資2]角色路 50 支 .kt 共用同一份建置檔:建置檔只判一次(判定以文字記憶),不每支重掃。翻紅:拿掉 _kt_build_verdict 的記憶 → misses 50。"""
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    w("build.gradle.kts", 'plugins {\n    id("org.springframework.boot") version "3.3.0"\n}\n')
+    for i in range(50):
+        w(f"src/S{i}.kt", "package s\nclass S\n")
+    base = c("base")
+    for i in range(50):
+        w(f"src/S{i}.kt", "package s\nclass S { fun x() = 1 }\n")
+    head = c("head")
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    scans = []
+    orig = m._kt_strip_comments
+    def counting(txt, xml=False):
+        scans.append(1)
+        return orig(txt, xml=xml)
+    m._kt_strip_comments = counting
+    try:
+        res = m._review_roles(d, base, head, budget=30)
+    finally:
+        m._kt_strip_comments = orig
+    check("資2:50 支都判後端", res["counts"]["backend"] == 50, str(res["counts"]))
+    check("資2:同一份建置檔只掃一次(其餘 49 支吃記憶)", len(scans) == 1, str(len(scans)))
+
+
+def t_review_roles_classify_loop_respects_budget():
+    """[r1 資2]分類迴圈也看預算:超過預算就停、標 timed_out,剩下的退回只看副檔名(.kt 判不出),不靜默超時。
+    ★不靠牆鐘★(r1 fix-check:高負載下批次讀取就吃光真實秒數,前置斷言時紅時綠):換成虛擬時鐘——批次讀取期間不走,
+    每判一支 .kt 前進 1 虛擬秒,預算 30 虛擬秒,所以應該剛好判到第 31 支左右就停,跟機器快慢無關。
+    翻紅:迴圈不看剩餘時間 → 60 支全判、timed_out=False。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    for i in range(60):
+        w(f"src/S{i}.kt", "package s\nclass S\n")
+    base = c("base")
+    for i in range(60):
+        w(f"src/S{i}.kt", "package s\nclass S { fun x() = 1 }\n")
+    head = c("head")
+    start = _t.monotonic()
+    ticks = []
+    orig_role = m._kt_role
+    def slow(*a, **k):
+        ticks.append(1)
+        return orig_role(*a, **k)
+    m._kt_role = slow
+    try:
+        res = m._review_roles(d, base, head, budget=30, now=lambda: start + len(ticks))
+    finally:
+        m._kt_role = orig_role
+    check("前置:批次讀取有讀到內容、分類迴圈真的跑到 .kt 判定", len(ticks) >= 1, str(len(ticks)))
+    check("資2:超過預算就停(判到 31 支左右,沒有 60 支全判)且標 timed_out",
+          res["timed_out"] is True and 25 <= len(ticks) <= 35, f"{len(ticks)} {res['timed_out']}")
+
+
+def t_review_roles_batch_total_bytes_capped():
+    """[r1 資3]角色路的批次讀取帶整批大小上限(max_total_bytes),不只單檔上限。結構檢查:攔下呼叫看參數。"""
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    w("build.gradle.kts", "plugins { }\n")
+    w("src/A.kt", "package a\n")
+    base = c("base")
+    w("src/A.kt", "package a\nclass A\n")
+    head = c("head")
+    seen = {}
+    orig = m._nodehome_cat_blobs_capped
+    def spy(*a, **k):
+        seen.update(k)
+        return orig(*a, **k)
+    m._nodehome_cat_blobs_capped = spy
+    try:
+        m._review_roles(d, base, head, budget=30)
+    finally:
+        m._nodehome_cat_blobs_capped = orig
+    check("資3:批次讀取帶 max_total_bytes", isinstance(seen.get("max_total_bytes"), int) and seen["max_total_bytes"] > 0, str(seen))
+
+
+def t_stack_android_only_inside_applicability():
+    """[r1 架3b]android_only 的排除照 shape_only 的做法在 _stack_applicability 與整組派生裡消化:同一個 exclude 參數,
+    整組清單與 _STACK_PERF_QUESTIONS 同一支派生(這兩點下面各有一條斷言)。"""
+    m = _load_lumos_inproc()
+    ex = frozenset({"kt-compose", "kt-leaks", "kt-startup"})
+    _a, meta = m._stack_applicability({"kt": ["val view = repo.get()", "init { x() }"]}, 300, exclude=ex)
+    check("架3b:exclude 的題整列不出", not ({r["id"] for r in meta["kt"]} & ex), str([r["id"] for r in meta["kt"]]))
+    check("架3b:整組清單派生同一支", m._STACK_PERF_QUESTIONS["kt"] == m._stack_whole_group("kt") and len(m._stack_whole_group("kt", ex)) == 4, "")
+
+
+def t_worktree_text_shared_reader():
+    """[r1 架3a]讀工作樹檔共用一支(package.json、建置檔、.kt 檔頭都走它):沒有回 None、太大回空字串、可只讀檔頭;不另立第二套快取。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-wttext-"))
+    (d / "big.txt").write_text("x" * 2000, encoding="utf-8")
+    (d / "small.txt").write_text("hello world", encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    check("架3a:沒有這個檔 → None", m._worktree_text(str(d), "none.txt") is None, "")
+    check("架3a:超過 max_bytes → 空字串", m._worktree_text(str(d), "big.txt", max_bytes=1000) == "", "")
+    check("架3a:head 只讀前幾個位元組", m._worktree_text(str(d), "small.txt", head=5) == "hello", "")
+    # 共用快取的行為:讀過就記住(改檔後照舊回舊值),清掉才重讀——package.json 與建置檔走同一份
+    (d / "small.txt").write_text("changed", encoding="utf-8")
+    check("架3a:同一份快取,讀過就記住", m._worktree_text(str(d), "small.txt", head=5) == "hello", "")
+    m._WORKTREE_TEXT_CACHE.clear()
+    check("架3a:清掉快取才重讀", m._worktree_text(str(d), "small.txt", head=5) == "chang", "")
+    # package.json(判前後端)與 Kotlin 建置檔(判平台)都走這一份快取
+    (d / "package.json").write_text('{"dependencies": {"react": "19"}}', encoding="utf-8")
+    (d / "build.gradle.kts").write_text('plugins { id("org.springframework.boot") }\n', encoding="utf-8")
+    (d / "A.kt").write_text("package a\n", encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    m._node_flavor("x.ts", str(d))
+    m._kt_flavor("A.kt", str(d))
+    keys = {Path(k[0]).name for k in m._WORKTREE_TEXT_CACHE}
+    check("架3a:package.json、建置檔、.kt 檔頭都進同一份快取", {"package.json", "build.gradle.kts", "A.kt"} <= keys, str(keys))
+
+
+def t_eslint_config_names_in_lint_globs():
+    """[r1 架5]偵測表的 eslint 設定檔名,新增告警閘搬設定檔的 _LINT_CONFIG_GLOBS 都要認得(兩份清單的同步守衛)。翻紅:GLOBS 拿掉 *.config.mts。"""
+    import fnmatch
+    m = _load_lumos_inproc()
+    # 判準來源:ESLint 官方文件列的設定檔名(flat config 六種副檔名、舊式 .eslintrc 五種寫法加無副檔名)
+    expected = {f"eslint.config.{e}" for e in ("js", "mjs", "cjs", "ts", "mts", "cts")} | {".eslintrc"} | {f".eslintrc.{e}" for e in ("js", "cjs", "json", "yml", "yaml")}
+    names = set(m._ESLINT_FLAT_CONFIGS) | set(m._ESLINT_LEGACY_CONFIGS)
+    check("架5:偵測表剛好是 ESLint 文件列的檔名(少一個、多一個都紅)", names == expected, str(sorted(names ^ expected)))
+    miss = [n for n in sorted(expected) if not any(fnmatch.fnmatch(n, g) for g in m._LINT_CONFIG_GLOBS)]
+    check("架5:搬設定檔的名單認得每一個 eslint 檔名", not miss, str(miss))
+
+
+def t_ran_evidence_colored_per_line_reader():
+    """[r1 通1/邊2/正2]逐行讀者(_kill_cap 的 keep_re,不去色)也認得帶色碼的 jest 與 vitest 摘要;被砍掉的中段裡那行要留下。
+    判準來源:jest 29 FORCE_COLOR 下的摘要行字樣(席位實測)。翻紅:數字前改回 \\b。"""
+    import re
+    m = _load_lumos_inproc()
+    pat = m._ran_evidence_re("node-jest")
+    jest_c = "\x1b[1mTests:\x1b[22m       \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m, 1 total"
+    vit_c = "\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (1)\x1b[39m"
+    check("D:帶色碼 jest 摘要逐行命中", bool(re.search(pat, jest_c)), "")
+    check("D:帶色碼 vitest 摘要逐行命中", bool(re.search(pat, vit_c)), "")
+    big = ("x" * 100 + "\n") * 3000 + jest_c + "\n" + ("y" * 100 + "\n") * 3000
+    kept = m._kill_cap(big, keep_re=pat)
+    check("D:_kill_cap 截斷時保住帶色碼的摘要行", len(kept) < len(big) and jest_c in kept, str(len(kept)))
+
+
+def t_ran_evidence_no_cross_line_match():
+    """[r1 正1]跑過證據不跨行:某行以 Tests 結尾、下一行剛好有「2 passed」字樣,不能算跑過。翻紅:\\s+ 改回可跨行。"""
+    m = _load_lumos_inproc()
+    out = "Running Integration Tests\n   ✓ handles 2 passed items\n Tests  1 skipped (1)\n"
+    check("D:跨行不命中", m._ran_evidence_check("node-jest", out)[0] is False, "")
+
+
+def t_kt_build_comments_and_ktor_dependency_not_server():
+    """[r1 正3]註解裡的 org.springframework.boot、依賴字串 ktor-server 不能把模組判成伺服端(判錯只准往判不出)。翻紅:不剝註解、或伺服端樣式收回 ktor-server。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    a = "plugins { alias(libs.plugins.app) }\n// migrate from org.springframework.boot later\n/* id(\"org.springframework.boot\") */\n"
+    b = 'plugins { id("myorg.android.application") }\ndependencies { implementation("io.ktor:ktor-server-cio:2.3.0") }\n'
+    check("E:只有註解提到 Spring → 判不出", m._kt_flavor_at("app/src/A.kt", "package a\n", {"app/build.gradle.kts": a}.get) is None, "")
+    check("E:只有 ktor-server 依賴 → 判不出", m._kt_flavor_at("app/src/A.kt", "package a\n", {"app/build.gradle.kts": b}.get) is None, "")
+    check("E 對照:真的 Spring 外掛 → 伺服端", m._kt_flavor_at("a/A.kt", "package a\n", {"build.gradle.kts": 'plugins { id("org.springframework.boot") }\n'}.get) == "server", "")
+
+
+def t_kt_spring_alias_is_server():
+    """[r1 正4]版本目錄寫 alias(libs.plugins.spring.boot) 也判伺服端。翻紅:伺服端樣式不收 libs.plugins.spring。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    for txt in ("plugins {\n    alias(libs.plugins.spring.boot)\n}\n", "plugins { alias(libs.plugins.springBoot) }\n", "plugins { alias(libs.plugins.ktor) }\n"):
+        check(f"E:{txt.split(chr(10))[0][:40]}… → 伺服端", m._kt_flavor_at("a/A.kt", "package a\n", {"build.gradle.kts": txt}.get) == "server", txt)
+
+
+def t_init_skeleton_vite_with_jest_stays_jest():
+    """[r1 通2/邊4]有 vite.config 但依賴只有 jest(Vite 打包、jest 測試)→ 照舊 jest;vite.config.ts.bak 不算設定檔。"""
+    files = {f"src/u{n}.ts": "x\n" for n in range(4)}
+    files["vite.config.ts"] = "export default {}\n"
+    files["package.json"] = '{"devDependencies": {"jest": "29", "vite": "5"}}'
+    data = _init_skel(files)
+    check("F:vite + jest → node-jest", data.get("test_profile") == "node-jest", str(data))
+    files2 = {f"src/u{n}.ts": "x\n" for n in range(4)}
+    files2["vite.config.ts.bak"] = "export default {}\n"
+    data2 = _init_skel(files2)
+    check("F:只有 vite.config.ts.bak → node-jest", data2.get("test_profile") == "node-jest", str(data2))
+
+
+def t_react_parallel_same_line_edit_quiet():
+    """[r1 邊1]只改同一行 await(舊行刪、新行加)不算兩行:react-parallel 不亮;新增兩行賦值式 await 才亮。翻紅:min_lines 改回數增刪行。"""
+    root = _react_repo({"react": "^19"}, {"src/api.ts": "export async function f(id) {\n  const user = await fetchUser(id, {cache: true})\n  return user\n}\n"},
+                       extra={"src/api.ts": "export async function f(id) {\n  const user = await fetchUser(id)\n  return user\n}\n"})
+    rows = {r["id"]: r for r in (_pitfalls_json(root).get("stack_questions_meta") or {}).get("react", [])}
+    check("G:改同一行 await → react-parallel 不亮", not rows.get("react-parallel", {}).get("applicable"), str(rows.get("react-parallel")))
+    root2 = _react_repo({"react": "^19"}, {"src/api.ts": "export async function f(id) {\n  const user = await fetchUser(id)\n  const prices = await fetchPrices()\n  return [user, prices]\n}\n"},
+                        extra={"src/api.ts": "export async function f(id) {\n  return null\n}\n"})
+    rows2 = {r["id"]: r for r in (_pitfalls_json(root2).get("stack_questions_meta") or {}).get("react", [])}
+    check("G 對照:新增兩行賦值式 await → 亮", rows2.get("react-parallel", {}).get("applicable") is True, str(rows2.get("react-parallel")))
+
+
+def t_tension_candidates_respect_applicability():
+    """[r1 正5]張力候選只出這次適用的題:新檔只有一行賦值式 await → 不出 react-parallel 候選(min_lines 沒到),react-race 照出。"""
+    root = _react_repo({"react": "^19"}, {"src/New.tsx": "export async function g() {\n  const u = await f()\n  return u\n}\n"},
+                       extra={"src/Other.tsx": "export const Other = () => null\n"})
+    qs = {c["question"] for c in ((_pitfalls_json(root).get("arch_alignment") or {}).get("tension_candidates") or [])}
+    check("G:沒有 react-parallel 候選、有 react-race 候選", "react-parallel" not in qs and "react-race" in qs, str(qs))
+
+
+def t_eslint_package_json_eslintconfig():
+    """[r1 邊3]根 package.json 的 eslintConfig 也算 eslint 設定(舊式),範本帶 ESLINT_USE_FLAT_CONFIG=false。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-eslintpkg-"))
+    (d / "package.json").write_text('{"name": "x", "eslintConfig": {"root": true}}', encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    hits = m._linter_config_hits(d)
+    check("G:package.json 的 eslintConfig 被認得、範本帶舊式旗標",
+          hits and any("eslintConfig" in n for n in hits[0][1]) and "ESLINT_USE_FLAT_CONFIG=false" in hits[0][2], str(hits))
+    (d / "package.json").write_text('{"name": "x"}', encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    check("G 對照:沒有 eslintConfig → 不算", m._linter_config_hits(d) == [], "")
+
+
+def t_test_pat_bare_names_and_irreversible_shared():
+    """[r1 邊5]檔名本身就是 test.tsx / spec.ts 也算測試檔;不可逆提示那份掃描共用同一個測試檔判定(App.test.tsx 裡的 DELETE FROM 不報)。"""
+    import subprocess as _sp
+    m = _load_lumos_inproc()
+    for f in ("src/test.tsx", "src/spec.ts", "test.js"):
+        check(f"G:{f} 是測試檔", bool(m._PITFALL_DIFF_TEST_PAT.search(f)), "")
+    for f in ("src/latest.tsx", "src/contest.ts", "src/testimony.ts"):
+        check(f"G:{f} 不是測試檔", not m._PITFALL_DIFF_TEST_PAT.search(f), "")
+    d = Path(tempfile.mkdtemp(prefix="gctl-irrevtest-"))
+    g = lambda *a: _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)  # noqa: E731
+    g("init", "-q", "-b", "main")
+    g("config", "user.email", "t@t.t")
+    g("config", "user.name", "t")
+    (d / "README.txt").write_text("x\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    (d / "src").mkdir()
+    (d / "src" / "App.test.tsx").write_text("db.run('DELETE FROM orders')\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "t")
+    check("G:測試檔裡的 DELETE FROM 不報不可逆", m._scan_diff_for_irreversible_hints(str(d)) == [], str(m._scan_diff_for_irreversible_hints(str(d))))
+    (d / "src" / "api.ts").write_text("db.run('DELETE FROM orders')\n", encoding="utf-8")
+    g("add", "-A")
+    g("commit", "-qm", "p")
+    check("G 對照:產品檔裡的 DELETE FROM 照報", bool(m._scan_diff_for_irreversible_hints(str(d))), "")
+
+
+
+# ── 代碼審 code-前端框架從vue分出 r2 折入(2026-10-15)──
+def t_kt_strip_comments_strings_aware():
+    """[r2 邊1/正1]剝註解要認得字串:字串裡的 /*、// 不算註解;沒閉合的區塊註解吃到檔尾。
+    判準來源:r2 兩席給的反例(glob 字串、行註解裡的 **/*.kt);Android 不准被判成伺服端。翻紅:改回先 find("/*") 再剝 // 的兩趟寫法。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    V = m._kt_build_verdict
+    gr = "sourceSets { main { resources { include '**/*.yml' } } }\napply plugin: 'org.springframework.boot'\n"
+    check("A:glob 字串在前,Spring 外掛照樣判伺服端", V(gr) == "server", str(V(gr)))
+    an = ('plugins { id("io.ktor.plugin"); id("convention.android.library") }\n// skip **/*.kt in lint\n'
+          'android { namespace = "x" }\ntasks { exclude("**/generated/**") }\n')
+    check("A:行註解裡的 /* 不吃掉 android { 區塊 → Android", V(an) == "android", str(V(an)))
+    check("A:行註解裡的 /* hack 不吃掉後面的 Spring 外掛", V('// TODO remove /* hack\nplugins { id("org.springframework.boot") }\n') == "server", "")
+    check("A:kts 原始字串裡的 /* 不算", V('val s = """/* not a comment"""\nplugins { id("org.springframework.boot") }\n') == "server", "")
+    check("A:真的區塊註解裡的宣告不算", V('/* plugins { id("org.springframework.boot") } */\nplugins { kotlin("jvm") }\n') is None, "")
+    check("A:沒閉合的區塊註解吃到檔尾", V('plugins { kotlin("jvm") }\n/* unclosed\nplugins { id("org.springframework.boot") }\n') is None, "")
+
+
+def t_kt_strip_comments_linear_on_hostile_input():
+    """[r2 邊1]剝註解的掃描器在 512KB 刁鑽輸入上不二次方:/* 重複、引號重複、未閉合字串,各 3 秒內。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    for name, txt in (("/* 重複", "/*" * 262144), ('" 重複', '"a' * 262144), ("' 未閉合", "'" + "x" * 524288), ("// 重複", "//\n" * 174762)):
+        t0 = _t.monotonic()
+        m._kt_strip_comments(txt)
+        dt = _t.monotonic() - t0
+        check(f"A:{name} 3 秒內掃完", dt < 3.0, f"{dt:.2f}s")
+
+
+def t_kt_build_verdict_cache_bounded():
+    """[r2 架1]建置檔判定的記憶是模組層 dict、自己管上限:塞 70 份不同的建置檔,記憶不超過 64 份。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    for i in range(70):
+        m._kt_build_verdict(f"plugins {{ kotlin(\"jvm\") }} // {i}\n")
+    check("B:記憶最多 64 份", 0 < len(m._KT_BUILD_VERDICT_CACHE) <= 64, str(len(m._KT_BUILD_VERDICT_CACHE)))
+
+
+def t_role_import_regexes_blank_lines_fast():
+    """[r2 資1/正4]角色與 Kotlin 判定用的匯入樣式(android 匯入、UI 匯入、UIKit)在 13 萬空行上 3 秒內:行首空白只收空格與 tab。
+    判準來源:r2 資源席實測(舊樣式 13 萬空行 31 秒)。翻紅:任一條改回 ^\\s*。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    pats = [m._ROLE_ANDROID_IMPORT, m._ROLE_UIKIT_IMPORT, *m._ROLE_UI_IMPORT.values()]
+    blank = "\n" * 131072
+    t0 = _t.monotonic()
+    for p in pats:
+        p.search(blank)
+    dt = _t.monotonic() - t0
+    check("C:全部匯入樣式在 13 萬空行上 3 秒內", dt < 3.0, f"{dt:.2f}s")
+    check("C:縮排的 import 照樣認得", bool(m._ROLE_ANDROID_IMPORT.search("package a\n\n  import androidx.room.Dao\n")), "")
+
+
+def t_review_roles_oversize_build_stops_not_climbs():
+    """[r2 資2/正2]角色路:Android 子模組的建置檔超過 512KB 沒讀,要停在那一層判不出,不能往上找到根的 Spring 判成後端。
+    判準來源:r2 兩席重現(修前修後都是 backend)。翻紅:超限的檔照舊回 None(往上找)→ backend。"""
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    w("build.gradle.kts", 'plugins {\n    id("org.springframework.boot") version "3.3.0"\n}\n')
+    w("app/build.gradle.kts", 'plugins {\n    id("com.android.application")\n}\n' + "// pad\n" * 80000)
+    w("app/src/Main.kt", "package a\nclass Main\n")
+    base = c("base")
+    w("app/src/Main.kt", "package a\nclass Main { fun x() = 1 }\n")
+    head = c("head")
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    res = m._review_roles(d, base, head, budget=30)
+    check("前置:Android 建置檔真的超過 512KB", (d / "app" / "build.gradle.kts").stat().st_size > m._ROLE_MAX_BYTES, "")
+    check("資2:超限的 Android 建置檔停住、判不出(不是 backend)", res["roles"].get("app/src/Main.kt") is None, str(res["roles"]))
+
+
+def t_review_roles_total_cap_stops_not_climbs():
+    """[r2 通2 → r3 G6]整批總量上限有行為:把上限調小到讀不下子模組建置檔時,那支 .kt 判不出(停在那一層);
+    總量夠時同一份子模組建置檔讀得到、判後端(前置斷言,證明差別來自總量上限)。翻紅:總量上限不生效、或超總量的檔回 None → 第一條紅。"""
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    w("build.gradle.kts", 'plugins { id("org.springframework.boot") }\n')
+    # 子模組建置檔也是 Spring:讀得到 → 後端;被總量上限擋掉 → 停在這一層判不出。這樣「上限有沒有生效」看得出差別(r3 通才席:原本兩邊都是 None)
+    w("app/build.gradle.kts", 'plugins {\n    id("org.springframework.boot")\n}\n' + "// pad\n" * 50)
+    w("app/src/Main.kt", "package a\n")
+    base = c("base")
+    w("app/src/Main.kt", "package a\nclass M\n")
+    head = c("head")
+    orig = m._ROLE_MAX_TOTAL_BYTES
+    m._ROLE_MAX_TOTAL_BYTES = 120
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    try:
+        res = m._review_roles(d, base, head, budget=30)
+    finally:
+        m._ROLE_MAX_TOTAL_BYTES = orig
+    check("通2:超過總量的建置檔停住、判不出", res["roles"].get("app/src/Main.kt") is None, str(res["roles"]))
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    res_ok = m._review_roles(d, base, head, budget=30)
+    check("通2 前置:總量夠時讀到子模組建置檔 → 後端(證明上面那次是被總量上限擋掉才判不出)", res_ok["roles"].get("app/src/Main.kt") == "backend", str(res_ok["roles"]))
+
+
+def t_kt_spring_dependency_coordinate_not_server():
+    """[r2 正3]只有 Spring 依賴座標(implementation("org.springframework.boot:…"))、沒有外掛宣告 → 判不出;外掛宣告兩種寫法都判伺服端。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    V = m._kt_build_verdict
+    check("E:只有 Spring 依賴座標 → 判不出", V('dependencies { implementation("org.springframework.boot:spring-boot-starter") }\n') is None, "")
+    check("E:id(\"org.springframework.boot\") → 伺服端", V('plugins {\n  id("org.springframework.boot") version "3.3.0"\n}\n') == "server", "")
+    check("E:apply plugin: 'org.springframework.boot' → 伺服端", V("apply plugin: 'org.springframework.boot'\n") == "server", "")
+    check("E:Groovy id 'org.springframework.boot' → 伺服端", V("plugins { id 'org.springframework.boot' version '3.3.0' }\n") == "server", "")
+    check("E:Maven 的 spring-boot-maven-plugin → 伺服端", V("<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin>\n") == "server", "")
+
+
+def t_kt_deleted_file_not_counted():
+    """[r2 正5]同一個 diff 刪掉一支 .kt、新增一支 Spring .kt:刪掉的不算進「全部判伺服端」,Android 三題照樣拿掉。"""
+    root = _kt_repo({"build.gradle.kts": _KT_SPRING_GRADLE, "src/Old.kt": "package s\nclass Old\n"}, {"src/New.kt": _KT_SPRING_SVC})
+    import subprocess as _sp
+    _sp.run(["git", "-C", str(root), "rm", "-q", "src/Old.kt"], capture_output=True)
+    _sp.run(["git", "-C", str(root), "commit", "-qm", "rm old"], capture_output=True)
+    import json as _j
+    r = _disp_run(["pitfalls", "--diff", "HEAD~2..HEAD", "--json", "--repo", str(root)])
+    data = _j.loads(next(ln for ln in r.stdout.splitlines() if ln.startswith("{")))
+    ids = {x["id"] for x in (data.get("stack_questions_meta") or {}).get("kt", [])}
+    check("F:刪除的 .kt 不擋住排除,Android 三題不列", ids and not (ids & _ANDROID3), str(ids))
+
+
+def t_kt_flavor_reads_with_limits():
+    """[r2 通3]工作樹路徑:.kt 只讀檔頭(head)、建置檔帶大小上限(max_bytes);Android 子模組建置檔超限、根是 Spring → 判不出。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-ktlimits-"))
+    (d / "build.gradle.kts").write_text('plugins { id("org.springframework.boot") }\n', encoding="utf-8")
+    (d / "app").mkdir()
+    (d / "app" / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n' + "// pad\n" * 80000, encoding="utf-8")
+    (d / "app" / "A.kt").write_text("package a\n", encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    calls = []
+    orig = m._worktree_text
+    def spy(root, rel, head=None, max_bytes=None):
+        calls.append((rel, head, max_bytes))
+        return orig(root, rel, head=head, max_bytes=max_bytes)
+    m._worktree_text = spy
+    try:
+        got = m._kt_flavor("app/A.kt", str(d))
+    finally:
+        m._worktree_text = orig
+    check("通3:超限的 Android 建置檔停住 → 判不出", got is None, str(got))
+    check("通3:.kt 檔頭帶 head、建置檔帶 max_bytes",
+          ("app/A.kt", m._KT_HEAD_BYTES, None) in calls and ("app/build.gradle.kts", None, m._ROLE_MAX_BYTES) in calls, str(calls))
+
+
+def t_ran_evidence_bounded_middle_fast():
+    """[r2 通1]跑過證據樣式的中段 200 字上限要有測試守:一行 "Tests: 1 " 重複 1.5 萬次(沒有 passed),3 秒內回沒跑過。
+    每個「Tests:」都是一個起點,中段不限長就是二次方(2026-10-15 實測拿掉上限 22 秒、有上限 0.07 秒;
+    r2 通才席原本給的 "Tests 1 " 輸入在開頭錨回 Tests: 或行首之後只剩一個起點,分不出有沒有上限,所以換成帶冒號的)。翻紅:{0,200} 改成 *。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    t0 = _t.monotonic()
+    ok, _h = m._ran_evidence_check("node-jest", "Tests: 1 " * 15000 + "\n")
+    dt = _t.monotonic() - t0
+    check("E:1.5 萬次 Tests: 1 重複 3 秒內回沒跑過", ok is False and dt < 3.0, f"{ok} {dt:.2f}s")
+
+
+def t_ran_evidence_anchored_to_summary_line():
+    """[r2 安2]跑過證據錨在 `Tests:` 或行首的 Tests:測試標題裡剛好有「Tests 2 passed」字樣不算跑過;jest、vitest 摘要照認。"""
+    m = _load_lumos_inproc()
+    check("F:行中的 Tests 2 passed 不算", m._ran_evidence_check("node-jest", "  ✓ it shows Tests 2 passed in title (3 ms)\n Tests  1 skipped (1)\n")[0] is False, "")
+    check("F:jest 摘要照認", m._ran_evidence_check("node-jest", "Tests:       1 passed, 1 total\n")[0] is True, "")
+    check("F:vitest 縮排摘要照認", m._ran_evidence_check("node-jest", "      Tests  1 passed | 33 skipped (34)\n")[0] is True, "")
+
+
+def t_test_pat_lowercase_test_ext_only():
+    """[r2 邊3/安1]檔名本身是 test/spec 的,只認小寫而且是 JS/TS 測試副檔名;Test.tsx 元件、test.py、spec.sh 正式檔不算;
+    根目錄的 tests/、test/ 也算測試目錄。"""
+    m = _load_lumos_inproc()
+    pat = m._PITFALL_DIFF_TEST_PAT
+    for f in ("src/test.tsx", "src/spec.ts", "test.js", "tests/a.tsx", "test/a.tsx", "Tests/a.py"):
+        check(f"F:{f} 是測試檔", bool(pat.search(f)), "")
+    for f in ("src/components/Test.tsx", "src/Spec.tsx", "src/payments/test.py", "scripts/spec.sh", "src/test.d.ts", "src/contest/x.ts"):
+        check(f"F:{f} 不是測試檔", not pat.search(f), "")
+
+
+def t_eslint_config_key_must_be_object():
+    """[r2 邊4]package.json 的 eslintConfig 要是物件才算 eslint 設定;null、字串、陣列、false 不算。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-eslintobj-"))
+    for val in ("null", '"react-app"', "[]", "false"):
+        (d / "package.json").write_text('{"eslintConfig": %s}' % val, encoding="utf-8")
+        m._WORKTREE_TEXT_CACHE.clear()
+        check(f"F:eslintConfig={val} 不算", m._linter_config_hits(d) == [], "")
+    (d / "package.json").write_text('{"eslintConfig": {}}', encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    check("F 對照:eslintConfig={} 算", bool(m._linter_config_hits(d)), "")
+
+
+# ── 代碼審 code-前端框架從vue分出 r3 折入(2026-10-15,上限輪;修完不再派席)──
+def t_strip_c_comments_shared_and_linear():
+    """[r3 G1]剝 C 式註解只有一支共用 helper(_strip_c_comments):測試檔剝註解與 Kotlin 建置檔剝註解都呼叫它;
+    未閉合字串吃到行尾、跳脫引號重複等刁鑽輸入 512KB 內 3 秒完成。判準來源:r3 正確性、資源、通才三席重現
+    (`"\\` 重複 6.4 萬字 13 秒、8 萬字 20 秒)。翻紅:字串分支改回 `"(?:\\\\.|[^"\\\\\\n])*"` → 時間斷言紅。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    for name, txt in (('"\\ 重複', '"\\' * 262144), ("'\\ 重複", "'\\" * 262144), ('" 加 a\\" 重複', '"' + 'a\\"' * 174762),
+                      ("/* 重複", "/*" * 262144), ('" 未閉合長行', '"' + "x" * 524288), ("// 重複", "//\n" * 174762)):
+        t0 = _t.monotonic()
+        m._strip_c_comments(txt)
+        dt = _t.monotonic() - t0
+        check(f"G1:{name} 512KB 3 秒內", dt < 3.0, f"{dt:.2f}s")
+    t0 = _t.monotonic()
+    m._strip_test_comments('"\\' * 262144, "c-style+strings")
+    check("G1:測試檔剝註解走同一支,同一個刁鑽輸入也快", _t.monotonic() - t0 < 3.0, "")
+    # 共用:兩邊對同一段文字剝出來的註解位置一致(字串裡的 // 與 /* 都不算註解)
+    src = 'val u = "https://x/*y" // c\n/* b */ fun t() {}\n'
+    check("G1:測試檔剝註解也認字串(字串裡的 // 與 /* 保留)", m._strip_test_comments(src, "c-style") == 'val u = "https://x/*y" \n fun t() {}\n',
+          repr(m._strip_test_comments(src, "c-style")))
+    check("G1:Kotlin 建置檔剝註解跟測試檔同一支", m._kt_strip_comments(src) == m._strip_test_comments(src, "c-style"), "")
+    check("G1:第二套掃描樣式已不存在(行為等價:建置檔判定照舊)", m._kt_build_verdict('// x\nplugins { id("org.springframework.boot") }\n') == "server", "")
+
+
+def t_strip_test_comments_strings_mode_kept():
+    """[r3 G1 相鄰路徑]c-style+strings 照舊把字串內容清空(保留引號),測試方法掃描不被字串裡的假簽章騙;未閉合字串不吃到下一行。"""
+    m = _load_lumos_inproc()
+    out = m._strip_test_comments('String s = "void fake() {}"; // x\nvoid real() {}\nString t = "open\nvoid next() {}\n', "c-style+strings")
+    check("G1:字串內容清空、真方法留著", '"void fake' not in out and "void real() {}" in out, repr(out))
+    check("G1:未閉合字串只吃到行尾,下一行的方法留著", "void next() {}" in out, repr(out))
+
+
+def t_kt_spring_regex_whitespace_flood_fast():
+    """[r3 G2]Spring 外掛樣式 `id` 後接一大段空白與換行,512KB 內 3 秒判完(舊寫法兩個 \\s* 夾可有可無的括號,4 萬換行 9 秒)。
+    同族:apply 括號寫法同形狀。翻紅:改回 \\bid\\s*\\(?\\s*。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    for name, txt in (("id 加換行", "val id" + "\n" * 524288 + "x"), ("id 加空格", '"id"' + " " * 524288), ("apply 加空白", "apply" + " \n" * 262144 + "x")):
+        t0 = _t.monotonic()
+        m._KT_BUILD_SERVER.search(txt)
+        dt = _t.monotonic() - t0
+        check(f"G2:{name} 3 秒內", dt < 3.0, f"{dt:.2f}s")
+
+
+def t_kt_spring_apply_paren_forms():
+    """[r3 G8 正4]Spring 也認 Kotlin DSL 的 apply(plugin = "…") 與 Groovy 的 apply(plugin: '…')。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    for txt in ('subprojects {\n  apply(plugin = "org.springframework.boot")\n}\n', "apply(plugin: 'org.springframework.boot')\n", "apply plugin: 'org.springframework.boot'\n"):
+        check(f"G8:{txt.strip()[:40]} → 伺服端", m._kt_build_verdict(txt) == "server", txt)
+
+
+def t_kt_pom_xml_comments():
+    """[r3 G8 正5]pom.xml 剝 XML 註解(被註解掉的 parent 不算),不走 C 式剝註解(`<include>**/*Test.java</include>` 不吃掉後面的外掛)。"""
+    m = _load_lumos_inproc()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    commented = "<project><!-- <parent><artifactId>spring-boot-starter-parent</artifactId></parent> --></project>\n"
+    check("G8:被 XML 註解掉的 parent → 判不出", m._kt_flavor_at("a/A.kt", "package a\n", {"pom.xml": commented}.get) is None, "")
+    glob = "<project><build><resources><include>**/*Test.java</include></resources>\n<plugin><artifactId>spring-boot-maven-plugin</artifactId></plugin></build></project>\n"
+    check("G8:pom 裡的 **/* 不吃掉後面的外掛 → 伺服端", m._kt_flavor_at("a/A.kt", "package a\n", {"pom.xml": glob}.get) == "server", "")
+    check("G8:pom 同一行的 http:// 不吃掉外掛", m._kt_flavor_at("a/A.kt", "package a\n", {"pom.xml": "<url>http://x</url><artifactId>spring-boot-maven-plugin</artifactId>\n"}.get) == "server", "")
+
+
+def _role_huge_source_case(name, body_head):
+    d, _g, w, c = _role_git_repo()
+    w("build.gradle.kts", 'plugins { id("org.springframework.boot") }\n')
+    w(f"app/{name}", "x\n")
+    base = c("base")
+    w(f"app/{name}", body_head + "// pad\n" * 90000)
+    head = c("head")
+    return d, base, head
+
+
+def t_review_roles_huge_source_stays_unknown():
+    """[r3 G3]被審的原始檔超過 512KB 沒讀:.java 與 .kt 都判不出(None),不能因為「空字串」走到後端;建置檔超限才回空字串。
+    判準來源:r3 正確性、邊界兩席重現(修後判成 backend)。翻紅:空字串映射不分原始檔與建置檔。"""
+    m = _load_lumos_inproc()
+    for name, head_line in (("Big.java", "import androidx.appcompat.app.AppCompatActivity;\n"), ("Big.kt", "import androidx.compose.runtime.Composable\n")):
+        d, base, head = _role_huge_source_case(name, head_line)
+        m._KT_BUILD_VERDICT_CACHE.clear()
+        res = m._review_roles(d, base, head, budget=30)
+        check(f"前置:{name} 真的超過單檔上限", (d / "app" / name).stat().st_size > m._ROLE_MAX_BYTES, "")
+        check(f"G3:超限的 {name} 判不出", res["roles"].get(f"app/{name}") is None, str(res["roles"]))
+
+
+def t_review_roles_total_cap_source_stays_unknown():
+    """[r3 G3]整批總量上限擋掉的原始檔(.java、.kt)也判不出,不是後端。"""
+    m = _load_lumos_inproc()
+    for name, head_line in (("A.java", "import androidx.appcompat.app.AppCompatActivity;\n"), ("A.kt", "import androidx.compose.runtime.Composable\n")):
+        d, _g, w, c = _role_git_repo()
+        w("build.gradle.kts", 'plugins { id("org.springframework.boot") }\n')
+        w(f"app/{name}", "x\n")
+        base = c("base")
+        w(f"app/{name}", head_line + "// pad\n" * 40)
+        head = c("head")
+        orig = m._ROLE_MAX_TOTAL_BYTES
+        m._ROLE_MAX_TOTAL_BYTES = 50
+        m._KT_BUILD_VERDICT_CACHE.clear()
+        try:
+            res = m._review_roles(d, base, head, budget=30)
+        finally:
+            m._ROLE_MAX_TOTAL_BYTES = orig
+        check(f"G3:超過總量的 {name} 判不出", res["roles"].get(f"app/{name}") is None, str(res["roles"]))
+
+
+def t_ran_evidence_workspace_prefixes():
+    """[r3 G4]跑過證據認得前綴後的摘要:turbo(`@org/web:test: `)、pnpm -r(`packages/app test: `)、方括號時間戳、ISO 時間戳、游標控制碼。
+    判準來源:r3 正確性、邊界席(修後這些真實摘要判成沒跑)。"""
+    m = _load_lumos_inproc()
+    for name, out in (("turbo", "@org/web:test:  Test Files  1 passed (1)\n@org/web:test:       Tests  1 passed (1)\n"),
+                      ("pnpm -r", "packages/app test:       Tests  1 passed (1)\n"),
+                      ("方括號時間戳", "[12:00:01]       Tests  1 passed (1)\n"),
+                      ("ISO 時間戳", "2026-10-15T10:00:00.123Z      Tests  1 passed (1)\n"),
+                      ("游標控制碼", "\x1b[2K\x1b[1G      Tests  1 passed (1)\n"),
+                      ("jest 帶 turbo 前綴", "@org/api:test: Tests:       2 passed, 2 total\n")):
+        check(f"G4:{name} 的摘要認得", m._ran_evidence_check("node-jest", out)[0] is True, repr(out))
+
+
+def t_ran_evidence_title_lines_rejected():
+    """[r3 G4]測試標題裡出現 `Tests: 2 passed` 或 `Tests 2 passed` 都不算跑過(Tests: 那一支也錨在行首或前綴之後)。翻紅:Tests: 分支不錨。"""
+    m = _load_lumos_inproc()
+    for out in ("  ○ skipped handles Tests: 2 passed case\nTests:       1 skipped, 1 total\n",
+                "  ✓ it shows Tests 2 passed in title (3 ms)\n Tests  1 skipped (1)\n",
+                "@org/web:test:  ✓ handles Tests: 2 passed\n@org/web:test:       Tests  1 skipped (1)\n"):
+        check(f"G4:標題不算:{out.splitlines()[0][:40]}", m._ran_evidence_check("node-jest", out)[0] is False, repr(out))
+
+
+def t_ran_evidence_prefix_regex_linear():
+    """[r3 G4]新的前綴樣式在 512KB 刁鑽輸入上 3 秒內:滿是冒號字、方括號、色碼、空白的行。"""
+    import re, time as _t
+    m = _load_lumos_inproc()
+    pat = m._ran_evidence_re("node-jest")
+    for name, txt in (("冒號字", "a:" * 262144), ("方括號", "[x]" * 174762), ("色碼", "\x1b[1m" * 131072), ("每行 Tests 前綴", ("@a:b: Tests 1 x\n") * 30000),
+                      ("空白", " " * 524288), ("pnpm 字加空白", ("p q " * 131072))):
+        t0 = _t.monotonic()
+        re.search(pat, txt)
+        dt = _t.monotonic() - t0
+        check(f"G4:{name} 3 秒內", dt < 3.0, f"{dt:.2f}s")
+
+
+def _multiline_caret_offenders(src):
+    """AST 掃 re 呼叫(認 `import re as X` 別名、flags= 關鍵字、旗標寫在別行):樣式字面含 ^\\s* 而且帶多行旗標的回 [行號]。"""
+    import ast
+    tree = ast.parse(src)
+    aliases = {"re"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.name == "re":
+                    aliases.add(a.asname or "re")
+    def strs(n):
+        out = []
+        for x in ast.walk(n):
+            if isinstance(x, ast.Constant) and isinstance(x.value, str):
+                out.append(x.value)
+        return out
+    def has_m(n):
+        return any(isinstance(x, ast.Attribute) and x.attr in ("M", "MULTILINE") for x in ast.walk(n))
+    bad = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in aliases and node.func.attr in ("compile", "search", "match", "fullmatch", "sub", "subn", "findall", "finditer", "split")):
+            continue
+        if not node.args:
+            continue
+        pat = "".join(strs(node.args[0]))
+        if "^\\s*" not in pat:
+            continue
+        flagged = "(?m" in pat or any(has_m(a) for a in node.args[1:]) or any(has_m(k.value) for k in node.keywords)
+        if flagged:
+            bad.append(node.lineno)
+    return bad
+
+
+def t_no_multiline_caret_whitespace_star():
+    """[r2 資1 → r3 G5]全檔守衛(AST 版):re 呼叫裡樣式字面含 ^\\s* 而且帶多行旗標的一律不准出現——\\s* 會吞換行,一大段空行二次方回溯。
+    認 `import re as X` 別名、flags= 關鍵字、旗標寫在別行(逐行掃描會被這三種繞過,r3 通才、正確性、邊界席)。
+    翻紅:判法改回逐行比對 → 下面三個合成樣本有兩個抓不到。"""
+    _need_src("scripts/lumos")
+    samples = {"別名": 'import re as _re_f\n_re_f.search(r"^\\s*FLAG:(\\S+)", s, _re_f.M)\n',
+               "flags 關鍵字": 'import re\nre.compile(r"^\\s*x", flags=re.MULTILINE)\n',
+               "旗標換行": 'import re\nre.compile(\n    r"^\\s*x",\n    re.M)\n'}
+    for name, s in samples.items():
+        check(f"G5:合成樣本抓得到({name})", _multiline_caret_offenders(s) != [], name)
+    check("G5 對照:沒有多行旗標不算", _multiline_caret_offenders('import re\nre.search(r"^\\s*x", s)\n') == [], "")
+    src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+    check("G5:scripts/lumos 沒有 ^\\s* 搭多行旗標的樣式", _multiline_caret_offenders(src) == [], str(_multiline_caret_offenders(src)[:5]))
+
+
+def t_test_pat_test_underscore_anchored():
+    """[r3 G8 邊7]`test_` 只認檔名開頭或 / 之後:contest_form、latest_items、attest_signer 不算;test_utils.py、src/test_api.py 算。"""
+    m = _load_lumos_inproc()
+    pat = m._PITFALL_DIFF_TEST_PAT
+    for f in ("src/contest_form.tsx", "src/latest_items.ts", "src/attest_signer.ts"):
+        check(f"G8:{f} 不是測試檔", not pat.search(f), "")
+    for f in ("test_utils.py", "src/test_api.py", "pkg/foo_test.go"):
+        check(f"G8:{f} 是測試檔", bool(pat.search(f)), "")
+
+
+def t_kt_missing_not_deleted_is_unknown():
+    """[r3 G8 安1]Kotlin 平台判定:工作樹不存在的檔只有在 diff 標為刪除時才略過;範圍的 head 不是工作樹(檔不在工作樹、也沒被刪)時當判不出,Android 題照附。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-ktmissing-"))
+    (d / "build.gradle.kts").write_text('plugins { id("org.springframework.boot") }\n', encoding="utf-8")
+    (d / "src").mkdir()
+    (d / "src" / "S.kt").write_text("package s\nclass S\n", encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    m._KT_BUILD_VERDICT_CACHE.clear()
+    check("G8:不在工作樹也沒被刪 → 不排除(判不出)", m._stack_platform_excluded(["src/S.kt", "src/Gone.kt"], str(d)) == frozenset(), "")
+    check("G8:不在工作樹而 diff 標為刪除 → 略過它、照樣排除",
+          m._stack_platform_excluded(["src/S.kt", "src/Gone.kt"], str(d), deleted={"src/Gone.kt"}) == frozenset(_ANDROID3), "")
+
+
+def t_nodehome_cat_sizes_newline_path_whole_batch_none():
+    """[r3 G8 安2]問大小的批次讀取遇到含換行的路徑,照 _nodehome_cat_blobs 一樣整批回 None(不讓輸出行數錯位)。"""
+    m = _load_lumos_inproc()
+    d, _g, w, c = _role_git_repo()
+    w("a.txt", "hello\n")
+    c("base")
+    ok = m._nodehome_cat_sizes(d, ["HEAD:a.txt", "HEAD:none.txt"])
+    check("前置:沒有換行時照常回每支的大小", ok == [6, None], str(ok))
+    check("G8:路徑含換行 → 整批 None", m._nodehome_cat_sizes(d, ["HEAD:a.txt", "HEAD:b\nc.txt"]) is None, "")
+
+
 def _run_unfamiliar_stack_brief_test(name):
     _need_src("governance/eval/test_unfamiliar_stack_brief.py")
     root = Path(GRAPHCTL).resolve().parent.parent
@@ -98303,6 +99584,20 @@ def t_unfamiliar_stack_brief_u4_oracle():
     """Node 四格 oracle 同時驗容量與回傳結果，不讓修復丟掉正常行為。"""
     _run_unfamiliar_stack_brief_test("ManifestTests.test_u4_result_preservation_and_capacity")
 
+
+
+def t_infra_before_react_stack_key():
+    """[前端框架從vue分出 交界條款,跟 Projects/前端知識與風險詞_計劃 的順序約定]_stack_key_for_file 先判 infra 再判 React/vue:
+    React 專案裡 e2e/ 資料夾下的 .ts/.tsx 判 infra、不判 react;src/ 底下的 .tsx 判 react。翻紅:把 infra 規則移到前端判斷之後 → 前兩條紅。"""
+    m = _load_lumos_inproc()
+    d = Path(tempfile.mkdtemp(prefix="gctl-infrareact-"))
+    (d / "package.json").write_text('{"dependencies": {"react": "^19"}}', encoding="utf-8")
+    m._WORKTREE_TEXT_CACHE.clear()
+    k = lambda f: m._stack_key_for_file(f, str(d))  # noqa: E731
+    check("交界:e2e/ 底下的 .ts → infra", k("e2e/order.spec.ts") == "infra" and k("e2e/helpers/db.ts") == "infra", f"{k('e2e/order.spec.ts')} {k('e2e/helpers/db.ts')}")
+    check("交界:e2e/ 底下的 .tsx → infra(不判 react)", k("e2e/fixtures/Page.tsx") == "infra", str(k("e2e/fixtures/Page.tsx")))
+    check("交界:src/ 底下的 .tsx → react", k("src/App.tsx") == "react" and k("src/api/orders.ts") == "react", f"{k('src/App.tsx')} {k('src/api/orders.ts')}")
+    check("交界 對照:src/ 底下的 e2e 資料夾是產品程式,照判 react", k("src/e2e/cipher.ts") == "react", str(k("src/e2e/cipher.ts")))
 
 if __name__ == "__main__":
     sys.exit(main())

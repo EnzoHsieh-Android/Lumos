@@ -361,7 +361,7 @@ LUMOS-SEAT: {loop}/{rN}/{席名}
 
 被審材料:{代碼迴圈:工作副本路徑;設計迴圈:spec-freeze 寫出的 governance/review-reports/<id>/rN-snapshot.md}
 同層最相似的既有檔(對照用,這些代表專案現在的寫法):{鄰居檔清單,pitfalls --diff 會吐}
-這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / swift-idioms / node-idioms / python-idioms / java-idioms / dart-idioms,依副檔名;.ts/.js 看 package.json 分前後端}
+這個技術棧的慣例 skill:{kotlin-idioms / csharp-idioms / vue-idioms / react-idioms / swift-idioms / node-idioms / python-idioms / java-idioms / dart-idioms,依副檔名;.ts/.js 看 package.json 分前後端與 vue/react}
 圖譜裡相關功能筆記(DEP/FLOW 寫了模組邊界):{代碼迴圈:原樣留一行 `LUMOS-IMPACT: {base}..{head 完整提交編號}`,hook 會附固定席(見 §3 鏡頭 3);設計迴圈:設計審派工前先 spec-freeze;席位材料、rN-snapshot、--reviewed 都用它產生的那份;派工單記 spec_commit(怎麼凍見 §1 圖譜鏡頭那一格),原樣貼它印的那一行 `LUMOS-SPEC: <完整提交編號>:<路徑>`(提交編號寫法只對 Claude 編排有效),hook 從計劃提到的檔與直接連結的節點算(2026-09-05 起;之前手貼實測 209 份只有 14 份貼)}
 LUMOS-ARCH-TARGET: on
 
@@ -446,7 +446,7 @@ LUMOS-SEAT: {loop}/{rN}/{席名}
 你是資安審查員,站在攻擊者那一邊看這份 diff。你只看「能被利用的洞」,不看一般 bug、效能、風格(別席管)。
 
 被審材料:{凍結 patch 路徑}
-這個技術棧慣例 skill 裡的資安條款:{node-idioms 的邊界驗證/秘密不進 log/速率限制;python-idioms 的 R15 邊界驗證/R16 秘密不進 log/R18 反序列化與 shell;java-idioms 的 R13 邊界驗證與 SQL 參數化/秘密不進 log;dart-idioms 的 R12 外來 JSON 一律不可信/R14 正式版不要用 print;其他棧沒有就寫「無」}
+這個技術棧慣例 skill 裡的資安條款:{node-idioms 的邊界驗證/秘密不進 log/速率限制;python-idioms 的 R15 邊界驗證/R16 秘密不進 log/R18 反序列化與 shell;java-idioms 的 R13 邊界驗證與 SQL 參數化/秘密不進 log;dart-idioms 的 R12 外來 JSON 一律不可信/R14 正式版不要用 print;react-idioms 的 R13 不把使用者內容當 HTML 插進頁面;其他棧沒有就寫「無」}
 (選配)專案資安類 linter 的輸出:{有宣告才附,沒有寫「無」}——這是另外長出來的材料,拿來跟 diff 對照
 (選配)pitfalls 清單裡 infra- 開頭的題:{被審改動有本機腳本才附}——/tmp、pid、路徑那幾題是資安面
 

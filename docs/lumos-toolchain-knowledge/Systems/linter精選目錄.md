@@ -139,6 +139,17 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
 
 **Vue 專案要點**:eslint-plugin-vue 自帶 compiler 產改造 AST,oxlint 官方明說**不會完整相容**→ Vue 專案 ESLint 仍是主力,oxlint 只當前置加速器(`eslint-plugin-oxlint` 讓 ESLint 跳過 oxlint 已覆蓋的規則)。純 TS/JS(非 Vue)可考慮 Biome 全換。
 
+## React（registry: `npm:<pkg>`；2026-10-15 補，[[Projects/前端框架從vue分出_計劃]]，消費端 order-web）
+
+| 工具 | 抓什麼 | 備註 |
+|---|---|---|
+| **eslint-plugin-react-hooks** | `rules-of-hooks`（Hook 只能在頂層呼叫）、`exhaustive-deps`（effect 依賴陣列漏值） | `npm:eslint-plugin-react-hooks`；★2026-10-15 在 order-web 用 eslint 9.39.5＋5.2.0 實跑，兩條各對違規樣本報一條★；recommended 裡 exhaustive-deps 只是 warning，建議升成 error（react-idioms R5） |
+| **eslint-plugin-react** | `react/jsx-key`（清單沒 key）、`react/no-array-index-key`（用索引當 key） | `npm:eslint-plugin-react`；未實跑（order-web 沒裝） |
+| **typescript-eslint** | type-aware 的 `no-floating-promises`、`no-misused-promises` | 同 Node 段；React 的事件處理常把 async 函式丟給 onClick |
+| **eslint-plugin-react-refresh** | 熱更新邊界（`only-export-components`） | Vite 範本預設會裝；不是正確性規則 |
+
+接法:SARIF 走 `@microsoft/eslint-formatter-sarif`(同 Node 段);專案根目錄有 eslint 設定而沒宣告 `.lumos/lint.json` 時,`lumos doctor` 的 [F] 段會印可貼的範本(見 [[Systems/lint-declaration-health]])。
+
 ## SQL（registry: `pypi:<pkg>`）
 | linter | 用途 | 備註 |
 |---|---|---|
