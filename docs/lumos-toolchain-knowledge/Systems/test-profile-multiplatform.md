@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-02
-updated: 2026-07-30
+updated: 2026-10-15
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/082e219ba898
 related:
@@ -20,13 +20,12 @@ tags:
   - status/done
   - scope/guards-gates
 summary: |-
-  FLOW:load_platforms 讀 .lumos/config→{multiplatform,default_platform,platforms:{plat:{profile,root}}}→resolve_test_refs 把 [test:plat:name] 逐段解析為 (plat,name)→_platform_test_index 惰性建每平台 root+profile 的 method set/haystack→Check T/classify_invariants/cmd_archive 各 ref 對其平台判 real/fake/dangling(跨 repo)
-  KEY:單一圖譜跨平台綁測試——config 從單 test_profile 擴為 platforms 多根多 profile map;[test:plat:name] 的**平台前綴**(android/backend/maestro/playwright)★注意:平台前綴≠profile 名★——profile 名截至 2026-09-12 共 10 個鍵(csharp-xunit/kotlin-junit/java-junit/maestro/playwright/dart/python/swift-xctest/node-jest/node-vitest,其中 node-vitest 是 node-jest 的別名)——★這串每次補棧都要跟著改★:2026-09-08 加 swift/node、2026-09-11 加 python 時都漏了,2026-09-12 補回;兩者同名的只有 maestro/playwright,android 對應 kotlin-junit、backend 對應 csharp-xunit
-  KEY:向後相容以「config 有無 platforms 鍵」為信號(multiplatform bool)——無 platforms=legacy,resolve 不切分整串當方法名,舊 test_profile/裸 [test:X] 照舊
-  KEY:default_platform 規則——多平台缺省即報錯(不猜);未定義平台前綴 [test:foo:X] Check T 明確報錯(不 fallback)
+  KEY:單一圖譜跨平台綁測試——config 從單 test_profile 擴為 platforms 多根多 profile map;`[test:plat:name]` 的**平台前綴**(android/backend/maestro/playwright)★注意:平台前綴≠profile 名★——profile 名截至 2026-09-12 共 10 個鍵(csharp-xunit/kotlin-junit/java-junit/maestro/playwright/dart/python/swift-xctest/node-jest/node-vitest,其中 node-vitest 是 node-jest 的別名)——★這串每次補棧都要跟著改★:2026-09-08 加 swift/node、2026-09-11 加 python 時都漏了,2026-09-12 補回;兩者同名的只有 maestro/playwright,android 對應 kotlin-junit、backend 對應 csharp-xunit
+  KEY:向後相容以「config 有無 platforms 鍵」為信號(multiplatform bool)——無 platforms=legacy,resolve 不切分整串當方法名,舊 test_profile/裸 `[test:X]` 照舊
+  KEY:default_platform 規則——多平台缺省即報錯(不猜);未定義平台前綴 `[test:foo:X]` Check T 明確報錯(不 fallback)
   KEY:新增內建 profile maestro(綁 flow name:,file_must_match=^appId: 濾非flow yaml,\s*$ 錨多字 name NO MATCH)/ playwright(綁 test('id'),多字 title NO MATCH)
   KEY:file_must_match 是 discover 選填 knob(讀檔後去註解前過濾,.get() 相容無此鍵的舊 profile)
-  KEY:guard bind/scaffold --platform 旗標——method 維持識別字、平台另帶,bind 寫 [test:plat:method] 去重/verify 比完整 ref;scaffold 範本/scaffold_ext/測試目錄偵測跟平台 root 走
+  KEY:guard bind/scaffold --platform 旗標——method 維持識別字、平台另帶,bind 寫 `[test:plat:method]` 去重/verify 比完整 ref;scaffold 範本/scaffold_ext/測試目錄偵測跟平台 root 走
   KEY:天花板——Check T 只驗測試識別子存在,不驗跑綠(CI 的事);E2E 要裝置/瀏覽器(無裝置才 skip);跨 repo 只讀不寫
   KEY:swift-xctest / node-jest(=node-vitest 別名) profile(2026-09-08,[[Projects/iOS與Node後端補棧_計劃]];★尚無真專案跑過,只有合成樣本測試★)=第 7、8 個 profile:SWIFT_TEST_RE 兩代並收(XCTest `func test*` 靠 lookahead 限前綴、Swift Testing `@Test` 巨集任意名,修飾詞可夾中間)+suffix 目錄模式(頂層 *Tests,pure/state 排除 *UITests,behavioral 只認 *UITests);JEST_TEST_RE 認 test/it/describe('id') 含 .only/.skip/.concurrent+檔名錨 *.test.*/*.spec.*(`__tests__/` 下無後綴檔不在錨內=天花板)+scaffold_name {m}.test [test:t_swift_profile_discovery] [test:t_node_jest_profile_discovery]
   KEY:dart profile(2026-07-26,taroko_app Flutter 接入)=第 6 個 profile:DART_TEST_RE 認 test('id')/testWidgets('id')(識別字名才可綁,含空白 NO MATCH 同 playwright 設計)+檔名錨 *_test.dart+comment_strip=c-style(Dart 有雙式註解)+scaffold_name={m}_test;dirs pure=test/、behavioral 含 integration_test/ [test:t_dart_profile_discovery]
@@ -36,6 +35,7 @@ summary: |-
   DEP:[[Systems/check-t-sentinel]]
   TEST:t_maestro_profile_discover｜t_playwright_profile_discover｜t_load_platforms｜t_resolve_test_refs｜t_multiplatform_guard_list｜t_multiplatform_doctor_check_t｜t_archive_live_guard_multiplatform｜t_guard_trace_multiplatform｜t_guard_bind_scaffold_platform(全綠(★「333」為當時全量口徑,已漂;相關 9 支測試現合計 25 斷言全過(2026-08-21 程式碼實證)★))
   VERIFY:[[Verification/2026-07-02_multiplatform-test-binding]]
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]平台 root 不存在的警告同一次執行只印一次(模組層集合記 (平台, root)),load_platforms 每個呼叫端共用 [出處:web 示範規格閘一次跑印三行同一句] [因:重複的警告讓人以為有三個問題] [test:t_platform_root_warning_once]
 aliases:
   - 多平台合約測試綁定
 about_code:

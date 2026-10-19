@@ -51,6 +51,7 @@ lumos set <node> <field> <value>                     # single-value fields, like
 lumos append <node> related|verified_by|... "[[X]]"  # add a link (one at a time)
 lumos decision-add <node> "<content>" --decided DATE # record a decision
 lumos summary-line <node> "<old fragment>" "<new fragment>"   # change one summary line without hand-editing the header fields
+lumos summary-add <node> "<one line>"                         # add a summary line (needs a prefix; runs the commit-time note-shape check first)
 ```
 
 **Every one of these verifies its own write.** Don't hand-edit the structured fields at the top — the classic trap is several links on one line, which grows a "ghost node".

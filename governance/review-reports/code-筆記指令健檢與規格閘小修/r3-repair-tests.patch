@@ -1,0 +1,328 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c338f16f077a8aa099c2b7980e1c0f60186a47cc..ecd2c3d7b3da072d7551f55995465e793326c61f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -89052,21 +89052,21 @@ def t_note_shape_negation_lexicon_pinned():
+     import importlib.machinery, importlib.util
+     loader = importlib.machinery.SourceFileLoader("_neg_measure_ref", str(mp))
+     spec = importlib.util.spec_from_loader("_neg_measure_ref", loader)
+     ref = importlib.util.module_from_spec(spec)
+     loader.exec_module(ref)
+     pairs = [("NARROW_ZH", "_NS_NEG_NARROW_ZH"), ("NARROW_V3_EN_CS", "_NS_NEG_NARROW_EN_CS"),
+              ("NARROW_V3_EN_CI", "_NS_NEG_NARROW_EN_CI"), ("NOT_LACK", "_NS_NEG_NOT_LACK"), ("HIST_MARK", "_NS_NEG_HIST"),
+              ("RULE_MARK_V3", "_NS_NEG_RULE"), ("EXIST_TOKENS", "_NS_NEG_EXIST"), ("TEMPLATE_V3", "_NS_NEG_TEMPLATES"),
+              ("QUOTE_PAIRS", "_NS_NEG_QUOTES"), ("MOD_BREAK", "_NS_NEG_MOD_BREAK"), ("MOD_STOP", "_NS_NEG_MOD_STOP"),
+              ("CLOSE_V4", "_NS_NEG_CLOSE"), ("MODAL_V4", "_NS_NEG_MODAL"), ("COND_OPEN_V4", "_NS_NEG_COND_OPEN"),
+-             ("COND_STOP_V4", "_TRIGGER_STOPWORDS"), ("CLAUSE_PUNCT_V4", "_NS_NEG_CLAUSE_PUNCT")]
++             ("COND_STOP_V4", "_TRIGGER_STOPWORDS"), ("NOT_CLAUSE_V4", "_NS_NEG_NOT_CLAUSE"), ("COND_PAIRED_V4", "_NS_NEG_COND_PAIRED")]
+     rx = [("FIELD_RX", "_NS_NEG_FIELD_RE"), ("RX_NARROW_V3", "_NS_NEG_NARROW_RE"), ("SEG_CUT_V3", "_NS_NEG_SEG_CUT_RE"),
+           ("RX_HIST_V3", "_NS_NEG_HIST_RE"), ("RX_RULE_V3", "_NS_NEG_RULE_RE"), ("RX_NOTLACK", "_NS_NEG_NOTLACK_RE")]
+     diff = [a for a, b in pairs if getattr(ref, a) != getattr(m, b)]
+     diff += [a for a, b in rx if (getattr(ref, a).pattern, getattr(ref, a).flags) != (getattr(m, b).pattern, getattr(m, b).flags)]
+     check("②量測程式在:兩邊常數與正則逐一相同", not diff, str(diff))
+ 
+     def _ref(line):
+         probe = m._strip_inline_markup(line)[0]
+         if not probe.strip() or m._revisit_split(probe)[0] is not None or ref.excluded_v3(probe, "body"):
+             return []
+@@ -97948,40 +97948,45 @@ def t_discipline_lists_summary_commands():
+         check(f"③{name} 的鐵則 2 跟範本同一行", rule2 in txt, rule2)
+ 
+ 
+ def t_docs_catalog_count_wording():
+     """[筆記指令健檢 S34] 命令數守衛也認「N 個指令的總目錄」;reference.md 真的用這種寫法(所以會被掃到)。"""
+     _need_src("skills/lumos-project-notes")
+     root = Path(GRAPHCTL).resolve().parent.parent
+     check("①認得總目錄寫法", _docs_command_count_claims("是 7 個指令的總目錄") == {"7"}, "")
+     check("②舊的三種寫法照認", _docs_command_count_claims("共 8 個頂層命令;9 top-level commands;10 是頂層命令數") == {"8", "9", "10"}, "")
+     ref = (root / "skills" / "lumos-project-notes" / "reference.md").read_text(encoding="utf-8")
+-    check("③reference.md 真的用總目錄那種寫法(所以會被守衛掃到)", "個指令的總目錄" in ref, "")
++    i = ref.find("個指令的總目錄")
++    num = __import__("re").match(r"\d+", ref[max(0, i - 6):i].rstrip()[::-1]) if i > 0 else None     # 總目錄前面的數字(從後往前讀)
++    num = num.group(0)[::-1] if num else None
++    check("③reference.md 的總目錄那句真的被守衛掃到", num is not None and num in _docs_command_count_claims(ref), (num, i))
+ 
+ 
+ # ── 筆記指令健檢與規格閘小修_計劃 ②:set 說明、append 的落點 ──
+ 
+ def t_set_help_lists_keys():
+     """[筆記指令健檢 S9] set --help 列出 set 收的每個欄位(含 responsibility 與整欄換掉的條件欄),跟擋下訊息列的是同一份;
+     append --help 同樣列清單欄位。判準:手寫的幾個一定要出現的欄位名,加上「擋下訊息裡列的每一個都在說明裡」。"""
+     import subprocess as sp, re as _re
+     h = sp.run([sys.executable, GRAPHCTL, "set", "--help"], capture_output=True, text=True).stdout
+     flat = " ".join(h.split())
+     for k in ("status", "responsibility", "about_code_stamp", "valid_under", "revalidate_when"):
+         check(f"①set 說明列出 {k}", k in flat, h)
+     v = mkvault()
+     write(v, "Systems/A.md", "type: system\nstatus: doing\nsummary: |-\n  KEY:x", "# A\n")
+     r = run(v, "set", "A", "沒有這欄", "x")
+     m = _load_lumos_inproc()
+     keys = sorted(set(m.SCALAR_KEYS) | set(m.COND_KEYS))       # 對照程式的欄位常數本身(代碼審 r1 通4)
+     check("②常數裡每個欄位都同時出現在說明與擋下訊息", r.returncode == 2 and all(k in flat and k in r.stderr for k in keys),
+           [k for k in keys if k not in flat or k not in r.stderr])
++    want = " ".join(m._set_keys_text().split())
++    check("③說明裡有整串欄位清單(不只是首句提到幾個欄位名)", want in flat and want in " ".join(r.stderr.split()), want)
+     ha = " ".join(sp.run([sys.executable, GRAPHCTL, "append", "--help"], capture_output=True, text=True).stdout.split())
+     check("③append 說明列出 lands_in 與 related", "lands_in" in ha and "related" in ha, ha)
+ 
+ 
+ def t_append_lands_in_normalizes():
+     """[筆記指令健檢 S10] append lands_in 收到 [[Systems/x]]、Systems/x.md → 寫成純字串 Systems/x 並講改了什麼;
+     正規化後仍不是 Systems/<名>(例:[[Projects/y]])→ rc2、檔不動。判準:處置閘的落點格式(純字串 Systems/<名>)。"""
+     v = mkvault()
+     write(v, "Projects/甲_計劃.md", "type: project\nstatus: doing\nsummary: |-\n  KEY:x", "# 甲\n")
+     p = v / "Projects" / "甲_計劃.md"
+@@ -98484,20 +98489,21 @@ def t_spec_gate_record_in_governance_log():
+           and gov[0].get("clause_sha") == can[0]["clause_sha"] and gov[0].get("gate") == "spec-gate", str(gov))
+     (kg.parent / ".canary-log.jsonl").unlink()
+     r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+     check("②本機審查帳不見了:照樣讀到留痕、紅了擋", r.returncode == 1 and "t_flip" in r.stdout, r.stdout[-500:])
+     d2, kg2, p2 = _sg_push_setup("sa28b")
+     old = _sg_records(kg2)[0]
+     p2.write_text(p2.read_text(encoding="utf-8").replace("系統應回 200", "系統應回 201"), encoding="utf-8")
+     run(kg2, "spec-gate", "Projects/甲_計劃", expect_rc=0)
+     _sg_commit(d2, "clause v2")
+     cl = kg2.parent / ".canary-log.jsonl"
++    old = dict(old, ts="2026-01-01T00:00:00+08:00")      # 舊的那筆確定比較早(秒級 ts 同秒時取本機那筆,代碼審 r2 G7)
+     cl.write_text(_j.dumps(old, ensure_ascii=False) + "\n", encoding="utf-8")   # 模擬舊機器:本機帳只有舊的那筆
+     (d2 / "tests" / "flip.ok").write_text("")
+     r = run(kg2, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d2))
+     check("③兩本各有一筆:取最晚那筆(新指紋)、不判過期", r.returncode == 0 and "過期" not in r.stdout, r.stdout[-500:])
+ 
+ 
+ def t_prepush_spec_gate_clean_clone_blocks():
+     """[筆記指令健檢 S29] 審查帳照 init 的忽略規則不進版控;在乾淨 clone(沒有本機審查帳)推送一份風險低計劃、條款測試紅 → 擋下。
+     前置:clone 裡真的沒有本機審查帳(修之前這個情境 rc0 一個字都不印)。"""
+     import subprocess as sp
+@@ -98577,21 +98583,22 @@ def t_prepush_spec_gate_done_stale_still_checks_nogo():
+     check("①過期+不做清單多了危險詞:擋(輕量審那道照查)", r.returncode == 1 and "輕量" in r.stdout, r.stdout[-700:])
+     d2, kg2, p2 = _sga_done_first("cr1b")
+     (d2 / "tests" / "flip.ok").write_text("")
+     p2.write_text(p2.read_text(encoding="utf-8").replace("系統應回 200", "系統應回 201"), encoding="utf-8")
+     _sg_commit(d2, "edit clause")
+     r = run(kg2, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d2))
+     check("②過期、不做清單沒動、測試綠:只提醒放行", r.returncode == 0 and "已完成" in r.stdout, r.stdout[-500:])
+ 
+ 
+ def t_prepush_spec_gate_done_gone_still_runs_rest():
+-    """[代碼審 r1 正2] 推送前就已完成的計劃:一支留痕測試找不到(改名)、另一支照樣紅 → 跑找得到的那支、紅了擋;兩支都找得到且綠 → 過。"""
++    """[代碼審 r1 正2] 推送前就已完成的計劃:一支留痕測試找不到(改名)、另一支照樣紅 → 跑找得到的那支、紅了擋。
++    (找得到的都綠時只提醒放行,由 t_prepush_spec_gate_done_in_range ④ 守;只剩找不到的由同支 ⑤ 守。)"""
+     d, kg, p = _sga_done_first("cr2", clauses=["- [S1] 系統應回 200 [test:t_flip]", "- [S2] 系統應回 404 [test:t_red2]"])
+     tf = d / "tests" / "test_x.py"
+     tf.write_text(tf.read_text(encoding="utf-8").replace("def t_flip():", "def t_flip_renamed():"), encoding="utf-8")
+     p.write_text(p.read_text(encoding="utf-8").replace("# 甲\n", "# 甲\n\n補一句說明。\n"), encoding="utf-8")
+     _sg_commit(d, "rename + prose")
+     r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
+     check("①一支找不到、另一支紅:擋並點名紅的那支", r.returncode == 1 and "t_red2" in r.stdout, r.stdout[-600:])
+ 
+ 
+ def t_prepush_spec_gate_done_this_push_is_strict():
+@@ -98674,27 +98681,27 @@ def t_refcheck_planned_many_paths_linear():
+     md = root / "plan.md"
+     md.write_text("".join(f"`src/new_{i}.py`(新增)\n`src/gone_{i}.py`\n" for i in range(8000)), encoding="utf-8")
+     t0 = _t.monotonic()
+     rc, st, d = _rp_refcheck(root, md)
+     dt = _t.monotonic() - t0
+     check("①計數對", d.get("planned") == 8000 and d.get("missing") == 8000, str({k: d.get(k) for k in ("planned", "missing")}))
+     check("②4 秒內跑完", dt < 4.0, f"{dt:.2f}s")
+ 
+ 
+ def t_spec_gate_pick_bad_ts():
+-    """[代碼審 r1 正4] 兩本帳的留痕有一筆 ts 讀不懂:不崩,讀得懂的那筆勝;兩筆都讀不懂取後列的(同時間的規則)。"""
++    """[代碼審 r1 正4] 兩本帳的留痕有一筆 ts 讀不懂:不崩,讀得懂的那筆勝;兩筆都讀不懂取先列的(同時間取先列,代碼審 r2 G7)。"""
+     m = _load_lumos_inproc()
+     good = {"token": "A", "ts": "2026-10-15T10:00:00+08:00"}
+     bad = {"token": "B", "ts": "2026-10-15T11:00:00"}
+     check("①讀不懂的排最前、讀得懂的勝(兩種順序)", m._spec_gate_pick(good, bad) is good and m._spec_gate_pick(bad, good) is good, "")
+     b2 = {"token": "C", "ts": "壞"}
+-    check("②兩筆都讀不懂:不崩、取後列的", m._spec_gate_pick(bad, b2) is b2, "")
++    check("②兩筆都讀不懂:不崩、取先列的", m._spec_gate_pick(bad, b2) is bad, "")
+ 
+ 
+ def t_ref_path_ignored_dir_trailing_slash():
+     """[代碼審 r1 正5] .gitignore 寫 scripts/runtime/(只認目錄)、筆記寫 `scripts/runtime/`:refcheck 列成 ignored,不報 missing;
+     問 git 時保留結尾斜線(拿掉斜線 git 不知道它是目錄、回不忽略)。"""
+     root = _rp_repo()
+     (root / ".gitignore").write_text("scripts/runtime/\n", encoding="utf-8")
+     _nh_commit(root, "ignore dir")
+     md = root / "plan.md"
+     md.write_text("`scripts/runtime/` 與 `scripts/runtime/state.json`\n", encoding="utf-8")
+@@ -98719,12 +98726,177 @@ def t_spec_gate_manual_red_checks_uncommitted():
+     _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_flip]"])
+     _sg_commit(d, "impl + plan")
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     check("①乾淨:不印還沒提交的警告、換回步驟用 --source=HEAD", r.returncode == 1 and "還沒提交的改動" not in r.stdout
+           and "git restore --source=HEAD" in r.stdout, r.stdout[-800:])
+     (d / "tests" / "run.py").write_text((d / "tests" / "run.py").read_text(encoding="utf-8") + "# wip\n", encoding="utf-8")
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     check("②有還沒提交的改動:先警告", r.returncode == 1 and "還沒提交的改動" in r.stdout, r.stdout[-800:])
+ 
+ 
++# ── 代碼審 code-筆記指令健檢與規格閘小修 r2 修正 ──
++
++def t_ref_path_command_without_flag():
++    """[代碼審 r2 G1:正1、邊1、整2、通1] 第一個詞是存在的檔、第二個詞不像路徑(沒有 / 也沒有副檔名)→ 當一行指令,只核對第一個詞;
++    帶旗標、帶子命令、後面接中文說明都一樣。第二個詞像路徑(有 / 或副檔名)、或第一個詞不存在 → 照整串核對(帶空白的缺檔照報 missing)。
++    doctor P 段同一支判法。"""
++    root = _rp_repo()
++    _nh_file(root, "src/app/m.py")
++    md = root / "plan.md"
++    md.write_text("`scripts/e2e.sh doctor`、`scripts/e2e.sh search 詞 詞`、`src/a.py 的某函式`、`scripts/e2e.sh dispatch --spec x/y.md`、"
++                  "`src/app v2/gone.py`、`src/app v2.py`、`src/中文 目錄/不存在.py`\n", encoding="utf-8")
++    rc, st, d = _rp_refcheck(root, md)
++    check("①子命令、中文說明、後面帶路徑參數的指令:只核對第一個詞、ok",
++          st.get("scripts/e2e.sh") == "ok" and st.get("src/a.py") == "ok" and not any(k.startswith("scripts/e2e.sh ") for k in st), str(st))
++    check("②第二個詞像路徑:照整串報 missing", st.get("src/app v2/gone.py") == "missing" and st.get("src/app v2.py") == "missing", str(st))
++    check("③第一個詞不存在:照整串報 missing", st.get("src/中文 目錄/不存在.py") == "missing", str(st))
++    _nh_node(root, "S", body="\n跑 `scripts/e2e.sh doctor`;缺的 `src/app v2/gone.py`\n")
++    _nh_commit(root, "s")
++    p = _rp_doctor_p(root)
++    check("④doctor P 段:子命令不列、帶空白的缺檔照列", "e2e.sh" not in p and "src/app v2/gone.py(已不存在)" in p, p)
++
++
++def t_prepush_spec_gate_done_stale_red_blocks():
++    """[代碼審 r2 G3:通2] 推送前就已完成的計劃、留痕過期、留痕裡的測試紅 → 擋(寬待只寬待過期本身,真紅照擋)。"""
++    d, kg, p = _sga_done_first("cr2a")
++    p.write_text(p.read_text(encoding="utf-8").replace("系統應回 200", "系統應回 201"), encoding="utf-8")
++    _sg_commit(d, "edit clause, test still red")
++    r = run(kg, "spec-gate", "--push-check", "HEAD~1..HEAD", "--repo", str(d))
++    check("①過期+測試紅:擋並點名", r.returncode == 1 and "t_flip" in r.stdout, r.stdout[-500:])
++
++
++def t_prepush_spec_gate_done_three_dot_base():
++    """[代碼審 r2 G4:架1] 三點範圍 X...HEAD 的起點是 merge-base:merge-base 那一版計劃已 done → 照「推送前就已完成」寬待;
++    舊寫法拿左端點 X(那條分支上計劃被改回 doing)當起點,會誤判成這次才改 done、照嚴的擋。"""
++    import subprocess as sp
++    d, kg, p = _sga_done_first("cr2b")
++    sp.run(["git", "-C", str(d), "checkout", "-q", "-b", "other"], capture_output=True)
++    p.write_text(p.read_text(encoding="utf-8").replace("status: done", "status: doing"), encoding="utf-8")
++    _sg_commit(d, "other: back to doing")
++    sp.run(["git", "-C", str(d), "checkout", "-q", "-"], capture_output=True)
++    (d / "tests" / "flip.ok").write_text("")
++    p.write_text(p.read_text(encoding="utf-8").replace("系統應回 200", "系統應回 201"), encoding="utf-8")
++    _sg_commit(d, "main: edit clause")
++    r = run(kg, "spec-gate", "--push-check", "other...HEAD", "--repo", str(d))
++    check("①三點範圍:起點取 merge-base(已 done)、只提醒放行", r.returncode == 0 and "已完成" in r.stdout, r.stdout[-500:])
++
++
++def t_note_shape_negation_clause_punct_unicode():
++    """[代碼審 r2 G5:邊2、通4] 「時」「前」後面接任何 Unicode 標點都算子句記號(半形句點、引號、方括號、書名號…),
++    只扣斜線、連字號類、底線(並列詞);「只要…就」「等到…才」這種配對才算條件開頭(只要求、等到期照舊算現況)。"""
++    m = _load_lumos_inproc()
++    quiet = ("資料還沒回來時.", "資料還沒回來時\"載入中\"", "還沒登入時[顯示]", "還沒登入時“顯示”", "還沒回來時】x", "還沒回來時〈x〉",
++             "只要尚未登入就導到登入頁", "等到檔案還沒鎖住才寫入")
++    loud = ("尚未登入時/顯示登入", "尚未部署前-測", "尚未上線前_備註", "只要求尚未上線", "等到期尚未付款")
++    for s in quiet:
++        check(f"①子句不唸:{s}", m._ns_negation_hits(s)[1] == [], str(m._ns_negation_hits(s)))
++    for s in loud:
++        check(f"②現況句照唸:{s}", m._ns_negation_hits(s)[1] != [], str(m._ns_negation_hits(s)))
++
++
++def t_spec_gate_manual_red_ignores_bookkeeping():
++    """[代碼審 r2 G6:正3、邊3、通9] 補跑紅前的「還沒提交」警告:只有簿記檔(治理帳、審查帳…)髒時不印;
++    沒被追蹤的新實作檔也算(第 3 步換空殼會覆寫它)。"""
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "cr2c")
++    (d / "tests" / "flip.ok").write_text("")
++    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_flip]"])
++    gl = d / "docs" / ".governance-log.jsonl"
++    gl.write_text('{"x": 1}\n', encoding="utf-8")
++    _sg_commit(d, "impl + plan + ledger")
++    gl.write_text(gl.read_text(encoding="utf-8") + '{"x": 2}\n', encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    check("①只有簿記檔髒:不警告", r.returncode == 1 and "還沒提交的改動" not in r.stdout, r.stdout[-600:])
++    (d / "src_new.py").write_text("x = 1\n", encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    check("②沒被追蹤的新實作檔:警告", r.returncode == 1 and "還沒提交的改動" in r.stdout, r.stdout[-600:])
++
++
++def t_spec_gate_pick_same_second_keeps_local():
++    """[代碼審 r2 G7:正2、通3] 先依 token 去重再比時間;同一秒時取先列的(呼叫端把本機審查帳那筆放最前):
++    (本機 B, 治理帳 A, 治理帳 B)三筆同秒 → B。ts 讀不懂的照樣排最前。"""
++    m = _load_lumos_inproc()
++    ts = "2026-10-15T10:00:00+08:00"
++    a, b = {"token": "A", "ts": ts}, {"token": "B", "ts": ts}
++    check("①(B,A,B) 同秒 → B", m._spec_gate_pick(b, a, dict(b)) is b, "")
++    later = {"token": "C", "ts": "2026-10-15T10:00:01+08:00"}
++    check("②較晚的照樣勝", m._spec_gate_pick(b, a, later) is later, "")
++
++
++def t_door_exclusions_many_spaces_fast():
++    """[代碼審 r2 G8:資1、架3] 冒號前置檢查搬進 _excluded_line 本身:規格閘判門走的 _door_exclusions 也不會被長空白行卡住。"""
++    import time as _t
++    m = _load_lumos_inproc()
++    text = "# 甲\n\n## 實務隱患\n\n- 已排除：" + " " * 3000 + "x\n- 已排除:金流:這份計劃不碰收費流程\n"
++    t0 = _t.monotonic()
++    found, _nos = m._door_exclusions(text)
++    dt = _t.monotonic() - t0
++    check("①合格的那行照認", found.get("金流") == "這份計劃不碰收費流程", str(found))
++    check("②一秒內跑完", dt < 1.0, f"{dt:.2f}s")
++
++
++def t_summary_line_git_broken_still_checks():
++    """[代碼審 r2 安1] summary-line 只在「確定不是 git 專案」時跳過寫前檢查;git 跑不起來(逾時、壞掉)時擋下,不當成非 git 放過。"""
++    m = _load_lumos_inproc()
++    _root, v, p = _sl_vault("KEY:付款")
++    env = m.Env(v)
++    orig = m._is_git_worktree
++    m._is_git_worktree = lambda root: None
++    try:
++        rc = m.cmd_summary_line(env, "Systems/Pay", "KEY:付款", "FACT:付款服務回 200 [confirmed:2026-10-15]")
++    finally:
++        m._is_git_worktree = orig
++    check("①git 判不了:擋(rc2)", rc == 2, str(rc))
++
++
++def t_cochange_empty_diff_is_error():
++    """[代碼審 r2 架2] cochange check 跟 home check、note-shape 同一條:沒帶範圍照 --staged;--diff 給空字串是範圍寫錯,rc2,不悄悄改查暫存區。"""
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_commit(root, "init")
++    r = sp.run([sys.executable, GRAPHCTL, "cochange", "check", "--diff", "", "--repo", str(root)], capture_output=True, text=True)
++    check("①--diff \"\":rc2", r.returncode == 2 and "照 --staged" not in r.stderr, r.stderr[-300:])
++
++
++def t_doctor_s8_worktree_symlink_node_not_home():
++    """[代碼審 r2 通5] 工作目錄裡未追蹤的節點是捷徑檔(指到 repo 外)→ 不跟、不當家:那支檔照列沒家。"""
++    import subprocess as sp
++    root = _nh_repo()
++    _nh_file(root, "src/app.py")
++    _nh_commit(root, "init")
++    outside = Path(tempfile.mkdtemp(prefix="gctl-symnode-")) / "x.md"
++    outside.write_text("---\ntype: system\nstatus: doing\nabout_code:\n  - src/app.py\nsummary: |-\n  KEY:x\n---\n# x\n", encoding="utf-8")
++    (root / "docs" / "kg-knowledge" / "Systems" / "連結.md").symlink_to(outside)
++    out = sp.run([sys.executable, GRAPHCTL, "--vault", str(root / "docs" / "kg-knowledge"), "doctor"], capture_output=True, text=True).stdout
++    s8 = out[out.find("[S8]"):out.find("[S9]")]
++    check("①捷徑檔節點不當家:src/app.py 照列、不算家還沒提交", "src/app.py" in s8 and "還沒提交" not in s8, s8)
++
++
++def t_doctor_s14_reads_governance_only():
++    """[代碼審 r2 通6] 本機審查帳不在(乾淨 clone)、只有治理帳有規格閘留痕 → doctor S14 段照樣列出那份計劃。"""
++    import subprocess as sp
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "cr2d")
++    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_flip]"])
++    run(kg, "spec-gate", "Projects/甲_計劃", expect_rc=0)
++    (kg.parent / ".canary-log.jsonl").unlink()
++    out = sp.run([sys.executable, GRAPHCTL, "--vault", str(kg), "doctor"], capture_output=True, text=True).stdout
++    s14 = out[out.find("[S14]"):out.find("[S15]")]
++    check("①只有治理帳:S14 段照列", "甲" in s14 and "規格閘當時" in s14, s14)
++
++
++def t_drift_fix_shape_follows_gate():
++    """[代碼審 r2 架5] 寫入前形狀檢查(drift fix 與摘要寫入共用)照 note_shape 總開關:off 不擋、warn 只提醒(印一句)、預設擋。"""
++    import io, contextlib
++    m = _load_lumos_inproc()
++    bad = [("FACT:付款服務回 200 [confirmed:2026-10-15]", "summary")]
++    for mode, want_err in ((None, True), ("warn", False), ("off", False)):
++        root = _nh_repo(cfg={"note_shape": {"gate": mode}} if mode else None)
++        _nh_commit(root, "init")
++        buf = io.StringIO()
++        with contextlib.redirect_stderr(buf):
++            err = m._drift_fix_shape_err(root, bad)
++        check(f"①gate={mode or '預設'}:{'擋' if want_err else '不擋'}", bool(err) == want_err, str(err))
++        if mode == "warn":
++            check("②warn 印提醒", "提醒" in buf.getvalue(), buf.getvalue())
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

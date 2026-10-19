@@ -51,6 +51,7 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 | 新筆記 | `lumos new <system\|issue\|verification\|project> <名>`;驗證紀錄加 `--plan <計劃> --systems <節點>` 自動雙向連 |
 | 改狀態 / 日期 | `lumos set <節點> <欄位> <值>`(日期不加引號) |
 | 加 / 刪清單項 | `lumos append <節點> <欄位> "[[x]]"` / `lumos remove …` |
+| 摘要加一行 / 改一行 | `lumos summary-add <節點> "<一行>"` / `lumos summary-line <節點> "<舊片段>" "<新片段>"`(兩支寫前都跑提交時的筆記形狀檢查) |
 | 記決策 / 翻案 | `lumos decision-add <節點> "<內容>" --decided <日期>` / `lumos decision-supersede` |
 | 正文段落 | Edit;寫完 `lumos lint <節點>` |
 

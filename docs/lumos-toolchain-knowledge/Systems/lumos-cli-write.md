@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-13
+updated: 2026-10-15
 self_audit: claude-fable/2026-08-24
 tags:
   - type/system
@@ -38,7 +38,7 @@ summary: |-
   FLOW:set/append/self-audit/decision-*→load_raw_for_edit(讀raw,拒BOM/CRLF)→line-based改fm→atomic_write_verify(★(2026-08-21 程式碼實證)實際順序:先在**記憶體**對 new_lines re-parse+expected_check+lint 指紋比對→全過才建 tmp 寫入→os.replace;檢查失敗時 tmp 根本未建立★)→敗則原檔不動
   KEY:[2026-08-11]新增 `remove <note> <key> <value>`=append 逆操作(T1 list 項移除)。缺口來自實戰:死背書(verified_by 指向已 superseded 的驗證)與降格後殘留 core_refs,都只能靠移除 list 項來收,而 set 只收純量、append 只能加,唯一退路 obsidian processFrontMatter 需 Obsidian 執行中→實務無路可走。比對沿用 link_target()(精確 target,不做前綴/basename 匹配);★不命中一律 rc=2★(靜默 no-op 回成功=呼叫端以為清乾淨了,比報錯危險);清空後連 key 行一併移除(裸鍵被 YAML 解成 null 比沒鍵更糟);core_refs 納入 LIST_KEYS(升格加/降格拆兩向都走 T1)。★不支援巢狀 dict 型 list 項★(core-knowledge facet 的 implements 需 T3 手術層,非本次範圍)。實戰驗收:LandmarkMember doctor E1 死背書 14→0、C 指針轉「無」。詳 [[Verification/2026-08-11_T1_remove_list項移除]]
   KEY:[2026-08-23]`remove <note> <key>`★不帶 value=把純量欄位整個拿掉★(design-loop about-code-field r3 抓到:回滾要刪 stamp,但 set 只能覆寫、remove 只動 list——純量沒有刪除原語)。不加新子命令,一個指令學一次。守衛三條:type/status/created 骨架欄硬擋(刪了 lint/doctor/分類全炸)/清單欄不准省 value(一句話誤刪整個 verified_by)/欄位不在 rc2。同批 about_code 進 LIST_KEYS、about_code_stamp 進 SCALAR_KEYS(語意欄位基礎,計劃 [[Projects/固定席扇出降權_計劃]])
-  KEY:8個寫入原語(set/append/remove/new/archive/decision-add/decision-supersede/self-audit)是「專案層」圖譜寫入的唯一安全路徑,取代手改 frontmatter / obsidian property:set
+  KEY:寫入原語(set/append/remove/new/archive/decision-add/decision-supersede/self-audit,另有改摘要的 summary-add/summary-line)是「專案層」圖譜寫入的唯一安全路徑,取代手改 frontmatter / obsidian property:set
   KEY:T1 寫後自驗 atomic——所有 fm mutation 經 atomic_write_verify:記憶體 re-parse 斷言該 key 寫成目標值 + 無引入新 lint 指紋 → 通過才寫 .lumos-tmp → os.replace 原子換入;任一步失敗原檔零變動(★(2026-08-21 程式碼實證)原文「先寫 tmp 再驗」順序寫反;保證不變★) [test:t_set_minimal_diff,t_append_exact_dedup]
   KEY:set 走 SCALAR_KEYS 白名單(10 鍵 <!--lumos:count=10 re=\"[a-z_]+\"(?=[^}\n]*\}  # pitfall_\* 2026-08-09) in=scripts/lumos-->:status,updated,created,type,self_audit,signed_off,regen,pitfall_ask,pitfall_source,about_code_stamp;scripts/lumos:7035)、append 走 LIST_KEYS(7 鍵 <!--lumos:count=8 re=\"[a-z_]+\"(?=[^}\n]*\}   # aliases 2026-08-05) in=scripts/lumos-->:verified_by,plan_refs,related,tags,aliases,pitfall_when,core_refs;7036)★原文列舉漏 pitfall_*/aliases/pitfall_when,(2026-08-21 程式碼實證);以常數為準勿再列舉★;白名單外 key 直接 rc2(list 用 append、decisions 翻盤/新增走 decision-*) [test:t_append_block_key_rejected]
   KEY:鐵則1(多wikilink必YAML list)由 append 結構性保證——一項一行 + link_target dedup,絕不字串塞多個[[]];鐵則3/4(含「: 」長文引號化、日期 bare)由 fmt_scalar/_fmt_decision_value 包辦
@@ -52,6 +52,10 @@ summary: |-
   DEP:scripts/lumos atomic_write_verify｜load_raw_for_edit｜_write_lf(唯一寫入原語,UTF-8/LF/no-BOM)｜parse_frontmatter｜parse_decisions
   TEST:set/append/decision/archive/new 全套 t_-prefixed 回歸(t_set_*,t_append_*,t_decision_*,t_archive_*,t_new_*);狀態標籤同步 t_set_status_syncs_tag+t_status_tag_drift_guard
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]lumos set 把 Issue 改成結案值(done/resolved/wontfix:狀態表 issue 那一格與結案集合的交集,不用跨類型的結案集合)時,列出它★全部★回頭條件、只印不擋,結案時才有人看到留著的 REVISIT;跟 doctor E5 共用一支判定,不塞進計劃收尾的連帶待辦(那支只管計劃)
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]] d1]新增 summary-add 往摘要加一行,寫入前跑提交時那套筆記形狀與格子檢查(_summary_write_shape_check),summary-line 換出來的新行也跑同一支;格子的舊行鍵照提交時的來源組(HEAD 版本這篇的摘要加被換掉的那一行) [出處:web 示範兩個代理都要加 RULE 行只能手改開頭欄位] [因:多一個寫入入口不能變成繞過提交檢查的路;傳 None 會把改舊行當新寫] [不選:不檢查前綴(沒前綴的孤行讓兩道檢查都空轉)] [test:t_summary_add_runs_note_shape_check] [test:t_summary_line_runs_shape_check]
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]append 的 lands_in 在寫入端就跑讀取端(lint、處置閘)同一支 _lands_in_bad:先用 link_target 拿掉 [[ ]] 與 .md,合格就寫成純字串並講改了什麼,仍不是 Systems/<名> 就擋;set 與 append 的說明列出可改欄位,跟擋下訊息共用 _set_keys_text、_append_keys_text [出處:web 示範後端代理照收連結寫法、到處置閘才被擋] [因:寫入端與讀取端判法不同,錯的值要到最後一關才被發現] [test:t_append_lands_in_normalizes]
+  WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r2]寫入前形狀檢查(當時是 _drift_fix_shape_err 共用;r3 起共用判定抽成 _write_shape_verdict,_drift_fix_shape_err 只剩 drift fix 的薄包裝)照 note_shape 總開關:off 不檢查、warn 只提醒;summary-line 只在確定不是 git 專案時跳過,git 跑不起來照擋 [出處:代碼審 r2 架構對齊、資安席] [因:同一支寫前檢查不能一處看開關一處不看;逾時不該被當成非 git 放過] [test:t_drift_fix_shape_follows_gate]
+  WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r3]寫入前形狀檢查收成 _write_shape_verdict 回(擋下原因、提醒清單),warn 的提醒跟格子提醒一樣由呼叫端印,設定讀一次傳下去;擋下訊息由呼叫端照自己的形狀加前綴,drift fix 走薄包裝 _drift_fix_shape_err [出處:代碼審 r3 架構對齊席] [因:同一命令裡兩種提醒走兩條通道、前綴靠字串開頭判斷] [test:t_summary_write_warns_via_return_list]
 decisions:
   - content: 所有 frontmatter 寫入經 atomic_write_verify「寫 tmp → re-parse 自驗(值正確且無新 lint 指紋)→ os.replace」,任一步敗則原檔零變動
     id: d1
@@ -95,23 +99,25 @@ about_code:
 
 [[Issues/過期鎖接手可能雙持]] 的跨程序交錯證明「先看 mtime 再按路徑 rename」可把別人剛建的新鎖搬走。[[Projects/過期鎖安全接手_計劃]] 決定停止自動接手，理由是派工鏡頭共用此原語，鎖內的啟動者 PID 不能證明背景工作已停；只加 PID 檢查會把同一類雙持帶回來。正常獨佔建立時要處理短寫與建檔錯誤，否則停止自動接手反而會使半成品鎖永久阻斷。防回歸測試為 `t_excl_lock_stale_takeover_is_single_owner`、`t_excl_lock_creation_failure_cleans_own_file`、`t_vault_stale_lock_fails_with_path`。這是同版程序的保證；混用舊版前須先停舊進程，不能宣稱跨版本安全。
 
-`scripts/lumos` 的**專案層圖譜寫入原語**(7 個子指令)—— 對知識圖譜 frontmatter 的唯一安全寫入路徑。直接手改 frontmatter / obsidian `property:set` 會繞過寫後自驗與格式鐵則(實測 `property:set` 塞多 wikilink 會長出亂碼 ghost 節點)。
+`scripts/lumos` 的**專案層圖譜寫入原語**(下表各列;以 `lumos --help` 為準)—— 對知識圖譜 frontmatter 的唯一安全寫入路徑。直接手改 frontmatter / obsidian `property:set` 會繞過寫後自驗與格式鐵則(實測 `property:set` 塞多 wikilink 會長出亂碼 ghost 節點)。
 
 > 源起:CLI 核心非日報觸發。
 
-## 八個原語(對應 `cmd_*`;2026-08-24 自足性審計補回漏列的 remove)
+## 寫入原語(對應 `cmd_*`;2026-08-24 自足性審計補回漏列的 remove,2026-10-15 補 summary-add/summary-line)
 | 指令 | 結構層 | 做什麼 |
 |---|---|---|
 | `set <node> <key> <value>` | 純量 | 改 `SCALAR_KEYS`(以 scripts/lumos 常數為準,2026-08-24 為 10 鍵含 about_code_stamp);行級手術最小 diff |
 | `append <node> <key> "[[x]]"` | list | 追加 `LIST_KEYS`(以常數為準,2026-10-03 為 10 項,含 about_code/core_refs/pitfall_when/aliases/lands_in/system_refs);鐵則1 安全格式 + `link_target` dedup |
 | `remove <node> <key> [value]` | list/純量 | 逐值拿掉 list 項(清死背書 verified_by/拔 core_refs);不帶 value=整欄拿掉純量(骨架欄 type/status/created 擋);同受 atomic_write_verify 保護 |
+| `summary-add <node> "<一行>" [--after 片段]` | 摘要 | 摘要加一行(要有前綴;去重;寫前跑提交時的筆記形狀與格子檢查,舊行照提交時的舊行規則),[[Projects/筆記指令健檢與規格閘小修_計劃]] d1 |
+| `summary-line <node> "<舊片段>" "<新片段>"` | 摘要 | 換或刪摘要裡唯一對上的那一段;換出來的新行同樣跑寫前形狀檢查 |
 | `self-audit <node> [--model][--date]` | 純量 | 寫 `self_audit: <model>/<date>` 節點級自足性審計戳記(內部即 `set self_audit`) |
 | `decision-add <node> "<content>" --decided DATE [--context][--why]` | 巢狀 | append 一條 ADR 決策(無 `decisions:` 則在 fm 末尾建) |
 | `decision-supersede <node> "<content子字串>" --by "..." [--ended DATE]` | 巢狀 | 把該條決策標 `valid:false` + 補 `superseded_by`/`ended` |
 | `new <type> <name>` | 建檔 | 依 `TEMPLATES`(system/verification/issue/project)建檔 + 印「寫入當下教學」(符號行/合約鏈) |
 | `archive [--days N] [--apply]` | 移檔 | 滾動歸檔老 Verification(days 是選填旗標預設 180,非位置參數;另見 `cmd_archive` 的「活守衛護欄」邏輯) |
 
-`new`/`archive` 嚴格說是建檔/移檔而非 fm mutation;其餘(set/append/remove/self-audit/decision-add/decision-supersede,2026-10-12 加 question-add/question-set)走 `atomic_write_verify`。寫入鎖 `_vault_write_lock`:2026-10-12 起所有呼叫 `atomic_write_verify` 的入口都拿同一把(set/append/remove、決策四支含 reindex --all 與 amend、決策引用、守衛綁定與審計、question-add/set),`atomic_write_verify` 沒拿鎖就不寫。
+`new`/`archive` 嚴格說是建檔/移檔而非 fm mutation;其餘(set/append/remove/self-audit/decision-add/decision-supersede,2026-10-12 加 question-add/question-set,2026-10-15 加 summary-add/summary-line)走 `atomic_write_verify`。寫入鎖 `_vault_write_lock`:2026-10-12 起所有呼叫 `atomic_write_verify` 的入口都拿同一把(set/append/remove、決策四支含 reindex --all 與 amend、決策引用、守衛綁定與審計、question-add/set),`atomic_write_verify` 沒拿鎖就不寫。
 
 ## T1 寫後自驗 atomic(核心不變式)
 

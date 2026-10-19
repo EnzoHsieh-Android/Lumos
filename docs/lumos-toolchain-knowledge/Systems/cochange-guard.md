@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-07-24
+updated: 2026-10-15
 self_audit: sonnet/2026-07-24
 about_code_stamp: batch-2026-08-23/2026-08-23/e9c48c3fe38c
 tags:
@@ -39,7 +39,7 @@ about_code:
 ## CLI
 
 - `lumos cochange rules [--all] [--repo] [--json]` — 預設輸出=check 會告警的規則集；`--all` 解除 confidence 門檻（support 硬底線 2 全域不解除）。
-- `lumos cochange check [--staged|--diff <A..B>] [--repo] [--json]` — 皆缺 rc 2、同給 `--diff` 優先；`--diff A..B` 挖掘母體到 A 為止（被查 commit 不自我豁免）。
+- `lumos cochange check [--staged|--diff <A..B>] [--repo] [--json]` — 皆缺時照 `--staged` 查(2026-10-15 起,跟 home check、note-shape 一致;`--diff ""` 是範圍寫錯 rc 2,見 [[Projects/筆記指令健檢與規格閘小修_計劃]])、同給 `--diff` 優先；`--diff A..B` 挖掘母體到 A 為止（被查 commit 不自我豁免）。
 - config：`.lumos/cochange.json`（`min_support`/`min_confidence`/`max_changeset`/`exclude` 與預設合併；fail-open，提示走 stdout）。
 
 ## 實作位置
