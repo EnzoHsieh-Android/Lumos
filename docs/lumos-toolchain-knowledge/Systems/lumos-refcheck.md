@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-02
-updated: 2026-07-02
+updated: 2026-10-15
 self_audit: sonnet/2026-07-24
 about_code_stamp: batch-2026-08-23/2026-08-23/20313a52aa84
 tags:
@@ -15,7 +15,6 @@ verified_by:
   - "[[Verification/2026-10-06_引用座標依實際換行_驗證]]"
   - "[[Verification/2026-10-06_引用座標修復主線CI]]"
 summary: |-
-  FLOW:refcheck <md> --repo <root>→FENCE剝/INLINE抽/剝反引號→跳://與*<>?→剝:suffix(純數字才當行號)→須含/且首段=頂層目錄→(token,line)去重→exists/is_dir/行號範圍核對→manifest{token,line,status,excerpt}+統計→rc 0/1/2
   KEY:vault-free(pre-Env 分流,同 install/bootstrap);--repo 省略時 cwd 逐層向上找 .git,無則 rc2
   KEY:去重粒度=(token,line) tuple,刻意不沿用 doctor Check P 的 token 級(同檔多行號不塌;manifest 粒度掛行號)——抽取 step1-2 同款、複製非共用
   KEY:只驗 spec→repo 指涉、不驗 spec 內部一致性(§ref/旗標/常數)——canary 保留地,refcheck 抓走=test-the-tester 防線報廢;(d)型 canary 靠裸檔名(無/)天然在抽取域外(散文規範非機械強制)
@@ -23,6 +22,8 @@ summary: |-
   DEP:[[canary-audit]]｜doctor Check P(抽取規則同源)
   TEST:t_refcheck 14 checks(missing/ok+excerpt/out_of_range/範圍行號/同檔多行號不塌/目錄型/跳過規則/rc語意)
   VERIFY:[[2026-07-02_lumos-refcheck]]
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]refcheck 認三種不是真不存在的路徑:反引號後面緊接(新增)的列 planned、被 git 忽略的執行期檔列 ignored,兩種都不算 missing、不讓回傳碼變 1;一行指令(第一個詞是存在的路徑、第二個詞不像路徑——不含 / 也沒有副檔名,代碼審 r2)只核對第一個詞,帶空白的路徑照整串核對(_node_code_ref_tokens 的 cmdline 選項,預設關、推筆記與每支檔有家不受影響);doctor P 段用同一組 _planned_ref_tokens、_ref_cmdline_token、_git_ignored [出處:web 示範前端新專案每個路徑都是新的,每輪派工要手動說明] [因:refcheck 只核對存在,分不出打錯字與還沒建] [test:t_refcheck_planned_path]
+  WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r3]一行指令的判法再收:第一個詞要是存在的檔案(資料夾開頭的帶空白路徑照整串核對),大寫開頭接小寫的限定名(Env.run)不算副檔名路徑、全大寫的 README.md 照算檔名 [出處:代碼審 r3 正確性、邊界席:src/app notes 被截成存在的資料夾] [因:資料夾不會是指令] [test:t_ref_path_dir_first_word_is_path]
 decisions:
   - content: 抽取邏輯從 Check P 複製而非抽共用 helper;去重粒度 (token,line) 與 Check P 的 token 級刻意分歧
     id: d1

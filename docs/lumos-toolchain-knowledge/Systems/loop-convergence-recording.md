@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-14
+updated: 2026-10-15
 self_audit: sonnet/2026-08-26
 about_code_stamp: claude/2026-08-30/be0e9557e400
 tags:
@@ -58,6 +58,7 @@ summary: |-
   TEST:t_loop_status + t_canary_loop_fields;258 passed
   VERIFY:[[Verification/2026-06-19_loop-convergence-recording]]
   WHY:逃逸帳可以歸因到殘留:loop escape 加選填 --residual-ref <資料夾>/<節點>#dN(驗法跟 guard residual 寫標記同一支:全名、存在、沒翻案),記進 residual_ref 欄;跟 --list、撤回、--auto 一起用回 2(自動記帳沒有歸因來源);escape-stats 印歸因到殘留的列數(撤回的不算,JSON 是 totals.residual_ref) [出處:[[Projects/審查收斂規則_計劃]]〈做法〉6] [因:審查收斂規則的撤除條件靠它量——殘留裡的缺陷其實是測得到的局部退化,就撤回殘留這條出口] [test:t_loop_escape_residual_ref]
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]kind=spec-gate 留痕另外寫一份進版控治理帳(kind=spec-gate-record),審查帳那份照舊;推送閘兩本合讀取最晚一筆 [出處:消費專案的審查帳被 gitignore,乾淨 clone 推送時規格閘留痕不見] [因:推送閘讀的留痕要進 CI 讀得到的帳] [test:t_spec_gate_record_in_governance_log]
 decisions:
   - content: 收斂用 tail-K 滑動窗(append 序最後 K 筆全 caught+clean/minor),非「每輪都得乾淨」;排序用檔案 append 序而非 ts
     id: d1

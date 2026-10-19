@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-13
+updated: 2026-10-15
 self_audit: claude-fable/2026-08-24
 about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
@@ -50,6 +50,8 @@ summary: |-
   KEY:stale --candidate 無 --match 直接 rc2 拒絕(反直覺限制:即使給了 --candidate 沒帶 --match 也拒,避免列全 vault 變噪音);--candidate --match <詞> 才有效
   TEST:scripts/test_lumos.py(t_-prefixed Python 回歸,非 doctor Check T 認的 C# xunit)
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]doctor E5 的到期清單裡,來源是已結案 Issue 的那一行標「這篇 Issue 已結案」,照樣列、照樣計數;只標 Issue——已收尾的計劃常刻意留著撤除用的回頭條件,標了反而讓人以為可以刪
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]lint 唸寫下就已成立的回頭條件與 RULE 撤除條件(_lint_born_true):只判 when-file、只有路徑的 when-gone、when-status 三種,一行整組成立才唸(跟推送閘 _drift_probe_line 同一支),新寫=上游追蹤分支(沒有就 HEAD)那一版沒有同一組條件;沒有條件的筆記不叫 git,工作目錄路徑樹整次執行只列一次 [出處:web 示範修補代理寫 when-file 指已存在的檔、推送才被擋] [因:回頭條件消失式與生來成立那份往回查歷史三輪收不了,這次只看寫下當下;doctor 逐篇呼叫 lint,每篇都叫 git 會多四五十秒] [不選:判 when-symbol 與 when-test(要讀程式內容,交給推送)] [test:t_lint_born_true_warns]
+  WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]lint 先唸計劃實務隱患節裡寫錯格式的已排除行(_lint_excluded_lines),判法用規格閘同一支 _excluded_line,引用塊與散文不唸 [出處:web 示範把已排除寫成類名加括號、到規格閘才知道缺行] [因:寫的當下就該知道規格閘認不得] [test:t_lint_excluded_line_format]
 related:
   - "[[Systems/lumos-cli-write]]"
   - "[[Systems/lumos-cli-lifecycle]]"
@@ -147,7 +149,7 @@ about_code:
   - `stats`(`cmd_stats`):各資料夾節點數 + total。
 
 ## 關鍵設計
-- **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)、doctor --ci 寫 governance-log,其餘純讀);寫入走另 7 個原語(set/append/new/archive/decision-add/decision-supersede/self-audit),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
+- **讀寫嚴格分軌**:這 14 個不改圖譜節點檔(context/show 寫 usage-local 事件帳(2026-10-04 前叫 usage-log,不進版控)、doctor --ci 寫 governance-log,其餘純讀);寫入走另外的寫入原語(見 [[Systems/lumos-cli-write]] 的表),經 `atomic_write_verify`(寫 tmp → re-parse 自驗 + lint 無新指紋 → atomic rename,任一步敗則 tmp 丟棄原檔不動)。詳見寫入原語節點。
 - **doctor vs lint 分工**:doctor 全圖權威(跨節點 + [test:] 存在性);`lint <節點>` 單檔 node-local 快檢,predicts pre-push 會不會擋。寫節點當下 lint,收尾 doctor。
 - **lint 另有一項軟提醒:開頭欄位的鍵打錯會被唸出來**(2026-09-06 全 repo 審視 #16)。出身:鍵打錯(例如把 `valid_under` 打成 `valid_unde`)以前是**所有檢查靜默略過**——那個欄位等於沒寫,而它可能正是承載回頭條件或驗證關聯的欄位。現在會指出哪個鍵不認得,並在只差一個字元時給出近名候選。
   - ★只算 warning 不升 error★:工具對未知欄位的立場是前向相容(消費專案與跨專案核心庫各有自己的欄位),升成 error 會讓別人的圖譜每次 lint 都被嘮叨。

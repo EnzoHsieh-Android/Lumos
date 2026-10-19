@@ -233,6 +233,104 @@ def classify_v3(probe):
             "kept": sorted({m.group(0) for m in kept})}
 
 
+# ── 第四版(Projects/筆記指令健檢與規格閘小修_計劃〈做法〉4,2026-10-15):條件與時序子句只認語法記號 ──
+# ①往後找「時」「前」時,收尾括號跳過不停 ②「時」「前」後面接任何 Unicode 標點(扣斜線、連字號類、底線)、空白、行尾,或情態詞「應該須」
+# ③否定字眼所在那一小段以條件開頭詞開頭(段首、去列表記號後;先比條款句式的停用詞表,「若干」「若是」不算)。不收當、這時、此時。
+CLOSE_V4 = set(")）」』")
+MODAL_V4 = set("應該須")
+COND_OPEN_V4 = ("若", "如果", "假如", "要是", "一旦")   # 代碼審 r1 邊3 拿掉「只要」「等到」(只要求、等到期)
+COND_PAIRED_V4 = {"只要": "就才便", "等到": "才再就"}   # 代碼審 r2 通4:配上後面的就/才才算條件
+SENT_END_V4 = re.compile(r"[。;；!?！？]")              # 代碼審 r3 G3:「只要…就」的配對字往後找到句末
+NOT_CLAUSE_V4 = set("/／\\_＿-‐‑‒–－﹣")               # 代碼審 r2 G5:Unicode 標點都算子句,只扣斜線、連字號類、底線
+COND_STOP_V4 = tuple(LM._TRIGGER_STOPWORDS)
+
+
+def _brk_v4(nxt):
+    import unicodedata as _ud
+    if nxt == "" or nxt in MOD_BREAK or nxt in MODAL_V4 or nxt.isspace():
+        return True
+    cat = _ud.category(nxt)
+    return cat.startswith("P") and cat != "Pc" and nxt not in NOT_CLAUSE_V4
+
+
+def _is_modifier_v4(masked, m):
+    """第三版加記號 ①②:收尾括號跳過不停;「時」「前」後面接標點、空白、行尾或情態詞就算子句。"""
+    tok = m.group(0)
+    exist = tok in EXIST_TOKENS or (tok == "還沒" and masked[m.end():m.end() + 1] == "有")
+    for j in range(m.end(), min(len(masked), m.end() + 9)):
+        ch = masked[j]
+        if ch in CLOSE_V4:
+            continue
+        if ch in MOD_STOP:
+            return False
+        if ch == "→" or masked[j:j + 3] == "的時候":
+            return True
+        if ch == "的" and not exist:
+            return True
+        if ch in "時前" and _brk_v4(masked[j + 1:j + 2]):
+            return True
+    return False
+
+
+def _cond_open_v4(head):
+    """記號 ③:這一小段(否定字眼之前的部分)以條件開頭詞開頭。"""
+    h = LM._REVISIT_MARK_RE.sub("", head.lstrip(), count=1).lstrip()
+    if any(h.startswith(w) for w in COND_STOP_V4):
+        return False
+    return any(h.startswith(w) for w in COND_OPEN_V4)
+
+
+def _cond_paired_v4(head, tail):
+    h = LM._REVISIT_MARK_RE.sub("", head.lstrip(), count=1).lstrip()
+    return any(h.startswith(w) and any(c in tail for c in pair) for w, pair in COND_PAIRED_V4.items())
+
+
+def classify_v4(probe):
+    """第四版:同 classify_v3,修飾語換成 _is_modifier_v4,另扣所在小段以條件開頭詞開頭的。"""
+    s = FIELD_RX.sub(lambda m: "\0" * len(m.group(0)), probe)
+    masked, _n = _mask_notlack(s)
+    nar = list(RX_NARROW_V3.finditer(masked))
+    if not nar:
+        return None
+    spans = _quote_spans(masked)
+    unq = list(masked)
+    for a, b in spans:
+        for k in range(a, b):
+            unq[k] = "\0"
+    unq = "".join(unq)
+    live = []
+    for m in nar:
+        if any(a <= m.start() < b for a, b in spans) or _is_modifier_v4(masked, m):
+            continue
+        a, b = _segment(masked, m.start())
+        se = SENT_END_V4.search(masked, m.end())       # 代碼審 r3 G3:配對字找到句末為止,逗號括號不切
+        if _cond_open_v4(masked[a:m.start()]) or _cond_paired_v4(masked[a:m.start()], masked[m.end():se.start() if se else len(masked)]):
+            continue
+        live.append(m)
+    kept = []
+    for m in live:
+        a, b = _segment(masked, m.start())
+        seg_before, seg = unq[a:m.start()], unq[a:b]
+        if RX_RULE_V3.search(seg) or RX_HIST_V3.search(seg_before):
+            continue
+        kept.append(m)
+    return {"narrow": sorted({m.group(0) for m in nar}), "live": sorted({m.group(0) for m in live}),
+            "kept": sorted({m.group(0) for m in kept})}
+
+
+def labels_v4_vs_v3(labels_path):
+    """2026-09-30 的人工判定逐行比 v3 與 v4:回 {label: v3 會提醒、v4 不提醒的行數} 與那幾行(重跑報告用)。"""
+    d = json.loads(Path(labels_path).read_text(encoding="utf-8"))
+    lost, rows = Counter(), []
+    for k, v in d.items():
+        probe = v["text"]
+        a, b = classify_v3(probe), classify_v4(probe)
+        if a and a["kept"] and not (b and b["kept"]):
+            lost[v["label"]] += 1
+            rows.append((k, v["label"], probe[:80]))
+    return lost, rows
+
+
 def excluded_v3(probe, region):
     """第三版不看的行 → 原因字串或 None。列表與引用記號用 scripts/lumos 的 `_REVISIT_MARK_RE`(全檔唯一那一份,
     設計審 r2 架構對齊 F4),不自己另寫。"""
