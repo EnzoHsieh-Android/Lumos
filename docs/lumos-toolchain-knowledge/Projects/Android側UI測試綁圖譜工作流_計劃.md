@@ -2,7 +2,7 @@
 type: project
 status: todo
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-10-19
 self_audit: sonnet/2026-08-11
 about_code_stamp: batch-2026-08-23/2026-08-23/dcf4c64e7ca5
 related:
@@ -16,21 +16,21 @@ tags:
   - status/todo
   - scope/stack-knowledge
 summary: |-
-  FLOW:功能完成→除單元測試外,用 maestro 建該功能的 UI flow 檔→以檔案形式實跑通過→用 [test:] 綁回該功能的圖譜節點→之後重測/重驗直接跑檔
+  FLOW:功能完成→除單元測試外,用 maestro 建該功能的 UI flow 檔→以檔案形式實跑通過→用 `[test:]` 綁回該功能的圖譜節點→之後重測/重驗直接跑檔 [來源:人工] [confirmed:2026-10-19]
   KEY:★缺口是三重的,且都很精確(對照既有 [[Systems/pitfalls-code-loop]] 的「UI 層驗收慣例」2026-08-05)★—①**時機**:既有慣例掛在 code-loop 終審(審查時派 agent 去看一眼),使用者要的是**功能完成當下** ②**產物**:既有留截圖+console 存 governance/review-reports/<loop-id>/ui-evidence/,那是**一次性證據**;要的是 flow 檔=**可重放資產**。⚠既有慣例自己寫著「證據可重放非口頭」——★但截圖其實不可重放,flow 檔才是★ ③**棧(★分兩層,原稿把範圍講太大★)**:`[test:]`/Check T 機制層**Android 早有通道**(maestro profile,見下方 KEY);缺的只有**慣例散文層**——UI 層驗收慣例只點名 Playwright MCP / claude-in-chrome(逐字核對 Systems/pitfalls-code-loop:17),沒寫「agent 要開 Android 時走哪條路」
-  KEY:★綁定機制不只已存在,maestro 這條早在 2026-07-02 就交付並驗證過★(見 [[Systems/test-profile-multiplatform]],status done + 兩份 Verification;commit f527e7f)—TEST_PROFILES 內建 maestro profile(scripts/lumos:1763):掃 `.maestro/` 下 yaml、`^appId:` 濾非 flow、綁 flow 的 **`name:` 欄位**,Check T 驗存在性,測試 t_maestro_profile_discover。語法=`[test:maestro:flow_name]`,指令=`lumos guard bind <node> "<KEY子字串>" <flow_name> --platform maestro`。★原稿提的「[test:] 接受檔案路徑」不是缺口而是與既有設計正面衝突★:cmd_guard_bind 明文「method 維持識別字、不含冒號,IDENT_RE 不放寬」(scripts/lumos:4479-4482)、profile 註解「綁 name: 欄位(識別字安全)」——檔案路徑含 `/`、`.`、`-`,放寬會一併鬆掉 `[test:平台:名]` 的冒號解析。★剩的是消費端設定,但比一行 JSON 複雜(r1-F1)★:`platforms` 是**全域模式開關**,一宣告 legacy test_profile 即失效、無冒號的舊 ref 全歸 default_platform——mOrangePos 只宣告 maestro 會讓既有 5 條 kotlin 綁定全懸空、doctor 直接紅(r2 實測訂正,r1 誤寫 19);正解=**雙平台宣告**(android=kotlin-junit + maestro,default_platform=android,maestro 的 root 指 `.maestro/` 免 doctor 掃整個 repo)。★三個照抄就壞★:①KEY 行必須單行單括號逗號分隔(續行對 Check T/contracts/lint 全隱形)②測試名須合法識別字(`Class.中文` 被 guard bind rc2 拒收)③`name:` 行不得帶行尾註解(`\s*$` 硬錨+不剝 YAML `#`)。既有 flow 是**加** name: 不是改(實查三支都沒有)
+  KEY:★綁定機制不只已存在,maestro 這條早在 2026-07-02 就交付並驗證過★(見 [[Systems/test-profile-multiplatform]],status done + 兩份 Verification;commit f527e7f)—TEST_PROFILES 內建 maestro profile(scripts/lumos 的 TEST_PROFILES):掃 `.maestro/` 下 yaml、`^appId:` 濾非 flow、綁 flow 的 **`name:` 欄位**,Check T 驗存在性,測試 t_maestro_profile_discover。語法=`[test:maestro:flow_name]`,指令=`lumos guard bind <node> "<KEY子字串>" <flow_name> --platform maestro`。★原稿提的「`[test:]` 接受檔案路徑」不是缺口而是與既有設計正面衝突★:cmd_guard_bind 明文「method 維持識別字、不含冒號,IDENT_RE 不放寬」(scripts/lumos 的 _cmd_guard_bind_locked;2026-10-15 起已改用 _test_name_ok,見 [[Projects/測試名收自由字串_計劃]])、profile 註解「綁 name: 欄位(識別字安全)」——檔案路徑含 `/`、`.`、`-`,放寬會一併鬆掉 `[test:平台:名]` 的冒號解析。★剩的是消費端設定,但比一行 JSON 複雜(r1-F1)★:`platforms` 是**全域模式開關**,一宣告 legacy test_profile 即失效、無冒號的舊 ref 全歸 default_platform——mOrangePos 只宣告 maestro 會讓既有 5 條 kotlin 綁定全懸空、doctor 直接紅(r2 實測訂正,r1 誤寫 19);正解=**雙平台宣告**(android=kotlin-junit + maestro,default_platform=android,maestro 的 root 指 `.maestro/` 免 doctor 掃整個 repo)。★三個照抄就壞★:①KEY 行必須單行單括號逗號分隔(續行對 Check T/contracts/lint 全隱形)②測試名須合法識別字(`Class.中文` 被 guard bind rc2 拒收)③`name:` 行不得帶行尾註解(`\s*$` 硬錨+不剝 YAML `#`)。既有 flow 是**加** name: 不是改(實查三支都沒有)
   KEY:★實戰要求一:斷言重點是「使用者看到什麼」,不是「有沒有被擋」★—mOrangePos 2026-08-11 實機抓到的缺陷:折扣超過 100% 的提示誤用 `R.string.input_err`(登入頁的「請輸入員工編號!」)。★單元測試斷言的回傳值 `Result.OutOfRange` 一直是對的,錯的是 UI 拿它去換哪一句話★——這一型單元測試結構上測不到,也正是 UI flow 唯一無可取代的價值。故 flow 的斷言必須含「畫面上出現什麼字」,只斷言「流程有沒有被擋」等於白做
-  KEY:★實戰要求二:「寫了 flow」≠「flow 會跑」★—inline 跑通不代表寫成檔案跑得通(runFlow 相對路徑、optional 步驟、共用子流程都可能出錯)。★工作流必須要求以檔案形式實跑通過一次才算完成★,同 [test:] 綁定後要真跑一次的精神(信任階梯:真跑>機械查>LLM 判官>自報)
+  KEY:★實戰要求二:「寫了 flow」≠「flow 會跑」★—inline 跑通不代表寫成檔案跑得通(runFlow 相對路徑、optional 步驟、共用子流程都可能出錯)。★工作流必須要求以檔案形式實跑通過一次才算完成★,同 `[test:]` 綁定後要真跑一次的精神(信任階梯:真跑>機械查>LLM 判官>自報)
   KEY:★實戰要求三:裝置前置是這條路線的真實成本,沒文件化第二次就沒人跑得起來★—mOrangePos 實測撞到四關:①首次使用授權閘(要算挑戰碼)②複製設定★務必改裝置名★(否則兩台產生重複單號,踩既有事故)③一人登入開著時重裝沒登出會被擋(要 logo 連點解鎖)④**別台機器編的 APK 簽章不同,要換版本得先移除、設定全掉**。工作流要把「裝置 ready 的定義」寫成可檢查的前置,不能當常識
   KEY:★四個會讓腳本「沉默地做錯事」的坑(不是報錯,是回報成功但做錯)★—①同畫面兩個鍵盤共用同一組 resource-id→用 text/id 選會打到另一個且不報錯 ②Maestro 的 `text:` 是**全字串正則**,`tapOn:"."` 匹配任意字元(實測點到「1」,把 3.25 打成 3125)③某些欄位點選付款方式會自動帶值,再自己輸入反而錯 ④SeekBar 要 swipe 不能 tap,起點落在元件外會靜默無效。★這類「綠燈但做錯」比紅燈危險,產生 flow 的 agent 必須被明確警告★
   KEY:★實務隱患(r1 三席一致補;pitfalls --check 機械零命中≠不需要)★—★金流/prod 不可逆最重★:flow 跑真裝置真後端,參考實作檔頭記著「驗過…單號 M092026081100001」=真開了一張單,而「複製設定務必改裝置名否則重複單號」證明單號序列跨裝置共用且會寫入 → v1 硬性:只准跑測試門店/測試帳,無測試門店則標「僅手動不進回歸集」;併發=裝置獨佔(人機同時操作→綠燈但畫面已亂=第六型)+`cmd_guard_bind` 無鎖 read-modify-write(兩次綁定重疊會無聲吃掉先寫的 ref);資源=裝置狀態不自動還原、換版本不可逆清設定;認證=挑戰碼人工步驟→**v1 不進自主 loop**;PII=影片/截圖含帳號單據,證據只留遮罩截圖、影片不入庫(無機械守衛);效能=root 指 `.maestro/` 免 doctor os.walk 整個 Android repo。已排除:快取/限流/遷移
-  PRIOR-ART:①最小解在既有層—`[test:]` 合約鏈 + `lumos guard bind --platform` + `.lumos/test-layers.json` 三個都已存在,★且 maestro 綁定已交付(2026-07-02)★;剩下的只有消費端設定與慣例散文層 Android 通道,**不造新機制、不新增治理層、也不改語法**(★訂正:原稿此處寫「只需讓 [test:] 接受 flow 檔路徑」——那是誤判,見 d1★;★教訓:PRIOR-ART ① 要問的不只「最小解在哪一層」,還有「那一層現在做到哪了」——查了才知道已完成★) ②世界解過—**Serenity BDD / Cucumber 的 living documentation**:把驗收條件變成可執行測試、再由測試結果產出活文件,核心價值=**同一份東西同時是規格與測試,兩者不會漂移**;**Maestro** 本身則提供 YAML flow(無編譯循環)、CI 整合、每次執行留影片/log/flake 偵測 ③裁定=**borrow-design**(借「規格與測試不分家」的意圖,原生實作;零依賴家規排除 adopt)
+  PRIOR-ART:①最小解在既有層—`[test:]` 合約鏈 + `lumos guard bind --platform` + `.lumos/test-layers.json` 三個都已存在,★且 maestro 綁定已交付(2026-07-02)★;剩下的只有消費端設定與慣例散文層 Android 通道,**不造新機制、不新增治理層、也不改語法**(★訂正:原稿此處寫「只需讓 `[test:]` 接受 flow 檔路徑」——那是誤判,見 d1★;★教訓:PRIOR-ART ① 要問的不只「最小解在哪一層」,還有「那一層現在做到哪了」——查了才知道已完成★) ②世界解過—**Serenity BDD / Cucumber 的 living documentation**:把驗收條件變成可執行測試、再由測試結果產出活文件,核心價值=**同一份東西同時是規格與測試,兩者不會漂移**;**Maestro** 本身則提供 YAML flow(無編譯循環)、CI 整合、每次執行留影片/log/flake 偵測 ③裁定=**borrow-design**(借「規格與測試不分家」的意圖,原生實作;零依賴家規排除 adopt)
   KEY:★與 Serenity/Cucumber 的刻意偏離★—它們引入 Gherkin + step definitions 這一層**翻譯層**,規格與程式之間多一組要維護的膠水。本設計**不做翻譯層**:敘述本來就在圖譜節點裡、可執行步驟本來就在 flow 檔裡,★只需要一個指標把兩者綁起來★。不新增第三種產物
   KEY:★天花板(先寫明,免得被當成全覆蓋)★—①UI flow 對「畫面長怎樣」敏感,版面一改就要重錄 ②只驗走得到的路徑,取不到裝置仍是「明記未驗+原因」不得靜默跳過 ③不取代單元測試:規則面仍歸單元測試,UI flow 守的是接線與呈現 ★r1 補★ ④`[kill:]` 第三階 v1 **走不通**(kill 改副本原始碼,但裝置跑的是已裝 APK;斷言被刪掉不會有任何機械檢查翻紅) ⑤`name:` 唯一性與 name↔檔名一致性**都無守衛**(discover 回不記路徑的扁平 set) ⑥Check T **不看目錄**(dirs 只被 scaffold 用,任何帶 appId: 的 yaml 有合法 name 就算證據,含共用子流程) ⑦★第一缺口「時機」v1 沒關上★—待辦全是設定/散文/清單/prompt,沒一條動觸發點,既有軟提醒只掛 pre-push
-  DECISION:[2026-08-11]先**用**既有 [test:] 與 test-layers,不新造機制(原寫「擴」,審閱訂正為「用」——不需擴,見下條);Android 通道補在既有「UI 層驗收慣例」之下而非另立
+  DECISION:[2026-08-11]先**用**既有 `[test:]` 與 test-layers,不新造機制(原寫「擴」,審閱訂正為「用」——不需擴,見下條);Android 通道補在既有「UI 層驗收慣例」之下而非另立
   DECISION:[2026-08-11 r1→r2 翻盤]d2「豁免 S1+改 skill」已被 d3 取代(前提錯:S1 是紀律層非機械閘)(invalid)
   DECISION:[2026-08-11 r2]★不改任何 skill★—綁定照常綁星標合約;有裝置真跑記 pass --note,沒裝置走既有 code-loop skip --note 留痕。d2 為解一個不存在的死鎖要改 skill+造新產物,PRIOR-ART ① 沒重跑(本 loop 第二次犯同型錯)(valid)
-  DECISION:[2026-08-11 審閱訂正]★不改 [test:] 語法★—maestro 綁定已交付且綁 name: 欄位(識別字安全),改吃檔案路徑會鬆掉 IDENT_RE 與 [test:平台:名] 冒號解析;v1 只補消費端設定+慣例散文層 Android 通道(valid)
+  DECISION:[2026-08-11 審閱訂正]★不改 `[test:]` 語法★—maestro 綁定已交付且綁 name: 欄位(識別字安全),改吃檔案路徑會鬆掉 IDENT_RE 與 `[test:]` 的「平台:名」冒號解析;v1 只補消費端設定+慣例散文層 Android 通道(valid)
 decisions:
   - content: "不改 [test:] 語法接受檔案路徑;maestro 綁定沿用既有「綁 flow name: 欄位」設計,v1 只補消費端設定與慣例散文層 Android 通道"
     id: d1
@@ -120,10 +120,10 @@ KEY:★INVARIANT★ 手動折扣百分比不得超過 100% [test:manualDiscountO
 ★三個照抄就壞的地方（r1 三席抓到，逐條釘死）★：
 
 1. **同一行、同一個中括號、逗號分隔**——不能寫成兩行兩括號。`INVARIANT_RE` 要求行首是 `KEY:★INVARIANT★`，續行對 Check T／`contracts`／`lint` **全部隱形**（不報錯、也不顯示成綁定）；`guard bind` 實際也是把新 ref 逗號併進同一括號。
-2. **測試名必須是合法識別字**——`IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]*$`（`scripts/lumos:4335`），`Class.方法` 的點號、中文都會被 `guard bind` 當場 rc2 拒收；kotlin profile 抽出的也只有函式名不含類別。原稿示範的 `ManualDiscountValidatorTest.百分比超過100必須擋下` 照抄會直接失敗。
+2. **測試名必須是合法識別字**——`IDENT_RE = ^[A-Za-z_][A-Za-z0-9_]*$`（`scripts/lumos:4335`），`Class.方法` 的點號、中文都會被 `guard bind` 當場 rc2 拒收；kotlin profile 抽出的也只有函式名不含類別。原稿示範的 `ManualDiscountValidatorTest.百分比超過100必須擋下` 照抄會直接失敗。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名,`IDENT_RE` 只留給 `guard scaffold`)
 3. **`[audit:]` 不能省**——見下方「三階鏈在 UI 層的實況」。
 
-★r2 補的第四條（兩席一致抓到，且原稿示範自己犯了）★：**Kotlin 慣用的反引號中文測試名綁不上**。mOrangePos 實際的測試叫 `` `百分比超過 100 必須擋下` ``，`KOTLIN_TEST_RE` 抽出來的就是含空白的中文原名——`IDENT_RE` 一樣拒收。**要綁合約的測試，函式名必須先改成識別字**（本例：`manualDiscountOver100Blocked`）。這是綁定路線的實質前置成本，原稿與 r1 折入都漏了。
+★r2 補的第四條（兩席一致抓到，且原稿示範自己犯了）★：**Kotlin 慣用的反引號中文測試名綁不上**。mOrangePos 實際的測試叫 `` `百分比超過 100 必須擋下` ``，`KOTLIN_TEST_RE` 抽出來的就是含空白的中文原名——`IDENT_RE` 一樣拒收。**要綁合約的測試，函式名必須先改成識別字**（本例：`manualDiscountOver100Blocked`）。這是綁定路線的實質前置成本，原稿與 r1 折入都漏了。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:反引號中文名照字面綁得上,不用先改成識別字)
 
 ```yaml
 # .maestro/smoke-05-manual-discount-over-100.yaml
@@ -137,7 +137,7 @@ name: smoke_05_manual_discount_over_100
 lumos guard bind <節點> "<KEY子字串>" smoke_05_manual_discount_over_100 --platform maestro
 ```
 
-**為什麼不能改成吃檔案路徑**：`cmd_guard_bind` 第一件事就是擋非識別字，旁邊註解白紙黑字「多平台：平台另帶（method 維持識別字、不含冒號），寫成 `[test:平台:方法]`。**IDENT_RE 不放寬**」（`scripts/lumos:4479-4482`）；profile 註解也寫「綁 `name:` 欄位（**識別字安全**）」。檔案路徑含 `/`、`.`、`-`，一旦放寬，`[test:平台:名]` 的冒號解析與識別字保證會一起鬆掉。這是當初刻意的設計選擇，不是沒想到。
+**為什麼不能改成吃檔案路徑**：`cmd_guard_bind` 第一件事就是擋非識別字，旁邊註解白紙黑字「多平台：平台另帶（method 維持識別字、不含冒號），寫成 `[test:平台:方法]`。**IDENT_RE 不放寬**」（`scripts/lumos:4479-4482`）；profile 註解也寫「綁 `name:` 欄位（**識別字安全**）」。檔案路徑含 `/`、`.`、`-`，一旦放寬，`[test:平台:名]` 的冒號解析與識別字保證會一起鬆掉。這是當初刻意的設計選擇，不是沒想到。(2026-10-15 起已被 [[Projects/測試名收自由字串_計劃]] 取代:`guard bind` 收句子名,`IDENT_RE` 只留給 `guard scaffold`)
 
 **剩下的是消費端設定——但它比一行 JSON 複雜（r1-F1，本輪最重的一條）**：
 
@@ -312,3 +312,6 @@ mOrangePos `8f239db`：
 - [ ] 「裝置 ready」的可檢查前置清單（各專案自填，如 `.maestro/README.md`）
 - [x] 產 flow 的 agent prompt（落成 `lumos-project-notes` reference.md 的〈產 maestro UI flow 的派工要求〉）：要求斷言含「畫面上出現什麼字」＋四個坑的警告＋必須以檔案形式實跑通過
 - [x] ★**「時機」觸發者已裁定（2026-08-11 Enzo）＝`lumos-project-notes` skill 退場段**★——收工前多問一句「這次有動到使用者看得到的畫面嗎」，user-scope 跨專案生效、零新機制；pre-push 軟提醒方案落選（觸發點在 push 前、不是功能完成當下）。★誠實記著：這是紀律不是機械閘，忘了就是忘了——第一缺口只從「完全沒有」變成「有人問」，沒有機械化★。落地見 [[Android側UI測試綁圖譜工作流_實作計畫]] Task 2
+
+
+> (2026-10-15 補)d1 的 why_chosen 裡「放寬 IDENT_RE 會一併鬆掉冒號解析與識別字保證」這個理由的前提已被 [[Projects/測試名收自由字串_計劃]] 取代:綁定名稱改用 `_test_name_ok`、冒號切法收成 `_split_test_ref`。「不改成吃檔案路徑」的結論照樣成立(maestro 綁 flow name: 欄位),所以不翻案。

@@ -617,12 +617,12 @@ lumos sync-verified-by --apply    # 真寫(T1 atomic append,自帶 dedup,冪等)
 
 > scaffold/bind 只省「打字」,不省「確認」。doctor Check T + 誠實鐵則(上節)照舊兜底:stub 不填(留 Assert.Fail)= 紅;綁了不存在的方法 = 懸空被擋。
 >
-> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 profile(以 `TEST_PROFILES` 為準):**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android/iOS E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('id')`/`test.describe('id')`;含空白 title 不可綁)、**`dart`**(Flutter,檔名錨 `*_test.dart`)、**`python`**(行首 `def test_*`+檔名錨)、**`swift-xctest`**(iOS:XCTest `func test*` 與 Swift Testing `@Test func` 兩代並收;頂層 `*Tests` 目錄,pure 排除 `*UITests`;2026-09-08 補,★尚無真專案跑過★)、**`node-jest`** / **`node-vitest`**(Node 後端,同一份設定:`test/it/describe('id')` 含 `.only/.skip`;檔名錨 `*.test.*`/`*.spec.*`,`__tests__/` 下無後綴的檔不在錨內;2026-09-08 補,★尚無真專案跑過★)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
+> **測試棧 profile(語言可插拔,P5)**:guard/Check T 的「認哪些測試方法」由 `.lumos/config.json` 決定。內建 profile(以 `TEST_PROFILES` 為準):**`csharp-xunit`(預設)**、**`kotlin-junit`**(Android 單元)、**`maestro`**(Android/iOS E2E,綁 flow `name:` 欄位;`file_must_match=^appId:` 只認真 flow;多字 name NO MATCH)、**`playwright`**(web E2E,綁 `test('名')`/`test.describe('名')`,標題整串比對,中文與空白都可以;不收半形逗號與方括號;檔名錨 `*.spec.*`/`*.test.*`)、**`dart`**(Flutter,檔名錨 `*_test.dart`)、**`python`**(行首 `def test_*`+檔名錨)、**`swift-xctest`**(iOS:XCTest `func test*` 與 Swift Testing `@Test func` 兩代並收;頂層 `*Tests` 目錄,pure 排除 `*UITests`;2026-09-08 補,★尚無真專案跑過★)、**`node-jest`** / **`node-vitest`**(Node 後端,同一份設定:`test/it/describe('名')` 含 `.only/.skip`,標題整串比對(句子名可綁,2026-10-15 起,見 [[Projects/測試名收自由字串_計劃]]);檔名錨 `*.test.*`/`*.spec.*`,`__tests__/` 下無後綴的檔不在錨內;2026-09-08 補,★尚無真專案跑過★)。各 profile 定:掃哪些副檔名、方法 regex、scaffold 副檔名、測試目錄偵測。**無 config = csharp-xunit,完全向後相容**。逃生口:`config.json` 的 `test` 可欄位級覆蓋 `exts`/`scaffold_ext`/`method_regex`/`file_name_match`(測試檔名錨,Playwright 自訂 testMatch 時用);多平台時寫在那個平台的設定裡(跟 `run_cmd` 同一層)。範本仍技術棧專屬、放各專案 `.lumos/guard-templates/`。
 > ```json
 > // 單平台:Android 專案 .lumos/config.json
 > { "test_profile": "kotlin-junit" }
 > ```
-> **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(`--method` 維持識別字、平台另帶,bind 寫 `[test:平台:方法]`)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
+> **多平台(單一圖譜跨平台綁測試,見 [[Systems/test-profile-multiplatform]])**:圖譜記錄橫跨前後端的系統時,用 `platforms` 多根多 profile map,讓 `[test:平台:方法]` 綁到不同 repo 的測試。`default_platform` 給無前綴裸 ref 的歸屬(多平台缺省即報錯)。`load_platforms`/`resolve_test_refs` 以「config 有無 `platforms` 鍵」為 legacy 信號,舊 `test_profile`/裸 ref 照舊。`guard bind/scaffold --platform` 指定平台(平台另帶,bind 寫 `[test:平台:名稱]`;bind 收句子名,名稱有冒號時必帶 `--platform`;scaffold 拿名字產程式碼,`--method` 維持識別字)。Check T/`classify_invariants`/`cmd_archive` 各 ref 對其平台的 root+profile 判定(跨 repo)。
 > ```json
 > // 多平台:<圖譜所在 repo>/.lumos/config.json(平台名/profile/root 依專案自訂)
 > { "default_platform": "app",
@@ -1193,7 +1193,7 @@ python3 scripts/lumos doctor
 
 **2 · 命名與位置（錯了會「Check T 綠但 flow 壞」）**
 - `name:` ＝檔名去副檔名轉底線（`smoke-05-x.yaml` → `smoke_05_x`），**識別字**、**該行無其他內容**（不得有行尾 `#` 註解）、**放在 `---` 之前的 config 區塊**。
-- 要綁的 Kotlin 測試函式名也必須是識別字——反引號中文名綁不上。
+- 要綁的 Kotlin 反引號測試名(含中文、空白)寫進 `[test:]` 時照原樣寫、反引號可留可去(整串被一對反引號包住會拆殼);不收半形逗號與方括號(2026-10-15 起,見 [[Projects/測試名收自由字串_計劃]])。`guard scaffold --method` 仍要識別字(它拿名字產程式碼)。
 
 **3 · 七個會「沉默地做錯事」的坑（回報成功但做的是別的事，比紅燈危險）**
 | 坑 | 症狀 |

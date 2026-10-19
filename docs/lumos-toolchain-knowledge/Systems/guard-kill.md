@@ -136,3 +136,8 @@ about_code:
 - [[Projects/guard殺傷力驗證_計劃]]
 - [[Systems/check-t-sentinel]]
 - [[Systems/test-profile-multiplatform]]
+
+## 句子名的配方(2026-10-15)
+
+- 配方的名稱合法性改用 `_test_name_ok`(句子名不再判「test 名不合法」),跑的時候照平台 `name_filter` 跳脫;跑之前跟推送前閘共用撞名判定(`_name_collision_reason`),撞名的配方不跑、記錯誤——篩選連帶選中別支時,壞法打紅的可能是別支,殺傷力證不出 [test:t_guard_kill_shares_collision_check];未定義、長得像平台名、冒號後緊接名稱的前綴(`android:Foo`)照舊版剝掉 [test:t_kill_method_name_prefix_rules];`_kill_method_name` 改走 `_split_test_ref`,多平台 test 欄的前綴是已定義平台才剝(`API: 逾時 顯示重試` 整串保留)。 [test:t_kill_free_string_name_paths]
+- 配方不在合約清單的提醒:印的 `lumos guard bind` 指令名稱經 `_kill_cmd_arg` 加引號;`guard settle` 收句子名,失敗時印的補救指令同樣加引號。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_kill_free_string_name_paths]

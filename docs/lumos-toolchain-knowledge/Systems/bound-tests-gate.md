@@ -151,6 +151,12 @@ WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓�
 
 找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的四道怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
 
+## 名稱篩選的跳脫與撞名(2026-10-15)
+
+- `_run_cmd_expand` 依平台 `name_filter` 跳脫:regex(Jest/Vitest -t)跳脫正規式字元與斜線再加 shell 引號;regex_tail(Playwright -g)跳脫後錨在結尾 `\s<名字>(?:\s@\S+)*$`(容許 Playwright 接在標題後面的 tag)(-g 比專案名、檔名、describe、標題整串);plain(dart)與 ident 只加引號。Windows 上名稱含 `& | < > ^ % " !` 判不合法(cmd.exe 不認單引號)。 [test:t_run_cmd_name_filter_escape]
+- `_run_bound_tests` 對名稱篩選型平台先做靜態撞名檢查(`_name_collision_reason`,guard kill 也用):數「篩選選得到的全部標題」(含 it.skip、帶 ${ 的樣板、.each、含逗號的標題),拿實際會用的篩選式比每個標題(regex 含這個名字、不分大小寫;regex_tail 用錨定式 search、只看測試;plain 含這個名字、分大小寫;describe 加測試的拼名只在同一支檔裡配對),撞名就不跑、記證不出(不是綠)。Windows 上 {method} 改用 list2cmdline(cmd.exe 不認單引號),規格閘與推送前閘一致。跑過的證據補了 playwright 一筆實測樣式(vitest 跟 jest 共用 node-jest 那一條,見下一節)。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_name_filter_collision_not_green]
+- 推送前合約測試閘的名稱合法性改用 `_test_name_ok`;`類別.方法` 拿最後一段比,只在點號兩邊都是識別字時才用。 [test:t_test_name_ok_rules] [test:t_clause_binds_free_string]
+
 ## 跑過證據認得 vitest(2026-10-15,[[Projects/前端框架從vue分出_計劃]] F1)
 
 `node-jest` 那條「跑過的證據」樣式改成同時吃 jest(`Tests:       1 passed, 1 total`)與 vitest(`      Tests  1 passed | 33 skipped (34)`),`node-vitest` 指向同一條;所以設定寫 `node-jest` 卻用 vitest 跑的專案也認得。中段限長 200 字(舊樣式遇到超長一行會二次方回溯,4 萬字實測 11 秒);數字前只要求「前一個字不是數字」(色碼結尾的 m 緊貼數字,字詞邊界不成立),空白只收同一行的、不跨行;`Tests:` 與 `Tests` 兩支都要在行首或行首前綴之後(前綴只收空白、色碼與游標控制碼、方括號或 ISO 時間戳、以冒號結尾的工作區前綴,如 turbo 的 `@org/web:test:`、pnpm -r 的 `packages/app test:`),測試標題裡出現「Tests: 2 passed」或「Tests 2 passed」都不算(代碼審 r3 折入,測試 t_ran_evidence_workspace_prefixes、t_ran_evidence_title_lines_rejected、t_ran_evidence_prefix_regex_linear;r2 折入,測試 t_ran_evidence_anchored_to_summary_line、t_ran_evidence_bounded_middle_fast;r1 折入,測試 t_ran_evidence_colored_per_line_reader、t_ran_evidence_no_cross_line_match)。全部 skipped 照舊判沒跑過。vitest 對不存在的測試名同樣回 0(5.0.4 實測),所以這條摘要行是唯一的證據。成本:每支綁定測試各起一次 vitest、預設依序跑,綁得多時用 `bound_tests.parallel`。測試 t_ran_evidence_vitest_one_passed、t_ran_evidence_vitest_all_skipped、t_ran_evidence_node_jest_accepts_vitest、t_ran_evidence_jest_summary_kept、t_ran_evidence_long_line_fast。
