@@ -1,0 +1,425 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 3e2dd5cfcdac883dd8cea0687f1f0ca6c9bd0208..a5cacfef692150eb123a8cea5019309147e1e91b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -8654,21 +8654,21 @@ def clause_bindings(text, split, default, methods_for, hay_for):
+             pairs = resolve_test_refs(seg, split, default)
+         except ValueError:
+             row["state"] = "bad-name"
+             out.append(row)
+             continue
+         worst = 0
+         for pl, n in pairs:
+             if n in methods_for(pl):
+                 continue
+             hay = hay_for(pl) or ""
+-            if re.search(r"^\s*def\s+" + re.escape(n) + r"\s*\(", hay, re.M):
++            if re.search(r"^[ \t]*def\s+" + re.escape(n) + r"\s*\(", hay, re.M):
+                 worst = max(worst, 1)          # unrecognized
+             elif n in hay:
+                 pass                           # mentioned(最輕,worst 預設 0)
+             else:
+                 worst = max(worst, 2)          # dangling
+         row["state"] = {0: "mentioned", 1: "unrecognized", 2: "dangling"}[worst]
+         out.append(row)
+     return out
+ 
+ 
+@@ -26162,21 +26162,21 @@ def _linter_config_hits(root):
+         return []
+     root = Path(root)
+     out = []
+     try:
+         _pkg = _j.loads((_worktree_text(root, "package.json") or "{}").lstrip("\ufeff"))
+     except (ValueError, RecursionError):
+         _pkg = {}
+     for tool, flat, legacy, cmd, pkg_key in _LINTER_CONFIG_MARKERS:
+         fh = [n for n in flat if (root / n).is_file()]
+         lh = [n for n in legacy if (root / n).is_file()]
+-        if isinstance(_pkg, dict) and pkg_key in _pkg:
++        if isinstance(_pkg, dict) and isinstance(_pkg.get(pkg_key), dict):   # 值要是物件(null、字串、陣列不算)
+             lh.append(f"package.json({pkg_key})")
+         if not (fh or lh):
+             continue
+         c = cmd if fh else "ESLINT_USE_FLAT_CONFIG=false " + cmd
+         tpl = _j.dumps({k: [c] for k in ("ts", "tsx", "js", "jsx")}, ensure_ascii=False, indent=2)
+         out.append((tool, fh + lh, tpl))
+     return out
+ 
+ 
+ def _init_lint_hint(root):
+@@ -27496,21 +27496,21 @@ def _anchor_repo_root(repo):
+ 
+ 
+ def _quote_norm(s):
+     """quote-check 的唯一正規化(T2 design-loop重設計):NFC → 剝 markdown 強調記號(*/`)
+     → 空白(含全形\u3000/換行)摺疊單空格。★抽取與比對共用這一份——嚴禁第二份實作★
+     (2026-08-02 教訓:預檢與主迴圈兩份實作當場漂移)。不做 lower(保留大小寫語意)。"""
+     import re
+     import unicodedata
+     s = unicodedata.normalize("NFC", s)
+     # Landmark 真場實測(2026-08-04):blockquote 折行的續行 > 記號會進 hay,引句永遠比不中
+-    s = re.sub(r"(?m)^\s*>\s?", "", s)
++    s = re.sub(r"(?m)^[ \t]*>\s?", "", s)
+     s = s.replace("*", "").replace("`", "")
+     return " ".join(s.split())
+ 
+ 
+ _QUOTE_MIN_NORM_LEN = 10   # 錨定紀律「引句 ≥10 字」轉機械(r1 否決席:一字引句必然錨得到=紀律被架空)
+ 
+ 
+ # ═══ 引句判準(Projects/引句錨定整段比對_計劃)═══
+ # 寫側用哪一版判準:程式常數,不放設定檔(設定檔任何一處寫壞都會讓寫側悄悄退版、而且帳只進不出——設計審 r4 三席)。
+ # 第一階段 legacy(行為不變,只讓讀帳的地方認得章);第二階段改成 full-span-v1,與文件同步放在同一個提交,回退就還原那個提交。
+@@ -30266,64 +30266,59 @@ _EXTCODE_RX_RAW = tuple(re.compile(_p, re.I) for _p in _EXTCODE_WHEN_RAW)
+ # 第三欄 when_raw(r1 外家 finder f7 → code-反面詞 r1 單席 f1 改成逐 pattern):只有這幾條要看字串內容(.on("error"、LIKE '%、
+ # import from "./x"、"SELECT 、require('child_process')),同題其他 pattern 照樣剝字串——整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中
+ _STACK_TRIGGERS = {_k: [(_s["id"], tuple(re.compile(_p, re.I) for _p in _s["when"]), tuple(re.compile(_p, re.I) for _p in _s.get("when_raw", ()))) for _s in _v]
+                    for _k, _v in _STACK_QUESTION_SPECS.items()}   # 載入時編譯:壞 regex=啟動即錯
+ # 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
+ # 前端值拆兩組(2026-10-15 [[Projects/前端框架從vue分出_計劃]]):只有 react 家族 → "react";其他前端框架(含跟 react 並存的混合依賴)照舊 "vue"
+ # ——svelte/Angular/Solid 之後有專案再各自補(使用者裁),混合依賴寧可維持現況也不猜成 react。
+ _NODE_REACT_MARKERS = ("react", "next", "preact")
+ _NODE_OTHER_FRONTEND_MARKERS = ("vue", "nuxt", "svelte", "@angular/core", "solid-js")
+ _NODE_FRONTEND_MARKERS = _NODE_OTHER_FRONTEND_MARKERS + _NODE_REACT_MARKERS
+-_NODE_FLAVOR_CACHE = {}
++_WORKTREE_TEXT_CACHE = {}
+ 
+ 
+ def _node_flavor(file_rel, repo_root, reader=None):
+     """判一支 .ts/.js 檔是「前端(vue)」還是「Node 後端(node)」:從檔案所在目錄往上找最近的 package.json
+     (monorepo 各包各判),依賴裡只有 react 家族的前端框架 → "react";有其他前端框架 → "vue"(見 _NODE_REACT_MARKERS 上方說明);
+     有 package.json 但沒前端框架 → "node";找不到 package.json → None(呼叫端沿用舊行為,不多附東西)。
+     ★只看 dependencies/devDependencies 的鍵,不猜檔案內容★——猜錯會把後端問題塞給前端檔。
+     ★最近那份 package.json 讀得到卻解析不了 → None★(容許開頭的 BOM;2026-09-29 角色鏡頭設計審 r1 邊界席:
+     原本當成沒有依賴、判成 node,前端專案的 package.json 多一個逗號就拿到後端題)。
+     reader:給了就改讀「某個版本」的 package.json(repo 相對路徑 → 文字或 None);沒給就讀工作樹(同一條往上找的路)。"""
+     if reader is None:
+-        reader = lambda rel: _node_pkg_text(repo_root, rel)   # noqa: E731 — 同一條找法,只換讀取來源
++        reader = lambda rel: _worktree_text(repo_root, rel)   # noqa: E731 — 同一條找法,只換讀取來源
+     return _node_flavor_at(file_rel, reader)
+ 
+ 
+ def _worktree_text(repo_root, rel, head=None, max_bytes=None):
+-    """工作樹裡某個相對路徑的文字(package.json、Kotlin 建置檔、.kt 檔頭共用這一支,快取在 _NODE_FLAVOR_CACHE)。
++    """工作樹裡某個相對路徑的文字(package.json、Kotlin 建置檔、.kt 檔頭共用這一支,快取在 _WORKTREE_TEXT_CACHE)。
+     沒有這個檔回 None;★檔在但讀不了(權限、非 UTF-8)回空字串★=「在但解析不了」→ 判不出;回 None 會被當成沒有、
+     往上找到父層改判(代碼審 r2 正確性席:UTF-16 的前端 package.json 被判成根層的後端)。非 UTF-8 照 git 版的讀法換字元。
+     head:只讀前這麼多位元組(.kt 檔頭找匯入);max_bytes:檔案超過這個大小回空字串(建置檔,同角色鏡頭的上限)。
+     快取一筆最多一份檔(大小受 max_bytes/head 管);呼叫端各自有檔數上限,所以總量有界。"""
+     key = (str(Path(repo_root) / rel), head, max_bytes)
+-    if key not in _NODE_FLAVOR_CACHE:
++    if key not in _WORKTREE_TEXT_CACHE:
+         p = Path(key[0])
+         try:
+             if not p.is_file():
+                 v = None
+             elif max_bytes is not None and p.stat().st_size > max_bytes:
+                 v = ""
+             elif head is not None:
+                 with open(p, "rb") as fh:
+                     v = fh.read(head).decode("utf-8", "replace")
+             else:
+                 v = p.read_text(encoding="utf-8", errors="replace")
+         except OSError:
+             v = ""
+-        _NODE_FLAVOR_CACHE[key] = v
+-    return _NODE_FLAVOR_CACHE[key]
+-
+-
+-def _node_pkg_text(repo_root, rel):
+-    """工作樹裡某個相對路徑的 package.json 文字;語意見 _worktree_text(同一個 repo 同一份檔只讀一次)。"""
+-    return _worktree_text(repo_root, rel)
++        _WORKTREE_TEXT_CACHE[key] = v
++    return _WORKTREE_TEXT_CACHE[key]
+ 
+ 
+ def _pkg_dep_keys(txt):
+     """一份 package.json 的文字 → dependencies/devDependencies/peerDependencies 的鍵集合;解析不了(容許開頭的 BOM)回 None。
+     判前後端與 init 判 vitest 共用這一支,不各收各的。"""
+     import json
+     try:
+         data = json.loads(txt.lstrip("\ufeff"))
+     except (ValueError, RecursionError):   # 超深巢狀丟的是 RecursionError(代碼審 r1 正確性 F3)
+         return None
+@@ -30362,62 +30357,60 @@ def _node_flavor_at(file_rel, reader):
+ 
+ 
+ _NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
+ 
+ # ── Kotlin 檔是 Android 還是伺服端(2026-10-15 [[Projects/前端框架從vue分出_計劃]] B10、決策 d2)──
+ # 判錯的方向只准是「判不出」(照舊附 Android 題),不准把 Android 判成伺服端:Android 跡象優先、伺服端只認外掛宣告,
+ # 不認一般的 io.ktor 字串(Android 與 KMP 模組常用 ktor 客戶端)。.java 不走這套(看匯入就夠,理由見計劃 B10 角色那條)。
+ _KT_BUILD_FILES = ("build.gradle.kts", "build.gradle", "pom.xml")
+ # 行首空白只收空格與 tab:\s* 會吞換行,搭多行旗標在一大段空行上二次方回溯(r1 資源席:6.5 萬空行 7.5 秒)
+ _KT_BUILD_ANDROID = re.compile(r"com\.android\.|libs\.plugins\.android|^[ \t]*android[ \t]*\{", re.M)
+-# 伺服端只認外掛宣告(含版本目錄 alias),不認 ktor-server 這種依賴字串——手機端也有本機 ktor 伺服器(r1 正確性席)
+-_KT_BUILD_SERVER = re.compile(r"org\.springframework\.boot|io\.ktor\.plugin|libs\.plugins\.(?:spring[.\-_]?boot|springBoot|ktor)\b")
+-_KT_LINE_COMMENT = re.compile(r"(?<!:)//[^\n]*")   # 不剝 https:// 這種網址裡的 //
++# 伺服端只認外掛宣告(含版本目錄 alias),不認依賴字串:ktor-server(手機端也有本機 ktor 伺服器,r1)、
++# org.springframework.boot:… 依賴座標(KMP 共用模組的 jvm 目標也可能宣告,r2)。Spring 認 id("…")/id '…'/apply plugin: '…'
++# 與 Maven 的 spring-boot-maven-plugin、spring-boot-starter-parent。
++_KT_BUILD_SERVER = re.compile(r"""(?:\bid\s*\(?\s*|\bapply\s+plugin\s*:\s*)["']org\.springframework\.boot["']"""
++                              r"|io\.ktor\.plugin|spring-boot-maven-plugin|spring-boot-starter-parent"
++                              r"|libs\.plugins\.(?:spring[.\-_]?boot|springBoot|ktor)\b")
++# 建置檔的字串與註解,一條從左到右的掃描(r2 兩席:先剝區塊再剝行註解會被 '**/*.yml'、// skip **/*.kt 帶歪):
++# 字串(""" 原始字串、"…"、'…')原樣留下,// 與 /* */ 註解拿掉,沒閉合的區塊註解或原始字串吃到檔尾。
++_KT_SCAN_TOKEN = re.compile(r'"""[\s\S]*?(?:"""|\Z)|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)')
+ _KT_HEAD_BYTES = 64 * 1024          # .kt 檔頭只讀這麼多找匯入
+ _KT_FLAVOR_CAP = 300                # pitfalls 一次最多判幾支 .kt(同 _ROLE_READ_CAP);超過的算判不出,Android 題照舊附
+ 
+ 
+ 
+ def _kt_build_candidates(file_rel):
+     """從檔案所在目錄往上到 repo 根,每一層的建置檔相對路徑(近的在前,同層照 _KT_BUILD_FILES 順序)。"""
+     from pathlib import PurePosixPath
+     parts = PurePosixPath(file_rel).parts[:-1]
+     return ["/".join((*parts[:i], n)) for i in range(len(parts), -1, -1) for n in _KT_BUILD_FILES]
+ 
+ 
+ def _kt_strip_comments(txt):
+-    """建置檔剝掉註解再比對(註解裡提到 org.springframework.boot 不算宣告)。區塊註解用 find 逐段跳,不用正規式,大檔也是線性。"""
+-    out, i = [], 0
+-    while True:
+-        j = txt.find("/*", i)
+-        if j < 0:
+-            out.append(txt[i:])
+-            break
+-        out.append(txt[i:j])
+-        k = txt.find("*/", j + 2)
+-        if k < 0:
+-            break
+-        i = k + 2
+-    return _KT_LINE_COMMENT.sub("", "".join(out))
++    """建置檔剝掉註解再比對(註解裡提到 org.springframework.boot 不算宣告)。字串原樣保留(字串裡的 /*、// 不是註解)。"""
++    return _KT_SCAN_TOKEN.sub(lambda mo: "" if mo.group(0)[:2] in ("//", "/*") else mo.group(0), txt)
+ 
+ 
+-import functools as _functools   # 只給下面這支記憶判定結果用
++_KT_BUILD_VERDICT_CACHE = {}   # 建置檔文字 → 判定;最多 _KT_BUILD_VERDICT_MAX 份,每份受讀檔上限管(512KB),記憶體有界
++_KT_BUILD_VERDICT_MAX = 64
+ 
+ 
+-@_functools.lru_cache(maxsize=64)
+ def _kt_build_verdict(txt):
+-    """一份建置檔的文字 → "android" / "server" / None。以文字記憶(r1 資源席:角色路每支 .kt 重掃同一份建置檔);
+-    最多記 64 份,每份受讀檔上限管(512KB),所以記憶體有界。"""
++    """一份建置檔的文字 → "android" / "server" / None。以文字記憶(r1 資源席:角色路每支 .kt 重掃同一份建置檔)。"""
++    if txt in _KT_BUILD_VERDICT_CACHE:
++        return _KT_BUILD_VERDICT_CACHE[txt]
+     t = _kt_strip_comments(txt)
+-    if _KT_BUILD_ANDROID.search(t):
+-        return "android"
+-    return "server" if _KT_BUILD_SERVER.search(t) else None
++    v = "android" if _KT_BUILD_ANDROID.search(t) else ("server" if _KT_BUILD_SERVER.search(t) else None)
++    if len(_KT_BUILD_VERDICT_CACHE) >= _KT_BUILD_VERDICT_MAX:
++        _KT_BUILD_VERDICT_CACHE.pop(next(iter(_KT_BUILD_VERDICT_CACHE)))   # 丟最早記的那份
++    _KT_BUILD_VERDICT_CACHE[txt] = v
++    return v
+ 
+ 
+ def _kt_flavor_at(file_rel, content, reader):
+     """一支 .kt 檔 → "android" / "server" / None(判不出)。content=檔案內容(None=沒讀到 → 判不出);
+     reader(相對路徑) → 建置檔文字,None=沒有這個檔(往上找),空字串=在但讀不了(停、判不出)。"""
+     if content is None:
+         return None
+     if _ROLE_ANDROID_IMPORT.search(content[:_KT_HEAD_BYTES]):
+         return "android"
+     for rel in _kt_build_candidates(file_rel):
+@@ -30437,21 +30430,22 @@ def _kt_flavor(file_rel, repo_root):
+ def _kt_role(file_rel, repo_root, content, reader):
+     """角色鏡頭的 .kt(沒有畫面匯入時):判成伺服端 → "backend",其他判不出(2026-10-15 決策 d2,翻掉角色鏡頭〈已知限制〉的「.kt 一律判不出」)。
+     reader 是派工路徑的批次讀取(起點版);沒給就讀工作樹。"""
+     rd = reader if reader is not None else (lambda rel: _worktree_text(repo_root, rel, max_bytes=_ROLE_MAX_BYTES))
+     return "backend" if _kt_flavor_at(file_rel, content, rd) == "server" else None
+ 
+ 
+ def _stack_platform_excluded(files, repo_root):
+     """這次改動的非測試檔 → 要從題表拿掉的題號集合(所有出題的地方共用)。
+     規則:.kt 檔全部判成伺服端時拿掉 android_only 的題;只要有一支判成 Android 或判不出(讀不到、超上限),就不拿。"""
+-    kts = [f for f in files if Path(f).suffix.lower() == ".kt" and not _PITFALL_DIFF_TEST_PAT.search(f)]
++    kts = [f for f in files if Path(f).suffix.lower() == ".kt" and not _PITFALL_DIFF_TEST_PAT.search(f)
++           and (Path(repo_root) / f).exists()]   # 這次刪掉的檔不算(r2 正確性席:刪檔讓「全部判伺服端」恆假)
+     if not kts or len(kts) > _KT_FLAVOR_CAP:
+         return frozenset()
+     if all(_kt_flavor(f, repo_root) == "server" for f in kts):
+         return frozenset(sp["id"] for sp in _STACK_QUESTION_SPECS.get("kt", []) if sp.get("android_only"))
+     return frozenset()
+ 
+ 
+ def _stack_key_for_file(file_rel, repo_root, reader=None):
+     """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看最近的 package.json——
+     後端回 "node",只有 react 家族的前端回 "react",其他前端回 "vue"(.vue 檔本來就命中 vue 鍵);
+@@ -30483,32 +30477,32 @@ _ROLE_CARDS = {
+     ),
+ }
+ _ROLE_VALUES = ("frontend", "backend", "none")
+ _ROLE_LABEL = {"frontend": "前端", "backend": "後端"}
+ _ROLE_FRONT_EXTS = {"vue", "svelte", "tsx", "jsx", "css", "scss", "html"}   # 副檔名就判前端(.tsx/.jsx 2026-10-15 起也有 react 題組鍵,留在這裡不影響判定)
+ _ROLE_FRONT_KEYS = {"vue", "react"}   # 題組鍵判前端(.ts/.js 走 package.json)
+ _ROLE_BACK_KEYS = {"node", "cs", "py", "sql"}
+ _ROLE_MOBILE_EXTS = {"kt", "java", "swift", "dart"}
+ # 手機畫面判定只看匯入,名單刻意窄:androidx 底下的 room/work/datastore、android.content 這些資料層也常匯入,
+ # 寬名單會把 DAO、Repository 判成畫面(設計審 r1 正確性席 F1)。
++# 行首空白一律只收空格與 tab:^\s* 搭多行旗標會吞換行,一大段空行二次方回溯(r2 資源席:13 萬空行 31 秒;t_no_multiline_caret_whitespace_star 全檔守)
+ _ROLE_UI_IMPORT = {
+-    "kt": re.compile(r"^\s*import\s+(?:androidx\.compose|android\.widget|android\.view|androidx\.recyclerview|androidx\.fragment|androidx\.activity|androidx\.appcompat)\.", re.M),
+-    "swift": re.compile(r"^\s*import\s+SwiftUI\b", re.M),
+-    "dart": re.compile(r"""^\s*import\s+['"]package:flutter/(?:material|widgets|cupertino)\.dart['"]""", re.M),
++    "kt": re.compile(r"^[ \t]*import\s+(?:androidx\.compose|android\.widget|android\.view|androidx\.recyclerview|androidx\.fragment|androidx\.activity|androidx\.appcompat)\.", re.M),
++    "swift": re.compile(r"^[ \t]*import\s+SwiftUI\b", re.M),
++    "dart": re.compile(r"""^[ \t]*import\s+['"]package:flutter/(?:material|widgets|cupertino)\.dart['"]""", re.M),
+ }
+ _ROLE_UI_IMPORT["java"] = _ROLE_UI_IMPORT["kt"]
+-_ROLE_ANDROID_IMPORT = re.compile(r"^\s*import\s+(?:android|androidx)\.", re.M)
+-_ROLE_UIKIT_IMPORT = re.compile(r"^\s*import\s+UIKit\b", re.M)
++_ROLE_ANDROID_IMPORT = re.compile(r"^[ \t]*import\s+(?:android|androidx)\.", re.M)
++_ROLE_UIKIT_IMPORT = re.compile(r"^[ \t]*import\s+UIKit\b", re.M)
+ _ROLE_UIKIT_SUBCLASS = re.compile(r"\bclass\s+\w+\s*:[^{\n]*\bUI\w*(?:ViewController|View)\b")
+ _ROLE_READ_CAP = 300     # 最多讀幾支檔的內容(數檔,不數往上找 package.json 的候選);超過的只看副檔名(手機檔判不出)
+ _ROLE_MAX_BYTES = 512 * 1024   # 單支檔超過這個大小不讀內容(判不出);上限交給批次讀取那一層守
+-_ROLE_CLOCK = None   # 角色計算的時間來源;None=time.monotonic,測試換成虛擬時鐘(r1 fix-check:牆鐘預算在高負載下時紅時綠)
+ _ROLE_MAX_TOTAL_BYTES = 16 * 1024 * 1024   # 整批讀取的總量上限(Kotlin 建置檔候選加進來後,最壞是檔數 × 三種建置檔名)
+ _ROLE_BUDGET = 3.0       # 角色計算自己最多幾秒
+ _ROLE_BUDGET_FLOOR = 1.0  # 期限很短時角色至少拿這麼多(消費專案光算工具檔清單就要半秒,代碼審 r1 正確性 F2)
+ 
+ 
+ def _role_budget(deadline):
+     """派工時角色計算能用幾秒:最多 _ROLE_BUDGET、至少 _ROLE_BUDGET_FLOOR,平常取期限的三分之一。"""
+     if not deadline or deadline <= 0:
+         return _ROLE_BUDGET
+     return min(_ROLE_BUDGET, max(_ROLE_BUDGET_FLOOR, deadline / 3))
+@@ -30595,48 +30589,56 @@ def _review_role_changed_files(root, base, head, deadline=None):
+     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
+     out += [(old, base) for old, new in renamed
+             if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
+             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
+             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
+     return [(path, ref) for path, ref in out
+             if not _PITFALL_DIFF_TEST_PAT.search(path)
+             and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
+ 
+ 
+-def _review_roles(root, base, head, budget=_ROLE_BUDGET):
++def _review_roles(root, base, head, budget=_ROLE_BUDGET, now=None):
+     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
+     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
+     import time as _t
+     if budget <= 0:
+         return {"roles": {}, "counts": {"frontend": 0, "backend": 0, "unknown": 0},
+                 "warnings": [], "capped": 0, "timed_out": True}
+-    _now = _ROLE_CLOCK or _t.monotonic   # 測試可換成虛擬時鐘,讓預算判定跟機器快慢無關
++    # 時間來源;測試傳虛擬時鐘,讓預算判定跟機器快慢無關(照 _drift_old_sentence_check 的 now= 先例)。
++    # 預設 None=呼叫當下才取 time.monotonic,既有測試 patch 掉 time.monotonic 的寫法照樣生效
++    _now = now or _t.monotonic
+     t0 = _now()
+     # 宣告讀分叉點那一版(_lens_trusted_ref):修補輪起點是分支提交時,不讓被審分支自己的 review_roles 決定拿哪張卡
+     _ref, _note = _trusted_decl_ref(root, base, why_text=_TRUSTED_REF_WHY_ROLE)
+     cfg, _state = _lumos_config_at_ref(root, _ref) if _ref else (None, "missing")
+     rules, warnings = _review_roles_config(cfg, unreadable=_state == "unreadable")
+     if _note:
+         warnings = [*warnings, _note]
+     files = _review_role_changed_files(root, base, head, deadline=t0 + budget)
+     if files is None:
+         return None
+     want, capped = _review_role_wanted(files, rules)
+     blobs = {}
+     left = budget - (_now() - t0)
+     timed_out = left <= 0
+     if want and left > 0.2:
+-        got = _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=left, max_total_bytes=_ROLE_MAX_TOTAL_BYTES)
++        sizes = _nodehome_cat_sizes(root, want, timeout=left)
++        got = (None if sizes is None else
++               _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=max(0.2, budget - (_now() - t0)),
++                                          max_total_bytes=_ROLE_MAX_TOTAL_BYTES, sizes=sizes))
+         if got is None:
+             timed_out = True
+         else:
+-            blobs = {k: (v.decode("utf-8", "replace") if v is not None else None) for k, v in zip(want, got)}
++            # 物件在、但超過單檔或整批上限沒讀的 → 空字串(在但讀不了,停在這一層判不出),跟工作樹路徑 _worktree_text 同語意;
++            # 回 None 會被當成「沒有這個檔」往上找到父層(r2 兩席:Android 子模組建置檔超限、根是 Spring 被判成後端)
++            blobs = {k: (v.decode("utf-8", "replace") if v is not None else ("" if n is not None else None))
++                     for k, v, n in zip(want, got, sizes)}
+     elif want:
+         timed_out = True
+     roles = {}
+     for p, ref in files:
+         if blobs and _now() - t0 > budget:
+             # 分類迴圈也算進預算(r1 資源席):超時就停用讀到的內容,剩下的照既有規則退回只看副檔名(手機檔判不出)
+             timed_out, blobs = True, {}
+         content = blobs.get(f"{ref}:{p}")
+         roles[p] = _review_role_for(p, root, rules, reader=lambda rel, _r=ref, _b=blobs: _b.get(f"{_r}:{rel}"), content=content)
+     counts = {"frontend": sum(1 for v in roles.values() if v == "frontend"),
+@@ -30852,21 +30854,22 @@ _BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.
+ # 寫的 append-only 帳(kill-log 由 guard kill 寫、signoff-log 由 signoff 寫),而這次替
+ # _pull_source_or_abort 加「來源只髒簿記帳就聯集合併不擋人」時,漏了它們就等於那條路對這兩本
+ # 失效——有人在來源 clone 跑過 guard kill 或 signoff,更新照樣被擋。
+ _BOOKKEEPING_DIRS = ("governance/code-loop/", "governance/review-reports/", "governance/replay/",
+                      "governance/note-verdicts/",   # 2026-09-17 小改動閘 r2:卷證目錄也是紀錄不是碼(三個消費者共用這一組)
+                      # 2026-10-01 回頭重讀的對照紀錄:理由同筆記內容審判定檔——紀錄不是碼,提交它不該讓代碼審留痕失效
+                      # (Projects/守檔筆記對照改動_計劃 [S8];整案回退時要同一個 revert 提交裡 git rm -r 這個資料夾)
+                      "governance/reread-verdicts/")
+ # JS/TS 的兩種主流寫法 *.test.* 與 __tests__/ 2026-10-15 補(Jest/Vitest 預設的 testMatch;[[Projects/前端框架從vue分出_計劃]] S43):
+ # 原本只認 .spec.,React 專案的 App.test.tsx 被當成產品程式拿題目。點號與目錄斜線都要在,latest、contest、attest 這類字不算。
+-_PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|\.test\.|/tests?/|(?:^|/)__tests__/|(?:^|/)(?:test|spec)\.[^/]*$)", re.I)
++# 檔名本身是 test/spec 的只認小寫加 JS/TS 副檔名(r2 邊界、資安席:Test.tsx 元件、test.py 正式檔不算);tests/、test/ 在 repo 根也算
++_PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|\.test\.|(?:^|/)tests?/|(?:^|/)__tests__/|(?:^|/)(?-i:test|spec)\.[cm]?[jt]sx?$)", re.I)
+ LINT_CMD_TIMEOUT = 180
+ 
+ 
+ def _diff_added_lines(diff_text):
+     """從 git diff -U3 輸出建 {file: set(new_line_numbers)} 對應所有新增行(+ 開頭)。
+     使用與 _pitfall_diff_mode 相同的 @@ 標頭推導邏輯。"""
+     added = {}
+     cur_file, new_ln = "", 0
+     for line in diff_text.splitlines():
+         if line.startswith("+++ b/"):
+@@ -45565,21 +45568,21 @@ def cmd_decision_amend(env, rel, did, field, text):
+                 if st[:1] in ("R", "C") and k + 2 < len(toks):
+                     renames[toks[k + 2]] = toks[k + 1]
+                     k += 3
+                     continue
+                 if st == "D" and k + 1 < len(toks):
+                     pure_del.append(toks[k + 1])
+                 k += 2
+             old = renames.get(rels, rels)
+             blobs = _nodehome_cat_blobs(root, [f"{ref}:{old}"] + [f"{ref}:{q}" for q in pure_del]) or []
+             if blobs and blobs[0] is not None:
+-                if re.search(rf"^\s*(?:-\s+)?id:\s*{re.escape(did)}\s*$", blobs[0].decode("utf-8", errors="replace"), re.M):
++                if re.search(rf"^[ \t]*(?:-\s+)?id:\s*{re.escape(did)}\s*$", blobs[0].decode("utf-8", errors="replace"), re.M):
+                     raise ValueError(f"遠端 {ref} 上的這篇已經有決策 {did}:可能①已經推上去了——請用 "
+                                      f"lumos decision-supersede 翻案;或②兩條分支撞號——請先把你的決策改號")
+             # git 配不成改名的搬檔(新檔沒進 git、或改寫太多相似度不夠):遠端上在工作目錄不見的筆記裡,
+             # 有一條跟這條一模一樣的決策,就當它是這篇改名前的樣子(代碼審 r3 兩席、驗收輪兩席)
+             for q, bq in zip(pure_del, blobs[1:]):
+                 if bq is not None and _same_decision(_dec_item(bq.decode("utf-8", errors="replace"))):
+                     raise ValueError(f"遠端 {ref} 上的 {q} 在工作目錄不見了,而它有一條跟這條一模一樣的決策 {did}:多半是這篇"
+                                      "改名前的樣子、已經推上去了——請用 lumos decision-supersede 翻案;如果不是,先 git add "
+                                      "新舊兩邊(或用 git mv)讓 git 認出改名")
+     with _vault_write_lock(env.vault):   # 只鎖讀改寫那段:上面的 git fetch 與遠端比對不寫筆記庫,放鎖外(代碼審 r3 併發、通才席)
+@@ -54524,23 +54527,24 @@ _RAN_EVIDENCE = {
+     "csharp-xunit": {
+         "re": r"Passed:\s*[1-9]",
+         "measured": "dotnet 9.0.117 實測:跑到測試印「Passed!  - Failed: 0, Passed: 1」,對不到只印「No test matches」",
+         "fix_hint": "在指令尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`,對不到測試就會直接回非零",
+     },
+     "node-jest": {
+         # 一條樣式同時吃 jest 與 vitest(2026-10-15 [[Projects/前端框架從vue分出_計劃]] F1,吸收逾期清單第 10 節):
+         # ①不錨行首、不加旗標——兩個讀者共用這條字串(_ran_evidence_check 去色後對整段 re.search、_kill_cap 逐行 re.search 不去色),
+         #   錨行首要內嵌多行旗標,逐行讀者帶色碼時行首又是色碼;不錨也不誤判,「Test Files  1 passed」那行不含 Tests 這個字。
+         #   數字前用「前一個字不是數字」而不是字詞邊界:色碼結尾的 m 緊貼數字時 \b 不成立(r1 三席實測);空白只收同一行的,不跨行。
++        #   開頭錨在「Tests:」或行首(可帶色碼與空白)的 Tests:測試標題裡剛好有「Tests 2 passed」不算(r2 資安席)。
+         # ②中段限長 200 字——舊樣式中段是不限長的 .*?,遇到「Tests:」接一長串數字的行二次方回溯(實測 4 萬字 11 秒,
+         #   兩個讀者都在單支測試逾時之後跑,推送會卡住)。
+-        "re": r"Tests\b[^\n]{0,200}?(?<![0-9])[1-9]\d*[^\S\n]+passed",
++        "re": r"(?:Tests:|(?:^|(?<=\n))[^\S\n]*(?:\x1b\[[0-9;]*m[^\S\n]*)*Tests\b)[^\n]{0,200}?(?<![0-9])[1-9]\d*[^\S\n]+passed",
+         "measured": ("jest 29 實測:跑到印「Tests: 1 passed, 1 total」,-t 對不到印「Tests: 1 skipped, 1 total」;"
+                      "vitest 5.0.4 實測(2026-10-15 order-web):跑到印「Tests  1 passed | 33 skipped (34)」,對不到印「Tests  34 skipped (34)」,兩種都回 0"),
+         "fix_hint": ("如果你換了自訂 reporter,摘要行的字樣會變——把 reporter 換回預設,或改用會對不到就回非零的跑法"
+                      "(vitest 的 --reporter=dot、json 沒有 Tests 摘要行,要用預設 reporter)"),
+     },
+     "python": {
+         "re": r"[1-9]\d*\s+passed",
+         # 規格閘用的「篩到幾支」(規格落成可驗收條件_計劃 S6-S8):支數不是斷言數——本 repo 自家 runner 的「N passed」數的是 check() 次數,
+         # 它印「lumos 測試(N 案例)」那行才是支數;unittest 讀 Ran N test(s);pytest 用摘要行各類相加(在 _ran_count 裡)
+         "count_re": [r"lumos 測試\((\d+) 案例\)", r"\bRan (\d+) tests?\b"],

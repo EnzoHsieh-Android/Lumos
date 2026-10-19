@@ -1,0 +1,324 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 801066d46a348916e4dbf2286ad4bef855e699d9..453fe84c6ee9cd265d0be88bfe520502dc3d0e93 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -98069,30 +98069,30 @@ def t_ran_evidence_jest_summary_kept():
+     zero = "Test Suites: 1 skipped, 0 of 1 total\nTests:       1 skipped, 1 total\nSnapshots:   0 total\n"
+     check("S7:jest 1 passed → 跑過", m._ran_evidence_check("node-jest", one)[0] is True, "")
+     check("S7:jest -t 對不到的摘要 → 沒跑過", m._ran_evidence_check("node-jest", zero)[0] is False, "")
+     check("S7:Test Files / Test Suites 那行不會被當成 Tests", m._ran_evidence_check("node-jest", " Test Files  1 passed (1)\n")[0] is False, "")
+ 
+ 
+ def t_ran_evidence_long_line_fast():
+     """[S35]一行 `Tests:` 開頭接 4 萬個數字:1 秒內回沒跑過(舊樣式中段不限長,實測 11 秒);逐行讀者 _kill_cap 同一條樣式也要快。"""
+     import re, time as _t
+     m = _load_lumos_inproc()
+-    big = "Tests: " + "9" * 40000 + "\n"
++    big = "Tests: " + "9" * 80000 + "\n"   # 舊樣式在 8 萬字約 44 秒;門檻 3 秒跟負載無關(r1 fix-check)
+     t0 = _t.monotonic()
+     ok, _h = m._ran_evidence_check("node-jest", big)
+     dt = _t.monotonic() - t0
+-    check("S35:4 萬字長行 1 秒內回沒跑過", ok is False and dt < 1.0, f"{ok} {dt:.2f}s")
++    check("S35:8 萬字長行 3 秒內回沒跑過", ok is False and dt < 3.0, f"{ok} {dt:.2f}s")
+     t1 = _t.monotonic()
+     for ln in big.splitlines():
+         re.search(m._ran_evidence_re("node-jest"), ln)
+     dt2 = _t.monotonic() - t1
+-    check("S35:逐行套同一條樣式也在 1 秒內", dt2 < 1.0, f"{dt2:.2f}s")
++    check("S35:逐行套同一條樣式也在 3 秒內", dt2 < 3.0, f"{dt2:.2f}s")
+ 
+ 
+ def t_init_skeleton_jsx_symbol_profile():
+     """[S28]只有 .jsx 的專案:symbol_profile 猜成 typescript(以前沒有 profile 收 .jsx,留空)。翻紅:typescript 的 code_exts 拿掉 .jsx。"""
+     data = _init_skel({f"src/C{n}.jsx": "export const C = 1\n" for n in range(4)})
+     check("S28:.jsx 專案 symbol_profile=typescript", data.get("symbol_profile") == "typescript", str(data))
+ 
+ 
+ # ── init 與 doctor 認得 eslint 設定(2026-10-15,Projects/前端框架從vue分出_計劃 W7)──
+ def _lint_hint_repo(files):
+@@ -98316,35 +98316,34 @@ def t_kt_flavor_cap_keeps_android_questions():
+     """[S34]一次改動超過 300 支 .kt:判定在上限處收手(不讀檔),Android 三題照舊列出。翻紅:拿掉上限檢查 → 全部判伺服端而拿掉三題。"""
+     m = _load_lumos_inproc()
+     d = Path(tempfile.mkdtemp(prefix="gctl-ktcap-"))
+     (d / "build.gradle.kts").write_text(_KT_SPRING_GRADLE, encoding="utf-8")
+     files = []
+     for i in range(301):
+         p = d / "src" / f"S{i}.kt"
+         p.parent.mkdir(parents=True, exist_ok=True)
+         p.write_text("package s\nclass S\n", encoding="utf-8")
+         files.append(f"src/S{i}.kt")
+-    m._KT_BUILD_CACHE.clear()
++    m._NODE_FLAVOR_CACHE.clear()
+     check("S34:301 支 → 不排除任何題", m._stack_platform_excluded(files, str(d)) == frozenset(), "")
+     check("S34 對照:300 支 → 排除 Android 三題", m._stack_platform_excluded(files[:300], str(d)) == frozenset(_ANDROID3), "")
+ 
+ 
+ def t_tension_candidates_skip_android_only():
+     """[S33]張力候選處理伺服端 .kt:不產生 Android 三題的候選(那三題已不在表態表,沒人能答)。"""
+     m = _load_lumos_inproc()
+     d = Path(tempfile.mkdtemp(prefix="gctl-kttension-"))
+     (d / "src").mkdir()
+     (d / "src" / "Other.kt").write_text("package s\nclass Other\n", encoding="utf-8")
+     arch = {"files": {"src/OrderService.kt": ["src/Other.kt"]}}
+     added = {"src/OrderService.kt": ["    val view = repo.findById(id)", "    init { require(true) }"]}
+-    m._tension_candidates_into(arch, added, str(d))
+-    m._tension_drop_excluded(arch, frozenset(_ANDROID3))
++    m._tension_candidates_into(arch, added, str(d), applicable_ids=frozenset({"kt-coroutines"}))
+     qs = {c["question"] for c in arch.get("tension_candidates", [])}
+     check("S33:排除後沒有 Android 三題的候選", not (qs & _ANDROID3), str(qs))
+     arch2 = {"files": {"src/OrderService.kt": ["src/Other.kt"]}}
+     m._tension_candidates_into(arch2, added, str(d))
+     check("S33 對照:不排除時 kt-leaks 有候選(證明樣本真的撞得到)", "kt-leaks" in {c["question"] for c in arch2.get("tension_candidates", [])}, str(arch2))
+ 
+ 
+ def t_review_role_kt_spring_backend():
+     """[S26]派工路徑:伺服端 .kt 的建置檔經批次讀取從版本讀到 → 判後端;Android 模組的 .kt 照舊判不出。
+     翻紅:_review_role_wanted 不把建置檔候選加進批次讀取 → 第一條紅(讀不到建置檔、判不出)。"""
+@@ -98409,12 +98408,247 @@ def t_pitfalls_test_pat_js_conventions():
+     m = _load_lumos_inproc()
+     pat = m._PITFALL_DIFF_TEST_PAT
+     for f in ("src/App.test.tsx", "src/__tests__/Cart.tsx", "__tests__/x.ts", "src/a.test.ts", "src/b.spec.jsx"):
+         check(f"S43:{f} 是測試檔", bool(pat.search(f)), "")
+     for f in ("src/latest.tsx", "src/contest/x.ts", "src/attest.ts", "src/testing/helpers.ts", "src/protests.ts"):
+         check(f"S43:{f} 不是測試檔", not pat.search(f), "")
+     root = _react_repo({"react": "^19"}, {"src/__tests__/Cart.tsx": "it('x', () => { useState(0) })\n", "src/App.test.tsx": "it('y', () => { useEffect(() => {}) })\n"})
+     check("S43:只改這兩種測試檔的 diff 不附 react 題", (_pitfalls_json(root).get("stack_questions") or {}) == {}, "")
+ 
+ 
++# ── 代碼審 code-前端框架從vue分出 r1 折入(2026-10-15)──
++def t_kt_build_android_regex_blank_lines_fast():
++    """[r1 資1]建置檔裡一大段空行,判 Android 的樣式不能二次方回溯:6.5 萬個空行 0.5 秒內判完;縮排的 `android {` 照樣認。
++    判準來源:資源席重現(舊樣式 ^\\s*android 搭多行旗標,6.5 萬空行 7.5 秒)。翻紅:樣式改回 ^\\s*android\\s*\\{。"""
++    import time as _t
++    m = _load_lumos_inproc()
++    m._kt_build_verdict.cache_clear()
++    # 門檻放到 3 秒、輸入放到 13 萬空行:舊樣式(二次方)在這個量是 30 秒以上,線性版本在高負載下也只要幾十毫秒(r1 fix-check:別讓門檻貼著機器快慢)
++    big = 'plugins { kotlin("jvm") }\n' + "\n" * 131072 + "dependencies {}\n"
++    t0 = _t.monotonic()
++    got = m._kt_flavor_at("a/A.kt", "package a\nclass A\n", {"build.gradle.kts": big}.get)
++    dt = _t.monotonic() - t0
++    check("資1:13 萬空行 3 秒內判完(判不出)", got is None and dt < 3.0, f"{got} {dt:.2f}s")
++    check("資1:縮排的 android { 照樣判 Android", m._kt_flavor_at("a/A.kt", "package a\n", {"build.gradle.kts": "plugins { }\n\n    android {\n    }\n"}.get) == "android", "")
++
++
++def t_review_roles_kt_build_verdict_memo():
++    """[r1 資2]角色路 50 支 .kt 共用同一份建置檔:建置檔只判一次(判定以文字記憶),不每支重掃。翻紅:拿掉 _kt_build_verdict 的記憶 → misses 50。"""
++    m = _load_lumos_inproc()
++    d, _g, w, c = _role_git_repo()
++    w("build.gradle.kts", 'plugins {\n    id("org.springframework.boot") version "3.3.0"\n}\n')
++    for i in range(50):
++        w(f"src/S{i}.kt", "package s\nclass S\n")
++    base = c("base")
++    for i in range(50):
++        w(f"src/S{i}.kt", "package s\nclass S { fun x() = 1 }\n")
++    head = c("head")
++    m._kt_build_verdict.cache_clear()
++    res = m._review_roles(d, base, head, budget=30)
++    info = m._kt_build_verdict.cache_info()
++    check("資2:50 支都判後端", res["counts"]["backend"] == 50, str(res["counts"]))
++    check("資2:同一份建置檔只判一次", info.misses == 1, str(info))
++
++
++def t_review_roles_classify_loop_respects_budget():
++    """[r1 資2]分類迴圈也看預算:超過預算就停、標 timed_out,剩下的退回只看副檔名(.kt 判不出),不靜默超時。
++    ★不靠牆鐘★(r1 fix-check:高負載下批次讀取就吃光真實秒數,前置斷言時紅時綠):換成虛擬時鐘——批次讀取期間不走,
++    每判一支 .kt 前進 1 虛擬秒,預算 30 虛擬秒,所以應該剛好判到第 31 支左右就停,跟機器快慢無關。
++    翻紅:迴圈不看剩餘時間 → 60 支全判、timed_out=False。"""
++    import time as _t
++    m = _load_lumos_inproc()
++    d, _g, w, c = _role_git_repo()
++    for i in range(60):
++        w(f"src/S{i}.kt", "package s\nclass S\n")
++    base = c("base")
++    for i in range(60):
++        w(f"src/S{i}.kt", "package s\nclass S { fun x() = 1 }\n")
++    head = c("head")
++    start = _t.monotonic()
++    ticks = []
++    orig_role, orig_clock = m._kt_role, m._ROLE_CLOCK
++    def slow(*a, **k):
++        ticks.append(1)
++        return orig_role(*a, **k)
++    m._kt_role = slow
++    m._ROLE_CLOCK = lambda: start + len(ticks)
++    try:
++        res = m._review_roles(d, base, head, budget=30)
++    finally:
++        m._kt_role, m._ROLE_CLOCK = orig_role, orig_clock
++    check("前置:批次讀取有讀到內容、分類迴圈真的跑到 .kt 判定", len(ticks) >= 1, str(len(ticks)))
++    check("資2:超過預算就停(判到 31 支左右,沒有 60 支全判)且標 timed_out",
++          res["timed_out"] is True and 25 <= len(ticks) <= 35, f"{len(ticks)} {res['timed_out']}")
++
++
++def t_review_roles_batch_total_bytes_capped():
++    """[r1 資3]角色路的批次讀取帶整批大小上限(max_total_bytes),不只單檔上限。結構檢查:攔下呼叫看參數。"""
++    m = _load_lumos_inproc()
++    d, _g, w, c = _role_git_repo()
++    w("build.gradle.kts", "plugins { }\n")
++    w("src/A.kt", "package a\n")
++    base = c("base")
++    w("src/A.kt", "package a\nclass A\n")
++    head = c("head")
++    seen = {}
++    orig = m._nodehome_cat_blobs_capped
++    def spy(*a, **k):
++        seen.update(k)
++        return orig(*a, **k)
++    m._nodehome_cat_blobs_capped = spy
++    try:
++        m._review_roles(d, base, head, budget=30)
++    finally:
++        m._nodehome_cat_blobs_capped = orig
++    check("資3:批次讀取帶 max_total_bytes", isinstance(seen.get("max_total_bytes"), int) and seen["max_total_bytes"] > 0, str(seen))
++
++
++def t_stack_android_only_inside_applicability():
++    """[r1 架3b]android_only 的排除照 shape_only 的做法在 _stack_applicability 與整組派生裡消化:同一個 exclude 參數,
++    整組清單與 _STACK_PERF_QUESTIONS 同一支派生;不再有事後過濾的小函式。"""
++    m = _load_lumos_inproc()
++    ex = frozenset({"kt-compose", "kt-leaks", "kt-startup"})
++    _a, meta = m._stack_applicability({"kt": ["val view = repo.get()", "init { x() }"]}, 300, exclude=ex)
++    check("架3b:exclude 的題整列不出", not ({r["id"] for r in meta["kt"]} & ex), str([r["id"] for r in meta["kt"]]))
++    check("架3b:整組清單派生同一支", m._STACK_PERF_QUESTIONS["kt"] == m._stack_whole_group("kt") and len(m._stack_whole_group("kt", ex)) == 4, "")
++    check("架3b:事後過濾小函式已拿掉", not hasattr(m, "_stack_drop_excluded") and not hasattr(m, "_tension_drop_excluded"), "")
++
++
++def t_worktree_text_shared_reader():
++    """[r1 架3a]讀工作樹檔共用一支(package.json、建置檔、.kt 檔頭都走它):沒有回 None、太大回空字串、可只讀檔頭;不另立第二套快取。"""
++    m = _load_lumos_inproc()
++    d = Path(tempfile.mkdtemp(prefix="gctl-wttext-"))
++    (d / "big.txt").write_text("x" * 2000, encoding="utf-8")
++    (d / "small.txt").write_text("hello world", encoding="utf-8")
++    m._NODE_FLAVOR_CACHE.clear()
++    check("架3a:沒有這個檔 → None", m._worktree_text(str(d), "none.txt") is None, "")
++    check("架3a:超過 max_bytes → 空字串", m._worktree_text(str(d), "big.txt", max_bytes=1000) == "", "")
++    check("架3a:head 只讀前幾個位元組", m._worktree_text(str(d), "small.txt", head=5) == "hello", "")
++    check("架3a:_kt_worktree_text 與 _KT_BUILD_CACHE 不再存在", not hasattr(m, "_kt_worktree_text") and not hasattr(m, "_KT_BUILD_CACHE"), "")
++
++
++def t_eslint_config_names_in_lint_globs():
++    """[r1 架5]偵測表的 eslint 設定檔名,新增告警閘搬設定檔的 _LINT_CONFIG_GLOBS 都要認得(兩份清單的同步守衛)。翻紅:GLOBS 拿掉 *.config.mts。"""
++    import fnmatch
++    m = _load_lumos_inproc()
++    names = list(m._ESLINT_FLAT_CONFIGS) + list(m._ESLINT_LEGACY_CONFIGS)
++    miss = [n for n in names if not any(fnmatch.fnmatch(n, g) for g in m._LINT_CONFIG_GLOBS)]
++    check("架5:偵測表的每個 eslint 檔名都被搬設定檔的名單認得", not miss, str(miss))
++
++
++def t_ran_evidence_colored_per_line_reader():
++    """[r1 通1/邊2/正2]逐行讀者(_kill_cap 的 keep_re,不去色)也認得帶色碼的 jest 與 vitest 摘要;被砍掉的中段裡那行要留下。
++    判準來源:jest 29 FORCE_COLOR 下的摘要行字樣(席位實測)。翻紅:數字前改回 \\b。"""
++    import re
++    m = _load_lumos_inproc()
++    pat = m._ran_evidence_re("node-jest")
++    jest_c = "\x1b[1mTests:\x1b[22m       \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m, 1 total"
++    vit_c = "\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m1 passed\x1b[39m\x1b[22m\x1b[90m (1)\x1b[39m"
++    check("D:帶色碼 jest 摘要逐行命中", bool(re.search(pat, jest_c)), "")
++    check("D:帶色碼 vitest 摘要逐行命中", bool(re.search(pat, vit_c)), "")
++    big = ("x" * 100 + "\n") * 3000 + jest_c + "\n" + ("y" * 100 + "\n") * 3000
++    kept = m._kill_cap(big, keep_re=pat)
++    check("D:_kill_cap 截斷時保住帶色碼的摘要行", len(kept) < len(big) and jest_c in kept, str(len(kept)))
++
++
++def t_ran_evidence_no_cross_line_match():
++    """[r1 正1]跑過證據不跨行:某行以 Tests 結尾、下一行剛好有「2 passed」字樣,不能算跑過。翻紅:\\s+ 改回可跨行。"""
++    m = _load_lumos_inproc()
++    out = "Running Integration Tests\n   ✓ handles 2 passed items\n Tests  1 skipped (1)\n"
++    check("D:跨行不命中", m._ran_evidence_check("node-jest", out)[0] is False, "")
++
++
++def t_kt_build_comments_and_ktor_dependency_not_server():
++    """[r1 正3]註解裡的 org.springframework.boot、依賴字串 ktor-server 不能把模組判成伺服端(判錯只准往判不出)。翻紅:不剝註解、或伺服端樣式收回 ktor-server。"""
++    m = _load_lumos_inproc()
++    m._kt_build_verdict.cache_clear()
++    a = "plugins { alias(libs.plugins.app) }\n// migrate from org.springframework.boot later\n/* id(\"org.springframework.boot\") */\n"
++    b = 'plugins { id("myorg.android.application") }\ndependencies { implementation("io.ktor:ktor-server-cio:2.3.0") }\n'
++    check("E:只有註解提到 Spring → 判不出", m._kt_flavor_at("app/src/A.kt", "package a\n", {"app/build.gradle.kts": a}.get) is None, "")
++    check("E:只有 ktor-server 依賴 → 判不出", m._kt_flavor_at("app/src/A.kt", "package a\n", {"app/build.gradle.kts": b}.get) is None, "")
++    check("E 對照:真的 Spring 外掛 → 伺服端", m._kt_flavor_at("a/A.kt", "package a\n", {"build.gradle.kts": 'plugins { id("org.springframework.boot") }\n'}.get) == "server", "")
++
++
++def t_kt_spring_alias_is_server():
++    """[r1 正4]版本目錄寫 alias(libs.plugins.spring.boot) 也判伺服端。翻紅:伺服端樣式不收 libs.plugins.spring。"""
++    m = _load_lumos_inproc()
++    m._kt_build_verdict.cache_clear()
++    for txt in ("plugins {\n    alias(libs.plugins.spring.boot)\n}\n", "plugins { alias(libs.plugins.springBoot) }\n", "plugins { alias(libs.plugins.ktor) }\n"):
++        check(f"E:{txt.split(chr(10))[0][:40]}… → 伺服端", m._kt_flavor_at("a/A.kt", "package a\n", {"build.gradle.kts": txt}.get) == "server", txt)
++
++
++def t_init_skeleton_vite_with_jest_stays_jest():
++    """[r1 通2/邊4]有 vite.config 但依賴只有 jest(Vite 打包、jest 測試)→ 照舊 jest;vite.config.ts.bak 不算設定檔。"""
++    files = {f"src/u{n}.ts": "x\n" for n in range(4)}
++    files["vite.config.ts"] = "export default {}\n"
++    files["package.json"] = '{"devDependencies": {"jest": "29", "vite": "5"}}'
++    data = _init_skel(files)
++    check("F:vite + jest → node-jest", data.get("test_profile") == "node-jest", str(data))
++    files2 = {f"src/u{n}.ts": "x\n" for n in range(4)}
++    files2["vite.config.ts.bak"] = "export default {}\n"
++    data2 = _init_skel(files2)
++    check("F:只有 vite.config.ts.bak → node-jest", data2.get("test_profile") == "node-jest", str(data2))
++
++
++def t_react_parallel_same_line_edit_quiet():
++    """[r1 邊1]只改同一行 await(舊行刪、新行加)不算兩行:react-parallel 不亮;新增兩行賦值式 await 才亮。翻紅:min_lines 改回數增刪行。"""
++    root = _react_repo({"react": "^19"}, {"src/api.ts": "export async function f(id) {\n  const user = await fetchUser(id, {cache: true})\n  return user\n}\n"},
++                       extra={"src/api.ts": "export async function f(id) {\n  const user = await fetchUser(id)\n  return user\n}\n"})
++    rows = {r["id"]: r for r in (_pitfalls_json(root).get("stack_questions_meta") or {}).get("react", [])}
++    check("G:改同一行 await → react-parallel 不亮", not rows.get("react-parallel", {}).get("applicable"), str(rows.get("react-parallel")))
++    root2 = _react_repo({"react": "^19"}, {"src/api.ts": "export async function f(id) {\n  const user = await fetchUser(id)\n  const prices = await fetchPrices()\n  return [user, prices]\n}\n"},
++                        extra={"src/api.ts": "export async function f(id) {\n  return null\n}\n"})
++    rows2 = {r["id"]: r for r in (_pitfalls_json(root2).get("stack_questions_meta") or {}).get("react", [])}
++    check("G 對照:新增兩行賦值式 await → 亮", rows2.get("react-parallel", {}).get("applicable") is True, str(rows2.get("react-parallel")))
++
++
++def t_tension_candidates_respect_applicability():
++    """[r1 正5]張力候選只出這次適用的題:新檔只有一行賦值式 await → 不出 react-parallel 候選(min_lines 沒到),react-race 照出。"""
++    root = _react_repo({"react": "^19"}, {"src/New.tsx": "export async function g() {\n  const u = await f()\n  return u\n}\n"},
++                       extra={"src/Other.tsx": "export const Other = () => null\n"})
++    qs = {c["question"] for c in ((_pitfalls_json(root).get("arch_alignment") or {}).get("tension_candidates") or [])}
++    check("G:沒有 react-parallel 候選、有 react-race 候選", "react-parallel" not in qs and "react-race" in qs, str(qs))
++
++
++def t_eslint_package_json_eslintconfig():
++    """[r1 邊3]根 package.json 的 eslintConfig 也算 eslint 設定(舊式),範本帶 ESLINT_USE_FLAT_CONFIG=false。"""
++    m = _load_lumos_inproc()
++    d = Path(tempfile.mkdtemp(prefix="gctl-eslintpkg-"))
++    (d / "package.json").write_text('{"name": "x", "eslintConfig": {"root": true}}', encoding="utf-8")
++    m._NODE_FLAVOR_CACHE.clear()
++    hits = m._linter_config_hits(d)
++    check("G:package.json 的 eslintConfig 被認得、範本帶舊式旗標",
++          hits and any("eslintConfig" in n for n in hits[0][1]) and "ESLINT_USE_FLAT_CONFIG=false" in hits[0][2], str(hits))
++    (d / "package.json").write_text('{"name": "x"}', encoding="utf-8")
++    m._NODE_FLAVOR_CACHE.clear()
++    check("G 對照:沒有 eslintConfig → 不算", m._linter_config_hits(d) == [], "")
++
++
++def t_test_pat_bare_names_and_irreversible_shared():
++    """[r1 邊5]檔名本身就是 test.tsx / spec.ts 也算測試檔;不可逆提示那份掃描共用同一個測試檔判定(App.test.tsx 裡的 DELETE FROM 不報)。"""
++    import subprocess as _sp
++    m = _load_lumos_inproc()
++    for f in ("src/test.tsx", "src/spec.ts", "test.js"):
++        check(f"G:{f} 是測試檔", bool(m._PITFALL_DIFF_TEST_PAT.search(f)), "")
++    for f in ("src/latest.tsx", "src/contest.ts", "src/testimony.ts"):
++        check(f"G:{f} 不是測試檔", not m._PITFALL_DIFF_TEST_PAT.search(f), "")
++    d = Path(tempfile.mkdtemp(prefix="gctl-irrevtest-"))
++    g = lambda *a: _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)  # noqa: E731
++    g("init", "-q", "-b", "main")
++    g("config", "user.email", "t@t.t")
++    g("config", "user.name", "t")
++    (d / "README.txt").write_text("x\n", encoding="utf-8")
++    g("add", "-A")
++    g("commit", "-qm", "init")
++    (d / "src").mkdir()
++    (d / "src" / "App.test.tsx").write_text("db.run('DELETE FROM orders')\n", encoding="utf-8")
++    g("add", "-A")
++    g("commit", "-qm", "t")
++    check("G:測試檔裡的 DELETE FROM 不報不可逆", m._scan_diff_for_irreversible_hints(str(d)) == [], str(m._scan_diff_for_irreversible_hints(str(d))))
++    (d / "src" / "api.ts").write_text("db.run('DELETE FROM orders')\n", encoding="utf-8")
++    g("add", "-A")
++    g("commit", "-qm", "p")
++    check("G 對照:產品檔裡的 DELETE FROM 照報", bool(m._scan_diff_for_irreversible_hints(str(d))), "")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

@@ -1,0 +1,1201 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index bcb9c015..a5cacfef 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -3775,21 +3775,30 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+ 
+     # Check F: linter 宣告檔健康(lint接線收口 [S1]:SARIF 橋最後一哩——宣告了跑不動的
+     # 東西,審查就漏那些告警;有宣告才驗,無宣告一行跳過不擋。路徑解析走本函式既有的
+     # _vault_repo_root(git 感知;沿革:env.vault 直拼→假綠、doctor 區域 repo_root→standalone
+     # 消失、_repo_root_from_env→standalone 回 parent 與既有定義互斥——三坑都踩過,本行是
+     # 三次修正的終點。與 cmd_lint_check 的 _anchor_repo_root(cwd 錨)是兩入口語境刻意分工;
+     # lint-check 找不到 root 已改 rc2 響亮(code-batch2 r2 d-f2)。
+     if True:
+         _lf = _lint_load_and_validate(_vault_repo_root(env))   # git 感知解析(ext-f1:_repo_root_from_env 對 standalone 回 parent,與 .git 在 vault 內的既有定義互斥)
+         section("F", "linter 宣告檔還健康嗎(.lumos/lint.json;沒宣告就跳過)")
+-        if not _lf["declared"]:
++        _lint_hits = _linter_config_hits(_vault_repo_root(env)) if not _lf["declared"] else []
++        if _lint_hits:
++            # 專案根目錄已經有 linter 設定、只是 lumos 沒接上(2026-10-15 [[Projects/前端框架從vue分出_計劃]] W7):
++            # 不再說「沒有接 linter」,改說看到了哪個、印可貼的宣告範本。仍是提醒、不計 issues。
++            for _tool, _names, _tpl in _lint_hits:
++                warn([],   # 空清單:算一段提醒、不計 issues(同「沒接 linter」那句),健檢 --ci 的退出碼不因此變紅
++                     f"專案裡有 {_tool} 設定({'、'.join(_names)}),但 lumos 還沒接上它(.lumos/lint.json 不存在)——代碼審看不到它的告警:",
++                     "接法三步:①裝 @microsoft/eslint-formatter-sarif(eslint 輸出 SARIF 用)②把下面這份存成 .lumos/lint.json "
++                     "③跑 lumos lint-check --smoke 驗它真的跑得動。範本:\n" + _tpl)
++        elif not _lf["declared"]:
+             # ★2026-08-29 誠實化★:原本這裡印綠勾「未宣告跳過」——等於恭喜你沒接 linter。
+             # 沒接的後果是實的:代碼審完全看不到任何 linter 告警,那些本來最便宜就能抓到的
+             # 問題只能靠審查員肉眼。空轉要說出來,而且要說得出下一步,別的 repo 才知道去裝。
+             warn([], "這個 repo 沒有接 linter(.lumos/lint.json 不存在)——代碼審看不到任何 linter 告警,"
+                      "那類最便宜就能抓的問題目前全靠審查員肉眼:",
+                  "要接的話三步:①先在這個專案裝一個 linter(如 eslint / detekt / ruff / stylelint,"
+                  "看技術棧)②建 .lumos/lint.json 宣告它怎麼跑、輸出 SARIF 到哪 "
+                  "③跑 lumos lint-check --smoke 驗它真的跑得動;接好之後 pitfalls 就會把它的告警"
+                  "帶進審查鏡頭。不打算接也可以,但這是選擇不是預設健康")
+         elif _lf["parse_error"]:
+@@ -5692,21 +5701,21 @@ SYMBOL_PROFILES = {
+     # camelCase,跟 Kotlin 同形狀,所以借同一條 shape_re;裸 camelCase 自由函式(fetchUser)不進候選
+     # =刻意的保守天花板(進了會把散文裡的英文單字當符號,噪音比漏檢貴)。
+     "swift": {
+         "shape_re": r"^[A-Z][A-Za-z]*(?:\.[a-zA-Z][A-Za-z]*)*$",
+         "suffixes": (), "dotted_ok": True,
+         "code_exts": (".swift",),
+     },
+     "typescript": {
+         "shape_re": r"^[A-Z][A-Za-z]*(?:\.[a-zA-Z][A-Za-z]*)*$",
+         "suffixes": (), "dotted_ok": True,
+-        "code_exts": (".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"),
++        "code_exts": (".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs", ".jsx"),   # .jsx 2026-10-15 補(純 .jsx 專案 init 原本猜不出 symbol_profile)
+     },
+     # Dart / Flutter(2026-09-13;★尚無真專案跑過★):型別 PascalCase、方法 camelCase,大致跟
+     # Kotlin 同形狀,★但不能直接借★——Flutter 的 State 類幾乎都是私有的底線開頭(_MyPageState),
+     # 借 Kotlin 那條會讓筆記裡最常被點名的那種類別一律「查無」。所以只多開一個可選的前置底線。
+     "dart": {
+         "shape_re": r"^_?[A-Z][A-Za-z0-9]*(?:\.[a-zA-Z_][A-Za-z0-9]*)*$",
+         "suffixes": (), "dotted_ok": True,
+         "code_exts": (".dart",),
+     },
+ }
+@@ -6079,21 +6088,21 @@ IRREVERSIBLE_HINT_PATTERNS = [
+     re.compile(r"external_api\b|ext_api\b", re.I),
+ ]
+ 
+ 
+ def _scan_diff_for_irreversible_hints(cwd):
+     """掃 git diff --staged(優先)或 HEAD~1..HEAD,回傳疑似不可逆 +行摘要列表。
+     非 git repo 或無 diff → 回傳 []。跳過測試檔與純注解行。
+     cwd=str(env.vault) 即可:git diff 無 pathspec 時範圍為全 repo,cwd 子目錄不縮小範圍。"""
+     import subprocess  # lazy import,與 L339/L2298 等先例一致
+     _SKIP_EXT = {".md", ".txt", ".rst"}
+-    _TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
++    _TEST_PAT = _PITFALL_DIFF_TEST_PAT   # 跟推送前分級共用同一個測試檔判定(r1 邊界席:這裡原本是一份沒跟著改的舊副本)
+ 
+     # ★取差異內容的呼叫一律關掉外部驅動器★(2026-09-18 代碼審 r3 資安終審,單源
+     # [[Projects/收工點名問版本控制_計劃]]):被打開的資料夾可以放一份未提交、未追蹤的屬性檔,
+     # 把某支檔指到一個★攻擊者自己命名★的差異驅動器,再用那個名字設定要執行的指令。
+     # 鍵名是他取的,所以「列舉危險設定」原理上擋不住——三輪三種修法都被打穿。
+     # 這兩個旗標關掉的是整類機制,不管設定裡寫什麼名字。
+     # ★範圍靠實測畫★:只取檔名/統計/狀態的呼叫不觸發,所以那些不強制帶;取內容的才要。
+     # t_lumos_content_diffs_all_disable_external_drivers 會掃全檔釘住這條性質。
+     for cmd in (["git", "diff", "--no-ext-diff", "--no-textconv", "--staged"],
+                 ["git", "diff", "--no-ext-diff", "--no-textconv", "HEAD~1..HEAD"]):
+@@ -8645,21 +8654,21 @@ def clause_bindings(text, split, default, methods_for, hay_for):
+             pairs = resolve_test_refs(seg, split, default)
+         except ValueError:
+             row["state"] = "bad-name"
+             out.append(row)
+             continue
+         worst = 0
+         for pl, n in pairs:
+             if n in methods_for(pl):
+                 continue
+             hay = hay_for(pl) or ""
+-            if re.search(r"^\s*def\s+" + re.escape(n) + r"\s*\(", hay, re.M):
++            if re.search(r"^[ \t]*def\s+" + re.escape(n) + r"\s*\(", hay, re.M):
+                 worst = max(worst, 1)          # unrecognized
+             elif n in hay:
+                 pass                           # mentioned(最輕,worst 預設 0)
+             else:
+                 worst = max(worst, 2)          # dangling
+         row["state"] = {0: "mentioned", 1: "unrecognized", 2: "dangling"}[worst]
+         out.append(row)
+     return out
+ 
+ 
+@@ -26125,20 +26134,66 @@ def _init_additive_setup(root: Path):
+                   "# 這底下是 per-machine 的執行期狀態,不版控、不跨機當權威\n"
+                   "# (CI 讀的是 docs/.governance-log.jsonl,那份刻意沒被忽略)。\n"
+                   "# code-loop:代碼審留痕與棧別提問表態的本機標記,綁 HEAD 版本號——一提交版本就移動、自己作廢。\n"
+                   "# runtime:hook 事件流水,每台機器各自的事實。★2026-09-09 補★:第一版漏了它,\n"
+                   "# 而第一個接入的真專案(calc-ios)因此把 hook-events.jsonl 提交進版控。\n"
+                   "code-loop/\n"
+                   "runtime/\n")
+         print(f"  ✓ 本機留痕的忽略設定 {gov_ignore}")
+     _ensure_docs_gitignore(root / "docs")
+     _init_config_skeleton(root)
++    _init_lint_hint(root)
++
++
++# 專案根目錄看得到的 linter 設定檔 → 可貼的 .lumos/lint.json 範本(2026-10-15 [[Projects/前端框架從vue分出_計劃]] W7)。
++# 目前只放 eslint;一列 = (工具名, 新式設定檔名, 舊式設定檔名, 範本)。只看根目錄、不掃樹。
++# 跟 _LINT_CONFIG_GLOBS(新增告警閘搬設定檔進快照的名單)用途不同、不合併,但 eslint 那幾個檔名兩邊都要認得——改一邊回頭看另一邊。
++_ESLINT_FLAT_CONFIGS = tuple(f"eslint.config.{e}" for e in ("js", "mjs", "cjs", "ts", "mts", "cts"))
++_ESLINT_LEGACY_CONFIGS = (".eslintrc", *(f".eslintrc.{e}" for e in ("js", "cjs", "json", "yml", "yaml")))
++_ESLINT_LINT_CMD = "npx eslint -f @microsoft/sarif -o {LINT_SARIF_OUT} {LINT_FILES}"
++# 最後一欄:根 package.json 裡代表舊式設定的鍵(eslint 的 eslintConfig)
++_LINTER_CONFIG_MARKERS = (("eslint", _ESLINT_FLAT_CONFIGS, _ESLINT_LEGACY_CONFIGS, _ESLINT_LINT_CMD, "eslintConfig"),)
++
++
++def _linter_config_hits(root):
++    """根目錄命中的 linter 設定:[(工具名, [命中檔名…], lint.json 範本文字)]。只命中舊式設定時,範本指令前面加
++    ESLINT_USE_FLAT_CONFIG=false(eslint 9 不設就不讀舊式設定);新舊都有給新式那份。"""
++    import json as _j
++    if not root:
++        return []
++    root = Path(root)
++    out = []
++    try:
++        _pkg = _j.loads((_worktree_text(root, "package.json") or "{}").lstrip("\ufeff"))
++    except (ValueError, RecursionError):
++        _pkg = {}
++    for tool, flat, legacy, cmd, pkg_key in _LINTER_CONFIG_MARKERS:
++        fh = [n for n in flat if (root / n).is_file()]
++        lh = [n for n in legacy if (root / n).is_file()]
++        if isinstance(_pkg, dict) and isinstance(_pkg.get(pkg_key), dict):   # 值要是物件(null、字串、陣列不算)
++            lh.append(f"package.json({pkg_key})")
++        if not (fh or lh):
++            continue
++        c = cmd if fh else "ESLINT_USE_FLAT_CONFIG=false " + cmd
++        tpl = _j.dumps({k: [c] for k in ("ts", "tsx", "js", "jsx")}, ensure_ascii=False, indent=2)
++        out.append((tool, fh + lh, tpl))
++    return out
++
++
++def _init_lint_hint(root):
++    """init 收尾:.lumos/lint.json 不存在、根目錄卻有 linter 設定時印一行提醒,指令另起一行。不替使用者寫 lint.json——
++    宣告了跑不動的 linter(formatter 沒裝)會讓健檢一直唸、讓新增告警閘拿到壞宣告(消費專案接入靜默失效_計劃:只加提醒與骨架)。"""
++    if (Path(root) / ".lumos" / "lint.json").exists():
++        return
++    for tool, names, _tpl in _linter_config_hits(root):
++        print(f"  ⚠ 看到 {tool} 設定 {'、'.join(names)},但 lumos 還沒接上它——代碼審看不到它的告警;接法看健檢 [F] 段的範本:")
++        print("    lumos doctor")
+ 
+ 
+ def _ensure_docs_gitignore(docs_dir):
+     """既有 vault 補本機帳的忽略規則(Projects/治理帳例行紀錄分流_計劃〈做法〉5)。只加不改。
+     - docs/ 不存在:什麼都不做(不建資料夾——獨立 vault 佈局建了反而改變「有沒有 docs/」的判斷)。
+     - docs/.gitignore 不存在:獨佔建一份★只放本機帳那兩行★(不套新建 vault 的整份清單,那會把另外幾本進版控的帳也忽略掉)。
+     - 存在:逐行比對,行尾換行與空白去掉後整行相等才算有(行首空白不去,跟 git 一樣);缺的接在尾端追加、
+       沿用原檔的換行符號,檔尾沒換行先補一個。★追加不替換★(代碼審 r2):替換會拆開捷徑或硬連結、
+       蓋掉使用者剛存的編輯、被砍時留暫存檔。★不拿鎖★(r3 併發席:鎖檔建不起來時空等 60 秒);
+       兩個程序剛好同時補可能補出重複行,對 git 無害、下次比對已有就不再補(使用者 2026-10-04 裁)。
+@@ -26310,20 +26365,23 @@ _SKELETON_RUN_CMD = {
+     # ★本機沒裝 gradle/mvn,這兩條指令沒有實跑核對過★,只保證形狀對(要能只跑一支測試)。
+     "java-junit": "./gradlew test --tests '*{method}'",
+     # ★尾巴那段 runsettings 不能省★(2026-09-09 r1 折入,dotnet 9.0.117 實測):
+     # 沒有它,`dotnet test --filter` 對一個根本不存在的測試名照樣印「No test matches」然後回 0,
+     # 閘拿退出碼當「測試跑過」就是假綠;加上去之後同一條指令回 1,對到真測試時仍回 0。
+     "csharp-xunit": "dotnet test --filter FullyQualifiedName~{method} -- RunConfiguration.TreatNoTestsAsError=true",
+     "python": "python3 -m pytest -k {method}",
+     # jest 沒有對應的旗標(29.x 實測:-t 對不到任何測試仍回 0,--passWithNoTests=false 也一樣)——
+     # 這條靠下面的「跑過的證據」比對摘要行,不靠退出碼。
+     "node-jest": "npx jest -t {method}",
++    # Vite 專案(根目錄有 vite/vitest 設定或依賴 vitest)給這條(2026-10-15 [[Projects/前端框架從vue分出_計劃]] F1);
++    # vitest 對不到測試名一樣回 0(5.0.4 實測),靠 _RAN_EVIDENCE 的摘要行判跑過。
++    "node-vitest": "npx vitest run -t {method}",
+     "dart": "flutter test --plain-name {method}",
+     "playwright": "npx playwright test -g {method}",
+ }
+ 
+ # 掃 repo 猜技術棧時一律略過的目錄(★兩支掃描共用同一份★——r1 單reviewer f4:
+ # 兩邊各有一份且內容不同時,init 猜出來的骨架跟健檢驗的東西會對不上,
+ # 「猜錯沒人知道」正好在自己身上重演一次)。
+ # ★只放「不是人寫的原始碼」的目錄★:相依套件、建置產物、工具自己的目錄。
+ # 合併時特意★把 scripts 從名單裡拿掉★:它原本只在健檢那份裡,而那是普通的原始碼目錄
+ # ——照舊略過的話,本 repo 自己的 Python 全在 scripts/ 底下,健檢就再也抓不到
+@@ -26457,20 +26515,39 @@ def _config_left_blank(root):
+     if not isinstance(cfg, dict):
+         return []
+     out = []
+     if not cfg.get("test_profile") and not cfg.get("platforms"):
+         out.append("`.lumos/config.json` 的 test_profile 還是空的——掃不到你的測試,合約綁不上任何東西(閘會靜默放行)")
+     if not cfg.get("symbol_profile"):
+         out.append("`.lumos/config.json` 的 symbol_profile 還是空的——符號檢查會用 C# 的副檔名清單,對你的程式碼視而不見")
+     return out
+ 
+ 
++_VITEST_CONFIG_NAMES = tuple(f"{b}.{e}" for b in ("vite.config", "vitest.config") for e in ("ts", "js", "mjs", "cjs", "mts", "cts"))
++
++
++def _uses_vitest(root):
++    """這個 repo 用不用 vitest(只看根目錄,init 只產一份根設定):根 package.json 的依賴(三類,_pkg_dep_keys)有 vitest → 是;
++    依賴有 jest 沒有 vitest(Vite 打包、jest 測試)→ 不是;依賴看不出來時,根目錄有 vite/vitest 設定檔(確切副檔名,.bak 不算)→ 是。"""
++    deps = _pkg_dep_keys(_worktree_text(root, "package.json") or "") or set()
++    if "vitest" in deps:
++        return True
++    if "jest" in deps:
++        return False
++    return any((Path(root) / n).is_file() for n in _VITEST_CONFIG_NAMES)
++
++
++def _init_test_profile(tp, root):
++    """骨架用的測試 profile:猜到 node-jest 而這個 repo 用 vitest 時換成 node-vitest,其餘照舊。"""
++    return "node-vitest" if tp == "node-jest" and _uses_vitest(root) else tp
++
++
+ def _init_config_skeleton(root):
+     """init 產出 .lumos/config.json 骨架(消費專案接入靜默失效 [A]/S1)。
+ 
+     為什麼要產:不產的話 test_profile 與 symbol_profile 各自退回 csharp 預設,
+     非 C# 專案第一天起兩個關鍵設定都錯而且★沒有任何提示★——2026-09-09 第一個 iOS 專案實地踩到。
+     既有設定一律不覆寫;猜到的棧一律標「推測」不當斷言;多語言走既有 platforms 多根多 profile 格式。"""
+     import json as _j
+     cfg_path = Path(root) / ".lumos" / "config.json"
+     if cfg_path.exists():
+         return   # 既有設定不碰
+@@ -26482,46 +26559,48 @@ def _init_config_skeleton(root):
+     note = ("這份是 lumos init 產出的骨架,裡面的技術棧是用副檔名推測的——請開檔確認。"
+             "猜錯的話兩件事會靜默失效:掃不到你的測試(合約綁不上)、符號檢查對你的程式碼視而不見。"
+             "確認完可以把這個 _請先確認 欄位刪掉。")
+     blank = {"_說明": "偵測不到已知的技術棧。填 test_profile(可選:%s)與 symbol_profile(可選:%s),並把 run_cmd 改成你專案跑單一測試的指令(必須帶 {method} 佔位符,而且對不存在的測試名要回非零或在輸出裡數得出跑了幾支)" % ("/".join(sorted(TEST_PROFILES)), "/".join(sorted(SYMBOL_PROFILES))),
+              "test_profile": "", "symbol_profile": "", "test": {"run_cmd": ""}}
+     if not ranked:
+         body = blank
+     elif len(ranked) == 1 or ranked[0][1] > sum(c for _, c in ranked[1:]) * 3:
+         ext = ranked[0][0]
+         g = guess[ext]
+-        tp, sp, human = g["test"], g["symbol"], g["human"]
+-        body = {"_推測": f"看到 {counts[ext]} 個 {ext} 檔,猜這是 {human} 專案——不對就改",
++        tp, sp, human = _init_test_profile(g["test"], root), g["symbol"], g["human"]
++        body = {"_推測": f"看到 {counts[ext]} 個 {ext} 檔,猜這是 {human} 專案——不對就改"
++                         + (";看到 vite/vitest 設定,所以給 vitest 的指令" if tp == "node-vitest" else ""),
+                 "test_profile": tp, "symbol_profile": sp,
+                 "test": {"run_cmd": _SKELETON_RUN_CMD.get(tp, "")}}
+         if not tp or not sp:
+             body["_請自己填"] = ("這個副檔名在正典表裡只被其中一種 profile 認領,另一個留空給你填:"
+                                 f"test_profile 可選 {'/'.join(sorted(TEST_PROFILES))};"
+                                 f"symbol_profile 可選 {'/'.join(sorted(SYMBOL_PROFILES))}")
+         if g["symbol_weak"]:
+             body["_這個猜得很弱"] = (f"symbol_profile 猜成 {sp},只是因為 {sp} 的副檔名清單裡碰巧收了 {ext}"
+                                     f"——那不代表這是 {sp} 專案。符號檢查會用 {sp} 的清單去找筆記提到的符號,"
+                                     "對不上就整批查不到也不會報。請自己確認,可選:"
+                                     f"{'/'.join(sorted(SYMBOL_PROFILES))}")
+     else:
+         plats = {}
+         # ★每一種偵測得到的語言都要列出來,不能只取前幾名★(2026-09-12 多語言驗證 repo 實撞):
+         # 原本是 ranked[:3],一個九種語言的 repo 只會產出三個平台,其餘六種的測試從此掃不到——
+         # 而掃不到的症狀不是報錯,是合約綁不上、閘靜默放行。多列一個平台的代價只是使用者刪一段設定,
+         # 少列一個的代價是那個語言的守衛整批不存在,兩邊不對等。
+         for ext, n in ranked:
+             g = guess[ext]
+-            tp, sp, human = g["test"], g["symbol"], g["human"]
++            tp, sp, human = _init_test_profile(g["test"], root), g["symbol"], g["human"]
+             if not tp:
+                 continue
+             plats.setdefault(tp.split("-")[0], {"profile": tp, "root": ".", "run_cmd": _SKELETON_RUN_CMD.get(tp, ""),
+-                                                "_推測": f"看到 {n} 個 {ext} 檔({human})"})
++                                                "_推測": f"看到 {n} 個 {ext} 檔({human})"
++                                                         + (";看到 vite/vitest 設定,所以給 vitest 的指令" if tp == "node-vitest" else "")})
+         if not plats:
+             body = blank
+         else:
+             body = {"_推測": "看到多種語言,用多平台格式(每個平台各自的 root/profile/run_cmd)——請確認並把 root 改成各平台真正的目錄;偵測得到的語言全部列出來了,不需要的平台整段刪掉就好",
+                     "default_platform": next(iter(plats)), "platforms": plats,
+                     "symbol_profile": guess[ranked[0][0]]["symbol"]}
+     cfg_path.parent.mkdir(parents=True, exist_ok=True)
+     body = {"_請先確認": note, **body}
+     _write_lf(cfg_path, _j.dumps(body, ensure_ascii=False, indent=2) + "\n")
+     print(f"  ✓ 設定骨架 {cfg_path}(★技術棧是推測的,請開檔確認★——猜錯會讓測試掃描與符號檢查靜默失效)")
+@@ -27417,21 +27496,21 @@ def _anchor_repo_root(repo):
+ 
+ 
+ def _quote_norm(s):
+     """quote-check 的唯一正規化(T2 design-loop重設計):NFC → 剝 markdown 強調記號(*/`)
+     → 空白(含全形\u3000/換行)摺疊單空格。★抽取與比對共用這一份——嚴禁第二份實作★
+     (2026-08-02 教訓:預檢與主迴圈兩份實作當場漂移)。不做 lower(保留大小寫語意)。"""
+     import re
+     import unicodedata
+     s = unicodedata.normalize("NFC", s)
+     # Landmark 真場實測(2026-08-04):blockquote 折行的續行 > 記號會進 hay,引句永遠比不中
+-    s = re.sub(r"(?m)^\s*>\s?", "", s)
++    s = re.sub(r"(?m)^[ \t]*>\s?", "", s)
+     s = s.replace("*", "").replace("`", "")
+     return " ".join(s.split())
+ 
+ 
+ _QUOTE_MIN_NORM_LEN = 10   # 錨定紀律「引句 ≥10 字」轉機械(r1 否決席:一字引句必然錨得到=紀律被架空)
+ 
+ 
+ # ═══ 引句判準(Projects/引句錨定整段比對_計劃)═══
+ # 寫側用哪一版判準:程式常數,不放設定檔(設定檔任何一處寫壞都會讓寫側悄悄退版、而且帳只進不出——設計審 r4 三席)。
+ # 第一階段 legacy(行為不變,只讓讀帳的地方認得章);第二階段改成 full-span-v1,與文件同步放在同一個提交,回退就還原那個提交。
+@@ -29973,39 +30052,39 @@ _EXTCODE_WHEN = (
+ # A 比較(要名稱片段)、B 分支(case "2000" / 行首 "2000" ->)、C 集合(in ( [ { 開頭是引號數字,要名稱片段):要看字串,放 when_raw。
+ _EXTCODE_WHEN_RAW = (
+     _EXTCODE_GUARD + r"(?=.*?" + _EXTCODE_NAME + r").*?(?:(?:===?|!==?)\s*" + _EXTCODE_QNUM + r"|" + _EXTCODE_QNUM
+     + r"\s*(?:===?|!==?)|\.equals\(\s*" + _EXTCODE_QNUM + r"|" + _EXTCODE_QNUM + r"\s*\.equals\()",
+     _EXTCODE_GUARD + r"(?:.*?\bcase\s+" + _EXTCODE_QNUM + r"|\s*" + _EXTCODE_QNUM + r"\s*(?:,\s*" + _EXTCODE_QNUM + r"\s*){0,10}->)",
+     _EXTCODE_GUARD + r"(?=.*?" + _EXTCODE_NAME + r").*?\bin\s*[\(\[\{]\s*" + _EXTCODE_QNUM,
+ )
+ _EXTCODE_Q = ("外部回應碼:這次改動拿外部系統(金流、第三方 API)回來的代碼做判斷。每個碼在官方文件裡的原文意思寫在哪篇筆記?"
+               "FACT 行要帶 [來源:外部],官方網址寫在 [查:] 欄(不要寫進來源標記)。沒有就先寫一篇,最好寫進改到那支檔的家;"
+               "特別確認『流程結束』這類碼是不是真的等於業務成功。")
+-_EXTCODE_STACKS = ("kt", "cs", "vue", "swift", "node", "py", "java", "dart")   # sql 不呼叫外部 API,不加
++_EXTCODE_STACKS = ("kt", "cs", "vue", "react", "swift", "node", "py", "java", "dart")   # sql 不呼叫外部 API,不加
+ 
+ 
+ _STACK_QUESTION_SPECS = {
+     "kt": [
+         {"id": "kt-compose", "q": 'Compose:昂貴計算有沒有 remember?不穩定型別/缺穩定 key 會不會讓重組失控(stability report 可查)?副作用有沒有放在 LaunchedEffect/DisposableEffect 且 key 選對(讀了會變的輸入卻用 Unit 當 key=永不重跑;key 太寬=每次重組重跑;2026-09-08 補,KDS 18 處 LaunchedEffect 有 9 處 Unit key)?',
+-         "when": ['@Composable', 'LaunchedEffect', 'DisposableEffect', '\\bremember\\b', 'derivedStateOf', 'Lazy(Column|Row|VerticalGrid)', 'findViewById', 'RecyclerView\\.Adapter', 'notifyDataSetChanged', '\\.inflate\\(', 'ViewHolder']},
++         "when": ['@Composable', 'LaunchedEffect', 'DisposableEffect', '\\bremember\\b', 'derivedStateOf', 'Lazy(Column|Row|VerticalGrid)', 'findViewById', 'RecyclerView\\.Adapter', 'notifyDataSetChanged', '\\.inflate\\(', 'ViewHolder'], "android_only": True},
+         {"id": "kt-coroutines", "q": '協程:互不依賴的等待有沒有並行(coroutineScope+async)?有沒有 GlobalScope 裸用/scope 沒跟生命週期(viewModelScope)?',
+          "when": ['\\blaunch\\b', '\\basync\\b', 'coroutineScope', 'supervisorScope', 'GlobalScope', 'viewModelScope', 'lifecycleScope', '\\.await\\(', '\\bThread\\s*\\(', 'Thread\\.sleep', 'runBlocking', '\\bHandler\\s*\\(', 'AsyncTask', 'Executors\\.', 'CountDownLatch']},
+         {"id": "kt-dispatchers", "q": 'Dispatchers 選對了嗎(IO 密集≠Default)?suspend 函式 main-safe 嗎?async 吞例外/長運算 ensureActive?',
+          "when": ['Dispatchers\\.', 'withContext\\(', 'suspend fun', 'ensureActive', 'runBlocking', 'Looper\\.getMainLooper', 'runOnUiThread', 'HandlerThread']},
+         {"id": "kt-flow", "q": 'Flow/Channel 選型:狀態=StateFlow/事件=SharedFlow/單消費=Channel,選反漏事件或黏著重放;背壓 buffer/conflate?repeatOnLifecycle?shareIn 有沒有放函式回傳(每叫一次漏一條熱流,idioms R5)?',
+          "when": ['StateFlow', 'SharedFlow', '\\bChannel\\b', '\\bflow\\s*\\{', 'shareIn', 'stateIn', '\\.collect\\b', 'collectLatest', 'repeatOnLifecycle', 'conflate', '\\.buffer\\(', 'LiveData', 'EventBus', 'PublishSubject', 'BroadcastReceiver']},
+         {"id": "kt-collections", "q": '大集合長鏈有沒有 asSequence(每步 map/filter 生中間 List)?熱路徑 value class 有沒有被泛型/可空觸發裝箱?',
+          "when": ['\\.(map|filter|flatMap|sortedBy|groupBy)\\s*\\{', 'asSequence', '@JvmInline', 'value class', '\\bArrayList\\(', 'Collections\\.sort', '\\.addAll\\(']},
+         {"id": "kt-leaks", "q": '洩漏:單例/SDK/companion 有沒有持 Activity Context 或 View(該給 applicationContext)?長活物件持 ViewModel/View 引用?',
+-         "when": ['\\bContext\\b', 'companion object', 'WeakReference', '\\bActivity\\b', '\\bView\\b', 'WeakReference', 'static\\s+(?:final\\s+)?(?:Context|Activity|View)\\b', 'TimerTask', 'registerReceiver']},
++         "when": ['\\bContext\\b', 'companion object', 'WeakReference', '\\bActivity\\b', '\\bView\\b', 'WeakReference', 'static\\s+(?:final\\s+)?(?:Context|Activity|View)\\b', 'TimerTask', 'registerReceiver'], "android_only": True},
+         {"id": "kt-startup", "q": '啟動:Application onCreate/首幀前有沒有同步重活(eager SDK init/磁碟 IO/大 JSON 解析)?拖冷啟+ANR 面;刻意暖機=正當取捨但要寫明理由(延後 init 可能把延遲挪到首筆業務,更糟)?',
+-         "when": ['onCreate\\(', ': Application\\(\\)', 'SplashScreen', '\\binit\\s*\\{', '\\.commit\\(\\)', 'Class\\.forName', 'assets\\.open']},
++         "when": ['onCreate\\(', ': Application\\(\\)', 'SplashScreen', '\\binit\\s*\\{', '\\.commit\\(\\)', 'Class\\.forName', 'assets\\.open'], "android_only": True},
+         # Kotlin 寫 Spring 後端(2026-10-12,[[Projects/後端工程提問與證據擴充_計劃]] S4):上面七題是 Android 導向,
+         # .kt 檔裡的交易/資料存取/外呼原本沒有任何題會亮。觸發詞只收 Spring/JPA 專屬寫法——Room 也用 @Entity 與 @Query("SELECT…"),不收。
+         # shape_only:只在真的寫到 Spring 寫法時才亮,不因行數門檻整組亮、也不進改檔前推播的整組清單(Android 專案看不到也不用答)。
+         {"id": "kt-springdata", "q": '資料層(Spring/JPA/JDBC):查詢會不會在迴圈裡跑(N+1)?LAZY 關聯是不是在迴圈裡才一筆筆載入?大表有沒有分頁或串流?@Transactional 有沒有被同一個類別內部呼叫(代理不生效)?交易裡有沒有夾外部呼叫?扣庫存這類共享資源用的是條件更新或鎖,還是先讀後寫?',
+          # 整組比對不分大小寫;撞 Android 自訂類名的字用 (?-i:…) 局部分大小寫並加字詞邊界,或只認 Spring 專屬的呼叫形狀(代碼審 r1 邊界席、通才席)
+          "when": ['@(?:get:|set:|field:)?Transactional\\b', 'JpaRepository', 'CrudRepository', 'PagingAndSortingRepository', 'MongoRepository',
+                   'R2dbcRepository', 'JdbcTemplate', '\\bJdbcClient\\b', '\\b(?:Reactive)?MongoTemplate\\b',
+                   'EntityManager', 'jakarta\\.persistence', 'javax\\.persistence', 'LockModeType', '@Modifying', 'TransactionTemplate',
+                   'R2dbcEntityTemplate', '(?-i:\\bDatabaseClient\\.(?:create|builder)\\b)', '(?-i:(?:\\b|(?<=[a-z0-9]))[dD]atabaseClient\\s*\\??\\.\\s*(?:sql|select|insert|update|delete|execute)\\s*\\()', 'org\\.springframework\\.(?:r2dbc|data|jdbc|transaction)\\b'],
+          "shape_only": True},
+@@ -30033,20 +30112,40 @@ _STACK_QUESTION_SPECS = {
+          "when": ['\\bawait\\b', '@click', '@input', 'addEventListener', 'setTimeout', '\\$http\\.', 'XMLHttpRequest', '\\$\\.(ajax|get|post)\\(', 'setInterval\\(']},
+         {"id": "vue-lcp", "q": 'LCP 元素有沒有被誤加 lazy loading?圖片有沒有寬高(防 CLS)?',
+          "when": ['<img', '<picture', 'IntersectionObserver', 'background-image', '\\.src\\s*='], "when_raw": ['loading=\\"lazy\\"', 'createElement\\([\'\\"]img']},
+         {"id": "vue-bundle", "q": '新依賴 bundle 多重?能不能動態載入?',
+          "when": ['defineAsyncComponent', 'import\\(', '<script[^>]+src=', 'require\\('], "when_raw": ['import\\s.*from\\s+[\'\\"][^./]']},
+         {"id": "vue-watch", "q": 'async watch 有沒有處理競態(舊回應蓋掉新資料)?深層 watch 成本有意識嗎?v-for 子項 prop 有沒有預算成 per-item 值?',
+          "when": ['\\bwatch\\(', 'watchEffect', 'v-for', 'deep:\\s*true', 'AbortController', '\\$watch\\(', '\\bwatch:\\s*\\{', 'deep:\\s*true', 'immediate:\\s*true']},
+         {"id": "vue-reactive", "q": '響應原語選型:大 API 回應/大列表有沒有整包 ref()/reactive()(深響應逐層 Proxy,大 JSON 可膨脹數倍記憶體)?不需深追蹤的大資料該 shallowRef/markRaw;ESLint 無規則可抓,量級自判?',
+          "when": ['\\breactive\\(', '\\bref\\(', 'shallowRef', 'markRaw', 'toRaw', 'JSON\\.parse', 'fetch\\(', 'axios', 'data\\(\\)\\s*\\{', 'Vue\\.set\\(', 'this\\.\\$set\\(', 'Vue\\.observable', '\\$forceUpdate']},
+     ],
++    # React(2026-10-15,[[Projects/前端框架從vue分出_計劃]] d1:走 React 專屬題;★只在 order-web 一個專案的審查報告取材★)。
++    # 前端 .ts/.tsx/.js/.jsx 的 package.json 只有 react/next/preact、沒有其他前端框架時才走這組(_node_flavor_of)。
++    # react-parallel 帶 min_lines=2:逐行比對看不到上下兩行,用「至少兩行命中」近似「連續兩個以上的 await」。
++    "react": [
++        {"id": "react-effect", "q": 'effect 依賴與清理:依賴陣列有沒有漏讀到的值(exhaustive-deps 不准關)?計時器、訂閱、監聽有沒有在清理函式收掉?是不是用 effect+setState 同步一個由 props 算得出來的值(該直接算)?',
++         "when": ['\\buseEffect\\b', '\\buseLayoutEffect\\b', '\\bsetInterval\\(', '\\bsetTimeout\\(', 'addEventListener\\(', '\\.subscribe\\(', 'componentDidMount', 'componentWillUnmount']},
++        {"id": "react-race", "q": '回應亂序:同一畫面連發的請求,舊回應晚到會不會蓋掉新的(序號、AbortController 或忽略旗標)?卸載後 await 回來還寫狀態嗎?被新請求取代而中止的那次,算不算失敗?',
++         "when": ['\\bfetch\\(', '\\baxios\\b', '\\bawait\\b', '\\.then\\(', 'AbortController', 'XMLHttpRequest', '\\buseSWR\\b', '\\buseQuery\\b']},
++        {"id": "react-render", "q": '重繪成本:高頻更新的狀態(輪詢、計時、輸入)放在哪一層、會不會整棵樹跟著重畫?Context 的 value 是不是每次重建新物件?昂貴計算有沒有 useMemo,而且只在量級值得時才加?',
++         "when": ['\\buseState\\b', '\\buseReducer\\b', '\\buseContext\\b', '\\bcreateContext\\b', '\\buseMemo\\b', '\\buseCallback\\b', '(?-i:\\bmemo\\()', '\\bforceUpdate\\b']},
++        {"id": "react-key", "q": '清單 key:key 是不是穩定的業務 id,不是陣列索引或隨機數?會插入、刪除、重排的清單用索引當 key,輸入框狀態會跟錯列。',
++         "when": ['\\.map\\(', '\\bkey=\\{\\s*(?:i|idx|index)\\s*\\}', '\\bkey=\\{[^}]{0,80}Math\\.random\\(']},
++        {"id": "react-strict", "q": 'StrictMode:開發模式下 effect 會掛載→清理→再掛載一次:setup 跑兩次會不會重複發請求、重複訂閱、重複送出?state 更新函式與 useState 初始化函式是不是純的(會被呼叫兩次)?用 ref 擋重複的地方,清理時有沒有重設?',
++         "when": ['\\bStrictMode\\b', '\\buseRef\\b', '\\buseEffect\\b', '\\buseState\\(\\s*\\(\\)']},
++        {"id": "react-bundle", "q": '新依賴 bundle 多重?路由層級能不能 lazy + Suspense 拆塊?有沒有整包匯入圖示庫或工具庫?',
++         "when": ['(?-i:\\blazy\\()', '\\bSuspense\\b', '\\bimport\\('], "when_raw": ['import\\s.*from\\s+[\'\\"][^./]']},
++        {"id": "react-parallel", "q": '互不依賴的等待有沒有並行:兩個 await 之間沒有資料依賴時,有沒有用 Promise.all(或 allSettled)一起等,而不是一個等完才發下一個(延遲相加)?迴圈裡逐筆 await 的,能不能改成一次發出、有界並行?',
++         "when": ['^\\s*(?:const|let|var)\\s+[\\w{}\\[\\],\\s]{1,80}=\\s*await\\b', '\\bfor\\b[^\\n]{0,120}\\bawait\\b', '\\.forEach\\(\\s*async\\b', '\\bPromise\\.(?:all|allSettled)\\('],
++         "min_lines": 2},
++    ],
+     "sql": [
+         {"id": "sql-nplus1", "needs_backing": True, "q": '這條查詢會在迴圈裡被呼叫嗎(N+1)?',
+          "when": ['\\bSELECT\\b', '\\bCURSOR\\b', '\\bWHILE\\b', 'FETCH NEXT', 'sp_executesql', '\\bEXEC\\s*\\(', 'OPENQUERY']},
+         {"id": "sql-index", "q": '有沒有索引支撐?會不會大表全掃?',
+          "when": ['\\bWHERE\\b', '\\bJOIN\\b', 'ORDER BY', '\\bLIKE\\b', '\\bIN\\s*\\(', 'SELECT\\s+\\*', '\\bNOT IN\\s*\\(', '\\bDISTINCT\\b']},
+         {"id": "sql-transaction", "needs_backing": True, "q": '交易範圍會不會鎖太久?隔離等級是刻意選的還是吃預設(READ COMMITTED 與 SERIALIZABLE 差在哪要說得出)?多表更新的鎖順序全站一致嗎(不一致=死鎖,重試包裝只是止血)?同一查詢換參數會不會拿到爛計畫(parameter sniffing;SQL Server compat 150 沒有 PSP 優化)?',
+          "when": ['BEGIN TRAN', '\\bCOMMIT\\b', '\\bROLLBACK\\b', 'ISOLATION LEVEL', '\\bUPDATE\\b', '\\bDELETE\\b', '\\bMERGE\\b', 'WITH\\s*\\((NOLOCK|UPDLOCK|HOLDLOCK)', '@\\w+', 'XACT_ABORT', '\\bTRUNCATE\\b', '\\bWAITFOR\\b', 'sp_getapplock']},
+         {"id": "sql-sargable", "q": 'SARGable:索引在卻被寫法廢掉——WHERE 欄位側有沒有函式包用(ISNULL/CAST 包欄位=逐列運算廢索引;CONVERT(date,欄) 是文件化特例可 seek)?參數型別對得上欄位嗎(C# string 預設 nvarchar 打 varchar 欄=隱式轉換整表掃)?',
+          "when": ['CONVERT\\(', 'CAST\\(', 'ISNULL\\(', 'COALESCE\\(', 'LOWER\\(', 'UPPER\\(', 'DATEADD\\(', '\\bYEAR\\(', '\\bMONTH\\(', 'SUBSTRING\\(', '\\b[LR]TRIM\\('], "when_raw": ["LIKE\\s*'%", "\\+\\s*'%", "'%'\\s*\\+"]},
+     ],
+@@ -30148,103 +30247,222 @@ _STACK_QUESTION_SPECS = {
+          "q": "平台通道與本機資源:MethodChannel / EventChannel 的呼叫有沒有逾時與錯誤處理(對面沒回應這邊會一直等)?偏好設定、檔案、資料庫的讀寫是不是在畫面執行緒同步做?大檔是不是一次讀進記憶體而不是串流?資料庫查詢有沒有在迴圈裡逐筆打?",
+          "when": ['MethodChannel', 'EventChannel', 'BasicMessageChannel', 'SharedPreferences',
+                   'path_provider', 'getApplicationDocumentsDirectory', '\\bFile\\(', 'writeAsString',
+                   'sqflite', 'openDatabase', 'rawQuery', 'Hive\\.']},
+     ],
+ }
+ # 外部回應碼題(八棧各一):shape_only=只看形狀——不因「改動超過行數門檻就整組適用」而亮,也不進下面的舊語意整組清單
+ for _stk in _EXTCODE_STACKS:
+     _STACK_QUESTION_SPECS[_stk].append({"id": f"{_stk}-extcode", "q": _EXTCODE_Q, "when": list(_EXTCODE_WHEN),
+                                         "when_raw": list(_EXTCODE_WHEN_RAW), "shape_only": True})
+-_STACK_PERF_QUESTIONS = {_k: [_s["q"] for _s in _v if not _s.get("shape_only")] for _k, _v in _STACK_QUESTION_SPECS.items()}   # 派生:舊語意(命中棧整組原文;shape_only 題不進)
++def _stack_whole_group(stk, exclude=frozenset()):
++    """命中棧整組清單(舊語意)的唯一派生:shape_only 題不進,exclude 裡的題號(這次不適用平台的 android_only 題)也不進。"""
++    return [sp["q"] for sp in _STACK_QUESTION_SPECS[stk] if not sp.get("shape_only") and sp["id"] not in exclude]
++
++
++_STACK_PERF_QUESTIONS = {_k: _stack_whole_group(_k) for _k in _STACK_QUESTION_SPECS}   # 派生:舊語意(命中棧整組原文;shape_only 題不進)
+ _EXTCODE_RX_PLAIN = tuple(re.compile(_p, re.I) for _p in _EXTCODE_WHEN)      # 鏡頭用:同兩組字串、同 re.I
+ _EXTCODE_RX_RAW = tuple(re.compile(_p, re.I) for _p in _EXTCODE_WHEN_RAW)
+ # when=範式詞+反面詞(2026-09-09 Enzo:用爛的方法寫同一個功能不能亮不同題或不亮——舊法/土法會出現的字也讓同一題亮;反面詞要具體到不誤傷,Thread\( 不是 Thread)
+ # 第三欄 when_raw(r1 外家 finder f7 → code-反面詞 r1 單席 f1 改成逐 pattern):只有這幾條要看字串內容(.on("error"、LIKE '%、
+ # import from "./x"、"SELECT 、require('child_process')),同題其他 pattern 照樣剝字串——整題看字串會讓 log 訊息裡的 SELECT/JSON.parse 變假命中
+ _STACK_TRIGGERS = {_k: [(_s["id"], tuple(re.compile(_p, re.I) for _p in _s["when"]), tuple(re.compile(_p, re.I) for _p in _s.get("when_raw", ()))) for _s in _v]
+                    for _k, _v in _STACK_QUESTION_SPECS.items()}   # 載入時編譯:壞 regex=啟動即錯
+ # 以 "node" 鍵而非副檔名為棧的原因:.ts/.js 在 Vue 前端與 Node 後端都出現,單看副檔名分不出來。
+-_NODE_FRONTEND_MARKERS = ("vue", "nuxt", "react", "next", "svelte", "@angular/core", "solid-js", "preact")
+-_NODE_FLAVOR_CACHE = {}
++# 前端值拆兩組(2026-10-15 [[Projects/前端框架從vue分出_計劃]]):只有 react 家族 → "react";其他前端框架(含跟 react 並存的混合依賴)照舊 "vue"
++# ——svelte/Angular/Solid 之後有專案再各自補(使用者裁),混合依賴寧可維持現況也不猜成 react。
++_NODE_REACT_MARKERS = ("react", "next", "preact")
++_NODE_OTHER_FRONTEND_MARKERS = ("vue", "nuxt", "svelte", "@angular/core", "solid-js")
++_NODE_FRONTEND_MARKERS = _NODE_OTHER_FRONTEND_MARKERS + _NODE_REACT_MARKERS
++_WORKTREE_TEXT_CACHE = {}
+ 
+ 
+ def _node_flavor(file_rel, repo_root, reader=None):
+     """判一支 .ts/.js 檔是「前端(vue)」還是「Node 後端(node)」:從檔案所在目錄往上找最近的 package.json
+-    (monorepo 各包各判),依賴裡有前端框架 → "vue"(只有 vue-idioms 這一份前端慣例,先都歸它);有 package.json
+-    但沒前端框架 → "node";找不到 package.json → None(呼叫端沿用舊行為,不多附東西)。
++    (monorepo 各包各判),依賴裡只有 react 家族的前端框架 → "react";有其他前端框架 → "vue"(見 _NODE_REACT_MARKERS 上方說明);
++    有 package.json 但沒前端框架 → "node";找不到 package.json → None(呼叫端沿用舊行為,不多附東西)。
+     ★只看 dependencies/devDependencies 的鍵,不猜檔案內容★——猜錯會把後端問題塞給前端檔。
+     ★最近那份 package.json 讀得到卻解析不了 → None★(容許開頭的 BOM;2026-09-29 角色鏡頭設計審 r1 邊界席:
+     原本當成沒有依賴、判成 node,前端專案的 package.json 多一個逗號就拿到後端題)。
+     reader:給了就改讀「某個版本」的 package.json(repo 相對路徑 → 文字或 None);沒給就讀工作樹(同一條往上找的路)。"""
+     if reader is None:
+-        reader = lambda rel: _node_pkg_text(repo_root, rel)   # noqa: E731 — 同一條找法,只換讀取來源
++        reader = lambda rel: _worktree_text(repo_root, rel)   # noqa: E731 — 同一條找法,只換讀取來源
+     return _node_flavor_at(file_rel, reader)
+ 
+ 
+-def _node_pkg_text(repo_root, rel):
+-    """工作樹裡某個相對路徑的 package.json 文字;沒有這個檔回 None。同一個 repo 同一份檔只讀一次(_NODE_FLAVOR_CACHE)。
+-    ★檔在但讀不了(權限、非 UTF-8)回空字串★=「在但解析不了」→ 判不出;回 None 會被當成沒有、往上找到父層改判
+-    (代碼審 r2 正確性席:UTF-16 的前端 package.json 被判成根層的後端)。非 UTF-8 照 git 版的讀法換字元,解析自然失敗。"""
+-    key = str(Path(repo_root) / rel)
+-    if key not in _NODE_FLAVOR_CACHE:
+-        p = Path(key)
++def _worktree_text(repo_root, rel, head=None, max_bytes=None):
++    """工作樹裡某個相對路徑的文字(package.json、Kotlin 建置檔、.kt 檔頭共用這一支,快取在 _WORKTREE_TEXT_CACHE)。
++    沒有這個檔回 None;★檔在但讀不了(權限、非 UTF-8)回空字串★=「在但解析不了」→ 判不出;回 None 會被當成沒有、
++    往上找到父層改判(代碼審 r2 正確性席:UTF-16 的前端 package.json 被判成根層的後端)。非 UTF-8 照 git 版的讀法換字元。
++    head:只讀前這麼多位元組(.kt 檔頭找匯入);max_bytes:檔案超過這個大小回空字串(建置檔,同角色鏡頭的上限)。
++    快取一筆最多一份檔(大小受 max_bytes/head 管);呼叫端各自有檔數上限,所以總量有界。"""
++    key = (str(Path(repo_root) / rel), head, max_bytes)
++    if key not in _WORKTREE_TEXT_CACHE:
++        p = Path(key[0])
+         try:
+-            _NODE_FLAVOR_CACHE[key] = p.read_text(encoding="utf-8", errors="replace") if p.is_file() else None
++            if not p.is_file():
++                v = None
++            elif max_bytes is not None and p.stat().st_size > max_bytes:
++                v = ""
++            elif head is not None:
++                with open(p, "rb") as fh:
++                    v = fh.read(head).decode("utf-8", "replace")
++            else:
++                v = p.read_text(encoding="utf-8", errors="replace")
+         except OSError:
+-            _NODE_FLAVOR_CACHE[key] = ""
+-    return _NODE_FLAVOR_CACHE[key]
++            v = ""
++        _WORKTREE_TEXT_CACHE[key] = v
++    return _WORKTREE_TEXT_CACHE[key]
+ 
+ 
+-def _node_flavor_of(txt):
+-    """一份 package.json 的文字 → "vue" / "node";解析不了(容許開頭的 BOM)回 None。"""
++def _pkg_dep_keys(txt):
++    """一份 package.json 的文字 → dependencies/devDependencies/peerDependencies 的鍵集合;解析不了(容許開頭的 BOM)回 None。
++    判前後端與 init 判 vitest 共用這一支,不各收各的。"""
+     import json
+     try:
+         data = json.loads(txt.lstrip("\ufeff"))
+     except (ValueError, RecursionError):   # 超深巢狀丟的是 RecursionError(代碼審 r1 正確性 F3)
+         return None
+     deps = set()
+     for k in ("dependencies", "devDependencies", "peerDependencies"):
+         v = data.get(k) if isinstance(data, dict) else None
+         if isinstance(v, dict):
+             deps.update(v.keys())
+-    return "vue" if any(m in deps for m in _NODE_FRONTEND_MARKERS) else "node"
++    return deps
++
++
++def _node_flavor_of(txt):
++    """一份 package.json 的文字 → "react" / "vue" / "node";解析不了(容許開頭的 BOM)回 None。"""
++    deps = _pkg_dep_keys(txt)
++    if deps is None:
++        return None
++    if any(m in deps for m in _NODE_OTHER_FRONTEND_MARKERS):
++        return "vue"
++    return "react" if any(m in deps for m in _NODE_REACT_MARKERS) else "node"
+ 
+ 
+ def _package_json_candidates(file_rel):
+     """從檔案所在目錄往上到 repo 根,每一層的 package.json 相對路徑(近的在前)。"""
+     from pathlib import PurePosixPath
+     parts = PurePosixPath(file_rel).parts[:-1]
+     return ["/".join((*parts[:i], "package.json")) for i in range(len(parts), -1, -1)]
+ 
+ 
+ def _node_flavor_at(file_rel, reader):
+     """_node_flavor 的「讀指定版本」那一半:最近一份讀得到的 package.json 決定。"""
+     for rel in _package_json_candidates(file_rel):
+         txt = reader(rel)
+         if txt is not None:
+             return _node_flavor_of(txt)
+     return None
+ 
+ 
+ _NODE_EXTS = {"ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"}
+ 
++# ── Kotlin 檔是 Android 還是伺服端(2026-10-15 [[Projects/前端框架從vue分出_計劃]] B10、決策 d2)──
++# 判錯的方向只准是「判不出」(照舊附 Android 題),不准把 Android 判成伺服端:Android 跡象優先、伺服端只認外掛宣告,
++# 不認一般的 io.ktor 字串(Android 與 KMP 模組常用 ktor 客戶端)。.java 不走這套(看匯入就夠,理由見計劃 B10 角色那條)。
++_KT_BUILD_FILES = ("build.gradle.kts", "build.gradle", "pom.xml")
++# 行首空白只收空格與 tab:\s* 會吞換行,搭多行旗標在一大段空行上二次方回溯(r1 資源席:6.5 萬空行 7.5 秒)
++_KT_BUILD_ANDROID = re.compile(r"com\.android\.|libs\.plugins\.android|^[ \t]*android[ \t]*\{", re.M)
++# 伺服端只認外掛宣告(含版本目錄 alias),不認依賴字串:ktor-server(手機端也有本機 ktor 伺服器,r1)、
++# org.springframework.boot:… 依賴座標(KMP 共用模組的 jvm 目標也可能宣告,r2)。Spring 認 id("…")/id '…'/apply plugin: '…'
++# 與 Maven 的 spring-boot-maven-plugin、spring-boot-starter-parent。
++_KT_BUILD_SERVER = re.compile(r"""(?:\bid\s*\(?\s*|\bapply\s+plugin\s*:\s*)["']org\.springframework\.boot["']"""
++                              r"|io\.ktor\.plugin|spring-boot-maven-plugin|spring-boot-starter-parent"
++                              r"|libs\.plugins\.(?:spring[.\-_]?boot|springBoot|ktor)\b")
++# 建置檔的字串與註解,一條從左到右的掃描(r2 兩席:先剝區塊再剝行註解會被 '**/*.yml'、// skip **/*.kt 帶歪):
++# 字串(""" 原始字串、"…"、'…')原樣留下,// 與 /* */ 註解拿掉,沒閉合的區塊註解或原始字串吃到檔尾。
++_KT_SCAN_TOKEN = re.compile(r'"""[\s\S]*?(?:"""|\Z)|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|//[^\n]*|/\*[\s\S]*?(?:\*/|\Z)')
++_KT_HEAD_BYTES = 64 * 1024          # .kt 檔頭只讀這麼多找匯入
++_KT_FLAVOR_CAP = 300                # pitfalls 一次最多判幾支 .kt(同 _ROLE_READ_CAP);超過的算判不出,Android 題照舊附
++
++
++
++def _kt_build_candidates(file_rel):
++    """從檔案所在目錄往上到 repo 根,每一層的建置檔相對路徑(近的在前,同層照 _KT_BUILD_FILES 順序)。"""
++    from pathlib import PurePosixPath
++    parts = PurePosixPath(file_rel).parts[:-1]
++    return ["/".join((*parts[:i], n)) for i in range(len(parts), -1, -1) for n in _KT_BUILD_FILES]
++
++
++def _kt_strip_comments(txt):
++    """建置檔剝掉註解再比對(註解裡提到 org.springframework.boot 不算宣告)。字串原樣保留(字串裡的 /*、// 不是註解)。"""
++    return _KT_SCAN_TOKEN.sub(lambda mo: "" if mo.group(0)[:2] in ("//", "/*") else mo.group(0), txt)
++
++
++_KT_BUILD_VERDICT_CACHE = {}   # 建置檔文字 → 判定;最多 _KT_BUILD_VERDICT_MAX 份,每份受讀檔上限管(512KB),記憶體有界
++_KT_BUILD_VERDICT_MAX = 64
++
++
++def _kt_build_verdict(txt):
++    """一份建置檔的文字 → "android" / "server" / None。以文字記憶(r1 資源席:角色路每支 .kt 重掃同一份建置檔)。"""
++    if txt in _KT_BUILD_VERDICT_CACHE:
++        return _KT_BUILD_VERDICT_CACHE[txt]
++    t = _kt_strip_comments(txt)
++    v = "android" if _KT_BUILD_ANDROID.search(t) else ("server" if _KT_BUILD_SERVER.search(t) else None)
++    if len(_KT_BUILD_VERDICT_CACHE) >= _KT_BUILD_VERDICT_MAX:
++        _KT_BUILD_VERDICT_CACHE.pop(next(iter(_KT_BUILD_VERDICT_CACHE)))   # 丟最早記的那份
++    _KT_BUILD_VERDICT_CACHE[txt] = v
++    return v
++
++
++def _kt_flavor_at(file_rel, content, reader):
++    """一支 .kt 檔 → "android" / "server" / None(判不出)。content=檔案內容(None=沒讀到 → 判不出);
++    reader(相對路徑) → 建置檔文字,None=沒有這個檔(往上找),空字串=在但讀不了(停、判不出)。"""
++    if content is None:
++        return None
++    if _ROLE_ANDROID_IMPORT.search(content[:_KT_HEAD_BYTES]):
++        return "android"
++    for rel in _kt_build_candidates(file_rel):
++        txt = reader(rel)
++        if txt is None:
++            continue
++        return _kt_build_verdict(txt)
++    return None
++
++
++def _kt_flavor(file_rel, repo_root):
++    """工作樹版的 _kt_flavor_at(pitfalls 與改檔前推播用;角色路讀起點版,見 _review_role_for)。"""
++    content = _worktree_text(repo_root, file_rel, head=_KT_HEAD_BYTES)
++    return _kt_flavor_at(file_rel, content or None, lambda rel: _worktree_text(repo_root, rel, max_bytes=_ROLE_MAX_BYTES))
++
++
++def _kt_role(file_rel, repo_root, content, reader):
++    """角色鏡頭的 .kt(沒有畫面匯入時):判成伺服端 → "backend",其他判不出(2026-10-15 決策 d2,翻掉角色鏡頭〈已知限制〉的「.kt 一律判不出」)。
++    reader 是派工路徑的批次讀取(起點版);沒給就讀工作樹。"""
++    rd = reader if reader is not None else (lambda rel: _worktree_text(repo_root, rel, max_bytes=_ROLE_MAX_BYTES))
++    return "backend" if _kt_flavor_at(file_rel, content, rd) == "server" else None
++
++
++def _stack_platform_excluded(files, repo_root):
++    """這次改動的非測試檔 → 要從題表拿掉的題號集合(所有出題的地方共用)。
++    規則:.kt 檔全部判成伺服端時拿掉 android_only 的題;只要有一支判成 Android 或判不出(讀不到、超上限),就不拿。"""
++    kts = [f for f in files if Path(f).suffix.lower() == ".kt" and not _PITFALL_DIFF_TEST_PAT.search(f)
++           and (Path(repo_root) / f).exists()]   # 這次刪掉的檔不算(r2 正確性席:刪檔讓「全部判伺服端」恆假)
++    if not kts or len(kts) > _KT_FLAVOR_CAP:
++        return frozenset()
++    if all(_kt_flavor(f, repo_root) == "server" for f in kts):
++        return frozenset(sp["id"] for sp in _STACK_QUESTION_SPECS.get("kt", []) if sp.get("android_only"))
++    return frozenset()
++
+ 
+ def _stack_key_for_file(file_rel, repo_root, reader=None):
+-    """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看 package.json——
+-    後端回 "node",前端回 "vue"(.vue 檔本來就命中 vue 鍵;純 .ts 前端檔目前無獨立題組,回 None)。
++    """一支改動檔對到 _STACK_PERF_QUESTIONS 的鍵:一般=副檔名;.ts/.js 家族要看最近的 package.json——
++    後端回 "node",只有 react 家族的前端回 "react",其他前端回 "vue"(.vue 檔本來就命中 vue 鍵);
++    找不到或解析不了 package.json 回 None。
+     兩個消費者(pitfalls --diff / impact hook)都走這一支,別各自抄副檔名邏輯。"""
+     ext = Path(file_rel).suffix.lstrip(".").lower()
+     if ext in _NODE_EXTS:
+-        # 2026-09-09(表態閘 r2 邊界席 B4):前端 .ts/.js 原本回 None=零覆蓋零稽核;改歸 vue 棧(watch/ref/await 那幾題有觸發)。
++        # 2026-09-09(表態閘 r2 邊界席 B4):前端 .ts/.js 原本回 None=零覆蓋零稽核,改歸前端棧;2026-10-15 起前端再分 vue 與 react(見 _node_flavor_of)。
+         _fl = _node_flavor(file_rel, repo_root, reader=reader)
+-        return "node" if _fl == "node" else ("vue" if _fl == "vue" else None)
++        return _fl if _fl in ("node", "vue", "react") else None
+     return ext if ext in _STACK_PERF_QUESTIONS else None
+ 
+ 
+ # ── 代碼審角色鏡頭(Projects/代碼審前後端角色鏡頭_計劃,2026-09-29)──────────────────────────
+ # 派正確性那一席時,依改到前端或後端附一張「該往哪看」的卡。不是閘:只影響審查員看哪裡。
+ # 題庫形狀照棧別題庫(每題有語意題號);★題號不要改★——撤除條件靠席報告裡的 fe-/be- 題號計數,改了等於量測歸零。
+ _ROLE_CARDS = {
+     "frontend": (
+         {"id": "fe-race", "q": "非同步回來的順序與取消:同一個畫面連發兩次請求、舊的比新的晚回來,畫面會不會被舊資料蓋掉?離開畫面時請求有沒有取消?", "web_only": False},
+         {"id": "fe-unmount", "q": "元件卸載(或離開畫面)之後,還在跑的計時器、訂閱、回呼會不會繼續寫狀態?", "web_only": False},
+@@ -30253,36 +30471,39 @@ _ROLE_CARDS = {
+         {"id": "fe-a11y", "q": "無障礙:只用鍵盤走得到嗎?互動元件有沒有讀得出來的標籤?文字與背景對比夠不夠?", "web_only": False},
+         {"id": "fe-xss", "q": "前端資安:有沒有把使用者內容當 HTML 插進頁面?token 是不是放在 JS 讀得到的地方?跳轉網址有沒有驗?", "web_only": True},
+     ),
+     "backend": (
+         {"id": "be-api-compat", "q": "對外 API 相容:欄位改名、刪欄位、預設值改變,舊版呼叫端(舊 App、別的服務)還讀得懂嗎?", "web_only": False},
+         {"id": "be-authz", "q": "授權:每個新增或改動的端點,有沒有檢查「這個人能不能動這筆資料」,而不只是「有沒有登入」?", "web_only": False},
+     ),
+ }
+ _ROLE_VALUES = ("frontend", "backend", "none")
+ _ROLE_LABEL = {"frontend": "前端", "backend": "後端"}
+-_ROLE_FRONT_EXTS = {"vue", "svelte", "tsx", "jsx", "css", "scss", "html"}   # 現在沒有題組鍵的前端檔
++_ROLE_FRONT_EXTS = {"vue", "svelte", "tsx", "jsx", "css", "scss", "html"}   # 副檔名就判前端(.tsx/.jsx 2026-10-15 起也有 react 題組鍵,留在這裡不影響判定)
++_ROLE_FRONT_KEYS = {"vue", "react"}   # 題組鍵判前端(.ts/.js 走 package.json)
+ _ROLE_BACK_KEYS = {"node", "cs", "py", "sql"}
+ _ROLE_MOBILE_EXTS = {"kt", "java", "swift", "dart"}
+ # 手機畫面判定只看匯入,名單刻意窄:androidx 底下的 room/work/datastore、android.content 這些資料層也常匯入,
+ # 寬名單會把 DAO、Repository 判成畫面(設計審 r1 正確性席 F1)。
++# 行首空白一律只收空格與 tab:^\s* 搭多行旗標會吞換行,一大段空行二次方回溯(r2 資源席:13 萬空行 31 秒;t_no_multiline_caret_whitespace_star 全檔守)
+ _ROLE_UI_IMPORT = {
+-    "kt": re.compile(r"^\s*import\s+(?:androidx\.compose|android\.widget|android\.view|androidx\.recyclerview|androidx\.fragment|androidx\.activity|androidx\.appcompat)\.", re.M),
+-    "swift": re.compile(r"^\s*import\s+SwiftUI\b", re.M),
+-    "dart": re.compile(r"""^\s*import\s+['"]package:flutter/(?:material|widgets|cupertino)\.dart['"]""", re.M),
++    "kt": re.compile(r"^[ \t]*import\s+(?:androidx\.compose|android\.widget|android\.view|androidx\.recyclerview|androidx\.fragment|androidx\.activity|androidx\.appcompat)\.", re.M),
++    "swift": re.compile(r"^[ \t]*import\s+SwiftUI\b", re.M),
++    "dart": re.compile(r"""^[ \t]*import\s+['"]package:flutter/(?:material|widgets|cupertino)\.dart['"]""", re.M),
+ }
+ _ROLE_UI_IMPORT["java"] = _ROLE_UI_IMPORT["kt"]
+-_ROLE_ANDROID_IMPORT = re.compile(r"^\s*import\s+(?:android|androidx)\.", re.M)
+-_ROLE_UIKIT_IMPORT = re.compile(r"^\s*import\s+UIKit\b", re.M)
++_ROLE_ANDROID_IMPORT = re.compile(r"^[ \t]*import\s+(?:android|androidx)\.", re.M)
++_ROLE_UIKIT_IMPORT = re.compile(r"^[ \t]*import\s+UIKit\b", re.M)
+ _ROLE_UIKIT_SUBCLASS = re.compile(r"\bclass\s+\w+\s*:[^{\n]*\bUI\w*(?:ViewController|View)\b")
+ _ROLE_READ_CAP = 300     # 最多讀幾支檔的內容(數檔,不數往上找 package.json 的候選);超過的只看副檔名(手機檔判不出)
+ _ROLE_MAX_BYTES = 512 * 1024   # 單支檔超過這個大小不讀內容(判不出);上限交給批次讀取那一層守
++_ROLE_MAX_TOTAL_BYTES = 16 * 1024 * 1024   # 整批讀取的總量上限(Kotlin 建置檔候選加進來後,最壞是檔數 × 三種建置檔名)
+ _ROLE_BUDGET = 3.0       # 角色計算自己最多幾秒
+ _ROLE_BUDGET_FLOOR = 1.0  # 期限很短時角色至少拿這麼多(消費專案光算工具檔清單就要半秒,代碼審 r1 正確性 F2)
+ 
+ 
+ def _role_budget(deadline):
+     """派工時角色計算能用幾秒:最多 _ROLE_BUDGET、至少 _ROLE_BUDGET_FLOOR,平常取期限的三分之一。"""
+     if not deadline or deadline <= 0:
+         return _ROLE_BUDGET
+     return min(_ROLE_BUDGET, max(_ROLE_BUDGET_FLOOR, deadline / 3))
+ 
+@@ -30327,23 +30548,23 @@ def _review_role_for(file_rel, repo_root, rules=(), reader=None, content=None):
+         return "frontend"
+     if ext in _ROLE_MOBILE_EXTS:
+         if content is None:
+             return None
+         if _ROLE_UI_IMPORT[ext].search(content):
+             return "frontend"
+         if ext == "swift" and _ROLE_UIKIT_IMPORT.search(content) and _ROLE_UIKIT_SUBCLASS.search(content):
+             return "frontend"
+         if ext == "java" and not _ROLE_ANDROID_IMPORT.search(content):
+             return "backend"    # Java 後端服務常見;Android 純 Java 資料類也會落在這裡(已知限制,出路是宣告)
+-        return None
++        return _kt_role(file_rel, repo_root, content, reader) if ext == "kt" else None
+     key = _stack_key_for_file(file_rel, repo_root, reader=reader)
+-    if key == "vue":
++    if key in _ROLE_FRONT_KEYS:
+         return "frontend"
+     return "backend" if key in _ROLE_BACK_KEYS else None
+ 
+ 
+ def _review_role_changed_files(root, base, head, deadline=None):
+     """角色鏡頭的改動檔清單:[(路徑, 讀內容用的版本)]。派工角色段與推送前分級那一行共用這一支。
+     一般改名算新路徑；跨到被排除的簿記終點另保留舊程式、讀起點版本。
+     刪除的檔照樣算、讀起點版本。剔除測試檔(_PITFALL_DIFF_TEST_PAT)、消費專案裡原封不動的工具檔
+     (_vendored_skip)、文件與帳檔(_impact_diff_seed_ok)。git 跑不起來回 None。"""
+     r = _lens_git(root, "diff", "--no-ext-diff", "--name-status", "-M", "-z", base, head)
+@@ -30368,71 +30589,85 @@ def _review_role_changed_files(root, base, head, deadline=None):
+     # 一般改名仍取新路徑；簿記終點未確認是程式時，保留舊側角色證據。
+     out += [(old, base) for old, new in renamed
+             if (new in _BOOKKEEPING_FILES or new.startswith(_IMPACT_RECORD_DIRS))
+             and not _impact_diff_seed_ok(new, *modes.get(new, (None, None)), unknown_is_code=False)
+             and _impact_diff_seed_ok(old, *modes.get(old, (None, None)))]
+     return [(path, ref) for path, ref in out
+             if not _PITFALL_DIFF_TEST_PAT.search(path)
+             and _impact_diff_seed_ok(path, *modes.get(path, (None, None))) and path not in skip]
+ 
+ 
+-def _review_roles(root, base, head, budget=_ROLE_BUDGET):
++def _review_roles(root, base, head, budget=_ROLE_BUDGET, now=None):
+     """算這段改動每支檔的角色。回 {"roles": {路徑: 角色|None}, "counts": {...}, "warnings": [...], "capped": N, "timed_out": bool};
+     git 讀不到改動清單回 None。成本:內容一次批次讀取(_nodehome_cat_blobs),最多讀 _ROLE_READ_CAP 支,整體受 budget 秒限制。"""
+     import time as _t
+     if budget <= 0:
+         return {"roles": {}, "counts": {"frontend": 0, "backend": 0, "unknown": 0},
+                 "warnings": [], "capped": 0, "timed_out": True}
+-    t0 = _t.monotonic()
++    # 時間來源;測試傳虛擬時鐘,讓預算判定跟機器快慢無關(照 _drift_old_sentence_check 的 now= 先例)。
++    # 預設 None=呼叫當下才取 time.monotonic,既有測試 patch 掉 time.monotonic 的寫法照樣生效
++    _now = now or _t.monotonic
++    t0 = _now()
+     # 宣告讀分叉點那一版(_lens_trusted_ref):修補輪起點是分支提交時,不讓被審分支自己的 review_roles 決定拿哪張卡
+     _ref, _note = _trusted_decl_ref(root, base, why_text=_TRUSTED_REF_WHY_ROLE)
+     cfg, _state = _lumos_config_at_ref(root, _ref) if _ref else (None, "missing")
+     rules, warnings = _review_roles_config(cfg, unreadable=_state == "unreadable")
+     if _note:
+         warnings = [*warnings, _note]
+     files = _review_role_changed_files(root, base, head, deadline=t0 + budget)
+     if files is None:
+         return None
+     want, capped = _review_role_wanted(files, rules)
+     blobs = {}
+-    left = budget - (_t.monotonic() - t0)
++    left = budget - (_now() - t0)
+     timed_out = left <= 0
+     if want and left > 0.2:
+-        got = _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=left)
++        sizes = _nodehome_cat_sizes(root, want, timeout=left)
++        got = (None if sizes is None else
++               _nodehome_cat_blobs_capped(root, want, _ROLE_MAX_BYTES, timeout=max(0.2, budget - (_now() - t0)),
++                                          max_total_bytes=_ROLE_MAX_TOTAL_BYTES, sizes=sizes))
+         if got is None:
+             timed_out = True
+         else:
+-            blobs = {k: (v.decode("utf-8", "replace") if v is not None else None) for k, v in zip(want, got)}
++            # 物件在、但超過單檔或整批上限沒讀的 → 空字串(在但讀不了,停在這一層判不出),跟工作樹路徑 _worktree_text 同語意;
++            # 回 None 會被當成「沒有這個檔」往上找到父層(r2 兩席:Android 子模組建置檔超限、根是 Spring 被判成後端)
++            blobs = {k: (v.decode("utf-8", "replace") if v is not None else ("" if n is not None else None))
++                     for k, v, n in zip(want, got, sizes)}
+     elif want:
+         timed_out = True
+     roles = {}
+     for p, ref in files:
++        if blobs and _now() - t0 > budget:
++            # 分類迴圈也算進預算(r1 資源席):超時就停用讀到的內容,剩下的照既有規則退回只看副檔名(手機檔判不出)
++            timed_out, blobs = True, {}
+         content = blobs.get(f"{ref}:{p}")
+-        roles[p] = _review_role_for(p, root, rules, reader=lambda rel, _r=ref: blobs.get(f"{_r}:{rel}"), content=content)
++        roles[p] = _review_role_for(p, root, rules, reader=lambda rel, _r=ref, _b=blobs: _b.get(f"{_r}:{rel}"), content=content)
+     counts = {"frontend": sum(1 for v in roles.values() if v == "frontend"),
+               "backend": sum(1 for v in roles.values() if v == "backend"),
+               "unknown": sum(1 for v in roles.values() if v is None)}
+     return {"roles": roles, "counts": counts, "warnings": warnings, "capped": capped, "timed_out": timed_out}
+ 
+ 
+ def _review_role_wanted(files, rules):
+     """要批次讀的「版本:路徑」清單(手機檔內容、.ts/.js 往上找的 package.json),與超過上限沒讀的檔數。
+     宣告命中的檔不讀(宣告優先)。★上限數檔,不數候選★(代碼審 r1 外家 F4:缺檔的候選也佔名額會提早截斷、誤判)。
+     ★路徑含換行的檔不讀★:批次讀取表達不了換行,混進去整批作廢(r1 外家 F5);它只判不出,其他照讀。回 (want, capped)。"""
+     declared = {p for p, _ in files if rules and _glob_first_match(p, [x for x, _ in rules]) is not None}
+     want, seen, n_files, capped = [], set(), 0, 0
+     for p, ref in files:
+         if p in declared or "\n" in p:
+             continue
+         ext = Path(p).suffix.lstrip(".").lower()
+         if ext in _ROLE_MOBILE_EXTS:
+             specs = [f"{ref}:{p}"]
++            if ext == "kt":   # 判 Kotlin 伺服端要讀建置檔(B10):候選照 package.json 那套一起批次讀,受同一個上限與預算管
++                specs += [f"{ref}:{rel}" for rel in _kt_build_candidates(p)]
+         elif ext in _NODE_EXTS and ext not in _ROLE_FRONT_EXTS:
+             specs = [f"{ref}:{rel}" for rel in _package_json_candidates(p)]
+         else:
+             continue
+         if n_files >= _ROLE_READ_CAP:
+             capped += 1
+             continue
+         n_files += 1
+         for spec in specs:
+             if spec not in seen:
+@@ -30506,44 +30741,63 @@ def _stack_norm_line(code, keep_strings=False):
+     s = code.strip()
+     if not s or s.startswith(("#", "//", "--", "/*", "*")):
+         return None
+     out = code if keep_strings else _strip_string_literals(code)
+     # 行尾註解也剝(r1 外家備援席 f2):`x = 1 // GlobalScope 之後拿掉` 不該觸發;字串已先剝掉,這裡的 // # -- 不會是 URL 或字面
+     out = re.sub(r"/\*.*?\*/", " ", out)
+     out = re.split(r"(?:^|\s)(?://|#|--)(?:\s|$)", out, maxsplit=1)[0]
+     return out
+ 
+ 
+-def _stack_applicability(lines_by_stack, threshold):
++def _stack_hit_lines(lines, pats, pats_raw):
++    """幾行改動命中這題的觸發詞(任一條 when 或 when_raw 命中算一行)。min_lines 用。"""
++    n = 0
++    for ln in lines:
++        a, b = _stack_norm_line(ln), _stack_norm_line(ln, keep_strings=True)
++        if (a is not None and any(p.search(a) for p in pats)) or (b is not None and any(p.search(b) for p in pats_raw)):
++            n += 1
++    return n
++
++
++def _stack_applicability(lines_by_stack, threshold, exclude=frozenset(), added_by_stack=None):
+     """lines_by_stack: {棧: [改動內容的行…]}(增行與刪行都算;呼叫端已排除測試檔與非代碼檔)。
+     回 (applicable, meta):applicable={棧: [題目原文…]}(只列適用);meta={棧: [{id, question, applicable, triggered_by}]}(全表)。
+-    某棧行數 > threshold → 該棧全表適用(改得多=觸發漏得多,寧多問;triggered_by=["行數>門檻"])。"""
++    某棧行數 > threshold → 該棧全表適用(改得多=觸發漏得多,寧多問;triggered_by=["行數>門檻"])。
++    exclude:這次不適用平台的題號(_stack_platform_excluded),整列不出,跟 shape_only 一樣在這裡消化。
++    added_by_stack:{棧: [增行…]};min_lines 只數增行(同一行改動的刪行與增行不算兩行),沒給就數全部改動行。"""
+     applicable, meta = {}, {}
+     for stk, raw_lines in lines_by_stack.items():
+         specs = _STACK_QUESTION_SPECS.get(stk)
+         if not specs:
+             continue
+         norm = [n for n in (_stack_norm_line(l) for l in raw_lines) if n is not None]
+         norm_raw = [n for n in (_stack_norm_line(l, keep_strings=True) for l in raw_lines) if n is not None]
+         over = len(raw_lines) > threshold
+         rows, app = [], []
+         for spec, (qid, pats, pats_raw) in zip(specs, _STACK_TRIGGERS[stk]):
++            if qid in exclude:
++                continue
+             hits = []
+             if over and not spec.get("shape_only"):
+                 hits = [f"行數>{threshold}"]
+             else:
+                 for pat in pats:
+                     if any(pat.search(n) for n in norm):
+                         hits.append(pat.pattern)
+                 for pat in pats_raw:   # 看字串的那幾條:對只剝註解的行比
+                     if any(pat.search(n) for n in norm_raw):
+                         hits.append(pat.pattern)
++                # min_lines:命中行數不到門檻就不算適用;沒帶這欄=1,行為同前
++                _need = spec.get("min_lines", 1)
++                _basis = raw_lines if added_by_stack is None else added_by_stack.get(stk, [])
++                if hits and _need > 1 and _stack_hit_lines(_basis, pats, pats_raw) < _need:
++                    hits = []
+             rows.append({"id": qid, "question": spec["q"], "applicable": bool(hits), "triggered_by": hits})
+             if hits:
+                 app.append(spec["q"])
+         meta[stk] = rows
+         if app:
+             applicable[stk] = app
+     return applicable, meta
+ 
+ 
+ def _stack_spec_by_id(qid):
+@@ -30598,21 +30852,24 @@ _BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.
+ # _PITFALL_DIFF_SKIP_EXT(.json/.jsonl,2026-08-22)按副檔名擋掉、輪不到白名單這關(s1-f1)。
+ # ↑ kill-log/signoff-log 2026-09-06 補([[Projects/全repo審視_計劃]] #5):兩本同樣是工具自己
+ # 寫的 append-only 帳(kill-log 由 guard kill 寫、signoff-log 由 signoff 寫),而這次替
+ # _pull_source_or_abort 加「來源只髒簿記帳就聯集合併不擋人」時,漏了它們就等於那條路對這兩本
+ # 失效——有人在來源 clone 跑過 guard kill 或 signoff,更新照樣被擋。
+ _BOOKKEEPING_DIRS = ("governance/code-loop/", "governance/review-reports/", "governance/replay/",
+                      "governance/note-verdicts/",   # 2026-09-17 小改動閘 r2:卷證目錄也是紀錄不是碼(三個消費者共用這一組)
+                      # 2026-10-01 回頭重讀的對照紀錄:理由同筆記內容審判定檔——紀錄不是碼,提交它不該讓代碼審留痕失效
+                      # (Projects/守檔筆記對照改動_計劃 [S8];整案回退時要同一個 revert 提交裡 git rm -r 這個資料夾)
+                      "governance/reread-verdicts/")
+-_PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|/tests?/)", re.I)
++# JS/TS 的兩種主流寫法 *.test.* 與 __tests__/ 2026-10-15 補(Jest/Vitest 預設的 testMatch;[[Projects/前端框架從vue分出_計劃]] S43):
++# 原本只認 .spec.,React 專案的 App.test.tsx 被當成產品程式拿題目。點號與目錄斜線都要在,latest、contest、attest 這類字不算。
++# 檔名本身是 test/spec 的只認小寫加 JS/TS 副檔名(r2 邊界、資安席:Test.tsx 元件、test.py 正式檔不算);tests/、test/ 在 repo 根也算
++_PITFALL_DIFF_TEST_PAT = re.compile(r"(test_|_test\.|\.spec\.|\.test\.|(?:^|/)tests?/|(?:^|/)__tests__/|(?:^|/)(?-i:test|spec)\.[cm]?[jt]sx?$)", re.I)
+ LINT_CMD_TIMEOUT = 180
+ 
+ 
+ def _diff_added_lines(diff_text):
+     """從 git diff -U3 輸出建 {file: set(new_line_numbers)} 對應所有新增行(+ 開頭)。
+     使用與 _pitfall_diff_mode 相同的 @@ 標頭推導邏輯。"""
+     added = {}
+     cur_file, new_ln = "", 0
+     for line in diff_text.splitlines():
+         if line.startswith("+++ b/"):
+@@ -31521,21 +31778,22 @@ def _lint_new_changed_files(repo_root, diff_range):
+                 break
+             out.append((parts[i + 1], parts[i + 1]))
+             i += 2
+     return (out, None)
+ 
+ 
+ # 工具要跑得起來,光有被掃的檔還不夠(2026-09-13 真專案實測):
+ # ①它的設定檔:eslint 的設定在子目錄裡,快照只有改動檔的話它找不到而直接拒跑
+ # ②它的依賴:eslint 要 node_modules 才載得了外掛——那不進版控,所以用連結指回真的專案
+ # ★設定檔一律取「現在版」★:兩次掃描要用同一份規則,基準版那次用舊設定的話比出來的差集沒有意義
+-_LINT_CONFIG_GLOBS = ("*.config.js", "*.config.mjs", "*.config.cjs", "*.config.ts",
++# eslint 設定檔名跟 _LINTER_CONFIG_MARKERS(init/健檢偵測用)兩邊都要認得;mts/cts 2026-10-15 補
++_LINT_CONFIG_GLOBS = ("*.config.js", "*.config.mjs", "*.config.cjs", "*.config.ts", "*.config.mts", "*.config.cts",
+                       ".eslintrc*", "package.json", "tsconfig*.json", "pyproject.toml",
+                       "setup.cfg", "ruff.toml", ".ruff.toml", "detekt.yml", ".swiftlint.yml",
+                       ".stylelintrc*", "stylelint.config.*", ".sqlfluff", "analysis_options.yaml")
+ _LINT_DEP_DIRS = ("node_modules", ".venv", "venv")
+ _LINT_CONFIG_MAX_BYTES = 200000     # 設定檔本來就小;超過這個大小的不像設定檔,不搬
+ 
+ 
+ def _lint_support_dirs(rel_paths):
+     """被掃的那些檔的所有祖先目錄(含專案根),由淺到深。"""
+     dirs = set()
+@@ -45310,21 +45568,21 @@ def cmd_decision_amend(env, rel, did, field, text):
+                 if st[:1] in ("R", "C") and k + 2 < len(toks):
+                     renames[toks[k + 2]] = toks[k + 1]
+                     k += 3
+                     continue
+                 if st == "D" and k + 1 < len(toks):
+                     pure_del.append(toks[k + 1])
+                 k += 2
+             old = renames.get(rels, rels)
+             blobs = _nodehome_cat_blobs(root, [f"{ref}:{old}"] + [f"{ref}:{q}" for q in pure_del]) or []
+             if blobs and blobs[0] is not None:
+-                if re.search(rf"^\s*(?:-\s+)?id:\s*{re.escape(did)}\s*$", blobs[0].decode("utf-8", errors="replace"), re.M):
++                if re.search(rf"^[ \t]*(?:-\s+)?id:\s*{re.escape(did)}\s*$", blobs[0].decode("utf-8", errors="replace"), re.M):
+                     raise ValueError(f"遠端 {ref} 上的這篇已經有決策 {did}:可能①已經推上去了——請用 "
+                                      f"lumos decision-supersede 翻案;或②兩條分支撞號——請先把你的決策改號")
+             # git 配不成改名的搬檔(新檔沒進 git、或改寫太多相似度不夠):遠端上在工作目錄不見的筆記裡,
+             # 有一條跟這條一模一樣的決策,就當它是這篇改名前的樣子(代碼審 r3 兩席、驗收輪兩席)
+             for q, bq in zip(pure_del, blobs[1:]):
+                 if bq is not None and _same_decision(_dec_item(bq.decode("utf-8", errors="replace"))):
+                     raise ValueError(f"遠端 {ref} 上的 {q} 在工作目錄不見了,而它有一條跟這條一模一樣的決策 {did}:多半是這篇"
+                                      "改名前的樣子、已經推上去了——請用 lumos decision-supersede 翻案;如果不是,先 git add "
+                                      "新舊兩邊(或用 git mv)讓 git 認出改名")
+     with _vault_write_lock(env.vault):   # 只鎖讀改寫那段:上面的 git fetch 與遠端比對不寫筆記庫,放鎖外(代碼審 r3 併發、通才席)
+@@ -46116,28 +46374,30 @@ def cmd_delguard_check(repo=None, as_json=False):
+         if as_json:
+             _degraded_json("error", len(locals().get("tokens", [])))
+         else:
+             print(f"提醒:「刪掉的東西筆記還在不在講」這項檢查自己出了內部錯誤({e.__class__.__name__}),先放行;已記一筆在治理帳。")
+         return 0
+ 
+ 
+ 
+ _ARCH_IDIOM_SKILL = {"kt": "kotlin-idioms", "kts": "kotlin-idioms", "cs": "csharp-idioms", "vue": "vue-idioms",
+                      "ts": "vue-idioms", "js": "vue-idioms", "swift": "swift-idioms", "py": "python-idioms",
+-                     "java": "java-idioms", "dart": "dart-idioms"}
++                     "java": "java-idioms", "dart": "dart-idioms",
++                     # 棧鍵(_stack_key_for_file 的回傳值):.ts/.js 家族用它查,不另立第二張表
++                     "node": "node-idioms", "react": "react-idioms"}
+ 
+ 
+ def _idiom_skill_for(ext, file_rel, repo_root):
+-    """副檔名 → 慣例 skill 名(沒有就 None)。.ts/.js 家族要看 package.json:後端 → node-idioms、
+-    前端或找不到 package.json → 沿用 vue-idioms(2026-09-08 前的行為)。"""
++    """副檔名 → 慣例 skill 名(沒有就 None)。.ts/.js 家族拿 _stack_key_for_file 的棧鍵查同一張表:
++    node → node-idioms、react → react-idioms、vue → vue-idioms;判不出(找不到或解析不了 package.json)沿用 vue-idioms。"""
+     if ext in _NODE_EXTS:
+-        return "node-idioms" if _node_flavor(file_rel, repo_root) == "node" else _ARCH_IDIOM_SKILL.get(ext, "vue-idioms")
++        return _ARCH_IDIOM_SKILL.get(_stack_key_for_file(file_rel, repo_root) or "", "vue-idioms")
+     return _ARCH_IDIOM_SKILL.get(ext)
+ # ── 目標架構基準(Projects/架構對齊可宣告目標架構_計劃)──
+ # 宣告形狀、壞宣告整份不用、只讀起點版,都照抄 review_roles(_review_roles_config);第一條命中算數,所以沒有「重疊」錯誤。
+ # ★pitfalls 只認「哪些檔用目標基準」、不讀節點★(它在推送前熱路徑上不載圖譜);規則原文由派工鏡頭附(_arch_target_text)。
+ _ARCH_TARGET_SHAPE = "要是清單,每條恰好 {\"path\": 路徑樣式, \"node\": \"Systems/<名>\" 或 \"none\"}"
+ _ARCH_TARGET_SHOW_FILES = 6        # pitfalls 人讀輸出每個節點列幾支檔
+ _ARCH_TARGET_LENS_FILES = 20       # 派工鏡頭每個節點列幾支檔
+ _ARCH_TARGET_LENS_RULES = 30       # 派工鏡頭每個節點貼幾條規則
+ _ARCH_TARGET_LENS_NODES = 3        # 派工鏡頭最多幾個節點貼內容,其餘只列名
+ # 目標架構段的總量上限(代碼審 code-派工鏡頭可指定目標repo r6 併1:列名行、規則原文、警告原本都不限,實測撐到 4.6MB到9MB;
+@@ -46590,21 +46850,21 @@ def _tension_read_norm(path):
+     替換成亂碼再比對會把後者偽裝成前者。"""
+     try:
+         if path.stat().st_size > _TENSION_MAX_BYTES:
+             return None
+         raw = path.read_bytes().decode("utf-8")
+     except (OSError, UnicodeDecodeError):
+         return None
+     return [n for n in (_stack_norm_line(l) for l in raw.splitlines()) if n is not None]
+ 
+ 
+-def _tension_candidates_into(arch, added_lines, repo_root):
++def _tension_candidates_into(arch, added_lines, repo_root, applicable_ids=None):
+     """把候選寫進 arch:arch["tension_candidates"]=[{file, question, patterns, siblings, unreadable}];超過檔數上限加 arch["candidates_truncated"]=True。
+     只看 when(不看 when_raw:鄰居的字串字面比對沒意義);正規化同 _stack_norm_line——區塊註解內不以 * 開頭的裸行會被當程式碼,
+     這是既有適用性判定同一條天花板,兩邊對稱、偏差方向是少一個候選(r1 外家 F1/通才 G4,承認不修)。
+     候選的題必在 stack_questions_applicable:added_lines 跟 changed_lines 過同一道 _stack_changed_ok,增行 ⊂ 增刪行。"""
+     out = []
+     n_files = 0
+     truncated = False
+     for f, sibs in (arch.get("files") or {}).items():
+         lines = added_lines.get(f)
+         if not lines:
+@@ -46618,20 +46878,22 @@ def _tension_candidates_into(arch, added_lines, repo_root):
+         if n_files >= _TENSION_MAX_FILES:
+             truncated = True
+             break
+         n_files += 1
+         sib_norm = {s: _tension_read_norm(Path(repo_root) / s) for s in sibs}
+         readable = [s for s in sibs if sib_norm[s] is not None]
+         unreadable = [s for s in sibs if sib_norm[s] is None]
+         if not readable:
+             continue   # 只剩不可讀的對照檔:沒有東西可比,不出候選
+         for qid, pats, _raw in _STACK_TRIGGERS[sk]:
++            if applicable_ids is not None and qid not in applicable_ids:   # 候選的題必在適用題裡(min_lines、平台排除都算進去)
++                continue
+             novel = []
+             for pat in pats:
+                 if not any(pat.search(n) for n in norm):
+                     continue
+                 if any(pat.search(n) for s in readable for n in sib_norm[s]):
+                     continue
+                 if pat.pattern not in novel:
+                     novel.append(pat.pattern)
+             if novel:
+                 out.append({"file": f, "question": qid, "patterns": novel, "siblings": readable, "unreadable": unreadable})
+@@ -47261,54 +47523,63 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
+             code_nostr = _strip_string_literals(code)
+             for pat, axis, q, in_strings in _PITFALL_DIFF_PATTERNS:
+                 if pat.search(code if in_strings else code_nostr):
+                     claims.append({"file": cur_file, "line": new_ln, "class": axis,
+                                    "pattern": pat.pattern, "question": q})
+                     break
+         new_ln += 1                           # 新增行推進新檔行號
+ 
+     # 棧別效能追問(T1):非測試檔的副檔名命中問題表 → 附該棧三問(去重,首見即收)
+     stack_qs = {}
++    _stack_excl = _stack_platform_excluded(list(changed_lines), repo_root)   # Kotlin 全是伺服端 → 拿掉 Android 題(B10)
+     for f in added:
+         if _PITFALL_DIFF_TEST_PAT.search(f):
+             continue
+         sk = _stack_key_for_file(f, repo_root)   # .ts/.js 看 package.json 分前後端(2026-09-08)
+         if sk and sk not in stack_qs:
+-            stack_qs[sk] = _STACK_PERF_QUESTIONS[sk]
++            stack_qs[sk] = _stack_whole_group(sk, _stack_excl)
+     # 觸發式適用性(表態閘 S2,2026-09-09):同一棧所有改動檔的增刪行合在一起比對;
+     # stack_questions 語意不變(命中棧整組),另給 stack_questions_applicable(只列適用)與 stack_questions_meta(全表)。
+     _sq_cfg = _stack_questions_config(repo_root)
+     _by_stack = {}
+     for f, lines_ in changed_lines.items():
+         if _PITFALL_DIFF_TEST_PAT.search(f):
+             continue
+         sk = _stack_key_for_file(f, repo_root)
+         if sk:
+             _by_stack.setdefault(sk, []).extend(lines_)
+-    stack_app, stack_meta = _stack_applicability(_by_stack, _sq_cfg["ask_all_over_lines"])
++    _added_by_stack = {}
++    for f, lines_ in added_lines.items():
++        if _PITFALL_DIFF_TEST_PAT.search(f):
++            continue
++        sk = _stack_key_for_file(f, repo_root)
++        if sk:
++            _added_by_stack.setdefault(sk, []).extend(lines_)
++    stack_app, stack_meta = _stack_applicability(_by_stack, _sq_cfg["ask_all_over_lines"], exclude=_stack_excl, added_by_stack=_added_by_stack)
+     for w in _sq_cfg["warnings"]:
+         print(f"提醒:{w}", file=sys.stderr)
+ 
+     # ── 架構對齊三問(2026-08-22,Enzo:自動開發不得產出跟既有不一樣或不入流的寫法)──
+     # 對每支改動的 code 檔,列同資料夾、同副檔名、最相似檔名的 3 個既有檔當「對照組」;
+     # 審查員/編排者拿這三個檔去問「分層與依賴方向 / 命名與錯誤處理 / 有沒有引入第二種做法」。
+     # 目標架構基準:只讀改動起點那一版的宣告(被審的分支不能自己改宣告決定自己怎麼被審);不讀節點、不載圖譜
+     # 讀分叉點那一版(_lens_trusted_ref):推分支時起點是遠端分支頂端、修補輪是上一輪終點,都不是主線上的版本
+     _at_base, _at_head = _diff_range_ends(repo_root, diff_range)
+     _at_ref, _at_note = _trusted_decl_ref(repo_root, _at_base) if _at_base else (None, None)
+     _at_rules, _at_warn = _arch_targets_at(repo_root, _at_ref) if _at_ref else ([], [_at_note] if _at_note else [])
+     if _at_rules and not _at_head:
+         _at_rules, _at_warn = [], [*_at_warn, "範圍終點是工作目錄(還沒提交),這次不分目標基準、全部照鄰居;提交後再跑"]
+     _at_files = _arch_target_changed_files(repo_root, _at_base, _at_head) if _at_rules else []
+     arch = _arch_alignment_hints(added, repo_root, targets=_arch_target_split(_at_files, _at_rules), warnings=_at_warn)
+     if arch:
+-        _tension_candidates_into(arch, added_lines, repo_root)   # 可能撞:改動檔新增了對照檔都沒有的做法(只端候選,不判)
++        _tension_candidates_into(arch, added_lines, repo_root,   # 可能撞:改動檔新增了對照檔都沒有的做法(只端候選,不判)
++                                 applicable_ids={r["id"] for rows in stack_meta.values() for r in rows if r["applicable"]})
+ 
+     # ── Task 4: lint 整合 ─────────────────────────────────────────────────
+     config = None if no_lint else _lint_load_config(repo_root)
+     if config is None:
+         # fallback: no_lint 或無 config → 維持 regex-only 輸出(不加 lint_ran/lint_skipped)
+         _t, _why = _pitfall_tier(claims, list(added) + list(changed_lines), repo_root, diff_range)
+         _sr = _test_suite_for_range(repo_root, diff_range)
+         _ak = _affected_test_keys(repo_root, diff_range, _sr["code"])
+         return {"claims": claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
+                 "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
+@@ -50079,27 +50350,28 @@ def cmd_impact(file, repo=None, depth=None, as_json=False,
+             out_obj = {"file": rel_file, "results": final, "meta": meta}
+             if lane_items:   # 條件鍵(同 query_gated/stack_questions 慣例):knob=0 或空 → 鍵不存在
+                 out_obj["lane"] = lane_items
+             if gated:
+                 out_obj["query_gated"] = True
+             # 棧別效能追問(pitfalls棧別效能追問_計劃 T2):完整 ranked 模式(非 incidents-only
+             # 冷卻快速路)且目標檔命中問題表 → 附該棧檢核問(全表);單源=_STACK_PERF_QUESTIONS,hook 只格式化
+             if not incidents_only and not _PITFALL_DIFF_TEST_PAT.search(rel_file):
+                 _sk = _stack_key_for_file(rel_file, repo_root_for_lookup)   # .ts/.js 看 package.json 分前後端
+                 if _sk:
+-                    out_obj["stack_questions"] = {_sk: _STACK_PERF_QUESTIONS[_sk]}
++                    _excl = _stack_platform_excluded([rel_file], repo_root_for_lookup)   # Kotlin 伺服端檔不印 Android 題(B10)
++                    out_obj["stack_questions"] = {_sk: _stack_whole_group(_sk, _excl)}
+                     # 觸發式適用性(表態閘 S3):hook 另送原始 delta_text(保留換行;query 那欄是 8000 字/512 詞截斷版,只給詞彙融合)
+                     # → 只列命中 when 的題;沒送(legacy 呼叫)就沒有 applicable 鍵,hook 退回印全表。
+                     _dt = _payload.get("delta_text") if stdin_payload else None
+                     if isinstance(_dt, str):
+                         _cfgq = _stack_questions_config(repo_root_for_lookup)
+-                        _app, _meta = _stack_applicability({_sk: _dt.splitlines()}, _cfgq["ask_all_over_lines"])
++                        _app, _meta = _stack_applicability({_sk: _dt.splitlines()}, _cfgq["ask_all_over_lines"], exclude=_excl)
+                         out_obj["stack_questions_applicable"] = _app
+                         out_obj["stack_questions_meta"] = _meta
+                         if _payload.get("delta_truncated"):
+                             out_obj["delta_truncated"] = True
+             print(json.dumps(out_obj, ensure_ascii=False))
+         else:
+             print(f"改動 {rel_file} — 相關 top(固定席 {len(pins)}):")
+             for r in final:
+                 mk = {"incident": "⚠事故", "direct": "直接", "indirect": f"hop{r.get('hop','?')}", "home": ""}.get(r["kind"], "")
+                 hm = "★家★" if r.get("home") else ""    # 推筆記認家 [S8]:這篇管這支檔
+@@ -54251,33 +54523,43 @@ _RAN_EVIDENCE = {
+         "re": r"Executed\s+[1-9]\d*\s+tests?\b",
+         "measured": "Xcode 26.6 實測:跑 1 支印「Executed 1 test, with 0 failures」,跑 0 支印「Executed 0 tests」",
+         "fix_hint": "xcodebuild 的 -quiet 會把那行藏起來——把 -quiet 拿掉(帶著 -quiet 時,跑 1 支跟跑 0 支的輸出一模一樣)",
+     },
+     "csharp-xunit": {
+         "re": r"Passed:\s*[1-9]",
+         "measured": "dotnet 9.0.117 實測:跑到測試印「Passed!  - Failed: 0, Passed: 1」,對不到只印「No test matches」",
+         "fix_hint": "在指令尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`,對不到測試就會直接回非零",
+     },
+     "node-jest": {
+-        "re": r"Tests:.*?[1-9]\d*\s+passed",
+-        "measured": "jest 29 實測:跑到印「Tests: 1 passed, 1 total」,-t 對不到印「Tests: 1 skipped, 1 total」",
+-        "fix_hint": "如果你換了自訂 reporter,摘要行的字樣會變——把 reporter 換回預設,或改用會對不到就回非零的跑法",
++        # 一條樣式同時吃 jest 與 vitest(2026-10-15 [[Projects/前端框架從vue分出_計劃]] F1,吸收逾期清單第 10 節):
++        # ①不錨行首、不加旗標——兩個讀者共用這條字串(_ran_evidence_check 去色後對整段 re.search、_kill_cap 逐行 re.search 不去色),
++        #   錨行首要內嵌多行旗標,逐行讀者帶色碼時行首又是色碼;不錨也不誤判,「Test Files  1 passed」那行不含 Tests 這個字。
++        #   數字前用「前一個字不是數字」而不是字詞邊界:色碼結尾的 m 緊貼數字時 \b 不成立(r1 三席實測);空白只收同一行的,不跨行。
++        #   開頭錨在「Tests:」或行首(可帶色碼與空白)的 Tests:測試標題裡剛好有「Tests 2 passed」不算(r2 資安席)。
++        # ②中段限長 200 字——舊樣式中段是不限長的 .*?,遇到「Tests:」接一長串數字的行二次方回溯(實測 4 萬字 11 秒,
++        #   兩個讀者都在單支測試逾時之後跑,推送會卡住)。
++        "re": r"(?:Tests:|(?:^|(?<=\n))[^\S\n]*(?:\x1b\[[0-9;]*m[^\S\n]*)*Tests\b)[^\n]{0,200}?(?<![0-9])[1-9]\d*[^\S\n]+passed",
++        "measured": ("jest 29 實測:跑到印「Tests: 1 passed, 1 total」,-t 對不到印「Tests: 1 skipped, 1 total」;"
++                     "vitest 5.0.4 實測(2026-10-15 order-web):跑到印「Tests  1 passed | 33 skipped (34)」,對不到印「Tests  34 skipped (34)」,兩種都回 0"),
++        "fix_hint": ("如果你換了自訂 reporter,摘要行的字樣會變——把 reporter 換回預設,或改用會對不到就回非零的跑法"
++                     "(vitest 的 --reporter=dot、json 沒有 Tests 摘要行,要用預設 reporter)"),
+     },
+     "python": {
+         "re": r"[1-9]\d*\s+passed",
+         # 規格閘用的「篩到幾支」(規格落成可驗收條件_計劃 S6-S8):支數不是斷言數——本 repo 自家 runner 的「N passed」數的是 check() 次數,
+         # 它印「lumos 測試(N 案例)」那行才是支數;unittest 讀 Ran N test(s);pytest 用摘要行各類相加(在 _ran_count 裡)
+         "count_re": [r"lumos 測試\((\d+) 案例\)", r"\bRan (\d+) tests?\b"],
+         "measured": "pytest 8 實測:跑到印「1 passed in 0.01s」;對不到本來就回 5(非零),這條只是雙保險",
+         "fix_hint": "pytest 的 -q/-p no:terminal 會把摘要行拿掉——留著預設輸出",
+     },
+ }
++_RAN_EVIDENCE["node-vitest"] = _RAN_EVIDENCE["node-jest"]   # 同 TEST_PROFILES 的別名:設定寫哪個都認
+ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+ 
+ 
+ _PYTEST_SUMMARY_RE = re.compile(r"(\d+)\s+(failed|passed|skipped|errors?|xfailed|xpassed)\b")
+ 
+ 
+ def _ran_count(profile, out):
+     """從測試工具輸出讀「篩到幾支」:回 (N 或 None, 那一支是不是被跳過)。None=這棧還讀不出支數,只能印有沒有跑過。
+     profile 的 count_re 逐條試(第一個命中為準);python 讀不到就用 pytest 摘要行各類相加(r4/r5:含 skipped/error/xfail 才不會漏算撞名)。"""
+     spec = _RAN_EVIDENCE.get(profile or "") or {}
+@@ -55674,20 +55956,28 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+                 return out
+             qid = row["id"]
+             try:
+                 pr = _one(qid, disp.get(qid))
+             except Exception as e:
+                 pr = f"{qid} 無法驗證(內部錯誤 {e.__class__.__name__}:{str(e)[:80]})——擋下不放行,修好再跑"
+             if pr:
+                 out["problems"].append(pr)
+             else:
+                 out["checked"] += 1
++    # 題組換過(例:前端值從 vue 改判 react,或退回舊版工具)時,帳上的舊答案是別棧的題號,--carry 只帶題號相同的、一題都帶不過來;
++    # 只印一排「缺表態」會讓人以為帳壞了,多講一行(2026-10-15 [[Projects/前端框架從vue分出_計劃]] S39,r1 設計審回滾席)
++    if any(p.endswith(" 缺表態") for p in out["problems"]):
++        _stale = sorted(q for q, e in disp.items() if isinstance(e, dict) and not e.get("auto")
++                        and (_stack_spec_by_id(q)[0] or None) not in meta)
++        if _stale:
++            out["problems"].append(f"(帳上有 {len(_stale)} 題舊表態屬於這次沒有出題的棧,例如 {_stale[0]}——題組換過了,舊題號不會帶過來;"
++                                   "用 lumos pitfalls --diff <範圍> --dispositions-template 產新樣板重答)")
+     out["blocked"] = bool(out["problems"])
+     return out
+ 
+ 
+ def _dispositions_template(pf_data, repo_root, branch=None, carry=False):
+     """S1:適用題 status 留空、未觸發題自動 na(auto:true+觸發清單);--carry 從該分支最後一筆表態帶「id 相同且仍適用」的舊答案。"""
+     meta = pf_data.get("stack_questions_meta") or {}
+     tpl = {}
+     old = {}
+     if carry and branch:
