@@ -1,0 +1,55 @@
+{
+  "base": "5919f48e",
+  "groups": [
+    {"id": "G1", "category": "boundary", "note": "讀回自驗用 splitlines 切行,note 含 U+2028/U+2029/U+0085 時已寫進帳卻報落盤自驗失敗;同族讀帳檔內容的地方一次掃完", "findings": ["正1", "邊1", "通1"],
+     "prior": {"why_failed": "r2 為了只讀回新寫那段把讀回改成 bytes decode 再 splitlines,沒走檔內唯一的切行規則 _ledger_lines,原始碼守衛只認 read_text().splitlines() 那一種字面,抓不到", "new_approach": "讀回改走 _ledger_lines,同族六處讀 JSONL 帳(逃逸帳、簽核帳、hook 事件帳、rule-gap、gov stats)一起換;守衛改成凡提到 JSONL 帳的函式,對 read_text、read、decode 的結果(直接接或先存變數)一律不准 splitlines,例外只收兩處非帳檔內容;補 U+2028/U+2029/U+0085 三種記帳測試"},
+     "paths": [
+       {"at": "scripts/lumos:_jsonl_append_verified", "status": "fixed", "tests": ["t_canary_record_note_line_separators", "t_jsonl_append_readback_reads_only_new_bytes"]},
+       {"at": "scripts/lumos:_escape_raw_rows", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]},
+       {"at": "scripts/lumos:cmd_loop_escape", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]},
+       {"at": "scripts/lumos:_guard_signoff_refs", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]},
+       {"at": "scripts/lumos:_hook_recent_ok", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]},
+       {"at": "scripts/lumos:cmd_rule_gap", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]},
+       {"at": "scripts/lumos:_render_gov_stats", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]}
+     ]},
+    {"id": "G2", "category": "boundary", "note": "帳壞分支沒測試:--regression-set 帳壞、--orchestrator 帳壞分支與輪次規則重複", "findings": ["通2", "通3"],
+     "prior": {"why_failed": "上一輪只在記帳主路徑補了帳壞訊息,帶 --regression-set 與 --orchestrator 的兩條分支沒列進同一張入口清單,也沒有能分辨的測試", "new_approach": "這輪把帳壞時會走到的每條分支都接到同一句讀不懂訊息,並各補一支整本帳非 UTF-8 時能分辨原因的測試"},
+     "paths": [
+       {"at": "scripts/lumos:cmd_canary", "status": "fixed", "tests": ["t_canary_record_regression_bad_ledger_message", "t_canary_record_outcome_orchestrator_bad_ledger", "t_canary_record_orchestrator_bad_ledger_message"]}
+     ]},
+    {"id": "G3", "category": "perf-memory", "note": "讀回自驗只讀新寫那段沒有測試守", "findings": ["通4"],
+     "prior": {"why_failed": "上一輪把整本帳讀三次收成一次時,寫入後讀回只讀新寫那段的改法沒有任何測試守著,改回整本重讀也照綠", "new_approach": "這輪補一支斷言讀回位元組數等於新寫那一列的測試,把讀回起點改成從頭讀會紅"},
+     "paths": [
+       {"at": "scripts/lumos:_jsonl_append_verified", "status": "fixed", "tests": ["t_jsonl_append_readback_reads_only_new_bytes"]}
+     ]},
+    {"id": "G4", "category": "other", "note": "結局帳入口漏網:verify-progress 等其他直接讀審查帳的指令", "findings": ["邊2", "架1"],
+     "prior": {"why_failed": "r2 把過濾收到四個讀帳入口,但只查了走 _canary_ledger_scan 與 _loop_status_read 的路,自己逐行讀帳的指令沒逐一查", "new_approach": "全檔搜直接讀 .canary-log.jsonl 的函式逐一判:會數審查輪或審查列的都接 _is_outcome_row(verify-progress、loop list、canary-stats、首筆時間、severity-check、逃逸歸因),刻意不濾的列進 _is_outcome_row 註解;補加結局帳前後輸出一樣的測試"},
+     "paths": [
+       {"at": "scripts/lumos:cmd_loop_verify_progress", "status": "fixed", "tests": ["t_outcome_row_other_readers_skip_it"]},
+       {"at": "scripts/lumos:cmd_loop_list", "status": "fixed", "tests": ["t_outcome_row_other_readers_skip_it"]},
+       {"at": "scripts/lumos:cmd_loop_canary_stats", "status": "fixed", "tests": ["t_outcome_row_other_readers_skip_it"]},
+       {"at": "scripts/lumos:_is_outcome_row", "status": "fixed", "tests": ["t_outcome_row_other_readers_skip_it", "t_outcome_row_readers_skip_it"]},
+       {"at": "scripts/lumos:_loop_first_ts_key", "status": "fixed", "tests": ["t_outcome_row_other_readers_skip_it"]},
+       {"at": "scripts/lumos:cmd_severity_check", "status": "fixed", "tests": ["t_outcome_row_other_readers_skip_it"]},
+       {"at": "scripts/lumos:_escape_review_rows_by_loop", "status": "fixed", "tests": ["t_cap_retro_r3_ledger_lines_everywhere"]}
+     ]},
+    {"id": "G5", "category": "escaping", "note": "照抄指令的迴圈編號還有截斷版與整行清版", "findings": ["邊3", "架2"],
+     "prior": {"why_failed": "r2 只在 canary record 的擋下訊息開了 _rf_qloop,同檔跑滿回顧兩處與其他印照抄指令的地方各自 quote、截 200 字或整行清", "new_approach": "全檔印給人照抄的迴圈編號一律走 _rf_qloop(先 quote、清控制字元、不截斷):_retro_cmd、_cap_retro_record_block、replay、fix-check、loop next 範本、loop status 指路、資安席補記指令;補兩支跑滿回顧照抄指令的測試"},
+     "paths": [
+       {"at": "scripts/lumos:_retro_cmd", "status": "fixed", "tests": ["t_retro_hint_commands_quote_full_loop_id"]},
+       {"at": "scripts/lumos:_cap_retro_record_block", "status": "fixed", "tests": ["t_retro_hint_commands_quote_full_loop_id"]},
+       {"at": "scripts/lumos:cmd_loop_next", "status": "fixed", "tests": ["t_canary_record_hint_quotes_full_loop_id", "t_loop_next_record_cmd_split_package_hint"]}
+     ]},
+    {"id": "G6", "category": "other", "note": "cmd_canary 用閉包快取讀帳,跟鄰居 rows=/scan= 往下傳的做法不同", "findings": ["架3"],
+     "prior": {"why_failed": "上一輪為了讀一次帳在 cmd_canary 裡就地寫閉包快取,沒對照鄰居把讀到的一份往下傳的既有做法", "new_approach": "這輪拿掉閉包快取,改成讀一次帳後當參數往下傳給各個檢查,跟鄰近函式同一種形狀"},
+     "paths": [
+       {"at": "scripts/lumos:cmd_canary", "status": "fixed", "tests": ["t_canary_record_reads_ledger_once", "t_canary_record_regression_bad_ledger_message"]}
+     ]},
+    {"id": "G7", "category": "other", "note": "說明文字、筆記、Issue 與舊計劃的過時句", "findings": ["整1", "整2", "整3", "整4"],
+     "prior": {"why_failed": "上一輪改程式行為後只同步了計劃與家節點的一部分,說明文字、Issue 與舊計劃裡的過時句沒一起掃", "new_approach": "這輪逐處改說明文字、筆記、Issue 與舊計劃的過時句,並修正一支測試說明,讓文件與現行行為一致"},
+     "paths": [
+       {"at": "scripts/lumos:main", "status": "fixed", "tests": ["t_canary_record_none_is_reserved_id"]},
+       {"at": "scripts/test_lumos.py:t_canary_carrier_quote_positive_controls", "status": "fixed", "tests": ["t_canary_carrier_quote_positive_controls"]}
+     ]}
+  ]
+}

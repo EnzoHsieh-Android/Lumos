@@ -1,0 +1,47 @@
+{
+  "base": "69ee6d76",
+  "groups": [
+    {"id": "G1", "category": "other", "note": "結局帳過濾散在六個呼叫端、測試只斷言沒有某句話;規格閘那一族與修正關卡分輪沒濾", "findings": ["正1", "正2", "正4", "通1", "通4"],
+     "prior": {"why_failed": "r1 在 loop next、loop status、處置閘、跑滿提示、寫側各自先濾一次,判法內又濾一次,層層重複,拿掉任一層測試照綠;規格閘讀帳與修正關卡分輪沒接", "new_approach": "改成跟規格閘留痕同一個位置:讀審查列的四個入口(_canary_ledger_scan、_loop_status_read、replay 讀帳、_spec_gate_ledger_index)一處用 _is_outcome_row 濾,呼叫端與判法內不再濾;每個讀側入口補正向行為測試,逐一拿掉入口過濾都會紅"},
+     "paths": [
+       {"at": "scripts/lumos:_is_outcome_row", "status": "fixed", "tests": ["t_outcome_row_loop_next_counts_review_rounds", "t_outcome_row_cap_hint_still_printed", "t_outcome_row_readers_skip_it"]},
+       {"at": "scripts/lumos:_canary_ledger_scan", "status": "fixed", "tests": ["t_outcome_row_loop_next_counts_review_rounds", "t_outcome_row_cap_hint_still_printed", "t_outcome_row_readers_skip_it"]},
+       {"at": "scripts/lumos:_loop_status_read", "status": "fixed", "tests": ["t_outcome_row_panel_gate_same_verdict", "t_outcome_row_disposal_gate_passes"]},
+       {"at": "scripts/lumos:cmd_loop_replay", "status": "fixed", "tests": ["t_outcome_row_replay_freeze_and_golden"]},
+       {"at": "scripts/lumos:_spec_gate_ledger_index", "status": "fixed", "tests": ["t_outcome_row_readers_skip_it"]},
+       {"at": "scripts/lumos:_loop_round_format", "status": "fixed", "tests": ["t_canary_record_outcome_exempt_round_format", "t_canary_record_round_ignores_outcome_rows"]},
+       {"at": "scripts/lumos:cmd_canary", "status": "fixed", "tests": ["t_outcome_row_disposal_gate_passes"]}
+     ]},
+    {"id": "G2", "category": "boundary", "note": "none 當真實 id 時其他清單的 none 有歧義:--regression-set 第一輪死路、之後記成回歸", "findings": ["邊1", "正3"],
+     "prior": {"why_failed": "r1 把 --regression-set 的 none 判法改成跟折入放行同一支,而那一支在發現清單有 none id 時照字面,同族歧義搬到了 regression-set", "new_approach": "none 改成保留字一條規則:任何清單出現叫 none 的發現 id 一律擋(_none_reserved_lines),整串 none 一律是空集合,各清單判法一致"},
+     "paths": [
+       {"at": "scripts/lumos:_none_reserved_lines", "status": "fixed", "tests": ["t_canary_record_none_is_reserved_id", "t_canary_record_set_none_is_empty", "t_canary_carrier_zero_quote_rejected", "t_canary_carrier_quote_positive_controls"]},
+       {"at": "scripts/lumos:cmd_canary", "status": "fixed", "tests": ["t_canary_record_none_is_reserved_id", "t_canary_record_regression_set_code_only"]}
+     ]},
+    {"id": "G3", "category": "perf-memory", "note": "預設記帳路徑整本帳仍讀三次、被擋的呼叫也先讀、掃描結果多留一份", "findings": ["資1", "資2", "資3"],
+     "prior": {"why_failed": "r1 只把 --orchestrator、--regression-set 接到開頭那次讀帳,跑滿回顧擋點自己又讀、定錨留痕整檔 read_text、讀回自驗整本重讀,而且開頭就讀、掃描結果留到函式結束", "new_approach": "canary record 改成用到才讀、只讀一次(_loop_records_checked_ex 的結果快取,只留這個編號的列);跑滿回顧擋點移到參數驗完之後並收共用的列;定錨留痕用同一份;讀回自驗只讀新寫的那段;補一支數讀帳次數的測試"},
+     "paths": [
+       {"at": "scripts/lumos:cmd_canary", "status": "fixed", "tests": ["t_canary_record_reads_ledger_once"]},
+       {"at": "scripts/lumos:_cap_retro_record_block", "status": "fixed", "tests": ["t_canary_record_reads_ledger_once", "t_cap_retro_only_blocks_decided_loops", "t_cap_retro_bad_ledger_fail_closed"]},
+       {"at": "scripts/lumos:_loop_records_checked_ex", "status": "fixed", "tests": ["t_canary_record_reads_ledger_once", "t_canary_record_round_check_bad_ledger_blocks"]},
+       {"at": "scripts/lumos:_jsonl_append_verified", "status": "fixed", "tests": ["t_canary_record_tail_without_newline", "t_canary_record_reads_ledger_once"]}
+     ]},
+    {"id": "G4", "category": "escaping", "note": "照抄用的指令先清再截 80 字才 quote,同函式另一處截 60 字", "findings": ["邊2", "通3", "架1"],
+     "prior": {"why_failed": "r1 為了清控制字元先 _esc_clean 再截斷才 quote,長編號與帶控制字元的編號照抄會開出另一個迴圈,而且只測了一條分支", "new_approach": "抽一支 _rf_qloop:照鄰居先 shell quote 再清控制字元、不截斷,同函式所有印編號的地方都用它;每個印指令的分支各補 ESC 編號與長編號的測試"},
+     "paths": [
+       {"at": "scripts/lumos:_rf_qloop", "status": "fixed", "tests": ["t_canary_record_hint_quotes_full_loop_id", "t_canary_record_first_row_needs_round"]},
+       {"at": "scripts/lumos:_round_format_write_block", "status": "fixed", "tests": ["t_canary_record_hint_quotes_full_loop_id"]}
+     ]},
+    {"id": "G5", "category": "boundary", "note": "整本非 UTF-8 時 --orchestrator 路徑丟堆疊;最後一列沒換行時新記錄黏上去", "findings": ["邊3", "邊4", "架2"],
+     "prior": {"why_failed": "r1 只讓輪次規則走友善訊息,--orchestrator 帳壞時退回會丟例外的舊讀法,cmd_canary 另寫了一份同樣的讀帳例外處理", "new_approach": "帳壞旗標由 _loop_records_checked_ex 回傳、訊息抽成 _round_format_bad_lines,輪次規則、--orchestrator、--regression-set 共用;寫入前照治理帳的 _ledger_tail_needs_newline 先補換行"},
+     "paths": [
+       {"at": "scripts/lumos:_round_format_bad_lines", "status": "fixed", "tests": ["t_canary_record_orchestrator_bad_ledger_message", "t_canary_record_round_check_bad_ledger_blocks"]},
+       {"at": "scripts/lumos:_jsonl_append_verified", "status": "fixed", "tests": ["t_canary_record_tail_without_newline"]}
+     ]},
+    {"id": "G6", "category": "other", "note": "測試標籤與文件過時:S17 標籤、計劃不做節與做法、筆記、兩篇舊計劃;S14 只做否定斷言", "findings": ["通2", "整1", "整2", "整3"],
+     "paths": [
+       {"at": "scripts/test_lumos.py:t_cap_retro_bad_ledger_fail_closed", "status": "fixed", "tests": ["t_cap_retro_bad_ledger_fail_closed"]},
+       {"at": "scripts/test_lumos.py:t_canary_record_outcome_exempt_round_format", "status": "fixed", "tests": ["t_canary_record_outcome_exempt_round_format"]}
+     ]}
+  ]
+}

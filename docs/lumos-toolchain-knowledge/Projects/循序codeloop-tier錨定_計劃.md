@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-08-18
-updated: 2026-08-18
+updated: 2026-10-15
 tags:
   - type/project
   - status/done
@@ -17,6 +17,8 @@ summary: |
   KEY:範圍刀=收斂閘判定式(--gate/--disposal/--panel)一字不動、不回溯舊帳、不為循序發明 dispatch 慣例
   TEST:六組測試見 body 測試策略節(anchor/panel_ok/回歸格含 light/roster 表/cap 行為/tier_hint 警告措辭)
 ---
+
+> **2026-10-15 起新迴圈不再進循序形狀**:[[Projects/記帳與迴圈工具小修_計劃]] d1 讓全新的一般分級代碼審每筆帶輪次(處置帳必綁輪次,無輪次的一有發現就判不過);帳上全無輪次的舊迴圈照本篇的放寬繼續走。
 
 > 白話:單 reviewer 循序跑的 code loop,照規矩本來就該標 standard 檔位,但現在的「檔位↔記帳格式一致性守衛」不分 loop 種類,一標 standard 就被當成漏帶 panel 格式擋死(rc2)——結果歷史上三個循序 loop 全被迫掉回最鬆的 legacy 判準(cap 6 而非 3,多燒三輪才被逼停)。本案把守衛改成認得 loop 種類:code 種的 standard=循序是設計行為,放行;其餘象限一格不動。
 
