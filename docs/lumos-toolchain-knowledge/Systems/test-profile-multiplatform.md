@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-02
-updated: 2026-10-15
+updated: 2026-10-20
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/082e219ba898
 related:
@@ -22,7 +22,7 @@ tags:
 summary: |-
   KEY:單一圖譜跨平台綁測試——config 從單 test_profile 擴為 platforms 多根多 profile map;`[test:]` 的「平台:名稱」寫法 的**平台前綴**(android/backend/maestro/playwright)★注意:平台前綴≠profile 名★——profile 名截至 2026-09-12 共 10 個鍵(csharp-xunit/kotlin-junit/java-junit/maestro/playwright/dart/python/swift-xctest/node-jest/node-vitest,其中 node-vitest 是 node-jest 的別名)——★這串每次補棧都要跟著改★:2026-09-08 加 swift/node、2026-09-11 加 python 時都漏了,2026-09-12 補回;兩者同名的只有 maestro/playwright,android 對應 kotlin-junit、backend 對應 csharp-xunit
   KEY:向後相容以「config 有無 platforms 鍵」為信號(multiplatform bool)——無 platforms=legacy,resolve 不切分整串當方法名,舊 test_profile/裸 `[test:]` 只寫名稱 照舊
-  KEY:default_platform 規則——多平台缺省即報錯(不猜);未定義平台前綴 `[test:]` 寫了沒定義的平台前綴 Check T 明確報錯(不 fallback)
+  KEY:default_platform 規則——多平台缺省即報錯(不猜);未定義平台前綴(半形冒號、前面長得像平台名)Check T 明確報錯(不 fallback);前面含空白、中文或用全形冒號的整串當名稱(2026-10-15 起,見 [[Projects/測試名收自由字串_計劃]])
   KEY:新增內建 profile maestro(綁 flow name:,file_must_match=^appId: 濾非flow yaml,\s*$ 錨多字 name NO MATCH)/ playwright(2026-10-15 起改收句子名:標題整串比對,見 [[Projects/測試名收自由字串_計劃]];maestro 刻意不跟)
   KEY:file_must_match 是 discover 選填 knob(讀檔後去註解前過濾,.get() 相容無此鍵的舊 profile)
   KEY:guard bind/scaffold --platform 旗標——平台另帶(2026-10-15 起 bind 收句子名、名稱有冒號時必帶 --platform;scaffold 拿名字產程式碼,維持識別字,見 [[Projects/測試名收自由字串_計劃]]),bind 寫 `[test:]` 的「平台:名稱」 去重/verify 比完整 ref;scaffold 範本/scaffold_ext/測試目錄偵測跟平台 root 走
@@ -61,7 +61,7 @@ about_code:
 
 ## 剝註解改成認字串(2026-10-15,[[Projects/前端框架從vue分出_計劃]] 代碼審 r3 G1)
 
-`_strip_test_comments` 的 c-style 與 c-style+strings 兩種模式改走共用的 `_strip_c_comments`(Kotlin 建置檔判平台也用它,不留第二套):一條從左到右的掃描,字串裡的 `//` 與 `/*` 不再被當成註解(原本先剝註解再清字串,字串裡的網址會被截斷、`"/*"` 會吃掉後面一大段);c-style+strings 照舊把字串內容清空、保留引號。掃描本體跟測試名收自由字串那支 `_C_STRIP_RE` 合成一套(合併主線時收掉 `_C_SCAN_RE`):多認三個雙引號、三個單引號、C# 的 @ 加雙引號與反引號字串,量詞用佔有式。沒閉合的字串吃到行尾(多行字串與區塊註解吃到檔尾),不回溯,`"\` 重複這種 512KB 輸入也在毫秒級。python profile 照舊不剝。測試 t_strip_c_comments_shared_and_linear、t_strip_test_comments_strings_mode_kept。
+`_strip_test_comments` 的 c-style 與 c-style+strings 兩種模式改走共用的 `_strip_c_comments`(Kotlin 建置檔判平台也用它,不留第二套):一條從左到右的掃描,字串裡的 `//` 與 `/*` 不再被當成註解(原本先剝註解再清字串,字串裡的網址會被截斷、`"/*"` 會吃掉後面一大段);c-style+strings 照舊把字串內容清空、保留引號。掃描本體跟測試名收自由字串那支 `_C_STRIP_RE` 合成一套(合併主線時收掉主線原本另一套掃描樣式,已移除):多認三個雙引號、三個單引號、C# 的 @ 加雙引號與反引號字串,量詞用佔有式。沒閉合的字串吃到行尾(多行字串與區塊註解吃到檔尾),不回溯,`"\` 重複這種 512KB 輸入也在毫秒級。python profile 照舊不剝。測試 t_strip_c_comments_shared_and_linear、t_strip_test_comments_strings_mode_kept。
 
 ## 相關系統
 - [[Systems/check-t-sentinel]]（Check T/K 機制；本機制擴充其 discover 面為多平台多根）
@@ -71,7 +71,7 @@ about_code:
 前端慣例是用一句話當測試名,舊設計「識別字名才可綁」讓示範專案 15 條條款全懸空。改法與理由在 [[Projects/測試名收自由字串_計劃]](推翻本篇原本 playwright 與 dart 的 NO MATCH 設計;多根多 profile 那條決策照樣成立)。
 
 - 名稱規則一支 `_test_name_ok`:不空、至多 200 字、不以減號開頭、不含方括號與半形逗號、沒有控制或格式字元;中文、空白、括號、冒號、引號、全形標點都可以。Windows 上另外不收 `& | < > ^ % " !`(cmd.exe 不認單引號);擋下訊息的白話是 `_TEST_NAME_RULE_ZH` 一句。 [test:t_test_name_ok_rules]
-- 一格 `[test:]` → (平台, 名稱) 一支 `_split_test_ref`(`resolve_test_refs`、`_test_names_of`、`_kill_method_name`、`_dispositions_split_test` 都改呼叫它):單平台整串是名稱;多平台第一個冒號(半形或全形)前是已定義平台才是前綴,長得像平台名的未定義前綴照擋(不猜),其他整串是名稱;只切半形逗號;反引號整串包住才拆殼。 [test:t_test_ref_split_rules]
+- 一格 `[test:]` → (平台, 名稱) 一支 `_split_test_ref`(`resolve_test_refs`、`_kill_method_name`、`_dispositions_split_test` 都改呼叫它;`_test_names_of` 不解前綴與反引號、回那一格原字串,交給下游的 `resolve_test_refs` 切):單平台整串是名稱;多平台第一個冒號(半形或全形)前是已定義平台才是前綴,長得像平台名的未定義前綴照擋(不猜),其他整串是名稱;只切半形逗號;反引號整串包住才拆殼。 [test:t_test_ref_split_rules]
 - 字串標題型 profile(node-jest/node-vitest、playwright、dart;`name_filter` 是 regex、regex_tail 或 plain)收第一個引數的完整字面:後面要接逗號或右括號、前面不能是點號或識別字、只認 \' \" \\ \` \$ 跳脫、Dart 的 $ 插值不收、字面限 200 字;過不了名稱規則的(含逗號、方括號)不收進集合。Kotlin 反引號名照舊。 [test:t_js_free_string_test_names_discovered] [test:t_js_title_partial_or_member_not_collected] [test:t_kotlin_backtick_comma_name_still_collected]
 - 剝註解的 `c-style`(所有用它的語言,不只這幾家;代碼審 code-測試名收自由字串 r1 編排者裁)改成一趟認字串(原樣留)與註解(刪掉),展開式正規式、沒結尾的 `/*` 刪到檔尾,時間與記憶體都線性;java 的 `c-style+strings` 走同一趟、另把字串內容清空(見上〈剝註解改成認字串〉)。已知限制:JS 的正規表示式字面(`/'/`)會被當成字串開頭。 [test:t_js_comment_strip_keeps_strings] [test:t_js_comment_strip_linear]
 - playwright 補檔名錨 `*.spec.*`/`*.test.*`;自訂測試檔名的專案在設定寫 `file_name_match`(單平台 `test` 裡,多平台寫在那個平台),舊綁定在不合錨的檔裡時 doctor 會講。Playwright 的宣告字面後面要接逗號(測試本體裡的 `test.skip('原因')` 不算宣告)。 [test:t_playwright_file_anchor_hint] [test:t_playwright_free_string_names_discovered]

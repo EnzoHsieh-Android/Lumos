@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-10-15
+updated: 2026-10-20
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 aliases:
@@ -20,9 +20,9 @@ summary: |-
   WHY:[2026-10-06 [[Projects/CI加速_計劃]]]CI 拆成三個工作:prep(編譯類檢查、決定範圍、純文件子集)→ shards(全套用 matrix 分給多台機器、每台背景跑自己那幾份 `--shard i/$SHARD_TOTAL`)與 gates(自主迴圈測試、健檢、代碼審留痕閘、筆記形狀閘、存量漂移檢查、回頭重讀提醒、錨點驗證)同時跑;每個工作各自抓完整歷史、補本機 main、裝 Python;後盾步驟的指令逐字照搬(`t_ci_yml_matrix_and_gates_shape` 用拆分前的指紋守),全套跟後盾不再有先後——全套紅了後盾照跑 [出處:Enzo 2026-10-06「CI 好慢,拖慢整個開發速度」] [因:一台機器切 4 片已跑到 32–38.5 分、離 45 分上限只剩約 7 分] [不選:主線推送在同一棵檔案樹已於合併請求跑綠時不重跑全套(看提交歷史的測試在合併請求與主線結果會不同,見 [[Systems/測試假綠形態]] 鏡頭逾時暖快取那條;Enzo 改裁不做);本機全綠就不等 CI(要改全域規則)] [test:t_ci_yml_matrix_and_gates_shape]
   WHY:CI 在 pull_request 事件多一步建出追蹤 origin/main 的本機 main(git branch --track main origin/main),讓 PR 跟推到 main 時是同一種環境 [出處:2026-10-03 第一個 PR(EnzoHsieh-Android/Lumos#1)CI 紅] [因:PR 取出的是不在分支上的合併提交、本機沒有 main,t_lens_timeout_keeps_warming_cache 與 t_codex_s1_lens_arm_claim 以 main@{upstream} 找主線而整支紅;容器重現:沒本機 main 紅、補上就綠] [不選:改兩支測試各自退回 origin/main(dispatch-lens 認主線的規則也要跟著改,範圍更大)]
   WHY:_classify_test_refs 多一個呼叫者:note-shape 的筆記測試綁定第①道,名稱逐一重包成 `[test:名]` 再交(同修正關卡),判 real 才算指得到 [出處:2026-10-03 [[Projects/筆記測試綁定要存在_計劃]]] [因:判存在不另寫第二套] [test:t_note_shape_test_refs_touched_note]
-  WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]「`[test:]` → resolve_test_refs → 白名單 → real/fake/dangling/bad-name」抽成 `_classify_test_refs`(修正關卡第 3 項也用),判定不變;修正關卡在自己建的隔離工作樹裡呼叫 `_bound_tests_check`(帳與測試快取落在樹裡、跟著刪)
+  WHY:[2026-10-02 Projects/代碼審修正關卡第0步_計劃]「`[test:]` → resolve_test_refs → 名稱規則(2026-10-15 起是 _test_name_ok,原本是白名單)→ real/fake/dangling/bad-name」抽成 `_classify_test_refs`(修正關卡第 3 項也用),判定不變;修正關卡在自己建的隔離工作樹裡呼叫 `_bound_tests_check`(帳與測試快取落在樹裡、跟著刪) [出處:Projects/代碼審修正關卡第0步_計劃] [因:推送前合約測試閘與修正關卡第 3 項要用同一套判法,分開寫會漂]
   KEY:★INVARIANT★ code-loop check 對 impact 固定席上合約綁的測試逐支真跑,任一紅/懸空(dangling/fake)/方法名不合法/★證不出跑過(unfilterable)★ → blocked=True rc1;沒 run_cmd/diff 算不出/無固定席/沒綁 → 不擋但寫 gate=bound-tests 帳 [test:t_bound_tests_gate] [audit:sonnet/2026-08-22]
-  KEY:★閘不得把「指令回成功」當「測試跑過」★(2026-09-09 消費專案接入靜默失效 [F];r1 代碼審把判準整條換掉):主力證據是★逐支看測試工具自己的輸出有沒有說「執行了 N 支(N≥1)」★(_RAN_EVIDENCE,只填實測過「跑 1 支」與「跑 0 支」兩種輸出的 profile:swift-xctest/csharp-xunit/node-jest/python);沒有樣式可比的 profile 才退回過濾能力冒煙測試(拿不存在的測試名跑一次看回不回 0)。任一支證不出來 → 狀態 unfilterable、不報綠,擋的路徑上跟紅一樣擋 [test:t_bound_tests_unproven_blocks_push]
+  KEY:★閘不得把「指令回成功」當「測試跑過」★(2026-09-09 消費專案接入靜默失效 [F];r1 代碼審把判準整條換掉):主力證據是★逐支看測試工具自己的輸出有沒有說「執行了 N 支(N≥1)」★(_RAN_EVIDENCE,只填實測過「跑 1 支」與「跑 0 支」兩種輸出的 profile:swift-xctest/csharp-xunit/node-jest(node-vitest 共用同一條)/playwright/python);沒有樣式可比的 profile 才退回過濾能力冒煙測試(拿不存在的測試名跑一次看回不回 0)。任一支證不出來 → 狀態 unfilterable、不報綠,擋的路徑上跟紅一樣擋 [test:t_bound_tests_unproven_blocks_push]
   KEY:為什麼不是只用冒煙測試(同上,r1 實測推翻第一版):★大多數測試工具都分不出「測試不存在」與「測試通過」★——xcodebuild 三段 -only-testing 但方法名打錯回 0、dotnet test --filter 對不到回 0、jest -t 對不到回 0;只有 pytest(回 5)分得出來。只靠冒煙測試等於把最常見的幾種棧全判成不可信,不是擋錯人就是等於沒擋 [test:t_bound_tests_rejects_unfilterable_cmd]
   KEY:★xcodebuild 帶 -quiet 時跑 1 支跟跑 0 支的輸出一模一樣★(2026-09-09 在 calc-ios 實測,逐字比對過兩份輸出):所以 swift 骨架指令刻意不帶 -quiet,unfilterable 的訊息也直接點名這件事;dotnet 的解法是尾巴加 `-- RunConfiguration.TreatNoTestsAsError=true`(實測對不到回 1、對到回 0),已寫進骨架
   KEY:★「擋」跟「講」是兩個地方★(2026-09-09 代碼審 r2 blocker):判定在 _codeloop_guard_verdict、但印給人看的在 cmd_code_loop,後者原本只認 green/red——低風險推送因此在假綠上一個字都不印就放行,高風險擋下時也看不到逃生指令。動判定一定要回頭看列印分流 [test:t_code_loop_check_speaks_about_unproven]
@@ -161,4 +161,4 @@ WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓�
 
 `node-jest` 那條「跑過的證據」樣式改成同時吃 jest(`Tests:       1 passed, 1 total`)與 vitest(`      Tests  1 passed | 33 skipped (34)`),`node-vitest` 指向同一條;所以設定寫 `node-jest` 卻用 vitest 跑的專案也認得。中段限長 200 字(舊樣式遇到超長一行會二次方回溯,4 萬字實測 11 秒);數字前只要求「前一個字不是數字」(色碼結尾的 m 緊貼數字,字詞邊界不成立),空白只收同一行的、不跨行;`Tests:` 與 `Tests` 兩支都要在行首或行首前綴之後(前綴只收空白、色碼與游標控制碼、方括號或 ISO 時間戳、以冒號結尾的工作區前綴,如 turbo 的 `@org/web:test:`、pnpm -r 的 `packages/app test:`),測試標題裡出現「Tests: 2 passed」或「Tests 2 passed」都不算(代碼審 r3 折入,測試 t_ran_evidence_workspace_prefixes、t_ran_evidence_title_lines_rejected、t_ran_evidence_prefix_regex_linear;r2 折入,測試 t_ran_evidence_anchored_to_summary_line、t_ran_evidence_bounded_middle_fast;r1 折入,測試 t_ran_evidence_colored_per_line_reader、t_ran_evidence_no_cross_line_match)。全部 skipped 照舊判沒跑過。vitest 對不存在的測試名同樣回 0(5.0.4 實測),所以這條摘要行是唯一的證據。成本:每支綁定測試各起一次 vitest、預設依序跑,綁得多時用 `bound_tests.parallel`。測試 t_ran_evidence_vitest_one_passed、t_ran_evidence_vitest_all_skipped、t_ran_evidence_node_jest_accepts_vitest、t_ran_evidence_jest_summary_kept、t_ran_evidence_long_line_fast。
 
-實地驗收(order-web 綁合約後推送拿到綠燈)要等測試名能收中文句子,見計劃的 S30。
+實地驗收(order-web 綁合約後推送拿到綠燈)要等測試名能收中文句子,見計劃的 S30。(2026-10-15 補:測試名已能收中文句子,見 [[Projects/測試名收自由字串_計劃]];實地驗收拿到綠燈與否以那份計劃的 S30 為準)
