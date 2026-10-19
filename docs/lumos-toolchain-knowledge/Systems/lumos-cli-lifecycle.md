@@ -173,3 +173,11 @@ WHY: 新test-quality sidecar沿精確vendor白名單部署及清理 [出處:[[Pr
 PITFALL: 部署缺少遞移sidecar曾漏過core模組的備援攔截 [出處:code-test-quality-native-push/r1-邊界-codex.md b1] [防回歸:test_partial_sidecar_returns_structured_invalid、test_missing_all_sidecars_explains_update、test_missing_quality_sidecar_does_not_break_legacy_help]。精確名單沿安裝白名單取得，維持單一來源；舊命令仍可用，新的不完整命令要求update。
 
 PITFALL: test-quality sidecar 內容變更卻漏更 bundle 指紋時，consumer 會把整套工具判為配套版本不一致 [出處:[[Verification/測試品質第四輪修補驗證]]] [防回歸:test_test_quality_cli.py 全套]。拒收是預期的安全行為；修改白名單內 sidecar 時，來源檔與 `scripts/lumos` 的內嵌指紋必須在同一提交更新。
+
+## init 對 Vite 專案給 vitest 的指令(2026-10-15,[[Projects/前端框架從vue分出_計劃]] F1)
+
+設定骨架猜到 `node-jest`、而 repo 根 package.json 的依賴有 `vitest`(或依賴看不出測試工具、根目錄有確切副檔名的 `vite.config.*`/`vitest.config.*`)時,改寫 `node-vitest` 與 `npx vitest run -t {method}`(單語言與多平台兩種骨架都換,`_推測` 欄多一句理由);只看根目錄。依賴有 jest 沒有 vitest 的照舊給 jest(代碼審 r1 折入,測試 t_init_skeleton_vite_with_jest_stays_jest);沒有這些跡象的也照舊給 jest。測試 t_init_skeleton_vitest_from_vite_config、t_init_skeleton_vitest_from_package_dep、t_init_skeleton_jest_default_kept。
+
+## init 看到 eslint 設定會提醒(2026-10-15,[[Projects/前端框架從vue分出_計劃]] W7)
+
+init 收尾 `.lumos/lint.json` 不存在、repo 根有 eslint 設定時,印一行 `⚠ 看到 eslint 設定 <檔名>…`,下一行獨立印 `lumos doctor`(範本在健檢 [F] 段);不寫 lint.json。細節在 [[Systems/lint-declaration-health]]。

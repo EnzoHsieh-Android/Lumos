@@ -1,6 +1,6 @@
 ---
 name: node-idioms
-description: 寫或審 Node.js／TypeScript 後端（HTTP API、worker、排程）代碼前必讀——通用不變量層的慣例規則：並行等待與有界並行、不阻塞事件迴圈、floating promise、外呼逾時與取消、錯誤與程序生命週期、stream 與記憶體、邊界驗證。每條附壞例→好例與機檢對照（typescript-eslint／eslint-plugin-n／eslint-plugin-security）。框架選擇（Express vs Fastify vs Nest、Prisma vs Drizzle vs Knex、ESM vs CJS）不在此裁——查該專案圖譜。前端 TS（Vue）另有 vue-idioms。
+description: 寫或審 Node.js／TypeScript 後端（HTTP API、worker、排程）代碼前必讀——通用不變量層的慣例規則：並行等待與有界並行、不阻塞事件迴圈、floating promise、外呼逾時與取消、錯誤與程序生命週期、stream 與記憶體、邊界驗證。每條附壞例→好例與機檢對照（typescript-eslint／eslint-plugin-n／eslint-plugin-security）。框架選擇（Express vs Fastify vs Nest、Prisma vs Drizzle vs Knex、ESM vs CJS）不在此裁——查該專案圖譜。前端 TS 另有 vue-idioms（Vue）與 react-idioms（React）。
 ---
 
 # Node.js／TypeScript 後端慣例（通用不變量層）

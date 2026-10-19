@@ -54,5 +54,14 @@ about_code:
 - **本節點亦為 `test_profile` 機制（原 P5，`csharp-xunit`/`kotlin-junit`）的權威說明**——P5 當初未建 Systems 節點，此處一併涵蓋四 profile，不另建重複節點（L4 審計 2026-07-02 決策）。`csharp-xunit`=預設（`.cs`/`[Fact]`/頂層 `*Tests` suffix）、`kotlin-junit`=Android 單元（`.kt`/`@Test`/`src/` 下 rglob）。
 - `guard bind` / `guard scaffold` 新增 `--platform` 旗標。
 
+## vitest 與 .jsx(2026-10-15,[[Projects/前端框架從vue分出_計劃]] F1)
+
+- 測試 profile 沒有新增:`node-vitest` 仍是 `node-jest` 的別名(同語法、同檔名錨),init 對 Vite 專案寫 `node-vitest` 只是讓設定看得出跑法;跑過證據那份表也加了同一個別名,見 [[Systems/bound-tests-gate]]。
+- 符號 profile `typescript` 收 `.jsx`(原本沒有任何 profile 認領,純 `.jsx` 專案 init 猜不出 symbol_profile)。測試 t_init_skeleton_jsx_symbol_profile。
+
+## 剝註解改成認字串(2026-10-15,[[Projects/前端框架從vue分出_計劃]] 代碼審 r3 G1)
+
+`_strip_test_comments` 的 c-style 與 c-style+strings 兩種模式改走共用的 `_strip_c_comments`(Kotlin 建置檔判平台也用它,不留第二套):一條從左到右的掃描,字串裡的 `//` 與 `/*` 不再被當成註解(原本先剝註解再清字串,字串裡的網址會被截斷、`"/*"` 會吃掉後面一大段);c-style+strings 照舊把字串內容清空、保留引號。沒閉合的字串吃到行尾、區塊註解吃到檔尾,不回溯,`"\` 重複這種 512KB 輸入也在毫秒級。python profile 照舊不剝。測試 t_strip_c_comments_shared_and_linear、t_strip_test_comments_strings_mode_kept。
+
 ## 相關系統
 - [[Systems/check-t-sentinel]]（Check T/K 機制；本機制擴充其 discover 面為多平台多根）

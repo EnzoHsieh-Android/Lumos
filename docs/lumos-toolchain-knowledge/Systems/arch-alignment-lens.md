@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-08-22
-updated: 2026-10-14
+updated: 2026-10-15
 self_audit: sonnet/2026-08-30
 aliases:
   - 架構對齊席
@@ -15,7 +15,7 @@ tags:
 summary: |-
   FLOW:pitfalls --diff 列對照檔→loop next 吐「架構對齊」席→派工用 templates §7.6 三問→finding 進處置閘
   KEY:只判「跟專案既有的一不一樣」,不評風格好壞;major 只給「引入第二種做法」或「跨層直呼」
-  KEY:對照組=同資料夾同副檔名、檔名最相似的 3 個既有檔(排除測試檔);慣例 skill 依副檔名(kotlin/csharp/vue-idioms)
+  KEY:對照組=同資料夾同副檔名、檔名最相似的 3 個既有檔(排除測試檔);慣例 skill 依副檔名或棧鍵(kotlin/csharp/vue/react/node-idioms 等;.ts/.js 看 package.json)
   DEP:[[Systems/pitfalls-code-loop]]
   DEP:[[Systems/design-loop]]
   TEST:t_pitfalls_diff_arch_alignment_hints(對照組選法/排除測試檔/慣例 skill/人讀三問);roster 測試含此席
@@ -84,3 +84,11 @@ REVISIT:2027-04-09 人裁目標架構宣告要不要撤:看各專案 lumos docto
 
 - `_arch_alignment_hints` 挑同資料夾鄰居時排除 `skip` 集合(`_vendored_skip` 算的原封不動工具自帶檔,參數名與意思跟 `_stack_changed_ok` 的 skip 相同):消費專案的 `scripts/e2e.sh` 不再拿 init 裝進來的工具腳本(例如改名用的那支)當對照。被專案改過的自帶檔照列;工具鏈本 repo 這個集合是空的。綁的測試 `t_arch_alignment_skips_vendored_siblings`。
 - 角色鏡頭:`infra` 鍵(`.sh`,與 `e2e/` 資料夾裡、或檔名帶 `.e2e.` 的 `.py` `.ts` `.js` 這類程式檔)不對應角色,算「判不出」,原本走 py 判後端、走 vue 判前端、走 node 判後端(例:後端 package 底下的 `server/order.e2e.ts`)的這些檔不再附卡;`_review_role_for` 先判副檔名,所以 e2e 路徑底下的 `.tsx` 照舊是前端、附前端卡。
+
+## 慣例 skill 對映認得 React(2026-10-15,[[Projects/前端框架從vue分出_計劃]])
+
+`.ts/.js` 家族改成拿 `_stack_key_for_file` 的棧鍵查 `_ARCH_IDIOM_SKILL`(表裡多 `node`、`react` 兩列),所以 React 專案的檔派 react-idioms、Node 後端派 node-idioms、判不出照舊 vue-idioms;不另立第二張對映表,`t_python_stack_wiring` 裡「表裡每個 skill 都真的存在」那段自動涵蓋 react-idioms。測試 t_react_idiom_skill_mapping。
+
+## 前端分層目標架構範本(2026-10-15,[[Projects/前端框架從vue分出_計劃]] F7)
+
+使用說明多一份 `target-arch-frontend-template.md`(放在 lumos-project-notes 的 commands/ 底下,形狀照 DDD 那份):五條 RULE 行——只有 API 層碰網路、API 層回型別化結果、domain 只放純函式且時間亂數從參數進來、狀態放最近共同父元件、測試照使用者看得到的行為驗;從 order-web 的目標架構一般化,不綁 React。06 的 arch_targets 那一列與技能首頁都指到它。測試 t_arch_target_frontend_template_valid、t_arch_target_frontend_template_linked_from_usage。
