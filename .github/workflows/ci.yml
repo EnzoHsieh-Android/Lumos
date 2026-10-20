@@ -4,6 +4,8 @@ name: CI
 on:
   push:
     branches: [main]
+    # 2026-10-20 tag 推送也判安全證據(Projects/安全主張驗收閘_計劃〈四〉:推得出去的東西都判過);tag 只跑 security_tag 那一個工作
+    tags: ['*']
   pull_request:
 
 # 2026-10-06 拆成三個工作(Projects/CI加速_計劃):全套在 CI 一台機器切 4 片已跑到 32–38.5 分、逼近 45 分上限——
@@ -18,7 +20,31 @@ concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # tag 推送只跑這一個工作:其他工作的 code-loop gate 步驟的 BEFORE 在新 tag 是全零、語意沒驗過,所以 tag 不跑它們(if 在 prep,
+  # shards 與 gates 跟著 prep 略過)。判定跟 pre-push 非分支那條路同一個指令;任何非 0 都紅。
+  security_tag:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # 凍結比對要 merge-base 與主線 tip 的完整歷史
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: 安全證據 gate(tag)
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true
+          python scripts/lumos code-loop check --security-only --at-sha "$SHA" --repo . || {
+            echo "::error::安全證據不合格或判不清(原因在上面):對這個 tag 指的提交跑 lumos security evidence --commit 看全表;真要先放行由使用者在核可鏈簽例外或 gate_setting"
+            exit 1
+          }
   prep:
+    if: github.event_name == 'pull_request' || github.ref_type == 'branch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     outputs:
@@ -195,7 +221,7 @@ jobs:
           python scripts/lumos code-loop check --diff "$BEFORE..$SHA" --at-sha "$SHA" --branch "$BRANCH" --repo . || {
             rc=$?
             if [ "$rc" -eq 1 ]; then
-              echo "::error::code-loop check 擋下(原因在上面:合約測試紅 / 效能檢核題沒表態 / 高風險代碼無審查留痕)——本機 pre-push 被繞過(--no-verify)或留痕失效;照上面 check 印的指令補留痕(dispositions / pass|skip --note)後重推"
+              echo "::error::code-loop check 擋下(原因在上面:合約測試紅 / 效能檢核題沒表態 / 高風險代碼無審查留痕 / 安全證據不合格)——本機 pre-push 被繞過(--no-verify)或留痕失效;照上面 check 印的指令補留痕(dispositions / pass|skip --note)後重推"
               exit 1
             fi
             exit "$rc"

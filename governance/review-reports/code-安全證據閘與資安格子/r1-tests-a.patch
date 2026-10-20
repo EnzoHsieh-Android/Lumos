@@ -1,0 +1,1635 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f0f4a714..a0648973 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -11721,31 +11721,37 @@ def t_skill_mentions_resolve():
+                     toks.append(tok)
+                 if not toks:
+                     continue
+                 cmd = toks[0]
+                 if not _re.fullmatch(r"[a-z][a-z0-9-]*", cmd):
+                     continue
+                 if (cmd,) not in tree:
+                     bad.append("%s: 沒有 `lumos %s` 這個指令" % (where, cmd))
+                     continue
+                 node, i = (cmd,), 1
+-                children = _lumos_subcommands(tree, node)
+-                if children and i < len(toks):
++                # ★子指令可以不只兩層★(`lumos security approvals payload`):有子指令就一層一層往下走,
++                # 原本只走一層,第三層的旗標被拿第二層的旗標表比,誤報「沒有這個旗標」
++                wrong = False
++                while i < len(toks) and _lumos_subcommands(tree, node):
+                     nxt = toks[i]
+-                    if (cmd, nxt) in tree:
+-                        node, i = (cmd, nxt), i + 1
+-                    elif _re.fullmatch(r"[a-z][a-z0-9-]*", nxt):
++                    if node + (nxt,) in tree:
++                        node, i = node + (nxt,), i + 1
++                        continue
++                    if _re.fullmatch(r"[a-z][a-z0-9-]*", nxt):
+                         # ★這一層有子指令,那後面那個小寫詞就該是子指令名★
+                         # (外家席:`lumos guard madeup` 本來整段被當位置參數放過)
+                         bad.append("%s: `lumos %s` 沒有 %s 這個子指令(有的是:%s)"
+-                                   % (where, cmd, nxt, "/".join(children)))
+-                        continue
++                                   % (where, " ".join(node), nxt, "/".join(_lumos_subcommands(tree, node))))
++                        wrong = True
++                    break
++                if wrong:
++                    continue
+                 allowed = set(_parser_flags(tree[node]))
+                 for anc in range(len(node)):
+                     allowed |= set(_parser_flags(tree[node[:anc]]))
+                 for tok in toks[i:]:
+                     if not tok.startswith("--") or tok == "--":
+                         continue
+                     flag = tok.split("=")[0]
+                     if not _re.fullmatch(r"--[a-z0-9][a-z0-9-]*", flag):
+                         continue
+                     if flag not in allowed:
+@@ -75229,24 +75235,25 @@ def t_prepush_mixed_versions():
+         check("④舊 lumos、沒有一道擋 → 照舊放行跑全套", rc == 0 and "SUITE" in lines, f"rc={rc} {out[-300:]}")
+         rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="code-loop:1")
+         cl = [ln for ln in lines if ln.startswith("code-loop check --diff")]
+         check("⑤新 lumos → 帶 --keep-going、彙總由 push-summary 印(不是簡版)",
+               rc == 1 and cl and all("--keep-going" in ln for ln in cl) and "簡版彙總" not in out and _ppc_header(out) == (1, 1),
+               f"rc={rc} {cl} {out[-400:]}")
+     finally:
+         _ppc_cleanup(root)
+ 
+ 
+-# 掛鉤對照表每種原因句的預期值:照計劃 Projects/推送前一次列出全部擋下原因_計劃〈做法〉5「對照表四句的正本在這裡」那段逐字寫
++# 掛鉤對照表每種原因句的預期值:照計劃 Projects/推送前一次列出全部擋下原因_計劃〈做法〉5「對照表五句的正本在這裡」那段逐字寫
+ # (不從掛鉤或 scripts/lumos 讀,免得跟著一起錯;要改句子先改計劃那段)
+ _PPC_KIND_SENTENCES = {"bound_tests": "受波及合約的測試沒過(或證不出跑過)", "dispositions": "棧別檢核題表態不完整",
+-                       "lint_new": "這次改動帶進了新的告警", "review": "高風險改動沒有有效的代碼審留痕"}
++                       "lint_new": "這次改動帶進了新的告警", "review": "高風險改動沒有有效的代碼審留痕",
++                       "security_evidence": "資安護欄的證據不合格(或判不清)"}
+ _PPC_ANCHOR_NOTE = "裁判檔沒簽名:代碼審與雙向門放行這次跑的測試用的是沒簽名的測試檔,它們的綠燈不算數;簽名後重推會重跑"
+ 
+ 
+ def t_prepush_block_kinds_each_recorded():
+     """代碼審判定一次擋兩個以上原因時,掛鉤照 LUMOS-BLOCKS: 行每個種類各記一筆、閘數只算一道,原因用對照表那一句;
+     那一行有兩行時只取最後一行;逗號後的空白、空元素略過。(代碼審 r1 邊界席 3、合約席 2)
+     判準:計劃〈做法〉5「每個 reason_kind 各記一筆、M 只算一道、有多行時取最後一行」;預期句子是 _PPC_KIND_SENTENCES 逐字寫的。
+     翻紅釘:記帳迴圈只記第一個種類 → ①②紅;對照表兩句對調 → ②紅;取第一行而不是最後一行 → ④紅;空元素也記 → ③紅。"""
+     print("t_prepush_block_kinds_each_recorded")
+     _need_src("scripts/hooks/pre-push")
+@@ -75487,22 +75494,26 @@ def t_prepush_interrupt_stops_every_gate():
+     check("①清單在、而且跟程式裡的 pp_stop_if_signaled 呼叫行數一樣多", len(entries) >= 9 and len(entries) == len(calls),
+           f"清單 {len(entries)} 筆、呼叫 {len(calls)} 行")
+     check("①刻意不接的也列在同一個區塊、各附理由", len(re.findall(r"^# 中斷不停:[^|\n]+\|.{4,}$", txt, flags=re.M)) >= 4, "")
+     root, base, head = _ppc_repo()
+     old_hook = root.with_name(root.name + "-oldhook")
+     try:
+         z = "0" * 40
+         normal = f"refs/heads/main {head} refs/heads/main {base}\n"
+         newbr = f"refs/heads/main {head} refs/heads/feat {z}\n"
+         old_hook.write_text(re.sub(r"^[ \t]*pp_stop_if_signaled \".*\n", "", txt, flags=re.M), encoding="utf-8")
++        # 推 tag 才會叫安全證據那一支:假 lumos 補上新版旗標字樣(掛鉤讀檔找它),那一筆改推 tag
++        fake = root / "scripts" / "lumos"
++        fake.write_text(fake.read_text(encoding="utf-8") + '\n# 新版:"--security-only"\n', encoding="utf-8")
++        tag = f"refs/tags/v1 {head} refs/tags/v1 {z}\n"
+         for cmd, name, _what in entries:
+-            stdin = newbr if cmd == "push-range" else normal
++            stdin = newbr if cmd == "push-range" else (tag if "security-only" in name else normal)
+             rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_SIG_CMD=cmd)
+             last = lines[-1] if lines else ""
+             want = cmd + " "
+             check(f"②{_what}被殺掉 → 以那個回傳碼結束、講明、被殺掉的是最後一次呼叫、全套沒跑",
+                   rc >= 128 and f"{name}被中斷(rc={rc})" in out and last.startswith(want) and "SUITE" not in lines,
+                   f"rc={rc} last={last!r} {out[-300:]}")
+             rc, lines, out = _ppc_run(root, stdin, hook=old_hook, FAKE_NEW="1", FAKE_SIG_CMD=cmd)
+             check(f"③對照:拿掉停下的掛鉤,{_what}被殺掉時不會以 128 以上結束", rc < 128, f"rc={rc}")
+         for sig, want in (("SIGTERM", 143), ("SIGINT", 130)):
+             rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_HOOK_SIG_CMD="home", FAKE_HOOK_SIG=sig)
+@@ -75968,21 +75979,21 @@ def _cl_reason_kind_sites(src):
+     return kinds, nonlit
+ 
+ 
+ # 查不到種類時的通用句:照計劃〈做法〉5 逐字寫在這裡(不從掛鉤讀)
+ _PPC_KIND_FALLBACK = "代碼審判定擋下(細節在上面)"
+ 
+ 
+ def t_prepush_cl_reason_table_matches_lumos():
+     """漂移守衛(結構測試,行為另由 t_prepush_block_kinds_each_recorded 驗):scripts/lumos 會產生的 reason_kind 集合,
+     跟掛鉤 pp_cl_reason 對照表的種類集合要一樣(雙向:掛鉤少一種,新種類的彙總會退成通用句;掛鉤多一種,是沒人產生的死條目);
+-    每種的句子與查不到時的通用句照 _PPC_KIND_SENTENCES / _PPC_KIND_FALLBACK 逐字(正本是計劃〈做法〉5「對照表四句的正本在這裡」那段,不從掛鉤讀)。
++    每種的句子與查不到時的通用句照 _PPC_KIND_SENTENCES / _PPC_KIND_FALLBACK 逐字(正本是計劃〈做法〉5「對照表五句的正本在這裡」那段,不從掛鉤讀)。
+     ★設定 reason_kind 的值一律要是字面字串★(代碼審 r2 合約席 4):種類若經變數或組字串產生,上面抽集合的那步抽不到,守衛會照綠;
+     只有收集分流與收尾兩處轉手(_CL_REASON_KIND_CARRIERS)可以不是字面,而且各只准一處。
+     原本 scripts/lumos 也存一份句子表(_CODELOOP_BLOCK_KIND_REASONS)給 JSON 的 summary 欄位用,沒有任何程式讀它,r2 拿掉。
+     翻紅釘:掛鉤加一種或刪一種 → ①紅;lumos 新增一種 reason_kind 沒補掛鉤 → ①紅;掛鉤改一句 → ②紅;
+     產生種類改成變數傳入 → ③紅。"""
+     print("t_prepush_cl_reason_table_matches_lumos")
+     import re
+     _need_src("scripts/hooks/pre-push")
+     hook = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+     mm = re.search(r"^pp_cl_reason\(\) \{\n(.*?)^\}", hook, flags=re.M | re.S)
+@@ -75997,33 +76008,33 @@ def t_prepush_cl_reason_table_matches_lumos():
+           and hf == [_PPC_KIND_FALLBACK], f"掛鉤 {hk} 通用句 {hf}")
+     from collections import Counter
+     per = Counter(owner for owner, _ln in nonlit)
+     stray = [(o, ln) for o, ln in nonlit if o not in _CL_REASON_KIND_CARRIERS]
+     over = {o: n for o, n in per.items() if o in _CL_REASON_KIND_CARRIERS and n > _CL_REASON_KIND_CARRIERS[o]}
+     check("③設定 reason_kind 的值都是字面字串(只有收集分流與收尾各一處轉手例外)", not stray and not over,
+           f"不是字面的:{stray} 轉手處超量:{over}")
+ 
+ 
+ def t_prepush_cl_reason_sentences_match_plan():
+-    """漂移守衛(結構測試):_PPC_KIND_SENTENCES 自稱照計劃〈做法〉5「對照表四句的正本在這裡」那段逐字寫,這支真的去讀那段比對
++    """漂移守衛(結構測試):_PPC_KIND_SENTENCES 自稱照計劃〈做法〉5「對照表五句的正本在這裡」那段逐字寫,這支真的去讀那段比對
+     (代碼審 r4 合約席 4:原本沒有任何測試讀計劃,「先改計劃再改兩處」純靠自律;只改計劃時所有測試照綠)。
+     判準來源是計劃那段的原文(人寫的正本),不是掛鉤或 scripts/lumos。掛鉤那份由 t_prepush_cl_reason_table_matches_lumos 比對常數。
+-    翻紅釘(2026-10-14 實測):計劃那段改一句 → ②紅;常數改一句 → ②紅;那段改寫成抽不出四句的樣子 → ①紅。"""
++    翻紅釘(2026-10-14 實測):計劃那段改一句 → ②紅;常數改一句 → ②紅;那段改寫成抽不出五句的樣子 → ①紅。"""
+     print("t_prepush_cl_reason_sentences_match_plan")
+     import re
+     rel = "docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md"
+     _need_src(rel)
+     plan = (Path(GRAPHCTL).resolve().parent.parent / rel).read_text(encoding="utf-8")
+-    lines = [ln for ln in plan.splitlines() if "**對照表四句的正本在這裡**" in ln]
++    lines = [ln for ln in plan.splitlines() if "**對照表五句的正本在這裡**" in ln]
+     got = dict(re.findall(r"`([a-z_]+)` 是「([^」]+)」", lines[0])) if len(lines) == 1 else {}
+-    check("①計劃裡恰好一行標著「對照表四句的正本在這裡」,抽得出四句", len(lines) == 1 and len(got) == 4, f"{len(lines)} 行 {got}")
+-    check("②計劃那四句跟測試常數 _PPC_KIND_SENTENCES 逐字一樣(要改句子先改計劃,再改掛鉤與常數)",
++    check("①計劃裡恰好一行標著「對照表五句的正本在這裡」,抽得出五句", len(lines) == 1 and len(got) == 5, f"{len(lines)} 行 {got}")
++    check("②計劃那五句跟測試常數 _PPC_KIND_SENTENCES 逐字一樣(要改句子先改計劃,再改掛鉤與常數)",
+           got == _PPC_KIND_SENTENCES, f"計劃 {got} 常數 {_PPC_KIND_SENTENCES}")
+ 
+ 
+ def _dr_settle(root, name="G"):
+     """守衛紀錄 pending → pass,預告句留著(舊版 settle 的樣子)。"""
+     g = root / _DR_VAULT / "Verification" / f"{name}.md"
+     g.write_text(g.read_text(encoding="utf-8").replace("status: pending", "status: pass").replace("status/pending", "status/pass"),
+                  encoding="utf-8")
+ 
+ 
+@@ -77981,21 +77992,22 @@ def t_test_run_cmd_uses_running_python():
+     cfg = _j.loads((repo / ".lumos" / "config.json").read_text(encoding="utf-8"))
+     check("③本 repo 的測試指令用 {python},不吃 PATH 上的 python3",
+           str((cfg.get("test") or {}).get("run_cmd", "")).startswith("{python} "), str(cfg.get("test")))
+ 
+ 
+ # 拆成多個工作之前(2026-10-06,CI加速_計劃 [S1])後盾每一步 run/if/continue-on-error/env 的指紋——拆分只准搬家、不准改指令
+ # (env 裡讀前一步輸出的 steps.suite.outputs 換成 needs.prep.outputs 是唯一准許的改動,比對前換回來;行尾註解不算)
+ _DR_CI_GATE_STEP_FP = {
+     "自主迴圈測試": "70b4cb1b0437f13e",
+     "Graph doctor (strict)": "2dedc7be727156cd",
+-    "code-loop gate (push 後盾;體檢 #5)": "60f8a6e29a02b58f",
++    # 2026-10-20 紅燈訊息補「安全證據不合格」(Projects/安全主張驗收閘_計劃〈四〉要跟著改的地方),指令本身沒改
++    "code-loop gate (push 後盾;體檢 #5)": "3d4d823541f94702",
+     "note-shape gate (筆記形狀擋;--no-verify 後盾)": "6e82ad401c1f6fa6",
+     "drift check (存量漂移檢查;--no-verify 後盾)": "f6f6bc3db304d1e7",
+     "note reread reminder (回頭重讀守檔筆記;只提醒、不擋)": "e72639490ed32108",
+     "Anchor verify (baseline 缺失必紅)": "53dc952f8a95ec57",
+ }
+ 
+ 
+ def _dr_ci_step_fp(block):
+     """一個步驟 → run、if、continue-on-error、env 四種行的指紋(縮排照 ci.yml:步驟 6 格、鍵 8 格、內容 10 格)。"""
+     import re as _re
+@@ -103116,21 +103128,22 @@ def t_seclist_s01_concern_sections():
+ 
+ def t_seclist_s02_registration_errors():
+     """S2:壞 JSON、重複鍵、未知 schema、含標記的未閉合圍欄、錯資料夾、重複 ID 都列錯誤並退出 2;正常項保留;
+     沒有專用標記的舊筆記有未閉合圍欄不報安全登記錯誤。"""
+     import json as _j
+     v = _seclist_vault()
+     write(v, "Systems/SlGood.md", "type: system\nstatus: done", body="# good\n" + _seclist_block([_seclist_ctrl("GOOD-1")]))
+     write(v, "Systems/SlBadJson.md", "type: system\nstatus: done", body="# b\n```lumos-security-v1\n{ not json\n```\n")
+     write(v, "Systems/SlDupKey.md", "type: system\nstatus: done",
+           body='# b\n```lumos-security-v1\n{"schema_version": 1, "schema_version": 1, "controls": []}\n```\n')
+-    write(v, "Systems/SlVer2.md", "type: system\nstatus: done", body="# b\n" + _seclist_block([_seclist_ctrl("V2-1")], version=2))
++    # schema v2 已是合法版本(Projects/安全主張驗收閘_計劃〈一〉的 v1/v2 雙讀);未知版本改用 3 驗
++    write(v, "Systems/SlVer2.md", "type: system\nstatus: done", body="# b\n" + _seclist_block([_seclist_ctrl("V2-1")], version=3))
+     write(v, "Systems/SlNaN.md", "type: system\nstatus: done",
+           body='# b\n```lumos-security-v1\n{"schema_version": 1, "controls": [], "inventory": NaN}\n```\n')
+     write(v, "Systems/SlUnclosed.md", "type: system\nstatus: done",
+           body="# b\n```lumos-security-v1\n" + _j.dumps({"schema_version": 1, "controls": [_seclist_ctrl("UNCL-1")]}) + "\n")
+     write(v, "Projects/SlMisplaced.md", "type: project\nstatus: doing", body="# p\n" + _seclist_block([_seclist_ctrl("MIS-1")]))
+     write(v, "Systems/SlDupId.md", "type: system\nstatus: done", body="# d\n" + _seclist_block([_seclist_ctrl("GOOD-1")]))
+     write(v, "Systems/SlExtra.md", "type: system\nstatus: done", body="# e\n" + _seclist_block([_seclist_ctrl("EXTRA-1", surprise=1)]))
+     write(v, "Systems/SlTwo.md", "type: system\nstatus: done",
+           body="# t\n" + _seclist_block([_seclist_ctrl("TWO-1")]) + "\n中間\n" + _seclist_block([_seclist_ctrl("TWO-2")]))
+     write(v, "Systems/SlLegacy.md", "type: system\nstatus: done", body="# 舊筆記\n```python\nprint(1)\n沒關的圍欄\n")
+@@ -104725,12 +104738,2983 @@ def t_seclist_r3_show_fast_path():
+                              0x1F600, 0xE0041, 0xD800, 0x7F, 0x85, 0xAD, 0x115F)]
+     diff = []
+     for _ in range(2000):
+         s = "".join(rng.choice(pool) for _ in range(rng.randint(0, 20)))
+         if mod._secinv_show(s, None) != mod._kill_esc(s, wide=True, hidden=True):
+             diff.append(s)
+     check("T7 快篩結果與逐字跳脫逐字相同(2000 組)", not diff, repr(diff[:3]))
+     check("T7 純中英文字串原樣回傳", mod._secinv_show("付款 API ok", None) == "付款 API ok")
+ 
+ 
++
++# ── 安全證據閘(Projects/安全主張驗收閘_計劃 S1–S63)───────────────────────────────────────
++# 判準來源是那篇計劃的〈二〉〈四〉與原因代碼表;預期值照條文手寫,不呼叫被測函式產生。
++# 合成消費 repo 全在暫存目錄;簽章用測試當場產生的 ssh 金鑰;不在任何真專案執行工具。
++
++_SG_ENV = {"GIT_AUTHOR_NAME": "sg", "GIT_AUTHOR_EMAIL": "sg@t.t", "GIT_COMMITTER_NAME": "sg",
++           "GIT_COMMITTER_EMAIL": "sg@t.t", "GIT_CONFIG_NOSYSTEM": "1"}
++
++
++def _sg_git(repo, *a, check=True, env=None):
++    e = {**_os_mod.environ, **_SG_ENV, **(env or {})}
++    r = subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, env=e)
++    if check and r.returncode != 0:
++        raise AssertionError(f"git {a} 失敗:{r.stderr}")
++    return r.stdout.strip()
++
++
++def _sg_sha(b):
++    import hashlib
++    return hashlib.sha256(b).hexdigest()
++
++
++def _sg_canon(o):
++    """規範化 JSON(計劃〈核可鏈〉:鍵排序、無空白、UTF-8),測試自己寫一份,不呼叫被測函式。"""
++    import json as _j
++    return _j.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
++
++
++def _sg_junit(cases):
++    """cases=[(classname::name, 狀態)];狀態 passed/failure/error/skipped。"""
++    rows = []
++    for cid, st in cases:
++        cls, name = cid.split("::", 1)
++        inner = {"passed": "", "failure": '<failure type="AssertionError" message="boom"/>',
++                 "failure_rt": '<failure type="java.lang.IllegalStateException" message="boom"/>',
++                 "error": '<error type="RuntimeError" message="x"/>', "skipped": "<skipped/>"}[st]
++        rows.append(f'<testcase classname="{cls}" name="{name}">{inner}</testcase>')
++    return ("<testsuite>" + "".join(rows) + "</testsuite>").encode("utf-8")
++
++
++_SG_JUDG = ["independent_oracle", "legit_control_real", "threshold_meaningful", "calibration_representative",
++            "not_applicable_sound", "report_provenance", "category_sufficient", "inventory_complete"]
++
++
++class _SgRepo:
++    """一個合成消費 repo。files:路徑 → 位元組(提交前寫);ctl:護欄 dict;items:證據項清單(bindings 在 commit 時照真 blob 補);
++    tools:工具清單;chain:要簽的核可(type, target, content 物件或 None, approved_on, expires_on, 額外鍵)。"""
++
++    def __init__(self, keys=1):
++        import tempfile
++        self.root = Path(tempfile.mkdtemp(prefix="gctl-sg-")) / "repo"
++        self.root.mkdir()
++        _sg_git(self.root, "init", "-q", "-b", "main")
++        (self.root / "README").write_text("x\n")
++        _sg_git(self.root, "add", "README")
++        _sg_git(self.root, "commit", "-q", "-m", "init")
++        self.project_id = _sg_git(self.root, "rev-list", "--max-parents=0", "HEAD")
++        self.keys = []
++        for i in range(keys):
++            kp = self.root.parent / f"key{i}"
++            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"k{i}", "-f", str(kp)], check=True,
++                           capture_output=True)
++            pub = (self.root.parent / f"key{i}.pub").read_text().split()
++            self.keys.append({"principal": f"user{i}@example.test", "priv": kp, "type": pub[0], "pub": pub[1]})
++        self.chain_lines = []
++        self.vault = "docs/sg-knowledge"
++        self.files = {"src/app.py": b"def pay(order, user):\n    return order.owner == user\n",
++                      "tests/test_app.py": b"def test_x():\n    assert True\n",
++                      "tests/fixtures/f.json": b"{}\n", "Dockerfile": b"FROM python:3.14\n"}
++        self.files["reports/behavior.xml"] = _sg_junit([("t::illegal", "passed"), ("t::legit", "passed"), ("t::pre", "passed")])
++        self.tools = [{"name": "pytest", "category": "test_runner", "version": "8.0", "install_source": "pip",
++                       "verify": "sha256:x", "decision_ref": "Systems/SgHome#d1", "budget": {"single_sec": 60},
++                       "allowed_targets": ["loopback"]},
++                      {"name": "test-quality", "category": "fault_injection", "version": "1", "install_source": "lumos",
++                       "verify": "bundle", "decision_ref": "Systems/SgHome#d1", "budget": {"single_sec": 60},
++                       "allowed_targets": ["loopback"]}]
++        self.ctl = {"id": "C1", "revision": "r1", "concerns": ["security"],
++                    "source": {"kind": "requirement", "claim": "他人不能付款別人的訂單", "decision_ref": "Systems/SgHome#d1"},
++                    "lifecycle": "active", "assets": ["A1"], "surfaces": ["S1"], "scope": "付款", "trust_boundary": "外部到服務端",
++                    "enforcement": "服務端", "legitimate_control": "本人付款成功", "abuse_case": "他人付款被拒",
++                    "status_reason": "測過", "owner": "sg", "revalidate_when": "改授權",
++                    "required_evidence": ["behavior", "fault_sensitivity", "review"],
++                    "evidence_refs": [{"kind": "behavior", "node": "Verification/SgEv"},
++                                      {"kind": "fault_sensitivity", "node": "Verification/SgEv"},
++                                      {"kind": "review", "node": "Verification/SgEv"}],
++                    "reported_status": "partial", "exception": None, "threat_categories": ["authz-object"],
++                    "threat_table_version": 1}
++        self.extra_ctls = []
++        self.capture()
++        self.items = [self.behavior_item(), self.tq_item(), self.review_item()]
++        self.extra_fence_items = []
++        self.home_about = ["src/app.py"]
++        self.verification_status = "pass"
++        self.extra_md = {}
++        self.config = None
++        self.human_review = True
++        self.home_fm_extra = ""          # 家節點開頭欄位多寫的東西(例如 kill_recipes)
++        self.considerations = []         # 圍欄頂層的 considerations 列
++        self.init_chain()
++
++    # ---- 證據項
++    def behavior_item(self, **over):
++        it = {"kind": "behavior", "format": "junit", "path": "reports/behavior.xml", "report_sha256": "@sha",
++              "tool": "pytest", "tool_version": "8.0", "control_id": "C1", "control_revision": "r1", "bindings": "@auto",
++              "test_sources": ["tests/test_app.py"], "fixture_globs": ["tests/fixtures/*"], "environment_ref": "Dockerfile",
++              "targets": {"tests": ["t::illegal"], "legit_controls": ["t::legit"], "preconditions": ["t::pre"]},
++              "environment": "本機", "observed_at": "2026-10-01T00:00:00+00:00"}
++        it.update(over)
++        return it
++
++    def tq_item(self, **over):
++        it = {"kind": "fault_sensitivity", "format": "tq_capture", "path": "evidence/tq", "tool": "test-quality",
++              "tool_version": "1", "control_id": "C1", "control_revision": "r1", "bindings": "@auto",
++              "test_sources": ["tests/test_app.py"], "fixture_globs": ["tests/fixtures/*"], "environment_ref": "Dockerfile",
++              "targets": {"tests": ["t::illegal"]}, "environment": "本機", "observed_at": "2026-10-01T00:00:00+00:00"}
++        it.update(over)
++        return it
++
++    def review_item(self, **over):
++        it = {"kind": "review", "format": "review_record", "control_id": "C1", "control_revision": "r1", "bindings": "@auto",
++              "targets": {}, "environment": "人審", "observed_at": "2026-10-01T00:00:00+00:00", "reviewer": "審查人甲",
++              "author": "claude", "reviewer_kind": "human", "judgments": list(_SG_JUDG), "expires_on": "2026-12-01",
++              "path": "docs/sg-knowledge/Verification/SgEv.md"}
++        it.update(over)
++        return it
++
++    def capture(self, fault_cases=None, tag="tq", exit_fault=1):
++        """寫三份 test-quality capture(baseline/fault/restored)到 evidence/<tag>/;形狀照 scripts/test_quality.py 的 receipt。"""
++        import json as _j
++        base_cases = [("t::illegal", "passed"), ("t::other", "passed")]
++        fault_cases = fault_cases or [("t::illegal", "failure"), ("t::other", "passed")]
++        impl, impl_bad, tests = b"impl-good\n", b"impl-bad\n", b"tests\n"
++        for ph, cases, ib, rc in (("baseline", base_cases, impl, 0), ("fault", fault_cases, impl_bad, exit_fault),
++                                  ("restored", base_cases, impl, 0)):
++            rep = _sg_junit(cases)
++            tq_cases = []
++            for cid, st in cases:
++                tq_cases.append({"id": cid, "status": "failure" if st == "failure_rt" else st, "assertion_failure": st == "failure",
++                                 "reason": ("AssertionError boom " if st == "failure" else
++                                            "java.lang.IllegalStateException boom " if st == "failure_rt" else
++                                            "RuntimeError x " if st == "error" else "")})
++            snaps = [{"role": "implementation", "path": "/w/src/app.py", "artifact": "snapshot-0.txt", "sha256": _sg_sha(ib)},
++                     {"role": "tests", "path": "/w/tests/test_app.py", "artifact": "snapshot-1.txt", "sha256": _sg_sha(tests)}]
++            receipt = {"schema_version": 1, "kind": "execution-receipt", "language": "py", "framework": "pytest",
++                       "command": ["pytest"], "cwd": "/w", "status": "executed", "verdict": "not_assessed",
++                       "snapshots": snaps, "limitations": [], "expected_targets": ["t::illegal"], "exit_code": rc,
++                       "report_sha256": _sg_sha(rep), "tests": tq_cases}
++            d = f"evidence/{tag}/{ph}"
++            self.files[f"{d}/receipt.json"] = _j.dumps(receipt).encode()
++            self.files[f"{d}/report.xml"] = rep
++            self.files[f"{d}/snapshot-0.txt"] = ib
++            self.files[f"{d}/snapshot-1.txt"] = tests
++
++    # ---- 核可鏈
++    def sign(self, body, key):
++        import tempfile
++        d = Path(tempfile.mkdtemp(prefix="gctl-sgsig-"))
++        f = d / "payload"
++        f.write_bytes(_sg_canon(body))
++        subprocess.run(["ssh-keygen", "-Y", "sign", "-n", "lumos-security", "-f", str(key["priv"]), str(f)], check=True,
++                       capture_output=True)
++        return (d / "payload.sig").read_text().strip()
++
++    def add_entry(self, typ, target, content, approved_on="2026-10-01", expires_on="2026-10-30", key=0, extra=None,
++                  raw_override=None):
++        import json as _j
++        prev = _sg_sha(_sg_canon(_j.loads(self.chain_lines[-1]))) if self.chain_lines else ""
++        body = {"seq": len(self.chain_lines) + 1, "prev_sha256": prev, "project_id": self.project_id, "type": typ,
++                "target": target, "content_sha256": _sg_sha(_sg_canon(content)), "approved_on": approved_on,
++                "expires_on": expires_on, "signer": self.keys[key]["principal"]}
++        body.update(extra or {})
++        if raw_override:
++            body.update(raw_override)
++        sig = self.sign(body, self.keys[key])
++        self.chain_lines.append(_j.dumps(dict(body, signature=sig), sort_keys=True, separators=(",", ":"), ensure_ascii=False))
++        return body
++
++    def init_chain(self):
++        if not self.keys:
++            return
++        ks = [f"{k['principal']} {k['type']} {k['pub']}" for k in self.keys]
++        self.add_entry("approvers_init", "approvers", ks, expires_on="2027-12-01", extra={"keys": ks})
++
++    def review_content(self, it):
++        return {k: v for k, v in it.items() if not k.startswith("_")}
++
++    # ---- 寫檔與提交
++    def blob(self, path):
++        return _sg_git(self.root, "hash-object", str(self.root / path))
++
++    def write(self, rel, b):
++        p = self.root / rel
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_bytes(b if isinstance(b, bytes) else b.encode("utf-8"))
++
++    def fence_items(self):
++        import fnmatch
++        out = []
++        self._no_approval = set()
++        for it in self.items + self.extra_fence_items:
++            it = dict(it)
++            if it.pop("_no_approval", False):
++                self._no_approval.add((it["control_id"], it["kind"]))
++            if it.get("report_sha256") == "@sha":
++                it["report_sha256"] = _sg_sha(self.files[it["path"]])
++            if it.get("bindings") == "@auto":
++                need = set(self.home_about) | set(it.get("test_sources") or [])
++                for g in it.get("fixture_globs") or []:
++                    need |= {p for p in self.files if fnmatch.fnmatchcase(p, g)}
++                if it.get("environment_ref"):
++                    need.add(it["environment_ref"])
++                if it.get("calibration_path"):
++                    need.add(it["calibration_path"])
++                it["bindings"] = [{"path": p, "blob": self.blob(p)} for p in sorted(need) if p in self.files]
++            out.append(it)
++        return out
++
++    def commit(self, msg="c", human_review_for=None):
++        import json as _j
++        for rel, b in self.files.items():
++            self.write(rel, b)
++        items = self.fence_items()
++        if self.human_review:
++            for it in items:
++                if it.get("reviewer_kind") == "human" and (it["control_id"], it["kind"]) not in self._no_approval:
++                    tgt = f"{it['control_id']}#{it['kind']}"
++                    if not any(f'"target":"{tgt}"' in ln and '"type":"human_review"' in ln for ln in self.chain_lines):
++                        self.add_entry("human_review", tgt, it, expires_on="2026-12-01")
++        v = self.vault
++        dec = ("decisions:\n  - content: 付款只認擁有者\n    id: d1\n    decided: 2026-10-01\n    valid: true\n"
++               "  - content: 舊規則\n    id: d2\n    decided: 2026-09-01\n    valid: false\n")
++        about = "about_code:\n" + "".join(f"  - {p}\n" for p in self.home_about)
++        inv = {"revision": "inv1", "decision_ref": "Systems/SgHome#d1",
++               "assets": [{"id": "A1", "description": "訂單"}, {"id": "A2", "description": "付款紀錄"}],
++               "surfaces": [{"id": "S1", "asset_ids": ["A1", "A2"], "description": "付款 API", "kind": "http_api", "actor_ids": ["stranger"]}],
++               "actors": [{"id": "stranger", "description": "他人"}]}
++        blk = {"schema_version": 2, "controls": [self.ctl] + self.extra_ctls, "inventory": inv}
++        if self.considerations:
++            blk["considerations"] = self.considerations
++        files_line = "、".join(f"`{p}`" for p in self.home_about)
++        self.write(f"{v}/Systems/SgHome.md", "---\ntype: system\nstatus: doing\nresponsibility: 付款的擁有者檢查與它的資安登記;不管下單與庫存\n"
++                   + about + dec + self.home_fm_extra + 'verified_by:\n  - "[[Verification/SgEv]]"\n'
++                   + "---\n# SgHome\n\n管 " + files_line + "。\n\n```lumos-security-v1\n"
++                   + _j.dumps(blk, ensure_ascii=False, indent=1) + "\n```\n")
++        fence = {"schema_version": 1, "items": items}
++        self.write(f"{v}/Verification/SgEv.md", f"---\ntype: verification\nstatus: {self.verification_status}\n"
++                   "valid_under: 本機\nrevalidate_when: 改授權\n---\n# SgEv\n\n```lumos-evidence-v1\n"
++                   + _j.dumps(fence, ensure_ascii=False, indent=1) + "\n```\n")
++        self.write(f"{v}/MOC/idx.md", "---\ntype: moc\n---\n# idx\n")
++        for rel, t in self.extra_md.items():
++            self.write(f"{v}/{rel}", t)
++        self.write(".lumos/security-tools.json", _j.dumps({"schema_version": 1, "tools": self.tools}, ensure_ascii=False))
++        self.write(".lumos/security-approvals.jsonl", "".join(ln + "\n" for ln in self.chain_lines))
++        if self.config is not None:
++            self.write(".lumos/config.json", _j.dumps(self.config))
++        _sg_git(self.root, "add", "-A")
++        _sg_git(self.root, "commit", "-q", "-m", msg, "--allow-empty")
++        return _sg_git(self.root, "rev-parse", "HEAD")
++
++
++def _sg_eval(repo, sha="HEAD", today=None, **kw):
++    """同一行程呼叫判定(要凍結日期時用)。"""
++    import datetime as _dt
++    mod = _load_lumos_inproc()
++    return mod._secev_evaluate(repo.root if isinstance(repo, _SgRepo) else repo, sha,
++                               today=today or _dt.date(2026, 10, 20), **kw)
++
++
++def _sg_ctl(rep, cid="C1"):
++    for j in (rep or {}).get("controls", []) + (rep or {}).get("candidates", []):
++        if j["id"] == cid:
++            return j
++    return {}
++
++
++def _sg_kind(rep, kind, cid="C1"):
++    for k in _sg_ctl(rep, cid).get("kinds", []):
++        if k["kind"] == kind:
++            return k
++    return {}
++
++
++def _sg_codes(rep, kind, cid="C1"):
++    k = _sg_kind(rep, kind, cid)
++    return sorted({c for it in k.get("items", []) for c in it.get("codes", [])} | set(k.get("codes", [])))
++
++
++def t_secev_baseline_sound():
++    """對照組:完整、版本對得上的三種證據(behavior JUnit、test-quality 三份 capture、人審核可)→ 整體 sound、不擋。
++    其他每條條款的擋下樣本都從這一份改一處,這支綠才能證明擋下是那一處造成的。"""
++    r = _SgRepo()
++    r.commit()
++    rep = _sg_eval(r)
++    j = _sg_ctl(rep)
++    check("對照組 整體 sound", j.get("verdict") == "sound", str({k["kind"]: (k["verdict"], k["codes"]) for k in j.get("kinds", [])})
++          + str(j.get("control_codes")) + str(rep.get("gate_code")) + str(rep.get("gate_detail")))
++    check("對照組 不擋", rep.get("blocked") is False and rep.get("blocking") == [], str(rep.get("blocking")))
++    check("對照組 security_verdict 固定 not_assessed", rep.get("security_verdict") == "not_assessed")
++    check("對照組 核可鏈第一筆有效、印得出金鑰指紋", rep["approvals"]["keys"] and rep["approvals"]["keys"][0]["fingerprint"].startswith("SHA256:"),
++          str(rep["approvals"]))
++
++
++
++def _sg_old_lumos():
++    """主線版 scripts/lumos 與它的 test-quality 配套抄到暫存目錄(S1 比「跟既有判定逐字相同」用)。"""
++    import tempfile
++    d = Path(tempfile.mkdtemp(prefix="gctl-sgold-"))
++    repo = Path(GRAPHCTL).resolve().parent.parent
++    base = _sg_git(repo, "merge-base", "HEAD", "Lumos/main", check=False) or "HEAD~1"
++    for f in ("lumos", "test_quality.py", "test_quality_scan.py", "test_quality_semgrep.py"):
++        b = subprocess.run(["git", "-C", str(repo), "show", f"{base}:scripts/{f}"], capture_output=True).stdout
++        (d / f).write_bytes(b)
++    return d / "lumos"
++
++
++def _sg_cl(lumos, repo, *extra):
++    r = subprocess.run([sys.executable, str(lumos), "code-loop", "check", "--repo", str(repo), *extra],
++                       capture_output=True, text=True, cwd=str(repo))
++    return r
++
++
++def t_secev_s01_no_registration_unchanged():
++    """S1:沒有 lumos-security-v1 圍欄 → 安全證據那一道不擋、文字輸出與退出碼跟改動前的工具逐字相同、不寫治理帳;
++    --json 只多一個 security_evidence: no_registration。只有 flag/security-relevant 標籤、零條目的專案同樣不擋。"""
++    import json as _j
++    _need_src("scripts/lumos")
++    old = _sg_old_lumos()
++    for label, extra in (("無登記", ""), ("只有標籤", "tags:\n  - flag/security-relevant\n")):
++        r = _SgRepo(keys=0)
++        r.files = {"src/app.py": b"x = 1\n"}
++        r.commit = None
++        root = r.root
++        (root / "docs/sg-knowledge/Systems").mkdir(parents=True)
++        (root / "docs/sg-knowledge/MOC").mkdir(parents=True)
++        (root / "docs/sg-knowledge/MOC/idx.md").write_text("---\ntype: moc\n---\n# i\n")
++        (root / "docs/sg-knowledge/Systems/A.md").write_text("---\ntype: system\nstatus: doing\n" + extra
++                                                             + "---\n# A\n散文提到 lumos-security-v1 字樣不算登記。\n")
++        (root / "src").mkdir()
++        (root / "src/app.py").write_text("x = 1\n")
++        (root / "docs/.governance-log.jsonl").write_text("")
++        _sg_git(root, "add", "-A")
++        _sg_git(root, "commit", "-q", "-m", "c")
++        gl = root / "docs/.governance-log.jsonl"
++        n0 = len(gl.read_text().splitlines())
++        new_t = _sg_cl(GRAPHCTL, root)
++        n1 = len(gl.read_text().splitlines())
++        old_t = _sg_cl(old, root)
++        n2 = len(gl.read_text().splitlines())
++        check(f"S1 {label}:文字輸出逐字相同", new_t.stdout == old_t.stdout and new_t.stderr == old_t.stderr,
++              f"new={new_t.stdout[-300:]}{new_t.stderr[-300:]}\nold={old_t.stdout[-300:]}{old_t.stderr[-300:]}")
++        check(f"S1 {label}:退出碼相同", new_t.returncode == old_t.returncode, f"{new_t.returncode} vs {old_t.returncode}")
++        check(f"S1 {label}:安全證據那一道不寫治理帳(新版多寫的筆數等於舊版)", n1 - n0 == n2 - n1, f"n0={n0} n1={n1} n2={n2}")
++        nj, oj = _sg_cl(GRAPHCTL, root, "--json"), _sg_cl(old, root, "--json")
++        try:
++            nd, od = _j.loads(nj.stdout.strip().splitlines()[-1]), _j.loads(oj.stdout.strip().splitlines()[-1])
++        except (ValueError, IndexError):
++            nd, od = {}, {"x": 1}
++        se = nd.pop("security_evidence", None)
++        if extra:
++            check("S1 只有標籤:--json 多一行提醒、仍是 no_registration", se and se.get("status") == "no_registration"
++                  and any("Systems/A.md" in w for w in se.get("warnings") or []) and nd == od, f"{se}\n{nd}\n{od}")
++        else:
++            check("S1 無登記:--json 只多 security_evidence=no_registration", se == {"status": "no_registration"} and nd == od,
++                  f"{se}\n{nd}\n{od}")
++        rep = _sg_eval(root)
++        check(f"S1 {label}:判定是 no_registration", rep["status"] == "no_registration" and not rep["blocked"], str(rep["status"]))
++
++
++def t_secev_s02_concerns_partition():
++    """S2:同一條雙關注面只列一筆、只對 security 判;純 business 不進必驗集合;獨立安全要求照判。"""
++    r = _SgRepo()
++    r.extra_ctls = [dict(r.ctl, id="BIZ", concerns=["business"], source={"kind": "requirement", "claim": "金額不得為負",
++                                                                         "decision_ref": "Systems/SgHome#d1"}),
++                    dict(r.ctl, id="DUAL", concerns=["business", "security"],
++                         source={"kind": "requirement", "claim": "雙關注", "decision_ref": "Systems/SgHome#d1"})]
++    r.commit()
++    rep = _sg_eval(r)
++    ids = [j["id"] for j in rep["controls"]]
++    check("S2 純業務不在必驗集合", "BIZ" not in ids, str(ids))
++    check("S2 雙關注面只列一筆", ids.count("DUAL") == 1, str(ids))
++    check("S2 獨立安全要求照判(sound)", _sg_ctl(rep, "C1").get("verdict") == "sound", str(_sg_ctl(rep, "C1").get("kinds")))
++    check("S2 雙關注面沒有自己的證據 → 照判 unsound,擋下列它", _sg_ctl(rep, "DUAL").get("verdict") == "unsound"
++          and any(b["id"] == "DUAL" for b in rep["blocking"]), str(rep["blocking"])[:400])
++    check("S2 純業務的證據不被判(不在 blocking)", not any(b["id"] == "BIZ" for b in rep["blocking"]))
++
++
++def t_secev_s03_registration_errors_block():
++    """S3:三版任一有資安登記痕跡而盤點讀取不完整或登記有錯 → 整道擋(判不清);全部條目被刪 → 每條 control_removed_unapproved;
++    三版都只有 candidate → 放行並列提醒。"""
++    import json as _j
++    # 壞 JSON
++    r = _SgRepo()
++    r.commit()
++    r.extra_md = {"Systems/Bad.md": "---\ntype: system\nstatus: doing\n---\n# B\n```lumos-security-v1\n{壞\n```\n"}
++    r.commit()
++    rep = _sg_eval(r)
++    check("S3 壞 JSON → registration_error 擋", rep["gate_code"] == "registration_error" and rep["blocked"], str(rep["gate_code"]))
++    # 重複 ID
++    r = _SgRepo()
++    r.extra_md = {"Systems/Dup.md": "---\ntype: system\nstatus: doing\n---\n# D\n```lumos-security-v1\n"
++                  + _j.dumps({"schema_version": 2, "controls": [r.ctl]}, ensure_ascii=False) + "\n```\n"}
++    r.commit()
++    rep = _sg_eval(r)
++    check("S3 重複 ID → registration_error 擋", rep["gate_code"] == "registration_error" and rep["blocked"], str(rep["gate_code"]))
++    # 讀取失敗:超過單檔上限的 Systems 節點 → read_incomplete
++    r = _SgRepo()
++    r.extra_md = {"Systems/Huge.md": "---\ntype: system\nstatus: doing\n---\n# H\n" + ("字" * (1024 * 1024))}
++    r.commit()
++    rep = _sg_eval(r)
++    check("S3 Systems 節點超過單檔上限 → read_incomplete 擋", rep["gate_code"] == "read_incomplete" and rep["blocked"],
++          str(rep["gate_code"]) + str(rep["gate_detail"]))
++    # 全部條目被刪:main 有 C1,分支刪掉整塊
++    r = _SgRepo()
++    r.commit()
++    _sg_git(r.root, "checkout", "-q", "-b", "feat")
++    p = r.root / r.vault / "Systems/SgHome.md"
++    p.write_text("---\ntype: system\nstatus: doing\n---\n# 刪光\n")
++    _sg_git(r.root, "commit", "-qam", "刪光")
++    rep = _sg_eval(r, pushed_branch="feat")
++    check("S3 推送版刪光 → C1 照必驗、判 missing:control_removed_unapproved",
++          "missing:control_removed_unapproved" in _sg_ctl(rep).get("control_codes", []) and rep["blocked"],
++          str(_sg_ctl(rep).get("control_codes")) + str(rep["gate_code"]))
++    # 三版都只有 candidate
++    r = _SgRepo()
++    r.ctl["lifecycle"] = "candidate"
++    r.items = []
++    r.commit()
++    rep = _sg_eval(r)
++    check("S3 只有 candidate → 放行", not rep["blocked"] and rep["controls"] == [], str(rep["blocking"]))
++    check("S3 只有 candidate → 照樣列出(候選區)", [j["id"] for j in rep["candidates"]] == ["C1"], str(rep["candidates"])[:300])
++
++
++def t_secev_s04_evidence_equals_check_and_list():
++    """S4:security evidence --commit 與 code-loop check 對同一提交判定相同;--json 的盤點區塊等於在那個提交的乾淨 checkout 跑
++    security list --json(工作目錄停在別的提交也一樣)。"""
++    import json as _j
++    r = _SgRepo()
++    r.commit()
++    _sg_git(r.root, "checkout", "-q", "-b", "feat")
++    saved = r.fence_items()
++    r.fence_items = lambda: saved                           # 證據不重收
++    r.files["src/app.py"] = r.files["src/app.py"] + b"# feat\n"   # 分支改了實作 → 證據 stale → unsound
++    feat = r.commit("feat")
++    _sg_git(r.root, "checkout", "-q", "main")
++    ev = subprocess.run([sys.executable, GRAPHCTL, "security", "evidence", "--commit", feat, "--json", "--repo", str(r.root)],
++                        capture_output=True, text=True)
++    try:
++        evj = _j.loads(ev.stdout)
++    except ValueError:
++        evj = {}
++    cl = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--at-sha", feat, "--branch", "feat", "--json",
++                         "--repo", str(r.root)], capture_output=True, text=True)
++    try:
++        clj = _j.loads(cl.stdout.strip().splitlines()[-1]).get("security_evidence") or {}
++    except (ValueError, IndexError):
++        clj = {}
++    pick = lambda d: [(j["id"], j["verdict"], [(k["kind"], k["verdict"], k["codes"]) for k in j["kinds"]]) for j in d.get("controls", [])]
++    check("S4 兩個入口的逐條判定相同", pick(evj) and pick(evj) == pick(clj), f"{pick(evj)}\n{pick(clj)}")
++    check("S4 工作目錄停在 main 也判 feat 那一版(實作改了、證據 stale)", _sg_kind(evj, "behavior").get("verdict") == "stale",
++          str(_sg_kind(evj, "behavior"))[:300])
++    check("S4 security evidence 退出 1(會被擋)", ev.returncode == 1, str(ev.returncode) + ev.stderr[-300:])
++    import tempfile
++    co = Path(tempfile.mkdtemp(prefix="gctl-sgco-")) / "co"
++    _sg_git(r.root, "worktree", "add", "-q", "--detach", str(co), feat)
++    ls = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(co / r.vault), "security", "list", "--json"],
++                        capture_output=True, text=True)
++    lsj = _j.loads(ls.stdout)
++    inv = evj.get("inventory_report") or {}
++    strip = lambda d: {k: v for k, v in d.items() if k not in ("observed_at", "vault")}
++    check("S4 盤點區塊等於乾淨 checkout 的 security list --json(去掉觀察時間與圖譜路徑)", strip(inv) == strip(lsj),
++          str(sorted(set(strip(inv)) ^ set(strip(lsj)))) + str([k for k in strip(lsj) if strip(inv).get(k) != strip(lsj).get(k)]))
++
++
++
++def _sg_with_kind(kind, item, tools=(), files=None, req=None, cats=None):
++    """在對照組上另加一條護欄 C2,只要一個種類、指一項證據;回 (repo, 判定)。要看的是種類那一層的判定。"""
++    r = _SgRepo()
++    for t in tools:
++        r.tools.append(t)
++    r.files.update(files or {})
++    c2 = dict(r.ctl, id="C2", source={"kind": "requirement", "claim": "C2 要求", "decision_ref": "Systems/SgHome#d1"},
++              required_evidence=req or [kind], evidence_refs=[{"kind": kind, "node": "Verification/SgEv"}],
++              threat_categories=cats or ["authz-object"])
++    r.extra_ctls = [c2]
++    r.extra_fence_items = [dict(item, control_id="C2")]
++    r.commit()
++    return r, _sg_eval(r)
++
++
++def t_secev_s05_junit_invalid_shapes():
++    """S5:JUnit 零案例、目標不在、被跳過、suite 層錯誤 → invalid 並擋,不得判 qualified 或 failed。"""
++    cases = {"零案例": (b"<testsuite></testsuite>", "invalid:zero_cases"),
++             "目標不在": (_sg_junit([("t::legit", "passed"), ("t::pre", "passed")]), "invalid:target_missing"),
++             "被跳過": (_sg_junit([("t::illegal", "skipped"), ("t::legit", "passed"), ("t::pre", "passed")]), "invalid:target_skipped"),
++             "suite 錯誤": (b'<testsuite errors="1"><testcase classname="t" name="illegal"/><testcase classname="t" name="legit"/>'
++                            b'<testcase classname="t" name="pre"/></testsuite>', "invalid:suite_error")}
++    for label, (xml, code) in cases.items():
++        r = _SgRepo()
++        r.files["reports/behavior.xml"] = xml
++        r.commit()
++        rep = _sg_eval(r)
++        k = _sg_kind(rep, "behavior")
++        check(f"S5 {label} → {code}", k.get("verdict") == "invalid" and code in _sg_codes(rep, "behavior"), str(k)[:400])
++        check(f"S5 {label} → 擋下", rep["blocked"] and _sg_ctl(rep)["verdict"] == "unsound")
++
++
++def t_secev_s06_legit_control_required():
++    """S6:behavior 只有非法案例(沒宣告或找不到合法對照)→ invalid:missing_legit_control;兩者都有 → qualified。"""
++    for label, it, xml, want in (
++            ("沒宣告合法對照", {"targets": {"tests": ["t::illegal"], "preconditions": ["t::pre"]}}, None, "invalid:missing_legit_control"),
++            ("宣告了但報告裡沒有", {}, _sg_junit([("t::illegal", "passed"), ("t::pre", "passed")]), "invalid:missing_legit_control"),
++            ("只測合法路徑(非法案例不在)", {}, _sg_junit([("t::legit", "passed"), ("t::pre", "passed")]), "invalid:target_missing")):
++        r = _SgRepo()
++        r.items[0] = r.behavior_item(**it)
++        if xml:
++            r.files["reports/behavior.xml"] = xml
++        r.commit()
++        rep = _sg_eval(r)
++        check(f"S6 {label} → {want}", want in _sg_codes(rep, "behavior") and _sg_kind(rep, "behavior")["verdict"] == "invalid",
++              str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.commit()
++    check("S6 兩者都有 → qualified", _sg_kind(_sg_eval(r), "behavior").get("verdict") == "qualified")
++
++
++def t_secev_s07_fault_not_real_detection():
++    """S7:故障證據的翻紅來自非目標測試、編譯錯(error)、逾時(收據沒 executed)或非斷言失敗 → invalid,不算抓到錯。"""
++    import json as _j
++    for label, fault, want in (("非目標測試紅", [("t::illegal", "passed"), ("t::other", "failure")], "invalid:nontarget_failure"),
++                               ("目標是 error 元素(編譯錯)", [("t::illegal", "error"), ("t::other", "passed")], "invalid:suite_error"),
++                               ("目標的失敗不是斷言", [("t::illegal", "failure_rt"), ("t::other", "passed")], "invalid:nonassertion_failure")):
++        r = _SgRepo()
++        r.capture(fault_cases=fault)
++        r.commit()
++        rep = _sg_eval(r)
++        check(f"S7 {label} → {want}", want in _sg_codes(rep, "fault_sensitivity"), str(_sg_codes(rep, "fault_sensitivity")))
++    r = _SgRepo()
++    rc = _j.loads(r.files["evidence/tq/fault/receipt.json"])
++    rc["status"] = "invalid"
++    rc["reason"] = "timeout; never detected"
++    r.files["evidence/tq/fault/receipt.json"] = _j.dumps(rc).encode()
++    r.commit()
++    rep = _sg_eval(r)
++    check("S7 逾時(收據不是 executed)→ invalid:receipt_not_executed", "invalid:receipt_not_executed" in _sg_codes(rep, "fault_sensitivity"),
++          str(_sg_codes(rep, "fault_sensitivity")))
++    r = _SgRepo()
++    r.capture(fault_cases=[("t::illegal", "passed"), ("t::other", "passed")])
++    r.commit()
++    rep = _sg_eval(r)
++    check("S7 拿掉防護照綠 → failed:survived(有缺陷,不是 invalid)", _sg_kind(rep, "fault_sensitivity").get("verdict") == "failed"
++          and "failed:survived" in _sg_codes(rep, "fault_sensitivity"), str(_sg_codes(rep, "fault_sensitivity")))
++
++
++def t_secev_s08_s20_oracle_needs_review():
++    """S8/S20:測試照抄錯規則但故障照樣翻紅 → fault_sensitivity qualified(抓得到錯),但缺 review 的護欄整體 unsound 並擋;
++    輸出保留抓錯證據並另列判準獨立性未成立,不改寫成需求正確。"""
++    r = _SgRepo()
++    r.items = [r.behavior_item(), r.tq_item()]
++    r.commit()
++    rep = _sg_eval(r)
++    check("S8 故障證據 qualified", _sg_kind(rep, "fault_sensitivity").get("verdict") == "qualified", str(_sg_kind(rep, "fault_sensitivity"))[:300])
++    check("S8 缺 review → 整體 unsound 並擋", _sg_ctl(rep)["verdict"] == "unsound" and rep["blocked"]
++          and _sg_kind(rep, "review").get("verdict") == "missing", str(_sg_kind(rep, "review")))
++    check("S20 輸出另列判準獨立性未成立(review 缺紀錄),security_verdict 仍 not_assessed",
++          "missing:review_record_missing" in _sg_codes(rep, "review") and rep["security_verdict"] == "not_assessed")
++    lim = [x for it in _sg_kind(rep, "fault_sensitivity")["items"] for x in it["limitations"]]
++    check("S20 故障證據的限制寫明判準獨立性要靠 review", any("independent_oracle" in x or "report_provenance" in x for x in lim), str(lim))
++
++
++def t_secev_s09_bindings():
++    """S9:綁定的任一檔 blob、護欄 revision 或工具版本跟要推的提交不同 → stale 或 tool_version_mismatch;綁定少了家 about_code、
++    test_sources、fixture_globs 展開的檔、environment_ref 或 glob 展開為空 → invalid:binding_incomplete。"""
++    def mut_after(path, label):
++        r = _SgRepo()
++        r.commit()
++        items = r.fence_items()
++        r.files[path] = r.files[path] + b"# changed\n"
++        saved = items                     # 證據圍欄保留舊 blob(不重收證據)
++        r.fence_items = lambda: saved
++        r.commit("改 " + path)
++        rep = _sg_eval(r)
++        check(f"S9 改了{label} → stale:binding_changed", "stale:binding_changed" in _sg_codes(rep, "behavior")
++              and rep["blocked"], str(_sg_codes(rep, "behavior")))
++    for path, label in (("src/app.py", "實作"), ("tests/test_app.py", "測試"), ("tests/fixtures/f.json", "夾具"), ("Dockerfile", "環境描述檔")):
++        mut_after(path, label)
++    r = _SgRepo()
++    r.ctl["revision"] = "r2"
++    r.commit()
++    rep = _sg_eval(r)
++    check("S9 護欄 revision 改了 → stale:revision_changed", "stale:revision_changed" in _sg_codes(rep, "behavior"), str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.tools[0] = dict(r.tools[0], version="8.1")
++    r.commit()
++    rep = _sg_eval(r)
++    check("S9 工具版本跟清單不同 → invalid:tool_version_mismatch", "invalid:tool_version_mismatch" in _sg_codes(rep, "behavior"),
++          str(_sg_codes(rep, "behavior")))
++    for label, drop in (("家 about_code", "src/app.py"), ("test_sources", "tests/test_app.py"), ("fixture_globs 展開", "tests/fixtures/f.json"),
++                        ("environment_ref", "Dockerfile")):
++        r = _SgRepo()
++        full = r.fence_items
++        r.fence_items = lambda full=full, drop=drop: [dict(it, bindings=[b for b in it["bindings"] if b["path"] != drop]) for it in full()]
++        r.commit()
++        rep = _sg_eval(r)
++        check(f"S9 漏綁 {label} → invalid:binding_incomplete", "invalid:binding_incomplete" in _sg_codes(rep, "behavior"),
++              str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.items[0] = r.behavior_item(fixture_globs=["tests/fixturez/*"])
++    r.commit()
++    rep = _sg_eval(r)
++    check("S9 glob 寫錯展開為空 → invalid:binding_incomplete", "invalid:binding_incomplete" in _sg_codes(rep, "behavior"),
++          str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.commit()
++    check("S9 同版本完整證據 → qualified(對照)", _sg_kind(_sg_eval(r), "behavior").get("verdict") == "qualified")
++
++
++def t_secev_s10_report_hash():
++    """S10:JUnit 報告內容跟圍欄記的 report_sha256 不同、或 tq_capture 的 receipt 雜湊跟原始報告對不上 → invalid;
++    輸出註明內容一致的偽造報告與「改綁定不重跑」不在可偵測範圍。"""
++    r = _SgRepo()
++    full = r.fence_items
++    r.fence_items = lambda: [dict(it, report_sha256="0" * 64) if it["format"] == "junit" else it for it in full()]
++    r.commit()
++    rep = _sg_eval(r)
++    check("S10 改報告一行(雜湊不符)→ invalid:report_hash_mismatch", "invalid:report_hash_mismatch" in _sg_codes(rep, "behavior"),
++          str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.files["evidence/tq/fault/report.xml"] = r.files["evidence/tq/fault/report.xml"].replace(b"boom", b"bam")
++    r.commit()
++    rep = _sg_eval(r)
++    check("S10 改 receipt 對應的報告 → invalid:receipt_hash_mismatch", "invalid:receipt_hash_mismatch" in _sg_codes(rep, "fault_sensitivity"),
++          str(_sg_codes(rep, "fault_sensitivity")))
++    lim = [x for it in _sg_kind(rep, "behavior")["items"] for x in it["limitations"]]
++    check("S10 limitations 寫明偽造報告與改綁定不重跑偵測不到", any("偽造" in x for x in lim) and any("不重跑" in x for x in lim), str(lim))
++
++
++def _sg_sarif(results, version="2.1.0", driver=("semgrep", "1.181.0"), invocations=None, notifications=None, null_results=False):
++    import json as _j
++    run = {"tool": {"driver": {"name": driver[0], "version": driver[1]}}, "results": None if null_results else results}
++    if invocations is not None:
++        run["invocations"] = invocations
++    if notifications is not None:
++        run.setdefault("invocations", [{"executionSuccessful": True}])[0]["toolExecutionNotifications"] = notifications
++    return _j.dumps({"version": version, "runs": [run]}).encode()
++
++
++def _sg_hit(rule, uri="src/app.py", line=1, **kw):
++    r = {"ruleId": rule, "level": "error", "locations": [{"physicalLocation": {"artifactLocation": {"uri": uri}, "region": {"startLine": line}}}]}
++    r.update(kw)
++    return r
++
++
++_SG_SEMGREP = {"name": "semgrep", "category": "static_analysis", "version": "1.181.0", "install_source": "pip", "verify": "sha256:x",
++               "decision_ref": "Systems/SgHome#d1", "budget": {"single_sec": 60}, "allowed_targets": ["loopback"],
++               "coverage_proof": "semgrep_paths_scanned"}
++
++
++def _sg_sarif_item(**over):
++    it = {"kind": "static_analysis", "format": "sarif", "path": "reports/sast.sarif", "report_sha256": "@sha",
++          "coverage_path": "reports/semgrep.json", "tool": "semgrep", "tool_version": "1.181.0", "control_id": "C2",
++          "control_revision": "r1", "bindings": "@auto", "environment_ref": "Dockerfile", "targets": {"rules": ["r.sqli"]},
++          "calibration_path": "reports/calib.sarif", "environment": "本機", "observed_at": "2026-10-01T00:00:00+00:00"}
++    it.update(over)
++    return it
++
++
++def _sg_sarif_files(main=None, calib=None, cov=b'{"paths": {"scanned": ["src/app.py"]}}'):
++    return {"reports/sast.sarif": main if main is not None else _sg_sarif([]),
++            "reports/calib.sarif": calib if calib is not None else _sg_sarif([_sg_hit("r.sqli", "calib/bad.py")]),
++            "reports/semgrep.json": cov}
++
++
++def t_secev_s11_scan_calibration():
++    """S11:掃描類只有零發現的正式報告、沒有同工具同版本對已知陽性樣本命中的校準檔、或校準沒命中某條宣告規則 → uncalibrated 並擋。"""
++    r, rep = _sg_with_kind("static_analysis", _sg_sarif_item(), tools=[_SG_SEMGREP], files=_sg_sarif_files())
++    check("S11 有校準 → qualified", _sg_kind(rep, "static_analysis", "C2").get("verdict") == "qualified",
++          str(_sg_codes(rep, "static_analysis", "C2")))
++    for label, it, files, want in (
++            ("無校準", _sg_sarif_item(calibration_path=None), _sg_sarif_files(), "uncalibrated:calibration_missing"),
++            ("校準版本不同", _sg_sarif_item(), _sg_sarif_files(calib=_sg_sarif([_sg_hit("r.sqli")], driver=("semgrep", "1.0.0"))),
++             "uncalibrated:calibration_version_mismatch"),
++            ("校準只命中別的規則", _sg_sarif_item(), _sg_sarif_files(calib=_sg_sarif([_sg_hit("r.other")])),
++             "uncalibrated:calibration_rule_missing")):
++        if it.get("calibration_path") is None:
++            it.pop("calibration_path")
++        r, rep = _sg_with_kind("static_analysis", it, tools=[_SG_SEMGREP], files=files)
++        k = _sg_kind(rep, "static_analysis", "C2")
++        check(f"S11 {label} → {want} 並擋", k.get("verdict") == "uncalibrated" and want in _sg_codes(rep, "static_analysis", "C2")
++              and rep["blocked"], str(_sg_codes(rep, "static_analysis", "C2")))
++
++
++def t_secev_s12_sarif_not_run():
++    """S12:SARIF 的 results 為 null、invocation 標失敗、通知有 error、或覆蓋證明缺 → invalid,不把空結果當沒找到問題。"""
++    for label, main, cov, want in (
++            ("results null", _sg_sarif([], null_results=True), None, "invalid:sarif_results_null"),
++            ("invocation 失敗", _sg_sarif([], invocations=[{"executionSuccessful": False}]), None, "invalid:sarif_invocation_failed"),
++            ("通知有 error", _sg_sarif([], notifications=[{"level": "error", "message": {"text": "x"}}]), None, "invalid:sarif_error_notification"),
++            ("覆蓋證明是空的", _sg_sarif([]), b'{"paths": {"scanned": []}}', "invalid:coverage_unproven"),
++            ("版本不是 2.1.0", _sg_sarif([], version="1.0.0"), None, "invalid:sarif_version_mismatch")):
++        files = _sg_sarif_files(main=main, **({"cov": cov} if cov is not None else {}))
++        r, rep = _sg_with_kind("static_analysis", _sg_sarif_item(), tools=[_SG_SEMGREP], files=files)
++        check(f"S12 {label} → {want}", want in _sg_codes(rep, "static_analysis", "C2")
++              and _sg_kind(rep, "static_analysis", "C2").get("verdict") == "invalid", str(_sg_codes(rep, "static_analysis", "C2")))
++    zap = {"name": "zap", "category": "dynamic_scan", "version": "2.17.0", "install_source": "docker", "verify": "digest",
++           "decision_ref": "Systems/SgHome#d1", "budget": {"single_sec": 600}, "allowed_targets": ["loopback"], "coverage_proof": "zap_stats"}
++    for label, stats, want in (("ZAP 統計齊", b'{"stats.auth.success": 3, "stats.network.send.success": 120, "stats.ascan.urls": 9}', "qualified"),
++                               ("ZAP 沒登入成功", b'{"stats.auth.success": 0, "stats.network.send.success": 120, "stats.ascan.urls": 9}',
++                                "invalid")):
++        it = _sg_sarif_item(kind="dynamic_scan", tool="zap", tool_version="2.17.0", coverage_path="reports/zap-stats.json",
++                            environment="本機 target=http://127.0.0.1:8080")
++        files = {"reports/sast.sarif": _sg_sarif([], driver=("zap", "2.17.0")),
++                 "reports/calib.sarif": _sg_sarif([_sg_hit("r.sqli")], driver=("zap", "2.17.0")), "reports/zap-stats.json": stats}
++        r, rep = _sg_with_kind("dynamic_scan", it, tools=[zap], files=files)
++        check(f"S12 {label} → {want}", _sg_kind(rep, "dynamic_scan", "C2").get("verdict") == want, str(_sg_codes(rep, "dynamic_scan", "C2")))
++
++
++_SG_K6_SCRIPT = b"import { Counter } from 'k6/metrics';\nconst f = new Counter('foreign_effects');\nexport default function () { f.add(0); }\n"
++
++
++def _sg_k6(version="2.3.0", script=_SG_K6_SCRIPT, metrics=None):
++    """k6 v2.3.0 新格式機器可讀摘要的形狀(2026-10-20 本機實測一份離線空腳本取得)。"""
++    import json as _j
++    ms = metrics if metrics is not None else [
++        {"contains": "default", "name": "iterations", "type": "counter", "values": {"count": 50}},
++        {"contains": "default", "name": "http_reqs", "type": "counter", "values": {"count": 400}},
++        {"contains": "default", "name": "foreign_effects", "type": "counter", "values": {"count": 0}},
++        {"contains": "default", "name": "foreign_rejected", "type": "counter", "values": {"count": 200}},
++        {"contains": "default", "name": "legit_ok", "type": "counter", "values": {"count": 200}}]
++    return _j.dumps({"config": {"duration": 1.0, "execution": "local", "script": script.decode()},
++                     "metadata": {"generated_at": "2026-10-01T00:00:00Z", "k6_version": version},
++                     "results": {"checks": {"metrics": [], "results": []}, "metrics": ms}, "version": "1.0.0"}).encode()
++
++
++_SG_K6_TOOL = {"name": "k6", "category": "load_test", "version": "2.3.0", "install_source": "brew", "verify": "sha256:x",
++               "decision_ref": "Systems/SgHome#d1", "budget": {"single_sec": 600}, "allowed_targets": ["loopback"],
++               "min_requests": {"load/od04.js": 300}}
++
++
++def _sg_k6_item(**over):
++    it = {"kind": "concurrency", "format": "k6_summary", "path": "reports/k6.json", "report_sha256": "@sha", "tool": "k6",
++          "tool_version": "2.3.0", "control_id": "C2", "control_revision": "r1", "bindings": "@auto", "fixture_globs": [],
++          "environment_ref": "Dockerfile", "targets": {"tests": ["load/od04.js"], "legit_controls": ["legit_ok"],
++                                                        "thresholds": ["foreign_effects count == 0", "foreign_rejected count > 0"]},
++          "environment": "本機 target=http://127.0.0.1:8080", "observed_at": "2026-10-01T00:00:00+00:00"}
++    it.update(over)
++    return it
++
++
++def t_secev_s13_k6():
++    """S13:k6 摘要的版本或腳本跟清單與提交對不上、請求數低於登記下限、合法流量為零、宣告指標沒出現(沒 add(0))或門檻寫法不允許
++    → invalid;安全計數超標 → failed。"""
++    def run(summary=None, item=None, script=_SG_K6_SCRIPT):
++        return _sg_with_kind("concurrency", item or _sg_k6_item(), tools=[_SG_K6_TOOL],
++                             files={"reports/k6.json": summary or _sg_k6(), "load/od04.js": script})[1]
++    rep = run()
++    check("S13 正常摘要 → qualified", _sg_kind(rep, "concurrency", "C2").get("verdict") == "qualified", str(_sg_codes(rep, "concurrency", "C2")))
++    base = [m for m in __import__("json").loads(_sg_k6())["results"]["metrics"]]
++    def ms(name, count=None, drop=False):
++        out = []
++        for m in base:
++            if m["name"] == name:
++                if drop:
++                    continue
++                m = dict(m, values={"count": count})
++            out.append(m)
++        return out
++    for label, kw, want in (
++            ("版本不同", {"summary": _sg_k6(version="2.2.0")}, "invalid:tool_version_mismatch"),
++            ("腳本全文對不上", {"summary": _sg_k6(script=b"export default function(){}\n")}, "invalid:k6_script_mismatch"),
++            ("請求數低於下限", {"summary": _sg_k6(metrics=ms("http_reqs", 10))}, "invalid:k6_requests_below_floor"),
++            ("合法流量為零", {"summary": _sg_k6(metrics=ms("legit_ok", 0))}, "invalid:missing_legit_control"),
++            ("指標沒 add(0) 不出現", {"summary": _sg_k6(metrics=ms("foreign_effects", drop=True))}, "invalid:k6_metric_missing"),
++            ("門檻寫法不允許", {"item": _sg_k6_item(targets={"tests": ["load/od04.js"], "legit_controls": ["legit_ok"],
++                                                           "thresholds": ["p(95)<200"]})}, "invalid:k6_threshold_form"),
++            ("安全計數超標", {"summary": _sg_k6(metrics=ms("foreign_effects", 3))}, "failed:threshold_exceeded")):
++        rep = run(**kw)
++        check(f"S13 {label} → {want}", want in _sg_codes(rep, "concurrency", "C2"), str(_sg_codes(rep, "concurrency", "C2")))
++    rep = run(summary=_sg_k6(metrics=ms("foreign_effects", 3)))
++    check("S13 超標判 failed(不是 invalid)", _sg_kind(rep, "concurrency", "C2").get("verdict") == "failed")
++
++
++def t_secev_s14_min_kinds():
++    """S14:護欄的必要種類少於全部威脅類別最低種類的聯集 → insufficient_required_evidence 並擋(威脅類別表 v1 已核可,照表擋);
++    工具清單沒有某工具類別時照替代欄換算,作者在護欄裡自述沒工具不影響換算。真實樣本:只宣告 behavior 的護欄被擋。"""
++    r = _SgRepo()
++    r.ctl["required_evidence"] = ["behavior"]
++    r.ctl["evidence_refs"] = [{"kind": "behavior", "node": "Verification/SgEv"}]
++    r.items = [r.behavior_item()]
++    r.commit()
++    rep = _sg_eval(r)
++    j = _sg_ctl(rep)
++    check("S14 只宣告 behavior 的 authz-object 護欄 → insufficient_required_evidence 並擋",
++          "insufficient_required_evidence" in j["control_codes"] and rep["blocked"] and j["verdict"] == "unsound",
++          str(j["control_codes"]) + str(j["notes"]))
++    check("S14 behavior 本身照樣是 qualified(護欄層擋,不改證據判定)", _sg_kind(rep, "behavior").get("verdict") == "qualified")
++    check("S14 註明最低種類還缺哪幾種", any("fault_sensitivity" in n and "review" in n for n in j["notes"]), str(j["notes"]))
++    r = _SgRepo()
++    r.ctl["threat_categories"] = ["authz-object", "input-injection"]
++    r.commit()
++    j = _sg_ctl(_sg_eval(r))
++    check("S14 兩個類別取聯集(多了 static_analysis,沒工具 → 替代成 review 多蓋 manual_check_scope;behavior/review 已在)",
++          "insufficient_required_evidence" not in j["control_codes"] and any("static_analysis" in n for n in j["notes"]), str(j))
++    check("S14 走了替代欄 → review 要人審蓋 manual_check_scope,沒蓋就 human_review_missing",
++          _sg_kind(_sg_eval(r), "review").get("codes") == ["missing:human_review_missing"], str(_sg_kind(_sg_eval(r), "review")))
++    r = _SgRepo()
++    r.tools.append(_SG_SEMGREP)
++    r.ctl["threat_categories"] = ["authz-object", "input-injection"]
++    r.ctl["status_reason"] = "我們沒有靜態分析工具"       # 作者自述沒工具不算數
++    r.commit()
++    j = _sg_ctl(_sg_eval(r))
++    check("S14 清單有靜態分析工具 → 不替代,缺 static_analysis 就 insufficient(自述沒工具不影響)",
++          "insufficient_required_evidence" in j["control_codes"], str(j["control_codes"]) + str(j["notes"]))
++
++
++
++_SG_PLAN = ("---\ntype: project\nstatus: doing\ndecisions:\n  - content: 定了\n    id: d1\n    decided: 2026-10-01\n    valid: true\n"
++            "  - content: 翻案了\n    id: d2\n    decided: 2026-10-01\n    valid: false\npending_questions:\n"
++            "  - id: Q1\n    text: 誰能付款\n    class: 權責\n    stage: 需求\n    status: 待人\n"
++            "  - id: Q2\n    text: 決策被翻案的題\n    class: 權責\n    stage: 需求\n    status: 已決\n    decision: \"#d2\"\n"
++            "  - id: Q3\n    text: 正常結了\n    class: 權責\n    stage: 需求\n    status: 已決\n    decision: \"#d1\"\n"
++            "---\n# SgPlan\n")
++
++
++def t_secev_s15_source_and_questions():
++    """S15:來源決策作廢、或 question_refs 列的題照 _pq_settled 沒結(待人、已決但決策被翻案、找不到)→ 整體 unsound 並指路到那一題;
++    全部結了的正常對照不擋。"""
++    r = _SgRepo()
++    r.ctl["source"] = dict(r.ctl["source"], decision_ref="Systems/SgHome#d2")
++    r.commit()
++    rep = _sg_eval(r)
++    check("S15 來源決策作廢 → 護欄層 source_decision_invalid", "source_decision_invalid" in _sg_ctl(rep).get("control_codes", [])
++          and rep["blocked"], str(_sg_ctl(rep).get("control_codes")) + str(rep["gate_code"]))
++    for q, label in (("Q1", "待人"), ("Q2", "已決但決策被翻案"), ("Q9", "不存在的題號")):
++        r = _SgRepo()
++        r.extra_md = {"Projects/SgPlan.md": _SG_PLAN}
++        r.ctl["question_refs"] = [f"Projects/SgPlan#{q}"]
++        r.commit()
++        j = _sg_ctl(_sg_eval(r))
++        check(f"S15 question_refs 列了{label}的題 → question_open 並指路", "question_open" in j.get("control_codes", [])
++              and any(f"SgPlan#{q}" in n for n in j.get("notes", [])), str(j.get("control_codes")) + str(j.get("notes")))
++    r = _SgRepo()
++    r.extra_md = {"Projects/SgPlan.md": _SG_PLAN}
++    r.ctl["question_refs"] = ["Projects/SgPlan#Q3"]
++    r.commit()
++    check("S15 全已決的正常對照 → sound", _sg_ctl(_sg_eval(r)).get("verdict") == "sound", str(_sg_ctl(_sg_eval(r)).get("control_codes")))
++
++
++def t_secev_s16_precondition_required():
++    """S16:非法請求被拒的原因可能是缺身分或資源不存在 → behavior 沒有前置斷言案例判 invalid:missing_precondition;有就 qualified。"""
++    r = _SgRepo()
++    r.items[0] = r.behavior_item(targets={"tests": ["t::illegal"], "legit_controls": ["t::legit"]})
++    r.commit()
++    rep = _sg_eval(r)
++    check("S16 沒有前置斷言 → invalid:missing_precondition", "invalid:missing_precondition" in _sg_codes(rep, "behavior"),
++          str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.commit()
++    check("S16 有前置斷言的完整對照 → qualified", _sg_kind(_sg_eval(r), "behavior").get("verdict") == "qualified")
++
++
++def t_secev_s17_bad_and_good_same_kind():
++    """S17:同護欄同種類兩份故障證據,一份只產生編譯錯(error)、一份真的目標翻紅 → 好的逐項 qualified,該種類整體 invalid 並擋;
++    只留好的那份 → 放行。"""
++    r = _SgRepo()
++    r.capture(fault_cases=[("t::illegal", "error"), ("t::other", "passed")], tag="tqbad")
++    r.items.append(r.tq_item(path="evidence/tqbad"))
++    r.commit()
++    rep = _sg_eval(r)
++    k = _sg_kind(rep, "fault_sensitivity")
++    verdicts = sorted(it["verdict"] for it in k.get("items", []))
++    check("S17 兩份逐項判定:一份 qualified、一份 invalid", verdicts == ["invalid", "qualified"], str(verdicts))
++    check("S17 種類整體 invalid 並擋(不准用好的蓋壞的)", k.get("verdict") == "invalid" and rep["blocked"], str(k.get("verdict")))
++    r = _SgRepo()
++    r.commit()
++    check("S17 只留好的那份 → 放行", not _sg_eval(r)["blocked"])
++
++
++def t_secev_s21_tool_list():
++    """S21:證據的工具不在 .lumos/security-tools.json、版本不等於釘版本、核可決策作廢、或清單本身是壞 JSON
++    → invalid:tool_unregistered 或 tool_version_mismatch 並擋。"""
++    for label, mut, want in (
++            ("清單缺項", lambda r: r.tools.pop(0), "invalid:tool_unregistered"),
++            ("版本差一號", lambda r: r.tools.__setitem__(0, dict(r.tools[0], version="8.1")), "invalid:tool_version_mismatch"),
++            ("核可決策作廢", lambda r: r.tools.__setitem__(0, dict(r.tools[0], decision_ref="Systems/SgHome#d2")), "invalid:tool_unregistered")):
++        r = _SgRepo()
++        mut(r)
++        r.commit()
++        rep = _sg_eval(r)
++        check(f"S21 {label} → {want} 並擋", want in _sg_codes(rep, "behavior") and rep["blocked"], str(_sg_codes(rep, "behavior")))
++    r = _SgRepo()
++    r.commit()
++    (r.root / ".lumos/security-tools.json").write_text("{壞")
++    _sg_git(r.root, "commit", "-qam", "壞清單")
++    rep = _sg_eval(r)
++    check("S21 清單是壞 JSON → 每個工具都算沒登記", "invalid:tool_unregistered" in _sg_codes(rep, "behavior")
++          and any("security-tools.json" in w for w in rep["warnings"]), str(_sg_codes(rep, "behavior")) + str(rep["warnings"]))
++
++
++def t_secev_s22_target_authorized():
++    """S22:壓測或動態掃描證據記的目標不是回環位址也不在核可清單 → invalid:target_not_authorized;127.0.0.1、localhost 放行。"""
++    for env_s, ok in (("target=http://127.0.0.1:8080", True), ("target=http://localhost:8080/x", True),
++                      ("target=https://shop.example.com/api", False)):
++        r, rep = _sg_with_kind("concurrency", _sg_k6_item(environment="本機 " + env_s), tools=[_SG_K6_TOOL],
++                               files={"reports/k6.json": _sg_k6(), "load/od04.js": _SG_K6_SCRIPT})
++        has = "invalid:target_not_authorized" in _sg_codes(rep, "concurrency", "C2")
++        check(f"S22 {env_s} → {'放行' if ok else 'target_not_authorized'}", has != ok, str(_sg_codes(rep, "concurrency", "C2")))
++
++
++def _sg_inputs_sha(ctl):
++    """判定輸入雜湊(計劃〈判定輸入也凍結〉):四個集合排序、表版號、evidence_refs 的種類 → 列數;不含節點名。"""
++    from collections import Counter
++    return _sg_sha(_sg_canon({"required_evidence": sorted(ctl["required_evidence"]), "threat_categories": sorted(ctl["threat_categories"]),
++                              "assets": sorted(ctl["assets"]), "surfaces": sorted(ctl["surfaces"]),
++                              "threat_table_version": ctl.get("threat_table_version"),
++                              "evidence_kinds": dict(sorted(Counter(x["kind"] for x in ctl["evidence_refs"]).items()))}))
++
++
++def _sg_exc_repo(exp="2026-10-25", approved="2026-10-15", sign=True, key=0, **ex_over):
++    """review 證據拿掉(missing),用一條蓋住 review 的例外放行。回 repo(已提交)。"""
++    r = _SgRepo(keys=2)
++    r.items = [r.behavior_item(), r.tq_item()]
++    ex = {"decision_ref": "Systems/SgHome#d1", "reason": "審查人下週回來", "compensating": "每日人工抽查", "expires_on": exp,
++          "covers_kinds": ["review"]}
++    ex.update(ex_over)
++    r.ctl["exception"] = ex
++    if sign:
++        content = {"control_id": "C1", "control_revision": "r1", "inputs_sha256": _sg_inputs_sha(r.ctl), "exception": ex}
++        r.add_entry("exception", "C1#review", content, approved_on=approved, expires_on=exp, key=key)
++    return r
++
++
++def t_secev_s23_exception_validity():
++    """S23:例外到期日已過、到期日減核可日 31 天、核可鏈沒有對應的一筆、或那一筆核可日晚於今天(UTC) → 例外無效、照擋,
++    後者列 approval:approval_in_future;到期日減核可日恰 30 天 → 放行;缺補償措施的例外是登記錯誤(照擋)。"""
++    import datetime as _dt
++    today = _dt.date(2026, 10, 20)
++    r = _sg_exc_repo(exp="2026-11-14", approved="2026-10-15")
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S23 30 天整的有效例外 → excepted、放行", _sg_ctl(rep).get("verdict") == "excepted" and not rep["blocked"],
++          str(_sg_ctl(rep).get("exception")) + str(rep["blocking"]))
++    for label, kw, want in (("已過期", dict(exp="2026-10-19", approved="2026-10-01"), "exception:exception_expired"),
++                            ("31 天", dict(exp="2026-11-15", approved="2026-10-15"), "exception:exception_too_long"),
++                            ("鏈上沒有那一筆", dict(sign=False), "exception:exception_unapproved"),
++                            ("核可日晚於今天(台灣清晨手填本地日期)", dict(exp="2026-11-10", approved="2026-10-21"),
++                             "exception:exception_unapproved")):
++        r = _sg_exc_repo(**kw)
++        r.commit()
++        rep = _sg_eval(r, today=today)
++        j = _sg_ctl(rep)
++        check(f"S23 {label} → {want}、照擋", (j.get("exception") or {}).get("status") == want and rep["blocked"],
++              str(j.get("exception")) + str(rep["blocking"]))
++    r = _sg_exc_repo(exp="2026-11-10", approved="2026-10-21")
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S23 核可日晚於今天 → 核可鏈那一筆列 approval:approval_in_future",
++          any(e["status"] == "approval:approval_in_future" for e in rep["approvals"]["entries"]), str(rep["approvals"]["entries"]))
++    r = _sg_exc_repo(compensating="")
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S23 缺補償措施 → 登記錯誤整道擋", rep["blocked"] and rep["gate_code"] == "registration_error", str(rep["gate_code"]))
++
++
++def t_secev_s24_exception_logged_once():
++    """S24:有效例外蓋住 review → 放行、治理帳以閘名 security-evidence 記一行;同一筆核可再被用到(含帳本提交後再推)不重記;
++    security evidence 照樣顯示底下原本的 missing。"""
++    import datetime as _dt
++    now = _dt.datetime.now(_dt.timezone.utc).date()
++    r = _sg_exc_repo(exp=(now + _dt.timedelta(days=20)).isoformat(), approved=now.isoformat())
++    r.files["docs/.governance-log.jsonl"] = b""
++    r.commit()
++    gl = r.root / "docs/.governance-log.jsonl"
++    def n_lines():
++        return sum(1 for ln in gl.read_text().splitlines() if '"sec_exc_key": "C1|review|' in ln)
++    a = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--security-only", "--repo", str(r.root)],
++                       capture_output=True, text=True)
++    check("S24 有效例外 → --security-only 放行", a.returncode == 0, a.stdout + a.stderr)
++    check("S24 第一次用到 → 治理帳一行(閘名 security-evidence)", n_lines() == 1
++          and '"gate": "security-evidence"' in gl.read_text(), gl.read_text()[-500:])
++    subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--security-only", "--repo", str(r.root)], capture_output=True, text=True)
++    check("S24 再跑一次不重記", n_lines() == 1, str(n_lines()))
++    _sg_git(r.root, "add", "docs/.governance-log.jsonl")
++    _sg_git(r.root, "commit", "-qm", "帳本")
++    subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--security-only", "--repo", str(r.root)], capture_output=True, text=True)
++    check("S24 帳本提交後再推也不重記", n_lines() == 1, str(n_lines()))
++    rep = _sg_eval(r, today=now)
++    k = _sg_kind(rep, "review")
++    check("S24 security evidence 照樣顯示底下是 missing、標例外蓋住", k.get("verdict") == "missing" and k.get("excepted") is True, str(k))
++
++
++def t_secev_s25_exception_dates():
++    """S25:今天(UTC)是例外到期日當天 → 放行並印 7 天內到期的提醒;隔天不需改檔就自動恢復擋;到期前八天不提醒、前一天提醒;
++    台灣時間清晨對應的 UTC 前一天照 UTC 判。"""
++    import datetime as _dt
++    r = _sg_exc_repo(exp="2026-10-30", approved="2026-10-15")
++    r.commit()
++    for d, blocked, remind in ((_dt.date(2026, 10, 22), False, False), (_dt.date(2026, 10, 29), False, True),
++                               (_dt.date(2026, 10, 30), False, True), (_dt.date(2026, 10, 31), True, False)):
++        rep = _sg_eval(r, today=d)
++        has = any("例外 2026-10-30 到期" in x for x in rep["reminders"])
++        check(f"S25 {d}:{'擋' if blocked else '放行'}、{'有' if remind else '沒有'}提醒", rep["blocked"] == blocked and has == remind,
++              f"blocked={rep['blocked']} reminders={rep['reminders']}")
++    # 台灣 2026-10-31 清晨 07:00 = UTC 2026-10-30 23:00:照 UTC 那天(到期日當天)判 → 放行
++    rep = _sg_eval(r, today=_dt.datetime(2026, 10, 30, 23, 0, tzinfo=_dt.timezone.utc).date())
++    check("S25 台灣清晨(UTC 前一天)照 UTC 判 → 放行", not rep["blocked"])
++
++
++def t_secev_s26_signatures():
++    """S26:例外在核可鏈沒有對應一筆、用不在當時有效金鑰裡的金鑰簽、簽完後物件或那一筆改一個字、或用已撤的金鑰簽 → 例外無效;
++    合格核可在壓提交、rebase、合併提交之後仍有效。"""
++    import datetime as _dt
++    import json as _j
++    today = _dt.date(2026, 10, 20)
++    r = _SgRepo(keys=2)
++    stranger = r.keys[1]
++    r.keys = r.keys[:1]
++    r.chain_lines = []
++    r.init_chain()                    # 只釘第一把
++    r.keys.append(stranger)
++    r.items = [r.behavior_item(), r.tq_item()]
++    ex = {"decision_ref": "Systems/SgHome#d1", "reason": "x", "compensating": "y", "expires_on": "2026-10-30", "covers_kinds": ["review"]}
++    r.ctl["exception"] = ex
++    content = {"control_id": "C1", "control_revision": "r1", "inputs_sha256": _sg_inputs_sha(r.ctl), "exception": ex}
++    r.add_entry("exception", "C1#review", content, approved_on="2026-10-15", expires_on="2026-10-30", key=1)
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S26 沒釘的金鑰簽的 → approval_signer_unknown、例外無效",
++          any(e["status"] == "approval:approval_signer_unknown" for e in rep["approvals"]["entries"]) and rep["blocked"],
++          str(rep["approvals"]["entries"]))
++    r = _sg_exc_repo(exp="2026-10-30", approved="2026-10-15")
++    r.ctl["exception"] = dict(r.ctl["exception"], reason="改了一個字")
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S26 簽完後物件改一個字 → exception_content_changed", (_sg_ctl(rep).get("exception") or {}).get("status")
++          == "exception:exception_content_changed" and rep["blocked"], str(_sg_ctl(rep).get("exception")))
++    r = _sg_exc_repo(exp="2026-10-30", approved="2026-10-15")
++    last = _j.loads(r.chain_lines[-1])
++    last["target"] = "C1#reviex"
++    r.chain_lines[-1] = _j.dumps(last, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S26 核可筆改一個字 → approval_signature_invalid、例外無效",
++          any(e["status"] == "approval:approval_signature_invalid" for e in rep["approvals"]["entries"]) and rep["blocked"],
++          str(rep["approvals"]["entries"]))
++    r = _SgRepo(keys=2)
++    r.add_entry("approvers_revoke", r.keys[1]["principal"], {"principal": r.keys[1]["principal"]}, approved_on="2026-10-10",
++                expires_on="2027-10-01", key=0)
++    r.items = [r.behavior_item(), r.tq_item()]
++    ex = {"decision_ref": "Systems/SgHome#d1", "reason": "x", "compensating": "y", "expires_on": "2026-10-30", "covers_kinds": ["review"]}
++    r.ctl["exception"] = ex
++    r.add_entry("exception", "C1#review", {"control_id": "C1", "control_revision": "r1", "inputs_sha256": _sg_inputs_sha(r.ctl),
++                                           "exception": ex}, approved_on="2026-10-15", expires_on="2026-10-30", key=1)
++    r.commit()
++    rep = _sg_eval(r, today=today)
++    check("S26 用已撤的金鑰簽 → approval_signer_revoked、例外無效",
++          any(e["status"] == "approval:approval_signer_revoked" for e in rep["approvals"]["entries"]) and rep["blocked"],
++          str(rep["approvals"]["entries"]))
++    r = _sg_exc_repo(exp="2026-10-30", approved="2026-10-15")
++    r.commit("一")
++    (r.root / "src/extra.txt").write_text("y\n")
++    _sg_git(r.root, "add", "-A")
++    _sg_git(r.root, "commit", "-qm", "二")
++    _sg_git(r.root, "reset", "--soft", "HEAD~2")
++    _sg_git(r.root, "commit", "-qm", "壓成一個")
++    check("S26 壓提交之後合格例外仍有效", not _sg_eval(r, today=today)["blocked"])
++    _sg_git(r.root, "checkout", "-q", "-b", "side", "HEAD~1")
++    (r.root / "side.txt").write_text("s\n")
++    _sg_git(r.root, "add", "-A")
++    _sg_git(r.root, "commit", "-qm", "side")
++    _sg_git(r.root, "checkout", "-q", "main")
++    _sg_git(r.root, "merge", "-q", "--no-edit", "side")
++    check("S26 合併提交之後合格例外仍有效", not _sg_eval(r, today=today)["blocked"])
++
++
++def t_secev_cli_subcommands_parse():
++    """security 族四個子命令各自進得了自己的 parser(main 裡頂層 parser 的變數名被子命令 parser 蓋掉時,全部都被當成同一支解析)。"""
++    r = _SgRepo()
++    r.commit()
++    for args, want in ((["security", "list", "--json"], '"purpose": "inventory"'),
++                       (["security", "evidence", "--json", "--repo", str(r.root)], '"purpose": "evidence"'),
++                       (["security", "approvals", "verify", "--repo", str(r.root)], "核可鏈"),
++                       (["code-loop", "check", "--security-only", "--repo", str(r.root)], "安全證據")):
++        p = subprocess.run([sys.executable, GRAPHCTL, *(["--vault", str(r.root / r.vault)] if args[1] == "list" else []), *args],
++                           capture_output=True, text=True)
++        check(f"CLI {' '.join(args[:3])} 進了自己的子命令", want in p.stdout, (p.stdout + p.stderr)[:400])
++
++
++
++def t_secev_s27_keep_going_and_message():
++    """S27:安全證據那一道與其他道同時擋而帶 --keep-going → 各道各自出訊息、LUMOS-BLOCKS 列出 security_evidence;
++    pre-push 的原因對照表認得它(t_prepush_cl_reason_table_matches_lumos 雙向比);擋下訊息是三段式(發生什麼、為什麼在意、指令獨立一行)。
++    合成 repo 讓安全證據(缺 review)擋下;多道同時擋時各記一筆的掛鉤行為由 t_prepush_block_kinds_each_recorded 驗。"""
++    r = _SgRepo()
++    r.items = [r.behavior_item(), r.tq_item()]
++    r.commit()
++    p = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--keep-going", "--repo", str(r.root)],
++                       capture_output=True, text=True)
++    bl = [ln for ln in p.stdout.splitlines() if ln.startswith("LUMOS-BLOCKS:")]
++    check("S27 --keep-going 的 LUMOS-BLOCKS 列出 security_evidence", bl and "security_evidence" in bl[-1], p.stdout[-500:] + p.stderr[-500:])
++    err = p.stderr
++    check("S27 發生什麼:護欄、種類、原因代碼", "安全證據 擋下:C1 [review] missing:review_record_missing" in err, err[-800:])
++    check("S27 為什麼在意:一句白話", "在意的原因:" in err and "審查紀錄" in err, err[-800:])
++    check("S27 怎麼修:指令獨立一行", any(ln.strip().startswith("lumos security evidence --commit") for ln in err.splitlines()), err[-800:])
++    check("S27 退出 1", p.returncode == 1)
++    import json as _j
++    pj = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--keep-going", "--json", "--repo", str(r.root)],
++                        capture_output=True, text=True)
++    try:
++        d = _j.loads(pj.stdout.strip().splitlines()[-1])
++    except (ValueError, IndexError):
++        d = {}
++    check("S27 --json 的 blocks 帶 security_evidence、明細鍵也在", any(b.get("reason_kind") == "security_evidence" for b in d.get("blocks", []))
++          and "security_evidence" in d, str(d.get("blocks")))
++
++
++def t_secev_s28_local_equals_ci():
++    """S28:本機推送前與 CI 對同一提交、同一主線 tip、同一 UTC 日期跑 code-loop check,安全證據判定完全相同,含核可鏈驗證結果
++    (一份有核可的例外、一份沒核可的例外)。推送前掛鉤帶 --diff 遠端舊值..頂端 --at-sha --branch;CI 帶 --diff before..sha --at-sha --branch。"""
++    import json as _j
++    for label, kw in (("有核可的例外", {}), ("沒核可的例外", {"sign": False})):
++        r = _sg_exc_repo(**kw)
++        r.commit()
++        base = _sg_git(r.root, "rev-parse", "HEAD~1")
++        head = _sg_git(r.root, "rev-parse", "HEAD")
++        def sec(args):
++            p = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", *args, "--json", "--repo", str(r.root)],
++                               capture_output=True, text=True)
++            try:
++                d = _j.loads(p.stdout.strip().splitlines()[-1]).get("security_evidence") or {}
++            except (ValueError, IndexError):
++                d = {}
++            return {"controls": d.get("controls"), "approvals": d.get("approvals"), "blocked": d.get("blocked"), "gate": d.get("gate_code")}
++        local = sec(["--diff", f"{base}..{head}", "--at-sha", head, "--branch", "main", "--keep-going"])
++        ci = sec(["--diff", f"{base}..{head}", "--at-sha", head, "--branch", "main"])
++        check(f"S28 {label}:本機與 CI 的安全證據判定完全相同", local["controls"] is not None and local == ci, f"{local}\n{ci}")
++
++
++def _sg_branch(r, name="feat"):
++    _sg_git(r.root, "checkout", "-q", "-b", name)
++
++
++def t_secev_s29_freeze_shrink():
++    """S29:推送版跟 merge-base 版或主線 tip 版比,資安條目被刪、降成 candidate 或 retired、或拿掉 security,而核可鏈上沒有有效的
++    revision 核可 → 照舊當必驗並擋;有有效核可 → 放行並列前後版本;核可過期 → 照擋;整篇節點刪掉加核可 → 讀得到、放行;
++    同一次推送搬圖譜目錄又削弱一條 → 擋。"""
++    import datetime as _dt
++    today = _dt.date(2026, 10, 20)
++    def shrink(mut):
++        r = _SgRepo()
++        r.commit()
++        _sg_branch(r)
++        mut(r)
++        r.commit("縮小")
++        return r, _sg_eval(r, pushed_branch="feat", today=today)
++    for label, mut in (("降成 candidate", lambda r: r.ctl.update(lifecycle="candidate")),
++                       ("退成 retired", lambda r: r.ctl.update(lifecycle="retired", retirement_reason="不用了", replacement_id=None)),
++                       ("拿掉 security", lambda r: r.ctl.update(concerns=["business"]))):
++        r, rep = shrink(mut)
++        check(f"S29 {label}、沒核可 → 照必驗、control_removed_unapproved、擋",
++              "missing:control_removed_unapproved" in _sg_ctl(rep).get("control_codes", []) and rep["blocked"],
++              str(_sg_ctl(rep).get("control_codes")) + str(rep["freeze"]))
++    # 有核可的降級:before=主線版(revision, inputs),after=推送版
++    r = _SgRepo()
++    r.commit()
++    before = {"revision": "r1", "inputs_sha256": _sg_inputs_sha(r.ctl)}
++    _sg_branch(r)
++    r.ctl["lifecycle"] = "candidate"
++    after = {"revision": "r1", "inputs_sha256": _sg_inputs_sha(r.ctl)}
++    r.add_entry("revision", "C1|Systems/SgHome#d1", {"control_id": "C1", "before": before, "after": after,
++                                                     "decision_ref": "Systems/SgHome#d1"}, approved_on="2026-10-15", expires_on="2026-11-10")
++    r.commit("有核可的降級")
++    rep = _sg_eval(r, pushed_branch="feat", today=today)
++    check("S29 有有效 revision 核可 → 不當必驗、放行、列出", not rep["blocked"] and rep["freeze"]["approved_revisions"]
++          and rep["freeze"]["approved_revisions"][0]["id"] == "C1", str(rep["freeze"]) + str(rep["blocking"]))
++    rep = _sg_eval(r, pushed_branch="feat", today=_dt.date(2026, 11, 11))
++    check("S29 核可已過期 → 照擋", rep["blocked"] and "missing:control_removed_unapproved" in _sg_ctl(rep).get("control_codes", []),
++          str(rep["freeze"]))
++    # 整篇節點刪掉 + removed 核可
++    r = _SgRepo()
++    r.commit()
++    before = {"revision": "r1", "inputs_sha256": _sg_inputs_sha(r.ctl)}
++    _sg_branch(r)
++    r.add_entry("revision", "C1|Systems/SgHome#d1", {"control_id": "C1", "before": before, "removed": True,
++                                                     "decision_ref": "Systems/SgHome#d1"}, approved_on="2026-10-15", expires_on="2026-11-10")
++    r.commit("先寫核可")
++    (r.root / r.vault / "Systems/SgHome.md").write_text("---\ntype: system\nstatus: doing\ndecisions:\n  - content: 付款只認擁有者\n"
++                                                        "    id: d1\n    decided: 2026-10-01\n    valid: true\n---\n# 拆了\n")
++    _sg_git(r.root, "commit", "-qam", "刪整塊")
++    rep = _sg_eval(r, pushed_branch="feat", today=today)
++    check("S29 刪整篇登記加 removed 核可 → 放行", not rep["blocked"] and rep["freeze"]["approved_revisions"], str(rep["freeze"]) + str(rep["blocking"]))
++    # 搬圖譜目錄又削弱一條
++    r = _SgRepo()
++    r.commit()
++    _sg_branch(r)
++    _sg_git(r.root, "mv", "docs/sg-knowledge", "docs/sg2-knowledge")
++    r.vault = "docs/sg2-knowledge"
++    r.ctl["required_evidence"] = ["behavior", "review"]
++    r.ctl["evidence_refs"] = [x for x in r.ctl["evidence_refs"] if x["kind"] != "fault_sensitivity"]
++    for it in r.items:
++        if it.get("path") == "docs/sg-knowledge/Verification/SgEv.md":
++            it["path"] = "docs/sg2-knowledge/Verification/SgEv.md"
++    r.commit("搬家又削弱")
++    rep = _sg_eval(r, pushed_branch="feat", today=today)
++    w = [x for x in rep["freeze"]["weakened"] if x["id"] == "C1"]
++    check("S29 搬圖譜目錄 + 削弱 → 照 id 對齊、判變弱、照嚴的擋(fault_sensitivity 照必要)",
++          w and "required_evidence" in w[0]["fields"] and rep["blocked"]
++          and _sg_kind(rep, "fault_sensitivity").get("verdict") == "missing", str(rep["freeze"]) + str(rep["blocking"]))
++
++
++def t_secev_s30_early_exits_and_bases():
++    """S30:取不到 HEAD、merge-base 等於 HEAD、算不出 merge-base 或 pitfalls 失敗這些既有放行早退時,有登記的專案照判;
++    起點算不出、淺層 clone、取不到提交而有登記 → 擋,淺層 clone 的訊息給 git fetch --unshallow;沒登記的淺層 clone 照舊放行;
++    沒有 remote 也沒有本機 main/master → 空樹當起點照判。"""
++    import tempfile
++    r = _SgRepo()
++    r.ctl["required_evidence"] = ["behavior"]       # 最低種類不夠 → 一定 unsound
++    r.ctl["evidence_refs"] = [{"kind": "behavior", "node": "Verification/SgEv"}]
++    r.items = [r.behavior_item()]
++    r.commit()
++    p = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--repo", str(r.root)], capture_output=True, text=True)
++    check("S30 在主線上(merge-base 等於 HEAD 的早退路)照判、擋", p.returncode == 1 and "insufficient_required_evidence" in p.stderr,
++          p.stdout[-300:] + p.stderr[-500:])
++    # 淺層 clone
++    sh = Path(tempfile.mkdtemp(prefix="gctl-sgsh-")) / "sh"
++    _sg_git(r.root.parent, "clone", "-q", "--depth", "1", "file://" + str(r.root), str(sh))
++    rep = _sg_eval(sh)
++    check("S30 有登記的淺層 clone → shallow_clone 擋、訊息給 git fetch --unshallow",
++          rep["gate_code"] == "shallow_clone" and rep["blocked"] and "git fetch --unshallow" in (rep["gate_detail"] or ""), str(rep["gate_code"]))
++    plain = Path(tempfile.mkdtemp(prefix="gctl-sgpl-")) / "p"
++    plain.mkdir()
++    _sg_git(plain, "init", "-q", "-b", "main")
++    (plain / "a.txt").write_text("a\n")
++    _sg_git(plain, "add", "-A")
++    _sg_git(plain, "commit", "-qm", "a")
++    (plain / "b.txt").write_text("b\n")
++    _sg_git(plain, "add", "-A")
++    _sg_git(plain, "commit", "-qm", "b")
++    sh2 = Path(tempfile.mkdtemp(prefix="gctl-sgsh2-")) / "sh"
++    _sg_git(plain.parent, "clone", "-q", "--depth", "1", "file://" + str(plain), str(sh2))
++    rep = _sg_eval(sh2)
++    check("S30 沒登記的淺層 clone → 照舊放行", rep["status"] == "no_registration" and not rep["blocked"], str(rep["status"]))
++    # 取不到提交而工作目錄有登記
++    rep = _sg_eval(r, sha="0" * 40)
++    check("S30 取不到要推的提交、工作目錄有登記 → commit_unavailable 擋", rep["gate_code"] == "commit_unavailable" and rep["blocked"],
++          str(rep["gate_code"]))
++    # 沒有 remote、沒有 main/master:分支叫 trunk 的新 repo
++    nr = _SgRepo()
++    _sg_git(nr.root, "branch", "-m", "main", "trunk")
++    nr.commit()
++    rep = _sg_eval(nr, pushed_branch="trunk")
++    check("S30 沒有 remote 也沒有 main/master → 空樹起點照判(不是 mainline_unknown)",
++          rep["gate_code"] is None and rep["mainline"]["sha"] is None and rep["controls"], str(rep["mainline"]) + str(rep["gate_code"]))
++    # 有 remote 但沒有追蹤 ref → mainline_unknown(S52 另測完整)
++    _sg_git(nr.root, "remote", "add", "origin", "file:///nonexistent")
++    rep = _sg_eval(nr, pushed_branch="trunk")
++    check("S30 有 remote 但認不出主線 → mainline_unknown,不退成空樹", rep["gate_code"] == "mainline_unknown" and rep["blocked"],
++          str(rep["gate_code"]))
++
++
++def t_secev_s31_inputs_weakened():
++    """S31:required_evidence、threat_categories、assets、surfaces 少了值,evidence_refs 少了一種或列數變少,而核可鏈沒有 revision 核可
++    → 照嚴的那版判並列出變弱的欄位;同一種類換指另一篇 Verification 不算變弱,例外與人審核可也不因此作廢。"""
++    import json as _j
++    def weaken(mut, label, field):
++        r = _SgRepo()
++        r.ctl["threat_categories"] = ["authz-object", "data-exposure"]
++        r.ctl["assets"] = ["A1", "A2"]
++        r.commit()
++        _sg_branch(r)
++        mut(r)
++        r.commit("削弱")
++        rep = _sg_eval(r, pushed_branch="feat")
++        w = [x for x in rep["freeze"]["weakened"] if x["id"] == "C1"]
++        check(f"S31 {label} → 列出變弱欄位 {field}", w and field in w[0]["fields"], str(rep["freeze"]))
++        return rep
++    rep = weaken(lambda r: (r.ctl.update(required_evidence=["behavior", "review"]),
++                            r.ctl.update(evidence_refs=[x for x in r.ctl["evidence_refs"] if x["kind"] != "fault_sensitivity"])),
++                 "required_evidence 少一種", "required_evidence")
++    check("S31 照嚴的判:fault_sensitivity 照樣必要 → missing 並擋", _sg_kind(rep, "fault_sensitivity").get("verdict") == "missing"
++          and rep["blocked"], str(_sg_kind(rep, "fault_sensitivity")))
++    weaken(lambda r: r.ctl.update(threat_categories=["authz-object"]), "threat_categories 少一類", "threat_categories")
++    weaken(lambda r: r.ctl.update(assets=["A1"]), "assets 少一個", "assets")
++    rep = weaken(lambda r: r.ctl.update(evidence_refs=[x for x in r.ctl["evidence_refs"] if x["kind"] != "review"]),
++                 "evidence_refs 少了 review 那種", "evidence_refs.kinds")
++    r = _SgRepo()
++    r.ctl["evidence_refs"] = r.ctl["evidence_refs"] + [{"kind": "behavior", "node": "Verification/SgEv2"}]
++    r.extra_md = {"Verification/SgEv2.md": "---\ntype: verification\nstatus: pass\nvalid_under: x\nrevalidate_when: y\n---\n# 2\n"}
++    r.commit()
++    _sg_branch(r)
++    r.ctl["evidence_refs"] = [x for x in r.ctl["evidence_refs"] if x["node"] != "Verification/SgEv2"]
++    r.commit("少一列")
++    rep = _sg_eval(r, pushed_branch="feat")
++    check("S31 某種類列數變少 → evidence_refs.count 變弱、缺的列判 missing:evidence_ref_removed",
++          any("evidence_refs.count" in x["fields"] for x in rep["freeze"]["weakened"])
++          and "missing:evidence_ref_removed" in _sg_kind(rep, "behavior").get("codes", []), str(rep["freeze"]) + str(_sg_kind(rep, "behavior")))
++    # 同一種類換指另一篇:不算變弱,例外與人審核可不作廢
++    r = _sg_exc_repo(exp="2026-10-30", approved="2026-10-15")
++    r.commit()
++    _sg_branch(r)
++    fence_old = (r.root / r.vault / "Verification/SgEv.md").read_text()
++    r.extra_md = {"Verification/SgEvNew.md": fence_old.replace("# SgEv", "# SgEvNew")}
++    r.ctl["evidence_refs"] = [dict(x, node="Verification/SgEvNew") for x in r.ctl["evidence_refs"]]
++    r.commit("換節點")
++    rep = _sg_eval(r, pushed_branch="feat")
++    check("S31 同種類換指另一篇 → 不算變弱", not [x for x in rep["freeze"]["weakened"] if x["id"] == "C1"], str(rep["freeze"]))
++    check("S31 換節點後例外照樣有效(判定輸入雜湊不含節點名)", (_sg_ctl(rep).get("exception") or {}).get("status") == "valid"
++          and not rep["blocked"], str(_sg_ctl(rep).get("exception")) + str(rep["blocking"]))
++
++
++def t_secev_s32_s60_hook_tag_path():
++    """S32/S60:推 tag 時 pre-push 對 tag 指的提交跑 code-loop check --security-only 並照擋;--security-only 回任何非 0(含 2)都擋,
++    不 fail-open;回 0 放行。(CI 那半在 t_secev_s32_ci_tag_job)"""
++    _need_src("scripts/hooks/pre-push")
++    root, base, head = _ppc_repo()
++    f = root / "scripts" / "lumos"
++    f.write_text(f.read_text(encoding="utf-8") + '\n# 新版:"--security-only"\n', encoding="utf-8")
++    try:
++        stdin = f"refs/tags/release-1 {head} refs/tags/release-1 {'0' * 40}\n"
++        for rc_fake, want_block in (("1", True), ("2", True), (None, False)):
++            env = {"FAKE_NEW": "1"}
++            if rc_fake:
++                env["FAKE_RCS"] = f"code-loop:{rc_fake}"
++            rc, lines, out = _ppc_run(root, stdin, **env)
++            called = [ln for ln in lines if "code-loop" in ln and "--security-only" in ln]
++            check(f"S32 推 tag → 叫 code-loop check --security-only --at-sha <tag 的提交>(假 lumos 回 {rc_fake or 0})",
++                  called and f"--at-sha {head}" in called[0], "\n".join(lines)[-600:])
++            if want_block:
++                check(f"S60 --security-only 回 {rc_fake} → 擋下、記一筆安全證據原因",
++                      rc == 1 and _PPC_KIND_SENTENCES["security_evidence"] in out, f"rc={rc} {out[-600:]}")
++            else:
++                check("S32 --security-only 回 0 → 不因這道擋", _PPC_KIND_SENTENCES["security_evidence"] not in out, out[-600:])
++    finally:
++        _ppc_cleanup(root)
++
++
++def t_secev_s32_ci_tag_job():
++    """S32 的 CI 那半:工具鏈 CI 的 push 觸發含 tags、有一個只在 tag 推送跑的工作呼叫 code-loop check --security-only --at-sha,
++    其他工作(prep 起頭的那一串)只在分支或 PR 跑。"""
++    _need_src(".github/workflows/ci.yml")
++    import re as _re
++    y = (Path(GRAPHCTL).resolve().parent.parent / ".github/workflows/ci.yml").read_text(encoding="utf-8")
++    check("S32 CI push 觸發含 tags", _re.search(r"(?m)^on:\n  push:\n    branches: \[main\]\n(?:    #.*\n)*    tags: \['\*'\]", y) is not None, y[:400])
++    m = _re.search(r"(?ms)^  security_tag:\n(.*?)(?=^  [a-z_]+:\n)", y)
++    blk = m.group(1) if m else ""
++    check("S32 security_tag 工作只在 tag 推送跑、呼叫 --security-only --at-sha \"$SHA\"",
++          "github.ref_type == 'tag'" in blk and 'code-loop check --security-only --at-sha "$SHA"' in blk, blk[:600])
++    check("S32 prep 只在分支或 PR 跑(shards、gates 跟著它)", "  prep:\n    if: github.event_name == 'pull_request' || github.ref_type == 'branch'" in y)
++
++
++
++def t_secev_s33_kind_format_tool():
++    """S33:kind 與 format 不在允許表同一列、工具類別產生不了該種類、或 targets 該種類要的鍵是空陣列
++    → invalid:kind_format_mismatch、tool_kind_mismatch、targets_empty。"""
++    r, rep = _sg_with_kind("secret_scan", dict(_SgRepo.behavior_item(None), kind="secret_scan"), req=["secret_scan"])
++    check("S33 secret_scan 配 junit → kind_format_mismatch", "invalid:kind_format_mismatch" in _sg_codes(rep, "secret_scan", "C2"),
++          str(_sg_codes(rep, "secret_scan", "C2")))
++    it = _sg_sarif_item(tool="k6", tool_version="2.3.0")
++    r, rep = _sg_with_kind("static_analysis", it, tools=[_SG_K6_TOOL], files=_sg_sarif_files())
++    check("S33 static_analysis 配壓測工具 → tool_kind_mismatch", "invalid:tool_kind_mismatch" in _sg_codes(rep, "static_analysis", "C2"),
++          str(_sg_codes(rep, "static_analysis", "C2")))
++    r = _SgRepo()
++    r.items[0] = r.behavior_item(targets={"tests": [], "legit_controls": ["t::legit"], "preconditions": ["t::pre"]})
++    r.commit()
++    rep = _sg_eval(r)
++    check("S33 behavior 的 tests 是空陣列 → targets_empty", "invalid:targets_empty" in _sg_codes(rep, "behavior"), str(_sg_codes(rep, "behavior")))
++
++
++def _sg_fence_raw(r, text):
++    """直接把 Verification 的證據圍欄換成一段原文(壞圍欄樣本用)。"""
++    full = r.commit
++    def commit(msg="c"):
++        sha = full(msg)
++        p = r.root / r.vault / "Verification/SgEv.md"
++        t = p.read_text()
++        a = t.index("```lumos-evidence-v1")
++        p.write_text(t[:a] + text)
++        _sg_git(r.root, "commit", "-qam", "壞圍欄")
++        return sha
++    r.commit = commit
++
++
++def t_secev_s34_fence_invalid():
++    """S34:證據圍欄是壞 JSON、有未列的鍵、缺必填或型別錯 → 引用它的護欄的所有證據 invalid:evidence_fence_invalid;
++    沒有讀法的 format → invalid:unsupported_format。"""
++    import json as _j
++    r0 = _SgRepo()
++    r0.commit()
++    good = r0.fence_items()
++    for label, text in (("壞 JSON", "```lumos-evidence-v1\n{壞\n```\n"),
++                        ("未列的鍵", "```lumos-evidence-v1\n" + _j.dumps({"schema_version": 1, "items": [dict(good[0], surprise=1)]}) + "\n```\n"),
++                        ("缺必填", "```lumos-evidence-v1\n" + _j.dumps({"schema_version": 1, "items": [{k: v for k, v in good[0].items()
++                                                                                                       if k != "observed_at"}]}) + "\n```\n"),
++                        ("型別錯", "```lumos-evidence-v1\n" + _j.dumps({"schema_version": 1, "items": [dict(good[0], bindings="x")]}) + "\n```\n"),
++                        ("巢狀過深", "```lumos-evidence-v1\n" + "[" * 5000 + "]" * 5000 + "\n```\n")):
++        r = _SgRepo()
++        _sg_fence_raw(r, text)
++        r.commit()
++        rep = _sg_eval(r)
++        ok = all("invalid:evidence_fence_invalid" in _sg_codes(rep, k) for k in ("behavior", "fault_sensitivity", "review"))
++        check(f"S34 {label} → 三個種類都 invalid:evidence_fence_invalid、不整道擋", ok and rep["gate_code"] is None,
++              str([_sg_codes(rep, k) for k in ("behavior", "review")]) + str(rep["gate_code"]))
++    r = _SgRepo()
++    r.items[0] = r.behavior_item(format="zap_json")
++    r.commit()
++    rep = _sg_eval(r)
++    check("S34 沒有讀法的 format → invalid:unsupported_format", "invalid:unsupported_format" in _sg_codes(rep, "behavior"),
++          str(_sg_codes(rep, "behavior")))
++
++

@@ -1,0 +1,1015 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/安全主張驗收閘_計劃.md b/docs/lumos-toolchain-knowledge/Projects/安全主張驗收閘_計劃.md
+index 441079d97204fb3445115ab942329b598b16c8c5..00bc828d3566f05c24394a22d54cb2c09adba9cf 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/安全主張驗收閘_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/安全主張驗收閘_計劃.md
+@@ -191,34 +191,50 @@ decisions:
+     decided: 2026-10-20
+     valid: true
+   - content: order-demo 不加 git 遠端,維持本機實驗專案;真推送的擋下與放行驗證改在工具鏈測試裡的合成消費 repo 與本機裸 repo 做,order-demo 只跑 security evidence 與 code-loop check --security-only 的本機判定
+     id: d16
+     context: 上線順序第 4 步原寫在 order-demo 旁建本機 bare repo 當 origin 做真推送
+     alternatives: "甲=建本機 bare repo 當 origin;乙=推到 GitHub 私有 repo;丙=不加遠端、真推送改在合成 repo 驗"
+     why_chosen: 使用者 2026-10-20 授權照編排者建議:order-demo 是實驗專案,加遠端會改變它的形狀;真推送的行為由合成 repo 驗即可
+     trade_offs: "order-demo 本身的 pre-push 掛鉤路徑沒有被真推送跑過,只驗到判定函式"
+     decided: 2026-10-20
+     valid: true
++  - content: 核可寫入(code-loop security-approval-add,所有型別、含第一筆 approvers_init)要求 stdin 與 stdout 都是互動終端,並要使用者照抄一段當場隨機產生的確認碼才寫入;非互動一律擋下、給可複製的指令;簽章金鑰不是硬體金鑰(sk- 開頭)只提醒不擋;刻意用 script 之類工具偽造終端寫成工具天花板
++    id: d17
++    context: 代碼審第一輪資安席實證:AI 自產金鑰後 payload、ssh-keygen 簽、security-approval-add 一路自簽,閘門把它當成使用者核可
++    alternatives: "甲=強制硬體金鑰(只收 sk- 開頭的金鑰類型);乙=維持現狀只靠金鑰;丙=互動終端加手打確認碼"
++    why_chosen: 代碼審第一輪資安席證明 AI 可一路自簽;編排者依使用者授權選最優解:互動終端加確認碼擋得住照常操作的 AI(它在非互動的殼裡跑指令),又不要求使用者先換硬體金鑰;強制硬體金鑰對沒有硬體金鑰的使用者等於用不了;維持現狀已被實證擋不住
++    trade_offs: "刻意用 script 之類工具偽造終端、自動照抄確認碼的 AI 擋不住(工具天花板);使用者每加一筆都要手打一次確認碼"
++    decided: 2026-10-20
++    valid: true
++  - content: 校準樣本的產生腳本不另開欄位強制綁:驗收閘 S9 改成要求校準輸出檔(calibration_path)在 bindings 裡;產生腳本照 d15 只在 Verification 正文記雜湊
++    id: d18
++    context: 代碼審第一輪規格對照席:條款寫「產生校準樣本的腳本要在 bindings 裡」,但證據圍欄沒有任何欄位指名那支腳本,照規格做不到
++    alternatives: "甲=證據圍欄加 calibration_script 欄位並強制綁;乙=條款改成綁校準輸出檔;丙=不綁、只靠審查"
++    why_chosen: 編排者依使用者授權選:校準輸出檔已經機械綁定(換了就 stale),樣本被換掉時輸出跟著變、抓得到;加欄位要動圍欄格式與每個掃描工具的寫法,換來的只是多抓「腳本改了但輸出沒重產」這一種
++    trade_offs: "產生腳本改了、校準輸出卻沒重產時抓不到;這一種靠 Verification 正文記的腳本雜湊與審查"
++    decided: 2026-10-20
++    valid: true
+ ---
+ # 安全主張驗收閘_計劃
+ 
+ ## 接手先讀：這份計劃管什麼、授權到哪
+ 
+ 白話：盤點指令已經能把資安護欄列成一張表；這份計劃要讓表上每一條「宣稱有驗過」的護欄，都拿得出一份真的跑過、對得上現在版本、抓得到錯的工具結果，拿不出就在推送時擋下。它像驗收單：不是問「有沒有人說驗過」，而是把原始成績單調出來核對日期、科目和分數；要放行例外，得有使用者手上那把金鑰蓋的章；每個章都登記在同一本只能往後加頁、每頁都帶前一頁指紋的簿子（核可鏈）裡，撕掉一頁、把舊頁貼回來、拿別家的頁來貼都對不上。
+ 
+ - 要求來源是母計劃 [[Projects/消費專案產品安全Brief與證據驗收_計劃]]：〈安全主張驗收閘：d5修正方向〉的單一來源與責任、判定與可宣稱範圍、G1–G5；〈驗證協議：五層證據〉V1–V5；〈與前導提問、測試品質的整合分工（d7）〉；〈證據交接與首案整合驗收〉六項整合控制。本篇逐條承接（見〈承接對照〉），不另起爐灶。
+ - 已裁定：母計劃 d9（必擋範圍、接 code-loop check、例外只有使用者核可且最長 30 天、所有接了 lumos 的專案預設擋）、母計劃 d8（P1 只核可 OD-01、OD-02 的故障證據）。
+   - 名詞：P1 是母計劃〈分階段實作〉的第一階段「付款／取消兩條主張跑通證據鏈」，在 order-demo（工具鏈拿來試行的示範訂單專案）上做；OD-01 到 OD-04 是 order-demo 所有權 Brief 的四條安全主張：OD-01 他人不能付款別人的訂單、OD-02 他人不能取消別人的訂單、OD-03 拒絕時不能透露訂單資料、OD-04 重送與並發不能讓他人操作生效。
+-  - 本篇自己的決策寫 d1–d10（d1 被 d6 取代、d6 被 d7 取代、d7 被 d10 取代）；母計劃的決策一律寫「母計劃 dN」，兩邊編號不通用。
++  - 本篇自己的決策寫 d1–d18（d1 被 d6 取代、d6 被 d7 取代、d7 被 d10 取代）；母計劃的決策一律寫「母計劃 dN」，兩邊編號不通用。
+   - 主線：專案的預設分支（通常是 main），怎麼認見〈四〉的〈主線怎麼認〉；主線 tip 是它現在的頂端。merge-base：要推的提交跟主線分岔的那個共同祖先。本篇的「起點版」指 merge-base 版，「三版」指推送版、merge-base 版、主線 tip 版。
+   - 核可鏈：`.lumos/security-approvals.jsonl`，使用者用金鑰簽的所有核可都記在這一本，見〈四〉的〈核可鏈〉。
+-- 這份只寫設計，不寫程式、不改 CI 或推送行為、不在任何專案安裝工具、不執行故障或壓測。實作前要先過本篇規格閘（預期風險高）、設計審，實作後再過代碼審；母計劃 d9 本身不代表閘已上線。
++- 2026-10-20 起進入實作(status doing):程式、CI 與推送前掛鉤的這一道照本篇做了,條款全綁測試;不在任何專案安裝工具、不執行故障或壓測。實作過代碼審之前不算上線;母計劃 d9 本身不代表閘已上線。
+ - 輸入：唯讀盤點 [[Projects/資安護欄唯讀盤點_計劃]] 的 `security list` 報告（同一支組報告的函式，不另寫讀法；從提交讀的那一步見〈四〉的〈從提交樹產快照〉）。
+ - 姊妹計劃 [[Projects/資安風險提問分階段_計劃]] 管「該想到哪些問題」；本篇管「宣告的證據合不合格、不合格就擋」。兩篇共用同一套資產、入口、證據種類、工具類別詞彙；威脅類別表的正本在 [[Systems/資安威脅類別表]]（設計內容暫在姊妹計劃），本篇只引用；兩篇 schema v2 新欄位的唯一完整清單在本篇〈一〉。
+ - 這個子系統的家是 [[Systems/安全證據閘]]；實作落地時用 `lumos append` 把 `scripts/lumos`、`scripts/hooks/pre-push`、`.github/workflows/ci.yml`、`scripts/test_quality.py` 列進它的 about_code，說明寫在那篇。這幾支檔原本的家（[[Systems/pitfalls-code-loop]] 管 code-loop check、[[Systems/bound-tests-gate]] 管 pre-push 與 ci.yml 的 code-loop 那一步、[[Systems/test-quality-cli]] 管 `scripts/test_quality.py`、[[Systems/lumos-cli-read]] 管 `security list` 與 `_secinv_*` 讀法）各只加一行連結；test-quality-cli 與 lumos-cli-read 因為自己的行為有改（JUnit 拒收改帶型別、`_secinv_blocks` 參數化），各在自己那篇記一行改了什麼。
+ 
+ ## 承接對照（母計劃要求 → 本篇落點）
+ 
+ | 母計劃要求 | 本篇落點 |
+ |---|---|
+ | 單一來源：Invariant 通用、可兼具業務與資安；獨立安全要求不必升格 | 〈一、區隔〉：沿用盤點 schema 的 source.kind 與 concerns，同一來源只列一筆 |
+ | 必驗集合凍結、不能由 AI 任選子集（G1） | 〈四〉的〈必驗集合與判定輸入以三版為底〉：必驗集合是推送版、merge-base 版、主線 tip 版 active 資安條目的聯集；判定輸入、證據項、工具清單有沒有變弱都跟另外兩版比；變弱要有核可鏈上的修訂紀錄，否則照嚴的那版判（本篇 S3、S29、S31、S52–S55） |
+@@ -322,27 +338,27 @@ decisions:
+ - 一筆 `review_record` 只算它自己宣告的那一個 `kind`：護欄同時要 review 與 deployment，就要兩項，不能一筆紀錄算兩次。
+ 
+ 護欄條目在 v2 另外新增一個選填欄位 `question_refs`：這條護欄的權限或適用性答案所在的待決問題，寫成 `<節點>#Qn`（指消費專案計劃開頭欄位的 `pending_questions`）。S15 只看這個欄位：列了的題目只要有一題沒「結」、或找不到，該護欄整體判 unsound（`question_open`）；沒列就不判這一項（盤點計劃 v1 沒有護欄連到待決問題的欄位，工具不從文字猜是哪一題）。
+ - 「結了」照既有 `_pq_settled`：狀態是已決或已驗，**而且**決策連結指到存在、沒作廢的決策（比「已決或已驗」嚴：已決但決策被翻案的題也算沒結）。規格閘、lint 用的也是這一條，三處同一個判準。
+ - 解析：題目在哪一篇、是哪一題，用 `pq_parse` 讀那篇開頭欄位的 `pending_questions` 找 `id`。`_pq_decision_target` 只收 `#dN`（`_dref_parse` 的正則是 `(.+?)#(d\d+)`，2026-10-20 實跑 `Projects/X_計劃#Q3` 回 `bad`，見 `governance/review-reports/安全主張驗收閘/r2-intake.md` 的〈r2 機械重現〉），所以把它「節點部分怎麼解」那一段抽成共用的 `_pq_node_target`，`_pq_decision_target` 改呼叫它、行為不變，`question_refs` 也呼叫它；不另寫第二套路徑解析。
+ - 讀的是閘門用提交樹快照建的那個 env，不讀工作目錄。
+ 
+ **最低種類怎麼算（`insufficient_required_evidence` 的唯一擁有者在本篇閘門）**：
+ - 每條資安護欄的 `required_evidence` 不能比它全部威脅類別最低種類的**聯集**少；最低種類與「沒有工具時改成什麼」的替代欄以 [[Systems/資安威脅類別表]] 為準。
+ - **用哪一版表**：用護欄自己記的 `threat_table_version` 那一版（鏡像常數保留每一個核可過的版本，不改舊版）；護欄沒記（v1 圍欄、null）用第一個核可版；記了工具不認得的版號判護欄層 `threat_table_version_unknown`。這樣表升版、最低種類變嚴時，已登記的護欄照它登記時那版判，不會在 `lumos update` 之後一起被擋；要改用新版，作者自己改 `threat_table_version`（改成最低種類較少的版本算變弱，見〈四〉）。這跟姊妹計劃「表改版後，舊版號的資料列照舊算數」一致。
+-- **表還沒核可時**：類別表現在是設計提案、還沒經雙家協定核可（姊妹計劃 d5 取代原本的使用者核可；[[Systems/資安威脅類別表]] 是 planned、`scripts/lumos` 還沒有鏡像常數，2026-10-20 查）。在核可、鏡像常數上線之前，閘門照護欄宣告的 `required_evidence` 判，最低種類檢查與未知類別檢查改印一行「威脅類別表未核可，最低種類未比對」，不擋；`required_evidence_empty` 與 `threat_categories_missing` 不需要表，照擋。
++- **表還沒核可時**(歷史規則,保留給之後新的表版號用):v1 已經雙家協定核可、鏡像常數上線(見 [[Systems/資安威脅類別表]] 與 d11),閘門照表擋最低種類。之後新加的版號在核可前,閘門照護欄宣告的 `required_evidence` 判,最低種類檢查與未知類別檢查改印一行「威脅類別表未核可，最低種類未比對」，不擋；`required_evidence_empty` 與 `threat_categories_missing` 不需要表，照擋。
+ - **空與未知**：`required_evidence` 為空、`threat_categories` 為空、或含表裡沒有的 id，一律是護欄層錯誤（見〈一〉彙總規則 1），例外蓋不掉；不把查不到的類別當成「沒有最低種類」，也不讓查不到變成整道 `evaluation_error`。
+ - 「有沒有工具」只看要推的提交裡的 `.lumos/security-tools.json`：某個最低種類要的工具類別在清單上一個核可工具都沒有，才照類別表的替代欄換成替代種類（例如沒有設定與容器掃描工具時 config_scan 換成 deployment;沒有秘密掃描工具時 secret_scan 換成 review 多蓋判斷 `manual_check_scope`）；替代可以是「已在集合裡的種類多蓋一項判斷」,這時被替代的種類照樣列出、標明走了替代,不當成原掃描已完成；不由作者在護欄裡自述沒工具。清單讀不出來時不做任何替代，照原最低種類判。
+ - 只有閘門讀得到工具清單，所以 `insufficient_required_evidence` 只由閘門（與同一支函式的 `security evidence`）判；`security list` 不判這一項，姊妹計劃 S5 指到本篇 S14。
+ - 這是防「為了合格而合格」的第一道：作者不能只宣告最好過的那一種。每類的最低集合都含 `review`，因為判準獨立（V1）機械做不到。
+ 
+-REVISIT:[when-status:Systems/資安威脅類別表=done][by:2027-01-31] 威脅類別表經 Claude 與 Codex 雙家協定核可(姊妹計劃 d5;節點 status 改 done 代表核可)、鏡像常數上線時,把閘門的「表未核可,最低種類未比對」改成照表擋,並補一份只宣告 behavior 的護欄被 insufficient_required_evidence 擋下的真實樣本 [closed:2026-10-20 表經雙家協定核可、鏡像常數上線,閘門已照表擋最低種類;只宣告 behavior 的真實樣本見測試 t_secev_s14_min_kinds 與 t_secev_baseline_sound]
++REVISIT:[when-status:Systems/資安威脅類別表=done][by:2027-01-31] 威脅類別表經 Claude 與 Codex 雙家協定核可(姊妹計劃 d5;節點 status 改 done 代表核可)、鏡像常數上線時,把閘門的「表未核可,最低種類未比對」改成照表擋,並補一份只宣告 behavior 的護欄被 insufficient_required_evidence 擋下的真實樣本 [closed:2026-10-20 表經雙家協定核可、鏡像常數上線,閘門已照表擋最低種類;只宣告 behavior 的樣本(合成 repo)見測試 t_secev_s14_min_kinds,完整對照見 t_secev_baseline_sound]
+ 
+ ### 證據從哪來：沿用既有收證，外部工具只讀它自己的輸出
+ 
+ 依有效決策（[[Projects/後端工程提問與證據擴充_計劃]] d6：證據走既有測試綁定與破壞測試，塞不進的再另開小計劃），不另建證據帳：
+ - **behavior，來源是 Invariant**：bound-tests-gate 的推送當場真跑不能當資安證據來源（2026-10-19 讀 `scripts/lumos` 的 `_bound_tests_for_diff` 與 `_bound_tests_check`、`.github/workflows/ci.yml` 的 code-loop gate 步驟）：它只跑這次改動波及到的合約，沒被波及的合約不跑；CI 那一步設了 `LUMOS_SKIP_BOUND_TESTS=1` 整道跳過；低風險推送帶 `--bound-tests-advisory`，紅了只提醒不擋。所以資安的 behavior 證據不分來源，一律要有自己的執行收據（工具輸出檔加證據圍欄，跟非 Invariant 的 behavior 同一條路），閘門讀收據判；bound-tests-gate 照舊管業務合約，它當次的綠燈不升格成資安證據。
+ - **fault_sensitivity**：兩條既有路擇一。
+   - ① guard kill：照表態閘的做法（`code-loop dispositions` 寫表態時在本機算背書），新增寫入型子命令 `lumos code-loop security-backing <護欄 id>`（放 code-loop 族，跟寫表態的 `code-loop dispositions` 同一族；`security` 族維持唯讀）：在本機讀 `.kill-log.jsonl`，有效列照既有 `_backing_valid_rows`（head_sha 是目標版本的祖先、中間只動簿記檔），把每個配方組的結果連同護欄 id、revision、配方 id、配方改到的檔與 head_sha 寫進**專用的受版控小檔 `docs/.security-backing.jsonl`**；閘門（本機與 CI）只從**要推的提交樹**讀這個檔，不讀工作目錄、不讀 kill-log。原因：kill-log 在 scaffold 寫的 `.gitignore` 裡、不進消費專案版控，推送前的 CI 讀不到；不寫進治理帳 `docs/.governance-log.jsonl`，因為那本現在就有 20,480,865 位元組（2026-10-20 量，本 repo），比證據的單檔上限還大，閘門每次推送都要整本讀才找得到那幾行。
+   - 背書檔進 `_BOOKKEEPING_FILES`（簿記檔名單），所以「寫完背書再提交」那一個提交不會讓背書自己變 stale；寫入用既有的追加寫法，單行上限 4096 位元組，配方改到的檔太多、一行裝不下時拒寫並請使用者拆配方，不截斷；閘門讀到截斷過的行（帶 `_truncated`）或超長的行一律判 `invalid:backing_truncated`。檔本身照證據檔的 16 MiB 單檔上限讀，超過時引用它的 guard_kill 項判 `invalid:evidence_too_large`。
+   - 背書的冪等鍵是（護欄 id、種類、head_sha）：同鍵已有一筆就不再寫；第一筆寫錯（例如工具缺陷造成的錯判）時，`code-loop security-backing <護欄 id> --supersede` 寫一筆新的，帶 `supersedes: <被更正那一行的 sha256>`，閘門跳過被更正的行。閘門讀到多筆時只取 head_sha 等於要推的提交或是它祖先、沒被更正的那幾筆裡最新的一筆。沒有任何一筆判 `missing:backing_missing`；背書的 head_sha 不是祖先、或中間動到非簿記檔，判 `stale:binding_changed`。背書沒提交就推：閘門讀提交樹看不到，判 `missing:backing_missing`，本機與 CI 同一個答案。
+   - **每組怎麼判（不沿用 `_backing_judge_groups`）**：那支函式靠 `covers` 選配方組，而且只回 strong 或 none 加一句理由，會把 `kill_unattributed`、`kill_timed_out_weak`、`kill_drifted`、`kill_abort`、`kill_error`、`kill_weak_only`、`survived` 全壓成 none（2026-10-20 讀 `scripts/lumos` 的 `_backing_judge_groups`）。本篇只沿用 `_backing_valid_rows` 的有效列判法，逐組判另寫一支：同一配方組有 survived 判 `failed:survived`；沒有非弱的 killed 時，照最後一筆的 verdict 對映上面的 invalid 代碼；判法優先序照 [[Systems/guard-kill]] 的 rc 優先序（survived→rc1、drifted/abort/error→rc2、弱證據不放行），方向一致。
+@@ -361,38 +377,38 @@ REVISIT:[when-status:Systems/資安威脅類別表=done][by:2027-01-31] 威脅
+ | `path` | 必填（`guard_kill` 除外） | 證據檔相對 repo 根的路徑；`tq_capture` 是三份 capture 的目錄 |
+ | `report_sha256` | `junit`、`sarif`、`k6_summary` 必填 | 證據檔內容的 sha256；閘門從要推的提交讀那個檔、自己算雜湊比對，不等判 `invalid:report_hash_mismatch` |
+ | `coverage_path` | `sarif` 必填 | 覆蓋證明所在的工具自家輸出（Semgrep JSON、ZAP 統計等）；工具的覆蓋證明本來就在 SARIF 裡時填同一個路徑 |
+ | `tool`、`tool_version` | 必填（`review_record` 除外） | 工具名與版本，要對得上工具清單 |
+ | `control_id`、`control_revision` | 必填 | 涵蓋的護欄 id 與 revision；一項只對一條護欄 |
+ | `bindings` | 必填 | `[{"path":…, "blob":…}]`，綁定檔與當時的 git blob |
+ | `test_sources` | `junit`、`tq_capture` 必填 | 測試原始檔路徑陣列（仿 test-quality 的 `--test-source`），每一支都要在 `bindings` 裡 |
+ | `fixture_globs` | `junit`、`tq_capture`、`k6_summary` 必填（沒有夾具寫空陣列） | 測試夾具、共用 helper、runner 設定的 glob 陣列（相對 repo 根，照 `git ls-files` 的 pathspec 語法）；閘門在要推的提交樹上展開，展開出的每支檔都要在 `bindings` 裡，缺了判 `invalid:binding_incomplete`；某個 glob 展開是空的也判 `binding_incomplete`（防寫錯路徑就等於沒綁） |
+ | `environment_ref` | 必填（`review_record` 除外） | 一支受版控的環境描述檔（Dockerfile、部署設定、鎖檔之一），必須在 `bindings` 裡 |
+ | `targets` | 必填 | 物件：`tests`、`legit_controls`、`preconditions`、`rules`、`thresholds`、`recipe_ids`（意思同前，都是字串陣列）；該種類要的鍵缺了或是空陣列都判 `invalid:targets_empty`，用不到的鍵省略 |
+-| `calibration_path` | 掃描類必填 | 校準輸出檔路徑；產生校準樣本的腳本要在 `bindings` 裡（樣本本身依 d15 不進版控） |
+-| `environment` | 必填 | 執行環境描述字串，只記不比對 |
++| `calibration_path` | 掃描類必填 | 校準輸出檔路徑；這支檔要在 `bindings` 裡(d18:產生樣本的腳本沒有欄位可指名,改成綁輸出檔;樣本本身依 d15 不進版控) |
++| `environment` | 必填 | 執行環境描述字串，只記不比對;唯一的例外是壓測與動態掃描寫 `target=<URL>` 的慣例,閘門用 `urllib.parse.urlsplit` 取主機比對工具清單的 `allowed_targets`(沒有目標位址欄位,先用這個慣例;判不出主機就擋 target_not_authorized) |
+ | `observed_at` | 必填 | 觀察時間（ISO 8601 含時區）；晚於要推的提交的 committer date（`git log -1 --format=%cI`，不是 author date，所以先跑測試再 `--amend` 補進舊提交不會誤判）判 `invalid:observed_in_future` |
+ | `vulndb_fetched_at` | dependency_scan 必填 | 漏洞庫抓取時間，只收 ISO 8601 含時區；不收版本號（算不出幾天） |
+ | `reviewer`、`author`、`reviewer_kind`、`judgments`、`expires_on` | review_record 必填 | 審查人、被審內容的作者（字串或字串陣列）、`ai` 或 `human`、這筆紀錄審了哪幾項判斷（id 見〈機械做不到的判斷〉）、到期日 |
+ 
+   - 圍欄項不再有 `signature` 欄：`reviewer_kind: human` 要在核可鏈上有一筆有效的 `human_review` 核可，它的 `content_sha256` 等於這一整項（含 `kind`、`bindings`、`test_sources`、`fixture_globs`、`author`、`judgments`、`reviewer`、`observed_at`、`expires_on`）規範化後的雜湊；沒有或對不上一律當成 `ai`（見〈四〉的〈核可鏈〉）。
+ 
+   - 圍欄本身讀不出來（壞 JSON、未列的鍵、必填缺、型別錯、巢狀過深）時，那條護欄引用到這篇的所有證據判 `invalid:evidence_fence_invalid`。
+   - **證據項被刪也凍結**（承接母計劃 G1「必驗集合不能由 AI 任選子集」）：主線 tip 版的證據圍欄裡有、推送版刪掉的項照樣算數（照主線 tip 版的內容、對要推的提交判），除非推送版有一項同 `control_id`、同 `kind`、同 `targets` 而且 `observed_at` 比它新的項取代它。所以把壞的那份刪掉不會讓種類轉綠；重收一份新的取代舊的才行。判不出取代關係（例如 `targets` 改了）時，被刪的那項照算。
+   - 理由：盤點已定「evidence_refs 指 Verification、由 Verification 指路原始報告」；指路從散文改成機器讀得懂的一塊，家還是同一個 Verification 節點，不是第二本帳。
+   - 不選：把報告路徑塞進護欄條目（盤點已否決）；frontmatter 巢狀 YAML（要擴通用解析器）；lumos 自己再存一份雜湊帳（後端計劃 d4 已作廢的方向）。
+ 
+ ### 綁版本與環境指紋
+ 
+ - 推送時以要推的那個提交為準：閘門用 git 讀那個提交裡每個綁定檔的 blob、證據檔與工具清單，跟證據記的比；任一不同、或綁定檔不在了，就是 stale。不讀工作目錄（見〈四〉的〈從提交樹產快照〉）。
+ - **報告本身也綁**：JUnit、SARIF、k6 的 `report_sha256` 讓「改了報告一行」變成 invalid；`tq_capture` 沿用 receipt 自己記的雜湊。作者把綁定的 blob 改成新版、卻不重跑測試時，報告雜湊沒變但綁定檔的內容是新的——這擋不住，因為雜湊只證明「這份報告與這些檔一起被提交」，不證明報告是用這些檔跑出來的；這一句寫進每份證據的 `limitations`，由〈機械做不到的判斷〉的「報告是不是真的跑出來的」承擔。
+-- 綁定集合至少要涵蓋：護欄所在 Systems 節點（護欄的家）about_code 列的全部程式檔、`test_sources` 列的測試原始檔、`fixture_globs` 在要推的提交樹上展開出的全部檔（夾具、共用 helper、runner 設定）、`environment_ref` 那支環境描述檔、產生校準樣本的腳本（樣本本身依 d15 不進版控）；少一支就是 `binding_incomplete`（invalid）。借「每支檔有家」：家列了哪些檔，那條護欄的證據就得綁哪些檔，作者不能挑；測試原始檔與夾具則由作者明列——測試 id 推不回檔案（Gradle、pytest、Jest 的 id 形狀各不相同），所以照 test-quality 的做法要呼叫端明示。
++- 綁定集合至少要涵蓋：護欄所在 Systems 節點（護欄的家）about_code 列的全部程式檔、`test_sources` 列的測試原始檔、`fixture_globs` 在要推的提交樹上展開出的全部檔（夾具、共用 helper、runner 設定）、`environment_ref` 那支環境描述檔、`calibration_path` 那支校準輸出檔(d18);review 與 deployment 的審查紀錄也照這一條,家的程式檔改了審查就 stale;少一支就是 `binding_incomplete`（invalid）。借「每支檔有家」：家列了哪些檔，那條護欄的證據就得綁哪些檔，作者不能挑；測試原始檔與夾具則由作者明列——測試 id 推不回檔案（Gradle、pytest、Jest 的 id 形狀各不相同），所以照 test-quality 的做法要呼叫端明示。
+ - **工具天花板（綁定）**：作者沒寫進 `test_sources` 或 `fixture_globs` 的夾具與 helper，工具自動找不到（要讀懂各語言的 import 與讀檔路徑）；改了那支檔、沿用舊報告，舊證據不會 stale。這一句寫進每份 behavior、concurrency、fault_sensitivity 證據的 `limitations`，由 review 的 `independent_oracle` 與 `report_provenance` 那兩項人工判斷承擔。
+ 
+ REVISIT:2027-01-20 回看威脅類別表的雙家協定:Claude 與 Codex 都沒看出、事後才發現的類別錯誤有幾件;有就把表的核可改回加一道人工確認(d11 的代價:兩家都是 AI,沒有人工兜底)
+ REVISIT:2027-01-31 數一次 `@repo` 秘密證據的漏網件數:護欄的家只列秘密與部署設定檔,在不在綁定裡的原始碼檔寫死金鑰時秘密證據不會 stale;有漏網就改成要求 CI 每次推送跑秘密掃描(例如 gitleaks)
+ REVISIT:2027-01-31 回看 order-demo 實跑時有沒有證據漏綁夾具或 helper 而沒被抓到;有就評估從測試原始檔的 import 與讀檔路徑自動推綁定,沒有就把這條改成下一季再看
+ - 護欄 revision 改了、威脅類別或必要種類改了，舊證據 stale。
+ - 工具版本要等於消費專案工具清單（見〈三〉）登記的釘版本；不等就是 `tool_version_mismatch`（invalid）。工具版本不另設 stale 代碼：清單換了釘版本，舊證據的版本就對不上新清單，一律走 `tool_version_mismatch`。工具輸出自己帶版本的（SARIF 的 driver.version、k6 新格式的 k6_version）以輸出為準，作者寫的只用來交叉比對。
+ - **環境**：`environment_ref` 指的那支描述檔（Dockerfile、部署設定、鎖檔）在綁定裡，內容一改舊證據就 stale；`environment` 字串只記描述、不比對。描述檔沒寫到的環境差異（作業系統、執行時才決定的資料庫版本）仍偵測不到，這一句寫進 limitations。
+ - 機械能保證的只到「這份結果與這些檔案的這個內容一起被提交」；結果是不是偽造的，雜湊證明不了（見〈機械做不到的判斷〉）。
+ 
+@@ -438,21 +454,21 @@ REVISIT:2027-01-31 order-demo 實作 k6 讀法時,用 k6 v2.3.0 實測一次自
+ 
+ **「找到 0 個問題」不等於證成**：掃描類只有「跑過、沒找到」加上「同工具、同版本、同規則對已知陽性樣本找得到」兩份一起，才算 qualified；只有前者判 `uncalibrated`，照擋。校準檔必須對 `targets.rules` 的每一條都命中，少一條判 `uncalibrated:calibration_rule_missing`。校準樣本依 d15 不提交進消費專案版控：在臨時隔離副本裡由一支受版控的產生腳本現場產生、掃完就刪，綁定的是那支腳本與校準輸出檔；跟正式掃描同一版本的工具與規則；工具或規則升版就要重做。
+ 
+ ### 讀不可信資料的上限與失敗處理
+ 
+ 證據檔是不可信資料，而且比筆記大得多（大專案的 SARIF、JUnit 動輒數 MB）。盤點的上限（單檔 2 MiB、總量 64 MiB、一萬檔）是為 Markdown 筆記定的，不沿用：
+ - 單一證據檔上限 16 MiB：比 test-quality `read()` 的 10 MiB 寬，因為閘門從 git 讀位元組直接餵只吃資料的解析，不經 `read()`；16 MiB 夠裝中型 repo 的 Semgrep、CodeQL SARIF，再大多半是掃描範圍設錯。
+ - 一次判定讀的證據總量上限 256 MiB，**按不同的 blob 算一次**：同一份專案級 JUnit 被一千條護欄引用，只算一次額度。累計順序固定：所有要讀的證據 blob 照（路徑、blob）排序後依序累加，超過的那一份與之後的每一份判 `invalid:evidence_too_large`；所以新增一條護欄不會因為排序把別條原本合格的證據推過額度線，除非它帶進一份新的、排在前面的大檔，而那會在輸出裡指名。
+ - 證據項總數上限 10000（跟盤點檔數上限同一個量級）：超過時照（護欄 id、種類、路徑）排序，第 10001 項起判 `invalid:evidence_too_large`。
+ - 超過任一上限，只把超限的那幾項判 `invalid:evidence_too_large` 並指出是哪個檔，不判整道讀取不完整，所以一份過大的 SARIF 只擋引用它的那幾條護欄。
+-- **深度**：JUnit 的 `junit()` 改成用 `xml.etree.ElementTree.iterparse` 邊解析邊數深度（start 事件加一、end 事件減一，超過 64 層立刻停），超過判 `invalid:report_too_deep`；同時把每個案例處理完就清掉元素，不先建整棵樹（r2 資源席實跑：6.7 MiB 的深巢狀 `<a>` 現在照吃、最後才報零案例，常駐 387 MiB）。改的是 [[Systems/test-quality-cli]] 的 `junit()`，拒收訊息字串一字不改，`test-quality check` 的輸出照舊。JSON 各個新呼叫端（證據圍欄、SARIF、k6、工具清單、核可鏈、背書檔）自己接 `RecursionError`，轉成那一項 invalid（`report_too_deep` 或那個檔的「讀不出來」），不落到整道 `evaluation_error`。
++- **深度**：JUnit 的 `junit()` 改成用 `xml.etree.ElementTree.XMLParser(target=…)` 自訂 target 邊解析邊數深度（start 回呼加一、end 回呼減一，超過 64 層立刻停;C 版解析器的 iterparse 不收自訂 builder,所以不用 iterparse,見 [[Systems/test-quality-cli]]），超過判 `invalid:report_too_deep`；同時把每個案例處理完就清掉元素，不先建整棵樹（r2 資源席實跑：6.7 MiB 的深巢狀 `<a>` 現在照吃、最後才報零案例，常駐 387 MiB）。改的是 [[Systems/test-quality-cli]] 的 `junit()`，拒收訊息字串一字不改，`test-quality check` 的輸出照舊。JSON 各個新呼叫端（證據圍欄、SARIF、k6、工具清單、核可鏈、背書檔）自己接 `RecursionError`，轉成那一項 invalid（`report_too_deep` 或那個檔的「讀不出來」），不落到整道 `evaluation_error`。
+ - **拒收帶型別**：`junit()` 現在對所有拒收都丟無型別的 `ValueError`、訊息是英文字串；[[Systems/test-quality-cli]] 的 WHY 否決過「各呼叫端比對例外訊息字串」。改成丟 `ValueError` 的子類別 `JUnitRejected`，帶一個原因代碼欄（既有呼叫端照舊接得到 `ValueError`），對映：`zero testcases`→`zero_cases`、`duplicate test identities`→`report_duplicate_identity`、`runner/suite errors`→`suite_error`、suite 計數矛盾→`count_mismatch`、`testcase missing name` 與 `outcome outside testcase` 與根元素不是 testsuite(s)→`report_malformed`、XML 語法錯或含 DTD→`report_unparseable`、深度超限→`report_too_deep`。SARIF、k6、證據圍欄的 JSON 讀不出來一律 `report_unparseable`。
+ - **快取只存濃縮事實**：同一次判定內，以（路徑、blob）當鍵快取的是判定要用的事實——JUnit 存案例的（身份、狀態、是否斷言失敗）、SARIF 存 driver 名與版本、每條宣告規則的命中位置與覆蓋證明的計數、k6 存版本、腳本雜湊與指標計數——不存解析樹。每份證據濃縮後最多 10 萬筆案例或命中，超過判 `invalid:evidence_too_large`。一份專案級 JUnit 被一千條護欄引用，只解析一次。
+ - **解析後記憶體預算**：同一時間只解析一份證據，解析完濃縮、丟掉解析樹再讀下一份。峰值約為單檔上限的 20 倍（r2 資源席實測 11.6 MiB 的 SARIF 經 `_secinv_json_loads` 常駐約 219 MiB），所以單檔 16 MiB 的峰值約 320 MiB，加上濃縮事實；不會因為 256 MiB 總量上限而同時留著十幾棵樹。
+ - git 讀取批次化，走既有的 `_nodehome_cat_blobs_capped`（先 `--batch-check` 問大小、超過單檔上限的不讀進記憶體、有總量上限與逾時，見〈四〉的〈從提交樹產快照〉），每批讀進來的位元組合計不超過 64 MiB，處理完這一批再讀下一批，不一次把三版的快照與全部證據都放在記憶體裡。
+ - **Verification 節點太大**：證據圍欄所在的 Verification 節點走盤點快照，單檔上限照盤點的 2 MiB；超過時不整道擋（不算讀取不完整），只讓引用那篇的護欄的證據判 `invalid:evidence_node_too_large`，訊息給拆法：一條護欄一篇、或一個種類一篇，綁定很多的家把 `bindings` 拆到多項。Systems 節點超過 2 MiB 照盤點原規則，整道讀取不完整。
+ - **時間預算**：整道判定每個 ref 60 秒（跟 pre-push 對其他閘每個 ref 判定本體 60 秒的預算同一個數），超過就停，整道擋 `evaluation_timeout`，訊息指出判到哪條護欄、跑了多久；不 fail-open。`code-loop check` 在 `evaluation_error` 與 `evaluation_timeout` 都回退出碼 1（pre-push 只把 1 當擋下，其他非 0 非 128 以上的退出碼會 fail-open 放行，2026-10-20 讀 `scripts/hooks/pre-push` 的 code-loop 那一段）；pre-push 新增的 `--security-only` 那條路徑把任何非 0 退出碼都當擋下。
+ - 判定函式裡任何沒預期到的例外（型別錯、遞迴過深、記憶體錯誤）一律轉成擋下，整道代碼 `evaluation_error`，訊息指出當時在判哪條護欄、哪個檔；不放行、不印 traceback 給推送流程。
+ - **fail-closed 是刻意偏離同族**：同族的閘（新增告警閘等十來處）遇到缺環境或內部錯誤走 `_gate_failopen`——放行、落一筆帳，不讓推送整個卡死。這一道不走 `_gate_failopen`：母計劃 d9 要「判不清就擋」，`evaluation_error`、`evaluation_timeout` 都擋；誤擋的出路是使用者簽 gate 降級（見〈四〉的〈哪些整道擋下可以降級〉）。
+ 
+ REVISIT:[when-status:Projects/安全主張驗收閘_計劃=done][by:2027-01-31] 實作完成後,對一千條護欄、每條九份證據(9000 項,在一萬項上限內)與另一份超過上限一項的合成 vault 各量一次判定時間與峰值記憶體;超過每個 ref 60 秒或峰值超過 1 GiB 就調上面的上限、批次大小或快取,並把量到的數字寫回本節
+@@ -497,21 +513,22 @@ REVISIT:2027-01-31 另議單人專案「唯一的人也是作者」時怎麼辦(
+ | 動態掃描（只對本機或已授權目標） | dynamic_scan | SARIF | ZAP |
+ | 靜態分析 | static_analysis | SARIF | Semgrep CE、CodeQL（私有 repo 需 GitHub Advanced Security 授權） |
+ | 依賴漏洞掃描 | dependency_scan | SARIF | OSV-Scanner、Trivy |
+ | 秘密掃描 | secret_scan | SARIF | gitleaks |
+ | 模糊測試 | fuzz | 各語言 fuzzer 輸出，先經既有 runner 轉成 JUnit（一個 fuzz 目標＝一個案例） | Go 原生 fuzz、Jazzer、Atheris |
+ | 設定與容器掃描 | config_scan | SARIF | Trivy config、Checkov、hadolint |
+ | 人工或獨立審查 | review、deployment | Verification 節點本身 | — |
+ 
+ - **lumos 只讀、不跑、不裝**：工具裝在消費專案、由消費專案執行並把輸出存進它自己的版控；lumos 核心維持零依賴。閘門不替任何人執行掃描或壓測。簽章驗證用系統的 `ssh-keygen`（OpenSSH 內建，macOS 與 GitHub 的 Linux runner 都有），不算新依賴；找不到 `ssh-keygen` 時所有簽章都當成驗不過。
+ - **消費專案工具清單**：`.lumos/security-tools.json`，每個工具一列：類別、名稱、釘死的版本、安裝來源與核對方式（例如 release 的 sha256 或容器映像 digest）、核可決策（消費專案某篇筆記的 dN）、執行預算（單次與整批上限）、允許的目標（壓測與動態掃描只准 `loopback` 或核可決策裡列名的目標）、覆蓋證明（掃描類必填，從上面那個固定小集合裡選一種；非掃描類不填）、壓測腳本的 `min_requests`（壓測類必填）。閘門從要推的提交讀這個檔，用 `_secinv_json_loads` 嚴格讀：壞 JSON、未列的鍵、型別錯一律當成「清單讀不出來」，裡面每個工具都算沒登記，不像 `_lint_load_config` 那樣靜默回空。沒列在清單上的工具，產出的證據判 `tool_unregistered`（invalid）；掃描類沒填覆蓋證明判 `coverage_unproven`（invalid）。
+-- **工具清單變弱要核可**：清單裡的「核可決策」只是 `decision_ref` 指到一條有效決策，AI 用 `lumos decision-add` 就寫得出來，所以清單本身也跟主線 tip 版比。某個工具的 `min_requests` 調低、某類的覆蓋證明換成另一種、允許的目標放寬（多了目標或從 `loopback` 改成外部）、某工具類別的最後一個工具被刪掉（會讓最低種類改走替代欄），都算變弱；變弱要核可鏈上有一筆 `tool_list_change` 核可（`target` 是工具名，`content_sha256` 是推送版那一列規範化後的雜湊；刪掉時是空內容的雜湊），沒有就照主線 tip 版那一列判（取兩版裡嚴的：下限取大、覆蓋證明用主線版、目標取交集、刪掉的工具類別照有工具算）。只新增工具、調高下限、收窄目標不算變弱。威脅類別表的變弱見〈四〉的〈判定輸入也凍結〉。
++- **工具清單的檔案格式**(代碼審第一輪整合席:原本只有中文說明,寫錯只看得到「工具類別不認得」):頂層 `{"schema_version": 1, "tools": [...]}`,兩個鍵都必填、不准有未列的鍵;每列必填 `name`、`category`、`version`、`install_source`、`verify`、`decision_ref`(非空字串)、`budget`(物件)、`allowed_targets`(字串陣列),選填 `coverage_proof`(字串)與 `min_requests`(以壓測腳本路徑為鍵、正整數為值的物件)。`category` 的值是程式內部 id:`test_runner`(behavior、concurrency)、`fault_injection`(fault_sensitivity)、`load_test`(concurrency)、`fuzz`(fuzz)、`dynamic_scan`、`static_analysis`、`dependency_scan`、`secret_scan`、`config_scan`(各自的掃描種類);`coverage_proof` 收 `sarif_invocation`、`semgrep_paths_scanned`、`osv_packages`、`trivy_misconf_count`、`checkov_resource_count`、`zap_stats`。欄位型別錯時講出 `tools[第幾列].欄位`,類別寫錯另列收哪幾個 id。
++- **工具清單變弱要核可**：清單裡的「核可決策」只是 `decision_ref` 指到一條有效決策，AI 用 `lumos decision-add` 就寫得出來，所以清單本身也跟主線 tip 版比。某個工具的 `min_requests` 調低、某類的覆蓋證明換成另一種、允許的目標放寬（多了目標或從 `loopback` 改成外部）、主線有、推送版沒有的工具名(刪掉或改名;改名等於刪舊加新)，都算變弱(代碼審第一輪外家席:原本只在刪掉某類別最後一個工具時才算,改名就繞過請求數下限)；變弱要核可鏈上有一筆 `tool_list_change` 核可（`target` 是工具名，`content_sha256` 是推送版那一列規範化後的雜湊；刪掉時是空內容的雜湊），沒有就照主線 tip 版那一列判（取兩版裡嚴的：下限取大、覆蓋證明用主線版、目標取交集、刪掉的工具類別照有工具算）;主線的工具被刪或改名而沒有核可時,推送版同類別新加的工具也不算登記(`tool_unregistered`),直到那一筆刪除有核可。只新增工具、調高下限、收窄目標不算變弱。威脅類別表的變弱見〈四〉的〈判定輸入也凍結〉。
+ - **壓測與動態掃描的目標限制**：證據要記目標位址；不是回環位址、也不在核可清單上，判 `target_not_authorized`（invalid）。這只檢查作者記的值；真正防誤打靠消費專案腳本自己檢查（order-demo 的 k6 腳本已經在非本機時中止）。
+ - **之後接新工具**：能出 SARIF、JUnit 的工具不需要改 lumos，只要登記清單與校準樣本；只有吐自家格式又無法轉 SARIF 的工具，才在 lumos 加一個讀法，而且要先有那個工具的正反樣本。
+ - 理由：一個格式一個讀法，比一個工具一個讀法少；SARIF 已是本 repo 新增告警閘在用的格式。
+ - 不選：每個工具寫專屬解析（工具多一個就多一套）；lumos 代為安裝或執行（違反零依賴、成本與授權都不在 lumos）。
+ 
+ **k6 第一個接**：k6 跑在消費專案（order-demo 既有的搶購壓測腳本可參考，腳本的家在 order-demo 自己的建置與啟動節點）；釘版本照清單（容器映像 digest 或 release 二進位的 sha256）；腳本一律開新的機器可讀摘要並寫到固定路徑。安全門檻對應主張的方式以 OD-04「重送與並發不能讓他人操作生效」為例：腳本用 B 身分對 A 的有效訂單重送與並發，自訂計數 `foreign_effects`（伺服器回成功的次數，開頭先 `add(0)`）門檻是等於 0、`foreign_rejected` 大於 0（攻擊流量真的送出去了），另一段 A 自己的合法流量 `legit_ok` 大於 0；整體請求數 `http_reqs` 不少於清單登記的 `min_requests`；k6 看不到資料庫，所以「訂單與庫存保持不變」另由同一次執行後的整合測試讀資料庫（behavior 證據），兩份一起才算這條的 concurrency 主張驗完。
+ 
+ **要使用者核可的**（不由 AI 決定）：每個專案裝哪些工具與版本、執行預算、壓測與動態掃描的目標，依 d4 逐專案、逐工具在要用時問使用者，AI 不自行安裝；OD-04 的 k6 實跑已依 d3 核可（order-demo、k6 v2.3.0、條件照母計劃 d8）；校準樣本依 d15 不進消費專案版控，現場產生、用完刪掉。
+ 
+ ## 四、閘門：code-loop check 的「安全證據」判定
+@@ -527,44 +544,45 @@ REVISIT:2027-01-31 另議單人專案「唯一的人也是作者」時怎麼辦(
+ - 本機與 CI 判定相同：核可都在核可鏈、驗的是內容，兩邊讀同一份推送版的鏈、對同一個主線 tip 驗；日期一律取 UTC。前提是同一個主線 tip 與同一個 UTC 日期（見〈一〉的〈判定跟日期有關〉）；本機的主線 tip 是本機最後一次 fetch 的位置，CI 的是推送當下的遠端，兩者不同時以 CI 為準。CI 那一步目前沒帶 `--keep-going`，訊息會只印第一道擋下，實作時一起評估。
+ 
+ **要跟著改的地方**（避免漏接）：
+ - `scripts/lumos`：合併各道明細的鍵清單（`_codeloop_kg_finish` 現在只列 bound_tests、dispositions、lint_new）、每次判定開頭清掉的暫存屬性（加 `last_security`）、放行時的小結（含「N 天內到期」的提醒，見〈核可鏈〉）。
+ - `scripts/lumos`：新開 `_cl_say_sec_block`，跟 `_cl_say_disp_block`、`_cl_say_lint_block` 同族，印三段式——發生什麼（哪條護欄哪個種類、原因代碼）、為什麼在意（這條安全主張現在沒有合格證據）、怎麼修（指令獨立一行）；`_cl_say_block` 遇到 `security_evidence` 分派過去，不落進印「這次高風險改動還不能推」的預設分支。
+ - `scripts/lumos`：唯讀子命令 `security evidence`（含 `--commit`）、`security approvals payload`（印出要簽的那一筆規範化 JSON，`approved_on` 自動填當天 UTC 日期）、`security approvals verify`（從頭驗整條鏈、印出每一筆有效與否與現在有效的金鑰指紋）；寫入型子命令放 code-loop 族：`code-loop security-backing`、`code-loop security-approval-add`（驗過這一筆接得上鏈才追加）；`code-loop check --security-only`。`security list` 不加參數（維持盤點 S7）。
+ - `scripts/lumos`：`security` 的 parser help（現在寫「資安護欄唯讀盤點」）與 `_SECINV_NOTICE` 改成「唯讀：盤點與證據判定；寫入在 code-loop 族」，兩個唯讀子命令各自的說明照實寫（`security list` 不執行程序；`security evidence` 與 `security approvals` 會跑 git 與 `ssh-keygen`、只在系統暫存目錄寫暫時檔）。
+ - `scripts/lumos`：`_KNOWN_GATES` 加新閘名 `security-evidence`（擋下、降級放行、例外首次使用三種事件都記在這個閘名下）。`_gate_event` 對不在名單上的閘名不寫、只印一行警告（2026-10-20 實跑：名單裡沒有任何含 `sec` 的閘名，見 r2-intake〈r2 機械重現〉），漏登記就整批記帳被吞掉；`t_gov_stats_gate_drift` 那類漂移釘子跟著同步。
+ - `scripts/lumos`：`docs/.security-backing.jsonl` 加進 `_BOOKKEEPING_FILES`；新函式 `_secinv_snapshot_tree`（見下〈從提交樹產快照〉）；`_secinv_blocks` 參數化；`_pq_node_target` 從 `_pq_decision_target` 抽出（見〈二〉的 `question_refs`）。
+ - `scripts/lumos`：`doctor` 對有資安登記痕跡的消費專案，CI 檔裡找不到 `code-loop check --security-only` 與 tag 觸發時，印一段可貼的 CI 步驟範本（照 doctor 對 note-shape、drift check、note-audit 缺步驟時印範本的先例），只提醒不擋。
+-- `scripts/test_quality.py`：`load_receipt` 與核對本體抽成只吃資料的純函式；`junit()` 改用 iterparse 數深度、拒收改丟帶原因代碼的 `JUnitRejected`（見〈二〉的〈讀不可信資料〉）；`scripts/lumos` 的 `_TEST_QUALITY_BUNDLE_DIGESTS` 同步；照 [[Verification/測試品質第四輪修補驗證]] 的 `revalidate_when` 重驗那篇。
++- `scripts/test_quality.py`：`load_receipt` 與核對本體抽成只吃資料的純函式；`junit()` 改用 XMLParser 自訂 target 數深度、拒收(含 DTD,唯一拒收點是 `NoDtdTreeBuilder`)改丟帶原因代碼的 `JUnitRejected`（見〈二〉的〈讀不可信資料〉）；`scripts/lumos` 的 `_TEST_QUALITY_BUNDLE_DIGESTS` 同步；照 [[Verification/測試品質第四輪修補驗證]] 的 `revalidate_when` 重驗那篇。
+ - `scripts/hooks/pre-push`：擋下原因對照表 `pp_cl_reason`（有測試雙向比對）、放行時只顯示特定字樣那一行的過濾條件、非分支 ref 那條路徑呼叫 `--security-only`、擋下後那句「逃生路依上面 check 講的原因走…」補上資安這一道的出路（使用者簽例外或 gate 降級，不准跳過檢查）。
+ - `.github/workflows/ci.yml`：加 `push: tags` 觸發，tag 推送只跑安全判定那一個工作（其他工作加 `if: github.ref_type == 'branch'`，因為現有 code-loop gate 步驟的 `BEFORE` 在新 tag 是全零、語意沒驗過）；紅燈訊息那句「合約測試紅 / 效能檢核題沒表態 / 高風險代碼無審查留痕」補上「安全證據不合格」。
+ - `scripts/hooks/pre-push` 與 `scripts/test_lumos.py` 都在 `ANCHOR_FILES` 清單上，改了要先 `lumos anchor approve` 簽名，否則推送前的閘把那次跑的測試當不算數。
+ - `skills/lumos-project-notes/commands/08-自動跑的.md`：pre-push 與 CI 兩列現在寫「三個判定各自擋」（連新增告警閘都沒算進去），改成照實列出四道再加這一道。
+ - `scripts/test_lumos.py` 的 `_PPC_KIND_SENTENCES` 加第五句；`t_prepush_cl_reason_sentences_match_plan` 會讀 [[Projects/推送前一次列出全部擋下原因_計劃]] 裡標著「對照表四句的正本在這裡」的那一行、抽出恰好四句比對——那一行要先改成五句的正本（標記字樣跟著改成「五句」），測試裡的「四句」判準與字樣同步改，否則這支必紅。照那篇的規矩：先改計劃那一行，再改掛鉤與常數。
+ - git 呼叫一律走既有包裝（`_lens_git`、`_nodehome_git`；批次讀 blob 走 `_nodehome_cat_blobs_capped`），並帶 `-c log.showSignature=false`（使用者設了 `log.showSignature` 會把簽章訊息夾進輸出，`scripts/lumos` 既有註解記過這個坑）。
+ - pitfalls 失敗那條分支不用另外處理：安全判定已在它之前跑完。
+ 
+ **輸入**：三版（推送版、merge-base 版、主線 tip 版）的盤點報告與證據圍欄；推送版的證據檔、工具清單、`.lumos/config.json`、`docs/.security-backing.jsonl`；推送版與主線 tip 版的核可鏈 `.lumos/security-approvals.jsonl`；主線 tip 版的工具清單（比變弱用）。全部從提交樹讀、唯讀，不讀工作目錄，不執行任何工具（`ssh-keygen` 只驗章）。
+ 
+ **從提交樹產快照**：盤點的 `_secinv_snapshot` 只會從工作目錄逐層開檔，`_secinv_build` 吃的是快照字典，接縫就在這裡。新增一支 `_secinv_snapshot_tree(repo_root, sha, vault_rel)`，**建在既有的 `_nodehome_list`（提交樹列檔加內容編號、連結檔與子模組不算一般檔）與 `_nodehome_cat_blobs_capped`（先 `--batch-check` 問大小、超過單檔上限的不讀進記憶體、有總量上限與逾時）之上**，不另寫第三份 `ls-tree`／`cat-file --batch` 解析（`scripts/lumos` 既有註解記過：另寫一份批次讀取被架構席點成第二套）。產出跟 `_secinv_snapshot` 同形狀的快照，沿用同一組容量常數與錯誤代碼：
+ - 轉接：`_nodehome_list` 回報為連結檔的 → `symlink_rejected`；子模組與其他特殊模式 → `special_file`；`_nodehome_cat_blobs_capped` 回報超過單檔上限 → `file_too_large`，總量超限 → `total_size_exceeded`，檔數超過 → `too_many_files`；路徑含換行（`_nodehome_cat_blobs` 遇到這種路徑整批回 None）→ 那一篇記 `unsupported_safe_read`、其他照讀，整批回 None 時整份快照判 `enumeration_failed`；不是 UTF-8 → `not_utf8`。
+ - 快照進 `_secinv_env` 照舊先查 NFC 碰撞（兩篇路徑 NFC 後相同就兩篇都不採用，`normalized_path_collision`），這是 [[Systems/lumos-cli-read]] 記過「提交樹、考試樹等其他 Env.from_texts 入口」的同族坑，S56 釘住提交樹這條路徑。
+ - **vault 路徑各版各自解析**：`vault_rel` 不從工作目錄找，對每一版從那一版的提交樹解析（照 `find_vault` 與 `_secinv_select_vault` 的規則：同一層找到不只一個圖譜就報錯、不猜）。圖譜在 merge-base 版或主線 tip 版存在、推送版消失或搬家時：推送版那一邊照搬過去的新路徑讀；三版的條目以護欄 id 對齊，不以路徑對齊，所以搬目錄不會讓凍結比對落空；推送版整個圖譜不見而另兩版有 active 資安條目，那些條目照必驗集合判（判 `missing:control_removed_unapproved`）。
+ - 要推的版、merge-base 版、主線 tip 版都用它，不讀工作目錄，所以 checkout 停在 main 而推的是別的分支時也判對版本。`security list` 不走這一支（它維持只讀工作目錄、不執行程序）；S4 比的是「`security evidence --commit <sha> --json` 的盤點區塊」與「在那個提交的乾淨 checkout 上跑 `security list --json`」。不沿用 `_drift_tree_env`（它沒有盤點那套容量上限）。
+ - 廉價預檢：先用一次 `git grep -l -F lumos-security-v1 <sha> -- <vault>` 找出提到這個字樣的檔；一篇都沒有就直接判「沒有登記痕跡」，不建完整快照。有命中才建快照、照盤點的嚴格讀法判有沒有真的圍欄（散文裡提到這個字樣不算痕跡）。
+ 
+ **主線怎麼認**（不另寫第四套，用既有那一組）：
+ - 主線候選照 `_push_mainlines`（遠端 HEAD、main/master 的 upstream、遠端 main/master，跳過「就是這次被推的那條」），再加本機 main/master（手動 `code-loop check` 的預設起點 `_codeloop_default_base` 也是這樣加）；分岔點照 `_push_range_start` 的算法，`git merge-base --all <頂端> <全部候選>`。理由：那一組已經處理過「remote 未必叫 origin」、「CI 的 checkout 不建 origin/HEAD」、git-flow 與 fork 兩頭顧不到（固定順序取第一個會錯）、git 查詢逾時被當成「找不到」而縮成少查——這些坑本篇重寫一份會再踩一次。
+ - **不沿用 `_push_range_start` 的退路**：它找不到主線時退到「遠端舊值、全零從空樹、或只查最後一個提交」（2026-10-20 實跑：沒有 remote、沒有 main 的 repo，`_push_range_start` 回空樹起點，見 r2-intake〈r2 機械重現〉），那對漂移檢查是少查，對凍結比對是整個失效。所以本篇只借候選與分岔點的算法，找不到主線時另判：
+-  - 有登記痕跡而認不出主線（有設 remote 但本機沒有任何追蹤 ref、git 查詢失敗或逾時、候選全部被跳過）→ 擋 `mainline_unknown`，訊息給兩條路：先 `git fetch`，或在 `.lumos/config.json` 設 `security_evidence.mainline`。
++  - 有登記痕跡而認不出主線（有設 remote 但本機沒有任何追蹤 ref、git 查詢失敗或逾時、候選全部被跳過）→ 擋 `mainline_unknown`，訊息給兩條路：先 `git fetch`，或在**主線上**的 `.lumos/config.json` 設 `security_evidence.mainline`。
+   - **只有確定是新 repo 才當空樹**：沒有設任何 remote、也沒有本機 main/master（`_mainline_ref` 在這種 repo 回 None，2026-10-20 實跑），起點＝空樹、主線 tip＝無，所有護欄當成新增照判。有本機 main 而沒有 remote（例如 order-demo 現況：`git remote -v` 空、本機有 main，2026-10-20 查），主線就是本機 main。
+-  - `security_evidence.mainline`（ref 名，例如 `refs/remotes/upstream/trunk`）有設時只用它，不再找候選；它指到的 ref 不存在照擋 `mainline_unknown`。
++  - `security_evidence.mainline`（只收 `refs/remotes/` 開頭的遠端追蹤 ref，例如 `refs/remotes/upstream/trunk`）**只從主線 tip 版的設定讀**:先用全部候選挑出主線 tip,那一版的設定有寫就改用它;它指到的 ref 不存在照擋 `mainline_unknown`。被推的提交自己寫的不採用、只印一行(代碼審第一輪資安席:被推的提交指定「拿誰比」,改一個檔就讓凍結比對與核可鏈前綴都變成自己對自己)。
++  - 主線 tip 怎麼挑:全部候選一起算 `git merge-base --all <頂端> <全部候選>`,取歷史最長的分岔點;主線 tip 是含那個分岔點的候選裡歷史最長的一個(不靠候選順序,規格對照席)。
+ - **推的就是主線本身**（推 main、CI 的 main push 事件）：主線 tip＝推送前的位置——pre-push 用遠端舊值，CI 用事件的 `before`。舊值全零（首推主線）時照「新 repo」那條判；舊值在本機找不到（force push 把主線退回舊提交）時擋 `mainline_unknown`，訊息寫明這是 force push 退版，不退成空樹或只查最後一個提交；依 d9 CI 本來就是事後，主線已經退回去了，紅燈只提醒有人沒照規矩。
+ - **工具天花板（主線）**：主線 tip 從本機 ref 讀；AI 能改本機 ref（`git update-ref`）就能造一個假主線。CI 用 checkout 時從遠端抓來的 ref，所以 CI 那一側是最後的核對（依 d9 是事後）；這一句寫進 `security evidence` 的 `limitations`。
+ 
+ **起點一律是 merge-base**：
+ - 起點＝要推的提交跟主線 tip 的 merge-base（照上面〈主線怎麼認〉）。不用「這個 ref 的遠端舊值」當起點——那是這個分支上次推送的位置，中途若有一次繞過把縮小推上去，之後每次比的都是已經縮小的版本。
+ - 多個提交的推送一律只對 merge-base 與主線 tip 判，不逐提交、不看要推的提交的母提交。
+ - 主線存在但跟要推的提交沒有共同祖先：擋 `freeze_base_unavailable`。
+ - 淺層 clone（`git rev-parse --is-shallow-repository` 是 true）：擋 `shallow_clone`，訊息給一行 `git fetch --unshallow`；CI 的 checkout 已是完整歷史（`fetch-depth: 0`）。這兩條都只在有登記痕跡時才判（見上〈先判有沒有登記痕跡〉）。
+ 
+ **必驗集合與判定輸入以三版為底**（承接母計劃 G1 的凍結要求）：
+@@ -580,30 +598,30 @@ REVISIT:2027-01-31 另議單人專案「唯一的人也是作者」時怎麼辦(
+ - 必驗集合裡有任何條目的整體判定是 unsound（規則見〈一〉的彙總規則）。
+ - 盤點讀取不完整或登記錯誤（`errors`，不含姊妹計劃的格子層錯誤 `cell_errors`；閘門不讀 `cell_errors`），而三版任一有資安登記痕跡：判不清就擋，不當零條目放行。Verification 節點超過單檔上限不算這一條（見〈二〉的〈Verification 節點太大〉）。
+ - **登記痕跡只認 `lumos-security-v1` 圍欄**（盤點讀到一塊合格的或是 `malformed_block`）；只有 `flag/security-relevant` 標籤、零條目的專案不算痕跡，只在 `security evidence` 與 `--json` 列提醒。2026-10-19 在工具鏈自己的工作樹實跑 `security list`：`read_complete: true`、`registration_complete: false`、零條目、`errors` 空，有兩篇只帶標籤、沒有圍欄——照舊判法會被當成「有痕跡又登記不完整」擋下工具鏈自己的每次推送，照現在的判法不擋（設計審 r1 實跑,見 `governance/review-reports/安全主張驗收閘/r1-intake.md` 的〈r1 機械重現〉）。
+ - 「全部條目被刪」不另設代碼：三版的聯集已經把被刪的條目留在必驗集合，每條各自判 `missing:control_removed_unapproved`。只有 candidate、從來沒有 active 條目的專案，三版的必驗集合都是空的，照下面〈不受影響〉放行並列提醒。
+ - 主線認不出（`mainline_unknown`）、凍結比對的起點算不出來、淺層 clone、取不到要推的提交、test-quality 配套缺檔（見上）。
+ - 核可鏈的主線 tip 版不是推送版的開頭一段（`approvals_diverged`，見〈核可鏈〉）。
+ - 判定函式本身出錯（`evaluation_error`）或超過時間預算（`evaluation_timeout`）。
+ - 例外過期、超過 30 天、缺欄位、核可鏈上沒有對應的有效核可或核准的內容跟現在不同——這些情況例外不算數，底下的種類照原判定。
+ 
+ **擋或只提醒的設定**：`.lumos/config.json` 的 `security_evidence.gate`，值域只有 `block`（預設）與 `warn`。形狀照 `lint_new.gate`（那一族的值域是 `block|warn|off`，`node_home.gate` 那一族是 `on|warn|off`，兩族不同；本篇不收 `off`）；讀法沿用 `_lint_new_config(..., from_snapshot=True)` 那一型，從要推的提交讀設定位元組，不讀工作目錄；看不懂的值、型別錯、`off` 一律當 `block`，並印一句「security_evidence.gate 的值看不懂，照 block 判」（同族慣例是看不懂照預設並講一句）。
+-- 改成 `warn` 時判定照算、照印、照記帳，只是不擋；但要核可鏈上有一筆有效的 `gate_setting` 核可（`target` 是 `security_evidence.gate`，內容是 `{"value":"warn"}`，最長 30 天），沒有、過期或驗不過一律當成 `block`，並印一行說明為什麼。所以 AI 改一行設定關不掉這道閘，把歷史上簽過的 warn 貼回來也會因為到期或對不上鏈而無效；使用者要給過渡期（Q4）或誤擋時要退，簽一筆就能降成只提醒，最長 30 天，到期自動恢復擋。
++- 改成 `warn` 時判定照算、照印、照記帳，只是不擋；但要核可鏈上有一筆有效的 `gate_setting` 核可（`target` 是 `security_evidence.gate`，內容是 `{"value":"warn"}`，最長 30 天），沒有、過期或驗不過一律當成 `block`，並印一行說明為什麼。所以 AI 改一行設定關不掉這道閘，把歷史上簽過的 warn 貼回來也會因為到期或對不上鏈而無效；依 d13 不給升級過渡期;誤擋時要退，簽一筆就能降成只提醒，最長 30 天，到期自動恢復擋。
+ 
+ **哪些整道擋下可以降級**（核可鏈讀的是推送版與主線 tip 版，不依賴 merge-base 版，所以多數整道擋下時 gate 設定照樣驗得出來）：
+ 
+ | 整道代碼 | warn 有沒有效 | 原因與出路 |
+ |---|---|---|
+ | `read_incomplete`、`registration_error`、`toolchain_incomplete`、`freeze_base_unavailable` | 有效 | 鏈從推送版讀、對主線 tip 驗前綴，不需要 merge-base |
+ | `shallow_clone` | 主線 tip 的物件讀得到時有效 | 根本解是 `git fetch --unshallow` |
+ | `evaluation_error`、`evaluation_timeout` | gate 設定先在自己受保護的那一步解出來；錯誤發生在那一步之後時有效，發生在讀設定或驗鏈本身時無效 | 無效時照擋，訊息指出錯在哪一步 |
+-| `mainline_unknown`、`approvals_diverged` | 無效 | 沒有可信的主線鏈可對，鏈本身不可信；出路是 `git fetch`、設 `security_evidence.mainline`、或把分支接上主線 |
++| `mainline_unknown`、`approvals_diverged` | 無效 | 沒有可信的主線鏈可對，鏈本身不可信；出路是 `git fetch`、在主線上設 `security_evidence.mainline`、或把分支接上主線 |
+ | `commit_unavailable` | 無效 | 什麼都讀不到；出路是修好 git 狀態 |
+ | 新 repo（空樹起點） | 有效，鏈第一筆照〈第一次釘金鑰〉的規則收 | — |
+ 
+ **不受影響**：
+ - 沒有任何資安登記痕跡的專案，這一步回 None、不寫治理帳，輸出與退出碼跟現在逐字相同；只在 `--json` 輸出多一個鍵 `security_evidence: {"status": "no_registration"}`，文字輸出不加行。這樣沒登記的專案每次推送不會弄髒工作樹、也不讓治理帳增長；淺層 clone 的 CI 也照舊放行（見上〈先判有沒有登記痕跡〉）。
+ - 純業務合約（concerns 只有 business）不進必驗集合。
+ - candidate 不擋、只列提醒（d12）；candidate 放超過 30 天（以那條護欄的 revision 日期或寫入那一版的提交日期算）在 `security evidence` 標出。
+ - review 種類照 d2、d8 判，沒有合格的審查紀錄或過期就擋（見〈機械做不到的判斷〉），不再有「只宣告不擋」的狀態。
+ 
+ **訊息形狀**（由 `_cl_say_sec_block` 印，三段式）：每個擋下的「護欄 × 種類」：
+@@ -619,21 +637,21 @@ REVISIT:2027-01-31 另議單人專案「唯一的人也是作者」時怎麼辦(
+ | 判定 | 代碼 |
+ |---|---|
+ | invalid（沒驗到） | `zero_cases`、`target_missing`、`target_skipped`、`targets_empty`、`suite_error`、`count_mismatch`、`report_unparseable`、`report_too_deep`、`report_malformed`、`report_duplicate_identity`、`missing_legit_control`、`missing_precondition`、`nontarget_failure`、`nonassertion_failure`、`receipt_hash_mismatch`、`receipt_not_executed`、`report_hash_mismatch`、`binding_incomplete`、`kind_format_mismatch`、`tool_kind_mismatch`、`evidence_kind_mismatch`、`tool_unregistered`、`tool_version_mismatch`、`target_not_authorized`、`unsupported_format`、`coverage_unproven`、`sarif_no_run`、`sarif_results_null`、`sarif_invocation_failed`、`sarif_error_notification`、`sarif_version_mismatch`、`sarif_driver_missing`、`k6_script_mismatch`、`k6_requests_below_floor`、`k6_metric_missing`、`k6_threshold_form`、`k6_aborted`、`kill_unattributed`、`kill_timed_out_weak`、`kill_drifted`、`kill_abort`、`kill_error`、`kill_weak_only`、`kill_recipe_unbound`、`backing_truncated`、`evidence_fence_invalid`、`evidence_node_too_large`、`evidence_too_large`、`observed_in_future`、`vulndb_after_observed`、`review_not_independent`、`review_expiry_too_long` |
+ | failed（有缺陷） | `assertion_failed`、`finding_unresolved`、`survived`、`threshold_exceeded` |
+ | stale（版本對不上） | `binding_changed`、`binding_missing`、`revision_changed`、`vulndb_stale`、`review_expired`、`verification_node_stale` |
+ | missing（沒有證據） | `no_evidence`、`review_record_missing`、`human_review_missing`、`control_removed_unapproved`、`evidence_ref_removed`、`backing_missing` |
+ | uncalibrated（沒校準） | `calibration_missing`、`calibration_version_mismatch`、`calibration_rule_missing` |
+ | 護欄層（整體 unsound，例外蓋不掉） | `insufficient_required_evidence`、`required_evidence_empty`、`threat_categories_missing`、`threat_category_unknown`、`threat_table_version_unknown`、`source_decision_invalid`、`question_open` |
+ | 整道判不清（不屬於單一護欄） | `read_incomplete`、`registration_error`、`mainline_unknown`、`freeze_base_unavailable`、`shallow_clone`、`commit_unavailable`、`approvals_diverged`、`toolchain_incomplete`、`evaluation_error`、`evaluation_timeout` |
+ | 例外無效（例外不算數，底下種類照原判定；寫成 `exception:<代碼>`） | `exception_unapproved`、`exception_expired`、`exception_too_long`、`exception_fields_missing`、`exception_content_changed` |
+-| 核可鏈上某一筆不算數（寫成 `approval:<代碼>`，只在 `security evidence` 與 `security approvals verify` 列出；那一筆核可的東西照「沒有核可」判） | `approval_chain_broken`、`approval_project_mismatch`、`approval_signer_unknown`、`approval_signer_revoked`、`approval_signature_invalid`、`approval_in_future`、`approval_expired`、`approval_too_long`、`approval_fields_missing` |
++| 核可鏈上某一筆不算數（寫成 `approval:<代碼>`，只在 `security evidence` 與 `security approvals verify` 列出；那一筆核可的東西照「沒有核可」判） | `approval_chain_broken`、`approval_project_mismatch`、`approval_signer_unknown`、`approval_signer_revoked`、`approval_signature_invalid`、`approval_in_future`、`approval_expired`、`approval_too_long`、`approval_fields_missing`、`approval_backdated`(核可日早於前面任何一筆有效的筆,擋拿到期金鑰回填舊日期) |
+ 
+ ### 核可物件：例外與 considerations 共用一套
+ 
+ 母計劃 d9 的「例外只有使用者能核可、最長 30 天」在兩篇計劃有兩個入口：本篇護欄的 `exception`，與姊妹計劃格子的 `considerations`（`risk_accepted` 與 `not_applicable`）。兩者用同一個核可物件形狀、同一支檢查函式（從既有 `_secinv_check_exception` 長出來），不各寫一套；核可本身（誰核可、哪天、到哪天）一律記在核可鏈，物件裡不放簽章：
+ 
+ | 鍵 | 例外 | considerations 的 risk_accepted | considerations 的 not_applicable |
+ |---|---|---|---|
+ | `decision_ref`、`reason`（v1 既有） | 必填 | 必填 | 必填 |
+ | `compensating`（補償措施） | 必填 | 必填 | 不填 |
+ | `expires_on`（v1 既有；要等於核可鏈那一筆的 `expires_on`） | 必填 | 必填 | 不填（物件不寫；核可鏈那一筆照樣有到期日，見下） |
+@@ -662,58 +680,62 @@ REVISIT:2027-01-31 另議單人專案「唯一的人也是作者」時怎麼辦(
+   - `prev_sha256`：前一筆（含它的 `signature`）規範化 JSON 的 sha256；第一筆是空字串。
+   - `project_id`：這個 repo 的根提交 sha（主線 tip 能走到的根提交，不只一個時取排序後第一個；新 repo 還沒有主線時取要推的提交的根提交）。
+   - `type`：`approvers_init`、`approvers_add`、`approvers_revoke`、`exception`、`revision`、`gate_setting`、`human_review`、`tool_list_change`、`threat_table_change`、`consideration`、`suppression` 之一。
+   - `target`：依 type，見下表。
+   - `content_sha256`：被核可物件規範化 JSON 的 sha256，蓋什麼見下表。
+   - `keys`：只有 `approvers_init` 與 `approvers_add` 有，allowed_signers 格式的列陣列（簽章人、金鑰類型、公鑰）；`content_sha256` 就是它的雜湊。
+   - `approved_on`：核可日，UTC 日期，由 `lumos security approvals payload` 自動填。
+   - `expires_on`：到期日，每筆都有，上限見下表。
+   - `signer`：簽章人（allowed_signers 裡的 principal），驗章時當 `ssh-keygen -Y verify -I` 的參數，不用枚舉清單或 `find-principals`。
+   - `signature`：`ssh-keygen -Y sign -n lumos-security` 對「去掉 `signature` 欄之後的規範化 JSON」的簽章（ssh 簽章文字整段放進 JSON 字串）。
++  - `outcome`:只有 `consideration` 有,`risk_accepted` 或 `not_applicable`(到期上限靠它分 30 天或 180 天;這一欄也在簽章範圍內)。
+ - **規範化 JSON**：`json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)` 的 UTF-8 位元組；空白、換行、鍵的順序都不進雜湊。
+ 
+ | type | target | content_sha256 蓋什麼 | 到期上限 |
+ |---|---|---|---|
+ | `approvers_init` | `approvers` | `keys` | 730 天 |
+ | `approvers_add` | `approvers` | `keys` | 730 天 |
+ | `approvers_revoke` | 被撤的 principal | `{"principal":…}` | 730 天（到期不會讓被撤的金鑰復活，撤銷永久有效；到期只代表這一筆不再算數的核可，撤銷不需要續） |
+ | `exception` | （護欄 id、`covers_kinds`） | 例外物件全部鍵加 `control_id`、`control_revision`、判定輸入雜湊 | 30 天 |
+-| `revision` | 護欄 id | `before`、`after` 或 `removed`、`decision_ref` | 30 天 |
++| `revision` | `<護欄 id>\|<decision_ref>`(target 帶 decision_ref:同一條護欄可能有好幾次修訂,鏈上要看得出是哪一筆決策授權的) | `before`、`after` 或 `removed`、`decision_ref` | 30 天 |
+ | `gate_setting` | `security_evidence.gate` | `{"value":"warn"}` | 30 天 |
+ | `human_review` | （護欄 id、種類） | 整份 review_record（含 `kind`、`bindings`、`test_sources`、`fixture_globs`、`author`、`judgments`、`reviewer`、`observed_at`、`expires_on`） | 90 天 |
+ | `tool_list_change` | 工具名 | 推送版那一列（刪掉時是空內容） | 30 天 |
+ | `threat_table_change` | （護欄 id、新表版號） | `{"from":舊版號,"to":新版號}` | 30 天（d11 起不用：表的變弱以 [[Systems/資安威脅類別表]] 的雙家協定核可紀錄放行；工具仍認得這一型以免舊鏈讀不進，但不再要求） |
+ | `consideration` | 格子 id | 物件全部鍵加入口、資產、類別、角色、outcome、表版號 | risk_accepted 30 天、not_applicable 180 天 |
+ | `suppression` | （規則 id、位置雜湊） | `{"rule":…,"location_sha256":…,"reason":…}` | 90 天 |
+ 
+ - 30 天的幾種（例外、修訂、gate 設定、工具清單、威脅類別表）：修訂、工具清單、表版號的核可只在「這個變弱還沒進主線」的期間有用——進了主線，主線 tip 版就是新版，不再算變弱；30 天夠一個分支合進去。到期 7 天內在放行訊息印提醒（見〈訊息形狀〉）。
+ - **驗證**（`security approvals verify` 與閘門同一支函式）：
+   1. 從要推的提交樹讀鏈（不讀工作目錄），照 `_secinv_json_loads` 嚴格讀，自己接 `RecursionError`；單檔照證據的 16 MiB 上限、筆數上限 10000。
+-  2. **主線前綴**：主線 tip 版的鏈必須逐位元組是推送版鏈的開頭一段，否則整道擋 `approvals_diverged`，訊息：「核可鏈跟主線分岔，先把分支接上主線（rebase 或合併主線）」。所以主線新撤的金鑰，舊分支一定看得到；分支上刪掉、改寫或調換主線已有的任何一筆，都會分岔。例外：主線版的鏈從第一筆起就沒有任何有效金鑰（例如第一次釘金鑰時壞掉、而那時還沒有這條規則保護），推送版可以整條換掉，並印一行警告；這跟〈第一次釘金鑰〉的信任前提相同。
++  2. **主線前綴**：主線 tip 版的鏈必須逐位元組是推送版鏈的開頭一段，否則整道擋 `approvals_diverged`，訊息：「核可鏈跟主線分岔，先把分支接上主線（rebase 或合併主線）」。所以主線新撤的金鑰，舊分支一定看得到；分支上刪掉、改寫或調換主線已有的任何一筆，都會分岔。例外：主線版的鏈從第一筆起就沒有任何一筆有效過(結構或簽章從頭就壞,例如第一次釘金鑰時壞掉、而那時還沒有這條規則保護),推送版可以整條換掉,並印一行警告;這跟〈第一次釘金鑰〉的信任前提相同。★主線鏈有過有效筆(含現在已全部到期的)就永遠只能追加★:到期只取消效力,不清掉信任歷史(代碼審第一輪外家、整合、資安席:原本「現在沒有 ok 筆」就准整條換掉,金鑰兩年沒續就等於任何人都能重釘)。
++  2b. **核可日不准回填**:每筆的 `approved_on` 不准早於前面任何一筆有效筆的核可日,早於就判 `approval:approval_backdated`、它核可的不算(擋拿已到期的金鑰回填舊日期讓它復活;前面沒有更晚的筆時回填偵測不到,是天花板)。
+   3. 從第一筆往下逐筆驗：`seq` 連續、`prev_sha256` 對得上、`project_id` 等於這個 repo；`signer` 在「這一筆之前」算出的有效金鑰裡（撤銷之後的筆用被撤金鑰簽的判 `approval_signer_revoked`）；用只含那把金鑰的暫時 allowed_signers 跑 `ssh-keygen -Y verify -f <暫時檔> -I <signer> -n lumos-security -s <簽章>`；`approved_on` 不晚於今天、`expires_on` 減 `approved_on` 不超過那一型的上限。斷在某一筆（`seq` 跳號、`prev_sha256` 對不上、壞 JSON 行）時，那一筆與之後每一筆都判 `approval:approval_chain_broken`，前面的照算；刪掉中間一筆、調換順序、重放舊筆都會在這一步斷。
+   4. 有效金鑰從第一筆往下重算：`approvers_init` 只能是第一筆，而且要用它自己 `keys` 裡的一把簽（證明持有）；`approvers_add` 與 `approvers_revoke` 要用當時有效的金鑰簽；金鑰本身的 `approvers_*` 那一筆過期，那把金鑰從過期隔天起失效（到期 7 天內提醒，續期就是同一把金鑰再寫一筆 `approvers_add`）。
+   5. 某個物件要用核可時，找鏈上 `type` 與 `target` 相符、而且有效的筆裡最新的一筆，比 `content_sha256`；`project_id` 對不上的筆（從別的專案貼來）判 `approval_project_mismatch`、不算數。
+   6. 驗證不讀 merge-base 版的任何東西，所以「起點算不出」這類整道擋下時，gate 設定照樣驗得出來（見〈哪些整道擋下可以降級〉）。暫時的 allowed_signers 放系統暫存目錄、判完就刪；找不到 `ssh-keygen` 時每一筆都判 `approval_signature_invalid`。
+-- **怎麼加一筆**：`lumos security approvals payload <type> <target>`（唯讀）印出要簽的那一筆（`seq`、`prev_sha256`、`project_id`、`content_sha256`、`approved_on` 都由工具從要推的提交算好填上），使用者自己用 `ssh-keygen -Y sign -n lumos-security -f <私鑰>` 簽，再用 `lumos code-loop security-approval-add <簽好的檔>` 追加：工具把這一筆接在工作目錄那條鏈後面，用同一支驗證函式驗過「整條鏈加這一筆」才寫入，驗不過不寫並說原因。
+-- **第一次釘金鑰**：`approvers_init` 由使用者手動做：先 `security approvals payload approvers_init approvers --key <公鑰檔>…` 印出內容，自己簽，再 `code-loop security-approval-add`；工具在寫入前用 `security approvals verify` 當場對這一筆驗一次（格式、金鑰類型、自簽驗得過），驗不過就不收——打錯一個字、貼成私鑰、金鑰類型不收，當場就知道，不會先合進主線再鎖死。驗得過之後，這一筆跟著提交進主線；之後它就是主線鏈的第一筆，分支改不掉。工具每次判到核可都印出現在有效的金鑰指紋，讓使用者看得到是哪幾把。
++- **怎麼加一筆**：`lumos security approvals payload <type> <target> --signer <principal> --expires-on YYYY-MM-DD --out <檔>`（唯讀;`--out` 存的檔沒有結尾換行,把輸出轉存成檔會多一個換行、簽章對不上;`exception`、`human_review`、`revision`、`consideration`、`tool_list_change` 的內容從 HEAD 那個提交算,要先提交再跑;target 寫法見下表,例外是 `<護欄 id>#<排序後的 covers_kinds>`、人審是 `<護欄 id>#<種類>`、修訂是 `<護欄 id>|<decision_ref>`）印出要簽的那一筆（`seq`、`prev_sha256`、`project_id`、`content_sha256`、`approved_on` 都由工具從要推的提交算好填上），使用者自己用 `ssh-keygen -Y sign -n lumos-security -f <私鑰>` 簽，再在自己的終端機用 `lumos code-loop security-approval-add <簽好的檔>` 追加：工具把這一筆接在工作目錄那條鏈後面，用同一支驗證函式驗過「整條鏈加這一筆」才寫入，驗不過不寫並說原因;驗得過之後還要 stdin 與 stdout 都是互動終端、使用者照抄一段當場隨機產生的確認碼才寫入(d17),非互動一律擋下、給可複製的指令;簽章金鑰不是硬體金鑰(`sk-` 開頭)時印一行提醒、不擋。
++- **第一次釘金鑰**：`approvers_init` 由使用者手動做：先 `security approvals payload approvers_init approvers --signer <principal> --expires-on YYYY-MM-DD --key <principal>=<公鑰檔>… --out <檔>` 印出內容，自己簽，再 `code-loop security-approval-add`；工具在寫入前用 `security approvals verify` 當場對這一筆驗一次（格式、金鑰類型、自簽驗得過），驗不過就不收——打錯一個字、貼成私鑰、金鑰類型不收，當場就知道，不會先合進主線再鎖死。驗得過之後，這一筆跟著提交進主線；之後它就是主線鏈的第一筆，分支改不掉。工具每次判到核可都印出現在有效的金鑰指紋，讓使用者看得到是哪幾把。
+ - **金鑰數量與遺失**：建議至少釘兩把，一把日常用、一把離線備份。一把遺失時用另一把簽一筆 `approvers_revoke` 撤掉遺失的、再簽一筆 `approvers_add` 加新的。
+ 
+ **為什麼這些重放不再成立**：
+ - 把歷史上簽過的 warn、修訂或例外貼回來：舊筆在鏈上有固定的 `seq` 與 `prev_sha256`，貼成新的一行接不上鏈；就算原本那一筆還在鏈上，它也有到期日（最長 30 天），過期就不算數。
+ - 貼到別的專案：`project_id` 對不上。
+ - 撤銷的金鑰復活：撤銷寫在鏈上，主線鏈必須是推送版的前綴，分支拿掉那一筆就分岔；撤銷之後的筆用那把金鑰簽的一律無效。
+ - 人審簽完改程式：`human_review` 的內容雜湊蓋住 `bindings` 與 `kind`，改了就對不上。
+ - 壓提交、rebase、合併提交、排版：驗的是鏈的內容，不看提交是誰簽的；規範化 JSON 不受空白與鍵順序影響。
+ 
+ **工具的天花板**：
+ - 「每次簽章都要實體觸碰或輸入密碼」是使用者那端的金鑰設定（例如 `ed25519-sk` 硬體金鑰要求觸碰、私鑰加密碼），工具只驗得到「由這把公鑰對應的私鑰簽的」，驗不到簽的時候有沒有觸碰或輸入密碼；私鑰若沒設這兩樣、又放在 AI 碰得到的地方，AI 就簽得出來。
+-- 第一次釘金鑰沒有東西可驗；若 AI 搶先用自己的金鑰寫 `approvers_init` 並合進主線，工具分辨不出來，只能靠使用者看指紋。
++- 第一次釘金鑰沒有東西可驗；若 AI 搶先用自己的金鑰寫 `approvers_init` 並合進主線，工具分辨不出來，只能靠使用者看指紋。寫入要互動終端加手打確認碼(d17)擋得住照常操作的 AI;刻意用 `script` 之類工具偽造終端、自動照抄確認碼的,工具分不出來。
++- 專案識別取根提交:fork 或從範本複製出的專案共用根提交,兄弟 repo 的核可鏈筆在識別上分不開;要被收還得護欄 id、revision、輸入雜湊與日期全部吻合,實際危害低(代碼審第一輪資安席)。
++- 核可日回填只在「前面有更晚的有效筆」時偵測得到;鏈上最後一筆之後持過期私鑰回填更早的日期,工具分不出來(撤銷照樣永久有效)。
+ - 主線 tip 從本機 ref 讀，AI 改得動本機 ref 就造得出假主線鏈；CI 用從遠端抓的 ref，是最後的核對（依 d9 是事後）。
+ - 全部金鑰都遺失或過期時，工具沒辦法自救：加金鑰要現有金鑰簽，例外與修訂也簽不出來。剩下的路只有使用者自己決定跳過本機閘（依 d9 的規矩，跳過檢查一律由使用者本人裁）或整道回退工具版本；伺服器端的強制或救援依 d9 不做。
+ - 不選：使用者另開第二個 GitHub 帳號只拿來核准例外 PR——要多維護一個帳號，CI 要加讀 PR 的權限與一步 API 查詢，帳號憑證若放在 AI 碰得到的地方就失效，而且 PR 上不跑 code-loop 的問題照舊。
+ 
+ REVISIT:2027-01-31 第一個消費專案寫 approvers_init 之後,請使用者確認至少釘了兩把、私鑰設了實體觸碰或密碼、指紋與工具印出的一致;確認不了就把天花板那幾句寫進 security evidence 的 limitations
+ REVISIT:[when-status:Projects/安全主張驗收閘_計劃=done][by:2027-01-31] 核可鏈實作後,把〈核可鏈〉改成現況說明,並寫明實測擋得住與擋不住哪種繞過(AI 直接改例外、只改外層護欄、壓提交後再推、重放舊的 warn、刪中間一筆、跨專案貼、用已撤金鑰、搶先第一次釘金鑰各試一次)
+ REVISIT:2027-03-31 回看有沒有任何消費專案遇過全部金鑰遺失或過期;遇過就把當時怎麼救的寫回〈工具的天花板〉,並重新評估要不要做伺服器端救援
+ 
+ **舊專案升級的過渡**：已接 lumos、沒有任何資安登記的專案升級後行為不變。已經登記了護欄的專案（目前只有試行中的 order-demo 會有），升級當下就會依現有證據被判；依 d13 不給過渡期；需要退時由使用者在核可鏈簽一筆 `gate_setting` 降成只提醒（最長 30 天，要更長就到期前再簽一筆），不另做開關。不論是否有過渡期，`lumos update` 的版本變更說明都要寫出這一道新判定。
+ 
+@@ -727,21 +749,21 @@ REVISIT:2027-03-31 回看有沒有任何消費專案遇過全部金鑰遺失或
+ - [S2] 當同一條 Invariant 同時登記 business 與 security 關注面時,`security evidence` 應只列一筆並只對 security 判定證據,純 business 條目應不進必驗集合。 [test:t_secev_s02_concerns_partition]
+ - [S3] 當盤點報告讀取不完整或登記有錯而三版任一有資安登記痕跡時,閘應擋下並說明判不清,不得當零條目放行;推送版把全部資安條目刪掉時,每條應各自判 missing:control_removed_unapproved;三版都只有 candidate 的專案應放行並列提醒。 [test:t_secev_s03_registration_errors_block]
+ - [S4] 當 `security evidence --commit <sha>` 與 code-loop check 對同一提交、同一主線 tip、同一 UTC 日期判定時,兩者的逐條判定應完全相同,而且 `security evidence --commit <sha> --json` 的盤點區塊應等於在那個提交的乾淨 checkout 上跑 `security list --json` 的報告,即使工作目錄停在別的提交。 [test:t_secev_s04_evidence_equals_check_and_list]
+ 
+ **合格判準與為了合格而合格的反例**
+ 
+ - [S5] 當 JUnit 報告零案例、目標測試不在、被跳過或有 suite 層錯誤時,該證據應判 invalid 並擋下,不得判 qualified 或 failed。 [test:t_secev_s05_junit_invalid_shapes]
+ - [S6] 當 behavior 證據只有非法案例、沒有宣告或找不到合法對照案例時,應判 invalid:missing_legit_control 並擋下。 [test:t_secev_s06_legit_control_required]
+ - [S7] 當故障證據的翻紅來自非目標測試、編譯錯、逾時或非斷言失敗時,應判 invalid,不得算成抓到錯。 [test:t_secev_s07_fault_not_real_detection]
+ - [S8] 當測試照抄錯誤規則而故障仍翻紅時,fault_sensitivity 應判 qualified,但缺 review 證據的護欄整體應判 unsound 並擋下。 [test:t_secev_s08_s20_oracle_needs_review]
+-- [S9] 當證據綁定的任一檔案 blob、護欄 revision 或工具版本跟要推的提交不同時,應判 stale 或 tool_version_mismatch 並擋下;綁定集合少了家節點 about_code 的檔、`test_sources` 列的測試原始檔、`fixture_globs` 展開出的任一支檔、`environment_ref` 或產生校準樣本的腳本,或某個 glob 展開為空時,應判 invalid:binding_incomplete。 [test:t_secev_s09_bindings]
++- [S9] 當證據綁定的任一檔案 blob、護欄 revision 或工具版本跟要推的提交不同時,應判 stale 或 tool_version_mismatch 並擋下;綁定集合少了家節點 about_code 的檔、`test_sources` 列的測試原始檔、`fixture_globs` 展開出的任一支檔、`environment_ref` 或校準輸出檔(calibration_path,d18),或某個 glob 展開為空時,應判 invalid:binding_incomplete;review 與 deployment 的審查紀錄綁定同樣要涵蓋家節點 about_code 的程式檔。 [test:t_secev_s09_bindings]
+ - [S10] 當 JUnit、SARIF 或 k6 證據檔的內容跟圍欄記的 `report_sha256` 不同、或 tq_capture 的 receipt 雜湊跟原始報告對不上時,應判 invalid;輸出應註明內容一致的偽造報告與「改綁定不重跑」不在可偵測範圍。 [test:t_secev_s10_report_hash]
+ - [S11] 當掃描類證據只有零發現的正式報告、沒有同工具同版本對已知陽性樣本命中的校準檔、或校準檔沒命中某一條宣告規則時,應判 uncalibrated 並擋下。 [test:t_secev_s11_scan_calibration]
+ - [S12] 當 SARIF 的 results 為 null、invocation 標失敗、通知有 error、或 `coverage_path` 那份缺登記的覆蓋證明時,應判 invalid,不得把空結果當沒找到問題。 [test:t_secev_s12_sarif_not_run]
+ - [S13] 當 k6 摘要的版本或腳本全文跟清單與提交對不上、請求數低於清單登記的下限、合法流量成功數為零、宣告的安全指標沒出現或門檻不是允許的計數寫法時,應判 invalid;安全計數超標時應判 failed。 [test:t_secev_s13_k6]
+ - [S14] 當護欄宣告的必要種類少於其全部威脅類別最低種類的聯集時,應判 insufficient_required_evidence 並擋下;工具清單上沒有某工具類別時,應照類別表的替代欄換算最低種類,作者在護欄裡自述沒工具應不影響換算。 [test:t_secev_s14_min_kinds]
+ 
+ **六項整合控制（母計劃〈證據交接與首案整合驗收〉）**
+ 
+ - [S15] 當護欄的來源決策作廢、或它 `question_refs` 列的待決問題有一題照 `_pq_settled` 沒結(狀態不是已決或已驗、或決策連結指到作廢或不存在的決策)或找不到時,該護欄整體應判 unsound 並指路到那一題。 [test:t_secev_s15_source_and_questions]
+ - [S16] 當非法請求的拒絕原因是缺身分或資源不存在時,behavior 證據應因缺前置斷言案例判 invalid,不當所有權防護通過。 [test:t_secev_s16_precondition_required]
+@@ -781,40 +803,40 @@ REVISIT:2027-03-31 回看有沒有任何消費專案遇過全部金鑰遺失或
+ - [S38] 當 `code-loop security-backing` 對同一護欄、種類與 head_sha 跑兩次時,背書檔應只多一筆;帶 `--supersede` 時應多一筆帶 supersedes 的更正,閘門應跳過被更正的那筆;閘門讀到多筆時應取 head_sha 相符、沒被更正的最新一筆。 [test:t_secev_s38_security_backing_command]
+ 
+ **審查紀錄（d2、d8）**
+ 
+ - [S39] 當審查紀錄的 reviewer 正規化後等於任一作者時,應判 invalid:review_not_independent;expires_on 已過時應判 stale:review_expired;expires_on 晚於 observed_at 加 90 天時應判 invalid:review_expiry_too_long。 [test:t_secev_s39_review_independence_and_dates]
+ - [S40] 當要人的判斷只有 reviewer_kind 為 ai 的紀錄蓋到、或標 human 卻在核可鏈上沒有對得上的 human_review、或人審核可之後紀錄的 bindings 或 kind 被改時,review 種類應判 missing:human_review_missing;不要人的判斷由 ai 紀錄蓋到時應算數。 [test:t_secev_s40_s62_reviewer_kind]
+ 
+ **資源與健壯**
+ 
+ - [S41] 當單一證據檔超過 16 MiB、一次判定的不同證據 blob 總量超過 256 MiB、或證據項超過 10000 時,應只把超限的那幾項照固定排序判 invalid:evidence_too_large 並指出檔名,同一份檔被多條護欄引用時應只算一次額度,其他護欄的判定應不受影響。 [test:t_secev_s41_s43_limits_and_cache]
+-- [S42] 當證據檔是巢狀過深的 JSON 或 XML 時,應只讓引用它的那幾項判 invalid:report_too_deep、其他護欄照判;當判定時拋出未預期例外時,閘應擋下並判 evaluation_error;兩者都不得放行或把 traceback 印給推送流程。 [test:t_secev_s42_deep_and_errors]
++- [S42] 當證據檔是巢狀過深的 JSON 或 XML 時,應只讓引用它的那幾項判 invalid:report_too_deep、其他護欄照判;當判定時拋出未預期例外(不是讀外來證據時的欄位型別錯——那種只讓那一項判 invalid:report_malformed、講出哪一列哪一欄)時,閘應擋下並判 evaluation_error;兩者都不得放行或把 traceback 印給推送流程。 [test:t_secev_s42_deep_and_errors]
+ - [S43] 當同一份證據檔被一千條護欄引用時,判定應只解析一次,讀 blob 應是批次讀取。 [test:t_secev_s41_s43_limits_and_cache]
+ - [S44] 當證據的 observed_at 晚於要推的提交的 committer date 時,應判 invalid:observed_in_future;observed_at 晚於 author date 但早於 committer date 時應不判。 [test:t_secev_s44_observed_in_future]
+ 
+ **設定與相容**
+ 
+ - [S45] 當 `.lumos/config.json` 的 security_evidence.gate 是 warn 而核可鏈上有有效的 gate_setting 核可時,閘應照算照印但不擋;沒有核可、核可過期、值看不懂或是 off、或把歷史上已過期的那一筆貼回來時,應當成 block 並印出原因。 [test:t_secev_s45_gate_setting]
+ - [S46] 當庫裡同時有 schema_version 1 與 2 的圍欄時,新工具應兩種都讀,v1 塊缺 v2 欄位時應照〈一〉表的預設處理;v1 塊出現 v2 鍵時應列未列出的欄位錯誤。 [test:t_secev_s46_v1_v2_mixed]
+ - [S47] 當 test-quality 配套缺檔而專案有資安登記痕跡時,閘應擋下並判 toolchain_incomplete。 [test:t_secev_s47_toolchain_incomplete]
+ 
+ **核可鏈（d10）**
+ 
+ - [S48] 當核可鏈上有人重放舊的一筆、刪掉中間一筆、調換兩筆順序、用已撤金鑰簽、從別的專案貼一筆、或某一筆已過期時,那一筆與受影響的後續筆應不算數並各列 approval 代碼,它核可的東西應照沒有核可判。 [test:t_secev_s48_chain_attacks]
+ - [S49] 當主線 tip 的核可鏈不是推送版鏈的開頭一段時,閘應整道擋下 approvals_diverged 並提示先接上主線;舊分支的 merge-base 版還信任某把金鑰、而主線已撤掉它時,用那把金鑰簽的新核可應不算數。 [test:t_secev_s49_chain_prefix]
+ - [S50] 當用 `code-loop security-approval-add` 寫第一筆 approvers_init 而內容打錯一字、貼成私鑰、金鑰類型不收或自簽驗不過時,工具應拒寫並說原因;驗得過時應寫入,之後主線鏈的第一筆應改不掉。 [test:t_secev_s50_first_key]
+ - [S51] 當閘門因讀取不完整、登記錯誤、起點沒有共同祖先或配套缺檔整道擋下而核可鏈上有有效的 gate_setting 時,warn 應照樣生效;因主線認不出、鏈分岔或取不到提交擋下時,warn 應無效並印出原因。 [test:t_secev_s51_warn_applicability]
+ 
+ **主線與必驗集合**
+ 
+-- [S52] 當有登記痕跡而主線認不出(有 remote 但沒有追蹤 ref、或 git 查詢逾時)時,閘應擋下 mainline_unknown,不得退成空樹;當沒有 remote 但有本機 main 時,主線應是本機 main;當設了 security_evidence.mainline 時應只用它。 [test:t_secev_s52_mainline]
++- [S52] 當有登記痕跡而主線認不出(有 remote 但沒有追蹤 ref、或 git 查詢逾時)時,閘應擋下 mainline_unknown,不得退成空樹;當沒有 remote 但有本機 main 時,主線應是本機 main;當主線 tip 版設了 security_evidence.mainline 時應只用它(被推的提交自己設的不採用)。 [test:t_secev_s52_mainline]
+ - [S53] 當分支從主線分岔之後,主線新增了一條 active 資安護欄而分支沒有它時,推送那個分支或對它打的 tag 應被擋下並提示先接上主線。 [test:t_secev_s53_mainline_new_control]
+ - [S54] 當主線 tip 版的證據圍欄有某一項、推送版把它刪掉而沒有同 control、同 kind、同 targets 且 observed_at 更新的項取代時,被刪的那項應照樣算數;有更新的項取代時應只判新的那項。 [test:t_secev_s54_frozen_items]
+ - [S55] 當工具清單跟主線 tip 版比調低 min_requests、換了覆蓋證明、放寬允許目標或刪掉某工具類別的最後一個工具,而核可鏈上沒有有效的 tool_list_change 時,閘應照主線 tip 版那一列判。 [test:t_secev_s55_tool_list_frozen]
+ - [S56] 當從提交樹產快照時遇到兩篇路徑 NFC 正規化後相同、樹裡有符號連結、單檔超過 2 MiB 或檔數超過上限時,應照盤點的錯誤代碼判,跟從工作目錄讀的結果相同;Verification 節點超過 2 MiB 時應只讓引用它的護欄判 invalid:evidence_node_too_large。 [test:t_secev_s56_tree_snapshot]
+ 
+ **護欄層與證據判準補充**
+ 
+ - [S57] 當 active 的資安護欄 required_evidence 為空、threat_categories 為空、含表裡沒有的類別 id、或記了工具不認得的表版號時,應判護欄層 unsound 且例外蓋不掉;威脅類別表還沒核可時,最低種類與未知類別檢查應只印「表未核可、未比對」而不擋,空陣列照擋。 [test:t_secev_s57_control_layer]
+ - [S58] 當 SARIF 對宣告規則有 level 為 error 或 warning、或 kind 為 fail 的 result 時,應判 failed:finding_unresolved;帶 suppressions(含 inSource)或 baselineState 而核可鏈上沒有對應的 suppression 核可時照判 failed;有核可時應算已處置;level 為 note 或 kind 為 pass 時應不算命中。 [test:t_secev_s58_sarif_findings]
+ - [S59] 當 JUnit 報告超過 64 層、XML 語法錯、含 DTD、testcase 沒有 name、有重複身份或任何一個 error 元素時,應分別判對應的 report_ 代碼或 suite_error,而 `test-quality check` 對同一批輸入的輸出與退出碼應跟改動前逐字相同。 [test:t_secev_s59_junit_rejections_unchanged]
+@@ -828,20 +850,21 @@ REVISIT:2027-03-31 回看有沒有任何消費專案遇過全部金鑰遺失或
+ - **首個真實驗收案例**：P1 在 order-demo 為 OD-01（付款）、OD-02（取消）各收三格（正常綠、只拿掉該條所有權防護後 B 操作 A 訂單的反例翻紅、還原再綠），另附 A 操作自己訂單成功的合法對照。這正好對上本篇 behavior（含合法對照）與 fault_sensitivity 兩種證據；review 種類由審查紀錄補（要人的判斷要使用者簽）。OD-03、OD-04 照舊列未驗，閘門上線後它們若已登記為 active，就會被擋——這是預期行為，不為了好看把它們留在 candidate。
+ - **前提**：盤點計劃 Q2（OD-01、OD-02 要不要在 order-demo 明示登記、由誰核對）還待人；沒登記，閘對 order-demo 不起作用。P1 的證據目前在 order-demo 的另一個工作樹進行中，本篇不碰。
+ - **上線順序**：
+   1. 工具鏈自己：先在測試用的合成 vault 與合成消費 repo 驗全部 S 條款（不在任何真專案跑工具）。
+   2. 發雙讀版：新工具同時讀 v1 與 v2，先發給所有專案，消費專案還不准升 v2。
+   3. order-demo 先釘金鑰：使用者手動用 `code-loop security-approval-add` 寫核可鏈的第一筆 `approvers_init`（至少兩把，工具寫入前當場驗一次）並合進主線；在這之前閘若上線，例外、修訂紀錄與降級設定都簽不出來，誤擋只能整道回退。
+   4. order-demo：只有 order-demo 先拿到新版——在 order-demo 跑 `lumos update --source <實作分支的工作樹>`，不從工具鏈主線拉，所以其他專案照舊。order-demo 現在沒有任何 remote、也沒有 `.github`（2026-10-20 查），依 d16 不加遠端、維持本機實驗專案：P1 證據收齊、OD-01／OD-02 登記後，讀真實筆記跑 `security evidence` 與 `code-loop check --security-only` 的本機判定；真推送的擋下與放行（S18、S19 的真實版）改在工具鏈測試的合成消費 repo 推到本機裸 repo 驗；CI 的半邊（S28、S32）在 order-demo 沒有 CI，改在工具鏈自己的合成消費 repo 驗，order-demo 只驗本機那一側。
+   5. 全部接了 lumos 的專案：前面幾步都過、使用者確認後，實作分支合進工具鏈主線，才隨一般的 `lumos update` 發出；沒登記的專案行為不變。
+ - OD-04 用 k6 實跑已依 d3 核可（條件照母計劃 d8）；實跑前 k6 讀法先用合成摘要驗，第一份真實摘要照 d5 在 order-demo 產生。
+ 
++REVISIT:[when-status:Projects/安全主張驗收閘_計劃=done][by:2027-01-31] 發版時在 CHANGELOG 的新版本段寫出這一道新判定(有資安登記的專案推送前多一道安全證據、推 tag 也判、核可寫入要本人在終端機跑);CHANGELOG 只記放出去的版本、不留未發布區塊,所以不在實作提交裡先寫
+ REVISIT:2026-11-30 核對上線順序第 1 到 4 步的實跑證據;任一步沒完成就不隨 lumos update 發給其他專案,並把沒完成的原因寫回本節
+ 
+ ## 世界解與採用判斷
+ 
+ PRIOR-ART: 最小解落在既有 code-loop check 加一道並列判定，證據沿用 bound-tests-gate、guard kill、test-quality capture/check；外部工具只讀標準輸出：JUnit（沿用 `scripts/test_quality.py` 的讀法）、SARIF（另寫嚴格解析，uri 正規化也各寫）、k6 新格式摘要（新寫一個小讀法）。核可用 OpenSSH 的 `ssh-keygen -Y sign/verify`（git 自己的 ssh 簽章也是用它）簽內容，不自建簽章格式；核可鏈借用「只追加、每筆帶前一筆雜湊」的雜湊鏈做法（透明日誌與 git 自己的提交鏈都是這個形狀），只用標準庫的 sha256 與 JSON，不引入新依賴。主線與分岔點沿用既有 `_push_mainlines`、`_push_range_start` 的算法，快照讀取沿用 `_nodehome_list`、`_nodehome_cat_blobs_capped`。借用 OSCAL「要求／實作／評估分層」的原則（盤點計劃已引，只借資料與結論分離）。不另造掃描器、runner、證據帳或安全總分。
+ 
+ 以下 2026-10-19 查閱；版本號是查閱當天的最新穩定版，消費專案採用時重核並釘自己的版本：
+ 
+ | 來源 | 借什麼 | 不外推什麼 |
+ |---|---|---|
+@@ -873,20 +896,20 @@ RETIRE-IF: 連續 8 週所有登記了資安護欄的專案，安全證據判定
+ 
+ REVISIT:2027-01-31 回看治理帳與 CI 紀錄,有沒有任何登記了資安護欄的專案發生過跳過本機閘(--no-verify)把證據不合格的提交推上主線;發生過就把次數與情境帶給使用者重裁 d9
+ REVISIT:2027-01-31 回看第一個消費專案建的工具清單,核對清單的核可決策、釘版本方式與變弱核可是否照本篇寫法,不符就先修清單格式再擴大
+ 
+ ## 回退
+ 
+ 實作分兩個提交:
+ - ①唯讀與讀法:`security evidence`、`security approvals payload`、`security approvals verify` 子命令,寫入型的 `code-loop security-backing` 與 `code-loop security-approval-add`(只寫自己的兩個新檔,撤掉不影響任何既有指令),證據圍欄、SARIF、k6、核可鏈的讀法,`_secinv_blocks` 參數化,`_secinv_snapshot_tree`,`_pq_node_target` 的抽出(`_pq_decision_target` 行為不變),`scripts/test_quality.py` 的 `load_receipt` 與核對本體抽成純函式、`junit()` 改 iterparse 與帶型別拒收,以及同一個提交裡的 `_TEST_QUALITY_BUNDLE_DIGESTS` 更新——這兩樣不同步時既有的 `test-quality check` 會對所有專案報「部署不完整」,不只有資安登記的專案,所以一定同進同退;`_KNOWN_GATES` 的 `security-evidence`、`_BOOKKEEPING_FILES` 的 `docs/.security-backing.jsonl`、`security` 的 help 與 `_SECINV_NOTICE` 也歸 ①。
+ - ②閘門接線:code-loop check 的新判定、`--security-only`、pre-push 對照表、逃生句與非分支路徑、CI 的 tag 觸發與紅燈訊息、doctor 的 CI 步驟範本、`commands/08-自動跑的.md`,以及 [[Projects/推送前一次列出全部擋下原因_計劃]] 那一行「四句改五句」與 `_PPC_KIND_SENTENCES` 的第五句(這一行與常數歸 ②,跟 ② 同進同退,否則 `t_prepush_cl_reason_sentences_match_plan` 會紅);pre-push 與 `scripts/test_lumos.py` 改了要重新 anchor approve。
+ - ② 呼叫 ① 的判定函式,所以要撤就先撤 ② 再撤 ①,不能單撤 ①。撤 ① 時 `scripts/test_quality.py` 與 bundle digest 一起退,並照 [[Verification/測試品質第四輪修補驗證]] 重驗一次。
+-- 消費專案的證據檔、工具清單、核可鏈與背書檔都留著不刪,撤回只是不再讀。誤擋時不准在執行中把判定改成通過;照〈四〉由使用者在核可鏈簽例外限時放行、或簽 `gate_setting` 整道降成只提醒(哪幾種整道擋下降級有效見〈哪些整道擋下可以降級〉),或整道回退。環境型的整道擋下各有自己的出路:淺層 clone 跑 `git fetch --unshallow`;主線認不出先 `git fetch` 或設 `security_evidence.mainline`;核可鏈分岔先把分支接上主線;force push 退版讓 CI 紅的,依 d9 是事後提醒,不影響已退回的主線;新 repo 根提交以空樹為起點照判。
++- 消費專案的證據檔、工具清單、核可鏈與背書檔都留著不刪,撤回只是不再讀。誤擋時不准在執行中把判定改成通過;照〈四〉由使用者在核可鏈簽例外限時放行、或簽 `gate_setting` 整道降成只提醒(哪幾種整道擋下降級有效見〈哪些整道擋下可以降級〉),或整道回退。環境型的整道擋下各有自己的出路:淺層 clone 跑 `git fetch --unshallow`;主線認不出先 `git fetch` 或在主線上設 `security_evidence.mainline`;核可鏈分岔先把分支接上主線;force push 退版讓 CI 紅的,依 d9 是事後提醒,不影響已退回的主線;新 repo 根提交以空樹為起點照判。
+ - **降回 v1 的順序**:回退到不認得 v2 的舊工具之前,消費專案要先把 v2 圍欄降回 schema_version 1(拿掉 v2 鍵),否則舊工具會整塊拒收、`security list` 讀取不完整。但 ② 還在時,拿掉 `threat_categories` 的那個提交會被判護欄層 `threat_categories_missing`(例外蓋不掉),所以順序是:先撤 ②(或先簽一筆 `gate_setting` 降成只提醒),再降圍欄,最後撤 ①。降回 v1 會讓判定輸入雜湊改變(`threat_categories`、`threat_table_version` 不見了),核可鏈上蓋住那幾條護欄的例外、修訂與人審核可全部對不上;之後重新升回 v2 時,判定輸入要逐欄還原成原樣才驗得過,否則要使用者重簽——這一句寫進 `lumos update` 的版本變更說明。
+ - schema v2 的欄位變更若被盤點計劃的設計審否決,先修規格,不對消費專案自動轉寫。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-19,7 席:正確性、邊界、整合、資源、回滾、架構對齊各一席 sonnet,外家 finder 一席 Codex):60 條/blocking 37 條,機器從各席報告的逐條 blocking 行數出;全部有去向(major 全折),處置與機械重現在 `governance/review-reports/安全主張驗收閘/r1-intake.md`,席報告在同一個目錄。
+ - 結論:例外核可從提交簽章改成內容簽章(d7 取代 d6),凍結比對擴到判定輸入、修訂紀錄搬出節點,補上種類 × 格式允許表、報告雜湊、測試原始檔與環境描述檔綁定、資源上限、tag 推送與 v1/v2 雙讀;G11、G12 由使用者裁成 d8(AI 審要標明、放行不了要人的判斷)與 d9(不設伺服器端保護,寫成天花板)。
+ - r2(2026-10-20,7 席同 r1 編制):70 條/blocking 35 條,機器從各席報告的 `blocking: 是` 行數與 `severity:` 行數出;全部 folded(major 全折、minor 能一句補的都補),處置表與機械重現在 `governance/review-reports/安全主張驗收閘/r2-intake.md`。
+ - 結論:核可改成只追加的核可鏈(d10 取代 d7),解掉重放、跨專案貼、撤銷金鑰復活、人審沒蓋綁定、首次釘金鑰沒驗證與整道擋下時驗不了降級;主線認定改用既有那組函式、認不出就擋,必驗集合擴成推送版、merge-base 版、主線 tip 版三版聯集;「變弱」改成只比種類與列數、同種類換節點不算,工具清單與證據項刪除也凍結;補空與未知的護欄層錯誤、SARIF 命中與處置的定義、夾具綁定、讀檔深度與記憶體預算、每個 ref 60 秒的時間預算;寫入型子命令搬到 code-loop 族、`security list` 維持不執行程序。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md b/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
+index 6abee645143824e3be27188c24500f6819d74dcc..19621f24095da8c93e7be5a48aa249a70ae87a6a 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/推送前一次列出全部擋下原因_計劃.md
+@@ -48,21 +48,21 @@ REVISIT:2026-12-15 數一次 `prepush-summary` 事件裡兩道以上不同閘的
+      - **沒有 `os.setpgid` 的 Python 不換群組**(代碼審第四輪正確性席、併發席、通才席):原生 Windows 的 Python 沒有 `setpgid`,它的 `os.execv` 又是起新行程後讓舊的立刻回 0。所以換群組那段只在有 `setpgid` 時才換、再 `exec`;沒有就在同一個行程裡用 `runpy` 跑測試檔。`setpgid` 本身失敗時不換群組、照樣 `exec`。離開碼一律是測試檔自己的。[test: t_prepush_interrupt_launcher_without_setpgid]
+    - **時機**:bash 要等前景子程序結束才跑陷阱。按 Ctrl-C 時整個前景程序組都會收到 INT,子程序自己會先停;只對掛鉤送 TERM 時,掛鉤會等手上那支子程序跑完才結束——S10 寫的「立刻」是指「目前那支子程序結束之後,不再開始下一道」。
+ 3. **全套測試之前統一判**:判斷點放在建 `_AUTOLOOP_LOG`、`_TESTS_LOG` 那兩個 log 檔之前。兩個 log 都放在 `$_PP_TMP` 裡,正常結束、擋下、中斷時都由 `EXIT` 陷阱一起清。原本它們用 `mktemp` 建在 `$_PP_TMP` 外,中斷與全綠時都會留下(代碼審第一輪併發席)。測試紅時要指給人看的那一份,先複製到暫存資料夾外,再印複製出去那份的路徑(S18)。
+    - `_PP_BLOCKED` 是 1 時,呼叫 `lumos push-summary --blocks-file "$_PP_TMP/blocks" --count "$_PP_NBLK" --refs <這次非刪除的推送行數>`:由它印「這次推送共有 N 筆擋下(M 道閘)」的彙總(N 是筆數,同一道被多個 ref 擋或代碼審內部擋兩個原因都各算一筆;M 是不同閘名的個數),逐筆一行:閘名、ref、原因,詳細處理方式看上面那一段。ref 欄在 `--refs` 大於 1 時印。它同時落一筆治理帳(閘名 `prepush-summary`、kind `blocked`、hard、帶 `LUMOS_PUSH_ATTEMPT`、`extra` 裡放 N、M、不同閘名的清單與推送行數)。`prepush-summary` 要登記進已知閘名清單 `_KNOWN_GATES`,不然事件會被拒寫。
+    - 不論 `push-summary` 成不成功,掛鉤接著一律 `exit 1`,不跑自主迴圈測試與全套測試。`push-summary` 回非零或不存在(舊版 lumos)時,掛鉤自己用 `while IFS=$'\t' read -r` 逐行印一份簡版彙總——觀測失效不得改變擋下。
+    - `_PP_BLOCKED` 不是 1 才照舊往下跑測試。
+    - 為什麼由掛鉤呼叫一支會記帳的子命令:先例是掛鉤呼叫 `loop escape --auto`,把掛鉤算好的內容交給它記帳。彙總必須在所有閘之後才算得出來,只有掛鉤知道全部結果;印彙總與記這一筆是 `push-summary` 自己的工作,不是開一個任意寫帳的入口(它只收這一種格式的檔)。
+    - 連帶擋下照實列:圖譜健檢擋下時,依賴圖譜索引的閘(每支檔有家、雙向門放行、回頭重讀)可能跟著擋。彙總照實列出,不去猜哪道是連帶;這會讓 RETIRE-IF 的筆數偏多,方向是「更不容易撤」,可以接受。
+ 4. **前提壞掉的照舊立刻停**:找不到 Python 3.14、暫存目錄建不起來(掛鉤開頭的總暫存目錄,與測試前建 log 檔那一步)、使用者中斷(第 2 點)——這幾種後面什麼都跑不了或不該再跑,維持立刻結束。找不到 `scripts/lumos` 照舊是「提醒後放行」(`exit 0`),不在收集範圍。
+ 5. **代碼審判定內部也全部判完**:`lumos code-loop check` 新增 `--keep-going`(名字照 PRIOR-ART 的 `make -k`):
+-   - 四道判定(合約測試、表態、新增告警、代碼審留痕)都跑完,每道擋下各印各的訊息(原本的擋下句一字不改),最後只要有一道擋下就 rc1。
++   - 各道判定(合約測試、表態、新增告警、代碼審留痕;2026-10-20 起有資安登記時另有安全證據,排最前,共五道)都跑完,每道擋下各印各的訊息(原本的擋下句一字不改),最後只要有一道擋下就 rc1。
+    - **一處判**:判定函式在這個模式下把擋下累積進一個清單,函式裡所有回傳都經過同一個收尾函式:清單非空就回擋下,清單是空的才照原樣回放行。放行站點的意思變成「這一道過了」,不能蓋掉前面記下的擋下。現有的放行站點有 8 個:pitfalls 失敗、pitfalls 沒有 JSON、pitfalls 例外、tier 不是 high、留痕有效(sha 直接相符)、留痕過時但屬簿記豁免、留痕要求被環境變數跳過、合併側放行。守衛測試掃這支函式的原始碼,每個 `return` 只准兩種形狀:直接 `return _fin(...)`;或回傳由收集分流 `kg.hit(...)` 指派的變數,而且緊接在判它非空的 `if <那個變數>:` 底下(不帶旗標時 `hit` 回的就是收尾後的結果;帶旗標時回 None,不判非空就回傳會讓整個函式回 None,代碼審第二輪合約席)。另外逐站點各一支行為測試(S13)。
+    - **合約測試有兩個擋下點**:一般的那個,與「帶低風險提醒旗標但算出 tier=high 時重跑」的那個;兩個在這個模式下都記成 `reason_kind: bound_tests` 並繼續。
+    - **pitfalls 失敗時**:表態需要 pitfalls 的資料,照現在 fail-open 不判;代碼審留痕需要 tier,同樣不判;新增告警閘只看改動範圍、不需要 pitfalls,照跑。前面記下的擋下照算。(不帶這個旗標時照舊整個 fail-open。)
+      - **所以推送前比直接跑 CLI 嚴**:掛鉤認得這個旗標就一律帶上。所以「pitfalls 暫時失敗(逾時、環境壞),而且這次改動帶進新告警」時,不帶旗標會放行,推送前會因新增告警擋下(`LUMOS-BLOCKS: lint_new`)。這是有意的,方向是更嚴、不是放行(代碼審第一輪正確性席要求寫明)。[test: t_code_loop_keep_going_pf_fail_stricter]
+    - 合約測試先紅時照樣算風險分級,後面幾道照判。
+    - 帶 `--json` 時多一個 `blocks` 清單(每筆 `reason_kind` 與 `reason`);`blocked`、`reason`(放第一筆)照舊;`tier` 在這個模式下一律是算出來的分級,pitfalls 失敗時是 `unknown`。不帶 `--keep-going` 時行為與輸出一字不變(其他呼叫者如 CI 不受影響)。
+    - 印合約測試狀態的那幾句照「合約測試有沒有記成擋下」選,不照第一個擋下原因選:記成擋下就不印「低風險只提醒不擋」那類句子。
+    - 治理帳照舊一次判定一筆 `code-loop` `blocked` 事件(現有統計的筆數意義不變),`extra` 多放 `blocks` 的 `reason_kind` 清單。
+    - **給掛鉤讀的那一行**:這個模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`。掛鉤的規則:`code-loop check` 回 1 時,不論這一行在不在、解析出幾筆,至少記一筆 `code-loop`;解析得到就每個 `reason_kind` 各記一筆(閘名一律是 `code-loop`,所以 M 只算一道),原因用對照表寫死的一句,對照表查不到的用通用句「代碼審判定擋下(細節在上面)」;有多行時取最後一行。掛鉤把這一行從要印給人看的輸出裡濾掉。
+      - **對照表五句的正本在這裡**(掛鉤的對照表與測試的預期值都照這五句逐字寫;要改句子先改這裡,再改那兩處):`bound_tests` 是「受波及合約的測試沒過(或證不出跑過)」;`dispositions` 是「棧別檢核題表態不完整」;`lint_new` 是「這次改動帶進了新的告警」;`review` 是「高風險改動沒有有效的代碼審留痕」;`security_evidence` 是「資安護欄的證據不合格(或判不清)」。2026-10-20 [[Projects/安全主張驗收閘_計劃]] 加了第五道。(代碼審第三輪合約席:原本只有表態那句在這裡有出處)
+diff --git a/docs/lumos-toolchain-knowledge/Projects/資安風險提問分階段_計劃.md b/docs/lumos-toolchain-knowledge/Projects/資安風險提問分階段_計劃.md
+index abc943ac35c834d07da7b7d68ea4f1d3e3efa456..b079e393740e0d3513e120ea8bae6cb75c5ab181 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/資安風險提問分階段_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/資安風險提問分階段_計劃.md
+@@ -124,25 +124,25 @@ decisions:
+     valid: true
+ ---
+ # 資安風險提問分階段_計劃
+ 
+ ## 接手先讀：這份計劃管什麼
+ 
+ 白話：資安問題漏掉，多半不是不會答，而是當時沒想到要問。這份計劃讓問題從「要保護什麼、誰會碰、從哪裡進來」的清單長出來，像查帳時逐格對表，而不是靠當下想起什麼問什麼；每個問到的問題最後都要有去向，沒去向的會變成看得到的缺口。
+ 
+ - 只管「想到哪些問題、什麼時候問、答案去哪」，不管證據合不合格；證據判定與推送閘在姊妹計劃 [[Projects/安全主張驗收閘_計劃]]。兩篇共用同一套資產、入口、證據種類與工具類別詞彙：證據種類的值域與定義、工具類別的叫法以姊妹計劃〈二〉的證據種類表與〈三〉的工具類別表為準，本篇照抄名稱不另取。
+ - **兩篇 schema v2 新欄位的唯一完整清單在姊妹計劃〈一〉的〈schema v2 新欄位〉**，含 v1 圍欄讀到時的預設與 v1/v2 怎麼並存；本篇只講這些欄位怎麼用，不另列一份。
+-- 威脅類別表的正本是 [[Systems/資安威脅類別表]]（實作時從本篇〈二〉搬過去）；「威脅類別 → 最低證據種類 → 工具類別」的對照以那篇為準，姊妹計劃只引用。
++- 威脅類別表的正本是 [[Systems/資安威脅類別表]]（2026-10-20 已從本篇〈二〉搬過去、v1 定稿 14 類;待決 Q2 題目寫的「12 類」是發問當時的版本）；「威脅類別 → 最低證據種類 → 工具類別」的對照以那篇為準，姊妹計劃只引用。
+ - 要求來源：母計劃 [[Projects/消費專案產品安全Brief與證據驗收_計劃]] 的〈提問依決策時機安排，不等交付才確認權限〉（需求、架構、驗證、交付各階段都要有）、〈消費專案資安護欄盤點指令〉的安全覆蓋盤點（G8）、P2 五案三臂方法試行。
+ - 沿用：需求風險面表 `_REQUIREMENT_FACETS` 與 `pitfalls --stage`（[[Projects/後端工程提問與證據擴充_計劃]] d12、d13）、開頭欄位 `pending_questions` 與它的阻塞規則（[[Projects/待決問題改存開頭欄位_計劃]]）、唯讀盤點的 inventory 與 coverage（[[Projects/資安護欄唯讀盤點_計劃]]）。
+ - 威脅類別表是「類別對照」，不是題庫：它只決定一格該套哪類問題的模板；產生出來的題一律進消費專案計劃既有的 `pending_questions`，不另開提問帳、不另存一份題目清單。這跟母計劃 d7「不新增平行題庫」不衝突：d7 擋的是另建一套跟情境出題並行的題目與流程，本篇的類別表接在既有需求風險面與 `pending_questions` 後面，題目的家仍是那兩處。
+-- 這份只寫設計，不改程式。實作前過本篇規格閘與設計審；其中盤點契約變更依 d2 併進 [[Projects/安全主張驗收閘_計劃]] 那次設計審一起審，不另跑。
++- 2026-10-20 起進入實作(status doing):格子、候選題與資安風險面照本篇做了,條款全綁測試;過代碼審之前不算上線。實作前過了本篇規格閘與設計審；其中盤點契約變更依 d2 併進 [[Projects/安全主張驗收閘_計劃]] 那次設計審一起審，不另跑。
+ - 本篇的決策寫 d1–d9（d1 被 d5 取代、d4 被 d9 取代）；母計劃的決策一律寫「母計劃 dN」，姊妹計劃的寫「姊妹計劃 dN」，編號不通用。
+ 
+ ## 現況（2026-10-19 讀程式）
+ 
+ - 需求風險面表共 25 項（15 項一般加 10 項前端），專門問資安的只有交付階段的 `deliver-security` 一項：「誰能做這件事?有哪些敏感資料?邊界在哪?」；另有前端面的 `arch-fe-origin`（架構階段，只在計劃提到前端字樣時列，問 CORS、cookie、CSRF 誰設定）。等到交付才問誰能做什麼，權限設計早就定了，跟母計劃 d7 標題下〈提問依決策時機安排，不等交付才確認權限〉一節的時機安排不合。
+ - 它的觸發詞是「會員、使用者、帳號、權限、個資、付款、登入、管理員」任一。2026-10-19 在提交 301b0916 上重算：`docs/lumos-toolchain-knowledge/Projects/` 358 篇筆記有 222 篇命中，其中檔名帶 `_計劃` 的 298 篇有 188 篇命中（口徑：用 `scripts/lumos` 裡 deliver-security 的那條正規式對全文 `re.search`，本篇自己也算在內；重跑指令見下）。「使用者」幾乎每篇都有，等於永遠觸發；人看久了就不看了。
+   - 重跑：`python3.14 -c "import re,glob;fs=glob.glob('docs/lumos-toolchain-knowledge/Projects/*_計劃.md');print(len(fs),sum(1 for f in fs if re.search(r'會員|使用者|帳號|權限|個資|付款|登入|管理員',open(f,encoding='utf-8-sig').read())))"`
+ - 盤點的 inventory 只有 assets 與 surfaces（surfaces 有描述與對應資產），沒有角色、入口種類與信任邊界的結構欄位；coverage 只算入口有沒有對到護欄，不算「這個入口的這類威脅想過沒」。
+ - 盤點讀取器現在只收 `schema_version: 1`，`surfaces[].asset_ids` 允許空陣列，護欄的 `assets`、`surfaces` 必須都在 inventory 裡（`_secinv_check_links`），id 只收英數字與 `._-`（`_SECINV_ID_RE`）；這幾點決定了下面的 `@repo`、空資產與相容寫法（設計審 r1 實跑，見 `governance/review-reports/資安風險提問分階段/r1-intake.md` 的〈r1 機械重現〉）。
+ 
+@@ -205,21 +205,21 @@ decisions:
+ - **觸發規則的新資料形狀（引擎改動，新增）**：現在每一項只有 `when`（正規式字串清單），`_pitfalls_stage` 用「任一條命中就觸發」判。新增一個選填鍵 `triggers`，七個新項只用它、不寫 `when`；既有 25 項照舊只用 `when`，行為不變。
+   - 形狀：`"triggers": [{"words": [正規式字串, …], "min_distinct": 2}, {"words": […], "min_distinct": 1, "plus_any": [正規式字串, …]}]`。一條規則成立＝`words` 裡至少 `min_distinct` 個不同的元素對全文 `re.search` 命中，且有 `plus_any` 時其中至少一個也命中；`triggers` 裡任一條規則成立，這一項就觸發。
+   - 一項只能有 `when` 或 `triggers` 其中一個（兩個都有或都沒有，表的自我檢查測試紅）。判斷收成一支函式，`--stage` 與其他讀風險面表的地方都呼叫它，不在各處各寫。
+   - `--stage --json` 現在會把整列原樣序列化；`triggers` 裡只有字串與整數，照樣原樣輸出，所以新項的 JSON 多一個 `triggers` 鍵、沒有 `when` 鍵，既有 25 項的 JSON 逐字不變。
+   - 正式的 JSON 形狀寫進 [[Systems/pitfalls-code-loop]] 的 `--stage` 那段，實作當次一起寫。
+ - **指路行改成表的選填鍵**：需要多印一句指路的項，在表裡加選填鍵 `hint`（字串）；`_pitfalls_stage` 的通用迴圈印完某項的問題句後，有 `hint` 就多印一行，不在迴圈裡寫死任何 id（同族做法：前端面靠資料欄位 `role` 區分）。`--stage --json` 照舊原樣序列化整列，`hint` 就在那一項的物件裡；既有 25 項沒有這個鍵，JSON 逐字不變。verify-sec-evidence 與 deliver-sec-exceptions 的 `hint` 是：「這份計劃連到的資安護欄與 open 格子，跑 `lumos security list` 或 `lumos spec-gate <計劃>` 看」。
+ - **問題怎麼進待決問題**：該人裁的照既有 `question-add` 寫進消費專案計劃的 `pending_questions`，標階段；會影響實作的權限題標需求階段與阻塞，規格閘照既有規則擋。題目文字帶格子 id，寫成 `[cell:<格子 id>]`（例：`[cell:orders-pay/order/authz-object/stranger]`），讓人讀得出是哪一格、也讓候選題輸出能去重；格子狀態不靠這段字算（見〈四〉）。
+   - 不選：在 `pending_questions` 加「格子」欄（改既有開頭欄位契約，而且題目結了不代表格子有去向，兩者會漂移）。
+ - **候選題怎麼產生**：新增 `lumos security list --questions`（不另開子命令，因為它就是盤點同一份格子的另一種輸出）：
+   - 依 open 格輸出候選題句：表的模板代入入口、資產名稱；有角色維度的類別一格就是一個角色、一題；其他類別的 `{角色}` 代入該入口全部 `actor_ids` 的名稱（用頓號串起來）。每題前面帶 `[cell:<id>]`，尾端固定附一句「這道防護依賴的服務逾時、丟例外或不可用時，是拒絕還是放行?」（威脅類別表 v1 定稿的共同附問；寫在產生規則裡、不寫進表的模板欄）。
+-  - 帶 `--plan <計劃>` 時，讀那份計劃的 `pending_questions`，題目文字已含同一個 `[cell:<id>]` 的格子不再輸出，所以重跑是冪等的；不帶就全列。
++  - 帶 `--plan <計劃>` 時，讀那份計劃全文(不只 `pending_questions`),已經出現同一個 `[cell:<id>]` 的格子不再輸出，所以重跑是冪等的；不帶就全列。看全文的理由:題目結了之後可能整理進正文或決策,只看 `pending_questions` 會把已處理過的格子再問一次(代碼審第一輪規格對照席點出跟原寫法不同,照程式改寫)。
+   - 一次最多輸出 30 題（`--limit` 可改），超過只印前 30 題加一行「還有 N 題」，避免一次灌幾百題進計劃。
+   - 只輸出、不寫檔；要進 `pending_questions` 仍由人或 AI 逐題跑 `question-add`。
+ - **格子怎麼看**：盤點 coverage 加一區 `cells`（每格帶 id、狀態、資料列的表版號），由 `security list` 列出。`security list` 不驗章（維持盤點 S7 不執行程序，見姊妹計劃〈一〉）：有 considerations 的格子在 list 輸出標 `considered_unverified:<outcome>`（例如 `considered_unverified:not_applicable`），只代表「有一列考量、簽章未驗」，不代表算數；這一列最終算不算數、格子是 not_applicable／risk_accepted 還是 open，由姊妹計劃的閘門與 `security evidence` 判。預設只印各狀態的格子數與 open 格的清單，`--all` 才逐格全列；`--json` 照舊一份完整物件。
+ - **跟筆記庫有關的檢查放在讀得到筆記庫的指令**：`pitfalls --stage` 只讀那份計劃的文字、不讀筆記庫（`_pitfalls_stage` 只收計劃檔路徑、自己讀那一個檔，連待決問題也是從那份檔的開頭欄位解析），解析不了計劃連到哪篇 Systems、那篇登記了哪些護欄、哪些格子是 open。所以「這份計劃連到登記了資安護欄的 Systems」與「這些 Systems 的 open 格子」由 `security list`（盤點，本來就讀筆記庫）與 `spec-gate`（規格閘，本來就讀筆記庫）列出。spec-gate 這一行是新增的提醒，家在 [[Systems/規格閘]]：
+   - **先便宜地看要不要讀**：只看計劃 `lands_in` 與 `related` 連到的那幾篇節點原文有沒有 `lumos-security-v1` 字樣；一篇都沒有就不印這一行、也不建快照。
+   - **讀法只有一支**：有字樣才呼叫一支公開的共用函式（例如 `_secinv_report(vault)`，`security list` 也改成呼叫它），走盤點既有的硬化快照與 `_secinv_build`，不另寫 inventory 解析，也不從 spec-gate 手上的一般 Env 讀。
+   - **印什麼**：連到的節點裡登記了哪些護欄；open 格子數的口徑是「連到的節點裡的護欄引用到的入口，再加上連到的節點若放了 inventory 就是全部入口」上的 open 格子；另印一個全庫 open 總數，讓人看得出全庫還有多少。
+   - **出錯時**：盤點讀取不完整、`errors` 非空、讀到不認得的 schema_version，或這一步自己拋錯，一律只印一行警告（例如「資安盤點讀取不完整,這一行略過」），不印格子數；不影響規格閘的判門、退出碼與留痕。
+ 
+ ## 四、每個答案只有三條去向，機械追得到
+@@ -232,21 +232,21 @@ decisions:
+ | 只有候選護欄 | 同上，但 lifecycle 是 candidate | `candidate:<id>`；不算有去向，跟 open 一起列進缺口數 |
+ | 不適用 | `considerations` 一列：入口、資產、類別（有角色維度再加角色）、`outcome: not_applicable`、核可欄位 | `not_applicable`；盤點另列一區「待審適用性的格子」 |
+ | 接受風險 | `considerations` 一列：同上、`outcome: risk_accepted`、核可欄位（含補償措施與到期日） | `risk_accepted`；過期或不合格就變回 `open` |
+ | 想過但沒下文 | 什麼都沒寫 | `open`：盤點輸出的缺口，不能當安全 |
+ 
+ - **覆蓋口徑跟現行入口覆蓋一致**：現行 `_secinv_surface` 只算 `concerns` 含 security、非 retired 的條目，並分 active 與 candidate；格子沿用同一個口徑，純 business 的 Invariant 就算填了 `threat_categories` 也不覆蓋格子。
+ - **護欄覆蓋格子不吃交叉積**：一條護欄寫了兩個入口、兩個資產，只覆蓋「入口 × 它自己 `asset_ids` 裡有的資產」那幾格，不是 2×2 全蓋。要更細就拆成兩條護欄。以 repo 為單位的四類：護欄的 `surfaces` 與 `assets` 寫 `@repo`。
+ - **部署面的宣稱另登一條 repo 層級護欄**：備份、快照、日誌保存、儲存加密、日誌防竄改這類部署面宣稱，另登一條 `surfaces`、`assets` 為 `@repo`、`threat_categories` 含 config-deploy 的護欄，不在入口護欄上加標 config-deploy（威脅類別表 v1 定稿的另登規則）。
+ - **護欄層 not_applicable 跟格子層 not_applicable 是兩件事**：護欄自己的 `reported_status: not_applicable`（v1 既有）是「這條護欄宣稱自己不適用」，照現在的行為進 `applicability_pending_control_ids`；它覆蓋到的格子狀態仍是 `control:<id>`，不會變成格子的 not_applicable。格子層的 not_applicable 只來自 considerations。
+ - **待審適用性的格子是新行為**：現在的 `applicability_pending_control_ids` 只來自護欄自己的 `reported_status`（`scripts/lumos` 的 `_secinv_surface`），沒有 considerations。v2 新增一區 `applicability_pending_cells`，列出所有格子層 not_applicable 的格子；盤點只列、不裁核可足不足。
+-- **核可走姊妹計劃的核可鏈**：considerations 的核可一律走姊妹計劃 d10 的核可鏈（`.lumos/security-approvals.jsonl`，`type: consideration`、`target` 是格子 id，內容雜湊蓋住入口、資產、類別、角色、outcome、表版號與那一列的全部鍵），形狀與檢查函式以姊妹計劃〈四〉的〈核可物件：例外與 considerations 共用一套〉為準，這裡不另寫。那一列只放 `decision_ref`、`reason`、`compensating`（risk_accepted 必填）與 `expires_on`，`expires_on` 必須等於鏈上對應那一筆的 `expires_on`；核可日、簽章人與簽章都在鏈上那一筆，不放在列裡。到期上限照鏈上那一筆算：risk_accepted 最長 30 天（31 天起無效），not_applicable 最長 180 天（見 d4）；到期日當天有效、隔天起變回 open，日期一律 UTC。鏈上沒有對得上的有效一筆，這一列不算數、格子是 open。所以 AI 寫一列 considerations 關不掉缺口。
++- **核可走姊妹計劃的核可鏈**：considerations 的核可一律走姊妹計劃 d10 的核可鏈（`.lumos/security-approvals.jsonl`，`type: consideration`、`target` 是格子 id，內容雜湊蓋住入口、資產、類別、角色、outcome、表版號與那一列的全部鍵），形狀與檢查函式以姊妹計劃〈四〉的〈核可物件：例外與 considerations 共用一套〉為準，這裡不另寫。那一列只放 `decision_ref`、`reason`、`compensating`（risk_accepted 必填）與 `expires_on`，`expires_on` 必須等於鏈上對應那一筆的 `expires_on`；核可日、簽章人與簽章都在鏈上那一筆，不放在列裡。到期上限照鏈上那一筆算：risk_accepted 最長 30 天（31 天起無效），not_applicable 最長 180 天（見 d9;d4 已作廢）；到期日當天有效、隔天起變回 open，日期一律 UTC。鏈上沒有對得上的有效一筆，這一列不算數、格子是 open。所以 AI 寫一列 considerations 關不掉缺口。
+ - **核可不合格的列不參與互斥**：過期、超過那一型的到期上限、到期日早於鏈上的核可日、`expires_on` 跟鏈上那一筆不同、核可決策找不到或作廢、缺 `decided` 的決策、缺欄位、核可鏈上沒有對得上的有效一筆的列都「不算數」：它不讓格子變成 not_applicable 或 risk_accepted，也不跟覆蓋這一格的護欄衝突；有有效護欄就是 `control:<id>`，沒有就是 open。輸出另列這些不算數的列與原因，留著不刪也不出錯，審計軌跡保留。
+ - **去向之間互斥**（S3 怎麼判）：同一格同時有「覆蓋它的護欄（不論那條護欄的 reported_status）」與「一列算數的 considerations」，或同一格有兩列算數的 considerations，就列格子層錯誤 `cell_conflict`，該格狀態是 `conflict`，不任選一個。
+ - 「想過沒下文」不靠追問題：只要格子在、三種去向都沒有，就一直是 `open`。題目結成已決但沒有寫成護欄或 considerations，格子照樣 open。
+ - open 格子現在**不擋推送**：母計劃 d9 擋的是「已登記護欄的證據不合格」；open 只在 `security list` 列出、spec-gate 提醒（見〈三〉）。要不要擋，等〈五〉的量測。
+ 
+ **格子層錯誤另放一區，不擋推送**：
+ - 下列錯誤放進 `security list` 新的 `cell_errors` 區，**不進既有的 `errors`**，所以不改退出碼，也不會被姊妹計劃閘門的「盤點登記錯誤就整道擋」接到（姊妹計劃寫明閘門不讀 `cell_errors`）。`cell_errors` 只收 considerations 列與入口層的問題；護欄（controls）自己的問題歸姊妹計劃的護欄層錯誤：`cell_conflict`；`surface_kind_missing`（v1 入口沒有 kind）；`surface_without_assets`；`surface_without_actors`；`unknown_category`（considerations 引用表裡沒有的類別）；considerations 指到不存在的入口、資產或角色（`consideration_unknown_ref`）；類別對該入口 kind 不適用（`consideration_category_not_applicable`）；資產不在該入口的 `asset_ids`（`consideration_asset_not_on_surface`）；`outcome` 不是兩值之一（`consideration_outcome_invalid`）；surfaces 出現 `@` 開頭的 id；格子數超過上限（`cells_limit_exceeded`，見下）。
+ - 為什麼不進 `errors`：這些是「格子算不清楚」，不是「護欄登記壞掉」；一個格子的筆誤不應該讓整個專案推不出去，而 open 格子本來就不擋。
+ - **讀不完整時格子不算**：盤點 `read_complete` 是 false、inventory 壞掉或沒有 inventory 時，`cells` 整區標 `status: unknown`、不輸出 open 數，避免把「沒讀到」顯示成「沒有缺口」；spec-gate 那一行照〈三〉只印警告。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index f4cbb7e0d73ff9ad8c572394b7f184760267c145..cd111645845265032eac3f9bc858c37bd48462d0 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -142,21 +142,21 @@ WHY:裁判簽名也改成收集:它管的是測試檔與掛鉤,不管 `scripts/l
+ WHY:中斷一律結束:清單上的每一支呼叫被訊號殺掉(128 以上)就以那個回傳碼停下;陷阱拆開,EXIT 只收拾,INT/TERM/HUP 先收掉自己的背景工作再以 130/143/129 結束 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉2] [因:原本 EXIT、INT、TERM 共用一支陷阱、裡面不結束,掛鉤自己被中斷時刪掉暫存目錄後照樣往下跑(/bin/bash 3.2.57 實測),收集模式會更常踩到;bash 要等手上那支前景子程序結束才跑陷阱,所以「立刻」是那支結束之後不再開始下一道] [test:t_prepush_interrupt_stops_every_gate]
+ 
+ PITFALL:掛鉤被砍或按 Ctrl-C 之後,全套測試的各片變成 ppid=1 的孤兒繼續跑(最多八分鐘,輸出寫進已刪的資料夾),兩個測試 log 也留在 TMPDIR [出處:第一輪代碼審併發席,/bin/bash 3.2.57 實測四片全成孤兒;第二輪代碼審併發席、架構對齊席:只對掛鉤送 HUP 時 8 片全活著;第三輪代碼審併發席、邊界席:片的子行程沒收、子殼的 HUP 陷阱沒測試守] [根因:掛鉤的陷阱只對 `jobs -p` 列出的直接子行程(跑測試的子殼)送 TERM,各片是孫行程;非互動 bash 用 & 起的背景命令又忽略 SIGINT,Ctrl-C 對整個行程群組送的 INT 也殺不到;主殼與子殼原本都沒接 HUP;兩個 log 用 mktemp 建在 `$_PP_TMP` 外] [修法:跑測試的子殼 `run_group` 自己接 TERM 與 HUP,用主殼同一支 `_pp_kill_jobs`(`jobs -p`)收掉它起的各片——不自己記 pid 收,「& 起片」與「記下 pid」之間有空窗,訊號落在中間會漏收剛起的那片;各片起的時候先換到自己的行程群組,`_pp_kill_jobs` 對每個工作整組送 TERM(不是組長才退回只送本人),連片自己起的子行程一起收(第三輪代碼審併發席:只收片本人時,片的子行程全成孤兒,起片後幾毫秒內收到訊號時連片也會漏);主殼也接 HUP(129);測試看那一片的 pid 在掛鉤結束後有沒有消失,不靠「睡幾秒再看有沒有寫下結束標記」的計時窗口(負載下會假綠);兩個 log 改放 `$_PP_TMP` 內,紅時要給人看的那份先複製到外面再印路徑;測試起掛鉤時先把 SIGINT 裝回預設,不然測試跑在推送前閘的背景分片裡、繼承「忽略 SIGINT」,bash 的 INT 陷阱裝不上,測 Ctrl-C 的斷言會假紅] [test:t_prepush_interrupt_stops_every_gate] [test:t_prepush_test_logs_inside_tmp]
+ 
+ PITFALL:整組只送一發 TERM 時,送的那一刻正在 fork 的片(或它的子行程)生出來的孩子變成 ppid=1 的孤兒 [出處:第四輪代碼審併發席,/bin/bash 3.2.57 模擬掛鉤啟動後 20–45 毫秒送 TERM] [根因:訊號是逐一投遞給群組當下的成員,剛生出來的孩子已經在群組裡、卻沒收到那一發;之後沒人再送] [修法:`_pp_kill_jobs` 送完第一發後短等 0.2 秒,再對每個群組送第二發,群組已空的錯誤吞掉;測試用「收到 TERM 才生孫行程」的假片讓這個情形每次都成立] [test:t_prepush_interrupt_stops_every_gate]
+ 
+ PITFALL:在原生 Windows 的 Python 上推送時,全套測試每一片一起跑就 AttributeError、被判成有紅,推送永遠被擋,「紅的是這幾支」又是空的 [出處:第四輪代碼審正確性席、併發席、通才席] [根因:換群組那段無條件呼叫 `os.setpgid`,Windows 的 Python 沒有它;就算繞過,Windows 的 `os.execv` 是起新行程後讓舊的立刻回 0,測試沒跑完就判綠] [修法:有 `setpgid` 才換群組再 `exec`(`setpgid` 失敗就不換、照樣 `exec`);沒有就在同一個行程裡用 `runpy` 跑測試檔,離開碼照實傳出] [test:t_prepush_interrupt_launcher_without_setpgid]
+ 
+ WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓換群組那段與其他每個 `$PY` 閘一啟動就回 0;掛鉤不為這件事加機制 [出處:第四輪代碼審資安席] [因:要先刻意放一支 sitecustomize、再讓推送行程的環境指過去才成立,屬刻意設定環境的手法,在工具鏈的資安範圍外(工具鏈本身的資安只看提示注入、讀寫與執行越界、非刻意的一步繞過;見 Systems/pitfalls-code-loop 工具鏈資安範圍 RULE);非刻意殘留、別的程序帶進來的 PYTHONPATH 屬那條 RULE 的第 ③ 類、照審;而且每個 `$PY` 閘都一樣,不是換群組那段獨有、修補前就有] [不選:整支掛鉤統一給 `$PY` 加 `-I` 或清掉 PYTHONPATH——改動面是每一支閘,換到的只是「已經能改環境的人」多走一步]
+ 
+-找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的四道怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
++找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的五道(含有資安登記時的安全證據)怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
+ 
+ ## 名稱篩選的跳脫與撞名(2026-10-15)
+ 
+ - `_run_cmd_expand` 依平台 `name_filter` 跳脫:regex(Jest/Vitest -t)跳脫正規式字元與斜線再加 shell 引號;regex_tail(Playwright -g)跳脫後錨在結尾 `\s<名字>(?:\s@\S+)*$`(容許 Playwright 接在標題後面的 tag)(-g 比專案名、檔名、describe、標題整串);plain(dart)與 ident 只加引號。Windows 上名稱含 `& | < > ^ % " !` 判不合法(cmd.exe 不認單引號)。 [test:t_run_cmd_name_filter_escape]
+ - `_run_bound_tests` 對名稱篩選型平台先做靜態撞名檢查(`_name_collision_reason`,guard kill 也用):數「篩選選得到的全部標題」(含 it.skip、帶 ${ 的樣板、.each、含逗號的標題),拿實際會用的篩選式比每個標題(regex 含這個名字、不分大小寫;regex_tail 用錨定式 search、只看測試;plain 含這個名字、分大小寫;describe 加測試的拼名只在同一支檔裡配對),撞名就不跑、記證不出(不是綠)。Windows 上 {method} 改用 list2cmdline(cmd.exe 不認單引號),規格閘與推送前閘一致。跑過的證據補了 playwright 一筆實測樣式(vitest 跟 jest 共用 node-jest 那一條,見下一節)。單源 [[Projects/測試名收自由字串_計劃]]。 [test:t_name_filter_collision_not_green]
+ - 推送前合約測試閘的名稱合法性改用 `_test_name_ok`;`類別.方法` 拿最後一段比,只在點號兩邊都是識別字時才用。 [test:t_test_name_ok_rules] [test:t_clause_binds_free_string]
+ 
+ ## 跑過證據認得 vitest(2026-10-15,[[Projects/前端框架從vue分出_計劃]] F1)
+ 
+ `node-jest` 那條「跑過的證據」樣式改成同時吃 jest(`Tests:       1 passed, 1 total`)與 vitest(`      Tests  1 passed | 33 skipped (34)`),`node-vitest` 指向同一條;所以設定寫 `node-jest` 卻用 vitest 跑的專案也認得。中段限長 200 字(舊樣式遇到超長一行會二次方回溯,4 萬字實測 11 秒);數字前只要求「前一個字不是數字」(色碼結尾的 m 緊貼數字,字詞邊界不成立),空白只收同一行的、不跨行;`Tests:` 與 `Tests` 兩支都要在行首或行首前綴之後(前綴只收空白、色碼與游標控制碼、方括號或 ISO 時間戳、以冒號結尾的工作區前綴,如 turbo 的 `@org/web:test:`、pnpm -r 的 `packages/app test:`),測試標題裡出現「Tests: 2 passed」或「Tests 2 passed」都不算(代碼審 r3 折入,測試 t_ran_evidence_workspace_prefixes、t_ran_evidence_title_lines_rejected、t_ran_evidence_prefix_regex_linear;r2 折入,測試 t_ran_evidence_anchored_to_summary_line、t_ran_evidence_bounded_middle_fast;r1 折入,測試 t_ran_evidence_colored_per_line_reader、t_ran_evidence_no_cross_line_match)。全部 skipped 照舊判沒跑過。vitest 對不存在的測試名同樣回 0(5.0.4 實測),所以這條摘要行是唯一的證據。成本:每支綁定測試各起一次 vitest、預設依序跑,綁得多時用 `bound_tests.parallel`。測試 t_ran_evidence_vitest_one_passed、t_ran_evidence_vitest_all_skipped、t_ran_evidence_node_jest_accepts_vitest、t_ran_evidence_jest_summary_kept、t_ran_evidence_long_line_fast。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index c8b5770e34a5469e5353b02d71d523cc6ea89ad3..5dc3360e6c1b43ead108527f723b494a807a0e12 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -231,21 +231,21 @@ REVISIT:2027-01-31 `--stage` 目前不列待決問題:開頭欄位版上線後
+ ## 手動 code-loop check 的預設起點取最近的主線(2026-10-13)
+ 
+ WHY:手動 `code-loop check` 不帶範圍時,起點改成「主線候選合起來跟 HEAD 的最近共同祖先」:候選沿用推送閘的 `_push_mainlines`(遠端取這條分支上游所在的遠端,沒有就用 origin),只多加本機 main/master(手動檢查在推送前跑,本機主線可能有還沒推的提交);不再照「先本機 main、再 master」的固定順序取第一個 [出處:2026-10-13 本會談實測:本機 main 落後遠端 52 個提交,範圍把別人已合併的高風險改動算進來、印出 tier=high] [因:推送閘的起點早就因同一個理由改成全部候選一起算,候選清單與挑法(`_push_pick_base`)都重用,不另立第三套主線判法(代碼審 r1 架構對齊席)] [不選:掃全部遠端(過期 fork 的 main 若含 HEAD,整條分支會被當成沒有改動而少擋,r1 單審席)、改成優先遠端 main(遠端可能落後本機未推的主線提交,一樣是固定順序)] [test:t_codeloop_default_base_prefers_newest_mainline]
+ 
+ 2026-10-14 起算法本體搬到推送起點那一區成為共用的 `_lens_default_base(repo_root, tip=None, include_local=True, deadline=None)`,`_codeloop_default_base` 留成呼叫它的薄包裝(行為不變);第二個消費者是回頭重讀 v2 指紋在沒有遠端舊值時的分岔點(傳解析好的頂端、不加本機 main/master;推主線時推送前掛鉤給了遠端舊值,分岔點直接取頂端與遠端舊值的 merge-base,不經它),理由見 [[Projects/回頭重讀指紋不因主線前進失效_計劃]]〈做法〉3。改這支的候選或挑法時兩邊一起跑 `-k codeloop_default_base` 與 `-k reread_fp`。
+ 
+ REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍用 `_mainline_ref`(固定順序取第一個),本機 main 落後或有多個遠端時可能跟上面算分級的範圍不同;到期在一個本機 main 落後的工作樹各跑一次兩種範圍,不同就改成共用 `_lens_default_base`(`_codeloop_default_base` 是它的薄包裝;回頭重讀沒有遠端舊值時的分岔點也走它,改的時候 `-k reread_fp` 要一起綠),相同就刪這行(代碼審 r2 架構對齊席)
+ 
+ ## code-loop check --keep-going(2026-10-14,[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5)
+ 
+-白話:`code-loop check` 本來是第一道沒過就停(合約測試 → 表態 → 新增告警 → 審查留痕,先中的先報);帶 `--keep-going` 時四道都判完、每道擋下各印各的原句,推送前掛鉤用它一次看到這個 ref 的全部原因。不帶旗標時行為與輸出一字不變,CI 與其他呼叫者不受影響。
++白話:`code-loop check` 本來是第一道沒過就停(安全證據 → 合約測試 → 表態 → 新增告警 → 審查留痕,先中的先報;安全證據那一道只在有資安登記時出現);帶 `--keep-going` 時五道都判完、每道擋下各印各的原句,推送前掛鉤用它一次看到這個 ref 的全部原因。不帶旗標時行為與輸出一字不變,CI 與其他呼叫者不受影響。
+ 
+ WHY:判定函式裡所有 return 都經過同一個收尾函式 `_fin`:keep-going 下擋下累積進清單,清單非空就回擋下(第一筆的欄位、`blocks` 清單、tier 一律是算出來的分級),清單是空的才照原樣放行——放行站點(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)的意思變成「這一道過了」,不能蓋掉前面記下的擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]] 第一輪設計審(代碼審內部放行蓋掉擋下)] [因:收集模式下最大的風險是某個放行站點直接回傳、把前面記下的擋下吞成放行] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+ 
+ WHY:keep-going 下 pitfalls 失敗時,表態(要 pitfalls 的資料)與代碼審留痕(要 tier)照舊 fail-open 不判,新增告警閘只看改動範圍,照跑;合約測試先紅時照樣算分級、判後面幾道,兩個合約測試擋下點(一般的、與帶低風險提醒旗標卻算出 tier=high 重跑的那個)都記成 `bound_tests`。所以推送前(掛鉤認得就一律帶旗標)比直接跑 CLI 嚴:pitfalls 失敗又有新增告警時,不帶旗標放行,帶旗標擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5;第一輪代碼審正確性席要求寫明這個差異] [因:一次列出全部原因,前提是每一道在它需要的資料拿得到時都判] [test:t_code_loop_check_keep_going] [test:t_code_loop_keep_going_pf_fail_stricter]
+ 
+ WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitfalls 失敗時照跑新增告警閘)集中在 `_CodeloopKg`;跑 pitfalls 取分級那一步拆成 `_codeloop_pitfalls_tier`。判定函式的複雜度 40→32(改動前 35) [出處:第一輪代碼審通才席:新增告警閘把這支的 C901 當成新告警擋下] [因:放行站點不經收尾的守衛照舊成立(每個回傳是 `_fin(...)`,或 `hit` 指派的變數、而且緊接在判它非空的 `if <那個變數>:` 底下——不帶旗標時 `hit` 回的就是 `fin(v)`,帶旗標時回 None,無條件 `return` 那個變數會讓整個判定函式回 None、下游 `.get` 崩);函式定義那一行多了參數,指紋已經變了,所以另用 lint-waive 附理由留痕] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+ 
+ 輸出契約:文字模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`(沒有擋下時是空的),是推送前掛鉤唯一的機讀通道;`--json` 不印這一行,改多一個 `blocks` 清單(每筆 `reason_kind`、`reason`),`blocked`、`reason`(第一筆)照舊。合約測試狀態那幾句照「合約測試有沒有記成擋下」選:沒記成擋下(低風險只提醒)就照印「只提醒不擋」。治理帳照舊一次判定一筆 `code-loop` `blocked`(統計的筆數意義不變),`extra` 多一個 `blocks` 種類清單。掛鉤那一頭怎麼讀見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉。
+ 
+ ## 工具鏈本 repo 的代碼審鏡頭範圍(2026-10-15,[[Projects/工具鏈代碼審資安與資源鏡頭範圍_計劃]],決策 d8)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+index 0987fc23d039d723afbadb54b69143ae45f2cccc..2a9363d6ca84aab3e43879fd1a2fb7d245eb25c2 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+@@ -66,13 +66,13 @@ WHY: `scripts/lumos` 在此節點只負責測試品質子命令的部署完整
+ PITFALL: test-quality 三支 bundle 檔加進隨工具安裝的清單、又新增 test-quality 子指令後，四道同步守衛在分支上一直是紅的，直到推送前跑全套才發現：文件寫的頂層指令數、每個子指令 --help 的「什麼時候用」、指令總目錄字數上限、提交前與提交後掛鉤的豁免清單 [出處:2026-10-09 測試品質分支推送前全套] [根因:分支開發期間只跑相關子集，這幾道守衛不在子集裡] [防回歸:t_precommit_whitelist_drift_guard、t_every_subcommand_has_when、t_docs_command_count、t_command_index_complete]。新增子指令或 vendored 檔時，連同這四處一起改；豁免在來源 repo 本身照樣不生效。
+ 
+ PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器排第一、頂層 import 共用 runner，被依賴者還沒從已驗 bytes 登記，標準 import 就從磁碟另載一份並吃同時間戳同大小的舊 bytecode；指紋檢查回報全部合格，scan --semgrep 卻跑舊判讀 [出處:governance/review-reports/測試品質部署配套校驗/r1-通才-sonnet.md、r1-邊界-sonnet.md、r1-接手-sonnet.md 三席獨立重現] [根因:載入順序沒照依賴、載入後沒核對引用來源] [防回歸:test_semgrep_adapter_uses_verified_runner_not_stale_bytecode、test_fifo_sidecar_does_not_hang_other_commands、test_sidecar_runtime_error_only_blocks_test_quality]。改成依賴順序 `_TEST_QUALITY_LOAD_ORDER` 載入，載入後以物件身分核對每支 sidecar 引用的配套模組與其函式、類別都是已驗那份（不靠名字比對，包過一層的函式、工廠產物、取別名的實例才不會誤報）；數字與字串常數沒有來源資訊，核對看不到，靠依賴順序那道擋。順序改錯時守衛單獨回部署不完整（test_bundle_reference_guard_rejects_wrong_load_order）。用 `_regular_own_fd` 非阻塞開檔後判一般檔，任何載入例外只讓 test-quality 回不完整。
+ 
+ ## 測試品質接入標準的前端節(2026-10-15,[[Projects/前端知識與風險詞_計劃]] 做法 8)
+ 
+ - lumos-project-notes 的 `commands/test-quality-standard.md` 加〈網頁前端(Vitest／Jest + Testing Library)的撰寫補充〉:假計時器下 user-event 要設 `advanceTimers`、fetch 替身要能控制先後、同輪連點用同步的 `fireEvent.click` 兩次;`03-寫回圖譜.md`〈實作測試品質〉加一句指過去。綁的測試 `t_test_quality_standard_frontend_section`。
+ 
+ ## 給安全證據閘用的讀法(2026-10-20,[[Projects/安全主張驗收閘_計劃]])
+ 
+-- `junit()` 改成自訂 XMLParser target 邊解析邊數深度(超過 64 層立刻停)、每個案例處理完就清掉元素,不先建整棵樹;拒收改丟帶原因代碼的 `JUnitRejected`(`ValueError` 子類別,既有呼叫端照樣接得到),訊息字串與優先序不變。C 版解析器的 iterparse 不收自訂 builder,所以不用 iterparse。
++- `junit()` 改成自訂 XMLParser target 邊解析邊數深度(超過 64 層立刻停)、每個案例處理完就清掉元素,不先建整棵樹;拒收改丟帶原因代碼的 `JUnitRejected`(`ValueError` 子類別,既有呼叫端照樣接得到),訊息字串與優先序不變。C 版解析器的 iterparse 不收自訂 builder,所以不用 iterparse。拒 DTD 只有 `NoDtdTreeBuilder` 一處(target 委派給它),丟 `JUnitRejected("report_unparseable", 原訊息)`,安全證據閘不比對訊息字串;XML 語法錯照舊是 `ET.ParseError`(型別本身就分得出來)[test:t_secev_r1_junit_dtd_typed_rejection]。
+ - `load_receipt` 抽成只吃資料的 `load_receipt_data(get)`、核對本體抽成 `fault_check(phases, target)`;`check()` 改呼叫它們,輸出不變。閘門從提交樹讀三份 capture 重跑同一套,不採信作者存的結果檔;拒收丟帶代碼的 `ReceiptRejected`。說明的家在 [[Systems/安全證據閘]]。
+ - REVISIT:[when-status:Projects/安全主張驗收閘_計劃=done][by:2027-01-31] 照 [[Verification/測試品質第四輪修補驗證]] 的 revalidate_when 重驗那篇(這次改了拒收型別與 bundle 指紋)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/安全證據閘.md b/docs/lumos-toolchain-knowledge/Systems/安全證據閘.md
+index 80ee8938ebef9255bab72bd70dab1c9424c49cf0..1069a69fa9d9cdebfccadaf96e1d91ae6e3e9f86 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/安全證據閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/安全證據閘.md
+@@ -37,19 +37,26 @@ verified_by:
+ ## 為什麼這樣
+ 
+ WHY:安全證據那一道排在 code-loop check 所有放行早退之前、不看 tier [出處:[[Projects/安全主張驗收閘_計劃]]〈四〉] [因:排在新增告警閘之後時,取不到 HEAD、merge-base 等於 HEAD、算不出 merge-base、全零起點、pitfalls 失敗五條早退路上根本跑不到] [不選:把五條早退對有登記的專案改成擋]
+ WHY:核可一律記在只追加、每筆帶前一筆雜湊的核可鏈,簽章用 ssh-keygen -Y 對規範化 JSON [出處:[[Projects/安全主張驗收閘_計劃]] d10] [因:分散在各物件的簽章可以重放、跨專案貼、讓撤銷的金鑰復活] [不選:PR 核准、提交簽章]
+ WHY:預檢先 git grep 字樣,命中的篇章再照盤點的嚴格圍欄讀法判,沒有真圍欄就不建快照 [出處:2026-10-20 實作量測:工具鏈自己 27 篇散文提到 lumos-security-v1、零圍欄] [因:沒登記的專案每次推送不該多讀三版整個圖譜]
+ WHY:來源決策失效(source.decision_ref 指到作廢或不存在的決策)在盤點層是 reference_error,閘門把這一種落到那條護欄的 source_decision_invalid,不整道 registration_error [出處:2026-10-20 實作 S15] [因:整道擋會蓋掉護欄層代碼,人看不出是哪一條的來源壞了;其他登記錯誤歸不到單一護欄,照舊整道擋] [test:t_secev_s15_source_and_questions]
+ PITFALL:三版各自建 Env、證據圍欄卻用篇章路徑當快取鍵時,主線版讀到的是推送版的圍欄,「主線有、推送版刪掉的證據項照算」整個失效 [出處:2026-10-20 實作 S54 先紅] [根因:同一次判定共用一個快取、三版的篇章路徑相同] [修法:快取鍵加上 Env] [test:t_secev_s54_frozen_items]
+ PITFALL:_nodehome_list 給的提交樹路徑已經 NFC 正規化,兩個只差 NFC/NFD 的原始路徑會被併成一個,碰撞看不到 [出處:2026-10-20 實作 S56 先紅] [根因:列檔時就正規化] [修法:快照另外用原始路徑列一次查碰撞;macOS 上造樣本要 core.precomposeUnicode=false] [test:t_secev_s56_tree_snapshot]
+ PITFALL:Python 3.14 的 json 對十萬層巢狀直接解完、不丟 RecursionError,「呼叫端接 RecursionError 轉 report_too_deep」那條路走不到 [出處:2026-10-20 實作 S42 先紅] [根因:新版 json 的解碼器不再遞迴到底] [修法:解完用迭代量深度,超過 128 層判 report_too_deep(_secev_loads)] [test:t_secev_s42_deep_and_errors]
+ PITFALL:首推主線到空遠端時,推送前掛鉤給的起點是空樹(pp_range_for 把全零換成空樹),被當成「本機找不到的舊值」判 mainline_unknown,第一次推主線一定擋 [出處:2026-10-20 合成消費 repo 真推送實驗] [根因:只認全零是首推] [修法:空樹與全零都當新 repo] [test:t_secev_s18_real_push_stale]
++WHY:外來 JSON(證據圍欄、SARIF、k6 摘要、guard kill 背書、核可鏈每一筆、工具清單)在讀進來那一層驗型別(bool 不算數值),單項壞只讓那一項 invalid:report_malformed 並講出哪一列哪一欄;讀法沒預料到的型別錯由 _secev_judge_item 兜底成同一個代碼,核可鏈那一筆判 approval_fields_missing、其餘照鏈往下算 [出處:代碼審 code-安全證據閘與資安格子 r1 正確性、邊界席] [因:原本丟 TypeError 變整道 evaluation_error,其他護欄的判定一起丟,而且例外救不了、只剩整道降成只提醒] [test:t_secev_r1_type_gate_fence_and_reports]
++WHY:主線只從主線 tip 版的設定讀(security_evidence.mainline 只收 refs/remotes/…),主線候選全部一起算 merge-base --all 挑 [出處:代碼審 r1 資安席、規格對照席] [因:被推的提交自己指定「拿誰比」,改一個檔就讓凍結比對與核可鏈前綴變成自己對自己;固定取第一個候選在 git-flow 與 fork 會錯] [test:t_secev_r1_mainline_not_from_pushed_config] [test:t_secev_r1_mainline_all_candidates]
++WHY:核可鏈有過有效筆就永遠只能追加、核可日不准早於前面有效的筆、寫入要互動終端加手打確認碼 [出處:代碼審 r1 外家、整合、資安席;[[Projects/安全主張驗收閘_計劃]] d17] [因:到期被當成「從沒有效過」時任何人都能整條換掉重釘;回填日期讓到期金鑰復活;AI 可一路自產金鑰自簽] [test:t_secev_r1_chain_expired_stays_append_only] [test:t_secev_r1_approval_add_needs_human_terminal]
++WHY:工具清單讀不出來時不走類別表替代欄、主線有推送版沒有的工具名一律算變弱 [出處:代碼審 r1 規格對照、外家席] [因:讀不出來當成空清單會讓每一類都「沒有工具」而全部走替代,最低種類反而變鬆;改名就繞過請求數下限的放寬核可] [test:t_secev_r1_tool_list_unreadable_no_substitution] [test:t_secev_r1_tool_rename_is_weakening]
++PITFALL:樹讀檔把「太大」與「不存在」都回 None,主線版核可鏈超過單檔上限時「主線鏈是推送版開頭」那一步被略過 [出處:代碼審 r1 邊界席] [根因:_SecevTree.read 一個回傳值表兩件事] [修法:設定、核可鏈、工具清單改用 read_status 分清楚,太大判整道 read_incomplete] [test:t_secev_r1_tree_too_large_not_missing]
+ PITFALL:main() 裡頂層 parser 的區域變數叫 ap,子命令 parser 取同名會把它蓋掉,之後所有 security 子命令都被當成最後那支 parser 解析 [出處:2026-10-20 實作時 security list 全部印 payload 的用法] [根因:main() 是一支超長函式、parser 變數名重用] [防回歸:t_secev_cli_subcommands_parse]
+ 
+ ## 工具天花板
+ 
+ - 內容一致的偽造報告、作者改綁定卻不重跑、沒寫進 test_sources/fixture_globs 的夾具,機械上都分不出來,寫進每份證據的 limitations,由 review 的 report_provenance、independent_oracle 承擔。
+ - `--no-verify` 跳過本機閘、CI 在主線更新之後才跑(決策 d9);主線 tip 從本機 ref 讀。
+-- 核可只證明「持登記金鑰的人簽過」,簽的時候有沒有觸碰或密碼驗不到;第一次釘金鑰沒有東西可驗。
++- 核可只證明「持登記金鑰的人簽過」,簽的時候有沒有觸碰或密碼驗不到;第一次釘金鑰沒有東西可驗。寫入要互動終端加確認碼,刻意用 `script` 偽造終端、自動照抄確認碼的分不出來。
++- 專案識別取根提交:fork 或範本複製的專案共用根提交,彼此的核可鏈筆在識別上分不開。
++- 核可日回填只在前面有更晚的有效筆時偵測得到。
+ - k6 摘要不帶退出碼:中止或逾時的執行只看得到「一個迭代都沒完成」(k6_aborted)或請求數低於下限。
+ - ZAP 覆蓋證明的統計鍵名照合成樣本實作,還沒對真實 ZAP 輸出驗過。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-20_安全證據閘與資安格子實作驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-20_安全證據閘與資安格子實作驗證.md
+index 0b9f2b84e0b95827f9fa31c868e65cb970e0a5d6..b0807fcfd9cc1e6b6895f11a1237dff941e18381 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-20_安全證據閘與資安格子實作驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-20_安全證據閘與資安格子實作驗證.md
+@@ -13,21 +13,58 @@ plan_refs:
+   - "[[Projects/資安風險提問分階段_計劃]]"
+ ---
+ # 2026-10-20_安全證據閘與資安格子實作驗證
+ 
+ ## 結論
+ 
+ 安全證據閘(security evidence、code-loop check 的安全那一道、pre-push 對 tag 的檢查、CI 的 tag 工作)與資安格子(security list 的格子、提問計劃的 `--questions`、pitfalls 的資安七項風險面)照兩篇計劃的條款做完。兩篇計劃每條條款都綁了測試:驗收閘 63 條、提問計劃 22 條,spec-gate 匯總都是「綁了全部、靠人 0、紅 0」,相依回歸 3 支綠。
+ 
+ 先紅後綠的做法:每條條款先寫合成樣本跑出紅(功能實作前的版本,或故意造壞的樣本),再實作到綠。S18、S19 用合成消費 repo 真推送到本機裸 repo,保留拒收輸出。
+ 
+-殺傷力抽查:對閘門造 12 種壞改動(例如同種類好的證據蓋掉壞的、JUnit 不數深度、核可鏈不驗前綴),11 種有測試翻紅;「格子吃交叉積」那一種是等價改動(結果不變),不算漏網。
++殺傷力抽查:對閘門造 12 種壞改動,11 種有測試翻紅;「格子吃交叉積」那一種是等價改動(結果不變),不算漏網。逐種(壞改動 → 用來翻紅的測試子集 → 結果;每種都是對原始碼一處精確字串替換,跑完還原):
++
++| 壞改動 | 子集 | 結果 |
++|---|---|---|
++| 同種類好的證據蓋掉壞的(`_secev_kind_verdict` 的 `if bad:` 改成永不成立) | `-k secev_s17` | 紅 |
++| 主線版刪掉的證據項不凍結(`_secev_frozen` 直接回空) | `-k secev_s54` | 紅 |
++| 核可鏈不查主線前綴(`push_raw.startswith(main_raw)` 那個判斷拿掉) | `-k secev_s49` | 紅 |
++| 撤銷的金鑰照收(`approval_signer_revoked` 那條判斷拿掉) | `-k secev_s26` | 紅 |
++| behavior 不要合法對照(`missing_legit_control` 那條判斷拿掉) | `-k secev_s06` | 紅 |
++| 安全證據那一道整個不判(`_codeloop_security_step` 直接當沒登記) | `-k secev_s30` | 紅 |
++| 審查人等於作者照收(`review_not_independent` 不加) | `-k secev_s39` | 紅 |
++| 漏洞庫第 15 天才 stale(門檻加一天) | `-k secev_s36` | 紅 |
++| 格子吃交叉積(入口不在護欄自己資產時照算) | `-k seccell_s14` | 照綠;等價改動:格子本來就只列「入口 × 入口自己 asset_ids 裡的資產」,拿掉過濾多出來的(入口, 別的資產)覆蓋鍵對不到任何一格(代碼審折入時重做一次替換確認照綠、讀程式確認原因) |
++| security list 把考量當成算數(`considered_unverified:` 前綴拿掉) | `-k seccell_s63` | 紅 |
++| 資安風險面觸發只要一個強詞(`min_distinct` 改成 1) | `-k secq_s06` | 紅 |
++| JUnit 不數深度(`_JUnitStream.start` 的深度上限拿掉,配套指紋跟著改) | `-k secev_s59` | 紅 |
++
++抽查的腳本與逐種輸出在當時的會談暫存目錄(`secgate-impl/mutate.py`、`mutation-results*.json`),不進版控;要重驗就照上表逐種做同一處替換、跑同一個子集。
++
++## 代碼審第一輪折入之後(2026-10-20)
++
++代碼審 code-安全證據閘與資安格子 第一輪九席的發現全部折入(卷證在 `governance/review-reports/code-安全證據閘與資安格子/`,修正紀錄 `r1-fix.json`)。新寫的 `t_secev_r1_*`、`t_seccell_r1_*`、`t_secq_r1_*` 對被審版本 b99f52c8 跑是 56 條斷言紅、31 條(前置與對照)綠,對修正後全綠。「跟改動前逐字相同」的三支(S1、S8、S59)改成比固定的 golden(安全證據閘之前的主線版 d42840cf 產出,存在 `governance/golden/安全證據閘改動前輸出/`),不再靠本機遠端名。
++
++效能與記憶體(macOS、Python 3.14、機器同時有別的會談在跑;每個情境獨立子行程量):
++
++| 情境 | 時間 | 峰值常駐記憶體 |
++|---|---|---|
++| 核可鏈 2000 筆(上限)全部真簽章、逐筆 ssh-keygen 驗章 | 19.2 秒 | 48 MiB |
++| 證據圍欄 1 萬項 | 0.18 秒 | 60 MiB |
++| SARIF 10 萬筆命中(15 MiB,接近單檔上限 16 MiB) | 1.6 秒 | 329 MiB |
++| k6 摘要 5 萬個指標 | 0.14 秒 | 91 MiB |
++| 工具清單 5000 列(每列 20 支腳本的下限)跟主線比、全部變弱 | 0.17 秒 | 67 MiB |
++| guard kill 背書 1 萬行 | 0.11 秒 | 63 MiB |
++| 巢狀 1 萬到 400 萬層的 JSON(8 MiB) | 0.01 秒內丟 RecursionError(照 report_too_deep) | 37–69 MiB |
++
++核可鏈上限從 1 萬筆降到 2000 筆:實測一筆約 6.5 到 9.6 毫秒(視機器負載),1 萬筆最壞超過每個 ref 60 秒的預算;2000 筆最壞約 13 到 20 秒,留其餘判定的時間。超過上限整道判 read_incomplete(不默默截掉後面的筆)。
++
++REVISIT:2027-03-31 數一次消費專案的核可鏈最長多少筆、判定最慢花幾秒;接近 1000 筆或單次超過 30 秒,就改成分段快取驗章結果(以每筆的雜湊為鍵存在本機),再放寬上限
+ 
+ 子集結果(拆函式之後重跑):`-k secev_` 326 項、`-k seccell` 65 項、`-k secq_` 41 項、`-k sectt` 9 項、`-k seclist` 350 項,全綠。test-quality 的 CLI 54 項、scanner 28 項、handbook 20 項全綠(見 [[Verification/測試品質第四輪修補驗證]] 的重驗段)。新增告警閘(複雜度上限 10 等規則)對分支範圍 0 條新增。
+ 
+ ## 真實專案實驗(order-demo)
+ 
+ order-demo 的所有權工作分支登記了 OD-01、OD-02(只登記所有權面向)。用工具鏈這一版跑 security list:兩條都登記到、證據檢查是 missing(behavior 與故障只到「宣告」,缺 review、缺威脅類別)。跑 security evidence:兩條 unsound,原因是缺威脅類別、Verification 沒有證據圍欄(no_evidence)、缺 review。2026-10-20 量的那一版 order-demo 的 Verification 不帶證據圍欄,閘門照設計擋下,是預期結果。order-demo 自帶的舊版 lumos 沒有 security 指令。
+ 
+ REVISIT:2027-01-31 order-demo 的所有權 Verification 補上證據圍欄後,重跑 security evidence,把 OD-01/OD-02 的判定寫回本段
+ 
+ ## 沒驗到的
+diff --git a/governance/golden/安全證據閘改動前輸出/README.md b/governance/golden/安全證據閘改動前輸出/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..3aff3a44edbb3019a206a2e8a13eb4fbfee291af
+--- /dev/null
++++ b/governance/golden/安全證據閘改動前輸出/README.md
+@@ -0,0 +1,11 @@
++# 安全證據閘改動前輸出(golden)
++
++`golden.json` 是安全證據閘上線之前的主線版(提交 `d42840cf643eb5c027e7eeb86660a2fdc2396966`)對固定輸入產出的輸出,給三支「跟改動前逐字相同」的測試比:
++
++- `t_secev_s01_no_registration_unchanged`:沒有資安登記的合成 repo 跑 `code-loop check`(文字、`--json`、治理帳多寫幾行)。
++- `t_secq_s08_s11_existing_unchanged`:固定一份計劃全文(`s8.plan_text`,取自那一版的 `Projects/消費專案產品安全Brief與證據驗收_計劃`)跑 `pitfalls` 與四個階段的 `--stage --json`。
++- `t_secev_s59_junit_rejections_unchanged`:`test_quality.junit()` 對五份壞 JUnit 的拒收訊息,與一份合格輸入的案例清單。
++
++為什麼存成檔:原本跟「本機 `Lumos/main` 的分岔點」比,CI 沒有這個遠端名時退成 `HEAD~1`(新碼跟自己比),合併進主線後也變成跟自己比,三支守衛都會空轉(代碼審通才席)。
++
++重產:把那一版的 `scripts/lumos`、`scripts/test_quality*.py` 抄到一個暫存目錄,在 `scripts/test_lumos.py` 裡對它呼叫 `_sg_golden_capture(<那份 lumos>)`,再加上 `_sg_golden_capture_s8(<那份 lumos>, <那一版的計劃全文>)` 存成 `s8`(另加 `plan_text`、`source_commit` 兩鍵),照 `json.dumps(..., ensure_ascii=False, indent=1, sort_keys=True)` 寫回。只有刻意改了這三種既有輸出時才重產,並在提交說明講為什麼。
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index f1d6304e4208d399ac9e188a4a67d477ad22c419..24ce8a3a0987eea5dc392a8f284701e045f8d9f3 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -24,20 +24,21 @@ cd "$REPO_ROOT" || exit 0
+ # ── stdin 必須最先讀(prepush範圍修法 #1)──
+ # githooks(5):每行 "<local_ref> <local_sha> <remote_ref> <remote_sha>"。
+ # 先整批讀進陣列——後段的 anchor verify/測試/doctor 都是 subprocess,會繼承並吃掉 fd0,
+ # 若不先讀,推送範圍就丟了。無 stdin 行(如手動測試)=空陣列,代碼風險段自然跳過。
+ _PP_LINES=()
+ while IFS= read -r _line; do
+   [[ -n "$_line" ]] && _PP_LINES+=("$_line")
+ done
+ 
+ _ZERO="0000000000000000000000000000000000000000"
++_sec_done=""     # 這次推送已判過安全證據的提交:「 sha=回傳碼」一串(bash 3.2 沒有關聯陣列;多個 tag 指同一個提交只判一次)
+ _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
+ 
+ # 一個 ref 的檢查範圍:$1=remote_sha $2=local_sha。
+ # 新 ref、或本地沒有那個 remote 物件(shallow / force-push 分岔沒 fetch)→ 保守掃全部引入內容
+ # (不是 fail-open:放行會讓「推個新分支」變成穩定繞法)。其餘走增量。
+ # ★只提醒的幾道用這支★;會擋或決定擋不擋的用下面的 pp_block_range_for(新分支首推時換成真起點)。
+ pp_range_for() {
+   if [[ "$1" == "$_ZERO" ]] || ! git cat-file -e "$1" 2>/dev/null; then
+     printf '%s..%s' "$_EMPTY_TREE" "$2"
+   else
+@@ -614,37 +615,51 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+         done
+       fi
+       [[ "$_cl_n" -gt 0 ]] || pp_record_block code-loop "$_rref" "$(pp_cl_reason "")"
+     else
+       # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常,128 以上除外):fail-open 放行
+       [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘|安全證據' >&2 || true; }
+     fi
+   else
+     # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,其他幾道一律 advisory(r2 外家 F7);
+     # ★安全證據那一道照擋★(Projects/安全主張驗收閘_計劃〈四〉:推得出去的東西都判過,不只分支):只跑那一道,任何非 0 都當擋下
+-    # (128 以上是被中斷,停下);舊版 lumos 沒有 --security-only 就不叫(探法同上面的 --keep-going:讀檔找旗標字樣)
++    # (128 以上是被中斷,停下);舊版 lumos 沒有 --security-only 就不叫(探法同上面的 --keep-going:讀檔找旗標字樣),但講一句。
++    # ★回傳碼語意跟上面分支那條路相反,是刻意的★:分支路徑的 code-loop check 是「rc1 擋、其餘非 0 異常 fail-open 放行」(舊慣例,
++    # 那裡有代碼審留痕與 CI 兜底);這裡只有安全證據一道,--security-only 自己保證判不清回 1,任何非 0 都不能當放行。
++    # 同一次推送好幾個 tag 指同一個提交時只判一次、共用結果(判定只看提交、主線 tip 與日期,同一個提交答案相同);
++    # 指不同提交的 tag 各判一次,省不了(每個提交的證據不同)。
+     if grep -q -- '"--security-only"' "$GRAPHCTL" 2>/dev/null; then
+       sec_rc=0
+-      _sec_out="$("$PY" "$GRAPHCTL" code-loop check --security-only --at-sha "$_lsha" --repo "$REPO_ROOT" 2>&1)" || sec_rc=$?
++      _sec_prev=""
++      case " $_sec_done " in *" $_lsha="*) _sec_prev="${_sec_done##* $_lsha=}"; _sec_prev="${_sec_prev%% *}" ;; esac
++      if [[ -n "$_sec_prev" ]]; then
++        sec_rc="$_sec_prev"
++        _sec_out="(同一個提交 ${_lsha:0:12} 這次推送已判過,沿用結果)"
++      else
++        _sec_out="$("$PY" "$GRAPHCTL" code-loop check --security-only --at-sha "$_lsha" --repo "$REPO_ROOT" 2>&1)" || sec_rc=$?
++        _sec_done="$_sec_done $_lsha=$sec_rc"
++      fi
+       pp_stop_if_signaled "$sec_rc" "安全證據判定(--security-only)"
+       if [[ "$sec_rc" -ne 0 ]]; then
+         {
+           echo ""
+           printf '%s\n' "$_sec_out"
+           echo ""
+           echo "逃生路:推的是 $_rref,安全證據那一道照樣判。重收證據;真要先放行由使用者在核可鏈簽例外或 gate_setting 降成只提醒(不准跳過檢查)。"
+           echo ""
+         } >&2
+         pp_record_block code-loop "$_rref" "$(pp_cl_reason security_evidence)"
+       else
+-        [ -n "$_sec_out" ] && { printf '%s\n' "$_sec_out" | grep -E '提醒|安全證據' >&2 || true; }
++        [ -n "$_sec_out" ] && { printf '%s\n' "$_sec_out" | grep -E '提醒|安全證據|沿用結果' >&2 || true; }
+       fi
++    else
++      echo "提醒:這台機器的 lumos 太舊(沒有 code-loop check --security-only),推 $_rref 時安全證據那一道沒判;跑 lumos update 之後再推,CI 的 security_tag 工作會事後補判。" >&2
+     fi
+     [[ "$_tier_high" -eq 1 ]] && echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
+     if printf '%s' "$pf_json" | grep -q '"stack_questions_applicable": *{"'; then
+       {
+         echo ""
+         echo "提醒:這次改到的技術棧有幾題效能檢核被觸發(推的是 tag,只提醒不擋),列在下面:"
+         "$PY" "$GRAPHCTL" pitfalls --diff "$_range" --no-lint --repo "$REPO_ROOT" 2>/dev/null | sed 's/^/    /'
+         echo ""
+       } >&2 || true
+     fi
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+index e9f86bf2a7f4fedd23fe9965bdae055332b1b159..a02dddef964c04561e8189548c2750bd944b0542 100644
+--- a/scripts/test_quality.py
++++ b/scripts/test_quality.py
+@@ -123,59 +123,62 @@ def assertion_failure(node):
+     if not kind:
+         # AGP instrumentation XML omits type/message; the first exception and
+         # its JUnit assertion frame identify the measured failure origin.
+         text = ''.join(node.itertext()).strip()
+         if text.startswith('java.lang.AssertionError:') and re.search(r'\bat org\.junit\.Assert\.(?:fail|assert)\w*\(', text):
+             return True
+         return bool(re.match(r'^.+\.swift:\d+(?::\d+)? - XCTAssert(?:Equal|NotEqual|True|False|Nil|NotNil|ThrowsError|NoThrow|GreaterThan|LessThan) failed:', message))
+     return False
+ 
+ 
+-class NoDtdTreeBuilder(ET.TreeBuilder):
+-    def doctype(self, name, pubid, system):
+-        raise ValueError("DTD/entity declarations not accepted")
+-
+-
+ JUNIT_MAX_DEPTH = 64
+ 
+ 
+ class JUnitRejected(ValueError):
+     """JUnit 拒收:訊息字串照舊(既有呼叫端照樣接得到 ValueError),另帶原因代碼 code 給安全證據閘用,
+     不讓呼叫端比對訊息字串(Projects/安全主張驗收閘_計劃〈讀不可信資料的上限與失敗處理〉)。"""
+ 
+     def __init__(self, code, message):
+         super().__init__(message)
+         self.code = code
+ 
+ 
++class NoDtdTreeBuilder(ET.TreeBuilder):
++    """拒 DTD 的唯一一處:丟帶原因代碼的 JUnitRejected(仍是 ValueError、訊息照舊,既有呼叫端照樣接得到),
++    安全證據閘不必比對訊息字串。_JUnitStream 委派給它。"""
++
++    def doctype(self, name, pubid, system):
++        raise JUnitRejected('report_unparseable', "DTD/entity declarations not accepted")
++
++
+ class ReceiptRejected(ValueError):
+     """收證或三階段核對拒收:訊息照舊,另帶原因代碼。"""
+ 
+     def __init__(self, code, message):
+         super().__init__(message)
+         self.code = code
+ 
+ 
+ class _JUnitStream:
+     """XMLParser 的 target:start/end 回呼裡數深度(超過上限立刻停)、testcase 結束就濃縮成一筆並清掉元素。
+-    內部包一個標準 TreeBuilder 建元素;拒 DTD 跟 NoDtdTreeBuilder 同一句。"""
++    內部包一個 NoDtdTreeBuilder 建元素,拒 DTD 委派給它(只有一個拒收點)。"""
+ 
+     def __init__(self):
+-        self.tb = ET.TreeBuilder()
++        self.tb = NoDtdTreeBuilder()
+         self.depth, self.stack = 0, []
+         self.root_tag = None
+         self.cases, self.missing_name = [], False
+         self.any_error_elem = self.outside = False
+         self.suites, self.suite_stack = [], []
+ 
+     def doctype(self, name, pubid, system):
+-        raise ValueError("DTD/entity declarations not accepted")
++        self.tb.doctype(name, pubid, system)
+ 
+     def start(self, tag_name, attrib):
+         self.depth += 1
+         if self.depth > JUNIT_MAX_DEPTH:
+             raise JUnitRejected('report_too_deep', f'JUnit nesting exceeds {JUNIT_MAX_DEPTH} levels')
+         node = self.tb.start(tag_name, attrib)
+         t = xml_tag(node)
+         if self.root_tag is None:
+             self.root_tag = t
+         if t in {'testsuite', 'testsuites'}:
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 03980b651dc381a97b74698de5b89e908f2ee047..67afea07c8d8d346b00f908ba36567675212768c 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -3,21 +3,21 @@ name: lumos-code-loop
+ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --diff 算風險分級,出 tier: high 就派乾淨的審查員找洞、辯方殺假陽性、證據閘過了才 lumos code-loop pass --note 留痕,沒留痕 pre-push 和 CI 都會擋。觸發:分支終審、準備 push、pitfalls 出 tier high、有人要 code review、指名 code loop。指令速查在 lumos-project-notes 的 commands/06-代碼審與推送.md。'
+ ---
+ # 代碼審查迴圈——一頁手冊
+ 
+ 白話:分支要推之前,先算這批改動風險多高;高風險的就讓幾個不知道脈絡的審查員看 diff 找 bug、辯方殺假陽性、真問題修掉、記帳、問閘,過了留痕才推得上去。**你派人和判讀,lumos 出記帳與判閘的指令。**
+ 
+ 指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`;每條規則的由來與事故見 `reference.md`〈入口頁舊版全文(去時效前)〉。
+ 
+ ## 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一位審查員加一席架構對齊(`--tier standard`,上限 3 輪;**每筆記帳都帶 `--round`**,第一筆就帶,不帶會被 `canary record` 擋——[[Projects/記帳與迴圈工具小修_計劃]];`pitfalls` 的 tier 行下面會印這級要派誰);`light` 只派一席架構對齊(Enzo 裁:每個分級都派架構對齊,小改動也不准脫離既有架構亂加;light 不再可跳)。light 有兩個機械來源:改動裡沒有程式檔(只有文件/圖/資料);或這次範圍碰到的計劃是風險低、全靠人驗、推送前小改動閘過(`pitfalls --diff` 不載圖譜,只會提示;`lumos spec-gate --push-check <範圍>` 才印「改動風險分級:light」)。同一份輸出的 `stack_questions_applicable`(這次改動觸發到的棧別效能檢核題)**跟 tier 無關**:有題就要在推送前表態,少一題 `code-loop check` 就擋([[Projects/棧別提問表態閘_計劃]])。
+-- pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:合約測試紅、有適用題表態不完整、**這次改動帶進新的告警**、high 沒有 `lumos code-loop pass|skip --note` 留痕,四個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。pre-push 帶 `--keep-going`(lumos 認得時):四道都判完再擋,一次看到全部原因,跟其他便宜的閘一起列在推送前的彙總裡。新增告警那道跟表態一樣不看 tier,誤報走 `lumos lint-waive <指紋> --note`(留痕、會被統計);整道關掉是 `LUMOS_SKIP_LINT_NEW`,細節見 [[Projects/新增告警閘_計劃]]。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。**把本機提交壓成一個、或 rebase 之後也一樣失效——內容沒變也算**(原本記的提交不再是祖先);所以要壓提交就先壓、再表態與留痕,順序反了就重跑一次(擋下訊息會給指令)。
++- pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:有資安登記時安全證據不合格(排最前、不看 tier)、合約測試紅、有適用題表態不完整、**這次改動帶進新的告警**、high 沒有 `lumos code-loop pass|skip --note` 留痕,五個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。推 tag 時只跑安全證據那一道(`code-loop check --security-only`)。pre-push 帶 `--keep-going`(lumos 認得時):五道都判完再擋,一次看到全部原因,跟其他便宜的閘一起列在推送前的彙總裡。新增告警那道跟表態一樣不看 tier,誤報走 `lumos lint-waive <指紋> --note`(留痕、會被統計);整道關掉是 `LUMOS_SKIP_LINT_NEW`,細節見 [[Projects/新增告警閘_計劃]]。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。**把本機提交壓成一個、或 rebase 之後也一樣失效——內容沒變也算**(原本記的提交不再是祖先);所以要壓提交就先壓、再表態與留痕,順序反了就重跑一次(擋下訊息會給指令)。
+ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ - **工具鏈本 repo 的五次修復試行**：首次派工前、每輪開始／接手及收尾，先讀 [[Projects/代碼審修復穩定性試行_計劃]] 的登記、停止狀態與工作目錄限制；僅符合條件的工作走 `reference.md`〈修復穩定性試行〉。五案收尾或到期先回顧，不自行延長；其他專案照原流程。
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。凍結前先把手上的改動提交(之後修正關卡拿這個提交當「修正前」)。
+    **首輪派審前先自己變異**:新功能第一次凍結材料之前,編排者對這次新寫的判斷函式逐條分支在複本上改壞一處(條件反過來、邊界差一、回傳值換掉)跑相關測試,沒翻紅的那條補斷言;介面測試的假輸入照真實輸出的形狀造(抓一次真輸出當樣本),不要用手寫的簡化形狀——這兩類漏洞留到審查席才抓,每條都多花一輪(週評通知代碼審跑滿回顧,卷證 `governance/review-reports/code-週評通知/cap-retro.json`)。
+    **先表態**(派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的題填成:
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+diff --git a/skills/lumos-code-loop/reference.md b/skills/lumos-code-loop/reference.md
+index ee877e433a50537d2aa5a7dc45b87bdce325091f..8d8ff517a3a5a4fc46209913fc67408165b64908 100644
+--- a/skills/lumos-code-loop/reference.md
++++ b/skills/lumos-code-loop/reference.md
+@@ -602,21 +602,21 @@ canary hunk 的 file:line 必須落在**真改動集之外**(合成新 hunk 於
+ > 2026-09-11 從 SKILL.md 原樣搬入([[Projects/skills提示工程優化_計劃]] S2):入口頁改寫時拿掉了日期、事故經過與裁定出處,原文保存在這裡。**只供查每條規則的由來與踩過的事故,不是現行規則——現行規則以 SKILL.md 為準。**標題降了一級,其餘逐字未動。
+ 
+ ## 代碼審查迴圈——一頁手冊
+ 
+ 白話:分支要推之前,先算這批改動風險多高;高風險的就讓幾個不知道脈絡的審查員看 diff 找 bug、辯方殺假陽性、真問題修掉、記帳、問閘,過了留痕才推得上去。**你派人和判讀,lumos 出記帳與判閘的指令。**
+ 
+ 指令速查:`lumos-project-notes` 的 `commands/06-代碼審與推送.md`。派工 prompt 與席位紀律見 `reference.md`。
+ 
+ ### 什麼時候用
+ - `lumos pitfalls --diff <merge-base>..HEAD` → `tier: high` 才走完整迴圈;`standard` 派一個審查員走循序(`--tier standard`,上限 3 輪);`light`/瑣碎改動可跳(commit 註明)。★同一份輸出的 `stack_questions_applicable`(這次改動觸發到的棧別效能檢核題)**跟 tier 無關**:有題就要在推送前表態,少一題 `code-loop check` 就擋(2026-09-09 表態閘,[[Projects/棧別提問表態閘_計劃]])。★
+-- pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:合約測試紅、有適用題表態不完整、**這次改動帶進新的告警**、high 沒有 `lumos code-loop pass|skip --note` 留痕,四個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。新增告警那道跟表態一樣不看 tier,誤報走 `lumos lint-waive <指紋> --note`(留痕、會被統計);整道關掉是 `LUMOS_SKIP_LINT_NEW`,細節見 [[Projects/新增告警閘_計劃]]。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。
++- pre-push 和 CI 對每個分支 ref 都叫 `code-loop check`:有資安登記時安全證據不合格(排最前、不看 tier)、合約測試紅、有適用題表態不完整、**這次改動帶進新的告警**、high 沒有 `lumos code-loop pass|skip --note` 留痕,五個獨立判定各自擋、各自出訊息(缺表態≠缺審查)。推 tag 時只跑安全證據那一道(`code-loop check --security-only`)。新增告警那道跟表態一樣不看 tier,誤報走 `lumos lint-waive <指紋> --note`(留痕、會被統計);整道關掉是 `LUMOS_SKIP_LINT_NEW`,細節見 [[Projects/新增告警閘_計劃]]。留痕與表態都綁當下版本,之後再改 code(簿記檔除外)就失效,要重跑(表態用 `--carry` 只答新題)。
+ - loop 編號 = `code-<主題>`。先 `lumos loop next <編號> --tier high --orchestrator claude|codex --spec <凍結 patch>` 拿「第幾輪、幾人、記帳範本」;首輪會印「主題既有節點」——近名或已翻案的先讀再開。
+ - 可先 `lumos testmap affected --diff …` 拿建議測試清單(要先 `testmap build` 過)。
+ 
+ ### 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(★旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動★);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。
+    **先表態**(2026-09-09 起,派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的那幾題填成 `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)/`na`(附 `reason`,≥10 個中文字)/`todo`(附 `issue: Issues/<名>` 與 `reason`)/`tension`(★張力,2026-09-09 起★:這題的做法跟鄰居不同——你刻意沿用既有寫法、或刻意改用建議做法——不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 會印成 ⚠ 讓人裁;單源 [[Projects/兩席相反時端出張力_計劃]]),再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
+ 2. **派審查員**:Agent、sonnet(★Codex 編排時的完整做法(點誰、唯讀怎麼開、版本差異)★:**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**——2026-09-06 起把原本抄在這裡的一整段搬走:版本行為一變就要改三處,而那正是散文載規則會漂的老問題。外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。standard 循序只派一位;多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制(記帳與問閘見步驟 6-7;2026-08-25 甲裁後多席也走處置閘)。**每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill,派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。**high 另必派一席「資安」**(不佔人數,2026-09-11 d6):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。★擋在問閘、不在 `code-loop pass`★:pass 本身不回頭驗問閘有沒有過(既有天花板);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。★圖譜鏡頭(2026-08-29 起每席都附;2026-09-01 d9 截錄;★2026-09-03 起改由 hook 機器附★——手貼 0 執行的結構因是「跑指令→讀→貼」落在編排者身上)★:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..HEAD`(★派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取:大範圍算一次 25 秒起,hook 45 秒超時就附不到節點;2026-09-05 起超時會在派工詞尾端附一行說明,不再靜默★),派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——**前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/★裸合約★——裸合約=閘守不到、只剩你讀,優先看)、逐條必答;超出只列名,不必答**;一句話層(L0)已砍(自由文字=注入管道)。標記不在/格式差/base 不在主線→靜默放行(超時則附一行說明,見上);★0 篇(v1.2)→附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約不必逐條答)★;派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。★Codex 編排時標記行無效(派工訊息對 hook 是密文):派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`(templates.md §3 ④;[[Projects/Codex完全支援_計劃]] d3)。★另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。★席報告格式★以 lumos-design-loop `templates.md` 的卷證規則為★唯一來源★,派工詞照抄不自創:逐字引句寫成 `引句:「…」` 單獨一行、≥10 字、**引句內不要再包「」**(巢狀會被機械收貨截斷);審材外查證所得走佐證通道,格式 ``file: `路徑:行號` ``(★反引號必加★,refcheck 只抽反引號 inline-code);每條標 severity 與 blocking,兩欄不得矛盾。
+    ★2026-09-06 教訓(收貨線指令化案停案後的根因修法)★:我自己的派工詞長期自創 `quote: <逐字一行>` / `file: <路徑>:<行>` 這套,跟上面規定的不一樣——**於是每個迴圈都要臨場寫一支正規化腳本把它轉回來,而那支腳本會在讀不到嚴重度時默默補成 clean、還會把引句裡的「」換成『』弄壞錨定**。查證指出席位吐錯格式不是模型天生行為,是派工詞要求的。**派工詞照範本寫,收貨正規化這件事就不存在。**
+    派工單落 `rN-dispatch.json`。
+ 3. **收貨**:★**所有席收齊之前不要動工作目錄**★(2026-09-06 實際踩到):某席先回來就開始折它的發現,後到的席會讀到已經改過的碼、甚至讀到先到那席的報告——**三席就不獨立了**。實際發生的樣子:架構席在報告裡直接引用外家席的結論;通才席回報「審到一半發現工作目錄被改動」。先折不會讓判定變錯(重疊的發現各自附了獨立證據),但它讓「多席獨立一致」這個判準失效,而那正是「可以直接折不用派辯方」的依據。收齊再動,先到的席報告先留在對話裡、不寫到硬碟,收齊再一次寫進卷證(2026-10-06 決策 d5,單源 lumos-design-loop templates.md §0)。
+diff --git a/skills/lumos-project-notes/commands/01-進場查脈絡.md b/skills/lumos-project-notes/commands/01-進場查脈絡.md
+index d6e3c6c0611837487dd2becf00e963e09f3166d4..4667b289c2a029b9e03216923fd41cb72e641340 100644
+--- a/skills/lumos-project-notes/commands/01-進場查脈絡.md
++++ b/skills/lumos-project-notes/commands/01-進場查脈絡.md
+@@ -1,21 +1,21 @@
+ # 01 進場查脈絡(你想搞懂現況的時候)
+ 
+ 規矩:**現況以程式碼為準,這裡的指令是拿來補程式碼看不出的脈絡**(為什麼這樣決定、踩過什麼坑、哪些不能碰);兩邊對不上時照程式碼寫,並立一篇 Issue 記下那句筆記錯在哪。
+ 
+ | 情境(你心裡在想…) | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「這件事圖譜有沒有記?在哪篇?」 | `lumos search <詞> [--path Systems] [--top N]` | 每行=篇名+命中行;分數越高越相關。0 命中先換同義詞,再判沒記 | 用 grep 判「圖譜沒記」,以前真的錯過 |
+ | 「找 code 裡有沒有提到這個符號/路徑」(配合圖譜一起看) | `lumos search <詞> --code` | 同上,但範圍含程式碼 | 分兩套工具搜,漏一邊 |
+ | 「這篇筆記的來龍去脈、鄰居、合約」 | `lumos context <節點> [--brief]` | 頭部先列「提醒:動這篇之前先確認前提」和合約;往下是連出/連入。大節點(Landmark 實測 40KB+)先 `--brief`,輸出超過 20KB 工具會提醒 | 只讀一篇,看不到它依賴誰、誰依賴它 |
+ | 「這篇完整內容」 | `lumos show <節點> [--body-only]` | 整篇原文 | search 的索引行不夠下結論 |
+-| 「這個專案登記了哪些資安護欄?證據核到哪?哪些入口還沒護欄?」 | `lumos security list [--json]` | 唯讀盤點,不是安全驗收:分現行/撤除/純業務、待分類合約、未登記的 flag/security-relevant 節點、覆蓋缺口與錯誤;security_verdict 固定 not_assessed,退出 0 只代表完整讀完 | 拿 rc0 或「全綠」當產品安全,未登記與覆蓋未知被當成沒問題 |
++| 「這個專案登記了哪些資安護欄?證據核到哪?哪些入口還沒護欄?」 | `lumos security list [--json] [--all]`;要候選提問 `lumos security list --questions [--plan <計劃>] [--limit N] [--json]` | 唯讀盤點,不是安全驗收:分現行/撤除/純業務、待分類合約、未登記的 flag/security-relevant 節點、覆蓋缺口與錯誤,另列資安格子(入口 × 資產 × 威脅類別,有角色的再乘角色;預設只列 open 的,`--all` 全列);`--questions` 每個 open 格一題、帶 `[cell:<id>]`,帶 `--plan` 時那份計劃已出現的格子不再問;security_verdict 固定 not_assessed,退出 0 只代表完整讀完 | 拿 rc0 或「全綠」當產品安全,未登記與覆蓋未知被當成沒問題 |
+ | 「動這個模組有什麼不能碰的?」 | `lumos contracts [<節點>]` | ★INVARIANT★=改了就是破壞性變更,後面 [test:] 是綁的測試;★DEBT★=可以改 | 碰到合約,pre-push 的 doctor 會擋 |
+ | 「誰連到它 / 它連到誰」 | `lumos backlinks <節點>` / `lumos links <節點>` | 一行一篇 | 改了上游不知道下游 |
+ | 「這一帶的關係長什麼樣」 | `lumos map <節點> [--depth 2]` | 樹狀展開 | — |
+ | 「篩條件:金流且未收案 / 連到 X 且還開著 / 有合約的」 | `lumos query --tag 家族/值 [--tag …(AND)] [--no-tag …] [--active] [--contract] [--linked <節點>]` | 清單;至少給一個條件 | grep 字串漏同義標籤 |
+ | 「當初為什麼這樣決定?翻案了嗎?」 | `lumos decisions <節點>`;全庫掃被推翻的 `lumos decisions --superseded` | 每條有編號、日期、valid;valid:false 代表已翻案 | 決策是結構化欄位,散文 grep 抓不全 |
+ | 「這個提案以前是不是被否決過?」 | `lumos rejections`(`--json` 給程式讀) | 一張清單:WHY 行的不選、被翻案的決策、內文寫不做的有效決策(關鍵字判)、作廢或否決的整篇;只收寫成結構的,散文裡的收不到 | 工具不判撞不撞,要讀完自己按概念比;撞到先問人 |
+ | 「最近動了什麼 / 現在在進行什麼」 | `lumos recent --days 7`;`lumos query --tag status/doing` | 篇名+日期 | git log 看不到圖譜層進度 |
+ | 「這幾場 Claude 會談實際做了什麼」 | `lumos events`(列最近 10 個會談)/ `lumos events --session <編號>`(逐筆;`--json`)/ `lumos events --prune --days N`(刪 N 天前的會談資料夾,N≥1) | 回合、工具呼叫(含失敗)、子代理;子代理用的實際模型只在 `--json` 的原始事件裡;在 worktree 裡跑讀的是主 checkout 那份;`--session` 只收單層名稱 | 只有 Claude Code 裝了 lumos-ledger 外掛才有;Codex 沒有;外掛出錯那段沒記,「沒記到」不等於「沒發生」 |
+ | 「上一個 session 做到一半斷了,我來接手」 | `lumos handoff <計劃節點>`(`--transcript <路徑>` 指定逐字稿;`--json`) | 點名檔各自 git 狀態(乾淨/已改/已改名/已刪/未追蹤)+最後提交;最後一輪改的檔、跑的指令、人最後一句 | 唯讀不造帳、不判進度;逐字稿缺/認不得就印「意圖不可得」;純 Bash 改檔看不到(收工閘同一盲點) |
+ | 「圖譜多大、各夾幾篇」 | `lumos stats` | 資料夾計數 | — |
+diff --git a/skills/lumos-project-notes/commands/06-代碼審與推送.md b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+index 9b83ac5e6d991f4b95653c113f99a17a3e5c6809..da98ba062a1b8e2128232f90b7dd24c71e9b92de 100644
+--- a/skills/lumos-project-notes/commands/06-代碼審與推送.md
++++ b/skills/lumos-project-notes/commands/06-代碼審與推送.md
+@@ -1,21 +1,21 @@
+ # 06 代碼審與推送(分支要推之前)
+ 
+ | 情境 | 指令 | 結果怎麼讀 | 不用它會怎樣 |
+ |---|---|---|---|
+ | 「這批改動風險多高?要不要過審?」 | `lumos pitfalls --diff <merge-base>..HEAD` | `tier: high` → 要過對抗代碼審(`lumos-code-loop` skill),其中必派一席資安席(templates.md §7.8,問閘會擋;工具鏈本 repo:資安席只看三類,見 templates.md §7.8〈工具鏈三類〉;消費專案照舊);standard 派一位審查員加架構對齊、每筆記帳帶 `--round`,light 只派架構對齊席(單源 `lumos-code-loop/SKILL.md`),但**同一份輸出列出的「觸發到的效能檢核題」不看 tier,推送前每題要表態**(下一列)。輸出末段「[架構對齊]」列每支改動檔同層最像的既有檔當對照,逐問三件事(分層依賴 / 命名錯誤處理 / 有沒有第二種做法)——派審查員時一併附上 | pre-push 自己會算,high 沒留痕就擋 |
+ | 「這次改動觸發了幾題效能檢核,要先交代」 | `lumos pitfalls --diff <範圍> --dispositions-template --carry > /tmp/disp.json`(填 status 留空的題:satisfied 附 evidence `path:line`/`test:<名>`、na 附 reason、todo 附 issue+reason、tension 附 chosen/existing/hazard/suggestion——這題的做法跟鄰居不同、兩席相反時用,不擋、check 印 ⚠ 交人裁;樣板帶 `hint` 的題就是候選)→ `lumos code-loop dispositions /tmp/disp.json [--branch <推送目的分支>]` | 未觸發的題工具已自動記「未觸發」;寫入綁當下版本,改碼後重跑樣板加 `--carry` 只答新題;審查席抓到未觸發題的問題 → `lumos code-loop recall-miss <id> --note` | `code-loop check` 擋(缺表態≠缺審查,訊息分開);`.lumos/config.json` 的 `stack_questions.gate` 可設 all/high-only/off |
+ | 「審完了/決定不審,要留痕才能推」 | `lumos code-loop pass --note "<審了什麼>"` 或 `lumos code-loop skip --note "<為什麼不審>"` | 留痕綁當下版本;之後再改 code(簿記檔除外)就失效,要重跑。合併請求合進主線時,主線的檢查也認合進來那一側的留痕——條件是分支合併前先跟上主線(合過主線、重記留痕)、合併提交本身不手改;不然主線那邊照擋,要補審或補記 | pre-push 與 CI 都擋 |
+-| 「我現在推得上去嗎?」 | `lumos code-loop check [--diff … --at-sha … --branch …]` | OK/BLOCKED + 原因,四個獨立判定:受波及合約綁的測試紅(高風險擋;低風險 pre-push 帶 `--bound-tests-advisory` 只提醒)→ 有適用效能檢核題表態不完整(不看 tier)→ 這次改動帶進新的告警(不看 tier)→ high 無審查留痕。不帶旗標是序列早退(先中的先報);帶 `--keep-going` 四道都判完、每道擋下各印各的,最後多一行 `LUMOS-BLOCKS: <種類,…>`(`--json` 多一個 `blocks` 清單) | pre-push 對每個分支 ref 都呼叫它(2026-09-09 起無條件;2026-10-14 起認得 `--keep-going` 的版本就帶上,一次看到這個 ref 的全部原因) |
++| 「我現在推得上去嗎?」 | `lumos code-loop check [--diff … --at-sha … --branch …]` | OK/BLOCKED + 原因,五個獨立判定:有資安登記時安全證據不合格(排最前、不看 tier;沒登記的專案輸出不變)→ 受波及合約綁的測試紅(高風險擋;低風險 pre-push 帶 `--bound-tests-advisory` 只提醒)→ 有適用效能檢核題表態不完整(不看 tier)→ 這次改動帶進新的告警(不看 tier)→ high 無審查留痕。不帶旗標是序列早退(先中的先報);帶 `--keep-going` 五道都判完、每道擋下各印各的,最後多一行 `LUMOS-BLOCKS: <種類,…>`(`--json` 多一個 `blocks` 清單) | pre-push 對每個分支 ref 都呼叫它(2026-09-09 起無條件;2026-10-14 起認得 `--keep-going` 的版本就帶上,一次看到這個 ref 的全部原因) |
+ | 「推送被『碰到的筆記裡有指不到真測試的綁定』擋下」 | 照它印的改法修那篇筆記(改成真的測試名;測試已刪寫 `[test-gone:名稱]`;作廢的條目把綁定移走)再推;擋不擋看 `.lumos/config.json` 的 `note_shape.test_refs`(沒設是 warn 只提醒、設 block 才擋),只關這組設 warn;誤擋單次 `LUMOS_SKIP_NOTE_SHAPE=1`(留帳) | 碰到的筆記整篇都要乾淨,舊行上的也算;簽出的不是推送終點、或測試檔與設定有沒提交的改動時只提醒、交給 CI | 指不到的 `[test:]` 是假的守衛,讀的人會以為有測試守著 |
+ | 「推送被『資安護欄的證據不合格』擋下,哪一條缺什麼?」 | `lumos security evidence [--commit <sha>] [--json]`(唯讀,跟 `code-loop check` 那一道同一支判定) | 逐條列必驗集合(active 資安護欄)的整體判定、最先要修的代碼與每份證據的判定;沒有資安登記就印「這一道不判」 | 只看到擋下不知道是哪一份證據、哪一個欄位不合格 |
+-| 「資安護欄的例外、變弱或改成只提醒,要人核可才算數」 | 產生要簽的那一筆 `lumos security approvals payload <type> <target> --signer <principal> --expires-on YYYY-MM-DD --out <檔>` → 自己用 `ssh-keygen -Y sign -n lumos-security` 簽 → `lumos code-loop security-approval-add <檔>` 接進核可鏈;驗整條鏈 `lumos security approvals verify` | 追加前用同一支驗證函式驗過「整條鏈加這一筆」才寫入;鏈跟主線分岔、金鑰已撤或過期都不算數 | 手改例外或核可檔,閘門照樣不認 |
++| 「資安護欄的例外、變弱或改成只提醒,要人核可才算數」 | 產生要簽的那一筆 `lumos security approvals payload <type> <target> --signer <principal> --expires-on YYYY-MM-DD --out <檔>`(釘金鑰另帶 `--key <principal>=<公鑰檔>`;例外、人審、修訂、考量、工具清單的內容從 HEAD 那個提交算,要先提交;target:例外 `<護欄 id>#<排序後的 covers_kinds>`、人審 `<護欄 id>#<種類>`、修訂 `<護欄 id>\|<decision_ref>`)→ 自己用 `ssh-keygen -Y sign -n lumos-security` 簽 → **在你自己的終端機** `lumos code-loop security-approval-add <檔>` 接進核可鏈(要照抄當場的確認碼);驗整條鏈 `lumos security approvals verify` | 追加前用同一支驗證函式驗過「整條鏈加這一筆」才寫入;非互動(AI 或腳本代跑)一律擋;鏈跟主線分岔、金鑰已撤或過期、核可日早於前面的筆都不算數 | 手改例外或核可檔,閘門照樣不認;把 payload 輸出轉存成檔會多結尾換行、簽章對不上(用 `--out`) |
+ | 「資安護欄靠故障翻紅當證據,要寫背書」 | 先照 `guard kill` 那一列跑過殺傷力配方,再 `lumos code-loop security-backing <護欄 id> [--supersede]` 把這一版的背書寫進 `docs/.security-backing.jsonl` 並一起提交 | 背書綁程式版本;背書後再改程式就失效、要重跑 | 故障證據判 `backing_missing`,推不上去 |
+ | 「新增告警閘擋下來,那條是誤報」 | `lumos lint-waive <指紋> --note "<為什麼放行>"`;看放行過什麼 `--list` | 放行綁指紋不綁版本,寫進 `.lumos/lint-waivers.json`(要一起提交)並記一筆治理帳 | 不放行就推不上去;健檢會數這個專案放行了幾條 |
+ | 「把一個坑固化成每次提交都會跑的規則」 | 規則放 `.lumos/rules/`、會被它抓到的樣本放 `.lumos/rules/samples/`,登記進 `index.json`,再 `lumos rule-check` | 每條規則都要有一支真的翻紅的樣本;沒樣本或樣本不翻紅 rc1 | 沒有會翻紅的樣本的規則可能是死的,跟沒有規則一樣 |
+ | 「漏網的問題本來哪條規則該抓」 | 記逃逸帳時帶 `--rule <規則id\|none>`;看待辦 `lumos rule-gap` | 列出「標了該抓、但規則還沒寫」的,附漏過幾次 | 逃逸帳只記漏掉了,不標規則就不會長出新守衛 |
+ | 「這次改動有沒有打破哪條硬合約?」 | `lumos bound-tests --diff <範圍> [--advisory]` | green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕** | ★2026-09-07 起低風險推送也跑★,紅了印出來記帳但不擋;高風險照舊擋。預設一支一支跑;要同時跑見安裝維運的 `bound_tests.parallel` |
+ | 「受波及合約的測試真的跑不了(外部 DB 不在)」 | `lumos code-loop check … --skip-bound-tests --note "<為什麼>"` 或 `lumos bound-tests --skip --note "<為什麼>"`;CI 用環境變數 `LUMOS_SKIP_BOUND_TESTS=1` | 留痕進治理帳,被統計(旗標記 `skipped-flag`、環境變數記 `skipped-env`,分開數) | 沒理由拒絕 |
+ | 「合約綁測試的狀態」 | `lumos guard list` | 真綁/懸空/偽證據/裸/未審 | doctor [T] 擋裸合約 |
+ | 「幫合約產一個測試骨架」 | `lumos guard scaffold <節點> "<KEY 片段>" --method <名> [--platform …]` | 預設紅燈 stub,斷言留 TODO | — |
+ | 「把寫好的測試綁回合約」 | `lumos guard bind <節點> "<KEY 片段>" <測試名>` | 寫回 [test:] | 裸合約擋推 |
+ | 「合約被不知道脈絡的人審過了」 | `lumos guard audit <節點> "<KEY 片段>"` | 寫回 [audit:] | lint 報「未獨立審計」,pre-push 擋 |

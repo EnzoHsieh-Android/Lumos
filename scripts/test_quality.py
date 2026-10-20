@@ -33,19 +33,6 @@ def xml_tag(node):
     return node.tag.split('}')[-1]
 
 
-def validate_suite_counts(root):
-    for suite in root.iter():
-        if xml_tag(suite) not in {'testsuite', 'testsuites'}:
-            continue
-        cases = [n for n in suite.iter() if xml_tag(n) == 'testcase']
-        observed = {'tests': len(cases)}
-        for field, tag in [('failures', 'failure'), ('errors', 'error'), ('skipped', 'skipped')]:
-            observed[field] = sum(any(xml_tag(c) == tag for c in case) for case in cases)
-        for field, count in observed.items():
-            if field in suite.attrib and int(suite.get(field)) != count:
-                raise ValueError('suite summary inconsistent with testcase rows: ' + field)
-
-
 class CaptureTimeout(ValueError):
     """Deadline reached; keeps the partial streams for callers that archive them."""
 
@@ -143,47 +130,140 @@ def assertion_failure(node):
     return False
 
 
+JUNIT_MAX_DEPTH = 64
+
+
+class JUnitRejected(ValueError):
+    """JUnit 拒收:訊息字串照舊(既有呼叫端照樣接得到 ValueError),另帶原因代碼 code 給安全證據閘用,
+    不讓呼叫端比對訊息字串(Projects/安全主張驗收閘_計劃〈讀不可信資料的上限與失敗處理〉)。"""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 class NoDtdTreeBuilder(ET.TreeBuilder):
+    """拒 DTD 的唯一一處:丟帶原因代碼的 JUnitRejected(仍是 ValueError、訊息照舊,既有呼叫端照樣接得到),
+    安全證據閘不必比對訊息字串。_JUnitStream 委派給它。"""
+
     def doctype(self, name, pubid, system):
-        raise ValueError("DTD/entity declarations not accepted")
+        raise JUnitRejected('report_unparseable', "DTD/entity declarations not accepted")
+
+
+class ReceiptRejected(ValueError):
+    """收證或三階段核對拒收:訊息照舊,另帶原因代碼。"""
+
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+class _JUnitStream:
+    """XMLParser 的 target:start/end 回呼裡數深度(超過上限立刻停)、testcase 結束就濃縮成一筆並清掉元素。
+    內部包一個 NoDtdTreeBuilder 建元素,拒 DTD 委派給它(只有一個拒收點)。"""
+
+    def __init__(self):
+        self.tb = NoDtdTreeBuilder()
+        self.depth, self.stack = 0, []
+        self.root_tag = None
+        self.cases, self.missing_name = [], False
+        self.any_error_elem = self.outside = False
+        self.suites, self.suite_stack = [], []
+
+    def doctype(self, name, pubid, system):
+        self.tb.doctype(name, pubid, system)
+
+    def start(self, tag_name, attrib):
+        self.depth += 1
+        if self.depth > JUNIT_MAX_DEPTH:
+            raise JUnitRejected('report_too_deep', f'JUnit nesting exceeds {JUNIT_MAX_DEPTH} levels')
+        node = self.tb.start(tag_name, attrib)
+        t = xml_tag(node)
+        if self.root_tag is None:
+            self.root_tag = t
+        if t in {'testsuite', 'testsuites'}:
+            ent = (t, dict(node.attrib), {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0})
+            self.suites.append(ent)
+            self.suite_stack.append(ent)
+        if t == 'error':
+            self.any_error_elem = True
+        if t in {'failure', 'skipped'} and (not self.stack or self.stack[-1] != 'testcase'):
+            self.outside = True
+        self.stack.append(t)
+        return node
+
+    def data(self, text):
+        self.tb.data(text)
+
+    def end(self, tag_name):
+        node = self.tb.end(tag_name)
+        self.depth -= 1
+        t = self.stack.pop()
+        if t == 'testcase':
+            self.case(node)
+        elif t in {'testsuite', 'testsuites'}:
+            self.suite_stack.pop()
+        return node
+
+    def case(self, node):
+        tag = xml_tag
+        name = node.get('name')
+        if not name:
+            self.missing_name = True
+        else:
+            cid = node.get('classname', '') + '::' + name
+            failures = [n for n in node if tag(n) == 'failure']
+            errors = [n for n in node if tag(n) == 'error']
+            skipped = any(tag(n) == 'skipped' for n in node)
+            reason = '\n'.join(n.get('type', '') + ' ' + n.get('message', '') + ' ' + ''.join(n.itertext())
+                               for n in failures + errors)
+            assertion = bool(failures) and all(assertion_failure(n) for n in failures)
+            status = 'error' if errors else 'skipped' if skipped else 'failure' if failures else 'passed'
+            self.cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
+                               'reason': reason[:4000]})
+        for _t, _a, c in self.suite_stack:
+            c['tests'] += 1
+            c['failures'] += any(tag(n) == 'failure' for n in node)
+            c['errors'] += any(tag(n) == 'error' for n in node)
+            c['skipped'] += any(tag(n) == 'skipped' for n in node)
+        node.clear()
+
+    def close(self):
+        return self.tb.close()
 
 
 def junit(raw):
-    root = ET.fromstring(raw, parser=ET.XMLParser(target=NoDtdTreeBuilder()))
-    tag = xml_tag
-    if tag(root) not in {'testsuites', 'testsuite'}:
-        raise ValueError('expected JUnit testsuite(s)')
-    cases = []
-    for node in root.iter():
-        if tag(node) != 'testcase':
-            continue
-        name = node.get('name')
-        if not name:
-            raise ValueError('testcase missing name')
-        cid = node.get('classname', '') + '::' + name
-        failures = [n for n in node if tag(n) == 'failure']
-        errors = [n for n in node if tag(n) == 'error']
-        skipped = any(tag(n) == 'skipped' for n in node)
-        reason = '\n'.join(n.get('type', '') + ' ' + n.get('message', '') + ' ' + ''.join(n.itertext())
-                           for n in failures + errors)
-        assertion = bool(failures) and all(assertion_failure(n) for n in failures)
-        status = 'error' if errors else 'skipped' if skipped else 'failure' if failures else 'passed'
-        cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
-                      'reason': reason[:4000]})
+    """JUnit XML → 案例清單。邊解析邊數深度(超過 JUNIT_MAX_DEPTH 層立刻停),每個案例處理完就清掉元素,
+    不先建整棵樹;拒收訊息與優先序跟整棵樹讀法相同(語法錯先丟,其餘檢查照原順序在讀完後判)。"""
+    st = _JUnitStream()
+    parser = ET.XMLParser(target=st)
+    parser.feed(raw)
+    parser.close()
+    if st.root_tag not in {'testsuites', 'testsuite'}:
+        raise JUnitRejected('report_malformed', 'expected JUnit testsuite(s)')
+    if st.missing_name:
+        raise JUnitRejected('report_malformed', 'testcase missing name')
+    cases = st.cases
     ids = [c['id'] for c in cases]
     if len(ids) != len(set(ids)):
-        raise ValueError('duplicate test identities')
+        raise JUnitRejected('report_duplicate_identity', 'duplicate test identities')
     if not cases:
-        raise ValueError('zero testcases')
+        raise JUnitRejected('zero_cases', 'zero testcases')
     # Suite-level errors must not disappear behind passing testcase rows.
-    if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
-        raise ValueError('runner/suite errors')
-    attached = {id(n) for case in root.iter() if tag(case) == "testcase"
-                for n in case if tag(n) in {"failure", "skipped"}}
-    if any(tag(n) in {"failure", "skipped"} and id(n) not in attached for n in root.iter()):
-        raise ValueError("outcome outside testcase")
-    validate_suite_counts(root)
+    if st.any_error_elem or any(int(a.get('errors', '0')) > 0 for t, a, _c in st.suites if t == 'testsuite'):
+        raise JUnitRejected('suite_error', 'runner/suite errors')
+    if st.outside:
+        raise JUnitRejected('report_malformed', "outcome outside testcase")
+    validate_suite_counts(st.suites)
     return cases
+
+
+def validate_suite_counts(suites):
+    """suites=[(tag, 屬性, 實數)]:每個 testsuite(s) 宣告的計數要等於它底下案例實際的數。"""
+    for _t, attrib, observed in suites:
+        for field in ('tests', 'failures', 'errors', 'skipped'):
+            if field in attrib and int(attrib[field]) != observed[field]:
+                raise JUnitRejected('count_mismatch', 'suite summary inconsistent with testcase rows: ' + field)
 
 
 def add_parser(sub):
@@ -279,60 +359,65 @@ def capture(args):
     return 0 if receipt['status'] == 'executed' else 2
 
 
-def load_receipt(folder):
-    r = json.loads(read(folder/'receipt.json'))
+def load_receipt_data(get):
+    """一份 capture 的核對本體,只吃資料:get(檔名) → 位元組(讀不到丟 ValueError)。
+    load_receipt 從磁碟讀、安全證據閘從提交樹讀,都呼叫這一支。"""
+    r = json.loads(get('receipt.json'))
     if r.get('schema_version') != 1 or r.get('kind') != 'execution-receipt' or r.get('status') != 'executed':
-        raise ValueError('missing or invalid execution receipt')
-    raw = read(folder/'report.xml')
+        raise ReceiptRejected('receipt_not_executed', 'missing or invalid execution receipt')
+    raw = get('report.xml')
     if sha(raw) != r.get('report_sha256'):
-        raise ValueError('report hash mismatch')
+        raise ReceiptRejected('receipt_hash_mismatch', 'report hash mismatch')
     cases = junit(raw)
     if cases != r.get('tests'):
-        raise ValueError('recorded test outcomes differ from raw report')
+        raise ReceiptRejected('receipt_hash_mismatch', 'recorded test outcomes differ from raw report')
     signatures = {}
     for item in r['snapshots']:
         artifact = item['artifact']
         if Path(artifact).name != artifact:
-            raise ValueError('snapshot artifact must be basename')
-        if sha(read(folder/artifact)) != item['sha256']:
-            raise ValueError('snapshot hash mismatch')
+            raise ReceiptRejected('report_malformed', 'snapshot artifact must be basename')
+        if sha(get(artifact)) != item['sha256']:
+            raise ReceiptRejected('receipt_hash_mismatch', 'snapshot hash mismatch')
         key = (item['role'], item['path'])
         if key in signatures:
-            raise ValueError('duplicate snapshots')
+            raise ReceiptRejected('report_malformed', 'duplicate snapshots')
         signatures[key] = item['sha256']
     if not all(any(k[0] == role for k in signatures) for role in ('implementation', 'tests')):
-        raise ValueError('missing implementation/test snapshots')
+        raise ReceiptRejected('report_malformed', 'missing implementation/test snapshots')
     return r, signatures, {c['id']: c for c in cases}
+
+
+def load_receipt(folder):
+    return load_receipt_data(lambda name: read(folder/name))
 
 
 def validate_phases(phases, base, bs, tests):
     for name, (r, signatures, cases) in phases.items():
         if (r['language'], r['framework'], r['command'], r['cwd']) != (base['language'], base['framework'], base['command'], base['cwd']):
-            raise ValueError('runtime selection or command changed across phases')
+            raise ReceiptRejected('report_malformed', 'runtime selection or command changed across phases')
         if set(cases) != set(tests) or signatures.keys() != bs.keys():
-            raise ValueError('test identities or tracked files changed')
+            raise ReceiptRejected('report_malformed', 'test identities or tracked files changed')
         if any(signatures[k] != bs[k] for k in bs if k[0] != 'implementation'):
-            raise ValueError('tests/context changed across phases')
+            raise ReceiptRejected('report_malformed', 'tests/context changed across phases')
         if name in {'baseline', 'restored', 'refactor'} and (r['exit_code'] != 0 or any(c['status'] != 'passed' for c in cases.values())):
-            raise ValueError(name + ' not all green')
+            raise ReceiptRejected('nontarget_failure', name + ' not all green')
         if name == 'restored' and signatures != bs:
-            raise ValueError('restoration snapshot mismatch')
+            raise ReceiptRejected('receipt_hash_mismatch', 'restoration snapshot mismatch')
         if name in {'fault', 'refactor'} and signatures == bs:
-            raise ValueError(name + ' implementation did not change')
+            raise ReceiptRejected('report_malformed', name + ' implementation did not change')
 
 
-def check(args):
+def fault_check(phases, target, oracle_note=None):
+    """三階段(或四階段)核對本體,只吃 load_receipt_data 的結果 → 結果 dict(fault_evidence 是 detected 或 survived)。
+    target 是宣告的目標清單(可重複時照舊拒收)。check 與安全證據閘共用。"""
     result = {'kind': 'fault-evidence', 'verdict': 'not_assessed', 'fault_evidence': 'invalid',
-              'oracle': {'status': 'declared' if args.oracle_note else 'unknown', 'source': args.oracle_note},
+              'oracle': {'status': 'declared' if oracle_note else 'unknown', 'source': oracle_note},
               'limitations': ['只核對收證內容一致性；報告可偽造，非執行真實性認證。',
                              '故障檢出不證明獨立判準或業務正確；context覆蓋與重構等價性另審。']}
-    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
-    if args.refactor:
-        phases['refactor'] = load_receipt(args.refactor)
     base, bs, tests = phases['baseline']
-    targets = set(args.target)
-    if not targets or len(targets) != len(args.target) or not targets <= set(tests):
-        raise ValueError('missing/duplicate target test identity')
+    targets = set(target)
+    if not targets or len(targets) != len(target) or not targets <= set(tests):
+        raise ReceiptRejected('target_missing', 'missing/duplicate target test identity')
     validate_phases(phases, base, bs, tests)
     r, _, cases = phases['fault']
     failed = {cid for cid, c in cases.items() if c['status'] != 'passed'}
@@ -341,9 +426,18 @@ def check(args):
     elif r['exit_code'] == 1 and failed <= targets and all(cases[t]['assertion_failure'] and cases[t]['status'] == 'failure' for t in failed):
         result['fault_evidence'] = 'detected'
     else:
-        raise ValueError('non-target, skipped or non-assertion failure')
+        raise ReceiptRejected('nontarget_failure' if not failed <= targets else 'nonassertion_failure',
+                              'non-target, skipped or non-assertion failure')
     result['targets'] = sorted(targets)
     result['failed_targets'] = sorted(failed)
+    return result
+
+
+def check(args):
+    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
+    if args.refactor:
+        phases['refactor'] = load_receipt(args.refactor)
+    result = fault_check(phases, args.target, args.oracle_note)
     result['refactor'] = 'green-reported-equivalence-unreviewed' if args.refactor else 'not-run'
     dump(result, args.out)
     return 0 if result['fault_evidence'] == 'detected' else 2

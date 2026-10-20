@@ -1,0 +1,1741 @@
+# 分包 c:接續自 diff --git a/scripts/lumos b/scripts/lumos 的 -7830,95 +8243,2947 區段(原 patch 第 3514 行起)
++def _secev_consideration_counted(ctx, env, cid, row):
++    """一列 considerations 算不算數(驗核可鏈):鏈上 type=consideration、target=格子 id 有有效的一筆、內容雜湊蓋住整列;
++    核可決策有效;risk_accepted 最長 30 天(31 天起無效)、到期日要等於鏈上那一筆;not_applicable 最長 180 天;到期日當天有效、隔天回到 open。"""
++    st, e = _secapr_lookup(ctx.chain, "consideration", cid, _secev_sha(_secev_canon(row)))
++    if st != "ok" or _secinv_decision_problem(env, row.get("decision_ref"), ctx._facts):
++        return False
++    ap, ex = _secinv_date(e["approved_on"]), _secinv_date(e["expires_on"])
++    if row["outcome"] == "risk_accepted":
++        if row.get("expires_on") != e["expires_on"] or (ex - ap).days > 30:
++            return False
++    elif (ex - ap).days > 180:
++        return False
++    if ex < ctx.today:
++        return False
++    if (ex - ctx.today).days <= _SECEV_REMIND_DAYS:
++        ctx.remind(f"格子 {cid} 的 {row['outcome']} {ex.isoformat()} 到期")
++    return True
++
++
++def _seccell_consideration_content(prep, target):
++    """security approvals payload consideration <格子 id>:那一列 considerations 的全部鍵(閘門比對時算同一份雜湊)。"""
++    for cr in prep.get("considerations") or []:
++        c = cr.get("raw")
++        if not isinstance(c, dict) or _seccell_cons_problem(c):
++            continue
++        tbl = _sectt_table(_sectt_current()) or {}
++        act = c.get("actor") if (tbl.get(c["category"]) or {}).get("has_actor") else None
++        if _seccell_id(c["surface"], c["asset"], c["category"], act) == target:
++            return c
++    raise ValueError(f"找不到格子 {target} 的 considerations 列")
++
++
++def _secev_candidate_age(repo_root, sha, r, prep, today):
++    """candidate 放了幾天:revision 是 YYYY-MM-DD 就用它,否則用家節點在這個提交上最後一次改動的提交日期。"""
++    import datetime as _dt
++    d = _secinv_date(str(r.get("revision") or ""))
++    if d is None:
++        rr = _secev_git(repo_root, "log", "-1", "--format=%cI", sha, "--", "*" + str(r.get("node") or ""))
++        dt = _secev_iso(rr.stdout.strip()) if rr is not None and rr.returncode == 0 and rr.stdout.strip() else None
++        d = dt.astimezone(_dt.timezone.utc).date() if dt else None
++    return (today - d).days if d else None
++
++
++def _secev_chain_view(chain):
++    return {"entries": [{"seq": e["seq"], "type": e["type"], "target": e["target"],
++                         "status": "ok" if e["status"] == "ok" else f"approval:{e['status']}"} for e in chain["entries"]],
++            "keys": [{"principal": p, "fingerprint": _secapr_fingerprint(t, k), "expires_on": x.isoformat()}
++                     for p, (t, k, x) in sorted(chain["keys"].items())],
++            "warnings": list(chain["warnings"])}
++
++
++def _secev_finish(rep):
++    """擋不擋:整道代碼或必驗集合裡有 unsound;gate_setting=warn 有效而且這個整道代碼可以降級時照算照印、不擋。"""
++    blocking = []
++    for j in rep["controls"]:
++        if j.get("mandatory") and j.get("verdict") == "unsound":
++            for c in j["control_codes"]:
++                blocking.append({"id": j["id"], "kind": "護欄", "code": c})
++            for k in j["kinds"]:
++                if k["verdict"] != "qualified" and not k.get("excepted"):
++                    first = next((it for it in k["items"] if it.get("verdict") != "qualified"), {})
++                    blocking.append({"id": j["id"], "kind": k["kind"], "code": (k["codes"] or [k["verdict"]])[0],
++                                     "path": first.get("path")})
++    rep["blocking"] = blocking
++    hard = bool(rep["gate_code"]) or bool(blocking)
++    gs = rep["gate_setting"]
++    warn_ok = gs["effective"] == "warn" and (not rep["gate_code"] or _SECEV_WARN_OK.get(rep["gate_code"], False))
++    if gs["effective"] == "warn" and rep["gate_code"] and not _SECEV_WARN_OK.get(rep["gate_code"], False):
++        gs["reason"] = f"整道代碼 {rep['gate_code']} 不能降級,warn 這次無效"
++    rep["blocked"] = hard and not warn_ok
++    rep["warned_only"] = hard and warn_ok
++    return rep
++
++
++def _secev_grep_trace(repo_root, sha):
++    """廉價預檢:先一次 git grep 找提到 lumos-security-v1 的 .md;命中的那幾篇再照盤點的嚴格讀法(_secinv_blocks)看
++    有沒有真的圍欄或變體(散文裡提到這個字樣不算痕跡)。回 True/False/None(git 失敗,當成可能有)。"""
++    r = _secev_git(repo_root, "grep", "-l", "-z", "-F", "--no-color", _SECINV_MARK, sha, "--", "*.md")
++    if r is None:
++        return None
++    if r.returncode == 1:
++        return False
++    if r.returncode != 0:
++        return None
++    pre = sha + ":"
++    paths = [p.removeprefix(pre) for p in r.stdout.split("\0") if p]
++    if not paths:
++        return False
++    got = _nodehome_cat_blobs_capped(repo_root, [f"{sha}:{p}" for p in paths], _VAULT_SAFE_FILE_MAX)
++    if got is None:
++        return None
++    for p, b in zip(paths, got):
++        if b is None:
++            return True             # 讀不到(太大、特殊檔):交給完整快照判
++        try:
++            text = b.decode("utf-8")
++        except UnicodeDecodeError:
++            return True
++        blocks, errs = _secinv_blocks(p, text)
++        if blocks or errs:
++            return True
++    return False
++
++
++def _secev_show_code(c):
++    return _secinv_show(c, 200)
++
++
++def _secev_render_head(rep, L):
++    """主線、gate、盤點、整道判不清、核可鏈的那幾行。"""
++    ml = rep.get("mainline") or {}
++    L.append(f"主線: {ml.get('sha') or '(無)'}({_secinv_show(ml.get('how') or '')})  merge-base: {rep.get('merge_base') or '(無)'}")
++    gs = rep["gate_setting"]
++    L.append(f"gate: 設定 {gs['configured']}、實際 {gs['effective']}" + (f"——{_secinv_show(gs['reason'])}" if gs.get("reason") else ""))
++    if rep.get("inventory"):
++        inv = rep["inventory"]
++        L.append(f"盤點: read_complete={str(inv['read_complete']).lower()} registration_complete={str(inv['registration_complete']).lower()} "
++                 f"errors={inv['errors']}(security_verdict 照舊 not_assessed)")
++    if rep["gate_code"]:
++        L.append(f"整道判不清: {rep['gate_code']}——{_secinv_show(rep['gate_detail'] or '')}")
++    keys = rep["approvals"]["keys"]
++    if keys:
++        L.append("現在有效的核可金鑰: " + "、".join(f"{_secinv_show(k['principal'])} {k['fingerprint']}(到 {k['expires_on']})" for k in keys))
++    L += [f"  核可鏈第 {e['seq']} 筆不算數:{e['status']}({_secinv_show(str(e['type']))} {_secinv_show(str(e['target']))})"
++          for e in [e for e in rep["approvals"]["entries"] if e["status"] != "ok"][:20]]
++
++
++def _secev_render_freeze(fz, L):
++    """凍結比對的那幾行:變弱、必驗集合縮小、有核可的修訂、工具清單變弱。"""
++    L += [f"變弱(沒有核可,照嚴的判):{_secinv_show(w['id'])} 對 {w['against']}:" + "、".join(w["fields"]) for w in fz["weakened"]]
++    L += [f"必驗集合縮小(沒有核可,照舊當必驗):{_secinv_show(w['id'])}——{w['why']}" for w in fz["removed"]]
++    L += [f"有核可的修訂:{_secinv_show(w['id'])}(核可鏈第 {w['approval_seq']} 筆)" for w in fz["approved_revisions"]]
++    L += [f"工具清單變弱:{_secinv_show(w['tool'])}:" + "、".join(w["weakened"]) + ("(有核可)" if w["approved"] else "(沒有核可,照主線那一列判)")
++          for w in fz["tool_list"]]
++
++
++def _secev_render_item(it, L):
++    L.append(f"        · {it.get('verdict')} {','.join(it.get('codes') or [])} 證據 {_secinv_show(str(it.get('path')))} "
++             f"工具 {_secinv_show(str(it.get('tool')))} {_secinv_show(str(it.get('tool_version')))} "
++             f"觀察 {it.get('observed_at')}" + (" (主線版被刪的項,照算)" if it.get("frozen_from_mainline") else ""))
++    L += [f"          限制: {lim}" for lim in it.get("limitations") or []]
++
++
++def _secev_render_control(j, L):
++    """一條護欄的判定:整體、來源與威脅類別、例外、註、各種證據與各項。"""
++    L.append(f"- [{_secinv_show(j['id'])}] revision={_secinv_show(str(j['revision']))} lifecycle={j['lifecycle']} "
++             f"整體={j['verdict']}" + (f" 護欄層={','.join(j['control_codes'])}" if j["control_codes"] else "")
++             + (f" 最先要修={j['first_fix']}" if j.get("first_fix") else ""))
++    L.append(f"    來源: {_secinv_show(j.get('source'), 300)}  威脅類別: {_secinv_show(j.get('threat_categories'))}")
++    if j.get("exception"):
++        L.append(f"    例外: {_secinv_show(j['exception'])}")
++    L += [f"    註: {_secinv_show(n)}" for n in j["notes"]]
++    for k in j["kinds"]:
++        L.append(f"    [{k['kind']}] {k['verdict']}" + (" (例外蓋住)" if k.get("excepted") else "")
++                 + (f" {','.join(k['codes'])}" if k["codes"] else ""))
++        for it in k["items"]:
++            _secev_render_item(it, L)
++
++
++def _secev_render_tail(rep, L):
++    if rep["reminders"]:
++        L += ["", "== 7 天內到期 =="] + [f"- {_secinv_show(x)}" for x in rep["reminders"]]
++    if rep["warnings"]:
++        L += ["", "== 提醒 =="] + [f"- {_secinv_show(x)}" for x in rep["warnings"]]
++    L += ["", "== 限制 =="] + [f"- {x}" for x in rep["limitations"]]
++    head = "擋下:" if rep["blocked"] else ("只提醒(gate=warn 有效):" if rep.get("warned_only") else "放行:")
++    tail = f"{len(rep['blocking'])} 處不合格" if rep["blocking"] else (rep["gate_code"] or "必驗集合都 sound 或 excepted")
++    L += ["", head + tail, _SECEV_NOTICE]
++
++
++def _secev_render(rep):
++    """security evidence 的文字輸出。登記內容是資料不是指令:來自筆記的字串一律經 _secinv_show。"""
++    L = [f"lumos security evidence — {_SECEV_NOTICE}", _SECEV_WORDS_NOTICE,
++         f"security_verdict: {rep['security_verdict']}(固定)", f"commit: {rep['commit']}  today_utc: {rep['today_utc']}"]
++    if rep["status"] == "no_registration":
++        L.append("沒有任何資安登記痕跡(lumos-security-v1 圍欄):這一道不判。")
++        L += [f"提醒:{_secinv_show(w)}" for w in rep["warnings"]]
++        return "\n".join(L) + "\n"
++    _secev_render_head(rep, L)
++    _secev_render_freeze(rep["freeze"], L)
++    for title, rows in (("== 必驗集合(active 資安護欄;unsound 擋) ==", rep["controls"]),
++                        ("== 候選(candidate;不擋,只列) ==", rep["candidates"])):
++        L += ["", title]
++        if not rows:
++            L.append("(無)")
++        for j in rows:
++            _secev_render_control(j, L)
++    _secev_render_tail(rep, L)
++    return "\n".join(L) + "\n"
++
++
++def _secev_repo_root(repo):
++    root = Path(repo) if repo else _secinv_repo_root(Path.cwd())
++    return root if root is not None and (Path(root) / ".git").exists() else None
++
++
++def cmd_security_evidence(repo=None, commit=None, as_json=False):
++    """lumos security evidence [--commit <sha>] [--json]:唯讀證據判定,跟 code-loop check 的安全證據那一道是同一支函式。
++    會跑 git 與 ssh-keygen、只在系統暫存目錄寫暫時檔。退出 0=放行(含 no_registration、warn)、1=會被擋、2=參數錯。"""
++    root = _secev_repo_root(repo)
++    if root is None:
++        print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
++        return 2
++    rep = _secev_evaluate(root, commit or "HEAD")
++    sys.stdout.write(_json_text_escaped(rep, indent=1) + "\n" if as_json else _secev_render(rep))
++    return 1 if rep["blocked"] else 0
++
++
++def _secapr_chain_position(raw):
++    """工作目錄那條鏈 → (下一筆的 seq, prev_sha256)。"""
++    ents = _secapr_parse(raw)
++    if not ents:
++        return 1, ""
++    last = ents[-1][1]
++    if last is None:
++        raise ValueError("工作目錄的核可鏈最後一行讀不出來,先修好再加")
++    return len(ents) + 1, _secev_sha(_secev_canon(last))
++
++
++def _secapr_c_keys(root, typ, target, opts):
++    keys = []
++    for spec in opts.get("keys") or []:
++        if "=" not in spec:
++            raise ValueError("--key 要寫成 <principal>=<公鑰檔>")
++        princ, path = spec.split("=", 1)
++        parts = Path(path).read_text(encoding="utf-8").strip().split()
++        if len(parts) < 2:
++            raise ValueError(f"{path} 不像 ssh 公鑰")
++        keys.append(f"{princ} {parts[0]} {parts[1]}")
++    if _secapr_parse_keys(keys) is None:
++        raise ValueError("金鑰格式不對、貼成私鑰或類型不收(收 ssh-ed25519、sk-ssh-ed25519@openssh.com、ecdsa、ssh-rsa)")
++    return keys, keys
++
++
++def _secapr_c_gate(root, typ, target, opts):
++    if target != "security_evidence.gate":
++        raise ValueError("gate_setting 的 target 只收 security_evidence.gate")
++    return {"value": "warn"}, None
++
++
++def _secapr_c_suppression(root, typ, target, opts):
++    if "#" not in target or not opts.get("reason"):
++        raise ValueError("suppression 的 target 寫 <規則 id>#<位置雜湊>,另帶 --reason")
++    rule, loc = target.split("#", 1)
++    return {"rule": rule, "location_sha256": loc, "reason": opts["reason"]}, None
++
++
++class _SecaprAt:
++    """要從某個提交的盤點算內容的那幾種 type 共用:那個提交的樹、盤點、索引。"""
++
++    def __init__(self, root, commit):
++        self.root, self.commit = root, commit
++        self.sha = _lens_full_sha(root, commit)
++        if self.sha is None:
++            raise ValueError(f"取不到提交 {commit}")
++        self.tree = _SecevTree(root, self.sha)
++        self.prep, self.penv, _v, _o = _secev_vault_report(root, self.tree, _secinv_today(), None)
++        if self.prep is None:
++            raise ValueError("讀不出那個提交的盤點")
++        self.idx = _secev_index(self.prep)
++
++
++def _secapr_c_exception(at, target):
++    cid = target.split("#", 1)[0]
++    r = at.idx.get(cid)
++    if r is None or not r.get("exception"):
++        raise ValueError(f"{at.commit} 裡找不到 {cid} 或它沒有 exception")
++    want = f"{cid}#{','.join(sorted(r['exception'].get('covers_kinds') or []))}"
++    if target != want:
++        raise ValueError(f"target 要寫成 {want}(護欄 id 加排序後的 covers_kinds)")
++    return {"control_id": cid, "control_revision": r.get("revision"), "inputs_sha256": _secev_inputs_sha(r),
++            "exception": r["exception"]}
++
++
++def _secapr_c_human(at, target):
++    cid, kind = ([*target.split("#", 1), ""])[:2]
++    its = [it for it in _secev_items_for(at.penv, at.idx.get(cid), {}) if it["kind"] == kind and it.get("reviewer_kind") == "human"]
++    if len(its) != 1:
++        raise ValueError(f"{cid} 的 {kind} 要恰好一項 reviewer_kind=human 的審查紀錄(找到 {len(its)} 項)")
++    return {k: its[0].get(k) for k in _SECEV_ITEM_KEYS if k in its[0]}
++
++
++def _secapr_c_tools(at, target):
++    t = _secev_tools_load(at.tree.read(_SECEV_TOOLS_REL), None, {})[0].get(target)
++    return {k: v for k, v in t.items() if not k.startswith("_")} if t else {}
++
++
++def _secapr_c_revision(at, target):
++    cid, dref = ([*target.split("|", 1), ""])[:2]
++    if not dref:
++        raise ValueError("revision 的 target 寫 <護欄 id>|<decision_ref>")
++    ml, _how, code = _secev_mainline(at.root, at.sha, _secev_config(at.tree.read(_SECEV_CONFIG_REL)))
++    if code or ml is None:
++        raise ValueError("認不出主線,算不出修訂之前的版本")
++    mrep = _secev_vault_report(at.root, _SecevTree(at.root, ml), _secinv_today(), None)[0]
++    old = _secev_index(mrep or {}).get(cid)
++    if old is None:
++        raise ValueError(f"主線版沒有 {cid}")
++    new = at.idx.get(cid)
++    content = {"control_id": cid, "before": _secev_state(old), "decision_ref": dref}
++    content.update({"removed": True} if new is None else {"after": _secev_state(new)})
++    return content
++
++
++_SECAPR_PLAIN = {"approvers_init": _secapr_c_keys, "approvers_add": _secapr_c_keys,
++                 "approvers_revoke": lambda root, typ, target, opts: ({"principal": target}, None),
++                 "gate_setting": _secapr_c_gate, "suppression": _secapr_c_suppression}
++_SECAPR_AT = {"exception": _secapr_c_exception, "human_review": _secapr_c_human, "tool_list_change": _secapr_c_tools,
++              "revision": _secapr_c_revision,
++              "consideration": lambda at, target: _seccell_consideration_content(at.prep, target)}
++
++
++def _secapr_content(root, typ, target, opts):
++    """要簽的內容(閘門比對時用同一套算法)→ (content 物件, keys 或 None)。依 type 分派:
++    不看提交的(金鑰、撤銷、gate、壓制)、帶 --content-file 的、要從提交盤點算的。"""
++    if typ in _SECAPR_PLAIN:
++        return _SECAPR_PLAIN[typ](root, typ, target, opts)
++    if opts.get("content_file"):
++        return _secev_loads(Path(opts["content_file"]).read_text(encoding="utf-8")), None
++    if typ not in _SECAPR_AT:
++        raise ValueError(f"{typ} 要帶 --content-file")
++    return _SECAPR_AT[typ](_SecaprAt(root, opts.get("commit") or "HEAD"), target), None
++
++
++def _secapr_cmd_verify(root, commit, as_json, today):
++    """security approvals verify:從頭驗整條鏈(對主線 tip 驗前綴)。退出 0=全數有效、1=有不算數或分岔、2=取不到提交。"""
++    sha = _lens_full_sha(root, commit or "HEAD")
++    if sha is None:
++        print(f"擋下:取不到提交 {commit or 'HEAD'}", file=sys.stderr)
++        return 2
++    tree = _SecevTree(root, sha)
++    ml, how, _code = _secev_mainline(root, sha, _secev_config(tree.read(_SECEV_CONFIG_REL)))
++    main_raw = _SecevTree(root, ml).read(_SECEV_APPROVALS_REL) if ml else None
++    chain = _secapr_verify(tree.read(_SECEV_APPROVALS_REL), main_raw, _secev_project_id(root, ml or sha), today)
++    view = dict(_secev_chain_view(chain), diverged=chain["diverged"], mainline=ml, mainline_how=how)
++    if as_json:
++        print(_json_text_escaped(view, indent=1))
++    else:
++        print(f"核可鏈 {_SECEV_APPROVALS_REL}(提交 {sha[:12]};主線 {ml[:12] if ml else '無'}):{len(view['entries'])} 筆")
++        if chain["diverged"]:
++            print("  ✗ 跟主線分岔:主線 tip 的鏈不是這一版的開頭一段;先把分支接上主線")
++        for e in view["entries"]:
++            print(f"  {e['seq']:>4} {e['status']:<32} {_secinv_show(str(e['type']))} {_secinv_show(str(e['target']), 120)}")
++        for k in view["keys"]:
++            print(f"  有效金鑰:{_secinv_show(k['principal'])} {k['fingerprint']}(到 {k['expires_on']})")
++        for w in view["warnings"]:
++            print(f"  提醒:{w}")
++    return 1 if chain["diverged"] or any(e["status"] != "ok" for e in view["entries"]) else 0
++
++
++def _secapr_payload_body(root, typ, target, signer, expires_on, opts, outcome, today):
++    """算好要簽的那一筆(seq、prev、project_id、content_sha256、approved_on);參數或內容不對丟 ValueError/OSError。"""
++    content, k = _secapr_content(root, typ, target, opts)
++    wt = Path(root) / _SECEV_APPROVALS_REL
++    seq, prev = _secapr_chain_position(wt.read_bytes() if wt.is_file() else None)
++    ml, _h, _c = _secev_mainline(root, "HEAD", _secev_config(None))
++    head = _lens_full_sha(root, "HEAD")
++    body = {"seq": seq, "prev_sha256": prev, "project_id": _secev_project_id(root, ml or head), "type": typ,
++            "target": target, "content_sha256": _secev_sha(_secev_canon(content)), "approved_on": today.isoformat(),
++            "expires_on": expires_on, "signer": signer}
++    if k is not None:
++        body["keys"] = k
++    if typ == "consideration" and outcome:
++        body["outcome"] = outcome
++    return body
++
++
++def cmd_security_approvals(sub_, repo=None, typ=None, target=None, signer=None, expires_on=None, keys=None,
++                           content_file=None, reason=None, out=None, commit=None, as_json=False, outcome=None):
++    """security approvals payload|verify(唯讀)。payload 印出要簽的那一筆(seq、prev_sha256、project_id、content_sha256、
++    approved_on 都由工具算好;approved_on 是當天 UTC 日期),verify 從頭驗整條鏈。"""
++    root = _secev_repo_root(repo)
++    if root is None:
++        print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
++        return 2
++    today = _secinv_today()
++    if sub_ == "verify":
++        return _secapr_cmd_verify(root, commit, as_json, today)
++    if typ not in _SECAPR_TYPES:
++        print(f"擋下:type 只收 {'、'.join(_SECAPR_TYPES)}", file=sys.stderr)
++        return 2
++    if not (signer and _secinv_is_text(target) and _secinv_date(expires_on)):
++        print("擋下:要帶 <type> <target> --signer <principal> --expires-on YYYY-MM-DD", file=sys.stderr)
++        return 2
++    opts = {"keys": keys, "content_file": content_file, "reason": reason, "commit": commit}
++    try:
++        raw = _secev_canon(_secapr_payload_body(root, typ, target, signer, expires_on, opts, outcome, today))
++        if out:
++            Path(out).write_bytes(raw)
++    except (OSError, ValueError) as e:
++        print(f"擋下:{_secinv_show(str(e))}", file=sys.stderr)
++        return 2
++    sys.stdout.write(raw.decode("utf-8") + "\n")
++    print(f"接下來:用你自己的金鑰簽這一份(工具拿不到私鑰):\n    ssh-keygen -Y sign -n {_SECAPR_NS} -f <私鑰> {out or '<上面那份存成的檔>'}\n"
++          f"簽好之後追加進核可鏈:\n    lumos code-loop security-approval-add {out or '<那份檔>'}", file=sys.stderr)
++    return 0
++
++
++def cmd_codeloop_security_approval_add(repo, payload_path, sig_path=None):
++    """code-loop security-approval-add <簽好的檔>:把那一筆接在工作目錄的核可鏈後面;用同一支驗證函式驗過「整條鏈加這一筆」
++    這一筆有效才寫入,驗不過不寫並說原因。第一筆 approvers_init 寫入前當場驗格式、金鑰類型與自簽。"""
++    root = _secev_repo_root(repo)
++    if root is None:
++        print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
++        return 2
++    try:
++        raw = Path(payload_path).read_bytes()
++        body = _secev_loads(raw.decode("utf-8"))
++        sig = Path(sig_path or (str(payload_path) + ".sig")).read_text(encoding="utf-8")
++    except (OSError, UnicodeDecodeError, ValueError, RecursionError) as e:
++        print(f"擋下:讀不出那一筆或它的簽章:{_secinv_show(str(e))}", file=sys.stderr)
++        return 2
++    if not isinstance(body, dict) or raw.rstrip(b"\n") != _secev_canon(body):
++        print("擋下:簽的檔要是 security approvals payload 印出的規範化 JSON 原樣(不能改排版、加欄位)", file=sys.stderr)
++        return 2
++    wt = Path(root) / _SECEV_APPROVALS_REL
++    cur = wt.read_bytes() if wt.is_file() else b""
++    if cur and not cur.endswith(b"\n"):
++        cur += b"\n"
++    entry = dict(body, signature=sig.strip())
++    new = cur + json.dumps(entry, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
++    pid = body.get("project_id")
++    chain = _secapr_verify(new, None, pid, _secinv_today())
++    last = chain["entries"][-1] if chain["entries"] else None
++    if last is None or last["status"] != "ok":
++        print(f"擋下:這一筆接上之後驗不過({last['status'] if last else '空鏈'}),不寫入。"
++              "常見原因:金鑰打錯一個字、貼成私鑰、類型不收、簽的不是 payload 原檔、seq 或前一筆雜湊對不上(先重新跑 payload)。",
++              file=sys.stderr)
++        return 1
++    real_pid = _secev_project_id(root, _secev_mainline(root, "HEAD", _secev_config(None))[0] or _lens_full_sha(root, "HEAD"))
++    if pid != real_pid:
++        print("擋下:這一筆的 project_id 不是這個 repo 的根提交(從別的專案貼來?),不寫入", file=sys.stderr)
++        return 1
++    wt.parent.mkdir(parents=True, exist_ok=True)
++    with open(wt, "ab") as fh:
++        fh.write(new[len(cur):] if cur else new)
++    print(f"✓ 核可鏈第 {body['seq']} 筆已追加({_secinv_show(str(body['type']))} {_secinv_show(str(body['target']))});"
++          f"提交 {_SECEV_APPROVALS_REL} 之後閘門才讀得到")
++    for p, (t, k, x) in sorted(chain["keys"].items()):
++        print(f"  有效金鑰:{_secinv_show(p)} {_secapr_fingerprint(t, k)}(到 {x.isoformat()})")
++    return 0
++
++
++def cmd_codeloop_security_backing(repo, control_id, supersede=False):
++    """code-loop security-backing <護欄 id> [--supersede]:在本機讀 .kill-log.jsonl,把這條護欄的 guard kill 結果(配方組、
++    配方改到的檔、每次的 verdict)連同 head_sha 寫進受版控的 docs/.security-backing.jsonl。冪等鍵(護欄、種類、head_sha);
++    --supersede 寫一筆更正(帶 supersedes=被更正那一行的 sha256)。單行上限 4096 位元組,裝不下拒寫、不截斷。"""
++    import time as _t
++    root = _secev_repo_root(repo)
++    if root is None:
++        print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
++        return 2
++    head = _lens_full_sha(root, "HEAD")
++    tree = _SecevTree(root, head)
++    prep, penv, _v, _o = _secev_vault_report(root, tree, _secinv_today(), None)
++    rec = _secev_index(prep or {}).get(control_id)
++    if rec is None:
++        print(f"擋下:HEAD 裡找不到護欄 {_secinv_show(control_id)}", file=sys.stderr)
++        return 2
++    items = [it for it in _secev_items_for(penv, rec, {}) if it["format"] == "guard_kill"]
++    rids = sorted({r for it in items for r in it["targets"].get("recipe_ids") or []})
++    if not rids:
++        print(f"擋下:{_secinv_show(control_id)} 的證據圍欄沒有 format=guard_kill 的項或沒列 recipe_ids(要先在 Verification 寫好)",
++              file=sys.stderr)
++        return 2
++    rows = [r for r in _backing_kill_rows(root) if r["recipe_id"] in rids]
++    valid, why = _backing_valid_rows(root, head, rows, {}, _t.monotonic() + _BACKING_BUDGET) if rows else (None, "本機沒有對得上的 kill 紀錄")
++    groups = []
++    for rid in rids:
++        g = [r for r in (valid or []) if r["recipe_id"] == rid]
++        rec_file = (g[-1].get("_recipe") or {}).get("file") if g else None
++        groups.append({"recipe_id": rid, "files": [rec_file] if rec_file else [],
++                       "verdicts": [{"verdict": r["verdict"], "weak": r["weak"], "head_sha": r["head_sha"], "ts": r.get("ts", "")}
++                                    for r in g[-20:]]})
++    line = {"control_id": control_id, "control_revision": rec.get("revision"), "kind": "fault_sensitivity", "head_sha": head,
++            "groups": groups, "ts": _dt_now_iso()}
++    path = Path(root) / _SECEV_BACKING_REL
++    old = path.read_bytes() if path.is_file() else b""
++    rows_old, _bad = _secev_backing_rows(old)
++    same = [r for r in rows_old if r.get("control_id") == control_id and r.get("kind") == "fault_sensitivity"
++            and r.get("head_sha") == head]
++    if same and not supersede:
++        print(f"= {_secinv_show(control_id)} 在 {head[:8]} 已有一筆背書,不重寫(寫錯了用 --supersede 更正)")
++        return 0
++    if same and supersede:
++        line["supersedes"] = same[-1]["_sha256"]
++    b = json.dumps(line, ensure_ascii=False, sort_keys=True).encode("utf-8")
++    if len(b) > _SECEV_BACKING_LINE_MAX:
++        print(f"擋下:這一筆 {len(b)} 位元組,超過單行上限 {_SECEV_BACKING_LINE_MAX};配方改到的檔太多,請拆配方,不截斷", file=sys.stderr)
++        return 1
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with open(path, "ab") as fh:
++        fh.write((b"\n" if old and not old.endswith(b"\n") else b"") + b + b"\n")
++    print(f"✓ {_secinv_show(control_id)} 的 guard kill 背書寫進 {_SECEV_BACKING_REL}(head {head[:8]},{len(groups)} 個配方組)"
++          + ("" if valid else f";提醒:{why}"))
++    print("  提交這支檔之後閘門才讀得到(閘門只讀要推的提交樹)")
++    return 0
++
++
++def _dt_now_iso():
++    import datetime as _dt
++    return _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
++
++
+ KNOWN_TYPES = {"system", "verification", "issue", "project", "moc"}
+ # SYMBOL_NAMES 的定義已上移到 SYMBOL_RE 旁(單一來源,見那裡的說明)。
+ # ★2026-09-15 放寬:認得連字號★——原本 ^([A-Z]{2,}): 只吃連續大寫,
+ # 含連字號的前綴整行躲過檢查(打成 PRIOR-ARTT: 也沒人唸)。
+ SYMBOLISH_RE = re.compile(r"^([A-Z][A-Z-]*[A-Z]):")   # 像「符號宣告」的行→ 抓 typo
+ 
+ 
+ def _git_commit_exists(repo_root, sha):
+     """[git:sha] Tier B 驗證:git cat-file -e sha^{commit}。非 git repo/物件缺 → False。"""
+     import subprocess
+@@ -9392,39 +12657,49 @@ def _pq_decision_target(env, rel, ref, cache=None):
+     _pq_decision_state 與殘留標記(_residual_decision、_residual_ref_key)共用這一份路徑解析(代碼審 code-審查收斂規則 r1 G9:原本殘留另寫一份,撞名取第一篇)。
+     本篇可簡寫 #dN(節點 = rel);帶路徑的寫法要整條對得上(完全相符優先,否則不分大小寫,多於一篇判 bad);只寫短名而同名不只一篇也判 bad。"""
+     ref = str(ref).strip()
+     if "[[" in ref or "]]" in ref:
+         return "bad", None, None
+     if re.fullmatch(r"#d\d+", ref):
+         return None, rel, ref[1:]
+     pr = _dref_parse(ref)
+     if not pr or not pr[0]:
+         return "bad", None, None
+-    lit = nfc(pr[0][:-3] if pr[0].lower().endswith(".md") else pr[0])
++    st, node = _pq_node_target(env, rel, pr[0], cache)
++    if st:
++        return st, None, None
++    return None, node, pr[1]
++
++
++def _pq_node_target(env, rel, node_part, cache=None):
++    """連結的節點部分 → (None, 節點 rel) 或 ("bad"|"missing", None)。帶路徑要整條對得上(完全相符優先,否則不分大小寫,
++    多於一篇判 bad);只寫短名而同名不只一篇也判 bad。決策連結(_pq_decision_target)與護欄的 question_refs(<節點>#Qn)
++    共用這一份,不另寫第二套路徑解析(Projects/安全主張驗收閘_計劃〈二〉的 question_refs)。"""
++    lit = nfc(node_part[:-3] if node_part.lower().endswith(".md") else node_part)
+     cache = {} if cache is None else cache
+     if "/" in lit:   # 帶路徑:整條對上,不像 env.resolve 對不上就退回比短名
+         if (lit + ".md") in env.notes:   # 完全相符優先(只差大小寫的兩篇並存時不判撞名,代碼審 r3 邊界席)
+             hits = [lit + ".md"]
+         else:
+             if cache.get("paths") is None:   # 不分大小寫的路徑索引,同一次判定只建一次(代碼審 r2 後的效能檢查)
+                 idx = {}
+                 for r in env.notes:
+                     idx.setdefault(r[:-3].lower(), []).append(r)
+                 cache["paths"] = idx
+             hits = list(cache["paths"].get(lit.lower(), []))
+     else:            # 只寫短名:用共用的短名索引 by_stem(不分大小寫);撞名不像 env.resolve 取第一篇,當格式不合
+         hits = list(env.by_stem.get(lit.lower(), []))
+     if len(hits) > 1:
+-        return "bad", None, None
++        return "bad", None
+     if not hits:
+-        return "missing", None, None
+-    return None, hits[0], pr[1]
++        return "missing", None
++    return None, hits[0]
+ 
+ 
+ def _pq_decision_state(env, rel, ref, self_fm=None, cache=None):
+     """決策連結 → ok / missing / superseded / bad。格式沿用決策紀錄的全域編號 <節點>#dN(解析 _dref_parse);本篇可簡寫 #dN。
+     self_fm:寫入指令在鎖內組好的開頭欄位——給了它,本篇用它、別篇從磁碟重讀(不信鎖外載入的舊內容,代碼審 r1 併發席)。
+     帶路徑的寫法要整條對得上;只寫短名而同名不只一篇,當格式不合(env.resolve 會退回比短名、撞名取第一篇,代碼審 r1 邊界席)。
+     路徑解析在 _pq_decision_target(殘留標記也用它)。cache:同一次判定裡每篇的決策只解析一次(代碼審 r1:原本每題重解析,題數乘決策數)。"""
+     cache = {} if cache is None else cache
+     st, node, did = _pq_decision_target(env, rel, ref, cache=cache)
+     if st:
+@@ -10861,35 +14136,80 @@ def cmd_spec_gate(env, node, no_run=False):
+     verdicts = {}
+     if _spec_gate_runnable(items, plats, clauses):
+         verdicts = _spec_gate_run_clauses(rr, plats, items, per_prof, loose_for)
+     counts = {k: sum(1 for v in verdicts.values() if v[0] == k) for k in ("red", "green", "weak")}
+     reg_fail, reg_ok, reg_nodes = _spec_gate_regress(env, rel, rr, split, default, methods_for, per_prof, no_run, loose_for)
+     if not _spec_gate_print_regress(reg_fail, reg_ok, reg_nodes):
+         return 1
+     if door == "low" and _spec_gate_twoway_run_verdict(clauses, keeps, verdicts):
+         return _spec_gate_low_not_red(env, rel, text, rows_b, judged, clauses, keeps, verdicts)
+     summ = _clause_summary(clauses)
++    _spec_gate_security_line(env, rel)
+     print(f"[spec-gate] 匯總: 條款 {len(clauses)}/綁了 {summ['bound']}/靠人 {summ['manual']}/紅 {counts['red']}/綠 {counts['green']}/弱證據 {counts['weak']}/相依回歸 {reg_ok} 支綠" + (f"/keeps {len(keeps)}" if keeps else ""))
+     if door == "low":
+         if judged["nogo_skipped"]:
+             print("[spec-gate] PASS(風險低):可以實作;不做清單略過了危險詞,推送前要一筆輕量設計審通過(指令見上;抓到 major 改開 -std 完整設計審)。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
+         else:
+             print("[spec-gate] PASS(風險低):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
+     else:
+         print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;風險高只印不擋。接著走:\n    lumos loop next")
+     _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts)
+     note = " ".join(f"{cid}={verdicts[cid][0]}" for cid in sorted(verdicts, key=lambda x: int(x[1:]))) or "no-run"
+     _append_governance_log(env.vault, [{"gate": "spec-gate", "kind": "spec-gate-run", "hard": False, "nodes": [rel],
+                                         "note": f"door={door} clauses={len(clauses)} bound={summ['bound']} red={counts['red']} green={counts['green']} weak={counts['weak']} regress={reg_ok} {note}"}])
+     return 0
+ 
+ 
++def _spec_gate_security_line(env, rel, report=None):
++    """規格閘的資安提醒(只印、不擋,不影響判門、退出碼與留痕;Projects/資安風險提問分階段_計劃〈三〉):
++    先便宜地看計劃 lands_in 與 related 連到的節點原文有沒有 lumos-security-v1 字樣,一篇都沒有就不印也不建快照;
++    有字樣才走盤點同一支 _secinv_report。出錯(讀取不完整、errors 非空、讀法拋錯)一律只印一行警告。"""
++    try:
++        n = env.notes.get(rel)
++        links = []
++        for k in ("lands_in", "related"):
++            for x in as_list(n.fields.get(k)) if n is not None else []:
++                t = str(x).strip().strip('"').removeprefix("[[").removesuffix("]]").split("|")[0]
++                if t:
++                    links.append(nfc(t if t.endswith(".md") else t + ".md"))
++        linked = [x for x in dict.fromkeys(links) if x in env.notes and _SECINV_MARK in (env_text(env, x) or "")]
++        if not linked:
++            return
++        rep, inv = report if report is not None else _secinv_report(env.vault)
++        if not rep["read_complete"] or rep["errors"] or (inv is None and any(
++                e.get("kind") == "unknown_schema_version" for e in rep["errors"])):
++            print("[spec-gate] 資安登記: 資安盤點讀取不完整或登記有錯,這一行略過(看 lumos security list)")
++            return
++        ctl = [r for r in rep["records"] if r["node"] in linked and "security" in (r.get("concerns") or [])]
++        cs = rep["coverage"].get("cells") or {}
++        if cs.get("status") != "known":
++            print(f"[spec-gate] 資安登記: 連到的節點登記了 {len(ctl)} 條護欄(" + "、".join(_secinv_show(r["id"], 40) for r in ctl[:10])
++                  + f");格子算不出來(status={cs.get('status')}),open 數不印")
++            return
++        inv_nodes = {rep["coverage"].get("inventory", {}).get("node")} if rep["coverage"].get("inventory") else set()
++        surf = {s_ for r in ctl for s_ in r.get("surfaces") or []}
++        if inv_nodes & set(linked):
++            surf |= {c["surface"] for c in cs.get("cells") or []}
++        mine = [c for c in cs.get("cells") or [] if c["surface"] in surf and (c["state"] == "open" or c["state"].startswith("candidate:"))]
++        print(f"[spec-gate] 資安登記: 連到的節點登記了 {len(ctl)} 條護欄(" + "、".join(_secinv_show(r["id"], 40) for r in ctl[:10])
++              + f");這些護欄引用到的入口上 open 格子 {len(mine)} 格,全庫 open {cs.get('gaps', 0)} 格(只提醒、不擋;"
++              "lumos security list --questions 看候選題)")
++    except _SECEV_RESILIENT as e:      # 這一行出錯不影響規格閘:只印警告
++        print(f"[spec-gate] 資安登記: 這一行算不出來({e.__class__.__name__}),略過")
++
++
++def _secinv_report(vault):
++    """盤點的公開讀法(security list 與 spec-gate 共用):安全快照 → (報告, 有效的 inventory 或 None)。"""
++    rep, _env = _secinv_build(vault, load_vault_safe(vault), want_env=True)
++    return rep, rep.pop("_inventory", None)
++
++
+ def _spec_gate_latest_records(env, index=None):
+     """審查帳裡每條迴圈(NFC)最後一筆 kind=spec-gate 留痕 {loop: rec}(append 序)。讀帳走 _spec_gate_ledger_index;
+     index=_nogo_ctx 已讀好的表(推送前檢查共用,不再讀一次帳)。"""
+     index = _spec_gate_ledger_index(env) if index is None else index
+     latest = {}
+     for loop, rows in index.items():
+         gates = [d for d in rows if d.get("kind") == "spec-gate"]
+         if gates:
+             latest[loop] = gates[-1]
+     return latest
+@@ -11933,20 +15253,22 @@ def cmd_signoff(env, node, note, by=None, ref=None):
+ # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
+ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
+                 "check-j", "check-k", "check-r", "check-s", "check-s2", "check-s3", "check-s4",
+                 # 2026-09-10 節點範圍與索引守衛:條款測試名懸空 / 索引漏列 / 合約多到讀不完
+                 "check-s5", "check-s6", "check-s7",
+                 # 2026-10-01 有效 RULE 的到期與確認:doctor S16,Projects/筆記標籤_過時判定與按需載入_計劃 [S6]
+                 "check-s16",
+                 # 2026-10-02 代碼審修正關卡(Projects/代碼審修正關卡第0步_計劃)
+                 "fix-check",
+                 "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
++                # 2026-10-20 安全證據閘:擋下、降級放行、例外首次使用都記在這個閘名下(Projects/安全主張驗收閘_計劃〈四〉)
++                "security-evidence",
+                 "daily-wrapper", "ledger-growth",
+                 # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
+                 "anchor", "pitfalls",
+                 # 2026-09-17 逃逸自動記 fail-open 失敗留痕(escape-auto-failed)與規格閘每次跑的觀測行(spec-gate-run)
+                 "escape-auto", "spec-gate",
+                 # 2026-09-11 每支檔有家:提交前/推送前的檢查、健檢三段(沒家的檔/寫了別人的檔名/管太多沒寫負責範圍)
+                 "nodehome-check", "check-s8", "check-s9", "check-s10",
+                 # 2026-09-13 新增告警閘:環境不可用自動放行、擋下新增告警,兩種事件都用這個閘名
+                 "lint-new",
+                 # 2026-09-12 推筆記認家:健檢新段(重建出來卻不管檔的節點 / 管了卻連檔名都沒提到的配對)
+@@ -32423,20 +35745,65 @@ _REQUIREMENT_FACETS += [{**_f, "role": "frontend", "when": [_REQ_FE_WHEN]} for _
+     {"id": "arch-fe-stale", "stage": "架構", "q": "畫面上的資料多舊算過期?過期時怎麼讓使用者看得出來、什麼時候重抓?"},
+     {"id": "arch-fe-origin", "stage": "架構", "q": "前端跟 API 是不是同一個來源?跨來源時 CORS、cookie、CSRF 誰設定?開發時的代理跟正式環境差在哪?"},
+     {"id": "arch-fe-poll", "stage": "架構", "q": "輪詢多久一次、失敗時怎麼退避(間隔拉長、上限、背景分頁暫停)?同時開著的使用者數乘上頻率,後端與連線池扛不扛得住?"},
+     {"id": "impl-fe-race", "stage": "實作", "q": "同一畫面連發兩次請求、舊的比新的晚回來,會不會蓋掉新資料?離開畫面或換使用者時,在途請求的結果怎麼丟掉?"},
+     {"id": "impl-fe-lifecycle", "stage": "實作", "q": "計時器、輪詢、訂閱在元件卸載時有沒有收掉?重複掛載時會不會跑兩份(React StrictMode 開發模式會故意掛兩次)?"},
+     {"id": "impl-fe-idem", "stage": "實作", "q": "連點、重新整理、重送時的冪等鍵由誰產生、存在哪?換使用者、換商品或上一筆已成功時要不要換新的?"},
+     {"id": "perf-fe-budget", "stage": "效能", "q": "首屏時間、bundle 大小、互動延遲的目標各是多少?在什麼裝置與網路下量?"},
+ )]
+ 
+ 
++# 資安面(2026-10-20 [[Projects/資安風險提問分階段_計劃]]〈三〉):七項新列只用 triggers(「至少幾個不同的詞」),不寫 when;
++# 既有各項照舊只用 when、行為不變。英文詞:每個元素各自帶 (?i)、允許複數尾 s、前後不接英數字(pip 不撞 pipeline);中文照字面。
++def _req_sec_words(zh, en):
++    return [re.escape(w) for w in zh] + [r"(?i)(?<![a-z0-9])" + w + r"s?(?![a-z0-9])" for w in en]
++
++
++_REQ_SEC_STRONG = _req_sec_words(("登入", "權限", "個資", "租戶", "他人的", "別人的", "擁有者", "所有權", "越權", "上傳", "下載", "匯出",
++                                  "密碼", "金鑰", "憑證"),
++                                 ("secret", r"api[ _-]?key", "oauth", "jwt", "session", "cookie", "csrf", "cors", "token"))
++_REQ_SEC_SECRET = _req_sec_words(("金鑰", "私鑰", "憑證", "密碼", "加密"), ("secret", r"api[ _-]?key", "token", "keystore", "kms"))
++_REQ_SEC_SUPPLY = _req_sec_words(("新依賴", "新增依賴", "映像", "鎖檔", "供應鏈"),
++                                 ("docker", "npm", "gradle", "maven", "pypi", "lockfile", "sbom", r"pip\s*install"))
++_REQ_SEC_BOUNDARY = _req_sec_words(("入口", "回呼", "匯入", "第三方", "管理後台"), ("api", "webhook"))
++_REQ_SEC_HINT = "這份計劃連到的資安護欄與 open 格子,跑 `lumos security list` 或 `lumos spec-gate <計劃>` 看"
++_REQUIREMENT_FACETS += [
++    {"id": "req-sec-assets", "stage": "需求", "q": "這功能碰到哪些要保護的資料與操作?誰可以做、誰不可以做(角色 × 資源 × 動作)?最不能發生的事是什麼(寫成看得到的結果)?",
++     "triggers": [{"words": _REQ_SEC_STRONG, "min_distinct": 2}]},
++    {"id": "req-sec-actors", "stage": "需求", "q": "誰可能濫用這功能(他人、未登入者、內部人、外部系統)?他能做到什麼程度?",
++     "triggers": [{"words": _REQ_SEC_STRONG, "min_distinct": 2}]},
++    {"id": "arch-sec-boundary", "stage": "架構", "q": "身分從哪來、何時可信?授權在哪個服務端邊界強制?外部輸入在哪一層驗?",
++     "triggers": [{"words": _REQ_SEC_STRONG, "min_distinct": 2},
++                  {"words": _REQ_SEC_STRONG, "min_distinct": 1, "plus_any": _REQ_SEC_BOUNDARY}]},
++    {"id": "arch-sec-secrets", "stage": "架構", "q": "會用到哪些秘密、金鑰、憑證?放哪、誰讀得到、外洩了怎麼換?",
++     "triggers": [{"words": _REQ_SEC_SECRET, "min_distinct": 2}]},
++    {"id": "arch-sec-supply", "stage": "架構", "q": "要新加的依賴、映像或掃描工具從哪來、版本怎麼釘、誰核可?",
++     "triggers": [{"words": _REQ_SEC_SUPPLY, "min_distinct": 2}]},
++    {"id": "verify-sec-evidence", "stage": "驗證", "q": "每條資安護欄要哪幾種證據?用哪個工具(查威脅類別表)?沒有工具時換成什麼?合法對照是什麼?",
++     "triggers": [{"words": _REQ_SEC_STRONG, "min_distinct": 2}], "hint": _REQ_SEC_HINT},
++    {"id": "deliver-sec-exceptions", "stage": "交付", "q": "還有哪些資安護欄沒驗或走例外?例外誰核可、哪天到期?",
++     "triggers": [{"words": _REQ_SEC_STRONG, "min_distinct": 2}], "hint": _REQ_SEC_HINT},
++]
++
++
++def _facet_triggered(f, text):
++    """一項需求風險面在這段文字上觸發沒(--stage 與其他讀風險面表的地方都呼叫這一支)。一項只能有 when 或 triggers 其中一個:
++    when=任一條正規式命中;triggers=任一條規則成立,規則=words 裡至少 min_distinct 個不同元素命中,有 plus_any 時其中至少一個也命中。"""
++    if "triggers" in f:
++        for rule in f["triggers"]:
++            hits = sum(1 for w in dict.fromkeys(rule["words"]) if re.search(w, text))
++            if hits >= rule["min_distinct"] and (not rule.get("plus_any") or any(re.search(w, text) for w in rule["plus_any"])):
++                return True
++        return False
++    return any(re.search(w, text) for w in f["when"])
++
++
+ def _req_frontend_hit(text):
+     """計劃全文裡第一個前端字樣(做法 1 的判準);沒有回 None。三個入口(--stage、計劃模式、--check)都比全文,結論一致。"""
+     mm = re.search(_REQ_FE_WHEN, text)
+     return mm.group(0) if mm else None
+ 
+ 
+ def _req_frontend_facets(text):
+     """計劃提到前端字樣時,role 為 frontend 的全部列(不分階段);沒提到回空清單。"""
+     return [f for f in _REQUIREMENT_FACETS if f.get("role") == "frontend"] if _req_frontend_hit(text) else []
+ 
+@@ -33316,20 +36683,22 @@ def _strip_string_literals(code):
+ # 兩處分開寫過會漂移;pitfalls 這端 2026-08-11 才補上——治理帳裡記的 skip 理由本身在
+ # 描述「命中 open(...)」,被當代碼掃就再次命中 → 再 skip → 再寫一行理由……自我餵食,
+ # 實測誤觸發 9 次。這些檔是紀錄不是要合入的碼。
+ _TEST_DURATIONS_REL = "governance/test-durations.json"   # 分片用的測試耗時表:資料,表錯只會分得不平均、不會漏跑(推送與CI提速)
+ _BOOKKEEPING_FILES = (_TEST_DURATIONS_REL, "docs/.governance-log.jsonl", "docs/.usage-log.jsonl",
+                       # 本機帳(被忽略)萬一被 git add -A 提交,也只是簿記、不讓代碼審留痕失效(治理帳例行紀錄分流_計劃)
+                       "docs/" + GOV_LOCAL_LOG_NAME, "docs/" + USAGE_LOCAL_LOG_NAME,
+                       "docs/.ci-log.jsonl", "docs/.canary-log.jsonl",
+                       "docs/.bypass-log.jsonl", "docs/.escape-log.jsonl",
+                       "docs/.kill-log.jsonl", "docs/.signoff-log.jsonl",
++                      # 資安護欄的 guard kill 背書帳:寫完背書再提交的那個提交不會讓背書自己變 stale(安全主張驗收閘〈證據從哪來〉)
++                      "docs/.security-backing.jsonl",
+                       "governance/anchor-baseline.json",
+                       # 存量漂移守衛的表態檔:跟判定檔一樣是人對發現的回應,不是程式改動(存量漂移防線 [S3])
+                       "governance/drift-acks.jsonl",
+                       # 存量漂移的修復帳(drift fix 每改一筆記一行稽核紀錄;同表態檔,是人對發現的處理紀錄;存量漂移改法 第 7 節)
+                       "governance/drift-fixes.jsonl")
+ # ↑ canary-log/bypass-log 2026-08-27 補（[[Issues/簿記白名單漏canary與bypass帳]] 死結根治）:
+ # 審計記帳(canary record)在 loop 中發生,pass 後提交它們原本會讓留痕失效→擋推。
+ # ★真效果只在 code-loop 留痕豁免這第二消費者★:pitfalls 那端 canary-log 早被
+ # _PITFALL_DIFF_SKIP_EXT(.json/.jsonl,2026-08-22)按副檔名擋掉、輪不到白名單這關(s1-f1)。
+ # ↑ kill-log/signoff-log 2026-09-06 補([[Projects/全repo審視_計劃]] #5):兩本同樣是工具自己
+@@ -47902,20 +51271,74 @@ _DRIFT_CI_STEP = """
+           git symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$DEFAULT_BRANCH"
+         fi
+         python3 scripts/lumos drift check --diff "$BEFORE..$SHA" --push-remote origin --pushed-ref "$GITHUB_REF" --repo .
+     # checkout 要設 fetch-depth: 0。起點由 lumos 算:跟主線最近的分岔點與 before 取比較新的;
+     # checkout 不建 origin/HEAD,上面照 GitHub 給的預設分支補上,預設分支不叫 main/master 也找得到主線。
+     # 回傳碼照原樣讓這步紅綠:0 是沒有要處理或 warn 模式只印;1 是 block 模式擋下;
+     # 其他非零是工具出錯或參數錯,也會紅——工具出錯時寧可紅。
+     # 這一步要在 Python 3.14 上跑:actions/setup-python 的 python-version 設 "3.14";lumos 的最低版本是 3.14,舊版會回 2 並說明。"""
+ 
+ 
++# doctor 給有資安登記的消費專案貼的 CI 步驟(Projects/安全主張驗收閘_計劃〈四〉;先例是 _DRIFT_CI_STEP):tag 推送也判安全證據。
++# 指令跟工具鏈自己 .github/workflows/ci.yml 的 security_tag 工作同一個;只差直譯器名(python3)。
++_SECEV_CI_STEP = """
++    # on.push 底下加 tags: ['*'],tag 推送才會觸發;下面這個工作只在 tag 推送跑(分支推送由 code-loop check 那步一起判)
++    security_tag:
++      if: github.event_name == 'push' && github.ref_type == 'tag'
++      runs-on: ubuntu-latest
++      steps:
++        - uses: actions/checkout@v4
++          with:
++            fetch-depth: 0
++        - uses: actions/setup-python@v5
++          with:
++            python-version: "3.14"
++        - name: 安全證據 gate(tag)
++          env:
++            SHA: ${{ github.sha }}
++          run: |
++            git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
++            git show-ref -q --verify refs/heads/main || git branch --track main origin/main || true
++            python3 scripts/lumos code-loop check --security-only --at-sha "$SHA" --repo .
++    # 任何非 0 都紅:判不清也擋(不 fail-open)。"""
++
++
++def _secev_doctor_lines(repo_root, env):
++    """有資安登記痕跡(Systems 裡有 lumos-security-v1 圍欄)而 CI 檔裡找不到 code-loop check --security-only 或 tag 觸發時,
++    印一段可貼的 CI 步驟範本;只提醒不擋。沒有 CI 檔、沒有登記痕跡都不唸。"""
++    if repo_root is None:
++        return []
++    has = False
++    for rel in env.notes:
++        if not rel.startswith("Systems/"):
++            continue
++        text = env_text(env, rel)
++        if text and _SECINV_MARK in text and _secinv_blocks(rel, text)[0]:
++            has = True
++            break
++    if not has:
++        return []
++    wf = Path(repo_root) / ".github" / "workflows"
++    ymls = sorted(list(wf.glob("*.yml")) + list(wf.glob("*.yaml"))) if wf.is_dir() else []
++    if not ymls:
++        return []
++    body = "\n".join(ln for _p, ls in _ci_workflow_texts(ymls) for ln in ls)
++    miss = []
++    if "code-loop check --security-only" not in body:
++        miss.append("沒呼叫 `lumos code-loop check --security-only`")
++    if not re.search(r"(?m)^[ \t]*tags[ \t]*:", body):
++        miss.append("push 沒有 tags 觸發")
++    if not miss:
++        return []
++    return ["這個專案登記了資安護欄,但專案 CI " + "、".join(miss) + ",對 tag 推送的安全證據沒人判——CI 加一個工作:" + _SECEV_CI_STEP]
++
++
+ # ── 考試 ─────────────────────────────────────────────────────────────────────────────
+ 
+ def _drift_set_status_text(text, status):
+     """全文裡把 status 欄改掉(連同 status/* 標籤)——考試在記憶體裡重放 lumos set 用,不寫檔。"""
+     lines = text.split("\n")
+     e = _drift_fm_end(lines)
+     if not e:
+         return text
+     fm = edit_fm_scalar(lines[1:e], "status", status)
+     fm, _s = edit_fm_sync_status_tag(fm, status)
+@@ -50599,36 +54022,38 @@ def _pitfalls_stage(md, stage, as_json, diff=None):
+         print(f"擋下:--stage 要是 {'/'.join(PQ_STAGES)} 之一,寫的是 {stage!r}", file=sys.stderr)
+         return 2
+     if not md:
+         print("擋下:--stage 要給計劃筆記路徑", file=sys.stderr)
+         return 2
+     try:
+         text = Path(md).read_text(encoding="utf-8-sig")
+     except (OSError, UnicodeDecodeError) as e:
+         print(f"擋下:讀不到 {md}:{e}", file=sys.stderr)
+         return 2
+-    facets = [f for f in _REQUIREMENT_FACETS if f["stage"] == stage and any(re.search(w, text) for w in f["when"])]
++    facets = [f for f in _REQUIREMENT_FACETS if f["stage"] == stage and _facet_triggered(f, text)]
+     _present, qs, errs = pq_parse(*_pq_fm_of_text(text))   # 開頭欄位的待決問題;不需要筆記庫
+     err = f"待決問題清單無法判定(第 {errs[0][0]} 行:{errs[0][1]});逐處看 lumos lint <計劃>" if errs else None
+     open_qs = [] if errs else sorted((q for q in qs if q["stage"] == stage and q["status"] in ("待查", "待人")), key=_pq_stage_sort_key)
+     if as_json:
+         out = {"stage": stage, "facets": facets}
+         if qs and not errs:
+             out["questions"] = [{k: q.get(k) for k in ("id", "text", "stage", "status", "blocking", "irreversible")} for q in open_qs]
+         if err:
+             out["questions_error"] = err
+         print(json.dumps(out, ensure_ascii=False, indent=2))
+         return 2 if err else 0
+     print(f"[pitfalls] 階段:{stage}")
+     print(f"  需求風險面({len(facets)} 項;每一項寫成這份需求的具體問題,先自己查、只把要人決定的交給人):")
+     for f in facets:
+         print(f"    - [{f['id']}] {f['q']}")
++        if f.get("hint"):
++            print(f"      ↳ {f['hint']}")
+     if open_qs:
+         print(f"  待決問題({len(open_qs)} 題還沒結;阻塞在前、不可逆其次):")
+         for q in open_qs:
+             tag = ("[阻塞]" if q["blocking"] else "") + ("[不可逆]" if q["irreversible"] else "")
+             print(f"    - [{q['id']}] {q['text']} {tag}({q['status']})".replace("  (", " ("))
+     if err:
+         print(f"擋下:{err}", file=sys.stderr)
+         return 2
+     return 0
+ 
+@@ -58975,21 +62400,21 @@ def _codeloop_kg_finish(v, blocks, keep_going, tier):
+         return v
+     if v.get("blocked") and v not in blocks:
+         blocks.append(v)
+     if not blocks:
+         return dict(v, blocks=[])
+     out = dict(blocks[0])
+     out["blocked"] = True
+     out["tier"] = tier
+     out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", "")} for b in blocks]
+     for b in blocks:   # 各道的明細照原本的鍵放著,印訊息那段各取各的
+-        for k in ("bound_tests", "dispositions", "lint_new"):
++        for k in ("bound_tests", "dispositions", "lint_new", "security_evidence"):
+             if k in b:
+                 out[k] = b[k]
+     return out
+ 
+ 
+ def _codeloop_lint_new_step(repo_root, diff_range, tier):
+     """3.6 新增告警閘(Projects/新增告警閘_計劃,2026-09-13):只看改動範圍、不需要 pitfalls 的資料。回這一道的擋下 dict 或 None(放行)。"""
+     lv = None
+     try:
+         import time as _time2
+@@ -59050,27 +62475,34 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+     回傳 dict{blocked:bool, reason:str, tier:str}。
+     """
+     import json as _json
+     import subprocess as _sp
+ 
+     # 留痕比對座標:優先用傳入的(hook 綁被推送 ref),否則讀 checkout
+     _codeloop_guard_verdict.last_bound = None   # 每次呼叫先清,提早 fail-open 的分支不會拿到上一輪的殘留
+     _codeloop_guard_verdict.last_dispositions = None
+     _codeloop_guard_verdict.last_lint_new = None
+     _codeloop_guard_verdict.last_arch = None
++    _codeloop_guard_verdict.last_security = None
+     marker_sha = at_sha or _codeloop_git_head(repo_root)
+     marker_branch = branch or _codeloop_git_branch(repo_root)
+     raw_range = diff_range        # 改寫全零起點之前的原值:合併提交認合進來那一側要拿它比第一個母
+     merge_cache = {}
+     kg = _CodeloopKg(keep_going)  # 收集模式的分流(記下的擋下、算出來的分級)
+     _fin = kg.fin                 # 唯一的收尾:所有 return 都經過它(本體在 _codeloop_kg_finish)
+ 
++    # 1.5 安全證據(Projects/安全主張驗收閘_計劃〈四〉):★排在所有放行早退之前★——取不到 HEAD、merge-base 等於 HEAD、
++    # 算不出 merge-base、全零起點、pitfalls 失敗這五條直接放行的路上照樣判;不看 tier。沒登記痕跡回 None,輸出一字不變。
++    _sec_stop = kg.hit(_codeloop_security_step(repo_root, marker_sha, marker_branch, raw_range))
++    if _sec_stop:
++        return _sec_stop
++
+     if not marker_sha:
+         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
+         return _fin({"blocked": False, "reason": "無法取得 HEAD sha(fail-open)", "tier": "unknown"})
+ 
+     if diff_range is None:
+         # 現行為:merge-base..HEAD 推導(向後相容)
+         head_sha = _codeloop_git_head(repo_root)
+         mb = _codeloop_default_base(repo_root)
+         if mb and mb == head_sha:
+             return _fin({"blocked": False, "reason": "merge-base == HEAD(無 branch diff)", "tier": "standard"})
+@@ -59226,20 +62658,129 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+                       f"tier=high 且留痕 sha 過時(留痕={rec_sha[:8]} 目標={marker_sha[:8]};非純簿記增量)")
+         else:
+             reason = f"tier=high 且留痕狀態無效({rec_status!r})"
+         return _fin(_codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason))
+ 
+     # 5. 無留痕
+     return _fin(_codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier,
+                                        "tier=high 且無留痕(尚未跑 code-loop pass/skip)"))
+ 
+ 
++def _codeloop_security_step(repo_root, marker_sha, marker_branch, raw_range, *, today=None, budget=None):
++    """code-loop check 的安全證據那一道(Projects/安全主張驗收閘_計劃〈四〉):不看 tier、排在所有放行早退之前。
++    沒有登記痕跡回 None、不寫治理帳;擋了回帶 reason_kind=security_evidence 的擋下 dict。判定本體是 _secev_evaluate
++    (security evidence 同一支)。結果放 _codeloop_guard_verdict.last_security。"""
++    rng = _lens_range_ok(raw_range) if raw_range else None
++    start = rng[0] if rng else None
++    rep = _secev_evaluate(repo_root, marker_sha, pushed_branch=marker_branch, range_start=start, today=today, budget=budget)
++    _codeloop_guard_verdict.last_security = rep
++    if rep["status"] == "no_registration":
++        return None
++    head = rep.get("commit") or marker_sha
++    if rep["blocked"] or rep.get("warned_only"):
++        _gate_event_or_warn(repo_root, "security-evidence", "blocked" if rep["blocked"] else "degraded",
++                            (rep["gate_code"] or f"{len(rep['blocking'])} 處不合格") + ("" if rep["blocked"] else "(gate=warn 有效,只提醒)"),
++                            hard=bool(rep["blocked"]), head_sha=head, ref=marker_branch,
++                            extra={"blocking": [f"{b['id']}[{b['kind']}]{b['code']}" for b in rep["blocking"][:20]],
++                                   "gate_code": rep["gate_code"]})
++    for j in rep["controls"]:
++        if j.get("exception_used"):
++            _secev_log_exception_use(repo_root, j, head, marker_branch)
++    if not rep["blocked"]:
++        return None
++    first = rep["blocking"][0] if rep["blocking"] else None
++    reason = (f"安全證據判不清:{rep['gate_code']}" if rep["gate_code"] else
++              f"安全證據不合格:{first['id']} [{first['kind']}] {first['code']}" + (f" 等 {len(rep['blocking'])} 處" if len(rep["blocking"]) > 1 else ""))
++    return {"blocked": True, "reason_kind": "security_evidence", "reason": reason, "tier": "unknown",
++            "security_evidence": _secev_compact(rep)}
++
++
++def _secev_compact(rep):
++    """給 code-loop check --json 的安全證據區塊:整份判定,但不帶盤點全文(security evidence --json 才帶)。"""
++    return {k: v for k, v in rep.items() if k != "inventory_report"}
++
++
++def _secev_log_exception_use(repo_root, j, head, branch):
++    """用到例外時在治理帳記一行(閘名 security-evidence);冪等鍵(護欄、種類、核可鏈 seq),只在這筆核可第一次被用到時寫——
++    不用 head_sha 當鍵:帳本提交本身就是新的 head_sha,會讓例外有效的整段期間每次推送都多一行。"""
++    led = Path(repo_root) / "docs" / ".governance-log.jsonl"
++    try:
++        text = led.read_bytes() if led.is_file() else b""
++    except OSError:
++        text = b""
++    for k in j["kinds"]:
++        if not k.get("excepted"):
++            continue
++        key = f"{j['id']}|{k['kind']}|{j['exception_seq']}"
++        if f'"sec_exc_key": "{key}"'.encode() in text:
++            continue
++        ex = j.get("exception") or {}
++        _gate_event_or_warn(repo_root, "security-evidence", "exception-used",
++                            f"{j['id']} [{k['kind']}] 用到例外,到期 {ex.get('expires_on')}", hard=False, head_sha=head, ref=branch,
++                            extra={"sec_exc_key": key, "control_id": j["id"], "kind": k["kind"], "expires_on": ex.get("expires_on"),
++                                   "decision_ref": ex.get("decision_ref"), "approval_seq": j["exception_seq"]})
++
++
++_SECEV_KIND_WHY = {
++    "behavior": "這條安全主張現在沒有一份真的跑過、帶合法對照的行為證據,等於沒驗",
++    "fault_sensitivity": "這條安全主張現在沒有一份真的跑過的故障證據(拿掉防護測試會紅),等於沒驗",
++    "review": "機器驗不了的判斷(判準獨立、合法對照真的合法、報告真的跑出來…)沒有合格的審查紀錄",
++    "deployment": "沒有工具時的人工核對要人審,現在沒有合格的人審紀錄",
++}
++
++
++def _cl_say_sec_block(verdict):
++    """安全證據那一道的擋下訊息,三段式:發生什麼(哪條護欄哪個種類、原因代碼)→ 為什麼在意 → 怎麼修(指令獨立一行)。"""
++    rep = verdict.get("security_evidence") or getattr(_codeloop_guard_verdict, "last_security", None) or {}
++    if rep.get("gate_code"):
++        print(f"安全證據 擋下:[整道] {rep['gate_code']}——{rep.get('gate_detail') or ''}", file=sys.stderr)
++        print("在意的原因:判不清就擋——安全證據這一道寧可擋錯也不放過看不清楚的推送。", file=sys.stderr)
++    for b in (rep.get("blocking") or [])[:12]:
++        p = f" 證據 {_secinv_show(str(b['path']))}" if b.get("path") else ""
++        print(f"安全證據 擋下:{_secinv_show(b['id'])} [{b['kind']}] {b['code']}{p}", file=sys.stderr)
++    if len(rep.get("blocking") or []) > 12:
++        print(f"  …另有 {len(rep['blocking']) - 12} 處", file=sys.stderr)
++    if rep.get("blocking"):
++        kinds = {b["kind"] for b in rep["blocking"]}
++        why = next((_SECEV_KIND_WHY[k] for k in ("fault_sensitivity", "behavior", "review", "deployment") if k in kinds),
++                   "這條安全主張現在沒有合格的證據,等於沒驗")
++        print(f"在意的原因:{why}。", file=sys.stderr)
++    gs = rep.get("gate_setting") or {}
++    if gs.get("reason"):
++        print(f"  ({gs['reason']})", file=sys.stderr)
++    print("接下來:重收證據並更新 Verification 的證據圍欄;真的要先放行,由使用者在核可鏈簽例外(最長 30 天)或 gate_setting 降成只提醒;"
++          "不准跳過檢查。全表:", file=sys.stderr)
++    print(f"    lumos security evidence --commit {str(rep.get('commit') or 'HEAD')[:12]}", file=sys.stderr)
++
++
++def cmd_codeloop_security_only(repo, at_sha=None, branch=None, diff_range=None, as_json=False):
++    """code-loop check --security-only [--at-sha <sha>]:只跑安全證據那一道(tag 與其他非分支 ref;pre-push 與 CI 都呼叫它)。
++    退出 0=放行、1=擋下;任何判不清也是 1(evaluation_error 不 fail-open)。"""
++    root = _secev_repo_root(repo)
++    if root is None:
++        print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
++        return 1
++    blk = _codeloop_security_step(root, at_sha or _codeloop_git_head(root) or "HEAD", branch, diff_range)
++    rep = getattr(_codeloop_guard_verdict, "last_security", None) or {}
++    if as_json:
++        print(json.dumps({"blocked": bool(blk), "security_evidence": _secev_compact(rep) if rep.get("status") != "no_registration"
++                          else {"status": "no_registration"}}, ensure_ascii=False))
++    elif blk:
++        _cl_say_sec_block(blk)
++    elif rep.get("status") != "no_registration":
++        print(f"✅ 安全證據:必驗集合 {len(rep.get('controls') or [])} 條都 sound 或 excepted"
++              + ("(gate=warn 有效,只提醒)" if rep.get("warned_only") else ""))
++        for r in rep.get("reminders") or []:
++            print(f"  提醒(7 天內到期):{_secinv_show(r)}")
++    return 1 if blk else 0
++
++
+ def _codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier, reason):
+     """高風險、目標分支沒有有效留痕時的收尾(沒有紀錄與紀錄無效兩條路共用):合併提交認得到合進來那一側的留痕就放行;
+     否則把為什麼沒認接在原因後面,再看 env 跳過,最後擋下。"""
+     ok_v, why = _codeloop_merge_side_pass(repo_root, marker_sha, raw_range, merge_cache, tier)
+     if ok_v:
+         return ok_v
+     reason = f"{reason};{why}" if why else reason
+     if _codeloop_marker_skipped(repo_root, reason, marker_sha):
+         return {"blocked": False, "reason": "留痕要求被 env 跳過(合約測試閘照跑)", "tier": tier}
+     return {"blocked": True, "reason": reason, "tier": tier, "reason_kind": "review"}
+@@ -59597,20 +63138,24 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+                                           payload=_impact_payload_read(from_json) if from_json else None,
+                                           bound_advisory=bound_advisory, keep_going=keep_going)
+         bt = getattr(_codeloop_guard_verdict, "last_bound", None)
+         if bt is not None and "bound_tests" not in verdict:
+             verdict["bound_tests"] = bt
+         dv = getattr(_codeloop_guard_verdict, "last_dispositions", None)
+         if dv is not None and "dispositions" not in verdict:
+             verdict["dispositions"] = dv
+         if getattr(_codeloop_guard_verdict, "last_arch", None):
+             verdict["arch_target"] = list(_codeloop_guard_verdict.last_arch)
++        _srep = getattr(_codeloop_guard_verdict, "last_security", None)
++        if as_json and "security_evidence" not in verdict:
++            verdict["security_evidence"] = (dict({"status": "no_registration"}, **({"warnings": _srep["warnings"]} if _srep and _srep.get("warnings") else {}))
++                                            if not _srep or _srep.get("status") == "no_registration" else _secev_compact(_srep))
+         blocked = verdict["blocked"]
+         reason = verdict["reason"]
+         tier = verdict["tier"]
+         _kinds = [b.get("reason_kind") or "?" for b in verdict.get("blocks") or []] if keep_going else []
+         # 合約測試狀態那幾句照「合約測試有沒有記成擋下」選(keep_going);不帶時照舊看整體 blocked,輸出一字不變
+         _bt_blk = ("bound_tests" in _kinds) if keep_going else blocked
+         if as_json:
+             print(_cljson.dumps(verdict, ensure_ascii=False))
+         else:
+             def _say(kind, reason):
+@@ -59643,20 +63188,22 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+     print(f"擋下:沒有 {subcmd!r} 這個子命令", file=sys.stderr)
+     return 2
+ 
+ 
+ def _cl_say_block(kind, reason, verdict, dv, branch, head_sha, diff_range, marker_branch, at_sha):
+     """code-loop check 印一道擋下的訊息(從 cmd_code_loop 搬出來、內容不變;--keep-going 時每道各叫一次)。"""
+     if kind == "dispositions":
+         _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha)
+     elif kind == "lint_new":
+         _cl_say_lint_block(reason, verdict, branch, head_sha)
++    elif kind == "security_evidence":
++        _cl_say_sec_block(verdict)
+     else:
+         print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
+               file=sys.stderr)
+ 
+ 
+ def _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha):
+     """表態不完整那一道的擋下訊息。"""
+     # 三段式:發生什麼 → 為何在意 → 指令獨立一行;最多列 10 問,其餘一句(r2 邊界席 B12)
+     _pr = (dv or {}).get("problems") or []
+     print(f"擋下:這次改動有 {(dv or {}).get('applicable', 0)} 題效能檢核適用,但表態不完整({len(_pr)} 處)——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
+@@ -59693,21 +63240,28 @@ def _cl_say_lint_block(reason, verdict, branch, head_sha):
+             print(f"  - 沒跑到:{_u.get('detail')}｜{_u.get('cmd')}", file=sys.stderr)
+     print("在意的原因:這道閘只擋你這次帶進來的問題,舊的一概不管;放著不處理,下一個人就分不出哪些是新欠的。", file=sys.stderr)
+     print("接下來(確認是誤報就放行,會留下紀錄並被統計;指紋、規則、檔名都填好了,補上理由照抄):", file=sys.stderr)
+     for _c in (_lv.get("new") or [])[:8]:
+         print(f"    {_lint_waive_cmd(_c)}", file=sys.stderr)
+     if not _lv.get("new"):
+         print("    lumos lint-waive <指紋> --note \"<為什麼放行>\"", file=sys.stderr)
+ 
+ 
+ def _cl_say_ok_extras(dv):
+-    """code-loop check 放行時印的表態閘與新增告警閘小結(從 cmd_code_loop 搬出來、內容不變)。"""
++    """code-loop check 放行時印的表態閘與新增告警閘小結(從 cmd_code_loop 搬出來、內容不變);有資安登記時另印安全證據一行
++    與 7 天內到期的提醒(沒登記的專案一字不多)。"""
++    _sr = getattr(_codeloop_guard_verdict, "last_security", None)
++    if _sr and _sr.get("status") != "no_registration":
++        print(f"  安全證據:必驗集合 {len(_sr.get('controls') or [])} 條都 sound 或 excepted"
++              + ("(gate=warn 有效,只提醒;不合格的看 lumos security evidence)" if _sr.get("warned_only") else ""))
++        for _r in _sr.get("reminders") or []:
++            print(f"  提醒(7 天內到期):{_secinv_show(_r)}")
+     if dv and dv.get("applicable"):
+         print(f"  表態閘:{dv['applicable']} 題適用、{dv.get('checked', 0)} 題表態核對過(gate={dv.get('gate_mode')})")
+     _lv = getattr(_codeloop_guard_verdict, "last_lint_new", None)
+     if _lv and _lv.get("status") not in ("off", "no-config", "no-files"):
+         _bits = [f"跑了 {len(_lv.get('ran') or [])} 條檢查命令"]
+         if _lv.get("waived"):
+             _bits.append(f"{_lv['waived']} 條先前放行過")
+         if _lv.get("report_only"):
+             _bits.append(f"{len(_lv['report_only'])} 條命令沒有檔案清單佔位、只報不擋")
+         if _lv.get("oversize_waived"):
+@@ -60215,21 +63769,21 @@ def cmd_handoff(env, node, as_json=False, transcript=None, turns=1):
+     fresh = [f["path"] for f in files if f["state"] == "未追蹤"]
+     if changed:
+         print("      git diff HEAD -- " + " ".join(changed))
+     if fresh:
+         print("      git status --short -- " + " ".join(fresh))
+     print(f"      lumos context {plan_name.split('/')[-1]} --brief")
+     return 0
+ 
+ 
+ HELP_WHEN = {
+-    "security": "資安護欄的唯讀盤點:security list 列出已登記的護欄、證據核對與覆蓋缺口。唯讀盤點,不是安全驗收。",
++    "security": "唯讀:盤點與證據判定;寫入在 code-loop 族。security list 列出已登記的護欄、證據核對與覆蓋缺口(不執行程序);security evidence 逐條核對工具結果、security approvals 驗核可鏈(會跑 git 與 ssh-keygen)。證據合格不等於產品安全。",
+     "doctor": "整個圖譜健不健康。收工前跑;紅的段先修,--verbose 看全部提醒,--ci 給 pre-push 和 CI 用。",
+     "links": "這篇筆記連出去哪些筆記。改上游前看下游用。",
+     "backlinks": "哪些筆記連到這篇。想知道「誰依賴它」的時候。",
+     "map": "以某篇為中心把關係展成樹。想看這一帶長什麼樣。",
+     "context": "進場第一步之二:這篇的來龍去脈、合約、前提、鄰居一次攤開。search 定位到之後用。",
+     "show": "讀一篇筆記全文。search 只給索引行,下結論前要用它讀全文。",
+     "contracts": "動某模組前看有什麼不能碰:列出標成 ★INVARIANT★ / ★DEBT★ 的規則與綁的測試。",
+     "lint": "剛寫完一篇,確認沒寫壞(欄位、標籤、合約標記)。比 doctor 快,只看這篇。",
+     "gov": "這篇或這段時間被哪幾道閘攔過。--stats 給純數字表。",
+     "bound-tests": "這次改動碰到的硬合約,它們綁的測試跑一次。紅了是要修測試,不是補審查留痕;低風險推送用 --advisory 只提醒不擋。",
+@@ -60363,20 +63917,23 @@ HELP_WHEN = {
+     "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;回頭條件與撤除條件的照留要嘛 --tracked-in 綁一篇開著的 Issue 或計劃(那篇收尾就失效),要嘛 30 天後失效,這次新寫就已成立的推送只認綁了去處的。",
+     "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
+     "drift exam": "拿考卷在被考 repo 的歷史上重放,算擋到、點到、漏、誤報與噪音;--history 對最近 N 個提交重放。",
+     "home check": "這次提交(--staged)或這段推送(--diff)有沒有「每支檔有家」的新違規;有就擋。",
+     "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
+     "rules": "列出共改規則集。",
+     "cochange check": "對這次變更集比對規則,列出可能漏改的夥伴檔(提醒不擋)。",
+     "code-loop check": "我現在推得上去嗎:合約測試紅、觸發到的效能檢核題沒表態、tier=high 又沒有效留痕,任一成立就 BLOCKED,並講原因。",
+     "code-loop dispositions": "推送前對這次改動觸發到的棧別效能檢核題逐題表態(做到了附證據/不適用附理由/待辦連 Issue);樣板從 pitfalls --diff --dispositions-template 來。",
+     "code-loop recall-miss": "審查席抓到「對得上某未觸發題」的問題時登記一筆;同題累積 3 次 gov --stats 列成觸發太窄候選。",
++    "code-loop security-backing": "資安護欄拿故障翻紅當證據時,跑過 guard kill 之後把這一版的背書寫進受版控的 docs/.security-backing.jsonl;背書後再改程式就要重寫。",
++    "code-loop security-approval-add": "簽好一筆資安核可(例外、變弱、gate 改 warn 等)之後,把它接進 .lumos/security-approvals.jsonl;整條鏈加這一筆驗過才寫入。",
++    "security approvals": "要人核可資安護欄的放寬時:payload 產生要簽的那一筆,verify 從頭驗整條核可鏈(唯讀,會跑 git 與 ssh-keygen)。",
+     "delguard": "commit 時自動跑:刪掉 / 改名的符號,筆記還在不在講它。",
+     "code-loop": "推送前的留痕:pass 審過、skip 刻意不審、dispositions 對效能檢核題表態、check 現在推得上去嗎。",
+     "loop rewrite": "人裁判「整份重寫」後收尾:記 rewrite 事件+血緣(prev/successor)進治理帳;連續第二次判重寫會警告強制攤人。",
+     "pass": "代碼審過了,留痕綁當下版本;之後再改 code 就失效要重跑。",
+     "skip": "刻意不審,留痕寫理由(合法,但會被統計)。",
+     "test-quality": "寫或審測試時找假測試:掃可疑寫法、跑可信本機測試收證、核對故障翻紅與還原綠;不裁決業務答案。",
+     "test-quality scan": "想知道測試裡有沒有自己比自己、重抄實作這類可疑寫法;零候選不代表測試有用。",
+     "test-quality capabilities": "接新技術棧前先看目前實際接入了哪些語言與證據格式、哪些範圍還沒驗。",
+     "test-quality capture": "要留下「這組測試真的跑過」的收據:執行可信本機測試命令,保存 JUnit 報告與來源快照。",
+     "test-quality check": "要證明測試抓得到某個錯:核對原版綠、故障版目標斷言紅、還原後綠三份收據。",
+@@ -60402,21 +63959,21 @@ def cmd_python_path():
+         path, tried = _py_resolve()
+         if not path:
+             sys.stderr.write(_py_floor_message(tried, head="LUMOS_PYTHON 指的不是一支可用的 Python 3.14"))
+             return 2
+         print(path)
+         return 0
+     print(sys.executable)
+     return 0
+ 
+ 
+-_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '9d17becda0ae6a8cedd7fb5677ac9983b33fb5cacd2dac0492730fd843ec340d', 'test_quality_scan.py': 'f67967665d3276e8babfba851b2c1d2e76b8da104ca70ddce9ac795017891435', 'test_quality.py': '97b1f6e950975add3c57029569974d2f981d02d017a3b23a5181e3bb20fad01d'}
++_TEST_QUALITY_BUNDLE_DIGESTS = {'test_quality_semgrep.py': '9d17becda0ae6a8cedd7fb5677ac9983b33fb5cacd2dac0492730fd843ec340d', 'test_quality_scan.py': 'f67967665d3276e8babfba851b2c1d2e76b8da104ca70ddce9ac795017891435', 'test_quality.py': 'db3c03d1ee3aa4355db8c2ba0b3aa0cdb987e5dc7840e58ad9f5a86cc51a5cdb'}
+ 
+ 
+ # 載入順序=依賴順序:轉接器頂層 import 共用 runner,被依賴者要先從已驗 bytes 登記,
+ # 否則標準 import 會從磁碟(含舊 bytecode)另載一份(設計審 測試品質部署配套校驗 r1)。
+ _TEST_QUALITY_LOAD_ORDER = ("test_quality.py", "test_quality_semgrep.py", "test_quality_scan.py")
+ 
+ 
+ def _test_quality_bundle_unverified_refs(modules):
+     """回第一個「引用了配套模組或其物件、卻不是已驗那份」的位置;都對得上回 None。
+     以物件身分比對,不靠名字(包過一層的函式、工廠產物、取別名的實例名字都對不上);
+@@ -60604,27 +64161,58 @@ def main():
+     p.add_argument("--min-score", type=float, default=0.20, dest="ctx_min", help="--recommend 分數底線")
+     p.add_argument("--json", action="store_true", dest="ctx_json", help="--recommend JSON 輸出")
+ 
+     p = sub.add_parser("show", help="節點完整內容(frontmatter+body;--body-only 略 frontmatter)")
+     p.add_argument("note")  # 派發組共用 args.note(9656 組硬編碼取用;嚴禁命名 node)
+     p.add_argument("--body-only", action="store_true", dest="body_only", help="只印 body(剝離開頭 frontmatter)")
+ 
+     p = sub.add_parser("contracts", help="合約登記簿 ★INVARIANT★/★DEBT★(全 vault 或單節點)")
+     p.add_argument("note", nargs="?")
+ 
+-    p = sub.add_parser("security", help="資安護欄唯讀盤點(唯讀盤點,不是安全驗收)")
++    p = sub.add_parser("security", help="唯讀:盤點與證據判定;寫入在 code-loop 族(證據合格不等於產品安全)")
+     secsub = p.add_subparsers(dest="seccmd", required=True)
+     p = secsub.add_parser("list", help="列出已登記的資安護欄、證據與缺口(唯讀盤點,不是安全驗收)",
+                           description="什麼時候用:想知道消費專案登記了哪些資安護欄、證據核對到哪、哪些入口還沒有護欄的時候。唯讀盤點,不是安全驗收:列出選定圖譜裡 lumos-security-v1 登記的護欄、證據核對與覆蓋缺口;"
+                                       "不執行測試、不寫檔、不連網。退出 0=完整讀取並產出盤點(含未驗、缺陷、覆蓋未知),"
+                                       "2=輸入、schema、引用或讀取不完整;兩者都不表示產品安全,security_verdict 固定 not_assessed。")
+     p.add_argument("--json", action="store_true", dest="sec_json", help="輸出單一 JSON 物件(含 purpose=inventory、security_verdict=not_assessed)")
++    p.add_argument("--all", action="store_true", dest="sec_all", help="逐格全列(預設只印各狀態的格子數與 open 格)")
++    p.add_argument("--questions", action="store_true", dest="sec_questions", help="依 open 格輸出候選題(只輸出、不寫檔)")
++    p.add_argument("--plan", dest="sec_plan", default=None, help="配 --questions:那份計劃已有同一個 [cell:<id>] 的題不再輸出")
++    p.add_argument("--limit", dest="sec_limit", type=int, default=30, help="配 --questions:一次最多輸出幾題(預設 30)")
++    p = secsub.add_parser("evidence", help="逐條、逐證據種類核對工具結果(唯讀;會跑 git 與 ssh-keygen,只在系統暫存目錄寫暫時檔)",
++                          description="什麼時候用:推送前想先看資安護欄的證據合不合格。跟 code-loop check 的安全證據那一道是同一支判定:"
++                                      "同一個提交、同一個主線 tip、同一個 UTC 日期,這裡看到 unsound 就是推送會被擋。只讀提交樹、不讀工作目錄、"
++                                      "不執行任何掃描或壓測工具。證據合格不等於產品安全,security_verdict 固定 not_assessed。"
++                                      "退出 0=放行(含沒有登記、gate=warn 有效)、1=會被擋、2=參數錯。")
++    p.add_argument("--commit", dest="sev_commit", default=None, help="改讀這個提交(預設 HEAD)")
++    p.add_argument("--json", action="store_true", dest="sev_json", help="輸出單一 JSON 物件")
++    p.add_argument("--repo", dest="sev_repo", default=None, help="repo root(預設 cwd 往上找 .git)")
++    p = secsub.add_parser("approvals", help="核可鏈(.lumos/security-approvals.jsonl):payload 印要簽的那一筆、verify 從頭驗整條鏈(唯讀)")
++    apsub = p.add_subparsers(dest="apcmd", required=True)
++    sec_ap = apsub.add_parser("payload", help="印出要簽的那一筆規範化 JSON(seq、前一筆雜湊、專案識別、內容雜湊、approved_on 由工具算)")
++    sec_ap.add_argument("ap_type", metavar="type")
++    sec_ap.add_argument("ap_target", metavar="target")
++    sec_ap.add_argument("--signer", dest="ap_signer", required=True, help="簽章人(allowed_signers 裡的 principal)")
++    sec_ap.add_argument("--expires-on", dest="ap_expires", required=True, help="到期日 YYYY-MM-DD(UTC;上限依 type)")
++    sec_ap.add_argument("--key", dest="ap_keys", action="append", default=[], help="approvers_init/add:<principal>=<公鑰檔>,可重複")
++    sec_ap.add_argument("--content-file", dest="ap_content", default=None, help="其他 type 的被核可內容 JSON 檔")
++    sec_ap.add_argument("--reason", dest="ap_reason", default=None, help="suppression 的理由")
++    sec_ap.add_argument("--outcome", dest="ap_outcome", default=None, choices=("risk_accepted", "not_applicable"),
++                    help="consideration 的 outcome(決定到期上限)")
++    sec_ap.add_argument("--commit", dest="ap_commit", default=None, help="被核可內容從哪個提交算(預設 HEAD)")
++    sec_ap.add_argument("--out", dest="ap_out", default=None, help="把要簽的那一份原樣寫到這個檔(簽這個檔)")
++    sec_ap.add_argument("--repo", dest="ap_repo", default=None)
++    sec_av = apsub.add_parser("verify", help="從頭驗整條核可鏈:每一筆有效與否、現在有效的金鑰指紋")
++    sec_av.add_argument("--commit", dest="ap_commit", default=None, help="驗這個提交樹上的鏈(預設 HEAD)")
++    sec_av.add_argument("--json", action="store_true", dest="ap_json")
++    sec_av.add_argument("--repo", dest="ap_repo", default=None)
+ 
+     p = sub.add_parser("lint", help="單檔快檢:寫完一個節點立刻自驗標籤/格式(比 doctor 快,只看這篇)")
+     p.add_argument("note")
+ 
+     p = sub.add_parser("gov", help="唯讀治理事件帳:時間軸 / 某節點歷來被哪幾道閘攔過")
+     p.add_argument("node", nargs="?")
+     p.add_argument("--since", type=int, default=90, help="近 N 天(預設 90)")
+     p.add_argument("--full", action="store_true", help="關去噪:advisory 逐筆完整列(預設同日同類折疊)")
+     p.add_argument("--stats", action="store_true",
+                    help="附加唯讀數字報表:每道閘的筆數/nodes/commit/起訖日 + 未出現的閘清單(恆 rc0,不做判定)")
+@@ -61524,51 +65112,62 @@ def main():
+     dg.add_argument("--repo")
+ 
+     cl = sub.add_parser("code-loop", help="code-loop 留痕(vault-free):pass/skip 收斂紀錄 + check 查詢")
+     clsub = cl.add_subparsers(dest="clcmd", required=True)
+     for _clname, _clhelp in (
+         ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
+         ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
+         ("dispositions", "棧別提問表態:把填好的表態 JSON 檔記進留痕與治理帳(派審查員之前做;skip 也要先表態)"),
+         ("recall-miss", "審查席抓到「對得上某未觸發題」的問題時登記一筆(同題累積 3 次 gov --stats 列觸發太窄候選)"),
+         ("check", "跑判定式:合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕 → rc1 blocked;--json 輸出 verdict dict"),
++        ("security-backing", "把一條資安護欄的 guard kill 結果寫進受版控的 docs/.security-backing.jsonl(閘門只從要推的提交樹讀它)"),
++        ("security-approval-add", "把簽好的一筆核可接在 .lumos/security-approvals.jsonl 後面(驗過整條鏈加這一筆才寫入)"),
+     ):
+         _clp = clsub.add_parser(_clname, help=_clhelp)
+         if _clname == "dispositions":
+             _clp.add_argument("cl_disp_file", metavar="file", help="表態 JSON 檔(lumos pitfalls --diff <範圍> --dispositions-template 印的樣板填完)")
+             _clp.add_argument("--branch", dest="cl_branch", default=None,
+                               help="表態寫在哪個分支名下(預設 checkout 分支;推 HEAD:別名 時帶遠端目的分支名,pre-push 按它查)")
+             _clp.add_argument("--at-sha", dest="cl_at_sha", default=None,
+                               help="表態綁哪個版本(預設 checkout HEAD;checkout 在別的分支、推的是另一個分支時帶被推的 sha)")
+         if _clname == "recall-miss":
+             _clp.add_argument("cl_qid", metavar="qid", help="題目 id(例 kt-coroutines;全表看 pitfalls --diff --json 的 stack_questions_meta)")
+             _clp.add_argument("--note", default="", help="審查席抓到了什麼(一句;進治理帳)")
+         if _clname in ("pass", "skip"):
+             _clp.add_argument("--note", default="", help="理由(pass/skip 必填習慣;進治理帳)")
++        if _clname == "security-backing":
++            _clp.add_argument("cl_sec_control", metavar="control_id", help="護欄 id")
++            _clp.add_argument("--supersede", dest="cl_sec_supersede", action="store_true",
++                              help="同一護欄、同一版本已有一筆時,寫一筆更正(帶 supersedes)")
++        if _clname == "security-approval-add":
++            _clp.add_argument("cl_sec_payload", metavar="file", help="security approvals payload --out 寫的那份(簽章在同名加 .sig)")
++            _clp.add_argument("--signature", dest="cl_sec_sig", default=None, help="簽章檔(預設 <file>.sig)")
+         if _clname == "check":
+             _clp.add_argument("--json", dest="cl_json", action="store_true",
+                               help="以 JSON 輸出 verdict dict{blocked,reason,tier}")
+             _clp.add_argument("--diff", dest="cl_diff", default=None,
+                               help="直接指定 diff 範圍 <A..B> 算 tier(跳 merge-base 推導;prepush範圍修法)")
+             _clp.add_argument("--at-sha", dest="cl_at_sha", default=None,
+                               help="留痕比對綁此 sha(hook 傳被推送 ref 的 local_sha;預設讀 checkout HEAD)")
+             _clp.add_argument("--branch", dest="cl_branch", default=None,
+                               help="留痕比對綁此 branch(hook 傳 remote_ref 分支名;預設讀 checkout branch)")
+             _clp.add_argument("--skip-bound-tests", dest="cl_skip_bound", action="store_true",
+                               help="不真跑受波及合約的測試(要配 --note 理由;進治理帳被統計;CI 用環境變數 LUMOS_SKIP_BOUND_TESTS=1)")
+             _clp.add_argument("--note", default="", help="--skip-bound-tests 的理由")
+             _clp.add_argument("--from-json", dest="cl_from_json", default=None,
+                               help="吃一份已經算好的波及結果(推送關卡一次推送只算一次)")
+             _clp.add_argument("--bound-tests-advisory", dest="cl_bound_advisory", action="store_true",
+                               help="受波及合約測試紅了只提醒不擋(pre-push 對低風險推送用;高風險不帶,照擋)")
+             _clp.add_argument("--keep-going", dest="cl_keep_going", action="store_true",
+                               help="四道判定都跑完、每道擋下各印各的,最後多印一行 LUMOS-BLOCKS:(推送前掛鉤用;不帶時第一道擋下就停)")
++            _clp.add_argument("--security-only", dest="cl_security_only", action="store_true",
++                              help="只跑安全證據那一道(tag 與其他非分支 ref 用;配 --at-sha)")
+         _clp.add_argument("--repo", dest="cl_repo", default=None,
+                           help="repo root(預設 cwd 逐層向上找 .git)")
+ 
+     # ★扁平頂層指令★(單一動詞的工具一律扁平;群組式留給天生有兩個以上動詞的)
+     bt = sub.add_parser("bound-tests",
+                         help="跑這次改動波及到的硬合約所綁的測試(紅了是要修測試,不是補審查留痕)")
+     bt.add_argument("--diff", dest="bt_diff", default=None, help="diff 範圍 <A..B>")
+     bt.add_argument("--repo", dest="bt_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     bt.add_argument("--json", dest="bt_json", action="store_true", help="以 JSON 輸出判定 dict")
+     bt.add_argument("--advisory", dest="bt_advisory", action="store_true",
+@@ -61788,20 +65387,27 @@ def main():
+     if args.cmd == "bound-tests":
+         if args.bt_skip and not (args.bt_note or "").strip():
+             print("擋下:--skip 要附一句理由(--note),不然帳上看不出為什麼跳過", file=sys.stderr)
+             return 2
+         if not args.bt_diff and not args.bt_from_json:
+             print("擋下:要嘛給 --diff <範圍>,要嘛給 --from-json <已算好的結果>", file=sys.stderr)
+             return 2
+         return cmd_bound_tests(args.bt_diff, repo=args.bt_repo, as_json=args.bt_json,
+                                advisory=args.bt_advisory, from_json=args.bt_from_json,
+                                skip=args.bt_skip, skip_note=args.bt_note)
++    if args.cmd == "code-loop" and args.clcmd == "security-backing":
++        return cmd_codeloop_security_backing(args.cl_repo, args.cl_sec_control, supersede=args.cl_sec_supersede)
++    if args.cmd == "code-loop" and args.clcmd == "security-approval-add":
++        return cmd_codeloop_security_approval_add(args.cl_repo, args.cl_sec_payload, args.cl_sec_sig)
++    if args.cmd == "code-loop" and args.clcmd == "check" and getattr(args, "cl_security_only", False):
++        return cmd_codeloop_security_only(args.cl_repo, getattr(args, "cl_at_sha", None), getattr(args, "cl_branch", None),
++                                          getattr(args, "cl_diff", None), as_json=getattr(args, "cl_json", False))
+     if args.cmd == "code-loop":
+         note = getattr(args, "note", None) or ""
+         cl_json = getattr(args, "cl_json", False)
+         return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json,
+                              diff_range=getattr(args, "cl_diff", None),
+                              at_sha=getattr(args, "cl_at_sha", None),
+                              skip_bound=getattr(args, "cl_skip_bound", False),
+                              marker_branch=getattr(args, "cl_branch", None),
+                              disp_file=getattr(args, "cl_disp_file", None),
+                              qid=getattr(args, "cl_qid", None),
+@@ -61809,22 +65415,32 @@ def main():
+                              bound_advisory=getattr(args, "cl_bound_advisory", False),
+                              keep_going=getattr(args, "cl_keep_going", False))
+     if args.cmd == "loop" and args.lcmd == "capture-counts":
+         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
+         return cmd_loop_capture_counts(None, args.finders,
+                                        from_pitfalls=args.cc_pitfalls, repo=args.cc_repo)
+ 
+     if args.cmd == "security":
+         # ★不走下面的 Env(vault)★:一般載入會 read_text 跟隨捷徑、沒有容量上限;盤點自己安全讀取後才交 Env.from_texts
+         # (Projects/資安護欄唯讀盤點_計劃)。沒唯一選定圖譜就報錯,不像 find_vault 取第一個。
++        if args.seccmd == "evidence":
++            return cmd_security_evidence(args.sev_repo, args.sev_commit, as_json=args.sev_json)
++        if args.seccmd == "approvals":
++            return cmd_security_approvals(args.apcmd, repo=args.ap_repo, typ=getattr(args, "ap_type", None),
++                                          target=getattr(args, "ap_target", None), signer=getattr(args, "ap_signer", None),
++                                          expires_on=getattr(args, "ap_expires", None), keys=getattr(args, "ap_keys", None),
++                                          content_file=getattr(args, "ap_content", None), reason=getattr(args, "ap_reason", None),
++                                          out=getattr(args, "ap_out", None), commit=getattr(args, "ap_commit", None),
++                                          as_json=getattr(args, "ap_json", False), outcome=getattr(args, "ap_outcome", None))
+         _sv, _serr = _secinv_select_vault(args.vault, Path.cwd())
+-        return cmd_security_list(_sv, as_json=args.sec_json, select_error=_serr, vault_arg=args.vault)
++        return cmd_security_list(_sv, as_json=args.sec_json, select_error=_serr, vault_arg=args.vault,
++                                 show_all=args.sec_all, questions=args.sec_questions, plan=args.sec_plan, limit=args.sec_limit)
+ 
+     vault = args.vault or find_vault(Path.cwd())
+     if vault is None or not vault.is_dir():
+         print("擋下:找不到知識圖譜(docs/*-knowledge),用 --vault 指定", file=sys.stderr)
+         return 2
+     env = Env(vault)
+ 
+     if args.cmd == "doctor":
+         color = sys.stdout.isatty() and not args.ci
+         _touched = _read_touched_list(getattr(args, "touched_from", None))
+diff --git a/scripts/test_quality.py b/scripts/test_quality.py
+index b67c10a9..e9f86bf2 100644
+--- a/scripts/test_quality.py
++++ b/scripts/test_quality.py
+@@ -26,33 +26,20 @@ def read(path):
+ 
+ 
+ def sha(raw):
+     return hashlib.sha256(raw).hexdigest()
+ 
+ 
+ def xml_tag(node):
+     return node.tag.split('}')[-1]
+ 
+ 
+-def validate_suite_counts(root):
+-    for suite in root.iter():
+-        if xml_tag(suite) not in {'testsuite', 'testsuites'}:
+-            continue
+-        cases = [n for n in suite.iter() if xml_tag(n) == 'testcase']
+-        observed = {'tests': len(cases)}
+-        for field, tag in [('failures', 'failure'), ('errors', 'error'), ('skipped', 'skipped')]:
+-            observed[field] = sum(any(xml_tag(c) == tag for c in case) for case in cases)
+-        for field, count in observed.items():
+-            if field in suite.attrib and int(suite.get(field)) != count:
+-                raise ValueError('suite summary inconsistent with testcase rows: ' + field)
+-
+-
+ class CaptureTimeout(ValueError):
+     """Deadline reached; keeps the partial streams for callers that archive them."""
+ 
+     def __init__(self, stdout=b'', stderr=b''):
+         super().__init__('timeout; never detected')
+         self.stdout, self.stderr = stdout, stderr
+ 
+ 
+ class CaptureInterrupted(ValueError):
+     """SIGTERM reached the runner; callers must stop instead of treating it as one bad input."""
+@@ -141,58 +128,148 @@ def assertion_failure(node):
+             return True
+         return bool(re.match(r'^.+\.swift:\d+(?::\d+)? - XCTAssert(?:Equal|NotEqual|True|False|Nil|NotNil|ThrowsError|NoThrow|GreaterThan|LessThan) failed:', message))
+     return False
+ 
+ 
+ class NoDtdTreeBuilder(ET.TreeBuilder):
+     def doctype(self, name, pubid, system):
+         raise ValueError("DTD/entity declarations not accepted")
+ 
+ 
+-def junit(raw):
+-    root = ET.fromstring(raw, parser=ET.XMLParser(target=NoDtdTreeBuilder()))
+-    tag = xml_tag
+-    if tag(root) not in {'testsuites', 'testsuite'}:
+-        raise ValueError('expected JUnit testsuite(s)')
+-    cases = []
+-    for node in root.iter():
+-        if tag(node) != 'testcase':
+-            continue
++JUNIT_MAX_DEPTH = 64
++
++
++class JUnitRejected(ValueError):
++    """JUnit 拒收:訊息字串照舊(既有呼叫端照樣接得到 ValueError),另帶原因代碼 code 給安全證據閘用,
++    不讓呼叫端比對訊息字串(Projects/安全主張驗收閘_計劃〈讀不可信資料的上限與失敗處理〉)。"""
++
++    def __init__(self, code, message):
++        super().__init__(message)
++        self.code = code
++
++
++class ReceiptRejected(ValueError):
++    """收證或三階段核對拒收:訊息照舊,另帶原因代碼。"""
++
++    def __init__(self, code, message):
++        super().__init__(message)
++        self.code = code
++
++
++class _JUnitStream:
++    """XMLParser 的 target:start/end 回呼裡數深度(超過上限立刻停)、testcase 結束就濃縮成一筆並清掉元素。
++    內部包一個標準 TreeBuilder 建元素;拒 DTD 跟 NoDtdTreeBuilder 同一句。"""
++
++    def __init__(self):
++        self.tb = ET.TreeBuilder()
++        self.depth, self.stack = 0, []
++        self.root_tag = None
++        self.cases, self.missing_name = [], False
++        self.any_error_elem = self.outside = False
++        self.suites, self.suite_stack = [], []
++
++    def doctype(self, name, pubid, system):
++        raise ValueError("DTD/entity declarations not accepted")
++
++    def start(self, tag_name, attrib):
++        self.depth += 1
++        if self.depth > JUNIT_MAX_DEPTH:
++            raise JUnitRejected('report_too_deep', f'JUnit nesting exceeds {JUNIT_MAX_DEPTH} levels')
++        node = self.tb.start(tag_name, attrib)
++        t = xml_tag(node)
++        if self.root_tag is None:
++            self.root_tag = t
++        if t in {'testsuite', 'testsuites'}:
++            ent = (t, dict(node.attrib), {'tests': 0, 'failures': 0, 'errors': 0, 'skipped': 0})
++            self.suites.append(ent)
++            self.suite_stack.append(ent)
++        if t == 'error':
++            self.any_error_elem = True
++        if t in {'failure', 'skipped'} and (not self.stack or self.stack[-1] != 'testcase'):
++            self.outside = True
++        self.stack.append(t)
++        return node
++
++    def data(self, text):
++        self.tb.data(text)
++
++    def end(self, tag_name):
++        node = self.tb.end(tag_name)
++        self.depth -= 1
++        t = self.stack.pop()
++        if t == 'testcase':
++            self.case(node)
++        elif t in {'testsuite', 'testsuites'}:
++            self.suite_stack.pop()
++        return node
++
++    def case(self, node):
++        tag = xml_tag
+         name = node.get('name')
+         if not name:
+-            raise ValueError('testcase missing name')
+-        cid = node.get('classname', '') + '::' + name
+-        failures = [n for n in node if tag(n) == 'failure']
+-        errors = [n for n in node if tag(n) == 'error']
+-        skipped = any(tag(n) == 'skipped' for n in node)
+-        reason = '\n'.join(n.get('type', '') + ' ' + n.get('message', '') + ' ' + ''.join(n.itertext())
+-                           for n in failures + errors)
+-        assertion = bool(failures) and all(assertion_failure(n) for n in failures)
+-        status = 'error' if errors else 'skipped' if skipped else 'failure' if failures else 'passed'
+-        cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
+-                      'reason': reason[:4000]})
++            self.missing_name = True
++        else:
++            cid = node.get('classname', '') + '::' + name
++            failures = [n for n in node if tag(n) == 'failure']
++            errors = [n for n in node if tag(n) == 'error']
++            skipped = any(tag(n) == 'skipped' for n in node)
++            reason = '\n'.join(n.get('type', '') + ' ' + n.get('message', '') + ' ' + ''.join(n.itertext())
++                               for n in failures + errors)
++            assertion = bool(failures) and all(assertion_failure(n) for n in failures)
++            status = 'error' if errors else 'skipped' if skipped else 'failure' if failures else 'passed'
++            self.cases.append({'id': cid, 'status': status, 'assertion_failure': assertion if status == 'failure' else False,
++                               'reason': reason[:4000]})
++        for _t, _a, c in self.suite_stack:
++            c['tests'] += 1
++            c['failures'] += any(tag(n) == 'failure' for n in node)
++            c['errors'] += any(tag(n) == 'error' for n in node)
++            c['skipped'] += any(tag(n) == 'skipped' for n in node)
++        node.clear()
++
++    def close(self):
++        return self.tb.close()
++
++
++def junit(raw):
++    """JUnit XML → 案例清單。邊解析邊數深度(超過 JUNIT_MAX_DEPTH 層立刻停),每個案例處理完就清掉元素,
++    不先建整棵樹;拒收訊息與優先序跟整棵樹讀法相同(語法錯先丟,其餘檢查照原順序在讀完後判)。"""
++    st = _JUnitStream()
++    parser = ET.XMLParser(target=st)
++    parser.feed(raw)
++    parser.close()
++    if st.root_tag not in {'testsuites', 'testsuite'}:
++        raise JUnitRejected('report_malformed', 'expected JUnit testsuite(s)')
++    if st.missing_name:
++        raise JUnitRejected('report_malformed', 'testcase missing name')
++    cases = st.cases
+     ids = [c['id'] for c in cases]
+     if len(ids) != len(set(ids)):
+-        raise ValueError('duplicate test identities')
++        raise JUnitRejected('report_duplicate_identity', 'duplicate test identities')
+     if not cases:
+-        raise ValueError('zero testcases')
++        raise JUnitRejected('zero_cases', 'zero testcases')
+     # Suite-level errors must not disappear behind passing testcase rows.
+-    if any(tag(n) == 'error' for n in root.iter()) or any(int(n.get('errors', '0')) > 0 for n in root.iter() if tag(n) == 'testsuite'):
+-        raise ValueError('runner/suite errors')
+-    attached = {id(n) for case in root.iter() if tag(case) == "testcase"
+-                for n in case if tag(n) in {"failure", "skipped"}}
+-    if any(tag(n) in {"failure", "skipped"} and id(n) not in attached for n in root.iter()):
+-        raise ValueError("outcome outside testcase")
+-    validate_suite_counts(root)
++    if st.any_error_elem or any(int(a.get('errors', '0')) > 0 for t, a, _c in st.suites if t == 'testsuite'):
++        raise JUnitRejected('suite_error', 'runner/suite errors')
++    if st.outside:
++        raise JUnitRejected('report_malformed', "outcome outside testcase")
++    validate_suite_counts(st.suites)
+     return cases
+ 
+ 
++def validate_suite_counts(suites):
++    """suites=[(tag, 屬性, 實數)]:每個 testsuite(s) 宣告的計數要等於它底下案例實際的數。"""
++    for _t, attrib, observed in suites:
++        for field in ('tests', 'failures', 'errors', 'skipped'):
++            if field in attrib and int(attrib[field]) != observed[field]:
++                raise JUnitRejected('count_mismatch', 'suite summary inconsistent with testcase rows: ' + field)
++
++
+ def add_parser(sub):
+     p = sub.add_parser('test-quality', help='測試品質候選掃描、可信本機測試收證與三階段JUnit證據核對；不裁決業務答案')
+     actions = p.add_subparsers(dest='tqcmd', required=True)
+     scan = actions.add_parser('scan', help='唯讀來源掃描，零候選不是品質通過')
+     try:
+         from test_quality_scan import add_scan_arguments
+     except ModuleNotFoundError as exc:
+         if exc.name != 'test_quality_scan':
+             raise
+         scan.add_argument('scan_args', nargs=argparse.REMAINDER)
+@@ -272,85 +349,99 @@ def capture(args):
+         if (passed and exit_code != 0) or (not passed and exit_code != 1):
+             raise ValueError('exit status inconsistent with testcase results')
+         receipt.update(status='executed', exit_code=exit_code, report_sha256=sha(raw), tests=cases)
+     except (OSError, ValueError, ET.ParseError) as exc:
+         receipt['reason'] = str(exc)
+     (args.out/'receipt.json').write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8')
+     dump(receipt)
+     return 0 if receipt['status'] == 'executed' else 2
+ 
+ 
+-def load_receipt(folder):
+-    r = json.loads(read(folder/'receipt.json'))
++def load_receipt_data(get):
++    """一份 capture 的核對本體,只吃資料:get(檔名) → 位元組(讀不到丟 ValueError)。
++    load_receipt 從磁碟讀、安全證據閘從提交樹讀,都呼叫這一支。"""
++    r = json.loads(get('receipt.json'))
+     if r.get('schema_version') != 1 or r.get('kind') != 'execution-receipt' or r.get('status') != 'executed':
+-        raise ValueError('missing or invalid execution receipt')
+-    raw = read(folder/'report.xml')
++        raise ReceiptRejected('receipt_not_executed', 'missing or invalid execution receipt')
++    raw = get('report.xml')
+     if sha(raw) != r.get('report_sha256'):
+-        raise ValueError('report hash mismatch')
++        raise ReceiptRejected('receipt_hash_mismatch', 'report hash mismatch')
+     cases = junit(raw)
+     if cases != r.get('tests'):
+-        raise ValueError('recorded test outcomes differ from raw report')
++        raise ReceiptRejected('receipt_hash_mismatch', 'recorded test outcomes differ from raw report')
+     signatures = {}
+     for item in r['snapshots']:
+         artifact = item['artifact']
+         if Path(artifact).name != artifact:
+-            raise ValueError('snapshot artifact must be basename')
+-        if sha(read(folder/artifact)) != item['sha256']:
+-            raise ValueError('snapshot hash mismatch')
++            raise ReceiptRejected('report_malformed', 'snapshot artifact must be basename')
++        if sha(get(artifact)) != item['sha256']:
++            raise ReceiptRejected('receipt_hash_mismatch', 'snapshot hash mismatch')
+         key = (item['role'], item['path'])
+         if key in signatures:
+-            raise ValueError('duplicate snapshots')
++            raise ReceiptRejected('report_malformed', 'duplicate snapshots')
+         signatures[key] = item['sha256']
+     if not all(any(k[0] == role for k in signatures) for role in ('implementation', 'tests')):
+-        raise ValueError('missing implementation/test snapshots')
++        raise ReceiptRejected('report_malformed', 'missing implementation/test snapshots')
+     return r, signatures, {c['id']: c for c in cases}
+ 
+ 
++def load_receipt(folder):
++    return load_receipt_data(lambda name: read(folder/name))
++
++
+ def validate_phases(phases, base, bs, tests):
+     for name, (r, signatures, cases) in phases.items():
+         if (r['language'], r['framework'], r['command'], r['cwd']) != (base['language'], base['framework'], base['command'], base['cwd']):
+-            raise ValueError('runtime selection or command changed across phases')
++            raise ReceiptRejected('report_malformed', 'runtime selection or command changed across phases')
+         if set(cases) != set(tests) or signatures.keys() != bs.keys():
+-            raise ValueError('test identities or tracked files changed')
++            raise ReceiptRejected('report_malformed', 'test identities or tracked files changed')
+         if any(signatures[k] != bs[k] for k in bs if k[0] != 'implementation'):
+-            raise ValueError('tests/context changed across phases')
++            raise ReceiptRejected('report_malformed', 'tests/context changed across phases')
+         if name in {'baseline', 'restored', 'refactor'} and (r['exit_code'] != 0 or any(c['status'] != 'passed' for c in cases.values())):
+-            raise ValueError(name + ' not all green')
++            raise ReceiptRejected('nontarget_failure', name + ' not all green')
+         if name == 'restored' and signatures != bs:
+-            raise ValueError('restoration snapshot mismatch')
++            raise ReceiptRejected('receipt_hash_mismatch', 'restoration snapshot mismatch')
+         if name in {'fault', 'refactor'} and signatures == bs:
+-            raise ValueError(name + ' implementation did not change')
++            raise ReceiptRejected('report_malformed', name + ' implementation did not change')
+ 
+ 
+-def check(args):
++def fault_check(phases, target, oracle_note=None):
++    """三階段(或四階段)核對本體,只吃 load_receipt_data 的結果 → 結果 dict(fault_evidence 是 detected 或 survived)。
++    target 是宣告的目標清單(可重複時照舊拒收)。check 與安全證據閘共用。"""
+     result = {'kind': 'fault-evidence', 'verdict': 'not_assessed', 'fault_evidence': 'invalid',
+-              'oracle': {'status': 'declared' if args.oracle_note else 'unknown', 'source': args.oracle_note},
++              'oracle': {'status': 'declared' if oracle_note else 'unknown', 'source': oracle_note},
+               'limitations': ['只核對收證內容一致性；報告可偽造，非執行真實性認證。',
+                              '故障檢出不證明獨立判準或業務正確；context覆蓋與重構等價性另審。']}
+-    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
+-    if args.refactor:
+-        phases['refactor'] = load_receipt(args.refactor)
+     base, bs, tests = phases['baseline']
+-    targets = set(args.target)
+-    if not targets or len(targets) != len(args.target) or not targets <= set(tests):
+-        raise ValueError('missing/duplicate target test identity')
++    targets = set(target)
++    if not targets or len(targets) != len(target) or not targets <= set(tests):
++        raise ReceiptRejected('target_missing', 'missing/duplicate target test identity')
+     validate_phases(phases, base, bs, tests)
+     r, _, cases = phases['fault']
+     failed = {cid for cid, c in cases.items() if c['status'] != 'passed'}
+     if not failed:
+         result['fault_evidence'] = 'survived'
+     elif r['exit_code'] == 1 and failed <= targets and all(cases[t]['assertion_failure'] and cases[t]['status'] == 'failure' for t in failed):
+         result['fault_evidence'] = 'detected'
+     else:
+-        raise ValueError('non-target, skipped or non-assertion failure')
++        raise ReceiptRejected('nontarget_failure' if not failed <= targets else 'nonassertion_failure',
++                              'non-target, skipped or non-assertion failure')
+     result['targets'] = sorted(targets)
+     result['failed_targets'] = sorted(failed)
++    return result
++
++
++def check(args):
++    phases = {name: load_receipt(path) for name, path in [('baseline', args.baseline), ('fault', args.fault), ('restored', args.restored)]}
++    if args.refactor:
++        phases['refactor'] = load_receipt(args.refactor)
++    result = fault_check(phases, args.target, args.oracle_note)
+     result['refactor'] = 'green-reported-equivalence-unreviewed' if args.refactor else 'not-run'
+     dump(result, args.out)
+     return 0 if result['fault_evidence'] == 'detected' else 2
+ 
+ 
+ def dispatch(args):
+     try:
+         if args.tqcmd == 'scan':
+             from test_quality_scan import main
+             return main(args=args)
+
