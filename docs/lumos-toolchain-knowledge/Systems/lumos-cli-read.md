@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-15
+updated: 2026-10-20
 self_audit: claude-fable/2026-08-24
 about_code_stamp: claude/2026-08-30/d8883b1b5f71
 tags:
@@ -10,6 +10,31 @@ tags:
   - status/done
   - scope/retrieval
 summary: |-
+  WHY:`lumos security list` 用讀取家族的第二種模式 load_vault_safe(放在 load_vault 旁;load_vault 本身不動):從圖譜根(根本身也不跟捷徑)的目錄代號逐層 O_DIRECTORY|O_NOFOLLOW 開、檔案走 _regular_own_fd(新增可選 dir_fd,預設行為不變),有界讀進記憶體(單檔 2MiB、總量 64MiB、10000 檔、列舉總項目 50000,先判容量再解碼),讀前讀後 fstat 對列舉時的屬性、讀完重列舉一次,再交 Env.from_texts 重用既有筆記與合約解析 [出處:2026-10-18 [[Projects/資安護欄唯讀盤點_計劃]] 設計審 r1 C3、I2、R2、C4;2026-10-19 代碼審 r1 架構對齊席、該計劃 d2] [因:read_text 會跟隨捷徑讀到圖譜外、整檔配置沒有上限;一般 Env 沒有內容快照,env_text 會再開一次檔;另起獨立一套會讓圖譜讀取有兩套分歧規則] [不選:先檢查不是捷徑再 read_text(檢查到使用之間可被置換);第二次全文雜湊(資源席選了較小的屬性比對);改 load_vault 本身(全部指令都受影響)] [test:t_seclist_s03_read_boundary]
+  WHY:security list 的 tags 原文(tags: 那行到下一個頂格鍵)寫了 flag/security-relevant 卻沒解析成標籤時列 tag_format_unrecognized,那篇照算未登記 [出處:2026-10-20 代碼審 r3 資安席] [因:frontmatter 讀法只認縮排清單,行內清單、頂格清單、行尾註解寫的標籤會讓那篇從未登記清單靜默消失;lint 與 doctor 都不唸] [test:t_seclist_r3_tag_formats]
+  WHY:security list 的錯誤清單另有全庫 2000 筆上限,每篇的彙總也算進額度、用完併成一筆 node=null 的全庫彙總 [出處:2026-10-20 代碼審 r3 通才席] [因:只有每篇上限時,6000 篇各 60 筆壞資料照樣輸出 90MB] [test:t_seclist_r3_global_error_cap]
+  WHY:重複 ID 與同一來源被兩個 ID 登記的控制項 registration_valid=false、不算入口映射,另列 invalid_registration_control_ids [出處:2026-10-20 代碼審 r3 外家 Codex] [因:兩篇各一條同 ID 的合法控制項時入口原本算已映射] [test:t_seclist_r3_duplicate_not_mapped]
+  WHY:--vault 先 abspath 正規化,檢查、開檔與報告都用這條;原始字串照字面逐段走,遇到 .. 而前一段是捷徑就擋 [出處:2026-10-20 代碼審 r3 資安、邊界、通才席] [因:abspath 把 link/.. 字面消掉、作業系統卻先跟 link 再往上,檢查與開檔落在不同地方] [test:t_seclist_r3_vault_dotdot]
+  WHY:_secinv_show 先快篩:字串 isprintable() 而且不含預設可忽略全表與像空白的字(兩張既有表組成的正則)就原樣回傳,命中才逐字 _kill_esc;結果對全部碼位逐一比對相同 [出處:2026-10-20 代碼審 r3 資源席] [因:hidden=True 逐字判定讓文字模式慢一倍] [test:t_seclist_r3_show_fast_path]
+  WHY:security list 印到 stdout 或 stderr、來自檔名或登記內容的字串一律經 _secinv_show(hidden=True、每欄最多 2000 字),選圖譜失敗的 stderr 也一樣;文字模式的覆蓋區照 JSON 的鍵逐一印 [出處:2026-10-20 代碼審 r2 資安、邊界、架構對齊、正確性、通才席與外家 Codex] [因:選圖譜失敗原樣印路徑,目錄名可藏 ESC 與換行偽造的系統指示;新欄位只接到 JSON、文字漏列] [test:t_seclist_r2_output_escape]
+  WHY:security list 選圖譜時從 repo 根(照字面往上找 .git)到圖譜之間每一層都用共用的 _repo_path_unsafe 判捷徑,自動找與 --vault 共用 [出處:2026-10-20 代碼審 r2 資安席、外家 Codex] [因:docs 這層是捷徑時會讀到 repo 外並印出別的專案的合約;圖譜根的 O_NOFOLLOW 只擋最後一段] [test:t_seclist_r2_docs_symlink]
+  WHY:security list 的錯誤清單每篇最多逐筆 50 筆,多的併成一筆 errors_truncated(references_valid 改數「試著記過」的筆數,不看清單長度;被併掉的讀取類錯誤照樣讓 read_complete=false);決策表、路徑小寫索引、合約宣稱計數在一次盤點裡各建一次;inventory 查重用 set [出處:2026-10-20 代碼審 r2 資源、正確性席] [因:8MB 的空物件產出 279 萬筆錯誤、峰值 5GB;3000 決策×3000 控制項 46 秒;5.5 萬 asset 17 秒] [test:t_seclist_r2_error_cap]
+  WHY:有界讀取的迴圈只有 _read_fd_capped 一份,跑滿回顧一族的 _retro_read_bytes 與 security list 的 _vault_safe_read_rel 共用;security list 用 dirfd 版逐層開檔是 _trusted_private_dir 那條「dirfd 版邊際價值低」決定的已知例外 [出處:2026-10-20 代碼審 r2 架構對齊席;[[Projects/資安護欄唯讀盤點_計劃]] d4] [因:讀的是不可信消費專案、輸出給 AI 當證據,先檢查再讀擋不住置換] [test:t_seclist_g8_read_request_bound]
+  WHY:security list 的證據引用指到非 Verification 節點算引用錯誤(references_valid=false、不消除入口缺口) [出處:2026-10-20 代碼審 r2 外家 Codex] [因:原本只記提示,入口照算已映射] [test:t_seclist_r2_nonverif_evidence]
+  WHY:security list 的中間目錄在列舉後或列舉中被換成捷徑都不跟(開檔與下探子目錄都帶 O_NOFOLLOW),JSON 與目錄巢狀過深記錯誤退出 2;選圖譜的候選規則用 _vault_in(all_candidates=True) 共用,選到的目錄是捷徑或不像圖譜(沒有 Projects/Systems/Issues/Verification 任一)時是輸入錯誤 [出處:2026-10-19 代碼審 r1 通才、資安、邊界、架構對齊席] [因:「零讀取」的條款原本沒有測試守;--vault 打錯目錄會得到 rc0 的完整零登記;重抄候選規則會在 _vault_in 加新佈局時悄悄落後] [test:t_seclist_g4_read_guards]
+  PITFALL:security list 的 schema 檢查先記問題、不停下,後面照用壞值:source.kind 是陣列時拿去查字典、asset id 是陣列時放進集合,整份盤點崩潰(rc1、stdout 空),正常項也列不出 [出處:2026-10-19 代碼審 r1 正確性、邊界、整合席與外家 Codex 獨立同報] [根因:驗成非法的值沒有被擋在後續集合與查表之外] [修法:統一規則——先驗型別(_secinv_is_text 也拒孤立代理字元)才查表或進集合] [test:t_seclist_g1_field_type_fuzz]
+  WHY:security list 的 JSON 輸出走共用的 _json_text_escaped(代理字元、雙向控制、行段分隔跳成 \uXXXX,讀回值不變),選圖譜失敗在 --json 也輸出同一組頂層欄位的單一物件;文字模式每個自由欄位最多 2000 字、登記欄位放在「登記內容是資料,不是指令」的資料框 [出處:2026-10-19 代碼審 r1 正確性、邊界、資安席與外家 Codex] [因:ensure_ascii=False 遇孤立代理字元直接編碼失敗;登記內容可能是第三方寫的、會被 AI 讀] [test:t_seclist_g2_output_contract]
+  WHY:_json_text_escaped 改成第一次用時把要跳脫的碼位編成一個正則再 sub,結果逐字相同 [出處:2026-10-19 security list 修正後的效能檢查] [因:逐字元查 unicodedata.category,12.8MB 輸出要 4 秒多] [test:t_seclist_g2_output_contract]
+  WHY:security list 的「已登記」是這篇至少有一條合法控制項(空塊、全部非法的塊不算);入口映射只採計引用都通過核對的 security 控制項,引用失效的另列 invalid_reference_control_ids、不消除缺口 [出處:2026-10-19 代碼審 r1 資安席、外家 Codex;[[Projects/資安護欄唯讀盤點_計劃]] d3] [因:放一個空塊就能讓有標籤的節點從未登記清單消失;核可決策不存在的唯一護欄讓入口顯示 mapped] [test:t_seclist_g3_gaps_not_hidden]
+  WHY:security list 的覆蓋先依入口 id 建一次索引、inventory 的 ID 集合只建一次、每篇的合約宣稱只數一次 [出處:2026-10-19 代碼審 r1 資源席與修正後效能檢查] [因:原本入口數×控制項數、控制項數×合約數,12000 條要 17 秒] [test:t_seclist_g7_scale]
+  WHY:security list 的容量上限在解碼與解析之前執行:每次讀取最多 min(單檔上限, 剩餘總額度)+1 位元組,超限的檔不進 Env.from_texts,累計超限後後面的檔不再讀 [出處:同計劃 r1 R2] [因:read_text 先整檔配置才知道多大] [test:t_seclist_s10_size_caps]
+  WHY:security list 偵測讀取期間的變動靠兩層:每檔讀前讀後 fstat 對列舉時的屬性(對不上的內容不採用),讀完再重列舉比集合與屬性 [出處:同計劃 r1 C4、R3] [因:單次雜湊或只比一次抓不到「讀完 A 才改 A」或「讀之前改了 B」] [不選:第二次全文雜湊] [test:t_seclist_s11_change_during_read]
+  WHY:_visible_lines 的原始碼變了(判定不變,10 萬組隨機輸入新舊零差異),照不做清單判斷邏輯的連動規則升版(跟主線測試名收自由字串那次各升一版後合併,再各升一版):_NOGO_SKIP_LOGIC_VERSION 7、_DOOR_RULE_VERSION 15,釘值測試的依賴清單加進 _fence_regions(判定實際在那支,只釘 _visible_lines 以後改圍欄邏輯會漏抓) [出處:2026-10-20 security list 推送前全套 t_nogo_skip_logic_version_pin 紅] [因:釘值測試釘的是依賴函式原始碼的雜湊,抽函式就會變] [test:t_nogo_skip_logic_version_pin]
+  WHY:圍欄區段判定抽成 _fence_regions,_visible_lines 改呼叫它、照舊在嚴格讀不完時退回寬鬆;security list 的專用登記只吃嚴格結果,而且只對原文含 lumos-security-v1 字面的篇章報未閉合 [出處:同計劃 r1 A1、S1] [因:另寫一份 toggle 或正則就是第二套邊界判定;一律擋未閉合會讓沒有登記的舊筆記變成安全登記錯誤] [test:t_seclist_s12_fence_refactor]
+  WHY:security list 的 evidence_check 只有 missing/stale/incomplete/declared_only 四種、security_verdict 固定 not_assessed、沒有總分,退出 0 只代表完整讀完並產出盤點 [出處:[[Projects/消費專案產品安全Brief與證據驗收_計劃]] d5、d6] [因:盤點不重跑測試、不核對報告內容;rc0 或全綠被當成放行就是製造假安全] [test:t_seclist_s04_never_verified]
+  WHY:security list 讀取、schema 或引用有任何錯誤就退出 2 且 read_complete/registration_complete 照實列,JSON 仍是單一可解析物件;合法但含未驗的完整盤點退出 0 [出處:同計劃〈CLI契約〉] [因:讀一半回傳「完整零條目」等於把未知報成乾淨] [test:t_seclist_s08_incomplete_read_exit]
+  PITFALL:Env.from_texts 用 nfc(路徑) 當字典鍵,兩個 Unicode 等價的原始路徑進去只剩一篇、另一篇靜默消失;security list 進 Env 前先分組,碰撞的兩篇都不採用、列 normalized_path_collision 並退出 2 [出處:2026-10-18 設計審 r1 C1、E1 實跑 2 篇變 1 篇] [根因:from_texts 的字典覆寫] [test:t_seclist_s09_nfc_collision] [同族:提交樹、考試樹等其他 Env.from_texts 入口]
+  REVISIT:2026-11-18 核對提交樹、考試樹等其他 Env.from_texts 入口要不要也在進 Env 前查 NFC 路徑碰撞
   WHY:doctor 3/4 判「驗收紀錄驗了誰」改用共用的 _verification_system_targets:紀錄寫了 system_refs 就只看它,每項照具名欄位索引的單項規則(_typed_link_target,build_typed_index 也改用它、行為不變)判,寫壞的任何形狀另起標題算 issue(畫面封頂 20、問題數照實算),功能那側多掛的只提醒;1/4 孤兒推薦對有宣告的只推它列的、全寫壞時叫人先修;1/4、3/4、E1、sync 的失效與作廢判斷改用 _verification_status 不分大小寫 [出處:2026-10-03 [[Projects/驗收紀錄寫明驗了哪些功能_計劃]]] [因:正文指路連結被當成驗過而擋推送;宣告寫壞若默默當成沒驗等於關掉檢查(設計審 r1 三席);自訂單項規則會變第二套(設計審 r2)] [test:t_doctor_check3_system_refs_authoritative] [test:t_doctor_check3_system_refs_bad_entry] [test:t_typed_link_target_unchanged] [test:t_verification_status_case_insensitive]
   PITFALL:doctor S20 的散文撤除候選原本只看條款下一層有沒有「撤除」兩字,「代使用者裁定:改寫:…舊守衛撤除」這種改寫說明被誤列(rtb 3 條);改成先把「裁定…:改寫/改為/改成/保留/維持…」那幾段挖掉、剩下的照舊判(代碼審 r2 抓到 r1 那版「有裁定就只看冒號後」會漏掉「裁定撤除這條,理由:…」這種真撤除,而這份候選是散文撤除唯一的網;「不保留」不算保留;r3 再抓到前綴放寬到「裁定到冒號之間任意字」會把「裁定撤除這條,理由:改寫後…」整段挖掉,同類第三次,換形狀成★只認緊貼的裁定前綴★:裁定直接接冒號、或中間只夾一個括號)——「只看裁定後第一個詞」那種修法會漏掉「裁定:這條撤除了」,實測後沒採 [出處:2026-10-03 rtb 清理循環第 2 輪回傳,[[Projects/漂移防治路線圖_計劃]]] [根因:撤除判斷只做字面比對,沒分清條款本身被撤還是說明裡提到別的東西被撤] [test:t_doctor_s20_prose_retire_by_verdict_verb]
   WHY:doctor 接在 S19 後多一段 S20:全庫每一篇照筆記測試綁定那五項判(指不到、作廢掛活測試、佔位字或空的、`[test-gone:]` 不對;判存在只做第①道),另列計劃條款仍掛 `[test:]` 而下一層寫了撤除的候選;不計入問題數、不寫治理帳,抽取與名稱切分跟 note-shape 同一套(_ns_test_ref_lines、_test_names_of) [出處:2026-10-03 [[Projects/筆記測試綁定要存在_計劃]]〈做法〉10] [因:推送只擋碰到的筆記,沒碰到的舊帳要有地方看得到] [test:t_doctor_note_test_refs]
@@ -45,7 +70,7 @@ summary: |-
   KEY:★INVARIANT★ search 預設排除 status=superseded 節點但不排除 stale(真遺忘,GateMem 2026-07-24;stale 是待重驗警訊,藏了=製造新洞,doctor Check S 綁 stale+superseded 正是反例),--include-superseded 逃生;濾網插「命中確認後、三路分岔前」故 ranked/legacy/regex 三路一致、hidden 數=命中被藏筆數非全庫;隱藏數走 stderr(全模式含 --files-only,不污染 stdout)、--json 加 hidden_superseded 欄位 [test:t_search_forget_superseded] [audit:sonnet/2026-07-24]
   KEY:[缺口已補 2026-07-25]原「Check T 無 Python profile」缺口已補(TEST_PROFILES 加 python:行首錨+檔名錨+comment_strip=none),本合約隨之升回正式;★根因更正★:當初被判偽證據的真兇不是 dirs(Check T 掃描走全 repo 不吃 dirs),是 discover 對所有語言剝 C 式註解、test_lumos.py 中文註解的 status/* 與遠處 glob 字面 **/ 配對吃掉半個檔(260→94);詳 [[Projects/CheckT-Python-profile_計劃]]
   KEY:真遺忘只做 search 這一刀(2026-07-24 使用者裁定);context 基本鄰居/推薦、impact、doctor 對作廢驗證的不一致=已知殘留(impact 永不做預設藏——direct 命中是事故記憶);設計與三審見 [[Projects/真遺忘召回過濾_計劃]]
-  KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)
+  KEY:讀指令屬「專案層」——以 cwd find_vault 鎖定本專案 vault(不受同名 vault 影響);對比 install/bootstrap 的「機器層」(全域 lumos + user-scope skills)(例外:security list 也從 cwd 往上找,但不用 find_vault,同層找到多個圖譜會報錯而非取第一個)
   DEP:scripts/lumos load_vault/Env/find_vault｜extract_contracts(contracts/context 共用)｜parse_decisions(decisions;stale 不經它——2026-08-24 審計訂正)｜status_of(links/map/stale 標狀態)
   KEY:stale --candidate 無 --match 直接 rc2 拒絕(反直覺限制:即使給了 --candidate 沒帶 --match 也拒,避免列全 vault 變噪音);--candidate --match <詞> 才有效
   TEST:scripts/test_lumos.py(t_-prefixed Python 回歸,非 doctor Check T 認的 C# xunit)
@@ -110,10 +135,36 @@ verified_by:
   - "[[Verification/2026-09-07_handoff接手視圖]]"
   - "[[Verification/2026-10-05_事件帳Python段實作]]"
   - "[[Verification/2026-10-07_README更新清點]]"
+  - "[[Verification/2026-10-19_資安護欄唯讀盤點實作]]"
 about_code:
   - scripts/lumos
 ---
 # lumos-cli-read
+
+## 2026-10-19 資安護欄唯讀盤點(security list)
+
+`lumos security list [--json]`:唯讀盤點,不是安全驗收。登記格式、分區、狀態映射與退出碼的單源是 [[Projects/資安護欄唯讀盤點_計劃]];本節只記程式看不出的取捨。
+
+- 沒有用 `--vault` 而同一層找到不只一個圖譜時報錯,不像 find_vault 取第一個(計劃〈CLI契約〉「不在多專案間猜測」);候選規則跟 find_vault 共用 `_vault_in`。
+- 指令在 main 裡排在一般 `Env(vault)` 之前分派,所以不會先跑一次跟隨捷徑的全庫載入。
+- 文字輸出與 stderr 一律經 `_secinv_show`(`_kill_esc(..., wide=True, hidden=True)`)把控制字元、雙向控制符、看不見的字顯示成 `\uXXXX`,每欄最多 2000 字並標明截斷;JSON 用 `_json_text_escaped` 跳脫控制類字元,讀回值不變、不截斷(填充字 U+3164 這類看不見但不是控制類的字在 JSON 照原值)。
+- 退出碼只有 0 與 2(契約定的;內容問題也算輸入不完整,專案其他唯讀檢查的 rc1 在這裡不用——改要先改設計並過設計審)。
+
+錯誤種類對照(security list 的 `errors[].kind` ↔ 既有管道;security list 不寫治理帳):
+
+| security list kind | 既有對應 | 說明 |
+|---|---|---|
+| `read_error` | load_vault 的 Note.lint「讀檔失敗: <原因>」(`_READ_FAIL`) | 開不了檔 |
+| `not_utf8` | Env.from_texts 的 unreadable 管道建出的空筆記,lint 是「讀檔失敗: 不是 UTF-8」 | errors 只記一次;那篇空筆記只讓引用核對判「這篇讀不到」,不另列 |
+| `vault_selection_failed` | main 的「擋下:找不到知識圖譜」(stderr、rc2) | security list 在 --json 另輸出一份不完整報告 |
+| `errors_truncated` | 無 | 一篇超過 50 筆錯誤時的彙總(omitted、omitted_by_kind);全庫超過 2000 筆時另有一筆 node=null 的全庫彙總;被併掉的讀取類錯誤照樣算讀取不完整 |
+| `tag_format_unrecognized` | 無(lint、doctor 都不唸這種寫法) | tags 原文有 flag/security-relevant 卻解析不到;不算讀取不完整,但退出 2 |
+| `symlink_rejected`、`special_file`、`file_too_large`、`total_size_exceeded`、`too_many_files`、`enumeration_failed`、`changed_during_read`、`normalized_path_collision`、`unsupported_safe_read` | 無(load_vault 跟隨捷徑、沒有上限,不會產生) | 都算讀取不完整,read_complete=false |
+| `json_invalid`、`duplicate_key`、`unknown_schema_version`、`invalid_block`、`unclosed_block`、`malformed_block`、`misplaced_block`、`multiple_blocks`、`invalid_record`、`duplicate_id`、`duplicate_source`、`inventory_error`、`reference_error`、`unknown_evidence_status` | 無(登記格式只有 security list 讀) | 登記或引用錯誤,registration_complete=false;證據指到非 Verification 節點也算 reference_error |
+
+治理事件的 kind(blocked、warned、unreadable、stale)是閘門留痕用的,security list 不寫帳,所以不對照;日後若有閘門要吃這份錯誤,讀取不完整那組對 unreadable,其餘由那道閘自己定。
+- 讀取中屬性變了的檔,錯誤照列、內容也不採用(避免把半途改過的內容當成有效登記);讀完重列舉才發現的差異只列錯誤。
+- 驗收條款綁定與故障變體紅綠在 [[Verification/2026-10-19_資安護欄唯讀盤點實作]]。
 
 ## 2026-10-13 待決問題嚴格讀法
 
@@ -126,7 +177,7 @@ about_code:
 源起:CLI 核心非日報觸發(read 原語是 lumos 工具鏈的地基能力,非某日報 gap/inspiration 衍生的單一功能)。
 
 ## 共同地基
-所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-local,不進版控)(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。
+所有讀指令先 `find_vault`(從 cwd 往上找 `docs/*-knowledge` 或 standalone vault root)→ `load_vault` 掃全 `.md`、解 frontmatter + wikilink → 建記憶體 `Env`(`notes` 節點字典、`by_stem` 名稱索引、雙向 `edges` = (out_e, in_e))。各 `cmd_*` 在此 Env 上純讀、印出、`return 0`(查無資料 / 正則無效等 → 非 0)。**不改圖譜節點檔**——context/show 寫 best-effort usage-local 事件帳(2026-10-04 前叫 usage-local,不進版控)(A2)、doctor --ci 視 findings 寫 governance-log,其餘讀指令純讀(2026-07-21 修「全程不寫檔」措辭與現實的 A2 漂移)。(例外:security list 不走這條,見同篇 security list 那段)
 
 ## 14 個原語(對應 cmd_* / scripts/lumos)
 - **進場三步(入口固定順序)**

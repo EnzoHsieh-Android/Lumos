@@ -1,0 +1,764 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 004e0b9eb1da5815995c7dcca2067d38411e0a37..d93d91aae5b19eef8a54d1bc2caa70dc5f087dd3 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -99824,45 +99824,45 @@ def t_seclist_s03_read_boundary():
+     check("S3 正常項保留", _sl_rec(doc, "OK-1").get("evidence_check") == "declared_only")
+     check("S3 讀取不完整", doc.get("read_complete") is False)
+     # 列舉之後、開檔之前把一般檔換成指向外面的捷徑:要被 O_NOFOLLOW 擋下,不讀到哨兵
+     v2 = _sl_vault()
+     swap = v2 / "Systems" / "SlSwap.md"
+     swap.write_text("---\ntype: system\n---\n# swap\n", encoding="utf-8")
+     sec2 = v2.parent / "secret2.md"
+     sec2.write_text("SENTINEL-TWO\n", encoding="utf-8")
+     secret_ino = sec2.stat().st_ino
+     mod = _load_lumos_inproc()
+-    orig_read, orig_os = mod._secinv_read_rel, mod.os
++    orig_read, orig_os = mod._vault_safe_read_rel, mod.os
+     opened_inodes = []
+ 
+     class _OsSpy:
+         def __getattr__(self, k):
+             return getattr(orig_os, k)
+ 
+         def open(self, *a, **kw):
+             fd = orig_os.open(*a, **kw)
+             try:
+                 opened_inodes.append(orig_os.fstat(fd).st_ino)
+             except OSError:
+                 pass
+             return fd
+ 
+     def swapping(root_fd, rel, remaining):
+         if rel == "Systems/SlSwap.md" and not swap.is_symlink():
+             swap.unlink()
+             _os.symlink(str(sec2), str(swap))
+         return orig_read(root_fd, rel, remaining)
+-    mod._secinv_read_rel, mod.os = swapping, _OsSpy()
++    mod._vault_safe_read_rel, mod.os = swapping, _OsSpy()
+     try:
+         rc2, d2, e2 = _sl_inproc(v2)
+     finally:
+-        mod._secinv_read_rel, mod.os = orig_read, orig_os
++        mod._vault_safe_read_rel, mod.os = orig_read, orig_os
+     check("S3 開檔前置換成捷徑:退出 2 且列錯誤", rc2 == 2 and any(e.get("node") == "Systems/SlSwap.md" for e in (d2 or {}).get("errors", [])),
+           str((d2 or {}).get("errors"))[:600] + e2[:300])
+     check("S3 開檔前置換:從沒開到外部哨兵", secret_ino not in opened_inodes and "SENTINEL-TWO" not in str(d2))
+ 
+ 
+ def t_seclist_s04_never_verified():
+     """S4:reported_status 原樣保留;evidence_check 最多 declared_only;有 pass 紀錄也不變成通過;不給總分。"""
+     v = _sl_vault("# SlPay\n" + _sl_block([
+         _sl_ctrl("U-1", reported_status="untested", status_reason="還沒測", evidence_refs=[]),
+         _sl_ctrl("D-1", reported_status="defect", status_reason="已知漏洞未修"),
+@@ -100029,48 +100029,48 @@ def t_seclist_s07_read_only_no_exec():
+           and "唯讀盤點,不是安全驗收" in _j.dumps(doc, ensure_ascii=False))
+ 
+ 
+ def t_seclist_s08_incomplete_read_exit():
+     """S8:讀取或列舉失敗 → read_complete=false、退出 2、JSON 仍可解析、正常項保留;合法未驗 → 退出 0 仍 not_assessed。"""
+     v = _sl_vault("# SlPay\n" + _sl_block([_sl_ctrl("KEEP-1")]))
+     write(v, "Systems/SlBroken.md", "type: system\nstatus: done", body="# broken\n" + _sl_block([_sl_ctrl("LOST-1")]))
+     (v / "Projects" / "deep").mkdir()
+     write(v, "Projects/deep/SlHidden.md", "type: project\nstatus: doing", body="# h\n")
+     mod = _load_lumos_inproc()
+-    orig_read, orig_list = mod._secinv_read_rel, mod._secinv_list_dir
++    orig_read, orig_list = mod._vault_safe_read_rel, mod._vault_safe_list_dir
+ 
+     def failing_read(root_fd, rel, remaining):
+         if rel == "Systems/SlBroken.md":
+             raise OSError(5, "模擬讀取失敗")
+         return orig_read(root_fd, rel, remaining)
+-    mod._secinv_read_rel = failing_read
++    mod._vault_safe_read_rel = failing_read
+     try:
+         rc, doc, err = _sl_inproc(v)
+     finally:
+-        mod._secinv_read_rel = orig_read
++        mod._vault_safe_read_rel = orig_read
+     check("S8 讀取失敗:退出 2 且 JSON 可解析", rc == 2 and doc is not None, err[:500])
+     doc = doc or {}
+     check("S8 讀取失敗:read_complete=false", doc.get("read_complete") is False)
+     check("S8 讀取失敗列 read_error 指名路徑", bool(_sl_err(doc, "read_error", "Systems/SlBroken.md")), str(doc.get("errors"))[:500])
+     check("S8 讀取失敗不冒充完整:其他項保留", "KEEP-1" in _sl_ids(doc.get("records")) and "LOST-1" not in _sl_ids(doc.get("records")))
+     calls = []
+ 
+     def failing_list(fd, rel, *rest):
+         calls.append(rel)
+         if rel == "Projects/deep":
+             raise OSError(13, "模擬列舉失敗")
+         return orig_list(fd, rel, *rest)
+-    mod._secinv_list_dir = failing_list
++    mod._vault_safe_list_dir = failing_list
+     try:
+         rc2, d2, err2 = _sl_inproc(v)
+     finally:
+-        mod._secinv_list_dir = orig_list
++        mod._vault_safe_list_dir = orig_list
+     check("S8 列舉失敗:退出 2、read_complete=false、列 enumeration_failed",
+           rc2 == 2 and (d2 or {}).get("read_complete") is False and bool(_sl_err(d2, "enumeration_failed", "Projects/deep")),
+           str((d2 or {}).get("errors"))[:500] + err2[:300])
+     check("S8 列舉失敗仍保留已讀項", "KEEP-1" in _sl_ids((d2 or {}).get("records")))
+     # 沒有唯一選定圖譜:不猜(find_vault 會取排序第一個,這裡要報錯)
+     import tempfile as _tf
+     proj = Path(_tf.mkdtemp(prefix="gctl-test-sl-proj-"))
+     (proj / ".git").mkdir()
+     for nm in ("a-knowledge", "b-knowledge"):
+         (proj / "docs" / nm / "Systems").mkdir(parents=True)
+@@ -100163,60 +100163,60 @@ def t_seclist_s10_size_caps():
+     (v / "Verification" / "SlZ.md").write_bytes(b"z")
+     reads.clear()
+     mod.os = _OsSpy()
+     try:
+         rc2, d2, err2 = _sl_inproc(v)
+     finally:
+         mod.os = orig_os
+     check("S10 總量 64MiB+1:退出 2、列 total_size_exceeded", rc2 == 2 and bool(_sl_err(d2, "total_size_exceeded")),
+           str((d2 or {}).get("errors"))[:400] + err2[:300])
+     check("S10 總量超限仍保留已讀項", "BIG-OK" in _sl_ids((d2 or {}).get("records")))
+-    check("S10 總量超限時讀取請求不超過剩餘額度+1", reads and max(reads) <= 2 * MiB + 1)
++    check("S10 總量超限時每次讀取請求仍不超過 2MiB+1(剩餘額度那一半見 t_seclist_g8_read_request_bound)", reads and max(reads) <= 2 * MiB + 1)
+     # 檔數:10000 照讀,10001 停
+     v2 = mkvault()
+     have_n = sum(1 for _ in v2.rglob("*.md"))
+     bulk = v2 / "Projects" / "bulk"
+     bulk.mkdir()
+     for i in range(10000 - have_n):
+         (bulk / f"n{i:05d}.md").write_bytes(b"---\ntype: project\n---\n")
+     r3, d3 = _sl_json(v2)
+     check("S10 剛好 10000 檔:退出 0", r3.returncode == 0 and (d3 or {}).get("read_complete") is True, r3.stderr[:300])
+     (bulk / "n99999.md").write_bytes(b"x")
+     r4, d4 = _sl_json(v2)
+     check("S10 第 10001 檔:退出 2、列 too_many_files、JSON 可解析",
+           r4.returncode == 2 and bool(_sl_err(d4, "too_many_files")), r4.stdout[:300] + r4.stderr[:300])
+     check("S10 錯誤輸出仍是單一 JSON", d4 is not None and isinstance(_j.loads(r4.stdout), dict))
+ 
+ 
+ def t_seclist_s11_change_during_read():
+     """S11:讀 A 之後改寫已讀 A、改寫未讀 B、新增檔、刪除檔 → 列不完整並退出 2;沒有變動的對照退出 0。"""
+     import os as _os
+     mod = _load_lumos_inproc()
+-    orig_read = mod._secinv_read_rel
++    orig_read = mod._vault_safe_read_rel
+ 
+     def scenario(mutate):
+         v = _sl_vault()
+         write(v, "Systems/SlA.md", "type: system\nstatus: done", body="# A\n")
+         write(v, "Systems/SlB.md", "type: system\nstatus: done", body="# B\n")
+         fired = []
+ 
+         def hooked(root_fd, rel, remaining):
+             res = orig_read(root_fd, rel, remaining)
+             if rel == "Systems/SlA.md" and not fired:
+                 fired.append(1)
+                 mutate(v)
+             return res
+-        mod._secinv_read_rel = hooked
++        mod._vault_safe_read_rel = hooked
+         try:
+             rc, doc, _err = _sl_inproc(v)
+         finally:
+-            mod._secinv_read_rel = orig_read
++            mod._vault_safe_read_rel = orig_read
+         return rc, doc or {}, fired
+ 
+     def rewrite(rel, text):
+         def f(v):
+             p = v / rel
+             st = p.stat()
+             p.write_text(text, encoding="utf-8")
+             _os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+         return f
+     rc0, d0, f0 = scenario(lambda v: None)
+@@ -100307,60 +100307,570 @@ def t_seclist_s13_missing_kind_unverified():
+     surf = {s.get("surface_id"): s for s in doc.get("coverage", {}).get("surfaces", [])}
+     sp = surf.get("S-pay", {})
+     check("S13 不適用列 applicability_pending", sp.get("applicability_pending_control_ids") == ["NA-1"], str(sp))
+     check("S13 所有映射(含 verified、不適用)都列未驗",
+           sorted(sp.get("unverified_control_ids", [])) == ["DEF-1", "K-FULL", "K-HALF", "K-NONE", "NA-1"], str(sp))
+     check("S13 缺陷子集另列", sp.get("defect_control_ids") == ["DEF-1"], str(sp))
+     check("S13 S-pay 有 active 映射所以不算 unmapped", "S-pay" not in doc.get("coverage", {}).get("unmapped", []))
+ 
+ 
+ def t_seclist_integration_gaps():
+-    """母計劃〈證據交接與首案整合驗收〉六項反例在盤點層的預期:都只列缺口、保持 not_assessed,不判通過。"""
++    """母計劃〈證據交接與首案整合驗收〉六項整合控制在盤點層的預期:都只列缺口、保持 not_assessed,不判通過。
++    盤點層做不到的(判準是否獨立、拒絕原因是否正確、執行是否真的到目標)只驗「不升格」,判定屬 P1 人工對照與收證工具,不在本測試宣稱範圍。
++    「缺少權限答案」這種待決狀態在登記 schema 沒有對應欄位,不在盤點層。"""
+     import datetime as _dt
++    today = _dt.date(2026, 10, 19)
+     v = _sl_vault("# SlPay\n" + _sl_block([
+-        # ①權限來源決策被撤銷 / 不存在
+-        _sl_ctrl("I-REVOKED", source={"kind": "requirement", "claim": "撤銷的權限答案", "decision_ref": "Systems/SlPay#d2"}),
+-        _sl_ctrl("I-NODEC", source={"kind": "requirement", "claim": "沒有決策", "decision_ref": "Systems/SlPay#d9"}),
+-        # ②測試重抄錯 oracle 但故障翻紅:作者照樣報 verified、紀錄是 pass → 仍只 declared_only
+-        _sl_ctrl("I-ORACLE"),
+-        # ③因缺身分或資源不存在而被拒(目標情境無效):紀錄還在 pending
+-        _sl_ctrl("I-FALSEREJ", evidence_refs=[{"kind": "fault_sensitivity", "node": "Verification/SlPending.md"}],
+-                 required_evidence=["fault_sensitivity"]),
+-        # ④編譯錯/零案例/非目標失敗 = 執行無效:紀錄 abandoned
++        # ① 權限來源決策被撤銷 / 不存在:列引用錯誤,且不算入口映射
++        _sl_ctrl("I-REVOKED", surfaces=["S-refund"],
++                 source={"kind": "requirement", "claim": "撤銷的權限答案", "decision_ref": "Systems/SlPay#d2"}),
++        _sl_ctrl("I-NODEC", surfaces=["S-refund"], source={"kind": "requirement", "claim": "沒有決策", "decision_ref": "Systems/SlPay#d9"}),
++        # ② 測試重抄錯的 oracle、故障也翻紅:紀錄自稱 pass 且前提齊全
++        _sl_ctrl("I-ORACLE", evidence_refs=[{"kind": "behavior", "node": "Verification/SlOracleCopy.md"},
++                                            {"kind": "fault_sensitivity", "node": "Verification/SlOracleCopy.md"}],
++                 required_evidence=["behavior", "fault_sensitivity"]),
++        # ③ 缺身分或資源不存在的假拒絕:有 A 合法成功(pass)與 B 被拒(情境無效、pending)成對
++        _sl_ctrl("I-PAIR", evidence_refs=[{"kind": "behavior", "node": "Verification/SlPass.md"},
++                                          {"kind": "fault_sensitivity", "node": "Verification/SlPending.md"}],
++                 required_evidence=["behavior", "fault_sensitivity"]),
++        #    只有 B 被拒、沒有 A 合法對照
++        _sl_ctrl("I-NOPAIR", evidence_refs=[{"kind": "fault_sensitivity", "node": "Verification/SlPending.md"}],
++                 required_evidence=["behavior", "fault_sensitivity"]),
++        # ④ 編譯錯/零案例/非目標失敗 = 執行無效(紀錄 abandoned),作者仍報 verified
+         _sl_ctrl("I-INVALIDRUN", evidence_refs=[{"kind": "fault_sensitivity", "node": "Verification/SlAbandoned.md"}],
+                  required_evidence=["fault_sensitivity"]),
+-        # ⑤換版本或環境後套舊證據:紀錄 stale
++        # ⑤ 換版本或環境後套舊證據:紀錄 stale
+         _sl_ctrl("I-OLDENV", evidence_refs=[{"kind": "behavior", "node": "Verification/SlStale.md"}]),
+-        # ⑥清單完整但有未驗與過期例外
+-        _sl_ctrl("I-EXPIRED", reported_status="untested", evidence_refs=[],
+-                 exception={"decision_ref": "Systems/SlPay#d1", "reason": "暫時接受", "expires_on": "2026-01-01"}),
+     ]))
+-    rc, doc, _err = _sl_inproc(v, today=_dt.date(2026, 10, 19))
++    write(v, "Verification/SlOracleCopy.md", "type: verification\nstatus: pass\nvalid_under: 本機\nrevalidate_when: 改判準時",
++          body="# 預期值是照實作算出來的(判準不獨立),故障版仍翻紅\n")
++    rc, doc, _err = _sl_inproc(v, today=today)
+     doc = doc or {}
+     refs = {e.get("id") for e in _sl_err(doc, "reference_error") if e.get("field") == "source"}
+     check("整合① 撤銷或不存在的決策列引用錯誤、退出 2", rc == 2 and {"I-REVOKED", "I-NODEC"} <= refs, str(doc.get("errors"))[:600])
+     check("整合① 撤銷的項仍列出,不悄悄消失", {"I-REVOKED", "I-NODEC"} <= set(_sl_ids(doc.get("records"))))
+-    check("整合② 重抄 oracle 的 pass 證據仍只 declared_only", _sl_rec(doc, "I-ORACLE").get("evidence_check") == "declared_only")
+-    check("整合③ 假拒絕情境的證據 incomplete", _sl_rec(doc, "I-FALSEREJ").get("evidence_check") == "incomplete")
+-    check("整合④ 執行無效的證據 incomplete、主張仍算未驗", _sl_rec(doc, "I-INVALIDRUN").get("evidence_check") == "incomplete")
++    surf = {s.get("surface_id"): s for s in doc.get("coverage", {}).get("surfaces", [])}
++    check("整合① 撤銷決策的護欄不算入口映射", "S-refund" in doc.get("coverage", {}).get("unmapped", [])
++          and surf.get("S-refund", {}).get("mapped_control_ids") == [], str(surf.get("S-refund")))
++    ora = _sl_rec(doc, "I-ORACLE")
++    check("整合② 判準重抄的 pass 證據只到 declared_only,報告內容不核對的限制照列",
++          ora.get("evidence_check") == "declared_only" and ora.get("reported_status") == "verified"
++          and any("不核對報告內容" in x for x in ora.get("limitations", [])), str(ora.get("limitations")))
++    check("整合③ 有 A 合法對照、B 拒絕情境無效:incomplete", _sl_rec(doc, "I-PAIR").get("evidence_check") == "incomplete")
++    nop = _sl_rec(doc, "I-NOPAIR")
++    check("整合③ 沒有 A 合法對照:缺 behavior 種類、missing", nop.get("evidence_check") == "missing"
++          and any(i.get("kind") == "missing_kind" and i.get("evidence_kind") == "behavior" for i in nop.get("issues", [])), str(nop.get("issues")))
++    inv_run = _sl_rec(doc, "I-INVALIDRUN")
++    check("整合④ 執行無效:incomplete,作者的 verified 照原樣保留但不升格",
++          inv_run.get("evidence_check") == "incomplete" and inv_run.get("reported_status") == "verified")
+     check("整合⑤ 舊證據 stale", _sl_rec(doc, "I-OLDENV").get("evidence_check") == "stale")
+-    iss = [i.get("kind") for i in _sl_rec(doc, "I-EXPIRED").get("issues", [])]
+-    check("整合⑥ 過期例外與未驗都留著", "exception_expired" in iss and _sl_rec(doc, "I-EXPIRED").get("evidence_check") == "missing", str(iss))
+-    check("整合 全部 not_assessed", doc.get("security_verdict") == "not_assessed")
++    # ⑥ 清單完整(所有入口都有引用有效的 active 護欄、沒有任何錯誤),但仍有未驗與過期例外
++    v6 = _sl_vault("# SlPay\n" + _sl_block([
++        _sl_ctrl("F-PAY", surfaces=["S-pay"]),
++        _sl_ctrl("F-REF", surfaces=["S-refund"], reported_status="untested", evidence_refs=[],
++                 exception={"decision_ref": "Systems/SlPay#d1", "reason": "暫時接受", "expires_on": "2026-01-01"}),
++    ]))
++    rc6, d6, _e6 = _sl_inproc(v6, today=today)
++    d6 = d6 or {}
++    cov6 = d6.get("coverage", {})
++    check("整合⑥ 前置:清單完整——沒有錯誤、讀取完整、登記完整、入口盤點已知且沒有未映射",
++          rc6 == 0 and d6.get("errors") == [] and d6.get("read_complete") is True and d6.get("registration_complete") is True
++          and cov6.get("status") == "known_inventory" and cov6.get("unmapped") == [], str(d6.get("errors"))[:400] + str(cov6)[:300])
++    s6 = {s.get("surface_id"): s for s in cov6.get("surfaces", [])}
++    check("整合⑥ 完整清單仍逐入口列未驗", s6.get("S-pay", {}).get("unverified_control_ids") == ["F-PAY"]
++          and s6.get("S-refund", {}).get("unverified_control_ids") == ["F-REF"], str(s6)[:400])
++    fref = _sl_rec(d6, "F-REF")
++    check("整合⑥ 未驗與過期例外照列、證據 missing、仍 not_assessed",
++          fref.get("evidence_check") == "missing" and "exception_expired" in [i.get("kind") for i in fref.get("issues", [])]
++          and d6.get("security_verdict") == "not_assessed", str(fref.get("issues")))
+ 
+ 
+ 
+ def t_infra_before_react_stack_key():
+     """[前端框架從vue分出 交界條款,跟 Projects/前端知識與風險詞_計劃 的順序約定]_stack_key_for_file 先判 infra 再判 React/vue:
+     React 專案裡 e2e/ 資料夾下的 .ts/.tsx 判 infra、不判 react;src/ 底下的 .tsx 判 react。翻紅:把 infra 規則移到前端判斷之後 → 前兩條紅。"""
+     m = _load_lumos_inproc()
+     d = Path(tempfile.mkdtemp(prefix="gctl-infrareact-"))
+     (d / "package.json").write_text('{"dependencies": {"react": "^19"}}', encoding="utf-8")
+     m._WORKTREE_TEXT_CACHE.clear()
+     k = lambda f: m._stack_key_for_file(f, str(d))  # noqa: E731
+     check("交界:e2e/ 底下的 .ts → infra", k("e2e/order.spec.ts") == "infra" and k("e2e/helpers/db.ts") == "infra", f"{k('e2e/order.spec.ts')} {k('e2e/helpers/db.ts')}")
+     check("交界:e2e/ 底下的 .tsx → infra(不判 react)", k("e2e/fixtures/Page.tsx") == "infra", str(k("e2e/fixtures/Page.tsx")))
+     check("交界:src/ 底下的 .tsx → react", k("src/App.tsx") == "react" and k("src/api/orders.ts") == "react", f"{k('src/App.tsx')} {k('src/api/orders.ts')}")
+     check("交界 對照:src/ 底下的 e2e 資料夾是產品程式,照判 react", k("src/e2e/cipher.ts") == "react", str(k("src/e2e/cipher.ts")))
+ 
++
++# ── security list 代碼審 r1 修正(governance/review-reports/code-資安護欄唯讀盤點/r1-intake.md G1 到 G8)──────────
++# 預期值照子計劃〈鍵的必填規則〉〈CLI契約〉〈輸出契約〉與 intake 的裁定手寫。
++
++_SL_WEIRD = ([], {}, 0, 1.5, True, None, "\ud800", "a\ud800", [[]], [{}], ["\ud800"], [1])
++_SL_NULLABLE = ("scope", "trust_boundary", "enforcement", "legitimate_control", "abuse_case",
++                "status_reason", "owner", "revalidate_when")
++
++
++def _sl_set_path(obj, path, value):
++    cur = obj
++    for k in path[:-1]:
++        cur = cur[k]
++    cur[path[-1]] = value
++
++
++def _sl_fuzz_legal(path, value):
++    """子計劃〈鍵的必填規則〉:哪些(欄位, 值)本身合法。合法的不該退出 2;其餘都是 schema 或引用錯誤。"""
++    head = path[0]
++    if value is None and len(path) == 2 and path[0] in ("c", "r") and path[1] in (*_SL_NULLABLE, "exception", "replacement_id"):
++        return True
++    if value == [] and type(value) is list and path in (("c", "assets"), ("c", "surfaces"), ("c", "required_evidence"),
++                                                        ("c", "evidence_refs"), ("top", "controls"),
++                                                        ("inv", "surfaces", 0, "asset_ids")):
++        return True
++    return head == "never"
++
++
++def t_seclist_g1_field_type_fuzz():
++    """G1:控制項、inventory、頂層每個欄位依序換成容器、數字、布林、null、代理字元:不得崩潰;
++    JSON 可解析且能編成 UTF-8;不合法的退出 2;同庫正常控制項照列。"""
++    import copy as _cp, json as _j
++    v = _sl_vault()
++    write(v, "Systems/SlGood.md", "type: system\nstatus: done", body="# g\n" + _sl_block([_sl_ctrl("GOOD-1")]))
++    base_c = _sl_ctrl("FZ-1", exception={"decision_ref": "Systems/SlPay#d1", "reason": "r", "expires_on": "2026-12-31"})
++    base_ret = _sl_ctrl("FZ-R", lifecycle="retired", retirement_reason="拿掉", replacement_id="GOOD-1")
++    paths = [("c", k) for k in base_c] + [("c", "source", k) for k in ("kind", "claim", "decision_ref")] \
++        + [("c", "evidence_refs", 0, k) for k in ("kind", "node")] + [("c", "exception", k) for k in base_c["exception"]] \
++        + [("r", "retirement_reason"), ("r", "replacement_id")] \
++        + [("inv", k) for k in ("revision", "decision_ref", "assets", "surfaces")] \
++        + [("inv", "assets", 0, "id"), ("inv", "assets", 0, "description"), ("inv", "surfaces", 0, "id"),
++           ("inv", "surfaces", 0, "asset_ids"), ("inv", "surfaces", 0, "description"), ("inv", "surfaces", 0, "asset_ids", 0)] \
++        + [("top", "schema_version"), ("top", "controls"), ("top", "inventory")]
++    crashes, wrong_rc, lost_good, bad_json = [], [], [], []
++    inv_note = v / "Systems" / "SlInv.md"
++    for path in paths:
++        for val in _SL_WEIRD:
++            c, ret, inv = _cp.deepcopy(base_c), _cp.deepcopy(base_ret), _sl_inventory()
++            top = {"schema_version": 1, "controls": [c, ret]}
++            target = {"c": c, "r": ret, "inv": inv, "top": top}[path[0]]
++            _sl_set_path(target, path[1:], _cp.deepcopy(val))
++            if path[0] == "top" and path[1] == "controls":
++                top["controls"] = _cp.deepcopy(val)
++            (v / "Systems" / "SlFz.md").write_text("---\ntype: system\nstatus: done\n---\n# fz\n```lumos-security-v1\n"
++                                                    + _j.dumps(top, ensure_ascii=True) + "\n```\n", encoding="utf-8")
++            inv_note.write_text("---\ntype: system\nstatus: done\n---\n# inv\n```lumos-security-v1\n"
++                                + _j.dumps({"schema_version": 1, "controls": [], "inventory": inv}, ensure_ascii=True)
++                                + "\n```\n", encoding="utf-8")
++            label = f"{'.'.join(map(str, path))}={val!r}"
++            try:
++                rc, doc, _err = _sl_inproc(v)
++            except Exception as e:      # 指令自己崩潰:就是本題要抓的
++                crashes.append(f"{label}: {type(e).__name__}")
++                continue
++            if doc is None:
++                bad_json.append(label)
++                continue
++            want = 0 if _sl_fuzz_legal(path, val) else 2
++            if rc != want:
++                wrong_rc.append(f"{label}: rc={rc} 預期 {want}")
++            if "GOOD-1" not in _sl_ids(doc.get("records")):
++                lost_good.append(label)
++    total = len(paths) * len(_SL_WEIRD)
++    check(f"G1 前置:{total} 種替換都跑到", total > 400, str(total))
++    check("G1 沒有任何替換讓指令崩潰", not crashes, "; ".join(crashes[:15]) + f"(共 {len(crashes)})")
++    check("G1 每次都輸出單一可解析 JSON", not bad_json, "; ".join(bad_json[:10]))
++    check("G1 不合法的值都退出 2、合法的退出 0", not wrong_rc, "; ".join(wrong_rc[:15]) + f"(共 {len(wrong_rc)})")
++    check("G1 同庫正常控制項照列", not lost_good, "; ".join(lost_good[:10]))
++
++
++def t_seclist_g2_output_contract():
++    """G2:JSON 模式恆為單一合法 UTF-8 JSON(代理字元、雙向控制、行段分隔一律跳脫,讀回值不變);
++    選圖譜失敗在 --json 也輸出 JSON 並退出 2;文字模式自由欄位有長度上限並標明是登記內容、不是指令。"""
++    import json as _j
++    r = subprocess.run([sys.executable, GRAPHCTL, "--vault", "/definitely-not-a-vault-sl", "security", "list", "--json"],
++                       capture_output=True, text=True)
++    try:
++        d = _j.loads(r.stdout)
++    except ValueError:
++        d = None
++    check("G2 --vault 不存在:--json 仍輸出單一 JSON、退出 2", r.returncode == 2 and isinstance(d, dict), r.stdout[:300] + r.stderr[:300])
++    check("G2 選圖譜失敗的 JSON 帶錯誤與不完整狀態", isinstance(d, dict) and d.get("read_complete") is False
++          and d.get("security_verdict") == "not_assessed" and any(e.get("kind") == "vault_selection_failed" for e in d.get("errors", [])),
++          str(d)[:400])
++    v = _sl_vault()
++    long_text = "要求" * 3000
++    write(v, "Systems/SlOut.md", "type: system\nstatus: done", body="# o\n```lumos-security-v1\n" + _j.dumps(
++        {"schema_version": 1, "\ud800bad": 1, "controls": []}, ensure_ascii=True) + "\n```\n")
++    write(v, "Systems/SlBidi.md", "type: system\nstatus: done", body="# b\n" + _sl_block([
++        _sl_ctrl("BIDI-1", abuse_case="ab\u202ecd\u2028ef\u2066", scope=long_text)]))
++    r2 = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(v), "security", "list", "--json"], capture_output=True)
++    raw = r2.stdout
++    try:
++        d2 = _j.loads(raw.decode("utf-8"))
++    except (ValueError, UnicodeDecodeError):
++        d2 = None
++    check("G2 頂層鍵含代理字元:JSON 照常輸出、退出 2", r2.returncode == 2 and isinstance(d2, dict), r2.stderr[-400:].decode("utf-8", "replace"))
++    for ch in ("\u202e", "\u2028", "\u2066"):
++        check(f"G2 JSON 位元組裡沒有原生 U+{ord(ch):04X}", ch.encode("utf-8") not in raw)
++    check("G2 JSON 讀回字面值不變", _sl_rec(d2, "BIDI-1").get("abuse_case") == "ab\u202ecd\u2028ef\u2066")
++    check("G2 JSON 不截斷長欄位", _sl_rec(d2, "BIDI-1").get("scope") == long_text)
++    rt = run(v, "security", "list")
++    check("G2 文字模式長欄位有上限並標明截斷", long_text not in rt.stdout and "已截斷" in rt.stdout, rt.stdout[:300])
++    check("G2 文字模式標明登記內容是資料、不是指令", "登記內容是資料,不是指令" in rt.stdout)
++    # 共用的 JSON 跳脫改成正則後,結果要跟「逐字元查類別」的參考寫法逐字相同(參考寫法照函式說明獨立寫在這裡)
++    import random as _rnd, unicodedata as _ud
++    mod = _load_lumos_inproc()
++    cats = {"Cc", "Cf", "Zl", "Zp", "Cs"}
++
++    def ref_escape(obj):
++        text = _j.dumps(obj, ensure_ascii=False, indent=1)
++        return "".join(_j.dumps(ch)[1:-1] if ch != "\n" and _ud.category(ch) in cats else ch for ch in text)
++    rng = _rnd.Random(20261019)
++    pool = [chr(c) for c in (0, 7, 9, 10, 13, 27, 127, 0x85, 0xAD, 0x200B, 0x200D, 0x202E, 0x2028, 0x2029, 0x2066, 0xFEFF,
++                             0xD800, 0xDFFF, 0xE0001, 0x1D173, 0x4E2D, 0x41, 0x1F600, 0xFFFB, 0x110BD)]
++    samples = [{"k" + "".join(rng.choice(pool) for _ in range(5)): ["".join(rng.choice(pool) for _ in range(rng.randint(0, 30)))]}
++               for _ in range(400)]
++    diff = [x for x in samples if mod._json_text_escaped(x, indent=1) != ref_escape(x)]
++    check("G2 共用 JSON 跳脫結果與逐字元參考寫法相同(400 組含各類控制字元)", not diff, repr(diff[:2]))
++    errs = [e for e in (d2 or {}).get("errors", []) if e.get("node") == "Systems/SlOut.md"]
++    check("G2 錯誤訊息照列壞鍵(跳脫後)", errs and "\ud800bad" in errs[0].get("detail", ""), str(errs)[:300])
++
++
++def t_seclist_g3_gaps_not_hidden():
++    """G3:空登記塊或全部非法的塊不算已登記;引用無效的控制項不消除入口缺口(照列錯誤、另列在入口上);
++    inventory 壞掉或多份時覆蓋未知。"""
++    flag = "type: system\nstatus: done\ntags:\n  - flag/security-relevant"
++    v = _sl_vault("# SlPay\n" + _sl_block([
++        _sl_ctrl("GOOD-P", surfaces=["S-pay"]),
++        _sl_ctrl("BADREF-R", surfaces=["S-refund"],
++                 source={"kind": "requirement", "claim": "退款要擁有者", "decision_ref": "Systems/SlPay#d9"}),
++        _sl_ctrl("BADEV-R", surfaces=["S-refund"], evidence_refs=[{"kind": "behavior", "node": "Verification/SlNope.md"}]),
++    ]))
++    write(v, "Systems/SlEmpty.md", flag, body="# e\n" + _sl_block([]))
++    write(v, "Systems/SlAllBad.md", flag, body="# a\n" + _sl_block([{"id": "x"}]))
++    write(v, "Systems/SlNoBlock.md", flag, body="# n\n")
++    write(v, "Systems/SlFlagGood.md", flag, body="# fg\n" + _sl_block([_sl_ctrl("FLAG-OK", source={
++        "kind": "requirement", "claim": "另一句要求", "decision_ref": "Systems/SlPay#d1"})]))
++    _r, doc = _sl_json(v)
++    doc = doc or {}
++    un = doc.get("unregistered_nodes", [])
++    check("G3 空登記塊不算已登記", "Systems/SlEmpty.md" in un, str(un))
++    check("G3 全部非法的塊不算已登記", "Systems/SlAllBad.md" in un, str(un))
++    check("G3 有標籤沒塊列出", "Systems/SlNoBlock.md" in un, str(un))
++    check("G3 有合法條目的標籤節點不列", "Systems/SlFlagGood.md" not in un, str(un))
++    surf = {s.get("surface_id"): s for s in doc.get("coverage", {}).get("surfaces", [])}
++    check("G3 引用無效的控制項不消除缺口:S-refund 仍 unmapped", "S-refund" in doc.get("coverage", {}).get("unmapped", [])
++          and surf.get("S-refund", {}).get("mapped_control_ids") == [], str(surf.get("S-refund")))
++    check("G3 引用無效的控制項另列在入口上", sorted(surf.get("S-refund", {}).get("invalid_reference_control_ids", []))
++          == ["BADEV-R", "BADREF-R"], str(surf.get("S-refund")))
++    check("G3 引用無效的控制項照列在主清單並標明", _sl_rec(doc, "BADREF-R").get("references_valid") is False
++          and _sl_rec(doc, "GOOD-P").get("references_valid") is True)
++    check("G3 合法映射照算", surf.get("S-pay", {}).get("mapped_control_ids") == ["FLAG-OK", "GOOD-P"], str(surf.get("S-pay")))
++    # 只有空登記塊:registration_complete 不得為 true
++    v0 = mkvault()
++    write(v0, "Systems/SlOnlyEmpty.md", "type: system\nstatus: done", body="# e\n" + _sl_block([]))
++    _r0, d0 = _sl_json(v0)
++    check("G3 只有空登記塊:registration_complete=false", (d0 or {}).get("registration_complete") is False)
++    # inventory 核可依據失效、多份 inventory
++    vb = _sl_vault("# SlPay\n" + _sl_block([_sl_ctrl("C-1")]), inventory=False)
++    bad_inv = _sl_inventory()
++    bad_inv["decision_ref"] = "Systems/SlPay#d9"
++    write(vb, "Systems/SlInv.md", "type: system\nstatus: done", body="# inv\n" + _sl_block([], bad_inv))
++    rb, db = _sl_json(vb)
++    check("G3 inventory 核可依據失效:inventory_error、覆蓋未知、退出 2",
++          rb.returncode == 2 and bool(_sl_err(db, "inventory_error", "Systems/SlInv.md"))
++          and (db or {}).get("coverage", {}).get("status") == "unknown", str((db or {}).get("errors"))[:400])
++    vm = _sl_vault("# SlPay\n" + _sl_block([_sl_ctrl("C-1")]))
++    write(vm, "Systems/SlInv2.md", "type: system\nstatus: done", body="# inv2\n" + _sl_block([], _sl_inventory()))
++    rm_, dm = _sl_json(vm)
++    check("G3 兩份 inventory:列錯誤、不任選、覆蓋未知", rm_.returncode == 2 and bool(_sl_err(dm, "inventory_error"))
++          and (dm or {}).get("coverage", {}).get("status") == "unknown", str((dm or {}).get("errors"))[:400])
++
++
++def t_seclist_g4_read_guards():
++    """G4:中間目錄在列舉後或列舉中被換成捷徑都不跟;JSON 與目錄巢狀過深都退出 2 且輸出 JSON;
++    圖譜根或自動找到的 docs/*-knowledge 是捷徑時拒讀;--vault 指到不像圖譜的目錄是輸入錯誤。"""
++    mod = _load_lumos_inproc()
++    _sl_g4_swap_checks(mod)
++    _sl_g4_deep_checks(mod)
++    _sl_g4_vault_checks(mod)
++
++
++def _sl_g4_spy_run(mod, v, hook_name, hook):
++    """換掉 mod 的一支讀取原語(hook 包住原本那支),同時記下每次 os.open 開到的 inode;回 (rc, JSON, 開過的 inode)。"""
++    orig_hook, orig_os = getattr(mod, hook_name), mod.os
++    opened = []
++
++    class _OsSpy:
++        def __getattr__(self, k):
++            return getattr(orig_os, k)
++
++        def open(self, *a, **kw):
++            fd = orig_os.open(*a, **kw)
++            try:
++                opened.append(orig_os.fstat(fd).st_ino)
++            except OSError:
++                pass
++            return fd
++    setattr(mod, hook_name, hook(orig_hook))
++    mod.os = _OsSpy()
++    try:
++        rc, doc, _err = _sl_inproc(v)
++    finally:
++        setattr(mod, hook_name, orig_hook)
++        mod.os = orig_os
++    return rc, doc or {}, opened
++
++
++def _sl_g4_swap_case():
++    """圖譜裡有 Systems/Sub/N.md,圖譜外有同名哨兵目錄 → (圖譜, 外部目錄, 外部兩個 inode)。"""
++    v = _sl_vault()
++    (v / "Systems" / "Sub").mkdir()
++    (v / "Systems" / "Sub" / "N.md").write_text("---\ntype: system\n---\n# n\n", encoding="utf-8")
++    out = v.parent / "outside-sub"
++    out.mkdir()
++    (out / "N.md").write_text("SENTINEL-DIR\n", encoding="utf-8")
++    return v, out, {out.stat().st_ino, (out / "N.md").stat().st_ino}
++
++
++def _sl_g4_do_swap(v, out):
++    """把 Systems/Sub 換成指向圖譜外的捷徑(只換一次)。"""
++    import os as _os
++    sub = v / "Systems" / "Sub"
++    if not sub.is_symlink():
++        (sub / "N.md").unlink()
++        sub.rmdir()
++        _os.symlink(str(out), str(sub))
++
++
++def _sl_g4_swap_checks(mod):
++    """G4 (a)(b):列舉後、列舉中把中間目錄換成捷徑。"""
++    # (a) 列舉後、讀檔前把中間目錄換成捷徑
++    v, out, out_inos = _sl_g4_swap_case()
++
++    def after_enum(orig):
++        def h(root_fd, rel, remaining):
++            if rel == "Systems/Sub/N.md":
++                _sl_g4_do_swap(v, out)
++            return orig(root_fd, rel, remaining)
++        return h
++    rc, doc, opened = _sl_g4_spy_run(mod, v, "_vault_safe_read_rel", after_enum)
++    check("G4 讀檔前中間目錄換成捷徑:外部目錄與檔從沒被開", not (out_inos & set(opened)), str(out_inos & set(opened)))
++    check("G4 讀檔前中間目錄換成捷徑:列錯誤、退出 2", rc == 2 and any(e.get("node") == "Systems/Sub/N.md" for e in doc.get("errors", [])),
++          str(doc.get("errors"))[:400])
++    check("G4 外部哨兵內容零外洩", "SENTINEL-DIR" not in str(doc))
++    # (b) 列舉中:列完 Systems 這層、還沒進 Sub 之前換掉
++    v2, out2, out2_inos = _sl_g4_swap_case()
++
++    def during_enum(orig):
++        def h(fd, rel, *rest):
++            res = orig(fd, rel, *rest)
++            if rel == "Systems":
++                _sl_g4_do_swap(v2, out2)
++            return res
++        return h
++    rc2, doc2, opened2 = _sl_g4_spy_run(mod, v2, "_vault_safe_list_dir", during_enum)
++    check("G4 列舉中子目錄換成捷徑:外部目錄從沒被開", not (out2_inos & set(opened2)), str(out2_inos & set(opened2)))
++    check("G4 列舉中子目錄換成捷徑:退出 2", rc2 == 2, str(doc2.get("errors"))[:400])
++
++
++def _sl_g4_deep_checks(mod):
++    """G4 (c)(d):JSON 與目錄巢狀過深。"""
++    import os as _os, sys as _sys
++    # (c) 200000 層巢狀 JSON
++    v3 = _sl_vault()
++    write(v3, "Systems/SlDeep.md", "type: system\nstatus: done",
++          body="# d\n```lumos-security-v1\n" + "[" * 200000 + "]" * 200000 + "\n```\n")
++    rc3, d3, e3 = _sl_inproc(v3)
++    check("G4 200000 層 JSON:json_invalid、退出 2、JSON 照出", rc3 == 2 and bool(_sl_err(d3, "json_invalid", "Systems/SlDeep.md")), e3[:300])
++    # (d) 目錄巢狀過深(把遞迴上限壓低,讓目錄深度確實超過它)
++    v4 = _sl_vault()
++    here = _os.getcwd()
++    _os.chdir(v4 / "Projects")
++    try:
++        for i in range(300):
++            _os.mkdir(f"d{i}")
++            _os.chdir(f"d{i}")
++    finally:
++        _os.chdir(here)
++    old_lim = _sys.getrecursionlimit()
++    import inspect as _insp
++    _sys.setrecursionlimit(len(_insp.stack()) + 250)
++    try:
++        rc4, d4, e4 = _sl_inproc(v4)
++    except RecursionError as e:
++        rc4, d4, e4 = None, None, f"RecursionError 沒被接住: {e}"
++    finally:
++        _sys.setrecursionlimit(old_lim)
++    check("G4 目錄巢狀過深:enumeration_failed、退出 2", rc4 == 2 and any(
++        e.get("kind") == "enumeration_failed" and "巢狀太深" in e.get("detail", "") for e in (d4 or {}).get("errors", [])),
++          str(e4)[:300] + str((d4 or {}).get("errors"))[:300])
++
++
++def _sl_g4_vault_checks(mod):
++    """G4 (e)(f):圖譜根或自動找到的圖譜是捷徑、--vault 不像圖譜。"""
++    import os as _os
++    # (e) 圖譜根本身是捷徑;自動找到的 docs/x-knowledge 是捷徑
++    v5 = _sl_vault("# SlPay\n" + _sl_block([_sl_ctrl("ROOT-1")]))
++    link = v5.parent / "kg-link"
++    _os.symlink(str(v5), str(link))
++    r5 = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(link), "security", "list", "--json"], capture_output=True, text=True)
++    check("G4 --vault 是捷徑:拒讀、退出 2、沒有登記內容", r5.returncode == 2 and "ROOT-1" not in r5.stdout and '"read_complete": false' in r5.stdout,
++          r5.stdout[:300] + r5.stderr[:200])
++    snap5 = mod.load_vault_safe(link)
++    check("G4 讀取家族自己也拒讀捷徑根(不靠選圖譜那道)", snap5["texts"] == []
++          and any(e.get("kind") == "symlink_rejected" and e.get("node") == "." for e in snap5["errors"]), str(snap5["errors"])[:300])
++    sv5, serr5 = mod._secinv_select_vault(str(link), Path.cwd())
++    check("G4 選圖譜自己也拒絕捷徑(不靠讀取那道)", sv5 is None and "捷徑" in (serr5 or ""), str(serr5))
++    import tempfile as _tf
++    proj = Path(_tf.mkdtemp(prefix="gctl-test-sl-link-"))
++    (proj / ".git").mkdir()
++    (proj / "docs").mkdir()
++    _os.symlink(str(v5), str(proj / "docs" / "x-knowledge"))
++    r6 = subprocess.run([sys.executable, GRAPHCTL, "security", "list", "--json"], cwd=str(proj), capture_output=True, text=True)
++    check("G4 自動找到的 docs/*-knowledge 是捷徑:拒讀、退出 2", r6.returncode == 2 and "ROOT-1" not in r6.stdout, r6.stdout[:300] + r6.stderr[:200])
++    # (f) --vault 指到不像圖譜的目錄
++    plain = Path(_tf.mkdtemp(prefix="gctl-test-sl-plain-"))
++    (plain / "notes.md").write_text("# hi\n", encoding="utf-8")
++    r7 = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(plain), "security", "list", "--json"], capture_output=True, text=True)
++    check("G4 --vault 不像圖譜:輸入錯誤、退出 2,不當零登記", r7.returncode == 2 and '"vault_selection_failed"' in r7.stdout, r7.stdout[:300])
++
++
++def t_seclist_g7_scale():
++    """G7:大量登記(12000 條、4000 個入口)與大量 Invariant 來源(2000 條)都在時間內完成;
++    列舉的總項目數(含非 .md 與目錄)有上限,超過記 enumeration_failed。"""
++    import time as _t
++    MiB = 1024 * 1024
++    v = _sl_vault(inventory=False)
++    n_s, per = 4000, 3
++    inv = {"revision": "i", "decision_ref": "Systems/SlPay#d1", "assets": [{"id": "A1", "description": "d"}],
++           "surfaces": [{"id": f"S{i}", "asset_ids": ["A1"], "description": "d"} for i in range(n_s)]}
++    write(v, "Systems/SlInv.md", "type: system\nstatus: done", body="# inv\n" + _sl_block([], inv))
++    k = 0
++    for part in range(8):
++        ctrls = []
++        for _ in range(n_s * per // 8):
++            ctrls.append(_sl_ctrl(f"C{k}", surfaces=[f"S{k % n_s}"], evidence_refs=[],
++                                  source={"kind": "requirement", "claim": f"要求 {k}", "decision_ref": "Systems/SlPay#d1"}))
++            k += 1
++        write(v, f"Systems/SlBulk{part}.md", "type: system\nstatus: done", body="# b\n" + _sl_block(ctrls))
++    check("G7 前置:每篇不超過單檔上限", all((v / "Systems" / f"SlBulk{p}.md").stat().st_size < 2 * MiB for p in range(8)))
++    t0 = _t.monotonic()
++    rc, doc, _err = _sl_inproc(v)
++    dt = _t.monotonic() - t0
++    check(f"G7 12000 條、4000 入口在 12 秒內(實測 {dt:.1f}s)", dt < 12 and rc == 0 and len((doc or {}).get("records", [])) == k,
++          f"rc={rc} {_err[:200]}")
++    # 3000 條 Invariant,每條各被一個控制項引用(分三篇放,每篇不超過單檔上限)
++    v2 = _sl_vault()
++    claims = [f"合約第 {i} 條" for i in range(3000)]
++    write(v2, "Systems/SlBigInv.md", "type: system\nstatus: done\nsummary: |-\n" + "\n".join(f"  KEY:★INVARIANT★ {c} [test:t_x]" for c in claims))
++    for part in range(3):
++        write(v2, f"Systems/SlRefs{part}.md", "type: system\nstatus: done", body="# r\n" + _sl_block([
++            _sl_ctrl(f"I{i}", evidence_refs=[], source={"kind": "invariant", "node": "Systems/SlBigInv", "exact_claim": c,
++                                                         "decision_ref": "Systems/SlPay#d1"})
++            for i, c in enumerate(claims) if i % 3 == part]))
++    t1 = _t.monotonic()
++    rc2, d2, _e2 = _sl_inproc(v2)
++    dt2 = _t.monotonic() - t1
++    check(f"G7 3000 條 Invariant 來源在 6 秒內(實測 {dt2:.1f}s)", dt2 < 6 and rc2 == 0 and len((d2 or {}).get("records", [])) == 3000,
++          f"rc={rc2} {str((d2 or {}).get('errors'))[:200]}")
++    # 總項目數上限
++    v3 = mkvault()
++    junk = v3 / "Projects" / "junk"
++    junk.mkdir()
++    mod = _load_lumos_inproc()
++    cap = mod._VAULT_SAFE_ENTRIES_MAX
++    check("G7 前置:項目上限是 50000", cap == 50000, str(cap))
++    for i in range(cap + 1):
++        (junk / f"x{i}.png").write_bytes(b"")
++    r3, d3 = _sl_json(v3)
++    check("G7 總項目數超過上限:enumeration_failed、退出 2", r3.returncode == 2 and any(
++        e.get("kind") == "enumeration_failed" and "項目" in e.get("detail", "") for e in (d3 or {}).get("errors", [])),
++          str((d3 or {}).get("errors"))[:300])
++
++
++def t_seclist_g8_key_rules():
++    """G8:子計劃〈鍵的必填規則〉逐項反例:每個都要列錯誤並退出 2,同庫正常項照列。"""
++    cases = [
++        ("id 帶空白", _sl_ctrl("a b"), "invalid_record"),
++        ("id 中文", _sl_ctrl("中文"), "invalid_record"),
++        ("id 帶斜線", _sl_ctrl("a/b"), "invalid_record"),
++        ("unclassified 與 security 並存", _sl_ctrl("K-UNC", concerns=["unclassified", "security"]), "invalid_record"),
++        ("concerns 空", _sl_ctrl("K-EMPTY", concerns=[]), "invalid_record"),
++        ("concerns 重複", _sl_ctrl("K-DUP", concerns=["security", "security"]), "invalid_record"),
++        ("active 帶 retirement_reason", _sl_ctrl("K-RR", retirement_reason="x"), "invalid_record"),
++        ("active 帶 replacement_id", _sl_ctrl("K-RI", replacement_id=None), "invalid_record"),
++        ("retired 缺 retirement_reason", {k: v for k, v in _sl_ctrl("K-NORR", lifecycle="retired", replacement_id=None).items()},
++         "invalid_record"),
++        ("retired 的 retirement_reason 空白", _sl_ctrl("K-RB", lifecycle="retired", retirement_reason="  ", replacement_id=None),
++         "invalid_record"),
++        ("retired 的 replacement_id 是數字", _sl_ctrl("K-RN", lifecycle="retired", retirement_reason="x", replacement_id=7),
++         "invalid_record"),
++        ("retired 的 replacement_id 指自己", _sl_ctrl("K-SELF", lifecycle="retired", retirement_reason="x", replacement_id="K-SELF"),
++         "reference_error"),
++        ("retired 的 replacement_id 指不存在", _sl_ctrl("K-GONE", lifecycle="retired", retirement_reason="x", replacement_id="NOPE"),
++         "reference_error"),
++        ("expires_on 月份 13", _sl_ctrl("K-D13", exception={"decision_ref": "Systems/SlPay#d1", "reason": "r", "expires_on": "2026-13-01"}),
++         "invalid_record"),
++        ("expires_on 沒有連字號", _sl_ctrl("K-DNH", exception={"decision_ref": "Systems/SlPay#d1", "reason": "r", "expires_on": "20261018"}),
++         "invalid_record"),
++        ("exception 理由空白", _sl_ctrl("K-ER", exception={"decision_ref": "Systems/SlPay#d1", "reason": " ", "expires_on": "2026-12-01"}),
++         "invalid_record"),
++        ("assets 指到不存在", _sl_ctrl("K-AS", assets=["NOPE"]), "reference_error"),
++        ("surfaces 指到不存在", _sl_ctrl("K-SU", surfaces=["NOPE"]), "reference_error"),
++        ("evidence kind 不支援", _sl_ctrl("K-EK", evidence_refs=[{"kind": "vibes", "node": "Verification/SlPass.md"}]), "invalid_record"),
++        ("evidence 重複", _sl_ctrl("K-ED", evidence_refs=[{"kind": "behavior", "node": "Verification/SlPass.md"}] * 2), "invalid_record"),
++        ("required_evidence 不支援", _sl_ctrl("K-RE", required_evidence=["pentest"]), "invalid_record"),
++        ("reported_status 不支援", _sl_ctrl("K-RS", reported_status="secure"), "invalid_record"),
++        ("決策引用只寫 #dN", _sl_ctrl("K-DR", source={"kind": "requirement", "claim": "短寫", "decision_ref": "#d1"}), "reference_error"),
++    ]
++    for label, ctrl, kind in cases:
++        v = _sl_vault()
++        write(v, "Systems/SlGood.md", "type: system\nstatus: done", body="# g\n" + _sl_block([_sl_ctrl("GOOD-1")]))
++        if label == "retired 缺 retirement_reason":
++            ctrl.pop("retirement_reason", None)
++        write(v, "Systems/SlCase.md", "type: system\nstatus: done", body="# c\n" + _sl_block([ctrl]))
++        r, doc = _sl_json(v)
++        hit = [e for e in (doc or {}).get("errors", []) if e.get("kind") == kind and e.get("node") == "Systems/SlCase.md"]
++        check(f"G8 {label}:列 {kind}、退出 2、正常項照列", r.returncode == 2 and bool(hit) and "GOOD-1" in _sl_ids((doc or {}).get("records")),
++              f"rc={r.returncode} {str((doc or {}).get('errors'))[:300]}")
++    for label, sv in (("schema_version 是 true", True), ("schema_version 是 1.0", 1.0), ("schema_version 是字串", "1")):
++        import json as _j
++        v = _sl_vault()
++        write(v, "Systems/SlGood.md", "type: system\nstatus: done", body="# g\n" + _sl_block([_sl_ctrl("GOOD-1")]))
++        write(v, "Systems/SlSv.md", "type: system\nstatus: done",
++              body="# s\n```lumos-security-v1\n" + _j.dumps({"schema_version": sv, "controls": [_sl_ctrl("SV-1")]}) + "\n```\n")
++        r, doc = _sl_json(v)
++        check(f"G8 {label}:列錯誤、不登記、退出 2", r.returncode == 2 and "SV-1" not in _sl_ids((doc or {}).get("records"))
++              and any(e.get("node") == "Systems/SlSv.md" for e in (doc or {}).get("errors", [])), str((doc or {}).get("errors"))[:300])
++
++
++def t_seclist_g8_read_request_bound():
++    """G8(S10 補):讀取請求真的不超過「剩餘總額度+1」;檔案在 fstat 之後長大也不多讀、不採用。"""
++    import os as _os
++    mod = _load_lumos_inproc()
++    v = mkvault()
++    p = v / "Systems" / "Grow.md"
++    p.write_bytes(b"x" * 50)
++    reads = []
++    orig_os = mod.os
++
++    class _OsSpy:
++        def __getattr__(self, k):
++            return getattr(orig_os, k)
++
++        def read(self, fd, n):
++            if not reads:
++                with open(p, "ab") as f:      # fstat 之後、第一次讀之前長大
++                    f.write(b"y" * 1000)
++            reads.append(n)
++            return orig_os.read(fd, n)
++    root = _os.open(str(v), _os.O_RDONLY | _os.O_DIRECTORY)
++    mod.os = _OsSpy()
++    try:
++        st0, _st1, data, why = mod._vault_safe_read_rel(root, "Systems/Grow.md", 100)
++    finally:
++        mod.os = orig_os
++        _os.close(root)
++    check("G8 前置:檔案在讀取前長大了", p.stat().st_size == 1050 and st0 is not None and st0.st_size == 50)
++    check("G8 讀取請求不超過剩餘額度+1(101)", reads and max(reads) <= 101 and sum(reads) <= 101 + 101, str(reads))
++    check("G8 長大的檔不回內容", data is None and why == "total_size_exceeded", f"{why} {None if data is None else len(data)}")
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
