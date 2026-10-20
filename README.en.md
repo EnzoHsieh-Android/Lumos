@@ -60,6 +60,23 @@ Linked notes form a “graph”; each note is a “node” covering a plan, feat
 
 **Fixing a defect must also preserve behavior that already worked.** Revision-round instructions pin the before and after versions, check that the original problem fails before and passes after, and separately check that existing behavior passes on both versions. Fresh reviewers then examine repair side effects. Repairs mixed with refactoring retain intermediate verification points; selected high-risk preservation cases also check whether tests detect degradation. `lumos loop fix-check` checks repair records and post-fix tests, but is advisory and does not replace these checks or the next review. Evidence references, snapshots, and records are also checked before accepting them. See the [code review instructions](skills/lumos-code-loop/SKILL.md).
 
+### How security is reviewed
+
+Business rules (★INVARIANT★) are agreements that must not break. Security runs as a separate track so one command can show which security guardrails are not yet soundly verified, and "soundly" means backed by tool results that actually ran, not a form filled in until it passes.
+
+- **Asking the right security questions**: Plans get security questions at the requirements, architecture, verification, and delivery stages. The questions come from a 14-category threat table (object authorization, authentication, injection, flow abuse, data exposure, outbound requests, secrets, supply chain, audit logging, and more, mapped to STRIDE, OWASP ASVS 5.0.0, WSTG, and the API Top 10). Claude and Codex review each table version independently; a new version is approved only when both agree.
+- **Inventory of guardrails**: `lumos security list` shows which security guardrails a project has registered, how far their evidence has been checked, and which entry points have no guardrail; `--questions` turns uncovered cells into candidate questions. It only takes inventory and runs no tests, so its result is always `not_assessed`: a complete inventory does not mean the product is secure.
+- **Evidence must come from tools that actually ran**: Each guardrail needs minimum evidence kinds for its category, and the gate reads tool output and judges it itself: JUnit tests, fault injection (guard kill), k6 load and concurrency summaries, and SARIF scan results (for example Semgrep, gitleaks, OSV-Scanner, ZAP). Scans also need a coverage proof showing they actually scanned something. Reports are bound to versions and hashes, so changing the code without re-collecting evidence makes it stale. `lumos security evidence` runs the same judgment as the push gate.
+- **Blocked on push**: In every project connected to lumos, `code-loop check` in pre-push and CI adds a security evidence gate. Failed, stale, or missing evidence blocks the push, tag pushes included.
+- **Only the user can sign exceptions**: To let something through temporarily, the user signs an approval with their own SSH key. It goes into the append-only `.lumos/security-approvals.jsonl` and expires after at most 30 days. Items that need human judgment need a review record: an AI review must say it is AI and cannot release human-accountability judgments; a human review counts only when the user has signed it with their key.
+- **lumos reads, never runs or installs**: Tools live in the consumer project, which runs them and commits their output; lumos stays dependency-free. Before a project uses a tool such as k6, gitleaks, OSV-Scanner, Semgrep, or ZAP, the user approves each one: install source, pinned version, time budget, and allowed targets. AI does not install them on its own.
+
+The limits of this layer, stated plainly:
+
+- **It guards against slips, not deliberate forgery**: Under the trust principle, an AI operating normally is assumed honest. The gate catches forgotten evidence refreshes, evidence attached to the wrong thing, and leftover settings; it cannot stop an AI that deliberately generates its own key and signs, or writes the approval file by hand.
+- **`--no-verify` skips the local gate**: CI goes red only after the push and cannot take back a commit already on the main branch.
+- **Qualified evidence is not a secure product**: Consistent tool evidence shows the results match the version; it does not show the criteria were right or the report is trustworthy.
+
 Review is one layer. Risk classification, AI review, approval rules, external rules (linters), and tests each have gaps. Stacking them makes it harder for a problem to pass through them all: the Swiss cheese model.
 
 <p align="center">
