@@ -70,3 +70,9 @@ PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器
 ## 測試品質接入標準的前端節(2026-10-15,[[Projects/前端知識與風險詞_計劃]] 做法 8)
 
 - lumos-project-notes 的 `commands/test-quality-standard.md` 加〈網頁前端(Vitest／Jest + Testing Library)的撰寫補充〉:假計時器下 user-event 要設 `advanceTimers`、fetch 替身要能控制先後、同輪連點用同步的 `fireEvent.click` 兩次;`03-寫回圖譜.md`〈實作測試品質〉加一句指過去。綁的測試 `t_test_quality_standard_frontend_section`。
+
+## 給安全證據閘用的讀法(2026-10-20,[[Projects/安全主張驗收閘_計劃]])
+
+- `junit()` 改成自訂 XMLParser target 邊解析邊數深度(超過 64 層立刻停)、每個案例處理完就清掉元素,不先建整棵樹;拒收改丟帶原因代碼的 `JUnitRejected`(`ValueError` 子類別,既有呼叫端照樣接得到),訊息字串與優先序不變。C 版解析器的 iterparse 不收自訂 builder,所以不用 iterparse。拒 DTD 只有 `NoDtdTreeBuilder` 一處(target 委派給它),丟 `JUnitRejected("report_unparseable", 原訊息)`,安全證據閘不比對訊息字串;XML 語法錯照舊是 `ET.ParseError`(型別本身就分得出來)[test:t_secev_r1_junit_dtd_typed_rejection]。
+- `load_receipt` 抽成只吃資料的 `load_receipt_data(get)`、核對本體抽成 `fault_check(phases, target)`;`check()` 改呼叫它們,輸出不變。閘門從提交樹讀三份 capture 重跑同一套,不採信作者存的結果檔;拒收丟帶代碼的 `ReceiptRejected`。說明的家在 [[Systems/安全證據閘]]。
+- REVISIT:[when-status:Projects/安全主張驗收閘_計劃=done][by:2027-01-31] 照 [[Verification/測試品質第四輪修補驗證]] 的 revalidate_when 重驗那篇(這次改了拒收型別與 bundle 指紋)

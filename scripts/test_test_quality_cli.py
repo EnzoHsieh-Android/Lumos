@@ -601,7 +601,7 @@ class QualityCLI(unittest.TestCase):
         if old:
             core = target / "test_quality.py"
             current = core.read_bytes()
-            previous = current.replace(b"    validate_suite_counts(root)\n", b"")
+            previous = current.replace(b"    validate_suite_counts(st.suites)\n", b"")
             self.assertNotEqual(
                 previous, current, "old package fixture must omit summary validation"
             )
@@ -778,7 +778,7 @@ class QualityCLI(unittest.TestCase):
 
     def test_source_bytes_not_stale_bytecode_authorize_capture(self):
         target = self.copied_bundle()
-        self.plant_stale_bytecode(target / "test_quality.py", b"    validate_suite_counts(root)\n", b"")
+        self.plant_stale_bytecode(target / "test_quality.py", b"    validate_suite_counts(st.suites)\n", b"")
         (self.root / "source.txt").write_text("production")
         (self.root / "tests.txt").write_text("independent")
         xml = '<testsuite tests="1" failures="1"><testcase name="x"/></testsuite>'

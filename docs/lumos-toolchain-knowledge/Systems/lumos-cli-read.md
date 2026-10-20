@@ -16,7 +16,7 @@ summary: |-
   WHY:重複 ID 與同一來源被兩個 ID 登記的控制項 registration_valid=false、不算入口映射,另列 invalid_registration_control_ids [出處:2026-10-20 代碼審 r3 外家 Codex] [因:兩篇各一條同 ID 的合法控制項時入口原本算已映射] [test:t_seclist_r3_duplicate_not_mapped]
   WHY:--vault 先 abspath 正規化,檢查、開檔與報告都用這條;原始字串照字面逐段走,遇到 .. 而前一段是捷徑就擋 [出處:2026-10-20 代碼審 r3 資安、邊界、通才席] [因:abspath 把 link/.. 字面消掉、作業系統卻先跟 link 再往上,檢查與開檔落在不同地方] [test:t_seclist_r3_vault_dotdot]
   WHY:_secinv_show 先快篩:字串 isprintable() 而且不含預設可忽略全表與像空白的字(兩張既有表組成的正則)就原樣回傳,命中才逐字 _kill_esc;結果對全部碼位逐一比對相同 [出處:2026-10-20 代碼審 r3 資源席] [因:hidden=True 逐字判定讓文字模式慢一倍] [test:t_seclist_r3_show_fast_path]
-  WHY:security list 印到 stdout 或 stderr、來自檔名或登記內容的字串一律經 _secinv_show(hidden=True、每欄最多 2000 字),選圖譜失敗的 stderr 也一樣;文字模式的覆蓋區照 JSON 的鍵逐一印 [出處:2026-10-20 代碼審 r2 資安、邊界、架構對齊、正確性、通才席與外家 Codex] [因:選圖譜失敗原樣印路徑,目錄名可藏 ESC 與換行偽造的系統指示;新欄位只接到 JSON、文字漏列] [test:t_seclist_r2_output_escape]
+  WHY:security list 印到 stdout 或 stderr、來自檔名或登記內容的字串一律經 _secinv_show(hidden=True、每欄最多 2000 字),選圖譜失敗的 stderr 也一樣;文字模式的覆蓋區:cells、cell_errors、applicability_pending_cells 三個鍵交給格子區印(預設只印各狀態格子數與 open 格,--all 才逐格),其餘鍵逐一照 JSON 的鍵名印 [出處:2026-10-20 代碼審 r2 資安、邊界、架構對齊、正確性、通才席與外家 Codex] [因:選圖譜失敗原樣印路徑,目錄名可藏 ESC 與換行偽造的系統指示;新欄位只接到 JSON、文字漏列] [test:t_seclist_r2_output_escape]
   WHY:security list 選圖譜時從 repo 根(照字面往上找 .git)到圖譜之間每一層都用共用的 _repo_path_unsafe 判捷徑,自動找與 --vault 共用 [出處:2026-10-20 代碼審 r2 資安席、外家 Codex] [因:docs 這層是捷徑時會讀到 repo 外並印出別的專案的合約;圖譜根的 O_NOFOLLOW 只擋最後一段] [test:t_seclist_r2_docs_symlink]
   WHY:security list 的錯誤清單每篇最多逐筆 50 筆,多的併成一筆 errors_truncated(references_valid 改數「試著記過」的筆數,不看清單長度;被併掉的讀取類錯誤照樣讓 read_complete=false);決策表、路徑小寫索引、合約宣稱計數在一次盤點裡各建一次;inventory 查重用 set [出處:2026-10-20 代碼審 r2 資源、正確性席] [因:8MB 的空物件產出 279 萬筆錯誤、峰值 5GB;3000 決策×3000 控制項 46 秒;5.5 萬 asset 17 秒] [test:t_seclist_r2_error_cap]
   WHY:有界讀取的迴圈只有 _read_fd_capped 一份,跑滿回顧一族的 _retro_read_bytes 與 security list 的 _vault_safe_read_rel 共用;security list 用 dirfd 版逐層開檔是 _trusted_private_dir 那條「dirfd 版邊際價值低」決定的已知例外 [出處:2026-10-20 代碼審 r2 架構對齊席;[[Projects/資安護欄唯讀盤點_計劃]] d4] [因:讀的是不可信消費專案、輸出給 AI 當證據,先檢查再讀擋不住置換] [test:t_seclist_g8_read_request_bound]
@@ -293,3 +293,11 @@ WHY:`lumos enforcement` 在附加工作樹裡認得「core.hooksPath 指向同�
 - `_lint_new_rules` 多一條 `_nl_rule_pending_questions`(擋不擋照 note_lint.gate):開頭欄位 `pending_questions` 讀不懂逐處報檔案行號與該怎麼改;讀得懂時查必附、決策連結(格式、存在、沒作廢)、已驗的測試名在本篇驗收條款定義行的 `[test:]` 裡(不建平台測試索引;比法跟條款綁定同一套平台前綴規則 `resolve_test_refs`,單平台專案不切前綴)、不可逆不得自答、阻塞不得延後。[test:t_qfm_lint_attachments]
 - 讀不懂時 lint 逐處報檔案行號(每一種寫法各自一條斷言)。[test:t_qfm_strict_parse_fail_closed]
 - 文法寫死在這個欄位專用的 `_pq_scan`(題目 2 格 `- id:`、鍵 4 格、值只收 `_yaml_quote` 寫得出的三種、拼錯的欄位名也擋;不掛在 `parse_decisions` 底下,決策清單的文法不同),規格閘、lint、`pitfalls --stage`、兩支寫入指令都呼叫同一支 `pq_parse`。已驗的測試名照條款綁定那一套平台前綴規則比(`resolve_test_refs`)。同一次判定裡每篇的決策只解析一次。
+
+## security list 的 schema v2 與格子(2026-10-20,[[Projects/安全主張驗收閘_計劃]]〈一〉、[[Projects/資安風險提問分階段_計劃]])
+
+- 雙讀:每一塊圍欄照自己的 `schema_version`(1 或 2)讀,同一庫可混用;v2 多認 `considerations`(頂層)、inventory 的 `actors` 與 surfaces 的 `kind`、`actor_ids`、`boundary_crossed`、controls 的 `threat_categories`、`actor_ids`、`threat_table_version`、`question_refs`,證據種類擴成十一種、例外多 `compensating` 與 `covers_kinds`;v1 塊出現 v2 鍵照舊是未列出的欄位。缺 `threat_categories` 的護欄(含 v1)列 `missing_field`。
+- 護欄的 `assets`、`surfaces` 放行保留字面值 `@repo`(整個部署單位);其他 `@` 開頭照舊 reference_error。
+- coverage 多三區:`cells`(入口 × 資產 × 類別,三類再乘角色;類別表在 [[Systems/資安威脅類別表]])、`cell_errors`(格子層錯誤,不進 errors、不改退出碼)、`applicability_pending_cells`。security list 不驗章(維持不執行程序):有 considerations 的格子標 `considered_unverified:<outcome>`;算不算數由 [[Systems/安全證據閘]] 驗核可鏈後判。讀取不完整或沒有有效 inventory 時 cells 整區 unknown;格子數超過 100000 只給計數。
+- 文字輸出預設只印各狀態格子數與 open 格,`--all` 逐格;`--questions [--plan <計劃>] [--limit N]` 依 open 格輸出候選題(帶 `[cell:<id>]`、尾端附安全失敗附問;`--plan` 已有同一個 cell id 的不再輸出),只輸出不寫檔。
+- 共用讀法:`_secinv_report(vault)`(security list 與 spec-gate 共用);`_secinv_blocks` 的圍欄標記參數化(證據圍欄 `lumos-evidence-v1` 同一支邊界判定);待決問題連結的節點解析抽成 `_pq_node_target`(決策連結與護欄的 question_refs 共用)。綁的測試在 `t_seccell_*` 與 `t_secev_s46_v1_v2_mixed`。

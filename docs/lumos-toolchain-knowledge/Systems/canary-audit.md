@@ -91,7 +91,7 @@ related:
 aliases:
   - test-the-tester
 kill_recipes: |-
-  [{"invariant": "canary record/second 回報成功", "test": "t_canary_record_persist", "file": "scripts/lumos", "old": "    print(f\"canary record: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\\n    {path.resolve()}\",\n          file=sys.stderr)\n    return 2", "new": "    print(f\"canary record: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\\n    {path.resolve()}\",\n          file=sys.stderr)\n    return 0", "note": "讀回找不到那筆卻回成功:使用者以為記了,帳上沒有"}]
+  [{"invariant": "canary record/second 回報成功", "test": "t_canary_record_persist", "file": "scripts/lumos", "old": "    print(f\"{label}: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\\n    {path.resolve()}\",\n          file=sys.stderr)\n    return 2", "new": "    print(f\"{label}: 落盤自驗失敗——系統說寫成功了,但讀回來找不到這一筆,這筆不算記成功:\\n    {path.resolve()}\",\n          file=sys.stderr)\n    return 0", "note": "讀回找不到那筆卻回成功:使用者以為記了,帳上沒有"}]
 about_code:
   - scripts/lumos
 ---

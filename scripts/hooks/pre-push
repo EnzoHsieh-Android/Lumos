@@ -31,6 +31,7 @@ while IFS= read -r _line; do
 done
 
 _ZERO="0000000000000000000000000000000000000000"
+_sec_done=""     # 這次推送已判過安全證據的提交:「 sha=回傳碼」一串(bash 3.2 沒有關聯陣列;多個 tag 指同一個提交只判一次)
 _EMPTY_TREE="$(git hash-object -t tree /dev/null 2>/dev/null || true)"
 
 # 一個 ref 的檢查範圍:$1=remote_sha $2=local_sha。
@@ -77,6 +78,7 @@ pp_block_range_for() {
 # 中斷就停:note-shape|筆記形狀擋|筆記形狀擋 note-shape
 # 中斷就停:spec-gate|雙向門放行檢查(spec-gate)|雙向門放行 spec-gate --push-check
 # 中斷就停:code-loop|code-loop check|代碼審判定 code-loop check
+# 中斷就停:code-loop|安全證據判定(--security-only)|推 tag 時的安全證據判定 code-loop check --security-only
 # 中斷就停:drift|存量漂移檢查|存量漂移 drift check
 # 中斷就停:note-audit|回頭重讀檢查|回頭重讀(帶 --gate 的那一支)
 # 刻意不接的(被中斷時它們本來就走放行,不會把擋下變成放行;中斷照樣由下一支清單上的呼叫或下面 INT/TERM 的陷阱接住):
@@ -139,6 +141,7 @@ pp_cl_reason() {
     dispositions) echo "棧別檢核題表態不完整" ;;
     lint_new) echo "這次改動帶進了新的告警" ;;
     review) echo "高風險改動沒有有效的代碼審留痕" ;;
+    security_evidence) echo "資安護欄的證據不合格(或判不清)" ;;
     *) echo "代碼審判定擋下(細節在上面)" ;;
   esac
 }
@@ -596,7 +599,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
         echo ""
         printf '%s\n' "$_cl_out"
         echo ""
-        echo "逃生路依上面 check 講的原因走:缺表態 → 先表態(上面的 dispositions 指令);高風險缺審查留痕 → 審過 lumos code-loop pass --note、或刻意不審 lumos code-loop skip --note \"為什麼\";合約測試紅 → 修測試;新增告警 → 照上面的 lint-waive 指令或修掉。緊急硬推 git push --no-verify(本機不留痕,CI 會把這次推送標紅)"
+        echo "逃生路依上面 check 講的原因走:缺表態 → 先表態(上面的 dispositions 指令);高風險缺審查留痕 → 審過 lumos code-loop pass --note、或刻意不審 lumos code-loop skip --note \"為什麼\";合約測試紅 → 修測試;新增告警 → 照上面的 lint-waive 指令或修掉;安全證據不合格 → 重收證據,真要先放行由使用者在核可鏈簽例外或 gate_setting(不准跳過檢查)。緊急硬推 git push --no-verify(本機不留痕,CI 會把這次推送標紅)"
         echo ""
       } >&2
       # 記幾筆:rc1 時不論那一行在不在、解析出幾筆,至少一筆;每個種類各一筆(閘名都是 code-loop,閘數只算一道)
@@ -614,10 +617,43 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       [[ "$_cl_n" -gt 0 ]] || pp_record_block code-loop "$_rref" "$(pp_cl_reason "")"
     else
       # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常,128 以上除外):fail-open 放行
-      [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘' >&2 || true; }
+      [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘|安全證據' >&2 || true; }
     fi
   else
-    # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,一律 advisory(r2 外家 F7)
+    # 非分支 remote_ref(tag/其他 namespace):無 branch marker 通道,其他幾道一律 advisory(r2 外家 F7);
+    # ★安全證據那一道照擋★(Projects/安全主張驗收閘_計劃〈四〉:推得出去的東西都判過,不只分支):只跑那一道,任何非 0 都當擋下
+    # (128 以上是被中斷,停下);舊版 lumos 沒有 --security-only 就不叫(探法同上面的 --keep-going:讀檔找旗標字樣),但講一句。
+    # ★回傳碼語意跟上面分支那條路相反,是刻意的★:分支路徑的 code-loop check 是「rc1 擋、其餘非 0 異常 fail-open 放行」(舊慣例,
+    # 那裡有代碼審留痕與 CI 兜底);這裡只有安全證據一道,--security-only 自己保證判不清回 1,任何非 0 都不能當放行。
+    # 同一次推送好幾個 tag 指同一個提交時只判一次、共用結果(判定只看提交、主線 tip 與日期,同一個提交答案相同);
+    # 指不同提交的 tag 各判一次,省不了(每個提交的證據不同)。
+    if grep -q -- '"--security-only"' "$GRAPHCTL" 2>/dev/null; then
+      sec_rc=0
+      _sec_prev=""
+      case " $_sec_done " in *" $_lsha="*) _sec_prev="${_sec_done##* $_lsha=}"; _sec_prev="${_sec_prev%% *}" ;; esac
+      if [[ -n "$_sec_prev" ]]; then
+        sec_rc="$_sec_prev"
+        _sec_out="(同一個提交 ${_lsha:0:12} 這次推送已判過,沿用結果)"
+      else
+        _sec_out="$("$PY" "$GRAPHCTL" code-loop check --security-only --at-sha "$_lsha" --repo "$REPO_ROOT" 2>&1)" || sec_rc=$?
+        _sec_done="$_sec_done $_lsha=$sec_rc"
+      fi
+      pp_stop_if_signaled "$sec_rc" "安全證據判定(--security-only)"
+      if [[ "$sec_rc" -ne 0 ]]; then
+        {
+          echo ""
+          printf '%s\n' "$_sec_out"
+          echo ""
+          echo "逃生路:推的是 $_rref,安全證據那一道照樣判。重收證據;真要先放行由使用者在核可鏈簽例外或 gate_setting 降成只提醒(不准跳過檢查)。"
+          echo ""
+        } >&2
+        pp_record_block code-loop "$_rref" "$(pp_cl_reason security_evidence)"
+      else
+        [ -n "$_sec_out" ] && { printf '%s\n' "$_sec_out" | grep -E '提醒|安全證據|沿用結果' >&2 || true; }
+      fi
+    else
+      echo "提醒:這台機器的 lumos 太舊(沒有 code-loop check --security-only),推 $_rref 時安全證據那一道沒判;跑 lumos update 之後再推,CI 的 security_tag 工作會事後補判。" >&2
+    fi
     [[ "$_tier_high" -eq 1 ]] && echo "提醒:這次推的是 tag 不是分支,高風險檢查只提醒不擋(advisory)。" >&2
     if printf '%s' "$pf_json" | grep -q '"stack_questions_applicable": *{"'; then
       {

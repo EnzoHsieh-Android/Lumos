@@ -1,0 +1,421 @@
+{
+  "base": "474346765ea9546241fed3dbfd95a59d5d09e4ad",
+  "groups": [
+    {
+      "id": "G1",
+      "category": "boundary",
+      "findings": [
+        "P1",
+        "B2",
+        "B1"
+      ],
+      "note": "判定層一律不兜例外:拿掉 _secev_judge_tq 在 fault_check 外的寬 except 與 _secapr_verify 在驗章外的寬 except;fault_check 會讀、load_receipt_data 沒驗的收據欄位改在讀法 _secev_tq_phase 驗;收據與覆蓋證明的讀檔搬出讀法接型別錯的 try;_SecevDataError 從沒有丟出點,整個拿掉(讀法本來就回代碼);日期與時間離上下限不到 366 天在 _secinv_date 與 _secev_iso 同一條規則判看不懂(S67)",
+      "prior": {
+        "why_failed": "上一輪只收窄了外層 _secev_judge_item 的 except,另設一個讀法要丟的例外類別卻沒接上任何丟出點;內層 fault_check 外與核可鏈驗章外的寬 except 沒一起掃,注入測試又是把整支判定函式換掉,裡面那層 except 從沒走到;日期只擋了換到 UTC 會溢位的一邊",
+        "new_approach": "換整類形狀:判定碼與它呼叫的程式一律不寫接一般例外的 except,外來型別錯只在讀法判成代碼(讀法回代碼、不丟例外,拿掉沒有丟出點的例外類別);測試改成掃描式:對每支判定函式遞移呼叫到的每支工具內函式、ctx 方法與 fault_check 在判定進行中各注入 KeyError 與 IndexError,斷言原樣穿出單項判定、端到端整道 evaluation_error;日期一條上下限規則管兩支讀法"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:_secev_judge_tq",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_judge_layer_no_catchall"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_tq_phase",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_judge_layer_no_catchall"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_coverage_ok",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_judge_layer_no_catchall",
+            "t_secev_r1_type_gate_coverage_bool"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secapr_verify",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_judge_layer_no_catchall",
+            "t_secev_r1_type_gate_backing_and_chain"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_judge_item",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_judge_layer_no_catchall",
+            "t_secev_s42_deep_and_errors"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secinv_date",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_extreme_dates_read_layer"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_iso",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_extreme_dates_read_layer",
+            "t_secev_r2_vulndb_extreme_date_single_item"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G2",
+      "category": "path",
+      "findings": [
+        "C2",
+        "B3"
+      ],
+      "note": "收據快照路徑換成 repo 路徑:新增 _secev_tq_map,前綴從 repo 根與「cwd 尾端幾層剛好是樹上資料夾」裡挑快照檔在樹上找得到最多而且唯一的那個,挑不出來判 receipt_source_unmapped 並講 cwd 對不到哪一層;指紋比對與故障相關性共用同一份換算;比的仍是收據自帶的 sha256",
+      "prior": {
+        "why_failed": "上一輪新加收據指紋比對時把收據的 cwd 當成 repo 根,只造了在 repo 根(或它的暫存複本)收證的樣本,沒想到 monorepo 在子目錄收證;換算不出來時訊息還沿用「檔改了」",
+        "new_approach": "不再假設 cwd 就是 repo 根:收據不記 repo 根,所以前綴用樹驗出來(唯一最多命中),驗不出來才判對不到並照實講;兩條用到路徑的檢查共用同一份換算,另造子目錄收證、暫存複本對不到兩種樣本"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:_secev_tq_map",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_subdir_cwd"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_tq_source_problems",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_subdir_cwd",
+            "t_secev_r2_fault_receipt_source_changed",
+            "t_secev_r3_fault_receipt_context_gone"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_tq_relevance",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_subdir_cwd",
+            "t_secev_r2_fault_evidence_unrelated"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G3",
+      "category": "perf-memory",
+      "findings": [
+        "R1"
+      ],
+      "note": "判定讀提交樹一律走 _SecevCtx.read_many:沒扣過的 blob 先扣整道讀取總額度(額度預掃扣完剩下的 budget_left),扣不下不讀進記憶體、判 evidence_too_large;收據的每份檔、快照對照的原始碼、校準、覆蓋、k6 腳本、背書都走這一支;收據四個相位改成一次批次讀(每次判定的 git 子程序 76 個降到 50 個)",
+      "prior": {
+        "why_failed": "上一輪盤了每個 git 呼叫點的時間預算,但讀取總額度只在預掃那一步算證據項的 path、coverage_path、calibration_path;新加的收據快照讀取另呼叫樹的批次讀取、沒帶總額度,舊的收據讀法也一樣",
+        "new_approach": "不逐個呼叫點補 max_total:把總額度收進判定唯一的讀取出口 ctx.read_many(按 blob 扣、同一份內容不重扣),所有證據相關讀取都改走它;用 40 支 15MB 的收據快照實量會擋"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:_SecevCtx",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_reads_total_budget"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_budget_prepass",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_reads_total_budget",
+            "t_secev_s41_s43_limits_and_cache"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_tq_phase",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_reads_total_budget"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_tq_source_problems",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_receipt_reads_total_budget"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G4",
+      "category": "other",
+      "findings": [
+        "C1"
+      ],
+      "note": "擋下訊息的「接下來」只在沒有整道代碼、沒有護欄層時建議簽例外;否則講例外蓋不掉哪一層、要先修;「或」與 gate_setting 之間補空格",
+      "prior": {
+        "why_failed": "上一輪讓訊息跟著原因代碼走時,只看有沒有證據種類在擋,沒扣掉同時在場、例外蓋不掉的護欄層與整道代碼;測試只造了單獨一層的樣本",
+        "new_approach": "建議簽例外的條件改成「例外蓋得掉全部擋下原因」,蓋不掉時把原因寫進接下來;測試造護欄層加證據層、整道代碼加證據層兩種混合樣本"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:_cl_sec_block_lines",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_block_message_exception_only_when_it_covers",
+            "t_secev_r2_block_message_follows_code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G5",
+      "category": "escaping",
+      "findings": [
+        "X1",
+        "X2",
+        "A2",
+        "G7"
+      ],
+      "note": "資安族指令的文字輸出收成單一出口 _secinv_say(拿掉十支指令裡的裸 print 與 _cl_say_sec_block 自寫的逐行跳脫);security list --questions 的題句包進 _secinv_framed 資料框;security approvals payload 給人看的那份走 _secinv_say 跳脫、有跳脫時另印提醒,--out 存原樣位元組;注入測試加 CR、U+202E、U+2028、U+2029、零寬字",
+      "prior": {
+        "why_failed": "上一輪加了統一出口卻沒把同一批指令裡的裸 print 收乾淨,出口有三種寫法;--questions 與 payload 這兩條輸出路徑沒列進盤點;注入測試只用換行與 ESC,局部跳脫也照綠",
+        "new_approach": "出口只留一支:逐支指令把文字輸出改走 _secinv_say,並加一支結構測試守「這幾支指令沒有裸 print」;補盤 --questions 與 payload 兩條路徑;注入字串加 CR、雙向覆寫、行段分隔與零寬字,證明走的是統一出口(局部跳脫的變體會紅)"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:_secinv_say",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_security_output_single_exit",
+            "t_secev_r3_block_message_all_controls"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_cl_say_sec_block",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_block_message_all_controls",
+            "t_secev_r3_security_output_single_exit"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_seccell_cmd_questions",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_questions_framed"
+          ]
+        },
+        {
+          "at": "scripts/lumos:cmd_security_approvals",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_payload_display_escaped",
+            "t_secev_r2_approval_commands_sanitized"
+          ]
+        },
+        {
+          "at": "scripts/lumos:cmd_codeloop_security_approval_add",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_security_output_single_exit"
+          ]
+        },
+        {
+          "at": "scripts/lumos:cmd_codeloop_security_backing",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_security_output_single_exit"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G6",
+      "category": "other",
+      "findings": [
+        "A1",
+        "A3",
+        "A4"
+      ],
+      "note": "符號連結:_secev_append_target 改成資料夾那段直接用既有的 _note_audit_safe_dir、檔本身再過 _repo_path_unsafe;擋下訊息抽成 _repo_path_unsafe_why 一份,筆記內容審、核可鏈前置檢查、背書共用;截止時間收成 _secev_deadline_check 一支(_SecevCtx.tick、_SecevRun.tick 改呼叫它,_secapr_tick 拿掉),「剩餘預算算單次 git 逾時、沒時間丟逾時」收成 _secev_git_left,替掉六處複製的樣式",
+      "prior": {
+        "why_failed": "上一輪補符號連結守衛與時間預算時各在呼叫點就地寫,沒先找既有的資料夾守衛與截止時間檢查,同一件事長出第二、第三份",
+        "new_approach": "先找既有的再接:資料夾守衛直接用 _note_audit_safe_dir,訊息與兩個時間 helper 各留一份、其他地方都呼叫它;測試斷言三個入口印的是同一句"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:_secev_append_target",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_symlink_guard_docs_and_one_text",
+            "t_secev_r2_append_refuses_symlink"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_repo_path_unsafe_why",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_symlink_guard_docs_and_one_text"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_note_audit_safe_dir",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_symlink_guard_docs_and_one_text"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_deadline_check",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r2_snapshot_symlinks_within_budget",
+            "t_secev_s60_timeout_blocks"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_secev_git_left",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r2_snapshot_symlinks_within_budget",
+            "t_secev_r2_mainline_config_unreadable"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G7",
+      "category": "other",
+      "findings": [
+        "G1",
+        "G2",
+        "G3",
+        "G4",
+        "G5",
+        "G6",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "note": "測試缺口:docs/ 是連結時背書也擋;S13 預期格數照威脅類別表手數寫死;符號連結預算測試改數 git 子程序次數(上限 10)並把時間上限降到 15 秒;主線設定 mainline_unknown 的讀內容失敗、寫法不對、ref 不存在、查 ref 失敗各一支;golden 重產在 CI(GITHUB_ACTIONS=true)拿不到來源提交算紅,本機淺 clone 才略過並講補法;收據指紋、校準綁定、k6 型別閘三支共用一個 repo;S64 補沒綁的 context 檔被刪、S65 補沒有 behavior 證據的情境、d19 limitations 斷言新句特有字樣",
+      "prior": {
+        "why_failed": "上一輪新測試的預期值有的照抄實作篩選式、有的上限貼著舊預算,只證明沒爆、沒證明不再逐檔叫 git;條款的另一半(檔不在樹上、沒有 behavior 證據)與決策句沒有樣本;每個情境各建 repo 讓測試偏慢",
+        "new_approach": "每支先列要抓的壞改法,預期值改從規格手數、斷言直接數被守的量(git 次數),每個分支各造一個樣本;共用 fixture 降秒數;每支都對修補做改回壞的翻紅並記下變體與紅在哪條斷言"
+      },
+      "paths": [
+        {
+          "at": "scripts/test_lumos.py:t_secev_r3_symlink_guard_docs_and_one_text",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_symlink_guard_docs_and_one_text"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secq_r2_s13_entry_filter",
+          "status": "fixed",
+          "tests": [
+            "t_secq_r2_s13_entry_filter"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r2_snapshot_symlinks_within_budget",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r2_snapshot_symlinks_within_budget"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r3_mainline_unknown_branches",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_mainline_unknown_branches"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r2_golden_capture_reproduces",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r2_golden_capture_reproduces"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r2_fault_receipt_source_changed",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r2_fault_receipt_source_changed"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r2_s09_calibration_binding",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r2_s09_calibration_binding"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r1_type_gate_k6_reports",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r1_type_gate_k6_reports"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r3_fault_receipt_context_gone",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_fault_receipt_context_gone"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r3_fault_without_behavior",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_fault_without_behavior"
+          ]
+        },
+        {
+          "at": "scripts/test_lumos.py:t_secev_r3_limits_d19_sentence",
+          "status": "fixed",
+          "tests": [
+            "t_secev_r3_limits_d19_sentence"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G8",
+      "category": "other",
+      "findings": [
+        "I1"
+      ],
+      "note": "2000 筆核可鏈全驗章的耗時統一成實測最慢的 23.8 秒:Verification 舊段的「最壞約 13 到 20 秒」標作廢並改成 23.8 秒、82 MiB,scripts/lumos 的 _SECAPR_MAX_ENTRIES 註解同步;本輪重量的數字另寫在第三輪那一節",
+      "prior": {
+        "why_failed": "上一輪新寫的效能段落用了重量的 23.8 秒,沒回頭 grep 同一件事在舊段與程式註解的寫法",
+        "new_approach": "改數字時 grep 全 repo 同一個量(2000 筆、13 秒、13 到 20 秒)逐處改,舊數字照實標作廢"
+      },
+      "paths": [
+        {
+          "at": "docs/lumos-toolchain-knowledge/Verification/2026-10-20_安全證據閘與資安格子實作驗證.md:2000",
+          "status": "fixed",
+          "tests": [
+            "t_secev_baseline_sound"
+          ]
+        },
+        {
+          "at": "scripts/lumos:_SECAPR_MAX_ENTRIES",
+          "status": "fixed",
+          "tests": [
+            "t_secev_s49_chain_prefix"
+          ]
+        }
+      ]
+    }
+  ]
+}

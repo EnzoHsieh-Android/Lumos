@@ -238,13 +238,13 @@ REVISIT:2026-11-13 `_codeloop_guard_verdict` 算表態適用範圍那一步仍�
 
 ## code-loop check --keep-going(2026-10-14,[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5)
 
-白話:`code-loop check` 本來是第一道沒過就停(合約測試 → 表態 → 新增告警 → 審查留痕,先中的先報);帶 `--keep-going` 時四道都判完、每道擋下各印各的原句,推送前掛鉤用它一次看到這個 ref 的全部原因。不帶旗標時行為與輸出一字不變,CI 與其他呼叫者不受影響。
+白話:`code-loop check` 本來是第一道沒過就停(安全證據 → 合約測試 → 表態 → 新增告警 → 審查留痕,先中的先報;安全證據那一道只在有資安登記時出現);帶 `--keep-going` 時五道都判完、每道擋下各印各的原句,推送前掛鉤用它一次看到這個 ref 的全部原因。不帶旗標時行為與輸出一字不變,CI 與其他呼叫者不受影響。
 
 WHY:判定函式裡所有 return 都經過同一個收尾函式 `_fin`:keep-going 下擋下累積進清單,清單非空就回擋下(第一筆的欄位、`blocks` 清單、tier 一律是算出來的分級),清單是空的才照原樣放行——放行站點(pitfalls 失敗、沒有 JSON、例外、tier 不是 high、留痕有效、留痕過時但屬簿記豁免、留痕被環境變數跳過、合併側放行)的意思變成「這一道過了」,不能蓋掉前面記下的擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]] 第一輪設計審(代碼審內部放行蓋掉擋下)] [因:收集模式下最大的風險是某個放行站點直接回傳、把前面記下的擋下吞成放行] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
 
 WHY:keep-going 下 pitfalls 失敗時,表態(要 pitfalls 的資料)與代碼審留痕(要 tier)照舊 fail-open 不判,新增告警閘只看改動範圍,照跑;合約測試先紅時照樣算分級、判後面幾道,兩個合約測試擋下點(一般的、與帶低風險提醒旗標卻算出 tier=high 重跑的那個)都記成 `bound_tests`。所以推送前(掛鉤認得就一律帶旗標)比直接跑 CLI 嚴:pitfalls 失敗又有新增告警時,不帶旗標放行,帶旗標擋下 [出處:[[Projects/推送前一次列出全部擋下原因_計劃]]〈做法〉5;第一輪代碼審正確性席要求寫明這個差異] [因:一次列出全部原因,前提是每一道在它需要的資料拿得到時都判] [test:t_code_loop_check_keep_going] [test:t_code_loop_keep_going_pf_fail_stricter]
 
-WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitfalls 失敗時照跑新增告警閘)集中在 `_CodeloopKg`;跑 pitfalls 取分級那一步拆成 `_codeloop_pitfalls_tier`。判定函式的複雜度 40→32(改動前 35) [出處:第一輪代碼審通才席:新增告警閘把這支的 C901 當成新告警擋下] [因:放行站點不經收尾的守衛照舊成立(每個回傳是 `_fin(...)`,或 `hit` 指派的變數、而且緊接在判它非空的 `if <那個變數>:` 底下——不帶旗標時 `hit` 回的就是 `fin(v)`,帶旗標時回 None,無條件 `return` 那個變數會讓整個判定函式回 None、下游 `.get` 崩);函式定義那一行多了參數,指紋已經變了,所以另用 lint-waive 附理由留痕] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
+WHY:收集模式的分流(唯一收尾 `fin`、「這一道擋下」`hit`、pitfalls 失敗時照跑新增告警閘)集中在 `_CodeloopKg`;跑 pitfalls 取分級那一步拆成 `_codeloop_pitfalls_tier`。判定函式的複雜度 40→32(改動前 35);之後接上安全證據那一步多一個分支,ruff C901 量到 33 [出處:第一輪代碼審通才席:新增告警閘把這支的 C901 當成新告警擋下] [因:放行站點不經收尾的守衛照舊成立(每個回傳是 `_fin(...)`,或 `hit` 指派的變數、而且緊接在判它非空的 `if <那個變數>:` 底下——不帶旗標時 `hit` 回的就是 `fin(v)`,帶旗標時回 None,無條件 `return` 那個變數會讓整個判定函式回 None、下游 `.get` 崩);函式定義那一行多了參數,指紋已經變了,所以另用 lint-waive 附理由留痕] [test:t_code_loop_keep_going_pass_sites_keep_blocks]
 
 輸出契約:文字模式最後多印一行 `LUMOS-BLOCKS: <reason_kind 以逗號分隔>`(沒有擋下時是空的),是推送前掛鉤唯一的機讀通道;`--json` 不印這一行,改多一個 `blocks` 清單(每筆 `reason_kind`、`reason`),`blocked`、`reason`(第一筆)照舊。合約測試狀態那幾句照「合約測試有沒有記成擋下」選:沒記成擋下(低風險只提醒)就照印「只提醒不擋」。治理帳照舊一次判定一筆 `code-loop` `blocked`(統計的筆數意義不變),`extra` 多一個 `blocks` 種類清單。掛鉤那一頭怎麼讀見 [[Systems/bound-tests-gate]]〈推送前一次列出全部擋下原因〉。
 
@@ -285,3 +285,6 @@ WHY:`pitfalls` 的人可讀輸出在 `tier:` 那行下面多印「這級仍要�
 - `_pitfall_diff_collect` 掃代碼型樣時問 `_skip_product_claims`:e2e 樣式內的檔都不掃,只有 kt、java、cs、swift、dart 這類有自己語言題的程式檔照掃(e2e 腳本與種子 SQL、compose 不問交易包裹、分級不因它變 high;`db/seeds`、`scripts/seed-prod.sh` 不在樣式內,照掃);只跳 claims 那一圈,`_stack_changed_ok` 不動(它也給棧別觸發用)。`scripts/deploy.sh` 這種不在樣式內的腳本照掃。
 - 架構對齊對照檔排除原封不動的工具自帶檔(見 [[Systems/arch-alignment-lens]])。
 - 綁的測試:`t_pitfalls_stage_frontend_facets_listed`、`t_pitfalls_spec_mode_lists_frontend_facets`、`t_pitfalls_check_frontend_hint_keeps_rc`、`t_stack_key_e2e_path_is_infra`、`t_pitfalls_diff_e2e_sql_not_product_claim`、`t_pitfalls_diff_plain_shell_sql_still_claimed`、`t_test_infra_path_skips_e2ee_source`、`t_test_infra_data_files_no_stack_key`。
+
+- 2026-10-20 code-loop check 多一道安全證據(reason_kind `security_evidence`),排在所有放行早退之前、不看 tier;沒登記資安護欄的專案輸出不變。說明的家在 [[Systems/安全證據閘]]。
+- 2026-10-20 `--stage` 的觸發判法收成 `_facet_triggered`:既有各項照舊用 `when`(任一條命中);資安七項改用選填鍵 `triggers`(`[{"words": [...], "min_distinct": 2}, {"words": [...], "min_distinct": 1, "plus_any": [...]}]`,任一條規則成立就觸發),一項只能有其中一個;選填鍵 `hint` 由通用迴圈在問題句後多印一行。`--stage --json` 照舊原樣序列化整列,新項多 `triggers`、`hint` 鍵、沒有 `when`,既有各項逐字不變(`t_secq_s08_s11_existing_unchanged`)。表的內容源在 [[Systems/情境出題]]。
