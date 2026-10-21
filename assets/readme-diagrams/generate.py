@@ -80,7 +80,7 @@ def scene(name,lang,title,kicker,h,body,desc):
 '''
 
 def map_scene(en):
-    title="Read the code first. Write back after." if en else "先讀程式碼，改完寫回"
+    title="Understand the code. Keep the context." if en else "先理解程式，改完留下脈絡"
     b=path("M74 156H674Q720 156 720 205V491Q720 544 669 544H89Q40 544 40 495V217Q40 156 74 156","coral",2.5,"12 8",True)
     b+=rect(170,129,420,50,"#111f34","#6a4c56",16)
     b+=text(380,162,"Outer loop: checking the process" if en else "外圈：定期檢查這套流程",22,"coral","middle",600)
@@ -91,21 +91,22 @@ def map_scene(en):
     b+=rect(*((276,481,284,33) if en else (404,481,156,33)),"#101c30","none",6)+text(552,505,"Records go to the outer loop" if en else "每輪紀錄送進外圈",19 if en else 21,"coral","end")
     # Clockwise station loop. Each hand-off is labelled with what travels along it.
     b+=path("M324 271H428","blue",2,"12 8",True)+arrow(437,271,"right","blue")
-    b+=text(380,258,"notes + diff" if en else "筆記＋改動",15,"blue","middle",550)
+    b+=text(380,238,"Implement" if en else "完成改動",14,"blue","middle",550)
+    b+=text(380,258,"+ context" if en else "連同脈絡送審",14,"blue","middle",550)
     b+=path("M563 311V366","purple",2,"12 8",True)+arrow(563,372,"down","purple")
     b+=text(575,346,"findings" if en else "各自的意見",15,"purple",weight=550)
     b+=path("M436 410H332","gold",2,"12 8",True)+arrow(324,410,"left","gold")
     b+=text(380,432,"outcomes" if en else "處理結果",15,"gold","middle",550)
     b+=path("M197 372V319","green",2,"12 8",True)+arrow(197,311,"up","green")
     b+=text(185,346,"next time" if en else "下次查得到",15,"green","end",550)
-    nodes=[(70,231,"01","Read code" if en else "讀程式碼","Notes add the why" if en else "筆記補上理由","green"),
+    nodes=[(70,231,"01","Read code" if en else "讀程式碼","Decisions + constraints" if en else "筆記補上決策與限制","green"),
            (436,231,"02","Dispatch" if en else "分派審查","Reviewers by risk" if en else "依風險派 AI 審查","blue"),
-           (436,372,"03","Review & resolve" if en else "審查與處理","Every finding logged" if en else "每條意見記下怎麼處理","purple"),
+           (436,372,"03","Review & resolve" if en else "審查與處理","Every finding logged" if en else "每項意見留下處理結論","purple"),
            (70,372,"04","Write back" if en else "寫回筆記","Trade-offs + checks" if en else "留下取捨與驗證","gold")]
     for x,y,_n,t,s,c in nodes:
         b+=rect(x,y,254,80)+text(x+22,y+32,t,26,c,weight=600)+text(x+22,y+60,s,19)
-    b+=text(380,589,"Git hooks check the parts that can be checked mechanically." if en else "提交與推送時，Git hooks 檢查能機械判斷的部分。",21,"muted","middle")
-    return title,620,b,"Four steps around each change: read the code and add context from notes, dispatch reviewers by risk, review and record every finding, write back. Each hand-off is labelled. An outer loop records each round and checks the process itself. Decorative paths animate; all labels remain visible."
+    b+=text(380,589,"Git hooks run automated checks at commit and push." if en else "提交與推送時，Git hooks 核對可自動檢查的項目。",21,"muted","middle")
+    return title,620,b,"Four steps around each change: read the code and add context from notes, dispatch reviewers by risk, review and record every finding, write back. Each hand-off is labelled. An outer loop records each round and checks the process itself. Decorative paths animate; all labels remain visible." if en else '每次改動依序理解程式並查閱脈絡、依風險分派審查、逐項處理意見、寫回筆記。箭頭標示各步驟交付的內容；外圈彙整每輪紀錄，定期檢查流程本身。裝飾線條會動，文字持續可見。'
 
 def case_scene(en):
     title = "How review changed the fix" if en else "審查如何改變修法"
@@ -180,7 +181,7 @@ def first_scene(en):
     return title,510,b,"Illustrative workflow, not a recorded run: a request, context retrieval, implementation and testing, authorized Git operations and write-back."
 
 def graph_scene(en):
-    title="Plans, features, evidence — then repair." if en else "計劃形成實作，事故推動修正"
+    title="Connect plans, verification, and repairs." if en else "從計劃到驗證，把修復經驗接回來"
     b='<g id="knowledge-flow">'
     # A complete static fallback; a 24-second story holds its final state
     # for 12.2 seconds after the repair verification appears.
@@ -192,8 +193,8 @@ def graph_scene(en):
         return (f'<animate attributeName="opacity" dur="24s" repeatCount="indefinite" '
                 f'values="0;0;1;1" keyTimes="0;{at/24:.4f};{(at+.3)/24:.4f};1"/>')
     bands=[(132,"01","Plans" if en else "先寫計劃","purple"),
-           (269,"02","Features" if en else "形成功能","blue"),
-           (421,"03","Verification" if en else "留下驗證","green"),
+           (269,"02","Features" if en else "實作功能","blue"),
+           (421,"03","Verification" if en else "記錄驗證","green"),
            (558,"04","Incidents" if en else "事故回饋","coral")]
     for y,n,t,c in bands:
         b+=rect(30,y,700,111,"#142238","#2b3c55",15)
@@ -250,7 +251,7 @@ def graph_scene(en):
       ("feature-payment",642,322,"Payments" if en else "付款串接","blue",23,True),
       ("incident",285,600,"Points not returned" if en else "取消訂單未退點","coral",16,False),
       ("verification-points",285,463,"Points regression" if en else "退點回歸測試","green",16,False),
-      ("verification-checkout",460,463,"Checkout E2E" if en else "結帳端對端","green",16,False),
+      ("verification-checkout",460,463,"Checkout E2E" if en else "結帳端對端測試","green",16,False),
       ("verification-payment",642,463,"Duplicate charge" if en else "重複付款壓測","green",16,False),
     ]
     for node,x,y,label,c,r,contract in nodes:
@@ -269,10 +270,10 @@ def graph_scene(en):
     b+='</g>'
     b+=rect(30,688,700,74,"#14243a","#344967",14)
     b+=circle(56,711,7,C["blue"])+circle(56,711,11,"none",C["gold"],2)
-    b+=text(79,718,"Gold ring: contract linked to verification" if en else "金環：帶合約，並連到驗證紀錄",en and 20 or 22,"gold")
+    b+=text(79,718,"Gold ring: rules linked to verification" if en else "金環：記有重要規則，並連到驗證紀錄",20 if en else 22,"gold")
     b+=path("M45 743H68","coral",2.5)+arrow(69,743,"right","coral")
     b+=text(79,750,"Incident → repair plan → existing feature → recheck" if en else "事故 → 修復計劃 → 既有功能 → 回歸驗證",en and 20 or 22,"coral")
-    return title,785,b,"Illustrative shop graph, assuming checkout owns points returns: plans precede features and verification. A points-not-returned incident is directly related to the checkout feature, creates a points-fix plan that modifies that existing flow, and is followed by a points regression test. Contract rings and stars appear after evidence. A 24-second cycle builds for 11.8 seconds, then holds the complete graph for 12.2 seconds; static fallback remains complete."
+    return title,785,b,"Illustrative shop graph, assuming checkout owns points returns: plans precede features and verification. A points-not-returned incident is directly related to the checkout feature, creates a points-fix plan that modifies that existing flow, and is followed by a points regression test. Contract rings and stars appear after evidence. A 24-second cycle builds for 11.8 seconds, then holds the complete graph for 12.2 seconds; static fallback remains complete." if en else '假設退點由結帳系統負責的商店示意圖：計劃連到功能與驗證。取消訂單未退點的事故關聯到既有結帳功能，衍生退點修復計劃，修改既有流程後補上回歸測試。重要規則的金環與星號在驗證節點後出現。動畫每輪 24 秒，前 11.8 秒逐步展開，再保留完整圖 12.2 秒；不播放動畫時也顯示完整內容。'
 
 def dispatch_scene(en):
     title="One brief. Several independent lenses." if en else "材料相同，判斷保持獨立"
@@ -296,7 +297,7 @@ def dispatch_scene(en):
     return title,505,b,"The same change, context, rules and evidence fan out to independent review perspectives, then findings are accounted for as adopted, rejected or needing follow-up. Seats are illustrative."
 
 def risk_review_scene(en):
-    title="Review weight follows risk" if en else "依風險決定審多重"
+    title="Review based on risk" if en else "依風險安排審查"
     # Column A: what goes in and how risk is judged.
     b=badge(36,121,"INPUT" if en else "輸入","green",110)
     b+=rect(36,166,150,262)
@@ -312,13 +313,13 @@ def risk_review_scene(en):
     b+=path("M186 330H214","coral",2)+arrow(221,330,color="coral")
     b+=rect(222,166,344,58)
     b+=text(242,202,"Ordinary change" if en else "一般改動",19,"blue",weight=600)
-    b+=text(546,202,"1 to 2 reviewers" if en else "派 1 到 2 位審查",17,"muted","end")
+    b+=text(546,202,"1 to 2 reviewers" if en else "1 至 2 位審查員",17,"muted","end")
     b+=rect(222,240,344,188,"url(#panel)","#6a4c56")
     b+=text(242,272,"High risk" if en else "高風險",19,"coral",weight=600)
     b+=text(546,272,"7+ per round" if en else "每輪至少 7 位",17,"muted","end")
     cells=[("Correctness" if en else "正確性","ink"),("Concurrency" if en else "併發與資源","ink"),("Edges & input" if en else "邊界與輸入","ink"),
            ("Rules & notes" if en else "規則與筆記","ink"),("Architecture" if en else "架構一致","purple"),("Security" if en else "資安","gold"),
-           ("Generalist" if en else "通才找問題","ink"),("Spec, if any" if en else "對照規格","muted")]
+           ("Generalist" if en else "綜合檢查","ink")]
     for i,(label,c) in enumerate(cells):
         # 最後一排不滿三格時置中,不讓右邊空一塊
         last=(len(cells)-1)//3
@@ -327,18 +328,18 @@ def risk_review_scene(en):
         y=288+(i//3)*40
         b+=rect(x,y,100,32,"#182a42","none" if c!="coral" else C["coral"],9,.8)
         b+=text(x+50,y+21,label,13 if en else 14,c,"middle",550)
-    b+=text(242,418,"Spec = only with a finalized design spec" if en else "對照規格 = 有定稿的設計規格才派",13,"muted")
+    b+=text(242,418,"+ Spec reviewer when the design is finalized" if en else "＋定稿設計規格：另加 1 位對照規格",13,"muted")
     # Column C: every finding gets a disposition.
     b+=path("M566 196H578V297M566 330H578V297","line",2)+path("M578 297H584","line",2)+arrow(591,297)
     b+=badge(574,121,"OUTPUT" if en else "每條意見的去向","purple",150)
     b+=rect(592,166,132,262)
-    for y,label,c in [(236,"Fixed" if en else "修掉","green"),(290,"Waived" if en else "附理由不修","gold"),(344,"Disproved" if en else "證明不成立","muted")]:
-        b+=circle(610,y-6,4,C[c])+text(622,y,label,18,c)
+    for y,label,c in [(236,"Fixed" if en else "修掉","green"),(290,"Waived" if en else "說明不修理由","gold"),(344,"Disproved" if en else "證明不成立","muted")]:
+        b+=circle(610,y-6,4,C[c])+text(622,y,label,16,c)
     # Bottom: the one mechanical rule plus the independence caveat.
     b+=rect(36,452,688,72,"#13243a","#334c68",14)
     b+=text(56,482,"High-risk push is blocked without a review outcome." if en else "高風險推送前必須留下審查結果：通過，或寫明理由的跳過。",18 if en else 19,weight=600)
-    b+=text(56,508,"Finders don't see each other's reports; agreement isn't proof." if en else "找問題的審查彼此看不到報告，意見一致也不等於一定對。",16,"muted")
-    return title,556,b,"A risk scan of new code sends ordinary changes to one or two reviewers and high-risk changes to at least seven per round: five problem-finders, architecture and security, plus a spec check when a finalized spec exists. Every finding must be fixed, waived with a reason, or disproved with evidence; a high-risk push needs a review outcome."
+    b+=text(56,508,"Finders don't see each other's reports; agreement isn't proof." if en else "審查員各自找問題，不互看報告，意見一致也不等於一定對。",16,"muted")
+    return title,556,b,"A risk scan of new code sends ordinary changes to one or two reviewers and high-risk changes to at least seven per round: five problem-finders, architecture and security, plus a spec check when a finalized spec exists. Every finding must be fixed, waived with a reason, or disproved with evidence; a high-risk push needs a review outcome." if en else '先掃描新增程式的風險：一般改動由一至兩位審查員檢查，高風險每輪至少七位，包含五個找問題的席位、架構與資安席；有定稿設計時再加規格對照席。每條意見都要修正、附理由接受或以證據反駁；高風險推送必須有審查結果。'
 
 def review_scene(en):
     title="Different checks. Shared evidence." if en else "從規則、判斷到行為，交叉看同一個改動"
@@ -378,7 +379,7 @@ def evals_scene(en):
     b = rect(36, 122, 688, 290)
     b += text(60, 160, "Scheduled mainly in Lumos's own repo" if en else "主要在 Lumos 自己的 repo 排程執行", 18, "muted")
     rows = [
-        (180, "Review replay" if en else "審查回放", "Recompute past verdicts; they should not change" if en else "用現在的判定程式重算舊案，結論應該不變", "purple"),
+        (180, "Review replay" if en else "審查回放", "Compare past verdicts and flag differences" if en else "比對歷史判定，找出差異", "purple"),
         (236, "Retrieval exam" if en else "查詢考卷", "Labelled questions: are the right notes found?" if en else "人工標好的題目：查得到該看的筆記嗎？", "blue"),
         (292, "Scenario probes" if en else "情境探針", "Plain requests: does the AI check notes itself?" if en else "用口語出題：AI 會不會自己去查筆記？", "green"),
         (348, "Missed notes" if en else "推播漏網", "Did notes shown before edits miss relevant ones?" if en else "改檔前送上的筆記，有沒有漏掉該看的？", "gold"),
@@ -389,7 +390,7 @@ def evals_scene(en):
     b += path("M380 414V446", "coral", 2) + arrow(380, 452, "down", "coral")
     boxes = [
         (36, "Record every week" if en else "每週留下紀錄"),
-        (280, "Alert on problems" if en else "出問題時通知人"),
+        (280, "Alert when triggered" if en else "符合條件時提醒"),
         (524, "Fix rules or add tests" if en else "修規則或補測試"),
     ]
     for x, label in boxes:
@@ -399,16 +400,16 @@ def evals_scene(en):
         b += path(f"M{x} 492H{x + 36}", "coral", 2) + arrow(x + 43, 492, "right", "coral")
     b += path("M624 524V566H20V266H28", "coral", 2, "8 7") + arrow(34, 266, "right", "coral")
     b += rect(250, 550, 260, 32, "#101d30", "none", 8) + text(380, 572, "Measure again next week" if en else "下週再量一次", 18 if en else 20, "coral", "middle")
-    b += text(36, 620, "It makes regressions visible; it does not guarantee improvement." if en else "它確保退步會被看見，但不保證一定變好", 16, "muted")
+    b += text(36, 620, "Helps detect regressions in covered scenarios; improvement is not guaranteed." if en else "讓已涵蓋情境的退步更容易被發現，不保證每次改動都變好", 16, "muted")
     desc = (
-        "Four checks run on a schedule, mainly in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly; failed review replays or probe questions alert a person, the retrieval exam only alerts when too many candidate notes are unlabelled (score drops are just recorded), the missed-note check only keeps a list, and fixes become rules or tests that are measured again the next week. It makes regressions visible but does not guarantee improvement."
+        "Four checks run on a schedule, mainly in Lumos's own repo: review replay recomputes past verdicts, a retrieval exam checks whether labelled questions find the right notes, scenario probes check whether the AI looks up notes on its own, and a missed-note check looks for relevant notes that were not shown before edits. Results are recorded weekly; failed review replays or probe questions alert a person, the retrieval exam only alerts when too many candidate notes are unlabelled (score drops are just recorded), the missed-note check only keeps a list, and fixes become rules or tests that are measured again the next week. It helps detect regressions in covered scenarios but does not guarantee improvement."
         if en else
-        "主要在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄；審查回放或情境探針出問題就通知人，查詢考卷只在沒標過的候選筆記太多時通知（分數退步只記錄），推播漏網只留清單；修成規則或測試後下週再量。它確保退步會被看見，但不保證一定變好。"
+        "主要在 Lumos 自己的 repo 排程執行四種檢查：審查回放重算舊案結論、查詢考卷看標好的題目查不查得到該看的筆記、情境探針看 AI 會不會自己查筆記、推播漏網看改檔前送上的筆記有沒有漏。每週留下紀錄；審查回放或情境探針出問題就通知人，查詢考卷只在沒標過的候選筆記太多時通知（分數退步只記錄），推播漏網只留清單；修成規則或測試後下週再量。讓已涵蓋情境的退步更容易被發現，不保證每次改動都變好。"
     )
     return title, 650, b, desc
 
 def swiss_cheese_scene(en):
-    title="Five imperfect layers. Fewer escapes." if en else "五層都有洞，但問題更難一路穿過"
+    title="Multiple checks, complementary coverage." if en else "多層檢查，補足各自的盲點"
     b=text(38,126,
            "Different blind spots reduce the chance of one shared miss." if en else "不同防線有不同盲點；疊起來，漏洞較不容易全部對齊。",
            en and 19 or 21,"muted")
@@ -419,8 +420,8 @@ def swiss_cheese_scene(en):
       (150,"01","Risk tiering" if en else "風險分級","purple",[(318,164,12),(448,188,9),(590,175,10),(676,161,8)]),
       (230,"02","AI reviewers" if en else "多個 AI 審查","blue",[(287,246,9),(405,265,13),(522,240,8),(590,255,10),(680,270,11)]),
       (310,"03","Disposition gate" if en else "放行規則","coral",[(305,340,12),(468,324,9),(590,335,10),(690,348,8)]),
-      (390,"04","External rules" if en else "外部規則","gold",[(280,404,8),(390,430,12),(505,405,10),(590,415,10),(675,432,9)]),
-      (470,"05","Tests proven red" if en else "測試翻紅","green",[(315,495,11),(445,480,8),(545,510,12),(590,495,10),(690,482,8)]),
+      (390,"04","Static checks" if en else "靜態檢查","gold",[(280,404,8),(390,430,12),(505,405,10),(590,415,10),(675,432,9)]),
+      (470,"05","Tests + faults" if en else "測試與故障驗證","green",[(315,495,11),(445,480,8),(545,510,12),(590,495,10),(690,482,8)]),
     ]
     for i,(y,n,label,c,holes) in enumerate(rows):
         mask=f"cheese-{i}"
@@ -430,7 +431,7 @@ def swiss_cheese_scene(en):
             b+=f'<circle cx="{hx}" cy="{hy}" r="{hr}" fill="black"/>'
         b+='</mask></defs>'
         b+=text(40,y+20,n,13,c,weight=700)
-        b+=text(76,y+34,label,en and 18 or 21,c,weight=600)
+        b+=text(76,y+34,label,18 if en else 20,c,weight=600)
         b+=f'<rect x="244" y="{y}" width="472" height="50" rx="14" fill="#3a3225" stroke="{C[c]}" stroke-width="1.2" mask="url(#{mask})"/>'
         for hx,hy,hr in holes:
             b+=circle(hx,hy,hr,"none","#886f4d",1)
@@ -442,63 +443,48 @@ def swiss_cheese_scene(en):
     b+=path("M403 594H369Q344 594 344 569V435Q344 415 365 415","green",2.5,"8 7")
     b+=arrow(373,415,"right","green")
     b+=rect(38,554,305,77,"#14243a","#344967",14)
-    b+=text(58,583,"Intercept ledger → precision" if en else "攔截帳 → 精準度",en and 18 or 20,"blue",weight=550)
-    b+=text(58,613,"Escape ledger → recall" if en else "漏網帳 → 召回率",en and 18 or 20,"green",weight=550)
+    b+=text(58,583,"Track false alarms" if en else "追蹤誤報",18 if en else 20,"blue",weight=550)
+    b+=text(58,613,"Track missed defects" if en else "追蹤漏判",18 if en else 20,"green",weight=550)
     b+=text(380,673,
-            "Not zero risk—visible leakage that becomes harder to repeat." if en else "不是零風險；而是讓漏多少看得見，並讓同類問題更難再漏。",
+            "Record escaped defects and use them to improve checks." if en else "記錄已發現的漏判，作為改進規則與測試的依據。",
             en and 19 or 21,"muted","middle")
-    return title,700,b,"Five Swiss-cheese defence layers: risk tiering, multi-seat review, disposition gates, external rules, and tests proven to fail when behaviour is removed. A rare aligned escape enters an escape ledger, which feeds new mechanical rules or tests. Intercept and escape ledgers make precision and recall observable; the model does not claim zero defects."
+    return title,700,b,"Five Swiss-cheese defence layers: risk tiering, multi-seat review, disposition gates, external rules, and tests proven to fail when behaviour is removed. A rare aligned escape enters an escape ledger, which feeds new mechanical rules or tests. Records of false alarms and missed defects inform improvements; the model does not claim zero defects." if en else '五層各有盲點的防線：風險分級、多席審查、處置閘、外部規則，以及確認改壞行為會失敗的測試。漏過防線的問題記入漏網帳，作為新增規則或測試的依據。誤報與漏判紀錄用來改進檢查，不代表零缺陷保證。'
 
 def drift_scene(en):
-    title = "From writing notes to pushing code" if en else "從寫下筆記到推送程式碼"
-    b = path("M57 147V550", "blue", 2)
+    title = "Keep notes useful for the next change" if en else "讓筆記跟得上每次改動"
+    b = path("M57 147V487", "blue", 2)
     stages = [
-        (122, 231, "Writing notes" if en else "寫入時", "green"),
-        (373, 132, "At commit" if en else "提交時", "blue"),
-        (525, 359, "Before push" if en else "推送前", "purple"),
+        (122, "Writing notes" if en else "寫入時", "green",
+         "Record decisions and constraints" if en else "保存決策與限制",
+         "Keep context the code cannot explain." if en else "留下程式碼看不出的理由與限制。",
+         "Set revisit conditions for temporary arrangements." if en else "暫時安排要寫明何時回頭確認。"),
+        (292, "At commit" if en else "提交時", "blue",
+         "Check that notes were maintained" if en else "檢查筆記是否同步維護",
+         "Check note updates alongside code changes." if en else "檢查程式改動是否伴隨筆記更新。",
+         "New source files need an assigned note." if en else "新增程式檔要指定負責的筆記。"),
+        (462, "Before push" if en else "推送前", "purple",
+         "Find stale references and pending checks" if en else "找出過期引用與待確認內容",
+         "Check old references and revisit conditions." if en else "檢查舊名稱、連結與已成立的回頭條件。",
+         "Reread notes updated with the code they describe." if en else "程式與負責的筆記一起改時，安排整篇重讀。"),
     ]
-    for number, (y, height, label, color) in enumerate(stages, 1):
+    for number, (y, label, color, purpose, line1, line2) in enumerate(stages, 1):
         b += circle(57, y + 25, 20, "#14243a", C[color])
         b += text(57, y + 32, str(number), 20, color, "middle", 600)
-        b += rect(94, y, 630, height)
+        b += rect(94, y, 630, 150)
         b += text(114, y + 32, label, 23, color, weight=600)
-    for y in (363, 515):
+        b += text(114, y + 67, purpose, 23 if not en else 22, weight=550)
+        b += text(114, y + 101, line1, 18, "muted")
+        b += text(114, y + 128, line2, 18, "muted")
+    for y in (282, 452):
         b += arrow(57, y, "down", "blue")
-
-    b += text(114, 185, "Keep reasons the code can't explain." if en else "只記程式碼看不出來的理由", 17)
-    b += text(114, 211, "Don't copy fields, defaults or flows." if en else "欄位、預設值、流程不抄進筆記", 17, "muted")
-    b += text(114, 241, "New code line refs / unsourced state descriptions" if en else "新增程式行號 / 沒註明來源的現況描述", 16)
-    b += badge(542 if en else 584, 219, "Block at commit" if en else "提交時擋下", "coral", 162 if en else 120)
-    b += text(114, 272, "'No refund page yet': suggest a revisit condition" if en else "新寫「還沒有退款頁面」這類句子：建議改成回頭條件", 16)
-    b += badge(566 if en else 584, 250, "Warn only" if en else "只提醒", "gold", 138 if en else 120)
-    b += text(114, 303, "Revisit condition mid-sentence or in a table" if en else "回頭條件寫在句子中間或表格裡", 16)
-    b += badge(542 if en else 584, 281, "Block at commit" if en else "提交時擋下", "coral", 162 if en else 120)
-    b += text(114, 334, "Other content needs rules and review." if en else "其餘內容靠守則和審查", 16, "muted")
-
-    rows = [
-        (434, "Code changed, no notes touched" if en else "改了程式、一篇筆記都沒動", "Always block" if en else "一定擋下", "coral"),
-        (473, "New source file, no assigned note" if en else "新增程式檔、沒指定負責的筆記", "Block" if en else "擋下", "coral"),
-        (586, "Note still cites a removed name or path" if en else "名稱或路徑消失、筆記還在提", "Block" if en else "擋下", "coral"),
-        (625, "Test exists, note says 'test to be added'" if en else "測試已上線、筆記還說之後補測試", "Block" if en else "擋下", "coral"),
-        (664, "Linked note was deleted" if en else "連到的另一篇筆記已被刪除", "Always block" if en else "一定擋下", "coral"),
-        (703, "Revisit condition met (refund page now exists)" if en else "回頭條件成立了（退款頁面做出來了）", "Block" if en else "擋下", "coral"),
-        (742, "A rule's retire condition is met" if en else "規則寫的撤除條件成立了", "Block" if en else "擋下", "coral"),
-        (781, "Bound test not found (projects can block)" if en else "綁的測試名稱找不到（專案可設成擋）", "Warn only" if en else "只提醒", "gold"),
-        (820, "Links a closed note, still says 'pending'" if en else "連到已收尾的筆記、同一句還寫待定", "Warn only" if en else "只提醒", "gold"),
-        (859, "Code and note changed: AI rereads first (local)" if en else "程式和管它的筆記一起改：先請 AI 重讀（本機擋）", "Block" if en else "擋下", "coral"),
-    ]
-    for y, label, status, color in rows:
-        b += text(114, y, label, 16)
-        b += badge(566 if en else 584, y - 22, status, color, 138 if en else 120)
-
-    b += text(94, 916, "Only some blocks can be set to warn by the project." if en else "只有部分檢查能由專案改成提醒", 16, "muted")
-    b += text(94, 943, "Content accuracy still needs review and people." if en else "筆記內容對不對、最後仍靠審查和人", 16, "muted")
+    b += text(94, 651, "Scopes and block/warn conditions are detailed below the diagram." if en else "各項檢查的範圍與擋下／提醒條件，見圖下方細節。", 17, "muted")
+    b += text(94, 678, "Content accuracy still needs review and human judgment." if en else "筆記內容是否正確，仍需審查與人的判斷。", 17, "muted")
     desc = (
-        "Three checkpoints from writing to push. Writing rules block new code line references, unsourced state descriptions and revisit conditions buried mid-sentence or in a table at commit. New 'no refund page yet' style sentences only get a reminder to become a revisit condition. Commit checks block code changes without note updates and new source files without an assigned note. Before push, bound test names that no longer exist (projects can make this block) and sentences still saying 'pending' about a closed note only warn, while removed names or paths still in notes, outdated promises to add existing tests, deleted note links, revisit conditions that have come true and rules whose retire condition is met block; a note changed together with the code it manages must first be reread by AI for lines the change made untrue, and rule lines it flags must be fixed or explicitly kept (blocked on the local push only; CI just warns). Missing note updates and broken links always block; only some checks (old names, the reread, note shape and a few others) can be set to warn. Content accuracy needs review and people."
+        "Three stages: record decisions and constraints, check note maintenance at commit, and find stale references and pending checks before push. This overview does not list every block or warning; the README details their scopes and exceptions."
         if en else
-        "從寫入到推送的三道關卡。新增程式行號、沒註明來源的現況描述、寫在句子中間或表格裡的回頭條件在提交時擋下；新寫的「還沒有退款頁面」這類句子只提醒改成回頭條件。提交時也擋下改程式沒動筆記、新增程式檔沒指定負責筆記。推送前、綁的測試名稱找不到（專案可設成擋）、連到已收尾的筆記卻還寫待定只提醒，消失的名稱或路徑還在筆記裡、測試已上線卻仍寫之後補測試、筆記連結斷掉、回頭條件成立、規則的撤除條件成立則擋下；程式和管它的筆記同一次都改了時，要先交給 AI 重讀整篇找出不成立的舊句，點出的規則行要改掉或表態照留（只在本機推送擋，CI 只提醒）。改程式沒動筆記和連結斷掉一定擋；能改成提醒的只有舊說法、回頭重讀、筆記寫法等幾類。內容正確性仍靠審查和人。"
+        "三階段維護筆記：寫入時保存決策與限制，提交時檢查筆記是否同步維護，推送前找出過期引用與待確認內容。這是摘要圖；各項擋下或提醒條件、範圍與例外見 README 細節。"
     )
-    return title, 974, b, desc
+    return title, 710, b, desc
 
 
 SCENES={"map":("00 / THE SYSTEM",map_scene),
@@ -536,7 +522,7 @@ def validate(svg):
             assert parent.tag.rsplit("}",1)[-1] in {"path","rect","circle"}
     assert root.find("s:title",ns).text
     assert root.find("s:desc",ns).text
-    if root.find("s:title",ns).text in {"Five imperfect layers. Fewer escapes.","五層都有洞，但問題更難一路穿過"}:
+    if root.find("s:title",ns).text in {"Multiple checks, complementary coverage.","多層檢查，補足各自的盲點"}:
         assert len(root.findall(".//*[@data-kind='defence-layer']"))==5
         assert len(root.findall(".//*[@data-kind='aligned-escape']"))==1
         assert len(root.findall(".//*[@data-kind='escape-ledger']"))==1
