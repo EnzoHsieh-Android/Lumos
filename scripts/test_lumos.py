@@ -106538,6 +106538,160 @@ def t_secev_s62_conditional_judgments():
               _sg_kind(rep, "review").get("verdict") == "qualified", str(_sg_codes(rep, "review")))
 
 
+def t_secev_s68_review_no_expiry():
+    """S68(d21,使用者 2026-10-21 裁「只在相關程式碼改動之後過期就好」):review 種類的審查紀錄與核可鏈上的 human_review
+    expires_on 寫 null → 半年後照樣有效、不判 review_expired/approval_expired;綁定的檔一改照樣 stale:binding_changed。
+    deployment 審查紀錄與 exception 核可寫 null → 照舊看不懂(不准順手放寬到別的種類與型別)。"""
+    import datetime as _dt
+    later = _dt.date(2027, 6, 1)
+    # 對照:寫日期的人審,半年後過期(證明「半年後」這個時間點真的會讓有日期的紀錄失效)
+    r = _SgRepo()
+    r.commit()
+    rep = _sg_eval(r, today=later)
+    check("★前置★ 寫日期的審查紀錄半年後判 stale:review_expired", "stale:review_expired" in _sg_codes(rep, "review"),
+          str(_sg_codes(rep, "review")))
+    # ① 審查紀錄與人審核可都寫 null → 半年後仍 qualified,核可鏈那一筆仍 ok
+    r = _SgRepo()
+    r.review_expires = None
+    r.hr_expires = None
+    r.items[2] = r.review_item()
+    r.commit()
+    rep = _sg_eval(r, today=later)
+    check("[S68] ① 不設期限的人審半年後仍 qualified", _sg_kind(rep, "review").get("verdict") == "qualified", str(_sg_codes(rep, "review")))
+    st = [s for s in _sg_chain_status(rep) if "human_review" in str(s)]
+    check("[S68] ① 核可鏈上不設期限的人審那一筆是 ok", bool(st) and all("ok" in str(s) for s in st), str(_sg_chain_status(rep)))
+    # ② 同一份,改了綁定的程式檔、紀錄沿用舊綁定(真實 repo 沒重收時就是這樣)→ stale:binding_changed
+    old = r.fence_items()
+    r.items = [dict(it, bindings=old[k]["bindings"]) for k, it in enumerate(r.items)]
+    r.files["src/app.py"] = r.files["src/app.py"] + b"\n# changed\n"
+    r.commit()
+    rep = _sg_eval(r, today=later)
+    check("★前置★ ② 人審核可的內容沒變(差別只在程式檔)", ("human_review" in str(_sg_chain_status(rep)))
+          and "approval_signer" not in str(_sg_chain_status(rep)), str(_sg_chain_status(rep)))
+    check("[S68] ② 不設期限的人審:綁定的程式一改就 stale:binding_changed", "stale:binding_changed" in _sg_codes(rep, "review"),
+          str(_sg_codes(rep, "review")))
+    # ②' 簽這份人審的金鑰後來被撤銷 → 不設期限的人審一併失效;寫日期的照舊有效到自己的到期日(對照)
+    for exp, want_revoked in ((None, True), ("2026-12-01", False)):
+        r = _SgRepo(keys=2)
+        r.review_expires = exp
+        r.hr_expires = exp
+        r.items[2] = r.review_item()
+        r.commit()
+        r.add_entry("approvers_revoke", r.keys[0]["principal"], {"principal": r.keys[0]["principal"]}, approved_on="2026-10-19",
+                    expires_on="2027-10-01", key=1)
+        r.commit()
+        st = [x for x in _sg_chain_status(_sg_eval(r)) if "human_review" in str(x)]
+        if want_revoked:
+            check("[S68] ②' 不設期限的人審:簽章金鑰撤銷後判 approval_signer_revoked", bool(st) and "approval_signer_revoked" in str(st), str(st))
+        else:
+            check("[S68] ②' 對照:寫日期的人審,金鑰撤銷前簽的照舊 ok", bool(st) and all(str(x).endswith("'ok')") for x in st), str(st))
+    # ①' payload:human_review 不帶 --expires-on → 要簽的那一筆 expires_on 是 null;exception 不帶 → 擋下 rc2
+    import json as _j
+    import subprocess as _sp
+    r2 = _SgRepo()
+    r2.review_expires = None
+    r2.items[2] = r2.review_item()
+    r2.commit()
+    out = _sp.run([sys.executable, GRAPHCTL, "security", "approvals", "payload", "human_review", "C1#review", "--signer",
+                   r2.keys[0]["principal"], "--repo", str(r2.root)], capture_output=True, text=True)
+    body = next((_j.loads(ln) for ln in out.stdout.splitlines() if ln.startswith("{")), {})
+    check("[S68] ①' human_review 不帶 --expires-on:payload 的 expires_on 是 null", out.returncode == 0 and "expires_on" in body
+          and body["expires_on"] is None, out.stdout[-400:] + out.stderr[-400:])
+    for typ in ("exception", "gate_setting", "revision", "consideration", "suppression", "tool_list_change", "threat_table_change",
+                "approvers_add", "approvers_revoke"):
+        out = _sp.run([sys.executable, GRAPHCTL, "security", "approvals", "payload", typ, "C1#behavior", "--signer",
+                       r2.keys[0]["principal"], "--repo", str(r2.root)], capture_output=True, text=True)
+        check(f"[S68] ①' {typ} 不帶 --expires-on 照舊擋下 rc2", out.returncode == 2 and "--expires-on" in out.stderr, out.stderr[-300:])
+    # ③ deployment 審查紀錄寫 null → 照舊看不懂
+    r = _SgRepo()
+    r.ctl["required_evidence"] = r.ctl["required_evidence"] + ["deployment"]
+    r.ctl["evidence_refs"] = r.ctl["evidence_refs"] + [{"kind": "deployment", "node": "Verification/SgEv.md"}]
+    r.extra_fence_items = [r.review_item(kind="deployment", expires_on=None)]
+    r.commit()
+    rep = _sg_eval(r)
+    check("[S68] ③ deployment 審查紀錄不准寫 null:判 evidence_fence_invalid", "invalid:evidence_fence_invalid" in _sg_codes(rep, "deployment"),
+          str(_sg_codes(rep, "deployment")))
+    # ④ 其他每一種核可型別寫 null → 形狀檢查判 approval_fields_missing;同一筆寫日期就過(對照,證明擋下的原因是 null)
+    mod = _load_lumos_inproc()
+    ks = ["enzo ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINi5XJ+buAMDgD/TZmEnbMGByPgyDJrYV/tznhvwbVJR"]
+    others = [t for t in mod._SECAPR_TYPES if t not in mod._SECAPR_NO_EXPIRY_TYPES]
+    check("★前置★ ④ 其他核可型別一個都沒漏(至少十種)", len(others) >= 10, str(others))
+    for typ in others:
+        e = {"seq": 1, "prev_sha256": "", "project_id": "p", "type": typ, "target": "t", "content_sha256": "c",
+             "approved_on": "2026-10-01", "expires_on": "2026-10-20", "signer": "enzo", "signature": "s"}
+        if typ in ("approvers_init", "approvers_add"):
+            e.update(keys=ks, content_sha256=mod._sha256_bytes(mod._secev_canon(ks)))
+        check(f"★前置★ ④ {typ} 寫日期時形狀合格", mod._secapr_entry_shape(e) is None, str(mod._secapr_entry_shape(e)))
+        check(f"[S68] ④ {typ} 不准寫 null:approval_fields_missing", mod._secapr_entry_shape(dict(e, expires_on=None)) == "approval_fields_missing",
+              str(mod._secapr_entry_shape(dict(e, expires_on=None))))
+    hr = {"seq": 1, "prev_sha256": "", "project_id": "p", "type": "human_review", "target": "C1#review", "content_sha256": "c",
+          "approved_on": "2026-10-01", "expires_on": None, "signer": "enzo", "signature": "s"}
+    check("[S68] ④ 對照:human_review 寫 null 形狀合格", mod._secapr_entry_shape(hr) is None, str(mod._secapr_entry_shape(hr)))
+
+
+def t_secev_s69_not_applicable_conditional():
+    """S69(d21):not_applicable_sound 只在護欄自己標 not_applicable、或推送版盤點有 outcome=not_applicable 的格子落在它的入口上時才要蓋;
+    要蓋時 ai 蓋就算數、沒人蓋判 missing:review_record_missing。"""
+    no_na = [j for j in _SG_JUDG if j != "not_applicable_sound"]
+    # ① 沒有任何判不適用 → 不必蓋
+    r = _SgRepo()
+    r.items[2] = r.review_item(judgments=no_na)
+    r.commit()
+    rep = _sg_eval(r)
+    check("[S69] ① 沒有判不適用的項目:沒人蓋 not_applicable_sound 也 qualified", _sg_kind(rep, "review").get("verdict") == "qualified",
+          str(_sg_codes(rep, "review")))
+    # ② 護欄自己標 not_applicable → 要蓋
+    r = _SgRepo()
+    r.ctl["reported_status"] = "not_applicable"
+    r.items[2] = r.review_item(judgments=no_na)
+    r.commit()
+    rep = _sg_eval(r)
+    check("[S69] ② 護欄自己標 not_applicable、沒人蓋 → missing:review_record_missing",
+          "missing:review_record_missing" in _sg_codes(rep, "review"), str(_sg_codes(rep, "review")))
+    # ③ 入口上有一格 outcome=not_applicable → 要蓋;ai 蓋到就算數
+    na = {"surface": "S1", "asset": "A2", "category": "data-exposure", "outcome": "not_applicable", "threat_table_version": 1,
+          "decision_ref": "Systems/SgHome#d1", "reason": "付款紀錄不外露"}
+    r = _SgRepo()
+    r.considerations = [na]
+    r.items[2] = r.review_item(judgments=no_na)
+    r.commit()
+    rep = _sg_eval(r)
+    check("[S69] ③ 判不適用的格子沒經核可(不算數)→ 不必蓋", "missing:review_record_missing" not in _sg_codes(rep, "review"),
+          str(_sg_codes(rep, "review")))
+    r.add_entry("consideration", "S1/A2/data-exposure", na, approved_on="2026-10-15", expires_on="2027-01-01", extra={"outcome": "not_applicable"})
+    r.commit()
+    rep = _sg_eval(r)
+    cell = next((c for c in (rep.get("cells") or {}).get("cells", []) if c["id"] == "S1/A2/data-exposure"), {})
+    check("★前置★ ③ 核可後那一格是 not_applicable", cell.get("state") == "not_applicable", str(cell))
+    check("[S69] ③ 入口上有判不適用的格子、沒人蓋 → missing:review_record_missing",
+          "missing:review_record_missing" in _sg_codes(rep, "review"), str(_sg_codes(rep, "review")))
+    r.extra_fence_items = [r.review_item(reviewer="另一個 AI 會談", reviewer_kind="ai", judgments=["not_applicable_sound"])]
+    r.commit()
+    rep = _sg_eval(r)
+    check("[S69] ③ 對照:ai 蓋了 not_applicable_sound → review qualified", _sg_kind(rep, "review").get("verdict") == "qualified",
+          str(_sg_codes(rep, "review")))
+    # ③' 同一入口上是核可過的 risk_accepted 格子(不是判不適用)→ 不必蓋(r2 正確性席 F1:只認 not_applicable)
+    ra = dict(na, outcome="risk_accepted", compensating="付款紀錄只在內網可讀", expires_on="2026-11-10", reason="先接受")
+    r = _SgRepo()
+    r.considerations = [ra]
+    r.items[2] = r.review_item(judgments=no_na)
+    r.add_entry("consideration", "S1/A2/data-exposure", ra, approved_on="2026-10-15", expires_on="2026-11-10", extra={"outcome": "risk_accepted"})
+    r.commit()
+    rep = _sg_eval(r)
+    cell = next((c for c in (rep.get("cells") or {}).get("cells", []) if c["id"] == "S1/A2/data-exposure"), {})
+    check("★前置★ ③' 核可後那一格是 risk_accepted", cell.get("state") == "risk_accepted", str(cell))
+    check("[S69] ③' 入口上只有接受風險的格子 → 不必蓋 not_applicable_sound", "missing:review_record_missing" not in _sg_codes(rep, "review"),
+          str(_sg_codes(rep, "review")))
+    # ④ 判不適用的格子在別的入口 → 不必蓋
+    r = _SgRepo()
+    r.considerations = [dict(na, surface="S9")]
+    r.items[2] = r.review_item(judgments=no_na)
+    r.commit()
+    rep = _sg_eval(r)
+    check("[S69] ④ 判不適用的格子不在這條護欄的入口上 → 不必蓋", "missing:review_record_missing" not in _sg_codes(rep, "review"),
+          str(_sg_codes(rep, "review")))
+
+
 def t_secev_s41_s43_limits_and_cache():
     """S41/S43:單一證據檔超過上限、不同證據 blob 總量超過上限、或證據項超過上限 → 只把超限的那幾項照固定排序判 invalid:evidence_too_large,
     同一份檔被多條護欄引用只算一次額度,其他護欄不受影響;同一份證據檔被很多條護欄引用時只解析一次、讀 blob 是批次。

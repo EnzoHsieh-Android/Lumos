@@ -8491,9 +8491,11 @@ _SECEV_JUDGMENTS = {"independent_oracle": True, "legit_control_real": True, "thr
                     "category_sufficient": False, "inventory_complete": False,
                     # 沒有工具時的人工核對(威脅類別表 v1 替代欄):只在這條護欄走了替代欄時才要蓋
                     "manual_check_scope": True}
-_SECEV_CONDITIONAL_JUDGMENTS = ("manual_check_scope", "threshold_meaningful", "calibration_representative")
+_SECEV_CONDITIONAL_JUDGMENTS = ("manual_check_scope", "threshold_meaningful", "calibration_representative", "not_applicable_sound")
 # 條件式判斷 → 護欄必要種類裡有「允許這種格式」的種類才要蓋(門檻只在 k6 摘要、校準只在 SARIF;種類 × 格式允許表推得)
 _SECEV_JUDGMENT_FORMATS = {"threshold_meaningful": "k6_summary", "calibration_representative": "sarif"}
+# expires_on 可以寫 null(不看時間、只靠綁版本失效)的證據種類(計劃 d21);其他照舊要日期。核可型別那一份是 _SECAPR_NO_EXPIRY_TYPES
+_SECEV_NO_EXPIRY_KINDS = ("review",)
 
 # 證據圍欄 lumos-evidence-v1(只准放在 Verification)
 _SECEV_MARK = "lumos-evidence-v1"
@@ -8619,8 +8621,9 @@ def _secev_ip_review(it):
     j = it.get("judgments")
     if not (isinstance(j, list) and j and all(isinstance(x, str) and x in _SECEV_JUDGMENTS for x in j) and len(set(j)) == len(j)):
         return "judgments 要是非空、不重複、只含已知判斷 id 的陣列"
-    if _secinv_date(it.get("expires_on")) is None:
-        return "expires_on 是 review_record 必填、要是 YYYY-MM-DD"
+    if "expires_on" not in it or (_secinv_date(it.get("expires_on")) is None
+                                  and not _secev_expiry_null_ok(it["expires_on"], it.get("kind"), _SECEV_NO_EXPIRY_KINDS)):
+        return "expires_on 是 review_record 必填、要是 YYYY-MM-DD(review 種類可寫 null:不看時間、只靠綁版本失效)"
     return None
 
 
@@ -9310,13 +9313,13 @@ def _secev_judge_review(it, ctx):
     authors = it["author"] if isinstance(it["author"], list) else [it["author"]]
     if _secev_norm_name(it["reviewer"]) in {_secev_norm_name(a) for a in authors}:
         probs.append("review_not_independent")
-    exp = _secinv_date(it["expires_on"])
+    exp = _secinv_date(it["expires_on"])   # None:不看時間(d21;格式檢查已擋掉別種寫錯)
     obs = _secev_iso(it["observed_at"]).astimezone(_dt.timezone.utc).date()
-    if exp > obs + _dt.timedelta(days=_SECEV_REVIEW_MAX_DAYS):
+    if exp is not None and exp > obs + _dt.timedelta(days=_SECEV_REVIEW_MAX_DAYS):
         probs.append("review_expiry_too_long")
-    if exp < ctx.today:
+    if exp is not None and exp < ctx.today:
         probs.append("review_expired")
-    elif (exp - ctx.today).days <= _SECEV_REMIND_DAYS:
+    elif exp is not None and (exp - ctx.today).days <= _SECEV_REMIND_DAYS:
         ctx.remind(f"{it['control_id']} [{it['kind']}] 審查紀錄 {it['expires_on']} 到期")
     kind = "ai"
     if it["reviewer_kind"] == "human":
@@ -9445,6 +9448,24 @@ _SECAPR_KEYS = ("seq", "prev_sha256", "project_id", "type", "target", "content_s
 _SECAPR_TYPES = {"approvers_init": 730, "approvers_add": 730, "approvers_revoke": 730, "exception": 30, "revision": 30,
                  "gate_setting": 30, "human_review": 90, "tool_list_change": 30, "threat_table_change": 30,
                  "consideration": 180, "suppression": 90}
+# expires_on 可以寫 null 的核可型別(計劃 d21);其他照舊要日期,上限照上表
+_SECAPR_NO_EXPIRY_TYPES = ("human_review",)
+
+
+def _secev_expiry_null_ok(value, kind, allowed):
+    """expires_on 寫 null 而且這個證據種類或核可型別准許不設期限(d21)→ True;其他(含缺鍵、寫錯)交給原本的日期檢查判。
+    證據圍欄(kind 對 _SECEV_NO_EXPIRY_KINDS)與核可鏈(type 對 _SECAPR_NO_EXPIRY_TYPES)共用這一支。"""
+    return value is None and kind in allowed
+
+
+def _secapr_signer_revoked(e, revoked, retro=False):
+    """這一筆的簽章人在撤銷集合裡 → True。逐筆判(retro=False)用「這一筆之前」算出的集合,撤銷之後才簽的判 revoked;
+    鏈判完後回溯(retro=True)用最終集合,只管不設期限的核可(沒有時間兜底,簽章人之後被撤銷也一併失效;d21)。"""
+    if retro and not _secev_expiry_null_ok(e.get("expires_on"), e.get("type"), _SECAPR_NO_EXPIRY_TYPES):
+        return False
+    return e.get("signer") in revoked
+
+
 _SECAPR_KEY_RE = re.compile(r"(\S+) (ssh-ed25519|sk-ssh-ed25519@openssh\.com|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|"
                             r"sk-ecdsa-sha2-nistp256@openssh\.com|ssh-rsa) ([A-Za-z0-9+/]+={0,3})")
 # 鏈長上限要讓最壞情況(每一筆都要另起一次 ssh-keygen 驗章)落在每個 ref 60 秒的預算裡(主線版與推送版共用驗章快取,同一筆不驗兩次)。
@@ -9546,7 +9567,8 @@ def _secapr_entry_shape(e):
     typ = e["type"]
     need = set(_SECAPR_KEYS) | ({"keys"} if typ in ("approvers_init", "approvers_add") else set())
     if set(e) - {"outcome"} != need or typ not in _SECAPR_TYPES \
-            or _secinv_date(e.get("approved_on")) is None or _secinv_date(e.get("expires_on")) is None:
+            or _secinv_date(e.get("approved_on")) is None \
+            or (_secinv_date(e.get("expires_on")) is None and not _secev_expiry_null_ok(e.get("expires_on"), typ, _SECAPR_NO_EXPIRY_TYPES)):
         return "approval_fields_missing"
     if typ in ("approvers_init", "approvers_add") and (_secapr_parse_keys(e.get("keys")) is None
                                                        or e["content_sha256"] != _sha256_bytes(_secev_canon(e["keys"]))):
@@ -9556,11 +9578,12 @@ def _secapr_entry_shape(e):
 
 def _secapr_entry_dates(e, today):
     """核可日不晚於今天、到期日減核可日不超過那一型的上限(consideration 的 risk_accepted 是 30 天)。"""
-    ap, ex = _secinv_date(e["approved_on"]), _secinv_date(e["expires_on"])
+    ap = _secinv_date(e["approved_on"])
+    ex = _secinv_date(e["expires_on"])   # None:不看時間(d21,只有 human_review;形狀檢查已擋掉別種)
     lim = 30 if (e["type"] == "consideration" and e.get("outcome") == "risk_accepted") else _SECAPR_TYPES[e["type"]]
     if ap > today:
         return "approval_in_future"
-    if ex < ap or (ex - ap).days > lim:
+    if ex is not None and (ex < ap or (ex - ap).days > lim):
         return "approval_too_long"
     return None
 
@@ -9578,7 +9601,7 @@ def _secapr_entry_status(i, e, project_id, today, keys, revoked, cache, deadline
     else:
         pool = {p: v for p, v in keys.items() if v[2] >= ap}
     signer = e["signer"]
-    if signer in revoked:
+    if _secapr_signer_revoked(e, revoked):
         return "approval_signer_revoked"
     if signer not in pool:
         return "approval_signer_unknown"
@@ -9630,6 +9653,8 @@ def _secapr_verify(push_raw, main_raw, project_id, today, cache=None, deadline=N
     - seq 連續、prev_sha256 對得上;斷在某一筆時那一筆與之後每一筆都 approval_chain_broken。
     - approved_on 不准早於前面任何一筆(approval_backdated):擋拿已到期的金鑰回填舊日期讓它復活。
     - 有效金鑰從第一筆重算;撤銷永久有效;金鑰那一筆過期,那把金鑰從隔天起失效。
+    - 撤銷分兩道、同一支 _secapr_signer_revoked 判:逐筆判時撤銷之後才簽的判 approval_signer_revoked;整條判完再回溯一次,
+      不設期限的核可(expires_on=null,目前只有 human_review)簽章人之後被撤銷也改判 approval_signer_revoked(d21)。
     - 某一筆欄位型別不對(_secapr_entry_shape 判)→ 那一筆 approval_fields_missing,其餘照鏈往下算;驗章與判定碼自己丟的例外不接。
     - 每一筆驗章前查截止時間;超過筆數上限丟 _SecaprTooLong(呼叫端判整道 read_incomplete)。"""
     cache = {} if cache is None else cache
@@ -9662,8 +9687,12 @@ def _secapr_verify(push_raw, main_raw, project_id, today, cache=None, deadline=N
         if ent["status"] == "ok":
             last_ap = ap         # 只拿有效的筆當日期基準:壞的一筆填未來日期不會讓之後每一筆都被判回填
             _secapr_apply(e, keys, revoked)
-            if _secinv_date(e["expires_on"]) < today:
+            if e["expires_on"] is not None and _secinv_date(e["expires_on"]) < today:
                 ent["status"] = "approval_expired"
+    for ent in res["entries"]:   # 不設期限的核可沒有時間兜底:簽章人後來被撤銷,先前簽的也一併失效(d21,代碼審 r1 F3)
+        e = ent.get("entry") or {}
+        if ent["status"] == "ok" and _secapr_signer_revoked(e, revoked, retro=True):
+            ent["status"] = "approval_signer_revoked"
     res["keys"] = {p: v for p, v in keys.items() if v[2] >= today}
     res["revoked"] = revoked
     return res
@@ -10129,6 +10158,7 @@ class _SecevCtx:
         self.reminders, self.notes = [], {}
         self.parse_count = 0
         self.over_items = set()    # 證據項總數超過上限的那幾項(id)
+        self.na_surfaces = set()   # 推送版入口盤點裡 outcome=not_applicable 的格子所在入口(_secev_stage_judge 判之前填)
         self.tools_broken = False  # 推送版工具清單讀不出來:不走類別表替代欄
 
     def table_tools(self):
@@ -10434,10 +10464,10 @@ def _secev_kind_verdict(kind, items, extra_judgments=()):
         human = {j for x in items if x.get("reviewer_kind_effective") == "human" for j in x.get("judgments") or []}
         anyone = {j for x in items for j in x.get("judgments") or []}
         base = set(_SECEV_JUDGMENTS) - set(_SECEV_CONDITIONAL_JUDGMENTS)
-        need_h = {j for j in base if _SECEV_JUDGMENTS[j]} | set(extra_judgments)
+        need_h = {j for j in base | set(extra_judgments) if _SECEV_JUDGMENTS[j]}   # 條件式裡 AI 也算數的(not_applicable_sound)不要人
         if need_h - human:
             return "missing", ["missing:human_review_missing"]
-        if base - anyone:
+        if (base | set(extra_judgments)) - anyone:
             return "missing", ["missing:review_record_missing"]
     return "qualified", []
 
@@ -10548,6 +10578,15 @@ def _secev_control_table(rec, ctx, out):
     return extra_j
 
 
+def _secev_na_judgments(rec, ctx):
+    """判不適用的條件式判斷(計劃 d21):護欄自己標 not_applicable、或推送版入口盤點有 outcome=not_applicable 的格子
+    落在它的入口上,才要蓋 not_applicable_sound(AI 審也算數)。"""
+    surfaces = {s for s in (rec.get("surfaces") or []) if isinstance(s, str)}
+    if rec.get("reported_status") == "not_applicable" or surfaces & ctx.na_surfaces:
+        return {"not_applicable_sound"}
+    return set()
+
+
 def _secev_format_judgments(rec):
     """必要種類帶出的條件式判斷:有允許 k6 摘要的種類才要人判門檻、有允許 SARIF 的種類才要人判校準樣本。"""
     req = [k for k in (rec.get("required_evidence") or []) if isinstance(k, str)]
@@ -10564,7 +10603,7 @@ def _secev_control_layer(rec, ctx, env, out, removed):
         out["control_codes"].append("required_evidence_empty")
     if not rec.get("threat_categories"):
         out["control_codes"].append("threat_categories_missing")
-    need_judgments = _secev_control_table(rec, ctx, out) | _secev_format_judgments(rec)
+    need_judgments = _secev_control_table(rec, ctx, out) | _secev_format_judgments(rec) | _secev_na_judgments(rec, ctx)
     src = rec.get("source") or {}
     if src.get("decision_ref") and _secinv_decision_problem(env, src["decision_ref"], ctx._facts):
         out["control_codes"].append("source_decision_invalid")
@@ -11224,6 +11263,13 @@ def _secev_stage_judge(run, ctx, idx, work):
         frozen[cid] = _secev_frozen(_secev_items_for(menv, idx["main"].get(cid), ctx._facts) if menv else [], pitems)
         all_items.append((rec, pitems + frozen[cid]))
     ctx.over_items = _secev_budget_prepass(ctx, all_items)
+    run.tick("算格子")
+    # 格子先算(驗過形狀、引用與核可鏈,只認算數的列),判不適用的條件式判斷讀它的結果,不另寫一套讀 considerations(r1 架構對齊席 F1)
+    cells, cell_errors, pend = _seccell_compute(run.reps["push"][3], idx["push"].values(),
+                                                run.reps["push"][0].get("considerations") or [],
+                                                counted=lambda cid, row: _secev_consideration_counted(ctx, penv, cid, row))
+    pend = set(pend)
+    ctx.na_surfaces = {c["surface"] for c in cells.get("cells") or [] if c["id"] in pend}
     run.tick("逐條判定")
     for rec, cid, removed, missing in work:
         run.tick(f"判護欄 {cid}")
@@ -11235,10 +11281,7 @@ def _secev_stage_judge(run, ctx, idx, work):
         if r.get("lifecycle") == "candidate" and "security" in (r.get("concerns") or []):
             run.tick(f"判候選 {cid}")
             rep["candidates"].append(_secev_candidate(run, ctx, r))
-    run.tick("算格子")
-    rep["cells"], rep["cell_errors"], _pend = _seccell_compute(run.reps["push"][3], idx["push"].values(),
-                                                              run.reps["push"][0].get("considerations") or [],
-                                                              counted=lambda cid, row: _secev_consideration_counted(ctx, penv, cid, row))
+    rep["cells"], rep["cell_errors"] = cells, cell_errors
     rep["reminders"] += ctx.reminders
     rep["warnings"] += _secev_orphans(penv, list(idx["push"].values()), ctx._facts)
     rep["parse_count"] = ctx.parse_count
@@ -11670,8 +11713,8 @@ def cmd_security_approvals(sub_, repo=None, typ=None, target=None, signer=None, 
     if typ not in _SECAPR_TYPES:
         _secinv_say(f"擋下:type 只收 {'、'.join(_SECAPR_TYPES)}", err=True)
         return 2
-    if not (signer and _secinv_is_text(target) and _secinv_date(expires_on)):
-        _secinv_say("擋下:要帶 <type> <target> --signer <principal> --expires-on YYYY-MM-DD", err=True)
+    if not (signer and _secinv_is_text(target) and (_secinv_date(expires_on) or _secev_expiry_null_ok(expires_on, typ, _SECAPR_NO_EXPIRY_TYPES))):
+        _secinv_say("擋下:要帶 <type> <target> --signer <principal> --expires-on YYYY-MM-DD(human_review 可以不帶 --expires-on)", err=True)
         return 2
     opts = {"keys": keys, "content_file": content_file, "reason": reason, "commit": commit}
     try:
@@ -64955,7 +64998,8 @@ def main():
     sec_ap.add_argument("ap_type", metavar="type")
     sec_ap.add_argument("ap_target", metavar="target")
     sec_ap.add_argument("--signer", dest="ap_signer", required=True, help="簽章人(allowed_signers 裡的 principal)")
-    sec_ap.add_argument("--expires-on", dest="ap_expires", required=True, help="到期日 YYYY-MM-DD(UTC;上限依 type)")
+    sec_ap.add_argument("--expires-on", dest="ap_expires", default=None,
+                        help="到期日 YYYY-MM-DD(UTC;上限依 type);human_review 可以不帶:不設期限、只靠綁版本失效")
     sec_ap.add_argument("--key", dest="ap_keys", action="append", default=[], help="approvers_init/add:<principal>=<公鑰檔>,可重複")
     sec_ap.add_argument("--content-file", dest="ap_content", default=None, help="其他 type 的被核可內容 JSON 檔")
     sec_ap.add_argument("--reason", dest="ap_reason", default=None, help="suppression 的理由")
