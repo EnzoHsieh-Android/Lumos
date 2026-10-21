@@ -10,7 +10,7 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
 
 **新模組要照 DDD 這類目標架構寫、不想被架構對齊席判成跟舊鄰居不一樣時**:抄 `commands/target-arch-ddd-template.md` 的範本開目標架構節點(前端專案的 API 層、domain、元件分層抄 `commands/target-arch-frontend-template.md`),宣告方式見 `commands/06-代碼審與推送.md` 的 `arch_targets` 那一列。
 
-**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開九個子檔之一。下面只列每個階段最常用的。
+**指令怎麼找**:`commands/INDEX.md`(本目錄,4k)——先看「grep 衝動對照表」,再按你正在做的事開十個子檔之一。下面只列每個階段最常用的。
 
 ## 1. 進場(每個子任務都重來,不是 session 開頭一次)
 
@@ -43,6 +43,7 @@ description: 專案知識圖譜(docs/{project}-knowledge/)的進場與讀寫—�
   3. 只把業務規則、成本、風險能接受到哪、做了回不去的決定、產品行為交給人;會擋住後面工作的、做了回不去的有幾題就一次問完,其他排後面,每題附建議答案。
   4. 題目用 `lumos question-add <計劃> "<問題>" --class <類> --stage <階段>` 寫進計劃開頭欄位 `pending_questions`(不寫正文;見 [[Projects/待決問題改存開頭欄位_計劃]]),可加 `--blocking` `--irreversible`;狀態取 待查/自答/待人/延後/已決/已驗,自答附 `--source`、延後附 `--reason`、已決附 `--decision "<節點>#dN"`、已驗再加 `--tests <條款綁的測試名>`;有答案了用 `lumos question-set <計劃> Q<n> status=已決 decision=#dN`。不可逆不得自答、阻塞不得延後(指令會擋);標阻塞的需求或架構題沒結,規格閘不放進實作。
   5. 要人決定的題沒回答前不寫程式。
+- **碰到登入、權限、付款、個資、上傳下載、對外呼叫、管理後台的功能，先登記資安護欄**（寫計劃時登記成候選、證據齊了改生效；沒登記的專案推送閘整個不判資安）：寫法、要哪些證據、哪些判斷要使用者用金鑰簽，見 `commands/10-資安護欄.md`。
 
 ## 3. 寫回(同一次工作內;pre-commit 擋「改 code 沒動圖譜」)
 

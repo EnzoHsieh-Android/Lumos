@@ -99,7 +99,8 @@ Business rules (★INVARIANT★) are agreements that must not break. Security ru
   </a>
 </p>
 
-- **Asking the right security questions**: Plans get security questions at four stages (requirements, architecture, verification, and delivery), drawn from a 14-category threat table.
+- **Nothing is checked until it is registered**: Security guardrails are registered in feature notes (see the [security guardrail guide](skills/lumos-project-notes/commands/10-資安護欄.md), Chinese); the working rules tell AI to register them for features touching login, permissions, payments, or personal data. **In a project with no registration, the push gate does not check security at all.**
+- **Asking the right security questions**: When AI writes a plan following the working rules, the questions for the requirements, architecture, verification, and delivery stages include security questions drawn from a 14-category threat table; they do not pop up on their own, AI has to ask for them as the rules say.
 - **Inventory of guardrails**: `lumos security list` shows which security guardrails a project has registered and which entry points have none. It only takes inventory and runs no tests; a complete inventory does not mean the product is secure.
 - **Evidence must come from tools that actually ran**: The gate reads the output of test, load, and scanning tools and judges it itself; changing the code without re-collecting evidence makes it stale.
 - **Blocked on push**: pre-push and CI add a security evidence gate; failed, stale, or missing evidence blocks the push.
