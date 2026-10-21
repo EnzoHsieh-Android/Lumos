@@ -1,0 +1,870 @@
+diff --git a/README.en.md b/README.en.md
+index 6d4a80de..137ae3c5 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -4,127 +4,225 @@
+     <img src="assets/lumos-logo.png" alt="Lumos" width="320">
+   </picture>
+ </p>
+ 
+ # Lumos
+ 
+ [繁體中文](README.md) · **English**
+ 
+ [![CI](https://github.com/EnzoHsieh-Android/Lumos/actions/workflows/ci.yml/badge.svg)](https://github.com/EnzoHsieh-Android/Lumos/actions/workflows/ci.yml)
+ 
+-**Let AI write the code—and leave context for the next change.**
++**Keep the reasons and verification results alongside the code AI changes.**
+ 
+-Lumos works with Claude Code or Codex to record decisions, constraints, and verification results alongside code changes. Automated checks and reviews based on risk help people understand the reasoning and evidence behind each change.
++Lumos is a toolkit installed in a Git project, used with Claude Code or Codex. You discuss requirements with AI as usual. Lumos adds working instructions, commands for finding project notes, and checks that run when code is committed or pushed.
+ 
+-Conversation can turn a request into working code quickly, but the trade-offs can stay buried in one chat. Three months later, a new teammate or a different AI tool may have to ask again: why was it built this way?
++It addresses a familiar handoff problem: the code is still there, but the discussion that explains it is hard to find.
+ 
+-For example, an API returns both an old field and its replacement. That may look like duplication worth removing. But the old field was kept because a customer's devices still run an older client; it can only be removed after the customer upgrades. The code shows that both fields exist, but may not explain who still needs this compatibility arrangement or when it can end.
++For example, an API returns both an old field and its replacement. Someone taking over might remove the old field, without knowing that a customer's devices still need it. The code may not explain which customer uses it or what needs to happen before removal. If that reason stays in one chat, the next person or AI has to investigate again.
+ 
+-Verification needs context too. When AI says “the tests passed,” the next person still needs to know which tests ran, against which version, and what they checked.
++Lumos requires AI to keep these reasons in Markdown notes, versioned with review reports and test records. They can then be consulted when the related code changes. This suits projects that need ongoing maintenance or frequent handoffs. Keeping records, running checks, and reviewing changes takes time; additional AI reviewers also use more model capacity.
+ 
+-Lumos keeps that context and those records in the project, versioned alongside the code, so the next person or AI can find them. It does three things:
++[See a typical change](#use) · [Install and try it](#start) · [Explore the checks](#mechanisms)
+ 
+-- **Makes AI keep records**: For each code change, AI records the reasons, the rules to preserve, and how it was verified, in Markdown notes versioned alongside the code, so anyone using any tool can find them.
+-- **Checks automatically at commit and push**: Git hooks check what can be automated, such as whether notes were updated. For code quality, it uses each language's existing linters and community rules and blocks only new warnings before a push.
+-- **Assigns AI reviewers by risk**: Reviewers examine changes from several angles. The workflow requires test execution records and checks whether tests can catch the relevant errors.
++<a id="use"></a>
+ 
+-It brings the ideas behind ADRs (architecture decision records), CODEOWNERS, and pre-commit into AI development: record decisions, assign file ownership, and check changes before committing. The aim is to help people assess changes through their decisions, reviews, and verification records, and focus their attention on requirements and risk.
++## What it looks like
+ 
+-You can describe requirements in natural language and have AI propose and implement a solution. The workflow is not tied to one programming language.
++Here is an illustrative workflow using the API example above. You might ask AI:
+ 
+-The core toolset consists of a single-file Python CLI using only the standard library, Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and project notes.
++> The new client uses the replacement field. Please tidy up this API. First find out why the old field is still there, and ask me if it is unclear whether we can remove it.
+ 
+-<details>
+-<summary>Three plugins for Claude Code only</summary>
++AI reads the code and looks up the related notes. If a note says some devices have not been upgraded, it has a reason to check with you instead of removing what looks like duplication. Once you decide, AI changes the code, runs relevant tests, arranges review according to risk, and updates the project records.
+ 
+-- One records session events; inspect them with `lumos events`.
+-- One requires the state needed for a handoff to be kept when the conversation is compacted.
+-- One restricts which tools agents marked as reviewers can use and where they can write files directly. This is not a security sandbox: their Bash remains a full shell.
++At the end, you can inspect the code changes, decision notes, review reports, and test records. In this example, the next person should be able to find who needs the old field, when it can be removed, and which old- and new-client scenarios were tested.
+ 
+-These plugins have no Codex counterpart.
++**AI performs this work by following the instructions. Lumos commands and Git checks help find notes and validate records, and can block a commit or push.** A note does not prove its reasoning is correct, and a test record does not prove the feature works. The contents still need review.
+ 
+-</details>
+-
+-## What it looks like
++<details>
++<summary>See real output: AI changed code but forgot to update notes</summary>
+ 
+ Take the commit check as an example. If AI changes the refund logic and commits without writing notes, it receives this message (real output, excerpted and translated from Chinese):
+ 
+ ```text
+ $ git commit -m "feat: check whether an order was already refunded"
+ 
+ Blocked: this commit changes code, but not a single knowledge note was touched.
+ …
+ Code changed in this commit (1):
+    • src/payment.py
+ …
+ Pick one of two paths:
+    1. Update the notes that should change, add them to the commit, and commit again.
+    2. This really needs no note change (typo, formatting, comments, work in progress) → skip this check:
+         git commit --no-verify -m '<message>'
+       Skipping is recorded; it is not a silent pass.
+ ```
+ 
+ The message is for AI: its instructions require it to update the notes and retry. If no update is needed, such as for a typo fix, it can skip the check, but the skip is recorded. You mainly decide business trade-offs and whether to accept a risk.
+ 
++</details>
++
+ ## How it works
+ 
+ <p align="center">
+   <a href="assets/map-en.svg">
+     <img src="assets/map-en.svg" alt="Four steps around each change: read the code and add context from notes, dispatch AI reviewers by risk, review and handle every finding, write back; an outer loop checks the process itself" width="760">
+   </a>
+ </p>
+ 
+ 1. **Read the code, add context**: AI reads the code first. When it edits a file, the tool supplies related notes with reasons the code cannot reveal. For descriptions of code behavior, code takes precedence over conflicting notes. For deployment state, business constraints, and other questions code cannot answer, verify or ask a person.
+ 2. **Assign AI reviewers based on risk**: See "How code review works" below.
+ 3. **Every finding needs an outcome**: Fix it, explain why it will not be fixed, or disprove it with evidence. Addressing every finding is a condition for passing this gate.
+ 4. **Update the notes**: Record trade-offs and verification methods in the note responsible for that file, ready for the next change.
+ 
+ The outer loop checks the process itself; see "How the toolkit keeps improving (evals)" below.
+ 
++## Where humans come in
++
++By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
++
++- Requirements, trade-offs, risk acceptance, and irreversible operations.
++- A review that hits 3 rounds without passing: a standard- or high-tier review (design or code review alike) stops for a human to decide whether to add a round or accept the risk; AI cannot declare a pass itself.
++- Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
++
++Each round's review reports and outcomes stay in the repo for spot-checking at any time.
++
++<details>
++<summary>Details: recording the human decision and retrospective</summary>
++
++- Record the human decision with `lumos loop cap-decision`.
++- Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip; once the human decision is recorded, without one of these no further review records can be added and the check that every finding was handled cannot pass.
++
++</details>
++
++<a id="start"></a>
++
++## Install and limits
++
++You need Git, Python 3.14+, and Claude Code or Codex. The following command downloads and runs the installer. Run it in the project directory:
++
++```bash
++curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
++```
++
++**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7](docs/updates/2026-10-07-readme-audit.md) and [October 7–10](docs/updates/2026-10-10-readme-audit.md) update audits (Chinese) list each audit's commits, documentation changes, and how main and release differed at the time of each audit.
++
++When asked to initialize the current directory, check that it is correct before entering `y`. After installation, start a new AI session and run `lumos enforcement` to inspect which checks are connected. Codex’s trust approval cannot be read locally; follow the prompts and trigger a hook once to confirm it runs. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese). To upgrade an existing project, run `lumos update --dry-run` first to preview which rule files and tool files would change; it changes nothing.
++
++<details>
++<summary>Projects already on an older Lumos: moving to Python 3.14</summary>
++
++- After updating, commits and pushes are blocked on machines without 3.14, with install instructions (macOS: `brew install python@3.14` or `uv python install 3.14`). If `python3` points to an older version, lumos finds 3.14 and re-runs itself.
++- Set your CI's `actions/setup-python` to 3.14.
++- Once 3.14 is installed, run `lumos install` once so the Claude/Codex hooks use it too.
++- This changes the Codex hook command lines, so Codex may ask you to re-approve them in an interactive session. Codex's trust state cannot be read locally; run `lumos enforcement`, then trigger a hook once to confirm it actually runs.
++
++</details>
++
++Lumos guarantees neither quality nor security and does not replace engineering judgment: notes can go stale, AI reviews can miss problems, and records do not prove correctness. People still decide business trade-offs, irreversible operations, and risk acceptance.
++
++For a first try, choose a small change with a clear expected result. In a new AI session, ask:
++
++> Read this project's working instructions, then help me change [specific requirement]. When finished, tell me what changed, which checks ran, and where to find the notes and review records.
++
++Look through one complete result before deciding whether to use the workflow for more features.
++
++
++<details>
++<summary>Tool components and Claude Code plugins</summary>
++
++It brings the ideas behind ADRs (architecture decision records), CODEOWNERS, and pre-commit into AI development: record decisions, assign file ownership, and check changes before committing. The aim is to help people assess changes through their decisions, reviews, and verification records, and focus their attention on requirements and risk.
++
++The core toolset consists of a single-file Python CLI using only the standard library, Git hooks, AI working instructions in CLAUDE.md / AGENTS.md, and project notes.
++
++<details>
++<summary>Three plugins for Claude Code only</summary>
++
++- One records session events; inspect them with `lumos events`.
++- One requires the state needed for a handoff to be kept when the conversation is compacted.
++- One restricts which tools agents marked as reviewers can use and where they can write files directly. This is not a security sandbox: their Bash remains a full shell.
++
++These plugins have no Codex counterpart.
++
++</details>
++
++</details>
++
++<a id="mechanisms"></a>
++
++## Explore the checks
++
++Each section below starts with its purpose. Expand it for diagrams, conditions, and commands when you need them; you do not need to read every detail on your first visit.
++
+ ## Connecting plans, features, and verification
+ 
++Notes live in `docs/<project>-knowledge/` and can be read in a text editor. Plans, feature descriptions, verification results, and incidents have separate notes with links between them. The “graph” means these linked notes; a “node” means one note.
++
++For the API example, the note should explain who needs the old field and what must be checked before removing it. Read the code to see how the fields are returned today. The diagram below illustrates relationships between notes; it is not a separate graphical interface you need to operate.
++
++<details>
++<summary>See how notes connect and how important rules are checked</summary>
++
+ Linked notes form a “graph”; each note is a “node” covering a plan, feature description, verification record, or incident. The fictional shop below shows how they connect:
+ 
+ - **From plan to verification**: Plan checkout and payment integration, build the features, then record results from checkout end-to-end tests and duplicate-payment stress tests.
+ - **When an incident happens**: If canceling an order fails to refund points, the incident links back to checkout, followed by a repair plan, a fix, and a regression test.
+ - **How important rules are guarded**: Record the rule as a line marked ★INVARIANT★ (a “contract line”), bind the tests that check it, and have an AI that took no part in the work audit it independently. You can also use `lumos guard` to break the code on purpose in an isolated copy and confirm the tests actually fail.
+ 
+ The gold rings are only an illustration of a note that carries rules that must hold and links to verification records; the tool has no “protected” status.
+ 
+ <p align="center">
+   <a href="assets/graph-demo-en.svg">
+     <img src="assets/graph-demo-en.svg" alt="An illustrative map of linked notes for a shop: plans connect to features and verification records; incident lessons feed later plans" width="760">
+   </a>
+ </p>
+ 
++</details>
++
+ ## How code review works
+ 
++Reviewers are separate AI agents that read the change and its context from different angles. Ordinary changes get one or two reviewers; high-risk changes get at least seven per round, taking more time and model capacity.
++
++Every finding needs an outcome: a fix, a reason for leaving it, or evidence that disproves it. A “gate” is a check that decides whether work can proceed. Some checks block operations automatically; others are instructions AI is expected to follow. Their scopes are explained separately below.
++
++<details>
++<summary>See risk tiers, the review diagram, and repair verification</summary>
++
+ <p align="center">
+   <a href="assets/risk-review-en.svg">
+     <img src="assets/risk-review-en.svg" alt="Review based on risk: new code is scanned with fixed rules; ordinary changes get one or two reviewers, high-risk changes at least seven per round, five problem-finders plus architecture and security; every finding must be fixed, waived with a reason or disproved; a high-risk push needs a review outcome" width="760">
+   </a>
+ </p>
+ 
+ - **Assess risk first**: Before a push, fixed rules scan newly added code for patterns prone to problems.
+ - **Choose how many AI reviewers to assign**: Ordinary changes get 1 to 2; high-risk changes get at least 7 per round: 5 look for problems, 1 checks architectural consistency, and 1 checks security. A finalized design spec adds 1 reviewer to check against it.
+ - **High-risk changes need a review outcome to push**: Record a pass or a skip with a written reason before pushing; otherwise, the Git hook blocks the push.
+ 
+ **Fixing a defect must also preserve behavior that already worked.** In the round after a fix, the instructions require:
+ 
+ - **Pinning the before and after versions**: A test that reproduces the original problem must fail before the fix and pass after it; behavior that already worked must pass on both versions.
+ - **Fresh AI reviewers**: New reviewers with no context from earlier rounds look for side effects of the fix.
+ - **Care when a fix is mixed with refactoring**: Intermediate verification points are kept; some high-risk cases are also spot-checked to confirm the tests catch regressions.
+ 
+ `lumos loop fix-check` checks fix records and post-fix tests, but it only warns and does not replace these checks or the next review round. References, snapshots, and records in the review material are also checked, so incomplete evidence is not accepted as a pass. See the [code review instructions](skills/lumos-code-loop/SKILL.md).
+ 
++</details>
++
+ ### How security is reviewed
+ 
++A security guardrail is a registered protection against a specific risk, such as “only the order owner can view the order.” The project runs tests or scanning tools, and Lumos checks whether the results meet the requirements and match the current version. **Without registration, this gate does not check security.**
++
++These checks help catch omitted work and mismatched evidence. They do not prove the product is secure or prevent deliberate falsification. Approvals that require a person remain that person's responsibility.
++
++<details>
++<summary>See the security diagram, registration, and approval limits</summary>
++
+ Business rules (★INVARIANT★) record agreements that must hold. Security controls are registered and verified separately, making gaps in their evidence easier to find. Filling in a form is not enough: evidence must meet the requirements for that kind of control and match the current version.
+ 
+ <p align="center">
+   <a href="assets/security-lane-en.svg">
+     <img src="assets/security-lane-en.svg" alt="The security lane in four steps: a threat-category table prompts questions, registered guardrails and gaps are inventoried, the project runs its own tools and keeps version-bound evidence, and pre-push and CI check that evidence; exceptions require user approval with their SSH key, for at most 30 days; AI reviews of judgment items must say they are AI; the layer catches mistakes, not deliberate forgery" width="760">
+   </a>
+ </p>
+ 
+ - **Nothing is checked until it is registered**: Security guardrails are registered in feature notes (see the [security guardrail guide](skills/lumos-project-notes/commands/10-資安護欄.md), Chinese); the working rules tell AI to register them for features touching login, permissions, payments, or personal data. **In a project with no registration, the push gate does not check security at all.**
+ - **Asking the right security questions**: When AI writes a plan following the working rules, the questions for the requirements, architecture, verification, and delivery stages include security questions drawn from a 14-category threat table; they do not pop up on their own, AI has to ask for them as the rules say.
+@@ -154,22 +252,29 @@ The limits of this layer, stated plainly:
+ - **Qualified evidence is not a secure product**: Consistent tool evidence shows the results match the version; it does not show the criteria were right or the report is trustworthy.
+ 
+ Review is one layer. Risk classification, AI review, approval rules, external rules (linters), and tests each have gaps. Stacking them makes it harder for a problem to pass through them all: the Swiss cheese model.
+ 
+ <p align="center">
+   <a href="assets/swiss-cheese-en.svg">
+     <img src="assets/swiss-cheese-en.svg" alt="Five Swiss-cheese defence layers, with escaped defects feeding new rules or tests" width="760">
+   </a>
+ </p>
+ 
++</details>
++
+ ## Tests must be useful, not a rewrite of the code
+ 
++Green tests can mean the code and the tests made the same mistake. Lumos instructions require expected results to come from the requirements, followed by checks that breaking the relevant code actually makes the tests fail. This is a development and review requirement; a tool cannot decide whether the expected answer is correct.
++
++<details>
++<summary>See a test example and the supporting tools</summary>
++
+ **All tests passing does not mean the feature is correct.** If a test computes its expected value with the same algorithm as the production code, both can make the same mistake and still pass. If it only checks that the source contains a certain function name, the actual behavior can break while the test stays green.
+ 
+ Say the requirement is "3 items at 5 each should total 15":
+ 
+ ```python
+ # Bad: rewrites the implementation's algorithm, so it cannot independently judge whether the algorithm meets the requirement
+ expected = quantity * unit_price
+ assert total_price(quantity, unit_price) == expected
+ 
+ # Good: checks the actual result against a confirmed requirement case
+@@ -185,39 +290,28 @@ The full practice is in [Implementation test quality](skills/lumos-project-notes
+ <details>
+ <summary>Helper tool: <code>lumos test-quality</code></summary>
+ 
+ - **`scan`**: Once Lumos is installed, `lumos test-quality scan <test file or directory> --json` lists suspicious test patterns, read-only, for a person to look at. For Python it finds four kinds; for other languages (PHP included), an optional local Semgrep finds assertions that compare a value with itself.
+ - **`capture`**: Runs a trusted local test runner only when you ask it to, and saves JUnit output and source snapshots.
+ - **`check`**: Verifies evidence for the normal → broken → restored sequence, optionally with before-and-after refactor evidence.
+ - **Limits**: **Finding no suspicious patterns, passing every test, or detecting an injected fault cannot alone prove the expected answer is correct.** The tool provides no sandbox and does not replace reviewing the requirement source; check the scope with `capabilities` first, then read [operation and capability limits](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli) (Chinese).
+ 
+ </details>
+ 
+-## Where humans come in
+-
+-By default, Lumos leaves line-by-line diff review to AI and automated checks. People handle these decisions:
++</details>
+ 
+-- Requirements, trade-offs, risk acceptance, and irreversible operations.
+-- A review that hits 3 rounds without passing: a standard- or high-tier review (design or code review alike) stops for a human to decide whether to add a round or accept the risk; AI cannot declare a pass itself.
+-- Whether rules still fit the business requires human sign-off and a record; tests cannot establish this.
++## How notes are kept from going stale (drift)
+ 
+-Each round's review reports and outcomes stay in the repo for spot-checking at any time.
++Notes need maintenance after they are written. Lumos checks whether notes were updated with code, looks for stale names, links, and pending items before a push, and asks AI to reread notes when their meaning needs checking. “Drift” means the code and notes gradually stop agreeing.
+ 
+ <details>
+-<summary>Details: recording the human decision and retrospective</summary>
+-
+-- Record the human decision with `lumos loop cap-decision`.
+-- Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip; once the human decision is recorded, without one of these no further review records can be added and the check that every finding was handled cannot pass.
+-
+-</details>
+-
+-## How notes are kept from going stale (drift)
++<summary>See the three checks and their configuration</summary>
+ 
+ Notes that still describe old code mislead AI. When I planted incorrect notes in a synthetic project, the smaller model, Haiku 4.5, dropped from 20 correct answers out of 25 to 12. So Lumos puts one checkpoint at each of three moments: writing notes, committing, and pushing.
+ 
+ **First check: when writing notes, record only what the code cannot show.**
+ 
+ - Fields, defaults, and flows the code already shows are not copied into notes; duplicating them adds maintenance work and risks drifting from the code.
+ - At commit time the tool blocks two patterns automatically: new code line references, and current-state descriptions (such as deployment settings) without a source. The rest relies on working rules and review.
+ - Sentences like “there is no refund page yet” go stale the fastest: once the page exists the sentence is wrong, and nobody comes back to fix it. The tool suggests rewriting it as a one-line “revisit condition,” such as “check again when the refund page's file appears.” Once that condition is written, the push in which the file appears is blocked until the sentence is updated or kept with a written reason.
+ 
+ **Second check: when committing, code changes need note changes.**
+@@ -244,22 +338,29 @@ Notes that still describe old code mislead AI. When I planted incorrect notes in
+ - **How revisit conditions are written**: The suggestion to rewrite does not block commits, but a revisit condition must sit on its own line; one buried mid-sentence or in a table blocks the commit. Mark a condition as closed once it no longer needs a look, and it stops reminding. Keeping a met revisit condition requires an expiry or a traceable destination.
+ - **What can be relaxed**: In `.lumos/config.json`, a project can set these to warn or off: outdated-statement checks, the note reread, note wording rules, file ownership, and new linter warnings (a few less common switches are listed in the [command reference](docs/command-reference.md#project-switches)).
+ - **What cannot**: code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval, a failing full test suite in Lumos's own repo, and a missing Python 3.14.
+ - **Cleanup when a note closes**: After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence.
+ - **Two ways to close an issue**: Closing with `lumos drift fix --kind c2 --close` is blocked while its summary still lists an undecided decision or unhandled revisit conditions; changing its status directly with `lumos set` only lists them and does not block.
+ - **Summaries follow closure**: Closing a note without updating its summary triggers a warning; closed notes whose summaries still say “pending” appear in drift checks. Use `lumos summary-add` (add a line) and `lumos summary-line` (edit a line) to maintain summaries; when `doctor` reports outdated update dates, preview the repairs with `lumos updated-sync --stale --dry-run`.
+ - **Counts tied to lists**: When a note says something like “there are N kinds,” it can be tied to the list in the code (Python for now); if the code gains an item and the note doesn't, the health check lists it and one command updates the number.
+ 
+ </details>
+ 
++</details>
++
+ ## How the toolkit keeps improving (evals)
+ 
++This describes how Lumos maintainers check the toolkit itself. Installing Lumos does not automatically run this process in every project. Evaluations (evals) check whether review decisions can be reproduced, relevant notes can be found, and AI follows instructions. They can detect regressions in covered scenarios, but do not guarantee that every change is an improvement.
++
++<details>
++<summary>See the four evaluations, schedules, and notifications</summary>
++
+ You cannot rely on gut feeling alone to tell whether a rule change broke something or the AI is following the rules. Lumos runs four evaluations (evals), each once a week:
+ 
+ - **Review replay**: Reviewed cases preserve their original verdict as a baseline for later comparison (this is called “freezing”). The current judging code recomputes it (no new AI review); a mismatch is flagged so someone can check whether a rule change broke something.
+ - **Retrieval exam**: Uses questions with human-labelled answers to check whether the tool finds the notes it needs.
+ - **Scenario probes**: Gives the AI plain-language requests to carry out in an isolated copy of the repo, checking whether it looks up notes and uses the right commands on its own. Each run restarts from the same frozen copy, an incident stops the whole batch, and broken runs are not scored (details in the [October 7–10 update audit](docs/updates/2026-10-10-readme-audit.md) (Chinese)).
+ - **Missed notes**: Checks whether the notes shown before an edit omit any that should be read.
+ 
+ <p align="center">
+   <a href="assets/evals-overview-en.svg">
+     <img src="assets/evals-overview-en.svg" alt="The toolkit itself is checked every week: review replay, retrieval exam, scenario probes, and missed-note checks; results are recorded weekly, a person is alerted when notification conditions are met, and fixes become rules or tests measured again the next week" width="760">
+@@ -280,37 +381,15 @@ Fixes become new rules or tests, checked again the next week. Major changes in d
+ 
+ The [offline review convergence evaluator](governance/eval/review_convergence.md) collects possible cases from ordinary reviews and from reviews that hit their round limit, then, after confirming and fixing the cases, versions, and both workflows, compares them, scoring separately whether the original problem was fixed, whether existing behavior was kept, new defects, rounds, and cost. Missing data remains unknown.
+ 
+ - It is a read-only local analysis tool; it does not run models or re-execute acceptance checks.
+ - It uses data fingerprints to check that records stay consistent. Consistent records are not proof that their contents are true, and do not prove that review rounds have decreased.
+ 
+ </details>
+ 
+ These evals run mainly in Lumos's own repo; the retrieval exam also covers one other project named in the scheduling script, when that machine has its exam. These evals make regressions in the covered scenarios easier to detect, but do not guarantee that every change is an improvement.
+ 
+-## Install and limits
+-
+-You need Git, Python 3.14+, and Claude Code or Codex. Run this in the project directory:
+-
+-```bash
+-curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+-```
+-
+-**Version scope: this README describes `main`; the installer above defaults to `release`.** The branches may differ. Check the installed source and version rather than assuming it includes every main update. The [October 1–7](docs/updates/2026-10-07-readme-audit.md) and [October 7–10](docs/updates/2026-10-10-readme-audit.md) update audits (Chinese) list each audit's commits, documentation changes, and how main and release differed at the time of each audit.
+-
+-When asked to initialize the current directory, check that it is correct before entering `y`. After installation, start a new AI session and run `lumos enforcement` to confirm all checks are connected. For Windows, offline installation, and removal, see the [onboarding guide](ONBOARDING.md) (Chinese). To upgrade an existing project, run `lumos update --dry-run` first to preview which rule files and tool files would change; it changes nothing.
+-
+-<details>
+-<summary>Projects already on an older Lumos: moving to Python 3.14</summary>
+-
+-- After updating, commits and pushes are blocked on machines without 3.14, with install instructions (macOS: `brew install python@3.14` or `uv python install 3.14`). If `python3` points to an older version, lumos finds 3.14 and re-runs itself.
+-- Set your CI's `actions/setup-python` to 3.14.
+-- Once 3.14 is installed, run `lumos install` once so the Claude/Codex hooks use it too.
+-- This changes the Codex hook command lines, so Codex may ask you to re-approve them in an interactive session. Codex's trust state cannot be read locally; run `lumos enforcement`, then trigger a hook once to confirm it actually runs.
+-
+ </details>
+ 
+-Lumos guarantees neither quality nor security and does not replace engineering judgment: notes can go stale, AI reviews can miss problems, and records do not prove correctness. People still decide business trade-offs, irreversible operations, and risk acceptance.
+-
+ Further reading: [Mental model](docs/mental-model.md) · [Taking over a project](docs/taking-over.md) · [Command reference](docs/command-reference.md) · [Architecture](ARCHITECTURE.md) · [SDD and Lumos](SDD-vs-Lumos.en.md) · [Methodology](docs/methodology/圖譜即合約.md) (Chinese)
+ 
+ License: [MIT](LICENSE). Your notes belong to you; Lumos claims no rights over them.
+diff --git a/README.md b/README.md
+index e339b8d9..b96910ac 100644
+--- a/README.md
++++ b/README.md
+@@ -4,127 +4,225 @@
+     <img src="assets/lumos-logo.png" alt="Lumos" width="320">
+   </picture>
+ </p>
+ 
+ # Lumos
+ 
+ **繁體中文** · [English](README.en.md)
+ 
+ [![CI](https://github.com/EnzoHsieh-Android/Lumos/actions/workflows/ci.yml/badge.svg)](https://github.com/EnzoHsieh-Android/Lumos/actions/workflows/ci.yml)
+ 
+-**讓 AI 寫下程式，也留下下一次修改需要的脈絡。**
++**用 AI 改程式時，把當初的理由和驗證結果一起留在專案裡。**
+ 
+-Lumos 搭配 Claude Code 或 Codex，讓 AI 在修改程式時留下決策理由、相關限制與驗證紀錄，再透過自動檢查和風險分級審查，協助人掌握每次改動的依據與結果。
++Lumos 是裝在 Git 專案裡的一套開發工具，搭配 Claude Code 或 Codex 使用。你照常跟 AI 討論需求；Lumos 提供工作守則、查筆記的指令，以及提交和推送時會執行的檢查。
+ 
+-透過對話開發，需求可以很快變成程式；但討論過的取捨，也容易留在某一段對話裡。三個月後換人接手，或換一個 AI 工具，往往得重新追問：當初為什麼這樣做？
++它想解決的是接手時常碰到的問題：程式還在，當初的討論卻找不到了。
+ 
+-例如，一個 API 同時回傳新舊兩個欄位，看起來像是可以清理的重複設計。但當初保留舊欄位，是因為客戶的設備仍在使用舊版程式，要等對方完成升級才能移除。程式碼能看出兩個欄位都還在，卻未必能回答這項相容安排是為誰保留、什麼條件下才能結束。
++例如，一個 API 同時回傳新舊兩個欄位。接手的人可能想刪掉舊欄位，但它其實是為了還沒升級的客戶設備而保留。光看程式，未必知道是哪個客戶還在用、要等什麼條件才能刪。這些理由如果只留在某次對話裡，換個人或換個 AI，就得重新查一次。
+ 
+-驗證也一樣。AI 說「測試通過了」，接手的人還需要知道：跑了哪些測試、對應哪個版本，又驗證了什麼。
++Lumos 要求 AI 把這類理由寫成 Markdown 筆記，連同審查與測試紀錄放進版本控制。下次改到相關程式時，就能一起查閱。這適合會持續維護、經常交接的專案；代價是每次改動多了記錄、檢查與審查的時間，多位 AI 審查員也會增加模型用量。
+ 
+-Lumos 把這些脈絡與紀錄留在專案裡，跟程式碼一起進版控，讓後續接手的人和 AI 都能查到。它做三件事：
++[看一次使用流程](#use) · [安裝與第一次使用](#start) · [深入了解各項檢查](#mechanisms)
+ 
+-- **要求 AI 留紀錄**：每次改程式，都寫下理由、必須遵守的規則和驗證方式，存成 Markdown 筆記，跟程式碼一起進版控，換誰、換哪個工具都查得到。
+-- **提交和推送時自動檢查**：Git hooks 檢查能自動判斷的部分，例如筆記有沒有跟著改。程式碼品質則接上各語言現成的 linter 和社群規則，推送前只擋新增的警告。
+-- **依風險派 AI 審查**：從多個角度審改動，要求留下測試執行紀錄，並驗證測試能否抓到相關錯誤。
++<a id="use"></a>
+ 
+-概念上，它把 ADR（架構決策紀錄）、CODEOWNERS 的檔案歸屬概念，以及 pre-commit 的提交檢查，串進 AI 的開發流程。目標是讓人從決策、審查與驗證紀錄掌握改動，把注意力放在需求與風險判斷上。
++## 用起來是什麼樣子
+ 
+-Lumos 支援以自然語言描述需求，再由 AI 提出方案與實作；這套流程不限定單一程式語言。
++以下是使用情境示意，沿用前面的 API 例子。你可以這樣交代 AI：
+ 
+-核心工具是一支單檔的 Python 命令列工具（只用標準函式庫）、一組 Git hooks、一份寫進 CLAUDE.md／AGENTS.md 的 AI 工作守則，加上專案筆記。
++> 新版客戶端已改用新欄位，請整理這支 API。先查一下舊欄位為什麼還留著；不確定能不能移除的地方，先問我。
+ 
+-<details>
+-<summary>Claude Code 專用的三個外掛</summary>
++AI 先讀程式，再查相關筆記。如果筆記記著「某批設備還沒升級」，它就有理由向你確認，而不是只憑兩個欄位看起來重複就刪掉。你決定怎麼處理後，AI 再修改程式、執行相關測試，依改動風險安排審查，並把結果寫回專案。
+ 
+-- 一個記錄會談裡發生的事件，可用 `lumos events` 查詢。
+-- 一個在對話被壓縮時，要求留下接手工作需要的狀態。
+-- 一個限制被標成審查員的 AI 能用哪些工具、能直接寫進哪些位置。這不是安全沙箱：它的 Bash 仍能執行完整的 shell。
++一次工作結束時，你可以查看程式改動、決策筆記、審查報告和測試紀錄。以這個例子來說，接手的人應該能查到：舊欄位為誰保留、何時能移除，以及這次測了哪些新舊客戶端情境。
+ 
+-這三項目前沒有對應的 Codex 外掛。
++**這些工作由 AI 依守則執行；Lumos 的指令和 Git 檢查負責協助查詢、核對紀錄，必要時擋下提交或推送。** 有筆記不代表理由正確，有測試紀錄也不代表功能一定沒問題，內容仍需要審查。
+ 
+-</details>
+-
+-## 用起來是什麼樣子
++<details>
++<summary>看實際輸出：AI 改了程式，卻忘記更新筆記時</summary>
+ 
+ 以提交時那道關卡為例：假設 AI 改了退款邏輯，卻沒寫任何筆記就提交，它會收到這段訊息（實機輸出，節錄）：
+ 
+ ```text
+ $ git commit -m "feat: 退款前檢查是否已退過"
+ 
+ 擋下:這次 commit 改了程式碼,但知識筆記一個字都沒動。
+ …
+ 這次改到的程式碼(1 個):
+    • src/payment.py
+ …
+ 兩條路選一條:
+    1. 把該改的筆記改一改,加進 commit,再提交一次。
+    2. 這次真的不需要動筆記(改錯字、排版、註解、還在進行中的半成品)→ 跳過這道檢查:
+         git commit --no-verify -m '<訊息>'
+       跳過會留下紀錄,不是偷偷放行。
+ ```
+ 
+ 這段訊息是給 AI 讀的：守則要它補好筆記再提交；真的不需要（例如只改錯字）也能跳過，但會留下紀錄。你主要負責業務取捨，和要不要接受某個風險。
+ 
++</details>
++
+ ## 怎麼運作
+ 
+ <p align="center">
+   <a href="assets/map-zh.svg">
+     <img src="assets/map-zh.svg" alt="一次改動的四步：讀程式碼並補上筆記裡的脈絡、依風險分派 AI 審查、審查並處理每條意見、寫回筆記；外圈定期檢查流程本身" width="760">
+   </a>
+ </p>
+ 
+ 1. **讀程式碼，補上脈絡**：AI 先讀程式碼；改檔時，工具會送上相關筆記，補上程式碼看不出的理由。筆記講的程式行為跟程式碼對不上時，以程式碼為準；部署狀態、業務限制這類程式碼答不了的，要查證或問人。
+ 2. **依風險派 AI 審查**：見下面「怎麼做 code review」。
+ 3. **每項審查意見都要有處理結論**：修掉、說明不修的理由，或用證據證明不成立；每項意見都完成處置，才符合這道關卡的放行條件。
+ 4. **寫回筆記**：把這次的取捨和驗證方式寫進負責這支檔的筆記，下次改到這裡查得到。
+ 
+ 外圈檢查流程本身，見下方「怎麼持續改進這套工具（evals）」。
+ 
++## 人在哪裡介入？
++
++Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責這些判斷：
++
++- 需求、取捨、要不要接受風險，以及不可逆的操作。
++- 審查跑滿 3 輪還沒過：standard 或 high 分級的審查（設計審、代碼審都算）會停下交給人，決定加輪或接受風險，AI 不能自己宣布通過。
++- 規則還符不符合業務，要人簽核並留紀錄，這是測試證明不了的。
++
++每輪的審查報告和處理結果都留在 repo，隨時可以抽查。
++
++<details>
++<summary>細節：如何記錄人工裁定與回顧</summary>
++
++- 人的裁定用 `lumos loop cap-decision` 記下。
++- 繼續之前，用 `lumos loop retro` 記一份合格的回顧，或留下有理由的略過紀錄；人的裁定記下後兩樣都沒有，就不能再記後續的審查紀錄，也過不了「每條審查意見都已處理」那道關卡。
++
++</details>
++
++<a id="start"></a>
++
++## 安裝與限制
++
++需要 Git、Python 3.14 以上，以及 Claude Code 或 Codex。下面的指令會下載安裝腳本並執行；請在要導入的專案目錄執行：
++
++```bash
++curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
++```
++
++**版本範圍：本 README 描述 `main`；上述一鍵安裝預設取得 `release`。** 兩條分支可能不同步，安裝後請核對工具來源與版本，不能假定已包含 main 的全部更新。[10/1–10/7](docs/updates/2026-10-07-readme-audit.md) 與 [10/7–10/10](docs/updates/2026-10-10-readme-audit.md) 兩份更新清點，列出每次盤點涵蓋的提交、補了哪些文件，以及盤點當時 main 和 release 差在哪裡。
++
++腳本問要不要初始化目前目錄時，確認目錄正確再輸入 `y`。裝完重開一個 AI 對話，執行 `lumos enforcement` 查看檢查是否接上。Codex 的信任核可狀態無法由本機讀取，仍要依提示確認並實際觸發一次 hook。Windows、離線安裝與移除見[上手細節](ONBOARDING.md)。已經在用的專案要升級時，可以先跑 `lumos update --dry-run`，預覽會改哪些規範檔與工具檔，不會真的動手。
++
++<details>
++<summary>已經在用舊版的專案：升級到 Python 3.14 要做的事</summary>
++
++- 更新後，沒有 3.14 的機器，提交與推送會被擋下並說明怎麼裝（macOS：`brew install python@3.14` 或 `uv python install 3.14`）。`python3` 指到舊版沒關係，lumos 會自己找 3.14 重跑。
++- 專案 CI 要把 `actions/setup-python` 設成 3.14。
++- 裝好之後跑一次 `lumos install`，讓 Claude／Codex 的 hooks 也改用 3.14。
++- Codex 的 hook 指令因此改變，可能要再開一次互動式 codex 重新核可。本機讀不到 Codex 的信任狀態，請跑 `lumos enforcement`，再實際觸發一次 hook，確認它真的會執行。
++
++</details>
++
++Lumos 不保證品質或安全，也不取代工程判斷：筆記可能過時，AI 審查可能漏判，有紀錄不代表內容正確。業務取捨、不可逆的操作和要不要承擔風險，仍由人決定。
++
++第一次使用，可以先挑一個範圍小、預期結果清楚的修改，在新的 AI 對話裡交代：
++
++> 請先讀這個專案的工作守則，再幫我修改［具體需求］。完成後告訴我改了什麼、跑了哪些檢查，以及相關筆記和審查紀錄在哪裡。
++
++先看一次完整的結果，再決定要不要用這套流程維護更多功能。
++
++
++<details>
++<summary>工具組成與 Claude Code 專用外掛</summary>
++
++概念上，它把 ADR（架構決策紀錄）、CODEOWNERS 的檔案歸屬概念，以及 pre-commit 的提交檢查，串進 AI 的開發流程。目標是讓人從決策、審查與驗證紀錄掌握改動，把注意力放在需求與風險判斷上。
++
++核心工具是一支單檔的 Python 命令列工具（只用標準函式庫）、一組 Git hooks、一份寫進 CLAUDE.md／AGENTS.md 的 AI 工作守則，加上專案筆記。
++
++<details>
++<summary>Claude Code 專用的三個外掛</summary>
++
++- 一個記錄會談裡發生的事件，可用 `lumos events` 查詢。
++- 一個在對話被壓縮時，要求留下接手工作需要的狀態。
++- 一個限制被標成審查員的 AI 能用哪些工具、能直接寫進哪些位置。這不是安全沙箱：它的 Bash 仍能執行完整的 shell。
++
++這三項目前沒有對應的 Codex 外掛。
++
++</details>
++
++</details>
++
++<a id="mechanisms"></a>
++
++## 深入了解各項檢查
++
++下面各節先說用途。想看圖、判定條件或操作指令時，再展開細節；第一次閱讀不必把它們全部看完。
++
+ ## 從計劃到驗證，讓筆記一步步連起來
+ 
++筆記放在專案的 `docs/<專案>-knowledge/` 裡，可以直接用文字編輯器閱讀。計劃、功能說明、驗證和事故各自成篇，再用連結串起來；README 裡說的「圖譜」就是這些互相連結的筆記，「節點」就是其中一篇。
++
++例如前面的 API 相容安排，筆記要留下的是「為誰保留舊欄位、移除前要確認什麼」。新舊欄位目前怎麼回傳，直接看程式即可。展開後的圖是筆記關係的示意，不是另一個需要操作的圖形介面。
++
++<details>
++<summary>看筆記如何連結，以及重要規則怎麼驗證</summary>
++
+ 互相連結的筆記合稱「圖譜」，每篇是一個「節點」，分成計劃、功能說明、驗證紀錄和事故。下圖以虛構的線上商店為例：
+ 
+ - **從計劃到驗證**：先寫結帳與付款串接的計劃，做出功能，再留下端對端測試和重複付款壓力測試的驗證紀錄。
+ - **出事故時**：發生「取消訂單未退點」，事故連回結帳流程，接著開修復計劃、修正功能、補上回歸測試。
+ - **重要規則怎麼守**：把規則寫成標有 ★INVARIANT★ 的一行（稱為「合約行」），綁上檢查它的測試，再交給沒參與這件工作的 AI 獨立審計。也可以用 `lumos guard` 在隔離的副本裡故意弄壞程式，確認測試真的會失敗。
+ 
+ 圖上的金環只是示意，表示那篇筆記記了必須遵守的規則、也連到了驗證紀錄；工具裡沒有「受保護」這種狀態。
+ 
+ <p align="center">
+   <a href="assets/graph-demo-zh.svg">
+     <img src="assets/graph-demo-zh.svg" alt="線上商店的示意筆記關聯圖：計劃連到功能與驗證紀錄，事故教訓回到後續計劃" width="760">
+   </a>
+ </p>
+ 
++</details>
++
+ ## 怎麼做 code review
+ 
++審查員是另外開啟的 AI，讀這次改動和相關資料，從不同角度找問題。一般改動安排一到兩位，高風險改動則增加到每輪至少七位，因此會花更多時間和模型用量。
++
++每條意見都要有結論：修正、附理由不修，或提出反證。文中的「閘門」指的是決定能不能繼續的檢查；有些是程式自動擋下，有些是要求 AI 遵守的工作規則，兩者的範圍在下方分開說明。
++
++<details>
++<summary>看風險分級、審查圖與修補驗證</summary>
++
+ <p align="center">
+   <a href="assets/risk-review-zh.svg">
+     <img src="assets/risk-review-zh.svg" alt="依風險安排審查：新增的程式碼先用規則掃風險；一般改動派一到兩位審查，高風險每輪至少七位，五個找問題加上架構一致性與資安；每條意見要修掉、附理由不修或證明不成立；高風險推送前必須留下審查結果" width="760">
+   </a>
+ </p>
+ 
+ - **先判風險**：推送前用固定規則掃這次新增的程式碼，找容易出事的寫法。
+ - **再決定派幾個 AI**：一般改動 1 到 2 個；高風險每輪至少 7 個，5 個找問題、1 個看架構一致、1 個看資安，有定稿的設計規格時再加 1 個對照規格。
+ - **高風險要有審查結果才能推**：推送前要留下審查結果（通過，或寫明理由的跳過），否則 Git hook 會擋下。
+ 
+ **修好一個問題，也要確認沒有弄壞原本正常的功能。** 修正後的那一輪，工作指引要求：
+ 
+ - **固定修正前、後兩個版本**：重現原問題的測試要修正前失敗、修正後通過；原本正常的行為要在兩個版本都正常。
+ - **由全新、沒有前輪脈絡的 AI 審查員重新檢查**：檢查修補有沒有副作用。
+ - **修補混了重構時**：保留分段的驗證點；部分高風險案例還要抽查，確認測試抓得到功能退化。
+ 
+ `lumos loop fix-check` 會檢查修正紀錄和修正後的測試，但目前只提醒，不取代上面這些驗證，也不取代下一輪審查。審查材料裡的引用、快照和紀錄也會先核對，避免拿不完整的證據當通過依據。詳見 [代碼審工作指引](skills/lumos-code-loop/SKILL.md)。
+ 
++</details>
++
+ ### 資安怎麼審
+ 
++資安護欄是針對具體風險登記的防護，例如「只有訂單擁有者能查看訂單」。登記後，專案執行測試或掃描工具，Lumos 再核對結果是否符合要求、是否對應目前版本。**沒有登記的專案，這道閘不會檢查資安。**
++
++這套檢查主要避免漏做或拿錯證據，不能證明產品安全，也擋不住刻意偽造紀錄。需要人負責的核可，仍要由人決定。
++
++<details>
++<summary>看資安流程圖、登記方式與核可限制</summary>
++
+ 業務規則（★INVARIANT★）記錄必須遵守的約定；資安防護另行登記與驗證，方便查出哪些項目仍缺少證據。驗證不能只靠填表，還需要符合該類防護要求、且對應目前版本的證據。
+ 
+ <p align="center">
+   <a href="assets/security-lane-zh.svg">
+     <img src="assets/security-lane-zh.svg" alt="資安這條線的四步：用威脅類別表想到該問的題、盤點已登記的護欄與缺口、由專案自己跑工具收證據並綁版本、本機推送前與 CI 推送後核對證據；例外須由使用者用 SSH 金鑰簽核、最長 30 天；需要人工判斷的項目 AI 審要標明是 AI；這層只防不小心、不防刻意偽造" width="760">
+   </a>
+ </p>
+ 
+ - **先登記才會判**：資安護欄要登記在功能筆記裡（寫法見[資安護欄手冊](skills/lumos-project-notes/commands/10-資安護欄.md)）；守則要求 AI 碰到登入、權限、付款、個資這類功能就登記。**沒登記的專案，推送閘整個不判資安。**
+ - **想到該問的資安問題**：AI 照守則寫計劃時，需求、架構、驗證、交付四個階段的提問裡都有資安題，題目來自一張 14 類的威脅類別表；不是自動彈出，要 AI 照守則去叫。
+@@ -154,22 +252,29 @@ $ git commit -m "feat: 退款前檢查是否已退過"
+ - **證據合格不等於產品安全**：工具收證一致只證明結果對得上版本，不證明判準選得對或報告可信。
+ 
+ 審查只是其中一層。風險分級、AI 審查、放行規則、外部規則（linter）和測試各有漏洞，疊在一起，問題就難一路穿過，這就是瑞士起司模型。
+ 
+ <p align="center">
+   <a href="assets/swiss-cheese-zh.svg">
+     <img src="assets/swiss-cheese-zh.svg" alt="五層瑞士起司防線，以及漏網問題回饋成新規則或測試的流程" width="760">
+   </a>
+ </p>
+ 
++</details>
++
+ ## 測試要有用，不能只是把程式碼重寫一次
+ 
++測試全綠，可能只是程式和測試犯了同一個錯。Lumos 的工作指引要求先從需求確認預期結果，再驗證程式被改壞時，測試是否真的會失敗。這是寫測試與審查的要求，工具不能代替人判斷預期答案是否正確。
++
++<details>
++<summary>看測試例子與檢查工具</summary>
++
+ **測試全綠，不等於功能正確。** 如果測試用和正式程式一樣的算法算出預期值，兩邊犯同一個錯還是會過；如果只檢查原始碼含有某個函式名稱，實際行為壞了也可能照樣綠。
+ 
+ 例如需求是「3 件商品，每件 5 元，總價應為 15 元」：
+ 
+ ```python
+ # 壞例：把實作的算法再寫一次，無法獨立判斷算法是否符合需求
+ expected = quantity * unit_price
+ assert total_price(quantity, unit_price) == expected
+ 
+ # 好例：用已確認的需求案例，檢查實際結果
+@@ -185,39 +290,28 @@ assert total_price(quantity=3, unit_price=5) == 15
+ <details>
+ <summary>輔助工具：<code>lumos test-quality</code></summary>
+ 
+ - **`scan`**：裝好 Lumos 後，`lumos test-quality scan <測試檔或目錄> --json` 會以唯讀方式列出可疑的測試寫法，供人進一步檢查。Python 能找四類可疑寫法；其他語言（含 PHP）可選用本機的 Semgrep，找出「拿一個值跟自己比較」這類斷言。
+ - **`capture`**：在你明確指定時執行本機可信的測試程式，保存 JUnit 結果與原始碼快照。
+ - **`check`**：核對「正常→弄壞→還原」三段的證據，也可以加上重構前後的證據。
+ - **限制**：**沒找到可疑寫法、測試全部通過，或成功抓到刻意引入的錯誤，都不能單獨證明預期答案正確。** 工具不提供沙盒、不替代需求來源審查；先用 `capabilities` 看範圍，再讀 [操作與能力邊界](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
+ 
+ </details>
+ 
+-## 人在哪裡介入？
+-
+-Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責這些判斷：
++</details>
+ 
+-- 需求、取捨、要不要接受風險，以及不可逆的操作。
+-- 審查跑滿 3 輪還沒過：standard 或 high 分級的審查（設計審、代碼審都算）會停下交給人，決定加輪或接受風險，AI 不能自己宣布通過。
+-- 規則還符不符合業務，要人簽核並留紀錄，這是測試證明不了的。
++## 怎麼防止筆記過期（drift）
+ 
+-每輪的審查報告和處理結果都留在 repo，隨時可以抽查。
++留下筆記之後，還要有人維護。Lumos 在提交時檢查程式與筆記是否一起更新，推送前找失效的名稱、連結和待確認內容；需要判斷整段話還對不對時，再請 AI 重讀。這裡說的 drift，就是程式和筆記逐漸對不上的情況。
+ 
+ <details>
+-<summary>細節：如何記錄人工裁定與回顧</summary>
+-
+-- 人的裁定用 `lumos loop cap-decision` 記下。
+-- 繼續之前，用 `lumos loop retro` 記一份合格的回顧，或留下有理由的略過紀錄；人的裁定記下後兩樣都沒有，就不能再記後續的審查紀錄，也過不了「每條審查意見都已處理」那道關卡。
+-
+-</details>
+-
+-## 怎麼防止筆記過期（drift）
++<summary>看三道檢查與可調整的範圍</summary>
+ 
+ 程式改了、筆記還在講舊的，AI 讀到就會被誤導。我在合成專案裡埋了錯誤筆記做實驗：較小的模型 Haiku 4.5，25 題原本答對 20 題，掉到只對 12 題。所以 Lumos 在寫筆記、提交、推送三個時間點各設一道關卡。
+ 
+ **第一道：寫筆記時，只寫程式碼看不出的東西。**
+ 
+ - 程式碼查得到的欄位、預設值和流程，不抄進筆記；重複記載會增加維護負擔，也容易與程式脫節。
+ - 工具在提交時自動擋兩種寫法：新寫的程式行號，以及沒註明來源的現況描述（例如部署設定）。其餘靠守則和審查。
+ - 「目前還沒有退款頁面」這種句子最容易過期：頁面做出來，這句就錯了，卻沒人會回來改。工具會提醒把它改寫成一行「回頭條件」，例如「退款頁面那支檔出現時回來檢查」。寫下回頭條件之後，等那支檔真的出現，那次推送會被擋下：把句子改成現況，或寫明理由照留，才推得出去。
+ 
+ **第二道：提交時，改了程式就要動筆記。**
+@@ -244,22 +338,29 @@ Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責
+ - **回頭條件的寫法**：提醒改寫本身不擋提交；但回頭條件要獨立一行，寫在句子中間或表格裡，提交時會擋下。不必再回頭的標上「已結案」，就不再提醒。已成立的回頭條件若決定照留，要寫重看期限或可追查的去處。
+ - **可以調鬆的**：在 `.lumos/config.json` 能改成只提醒或關掉的有舊說法檢查、回頭重讀、筆記寫法、檔案歸屬，以及新增的 linter 告警（另有幾個較少用的開關，見[指令參考](docs/指令參考.md#專案開關)）。
+ - **不能調的**：改程式沒動筆記、連結斷掉、高風險改動沒有審查紀錄、測試或掛鉤檔被改過卻沒重新核可、Lumos 自己 repo 的全套測試沒過，以及找不到 Python 3.14。
+ - **結案時連帶收尾**：一篇計劃收尾、Issue 結案或決策被翻案之後，別篇連到它卻還寫「待裁定」「排隊中」，推送前會列出來，一行指令就能在那句後面補上結論。
+ - **結 Issue 的兩種方式**：用 `lumos drift fix --kind c2 --close` 結案時，摘要裡的決策還寫待定、或還有沒處理的回頭條件，會先擋下；直接用 `lumos set` 改狀態結案，只列出來、不擋。
+ - **摘要跟著結案**：筆記結案時摘要沒跟著改會提醒；已結案筆記的摘要仍寫待定，會列入漂移檢查。維護摘要用 `lumos summary-add`（加一行）與 `lumos summary-line`（改一行）；`doctor` 列出更新日期落後時，可先用 `lumos updated-sync --stale --dry-run` 預覽修正。
+ - **數字綁清單**：筆記寫「共 N 種」這類數字時，可以綁到程式裡那份清單（目前支援 Python）；程式多一項、筆記沒跟上，健康檢查會列出來，一行指令改成現值。
+ 
+ </details>
+ 
++</details>
++
+ ## 怎麼持續改進這套工具（evals）
+ 
++這一節是 Lumos 維護者如何檢查工具本身，不是安裝後每個專案都會自動執行的流程。評測（evals）會檢查審查結果能否重算、筆記是否找得對，以及 AI 是否依守則操作；它們能找出已涵蓋情境的退步，不能保證每次修改都更好。
++
++<details>
++<summary>看四種評測、排程與通知條件</summary>
++
+ 規則有沒有改壞、AI 有沒有照規矩做，不能只靠感覺。Lumos 用以下四種評測（evals）檢查，每週各跑一次：
+ 
+ - **審查回放**：審完的案子會保存當時的判定，作為日後回放比對的基準（這叫「凍結」）。用現在的判定程式重算一次（不重新找 AI 審），結論對不上就會標出來，查是不是改規則時改壞了東西。
+ - **查詢考卷**：用人工標好答案的題目，檢查工具能不能找到該看的筆記。
+ - **情境探針**：用口語出題，讓 AI 在 repo 的隔離副本裡實際操作，看它會不會主動查筆記、用對指令。每場從同一份凍結副本重新開始，出事故整批停下，壞掉的場次不算分（細節見 [10/7–10/10 更新清點](docs/updates/2026-10-10-readme-audit.md)）。
+ - **推播漏網**：檢查改檔前送上的筆記，有沒有漏掉該看的。
+ 
+ <p align="center">
+   <a href="assets/evals-overview-zh.svg">
+     <img src="assets/evals-overview-zh.svg" alt="每週自動檢查這套工具本身：審查回放、查詢考卷、情境探針、推播漏網四種檢查；每週留下紀錄，符合通知條件時提醒，修成規則或測試後下週再量一次" width="760">
+@@ -280,37 +381,15 @@ Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責
+ 
+ [審查收斂評測工具](governance/eval/review_convergence.md)從一般審查和跑滿輪數的審查收集候選案例，確認並固定案例、版本與兩種流程後再比較，分開看原問題有沒有修好、原本的行為有沒有保住、有沒有新缺陷、跑了幾輪、花多少成本；缺的資料就標成未知。
+ 
+ - 這是本機的唯讀分析工具，不會執行模型或重跑驗收。
+ - 它用資料指紋檢查前後記載是否一致。記載一致不代表內容屬實，也不能拿來證明審查輪數已經降低。
+ 
+ </details>
+ 
+ 這些評測主要在 Lumos 自己的 repo 跑；查詢考卷另外會順帶考排程腳本裡指定的另一個專案（那台機器上有它的考卷時）。這些評測讓已涵蓋情境中的退步更容易被發現，但不保證每次改動都會變好。
+ 
+-## 安裝與限制
+-
+-需要 Git、Python 3.14 以上，以及 Claude Code 或 Codex。在要導入的專案目錄執行：
+-
+-```bash
+-curl -fsSL https://raw.githubusercontent.com/EnzoHsieh-Android/Lumos/release/get.sh | bash
+-```
+-
+-**版本範圍：本 README 描述 `main`；上述一鍵安裝預設取得 `release`。** 兩條分支可能不同步，安裝後請核對工具來源與版本，不能假定已包含 main 的全部更新。[10/1–10/7](docs/updates/2026-10-07-readme-audit.md) 與 [10/7–10/10](docs/updates/2026-10-10-readme-audit.md) 兩份更新清點，列出每次盤點涵蓋的提交、補了哪些文件，以及盤點當時 main 和 release 差在哪裡。
+-
+-腳本問要不要初始化目前目錄時，確認目錄正確再輸入 `y`。裝完重開一個 AI 對話，執行 `lumos enforcement` 確認檢查都接上了。Windows、離線安裝與移除見[上手細節](ONBOARDING.md)。已經在用的專案要升級時，可以先跑 `lumos update --dry-run`，預覽會改哪些規範檔與工具檔，不會真的動手。
+-
+-<details>
+-<summary>已經在用舊版的專案：升級到 Python 3.14 要做的事</summary>
+-
+-- 更新後，沒有 3.14 的機器，提交與推送會被擋下並說明怎麼裝（macOS：`brew install python@3.14` 或 `uv python install 3.14`）。`python3` 指到舊版沒關係，lumos 會自己找 3.14 重跑。
+-- 專案 CI 要把 `actions/setup-python` 設成 3.14。
+-- 裝好之後跑一次 `lumos install`，讓 Claude／Codex 的 hooks 也改用 3.14。
+-- Codex 的 hook 指令因此改變，可能要再開一次互動式 codex 重新核可。本機讀不到 Codex 的信任狀態，請跑 `lumos enforcement`，再實際觸發一次 hook，確認它真的會執行。
+-
+ </details>
+ 
+-Lumos 不保證品質或安全，也不取代工程判斷：筆記可能過時，AI 審查可能漏判，有紀錄不代表內容正確。業務取捨、不可逆的操作和要不要承擔風險，仍由人決定。
+-
+ 深入閱讀：[心智模型與機制](docs/心智模型.md) · [接手舊專案](docs/接手舊專案.md) · [指令參考](docs/指令參考.md) · [架構全景](ARCHITECTURE.md) · [SDD 與 Lumos](SDD-vs-Lumos.md) · [方法論](docs/methodology/圖譜即合約.md)
+ 
+ 授權：[MIT](LICENSE)。你寫的筆記是你的，Lumos 不主張任何權利。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/README首次閱讀動線_計劃.md b/docs/lumos-toolchain-knowledge/Projects/README首次閱讀動線_計劃.md
+new file mode 100644
+index 00000000..fd3c5daa
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/README首次閱讀動線_計劃.md
+@@ -0,0 +1,48 @@
++---
++type: project
++status: done
++created: 2026-10-21
++updated: 2026-10-21
++self_audit: gpt-5.6-sol/2026-10-21
++tags:
++  - type/project
++  - status/done
++  - scope/ux-docs-hygiene
++lands_in:
++  - Systems/README圖產生器
++---
++# README首次閱讀動線_計劃
++
++
++使用者要求以第一次接觸 Lumos 的讀者重讀 README，指出讀不懂的地方並直接調整；另指定語氣自然，避免口號與制式介紹。這次只改中英文文件的敘述與呈現，不改工具或圖示產生器。
++
++PRIOR-ART: 沿用 README 已有的 Markdown、段落、連結與 details 展開區；七組圖示沿用既有資產，以正文交代看圖方式。
++RETIRE-IF: 若實際初讀回饋顯示讀者找不到關鍵限制或無法定位細節，取消對應折疊，將那段移回正文。
++
++## 初讀障礙與編輯取捨
++
++- 開場先說裝在 Git 專案裡、搭配既有 AI 工具，免得讀者猜產品形態。
++- 先示範正常使用，再展開被擋時的終端輸出；人、AI 與程式檢查的責任分開說明。
++- 安裝與第一次可交代的任務移到深入機制之前，保留 main 與 release 差異。
++- 圖譜用筆記與檔案位置解釋；保留既有詳圖，在讀者想看細節時才展開。
++- 資安無登記不判、證據與正確性的差別、額外時間與模型用量留在可直接讀到的正文。
++- 中文採工程師介紹工具的語氣；英文保持同樣層次與範圍。
++
++純編輯修訂，不建立機制或新增依賴，免完整設計迴圈。驗收以中英文段落對照、Markdown結構、連結、圖文位置及瀏覽器寬窄版閱讀為準；本次僅改文件，不跑全套程式測試。
++
++lands_in 指向既有 README 圖文維護的知識位置，不表示修改圖示產生器。
++
++## 驗收判準
++
++- 中英文的段落順序、責任與限制相符；main/release 差異、人工決定及安全限制維持可見。
++- Markdown 的程式碼區塊、details 與 summary 配對；原有圖片與本機檔案連結仍可解析。
++- 以 1024px 與 390px 寬度渲染，正文不超出視窗，圖片不截斷；折疊區可展開閱讀。
++- Git diff 僅包含文件與本次編輯決策、驗證筆記。
++
++## 實務隱患
++
++已排除:金流:僅調整介紹文字，不修改付款程式
++已排除:對外送出:文字修訂不新增工具對外操作
++已排除:不可逆:文件修訂可由版本控制還原
++已排除:守衛面:保留原有規則與限制，不修改檢查程式
++
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-21_README首次閱讀檢查.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-21_README首次閱讀檢查.md
+new file mode 100644
+index 00000000..e06ab3dd
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-21_README首次閱讀檢查.md
+@@ -0,0 +1,24 @@
++---
++type: verification
++status: pass
++date: 2026-10-21
++valid_under: 僅適用此次中英文 README 敘述與折疊呈現，未修改程式或圖示
++revalidate_when: README 的連結、段落順序或折疊結構再變更時
++tags:
++  - type/verification
++  - status/pass
++  - scope/ux-docs-hygiene
++plan_refs:
++  - "[[Projects/README首次閱讀動線_計劃]]"
++---
++# 2026-10-21_README首次閱讀檢查
++
++本次僅調整中英文 README，未修改程式或圖示資產，沒有跑全套程式測試。
++
++- 中英文段落順序與新增說明已對照，人工責任、版本差異及資安限制留在正文。
++- Markdown 程式碼圍欄、details/summary 配對、本機連結與三個導覽錨點檢查通過；原有圖片路徑與順序保持一致。
++- 使用暫存 Python-Markdown 與 Chrome 做本機預覽，目視確認中文 390px 內容寬度與英文桌面版的開頭、段落與主流程圖未截斷。這是本機樣式預覽，不是 GitHub 實際頁面驗收。完整雙語、雙寬度與展開狀態的 CDP 自動驗證未完成：瀏覽器載入與尺寸同步不穩，未將該檢查列為通過。
++- 計劃筆記經獨立自足性複核，修正知識落點說明與驗收條件後無 finding。
++- git diff --check 通過；圖譜 doctor 為 0 issues，另有既有健康提醒。
++
++此次屬純文件編輯，免完整設計迴圈。spec-gate 的 no-run 檢查判低風險，但因無程式驗收條款未放行；未宣稱通過該程式規格閘。
