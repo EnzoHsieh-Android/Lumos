@@ -103077,6 +103077,18 @@ def _seclist_rec(doc, cid):
 
 
 _SECGUIDE_REL = "skills/lumos-project-notes/commands/10-資安護欄.md"
+_SECGUIDE_EXAMPLE_ID = "EXAMPLE-PAY-01"
+
+
+def t_secguide_example_id_not_copied():
+    """資安護欄手冊 [S7]:欄位表寫明 id 要唯一、先跑 security list 看已用的、不要照抄範例的編號。判準來源:2026-10-21 乾淨 AI 探針照抄範例的
+    OD-01,跟真實 order-demo 主線的 OD-01 撞號。範例編號本身是不是範例專用,由 [S2] 用盤點自己的讀法斷言(不另寫圍欄解析)。"""
+    guide = _secguide_read(_SECGUIDE_REL)
+    check("★前置★ 範例編號常數是範例專用的樣子", _SECGUIDE_EXAMPLE_ID.startswith("EXAMPLE-"), _SECGUIDE_EXAMPLE_ID)
+    row = [ln for ln in guide.splitlines() if ln.startswith("| `id` |")]
+    check("[S7] 欄位表有 id 一列", len(row) == 1, str(row))
+    r = row[0] if row else ""
+    check("[S7] 那一列寫明唯一、先跑 security list、不要照抄範例", all(w in r for w in ("唯一", "lumos security list", "不要照抄", _SECGUIDE_EXAMPLE_ID)), r)
 
 
 def _secguide_read(rel):
@@ -103131,8 +103143,8 @@ def t_secguide_example_registers():
     check("[S2] 盤點讀得懂範例:JSON 可解析且退出 0", doc is not None and r.returncode == 0, r.stdout[:800] + r.stderr[:800])
     doc = doc or {}
     check("[S2] 零登記錯誤", doc.get("errors") == [], str(doc.get("errors"))[:600])
-    rec = _seclist_rec(doc, "OD-01")
-    check("[S2] 範例護欄進主清單", _seclist_ids(doc.get("records")) == ["OD-01"], str(_seclist_ids(doc.get("records"))))
+    rec = _seclist_rec(doc, _SECGUIDE_EXAMPLE_ID)
+    check("[S2] 範例護欄進主清單", _seclist_ids(doc.get("records")) == [_SECGUIDE_EXAMPLE_ID], str(_seclist_ids(doc.get("records"))))
     check("[S2] 範例是候選,不讓推送被擋", rec.get("lifecycle") == "candidate", str(rec.get("lifecycle")))
     bad = guide.replace('"abuse_case"', '"abuse_cases"', 1)
     check("★前置★ 改壞那一下真的套上", bad != guide)
