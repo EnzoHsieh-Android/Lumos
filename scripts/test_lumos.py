@@ -106374,7 +106374,7 @@ def t_secev_s39_review_independence_and_dates():
 
 def t_secev_s40_s62_reviewer_kind():
     """S40/S62:要人的判斷只有 ai 紀錄蓋到、標 human 卻沒有對得上的 human_review 核可、人審核可後 bindings 或 kind 被改
-    → missing:human_review_missing;不要人的判斷由 ai 紀錄蓋到算數;人審沒蓋 report_provenance → human_review_missing。"""
+    → missing:human_review_missing;不要人的判斷由 ai 紀錄蓋到算數;人審沒蓋 legit_control_real → human_review_missing。"""
     human_j = ["independent_oracle", "legit_control_real", "threshold_meaningful", "calibration_representative",
                "not_applicable_sound", "report_provenance"]
     cases = []
@@ -106385,8 +106385,8 @@ def t_secev_s40_s62_reviewer_kind():
     r.items[2] = r.review_item(_no_approval=True)
     cases.append(("標 human 但核可鏈上沒有", r, "missing:human_review_missing"))
     r = _SgRepo()
-    r.items[2] = r.review_item(judgments=[j for j in _SG_JUDG if j != "report_provenance"])
-    cases.append(("S62 人審沒蓋 report_provenance", r, "missing:human_review_missing"))
+    r.items[2] = r.review_item(judgments=[j for j in _SG_JUDG if j != "legit_control_real"])
+    cases.append(("人審沒蓋 legit_control_real", r, "missing:human_review_missing"))
     for label, r, want in cases:
         r.commit()
         rep = _sg_eval(r)
@@ -106422,6 +106422,53 @@ def t_secev_s40_s62_reviewer_kind():
     rep = _sg_eval(r)
     check("S40 不要人的判斷由 ai 紀錄蓋到 → 算數(review qualified)", _sg_kind(rep, "review").get("verdict") == "qualified",
           str(_sg_codes(rep, "review")))
+
+
+def t_secev_s62_conditional_judgments():
+    """S62:門檻只出現在壓測類證據、校準只出現在掃描類證據(種類 × 格式允許表裡有 k6_summary／sarif 的種類)。
+    護欄沒有這兩類種類時不用蓋 threshold_meaningful、calibration_representative;report_provenance 與 not_applicable_sound
+    由 ai 紀錄蓋到就算數;有 concurrency 而門檻只有 ai 蓋到、有掃描類而校準只有 ai 蓋到 → missing:human_review_missing。"""
+    must_h = ["independent_oracle", "legit_control_real"]
+    ai_j = ["not_applicable_sound", "report_provenance", "category_sufficient", "inventory_complete"]
+    # ① 授權類護欄(behavior、fault_sensitivity、review):人只蓋必要人審的兩項,門檻與校準誰都沒蓋
+    r = _SgRepo()
+    check("S62 前置:預設護欄沒有壓測或掃描類種類", not ({"concurrency", "static_analysis", "dependency_scan", "secret_scan",
+          "dynamic_scan", "config_scan"} & set(r.ctl["required_evidence"])), str(r.ctl["required_evidence"]))
+    r.items[2] = r.review_item(judgments=must_h)
+    r.extra_fence_items = [r.review_item(reviewer="另一個 AI 會談", reviewer_kind="ai", judgments=ai_j)]
+    r.commit()
+    rep = _sg_eval(r)
+    check("S62 ① 沒有門檻與校準的護欄:人審不用蓋那兩項、報告來源與不適用由 ai 蓋 → review qualified",
+          _sg_kind(rep, "review").get("verdict") == "qualified", str(_sg_codes(rep, "review")))
+    # ② 同一條護欄,報告來源與不適用連 ai 都沒蓋 → 缺紀錄(不要人,但仍要有人或 AI 審過)
+    r = _SgRepo()
+    r.items[2] = r.review_item(judgments=must_h)
+    r.extra_fence_items = [r.review_item(reviewer="另一個 AI 會談", reviewer_kind="ai", judgments=["category_sufficient", "inventory_complete"])]
+    r.commit()
+    rep = _sg_eval(r)
+    check("S62 ② 報告來源與不適用誰都沒蓋 → missing:review_record_missing", "missing:review_record_missing" in _sg_codes(rep, "review"),
+          str(_sg_codes(rep, "review")))
+    # ③ 有壓測類種類:門檻只有 ai 蓋到 → 要人
+    for extra_kind, judg in (("concurrency", "threshold_meaningful"), ("static_analysis", "calibration_representative"),
+                             ("dynamic_scan", "calibration_representative")):
+        r = _SgRepo()
+        r.ctl["required_evidence"] = r.ctl["required_evidence"] + [extra_kind]
+        other = [j for j in ("threshold_meaningful", "calibration_representative") if j != judg]
+        r.items[2] = r.review_item(judgments=must_h + other)
+        r.extra_fence_items = [r.review_item(reviewer="另一個 AI 會談", reviewer_kind="ai", judgments=ai_j + [judg])]
+        r.commit()
+        rep = _sg_eval(r)
+        check(f"S62 ③ 護欄有 {extra_kind}、{judg} 只有 ai 蓋到 → missing:human_review_missing",
+              "missing:human_review_missing" in _sg_codes(rep, "review"), str(_sg_codes(rep, "review")))
+        # 對照:人也蓋了那一項 → review 不再缺人審
+        r = _SgRepo()
+        r.ctl["required_evidence"] = r.ctl["required_evidence"] + [extra_kind]
+        r.items[2] = r.review_item(judgments=must_h + ["threshold_meaningful", "calibration_representative"])
+        r.extra_fence_items = [r.review_item(reviewer="另一個 AI 會談", reviewer_kind="ai", judgments=ai_j)]
+        r.commit()
+        rep = _sg_eval(r)
+        check(f"S62 ③ 對照:護欄有 {extra_kind}、人審蓋了 {judg} → review qualified",
+              _sg_kind(rep, "review").get("verdict") == "qualified", str(_sg_codes(rep, "review")))
 
 
 def t_secev_s41_s43_limits_and_cache():
