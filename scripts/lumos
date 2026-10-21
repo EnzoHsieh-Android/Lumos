@@ -8487,11 +8487,13 @@ _SECEV_COVERAGE_PROOFS = ("sarif_invocation", "semgrep_paths_scanned", "osv_pack
                           "checkov_resource_count", "zap_stats")
 # 判斷 id → 要不要人(計劃〈機械做不到的判斷〉)
 _SECEV_JUDGMENTS = {"independent_oracle": True, "legit_control_real": True, "threshold_meaningful": True,
-                    "calibration_representative": True, "not_applicable_sound": True, "report_provenance": True,
+                    "calibration_representative": True, "not_applicable_sound": False, "report_provenance": False,
                     "category_sufficient": False, "inventory_complete": False,
                     # 沒有工具時的人工核對(威脅類別表 v1 替代欄):只在這條護欄走了替代欄時才要蓋
                     "manual_check_scope": True}
-_SECEV_CONDITIONAL_JUDGMENTS = ("manual_check_scope",)
+_SECEV_CONDITIONAL_JUDGMENTS = ("manual_check_scope", "threshold_meaningful", "calibration_representative")
+# 條件式判斷 → 護欄必要種類裡有「允許這種格式」的種類才要蓋(門檻只在 k6 摘要、校準只在 SARIF;種類 × 格式允許表推得)
+_SECEV_JUDGMENT_FORMATS = {"threshold_meaningful": "k6_summary", "calibration_representative": "sarif"}
 
 # 證據圍欄 lumos-evidence-v1(只准放在 Verification)
 _SECEV_MARK = "lumos-evidence-v1"
@@ -10546,6 +10548,12 @@ def _secev_control_table(rec, ctx, out):
     return extra_j
 
 
+def _secev_format_judgments(rec):
+    """必要種類帶出的條件式判斷:有允許 k6 摘要的種類才要人判門檻、有允許 SARIF 的種類才要人判校準樣本。"""
+    req = [k for k in (rec.get("required_evidence") or []) if isinstance(k, str)]
+    return {j for j, fmt in _SECEV_JUDGMENT_FORMATS.items() if any(fmt in _SECEV_KIND_FORMATS.get(k, ()) for k in req)}
+
+
 def _secev_control_layer(rec, ctx, env, out, removed):
     """護欄層(整體 unsound、例外蓋不掉):被刪沒核可、必要種類或威脅類別空、表版號不認得、核可過的表算出的最低種類不夠、
     未知類別、來源決策作廢、引用的待決問題沒結。回走了替代欄時 review 要多蓋的判斷。"""
@@ -10556,7 +10564,7 @@ def _secev_control_layer(rec, ctx, env, out, removed):
         out["control_codes"].append("required_evidence_empty")
     if not rec.get("threat_categories"):
         out["control_codes"].append("threat_categories_missing")
-    need_judgments = _secev_control_table(rec, ctx, out)
+    need_judgments = _secev_control_table(rec, ctx, out) | _secev_format_judgments(rec)
     src = rec.get("source") or {}
     if src.get("decision_ref") and _secinv_decision_problem(env, src["decision_ref"], ctx._facts):
         out["control_codes"].append("source_decision_invalid")
