@@ -11261,7 +11261,9 @@ def t_command_index_complete():
     check("★二層子指令也都有歸位★", not missing2, f"缺: {missing2}")
     idx = (cmd_dir / "INDEX.md").read_text(encoding="utf-8")
     check("總目錄控制在 4.5k 字元內(分塊的意義)", len(idx) <= 4500, str(len(idx)))
-    for p in sorted(cmd_dir.glob("0*.md")):
+    subs_files = sorted(cmd_dir.glob("[0-9]*.md"))   # 編號子檔(01- 到 10- 以後);只看 0* 會漏掉 10- 起的子檔
+    check("★前置★ 編號子檔掃得到 10 開頭的", any(p.name.startswith("10-") for p in subs_files), str([p.name for p in subs_files]))
+    for p in subs_files:
         check(f"子檔 {p.name} 在總目錄被指到", p.name in idx, p.name)
     print("  ✓ t_command_index_complete")
 
@@ -103072,6 +103074,71 @@ def _seclist_rec(doc, cid):
             if r.get("id") == cid:
                 return r
     return {}
+
+
+_SECGUIDE_REL = "skills/lumos-project-notes/commands/10-資安護欄.md"
+
+
+def _secguide_read(rel):
+    return (_repo_root_for_discipline() / rel).read_text(encoding="utf-8")
+
+
+def t_secguide_template_row():
+    """資安護欄手冊 [S1]:注入 CLAUDE.md／AGENTS.md 的守則範本要有一列講「碰到登入、權限、付款要登記護欄」並指到手冊,
+    兩份產出帶著同一列。判準來源:使用者 2026-10-21 裁「補進工作守則與 skill 首頁」。"""
+    check("★前置★ 手冊檔存在", (_repo_root_for_discipline() / _SECGUIDE_REL).is_file(), _SECGUIDE_REL)
+    name = Path(_SECGUIDE_REL).name
+    rows = [ln for ln in _secguide_read("scripts/templates/graph-discipline.md").splitlines() if name in ln]
+    check("[S1] 守則範本恰好一列指到手冊", len(rows) == 1, str(rows))
+    row = rows[0] if rows else "\0"
+    check("[S1] 那一列講到觸發情境與盤點指令", all(w in row for w in ("登入", "權限", "付款", "lumos security list")), row)
+    for f in ("CLAUDE.md", "AGENTS.md"):
+        check(f"[S1] {f} 帶著同一列(範本改了要同步)", row in _secguide_read(f).splitlines(), f)
+
+
+def t_secguide_skill_home():
+    """資安護欄手冊 [S3]:skill 首頁有一行講觸發情境並指到手冊(AI 進場讀的是首頁,不一定開索引)。"""
+    name = Path(_SECGUIDE_REL).name
+    hit = [ln for ln in _secguide_read("skills/lumos-project-notes/SKILL.md").splitlines() if f"commands/{name}" in ln]
+    check("[S3] skill 首頁恰好一行指到手冊", len(hit) == 1, str(hit))
+    check("[S3] 那一行講到登入與付款", bool(hit) and "登入" in hit[0] and "付款" in hit[0], str(hit))
+
+
+def t_secguide_index():
+    """資安護欄手冊 [S4]:指令索引的子檔表列了手冊,並講到觸發情境與人審簽章。"""
+    name = Path(_SECGUIDE_REL).name
+    lines = [ln for ln in _secguide_read("skills/lumos-project-notes/commands/INDEX.md").splitlines() if f"commands/{name}" in ln]
+    check("[S4] 索引恰好一列指到手冊", len(lines) == 1, str(lines))
+    check("[S4] 那一列講到登入與人審", bool(lines) and "登入" in lines[0] and "人審" in lines[0], str(lines))
+
+
+def t_secguide_example_registers():
+    """資安護欄手冊 [S2]:整份手冊原文當成功能筆記正文,盤點用自己的嚴格圍欄讀法認得裡面的範例、零登記錯誤、是候選(不擋推送)。
+    判準來源是盤點本身(security list 的 errors 與 records),不是手冊自己的說法;範例改壞一個欄位名要翻紅。"""
+    guide = _secguide_read(_SECGUIDE_REL)
+    check("★前置★ 手冊裡有範例圍欄", "```lumos-security-v1\n" in guide, guide[:300])
+
+    def vault_with(body):
+        v = mkvault()
+        write(v, "Projects/訂單下單_計劃.md", "type: project\nstatus: doing\ndecisions:\n"
+              "  - content: 付款要擁有者\n    id: d13\n    decided: 2026-10-20\n    valid: true", body="# 訂單下單\n")
+        write(v, "Systems/訂單生命週期.md", "type: system\nstatus: done", body=body)
+        write(v, "Verification/2026-10-20_所有權安全證據閘收證.md",
+              "type: verification\nstatus: pass\nvalid_under: 本機\nrevalidate_when: 改授權時", body="# 收證\n")
+        return v
+
+    r, doc = _seclist_json(vault_with(guide))
+    check("[S2] 盤點讀得懂範例:JSON 可解析且退出 0", doc is not None and r.returncode == 0, r.stdout[:800] + r.stderr[:800])
+    doc = doc or {}
+    check("[S2] 零登記錯誤", doc.get("errors") == [], str(doc.get("errors"))[:600])
+    rec = _seclist_rec(doc, "OD-01")
+    check("[S2] 範例護欄進主清單", _seclist_ids(doc.get("records")) == ["OD-01"], str(_seclist_ids(doc.get("records"))))
+    check("[S2] 範例是候選,不讓推送被擋", rec.get("lifecycle") == "candidate", str(rec.get("lifecycle")))
+    bad = guide.replace('"abuse_case"', '"abuse_cases"', 1)
+    check("★前置★ 改壞那一下真的套上", bad != guide)
+    r2, doc2 = _seclist_json(vault_with(bad))
+    check("[S2] 對照:欄位名打錯一個字就列登記錯誤、退出 2", r2.returncode == 2 and bool((doc2 or {}).get("errors")),
+          f"rc={r2.returncode} " + str((doc2 or {}).get("errors"))[:400])
 
 
 def t_seclist_s01_concern_sections():
