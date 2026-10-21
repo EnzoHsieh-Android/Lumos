@@ -17,6 +17,7 @@
 | 「有沒有程式看不出的規則或事故？」 | `lumos search "詞 詞"`（**中文概念之間加空白**：`lumos search "作廢 收回 點數"`，黏成一串幾乎必定 0 筆） |
 | 「這篇全文」 | `lumos context <節點> --brief` → 要全文再 `lumos show` |
 | 「這批改動要不要過審才能推？」 | `lumos pitfalls --diff <merge-base>..HEAD` |
+| 「這功能碰登入、權限、付款、個資、上傳、對外呼叫，資安要怎麼顧？」 | 先登記資安護欄（寫法見 lumos-project-notes 的 `commands/10-資安護欄.md`），再 `lumos security list` 確認認得；**沒登記的專案，推送閘整個不判資安** |
 | 「我 push 了，CI 怎樣？」 | `lumos ci-wait` / `lumos ci-status`（不要 `gh run list`：結果要進治理帳） |
 | 「上一個 session 做到一半斷了」 | `lumos handoff <計劃節點>`（唯讀） |
 | 「做完了，要留紀錄 / 改狀態 / 記決策」 | `lumos new verification … --plan … --systems …` / `lumos set` / `lumos decision-add` |
