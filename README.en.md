@@ -125,35 +125,44 @@ By default, Lumos leaves line-by-line diff review to AI and automated checks. Pe
 
 ## How notes are kept from going stale (drift)
 
-Notes that describe old code can mislead AI. When I planted incorrect notes in a synthetic project, the smaller model, Haiku 4.5, dropped from 20/25 correct answers to 12/25. Lumos therefore checks at three points: writing notes, committing, and pushing.
+Notes that still describe old code mislead AI. When I planted incorrect notes in a synthetic project, the smaller model, Haiku 4.5, dropped from 20 correct answers out of 25 to 12. So Lumos puts one checkpoint at each of three moments: writing notes, committing, and pushing.
 
-**First check: write only what code cannot reveal.** Fields, defaults, and flows that the code already shows are not copied into notes. The tool blocks only two fixed patterns at commit time: new code line references and current-state descriptions (such as deployment settings) without a source. The rest relies on working rules and review.
+**First check: when writing notes, record only what the code cannot show.**
 
-Some sentences go stale easily: “there is no refund page yet” becomes wrong once the page exists, but nobody returns to fix it. When such a sentence is added, the tool suggests a one-line “revisit condition” stating when to check again, such as “when the refund page's file appears.” If the writer follows that advice, the push adding that file is blocked and the check points to the sentence. Update it or give a reason to keep it before pushing. The suggestion itself does not block commits, but a revisit condition must sit on its own line: one buried mid-sentence or in a table blocks the commit. Mark a condition as closed once it no longer needs a look, and it stops reminding.
+- Fields, defaults, and flows the code already shows are not copied into notes; copies go stale.
+- At commit time the tool blocks two patterns automatically: new code line references, and current-state descriptions (such as deployment settings) without a source. The rest relies on working rules and review.
+- Sentences like “there is no refund page yet” go stale the fastest: once the page exists the sentence is wrong, and nobody comes back to fix it. The tool suggests rewriting it as a one-line “revisit condition,” such as “check again when the refund page's file appears.” Once that condition is written, the push in which the file appears is blocked until the sentence is updated or kept with a written reason.
 
-**Second check: update notes when committing code.** Code changes without any note updates, or new source files without an assigned note, block the commit. The “code changed, notes untouched” check always blocks and projects cannot turn it off; if no note change is really needed, skip it with `git commit --no-verify`; a post-commit hook records every skip.
+**Second check: when committing, code changes need note changes.**
 
-**Third check: find outdated statements before pushing.** Any of these blocks the push:
+- A commit is blocked if it changes code without touching any note, or adds a source file with no note assigned to it.
+- The “code changed, notes untouched” check always blocks and projects cannot turn it off. If no note change is really needed (a typo fix, say), skip it with `git commit --no-verify`; a post-commit hook records every skip.
 
-- **Old names left in notes**: Python functions, classes, module- or class-level variables and constants, or command-line flags were deleted or renamed, or code files were deleted or moved, but the notes responsible for the files you changed, or any note's summary, still mention the old name or path. Mentions elsewhere are only listed.
-- **A rule's test is live, but its note still says “test to be added.”**
-- **A linked note was deleted.**
-- **A revisit condition has been met.**
-- **A rule's retirement condition has come true**: the rule's own “retire when…” line.
+**Third check: before pushing, find notes that still describe the old code.** Any of these blocks the push:
 
-A test name bound in a note that no longer matches a real test only warns by default; projects can make it block. Broken links between notes always block.
-
-One more pre-push check rereads notes. When a push changes both the code and the note that manages it, the note often just gets a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this, so the change and the whole note go to AI first, which points out the lines that are no longer true. The local push is blocked until that reread is recorded and every rule line it flags is fixed or explicitly kept; CI only warns. To keep a flagged line, record that with `lumos drift ack --kind reread`. Projects that can't send code to an external model can set this check to warn or off.
-
-**Which checks a project can relax.** In `.lumos/config.json`, a project can set these to warn or off: outdated-statement checks, the note reread, note wording rules, file ownership, and new linter warnings (a few less common switches are listed in the [command reference](docs/command-reference.md#project-switches)). These have no switch: code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval, a failing full test suite in Lumos's own repo, and a missing Python 3.14.
-
-**Closing one note tidies the others.** After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence. Closing an issue with `lumos drift fix --kind c2 --close` is blocked while its summary still lists an undecided decision or unhandled revisit conditions; changing its status directly with `lumos set` only lists them and does not block.
-
-Closing a note without updating its summary also triggers a warning; closed notes whose summaries still say “pending” appear in drift checks. Keeping a met revisit condition requires an expiry or a traceable destination. Use `lumos summary-add` (add a line) and `lumos summary-line` (edit a line) to maintain summaries; preview stale update-date repairs with `lumos updated-sync --stale --dry-run`.
-
-When a note says something like “there are N kinds,” it can be tied to the list in the code (Python for now); if the code gains an item and the note doesn't, the health check lists it and one command updates the number.
+- A name in the code was deleted or renamed, or a code file was deleted or moved, and a related note still mentions the old name or path (scope in the details below).
+- A rule's test is live, but its note still says “test to be added.”
+- A linked note was deleted, or a link between notes is broken.
+- A revisit condition has been met, or a rule's own “retire when…” condition has come true.
+- The code and the note that manages it both changed in this push, but AI has not reread the whole note against this change and recorded the reread. Notes often just get a new paragraph while older sentences go unread: the code moves from three variables to four, yet the note still says three. Literal matching can't catch this; only a reread can. This blocks local pushes only; CI just warns.
 
 <p align="center"><a href="assets/drift-guard-en.svg"><img src="assets/drift-guard-en.svg" alt="Three checkpoints from writing notes to pushing: writing rules enforced at commit with a warning for new 'not yet…' sentences and a block for revisit conditions buried mid-sentence, note maintenance checked at commit, and outdated references, broken links, revisit and retire conditions that have come true, missing bound tests and sentences still pending on a closed note checked before push, and notes changed with the code must first be reread by AI (blocked on the local push); each check is labelled as a block or warning" width="760"></a></p>
+
+<details>
+<summary>Details: what is checked, what can be relaxed, and cleanup when notes close</summary>
+
+- **Scope of the old-name check**: Python functions, classes, module- or class-level variables and constants, command-line flags, and code files. It blocks only when the old name appears in the notes responsible for the files you changed or in any note's summary; mentions elsewhere are only listed.
+- **Test names that don't match**: A test name bound in a note that no longer matches a real test only warns by default; projects can make it block.
+- **After the reread**: Every rule line the AI flags must be fixed or explicitly kept with `lumos drift ack --kind reread`; otherwise the push is still blocked. Projects that can't send code to an external model can set the reread to warn or off.
+- **How revisit conditions are written**: The suggestion to rewrite does not block commits, but a revisit condition must sit on its own line; one buried mid-sentence or in a table blocks the commit. Mark a condition as closed once it no longer needs a look, and it stops reminding. Keeping a met revisit condition requires an expiry or a traceable destination.
+- **What can be relaxed**: In `.lumos/config.json`, a project can set these to warn or off: outdated-statement checks, the note reread, note wording rules, file ownership, and new linter warnings (a few less common switches are listed in the [command reference](docs/command-reference.md#project-switches)).
+- **What cannot**: code changes without note updates, broken links, a high-risk change without a review record, test or hook files changed without re-approval, a failing full test suite in Lumos's own repo, and a missing Python 3.14.
+- **Cleanup when a note closes**: After a plan wraps up, an issue closes, or a decision is overturned, other notes that link to it but still say “pending” or “queued” are listed before push, and one command appends the outcome to that sentence.
+- **Two ways to close an issue**: Closing with `lumos drift fix --kind c2 --close` is blocked while its summary still lists an undecided decision or unhandled revisit conditions; changing its status directly with `lumos set` only lists them and does not block.
+- **Summaries follow closure**: Closing a note without updating its summary triggers a warning; closed notes whose summaries still say “pending” appear in drift checks. Use `lumos summary-add` (add a line) and `lumos summary-line` (edit a line) to maintain summaries; when `doctor` reports outdated update dates, preview the repairs with `lumos updated-sync --stale --dry-run`.
+- **Counts tied to lists**: When a note says something like “there are N kinds,” it can be tied to the list in the code (Python for now); if the code gains an item and the note doesn't, the health check lists it and one command updates the number.
+
+</details>
 
 ## What it looks like
 
