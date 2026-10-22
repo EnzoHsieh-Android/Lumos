@@ -141,9 +141,9 @@ flowchart TB
 
 > `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 93 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
-## 4. 筆記不腐爛,靠的是五段接力
+## 4. 筆記怎麼跟上程式碼:五段接力
 
-**工作進行中,系統在四個時點主動把東西推到你眼前**(這些只提醒,不擋):(更正 2026-10-12:「只提醒不擋」對前三個時點成立;第四個收工時點會擋一次,同一個會談第二次才放行,跟下面清單那句一致,這句以清單為準)
+**工作進行中,系統在四個時點主動把東西推到你眼前**(前三個只提醒;收工那個會擋一次,同一個會談第二次才放行):
 
 - 一進場:提醒程式碼為主、筆記補脈絡
 - 改檔之前:「你要改的這個檔會波及哪幾篇」
@@ -173,9 +173,12 @@ flowchart TB
     PC -->|通過| COMMIT["commit"]
 
     COMMIT --> PUSH{"pre-push (git)"}
-    PUSH -->|"① lumos doctor --ci"| PB1["⛔ 圖譜不健康(斷連結、孤兒、規則沒綁測試…)"]
-    PUSH -->|"② anchor verify"| PB2["⛔ 測試程式或把關腳本被改了,沒人簽名"]
-    PUSH -->|"③ code-loop check (留痕/表態)"| PB3["⛔ 高風險改動沒審過,或觸發到的效能檢核題沒表態<br/>(審過留憑證 pass / 說明理由跳過 skip / 每題表態 dispositions / 硬繞 --no-verify 會留下紀錄;<br/>憑證與表態都綁版本,之後再改程式就失效,只改帳本檔不算)"]
+    PUSH -->|"① anchor verify"| PB2["⛔ 測試程式或把關腳本被改了,沒人簽名"]
+    PUSH -->|"② lumos doctor --ci"| PB1["⛔ 圖譜不健康(斷連結、孤兒、規則沒綁測試…)"]
+    PUSH -->|"③ 規格閘複驗"| PB4["⛔ 風險低計劃綁的條款測試沒全綠"]
+    PUSH -->|"④ code-loop check (留痕/表態/證據)"| PB3["⛔ 高風險改動沒審過、觸發到的效能檢核題沒表態、<br/>碰到的合約測試紅、新增 linter 告警、登記過的資安護欄證據不合格<br/>(審過留憑證 pass / 說明理由跳過 skip / 每題表態 dispositions / 硬繞 --no-verify 會留下紀錄;<br/>憑證與表態都綁版本,之後再改程式就失效,只改帳本檔不算)"]
+    PUSH -->|"⑤ drift check"| PB5["⛔ 筆記還在提已刪改的名稱或路徑、連結斷了、回頭條件已成立"]
+    PUSH -->|"⑥ 回頭重讀"| PB6["⛔ 程式和管它的筆記這次都改了,卻沒對照改動重讀整篇筆記<br/>(只有本機擋,CI 只提醒)"]
     PUSH -->|全過| PASS["push"]
     PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify"]
     CI --> WAIT{"lumos ci-wait<br/>(push 後同輪等結論)"}
@@ -186,7 +189,7 @@ flowchart TB
     classDef gate fill:#3a2020,stroke:#dc5b5b,color:#ffe8e8
     classDef ok fill:#1b3a2a,stroke:#3ddc84,color:#e8fff0
     classDef push fill:#2a2440,stroke:#9a7bd6,color:#f0ecff
-    class PC,PUSH,BLOCK,PB1,PB2,PB3 gate
+    class PC,PUSH,BLOCK,PB1,PB2,PB3,PB4,PB5,PB6 gate
     class COMMIT,PASS,CI,EDIT,DONE ok
     class WAIT,FIX gate
     class BEFORE,ENTRY,PRE,LENS,STOPH push
@@ -213,17 +216,17 @@ flowchart TB
 
     subgraph R1["① 開一輪 → 派人 → 審 → 交回來驗"]
         direction LR
-        NEXT["開一輪審查<br/>算風險分級、第幾輪、派幾席<br/>先列出主題已有的節點"] --> LENS["派工時自動附節點<br/>代碼審從 diff 算 · 設計審從計劃筆記算<br/>超時會留一行說明,不再靜默"] --> SEATS["審查席<br/>幾個不同角度的同門 AI<br/>+ 架構一致席 + 換一家的 AI"] --> INTAKE["交回來先機器驗<br/>引的句子找得到?行號存在?材料讀了?<br/>對不回原文的不採信"]
+        NEXT["開一輪審查<br/>算風險分級、第幾輪、派幾席<br/>先列出主題已有的節點"] --> LENS["派工時自動附節點<br/>代碼審從 diff 算 · 設計審從計劃筆記算<br/>超時會留一行說明,不再靜默"] --> SEATS["審查席<br/>幾個不同角度的同門 AI<br/>+ 架構一致席(高風險代碼審再加資安席)<br/>要第二種視角才加派另一家的 AI(2026-09-30 起不預設派)"] --> INTAKE["交回來先機器驗<br/>引的句子找得到?行號存在?材料讀了?<br/>對不回原文的不採信"]
     end
 
     subgraph R2["② 每條意見有交代 → 記帳 → 過不過 → 留憑證"]
         direction LR
-        FOLD["回頭改設計稿<br/>採納的改進稿子,不採納的寫理由<br/>拿不準的先派外家反駁"] --> LEDGER["記帳<br/>每席一筆 + 一筆彙總<br/>發現了什麼、改了哪些、哪些不採納"] --> GATE{"過不過?<br/>每條都有交代 ∧ 紀錄能重算 ∧ 引的句子全找得到<br/>程式碼審:嚴重的一律要改"} -->|過| FREEZE["凍結判定<br/>存成標準答案<br/>每週機器回放"] --> PASS["「審過了」憑證<br/>綁在這個版本上<br/>推送與 CI 都認它"]
+        FOLD["回頭改設計稿<br/>採納的改進稿子,不採納的寫理由<br/>拿不準的另派一個沒看過結論的辯方反駁"] --> LEDGER["記帳<br/>每席一筆 + 一筆彙總<br/>發現了什麼、改了哪些、哪些不採納"] --> GATE{"過不過?<br/>每條都有交代 ∧ 紀錄能重算 ∧ 引的句子全找得到<br/>程式碼審:嚴重的一律要改"} -->|過| FREEZE["凍結判定<br/>存成標準答案<br/>每週機器回放"] --> PASS["「審過了」憑證<br/>綁在這個版本上<br/>推送與 CI 都認它"]
     end
 
     subgraph R3["③ 外圍:量它、跑它"]
         direction LR
-        OBS["觀測帳<br/>附的節點有沒被用 · 被舊決定擋幾次<br/>每支迴圈燒多少"] ~~~ AUTO["每日自動輪(2026-09-05 起暫停派工)<br/>挑缺口 → 寫設計 → 走同一條路 → 停在等人放行<br/>近兩週帳上零產出,10/05 裁去留"] ~~~ PROBE["情境探針<br/>AI 會不會自己去查圖譜補脈絡<br/>Claude / Codex 同一批題對照"]
+        OBS["觀測帳<br/>附的節點有沒被用 · 被舊決定擋幾次<br/>每支迴圈燒多少"] ~~~ AUTO["每日自動輪(2026-09-05 起預設暫停派工)<br/>挑缺口 → 寫設計 → 走同一條路 → 停在等人放行<br/>暫停期間週期觀測照跑"] ~~~ PROBE["情境探針<br/>AI 會不會自己去查圖譜補脈絡<br/>Claude / Codex 同一批題對照"]
     end
 
     NODES ==>|"籌碼:相關節點進派工單"| R1

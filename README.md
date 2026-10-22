@@ -390,6 +390,6 @@ assert total_price(quantity=3, unit_price=5) == 15
 
 </details>
 
-深入閱讀：[心智模型與機制](docs/心智模型.md) · [接手舊專案](docs/接手舊專案.md) · [指令參考](docs/指令參考.md) · [架構全景](ARCHITECTURE.md) · [SDD 與 Lumos](SDD-vs-Lumos.md) · [方法論](docs/methodology/圖譜即合約.md)
+深入閱讀：[心智模型與機制](docs/心智模型.md) · [接手舊專案](docs/接手舊專案.md) · [指令參考](docs/指令參考.md) · [架構全景](ARCHITECTURE.md) · [SDD 與 Lumos](SDD-vs-Lumos.md) · [設計理念長文](docs/methodology/圖譜即合約-對外論述.md) · [設計演進與決策史](docs/methodology/圖譜即合約.md)
 
 授權：[MIT](LICENSE)。你寫的筆記是你的，Lumos 不主張任何權利。
