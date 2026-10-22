@@ -1,0 +1,301 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
+index ae025529df5267bf351d74db3b5408f1c9bde38f..d5ad552d1b4612847185bb9db1e2db531dc6fe92 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
+@@ -97,21 +97,21 @@ REVISIT:2026-12-21 容差預設 10% 是拍的,有消費專案的真實數據後,
+ - 最接近的是 [[Systems/compose-metrics-adapter]]:讀 Compose 編譯器報告比基準。它目前只能手動叫,沒有接進推送前的檢查或 CI。
+ - [[Projects/pitfalls棧別效能追問_計劃]] 寫過「不做效能自動評分(oracle 教訓)」。那條講的是由工具判斷作者對效能題的回答對不對;這次是拿實機量到的數字跟基準比,而且只提醒,不打分也不放行,所以不算翻案。
+ - 本機三個 Android 專案(mOrangePos、Compass_KDS、Citrus_KDS)的建置設定裡都沒有 Macrobenchmark 或 Baseline Profile 相依,也找不到任何結果檔。照 d1 先在 Citrus_KDS 加模組拿真檔,見下一節。
+ 
+ ## 實測(2026-10-21,Citrus_KDS 在模擬器上跑一次)
+ 
+ - KDS 那邊的做法(基準測試模組、假 POS 伺服器、跑法與踩到的坑)記在 KDS 圖譜的 `Systems/效能基準`;改動放在 KDS 本機的 `macrobench` 分支工作目錄。
+ REVISIT:2026-11-06 KDS 那邊的基準測試模組提交進 KDS repo 了沒;沒有就判要不要提交或撤掉
+ - 真結果檔存在 `governance/research/macrobench/2026-10-21-kds-emulator-benchmarkData.json`,實作讀取器時拿來當測試資料。
+ - 跟原本依文件寫的計劃有出入、讀取器要照真檔做的地方:
+-  - 檔名是 `com_citrus_citruskds_macrobenchmark-benchmarkData.json`,套件名的點變成底線;官方範例寫成點。讀取器要用 `*-benchmarkData.json` 掃,不要拼檔名。
++  - 檔名是 `com_citrus_citruskds_macrobenchmark-benchmarkData.json`,套件名的點變成底線;官方範例寫成點。讀取器要用 `*-benchmarkData.json` 掃,不要拼檔名。2026-10-23 實機上 benchmark-macro 1.4.1 寫出的檔名反而保留點(`com.example.mblab.bench-benchmarkData.json`),兩種都要掃得到。
+   - `sampledMetrics` 每個指標除了 `P50`/`P90`/`P95`/`P99`,還有 `runs`,是「每次重複各自的每幀數值」的陣列的陣列(這次五次各 29~33 幀)。
+   - 這次的 `metrics` 只有 `timeToInitialDisplayMs`;沒有出現 `frameCount`。
+   - `context.build` 有 `brand`、`device`、`fingerprint`、`model`、`version.sdk`;另有 `cpuLocked`、`cpuCoreCount` 等。判「裝置不同」用 `model` 加 `fingerprint`。
+ - 模擬器的數字:冷啟動中位數約 2188ms(最小 1927、最大 2562);滑動每幀 CPU 耗時 P50 約 36ms、P90 約 153ms。模擬器用軟體畫圖,這些數字只證明流程跑得通,不能當基準,也不能拿來訂容差。
+ 
+ ## 要做的事
+ 
+ 1. 新指令 `lumos macrobench`,選項比照 compose-metrics:`--repo`、`--json`、`--update-baseline`。
+ 2. 設定檔 `.lumos/macrobench.json`:列出要掃的結果目錄(在目錄裡找 `*-benchmarkData.json`,見上一節的檔名坑)、容差百分比(預設 10)、哪些指標是「越大越好」(預設全部當越小越好)。
+ 3. 基準檔 `.lumos/macrobench-baseline.json`:每個「測試類別 + 測試名 + 參數 + 指標」存中位數、最小、最大,以及裝置型號與系統指紋。
+@@ -123,28 +123,37 @@ REVISIT:2026-11-06 KDS 那邊的基準測試模組提交進 KDS repo 了沒;沒
+ 5. 比對結果分四種:退步、新出現的情境、這次沒跑到的情境、裝置不同不比。裝置不同時整項不比、只列出來,因為不同手機的毫秒數不能互比。
+ 6. 退步不改結束碼(維持 0);設定檔壞掉才回 2,比照 compose-metrics。
+ 7. 不接進推送前的檢查。建議消費專案在每晚的 CI 上跑完基準後呼叫一次,寫法放進使用說明。
+ 
+ ## 條款
+ 
+ - [S1] 當結果檔的某指標中位數比基準中位數慢超過容差、而且比基準最大值還慢時,指令應列為退步並附基準值、現值與差幅 [test:t_macrobench_regression_needs_both]
+ - [S2] 當只滿足其中一道(超過容差但仍在基準浮動範圍內,或超出範圍但差幅小於容差)時,指令應不列為退步 [test:t_macrobench_single_gate_not_enough]
+ - [S3] 當結果檔的裝置型號或系統指紋跟基準不同時,指令應整項不比對、列為裝置不同 [test:t_macrobench_device_mismatch_skips]
+ - [S4] 當指標被設定為越大越好時,指令應反過來判退步 [test:t_macrobench_higher_is_better]
+-- [S5] 當基準值是零或負數(例如每幀超時毫秒數可能是負的)時,指令應改用基準的絕對值算容差、基準是零時改用設定的絕對容差(預設 1),不得除以零,也不得把變快判成變慢 [test:t_macrobench_nonpositive_baseline]
++- [S5] 指令算容差時應取「基準絕對值 × 容差百分比」與設定的絕對容差(預設 1)兩者較大的那個:基準是負數(例如每幀超時毫秒數)也按絕對值算比例,基準是零時就是絕對容差,不得除以零,也不得把變快判成變慢 [test:t_macrobench_nonpositive_baseline]
+ - [S8] 當 `sampledMetrics` 的 `P50` 或 `P90` 比基準慢超過容差時,指令應列為退步;只有 `P99` 變慢時應只列出、不算退步 [test:t_macrobench_sampled_percentiles]
+ - [S9] 當 `frameOverrunMs` 的基準 `P90` 不大於零、現值大於零時,指令應列為退步,不看差幅 [test:t_macrobench_overrun_crosses_zero]
+ - [S6] 當帶 `--update-baseline` 時,指令應只用成功解析的結果檔更新基準,解析失敗的檔不得清掉既有基準 [test:t_macrobench_update_baseline_skips_failed]
+ - [S7] 當設定檔 JSON 壞掉或缺必要欄位時,指令應回 2 並印出哪裡壞;設定檔不存在(專案沒接)或有退步時應回 0,比照 compose-metrics [test:t_macrobench_exit_codes]
+-- [S10] 當結果目錄裡是 Macrobenchmark 實際寫出的檔(檔名裡套件名的點變底線、放在子目錄裡)時,指令應找得到並讀出啟動與幀耗時指標 [test:t_macrobench_reads_real_kds_file]
++- [S10] 當結果目錄裡是 Macrobenchmark 實際寫出的檔(檔名裡套件名的點變底線或保留點、放在子目錄裡)時,指令應找得到並讀出啟動與幀耗時指標 [test:t_macrobench_reads_real_kds_file]
+ - [S11] 當基準檔裡任何一項缺欄或型別不對(手改、寫壞)時,指令應整份當基準讀不了:回 0、印基準讀不了、不比對,`--update-baseline` 也不得蓋掉它 [test:t_macrobench_corrupt_baseline_entry]
+ - [S12] 當同一個情境出現在兩個以上的結果檔時,指令應兩份都不收,並明講是重複出現,不得說成結果檔讀不了 [test:t_macrobench_duplicate_scenario]
++- [S13] 當用實機跑出的正常版結果當基準時,注入已知變慢那次的結果應剛好報出變慢的那幾項,同一版本正常重跑的結果不得報任何一項 [test:t_macrobench_real_tablet_lab]
++
++## 實機端到端(2026-10-23,SM-X710 平板、Android 16)
++
++- KDS 那組基準(benchmark-macro 1.2.4)在這台平板上兩支都失敗:錯誤是確認不了畫面啟動完成。系統日誌顯示 App 352ms 就顯示了,函式庫查 15 秒的畫格資料都是空的;手動查畫格資料正常、格式也對得上它的解析程式,所以不是格式問題。真正原因沒查出來。
++- 另開小專案 `/Users/enzo/orca/workspaces/macrobench-lab`(一個 300 列清單的 App,可從啟動參數注入已知的變慢),用 benchmark-macro 1.4.1 在同一台平板上兩支都跑通。所以 KDS 失敗最可能是 1.2.4 太舊;1.4.1 只要求 compileSdk 34、建置外掛 8.1.1,KDS 都符合。這仍是推論,KDS 升級後跑一次才算證實。
++- 三次實跑:正常、注入變慢(啟動多 300ms、每列多 8ms)、正常重跑,結果檔存在 `governance/research/macrobench/2026-10-23-lab-tablet/`。變慢那次報出四項,正常重跑那次原本誤報一項(每幀超時 P90 -1.7→-0.9,容差只按 10% 算是 0.17ms),所以把容差改成有下限(條款 S5、S13)。
++- 這台不是店裡實際用的機型時,數字只能證明工具判得對,不能當 KDS 的效能基準。
++REVISIT:2026-11-06 KDS 的基準測試函式庫升到 1.4.1 後在實機跑一次,確認兩支都過;還是失敗就查畫格資料為什麼在測試程序裡是空的
+ 
+ ## 下一段:驗證收據試跑(2026-10-23 併入,決策 d4)
+ 
+ 調研全文在 [[Projects/Android診斷證據接入_調研]]。這一段只做調研的第零階段,不改 Lumos 核心:
+ 
+ 1. 等評測實驗跑完、機器空出來,裝 Google 官方 android-profiler skill,釘調研時看的版本。
+ 2. 用 KDS 既有的兩支基準在模擬器上重跑一次;Macrobenchmark 每輪都會留一份 Perfetto Trace,一起拉回本機。
+ 3. 用 trace_processor 對最慢那一輪跑查詢,把實際跑的 SQL 與結果存下來。
+ 4. 手寫一份收據:manifest 照調研的草案欄位填,報告用 `[MEASURED]`、`[INFERRED]`、`[GAP]` 標籤;原始 Trace 只留本機、記雜湊。
+ 5. 寫成一份驗證紀錄,狀態照調研的寫回規則:模擬器只能算流程驗證,不寫成效能通過。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+index abb2b42d1e38cfa589c5aee019a5f9129dcef2f7..2fc7607953ca2e1c6718eb7c6af9dd344c653e36 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -1,36 +1,38 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-21
+-updated: 2026-10-21
++updated: 2026-10-23
+ responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢;不負責建置或執行基準測試、不接裝置、不擋推送
+ aliases: []
+ about_code:
+   - scripts/lumos
+ tags:
+   - type/system
+   - status/doing
+   - scope/stack-knowledge
+ summary: |-
+   WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢 [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
+   WHY:滑動類只有百分位,P50 與 P90 過容差算退步,P99 只列出 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S8] [因:P99 浮動大,拿來判會一直誤報] [test:t_macrobench_sampled_percentiles]
+   WHY:有退步也回 0,只提醒不擋推送 [出處:[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 推送前證據不收毫秒] [因:毫秒隨機器與溫度浮動,拿來擋會隨機誤擋] [test:t_macrobench_exit_codes]
+-  PITFALL:結果檔名裡套件名的點會變成底線,照官方文件範例拼檔名找不到檔 [出處:2026-10-21 Citrus_KDS 模擬器實跑,benchmark-macro 1.2.4] [根因:函式庫把套件名正規化成檔名] [test:t_macrobench_reads_real_kds_file]
++  PITFALL:結果檔名的寫法隨函式庫版本變,照官方文件範例拼檔名會找不到檔:1.2.4 把套件名的點換成底線,1.4.1 保留點 [出處:2026-10-21 Citrus_KDS 模擬器實跑(1.2.4)、2026-10-23 實機小專案(1.4.1)] [根因:函式庫自己決定檔名正規化,各版不同] [test:t_macrobench_reads_real_kds_file]
+   SEE:[[Systems/compose-metrics-adapter]] [[Projects/Macrobenchmark退步提醒_計劃]]
+   WHY:--update-baseline 把這次讀到的項目蓋進舊基準,不整份重寫 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S6] [因:某個結果檔這次壞掉時,它原本的項目不能跟著消失] [代價:已刪掉的情境會留在基準裡,每次列成「沒跑到」] [test:t_macrobench_update_baseline_skips_failed]
+   REVISIT:2026-12-21 看接上的消費專案基準裡有沒有累積「沒跑到」的舊情境;有就加一個刪除舊情境的選項
++  WHY:容差取「基準絕對值×容差百分比」與絕對容差兩者較大的那個,不只按比例 [出處:2026-10-23 實機小專案正常版重跑] [因:每幀超時這種接近 0 的指標,10% 的容差只剩零點幾毫秒,正常抖動就被報成變慢;滑動類又沒有超出基準浮動範圍那第二道] [不選:只對每幀超時一個指標特別處理(其他接近 0 的指標會再踩一次)] [test:t_macrobench_real_tablet_lab]
+ verified_by:
+   - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
++  - "[[Verification/2026-10-23_macrobench實機端到端]]"
+ ---
+ # macrobenchmark-adapter
+ 
+ 白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
+ 
+-- 設定 `.lumos/macrobench.json`:`results_dirs`(必填,結果目錄清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(基準是 0 時用,預設 1)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
++- 設定 `.lumos/macrobench.json`:`results_dirs`(必填,結果目錄清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
+ - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
+ - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
+ - 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
+ - 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現(更新基準與一般比對兩條路都是),不說成讀不了;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
+ - 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
+ 
+ REVISIT:2026-12-21 接上實機結果後,看結果檔或基準裡有沒有出現 NaN 或 Infinity;有就把數值判斷改成只收有限數,現在 NaN 會讓那一項永遠比不出變慢
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-23_macrobench實機端到端.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-23_macrobench實機端到端.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..86279b51e43dbde0e534a2088be7c6674b969278
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-23_macrobench實機端到端.md
+@@ -0,0 +1,30 @@
++---
++type: verification
++status: pass
++date: 2026-10-23
++valid_under:
++  - 實機 SM-X710(Android 16、user build),小專案用 benchmark-macro 1.4.1,三次實跑在同一台、間隔數分鐘內
++  - 只驗工具判得對:小專案的數字不代表任何正式 App 的效能
++revalidate_when:
++  - 換函式庫大版本或換裝置後第一次跑時,用新的實機結果檔重跑 t_macrobench_real_tablet_lab 那組比對
++  - 改動容差算法或判退步規則時
++tags:
++  - type/verification
++  - status/pass
++  - scope/stack-knowledge
++plan_refs:
++  - "[[Projects/Macrobenchmark退步提醒_計劃]]"
++---
++# 2026-10-23_macrobench實機端到端
++
++白話:在真的平板上確認 `lumos macrobench` 抓得到已知的變慢、正常重跑時不亂報。
++
++- **做法**:小專案 `/Users/enzo/orca/workspaces/macrobench-lab` 跑三次——正常、注入變慢(`-e startupDelayMs 300 -e bindDelayMs 8`)、正常重跑——每次跑完拉回結果檔,用 `lumos macrobench` 跟第一次存的基準比。
++- **結果**(修正容差下限之後):
++  - 注入變慢:報出 4 項——冷啟動中位數 216.1→571.1ms、每幀 CPU P90 4.7→10.2ms、每幀超時 P50 -3.6→-1.0ms、每幀超時 P90 -1.7→3.6ms(標成跨零)。P99 兩項只列出。
++  - 正常重跑:0 項。修正前這次誤報了每幀超時 P90 -1.7→-0.9,這就是改容差下限的原因。
++  - 滑動的 P50 沒變:大部分幀不畫新列,只有畫新列的幀被拖慢,要看 P90。
++- **原始檔**:三份結果檔在 `governance/research/macrobench/2026-10-23-lab-tablet/`,測試 `t_macrobench_real_tablet_lab` 直接讀它們。
++- **沒驗的**:KDS 本身在這台平板上用 1.2.4 跑不起來(見計劃〈實機端到端〉);容差下限 1ms 只用一次重跑的抖動回推,沒有多次重跑量浮動。
++REVISIT:2026-12-21 同一台裝置正常版重跑至少 5 次量每個指標的抖動,重訂容差百分比與下限的預設值
++
+diff --git a/scripts/lumos b/scripts/lumos
+index df06c7a79aa799be0455fa7867f4d83667a5930e..f7a5bc6cca555578ac83f7aed787f7569efee7ee 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39457,23 +39457,24 @@ def _macrobench_collect(repo, cfg):
+                 if k in seen:
+                     failed.append({"file": rel, "reason": f"{k} 重複出現(也在 {seen[k]}),兩份都不收", "kind": "duplicate"})
+                     entries.pop(k, None)
+                     continue
+                 seen[k] = rel
+                 entries[k] = v
+     return entries, failed, n_files
+ 
+ 
+ def _macrobench_worse(metric, base, cur, cfg):
+-    """回 (變差了多少, 容差);變快或持平時差值 ≤ 0。基準 ≤ 0 時用基準的絕對值算容差,基準是 0 用絕對容差。"""
++    """回 (變差了多少, 容差);變快或持平時差值 ≤ 0。容差 = max(|基準|×容差百分比, 絕對容差):
++    基準是負數也按絕對值算比例、基準是 0 時就是絕對容差;接近 0 的指標(例如每幀超時)只靠比例會被正常抖動誤報。"""
+     delta = (base - cur) if metric in cfg["higher_is_better"] else (cur - base)
+-    tol = abs(base) * cfg["tolerance_pct"] / 100.0 if base != 0 else cfg["abs_tolerance"]
++    tol = max(abs(base) * cfg["tolerance_pct"] / 100.0, cfg["abs_tolerance"])
+     return delta, tol
+ 
+ 
+ def _macrobench_cmp_metrics(key, base, cur, cfg, res):
+     """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步。"""
+     for metric, c in sorted(cur["metrics"].items()):
+         b = (base.get("metrics") or {}).get(metric)
+         if not b:
+             continue
+         delta, tol = _macrobench_worse(metric, b["median"], c["median"], cfg)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c74f1a2d9820b811918f718ddae06389de1fc70e..2a90adecb1abb0847b3e590f0e14808bb404cd6a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17474,26 +17474,34 @@ def t_macrobench_nonpositive_baseline():
+         b = {k: _mb_entry(sampled={metric: {"P50": base_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
+         c = {k: _mb_entry(sampled={metric: {"P50": cur_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
+         return [x for x in m._macrobench_compare(b, c, _MB_CFG)["regressions"] if x["stat"] == "P50"]
+     check("-10 → -12 是變快 → 不算", cmp(-10.0, -12.0) == [], str(cmp(-10.0, -12.0)))
+     check("-10 → -9.5 慢 0.5 < 1 → 不算", cmp(-10.0, -9.5) == [], str(cmp(-10.0, -9.5)))
+     check("-10 → -8.5 慢 1.5 > 1 → 退步", len(cmp(-10.0, -8.5)) == 1, str(cmp(-10.0, -8.5)))
+     check("基準 0 → 0.5 未過絕對容差 1 → 不算", cmp(0.0, 0.5, "frameDurationCpuMs") == [], "")
+     check("基準 0 → 1.5 過絕對容差 → 退步", len(cmp(0.0, 1.5, "frameDurationCpuMs")) == 1, "")
+     # 上面的 -10 剛好讓 10%×|基準| 等於絕對容差 1,分不出「負數用比例」與「負數誤用絕對容差」;下面兩組才分得出
+     check("-100 → -95 慢 5 < 10%×100 → 不算", cmp(-100.0, -95.0) == [], str(cmp(-100.0, -95.0)))
+-    check("-0.5 → -0.2 慢 0.3 > 10%×0.5 → 退步", len(cmp(-0.5, -0.2)) == 1, str(cmp(-0.5, -0.2)))
++    check("-100 → -85 慢 15 > 10%×100 → 退步", len(cmp(-100.0, -85.0)) == 1, str(cmp(-100.0, -85.0)))
++    # 容差有下限:取「基準的 10%」與絕對容差兩者較大的那個(2026-10-23 實機:接近 0 的指標只靠比例會被正常抖動誤報)
++    check("-0.5 → -0.2 慢 0.3 未過下限 1 → 不算", cmp(-0.5, -0.2) == [], str(cmp(-0.5, -0.2)))
++    check("5 → 5.8 慢 0.8:比例只允許 0.5,但下限 1 → 不算", cmp(5.0, 5.8, "frameDurationCpuMs") == [], str(cmp(5.0, 5.8, "frameDurationCpuMs")))
++    check("5 → 6.2 慢 1.2 > 下限 1 → 退步", len(cmp(5.0, 6.2, "frameDurationCpuMs")) == 1, str(cmp(5.0, 6.2, "frameDurationCpuMs")))
+     cfg = dict(_MB_CFG, abs_tolerance=0.3)
+     b0 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 0.0, "P90": 5.0}})}
+     c0 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 0.5, "P90": 5.0}})}
+     got = [x["stat"] for x in m._macrobench_compare(b0, c0, cfg)["regressions"]]
+     check("基準 0、自訂絕對容差 0.3 → 0.5 算退步", got == ["P50"], str(got))
++    b5 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 5.0, "P90": 9.0}})}
++    c5 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 5.8, "P90": 9.0}})}
++    got = [x["stat"] for x in m._macrobench_compare(b5, c5, cfg)["regressions"]]
++    check("自訂下限 0.3:5 → 5.8 慢 0.8 > 比例 0.5 → 退步", got == ["P50"], str(got))
+ 
+ 
+ def t_macrobench_sampled_percentiles():
+     """滑動類指標只有百分位:P50、P90 過容差算退步;P99 太吵只列出。手算:P90 基準 20 → 門檻 22。"""
+     m = _macrobench_mod()
+     k = "pkg.Scroll#scroll"
+     base = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 10.0, "P90": 20.0, "P95": 30.0, "P99": 40.0}})}
+     def cur(p50, p90, p99):
+         return {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": p50, "P90": p90, "P95": 30.0, "P99": p99}})}
+     r = m._macrobench_compare(base, cur(10.0, 20.0, 60.0), _MB_CFG)
+@@ -17622,20 +17630,53 @@ def t_macrobench_exit_codes():
+         f.write_text(_mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+         _mb_run(root, "--update-baseline")
+         f.write_text(_mb_result_json([_mb_startup("pkg.S", 2000.0, 1900.0, 2100.0)]), encoding="utf-8")
+         r = _mb_run(root, "--json")
+         d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+         check("有退步 → rc0 且列出", r.returncode == 0 and len(d.get("regressions", [])) == 1, r.stdout)
+         rt = _mb_run(root)
+         check("文字輸出有寫退步的情境名", rt.returncode == 0 and "pkg.S#coldStartup" in rt.stdout, rt.stdout)
+ 
+ 
++def t_macrobench_real_tablet_lab():
++    """2026-10-23 實機(SM-X710、Android 16、benchmark-macro 1.4.1)跑小專案三次:正常、注入變慢(啟動多 300ms、
++    每列多 8ms)、正常重跑。以正常那次當基準:變慢那次要剛好報出四項,正常重跑那次要一項都不報。
++    預期值照三次實跑印出的數字手算(容差 = max(10%×|基準|, 1)):
++      啟動中位數 216.1 → 571.1(差 355 > 21.6 且 > 基準最大 226.8);重跑 223.1(差 7 < 21.6)
++      幀 CPU P90 4.7 → 10.2(差 5.5 > 1);重跑 4.7
++      幀超時 P50 -3.6 → -1.0(差 2.6 > 1);重跑 -3.4(差 0.2)
++      幀超時 P90 -1.7 → 3.6(跨零);重跑 -0.9(差 0.8 < 1,只靠比例 0.17 會誤報)
++    結果檔名 1.4.1 保留套件名的點(1.2.4 會換成底線),兩種都要掃得到。"""
++    import json, shutil, tempfile
++    src = Path(GRAPHCTL).resolve().parent.parent / "governance" / "research" / "macrobench" / "2026-10-23-lab-tablet"
++    with tempfile.TemporaryDirectory(prefix="gctl-mbtab-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["latest"]}), encoding="utf-8")
++        (root / "latest").mkdir()
++        dst = root / "latest" / "com.example.mblab.bench-benchmarkData.json"
++        shutil.copy(src / "1-base-benchmarkData.json", dst)
++        r = _mb_run(root, "--update-baseline")
++        check("前置:實機正常版存成基準(檔名帶點也掃得到)", "寫入 2 個情境" in r.stdout, r.stdout + r.stderr)
++        shutil.copy(src / "2-slow-benchmarkData.json", dst)
++        d = json.loads(_mb_run(root, "--json").stdout)
++        got = sorted((x["key"].split("#")[1], x["metric"], x["stat"]) for x in d["regressions"])
++        want = sorted([("coldStartup", "timeToInitialDisplayMs", "median"), ("scrollList", "frameDurationCpuMs", "P90"),
++                       ("scrollList", "frameOverrunMs", "P50"), ("scrollList", "frameOverrunMs", "P90")])
++        check("注入變慢 → 剛好報出四項", got == want, str(got))
++        cross = [x for x in d["regressions"] if x["metric"] == "frameOverrunMs" and x["stat"] == "P90"]
++        check("注入變慢 → 幀超時 P90 標成跨零", bool(cross) and cross[0].get("zero_crossed") is True, str(cross))
++        shutil.copy(src / "3-base-again-benchmarkData.json", dst)
++        d = json.loads(_mb_run(root, "--json").stdout)
++        check("正常重跑 → 一項都不報", d["regressions"] == [] and d["checked"] == 2, str(d["regressions"]))
++
++
+ def t_macrobench_corrupt_baseline_entry():
+     """基準檔某一項缺欄(手改或寫壞)時,當成基準讀不了:rc0、說基準讀不了,不噴 traceback。"""
+     import json, tempfile
+     with tempfile.TemporaryDirectory(prefix="gctl-mbcb-") as td:
+         root = Path(td)
+         (root / ".lumos").mkdir()
+         (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+         (root / "out").mkdir()
+         (root / "out" / "x-benchmarkData.json").write_text(
+             _mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index a893b24e242ddb13dd88267639c83571b0c05022..c9abd6004a27b90d6bd53d63f94b63bf3268419f 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -77,21 +77,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ | **全文搜尋** | `python3 scripts/lumos search <詞> [--path Systems] [--regex] [--files-only] [--top N] [--json]` — frontmatter+body,大小寫不敏感 substring;**預設 BM25F 相關性排序**(2026-07-11 轉正,goldset 評測修正尺 nDCG@5 +58.1%;只重排既有候選不擴召回,預設全量+逐檔命中明細,--top N 才截);`--legacy` 走舊字母序全量,`--regex` 自動走舊路;**A1 型別先驗:MOC 索引頁 ×0.4 降權**(仍在結果內只是後移;要找索引頁用 `--path MOC` 直達) |
+ | **spec 指涉宣稱機械核對(vault-free)** | `lumos refcheck <md檔> [--repo <root>] [--json]` — 抽 inline-code 檔路徑/行號、核對存在性/行號範圍、輸出證據 manifest(含行內容摘錄);design-loop 審計前先跑,存在性查證不靠 LLM。rc:全 ok=0/有 missing 或超界=1/參數錯=2 |
+ | **實務隱患掃描(vault-free，三模式)** | `lumos pitfalls <md>` — 輸出提問清單(spec 潛在隱患);`lumos pitfalls <md> --check` — 缺「## 實務隱患」節 rc 1(逼補節);`lumos pitfalls --diff <merge-base>..HEAD` — 代碼變更風險 manifest + 尾行 `tier: high\|standard`(`tier: high` → 調用 `lumos-code-loop` 做對抗代碼審)。**專案配 `.lumos/lint.json`(一棧一組指令、各輸出 SARIF)則 `--diff` 自動吃社群 linter**:偵測 diff 涉及棧→跑 lint→解析合併 SARIF→過濾到 diff 觸及行→併進 manifest(claim 帶 `source:"lint:<driver>"`);無宣告則 regex-only 分毫不變。lumos 只解 SARIF、不內建棧規則。`--no-lint`:`--diff` 只跑快的 regex 層(不跑專案 lint 指令)。**pre-push hook 單點把關(blocking)**(2026-07-06 ADR:撤除每回合 Stop nag——太擾民,push 才是把關時點):push 前跑 `--diff --no-lint`,tier=high 且無有效 pass/skip 留痕 → rc1 **硬擋 push**;提示三路(跑 lumos-code-loop / `lumos code-loop skip --note` / `git push --no-verify`);tier≠high 不誤傷 |
+ | **code-loop 收斂留痕(vault-free;留痕=逐筆 append 的持久紀錄檔,pre-push 讀它判放行)** | `lumos code-loop pass --note "<收斂理由>"` / `lumos code-loop skip --note "<理由>"`(留痕綁當下版本,寫 `governance/code-loop/<branch>.json`)/ `lumos code-loop check`——check 的判定項目與順序見 `commands/06-代碼審與推送.md`。**tier=high 分支收斂後必須 `lumos code-loop pass` 再 push,否則 pre-push 硬擋** |
+ | **受波及合約測試(vault-free;2026-09-07 從 code-loop check 裡拆出來)** | `lumos bound-tests --diff <範圍> [--advisory] [--from-json <已算好的波及結果>] [--json]` — 跑「這次改動碰到的硬合約」綁的那些測試,回 green / red / 沒東西可跑。**紅了是要修測試,不是補審查留痕**——這是拆出來的整個理由:以前紅了會讓 `code-loop check` 回 rc1,而 pre-push 把所有 rc1 一律解讀成「還沒審查」,叫人去跑 `code-loop pass`,而補留痕修不好一支紅掉的測試。★人裁 2026-09-07★:低風險推送也跑,紅了印出來、記帳,但 `--advisory` 不擋;高風險照舊擋。`--from-json` 吃 pre-push 算好的那份波及結果(一次推送只算一次)。帳的類別:green / red-advisory / red-blocked / skipped-flag / skipped-env / no-config / no-pins / no-bound / range-unavailable / whole-suite-deferred |
+ | **錨點完整性(vault-free)** | `lumos anchor verify [--repo] [--json]`/`lumos anchor approve --note "<理由>"` — 測試 runner+把關 hooks 的 sha256 baseline(`governance/anchor-baseline.json`);verify 不符 rc=1(pre-push/自主 loop 入口擋)、approve=改錨點合法路徑(治理帳留痕)。改測試 runner/hooks 後記得 approve |
+ | **派工鏡頭(vault-free)** | `lumos dispatch-lens <base>..<head> [--json] [--role-cards]` — 代碼審派工詞的固定席(Claude 側 hook 看 `LUMOS-IMPACT:` 自動叫;派工詞另有 `LUMOS-ROLE-CARDS: on` 時多附前端/後端角色鏡頭卡,圖譜段失敗也照附;派工前先手敲一次暖 20 分快取,大範圍 45 秒會超時、超時會附一行說明);`lumos dispatch-lens --spec <計劃.md>` — 設計審用,從計劃提到的程式檔與直接連結節點算(hook 看 `LUMOS-SPEC:`;2026-09-05);`--spec` 也收 `<完整提交編號>:<計劃路徑>`(在會談 repo 從物件庫讀那個提交裡的計劃,計劃只在別的工作樹也讀得到;只對 Claude 編排有效),這一行由 `lumos spec-freeze` 產生(設計審派工前先 spec-freeze;席位材料、rN-snapshot、--reviewed 都用它產生的那份;派工單記 spec_commit。計劃在會談目錄時 `lumos spec-freeze <計劃> --out governance/review-reports/<編號>/rN-snapshot.md`;計劃在別的工作樹時先在那裡跑 `lumos spec-freeze <計劃>`(不帶 `--out`:只建不掛分支的提交、印那一行,不在那裡留檔),再回會談目錄跑 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md` 寫快照;不動分支與 index;`--out` 只收執行所在 repo 的 `governance/review-reports/` 底下、已存在而且內容不同就拒絕,`--json` 失敗印 `freeze_fail`);`--arm/--claim/--disarm/--status` Codex 編排用 |
+ | **linter→SARIF 橋接(vault-free)** | `lumos sqlfluff-sarif`(T-SQL,吃 `sqlfluff … --format json`)/ `lumos stylelint-sarif`(CSS/SCSS/.vue,吃 `stylelint … --formatter json`)/ `lumos dart-sarif`(Dart/Flutter,吃 `dart analyze --format=json`;★讀不懂就 rc2 不寫檔★,dart 沒裝時閘判「跑不動」而不是乾淨)—— 這三款無原生 SARIF,轉 SARIF v2.1 進 lint-adapter(專案 `.lumos/lint.json` 對應棧 pipe;`... \| python3 scripts/lumos <bridge> --out {LINT_SARIF_OUT}`)。**原生吐 SARIF 的不用橋接**:detekt/Roslyn(dotnet ErrorLog)/**ESLint(`@microsoft/eslint-formatter-sarif`)** 直接接。Landmark 真機:sqlfluff 65 .sql、ESLint 148 .vue 都驗過。盲區:Dapper 寫在 C# 字串的 SQL 非 .sql 檔 |
+ | **linter 版本偵測(vault-free)** | `lumos lint-watch [--repo <root>] [--json]` — 讀專案 `.lumos/lint-watch.json`(`[{name,registry,current}]`,registry=`pypi:`/`npm:`/`maven:g:a`/`google-maven:g:a`(Android/AGP/AndroidX,dl.google.com)/`nuget:PackageId`(C#/.NET)/`github:o/r`),機械查各 registry 最新**穩定**版 vs 鎖定版 → 落後產候選 manifest(`{candidates,checked,failed}`)。純數字 tuple 比較 + 等段數守衛、prerelease 一律排除、fail-open(網路失敗不升 rc)。rc:成功=0(含缺/空清單)/清單格式壞=2。治理排程 `governance/lint-watch-check.sh`(掛 daily wrapper 第3步)吃它 → seen-ledger 去重 → 新候選暫存 `governance/lint-upgrades/` + LINE 通知 → 人放行(bump `current`) |
+ | **Compose 重組效能(vault-free)** | `lumos compose-metrics [--repo <root>] [--json] [--update-baseline] [--audit]` — 讀專案 `.lumos/compose-metrics.json`(宣告 metrics/reports 目錄)+ `.lumos/compose-baseline.json`,比對 Compose Compiler Metrics(專案 build 產出)現況 vs baseline → 退步 manifest(新增 non-skippable composable + skippable 比率退步/unstable 上升)。`--update-baseline`=放行(只寫成功解析模組)。**`--audit`=盤點模式:無視 baseline、列出當下全部 non-skippable composable(+unstable 原因)——初次採用/看既有問題點全景(補 delta-only 看不到既有債的洞)**。baseline+delta(metrics 整模組快照無 file:line)。rc:成功=0/宣告壞=2。**⚠ metrics 要用完整 build(非 incremental——incremental 只出部分檔)**;需專案 build 時給 Compose 編譯器 `metricsDestination`/`reportsDestination` 旗標(lumos 只讀不 build) |
+-| **Android 啟動與滑動效能(vault-free)** | `lumos macrobench [--repo <root>] [--json] [--update-baseline]` — 讀專案 `.lumos/macrobench.json`(必填 `results_dirs`:結果目錄清單;選填 `tolerance_pct` 預設 10、`abs_tolerance` 預設 1、`higher_is_better`、`ignore_metrics`)指到的目錄底下所有 `*-benchmarkData.json`(Macrobenchmark 結果檔,檔名裡套件名的點會變底線,所以用掃的),跟 `.lumos/macrobench-baseline.json` 比,只報變慢:啟動類要中位數慢超過容差而且超出基準最大值;滑動類 P50/P90 過容差算退步、P99 只列出;每幀超時從準時變成掉幀不看差幅;換了裝置整項不比。`--update-baseline`=放行(讀不了的檔跳過,舊項目保留;基準檔讀不了時不覆寫)。rc:有沒有退步都 0、設定壞=2。lumos 只讀結果檔,不跑 Gradle、不接裝置 |
++| **Android 啟動與滑動效能(vault-free)** | `lumos macrobench [--repo <root>] [--json] [--update-baseline]` — 讀專案 `.lumos/macrobench.json`(必填 `results_dirs`:結果目錄清單;選填 `tolerance_pct` 預設 10、`abs_tolerance` 容差下限預設 1(容差取 |基準|×百分比與下限兩者較大的,接近 0 的指標才不會被正常抖動誤報)、`higher_is_better`、`ignore_metrics`)指到的目錄底下所有 `*-benchmarkData.json`(Macrobenchmark 結果檔,檔名裡套件名的點會變底線,所以用掃的),跟 `.lumos/macrobench-baseline.json` 比,只報變慢:啟動類要中位數慢超過容差而且超出基準最大值;滑動類 P50/P90 過容差算退步、P99 只列出;每幀超時從準時變成掉幀不看差幅;換了裝置整項不比。`--update-baseline`=放行(讀不了的檔跳過,舊項目保留;基準檔讀不了時不覆寫)。rc:有沒有退步都 0、設定壞=2。lumos 只讀結果檔,不跑 Gradle、不接裝置 |
+ | **影響幅度偵測(關聯節點自動修復地基,vault-free)** | `lumos impact --file <code路徑> [--repo <root>] [--json] [--depth N]` — 算「改這支 code 波及哪些圖譜節點」:①直接(body inline-code 反查,不掃 core_refs)②間接(多源 BFS hop 1..depth,related/verified_by/plan_refs/body-wikilink 雙向,cycle guard)③相關事故(節點 `pitfall_when` glob/content-regex 命中被碰檔;去重:既結構又 trigger 命中只列 incidents)。標 direction/contract/combo。**已掛 PreToolUse hook(v1.1 降噪版,2026-07-11 goldset §6 全過轉正)**:Claude Edit/Write/MultiEdit code 時動手前自動注入「必看(合約/事故固定席)+相關 top-8(帶分數,改動內容當查詢詞)」——從全量 40+ 行縮到數行;TTL 20min 冷卻窗內走 `--incidents-only` 快速路(事故安全面每次看)。據此判受影響節點需不需同步。rc:0/3(vault 缺)。**`lumos impact --diff <base>..HEAD [--json]`(2026-07-11 橋接)**:聚合整段 diff 各改動檔的 ranked impact(query=該檔 hunk)成受影響功能面 manifest(固定席全保+非固定 top-8+來源檔標注)——code-loop 派 reviewer 前跑,**固定席逐條貼進每席派工詞**(2026-08-29 起每席都附;★不是給 manifest 路徑——那條經兩輪設計審否決,見 [[Projects/impact鏡頭機械化_計劃]]★);advisory 人判;--diff 聚合版不接 hook——單檔版已轉正接 hook,見 impact 行)。**`--sync-check`(落成核對)**:同 range 的預期受影響節點 vs 實際動過節點 → 未同步清單(code-loop 收斂後、pass 留痕前跑) |
+ | **共改漏改守衛(知識同步散落的機械守衛,vault-free)** | `lumos cochange rules [--all] [--repo] [--json]` / `lumos cochange check [--staged\|--diff <A..B>] [--repo] [--json]` — git 歷史挖「改 A 歷史 X% 同改 B」規則(ROSE 非對稱 confidence,conf≥0.8/support≥3/排>20檔 commit/預設排除治理帳與生成檔),check 對變更集列漏改警告。**pre-commit Gate CC 已接線(advisory 恆不擋)**:改了機制文件漏掉歷史上總同改的列舉表會在 commit 時提醒。rc:正常 0(含空/zero-commit)/git 失敗 2。設計見 `Projects/cochange守衛_計劃` |
+ | **折入漂移守衛(design-loop 折入後查一致性)** | `lumos fold-check <spec路徑> [--json]` — 列鏡像段(summary/json fence/審計紀錄/天花板)逼逐段複查 + value-drift(全文域同識別詞不同值,如 `2..depth` vs `1..depth`)+ reverse-omission(高訊號 token `--flag`/★MARKER★/檔名 某段缺)。**design-loop skill step7 折入後強制跑**;排除審計紀錄段/placeholder/FENCE。rc:有 flag=1(訊號非 abort)/無=0 |
+ | 鄰域樹狀展開／畫圖 | `map <筆記名> --depth 2`／`export --folders Systems Projects` |
+ 
+ **寫入**：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 改純量 status/updated/created/type | `lumos set <note> <key> <value>` | 行級手術，構造性最小 diff（只改該行，其餘原樣）；日期 bare 不加引號 |

@@ -39353,6 +39353,291 @@ def _compose_metrics_mode(repo, as_json, update_baseline, audit=False):
     return 0
 
 
+MACROBENCH_DEFAULTS = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_better": [], "ignore_metrics": ["frameCount"]}
+MACROBENCH_PERCENTILES = ("P50", "P90", "P95", "P99")   # 結果檔滑動類指標會有的百分位
+MACROBENCH_SAMPLED_JUDGED = ("P50", "P90")   # 滑動類只有百分位:這兩個過容差算退步
+MACROBENCH_SAMPLED_LISTED = ("P99",)         # P99 太吵:變慢只列出,不算退步
+MACROBENCH_ZERO_CROSS = {"frameOverrunMs": "P90"}   # 每幀超時從不大於 0 變成大於 0 = 開始掉幀,不看差幅
+
+
+def _macrobench_config_fields(raw, cfg):
+    """選填欄位驗型別並併進 cfg;回錯誤訊息或 None。"""
+    for k in ("tolerance_pct", "abs_tolerance"):
+        if k in raw:
+            if not _secev_num(raw[k]) or raw[k] <= 0:   # _secev_num:int/float 但不收 JSON 的 true/false
+                return f"macrobench.json 的 {k} 要是大於 0 的數字"
+            cfg[k] = float(raw[k])
+    for k in ("higher_is_better", "ignore_metrics"):
+        if k in raw:
+            if not isinstance(raw[k], list) or not all(isinstance(x, str) for x in raw[k]):
+                return f"macrobench.json 的 {k} 要是指標名稱字串的清單"
+            cfg[k] = list(raw[k])
+    return None
+
+
+def _macrobench_config(repo):
+    """讀 .lumos/macrobench.json。回 (cfg, None) / (None, 錯誤訊息) / (None, None)=沒接。"""
+    import json
+    path = Path(repo) / ".lumos" / "macrobench.json"
+    if not path.exists():
+        return None, None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, f"macrobench.json 讀不了(JSON 格式壞了?): {e}"
+    if not isinstance(raw, dict):
+        return None, "macrobench.json 最外層要是物件"
+    dirs = raw.get("results_dirs")
+    if not isinstance(dirs, list) or not dirs or not all(isinstance(d, str) and d for d in dirs):
+        return None, "macrobench.json 要有 results_dirs:結果目錄的清單(相對 repo 根目錄的路徑字串)"
+    cfg = dict(MACROBENCH_DEFAULTS, results_dirs=dirs)
+    err = _macrobench_config_fields(raw, cfg)
+    return (None, err) if err else (cfg, None)
+
+
+def _macrobench_read_one(b, ignore):
+    """結果檔裡的一項 benchmark → (情境鍵, metrics, sampled)。格式不對丟 ValueError。
+    情境鍵 = 測試類別#測試名,有參數時再接 [排序後的參數 JSON]。"""
+    import json
+    if not isinstance(b, dict) or not isinstance(b.get("className"), str) or not isinstance(b.get("name"), str):
+        raise ValueError("benchmarks 裡每一項要有 className 與 name")
+    key = f"{b['className']}#{b['name']}"
+    if b.get("params"):
+        key += "[" + json.dumps(b["params"], sort_keys=True, ensure_ascii=False) + "]"
+    metrics, sampled = {}, {}
+    for name, v in (b.get("metrics") or {}).items():
+        if name in ignore:
+            continue
+        if not isinstance(v, dict) or not all(_secev_num(v.get(s)) for s in ("median", "minimum", "maximum")):
+            raise ValueError(f"{key} 的 {name} 缺 median/minimum/maximum")
+        metrics[name] = {s: float(v[s]) for s in ("median", "minimum", "maximum")}
+    for name, v in (b.get("sampledMetrics") or {}).items():
+        if name in ignore:
+            continue
+        stats = {s: float(v[s]) for s in MACROBENCH_PERCENTILES if isinstance(v, dict) and _secev_num(v.get(s))}
+        if not all(s in stats for s in MACROBENCH_SAMPLED_JUDGED):
+            raise ValueError(f"{key} 的 {name} 缺 P50/P90")
+        sampled[name] = stats
+    return key, metrics, sampled
+
+
+def _macrobench_read_file(path, ignore):
+    """讀一個 Macrobenchmark 結果檔 → {情境鍵: {device, metrics, sampled}}。格式不對丟 ValueError。"""
+    import json
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or not isinstance(data.get("benchmarks"), list):
+        raise ValueError("最外層要是物件、要有 benchmarks 清單")
+    build = ((data.get("context") or {}).get("build") or {})
+    device = {"model": str(build.get("model", "")), "fingerprint": str(build.get("fingerprint", ""))}
+    out = {}
+    for b in data["benchmarks"]:
+        key, metrics, sampled = _macrobench_read_one(b, ignore)
+        out[key] = {"device": device, "metrics": metrics, "sampled": sampled}
+    return out
+
+
+def _macrobench_collect(repo, cfg):
+    """掃設定的結果目錄底下所有 *-benchmarkData.json(含子目錄;檔名裡套件名的點會被換成底線,不能拼檔名)。
+    回 (entries, failed, n_files);同一個情境出現在兩個檔 → 兩個都不收、記進 failed。"""
+    entries, failed, seen, n_files = {}, [], {}, 0
+    for d in cfg["results_dirs"]:
+        base = Path(repo) / d
+        if not base.is_dir():
+            failed.append({"file": d, "reason": "結果目錄不存在", "kind": "missing_dir"})
+            continue
+        for f in sorted(base.rglob("*-benchmarkData.json")):
+            n_files += 1
+            rel = os.path.relpath(f, repo)
+            try:
+                got = _macrobench_read_file(f, set(cfg["ignore_metrics"]))
+            except Exception as e:
+                failed.append({"file": rel, "reason": f"讀不了:{e}", "kind": "unreadable"})
+                continue
+            for k, v in got.items():
+                if k in seen:
+                    failed.append({"file": rel, "reason": f"{k} 重複出現(也在 {seen[k]}),兩份都不收", "kind": "duplicate"})
+                    entries.pop(k, None)
+                    continue
+                seen[k] = rel
+                entries[k] = v
+    return entries, failed, n_files
+
+
+def _macrobench_worse(metric, base, cur, cfg):
+    """回 (變差了多少, 容差);變快或持平時差值 ≤ 0。容差 = max(|基準|×容差百分比, 絕對容差):
+    基準是負數也按絕對值算比例、基準是 0 時就是絕對容差;接近 0 的指標(例如每幀超時)只靠比例會被正常抖動誤報。"""
+    delta = (base - cur) if metric in cfg["higher_is_better"] else (cur - base)
+    tol = max(abs(base) * cfg["tolerance_pct"] / 100.0, cfg["abs_tolerance"])
+    return delta, tol
+
+
+def _macrobench_cmp_metrics(key, base, cur, cfg, res):
+    """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步。"""
+    for metric, c in sorted(cur["metrics"].items()):
+        b = (base.get("metrics") or {}).get(metric)
+        if not b:
+            continue
+        delta, tol = _macrobench_worse(metric, b["median"], c["median"], cfg)
+        outside = c["median"] < b["minimum"] if metric in cfg["higher_is_better"] else c["median"] > b["maximum"]
+        if delta > tol and outside:
+            res["regressions"].append({"key": key, "metric": metric, "stat": "median",
+                                       "baseline": b["median"], "current": c["median"], "delta": delta})
+
+
+def _macrobench_cmp_sampled(key, base, cur, cfg, res):
+    """滑動類(只有百分位):P50/P90 過容差算退步,P99 只列出;每幀超時跨零不看差幅。"""
+    for metric, c in sorted(cur["sampled"].items()):
+        b = (base.get("sampled") or {}).get(metric)
+        if not b:
+            continue
+        for stat in MACROBENCH_SAMPLED_JUDGED + MACROBENCH_SAMPLED_LISTED:
+            if stat not in b or stat not in c:
+                continue
+            delta, tol = _macrobench_worse(metric, b[stat], c[stat], cfg)
+            crossed = MACROBENCH_ZERO_CROSS.get(metric) == stat and b[stat] <= 0 < c[stat]
+            if not (delta > tol or crossed):
+                continue
+            rec = {"key": key, "metric": metric, "stat": stat, "baseline": b[stat], "current": c[stat], "delta": delta}
+            if crossed:
+                rec["zero_crossed"] = True
+            res["regressions" if stat in MACROBENCH_SAMPLED_JUDGED else "listed"].append(rec)
+
+
+def _macrobench_compare(baseline, current, cfg):
+    """比基準與現況。回 regressions(算退步)、listed(只列出)、new、missing、device_changed、checked。"""
+    res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0}
+    for key in sorted(current):
+        cur = current[key]
+        if key not in baseline:
+            res["new"].append(key)
+            continue
+        base = baseline[key]
+        if base.get("device") != cur["device"]:
+            res["device_changed"].append({"key": key, "baseline": base.get("device"), "current": cur["device"]})
+            continue
+        res["checked"] += 1
+        _macrobench_cmp_metrics(key, base, cur, cfg, res)
+        _macrobench_cmp_sampled(key, base, cur, cfg, res)
+    res["missing"] = sorted(k for k in baseline if k not in current)
+    return res
+
+
+def _macrobench_entry_ok(e):
+    """基準檔的一項要跟讀結果檔產出的形狀一樣(見 _macrobench_read_one):啟動類三個統計值都是數字;
+    滑動類只能有 P50 到 P99 這幾個鍵、全是數字,P50/P90 必有;device 是物件。比對會讀到的每個值都先驗過,才不會噴例外。"""
+    if not isinstance(e, dict) or not isinstance(e.get("device"), dict):
+        return False
+    metrics, sampled = e.get("metrics", {}), e.get("sampled", {})
+    if not isinstance(metrics, dict) or not isinstance(sampled, dict):
+        return False
+    if not all(isinstance(v, dict) and all(_secev_num(v.get(s)) for s in ("median", "minimum", "maximum"))
+               for v in metrics.values()):
+        return False
+    return all(isinstance(v, dict) and set(v) <= set(MACROBENCH_PERCENTILES) and all(_secev_num(x) for x in v.values())
+               and all(s in v for s in MACROBENCH_SAMPLED_JUDGED) for v in sampled.values())
+
+
+def _macrobench_load_baseline(bpath):
+    """回 (entries, missing, unreadable);任何一項形狀不對,整份當讀不了(不比、也不讓 --update-baseline 蓋掉它)。"""
+    import json
+    if not bpath.exists():
+        return {}, True, False
+    try:
+        entries = json.loads(bpath.read_text(encoding="utf-8"))["entries"]
+        if isinstance(entries, dict) and all(_macrobench_entry_ok(e) for e in entries.values()):
+            return entries, False, False
+    except Exception:
+        pass
+    return {}, False, True
+
+
+def _macrobench_update(bpath, baseline, unreadable, current, failed):
+    """--update-baseline:把這次讀到的蓋進舊基準(讀失敗那幾個檔原本的項目留著)。"""
+    import json
+    for f in failed:
+        print(f"  略過 {f['file']}:{f['reason']}")
+    if not current:
+        if any(f.get("kind") == "duplicate" for f in failed):
+            print("基準沒更新:讀到的情境都重複出現在兩個以上的結果檔,分不出該用哪一份;讓 results_dirs 只指到一份結果。")
+        else:
+            print("基準沒更新:這次一個結果檔都沒讀成功(先跑基準測試、確認 results_dirs 指對地方)。")
+        return 0
+    if unreadable:
+        print("基準沒更新:現有的基準檔讀不了,為了不蓋掉它這次不寫。確認不要了就刪掉它再跑一次:")
+        print(f"    rm {bpath}")
+        return 0
+    merged = dict(baseline)
+    merged.update(current)
+    _write_lf(bpath, json.dumps({"version": 1, "entries": merged}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    print(f"基準已更新:這次寫入 {len(current)} 個情境,沿用舊的 {len(merged) - len(current)} 個。")
+    return 0
+
+
+def _macrobench_print(res, cfg):
+    """把比對結果印成給人看的文字。"""
+    if res["baseline_missing"]:
+        print("還沒有基準:這次的結果先存成基準,之後才比得出有沒有變慢:")
+        print("    lumos macrobench --update-baseline")
+    elif res["baseline_unreadable"]:
+        print("基準檔讀不了,這次沒比。修好它,或刪掉後重存基準。")
+    else:
+        _macrobench_print_diff(res, cfg)
+    for f in res["failed"]:
+        label = "重複情境,沒收" if f.get("kind") == "duplicate" else "讀不了"
+        print(f"  {label} {f['file']}:{f['reason']}")
+
+
+def _macrobench_print_diff(res, cfg):
+    """有基準時的比對結果:變慢、僅列出、換裝置、新出現、沒跑到。"""
+    regs = res["regressions"]
+    print(f"比了 {res['checked']} 個情境,{len(regs)} 項變慢(容差 {cfg['tolerance_pct']:g}%;只提醒,不擋推送)。")
+    for r in regs:
+        why = "從準時變成掉幀" if r.get("zero_crossed") else f"慢了 {r['delta']:.1f}"
+        print(f"  [變慢] {r['key']} {r['metric']} {r['stat']}:{r['baseline']:.1f} → {r['current']:.1f}({why})")
+    for r in res["listed"]:
+        print(f"  [僅列出] {r['key']} {r['metric']} {r['stat']}:{r['baseline']:.1f} → {r['current']:.1f}(P99 浮動大,不算退步)")
+    for d in res["device_changed"]:
+        print(f"  [換了裝置,沒比] {d['key']}:基準是 {d['baseline'].get('model')},這次是 {d['current'].get('model')}")
+    if res["new"]:
+        print(f"  基準裡沒有、這次新出現的情境:{', '.join(res['new'])}")
+    if res["missing"]:
+        print(f"  基準裡有、這次沒跑到的情境:{', '.join(res['missing'])}")
+    if regs:
+        print("確認是刻意的變慢(例如加了功能),用這次的結果覆蓋基準:")
+        print("    lumos macrobench --update-baseline")
+
+
+def _macrobench_mode(repo, as_json, update_baseline):
+    """lumos macrobench:讀專案自己跑出的 Macrobenchmark 結果檔,跟 .lumos/macrobench-baseline.json 比,只報變慢。
+    只提醒:有退步也回 0;設定檔壞了回 2。不跑 Gradle、不接裝置。"""
+    import json
+    cfg, err = _macrobench_config(repo)
+    if err:
+        print(f"擋下:{err}", file=sys.stderr)
+        return 2
+    res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
+           "failed": [], "baseline_missing": False, "baseline_unreadable": False}
+    if cfg is None:
+        if as_json:
+            print(json.dumps(dict(res, configured=False), ensure_ascii=False))
+        else:
+            print("這個專案沒接 Macrobenchmark 退步提醒(沒有 .lumos/macrobench.json),沒有東西可比。")
+        return 0
+    current, failed, n_files = _macrobench_collect(repo, cfg)
+    bpath = Path(repo) / ".lumos" / "macrobench-baseline.json"
+    baseline, missing, unreadable = _macrobench_load_baseline(bpath)
+    if update_baseline:
+        return _macrobench_update(bpath, baseline, unreadable, current, failed)
+    res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
+    if not missing and not unreadable:
+        res.update(_macrobench_compare(baseline, current, cfg))
+    if as_json:
+        print(json.dumps(dict(res, configured=True, files=n_files), ensure_ascii=False))
+    else:
+        _macrobench_print(res, cfg)
+    return 0
+
+
 def _lint_watch_mode(repo_root, as_json):
     """lumos lint-watch: 讀 .lumos/lint-watch.json、逐條查 registry、輸出 manifest。
     rc 0 = 成功(含空清單); rc 2 = config 格式錯誤。
@@ -64704,6 +64989,7 @@ HELP_WHEN = {
     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+    "macrobench": "Android 專案跑完 Macrobenchmark 後:啟動時間、滑動每幀耗時有沒有比基準變慢(只提醒,不擋)。",
     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
@@ -65785,6 +66071,11 @@ def main():
     p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
     p.add_argument("--audit", action="store_true", help="無視 baseline,盤點當下全部 non-skippable composable(初次採用/現況全景)")
 
+    p = sub.add_parser("macrobench", help="Macrobenchmark 退步提醒(vault-free):讀 .lumos/macrobench.json 指的結果目錄,跟基準比,只報變慢")
+    p.add_argument("--repo", dest="macrobench_repo", default=".", help="repo 根目錄(含 .lumos/macrobench.json 的資料夾,預設 .)")
+    p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON")
+    p.add_argument("--update-baseline", action="store_true", help="用這次的結果更新基準(讀不了的檔跳過,它們原本的項目保留)")
+
     cc = sub.add_parser("cochange", help="co-change 漏改守衛(vault-free):git 歷史挖共改規則,commit 時警告漏改夥伴(advisory)")
     ccsub = cc.add_subparsers(dest="cccmd", required=True)
     ccr = ccsub.add_parser("rules", help="列告警規則集(預設套 config 門檻;--all 解除 confidence 門檻)")
@@ -66129,6 +66420,8 @@ def main():
         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
     if args.cmd == "compose-metrics":
         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
+    if args.cmd == "macrobench":
+        return _macrobench_mode(args.macrobench_repo, args.as_json, args.update_baseline)
     if args.cmd == "cochange":
         if args.cccmd == "rules":
             return cmd_cochange_rules(repo=args.coch_repo, show_all=args.coch_all,
