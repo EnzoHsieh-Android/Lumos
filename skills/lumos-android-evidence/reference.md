@@ -73,7 +73,8 @@ select ...;
 - `requires`:要先跑過的查詢(建暫存表、`include perfetto module`);沒有寫 `-`。
 - `expect`:`<列的第一欄值>:<欄>=<值>,…`,比對時數值取到小數兩位;只建表不出結果的寫 `expect=-`。第一欄的值不能有空白、冒號、逗號,也要是字串(輸出裡帶引號那種);名稱不合(例如 `Heap size (KB)`、`HWC:validate`)或第一欄是數字時,SQL 裡另取一個字串別名當第一欄(`'heap_kb' as k`)。
 - `rerun.sh` 遇到標頭數跟解析到的條數不一樣、一條 expect 都沒有、或 manifest 列的 Q 不在檔裡,會回 2 並說原因;這是收據本身寫錯,不是量測結果不符。
-- 下一行起到 `;` 結束是 SQL 本體,一條一個語句。
+- 下一行起到第一個以 `;` 結尾的行是 SQL 本體,一條一個語句;註解行不要以 `;` 結尾,不然查詢會被截在那一行。
+- 查詢有兩種來源:固定的分析查詢(每次都一樣、只換參數,例:分 XML / Compose 的 `scripts/templates/android-ui-attribution.sql`)放工具鏈的範本目錄、整份貼進來;其餘一次性、照這次症狀寫的查詢照舊手寫在這裡。範本裡的佔位字(例:`__PROCESS__`)貼進來時就換掉,不要留在收據裡。佔位字有兩種寫法:`{{NAME}}` 是 lumos 程式自己替換的(例:回頭重讀的派工詞範本),`__NAME__` 是給 AI 照 skill 手動替換的(例:這支查詢範本,而且它在 SQL 的字串引號裡)。
 
 ## rerun.sh
 
@@ -83,7 +84,7 @@ select ...;
 cp scripts/templates/android-receipt-rerun.sh .lumos/receipts/<run-id>/rerun.sh
 ```
 
-跑前把 `$SKILL_ROOT/references/perfetto/bin` 放進 PATH(或用 `TP=<trace_processor 路徑> ./rerun.sh` 指定)。需要 python3(標準庫)。回傳碼:0 全部相符、1 有比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡、查詢指到 manifest 沒有的 artifact、requires 指到不存在的查詢),回 2 時在 stderr 印「擋下:」開頭的原因。
+跑前把 `$SKILL_ROOT/references/perfetto/bin` 放進 PATH(或用 `TP=<trace_processor 路徑> ./rerun.sh` 指定)。需要 python3.7 以上(標準庫;腳本用 UTF-8 模式跑,收據裡有中文也不受系統語系影響,檔頭帶 BOM 也讀得到)。回傳碼:0 全部相符、1 有比對不符、2 收據本身寫錯或環境沒準備好(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡、查詢指到 manifest 沒有的 artifact、requires 指到不存在的查詢、分析工具執行不了),回 2 時在 stderr 印「擋下:」開頭的原因。
 
 - 每條查詢只重放它 `requires` 鏈上的語句,不重放同 session 其他查詢:trace_processor v57.2 的 `-q` 一個檔裡有兩條回傳列的語句會直接報錯(2026-10-23 實測)。所以 `requires` 只能指 INCLUDE / CREATE 這類不回傳列的語句。
 - 不靠常駐 session 的狀態,別人重跑得出一樣的結果;查詢多時會慢。
