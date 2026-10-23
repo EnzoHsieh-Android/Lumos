@@ -1,0 +1,277 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
+index 59a65e2c17a557074cfed3d4ec5f3155071f89f2..ae025529df5267bf351d74db3b5408f1c9bde38f 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
+@@ -129,20 +129,22 @@ REVISIT:2026-11-06 KDS 那邊的基準測試模組提交進 KDS repo 了沒;沒
+ - [S1] 當結果檔的某指標中位數比基準中位數慢超過容差、而且比基準最大值還慢時,指令應列為退步並附基準值、現值與差幅 [test:t_macrobench_regression_needs_both]
+ - [S2] 當只滿足其中一道(超過容差但仍在基準浮動範圍內,或超出範圍但差幅小於容差)時,指令應不列為退步 [test:t_macrobench_single_gate_not_enough]
+ - [S3] 當結果檔的裝置型號或系統指紋跟基準不同時,指令應整項不比對、列為裝置不同 [test:t_macrobench_device_mismatch_skips]
+ - [S4] 當指標被設定為越大越好時,指令應反過來判退步 [test:t_macrobench_higher_is_better]
+ - [S5] 當基準值是零或負數(例如每幀超時毫秒數可能是負的)時,指令應改用基準的絕對值算容差、基準是零時改用設定的絕對容差(預設 1),不得除以零,也不得把變快判成變慢 [test:t_macrobench_nonpositive_baseline]
+ - [S8] 當 `sampledMetrics` 的 `P50` 或 `P90` 比基準慢超過容差時,指令應列為退步;只有 `P99` 變慢時應只列出、不算退步 [test:t_macrobench_sampled_percentiles]
+ - [S9] 當 `frameOverrunMs` 的基準 `P90` 不大於零、現值大於零時,指令應列為退步,不看差幅 [test:t_macrobench_overrun_crosses_zero]
+ - [S6] 當帶 `--update-baseline` 時,指令應只用成功解析的結果檔更新基準,解析失敗的檔不得清掉既有基準 [test:t_macrobench_update_baseline_skips_failed]
+ - [S7] 當設定檔 JSON 壞掉或缺必要欄位時,指令應回 2 並印出哪裡壞;設定檔不存在(專案沒接)或有退步時應回 0,比照 compose-metrics [test:t_macrobench_exit_codes]
+ - [S10] 當結果目錄裡是 Macrobenchmark 實際寫出的檔(檔名裡套件名的點變底線、放在子目錄裡)時,指令應找得到並讀出啟動與幀耗時指標 [test:t_macrobench_reads_real_kds_file]
++- [S11] 當基準檔裡任何一項缺欄或型別不對(手改、寫壞)時,指令應整份當基準讀不了:回 0、印基準讀不了、不比對,`--update-baseline` 也不得蓋掉它 [test:t_macrobench_corrupt_baseline_entry]
++- [S12] 當同一個情境出現在兩個以上的結果檔時,指令應兩份都不收,並明講是重複出現,不得說成結果檔讀不了 [test:t_macrobench_duplicate_scenario]
+ 
+ ## 下一段:驗證收據試跑(2026-10-23 併入,決策 d4)
+ 
+ 調研全文在 [[Projects/Android診斷證據接入_調研]]。這一段只做調研的第零階段,不改 Lumos 核心:
+ 
+ 1. 等評測實驗跑完、機器空出來,裝 Google 官方 android-profiler skill,釘調研時看的版本。
+ 2. 用 KDS 既有的兩支基準在模擬器上重跑一次;Macrobenchmark 每輪都會留一份 Perfetto Trace,一起拉回本機。
+ 3. 用 trace_processor 對最慢那一輪跑查詢,把實際跑的 SQL 與結果存下來。
+ 4. 手寫一份收據:manifest 照調研的草案欄位填,報告用 `[MEASURED]`、`[INFERRED]`、`[GAP]` 標籤;原始 Trace 只留本機、記雜湊。
+ 5. 寫成一份驗證紀錄,狀態照調研的寫回規則:模擬器只能算流程驗證,不寫成效能通過。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+index 1dd45c893827cbbc4a5ef07b5d2e7a0341bb8c6d..745ef75cce4cbc11ca89482572dff8a3370230d8 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -22,11 +22,13 @@ summary: |-
+ verified_by:
+   - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
+ ---
+ # macrobenchmark-adapter
+ 
+ 白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
+ 
+ - 設定 `.lumos/macrobench.json`:`results_dirs`(必填,結果目錄清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(基準是 0 時用,預設 1)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
+ - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
+ - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
++- 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。
++- 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
+ - 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
+diff --git a/scripts/lumos b/scripts/lumos
+index 9890b1cf5664a356efabcd1d148c5fd6b31933a2..2652fda595f4e7fe810b4432b5179d281fc1cbaf 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39435,33 +39435,33 @@ def _macrobench_read_file(path, ignore):
+     return out
+ 
+ 
+ def _macrobench_collect(repo, cfg):
+     """掃設定的結果目錄底下所有 *-benchmarkData.json(含子目錄;檔名裡套件名的點會被換成底線,不能拼檔名)。
+     回 (entries, failed, n_files);同一個情境出現在兩個檔 → 兩個都不收、記進 failed。"""
+     entries, failed, seen, n_files = {}, [], {}, 0
+     for d in cfg["results_dirs"]:
+         base = Path(repo) / d
+         if not base.is_dir():
+-            failed.append({"file": d, "reason": "結果目錄不存在"})
++            failed.append({"file": d, "reason": "結果目錄不存在", "kind": "missing_dir"})
+             continue
+         for f in sorted(base.rglob("*-benchmarkData.json")):
+             n_files += 1
+             rel = os.path.relpath(f, repo)
+             try:
+                 got = _macrobench_read_file(f, set(cfg["ignore_metrics"]))
+             except Exception as e:
+-                failed.append({"file": rel, "reason": f"讀不了:{e}"})
++                failed.append({"file": rel, "reason": f"讀不了:{e}", "kind": "unreadable"})
+                 continue
+             for k, v in got.items():
+                 if k in seen:
+-                    failed.append({"file": rel, "reason": f"{k} 也出現在 {seen[k]},兩份都不收"})
++                    failed.append({"file": rel, "reason": f"{k} 重複出現(也在 {seen[k]}),兩份都不收", "kind": "duplicate"})
+                     entries.pop(k, None)
+                     continue
+                 seen[k] = rel
+                 entries[k] = v
+     return entries, failed, n_files
+ 
+ 
+ def _macrobench_worse(metric, base, cur, cfg):
+     """回 (變差了多少, 容差);變快或持平時差值 ≤ 0。基準 ≤ 0 時用基準的絕對值算容差,基準是 0 用絕對容差。"""
+     delta = (base - cur) if metric in cfg["higher_is_better"] else (cur - base)
+@@ -39513,41 +39513,58 @@ def _macrobench_compare(baseline, current, cfg):
+         if base.get("device") != cur["device"]:
+             res["device_changed"].append({"key": key, "baseline": base.get("device"), "current": cur["device"]})
+             continue
+         res["checked"] += 1
+         _macrobench_cmp_metrics(key, base, cur, cfg, res)
+         _macrobench_cmp_sampled(key, base, cur, cfg, res)
+     res["missing"] = sorted(k for k in baseline if k not in current)
+     return res
+ 
+ 
++def _macrobench_entry_ok(e):
++    """基準檔的一項要跟讀結果檔產出的形狀一樣,比對時才不會讀到缺欄的項目而噴例外。"""
++    if not isinstance(e, dict) or not isinstance(e.get("device"), dict):
++        return False
++    metrics, sampled = e.get("metrics", {}), e.get("sampled", {})
++    if not isinstance(metrics, dict) or not isinstance(sampled, dict):
++        return False
++    if not all(isinstance(v, dict) and all(_secev_num(v.get(s)) for s in ("median", "minimum", "maximum"))
++               for v in metrics.values()):
++        return False
++    return all(isinstance(v, dict) and all(_secev_num(v.get(s)) for s in MACROBENCH_SAMPLED_JUDGED)
++               for v in sampled.values())
++
++
+ def _macrobench_load_baseline(bpath):
+-    """回 (entries, missing, unreadable)。"""
++    """回 (entries, missing, unreadable);任何一項形狀不對,整份當讀不了(不比、也不讓 --update-baseline 蓋掉它)。"""
+     import json
+     if not bpath.exists():
+         return {}, True, False
+     try:
+         entries = json.loads(bpath.read_text(encoding="utf-8"))["entries"]
+-        if isinstance(entries, dict):
++        if isinstance(entries, dict) and all(_macrobench_entry_ok(e) for e in entries.values()):
+             return entries, False, False
+     except Exception:
+         pass
+     return {}, False, True
+ 
+ 
+ def _macrobench_update(bpath, baseline, unreadable, current, failed):
+     """--update-baseline:把這次讀到的蓋進舊基準(讀失敗那幾個檔原本的項目留著)。"""
+     import json
+     for f in failed:
+         print(f"  略過 {f['file']}:{f['reason']}")
+     if not current:
+-        print("基準沒更新:這次一個結果檔都沒讀成功(先跑基準測試、確認 results_dirs 指對地方)。")
++        if any(f.get("kind") == "duplicate" for f in failed):
++            print("基準沒更新:讀到的情境都重複出現在兩個以上的結果檔,分不出該用哪一份;讓 results_dirs 只指到一份結果。")
++        else:
++            print("基準沒更新:這次一個結果檔都沒讀成功(先跑基準測試、確認 results_dirs 指對地方)。")
+         return 0
+     if unreadable:
+         print("基準沒更新:現有的基準檔讀不了,為了不蓋掉它這次不寫。確認不要了就刪掉它再跑一次:")
+         print(f"    rm {bpath}")
+         return 0
+     merged = dict(baseline)
+     merged.update(current)
+     _write_lf(bpath, json.dumps({"version": 1, "entries": merged}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+     print(f"基準已更新:這次寫入 {len(current)} 個情境,沿用舊的 {len(merged) - len(current)} 個。")
+     return 0
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 66c07fdadb7edaff1e98aa777cec0e66aa8ebb81..d6f4e9ff47f57d0765cccff3078430988204cefd 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17387,26 +17387,21 @@ def t_compose_metrics_audit():
+     check("audit checked_modules/failed 欄位", d["checked_modules"]==1 and d["failed"]==[], str(d))
+     # 缺 config + --audit → audit 形狀(有 inventory 鍵,非 delta 形狀)
+     root2 = Path(tempfile.mkdtemp(prefix="gctl-cmaudit2-"))
+     ra = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root2),"--audit","--json"],
+                 capture_output=True,text=True)
+     da = json.loads(ra.stdout)
+     check("缺config+audit → audit 形狀(inventory 鍵)", ra.returncode==0 and "inventory" in da and "regressions" not in da, ra.stdout)
+ 
+ 
+ def _macrobench_mod():
+-    import importlib.util as U
+-    from importlib.machinery import SourceFileLoader
+-    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
+-    m = U.module_from_spec(spec)
+-    spec.loader.exec_module(m)
+-    return m
++    return _load_lumos_inproc()   # 只讀不改模組狀態,共用快取單例即可
+ 
+ 
+ _MB_CFG = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_better": [], "ignore_metrics": ["frameCount"]}
+ _MB_DEV = {"model": "Pixel Tablet", "fingerprint": "google/tangorpro/tangorpro:14/X/1:user/release-keys"}
+ 
+ 
+ def _mb_entry(metrics=None, sampled=None, device=None):
+     return {"device": dict(device or _MB_DEV), "metrics": metrics or {}, "sampled": sampled or {}}
+ 
+ 
+@@ -17477,20 +17472,28 @@ def t_macrobench_nonpositive_baseline():
+     k = "pkg.Scroll#scroll"
+     def cmp(base_p50, cur_p50, metric="frameOverrunMs"):
+         b = {k: _mb_entry(sampled={metric: {"P50": base_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
+         c = {k: _mb_entry(sampled={metric: {"P50": cur_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
+         return [x for x in m._macrobench_compare(b, c, _MB_CFG)["regressions"] if x["stat"] == "P50"]
+     check("-10 → -12 是變快 → 不算", cmp(-10.0, -12.0) == [], str(cmp(-10.0, -12.0)))
+     check("-10 → -9.5 慢 0.5 < 1 → 不算", cmp(-10.0, -9.5) == [], str(cmp(-10.0, -9.5)))
+     check("-10 → -8.5 慢 1.5 > 1 → 退步", len(cmp(-10.0, -8.5)) == 1, str(cmp(-10.0, -8.5)))
+     check("基準 0 → 0.5 未過絕對容差 1 → 不算", cmp(0.0, 0.5, "frameDurationCpuMs") == [], "")
+     check("基準 0 → 1.5 過絕對容差 → 退步", len(cmp(0.0, 1.5, "frameDurationCpuMs")) == 1, "")
++    # 上面的 -10 剛好讓 10%×|基準| 等於絕對容差 1,分不出「負數用比例」與「負數誤用絕對容差」;下面兩組才分得出
++    check("-100 → -95 慢 5 < 10%×100 → 不算", cmp(-100.0, -95.0) == [], str(cmp(-100.0, -95.0)))
++    check("-0.5 → -0.2 慢 0.3 > 10%×0.5 → 退步", len(cmp(-0.5, -0.2)) == 1, str(cmp(-0.5, -0.2)))
++    cfg = dict(_MB_CFG, abs_tolerance=0.3)
++    b0 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 0.0, "P90": 5.0}})}
++    c0 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 0.5, "P90": 5.0}})}
++    got = [x["stat"] for x in m._macrobench_compare(b0, c0, cfg)["regressions"]]
++    check("基準 0、自訂絕對容差 0.3 → 0.5 算退步", got == ["P50"], str(got))
+ 
+ 
+ def t_macrobench_sampled_percentiles():
+     """滑動類指標只有百分位:P50、P90 過容差算退步;P99 太吵只列出。手算:P90 基準 20 → 門檻 22。"""
+     m = _macrobench_mod()
+     k = "pkg.Scroll#scroll"
+     base = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 10.0, "P90": 20.0, "P95": 30.0, "P99": 40.0}})}
+     def cur(p50, p90, p99):
+         return {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": p50, "P90": p90, "P95": 30.0, "P99": p99}})}
+     r = m._macrobench_compare(base, cur(10.0, 20.0, 60.0), _MB_CFG)
+@@ -17619,20 +17622,67 @@ def t_macrobench_exit_codes():
+         f.write_text(_mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+         _mb_run(root, "--update-baseline")
+         f.write_text(_mb_result_json([_mb_startup("pkg.S", 2000.0, 1900.0, 2100.0)]), encoding="utf-8")
+         r = _mb_run(root, "--json")
+         d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+         check("有退步 → rc0 且列出", r.returncode == 0 and len(d.get("regressions", [])) == 1, r.stdout)
+         rt = _mb_run(root)
+         check("文字輸出有寫退步的情境名", rt.returncode == 0 and "pkg.S#coldStartup" in rt.stdout, rt.stdout)
+ 
+ 
++def t_macrobench_corrupt_baseline_entry():
++    """基準檔某一項缺欄(手改或寫壞)時,當成基準讀不了:rc0、說基準讀不了,不噴 traceback。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-mbcb-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
++        (root / "out").mkdir()
++        (root / "out" / "x-benchmarkData.json").write_text(
++            _mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
++        r = _mb_run(root, "--update-baseline")
++        check("前置:基準建得起來", r.returncode == 0 and (root / ".lumos" / "macrobench-baseline.json").exists(), r.stdout + r.stderr)
++        bp = root / ".lumos" / "macrobench-baseline.json"
++        data = json.loads(bp.read_text(encoding="utf-8"))
++        key = next(iter(data["entries"]))
++        check("前置:基準裡有啟動指標", "timeToInitialDisplayMs" in data["entries"][key]["metrics"], str(data))
++        data["entries"][key]["metrics"]["timeToInitialDisplayMs"] = {"median": 1000.0}
++        bp.write_text(json.dumps(data), encoding="utf-8")
++        before = bp.read_text(encoding="utf-8")
++        r = _mb_run(root)
++        check("缺欄的基準 → rc0、沒有 traceback", r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} err={r.stderr[-300:]!r}")
++        check("缺欄的基準 → 說基準讀不了", "基準檔讀不了" in r.stdout, r.stdout)
++        r = _mb_run(root, "--update-baseline")
++        check("缺欄的基準 → 更新時不蓋掉它", r.returncode == 0 and bp.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
++
++
++def t_macrobench_duplicate_scenario():
++    """同一個情境出現在兩個結果檔:兩份都不收,而且要說是重複,不能說成檔案讀不了。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-mbdup-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
++        body = _mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)])
++        for sub in ("a", "b"):
++            (root / "out" / sub).mkdir(parents=True)
++            (root / "out" / sub / "x-benchmarkData.json").write_text(body, encoding="utf-8")
++        r = _mb_run(root, "--update-baseline")
++        check("重複情境 → 不寫基準", not (root / ".lumos" / "macrobench-baseline.json").exists(), r.stdout)
++        check("重複情境 → 說是重複出現", "重複" in r.stdout, r.stdout)
++        check("重複情境 → 不說一個結果檔都沒讀成功", "一個結果檔都沒讀成功" not in r.stdout, r.stdout)
++        r = _mb_run(root, "--json")
++        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++        dup = [f for f in d.get("failed", []) if "pkg.S#coldStartup" in f.get("reason", "")]
++        check("重複情境 → --json 的 failed 有這個情境", len(dup) >= 1, r.stdout)
++
++
+ def t_pitfalls_no_lint():
+     """--no-lint:--diff 只跑 regex 層,即使有 .lumos/lint.json 也不跑 lint(pre-push advisory 用)。"""
+     import json as _json, subprocess as sp, sys as _sys
+     root = Path(tempfile.mkdtemp(prefix="gctl-pfnl-"))
+     def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+     git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+     (root / "a.kt").write_text("l1\n", encoding="utf-8")
+     git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c1")
+     # 假 linter:寫最小 SARIF 到 {LINT_SARIF_OUT}
+     hd = Path(tempfile.mkdtemp(prefix="gctl-pfnl-h-"))

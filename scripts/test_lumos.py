@@ -3819,7 +3819,10 @@ def t_search_structure_aware():
 
 # ── gov 去噪:同日同類 advisory 折疊+大群組摘要+--full 逃生(帳不動只動呈現) ──
 def t_gov_denoise():
+    import datetime
     import json as _j
+    # gov 預設只看近 90 天:帳的日期寫死會隨日子過去掉出窗外(2026-10-23 同天翻紅),取今天往前幾天
+    day = (datetime.date.today() - datetime.timedelta(days=5)).isoformat()
     # 私有巢狀結構(root/docs/x-knowledge):gov 讀 vault.parent 當帳目錄——
     # 不可用 mkvault()(standalone,parent=共用系統 tmp,寫帳會污染他測跨執行讀的同名檔)
     root = Path(tempfile.mkdtemp(prefix="gctl-gov-"))
@@ -3833,26 +3836,26 @@ def t_gov_denoise():
     # 3 次 doctor 各記同一批 10 節點的 check-s(不同 commit)→ 舊版 30 行噪音
     for c in ("c1", "c2", "c3"):
         for i in range(10):
-            rows.append({"ts": "2026-07-24T10:00:00+08:00", "commit": c, "gate": "check-s",
+            rows.append({"ts": f"{day}T10:00:00+08:00", "commit": c, "gate": "check-s",
                          "kind": "warned", "hard": False, "nodes": [f"node{i}"]})
     (docs / ".governance-log.jsonl").write_text(
         "\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
     (docs / ".canary-log.jsonl").write_text(_j.dumps(
-        {"ts": "2026-07-24T11:00:00+08:00", "kind": "caught", "token": "tk1",
+        {"ts": f"{day}T11:00:00+08:00", "kind": "caught", "token": "tk1",
          "loop": "demo", "severity": "minor", "auditor": "sonnet", "note": "r1"}) + "\n",
         encoding="utf-8")
     r = run(v, "gov", expect_rc=0)
-    body = [l for l in r.stdout.splitlines() if l.startswith("2026-")]
+    body = [l for l in r.stdout.splitlines() if l.startswith(day[:5])]
     check("gov 去噪: 30 筆 advisory 折成 1 摘要行+1 canary", len(body) == 2, f"{len(body)} 行\n" + r.stdout[:400])
     check("gov 去噪: 摘要行含節點數與次數", "10 節點" in r.stdout and "×3" in r.stdout, r.stdout[:300])
     check("gov 去噪: canary 逐筆保留(不折)", "loop=demo" in r.stdout, r.stdout[:300])
     # --full 逃生:回完整帳(30 advisory+1 canary=31 行)
     rf = run(v, "gov", "--full", expect_rc=0)
-    bodyf = [l for l in rf.stdout.splitlines() if l.startswith("2026-")]
+    bodyf = [l for l in rf.stdout.splitlines() if l.startswith(day[:5])]
     check("gov --full: 完整帳 31 行", len(bodyf) == 31, f"{len(bodyf)} 行")
     # 少量同類(≤6 節點)不收摘要、但同日跨 commit 仍折 ×N
     (docs / ".governance-log.jsonl").write_text(
-        "\n".join(_j.dumps({"ts": "2026-07-24T10:00:00+08:00", "commit": c, "gate": "check-s",
+        "\n".join(_j.dumps({"ts": f"{day}T10:00:00+08:00", "commit": c, "gate": "check-s",
                             "kind": "warned", "hard": False, "nodes": ["only1"]})
                   for c in ("c1", "c2")) + "\n", encoding="utf-8")
     r2 = run(v, "gov", expect_rc=0)
@@ -3895,21 +3898,24 @@ def t_doctor_superseded_verification_consistency():
 
 # ── gov 對抗層增量帳:折入缺陷計數(驗證層對自己的驗證;趨零=機關裝飾該砍) ──
 def t_gov_adversarial_increment():
+    import datetime
     import json as _j
+    # gov 預設只看近 90 天:帳的日期寫死會隨日子過去掉出窗外(2026-10-23 同天翻紅),取今天往前幾天
+    day = (datetime.date.today() - datetime.timedelta(days=5)).isoformat()
     root = Path(tempfile.mkdtemp(prefix="gctl-govinc-"))
     v = root / "docs" / "x-knowledge"
     (v / "MOC").mkdir(parents=True)
     (v / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
     rows = [
-        {"ts": "2026-07-24T10:00:00+08:00", "kind": "caught", "token": "t1", "loop": "a",
+        {"ts": f"{day}T10:00:00+08:00", "kind": "caught", "token": "t1", "loop": "a",
          "severity": "major", "findings": 4, "auditor": "sonnet", "note": "r1"},
-        {"ts": "2026-07-24T11:00:00+08:00", "kind": "caught", "token": "t2", "loop": "a",
+        {"ts": f"{day}T11:00:00+08:00", "kind": "caught", "token": "t2", "loop": "a",
          "severity": "blocker", "findings": 2, "auditor": "codex", "note": "std"},
-        {"ts": "2026-07-24T12:00:00+08:00", "kind": "missed", "token": "t3", "loop": "b",
+        {"ts": f"{day}T12:00:00+08:00", "kind": "missed", "token": "t3", "loop": "b",
          "severity": "major", "findings": 5, "auditor": "sonnet", "note": "r1"},  # missed 不計折入
-        {"ts": "2026-07-24T13:00:00+08:00", "kind": "caught", "token": "t4", "loop": "b",
+        {"ts": f"{day}T13:00:00+08:00", "kind": "caught", "token": "t4", "loop": "b",
          "severity": "clean", "findings": 0, "auditor": "sonnet", "note": "r2"},
-        {"ts": "2026-07-24T14:00:00+08:00", "kind": "caught", "token": "t5", "loop": "c",
+        {"ts": f"{day}T14:00:00+08:00", "kind": "caught", "token": "t5", "loop": "c",
          "auditor": "sonnet", "note": "舊輪無 findings 欄"},   # M1 前舊資料
     ]
     (root / "docs" / ".canary-log.jsonl").write_text(
@@ -17391,6 +17397,360 @@ def t_compose_metrics_audit():
                 capture_output=True,text=True)
     da = json.loads(ra.stdout)
     check("缺config+audit → audit 形狀(inventory 鍵)", ra.returncode==0 and "inventory" in da and "regressions" not in da, ra.stdout)
+
+
+def _macrobench_mod():
+    return _load_lumos_inproc()   # 只讀不改模組狀態,共用快取單例即可
+
+
+_MB_CFG = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_better": [], "ignore_metrics": ["frameCount"]}
+_MB_DEV = {"model": "Pixel Tablet", "fingerprint": "google/tangorpro/tangorpro:14/X/1:user/release-keys"}
+
+
+def _mb_entry(metrics=None, sampled=None, device=None):
+    return {"device": dict(device or _MB_DEV), "metrics": metrics or {}, "sampled": sampled or {}}
+
+
+def t_macrobench_regression_needs_both():
+    """啟動類指標(有 median/min/max)要同時過兩道才算退步:中位數慢超過容差,而且比基準最大值還慢。
+    預期值手算:基準中位數 1000、容差 10% → 門檻 1100。"""
+    m = _macrobench_mod()
+    k = "pkg.StartupBenchmark#coldStartup"
+    base = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1050.0}})}
+    def run(cur_median, base_entries=base):
+        cur = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": cur_median, "minimum": cur_median, "maximum": cur_median}})}
+        return m._macrobench_compare(base_entries, cur, _MB_CFG)
+    r = run(1120.0)
+    regs = r["regressions"]
+    check("1120 > 1100 且 > 最大值 1050 → 退步", len(regs) == 1 and regs[0]["metric"] == "timeToInitialDisplayMs", str(r))
+    check("退步附基準值與現值", regs and regs[0]["baseline"] == 1000.0 and regs[0]["current"] == 1120.0, str(regs))
+    check("變快 900 → 不算", run(900.0)["regressions"] == [], str(run(900.0)))
+
+
+def t_macrobench_single_gate_not_enough():
+    """只過其中一道不算退步。手算:基準中位數 1000、容差 10% → 門檻 1100。"""
+    m = _macrobench_mod()
+    k = "pkg.StartupBenchmark#coldStartup"
+    def run(cur_median, lo, hi):
+        b = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": lo, "maximum": hi}})}
+        c = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": cur_median, "minimum": cur_median, "maximum": cur_median}})}
+        return m._macrobench_compare(b, c, _MB_CFG)["regressions"]
+    check("前置:1120 對窄基準(最大 1050)是退步", len(run(1120.0, 950.0, 1050.0)) == 1, "")
+    check("1080 超出最大值 1050 但沒過容差 1100 → 不算", run(1080.0, 950.0, 1050.0) == [], "")
+    check("1200 過容差但仍在基準浮動範圍(最大 1300)內 → 不算", run(1200.0, 800.0, 1300.0) == [], "")
+
+
+def t_macrobench_device_mismatch_skips():
+    """換了裝置(型號或系統指紋不同)整項不比,只列出來。對照組:同裝置同數字一定是退步,證明情境成立。"""
+    m = _macrobench_mod()
+    k = "pkg.StartupBenchmark#coldStartup"
+    base = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1050.0}})}
+    slow = {"timeToInitialDisplayMs": {"median": 3000.0, "minimum": 3000.0, "maximum": 3000.0}}
+    same = m._macrobench_compare(base, {k: _mb_entry(metrics=slow)}, _MB_CFG)
+    check("前置:同裝置慢三倍 → 退步", len(same["regressions"]) == 1, str(same))
+    other_fp = dict(_MB_DEV, fingerprint="google/tangorpro/tangorpro:15/Y/2:user/release-keys")
+    r = m._macrobench_compare(base, {k: _mb_entry(metrics=slow, device=other_fp)}, _MB_CFG)
+    check("指紋不同 → 不比、不報退步", r["regressions"] == [], str(r))
+    check("指紋不同 → 列在 device_changed", [d["key"] for d in r["device_changed"]] == [k], str(r))
+    other_model = dict(_MB_DEV, model="SM-T220")
+    r2 = m._macrobench_compare(base, {k: _mb_entry(metrics=slow, device=other_model)}, _MB_CFG)
+    check("型號不同 → 列在 device_changed", r2["regressions"] == [] and len(r2["device_changed"]) == 1, str(r2))
+
+
+def t_macrobench_higher_is_better():
+    """設定為越大越好的指標反過來判:變小才是退步。對照組:同一組數字放在越小越好時,判斷要相反。"""
+    m = _macrobench_mod()
+    k = "pkg.X#y"
+    base = {k: _mb_entry(metrics={"opsPerSec": {"median": 100.0, "minimum": 95.0, "maximum": 105.0}})}
+    hib = dict(_MB_CFG, higher_is_better=["opsPerSec"])
+    def cur(v):
+        return {k: _mb_entry(metrics={"opsPerSec": {"median": v, "minimum": v, "maximum": v}})}
+    check("越大越好:85(< 90 且 < 最小 95)→ 退步", len(m._macrobench_compare(base, cur(85.0), hib)["regressions"]) == 1, "")
+    check("越大越好:120 → 不算", m._macrobench_compare(base, cur(120.0), hib)["regressions"] == [], "")
+    check("對照:越小越好時 120 → 退步", len(m._macrobench_compare(base, cur(120.0), _MB_CFG)["regressions"]) == 1, "")
+    check("對照:越小越好時 85 → 不算", m._macrobench_compare(base, cur(85.0), _MB_CFG)["regressions"] == [], "")
+
+
+def t_macrobench_nonpositive_baseline():
+    """基準是負數或零時不除以零、方向不反。每幀超時(frameOverrunMs)負的代表準時。
+    手算:基準 P50 -10、容差 10% → 允許慢 1ms;基準 0 → 用絕對容差 1ms。"""
+    m = _macrobench_mod()
+    k = "pkg.Scroll#scroll"
+    def cmp(base_p50, cur_p50, metric="frameOverrunMs"):
+        b = {k: _mb_entry(sampled={metric: {"P50": base_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
+        c = {k: _mb_entry(sampled={metric: {"P50": cur_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
+        return [x for x in m._macrobench_compare(b, c, _MB_CFG)["regressions"] if x["stat"] == "P50"]
+    check("-10 → -12 是變快 → 不算", cmp(-10.0, -12.0) == [], str(cmp(-10.0, -12.0)))
+    check("-10 → -9.5 慢 0.5 < 1 → 不算", cmp(-10.0, -9.5) == [], str(cmp(-10.0, -9.5)))
+    check("-10 → -8.5 慢 1.5 > 1 → 退步", len(cmp(-10.0, -8.5)) == 1, str(cmp(-10.0, -8.5)))
+    check("基準 0 → 0.5 未過絕對容差 1 → 不算", cmp(0.0, 0.5, "frameDurationCpuMs") == [], "")
+    check("基準 0 → 1.5 過絕對容差 → 退步", len(cmp(0.0, 1.5, "frameDurationCpuMs")) == 1, "")
+    # 上面的 -10 剛好讓 10%×|基準| 等於絕對容差 1,分不出「負數用比例」與「負數誤用絕對容差」;下面兩組才分得出
+    check("-100 → -95 慢 5 < 10%×100 → 不算", cmp(-100.0, -95.0) == [], str(cmp(-100.0, -95.0)))
+    check("-100 → -85 慢 15 > 10%×100 → 退步", len(cmp(-100.0, -85.0)) == 1, str(cmp(-100.0, -85.0)))
+    # 容差有下限:取「基準的 10%」與絕對容差兩者較大的那個(2026-10-23 實機:接近 0 的指標只靠比例會被正常抖動誤報)
+    check("-0.5 → -0.2 慢 0.3 未過下限 1 → 不算", cmp(-0.5, -0.2) == [], str(cmp(-0.5, -0.2)))
+    check("5 → 5.8 慢 0.8:比例只允許 0.5,但下限 1 → 不算", cmp(5.0, 5.8, "frameDurationCpuMs") == [], str(cmp(5.0, 5.8, "frameDurationCpuMs")))
+    check("5 → 6.2 慢 1.2 > 下限 1 → 退步", len(cmp(5.0, 6.2, "frameDurationCpuMs")) == 1, str(cmp(5.0, 6.2, "frameDurationCpuMs")))
+    cfg = dict(_MB_CFG, abs_tolerance=0.3)
+    b0 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 0.0, "P90": 5.0}})}
+    c0 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 0.5, "P90": 5.0}})}
+    got = [x["stat"] for x in m._macrobench_compare(b0, c0, cfg)["regressions"]]
+    check("基準 0、自訂絕對容差 0.3 → 0.5 算退步", got == ["P50"], str(got))
+    b5 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 5.0, "P90": 9.0}})}
+    c5 = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 5.8, "P90": 9.0}})}
+    got = [x["stat"] for x in m._macrobench_compare(b5, c5, cfg)["regressions"]]
+    check("自訂下限 0.3:5 → 5.8 慢 0.8 > 比例 0.5 → 退步", got == ["P50"], str(got))
+
+
+def t_macrobench_sampled_percentiles():
+    """滑動類指標只有百分位:P50、P90 過容差算退步;P99 太吵只列出。手算:P90 基準 20 → 門檻 22。"""
+    m = _macrobench_mod()
+    k = "pkg.Scroll#scroll"
+    base = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 10.0, "P90": 20.0, "P95": 30.0, "P99": 40.0}})}
+    def cur(p50, p90, p99):
+        return {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": p50, "P90": p90, "P95": 30.0, "P99": p99}})}
+    r = m._macrobench_compare(base, cur(10.0, 20.0, 60.0), _MB_CFG)
+    check("只有 P99 變慢 → 不算退步", r["regressions"] == [], str(r))
+    check("只有 P99 變慢 → 列在 listed", [(x["stat"], x["current"]) for x in r["listed"]] == [("P99", 60.0)], str(r))
+    r2 = m._macrobench_compare(base, cur(10.0, 23.0, 40.0), _MB_CFG)
+    check("P90 23 > 22 → 退步", [(x["metric"], x["stat"]) for x in r2["regressions"]] == [("frameDurationCpuMs", "P90")], str(r2))
+    r3 = m._macrobench_compare(base, cur(10.5, 20.0, 40.0), _MB_CFG)
+    check("P50 10.5 < 11 → 不算", r3["regressions"] == [], str(r3))
+    r4 = m._macrobench_compare(base, cur(11.5, 20.0, 40.0), _MB_CFG)
+    check("P50 11.5 > 11 → 退步", [x["stat"] for x in r4["regressions"]] == ["P50"], str(r4))
+
+
+def t_macrobench_overrun_crosses_zero():
+    """每幀超時 P90 從不大於 0 變成大於 0(開始掉幀)不看差幅就算退步。
+    選基準 0 → 0.5:差幅 0.5 沒過絕對容差 1,所以只有「跨零」這條會讓它成立。"""
+    m = _macrobench_mod()
+    k = "pkg.Scroll#scroll"
+    def cmp(metric, base_p90, cur_p90):
+        b = {k: _mb_entry(sampled={metric: {"P50": -20.0, "P90": base_p90, "P95": 5.0, "P99": 9.0}})}
+        c = {k: _mb_entry(sampled={metric: {"P50": -20.0, "P90": cur_p90, "P95": 5.0, "P99": 9.0}})}
+        return [x for x in m._macrobench_compare(b, c, _MB_CFG)["regressions"] if x["stat"] == "P90"]
+    check("frameOverrunMs P90 0 → 0.5 跨零 → 退步", len(cmp("frameOverrunMs", 0.0, 0.5)) == 1, str(cmp("frameOverrunMs", 0.0, 0.5)))
+    check("對照:別的指標 0 → 0.5 → 不算", cmp("frameDurationCpuMs", 0.0, 0.5) == [], "")
+    check("frameOverrunMs P90 0.2 → 0.21 本來就正的、差 0.01 沒過容差 0.02 → 不算", cmp("frameOverrunMs", 0.2, 0.21) == [], "")
+
+
+def _mb_result_json(benchmarks, model="Pixel Tablet", fingerprint="fp-1"):
+    """照 2026-10-21 KDS 實跑結果檔的形狀造假檔(只放讀取器會用到的欄位)。"""
+    import json
+    return json.dumps({"context": {"build": {"brand": "google", "device": "d", "fingerprint": fingerprint,
+                                             "model": model, "version": {"sdk": 34}}},
+                       "benchmarks": benchmarks})
+
+
+def _mb_startup(cls, median, lo, hi):
+    return {"name": "coldStartup", "params": {}, "className": cls,
+            "metrics": {"timeToInitialDisplayMs": {"minimum": lo, "maximum": hi, "median": median, "runs": [median]}},
+            "sampledMetrics": {}}
+
+
+def _mb_run(root, *args):
+    import subprocess as sp
+    return sp.run([sys.executable, GRAPHCTL, "macrobench", "--repo", str(root), *args], capture_output=True, text=True)
+
+
+def t_macrobench_reads_real_kds_file():
+    """拿 2026-10-21 Citrus_KDS 在模擬器上真跑出來的結果檔:檔名裡套件名的點變底線、放在子目錄。
+    預期值是當天直接從該檔讀出來的數字(不是用讀取器算的)。"""
+    import json, shutil, tempfile
+    real = Path(GRAPHCTL).resolve().parent.parent / "governance" / "research" / "macrobench" / "2026-10-21-kds-emulator-benchmarkData.json"
+    check("前置:真結果檔在 repo 裡", real.exists(), str(real))
+    if not real.exists():
+        return
+    with tempfile.TemporaryDirectory(prefix="gctl-mbreal-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        out = root / "app-bench" / "build" / "outputs" / "connected" / "emu"
+        out.mkdir(parents=True)
+        shutil.copy(real, out / "com_citrus_citruskds_macrobenchmark-benchmarkData.json")
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["app-bench/build/outputs"]}), encoding="utf-8")
+        ru = _mb_run(root, "--update-baseline")
+        check("真檔 update-baseline rc0", ru.returncode == 0, ru.stdout + ru.stderr)
+        bp = root / ".lumos" / "macrobench-baseline.json"
+        check("真檔 update-baseline 有寫出基準檔", bp.exists(), ru.stdout)
+        bl = json.loads(bp.read_text(encoding="utf-8")).get("entries", {}) if bp.exists() else {}
+        st = bl.get("com.citrus.citruskds.macrobenchmark.StartupBenchmark#coldStartup", {})
+        check("啟動中位數照真檔", st.get("metrics", {}).get("timeToInitialDisplayMs", {}).get("median") == 2188.0938340000002, str(st)[:300])
+        sc = bl.get("com.citrus.citruskds.macrobenchmark.OrderScrollBenchmark#scrollMainOrders", {})
+        check("每幀超時 P90 照真檔", sc.get("sampled", {}).get("frameOverrunMs", {}).get("P90") == 213.84345389999996, str(sc)[:300])
+        check("裝置型號照真檔", st.get("device", {}).get("model") == "sdk_gphone64_arm64", str(st.get("device")))
+        r = _mb_run(root, "--json")
+        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+        check("同一份檔跟自己比 → 0 退步、2 項都比到", r.returncode == 0 and d.get("regressions") == [] and d.get("checked") == 2, r.stdout[:400])
+
+
+def t_macrobench_update_baseline_skips_failed():
+    """--update-baseline 只用解析成功的檔;壞檔不能把既有基準清掉。全部壞掉時基準檔一個位元組都不動。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbupd-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        res = root / "out"
+        res.mkdir()
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        old = {"version": 1, "entries": {"pkg.Old#kept": {"device": {"model": "m", "fingerprint": "f"},
+                                                           "metrics": {"timeToInitialDisplayMs": {"median": 1.0, "minimum": 1.0, "maximum": 1.0}},
+                                                           "sampled": {}}}}
+        bpath = root / ".lumos" / "macrobench-baseline.json"
+        bpath.write_text(json.dumps(old), encoding="utf-8")
+        (res / "a-benchmarkData.json").write_text(_mb_result_json([_mb_startup("pkg.New", 500.0, 480.0, 520.0)]), encoding="utf-8")
+        (res / "b-benchmarkData.json").write_text("{ not json", encoding="utf-8")
+        ru = _mb_run(root, "--update-baseline")
+        check("部分壞檔 update rc0", ru.returncode == 0, ru.stdout + ru.stderr)
+        entries = json.loads(bpath.read_text(encoding="utf-8")).get("entries", {})
+        check("新檔的項目寫進基準", entries.get("pkg.New#coldStartup", {}).get("metrics", {}).get("timeToInitialDisplayMs", {}).get("median") == 500.0, str(entries))
+        check("既有項目沒被清掉", "pkg.Old#kept" in entries, str(entries))
+        check("壞檔有說出來", "b-benchmarkData.json" in ru.stdout, ru.stdout)
+        (res / "a-benchmarkData.json").write_text("[]", encoding="utf-8")
+        before = bpath.read_bytes()
+        ru2 = _mb_run(root, "--update-baseline")
+        check("全部壞掉 → rc0 且基準檔不動", ru2.returncode == 0 and bpath.read_bytes() == before, ru2.stdout)
+
+
+def t_macrobench_exit_codes():
+    """設定檔壞掉回 2;沒接(沒設定檔)與有退步都回 0(只提醒,不擋)。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbrc-") as td:
+        root = Path(td)
+        r0 = _mb_run(root, "--json")
+        d0 = json.loads(r0.stdout) if r0.stdout.strip().startswith("{") else {}
+        check("沒設定檔 → rc0", r0.returncode == 0 and d0.get("regressions") == [], r0.stdout + r0.stderr)
+        (root / ".lumos").mkdir()
+        cfg = root / ".lumos" / "macrobench.json"
+        for bad, why in (("[]", "最外層陣列"), ("{", "JSON 壞掉"), ('{"tolerance_pct": 10}', "缺 results_dirs"),
+                         ('{"results_dirs": "out"}', "results_dirs 不是陣列"),
+                         ('{"results_dirs": ["out"], "tolerance_pct": "ten"}', "容差不是數字"),
+                         ('{"results_dirs": ["out"], "tolerance_pct": 0}', "容差不是正數")):
+            cfg.write_text(bad, encoding="utf-8")
+            r = _mb_run(root, "--json")
+            check(f"壞設定({why}) → rc2 且說哪裡壞", r.returncode == 2 and "macrobench.json" in r.stderr, f"rc={r.returncode} err={r.stderr!r}")
+        res = root / "out"
+        res.mkdir()
+        cfg.write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        f = res / "x-benchmarkData.json"
+        f.write_text(_mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+        _mb_run(root, "--update-baseline")
+        f.write_text(_mb_result_json([_mb_startup("pkg.S", 2000.0, 1900.0, 2100.0)]), encoding="utf-8")
+        r = _mb_run(root, "--json")
+        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+        check("有退步 → rc0 且列出", r.returncode == 0 and len(d.get("regressions", [])) == 1, r.stdout)
+        rt = _mb_run(root)
+        check("文字輸出有寫退步的情境名", rt.returncode == 0 and "pkg.S#coldStartup" in rt.stdout, rt.stdout)
+
+
+def t_macrobench_real_tablet_lab():
+    """2026-10-23 實機(SM-X710、Android 16、benchmark-macro 1.4.1)跑小專案三次:正常、注入變慢(啟動多 300ms、
+    每列多 8ms)、正常重跑。以正常那次當基準:變慢那次要剛好報出四項,正常重跑那次要一項都不報。
+    預期值照三次實跑印出的數字手算(容差 = max(10%×|基準|, 1)):
+      啟動中位數 216.1 → 571.1(差 355 > 21.6 且 > 基準最大 226.8);重跑 223.1(差 7 < 21.6)
+      幀 CPU P90 4.7 → 10.2(差 5.5 > 1);重跑 4.7
+      幀超時 P50 -3.6 → -1.0(差 2.6 > 1);重跑 -3.4(差 0.2)
+      幀超時 P90 -1.7 → 3.6(跨零);重跑 -0.9(差 0.8 < 1,只靠比例 0.17 會誤報)
+    結果檔名 1.4.1 保留套件名的點(1.2.4 會換成底線),兩種都要掃得到。"""
+    import json, shutil, tempfile
+    src = Path(GRAPHCTL).resolve().parent.parent / "governance" / "research" / "macrobench" / "2026-10-23-lab-tablet"
+    with tempfile.TemporaryDirectory(prefix="gctl-mbtab-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["latest"]}), encoding="utf-8")
+        (root / "latest").mkdir()
+        dst = root / "latest" / "com.example.mblab.bench-benchmarkData.json"
+        shutil.copy(src / "1-base-benchmarkData.json", dst)
+        r = _mb_run(root, "--update-baseline")
+        check("前置:實機正常版存成基準(檔名帶點也掃得到)", "寫入 2 個情境" in r.stdout, r.stdout + r.stderr)
+        shutil.copy(src / "2-slow-benchmarkData.json", dst)
+        d = json.loads(_mb_run(root, "--json").stdout)
+        got = sorted((x["key"].split("#")[1], x["metric"], x["stat"]) for x in d["regressions"])
+        want = sorted([("coldStartup", "timeToInitialDisplayMs", "median"), ("scrollList", "frameDurationCpuMs", "P90"),
+                       ("scrollList", "frameOverrunMs", "P50"), ("scrollList", "frameOverrunMs", "P90")])
+        check("注入變慢 → 剛好報出四項", got == want, str(got))
+        cross = [x for x in d["regressions"] if x["metric"] == "frameOverrunMs" and x["stat"] == "P90"]
+        check("注入變慢 → 幀超時 P90 標成跨零", bool(cross) and cross[0].get("zero_crossed") is True, str(cross))
+        shutil.copy(src / "3-base-again-benchmarkData.json", dst)
+        d = json.loads(_mb_run(root, "--json").stdout)
+        check("正常重跑 → 一項都不報", d["regressions"] == [] and d["checked"] == 2, str(d["regressions"]))
+
+
+def t_macrobench_corrupt_baseline_entry():
+    """基準檔某一項缺欄(手改或寫壞)時,當成基準讀不了:rc0、說基準讀不了,不噴 traceback。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbcb-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        (root / "out").mkdir()
+        (root / "out" / "x-benchmarkData.json").write_text(
+            _mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+        r = _mb_run(root, "--update-baseline")
+        check("前置:基準建得起來", r.returncode == 0 and (root / ".lumos" / "macrobench-baseline.json").exists(), r.stdout + r.stderr)
+        bp = root / ".lumos" / "macrobench-baseline.json"
+        data = json.loads(bp.read_text(encoding="utf-8"))
+        key = next(iter(data["entries"]))
+        check("前置:基準裡有啟動指標", "timeToInitialDisplayMs" in data["entries"][key]["metrics"], str(data))
+        good = json.loads(json.dumps(data))
+        # 每一種壞法都要整份當讀不了;基準檔的形狀要跟讀結果檔產出的一樣(啟動類 median/minimum/maximum,
+        # 滑動類 P50/P90 必有、P95/P99 有就要是數字,device 是物件)
+        def bad_metrics_missing(e): e["metrics"]["timeToInitialDisplayMs"] = {"median": 1000.0}
+        def bad_metrics_list(e): e["metrics"] = []
+        def bad_device_str(e): e["device"] = "Pixel"
+        def bad_entry_list(e): e.clear(); e["x"] = 1
+        def bad_sampled_no_p90(e): e["sampled"] = {"frameDurationCpuMs": {"P50": 5.0}}
+        def bad_sampled_p99_null(e): e["sampled"] = {"frameDurationCpuMs": {"P50": 5.0, "P90": 8.0, "P99": None}}
+        def bad_sampled_p95_str(e): e["sampled"] = {"frameDurationCpuMs": {"P50": 5.0, "P90": 8.0, "P95": "9"}}
+        def bad_sampled_list(e): e["sampled"] = [1]
+        # 現況也要有滑動類指標,壞掉的基準欄位才會真的被拿來比(沒被比到就看不出會不會噴例外)
+        (root / "out" / "x-benchmarkData.json").write_text(json.dumps({
+            "context": {"build": {"model": "Pixel Tablet", "fingerprint": "fp-1"}},
+            "benchmarks": [{"className": "pkg.S", "name": "coldStartup",
+                            "metrics": {"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1050.0}},
+                            "sampledMetrics": {"frameDurationCpuMs": {"P50": 5.0, "P90": 8.0, "P95": 9.0, "P99": 12.0}}}]}),
+            encoding="utf-8")
+        r = _mb_run(root, "--update-baseline")
+        good = json.loads(bp.read_text(encoding="utf-8"))
+        r = _mb_run(root)
+        check("前置:形狀正確的基準照常比對", r.returncode == 0 and "比了 1 個情境" in r.stdout, r.stdout + r.stderr)
+        for name, breaker in (("metrics 缺欄", bad_metrics_missing), ("metrics 是陣列", bad_metrics_list),
+                              ("device 是字串", bad_device_str), ("項目少了 device", bad_entry_list),
+                              ("sampled 缺 P90", bad_sampled_no_p90), ("sampled 的 P99 是 null", bad_sampled_p99_null),
+                              ("sampled 的 P95 是字串", bad_sampled_p95_str), ("sampled 是陣列", bad_sampled_list)):
+            data = json.loads(json.dumps(good))
+            breaker(data["entries"][key])
+            bp.write_text(json.dumps(data), encoding="utf-8")
+            before = bp.read_text(encoding="utf-8")
+            r = _mb_run(root)
+            check(f"{name} → rc0、沒有 traceback", r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} err={r.stderr[-300:]!r}")
+            check(f"{name} → 說基準讀不了", "基準檔讀不了" in r.stdout, r.stdout)
+            r = _mb_run(root, "--update-baseline")
+            check(f"{name} → 更新時不蓋掉它", r.returncode == 0 and bp.read_text(encoding="utf-8") == before, r.stdout + r.stderr)
+
+
+def t_macrobench_duplicate_scenario():
+    """同一個情境出現在兩個結果檔:兩份都不收,而且要說是重複,不能說成檔案讀不了。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbdup-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        body = _mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)])
+        for sub in ("a", "b"):
+            (root / "out" / sub).mkdir(parents=True)
+            (root / "out" / sub / "x-benchmarkData.json").write_text(body, encoding="utf-8")
+        r = _mb_run(root, "--update-baseline")
+        check("重複情境 → 不寫基準", not (root / ".lumos" / "macrobench-baseline.json").exists(), r.stdout)
+        check("重複情境 → 說是重複出現", "重複" in r.stdout, r.stdout)
+        check("重複情境 → 不說一個結果檔都沒讀成功", "一個結果檔都沒讀成功" not in r.stdout, r.stdout)
+        r = _mb_run(root, "--json")
+        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+        dup = [f for f in d.get("failed", []) if "pkg.S#coldStartup" in f.get("reason", "")]
+        check("重複情境 → --json 的 failed 有這個情境", len(dup) >= 1, r.stdout)
+        r = _mb_run(root)
+        check("重複情境 → 一般比對的文字輸出說重複", "重複" in r.stdout, r.stdout)
+        check("重複情境 → 一般比對不說讀不了", "讀不了" not in r.stdout, r.stdout)
 
 
 def t_pitfalls_no_lint():

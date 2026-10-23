@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-10-23
 responsibility: 固定手冊兩臂試行與證據歸因；只測隔離的小型題目，不推論所有語言或模型
 self_audit: GPT-6-Codex-clean-agent/2026-10-07
 aliases: []
@@ -16,6 +16,7 @@ tags:
   - scope/evals
 summary: |-
   WHY: 凍結兩臂與題目後才量測手冊效果 [出處:2026-10-07 使用者要求先實驗再決定推送] [因:掃描器考卷通過不能證明模型會讀取或遵循規範]
+  PITFALL:測試造的帳或資料寫死日期、被測指令又只看近 N 天時,日子一過整批掉出窗外,測試在沒人改程式的那天突然翻紅 [出處:2026-10-23 t_gov_denoise 與 t_gov_adversarial_increment 同天翻紅,帳日期 2026-07-24、gov 預設近 90 天] [根因:測試資料用絕對日期,被測行為用相對今天的時間窗] [修法:測試函式內 import datetime,日期取今天往前幾天(跟檔內其他相對日期的測試同寫法)] [test:t_gov_denoise]
 related:
   - "[[Systems/test-quality-scan]]"
 verified_by:

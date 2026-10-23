@@ -1,0 +1,1443 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android診斷證據接入_調研.md b/docs/lumos-toolchain-knowledge/Projects/Android診斷證據接入_調研.md
+new file mode 100644
+index 00000000..ef723360
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Android診斷證據接入_調研.md
+@@ -0,0 +1,152 @@
++---
++type: project
++status: doing
++created: 2026-10-23
++updated: 2026-10-23
++tags:
++  - type/project
++  - status/doing
++  - scope/stack-knowledge
++related:
++  - "[[Projects/Macrobenchmark退步提醒_計劃]]"
++  - "[[Projects/後端工程提問與證據擴充_計劃]]"
++  - "[[Projects/併發與效能表態要合約背書_計劃]]"
++  - "[[Systems/guard-kill]]"
++---
++# Android診斷證據接入_調研
++
++白話:想讓 AI 拿得到 Android 的效能、記憶體、ANR 與正式環境品質資料,並把「這一版功能在講清楚的測試條件下真的跑過、符合驗收條件」的證據接回 Lumos。本篇是 Enzo 2026-10-23 帶進來的調研稿整理,是接入規格草案,不代表 Lumos 已經有這些能力。落地併進 [[Projects/Macrobenchmark退步提醒_計劃]](Enzo 2026-10-23 裁「接手舊計劃一起做」)。
++
++WHY:不由 Lumos 重做 Android Profiler,直接用 Google 官方的 android-profiler Agent Skill 與 Perfetto 工具 [出處:2026-10-23 Enzo 帶進的調研稿] [因:官方 skill 已能指引 Agent 錄 System Trace、Java/Native Heap、CPU Callstack,用 trace_processor 與 PerfettoSQL 分析,並把結論分成量測、推論、資料缺口] [不選:Lumos 自己解析 Perfetto 檔或教 AI 看 Profiler(重造輪子)]
++WHY:第一版不新增通用的證據執行指令,只做轉接 skill 加手寫收據 [出處:[[Projects/後端工程提問與證據擴充_計劃]] 決策 d6] [因:核心 CLI 同時管子程序、權限、遮蔽、原始檔保存、作廢與交付判斷,兩輪設計審證實會長成第二套測試框架] [不選:lumos evidence 執行器]
++WHY:毫秒數字只當驗證數據,不當推送硬閘;只有人明確裁定某裝置某情境的門檻,才算合約 [出處:[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 裁定] [因:數字隨裝置、溫度、建置浮動]
++PRIOR-ART: 官方 android-profiler skill https://developer.android.com/agents/skills/profilers/android-profiler/skill (調研時看的版本 95ea931a1ad8f9b2be132ae0cfb2aad964d71118,會更新,正式接入要釘版本重驗);Android Performance Analyzer 的 AI 分析 https://developer.android.com/android-performance-analyzer/analyze/ai ;Macrobenchmark 結果與指標 https://developer.android.com/topic/performance/benchmarking/macrobenchmark-overview#benchmark-results 、https://developer.android.com/topic/performance/benchmarking/macrobenchmark-metrics ;Trace Processor https://perfetto.dev/docs/reference/trace-processor-cli 、Batch Trace Processor https://perfetto.dev/docs/analysis/batch-trace-processor 、Trace Summary https://perfetto.dev/docs/analysis/trace-summary 。裁定:借用,Lumos 不加依賴。
++RETIRE-IF: 試跑後另一個不知道對話脈絡的 Agent 只靠節點、收據、報告仍重跑不出核心查詢,或連續兩個試行案例都覺得收據比直接讀測試輸出更難用,就撤掉收據格式、回到只綁 [test:]。
++
++## 核心定位:合約的一次 E2E 驗證收據
++
++既有合約鏈是「功能節點的 ★INVARIANT★ → [test:某支 E2E]」。接入後要補的是「這一次驗證」留下了什麼:
++
++- 測試前提:App 提交與版本、裝置、資料、帳號、Feature Flag。
++- 執行紀錄:跑了哪個 flow、起訖時間、結果。
++- 行為證據:畫面狀態、UI tree、API 或資料狀態、Log。
++- 診斷證據:Perfetto Trace、Heap、CPU、記憶體、畫格數據。
++- 判定依據:合約要求跟實際結果怎麼對上。
++- 檔案身分:位置、SHA-256、大小、工具版本、資料缺口。
++- 重驗條件:改到什麼就要重跑。
++
++三個角色不能合併:合約是正確答案的來源(來自需求或人裁,不能從程式或當次數字反推);E2E 負責把情境做出來;診斷工具負責留下現場。「這次量到 P95 18ms」只是一筆數據,不是新合約。
++
++- 行為 E2E(只產生一張訂單、畫面顯示成功)可以直接決定 pass/fail。
++- 診斷數據(GC 次數、P95、Native Heap)先用來留現場與比較,一次數字不能擋交付。
++- 需求本身有時間或資源上限時,要同時鎖定裝置、build、fixture、操作流程、warmup 與容許誤差,否則兩次數字不能比。
++- 通過與失敗都留收據;裝置斷線、Trace 掉資料、測試帳號失效這類環境失敗標「無法判定」,不算失敗也不算通過。
++- 宣稱某支 E2E 守得住合約,要做故障敏感度驗證:暫時破壞它保護的行為,確認 E2E 會紅(沿用 [[Systems/guard-kill]] 的想法)。
++
++## 拿得到哪些資料(本機或測試裝置)
++
++| 目的 | 首選方式 | 限制 |
++|---|---|---|
++| 卡頓、ANR、執行緒阻塞 | Perfetto System Trace + PerfettoSQL | 看得到什麼取決於錄了哪些 data source |
++| 可重複的啟動與畫面效能 | Macrobenchmark(JSON + 每輪一份 Trace) | 要實機;有量測雜訊 |
++| 單段熱路徑 | Microbenchmark | 不代表完整使用者流程 |
++| Java/Kotlin 物件保留 | Perfetto `android.java_hprof` | 只有引用圖,沒有欄位內容,不能給 AHAT 開 |
++| 傳統洩漏分析 | `adb shell am dumpheap` 的 `.hprof` + Shark/AHAT | 可能含個資;檔案大 |
++| Native 配置 | heapprofd(`heap_profile`) | 抽樣;沒 symbols 只能定位到 `.so` 與位址;跟 RSS 不是同一個數 |
++| 快速分流 | `dumpsys meminfo`、`dumpsys gfxinfo <pkg> framestats` | 只有概況或近期資料 |
++| Crash/ANR 現場 | Logcat、ApplicationExitInfo | 循環緩衝會覆蓋,`null` 不代表沒發生 |
++
++- Macrobenchmark 在 debuggable、非 profileable、模擬器、低電量時會報錯,不會悄悄給出看似可信的數字。畫面驗收看 `frameOverrunMs`(正數通常是看得見的卡頓)、`frameDurationCpuMs`,看百分位分布不看平均。
++- `trace_processor query <trace> --format csv "<SQL>"` 可直接出 CSV,也能開常駐 session、跑官方 metrics、批次比較多份 Trace。Lumos 不讀數百 MB 的 Trace,只保存原始檔身分、實際跑過的 SQL、查詢結果與報告。
++
++## 正式環境(第四階段才碰,唯讀)
++
++- ProfilingManager(API 35 起):App 請系統錄 Trace、Heap、Stack Sampling;有 rate limit、不保證每次執行,只適合抓罕見問題現場。標 `source: production-profiling-manager`、`redacted: true`、`sampling: system-rate-limited`;沒收到結果不能推論問題沒發生。
++- Crashlytics 匯出 BigQuery:可按版本、裝置、Flag 分組看修正後是否下降;issue 分組只是線索,不是業務正確性判準。
++- Play Developer Reporting API:crash/ANR rate、slow rendering/start、LMK 等趨勢,不是固定場景的驗收。
++
++## 沒有低階實機時
++
++優先序:團隊共用的代表性實機 → Firebase Test Lab 實體裝置 → 一般實機做相對比較 → 模擬器只驗功能與流程。模擬器綠燈不能寫成「低階實機已驗證」,要留「低階裝置未驗證」。
++
++## 收據格式草案(manifest)
++
++原始 Trace、HPROF、Logcat、正式環境匯出不進 Git;manifest 與去敏後的報告可以進版控。
++
++```json
++{
++  "schema": "lumos-android-evidence/v1",
++  "run_id": "android-20261023T103000Z-a1b2c3d4",
++  "purpose": "compare",
++  "question": "結帳頁動畫修改後是否增加可見卡頓",
++  "source": "macrobenchmark",
++  "project": {"git_commit": "<full-sha>", "dirty": false, "package": "com.example.app",
++              "version_code": 123, "build_type": "release-profileable"},
++  "device": {"model": "Pixel 6a", "api": 35, "build_fingerprint": "<fingerprint>",
++             "physical": true, "battery_percent": 82, "thermal_status": "none"},
++  "scenario": {"id": "checkout-scroll-v2", "iterations": 10, "preconditions": ["已登入", "固定測試資料"],
++               "baseline_run_id": "android-20261022T091000Z-11223344"},
++  "tooling": {"android_profiler_skill_commit": "95ea931a…", "trace_processor_version": "<version>",
++              "capture_config_sha256": "<sha256>", "queries_sha256": "<sha256>"},
++  "artifacts": [{"kind": "perfetto-trace", "path": ".lumos/artifacts/android/<run-id>/iteration-01.perfetto-trace",
++                 "sha256": "<sha256>", "bytes": 12345678, "committed": false, "redacted": false}],
++  "result": {"state": "measured", "report": "perfetto_analysis_report.md",
++             "gaps": ["未涵蓋 API 29 裝置"], "symbolization": "complete"}
++}
++```
++
++manifest 要答得出:哪一版程式(完整 SHA、是否 dirty)、哪個 App 建置(profileable/debuggable)、哪台裝置(實體或模擬器)、哪個情境(資料、步驟、iteration、warmup)、哪套工具與設定(版本、capture config 與 SQL 的雜湊)、哪個 baseline(不能只寫「前版」)、哪些缺口、原始檔在哪與雜湊。
++
++報告沿用官方 skill 的證據標籤:`[MEASURED]` 指得回 SQL、Trace 或 JSON 的數字;`[INFERRED]` 從多筆量測推的可能原因;`[GAP]` 目前資料答不了;`[DECISION]` 人裁的接受標準。
++
++## 寫回規則
++
++| 實際情況 | 寫回 | 不可以寫成 |
++|---|---|---|
++| 相同條件重跑且達到已裁定標準 | Verification pass | 「AI 認為已優化」 |
++| 指標退化或 Trace 證明有問題 | 開或更新 Issue | 為了讓驗證綠而放寬標準 |
++| 缺 baseline、裝置不等價、Trace 掉資料 | Verification pending 或不寫 pass | 「沒有發現問題」 |
++| 原本成立的裝置、版本、情境已變 | Verification stale | 沿用舊數字 |
++| 只有 Crashlytics/Vitals 趨勢改善 | 正式環境觀測證據 | 固定場景效能驗收已通過 |
++| 只有模擬器結果 | 功能或初篩證據 | 低階實機已驗證 |
++| Native profile 缺 symbols | 元件層級嫌疑 + GAP | 已定位第三方 SDK 內部函式 |
++
++可以自動檢查的:指令真的執行成功、檔案存在、雜湊相符、Trace 沒掉事件、SQL 真的跑成功、baseline 與 candidate 的裝置與情境相符、必填欄位與缺口誠實填寫。不該直接當推送硬閘的:單次 P95/P99、跨裝置數字、正式環境短期沒新事件、AI 推論的根因、沒 symbols 時的函式級判斷。
++
++## 安全與隱私
++
++1. HPROF 可能含 token、密碼、使用者資料,不提交、不上傳公共模型。
++2. 手動錄的 Perfetto Trace 可能含其他 Process 資訊;正式環境優先用會遮蔽其他 App 的 ProfilingManager。
++3. Logcat、Crashlytics 的 Custom Key 與 Breadcrumb 可能帶個資,匯入前遮蔽。
++4. 連 Crashlytics BigQuery、Play Reporting API、Test Lab 用唯讀最小權限帳號。
++5. 原始檔放 `.lumos/artifacts/` 並加進忽略清單;要團隊共享就用有保存期限與存取控制的物件儲存。
++6. Shark 的 `strip-hprof` 降低 primitive array 外洩風險,但「已 strip」不等於已證明沒有敏感資料。
++7. 原始資料的刪除、保留期限與對外上傳由專案另行裁定,不由 Agent 自己決定。
++
++## 分階段
++
++- **第零階段 外掛試跑,不改 Lumos 核心**:裝官方 skill;選一個可重現的卡頓情境;完成 Trace 擷取、SQL 分析與 baseline/candidate 比較;人工寫一份驗證紀錄,看 manifest 欄位夠不夠。驗收:一個不知道對話脈絡的 Agent 只靠節點、manifest、報告與原始檔,能重跑核心 SQL 並指出資料缺口。
++- **第一階段 轉接 skill**(`lumos-android-evidence`):檢查 adb、裝置、建置、官方 skill 與 trace processor;依目的選工具;產 manifest、雜湊與報告骨架;導向驗證紀錄、Issue 或 pending。不自己實作 profiler、不解析 Perfetto protobuf、不把毫秒門檻寫死、不自動上傳。
++- **第二階段 唯讀檢查指令**:只有試跑證明人工寫回容易出錯時才做,例如檢查 manifest、比兩份 manifest、把 manifest 連到計劃與節點;只檢查與連結,不錄製、不執行第三方指令、不替人決定標準。
++- **第三階段 CI 與裝置矩陣**:固定實體裝置定期跑 Macrobenchmark;PR 只檢查基準跑得起來、檔案完整;趨勢退化先提醒。
++- **第四階段 正式環境唯讀連接**:Crashlytics BigQuery、Play Reporting API、ProfilingManager(要另做產品、隱私、成本與採樣裁定)。
++
++## 要人裁定的事與目前答案(2026-10-23)
++
++| 題目 | 目前答案 |
++|---|---|
++| 第一個消費專案 | Citrus_KDS(沿用 [[Projects/Macrobenchmark退步提醒_計劃]] 決策 d2) |
++| 第一個試行情境 | KDS 主頁訂單清單滑動與冷啟動,用假 POS 伺服器餵固定 60 張訂單(KDS 那邊已寫好兩支基準) |
++| 原始檔只留本機或接物件儲存 | 待人裁;裁定前一律只留本機 |
++| 能不能裝官方 skill 與它下載的 Perfetto 工具 | 可以(Enzo 2026-10-23),要釘版本;等評測實驗跑完、機器空出來再裝 |
++| 能不能用 Firebase Test Lab、費用誰出 | 待人裁;裁定前不用 |
++| HPROF、Trace、Log 的保存期限與可見人員 | 待人裁;裁定前不錄 HPROF |
++| 第一版只做轉接 skill 還是加 CLI | 照第一、二階段的順序:先 skill,試跑證明需要才加指令 |
++
++## 調研邊界
++
++- 官方工具、格式與程式化取得路徑確認存在;在指定 Android 專案與裝置上的實跑只做到 Macrobenchmark 結果檔(模擬器一次,見 [[Projects/Macrobenchmark退步提醒_計劃]] 的〈實測〉)。
++- Firebase Test Lab 能不能讓所選裝置與情境完整產生 Macrobenchmark 檔案,本篇沒驗。
++- 消費專案有沒有 LeakCanary、Crashlytics、Play API 或 ProfilingManager,本篇沒查。
++- 本篇沒有宣稱任何 AI 分析結果可以取代產品、資安、隱私或發布的人工作業。
++REVISIT:2026-12-21 KDS 實機收據試跑做了沒;沒做就判延後或撤案
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
+new file mode 100644
+index 00000000..59a65e2c
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Macrobenchmark退步提醒_計劃.md
+@@ -0,0 +1,169 @@
++---
++type: project
++status: doing
++created: 2026-10-21
++updated: 2026-10-21
++tags:
++  - type/project
++  - status/doing
++  - scope/stack-knowledge
++lands_in:
++  - Systems/macrobenchmark-adapter
++related:
++  - "[[Systems/compose-metrics-adapter]]"
++  - "[[Systems/效能檢核目錄]]"
++  - "[[Projects/併發與效能表態要合約背書_計劃]]"
++  - "[[Projects/Android診斷證據接入_調研]]"
++pending_questions:
++  - id: Q1
++    text: 三個 Android 專案都還沒有 Macrobenchmark 模組:要先在 Lumos 做好讀取器、用假結果檔測(建議),還是先在某個專案加基準測試模組並在實機跑出真結果檔再做?
++    class: 範圍
++    stage: 需求
++    status: 已決
++    blocking: true
++    decision: "#d1"
++  - id: Q2
++    text: 退步要不要擋推送?
++    class: 行為
++    stage: 架構
++    status: 自答
++    source: Projects/併發與效能表態要合約背書_計劃 2026-10-01 WHY 行:推送前證據不收毫秒;本計劃只提醒
++  - id: Q3
++    text: 指令在哪裡被叫?
++    class: 行為
++    stage: 架構
++    status: 自答
++    source: 官方 CI 自動化頁建議基準排在每晚的建置跑;第一版由消費專案每晚 CI 手動呼叫,不接推送前檢查
++  - id: Q4
++    text: FrameTimingMetric 等幀耗時指標在結果檔裡的實際欄位名與 sampledMetrics 格式為何?
++    class: 資料
++    stage: 實作
++    status: 自答
++    source: "2026-10-21 Citrus_KDS 模擬器實跑的真結果檔(governance/research/macrobench/),鍵名與官方指標頁、Firefox 解析腳本一致;另見本篇〈實測〉"
++  - id: Q5
++    text: 容差預設值訂多少?
++    class: 門檻
++    stage: 效能
++    status: 延後
++    reason: 沒有真實數據量浮動;先用 10%,見 2026-12-21 的回頭條件
++  - id: Q6
++    text: Citrus_KDS 的基準測試要用哪台裝置跑?(專案已決 d2)
++    class: 範圍
++    stage: 需求
++    status: 已決
++    blocking: true
++    decision: "#d3"
++decisions:
++  - content: 先在一個 Android 消費專案加 Macrobenchmark 模組、在實機跑出真結果檔,再依真檔寫 Lumos 讀取器
++    id: d1
++    context: 三個 Android 專案都沒有基準測試模組與結果檔,讀取器只能用照官方範例造的假檔測;幀耗時欄位格式只有二手來源
++    why_chosen: 使用者選 2:格式一次對準真檔,避免照假檔寫完再改;代價是要動消費專案、要實體手機、時程拉長
++    decided: 2026-10-21
++    valid: true
++  - content: 第一個消費專案用 Citrus_KDS
++    id: d2
++    context: 能用的 Android 專案只有 Citrus_KDS 與 mOrangePos;mOrangePos 啟動會初始化付款 SDK
++    why_chosen: 使用者選 Citrus_KDS:Compose 訂單清單,啟動與滑動都能量,沒有付款 SDK 干擾;代價是建置工具較舊,要先確認 Macrobenchmark 版本相容
++    decided: 2026-10-21
++    valid: true
++  - content: 拿結果檔格式、驗流程這一段用模擬器(Android 14 平板尺寸);正式基準與容差改用店裡實際用的平板量
++    id: d3
++    context: 本機沒接任何實體裝置;官方不建議用模擬器量效能
++    why_chosen: 使用者問模擬器行不行並同意分兩步:結果檔格式與機器無關,模擬器足以讓讀取器照真檔寫;代價是容差與基準要等實機才訂得出來
++    decided: 2026-10-21
++    valid: true
++  - content: 本計劃併入 Android 診斷證據調研的第零階段:用 KDS 既有的兩支基準加 Macrobenchmark 自帶的每輪 Trace,手寫一份驗證收據(manifest 加報告),不改 Lumos 核心;轉接 skill 與檢查指令等試跑證明需要再做
++    id: d4
++    context: Enzo 2026-10-23 帶進 Android 診斷證據接入調研,與本計劃重疊(都以 Citrus_KDS 的 Macrobenchmark 為第一個案例),裁定接手本計劃一起做
++    why_chosen: 結果檔讀取器已寫完並驗過,收據試跑可直接沿用同一組基準與裝置設定;不選:另開計劃(兩篇講同一組基準,容易分岔)、先做轉接 skill(調研本身要求先試跑確認 manifest 欄位夠用)
++    decided: 2026-10-23
++    valid: true
++---
++# Macrobenchmark退步提醒_計劃
++
++白話：Android 專案自己在實機上跑 Macrobenchmark（量啟動時間、每幀耗時的官方工具），Lumos 只讀它留下的結果檔，跟存好的基準比，列出「哪個情境比上次慢了」。Lumos 不跑測試、不接裝置、不擋推送。
++
++WHY:第一版只提醒不擋推送 [出處:2026-10-21 本對話,使用者選先做 Android Macrobenchmark,擋不擋沿用既有決定] [因:毫秒隨機器與溫度浮動,[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 已裁推送前證據不收毫秒] [不選:超過容差就擋推送(會隨機誤擋,且要先推翻那條決定)]
++WHY:Lumos 只讀結果檔,不負責建置或執行基準測試 [出處:2026-10-21 本對話] [因:Lumos 是零依賴的 python 工具,沒有裝置也沒有 Gradle;[[Systems/compose-metrics-adapter]] 已用同一條界線] [不選:由 Lumos 呼叫 gradlew 或 adb 跑基準(要裝置、跨專案設定各異、執行時間以分鐘計)]
++WHY:判退步要同時過兩道:中位數比基準中位數慢超過容差,而且比基準那次的最大值還慢 [出處:2026-10-21 本對話] [因:官方文件說基準結果本來就會浮動、要看趨勢;只看百分比,基準那次剛好跑得快就會誤報;要求落在基準那次的浮動範圍外,可以濾掉一部分雜訊] [不選:官方建議的 step fitting(拿前後多次建置的滾動視窗比),要存多次歷史且要每晚固定跑,第一版先不做] [代價:只比一次基準,單次跑得特別慢仍可能誤報]
++PRIOR-ART: 結果檔格式照官方〈Benchmark in Continuous Integration〉頁的 `<套件>-benchmarkData.json` 範例(context 記裝置、benchmarks 每項有 metrics,每個指標有 minimum/maximum/median/runs) https://developer.android.com/topic/performance/benchmarking/benchmarking-in-ci ;幀耗時的 `sampledMetrics` 百分位鍵照官方指標頁 https://developer.android.com/topic/performance/benchmarking/macrobenchmark-metrics 與 Firefox CI 的解析腳本 https://searchfox.org/mozilla-central/source/taskcluster/scripts/tests/compute-macrobenchmark-results.py (2026-10-21 已用 KDS 真結果檔核對過鍵名,見〈實測〉);判退步的雙道規則借 [[Systems/compose-metrics-adapter]] 的「存基準、只報退步、用指令更新基準放行」形狀;官方 step fitting 見 https://developer.android.com/training/testing/continuous-integration/automation ,原文 Medium 文章本次抓不到(403),細節沒讀到。裁定:借用,不加依賴。
++RETIRE-IF: 第一個消費專案接上後連續 8 週,提醒裡確認是真退步的次數為零、或誤報多過真報,就撤掉這個指令;消費專案改用 Android Studio 或雲端測試服務內建的趨勢比對時也撤。
++REVISIT:2026-12-21 看有沒有消費專案接上 Macrobenchmark 並跑過這個指令;還沒有就判撤案或延後,延後要寫下一個日期。
++REVISIT:2026-12-21 容差預設 10% 是拍的,有消費專案的真實數據後,用同一台裝置重跑同一版本至少 5 次量浮動,重訂預設值。
++
++## 現況(2026-10-21 查)
++
++- 開案當時(2026-10-21)Lumos 沒有任何指令讀執行期的效能數字;現有效能機制是改程式時跳出的檢核題與推送前逐題表態([[Systems/效能檢核目錄]]、[[Systems/棧別提問表態閘]])。這句另派了一個沒看過結論的子代理用原始問題查過,結論相同。
++- 最接近的是 [[Systems/compose-metrics-adapter]]:讀 Compose 編譯器報告比基準。它目前只能手動叫,沒有接進推送前的檢查或 CI。
++- [[Projects/pitfalls棧別效能追問_計劃]] 寫過「不做效能自動評分(oracle 教訓)」。那條講的是由工具判斷作者對效能題的回答對不對;這次是拿實機量到的數字跟基準比,而且只提醒,不打分也不放行,所以不算翻案。
++- 本機三個 Android 專案(mOrangePos、Compass_KDS、Citrus_KDS)的建置設定裡都沒有 Macrobenchmark 或 Baseline Profile 相依,也找不到任何結果檔。照 d1 先在 Citrus_KDS 加模組拿真檔,見下一節。
++
++## 實測(2026-10-21,Citrus_KDS 在模擬器上跑一次)
++
++- KDS 那邊的做法(基準測試模組、假 POS 伺服器、跑法與踩到的坑)記在 KDS 圖譜的 `Systems/效能基準`;改動放在 KDS 本機的 `macrobench` 分支工作目錄。
++REVISIT:2026-11-06 KDS 那邊的基準測試模組提交進 KDS repo 了沒;沒有就判要不要提交或撤掉
++- 真結果檔存在 `governance/research/macrobench/2026-10-21-kds-emulator-benchmarkData.json`,實作讀取器時拿來當測試資料。
++- 跟原本依文件寫的計劃有出入、讀取器要照真檔做的地方:
++  - 檔名是 `com_citrus_citruskds_macrobenchmark-benchmarkData.json`,套件名的點變成底線;官方範例寫成點。讀取器要用 `*-benchmarkData.json` 掃,不要拼檔名。
++  - `sampledMetrics` 每個指標除了 `P50`/`P90`/`P95`/`P99`,還有 `runs`,是「每次重複各自的每幀數值」的陣列的陣列(這次五次各 29~33 幀)。
++  - 這次的 `metrics` 只有 `timeToInitialDisplayMs`;沒有出現 `frameCount`。
++  - `context.build` 有 `brand`、`device`、`fingerprint`、`model`、`version.sdk`;另有 `cpuLocked`、`cpuCoreCount` 等。判「裝置不同」用 `model` 加 `fingerprint`。
++- 模擬器的數字:冷啟動中位數約 2188ms(最小 1927、最大 2562);滑動每幀 CPU 耗時 P50 約 36ms、P90 約 153ms。模擬器用軟體畫圖,這些數字只證明流程跑得通,不能當基準,也不能拿來訂容差。
++
++## 要做的事
++
++1. 新指令 `lumos macrobench`,選項比照 compose-metrics:`--repo`、`--json`、`--update-baseline`。
++2. 設定檔 `.lumos/macrobench.json`:列出要掃的結果目錄(在目錄裡找 `*-benchmarkData.json`,見上一節的檔名坑)、容差百分比(預設 10)、哪些指標是「越大越好」(預設全部當越小越好)。
++3. 基準檔 `.lumos/macrobench-baseline.json`:每個「測試類別 + 測試名 + 參數 + 指標」存中位數、最小、最大,以及裝置型號與系統指紋。
++4. 兩種欄位分開判:
++   - `metrics`(啟動時間這類,有 median/minimum/maximum/runs):照上面 WHY 的雙道規則。
++   - `sampledMetrics`(滑動的幀耗時 `frameDurationCpuMs`、`frameOverrunMs`,只有 `P50`/`P90`/`P95`/`P99`,大寫 P):沒有最大值可比,只比 `P50` 與 `P90` 有沒有超過容差;`P99` 太吵,只列出不判退步。
++   - `frameOverrunMs` 是「這一幀比期限晚多少」,負的代表準時。基準是負的、現在變成正的,不論差幅都列為退步,因為那代表開始掉幀。
++   - `frameCount` 這類次數欄位不是效能指標,預設忽略(設定檔 `ignore_metrics` 可改)。
++5. 比對結果分四種:退步、新出現的情境、這次沒跑到的情境、裝置不同不比。裝置不同時整項不比、只列出來,因為不同手機的毫秒數不能互比。
++6. 退步不改結束碼(維持 0);設定檔壞掉才回 2,比照 compose-metrics。
++7. 不接進推送前的檢查。建議消費專案在每晚的 CI 上跑完基準後呼叫一次,寫法放進使用說明。
++
++## 條款
++
++- [S1] 當結果檔的某指標中位數比基準中位數慢超過容差、而且比基準最大值還慢時,指令應列為退步並附基準值、現值與差幅 [test:t_macrobench_regression_needs_both]
++- [S2] 當只滿足其中一道(超過容差但仍在基準浮動範圍內,或超出範圍但差幅小於容差)時,指令應不列為退步 [test:t_macrobench_single_gate_not_enough]
++- [S3] 當結果檔的裝置型號或系統指紋跟基準不同時,指令應整項不比對、列為裝置不同 [test:t_macrobench_device_mismatch_skips]
++- [S4] 當指標被設定為越大越好時,指令應反過來判退步 [test:t_macrobench_higher_is_better]
++- [S5] 當基準值是零或負數(例如每幀超時毫秒數可能是負的)時,指令應改用基準的絕對值算容差、基準是零時改用設定的絕對容差(預設 1),不得除以零,也不得把變快判成變慢 [test:t_macrobench_nonpositive_baseline]
++- [S8] 當 `sampledMetrics` 的 `P50` 或 `P90` 比基準慢超過容差時,指令應列為退步;只有 `P99` 變慢時應只列出、不算退步 [test:t_macrobench_sampled_percentiles]
++- [S9] 當 `frameOverrunMs` 的基準 `P90` 不大於零、現值大於零時,指令應列為退步,不看差幅 [test:t_macrobench_overrun_crosses_zero]
++- [S6] 當帶 `--update-baseline` 時,指令應只用成功解析的結果檔更新基準,解析失敗的檔不得清掉既有基準 [test:t_macrobench_update_baseline_skips_failed]
++- [S7] 當設定檔 JSON 壞掉或缺必要欄位時,指令應回 2 並印出哪裡壞;設定檔不存在(專案沒接)或有退步時應回 0,比照 compose-metrics [test:t_macrobench_exit_codes]
++- [S10] 當結果目錄裡是 Macrobenchmark 實際寫出的檔(檔名裡套件名的點變底線、放在子目錄裡)時,指令應找得到並讀出啟動與幀耗時指標 [test:t_macrobench_reads_real_kds_file]
++
++## 下一段:驗證收據試跑(2026-10-23 併入,決策 d4)
++
++調研全文在 [[Projects/Android診斷證據接入_調研]]。這一段只做調研的第零階段,不改 Lumos 核心:
++
++1. 等評測實驗跑完、機器空出來,裝 Google 官方 android-profiler skill,釘調研時看的版本。
++2. 用 KDS 既有的兩支基準在模擬器上重跑一次;Macrobenchmark 每輪都會留一份 Perfetto Trace,一起拉回本機。
++3. 用 trace_processor 對最慢那一輪跑查詢,把實際跑的 SQL 與結果存下來。
++4. 手寫一份收據:manifest 照調研的草案欄位填,報告用 `[MEASURED]`、`[INFERRED]`、`[GAP]` 標籤;原始 Trace 只留本機、記雜湊。
++5. 寫成一份驗證紀錄,狀態照調研的寫回規則:模擬器只能算流程驗證,不寫成效能通過。
++6. 派一個沒看過對話的 Agent,只靠節點、收據與原始檔重跑核心查詢,記下它卡在哪個欄位;卡住的欄位就是 manifest 要改的地方。
++
++這一段不做:轉接 skill、檢查 manifest 的指令、HPROF、正式環境資料。第 6 步證明人工寫收據容易出錯,才另開設計。
++
++## 不做
++
++- 不跑 Gradle、adb,不管裝置與溫控。
++- 不擋推送,不接進推送前檢查與 CI 閘。
++- 不做 step fitting 與多次歷史保存。
++- 不讀 Play Console 的 Android vitals 這類線上數據。
++
++## 實務隱患
++
++已排除:金流:只讀本機結果檔,不碰交易
++已排除:對外送出:不發網路請求
++已排除:不可逆:只在帶 `--update-baseline` 時寫基準檔,基準檔在消費專案版控裡可還原
++已排除:守衛面:只提醒,不改任何推送前檢查或閘的判定
++
++## 回退
++
++拿掉 `macrobench` 子指令與它的解析函式;消費專案留著的兩個設定檔會被忽略,不影響其他指令。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+new file mode 100644
+index 00000000..1dd45c89
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -0,0 +1,32 @@
++---
++type: system
++status: doing
++created: 2026-10-21
++updated: 2026-10-21
++responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢;不負責建置或執行基準測試、不接裝置、不擋推送
++aliases: []
++about_code:
++  - scripts/lumos
++tags:
++  - type/system
++  - status/doing
++  - scope/stack-knowledge
++summary: |-
++  WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢 [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
++  WHY:滑動類只有百分位,P50 與 P90 過容差算退步,P99 只列出 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S8] [因:P99 浮動大,拿來判會一直誤報] [test:t_macrobench_sampled_percentiles]
++  WHY:有退步也回 0,只提醒不擋推送 [出處:[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 推送前證據不收毫秒] [因:毫秒隨機器與溫度浮動,拿來擋會隨機誤擋] [test:t_macrobench_exit_codes]
++  PITFALL:結果檔名裡套件名的點會變成底線,照官方文件範例拼檔名找不到檔 [出處:2026-10-21 Citrus_KDS 模擬器實跑,benchmark-macro 1.2.4] [根因:函式庫把套件名正規化成檔名] [test:t_macrobench_reads_real_kds_file]
++  SEE:[[Systems/compose-metrics-adapter]] [[Projects/Macrobenchmark退步提醒_計劃]]
++  WHY:--update-baseline 把這次讀到的項目蓋進舊基準,不整份重寫 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S6] [因:某個結果檔這次壞掉時,它原本的項目不能跟著消失] [代價:已刪掉的情境會留在基準裡,每次列成「沒跑到」] [test:t_macrobench_update_baseline_skips_failed]
++  REVISIT:2026-12-21 看接上的消費專案基準裡有沒有累積「沒跑到」的舊情境;有就加一個刪除舊情境的選項
++verified_by:
++  - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
++---
++# macrobenchmark-adapter
++
++白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
++
++- 設定 `.lumos/macrobench.json`:`results_dirs`(必填,結果目錄清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(基準是 0 時用,預設 1)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
++- 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
++- 換了裝置(型號或系統指紋不同)整項不比,只列出來。
++- 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-21_Macrobenchmark退步提醒.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-21_Macrobenchmark退步提醒.md
+new file mode 100644
+index 00000000..88485fdb
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-21_Macrobenchmark退步提醒.md
+@@ -0,0 +1,24 @@
++---
++type: verification
++status: pass
++date: 2026-10-21
++valid_under:
++  - 結果檔格式以 androidx.benchmark:benchmark-macro 1.2.4 在 Android 14 模擬器上寫出的為準
++  - 容差與基準的數字未經實機量測,只驗判斷邏輯
++revalidate_when:
++  - 消費專案升級 Macrobenchmark 版本(結果檔欄位或檔名規則可能變)
++  - 第一次在實機上跑出結果檔時,用它重跑讀真檔那支測試
++tags:
++  - type/verification
++  - status/pass
++plan_refs:
++  - "[[Projects/Macrobenchmark退步提醒_計劃]]"
++---
++# 2026-10-21_Macrobenchmark退步提醒
++
++白話:確認 `lumos macrobench` 照真結果檔的格式讀得到資料,判退步的規則照計劃的十條條款運作。
++
++- **測試**:`python3.14 scripts/test_lumos.py -k macrobench`,10 支測試、48 條斷言全綠。
++- **測試真的抓得到錯**:規格閘把實作換成什麼都不做的空殼時,10 條條款的測試全紅、沒有弱證據;換回實作全綠。另外手動做了五種改壞(拿掉「超出基準浮動範圍」那一道、拿掉換裝置不比、拿掉跨零規則、更新基準不保留舊項目、越大越好不反向),每一種都讓對應的測試變紅,改回來全綠。
++- **真資料**:讀的是 Citrus_KDS 在 Android 14 模擬器上實跑的結果檔(`governance/research/macrobench/` 底下),啟動中位數、每幀超時 P90、裝置型號都跟當天直接讀檔的數字一致。
++- **沒驗的**:沒有在實體裝置上跑;容差 10% 沒有實測依據。回頭條件寫在 [[Projects/Macrobenchmark退步提醒_計劃]] 的兩行 REVISIT。
+diff --git a/governance/research/macrobench/2026-10-21-kds-emulator-benchmarkData.json b/governance/research/macrobench/2026-10-21-kds-emulator-benchmarkData.json
+new file mode 100644
+index 00000000..1f872528
+--- /dev/null
++++ b/governance/research/macrobench/2026-10-21-kds-emulator-benchmarkData.json
+@@ -0,0 +1,417 @@
++{
++    "context": {
++        "build": {
++            "brand": "google",
++            "device": "emu64a",
++            "fingerprint": "google/sdk_gphone64_arm64/emu64a:14/UE1A.230829.050/12077443:userdebug/dev-keys",
++            "model": "sdk_gphone64_arm64",
++            "version": {
++                "sdk": 34
++            }
++        },
++        "cpuCoreCount": 4,
++        "cpuLocked": false,
++        "cpuMaxFreqHz": 2000,
++        "memTotalBytes": 4113223680,
++        "sustainedPerformanceModeEnabled": false
++    },
++    "benchmarks": [
++        {
++            "name": "scrollMainOrders",
++            "params": {},
++            "className": "com.citrus.citruskds.macrobenchmark.OrderScrollBenchmark",
++            "totalRunTimeNs": 141340000151,
++            "metrics": {},
++            "sampledMetrics": {
++                "frameDurationCpuMs": {
++                    "P50": 36.389167,
++                    "P90": 153.07192149999997,
++                    "P95": 186.24243814999994,
++                    "P99": 237.0936654699999,
++                    "runs": [
++                        [
++                            24.876125,
++                            65.705709,
++                            192.534167,
++                            303.505583,
++                            228.007792,
++                            7.466084,
++                            6.393542,
++                            76.801541,
++                            119.277417,
++                            223.335,
++                            100.383917,
++                            11.873584,
++                            11.663958,
++                            46.234333,
++                            94.317083,
++                            133.302292,
++                            5.444584,
++                            8.601583,
++                            10.325542,
++                            86.891541,
++                            87.542083,
++                            132.984542,
++                            8.827417,
++                            6.780667,
++                            12.937458,
++                            58.310417,
++                            92.460417,
++                            133.00675,
++                            5.889917,
++                            29.232333,
++                            5.028708,
++                            68.307,
++                            250.168459
++                        ],
++                        [
++                            173.194667,
++                            216.059,
++                            128.013458,
++                            6.765875,
++                            7.586375,
++                            5.191667,
++                            54.413916,
++                            98.701,
++                            131.775917,
++                            11.7635,
++                            8.569875,
++                            24.30875,
++                            20.787875,
++                            60.272834,
++                            170.758458,
++                            5.496625,
++                            25.627833,
++                            8.34025,
++                            37.259417,
++                            109.248208,
++                            137.45625,
++                            5.119708,
++                            7.643125,
++                            6.899917,
++                            54.986042,
++                            105.249833,
++                            124.704625,
++                            9.201166,
++                            8.516625,
++                            9.247834,
++                            39.317167,
++                            82.897542,
++                            186.040709
++                        ],
++                        [
++                            73.420958,
++                            65.59675,
++                            112.968459,
++                            13.162416,
++                            9.130375,
++                            16.557125,
++                            30.312667,
++                            77.542834,
++                            150.291125,
++                            5.776542,
++                            29.143375,
++                            17.150459,
++                            30.488458,
++                            78.412333,
++                            147.165166,
++                            6.458792,
++                            5.149,
++                            5.460875,
++                            36.077042,
++                            168.504625,
++                            218.935458,
++                            8.085667,
++                            10.580958,
++                            8.613708,
++                            24.743167,
++                            122.215958,
++                            129.347083,
++                            5.150541,
++                            9.093875,
++                            6.263875,
++                            54.26025,
++                            97.826375,
++                            164.353084
++                        ],
++                        [
++                            43.0565,
++                            152.754459,
++                            132.798,
++                            6.598042,
++                            15.021875,
++                            57.255041,
++                            131.745917,
++                            128.434958,
++                            9.722166,
++                            8.199875,
++                            5.665916,
++                            135.052458,
++                            114.791917,
++                            120.707459,
++                            7.068541,
++                            8.396208,
++                            33.577917,
++                            79.701416,
++                            155.929084,
++                            151.067,
++                            6.309083,
++                            70.462375,
++                            5.6715,
++                            116.217167,
++                            147.807958,
++                            165.815375,
++                            13.278833,
++                            21.279459,
++                            10.039
++                        ],
++                        [
++                            75.696917,
++                            112.11225,
++                            190.075292,
++                            31.361792,
++                            12.218,
++                            7.303458,
++                            38.584125,
++                            151.356625,
++                            168.057083,
++                            10.997875,
++                            4.892209,
++                            15.510417,
++                            28.8085,
++                            110.721167,
++                            149.874584,
++                            11.707584,
++                            4.414709,
++                            10.998208,
++                            36.701292,
++                            97.167709,
++                            150.172416,
++                            12.966584,
++                            12.811625,
++                            5.3825,
++                            35.69625,
++                            126.592416,
++                            121.4805,
++                            17.904708,
++                            10.768667,
++                            19.132042,
++                            33.526083,
++                            127.891833
++                        ]
++                    ]
++                },
++                "frameOverrunMs": {
++                    "P50": 79.9617155,
++                    "P90": 213.84345389999996,
++                    "P95": 634.318505949925,
++                    "P99": 16246.344892189998,
++                    "runs": [
++                        [
++                            84.701335,
++                            96.953735,
++                            201.073154,
++                            299.768085,
++                            414.253379,
++                            74.321079,
++                            57.720369,
++                            4815.555918,
++                            163.753192,
++                            226.35932,
++                            148.245202,
++                            60.475908,
++                            67.942676,
++                            102.940684,
++                            164.917602,
++                            152.529729,
++                            46.106406,
++                            41.989113,
++                            61.796571,
++                            103.071682,
++                            116.375392,
++                            178.856019,
++                            42.788319,
++                            39.390823,
++                            50.476192,
++                            88.763678,
++                            148.810637,
++                            191.428472,
++                            21.46719,
++                            63.546023,
++                            56.249688,
++                            12033.545905,
++                            17526.15782
++                        ],
++                        [
++                            184.748467,
++                            279.318134,
++                            226.955145,
++                            56.501135,
++                            39.891259,
++                            25.822799,
++                            86.656698,
++                            114.516032,
++                            154.955743,
++                            55.488172,
++                            46.434755,
++                            69.523796,
++                            48.760111,
++                            130.693487,
++                            182.569945,
++                            46.626669,
++                            50.60771,
++                            31.83775,
++                            62.335816,
++                            101.5229,
++                            128.256942,
++                            24.190249,
++                            44.467373,
++                            38.342163,
++                            76.130395,
++                            114.398773,
++                            154.177861,
++                            42.657787,
++                            42.754869,
++                            40.150285,
++                            81.729225,
++                            140.966642,
++                            15794.701894
++                        ],
++                        [
++                            124.927538,
++                            144.63129,
++                            178.857168,
++                            52.566191,
++                            38.008523,
++                            48.33573,
++                            59.148743,
++                            110.66266,
++                            144.559119,
++                            39.92352,
++                            50.988394,
++                            70.39981,
++                            57.650905,
++                            104.174656,
++                            143.376823,
++                            33.252016,
++                            58.92014,
++                            30.112681,
++                            97.707694,
++                            164.792862,
++                            222.145154,
++                            38.560429,
++                            30.007679,
++                            60.726094,
++                            62.683524,
++                            108.896399,
++                            200.911442,
++                            28.976342,
++                            29.658842,
++                            60.917632,
++                            81.88969,
++                            15513.034449,
++                            16603.915784
++                        ],
++                        [
++                            105.198958,
++                            156.387958,
++                            212.932251,
++                            44.946915,
++                            51.886705,
++                            104.568621,
++                            153.53883,
++                            198.895082,
++                            46.955494,
++                            42.730909,
++                            50.935241,
++                            121.449783,
++                            173.417659,
++                            119.321206,
++                            35.732574,
++                            52.412115,
++                            70.592447,
++                            109.471031,
++                            156.635824,
++                            190.7847,
++                            47.097279,
++                            111.004444,
++                            71.818527,
++                            104.849612,
++                            172.577237,
++                            222.04428,
++                            51.16015,
++                            64.911649,
++                            15997.863425
++                        ],
++                        [
++                            104.571835,
++                            149.040544,
++                            182.042083,
++                            88.37218,
++                            40.824596,
++                            37.548803,
++                            78.194206,
++                            147.986456,
++                            226.964832,
++                            65.13651,
++                            41.116342,
++                            45.424382,
++                            60.155495,
++                            97.895038,
++                            174.216705,
++                            55.984631,
++                            46.361838,
++                            41.778837,
++                            59.731325,
++                            88.644284,
++                            139.586617,
++                            40.025253,
++                            48.207377,
++                            38.648875,
++                            61.119821,
++                            118.095905,
++                            151.852197,
++                            49.518207,
++                            38.711415,
++                            54.464663,
++                            59.247192,
++                            15855.982939
++                        ]
++                    ]
++                }
++            },
++            "warmupIterations": 0,
++            "repeatIterations": 5,
++            "thermalThrottleSleepSeconds": 0
++        },
++        {
++            "name": "coldStartup",
++            "params": {},
++            "className": "com.citrus.citruskds.macrobenchmark.StartupBenchmark",
++            "totalRunTimeNs": 82073988414,
++            "metrics": {
++                "timeToInitialDisplayMs": {
++                    "minimum": 1927.316126,
++                    "maximum": 2562.078626,
++                    "median": 2188.0938340000002,
++                    "runs": [
++                        2240.060876,
++                        2345.483709,
++                        2231.248126,
++                        1963.581125,
++                        2144.939542,
++                        1927.316126,
++                        2347.052251,
++                        2043.468584,
++                        2562.078626,
++                        1944.201334
++                    ]
++                }
++            },
++            "sampledMetrics": {},
++            "warmupIterations": 0,
++            "repeatIterations": 10,
++            "thermalThrottleSleepSeconds": 0
++        }
++    ]
++}
+\ No newline at end of file
+diff --git a/scripts/lumos b/scripts/lumos
+index 0162124a..9890b1cf 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39346,20 +39346,284 @@ def _compose_metrics_mode(repo, as_json, update_baseline, audit=False):
+                 print(f"  [new-non-skippable] {r['module']}/{r['name']}")
+             else:
+                 print(f"  [aggregate] {r['module']} {r['metric']} {r['baseline']}→{r['current']}")
+         if baseline_missing:
+             print("notice: baseline not found — run --update-baseline to establish")
+         if new_modules:
+             print(f"notice: new modules (not in baseline): {', '.join(new_modules)}")
+     return 0
+ 
+ 
++MACROBENCH_DEFAULTS = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_better": [], "ignore_metrics": ["frameCount"]}
++MACROBENCH_SAMPLED_JUDGED = ("P50", "P90")   # 滑動類只有百分位:這兩個過容差算退步
++MACROBENCH_SAMPLED_LISTED = ("P99",)         # P99 太吵:變慢只列出,不算退步
++MACROBENCH_ZERO_CROSS = {"frameOverrunMs": "P90"}   # 每幀超時從不大於 0 變成大於 0 = 開始掉幀,不看差幅
++
++
++def _macrobench_config_fields(raw, cfg):
++    """選填欄位驗型別並併進 cfg;回錯誤訊息或 None。"""
++    for k in ("tolerance_pct", "abs_tolerance"):
++        if k in raw:
++            if not _secev_num(raw[k]) or raw[k] <= 0:   # _secev_num:int/float 但不收 JSON 的 true/false
++                return f"macrobench.json 的 {k} 要是大於 0 的數字"
++            cfg[k] = float(raw[k])
++    for k in ("higher_is_better", "ignore_metrics"):
++        if k in raw:
++            if not isinstance(raw[k], list) or not all(isinstance(x, str) for x in raw[k]):
++                return f"macrobench.json 的 {k} 要是指標名稱字串的清單"
++            cfg[k] = list(raw[k])
++    return None
++
++
++def _macrobench_config(repo):
++    """讀 .lumos/macrobench.json。回 (cfg, None) / (None, 錯誤訊息) / (None, None)=沒接。"""
++    import json
++    path = Path(repo) / ".lumos" / "macrobench.json"
++    if not path.exists():
++        return None, None
++    try:
++        raw = json.loads(path.read_text(encoding="utf-8"))
++    except Exception as e:
++        return None, f"macrobench.json 讀不了(JSON 格式壞了?): {e}"
++    if not isinstance(raw, dict):
++        return None, "macrobench.json 最外層要是物件"
++    dirs = raw.get("results_dirs")
++    if not isinstance(dirs, list) or not dirs or not all(isinstance(d, str) and d for d in dirs):
++        return None, "macrobench.json 要有 results_dirs:結果目錄的清單(相對 repo 根目錄的路徑字串)"
++    cfg = dict(MACROBENCH_DEFAULTS, results_dirs=dirs)
++    err = _macrobench_config_fields(raw, cfg)
++    return (None, err) if err else (cfg, None)
++
++
++def _macrobench_read_one(b, ignore):
++    """結果檔裡的一項 benchmark → (情境鍵, metrics, sampled)。格式不對丟 ValueError。
++    情境鍵 = 測試類別#測試名,有參數時再接 [排序後的參數 JSON]。"""
++    import json
++    if not isinstance(b, dict) or not isinstance(b.get("className"), str) or not isinstance(b.get("name"), str):
++        raise ValueError("benchmarks 裡每一項要有 className 與 name")
++    key = f"{b['className']}#{b['name']}"
++    if b.get("params"):
++        key += "[" + json.dumps(b["params"], sort_keys=True, ensure_ascii=False) + "]"
++    metrics, sampled = {}, {}
++    for name, v in (b.get("metrics") or {}).items():
++        if name in ignore:
++            continue
++        if not isinstance(v, dict) or not all(_secev_num(v.get(s)) for s in ("median", "minimum", "maximum")):
++            raise ValueError(f"{key} 的 {name} 缺 median/minimum/maximum")
++        metrics[name] = {s: float(v[s]) for s in ("median", "minimum", "maximum")}
++    for name, v in (b.get("sampledMetrics") or {}).items():
++        if name in ignore:
++            continue
++        stats = {s: float(v[s]) for s in ("P50", "P90", "P95", "P99") if isinstance(v, dict) and _secev_num(v.get(s))}
++        if not all(s in stats for s in MACROBENCH_SAMPLED_JUDGED):
++            raise ValueError(f"{key} 的 {name} 缺 P50/P90")
++        sampled[name] = stats
++    return key, metrics, sampled
++
++
++def _macrobench_read_file(path, ignore):
++    """讀一個 Macrobenchmark 結果檔 → {情境鍵: {device, metrics, sampled}}。格式不對丟 ValueError。"""
++    import json
++    data = json.loads(Path(path).read_text(encoding="utf-8"))
++    if not isinstance(data, dict) or not isinstance(data.get("benchmarks"), list):
++        raise ValueError("最外層要是物件、要有 benchmarks 清單")
++    build = ((data.get("context") or {}).get("build") or {})
++    device = {"model": str(build.get("model", "")), "fingerprint": str(build.get("fingerprint", ""))}
++    out = {}
++    for b in data["benchmarks"]:
++        key, metrics, sampled = _macrobench_read_one(b, ignore)
++        out[key] = {"device": device, "metrics": metrics, "sampled": sampled}
++    return out
++
++
++def _macrobench_collect(repo, cfg):
++    """掃設定的結果目錄底下所有 *-benchmarkData.json(含子目錄;檔名裡套件名的點會被換成底線,不能拼檔名)。
++    回 (entries, failed, n_files);同一個情境出現在兩個檔 → 兩個都不收、記進 failed。"""
++    entries, failed, seen, n_files = {}, [], {}, 0
++    for d in cfg["results_dirs"]:
++        base = Path(repo) / d
++        if not base.is_dir():
++            failed.append({"file": d, "reason": "結果目錄不存在"})
++            continue
++        for f in sorted(base.rglob("*-benchmarkData.json")):
++            n_files += 1
++            rel = os.path.relpath(f, repo)
++            try:
++                got = _macrobench_read_file(f, set(cfg["ignore_metrics"]))
++            except Exception as e:
++                failed.append({"file": rel, "reason": f"讀不了:{e}"})
++                continue
++            for k, v in got.items():
++                if k in seen:
++                    failed.append({"file": rel, "reason": f"{k} 也出現在 {seen[k]},兩份都不收"})
++                    entries.pop(k, None)
++                    continue
++                seen[k] = rel
++                entries[k] = v
++    return entries, failed, n_files
++
++
++def _macrobench_worse(metric, base, cur, cfg):
++    """回 (變差了多少, 容差);變快或持平時差值 ≤ 0。基準 ≤ 0 時用基準的絕對值算容差,基準是 0 用絕對容差。"""
++    delta = (base - cur) if metric in cfg["higher_is_better"] else (cur - base)
++    tol = abs(base) * cfg["tolerance_pct"] / 100.0 if base != 0 else cfg["abs_tolerance"]
++    return delta, tol
++
++
++def _macrobench_cmp_metrics(key, base, cur, cfg, res):
++    """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步。"""
++    for metric, c in sorted(cur["metrics"].items()):
++        b = (base.get("metrics") or {}).get(metric)
++        if not b:
++            continue
++        delta, tol = _macrobench_worse(metric, b["median"], c["median"], cfg)
++        outside = c["median"] < b["minimum"] if metric in cfg["higher_is_better"] else c["median"] > b["maximum"]
++        if delta > tol and outside:
++            res["regressions"].append({"key": key, "metric": metric, "stat": "median",
++                                       "baseline": b["median"], "current": c["median"], "delta": delta})
++
++
++def _macrobench_cmp_sampled(key, base, cur, cfg, res):
++    """滑動類(只有百分位):P50/P90 過容差算退步,P99 只列出;每幀超時跨零不看差幅。"""
++    for metric, c in sorted(cur["sampled"].items()):
++        b = (base.get("sampled") or {}).get(metric)
++        if not b:
++            continue
++        for stat in MACROBENCH_SAMPLED_JUDGED + MACROBENCH_SAMPLED_LISTED:
++            if stat not in b or stat not in c:
++                continue
++            delta, tol = _macrobench_worse(metric, b[stat], c[stat], cfg)
++            crossed = MACROBENCH_ZERO_CROSS.get(metric) == stat and b[stat] <= 0 < c[stat]
++            if not (delta > tol or crossed):
++                continue
++            rec = {"key": key, "metric": metric, "stat": stat, "baseline": b[stat], "current": c[stat], "delta": delta}
++            if crossed:
++                rec["zero_crossed"] = True
++            res["regressions" if stat in MACROBENCH_SAMPLED_JUDGED else "listed"].append(rec)
++
++
++def _macrobench_compare(baseline, current, cfg):
++    """比基準與現況。回 regressions(算退步)、listed(只列出)、new、missing、device_changed、checked。"""
++    res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0}
++    for key in sorted(current):
++        cur = current[key]
++        if key not in baseline:
++            res["new"].append(key)
++            continue
++        base = baseline[key]
++        if base.get("device") != cur["device"]:
++            res["device_changed"].append({"key": key, "baseline": base.get("device"), "current": cur["device"]})
++            continue
++        res["checked"] += 1
++        _macrobench_cmp_metrics(key, base, cur, cfg, res)
++        _macrobench_cmp_sampled(key, base, cur, cfg, res)
++    res["missing"] = sorted(k for k in baseline if k not in current)
++    return res
++
++
++def _macrobench_load_baseline(bpath):
++    """回 (entries, missing, unreadable)。"""
++    import json
++    if not bpath.exists():
++        return {}, True, False
++    try:
++        entries = json.loads(bpath.read_text(encoding="utf-8"))["entries"]
++        if isinstance(entries, dict):
++            return entries, False, False
++    except Exception:
++        pass
++    return {}, False, True
++
++
++def _macrobench_update(bpath, baseline, unreadable, current, failed):
++    """--update-baseline:把這次讀到的蓋進舊基準(讀失敗那幾個檔原本的項目留著)。"""
++    import json
++    for f in failed:
++        print(f"  略過 {f['file']}:{f['reason']}")
++    if not current:
++        print("基準沒更新:這次一個結果檔都沒讀成功(先跑基準測試、確認 results_dirs 指對地方)。")
++        return 0
++    if unreadable:
++        print("基準沒更新:現有的基準檔讀不了,為了不蓋掉它這次不寫。確認不要了就刪掉它再跑一次:")
++        print(f"    rm {bpath}")
++        return 0
++    merged = dict(baseline)
++    merged.update(current)
++    _write_lf(bpath, json.dumps({"version": 1, "entries": merged}, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
++    print(f"基準已更新:這次寫入 {len(current)} 個情境,沿用舊的 {len(merged) - len(current)} 個。")
++    return 0
++
++
++def _macrobench_print(res, cfg):
++    """把比對結果印成給人看的文字。"""
++    if res["baseline_missing"]:
++        print("還沒有基準:這次的結果先存成基準,之後才比得出有沒有變慢:")
++        print("    lumos macrobench --update-baseline")
++    elif res["baseline_unreadable"]:
++        print("基準檔讀不了,這次沒比。修好它,或刪掉後重存基準。")
++    else:
++        _macrobench_print_diff(res, cfg)
++    for f in res["failed"]:
++        print(f"  讀不了 {f['file']}:{f['reason']}")
++
++
++def _macrobench_print_diff(res, cfg):
++    """有基準時的比對結果:變慢、僅列出、換裝置、新出現、沒跑到。"""
++    regs = res["regressions"]
++    print(f"比了 {res['checked']} 個情境,{len(regs)} 項變慢(容差 {cfg['tolerance_pct']:g}%;只提醒,不擋推送)。")
++    for r in regs:
++        why = "從準時變成掉幀" if r.get("zero_crossed") else f"慢了 {r['delta']:.1f}"
++        print(f"  [變慢] {r['key']} {r['metric']} {r['stat']}:{r['baseline']:.1f} → {r['current']:.1f}({why})")
++    for r in res["listed"]:
++        print(f"  [僅列出] {r['key']} {r['metric']} {r['stat']}:{r['baseline']:.1f} → {r['current']:.1f}(P99 浮動大,不算退步)")
++    for d in res["device_changed"]:
++        print(f"  [換了裝置,沒比] {d['key']}:基準是 {d['baseline'].get('model')},這次是 {d['current'].get('model')}")
++    if res["new"]:
++        print(f"  基準裡沒有、這次新出現的情境:{', '.join(res['new'])}")
++    if res["missing"]:
++        print(f"  基準裡有、這次沒跑到的情境:{', '.join(res['missing'])}")
++    if regs:
++        print("確認是刻意的變慢(例如加了功能),用這次的結果覆蓋基準:")
++        print("    lumos macrobench --update-baseline")
++
++
++def _macrobench_mode(repo, as_json, update_baseline):
++    """lumos macrobench:讀專案自己跑出的 Macrobenchmark 結果檔,跟 .lumos/macrobench-baseline.json 比,只報變慢。
++    只提醒:有退步也回 0;設定檔壞了回 2。不跑 Gradle、不接裝置。"""
++    import json
++    cfg, err = _macrobench_config(repo)
++    if err:
++        print(f"擋下:{err}", file=sys.stderr)
++        return 2
++    res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
++           "failed": [], "baseline_missing": False, "baseline_unreadable": False}
++    if cfg is None:
++        if as_json:
++            print(json.dumps(dict(res, configured=False), ensure_ascii=False))
++        else:
++            print("這個專案沒接 Macrobenchmark 退步提醒(沒有 .lumos/macrobench.json),沒有東西可比。")
++        return 0
++    current, failed, n_files = _macrobench_collect(repo, cfg)
++    bpath = Path(repo) / ".lumos" / "macrobench-baseline.json"
++    baseline, missing, unreadable = _macrobench_load_baseline(bpath)
++    if update_baseline:
++        return _macrobench_update(bpath, baseline, unreadable, current, failed)
++    res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
++    if not missing and not unreadable:
++        res.update(_macrobench_compare(baseline, current, cfg))
++    if as_json:
++        print(json.dumps(dict(res, configured=True, files=n_files), ensure_ascii=False))
++    else:
++        _macrobench_print(res, cfg)
++    return 0
++
++
+ def _lint_watch_mode(repo_root, as_json):
+     """lumos lint-watch: 讀 .lumos/lint-watch.json、逐條查 registry、輸出 manifest。
+     rc 0 = 成功(含空清單); rc 2 = config 格式錯誤。
+     """
+     import json
+     cfg_path = Path(repo_root) / ".lumos" / "lint-watch.json"
+     if not cfg_path.exists():
+         entries = []
+     else:
+         try:
+@@ -64697,20 +64961,21 @@ HELP_WHEN = {
+     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
+     "spec-freeze": "設計審派工前凍結計劃:計劃在會談目錄時敲 `lumos spec-freeze <計劃> --out governance/review-reports/<編號>/rN-snapshot.md`;計劃在別的工作樹時,先在那裡敲 `lumos spec-freeze <計劃>`(不帶 --out,只建不掛分支的提交、印那一行),再回會談目錄敲 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md`。印的那行 `LUMOS-SPEC: <完整提交編號>:<路徑>` 貼進派工詞(只對 Claude 編排有效)。不動分支、ref 與 index;--out 只收執行所在 repo 的 governance/review-reports/ 底下,已存在而且內容不同就拒絕。",
+     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀,合約行原文附上、隱藏字元轉成看得見的寫法;base 不在主線→rc4 放行)。",
+     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
+     "approve": "刻意改了驗證器,重算指紋寫回基準線並留理由。",
+     "quote-check": "審查報告的引句是不是真的在凍結快照裡;錨不到的不採信。",
+     "link-candidates": "哪些 code 沒有任何筆記連到它,列候選;要不要補由人裁。",
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
++    "macrobench": "Android 專案跑完 Macrobenchmark 後:啟動時間、滑動每幀耗時有沒有比基準變慢(只提醒,不擋)。",
+     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
+     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
+     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
+     "note-audit prepare": "推送前要審新寫的筆記時:算出這段範圍還沒被判定涵蓋的行,切成清單檔(每份最多 150 行)給判定者。",
+     "note-audit record": "判定者交回報告後:照信任方向逐行收進判定檔(重的照收、輕的要來源對、上下文沒變才收)。",
+     "note-audit check": "推之前自己先查一次:這段推送新寫的筆記行是不是都被已提交的判定涵蓋了(沒有就 rc1)。",
+     "note-audit skip": "真的來不及審時:把從沒被判過的行記成略過(要理由、會留帳;判過推得出的不能略過)。",
+     "test-durations refresh": "CI 各份測試又不平均時、或每月一次:把 .lumos/test-durations-run*.json 的實測秒數合進 governance/test-durations.json,讀完刪掉。",
+     "note-audit reread-prepare": "推送前回頭重讀守檔筆記:這次改到的程式檔的家、而且這次也改過的筆記,每篇出一份項目檔給判定者問「哪幾行被這次改動弄得不成立了」。",
+     "note-audit reread-record": "判定者交回報告後:把點出的行記成對照紀錄(governance/reread-verdicts/,提交才算)。",
+@@ -65778,20 +66043,25 @@ def main():
+     p = sub.add_parser("lint-watch", help="依賴版本落差掃描(vault-free):讀 .lumos/lint-watch.json 對比 registry 最新版")
+     p.add_argument("--repo", dest="lint_watch_repo", default=".", help="repo root(含 .lumos/lint-watch.json 的資料夾,預設 .)")
+     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
+ 
+     p = sub.add_parser("compose-metrics", help="Compose 可組合指標回歸掃描(vault-free):讀 .lumos/compose-metrics.json 比對 baseline")
+     p.add_argument("--repo", dest="compose_metrics_repo", default=".", help="repo root(含 .lumos/compose-metrics.json 的資料夾,預設 .)")
+     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
+     p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
+     p.add_argument("--audit", action="store_true", help="無視 baseline,盤點當下全部 non-skippable composable(初次採用/現況全景)")
+ 
++    p = sub.add_parser("macrobench", help="Macrobenchmark 退步提醒(vault-free):讀 .lumos/macrobench.json 指的結果目錄,跟基準比,只報變慢")
++    p.add_argument("--repo", dest="macrobench_repo", default=".", help="repo 根目錄(含 .lumos/macrobench.json 的資料夾,預設 .)")
++    p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON")
++    p.add_argument("--update-baseline", action="store_true", help="用這次的結果更新基準(讀不了的檔跳過,它們原本的項目保留)")
++
+     cc = sub.add_parser("cochange", help="co-change 漏改守衛(vault-free):git 歷史挖共改規則,commit 時警告漏改夥伴(advisory)")
+     ccsub = cc.add_subparsers(dest="cccmd", required=True)
+     ccr = ccsub.add_parser("rules", help="列告警規則集(預設套 config 門檻;--all 解除 confidence 門檻)")
+     ccr.add_argument("--all", action="store_true", dest="coch_all",
+                      help="解除 confidence 門檻(support 硬底線 2 仍全域生效)")
+     ccr.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     ccr.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+     ccc = ccsub.add_parser("check", help="對變更集比對規則列漏改警告(advisory rc0;git 失敗 rc2)")
+     ccc.add_argument("--staged", action="store_true", dest="coch_staged", help="變更集=git staged")
+     ccc.add_argument("--diff", dest="coch_diff", default=None, metavar="A..B",
+@@ -66122,20 +66392,22 @@ def main():
+         return cmd_python_path()
+     if args.cmd == "events":
+         return cmd_events(repo=args.ev_repo, session=args.ev_session, as_json=args.ev_json,
+                           prune=args.ev_prune, days=args.ev_days)
+     if args.cmd == "enforcement":
+         return cmd_enforcement(repo=args.enf_repo, as_json=args.enf_json)
+     if args.cmd == "lint-watch":
+         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
+     if args.cmd == "compose-metrics":
+         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
++    if args.cmd == "macrobench":
++        return _macrobench_mode(args.macrobench_repo, args.as_json, args.update_baseline)
+     if args.cmd == "cochange":
+         if args.cccmd == "rules":
+             return cmd_cochange_rules(repo=args.coch_repo, show_all=args.coch_all,
+                                       as_json=args.coch_json)
+         return cmd_cochange_check(repo=args.coch_repo, staged=args.coch_staged,
+                                   diff_range=args.coch_diff, as_json=args.coch_json)
+     if args.cmd == "home":
+         # 兩個同給=用法錯誤(rc2),不靜默選邊(第二輪外家席);寫法同 loop status 的 --light/--panel——
+         # 不用 argparse 的互斥群組:整支工具只有這裡用它,而且它的錯誤訊息是英文(代碼審 r1 架構席)
+         # 用 is None 分「沒給」與「給了空字串」:--diff "" 是範圍寫錯,要走下面範圍判法講對原因(代碼審 r2 邊界席)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c8cd4ac6..66c07fda 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17386,20 +17386,253 @@ def t_compose_metrics_audit():
+     check("audit aggregate", d["aggregate"]["app"]["skippableComposables"]==8, str(d.get("aggregate")))
+     check("audit checked_modules/failed 欄位", d["checked_modules"]==1 and d["failed"]==[], str(d))
+     # 缺 config + --audit → audit 形狀(有 inventory 鍵,非 delta 形狀)
+     root2 = Path(tempfile.mkdtemp(prefix="gctl-cmaudit2-"))
+     ra = sp.run([sys.executable,GRAPHCTL,"compose-metrics","--repo",str(root2),"--audit","--json"],
+                 capture_output=True,text=True)
+     da = json.loads(ra.stdout)
+     check("缺config+audit → audit 形狀(inventory 鍵)", ra.returncode==0 and "inventory" in da and "regressions" not in da, ra.stdout)
+ 
+ 
++def _macrobench_mod():
++    import importlib.util as U
++    from importlib.machinery import SourceFileLoader
++    spec = U.spec_from_file_location("lm", GRAPHCTL, loader=SourceFileLoader("lm", GRAPHCTL))
++    m = U.module_from_spec(spec)
++    spec.loader.exec_module(m)
++    return m
++
++
++_MB_CFG = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_better": [], "ignore_metrics": ["frameCount"]}
++_MB_DEV = {"model": "Pixel Tablet", "fingerprint": "google/tangorpro/tangorpro:14/X/1:user/release-keys"}
++
++
++def _mb_entry(metrics=None, sampled=None, device=None):
++    return {"device": dict(device or _MB_DEV), "metrics": metrics or {}, "sampled": sampled or {}}
++
++
++def t_macrobench_regression_needs_both():
++    """啟動類指標(有 median/min/max)要同時過兩道才算退步:中位數慢超過容差,而且比基準最大值還慢。
++    預期值手算:基準中位數 1000、容差 10% → 門檻 1100。"""
++    m = _macrobench_mod()
++    k = "pkg.StartupBenchmark#coldStartup"
++    base = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1050.0}})}
++    def run(cur_median, base_entries=base):
++        cur = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": cur_median, "minimum": cur_median, "maximum": cur_median}})}
++        return m._macrobench_compare(base_entries, cur, _MB_CFG)
++    r = run(1120.0)
++    regs = r["regressions"]
++    check("1120 > 1100 且 > 最大值 1050 → 退步", len(regs) == 1 and regs[0]["metric"] == "timeToInitialDisplayMs", str(r))
++    check("退步附基準值與現值", regs and regs[0]["baseline"] == 1000.0 and regs[0]["current"] == 1120.0, str(regs))
++    check("變快 900 → 不算", run(900.0)["regressions"] == [], str(run(900.0)))
++
++
++def t_macrobench_single_gate_not_enough():
++    """只過其中一道不算退步。手算:基準中位數 1000、容差 10% → 門檻 1100。"""
++    m = _macrobench_mod()
++    k = "pkg.StartupBenchmark#coldStartup"
++    def run(cur_median, lo, hi):
++        b = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": lo, "maximum": hi}})}
++        c = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": cur_median, "minimum": cur_median, "maximum": cur_median}})}
++        return m._macrobench_compare(b, c, _MB_CFG)["regressions"]
++    check("前置:1120 對窄基準(最大 1050)是退步", len(run(1120.0, 950.0, 1050.0)) == 1, "")
++    check("1080 超出最大值 1050 但沒過容差 1100 → 不算", run(1080.0, 950.0, 1050.0) == [], "")
++    check("1200 過容差但仍在基準浮動範圍(最大 1300)內 → 不算", run(1200.0, 800.0, 1300.0) == [], "")
++
++
++def t_macrobench_device_mismatch_skips():
++    """換了裝置(型號或系統指紋不同)整項不比,只列出來。對照組:同裝置同數字一定是退步,證明情境成立。"""
++    m = _macrobench_mod()
++    k = "pkg.StartupBenchmark#coldStartup"
++    base = {k: _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1050.0}})}
++    slow = {"timeToInitialDisplayMs": {"median": 3000.0, "minimum": 3000.0, "maximum": 3000.0}}
++    same = m._macrobench_compare(base, {k: _mb_entry(metrics=slow)}, _MB_CFG)
++    check("前置:同裝置慢三倍 → 退步", len(same["regressions"]) == 1, str(same))
++    other_fp = dict(_MB_DEV, fingerprint="google/tangorpro/tangorpro:15/Y/2:user/release-keys")
++    r = m._macrobench_compare(base, {k: _mb_entry(metrics=slow, device=other_fp)}, _MB_CFG)
++    check("指紋不同 → 不比、不報退步", r["regressions"] == [], str(r))
++    check("指紋不同 → 列在 device_changed", [d["key"] for d in r["device_changed"]] == [k], str(r))
++    other_model = dict(_MB_DEV, model="SM-T220")
++    r2 = m._macrobench_compare(base, {k: _mb_entry(metrics=slow, device=other_model)}, _MB_CFG)
++    check("型號不同 → 列在 device_changed", r2["regressions"] == [] and len(r2["device_changed"]) == 1, str(r2))
++
++
++def t_macrobench_higher_is_better():
++    """設定為越大越好的指標反過來判:變小才是退步。對照組:同一組數字放在越小越好時,判斷要相反。"""
++    m = _macrobench_mod()
++    k = "pkg.X#y"
++    base = {k: _mb_entry(metrics={"opsPerSec": {"median": 100.0, "minimum": 95.0, "maximum": 105.0}})}
++    hib = dict(_MB_CFG, higher_is_better=["opsPerSec"])
++    def cur(v):
++        return {k: _mb_entry(metrics={"opsPerSec": {"median": v, "minimum": v, "maximum": v}})}
++    check("越大越好:85(< 90 且 < 最小 95)→ 退步", len(m._macrobench_compare(base, cur(85.0), hib)["regressions"]) == 1, "")
++    check("越大越好:120 → 不算", m._macrobench_compare(base, cur(120.0), hib)["regressions"] == [], "")
++    check("對照:越小越好時 120 → 退步", len(m._macrobench_compare(base, cur(120.0), _MB_CFG)["regressions"]) == 1, "")
++    check("對照:越小越好時 85 → 不算", m._macrobench_compare(base, cur(85.0), _MB_CFG)["regressions"] == [], "")
++
++
++def t_macrobench_nonpositive_baseline():
++    """基準是負數或零時不除以零、方向不反。每幀超時(frameOverrunMs)負的代表準時。
++    手算:基準 P50 -10、容差 10% → 允許慢 1ms;基準 0 → 用絕對容差 1ms。"""
++    m = _macrobench_mod()
++    k = "pkg.Scroll#scroll"
++    def cmp(base_p50, cur_p50, metric="frameOverrunMs"):
++        b = {k: _mb_entry(sampled={metric: {"P50": base_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
++        c = {k: _mb_entry(sampled={metric: {"P50": cur_p50, "P90": -50.0, "P95": -40.0, "P99": -30.0}})}
++        return [x for x in m._macrobench_compare(b, c, _MB_CFG)["regressions"] if x["stat"] == "P50"]
++    check("-10 → -12 是變快 → 不算", cmp(-10.0, -12.0) == [], str(cmp(-10.0, -12.0)))
++    check("-10 → -9.5 慢 0.5 < 1 → 不算", cmp(-10.0, -9.5) == [], str(cmp(-10.0, -9.5)))
++    check("-10 → -8.5 慢 1.5 > 1 → 退步", len(cmp(-10.0, -8.5)) == 1, str(cmp(-10.0, -8.5)))
++    check("基準 0 → 0.5 未過絕對容差 1 → 不算", cmp(0.0, 0.5, "frameDurationCpuMs") == [], "")
++    check("基準 0 → 1.5 過絕對容差 → 退步", len(cmp(0.0, 1.5, "frameDurationCpuMs")) == 1, "")
++
++
++def t_macrobench_sampled_percentiles():
++    """滑動類指標只有百分位:P50、P90 過容差算退步;P99 太吵只列出。手算:P90 基準 20 → 門檻 22。"""
++    m = _macrobench_mod()
++    k = "pkg.Scroll#scroll"
++    base = {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": 10.0, "P90": 20.0, "P95": 30.0, "P99": 40.0}})}
++    def cur(p50, p90, p99):
++        return {k: _mb_entry(sampled={"frameDurationCpuMs": {"P50": p50, "P90": p90, "P95": 30.0, "P99": p99}})}
++    r = m._macrobench_compare(base, cur(10.0, 20.0, 60.0), _MB_CFG)
++    check("只有 P99 變慢 → 不算退步", r["regressions"] == [], str(r))
++    check("只有 P99 變慢 → 列在 listed", [(x["stat"], x["current"]) for x in r["listed"]] == [("P99", 60.0)], str(r))
++    r2 = m._macrobench_compare(base, cur(10.0, 23.0, 40.0), _MB_CFG)
++    check("P90 23 > 22 → 退步", [(x["metric"], x["stat"]) for x in r2["regressions"]] == [("frameDurationCpuMs", "P90")], str(r2))
++    r3 = m._macrobench_compare(base, cur(10.5, 20.0, 40.0), _MB_CFG)
++    check("P50 10.5 < 11 → 不算", r3["regressions"] == [], str(r3))
++    r4 = m._macrobench_compare(base, cur(11.5, 20.0, 40.0), _MB_CFG)
++    check("P50 11.5 > 11 → 退步", [x["stat"] for x in r4["regressions"]] == ["P50"], str(r4))
++
++
++def t_macrobench_overrun_crosses_zero():
++    """每幀超時 P90 從不大於 0 變成大於 0(開始掉幀)不看差幅就算退步。
++    選基準 0 → 0.5:差幅 0.5 沒過絕對容差 1,所以只有「跨零」這條會讓它成立。"""
++    m = _macrobench_mod()
++    k = "pkg.Scroll#scroll"
++    def cmp(metric, base_p90, cur_p90):
++        b = {k: _mb_entry(sampled={metric: {"P50": -20.0, "P90": base_p90, "P95": 5.0, "P99": 9.0}})}
++        c = {k: _mb_entry(sampled={metric: {"P50": -20.0, "P90": cur_p90, "P95": 5.0, "P99": 9.0}})}
++        return [x for x in m._macrobench_compare(b, c, _MB_CFG)["regressions"] if x["stat"] == "P90"]
++    check("frameOverrunMs P90 0 → 0.5 跨零 → 退步", len(cmp("frameOverrunMs", 0.0, 0.5)) == 1, str(cmp("frameOverrunMs", 0.0, 0.5)))
++    check("對照:別的指標 0 → 0.5 → 不算", cmp("frameDurationCpuMs", 0.0, 0.5) == [], "")
++    check("frameOverrunMs P90 0.2 → 0.21 本來就正的、差 0.01 沒過容差 0.02 → 不算", cmp("frameOverrunMs", 0.2, 0.21) == [], "")
++
++
++def _mb_result_json(benchmarks, model="Pixel Tablet", fingerprint="fp-1"):
++    """照 2026-10-21 KDS 實跑結果檔的形狀造假檔(只放讀取器會用到的欄位)。"""
++    import json
++    return json.dumps({"context": {"build": {"brand": "google", "device": "d", "fingerprint": fingerprint,
++                                             "model": model, "version": {"sdk": 34}}},
++                       "benchmarks": benchmarks})
++
++
++def _mb_startup(cls, median, lo, hi):
++    return {"name": "coldStartup", "params": {}, "className": cls,
++            "metrics": {"timeToInitialDisplayMs": {"minimum": lo, "maximum": hi, "median": median, "runs": [median]}},
++            "sampledMetrics": {}}
++
++
++def _mb_run(root, *args):
++    import subprocess as sp
++    return sp.run([sys.executable, GRAPHCTL, "macrobench", "--repo", str(root), *args], capture_output=True, text=True)
++
++
++def t_macrobench_reads_real_kds_file():
++    """拿 2026-10-21 Citrus_KDS 在模擬器上真跑出來的結果檔:檔名裡套件名的點變底線、放在子目錄。
++    預期值是當天直接從該檔讀出來的數字(不是用讀取器算的)。"""
++    import json, shutil, tempfile
++    real = Path(GRAPHCTL).resolve().parent.parent / "governance" / "research" / "macrobench" / "2026-10-21-kds-emulator-benchmarkData.json"
++    check("前置:真結果檔在 repo 裡", real.exists(), str(real))
++    if not real.exists():
++        return
++    with tempfile.TemporaryDirectory(prefix="gctl-mbreal-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        out = root / "app-bench" / "build" / "outputs" / "connected" / "emu"
++        out.mkdir(parents=True)
++        shutil.copy(real, out / "com_citrus_citruskds_macrobenchmark-benchmarkData.json")
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["app-bench/build/outputs"]}), encoding="utf-8")
++        ru = _mb_run(root, "--update-baseline")
++        check("真檔 update-baseline rc0", ru.returncode == 0, ru.stdout + ru.stderr)
++        bp = root / ".lumos" / "macrobench-baseline.json"
++        check("真檔 update-baseline 有寫出基準檔", bp.exists(), ru.stdout)
++        bl = json.loads(bp.read_text(encoding="utf-8")).get("entries", {}) if bp.exists() else {}
++        st = bl.get("com.citrus.citruskds.macrobenchmark.StartupBenchmark#coldStartup", {})
++        check("啟動中位數照真檔", st.get("metrics", {}).get("timeToInitialDisplayMs", {}).get("median") == 2188.0938340000002, str(st)[:300])
++        sc = bl.get("com.citrus.citruskds.macrobenchmark.OrderScrollBenchmark#scrollMainOrders", {})
++        check("每幀超時 P90 照真檔", sc.get("sampled", {}).get("frameOverrunMs", {}).get("P90") == 213.84345389999996, str(sc)[:300])
++        check("裝置型號照真檔", st.get("device", {}).get("model") == "sdk_gphone64_arm64", str(st.get("device")))
++        r = _mb_run(root, "--json")
++        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++        check("同一份檔跟自己比 → 0 退步、2 項都比到", r.returncode == 0 and d.get("regressions") == [] and d.get("checked") == 2, r.stdout[:400])
++
++
++def t_macrobench_update_baseline_skips_failed():
++    """--update-baseline 只用解析成功的檔;壞檔不能把既有基準清掉。全部壞掉時基準檔一個位元組都不動。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-mbupd-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        res = root / "out"
++        res.mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
++        old = {"version": 1, "entries": {"pkg.Old#kept": {"device": {"model": "m", "fingerprint": "f"},
++                                                           "metrics": {"timeToInitialDisplayMs": {"median": 1.0, "minimum": 1.0, "maximum": 1.0}},
++                                                           "sampled": {}}}}
++        bpath = root / ".lumos" / "macrobench-baseline.json"
++        bpath.write_text(json.dumps(old), encoding="utf-8")
++        (res / "a-benchmarkData.json").write_text(_mb_result_json([_mb_startup("pkg.New", 500.0, 480.0, 520.0)]), encoding="utf-8")
++        (res / "b-benchmarkData.json").write_text("{ not json", encoding="utf-8")
++        ru = _mb_run(root, "--update-baseline")
++        check("部分壞檔 update rc0", ru.returncode == 0, ru.stdout + ru.stderr)
++        entries = json.loads(bpath.read_text(encoding="utf-8")).get("entries", {})
++        check("新檔的項目寫進基準", entries.get("pkg.New#coldStartup", {}).get("metrics", {}).get("timeToInitialDisplayMs", {}).get("median") == 500.0, str(entries))
++        check("既有項目沒被清掉", "pkg.Old#kept" in entries, str(entries))
++        check("壞檔有說出來", "b-benchmarkData.json" in ru.stdout, ru.stdout)
++        (res / "a-benchmarkData.json").write_text("[]", encoding="utf-8")
++        before = bpath.read_bytes()
++        ru2 = _mb_run(root, "--update-baseline")
++        check("全部壞掉 → rc0 且基準檔不動", ru2.returncode == 0 and bpath.read_bytes() == before, ru2.stdout)
++
++
++def t_macrobench_exit_codes():
++    """設定檔壞掉回 2;沒接(沒設定檔)與有退步都回 0(只提醒,不擋)。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-mbrc-") as td:
++        root = Path(td)
++        r0 = _mb_run(root, "--json")
++        d0 = json.loads(r0.stdout) if r0.stdout.strip().startswith("{") else {}
++        check("沒設定檔 → rc0", r0.returncode == 0 and d0.get("regressions") == [], r0.stdout + r0.stderr)
++        (root / ".lumos").mkdir()
++        cfg = root / ".lumos" / "macrobench.json"
++        for bad, why in (("[]", "最外層陣列"), ("{", "JSON 壞掉"), ('{"tolerance_pct": 10}', "缺 results_dirs"),
++                         ('{"results_dirs": "out"}', "results_dirs 不是陣列"),
++                         ('{"results_dirs": ["out"], "tolerance_pct": "ten"}', "容差不是數字"),
++                         ('{"results_dirs": ["out"], "tolerance_pct": 0}', "容差不是正數")):
++            cfg.write_text(bad, encoding="utf-8")
++            r = _mb_run(root, "--json")
++            check(f"壞設定({why}) → rc2 且說哪裡壞", r.returncode == 2 and "macrobench.json" in r.stderr, f"rc={r.returncode} err={r.stderr!r}")
++        res = root / "out"
++        res.mkdir()
++        cfg.write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
++        f = res / "x-benchmarkData.json"
++        f.write_text(_mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
++        _mb_run(root, "--update-baseline")
++        f.write_text(_mb_result_json([_mb_startup("pkg.S", 2000.0, 1900.0, 2100.0)]), encoding="utf-8")
++        r = _mb_run(root, "--json")
++        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++        check("有退步 → rc0 且列出", r.returncode == 0 and len(d.get("regressions", [])) == 1, r.stdout)
++        rt = _mb_run(root)
++        check("文字輸出有寫退步的情境名", rt.returncode == 0 and "pkg.S#coldStartup" in rt.stdout, rt.stdout)
++
++
+ def t_pitfalls_no_lint():
+     """--no-lint:--diff 只跑 regex 層,即使有 .lumos/lint.json 也不跑 lint(pre-push advisory 用)。"""
+     import json as _json, subprocess as sp, sys as _sys
+     root = Path(tempfile.mkdtemp(prefix="gctl-pfnl-"))
+     def git(*a): sp.run(["git", *a], cwd=root, capture_output=True)
+     git("init"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+     (root / "a.kt").write_text("l1\n", encoding="utf-8")
+     git("add", "-A"); git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "c1")
+     # 假 linter:寫最小 SARIF 到 {LINT_SARIF_OUT}
+     hd = Path(tempfile.mkdtemp(prefix="gctl-pfnl-h-"))

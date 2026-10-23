@@ -1,0 +1,167 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+index 119b7a0c..b0926543 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-handbook.md
+@@ -1,28 +1,29 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-07
+-updated: 2026-10-07
++updated: 2026-10-23
+ responsibility: 固定手冊兩臂試行與證據歸因；只測隔離的小型題目，不推論所有語言或模型
+ self_audit: GPT-6-Codex-clean-agent/2026-10-07
+ aliases: []
+ about_code:
+   - governance/eval/test_quality_handbook.py
+   - governance/eval/test_test_quality_handbook.py
+   - scripts/test_lumos.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/evals
+ summary: |-
+   WHY: 凍結兩臂與題目後才量測手冊效果 [出處:2026-10-07 使用者要求先實驗再決定推送] [因:掃描器考卷通過不能證明模型會讀取或遵循規範]
++  PITFALL:測試造的帳或資料寫死日期、被測指令又只看近 N 天時,日子一過整批掉出窗外,測試在沒人改程式的那天突然翻紅 [出處:2026-10-23 t_gov_denoise 與 t_gov_adversarial_increment 同天翻紅,帳日期 2026-07-24、gov 預設近 90 天] [根因:測試資料用絕對日期,被測行為用相對今天的時間窗] [修法:測試日期一律取今天往前幾天] [test:t_gov_denoise]
+ related:
+   - "[[Systems/test-quality-scan]]"
+ verified_by:
+   - "[[Verification/2026-10-07_測試手冊措辭兩臂試行]]"
+   - "[[Verification/2026-10-07_手冊人工推導與原生路由重驗]]"
+   - "[[Verification/測試品質分支推送前修復驗證]]"
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
+   - "[[Verification/測試品質第四輪修補驗證]]"
+ ---
+ # test-quality-handbook
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index fb89a889..02e0c282 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,20 +1,20 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "648961e9c1a1fa42cd46532697c527403c3b16b83b3c77e3305783fdb1195357",
++    "scripts/test_lumos.py": "81d54bb8b537bba276d960f8b9e78be0b3b9aec6eb69a2249eda8de3d504967c",
+     "scripts/test_autonomous_loop.py": "75acae20cfd1c4972fe29803a096428a5c50fb9be9f9287b055ebc4d2b4211e4",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+     "scripts/hooks/pre-push": "26cdcf13d70e4b7c2ed308e112c4582dee080f51d12e0406d6381a079f19a948",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "c00b0348adcd608878ae08c854466e58f5ca25c6f18ceb3dab7fe848886d3163",
+     "scripts/hooks/claude/lumos-entry-hook.py": "12be2d1869549c79d7eb80b0d20d50b69af4d4ab577240b3d142b4e0633bbbe8",
+     "scripts/hooks/claude/impact-hook.py": "9e57da8a678024f249d722530301a513e6ce084d1fd362fe6eea5c32ae42f4cc",
+     "scripts/hooks/claude/check-graph-sync.py": "f6f32f64fb24377b9b9a8c249dc16ee68a2ee32f6b91871d030c0b5e195520d6",
+     "scripts/hooks/claude/ci-status-hook.py": "9ec8b67e6d458248c7a40e675795e3b05d0085caa574e196e615de966ae4147c",
+     "scripts/hooks/claude/memory-sweep.py": "a3c41509100e5043fcb02b4e378be9ab8ce2701447b6783d79ef2aaaee6c9f4c",
+     "scripts/hooks/claude/bypass-ask-hook.py": "7a1e1bb9fd5b7b262ecba3823d4e21836e91899df8cdc7a4b634d4a3fd775f4d",
+     "scripts/hooks/claude/_hookevent.py": "034bfe001290469a71c9a8d7b702b8e98afc9ec76fe826509b158a97675e187f"
+   },
+-  "approved_at": "2026-10-23T11:36:47+08:00",
+-  "note": "新增 macrobench 指令的 13 支測試(含實機結果檔比對),過四輪代碼審"
++  "approved_at": "2026-10-23T16:57:00+08:00",
++  "note": "兩支 gov 測試的帳本日期改成相對今天,修 2026-10-23 起超出 90 天窗口的定時炸彈"
+ }
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2a90adec..08e7ddaf 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -3811,55 +3811,59 @@ def t_search_structure_aware():
+     r = run(v, "search", "widget", expect_rc=0)
+     check("search 排除 code block(預設)", "widget in code block" not in r.stdout, r.stdout)
+     check("search 區域標記 ★INVARIANT★", "[★INVARIANT★]" in r.stdout, r.stdout)
+     check("search 區域標記 body", "[body]" in r.stdout, r.stdout)
+     # --code 才含 code block 那行
+     rc = run(v, "search", "widget", "--code", expect_rc=0)
+     check("search --code 含 code block 內容", "widget in code block" in rc.stdout, rc.stdout)
+ 
+ 
+ # ── gov 去噪:同日同類 advisory 折疊+大群組摘要+--full 逃生(帳不動只動呈現) ──
++# gov 預設只看近 90 天:測試帳的日期寫死會隨日子過去掉出窗外(2026-10-23 兩支同天翻紅),一律取今天往前幾天
++_GOV_D = (__import__("datetime").date.today() - __import__("datetime").timedelta(days=5)).isoformat()
++
++
+ def t_gov_denoise():
+     import json as _j
+     # 私有巢狀結構(root/docs/x-knowledge):gov 讀 vault.parent 當帳目錄——
+     # 不可用 mkvault()(standalone,parent=共用系統 tmp,寫帳會污染他測跨執行讀的同名檔)
+     root = Path(tempfile.mkdtemp(prefix="gctl-gov-"))
+     v = root / "docs" / "x-knowledge"
+     for sub in ("Systems", "MOC"):
+         (v / sub).mkdir(parents=True)
+     (v / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+     write(v, "Systems/A.md", "type: system\nstatus: done", body="# A\n")
+     docs = v.parent
+     rows = []
+     # 3 次 doctor 各記同一批 10 節點的 check-s(不同 commit)→ 舊版 30 行噪音
+     for c in ("c1", "c2", "c3"):
+         for i in range(10):
+-            rows.append({"ts": "2026-07-24T10:00:00+08:00", "commit": c, "gate": "check-s",
++            rows.append({"ts": f"{_GOV_D}T10:00:00+08:00", "commit": c, "gate": "check-s",
+                          "kind": "warned", "hard": False, "nodes": [f"node{i}"]})
+     (docs / ".governance-log.jsonl").write_text(
+         "\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+     (docs / ".canary-log.jsonl").write_text(_j.dumps(
+-        {"ts": "2026-07-24T11:00:00+08:00", "kind": "caught", "token": "tk1",
++        {"ts": f"{_GOV_D}T11:00:00+08:00", "kind": "caught", "token": "tk1",
+          "loop": "demo", "severity": "minor", "auditor": "sonnet", "note": "r1"}) + "\n",
+         encoding="utf-8")
+     r = run(v, "gov", expect_rc=0)
+-    body = [l for l in r.stdout.splitlines() if l.startswith("2026-")]
++    body = [l for l in r.stdout.splitlines() if l.startswith(_GOV_D[:5])]
+     check("gov 去噪: 30 筆 advisory 折成 1 摘要行+1 canary", len(body) == 2, f"{len(body)} 行\n" + r.stdout[:400])
+     check("gov 去噪: 摘要行含節點數與次數", "10 節點" in r.stdout and "×3" in r.stdout, r.stdout[:300])
+     check("gov 去噪: canary 逐筆保留(不折)", "loop=demo" in r.stdout, r.stdout[:300])
+     # --full 逃生:回完整帳(30 advisory+1 canary=31 行)
+     rf = run(v, "gov", "--full", expect_rc=0)
+-    bodyf = [l for l in rf.stdout.splitlines() if l.startswith("2026-")]
++    bodyf = [l for l in rf.stdout.splitlines() if l.startswith(_GOV_D[:5])]
+     check("gov --full: 完整帳 31 行", len(bodyf) == 31, f"{len(bodyf)} 行")
+     # 少量同類(≤6 節點)不收摘要、但同日跨 commit 仍折 ×N
+     (docs / ".governance-log.jsonl").write_text(
+-        "\n".join(_j.dumps({"ts": "2026-07-24T10:00:00+08:00", "commit": c, "gate": "check-s",
++        "\n".join(_j.dumps({"ts": f"{_GOV_D}T10:00:00+08:00", "commit": c, "gate": "check-s",
+                             "kind": "warned", "hard": False, "nodes": ["only1"]})
+                   for c in ("c1", "c2")) + "\n", encoding="utf-8")
+     r2 = run(v, "gov", expect_rc=0)
+     check("gov 去噪: 小群組逐節點列+×2 計次", "only1" in r2.stdout and "×2" in r2.stdout, r2.stdout[:300])
+ 
+ 
+ # ── 真遺忘第二刀:doctor 對 superseded 驗證三面一致(不索回掛/判死背書/不補回) ──
+ def t_doctor_superseded_verification_consistency():
+     v = mkvault()
+     write(v, "Systems/S.md", "type: system\nstatus: done", body="# S\n")
+@@ -3894,29 +3898,29 @@ def t_doctor_superseded_verification_consistency():
+ 
+ 
+ # ── gov 對抗層增量帳:折入缺陷計數(驗證層對自己的驗證;趨零=機關裝飾該砍) ──
+ def t_gov_adversarial_increment():
+     import json as _j
+     root = Path(tempfile.mkdtemp(prefix="gctl-govinc-"))
+     v = root / "docs" / "x-knowledge"
+     (v / "MOC").mkdir(parents=True)
+     (v / "MOC" / "idx.md").write_bytes("---\ntype: moc\n---\n# idx\n".encode("utf-8"))
+     rows = [
+-        {"ts": "2026-07-24T10:00:00+08:00", "kind": "caught", "token": "t1", "loop": "a",
++        {"ts": f"{_GOV_D}T10:00:00+08:00", "kind": "caught", "token": "t1", "loop": "a",
+          "severity": "major", "findings": 4, "auditor": "sonnet", "note": "r1"},
+-        {"ts": "2026-07-24T11:00:00+08:00", "kind": "caught", "token": "t2", "loop": "a",
++        {"ts": f"{_GOV_D}T11:00:00+08:00", "kind": "caught", "token": "t2", "loop": "a",
+          "severity": "blocker", "findings": 2, "auditor": "codex", "note": "std"},
+-        {"ts": "2026-07-24T12:00:00+08:00", "kind": "missed", "token": "t3", "loop": "b",
++        {"ts": f"{_GOV_D}T12:00:00+08:00", "kind": "missed", "token": "t3", "loop": "b",
+          "severity": "major", "findings": 5, "auditor": "sonnet", "note": "r1"},  # missed 不計折入
+-        {"ts": "2026-07-24T13:00:00+08:00", "kind": "caught", "token": "t4", "loop": "b",
++        {"ts": f"{_GOV_D}T13:00:00+08:00", "kind": "caught", "token": "t4", "loop": "b",
+          "severity": "clean", "findings": 0, "auditor": "sonnet", "note": "r2"},
+-        {"ts": "2026-07-24T14:00:00+08:00", "kind": "caught", "token": "t5", "loop": "c",
++        {"ts": f"{_GOV_D}T14:00:00+08:00", "kind": "caught", "token": "t5", "loop": "c",
+          "auditor": "sonnet", "note": "舊輪無 findings 欄"},   # M1 前舊資料
+     ]
+     (root / "docs" / ".canary-log.jsonl").write_text(
+         "\n".join(_j.dumps(r) for r in rows) + "\n", encoding="utf-8")
+     r = run(v, "gov", expect_rc=0)
+     check("增量帳: 折入總數=6(caught 之和,missed 不計)", "折入 6" in r.stdout, r.stdout[-500:])
+     check("增量帳: severity 分佈", "blocker 2" in r.stdout and "major 4" in r.stdout, r.stdout[-500:])
+     check("增量帳: 分審計員(codex 2/sonnet 4)",
+           "codex 2" in r.stdout and "sonnet 4" in r.stdout, r.stdout[-500:])
+     check("增量帳: 舊輪無欄誠實註記", "無 findings 欄" in r.stdout or "舊輪不計" in r.stdout, r.stdout[-500:])
