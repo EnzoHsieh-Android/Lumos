@@ -97,7 +97,7 @@ RETIRE-IF: 試跑後另一個不知道對話脈絡的 Agent 只靠節點、收�
 
 manifest 要答得出:哪一版程式(完整 SHA、是否 dirty)、哪個 App 建置(profileable/debuggable)、哪台裝置(實體或模擬器)、哪個情境(資料、步驟、iteration、warmup)、哪套工具與設定(版本、capture config 與 SQL 的雜湊)、哪個 baseline(不能只寫「前版」)、哪些缺口、原始檔在哪與雜湊。
 
-報告沿用官方 skill 的證據標籤:`[MEASURED]` 指得回 SQL、Trace 或 JSON 的數字;`[INFERRED]` 從多筆量測推的可能原因;`[GAP]` 目前資料答不了;`[DECISION]` 人裁的接受標準。
+報告沿用官方 skill 的證據標籤:`[SQL]` 指得回 SQL、Trace 或 JSON 的數字;`[INFERRED]` 從多筆量測推的可能原因;`[GAP]` 目前資料答不了;另加 `[DECISION]` 人裁的接受標準。(2026-10-23 訂正:原稿寫 `[MEASURED]`,官方 skill 95ea931a 實際用 `[SQL]`。)
 
 ## 寫回規則
 
@@ -145,7 +145,8 @@ manifest 要答得出:哪一版程式(完整 SHA、是否 dirty)、哪個 App �
 
 ## 調研邊界
 
-- 官方工具、格式與程式化取得路徑確認存在;在指定 Android 專案與裝置上的實跑只做到 Macrobenchmark 結果檔(模擬器一次,見 [[Projects/Macrobenchmark退步提醒_計劃]] 的〈實測〉)。
+- 官方工具、格式與程式化取得路徑確認存在。
+- 第零階段已在實驗室 App 與實體平板跑完(不是 KDS:KDS 的基準在 Android 16 上跑不起來,見 [[Projects/Macrobenchmark退步提醒_計劃]]〈實機端到端〉),結果見 [[Verification/2026-10-23_Android驗證收據第零階段試跑]];第一階段改成逐層診斷,見 [[Projects/Android逐層診斷_計劃]]。
 - Firebase Test Lab 能不能讓所選裝置與情境完整產生 Macrobenchmark 檔案,本篇沒驗。
 - 消費專案有沒有 LeakCanary、Crashlytics、Play API 或 ProfilingManager,本篇沒查。
 - 本篇沒有宣稱任何 AI 分析結果可以取代產品、資安、隱私或發布的人工作業。

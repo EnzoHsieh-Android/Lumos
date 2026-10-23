@@ -31925,6 +31925,7 @@ _VENDORED_TREE_FILES = (
     "scripts/templates/graph-discipline.md",
     "scripts/templates/note-audit-judge.md",
     "scripts/templates/note-audit-reread.md",     # 回頭重讀守檔筆記的派工詞範本(lumos update 才發得到消費專案)
+    "scripts/templates/android-receipt-rerun.sh",  # 逐層診斷收據的重跑腳本範本(寫收據時複製進收據目錄)
 )
 _VENDORED_ALL = frozenset(_VENDORED_TOOLKIT + _VENDORED_TREE_FILES)
 
@@ -39360,11 +39361,21 @@ MACROBENCH_SAMPLED_LISTED = ("P99",)         # P99 太吵:變慢只列出,不算
 MACROBENCH_ZERO_CROSS = {"frameOverrunMs": "P90"}   # 每幀超時從不大於 0 變成大於 0 = 開始掉幀,不看差幅
 
 
+def _macrobench_num(v):
+    """macrobench 讀到的數字一律用這支:是數字(不收 JSON 的 true/false)而且是有限數。
+    json.loads 收 NaN 與 ±Infinity,不擋的話 NaN 門檻恆判達標、無限大容差永遠不算退步。"""
+    import math
+    try:
+        return _secev_num(v) and math.isfinite(v)
+    except OverflowError:   # JSON 的超大整數讀成 Python int,轉 float 溢位;當成不合格,不要噴例外
+        return False
+
+
 def _macrobench_config_fields(raw, cfg):
     """選填欄位驗型別並併進 cfg;回錯誤訊息或 None。"""
     for k in ("tolerance_pct", "abs_tolerance"):
         if k in raw:
-            if not _secev_num(raw[k]) or raw[k] <= 0:   # _secev_num:int/float 但不收 JSON 的 true/false
+            if not _macrobench_num(raw[k]) or raw[k] <= 0:
                 return f"macrobench.json 的 {k} 要是大於 0 的數字"
             cfg[k] = float(raw[k])
     for k in ("higher_is_better", "ignore_metrics"):
@@ -39408,23 +39419,24 @@ def _macrobench_read_one(b, ignore):
     for name, v in (b.get("metrics") or {}).items():
         if name in ignore:
             continue
-        if not isinstance(v, dict) or not all(_secev_num(v.get(s)) for s in ("median", "minimum", "maximum")):
+        if not isinstance(v, dict) or not all(_macrobench_num(v.get(s)) for s in ("median", "minimum", "maximum")):
             raise ValueError(f"{key} 的 {name} 缺 median/minimum/maximum")
         metrics[name] = {s: float(v[s]) for s in ("median", "minimum", "maximum")}
     for name, v in (b.get("sampledMetrics") or {}).items():
         if name in ignore:
             continue
-        stats = {s: float(v[s]) for s in MACROBENCH_PERCENTILES if isinstance(v, dict) and _secev_num(v.get(s))}
+        stats = {s: float(v[s]) for s in MACROBENCH_PERCENTILES if isinstance(v, dict) and _macrobench_num(v.get(s))}
         if not all(s in stats for s in MACROBENCH_SAMPLED_JUDGED):
             raise ValueError(f"{key} 的 {name} 缺 P50/P90")
         sampled[name] = stats
     return key, metrics, sampled
 
 
-def _macrobench_read_file(path, ignore):
-    """讀一個 Macrobenchmark 結果檔 → {情境鍵: {device, metrics, sampled}}。格式不對丟 ValueError。"""
+def _macrobench_read_file(path, ignore, raw=None):
+    """讀一個 Macrobenchmark 結果檔 → {情境鍵: {device, metrics, sampled}}。格式不對丟 ValueError。
+    raw 給了就用那份 bytes 解析(呼叫端拿同一份算雜湊,兩次讀之間檔案被換掉也對得上)。"""
     import json
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    data = json.loads((Path(path).read_bytes() if raw is None else raw).decode("utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("benchmarks"), list):
         raise ValueError("最外層要是物件、要有 benchmarks 清單")
     build = ((data.get("context") or {}).get("build") or {})
@@ -39439,6 +39451,7 @@ def _macrobench_read_file(path, ignore):
 def _macrobench_collect(repo, cfg):
     """掃設定的結果目錄底下所有 *-benchmarkData.json(含子目錄;檔名裡套件名的點會被換成底線,不能拼檔名)。
     回 (entries, failed, n_files);同一個情境出現在兩個檔 → 兩個都不收、記進 failed。"""
+    import hashlib
     entries, failed, seen, n_files = {}, [], {}, 0
     for d in cfg["results_dirs"]:
         base = Path(repo) / d
@@ -39449,11 +39462,15 @@ def _macrobench_collect(repo, cfg):
             n_files += 1
             rel = os.path.relpath(f, repo)
             try:
-                got = _macrobench_read_file(f, set(cfg["ignore_metrics"]))
+                raw = f.read_bytes()
+                got = _macrobench_read_file(f, set(cfg["ignore_metrics"]), raw)
             except Exception as e:
                 failed.append({"file": rel, "reason": f"讀不了:{e}", "kind": "unreadable"})
                 continue
+            # 存成基準時一起寫進去:之後要找基準那次的 Trace 才知道是哪一次執行(比對不看這欄)
+            src = {"file": Path(rel).as_posix(), "sha256": hashlib.sha256(raw).hexdigest()}
             for k, v in got.items():
+                v["source"] = src
                 if k in seen:
                     failed.append({"file": rel, "reason": f"{k} 重複出現(也在 {seen[k]}),兩份都不收", "kind": "duplicate"})
                     entries.pop(k, None)
@@ -39530,10 +39547,10 @@ def _macrobench_entry_ok(e):
     metrics, sampled = e.get("metrics", {}), e.get("sampled", {})
     if not isinstance(metrics, dict) or not isinstance(sampled, dict):
         return False
-    if not all(isinstance(v, dict) and all(_secev_num(v.get(s)) for s in ("median", "minimum", "maximum"))
+    if not all(isinstance(v, dict) and all(_macrobench_num(v.get(s)) for s in ("median", "minimum", "maximum"))
                for v in metrics.values()):
         return False
-    return all(isinstance(v, dict) and set(v) <= set(MACROBENCH_PERCENTILES) and all(_secev_num(x) for x in v.values())
+    return all(isinstance(v, dict) and set(v) <= set(MACROBENCH_PERCENTILES) and all(_macrobench_num(x) for x in v.values())
                and all(s in v for s in MACROBENCH_SAMPLED_JUDGED) for v in sampled.values())
 
 
@@ -39607,16 +39624,115 @@ def _macrobench_print_diff(res, cfg):
         print("    lumos macrobench --update-baseline")
 
 
+MACROBENCH_METRIC_STATS = ("median", "minimum", "maximum")   # 啟動類指標的統計值
+MACROBENCH_THRESHOLD_REQUIRED = ("scenario", "metric", "stat", "contract", "decided_by", "decided_at")
+
+
+def _macrobench_threshold_item_err(t):
+    """門檻檔的一條:必填欄位、max/min 恰好一個有限數、日期是真的日期、stat 的寫法。回錯誤訊息或 None。"""
+    import datetime
+    if not isinstance(t, dict):
+        return "要是物件"
+    for k in MACROBENCH_THRESHOLD_REQUIRED:
+        if not isinstance(t.get(k), str) or not t[k].strip():
+            return f"缺 {k}(要是非空字串)"
+    bounds = [k for k in ("max", "min") if k in t]
+    if len(bounds) != 1 or not _macrobench_num(t[bounds[0]]):
+        return "max 與 min 要恰好寫一個,值是有限的數字(不收 NaN、Infinity)"
+    try:
+        ok_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", t["decided_at"])) and datetime.date.fromisoformat(t["decided_at"])
+    except ValueError:
+        ok_date = False
+    if not ok_date:
+        return "decided_at 要是真的日期,寫成 YYYY-MM-DD"
+    if t["stat"] not in MACROBENCH_METRIC_STATS + MACROBENCH_PERCENTILES:
+        return f"stat 只能是 {'/'.join(MACROBENCH_METRIC_STATS + MACROBENCH_PERCENTILES)}"
+    if "device_model" in t and not isinstance(t["device_model"], str):
+        return "device_model 要是字串"
+    return None
+
+
+def _macrobench_thresholds(repo):
+    """讀 .lumos/macrobench-thresholds.json(人裁的驗收門檻)。回 (清單, None) / (None, 錯誤訊息);沒有檔回 ([], None)。"""
+    import json
+    path = Path(repo) / ".lumos" / "macrobench-thresholds.json"
+    if not path.exists():
+        return [], None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, f"macrobench-thresholds.json 讀不了(JSON 格式壞了?): {e}"
+    if not isinstance(raw, dict) or not isinstance(raw.get("thresholds"), list):
+        return None, "macrobench-thresholds.json 最外層要是物件、要有 thresholds 清單"
+    for i, t in enumerate(raw["thresholds"], 1):
+        err = _macrobench_threshold_item_err(t)
+        if err:
+            return None, f"macrobench-thresholds.json 第 {i} 條:{err}"
+    return raw["thresholds"], None
+
+
+def _macrobench_check_thresholds(thresholds, current):
+    """每條門檻對這次的結果判:沒達 / 達標 / 沒判(情境或指標沒跑到、換了裝置)。跟基準無關。
+    回 (結果 dict, 錯誤訊息或 None);stat 跟這次結果裡的指標類型不合(例如滑動類寫 median)算門檻檔寫錯。"""
+    out = {"threshold_failures": [], "threshold_passed": [], "threshold_skipped": []}
+    for i, t in enumerate(thresholds, 1):
+        rec = {k: t[k] for k in ("scenario", "metric", "stat", "contract") if k in t}
+        bound = "max" if "max" in t else "min"
+        rec[bound] = t[bound]
+        cur = current.get(t["scenario"])
+        if cur is None:
+            out["threshold_skipped"].append(dict(rec, reason="這次沒跑到這個情境"))
+            continue
+        model = cur["device"].get("model")
+        if "device_model" in t and model != t["device_model"]:
+            out["threshold_skipped"].append(dict(rec, reason=f"換了裝置:門檻指定 {t['device_model']},這次是 {model}"))
+            continue
+        kind = "metrics" if t["metric"] in cur["metrics"] else "sampled" if t["metric"] in cur["sampled"] else None
+        if kind is None:
+            out["threshold_skipped"].append(dict(rec, reason=f"這次結果裡沒有 {t['metric']} 這個指標"))
+            continue
+        allowed = MACROBENCH_METRIC_STATS if kind == "metrics" else MACROBENCH_PERCENTILES
+        if t["stat"] not in allowed:
+            return None, f"macrobench-thresholds.json 第 {i} 條:{t['metric']} 只有 {'/'.join(allowed)},不能用 {t['stat']}"
+        value = cur[kind][t["metric"]].get(t["stat"])
+        if value is None:
+            out["threshold_skipped"].append(dict(rec, reason=f"這次結果裡 {t['metric']} 沒有 {t['stat']}"))
+            continue
+        rec["current"] = value
+        failed = value > t["max"] if bound == "max" else value < t["min"]
+        out["threshold_failures" if failed else "threshold_passed"].append(rec)
+    return out, None
+
+
+def _macrobench_print_thresholds(res):
+    """門檻判定的文字輸出;沒有門檻檔時不印。"""
+    n = sum(len(res[k]) for k in ("threshold_failures", "threshold_passed", "threshold_skipped"))
+    if not n:
+        return
+    fails = res["threshold_failures"]
+    print(f"驗收門檻:{len(fails)} 條沒達、{len(res['threshold_passed'])} 條達標、"
+          f"{len(res['threshold_skipped'])} 條沒判(只提醒,不擋推送)。")
+    for r in fails:
+        op, lim = ("≤", r["max"]) if "max" in r else ("≥", r["min"])
+        print(f"  [沒達驗收門檻] {r['scenario']} {r['metric']} {r['stat']}:{r['current']:.1f}(門檻 {op} {lim:g})")
+        print(f"      合約:{r['contract']}")
+    for r in res["threshold_skipped"]:
+        print(f"  [沒判] {r['scenario']} {r['metric']} {r['stat']}:{r['reason']}")
+
+
 def _macrobench_mode(repo, as_json, update_baseline):
-    """lumos macrobench:讀專案自己跑出的 Macrobenchmark 結果檔,跟 .lumos/macrobench-baseline.json 比,只報變慢。
-    只提醒:有退步也回 0;設定檔壞了回 2。不跑 Gradle、不接裝置。"""
+    """lumos macrobench:讀專案自己跑出的 Macrobenchmark 結果檔,跟 .lumos/macrobench-baseline.json 比,只報變慢;
+    有 .lumos/macrobench-thresholds.json 時另判人裁的驗收門檻。
+    只提醒:有退步或沒達門檻也回 0;設定檔或門檻檔壞了回 2。不跑 Gradle、不接裝置。"""
     import json
     cfg, err = _macrobench_config(repo)
-    if err:
-        print(f"擋下:{err}", file=sys.stderr)
+    thresholds, terr = _macrobench_thresholds(repo)
+    if err or terr:
+        print(f"擋下:{err or terr}", file=sys.stderr)
         return 2
     res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
-           "failed": [], "baseline_missing": False, "baseline_unreadable": False}
+           "failed": [], "baseline_missing": False, "baseline_unreadable": False,
+           "threshold_failures": [], "threshold_passed": [], "threshold_skipped": []}
     if cfg is None:
         if as_json:
             print(json.dumps(dict(res, configured=False), ensure_ascii=False))
@@ -39631,10 +39747,16 @@ def _macrobench_mode(repo, as_json, update_baseline):
     res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
     if not missing and not unreadable:
         res.update(_macrobench_compare(baseline, current, cfg))
+    judged, terr = _macrobench_check_thresholds(thresholds, current)   # 門檻是絕對值,有沒有基準都照判
+    if terr:
+        print(f"擋下:{terr}", file=sys.stderr)
+        return 2
+    res.update(judged)
     if as_json:
         print(json.dumps(dict(res, configured=True, files=n_files), ensure_ascii=False))
     else:
         _macrobench_print(res, cfg)
+        _macrobench_print_thresholds(res)
     return 0
 
 

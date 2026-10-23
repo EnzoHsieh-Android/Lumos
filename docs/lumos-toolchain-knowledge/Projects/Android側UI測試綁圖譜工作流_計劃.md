@@ -182,6 +182,8 @@ inline 跑得通，不代表寫成檔案跑得通——`runFlow` 的相對路徑
 >
 > 而天花板寫的逃生口「取不到裝置→明記未驗＋原因」**接不上 S1**：S1 的退路階梯（退跑檔案級／模組級／全套）是為「指令解析不出來」設計的，對「沒有裝置」完全無效。
 >
+> 2026-10-23 訂正:下面說 pre-push「擋的是留痕而不是真跑」,已過期——綁定測試閘 2026-08-22 起對受波及節點的合約逐支真跑、紅就擋高風險推送,見 [[Systems/bound-tests-gate]];`code-loop skip --note` 與 `bound-tests --skip --note` 的逃生門還在。以下是當時的判讀。
+>
 > ★r2 訂正（F6，opus 席實查）：上面這個「撞裁定」的擔憂**前提是錯的**★——S1 條文自己標明「**紀律層規則非機械閘**」（`skills/lumos-code-loop/SKILL.md:227`），pre-push 硬擋的是「tier=high 沒有 code-loop 留痕」**而不是真跑**，而且它的錯誤訊息直接給第二條出路 `lumos code-loop skip --note "<理由>"`。所以「沒裝置就 push 不了」的死鎖不存在。
 >
 > **本輪裁定（decisions d3，翻盤 d2）**：**什麼都不用改**——綁定照常綁 ★INVARIANT★；有裝置就真跑並記 `pass --note`，沒裝置走既有 `code-loop skip --note` 留痕。d2 原本要改 `lumos-code-loop` skill 加平台例外、還要新造一個「上次實跑留痕」產物，兩者都是為了解一個不存在的死鎖——**PRIOR-ART ① 在 d2 沒重跑，這是本 loop 第二次犯同一型錯**（第一次見審計修正紀錄）。
