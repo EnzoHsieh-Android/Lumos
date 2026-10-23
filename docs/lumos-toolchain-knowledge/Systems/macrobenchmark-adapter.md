@@ -8,6 +8,7 @@ aliases: []
 about_code:
   - scripts/lumos
   - scripts/templates/android-receipt-rerun.sh
+  - scripts/templates/android-ui-attribution.sql
 tags:
   - type/system
   - status/doing
@@ -30,6 +31,7 @@ verified_by:
   - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
   - "[[Verification/2026-10-23_macrobench實機端到端]]"
   - "[[Verification/2026-10-23_Android驗證收據第零階段試跑]]"
+  - "[[Verification/2026-10-23_Android介面寫法分流實驗室驗收]]"
 ---
 # macrobenchmark-adapter
 
@@ -44,4 +46,6 @@ verified_by:
 
 REVISIT:2026-12-21 接上實機結果後,看結果檔或基準裡有沒有出現 NaN 或 Infinity;有就把數值判斷改成只收有限數,現在 NaN 會讓那一項永遠比不出變慢 [closed:2026-10-23 門檻檔的 NaN 讓門檻恆判達標(代碼審 code-android-evidence 抓到),同一族一次改完:macrobench 讀數字一律只收有限數]
 
-`scripts/templates/android-receipt-rerun.sh` 是 lumos-android-evidence 收據的重跑腳本範本:照 queries.sql 的標頭重跑查詢並比對 expect,0 全部相符、1 比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡、查詢指到不存在的 artifact 或 requires),回 2 時 stderr 印「擋下:」。登記在工具組複製清單(`_VENDORED_TREE_FILES`),消費專案才會在 lumos init/update 時拿到它。寫收據時複製進消費專案的收據目錄;它跟 macrobench 同屬 Android 效能證據這一塊,所以掛在這篇。
+`scripts/templates/android-receipt-rerun.sh` 是 lumos-android-evidence 收據的重跑腳本範本:照 queries.sql 的標頭重跑查詢並比對 expect,0 全部相符、1 比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡、查詢指到不存在的 artifact 或 requires)或分析工具執行不了(環境沒準備好,不是收據寫錯),回 2 時 stderr 印「擋下:」並說是哪一種。收據寫歪到解析那一步才出錯的幾種情形目前是 Traceback 回 1,見 [[Issues/Android收據重跑第四輪放行的小缺口]]。登記在工具組複製清單(`_VENDORED_TREE_FILES`),消費專案才會在 lumos init/update 時拿到它。寫收據時複製進消費專案的收據目錄;它跟 macrobench 同屬 Android 效能證據這一塊,所以掛在這篇。
+
+`scripts/templates/android-ui-attribution.sql` 是 lumos-android-evidence L1 的分類查詢範本:把 App 主執行緒每一幀的自身時間拆成 Compose、只有 XML 才有的元件、兩種寫法共用的畫面管線、其他四類,嵌在 XML 裡的 Compose 算給 Compose;跟基準比哪一類長最多,決定往 Compose 分支還是原本的 L2 走。規則與為什麼這樣分見 [[Projects/Android介面寫法分流_計劃]]。只用標準 SQLite 語法與 slice/thread_track/thread/process 四張表,測試(`t_android_ui_attribution_*`)用 Python 內建的 sqlite3 跑同一支檔;實際分析時交給 trace_processor。第一欄 `frame` 是「f 接幀起點」的字串,收據的重跑腳本拿第一欄當鍵。一樣登記在工具組複製清單。範本整份(含檔頭註解)貼進收據的 queries.sql 照樣能重跑:範本註解不以分號結尾;重跑腳本用 Python 的 UTF-8 模式跑(`exec env PYTHONUTF8=1 python3 -`),收據檔頭帶 BOM 也讀得到,分析工具執行不了時回 2 並刪掉暫存查詢檔(`t_android_ui_attribution_receipt_rerun` 在預設與 LC_ALL=C 兩種環境跑,macOS 與 Linux 容器都驗過)。

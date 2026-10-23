@@ -17787,6 +17787,297 @@ def t_android_evidence_rerun_refuses_empty():
                   f"rc={r.returncode} out={r.stdout[:300]} err={r.stderr[:200]}")
 
 
+_UI_ATTR_TPL = "android-ui-attribution.sql"
+
+
+def _ui_attr(frames, other_tracks=()):
+    """拿 Python 內建的 sqlite3 建出 Perfetto 的四張表,跑工具鏈範本裡的歸因查詢(scripts/templates/android-ui-attribution.sql)。
+    frames:每一幀是一棵樹 (名稱, 毫秒, [子區段…]),放在 com.lab 的主執行緒上;子區段從父區段的起點依序排、不交錯(Perfetto 同一條執行緒上的區段一定是巢狀)。
+    other_tracks:(行程名, 是不是主執行緒, 樹) 放到別的執行緒,用來確認查詢只算這個 App 的主執行緒。
+    回 {幀起點毫秒: {"xml", "compose", "pipeline", "other", "dur"(毫秒), "fn"(Compose 自身時間最多的函式區段名)}};範本不在回 None。"""
+    import sqlite3
+    tpl = Path(GRAPHCTL).resolve().parent / "templates" / _UI_ATTR_TPL
+    if not tpl.is_file():
+        return None
+    ms = 1_000_000
+    db = sqlite3.connect(":memory:")
+    db.executescript("create table process(upid integer primary key, pid int, name text);"
+                     "create table thread(utid integer primary key, tid int, name text, upid int);"
+                     "create table thread_track(id integer primary key, utid int);"
+                     "create table slice(id integer primary key, ts int, dur int, track_id int, name text, depth int, parent_id int);"
+                     "insert into process values (1, 100, 'com.lab'), (2, 200, 'com.other');"
+                     "insert into thread values (1, 100, 'com.lab', 1), (2, 101, 'RenderThread', 1), (3, 200, 'com.other', 2);"
+                     "insert into thread_track values (1, 1), (2, 2), (3, 3);")
+    nid = [0]
+
+    def put(node, track, ts, depth, parent):
+        name, dur, kids = node[0], node[1], (node[2] if len(node) > 2 else [])
+        nid[0] += 1
+        me = nid[0]
+        db.execute("insert into slice values (?,?,?,?,?,?,?)", (me, ts * ms, dur * ms, track, name, depth, parent))
+        at = ts
+        for k in kids:
+            put(k, track, at, depth + 1, me)
+            at += k[1]
+    start = 0
+    for f in frames:
+        put(f, 1, start, 0, None)
+        start += 100
+    for proc, main, tree in other_tracks:
+        put(tree, 1 if proc == "com.lab" and main else 2 if proc == "com.lab" else 3, start, 0, None)
+        start += 100
+    cur = db.execute(tpl.read_text(encoding="utf-8").replace("__PROCESS__", "com.lab"))
+    cols = [c[0] for c in cur.description]
+    out = {}
+    for row in cur.fetchall():
+        r = dict(zip(cols, row))
+        if cols[0] != "frame" or r["frame"] != f"f{r['frame_ts']}":
+            raise AssertionError(f"第一欄要是字串鍵 frame='f<幀起點>'(重跑腳本拿第一欄當鍵):{cols[:2]} {row[:2]}")
+        out[r["frame_ts"] // ms] = {"xml": r["xml_ns"] / ms, "compose": r["compose_ns"] / ms, "pipeline": r["pipeline_ns"] / ms,
+                                    "other": r["other_ns"] / ms, "dur": r["frame_dur"] / ms, "fn": r["top_compose_fn"]}
+    return out
+
+
+def _ui_split(got, ts):
+    """某一幀的 (xml, compose, pipeline, other) 毫秒;沒有那一幀回 None。"""
+    f = (got or {}).get(ts)
+    return None if f is None else (f["xml"], f["compose"], f["pipeline"], f["other"])
+
+
+def t_android_ui_attribution_innermost():
+    """外層包著 Compose 時,Compose 那段的自身時間算給 Compose,外層只算扣掉子區段後剩下的。兩種包法:
+    畫面管線的 measure 包著 Compose 的排版(Compose 畫面或 XML 裡嵌 ComposeView 的排版階段);
+    清單綁定列包著 Compose 重組(XML 清單每列是 ComposeView)。比外層總長的話,Compose 會被整段算給外層。"""
+    got = _ui_attr([("Choreographer#doFrame 1", 16, [("traversal", 12, [("measure", 10, [("Compose:measure", 7)])])]),
+                    ("Choreographer#doFrame 4", 10, [("animation", 6, [("compose:lazy:prefetch:compose", 5)])]),
+                    ("Choreographer#doFrame 2", 10, [("RV onBindViewHolder type=0x0", 6, [("Compose:recompose", 4)])]),
+                    ("Choreographer#doFrame 3", 10, [("animation", 6, [("Recomposer:recompose", 4)])])])
+    check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+    if got is None:
+        return
+    check("animation 階段包 Recomposer 的重組:Compose 4、管線 2、其他 4", _ui_split(got, 300) == (0.0, 4.0, 2.0, 4.0), str(got))
+    # LazyColumn 的預先組合用小寫開頭(2026-10-23 實驗室 Compose 1.9 真實 Trace:每輪約 1 秒)
+    check("小寫 compose:lazy:prefetch 也算 Compose:Compose 5、管線 1、其他 4", _ui_split(got, 100) == (0.0, 5.0, 1.0, 4.0), str(got))
+    check("管線包 Compose:XML 0、Compose 7、管線 5(traversal 2 + measure 3)、其他 4(doFrame 自身)",
+          _ui_split(got, 0) == (0.0, 7.0, 5.0, 4.0), str(got))
+    check("清單綁定列包 Compose:XML 2、Compose 4、管線 0、其他 4", _ui_split(got, 200) == (2.0, 4.0, 0.0, 4.0), str(got))
+
+
+def t_android_ui_attribution_inherit():
+    """名稱分不出類的區段(App 自己打的、binder 等)跟著最近一個分得出類的祖先;一路上都分不出的算其他。"""
+    got = _ui_attr([("Choreographer#doFrame 1", 30, [("RV onBindViewHolder type=0x0", 8, [("MyApp#bindRow", 5)]),
+                                                     ("Compose:recompose", 6, [("RepoLoad", 2)]),
+                                                     ("Record View#draw()", 7, [("binder transaction", 4)]),
+                                                     ("MyApp#tick", 1)])])
+    check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+    if got is None:
+        return
+    xml, comp, pipe, other = _ui_split(got, 0) or (None,) * 4
+    check("清單綁定列底下的 App 區段算 XML(3 + 5 = 8)", xml == 8.0, str(got))
+    check("Compose 底下的 App 區段算 Compose(4 + 2 = 6)", comp == 6.0, str(got))
+    check("繪製底下的 binder 算管線(3 + 4 = 7)", pipe == 7.0, str(got))
+    check("直接掛在 doFrame 底下的 App 區段算其他(doFrame 自身 8 + 1 = 9)", other == 9.0, str(got))
+    # 名稱是 NULL 的區段(track_event 沒給名稱)照「分不出類、跟祖先」,不能連子樹整段消失(2026-10-24 代碼審 r1 正確性席、邊界席)
+    got2 = _ui_attr([("Choreographer#doFrame 1", 10, [(None, 6, [("measure", 3)])])])
+    check("名稱 NULL 的區段跟祖先算其他、底下的 measure 照算管線,四類加總等於幀長",
+          _ui_split(got2, 0) == (0.0, 0.0, 3.0, 7.0), str(got2))
+
+
+def t_android_ui_attribution_rv_names():
+    """只有 XML 寫法才有的元件區段:清單綁定的新舊名(官方文件寫 RV OnBindView,RecyclerView 主線已改成 RV onBindViewHolder type=0x…)、
+    舊清單元件 ListView 的 obtainView 與 setupListItem(實驗室 App 的真實 Trace 裡就是這兩個)、inflate。"""
+    names = ("RV OnBindView", "RV onBindViewHolder type=0x0", "obtainView", "setupListItem", "inflate")
+    got = _ui_attr([("Choreographer#doFrame 1", 10, [(n, 3)]) for n in names] +
+                   [("Choreographer#doFrame 9", 10, [("RVX", 2)])])
+    check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+    if got is None:
+        return
+    for i, n in enumerate(names):
+        check(f"{n} 算 XML 元件", _ui_split(got, i * 100) == (3.0, 0.0, 0.0, 7.0), str(got.get(i * 100)))
+    check("RV 後面沒有空白的不算(只比開頭「RV 」)", _ui_split(got, len(names) * 100) == (0.0, 0.0, 0.0, 10.0),
+          str(got.get(len(names) * 100)))
+
+
+def t_android_ui_attribution_pipeline():
+    """兩種寫法共用的畫面管線(input、animation、traversal、measure、layout、draw、Record View#draw()、postAndWait)
+    單獨一類、不算成 XML:Compose 畫面也掛在 View 系統上跑,Compose 的繪製沒有自己的區段。"""
+    names = ("input", "animation", "traversal", "measure", "layout", "draw", "draw-VRI[MainActivity]@1", "Record View#draw()", "postAndWait")
+    got = _ui_attr([("Choreographer#doFrame 1", 10, [(n, 3)]) for n in names])
+    check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+    if got is None:
+        return
+    for i, n in enumerate(names):
+        check(f"{n} 算管線、不算 XML", _ui_split(got, i * 100) == (0.0, 0.0, 3.0, 7.0), str(got.get(i * 100)))
+    # App 自己打的 draw 開頭區段不是框架的繪製,跟祖先(2026-10-24 代碼審 r1 邊界席:原本 draw* 全吸進管線)
+    got2 = _ui_attr([("Choreographer#doFrame 1", 100, [("Compose:recompose", 60, [("drawChart", 50)])])])
+    check("Compose 底下 App 的 drawChart 跟祖先算 Compose(60),不算管線", _ui_split(got2, 0) == (0.0, 60.0, 0.0, 40.0), str(got2))
+
+
+def t_android_ui_attribution_compose_fn():
+    """有開 composition tracing 時,輸出 Compose 自身時間最多的函式區段名(同名的加總後比,名稱帶檔名與行號);
+    Compose: 開頭的框架區段不算函式。函式區段直接掛在 XML 元件底下(清單每列是 ComposeView)也算 Compose。"""
+    got = _ui_attr([("Choreographer#doFrame 1", 20, [("Compose:recompose", 12, [("com.a.Row (Row.kt:12)", 2),
+                                                                                ("com.a.Row (Row.kt:12)", 2),
+                                                                                ("com.a.Header (Header.kt:5)", 3)])]),
+                    ("Choreographer#doFrame 2", 10, [("RV onBindViewHolder type=0x0", 6, [("com.a.Card (Card.kt:3)", 4)])]),
+                    ("Choreographer#doFrame 3", 5, [("Compose:recompose", 3)])])
+    check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+    if got is None:
+        return
+    check("同名加總後最多的是 Row(2+2 > Header 3),不是自身 5 的 Compose:recompose",
+          (got.get(0) or {}).get("fn") == "com.a.Row (Row.kt:12)", str(got.get(0)))
+    check("函式區段直接在 XML 元件底下 → XML 2、Compose 4", (_ui_split(got, 100) or ())[:2] == (2.0, 4.0), str(got.get(100)))
+    check("沒有函式區段的幀不亂填", 200 in got and got[200]["fn"] is None, str(got.get(200)))
+    # 同分時照名稱排、取第一個,Python 的 sqlite3 與 trace_processor 才挑得出同一個(2026-10-24 代碼審 r2 正確性席)
+    got_tie = _ui_attr([("Choreographer#doFrame 1", 10, [("Compose:recompose", 8, [("a.B (B.kt:1)", 3), ("a.A (A.kt:1)", 3)])])])
+    check("兩個函式自身時間同分 → 取名稱排在前面的 a.A", (got_tie.get(0) or {}).get("fn") == "a.A (A.kt:1)", str(got_tie))
+    # ART 的鎖競爭區段也帶「(檔.kt:行號)」,但是一整句話;2026-10-23 實驗室真實 Trace 裡被誤算成 Compose 791 毫秒
+    lock = ("monitor contention with owner lab-lock-holder (24615) at void com.example.mblab.MainActivity$Companion."
+            "startLockHolder$lambda$0(long)(MainActivity.kt:65) waiters=0 blocking from android.view.View "
+            "com.example.mblab.MainActivity$RowAdapter.getView(int, android.view.View, android.view.ViewGroup)(MainActivity.kt:44)")
+    got2 = _ui_attr([("Choreographer#doFrame 1", 10, [("obtainView", 8, [(lock, 6)])])])
+    check("鎖競爭區段不算 Compose 函式,跟著祖先算 XML 元件", _ui_split(got2, 0) == (8.0, 0.0, 0.0, 2.0) and got2[0]["fn"] is None,
+          str(got2))
+
+
+def t_android_ui_attribution_sums():
+    """只有某一類的幀其他類是 0,四類加總等於幀長;只算這個 App 的主執行緒:
+    別的 App 主執行緒、同一個 App 別的執行緒上的 doFrame(有自己 Choreographer 的背景執行緒)都不算;
+    Trace 結束時還沒收尾的幀(Perfetto 記成長度 -1)不輸出;doFrame 掛在 Looper 訊息區段底下(開了訊息迴圈追蹤)照樣算。"""
+    got = _ui_attr([("Choreographer#doFrame 1", 10, [("RV OnBindView", 9)]),
+                    ("Choreographer#doFrame 2", 10, [("Compose:recompose", 6)]),
+                    ("Looper.dispatch: android.view.Choreographer$FrameHandler", 12, [("Choreographer#doFrame 3", 10, [("layout", 4)])]),
+                    ("Choreographer#doFrame 4", -1)],
+                   other_tracks=(("com.lab", False, ("Choreographer#doFrame 5", 8, [("traversal", 5)])),
+                                 ("com.other", True, ("Choreographer#doFrame 9", 30, [("traversal", 25)]))))
+    check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+    if got is None:
+        return
+    check("只算 com.lab 主執行緒的三個完整幀(不含別的執行緒、別的 App、沒收尾的)", sorted(got) == [0, 100, 200], str(got))
+    check("掛在 Looper 訊息底下的幀:管線 4、其他 6", _ui_split(got, 200) == (0.0, 0.0, 4.0, 6.0), str(got.get(200)))
+    check("只有 XML 元件的幀:XML 9、Compose 0、管線 0、其他 1", _ui_split(got, 0) == (9.0, 0.0, 0.0, 1.0), str(got))
+    check("只有 Compose 的幀:XML 0、Compose 6、管線 0、其他 4", _ui_split(got, 100) == (0.0, 6.0, 0.0, 4.0), str(got))
+    check("四類加總等於幀長", all(abs(sum(_ui_split(got, t)) - v["dur"]) < 1e-9 for t, v in got.items()), str(got))
+    # 沒收尾(dur -1)的區段連同底下整棵子樹都不算,時間留給最近一個已收尾的祖先;結果不能隨「這個名稱在別處有沒有出現過」而變
+    # (2026-10-24 代碼審 r2 邊界席:名稱只出現一次時子樹消失,名稱在別處出現過時子樹被算進去、祖先又沒扣,加總超過幀長)
+    for extra in ([], [("Choreographer#doFrame 2", 10, [("measure", 2)])]):
+        got4 = _ui_attr([("Choreographer#doFrame 1", 10, [("traversal", 5, [("measure", -1, [("Compose:a", 3)])])]), *extra])
+        check(f"沒收尾的 measure 底下的 Compose 不算、時間留給 traversal(measure 在別處{'有' if extra else '沒有'}出現)",
+              _ui_split(got4, 0) == (0.0, 0.0, 5.0, 5.0), str(got4.get(0)))
+    # 子區段比父區段長(資料錯或時間重疊)時自身時間取 0,不輸出負數(2026-10-24 代碼審 r1 邊界席)
+    got3 = _ui_attr([("Choreographer#doFrame 1", 100, [("Compose:recompose", 150)])])
+    check("子區段比幀長時其他類是 0、不是負的", (_ui_split(got3, 0) or (None,) * 4)[3] == 0.0, str(got3))
+
+
+def t_android_ui_attribution_vendored():
+    """歸因查詢範本要登記在工具組複製清單,才會跟其他範本一起進消費專案;skill 要指到它,並說明 expect 的第一欄鍵。"""
+    m = _load_lumos_inproc()
+    rel = f"scripts/templates/{_UI_ATTR_TPL}"
+    check("範本登記在工具組複製清單", rel in m._VENDORED_TREE_FILES, "")
+    check("範本檔真的在", (Path(GRAPHCTL).resolve().parent / "templates" / _UI_ATTR_TPL).is_file(), "")
+    skill = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-android-evidence" / "SKILL.md"
+    if not skill.is_file():
+        raise _SrcOnly("skills/ 只在工具鏈 repo 裡")
+    s = skill.read_text(encoding="utf-8")
+    check("skill 指到範本路徑", rel in s, "")
+    check("skill 說明 expect 的第一欄是 f 接幀起點", "f<幀起點>" in s, "")
+
+
+def t_android_ui_attribution_receipt_rerun():
+    """範本整份(含檔頭註解)貼在收據標頭底下,收據的重跑腳本要把完整的查詢交給分析工具。
+    重跑腳本拿「第一個以分號結尾的行」當查詢結尾;範本註解要是以分號結尾,查詢會被截在註解、本體整段丟掉,
+    而且不會回 2(標頭數照樣對),只會在比對時報不符(2026-10-24 代碼審 code-android-ui-kind r1 整合席)。
+    假的分析工具只在收到的查詢從 WITH RECURSIVE 到結尾 ORDER BY 都在時才印出一列,expect 才對得上。"""
+    import json, os, subprocess as sp, tempfile
+    here = Path(GRAPHCTL).resolve().parent / "templates"
+    tpl, rerun = here / _UI_ATTR_TPL, here / "android-receipt-rerun.sh"
+    check("前置:兩支範本都在", tpl.is_file() and rerun.is_file(), str(here))
+    if not (tpl.is_file() and rerun.is_file()):
+        return
+    sql = "-- [Q1] session=c trace=t requires=- expect=f100:compose_ns=5\n" + tpl.read_text(encoding="utf-8").replace("__PROCESS__", "com.lab")
+    with tempfile.TemporaryDirectory(prefix="gctl-uirerun-") as td:
+        d = Path(td) / ".lumos" / "receipts" / "x"
+        d.mkdir(parents=True)
+        (d / "rerun.sh").write_bytes(rerun.read_bytes())
+        (d / "queries.sql").write_text(sql, encoding="utf-8")
+        (d / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace.bin"}],
+                                                     "layers": [{"layer": "L1", "queries": ["Q1"]}]}), encoding="utf-8")
+        fake = Path(td) / "fake_tp"
+        fake.write_text("#!/bin/sh\n# 用法跟 trace_processor 一樣:<trace> -q <查詢檔>\n"
+                        "if grep -q 'WITH RECURSIVE' \"$3\" && grep -q 'ORDER BY f.ts;' \"$3\"; then\n"
+                        "  printf '\"frame\",\"compose_ns\"\\n\"f100\",\"5\"\\n'\nfi\n", encoding="utf-8")
+        fake.chmod(0o755)
+        r = sp.run(["sh", str(d / "rerun.sh")], capture_output=True, text=True, env=dict(os.environ, TP=str(fake)))
+        check("整份範本貼進收據 → 重跑腳本交出完整查詢、比對相符回 0", r.returncode == 0 and "OK  Q1" in r.stdout,
+              f"rc={r.returncode} out={r.stdout[:300]} err={r.stderr[:200]}")
+        # 非 UTF-8 的環境(LC_ALL=C)照樣跑通(2026-10-24 代碼審 r2 邊界席:範本帶中文註解,原本寫暫存檔時 UnicodeEncodeError)。
+        # 重跑腳本四處讀寫都要碰到中文才驗得到:manifest 的路徑、分析工具的輸出、印出的比對值(stdout)、收據寫錯時的訊息(stderr)
+        env_c = {k: v for k, v in os.environ.items() if not k.startswith(("LC_", "LANG", "PYTHONUTF8", "PYTHONIOENCODING"))}
+        env_c.update(LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", TP=str(fake))
+        d2 = Path(td) / ".lumos" / "receipts" / "y"
+        d2.mkdir(parents=True)
+        (d2 / "rerun.sh").write_bytes(rerun.read_bytes())
+        (d2 / "queries.sql").write_text(sql.replace("expect=f100:compose_ns=5", "expect=f100:compose_ns=5,top_compose_fn=甲"), encoding="utf-8")
+        (d2 / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace-甲.bin"}],
+                                                      "layers": [{"layer": "L1", "queries": ["Q1"]}]}, ensure_ascii=False), encoding="utf-8")
+        fake.write_text("#!/bin/sh\n"
+                        "if grep -q 'WITH RECURSIVE' \"$3\" && grep -q 'ORDER BY f.ts;' \"$3\"; then\n"
+                        "  printf '\"frame\",\"compose_ns\",\"top_compose_fn\"\\n\"f100\",\"5\",\"甲\"\\n'\nfi\n", encoding="utf-8")
+        r2 = sp.run(["sh", str(d2 / "rerun.sh")], capture_output=True, env=env_c)
+        out2, err2 = r2.stdout.decode("utf-8", "replace"), r2.stderr.decode("utf-8", "replace")
+        check("非 UTF-8 環境:中文路徑、中文輸出、中文比對值照樣比對相符回 0", r2.returncode == 0 and "OK  Q1" in out2 and "甲" in out2
+              and "Traceback" not in err2, f"rc={r2.returncode} out={out2[:200]} err={err2[-300:]}")
+        (d2 / "queries.sql").write_text(sql.replace("expect=f100:compose_ns=5", "expect=-"), encoding="utf-8")
+        r3 = sp.run(["sh", str(d2 / "rerun.sh")], capture_output=True, env=env_c)
+        err3 = r3.stderr.decode("utf-8", "replace")
+        check("非 UTF-8 環境:收據寫錯照樣回 2 並印出中文原因", r3.returncode == 2 and err3.startswith("擋下:") and "Traceback" not in err3,
+              f"rc={r3.returncode} err={err3[-300:]}")
+        # 收據檔開頭帶 BOM(2026-10-24 代碼審 r3 邊界席):queries.sql 的 BOM 原本讓第一個標頭配不到、標頭數與條數一起少一,
+        # 第一條比對不符也照樣回 0(假過);manifest.json 的 BOM 原本 Traceback
+        bom = "\ufeff"
+        two = (sql.replace("expect=f100:compose_ns=5", "expect=f100:compose_ns=999")
+               + "\n" + sql.replace("-- [Q1]", "-- [Q2]"))
+        (d2 / "queries.sql").write_text(bom + two, encoding="utf-8")
+        (d2 / "manifest.json").write_text(bom + json.dumps({"artifacts": [{"id": "t", "path": "trace-甲.bin"}],
+                                                            "layers": [{"layer": "L1", "queries": ["Q1", "Q2"]}]}, ensure_ascii=False),
+                                          encoding="utf-8")
+        r4 = sp.run(["sh", str(d2 / "rerun.sh")], capture_output=True, env=dict(os.environ, TP=str(fake)))
+        out4, err4 = r4.stdout.decode("utf-8", "replace"), r4.stderr.decode("utf-8", "replace")
+        check("queries.sql 與 manifest 帶 BOM:第一條照樣被讀到、比對不符回 1", r4.returncode == 1 and "BAD Q1" in out4 and "OK  Q2" in out4
+              and "Traceback" not in err4, f"rc={r4.returncode} out={out4[:200]} err={err4[-300:]}")
+        # 分析工具不存在:回 2 說原因,不留暫存查詢檔(2026-10-24 代碼審 r3 資源席:原本 Traceback 回 1、暫存檔留在系統暫存目錄)
+        (d2 / "queries.sql").write_text(sql, encoding="utf-8")
+        (d2 / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace.bin"}],
+                                                      "layers": [{"layer": "L1", "queries": ["Q1"]}]}), encoding="utf-8")
+        tmp = Path(td) / "tmpdir"
+        tmp.mkdir()
+        r5 = sp.run(["sh", str(d2 / "rerun.sh")], capture_output=True,
+                    env=dict(os.environ, TP=str(Path(td) / "沒有這支工具"), TMPDIR=str(tmp)))
+        err5 = r5.stderr.decode("utf-8", "replace")
+        check("分析工具不存在 → 回 2、說是找不到分析工具、不留暫存檔", r5.returncode == 2 and err5.startswith("擋下:") and "分析工具" in err5
+              and "Traceback" not in err5 and not list(tmp.iterdir()), f"rc={r5.returncode} err={err5[-300:]} tmp={list(tmp.iterdir())}")
+
+
+def t_macrobench_threshold_trace_section_count():
+    """TraceSectionMetric 的次數指標(例 Compose:recompose 的 Count 模式,結果檔叫 Compose:recomposeCount)跟啟動時間一樣是單值指標,
+    可以寫門檻:中位數超過上限列沒達、在上限內列達標。"""
+    import tempfile
+
+    def bench(med):
+        return {"name": "scrollCompose", "params": {}, "className": "pkg.Flow",
+                "metrics": {"Compose:recomposeCount": {"minimum": med - 2, "maximum": med + 2, "median": med, "runs": [med]}},
+                "sampledMetrics": {}}
+    for med, want_fail in ((55.0, True), (40.0, False)):
+        with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+            thr = _mb_thr(scenario="pkg.Flow#scrollCompose", metric="Compose:recomposeCount", stat="median", max=40)
+            _, r, d, rt = _mb_thr_root(td, [bench(med)], [thr])
+            got = (len(d.get("threshold_failures", [])), len(d.get("threshold_passed", [])))
+            check(f"重組次數中位數 {med}、門檻 ≤ 40 → {'沒達' if want_fail else '達標'}",
+                  got == ((1, 0) if want_fail else (0, 1)), r.stdout + r.stderr)
+            if want_fail:
+                check("文字輸出印出指標名與次數", "Compose:recomposeCount" in rt.stdout and "55" in rt.stdout, rt.stdout)
+
+
 def t_macrobench_rejects_nonfinite():
     """NaN 與正負無限大在每個讀數字的地方都不收(JSON 解析器收這三個字面值,型別檢查也當成數字):
     門檻值→回 2;設定檔容差→回 2;基準檔的統計值→整份當讀不了;結果檔的統計值→那個檔記成讀不了。
@@ -53629,8 +53920,21 @@ def t_license_headers_travel_with_vendored_files():
     exempt = {"scripts/templates/graph-discipline.md"}
     targets = sorted(set(targets) - exempt)
     check("授權/KEY2: 會被複製出去的檔案集合算得出來且非空", len(targets) >= 12, f"{len(targets)} 支")
-    missing = [f for f in targets if (root / f).is_file() and not _spdx.search(head((root / f).read_text(encoding="utf-8", errors="replace")))]
+    # 註解符號照檔案類型認:SQL 只能用 `--`(2026-10-24 代碼審 code-android-ui-kind r1 五席:.sql 範本被判成缺標示);
+    # 其餘照舊只認 `#`——不整體放寬,.sql 寫成 `#` 也不收(那在 SQL 裡不是註解)
+    _spdx_sql = _re.compile(r"^--\s*SPDX-License-Identifier:\s*MIT\s*$", _re.M)
+
+    def spdx_for(f):
+        return _spdx_sql if f.lower().endswith(".sql") else _spdx
+    missing = [f for f in targets if (root / f).is_file()
+               and not spdx_for(f).search(head((root / f).read_text(encoding="utf-8", errors="replace")))]
     check("授權/KEY2: 每支會被複製進消費專案的檔都帶 SPDX 標示", not missing, str(missing))
+    # 前置:照類型認註解符號的判斷本身(拿假檔名驗,不依賴清單裡現在有沒有 .sql——撤掉 SQL 範本時這條不該跟著紅;2026-10-24 代碼審 r2 通才席)
+    check("授權/KEY2 前置:.sql 認 -- 不認 #,其餘認 # 不認 --",
+          bool(spdx_for("x.sql").search("-- SPDX-License-Identifier: MIT")) and not spdx_for("x.sql").search("# SPDX-License-Identifier: MIT")
+          and bool(spdx_for("x.sh").search("# SPDX-License-Identifier: MIT")) and not spdx_for("x.sh").search("-- SPDX-License-Identifier: MIT")
+          # 副檔名不分大小寫(2026-10-24 代碼審 r3 邊界席)
+          and bool(spdx_for("x.SQL").search("-- SPDX-License-Identifier: MIT")), "")
 
     # [KEY 1] 授權檔不得進白名單(讀執行期真值,不掃原始碼字串)
     wl = list(getattr(m, "_VENDORED_TOOLKIT", []))

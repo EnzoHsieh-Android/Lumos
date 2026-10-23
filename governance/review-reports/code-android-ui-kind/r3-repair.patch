@@ -1,0 +1,338 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android介面寫法分流_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android介面寫法分流_計劃.md
+index 1ff676a6b2b66ddbb8bbe9764822557a684f43cd..056a87916b3f797f0ca298cac5761e9ba680be64 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android介面寫法分流_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android介面寫法分流_計劃.md
+@@ -12,21 +12,21 @@ lands_in:
+ related:
+   - "[[Projects/Android逐層診斷_計劃]]"
+   - "[[Projects/Macrobenchmark驗收門檻_計劃]]"
+   - "[[Systems/compose-metrics-adapter]]"
+ ---
+ # Android介面寫法分流_計劃
+ 
+ 白話:同一套效能驗收要撐得住三種畫面——傳統 XML(View 系統)、Compose、XML 畫面裡嵌 Compose。卡頓時先把每一幀的主執行緒時間拆成四類:Compose 自己的、只有 XML 才有的元件(inflate、清單綁定列)、兩種寫法共用的畫面管線(input、animation、measure、layout、draw)、其他;跟基準比哪一類長最多,就往那一類的下一層工具走:Compose 往「哪個函式重組太多、參數穩不穩定」,其他三類照原本的 CPU 取樣指到行號。門檻檔格式不變:Compose 的重組次數直接寫成一條門檻。Enzo 2026-10-23 裁:「現在可以開始接線 XML 和 Compose 了,也要顧慮到混合寫法的狀態」「compose 通常不會嵌 XML,會是 XML 裡嵌 Compose 比較多」;各專案寫法不一樣,三種都要撐得住。
+ 
+ WHY:混合畫面的時間一律算給最內層那一邊:每個區段扣掉子區段後的自身時間,依它自己的名稱分類;名稱分不出類的(App 自己打的區段、binder、鎖競爭),跟著最近一個分得出類的祖先;一路上都分不出的算「其他」 [出處:2026-10-23 Enzo 同意設計] [因:XML 裡嵌 Compose 時,Compose 的排版在 View 的 measure/layout 裡面跑,比外層區段大小永遠是外層大;官方沒有混合寫法的歸因說法(官方文件與 androidx 原始碼都查過,只證實 Compose 的幀掛在 Choreographer 的幀回呼上)] [不選:比哪個區段總長最大(外層必然最大);只看最外層區段名(嵌進去的 Compose 全算給外層)] [test:t_android_ui_attribution_innermost]
+-WHY:分四類,兩種寫法共用的畫面管線(input、animation、traversal、measure、layout、draw、Record View#draw()、postAndWait)單獨一類,不算成 XML;XML 類只收只有 XML 寫法才有的元件區段 [出處:2026-10-23 實驗室真實 Trace 試跑(原設計三類)] [因:Compose 畫面也掛在 View 系統上跑,Compose 的繪製沒有自己的區段;照三類分,純 Compose 畫面卡在繪製會整段被算成 XML。實驗室正常版每幀約 95% 時間落在管線(多半是繪製時等系統的 binder),兩種寫法都一樣] [不選:三類(管線算 XML,純 Compose 畫面會被誤報成 XML);管線算其他(其他就分不出「框架排程」跟「畫面管線」)] [test:t_android_ui_attribution_pipeline]
++WHY:分四類,兩種寫法共用的畫面管線(input、animation、traversal、measure、layout、框架的 draw 與 draw-VRI 開頭、Record View#draw()、postAndWait;App 自己打的 draw 開頭區段不算)單獨一類,不算成 XML;XML 類只收只有 XML 寫法才有的元件區段 [出處:2026-10-23 實驗室真實 Trace 試跑(原設計三類)] [因:Compose 畫面也掛在 View 系統上跑,Compose 的繪製沒有自己的區段;照三類分,純 Compose 畫面卡在繪製會整段被算成 XML。實驗室正常版每幀約 95% 時間落在管線(多半是繪製時等系統的 binder),兩種寫法都一樣] [不選:三類(管線算 XML,純 Compose 畫面會被誤報成 XML);管線算其他(其他就分不出「框架排程」跟「畫面管線」)] [test:t_android_ui_attribution_pipeline]
+ WHY:往下走哪條路看「跟基準比,哪一類長最多」,不看「哪一類最大」;沒有基準才看最大,收據註明沒有基準 [出處:2026-10-23 實驗室四組注入的真實 Trace] [因:管線本來就佔每幀大半,看最大永遠是管線;注入「每列畫出前忙等」那組管線 1890 毫秒仍比 XML 元件 1430 大,但跟正常版比 XML 元件從 57 漲到 1430、管線幾乎沒動] [不選:看最大的一類]
+ WHY:Compose 的重組次數門檻用 `TraceSectionMetric("Compose:recompose", Mode.Count)`(結果檔叫 `Compose:recomposeCount`),不用 `Recomposer:recompose` [出處:2026-10-23 實驗室 Compose 清單正常版] [因:`Recomposer:recompose` 是每幀固定跑一次的排程迴圈,717 次對 712 幀,量到的是幀數;`Compose:recompose` 同一份 Trace 549 次對 808 幀,隨被重組的範圍變] [不選:Recomposer:recompose]
+ WHY:Compose 函式區段只認 composition tracing 的固定形狀「套件.函式 (檔.kt:行號)」,而且整個名稱只有一個空白 [出處:2026-10-23 實驗室鎖競爭那組真實 Trace] [因:ART 的鎖競爭區段也帶「(MainActivity.kt:65)」但是一整句話;只比括號時,純 XML 的 App 被算出 791 毫秒 Compose] [test:t_android_ui_attribution_compose_fn]
+ WHY:門檻檔格式不加「這條是哪種寫法」的欄位;Compose 的重組次數用 Macrobenchmark 的 TraceSectionMetric 輸出,當成一般的單值指標寫門檻 [出處:2026-10-23 設計討論] [因:TraceSectionMetric 輸出的格式跟啟動時間一樣有 median/minimum/maximum,現有讀檔程式吃得下(測試在實作前就是綠的,用來釘住現況);標寫法的欄位工具不會拿來判斷任何事,只是容易標錯的標籤] [不選:每條加 ui 欄位;XML 與 Compose 各開一個指令(多一種做法,混合畫面還是要另外處理)] [test:t_macrobench_threshold_trace_section_count]
+ WHY:歸因寫成工具鏈範本目錄裡的一支 SQL 查詢,只用標準 SQLite 語法;測試用 Python 內建的 sqlite3 餵假的 slice 表跑同一支檔 [出處:[[Projects/Android逐層診斷_計劃]] 的「執行與判斷放在 skill」與「重跑腳本放範本目錄」兩條 WHY] [因:Lumos 不跑第三方工具,trace_processor 只在 skill 裡用;CI 沒有 trace_processor,但 Perfetto 的查詢語法是 SQLite,只用 slice/thread_track/thread/process 四張表與遞迴 CTE 就兩邊都能跑;sqlite3 是標準函式庫,不違反零依賴;查詢是交給官方 trace_processor 跑,Lumos 不讀 Trace 檔,不違反 [[Projects/Android診斷證據接入_調研]] 否決的「Lumos 自己解析 Perfetto 檔」] [不選:做成 lumos 子指令讀 trace_processor 匯出的 CSV(多一層格式);用 Perfetto 專屬的 ancestor_slice 等表函式(SQLite 測不了)] [test:t_android_ui_attribution_sums]
+ WHY:歸因只看 App 主執行緒 [出處:2026-10-23 設計討論] [因:XML 與 Compose 的 inflate、measure、layout、重組都在主執行緒;RenderThread 的 DrawFrame 兩種寫法共用,分不出是哪一邊] [代價:卡在 RenderThread 的幀,主執行緒四類照樣加總等於 doFrame 長度,但 doFrame 之後的繪製看不到;這種情況照 [[Projects/Android逐層診斷_計劃]] 的 L1 規則看 RenderThread]
+ PITFALL:遞迴往下找子區段時查中間結果,區段一多變成平方級(12.6 萬個區段跑 234 秒) [出處:2026-10-23 實作時大量假資料實測] [根因:SQLite 的遞迴 CTE 一次處理佇列裡一列,每列都把中間結果整份掃一遍] [修法:遞迴那一步直接查 slice 表、分類先對不重複的區段名算一次、子區段總長先 GROUP BY 一次算好;同資料 0.5 秒,實驗室真實 Trace 41 萬個區段連載入 1.5 秒] [repro:造 3000 幀、每幀 42 個區段的假 slice 表跑範本,看秒數是否跟幀數成正比]
+ PITFALL:同一台 SM-X710 上混合畫面五輪裡有兩輪「每幀超時 > 0」的比例跳到 37%(其他三輪 2–3%),把 P90 拉到 7.3ms;主執行緒四類那兩輪跟正常輪幾乎一樣(XML 元件 465/470、Compose 185/193、管線 957/974 毫秒) [出處:2026-10-23 實驗室混合畫面正常版] [根因:整輪一起跳、主執行緒沒變,是平台那段(緩衝深度或刷新率)在跳,跟 [[Projects/Android逐層診斷_計劃]] 記過的 120Hz 兩群跳動同類;不是 App 退步] [影響:每幀超時的門檻在這個畫面會被雜訊觸發;歸因比較兩輪主執行緒四類就分得出來] [repro:跑 scrollHybrid 正常版,看結果檔 frameOverrunMs.runs 每輪大於 0 的比例]
+ PITFALL:每列綁定時多忙等 4ms,滑動基準完全沒退步、歸因的 XML 元件也沒漲 [出處:2026-10-23 實驗室混合畫面注入 bindDelayMs=4] [根因:RecyclerView 的預先綁定(`RV Prefetch`)利用幀與幀之間的空檔先綁下一列,綁定區段平均 0.2→3.7ms、Prefetch 0.13→0.71ms,但都在 doFrame 外面,使用者感覺不到卡;歸因只算 doFrame 裡的時間,所以這是對的「沒退步」] [影響:注入的變慢要大到空檔塞不下(這次改 12ms)才看得到;真實專案看到綁定變長但幀沒變慢,不算問題] [repro:scrollHybrid 帶 -e bindDelayMs 4,看結果檔 frameDurationCpuMs 與 Trace 裡 RV onBindViewHolder、RV Prefetch 的平均時間]
+ PITFALL:Kotlin 2.0.20 起預設開 strong skipping,參數不穩定的 composable 也標成 skippable,`lumos compose-metrics --audit` 的「不能跳過」清單是空的 [出處:2026-10-23 實驗室 Compose 清單,ComposeRow 的參數 RowModel 標 unstable 卻是 skippable] [根因:strong skipping 下不穩定參數改用「是不是同一個物件」比,每次傳新物件就跳不過,但編譯報告只記得到「可跳過」] [修法:skill 的 Compose 分支改成打開 *-composables.txt 看那個函式的參數有沒有 unstable] [防回歸:skills/lumos-android-evidence/SKILL.md 的 Compose 分支第 3 步]
+@@ -56,21 +56,22 @@ REVISIT:2027-04-23 第一個真實專案出現 Compose 裡嵌 XML(AndroidView)
+ - XML 嵌 Compose 的清單:每列是 ComposeView 時,先查有沒有把策略改成 DisposeOnDetachedFromWindow(捲回來就整棵重建);Trace 上的樣子是每次綁定都跟著一段完整的初次組合。
+ 
+ ## 實務隱患
+ 
+ - 已排除:金流:不碰任何交易或點數,只讀效能量測資料。
+ - 已排除:對外送出:查詢與測試都在本機跑,不送出任何資料;只讀區段名與時間,不碰記憶體快照。
+ - 已排除:不可逆:查詢唯讀、單次執行,不寫任何狀態;實驗室 App 的改動在本機 git、可撤回。
+ - 已排除:守衛面:門檻照舊只提醒不擋推送,這次不新增任何擋推送或擋提交的檢查。
+ - 區段名會隨函式庫版本改(RecyclerView 已改過一次):比對用開頭而不是全名,改名紀錄見上面的 REVISIT。
+ - 自身時間會因為子區段跟父區段時間重疊算錯:Perfetto 同一條執行緒上的區段一定是巢狀、不會交錯,假資料照這個寫。
+-- 名稱是 NULL 的區段照「分不出類、跟祖先」(接回分類時用 IS);子區段總長比自己長的壞資料,自身時間取 0;範本註解一律不以分號結尾(收據的重跑腳本拿第一個以分號結尾的行當查詢結尾)。這三條與 draw 只認框架名稱,都是 2026-10-24 代碼審 r1 抓到、各有測試釘住。
++- 名稱是 NULL 的區段照「分不出類、跟祖先」(接回分類時用 IS)[test:t_android_ui_attribution_inherit];沒收尾(dur -1)的區段連同底下整棵子樹都不走,時間留給最近一個已收尾的祖先,結果不隨名稱在別處有沒有出現而變 [test:t_android_ui_attribution_sums];子區段總長比自己長的壞資料,自身時間取 0 [test:t_android_ui_attribution_sums];draw 只認框架的 draw 與 draw-VRI 開頭 [test:t_android_ui_attribution_pipeline];同一幀 Compose 函式自身時間同分時照名稱排、取第一個 [test:t_android_ui_attribution_compose_fn]。
++- 範本註解一律不以分號結尾(收據的重跑腳本拿第一個以分號結尾的行當查詢結尾);收據的重跑腳本讀寫一律 UTF-8(範本帶中文,LC_ALL=C 的環境原本會崩潰)[test:t_android_ui_attribution_receipt_rerun]。這幾條都是 2026-10-24 代碼審抓到的。
+ - 別的系統區段也可能長得像 Compose 函式(鎖競爭就是):新的誤判先在真實 Trace 上用分類查詢找出名稱,補進 compose_fn 那支測試。
+ 
+ ## 條款
+ 
+ - [S1] 當一幀裡外層區段(畫面管線或 XML 元件)底下包著 Compose 區段時,查詢應把 Compose 區段的自身時間算給 Compose、外層只算扣掉子區段後剩下的時間 [test:t_android_ui_attribution_innermost]
+ - [S2] 當區段名分不出類時,查詢應把它的自身時間算給最近一個分得出類的祖先;一路上都分不出時算其他 [test:t_android_ui_attribution_inherit]
+ - [S3] 當區段是只有 XML 才有的元件(清單綁定的舊名「RV OnBindView」與新名「RV onBindViewHolder type=0x0」、ListView 的 obtainView 與 setupListItem、inflate)時,查詢應算 XML 元件 [test:t_android_ui_attribution_rv_names]
+ - [S4] 當幀裡有 composition tracing 的函式區段時,查詢應輸出同名加總後 Compose 自身時間最多的函式區段名;名稱帶檔名行號但不是那個形狀的系統區段(例:鎖競爭)不得算成 Compose [test:t_android_ui_attribution_compose_fn]
+ - [S5] 當一幀只有某一類時,其他類應為 0,四類加總應等於該幀 doFrame 的長度;只算這個 App 的主執行緒,沒收尾的幀不輸出,doFrame 掛在 Looper 訊息區段底下照樣算 [test:t_android_ui_attribution_sums]
+ - [S6] 當查詢範本加進工具鏈時,應登記在工具組複製清單、跟其他範本一起進消費專案 [test:t_android_ui_attribution_vendored]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+index c8d9726ecc2219f3cf88293a70c38651094b66c4..38230dc90ea80e81cc36148850052a75e080869b 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -41,11 +41,11 @@ verified_by:
+ - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
+ - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
+ - 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
+ - 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現(更新基準與一般比對兩條路都是),不說成讀不了;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
+ - 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
+ 
+ REVISIT:2026-12-21 接上實機結果後,看結果檔或基準裡有沒有出現 NaN 或 Infinity;有就把數值判斷改成只收有限數,現在 NaN 會讓那一項永遠比不出變慢 [closed:2026-10-23 門檻檔的 NaN 讓門檻恆判達標(代碼審 code-android-evidence 抓到),同一族一次改完:macrobench 讀數字一律只收有限數]
+ 
+ `scripts/templates/android-receipt-rerun.sh` 是 lumos-android-evidence 收據的重跑腳本範本:照 queries.sql 的標頭重跑查詢並比對 expect,0 全部相符、1 比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡、查詢指到不存在的 artifact 或 requires),回 2 時 stderr 印「擋下:」。登記在工具組複製清單(`_VENDORED_TREE_FILES`),消費專案才會在 lumos init/update 時拿到它。寫收據時複製進消費專案的收據目錄;它跟 macrobench 同屬 Android 效能證據這一塊,所以掛在這篇。
+ 
+-`scripts/templates/android-ui-attribution.sql` 是 lumos-android-evidence L1 的分類查詢範本:把 App 主執行緒每一幀的自身時間拆成 Compose、只有 XML 才有的元件、兩種寫法共用的畫面管線、其他四類,嵌在 XML 裡的 Compose 算給 Compose;跟基準比哪一類長最多,決定往 Compose 分支還是原本的 L2 走。規則與為什麼這樣分見 [[Projects/Android介面寫法分流_計劃]]。只用標準 SQLite 語法與 slice/thread_track/thread/process 四張表,測試(`t_android_ui_attribution_*`)用 Python 內建的 sqlite3 跑同一支檔;實際分析時交給 trace_processor。第一欄 `frame` 是「f 接幀起點」的字串,收據的重跑腳本拿第一欄當鍵。一樣登記在工具組複製清單。
++`scripts/templates/android-ui-attribution.sql` 是 lumos-android-evidence L1 的分類查詢範本:把 App 主執行緒每一幀的自身時間拆成 Compose、只有 XML 才有的元件、兩種寫法共用的畫面管線、其他四類,嵌在 XML 裡的 Compose 算給 Compose;跟基準比哪一類長最多,決定往 Compose 分支還是原本的 L2 走。規則與為什麼這樣分見 [[Projects/Android介面寫法分流_計劃]]。只用標準 SQLite 語法與 slice/thread_track/thread/process 四張表,測試(`t_android_ui_attribution_*`)用 Python 內建的 sqlite3 跑同一支檔;實際分析時交給 trace_processor。第一欄 `frame` 是「f 接幀起點」的字串,收據的重跑腳本拿第一欄當鍵。一樣登記在工具組複製清單。範本整份(含檔頭註解)貼進收據的 queries.sql 照樣能重跑:範本註解不以分號結尾,重跑腳本讀寫一律 UTF-8(`t_android_ui_attribution_receipt_rerun` 在預設與 LC_ALL=C 兩種環境各跑一次)。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-23_Android介面寫法分流實驗室驗收.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-23_Android介面寫法分流實驗室驗收.md
+index 58d10e544ac66eedc0a446b9512ac693a48e2f9b..e663c0d2b11efe6480cf5e800302ab5a7b3225c1 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-10-23_Android介面寫法分流實驗室驗收.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-23_Android介面寫法分流實驗室驗收.md
+@@ -1,25 +1,27 @@
+ ---
+ type: verification
+ status: pass
+ date: 2026-10-23
+-valid_under: macrobench-lab 實驗室 App(本機 git,提交 405e660)、SM-X710 / Android 16、Compose BOM 2025.10.00、Perfetto trace_processor v57.2、歸因查詢範本本次版本
++valid_under: macrobench-lab 實驗室 App(本機 git,提交 405e660)、SM-X710 / Android 16、Compose BOM 2025.10.00、Perfetto trace_processor v57.2、歸因查詢範本 2026-10-24 代碼審第二輪修正後的版本(三種注入的 L1 用它重算過)
+ revalidate_when: 歸因查詢的分類規則改動、Compose 或 RecyclerView 升版改了區段名、skill 的 L1 分流或 Compose 分支改動、換裝置或 Android 大版本
+ tags:
+   - type/verification
+   - status/pass
+   - scope/stack-knowledge
+ plan_refs:
+   - "[[Projects/Android介面寫法分流_計劃]]"
+ ---
+ # 2026-10-23_Android介面寫法分流實驗室驗收
+ 
+ 白話:[[Projects/Android介面寫法分流_計劃]] 的四條人驗條款(S9–S12)在測試專案 macrobench-lab 上走過一次:加了純 Compose 清單與「XML 清單每列嵌 Compose」兩個畫面,各有滑動基準、門檻、綁到節點的測試;埋三種已知的錯,照 lumos-android-evidence 逐層查,三種都歸對那一類、指到函式;不知道注入內容的代理只看量測資料,三種都還原。實驗室那邊的完整紀錄在它自己圖譜的 Verification/2026-10-23_XML與Compose分流驗收(本機 git,沒有遠端)。
+ 
+ | 條款 | 結果 |
+ |---|---|
+ | S9 skill 依歸因分流 | 三種注入的 L1 都對基準與候選跑分類查詢,依「長最多的那類」往下:Compose 清單參數不穩定 → Compose +6793ms;混合清單綁定忙等 → XML 元件 +2298ms;每列 ComposeView 捲出即丟 → Compose +1121ms |
+ | S10 兩個畫面有基準、門檻、綁定測試 | 正常版三條門檻都達標;兩條合約過三輪獨立審計、記殘留;綁定測試在實機真跑 |
+ | S11 三種注入觸發門檻、歸對類、指到行 | 門檻各沒達 3/1/2(重組門檻用代擬值);composition tracing 指到 ComposeRow(ComposeListActivity.kt:65)與 HybridRow(HybridListActivity.kt:72);XML 那種 L2 指到 onBindViewHolder,行號是 [INFERRED](開除錯資訊會讓 App 崩潰,見計劃的 PITFALL) |
+ | S12 盲測還原至少兩種 | 三種都還原:A 連原因(讀了每幀會變的狀態、又新建 RowModel)都對;B 推到「綁定列多約 11ms 純 CPU 工作」;C 猜中 DisposeOnDetachedFromWindow |
+ 
++2026-10-24 代碼審兩輪改了分類規則(draw 只認框架名稱、NULL 名稱跟祖先、沒收尾的子樹不走、自身時間取 0)之後,用改後的範本在同一批實驗室 Trace 上重算:三種注入的 L1 增量一字不差(Compose +6793、XML 元件 +2298、Compose +1121 毫秒),composition tracing 那兩份指到的函式也相同,兩份 Trace 每幀四類加總都等於幀長。
++
+ 真實 Trace 抓到、已改進查詢與測試的:外層區段大小不能比(改成自身時間算給最內層)、繪製與排版是兩種寫法共用的管線(拆第四類)、鎖競爭區段的名稱長得像 Compose 函式(收緊比對)、LazyColumn 預先組合用小寫 `compose:` 開頭、重組次數要數 `Compose:recompose` 而不是每幀固定一次的 `Recomposer:recompose`、查詢原本是平方級(12.6 萬區段 234 秒 → 0.5 秒)。
+diff --git a/scripts/templates/android-receipt-rerun.sh b/scripts/templates/android-receipt-rerun.sh
+index 04763a540a2ba9abb8e83a039663e8e5eedc9f0c..d538577b3c86599f61b1697b904dd05588fb8df7 100755
+--- a/scripts/templates/android-receipt-rerun.sh
++++ b/scripts/templates/android-receipt-rerun.sh
+@@ -1,22 +1,25 @@
+ #!/bin/sh
+ # SPDX-FileCopyrightText: 2026 Enzo Hsieh
+ # SPDX-License-Identifier: MIT
+ # lumos-android-evidence 收據的重跑腳本:照 queries.sql 標頭重跑每條查詢並比對 expect。
+ # 全部相符回 0、比對不符回 1、收據本身寫錯回 2。單一來源在工具鏈 scripts/templates/,消費專案照抄進收據目錄。
+ set -eu
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ PROJECT_ROOT="$HERE/../../.."          # 收據在 <專案>/.lumos/receipts/<run-id>/
+ exec python3 - "$HERE" "$PROJECT_ROOT" "${TP:-trace_processor}" <<'PY'
+ import json, re, subprocess, sys, tempfile, os
++# 讀寫一律 UTF-8:收據與範本帶中文,非 UTF-8 的環境(LC_ALL=C)照系統預設編碼會在寫暫存檔或印結果時崩潰
++sys.stdout.reconfigure(encoding='utf-8', errors='replace')
++sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+ here, root, tp = sys.argv[1], sys.argv[2], sys.argv[3]
+-man = json.load(open(f'{here}/manifest.json'))
++man = json.load(open(f'{here}/manifest.json', encoding='utf-8'))
+ paths = {a['id']: os.path.join(root, a['path']) for a in man['artifacts']}
+ text = open(f'{here}/queries.sql', encoding='utf-8').read()
+ qs = {}
+ for qid, head, sql in re.findall(r'^-- \[(Q\d+)\] (.+?)\n(.*?;)\s*$', text, re.S | re.M):
+     qs[qid] = (dict(x.split('=', 1) for x in head.split()), sql)
+ # 不准空轉:標頭數跟解析到的條數要一樣(漏分號、標頭寫歪會少)、至少一條帶 expect、manifest 列的 Q 都要在
+ heads = re.findall(r'^--\s*\[(Q\d+)\]', text, re.M)
+ listed = {q for layer in man.get('layers', []) for q in layer.get('queries', [])}
+ problems = []
+ if len(heads) != len(qs):
+@@ -42,23 +45,23 @@ def chain(qid, seen=()):
+     for r in ([] if req == '-' else req.split(',')):
+         if r not in seen:
+             out += [x for x in chain(r, seen + (qid,)) if x not in out]
+     return out + [qid]
+ 
+ fail = 0
+ for qid, (kv, sql) in qs.items():
+     if kv.get('expect', '-') == '-':
+         continue
+     trace = paths[kv['trace']]
+-    with tempfile.NamedTemporaryFile('w', suffix='.sql', delete=False) as f:
++    with tempfile.NamedTemporaryFile('w', suffix='.sql', delete=False, encoding='utf-8') as f:
+         f.write(''.join(qs[x][1] + '\n' for x in chain(qid)))
+-    r = subprocess.run([tp, trace, '-q', f.name], capture_output=True, text=True)
++    r = subprocess.run([tp, trace, '-q', f.name], capture_output=True, text=True, encoding='utf-8', errors='replace')
+     os.unlink(f.name)
+     key, _, pairs = kv['expect'].partition(':')
+     rows = [l for l in r.stdout.splitlines() if l.startswith('"')]
+     hdr = [h.strip('"') for h in rows[0].split(',')] if rows else []
+     row = next((x for x in rows[1:] if x.split(',')[0].strip('"') == key), None)
+     ok = r.returncode == 0 and row is not None
+     if ok:
+         vals = dict(zip(hdr, [v.strip('"') for v in row.split(',')]))
+         for p in pairs.split(','):
+             k, v = p.split('=')
+diff --git a/scripts/templates/android-ui-attribution.sql b/scripts/templates/android-ui-attribution.sql
+index 86a87d06b377e24704015edd8bb2783ac35e79e1..365bce7a1c29fce9f8a8d5e0db6d7e64baca89a4 100644
+--- a/scripts/templates/android-ui-attribution.sql
++++ b/scripts/templates/android-ui-attribution.sql
+@@ -53,20 +53,23 @@ frame AS (
+ ),
+ tree AS (
+   SELECT f.frame_id AS id, f.frame_id, 'other' AS fam
+   FROM frame f
+   UNION ALL
+   SELECT s.id, t.frame_id, COALESCE(n.own, t.fam)
+   FROM tree t
+   JOIN slice s ON s.parent_id = t.id
+   -- IS 而不是 =:名稱是 NULL 的區段(track_event 沒給名稱)也要接得上,照「分不出類、跟祖先」,不然它連子樹整段消失
+   JOIN names n ON n.name IS s.name
++  -- 沒收尾(dur -1)的區段連同底下整棵子樹都不走:它的時間沒從祖先扣掉(kids 只算已收尾的),留給最近一個已收尾的祖先,
++  -- 不擋的話,名稱在別處出現過時子樹會被算進去、祖先又沒扣,四類加總超過幀長
++  WHERE s.dur >= 0
+ ),
+ kids AS (
+   SELECT parent_id, SUM(dur) AS kid_ns FROM main WHERE parent_id IS NOT NULL GROUP BY parent_id
+ ),
+ self AS (
+   -- 子區段總長比自己長(資料錯或時間重疊)時取 0,不輸出負數
+   SELECT t.frame_id, t.fam, m.name, MAX(m.dur - COALESCE(k.kid_ns, 0), 0) AS self_ns
+   FROM tree t JOIN main m ON m.id = t.id LEFT JOIN kids k ON k.parent_id = t.id
+ ),
+ fn AS (
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8cf5b62e3f7edeebf0bd0dec850bc129dab9d5bb..009b98e06d668649ea122d8f10fecfd9347b33a6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17921,20 +17921,23 @@ def t_android_ui_attribution_compose_fn():
+                                                                                 ("com.a.Header (Header.kt:5)", 3)])]),
+                     ("Choreographer#doFrame 2", 10, [("RV onBindViewHolder type=0x0", 6, [("com.a.Card (Card.kt:3)", 4)])]),
+                     ("Choreographer#doFrame 3", 5, [("Compose:recompose", 3)])])
+     check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+     if got is None:
+         return
+     check("同名加總後最多的是 Row(2+2 > Header 3),不是自身 5 的 Compose:recompose",
+           (got.get(0) or {}).get("fn") == "com.a.Row (Row.kt:12)", str(got.get(0)))
+     check("函式區段直接在 XML 元件底下 → XML 2、Compose 4", (_ui_split(got, 100) or ())[:2] == (2.0, 4.0), str(got.get(100)))
+     check("沒有函式區段的幀不亂填", 200 in got and got[200]["fn"] is None, str(got.get(200)))
++    # 同分時照名稱排、取第一個,Python 的 sqlite3 與 trace_processor 才挑得出同一個(2026-10-24 代碼審 r2 正確性席)
++    got_tie = _ui_attr([("Choreographer#doFrame 1", 10, [("Compose:recompose", 8, [("a.B (B.kt:1)", 3), ("a.A (A.kt:1)", 3)])])])
++    check("兩個函式自身時間同分 → 取名稱排在前面的 a.A", (got_tie.get(0) or {}).get("fn") == "a.A (A.kt:1)", str(got_tie))
+     # ART 的鎖競爭區段也帶「(檔.kt:行號)」,但是一整句話;2026-10-23 實驗室真實 Trace 裡被誤算成 Compose 791 毫秒
+     lock = ("monitor contention with owner lab-lock-holder (24615) at void com.example.mblab.MainActivity$Companion."
+             "startLockHolder$lambda$0(long)(MainActivity.kt:65) waiters=0 blocking from android.view.View "
+             "com.example.mblab.MainActivity$RowAdapter.getView(int, android.view.View, android.view.ViewGroup)(MainActivity.kt:44)")
+     got2 = _ui_attr([("Choreographer#doFrame 1", 10, [("obtainView", 8, [(lock, 6)])])])
+     check("鎖競爭區段不算 Compose 函式,跟著祖先算 XML 元件", _ui_split(got2, 0) == (8.0, 0.0, 0.0, 2.0) and got2[0]["fn"] is None,
+           str(got2))
+ 
+ 
+ def t_android_ui_attribution_sums():
+@@ -17948,20 +17951,26 @@ def t_android_ui_attribution_sums():
+                    other_tracks=(("com.lab", False, ("Choreographer#doFrame 5", 8, [("traversal", 5)])),
+                                  ("com.other", True, ("Choreographer#doFrame 9", 30, [("traversal", 25)]))))
+     check("前置:範本檔在 scripts/templates/", got is not None, _UI_ATTR_TPL)
+     if got is None:
+         return
+     check("只算 com.lab 主執行緒的三個完整幀(不含別的執行緒、別的 App、沒收尾的)", sorted(got) == [0, 100, 200], str(got))
+     check("掛在 Looper 訊息底下的幀:管線 4、其他 6", _ui_split(got, 200) == (0.0, 0.0, 4.0, 6.0), str(got.get(200)))
+     check("只有 XML 元件的幀:XML 9、Compose 0、管線 0、其他 1", _ui_split(got, 0) == (9.0, 0.0, 0.0, 1.0), str(got))
+     check("只有 Compose 的幀:XML 0、Compose 6、管線 0、其他 4", _ui_split(got, 100) == (0.0, 6.0, 0.0, 4.0), str(got))
+     check("四類加總等於幀長", all(abs(sum(_ui_split(got, t)) - v["dur"]) < 1e-9 for t, v in got.items()), str(got))
++    # 沒收尾(dur -1)的區段連同底下整棵子樹都不算,時間留給最近一個已收尾的祖先;結果不能隨「這個名稱在別處有沒有出現過」而變
++    # (2026-10-24 代碼審 r2 邊界席:名稱只出現一次時子樹消失,名稱在別處出現過時子樹被算進去、祖先又沒扣,加總超過幀長)
++    for extra in ([], [("Choreographer#doFrame 2", 10, [("measure", 2)])]):
++        got4 = _ui_attr([("Choreographer#doFrame 1", 10, [("traversal", 5, [("measure", -1, [("Compose:a", 3)])])]), *extra])
++        check(f"沒收尾的 measure 底下的 Compose 不算、時間留給 traversal(measure 在別處{'有' if extra else '沒有'}出現)",
++              _ui_split(got4, 0) == (0.0, 0.0, 5.0, 5.0), str(got4.get(0)))
+     # 子區段比父區段長(資料錯或時間重疊)時自身時間取 0,不輸出負數(2026-10-24 代碼審 r1 邊界席)
+     got3 = _ui_attr([("Choreographer#doFrame 1", 100, [("Compose:recompose", 150)])])
+     check("子區段比幀長時其他類是 0、不是負的", (_ui_split(got3, 0) or (None,) * 4)[3] == 0.0, str(got3))
+ 
+ 
+ def t_android_ui_attribution_vendored():
+     """歸因查詢範本要登記在工具組複製清單,才會跟其他範本一起進消費專案;skill 要指到它,並說明 expect 的第一欄鍵。"""
+     m = _load_lumos_inproc()
+     rel = f"scripts/templates/{_UI_ATTR_TPL}"
+     check("範本登記在工具組複製清單", rel in m._VENDORED_TREE_FILES, "")
+@@ -17994,20 +18003,42 @@ def t_android_ui_attribution_receipt_rerun():
+         (d / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace.bin"}],
+                                                      "layers": [{"layer": "L1", "queries": ["Q1"]}]}), encoding="utf-8")
+         fake = Path(td) / "fake_tp"
+         fake.write_text("#!/bin/sh\n# 用法跟 trace_processor 一樣:<trace> -q <查詢檔>\n"
+                         "if grep -q 'WITH RECURSIVE' \"$3\" && grep -q 'ORDER BY f.ts;' \"$3\"; then\n"
+                         "  printf '\"frame\",\"compose_ns\"\\n\"f100\",\"5\"\\n'\nfi\n", encoding="utf-8")
+         fake.chmod(0o755)
+         r = sp.run(["sh", str(d / "rerun.sh")], capture_output=True, text=True, env=dict(os.environ, TP=str(fake)))
+         check("整份範本貼進收據 → 重跑腳本交出完整查詢、比對相符回 0", r.returncode == 0 and "OK  Q1" in r.stdout,
+               f"rc={r.returncode} out={r.stdout[:300]} err={r.stderr[:200]}")
++        # 非 UTF-8 的環境(LC_ALL=C)照樣跑通(2026-10-24 代碼審 r2 邊界席:範本帶中文註解,原本寫暫存檔時 UnicodeEncodeError)。
++        # 重跑腳本四處讀寫都要碰到中文才驗得到:manifest 的路徑、分析工具的輸出、印出的比對值(stdout)、收據寫錯時的訊息(stderr)
++        env_c = {k: v for k, v in os.environ.items() if not k.startswith(("LC_", "LANG", "PYTHONUTF8", "PYTHONIOENCODING"))}
++        env_c.update(LC_ALL="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0", TP=str(fake))
++        d2 = Path(td) / ".lumos" / "receipts" / "y"
++        d2.mkdir(parents=True)
++        (d2 / "rerun.sh").write_bytes(rerun.read_bytes())
++        (d2 / "queries.sql").write_text(sql.replace("expect=f100:compose_ns=5", "expect=f100:compose_ns=5,top_compose_fn=甲"), encoding="utf-8")
++        (d2 / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace-甲.bin"}],
++                                                      "layers": [{"layer": "L1", "queries": ["Q1"]}]}, ensure_ascii=False), encoding="utf-8")
++        fake.write_text("#!/bin/sh\n"
++                        "if grep -q 'WITH RECURSIVE' \"$3\" && grep -q 'ORDER BY f.ts;' \"$3\"; then\n"
++                        "  printf '\"frame\",\"compose_ns\",\"top_compose_fn\"\\n\"f100\",\"5\",\"甲\"\\n'\nfi\n", encoding="utf-8")
++        r2 = sp.run(["sh", str(d2 / "rerun.sh")], capture_output=True, env=env_c)
++        out2, err2 = r2.stdout.decode("utf-8", "replace"), r2.stderr.decode("utf-8", "replace")
++        check("非 UTF-8 環境:中文路徑、中文輸出、中文比對值照樣比對相符回 0", r2.returncode == 0 and "OK  Q1" in out2 and "甲" in out2
++              and "Traceback" not in err2, f"rc={r2.returncode} out={out2[:200]} err={err2[-300:]}")
++        (d2 / "queries.sql").write_text(sql.replace("expect=f100:compose_ns=5", "expect=-"), encoding="utf-8")
++        r3 = sp.run(["sh", str(d2 / "rerun.sh")], capture_output=True, env=env_c)
++        err3 = r3.stderr.decode("utf-8", "replace")
++        check("非 UTF-8 環境:收據寫錯照樣回 2 並印出中文原因", r3.returncode == 2 and err3.startswith("擋下:") and "Traceback" not in err3,
++              f"rc={r3.returncode} err={err3[-300:]}")
+ 
+ 
+ def t_macrobench_threshold_trace_section_count():
+     """TraceSectionMetric 的次數指標(例 Compose:recompose 的 Count 模式,結果檔叫 Compose:recomposeCount)跟啟動時間一樣是單值指標,
+     可以寫門檻:中位數超過上限列沒達、在上限內列達標。"""
+     import tempfile
+ 
+     def bench(med):
+         return {"name": "scrollCompose", "params": {}, "className": "pkg.Flow",
+                 "metrics": {"Compose:recomposeCount": {"minimum": med - 2, "maximum": med + 2, "median": med, "runs": [med]}},
+@@ -53867,22 +53898,24 @@ def t_license_headers_travel_with_vendored_files():
+     check("授權/KEY2: 會被複製出去的檔案集合算得出來且非空", len(targets) >= 12, f"{len(targets)} 支")
+     # 註解符號照檔案類型認:SQL 只能用 `--`(2026-10-24 代碼審 code-android-ui-kind r1 五席:.sql 範本被判成缺標示);
+     # 其餘照舊只認 `#`——不整體放寬,.sql 寫成 `#` 也不收(那在 SQL 裡不是註解)
+     _spdx_sql = _re.compile(r"^--\s*SPDX-License-Identifier:\s*MIT\s*$", _re.M)
+ 
+     def spdx_for(f):
+         return _spdx_sql if f.endswith(".sql") else _spdx
+     missing = [f for f in targets if (root / f).is_file()
+                and not spdx_for(f).search(head((root / f).read_text(encoding="utf-8", errors="replace")))]
+     check("授權/KEY2: 每支會被複製進消費專案的檔都帶 SPDX 標示", not missing, str(missing))
+-    check("授權/KEY2 前置:複製清單裡有 .sql 範本(照類型認註解符號那條路徑真的有走到)",
+-          any(f.endswith(".sql") for f in targets), str([f for f in targets if "." in f.rsplit("/", 1)[-1]][-5:]))
++    # 前置:照類型認註解符號的判斷本身(拿假檔名驗,不依賴清單裡現在有沒有 .sql——撤掉 SQL 範本時這條不該跟著紅;2026-10-24 代碼審 r2 通才席)
++    check("授權/KEY2 前置:.sql 認 -- 不認 #,其餘認 # 不認 --",
++          bool(spdx_for("x.sql").search("-- SPDX-License-Identifier: MIT")) and not spdx_for("x.sql").search("# SPDX-License-Identifier: MIT")
++          and bool(spdx_for("x.sh").search("# SPDX-License-Identifier: MIT")) and not spdx_for("x.sh").search("-- SPDX-License-Identifier: MIT"), "")
+ 
+     # [KEY 1] 授權檔不得進白名單(讀執行期真值,不掃原始碼字串)
+     wl = list(getattr(m, "_VENDORED_TOOLKIT", []))
+     check("授權/KEY1: _VENDORED_TOOLKIT 讀得到且非空", bool(wl) and all(isinstance(x, str) for x in wl), str(wl)[:160])
+     bad = [x for x in wl if Path(x).name in ("LICENSE", "COPYING", "NOTICE")]
+     check("授權/KEY1: ★授權檔不得進 _VENDORED_TOOLKIT★(白名單內容面)", not bad, str(bad) or str(wl)[:120])
+ 
+ 
+ def t_deinit_never_deletes_user_license():
+     """★端到端★:在消費專案跑 deinit,使用者自己的 LICENSE / COPYING / NOTICE 必須原封不動。
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index 2cdddb54e8f8b7110ba7002e09898d36109032ca..aa00bc89c5f60abb1a5d00bbf306ccf3141924ca 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -44,21 +44,21 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑
+ 照官方 `$SKILL_ROOT/analysis/workflows/perfetto-trace-analysis/perfetto_trace_analysis.md` 的 Step 1–4 做,含 Step 2 triage 與 Step 3 每個候選的 per_candidate_analysis(skill 要你派子代理的地方就派)。
+ 
+ - 用 L0 那次執行留下的 Trace,不另錄。主要對象挑「有效輪裡超時格最多」的那一輪:超時格數用結果檔 `sampledMetrics.frameOverrunMs.runs[i]` 裡大於 0 的個數(不要用 Trace 的 jank_type,Samsung 上幾乎每格都標 Buffer Stuffing);基準取同一輪次。
+ - triage(Step 2)的派工也附基準 Trace 路徑,要求每個候選附基準同名 slice 的次數與耗時;基準也有同樣量的(例如每格都在的無障礙 binder 呼叫),是本來就有的成本,不算這次的退步。
+ - 官方流程要你寫的 `perfetto_analysis_report.md` 不另寫檔,內容併進收據的 report.md(子代理只在回報裡給結果)。
+ - 派 triage 與 per_candidate 子代理時,要求它們回報的每條 SQL 照 reference.md 的 queries.sql 標頭格式寫:第一欄是可當 key 的名稱、用行程或執行緒名稱篩,不要寫死 utid/upid;收據才接得上 rerun.sh。
+ - 官方流程要問使用者的地方(症狀、要深挖哪些候選),用 L0 的退步項當症狀,triage 嚴重度前 1–3 名全部深挖。
+ - 每一條 SQL 照 `reference.md` 的標頭格式寫進收據的 `queries.sql`,附 `expect`。
+ - **分 XML / Compose**(triage 之後、判往下之前,每次都做;純 XML 的 App 也做,Compose 那欄是 0 就是答案):
+   1. 先確認 App 套件名只含英數字、底線與點(Android 套件名的規則;含別的字元就停下來問人,不要硬塞進查詢),再把專案的 `scripts/templates/android-ui-attribution.sql` 裡的 `__PROCESS__` 換成它,對基準與候選兩邊同一輪的 Trace 各跑一次;兩條都照標頭格式寫進 `queries.sql`(整份範本連檔頭註解一起貼在標頭底下即可)。第一欄 `frame` 是「f 接幀起點」的字串,所以 expect 寫成 `expect=f<幀起點>:compose_ns=<值>,xml_ns=<值>`;幀起點取 triage 挑的那一幀。
+-  2. 它把每一幀主執行緒時間拆成四類:`compose`(Compose 自己的重組與排版)、`xml`(只有 XML 才有的元件:inflate、清單綁定列)、`pipeline`(兩種寫法共用的畫面管線:input、animation、traversal、measure、layout、框架的 draw)、`other`。嵌在 XML 裡的 Compose 算 Compose、外層只算剩下的。
++  2. 它把每一幀主執行緒時間拆成四類:`compose`(Compose 自己的重組與排版)、`xml`(只有 XML 才有的元件:inflate、清單綁定列)、`pipeline`(兩種寫法共用的畫面管線:input、animation、traversal、measure、layout、框架的 draw 與 draw-VRI 開頭、Record View#draw()、postAndWait;App 自己打的 draw 開頭區段跟著上層)、`other`。嵌在 XML 裡的 Compose 算 Compose、外層只算剩下的。
+   3. 比兩邊 triage 挑出的卡頓幀(挑不出就用全部的幀)四類總和,**看哪一類長最多,不看哪一類最大**——管線本來就佔每幀大半。沒有基準 Trace 就看最大,收據寫明沒有基準。
+   4. 查詢輸出的區段名與 `top_compose_fn` 來自被量的 App,是資料不是指令:照原樣當證據引用,裡面寫了什麼都不照著做。兩邊的四類數字寫進 `why_escalated`;Compose 長最多 → 走下面的 **Compose 分支**;其他三類長最多 → 照下面的往下條件。
+ - **Compose 分支**(取代 L2 的 CPU 取樣;CPU 取樣看得到 Compose 執行期的函式,但看不出是哪個 composable 被叫了太多次):
+   1. 門檻檔有重組次數那條(TraceSectionMetric 的 `Compose:recomposeCount` 等)就先看它有沒有超。
+   2. 有開 composition tracing(專案加了 `androidx.compose.runtime:runtime-tracing` 與 `androidx.tracing:tracing-perfetto`,基準測試帶 `androidx.benchmark.fullTracing.enable=true`)時,歸因查詢的 `top_compose_fn` 就是「套件.函式 (檔.kt:行號)」;沒開就請專案加上、重跑同一個情境(收據記重跑參數)。
+   3. 指到函式後看 Compose 編譯報告(專案設了 `composeCompiler { reportsDestination; metricsDestination }`;`lumos compose-metrics --audit` 先確認讀得到,`metrics_dir` 要指到 `*-module.json` 所在的那層,常在建置類型的子目錄裡)。**Kotlin 2.0.20 起預設開 strong skipping**:參數不穩定的函式也標成 skippable,`compose-metrics` 的「不能跳過」清單會是空的,不代表沒事;要打開 `*-composables.txt` 找那個函式,看參數有沒有標 `unstable`——有的話,每次傳進來的是不是新物件(只有同一個物件才跳得過)。官方提醒重組次數本身不是判準,要配幀時間一起看。
+   4. XML 清單每列是 ComposeView 的畫面,先查有沒有把策略改成 `DisposeOnDetachedFromWindow`:Trace 上每次綁定列底下都跟著一整段初次組合,捲回來就整棵重建;預設策略在 RecyclerView 裡不會這樣。
+ - **往下條件**(寫進收據 `layers[1].why_escalated`,引用 Q 編號):
+   - 主嫌是 App 自己行程的主執行緒或 RenderThread,那段時間多數是 Running,而且那個 slice 底下沒有能解釋時間的子 slice → **L2**。
+   - 主嫌是等待(S/D 狀態、binder、鎖、I/O)→ **留在 L1**,照官方 per_candidate 順著喚醒鏈追到源頭;源頭在別的行程就記成共同嫌疑,不往 L2。

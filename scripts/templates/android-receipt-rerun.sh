@@ -6,12 +6,15 @@
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 PROJECT_ROOT="$HERE/../../.."          # 收據在 <專案>/.lumos/receipts/<run-id>/
-exec python3 - "$HERE" "$PROJECT_ROOT" "${TP:-trace_processor}" <<'PY'
+# PYTHONUTF8=1(Python 3.7 起):檔案系統編碼、標準輸出入、開檔預設一律 UTF-8。收據與範本帶中文,
+# 非 UTF-8 的環境(Linux 的 LC_ALL=C 連傳給分析工具的路徑都用 ascii 編)不開這個會崩潰
+exec env PYTHONUTF8=1 python3 - "$HERE" "$PROJECT_ROOT" "${TP:-trace_processor}" <<'PY'
 import json, re, subprocess, sys, tempfile, os
 here, root, tp = sys.argv[1], sys.argv[2], sys.argv[3]
-man = json.load(open(f'{here}/manifest.json'))
+# utf-8-sig:檔頭帶 BOM 也讀得到(queries.sql 的 BOM 原本讓第一條標頭配不到,第一條不符也照樣回 0)
+man = json.load(open(f'{here}/manifest.json', encoding='utf-8-sig'))
 paths = {a['id']: os.path.join(root, a['path']) for a in man['artifacts']}
-text = open(f'{here}/queries.sql', encoding='utf-8').read()
+text = open(f'{here}/queries.sql', encoding='utf-8-sig').read()
 qs = {}
 for qid, head, sql in re.findall(r'^-- \[(Q\d+)\] (.+?)\n(.*?;)\s*$', text, re.S | re.M):
     qs[qid] = (dict(x.split('=', 1) for x in head.split()), sql)
@@ -51,8 +54,13 @@ for qid, (kv, sql) in qs.items():
     trace = paths[kv['trace']]
     with tempfile.NamedTemporaryFile('w', suffix='.sql', delete=False) as f:
         f.write(''.join(qs[x][1] + '\n' for x in chain(qid)))
-    r = subprocess.run([tp, trace, '-q', f.name], capture_output=True, text=True)
-    os.unlink(f.name)
+    try:
+        r = subprocess.run([tp, trace, '-q', f.name], capture_output=True, text=True, errors='replace')
+    except OSError as e:   # 分析工具不存在或不能執行:這是環境沒準備好,不是比對不符
+        print(f'擋下:執行不了分析工具 {tp}({e.strerror});用 TP=<trace_processor 路徑> 指定', file=sys.stderr)
+        sys.exit(2)
+    finally:
+        os.unlink(f.name)
     key, _, pairs = kv['expect'].partition(':')
     rows = [l for l in r.stdout.splitlines() if l.startswith('"')]
     hdr = [h.strip('"') for h in rows[0].split(',')] if rows else []
