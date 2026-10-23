@@ -8,11 +8,11 @@ This is for people who have decided to use it and want to know how it actually w
 
 ## 1. The whole idea, in four sentences
 
-1. **The notes are the source of truth for *why*.**
-   But for *what it actually does right now*, the authority is the tests and production. When the two disagree, **the notes don't automatically win** — work out which side is wrong, then write up the incident.
+1. **Code first; notes fill in the context.**
+   For *what the code does right now*, the code is the authority. Notes record only what the code can't tell you: why a decision was made, what was rejected, limits the code can't see, and traps already hit. Things the code can't answer either — deployment settings, actual database values, production behaviour — have to be checked, run, or asked about.
 
-2. **Read before you touch.**
-   To change an existing system, your first move is to search the notes, not grep. The notes give you the boundaries and the landmines; the code confirms the details.
+2. **Read the code, then the notes.**
+   To change an existing system, first read the code yourself. Before you edit a file, the tooling puts the related notes in front of you to supply the boundaries and the landmines. When a note's description of behaviour disagrees with the code, go with what the code does, then record what the note got wrong.
 
 3. **Write back on the way out.**
    Put the decisions and the verification results back while you're still the witness — don't leave the next person doing archaeology.
@@ -28,9 +28,16 @@ This is for people who have decided to use it and want to know how it actually w
   <img src="../assets/note-types-en.svg" alt="Five kinds of note: module, verification record, incident, plan, index" width="880">
 </p>
 
-Every note opens with a few prefixed summary lines: `FLOW:` (how it flows), `KEY:` (the load-bearing facts), `DEP:` (what it depends on), `TEST:` (test state), `DECISION:` (decisions).
+Every note opens with a few prefixed summary lines. **The test for each line is whether the code could tell you the same thing**; anything the code already answers stays out:
 
-**They're designed so the opening lines alone give you the whole shape** — you shouldn't have to read the body. For a big note, start with the compressed view (`lumos context <node> --brief`, contracts still pinned to the top) and only expand if you need to.
+- `WHY:` a decision, and what was rejected
+- `RULE:` a limit the code can't see (regulation, an external system, a human sign-off)
+- `PITFALL:` a trap already hit: symptom, root cause, the test that keeps it from coming back
+- `FACT:` `FLOW:` `DEP:` current state the code can't answer (deployment, database, production), with a source and a confirmation date
+- `SEE:` links only
+- `KEY:` new lines use it only for contract lines (the ★INVARIANT★ family in the next section)
+
+The required fields for each prefix are in the lumos-project-notes handbook. For a big note, start with the compressed view (`lumos context <node> --brief`, contracts still pinned to the top) and only expand if you need to.
 
 ---
 
@@ -103,17 +110,17 @@ flowchart TB
 
     subgraph R1["1. Open a round → brief → review → intake"]
         direction LR
-        NEXT["Open a round<br/>risk tier, which round, how many seats<br/>list the notes this topic already has"] --> LENS["Attach notes automatically<br/>code review from the diff · design review from the plan note<br/>a timeout leaves a line, no longer silent"] --> SEATS["Review seats<br/>several same-family AIs, different angles<br/>+ an architecture seat + one from another vendor"] --> INTAKE["Machine-check intake<br/>do quotes resolve? line numbers real? material read?<br/>unanchored findings aren't accepted"]
+        NEXT["Open a round<br/>risk tier, which round, how many seats<br/>list the notes this topic already has"] --> LENS["Attach notes automatically<br/>code review from the diff · design review from the plan note<br/>a timeout leaves a line, no longer silent"] --> SEATS["Review seats<br/>several same-family AIs, different angles<br/>+ an architecture seat (plus security on high risk)<br/>another vendor's AI only when a second view is needed"] --> INTAKE["Machine-check intake<br/>do quotes resolve? line numbers real? material read?<br/>unanchored findings aren't accepted"]
     end
 
     subgraph R2["2. Account for each finding → ledger → gate → certificate"]
         direction LR
-        FOLD["Revise<br/>adopted ones change the draft, rejected ones get a reason<br/>borderline ones go to an outside AI to rebut"] --> LEDGER["Ledger<br/>one entry per seat plus a summary<br/>what was found, what changed, what was rejected"] --> GATE{"Pass?<br/>every finding accounted for ∧ record recomputable ∧ all quotes resolve<br/>code review: severe ones must be fixed"} -->|pass| FREEZE["Freeze the verdict<br/>stored as the reference answer<br/>replayed weekly by machine"] --> PASS["The 'reviewed' certificate<br/>bound to this version<br/>honoured by push and CI"]
+        FOLD["Revise<br/>adopted ones change the draft, rejected ones get a reason<br/>borderline ones go to a separate AI, not shown the conclusion, to rebut"] --> LEDGER["Ledger<br/>one entry per seat plus a summary<br/>what was found, what changed, what was rejected"] --> GATE{"Pass?<br/>every finding accounted for ∧ record recomputable ∧ all quotes resolve<br/>code review: severe ones must be fixed"} -->|pass| FREEZE["Freeze the verdict<br/>stored as the reference answer<br/>replayed weekly by machine"] --> PASS["The 'reviewed' certificate<br/>bound to this version<br/>honoured by push and CI"]
     end
 
     subgraph R3["3. Around the edges: measure it, run it"]
         direction LR
-        OBS["Observation ledger<br/>were the attached notes used? how often did old decisions block?"] ~~~ AUTO["Daily automatic round<br/>pick a gap → write a design → same path → stop and wait for a human"] ~~~ PROBE["Scenario probe<br/>does the AI search the notes first?<br/>Claude and Codex on the same questions"]
+        OBS["Observation ledger<br/>were the attached notes used? how often did old decisions block?"] ~~~ AUTO["Daily automatic round<br/>pick a gap → write a design → same path → stop and wait for a human<br/>(dispatch paused by default since 2026-09-05)"] ~~~ PROBE["Scenario probe<br/>does the AI search the notes first?<br/>Claude and Codex on the same questions"]
     end
 
     NODES ==>|"input: relevant notes go into the brief"| R1

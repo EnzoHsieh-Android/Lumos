@@ -39,6 +39,7 @@ lumos map <node>                 # the neighbourhood tree
 lumos links / backlinks / recent / stats
 lumos query --tag <family/value> [--active] [--linked <node>]
 lumos stale --candidate --match <words>   # which verifications are due for a re-check
+lumos handoff <plan node>        # pick up a half-finished plan: git state of each file the plan names, what the last round was touching (read-only; doesn't judge progress)
 ```
 
 ---
@@ -145,6 +146,14 @@ lumos ci-wait / ci-status        # wait for CI after a push / check the last res
 ```
 
 Use `lumos ci-wait` rather than `gh run list` — the result has to land in the governance ledger.
+
+Security guardrails (read-only; passing evidence does not mean the product is secure; how to register a guardrail is in the [security guardrail handbook](../skills/lumos-project-notes/commands/10-資安護欄.md), Chinese):
+
+```bash
+lumos security list [--all] [--questions]   # which security guardrails the project registered, how far evidence checks got, which entry points have none (runs no tests)
+lumos security evidence                     # check each tool result: does it qualify, does it match the current version (the push-time evidence check uses the same logic)
+lumos security approvals verify             # verify the exception-approval chain the user signs with an SSH key
+```
 
 ---
 

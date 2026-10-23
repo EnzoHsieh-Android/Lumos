@@ -390,6 +390,6 @@ These evals run mainly in Lumos's own repo; the retrieval exam also covers one o
 
 </details>
 
-Further reading: [Mental model](docs/mental-model.md) · [Taking over a project](docs/taking-over.md) · [Command reference](docs/command-reference.md) · [Architecture](ARCHITECTURE.md) · [SDD and Lumos](SDD-vs-Lumos.en.md) · [Methodology](docs/methodology/圖譜即合約.md) (Chinese)
+Further reading: [Mental model](docs/mental-model.md) · [Taking over a project](docs/taking-over.md) · [Command reference](docs/command-reference.md) · [Architecture](ARCHITECTURE.md) · [SDD and Lumos](SDD-vs-Lumos.en.md) · [Design rationale](docs/methodology/圖譜即合約-對外論述.md) (Chinese) · [Design history and decisions](docs/methodology/圖譜即合約.md) (Chinese)
 
 License: [MIT](LICENSE). Your notes belong to you; Lumos claims no rights over them.
