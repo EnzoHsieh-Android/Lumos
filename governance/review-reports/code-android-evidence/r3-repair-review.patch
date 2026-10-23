@@ -1,0 +1,398 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android逐層診斷_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android逐層診斷_計劃.md
+index af4672d4994baf37dc64c1be5326dfdde7b76a54..163e0d568cd0d70defdb29a3c29590ae85838c26 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android逐層診斷_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android逐層診斷_計劃.md
+@@ -14,21 +14,21 @@ related:
+   - "[[Projects/Macrobenchmark退步提醒_計劃]]"
+ ---
+ # Android逐層診斷_計劃
+ 
+ 白話:Android 效能問題不靠一次把所有工具開滿,而是一層一層往下查:先看基準結果有沒有變慢或沒達門檻,有才看 Trace 找卡在哪,Trace 指到 App 自己的程式在 CPU 上算很久、又沒有更細的打點,才錄 CPU 取樣指到檔案與行號;熱點落在記憶體配置或回收才往記憶體那層。每往下一層都寫進同一份驗證收據,並記下為什麼往下。落地成調研第一階段的轉接 skill `lumos-android-evidence`:skill 教 Agent 怎麼跑、怎麼判斷要不要往下;Lumos 核心不呼叫 adb、不跑工具。Enzo 2026-10-23 裁:「我需要能看到哪一行程式的評測結果……層遞式的,當這份 trace 實際錄出異常,或是不達驗收門檻時,就往下一個工具執行」。
+ 
+ WHY:分層往下、每層有觸發條件,不一次全錄 [出處:2026-10-23 Enzo 裁] [因:CPU 取樣要重新編譯 App 並帶除錯資訊,會改變被量的對象;記憶體快照可能含個資;沒有異常就全錄等於每次都付最貴的代價] [不選:每次都錄 Trace+CPU 取樣+記憶體(慢、改變被量對象、留下不必要的敏感檔)]
+ WHY:指到行號用 simpleperf 加帶除錯資訊的完整編譯,先錄回程位址堆疊(`--call-graph fp`)、對不到行號再補錄 DWARF,不用 Perfetto 的 traced_perf [出處:2026-10-23 SM-X710 實測,見〈第零階段試跑〉與〈四組驗證〉] [因:traced_perf 與 simpleperf 預設的 DWARF 堆疊都在系統讀時鐘那段核心提供的程式(vdso)斷掉,1654 個樣本全部解不出上一層;改回程位址堆疊後 2215 個樣本接回 `getView`,官方 `annotate.py` 標出第 36 行佔 86.6%] [代價:熱點在配置記憶體時 fp 會斷在 ART 配置慢路徑(s05 主執行緒 651 樣本只有 16 個看得到 App 框架),要多錄一次 DWARF] [不選:traced_perf callstack_sampling(本機實測斷在 vdso);Java method tracing(只到函式、沒有行號,且開銷大);只用 DWARF(熱點在讀時鐘時斷在 vdso)]
+ WHY:量速度的那一層與指行號的那一層分開記,行號層的數字不拿來比快慢 [出處:2026-10-23 實測] [因:指行號要 `cmd package compile -f -m speed` 並開 `debug.generate-debug-info`,跟 Macrobenchmark 的 CompilationMode 不同,執行速度不可互比] [代價:要多跑一次情境]
+ WHY:執行與判斷放在 skill,不加 Lumos 指令 [出處:[[Projects/Android診斷證據接入_調研]] 第一階段、[[Projects/後端工程提問與證據擴充_計劃]] 決策 d6] [因:Lumos 零依賴、不碰裝置;要不要往下一層要讀 Trace 判斷,是 Agent 的工作] [不選:lumos android-evidence 執行器]
+-WHY:收據的重跑腳本以文字範本寫在 skill 的 reference.md,由 Agent 照抄進消費專案的收據目錄;skill 目錄本身只放 .md、不放可執行檔 [出處:2026-10-23 代碼審 code-android-evidence 架構對齊席 A3] [因:收據要能讓沒脈絡的人一鍵重跑([[Projects/Android診斷證據接入_調研]]〈收據格式草案〉),腳本得跟著收據進消費專案的版控;其他 skill 都沒有可執行檔,安裝器整個目錄 symlink,放執行檔要另外處理權限與更新] [不選:skill 目錄附一支 rerun.sh 讓消費專案直接呼叫(收據會依賴工具鏈的安裝位置,換機器就重跑不了)] [test:t_android_evidence_rerun_refuses_empty]
++WHY:收據的重跑腳本是工具鏈 `scripts/templates/` 裡的一支範本檔,寫收據時複製進消費專案的收據目錄;skill 目錄本身只放 .md、不放可執行檔 [出處:2026-10-23 代碼審 code-android-evidence r1 架構對齊席 A3、r2 架構對齊席(原本把腳本寫在 reference.md 的程式碼區塊,測試得從 markdown 抽出來執行,是專案沒有的第二種做法)] [因:收據要能讓沒脈絡的人一鍵重跑([[Projects/Android診斷證據接入_調研]]〈收據格式草案〉),腳本得跟著收據進消費專案的版控;其他 skill 都沒有可執行檔,安裝器整個目錄 symlink,放執行檔要另外處理權限與更新] [不選:skill 目錄附一支 rerun.sh 讓消費專案直接呼叫(收據會依賴工具鏈的安裝位置,換機器就重跑不了);腳本寫在 reference.md 的程式碼區塊(測試只能從 markdown 抽出來跑,範本文字一改被測物就跟著變)] [test:t_android_evidence_rerun_refuses_empty]
+ PRIOR-ART: Google 官方 android-profiler skill(釘 95ea931a1ad8f9b2be132ae0cfb2aad964d71118)的 recording/analysis 流程與 [SQL]/[INFERRED]/[GAP] 標籤;Perfetto v57.2 的 trace_processor 與錄製腳本(`cpu_profile`、`heap_profile`、`java_heap_dump`,https://raw.githubusercontent.com/google/perfetto/v57.2/tools/);NDK 28.2.13676358 附的 simpleperf(`app_profiler.py`、`annotate.py`、`report_sample.py`,文件 android_application_profiling.md「Java 要完整編譯才標得出原始碼行」)。裁定:全借用,skill 只串流程與收據,Lumos 不加依賴。
+ RETIRE-IF: 連續兩個真實消費專案的退步案例,走完分層仍停在 [GAP]、指不到函式;或 Android Studio / 官方 skill 內建同樣的逐層與收據,就撤掉這個 skill 改指向官方。
+ REVISIT:2026-12-21 KDS 或另一個真實專案跑過一次完整分層(不是注入的退步)了沒;沒有就判延後或撤案
+ 
+ ## 四層與往下的條件
+ 
+ | 層 | 工具 | 回答 | 往下一層的條件 |
+ |---|---|---|---|
+ | L0 | Macrobenchmark 結果檔 + `lumos macrobench`(或人裁的門檻檔) | 有沒有變慢、有沒有達門檻 | 報出退步,或任一指標沒達人裁的門檻;都沒有就停,收據記 L0 通過 |
+ | L1 | 同一次執行每輪附帶的 Perfetto Trace + 官方 perfetto-trace-analysis(triage → per-candidate) | 卡在哪個執行緒、哪段框架 slice、是在算(Running)還是在等 | 主嫌是 App 自己行程的主執行緒或 RenderThread,在 CPU 上跑(Running 佔多數),且那段 slice 底下沒有更細的打點 → L2;主嫌是等待(binder、鎖、I/O)→ 留在 L1 順著喚醒鏈追;主嫌是 GC、配置或 LMK → L3 |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+index 5c4b095e3882c16b8cc4e25434d9488689d206e4..9aa2e1a40824261c85965d24349df73f6a9c87e4 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -1,19 +1,20 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-21
+ updated: 2026-10-23
+ responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢,並照專案的人裁門檻檔判驗收門檻;不負責建置或執行基準測試、不接裝置、不擋推送、不從量測產生門檻
+ aliases: []
+ about_code:
+   - scripts/lumos
++  - scripts/templates/android-receipt-rerun.sh
+ tags:
+   - type/system
+   - status/doing
+   - scope/stack-knowledge
+ summary: |-
+   WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢 [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
+   WHY:滑動類只有百分位,P50 與 P90 過容差算退步,P99 只列出 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S8] [因:P99 浮動大,拿來判會一直誤報] [test:t_macrobench_sampled_percentiles]
+   WHY:有退步也回 0,只提醒不擋推送 [出處:[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 推送前證據不收毫秒] [因:毫秒隨機器與溫度浮動,拿來擋會隨機誤擋] [test:t_macrobench_exit_codes]
+   PITFALL:結果檔名的寫法隨函式庫版本變,照官方文件範例拼檔名會找不到檔:1.2.4 把套件名的點換成底線,1.4.1 保留點 [出處:2026-10-21 Citrus_KDS 模擬器實跑(1.2.4)、2026-10-23 實機小專案(1.4.1)] [根因:函式庫自己決定檔名正規化,各版不同] [test:t_macrobench_reads_real_kds_file]
+   SEE:[[Systems/compose-metrics-adapter]] [[Projects/Macrobenchmark退步提醒_計劃]]
+@@ -34,10 +35,12 @@ verified_by:
+ 白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
+ 
+ - 設定 `.lumos/macrobench.json`:`results_dirs`(必填,結果目錄清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
+ - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
+ - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
+ - 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
+ - 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現(更新基準與一般比對兩條路都是),不說成讀不了;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
+ - 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
+ 
+ REVISIT:2026-12-21 接上實機結果後,看結果檔或基準裡有沒有出現 NaN 或 Infinity;有就把數值判斷改成只收有限數,現在 NaN 會讓那一項永遠比不出變慢 [closed:2026-10-23 門檻檔的 NaN 讓門檻恆判達標(代碼審 code-android-evidence 抓到),同一族一次改完:macrobench 讀數字一律只收有限數]
++
++`scripts/templates/android-receipt-rerun.sh` 是 lumos-android-evidence 收據的重跑腳本範本:照 queries.sql 的標頭重跑查詢並比對 expect,0 全部相符、1 比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡)。寫收據時複製進消費專案的收據目錄;它跟 macrobench 同屬 Android 效能證據這一塊,所以掛在這篇。
+diff --git a/scripts/lumos b/scripts/lumos
+index 772adfebc385ea072be52ce36029219019f51543..b68cdc99e39690ed24dbb8e52dd43ffb602fb168 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39357,21 +39357,24 @@ MACROBENCH_DEFAULTS = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_b
+ MACROBENCH_PERCENTILES = ("P50", "P90", "P95", "P99")   # 結果檔滑動類指標會有的百分位
+ MACROBENCH_SAMPLED_JUDGED = ("P50", "P90")   # 滑動類只有百分位:這兩個過容差算退步
+ MACROBENCH_SAMPLED_LISTED = ("P99",)         # P99 太吵:變慢只列出,不算退步
+ MACROBENCH_ZERO_CROSS = {"frameOverrunMs": "P90"}   # 每幀超時從不大於 0 變成大於 0 = 開始掉幀,不看差幅
+ 
+ 
+ def _macrobench_num(v):
+     """macrobench 讀到的數字一律用這支:是數字(不收 JSON 的 true/false)而且是有限數。
+     json.loads 收 NaN 與 ±Infinity,不擋的話 NaN 門檻恆判達標、無限大容差永遠不算退步。"""
+     import math
+-    return _secev_num(v) and math.isfinite(v)
++    try:
++        return _secev_num(v) and math.isfinite(v)
++    except OverflowError:   # JSON 的超大整數讀成 Python int,轉 float 溢位;當成不合格,不要噴例外
++        return False
+ 
+ 
+ def _macrobench_config_fields(raw, cfg):
+     """選填欄位驗型別並併進 cfg;回錯誤訊息或 None。"""
+     for k in ("tolerance_pct", "abs_tolerance"):
+         if k in raw:
+             if not _macrobench_num(raw[k]) or raw[k] <= 0:
+                 return f"macrobench.json 的 {k} 要是大於 0 的數字"
+             cfg[k] = float(raw[k])
+     for k in ("higher_is_better", "ignore_metrics"):
+diff --git a/scripts/templates/android-receipt-rerun.sh b/scripts/templates/android-receipt-rerun.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..e08f574d5fc3bdd6a4e4c8cea69855790f0ea265
+--- /dev/null
++++ b/scripts/templates/android-receipt-rerun.sh
+@@ -0,0 +1,64 @@
++#!/bin/sh
++# lumos-android-evidence 收據的重跑腳本:照 queries.sql 標頭重跑每條查詢並比對 expect。
++# 全部相符回 0、比對不符回 1、收據本身寫錯回 2。單一來源在工具鏈 scripts/templates/,消費專案照抄進收據目錄。
++set -eu
++HERE=$(cd "$(dirname "$0")" && pwd)
++PROJECT_ROOT="$HERE/../../.."          # 收據在 <專案>/.lumos/receipts/<run-id>/
++exec python3 - "$HERE" "$PROJECT_ROOT" "${TP:-trace_processor}" <<'PY'
++import json, re, subprocess, sys, tempfile, os
++here, root, tp = sys.argv[1], sys.argv[2], sys.argv[3]
++man = json.load(open(f'{here}/manifest.json'))
++paths = {a['id']: os.path.join(root, a['path']) for a in man['artifacts']}
++text = open(f'{here}/queries.sql', encoding='utf-8').read()
++qs = {}
++for qid, head, sql in re.findall(r'^-- \[(Q\d+)\] (.+?)\n(.*?;)\s*$', text, re.S | re.M):
++    qs[qid] = (dict(x.split('=', 1) for x in head.split()), sql)
++# 不准空轉:標頭數跟解析到的條數要一樣(漏分號、標頭寫歪會少)、至少一條帶 expect、manifest 列的 Q 都要在
++heads = re.findall(r'^--\s*\[(Q\d+)\]', text, re.M)
++listed = {q for layer in man.get('layers', []) for q in layer.get('queries', [])}
++problems = []
++if len(heads) != len(qs):
++    problems.append(f'queries.sql 有 {len(heads)} 個標頭、只解析到 {len(qs)} 條(標頭要寫成 -- [Qn],SQL 要以 ; 結尾)')
++if not any(kv.get('expect', '-') != '-' for kv, _ in qs.values()):
++    problems.append('沒有任何一條帶 expect,等於什麼都沒驗')
++if listed - set(qs):
++    problems.append(f'manifest 列了 queries.sql 沒有的查詢:{sorted(listed - set(qs))}')
++if problems:
++    print('BAD 收據本身:' + ';'.join(problems))
++    sys.exit(2)
++
++def chain(qid, seen=()):
++    """requires 遞移展開,前置語句在前;前置只能是 INCLUDE / CREATE 這類不回傳列的語句"""
++    req = qs[qid][0].get('requires', '-')
++    out = []
++    for r in ([] if req == '-' else req.split(',')):
++        if r not in seen:
++            out += [x for x in chain(r, seen + (qid,)) if x not in out]
++    return out + [qid]
++
++fail = 0
++for qid, (kv, sql) in qs.items():
++    if kv.get('expect', '-') == '-':
++        continue
++    trace = paths[kv['trace']]
++    with tempfile.NamedTemporaryFile('w', suffix='.sql', delete=False) as f:
++        f.write(''.join(qs[x][1] + '\n' for x in chain(qid)))
++    r = subprocess.run([tp, trace, '-q', f.name], capture_output=True, text=True)
++    os.unlink(f.name)
++    key, _, pairs = kv['expect'].partition(':')
++    rows = [l for l in r.stdout.splitlines() if l.startswith('"')]
++    hdr = [h.strip('"') for h in rows[0].split(',')] if rows else []
++    row = next((x for x in rows[1:] if x.split(',')[0].strip('"') == key), None)
++    ok = r.returncode == 0 and row is not None
++    if ok:
++        vals = dict(zip(hdr, [v.strip('"') for v in row.split(',')]))
++        for p in pairs.split(','):
++            k, v = p.split('=')
++            try:
++                ok &= round(float(vals.get(k, 'nan')), 2) == round(float(v), 2)
++            except ValueError:
++                ok &= vals.get(k) == v
++    print(('OK  ' if ok else 'BAD ') + qid, kv['expect'], '' if r.returncode == 0 else r.stderr.strip()[-200:])
++    fail += not ok
++sys.exit(1 if fail else 0)
++PY
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 391e25868358526b0e38eb8ad1a1508d9a4348a2..ad4a128bbd08e7f976d4a0d9ca89a0e613e08330 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17747,41 +17747,47 @@ def t_macrobench_duplicate_scenario():
+         r = _mb_run(root, "--json")
+         d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+         dup = [f for f in d.get("failed", []) if "pkg.S#coldStartup" in f.get("reason", "")]
+         check("重複情境 → --json 的 failed 有這個情境", len(dup) >= 1, r.stdout)
+         r = _mb_run(root)
+         check("重複情境 → 一般比對的文字輸出說重複", "重複" in r.stdout, r.stdout)
+         check("重複情境 → 一般比對不說讀不了", "讀不了" not in r.stdout, r.stdout)
+ 
+ 
+ def t_android_evidence_rerun_refuses_empty():
+-    """逐層診斷收據的 rerun.sh 範本(skill reference.md 裡那段):一條查詢都沒解析到(最後一條漏分號、標頭格式差一點)
+-    或 manifest 的 layers 列了 queries.sql 裡沒有的 Q 編號時,要回非 0 並說原因,不能空轉回 0。
+-    這兩種情況在叫 trace_processor 之前就結束,所以不需要裝 Perfetto。"""
+-    import json, os, re as _re, subprocess as sp, tempfile
+-    ref = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-android-evidence" / "reference.md"
+-    m = _re.search(r"```sh\n(.*?)```", ref.read_text(encoding="utf-8"), _re.S)
+-    check("前置:reference.md 裡有 rerun.sh 範本", m is not None, str(ref))
+-    if not m:
++    """逐層診斷收據的重跑腳本(scripts/templates/android-receipt-rerun.sh):收據本身寫錯時回 2 並說原因,不能空轉回 0。
++    每個案例只踩一道檢查(其他條件都合格、查詢都帶 expect),拿掉任一道檢查,那個案例就會跑去叫分析工具、回 1 而不是 2。
++    最後一個案例格式全對,用假的分析工具確認範本真的跑得通、比對相符時回 0。"""
++    import json, os, subprocess as sp, tempfile
++    tpl = Path(GRAPHCTL).resolve().parent / "templates" / "android-receipt-rerun.sh"
++    check("前置:範本檔在 scripts/templates/", tpl.is_file(), str(tpl))
++    if not tpl.is_file():
+         return
+-    cases = (("最後一條漏分號", "-- [Q1] session=a trace=t requires=- expect=a:n=1\nselect 1 as n\n", []),
+-             ("標頭少一個空格", "--[Q1] session=a trace=t requires=- expect=a:n=1\nselect 1 as n;\n", []),
+-             ("manifest 列了不存在的 Q", "-- [Q1] session=a trace=t requires=- expect=-\ncreate perfetto table x as select 1;\n", ["Q9"]))
+-    for why, sql, layer_qs in cases:
++    ok_q = "-- [Q1] session=a trace=t requires=- expect=a:n=1\nselect 'a' as k, 1 as n;\n"
++    cases = (("標頭比解析到的多(最後一條漏分號)", ok_q + "-- [Q2] session=a trace=t requires=- expect=a:n=1\nselect 'a' as k, 1 as n\n", ["Q1"], 2, "標頭"),
++             ("一條 expect 都沒有", "-- [Q1] session=a trace=t requires=- expect=-\ncreate perfetto table x as select 1;\n", [], 2, "expect"),
++             ("manifest 列了不存在的 Q", ok_q, ["Q1", "Q9"], 2, "Q9"),
++             ("格式全對、比對相符", ok_q, ["Q1"], 0, "OK  Q1"))
++    for why, sql, layer_qs, want_rc, want_text in cases:
+         with tempfile.TemporaryDirectory(prefix="gctl-rerun-") as td:
+             d = Path(td) / ".lumos" / "receipts" / "x"
+             d.mkdir(parents=True)
+-            (d / "rerun.sh").write_text(m.group(1), encoding="utf-8")
++            (d / "rerun.sh").write_bytes(tpl.read_bytes())
+             (d / "queries.sql").write_text(sql, encoding="utf-8")
+-            (d / "manifest.json").write_text(json.dumps({"artifacts": [], "layers": [{"layer": "L1", "queries": layer_qs}]}), encoding="utf-8")
+-            r = sp.run(["sh", str(d / "rerun.sh")], capture_output=True, text=True, env=dict(os.environ, TP="false"))
+-            check(f"rerun.sh {why} → 非 0", r.returncode != 0, f"rc={r.returncode} out={r.stdout[:200]} err={r.stderr[:200]}")
++            (d / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace.bin"}],
++                                                         "layers": [{"layer": "L1", "queries": layer_qs}]}), encoding="utf-8")
++            fake = Path(td) / "fake_tp"
++            fake.write_text("#!/bin/sh\nprintf '\"k\",\"n\"\\n\"a\",\"1\"\\n'\n", encoding="utf-8")
++            fake.chmod(0o755)
++            r = sp.run(["sh", str(d / "rerun.sh")], capture_output=True, text=True, env=dict(os.environ, TP=str(fake)))
++            check(f"rerun.sh {why} → rc{want_rc} 並說明", r.returncode == want_rc and want_text in r.stdout,
++                  f"rc={r.returncode} out={r.stdout[:300]} err={r.stderr[:200]}")
+ 
+ 
+ def t_macrobench_rejects_nonfinite():
+     """NaN 與正負無限大在每個讀數字的地方都不收(JSON 解析器收這三個字面值,型別檢查也當成數字):
+     門檻值→回 2;設定檔容差→回 2;基準檔的統計值→整份當讀不了;結果檔的統計值→那個檔記成讀不了。
+     不擋的話:門檻 max 寫 NaN 時「現值 > NaN」恆假→永遠判達標;容差寫 Infinity→永遠不算退步。"""
+     import json, tempfile
+     for lit in ("NaN", "Infinity", "-Infinity"):
+         for bound in ("max", "min"):
+             with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+@@ -17810,20 +17816,50 @@ def t_macrobench_rejects_nonfinite():
+             (root / ".lumos" / "macrobench-baseline.json").write_text(json.dumps(base).replace("12345", lit), encoding="utf-8")
+             r = _mb_run(root, "--json")
+             d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+             check(f"基準統計值 {lit} → 整份當讀不了", d.get("baseline_unreadable") is True, r.stdout[:300])
+             res = _mb_result_json([_mb_startup("pkg.S", 12345, 950.0, 1050.0)]).replace("12345", lit)
+             (root / "out" / "x-benchmarkData.json").write_text(res, encoding="utf-8")
+             (root / ".lumos" / "macrobench-baseline.json").unlink()
+             r = _mb_run(root, "--json")
+             d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+             check(f"結果檔統計值 {lit} → 那個檔記成讀不了", any(f.get("kind") == "unreadable" for f in d.get("failed", [])), r.stdout[:300])
++        with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
++            root = Path(td)
++            (root / ".lumos").mkdir()
++            (root / "out").mkdir()
++            (root / ".lumos" / "macrobench.json").write_text('{"results_dirs": ["out"]}', encoding="utf-8")
++            (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([_mb_scroll("pkg.Flow", 1.0)]), encoding="utf-8")
++            base = {"version": 1, "entries": {"pkg.Flow#scrollList": {"device": {"model": "Pixel Tablet", "fingerprint": "fp-1"},
++                    "metrics": {}, "sampled": {"frameOverrunMs": {"P50": -3.0, "P90": 12345, "P95": 1.0, "P99": 1.0}}}}}
++            (root / ".lumos" / "macrobench-baseline.json").write_text(json.dumps(base).replace("12345", lit), encoding="utf-8")
++            r = _mb_run(root, "--json")
++            d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++            check(f"基準滑動類 P90 {lit} → 整份當讀不了", d.get("baseline_unreadable") is True, r.stdout[:300])
++            (root / ".lumos" / "macrobench-baseline.json").unlink()
++            (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([_mb_scroll("pkg.Flow", 12345)]).replace("12345", lit), encoding="utf-8")
++            r = _mb_run(root, "--json")
++            d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++            check(f"結果檔滑動類 P90 {lit} → 那個檔記成讀不了", any(f.get("kind") == "unreadable" for f in d.get("failed", [])), r.stdout[:300])
++    huge = "1" + "0" * 400   # JSON 整數讀成 Python int,轉 float 會溢位
++    with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
++        root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr(max=12345)])
++        p = root / ".lumos" / "macrobench-thresholds.json"
++        p.write_text(p.read_text(encoding="utf-8").replace("12345", huge), encoding="utf-8")
++        r = _mb_run(root, "--json")
++        check("門檻 max 是超大整數 → rc2 不噴例外", r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
++    with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text('{"results_dirs": ["out"], "tolerance_pct": %s}' % huge, encoding="utf-8")
++        r = _mb_run(root, "--json")
++        check("設定容差是超大整數 → rc2 不噴例外", r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+ 
+ 
+ def t_macrobench_baseline_records_source():
+     """--update-baseline 把每個情境來自哪個結果檔(相對 repo 的路徑與 sha256)寫進基準;
+     這次讀不了而沿用的舊項目保留它原本的來源;沒有來源欄的舊基準照樣能比。"""
+     import hashlib, json, tempfile
+     with tempfile.TemporaryDirectory(prefix="gctl-mbsrc-") as td:
+         root = Path(td)
+         (root / ".lumos").mkdir()
+         (root / "out" / "run1").mkdir(parents=True)
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index 16fcaaccbf91d3dcb6269dc797b33aedbb2d6110..78c993d1e9862c47560a17330526719e8d6f4a85 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -117,14 +117,14 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑
+    select c.name, d.dominated_size_bytes, d.dominated_obj_count from heap_graph_dominator_tree d
+      join heap_graph_object o on o.id = d.id join heap_graph_class c on o.type_id = c.id
+    order by d.dominated_size_bytes desc limit 10;
+    ```
+    `heap_graph_reference` 以 `owned_id` 找回 `owner_id` 與 `field_name`,就是程式裡的變數名。
+ 3. 收據 `layers[3]` 記兩份檔的雜湊、查詢 Q 編號與結果;快照可能含個資,`redacted` 照實填。
+ 
+ ## 收尾
+ 
+ 1. 收據的 `report.md` 是收據檔,不是給編排者的報告;子代理環境擋 Write 寫報告檔時,用 Bash 寫入。報告用官方標籤:`[SQL]`(指得回 Q 編號或結果檔)、`[INFERRED]`、`[GAP]`,另加 `[DECISION]`(人裁的接受標準)。
+-2. 照抄 `reference.md` 的 `rerun.sh`(不用改),自己跑一次確認回 0。
++2. 把 `scripts/templates/android-receipt-rerun.sh` 複製成收據目錄的 `rerun.sh`(不用改),自己跑一次確認回 0;回 2 是收據本身寫錯,照它印的原因修。
+    收據進版控時,`queries.sql`、`rerun.sh` 會被「每支檔有家」當程式檔擋下:第一次在專案的 `.lumos/config.json` 加 `"node_home": {"ignore": [".lumos/receipts/*"]}`(已有 node_home 就只加進 ignore 清單),收據是驗證留下的紀錄,不需要家。
+ 3. 依調研〈寫回規則〉決定寫回:相同條件達標 → Verification pass;退步或證實有問題 → 開或更新 Issue;條件不等價、缺基準、Trace 掉資料 → pending,不寫 pass。
+ 4. 要證明收據夠用(提交前必做):派一個沒脈絡的 Agent,只給收據目錄與原始檔,跑 `rerun.sh` 並判每條結論;它抓到的問題改完、重跑 `rerun.sh` 回 0 才提交。要盲測分析能力時,artifacts 目錄名改成中性的(不要叫 `bind8` 這種會洩露答案的名字)。
+diff --git a/skills/lumos-android-evidence/reference.md b/skills/lumos-android-evidence/reference.md
+index 3d5ba04e1dd0ec9a3e9bc64d344ffbca172c24db..077960b7af4f2c328f16926db851922764e3c84a 100644
+--- a/skills/lumos-android-evidence/reference.md
++++ b/skills/lumos-android-evidence/reference.md
+@@ -68,83 +68,23 @@
+ select ...;
+ ```
+ 
+ - `session`:同一個 trace_processor session 的名字;同名的查詢依序在同一個 session 跑。
+ - `trace`:artifact `id`。同一個 session 只能對一份 Trace。
+ - `requires`:要先跑過的查詢(建暫存表、`include perfetto module`);沒有寫 `-`。
+ - `expect`:`<列的第一欄值>:<欄>=<值>,…`,比對時數值取到小數兩位;只建表不出結果的寫 `expect=-`。第一欄的值不能有空白、冒號、逗號,也要是字串(輸出裡帶引號那種);名稱不合(例如 `Heap size (KB)`、`HWC:validate`)或第一欄是數字時,SQL 裡另取一個字串別名當第一欄(`'heap_kb' as k`)。
+ - `rerun.sh` 遇到標頭數跟解析到的條數不一樣、一條 expect 都沒有、或 manifest 列的 Q 不在檔裡,會回 2 並說原因;這是收據本身寫錯,不是量測結果不符。
+ - 下一行起到 `;` 結束是 SQL 本體,一條一個語句。
+ 
+-## rerun.sh 範本
++## rerun.sh
+ 
+-收據目錄裡放這支,原樣照抄、不用改。跑前把 `$SKILL_ROOT/references/perfetto/bin` 放進 PATH(或用 `TP=<trace_processor 路徑> ./rerun.sh` 指定)。需要 python3(標準庫)。
++範本是工具鏈的 `scripts/templates/android-receipt-rerun.sh`(接上 Lumos 的專案裡同一個路徑也有一份),寫收據時原樣複製進收據目錄,不要改:
+ 
+-```sh
+-#!/bin/sh
+-# 照 queries.sql 標頭重跑每條查詢並比對 expect;全部相符回 0
+-set -eu
+-HERE=$(cd "$(dirname "$0")" && pwd)
+-PROJECT_ROOT="$HERE/../../.."          # 收據在 <專案>/.lumos/receipts/<run-id>/
+-exec python3 - "$HERE" "$PROJECT_ROOT" "${TP:-trace_processor}" <<'PY'
+-import json, re, subprocess, sys, tempfile, os
+-here, root, tp = sys.argv[1], sys.argv[2], sys.argv[3]
+-man = json.load(open(f'{here}/manifest.json'))
+-paths = {a['id']: os.path.join(root, a['path']) for a in man['artifacts']}
+-text = open(f'{here}/queries.sql', encoding='utf-8').read()
+-qs = {}
+-for qid, head, sql in re.findall(r'^-- \[(Q\d+)\] (.+?)\n(.*?;)\s*$', text, re.S | re.M):
+-    qs[qid] = (dict(x.split('=', 1) for x in head.split()), sql)
+-# 不准空轉:標頭數跟解析到的條數要一樣(漏分號、標頭寫歪會少)、至少一條帶 expect、manifest 列的 Q 都要在
+-heads = re.findall(r'^--\s*\[(Q\d+)\]', text, re.M)
+-listed = {q for layer in man.get('layers', []) for q in layer.get('queries', [])}
+-problems = []
+-if len(heads) != len(qs):
+-    problems.append(f'queries.sql 有 {len(heads)} 個標頭、只解析到 {len(qs)} 條(標頭要寫成 -- [Qn],SQL 要以 ; 結尾)')
+-if not any(kv.get('expect', '-') != '-' for kv, _ in qs.values()):
+-    problems.append('沒有任何一條帶 expect,等於什麼都沒驗')
+-if listed - set(qs):
+-    problems.append(f'manifest 列了 queries.sql 沒有的查詢:{sorted(listed - set(qs))}')
+-if problems:
+-    print('BAD 收據本身:' + ';'.join(problems))
+-    sys.exit(2)
+-
+-def chain(qid, seen=()):
+-    """requires 遞移展開,前置語句在前;前置只能是 INCLUDE / CREATE 這類不回傳列的語句"""
+-    req = qs[qid][0].get('requires', '-')
+-    out = []
+-    for r in ([] if req == '-' else req.split(',')):
+-        if r not in seen:
+-            out += [x for x in chain(r, seen + (qid,)) if x not in out]
+-    return out + [qid]
+-
+-fail = 0
+-for qid, (kv, sql) in qs.items():
+-    if kv.get('expect', '-') == '-':
+-        continue
+-    trace = paths[kv['trace']]
+-    with tempfile.NamedTemporaryFile('w', suffix='.sql', delete=False) as f:
+-        f.write(''.join(qs[x][1] + '\n' for x in chain(qid)))
+-    r = subprocess.run([tp, trace, '-q', f.name], capture_output=True, text=True)
+-    os.unlink(f.name)
+-    key, _, pairs = kv['expect'].partition(':')
+-    rows = [l for l in r.stdout.splitlines() if l.startswith('"')]
+-    hdr = [h.strip('"') for h in rows[0].split(',')] if rows else []
+-    row = next((x for x in rows[1:] if x.split(',')[0].strip('"') == key), None)
+-    ok = r.returncode == 0 and row is not None
+-    if ok:
+-        vals = dict(zip(hdr, [v.strip('"') for v in row.split(',')]))
+-        for p in pairs.split(','):
+-            k, v = p.split('=')
+-            try:
+-                ok &= round(float(vals.get(k, 'nan')), 2) == round(float(v), 2)
+-            except ValueError:
+-                ok &= vals.get(k) == v
+-    print(('OK  ' if ok else 'BAD ') + qid, kv['expect'], '' if r.returncode == 0 else r.stderr.strip()[-200:])
+-    fail += not ok
+-sys.exit(1 if fail else 0)
+-PY
+ ```
++cp scripts/templates/android-receipt-rerun.sh .lumos/receipts/<run-id>/rerun.sh
++```
++
++跑前把 `$SKILL_ROOT/references/perfetto/bin` 放進 PATH(或用 `TP=<trace_processor 路徑> ./rerun.sh` 指定)。需要 python3(標準庫)。回傳碼:0 全部相符、1 有比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡)。
+ 
+ - 每條查詢只重放它 `requires` 鏈上的語句,不重放同 session 其他查詢:trace_processor v57.2 的 `-q` 一個檔裡有兩條回傳列的語句會直接報錯(2026-10-23 實測)。所以 `requires` 只能指 INCLUDE / CREATE 這類不回傳列的語句。
+ - 不靠常駐 session 的狀態,別人重跑得出一樣的結果;查詢多時會慢。
+ - 停在 L0 的收據也要有幾條 Trace 查詢(每輪 App 畫格數、超時格數),驗 `valid_iterations.confirmed_in_trace`;L0 本身的重跑指令寫在 report.md(見 SKILL.md L0 第 5 步)。

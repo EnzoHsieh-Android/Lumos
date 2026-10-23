@@ -17753,6 +17753,307 @@ def t_macrobench_duplicate_scenario():
         check("重複情境 → 一般比對不說讀不了", "讀不了" not in r.stdout, r.stdout)
 
 
+def t_android_evidence_rerun_refuses_empty():
+    """逐層診斷收據的重跑腳本(scripts/templates/android-receipt-rerun.sh):收據本身寫錯時回 2 並說原因,不能空轉回 0。
+    每個案例只踩一道檢查(其他條件都合格、查詢都帶 expect),拿掉任一道檢查,那個案例就會跑去叫分析工具、回 1 而不是 2。
+    最後一個案例格式全對,用假的分析工具確認範本真的跑得通、比對相符時回 0。"""
+    import json, os, subprocess as sp, tempfile
+    tpl = Path(GRAPHCTL).resolve().parent / "templates" / "android-receipt-rerun.sh"
+    check("前置:範本檔在 scripts/templates/", tpl.is_file(), str(tpl))
+    if not tpl.is_file():
+        return
+    ok_q = "-- [Q1] session=a trace=t requires=- expect=a:n=1\nselect 'a' as k, 1 as n;\n"
+    cases = (("標頭比解析到的多(最後一條漏分號)", ok_q + "-- [Q2] session=a trace=t requires=- expect=a:n=1\nselect 'a' as k, 1 as n\n", ["Q1"], 2, "標頭"),
+             ("一條 expect 都沒有", "-- [Q1] session=a trace=t requires=- expect=-\ncreate perfetto table x as select 1;\n", [], 2, "expect"),
+             ("manifest 列了不存在的 Q", ok_q, ["Q1", "Q9"], 2, "Q9"),
+             ("查詢指到不存在的 Trace", ok_q.replace("trace=t", "trace=zzz"), ["Q1"], 2, "zzz"),
+             ("requires 指到不存在的查詢", ok_q.replace("requires=-", "requires=Q7"), ["Q1"], 2, "Q7"),
+             ("格式全對、比對相符", ok_q, ["Q1"], 0, "OK  Q1"))
+    for why, sql, layer_qs, want_rc, want_text in cases:
+        with tempfile.TemporaryDirectory(prefix="gctl-rerun-") as td:
+            d = Path(td) / ".lumos" / "receipts" / "x"
+            d.mkdir(parents=True)
+            (d / "rerun.sh").write_bytes(tpl.read_bytes())
+            (d / "queries.sql").write_text(sql, encoding="utf-8")
+            (d / "manifest.json").write_text(json.dumps({"artifacts": [{"id": "t", "path": "trace.bin"}],
+                                                         "layers": [{"layer": "L1", "queries": layer_qs}]}), encoding="utf-8")
+            fake = Path(td) / "fake_tp"
+            fake.write_text("#!/bin/sh\nprintf '\"k\",\"n\"\\n\"a\",\"1\"\\n'\n", encoding="utf-8")
+            fake.chmod(0o755)
+            r = sp.run(["sh", str(d / "rerun.sh")], capture_output=True, text=True, env=dict(os.environ, TP=str(fake)))
+            said = r.stderr if want_rc == 2 else r.stdout   # 收據寫錯照 lumos 慣例印到 stderr、以「擋下:」開頭
+            check(f"rerun.sh {why} → rc{want_rc} 並說明", r.returncode == want_rc and want_text in said
+                  and (want_rc != 2 or said.startswith("擋下:")) and "Traceback" not in r.stderr,
+                  f"rc={r.returncode} out={r.stdout[:300]} err={r.stderr[:200]}")
+
+
+def t_macrobench_rejects_nonfinite():
+    """NaN 與正負無限大在每個讀數字的地方都不收(JSON 解析器收這三個字面值,型別檢查也當成數字):
+    門檻值→回 2;設定檔容差→回 2;基準檔的統計值→整份當讀不了;結果檔的統計值→那個檔記成讀不了。
+    不擋的話:門檻 max 寫 NaN 時「現值 > NaN」恆假→永遠判達標;容差寫 Infinity→永遠不算退步。"""
+    import json, tempfile
+    for lit in ("NaN", "Infinity", "-Infinity"):
+        for bound in ("max", "min"):
+            with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+                root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+                t = _mb_thr(max=None)
+                t[bound] = 12345
+                body = json.dumps({"version": 1, "thresholds": [t]}, ensure_ascii=False)
+                (root / ".lumos" / "macrobench-thresholds.json").write_text(body.replace("12345", lit), encoding="utf-8")
+                r = _mb_run(root, "--json")
+                check(f"門檻 {bound}={lit} → rc2 且說第 1 條", r.returncode == 2 and "第 1 條" in r.stderr, f"rc={r.returncode} {r.stdout[:200]} {r.stderr[:200]}")
+        for key in ("tolerance_pct", "abs_tolerance"):
+            with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+                root = Path(td)
+                (root / ".lumos").mkdir()
+                (root / ".lumos" / "macrobench.json").write_text('{"results_dirs": ["out"], "%s": %s}' % (key, lit), encoding="utf-8")
+                r = _mb_run(root, "--json")
+                check(f"設定 {key}={lit} → rc2", r.returncode == 2 and "macrobench.json" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+            root = Path(td)
+            (root / ".lumos").mkdir()
+            (root / "out").mkdir()
+            (root / ".lumos" / "macrobench.json").write_text('{"results_dirs": ["out"]}', encoding="utf-8")
+            (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+            base = {"version": 1, "entries": {"pkg.S#coldStartup": {"device": {"model": "Pixel Tablet", "fingerprint": "fp-1"},
+                    "metrics": {"timeToInitialDisplayMs": {"median": 12345, "minimum": 1.0, "maximum": 2.0}}, "sampled": {}}}}
+            (root / ".lumos" / "macrobench-baseline.json").write_text(json.dumps(base).replace("12345", lit), encoding="utf-8")
+            r = _mb_run(root, "--json")
+            d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+            check(f"基準統計值 {lit} → 整份當讀不了", d.get("baseline_unreadable") is True, r.stdout[:300])
+            res = _mb_result_json([_mb_startup("pkg.S", 12345, 950.0, 1050.0)]).replace("12345", lit)
+            (root / "out" / "x-benchmarkData.json").write_text(res, encoding="utf-8")
+            (root / ".lumos" / "macrobench-baseline.json").unlink()
+            r = _mb_run(root, "--json")
+            d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+            check(f"結果檔統計值 {lit} → 那個檔記成讀不了", any(f.get("kind") == "unreadable" for f in d.get("failed", [])), r.stdout[:300])
+        with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+            root = Path(td)
+            (root / ".lumos").mkdir()
+            (root / "out").mkdir()
+            (root / ".lumos" / "macrobench.json").write_text('{"results_dirs": ["out"]}', encoding="utf-8")
+            (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([_mb_scroll("pkg.Flow", 1.0)]), encoding="utf-8")
+            base = {"version": 1, "entries": {"pkg.Flow#scrollList": {"device": {"model": "Pixel Tablet", "fingerprint": "fp-1"},
+                    "metrics": {}, "sampled": {"frameOverrunMs": {"P50": -3.0, "P90": 12345, "P95": 1.0, "P99": 1.0}}}}}
+            (root / ".lumos" / "macrobench-baseline.json").write_text(json.dumps(base).replace("12345", lit), encoding="utf-8")
+            r = _mb_run(root, "--json")
+            d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+            check(f"基準滑動類 P90 {lit} → 整份當讀不了", d.get("baseline_unreadable") is True, r.stdout[:300])
+            (root / ".lumos" / "macrobench-baseline.json").unlink()
+            (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([_mb_scroll("pkg.Flow", 12345)]).replace("12345", lit), encoding="utf-8")
+            r = _mb_run(root, "--json")
+            d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+            check(f"結果檔滑動類 P90 {lit} → 那個檔記成讀不了", any(f.get("kind") == "unreadable" for f in d.get("failed", [])), r.stdout[:300])
+    huge = "1" + "0" * 400   # JSON 整數讀成 Python int,轉 float 會溢位
+    with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+        root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr(max=12345)])
+        p = root / ".lumos" / "macrobench-thresholds.json"
+        p.write_text(p.read_text(encoding="utf-8").replace("12345", huge), encoding="utf-8")
+        r = _mb_run(root, "--json")
+        check("門檻 max 是超大整數 → rc2 不噴例外", r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+    with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "macrobench.json").write_text('{"results_dirs": ["out"], "tolerance_pct": %s}' % huge, encoding="utf-8")
+        r = _mb_run(root, "--json")
+        check("設定容差是超大整數 → rc2 不噴例外", r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-200:]}")
+
+
+def t_macrobench_baseline_records_source():
+    """--update-baseline 把每個情境來自哪個結果檔(相對 repo 的路徑與 sha256)寫進基準;
+    這次讀不了而沿用的舊項目保留它原本的來源;沒有來源欄的舊基準照樣能比。"""
+    import hashlib, json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbsrc-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / "out" / "run1").mkdir(parents=True)
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        f = root / "out" / "run1" / "x-benchmarkData.json"
+        f.write_text(_mb_result_json([_mb_startup("pkg.S", 1000.0, 950.0, 1050.0)]), encoding="utf-8")
+        want = hashlib.sha256(f.read_bytes()).hexdigest()
+        r = _mb_run(root, "--update-baseline")
+        bp = root / ".lumos" / "macrobench-baseline.json"
+        e = json.loads(bp.read_text(encoding="utf-8"))["entries"].get("pkg.S#coldStartup", {}) if bp.exists() else {}
+        check("基準記下來源檔的相對路徑", e.get("source", {}).get("file") == "out/run1/x-benchmarkData.json", r.stdout + str(e))
+        check("基準記下來源檔的 sha256", e.get("source", {}).get("sha256") == want, str(e.get("source")))
+        g = root / "out" / "run1" / "y-benchmarkData.json"
+        g.write_text(_mb_result_json([_mb_startup("pkg.T", 500.0, 480.0, 520.0)]), encoding="utf-8")
+        f.write_text("{ broken", encoding="utf-8")
+        _mb_run(root, "--update-baseline")
+        es = json.loads(bp.read_text(encoding="utf-8"))["entries"]
+        check("這次讀不了的檔,沿用的舊項目保留原本的來源", es.get("pkg.S#coldStartup", {}).get("source", {}).get("sha256") == want, str(es)[:400])
+        check("新讀到的項目記新檔的來源", es.get("pkg.T#coldStartup", {}).get("source", {}).get("file") == "out/run1/y-benchmarkData.json", str(es)[:400])
+        old = {"version": 1, "entries": {"pkg.T#coldStartup": {k: v for k, v in es["pkg.T#coldStartup"].items() if k != "source"}}}
+        bp.write_text(json.dumps(old), encoding="utf-8")
+        r2 = _mb_run(root, "--json")
+        d = json.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+        check("沒有來源欄的舊基準照樣能比", d.get("baseline_unreadable") is False and d.get("checked") == 1, r2.stdout[:300])
+
+
+def _mb_scroll(cls, p90, p50=-3.0):
+    return {"name": "scrollList", "params": {}, "className": cls, "metrics": {},
+            "sampledMetrics": {"frameOverrunMs": {"P50": p50, "P90": p90, "P95": p90, "P99": p90, "runs": [[p90]]}}}
+
+
+def _mb_thr(**over):
+    t = {"scenario": "pkg.Flow#scrollList", "metric": "frameOverrunMs", "stat": "P90", "max": 0,
+         "contract": "Systems/結帳 ★INVARIANT★ 從主頁進結帳", "decided_by": "Enzo", "decided_at": "2026-10-23"}
+    t.update(over)
+    return {k: v for k, v in t.items() if v is not None}
+
+
+def _mb_thr_root(td, benchmarks, thresholds, model="Pixel Tablet"):
+    """暫存專案:一份結果檔 + 門檻檔,沒有基準檔。回 (root, --json 那次的 CompletedProcess, 解析後的 dict, 文字輸出那次的 CompletedProcess)。"""
+    import json
+    root = Path(td)
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / "out").mkdir(exist_ok=True)
+    (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+    (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json(benchmarks, model=model), encoding="utf-8")
+    (root / ".lumos" / "macrobench-thresholds.json").write_text(
+        json.dumps({"version": 1, "thresholds": thresholds}, ensure_ascii=False), encoding="utf-8")
+    r = _mb_run(root, "--json")
+    d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    return root, r, d, _mb_run(root)
+
+
+def t_macrobench_threshold_fail():
+    """門檻 P90 ≤ 0,這次 3.6 → 列為沒達,附現值、門檻值與合約;仍回 0;--json 有三欄。"""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        _, r, d, rt = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+        fails = d.get("threshold_failures", [])
+        check("沒達門檻 → rc0(只提醒)", r.returncode == 0, r.stdout + r.stderr)
+        check("--json 有三欄", all(k in d for k in ("threshold_failures", "threshold_passed", "threshold_skipped")), r.stdout)
+        check("列進沒達且附現值與門檻", len(fails) == 1 and fails[0].get("current") == 3.6 and fails[0].get("max") == 0,
+              str(fails))
+        check("沒達那筆附合約", fails and fails[0].get("contract") == "Systems/結帳 ★INVARIANT★ 從主頁進結帳", str(fails))
+        check("文字輸出說沒達驗收門檻並印合約", rt.returncode == 0 and "沒達驗收門檻" in rt.stdout and "從主頁進結帳" in rt.stdout,
+              rt.stdout)
+
+
+def t_macrobench_threshold_rc_and_fields():
+    """只提醒不擋:同時有退步與沒達門檻,文字與 --json 兩種輸出都回 0;--json 一律有三欄,沒門檻檔時三欄是空清單。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+        (root / ".lumos" / "macrobench-baseline.json").write_text(json.dumps({"version": 1, "entries": {
+            "pkg.Flow#scrollList": {"device": {"model": "Pixel Tablet", "fingerprint": "fp-1"}, "metrics": {},
+                                    "sampled": {"frameOverrunMs": {"P50": -3.0, "P90": -1.0, "P95": -1.0, "P99": -1.0}}}}}),
+            encoding="utf-8")
+        r = _mb_run(root, "--json")
+        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+        check("前置:同時有退步與沒達門檻", d.get("regressions") and d.get("threshold_failures"), r.stdout[:300])
+        check("--json 回 0", r.returncode == 0, r.stderr)
+        check("文字輸出也回 0", _mb_run(root).returncode == 0)
+        check("--json 三欄都在而且是清單", all(isinstance(d.get(k), list)
+              for k in ("threshold_failures", "threshold_passed", "threshold_skipped")), r.stdout[:300])
+
+
+def t_macrobench_threshold_pass_edge():
+    """剛好等於門檻、或在門檻內 → 達標;min 型(越大越好)低於 min 才算沒達。"""
+    import tempfile
+    for p90, want_fail in ((0.0, False), (-0.5, False), (0.01, True)):
+        with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+            _, r, d, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", p90)], [_mb_thr()])
+            got = (len(d.get("threshold_failures", [])), len(d.get("threshold_passed", [])))
+            check(f"P90={p90} 門檻 max 0 → {'沒達' if want_fail else '達標'}", got == ((1, 0) if want_fail else (0, 1)),
+                  r.stdout)
+    for med, want_fail in ((500.0, False), (499.9, True)):
+        with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+            thr = _mb_thr(scenario="pkg.S#coldStartup", metric="timeToInitialDisplayMs", stat="median", max=None, min=500)
+            _, r, d, _ = _mb_thr_root(td, [_mb_startup("pkg.S", med, med - 10, med + 10)], [thr])
+            got = (len(d.get("threshold_failures", [])), len(d.get("threshold_passed", [])))
+            check(f"min 500、中位數 {med} → {'沒達' if want_fail else '達標'}", got == ((1, 0) if want_fail else (0, 1)), r.stdout)
+
+
+def t_macrobench_threshold_device():
+    """門檻寫了 device_model 而這次裝置不同 → 換了裝置沒判,不判達標也不判沒達;沒寫 device_model 照判。"""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        _, r, d, rt = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr(device_model="SM-X710")], model="Pixel 6a")
+        sk = d.get("threshold_skipped", [])
+        check("裝置不同 → 不列沒達也不列達標", not d.get("threshold_failures") and not d.get("threshold_passed"), r.stdout)
+        check("裝置不同 → 列進沒判並說是裝置", len(sk) == 1 and "裝置" in sk[0].get("reason", ""), str(sk))
+        check("文字輸出說換了裝置", "換了裝置" in rt.stdout, rt.stdout)
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        _, r, d, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr(device_model="SM-X710")], model="SM-X710")
+        check("裝置相同 → 照判(沒達)", len(d.get("threshold_failures", [])) == 1, r.stdout)
+
+
+def t_macrobench_threshold_without_baseline():
+    """沒有基準檔、或基準檔讀不了,門檻照判;不受基準影響。"""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        root, r, d, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+        check("前置:沒有基準檔", d.get("baseline_missing") is True, r.stdout)
+        check("沒基準 → 門檻照判", len(d.get("threshold_failures", [])) == 1, r.stdout)
+        (root / ".lumos" / "macrobench-baseline.json").write_text("{ broken", encoding="utf-8")
+        import json
+        r2 = _mb_run(root, "--json")
+        d2 = json.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+        check("前置:基準檔讀不了", d2.get("baseline_unreadable") is True, r2.stdout)
+        check("基準讀不了 → 門檻照判", len(d2.get("threshold_failures", [])) == 1, r2.stdout)
+
+
+def t_macrobench_threshold_bad_file():
+    """門檻檔壞掉或欄位不對 → rc2 並說第幾條哪裡壞;沒有門檻檔照舊不報錯。"""
+    import json, tempfile
+    bads = [("JSON 壞掉", "{ nope"), ("最外層陣列", "[]"), ("thresholds 不是清單", '{"version": 1, "thresholds": {}}')]
+    for why, item in (("缺 scenario", _mb_thr(scenario=None)), ("缺 contract", _mb_thr(contract=None)),
+                      ("缺 decided_by", _mb_thr(decided_by=None)), ("decided_at 不是日期", _mb_thr(decided_at="昨天")),
+                      ("max 與 min 都寫", _mb_thr(min=1)), ("max 與 min 都沒寫", _mb_thr(max=None)),
+                      ("max 不是數字", _mb_thr(max="0")), ("max 是布林", _mb_thr(max=True)),
+                      ("stat 不認得", _mb_thr(stat="P75")), ("滑動指標卻用 median", _mb_thr(stat="median")),
+                      ("device_model 不是字串", _mb_thr(device_model=7)),
+                      ("decided_at 格式對但不是真的日期", _mb_thr(decided_at="2026-13-45"))):
+        bads.append((why, json.dumps({"version": 1, "thresholds": [_mb_thr(), item]}, ensure_ascii=False)))
+    for why, body in bads:
+        with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+            root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+            (root / ".lumos" / "macrobench-thresholds.json").write_text(body, encoding="utf-8")
+            r = _mb_run(root, "--json")
+            item_err = why not in ("JSON 壞掉", "最外層陣列", "thresholds 不是清單")
+            check(f"壞門檻檔({why}) → rc2 且說是門檻檔" + ("、第 2 條" if item_err else ""),
+                  r.returncode == 2 and "macrobench-thresholds.json" in r.stderr and (not item_err or "第 2 條" in r.stderr),
+                  f"rc={r.returncode} err={r.stderr!r}")
+    # 壞的那條排第 1 條:編號要對得上檔案順序,不能剛好等於最後一條
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+        (root / ".lumos" / "macrobench-thresholds.json").write_text(json.dumps(
+            {"version": 1, "thresholds": [_mb_thr(contract=None), _mb_thr()]}, ensure_ascii=False), encoding="utf-8")
+        r = _mb_run(root, "--json")
+        check("壞的排第 1 條 → 說第 1 條", r.returncode == 2 and "第 1 條" in r.stderr and "第 2 條" not in r.stderr, r.stderr[:200])
+    # stat 寫錯而且那個情境這次沒跑到:要在讀檔時就擋,不能靠比對時才發現(比對時情境沒跑到只會列成沒判)
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+        (root / ".lumos" / "macrobench-thresholds.json").write_text(json.dumps(
+            {"version": 1, "thresholds": [_mb_thr(scenario="pkg.Other#x", stat="P75")]}, ensure_ascii=False), encoding="utf-8")
+        r = _mb_run(root, "--json")
+        check("stat 不認得、情境沒跑到 → 仍 rc2", r.returncode == 2 and "第 1 條" in r.stderr, f"rc={r.returncode} {r.stdout[:200]}")
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+        (root / ".lumos" / "macrobench-thresholds.json").unlink()
+        r = _mb_run(root, "--json")
+        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+        check("沒門檻檔 → rc0、三欄都空", r.returncode == 0 and d.get("threshold_failures") == [] and
+              d.get("threshold_passed") == [] and d.get("threshold_skipped") == [], r.stdout + r.stderr)
+
+
+def t_macrobench_threshold_missing_scenario():
+    """門檻指的情境或指標這次沒跑到 → 沒判,並說缺哪個;不得當成達標。"""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+        thrs = [_mb_thr(scenario="pkg.Other#scrollList"), _mb_thr(metric="frameDurationCpuMs")]
+        _, r, d, rt = _mb_thr_root(td, [_mb_scroll("pkg.Flow", -1.0)], thrs)
+        sk = d.get("threshold_skipped", [])
+        check("缺情境與缺指標 → 兩條都沒判", len(sk) == 2 and not d.get("threshold_passed") and not d.get("threshold_failures"),
+              r.stdout)
+        reasons = " ".join(s.get("reason", "") for s in sk)
+        check("沒判理由分得出缺情境與缺指標", "情境" in reasons and "frameDurationCpuMs" in reasons, reasons)
+        check("文字輸出兩條都列成沒判、沒有沒達的行", rt.stdout.count("[沒判]") == 2 and "[沒達驗收門檻]" not in rt.stdout, rt.stdout)
+
+
 def t_pitfalls_no_lint():
     """--no-lint:--diff 只跑 regex 層,即使有 .lumos/lint.json 也不跑 lint(pre-push advisory 用)。"""
     import json as _json, subprocess as sp, sys as _sys
