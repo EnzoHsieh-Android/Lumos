@@ -89,3 +89,92 @@ cp scripts/templates/android-receipt-rerun.sh .lumos/receipts/<run-id>/rerun.sh
 - 每條查詢只重放它 `requires` 鏈上的語句,不重放同 session 其他查詢:trace_processor v57.2 的 `-q` 一個檔裡有兩條回傳列的語句會直接報錯(2026-10-23 實測)。所以 `requires` 只能指 INCLUDE / CREATE 這類不回傳列的語句。
 - 不靠常駐 session 的狀態,別人重跑得出一樣的結果;查詢多時會慢。
 - 停在 L0 的收據也要有幾條 Trace 查詢(每輪 App 畫格數、超時格數),驗 `valid_iterations.confirmed_in_trace`;L0 本身的重跑指令寫在 report.md(見 SKILL.md L0 第 5 步)。
+
+## 記憶體與穩定性收集
+
+規則單源 `Projects/Android記憶體與穩定性驗收_計劃`;這裡只放照抄用的寫法。
+
+`.lumos/macrobench.json` 加 `stability` 段(有這段時 `results_dirs` 可以不填):
+
+```json
+{"stability": {
+  "package": "com.example.app",
+  "scenario": "com.example.bench.PlayerLeak#cycle",
+  "driver": "adb shell am instrument -w -e class com.example.bench.PlayerLeak#cycle -e cycles {{CYCLES}} com.example.bench/androidx.test.runner.AndroidJUnitRunner",
+  "warmup": 2, "cycles": 5,
+  "test_data": {"value": true, "decided_by": "<裁定的人>", "decided_at": "<YYYY-MM-DD>"},
+  "strictmode": true, "category": "app"}}
+```
+
+- `driver` 跑兩次(暖機、量測),`{{CYCLES}}` 換成輪數,環境變數 `CYCLES` 與 `ANDROID_SERIAL`(設了 `adb_serial` 時)也會給。
+- `test_data` 不寫就不錄 Java 快照,java_growth 與 instances 列成跳過。範例的裁定人與日期是佔位,不能照抄:要先問人「這個專案是不是只在測試帳號與假資料下跑」,照對方的回答填真的人名與日期(--check-config 只擋得住 <裁定的人>、<YYYY-MM-DD> 這種原樣照抄的佔位,改成別的假名字它分不出來;真正的防線是先問人)。
+- `strictmode` 寫 true 的前提是測試建置真的打開了 StrictMode 的 VM 規則並 `penaltyLog()`;宣告了卻沒開,零筆照樣判通過。
+- release 建置開 R8 時加 `"mapping": "app/build/outputs/mapping/benchmark/mapping.txt"`,類別名才還原得回來。
+
+跑:`sh scripts/templates/android-stability-collect.sh [run-id]`(在專案根目錄;`ADB`、`TP`、`JAVA_HEAP_DUMP` 指外部工具),再 `lumos macrobench --stability .lumos/artifacts/android/<run-id>/stability.json`。
+
+- 主機的 `python3` 要 3.11 以上(腳本用 `python3 -P`;工具鏈本身要求 3.14)。
+- run-id 只收英數字、點、底線與連字號,也不能只有點(它會用在裝置上的路徑);不給就用 `stability-<日期時間>`。
+- 專案是 git repo 時,`.lumos/artifacts/` 要先在 `.gitignore` 裡,不然腳本回 2、不碰裝置。
+- 保留:每次開跑時只自動刪超過 7 天的 `heap-*.pftrace`(不再跑就不會刪);`cycle.pftrace`(量測那段的追蹤檔)、`record.pbtxt`(錄製設定)、`logcat.txt`(只有違規行)、`stability.json` 不自動刪;原始日誌 `logcat.raw` 不管成不成都在收集結束前刪掉。整個 run 目錄不進版控,用完自己刪。
+- `java_heap_dump` 逾時或被中斷時,它在裝置 `/data/misc/perfetto-traces/` 底下的暫存快照(`java-profile-*`)可能留著;收集腳本只清自己的 `lumos-stability-<run-id>.*`,那份要自己 `adb shell ls` 看過再刪。
+- 測試縮短用的環境變數:`LUMOS_STABILITY_SETTLE`(預設 2 秒)、`LUMOS_STABILITY_STOP_TIMEOUT`(30 秒)、`LUMOS_STABILITY_LONG_TIMEOUT`(1800 秒),平常不用設。
+
+門檻檔 `.lumos/macrobench-thresholds.json` 的寫了 `check` 的條目(`scenario` 要等於 stability 段的 scenario;另加 `contract`、`decided_by`、`decided_at`):
+
+| check | 自己的欄位 |
+|---|---|
+| native_unreachable | `max_bytes`(預設 0) |
+| java_growth | `min_per_cycle`(預設 1)、`exclude_prefixes`(蓋掉預設排除的 java.、javax.、kotlin.、android.、androidx.、dalvik.、libcore.、sun.) |
+| instances | `class`、`max` |
+| peak_vitals、exits、strictmode | 無 |
+| frozen | `max_block_ms`(選填) |
+
+每一種都另外可以寫 `device_model`(選填,指定裝置型號;結果檔換了裝置時那條跳過)。
+
+寫了表格以外的欄位會被當成寫錯、回 2。例:
+
+```json
+{"version": 1, "thresholds": [
+  {"scenario": "com.example.bench.PlayerLeak#cycle", "check": "java_growth", "min_per_cycle": 1,
+   "contract": "Systems/播放器釋放:畫面關掉時 SDK 都要 release", "decided_by": "<裁定的人>", "decided_at": "<YYYY-MM-DD>"},
+  {"scenario": "com.example.bench.PlayerLeak#cycle", "check": "instances", "class": "com.example.app.PlayerActivity", "max": 1,
+   "contract": "Systems/播放器釋放:畫面關掉時 SDK 都要 release", "decided_by": "<裁定的人>", "decided_at": "<YYYY-MM-DD>"},
+  {"scenario": "com.example.bench.PlayerLeak#cycle", "check": "exits",
+   "contract": "Systems/播放器釋放:畫面關掉時 SDK 都要 release", "decided_by": "<裁定的人>", "decided_at": "<YYYY-MM-DD>"}]}
+```
+
+UI Automator 驅動要「自己測自己」(測試模組的 `targetPackage` 是測試套件本身,Macrobenchmark 模組就是這種),否則每次 `am instrument` 會重啟被測 App,記憶體累積不起來:
+
+```kotlin
+@RunWith(AndroidJUnit4::class)
+class PlayerLeak {
+    @Test fun cycle() {
+        val n = InstrumentationRegistry.getArguments().getString("cycles")!!.toInt()
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        repeat(n) {
+            device.findObject(By.res("com.example.app", "open_player")).click()   // 開畫面
+            device.wait(Until.hasObject(By.res("com.example.app", "player")), 5_000)
+            device.pressBack()                                                     // 關畫面
+            device.wait(Until.hasObject(By.res("com.example.app", "open_player")), 5_000)
+        }
+    }
+}
+```
+
+Maestro 驅動:flow 不能用會先停 App 的 `launchApp`(要嘛不啟動,要嘛 `stopApp: false`),兩次呼叫都從同一個起點畫面開始,輪數用 `-e` 傳(`"driver": "maestro test -e CYCLES={{CYCLES}} .maestro/player-cycle.yaml"`):
+
+```yaml
+appId: com.example.app
+---
+- repeat:
+    times: ${CYCLES}
+    commands:
+      - tapOn:
+          id: "open_player"
+      - assertVisible:
+          id: "player"
+      - back
+```
+
+`repeat` 的 `times` 吃不吃 `${CYCLES}` 這種變數,官方文件沒寫、這裡也沒實測過;子案二接 Maestro 時先驗,不行就改用 `while` 加計數。

@@ -1,0 +1,1250 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 33a712bf..57d1333d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -31920,20 +31920,24 @@ _VENDORED_TREE_FILES = (
+     "scripts/hooks/claude/lumos-entry-hook.py",
+     "scripts/hooks/claude/bypass-ask-hook.py",
+     "scripts/hooks/post-commit",
+     "scripts/hooks/pre-commit",
+     "scripts/hooks/pre-push",
+     "scripts/templates/graph-discipline.md",
+     "scripts/templates/note-audit-judge.md",
+     "scripts/templates/note-audit-reread.md",     # 回頭重讀守檔筆記的派工詞範本(lumos update 才發得到消費專案)
+     "scripts/templates/android-receipt-rerun.sh",  # 逐層診斷收據的重跑腳本範本(寫收據時複製進收據目錄)
+     "scripts/templates/android-ui-attribution.sql",  # 逐層診斷 L1 每幀拆 XML/Compose/其他的查詢範本
++    "scripts/templates/android-stability-collect.sh",  # 記憶體與穩定性收集腳本(主機端排順序、用 adb 收資料寫 stability.json)
++    "scripts/templates/android-stability-cycle.sql",  # 記憶體與穩定性:量測期間追蹤檔的峰值、凍結幀、最長阻塞
++    "scripts/templates/android-heap-classes.sql",  # 記憶體與穩定性:Java 快照每個類別還有人指著的實例數
++    "scripts/templates/android-stability-record.pbtxt",  # 記憶體與穩定性:量測期間的 Perfetto 錄製設定
+ )
+ _VENDORED_ALL = frozenset(_VENDORED_TOOLKIT + _VENDORED_TREE_FILES)
+ 
+ 
+ _VENDORED_MANIFEST = ".lumos/vendored.json"   # 安裝/更新時記下每支工具檔的內容指紋
+ 
+ 
+ def _vendored_digest(data):
+     """工具檔的內容指紋:換行統一成 LF 再算 sha256(Windows 的換行轉換不該讓指紋對不上)。"""
+     import hashlib
+@@ -39393,27 +39397,76 @@ def _macrobench_config(repo):
+     path = Path(repo) / ".lumos" / "macrobench.json"
+     if not path.exists():
+         return None, None
+     try:
+         raw = json.loads(path.read_text(encoding="utf-8"))
+     except Exception as e:
+         return None, f"macrobench.json 讀不了(JSON 格式壞了?): {e}"
+     if not isinstance(raw, dict):
+         return None, "macrobench.json 最外層要是物件"
+     dirs = raw.get("results_dirs")
+-    if not isinstance(dirs, list) or not dirs or not all(isinstance(d, str) and d for d in dirs):
++    has_dirs = isinstance(dirs, list) and bool(dirs) and all(isinstance(d, str) and d for d in dirs)
++    if "stability" in raw and dirs == []:   # 只做穩定性的專案:results_dirs 不填或給空清單都收
++        raw = {k: v for k, v in raw.items() if k != "results_dirs"}
++    if "stability" in raw:
++        err = _macrobench_stability_cfg_err(raw["stability"])
++        if err:
++            return None, f"macrobench.json 的 stability 段:{err}"
++    if not has_dirs and ("results_dirs" in raw or "stability" not in raw):
+         return None, "macrobench.json 要有 results_dirs:結果目錄的清單(相對 repo 根目錄的路徑字串)"
+-    cfg = dict(MACROBENCH_DEFAULTS, results_dirs=dirs)
++    cfg = dict(MACROBENCH_DEFAULTS, results_dirs=dirs if has_dirs else [], stability=raw.get("stability"))
+     err = _macrobench_config_fields(raw, cfg)
+     return (None, err) if err else (cfg, None)
+ 
+ 
++MACROBENCH_PKG_RE = re.compile(r"[A-Za-z0-9_.]+")   # 套件名只收英數字、底線與點(跟 skill 替換 __PROCESS__ 前的檢查一樣)
++
++
++def _macrobench_date_ok(s):
++    """YYYY-MM-DD 的真日期:照專案慣例先用 DATE_RE 擋怪寫法,再交給既有 _rule_date(不另寫日期判法)。"""
++    return isinstance(s, str) and bool(DATE_RE.match(s)) and _rule_date(s) is not None
++
++
++def _macrobench_stability_cfg_err(st):
++    """.lumos/macrobench.json 的 stability 段(收集腳本讀、lumos 驗;單源見 Projects/Android記憶體與穩定性驗收_計劃)。回錯誤訊息或 None。"""
++    if not isinstance(st, dict):
++        return "要是物件"
++    for k in ("package", "scenario", "driver"):
++        if not isinstance(st.get(k), str) or not st[k].strip():
++            return f"缺 {k}(要是非空字串)"
++    if not MACROBENCH_PKG_RE.fullmatch(st["package"]):
++        return "package 只收英數字、底線與點"
++    for k in ("warmup", "cycles"):
++        if not _secev_int(st.get(k)) or not 1 <= st[k] <= MACROBENCH_MAX_CYCLES:   # 沒上限時寫錯成天文數字,驅動會一直跑(代碼審 r2 邊界席)
++            return f"{k} 要是 1 到 {MACROBENCH_MAX_CYCLES} 的整數"
++    return _macrobench_stability_optional_err(st)
++
++
++def _macrobench_stability_optional_err(st):
++    """stability 段的選填欄位。回錯誤訊息或 None。"""
++    td = st.get("test_data")
++    if td is not None and not (isinstance(td, dict) and isinstance(td.get("value"), bool)
++                               and isinstance(td.get("decided_by"), str) and td["decided_by"].strip()
++                               and _macrobench_date_ok(td.get("decided_at"))):
++        return "test_data 要寫成 {value: true/false, decided_by: 誰, decided_at: YYYY-MM-DD}"
++    if "strictmode" in st and not isinstance(st["strictmode"], bool):
++        return "strictmode 要是 true 或 false"
++    if not isinstance(st.get("category", "app"), str) or st.get("category", "app") not in MACROBENCH_VITALS_FG:
++        return "category 只能是 app 或 game"
++    if "max_record_s" in st and (not _macrobench_num(st["max_record_s"]) or not 1 <= st["max_record_s"] <= 86400):
++        return "max_record_s 要是 1 到 86400 之間的秒數"
++    for k in ("adb_serial", "mapping"):
++        if k in st and (not isinstance(st[k], str) or not st[k].strip()):
++            return f"{k} 要是非空字串"
++    return None
++
++
+ def _macrobench_read_one(b, ignore):
+     """結果檔裡的一項 benchmark → (情境鍵, metrics, sampled)。格式不對丟 ValueError。
+     情境鍵 = 測試類別#測試名,有參數時再接 [排序後的參數 JSON]。"""
+     import json
+     if not isinstance(b, dict) or not isinstance(b.get("className"), str) or not isinstance(b.get("name"), str):
+         raise ValueError("benchmarks 裡每一項要有 className 與 name")
+     key = f"{b['className']}#{b['name']}"
+     if b.get("params"):
+         key += "[" + json.dumps(b["params"], sort_keys=True, ensure_ascii=False) + "]"
+     metrics, sampled = {}, {}
+@@ -39624,34 +39677,31 @@ def _macrobench_print_diff(res, cfg):
+         print("確認是刻意的變慢(例如加了功能),用這次的結果覆蓋基準:")
+         print("    lumos macrobench --update-baseline")
+ 
+ 
+ MACROBENCH_METRIC_STATS = ("median", "minimum", "maximum")   # 啟動類指標的統計值
+ MACROBENCH_THRESHOLD_REQUIRED = ("scenario", "metric", "stat", "contract", "decided_by", "decided_at")
+ 
+ 
+ def _macrobench_threshold_item_err(t):
+     """門檻檔的一條:必填欄位、max/min 恰好一個有限數、日期是真的日期、stat 的寫法。回錯誤訊息或 None。"""
+-    import datetime
+     if not isinstance(t, dict):
+         return "要是物件"
++    if "check" in t:
++        return _macrobench_check_item_err(t)
+     for k in MACROBENCH_THRESHOLD_REQUIRED:
+         if not isinstance(t.get(k), str) or not t[k].strip():
+             return f"缺 {k}(要是非空字串)"
+     bounds = [k for k in ("max", "min") if k in t]
+     if len(bounds) != 1 or not _macrobench_num(t[bounds[0]]):
+         return "max 與 min 要恰好寫一個,值是有限的數字(不收 NaN、Infinity)"
+-    try:
+-        ok_date = bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", t["decided_at"])) and datetime.date.fromisoformat(t["decided_at"])
+-    except ValueError:
+-        ok_date = False
+-    if not ok_date:
++    if not _macrobench_date_ok(t["decided_at"]):
+         return "decided_at 要是真的日期,寫成 YYYY-MM-DD"
+     if t["stat"] not in MACROBENCH_METRIC_STATS + MACROBENCH_PERCENTILES:
+         return f"stat 只能是 {'/'.join(MACROBENCH_METRIC_STATS + MACROBENCH_PERCENTILES)}"
+     if "device_model" in t and not isinstance(t["device_model"], str):
+         return "device_model 要是字串"
+     return None
+ 
+ 
+ def _macrobench_thresholds(repo):
+     """讀 .lumos/macrobench-thresholds.json(人裁的驗收門檻)。回 (清單, None) / (None, 錯誤訊息);沒有檔回 ([], None)。"""
+@@ -39670,20 +39720,22 @@ def _macrobench_thresholds(repo):
+         if err:
+             return None, f"macrobench-thresholds.json 第 {i} 條:{err}"
+     return raw["thresholds"], None
+ 
+ 
+ def _macrobench_check_thresholds(thresholds, current):
+     """每條門檻對這次的結果判:沒達 / 達標 / 沒判(情境或指標沒跑到、換了裝置)。跟基準無關。
+     回 (結果 dict, 錯誤訊息或 None);stat 跟這次結果裡的指標類型不合(例如滑動類寫 median)算門檻檔寫錯。"""
+     out = {"threshold_failures": [], "threshold_passed": [], "threshold_skipped": []}
+     for i, t in enumerate(thresholds, 1):
++        if "check" in t:   # 記憶體與穩定性的條目由 _macrobench_judge_stability 判
++            continue
+         rec = {k: t[k] for k in ("scenario", "metric", "stat", "contract") if k in t}
+         bound = "max" if "max" in t else "min"
+         rec[bound] = t[bound]
+         cur = current.get(t["scenario"])
+         if cur is None:
+             out["threshold_skipped"].append(dict(rec, reason="這次沒跑到這個情境"))
+             continue
+         model = cur["device"].get("model")
+         if "device_model" in t and model != t["device_model"]:
+             out["threshold_skipped"].append(dict(rec, reason=f"換了裝置:門檻指定 {t['device_model']},這次是 {model}"))
+@@ -39698,67 +39750,389 @@ def _macrobench_check_thresholds(thresholds, current):
+         value = cur[kind][t["metric"]].get(t["stat"])
+         if value is None:
+             out["threshold_skipped"].append(dict(rec, reason=f"這次結果裡 {t['metric']} 沒有 {t['stat']}"))
+             continue
+         rec["current"] = value
+         failed = value > t["max"] if bound == "max" else value < t["min"]
+         out["threshold_failures" if failed else "threshold_passed"].append(rec)
+     return out, None
+ 
+ 
++MACROBENCH_THRESHOLD_CHECK_REQUIRED = ("scenario", "check", "contract", "decided_by", "decided_at")
++# 每種 check 的欄位:名稱 → (必填?, 驗型別的函式, 說明)
++MACROBENCH_CHECK_FIELDS = {
++    "native_unreachable": {"max_bytes": (False, "nonneg", "不小於 0 的數字")},
++    "java_growth": {"min_per_cycle": (False, "pos", "大於 0 的數字"), "exclude_prefixes": (False, "strlist", "字串清單")},
++    "instances": {"class": (True, "str", "非空字串"), "max": (True, "nonneg", "不小於 0 的數字")},
++    "peak_vitals": {}, "exits": {}, "strictmode": {},
++    "frozen": {"max_block_ms": (False, "pos", "大於 0 的數字")},
++}
++MACROBENCH_JAVA_GROWTH_EXCLUDE = ("java.", "javax.", "kotlin.", "android.", "androidx.", "dalvik.", "libcore.", "sun.")
++MACROBENCH_PRIMITIVE_ARRAYS = {f"{x}[]" for x in ("boolean", "byte", "char", "short", "int", "long", "float", "double")}
++# Android vitals 前景記憶體上限(GB),依裝置可用記憶體(MB)分級,含下界不含上界;developer.android.com/google/play/vitals 2026-10-24
++MACROBENCH_VITALS_TIERS = ((3200, 4800), (4800, 6800), (6800, 9216), (9216, 14336), (14336, 18432))
++MACROBENCH_VITALS_FG = {"app": (2.00, 2.25, 2.25, 3.25, 4.25), "game": (2.25, 2.75, 3.50, 4.00, 5.00)}
++MACROBENCH_MAX_CYCLES = 10000   # 暖機與量測輪數上限:驅動真的會跑這麼多輪,超過多半是寫錯
++MACROBENCH_EXIT_FAIL_TYPES = ("crash", "native_crash", "anr", "low_memory", "memory_limiter")
++MACROBENCH_NEEDS_FULL_CYCLES = ("native_unreachable", "java_growth", "instances", "peak_vitals", "frozen")
++
++
++def _macrobench_field_ok(kind, v):
++    if kind == "str":
++        return isinstance(v, str) and bool(v.strip())
++    if kind == "strlist":
++        return isinstance(v, list) and all(isinstance(x, str) and x for x in v)
++    if not _macrobench_num(v):
++        return False
++    return v >= 0 if kind == "nonneg" else v > 0
++
++
++def _macrobench_check_item_err(t):
++    """寫了 check 的門檻條目:共同必填欄位、認得的 check、那種 check 的欄位。回錯誤訊息或 None。"""
++    for k in MACROBENCH_THRESHOLD_CHECK_REQUIRED:
++        if not isinstance(t.get(k), str) or not t[k].strip():
++            return f"缺 {k}(要是非空字串)"
++    fields = MACROBENCH_CHECK_FIELDS.get(t["check"])
++    if fields is None:
++        return f"check 只能是 {'/'.join(MACROBENCH_CHECK_FIELDS)}"
++    if not _macrobench_date_ok(t["decided_at"]):
++        return "decided_at 要是真的日期,寫成 YYYY-MM-DD"
++    if "device_model" in t and not isinstance(t["device_model"], str):
++        return "device_model 要是字串"
++    return _macrobench_check_fields_err(t, fields)
++
++
++def _macrobench_check_fields_err(t, fields):
++    """check 條目自己的欄位:不認得的欄位擋下(拼錯會默默用預設值)、必填有沒有、值的型別。回錯誤訊息或 None。"""
++    extra = sorted(set(t) - set(MACROBENCH_THRESHOLD_CHECK_REQUIRED) - {"device_model", "version"} - set(fields))
++    if extra:
++        return f"check {t['check']} 不認得這些欄位:{'、'.join(extra)}(拼錯的話會默默用預設值)"
++    for name, (required, kind, desc) in fields.items():
++        if name not in t:
++            if required:
++                return f"check {t['check']} 要有 {name}"
++            continue
++        if not _macrobench_field_ok(kind, t[name]):
++            return f"{name} 要是{desc}(不收 NaN、Infinity)"
++    return None
++
++
++def _macrobench_stability_load(path):
++    """讀收集腳本寫的 stability.json。回 (dict, None) / (None, 錯誤訊息)。"""
++    import json
++    try:
++        raw = json.loads(Path(path).read_text(encoding="utf-8"))
++    except FileNotFoundError:
++        return None, f"--stability 指的結果檔不存在:{path}"
++    except Exception as e:
++        return None, f"--stability 結果檔讀不了(JSON 格式壞了?): {e}"
++    if not isinstance(raw, dict):
++        return None, "--stability 結果檔最外層要是物件"
++    return raw, None
++
++
++def _macrobench_stab_src(stab, name):
++    """來源那一段;不是 ok 回 (None, 原因)。"""
++    s = stab.get(name)
++    if not isinstance(s, dict):
++        return None, f"結果檔沒有 {name} 這個來源"
++    if s.get("status") != "ok":
++        return None, f"{name} 沒收到({s.get('status')}):{s.get('reason') or '沒寫原因'}"
++    return s, None
++
++
++def _macrobench_stab_val(v):
++    """結果檔的數字:不是有限數或是 -1(量不到)回 None。"""
++    return None if not _macrobench_num(v) or v == -1 else v
++
++
++def _macrobench_stab_native_unreachable(t, stab, rec):
++    s, why = _macrobench_stab_src(stab, "unreachable")
++    if why:
++        return None, why
++    b, a = s.get("before"), s.get("after")
++    if not isinstance(b, dict) or not isinstance(a, dict):   # 跟 heap 同一條:形狀不對列成跳過,不噴例外(代碼審 r2 邊界席)
++        return None, "unreachable 缺 before 或 after(或不是物件)"
++    vals = [_macrobench_stab_val(x) for x in (b.get("bytes"), a.get("bytes"), b.get("allocations"), a.get("allocations"))]
++    if None in vals:
++        return None, "unreachable 的位元組或塊數缺了、不是有限數或是 -1"
++    rec.update(delta_bytes=vals[1] - vals[0], delta_allocations=vals[3] - vals[2], max_bytes=t.get("max_bytes", 0))
++    return rec["delta_bytes"] > rec["max_bytes"], None
++
++
++def _macrobench_stab_heap(stab):
++    s, why = _macrobench_stab_src(stab, "heap")
++    if why:
++        return None, None, why
++    b, a = s.get("before"), s.get("after")
++    if not isinstance(b, dict) or not isinstance(a, dict):
++        return None, None, "heap 缺 before 或 after(或不是物件)"
++    seen = s.get("classes_seen") or {}
++    if not isinstance(seen, dict) or not all(_secev_int(seen.get(k)) and seen[k] > 0 for k in ("before", "after")):
++        return None, None, "heap 沒有 classes_seen 或其中一份快照一個類別都沒讀到(快照是空的、或套件名對不上)"
++    if not all(_macrobench_stab_val(v) is not None for v in [*b.values(), *a.values()]):
++        return None, None, "heap 的實例數有不是有限數的值"
++    return b, a, None
++
++
++def _macrobench_stab_java_growth(t, stab, rec):
++    b, a, why = _macrobench_stab_heap(stab)
++    if why:
++        return None, why
++    n = stab.get("cycles")
++    if not _secev_int(n) or not 1 <= n <= MACROBENCH_MAX_CYCLES:   # 超大整數會讓每類門檻大到永遠不會達到,判成通過(代碼審 r2 邊界席)
++        return None, f"結果檔的 cycles 缺了、不是整數或不在 1 到 {MACROBENCH_MAX_CYCLES} 之間"
++    need = n * t.get("min_per_cycle", 1)
++    skip = tuple(t.get("exclude_prefixes", MACROBENCH_JAVA_GROWTH_EXCLUDE))
++    grown = [{"class": c, "delta": a[c] - b.get(c, 0)} for c in sorted(a)
++             if c not in MACROBENCH_PRIMITIVE_ARRAYS and not c.startswith(skip) and a[c] - b.get(c, 0) >= need]
++    rec.update(grown=grown, need_per_class=need, class_names=(stab.get("heap") or {}).get("class_names"))
++    return bool(grown), None
++
++
++def _macrobench_stab_instances(t, stab, rec):
++    b, a, why = _macrobench_stab_heap(stab)
++    if why:
++        return None, why
++    loaded = f"java.lang.Class<{t['class']}>"   # 載入過的類別在快照裡都有一個類別物件;沒有實例時靠它分辨「載入過、都釋放了」與「名字拼錯」
++    if not any(k in s for s in (a, b) for k in (t["class"], loaded)):
++        return None, f"{t['class']} 兩份快照都沒有它的實例也沒有它的類別物件(類別名拼錯或被混淆?)"
++    rec.update({"class": t["class"], "count": a.get(t["class"], 0), "max": t["max"]})
++    return rec["count"] > t["max"], None
++
++
++def _macrobench_stab_peak_vitals(t, stab, rec):
++    s, why = _macrobench_stab_src(stab, "cycle_trace")
++    if why:
++        return None, why
++    peak, mem = _macrobench_stab_val(s.get("peak_anon_swap_kb")), _macrobench_stab_val(stab.get("total_mem_mb"))
++    if peak is None or mem is None:
++        return None, "峰值或裝置總記憶體缺了、不是有限數或是 -1"
++    cat = stab.get("category", "app")
++    table = MACROBENCH_VITALS_FG.get(cat) if isinstance(cat, str) else None
++    if table is None:
++        return None, f"category {stab.get('category')!r} 不是 app 或 game"
++    tier = next((i for i, (lo, hi) in enumerate(MACROBENCH_VITALS_TIERS) if lo <= mem < hi), None)
++    if tier is None:
++        return None, f"裝置可用記憶體 {mem:g} MB 不在官方分級區間(3200 到 18432 MB),沒有官方數字"
++    rec.update(peak_kb=peak, limit_gb=table[tier], total_mem_mb=mem)
++    return peak > table[tier] * 1024 * 1024, None
++
++
++def _macrobench_stab_pids(stab):
++    """三次 pid 都是整數才回清單;否則回 None。"""
++    p, _ = _macrobench_stab_src(stab, "pids")
++    vals = p.get("values") if p else None
++    return vals if isinstance(vals, list) and len(vals) == 3 and all(_secev_int(v) for v in vals) else None
++
++
++def _macrobench_stab_exits(t, stab, rec):
++    s, why = _macrobench_stab_src(stab, "exits")
++    if why:
++        return None, why
++    if not isinstance(s.get("new"), list):
++        return None, "exits 缺 new 清單"
++    if not all(isinstance(e, dict) and isinstance(e.get("type"), str) for e in s["new"]):   # 丟掉格式不對的元素會判成達標(代碼審 r2 邊界席)
++        return None, "exits 的 new 有不是 {type: 字串} 的紀錄"
++    new = s["new"]
++    bad = [e.get("type") for e in new if e.get("type") in MACROBENCH_EXIT_FAIL_TYPES]
++    pids = _macrobench_stab_pids(stab)
++    rec.update(bad_types=bad, other=len(new) - len(bad), pid_changed=pids is not None and len(set(pids)) > 1)
++    if bad:   # 崩潰類紀錄不靠 pid:崩潰後 App 沒被重啟時第三次讀不到 pid,這正是最該抓的情境(代碼審 r1)
++        return True, None
++    if pids is None:
++        return None, "pid 有讀不到的(判不出量測期間行程有沒有換過)"
++    return rec["pid_changed"], None
++
++
++def _macrobench_stab_strictmode(t, stab, rec):
++    s, why = _macrobench_stab_src(stab, "strictmode")
++    if why:
++        return None, why
++    if not isinstance(s.get("violations"), list):
++        return None, "strictmode 缺 violations 清單"
++    if not all(isinstance(x, dict) and isinstance(x.get("type"), str) for x in s["violations"]):
++        return None, "strictmode 的 violations 有不是 {type: 字串} 的紀錄"
++    v = [x["type"] for x in s["violations"]]
++    rec.update(violations=v)
++    return bool(v), None
++
++
++def _macrobench_stab_frozen(t, stab, rec):
++    s, why = _macrobench_stab_src(stab, "cycle_trace")
++    if why:
++        return None, why
++    frames, frozen = _macrobench_stab_val(s.get("frames")), _macrobench_stab_val(s.get("frozen_frames"))
++    block = _macrobench_stab_val(s.get("max_main_block_ms"))
++    if frames is None or frozen is None:
++        return None, "幀數或凍結幀數缺了、不是有限數或是 -1"
++    if frames == 0:
++        return None, "追蹤檔裡一幀都沒有(沒錄到畫面)"
++    if "max_block_ms" in t and block is None:
++        return None, "設了 max_block_ms,但主執行緒阻塞量不到(-1 或缺)"
++    rec.update(frozen_frames=frozen, max_main_block_ms=block, frames=frames)
++    over = "max_block_ms" in t and block > t["max_block_ms"]
++    if over:
++        rec["max_block_ms"] = t["max_block_ms"]
++    return frozen > 0 or over, None
++
++
++MACROBENCH_CHECK_JUDGES = {"native_unreachable": _macrobench_stab_native_unreachable, "java_growth": _macrobench_stab_java_growth,
++                           "instances": _macrobench_stab_instances, "peak_vitals": _macrobench_stab_peak_vitals, "exits": _macrobench_stab_exits,
++                           "strictmode": _macrobench_stab_strictmode, "frozen": _macrobench_stab_frozen}
++
++
++def _macrobench_stab_skip_reason(t, stab):
++    """這條在判之前就該跳過的原因;不用跳過回 None。"""
++    if stab is None:
++        return "沒給 --stability 結果檔"
++    if stab.get("scenario") != t["scenario"]:
++        return f"結果檔是情境 {stab.get('scenario')},不是這條的 {t['scenario']}"
++    if "device_model" in t and stab.get("device_model") != t["device_model"]:
++        return f"換了裝置:門檻指定 {t['device_model']},這次是 {stab.get('device_model')}"
++    if t["check"] in MACROBENCH_NEEDS_FULL_CYCLES:
++        _, why = _macrobench_stab_src(stab, "driver")
++        if why:
++            return f"驅動沒跑完 N 輪,{why}"
++        pids = _macrobench_stab_pids(stab)
++        if pids is None:
++            return "pid 有讀不到的,前後量的可能不是同一個行程"
++        if len(set(pids)) > 1:   # 中途崩潰後 App 被重啟:前後兩次量的是不同行程,比了也沒意義(2026-10-24 實驗室)
++            return "量測期間行程換過(pid 變了),前後量的不是同一個行程"
++    return None
++
++
++def _macrobench_judge_stability(thresholds, stab):
++    """寫了 check 的門檻條目對 stability.json 判:沒過 / 通過 / 跳過(附原因)。只提醒,不擋。"""
++    out = {"threshold_failures": [], "threshold_passed": [], "threshold_skipped": []}
++    for t in thresholds:
++        if "check" not in t:
++            continue
++        rec = {k: t[k] for k in ("scenario", "check", "contract")}
++        why = _macrobench_stab_skip_reason(t, stab)
++        failed = None
++        if why is None:
++            failed, why = MACROBENCH_CHECK_JUDGES[t["check"]](t, stab, rec)
++        if why is not None:
++            out["threshold_skipped"].append(dict(rec, reason=why))
++        else:
++            out["threshold_failures" if failed else "threshold_passed"].append(rec)
++    return out
++
++
++def _macrobench_stab_fmt(v):
++    """整數照原樣印(位元組數不要變科學記號),其他用 :g。"""
++    return str(int(v)) if float(v).is_integer() else f"{v:g}"
++
++
++def _macrobench_stab_detail(r):
++    """check 條目的一行明細(文字輸出用)。"""
++    c = r["check"]
++    if c == "native_unreachable":
++        return (f"沒人指著的原生記憶體多了 {_macrobench_stab_fmt(r['delta_bytes'])} 位元組、{_macrobench_stab_fmt(r['delta_allocations'])} 塊"
++                f"(門檻 {_macrobench_stab_fmt(r['max_bytes'])})")
++    if c == "java_growth":
++        note = "(類別名未還原:沒給 R8 mapping,排除清單擋不到被改名的函式庫類別)" if r.get("class_names") == "raw" else ""
++        return ("、".join(f"{g['class']} 多 {_macrobench_stab_fmt(g['delta'])} 個" for g in r.get("grown", [])) or "沒有類別增長") + note
++    if c == "instances":
++        return f"{r['class']} 有 {_macrobench_stab_fmt(r['count'])} 個(上限 {_macrobench_stab_fmt(r['max'])})"
++    if c == "peak_vitals":
++        return f"峰值 {r['peak_kb'] / 1024:.0f} MB(官方上限 {r['limit_gb']:g} GB,裝置 {r['total_mem_mb']:g} MB)"
++    if c == "exits":
++        bits = [*r.get("bad_types", []), *(["pid 變了"] if r.get("pid_changed") else [])]
++        return "、".join(bits) or f"只有 {r.get('other', 0)} 筆其他原因的結束紀錄"
++    if c == "strictmode":
++        return "、".join(r.get("violations", [])) or "沒有違規"
++    if c == "frozen":
++        return f"凍結幀 {_macrobench_stab_fmt(r['frozen_frames'])} 幀、主執行緒最長阻塞 {r.get('max_main_block_ms')} ms"
++    return ""
++
++
+ def _macrobench_print_thresholds(res):
+     """門檻判定的文字輸出;沒有門檻檔時不印。"""
+     n = sum(len(res[k]) for k in ("threshold_failures", "threshold_passed", "threshold_skipped"))
+     if not n:
+         return
+     fails = res["threshold_failures"]
+     print(f"驗收門檻:{len(fails)} 條沒達、{len(res['threshold_passed'])} 條達標、"
+           f"{len(res['threshold_skipped'])} 條沒判(只提醒,不擋推送)。")
+     for r in fails:
+-        op, lim = ("≤", r["max"]) if "max" in r else ("≥", r["min"])
+-        print(f"  [沒達驗收門檻] {r['scenario']} {r['metric']} {r['stat']}:{r['current']:.1f}(門檻 {op} {lim:g})")
++        if "check" in r:   # 明細與原因含被量 App 的類別名、收集到的文字:控制字元換空白再印(代碼審 r2 資安席)
++            print(f"  [沒達驗收門檻] {r['scenario']} {r['check']}:{_esc_clean(_macrobench_stab_detail(r), 500)}")
++        else:
++            op, lim = ("≤", r["max"]) if "max" in r else ("≥", r["min"])
++            print(f"  [沒達驗收門檻] {r['scenario']} {r['metric']} {r['stat']}:{r['current']:.1f}(門檻 {op} {lim:g})")
+         print(f"      合約:{r['contract']}")
++    for r in res["threshold_passed"]:
++        if r.get("check") in ("frozen", "exits"):   # 通過也回報:最長阻塞、其他原因的結束紀錄
++            print(f"  [達標] {r['scenario']} {r['check']}:{_esc_clean(_macrobench_stab_detail(r), 500)}")
+     for r in res["threshold_skipped"]:
+-        print(f"  [沒判] {r['scenario']} {r['metric']} {r['stat']}:{r['reason']}")
++        what = r["check"] if "check" in r else f"{r['metric']} {r['stat']}"
++        print(f"  [沒判] {r['scenario']} {what}:{_esc_clean(r['reason'], 500)}")
++
+ 
++def _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_baseline):
++    """沒有 Macrobenchmark 結果目錄(沒有設定檔,或設定只有 stability 段):舊門檻條目列成沒判,check 條目照判。"""
++    import json
++    if update_baseline:
++        print("這個專案沒有 .lumos/macrobench.json,沒有 Macrobenchmark 結果可以更新基準。" if cfg is None
++              else "這個專案的 macrobench.json 沒有 results_dirs,沒有 Macrobenchmark 結果可以更新基準。")
++        return 0
++    res.update(stab_res)
++    res["threshold_skipped"].extend(
++        dict({k: t[k] for k in ("scenario", "metric", "stat", "contract") if k in t}, reason="沒有 Macrobenchmark 結果目錄")
++        for t in thresholds if "check" not in t)
++    if as_json:
++        print(json.dumps(dict(res, configured=cfg is not None), ensure_ascii=False))
++        return 0
++    if cfg is None and not any(res[k] for k in ("threshold_failures", "threshold_passed", "threshold_skipped")):
++        print("這個專案沒接 Macrobenchmark 退步提醒(沒有 .lumos/macrobench.json),沒有東西可比。")
++    _macrobench_print_thresholds(res)
++    return 0
+ 
+-def _macrobench_mode(repo, as_json, update_baseline):
++
++def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_config=False):
+     """lumos macrobench:讀專案自己跑出的 Macrobenchmark 結果檔,跟 .lumos/macrobench-baseline.json 比,只報變慢;
+     有 .lumos/macrobench-thresholds.json 時另判人裁的驗收門檻。
+     只提醒:有退步或沒達門檻也回 0;設定檔或門檻檔壞了回 2。不跑 Gradle、不接裝置。"""
+     import json
+     cfg, err = _macrobench_config(repo)
+     thresholds, terr = _macrobench_thresholds(repo)
+-    if err or terr:
+-        print(f"擋下:{err or terr}", file=sys.stderr)
++    stab, serr = _macrobench_stability_load(stability_path) if stability_path else (None, None)
++    if err or terr or serr:
++        print(f"擋下:{err or terr or serr}", file=sys.stderr)
+         return 2
++    if check_config:
++        print("macrobench 設定與門檻檔都合格。" if cfg else "這個專案沒有 .lumos/macrobench.json;門檻檔合格。")
++        return 0
+     res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
+            "failed": [], "baseline_missing": False, "baseline_unreadable": False,
+            "threshold_failures": [], "threshold_passed": [], "threshold_skipped": []}
+-    if cfg is None:
+-        if as_json:
+-            print(json.dumps(dict(res, configured=False), ensure_ascii=False))
+-        else:
+-            print("這個專案沒接 Macrobenchmark 退步提醒(沒有 .lumos/macrobench.json),沒有東西可比。")
+-        return 0
++    stab_res = _macrobench_judge_stability(thresholds, stab)   # 記憶體與穩定性:只看 stability.json,有沒有接 Macrobenchmark 都照判
++    if stab is not None and not as_json and not any("check" in t for t in thresholds):   # 忘了寫門檻檔時不能看起來像全部通過(代碼審 r2 邊界席)
++        print("給了 --stability,但門檻檔裡沒有寫了 check 的條目,記憶體與穩定性沒有東西可判。")
++    if cfg is None or not cfg["results_dirs"]:
++        return _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_baseline)
+     current, failed, n_files = _macrobench_collect(repo, cfg)
+     bpath = Path(repo) / ".lumos" / "macrobench-baseline.json"
+     baseline, missing, unreadable = _macrobench_load_baseline(bpath)
+     if update_baseline:
+         return _macrobench_update(bpath, baseline, unreadable, current, failed)
+     res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
+     if not missing and not unreadable:
+         res.update(_macrobench_compare(baseline, current, cfg))
+     judged, terr = _macrobench_check_thresholds(thresholds, current)   # 門檻是絕對值,有沒有基準都照判
+     if terr:
+         print(f"擋下:{terr}", file=sys.stderr)
+         return 2
++    for k, v in stab_res.items():
++        judged[k].extend(v)
+     res.update(judged)
+     if as_json:
+         print(json.dumps(dict(res, configured=True, files=n_files), ensure_ascii=False))
+     else:
+         _macrobench_print(res, cfg)
+         _macrobench_print_thresholds(res)
+     return 0
+ 
+ 
+ def _lint_watch_mode(repo_root, as_json):
+@@ -66191,20 +66565,23 @@ def main():
+     p = sub.add_parser("compose-metrics", help="Compose 可組合指標回歸掃描(vault-free):讀 .lumos/compose-metrics.json 比對 baseline")
+     p.add_argument("--repo", dest="compose_metrics_repo", default=".", help="repo root(含 .lumos/compose-metrics.json 的資料夾,預設 .)")
+     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON manifest")
+     p.add_argument("--update-baseline", action="store_true", help="以現況更新 baseline(跳過解析失敗模組)")
+     p.add_argument("--audit", action="store_true", help="無視 baseline,盤點當下全部 non-skippable composable(初次採用/現況全景)")
+ 
+     p = sub.add_parser("macrobench", help="Macrobenchmark 退步提醒(vault-free):讀 .lumos/macrobench.json 指的結果目錄,跟基準比,只報變慢")
+     p.add_argument("--repo", dest="macrobench_repo", default=".", help="repo 根目錄(含 .lumos/macrobench.json 的資料夾,預設 .)")
+     p.add_argument("--json", action="store_true", dest="as_json", help="輸出 JSON")
+     p.add_argument("--update-baseline", action="store_true", help="用這次的結果更新基準(讀不了的檔跳過,它們原本的項目保留)")
++    p.add_argument("--stability", dest="stability_path", default=None,
++                   help="收集腳本寫的 stability.json(記憶體與穩定性);門檻檔裡寫了 check 的條目對它判")
++    p.add_argument("--check-config", action="store_true", help="只驗 .lumos/macrobench.json 與門檻檔的格式,合格回 0、不合格回 2")
+ 
+     cc = sub.add_parser("cochange", help="co-change 漏改守衛(vault-free):git 歷史挖共改規則,commit 時警告漏改夥伴(advisory)")
+     ccsub = cc.add_subparsers(dest="cccmd", required=True)
+     ccr = ccsub.add_parser("rules", help="列告警規則集(預設套 config 門檻;--all 解除 confidence 門檻)")
+     ccr.add_argument("--all", action="store_true", dest="coch_all",
+                      help="解除 confidence 門檻(support 硬底線 2 仍全域生效)")
+     ccr.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     ccr.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+     ccc = ccsub.add_parser("check", help="對變更集比對規則列漏改警告(advisory rc0;git 失敗 rc2)")
+     ccc.add_argument("--staged", action="store_true", dest="coch_staged", help="變更集=git staged")
+@@ -66537,21 +66914,21 @@ def main():
+     if args.cmd == "events":
+         return cmd_events(repo=args.ev_repo, session=args.ev_session, as_json=args.ev_json,
+                           prune=args.ev_prune, days=args.ev_days)
+     if args.cmd == "enforcement":
+         return cmd_enforcement(repo=args.enf_repo, as_json=args.enf_json)
+     if args.cmd == "lint-watch":
+         return _lint_watch_mode(args.lint_watch_repo, args.as_json)
+     if args.cmd == "compose-metrics":
+         return _compose_metrics_mode(args.compose_metrics_repo, args.as_json, args.update_baseline, args.audit)
+     if args.cmd == "macrobench":
+-        return _macrobench_mode(args.macrobench_repo, args.as_json, args.update_baseline)
++        return _macrobench_mode(args.macrobench_repo, args.as_json, args.update_baseline, args.stability_path, args.check_config)
+     if args.cmd == "cochange":
+         if args.cccmd == "rules":
+             return cmd_cochange_rules(repo=args.coch_repo, show_all=args.coch_all,
+                                       as_json=args.coch_json)
+         return cmd_cochange_check(repo=args.coch_repo, staged=args.coch_staged,
+                                   diff_range=args.coch_diff, as_json=args.coch_json)
+     if args.cmd == "home":
+         # 兩個同給=用法錯誤(rc2),不靜默選邊(第二輪外家席);寫法同 loop status 的 --light/--panel——
+         # 不用 argparse 的互斥群組:整支工具只有這裡用它,而且它的錯誤訊息是英文(代碼審 r1 架構席)
+         # 用 is None 分「沒給」與「給了空字串」:--diff "" 是範圍寫錯,要走下面範圍判法講對原因(代碼審 r2 邊界席)
+diff --git a/scripts/templates/android-heap-classes.sql b/scripts/templates/android-heap-classes.sql
+new file mode 100644
+index 00000000..aad9cde1
+--- /dev/null
++++ b/scripts/templates/android-heap-classes.sql
+@@ -0,0 +1,20 @@
++-- SPDX-FileCopyrightText: 2026 Enzo Hsieh
++-- SPDX-License-Identifier: MIT
++--
++-- 記憶體與穩定性收集:一份 Java 快照(Perfetto java_hprof,由 skill 的 java_heap_dump 錄)裡,每個類別還有人指著的實例數
++--   只算 reachable 的物件(等於回收之後的樣子);同名類別出現在不同 classloader 時加總成一列
++--   收集腳本對暖機後與 N 輪後兩份快照各跑一次,增減由 lumos macrobench 的 java_growth 判
++-- 用法:把 __PROCESS__ 換成 App 的行程名(套件名,只收英數字、底線與點),交給 trace_processor 跑,
++--   複製進收據的 queries.sql 時上面加一行 -- [Qn] session=<名> trace=<artifact id> requires=- expect=-
++--   expect 寫 -(只記錄、不比對):快照 7 天後會被刪,寫了 expect 重跑會誤報成比對不符
++--   第一欄是類別名:重跑腳本拿第一欄當鍵
++-- 只用標準 SQLite 語法與 process、heap_graph_object、heap_graph_class 三張表(測試用 Python 內建的 sqlite3 建同名的表跑)
++-- 規則單源 Projects/Android記憶體與穩定性驗收_計劃
++-- 註解一律不以分號結尾:收據的重跑腳本拿第一個以分號結尾的行當查詢結尾
++SELECT c.name AS class, COUNT(*) AS instances
++FROM heap_graph_object o
++JOIN heap_graph_class c ON o.type_id = c.id
++JOIN process p ON o.upid = p.upid
++WHERE p.name = '__PROCESS__' AND o.reachable
++GROUP BY c.name
++ORDER BY c.name;
+diff --git a/scripts/templates/android-stability-collect.sh b/scripts/templates/android-stability-collect.sh
+new file mode 100644
+index 00000000..c3c890fc
+--- /dev/null
++++ b/scripts/templates/android-stability-collect.sh
+@@ -0,0 +1,509 @@
++#!/bin/sh
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++# lumos 記憶體與穩定性收集:在主機端排順序、用 adb 收記憶體與穩定性資料,寫成 .lumos/artifacts/android/<run-id>/stability.json;
++# 不判過不過(判定在 lumos macrobench --stability)。單一來源在工具鏈 scripts/templates/,消費專案照抄;規則單源 Projects/Android記憶體與穩定性驗收_計劃。
++# 用法:在專案根目錄跑 sh scripts/templates/android-stability-collect.sh [run-id]
++# 外部工具:ADB(預設 adb)、TP(trace_processor)、JAVA_HEAP_DUMP(skill 的 java_heap_dump,宣告了測試資料才用)
++# 測試縮短用:LUMOS_STABILITY_SETTLE(等 App 起來、等日誌跟上,預設 2 秒)、LUMOS_STABILITY_STOP_TIMEOUT(等錄製停下,預設 30 秒)、
++#   LUMOS_STABILITY_LONG_TIMEOUT(驅動、原生掃描、快照與查詢的上限,預設 1800 秒)
++# 回傳碼:結果檔寫出來回 0(哪一段沒收到寫在那個來源的 status);設定讀不了、必要工具找不到、run-id 不合法或用過、
++#   產物沒被 git 忽略、mapping 檔不在、被中斷都回 2 並印「擋下:」,不寫結果檔
++set -eu
++HERE=$(cd "$(dirname "$0")" && pwd)
++python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || { echo "擋下:收集腳本要 python3 3.11 以上(用了 -P)" >&2; exit 2; }
++# -P:不把目前目錄放進模組搜尋路徑(在放了外來 .py 的目錄執行也不會載入它);拿掉 PYTHONPATH,殘留的路徑也不載入;
++# 不用 -I,-I 會連 PYTHONUTF8 一起忽略(代碼審 r1 架構對齊席、r2 資安席)
++exec env -u PYTHONPATH PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -P - "$HERE" "$(pwd)" "${1:-}" <<'PY'
++import json, os, re, shutil, signal, subprocess, sys, tempfile, time
++here, root, run_id = sys.argv[1], sys.argv[2], sys.argv[3] or time.strftime("stability-%Y%m%d-%H%M%S")
++ADB, TP, JHD = os.environ.get("ADB", "adb"), os.environ.get("TP", "trace_processor"), os.environ.get("JAVA_HEAP_DUMP", "java_heap_dump")
++T_SHORT = 120   # 秒:一般 adb 呼叫
++T_LONG = float(os.environ.get("LUMOS_STABILITY_LONG_TIMEOUT", "1800"))   # 秒:驅動、原生掃描與快照查詢的上限(測試縮短用)
++SETTLE = float(os.environ.get("LUMOS_STABILITY_SETTLE", "2"))   # 等 App 起來、等日誌串流跟上的秒數(測試縮短用)
++STOP_WAIT = float(os.environ.get("LUMOS_STABILITY_STOP_TIMEOUT", "30"))   # 送 TERM 後等錄製結束的秒數,等完還在就補 KILL
++REAP = 10   # 秒:整組殺掉之後等管線關掉的上限
++GROUPS = []   # 正在跑的子程序(每個都自成程序群組):被中斷時整組收掉
++ARTIFACTS = ("stability.json", "logcat.txt", "logcat.raw", "cycle.pftrace", "record.pbtxt", "heap-before.pftrace", "heap-after.pftrace")
++EXIT_TYPES = {3: "low_memory", 4: "crash", 5: "native_crash", 6: "anr"}
++
++
++def die(msg):
++    print(f"擋下:{msg}", file=sys.stderr)
++    sys.exit(2)
++
++
++class Terminated(Exception):
++    """收到 SIGTERM:轉成例外,讓 finally 收掉裝置上的錄製與主機上的子程序(Python 預設收到 SIGTERM 直接結束、finally 不會跑)。"""
++
++
++def on_term(signum, frame):
++    raise Terminated()
++
++
++def kill_group(p):
++    try:
++        os.killpg(p.pid, signal.SIGKILL)
++    except OSError:
++        pass
++
++
++def run(cmd, timeout=T_SHORT, **kw):
++    """回 (回傳碼, 標準輸出, 標準錯誤);逾時或執行不了回 (None, '', 原因)。每個子程序都自成一個程序群組,
++    逾時或被中斷時整組殺掉:驅動是 sh -c、java_heap_dump 是 shell 腳本,底下的程序會握著輸出管線,
++    只殺最外層的話要等到它們自己結束才回得來(代碼審 r2 資源席);殺完再等管線關掉也有上限。"""
++    try:
++        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
++                             start_new_session=True, **kw)
++    except OSError as e:
++        return None, "", f"執行不了({e.strerror})"
++    GROUPS.append(p)
++    try:
++        out, err = p.communicate(timeout=timeout)
++        return p.returncode, out, err
++    except subprocess.TimeoutExpired:
++        kill_group(p)
++        reap(p)
++        return None, "", f"逾時({timeout} 秒)"
++    except BaseException:   # SIGTERM 或 Ctrl-C 打斷等待:先收掉子程序(整組)再往上丟,不然下面的 finally 會先把它從待收清單拿掉
++        kill_group(p)
++        raise
++    finally:
++        GROUPS.remove(p)
++
++
++def reap(p):
++    """整組殺掉之後收屍:管線 REAP 秒內還沒關(底下有程序另開了自己的群組)就不等了。"""
++    try:
++        p.communicate(timeout=REAP)
++    except subprocess.TimeoutExpired:
++        for f in (p.stdout, p.stderr):
++            f.close()
++
++
++def adb(*args, timeout=T_SHORT):
++    return run([ADB, *args], timeout=timeout)
++
++
++def shell(cmd, timeout=T_SHORT):
++    return adb("shell", cmd, timeout=timeout)
++
++
++def load_config():
++    lumos = os.path.join(here, "..", "lumos")
++    rc, out, err = run([sys.executable, lumos, "macrobench", "--repo", root, "--check-config"])
++    if rc != 0:
++        die((err or out).strip().removeprefix("擋下:") or "lumos macrobench --check-config 沒過")
++    try:
++        cfg = json.load(open(os.path.join(root, ".lumos", "macrobench.json"), encoding="utf-8-sig"))
++    except Exception as e:
++        die(f".lumos/macrobench.json 讀不了:{e}")
++    st = cfg.get("stability")
++    if not isinstance(st, dict):
++        die(".lumos/macrobench.json 沒有 stability 段")
++    return st
++
++
++def prune_old_snapshots():
++    """只刪這個專案產物目錄底下超過 7 天的 heap-*.pftrace(快照可能含個資,保存規則見計劃)。"""
++    base = os.path.join(root, ".lumos", "artifacts", "android")
++    cutoff = time.time() - 7 * 86400
++    if not os.path.isdir(base):
++        return
++    if os.path.islink(base):   # 產物目錄是捷徑時不刪(會刪到捷徑指去的別處)
++        return
++    for d in os.listdir(base):
++        p = os.path.join(base, d)
++        if os.path.islink(p) or not os.path.isdir(p):
++            continue
++        for f in os.listdir(p):
++            fp = os.path.join(p, f)
++            if re.fullmatch(r"heap-.*\.pftrace", f) and not os.path.islink(fp) and os.path.isfile(fp) and os.path.getmtime(fp) < cutoff:
++                os.unlink(fp)
++
++
++def parse_exit_info(text, pkg):
++    """dumpsys activity exit-info <套件>。回 (status, 紀錄清單或原因):只有全域標頭沒有套件區段是零筆。"""
++    if not re.search(r"^\s*ACTIVITY MANAGER PROCESS EXIT INFO", text, re.I | re.M):
++        return "failed", "輸出沒有全域標頭(格式變了或指令失敗)"
++    recs, cur, in_pkg = [], None, False
++    for line in text.splitlines():
++        m = re.match(r"\s*package:\s*(\S+)", line)
++        if m:
++            in_pkg = m.group(1) == pkg
++            continue
++        if not in_pkg:
++            continue
++        if re.match(r"\s*ApplicationExitInfo #\d+:", line):
++            cur = {}
++            recs.append(cur)
++            continue
++        if cur is None:
++            continue
++        for k, v in re.findall(r"(timestamp|pid|reason|description)=(\d{4}-\d\d-\d\d [\d:.]+|\S+)", line):
++            cur.setdefault(k, v)
++        d = re.search(r"description=(.*?)(?: state=| trace=|$)", line)
++        if d:
++            cur["description"] = d.group(1).strip()
++    return "ok", [r for r in recs if "pid" in r and "timestamp" in r]
++
++
++def classify(r):
++    reason = int(r.get("reason", "-1")) if str(r.get("reason", "")).lstrip("-").isdigit() else -1
++    if reason in EXIT_TYPES:
++        return EXIT_TYPES[reason]
++    return "memory_limiter" if "MemoryLimiter" in r.get("description", "") else "other"
++
++
++def exit_diff(before, after):
++    seen = {(r["pid"], r["timestamp"]) for r in before}
++    return [{"type": classify(r), "reason": int(r["reason"]) if r.get("reason", "").isdigit() else None,
++             "pid": int(r["pid"]) if r["pid"].isdigit() else r["pid"], "timestamp": r["timestamp"],
++             "desc": r.get("description", "")} for r in after if (r["pid"], r["timestamp"]) not in seen]
++
++
++def read_exits(pkg):
++    rc, out, err = shell(f"dumpsys activity exit-info {pkg}")
++    if rc != 0:
++        return "failed", f"dumpsys activity exit-info 失敗:{err.strip() or rc}"
++    return parse_exit_info(out, pkg)
++
++
++def unreachable(pid):
++    rc, out, err = shell(f"dumpsys -t 300 meminfo --unreachable {pid}", timeout=T_LONG)
++    m = re.search(r"(\d+)\s+bytes in\s+(\d+)\s+unreachable allocation", out)
++    if rc != 0 or not m:
++        return None, f"dumpsys meminfo --unreachable 讀不到結果:{(err or out).strip()[-200:] or rc}"
++    return {"bytes": int(m.group(1)), "allocations": int(m.group(2))}, None   # 只留總量,丟掉每塊開頭內容
++
++
++def native_heap_kb(pkg):
++    rc, out, _ = shell(f"dumpsys meminfo {pkg}")
++    m = re.search(r"^\s*Native Heap:\s+(\d+)", out, re.M)
++    return int(m.group(1)) if rc == 0 and m else None
++
++
++def pidof(pkg):
++    rc, out, _ = shell(f"pidof {pkg}")
++    v = out.strip().split()
++    return int(v[0]) if rc == 0 and v and v[0].isdigit() else None
++
++
++def driver(cmd, n, serial):
++    env = dict(os.environ, CYCLES=str(n))
++    if serial:
++        env["ANDROID_SERIAL"] = serial
++    rc, out, err = run(["sh", "-c", cmd.replace("{{CYCLES}}", str(n))], timeout=T_LONG, env=env)
++    text = out + err
++    if rc != 0:
++        return {"rc": rc, "ok": False, "why": f"驅動回 {rc}:{text.strip()[-200:]}"}
++    # 輸出出現任何 INSTRUMENTATION_ 開頭的行就是 UI Automator:要有 INSTRUMENTATION_CODE: -1 且沒有 FAILURES!!!
++    # (INSTRUMENTATION_FAILED、INSTRUMENTATION_ABORTED 這類啟動失敗回傳碼照樣可能是 0;代碼審 r1 正確性席)
++    if re.search(r"^INSTRUMENTATION_", text, re.M) and ("INSTRUMENTATION_CODE: -1" not in text or "FAILURES!!!" in text):
++        return {"rc": rc, "ok": False, "why": "UI Automator 驅動沒有成功結束(沒有 INSTRUMENTATION_CODE: -1、或有 FAILURES!!!、INSTRUMENTATION_FAILED)"}
++    return {"rc": rc, "ok": True}
++
++
++def load_mapping(path):
++    """R8 的 mapping.txt:混淆後的類別名 → 原名。"""
++    m = {}
++    if not path:
++        return m
++    if not os.path.isfile(os.path.join(root, path)):
++        die(f"stability.mapping 指的檔不存在:{path}")
++    for line in open(os.path.join(root, path), encoding="utf-8", errors="replace"):
++        g = re.match(r"(\S+) -> (\S+):$", line.rstrip())
++        if g:
++            m[g.group(2)] = g.group(1)
++    return m
++
++
++def heap_counts(trace, pkg, mapping):
++    q = open(os.path.join(here, "android-heap-classes.sql"), encoding="utf-8").read().replace("__PROCESS__", pkg)
++    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
++        f.write(q)
++    try:
++        rc, out, err = run([TP, trace, "-q", f.name], timeout=T_LONG)
++    finally:
++        os.unlink(f.name)
++    if rc != 0:
++        return None, f"trace_processor 算不了快照:{err.strip()[-200:] or rc}"
++    counts = {}
++    for line in out.splitlines()[1:]:
++        cells = [c.strip('"') for c in line.split(",")]
++        if len(cells) >= 2 and cells[-1].isdigit():
++            name = deobfuscate(",".join(cells[:-1]), mapping)
++            counts[name] = counts.get(name, 0) + int(cells[-1])
++    if not counts:   # 回傳碼 0 但一列都沒有:快照是空的、或套件名對不上快照裡的行程(代碼審 r1 邊界、正確性席)
++        return None, "快照查詢一個類別都沒讀到(快照是空的、或套件名對不上)"
++    return counts, None
++
++
++def deobfuscate(name, mapping):
++    """類別名照 R8 mapping 還原:陣列後綴照留,類別物件 java.lang.Class<混淆名> 尖括號裡的名字也還原。"""
++    m = re.fullmatch(r"java\.lang\.Class<(.*)>", name)
++    if m:
++        return f"java.lang.Class<{deobfuscate(m.group(1), mapping)}>"
++    base, arr = re.fullmatch(r"(.*?)((?:\[\])*)", name).groups()
++    return mapping.get(base, base) + arr
++
++
++def snapshot(pkg, out_dir, tag, mapping):
++    path = os.path.join(out_dir, f"heap-{tag}.pftrace")
++    rc, _, err = run([JHD, "-n", pkg, "-o", path], timeout=T_LONG)
++    if rc != 0 or not os.path.isfile(path):
++        return None, f"java_heap_dump 錄不到快照:{err.strip()[-200:] or rc}"
++    return heap_counts(path, pkg, mapping)
++
++
++def cycle_numbers(trace, pkg):
++    q = open(os.path.join(here, "android-stability-cycle.sql"), encoding="utf-8").read().replace("__PROCESS__", pkg)
++    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
++        f.write(q)
++    try:
++        rc, out, err = run([TP, trace, "-q", f.name], timeout=T_LONG)
++    finally:
++        os.unlink(f.name)
++    rows = [line for line in out.splitlines() if line.startswith('"cycle"')]
++    if rc != 0 or not rows:
++        return None, f"trace_processor 算不了追蹤檔:{err.strip()[-200:] or rc}"
++    v = [c.strip('"') for c in rows[0].split(",")]
++    keys = ("peak_anon_swap_kb", "frozen_frames", "max_main_block_ms", "frames")
++    return {k: (float(x) if "." in x else int(x)) for k, x in zip(keys, v[1:])}, None
++
++
++def start_record(pkg, run_dir, max_s):
++    cfg = open(os.path.join(here, "android-stability-record.pbtxt"), encoding="utf-8").read()
++    cfg = cfg.replace("__PROCESS__", pkg).replace("__DURATION_MS__", str(int(max_s * 1000)))
++    local = os.path.join(run_dir, "record.pbtxt")
++    open(local, "w", encoding="utf-8").write(cfg)
++    # 設定放 /data/misc/perfetto-configs/:放 /data/local/tmp 時 perfetto 讀不到(2026-10-24 SM-X710 實機 errno 13)
++    remote_cfg, remote_trace = f"/data/misc/perfetto-configs/lumos-stability-{run_id}.pbtxt", f"/data/misc/perfetto-traces/lumos-stability-{run_id}.pftrace"
++    adb("push", local, remote_cfg)
++    rc, out, err = shell(f"perfetto --background --txt -c {remote_cfg} -o {remote_trace}")
++    pid = out.strip().split()[-1] if out.strip() else ""
++    if rc == 0 and pid.isdigit():
++        return pid, remote_cfg, remote_trace
++    shell(f"rm -f {remote_cfg} {remote_trace}")   # 開不起來也要收掉推上去的設定檔
++    return None, f"perfetto 開不了錄製:{(err or out).strip()[-200:]}", None
++
++
++def perfetto_alive(pid):
++    """用 ps 看背景錄製還在不在:裝置不准 shell 對 perfetto 送 kill -0(回 Permission denied),kill -TERM 照樣有效(2026-10-24 SM-X710 實機)。"""
++    rc, out, _ = shell(f"ps -A -o PID,NAME | grep -w {pid}")
++    return rc == 0 and any(line.split()[:1] == [pid] for line in out.splitlines())
++
++
++def stop_record(rec, run_dir):
++    pid, remote_cfg, remote_trace = rec
++    try:
++        alive = perfetto_alive(pid)
++        shell(f"kill -TERM {pid}")
++        deadline = time.time() + STOP_WAIT
++        while perfetto_alive(pid) and time.time() < deadline:
++            time.sleep(1)
++        if perfetto_alive(pid):   # 等完還在:補 KILL,這份追蹤檔沒寫完,不能拿來算
++            shell(f"kill -KILL {pid}")
++            return None, f"錄製收到 TERM 等了 {STOP_WAIT:g} 秒還停不下來,已補 KILL"
++        if not alive:
++            return None, "錄製在 N 輪跑完前就到了上限(stability.max_record_s)"
++        local = os.path.join(run_dir, "cycle.pftrace")
++        rc = adb("pull", remote_trace, local)[0]
++        return (local, None) if rc == 0 and os.path.isfile(local) else (None, "拉不回追蹤檔")
++    finally:
++        shell(f"rm -f {remote_cfg} {remote_trace}")
++
++
++def declared_classes():
++    """門檻檔裡 check 是 instances 的那幾個類別:即使前後沒增減也要存進結果檔。"""
++    try:
++        raw = json.load(open(os.path.join(root, ".lumos", "macrobench-thresholds.json"), encoding="utf-8-sig"))
++        return {t["class"] for t in raw.get("thresholds", []) if isinstance(t, dict) and t.get("check") == "instances" and isinstance(t.get("class"), str)}
++    except (OSError, ValueError, AttributeError):
++        return set()
++
++
++def abort_record(rec):
++    """中途出例外或被中斷時收掉裝置上的錄製與暫存檔。"""
++    if rec and rec[0]:
++        shell(f"kill -TERM {rec[0]}")
++        shell(f"rm -f {rec[1]} {rec[2]}")
++
++
++def src(value, why, status_if_none="failed"):
++    return {"status": "ok", **value} if why is None else {"status": status_if_none, "reason": why}
++
++
++def preflight(st):
++    """動裝置之前的檢查:run-id、工具、產物目錄有沒有被 git 忽略。回 (是否錄快照, run 目錄)。"""
++    if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id) or set(run_id) <= {"."}:
++        die(f"run-id 只收英數字、點、底線與連字號,也不能只有點(它會用在裝置上的路徑):{run_id!r}")
++    for tool in (ADB, TP):
++        if not shutil.which(tool):
++            die(f"找不到 {tool};用環境變數 ADB=、TP= 指定")
++    test_data = bool((st.get("test_data") or {}).get("value"))
++    if test_data and not shutil.which(JHD):
++        die(f"宣告了測試資料要錄快照,但找不到 {JHD};用 JAVA_HEAP_DUMP= 指定")
++    run_dir = os.path.join(root, ".lumos", "artifacts", "android", run_id)
++    if os.path.exists(os.path.join(run_dir, "stability.json")):   # 沿用舊目錄的話,這次中斷時舊結果檔會被當成這次的(代碼審 r2 正確性席)
++        die(f"run-id {run_id} 已經有結果檔了;換一個 run-id(不給就用日期時間)")
++    in_git = run(["git", "-C", root, "rev-parse", "--is-inside-work-tree"])[0] == 0
++    # 快照、日誌與結果檔不准進版控(代碼審 r1 資安席);每種會寫出的檔名都問一次,.gitignore 只寫 *.json 時快照照樣會進版控(r2 資安席)
++    loose = [n for n in ARTIFACTS if in_git and run(["git", "-C", root, "check-ignore", "-q", os.path.join(run_dir, n)])[0] != 0]
++    if loose:
++        die(f".lumos/artifacts/ 底下這些檔沒被 git 忽略:{'、'.join(loose)};先在 .gitignore 加一行 .lumos/artifacts/ 再跑(快照與日誌可能含使用者資料)")
++    return test_data, run_dir
++
++
++def device_info(st):
++    res = {"scenario": st["scenario"], "warmup": st["warmup"], "cycles": st["cycles"], "category": st.get("category", "app")}
++    res["device_model"] = shell("getprop ro.product.model")[1].strip()
++    sdk = shell("getprop ro.build.version.sdk")[1].strip()
++    res["android_sdk"] = int(sdk) if sdk.isdigit() else None
++    m = re.search(r"MemTotal:\s+(\d+)\s*kB", shell("cat /proc/meminfo")[1])
++    res["total_mem_mb"] = int(m.group(1)) // 1024 if m else -1
++    return res
++
++
++def start_logcat(st, pid, t0, run_dir):
++    """只在宣告了 strictmode 時開日誌串流,只收這個 pid、量測開始之後的。回 (Popen 或 None, 暫存檔路徑)。"""
++    if not st.get("strictmode") or not pid:
++        return None, None
++    raw = os.path.join(run_dir, "logcat.raw")
++    with open(raw, "w", encoding="utf-8") as logf:
++        lc = subprocess.Popen([ADB, "logcat", f"--pid={pid}", "-T", t0, "-v", "brief"], stdout=logf, stderr=subprocess.STDOUT)
++    return lc, raw
++
++
++def stop_logcat(lc):
++    """收掉日誌串流;回它是不是早就自己斷了。"""
++    if lc is None:
++        return False
++    time.sleep(SETTLE)   # 讓日誌串流跟上量測結束前的最後幾行;等完再看它是不是早就自己斷了
++    died = lc.poll() is not None
++    lc.terminate()
++    try:
++        lc.wait(timeout=10)
++    except subprocess.TimeoutExpired:
++        lc.kill()
++    return died
++
++
++def drop_raw(raw):
++    """刪掉原始日誌串流(日誌常含帳號、權杖、網址):每條路都要刪,包括串流斷了與被中斷(代碼審 r2 五席)。"""
++    if raw and os.path.lexists(raw):
++        os.unlink(raw)
++
++
++def strictmode_result(st, started, died, raw, run_dir):
++    """只留違規那幾行落地,原始串流不管成不成都刪掉。"""
++    try:
++        if not st.get("strictmode"):
++            return {"status": "unsupported", "reason": "設定沒宣告 strictmode"}
++        if not started or died:
++            return {"status": "failed", "reason": "日誌串流沒開成或中途斷了"}
++        lines = [x for x in open(raw, encoding="utf-8", errors="replace") if "StrictMode policy violation" in x]
++    finally:
++        drop_raw(raw)
++    with open(os.path.join(run_dir, "logcat.txt"), "w", encoding="utf-8") as f:
++        f.writelines(lines)
++    return {"status": "ok", "violations": [
++        {"type": (re.search(r"strictmode\.(\w+Violation)", x) or re.search(r"(\w+Violation)", x) or [None, "unknown"])[1]} for x in lines]}
++
++
++def heap_result(test_data, before, after, why, mapping):
++    if before is None or after is None:
++        return src({}, why, "unsupported" if not test_data else "failed")
++    declared = declared_classes()
++    declared |= {f"java.lang.Class<{c}>" for c in declared}   # 宣告類別沒有實例時,靠它的類別物件證明載入過
++    keep = {c for c in set(before) | set(after) if before.get(c) != after.get(c) or c in declared}
++    return {"status": "ok", "before": {c: before[c] for c in keep if c in before}, "after": {c: after[c] for c in keep if c in after},
++            "classes_seen": {"before": len(before), "after": len(after)}, "class_names": "mapping" if mapping else "raw"}
++
++
++def measure(st, test_data, run_dir, mapping, state):
++    """裝置上的整段流程;state 收著被中斷時要收掉的錄製與日誌串流。"""
++    pkg, n, w, serial = st["package"], st["cycles"], st["warmup"], st.get("adb_serial")
++    res = device_info(st)
++    shell(f"am force-stop {pkg}")   # 從乾淨的行程開始:不停的話上一次留下的物件會算進這一次(2026-10-24 實驗室連跑兩次時抓到)
++    ex_status, ex_before = read_exits(pkg)   # 停完才讀,停 App 自己產生的那筆結束紀錄不會被當成測試期間的
++    shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
++    time.sleep(SETTLE)
++    pids = [pidof(pkg)]
++    d_warm = driver(st["driver"], w, serial)
++    pids.append(pidof(pkg))
++    u_before, u_why = unreachable(pids[-1]) if pids[-1] else (None, "App 沒在跑")   # 先掃再錄快照:錄快照時的配置不算進掃描
++    nh_before = native_heap_kb(pkg)
++    h_before, h_why = snapshot(pkg, run_dir, "before", mapping) if test_data else (None, "沒宣告測試資料(stability.test_data),不錄快照")
++    t0 = shell("date '+%m-%d %H:%M:%S.000'")[1].strip()
++    state["rec"] = start_record(pkg, run_dir, st.get("max_record_s", 600))
++    state["lc"], state["raw"] = start_logcat(st, pids[-1], t0, run_dir)
++    raw = state["raw"]
++    d_cyc = driver(st["driver"], n, serial)
++    # 停完才從 state 拿掉:等日誌跟上、等錄製停下的那幾秒被中斷時,cleanup 還找得到它們(代碼審 r2 正確性席、資源席)
++    died = stop_logcat(state["lc"])
++    del state["lc"]
++    rec = state["rec"]
++    trace, t_why = stop_record(rec, run_dir) if rec[0] else (None, rec[1])
++    del state["rec"]
++    pids.append(pidof(pkg))
++    u_after, u_why2 = unreachable(pids[-1]) if pids[-1] else (None, "App 沒在跑")
++    nh_after = native_heap_kb(pkg)
++    h_after, h_why2 = snapshot(pkg, run_dir, "after", mapping) if test_data else (None, h_why)
++    ex_status2, ex_after = read_exits(pkg)
++    drv_ok = d_warm["ok"] and d_cyc["ok"]
++    res["driver"] = {"status": "ok" if drv_ok else "failed", "warmup": d_warm, "cycles": d_cyc,
++                     **({} if drv_ok else {"reason": d_warm.get("why") or d_cyc.get("why")})}
++    res["pids"] = src({"values": pids}, None if all(pids) else "有一次讀不到 pid(App 不在了)")
++    res["unreachable"] = src({"before": u_before, "after": u_after}, u_why or u_why2)
++    res["native_heap_kb"] = src({"before": nh_before, "after": nh_after}, None if nh_before is not None and nh_after is not None else "讀不到 Native Heap")
++    res["heap"] = heap_result(test_data, h_before, h_after, h_why or h_why2, mapping)
++    nums, c_why = cycle_numbers(trace, pkg) if trace else (None, t_why)
++    res["cycle_trace"] = src(nums or {}, c_why)
++    if ex_status == "ok" and ex_status2 == "ok":
++        res["exits"] = {"status": "ok", "new": exit_diff(ex_before, ex_after)}
++    else:
++        res["exits"] = {"status": "failed", "reason": ex_before if ex_status != "ok" else ex_after}
++    res["strictmode"] = strictmode_result(st, raw is not None, died, raw, run_dir)
++    return res
++
++
++def cleanup(state):
++    """被 SIGTERM、Ctrl-C 或例外中斷時:收掉驅動整組子程序、日誌串流,停掉裝置上的錄製並刪暫存。"""
++    for p in list(GROUPS):
++        kill_group(p)
++    lc = state.get("lc")
++    if lc is not None:
++        lc.kill()
++    rec = state.get("rec")
++    if rec:
++        abort_record(rec)
++    drop_raw(state.get("raw"))
++
++
++def main():
++    signal.signal(signal.SIGTERM, on_term)
++    st = load_config()
++    if st.get("adb_serial"):
++        os.environ["ANDROID_SERIAL"] = st["adb_serial"]
++    test_data, run_dir = preflight(st)
++    os.makedirs(run_dir, exist_ok=True)
++    prune_old_snapshots()
++    mapping = load_mapping(st.get("mapping"))
++    state = {}
++    try:
++        res = measure(st, test_data, run_dir, mapping, state)
++    except (Terminated, KeyboardInterrupt):
++        cleanup(state)
++        print("擋下:收集被中斷,裝置上的錄製與暫存已收掉,沒寫結果檔", file=sys.stderr)
++        sys.exit(2)
++    except BaseException:
++        cleanup(state)
++        raise
++    out = os.path.join(run_dir, "stability.json")
++    with open(out, "w", encoding="utf-8") as f:
++        json.dump(res, f, ensure_ascii=False, indent=1)
++    print(out)
++
++main()
++PY
+diff --git a/scripts/templates/android-stability-cycle.sql b/scripts/templates/android-stability-cycle.sql
+new file mode 100644
+index 00000000..a0cb02b8
+--- /dev/null
++++ b/scripts/templates/android-stability-cycle.sql
+@@ -0,0 +1,50 @@
++-- SPDX-FileCopyrightText: 2026 Enzo Hsieh
++-- SPDX-License-Identifier: MIT
++--
++-- 記憶體與穩定性收集:N 輪量測期間那一份追蹤檔算一列數字,給收集腳本(android-stability-collect.sh)寫進 stability.json 的 cycle_trace
++--   peak_anon_swap_kb  App 的匿名常駐記憶體加 swap 的最大值(KB);swap 取樣比較稀,每個 mem.rss.anon 取樣點配它之前最近一次的 swap
++--                      (swap 先排成「這一筆到下一筆」的區間再配,不對每個取樣點各跑一次子查詢:真實追蹤檔從 73.8 秒降到 0.26 秒,代碼審 r1 資源席,
++--                      區間配對仍隨取樣數平方成長,只是常數小很多,預設 600 秒錄製約 2400 個取樣點影響不到,代碼審 r2 資源席)
++--   frozen_frames      超過 700ms 的幀數:有幀時間線(Android 12 以上)用 actual_frame_timeline_slice,沒有時用主執行緒名稱以 Choreographer#doFrame 開頭的區段
++--   max_main_block_ms  主執行緒最上層區段裡最長的那個(毫秒),只回報
++--   frames             算凍結幀時用的那一種來源一共幾幀;是 0 表示沒錄到畫面,判定會列成跳過
++-- 量不到的欄位輸出 -1(重跑腳本比對 expect 時寫得出來,trace_processor 的空值會印成 [NULL])
++-- 用法:把 __PROCESS__ 換成 App 的行程名(套件名,只收英數字、底線與點),交給 trace_processor 跑,
++--   複製進收據的 queries.sql 時上面加一行 -- [Qn] session=<名> trace=<artifact id> requires=- expect=cycle:frozen_frames=<值>
++--   第一欄是字串 cycle:重跑腳本拿第一欄當鍵
++-- 只用標準 SQLite 語法與 process、thread、thread_track、slice、process_counter_track、counter、actual_frame_timeline_slice 七張表
++--   (測試用 Python 內建的 sqlite3 照 Perfetto 文件建同名的表跑同一支檔)
++-- 規則單源 Projects/Android記憶體與穩定性驗收_計劃
++-- 註解一律不以分號結尾:收據的重跑腳本拿第一個以分號結尾的行當查詢結尾
++WITH
++app AS (SELECT upid, pid FROM process WHERE name = '__PROCESS__'),
++anon AS (
++  SELECT c.ts, c.value FROM counter c JOIN process_counter_track t ON c.track_id = t.id
++  WHERE t.name = 'mem.rss.anon' AND t.upid IN (SELECT upid FROM app)
++),
++swp AS (
++  SELECT c.ts, c.value FROM counter c JOIN process_counter_track t ON c.track_id = t.id
++  WHERE t.name = 'mem.swap' AND t.upid IN (SELECT upid FROM app)
++),
++swp_span AS (SELECT ts, LEAD(ts) OVER (ORDER BY ts) AS next_ts, value FROM swp),
++peak AS (
++  SELECT MAX(a.value + COALESCE(s.value, 0)) AS v FROM anon a
++  LEFT JOIN swp_span s ON a.ts >= s.ts AND (s.next_ts IS NULL OR a.ts < s.next_ts)
++),
++main_track AS (
++  SELECT tt.id AS track_id FROM thread_track tt JOIN thread th ON tt.utid = th.utid JOIN app ON th.upid = app.upid
++  WHERE th.tid = app.pid
++),
++timeline AS (SELECT dur FROM actual_frame_timeline_slice WHERE upid IN (SELECT upid FROM app)),
++doframe AS (SELECT dur FROM slice WHERE track_id IN (SELECT track_id FROM main_track) AND name LIKE 'Choreographer#doFrame%'),
++frames AS (
++  SELECT dur FROM timeline
++  UNION ALL
++  SELECT dur FROM doframe WHERE NOT EXISTS (SELECT 1 FROM timeline)
++)
++SELECT
++  'cycle' AS key,
++  COALESCE((SELECT CAST(v / 1024 AS INT) FROM peak), -1) AS peak_anon_swap_kb,
++  (SELECT COUNT(*) FROM frames WHERE dur > 700000000) AS frozen_frames,
++  COALESCE((SELECT MAX(dur) / 1000000 FROM slice WHERE track_id IN (SELECT track_id FROM main_track) AND depth = 0), -1) AS max_main_block_ms,
++  (SELECT COUNT(*) FROM frames) AS frames;
+diff --git a/scripts/templates/android-stability-record.pbtxt b/scripts/templates/android-stability-record.pbtxt
+new file mode 100644
+index 00000000..2200b71b
+--- /dev/null
++++ b/scripts/templates/android-stability-record.pbtxt
+@@ -0,0 +1,29 @@
++# SPDX-FileCopyrightText: 2026 Enzo Hsieh
++# SPDX-License-Identifier: MIT
++#
++# 記憶體與穩定性收集:N 輪量測期間那一份 Perfetto 追蹤檔的錄製設定(android-stability-collect.sh 換掉佔位後推到裝置)
++#   __PROCESS__      App 的行程名(套件名)
++#   __DURATION_MS__  錄製上限(.lumos/macrobench.json 的 stability.max_record_s 換成毫秒,預設 600 秒)
++# 錄的東西:App 的行程記憶體計數(每 250ms 一次)、幀時間線、App 的區段;單源 Projects/Android記憶體與穩定性驗收_計劃
++buffers { size_kb: 65536 fill_policy: RING_BUFFER }
++buffers { size_kb: 8192 fill_policy: RING_BUFFER }
++data_sources {
++  config {
++    name: "linux.process_stats"
++    target_buffer: 1
++    process_stats_config { proc_stats_poll_ms: 250 scan_all_processes_on_start: true }
++  }
++}
++data_sources { config { name: "android.surfaceflinger.frametimeline" } }
++data_sources {
++  config {
++    name: "linux.ftrace"
++    ftrace_config {
++      ftrace_events: "sched/sched_switch"
++      atrace_categories: "view"
++      atrace_categories: "gfx"
++      atrace_apps: "__PROCESS__"
++    }
++  }
++}
++duration_ms: __DURATION_MS__

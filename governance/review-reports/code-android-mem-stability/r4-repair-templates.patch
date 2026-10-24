@@ -1,0 +1,271 @@
+diff --git a/scripts/templates/android-stability-collect.sh b/scripts/templates/android-stability-collect.sh
+index c3c890fc01ee6a894db6e47282b8aaa308fbb563..2e12e80efa4c18cfbfdff4f25642b432169559f9 100644
+--- a/scripts/templates/android-stability-collect.sh
++++ b/scripts/templates/android-stability-collect.sh
+@@ -26,22 +26,25 @@ REAP = 10   # 秒:整組殺掉之後等管線關掉的上限
+ GROUPS = []   # 正在跑的子程序(每個都自成程序群組):被中斷時整組收掉
+ ARTIFACTS = ("stability.json", "logcat.txt", "logcat.raw", "cycle.pftrace", "record.pbtxt", "heap-before.pftrace", "heap-after.pftrace")
+ EXIT_TYPES = {3: "low_memory", 4: "crash", 5: "native_crash", 6: "anr"}
+ 
+ 
+ def die(msg):
+     print(f"擋下:{msg}", file=sys.stderr)
+     sys.exit(2)
+ 
+ 
++INTERRUPTS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)   # 轉成例外、走 cleanup 的訊號(Ctrl-C 是 KeyboardInterrupt,另外接)
++
++
+ class Terminated(Exception):
+-    """收到 SIGTERM:轉成例外,讓 finally 收掉裝置上的錄製與主機上的子程序(Python 預設收到 SIGTERM 直接結束、finally 不會跑)。"""
++    """收到 SIGTERM、SIGHUP 或 SIGQUIT:轉成例外,讓 finally 收掉裝置上的錄製與主機上的子程序(Python 預設收到 SIGTERM 直接結束、finally 不會跑)。"""
+ 
+ 
+ def on_term(signum, frame):
+     raise Terminated()
+ 
+ 
+ def kill_group(p):
+     try:
+         os.killpg(p.pid, signal.SIGKILL)
+     except OSError:
+@@ -166,21 +169,22 @@ def read_exits(pkg):
+     rc, out, err = shell(f"dumpsys activity exit-info {pkg}")
+     if rc != 0:
+         return "failed", f"dumpsys activity exit-info 失敗:{err.strip() or rc}"
+     return parse_exit_info(out, pkg)
+ 
+ 
+ def unreachable(pid):
+     rc, out, err = shell(f"dumpsys -t 300 meminfo --unreachable {pid}", timeout=T_LONG)
+     m = re.search(r"(\d+)\s+bytes in\s+(\d+)\s+unreachable allocation", out)
+     if rc != 0 or not m:
+-        return None, f"dumpsys meminfo --unreachable 讀不到結果:{(err or out).strip()[-200:] or rc}"
++        # 不帶輸出尾巴:總量那行之後是每塊沒人指著的配置的十六進位傾印,是 App 的原生記憶體內容(代碼審 r3 資安席)
++        return None, f"dumpsys meminfo --unreachable 讀不到總量那行(回傳碼 {rc});輸出含 App 記憶體內容,不留"
+     return {"bytes": int(m.group(1)), "allocations": int(m.group(2))}, None   # 只留總量,丟掉每塊開頭內容
+ 
+ 
+ def native_heap_kb(pkg):
+     rc, out, _ = shell(f"dumpsys meminfo {pkg}")
+     m = re.search(r"^\s*Native Heap:\s+(\d+)", out, re.M)
+     return int(m.group(1)) if rc == 0 and m else None
+ 
+ 
+ def pidof(pkg):
+@@ -265,76 +269,81 @@ def cycle_numbers(trace, pkg):
+     finally:
+         os.unlink(f.name)
+     rows = [line for line in out.splitlines() if line.startswith('"cycle"')]
+     if rc != 0 or not rows:
+         return None, f"trace_processor 算不了追蹤檔:{err.strip()[-200:] or rc}"
+     v = [c.strip('"') for c in rows[0].split(",")]
+     keys = ("peak_anon_swap_kb", "frozen_frames", "max_main_block_ms", "frames")
+     return {k: (float(x) if "." in x else int(x)) for k, x in zip(keys, v[1:])}, None
+ 
+ 
+-def start_record(pkg, run_dir, max_s):
++def start_record(pkg, run_dir, max_s, state):
+     cfg = open(os.path.join(here, "android-stability-record.pbtxt"), encoding="utf-8").read()
+     cfg = cfg.replace("__PROCESS__", pkg).replace("__DURATION_MS__", str(int(max_s * 1000)))
+     local = os.path.join(run_dir, "record.pbtxt")
+     open(local, "w", encoding="utf-8").write(cfg)
+     # 設定放 /data/misc/perfetto-configs/:放 /data/local/tmp 時 perfetto 讀不到(2026-10-24 SM-X710 實機 errno 13)
+     remote_cfg, remote_trace = f"/data/misc/perfetto-configs/lumos-stability-{run_id}.pbtxt", f"/data/misc/perfetto-traces/lumos-stability-{run_id}.pftrace"
++    state["rec"] = (None, remote_cfg, remote_trace)   # 推設定之前先登記:錄製開起來、pid 還沒回來時被中斷,cleanup 照樣收得到(代碼審 r3 正確性席、資源席)
+     adb("push", local, remote_cfg)
+     rc, out, err = shell(f"perfetto --background --txt -c {remote_cfg} -o {remote_trace}")
+     pid = out.strip().split()[-1] if out.strip() else ""
+     if rc == 0 and pid.isdigit():
+         return pid, remote_cfg, remote_trace
+     shell(f"rm -f {remote_cfg} {remote_trace}")   # 開不起來也要收掉推上去的設定檔
+     return None, f"perfetto 開不了錄製:{(err or out).strip()[-200:]}", None
+ 
+ 
+ def perfetto_alive(pid):
+-    """用 ps 看背景錄製還在不在:裝置不准 shell 對 perfetto 送 kill -0(回 Permission denied),kill -TERM 照樣有效(2026-10-24 SM-X710 實機)。"""
+-    rc, out, _ = shell(f"ps -A -o PID,NAME | grep -w {pid}")
+-    return rc == 0 and any(line.split()[:1] == [pid] for line in out.splitlines())
++    """用 ps 看背景錄製還在不在:裝置不准 shell 對 perfetto 送 kill -0(回 Permission denied),kill -TERM 照樣有效(2026-10-24 SM-X710 實機)。
++    回 True / False / None(ps 本身沒跑成,不知道):不在裝置上 grep,ps 失敗與「沒找到」才分得開(代碼審 r3 正確性席)。"""
++    rc, out, _ = shell("ps -A -o PID,NAME")
++    if rc != 0:
++        return None
++    return any(line.split()[:1] == [pid] for line in out.splitlines())
+ 
+ 
+ def stop_record(rec, run_dir):
+     pid, remote_cfg, remote_trace = rec
+     try:
+-        alive = perfetto_alive(pid)
++        alive = perfetto_alive(pid)   # None(不知道)當成還在跑:照樣送 TERM、等它停,不把好的追蹤檔丟掉
+         shell(f"kill -TERM {pid}")
+         deadline = time.time() + STOP_WAIT
+-        while perfetto_alive(pid) and time.time() < deadline:
++        while perfetto_alive(pid) is not False and time.time() < deadline:
+             time.sleep(1)
+-        if perfetto_alive(pid):   # 等完還在:補 KILL,這份追蹤檔沒寫完,不能拿來算
++        if perfetto_alive(pid) is not False:   # 等完還在(或一直問不到):補 KILL,這份追蹤檔沒寫完,不能拿來算
+             shell(f"kill -KILL {pid}")
+-            return None, f"錄製收到 TERM 等了 {STOP_WAIT:g} 秒還停不下來,已補 KILL"
+-        if not alive:
++            return None, f"錄製收到 TERM 等了 {STOP_WAIT:g} 秒還停不下來(或問不到它還在不在),已補 KILL"
++        if alive is False:
+             return None, "錄製在 N 輪跑完前就到了上限(stability.max_record_s)"
+         local = os.path.join(run_dir, "cycle.pftrace")
+         rc = adb("pull", remote_trace, local)[0]
+         return (local, None) if rc == 0 and os.path.isfile(local) else (None, "拉不回追蹤檔")
+     finally:
+         shell(f"rm -f {remote_cfg} {remote_trace}")
+ 
+ 
+ def declared_classes():
+     """門檻檔裡 check 是 instances 的那幾個類別:即使前後沒增減也要存進結果檔。"""
+     try:
+         raw = json.load(open(os.path.join(root, ".lumos", "macrobench-thresholds.json"), encoding="utf-8-sig"))
+         return {t["class"] for t in raw.get("thresholds", []) if isinstance(t, dict) and t.get("check") == "instances" and isinstance(t.get("class"), str)}
+     except (OSError, ValueError, AttributeError):
+         return set()
+ 
+ 
+ def abort_record(rec):
+-    """中途出例外或被中斷時收掉裝置上的錄製與暫存檔。"""
+-    if rec and rec[0]:
+-        shell(f"kill -TERM {rec[0]}")
+-        shell(f"rm -f {rec[1]} {rec[2]}")
++    """中途出例外或被中斷時收掉裝置上的錄製與暫存檔。rec 是 (pid, 設定檔, 追蹤檔);pid 還沒回來時照追蹤檔名找錄製停掉。"""
++    if not rec or rec[2] is None:   # (None, 原因, None):沒開成,start_record 已經收過了
++        return
++    shell(f"kill -TERM {rec[0]}" if rec[0] else f"pkill -TERM -f {rec[2]}")
++    shell(f"rm -f {rec[1]} {rec[2]}")
+ 
+ 
+ def src(value, why, status_if_none="failed"):
+     return {"status": "ok", **value} if why is None else {"status": status_if_none, "reason": why}
+ 
+ 
+ def preflight(st):
+     """動裝置之前的檢查:run-id、工具、產物目錄有沒有被 git 忽略。回 (是否錄快照, run 目錄)。"""
+     if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id) or set(run_id) <= {"."}:
+         die(f"run-id 只收英數字、點、底線與連字號,也不能只有點(它會用在裝置上的路徑):{run_id!r}")
+@@ -358,27 +367,27 @@ def preflight(st):
+ def device_info(st):
+     res = {"scenario": st["scenario"], "warmup": st["warmup"], "cycles": st["cycles"], "category": st.get("category", "app")}
+     res["device_model"] = shell("getprop ro.product.model")[1].strip()
+     sdk = shell("getprop ro.build.version.sdk")[1].strip()
+     res["android_sdk"] = int(sdk) if sdk.isdigit() else None
+     m = re.search(r"MemTotal:\s+(\d+)\s*kB", shell("cat /proc/meminfo")[1])
+     res["total_mem_mb"] = int(m.group(1)) // 1024 if m else -1
+     return res
+ 
+ 
+-def start_logcat(st, pid, t0, run_dir):
+-    """只在宣告了 strictmode 時開日誌串流,只收這個 pid、量測開始之後的。回 (Popen 或 None, 暫存檔路徑)。"""
++def start_logcat(st, pid, t0, run_dir, state):
++    """只在宣告了 strictmode 時開日誌串流,只收這個 pid、量測開始之後的;串流與暫存檔路徑登記在 state。回 (Popen 或 None, 暫存檔路徑)。"""
+     if not st.get("strictmode") or not pid:
+         return None, None
+-    raw = os.path.join(run_dir, "logcat.raw")
++    raw = state["raw"] = os.path.join(run_dir, "logcat.raw")   # 開檔之前先登記,開到一半被中斷也刪得到
+     with open(raw, "w", encoding="utf-8") as logf:
+-        lc = subprocess.Popen([ADB, "logcat", f"--pid={pid}", "-T", t0, "-v", "brief"], stdout=logf, stderr=subprocess.STDOUT)
++        lc = state["lc"] = subprocess.Popen([ADB, "logcat", f"--pid={pid}", "-T", t0, "-v", "brief"], stdout=logf, stderr=subprocess.STDOUT)
+     return lc, raw
+ 
+ 
+ def stop_logcat(lc):
+     """收掉日誌串流;回它是不是早就自己斷了。"""
+     if lc is None:
+         return False
+     time.sleep(SETTLE)   # 讓日誌串流跟上量測結束前的最後幾行;等完再看它是不是早就自己斷了
+     died = lc.poll() is not None
+     lc.terminate()
+@@ -429,27 +438,26 @@ def measure(st, test_data, run_dir, mapping, state):
+     ex_status, ex_before = read_exits(pkg)   # 停完才讀,停 App 自己產生的那筆結束紀錄不會被當成測試期間的
+     shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+     time.sleep(SETTLE)
+     pids = [pidof(pkg)]
+     d_warm = driver(st["driver"], w, serial)
+     pids.append(pidof(pkg))
+     u_before, u_why = unreachable(pids[-1]) if pids[-1] else (None, "App 沒在跑")   # 先掃再錄快照:錄快照時的配置不算進掃描
+     nh_before = native_heap_kb(pkg)
+     h_before, h_why = snapshot(pkg, run_dir, "before", mapping) if test_data else (None, "沒宣告測試資料(stability.test_data),不錄快照")
+     t0 = shell("date '+%m-%d %H:%M:%S.000'")[1].strip()
+-    state["rec"] = start_record(pkg, run_dir, st.get("max_record_s", 600))
+-    state["lc"], state["raw"] = start_logcat(st, pids[-1], t0, run_dir)
+-    raw = state["raw"]
++    state["rec"] = start_record(pkg, run_dir, st.get("max_record_s", 600), state)
++    _, raw = start_logcat(st, pids[-1], t0, run_dir, state)
+     d_cyc = driver(st["driver"], n, serial)
+     # 停完才從 state 拿掉:等日誌跟上、等錄製停下的那幾秒被中斷時,cleanup 還找得到它們(代碼審 r2 正確性席、資源席)
+-    died = stop_logcat(state["lc"])
+-    del state["lc"]
++    died = stop_logcat(state.get("lc"))
++    state.pop("lc", None)
+     rec = state["rec"]
+     trace, t_why = stop_record(rec, run_dir) if rec[0] else (None, rec[1])
+     del state["rec"]
+     pids.append(pidof(pkg))
+     u_after, u_why2 = unreachable(pids[-1]) if pids[-1] else (None, "App 沒在跑")
+     nh_after = native_heap_kb(pkg)
+     h_after, h_why2 = snapshot(pkg, run_dir, "after", mapping) if test_data else (None, h_why)
+     ex_status2, ex_after = read_exits(pkg)
+     drv_ok = d_warm["ok"] and d_cyc["ok"]
+     res["driver"] = {"status": "ok" if drv_ok else "failed", "warmup": d_warm, "cycles": d_cyc,
+@@ -462,47 +470,52 @@ def measure(st, test_data, run_dir, mapping, state):
+     res["cycle_trace"] = src(nums or {}, c_why)
+     if ex_status == "ok" and ex_status2 == "ok":
+         res["exits"] = {"status": "ok", "new": exit_diff(ex_before, ex_after)}
+     else:
+         res["exits"] = {"status": "failed", "reason": ex_before if ex_status != "ok" else ex_after}
+     res["strictmode"] = strictmode_result(st, raw is not None, died, raw, run_dir)
+     return res
+ 
+ 
+ def cleanup(state):
+-    """被 SIGTERM、Ctrl-C 或例外中斷時:收掉驅動整組子程序、日誌串流,停掉裝置上的錄製並刪暫存。"""
++    """被 SIGTERM、SIGHUP、Ctrl-C 或例外中斷時:收掉驅動整組子程序、日誌串流,停掉裝置上的錄製並刪暫存。
++    先擋掉後面再來的中斷、先刪原始日誌(本機、一下就好),再做可能卡 120 秒的裝置呼叫:連按兩次 Ctrl-C 也不留日誌(代碼審 r3 正確性席、資源席)。"""
++    for s in INTERRUPTS + (signal.SIGINT,):
++        signal.signal(s, signal.SIG_IGN)
++    drop_raw(state.get("raw"))
+     for p in list(GROUPS):
+         kill_group(p)
+     lc = state.get("lc")
+     if lc is not None:
+         lc.kill()
+     rec = state.get("rec")
+     if rec:
+         abort_record(rec)
+-    drop_raw(state.get("raw"))
+ 
+ 
+ def main():
+-    signal.signal(signal.SIGTERM, on_term)
++    for s in INTERRUPTS:   # SIGHUP:關掉終端機分頁、ssh 斷線;子程序各自成組收不到,要靠這裡收(代碼審 r3 資源席、資安席)
++        signal.signal(s, on_term)
+     st = load_config()
+     if st.get("adb_serial"):
+         os.environ["ANDROID_SERIAL"] = st["adb_serial"]
+     test_data, run_dir = preflight(st)
+     os.makedirs(run_dir, exist_ok=True)
+     prune_old_snapshots()
+     mapping = load_mapping(st.get("mapping"))
+     state = {}
+     try:
+         res = measure(st, test_data, run_dir, mapping, state)
+     except (Terminated, KeyboardInterrupt):
+         cleanup(state)
+-        print("擋下:收集被中斷,裝置上的錄製與暫存已收掉,沒寫結果檔", file=sys.stderr)
++        print(f"擋下:收集被中斷,沒寫結果檔;裝置上的錄製已停、暫存與原始日誌已刪,{run_dir} 裡已經錄到的快照與追蹤檔留著(可能含使用者資料,用完自己刪)",
++              file=sys.stderr)
+         sys.exit(2)
+     except BaseException:
+         cleanup(state)
+         raise
+     out = os.path.join(run_dir, "stability.json")
+     with open(out, "w", encoding="utf-8") as f:
+         json.dump(res, f, ensure_ascii=False, indent=1)
+     print(out)
+ 
+ main()

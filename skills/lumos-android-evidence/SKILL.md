@@ -22,7 +22,7 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑�
 
 - 不上傳 Trace、perf.data、記憶體檔到任何外部服務或公共模型。原始檔只放專案 `.lumos/artifacts/android/<run-id>/`(確認在 `.gitignore`);進版控的只有收據目錄 `.lumos/receipts/<run-id>/`。
 - 不把任何一層的毫秒數字當推送閘,也不從這次的數字反推出「合約」。門檻只能來自人裁,寫在專案的 `.lumos/macrobench-thresholds.json`(格式與節點寫法見 [[Projects/Macrobenchmark驗收門檻_計劃]]);沒有門檻檔就只跟基準比。
-- 沒有人裁的保存規則,不錄 L3(記憶體快照可能含個資)。
+- 沒有人裁的保存規則,不錄 L3(記憶體快照可能含個資)。人裁的保存規則寫在 `.lumos/macrobench.json` 的 `stability.test_data`:`{"value": true, "decided_by": "<裁定的人>", "decided_at": "<YYYY-MM-DD>"}`(兩個佔位只能照使用者的回答填,AI 不能自己寫;照抄佔位會被 --check-config 擋下),意思是「這個專案只在測試帳號與假資料下跑」;value 是 true 才錄(沒寫或 value 是 false 都不錄),快照檔名一律 `heap-*.pftrace`、放 `.lumos/artifacts/android/<run-id>/`,收集腳本每次開跑會刪掉超過 7 天的。
 - 模擬器的結果只能寫「流程驗證」,不能寫成效能通過。
 
 ## L0:有沒有變慢、有沒有達門檻
@@ -36,13 +36,14 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑�
    - 基準是另一次執行(例如同一天先跑的正常版):不要覆蓋專案的基準檔。另建一個暫存目錄,放 `.lumos/macrobench.json`(`results_dirs` 寫基準那次的絕對路徑),並把專案的 `.lumos/macrobench-thresholds.json` 複製進暫存目錄的 `.lumos/`(門檻是從 `--repo` 指的目錄讀的,沒複製就一條門檻都不判),`lumos macrobench --repo <暫存目錄> --update-baseline`,再把 `results_dirs` 改成候選那次的路徑跑 `--json`;收據 `scenario.baseline_run_id` 旁寫明基準是這樣產生的。
 6. 找 L1 要對照的基準 Trace:專案基準檔(`.lumos/macrobench-baseline.json`)只有統計值,但每個情境的 `source` 記了它來自哪個結果檔與 sha256;去 artifacts 找雜湊對得上的那次執行,用同一次留下的 Trace。基準是舊版工具存的(沒有 `source`)或那次的 artifacts 已經不在,就用同裝置、同情境、最近一次正常版執行代替,收據寫明它不是基準的來源;都沒有就先用目前正常版的程式重跑一次。
 7. 檢查有效輪:讀結果檔每輪 `frameCount.runs`(滑動)或每輪啟動時間;某幾輪畫格數明顯少一截,先懷疑量測腳本沒真的操作到(例:清單已停在底部),在收據 `valid_iterations` 記下來,L1 時用 Trace 確認。
-8. **往下條件**:`--json` 的 `regressions` 不是空的(比基準變慢),或 `threshold_failures` 不是空的(沒達人裁的驗收門檻)。都沒有 → 收據記 `L0 通過` 後停,不錄 L2、L3。`threshold_skipped` 裡的門檻(換了裝置、情境沒跑到)要寫進收據 gaps,不能當成達標。
+8. **往下條件**:`--json` 的 `regressions` 不是空的(比基準變慢),或 `threshold_failures` 不是空的(沒達人裁的驗收門檻)。有跑記憶體與穩定性收集(`sh scripts/templates/android-stability-collect.sh`,寫出 `.lumos/artifacts/android/<run-id>/stability.json`)時,L0 改跑 `lumos macrobench --json --stability <那份結果檔>`;`threshold_failures` 每筆有 `check` 欄位的照它走:`native_unreachable`、`java_growth`、`instances` → 直接 **L3**(L1、L2 看 CPU 時間,記憶體問題在那裡看不到;專案的 `stability.test_data` 沒寫或 value 不是 true 時不往下,收據記 `[GAP] L3 未授權` 並列出哪條 check 沒過,請人裁要不要宣告);`frozen` → L1;`exits` → 看 `stability.json` 的 `exits.new`(每筆新的結束紀錄),`strictmode` → 看 run 目錄的 `logcat.txt`(只留違規那幾行);`peak_vitals` → L3(沒有宣告時同上,記 `[GAP] L3 未授權`)。都沒有 → 收據記 `L0 通過` 後停,不錄 L2、L3。結果有 `stability_unjudged` 一欄時(給了結果檔、門檻檔卻沒有 check 條目),不能記成 L0 通過:收據 gaps 記「記憶體與穩定性沒有門檻可判」並請人補門檻。`threshold_skipped` 裡的門檻(換了裝置、情境沒跑到)要寫進收據 gaps,不能當成達標。
 9. 沒達門檻的那幾條各帶 `contract`(功能節點的合約行):照抄進收據 `contract_refs`,寫回時對到那個功能節點。
 
 ## L1:卡在哪、在算還是在等
 
 照官方 `$SKILL_ROOT/analysis/workflows/perfetto-trace-analysis/perfetto_trace_analysis.md` 的 Step 1–4 做,含 Step 2 triage 與 Step 3 每個候選的 per_candidate_analysis(skill 要你派子代理的地方就派)。
 
+- 從記憶體與穩定性收集過來的(`frozen` 沒過):主要對象是 run 目錄的 `cycle.pftrace`(N 輪合在一份、沒有逐輪 Trace 也沒有基準 Trace),直接從凍結幀與主執行緒最長阻塞那段往下 triage,不做基準 A/B,收據 gaps 記「沒有基準 Trace」;下面這幾條照 Macrobenchmark 結果檔挑輪次的做法不適用。
 - 用 L0 那次執行留下的 Trace,不另錄。主要對象挑「有效輪裡超時格最多」的那一輪:超時格數用結果檔 `sampledMetrics.frameOverrunMs.runs[i]` 裡大於 0 的個數(不要用 Trace 的 jank_type,Samsung 上幾乎每格都標 Buffer Stuffing);基準取同一輪次。
 - triage(Step 2)的派工也附基準 Trace 路徑,要求每個候選附基準同名 slice 的次數與耗時;基準也有同樣量的(例如每格都在的無障礙 binder 呼叫),是本來就有的成本,不算這次的退步。
 - 官方流程要你寫的 `perfetto_analysis_report.md` 不另寫檔,內容併進收據的 report.md(子代理只在回報裡給結果)。
@@ -106,11 +107,11 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑�
 6. 收據 `layers[2]` 記 `compile: speed+debug-info`、熱點檔案與行號、佔比;perf.data 與 annotate 輸出放 artifacts。
 7. **往下條件**:熱點行在配置記憶體(new、集合擴容、字串串接)或 GC → L3;否則停。
 
-## L3:誰配置、誰留住(預設關)
+## L3:誰配置、誰留住(`stability.test_data` 的 value 是 true 才做)
 
-只有專案有人裁的保存規則(保存多久、誰看得到、能不能離開本機)才做;收據 `[DECISION]` 記是誰、哪天裁的。HPROF 類檔案不進版控、不外傳。重現情境照 L2 第 2 步的順序(背景重現、等 `pidof` 有值再開錄)。
+只有專案有人裁的保存規則(`stability.test_data` 帶署名與日期的宣告,見開頭的限制)才做;收據 `[DECISION]` 記是誰、哪天裁的。從記憶體與穩定性收集過來的,run 目錄裡已經有暖機後與 N 輪後兩份快照(`heap-before.pftrace`、`heap-after.pftrace`),Java 那側直接用第二份做第 2 步,不用重錄。HPROF 類檔案不進版控、不外傳。重現情境照 L2 第 2 步的順序(背景重現、等 `pidof` 有值再開錄)。
 
-1. 誰在配置(Java):`heap_profile -n <套件> --heaps com.android.art -d 10000 -o <目錄>`。`-o` 的目錄要先建好,不存在時它只印一行就結束、什麼都沒錄。原生配置把 `--heaps` 換成 `libc.malloc`。
+1. 誰在配置(Java):`heap_profile -n <套件> --heaps com.android.art -d 10000 -o .lumos/artifacts/android/<run-id>/heap-profile-<名>/`(放在產物目錄底下才會被 git 忽略;7 天自動刪只認 `heap-*.pftrace`,這個目錄要自己刪;heap_profile 另外會在系統暫存目錄留一份 `heap_profile-*` 轉檔、中途斷線時裝置上留 `/data/misc/perfetto-traces/profile-*`,跑完都要自己看過再刪)。`-o` 的目錄要先建好,不存在時它只印一行就結束、什麼都沒錄。原生配置把 `--heaps` 換成 `libc.malloc`。
    查 App 自己的函式各經手多少配置(對 `raw-trace`):
    ```
    with recursive anc(alloc_id, callsite_id) as (
@@ -122,7 +123,7 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑�
    where f.name like '%<套件片段>%' group by 1 order by bytes desc;
    ```
    只到函式,沒有行號;函式很長時再對照 L2 的行號。
-2. 誰留住(Java):重現跑完、App 還活著時 `java_heap_dump -n <套件> -o <檔>.perfetto-trace`。查支配樹最大的幾個,再查是哪個欄位指到它:
+2. 誰留住(Java):重現跑完、App 還活著時 `java_heap_dump -n <套件> -o .lumos/artifacts/android/<run-id>/heap-<名>.pftrace`(檔名照 `heap-*.pftrace`:下一次跑收集腳本時,超過 7 天的才會被刪,不再跑就不會刪,用完自己刪)。查支配樹最大的幾個,再查是哪個欄位指到它:
    ```
    include perfetto module android.memory.heap_graph.dominator_tree;
    select c.name, d.dominated_size_bytes, d.dominated_obj_count from heap_graph_dominator_tree d
@@ -130,7 +131,8 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑�
    order by d.dominated_size_bytes desc limit 10;
    ```
    `heap_graph_reference` 以 `owned_id` 找回 `owner_id` 與 `field_name`,就是程式裡的變數名。
-3. 收據 `layers[3]` 記兩份檔的雜湊、查詢 Q 編號與結果;快照可能含個資,`redacted` 照實填。
+3. 原生那側(`native_unreachable` 沒過):用第 1 步的 `--heaps libc.malloc` 重跑一次開關畫面,看沒釋放的配置是誰呼叫的。第三方 .so 沒有符號時,呼叫鏈只到「哪支 .so、哪個位移」:報告照實寫到「哪支 .so、哪個位移、App 哪個函式呼叫它」為止(原生配置的呼叫鏈對 Java 那幾層只記函式、不記行號),標 `[INFERRED] 第三方沒有符號`,不要猜函式名。
+4. 收據 `layers[3]` 記兩份檔的雜湊、查詢 Q 編號與結果;快照可能含個資,`redacted` 照實填。
 
 ## 收尾
 

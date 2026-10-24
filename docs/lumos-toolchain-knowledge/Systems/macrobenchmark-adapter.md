@@ -2,8 +2,8 @@
 type: system
 status: doing
 created: 2026-10-21
-updated: 2026-10-23
-responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢,並照專案的人裁門檻檔判驗收門檻;不負責建置或執行基準測試、不接裝置、不擋推送、不從量測產生門檻
+updated: 2026-10-24
+responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢,照專案的人裁門檻檔判驗收門檻,並讀收集腳本寫的 stability.json 判記憶體與穩定性(--stability);不負責建置或執行基準測試、不接裝置(接裝置的是收集腳本,家在 Systems/android-stability-collector)、不擋推送、不從量測產生門檻
 aliases: []
 about_code:
   - scripts/lumos
@@ -27,17 +27,26 @@ summary: |-
   WHY:--update-baseline 把每個情境的來源結果檔(相對路徑與 sha256)一起寫進基準,比對不看這欄 [出處:[[Projects/Macrobenchmark驗收門檻_計劃]] S9,2026-10-23 測試專案端到端演練] [因:逐層診斷 L1 要拿基準那次的 Trace 做 A/B,基準檔原本只有統計值,找不到是哪一次] [不選:另存一份來源索引檔(兩份要同步)] [test:t_macrobench_baseline_records_source]
   PITFALL:門檻、容差、基準或結果檔的數字寫成 NaN 或 ±Infinity 時,Python 的 json.loads 照收、型別檢查也當成數字;NaN 門檻讓「現值 > 門檻」恆假而永遠判達標,無限大容差讓什麼都不算退步 [出處:2026-10-23 代碼審 code-android-evidence 單審席] [根因:只檢查型別、沒檢查有限數] [修法:macrobench 讀數字一律走只收有限數的那一支] [test:t_macrobench_rejects_nonfinite]
   PITFALL:往 scripts/templates/ 或 scripts/hooks/ 新增要複製進消費專案的檔,只放檔案不夠:沒登記 _VENDORED_TREE_FILES 就不會被複製進消費專案(安裝只照這份精確清單複製),而且清單跟受版控的檔對不上會讓守衛測試紅;沒帶 SPDX 檔頭,授權聲明不跟著走 [出處:2026-10-23 代碼審 code-android-evidence r3 與修正關卡] [根因:安裝照 _VENDORED_TREE_FILES 精確清單複製、授權檢查另外看檔頭,放檔、登記、檔頭是三件事] [test:t_vendored_file_list_matches_what_install_ships]
+  WHY:--stability 的文字輸出把明細與原因先過既有的 _events_clean(控制字元、U+2028 這類分行字元換空白、截長;r4 資安席指出 _esc_clean 留下 U+2028)再印 [出處:2026-10-24 代碼審 code-android-mem-stability r2 資安席] [因:明細裡有被量 App 的類別名、收集到的錯誤文字,含換行時會偽造出一行 [達標] 給讀輸出的 AI] [不選:另寫一支清理函式(專案已經有 _esc_clean)] [test:t_android_memstab_unreadable_never_passes]
+  WHY:check 條目達標時,exits 與 frozen 也逐條印 [達標] 明細,其他種類只算條數 [出處:2026-10-24 代碼審 r2 架構對齊席指出跟舊條目印法不同] [因:計劃 S5 要回報其他原因的結束紀錄、frozen 要看到最長阻塞,達標時不印就看不到] [test:t_android_memstab_exits]
+  WHY:stability 段的 warmup、cycles 與結果檔的 cycles 限 1 到 10000 [出處:2026-10-24 代碼審 r2 邊界席] [因:沒上限時寫錯成天文數字,驅動會一直跑;結果檔的超大輪數讓每類門檻大到永遠不會達到,java_growth 判成通過] [test:t_android_memstab_check_fields_strict,t_android_memstab_unreadable_never_passes]
+  WHY:門檻條目兩種寫法與 stability 的 test_data 共用一支署名檢查,decided_by 寫成 <裁定的人> 這種佔位也擋 [出處:2026-10-24 代碼審 r3 文件資安席、整合席、架構對齊席] [因:skill 範例用佔位提醒要問人,只改日期就照抄時不能當成有人裁過;同一組檢查原本在兩支函式各寫一份] [test:t_android_memstab_check_fields_strict]
+  WHY:--stability 給了結果檔、門檻檔卻沒有 check 條目時,--json 也帶 stability_unjudged 一欄,文字輸出印同一句 [出處:2026-10-24 代碼審 r3 整合席] [因:skill 的 L0 走 --json,三個清單全空會被當成通過、收據記 L0 通過;這一欄跟其他欄一樣一開始就放好(值是 null),讀取端不用判斷鍵在不在(r4 架構對齊席)] [test:t_android_memstab_unreadable_never_passes]
+  WHY:讀結果檔時先限深(20 層)、字串過 _esc_clean;數字欄位負數一律當量不到 [出處:2026-10-24 代碼審 r3 邊界席] [因:孤立代理字元讓 --json 印到 UTF-8 時整支崩;這些欄位是次數、位元組、時間,-1 以外的負數只會是手改或壞掉的檔] [test:t_android_memstab_unreadable_never_passes]
+  WHY:門檻檔的條目寫了 check(native_unreachable、java_growth、instances、peak_vitals、exits、strictmode、frozen)就對 --stability 給的 stability.json 判記憶體與穩定性,沒寫 check 的照舊對 Macrobenchmark 結果檔判、判定結果不變;驗證多了一項:decided_by 寫成 <裁定的人> 這種佔位會被擋(跟 check 條目共用署名檢查);有 stability 段時 results_dirs 可以不填,沒有 macrobench.json 也照判 check 條目 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]]] [因:這幾種檢查不是單一上下限,硬塞進 max 會寫出假數字;只做穩定性的專案沒有 Macrobenchmark 結果目錄] [不選:另開門檻檔或指令(多一種做法)] [test:t_android_memstab_check_compat]
+  WHY:stability.json 每個來源帶 status,不是 ok 的、值是 -1 或不是有限數的,用到它的檢查一律列成跳過不列通過;驅動沒跑完時只跳過需要完整 N 輪的五種,exits 與 strictmode 照判 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]] 設計審 r1–r3] [因:這類守衛最常見的失效是讀不到所以全綠;App 在量測輪崩潰時驅動一定跟著失敗,這時正是 exits 該判不過] [test:t_android_memstab_source_not_ok_skipped]
 verified_by:
   - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
   - "[[Verification/2026-10-23_macrobench實機端到端]]"
   - "[[Verification/2026-10-23_Android驗證收據第零階段試跑]]"
   - "[[Verification/2026-10-23_Android介面寫法分流實驗室驗收]]"
+  - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
 ---
 # macrobenchmark-adapter
 
 白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
 
-- 設定 `.lumos/macrobench.json`:`results_dirs`(必填,結果目錄清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
+- 設定 `.lumos/macrobench.json`:`results_dirs`(結果目錄清單;有 `stability` 段的專案可以不填或給空清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
 - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
 - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
 - 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
