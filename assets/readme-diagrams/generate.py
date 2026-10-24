@@ -487,6 +487,51 @@ def drift_scene(en):
     return title, 710, b, desc
 
 
+ANDROID_TITLES={"en":"Android: check first, then dig one layer at a time.","zh":"Android：先判有沒有問題，再一層一層往下查"}   # validate 也用它認圖,改標題只改這裡
+
+def android_scene(en):
+    title=ANDROID_TITLES["en" if en else "zh"]
+    b=text(38,128,"Go deeper only when the layer above shows a problem; log every step." if en else "上一層真的看到異常才往下；每一步都寫進同一份查證紀錄。",
+           17 if en else 20,"muted")
+    b+='<g data-kind="android-inputs">'
+    b+=rect(38,150,330,70)+rect(39,151,4,68,C["blue"],"none",2)
+    b+=text(58,180,"Macrobenchmark",21,"blue",weight=600)
+    b+=text(58,207,"Startup and scroll numbers + traces" if en else "啟動、滑動的每輪數字與 Trace",16 if en else 17,"muted")
+    b+=rect(392,150,330,70)+rect(393,151,4,68,C["purple"],"none",2)
+    b+=text(412,180,"Memory & stability run" if en else "記憶體與穩定性收集",21,"purple",weight=600)
+    b+=text(412,207,"Open/close a screen: memory, crashes" if en else "反覆開關畫面：記憶體與閃退",16 if en else 17,"muted")+'</g>'
+    b+=path("M203 220V246","line",2)+arrow(203,250,"down")+path("M557 220V246","line",2)+arrow(557,250,"down")
+    layers=[
+      (254,"L0","Slower? Below the agreed bar?" if en else "有沒有變慢、達不達標","lumos macrobench: vs. baseline and agreed standards" if en else "lumos macrobench：跟基準比、對照人訂的標準","Lumos","green"),
+      (346,"L1","Where is it stuck: busy or waiting?" if en else "卡在哪：忙著算，還是在等","Google's official skill reads the ms-level recording" if en else "照 Google 官方 skill 讀逐毫秒的執行紀錄","Google skill" if en else "Google 官方","blue"),
+      (438,"L2","Which function, which line?" if en else "哪個函式、哪一行","simpleperf sampling with line annotation" if en else "simpleperf 抽樣，指到檔案與行號","Android tool" if en else "Android 工具","gold"),
+      (530,"L3","What holds memory, and why?" if en else "誰在佔記憶體、為什麼不釋放","Memory snapshots; a person must OK test data first" if en else "記憶體快照；要先有人同意只用測試資料","Needs a human" if en else "要人裁","coral"),
+    ]
+    for i,(y,n,label,sub,tag,c) in enumerate(layers):
+        b+=f'<g data-kind="android-layer" data-layer="{n}">'
+        b+=rect(38,y,684,70)+rect(39,y+1,4,68,C[c],"none",2)
+        b+=text(58,y+31,n,15,c,weight=700)
+        b+=text(98,y+31,label,20 if en else 21,"ink",weight=600)
+        b+=text(98,y+57,sub,15 if en else 16,"muted")
+        b+=badge(562,y+20,tag,c,146)+'</g>'
+        if i<len(layers)-1:
+            b+=path(f"M380 {y+70}V{y+88}","line",2,"6 6",True)+arrow(380,y+92,"down")
+    # 記憶體類 check 沒過時從 L0 直達 L3(L1、L2 看 CPU 時間,記憶體問題看不到)
+    b+='<g data-kind="memory-shortcut">'+path("M722 289H738Q746 289 746 297V557Q746 565 738 565H726","coral",2,"6 6",True)+arrow(724,565,"left","coral")+'</g>'
+    b+=text(380,626,"No anomaly at a layer → record it and stop there" if en else "哪一層沒有異常，就在查證紀錄記下並停在那一層",15 if en else 16,"muted","middle")
+    b+='<g data-kind="android-record">'+rect(38,642,684,82,"#14243a","#344967",14)
+    b+=text(58,674,"Evidence record" if en else "查證紀錄",22,"green",weight=650)
+    b+=text(58,705,"rerun.sh reruns it all; an AI with no background re-judges → notes" if en else "rerun.sh 一鍵重跑；不知前因的 AI 再判一次 → 寫回筆記",15 if en else 17,"muted")+'</g>'
+    desc=("Android verification flow. Two inputs: Macrobenchmark results with a recording of each run, and a memory and stability run that opens and closes a screen many times. "
+          "L0 uses lumos macrobench to compare with the saved baseline and the standards people agreed on. Only when it finds a problem does L1 follow Google's official android-profiler skill to read the recording and find where the app is stuck; "
+          "L2 uses simpleperf to point at the function and line; L3 takes memory snapshots, only after a person agrees to run on test data only. "
+          "A dashed shortcut takes failed memory checks from L0 straight to L3. Any layer with nothing wrong is recorded and the check stops there; everything goes into an evidence record that can be rerun and is re-judged by an AI with no background.") if en else (
+          "Android 驗證流程。兩種輸入：Macrobenchmark 的結果（含每次的執行紀錄），以及反覆開關畫面的記憶體與穩定性收集。"
+          "L0 由 lumos macrobench 跟存好的基準比、對照人訂的標準；有問題才到 L1，照 Google 官方 android-profiler skill 讀執行紀錄、找出卡在哪；"
+          "L2 用 simpleperf 指到函式與行號；L3 拍記憶體快照，要先有人同意只用測試資料。"
+          "記憶體類的檢查沒過時，虛線從 L0 直接跳到 L3。哪一層沒問題就記下並停在那一層；全部寫進可重跑、並由不知前因的 AI 再判一次的查證紀錄。")
+    return title,746,b,desc
+
 SCENES={"map":("00 / THE SYSTEM",map_scene),
         "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
         "first-change":("START / NATURAL LANGUAGE",first_scene),
@@ -496,8 +541,17 @@ SCENES={"map":("00 / THE SYSTEM",map_scene),
         "risk-review":("02-03 / REVIEW BY RISK",risk_review_scene),
         "review-overview":("03 / REVIEW",review_scene),
         "swiss-cheese":("QUALITY / FIVE LAYERS",swiss_cheese_scene),
+        "android-e2e":("ANDROID / EVIDENCE BY LAYER",android_scene),
         "writeback-overview":("04 / WRITE-BACK",writeback_scene),
         "evals-overview":("EVALS / FEEDBACK",evals_scene)}
+
+def validate_android(root,ns):
+    """android-e2e 圖:四層依序是 L0 到 L3,輸入、記憶體捷徑、查證紀錄各一個。"""
+    if root.find("s:title",ns).text not in set(ANDROID_TITLES.values()):
+        return
+    assert [el.get("data-layer") for el in root.findall(".//*[@data-kind='android-layer']")]==["L0","L1","L2","L3"]
+    for kind in ("android-inputs","memory-shortcut","android-record"):
+        assert len(root.findall(f".//*[@data-kind='{kind}']"))==1, kind
 
 def validate(svg):
     root=ET.fromstring(svg)
@@ -526,6 +580,7 @@ def validate(svg):
         assert len(root.findall(".//*[@data-kind='defence-layer']"))==5
         assert len(root.findall(".//*[@data-kind='aligned-escape']"))==1
         assert len(root.findall(".//*[@data-kind='escape-ledger']"))==1
+    validate_android(root,ns)
     if graph is not None:
         # Preserve the node process, not merely the same palette.
         expected={

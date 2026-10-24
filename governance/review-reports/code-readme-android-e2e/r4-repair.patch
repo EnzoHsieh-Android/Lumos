@@ -1,0 +1,315 @@
+diff --git a/README.en.md b/README.en.md
+index a0359754..b7623ed0 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -294,74 +294,74 @@ The full practice is in [Implementation test quality](skills/lumos-project-notes
+ - **`capture`**: Runs a trusted local test runner only when you ask it to, and saves JUnit output and source snapshots.
+ - **`check`**: Verifies evidence for the normal → broken → restored sequence, optionally with before-and-after refactor evidence.
+ - **Limits**: **Finding no suspicious patterns, passing every test, or detecting an injected fault cannot alone prove the expected answer is correct.** The tool provides no sandbox and does not replace reviewing the requirement source; check the scope with `capabilities` first, then read [operation and capability limits](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli) (Chinese).
+ 
+ </details>
+ 
+ </details>
+ 
+ ## Android: checking speed and memory on a real device
+ 
+-After an Android change, Lumos checks two things on a real phone or tablet: **did it get slower**, and **does it hold on to memory it never gives back**. When something is wrong, it digs down one layer at a time until it can name the function and line responsible; every step is written into an evidence record, so someone else can rerun it and get the same result.
++After an Android change, Lumos checks two things on a real phone or tablet: **did it get slower**, and **does it hold on to memory it never gives back**. When something is wrong, it digs down one layer at a time until it can name the function and line responsible; every step is written into an evidence record, so someone with the same raw data can rerun it and get the same result.
+ 
+-The step "read the performance recording and find where it gets stuck" follows Google's public [android-profiler skill](https://github.com/android/skills) (analysis instructions written for AI agents) as is, instead of inventing a separate method. Lumos only adds what the official skill does not cover: deciding whether it really got slower, telling which kind of screen code is to blame, catching memory a third-party library forgot to free, and writing the process down.
++The step "read the performance recording and find where it gets stuck" follows Google's public [android-profiler skill](https://github.com/android/skills) (analysis instructions written for AI agents) as is, instead of inventing a separate method. Lumos handles the joining-up around the official skill: deciding whether it really got slower and whether to dig deeper, connecting the tools of each layer, telling which kind of screen code is to blame, catching memory a third-party library forgot to free, and writing the process down as a rerunnable record.
+ 
+ <p align="center">
+   <a href="assets/android-e2e-en.svg">
+     <img src="assets/android-e2e-en.svg" alt="Android verification flow: performance test results and a memory and stability run go to L0, which decides whether there is a problem; only then does L1 follow Google's official skill to find where it is stuck, L2 point to the line, and L3 examine memory (only after a person agrees to test data only); memory problems jump straight from L0 to L3; everything goes into a rerunnable evidence record" width="760">
+   </a>
+ </p>
+ 
+ <details>
+-<summary>What each layer does, lab results, and limits</summary>
++<summary>See what each layer does, lab results, and limits</summary>
+ 
+ **Layered like a doctor's visit: take the temperature first, draw blood only if there is a fever, order a scan only if the blood test is off.** Not every tool is switched on at once: some tools change how the app runs, and memory snapshots may capture user data; recording everything when nothing is wrong means paying the highest price every time.
+ 
+ | Layer | Question | How | When to go deeper |
+ |---|---|---|---|
+ | L0 | Did it get slower? Does it meet the agreed standard? | Run Google's performance test tool, Macrobenchmark, then `lumos macrobench` compares it with the saved baseline and the human-set standards | Slower than the baseline, or below standard |
+ | L1 | Where is it stuck? Busy computing, or waiting on something? | Each test run leaves a millisecond-by-millisecond recording (a Perfetto trace), read with the steps of Google's official skill; it also works out whether the time went to the newer (Compose) or older (XML) way of building screens | The app itself is busy → deeper; it is waiting on another program or a file → stay here and follow who made it wait |
+-| L2 | Which function, which line? | simpleperf notes "which code is running right now" every millisecond; the line that shows up most is the culprit; phone settings are restored afterwards | That line creates lots of objects → deeper |
++| L2 | Which function, which line? | simpleperf (Android's performance sampling tool) notes "which code is running right now" every millisecond; the line that shows up most is the culprit; phone settings are restored afterwards | That line creates lots of objects → deeper |
+ | L3 | What is using memory, and why is it never freed? | Take memory snapshots and find which variable keeps holding on to it | — |
+ 
+-**Why Google's official skill.** Google maintains the steps for reading performance recordings and updates them with its tools, which is more reliable than writing our own. The skill and every tool are pinned to fixed versions and re-verified on upgrade, so a result found today still matches when the same record is rerun later.
++**Why Google's official skill.** Google maintains the steps for reading performance recordings and updates them with its tools, which is more reliable than writing our own. The skill and every tool are each pinned to a fixed version and re-verified on upgrade, so a result found today still matches when the same record is rerun later.
+ 
+-**Memory: catching "the library offers a release method, the app forgets to call it".** Libraries such as players or maps need release to be called when a screen closes; forgetting keeps the memory in use. Lumos's collection script opens and closes the same screen on the phone again and again, and looks at seven things:
++**Memory: catching "the library offers a release method, the app forgets to call it".** Libraries such as players or maps need release to be called when a screen closes; forgetting keeps the memory in use. The project's own UI test opens and closes the same screen on the phone again and again, Lumos's collection script gathers data alongside, and `lumos macrobench` then judges seven things (each one is judged only if the project's standards file has a line for it):
+ 
+-- Memory nothing uses any more that was never freed.
++- On the C/C++ side, memory nothing uses any more that was never freed.
+ - Objects that keep multiplying each time the screen opens.
+ - How many of a named object remain after the screen closes.
+ - The highest memory use.
+ - Whether the app crashed or was killed by the system.
+-- Whether Android's built-in StrictMode check caught an unclosed resource, an unregistered listener, or a screen kept alive (the project turns it on in its test build; otherwise it is skipped).
++- Whether Android's built-in StrictMode check caught an unclosed resource, an unregistered listener, or a screen kept alive. This needs both: the project turns StrictMode on in its test build and declares so in its settings; without the declaration it is skipped. Declared but not actually turned on, it receives no violations and is wrongly judged a pass.
+ - Whether the screen froze for more than 0.7 seconds.
+ 
+ When a memory check fails, it jumps straight to L3: the two middle layers look at where CPU time goes, and memory problems do not show there.
+ 
+-**Every step goes into the evidence record.** Phone model and state, the installed app version, each query with its expected result, and why the next layer was needed all sit in one folder, with a `rerun.sh` that reruns and compares everything in one go. Before committing, a separate AI that knows nothing of the background re-judges every conclusion from this record alone; if it cannot, the record is not clear enough.
++**Every step goes into the evidence record.** Phone model and state, the installed app (matched by file fingerprint), each query with its expected result, and why the next layer was needed all sit in one folder, with a `rerun.sh` that reruns every query on the same raw data and compares the results in one go; the raw data stays on the local machine and is not committed. Before committing, a separate AI that knows nothing of the background re-judges every conclusion from this record alone; if it cannot, the record is not clear enough.
+ 
+ **Lab results** (one Samsung tablet (model SM-X710) and a small app with deliberately planted problems):
+ 
+-- Each list row deliberately waits 8 ms longer: L0 reports the screen got slower (the slower tenth of frames went from 4.3 ms to 10.4 ms), and L2 points straight to line 36 of `MainActivity.kt`.
++- Each list row deliberately waits 8 ms longer: L0 reports the screen got slower (each redraw of the screen is a frame; for the slower tenth of frames, processor time per frame went from 4.3 ms to 10.4 ms), and L2 points straight to line 36 of the lab app's `MainActivity.kt`.
+ - A third-party library written in Java, not released when the screen closes: 5 objects left behind; L3 shows the library's own internal list holds them.
+ - A third-party library written in C/C++, not released: 10 MB extra (5 open-close rounds, 2 MB each), traced to the library file and the app function that created it.
+ - Slowdowns from three kinds of screen code were each put in the right category and traced to a function; a separate AI that did not know what was planted found the problem in all three from the measurements alone.
+ 
+ **Current limits.**
+ 
+ - Verified on one tablet and one lab app only; the numbers do not represent a production app, and tools may behave differently on other brands.
+ - It reminds, it does not block pushes: millisecond numbers drift with the phone and its temperature, so they are not suited to a hard gate.
+ - Memory snapshots are off by default: a project must first write down who agreed, and on which day, to run on test data only; snapshots stay on the local machine, each later run of the collection script deletes those older than 7 days, nothing is deleted if it is not run again, and you delete them yourself when done.
+-- The allowed margin for "counts as slower" is being recalibrated with real-device data.
+-- UI flows can already be written as Maestro flow files and linked to feature notes for re-checking; making them, together with speed and memory, the end-to-end acceptance standard for Android is the next step.
++- The allowed margin for "counts as slower" is provisional (10% by default, with a 1 ms floor) and will be reset from repeated real-device runs.
++- UI flows can already be written as Maestro (a tool that drives the screen from a text script of what to tap and type) flow files and linked to feature notes for re-checking; making them, together with speed and memory, the end-to-end acceptance standard for Android is the next step.
+ 
+-**To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (in Chinese).
++**To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (Chinese).
+ 
+ </details>
+ 
+ ## How notes are kept from going stale (drift)
+ 
+ Notes need maintenance after they are written. Lumos checks whether notes were updated with code, looks for stale names, links, and pending items before a push, and asks AI to reread notes when their meaning needs checking. “Drift” means the code and notes gradually stop agreeing.
+ 
+ <details>
+ <summary>See the three checks and their configuration</summary>
+ 
+diff --git a/README.md b/README.md
+index 162fc1f8..3796befb 100644
+--- a/README.md
++++ b/README.md
+@@ -294,72 +294,72 @@ assert total_price(quantity=3, unit_price=5) == 15
+ - **`capture`**：在你明確指定時執行本機可信的測試程式，保存 JUnit 結果與原始碼快照。
+ - **`check`**：核對「正常→弄壞→還原」三段的證據，也可以加上重構前後的證據。
+ - **限制**：**沒找到可疑寫法、測試全部通過，或成功抓到刻意引入的錯誤，都不能單獨證明預期答案正確。** 工具不提供沙盒、不替代需求來源審查；先用 `capabilities` 看範圍，再讀 [操作與能力邊界](skills/lumos-project-notes/commands/03-寫回圖譜.md#事後掃描與執行收證已安裝-cli)。
+ 
+ </details>
+ 
+ </details>
+ 
+ ## Android：在實機上驗效能與記憶體
+ 
+-Android App 改完之後，Lumos 在真的手機或平板上確認兩件事：**有沒有變慢**、**有沒有吃掉記憶體不還**。發現問題就一層一層往下查，直到指出是哪個函式、哪一行造成的；每一步都寫成查證紀錄，別人照著重跑，會得到一樣的結果。
++Android App 改完之後，Lumos 在真的手機或平板上確認兩件事：**有沒有變慢**、**有沒有吃掉記憶體不還**。發現問題就一層一層往下查，直到指出是哪個函式、哪一行造成的；每一步都寫成查證紀錄，別人拿到同一批原始資料照著重跑，會得到一樣的結果。
+ 
+-其中「讀效能紀錄、找出卡在哪」這一步，直接照 Google 官方公開的 [android-profiler skill](https://github.com/android/skills)（寫給 AI 看的分析步驟說明）來做，不自己另編一套。Lumos 只補官方沒涵蓋的部分：判斷到底有沒有變慢、分辨問題出在哪一種畫面寫法、抓出第三方套件忘了釋放的記憶體，以及把過程寫成紀錄。
++其中「讀效能紀錄、找出卡在哪」這一步，直接照 Google 官方公開的 [android-profiler skill](https://github.com/android/skills)（寫給 AI 看的分析步驟說明）來做，不自己另編一套。Lumos 負責官方 skill 以外的串接：判斷到底有沒有變慢、要不要往下查，把各層工具接起來，分辨問題出在哪一種畫面寫法，抓出第三方套件忘了釋放的記憶體，並把過程寫成可重跑的紀錄。
+ 
+ <p align="center">
+   <a href="assets/android-e2e-zh.svg">
+     <img src="assets/android-e2e-zh.svg" alt="Android 驗證流程：效能測試結果與記憶體穩定性收集先進到 L0 判斷有沒有問題；有問題才往 L1 照 Google 官方 skill 找卡在哪、L2 指到哪一行、L3 查記憶體（要人先同意只用測試資料）；記憶體類的問題從 L0 直接跳到 L3；全部寫進可重跑的查證紀錄" width="760">
+   </a>
+ </p>
+ 
+ <details>
+ <summary>看每一層在做什麼、實驗結果與限制</summary>
+ 
+ **像看病一樣分層：先量體溫，有發燒才抽血，抽血有問題才照片子。** 不一開始就把所有工具全開，因為有些工具本身會讓 App 跑起來不一樣，記憶體快照還可能拍到使用者資料；沒問題卻全部都錄，等於每次都付最高的代價。
+ 
+ | 層 | 要回答的問題 | 怎麼查 | 什麼情況才往下 |
+ |---|---|---|---|
+ | L0 | 有沒有變慢？有沒有達到約定的標準？ | 跑 Google 的效能測試工具 Macrobenchmark，再用 `lumos macrobench` 跟上次存的基準比，並對照人訂的標準 | 比基準慢、或沒達標 |
+ | L1 | 卡在哪？是忙著計算，還是在等別人？ | 每次測試都會留下一份逐毫秒的執行紀錄（Perfetto Trace），照 Google 官方 skill 的步驟讀它；同時算出時間花在新式（Compose）還是舊式（XML）的畫面寫法上 | App 自己在忙著算 → 往下；是在等別的程式或檔案 → 留在這層，順著追是誰讓它等 |
+-| L2 | 是哪個函式、哪一行？ | 用 simpleperf 每毫秒記一次「現在在跑哪段程式」，次數最多的那一行就是兇手；查完把手機設定還原 | 那一行在大量建立物件 → 往下 |
++| L2 | 是哪個函式、哪一行？ | 用 simpleperf（Android 附的效能抽樣工具）每毫秒記一次「現在在跑哪段程式」，次數最多的那一行就是兇手；查完把手機設定還原 | 那一行在大量建立物件 → 往下 |
+ | L3 | 誰在佔記憶體？為什麼一直不釋放？ | 拍記憶體快照，找出是哪個變數一直抓著那些東西 | — |
+ 
+-**為什麼用 Google 官方的 skill。** 讀效能紀錄的步驟由 Google 維護，會跟著它的工具一起更新，比我們自己寫一套可靠。我們把 skill 和每個工具都固定在同一個版本，升級時要重新驗過；這樣今天查到的結果，日後照同一份紀錄重跑還是對得上。
++**為什麼用 Google 官方的 skill。** 讀效能紀錄的步驟由 Google 維護，會跟著它的工具一起更新，比我們自己寫一套可靠。我們把 skill 和每個工具各自固定在一個版本，升級時要重新驗過；這樣今天查到的結果，日後照同一份紀錄重跑還是對得上。
+ 
+-**記憶體：專抓「第三方套件有提供釋放的方法，App 卻忘了呼叫」。** 例如播放器、地圖這類套件，關掉畫面時要呼叫 release，忘了就會一直佔著記憶體。Lumos 的收集腳本會在手機上反覆打開又關掉同一個畫面，看七件事：
++**記憶體：專抓「第三方套件有提供釋放的方法，App 卻忘了呼叫」。** 例如播放器、地圖這類套件，關掉畫面時要呼叫 release，忘了就會一直佔著記憶體。專案自己寫的操作測試會在手機上反覆打開又關掉同一個畫面，Lumos 的收集腳本在旁邊收資料，再由 `lumos macrobench` 判斷七件事（每一項都要在專案的標準檔裡寫一條才會判）：
+ 
+-- 有沒有記憶體已經沒人在用、卻沒被釋放。
++- C/C++ 那一側有沒有記憶體已經沒人在用、卻沒被釋放。
+ - 某些物件的數量是不是越開越多。
+ - 指定的物件關掉畫面後還剩幾個。
+ - 記憶體用量最高到多少。
+ - App 有沒有閃退或被系統強制關掉。
+-- 系統內建的檢查（StrictMode）有沒有抓到資源沒關、註冊沒取消、畫面被留住這類違規（要專案在測試版自己打開，沒打開就列成跳過）。
++- 系統內建的檢查（StrictMode）有沒有抓到資源沒關、註冊沒取消、畫面被留住這類違規。這項要兩件事都做：專案在測試版自己打開 StrictMode，並在設定檔宣告有打開；沒宣告就列成跳過。宣告了卻沒真的打開，會因為一筆違規都收不到而被誤判成通過。
+ - 畫面有沒有卡住超過 0.7 秒。
+ 
+ 記憶體類的問題沒過時，會直接跳到 L3：中間兩層看的是 CPU 花在哪裡，記憶體問題在那裡看不出來。
+ 
+-**每一步都寫進查證紀錄。** 手機型號與狀態、安裝的 App 版本、每一條查詢與預期結果、為什麼要往下一層，全都放在同一個資料夾，附一支 `rerun.sh` 可以一鍵重跑比對。提交前會另外找一個完全不知道前因後果的 AI，只看這份紀錄重新判斷每個結論；它判斷不出來，就代表紀錄寫得不夠清楚。
++**每一步都寫進查證紀錄。** 手機型號與狀態、安裝的 App（用檔案指紋比對）、每一條查詢與預期結果、為什麼要往下一層，全都放在同一個資料夾，附一支 `rerun.sh`，可以對同一批原始資料一鍵重跑每條查詢、比對結果；原始資料只留在本機，不進版控。提交前會另外找一個完全不知道前因後果的 AI，只看這份紀錄重新判斷每個結論；它判斷不出來，就代表紀錄寫得不夠清楚。
+ 
+ **實驗結果**（用一台 Samsung 平板（型號 SM-X710），和一個刻意埋了問題的小 App）：
+ 
+-- 清單每畫一列就故意多等 8 毫秒：L0 報出畫面變慢（較慢的那一成幀，從 4.3 毫秒變成 10.4 毫秒），L2 直接指到 `MainActivity.kt` 第 36 行。
++- 清單每畫一列就故意多等 8 毫秒：L0 報出畫面變慢（畫面每重畫一次叫一幀；較慢的那一成幀，每幀花的處理器時間從 4.3 毫秒變成 10.4 毫秒），L2 直接指到實驗 App 的 `MainActivity.kt` 第 36 行。
+ - Java 寫的第三方套件，關畫面時沒呼叫 release：多留下 5 個物件，L3 查出是被套件自己內部的清單抓著。
+ - C/C++ 寫的第三方套件沒呼叫 release：多佔 10 MB（開關 5 次、每次 2 MB），指到是哪個套件檔，以及 App 裡哪個函式建立它。
+ - 三種畫面寫法造成的變慢，都被分到對的類別並指到函式；另外找一個不知道埋了什麼的 AI，只看量測資料，三種都找到了問題所在。
+ 
+ **目前的限制。**
+ 
+ - 只在一台平板、一個實驗用 App 上驗過，數字不代表正式 App；換了手機品牌，工具的行為可能不同。
+ - 只提醒、不擋推送：毫秒數字會隨手機和溫度浮動，不適合當成硬性關卡。
+ - 記憶體快照預設不錄：專案要先寫下「誰、在哪一天同意只用測試資料跑」，才會錄；快照只放在本機，之後每次跑收集腳本會順手刪掉超過 7 天的，不再跑就不會自動刪，用完要自己刪。
+-- 判斷「算不算變慢」的容許誤差，正在用實機資料重新校正。
+-- UI 操作流程目前可以用 Maestro 寫成流程檔、綁回功能筆記當作重驗用的檔；把它跟效能、記憶體一起變成 Android 端到端的驗收標準，是下一步。
++- 判斷「算不算變慢」的容許誤差目前是暫定值（預設 10%，另有 1 毫秒的下限），之後會用多次實機重跑的資料重訂。
++- UI 操作流程目前可以用 Maestro（一種用文字寫好「點哪裡、輸入什麼」的畫面自動操作工具）寫成流程檔、綁回功能筆記當作重驗用的檔；把它跟效能、記憶體一起變成 Android 端到端的驗收標準，是下一步。
+ 
+ **怎麼開始用：** 在 Android 專案跑完 Macrobenchmark 後執行 `lumos macrobench`（第一次加 `--update-baseline` 存成基準）；它報出問題時，請 AI 照 `lumos-android-evidence` skill 一層一層查。設定檔與標準的寫法見 [Macrobenchmark 驗收門檻](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) 與 [記憶體與穩定性驗收](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md)。
+ 
+ </details>
+ 
+ ## 怎麼防止筆記過期（drift）
+ 
+ 留下筆記之後，還要有人維護。Lumos 在提交時檢查程式與筆記是否一起更新，推送前找失效的名稱、連結和待確認內容；需要判斷整段話還對不對時，再請 AI 重讀。這裡說的 drift，就是程式和筆記逐漸對不上的情況。
+ 
+ <details>
+diff --git a/assets/readme-diagrams/README.md b/assets/readme-diagrams/README.md
+index 8bc9540d..ab4eb745 100644
+--- a/assets/readme-diagrams/README.md
++++ b/assets/readme-diagrams/README.md
+@@ -35,20 +35,22 @@ Scene roles:
+ - Knowledge: four rows separating plans, features, verification, and incidents,
+   with contract rings on features and an incident → repair plan → existing
+   feature → regression verification feedback path.
+ - Dispatch: shared materials fan out to independent review perspectives.
+ - Review: architecture context above complementary evidence sources.
+ - Write-back: work records become retrievable notes.
+ - Evals: review replay and retrieval evaluation inform calibration.
+ - Android: two inputs feed a layered check (L0 → L1 → L2 → L3), a dashed
+   shortcut takes failed memory checks from L0 to L3, and every step ends in an
+   evidence record. Labels follow the plain wording of the README chapter.
++  The check also asserts the four layers L0–L3 in order and one inputs group,
++  memory shortcut, and evidence record.
+ 
+ These are conceptual illustrations, not screenshots, benchmark reports, or
+ claims of guaranteed correctness. The map retains a moving loop; every scene
+ is complete and readable when animation is unavailable.
+ 
+ The map labels each hand-off with what travels along it and uses the same step
+ names as the README body. The case-review scene is a timeline of one real review
+ round set (counts come from `governance/review-reports/code-工具自裝檔不算消費專案/`);
+ if that record is ever corrected, update the scene text and alt text together.
+ Do not hand-edit the map SVG: a 2026-09-21 hand edit left the generator out of
+diff --git a/assets/readme-diagrams/generate.py b/assets/readme-diagrams/generate.py
+index ffb6d220..0401ecb7 100644
+--- a/assets/readme-diagrams/generate.py
++++ b/assets/readme-diagrams/generate.py
+@@ -490,51 +490,51 @@ def drift_scene(en):
+ def android_scene(en):
+     title="Android: check first, then dig one layer at a time." if en else "Android：先判有沒有問題，再一層一層往下查"
+     b=text(38,128,"Go deeper only when the layer above shows a problem; log every step." if en else "上一層真的看到異常才往下；每一步都寫進同一份查證紀錄。",
+            17 if en else 20,"muted")
+     b+='<g data-kind="android-inputs">'
+     b+=rect(38,150,330,70)+rect(39,151,4,68,C["blue"],"none",2)
+     b+=text(58,180,"Macrobenchmark",21,"blue",weight=600)
+     b+=text(58,207,"Startup and scroll numbers + traces" if en else "啟動、滑動的每輪數字與 Trace",16 if en else 17,"muted")
+     b+=rect(392,150,330,70)+rect(393,151,4,68,C["purple"],"none",2)
+     b+=text(412,180,"Memory & stability run" if en else "記憶體與穩定性收集",21,"purple",weight=600)
+-    b+=text(412,207,"Open and close a screen, repeatedly" if en else "反覆開關畫面：記憶體與閃退",16 if en else 17,"muted")+'</g>'
++    b+=text(412,207,"Open/close a screen: memory, crashes" if en else "反覆開關畫面：記憶體與閃退",16 if en else 17,"muted")+'</g>'
+     b+=path("M203 220V246","line",2)+arrow(203,250,"down")+path("M557 220V246","line",2)+arrow(557,250,"down")
+     layers=[
+       (254,"L0","Slower? Below the agreed bar?" if en else "有沒有變慢、達不達標","lumos macrobench: vs. baseline and agreed standards" if en else "lumos macrobench：跟基準比、對照人訂的標準","Lumos","green"),
+       (346,"L1","Where is it stuck: busy or waiting?" if en else "卡在哪：忙著算，還是在等","Google's official skill reads the ms-level recording" if en else "照 Google 官方 skill 讀逐毫秒的執行紀錄","Google skill" if en else "Google 官方","blue"),
+-      (438,"L2","Which function, which line?" if en else "哪個函式、哪一行","simpleperf sampling with line annotation" if en else "simpleperf 抽樣，指到檔案與行號","Android tool" if en else "官方工具","gold"),
++      (438,"L2","Which function, which line?" if en else "哪個函式、哪一行","simpleperf sampling with line annotation" if en else "simpleperf 抽樣，指到檔案與行號","Android tool" if en else "Android 工具","gold"),
+       (530,"L3","What holds memory, and why?" if en else "誰在佔記憶體、為什麼不釋放","Memory snapshots; a person must OK test data first" if en else "記憶體快照；要先有人同意只用測試資料","Needs a human" if en else "要人裁","coral"),
+     ]
+     for i,(y,n,label,sub,tag,c) in enumerate(layers):
+         b+=f'<g data-kind="android-layer" data-layer="{n}">'
+         b+=rect(38,y,684,70)+rect(39,y+1,4,68,C[c],"none",2)
+         b+=text(58,y+31,n,15,c,weight=700)
+         b+=text(98,y+31,label,20 if en else 21,"ink",weight=600)
+         b+=text(98,y+57,sub,15 if en else 16,"muted")
+         b+=badge(562,y+20,tag,c,146)+'</g>'
+         if i<len(layers)-1:
+             b+=path(f"M380 {y+70}V{y+88}","line",2,"6 6",True)+arrow(380,y+92,"down")
+     # 記憶體類 check 沒過時從 L0 直達 L3(L1、L2 看 CPU 時間,記憶體問題看不到)
+     b+='<g data-kind="memory-shortcut">'+path("M722 289H738Q746 289 746 297V557Q746 565 738 565H726","coral",2,"6 6",True)+arrow(724,565,"left","coral")+'</g>'
+     b+=text(380,626,"No anomaly at a layer → record it and stop there" if en else "哪一層沒有異常，就在查證紀錄記下並停在那一層",15 if en else 16,"muted","middle")
+     b+='<g data-kind="android-record">'+rect(38,642,684,82,"#14243a","#344967",14)
+     b+=text(58,674,"Evidence record" if en else "查證紀錄",22,"green",weight=650)
+     b+=text(58,705,"rerun.sh reruns it all; an AI with no background re-judges → notes" if en else "rerun.sh 一鍵重跑；不知前因的 AI 再判一次 → 寫回筆記",15 if en else 17,"muted")+'</g>'
+-    desc=("Android verification flow. Inputs are Macrobenchmark results with per-iteration traces and a memory and stability run that opens and closes a screen many times. "
+-          "L0 uses lumos macrobench to compare against a baseline and human-set limits. Only when a problem shows does it go to L1, which analyses Perfetto traces with Google's official android-profiler skill; "
+-          "L2 uses simpleperf to point at a function and line; L3 takes heap snapshots and requires a human declaration that only test data is used. "
+-          "A dashed shortcut takes failed memory checks from L0 straight to L3. Each layer stops when nothing abnormal is found, and everything is written into an evidence record that a script can rerun and a fresh AI checks blind.") if en else (
+-          "Android 驗證流程。輸入是 Macrobenchmark 結果（含每輪 Trace）與反覆開關畫面的記憶體與穩定性收集。"
+-          "L0 由 lumos macrobench 比基準、判人裁門檻；有異常才到 L1，用 Google 官方 android-profiler skill 分析 Perfetto Trace；"
+-          "L2 用 simpleperf 指到函式與行號；L3 錄記憶體快照，要先有人宣告只用測試資料。"
+-          "記憶體類檢查沒過時，虛線捷徑從 L0 直達 L3。每一層沒有異常就停，全部寫進可用腳本重跑、由沒脈絡的 AI 盲測的查證紀錄。")
++    desc=("Android verification flow. Two inputs: Macrobenchmark results with a recording of each run, and a memory and stability run that opens and closes a screen many times. "
++          "L0 uses lumos macrobench to compare with the saved baseline and the standards people agreed on. Only when it finds a problem does L1 follow Google's official android-profiler skill to read the recording and find where the app is stuck; "
++          "L2 uses simpleperf to point at the function and line; L3 takes memory snapshots, only after a person agrees to run on test data only. "
++          "A dashed shortcut takes failed memory checks from L0 straight to L3. Any layer with nothing wrong is recorded and the check stops there; everything goes into an evidence record that can be rerun and is re-judged by an AI with no background.") if en else (
++          "Android 驗證流程。兩種輸入：Macrobenchmark 的結果（含每次的執行紀錄），以及反覆開關畫面的記憶體與穩定性收集。"
++          "L0 由 lumos macrobench 跟存好的基準比、對照人訂的標準；有問題才到 L1，照 Google 官方 android-profiler skill 讀執行紀錄、找出卡在哪；"
++          "L2 用 simpleperf 指到函式與行號；L3 拍記憶體快照，要先有人同意只用測試資料。"
++          "記憶體類的檢查沒過時，虛線從 L0 直接跳到 L3。哪一層沒問題就記下並停在那一層；全部寫進可重跑、並由不知前因的 AI 再判一次的查證紀錄。")
+     return title,746,b,desc
+ 
+ SCENES={"map":("00 / THE SYSTEM",map_scene),
+         "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
+         "first-change":("START / NATURAL LANGUAGE",first_scene),
+         "graph-demo":("01 / KNOWLEDGE",graph_scene),
+         "case-review":("CASE / REAL REVIEW",case_scene),
+         "dispatch-overview":("02 / DISPATCH",dispatch_scene),
+         "risk-review":("02-03 / REVIEW BY RISK",risk_review_scene),
+         "review-overview":("03 / REVIEW",review_scene),
+@@ -563,20 +563,24 @@ def validate(svg):
+             assert abs(keys[1]-at/24)<.0001 and abs(keys[2]-(at+.3)/24)<.0001
+         else:
+             assert el.get("attributeName") in {"stroke-width","stroke-dashoffset"}
+             assert parent.tag.rsplit("}",1)[-1] in {"path","rect","circle"}
+     assert root.find("s:title",ns).text
+     assert root.find("s:desc",ns).text
+     if root.find("s:title",ns).text in {"Multiple checks, complementary coverage.","多層檢查，補足各自的盲點"}:
+         assert len(root.findall(".//*[@data-kind='defence-layer']"))==5
+         assert len(root.findall(".//*[@data-kind='aligned-escape']"))==1
+         assert len(root.findall(".//*[@data-kind='escape-ledger']"))==1
++    if root.find("s:title",ns).text in {"Android: check first, then dig one layer at a time.","Android：先判有沒有問題，再一層一層往下查"}:
++        assert [el.get("data-layer") for el in root.findall(".//*[@data-kind='android-layer']")]==["L0","L1","L2","L3"]
++        for kind in ("android-inputs","memory-shortcut","android-record"):
++            assert len(root.findall(f".//*[@data-kind='{kind}']"))==1, kind
+     if graph is not None:
+         # Preserve the node process, not merely the same palette.
+         expected={
+             ("plan-checkout","feature-checkout"),
+             ("plan-payment","feature-payment"),
+             ("feature-checkout","feature-payment"),
+             ("feature-checkout","verification-checkout"),
+             ("feature-payment","verification-payment"),
+             ("incident","feature-checkout"),
+             ("incident","plan-points-fix"),
+diff --git a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+index 82048ead..1b421773 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
++++ b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+@@ -43,11 +43,11 @@ verified_by:
+ 
+ - 2026-09-30:新增 drift-guard 圖(從寫下筆記到推送程式碼,三道關卡各標擋下或提醒),由 Codex(gpt-6-astra)依事實清單起稿、Claude 核對後把第 1 道的標籤移到真正被擋的那一行。
+ - 2026-09-30:drift-guard 圖第 1 道加「新寫『還沒有退款頁面』這類句子只提醒改成回頭條件」、第 3 道加「回頭條件成立 → 擋下」(用具體例子取代抽象的「還沒有 X」,使用者覺得 X 太抽象),對應提交時的否定現況句提醒([[Projects/否定現況句配回頭條件_計劃]])與推送前的回頭條件檢查;圖高 710 → 787。
+ - 2026-09-30:drift-guard 左側直線原本畫到第 3 個圓圈下方(多出一截),改成停在第 3 個圓圈中心、被圓圈蓋住。README 拿掉「一個真實的例子」一節(使用者裁),case-review 圖不再被 README 引用,產生器與圖檔先留著,要放回時不用重畫。
+ - 2026-10-01:evals-overview 圖重畫成跟 drift-guard 同一套版型:四種每週檢查(審查回放、查詢考卷、情境探針、推播漏網)→ 每週留紀錄 → 退步或沒過通知人 → 修規則或補測試 → 下週再量。四種的排程與「推播漏網只留紀錄不通知」都對過 governance/autonomous-loop.sh 的各個週跑段;README 新增 evals 一章引用它,取代「怎麼運作」裡外圈那段。(通知與排程範圍的說法 2026-10-10 改過,見下方 2026-10-10 那條。)
+ - 2026-10-01:drift-guard 第 3 道加一列「程式和管它的筆記一起改:請 AI 重讀整篇舊句 → 只提醒」,對應推送前的回頭重讀提醒([[Projects/守檔筆記對照改動_計劃]]);第 3 格高 203 → 242、圖高 787 → 826。這次先手改了兩張 SVG,提交時被「常一起改」的提醒抓到才補產生器,補完重產的結果跟手改的逐位元組相同。(這列 2026-10-09 起改成「先請 AI 重讀(本機擋)」,見下方 2026-10-09 那條。)
+ - 2026-10-05:drift-guard 補上 10/2 之後上線的防線:第 1 道加「回頭條件寫在句中或表格 → 提交時擋下」;第 3 道加「規則的撤除條件成立 → 擋下」「綁的測試名稱找不到 → 只提醒(專案可設成擋)」「連到已收尾的筆記、同一句還寫待定 → 只提醒」。擋或提醒都對過程式預設(筆記形狀擋預設擋、測試綁定預設提醒、c6 推送前只列出)。第 1 格高 200 → 231、第 3 格 242 → 359、圖高 826 → 974。數量標記與結 Issue 前的擋不在這三個時間點,只寫進 README 正文、不上圖。
+ - 2026-10-09:drift-guard 第 3 道兩列改成擋下:「名稱或路徑消失、筆記還在提」(舊句檢查沒寫子開關時照總開關,預設擋)、「程式和管它的筆記一起改:先請 AI 重讀(本機擋)」(回頭重讀在推送前掛鉤帶 `--gate` 擋、CI 只提醒),中英兩版與替代文字一起改,對應 [[Projects/舊句兩道轉擋_計劃]];英文那列縮成「Code and note changed: AI rereads first (local)」免得跟標籤擠在一起。改產生器重產,沒手改 SVG。
+ - 2026-10-10:README 照程式改正說法時,兩張圖的字跟著改:drift-guard 底下那行從「除了兩項一定擋下的檢查、其餘可由專案改成提醒」改成「只有部分檢查能由專案改成提醒」(能調的只有舊說法、回頭重讀、筆記寫法等幾類,高風險沒審查紀錄、驗證器被改、全套測試、缺 Python 3.14 都沒有開關);evals-overview 改成「主要在 Lumos 自己的 repo 排程執行」、通知那格改「出問題時通知人」,替代說明講清只有審查回放與情境探針出問題才通知、查詢考卷分數退步只記錄。中英兩版一起改產生器重產,沒手改 SVG;用無頭 Chrome(--virtual-time-budget)轉圖、中英四張都看過,字沒超出框(先用了 qlmanage,被審查點出會截到動畫第一格、見上面的坑,改用 Chrome 重看)。查詢考卷的通知門檻是「計分觸及的候選筆記沒標過的比例」,不是題目沒標答案,desc 照這個寫。
+ - 2026-09-30:case-review 圖改成三格因果圖(整個目錄免查、只認檔名、比對內容),原本的逐輪報告數與條數圖讀者看不懂;由 Codex(gpt-6-astra)起稿,事實對回 governance/review-reports/code-工具自裝檔不算消費專案/ 與事故筆記。
+-- 2026-10-25:新增 android-e2e 圖(Android 在實機上逐層查:兩種輸入 → L0 判定 → L1 用 Google 官方 android-profiler skill 分析 Trace → L2 行號 → L3 記憶體,右側虛線是記憶體類 check 從 L0 直達 L3 的捷徑,底部是查證紀錄);README 新增〈Android:在實機上驗效能與記憶體〉一章引用它。使用者要求不用「收據」兩字,圖與 README 一律寫「查證紀錄」(英文 evidence record);skill 與計劃內部仍叫收據。英文副標原本超出框,縮短後中英兩版都用無頭 Chrome 截圖看過。同日使用者要求敘述白話,android-e2e 圖上的子標也改成跟 README 正文同一套白話用詞(例:「判人裁門檻」→「對照人訂的標準」、「誰配置、誰留住記憶體」→「誰在佔記憶體、為什麼不釋放」)。代碼審 r1 架構對齊席抓到整批換詞時把 data-kind 也換成帶空白的 `android-evidence record`,改回單詞 `android-record`;產生器說明檔的場景數(12)、圖檔數(24)與場景清單一併補上。
++- 2026-10-25:新增 android-e2e 圖(Android 在實機上逐層查:兩種輸入 → L0 判定 → L1 用 Google 官方 android-profiler skill 分析 Trace → L2 行號 → L3 記憶體,右側虛線是記憶體類 check 從 L0 直達 L3 的捷徑,底部是查證紀錄);README 新增〈Android:在實機上驗效能與記憶體〉一章引用它。使用者要求不用「收據」兩字,圖與 README 一律寫「查證紀錄」(英文 evidence record);skill 與計劃內部仍叫收據。英文副標原本超出框,縮短後中英兩版都用無頭 Chrome 截圖看過。同日使用者要求敘述白話,android-e2e 圖上的子標也改成跟 README 正文同一套白話用詞(例:「判人裁門檻」→「對照人訂的標準」、「誰配置、誰留住記憶體」→「誰在佔記憶體、為什麼不釋放」)。代碼審 r1 架構對齊席抓到整批換詞時把 data-kind 也換成帶空白的 `android-evidence record`,改回單詞 `android-record`;產生器說明檔的場景數(12)、圖檔數(24)與場景清單一併補上。r3 起 validate 對 android-e2e 圖另驗四層依序是 L0–L3、輸入、記憶體捷徑、查證紀錄各一個(改壞一層的編號 --check 會紅);中文 L2 徽章改「Android 工具」免得跟 L1 的「Google 官方」混成同一個東西,替代文字也改成跟正文同一套白話。

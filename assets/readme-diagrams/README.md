@@ -1,6 +1,6 @@
 # README diagram source
 
-Eleven bilingual scenes share one visual system without sharing one layout.
+Twelve bilingual scenes share one visual system without sharing one layout.
 The generator uses only the Python standard library and writes the existing
 SVG filenames used by the READMEs. Logos, the recorded GIF, and the detailed
 diagrams in docs are outside its scope.
@@ -10,7 +10,7 @@ python3 assets/readme-diagrams/generate.py
 python3 assets/readme-diagrams/generate.py --check
 ```
 
-The check validates XML, reproduces all 22 assets exactly, and ensures that
+The check validates XML, reproduces all 24 assets exactly, and ensures that
 animation is confined to decorative paths or borders, except for the knowledge
 scene's explicit node-reveal timeline.
 The knowledge scene also checks its plan-to-feature-to-verification relations,
@@ -39,6 +39,11 @@ Scene roles:
 - Review: architecture context above complementary evidence sources.
 - Write-back: work records become retrievable notes.
 - Evals: review replay and retrieval evaluation inform calibration.
+- Android: two inputs feed a layered check (L0 → L1 → L2 → L3), a dashed
+  shortcut takes failed memory checks from L0 to L3, and every step ends in an
+  evidence record. Labels follow the plain wording of the README chapter.
+  The check also asserts the four layers L0–L3 in order and one inputs group,
+  memory shortcut, and evidence record.
 
 These are conceptual illustrations, not screenshots, benchmark reports, or
 claims of guaranteed correctness. The map retains a moving loop; every scene
