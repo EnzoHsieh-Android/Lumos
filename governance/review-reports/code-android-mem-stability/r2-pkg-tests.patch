@@ -1,0 +1,966 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 355824fd..4cf633d6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -18071,20 +18071,961 @@ def t_macrobench_threshold_trace_section_count():
+         with tempfile.TemporaryDirectory(prefix="gctl-mbthr-") as td:
+             thr = _mb_thr(scenario="pkg.Flow#scrollCompose", metric="Compose:recomposeCount", stat="median", max=40)
+             _, r, d, rt = _mb_thr_root(td, [bench(med)], [thr])
+             got = (len(d.get("threshold_failures", [])), len(d.get("threshold_passed", [])))
+             check(f"重組次數中位數 {med}、門檻 ≤ 40 → {'沒達' if want_fail else '達標'}",
+                   got == ((1, 0) if want_fail else (0, 1)), r.stdout + r.stderr)
+             if want_fail:
+                 check("文字輸出印出指標名與次數", "Compose:recomposeCount" in rt.stdout and "55" in rt.stdout, rt.stdout)
+ 
+ 
++def _ms_result(**over):
++    """收集腳本寫的 stability.json 的假檔:預設每個來源都 ok、什麼都沒漏。over 用 來源=dict 整段蓋掉。"""
++    d = {"scenario": "pkg.Leak#cycle", "device_model": "SM-X710", "android_sdk": 36, "total_mem_mb": 7213,
++         "category": "app", "warmup": 2, "cycles": 5,
++         "driver": {"status": "ok", "warmup": {"rc": 0}, "cycles": {"rc": 0}},
++         "pids": {"status": "ok", "values": [100, 100, 100]},
++         "unreachable": {"status": "ok", "before": {"bytes": 0, "allocations": 0}, "after": {"bytes": 0, "allocations": 0}},
++         "heap": {"status": "ok", "before": {"com.sdk.Player": 1}, "after": {"com.sdk.Player": 1}, "classes_seen": {"before": 9000, "after": 9000}},
++         "native_heap_kb": {"status": "ok", "before": 7000, "after": 7100},
++         "cycle_trace": {"status": "ok", "peak_anon_swap_kb": 200000, "frozen_frames": 0, "max_main_block_ms": 40, "frames": 600},
++         "exits": {"status": "ok", "new": []},
++         "strictmode": {"status": "ok", "violations": []}}
++    d.update(over)
++    return d
++
++
++def _ms_thr(check, **over):
++    t = {"scenario": "pkg.Leak#cycle", "check": check, "contract": "Systems/播放器 ★INVARIANT★ 關畫面釋放播放器",
++         "decided_by": "Enzo", "decided_at": "2026-10-24"}
++    t.update(over)
++    return {k: v for k, v in t.items() if v is not None}
++
++
++def _ms_root(td, thresholds, result, config=None, text=True):
++    """暫存專案:門檻檔 + 一份 stability.json;config 給了才寫 .lumos/macrobench.json。
++    回 (root, --json 那次, 解析後的 dict, 文字輸出那次)。"""
++    import json
++    root = Path(td)
++    (root / ".lumos").mkdir(exist_ok=True)
++    if config is not None:
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps(config), encoding="utf-8")
++    (root / ".lumos" / "macrobench-thresholds.json").write_text(
++        json.dumps({"version": 1, "thresholds": thresholds}, ensure_ascii=False), encoding="utf-8")
++    sp = root / "stability.json"
++    sp.write_text(result if isinstance(result, str) else json.dumps(result, ensure_ascii=False), encoding="utf-8")
++    r = _mb_run(root, "--stability", str(sp), "--json")
++    d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++    return root, r, d, (_mb_run(root, "--stability", str(sp)) if text else r)
++
++
++def _ms_verdict(d):
++    """--json 結果裡寫了 check 的那幾筆 → [(清單名, check, 那筆)]。"""
++    return [(k, x.get("check"), x) for k in ("threshold_failures", "threshold_passed", "threshold_skipped")
++            for x in d.get(k, []) if x.get("check")]
++
++
++def t_android_memstab_native_unreachable():
++    """S1:兩次掃描的沒人指著原生記憶體差值大於門檻 → 沒過並印差值;等於門檻 → 通過;只比差值不比絕對值。"""
++    import tempfile
++    cases = [((0, 0), (10485760, 5), None, "threshold_failures"),   # 實驗室實測:沒呼叫 release 5 輪漏 10 MB 5 塊
++             ((4096, 1), (4096, 1), None, "threshold_passed"),       # 暖機後就有 4 KB 基線、量測後沒變 → 差值 0
++             ((0, 0), (1024, 1), 1024, "threshold_passed"),          # 差值剛好等於門檻
++             ((0, 0), (1025, 1), 1024, "threshold_failures")]
++    for (b, ba), (a, aa), lim, want in cases:
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            res = _ms_result(unreachable={"status": "ok", "before": {"bytes": b, "allocations": ba},
++                                          "after": {"bytes": a, "allocations": aa}})
++            _, r, d, rt = _ms_root(td, [_ms_thr("native_unreachable", max_bytes=lim)], res)
++            v = _ms_verdict(d)
++            check(f"前 {b} 後 {a} 門檻 {lim} → {want}", [x[0] for x in v] == [want], r.stdout + r.stderr)
++            if want == "threshold_failures":
++                rec = v[0][2]
++                check("沒過那筆附差值位元組與塊數", rec.get("delta_bytes") == a - b and rec.get("delta_allocations") == aa - ba, str(rec))
++                check("文字輸出印出差值", str(a - b) in rt.stdout and "native_unreachable" in rt.stdout, rt.stdout)
++            check("只提醒、回 0", r.returncode == 0 and rt.returncode == 0, r.stderr + rt.stderr)
++
++
++def t_android_memstab_java_growth():
++    """S2:不在排除清單的類別增加量至少 N × 每輪門檻 → 沒過並列出;少一個 → 通過;平台型別增加再多也不算。"""
++    import tempfile
++    def run(before, after, **thr):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            res = _ms_result(heap={"status": "ok", "before": before, "after": after, "classes_seen": {"before": 9000, "after": 9000}})
++            _, r, d, rt = _ms_root(td, [_ms_thr("java_growth", **thr)], res)
++            return _ms_verdict(d), r, rt
++    v, r, rt = run({"com.sdk.Player": 1, "java.lang.String": 900}, {"com.sdk.Player": 6, "java.lang.String": 5000})
++    check("SDK 類別 5 輪多 5 個 → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout + r.stderr)
++    grown = v[0][2].get("grown", []) if v else []
++    check("列出增長的類別與增加量,不列平台型別", grown == [{"class": "com.sdk.Player", "delta": 5}], str(grown))
++    check("文字輸出印出類別名", "com.sdk.Player" in rt.stdout, rt.stdout)
++    v, r, _ = run({"com.sdk.Player": 1}, {"com.sdk.Player": 5})
++    check("多 4 個(少一個)→ 通過", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    v, r, _ = run({"byte[]": 10, "androidx.Foo": 1, "kotlin.Bar": 1}, {"byte[]": 99999, "androidx.Foo": 50, "kotlin.Bar": 50})
++    check("基本型別陣列與 androidx.、kotlin. 開頭的增加再多也不算", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    v, r, _ = run({"com.sdk.Player": 1}, {"com.sdk.Player": 11}, min_per_cycle=2)
++    check("每輪門檻 2:多 10 個 = 5×2 → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout)
++    v, r, _ = run({"com.sdk.Player": 1}, {"com.sdk.Player": 11}, exclude_prefixes=["com.sdk."])
++    check("自訂排除清單蓋掉預設:排除 com.sdk. 後通過", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    v, r, _ = run({}, {"com.sdk.New": 5})
++    check("第一份沒有、第二份有 5 個的類別算增加 5", [x[0] for x in v] == ["threshold_failures"], r.stdout)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        res = _ms_result(heap={"status": "ok", "before": {"a.b": 1}, "after": {"a.b": 6}, "classes_seen": {"before": 9, "after": 9}, "class_names": "raw"})
++        _, r, _d, rt = _ms_root(td, [_ms_thr("java_growth")], res)
++        check("類別名沒還原時文字輸出標明(沒給 R8 mapping)", "類別名未還原" in rt.stdout, rt.stdout)
++
++
++def t_android_memstab_instance_limit():
++    """S3:宣告類別在第二份快照超過上限 → 沒過並印類別名與實例數;只在第一份有 → 算 0;兩份都沒有 → 跳過並說可能拼錯或混淆。"""
++    import tempfile
++    def run(before, after, mx=1):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            res = _ms_result(heap={"status": "ok", "before": before, "after": after, "classes_seen": {"before": 9000, "after": 9000}})
++            _, r, d, rt = _ms_root(td, [_ms_thr("instances", **{"class": "com.sdk.Player", "max": mx})], res)
++            return _ms_verdict(d), r, rt
++    v, r, rt = run({"com.sdk.Player": 1}, {"com.sdk.Player": 5})
++    check("5 個 > 上限 1 → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout + r.stderr)
++    check("沒過那筆附類別名與實例數", v and v[0][2].get("class") == "com.sdk.Player" and v[0][2].get("count") == 5, str(v))
++    check("文字輸出印出類別名與實例數", "com.sdk.Player" in rt.stdout and "5" in rt.stdout, rt.stdout)
++    v, r, _ = run({"com.sdk.Player": 1}, {"com.sdk.Player": 1})
++    check("1 個 = 上限 → 通過", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    v, r, _ = run({"com.sdk.Player": 3}, {}, mx=0)
++    check("只在第一份有 → 第二份算 0 個 → 通過", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    v, r, _ = run({"com.other.X": 1}, {"com.other.X": 1})
++    check("兩份都沒有實例、也沒有類別物件 → 跳過(不是通過)", [x[0] for x in v] == ["threshold_skipped"], r.stdout)
++    check("跳過原因提到拼錯或混淆", v and ("拼錯" in v[0][2].get("reason", "") and "混淆" in v[0][2].get("reason", "")), str(v))
++    cls = "java.lang.Class<com.sdk.Player>"
++    v, r, _ = run({cls: 1}, {cls: 1}, mx=0)
++    check("沒有實例但有類別物件(載入過、實例都釋放了)→ 算 0 個 → 通過(2026-10-24 實驗室正常版)", [x[0] for x in v] == ["threshold_passed"]
++          and v[0][2].get("count") == 0, str(v))
++
++
++def t_android_memstab_peak_vitals_floor():
++    """S4:依 total_mem_mb 與 category 照官方區間(含下界不含上界)查前景上限;超過 → 沒過;區間外 → 跳過並說原因。"""
++    import tempfile
++    GB = 1024 * 1024   # KB
++    cases = [(7213, "app", 2.25 * GB + 1, "threshold_failures"),    # SM-X710 實測 MemTotal 約 7213 MB → 6800到9216 級 2.25 GB
++             (7213, "app", 2.25 * GB, "threshold_passed"),
++             (6800, "app", 2.25 * GB + 1, "threshold_failures"),    # 下界含:6800 落 6800到9216 級
++             (6799, "app", 2.25 * GB, "threshold_passed"),          # 6799 落 4800到6800 級(也是 2.25)
++             (4799, "app", 2.0 * GB + 1, "threshold_failures"),     # 3200到4800 級 2.00 GB
++             (4800, "game", 2.75 * GB, "threshold_passed"),         # 遊戲 4800到6800 級 2.75 GB
++             (4800, "game", 2.75 * GB + 1, "threshold_failures"),
++             (3199, "app", 99 * GB, "threshold_skipped"),           # 低於 3200 沒有官方數字
++             (18432, "app", 99 * GB, "threshold_skipped")]          # 至少 18432 沒有官方數字
++    for mem, cat, peak, want in cases:
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            ct = dict(_ms_result()["cycle_trace"], peak_anon_swap_kb=peak)
++            res = _ms_result(total_mem_mb=mem, category=cat, cycle_trace=ct)
++            _, r, d, _ = _ms_root(td, [_ms_thr("peak_vitals")], res)
++            v = _ms_verdict(d)
++            check(f"{mem} MB {cat} 峰值 {peak / GB:.4f} GB → {want}", [x[0] for x in v] == [want], r.stdout + r.stderr)
++            if want == "threshold_skipped":
++                check("跳過說沒有官方數字", "官方" in v[0][2].get("reason", ""), str(v))
++
++
++def t_android_memstab_exits():
++    """S5:新增紀錄裡有崩潰、原生崩潰、ANR、低記憶體被殺、記憶體上限,或三次 pid 不一樣 → 沒過並印種類;只有其他原因 → 通過並回報。"""
++    import tempfile
++    def run(new, pids=(100, 100, 100)):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            res = _ms_result(exits={"status": "ok", "new": new}, pids={"status": "ok", "values": list(pids)})
++            _, r, d, rt = _ms_root(td, [_ms_thr("exits")], res)
++            return _ms_verdict(d), r, rt
++    for typ in ("crash", "native_crash", "anr", "low_memory", "memory_limiter"):
++        v, r, rt = run([{"type": typ, "reason": 4, "pid": 100, "timestamp": "2026-10-24 02:37:24.652", "desc": "x"}])
++        check(f"新增一筆 {typ} → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout + r.stderr)
++        check(f"{typ} 印出種類", typ in rt.stdout, rt.stdout)
++    v, r, rt = run([{"type": "other", "reason": 10, "pid": 100, "timestamp": "2026-10-24 02:37:24.652", "desc": "user"}])
++    check("只有使用者要求那種 → 通過", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    check("通過那筆仍回報其他原因的紀錄", v and v[0][2].get("other") == 1, str(v))
++    v, r, _ = run([], pids=(100, 100, 222))
++    check("三次 pid 不一樣 → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout)
++
++
++def t_android_memstab_strictmode():
++    """S7:有違規 → 沒過;設定沒宣告 strictmode(收集腳本記 unsupported)或日誌串流中斷(failed)→ 跳過。"""
++    import tempfile
++    def run(sm):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            _, r, d, _ = _ms_root(td, [_ms_thr("strictmode")], _ms_result(strictmode=sm))
++            return _ms_verdict(d), r
++    v, r = run({"status": "ok", "violations": [{"type": "LeakedClosableViolation"}]})
++    check("一筆違規 → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout + r.stderr)
++    v, r = run({"status": "ok", "violations": []})
++    check("零筆且收得到 → 通過", [x[0] for x in v] == ["threshold_passed"], r.stdout)
++    v, r = run({"status": "unsupported", "reason": "設定沒宣告 strictmode"})
++    check("沒宣告 → 跳過", [x[0] for x in v] == ["threshold_skipped"], r.stdout)
++    v, r = run({"status": "failed", "reason": "日誌串流中斷"})
++    check("串流中斷 → 跳過(不是通過)", [x[0] for x in v] == ["threshold_skipped"], r.stdout)
++
++
++def t_android_memstab_frozen_frame():
++    """S8:凍結幀 > 0 → 沒過;設了 max_block_ms 而最長阻塞超過 → 沒過;沒設只回報;frames 欄位是 0 → 跳過。"""
++    import tempfile
++    def run(ct, **thr):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            full = dict(_ms_result()["cycle_trace"], **ct)
++            _, r, d, _ = _ms_root(td, [_ms_thr("frozen", **thr)], _ms_result(cycle_trace=full))
++            return _ms_verdict(d), r
++    v, r = run({"frozen_frames": 1})
++    check("一幀超過 700ms → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout + r.stderr)
++    v, r = run({"frozen_frames": 0, "max_main_block_ms": 650})
++    check("沒設阻塞上限、最長 650ms → 通過並回報", [x[0] for x in v] == ["threshold_passed"] and v[0][2].get("max_main_block_ms") == 650, str(v))
++    v, r = run({"frozen_frames": 0, "max_main_block_ms": 650}, max_block_ms=500)
++    check("設了 500ms、最長 650ms → 沒過", [x[0] for x in v] == ["threshold_failures"], r.stdout)
++    v, r = run({"frozen_frames": 0, "frames": 0})
++    check("frames 是 0(沒錄到幀)→ 跳過", [x[0] for x in v] == ["threshold_skipped"], r.stdout)
++
++
++def t_android_memstab_source_not_ok_skipped():
++    """S11:來源 status 不是 ok、欄位缺、值是 -1 或不是有限數 → 跳過不通過;driver 不是 ok → 需要完整 N 輪的五種跳過,exits 與 strictmode 照判。"""
++    import tempfile
++    all_checks = [_ms_thr("native_unreachable"), _ms_thr("java_growth"), _ms_thr("instances", **{"class": "com.sdk.Player", "max": 9}),
++                  _ms_thr("peak_vitals"), _ms_thr("exits"), _ms_thr("strictmode"), _ms_thr("frozen")]
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        res = _ms_result(driver={"status": "failed", "reason": "FAILURES!!!"},
++                         exits={"status": "ok", "new": [{"type": "crash", "reason": 4, "pid": 100, "timestamp": "t", "desc": "x"}]})
++        _, r, d, _ = _ms_root(td, all_checks, res)
++        got = {c: k for k, c, _ in _ms_verdict(d)}
++        check("前置:七條都有判定", len(got) == 7, str(got))
++        check("driver 失敗:五種需要完整 N 輪的跳過",
++              all(got.get(c) == "threshold_skipped" for c in ("native_unreachable", "java_growth", "instances", "peak_vitals", "frozen")), str(got))
++        check("driver 失敗:exits 照判(量測輪崩潰 → 沒過)", got.get("exits") == "threshold_failures", str(got))
++        check("driver 失敗:strictmode 照判", got.get("strictmode") == "threshold_passed", str(got))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        res = _ms_result(pids={"status": "ok", "values": [100, 100, 222]},
++                         exits={"status": "ok", "new": [{"type": "crash", "reason": 4, "pid": 100, "timestamp": "t", "desc": "x"}]})
++        _, r, d, _ = _ms_root(td, all_checks, res)
++        got = {c: k for k, c, _ in _ms_verdict(d)}
++        check("行程換過(中途崩潰後被重啟,2026-10-24 實驗室):五種需要完整 N 輪的跳過",
++              all(got.get(c) == "threshold_skipped" for c in ("native_unreachable", "java_growth", "instances", "peak_vitals", "frozen")), str(got))
++        check("行程換過:exits 照判沒過", got.get("exits") == "threshold_failures", str(got))
++    bad = [("unreachable", {"status": "failed", "reason": "掃描逾時"}, "native_unreachable"),
++           ("unreachable", {"status": "ok", "before": {"bytes": 0, "allocations": 0}, "after": {"bytes": float("nan"), "allocations": 0}}, "native_unreachable"),
++           ("unreachable", {"status": "ok", "before": {"bytes": 0, "allocations": 0}, "after": {"bytes": True, "allocations": 0}}, "native_unreachable"),
++           ("heap", {"status": "unsupported", "reason": "沒宣告測試資料"}, "java_growth"),
++           ("cycle_trace", dict(_ms_result()["cycle_trace"], peak_anon_swap_kb=-1), "peak_vitals"),
++           ("exits", {"status": "failed", "reason": "沒有全域標頭"}, "exits")]
++    for src, val, chk in bad:
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            res = _ms_result(**{src: val})
++            if isinstance(val.get("after", {}).get("bytes"), float):   # NaN 用 json 的 NaN 字面寫進檔
++                import json
++                res = json.dumps(res)
++            _, r, d, _ = _ms_root(td, [t for t in all_checks if t["check"] == chk], res)
++            v = _ms_verdict(d)
++            check(f"{src}={str(val)[:40]} → {chk} 跳過", [x[0] for x in v] == ["threshold_skipped"], r.stdout + r.stderr)
++            check(f"{src} 跳過附原因", v and v[0][2].get("reason"), str(v))
++
++
++def t_android_memstab_check_compat():
++    """S13:沒寫 check 的條目照舊對 Macrobenchmark 結果檔判、結果不變;不認得的 check、缺欄位、門檻不是有限數 → 回 2;
++    沒給 --stability 時 check 條目跳過;check 條目沒過時文字輸出不因缺 metric 出錯。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        root, r, d, rt = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr(), _ms_thr("exits")])
++        legacy = [x for x in d.get("threshold_failures", []) if not x.get("check")]
++        check("舊條目照舊判沒達、附現值", len(legacy) == 1 and legacy[0].get("current") == 3.6, r.stdout + r.stderr)
++        skipped = [x for x in d.get("threshold_skipped", []) if x.get("check") == "exits"]
++        check("沒給 --stability:check 條目跳過並說原因", len(skipped) == 1 and "stability" in skipped[0].get("reason", ""), r.stdout)
++        check("兩種條目並存時文字輸出回 0", rt.returncode == 0, rt.stderr)
++    for bad, why in ((_ms_thr("leakz"), "不認得的 check"), (_ms_thr("instances", max=1), "instances 缺 class"),
++                     (_ms_thr("instances", **{"class": "c"}), "instances 缺 max"),
++                     (_ms_thr("native_unreachable", max_bytes=float("inf")), "門檻不是有限數"),
++                     (_ms_thr("exits", decided_at="2026-13-40"), "日期不是真的日期"),
++                     (_ms_thr("exits", contract=None), "缺 contract")):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            root = Path(td)
++            (root / ".lumos").mkdir()
++            (root / ".lumos" / "macrobench-thresholds.json").write_text(json.dumps({"version": 1, "thresholds": [bad]}), encoding="utf-8")
++            (root / "s.json").write_text(json.dumps(_ms_result()), encoding="utf-8")
++            r = _mb_run(root, "--stability", str(root / "s.json"))
++            check(f"{why} → 回 2 並印擋下", r.returncode == 2 and "擋下" in r.stderr, r.stdout + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, r, d, rt = _ms_root(td, [_ms_thr("exits")], _ms_result(exits={"status": "ok", "new": [
++            {"type": "anr", "reason": 6, "pid": 100, "timestamp": "t", "desc": "x"}]}))
++        check("check 條目沒過時文字輸出回 0、印 check 名", rt.returncode == 0 and "exits" in rt.stdout and "Traceback" not in rt.stderr,
++              rt.stdout + rt.stderr)
++
++
++def t_android_memstab_stability_config():
++    """S14:沒有 .lumos/macrobench.json、或只有 stability 段沒有 results_dirs 時照樣判 check 條目;
++    只有 stability 段時 --update-baseline 說沒有結果目錄、回 0;結果檔讀不了或不是 JSON → 回 2 擋下。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, r, d, _ = _ms_root(td, [_ms_thr("exits")], _ms_result())
++        check("沒有 macrobench.json 也判", [x[0] for x in _ms_verdict(d)] == ["threshold_passed"], r.stdout + r.stderr)
++    stab = {"stability": {"package": "com.example.mblab", "scenario": "pkg.Leak#cycle", "driver": "x {{CYCLES}}",
++                          "warmup": 2, "cycles": 5}}
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        root, r, d, _ = _ms_root(td, [_ms_thr("exits")], _ms_result(), config=stab)
++        check("只有 stability 段也判", [x[0] for x in _ms_verdict(d)] == ["threshold_passed"], r.stdout + r.stderr)
++        u = _mb_run(root, "--update-baseline")
++        check("只有 stability 段:--update-baseline 說沒有結果目錄、回 0", u.returncode == 0 and "results_dirs" in u.stdout, u.stdout + u.stderr)
++        c = _mb_run(root, "--check-config")
++        check("--check-config 設定合格 → 回 0", c.returncode == 0, c.stdout + c.stderr)
++    for bad, why in (({"stability": dict(stab["stability"], cycles=0)}, "cycles 是 0"),
++                     ({"stability": dict(stab["stability"], warmup=0)}, "warmup 是 0"),
++                     ({"stability": dict(stab["stability"], package="com.x; rm -rf /")}, "套件名有怪字元"),
++                     ({"stability": dict(stab["stability"], category="toy")}, "category 不是 app 或 game"),
++                     ({"stability": dict(stab["stability"], test_data=True)}, "test_data 沒署名日期")):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            root = Path(td)
++            (root / ".lumos").mkdir()
++            (root / ".lumos" / "macrobench.json").write_text(json.dumps(bad), encoding="utf-8")
++            c = _mb_run(root, "--check-config")
++            check(f"--check-config:{why} → 回 2 擋下", c.returncode == 2 and "擋下" in c.stderr, c.stdout + c.stderr)
++    for content, why in (("{not json", "不是 JSON"), (None, "檔案不存在"), ("[1, 2]", "最外層不是物件")):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            root = Path(td)
++            (root / ".lumos").mkdir()
++            (root / ".lumos" / "macrobench-thresholds.json").write_text(json.dumps({"version": 1, "thresholds": [_ms_thr("exits")]}), encoding="utf-8")
++            if content is not None:
++                (root / "s.json").write_text(content, encoding="utf-8")
++            r = _mb_run(root, "--stability", str(root / "s.json"))
++            check(f"結果檔{why} → 回 2 擋下", r.returncode == 2 and "擋下" in r.stderr, r.stdout + r.stderr)
++
++
++def _ms_sql(name, setup):
++    """拿 Python 內建 sqlite3 照 Perfetto 文件建同名的表,跑工具鏈範本裡的查詢;範本不在回 None。"""
++    import sqlite3
++    tpl = Path(GRAPHCTL).resolve().parent / "templates" / name
++    if not tpl.is_file():
++        return None
++    db = sqlite3.connect(":memory:")
++    db.executescript("create table process(upid integer primary key, pid int, name text);"
++                     "create table thread(utid integer primary key, tid int, name text, upid int);"
++                     "create table thread_track(id integer primary key, utid int);"
++                     "create table slice(id integer primary key, ts int, dur int, track_id int, name text, depth int, parent_id int);"
++                     "create table process_counter_track(id integer primary key, upid int, name text);"
++                     "create table counter(id integer primary key, ts int, track_id int, value real);"
++                     "create table actual_frame_timeline_slice(id integer primary key, ts int, dur int, upid int);"
++                     "create table heap_graph_class(id integer primary key, name text);"
++                     "create table heap_graph_object(id integer primary key, upid int, type_id int, reachable int);"
++                     "insert into process values (1, 100, 'com.lab'), (2, 200, 'com.other');"
++                     "insert into thread values (1, 100, 'com.lab', 1), (2, 101, 'RenderThread', 1), (3, 200, 'com.other', 2);"
++                     "insert into thread_track values (1, 1), (2, 2), (3, 3);"
++                     "insert into process_counter_track values (1, 1, 'mem.rss.anon'), (2, 1, 'mem.swap'), (3, 2, 'mem.rss.anon');")
++    db.executescript(setup)
++    sql = tpl.read_text(encoding="utf-8").replace("__PROCESS__", "com.lab")
++    return db.execute(sql).fetchall()
++
++
++def t_android_memstab_cycle_query():
++    """S9:追蹤檔查詢一列:cycle、匿名常駐加 swap 最大值(swap 取之前最近一次)、凍結幀(有幀時間線用幀時間線)、主執行緒最長最上層區段、幀數;量不到 -1。"""
++    MB, ms = 1024 * 1024, 1_000_000
++    setup = (f"insert into counter(ts, track_id, value) values (0, 2, {10 * MB}), (100, 1, {100 * MB}), (200, 1, {150 * MB}),"
++             f" (300, 2, {40 * MB}), (400, 1, {120 * MB}), (500, 3, {999 * MB});"   # 別的行程那筆 999 MB 不能算進來
++             f"insert into actual_frame_timeline_slice(ts, dur, upid) values (0, {16 * ms}, 1), (100, {701 * ms}, 1), (200, {700 * ms}, 1),"
++             f" (300, {900 * ms}, 2);"   # 別的行程的凍結幀不算;剛好 700ms 不算凍結
++             f"insert into slice(ts, dur, track_id, name, depth) values (0, {650 * ms}, 1, 'activityStart', 0), (0, {600 * ms}, 1, 'inflate', 1),"
++             f" (0, {2000 * ms}, 2, 'DrawFrame', 0), (0, {3000 * ms}, 3, 'other', 0);")
++    rows = _ms_sql("android-stability-cycle.sql", setup)
++    check("前置:範本在", rows is not None)
++    if rows is None:
++        return
++    check("恰好一列、第一欄是字串 cycle", len(rows) == 1 and rows[0][0] == "cycle", str(rows))
++    _key, peak, frozen, block, frames = rows[0]
++    # 峰值:200 那點 anon 150 MB 配之前最近的 swap 10 MB = 160 MB;400 那點 120 + 40 = 160 MB;取最大 160 MB
++    check("峰值 = anon 加之前最近一次 swap 的最大值,只算這個 App", peak == 160 * 1024, str(rows))
++    check("凍結幀只算超過 700ms、只算這個 App", frozen == 1, str(rows))
++    check("主執行緒最長最上層區段 650ms(RenderThread 與別的行程不算、子區段不算)", block == 650, str(rows))
++    check("幀數 = 這個 App 的幀時間線筆數", frames == 3, str(rows))
++    rows = _ms_sql("android-stability-cycle.sql",
++                   f"insert into slice(ts, dur, track_id, name, depth) values (0, {800 * ms}, 1, 'Choreographer#doFrame 12345', 0),"
++                   f" (900, {16 * ms}, 1, 'Choreographer#doFrame 12346', 0);")
++    check("沒有幀時間線時用名稱以 Choreographer#doFrame 開頭的區段(帶幀號也認)", rows and rows[0][2] == 1 and rows[0][4] == 2, str(rows))
++    check("沒有記憶體計數 → 峰值 -1", rows and rows[0][1] == -1, str(rows))
++    rows = _ms_sql("android-stability-cycle.sql", "")
++    check("什麼都沒有 → 峰值 -1、阻塞 -1、幀數 0", rows == [("cycle", -1, 0, -1, 0)], str(rows))
++
++
++def t_android_memstab_heap_query():
++    """S10:快照查詢每個類別一列、第一欄是類別名、只算還有人指著的物件、同名類別加總成一列、只算這個 App。"""
++    setup = ("insert into heap_graph_class values (1, 'com.sdk.Player'), (2, 'com.sdk.Player'), (3, 'java.lang.String');"
++             "insert into heap_graph_object(upid, type_id, reachable) values (1, 1, 1), (1, 1, 1), (1, 2, 1), (1, 1, 0),"
++             " (1, 3, 1), (2, 1, 1), (2, 3, 1);")
++    rows = _ms_sql("android-heap-classes.sql", setup)
++    check("前置:範本在", rows is not None)
++    if rows is None:
++        return
++    got = dict(rows)
++    check("同名類別(兩個 classloader)加總、不算沒人指著的、不算別的行程", got.get("com.sdk.Player") == 3, str(rows))
++    check("每個類別一列", got == {"com.sdk.Player": 3, "java.lang.String": 1}, str(rows))
++    check("第一欄是類別名字串", all(isinstance(r[0], str) for r in rows), str(rows))
++
++
++def t_android_memstab_templates_receipt_safe():
++    """兩支新範本的註解沒有以分號結尾的行(收據重跑腳本拿第一個分號結尾的行當查詢結尾),整支只有最後一行以分號結尾。"""
++    tdir = Path(GRAPHCTL).resolve().parent / "templates"
++    for name in ("android-stability-cycle.sql", "android-heap-classes.sql"):
++        f = tdir / name
++        check(f"前置:{name} 在", f.is_file())
++        if not f.is_file():
++            continue
++        lines = [x.rstrip() for x in f.read_text(encoding="utf-8").splitlines() if x.strip()]
++        semi = [i for i, x in enumerate(lines) if x.endswith(";")]
++        check(f"{name} 只有最後一行以分號結尾", semi == [len(lines) - 1], str([lines[i] for i in semi]))
++
++
++_MS_FAKE_ADB = r"""#!/usr/bin/env python3
++import os, sys, time
++d = os.environ["FAKE_DIR"]
++def nxt(name):
++    # 依序回 name.0、name.1…;沒有下一份就一直回最後一份
++    c = os.path.join(d, name + ".count")
++    i = int(open(c).read()) if os.path.exists(c) else 0
++    open(c, "w").write(str(i + 1))
++    for k in (i, i - 1, 0):
++        f = os.path.join(d, f"{name}.{k}")
++        if k >= 0 and os.path.exists(f):
++            return open(f).read()
++    return ""
++a = sys.argv[1:]
++open(os.path.join(d, "adb.log"), "a").write(" ".join(a) + "\n")
++if a[0] == "push":
++    sys.exit(0)
++if a[0] == "pull":
++    open(a[2], "w").write("trace")
++    sys.exit(0)
++if a[0] == "logcat":
++    if os.path.exists(os.path.join(d, "logcat_dies")):
++        sys.exit(1)   # 裝置斷線、--pid 無效:串流一開就結束
++    if "-T" not in a and os.path.exists(os.path.join(d, "logcat_before_t0.txt")):
++        sys.stdout.write(open(os.path.join(d, "logcat_before_t0.txt")).read())   # 沒帶 -T 時會倒出量測開始前的舊日誌
++    sys.stdout.write(open(os.path.join(d, "logcat.txt")).read() if os.path.exists(os.path.join(d, "logcat.txt")) else "")
++    sys.stdout.flush()
++    time.sleep(60)
++    sys.exit(0)
++c = a[1] if a[0] == "shell" else ""
++if c.startswith("getprop ro.product.model"): print("SM-X710")
++elif c.startswith("getprop ro.build.version.sdk"): print("36")
++elif c.startswith("cat /proc/meminfo"): print("MemTotal:        7386728 kB")
++elif c.startswith("dumpsys activity exit-info"): sys.stdout.write(nxt("exitinfo"))
++elif c.startswith("pidof"): sys.stdout.write(nxt("pid"))
++elif "--unreachable" in c: sys.stdout.write(nxt("unreachable"))
++elif c.startswith("dumpsys meminfo"): print(" Native Heap:     4816                           7208")
++elif c.startswith("date"): print("10-24 03:00:00.000")
++elif c.startswith("perfetto"):
++    if os.path.exists(os.path.join(d, "perfetto_fails")): print("errno: 13, Permission denied"); sys.exit(1)
++    print("4321")
++elif c.startswith("kill -TERM"):
++    if not os.path.exists(os.path.join(d, "ignores_term")): open(os.path.join(d, "termed"), "w").write("1")
++elif c.startswith("kill -KILL"): open(os.path.join(d, "termed"), "w").write("1")
++elif c.startswith("kill -0"): print("/system/bin/sh: kill: 4321: Permission denied"); sys.exit(1)   # 實機:shell 不准對 perfetto 送 kill -0
++elif c.startswith("ps -A"):
++    want = c.split()[-1]   # 真的指令是 ps -A -o PID,NAME | grep -w <pid>
++    lines = ["999 surfaceflinger"]   # 別的行程:不能被當成錄製還活著
++    if not (os.path.exists(os.path.join(d, "record_dies_early")) or os.path.exists(os.path.join(d, "termed"))):
++        lines.append("4321 perfetto")
++    hit = [x for x in lines if want in x.split()]
++    print("\n".join(hit)) if hit else sys.exit(1)
++"""
++_MS_FAKE_TP = r"""#!/usr/bin/env python3
++import os, sys
++d = os.environ["FAKE_DIR"]
++q = open(sys.argv[3]).read()
++if "heap_graph_object" in q:
++    tag = "after" if "heap-after" in sys.argv[1] else "before"
++    print('"class","instances"')
++    if not os.path.exists(os.path.join(d, "heap_empty")):   # 套件名跟快照裡的行程對不上時:回傳碼 0、一列都沒有
++        sys.stdout.write(open(os.path.join(d, f"heap.{tag}")).read())
++else:
++    print('"key","peak_anon_swap_kb","frozen_frames","max_main_block_ms","frames"')
++    print('"cycle",200000,0,40,600')
++"""
++_MS_FAKE_JHD = r"""#!/usr/bin/env python3
++import os, sys
++open(os.path.join(os.environ["FAKE_DIR"], "jhd.log"), "a").write(" ".join(sys.argv[1:]) + "\n")
++open(sys.argv[sys.argv.index("-o") + 1], "w").write("hprof")
++"""
++_MS_EXIT_HEAD = "ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)\nLast Timestamp of Persistence Into Persistent Storage: 2026-10-24 02:12:32.070\n"
++
++
++def _ms_exit_rec(i, pid, ts, reason, name, desc="x"):
++    return (f"        ApplicationExitInfo #{i}:\n"
++            f"          timestamp={ts} pid={pid} realUid=10229 packageUid=10229 definingUid=10229 user=0\n"
++            f"          process=com.lab reason={reason} ({name}) subreason=0 (UNKNOWN) status=0\n"
++            f"          importance=100 pss=0.00 rss=0.00 description={desc} state=empty trace=null\n")
++
++
++def _ms_collect_env(fake):
++    """收集腳本用的假工具環境;LUMOS_STABILITY_SETTLE_S 把腳本裡等 App 起來、等日誌跟上的兩秒縮短(測試用,預設 2)。"""
++    import os
++    return dict(os.environ, ADB=str(fake / "adb"), TP=str(fake / "tp"), JAVA_HEAP_DUMP=str(fake / "jhd"), FAKE_DIR=str(fake),
++                LUMOS_STABILITY_SETTLE_S="0.1", LUMOS_STABILITY_STOP_WAIT_S="2")
++
++
++def _ms_collect(td, *, exit_before, exit_after, pids=("100", "100", "100"), unreachable=("0 bytes in 0 unreachable allocations",) * 2,
++                driver_out="INSTRUMENTATION_CODE: -1", driver_rc=0, stability=None, heap=({"com.sdk.Player": 1}, {"com.sdk.Player": 6}),
++                logcat="", thresholds=None):
++    """在暫存專案跑工具鏈的收集腳本,adb、trace_processor、java_heap_dump 與驅動都用假的。回 (CompletedProcess, 結果 dict, 假工具目錄)。"""
++    import json, subprocess as sp
++    root, fake, script = _ms_prepare(td, exit_before=exit_before, exit_after=exit_after, pids=pids, unreachable=unreachable,
++                                     driver_out=driver_out, driver_rc=driver_rc, stability=stability, heap=heap, logcat=logcat, thresholds=thresholds)
++    r = sp.run(["sh", str(script), "run1"], cwd=root, capture_output=True, text=True, env=_ms_collect_env(fake), timeout=120)
++    out = root / ".lumos" / "artifacts" / "android" / "run1" / "stability.json"
++    return r, (json.loads(out.read_text(encoding="utf-8")) if out.is_file() else {}), fake
++
++
++def _ms_prepare(td, *, exit_before, exit_after, pids=("100", "100", "100"), unreachable=("0 bytes in 0 unreachable allocations",) * 2,
++                driver_out="INSTRUMENTATION_CODE: -1", driver_rc=0, stability=None, heap=({"com.sdk.Player": 1}, {"com.sdk.Player": 6}),
++                logcat="", thresholds=None):
++    """備好暫存專案與假工具,不跑收集腳本。回 (專案根, 假工具目錄, 收集腳本路徑)。"""
++    import json
++    root, fake = Path(td) / "proj", Path(td) / "fake"
++    (root / ".lumos").mkdir(parents=True, exist_ok=True)
++    fake.mkdir(exist_ok=True)
++    for name, body in (("adb", _MS_FAKE_ADB), ("tp", _MS_FAKE_TP), ("jhd", _MS_FAKE_JHD)):
++        (fake / name).write_text(body, encoding="utf-8")
++        (fake / name).chmod(0o755)
++    (fake / "driver").write_text(f"#!/bin/sh\necho \"$@\" >> \"$FAKE_DIR/driver.log\"\n[ -f \"$FAKE_DIR/driver_sleeps\" ] && [ \"$1\" = 5 ] && \"$FAKE_DIR/sleeper\"\n"
++                                 f"echo '{driver_out}'\nexit {driver_rc}\n", encoding="utf-8")
++    (fake / "driver").chmod(0o755)
++    (fake / "sleeper").write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")   # 驅動底下的子程序,名字帶假工具目錄,孤兒才查得到
++    (fake / "sleeper").chmod(0o755)
++    (fake / "exitinfo.0").write_text(exit_before, encoding="utf-8")
++    (fake / "exitinfo.1").write_text(exit_after, encoding="utf-8")
++    for i, v in enumerate(pids):
++        (fake / f"pid.{i}").write_text(v + "\n", encoding="utf-8")
++    for i, v in enumerate(unreachable):
++        (fake / f"unreachable.{i}").write_text(f" Unreachable memory\n  {v}\n  ABI: 'arm64'\n", encoding="utf-8")
++    for tag, counts in zip(("before", "after"), heap):
++        (fake / f"heap.{tag}").write_text("".join(f'"{k}","{v}"\n' for k, v in counts.items()), encoding="utf-8")
++    (fake / "logcat.txt").write_text(logcat, encoding="utf-8")
++    st = {"package": "com.lab", "scenario": "pkg.Leak#cycle", "driver": f"{fake / 'driver'} {{{{CYCLES}}}}", "warmup": 2, "cycles": 5}
++    st.update(stability or {})
++    (root / ".lumos" / "macrobench.json").write_text(json.dumps({"stability": st}), encoding="utf-8")
++    if thresholds is not None:
++        (root / ".lumos" / "macrobench-thresholds.json").write_text(json.dumps({"version": 1, "thresholds": thresholds}), encoding="utf-8")
++    return root, fake, Path(GRAPHCTL).resolve().parent / "templates" / "android-stability-collect.sh"
++
++
++def t_android_memstab_exit_info_diff():
++    """S6:只留後一份多出來的紀錄(pid 加 timestamp 比)並依 reason 與描述分類;只有全域標頭沒有套件區段是零筆 ok;沒有全域標頭是 failed。"""
++    import tempfile
++    pkg = "  package: com.lab\n    Historical Process Exit for uid=10229\n"
++    old = _ms_exit_rec(0, 90, "2026-10-23 23:52:02.173", 10, "USER REQUESTED")
++    new_recs = (_ms_exit_rec(0, 100, "2026-10-24 03:00:05.000", 4, "APP CRASH(EXCEPTION)") +
++                _ms_exit_rec(1, 101, "2026-10-24 03:00:06.000", 5, "APP CRASH(NATIVE)") +
++                _ms_exit_rec(2, 102, "2026-10-24 03:00:07.000", 6, "ANR") +
++                _ms_exit_rec(3, 103, "2026-10-24 03:00:08.000", 3, "LOW MEMORY") +
++                _ms_exit_rec(4, 104, "2026-10-24 03:00:09.000", 13, "OTHER KILLS BY SYSTEM", desc="MemoryLimiter:AnonSwap") +
++                _ms_exit_rec(5, 105, "2026-10-24 03:00:10.000", 10, "USER REQUESTED"))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD + pkg + old, exit_after=_MS_EXIT_HEAD + pkg + new_recs + old)
++        ex = d.get("exits", {})
++        check("收集腳本回 0 並寫出結果檔", r.returncode == 0 and d, r.stdout + r.stderr)
++        check("結束紀錄 status ok", ex.get("status") == "ok", str(ex))
++        types = [e.get("type") for e in ex.get("new", [])]
++        check("只留後一份多的 6 筆,舊的那筆不算", len(types) == 6, str(ex))
++        check("依 reason 與描述分類", types == ["crash", "native_crash", "anr", "low_memory", "memory_limiter", "other"], str(types))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("只有全域標頭、沒有套件區段 → 零筆且 ok", d.get("exits") == {"status": "ok", "new": []}, str(d.get("exits")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, _ = _ms_collect(td, exit_before="Error: unknown command\n", exit_after=_MS_EXIT_HEAD)
++        check("連全域標頭都沒有 → failed", d.get("exits", {}).get("status") == "failed", str(d.get("exits")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        other = "  package: com.other\n    Historical Process Exit for uid=1\n" + _ms_exit_rec(0, 7, "2026-10-24 03:00:01.000", 4, "APP CRASH")
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD + other)
++        check("別的套件的崩潰不算", d.get("exits") == {"status": "ok", "new": []}, str(d.get("exits")))
++
++
++def t_android_memstab_collect_test_data_gate():
++    """S15:沒宣告測試資料 → 不錄快照、heap 是 unsupported;開跑先刪產物目錄底下超過 7 天的 heap-*.pftrace,不刪別的檔;
++    宣告了才錄快照,且結果檔只存有增減的類別與門檻檔宣告的類別。"""
++    import os, tempfile, time
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        art = Path(td) / "proj" / ".lumos" / "artifacts" / "android" / "old"
++        art.mkdir(parents=True)
++        old_ts = time.time() - 8 * 86400
++        for name in ("heap-before.pftrace", "cycle.pftrace", "heap-notes.txt"):
++            (art / name).write_text("x", encoding="utf-8")
++            os.utime(art / name, (old_ts, old_ts))
++        (art / "heap-after.pftrace").write_text("x", encoding="utf-8")   # 新的(今天)不刪
++        r, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("回 0", r.returncode == 0, r.stderr)
++        check("沒宣告 → heap 是 unsupported", d.get("heap", {}).get("status") == "unsupported", str(d.get("heap")))
++        check("沒宣告 → 沒有呼叫 java_heap_dump", not (fake / "jhd.log").exists())
++        check("超過 7 天的 heap-*.pftrace 刪了", not (art / "heap-before.pftrace").exists())
++        check("超過 7 天但不是快照樣式的檔沒刪", (art / "cycle.pftrace").exists() and (art / "heap-notes.txt").exists())
++        check("今天的快照沒刪", (art / "heap-after.pftrace").exists())
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        elsewhere = Path(td) / "elsewhere"
++        elsewhere.mkdir()
++        (elsewhere / "heap-x.pftrace").write_text("x", encoding="utf-8")
++        os.utime(elsewhere / "heap-x.pftrace", (time.time() - 9 * 86400,) * 2)
++        base = Path(td) / "proj" / ".lumos" / "artifacts" / "android"
++        base.mkdir(parents=True)
++        (base / "linked").symlink_to(elsewhere, target_is_directory=True)
++        _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("產物目錄底下的捷徑指到別處時,別處的舊快照不刪", (elsewhere / "heap-x.pftrace").exists())
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        td_decl = {"test_data": {"value": True, "decided_by": "Enzo", "decided_at": "2026-10-24"}}
++        heap = ({"com.sdk.Player": 1, "com.app.Same": 3, "com.app.Declared": 2}, {"com.sdk.Player": 6, "com.app.Same": 3, "com.app.Declared": 2})
++        thr = [{"scenario": "pkg.Leak#cycle", "check": "instances", "class": "com.app.Declared", "max": 5,
++                "contract": "c", "decided_by": "Enzo", "decided_at": "2026-10-24"}]
++        r, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability=td_decl, heap=heap, thresholds=thr)
++        h = d.get("heap", {})
++        check("宣告了 → heap ok 並錄兩份", h.get("status") == "ok" and (fake / "jhd.log").read_text().count("-n com.lab") == 2, str(h) + r.stderr)
++        check("只存有增減的與宣告的類別", set(h.get("after", {})) == {"com.sdk.Player", "com.app.Declared"}, str(h))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        heap = ({"java.lang.Class<com.app.Declared>": 1, "com.app.Other": 1}, {"java.lang.Class<com.app.Declared>": 1, "com.app.Other": 1})
++        r, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability=td_decl, heap=heap, thresholds=thr)
++        check("宣告類別沒有實例時,它的類別物件照樣存進結果檔", d.get("heap", {}).get("after") == {"java.lang.Class<com.app.Declared>": 1}, str(d.get("heap")))
++        log = (fake / "adb.log").read_text()
++        check("錄製設定推到 /data/misc/perfetto-configs/(放 /data/local/tmp 時 perfetto 讀不到,2026-10-24 實機)",
++              "/data/misc/perfetto-configs/" in log and "/data/local/tmp/lumos-stability" not in log, log[-400:])
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        import subprocess as sp
++        root, fake0, script = _ms_prepare(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        r = sp.run(["sh", str(script), "mem java -1"], cwd=root, capture_output=True, text=True, env=_ms_collect_env(fake0), timeout=60)
++        check("run-id 有空白(會壞掉裝置上的路徑)→ 回 2 擋下", r.returncode == 2 and "run-id" in r.stderr, r.stdout + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        bad = {"test_data": True}
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability=bad)
++        check("test_data 沒署名日期 → 回 2 擋下、不寫結果檔", r.returncode == 2 and "擋下" in r.stderr and not d, r.stdout + r.stderr)
++
++
++def t_android_memstab_collect_record_alive():
++    """錄製還在跑時(ps 看得到)停止後 cycle_trace 是 ok;錄製在量測跑完前就結束(ps 看不到)→ failed 並說到了上限。
++    不能用 kill -0 判斷:實機上 shell 對 perfetto 送 kill -0 回 Permission denied(2026-10-24 SM-X710)。"""
++    import tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("錄製還在跑 → cycle_trace ok", d.get("cycle_trace", {}).get("status") == "ok", str(d.get("cycle_trace")) + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        fake = Path(td) / "fake"
++        fake.mkdir()
++        (fake / "record_dies_early").write_text("1", encoding="utf-8")
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        ct = d.get("cycle_trace", {})
++        check("錄製提早結束 → cycle_trace failed 並說到了上限", ct.get("status") == "failed" and "上限" in ct.get("reason", ""), str(ct) + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        fake = Path(td) / "fake"
++        fake.mkdir()
++        (fake / "perfetto_fails").write_text("1", encoding="utf-8")
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        log = (fake / "adb.log").read_text()
++        check("錄製開不起來 → cycle_trace failed", d.get("cycle_trace", {}).get("status") == "failed", str(d.get("cycle_trace")))
++        check("錄製開不起來也刪掉推上裝置的設定檔(2026-10-24 實機留下殘檔)", "rm -f /data/misc/perfetto-configs/lumos-stability-run1.pbtxt" in log, log[-300:])
++
++
++def t_android_memstab_collect_driver_status():
++    """S16:驅動回傳碼不是 0、或 UI Automator 輸出沒有 INSTRUMENTATION_CODE: -1、或有 FAILURES!!! → driver failed;成功 → ok 並把輪數換進指令。"""
++    import tempfile
++    cases = (("INSTRUMENTATION_STATUS: ok\\nINSTRUMENTATION_CODE: -1", 0, "ok"),
++             ("FAILURES!!!\\nINSTRUMENTATION_CODE: -1", 0, "failed"),
++             ("INSTRUMENTATION_CODE: 0", 0, "failed"),
++             ("maestro: flow passed", 0, "ok"),
++             ("boom", 3, "failed"))
++    for out, rc, want in cases:
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            r, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, driver_out=out, driver_rc=rc)
++            check(f"驅動輸出 {out[:30]!r} rc{rc} → driver {want}", d.get("driver", {}).get("status") == want, str(d.get("driver")) + r.stderr)
++            if want == "ok":
++                calls = (fake / "driver.log").read_text().split()
++                check("輪數換進指令:暖機 2、量測 5", calls == ["2", "5"], str(calls))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, pids=("100", "100", "222"),
++                              unreachable=("0 bytes in 0 unreachable allocations", "10485760 bytes in 5 unreachable allocations"),
++                              stability={"strictmode": True},
++                              logcat="D/StrictMode( 100): StrictMode policy violation: android.os.strictmode.LeakedClosableViolation: x\nD/StrictMode( 100): \tat a.b\n")
++        check("三次 pid 都記下", d.get("pids", {}).get("values") == [100, 100, 222], str(d.get("pids")))
++        log = (Path(td) / "fake" / "adb.log").read_text().splitlines()
++        fs = next((i for i, x in enumerate(log) if "am force-stop com.lab" in x), None)
++        ex = next((i for i, x in enumerate(log) if "exit-info" in x), None)
++        st = next((i for i, x in enumerate(log) if "monkey -p com.lab" in x), None)
++        check("開跑先強制停止 App,而且在讀前一次結束紀錄與啟動之前(上一次的殘留不算進這一次)",
++              None not in (fs, ex, st) and fs < ex < st, str(log[:8]))
++        check("兩次原生掃描都記下總量", d.get("unreachable", {}).get("after") == {"bytes": 10485760, "allocations": 5}, str(d.get("unreachable")))
++        sm = d.get("strictmode", {})
++        check("StrictMode 一筆違規只算一次(堆疊行不算)", sm.get("status") == "ok" and sm.get("violations") == [{"type": "LeakedClosableViolation"}], str(sm))
++
++
++def t_android_memstab_vendored():
++    """S12:收集腳本、兩支查詢範本與錄製設定要帶 SPDX 檔頭、登記在工具組複製清單,才會跟其他範本一起進消費專案。"""
++    m = _load_lumos_inproc()
++    tdir = Path(GRAPHCTL).resolve().parent / "templates"
++    for name in ("android-stability-collect.sh", "android-stability-cycle.sql", "android-heap-classes.sql", "android-stability-record.pbtxt"):
++        rel = f"scripts/templates/{name}"
++        check(f"{name} 登記在工具組複製清單", rel in m._VENDORED_TREE_FILES, "")
++        f = tdir / name
++        check(f"{name} 檔真的在", f.is_file(), "")
++        head = f.read_text(encoding="utf-8")[:400] if f.is_file() else ""
++        mark = "--" if name.endswith(".sql") else "#"
++        check(f"{name} 檔頭有 {mark} 開頭的 SPDX 行", f"{mark} SPDX-License-Identifier: MIT" in head, head[:120])
++
++
++def t_android_memstab_unreadable_never_passes():
++    """代碼審 r1 甲組(讀不到不准當成沒事)的統一規則:每種檢查用到的欄位缺、型別錯、空的、量不到,一律列成跳過並說原因,不列通過、不噴例外;
++    唯一例外是 exits:結束紀錄裡有崩潰類,就算 pid 讀不到也判沒過(崩潰後 App 沒被重啟時第三次讀不到 pid,這正是最該抓的情境)。"""
++    import tempfile
++    def verdict(thr, res):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            _, r, d, rt = _ms_root(td, [thr], res)
++            v = _ms_verdict(d)
++            return (v[0][0] if v else None), (v[0][2] if v else {}), r, rt
++    crash = [{"type": "crash", "reason": 4, "pid": 100, "timestamp": "t", "desc": "x"}]
++    k, rec, r, _ = verdict(_ms_thr("exits"), _ms_result(exits={"status": "ok", "new": crash},
++                                                       pids={"status": "failed", "reason": "有一次讀不到 pid", "values": [100, 100, None]},
++                                                       driver={"status": "failed", "reason": "FAILURES!!!"}))
++    check("崩潰後沒被重啟(第三次讀不到 pid、驅動也失敗)→ exits 沒過", k == "threshold_failures" and rec.get("bad_types") == ["crash"], r.stdout + r.stderr)
++    k, rec, r, _ = verdict(_ms_thr("exits"), _ms_result(exits={"status": "ok", "new": []},
++                                                       pids={"status": "failed", "reason": "讀不到", "values": [100, None, None]}))
++    check("沒有崩潰類紀錄、pid 又讀不到 → exits 跳過(判不出 pid 有沒有變)", k == "threshold_skipped", r.stdout)
++    cases = [
++        ("java_growth 兩份快照都是空的", _ms_thr("java_growth"), _ms_result(heap={"status": "ok", "before": {}, "after": {}})),
++        ("frozen 設了阻塞上限但阻塞量不到(-1)", _ms_thr("frozen", max_block_ms=500), _ms_result(cycle_trace=dict(_ms_result()["cycle_trace"], max_main_block_ms=-1))),
++        ("exits 缺 new 欄", _ms_thr("exits"), _ms_result(exits={"status": "ok"})),
++        ("exits 的 new 是 null", _ms_thr("exits"), _ms_result(exits={"status": "ok", "new": None})),
++        ("strictmode 缺 violations 欄", _ms_thr("strictmode"), _ms_result(strictmode={"status": "ok"})),
++        ("pids 缺 values 欄", _ms_thr("exits"), _ms_result(pids={"status": "ok"})),
++        ("pids 的 values 是巢狀清單", _ms_thr("exits"), _ms_result(pids={"status": "ok", "values": [[1], [2]]})),
++        ("heap 的 before 是清單", _ms_thr("java_growth"), _ms_result(heap={"status": "ok", "before": [1], "after": {"a.B": 1}})),
++        ("category 寫成清單", _ms_thr("peak_vitals"), _ms_result(category=["app"])),
++        ("cycles 是字串", _ms_thr("java_growth"), _ms_result(cycles="5")),
++    ]
++    for why, thr, res in cases:
++        k, rec, r, rt = verdict(thr, res)
++        check(f"{why} → 跳過並附原因", k == "threshold_skipped" and rec.get("reason"), r.stdout + r.stderr)
++        check(f"{why} → 不噴例外、回 0", r.returncode == 0 and rt.returncode == 0 and "Traceback" not in r.stderr + rt.stderr, r.stderr + rt.stderr)
++
++
++def t_android_memstab_check_fields_strict():
++    """代碼審 r1:check 條目寫了不認得的欄位(拼錯)→ 回 2,不准默默用預設值;stability 段的 category 不是字串 → 回 2 不噴例外;
++    results_dirs 給空清單、只做穩定性也收;run-id 只有點、max_record_s 太大太小 → 擋下。"""
++    import json, tempfile
++    for bad, why in ((_ms_thr("native_unreachable", max_byte=999), "max_byte 拼錯"), (_ms_thr("frozen", max_block=5), "max_block 拼錯")):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            root = Path(td)
++            (root / ".lumos").mkdir()
++            (root / ".lumos" / "macrobench-thresholds.json").write_text(json.dumps({"version": 1, "thresholds": [bad]}), encoding="utf-8")
++            r = _mb_run(root, "--check-config")
++            check(f"{why} → 回 2 並說不認得的欄位", r.returncode == 2 and "擋下" in r.stderr and ("max_byte" in r.stderr or "max_block" in r.stderr), r.stdout + r.stderr)
++    stab = {"package": "com.lab", "scenario": "s", "driver": "x {{CYCLES}}", "warmup": 2, "cycles": 5}
++    for st, want, why in ((dict(stab, category=["app"]), 2, "category 是清單"), (dict(stab, category={}), 2, "category 是物件"),
++                          (dict(stab, max_record_s=1e300), 2, "max_record_s 超大"), (dict(stab, max_record_s=0.0004), 2, "max_record_s 不到 1 秒")):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            root = Path(td)
++            (root / ".lumos").mkdir()
++            (root / ".lumos" / "macrobench.json").write_text(json.dumps({"stability": st}), encoding="utf-8")
++            r = _mb_run(root, "--check-config")
++            check(f"{why} → 回 {want} 擋下、不噴例外", r.returncode == want and "Traceback" not in r.stderr, r.stdout + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": [], "stability": stab}), encoding="utf-8")
++        r = _mb_run(root, "--check-config")
++        check("有 stability 段時 results_dirs 給空清單也收", r.returncode == 0, r.stdout + r.stderr)
++    for rid in (".", ".."):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            import subprocess as sp
++            root, fake, script = _ms_prepare(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++            r = sp.run(["sh", str(script), rid], cwd=root, capture_output=True, text=True, env=_ms_collect_env(fake), timeout=60)
++            check(f"run-id {rid!r} → 回 2 擋下", r.returncode == 2 and "run-id" in r.stderr, r.stdout + r.stderr)
++
++
++def t_android_memstab_vitals_every_tier():
++    """S4:官方表每一級都對一次「剛好等於 → 通過、多 1 KB → 沒過」,含每個分級的上界(上界不含)。
++    40 個案例直接呼叫判定函式(每案起一次 lumos 要 20 多秒);命令列那條路徑由 t_android_memstab_peak_vitals_floor 走。"""
++    m = _load_lumos_module()
++    GB = 1024 * 1024
++    app = ((3200, 2.00), (4800, 2.25), (6800, 2.25), (9216, 3.25), (14336, 4.25))
++    game = ((3200, 2.25), (4800, 2.75), (6800, 3.50), (9216, 4.00), (14336, 5.00))
++    for cat, table in (("app", app), ("game", game)):
++        for i, (lo, gb) in enumerate(table):
++            hi = table[i + 1][0] if i + 1 < len(table) else 18432
++            for mem in (lo, hi - 1):
++                for peak, want in ((gb * GB, "threshold_passed"), (gb * GB + 1, "threshold_failures")):
++                    res = _ms_result(total_mem_mb=mem, category=cat, cycle_trace=dict(_ms_result()["cycle_trace"], peak_anon_swap_kb=peak))
++                    v = _ms_verdict(m._macrobench_judge_stability([_ms_thr("peak_vitals")], res))
++                    check(f"{cat} {mem} MB 峰值 {peak / GB:.6f} GB → {want}", [x[0] for x in v] == [want], str(v))
++
++
++def t_android_memstab_collect_never_fakes_ok():
++    """代碼審 r1 甲、乙組在收集腳本這一側:讀不到就記 failed,不准記成 ok。
++    驅動輸出任何 INSTRUMENTATION_ 開頭的行卻沒有 INSTRUMENTATION_CODE: -1 → failed;快照查詢回傳碼 0 但一列都沒有 → heap failed;
++    日誌串流一開就斷 → strictmode failed;正常時 heap 帶 classes_seen 讓判定端分得出空快照。"""
++    import tempfile
++    td_decl = {"test_data": {"value": True, "decided_by": "Enzo", "decided_at": "2026-10-24"}}
++    for out in ("INSTRUMENTATION_FAILED: com.lab.test/androidx.test.runner.AndroidJUnitRunner",
++                "INSTRUMENTATION_RESULT: shortMsg=Process crashed.", "INSTRUMENTATION_ABORTED: System has crashed."):
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, driver_out=out)
++            check(f"驅動輸出 {out[:28]!r} 回 0 → driver failed", d.get("driver", {}).get("status") == "failed", str(d.get("driver")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        fake = Path(td) / "fake"
++        fake.mkdir()
++        (fake / "heap_empty").write_text("1", encoding="utf-8")
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability=td_decl)
++        check("快照查詢一列都沒有 → heap failed", d.get("heap", {}).get("status") == "failed", str(d.get("heap")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability=td_decl)
++        check("正常時 heap 帶兩份快照讀到的類別數", d.get("heap", {}).get("classes_seen") == {"before": 1, "after": 1}, str(d.get("heap")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        fake = Path(td) / "fake"
++        fake.mkdir()
++        (fake / "logcat_dies").write_text("1", encoding="utf-8")
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability={"strictmode": True})
++        check("日誌串流一開就斷 → strictmode failed", d.get("strictmode", {}).get("status") == "failed", str(d.get("strictmode")))
++
++
++def t_android_memstab_collect_logcat_scope():
++    """日誌只收量測開始之後、只收這個 pid、只在宣告了 strictmode 時才開;落地的只留違規那幾行(日誌常含帳號、權杖、網址)。"""
++    import tempfile
++    vio = "D/StrictMode( 100): StrictMode policy violation: android.os.strictmode.LeakedClosableViolation: x\n"
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        fake = Path(td) / "fake"
++        fake.mkdir()
++        (fake / "logcat_before_t0.txt").write_text(vio.replace("Closable", "Registration"), encoding="utf-8")
++        _, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability={"strictmode": True},
++                                 logcat=vio + "I/App( 100): token=SECRET123 user=alice@example.com\n")
++        sm = d.get("strictmode", {})
++        check("量測開始前的違規不算(有帶 -T)", sm.get("violations") == [{"type": "LeakedClosableViolation"}], str(sm))
++        log = (fake / "adb.log").read_text()
++        check("日誌串流帶 --pid 與 -T 量測開始時間", "logcat --pid=100 -T 10-24 03:00:00.000" in log, log[-300:])
++        kept = (Path(td) / "proj" / ".lumos" / "artifacts" / "android" / "run1" / "logcat.txt")
++        body = kept.read_text(encoding="utf-8") if kept.exists() else ""
++        check("落地的日誌只留違規那幾行,不留其他內容", "SECRET123" not in body and "alice@example.com" not in body, body[:200])
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, logcat="I/App( 100): token=SECRET123\n")
++        log = (fake / "adb.log").read_text()
++        check("沒宣告 strictmode → 不開日誌串流", " logcat " not in f" {log}" and "logcat --pid" not in log, log[-300:])
++        check("沒宣告 strictmode → 不留日誌檔", not (Path(td) / "proj" / ".lumos" / "artifacts" / "android" / "run1" / "logcat.txt").exists())
++
++
++def t_android_memstab_collect_edges():
++    """exit-info 同一個 pid 先後兩筆用 timestamp 分開;ps 只認自己那個 pid;產物目錄本身是捷徑時不刪別處的舊快照;
++    R8 mapping 會還原類別物件 java.lang.Class<混淆名> 尖括號裡的名字,沒給 mapping 時結果檔標明類別名未還原;
++    專案是 git repo 而產物目錄沒被忽略時擋下(快照與結果檔不准進版控)。"""
++    import os, subprocess as sp, tempfile, time
++    pkg = "  package: com.lab\n    Historical Process Exit for uid=10229\n"
++    old = _ms_exit_rec(0, 100, "2026-10-23 10:00:00.000", 10, "USER REQUESTED")
++    new = _ms_exit_rec(0, 100, "2026-10-24 03:00:05.000", 4, "APP CRASH(EXCEPTION)")
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD + pkg + old, exit_after=_MS_EXIT_HEAD + pkg + new + old)
++        check("同一個 pid、不同時間的新紀錄要算進去", [e.get("type") for e in d.get("exits", {}).get("new", [])] == ["crash"], str(d.get("exits")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("ps 照 pid 過濾時錄製判成還在跑 → cycle_trace ok", d.get("cycle_trace", {}).get("status") == "ok", str(d.get("cycle_trace")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        elsewhere = Path(td) / "elsewhere"
++        (elsewhere / "r").mkdir(parents=True)
++        (elsewhere / "r" / "heap-x.pftrace").write_text("x", encoding="utf-8")
++        os.utime(elsewhere / "r" / "heap-x.pftrace", (time.time() - 9 * 86400,) * 2)
++        (Path(td) / "proj" / ".lumos" / "artifacts").mkdir(parents=True)
++        (Path(td) / "proj" / ".lumos" / "artifacts" / "android").symlink_to(elsewhere, target_is_directory=True)
++        _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("產物目錄本身是捷徑時,捷徑指去的舊快照不刪", (elsewhere / "r" / "heap-x.pftrace").exists())
++    td_decl = {"test_data": {"value": True, "decided_by": "Enzo", "decided_at": "2026-10-24"}}
++    thr = [{"scenario": "pkg.Leak#cycle", "check": "instances", "class": "com.sdk.Player", "max": 0,
++            "contract": "c", "decided_by": "Enzo", "decided_at": "2026-10-24"}]
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        (Path(td) / "proj").mkdir()
++        (Path(td) / "proj" / "mapping.txt").write_text("com.sdk.Player -> a.b:\ncom.sdk.Other -> a.c:\n", encoding="utf-8")
++        heap = ({"java.lang.Class<a.b>": 1, "a.c": 1}, {"java.lang.Class<a.b>": 1, "a.c": 4})
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, heap=heap, thresholds=thr,
++                              stability=dict(td_decl, mapping="mapping.txt"))
++        h = d.get("heap", {})
++        check("類別物件尖括號裡的混淆名也還原", h.get("after", {}).get("java.lang.Class<com.sdk.Player>") == 1, str(h))
++        check("一般類別名照樣還原", h.get("after", {}).get("com.sdk.Other") == 4, str(h))
++        check("有 mapping → 標明類別名已還原", h.get("class_names") == "mapping", str(h))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        _, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, stability=td_decl)
++        check("沒給 mapping → 結果檔標明類別名未還原", d.get("heap", {}).get("class_names") == "raw", str(d.get("heap")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        proj = Path(td) / "proj"
++        proj.mkdir()
++        sp.run(["git", "init", "-q", str(proj)], check=True)
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("git repo 裡產物目錄沒被忽略 → 回 2 擋下、不寫結果檔", r.returncode == 2 and "gitignore" in r.stderr and not d, r.stdout + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        proj = Path(td) / "proj"
++        proj.mkdir()
++        sp.run(["git", "init", "-q", str(proj)], check=True)
++        (proj / ".gitignore").write_text(".lumos/artifacts/\n", encoding="utf-8")
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("git repo 裡產物目錄有被忽略 → 照常寫出結果檔", r.returncode == 0 and d, r.stdout + r.stderr)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        proj = Path(td) / "proj"
++        proj.mkdir()
++        for mod in ("json", "re"):
++            (proj / f"{mod}.py").write_text("raise SystemExit('專案目錄的同名模組被載入了')\n", encoding="utf-8")
++        r, d, _ = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        check("專案根目錄有同名的 json.py、re.py → 不載入它們,照常寫出結果檔", r.returncode == 0 and d and "同名模組" not in r.stderr, r.stdout + r.stderr)
++    big5 = sp.run(["python3", "-I", "-c", "import sys; print(sys.stdout.encoding)"], capture_output=True, text=True,
++                  env={"PATH": os.environ["PATH"], "LC_ALL": "zh_TW.BIG5"}).stdout.strip().lower()
++    if big5 == "big5":   # 機器有 Big5 語系才驗得出來(Linux CI 多半沒有,這段不跑)
++        with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++            root, fake, script = _ms_prepare(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++            r = sp.run(["sh", str(script), "壞 id"], cwd=root, capture_output=True, timeout=60, env=dict(_ms_collect_env(fake), LC_ALL="zh_TW.BIG5"))
++            err = r.stderr.decode("utf-8", errors="replace")
++            check("Big5 語系下擋下訊息照樣是 UTF-8(-I 會關掉 UTF-8 模式)", r.returncode == 2 and "擋下" in err and "run-id" in err, err)
++
++
++def t_android_memstab_collect_cleanup():
++    """收集腳本收到 SIGTERM(外層逾時、kill 的預設訊號)時,停掉裝置上的錄製、刪裝置暫存、收掉日誌串流與驅動整組子程序;
++    錄製收到 TERM 不停時,等完就補 KILL 並記成 failed;驅動逾時時也整組殺掉。"""
++    import json, signal, subprocess as sp, tempfile, time
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        root, fake, script = _ms_prepare(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD, pids=("100", "100", "100"),
++                                         unreachable=("0 bytes in 0 unreachable allocations",) * 2, driver_out="INSTRUMENTATION_CODE: -1",
++                                         driver_rc=0, stability={"strictmode": True}, heap=({}, {}), logcat="", thresholds=None)
++        (fake / "driver_sleeps").write_text("1", encoding="utf-8")
++        p = sp.Popen(["sh", str(script), "run2"], cwd=root, stdout=sp.PIPE, stderr=sp.PIPE, text=True, env=_ms_collect_env(fake))
++        for _ in range(300):   # 等到量測輪的驅動開始(驅動被呼叫第二次)
++            if (fake / "driver.log").exists() and (fake / "driver.log").read_text().count("\n") >= 2:
++                break
++            time.sleep(0.1)
++        time.sleep(0.5)
++        p.send_signal(signal.SIGTERM)
++        p.wait(timeout=60)
++        log = (fake / "adb.log").read_text()
++        check("SIGTERM 時停掉裝置上的錄製", "kill -TERM 4321" in log, log[-500:])
++        check("SIGTERM 時刪掉裝置上的錄製設定與追蹤檔", "rm -f /data/misc/perfetto-configs/lumos-stability-run2.pbtxt" in log, log[-500:])
++        time.sleep(0.5)
++        left = sp.run(["pgrep", "-f", f"{fake}/adb logcat"], capture_output=True, text=True).stdout.split()
++        check("SIGTERM 時日誌串流沒有變成孤兒", not left, str(left))
++        left = sp.run(["pgrep", "-f", f"{fake}/(driver|sleeper)"], capture_output=True, text=True).stdout.split()
++        check("SIGTERM 時驅動(連同它底下的 sleep)沒有變成孤兒", not left, str(left))
++        for pid in left:   # 測試自己收尾:紅的時候不留孤兒給別支測試
++            sp.run(["kill", pid], capture_output=True)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        fake = Path(td) / "fake"
++        fake.mkdir()
++        (fake / "ignores_term").write_text("1", encoding="utf-8")
++        _r, d, fake = _ms_collect(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        log = (fake / "adb.log").read_text()
++        check("錄製收到 TERM 不停 → 等完補 KILL", "kill -KILL 4321" in log, log[-400:])
++        check("錄製要靠 KILL 才停 → cycle_trace failed 並說停不下來", d.get("cycle_trace", {}).get("status") == "failed"
++              and "停不下來" in d.get("cycle_trace", {}).get("reason", ""), str(d.get("cycle_trace")))
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        root, fake, script = _ms_prepare(td, exit_before=_MS_EXIT_HEAD, exit_after=_MS_EXIT_HEAD)
++        (fake / "driver_sleeps").write_text("1", encoding="utf-8")
++        t0 = time.monotonic()
++        r = sp.run(["sh", str(script), "run3"], cwd=root, capture_output=True, text=True, timeout=120,
++                   env=dict(_ms_collect_env(fake), LUMOS_STABILITY_LONG_S="2"))
++        took = time.monotonic() - t0
++        out = root / ".lumos" / "artifacts" / "android" / "run3" / "stability.json"
++        drv = json.loads(out.read_text(encoding="utf-8")).get("driver", {}) if out.is_file() else {}
++        check("驅動逾時 → driver failed 並說逾時", drv.get("status") == "failed" and "逾時" in str(drv), r.stdout + r.stderr + str(drv))
++        time.sleep(0.5)
++        left = sp.run(["pgrep", "-f", f"{fake}/(driver|sleeper)"], capture_output=True, text=True).stdout.split()
++        check("驅動逾時時整組殺掉,驅動底下的程序沒有變成孤兒", not left, str(left))
++        check("驅動逾時後不等底下的程序自己跑完(它們握著輸出管線,只殺最外層會卡到它們結束)", took < 20, f"{took:.1f} 秒")
++        for pid in left:
++            sp.run(["kill", pid], capture_output=True)
++
++
+ def t_macrobench_rejects_nonfinite():
+     """NaN 與正負無限大在每個讀數字的地方都不收(JSON 解析器收這三個字面值,型別檢查也當成數字):
+     門檻值→回 2;設定檔容差→回 2;基準檔的統計值→整份當讀不了;結果檔的統計值→那個檔記成讀不了。
+     不擋的話:門檻 max 寫 NaN 時「現值 > NaN」恆假→永遠判達標;容差寫 Infinity→永遠不算退步。"""
+     import json, tempfile
+     for lit in ("NaN", "Infinity", "-Infinity"):
+         for bound in ("max", "min"):
+             with tempfile.TemporaryDirectory(prefix="gctl-mbnf-") as td:
+                 root, _, _, _ = _mb_thr_root(td, [_mb_scroll("pkg.Flow", 3.6)], [_mb_thr()])
+                 t = _mb_thr(max=None)

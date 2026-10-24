@@ -1,0 +1,215 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 89221b98bd3a1b856b83fc57186d8177dfc372aa..57d1333dfc1729410880f62b0758dff7dd499ae3 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39429,22 +39429,22 @@ def _macrobench_date_ok(s):
+ def _macrobench_stability_cfg_err(st):
+     """.lumos/macrobench.json 的 stability 段(收集腳本讀、lumos 驗;單源見 Projects/Android記憶體與穩定性驗收_計劃)。回錯誤訊息或 None。"""
+     if not isinstance(st, dict):
+         return "要是物件"
+     for k in ("package", "scenario", "driver"):
+         if not isinstance(st.get(k), str) or not st[k].strip():
+             return f"缺 {k}(要是非空字串)"
+     if not MACROBENCH_PKG_RE.fullmatch(st["package"]):
+         return "package 只收英數字、底線與點"
+     for k in ("warmup", "cycles"):
+-        if not _secev_int(st.get(k)) or st[k] < 1:
+-            return f"{k} 要是至少 1 的整數"
++        if not _secev_int(st.get(k)) or not 1 <= st[k] <= MACROBENCH_MAX_CYCLES:   # 沒上限時寫錯成天文數字,驅動會一直跑(代碼審 r2 邊界席)
++            return f"{k} 要是 1 到 {MACROBENCH_MAX_CYCLES} 的整數"
+     return _macrobench_stability_optional_err(st)
+ 
+ 
+ def _macrobench_stability_optional_err(st):
+     """stability 段的選填欄位。回錯誤訊息或 None。"""
+     td = st.get("test_data")
+     if td is not None and not (isinstance(td, dict) and isinstance(td.get("value"), bool)
+                                and isinstance(td.get("decided_by"), str) and td["decided_by"].strip()
+                                and _macrobench_date_ok(td.get("decided_at"))):
+         return "test_data 要寫成 {value: true/false, decided_by: 誰, decided_at: YYYY-MM-DD}"
+@@ -39764,20 +39764,21 @@ MACROBENCH_CHECK_FIELDS = {
+     "java_growth": {"min_per_cycle": (False, "pos", "大於 0 的數字"), "exclude_prefixes": (False, "strlist", "字串清單")},
+     "instances": {"class": (True, "str", "非空字串"), "max": (True, "nonneg", "不小於 0 的數字")},
+     "peak_vitals": {}, "exits": {}, "strictmode": {},
+     "frozen": {"max_block_ms": (False, "pos", "大於 0 的數字")},
+ }
+ MACROBENCH_JAVA_GROWTH_EXCLUDE = ("java.", "javax.", "kotlin.", "android.", "androidx.", "dalvik.", "libcore.", "sun.")
+ MACROBENCH_PRIMITIVE_ARRAYS = {f"{x}[]" for x in ("boolean", "byte", "char", "short", "int", "long", "float", "double")}
+ # Android vitals 前景記憶體上限(GB),依裝置可用記憶體(MB)分級,含下界不含上界;developer.android.com/google/play/vitals 2026-10-24
+ MACROBENCH_VITALS_TIERS = ((3200, 4800), (4800, 6800), (6800, 9216), (9216, 14336), (14336, 18432))
+ MACROBENCH_VITALS_FG = {"app": (2.00, 2.25, 2.25, 3.25, 4.25), "game": (2.25, 2.75, 3.50, 4.00, 5.00)}
++MACROBENCH_MAX_CYCLES = 10000   # 暖機與量測輪數上限:驅動真的會跑這麼多輪,超過多半是寫錯
+ MACROBENCH_EXIT_FAIL_TYPES = ("crash", "native_crash", "anr", "low_memory", "memory_limiter")
+ MACROBENCH_NEEDS_FULL_CYCLES = ("native_unreachable", "java_growth", "instances", "peak_vitals", "frozen")
+ 
+ 
+ def _macrobench_field_ok(kind, v):
+     if kind == "str":
+         return isinstance(v, str) and bool(v.strip())
+     if kind == "strlist":
+         return isinstance(v, list) and all(isinstance(x, str) and x for x in v)
+     if not _macrobench_num(v):
+@@ -39841,21 +39842,23 @@ def _macrobench_stab_src(stab, name):
+ 
+ def _macrobench_stab_val(v):
+     """結果檔的數字:不是有限數或是 -1(量不到)回 None。"""
+     return None if not _macrobench_num(v) or v == -1 else v
+ 
+ 
+ def _macrobench_stab_native_unreachable(t, stab, rec):
+     s, why = _macrobench_stab_src(stab, "unreachable")
+     if why:
+         return None, why
+-    b, a = s.get("before") or {}, s.get("after") or {}
++    b, a = s.get("before"), s.get("after")
++    if not isinstance(b, dict) or not isinstance(a, dict):   # 跟 heap 同一條:形狀不對列成跳過,不噴例外(代碼審 r2 邊界席)
++        return None, "unreachable 缺 before 或 after(或不是物件)"
+     vals = [_macrobench_stab_val(x) for x in (b.get("bytes"), a.get("bytes"), b.get("allocations"), a.get("allocations"))]
+     if None in vals:
+         return None, "unreachable 的位元組或塊數缺了、不是有限數或是 -1"
+     rec.update(delta_bytes=vals[1] - vals[0], delta_allocations=vals[3] - vals[2], max_bytes=t.get("max_bytes", 0))
+     return rec["delta_bytes"] > rec["max_bytes"], None
+ 
+ 
+ def _macrobench_stab_heap(stab):
+     s, why = _macrobench_stab_src(stab, "heap")
+     if why:
+@@ -39869,22 +39872,22 @@ def _macrobench_stab_heap(stab):
+     if not all(_macrobench_stab_val(v) is not None for v in [*b.values(), *a.values()]):
+         return None, None, "heap 的實例數有不是有限數的值"
+     return b, a, None
+ 
+ 
+ def _macrobench_stab_java_growth(t, stab, rec):
+     b, a, why = _macrobench_stab_heap(stab)
+     if why:
+         return None, why
+     n = stab.get("cycles")
+-    if not _secev_int(n) or n < 1:
+-        return None, "結果檔的 cycles 缺了、不是整數或小於 1"
++    if not _secev_int(n) or not 1 <= n <= MACROBENCH_MAX_CYCLES:   # 超大整數會讓每類門檻大到永遠不會達到,判成通過(代碼審 r2 邊界席)
++        return None, f"結果檔的 cycles 缺了、不是整數或不在 1 到 {MACROBENCH_MAX_CYCLES} 之間"
+     need = n * t.get("min_per_cycle", 1)
+     skip = tuple(t.get("exclude_prefixes", MACROBENCH_JAVA_GROWTH_EXCLUDE))
+     grown = [{"class": c, "delta": a[c] - b.get(c, 0)} for c in sorted(a)
+              if c not in MACROBENCH_PRIMITIVE_ARRAYS and not c.startswith(skip) and a[c] - b.get(c, 0) >= need]
+     rec.update(grown=grown, need_per_class=need, class_names=(stab.get("heap") or {}).get("class_names"))
+     return bool(grown), None
+ 
+ 
+ def _macrobench_stab_instances(t, stab, rec):
+     b, a, why = _macrobench_stab_heap(stab)
+@@ -39921,38 +39924,42 @@ def _macrobench_stab_pids(stab):
+     vals = p.get("values") if p else None
+     return vals if isinstance(vals, list) and len(vals) == 3 and all(_secev_int(v) for v in vals) else None
+ 
+ 
+ def _macrobench_stab_exits(t, stab, rec):
+     s, why = _macrobench_stab_src(stab, "exits")
+     if why:
+         return None, why
+     if not isinstance(s.get("new"), list):
+         return None, "exits 缺 new 清單"
+-    new = [e for e in s["new"] if isinstance(e, dict)]
++    if not all(isinstance(e, dict) and isinstance(e.get("type"), str) for e in s["new"]):   # 丟掉格式不對的元素會判成達標(代碼審 r2 邊界席)
++        return None, "exits 的 new 有不是 {type: 字串} 的紀錄"
++    new = s["new"]
+     bad = [e.get("type") for e in new if e.get("type") in MACROBENCH_EXIT_FAIL_TYPES]
+     pids = _macrobench_stab_pids(stab)
+     rec.update(bad_types=bad, other=len(new) - len(bad), pid_changed=pids is not None and len(set(pids)) > 1)
+     if bad:   # 崩潰類紀錄不靠 pid:崩潰後 App 沒被重啟時第三次讀不到 pid,這正是最該抓的情境(代碼審 r1)
+         return True, None
+     if pids is None:
+         return None, "pid 有讀不到的(判不出量測期間行程有沒有換過)"
+     return rec["pid_changed"], None
+ 
+ 
+ def _macrobench_stab_strictmode(t, stab, rec):
+     s, why = _macrobench_stab_src(stab, "strictmode")
+     if why:
+         return None, why
+     if not isinstance(s.get("violations"), list):
+         return None, "strictmode 缺 violations 清單"
+-    v = [x.get("type") for x in s["violations"] if isinstance(x, dict)]
++    if not all(isinstance(x, dict) and isinstance(x.get("type"), str) for x in s["violations"]):
++        return None, "strictmode 的 violations 有不是 {type: 字串} 的紀錄"
++    v = [x["type"] for x in s["violations"]]
+     rec.update(violations=v)
+     return bool(v), None
+ 
+ 
+ def _macrobench_stab_frozen(t, stab, rec):
+     s, why = _macrobench_stab_src(stab, "cycle_trace")
+     if why:
+         return None, why
+     frames, frozen = _macrobench_stab_val(s.get("frames")), _macrobench_stab_val(s.get("frozen_frames"))
+     block = _macrobench_stab_val(s.get("max_main_block_ms"))
+@@ -40042,39 +40049,40 @@ def _macrobench_stab_detail(r):
+ 
+ def _macrobench_print_thresholds(res):
+     """門檻判定的文字輸出;沒有門檻檔時不印。"""
+     n = sum(len(res[k]) for k in ("threshold_failures", "threshold_passed", "threshold_skipped"))
+     if not n:
+         return
+     fails = res["threshold_failures"]
+     print(f"驗收門檻:{len(fails)} 條沒達、{len(res['threshold_passed'])} 條達標、"
+           f"{len(res['threshold_skipped'])} 條沒判(只提醒,不擋推送)。")
+     for r in fails:
+-        if "check" in r:
+-            print(f"  [沒達驗收門檻] {r['scenario']} {r['check']}:{_macrobench_stab_detail(r)}")
++        if "check" in r:   # 明細與原因含被量 App 的類別名、收集到的文字:控制字元換空白再印(代碼審 r2 資安席)
++            print(f"  [沒達驗收門檻] {r['scenario']} {r['check']}:{_esc_clean(_macrobench_stab_detail(r), 500)}")
+         else:
+             op, lim = ("≤", r["max"]) if "max" in r else ("≥", r["min"])
+             print(f"  [沒達驗收門檻] {r['scenario']} {r['metric']} {r['stat']}:{r['current']:.1f}(門檻 {op} {lim:g})")
+         print(f"      合約:{r['contract']}")
+     for r in res["threshold_passed"]:
+         if r.get("check") in ("frozen", "exits"):   # 通過也回報:最長阻塞、其他原因的結束紀錄
+-            print(f"  [達標] {r['scenario']} {r['check']}:{_macrobench_stab_detail(r)}")
++            print(f"  [達標] {r['scenario']} {r['check']}:{_esc_clean(_macrobench_stab_detail(r), 500)}")
+     for r in res["threshold_skipped"]:
+         what = r["check"] if "check" in r else f"{r['metric']} {r['stat']}"
+-        print(f"  [沒判] {r['scenario']} {what}:{r['reason']}")
++        print(f"  [沒判] {r['scenario']} {what}:{_esc_clean(r['reason'], 500)}")
+ 
+ 
+ def _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_baseline):
+     """沒有 Macrobenchmark 結果目錄(沒有設定檔,或設定只有 stability 段):舊門檻條目列成沒判,check 條目照判。"""
+     import json
+     if update_baseline:
+-        print("這個專案的 macrobench.json 沒有 results_dirs,沒有 Macrobenchmark 結果可以更新基準。")
++        print("這個專案沒有 .lumos/macrobench.json,沒有 Macrobenchmark 結果可以更新基準。" if cfg is None
++              else "這個專案的 macrobench.json 沒有 results_dirs,沒有 Macrobenchmark 結果可以更新基準。")
+         return 0
+     res.update(stab_res)
+     res["threshold_skipped"].extend(
+         dict({k: t[k] for k in ("scenario", "metric", "stat", "contract") if k in t}, reason="沒有 Macrobenchmark 結果目錄")
+         for t in thresholds if "check" not in t)
+     if as_json:
+         print(json.dumps(dict(res, configured=cfg is not None), ensure_ascii=False))
+         return 0
+     if cfg is None and not any(res[k] for k in ("threshold_failures", "threshold_passed", "threshold_skipped")):
+         print("這個專案沒接 Macrobenchmark 退步提醒(沒有 .lumos/macrobench.json),沒有東西可比。")
+@@ -40093,20 +40101,22 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
+     if err or terr or serr:
+         print(f"擋下:{err or terr or serr}", file=sys.stderr)
+         return 2
+     if check_config:
+         print("macrobench 設定與門檻檔都合格。" if cfg else "這個專案沒有 .lumos/macrobench.json;門檻檔合格。")
+         return 0
+     res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
+            "failed": [], "baseline_missing": False, "baseline_unreadable": False,
+            "threshold_failures": [], "threshold_passed": [], "threshold_skipped": []}
+     stab_res = _macrobench_judge_stability(thresholds, stab)   # 記憶體與穩定性:只看 stability.json,有沒有接 Macrobenchmark 都照判
++    if stab is not None and not as_json and not any("check" in t for t in thresholds):   # 忘了寫門檻檔時不能看起來像全部通過(代碼審 r2 邊界席)
++        print("給了 --stability,但門檻檔裡沒有寫了 check 的條目,記憶體與穩定性沒有東西可判。")
+     if cfg is None or not cfg["results_dirs"]:
+         return _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_baseline)
+     current, failed, n_files = _macrobench_collect(repo, cfg)
+     bpath = Path(repo) / ".lumos" / "macrobench-baseline.json"
+     baseline, missing, unreadable = _macrobench_load_baseline(bpath)
+     if update_baseline:
+         return _macrobench_update(bpath, baseline, unreadable, current, failed)
+     res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
+     if not missing and not unreadable:
+         res.update(_macrobench_compare(baseline, current, cfg))

@@ -66,6 +66,7 @@ SEE:效能驗收門檻在 .lumos/macrobench-thresholds.json,contract 欄指回�
 - [S3] 當門檻寫了 `device_model` 而這次結果的裝置型號不同時,指令應列為換了裝置沒判,不得判達標或沒達 [test:t_macrobench_threshold_device]
 - [S4] 當還沒有基準檔、或基準檔讀不了時,指令仍應照門檻檔判;門檻判定不受基準影響 [test:t_macrobench_threshold_without_baseline]
 - [S5] 當門檻檔 JSON 壞掉、或任一條缺必填欄位、`max`/`min` 不是恰好一個有限的數字、`decided_at` 不是真的日期(例如 2026-13-45)、`stat` 不是該類指標會有的統計值時,指令應回 2 並印出第幾條哪裡壞;沒有門檻檔時照舊、不報錯 [test:t_macrobench_threshold_bad_file]
+  - 2026-10-24 補充(不改本條的驗收範圍):寫了 `check` 的條目不驗 `max`/`min`,改驗那種檢查自己的欄位;舊寫法條目的 decided_by 寫成 <裁定的人> 這種佔位也回 2(跟 check 條目共用一支署名檢查)。這兩件由 [[Projects/Android記憶體與穩定性驗收_計劃]] 的 S13、S25 驗,綁 t_android_memstab_check_fields_strict
 - [S6] 當門檻指的情境或指標這次沒跑到時,指令應列為沒判(並說是哪個缺),不得當成達標 [test:t_macrobench_threshold_missing_scenario]
 - [S7] 沒達門檻時指令仍應回 0(只提醒,不擋推送),`--json` 輸出應有 `threshold_failures`、`threshold_passed`、`threshold_skipped` 三欄 [test:t_macrobench_threshold_rc_and_fields]
 - [S9] 當帶 `--update-baseline` 時,基準檔的每個情境應記下它來自哪個結果檔(相對 repo 的路徑與 sha256);這次讀不了而沿用的舊項目保留原本的來源;沒有來源欄的舊基準照樣能比 [test:t_macrobench_baseline_records_source]
