@@ -499,13 +499,13 @@ def android_scene(en):
     b+=text(58,207,"Startup and scroll numbers + traces" if en else "啟動、滑動的每輪數字與 Trace",16 if en else 17,"muted")
     b+=rect(392,150,330,70)+rect(393,151,4,68,C["purple"],"none",2)
     b+=text(412,180,"Memory & stability run" if en else "記憶體與穩定性收集",21,"purple",weight=600)
-    b+=text(412,207,"Open/close a screen: memory, crashes" if en else "反覆開關畫面：記憶體與閃退",16 if en else 17,"muted")+'</g>'
+    b+=text(412,207,"Collects with dumpsys · Perfetto · logcat" if en else "dumpsys、Perfetto、logcat 收資料",16 if en else 17,"muted")+'</g>'
     b+=path("M203 220V246","line",2)+arrow(203,250,"down")+path("M557 220V246","line",2)+arrow(557,250,"down")
     layers=[
       (254,"L0","Slower? Below the agreed bar?" if en else "有沒有變慢、達不達標","lumos macrobench: vs. baseline and agreed standards" if en else "lumos macrobench：跟基準比、對照人訂的標準","Lumos","green"),
-      (346,"L1","Where is it stuck: busy or waiting?" if en else "卡在哪：忙著算，還是在等","Google's official skill reads the ms-level recording" if en else "照 Google 官方 skill 讀逐毫秒的執行紀錄","Google skill" if en else "Google 官方","blue"),
-      (438,"L2","Which function, which line?" if en else "哪個函式、哪一行","simpleperf sampling with line annotation" if en else "simpleperf 抽樣，指到檔案與行號","Android tool" if en else "Android 工具","gold"),
-      (530,"L3","What holds memory, and why?" if en else "誰在佔記憶體、為什麼不釋放","Memory snapshots; a person must OK test data first" if en else "記憶體快照；要先有人同意只用測試資料","Needs a human" if en else "要人裁","coral"),
+      (346,"L1","Where is it stuck: busy or waiting?" if en else "卡在哪：忙著算，還是在等","Perfetto + trace_processor, read via Google's skill" if en else "Perfetto 錄、trace_processor 查，照 Google 官方 skill","Google skill" if en else "Google 官方","blue"),
+      (438,"L2","Which function, which line?" if en else "哪個函式、哪一行","simpleperf (Android NDK) points to file and line" if en else "simpleperf（NDK 附）抽樣，指到檔案與行號","Android tool" if en else "Android 工具","gold"),
+      (530,"L3","What holds memory, and why?" if en else "誰在佔記憶體、為什麼不釋放","heap_profile, java_heap_dump; test data OK'd first" if en else "heap_profile、java_heap_dump；要先同意只用測試資料","Needs a human" if en else "要人裁","coral"),
     ]
     for i,(y,n,label,sub,tag,c) in enumerate(layers):
         b+=f'<g data-kind="android-layer" data-layer="{n}">'
@@ -523,12 +523,12 @@ def android_scene(en):
     b+=text(58,674,"Evidence record" if en else "查證紀錄",22,"green",weight=650)
     b+=text(58,705,"rerun.sh reruns it all; an AI with no background re-judges → notes" if en else "rerun.sh 一鍵重跑；不知前因的 AI 再判一次 → 寫回筆記",15 if en else 17,"muted")+'</g>'
     desc=("Android verification flow. Two inputs: Macrobenchmark results with a recording of each run, and a memory and stability run that opens and closes a screen many times. "
-          "L0 uses lumos macrobench to compare with the saved baseline and the standards people agreed on. Only when it finds a problem does L1 follow Google's official android-profiler skill to read the recording and find where the app is stuck; "
-          "L2 uses simpleperf to point at the function and line; L3 takes memory snapshots, only after a person agrees to run on test data only. "
+          "L0 uses lumos macrobench to compare with the saved baseline and the standards people agreed on. Only when it finds a problem does L1 read a Perfetto recording with trace_processor, following Google's official android-profiler skill, to find where the app is stuck; "
+          "L2 uses simpleperf from the Android NDK to point at the function and line; L3 uses Perfetto's heap_profile and java_heap_dump, only after a person agrees to run on test data only. The memory and stability run gathers data with dumpsys, Perfetto, and logcat. "
           "A dashed shortcut takes failed memory checks from L0 straight to L3. Any layer with nothing wrong is recorded and the check stops there; everything goes into an evidence record that can be rerun and is re-judged by an AI with no background.") if en else (
           "Android 驗證流程。兩種輸入：Macrobenchmark 的結果（含每次的執行紀錄），以及反覆開關畫面的記憶體與穩定性收集。"
-          "L0 由 lumos macrobench 跟存好的基準比、對照人訂的標準；有問題才到 L1，照 Google 官方 android-profiler skill 讀執行紀錄、找出卡在哪；"
-          "L2 用 simpleperf 指到函式與行號；L3 拍記憶體快照，要先有人同意只用測試資料。"
+          "L0 由 lumos macrobench 跟存好的基準比、對照人訂的標準；有問題才到 L1，用 trace_processor 讀 Perfetto 錄下的紀錄，照 Google 官方 android-profiler skill 找出卡在哪；"
+          "L2 用 Android NDK 附的 simpleperf 指到函式與行號；L3 用 Perfetto 附的 heap_profile 與 java_heap_dump 查記憶體，要先有人同意只用測試資料。記憶體與穩定性收集用 dumpsys、Perfetto、logcat 收資料。"
           "記憶體類的檢查沒過時，虛線從 L0 直接跳到 L3。哪一層沒問題就記下並停在那一層；全部寫進可重跑、並由不知前因的 AI 再判一次的查證紀錄。")
     return title,746,b,desc
 
