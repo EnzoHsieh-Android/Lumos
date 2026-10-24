@@ -299,6 +299,65 @@ The full practice is in [Implementation test quality](skills/lumos-project-notes
 
 </details>
 
+## Android: checking speed and memory on a real device
+
+After an Android change, Lumos checks two things on a real phone or tablet: **did it get slower**, and **does it hold on to memory it never gives back**. When something is wrong, it digs down one layer at a time until it can name the function and line responsible; every step is written into an evidence record, so someone with the same raw data can rerun it and get the same result.
+
+The step "read the performance recording and find where it gets stuck" follows Google's public [android-profiler skill](https://github.com/android/skills) (analysis instructions written for AI agents) as is, instead of inventing a separate method. Lumos handles the joining-up around the official skill: deciding whether it really got slower and whether to dig deeper, connecting the tools of each layer, telling which kind of screen code is to blame, catching memory a third-party library forgot to free, and writing the process down as a rerunnable record.
+
+<p align="center">
+  <a href="assets/android-e2e-en.svg">
+    <img src="assets/android-e2e-en.svg" alt="Android verification flow: performance test results and a memory and stability run go to L0, which decides whether there is a problem; only then does L1 follow Google's official skill to find where it is stuck, L2 point to the line, and L3 examine memory (only after a person agrees to test data only); memory problems jump straight from L0 to L3; everything goes into a rerunnable evidence record" width="760">
+  </a>
+</p>
+
+<details>
+<summary>See what each layer does, lab results, and limits</summary>
+
+**Layered like a doctor's visit: take the temperature first, draw blood only if there is a fever, order a scan only if the blood test is off.** Not every tool is switched on at once: some tools change how the app runs, and memory snapshots may capture user data; recording everything when nothing is wrong means paying the highest price every time.
+
+| Layer | Question | How | When to go deeper |
+|---|---|---|---|
+| L0 | Did it get slower? Does it meet the agreed standard? | Run Google's performance test tool, Macrobenchmark, then `lumos macrobench` compares it with the saved baseline and the human-set standards | Slower than the baseline, or below standard |
+| L1 | Where is it stuck? Busy computing, or waiting on something? | Each test run leaves a millisecond-by-millisecond recording (a Perfetto trace), read with the steps of Google's official skill; it also works out whether the time went to the newer (Compose) or older (XML) way of building screens | The app itself is busy → deeper; it is waiting on another program or a file → stay here and follow who made it wait |
+| L2 | Which function, which line? | simpleperf (Android's performance sampling tool) notes "which code is running right now" every millisecond; the line that shows up most is the culprit; phone settings are restored afterwards | That line creates lots of objects → deeper |
+| L3 | What is using memory, and why is it never freed? | Take memory snapshots and find which variable keeps holding on to it | — |
+
+**Why Google's official skill.** Google maintains the steps for reading performance recordings and updates them with its tools, which is more reliable than writing our own. The skill and every tool are each pinned to a fixed version and re-verified on upgrade, so a result found today still matches when the same record is rerun later.
+
+**Memory: catching "the library offers a release method, the app forgets to call it".** Libraries such as players or maps need release to be called when a screen closes; forgetting keeps the memory in use. The project's own UI test opens and closes the same screen on the phone again and again, Lumos's collection script gathers data alongside, and `lumos macrobench` then judges seven things (each one is judged only if the project's standards file has a line for it):
+
+- On the C/C++ side, memory nothing uses any more that was never freed.
+- Objects that keep multiplying each time the screen opens.
+- How many of a named object remain after the screen closes.
+- The highest memory use.
+- Whether the app crashed or was killed by the system.
+- Whether Android's built-in StrictMode check caught an unclosed resource, an unregistered listener, or a screen kept alive. This needs both: the project turns StrictMode on in its test build and declares so in its settings; without the declaration it is skipped. Declared but not actually turned on, it receives no violations and is wrongly judged a pass.
+- Whether the screen froze for more than 0.7 seconds.
+
+When one of the first four (the memory ones) fails, it jumps straight to L3: the two middle layers look at where CPU time goes, and memory problems do not show there; the project must first declare test data only, otherwise it stops at L0 and records the gap. A frozen screen goes through L1 as usual; crashes and StrictMode violations are read straight from the collected exit records and log.
+
+**Every step goes into the evidence record.** Phone model and state, the installed app (matched by file fingerprint), each query with its expected result, and why the next layer was needed all sit in one folder, with a `rerun.sh` that reruns every query with an expected result on the same raw data and compares the results in one go; the raw data stays on the local machine and is not committed. Before committing, a separate AI that knows nothing of the background re-judges every conclusion from this record alone; if it cannot, the record is not clear enough.
+
+**Lab results** (one Samsung tablet (model SM-X710) and a small app with deliberately planted problems):
+
+- Each list row deliberately waits 8 ms longer: L0 reports the screen got slower (each redraw of the screen is a frame; for the slower tenth of frames, processor time per frame went from 4.3 ms to 10.4 ms), and L2 points straight to line 36 of the lab app's `MainActivity.kt`.
+- A third-party library written in Java, not released when the screen closes: 5 objects left behind; L3 shows the library's own internal list holds them.
+- A third-party library written in C/C++, not released: 10 MB extra (5 open-close rounds, 2 MB each), traced to the library file and the app function that created it.
+- Slowdowns from three kinds of screen code were each put in the right category and traced to a function; a separate AI that did not know what was planted found the problem in all three from the measurements alone.
+
+**Current limits.**
+
+- Verified on one tablet and one lab app only; the numbers do not represent a production app, and tools may behave differently on other brands.
+- It reminds, it does not block pushes: millisecond numbers drift with the phone and its temperature, so they are not suited to a hard gate.
+- Memory snapshots are off by default: a project must first write down who agreed, and on which day, to run on test data only; snapshots stay on the local machine, each later run of the collection script deletes those older than 7 days, nothing is deleted if it is not run again, and you delete them yourself when done.
+- The allowed margin for "counts as slower" is provisional (10% by default, with a 1 ms floor) and will be reset from repeated real-device runs.
+- UI flows can already be written as Maestro (a tool that drives the screen from a text script of what to tap and type) flow files and linked to feature notes for re-checking; making them, together with speed and memory, the end-to-end acceptance standard for Android is the next step.
+
+**To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (Chinese).
+
+</details>
+
 ## How notes are kept from going stale (drift)
 
 Notes need maintenance after they are written. Lumos checks whether notes were updated with code, looks for stale names, links, and pending items before a push, and asks AI to reread notes when their meaning needs checking. “Drift” means the code and notes gradually stop agreeing.
