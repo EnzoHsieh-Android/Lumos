@@ -1,0 +1,139 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md
+index f569ad81..2de683de 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md
+@@ -9,36 +9,42 @@ tags:
+   - scope/stack-knowledge
+ related:
+   - "[[Projects/Macrobenchmark退步提醒_計劃]]"
+   - "[[Projects/Macrobenchmark驗收門檻_計劃]]"
+   - "[[Projects/Android記憶體與穩定性驗收_計劃]]"
+ lands_in:
+   - Systems/macrobenchmark-adapter
+ ---
+ # Android效能判定統計化_計劃
+ 
+-白話:`lumos macrobench` 判「有沒有變慢」現在只比一次基準的彙總值(中位數、百分位),5 輪滑動,雜訊靠容差下限吸收;診斷鏈(Macrobenchmark、Perfetto、simpleperf)已是官方推薦路徑,落後的是判定的統計面。這份計劃收 2026-10-24 調研排出的五條優化,加上記憶體計劃移過來的第 6 條,排在 [[Projects/Android記憶體與穩定性驗收_計劃]] 之後做;子案二(Maestro 整合成 E2E 驗收)改成擋合併之前要先做前三條,因為擋了以後誤報就是硬成本。Enzo 2026-10-24 問「我們的效能做法貼近世界解嗎?還是有可以優化的地方?」,看完調研回「好」。下面是待辦清單,動手前照設計流程走(何時開始見 REVISIT)。
++白話:`lumos macrobench` 判「有沒有變慢」現在只比一次基準的彙總值(中位數、百分位),5 輪滑動,雜訊靠容差下限吸收;診斷鏈(Macrobenchmark、Perfetto、simpleperf)已是官方推薦路徑,落後的是判定的統計面。這份計劃收 2026-10-24 調研排出的優化與記憶體計劃移過來的一條,2026-10-24 實機評測後重排成下面九條,排在 [[Projects/Android記憶體與穩定性驗收_計劃]] 之後做;子案二(Maestro 整合成 E2E 驗收)要把毫秒類效能改成擋合併之前,先做同場比較、20 輪、太吵指標只列出(第 1、2、4 條),因為擋了以後誤報就是硬成本。Enzo 2026-10-24 問「我們的效能做法貼近世界解嗎?還是有可以優化的地方?」,看完調研回「好」。下面是待辦清單,動手前照設計流程走(何時開始見 REVISIT)。
+ 
+ PRIOR-ART: Google 官方建議 CI 用 step fitting 比對滾動視窗(developer.android.com/training/testing/continuous-integration/automation);Mozilla Perfherder 用 t-test 加變化幅度兩道門檻、太吵的測試由 Performance Sheriff 降級(wiki.mozilla.org/TestEngineering/Performance/Sheriffing/Alerts);Chromium Pinpoint 取 Kolmogorov-Smirnov 與 Mann-Whitney 兩個 p 值的較小者(catapult 的 pinpoint compare.py);Android vitals 的慢幀 16ms、凍結幀 700ms、過多慢幀 50%、過多凍結幀 0.1%;Perfetto stdlib 的 android.frames 模組。以上 2026-10-24 調研讀到;Google 的 step fitting 原文(androidx 部落格)回 403 沒讀到;Uber、Airbnb、Spotify 等公司的一手文章沒找到。
+-RETIRE-IF: 六條都做完後連續兩個真實專案三個月內,統計檢定那道門從沒改變過判定結果(誤報與漏報都沒減少),就拿掉檢定、回到雙道規則。
+-REVISIT:2026-11-30 記憶體與穩定性子案收尾後,照下面六條開設計;動手前先 lumos search 檢定 統計 與 lumos decisions Macrobenchmark退步提醒_計劃,確認沒有否決過同類做法
+-
+-## 待辦(依效益除以成本排)
+-
+-1. 同一次建置內用每輪原始數值做 Mann-Whitney 檢定,當原本兩道規則之後的第三道門,只用來壓誤報;基準檔要多存每輪原始值。不撞 [[Projects/Macrobenchmark退步提醒_計劃]] 否決 step fitting 的理由(那條否決的是跨建置的歷史視窗)。順便評估 K-S 檢定抓 120Hz 兩群跳動那種雙峰。
+-2. 實驗室滑動從 5 輪加到至少 10 輪,L0 收據記每項指標的變異係數;併做 [[Projects/Macrobenchmark退步提醒_計劃]] 與 [[Verification/2026-10-23_macrobench實機端到端]] 裡那條容差實測的 REVISIT。
+-3. 設定加「太吵的指標只列出不判定」的出口(借 Mozilla 把太吵的測試降級的做法),一次解掉 120Hz 雙峰與混合畫面 37% 超時兩件同類事。
+-4. 報告多印一行 Android vitals 對照(超過 16ms 的幀佔比、超過 700ms 的幀數),只當參考線不當門檻,寫清楚跟線上統計的口徑差。
+-5. 評估用 Perfetto stdlib 的幀表取代歸因範本自己切幀;代價是 CI 不能再用 Python 內建 sqlite3 跑範本測試,所以先寫比對腳本看兩邊切出的幀一不一致再決定。
+-6. 記憶體峰值跟 App 自己的基準比(從 [[Projects/Android記憶體與穩定性驗收_計劃]] 移過來,那份只做官方底線):基準要存每次收集的峰值,容差用記憶體單位(KB)另設,不沿用毫秒類指標的絕對容差。
+-- 另待驗:官方建議看 P95/P99,我們以「P99 太吵」降成只列出,理由只有少量實測,做第 2 條時用 10 輪資料重驗。
++RETIRE-IF: 同場比較上線後連續兩個真實專案三個月內,同場判定的誤報與漏報都沒比單一存檔基準少,就拿掉同場比較、回到單一基準。
++RETIRE-IF: 第 3 條上線後三個月內,真實專案因拿掉那一道而多出的誤報,多過因此多抓到的真退步,就把「超出基準最大值」那道加回去。
++RETIRE-IF: 第 2 條上線後,實機跑一次的時間讓推送前改走略過檢查的次數明顯變多(帳上看得到),就把預設輪數降回 10,改靠第 1 條壓誤報。
++REVISIT:2026-11-30 記憶體與穩定性子案收尾後,照下面待辦開設計;動手前先 lumos search 檢定 統計 與 lumos decisions Macrobenchmark退步提醒_計劃,確認沒有否決過同類做法
++
++## 待辦(依效益除以成本排;2026-10-24 實機評測後重排,證據見 [[Verification/2026-10-24_效能判定規則實機評測]])
++
++1. 同場比較:基準版與候選版在同一段時間、同一台裝置上交錯跑(兩個 APK 輪流裝、輪流量),拿同場的數字比,不再拿別的時段存的基準比;存下的基準只留作參考。實測這批資料的誤報全部來自跨時段:拿間隔批當基準、連跑批當現況,5 輪時 48 組誤報 5 組,同場互比(連跑批 56 組、間隔批 30 組)都是 0。每幀 CPU 耗時 P90 的跨時段差(兩批均值差約 15%)大約是它同時段雜訊(各次之間最大差 3.4–6.8%)的 2–4 倍;這次只觀察到一次(間隔批比連跑批快,中間裝置重開機過),別天的方向不知道。世界解:Chromium Pinpoint 是同一台機器、同一段時間交錯跑 A 與 B(依調研,本批資料沒驗)。不撞 [[Projects/Macrobenchmark退步提醒_計劃]] 否決 step fitting 的理由:那條否決的是存多次建置的歷史視窗,同場比較不用存歷史。
++2. 預設輪數從 5 加到 20:20 輪時現行規則連跨時段都 0 誤報,同場雜訊也降 40–50%(冷啟動 8.1%→4.8%、每幀 P90 6.8%→3.4%);代價是實驗 App 上一次約 9 分鐘(冷啟動加滑動各 20 輪)。L0 收據記每項指標各輪的變異係數。併做 [[Projects/Macrobenchmark退步提醒_計劃]] 與 [[Verification/2026-10-23_macrobench實機端到端]] 那條容差實測的 REVISIT。
++3. 啟動類拿掉「超出基準最大值」那一道,只留差幅超過容差(跟第 2 條一起上線):20 輪時啟動 +20ms(約 7%)那級從 1/24 抓到 10/24,同場與跨時段誤報都仍是 0(56、30、96 組);5 輪時拿掉也沒多抓到(啟動 +20ms 都是 4/24),10 輪時跨時段還多 1 組誤報(96 組裡 4 組對現行 3 組),所以要跟 20 輪一起上。
++4. 設定加「太吵的指標只列出不判定」的出口(借 Mozilla 把太吵的測試降級的做法):實測每幀超時 P50 光同版本重跑就差 17%(20 輪)到 29%(5 輪);也一次解掉 120Hz 雙峰與混合畫面 37% 超時兩件同類事(那兩件見 [[Projects/Android逐層診斷_計劃]] 與 [[Projects/Android介面寫法分流_計劃]],不在本批資料)。
++5. 容差依同場雜訊校準(做完第 1 條才做):把容差收到「同場正常互比最大差 × 倍數」時,同場誤報 0(訂容差用的連跑批 280 組、獨立驗證的間隔批 150 組),跨時段誤報 15–23%(480 組裡 74–111 組),所以不准在沒有同場比較時收窄;倍數要在抓到率與餘裕之間取捨:1.5 倍時啟動 +20ms 抓到 18/24、2 倍 10/24、3 倍 0/24,「啟動 +50ms 加每列 +2ms」那組的每幀 CPU 耗時 P90 三種都 24/24(每幀超時 P90 一律 0/24)。
++6. 報告多印一行 Android vitals 對照(超過 16ms 的幀佔比、超過 700ms 的幀數),只當參考線不當門檻,寫清楚跟線上統計的口徑差。
++7. 評估用 Perfetto stdlib 的幀表取代歸因範本自己切幀;代價是 CI 不能再用 Python 內建 sqlite3 跑範本測試,所以先寫比對腳本看兩邊切出的幀一不一致再決定。
++8. 記憶體峰值跟 App 自己的基準比(從 [[Projects/Android記憶體與穩定性驗收_計劃]] 移過來,那份只做官方底線):基準要存每次收集的峰值,容差用記憶體單位(KB)另設,不沿用毫秒類指標的絕對容差。
++9. 統計檢定(原本排第一):同一次建置內用每輪原始數值做 Mann-Whitney 檢定當第三道門。在 2026-10-23 的舊結果檔上試算,5 輪時檢定力不足(每列 +8ms 讓 P90 從 4.47 變 8.83ms 仍 p=0.21)、合併所有幀算又因幀彼此不獨立而把正常重跑判成顯著;本批同場資料上沒有誤報可壓,第 3 條多抓到的也不是檢定的功勞。
++REVISIT:2027-03-31 第 1、2、3、5 條上線後,真實專案若出現同場 20 輪仍誤報、或卡在雜訊邊緣的漏報,再評估第 9 條統計檢定;都沒有就把第 9 條拿掉
++- 另待驗:官方建議看 P95/P99,我們以「P99 太吵」降成只列出,理由只有少量實測,做第 2 條時用 20 輪資料重驗。
+ 
+ ## 實務隱患
+ 
+ - 已排除:金流:只讀效能量測結果檔,不碰交易。
+ - 已排除:對外送出:判定在本機跑,不送出資料。
+ - 已排除:不可逆:判定唯讀,基準檔多存欄位可回退。
+ - 已排除:守衛面:判定照舊只提醒不擋;擋合併在子案二另案。
+ 
+ ## 條款
+ 
+-- [S1] 當這份計劃開始設計時,應先依待辦六條寫出各自的條款與測試,再跑規格閘 [manual:設計開始時改寫本節,這行刪掉]
++- [S1] 當這份計劃開始設計時,應先依待辦各條寫出各自的條款與測試,再跑規格閘 [manual:設計開始時改寫本節,這行刪掉]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+index 5ede84cb..2e692147 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -34,20 +34,21 @@ summary: |-
+   WHY:--stability 給了結果檔、門檻檔卻沒有 check 條目時,--json 也帶 stability_unjudged 一欄,文字輸出印同一句 [出處:2026-10-24 代碼審 r3 整合席] [因:skill 的 L0 走 --json,三個清單全空會被當成通過、收據記 L0 通過;這一欄跟其他欄一樣一開始就放好(值是 null),讀取端不用判斷鍵在不在(r4 架構對齊席)] [test:t_android_memstab_unreadable_never_passes]
+   WHY:讀結果檔時先限深(20 層)、字串過 _esc_clean;數字欄位負數一律當量不到 [出處:2026-10-24 代碼審 r3 邊界席] [因:孤立代理字元讓 --json 印到 UTF-8 時整支崩;這些欄位是次數、位元組、時間,-1 以外的負數只會是手改或壞掉的檔] [test:t_android_memstab_unreadable_never_passes]
+   WHY:門檻檔的條目寫了 check(native_unreachable、java_growth、instances、peak_vitals、exits、strictmode、frozen)就對 --stability 給的 stability.json 判記憶體與穩定性,沒寫 check 的照舊對 Macrobenchmark 結果檔判、判定結果不變;驗證多了一項:decided_by 寫成 <裁定的人> 這種佔位會被擋(跟 check 條目共用署名檢查);有 stability 段時 results_dirs 可以不填,沒有 macrobench.json 也照判 check 條目 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]]] [因:這幾種檢查不是單一上下限,硬塞進 max 會寫出假數字;只做穩定性的專案沒有 Macrobenchmark 結果目錄] [不選:另開門檻檔或指令(多一種做法)] [test:t_android_memstab_check_compat]
+   WHY:stability.json 每個來源帶 status,不是 ok 的、值是 -1 或不是有限數的,用到它的檢查一律列成跳過不列通過;驅動沒跑完時只跳過需要完整 N 輪的五種,exits 與 strictmode 照判 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]] 設計審 r1–r3] [因:這類守衛最常見的失效是讀不到所以全綠;App 在量測輪崩潰時驅動一定跟著失敗,這時正是 exits 該判不過] [test:t_android_memstab_source_not_ok_skipped]
+ verified_by:
+   - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
+   - "[[Verification/2026-10-23_macrobench實機端到端]]"
+   - "[[Verification/2026-10-23_Android驗證收據第零階段試跑]]"
+   - "[[Verification/2026-10-23_Android介面寫法分流實驗室驗收]]"
+   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
++  - "[[Verification/2026-10-24_效能判定規則實機評測]]"
+ ---
+ # macrobenchmark-adapter
+ 
+ 白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
+ 
+ - 設定 `.lumos/macrobench.json`:`results_dirs`(結果目錄清單;有 `stability` 段的專案可以不填或給空清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
+ - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
+ - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
+ - 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
+ - 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現(更新基準與一般比對兩條路都是),不說成讀不了;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-10-24_效能判定規則實機評測.md b/docs/lumos-toolchain-knowledge/Verification/2026-10-24_效能判定規則實機評測.md
+new file mode 100644
+index 00000000..2079747e
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-10-24_效能判定規則實機評測.md
+@@ -0,0 +1,46 @@
++---
++type: verification
++status: pass
++date: 2026-10-24
++valid_under:
++  - 實機 SM-X710(Android 16)、macrobench-lab 實驗 App、benchmark-macro 1.4.1、CompilationMode.None;連續兩個時段:連跑批 2026-10-24 19:25–22:01、間隔批 23:20–10-25 03:58(間隔 45 分鐘);間隔批前裝置重開機過
++  - 只驗判定規則的相對好壞;數字不代表正式 App,也不代表別的裝置
++revalidate_when:
++  - 改判退步規則、容差算法或預設輪數時
++  - 換裝置或換 benchmark-macro 大版本後
++tags:
++  - type/verification
++  - status/pass
++  - scope/stack-knowledge
++plan_refs:
++  - "[[Projects/Android效能判定統計化_計劃]]"
++---
++# 2026-10-24_效能判定規則實機評測
++
++白話:在實機上量 `lumos macrobench` 的判定規則「沒變慢時會不會亂報、真的變慢時抓不抓得到」,回答 [[Projects/Android效能判定統計化_計劃]] 的待辦該怎麼排。結論:這批資料裡的誤報全部來自「拿另一個時段的基準來比」,同一時段內互比沒有誤報;所以第一優先是同場比較(基準與候選在同一段時間交錯跑),其次是跑 20 輪;20 輪時拿掉「超出基準最大值」那一道,能多抓到小幅的啟動變慢而不多誤報;統計檢定在這批資料上沒有看到效益。
++
++## 怎麼量
++
++- 實驗 App 能從參數注入已知大小的變慢:啟動時忙等(`startupDelayMs`)、清單每畫一列忙等(`bindDelayMs`)。每次冷啟動與滑動各跑 20 輪,事後取前 5、10、20 輪模擬只跑那麼多。
++- 連跑批(2026-10-24 19:25–22:01):正常版 8 次、注入 9 次(啟動 +20/50/100ms 配每列 +1/2/4ms,各 3 次),正常與注入大致交錯(最後兩次是連續注入),共約 2.6 小時;電池溫度 31.3→34°C。
++- 間隔批(23:20–10-25 03:58):正常版 6 次,每次之間休息 45 分鐘;溫度約 31.5–32.8°C。原本想每次重開機模擬換時段:22:04 重開機後裝置停在解鎖畫面(設了螢幕鎖)、連不回電腦,人解鎖後改成拉長間隔,所以這批是在重開機之後跑的(觀察存在研究資料夾的 `device-observations.txt`)。研究資料夾的報告檔裡「下午」指連跑批、「晚上」指間隔批(產生報告時時段叫錯,數字不受影響)。
++- 離線比較五條規則:現行雙道、現行加 Mann-Whitney、拿掉「超出基準最大值」那道改用 Mann-Whitney、現行加 K-S、只看幅度。現行規則直接呼叫 `_macrobench_compare`,不重寫一份。實驗腳本與評估程式在 macrobench-lab 的 `scripts/perf-stats-experiment.sh`、`scripts/perf-stats/`;摘要與原始配對結果在 `governance/research/macrobench/2026-10-24-perf-stats/`。
++
++## 結果
++
++數字都出自 `governance/research/macrobench/2026-10-24-perf-stats/`:同一時段五條規則看 `same-session-report.json`,跨時段看 `cross-session-report.txt`,容差實驗拆組看 `tolerance-split-report.txt`,只看幅度看 `magnitude-only-report.txt`。
++
++- 同一時段內,五條規則誤報都是 0(連跑批 56 組正常互比,5、10、20 輪都一樣)。大的變慢(啟動 +100ms、每列 +4ms)每次都抓到。
++- 抓到率有一處差別:20 輪時「啟動 +20ms」(約 7%)這一級,現行規則、現行加 Mann-Whitney、現行加 K-S 都只抓到 1/24;拿掉「超出基準最大值」那一道的兩條(只看幅度、幅度加 Mann-Whitney)抓到 10/24,誤報仍是 0。差別來自拿掉那一道,不是來自檢定。每列 +1–2ms 那級五條都抓不到,卡在容差(10%、下限 1ms)。
++- 同時段雜訊(正常版各次之間最大差):冷啟動中位數 5 輪 8.1%、20 輪 4.8%;每幀 CPU 耗時 P90 5 輪 6.8%、20 輪 3.4%。
++- 跨時段:間隔批的平均比連跑批快,每幀 CPU 耗時 P90 4.96→4.22ms(約 15%)、冷啟動 295→285ms(約 3%)。這是兩批均值的差,跟上一條「各次之間最大差」口徑不同;每幀 P90 的跨時段差約是同時段雜訊的 2–4 倍,冷啟動的跨時段差反而比同時段雜訊小(0.4–0.7 倍);跨時段的誤報落在哪幾項指標沒有逐一拆開。拿間隔批當基準、連跑批當現況,現行規則 5 輪時 48 組誤報 5 組、10 輪 3 組、20 輪 0 組;連跑批當基準時都是 0,因為現況剛好比較快。只看幅度那條在跨時段 96 組裡:5 輪 5 組、10 輪 4 組、20 輪 0 組。
++- 容差改成「連跑批同場正常互比最大差 × 1.5、2、3 倍」(20 輪、只看幅度):連跑批同場 0/280(這是訂容差用的資料,不算驗證)、間隔批同場 0/150、跨時段 111/480、97/480、74/480。間隔批沒參與訂容差,所以它的 0/150 是獨立驗證。代價是抓到率:啟動 +20ms 在 1.5 倍時 18/24、2 倍 10/24、3 倍 0/24;「啟動 +50ms 加每列 +2ms」那組的每幀 CPU 耗時 P90 三種倍數都是 24/24(同組的每幀超時 P90 一律 0/24,沒有只注入每列 +2ms 的組別)。
++- 統計檢定:在 2026-10-23 那三份舊結果檔(5 輪滑動)上試算(`mwu-trial-2026-10-23-data.txt`),每列 +8ms 讓每幀 P90 從 4.47 變 8.83ms,每輪各算一個百分位的 Mann-Whitney 在 P90 上仍是 p=0.21(同一次的每幀超時 P50 則是 p=0.0079,看得出差別的指標也有);把 5 輪共兩千多幀合起來算,正常重跑也被判成顯著(p=5e-20),因為同一輪的幀彼此不獨立。本批同場資料上沒有誤報可壓,也沒有因檢定多抓到的。
++- 間隔批變快的原因沒查出:間隔批跑完後查實驗 App 編譯狀態是 `verify/cmdline`(不是背景重新編譯;連跑批沒查過,無對照);候選有兩個都沒證實:溫度(連跑批大多在 33–34°C)、間隔批前剛重開機(背景程式與快取狀態不同)。
++
++## 沒驗的
++
++- 只有一台平板、一個小 App、連續約 8.5 小時;跨時段漂移只觀察到一次(間隔批比連跑批快,中間隔了一次重開機),別天、別台的方向與幅度不知道。
++- 56 組正常互比的配對彼此不獨立,比例只當描述,不是機率。
++
++REVISIT:2026-11-30 照同場比較做完設計後,在同一台平板上隔天再跑一批正常版與注入版,確認同場比較時收窄的容差跨天也不誤報,結果寫回這篇
