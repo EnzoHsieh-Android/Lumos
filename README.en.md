@@ -321,19 +321,21 @@ The step "read the performance recording and find where it gets stuck" follows G
 | L0 | Did it get slower? Does it meet the agreed standard? | Run Google's performance test tool, Macrobenchmark, then `lumos macrobench` compares it with the saved baseline and the human-set standards | Slower than the baseline, or below standard |
 | L1 | Where is it stuck? Busy computing, or waiting on something? | Each test run leaves a millisecond-by-millisecond recording (a Perfetto trace), read with the steps of Google's official skill; it also works out whether the time went to the newer (Compose) or older (XML) way of building screens | The app itself is busy → deeper; it is waiting on another program or a file → stay here and follow who made it wait |
 | L2 | Which function, which line? | simpleperf (Android's performance sampling tool) notes "which code is running right now" every millisecond; the line that shows up most is the culprit; phone settings are restored afterwards | That line creates lots of objects → deeper |
-| L3 | What is using memory, and why is it never freed? | Take memory snapshots and find which variable keeps holding on to it | — |
+| L3 | What is using memory, and why is it never freed? | Perfetto's `heap_profile` shows what allocates heavily, and `java_heap_dump` takes memory snapshots to find which variable keeps holding on to it | — |
+
+**Tools per layer at a glance.** L0 is Google's performance test library Macrobenchmark plus `lumos macrobench` for the verdict; L1 is a recording from Google's system tracing tool Perfetto, read with its query tool `trace_processor` following the official skill; L2 is simpleperf from the Android NDK; L3 is Perfetto's `heap_profile` and `java_heap_dump`.
 
 **Why Google's official skill.** Google maintains the steps for reading performance recordings and updates them with its tools, which is more reliable than writing our own. The skill and every tool are each pinned to a fixed version and re-verified on upgrade, so a result found today still matches when the same record is rerun later.
 
-**Memory: catching "the library offers a release method, the app forgets to call it".** Libraries such as players or maps need release to be called when a screen closes; forgetting keeps the memory in use. The project's own UI test opens and closes the same screen on the phone again and again, Lumos's collection script gathers data alongside, and `lumos macrobench` then judges seven things (each one is judged only if the project's standards file has a line for it):
+**Memory: catching "the library offers a release method, the app forgets to call it".** Libraries such as players or maps need release to be called when a screen closes; forgetting keeps the memory in use. The project's own UI test (the driver command is set in the project's settings; Android's UI Automator is what has been verified, and Maestro is planned next) opens and closes the same screen on the phone again and again, Lumos's collection script gathers data alongside, and `lumos macrobench` then judges seven things (each one is judged only if the project's standards file has a line for it):
 
-- On the C/C++ side, memory nothing uses any more that was never freed.
-- Objects that keep multiplying each time the screen opens.
-- How many of a named object remain after the screen closes.
-- The highest memory use.
-- Whether the app crashed or was killed by the system.
-- Whether Android's built-in StrictMode check caught an unclosed resource, an unregistered listener, or a screen kept alive. This needs both: the project turns StrictMode on in its test build and declares so in its settings; without the declaration it is skipped. Declared but not actually turned on, it receives no violations and is wrongly judged a pass.
-- Whether the screen froze for more than 0.7 seconds.
+- On the C/C++ side, memory nothing uses any more that was never freed (Android's built-in `dumpsys meminfo --unreachable`, scanned once after the warm-up and once after the measured rounds).
+- Objects that keep multiplying each time the screen opens (Perfetto's `java_heap_dump` takes a snapshot after the warm-up and after the measured rounds, and `trace_processor` counts each kind of object; snapshots are taken only after test data only is declared).
+- How many of a named object remain after the screen closes (from the second snapshot above).
+- The highest memory use (Perfetto records the whole open-close run, and `trace_processor` finds the maximum).
+- Whether the app crashed or was killed by the system (Android's built-in `dumpsys activity exit-info` before and after, plus a check that the process did not change).
+- Whether Android's built-in StrictMode check caught an unclosed resource, an unregistered listener, or a screen kept alive (`adb logcat` collects this app's log during the run and keeps only the violation lines). This needs both: the project turns StrictMode on in its test build and declares so in its settings; without the declaration it is skipped. Declared but not actually turned on, it receives no violations and is wrongly judged a pass.
+- Whether the screen froze for more than 0.7 seconds (frame times from the same Perfetto recording).
 
 When one of the first four (the memory ones) fails, it jumps straight to L3: the two middle layers look at where CPU time goes, and memory problems do not show there; the project must first declare test data only, otherwise it stops at L0 and records the gap. A frozen screen goes through L1 as usual; crashes and StrictMode violations are read straight from the collected exit records and log.
 
