@@ -1,0 +1,527 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index 9428fcb06b6983485bd6448b807710d4b25587bf..39e878ec4ec9f51c6834e469121749c421fe3fae 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -18,20 +18,23 @@ summary: |-
+   WHY:建置或安裝失敗、裝置上的 APK 跟建出的不同或中途被換、這次被中斷,記成 unjudged 而不是 fail [出處:2026-10-25 實作] [因:那是環境沒跑成,不是程式本身的結論;紀錄要分得出是程式壞還是環境壞,推送檢查兩種都擋] [不選:一律記 fail(看紀錄的人會以為程式壞了)] [test:t_android_e2e_judge_tool_failure]
+   WHY:裝置鎖放在 ~/.cache/lumos/android-e2e-lock/<序號>、寫程序編號,記的程序已經不在就清掉接手 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 守衛席、邊界席] [因:兩個工作樹會對同一台裝置跑;被 kill -9 或斷電時鎖會留下] [test:t_android_e2e_run_script]
+   WHY:範本腳本把效能排最後,裝置上 APK 的第二次 sha256 在它之前讀 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 正確性席] [因:Macrobenchmark 的 Gradle 指令常會自己裝上、跑完再移除測試用的 App,排前面會讓記憶體那塊沒有 App 可跑]
+   WHY:範本腳本的開跑前檢查呼叫 lumos android-e2e judge --precheck,不自己列簿記檔 [出處:2026-10-25 實作] [因:哪些檔不算改動只該有 lumos 那一份清單,腳本自己列就是第二份、會漂] [test:t_android_e2e_run_script]
+   PITFALL:新範本沒登記進工具組複製清單,lumos update 不會把它裝進消費專案,接入的專案拿不到驗收腳本 [出處:2026-10-25 實驗室接入] [根因:複製清單是手寫的,加新範本時要同時加一行] [修法:登記進清單並補檔頭檢查] [test:t_android_e2e_vendored]
+   WHY:裝置鎖記的程序已經不在就清掉接手,跟 lumos 本體 _excl_lock_try 不自動接手的做法相反 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 架構對齊席] [因:範本腳本是獨立的 Python、拿不到 lumos 的鎖;被 kill -9 或斷電後不接手,每次都要人手動刪鎖] [不選:照本體不自動接手(無人看顧時卡死)] [代價:兩次驗收幾乎同時發現同一把殘鎖時可能兩邊都拿到;照 Lumos 的威脅模型(單人、AI 依序操作)不另外防]
+   WHY:中斷時先對子程序群組送 TERM、等 LUMOS_E2E_STOP_GRACE 秒(預設 60)再 KILL [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [因:收集腳本靠 TERM 才停裝置上的錄製、刪原始日誌,它自己的子程序各自成組只能由它收;toolkit 靠 trap 清鎖與展示模式;一開始就 KILL 這些收尾都不會跑] [不選:直接 KILL(裝置上的錄製一直錄、驅動變孤兒)] [代價:Ctrl-C 之後最久要等 60 秒] [test:t_android_e2e_run_script]
+   PITFALL:關掉終端(HUP)時,中斷路徑上那一行印到錯誤輸出的訊息丟出 EIO 或 EPIPE,例外跳過後面的存檔與 judge,steps.json 沒標中斷、也沒寫紀錄 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [根因:收尾路徑上的 print 沒保護] [修法:收尾與擋下訊息一律走 say(),印不出來就算了] [test:t_android_e2e_run_script]
+   PITFALL:門檻檔裡同一個 check 另有別的情境或別的裝置的條目時,它們落在 threshold_skipped,記憶體這塊永遠判成沒判完 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [根因:判定只看 check 名、沒分這條適不適用這次的結果] [修法:lumos macrobench --stability 對情境或裝置不符的跳過條目標 applies=false,端到端驗收不把它們算進來] [test:t_android_e2e_stab_applies_flag]
+   WHY:JUnit 報告用 test_quality.junit() 讀(安全證據閘同一套),判定用的 JSON 讀檔限深並清孤立代理字元,git 呼叫走 _nodehome_git [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 架構對齊席] [因:自己寫的讀法會漏掉既有讀法擋的情況(帶 DTD、宣告的案例數對不上;孤立代理字元讓寫紀錄時整支崩)] [test:t_android_e2e_judge_ui]
++  PITFALL:改成先 TERM 再等寬限之後,逾時路徑在寬限中又被中斷時,例外從 except 區塊丟出、子程序已從待收清單拿掉,不理 TERM 的子程序變孤兒;領頭程序在寬限內退了也不再補 KILL,同組裡不理 TERM 的成員留著 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:等寬限那一段沒接中斷,KILL 只在寬限到期時送] [修法:寬限中被中斷先補 KILL 再往上丟;寬限結束一律對整組補 KILL] [test:t_android_e2e_run_script]
++  PITFALL:讀紀錄時套了清洗(換行、tab、孤立代理字元換成空白),讀改寫一次就把人寫的放行理由壓扁再寫回 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:同一支讀檔函式同時給只讀的判定輸出與要整份寫回的紀錄用] [修法:紀錄讀回只限深、不清洗] [test:t_android_e2e_judge_dirty_tree]
++  PITFALL:錯誤輸出斷了之後,say() 吞掉例外、但緩衝區還留著字,程式結束清緩衝區時失敗,回傳碼變成 120 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席] [根因:只吞了這一次的例外,沒換掉壞掉的錯誤輸出] [修法:第一次寫不出去就把錯誤輸出換成 /dev/null] [test:t_android_e2e_run_script]
+   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+ ---
+ # android-e2e-acceptance
+ 
+ 白話:Android App 推送前在實機上跑一次端到端驗收的那一套。範本腳本負責碰裝置、把每一步的結果寫成 steps.json;lumos 只讀這些結果判過不過,再寫一份綁在「App 程式與驗收素材內容」上的查證紀錄。設計與條款的單源在 [[Projects/Android端到端驗收_計劃]],這裡只記現在怎麼運作、程式碼看不出來的理由。
+ 
+ ## 怎麼跑
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 68710afdb77764893bd2326a56bf6cdbc69858bc..521caae654c6d6f01a6f68c7976abe793b386500 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40277,21 +40277,22 @@ def _e2e_relpath_err(p, what):
+ def _e2e_norm(p):
+     return p.strip().rstrip("/").removeprefix("./")
+ 
+ 
+ def _e2e_under(path, d):
+     """path 是不是 d 本身或在 d 底下(整段路徑比對:app/src 不含 app/src2)。"""
+     return path == d or path.startswith(d + "/")
+ 
+ 
+ def _e2e_flow_name(p):
+-    """flow 的「名」=相對專案根的路徑去掉副檔名、/ 換成 __(報告檔名用,同名會互蓋所以設定時就擋)。"""
++    """flow 的「名」=相對專案根的路徑去掉副檔名、/ 換成 __(報告檔名用,同名會互蓋所以設定時就擋)。
++    範本腳本 android-e2e-run.sh 的 accept() 裡有同一套規則(它是獨立的 Python、拿不到這支),兩邊要一起改。"""
+     q = _e2e_norm(p)
+     stem, dot, ext = q.rpartition(".")
+     base = stem if dot and "/" not in ext else q
+     return base.replace("/", "__")
+ 
+ 
+ def _e2e_list_err(e2e, key, required):
+     v = e2e.get(key)
+     if v is None and not required:
+         return None
+@@ -40388,31 +40389,28 @@ def _e2e_thresholds_err(cfg, thresholds):
+     scen = cfg["stability"]["scenario"]
+     have = {t["check"] for t in thresholds or [] if "check" in t and t.get("scenario") == scen}
+     miss = [c for c in e2e.get("stability_checks", E2E_STAB_CHECKS) if c not in have]
+     if miss:
+         return (f"e2e 段要求的記憶體 check 在 {E2E_THRESHOLDS} 裡沒有情境 {scen} 的條目:{'、'.join(miss)}"
+                 "(補上門檻條目,或從 stability_checks 拿掉)")
+     return None
+ 
+ 
+ def _e2e_config_at(root, rev):
+-    """那個提交樹裡的 .lumos/macrobench.json → (整份 dict 或 None, 錯誤訊息或 None);檔不在回 (None, None)。"""
+-    import json
+-    raw = _nodehome_git(root, "cat-file", "-p", f"{rev}:.lumos/macrobench.json", timeout=60)
+-    if raw is None:
+-        exists = _nodehome_git(root, "cat-file", "-e", f"{rev}:.lumos/macrobench.json", timeout=60)
+-        return (None, None) if exists is None else (None, f"{rev[:8]} 的 macrobench.json 讀不出來")
+-    try:   # 編碼照 _macrobench_config(UTF-8,不收 BOM):同一個檔兩條讀法容忍度要一樣
+-        d = json.loads(raw.decode("utf-8"))
+-    except Exception as e:
+-        return None, f"{rev[:8]} 的 macrobench.json 不是合格的 JSON:{e}"
+-    return (d, None) if isinstance(d, dict) else (None, f"{rev[:8]} 的 macrobench.json 最外層不是物件")
++    """那個提交樹裡的 .lumos/macrobench.json → (整份 dict 或 None, 錯誤訊息或 None);檔不在回 (None, None)。
++    讀法走既有的 _lumos_config_at_ref(嚴格 UTF-8;先讀、讀不到再分辨「檔不在」與「檔在但讀不懂」)。"""
++    d, st = _lumos_config_at_ref(root, rev, strict=True, rel=".lumos/macrobench.json")
++    if st == "ok":
++        return d, None
++    if st == "missing":
++        return None, None
++    return None, f"{rev[:8]} 的 macrobench.json " + ("讀不懂(不是合格的 UTF-8 JSON 物件)" if st == "unreadable" else "讀不出來(git 失敗或逾時)")
+ 
+ 
+ def _e2e_default_excluded(p):
+     """預設排除:每個模組的 src/test/ 與 src/androidTest/(只改單元測試不用重跑實機)。"""
+     parts = p.split("/")
+     return any(parts[i] == "src" and parts[i + 1] in ("test", "androidTest") for i in range(len(parts) - 2))
+ 
+ 
+ def _e2e_fingerprint(root, rev, e2e):
+     """對提交 rev 的檔案樹與那份 e2e 段算指紋(單源計劃〈查證紀錄〉)→ (指紋, None) / (None, 錯誤訊息)。
+@@ -40465,35 +40463,33 @@ def _e2e_record_err(rec, fp):
+         return "紀錄裡的指紋跟檔名對不上"
+     runs = rec.get("runs")
+     if runs is not None and (not isinstance(runs, dict) or runs.get("result") not in E2E_RESULTS):
+         return "runs.result 不是 pass、fail、unjudged 之一"
+     if not isinstance(rec.get("waivers", []), list) or not isinstance(rec.get("history", []), list):
+         return "waivers 或 history 不是清單"
+     return None
+ 
+ 
+ def _e2e_junit_ok(path):
+-    """Maestro 的 JUnit 報告 → (過不過, 原因)。讀法沿用 test_quality.junit()(安全證據閘同一套:拒收 DTD、
+-    宣告的案例數要對得上、零案例與 suite 層錯誤都不算過);每個案例都 passed 才算這一次過。"""
+-    import xml.etree.ElementTree as _ET
++    """Maestro 的 JUnit 報告 → (過不過, 原因)。讀法走 _secev_junit_facts(安全證據閘同一支:test_quality.junit()、
++    拒收 DTD、宣告的案例數要對得上、零案例與 suite 層錯誤都不算過、案例數有上限);每個案例都 passed 才算這一次過。"""
+     tq = _secev_tq()
+     if tq is None:
+         return False, "測試品質模組(scripts/test_quality.py)讀不到,判不了 JUnit 報告"
+     try:
+-        cases = tq.junit(Path(path).read_bytes())
++        raw = Path(path).read_bytes()
+     except OSError as e:
+         return False, f"報告讀不了:{e}"
+-    except getattr(tq, "JUnitRejected", ()) as e:
+-        return False, {"zero_cases": "報告裡沒有任何測試案例"}.get(e.code, f"報告不合格({e.code})")
+-    except (_ET.ParseError, RecursionError, ValueError) as e:
+-        return False, f"報告讀不了:{type(e).__name__}"
+-    bad = [c for c in cases if c.get("status") != "passed"]
++    facts, why = _secev_junit_facts(raw, tq)
++    if facts is None:
++        return False, {"zero_cases": "報告裡沒有任何測試案例"}.get(why, f"報告不合格({why})")
++    bad = [k for k, (status, _a) in facts.items() if status != "passed"]
+     if bad:
+         return False, f"{len(bad)} 個測試案例沒過"
+     return True, None
+ 
+ 
+ def _e2e_tail(path, n=300):
+     try:
+         return Path(path).read_text(encoding="utf-8", errors="replace").strip()[-n:]
+     except (OSError, TypeError):
+         return ""
+@@ -40544,30 +40540,31 @@ def _e2e_judge_visual(e2e, steps, run_dir):
+         rec = {"screen": v, "result": "fail", "reason": (text.strip().splitlines() or [f"回傳碼 {s.get('rc')}"])[-1][-300:]}
+         if m:
+             rec["match_pct"] = float(m.group(1))
+             diff = Path(run_dir) / "visual" / v / f"{v}_diff.png"
+             if diff.exists():
+                 rec["diff"] = str(diff)
+         out.append(rec)
+     return out
+ 
+ 
+-def _e2e_load_json(path):
+-    """讀範本腳本與 lumos 寫的 JSON:限深與清孤立代理字元照 _macrobench_stab_load(否則印出或寫回紀錄時整支崩)。"""
++def _e2e_load_json(path, scrub=True):
++    """讀範本腳本與 lumos 寫的 JSON:限深與清孤立代理字元照 _macrobench_stab_load(否則印出或寫回紀錄時整支崩)。
++    scrub=False 給要整份寫回的查證紀錄用:只限深、不清洗,人寫的放行理由裡的換行與 tab 要原樣保留。"""
+     import json
+     try:
+         raw = json.loads(Path(path).read_text(encoding="utf-8"))
+     except (OSError, TypeError, ValueError) as e:
+         return None, f"讀不了 {path}:{e}"
+     if not _events_depth_ok(raw, 20):
+         return None, f"{path} 巢狀太深"
+-    return _macrobench_stab_scrub(raw), None
++    return (_macrobench_stab_scrub(raw) if scrub else raw), None
+ 
+ 
+ def _e2e_judge_stability(e2e, steps, notices):
+     """記憶體與穩定性:只看帶 check、而且在 stability_checks 裡的條目;frozen 與沒列的只寫 notices。"""
+     if not e2e.get("stability"):
+         return "未設定"
+     want = list(e2e.get("stability_checks", E2E_STAB_CHECKS))
+     col, jud = _e2e_steps(steps, "stability"), _e2e_steps(steps, "stability_judge")
+     bad = next((s for s in col + jud if s.get("rc") != 0), None)
+     if not col or not jud or bad is not None:
+@@ -40583,21 +40580,21 @@ def _e2e_judge_stability(e2e, steps, notices):
+         skipped = [r for r in res.get("threshold_skipped", []) if r.get("check") == c and r.get("applies") is not False]
+         if fails:
+             out.append({"check": c, "result": "fail", "detail": fails})
+         elif skipped or not passed:
+             why = (skipped[0].get("reason") if skipped else None) or res.get("stability_unjudged") or "這個 check 沒有出現在判定結果裡"
+             out.append({"check": c, "result": "unjudged", "reason": why})
+         else:
+             out.append({"check": c, "result": "pass"})
+     for k in ("threshold_failures", "threshold_skipped"):
+         for r in res.get(k, []):
+-            if r.get("check") and r["check"] not in want:
++            if r.get("check") and r["check"] not in want and r.get("applies") is not False:
+                 notices.append(f"記憶體 {r['check']}({'沒過' if k == 'threshold_failures' else '沒判到'}):只提醒")
+     return out
+ 
+ 
+ def _e2e_judge_macrobench(e2e, steps, notices):
+     """毫秒類效能:第一版只提醒,任何結果都只寫 notices。"""
+     if not e2e.get("macrobench"):
+         return "未設定"
+     st = _e2e_steps(steps, "macrobench_judge") or _e2e_steps(steps, "macrobench")
+     bad = next((s for s in _e2e_steps(steps, "macrobench") + _e2e_steps(steps, "macrobench_judge") if s.get("rc") != 0), None)
+@@ -40663,21 +40660,21 @@ def _e2e_now():
+     return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+ 
+ 
+ def _e2e_record_update(root, fp, mutate):
+     """讀出整份紀錄、交給 mutate 改、整份寫回;包在讀改寫鎖裡(照 lint-waive),寫入用 _write_lf。
+     紀錄讀不懂就不寫(回錯誤訊息),不拿空白紀錄蓋掉它。"""
+     import json
+     p = _e2e_record_path(root, fp)
+     with _vault_write_lock(p):
+         if p.exists():
+-            rec, err = _e2e_load_json(p)
++            rec, err = _e2e_load_json(p, scrub=False)
+             err = err or _e2e_record_err(rec, fp)
+             if err:
+                 return None, f"{p} 讀不懂({err});先看過再決定刪掉或修好,這次不寫"
+         else:
+             rec = {"schema": E2E_SCHEMA, "fingerprint": fp, "runs": None, "history": [], "waivers": []}
+         rec.setdefault("history", [])
+         rec.setdefault("waivers", [])
+         mutate(rec)
+         p.parent.mkdir(parents=True, exist_ok=True)
+         _write_lf(p, json.dumps(rec, ensure_ascii=False, indent=1) + "\n")
+@@ -54698,30 +54695,30 @@ def _arch_targets_config(data, unreadable=False):
+             # **、**/*.php、*.cs 這類:比對時開頭 **/ 會被去掉再試,等於整個 repo 或整個語言——變相的全域開關
+             return [], [f"arch_targets 第 {i} 條的 path 太寬或有控制字元(第一段要是寫死的資料夾名、而且至少兩段)" + tail]
+         if not isinstance(node, str) or _path_special_chars(node) or not (
+                 node == "none" or (node.startswith("Systems/") and len(node) > len("Systems/")
+                                    and not node.endswith(".md") and "\\" not in node)):
+             return [], [f"arch_targets 第 {i} 條的 node 不合法(要是 none 或 Systems/<名>,不帶 .md、不能有控制字元)" + tail]
+         rules.append((nfc(pat), nfc(node)))
+     return rules, []
+ 
+ 
+-def _lumos_config_at_ref(root, ref, strict=False):
++def _lumos_config_at_ref(root, ref, strict=False, rel=".lumos/config.json"):
+     """讀某個版本的 .lumos/config.json → (內容 dict 或 None, 狀態)。狀態:ok / missing(這版沒有這個檔)/
+     unreadable(檔在但讀不懂:壞 JSON、頂層不是物件、strict 時非 UTF-8)/ git-failed(git 跑不起來或逾時)。
+     角色鏡頭與目標架構共用(代碼審 r2 架構對齊席:原本兩處各自內嵌「先讀、再 cat-file 分辨」)。"""
+     # 不嚴格時照舊用三個位置參數呼叫(既有呼叫形狀不變)
+-    cfg = (_json_at_ref(root, ref, ".lumos/config.json", strict=True) if strict
+-           else _json_at_ref(root, ref, ".lumos/config.json"))
++    cfg = (_json_at_ref(root, ref, rel, strict=True) if strict
++           else _json_at_ref(root, ref, rel))
+     if cfg is not None:
+         return cfg, "ok"
+-    there = _lens_git(root, "cat-file", "-e", f"{ref}:.lumos/config.json")
++    there = _lens_git(root, "cat-file", "-e", f"{ref}:{rel}")
+     if there is None:
+         return None, "git-failed"
+     return None, ("unreadable" if there.returncode == 0 else "missing")
+ 
+ 
+ # 讀不到可信版本時要附的固定說明:目標架構與角色鏡頭各一份常數(代碼審 r4 架構對齊席:原本角色那邊拿目標架構的句子做字串替換,措辭一改就靜默失效)
+ _TRUSTED_REF_WHY = {
+     "no-common-ancestor": "起點跟主線沒有共同祖先,這次不讀宣告,宣告範圍內的檔照鄰居審",
+     "git-failed": "算不出起點跟主線的分叉點(git 失敗或逾時),這次不讀宣告,宣告範圍內的檔照鄰居審",
+ }
+diff --git a/scripts/templates/android-e2e-run.sh b/scripts/templates/android-e2e-run.sh
+index afad6045eb22a4e411db283f431d275536653cc7..ee87b3cdcc31fbcfcc607a5f1345cbcbdd44e318 100644
+--- a/scripts/templates/android-e2e-run.sh
++++ b/scripts/templates/android-e2e-run.sh
+@@ -30,21 +30,24 @@ GRACE = float(os.environ.get("LUMOS_E2E_STOP_GRACE", "60"))
+ LOCK_DIR = os.environ.get("LUMOS_E2E_LOCK_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "lumos", "android-e2e-lock")
+ GROUPS = []
+ INTERRUPTS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+ 
+ 
+ def say(msg):
+     """印到錯誤輸出;終端被關(EIO)或管線斷了(EPIPE)時不讓例外打斷收尾。"""
+     try:
+         print(msg, file=sys.stderr, flush=True)
+     except (OSError, ValueError):
+-        pass
++        try:   # 錯誤輸出已經斷了:換成 /dev/null,結束時清緩衝區才不會失敗、回傳碼變 120
++            sys.stderr = open(os.devnull, "w")
++        except OSError:
++            pass
+ 
+ 
+ def die(msg):
+     say(f"擋下:{msg}")
+     sys.exit(2)
+ 
+ 
+ class Terminated(Exception):
+     """收到 SIGTERM、SIGHUP 或 SIGQUIT:轉成例外,讓收尾寫下「中斷」再交給 judge(同收集腳本)。"""
+ 
+@@ -68,29 +71,32 @@ def signal_group(p, sig):
+     try:
+         os.killpg(p.pid, sig)
+     except (OSError, AttributeError):
+         try:
+             p.send_signal(sig)
+         except OSError:
+             pass
+ 
+ 
+ def kill_group(p):
+-    """整組收掉:先送 TERM、等 GRACE 秒讓它自己收尾(收集腳本靠 TERM 停裝置上的錄製、toolkit 靠 trap 清鎖與展示模式),
++    """整組收掉(寬限到了一律補 KILL,同組成員也收):先送 TERM、等 GRACE 秒讓它自己收尾(收集腳本靠 TERM 停裝置上的錄製、toolkit 靠 trap 清鎖與展示模式),
+     還在才 KILL。收集腳本的子程序各自成組,它們得靠收集腳本自己收,所以不能一開始就 KILL。"""
+-    if p.poll() is not None:
+-        return
+-    signal_group(p, signal.SIGTERM)
+-    try:
+-        p.wait(timeout=GRACE)
+-    except subprocess.TimeoutExpired:
+-        signal_group(p, signal.SIGKILL)
++    if p.poll() is None:
++        signal_group(p, signal.SIGTERM)
++        try:
++            p.wait(timeout=GRACE)
++        except subprocess.TimeoutExpired:
++            pass
++        except BaseException:   # 寬限中又被中斷(例如逾時路徑上還沒擋掉訊號):先補 KILL 再往上丟,不留孤兒
++            signal_group(p, signal.SIGKILL)
++            raise
++    signal_group(p, signal.SIGKILL)   # 領頭已經退了也補一次:同組裡不理 TERM 的成員要靠這一下收掉
+ 
+ 
+ def run(cmd, timeout=T_SHORT, out=None, err=None, **kw):
+     """回 (回傳碼, 標準輸出, 標準錯誤);out/err 給了檔案路徑就寫進檔(回傳的字串是空的)。
+     逾時或執行不了回 (None, '', 原因)。每個子程序自成一個程序群組,逾時或被中斷時整組殺掉。"""
+     fo = open(out, "w", encoding="utf-8") if out else subprocess.PIPE
+     fe = open(err, "w", encoding="utf-8") if err else subprocess.PIPE
+     try:
+         try:
+             p = subprocess.Popen(cmd, stdout=fo, stderr=fe, text=True, errors="replace", start_new_session=True, **kw)
+@@ -349,20 +355,21 @@ def accept(cfg, serial, st):
+     apk = os.path.join(root, e2e["apk"])
+     st.data["apk"]["built_sha256"] = sha256_file(apk) if os.path.isfile(apk) else None
+     st.step("install", [ADB, "-s", serial, "install", "-r", apk], timeout=T_SHORT * 5)
+     st.data["apk"]["installed_sha256_before"] = installed_sha(serial, pkg)
+     dev = st.data["device"]
+     dev["model"] = adb(serial, "shell", "getprop ro.product.model")[1].strip()
+     dev["release"] = adb(serial, "shell", "getprop ro.build.version.release")[1].strip()
+     st.save()
+     os.makedirs(os.path.join(rd, "ui"), exist_ok=True)
+     for f in e2e["flows"]:
++        # flow 的「名」:跟 lumos 的 _e2e_flow_name 同一套規則(相對路徑去副檔名、/ 換 __);兩邊要一起改
+         name = re.sub(r"\.[^./]*$", "", f.strip().rstrip("/").removeprefix("./")).replace("/", "__")
+         for attempt in (1, 2):
+             rep = os.path.join(rd, "ui", f"{name}.try{attempt}.xml")
+             rc = st.step("ui", [MAESTRO, "--udid", serial, "test", "--format", "junit", "--output", rep, f],
+                          name=name, attempt=attempt, report=rep)
+             if rc == 0:
+                 break
+     th = threshold_arg(e2e.get("visual_threshold", 99.5))
+     for v in e2e.get("visual") or []:
+         evid = os.path.join(rd, "visual", v)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index faf8bdcd90e778296c1c81a600c4b0eaf6cf7947..173dc13d870644c46bb1c4bfbb64cae143b545f4 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -18779,20 +18779,22 @@ def t_android_e2e_judge_perf_memory():
+              ("有一條沒過", res(threshold_failures=[P], threshold_passed=[G]), 0, mb_ok, "fail", {"exits": "fail"}),
+              ("有一條跳過", res(threshold_skipped=[dict(G, reason="換了裝置")], threshold_passed=[P]), 0, mb_ok, "unjudged",
+               {"java_growth": "unjudged"}),
+              ("有一條沒出現", res(threshold_passed=[P]), 0, mb_ok, "unjudged", {"java_growth": "unjudged"}),
+              ("frozen 沒過只提醒", res(threshold_passed=[P, G], threshold_failures=[F]), 0, mb_ok, "pass", {}),
+              ("判定回非 0", res(), 2, mb_ok, "unjudged", {"exits": "unjudged"}),
+              ("別的情境、別的裝置的條目不算", res(threshold_passed=[P, G], threshold_skipped=[
+                  dict(P, scenario="pkg.Other#x", applies=False, reason="結果檔是情境 pkg.Leak#cycle,不是這條的 pkg.Other#x"),
+                  dict(G, applies=False, reason="換了裝置:門檻指定 Pixel,這次是 SM-X710")]), 0, mb_ok, "pass",
+               {"exits": "pass", "java_growth": "pass"}),
++             ("別的情境的 frozen 不寫成沒判到", res(threshold_passed=[P, G], threshold_skipped=[
++                 dict(F, scenario="pkg.Other#x", applies=False, reason="結果檔是情境 pkg.Leak#cycle,不是這條的 pkg.Other#x")]), 0, mb_ok, "pass", {}),
+              ("判定輸出帶孤立代理字元", res(threshold_passed=[P], threshold_skipped=[dict(G, reason="壞\\ud800字")]).replace("\\\\ud800", "\\ud800"),
+               0, mb_ok, "unjudged", {"java_growth": "unjudged"}),
+              ("效能沒跑成", res(threshold_passed=[P, G]), 0, None, "pass", {})]
+     for desc, sj, sj_rc, mb, want, checks in cases:
+         with tempfile.TemporaryDirectory() as td:
+             root = _e2e_proj(td, e2e, {"stability": stab, "results_dirs": ["r"]}, thr)
+             steps = [{"block": "stability", "rc": 0}, {"block": "stability_judge", "rc": sj_rc, "stdout": "s.json", "stderr": "s.err"},
+                      {"block": "macrobench", "rc": 0 if mb else 1, "stderr": "m.err"}]
+             files = {"s.json": sj, "s.err": "", "m.err": ""}
+             if mb:
+@@ -18804,20 +18806,22 @@ def t_android_e2e_judge_perf_memory():
+             runs = rec["runs"]
+             check("e2e:runs['result'] == want", runs["result"] == want, str((desc, runs)))
+             got = {x["check"]: x["result"] for x in runs["blocks"]["stability"]}
+             check("記憶體塊只列要求的 check(frozen 不算進來)", set(got) == {"exits", "java_growth"}, str((desc, got)))
+             for c, w in checks.items():
+                 check("e2e:got[c] == w", got[c] == w, str((desc, got)))
+             if mb:
+                 check("e2e:any('退步' in n for n in runs['notices']) and runs['blocks']['macrobench", any("退步" in n for n in runs["notices"]) and runs["blocks"]["macrobench"] == "只提醒", str((desc, runs)))
+             else:
+                 check("e2e:any('效能這塊沒跑成' in n for n in runs['notices'])", any("效能這塊沒跑成" in n for n in runs["notices"]), str((desc, runs)))
++            if desc == "別的情境的 frozen 不寫成沒判到":
++                check("不適用這次的條目不寫進提醒", not any("frozen" in n for n in runs["notices"]), str(runs["notices"]))
+             if desc.startswith("frozen"):
+                 check("e2e:any('frozen' in n for n in runs['notices'])", any("frozen" in n for n in runs["notices"]), str(runs))
+ 
+ 
+ def t_android_e2e_stab_applies_flag():
+     """lumos macrobench --stability 對別的情境、別的裝置的門檻條目標 applies=False;同情境同裝置只是缺資料的照舊沒標。
+     端到端驗收靠這一欄分辨「不適用這次」與「這次沒判到」。"""
+     m = _load_lumos_inproc()
+     stab = {"scenario": "pkg.Leak#cycle", "device_model": "SM-X710"}
+     thr = [_ms_thr("exits", scenario="pkg.Other#x"), _ms_thr("exits", device_model="Pixel"), _ms_thr("exits")]
+@@ -18869,20 +18873,30 @@ def t_android_e2e_judge_dirty_tree():
+             ("驗收中途提交了新程式", lambda root, rd: ((root / "app/src/main/A.kt").write_text("y\n"),
+                                                       _e2e_tgit(root, "commit", "-qam", "mid")), "開跑時"),
+             ("steps.json 是新格式", lambda root, rd: (rd / "steps.json").write_text(
+                 json.dumps(dict(json.loads((rd / "steps.json").read_text()), schema=2))), "schema")]
+     for desc, mut, word in muts:
+         with tempfile.TemporaryDirectory() as td:
+             root, rd = mk(td)
+             mut(root, rd)
+             r, rec = _e2e_judge(root, rd)
+             check("e2e:r.returncode == 2 and word in r.stderr and no_record(root)", r.returncode == 2 and word in r.stderr and no_record(root), str((desc, r.returncode, r.stderr)))
++    with tempfile.TemporaryDirectory() as td:   # 紀錄裡人寫的放行理由,下一次 judge 讀改寫時原樣保留(不清洗換行與 tab)
++        root, rd = mk(td)
++        _e2e_judge(root, rd)
++        recp = sorted((root / ".lumos" / "e2e-records").glob("*.json"))[0]
++        rec = json.loads(recp.read_text())
++        rec["waivers"] = [{"by": "human", "reason": "第一行\n第二行\ttab"}]
++        recp.write_text(json.dumps(rec, ensure_ascii=False))
++        rd2 = _e2e_steps(root, _E2E_BASE_STEPS + ok_ui, run_id="r3", files=ok_files)
++        r, rec = _e2e_judge(root, rd2)
++        check("放行理由跨兩次判定原樣保留", r.returncode == 0 and rec["waivers"][0]["reason"] == "第一行\n第二行\ttab", str(rec and rec["waivers"]))
+     with tempfile.TemporaryDirectory() as td:   # 簿記檔(之前寫的紀錄)沒提交不算髒
+         root, rd = mk(td)
+         check("e2e:_e2e_judge(root, rd)[0].returncode == 0", _e2e_judge(root, rd)[0].returncode == 0)
+         rd2 = _e2e_steps(root, _E2E_BASE_STEPS + ok_ui, run_id="r2", files=ok_files)
+         r, rec = _e2e_judge(root, rd2)
+         check("e2e:r.returncode == 0 and len(rec['history']) == 2", r.returncode == 0 and len(rec["history"]) == 2, str(r.stderr))
+ 
+ 
+ def t_macrobench_results_dir():
+     """S15:--results-dir 只讀那個目錄(不讀 results_dirs 裡的舊結果),基準照舊用專案的;設定沒有 results_dirs 也照跑。"""
+@@ -18943,20 +18957,28 @@ if a[:1] == ["shell"]:
+     sys.exit(0)
+ sys.exit(0)
+ """
+ 
+ _E2E_FAKE_MAESTRO = r"""#!/usr/bin/env python3
+ import os, sys, time
+ d = os.environ["FAKE_DIR"]
+ a = sys.argv[1:]
+ open(os.path.join(d, "maestro.log"), "a").write(" ".join(a) + "\n")
+ rep, flow = a[a.index("--output") + 1], a[-1]
++if os.path.exists(os.path.join(d, "maestro_ignore_term")):   # 自己不理 TERM:驗寬限到期或寬限中再被中斷時要補 KILL
++    import signal
++    signal.signal(signal.SIGTERM, signal.SIG_IGN)
++    open(os.path.join(d, "maestro_pid"), "w").write(str(os.getpid()))
++if os.path.exists(os.path.join(d, "maestro_child_ignore")):   # 開一個不理 TERM 的同組子程序:驗整組都要收掉
++    import subprocess
++    c = subprocess.Popen([sys.executable, "-c", "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)"])
++    open(os.path.join(d, "maestro_child"), "w").write(str(c.pid))
+ if os.path.exists(os.path.join(d, "maestro_trap")):
+     import signal
+     def _bye(*_):
+         open(os.path.join(d, "maestro_cleaned"), "w").write("1")
+         sys.exit(143)
+     signal.signal(signal.SIGTERM, _bye)
+ if os.path.exists(os.path.join(d, "maestro_sleep")):
+     open(os.path.join(d, "maestro_started"), "w").write("1")
+     time.sleep(30)
+ seq_p = os.path.join(d, "rcs")
+@@ -19092,20 +19114,68 @@ def t_android_e2e_run_script():
+             _t.sleep(0.1)
+         check("現場成立:flow 有開跑(HUP 情境)", (fake / "maestro_started").exists())
+         p.stderr.close()
+         p.send_signal(signal.SIGHUP)
+         p.wait(timeout=60)
+         sj = root / ".lumos/artifacts/android/run-hup/steps.json"
+         steps = json.loads(sj.read_text()) if sj.exists() else {}
+         check("錯誤輸出寫不出去時照樣在 steps.json 記下中斷", steps.get("interrupted") is True and bool(steps.get("ended")), str(steps)[:300])
+         rec = rec_of(root)
+         check("錯誤輸出寫不出去時照樣交給 judge 寫紀錄", bool(rec) and rec["history"][-1]["run_id"] == "run-hup", str(rec)[:300])
++        check("錯誤輸出寫不出去時回傳碼照樣是 2(不是結束時寫錯誤輸出失敗的 120)", p.returncode == 2, str(p.returncode))
++
++    def _alive(pid):
++        try:
++            os.kill(pid, 0)
++            return True
++        except OSError:
++            return False
++
++    def _reap(pid):
++        if _alive(pid):
++            os.kill(pid, signal.SIGKILL)
++    for desc, flag, pidf, extra in (("逾時後寬限中又被中斷,不理 TERM 的子程序照樣收掉", "maestro_ignore_term", "maestro_pid",
++                                     {"LUMOS_E2E_LONG_TIMEOUT": "2", "LUMOS_E2E_STOP_GRACE": "20"}),
++                                    ("同組裡不理 TERM 的成員也收掉", "maestro_child_ignore", "maestro_child", {})):
++        with tempfile.TemporaryDirectory() as td:
++            root, fake, env, script = _e2e_script_env(td)
++            (fake / "maestro_sleep").write_text("1")
++            (fake / flag).write_text("1")
++            p = sp.Popen(["sh", str(script), "run-kill"], cwd=root, env=dict(env, **extra), stdout=sp.DEVNULL, stderr=sp.DEVNULL)
++            deadline = _t.monotonic() + 60
++            while not ((fake / "maestro_started").exists() and (fake / pidf).exists()) and _t.monotonic() < deadline:
++                _t.sleep(0.1)
++            pid = int((fake / pidf).read_text()) if (fake / pidf).exists() else 0
++            check(f"現場成立:{desc}(子程序有起來)", pid > 0 and _alive(pid))
++            if extra:
++                _t.sleep(3.5)   # 過了 2 秒逾時、進入 20 秒寬限
++            p.send_signal(signal.SIGTERM)
++            p.wait(timeout=90)
++            _t.sleep(0.5)
++            gone = pid > 0 and not _alive(pid)
++            if pid > 0:
++                _reap(pid)
++            check(desc, gone, f"pid {pid}")
++    with tempfile.TemporaryDirectory() as td:   # flow 寫成巢狀路徑、前面帶 ./:範本與 judge 算出的「名」要一樣
++        root, fake, env, script = _e2e_script_env(td)
++        (root / ".maestro/sub").mkdir()
++        (root / ".maestro/sub/a.yml").write_text("appId: com.lab\n---\n- launchApp\n")
++        cfgp = root / ".lumos/macrobench.json"
++        cfg = json.loads(cfgp.read_text())
++        cfg["e2e"]["flows"] = [".maestro/sub/a.yml", "./.maestro/login.yaml"]
++        cfgp.write_text(json.dumps(cfg))
++        _e2e_tgit(root, "add", "-A")
++        _e2e_tgit(root, "commit", "-qm", "flows")
++        r = _e2e_script(root, script, env, "run-names")
++        ui = (rec_of(root) or {}).get("runs", {}).get("blocks", {}).get("ui", [])
++        check("巢狀路徑與 ./ 開頭的 flow,judge 都認得範本寫的報告", r.returncode == 0 and [x["result"] for x in ui] == ["pass", "pass"],
++              str((r.returncode, ui, r.stderr[-300:])))
+ 
+ 
+ _MS_FAKE_ADB = r"""#!/usr/bin/env python3
+ import os, sys, time
+ d = os.environ["FAKE_DIR"]
+ def nxt(name):
+     # 依序回 name.0、name.1…;沒有下一份就一直回最後一份
+     c = os.path.join(d, name + ".count")
+     i = int(open(c).read()) if os.path.exists(c) else 0
+     open(c, "w").write(str(i + 1))
