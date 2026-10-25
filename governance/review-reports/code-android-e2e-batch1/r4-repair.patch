@@ -1,0 +1,208 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index 39e878ec4ec9f51c6834e469121749c421fe3fae..0576fadead6709f9334aaddda121ff2abc4c6deb 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -19,20 +19,21 @@ summary: |-
+   WHY:裝置鎖放在 ~/.cache/lumos/android-e2e-lock/<序號>、寫程序編號,記的程序已經不在就清掉接手 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 守衛席、邊界席] [因:兩個工作樹會對同一台裝置跑;被 kill -9 或斷電時鎖會留下] [test:t_android_e2e_run_script]
+   WHY:範本腳本把效能排最後,裝置上 APK 的第二次 sha256 在它之前讀 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 正確性席] [因:Macrobenchmark 的 Gradle 指令常會自己裝上、跑完再移除測試用的 App,排前面會讓記憶體那塊沒有 App 可跑]
+   WHY:範本腳本的開跑前檢查呼叫 lumos android-e2e judge --precheck,不自己列簿記檔 [出處:2026-10-25 實作] [因:哪些檔不算改動只該有 lumos 那一份清單,腳本自己列就是第二份、會漂] [test:t_android_e2e_run_script]
+   PITFALL:新範本沒登記進工具組複製清單,lumos update 不會把它裝進消費專案,接入的專案拿不到驗收腳本 [出處:2026-10-25 實驗室接入] [根因:複製清單是手寫的,加新範本時要同時加一行] [修法:登記進清單並補檔頭檢查] [test:t_android_e2e_vendored]
+   WHY:裝置鎖記的程序已經不在就清掉接手,跟 lumos 本體 _excl_lock_try 不自動接手的做法相反 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 架構對齊席] [因:範本腳本是獨立的 Python、拿不到 lumos 的鎖;被 kill -9 或斷電後不接手,每次都要人手動刪鎖] [不選:照本體不自動接手(無人看顧時卡死)] [代價:兩次驗收幾乎同時發現同一把殘鎖時可能兩邊都拿到;照 Lumos 的威脅模型(單人、AI 依序操作)不另外防]
+   WHY:中斷時先對子程序群組送 TERM、等 LUMOS_E2E_STOP_GRACE 秒(預設 60)再 KILL [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [因:收集腳本靠 TERM 才停裝置上的錄製、刪原始日誌,它自己的子程序各自成組只能由它收;toolkit 靠 trap 清鎖與展示模式;一開始就 KILL 這些收尾都不會跑] [不選:直接 KILL(裝置上的錄製一直錄、驅動變孤兒)] [代價:Ctrl-C 之後最久要等 60 秒] [test:t_android_e2e_run_script]
+   PITFALL:關掉終端(HUP)時,中斷路徑上那一行印到錯誤輸出的訊息丟出 EIO 或 EPIPE,例外跳過後面的存檔與 judge,steps.json 沒標中斷、也沒寫紀錄 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [根因:收尾路徑上的 print 沒保護] [修法:收尾與擋下訊息一律走 say(),印不出來就算了] [test:t_android_e2e_run_script]
+   PITFALL:門檻檔裡同一個 check 另有別的情境或別的裝置的條目時,它們落在 threshold_skipped,記憶體這塊永遠判成沒判完 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [根因:判定只看 check 名、沒分這條適不適用這次的結果] [修法:lumos macrobench --stability 對情境或裝置不符的跳過條目標 applies=false,端到端驗收不把它們算進來] [test:t_android_e2e_stab_applies_flag]
+   WHY:JUnit 報告用 test_quality.junit() 讀(安全證據閘同一套),判定用的 JSON 讀檔限深並清孤立代理字元,git 呼叫走 _nodehome_git [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 架構對齊席] [因:自己寫的讀法會漏掉既有讀法擋的情況(帶 DTD、宣告的案例數對不上;孤立代理字元讓寫紀錄時整支崩)] [test:t_android_e2e_judge_ui]
+   PITFALL:改成先 TERM 再等寬限之後,逾時路徑在寬限中又被中斷時,例外從 except 區塊丟出、子程序已從待收清單拿掉,不理 TERM 的子程序變孤兒;領頭程序在寬限內退了也不再補 KILL,同組裡不理 TERM 的成員留著 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:等寬限那一段沒接中斷,KILL 只在寬限到期時送] [修法:寬限中被中斷先補 KILL 再往上丟;寬限結束一律對整組補 KILL] [test:t_android_e2e_run_script]
++  PITFALL:紀錄讀回改成完全不清洗之後,紀錄裡要是有孤立代理字元(手改或舊版寫的),寫回時編碼失敗、judge 整支崩,回傳碼 1 看起來像「寫了紀錄但沒過」 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r3 單審席(上一輪修補帶進來的)] [根因:為了保住換行與 tab 把清洗整個關掉,孤立代理字元那一類又放回來] [修法:紀錄讀回只把孤立代理字元換成 U+FFFD,其他照原樣] [test:t_android_e2e_judge_dirty_tree]
+   PITFALL:讀紀錄時套了清洗(換行、tab、孤立代理字元換成空白),讀改寫一次就把人寫的放行理由壓扁再寫回 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:同一支讀檔函式同時給只讀的判定輸出與要整份寫回的紀錄用] [修法:紀錄讀回只限深、不清洗] [test:t_android_e2e_judge_dirty_tree]
+   PITFALL:錯誤輸出斷了之後,say() 吞掉例外、但緩衝區還留著字,程式結束清緩衝區時失敗,回傳碼變成 120 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席] [根因:只吞了這一次的例外,沒換掉壞掉的錯誤輸出] [修法:第一次寫不出去就把錯誤輸出換成 /dev/null] [test:t_android_e2e_run_script]
+   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+ ---
+ # android-e2e-acceptance
+ 
+ 白話:Android App 推送前在實機上跑一次端到端驗收的那一套。範本腳本負責碰裝置、把每一步的結果寫成 steps.json;lumos 只讀這些結果判過不過,再寫一份綁在「App 程式與驗收素材內容」上的查證紀錄。設計與條款的單源在 [[Projects/Android端到端驗收_計劃]],這裡只記現在怎麼運作、程式碼看不出來的理由。
+ 
+diff --git a/scripts/lumos b/scripts/lumos
+index 521caae654c6d6f01a6f68c7976abe793b386500..aab463024d9a5788d2bc8c36d3469e942d09b0e8 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40390,21 +40390,23 @@ def _e2e_thresholds_err(cfg, thresholds):
+     have = {t["check"] for t in thresholds or [] if "check" in t and t.get("scenario") == scen}
+     miss = [c for c in e2e.get("stability_checks", E2E_STAB_CHECKS) if c not in have]
+     if miss:
+         return (f"e2e 段要求的記憶體 check 在 {E2E_THRESHOLDS} 裡沒有情境 {scen} 的條目:{'、'.join(miss)}"
+                 "(補上門檻條目,或從 stability_checks 拿掉)")
+     return None
+ 
+ 
+ def _e2e_config_at(root, rev):
+     """那個提交樹裡的 .lumos/macrobench.json → (整份 dict 或 None, 錯誤訊息或 None);檔不在回 (None, None)。
+-    讀法走既有的 _lumos_config_at_ref(嚴格 UTF-8;先讀、讀不到再分辨「檔不在」與「檔在但讀不懂」)。"""
++    讀法走既有的 _lumos_config_at_ref(嚴格 UTF-8;先讀、讀不到再分辨「檔不在」與「檔在但讀不懂」)。
++    它容許開頭的 BOM,_macrobench_config 讀工作目錄那份不容許:帶 BOM 的設定在 macrobench --check-config 就擋下,
++    範本腳本開跑前一定先過那一道,所以走不到這裡;推送檢查那一道(下一批)要自己再擋一次。"""
+     d, st = _lumos_config_at_ref(root, rev, strict=True, rel=".lumos/macrobench.json")
+     if st == "ok":
+         return d, None
+     if st == "missing":
+         return None, None
+     return None, f"{rev[:8]} 的 macrobench.json " + ("讀不懂(不是合格的 UTF-8 JSON 物件)" if st == "unreadable" else "讀不出來(git 失敗或逾時)")
+ 
+ 
+ def _e2e_default_excluded(p):
+     """預設排除:每個模組的 src/test/ 與 src/androidTest/(只改單元測試不用重跑實機)。"""
+@@ -40542,29 +40544,41 @@ def _e2e_judge_visual(e2e, steps, run_dir):
+             rec["match_pct"] = float(m.group(1))
+             diff = Path(run_dir) / "visual" / v / f"{v}_diff.png"
+             if diff.exists():
+                 rec["diff"] = str(diff)
+         out.append(rec)
+     return out
+ 
+ 
+ def _e2e_load_json(path, scrub=True):
+     """讀範本腳本與 lumos 寫的 JSON:限深與清孤立代理字元照 _macrobench_stab_load(否則印出或寫回紀錄時整支崩)。
+-    scrub=False 給要整份寫回的查證紀錄用:只限深、不清洗,人寫的放行理由裡的換行與 tab 要原樣保留。"""
++    scrub=False 給要整份寫回的查證紀錄用:只限深、只把孤立代理字元換成替代字元(不然寫回時編碼失敗、整支崩),
++    其他照原樣——人寫的放行理由裡的換行與 tab 要保留。"""
+     import json
+     try:
+         raw = json.loads(Path(path).read_text(encoding="utf-8"))
+     except (OSError, TypeError, ValueError) as e:
+         return None, f"讀不了 {path}:{e}"
+     if not _events_depth_ok(raw, 20):
+         return None, f"{path} 巢狀太深"
+-    return (_macrobench_stab_scrub(raw) if scrub else raw), None
++    return (_macrobench_stab_scrub(raw) if scrub else _e2e_fix_surrogates(raw)), None
++
++
++def _e2e_fix_surrogates(v):
++    """遞迴把字串裡的孤立代理字元換成 U+FFFD,其他字元不動(呼叫前已限深)。"""
++    if isinstance(v, str):
++        return re.sub("[\ud800-\udfff]", "\ufffd", v)
++    if isinstance(v, list):
++        return [_e2e_fix_surrogates(x) for x in v]
++    if isinstance(v, dict):
++        return {_e2e_fix_surrogates(k): _e2e_fix_surrogates(x) for k, x in v.items()}
++    return v
+ 
+ 
+ def _e2e_judge_stability(e2e, steps, notices):
+     """記憶體與穩定性:只看帶 check、而且在 stability_checks 裡的條目;frozen 與沒列的只寫 notices。"""
+     if not e2e.get("stability"):
+         return "未設定"
+     want = list(e2e.get("stability_checks", E2E_STAB_CHECKS))
+     col, jud = _e2e_steps(steps, "stability"), _e2e_steps(steps, "stability_judge")
+     bad = next((s for s in col + jud if s.get("rc") != 0), None)
+     if not col or not jud or bad is not None:
+@@ -54696,21 +54710,21 @@ def _arch_targets_config(data, unreadable=False):
+             return [], [f"arch_targets 第 {i} 條的 path 太寬或有控制字元(第一段要是寫死的資料夾名、而且至少兩段)" + tail]
+         if not isinstance(node, str) or _path_special_chars(node) or not (
+                 node == "none" or (node.startswith("Systems/") and len(node) > len("Systems/")
+                                    and not node.endswith(".md") and "\\" not in node)):
+             return [], [f"arch_targets 第 {i} 條的 node 不合法(要是 none 或 Systems/<名>,不帶 .md、不能有控制字元)" + tail]
+         rules.append((nfc(pat), nfc(node)))
+     return rules, []
+ 
+ 
+ def _lumos_config_at_ref(root, ref, strict=False, rel=".lumos/config.json"):
+-    """讀某個版本的 .lumos/config.json → (內容 dict 或 None, 狀態)。狀態:ok / missing(這版沒有這個檔)/
++    """讀某個版本的 rel(預設 .lumos/config.json)→ (內容 dict 或 None, 狀態)。狀態:ok / missing(這版沒有這個檔)/
+     unreadable(檔在但讀不懂:壞 JSON、頂層不是物件、strict 時非 UTF-8)/ git-failed(git 跑不起來或逾時)。
+     角色鏡頭與目標架構共用(代碼審 r2 架構對齊席:原本兩處各自內嵌「先讀、再 cat-file 分辨」)。"""
+     # 不嚴格時照舊用三個位置參數呼叫(既有呼叫形狀不變)
+     cfg = (_json_at_ref(root, ref, rel, strict=True) if strict
+            else _json_at_ref(root, ref, rel))
+     if cfg is not None:
+         return cfg, "ok"
+     there = _lens_git(root, "cat-file", "-e", f"{ref}:{rel}")
+     if there is None:
+         return None, "git-failed"
+diff --git a/scripts/templates/android-e2e-run.sh b/scripts/templates/android-e2e-run.sh
+index ee87b3cdcc31fbcfcc607a5f1345cbcbdd44e318..47359bbba95278ad98ad7720b4448ab39e48ff96 100644
+--- a/scripts/templates/android-e2e-run.sh
++++ b/scripts/templates/android-e2e-run.sh
+@@ -2,21 +2,21 @@
+ # SPDX-FileCopyrightText: 2026 Enzo Hsieh
+ # SPDX-License-Identifier: MIT
+ # lumos Android 端到端驗收:在主機端依序建 APK、裝上、跑 Maestro flow、截圖比對、記憶體與穩定性、效能,
+ # 每一步寫進 .lumos/artifacts/android/<run-id>/steps.json,最後交給 lumos android-e2e judge 判與寫查證紀錄。
+ # 不判過不過(判定在 lumos)。單一來源在工具鏈 scripts/templates/,消費專案照抄;規則單源 Projects/Android端到端驗收_計劃。
+ # 用法:在專案根目錄跑 sh scripts/templates/android-e2e-run.sh [--preflight] [run-id]
+ #   --preflight:只做開跑前檢查(工作目錄、裝置、工具、產物目錄有沒有被忽略、裝置鎖),不碰 App
+ # 外部工具:ADB(預設 adb)、MAESTRO(預設 maestro);設定在 .lumos/macrobench.json 的 e2e 段
+ # 測試縮短與替換用:LUMOS_E2E_LONG_TIMEOUT(建置、flow、收集與效能的上限,預設 3600 秒)、
+ #   LUMOS_E2E_LOCK_DIR(裝置鎖的目錄,預設 ~/.cache/lumos/android-e2e-lock)、
+-#   LUMOS_E2E_STOP_GRACE(中斷時先送 TERM、等子程序自己收尾的秒數,等完還在才 KILL,預設 60 秒;收集腳本在裝置沒回應時收尾可能要好幾分鐘)
++#   LUMOS_E2E_STOP_GRACE(中斷時先送 TERM、等子程序自己收尾的秒數,寬限結束後一律對整組補 KILL,預設 60 秒;收集腳本在裝置沒回應時收尾可能要好幾分鐘)
+ # 回傳碼:跟 lumos android-e2e judge 一樣(0 寫了紀錄且通過、1 寫了紀錄但沒通過、2 沒寫);開跑前檢查沒過回 2 並印「擋下:」
+ set -eu
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || { echo "擋下:驗收腳本要 python3 3.11 以上(用了 -P)" >&2; exit 2; }
+ # -P 與拿掉 PYTHONPATH 的理由同收集腳本 android-stability-collect.sh
+ exec env -u PYTHONPATH PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -P - "$HERE" "$(pwd)" "$@" <<'PY'
+ import glob, hashlib, json, os, re, shutil, signal, subprocess, sys, time
+ here, root = sys.argv[1], sys.argv[2]
+ argv = sys.argv[3:]
+ PREFLIGHT = "--preflight" in argv
+@@ -71,22 +71,23 @@ def signal_group(p, sig):
+     try:
+         os.killpg(p.pid, sig)
+     except (OSError, AttributeError):
+         try:
+             p.send_signal(sig)
+         except OSError:
+             pass
+ 
+ 
+ def kill_group(p):
+-    """整組收掉(寬限到了一律補 KILL,同組成員也收):先送 TERM、等 GRACE 秒讓它自己收尾(收集腳本靠 TERM 停裝置上的錄製、toolkit 靠 trap 清鎖與展示模式),
+-    還在才 KILL。收集腳本的子程序各自成組,它們得靠收集腳本自己收,所以不能一開始就 KILL。"""
++    """整組收掉:先送 TERM、等最多 GRACE 秒讓它自己收尾(收集腳本靠 TERM 停裝置上的錄製、toolkit 靠 trap 清鎖與展示模式),
++    寬限結束(或領頭先退了)一律對整組補 KILL,同組裡不理 TERM 的成員也收掉。收集腳本的子程序各自成組,
++    它們得靠收集腳本自己收,所以不能一開始就 KILL。"""
+     if p.poll() is None:
+         signal_group(p, signal.SIGTERM)
+         try:
+             p.wait(timeout=GRACE)
+         except subprocess.TimeoutExpired:
+             pass
+         except BaseException:   # 寬限中又被中斷(例如逾時路徑上還沒擋掉訊號):先補 KILL 再往上丟,不留孤兒
+             signal_group(p, signal.SIGKILL)
+             raise
+     signal_group(p, signal.SIGKILL)   # 領頭已經退了也補一次:同組裡不理 TERM 的成員要靠這一下收掉
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 173dc13d870644c46bb1c4bfbb64cae143b545f4..703c7bb3cb476b3821843ddaa97cf81b648ea601 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -18883,20 +18883,28 @@ def t_android_e2e_judge_dirty_tree():
+     with tempfile.TemporaryDirectory() as td:   # 紀錄裡人寫的放行理由,下一次 judge 讀改寫時原樣保留(不清洗換行與 tab)
+         root, rd = mk(td)
+         _e2e_judge(root, rd)
+         recp = sorted((root / ".lumos" / "e2e-records").glob("*.json"))[0]
+         rec = json.loads(recp.read_text())
+         rec["waivers"] = [{"by": "human", "reason": "第一行\n第二行\ttab"}]
+         recp.write_text(json.dumps(rec, ensure_ascii=False))
+         rd2 = _e2e_steps(root, _E2E_BASE_STEPS + ok_ui, run_id="r3", files=ok_files)
+         r, rec = _e2e_judge(root, rd2)
+         check("放行理由跨兩次判定原樣保留", r.returncode == 0 and rec["waivers"][0]["reason"] == "第一行\n第二行\ttab", str(rec and rec["waivers"]))
++        rec["waivers"].append({"by": "human", "reason": "壞字"})
++        recp.write_text(json.dumps(rec, ensure_ascii=False).replace("壞字", "壞\\ud800字"))   # 紀錄裡有孤立代理字元(手改或舊版寫的)
++        rd3 = _e2e_steps(root, _E2E_BASE_STEPS + ok_ui, run_id="r4", files=ok_files)
++        r, rec = _e2e_judge(root, rd3)
++        check("紀錄裡有孤立代理字元時 judge 照樣寫回、不崩,其他放行理由原樣",
++              r.returncode == 0 and bool(rec) and rec["history"][-1]["run_id"] == "r4"
++              and rec["waivers"][0]["reason"] == "第一行\n第二行\ttab" and rec["waivers"][1]["reason"] == "壞\ufffd字",
++              str((r.returncode, r.stderr[-200:], rec and rec["waivers"])))
+     with tempfile.TemporaryDirectory() as td:   # 簿記檔(之前寫的紀錄)沒提交不算髒
+         root, rd = mk(td)
+         check("e2e:_e2e_judge(root, rd)[0].returncode == 0", _e2e_judge(root, rd)[0].returncode == 0)
+         rd2 = _e2e_steps(root, _E2E_BASE_STEPS + ok_ui, run_id="r2", files=ok_files)
+         r, rec = _e2e_judge(root, rd2)
+         check("e2e:r.returncode == 0 and len(rec['history']) == 2", r.returncode == 0 and len(rec["history"]) == 2, str(r.stderr))
+ 
+ 
+ def t_macrobench_results_dir():
+     """S15:--results-dir 只讀那個目錄(不讀 results_dirs 裡的舊結果),基準照舊用專案的;設定沒有 results_dirs 也照跑。"""
