@@ -6,7 +6,8 @@
 # 不判過不過(判定在 lumos)。單一來源在工具鏈 scripts/templates/,消費專案照抄;規則單源 Projects/Android端到端驗收_計劃。
 # 用法:在專案根目錄跑 sh scripts/templates/android-e2e-run.sh [--preflight] [run-id]
 #   --preflight:只做開跑前檢查(工作目錄、裝置、工具、產物目錄有沒有被忽略、裝置鎖),不碰 App
-# 外部工具:ADB(預設 adb)、MAESTRO(預設 maestro);設定在 .lumos/macrobench.json 的 e2e 段
+# 外部工具:ADB(預設 adb)、MAESTRO(預設 maestro);開了記憶體與穩定性時另要 TP(預設 trace_processor),
+#   宣告了測試資料時再要 JAVA_HEAP_DUMP(預設 java_heap_dump),跟收集腳本同兩個環境變數;設定在 .lumos/macrobench.json 的 e2e 段
 # 測試縮短與替換用:LUMOS_E2E_LONG_TIMEOUT(建置、flow、收集與效能的上限,預設 3600 秒)、
 #   LUMOS_E2E_LOCK_DIR(裝置鎖的目錄,預設 ~/.cache/lumos/android-e2e-lock)、
 #   LUMOS_E2E_STOP_GRACE(中斷時先送 TERM、等子程序自己收尾的秒數,寬限結束後一律對整組補 KILL,預設 60 秒;收集腳本在裝置沒回應時收尾可能要好幾分鐘)
@@ -23,6 +24,7 @@ PREFLIGHT = "--preflight" in argv
 rest = [a for a in argv if a != "--preflight"]
 run_id = rest[0] if rest else time.strftime("e2e-%Y%m%d-%H%M%S")
 ADB, MAESTRO = os.environ.get("ADB", "adb"), os.environ.get("MAESTRO", "maestro")
+TP, JHD = os.environ.get("TP", "trace_processor"), os.environ.get("JAVA_HEAP_DUMP", "java_heap_dump")
 LUMOS = os.path.join(here, "..", "lumos")
 T_SHORT = 120
 T_LONG = float(os.environ.get("LUMOS_E2E_LONG_TIMEOUT", "3600"))
@@ -249,6 +251,16 @@ def preflight(cfg, serial, run_dir):
     for tool in (ADB, MAESTRO):
         if not shutil.which(tool):
             die(f"找不到 {tool};用環境變數 ADB=、MAESTRO= 指定")
+    if e2e.get("stability"):   # 收集腳本自己也查,但要等建置、安裝、UI、截圖都跑完才輪到它,缺工具就白跑一趟
+        st = cfg.get("stability") or {}
+        # 下一行跟收集腳本判「要不要錄快照」那一行逐字相同(測試抽出兩邊那一行比相等)
+        test_data = bool((st.get("test_data") or {}).get("value"))
+        need = [("trace_processor", "TP", TP)]
+        if test_data:
+            need.append(("java_heap_dump", "JAVA_HEAP_DUMP", JHD))
+        for name, var, tool in need:
+            if not shutil.which(tool):
+                die(f"找不到 {name}(記憶體與穩定性要用,找的是 {tool});用環境變數 {var}= 指定")
     rc, out, err = lumos("android-e2e", "judge", "--repo", root, "--precheck")
     if rc != 0:
         die((err or out).strip().removeprefix("擋下:") or "工作目錄不能開跑")

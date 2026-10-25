@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-09-30
-updated: 2026-10-21
+updated: 2026-10-25
 responsibility: 負責重產 README 中英兩版的示意圖 SVG 並檢查圖的語意與動畫限制;不負責 logo、錄影 GIF 與 docs 裡的高密度詳圖
 self_audit: codex/2026-10-21
 aliases: []
@@ -19,6 +19,7 @@ summary: |-
   PITFALL:[2026-09-30 本輪發現]2026-09-21 那次「說明改成程式碼為主」直接手改了 map-zh/en.svg,沒改產生器,之後 `--check` 一直是紅的;這次重畫主圖時才順手對齊。重現:`python3 assets/readme-diagrams/generate.py --check`
   PITFALL:[2026-09-30 本輪發現]用 qlmanage 把這批 SVG 轉 PNG 會截到動畫第一格(知識圖節點全空)而且裁成正方形;目視檢查改用無頭 Chrome 加 `--virtual-time-budget` 等動畫跑完再截。重現:`qlmanage -t -s 1400 -o /tmp assets/graph-demo-zh.svg` 後打開那張 PNG,節點是空的
   WHY:主圖採三階段摘要，具體擋下與提醒條件留在 README 展開區；通知與核可用語保留適用邊界 [出處:使用者核可 [[Projects/README文案與圖示潤飾_計劃]]] [因:首次閱讀不應先消化操作清單，也不應由圖示推論全面安全或必定通知]
+  WHY:Android 推送前整套驗收另開一張 android-acceptance 圖,不塞進 L0–L3 那張 [出處:2026-10-25 使用者要求 README 連圖一起更新] [因:整套驗收是推送前一定跑的五步流程,L0–L3 是出問題才往下查的分層;畫在同一張會讓人以為每次都要跑到 L3] [不選:在舊圖上加一列(版面塞不下五步、兩種流程的方向不同)]
 verified_by:
   - "[[Verification/2026-10-21_README文案與圖示潤飾]]"
 ---

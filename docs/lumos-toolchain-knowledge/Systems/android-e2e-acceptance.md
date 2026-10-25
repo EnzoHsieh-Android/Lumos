@@ -15,7 +15,7 @@ tags:
 summary: |-
   WHY:指紋用那個提交自己的 e2e 段選檔,只接 e2e 段的正規化雜湊、不接整份 macrobench.json [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 正確性、守衛、整合三席] [因:分支加了 flow 要認得自己的紀錄;改效能基準或 results_dirs 不該讓 E2E 紀錄失效] [test:t_android_e2e_fingerprint]
   WHY:judge 遇到 HEAD 跟開跑時不同、工作目錄有簿記檔以外的改動或沒追蹤的新檔、steps.json 格式不認得,就不寫紀錄、回 2 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 邊界席、正確性席] [因:驗的不是這一版時,紀錄會把沒驗過的程式記成通過] [test:t_android_e2e_judge_dirty_tree]
-  WHY:建置或安裝失敗、裝置上的 APK 跟建出的不同或中途被換、這次被中斷,記成 unjudged 而不是 fail [出處:2026-10-25 實作] [因:那是環境沒跑成,不是程式本身的結論;紀錄要分得出是程式壞還是環境壞,推送檢查兩種都擋] [不選:一律記 fail(看紀錄的人會以為程式壞了)] [test:t_android_e2e_judge_tool_failure]
+  WHY:建置或安裝失敗、裝置上的 APK 跟建出的不同或中途被換、這次被中斷,那一塊記成 unjudged 而不是 fail(整份結果只要有一塊 fail 就是 fail,沒有 fail 才看 unjudged) [出處:2026-10-25 實作] [因:那是環境沒跑成,不是程式本身的結論;紀錄要分得出是程式壞還是環境壞,推送檢查兩種都擋] [不選:一律記 fail(看紀錄的人會以為程式壞了)] [test:t_android_e2e_judge_tool_failure]
   WHY:裝置鎖放在 ~/.cache/lumos/android-e2e-lock/<序號>、寫程序編號,記的程序已經不在就清掉接手 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 守衛席、邊界席] [因:兩個工作樹會對同一台裝置跑;被 kill -9 或斷電時鎖會留下] [test:t_android_e2e_run_script]
   WHY:範本腳本把效能排最後,裝置上 APK 的第二次 sha256 在它之前讀 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 正確性席] [因:Macrobenchmark 的 Gradle 指令常會自己裝上、跑完再移除測試用的 App,排前面會讓記憶體那塊沒有 App 可跑]
   WHY:範本腳本的開跑前檢查呼叫 lumos android-e2e judge --precheck,不自己列簿記檔 [出處:2026-10-25 實作] [因:哪些檔不算改動只該有 lumos 那一份清單,腳本自己列就是第二份、會漂] [test:t_android_e2e_run_script]
@@ -31,9 +31,11 @@ summary: |-
   PITFALL:錯誤輸出斷了之後,say() 吞掉例外、但緩衝區還留著字,程式結束清緩衝區時失敗,回傳碼變成 120 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席] [根因:只吞了這一次的例外,沒換掉壞掉的錯誤輸出] [修法:第一次寫不出去就把錯誤輸出換成 /dev/null] [test:t_android_e2e_run_script]
   PITFALL:紀錄或 lumos 本體裡用 "diff" 當欄位名,推送前全套測試的「取差異內容的 git 呼叫要帶防護旗標」守衛會把它當成 git 呼叫而翻紅 [出處:2026-10-25 首次推送被擋] [根因:那道守衛靠字面上的引號 diff 找呼叫點] [修法:截圖比對的差異圖欄位叫 diff_image] [test:t_lumos_content_diffs_all_disable_external_drivers]
   PITFALL:新加頂層子指令只寫了 add_parser,推送前全套測試另有兩支會紅:說明沒有「什麼時候用」、架構說明與手冊參考檔寫的指令總數沒跟著加 [出處:2026-10-25 第四次推送被擋] [根因:「什麼時候用」集中寫在 HELP_WHEN 表、指令總數散在兩份文件,加指令時不會被提醒] [修法:android-e2e 與 android-e2e judge 補進 HELP_WHEN,總數改 95] [test:t_every_subcommand_has_when]
+  WHY:e2e 段開了記憶體與穩定性時(看 e2e 段,不看最外層給單獨 macrobench --stability 用的那段),範本腳本的開跑前檢查先查 trace_processor,宣告了測試資料再查 java_heap_dump,跟收集腳本同兩個環境變數、讀 test_data 的那一行逐字相同(測試各抽出那一行比相等) [出處:2026-10-25 實驗室四塊實跑] [因:收集腳本自己也查,但輪到它時建置、安裝、UI、截圖都已跑完,實驗室兩次都白跑一趟才記成沒判完] [不選:只靠收集腳本自己查(慢)] [test:t_android_e2e_preflight_stability_tools]
   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+  - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
 ---
 # android-e2e-acceptance
 

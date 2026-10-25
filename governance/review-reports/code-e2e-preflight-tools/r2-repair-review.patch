@@ -1,0 +1,139 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index 16db6c9e..6e992e36 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -24,21 +24,21 @@ summary: |-
+   WHY:中斷時先對子程序群組送 TERM、等 LUMOS_E2E_STOP_GRACE 秒(預設 60)再 KILL [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [因:收集腳本靠 TERM 才停裝置上的錄製、刪原始日誌,它自己的子程序各自成組只能由它收;toolkit 靠 trap 清鎖與展示模式;一開始就 KILL 這些收尾都不會跑] [不選:直接 KILL(裝置上的錄製一直錄、驅動變孤兒)] [代價:Ctrl-C 之後最久要等 60 秒] [test:t_android_e2e_run_script]
+   PITFALL:關掉終端(HUP)時,中斷路徑上那一行印到錯誤輸出的訊息丟出 EIO 或 EPIPE,例外跳過後面的存檔與 judge,steps.json 沒標中斷、也沒寫紀錄 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [根因:收尾路徑上的 print 沒保護] [修法:收尾與擋下訊息一律走 say(),印不出來就算了] [test:t_android_e2e_run_script]
+   PITFALL:門檻檔裡同一個 check 另有別的情境或別的裝置的條目時,它們落在 threshold_skipped,記憶體這塊永遠判成沒判完 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 單審席] [根因:判定只看 check 名、沒分這條適不適用這次的結果] [修法:lumos macrobench --stability 對情境或裝置不符的跳過條目標 applies=false,端到端驗收不把它們算進來] [test:t_android_e2e_stab_applies_flag]
+   WHY:JUnit 報告用 test_quality.junit() 讀(安全證據閘同一套),判定用的 JSON 讀檔限深並清孤立代理字元,git 呼叫走 _nodehome_git [出處:2026-10-25 代碼審 code-android-e2e-batch1 r1 架構對齊席] [因:自己寫的讀法會漏掉既有讀法擋的情況(帶 DTD、宣告的案例數對不上;孤立代理字元讓寫紀錄時整支崩)] [test:t_android_e2e_judge_ui]
+   PITFALL:改成先 TERM 再等寬限之後,逾時路徑在寬限中又被中斷時,例外從 except 區塊丟出、子程序已從待收清單拿掉,不理 TERM 的子程序變孤兒;領頭程序在寬限內退了也不再補 KILL,同組裡不理 TERM 的成員留著 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:等寬限那一段沒接中斷,KILL 只在寬限到期時送] [修法:寬限中被中斷先補 KILL 再往上丟;寬限結束一律對整組補 KILL] [test:t_android_e2e_run_script]
+   PITFALL:紀錄讀回改成完全不清洗之後,紀錄裡要是有孤立代理字元(手改或舊版寫的),寫回時編碼失敗、judge 整支崩,回傳碼 1 看起來像「寫了紀錄但沒過」 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r3 單審席(上一輪修補帶進來的)] [根因:為了保住換行與 tab 把清洗整個關掉,孤立代理字元那一類又放回來] [修法:紀錄讀回只把孤立代理字元換成 U+FFFD,其他照原樣] [test:t_android_e2e_judge_dirty_tree]
+   PITFALL:讀紀錄時套了清洗(換行、tab、孤立代理字元換成空白),讀改寫一次就把人寫的放行理由壓扁再寫回 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:同一支讀檔函式同時給只讀的判定輸出與要整份寫回的紀錄用] [修法:紀錄讀回只限深、不清洗換行與 tab;孤立代理字元後來仍換成 U+FFFD,見上一條 r3 那行] [test:t_android_e2e_judge_dirty_tree]
+   PITFALL:錯誤輸出斷了之後,say() 吞掉例外、但緩衝區還留著字,程式結束清緩衝區時失敗,回傳碼變成 120 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席] [根因:只吞了這一次的例外,沒換掉壞掉的錯誤輸出] [修法:第一次寫不出去就把錯誤輸出換成 /dev/null] [test:t_android_e2e_run_script]
+   PITFALL:紀錄或 lumos 本體裡用 "diff" 當欄位名,推送前全套測試的「取差異內容的 git 呼叫要帶防護旗標」守衛會把它當成 git 呼叫而翻紅 [出處:2026-10-25 首次推送被擋] [根因:那道守衛靠字面上的引號 diff 找呼叫點] [修法:截圖比對的差異圖欄位叫 diff_image] [test:t_lumos_content_diffs_all_disable_external_drivers]
+   PITFALL:新加頂層子指令只寫了 add_parser,推送前全套測試另有兩支會紅:說明沒有「什麼時候用」、架構說明與手冊參考檔寫的指令總數沒跟著加 [出處:2026-10-25 第四次推送被擋] [根因:「什麼時候用」集中寫在 HELP_WHEN 表、指令總數散在兩份文件,加指令時不會被提醒] [修法:android-e2e 與 android-e2e judge 補進 HELP_WHEN,總數改 95] [test:t_every_subcommand_has_when]
+-  WHY:開了記憶體與穩定性時,範本腳本的開跑前檢查先查 trace_processor,宣告了測試資料再查 java_heap_dump,跟收集腳本同兩個環境變數 [出處:2026-10-25 實驗室四塊實跑] [因:收集腳本自己也查,但輪到它時建置、安裝、UI、截圖都已跑完,實驗室兩次都白跑一趟才記成沒判完] [不選:只靠收集腳本自己查(慢)] [test:t_android_e2e_preflight_stability_tools]
++  WHY:e2e 段開了記憶體與穩定性時(看 e2e 段,不看最外層給單獨 macrobench --stability 用的那段),範本腳本的開跑前檢查先查 trace_processor,宣告了測試資料再查 java_heap_dump,跟收集腳本同兩個環境變數、同一句判斷式(測試比對兩邊一字不差) [出處:2026-10-25 實驗室四塊實跑] [因:收集腳本自己也查,但輪到它時建置、安裝、UI、截圖都已跑完,實驗室兩次都白跑一趟才記成沒判完] [不選:只靠收集腳本自己查(慢)] [test:t_android_e2e_preflight_stability_tools]
+   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
+ ---
+ # android-e2e-acceptance
+ 
+ 白話:Android App 推送前在實機上跑一次端到端驗收的那一套。範本腳本負責碰裝置、把每一步的結果寫成 steps.json;lumos 只讀這些結果判過不過,再寫一份綁在「App 程式與驗收素材內容」上的查證紀錄。設計與條款的單源在 [[Projects/Android端到端驗收_計劃]],這裡只記現在怎麼運作、程式碼看不出來的理由。
+ 
+ ## 怎麼跑
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 9de2b1ef..3507946d 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,20 +1,20 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "7f77b0b96457a50a0889e7012b894be5c5778267182cd77e3dd3e318c7789a92",
++    "scripts/test_lumos.py": "ec129bad16d0ea1e504ba3fa2ab815d21f896f45f9d465d47d60ecfceaae4b43",
+     "scripts/test_autonomous_loop.py": "75acae20cfd1c4972fe29803a096428a5c50fb9be9f9287b055ebc4d2b4211e4",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+     "scripts/hooks/pre-push": "26cdcf13d70e4b7c2ed308e112c4582dee080f51d12e0406d6381a079f19a948",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "c00b0348adcd608878ae08c854466e58f5ca25c6f18ceb3dab7fe848886d3163",
+     "scripts/hooks/claude/lumos-entry-hook.py": "12be2d1869549c79d7eb80b0d20d50b69af4d4ab577240b3d142b4e0633bbbe8",
+     "scripts/hooks/claude/impact-hook.py": "9e57da8a678024f249d722530301a513e6ce084d1fd362fe6eea5c32ae42f4cc",
+     "scripts/hooks/claude/check-graph-sync.py": "f6f32f64fb24377b9b9a8c249dc16ee68a2ee32f6b91871d030c0b5e195520d6",
+     "scripts/hooks/claude/ci-status-hook.py": "9ec8b67e6d458248c7a40e675795e3b05d0085caa574e196e615de966ae4147c",
+     "scripts/hooks/claude/memory-sweep.py": "a3c41509100e5043fcb02b4e378be9ab8ce2701447b6783d79ef2aaaee6c9f4c",
+     "scripts/hooks/claude/bypass-ask-hook.py": "7a1e1bb9fd5b7b262ecba3823d4e21836e91899df8cdc7a4b634d4a3fd775f4d",
+     "scripts/hooks/claude/_hookevent.py": "034bfe001290469a71c9a8d7b702b8e98afc9ec76fe826509b158a97675e187f"
+   },
+-  "approved_at": "2026-10-25T21:42:54+08:00",
+-  "note": "Android 端到端驗收:新增 t_android_e2e_preflight_stability_tools(開跑前檢查先查 trace_processor 與 java_heap_dump)"
++  "approved_at": "2026-10-25T21:56:06+08:00",
++  "note": "Android 端到端驗收開跑前查工具:代碼審第一輪修正(補只有最外層 stability 的案例、整套跑也驗放行、兩支範本判斷式一致)"
+ }
+diff --git a/scripts/templates/android-e2e-run.sh b/scripts/templates/android-e2e-run.sh
+index a87cc82c..4f22b67d 100644
+--- a/scripts/templates/android-e2e-run.sh
++++ b/scripts/templates/android-e2e-run.sh
+@@ -250,21 +250,21 @@ def preflight(cfg, serial, run_dir):
+         die(f"run-id 只收英數字、點、底線與連字號,也不能只有點:{run_id!r}")
+     for tool in (ADB, MAESTRO):
+         if not shutil.which(tool):
+             die(f"找不到 {tool};用環境變數 ADB=、MAESTRO= 指定")
+     if e2e.get("stability"):   # 收集腳本自己也查,但要等建置、安裝、UI、截圖都跑完才輪到它,缺工具就白跑一趟
+         need = [("trace_processor", "TP", TP)]
+         if ((cfg.get("stability") or {}).get("test_data") or {}).get("value"):
+             need.append(("java_heap_dump", "JAVA_HEAP_DUMP", JHD))
+         for name, var, tool in need:
+             if not shutil.which(tool):
+-                die(f"記憶體與穩定性要用的 {name} 找不到(找的是 {tool});裝好 Perfetto 的工具,或用環境變數 {var}= 指定")
++                die(f"找不到 {name}(記憶體與穩定性要用,找的是 {tool});用環境變數 {var}= 指定")
+     rc, out, err = lumos("android-e2e", "judge", "--repo", root, "--precheck")
+     if rc != 0:
+         die((err or out).strip().removeprefix("擋下:") or "工作目錄不能開跑")
+     if os.path.exists(os.path.join(run_dir, "steps.json")):
+         die(f"run-id {run_id} 已經跑過了;換一個 run-id(不給就用日期時間)")
+     for rel in ("steps.json", "ui/x.xml", "visual/x/x.png", "logs/x.out", "macrobench/x.json"):
+         if run(["git", "-C", root, "check-ignore", "-q", os.path.join(run_dir, rel)])[0] != 0:
+             die(".lumos/artifacts/ 沒被 git 忽略;先在 .gitignore 加一行 .lumos/artifacts/ 再跑(截圖與報告可能含使用者資料)")
+     if adb(serial, "get-state")[1].strip() != "device":
+         die(f"裝置 {serial} 沒連上(adb get-state 不是 device)")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 0d679b2c..0b19f458 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -19037,40 +19037,50 @@ def t_android_e2e_preflight_stability_tools():
+     JAVA_HEAP_DUMP=):2026-10-25 實驗室兩次都要等建置、安裝、UI、截圖跑完,輪到收集腳本才因缺工具記成沒判完。"""
+     import tempfile
+     stab = {"package": "com.lab", "scenario": "pkg.Leak#cycle", "driver": "true", "warmup": 1, "cycles": 2}
+     th = [_ms_thr("exits")]
+     cases = [  # (說明, 開 stability, 宣告測試資料, 有 trace_processor, 有 java_heap_dump, 預期回傳, 訊息裡要有的字)
+         ("開了穩定性、缺 trace_processor", True, False, False, True, 2, "trace_processor"),
+         ("宣告了測試資料、缺 java_heap_dump", True, True, True, False, 2, "java_heap_dump"),
+         ("沒宣告測試資料、缺 java_heap_dump 不擋", True, False, True, False, 0, None),
+         ("兩支都在", True, True, True, True, 0, None),
+         ("沒開穩定性、兩支都缺也不擋", False, False, False, False, 0, None),
++        # 最外層有 stability 段(給單獨的 lumos macrobench --stability 用),e2e 段沒開:看的是 e2e 段,不擋
++        ("只有最外層 stability、e2e 沒開、兩支都缺也不擋", "top", True, False, False, 0, None),
+     ]
+     for desc, on, td_decl, has_tp, has_jhd, want, word in cases:
+         with tempfile.TemporaryDirectory() as td:
+             st = dict(stab, test_data={"value": True, "decided_by": "t", "decided_at": "2026-10-25"}) if td_decl else stab
+             root, fake, env, script = _e2e_script_env(
+-                td, e2e={"stability": True, "stability_checks": ["exits"]} if on else None,
++                td, e2e={"stability": True, "stability_checks": ["exits"]} if on is True else None,
+                 top={"stability": st} if on else None, thresholds=th if on else None)
+             for name, has in (("TP", has_tp), ("JAVA_HEAP_DUMP", has_jhd)):
+                 tool = fake / name.lower()
+                 if has:
+                     tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                     tool.chmod(0o755)
+                 env[name] = str(tool)
+             for extra in (("--preflight",), ()):
+                 r = _e2e_script(root, script, env, *extra, "run-t")
+                 if want == 2:
+-                    check("e2e:缺工具在開跑前擋下、說是哪一支", r.returncode == 2 and word in r.stderr, str((desc, extra, r.returncode, r.stderr[-300:])))
++                    check("e2e:缺工具在開跑前擋下、說是哪一支", r.returncode == 2 and f"找不到 {word}" in r.stderr, str((desc, extra, r.returncode, r.stderr[-300:])))
+                     check("e2e:擋下時沒碰 App", not (fake / "installed.apk").exists() and not (fake / "maestro.log").exists(), str((desc, extra)))
+                 elif extra:
+                     check("e2e:工具齊或不需要時開跑前檢查過", r.returncode == 0, str((desc, r.stderr[-300:])))
++                else:   # 整套跑:開跑前檢查要放行、真的建置安裝到 App(後面的收集腳本用假工具,成敗不在這條測)
++                    check("e2e:整套跑時開跑前檢查放行", "找不到" not in r.stderr and (fake / "installed.apk").exists(), str((desc, r.returncode, r.stderr[-300:])))
++    # 「宣告了測試資料才要 java_heap_dump」在兩支範本各寫一份(各自是獨立的 python3 - 腳本、照抄進消費專案,無法共用);
++    # 兩邊的判斷式要一字不差,只改一邊這條就紅
++    tdir = Path(GRAPHCTL).resolve().parent / "templates"
++    cond = '.get("test_data") or {}).get("value")'
++    for name in ("android-e2e-run.sh", "android-stability-collect.sh"):
++        check(f"e2e:{name} 用同一句判斷有沒有宣告測試資料", cond in (tdir / name).read_text(encoding="utf-8"), name)
+     print("  ✓ t_android_e2e_preflight_stability_tools")
+ 
+ 
+ def t_android_e2e_run_script():
+     """S16:範本腳本跑完、某步失敗、或被中斷都寫出 steps.json 並交給 judge;開跑前檢查沒過不開跑並說原因;
+     裝置鎖裡記的程序已經不在時清掉接手。用假的 adb 與 maestro,判準來源是計劃〈資料怎麼流〉第 1、2 步。"""
+     import json, os, signal, subprocess as sp, tempfile, time as _t
+ 
+     def rec_of(root):
+         d = root / ".lumos" / "e2e-records"
