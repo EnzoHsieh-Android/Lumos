@@ -1,11 +1,11 @@
 ---
 type: project
-status: todo
+status: doing
 created: 2026-10-24
 updated: 2026-10-24
 tags:
   - type/project
-  - status/todo
+  - status/doing
   - scope/stack-knowledge
 related:
   - "[[Projects/Macrobenchmark退步提醒_計劃]]"
@@ -47,4 +47,17 @@ REVISIT:2026-11-30 記憶體與穩定性子案收尾後,照下面待辦開設計
 
 ## 條款
 
-- [S1] 當這份計劃開始設計時,應先依待辦各條寫出各自的條款與測試,再跑規格閘 [manual:設計開始時改寫本節,這行刪掉]
+第一批只做待辦第 1、2 條(2026-10-25 Enzo 選「實作效能計劃前幾條」;已實作,見 [[Systems/macrobenchmark-adapter]])。Lumos 不跑效能測試,輪數寫在各專案自己的 Macrobenchmark 測試裡,所以第 1 條在 Lumos 這邊落成「記下輪數、輪數不足時提醒、算變異係數」,第 2 條綁在「兩邊都至少 20 輪」才生效:既有專案(5 輪、10 輪、舊基準沒記輪數)的判定完全不變,第 2 條自動跟第 1 條一起上線。
+
+- [S1] 當基準與現況某個情境都記著至少 20 輪時,lumos macrobench 判那個情境的啟動類指標(有中位數、最小值、最大值的那類)變慢,應只看中位數比基準中位數慢超過容差,不再要求比基準最大值還慢;任一邊少於 20 輪時照舊兩道都要過 [test:t_macrobench_mag_only_at_20]
+- [S2] 當基準是舊格式、沒記輪數時,應照舊兩道都要過才算變慢 [test:t_macrobench_single_gate_not_enough] [keeps]
+- [S3] 當現況某個情境少於 20 輪時,文字輸出應印一行提醒並寫出那個情境的輪數,--json 的 low_iterations 列出情境與輪數;判定結果不因此改變 [test:t_macrobench_low_iterations_notice]
+- [S4] 當帶 --update-baseline 時,基準檔每個情境應記下輪數,啟動類每個指標另記各輪的變異係數(標準差除以平均);結果檔的 runs 缺、不是清單或含非有限數時那一項不記,照樣能比、能存 [test:t_macrobench_baseline_records_iterations]
+  - S4 的「那一項不記」分兩層:輪數以情境為單位,情境裡任一個沒忽略的指標 runs 讀不出,整個情境不記輪數(保守:照舊兩道);變異係數以指標為單位,runs 正常的指標照記,平均為 0、算的途中溢位或結果不是有限數時那個指標不記(代碼審 r1 單審指出寫進基準的無限大會讓整份基準讀不回來)。
+- [S5] 當判滑動類指標時,lumos macrobench 應照舊把 P50、P90 過容差,或每幀超時 P90 從不超時變成超時,算成變慢,不受輪數影響 [test:t_macrobench_overrun_crosses_zero] [keeps]
+- [S6] 當 AI 照 lumos-android-evidence skill 接 Macrobenchmark 時,範例與說明應寫明預設 20 輪,以及兩邊都至少 20 輪時啟動類只看差幅 [manual:讀 skills/lumos-android-evidence 的 SKILL.md 與 reference.md,範例的 iterations 是 20、L0 段寫了 20 輪規則]
+
+## 回退
+
+- 判定:S1 的規則只看基準與現況是否都有輪數欄位且至少 20 輪;要回到舊判法,把 20 輪那個常數設成極大值即可,舊基準不用改。
+- 基準檔:多記的輪數與變異係數是新增欄位,舊版 lumos 讀到會照舊判(不認得的欄位不影響比對);刪掉這兩欄就回到舊格式。

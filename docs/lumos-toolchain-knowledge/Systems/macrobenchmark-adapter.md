@@ -14,7 +14,10 @@ tags:
   - status/doing
   - scope/stack-knowledge
 summary: |-
-  WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢 [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
+  WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢;例外是基準與現況都記著至少 20 輪時,啟動類只看差幅(見下一行) [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
+  WHY:基準與現況都記著至少 20 輪時,啟動類只看中位數差幅、不再要求超出基準最大值;任一邊少於 20 輪或舊基準沒記輪數,照舊兩道 [出處:[[Projects/Android效能判定統計化_計劃]] 第 1、2 條,[[Verification/2026-10-24_效能判定規則實機評測]]] [因:實測 20 輪時拿掉那道,啟動 +20ms 那級從 1/24 抓到 10/24,同場與跨時段誤報仍是 0;10 輪時跨時段多 1 組誤報,所以綁在 20 輪] [不選:一律拿掉那道(5、10 輪時沒好處、10 輪還多誤報);另開設定讓專案自己選(多一個要記得的開關)] [test:t_macrobench_mag_only_at_20]
+  WHY:讀結果檔時記下每個情境的輪數(iterations)與啟動類各指標的變異係數(cv,母體標準差除以平均),--update-baseline 一起寫進基準;現況少於 20 輪時 --json 的 low_iterations 列出、文字輸出印一行提醒,判定不變 [出處:[[Projects/Android效能判定統計化_計劃]] S3、S4] [因:20 輪規則要知道兩邊各跑幾輪,舊基準只有統計值;L0 收據要記各輪的變異係數] [不選:讀不出輪數時猜一個值(猜錯會讓 5 輪的專案也放寬)] [test:t_macrobench_baseline_records_iterations]
+  PITFALL:極端但有限的 runs(例:1e300 與 -1e300 混著 5e-324)算出的變異係數是無限大,寫進基準後讀基準的形狀檢查拒收非有限數,整份基準讀不回來、--update-baseline 也不肯蓋 [出處:2026-10-25 代碼審 code-macrobench-20-iters r1 單審] [根因:寫端沒照讀端的標準過濾] [修法:_macrobench_cv 算的途中溢位、平均為 0、結果不是有限數一律回 None 不記] [test:t_macrobench_baseline_records_iterations]
   WHY:滑動類只有百分位,P50 與 P90 過容差算退步,P99 只列出 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S8] [因:P99 浮動大,拿來判會一直誤報] [test:t_macrobench_sampled_percentiles]
   WHY:有退步也回 0,只提醒不擋推送 [出處:[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 推送前證據不收毫秒] [因:毫秒隨機器與溫度浮動,拿來擋會隨機誤擋] [test:t_macrobench_exit_codes]
   PITFALL:結果檔名的寫法隨函式庫版本變,照官方文件範例拼檔名會找不到檔:1.2.4 把套件名的點換成底線,1.4.1 保留點 [出處:2026-10-21 Citrus_KDS 模擬器實跑(1.2.4)、2026-10-23 實機小專案(1.4.1)] [根因:函式庫自己決定檔名正規化,各版不同] [test:t_macrobench_reads_real_kds_file]
@@ -50,7 +53,7 @@ verified_by:
 - 設定 `.lumos/macrobench.json`:`results_dirs`(結果目錄清單;有 `stability` 段的專案可以不填或給空清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
 - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
 - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
-- 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
+- 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;有 iterations 時要是正整數、有 cv 時每個值都是有限數;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
 - 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現(更新基準與一般比對兩條路都是),不說成讀不了;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
 - 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
 

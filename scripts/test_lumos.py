@@ -19465,6 +19465,128 @@ def t_macrobench_baseline_records_source():
         check("沒有來源欄的舊基準照樣能比", d.get("baseline_unreadable") is False and d.get("checked") == 1, r2.stdout[:300])
 
 
+def t_macrobench_mag_only_at_20():
+    """[S1] 基準與現況都記著至少 20 輪時,啟動類只看中位數差幅:不再要求比基準最大值還慢;任一邊少於 20 輪照舊兩道。
+    手算:基準中位數 1000、容差 10% → 門檻 1100;基準最大值 1300,所以 1120 過了容差、沒超出最大值。
+    應抓到的錯:輪數條件沒接上(永遠兩道 → ①紅)、條件寫成任一邊 ≥20 就放寬(→ ②③紅)、放寬時連容差也拿掉(→ ④紅)。"""
+    m = _macrobench_mod()
+    k = "pkg.StartupBenchmark#coldStartup"
+    def run(cur_median, base_iters, cur_iters):
+        b = _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1300.0}})
+        c = _mb_entry(metrics={"timeToInitialDisplayMs": {"median": cur_median, "minimum": cur_median, "maximum": cur_median}})
+        if base_iters is not None:
+            b["iterations"] = base_iters
+        if cur_iters is not None:
+            c["iterations"] = cur_iters
+        return m._macrobench_compare({k: b}, {k: c}, _MB_CFG)["regressions"]
+    check("前置:兩邊都沒記輪數時,1120 沒超出基準最大值 1300 → 不算(舊判法)", run(1120.0, None, None) == [], "")
+    regs = run(1120.0, 20, 20)
+    check("① 兩邊都 20 輪:1120 過了容差 1100 → 算變慢,不看基準最大值", len(regs) == 1 and regs[0]["current"] == 1120.0, str(regs))
+    check("② 基準 20 輪、現況 19 輪 → 照舊兩道,不算", run(1120.0, 20, 19) == [], "")
+    check("③ 基準 10 輪、現況 20 輪 → 照舊兩道,不算", run(1120.0, 10, 20) == [], "")
+    check("④ 兩邊都 20 輪但 1080 沒過容差 1100 → 不算", run(1080.0, 20, 20) == [], "")
+    check("⑤ 兩邊都 40 輪也放寬(至少 20)", len(run(1120.0, 40, 40)) == 1, "")
+
+
+def t_macrobench_low_iterations_notice():
+    """[S3] 現況某情境少於 20 輪時,文字輸出印一行提醒並寫出輪數,--json 的 low_iterations 列出情境與輪數;判定不變。
+    應抓到的錯:不提醒(①紅)、提醒但沒寫輪數(②紅)、滿 20 輪也提醒(③紅)、提醒時改了判定(④紅)。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbiter-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / "out").mkdir()
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        f = root / "out" / "x-benchmarkData.json"
+        five = _mb_startup("pkg.S", 1000.0, 950.0, 1050.0)
+        five["metrics"]["timeToInitialDisplayMs"]["runs"] = [1000.0, 990.0, 1010.0, 950.0, 1050.0]
+        twenty = _mb_startup("pkg.T", 500.0, 480.0, 520.0)
+        twenty["metrics"]["timeToInitialDisplayMs"]["runs"] = [500.0] * 18 + [480.0, 520.0]
+        f.write_text(_mb_result_json([five, twenty]), encoding="utf-8")
+        _mb_run(root, "--update-baseline")
+        r = _mb_run(root, "--json")
+        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+        low = d.get("low_iterations")
+        check("① --json 的 low_iterations 列出 5 輪的情境", isinstance(low, list) and any(x.get("key") == "pkg.S#coldStartup" for x in low), r.stdout[:400])
+        check("② 附上輪數 5", isinstance(low, list) and any(x.get("key") == "pkg.S#coldStartup" and x.get("iterations") == 5 for x in low), str(low))
+        check("③ 滿 20 輪的情境不列", isinstance(low, list) and not any(x.get("key") == "pkg.T#coldStartup" for x in low), str(low))
+        check("④ 判定不變:同一份結果對自己的基準沒有變慢", d.get("regressions") == [] and d.get("checked") == 2, r.stdout[:400])
+        t = _mb_run(root)
+        line = [l for l in t.stdout.splitlines() if "pkg.S#coldStartup" in l]
+        check("⑤ 文字輸出有一行提醒,寫出情境與「只跑了 5 輪」", any("只跑了 5 輪" in l for l in line), t.stdout[:600])
+        u = _mb_run(root, "--update-baseline")
+        check("⑥ 存基準時也提醒(這份少於 20 輪的基準會讓 20 輪規則一直不生效)",
+              any("pkg.S#coldStartup" in l and "只跑了 5 輪" in l for l in u.stdout.splitlines()), u.stdout[:600])
+        check("⑦ 存基準時滿 20 輪的情境不提醒", not any("pkg.T#coldStartup" in l and "輪數不足" in l for l in u.stdout.splitlines()), u.stdout[:600])
+
+
+def t_macrobench_baseline_records_iterations():
+    """[S4] --update-baseline 時基準每個情境記下輪數,啟動類每個指標另記各輪的變異係數(母體標準差除以平均);
+    runs 缺、不是清單或含非數字時那一項不記,照樣能比、能存。
+    手算:runs [90,100,110] 平均 100、母體標準差 sqrt((100+0+100)/3)=8.1650 → 0.081650;滑動類 runs 兩輪 → 輪數 2、不記變異係數。
+    應抓到的錯:沒記輪數(①紅)、用樣本標準差 10/100=0.1(②紅)、壞 runs 讓整份讀不了或噴例外(④⑤紅)、只看好的那個指標就記輪數(⑤b紅)、
+    平均 0 除以零讓整檔讀不了(⑤d⑥紅)、無限大的變異係數寫進基準後自己讀不回來(⑥紅)、相加溢位讓整檔讀不了(⑤g⑥紅)。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory(prefix="gctl-mbrec-") as td:
+        root = Path(td)
+        (root / ".lumos").mkdir()
+        (root / "out").mkdir()
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
+        st = _mb_startup("pkg.S", 100.0, 90.0, 110.0)
+        st["metrics"]["timeToInitialDisplayMs"]["runs"] = [90.0, 100.0, 110.0]
+        sc = {"name": "scrollList", "params": {}, "className": "pkg.L", "metrics": {},
+              "sampledMetrics": {"frameOverrunMs": {"P50": -3.0, "P90": -1.0, "P95": -1.0, "P99": -1.0, "runs": [[-3.0, -1.0], [-2.0, -1.5]]}}}
+        bad = _mb_startup("pkg.B", 200.0, 190.0, 210.0)
+        bad["metrics"]["timeToInitialDisplayMs"]["runs"] = [200.0, "x"]
+        nor = _mb_startup("pkg.N", 300.0, 290.0, 310.0)
+        del nor["metrics"]["timeToInitialDisplayMs"]["runs"]
+        mix = _mb_startup("pkg.M", 400.0, 390.0, 410.0)
+        mix["metrics"]["timeToInitialDisplayMs"]["runs"] = [400.0, 390.0, 410.0]
+        mix["metrics"]["timeToFullDisplayMs"] = {"minimum": 500.0, "maximum": 520.0, "median": 510.0, "runs": [510.0, None]}
+        zero = _mb_startup("pkg.Z", 0.0, 0.0, 0.0)
+        zero["metrics"]["timeToInitialDisplayMs"]["runs"] = [0.0, 0.0, 0.0]
+        neg = _mb_startup("pkg.G", -10.0, -12.0, -8.0)
+        neg["metrics"]["timeToInitialDisplayMs"]["runs"] = [-12.0, -10.0, -8.0]
+        inf = _mb_startup("pkg.I", 5e-324, -1e300, 1e300)
+        inf["metrics"]["timeToInitialDisplayMs"]["runs"] = [1e300, -1e300, 5e-324, 5e-324, 5e-324]
+        ovf = _mb_startup("pkg.O", 1e308, 1e308, 1e308)
+        ovf["metrics"]["timeToInitialDisplayMs"]["runs"] = [1e308, 1e308]
+        (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([st, sc, bad, nor, mix, zero, neg, inf, ovf]), encoding="utf-8")
+        r = _mb_run(root, "--update-baseline")
+        bp = root / ".lumos" / "macrobench-baseline.json"
+        es = json.loads(bp.read_text(encoding="utf-8"))["entries"] if bp.exists() else {}
+        s = es.get("pkg.S#coldStartup", {})
+        check("① 啟動類情境記下輪數 3", s.get("iterations") == 3, r.stdout + str(s)[:300])
+        cv = (s.get("cv") or {}).get("timeToInitialDisplayMs")
+        check("② 變異係數是母體標準差除以平均 0.081650", isinstance(cv, float) and abs(cv - 0.0816497) < 1e-5, str(s.get("cv")))
+        l = es.get("pkg.L#scrollList", {})
+        check("③ 滑動類記輪數 2、不記變異係數", l.get("iterations") == 2 and "cv" not in l, str(l)[:300])
+        check("④ runs 含非數字的情境照樣存進基準、不記輪數", "pkg.B#coldStartup" in es and "iterations" not in es["pkg.B#coldStartup"], str(es.get("pkg.B#coldStartup"))[:300])
+        check("⑤ 沒有 runs 的情境照樣存進基準、不記輪數", "pkg.N#coldStartup" in es and "iterations" not in es["pkg.N#coldStartup"], str(es.get("pkg.N#coldStartup"))[:300])
+        check("⑤b 同一情境一個指標 runs 正常、另一個壞掉 → 整個情境不記輪數(保守照舊兩道)", "pkg.M#coldStartup" in es and "iterations" not in es["pkg.M#coldStartup"], str(es.get("pkg.M#coldStartup"))[:300])
+        mcv = es.get("pkg.M#coldStartup", {}).get("cv") or {}
+        check("⑤c 那個情境裡 runs 正常的指標仍記變異係數、壞掉的不記", "timeToInitialDisplayMs" in mcv and "timeToFullDisplayMs" not in mcv, str(mcv))
+        z = es.get("pkg.Z#coldStartup", {})
+        check("⑤d 平均為 0:記輪數 3、不記變異係數(除不出)、照樣存進基準", z.get("iterations") == 3 and "timeToInitialDisplayMs" not in (z.get("cv") or {}), str(z)[:300])
+        gcv = (es.get("pkg.G#coldStartup", {}).get("cv") or {}).get("timeToInitialDisplayMs")
+        check("⑤e 平均為負:用 |平均| 算,變異係數 sqrt(8/3)/10=0.163299 為正", isinstance(gcv, float) and abs(gcv - 0.1632993) < 1e-5, str(gcv))
+        i_ = es.get("pkg.I#coldStartup", {})
+        check("⑤f 極端數字讓標準差爆成無限大:不記變異係數,這個情境照樣存進基準", "pkg.I#coldStartup" in es and "timeToInitialDisplayMs" not in (i_.get("cv") or {}), str(i_)[:300])
+        check("⑤g 相加會溢位的數字:這個情境照樣讀進來、存進基準、不記變異係數", "pkg.O#coldStartup" in es and "timeToInitialDisplayMs" not in (es["pkg.O#coldStartup"].get("cv") or {}) if "pkg.O#coldStartup" in es else False, str(es.get("pkg.O#coldStartup"))[:300])
+        r2 = _mb_run(root, "--json")
+        d = json.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+        check("⑥ 帶輪數與變異係數的基準照樣能比(寫進去的值自己讀得回來)", d.get("baseline_unreadable") is False and d.get("checked") == 9, r2.stdout[:300])
+        good = json.loads(bp.read_text(encoding="utf-8"))
+        for label, field, val in (("⑦ 輪數寫成 true", "iterations", True), ("⑧ 輪數寫成 0", "iterations", 0),
+                                  ("⑨ 變異係數不是數字", "cv", {"timeToInitialDisplayMs": "x"})):
+            broken = json.loads(json.dumps(good))
+            broken["entries"]["pkg.S#coldStartup"][field] = val
+            bp.write_text(json.dumps(broken), encoding="utf-8")
+            r3 = _mb_run(root, "--json")
+            d3 = json.loads(r3.stdout) if r3.stdout.strip().startswith("{") else {}
+            check(f"{label} → 基準整份當讀不了(跟其他欄位壞掉一樣,不比、不噴例外)", d3.get("baseline_unreadable") is True and r3.returncode == 0, r3.stdout[:300] + r3.stderr[-300:])
+
+
 def _mb_scroll(cls, p90, p50=-3.0):
     return {"name": "scrollList", "params": {}, "className": cls, "metrics": {},
             "sampledMetrics": {"frameOverrunMs": {"P50": p50, "P90": p90, "P95": p90, "P99": p90, "runs": [[p90]]}}}
