@@ -39364,6 +39364,7 @@ MACROBENCH_PERCENTILES = ("P50", "P90", "P95", "P99")   # 結果檔滑動類指�
 MACROBENCH_SAMPLED_JUDGED = ("P50", "P90")   # 滑動類只有百分位:這兩個過容差算退步
 MACROBENCH_SAMPLED_LISTED = ("P99",)         # P99 太吵:變慢只列出,不算退步
 MACROBENCH_ZERO_CROSS = {"frameOverrunMs": "P90"}   # 每幀超時從不大於 0 變成大於 0 = 開始掉幀,不看差幅
+MACROBENCH_MAG_ONLY_ITERS = 20   # 基準與現況都至少這麼多輪時,啟動類只看差幅、不再要求超出基準最大值(2026-10-24 實機評測,見 Android效能判定統計化_計劃 第 1、2 條)
 
 
 def _macrobench_num(v):
@@ -39476,8 +39477,39 @@ def _macrobench_stab_optional_err(st):
     return None
 
 
+def _macrobench_runs_count(runs, nested):
+    """結果檔一個指標的 runs → 輪數;不是清單、空的、或含非有限數就回 None(不記輪數,照樣能比)。
+    滑動類每輪是一串幀(nested),啟動類每輪是一個數字。"""
+    if not isinstance(runs, list) or not runs:
+        return None
+    rows = runs if nested else [[x] for x in runs]
+    if not all(isinstance(r, list) and r and all(_macrobench_num(x) for x in r) for r in rows):
+        return None
+    return len(runs)
+
+
+def _macrobench_cv(runs):
+    """各輪的變異係數 = 母體標準差 / |平均|;平均是 0、算的途中溢位、或結果不是有限數(極端數字讓標準差爆成無限大)時回 None,
+    不記這一項:寫進基準的值讀回來時會被 _macrobench_entry_ok 用 _macrobench_num 驗,寫端只能產出讀端收得下的值(代碼審 r1 單審)。"""
+    import math
+    import statistics
+    try:
+        mean = statistics.fmean(runs)
+        cv = statistics.pstdev(runs) / abs(mean) if mean else None
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return None
+    return cv if cv is not None and math.isfinite(cv) else None
+
+
+def _macrobench_iters_ok(v, least=1):
+    """基準檔與比對用的輪數:整數(不收 JSON 的 true/false)而且至少 least 輪。"""
+    return _secev_int(v) and v >= least
+
+
 def _macrobench_read_one(b, ignore):
-    """結果檔裡的一項 benchmark → (情境鍵, metrics, sampled)。格式不對丟 ValueError。
+    """結果檔裡的一項 benchmark → (情境鍵, metrics, sampled, 輪數, 啟動類各指標的變異係數)。格式不對丟 ValueError。
+    輪數:沒忽略的每個指標的 runs 都讀得出輪數才記(取最少的那個),有一個讀不出就整個情境不記(保守:照舊兩道);
+    變異係數只記 runs 讀得出、而且算得出有限值的啟動類指標。
     情境鍵 = 測試類別#測試名,有參數時再接 [排序後的參數 JSON]。"""
     import json
     if not isinstance(b, dict) or not isinstance(b.get("className"), str) or not isinstance(b.get("name"), str):
@@ -39485,13 +39517,17 @@ def _macrobench_read_one(b, ignore):
     key = f"{b['className']}#{b['name']}"
     if b.get("params"):
         key += "[" + json.dumps(b["params"], sort_keys=True, ensure_ascii=False) + "]"
-    metrics, sampled = {}, {}
+    metrics, sampled, counts, cv = {}, {}, [], {}
     for name, v in (b.get("metrics") or {}).items():
         if name in ignore:
             continue
         if not isinstance(v, dict) or not all(_macrobench_num(v.get(s)) for s in ("median", "minimum", "maximum")):
             raise ValueError(f"{key} 的 {name} 缺 median/minimum/maximum")
         metrics[name] = {s: float(v[s]) for s in ("median", "minimum", "maximum")}
+        counts.append(_macrobench_runs_count(v.get("runs"), nested=False))
+        c = _macrobench_cv([float(x) for x in v["runs"]]) if counts[-1] is not None else None
+        if c is not None:
+            cv[name] = c
     for name, v in (b.get("sampledMetrics") or {}).items():
         if name in ignore:
             continue
@@ -39499,7 +39535,9 @@ def _macrobench_read_one(b, ignore):
         if not all(s in stats for s in MACROBENCH_SAMPLED_JUDGED):
             raise ValueError(f"{key} 的 {name} 缺 P50/P90")
         sampled[name] = stats
-    return key, metrics, sampled
+        counts.append(_macrobench_runs_count(v.get("runs"), nested=True))
+    iters = min(counts) if counts and None not in counts else None
+    return key, metrics, sampled, iters, cv
 
 
 def _macrobench_read_file(path, ignore, raw=None):
@@ -39513,8 +39551,12 @@ def _macrobench_read_file(path, ignore, raw=None):
     device = {"model": str(build.get("model", "")), "fingerprint": str(build.get("fingerprint", ""))}
     out = {}
     for b in data["benchmarks"]:
-        key, metrics, sampled = _macrobench_read_one(b, ignore)
+        key, metrics, sampled, iters, cv = _macrobench_read_one(b, ignore)
         out[key] = {"device": device, "metrics": metrics, "sampled": sampled}
+        if iters is not None:
+            out[key]["iterations"] = iters
+        if cv:
+            out[key]["cv"] = cv
     return out
 
 
@@ -39559,14 +39601,16 @@ def _macrobench_worse(metric, base, cur, cfg):
 
 
 def _macrobench_cmp_metrics(key, base, cur, cfg, res):
-    """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步。"""
+    """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步;
+    基準與現況都記著至少 MACROBENCH_MAG_ONLY_ITERS 輪時只看差幅(輪數多,單次偏快的基準不再讓小幅變慢躲進浮動範圍)。"""
+    mag_only = all(_macrobench_iters_ok(e.get("iterations"), MACROBENCH_MAG_ONLY_ITERS) for e in (base, cur))
     for metric, c in sorted(cur["metrics"].items()):
         b = (base.get("metrics") or {}).get(metric)
         if not b:
             continue
         delta, tol = _macrobench_worse(metric, b["median"], c["median"], cfg)
         outside = c["median"] < b["minimum"] if metric in cfg["higher_is_better"] else c["median"] > b["maximum"]
-        if delta > tol and outside:
+        if delta > tol and (outside or mag_only):
             res["regressions"].append({"key": key, "metric": metric, "stat": "median",
                                        "baseline": b["median"], "current": c["median"], "delta": delta})
 
@@ -39620,6 +39664,11 @@ def _macrobench_entry_ok(e):
     if not all(isinstance(v, dict) and all(_macrobench_num(v.get(s)) for s in ("median", "minimum", "maximum"))
                for v in metrics.values()):
         return False
+    if e.get("iterations") is not None and not _macrobench_iters_ok(e["iterations"]):
+        return False
+    cv = e.get("cv")
+    if cv is not None and not (isinstance(cv, dict) and all(_macrobench_num(x) for x in cv.values())):
+        return False
     return all(isinstance(v, dict) and set(v) <= set(MACROBENCH_PERCENTILES) and all(_macrobench_num(x) for x in v.values())
                and all(s in v for s in MACROBENCH_SAMPLED_JUDGED) for v in sampled.values())
 
@@ -39660,6 +39709,18 @@ def _macrobench_update(bpath, baseline, unreadable, current, failed):
     return 0
 
 
+def _macrobench_low_iterations(current):
+    """這次讀到的情境裡,記著輪數而且少於 MACROBENCH_MAG_ONLY_ITERS 的那些(讀不出輪數的不列)。"""
+    return [{"key": k, "iterations": v["iterations"]} for k, v in sorted(current.items())
+            if v.get("iterations") is not None and v["iterations"] < MACROBENCH_MAG_ONLY_ITERS]
+
+
+def _macrobench_print_low_iterations(low):
+    for x in low:
+        print(f"  [輪數不足] {x['key']}:只跑了 {x['iterations']} 輪;建議 Macrobenchmark 的 iterations 設 {MACROBENCH_MAG_ONLY_ITERS},"
+              f"少於 {MACROBENCH_MAG_ONLY_ITERS} 輪時啟動類照舊要超出基準最大值才算變慢")
+
+
 def _macrobench_print(res, cfg):
     """把比對結果印成給人看的文字。"""
     if res["baseline_missing"]:
@@ -39672,6 +39733,7 @@ def _macrobench_print(res, cfg):
     for f in res["failed"]:
         label = "重複情境,沒收" if f.get("kind") == "duplicate" else "讀不了"
         print(f"  {label} {f['file']}:{f['reason']}")
+    _macrobench_print_low_iterations(res.get("low_iterations", []))
 
 
 def _macrobench_print_diff(res, cfg):
@@ -40139,16 +40201,19 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
     res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
            "failed": [], "baseline_missing": False, "baseline_unreadable": False,
            "threshold_failures": [], "threshold_passed": [], "threshold_skipped": [],
-           "stability_unjudged": None}   # 鍵固定、沒東西可判時才填字串(代碼審 r4 架構對齊席)
+           "stability_unjudged": None, "low_iterations": []}   # 鍵固定、沒東西可判時才填字串(代碼審 r4 架構對齊席)
     stab_res = _macrobench_judge_stability(thresholds, stab)   # 記憶體與穩定性:只看 stability.json,有沒有接 Macrobenchmark 都照判
     _macrobench_stab_unjudged(res, stab, thresholds, as_json)
     if cfg is None or not cfg["results_dirs"]:
         return _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_baseline)
     current, failed, n_files = _macrobench_collect(repo, cfg)
+    res["low_iterations"] = _macrobench_low_iterations(current)
     bpath = Path(repo) / ".lumos" / "macrobench-baseline.json"
     baseline, missing, unreadable = _macrobench_load_baseline(bpath)
     if update_baseline:
-        return _macrobench_update(bpath, baseline, unreadable, current, failed)
+        rc = _macrobench_update(bpath, baseline, unreadable, current, failed)
+        _macrobench_print_low_iterations(res["low_iterations"])   # 存下少於 20 輪的基準時就提醒:這份基準會讓 20 輪規則一直不生效(代碼審 r1 單審)
+        return rc
     res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
     if not missing and not unreadable:
         res.update(_macrobench_compare(baseline, current, cfg))

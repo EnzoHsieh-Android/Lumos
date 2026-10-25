@@ -18,7 +18,7 @@
              "battery_percent_before": 100, "battery_percent_after": 100,
              "thermal_status_before": "0", "thermal_status_after": "0",
              "cpu_locked": false, "cpu_locked_note": "照抄結果檔 context.cpuLocked;未 root 時是猜的,兩邊不同列 gaps"},
-  "scenario": {"id": "…", "benchmark": "<類別#方法>", "iterations": 5, "compilation_mode": "None",
+  "scenario": {"id": "…", "benchmark": "<類別#方法>", "iterations": 20, "compilation_mode": "None",
                "instrument_args": {"<鍵>": "<值>"}, "baseline_instrument_args": {}, "steps": ["沒有 Macrobenchmark 時寫 adb shell input 步驟"],
                "valid_iterations": {"frame_count_runs": [1033, 1014], "confirmed_in_trace": [0, 1, 2, 3, 4]},
                "started_utc": "…", "ended_utc": "…", "baseline_run_id": "…"},

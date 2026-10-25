@@ -1,0 +1,503 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md
+index d75494e2..43403c5c 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android效能判定統計化_計劃.md
+@@ -1,18 +1,18 @@
+ ---
+ type: project
+-status: todo
++status: doing
+ created: 2026-10-24
+ updated: 2026-10-24
+ tags:
+   - type/project
+-  - status/todo
++  - status/doing
+   - scope/stack-knowledge
+ related:
+   - "[[Projects/Macrobenchmark退步提醒_計劃]]"
+   - "[[Projects/Macrobenchmark驗收門檻_計劃]]"
+   - "[[Projects/Android記憶體與穩定性驗收_計劃]]"
+ lands_in:
+   - Systems/macrobenchmark-adapter
+ ---
+ # Android效能判定統計化_計劃
+ 
+@@ -40,11 +40,23 @@ REVISIT:2026-11-30 記憶體與穩定性子案收尾後,照下面待辦開設計
+ 
+ ## 實務隱患
+ 
+ - 已排除:金流:只讀效能量測結果檔,不碰交易。
+ - 已排除:對外送出:判定在本機跑,不送出資料。
+ - 已排除:不可逆:判定唯讀,基準檔多存欄位可回退。
+ - 已排除:守衛面:判定照舊只提醒不擋;擋合併在子案二另案。
+ 
+ ## 條款
+ 
+-- [S1] 當這份計劃開始設計時,應先依待辦各條寫出各自的條款與測試,再跑規格閘 [manual:設計開始時改寫本節,這行刪掉]
++第一批只做待辦第 1、2 條(2026-10-25 Enzo 選「實作效能計劃前幾條」;已實作,見 [[Systems/macrobenchmark-adapter]])。Lumos 不跑效能測試,輪數寫在各專案自己的 Macrobenchmark 測試裡,所以第 1 條在 Lumos 這邊落成「記下輪數、輪數不足時提醒、算變異係數」,第 2 條綁在「兩邊都至少 20 輪」才生效:既有專案(5 輪、10 輪、舊基準沒記輪數)的判定完全不變,第 2 條自動跟第 1 條一起上線。
++
++- [S1] 當基準與現況某個情境都記著至少 20 輪時,lumos macrobench 判那個情境的啟動類指標(有中位數、最小值、最大值的那類)變慢,應只看中位數比基準中位數慢超過容差,不再要求比基準最大值還慢;任一邊少於 20 輪時照舊兩道都要過 [test:t_macrobench_mag_only_at_20]
++- [S2] 當基準是舊格式、沒記輪數時,應照舊兩道都要過才算變慢 [test:t_macrobench_single_gate_not_enough] [keeps]
++- [S3] 當現況某個情境少於 20 輪時,文字輸出應印一行提醒並寫出那個情境的輪數,--json 的 low_iterations 列出情境與輪數;判定結果不因此改變 [test:t_macrobench_low_iterations_notice]
++- [S4] 當帶 --update-baseline 時,基準檔每個情境應記下輪數,啟動類每個指標另記各輪的變異係數(標準差除以平均);結果檔的 runs 缺、不是清單或含非有限數時那一項不記,照樣能比、能存 [test:t_macrobench_baseline_records_iterations]
++- [S5] 當判滑動類指標時,lumos macrobench 應照舊把 P50、P90 過容差,或每幀超時 P90 從不超時變成超時,算成變慢,不受輪數影響 [test:t_macrobench_overrun_crosses_zero] [keeps]
++- [S6] 當 AI 照 lumos-android-evidence skill 接 Macrobenchmark 時,範例與說明應寫明預設 20 輪,以及兩邊都至少 20 輪時啟動類只看差幅 [manual:讀 skills/lumos-android-evidence 的 SKILL.md 與 reference.md,範例的 iterations 是 20、L0 段寫了 20 輪規則]
++
++## 回退
++
++- 判定:S1 的規則只看基準與現況是否都有輪數欄位且至少 20 輪;要回到舊判法,把 20 輪那個常數設成極大值即可,舊基準不用改。
++- 基準檔:多記的輪數與變異係數是新增欄位,舊版 lumos 讀到會照舊判(不認得的欄位不影響比對);刪掉這兩欄就回到舊格式。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+index 2e692147..aabab6f8 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
++++ b/docs/lumos-toolchain-knowledge/Systems/macrobenchmark-adapter.md
+@@ -7,21 +7,23 @@ responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrob
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/templates/android-receipt-rerun.sh
+   - scripts/templates/android-ui-attribution.sql
+ tags:
+   - type/system
+   - status/doing
+   - scope/stack-knowledge
+ summary: |-
+-  WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢 [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
++  WHY:判退步要同時過兩道:中位數慢超過容差、而且比基準最大值還慢;例外是基準與現況都記著至少 20 輪時,啟動類只看差幅(見下一行) [出處:[[Projects/Macrobenchmark退步提醒_計劃]]] [因:官方說基準結果本來就浮動;只比百分比,基準那次剛好偏快就會誤報] [不選:官方的 step fitting(要存多次建置的歷史,第一版不做)] [test:t_macrobench_regression_needs_both]
++  WHY:基準與現況都記著至少 20 輪時,啟動類只看中位數差幅、不再要求超出基準最大值;任一邊少於 20 輪或舊基準沒記輪數,照舊兩道 [出處:[[Projects/Android效能判定統計化_計劃]] 第 1、2 條,[[Verification/2026-10-24_效能判定規則實機評測]]] [因:實測 20 輪時拿掉那道,啟動 +20ms 那級從 1/24 抓到 10/24,同場與跨時段誤報仍是 0;10 輪時跨時段多 1 組誤報,所以綁在 20 輪] [不選:一律拿掉那道(5、10 輪時沒好處、10 輪還多誤報);另開設定讓專案自己選(多一個要記得的開關)] [test:t_macrobench_mag_only_at_20]
++  WHY:讀結果檔時記下每個情境的輪數(iterations)與啟動類各指標的變異係數(cv,母體標準差除以平均),--update-baseline 一起寫進基準;現況少於 20 輪時 --json 的 low_iterations 列出、文字輸出印一行提醒,判定不變 [出處:[[Projects/Android效能判定統計化_計劃]] S3、S4] [因:20 輪規則要知道兩邊各跑幾輪,舊基準只有統計值;L0 收據要記各輪的變異係數] [不選:讀不出輪數時猜一個值(猜錯會讓 5 輪的專案也放寬)] [test:t_macrobench_baseline_records_iterations]
+   WHY:滑動類只有百分位,P50 與 P90 過容差算退步,P99 只列出 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S8] [因:P99 浮動大,拿來判會一直誤報] [test:t_macrobench_sampled_percentiles]
+   WHY:有退步也回 0,只提醒不擋推送 [出處:[[Projects/併發與效能表態要合約背書_計劃]] 2026-10-01 推送前證據不收毫秒] [因:毫秒隨機器與溫度浮動,拿來擋會隨機誤擋] [test:t_macrobench_exit_codes]
+   PITFALL:結果檔名的寫法隨函式庫版本變,照官方文件範例拼檔名會找不到檔:1.2.4 把套件名的點換成底線,1.4.1 保留點 [出處:2026-10-21 Citrus_KDS 模擬器實跑(1.2.4)、2026-10-23 實機小專案(1.4.1)] [根因:函式庫自己決定檔名正規化,各版不同] [test:t_macrobench_reads_real_kds_file]
+   SEE:[[Systems/compose-metrics-adapter]] [[Projects/Macrobenchmark退步提醒_計劃]]
+   WHY:--update-baseline 把這次讀到的項目蓋進舊基準,不整份重寫 [出處:[[Projects/Macrobenchmark退步提醒_計劃]] S6] [因:某個結果檔這次壞掉時,它原本的項目不能跟著消失] [代價:已刪掉的情境會留在基準裡,每次列成「沒跑到」] [test:t_macrobench_update_baseline_skips_failed]
+   REVISIT:2026-12-21 看接上的消費專案基準裡有沒有累積「沒跑到」的舊情境;有就加一個刪除舊情境的選項
+   WHY:容差取「基準絕對值×容差百分比」與絕對容差兩者較大的那個,不只按比例 [出處:2026-10-23 實機小專案正常版重跑] [因:每幀超時這種接近 0 的指標,10% 的容差只剩零點幾毫秒,正常抖動就被報成變慢;滑動類又沒有超出基準浮動範圍那第二道] [不選:只對每幀超時一個指標特別處理(其他接近 0 的指標會再踩一次)] [test:t_macrobench_real_tablet_lab]
+   WHY:另讀 .lumos/macrobench-thresholds.json 判人裁的驗收門檻,跟基準比對分開、沒基準也照判,沒達也回 0 [出處:[[Projects/Macrobenchmark驗收門檻_計劃]] 2026-10-23 Enzo 裁只提醒不擋] [因:驗收門檻是絕對值,第一次接上就要能判;每條記 contract 指回功能節點的合約行,流程驗收與效能門檻才連得起來] [不選:節點摘要行新增前綴(要改 lint 與形狀檢查)] [test:t_macrobench_threshold_fail]
+   PITFALL:門檻的 stat 寫錯類(滑動類指標寫 median)只看門檻檔判不出來,要對照這次結果才知道指標是哪一類 [出處:2026-10-23 實作] [根因:門檻檔不記指標類型,類型由結果檔決定] [test:t_macrobench_threshold_bad_file]
+   WHY:--update-baseline 把每個情境的來源結果檔(相對路徑與 sha256)一起寫進基準,比對不看這欄 [出處:[[Projects/Macrobenchmark驗收門檻_計劃]] S9,2026-10-23 測試專案端到端演練] [因:逐層診斷 L1 要拿基準那次的 Trace 做 A/B,基準檔原本只有統計值,找不到是哪一次] [不選:另存一份來源索引檔(兩份要同步)] [test:t_macrobench_baseline_records_source]
+@@ -43,19 +45,19 @@ verified_by:
+   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
+   - "[[Verification/2026-10-24_效能判定規則實機評測]]"
+ ---
+ # macrobenchmark-adapter
+ 
+ 白話:Android 專案在測試機上跑完 Macrobenchmark(量啟動時間、滑動時每幀耗時的官方工具)後,`lumos macrobench` 讀它留下的結果檔,跟存好的基準比,列出哪個情境變慢了。只讀檔、只提醒;建置、裝置、跑測試都是消費專案自己的事。
+ 
+ - 設定 `.lumos/macrobench.json`:`results_dirs`(結果目錄清單;有 `stability` 段的專案可以不填或給空清單)、`tolerance_pct`(預設 10)、`abs_tolerance`(容差下限,預設 1;容差取 |基準|×`tolerance_pct` 與它兩者較大的)、`higher_is_better`、`ignore_metrics`(預設忽略 `frameCount`)。
+ - 基準 `.lumos/macrobench-baseline.json`,用 `lumos macrobench --update-baseline` 建立或放行刻意的變慢。
+ - 換了裝置(型號或系統指紋不同)整項不比,只列出來。
+-- 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
++- 基準檔任何一項形狀不對,整份當讀不了:不比、`--update-baseline` 也不蓋掉它,要人看過再刪(計劃條款 S11)。「形狀對」的標準跟讀結果檔產出的一樣:啟動類 median/minimum/maximum 都是數字;有 iterations 時要是正整數、有 cv 時每個值都是有限數;滑動類只能有 P50、P90、P95、P99 這幾個鍵、全是數字,P50 與 P90 必有;device 是物件。只驗比對會用到的那幾個值會漏,實際踩過 P99 是 null 時噴例外。
+ - 同一個情境出現在兩個結果檔,兩份都不收,訊息明講重複出現(更新基準與一般比對兩條路都是),不說成讀不了;常見原因是 `results_dirs` 同時指到同一份結果的兩個副本(計劃條款 S12)。
+ - 第一個消費端的跑法(假 POS 伺服器、模擬器設定)記在 Citrus_KDS 圖譜的 `Systems/效能基準`。
+ 
+ REVISIT:2026-12-21 接上實機結果後,看結果檔或基準裡有沒有出現 NaN 或 Infinity;有就把數值判斷改成只收有限數,現在 NaN 會讓那一項永遠比不出變慢 [closed:2026-10-23 門檻檔的 NaN 讓門檻恆判達標(代碼審 code-android-evidence 抓到),同一族一次改完:macrobench 讀數字一律只收有限數]
+ 
+ `scripts/templates/android-receipt-rerun.sh` 是 lumos-android-evidence 收據的重跑腳本範本:照 queries.sql 的標頭重跑查詢並比對 expect,0 全部相符、1 比對不符、2 收據本身寫錯(標頭沒被解析到、一條 expect 都沒有、manifest 列的查詢不在檔裡、查詢指到不存在的 artifact 或 requires)或分析工具執行不了(環境沒準備好,不是收據寫錯),回 2 時 stderr 印「擋下:」並說是哪一種。收據寫歪到解析那一步才出錯的幾種情形目前是 Traceback 回 1,見 [[Issues/Android收據重跑第四輪放行的小缺口]]。登記在工具組複製清單(`_VENDORED_TREE_FILES`),消費專案才會在 lumos init/update 時拿到它。寫收據時複製進消費專案的收據目錄;它跟 macrobench 同屬 Android 效能證據這一塊,所以掛在這篇。
+ 
+ `scripts/templates/android-ui-attribution.sql` 是 lumos-android-evidence L1 的分類查詢範本:把 App 主執行緒每一幀的自身時間拆成 Compose、只有 XML 才有的元件、兩種寫法共用的畫面管線、其他四類,嵌在 XML 裡的 Compose 算給 Compose;跟基準比哪一類長最多,決定往 Compose 分支還是原本的 L2 走。規則與為什麼這樣分見 [[Projects/Android介面寫法分流_計劃]]。只用標準 SQLite 語法與 slice/thread_track/thread/process 四張表,測試(`t_android_ui_attribution_*`)用 Python 內建的 sqlite3 跑同一支檔;實際分析時交給 trace_processor。第一欄 `frame` 是「f 接幀起點」的字串,收據的重跑腳本拿第一欄當鍵。一樣登記在工具組複製清單。範本整份(含檔頭註解)貼進收據的 queries.sql 照樣能重跑:範本註解不以分號結尾;重跑腳本用 Python 的 UTF-8 模式跑(`exec env PYTHONUTF8=1 python3 -`),收據檔頭帶 BOM 也讀得到,分析工具執行不了時回 2 並刪掉暫存查詢檔(`t_android_ui_attribution_receipt_rerun` 在預設與 LC_ALL=C 兩種環境跑,macOS 與 Linux 容器都驗過)。
+diff --git a/scripts/lumos b/scripts/lumos
+index 4ee45b0f..a7e337ef 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39357,20 +39357,21 @@ def _compose_metrics_mode(repo, as_json, update_baseline, audit=False):
+         if new_modules:
+             print(f"notice: new modules (not in baseline): {', '.join(new_modules)}")
+     return 0
+ 
+ 
+ MACROBENCH_DEFAULTS = {"tolerance_pct": 10.0, "abs_tolerance": 1.0, "higher_is_better": [], "ignore_metrics": ["frameCount"]}
+ MACROBENCH_PERCENTILES = ("P50", "P90", "P95", "P99")   # 結果檔滑動類指標會有的百分位
+ MACROBENCH_SAMPLED_JUDGED = ("P50", "P90")   # 滑動類只有百分位:這兩個過容差算退步
+ MACROBENCH_SAMPLED_LISTED = ("P99",)         # P99 太吵:變慢只列出,不算退步
+ MACROBENCH_ZERO_CROSS = {"frameOverrunMs": "P90"}   # 每幀超時從不大於 0 變成大於 0 = 開始掉幀,不看差幅
++MACROBENCH_MAG_ONLY_ITERS = 20   # 基準與現況都至少這麼多輪時,啟動類只看差幅、不再要求超出基準最大值(2026-10-24 實機評測,見 Android效能判定統計化_計劃 第 1、2 條)
+ 
+ 
+ def _macrobench_num(v):
+     """macrobench 讀到的數字一律用這支:是數字(不收 JSON 的 true/false)而且是有限數。
+     json.loads 收 NaN 與 ±Infinity,不擋的話 NaN 門檻恆判達標、無限大容差永遠不算退步。"""
+     import math
+     try:
+         return _secev_num(v) and math.isfinite(v)
+     except OverflowError:   # JSON 的超大整數讀成 Python int,轉 float 溢位;當成不合格,不要噴例外
+         return False
+@@ -39469,20 +39470,56 @@ def _macrobench_stab_optional_err(st):
+     if not isinstance(st.get("category", "app"), str) or st.get("category", "app") not in MACROBENCH_VITALS_FG:
+         return "category 只能是 app 或 game"
+     if "max_record_s" in st and (not _macrobench_num(st["max_record_s"]) or not 1 <= st["max_record_s"] <= 86400):
+         return "max_record_s 要是 1 到 86400 之間的秒數"
+     for k in ("adb_serial", "mapping"):
+         if k in st and (not isinstance(st[k], str) or not st[k].strip()):
+             return f"{k} 要是非空字串"
+     return None
+ 
+ 
++def _macrobench_runs_count(runs, nested):
++    """結果檔一個指標的 runs → 輪數;不是清單、空的、或含非有限數就回 None(不記輪數,照樣能比)。
++    滑動類每輪是一串幀(nested),啟動類每輪是一個數字。"""
++    if not isinstance(runs, list) or not runs:
++        return None
++    rows = runs if nested else [[x] for x in runs]
++    if not all(isinstance(r, list) and r and all(_macrobench_num(x) for x in r) for r in rows):
++        return None
++    return len(runs)
++
++
++def _macrobench_cv(runs):
++    """各輪的變異係數 = 母體標準差 / |平均|;平均是 0 時回 None(除不出)。"""
++    import statistics
++    mean = statistics.fmean(runs)
++    return statistics.pstdev(runs) / abs(mean) if mean else None
++
++
++def _macrobench_iterations(b, ignore):
++    """一項 benchmark 的輪數與啟動類各指標的變異係數。有一個沒忽略的指標的 runs 讀不出輪數,整項就不記輪數(保守:照舊兩道)。"""
++    counts, cv = [], {}
++    for name, v in (b.get("metrics") or {}).items():
++        if name in ignore:
++            continue
++        n = _macrobench_runs_count(v.get("runs") if isinstance(v, dict) else None, nested=False)
++        counts.append(n)
++        if n is not None:
++            c = _macrobench_cv([float(x) for x in v["runs"]])
++            if c is not None:
++                cv[name] = c
++    for name, v in (b.get("sampledMetrics") or {}).items():
++        if name not in ignore:
++            counts.append(_macrobench_runs_count(v.get("runs") if isinstance(v, dict) else None, nested=True))
++    return (min(counts) if counts and None not in counts else None), cv
++
++
+ def _macrobench_read_one(b, ignore):
+     """結果檔裡的一項 benchmark → (情境鍵, metrics, sampled)。格式不對丟 ValueError。
+     情境鍵 = 測試類別#測試名,有參數時再接 [排序後的參數 JSON]。"""
+     import json
+     if not isinstance(b, dict) or not isinstance(b.get("className"), str) or not isinstance(b.get("name"), str):
+         raise ValueError("benchmarks 裡每一項要有 className 與 name")
+     key = f"{b['className']}#{b['name']}"
+     if b.get("params"):
+         key += "[" + json.dumps(b["params"], sort_keys=True, ensure_ascii=False) + "]"
+     metrics, sampled = {}, {}
+@@ -39508,20 +39545,25 @@ def _macrobench_read_file(path, ignore, raw=None):
+     import json
+     data = json.loads((Path(path).read_bytes() if raw is None else raw).decode("utf-8"))
+     if not isinstance(data, dict) or not isinstance(data.get("benchmarks"), list):
+         raise ValueError("最外層要是物件、要有 benchmarks 清單")
+     build = ((data.get("context") or {}).get("build") or {})
+     device = {"model": str(build.get("model", "")), "fingerprint": str(build.get("fingerprint", ""))}
+     out = {}
+     for b in data["benchmarks"]:
+         key, metrics, sampled = _macrobench_read_one(b, ignore)
+         out[key] = {"device": device, "metrics": metrics, "sampled": sampled}
++        iters, cv = _macrobench_iterations(b, ignore)
++        if iters is not None:
++            out[key]["iterations"] = iters
++        if cv:
++            out[key]["cv"] = cv
+     return out
+ 
+ 
+ def _macrobench_collect(repo, cfg):
+     """掃設定的結果目錄底下所有 *-benchmarkData.json(含子目錄;檔名裡套件名的點會被換成底線,不能拼檔名)。
+     回 (entries, failed, n_files);同一個情境出現在兩個檔 → 兩個都不收、記進 failed。"""
+     import hashlib
+     entries, failed, seen, n_files = {}, [], {}, 0
+     for d in cfg["results_dirs"]:
+         base = Path(repo) / d
+@@ -39552,28 +39594,31 @@ def _macrobench_collect(repo, cfg):
+ 
+ def _macrobench_worse(metric, base, cur, cfg):
+     """回 (變差了多少, 容差);變快或持平時差值 ≤ 0。容差 = max(|基準|×容差百分比, 絕對容差):
+     基準是負數也按絕對值算比例、基準是 0 時就是絕對容差;接近 0 的指標(例如每幀超時)只靠比例會被正常抖動誤報。"""
+     delta = (base - cur) if metric in cfg["higher_is_better"] else (cur - base)
+     tol = max(abs(base) * cfg["tolerance_pct"] / 100.0, cfg["abs_tolerance"])
+     return delta, tol
+ 
+ 
+ def _macrobench_cmp_metrics(key, base, cur, cfg, res):
+-    """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步。"""
++    """啟動類(有 median/min/max):中位數慢超過容差,而且超出基準那次的浮動範圍,兩道都過才算退步;
++    基準與現況都記著至少 MACROBENCH_MAG_ONLY_ITERS 輪時只看差幅(輪數多,單次偏快的基準不再讓小幅變慢躲進浮動範圍)。"""
++    mag_only = all(isinstance(e.get("iterations"), int) and not isinstance(e.get("iterations"), bool)
++                   and e["iterations"] >= MACROBENCH_MAG_ONLY_ITERS for e in (base, cur))
+     for metric, c in sorted(cur["metrics"].items()):
+         b = (base.get("metrics") or {}).get(metric)
+         if not b:
+             continue
+         delta, tol = _macrobench_worse(metric, b["median"], c["median"], cfg)
+         outside = c["median"] < b["minimum"] if metric in cfg["higher_is_better"] else c["median"] > b["maximum"]
+-        if delta > tol and outside:
++        if delta > tol and (outside or mag_only):
+             res["regressions"].append({"key": key, "metric": metric, "stat": "median",
+                                        "baseline": b["median"], "current": c["median"], "delta": delta})
+ 
+ 
+ def _macrobench_cmp_sampled(key, base, cur, cfg, res):
+     """滑動類(只有百分位):P50/P90 過容差算退步,P99 只列出;每幀超時跨零不看差幅。"""
+     for metric, c in sorted(cur["sampled"].items()):
+         b = (base.get("sampled") or {}).get(metric)
+         if not b:
+             continue
+@@ -39613,20 +39658,26 @@ def _macrobench_entry_ok(e):
+     """基準檔的一項要跟讀結果檔產出的形狀一樣(見 _macrobench_read_one):啟動類三個統計值都是數字;
+     滑動類只能有 P50 到 P99 這幾個鍵、全是數字,P50/P90 必有;device 是物件。比對會讀到的每個值都先驗過,才不會噴例外。"""
+     if not isinstance(e, dict) or not isinstance(e.get("device"), dict):
+         return False
+     metrics, sampled = e.get("metrics", {}), e.get("sampled", {})
+     if not isinstance(metrics, dict) or not isinstance(sampled, dict):
+         return False
+     if not all(isinstance(v, dict) and all(_macrobench_num(v.get(s)) for s in ("median", "minimum", "maximum"))
+                for v in metrics.values()):
+         return False
++    it = e.get("iterations")
++    if it is not None and not (isinstance(it, int) and not isinstance(it, bool) and it >= 1):
++        return False
++    cv = e.get("cv")
++    if cv is not None and not (isinstance(cv, dict) and all(_macrobench_num(x) for x in cv.values())):
++        return False
+     return all(isinstance(v, dict) and set(v) <= set(MACROBENCH_PERCENTILES) and all(_macrobench_num(x) for x in v.values())
+                and all(s in v for s in MACROBENCH_SAMPLED_JUDGED) for v in sampled.values())
+ 
+ 
+ def _macrobench_load_baseline(bpath):
+     """回 (entries, missing, unreadable);任何一項形狀不對,整份當讀不了(不比、也不讓 --update-baseline 蓋掉它)。"""
+     import json
+     if not bpath.exists():
+         return {}, True, False
+     try:
+@@ -39665,20 +39716,23 @@ def _macrobench_print(res, cfg):
+     if res["baseline_missing"]:
+         print("還沒有基準:這次的結果先存成基準,之後才比得出有沒有變慢:")
+         print("    lumos macrobench --update-baseline")
+     elif res["baseline_unreadable"]:
+         print("基準檔讀不了,這次沒比。修好它,或刪掉後重存基準。")
+     else:
+         _macrobench_print_diff(res, cfg)
+     for f in res["failed"]:
+         label = "重複情境,沒收" if f.get("kind") == "duplicate" else "讀不了"
+         print(f"  {label} {f['file']}:{f['reason']}")
++    for x in res.get("low_iterations", []):
++        print(f"  [輪數不足] {x['key']}:只跑了 {x['iterations']} 輪;建議 Macrobenchmark 的 iterations 設 {MACROBENCH_MAG_ONLY_ITERS},"
++              f"少於 {MACROBENCH_MAG_ONLY_ITERS} 輪時啟動類照舊要超出基準最大值才算變慢")
+ 
+ 
+ def _macrobench_print_diff(res, cfg):
+     """有基準時的比對結果:變慢、僅列出、換裝置、新出現、沒跑到。"""
+     regs = res["regressions"]
+     print(f"比了 {res['checked']} 個情境,{len(regs)} 項變慢(容差 {cfg['tolerance_pct']:g}%;只提醒,不擋推送)。")
+     for r in regs:
+         why = "從準時變成掉幀" if r.get("zero_crossed") else f"慢了 {r['delta']:.1f}"
+         print(f"  [變慢] {r['key']} {r['metric']} {r['stat']}:{r['baseline']:.1f} → {r['current']:.1f}({why})")
+     for r in res["listed"]:
+@@ -40132,26 +40186,28 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
+     stab, serr = _macrobench_stab_load(stability_path) if stability_path else (None, None)
+     if err or terr or serr:
+         print(f"擋下:{err or terr or serr}", file=sys.stderr)
+         return 2
+     if check_config:
+         print("macrobench 設定與門檻檔都合格。" if cfg else "這個專案沒有 .lumos/macrobench.json;門檻檔合格。")
+         return 0
+     res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
+            "failed": [], "baseline_missing": False, "baseline_unreadable": False,
+            "threshold_failures": [], "threshold_passed": [], "threshold_skipped": [],
+-           "stability_unjudged": None}   # 鍵固定、沒東西可判時才填字串(代碼審 r4 架構對齊席)
++           "stability_unjudged": None, "low_iterations": []}   # 鍵固定、沒東西可判時才填字串(代碼審 r4 架構對齊席)
+     stab_res = _macrobench_judge_stability(thresholds, stab)   # 記憶體與穩定性:只看 stability.json,有沒有接 Macrobenchmark 都照判
+     _macrobench_stab_unjudged(res, stab, thresholds, as_json)
+     if cfg is None or not cfg["results_dirs"]:
+         return _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_baseline)
+     current, failed, n_files = _macrobench_collect(repo, cfg)
++    res["low_iterations"] = [{"key": k, "iterations": v["iterations"]} for k, v in sorted(current.items())
++                             if v.get("iterations") is not None and v["iterations"] < MACROBENCH_MAG_ONLY_ITERS]
+     bpath = Path(repo) / ".lumos" / "macrobench-baseline.json"
+     baseline, missing, unreadable = _macrobench_load_baseline(bpath)
+     if update_baseline:
+         return _macrobench_update(bpath, baseline, unreadable, current, failed)
+     res.update(failed=failed, baseline_missing=missing, baseline_unreadable=unreadable)
+     if not missing and not unreadable:
+         res.update(_macrobench_compare(baseline, current, cfg))
+     judged, terr = _macrobench_check_thresholds(thresholds, current)   # 門檻是絕對值,有沒有基準都照判
+     if terr:
+         print(f"擋下:{terr}", file=sys.stderr)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e19f68dc..1faf17dd 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -19458,20 +19458,120 @@ def t_macrobench_baseline_records_source():
+         es = json.loads(bp.read_text(encoding="utf-8"))["entries"]
+         check("這次讀不了的檔,沿用的舊項目保留原本的來源", es.get("pkg.S#coldStartup", {}).get("source", {}).get("sha256") == want, str(es)[:400])
+         check("新讀到的項目記新檔的來源", es.get("pkg.T#coldStartup", {}).get("source", {}).get("file") == "out/run1/y-benchmarkData.json", str(es)[:400])
+         old = {"version": 1, "entries": {"pkg.T#coldStartup": {k: v for k, v in es["pkg.T#coldStartup"].items() if k != "source"}}}
+         bp.write_text(json.dumps(old), encoding="utf-8")
+         r2 = _mb_run(root, "--json")
+         d = json.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
+         check("沒有來源欄的舊基準照樣能比", d.get("baseline_unreadable") is False and d.get("checked") == 1, r2.stdout[:300])
+ 
+ 
++def t_macrobench_mag_only_at_20():
++    """[S1] 基準與現況都記著至少 20 輪時,啟動類只看中位數差幅:不再要求比基準最大值還慢;任一邊少於 20 輪照舊兩道。
++    手算:基準中位數 1000、容差 10% → 門檻 1100;基準最大值 1300,所以 1120 過了容差、沒超出最大值。
++    應抓到的錯:輪數條件沒接上(永遠兩道 → ①紅)、條件寫成任一邊 ≥20 就放寬(→ ②③紅)、放寬時連容差也拿掉(→ ④紅)。"""
++    m = _macrobench_mod()
++    k = "pkg.StartupBenchmark#coldStartup"
++    def run(cur_median, base_iters, cur_iters):
++        b = _mb_entry(metrics={"timeToInitialDisplayMs": {"median": 1000.0, "minimum": 950.0, "maximum": 1300.0}})
++        c = _mb_entry(metrics={"timeToInitialDisplayMs": {"median": cur_median, "minimum": cur_median, "maximum": cur_median}})
++        if base_iters is not None:
++            b["iterations"] = base_iters
++        if cur_iters is not None:
++            c["iterations"] = cur_iters
++        return m._macrobench_compare({k: b}, {k: c}, _MB_CFG)["regressions"]
++    check("前置:兩邊都沒記輪數時,1120 沒超出基準最大值 1300 → 不算(舊判法)", run(1120.0, None, None) == [], "")
++    regs = run(1120.0, 20, 20)
++    check("① 兩邊都 20 輪:1120 過了容差 1100 → 算變慢,不看基準最大值", len(regs) == 1 and regs[0]["current"] == 1120.0, str(regs))
++    check("② 基準 20 輪、現況 19 輪 → 照舊兩道,不算", run(1120.0, 20, 19) == [], "")
++    check("③ 基準 10 輪、現況 20 輪 → 照舊兩道,不算", run(1120.0, 10, 20) == [], "")
++    check("④ 兩邊都 20 輪但 1080 沒過容差 1100 → 不算", run(1080.0, 20, 20) == [], "")
++    check("⑤ 兩邊都 40 輪也放寬(至少 20)", len(run(1120.0, 40, 40)) == 1, "")
++
++
++def t_macrobench_low_iterations_notice():
++    """[S3] 現況某情境少於 20 輪時,文字輸出印一行提醒並寫出輪數,--json 的 low_iterations 列出情境與輪數;判定不變。
++    應抓到的錯:不提醒(①紅)、提醒但沒寫輪數(②紅)、滿 20 輪也提醒(③紅)、提醒時改了判定(④紅)。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-mbiter-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / "out").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
++        f = root / "out" / "x-benchmarkData.json"
++        five = _mb_startup("pkg.S", 1000.0, 950.0, 1050.0)
++        five["metrics"]["timeToInitialDisplayMs"]["runs"] = [1000.0, 990.0, 1010.0, 950.0, 1050.0]
++        twenty = _mb_startup("pkg.T", 500.0, 480.0, 520.0)
++        twenty["metrics"]["timeToInitialDisplayMs"]["runs"] = [500.0] * 18 + [480.0, 520.0]
++        f.write_text(_mb_result_json([five, twenty]), encoding="utf-8")
++        _mb_run(root, "--update-baseline")
++        r = _mb_run(root, "--json")
++        d = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
++        low = d.get("low_iterations")
++        check("① --json 的 low_iterations 列出 5 輪的情境", isinstance(low, list) and any(x.get("key") == "pkg.S#coldStartup" for x in low), r.stdout[:400])
++        check("② 附上輪數 5", isinstance(low, list) and any(x.get("key") == "pkg.S#coldStartup" and x.get("iterations") == 5 for x in low), str(low))
++        check("③ 滿 20 輪的情境不列", isinstance(low, list) and not any(x.get("key") == "pkg.T#coldStartup" for x in low), str(low))
++        check("④ 判定不變:同一份結果對自己的基準沒有變慢", d.get("regressions") == [] and d.get("checked") == 2, r.stdout[:400])
++        t = _mb_run(root)
++        line = [l for l in t.stdout.splitlines() if "pkg.S#coldStartup" in l and "20" in l]
++        check("⑤ 文字輸出有一行提醒,寫出情境與 5 輪", any("5" in l for l in line), t.stdout[:600])
++
++
++def t_macrobench_baseline_records_iterations():
++    """[S4] --update-baseline 時基準每個情境記下輪數,啟動類每個指標另記各輪的變異係數(母體標準差除以平均);
++    runs 缺、不是清單或含非數字時那一項不記,照樣能比、能存。
++    手算:runs [90,100,110] 平均 100、母體標準差 sqrt((100+0+100)/3)=8.1650 → 0.081650;滑動類 runs 兩輪 → 輪數 2、不記變異係數。
++    應抓到的錯:沒記輪數(①紅)、用樣本標準差 10/100=0.1(②紅)、壞 runs 讓整份讀不了或噴例外(④⑤紅)、只看好的那個指標就記輪數(⑤b紅)。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory(prefix="gctl-mbrec-") as td:
++        root = Path(td)
++        (root / ".lumos").mkdir()
++        (root / "out").mkdir()
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps({"results_dirs": ["out"]}), encoding="utf-8")
++        st = _mb_startup("pkg.S", 100.0, 90.0, 110.0)
++        st["metrics"]["timeToInitialDisplayMs"]["runs"] = [90.0, 100.0, 110.0]
++        sc = {"name": "scrollList", "params": {}, "className": "pkg.L", "metrics": {},
++              "sampledMetrics": {"frameOverrunMs": {"P50": -3.0, "P90": -1.0, "P95": -1.0, "P99": -1.0, "runs": [[-3.0, -1.0], [-2.0, -1.5]]}}}
++        bad = _mb_startup("pkg.B", 200.0, 190.0, 210.0)
++        bad["metrics"]["timeToInitialDisplayMs"]["runs"] = [200.0, "x"]
++        nor = _mb_startup("pkg.N", 300.0, 290.0, 310.0)
++        del nor["metrics"]["timeToInitialDisplayMs"]["runs"]
++        mix = _mb_startup("pkg.M", 400.0, 390.0, 410.0)
++        mix["metrics"]["timeToInitialDisplayMs"]["runs"] = [400.0, 390.0, 410.0]
++        mix["metrics"]["timeToFullDisplayMs"] = {"minimum": 500.0, "maximum": 520.0, "median": 510.0, "runs": [510.0, None]}
++        (root / "out" / "x-benchmarkData.json").write_text(_mb_result_json([st, sc, bad, nor, mix]), encoding="utf-8")
++        r = _mb_run(root, "--update-baseline")
++        bp = root / ".lumos" / "macrobench-baseline.json"
++        es = json.loads(bp.read_text(encoding="utf-8"))["entries"] if bp.exists() else {}
++        s = es.get("pkg.S#coldStartup", {})
++        check("① 啟動類情境記下輪數 3", s.get("iterations") == 3, r.stdout + str(s)[:300])
++        cv = (s.get("cv") or {}).get("timeToInitialDisplayMs")
++        check("② 變異係數是母體標準差除以平均 0.081650", isinstance(cv, float) and abs(cv - 0.0816497) < 1e-5, str(s.get("cv")))
++        l = es.get("pkg.L#scrollList", {})
++        check("③ 滑動類記輪數 2、不記變異係數", l.get("iterations") == 2 and "cv" not in l, str(l)[:300])
++        check("④ runs 含非數字的情境照樣存進基準、不記輪數", "pkg.B#coldStartup" in es and "iterations" not in es["pkg.B#coldStartup"], str(es.get("pkg.B#coldStartup"))[:300])
++        check("⑤ 沒有 runs 的情境照樣存進基準、不記輪數", "pkg.N#coldStartup" in es and "iterations" not in es["pkg.N#coldStartup"], str(es.get("pkg.N#coldStartup"))[:300])
++        check("⑤b 同一情境一個指標 runs 正常、另一個壞掉 → 整項不記輪數(保守照舊兩道)", "pkg.M#coldStartup" in es and "iterations" not in es["pkg.M#coldStartup"], str(es.get("pkg.M#coldStartup"))[:300])
++        r2 = _mb_run(root, "--json")
++        d = json.loads(r2.stdout) if r2.stdout.strip().startswith("{") else {}
++        check("⑥ 帶輪數與變異係數的基準照樣能比", d.get("baseline_unreadable") is False and d.get("checked") == 5, r2.stdout[:300])
++        good = json.loads(bp.read_text(encoding="utf-8"))
++        for label, field, val in (("⑦ 輪數寫成 true", "iterations", True), ("⑧ 輪數寫成 0", "iterations", 0),
++                                  ("⑨ 變異係數不是數字", "cv", {"timeToInitialDisplayMs": "x"})):
++            broken = json.loads(json.dumps(good))
++            broken["entries"]["pkg.S#coldStartup"][field] = val
++            bp.write_text(json.dumps(broken), encoding="utf-8")
++            r3 = _mb_run(root, "--json")
++            d3 = json.loads(r3.stdout) if r3.stdout.strip().startswith("{") else {}
++            check(f"{label} → 基準整份當讀不了(跟其他欄位壞掉一樣,不比、不噴例外)", d3.get("baseline_unreadable") is True and r3.returncode == 0, r3.stdout[:300] + r3.stderr[-300:])
++
++
+ def _mb_scroll(cls, p90, p50=-3.0):
+     return {"name": "scrollList", "params": {}, "className": cls, "metrics": {},
+             "sampledMetrics": {"frameOverrunMs": {"P50": p50, "P90": p90, "P95": p90, "P99": p90, "runs": [[p90]]}}}
+ 
+ 
+ def _mb_thr(**over):
+     t = {"scenario": "pkg.Flow#scrollList", "metric": "frameOverrunMs", "stat": "P90", "max": 0,
+          "contract": "Systems/結帳 ★INVARIANT★ 從主頁進結帳", "decided_by": "Enzo", "decided_at": "2026-10-23"}
+     t.update(over)
+     return {k: v for k, v in t.items() if v is not None}
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index 3bb36ec0..9074ba2d 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -28,21 +28,21 @@ description: Android 效能問題逐層查到哪一行,並留一份別人重跑
+ ## L0:有沒有變慢、有沒有達門檻
+ 
+ 1. 跑專案的 Macrobenchmark(實體裝置、USB、先 `adb shell svc power stayon usb`;跑前刪掉裝置上 `/sdcard/Android/media/<benchmark 套件>/` 舊檔)。
+ 2. 記下這次的輸入:啟動參數(`am instrument -e …`、intent extras)、測試資料、Feature Flag。基準與候選兩邊都記;同一個 APK 只換參數時,這是兩邊唯一的差異,沒記就證明不了差在哪。
+ 3. 跑前跑後各記一次裝置狀態(L0 是推送前的綁定測試閘代跑、你拿到時已經跑完的話,當下補量一次,收據 gaps 寫明是事後量的):型號、`ro.build.fingerprint`、電量、`dumpsys thermalservice` 的 Thermal Status;從裝置 `pm path` 拉實際安裝的 APK 算 sha256(同一份原始碼重建的 APK 雜湊會不同,只記建置產物不夠)。
+ 4. 拉回結果 JSON 與每輪 `.perfetto-trace` 到 artifacts 目錄,算 sha256 與大小。
+ 5. `lumos macrobench --json` 比對基準,輸出存成 artifact,並把比對用的設定與指令寫進 report.md(L0 的重跑方式)。
+    - 基準是專案自己存的 `.lumos/macrobench-baseline.json`:在專案根直接跑。
+    - 基準是另一次執行(例如同一天先跑的正常版):不要覆蓋專案的基準檔。另建一個暫存目錄,放 `.lumos/macrobench.json`(`results_dirs` 寫基準那次的絕對路徑),並把專案的 `.lumos/macrobench-thresholds.json` 複製進暫存目錄的 `.lumos/`(門檻是從 `--repo` 指的目錄讀的,沒複製就一條門檻都不判),`lumos macrobench --repo <暫存目錄> --update-baseline`,再把 `results_dirs` 改成候選那次的路徑跑 `--json`;收據 `scenario.baseline_run_id` 旁寫明基準是這樣產生的。
+ 6. 找 L1 要對照的基準 Trace:專案基準檔(`.lumos/macrobench-baseline.json`)只有統計值,但每個情境的 `source` 記了它來自哪個結果檔與 sha256;去 artifacts 找雜湊對得上的那次執行,用同一次留下的 Trace。基準是舊版工具存的(沒有 `source`)或那次的 artifacts 已經不在,就用同裝置、同情境、最近一次正常版執行代替,收據寫明它不是基準的來源;都沒有就先用目前正常版的程式重跑一次。
+-7. 檢查有效輪:讀結果檔每輪 `frameCount.runs`(滑動)或每輪啟動時間;某幾輪畫格數明顯少一截,先懷疑量測腳本沒真的操作到(例:清單已停在底部),在收據 `valid_iterations` 記下來,L1 時用 Trace 確認。
++7. 檢查有效輪與輪數:專案的 Macrobenchmark 預設 iterations 寫 20(2026-10-24 實機評測:5 輪時拿另一個時段的基準比會誤報,20 輪歸零);`--json` 的 `low_iterations` 不是空的,收據 gaps 記哪幾個情境只跑了幾輪。基準與現況都至少 20 輪時,啟動類只看中位數差幅;少於 20 輪照舊要超出基準最大值。各輪的變異係數在基準檔每個情境的 `cv`,抄進收據。再讀結果檔每輪 `frameCount.runs`(滑動)或每輪啟動時間;某幾輪畫格數明顯少一截,先懷疑量測腳本沒真的操作到(例:清單已停在底部),在收據 `valid_iterations` 記下來,L1 時用 Trace 確認。
+ 8. **往下條件**:`--json` 的 `regressions` 不是空的(比基準變慢),或 `threshold_failures` 不是空的(沒達人裁的驗收門檻)。有跑記憶體與穩定性收集(`sh scripts/templates/android-stability-collect.sh`,寫出 `.lumos/artifacts/android/<run-id>/stability.json`)時,L0 改跑 `lumos macrobench --json --stability <那份結果檔>`;`threshold_failures` 每筆有 `check` 欄位的照它走:`native_unreachable`、`java_growth`、`instances` → 直接 **L3**(L1、L2 看 CPU 時間,記憶體問題在那裡看不到;專案的 `stability.test_data` 沒寫或 value 不是 true 時不往下,收據記 `[GAP] L3 未授權` 並列出哪條 check 沒過,請人裁要不要宣告);`frozen` → L1;`exits` → 看 `stability.json` 的 `exits.new`(每筆新的結束紀錄),`strictmode` → 看 run 目錄的 `logcat.txt`(只留違規那幾行);`peak_vitals` → L3(沒有宣告時同上,記 `[GAP] L3 未授權`)。都沒有 → 收據記 `L0 通過` 後停,不錄 L2、L3。結果有 `stability_unjudged` 一欄時(給了結果檔、門檻檔卻沒有 check 條目),不能記成 L0 通過:收據 gaps 記「記憶體與穩定性沒有門檻可判」並請人補門檻。`threshold_skipped` 裡的門檻(換了裝置、情境沒跑到)要寫進收據 gaps,不能當成達標。
+ 9. 沒達門檻的那幾條各帶 `contract`(功能節點的合約行):照抄進收據 `contract_refs`,寫回時對到那個功能節點。
+ 
+ ## L1:卡在哪、在算還是在等
+ 
+ 照官方 `$SKILL_ROOT/analysis/workflows/perfetto-trace-analysis/perfetto_trace_analysis.md` 的 Step 1–4 做,含 Step 2 triage 與 Step 3 每個候選的 per_candidate_analysis(skill 要你派子代理的地方就派)。
+ 
+ - 從記憶體與穩定性收集過來的(`frozen` 沒過):主要對象是 run 目錄的 `cycle.pftrace`(N 輪合在一份、沒有逐輪 Trace 也沒有基準 Trace),直接從凍結幀與主執行緒最長阻塞那段往下 triage,不做基準 A/B,收據 gaps 記「沒有基準 Trace」;下面這幾條照 Macrobenchmark 結果檔挑輪次的做法不適用。
+ - 用 L0 那次執行留下的 Trace,不另錄。主要對象挑「有效輪裡超時格最多」的那一輪:超時格數用結果檔 `sampledMetrics.frameOverrunMs.runs[i]` 裡大於 0 的個數(不要用 Trace 的 jank_type,Samsung 上幾乎每格都標 Buffer Stuffing);基準取同一輪次。
+ - triage(Step 2)的派工也附基準 Trace 路徑,要求每個候選附基準同名 slice 的次數與耗時;基準也有同樣量的(例如每格都在的無障礙 binder 呼叫),是本來就有的成本,不算這次的退步。
+diff --git a/skills/lumos-android-evidence/reference.md b/skills/lumos-android-evidence/reference.md
+index 4c543b6a..81df8ac7 100644
+--- a/skills/lumos-android-evidence/reference.md
++++ b/skills/lumos-android-evidence/reference.md
+@@ -11,21 +11,21 @@
+   "purpose": "compare",
+   "question": "一句話:要回答什麼",
+   "project": {"git_commit": "<40 碼>", "dirty": false, "package": "<套件>", "version_code": 1,
+               "build_type": "<建置類型;是否 debuggable / profileable>",
+               "built_apk_sha256": {"app": "…", "benchmark": "…"},
+               "installed_apk_sha256": {"app": "…", "benchmark": "…"}},
+   "device": {"model": "…", "api": 36, "build_fingerprint": "…", "physical": true,
+              "battery_percent_before": 100, "battery_percent_after": 100,
+              "thermal_status_before": "0", "thermal_status_after": "0",
+              "cpu_locked": false, "cpu_locked_note": "照抄結果檔 context.cpuLocked;未 root 時是猜的,兩邊不同列 gaps"},
+-  "scenario": {"id": "…", "benchmark": "<類別#方法>", "iterations": 5, "compilation_mode": "None",
++  "scenario": {"id": "…", "benchmark": "<類別#方法>", "iterations": 20, "compilation_mode": "None",
+                "instrument_args": {"<鍵>": "<值>"}, "baseline_instrument_args": {}, "steps": ["沒有 Macrobenchmark 時寫 adb shell input 步驟"],
+                "valid_iterations": {"frame_count_runs": [1033, 1014], "confirmed_in_trace": [0, 1, 2, 3, 4]},
+                "started_utc": "…", "ended_utc": "…", "baseline_run_id": "…"},
+   "tooling": {"android_profiler_skill_commit": "95ea931a1ad8f9b2be132ae0cfb2aad964d71118",
+               "trace_processor_version": "Perfetto v57.2-…", "trace_processor_sha256": "<平台二進位雜湊>",
+               "perfetto_tools_ref": "v57.2", "simpleperf_ndk": "28.2.13676358",
+               "trace_processor_platform": "mac-arm64", "trace_processor_sha256_note": "平台二進位的雜湊,不是 skill 裡那支包裝腳本", "simpleperf_version": "<simpleperf --version 輸出>",
+               "python_deps": ["texttable", "protobuf"],
+               "benchmark_macro_version": "1.4.1", "queries": "queries.sql", "queries_sha256": "…"},
+   "contract_refs": [{"contract": "Systems/結帳流程 ★INVARIANT★ 從主頁進結帳…", "threshold": "frameOverrunMs P90 ≤ 0", "result": "沒達(3.6)"}],
