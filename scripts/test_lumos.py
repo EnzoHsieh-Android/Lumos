@@ -18749,7 +18749,7 @@ def t_android_e2e_judge_visual():
             check("e2e:v['result'] == want and rec['runs']['result'] == want", v["result"] == want and rec["runs"]["result"] == want, str((desc, rec["runs"])))
             check("e2e:v.get('match_pct') == pct", v.get("match_pct") == pct, str((desc, v)))
             if pct:
-                check("e2e:v['diff'].endswith('home_visual_diff.png') and '97.3' in r.stdout", v["diff"].endswith("home_visual_diff.png") and "97.3" in r.stdout, str((desc, r.stdout)))
+                check("e2e:v['diff_image'].endswith('home_visual_diff.png') and '97.3' in r.stdout", v["diff_image"].endswith("home_visual_diff.png") and "97.3" in r.stdout, str((desc, r.stdout)))
             if desc == "缺基準圖":
                 check("e2e:'沒有基準圖' in v['reason']", "沒有基準圖" in v["reason"], str(v))
     with tempfile.TemporaryDirectory() as td:
