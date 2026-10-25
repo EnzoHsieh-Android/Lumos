@@ -371,7 +371,7 @@ sh scripts/templates/android-e2e-run.sh               # run the whole thing once
 
 <p align="center">
   <a href="assets/android-acceptance-en.svg">
-    <img src="assets/android-acceptance-en.svg" alt="Android full check before push: a preflight (device, tools, clean working tree; fails with exit 2 without touching the app), then build and install, Maestro UI flows, screenshots, memory and stability, and speed (warns only); lumos android-e2e judge decides and writes a verification record tied to this version: 0 passed, 1 failed or not judged, 2 no record; a failure or slowdown is investigated with the diagram above; it does not block pushing yet" width="760">
+    <img src="assets/android-acceptance-en.svg" alt="Android full check before push: a preflight with adb and git (stops without touching the app if it fails), then build and install (Gradle, adb), UI flows (Maestro), screenshots (visual-check.sh), memory and stability (dumpsys, Perfetto), and speed (Macrobenchmark, warns only); lumos android-e2e judge decides and writes a verification record. If it passed, commit the record and push; if UI flows or screenshots failed, read the report and diff image; if memory failed or a slowdown warning appeared, go to the layered check above, where L0 first decides whether there is an anomaly; a failed build, a missing tool or an interruption is a setup problem to fix and rerun" width="760">
   </a>
 </p>
 
@@ -384,11 +384,10 @@ sh scripts/templates/android-e2e-run.sh               # run the whole thing once
 
 **Reading the result.**
 
-| Exit code | Meaning |
-|---|---|
-| 0 | Passed, record written |
-| 1 | Record written, but the result is not a pass: if any part failed it is "failed"; if none failed but one could not run (for example a failed build or install) it is "not judged" |
-| 2 | No record: bad configuration, uncommitted changes, the memory part is on but a Perfetto tool is missing (stopped before the app is touched), or the version changed mid-run |
+- **Passed**: the record is written; commit it and push. A slowdown only adds a warning and still passes.
+- **Failed**: if any part failed, the result is failed, and the terminal shows which part. A failed UI flow comes with its report path and a failed screenshot with its match rate and diff image, so read those; when memory fails, the raw numbers are in this run's artifacts (`.lumos/artifacts/android/<run-id>/stability.json`), and the layered check above takes it from there.
+- **Not judged**: nothing failed, but a part could not run, for example a failed build or install, or the run was interrupted (an interruption still writes this record). That is a setup problem: fix it and run again.
+- **No record**: the preflight stopped (bad configuration, uncommitted changes, or the memory part is on but a Perfetto tool is missing), or the version changed mid-run. Fix it and run again.
 
 A failed UI flow is retried once; it only counts as failed if both runs fail. Speed still only warns, for the same reason as above: millisecond numbers drift.
 
@@ -402,7 +401,7 @@ A failed UI flow is retried once; it only counts as failed if both runs fail. Sp
 
 **Current limits.**
 
-- It does not block pushing yet: forgetting to run it, or failing it, still lets you push. The push check and an override command are the next batch.
+- It does not block pushing yet: forgetting to run it, or failing it, still lets you push.
 - Screenshot comparison catches layout shifts but not a change of a few characters; write key text into the flow file as "this text must be visible".
 - Verified only on one tablet and one lab app.
 

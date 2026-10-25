@@ -45,9 +45,11 @@ Scene roles:
   The check also asserts the four layers L0–L3 in order and one inputs group,
   memory shortcut, and evidence record.
 - Android acceptance: a preflight, five steps in order (build and install, UI
-  flows, screenshots, memory and stability, speed), the judge, and one
-  verification record with its three exit codes. The check asserts the five
-  steps in order and one preflight, judge, and record.
+  flows, screenshots, memory and stability, speed), each badged with its tool,
+  then the judge and two outcomes: passed, or failed / slowdown warning, which
+  hands off to the layered Android check. Outcomes are worded in plain language,
+  not exit codes. The check asserts the five steps in order, one preflight and
+  judge, and the two outcomes in order.
 
 These are conceptual illustrations, not screenshots, benchmark reports, or
 claims of guaranteed correctness. The map retains a moving loop; every scene
