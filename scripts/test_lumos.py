@@ -19001,9 +19001,9 @@ sys.exit(rc)
 """
 
 
-def _e2e_script_env(td):
+def _e2e_script_env(td, **proj):
     import os
-    root = _e2e_proj(td)
+    root = _e2e_proj(td, **proj)
     fake = Path(td) / "fake"
     fake.mkdir()
     for name, body in (("adb", _E2E_FAKE_ADB), ("maestro", _E2E_FAKE_MAESTRO)):
@@ -19029,6 +19029,53 @@ def t_android_e2e_vendored():
     check("android-e2e-run.sh 檔真的在", f.is_file(), "")
     head = f.read_text(encoding="utf-8")[:400] if f.is_file() else ""
     check("android-e2e-run.sh 檔頭有 SPDX 行", "# SPDX-License-Identifier: MIT" in head, head[:120])
+
+
+def t_android_e2e_preflight_stability_tools():
+    """開跑前檢查要先查記憶體那塊要用的工具:開了 stability 就要有 trace_processor,另外宣告了測試資料(會錄快照)
+    還要有 java_heap_dump;少了在動 App 之前就擋、回 2。判準來源是收集腳本自己的開跑檢查(同兩個環境變數 TP=、
+    JAVA_HEAP_DUMP=):2026-10-25 實驗室兩次都要等建置、安裝、UI、截圖跑完,輪到收集腳本才因缺工具記成沒判完。"""
+    import tempfile
+    stab = {"package": "com.lab", "scenario": "pkg.Leak#cycle", "driver": "true", "warmup": 1, "cycles": 2}
+    th = [_ms_thr("exits")]
+    cases = [  # (說明, 開 stability, 宣告測試資料, 有 trace_processor, 有 java_heap_dump, 預期回傳, 訊息裡要有的字)
+        ("開了穩定性、缺 trace_processor", True, False, False, True, 2, "trace_processor"),
+        ("宣告了測試資料、缺 java_heap_dump", True, True, True, False, 2, "java_heap_dump"),
+        ("沒宣告測試資料、缺 java_heap_dump 不擋", True, False, True, False, 0, None),
+        ("兩支都在", True, True, True, True, 0, None),
+        ("沒開穩定性、兩支都缺也不擋", False, False, False, False, 0, None),
+        # 最外層有 stability 段(給單獨的 lumos macrobench --stability 用),e2e 段沒開:看的是 e2e 段,不擋
+        ("只有最外層 stability、e2e 沒開、兩支都缺也不擋", "top", True, False, False, 0, None),
+    ]
+    for desc, on, td_decl, has_tp, has_jhd, want, word in cases:
+        with tempfile.TemporaryDirectory() as td:
+            st = dict(stab, test_data={"value": True, "decided_by": "t", "decided_at": "2026-10-25"}) if td_decl else stab
+            root, fake, env, script = _e2e_script_env(
+                td, e2e={"stability": True, "stability_checks": ["exits"]} if on is True else None,
+                top={"stability": st} if on else None, thresholds=th if on else None)
+            for name, has in (("TP", has_tp), ("JAVA_HEAP_DUMP", has_jhd)):
+                tool = fake / name.lower()
+                if has:
+                    tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                    tool.chmod(0o755)
+                env[name] = str(tool)
+            for extra in (("--preflight",), ()):
+                r = _e2e_script(root, script, env, *extra, "run-t")
+                if want == 2:
+                    check("e2e:缺工具在開跑前擋下、說是哪一支", r.returncode == 2 and f"找不到 {word}" in r.stderr, str((desc, extra, r.returncode, r.stderr[-300:])))
+                    check("e2e:擋下時沒碰 App", not (fake / "installed.apk").exists() and not (fake / "maestro.log").exists(), str((desc, extra)))
+                elif extra:
+                    check("e2e:工具齊或不需要時開跑前檢查過", r.returncode == 0, str((desc, r.stderr[-300:])))
+                else:   # 整套跑:開跑前檢查要放行、真的建置安裝到 App(後面的收集腳本用假工具,成敗不在這條測)
+                    check("e2e:整套跑時開跑前檢查放行", "找不到" not in r.stderr and (fake / "installed.apk").exists(), str((desc, r.returncode, r.stderr[-300:])))
+    # 「宣告了測試資料才要 java_heap_dump」在兩支範本各寫一份(各自是獨立的 python3 - 腳本、照抄進消費專案,無法共用);
+    # 各抽出讀 test_data 的那一行比相等(同 post-commit 對 pre-commit 那道漂移守衛的做法),只改一邊這條就紅
+    tdir = Path(GRAPHCTL).resolve().parent / "templates"
+    got = {name: [ln.strip() for ln in (tdir / name).read_text(encoding="utf-8").splitlines() if 'get("test_data")' in ln]
+           for name in ("android-e2e-run.sh", "android-stability-collect.sh")}
+    check("★前置★ 兩支範本各恰好一行讀 test_data", all(len(v) == 1 for v in got.values()), str(got))
+    check("e2e:兩支範本判斷有沒有宣告測試資料的那一行相同", len(set(v[0] for v in got.values() if v)) == 1, str(got))
+    print("  ✓ t_android_e2e_preflight_stability_tools")
 
 
 def t_android_e2e_run_script():

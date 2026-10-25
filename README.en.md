@@ -354,9 +354,57 @@ When one of the first four (the memory ones) fails, it jumps straight to L3: the
 - It reminds, it does not block pushes: millisecond numbers drift with the phone and its temperature, so they are not suited to a hard gate.
 - Memory snapshots are off by default: a project must first write down who agreed, and on which day, to run on test data only; snapshots stay on the local machine, each later run of the collection script deletes those older than 7 days, nothing is deleted if it is not run again, and you delete them yourself when done.
 - The allowed margin for "counts as slower" is provisional (10% by default, with a 1 ms floor) and will be reset from repeated real-device runs.
-- UI flows can already be written as Maestro (a tool that drives the screen from a text script of what to tap and type) flow files and linked to feature notes for re-checking; making them, together with speed and memory, the end-to-end acceptance standard for Android is the next step.
+- Speed and memory are now part of the "full check before pushing" below; running `lumos macrobench` on its own still only warns.
 
 **To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (Chinese).
+
+</details>
+
+### Full check before pushing (end-to-end acceptance)
+
+**After changing a screen or feature, run the whole app once on a real device before pushing, and keep the result as a verification record.** One script does five things in order: build and install the app, tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, open and close a screen repeatedly to check memory and stability, and run the speed tests. `lumos android-e2e judge` then decides pass or fail. The record is tied to "this version of the app code and test materials": change the app code, a flow file, a baseline image or a threshold, and the record no longer counts.
+
+```
+sh scripts/templates/android-e2e-run.sh --preflight   # only checks the device, tools and working tree
+sh scripts/templates/android-e2e-run.sh               # run the whole thing once
+```
+
+<p align="center">
+  <a href="assets/android-acceptance-en.svg">
+    <img src="assets/android-acceptance-en.svg" alt="Android full check before push: a preflight (device, tools, clean working tree; fails with exit 2 without touching the app), then build and install, Maestro UI flows, screenshots, memory and stability, and speed (warns only); lumos android-e2e judge decides and writes a verification record tied to this version: 0 passed, 1 failed or not judged, 2 no record; a failure or slowdown is investigated with the diagram above; it does not block pushing yet" width="760">
+  </a>
+</p>
+
+<details>
+<summary>How to set it up, how to read the result, experiment results and limits</summary>
+
+**Setup.** Add an `e2e` section to the project's `.lumos/macrobench.json`: which folders count as app code, how to build, where the APK is, which flow files to run; screenshots, memory and stability, and speed each run only when switched on. For screenshots, install [maestro-visual-toolkit](https://github.com/EnzoHsieh-Android/maestro-visual-toolkit) into the project and record baselines first. `lumos update` copies the script into the project's `scripts/templates/`. Details in [Android end-to-end acceptance](docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md) (Chinese).
+
+**Why commit first.** The record is tied to a commit, so the script refuses to run with uncommitted changes, and writes no record if the version changes mid-run. The order is: change code → commit → run the check → commit the record separately.
+
+**Reading the result.**
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Passed, record written |
+| 1 | Record written, but the result is not a pass: if any part failed it is "failed"; if none failed but one could not run (for example a failed build or install) it is "not judged" |
+| 2 | No record: bad configuration, uncommitted changes, the memory part is on but a Perfetto tool is missing (stopped before the app is touched), or the version changed mid-run |
+
+A failed UI flow is retried once; it only counts as failed if both runs fail. Speed still only warns, for the same reason as above: millisecond numbers drift.
+
+**If a screenshot fails because you meant to change the screen, replace the baseline; do not lower the threshold.** Replacing a baseline redefines "this screen is correct", so a person looks at the new image before it is recorded (the toolkit's `visual-record.sh`), then the check is run again.
+
+**Experiment results** (same SM-X710 tablet, same lab app):
+
+- With all four parts on, the full run passed in about 3 minutes (build cached, speed at 5 rounds; the recommended 20 rounds adds a few minutes).
+- Making the app skip releasing a C/C++ library when the screen closes: judged failed, with only the "C/C++ memory nobody points to" item red and everything else passing.
+- Scenario test: asking the AI in plain words to "make the list text bigger, check it, then commit", without mentioning end-to-end acceptance. Before the manual was updated, the AI had to read the tool's source code to find this check; afterwards the same task found it straight from the manual and ran all four parts in the order commit → check → commit record, and passed.
+
+**Current limits.**
+
+- It does not block pushing yet: forgetting to run it, or failing it, still lets you push. The push check and an override command are the next batch.
+- Screenshot comparison catches layout shifts but not a change of a few characters; write key text into the flow file as "this text must be visible".
+- Verified only on one tablet and one lab app.
 
 </details>
 
