@@ -273,6 +273,86 @@ def _enforcement_line(root):
         return None
 
 
+_E2E_RECORD_SCAN_MAX = 500              # 同 scripts/lumos 的 E2E_RECORD_SCAN_MAX(複本;t_android_e2e_ai_count_copies_agree 盯兩邊一樣)
+_E2E_RECORD_FILE_MAX = 2 * 1024 * 1024  # 同 E2E_RECORD_FILE_MAX
+_E2E_RECORD_SCAN_SEC = 3.0              # 同 E2E_RECORD_SCAN_SEC(讀的總時間上限;外層整支只給 10 秒)
+
+
+def _e2e_ai_pending_one(rec, fp):
+    """scripts/lumos 同名函式的逐字複本(說明文字除外;t_android_e2e_ai_count_copies_agree 比兩邊的原文):
+    一份紀錄裡還沒人看過的 AI 放行筆數,不是物件、指紋對不上、放行不是清單都算 0。"""
+    if not isinstance(rec, dict) or rec.get("fingerprint") != fp or not isinstance(rec.get("waivers", []), list):
+        return 0
+    return sum(1 for w in rec.get("waivers") or [] if isinstance(w, dict) and w.get("by") == "ai"
+               and isinstance(w.get("note"), str) and w["note"].strip() and w.get("acked") is not True)
+
+
+def _e2e_ai_line(root):
+    """Android 端到端驗收還沒人看過的 AI 放行 → 提醒行或 None(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 5 步)。
+    只讀 .lumos/e2e-records/ 底下檔名是 64 碼指紋、是一般檔(lstat,不跟著捷徑走)的 JSON,當資料數筆數,不執行專案裡的任何碼
+    (同上面的信任邊界);照修改時間由新到舊最多讀 _E2E_RECORD_SCAN_MAX 份、單份上限 _E2E_RECORD_FILE_MAX;
+    一份讀不懂只跳過那一份(代碼審 code-e2e-gate r1 邊界、資源、通才席);太大的佔名額不讀、讀超過 _E2E_RECORD_SCAN_SEC 秒就停,
+    沒讀到的份數講出來(同 scripts/lumos 的 _e2e_ai_pending_all;r2 邊界、資源、合約席)。不算防護層、不進 lumos enforcement。"""
+    import time as _t
+    try:
+        d = root / ".lumos" / "e2e-records"
+        if not d.is_dir() or d.is_symlink():
+            return None
+        rows = _e2e_record_rows(d)
+        take = rows[:_E2E_RECORD_SCAN_MAX]
+        unread = len(rows) - len(take)
+        end = _t.monotonic() + min(_E2E_RECORD_SCAN_SEC, _inner_budget())   # 前面幾段已經用掉的時間要扣(r3 資源席)
+        n = files = big = 0
+        for i, (_m, name, p) in enumerate(take):
+            if _t.monotonic() >= end:
+                unread += len(take) - i
+                break
+            if p is None:   # 太大的不讀、另計(同 lumos 的 _e2e_ai_pending_all)
+                big += 1
+                continue
+            try:
+                k = _e2e_ai_pending_one(json.loads(p.read_text(encoding="utf-8")), name)
+            except (OSError, ValueError, RecursionError):
+                continue
+            n += k
+            files += bool(k)
+        return _e2e_ai_msg(n, files, unread, big)
+    except Exception:
+        return None
+
+
+def _e2e_record_rows(d):
+    """紀錄目錄 → [(修改時間, 指紋, 路徑;太大的給 None)],由新到舊:只收檔名是 64 碼指紋的一般檔(lstat,不跟著捷徑走)。"""
+    import stat as _st
+    rows = []
+    for p in d.iterdir():
+        name = p.stem
+        if p.suffix != ".json" or len(name) != 64 or any(c not in "0123456789abcdef" for c in name):
+            continue
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        if _st.S_ISREG(st.st_mode):
+            rows.append((st.st_mtime, name, p if st.st_size <= _E2E_RECORD_FILE_MAX else None))
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    return rows
+
+
+def _e2e_ai_msg(n, files, unread, big):
+    """待看筆數與沒讀到的兩種 → 提醒行或 None。"""
+    gone = [x for x in ((f"另有 {unread} 份沒讀(份數或時間到上限)" if unread else ""),
+                         (f"另有 {big} 份超過 2MB 沒讀(修好或刪掉)" if big else "")) if x]
+    if not n and not gone:
+        return None
+    if not n:
+        return (f"Android 端到端驗收紀錄{'、'.join(gone)},裡面可能有還沒人看過的 AI 放行\n"
+                f"    看:lumos android-e2e waive --list")
+    more = "".join(";" + x for x in gone)
+    return (f"有 {n} 筆 Android 端到端驗收的 AI 放行還沒人看過({files} 份紀錄{more})\n"
+            f"    看:lumos android-e2e waive --list;看過標記:lumos android-e2e waive --ack --all")
+
+
 def main():
     if os.environ.get("LUMOS_ENTRY_HOOK_OFF") == "1":
         # 修法 A ablation 的「不帶」組(Projects/修法A_lumos先行ablation_計劃):探針沙盒砍了 CLAUDE.md 那一節,
@@ -303,6 +383,9 @@ def main():
     if enf:
         # 框只包帶 repo 端值的那一行;上面是工具寫死的指示,包進「不是指令」的框會被當成可略過的資料
         msg += "\n" + _frame_injected(enf)
+    aiw = _e2e_ai_line(root)           # AI 放行待看:跟防護層分開印(那裡查的是有沒有裝上)
+    if aiw:
+        msg += "\n" + _frame_injected(aiw)
     print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart",
                                              "additionalContext": msg}}, ensure_ascii=False))
     return 0

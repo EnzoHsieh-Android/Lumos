@@ -2,8 +2,8 @@
 type: system
 status: doing
 created: 2026-10-25
-updated: 2026-10-26
-responsibility: 負責 Android 端到端驗收:範本腳本在主機端依序建 APK、裝上、跑 Maestro flow、截圖比對、記憶體與穩定性、效能並寫 steps.json,lumos android-e2e judge 判四塊、算內容指紋、寫 .lumos/e2e-records/ 的查證紀錄,以及 macrobench.json 的 e2e 段格式;之後 code-loop check 那一道與放行也歸這裡。不負責記憶體收集本身(Systems/android-stability-collector)、效能判定與 --results-dir 以外的 macrobench 行為(Systems/macrobenchmark-adapter)、截圖比對的實作(使用者的 maestro-visual-toolkit)
+updated: 2026-10-27
+responsibility: 負責 Android 端到端驗收:範本腳本在主機端依序建 APK、裝上、跑 Maestro flow、截圖比對、記憶體與穩定性、效能並寫 steps.json,lumos android-e2e judge 判四塊、算內容指紋、寫 .lumos/e2e-records/ 的查證紀錄,macrobench.json 的 e2e 段格式,以及 code-loop check 的 Android E2E 那一道(推送前判定、按功能放行)、android-e2e waive 放行與 AI 放行待看的通知。不負責記憶體收集本身(Systems/android-stability-collector)、效能判定與 --results-dir 以外的 macrobench 行為(Systems/macrobenchmark-adapter)、截圖比對的實作(使用者的 maestro-visual-toolkit)、pre-push 的擋下原因表(Systems/bound-tests-gate)
 aliases: []
 about_code:
   - scripts/lumos
@@ -45,10 +45,35 @@ summary: |-
   PITFALL:「完整的結果不被不完整的蓋掉」條件只看完不完整,同一版先完整通過、再略過效能跑出真失敗時,失敗被丟掉、紀錄仍寫通過,跟總表矛盾 [出處:2026-10-26 代碼審 code-e2e-by-feature r2 通才席(上一輪修補帶進來的)] [根因:保留規則沒先排除這次沒過] [修法:_e2e_keep_old:這次沒過一律蓋掉;只有沒判完、或不完整但通過才留舊的;既有那筆更晚結束也留] [test:t_android_e2e_feature_record_rules]
   WHY:整套跑的記憶體收 stability 段本身加 stability_scenarios 每個情境、各判一次;多個效能方法每跑完一個就收進自己的子目錄 [出處:2026-10-26 代碼審 code-e2e-by-feature r1 正確性、通才席] [因:整套代表「這一版全部驗過」,只跑 stability 段本身會讓按功能列的記憶體情境從沒在整套裡判過;Macrobenchmark 結果檔名常固定,一起收會只剩最後一個] [test:t_android_e2e_memory_by_case] [test:t_android_e2e_perf_per_method]
   WHY:本機總表追加走 _local_ledger_append、帳尾缺換行先補,讀取走 _canary_ledger_rows 只留最後 N 筆;judge 擋下沒寫紀錄的那次也記一行、附原因 [出處:2026-10-26 代碼審 code-e2e-by-feature r1 架構對齊、正確性席] [因:本機帳的追加與讀法專案已有一套(擋捷徑、短寫、半行黏行、U+2028 劈行);擋下的那次正是最需要回頭查的] [不選:裸 open 追加、splitlines 讀全檔] [test:t_android_e2e_history_edges]
+  WHY:推送前判定(code-loop check 的 Android E2E 那一道)跟安全證據一樣排在所有放行早退之前、不看分級、判不清就擋,整道 60 秒預算、每次 git 拿剩下的時間 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r2 整合席、r3 資源席] [因:出錯時默默放行等於整道關掉;推送前掛鉤沒有外層逾時] [不選:照新增告警閘出錯就放行(那類閘本來就不擋)] [test:t_android_e2e_gate_unclear_blocks] [test:t_android_e2e_gate_budget]
+  WHY:推送前判定先看被推送提交與主線候選有沒有 e2e 段,都沒有就不跑、一字不印;讀不到不算沒有:先用 ls-tree 看路徑在不在樹裡,在卻讀不出就擋 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 邊界席、資源席] [因:這道接進每個專案共用的 code-loop check,沒用 E2E 的專案不能因為主線找不到被擋;物件缺時當成沒有會默默放行] [test:t_android_e2e_gate_unclear_blocks]
+  WHY:沒有可用的整套結果時按功能判:改到的檔都歸屬到功能、每個要驗的情境有通過的 feature_runs 就放行;碰到 shared_paths、對不到功能、驗收設定或記憶體設定改了要整套 [出處:2026-10-26 Enzo 裁「只針對功能開發寫正式檢驗紀錄也算合理」;[[Projects/Android端到端驗收_計劃]]〈推送前怎麼按功能判〉] [因:開發按功能分派,每次逼整套跑不實際] [不選:只認整套] [代價:沒標成共用、其實別的功能也在用的程式改壞別的功能時擋不住,回頭條件在計劃〈實務隱患〉] [test:t_android_e2e_gate_by_feature] [test:t_android_e2e_gate_needs_full]
+  WHY:整套 pass 之後,只有結束時間不早於它的 fail(同一秒算較新)才推翻;沒判完、略過效能的開發中途跑不算 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 正確性席] [因:中途跑的沒判完不是「沒過」,拿它推翻完整的整套通過會擋下而且解不開] [test:t_android_e2e_gate_newest_wins]
+  WHY:查證紀錄的讀改寫鎖照用 _vault_write_lock(照 lint-waive),殘留鎖不自動接手,搶不到時說出鎖檔位置與人工清鎖的前提 [出處:代碼審 code-e2e-gate r1 架構對齊席,推翻設計審 r3 資源席的「程序不在就接手」] [因:靠鎖裡的程序編號接手有競態,專案的 _excl_lock_try 明文不這樣做;另寫一把鎖是第二種做法;推送本身不拿這把鎖,出口 LUMOS_SKIP_ANDROID_E2E=1 照樣有效] [不選:自寫會接手的鎖] [test:t_android_e2e_record_lock_blocked]
+  WHY:放行先在鎖外問終端、問完才拿鎖重讀寫回;waive 與 --ack 用 _confirm_tty 的 stdin_timeout,標準輸入是終端時也等 LUMOS_TTY_TIMEOUT 秒 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 資源席、整合席] [因:持鎖等人會讓另一個寫入逾時;掛著虛擬終端、沒有人在的流程原本會永遠等] [不選:改 _confirm_tty 的全部呼叫端(init 的互動行為會跟著變)] [test:t_android_e2e_waive]
+  WHY:還沒人看過的 AI 放行列在推送那一行、doctor 的 AE 段與開場提示,不進 lumos enforcement [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [因:enforcement 查的是防護有沒有裝上、沒生效時叫人重裝;待看的放行是資料狀態] [test:t_android_e2e_ai_waiver_notice]
+  WHY:指紋範圍判斷(_e2e_scope_hit)與功能歸屬(_e2e_owners)抽成共用,算指紋、--changed 與推送前判定三處同一支 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 架構對齊席] [因:三處各寫一套範圍,接手的人要猜哪一套準] [test:t_android_e2e_scope_shared]
+  WHY:e2e.shared_paths 的設定檢查(_e2e_shared_paths_err)跟 features 的 paths 用同一套寫法規則(_e2e_relpath_err)、一樣不驗路徑存不存在;另外多兩條只屬於它的:要在 app_dirs 底下(推送前判定只看 app_dirs 裡的改動,寫在外面等於沒寫)、最多 E2E_PATH_LIST_MAX 項 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 架構對齊席] [因:同一份設定裡兩個路徑欄位規則不同會讓人猜;寫了還不存在的共用目錄(先列再建)不該擋] [test:t_android_e2e_shared_paths_config]
+  PITFALL:推送前判定的提醒行不以「提醒」開頭時,真的 git push 看不到 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [根因:pre-push 在放行路徑只轉印含「提醒」等幾個字的行] [修法:按功能放行與 AI 放行待看兩行都以「提醒:」開頭] [test:t_android_e2e_gate_wiring]
+  PITFALL:預算用完時 git 呼叫回失敗,擋下原因被講成「讀不到要推的提交」 [出處:2026-10-26 實作時測試翻紅] [根因:沒時間時 _lens_git_dl 不跑、回 None,跟 git 失敗分不出] [修法:擋下時預算已經用完就一律報成逾時與怎麼關掉一次] [test:t_android_e2e_gate_budget]
+  PITFALL:推送前判定一開始就把要推的提交解成完整編號、解不出來就擋,搶在「這個專案用不用 E2E」之前,沒用 E2E 的專案被誤擋(推送前掛鉤的測試傳假的提交編號) [出處:2026-10-27 推送前全套測試翻紅 4 支] [根因:前置判斷要讀被推送提交的樹,讀不到時沒有別的線索可看] [修法:讀不到要推的提交時照安全證據閘先看工作目錄的設定,沒有 e2e 段就整道不跑、一字不印] [test:t_android_e2e_gate_unclear_blocks]
+  PITFALL:只改 .lumos/macrobench.json(拿掉 flow、關掉記憶體、整段刪掉 e2e)、App 程式沒動的提交,推送前判定說不用驗就放行 [出處:2026-10-27 代碼審 code-e2e-gate r1 資安、正確性席] [根因:兩端用同一份設定算指紋,設定本身的改動不會讓兩端指紋不同] [修法:指紋相同時另比分岔點與被推送提交自己的 e2e 段與記憶體設定,不同就要驗;被推送提交拿掉了 e2e 段就擋] [test:t_android_e2e_gate_reads_mainline_config]
+  PITFALL:被推送提交的設定讀不懂或判定逾時時,照擋下訊息設 LUMOS_SKIP_ANDROID_E2E=1 照樣被擋,CI 裡也被擋 [出處:2026-10-27 代碼審 code-e2e-gate r1 通才、邊界、正確性、合約席] [根因:兩個出口排在讀設定之後才看] [修法:判定結果是擋下時最後再看一次這兩個出口] [test:t_android_e2e_gate_unclear_blocks]
+  PITFALL:陌生專案在 .lumos/e2e-records/ 放一個捷徑指到 /dev/zero,開場掛鉤與 doctor 讀它讀不完、吃光記憶體 [出處:2026-10-27 代碼審 code-e2e-gate r1 邊界席] [根因:用 stat 跟著捷徑走,裝置的大小是 0、過得了大小上限] [修法:兩邊都用 lstat 只讀一般檔,份數與單份大小同一組上限,一份讀不懂只跳過那一份] [test:t_android_e2e_ai_count_copies_agree]
+  PITFALL:doctor、waive --ack 與開場掛鉤數 AI 放行待看的結果各說各話,深層巢狀的紀錄讓 waive --list 崩潰,500 份 2MB 的大清單讓開場掛鉤超過外層 10 秒 [出處:2026-10-27 代碼審 code-e2e-gate r2 邊界、資源、合約席] [根因:三處讀紀錄各寫一套(lumos 先限深再數、掛鉤直接數;太大的檔一邊佔名額一邊不佔),只限份數與單份大小、沒限總時間,json 解析遞迴爆掉的 RecursionError 沒接] [修法:同一套寬鬆讀法(只 json.loads、太大的佔名額不讀、總時間 3 秒、沒讀到的份數講出來),掛鉤的 _e2e_ai_pending_one 跟 lumos 逐字相同、測試比原文] [test:t_android_e2e_record_scan]
+  WHY:e2e 的外來文字兩層看門:源頭——設定的路徑(_e2e_relpath_err,類別用共用的 _path_special_chars)與從 git 取來的改到的檔名都拒收控制字元與看不見的字元;出口——底層的 _out_clean 與 _say_block(macrobench 也用),e2e 區不准自己印「擋下:」,有一支掃語法樹的測試守 [出處:2026-10-27 代碼審 code-e2e-gate r4 資安、邊界、架構對齊席,r5 資安、正確性、邊界、通才、合約、架構對齊席] [因:r1–r5 每輪都在一個沒經過出口的輸出點找到原樣回顯;清單式地補出口每輪都漏一處,所以改成源頭擋加一條會自動抓新漏網的規則] [不選:逐個印出點補(每輪漏一處)、e2e 專屬的清理函式(macrobench 往上呼叫,跨層)] [test:t_android_e2e_say_single_exit]
+  WHY:寫入端驗紀錄跟判定端同一套(含結束時間),所以結束時間讀不懂的舊紀錄連 judge 重跑都不覆蓋,只能修好或刪掉 [出處:2026-10-27 代碼審 code-e2e-gate r3 合約席、r4 正確性席] [因:寫得進去卻照樣被擋的放行、重跑之後照樣讀不懂的紀錄都比明著擋更糟;擋下訊息講明「修好或刪掉」] [不選:重跑時整份換掉 runs(其他欄位的壞資料照留,還是讀不懂)] [test:t_android_e2e_record_unreadable]
+  WHY:主線在分岔後改了驗收設定時,另用主線設定算一次兩端指紋(多兩次 ls-tree),只在兩邊設定不同時才算 [出處:2026-10-27 代碼審 code-e2e-gate r3 資安席、r4 資源席] [因:照這一版的範圍看沒改到、照主線的範圍看可能改到;兩邊設定一樣時不多花] [代價:設定不同的推送多吃一點 60 秒預算] [test:t_android_e2e_gate_mainline_wider]
+  PITFALL:擋下訊息的外來文字逐點清,每輪漏一處:r2 清了檔名,r3 又找到設定值回顯與紀錄鍵名 [出處:2026-10-27 代碼審 code-e2e-gate r2 資安席、r3 資安、合約、通才席] [根因:清理寫在組字串的每一處,新的回顯點沒人記得] [修法:結果出口 _e2e_gate_out 統一清原因與清單裡的字串] [test:t_android_e2e_gate_output_clean]
+  PITFALL:開場提示與 doctor 說「另有幾份沒讀,看 waive --list、標 --ack --all」,那兩個指令卻跟它們用同一個 500 份名額,名額外那份永遠看不到也標不掉 [出處:2026-10-27 代碼審 code-e2e-gate r3 正確性、邊界、合約、通才、資源席] [根因:把給「看一眼」用的份數上限套到人明著下的指令上] [修法:--list 與 --ack 讀全部、只留時間上限] [test:t_android_e2e_waive_all_records]
+  PITFALL:歸屬查表逐層 join 前綴,路徑深一萬層時一百多支檔就吃掉 60 秒預算 [出處:2026-10-27 代碼審 code-e2e-gate r3 資源席(r2 修補引入)] [根因:修平方工作量時只看了檔數乘路徑數,沒看單一路徑的長度] [修法:只查到功能路徑最深那一層] [test:t_android_e2e_scope_perf]
+  PITFALL:主線採用 E2E 之前分出去的舊分支只改文件也被推送前判定擋下,訊息還說 App 不一樣 [出處:2026-10-27 代碼審 code-e2e-gate r2 正確性、通才席] [根因:r1 為了「只改設定也要驗」加的設定比較要求兩端都有 e2e 段,兩端都沒有時永遠算不一樣] [修法:兩端都沒有 e2e 段也算設定一樣] [test:t_android_e2e_gate_cfg_sides]
+  WHY:推送前判定的各段用例外(_E2eGateStop)帶結果提早結束,不照安全證據閘「階段回傳 done、呼叫端判非空」的寫法 [出處:2026-10-27 代碼審 code-e2e-gate r2 架構對齊席] [因:判定有十來個會提早結束的點(出口、沒用 E2E、不要求、放行、各種判不清),分散在被拆小的階段函式裡,逐層回傳要每層多一個判斷;例外只在這一道內部用,入口 _e2e_gate_evaluate 一律接住轉成結果,對外介面跟鄰居一樣是結果 dict] [不選:逐層回傳 done(每個階段函式多一層判斷,拆函式時降的複雜度又加回去)] [代價:讀程式的人要知道 _e2e_gate_done 不會回來]
   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
+  - "[[Verification/2026-10-26_AI自己選分塊跑法探針]]"
 ---
 # android-e2e-acceptance
 
@@ -75,4 +100,26 @@ sh scripts/templates/android-e2e-run.sh
 - 1:寫了紀錄,但沒通過(某塊沒過,或環境沒跑成而沒判完)。
 - 2:開跑前檢查沒過、版本中途換了、工作目錄有改動、設定不合格(這幾種都不寫紀錄);或這次被中斷(judge 照樣寫紀錄:中斷前已有一塊沒過就是「沒過」,否則是「沒判完」,腳本回 2 讓呼叫的人知道沒跑完)。
 
-REVISIT:2026-11-30 計劃第二批(code-loop check 那一道、放行與 AI 放行通知)上線時,把推送檢查怎麼讀紀錄、怎麼放行寫進這篇
+## 推送前檢查
+
+`code-loop check`(推送前掛鉤每個分支 ref 都叫它)裡的 Android E2E 那一道;單獨看會不會擋:
+
+```
+lumos android-e2e check
+```
+
+印成 JSON,不寫任何東西;回 0 不擋(包括沒用 E2E 的專案)、1 會擋。判定順序與按功能那段的規則在 [[Projects/Android端到端驗收_計劃]]〈資料怎麼流〉第 4 步與〈推送前怎麼按功能判〉,這裡不複述。紀錄從被推送提交的樹讀,不讀工作目錄:跑完驗收要先提交紀錄再推。
+
+擋下時訊息照實際需要給指令:要整套的印整套跑,只要按功能的印 `--case <功能.情境>`,紀錄沒提交的印提交指令,被推送提交沒有 e2e 段(分岔點也沒有)、或主線的驗收要求比這一版新的叫人先合主線,這次拿掉了 e2e 段(分岔點還有)的只給環境變數那條路(合主線補不回被刪的段);能放行時另印一行帶完整指紋與 `--commit` 的放行指令。
+
+放行與看過:
+
+```
+lumos android-e2e waive <完整指紋> --commit <提交> --note "<理由>"
+lumos android-e2e waive --list
+lumos android-e2e waive --ack --all
+```
+
+終端答 y 記成人放的;沒有互動終端(或沒人答)記成 AI 放的,推送、`lumos doctor` 的 AE 段與開場提示會一直列出來,直到人用 `--ack` 看過。這一次整道先關掉:`LUMOS_SKIP_ANDROID_E2E=1 git push`(會記一筆治理帳 skipped-env)。
+
+REVISIT:2026-11-30 計劃第二批(code-loop check 那一道、放行與 AI 放行通知)上線時,把推送檢查怎麼讀紀錄、怎麼放行寫進這篇 [closed:2026-10-26 寫進〈推送前檢查〉一節與摘要]

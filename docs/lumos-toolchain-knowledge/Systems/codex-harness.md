@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-09-05
-updated: 2026-10-14
+updated: 2026-10-26
 responsibility: 負責 lumos 的防護怎麼接到 Claude 與 Codex 兩家 CLI 上:進場提醒、改檔前推波及、派審查員附鏡頭、收工點名這四個時點的 hook 腳本,以及情境探針這支量「AI 有沒有自己去查脈絡」的儀器;不負責這些 hook 推出來的內容對不對(那是各機制自己的節點),也不負責 lumos 本體的讀寫語意
 self_audit: gpt-5.6-sol/2026-10-08
 aliases: []
@@ -41,6 +41,8 @@ summary: |-
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]Claude/Codex 掛鉤註冊寫進設定的直譯器改成跑註冊那支程式的 sys.executable(POSIX 加 shell 引號);原本 which("python3") 常是系統內建 3.9。merge-claude-settings.py 被舊版叫起時問同目錄的 lumos python-path、改用 3.14 重跑,舊版的更新程式叫新版的它時註冊照樣寫成 3.14 [test:t_hook_cmd_uses_running_python]
   WHY:[2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]]]派工鏡頭掛鉤在 lumos 回非零碼、JSON 帶認得的 lens_fail(範圍六個 commit_missing/not_git/sha_unresolved/no_mainline/base_not_mainline/empty_range;2026-10-14 起設計審計劃類加五個 spec_rev_missing/spec_missing/spec_outside_repo/spec_too_large/no_knowledge,not_git 兩邊共用,共十一個,計劃類走計劃版說明 SPEC_FAIL_NOTE、鍵集合等於 lumos 的 _LENS_FAIL_CODES)時附一行 `LUMOS-LENS:` 說明(範圍、會談專案路徑、固定原因句、繞法、終點要寫完整提交編號),角色卡接在後;範圍不合保守字元集以 `<範圍>` 代替、會談專案路徑走名字顯示規則 _spec_name_show(同計劃值與範圍值;代碼審 code-派工鏡頭可指定目標repo r7 起,原本是先過 _plain_label 再多清反引號與行段分隔);判斷住在 `_fail_note`,讀 JSON 共用 `_last_json`,主函式只多一個「或」 [出處:rtb 2026-10-07 回報四輪派工 0 份附加] [因:掛鉤用會談的專案目錄算鏡頭,會談開在別的專案時範圍找不到,原設計失敗一律靜默] [不選:讀 lumos 的錯誤輸出原文轉進派工詞(自由文字零輸出)] [test:t_dispatch_lens_hook_fail_reason_notice]
   PITFALL:Codex 編排時派工鏡頭掛鉤領席(--claim)超時那條路一走就 NameError,超時說明附不出去——掛鉤呼叫 _frame_injected 卻從沒複製 ★注入框★ 區塊;框一致性守衛把這支檔列在清單上、但找不到框常數就略過,所以一直沒抓到 [出處:2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]] 代碼審第三輪查證時發現] [根因:複製式共用(hook 彼此 import 不到)只守「有的複本一致」、沒守「該有的都有」] [修法:區塊逐字抄進來;守衛改成自動找:用到框函式或清理函式的 hook 都要有完整區塊、連同 lumos 本體整段逐字相同(原本只比框常數、只看寫死的清單,memory-sweep 不在清單上)] [test:t_dispatch_lens_hook_claim_timeout_framed]
+  WHY:開場掛鉤另印一行 Android 端到端驗收「AI 放行還沒人看過」,自己讀 .lumos/e2e-records/ 底下檔名是 64 碼指紋的 JSON 數筆數,不呼叫 lumos、不進 enforcement 那一行 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [因:這支掛鉤只執行可信來源的 lumos,讀資料不算執行專案的碼;待看的放行是資料狀態,不是防護層沒裝上] [不選:放進 lumos enforcement(沒生效時會叫人重裝)] [test:t_android_e2e_ai_waiver_notice]
+  WHY:開場掛鉤數 AI 放行待看時,讀紀錄的總時間取 3 秒跟這支掛鉤剩下時間(_inner_budget)的小者;超過 2MB 的紀錄不讀、另計成「超過 2MB 沒讀(修好或刪掉)」(裡面可能有已經生效過的 AI 放行;r3 算進沒讀時被講成讀超過時間、r4 不算時整個看不到,r5 改成獨立一類);待看計數函式 _e2e_ai_pending_one 是 scripts/lumos 同名函式的逐字複本 [出處:2026-10-27 代碼審 code-e2e-gate r2、r3 資源席,r4 正確性、通才、合約席] [因:外層整支只給 10 秒,前面 enforcement 那段卡住時再讀滿 3 秒會超過、整段開場指引送不出去;複本手抄條件會跟主程式分岔] [不選:每段各給固定秒數(相加會超過外層)] [test:t_android_e2e_gate_r4_paths]
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
