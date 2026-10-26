@@ -302,7 +302,7 @@ lumos loop capture-counts \
   --finder "app.py:12,util.py:9"   # LLM reviewer B
   --finder "app.py:12"             # SARIF linter(pitfalls --diff 命中)
   --finder "svc.py:40"             # 測試失敗 / mutation 存活
-# → capture_counts=… + 殘餘估計 + 可直接貼的 `canary record … --capture-counts <串>`
+# → capture_counts=… + 可直接貼的 `canary record … --capture-counts <串>`
 ```
 - 重疊計數(同洞被幾個 finder 中)是 capture-recapture 核心輸入,**人手數易錯 → 該機械化**。
 - **linter 免手貼:`--from-pitfalls <range>` 一鍵收割**——`loop capture-counts --finder "<LLM A>" --finder "<LLM B>" --from-pitfalls main..HEAD --repo <root>` 會自己跑 `pitfalls --diff`、按 source 分組(每個 linter driver / pitfalls 內建各一個確定性 finder)、把命中的 `file:line` 併進來一起算重疊。手動 `--finder` 留給 LLM reviewer,確定性 finder 自動來。

@@ -26373,13 +26373,18 @@ def t_loop_capture_counts_cli():
         check("cli cc: distinct=3", "distinct-findings=3" in r.stdout, r.stdout)
         check("cli cc: capture_counts 含 3", "capture_counts=3" in r.stdout, r.stdout)
         check("cli cc: 吐 --capture-counts 建議", "--capture-counts 3" in r.stdout, r.stdout)
+        # 漏網估計停印(Projects/漏網估計停印_計劃 S1):公式套錯資料型別又分不出好壞,不印數字、留一句指路
+        check("cli cc: 不印漏網估計數字", "remaining-estimate" not in r.stdout and "估計還有" not in r.stdout, r.stdout)
+        check("cli cc: 有一句說明不再印並指到計劃", "不再印漏網估計" in r.stdout and "漏網估計停印_計劃" in r.stdout, r.stdout)
         # 全獨發 → 殘餘 ≥1 → 續跑側
         r2 = run("--finder", "a", "--finder", "b", "--finder", "c")
-        check("cli cc: 全獨發=advisory 中性措辭(降級後不再判收斂/續跑)", "僅供參考" in r2.stdout and "續跑側" not in r2.stdout, r2.stdout)
+        check("cli cc: 全獨發也不印漏網估計數字(最容易出大數字的情形)", "remaining-estimate" not in r2.stdout and "續跑側" not in r2.stdout
+              and "capture_counts=1,1,1" in r2.stdout, r2.stdout)
         # 無 finder → 空、殘餘 0、不吐建議串
         r3 = run()
         check("cli cc: 空 rc0", r3.returncode == 0 and "distinct-findings=0" in r3.stdout, r3.stdout)
         check("cli cc: 空不吐建議", "--capture-counts" not in r3.stdout, r3.stdout)
+        check("cli cc: 空也不印漏網估計數字(S2)", "remaining-estimate" not in r3.stdout, r3.stdout)
 
 
 def t_loop_capture_counts_from_pitfalls():
@@ -26409,6 +26414,7 @@ def t_loop_capture_counts_from_pitfalls():
     # app.py:3 被手動+pitfalls 兩家中 → capture_counts 含 2;app.py:5 與 svc.py:9 各獨發
     check("ccfp: app.py:3 重疊 → 含 2", "capture_counts=2" in r.stdout, r.stdout)
     check("ccfp: 吐 record 建議串", "--capture-counts 2" in r.stdout, r.stdout)
+    check("ccfp: 不印漏網估計數字(Projects/漏網估計停印_計劃 S3)", "remaining-estimate" not in r.stdout, r.stdout)
     # git 錯誤 range → rc2、不崩
     r2 = cc("--from-pitfalls", "nonexistent..range", "--repo", str(root))
     check("ccfp: 壞 range → rc2", r2.returncode == 2, f"rc={r2.returncode} {r2.stdout}")
