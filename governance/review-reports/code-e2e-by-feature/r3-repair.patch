@@ -1,0 +1,1185 @@
+diff --git a/README.en.md b/README.en.md
+index 18e824067ef2e0362ad251d70bfa2f444d7acdb4..a8cabda711c529c12cad27825b7ea481233fc3c7 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -347,36 +347,36 @@ When one of the first four (the memory ones) fails, it jumps straight to L3: the
+ - A third-party library written in Java, not released when the screen closes: 5 objects left behind; L3 shows the library's own internal list holds them.
+ - A third-party library written in C/C++, not released: 10 MB extra (5 open-close rounds, 2 MB each), traced to the library file and the app function that created it.
+ - Slowdowns from three kinds of screen code were each put in the right category and traced to a function; a separate AI that did not know what was planted found the problem in all three from the measurements alone.
+ 
+ **Current limits.**
+ 
+ - Verified on one tablet and one lab app only; the numbers do not represent a production app, and tools may behave differently on other brands.
+ - It reminds, it does not block pushes: millisecond numbers drift with the phone and its temperature, so they are not suited to a hard gate.
+ - Memory snapshots are off by default: a project must first write down who agreed, and on which day, to run on test data only; snapshots stay on the local machine, each later run of the collection script deletes those older than 7 days, nothing is deleted if it is not run again, and you delete them yourself when done.
+ - The allowed margin for "counts as slower" is provisional (10% by default, with a 1 ms floor) and will be reset from repeated real-device runs.
+-- Speed and memory are now part of the "full check before pushing" below; running `lumos macrobench` on its own still only warns.
++- Speed and memory are now part of the "Device acceptance" section below; running `lumos macrobench` on its own still only warns.
+ 
+ **To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (Chinese).
+ 
+ </details>
+ 
+ ### Device acceptance: by feature while developing, the whole app before pushing (end-to-end acceptance)
+ 
+ **One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail.
+ 
+ ```
+ sh scripts/templates/android-e2e-run.sh --changed                  # while developing: run the use cases of the features your changes touch
+ sh scripts/templates/android-e2e-run.sh --feature player           # every use case of this feature
+ sh scripts/templates/android-e2e-run.sh --case player.open-close   # just this use case (add --no-perf or --no-memory to skip those parts)
+ sh scripts/templates/android-e2e-run.sh                            # before pushing: the whole app, writes the verification record
+-lumos android-e2e history                                          # every check you ran (filter with --feature, --case)
++lumos android-e2e history                                          # the last 20 checks (filter with --feature, --case; --last for more)
+ ```
+ 
+ <p align="center">
+   <a href="assets/android-acceptance-en.svg">
+     <img src="assets/android-acceptance-en.svg" alt="Android device acceptance: by feature or use case while developing (--changed, --feature, --case), the whole app before pushing; a preflight with adb and git (stops without touching the app if it fails), then build and install (Gradle, adb), UI flows (Maestro), screenshots (visual-check.sh), memory and stability (dumpsys, Perfetto), and speed (Macrobenchmark, warns only); lumos android-e2e judge decides and writes a verification record. If it passed, commit the record and push; if UI flows or screenshots failed, read the report and diff image; if memory failed or a slowdown warning appeared, go to the layered check above, where L0 first decides whether there is an anomaly; a failed build, a missing tool or an interruption is a setup problem to fix and rerun" width="760">
+   </a>
+ </p>
+ 
+ <details>
+ <summary>How to set it up, how to read the result, experiment results and limits</summary>
+@@ -385,21 +385,21 @@ lumos android-e2e history                                          # every check
+ 
+ **Feature map.** Add `features` to the `e2e` section: each feature lists the code paths it owns (`--changed` uses them to find features from changed files) and its use cases; each use case lists its flow files, screenshot screens, speed test methods and memory scenarios. Write `{{TEST}}` in the speed command and it is replaced with the chosen test method; memory scenarios live in the top-level `stability_scenarios`, one screen-cycling driver each. A map that names a flow or scenario that does not exist is rejected when the configuration is checked.
+ 
+ **Two kinds of record.** Every run (whole app or by feature, passed or failed, interrupted, or stopped by the judge without a record) adds a line to the local check log `.lumos/artifacts/android/history.jsonl`: when, which version, whether there were uncommitted changes, which use cases were chosen, each item's result, and where the evidence is. When the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version: a whole-app run fills `runs`, a by-feature run records its use cases in `feature_runs` (one entry per use case; it is marked incomplete when speed or memory it has was skipped, or when it lists only speed and nothing that passes or fails; a complete result for the same version is not replaced by an incomplete one). The record is tied to "this version of the app code and test materials": change the app code, a flow file, a baseline image or a threshold, and it no longer counts.
+ 
+ **Why commit first.** The verification record is tied to a commit, so a whole-app run refuses to start with uncommitted changes. A by-feature run still runs, but if there were uncommitted changes when it started it only writes the local log (the app it built is not this version, even if the changes are put away mid-run). Nothing is recorded if the version changes mid-run. The order is: change code → commit → run the check → commit the record separately.
+ 
+ **Reading the result.**
+ 
+ - **Passed**: the record is written; commit it and push. A slowdown only adds a warning and still passes.
+-- **Failed**: if any part failed, the result is failed, and the terminal shows which part. A failed UI flow comes with its report path and a failed screenshot with its match rate and diff image, so read those; when memory fails, the raw numbers are in this run's artifacts (`.lumos/artifacts/android/<run-id>/stability.json`), and the layered check above takes it from there.
++- **Failed**: if any part failed, the result is failed, and the terminal shows which part. A failed UI flow comes with its report path and a failed screenshot with its match rate and diff image, so read those; when memory fails, the raw numbers are in this run's artifacts: the `stability` section itself in `.lumos/artifacts/android/<run-id>/stability.json`, other memory scenarios next to it in `<run-id>.<scenario>/stability.json`; the layered check above takes it from there. Each scenario keeps its own recording and nothing is cleaned up automatically, so delete old ones yourself.
+ - **Not judged**: nothing failed, but a part could not run, for example a failed build or install, or the run was interrupted (an interruption still writes this record). That is a setup problem: fix it and run again.
+ - **No record**: the preflight stopped (bad configuration, uncommitted changes on a whole-app run, the memory part is chosen but a Perfetto tool is missing, or `--changed` matched no feature), or the version changed mid-run. Fix it and run again.
+ 
+ A failed UI flow is retried once; it only counts as failed if both runs fail. Speed still only warns, for the same reason as above: millisecond numbers drift.
+ 
+ **If a screenshot fails because you meant to change the screen, replace the baseline; do not lower the threshold.** Replacing a baseline redefines "this screen is correct", so a person looks at the new image before it is recorded (the toolkit's `visual-record.sh`), then the check is run again.
+ 
+ **Experiment results** (same SM-X710 tablet, same lab app):
+ 
+ - With all four parts on, the full run passed in about 3 minutes (build cached, speed at 5 rounds; the recommended 20 rounds adds a few minutes).
+diff --git a/README.md b/README.md
+index 3d7ba3b96e235cef015dd7c80a995f94641cbfc3..b0b155f170c51a4c0a732393a661a76258877228 100644
+--- a/README.md
++++ b/README.md
+@@ -347,36 +347,36 @@ Android App 改完之後，Lumos 在真的手機或平板上確認兩件事：**
+ - Java 寫的第三方套件，關畫面時沒呼叫 release：多留下 5 個物件，L3 查出是被套件自己內部的清單抓著。
+ - C/C++ 寫的第三方套件沒呼叫 release：多佔 10 MB（開關 5 次、每次 2 MB），指到是哪個套件檔，以及 App 裡哪個函式建立它。
+ - 三種畫面寫法造成的變慢，都被分到對的類別並指到函式；另外找一個不知道埋了什麼的 AI，只看量測資料，三種都找到了問題所在。
+ 
+ **目前的限制。**
+ 
+ - 只在一台平板、一個實驗用 App 上驗過，數字不代表正式 App；換了手機品牌，工具的行為可能不同。
+ - 只提醒、不擋推送：毫秒數字會隨手機和溫度浮動，不適合當成硬性關卡。
+ - 記憶體快照預設不錄：專案要先寫下「誰、在哪一天同意只用測試資料跑」，才會錄；快照只放在本機，之後每次跑收集腳本會順手刪掉超過 7 天的，不再跑就不會自動刪，用完要自己刪。
+ - 判斷「算不算變慢」的容許誤差目前是暫定值（預設 10%，另有 1 毫秒的下限），之後會用多次實機重跑的資料重訂。
+-- 效能、記憶體已經接進下面的「推送前整套驗收」；單獨跑 `lumos macrobench` 時照舊只提醒。
++- 效能、記憶體已經接進下面的「實機驗收」；單獨跑 `lumos macrobench` 時照舊只提醒。
+ 
+ **怎麼開始用：** 在 Android 專案跑完 Macrobenchmark 後執行 `lumos macrobench`（第一次加 `--update-baseline` 存成基準）；它報出問題時，請 AI 照 `lumos-android-evidence` skill 一層一層查。設定檔與標準的寫法見 [Macrobenchmark 驗收門檻](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) 與 [記憶體與穩定性驗收](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md)。
+ 
+ </details>
+ 
+ ### 實機驗收：開發中按功能跑，推之前整套跑（端到端驗收）
+ 
+ **同一支腳本，開發中只跑你正在做的那個功能、甚至只跑它的一個使用情境；推之前把 App 從頭到尾驗一遍，結果寫成一份查證紀錄。** 每個使用情境可以有四樣東西：照 Maestro（一種用文字寫好「點哪裡、輸入什麼」的畫面自動操作工具）的流程檔實際點一遍、拍畫面跟人看過的基準圖比、跑效能測試、反覆開關畫面看記憶體與穩定性。每次跑都先建置並安裝 App，跑完由 `lumos android-e2e judge` 判過不過。
+ 
+ ```
+ sh scripts/templates/android-e2e-run.sh --changed                  # 開發中：看這次改到的檔，只跑對應功能的使用情境
+ sh scripts/templates/android-e2e-run.sh --feature player           # 只跑這個功能的全部使用情境
+ sh scripts/templates/android-e2e-run.sh --case player.open-close   # 只跑這一個使用情境（加 --no-perf、--no-memory 可略過效能或記憶體）
+ sh scripts/templates/android-e2e-run.sh                            # 推之前：整套跑一次，寫查證紀錄
+-lumos android-e2e history                                          # 看每一次檢測的紀錄（可加 --feature、--case 篩）
++lumos android-e2e history                                          # 看最近 20 次檢測的紀錄（可加 --feature、--case 篩，--last 改筆數）
+ ```
+ 
+ <p align="center">
+   <a href="assets/android-acceptance-zh.svg">
+     <img src="assets/android-acceptance-zh.svg" alt="Android 實機驗收：開發中用 --changed、--feature、--case 按功能或使用情境跑，推之前整套跑；先用 adb、git 做開跑前檢查（不過就停下、不碰 App），再依序建置並安裝（Gradle、adb）、UI 流程（Maestro）、截圖比對（visual-check.sh）、記憶體與穩定性（dumpsys、Perfetto）、效能（Macrobenchmark，只提醒）；lumos android-e2e judge 判過不過並寫查證紀錄。通過就提交紀錄再推送；UI 或截圖沒過就看報告與差異圖，記憶體沒過或印了變慢的提醒，就接到上一張圖的分層查證，L0 先判有沒有異常再往下；建置失敗、缺工具、中斷是環境問題，修好再跑" width="760">
+   </a>
+ </p>
+ 
+ <details>
+ <summary>看怎麼接、結果怎麼讀、實驗結果與限制</summary>
+@@ -385,21 +385,21 @@ lumos android-e2e history                                          # 看每一
+ 
+ **功能對照表。** 在 `e2e` 段加 `features`：每個功能寫它管哪些程式路徑（`--changed` 靠這個從改到的檔找出功能）、有哪些使用情境，每個情境列它的流程檔、截圖畫面、效能測試方法、記憶體情境。效能指令裡寫 `{{TEST}}`，會換成挑到的測試方法；記憶體情境寫在最外層的 `stability_scenarios`，一個情境一個開關畫面的驅動。對照表寫了不存在的流程檔或情境，檢查設定時就擋下。
+ 
+ **兩種紀錄。** 每一次跑（整套或按功能、過或沒過、被中斷、判定擋下沒寫紀錄）都記進本機的檢測總表 `.lumos/artifacts/android/history.jsonl`：時間、哪一版、有沒有沒提交的改動、挑了哪些使用情境、每一項的結果、證據放在哪。從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄：整套跑記在 `runs`，按功能跑把那幾個使用情境記在 `feature_runs`（一個情境一筆；略過情境本來有的效能或記憶體、或只列了效能沒有會判過不過的項目時標「不完整」，同一版已有完整的結果不會被不完整的蓋掉）。查證紀錄綁在「這一版 App 程式與驗收素材」上：之後改了 App 程式、流程檔、基準圖或門檻任何一處，這份紀錄就不算數，要重跑。
+ 
+ **為什麼要先提交。** 查證紀錄要綁在某個提交上，所以整套跑時工作目錄有沒提交的改動會拒跑；按功能跑則照跑，但開跑時有沒提交的改動就只記總表（建出來的 App 不是這一版，跑到一半才收掉改動也一樣）。跑到一半換了版本，也不寫紀錄。順序是：改程式 → 提交 → 跑驗收 → 把紀錄另外提交。
+ 
+ **結果怎麼讀。**
+ 
+ - **通過**：紀錄寫好了，提交它再推送。效能變慢只會多印提醒，照樣算通過。
+-- **沒過**：只要有一塊沒過就是沒過，終端會印是哪一塊。UI 流程沒過附報告路徑、截圖沒過附相符率與差異圖，直接看那份；記憶體沒過時原始數字在這次的產物目錄（`.lumos/artifacts/android/<run-id>/stability.json`），照上面的分層查證往下找。
++- **沒過**：只要有一塊沒過就是沒過，終端會印是哪一塊。UI 流程沒過附報告路徑、截圖沒過附相符率與差異圖，直接看那份；記憶體沒過時原始數字在這次的產物目錄：`stability` 段本身在 `.lumos/artifacts/android/<run-id>/stability.json`，其他記憶體情境在旁邊的 `<run-id>.<情境>/stability.json`，照上面的分層查證往下找。每個情境各留一份錄製檔，不會自動清，舊的要自己刪。
+ - **沒判完**：沒有一塊沒過，但有一塊沒跑成，例如建置或安裝失敗，或跑到一半被中斷（中斷時仍會寫下這份紀錄）。這是環境的問題，修好再跑。
+ - **沒寫紀錄**：開跑前檢查就停下了（設定不合格、整套跑時工作目錄有沒提交的改動、要跑記憶體那塊卻缺 Perfetto 工具、`--changed` 對不到任何功能），或跑到一半換了版本。修好再跑。
+ 
+ UI 流程失敗會自動重跑一次，兩次都失敗才算沒過。效能這塊照舊只提醒、不擋，原因跟上面一樣：毫秒數字會浮動。
+ 
+ **截圖比對沒過、而且畫面是你故意改的，要換基準圖，不要降門檻。** 換基準圖等於重新定義「這畫面是對的」，所以要人看過新圖才換（toolkit 的 `visual-record.sh`），再重跑驗收。
+ 
+ **實驗結果**（同一台 SM-X710 平板、同一個實驗 App）：
+ 
+ - 四塊全開時整套通過，一次約 3 分鐘（建置有快取、效能只跑 5 輪；效能照建議跑 20 輪會再多幾分鐘）。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md
+index 442b60505448fca198d1bdbb3ca102d14c8b17f4..fadd32eb22e27ea5ea54608cfe55ad5043bf350e 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md
+@@ -193,46 +193,46 @@ WHY:毫秒類第一版只提醒 [出處:2026-10-25 Enzo 選「毫秒類先只提
+     "paths": ["app/src/main/java/com/example/mblab/MainActivity.kt"],
+     "cases": {
+       "scroll": {"flows": [".maestro/list.yaml"], "visual": ["main_visual"], "macrobench": ["ScrollBenchmark#scrollList"],
+                  "stability": []}
+     }
+   }
+ }
+ ```
+ 
+ - 不另外用 Maestro 的 tags 標功能:效能與記憶體的測試寫在 Kotlin 裡貼不了標籤,兩套標法會漂;對照表一處寫齊。
+-- 效能:`macrobench_cmd` 可以帶 `{{TEST}}`,按功能跑時換成選到的測試方法、一個方法跑一次(例如 `sh scripts/run-bench.sh {{TEST}}`);沒帶 `{{TEST}}` 時按功能跑不能選效能,開跑前說明。
++- 效能:`macrobench_cmd` 可以帶 `{{TEST}}`,按功能跑時換成選到的測試方法、一個方法跑一次(例如 `sh scripts/run-bench.sh {{TEST}}`);情境列了效能測試方法卻沒帶 `{{TEST}}`,設定檢查就擋(S26)。帶了 `{{TEST}}` 之後,整套跑也只跑對照表列到的方法,沒列進任何情境的 Macrobenchmark 方法不會跑。方法名原樣換進 `sh -c`,所以不收 `$`(會被當變數展開、跑成別支)。
+ - 記憶體:`stability` 段改成可以有多個情境(`stability_scenarios`:情境名 → 驅動指令與情境名),收集腳本照選到的情境跑;門檻檔照舊用情境名對條目。原本只有一個情境的寫法照舊認得。
+ - 對照表裡寫了整套清單沒有的 flow 或畫面、門檻檔沒有的情境,`macrobench --check-config` 擋。
+ 
+ ### 怎麼叫
+ 
+ ```
+ sh scripts/templates/android-e2e-run.sh                            # 整套(推送前):全部跑、寫正式查證紀錄
+ sh scripts/templates/android-e2e-run.sh --changed                  # 自動:看這次改到的檔,挑對應功能的全部情境
+ sh scripts/templates/android-e2e-run.sh --feature player           # 指定功能:這個功能的全部情境
+ sh scripts/templates/android-e2e-run.sh --case player.open-close   # 指定情境(可以逗號接多個)
+   加 --no-perf / --no-memory:這次不跑效能或記憶體(那兩塊一個情境要好幾分鐘)
+ ```
+ 
+ - 建置與安裝每次都跑。
+ - `--changed` 比的是「HEAD 加上工作目錄沒提交的改動與沒追蹤的新檔」跟分岔點(主線)的差異,檔案落在哪個功能的 `paths` 裡就挑那個功能;一個功能都對不到時不靜默放過,印出改到的檔、提示補對照表或整套跑,回 2。
+ - 按功能跑不要求工作目錄乾淨(開發中本來就有沒提交的改動)。
+ - 改到的檔有些對得到功能、有些對不到時,`--changed` 照跑對得到的功能,另外列出「這些檔沒有對應功能」,提醒補對照表(推送前的整套跑照樣會驗到它們)。
+ 
+ ### 檢測紀錄
+ 
+-- 每一次跑(整套或按功能)都在本機總表 `.lumos/artifacts/android/history.jsonl` 加一行:時間、run-id、HEAD、工作目錄有沒有沒提交的改動、怎麼挑的(整套、`--changed`、`--feature`、`--case` 與挑到的功能和情境)、每個情境每一項的結果(過、沒過、沒判完、這次沒跑)、證據目錄。總表在被 git 忽略的產物目錄裡,不進版控。
++- 每一次跑(整套或按功能)都在本機總表 `.lumos/artifacts/android/history.jsonl` 加一行:時間、run-id、HEAD、工作目錄有沒有沒提交的改動、怎麼挑的(整套、`--changed`、`--feature`、`--case` 與挑到的功能和情境)、每一項的結果(按功能跑另記每個情境自己的結果與項目,`history --case` 只列那個情境的)、證據目錄;judge 擋下沒寫紀錄的那次也記、附原因。總表在被 git 忽略的產物目錄裡,不進版控。
+ - `lumos android-e2e history [--feature <功能>] [--case <情境>] [--last N]` 列出歷史;每一行附證據目錄。
+ - 正式的查證紀錄(`.lumos/e2e-records/<指紋>.json`):整套跑寫 `runs`;按功能跑在工作目錄乾淨、HEAD 沒換時,把每個情境的結果寫進同一份紀錄的 `feature_runs`(`功能.情境` → result、complete、skipped、每項結果、run_id、ended、commit),不碰 `runs`;用了 `--no-perf`、`--no-memory` 而那個情境本來有那塊時 complete 是 false。沒提交時只記總表並說原因。判讀走 `judge --no-record`(名字沿用;意思是「不寫整套的 runs」),`steps.json` 帶 `selection` 欄,judge 沒帶 `--no-record` 讀到有 `selection` 的就拒寫、回 2。
+ - 2026-10-26 Enzo 裁「只針對功能開發寫正式檢驗紀錄也算合理」(開發是按功能分派的):推送前檢查(下一批)要能按「這次改動碰到哪些功能」去要那些功能的 `feature_runs`,碰到共用程式(對照表要能標 `shared`)或對不到功能的檔才要整套 `runs`;判法在下一批設計,這一批只把紀錄寫出來。
+-- 終端最後一段照情境列:「player.open-close:UI ✓、記憶體 ✗ native_unreachable(證據 …)」。
++- 終端最後照情境各列一行:「情境 player.open-close:沒過;沒過或沒判完:stability player:native_unreachable」;證據目錄看總表或 `history`。
+ 
+ ### 不做
+ 
+ - 不從圖譜的功能筆記推功能(那要讀 vault,端到端驗收目前是 vault-free 的);對照表寫在專案設定。
+ - 不做「只判記憶體某一項」:一個情境的開關資料是一起收的,只判一項省不了時間。
+ 
+ WHY:按功能跑的結果另存在查證紀錄的 feature_runs,不寫進整套的 runs;沒提交時只記總表 [出處:2026-10-26 Enzo 先要完善的檢測紀錄,後裁「只針對功能開發寫正式檢驗紀錄也算合理」] [因:開發按功能分派,每次逼整套跑不實際;但 runs 代表「這一版整套驗過」,混在一起推送前檢查就分不出驗了哪些;沒提交的版本對不上任何提交,不寫] [不選:按功能跑只記總表(原案,被 Enzo 改掉);寫進 runs 並標部分]
+ WHY:功能對照表寫在專案設定,不用 Maestro tags [出處:同上] [因:效能與記憶體的測試在 Kotlin 裡貼不了標籤,兩套標法會漂] [不選:flow 用 tags、其他用設定]
+ 
+ ## 條款
+@@ -252,30 +252,31 @@ WHY:功能對照表寫在專案設定,不用 Maestro tags [出處:同上] [因:
+ - [S13] 當執行 `lumos android-e2e waive --note <理由>` 時,lumos 應在理由去掉空白後少於 10 個字時回 2;終端答 y 時記成人放行、答了別的時不放行並回 1、沒有互動終端時記成 AI 放行;成功時把放行加進紀錄的 waivers(沒有紀錄就新建 `runs` 為 null 的紀錄)、之後重跑 judge 不會蓋掉;治理帳記一筆 android-e2e 的 waived [test:t_android_e2e_waive]
+ - [S14] 當被推送提交的紀錄裡有還沒被人看過的 AI 放行時,`code-loop check` 的這道應多印一行待看筆數、`lumos doctor` 應列成提醒(`--ci` 不因此變紅)、`lumos enforcement` 的那一列應標成沒生效;人用 `waive --ack` 答 y 確認後三處都不再列,答別的或沒人答時不標看過 [test:t_android_e2e_ai_waiver_notice]
+ - [S15] 當 `lumos macrobench` 帶 `--results-dir <目錄>` 時,應只讀那個目錄底下的結果檔、照舊用專案的基準與門檻,設定檔沒有 `results_dirs` 也照跑 [test:t_macrobench_results_dir]
+ - [S16] 當範本腳本 `android-e2e-run.sh` 跑完、中途有一步失敗、或被 INT、TERM、HUP 中斷時,它應寫出 `steps.json` 並呼叫 judge,不留下沒有紀錄的半套結果;開跑前檢查沒過(工作目錄有未提交改動或沒追蹤的新檔、裝置沒連上或鎖屏、同一台裝置有另一次驗收在跑)時不開跑並說原因;裝置鎖裡記的程序已經不在時清掉並接手 [test:t_android_e2e_run_script]
+ - [S17] 當主線找不到、主線版的 `e2e` 段不合格、被推送提交的 `app_dirs` 有一項不存在、或判定內部出錯時,判定應擋下(回 1)並說原因,不放行;`LUMOS_SKIP_ANDROID_E2E` 有設時整道不跑並記一筆治理帳 skipped [test:t_android_e2e_gate_unclear_blocks]
+ - [S18] 當開始實作時,應先在 SM-X710 上實測 Maestro repeat 吃不吃 ${CYCLES} 與 toolkit 狀態列固定得住,兩項各寫下「可以」或「不行與改法」;狀態列不行時截圖這塊不進第一版 [manual:前置兩項實測結果寫進〈資料怎麼流〉第 0 步之後]
+ - [S19] 當在 macrobench-lab 上照〈實驗室驗收〉逐組跑時,每一組都應照預期(UI 正常版 5 次全過、截圖同版本 3 次全相符、應該擋的全擋、不該擋的全放);任一組不照預期就算沒過,修好重跑那一組 [manual:SM-X710 上逐組跑,每組結果寫進驗證紀錄]
+ - [S20] 當在 Citrus_KDS 上接 E2E 驗收時,至少 UI 流程這塊應跑得起來、紀錄寫得出來、推送檢查認得它,並記下一次驗收實際花多少時間;超過 30 分鐘時在驗證紀錄寫一條縮短的回頭條件;Enzo 不同意升 benchmark-macro 時,效能與記憶體兩塊在 KDS 不開、照實寫進驗證紀錄 [manual:SM-X710 上跑一次,時間、各塊結果與沒開的塊寫進驗證紀錄]
+ - [S21] 當 AI 照 lumos-android-evidence skill 接 E2E 驗收時,skill 應寫明接入順序、怎麼跑、紅了看哪裡、怎麼放行、AI 放行會被列出來、怎麼整道關掉一次 [manual:讀 skill 的 E2E 驗收一節,六件事都寫到]
+ - [S22] 當範本腳本帶 `--case <功能>.<情境>` 或 `--feature <功能>` 跑時,它應建置、安裝,只跑對照表裡那些情境列的 flow、截圖、效能測試方法與記憶體情境,呼叫 `judge --no-record`;選到的都過時回 0、有沒過或沒判完時回 1;工作目錄有沒提交的改動時照樣開跑,不寫整套的 `runs`(按情境的結果寫不寫見 S27);終端最後照情境各列一行結果 [test:t_android_e2e_by_feature] [test:t_android_e2e_memory_by_case]
+-- [S23] 當帶 `--changed` 跑時,範本腳本應用「HEAD 加工作目錄改動與沒追蹤的新檔(逐檔)」對分岔點的差異挑出 `paths` 對得到的功能,改到的是某個情境列的 flow 檔時也挑那個功能;一個功能都對不到時回 2 並印出改到的檔與「補對照表或整套跑」;`--no-perf`、`--no-memory` 時不跑那兩塊,也不查那兩塊要的工具,沒配挑法時回 2;不認得的 `-` 開頭參數回 2 [test:t_android_e2e_by_feature] [test:t_android_e2e_changed_pick] [test:t_android_e2e_memory_by_case] [test:t_android_e2e_args_and_names]
++- [S23] 當帶 `--changed` 跑時,範本腳本應用「HEAD 加工作目錄改動與沒追蹤的新檔(逐檔)」對分岔點的差異挑出 `paths` 對得到的功能(改名的舊路徑也算;讀 git 失敗時回 2,不當成沒改動),改到的是某個情境列的 flow 檔時也挑那個功能,改到共用 flow、截圖素材、驗收設定或門檻卻對不到功能時列出來提醒;同時用 `--case` 而 `--changed` 對不到時照跑指名的;一個功能都對不到時回 2 並印出改到的檔與「補對照表或整套跑」;`--no-perf`、`--no-memory` 時不跑那兩塊,也不查那兩塊要的工具,沒配挑法時回 2;不認得的 `-` 開頭參數回 2 [test:t_android_e2e_by_feature] [test:t_android_e2e_changed_pick] [test:t_android_e2e_memory_by_case] [test:t_android_e2e_args_and_names] [test:t_android_e2e_changed_edges]
+ - [S24] 當 judge 沒帶 `--no-record`、讀到的 `steps.json` 有 `selection` 欄時,應拒絕寫紀錄並回 2;帶 `--no-record` 時只判選到的情境、不寫整套的 `runs` [test:t_android_e2e_by_feature]
+-- [S25] 當每一次範本腳本跑完(整套或按功能、過或沒過、被中斷)時,它應在 `.lumos/artifacts/android/history.jsonl` 加一行,含時間、run-id、HEAD、工作目錄有沒有改動、挑法、每一項的結果與證據目錄,judge 擋下沒寫紀錄的那次也記、附原因;`lumos android-e2e history` 照 `--feature`、`--case`、`--last`(正整數)篩出來 [test:t_android_e2e_history] [test:t_android_e2e_history_edges]
+-- [S26] 當對照表寫了整套清單沒有的 flow 或畫面、門檻檔沒有的記憶體情境、或 `macrobench_cmd` 沒帶 `{{TEST}}` 卻有情境列了效能測試方法時,`macrobench --check-config` 應回 2 並點名;效能測試方法名不合規則(開頭 #、含空白)或 `stability_scenarios` 的輪數超過 10000 也回 2;原本只有一個記憶體情境的 `stability` 寫法照舊合格 [test:t_android_e2e_features_config] [test:t_android_e2e_args_and_names]
+-- [S27] 當按功能跑時開跑時與判讀時工作目錄都乾淨、HEAD 沒換,judge 應把每個挑到的情境寫進這一版查證紀錄的 `feature_runs`(result 照那個情境自己的項目算;略過情境本來有的效能或記憶體時 complete 是 false;一個會判的項目都沒有時 result 是 unjudged、complete 是 false),不碰 `runs`;同一版已有完整、判完的結果時,不拿這次不完整或沒判完的蓋掉;之後整套跑寫 `runs` 時不蓋掉 `feature_runs` [test:t_android_e2e_by_feature] [test:t_android_e2e_feature_record_trust]
+-- [S28] 當整套跑時,記憶體應收 `stability` 段本身加 `stability_scenarios` 每個情境、各判一次;多個效能測試方法時每跑完一個就收一次結果 [test:t_android_e2e_memory_by_case] [test:t_android_e2e_perf_per_method]
++- [S25] 當每一次範本腳本跑完(整套或按功能、過或沒過、被中斷)時,它應在 `.lumos/artifacts/android/history.jsonl` 加一行,含時間、run-id、HEAD、工作目錄有沒有改動、挑法、每一項的結果與證據目錄,judge 擋下沒寫紀錄的那次也記、附原因;`lumos android-e2e history` 照 `--feature`、`--case`、`--last`(正整數)篩出來 [test:t_android_e2e_history] [test:t_android_e2e_history_edges] [test:t_android_e2e_history_by_case]
++- [S26] 當對照表寫了整套清單沒有的 flow 或畫面、門檻檔沒有的記憶體情境、或 `macrobench_cmd` 沒帶 `{{TEST}}` 卻有情境列了效能測試方法時,`macrobench --check-config` 應回 2 並點名;效能測試方法名不合規則(開頭 #、含空白、含 $)、功能 `paths` 不是正規寫法(`//`、`/./`、只寫 `.`)、`macrobench_cmd` 不是字串、或 `stability_scenarios` 的輪數超過 10000 也回 2;原本只有一個記憶體情境的 `stability` 寫法照舊合格 [test:t_android_e2e_features_config] [test:t_android_e2e_args_and_names]
++- [S27] 當按功能跑時開跑時與判讀時工作目錄都乾淨、HEAD 沒換,judge 應把每個挑到的情境寫進這一版查證紀錄的 `feature_runs`(result 照那個情境自己的項目算;略過情境本來有的效能或記憶體時 complete 是 false;一個會判的項目都沒有時 result 是 unjudged、complete 是 false),不碰 `runs`;同一版已有完整、判完的結果時,這次沒判完、或不完整但通過的不蓋掉它,這次沒過一律蓋掉,重判比既有那筆更早結束的那次也不蓋掉;一個情境沒判完時整次結果也是沒判完、回 1;之後整套跑寫 `runs` 時不蓋掉 `feature_runs` [test:t_android_e2e_by_feature] [test:t_android_e2e_feature_record_trust] [test:t_android_e2e_feature_record_rules]
++- [S28] 當整套跑時,記憶體應收 `stability` 段本身加 `stability_scenarios` 每個情境、各判一次(段本身不帶 shell 殘留的情境變數);用了替身收集腳本(`LUMOS_E2E_COLLECT`)時不寫查證紀錄;多個效能測試方法時每跑完一個就收一次結果 [test:t_android_e2e_memory_by_case] [test:t_android_e2e_perf_per_method] [test:t_android_e2e_full_scenarios_judged]
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-25,6 席:正確性、守衛、邊界、整合、通才、架構對齊):55 條/blocking 32/CI 在 PR 不跑、放行太便宜、APK 沒綁原始碼、紀錄格式與讀法、指紋定義、範本腳本介面、判定分流、接線清單;Enzo 另裁 AI 可放行但要通知、第一版只擋本機推送;55 條全折。
+ - r2(2026-10-25,6 席同上鏡頭、全新代理):59 條/blocking 33/回退指錯檔、指紋選檔設定與 `e2e` 段雜湊、分岔點算法與 CI、判不清改成擋、驗收中途換版與髒樹範圍、終端答 n、只有放行的紀錄、AI 放行通知落點、RETIRE-IF 資料來源、只有 e2e 段的設定檔、對照表句子正本、鎖殘留與原子寫入;折 58 條、放行 1 條(舊版 lumos 沒有這道判定時不另加版本探測,見 r2-intake.md)。
+ - 2026-10-26 先加〈只跑某一塊〉(--only 按大類挑),同日 Enzo 說粒度要到功能與使用情境,改寫成〈按功能與使用情境跑〉與 S22–S27,--only 那版沒推就改掉。新設計動到設定格式與收集腳本,spec-gate 判計劃風險高;Enzo 說「直接開工」,沒另開設計審,實作走代碼審、開發完在實驗室實跑。
+-- 代碼審 code-e2e-by-feature r1(2026-10-26,7 席:正確性、資源、邊界、合約、通才、資安、架構對齊):43 條/blocking 6/按功能跑「不寫紀錄」的說法與實作相反、測試沒守住分岔點與記憶體情境、--changed 漏挑新目錄與 flow 檔、開跑時髒卻記成這一版驗過、總表另起寫法、整套跑漏了記憶體情境;43 條全折,補 S28。卷證 governance/review-reports/code-e2e-by-feature/。
++- 代碼審 code-e2e-by-feature r1(2026-10-26,7 席:正確性、資源、邊界、合約、通才、資安、架構對齊):43 條/blocking 6/按功能跑「不寫紀錄」的說法與實作相反、測試沒守住分岔點與記憶體情境、--changed 漏挑新目錄與 flow 檔、開跑時髒卻記成這一版驗過、總表另起寫法、整套跑漏了記憶體情境;43 條全折,補 S28。
++- 代碼審 code-e2e-by-feature r2(2026-10-26,7 席同上):30 條/blocking 7/效能方法名收了 $ 被 sh 展開成別支、不蓋掉完整結果的條件把真失敗也蓋掉、沒有會判項目時三處說法矛盾、紀錄前提與分岔點與整套各判一次沒有測試守住,另有 --changed 邊角、替身收集腳本與殘留情境變數、總表按情境;30 條全折。卷證 governance/review-reports/code-e2e-by-feature/。
+ - 卷證:governance/review-reports/android端到端驗收/(r1-intake.md、r2-intake.md 有逐條重現與去向)
+ 
+ ## 回退
+ 
+ - 判定:一次推送要關掉這道,設 `LUMOS_SKIP_ANDROID_E2E=1`(記一筆治理帳);要長期關,從主線版的 `.lumos/macrobench.json` 刪掉 `e2e` 段(刪段的那次推送本身用環境變數關,合進主線後判定就不跑),其他判定不受影響。
+ - 紀錄與放行:`.lumos/e2e-records/` 是新增的檔,刪掉不影響其他功能;放行寫在治理帳的事件只是統計來源,不影響其他判定。
+ - 程式:新子命令與 `code-loop check` 那一道是新增的,回退就是撤掉那次提交;既有判定的程式碼只改 `lumos macrobench` 讀設定的那支(接受只有 `e2e` 段),撤掉時一起還原。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+index 081379eaccc82be4688160796ce7498c3c6195bd..509398a1420885b6c595ede087cd843460312582 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
++++ b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+@@ -14,21 +14,21 @@ tags:
+   - scope/ux-docs-hygiene
+ summary: |-
+   WHY:[2026-09-30 [[Projects/README面試官十分鐘_計劃]]]主圖站名改成跟 README 正文一致的白話(讀程式碼/分派審查/審查與處理/寫回筆記),箭頭標上交給下一步的東西——讀者扮面試官時一再扣「圖上的圖譜、派工、evals 看不懂」「四個方框看不出資料怎麼流」
+   WHY:[2026-09-30 同上]新增案例時間線圖 case-review,把 README〈一個真實的例子〉那段四輪審查畫成一張;數字來自 governance/review-reports/code-工具自裝檔不算消費專案/ 的四份 intake(每輪 7/4/7/5 位、12/6/17/11 條)
+   WHY:[2026-09-30 [[Projects/README面試官十分鐘_計劃]] 第四輪]新增 risk-review 合併圖(依風險決定審多重),README 用它取代派工圖與審查圖;舊的兩張仍由產生器產出,別處若還引用不會斷
+   PITFALL:[2026-09-30 本輪發現]2026-09-21 那次「說明改成程式碼為主」直接手改了 map-zh/en.svg,沒改產生器,之後 `--check` 一直是紅的;這次重畫主圖時才順手對齊。重現:`python3 assets/readme-diagrams/generate.py --check`
+   PITFALL:[2026-09-30 本輪發現]用 qlmanage 把這批 SVG 轉 PNG 會截到動畫第一格(知識圖節點全空)而且裁成正方形;目視檢查改用無頭 Chrome 加 `--virtual-time-budget` 等動畫跑完再截。重現:`qlmanage -t -s 1400 -o /tmp assets/graph-demo-zh.svg` 後打開那張 PNG,節點是空的
+   WHY:主圖採三階段摘要，具體擋下與提醒條件留在 README 展開區；通知與核可用語保留適用邊界 [出處:使用者核可 [[Projects/README文案與圖示潤飾_計劃]]] [因:首次閱讀不應先消化操作清單，也不應由圖示推論全面安全或必定通知]
+   WHY:Android 推送前整套驗收另開一張 android-acceptance 圖,不塞進 L0–L3 那張 [出處:2026-10-25 使用者要求 README 連圖一起更新] [因:整套驗收是推送前要跑的五步流程(目前還不擋推送),L0–L3 是出問題才往下查的分層;畫在同一張會讓人以為每次都要跑到 L3] [不選:在舊圖上加一列(版面塞不下五步、兩種流程的方向不同)]
+   WHY:android-acceptance 圖每一步的標籤寫用的工具、判完分「通過」與「沒過或印了變慢提醒→接分層查證」兩條路,結果用白話不寫回傳碼 [出處:2026-10-26 使用者看了第一版的意見] [因:第一版標籤寫必須過/只提醒,看不出用什麼工具,也看不出有異常才往下查;回 0/1/2 讀者看不懂] [不選:沿用第一版]
+-  WHY:android-acceptance 圖最上面加「怎麼叫」一排(整套、--changed、--feature、--case),結果與底下兩行分開講本機檢測總表(每次都記)與查證紀錄(只有整套跑寫) [出處:2026-10-26 Enzo 要檢測過程能彈性調用、自動化、有完善的檢測紀錄,README 的圖也要更新] [因:只畫整套五步會讓人以為每次都要整套跑] [不選:另開一張按功能跑的圖(兩張圖五步重複)]
++  WHY:android-acceptance 圖最上面加「怎麼叫」一排(整套、--changed、--feature、--case),結果與底下兩行分開講本機檢測總表(每次都記)與查證紀錄(整套跑寫 runs;按功能跑從開跑到判讀都乾淨時按情境寫 feature_runs) [出處:2026-10-26 Enzo 要檢測過程能彈性調用、自動化、有完善的檢測紀錄,README 的圖也要更新] [因:只畫整套五步會讓人以為每次都要整套跑] [不選:另開一張按功能跑的圖(兩張圖五步重複)]
+ verified_by:
+   - "[[Verification/2026-10-21_README文案與圖示潤飾]]"
+ ---
+ # README圖產生器
+ 
+ > 白話:這支產生器管理的 README 示意圖不要手改 SVG；獨立維護的資安圖依資產說明處理。改完跑 `--check`,再轉圖用眼睛看中英兩版有沒有字擠出框、線穿過字。
+ 
+ ## 怎麼改、怎麼驗
+ 
+ - 改 `assets/readme-diagrams/generate.py` 裡對應的 scene 函式,跑一次產生,再跑 `--check`(驗 XML、可重現、動畫只動線不動字、知識圖的揭露順序與關聯)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index da5ddebbcb5173aaf319c454bdd49e4b04ba1e2e..59ba9dc854e43e9aabae6d8c9600a89093089004 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -30,20 +30,22 @@ summary: |-
+   PITFALL:讀紀錄時套了清洗(換行、tab、孤立代理字元換成空白),讀改寫一次就把人寫的放行理由壓扁再寫回 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席(上一輪修補帶進來的)] [根因:同一支讀檔函式同時給只讀的判定輸出與要整份寫回的紀錄用] [修法:紀錄讀回只限深、不清洗換行與 tab;孤立代理字元後來仍換成 U+FFFD,見上一條 r3 那行] [test:t_android_e2e_judge_dirty_tree]
+   PITFALL:錯誤輸出斷了之後,say() 吞掉例外、但緩衝區還留著字,程式結束清緩衝區時失敗,回傳碼變成 120 [出處:2026-10-25 代碼審 code-android-e2e-batch1 r2 單審席] [根因:只吞了這一次的例外,沒換掉壞掉的錯誤輸出] [修法:第一次寫不出去就把錯誤輸出換成 /dev/null] [test:t_android_e2e_run_script]
+   PITFALL:紀錄或 lumos 本體裡用 "diff" 當欄位名,推送前全套測試的「取差異內容的 git 呼叫要帶防護旗標」守衛會把它當成 git 呼叫而翻紅 [出處:2026-10-25 首次推送被擋] [根因:那道守衛靠字面上的引號 diff 找呼叫點] [修法:截圖比對的差異圖欄位叫 diff_image] [test:t_lumos_content_diffs_all_disable_external_drivers]
+   PITFALL:新加頂層子指令只寫了 add_parser,推送前全套測試另有兩支會紅:說明沒有「什麼時候用」、架構說明與手冊參考檔寫的指令總數沒跟著加 [出處:2026-10-25 第四次推送被擋] [根因:「什麼時候用」集中寫在 HELP_WHEN 表、指令總數散在兩份文件,加指令時不會被提醒] [修法:android-e2e 與 android-e2e judge 補進 HELP_WHEN,總數改 95] [test:t_every_subcommand_has_when]
+   WHY:e2e 段開了記憶體與穩定性時(看 e2e 段,不看最外層給單獨 macrobench --stability 用的那段),範本腳本的開跑前檢查先查 trace_processor,宣告了測試資料再查 java_heap_dump,跟收集腳本同兩個環境變數、讀 test_data 的那一行逐字相同(測試各抽出那一行比相等) [出處:2026-10-25 實驗室四塊實跑] [因:收集腳本自己也查,但輪到它時建置、安裝、UI、截圖都已跑完,實驗室兩次都白跑一趟才記成沒判完] [不選:只靠收集腳本自己查(慢)] [test:t_android_e2e_preflight_stability_tools]
+   WHY:範本腳本 --changed、--feature、--case 按 e2e.features 對照表只跑挑到的情境,交給 judge --no-record 判;開跑時與判讀時工作目錄都乾淨、HEAD 沒換時把每個情境的結果寫進這一版查證紀錄的 feature_runs(略過效能或記憶體、或沒有會判的項目時標 complete=false),不碰整套的 runs;judge 沒帶 --no-record 卻讀到 steps.json 有 selection 欄就拒寫、回 2 [出處:2026-10-26 Enzo 要按功能與使用情境跑,並說「只針對功能開發寫正式檢驗紀錄也算合理」(開發是按功能分派的)] [因:整套的 runs 代表「這一版整套驗過」,按功能的結果另存一欄,推送前檢查(下一批)才分得出改動碰到的功能各有沒有驗過] [不選:按大類挑的 --only(粒度不對,同日改掉);按功能跑只記總表(開發按功能分派,每次逼整套跑不實際)] [test:t_android_e2e_by_feature]
+   WHY:每次跑(整套或按功能)都由 judge --history 在 .lumos/artifacts/android/history.jsonl 加一行,有沒有沒提交的改動照開跑前檢查同一套規則判 [出處:同上,Enzo 要完善的檢測紀錄] [因:按功能跑不寫整套的紀錄、開跑時有改動就什麼紀錄都不寫,開發中的檢測歷史要另有地方查;簿記檔不算改動,不然整套跑後沒提交的紀錄檔會讓下一筆都記成有改動] [test:t_android_e2e_history]
+   WHY:--changed 的分岔點照安全證據那套挑主線(_secev_mainline),挑不到只看工作目錄的改動並說明;一個功能都對不到回 2,不靜默放過 [出處:同上] [因:主線挑法只該有一份;對不到時什麼都不跑卻回通過,會被當成驗過] [test:t_android_e2e_by_feature]
+   PITFALL:按功能跑開跑時工作目錄有改動、跑到一半收掉,判讀時乾淨、HEAD 沒換,結果被記成這一版驗過,但建出來的 App 含那些改動 [出處:2026-10-26 代碼審 code-e2e-by-feature r1 資安、通才席] [根因:寫 feature_runs 只看判讀當下的工作目錄,開跑時記下的 dirty 沒拿來擋] [修法:steps 的 dirty 不是 false 就只記總表] [test:t_android_e2e_feature_record_trust]
+   PITFALL:--changed 漏挑:整個沒追蹤的新目錄被 git status 收成一筆「目錄/」,對不到寫在更深一層的 paths;只改 flow 檔時對不到任何功能 [出處:2026-10-26 代碼審 code-e2e-by-feature r1 邊界席] [根因:沒追蹤的檔沒逐檔展開;只用程式路徑對功能] [修法:沒追蹤的檔用 ls-files --others 逐檔列;改到某情境列的 flow 也算那個功能] [test:t_android_e2e_changed_pick]
++  PITFALL:效能測試方法名為了收 Kotlin 巢狀類別而放行 $,但名字原樣換進 sh -c,Outer$Inner#test 被展開成 Outer#test,設定檢查與驗收都過、跑的卻是別支 [出處:2026-10-26 代碼審 code-e2e-by-feature r2 通才、合約、正確性席(上一輪修補帶進來的)] [根因:放寬白名單時只想到設定檢查,沒追到值換進 shell 之後] [修法:E2E_BENCH_NAME_RE 與範本腳本同一條都不收 $] [test:t_android_e2e_args_and_names]
++  PITFALL:「完整的結果不被不完整的蓋掉」條件只看完不完整,同一版先完整通過、再略過效能跑出真失敗時,失敗被丟掉、紀錄仍寫通過,跟總表矛盾 [出處:2026-10-26 代碼審 code-e2e-by-feature r2 通才席(上一輪修補帶進來的)] [根因:保留規則沒先排除這次沒過] [修法:_e2e_keep_old:這次沒過一律蓋掉;只有沒判完、或不完整但通過才留舊的;既有那筆更晚結束也留] [test:t_android_e2e_feature_record_rules]
+   WHY:整套跑的記憶體收 stability 段本身加 stability_scenarios 每個情境、各判一次;多個效能方法每跑完一個就收進自己的子目錄 [出處:2026-10-26 代碼審 code-e2e-by-feature r1 正確性、通才席] [因:整套代表「這一版全部驗過」,只跑 stability 段本身會讓按功能列的記憶體情境從沒在整套裡判過;Macrobenchmark 結果檔名常固定,一起收會只剩最後一個] [test:t_android_e2e_memory_by_case] [test:t_android_e2e_perf_per_method]
+   WHY:本機總表追加走 _local_ledger_append、帳尾缺換行先補,讀取走 _canary_ledger_rows 只留最後 N 筆;judge 擋下沒寫紀錄的那次也記一行、附原因 [出處:2026-10-26 代碼審 code-e2e-by-feature r1 架構對齊、正確性席] [因:本機帳的追加與讀法專案已有一套(擋捷徑、短寫、半行黏行、U+2028 劈行);擋下的那次正是最需要回頭查的] [不選:裸 open 追加、splitlines 讀全檔] [test:t_android_e2e_history_edges]
+   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
+ ---
+ # android-e2e-acceptance
+ 
+ 白話:Android App 推送前在實機上跑一次端到端驗收的那一套。範本腳本負責碰裝置、把每一步的結果寫成 steps.json;lumos 只讀這些結果判過不過,再寫一份綁在「App 程式與驗收素材內容」上的查證紀錄。設計與條款的單源在 [[Projects/Android端到端驗收_計劃]],這裡只記現在怎麼運作、程式碼看不出來的理由。
+@@ -52,17 +54,21 @@ verified_by:
+ 
+ 在專案根目錄:
+ 
+ ```
+ sh scripts/templates/android-e2e-run.sh --preflight
+ sh scripts/templates/android-e2e-run.sh
+ ```
+ 
+ 第一行只做開跑前檢查(工作目錄乾淨、裝置連著沒鎖屏、工具與截圖素材在、產物目錄被忽略、同一台裝置沒有另一次驗收在跑),不碰 App;第二行照順序跑完,最後交給 `lumos android-e2e judge` 判並寫紀錄,結尾印要提交的紀錄檔。
+ 
++開發中按功能跑:加 `--changed`(看改到的檔挑 `e2e.features` 的功能)、`--feature <功能>` 或 `--case <功能.情境>`,可再加 `--no-perf`、`--no-memory`。不要求工作目錄乾淨、不寫整套的紀錄;從開跑到判讀都乾淨、HEAD 沒換時,按情境的結果寫進這一版紀錄的 `feature_runs`。每次都記進本機總表,`lumos android-e2e history` 看。
++
+ ## 回傳碼
+ 
++以下是整套跑;按功能跑是 0=挑到的都過、1=有沒過或沒判完(一個會判的項目都沒有也算)、2=挑不到或設定不合格,寫沒寫進紀錄看終端最後那行。
++
+ - 0:寫了紀錄,而且這次通過。
+ - 1:寫了紀錄,但沒通過(某塊沒過,或環境沒跑成而沒判完)。
+ - 2:開跑前檢查沒過、版本中途換了、工作目錄有改動、設定不合格(這幾種都不寫紀錄);或這次被中斷(judge 照樣寫紀錄:中斷前已有一塊沒過就是「沒過」,否則是「沒判完」,腳本回 2 讓呼叫的人知道沒跑完)。
+ 
+ REVISIT:2026-11-30 計劃第二批(code-loop check 那一道、放行與 AI 放行通知)上線時,把推送檢查怎麼讀紀錄、怎麼放行寫進這篇
+diff --git a/scripts/lumos b/scripts/lumos
+index bf61b7923ba043ce46c76496697287768551cf52..cb8724fc4fdab84bd42626432a381877c6e83e98 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40373,21 +40373,22 @@ def _e2e_app_err(e2e, stab):
+     if "adb_serial" in e2e and (not isinstance(e2e["adb_serial"], str) or not e2e["adb_serial"].strip()):
+         return "adb_serial 要是非空字串"
+     if isinstance(stab, dict):
+         for k in ("package", "adb_serial"):
+             if k in e2e and k in stab and e2e[k] != stab[k]:
+                 return f"{k} 跟 stability 段不一致({e2e[k]} 對 {stab[k]})"
+     return None
+ 
+ 
+ E2E_SCENARIO_KEYS = ("scenario", "driver", "warmup", "cycles")   # 情境能蓋過 stability 段的欄位;收集腳本有一行同樣的清單,測試抽出兩邊比相等
+-E2E_BENCH_NAME_RE = re.compile(r"[A-Za-z0-9_.$][A-Za-z0-9_.$#]*")   # 效能測試方法名:會換進 macrobench_cmd 交給 sh,開頭不准 #(sh 當註解);範本腳本同一條
++E2E_BENCH_NAME_RE = re.compile(r"[A-Za-z0-9_.][A-Za-z0-9_.#]*")   # 效能測試方法名:原樣換進 macrobench_cmd 交給 sh,不收 $(sh 會當變數展開、跑成別支)、開頭不准 #(sh 當註解);範本腳本同一條
++E2E_HISTORY_REL = ".lumos/artifacts/android/history.jsonl"   # 本機檢測總表(寫入與讀取共用)
+ 
+ 
+ def _e2e_scenarios_err(scen):
+     """macrobench.json 最外層的 stability_scenarios:情境名 → 蓋過 stability 段的欄位(scenario、driver 必填,warmup、cycles 選填,
+     上限跟 stability 段一樣 MACROBENCH_MAX_CYCLES)。"""
+     if scen is None:
+         return None
+     if not isinstance(scen, dict) or not scen:
+         return "stability_scenarios 要是非空物件(情境名 → {scenario, driver})"
+     for name, v in scen.items():
+@@ -40400,21 +40401,21 @@ def _e2e_scenarios_err(scen):
+         extra = sorted(set(v) - set(E2E_SCENARIO_KEYS))
+         if extra:
+             return f"stability_scenarios.{name} 不認得的欄位:{'、'.join(extra)}(只收 {'、'.join(E2E_SCENARIO_KEYS)})"
+     return None
+ 
+ 
+ def _e2e_case_bench_err(where, c, e2e):
+     """使用情境列的效能測試方法:名字照 E2E_BENCH_NAME_RE(會換進 macrobench_cmd 交給 sh),而且 e2e 段要開效能、指令帶 {{TEST}}。"""
+     bad = next((x for x in c.get("macrobench", []) if not E2E_BENCH_NAME_RE.fullmatch(x)), None)
+     if bad is not None:
+-        return f"{where}.macrobench 的 {bad!r}:效能測試方法名只收英數字、點、底線、$ 與 #,開頭不能是 #"
++        return f"{where}.macrobench 的 {bad!r}:效能測試方法名只收英數字、點、底線與 #,開頭不能是 #(不收 $:sh 會把它當變數展開)"
+     if c.get("macrobench") and (not e2e.get("macrobench") or "{{TEST}}" not in (e2e.get("macrobench_cmd") or "")):
+         return f"{where} 列了效能測試方法,e2e 段要 macrobench 是 true、而且 macrobench_cmd 帶 {{{{TEST}}}}"
+     return None
+ 
+ 
+ def _e2e_case_err(where, cn, c, e2e, scen, flows, screens):
+     """功能對照表裡的一個使用情境:四種清單的形狀、至少列一樣、每一樣都要在整套清單或 stability_scenarios 裡。"""
+     if not re.fullmatch(r"[A-Za-z0-9_-]+", cn):
+         return f"{where}:情境名只收英數字、底線與連字號"
+     if not isinstance(c, dict):
+@@ -40436,38 +40437,44 @@ def _e2e_case_err(where, cn, c, e2e, scen, flows, screens):
+         return err
+     if c.get("stability") and not e2e.get("stability"):
+         return f"{where} 列了記憶體情境,e2e 段要 stability 是 true"
+     miss = [x for x in c.get("stability", []) if x not in (scen or {})]
+     if miss:
+         return f"{where}.stability 的 {'、'.join(miss)} 不在 stability_scenarios 裡"
+     return None
+ 
+ 
+ def _e2e_feature_head_err(fn, f, name_ok):
+-    """功能對照表裡一個功能本身:名字、paths(--changed 靠它挑功能,要是專案裡的相對路徑)、cases 非空。"""
++    """功能對照表裡一個功能本身:名字、paths(--changed 靠它挑功能,要是專案裡正規寫法的相對路徑)、cases 非空。"""
++    import posixpath
+     if not name_ok.fullmatch(fn):
+         return f"features 的功能名只收英數字、底線與連字號:{fn!r}"
+     if not isinstance(f, dict) or not isinstance(f.get("paths"), list) or not all(isinstance(x, str) and x.strip() for x in f["paths"]):
+         return f"features.{fn}.paths 要是字串清單(這個功能的程式路徑,--changed 靠它挑功能)"
+     bad = next((x for x in f["paths"] if Path(x).is_absolute() or ".." in Path(x).parts), None)
+     if bad is not None:
+         return f"features.{fn}.paths 的 {bad} 要是專案裡的相對路徑"
++    bad = next((x for x in f["paths"] if _e2e_norm(x) in ("", ".") or posixpath.normpath(_e2e_norm(x)) != _e2e_norm(x)), None)
++    if bad is not None:   # app//src、app/./src、. 這類寫法照收卻永遠對不到改到的檔
++        return f"features.{fn}.paths 的 {bad!r} 要寫成正規的相對路徑(例 app/src/login,不要 //、/./ 或只寫 .)"
+     if not isinstance(f.get("cases"), dict) or not f["cases"]:
+         return f"features.{fn}.cases 要是非空物件(使用情境名 → 要跑的東西)"
+     return None
+ 
+ 
+ def _e2e_features_err(e2e, scen):
+     """e2e 段的 features(功能對照表,單源計劃〈按功能與使用情境跑〉):功能 → {paths, cases: 情境 → {flows, visual, macrobench, stability}}。
+     flow 與畫面要在整套清單裡;效能要 macrobench_cmd 帶 {{TEST}};記憶體情境要在 stability_scenarios 裡。"""
+     feats = e2e.get("features")
+     cmd = e2e.get("macrobench_cmd") or ""
++    if not isinstance(cmd, str):
++        return "macrobench_cmd 要是字串"
+     if feats is None:
+         return "macrobench_cmd 帶 {{TEST}} 時要有 features 列出效能測試方法" if "{{TEST}}" in cmd else None
+     if not isinstance(feats, dict) or not feats:
+         return "features 要是非空物件(功能名 → {paths, cases})"
+     name_ok = re.compile(r"[A-Za-z0-9_-]+")
+     flows = {_e2e_norm(f) for f in e2e.get("flows") or []}
+     screens = set(e2e.get("visual") or [])
+     tests = 0
+     for fn, f in feats.items():
+         err = _e2e_feature_head_err(fn, f, name_ok)
+@@ -40826,52 +40833,58 @@ def _e2e_precheck(root):
+     dirty = _dirty_non_bookkeeping(root, untracked=True)
+     if dirty is None:
+         return "git 判不了工作目錄有沒有改動"
+     if dirty:
+         more = f" 等 {len(dirty)} 個" if len(dirty) > 5 else ""
+         return f"工作目錄有沒提交的改動或沒追蹤的新檔:{'、'.join(dirty[:5])}{more}(紀錄要綁提交;先提交或收起來再跑)"
+     return None
+ 
+ 
+ def _e2e_changed_files(root):
+-    """--changed 用:HEAD 加工作目錄沒提交的改動與沒追蹤的新檔,對主線分岔點的差異 → (檔案清單, 說明)。
++    """--changed 用:HEAD 加工作目錄沒提交的改動與沒追蹤的新檔,對主線分岔點的差異 → (檔案清單, 說明, 錯誤訊息或 None)。
+     主線照安全證據那套挑(_secev_mainline);挑不到主線時只看工作目錄的改動,說明裡講清楚。
+-    沒追蹤的新檔逐檔列(ls-files --others):git status 會把整個沒追蹤的目錄收成一筆「目錄/」,對不到寫在更深一層的 paths。"""
++    沒提交的改動用 diff HEAD --no-renames(改名的舊路徑也算,跟提交後一樣);沒追蹤的新檔逐檔列(ls-files --others):
++    git status 會把整個沒追蹤的目錄收成一筆「目錄/」,對不到寫在更深一層的 paths。git 讀不到(逾時、失敗)就擋,不當成沒改動。"""
+     head = (_nodehome_git(root, "rev-parse", "HEAD") or b"").decode().strip()
+     files, note = set(), ""
+     ml, why, _code = _secev_mainline(root, head) if head else (None, "讀不到 HEAD", None)
+     base = (_nodehome_git(root, "merge-base", ml, head) or b"").decode().strip() if ml else ""
+-    if base:
+-        raw = _nodehome_git(root, "diff", "--name-only", "-z", "--no-renames", base, head) or b""
+-        files.update(os.fsdecode(x) for x in raw.split(b"\0") if x)
+-    else:
++    reads = [("diff", "--name-only", "-z", "--no-renames", base, head)] if base else []
++    if not base:
+         note = f"找不到主線分岔點({why}),只看工作目錄沒提交的改動"
+-    files.update(_dirty_non_bookkeeping(root) or [])
+-    raw = _nodehome_git(root, "ls-files", "--others", "--exclude-standard", "-z") or b""
+-    files.update(x for x in (os.fsdecode(y) for y in raw.split(b"\0") if y)
+-                 if x not in _BOOKKEEPING_FILES and not x.startswith(_BOOKKEEPING_DIRS))
+-    return sorted(files), note
++    reads += [("diff", "--name-only", "-z", "--no-renames", "HEAD")] if head else []
++    reads += [("ls-files", "--others", "--exclude-standard", "-z")]
++    for cmd in reads:
++        raw = _nodehome_git(root, *cmd)
++        if raw is None:
++            return [], note, f"git {cmd[0]} 讀不到改動(逾時或失敗),--changed 判不出改了什麼;用 --feature、--case 或整套跑"
++        files.update(os.fsdecode(x) for x in raw.split(b"\0") if x)
++    files = {x for x in files if x not in _BOOKKEEPING_FILES and not x.startswith(_BOOKKEEPING_DIRS)}
++    return sorted(files), note, None
+ 
+ 
+ def _e2e_changed_features(root, e2e, feats):
+-    """--changed:改到的檔對到哪些功能 → (功能集合, 在 app_dirs 或整套 flow 清單裡卻對不到功能的檔, 說明, 錯誤訊息或 None)。
++    """--changed:改到的檔對到哪些功能 → (功能集合, 會影響驗收卻對不到功能的檔(app_dirs、.maestro 底下、驗收設定與門檻), 說明, 錯誤訊息或 None)。
+     改到的是 flow 檔時,對到「哪個情境列了這支 flow」的功能。"""
+-    files, note = _e2e_changed_files(root)
++    files, note, gerr = _e2e_changed_files(root)
++    if gerr:
++        return None, None, note, gerr
+     hit, unmatched = set(), []
+     all_flows = {_e2e_norm(x) for x in e2e.get("flows") or []}
+     for f in files:
+         owners = [fn for fn, v in feats.items() if any(_e2e_under(f, _e2e_norm(x)) for x in v["paths"])
+                   or any(_e2e_norm(x) == _e2e_norm(f) for c in v["cases"].values() for x in c.get("flows", []))]
+         if owners:
+             hit.update(owners)
+-        elif _e2e_norm(f) in all_flows or any(_e2e_under(f, _e2e_norm(d)) for d in e2e["app_dirs"]):
+-            unmatched.append(f)
++        elif (_e2e_norm(f) in all_flows or _e2e_under(f, ".maestro") or f in (".lumos/macrobench.json", ".lumos/macrobench-thresholds.json")
++              or any(_e2e_under(f, _e2e_norm(d)) for d in e2e["app_dirs"])):
++            unmatched.append(f)   # 共用 flow、截圖素材、設定與門檻也會改驗收結果:有別的命中時照樣列出來提醒
+     if hit:
+         return hit, unmatched, note, None
+     shown = "、".join(files[:10]) + (f" 等 {len(files)} 支" if len(files) > 10 else "") if files else "(沒有改動)"
+     return None, None, note, (f"--changed 對不到任何功能:改到的檔 {shown}" + (f";{note}" if note else "")
+                               + ";補 features 的 paths,或整套跑")
+ 
+ 
+ def _e2e_named_cases(feats, features, cases):
+     """--feature 與 --case 指名的情境 → (功能.情境清單, 錯誤訊息或 None)。"""
+     picked = []
+@@ -40880,48 +40893,56 @@ def _e2e_named_cases(feats, features, cases):
+             return None, f"--feature 不認得:{fn};對照表有 {'、'.join(feats)}"
+         picked += [f"{fn}.{c}" for c in feats[fn]["cases"]]
+     for fc in cases:
+         fn, _, cn = fc.partition(".")
+         if fn not in feats or cn not in feats[fn]["cases"]:
+             return None, f"--case 不認得:{fc}(寫成 功能.情境;對照表有 " + "、".join(f"{a}.{b}" for a in feats for b in feats[a]["cases"]) + ")"
+         picked.append(fc)
+     return picked, None
+ 
+ 
++def _e2e_sel_add(sel, c, no_perf, no_memory):
++    """把一個情境要跑的東西併進挑法(_e2e_select 用):--no-perf、--no-memory 略過那兩塊;同一支 flow 寫成 ./a.yaml 與 a.yaml、
++    或同一份清單寫兩次,都只跑一次。"""
++    for k in ("flows", "visual", "macrobench", "stability"):
++        if (k == "macrobench" and no_perf) or (k == "stability" and no_memory):
++            continue
++        for x in c.get(k, []):
++            if (_e2e_norm(x) if k == "flows" else x) not in {(_e2e_norm(y) if k == "flows" else y) for y in sel[k]}:
++                sel[k].append(x)
++
++
+ def _e2e_select(root, e2e, scen, features=(), cases=(), changed=False, no_perf=False, no_memory=False):
+     """按功能與使用情境挑要跑的東西(單源計劃〈按功能與使用情境跑〉)→ (挑法 dict, 錯誤訊息或 None)。
+     挑法:mode、cases(功能.情境)、flows、visual、macrobench、stability、unmatched(--changed 對不到功能的檔)、note。"""
+     feats = e2e.get("features") or {}
+     if not feats:
+         return None, "e2e 段沒有 features(功能對照表);按功能跑之前先補,見計劃〈按功能與使用情境跑〉"
+     picked, err = _e2e_named_cases(feats, features, cases)
+     if err:
+         return None, err
+     unmatched, note = [], ""
+     if changed:
+         hit, unmatched, note, err = _e2e_changed_features(root, e2e, feats)
+-        if err:
++        if err and not picked:
+             return None, err
++        if err:   # 同時指名了情境:--changed 對不到不連累指名的,照跑並說明
++            note, unmatched, hit = err, [], set()
+         picked += [f"{fn}.{c}" for fn in sorted(hit) for c in feats[fn]["cases"]]
+     picked = list(dict.fromkeys(picked))
+     if not picked:
+         return None, "沒挑到任何情境:用 --changed、--feature 或 --case"
+     sel = {"mode": "changed" if changed else "manual", "cases": picked, "unmatched": unmatched, "note": note,
+            "flows": [], "visual": [], "macrobench": [], "stability": []}
+     for fc in picked:
+         fn, _, cn = fc.partition(".")
+-        c = feats[fn]["cases"][cn]
+-        for k in ("flows", "visual", "macrobench", "stability"):
+-            if (k == "macrobench" and no_perf) or (k == "stability" and no_memory):
+-                continue
+-            norm = _e2e_norm if k == "flows" else (lambda x: x)   # 同一支 flow 寫成 ./a.yaml 與 a.yaml 只跑一次
+-            sel[k] += [x for x in c.get(k, []) if norm(x) not in {norm(y) for y in sel[k]}]
++        _e2e_sel_add(sel, feats[fn]["cases"][cn], no_perf, no_memory)
+     sel["skipped"] = [k for k, on in (("macrobench", no_perf), ("stability", no_memory)) if on]
+     return sel, None
+ 
+ 
+ def _e2e_worktree_e2e(root):
+     """按功能跑讀工作目錄的設定:走 _macrobench_config(跟 macrobench --check-config 同一套驗法)→ (e2e 段, stability_scenarios, 錯誤訊息或 None)。"""
+     cfg, err = _macrobench_config(root)
+     if err is None and not (cfg or {}).get("e2e"):
+         err = "工作目錄的 macrobench.json 沒有 e2e 段" if cfg else "工作目錄沒有 .lumos/macrobench.json"
+     if err:
+@@ -40953,20 +40974,23 @@ def _e2e_judge_partial(root, run_dir, steps):
+     sel = steps.get("selection")
+     if err is None and (not isinstance(sel, dict) or not all(isinstance(sel.get(k), list) for k in ("cases", "flows", "visual", "macrobench", "stability"))):
+         err = f"steps.json 的 selection 欄看不懂:{sel!r}"
+     if err is None and any(fc.partition(".")[2] not in ((e2e.get("features") or {}).get(fc.partition(".")[0]) or {}).get("cases", {}) for fc in sel["cases"]):
+         err = f"steps.json 挑到的情境 {'、'.join(sel['cases'])} 有的已經不在功能對照表裡(開跑後改了設定)"
+     if err:
+         print(f"擋下:{err}", file=sys.stderr)
+         return 2, None, err
+     runs = _e2e_evaluate_selected(e2e, steps, run_dir, sel)
+     cases = _e2e_case_results(e2e, sel, runs)
++    rs = [v["result"] for v in cases.values()]   # 整次結果跟著最差的情境:終端、回傳碼、總表、紀錄的 history 才說同一件事
++    runs["result"] = "fail" if "fail" in rs + [runs["result"]] else ("unjudged" if "unjudged" in rs + [runs["result"]] else "pass")
++    runs["cases"] = cases
+     print(f"(按功能跑:{'、'.join(sel['cases'])})")
+     if sel.get("unmatched"):
+         print(f"  ! 這些改到的檔沒有對應功能(推送前的整套跑照樣會驗到):{'、'.join(sel['unmatched'])}")
+     _e2e_print_runs(runs)
+     word = {"pass": "通過", "fail": "沒過", "unjudged": "沒判完"}
+     for fc, v in cases.items():
+         bad = [f"{i['kind']} {i['name']}" for i in v["items"] if i["result"] != "pass"]
+         more = (f";沒過或沒判完:{'、'.join(bad)}" if bad else "") + (f";這次略過:{'、'.join(v['skipped'])}" if v["skipped"] else "")
+         print(f"  情境 {fc}:{word[v['result']]}{more}{(';' + v['reason']) if v.get('reason') else ''}")
+     _e2e_feature_record(root, steps, e2e, cases, runs)
+@@ -40989,67 +41013,81 @@ def _e2e_case_results(e2e, sel, runs):
+         c = e2e["features"][fn]["cases"][cn]
+         items = ([("ui", f, ui.get(_e2e_norm(f), "unjudged")) for f in c.get("flows", [])]
+                  + [("visual", v, vis.get(v, "unjudged")) for v in c.get("visual", [])]
+                  + [("stability", n, r) for n in c.get("stability", []) if n in sel["stability"] for r in stab.get(n, ["unjudged"])])
+         rs = [r for _k, _n, r in items]
+         result = "fail" if "fail" in rs else ("unjudged" if probs or "unjudged" in rs or not rs else "pass")
+         skipped = [k for k in ("macrobench", "stability") if c.get(k) and k in (sel.get("skipped") or [])]
+         out[fc] = {"result": result, "complete": not skipped and bool(rs), "skipped": skipped,
+                    "items": [{"kind": k, "name": n, "result": r} for k, n, r in items]}
+         if not rs:   # 只列效能(只提醒)或該跑的都略過了:沒有會判過不過的項目,不能記成通過
+-            out[fc]["reason"] = "這個情境這次沒有會判過不過的項目(效能只提醒)"
++            out[fc]["reason"] = (f"這次略過了 {'、'.join(skipped)},沒有會判過不過的項目" if skipped
++                                 else "這個情境只列了效能(只提醒),沒有會判過不過的項目")
+     return out
+ 
+ 
++def _e2e_keep_old(old, new, ended):
++    """feature_runs 裡同一個情境:既有那筆要不要留著、不讓這次的蓋掉(_e2e_feature_record 用)。
++    既有那筆比這次更晚結束(重判舊的 run)→ 留;既有那筆完整、判完,而這次沒判完、或不完整但通過 → 留;這次沒過 → 一律蓋掉。"""
++    if not old:
++        return False
++    t_old, t_new = _gov_ts(old.get("ended")), _gov_ts(ended)
++    if t_old and t_new and t_old > t_new:
++        return True
++    if new["result"] == "fail":
++        return False
++    return bool(old.get("complete") and old.get("result") in ("pass", "fail") and (new["result"] == "unjudged" or not new["complete"]))
++
++
+ def _e2e_feature_record(root, steps, e2e, cases, runs):
+     """按功能跑寫進正式查證紀錄的 feature_runs(單源計劃〈按功能與使用情境跑〉):開跑時工作目錄乾淨(steps 的 dirty)、
+     現在也乾淨、HEAD 跟開跑時一樣才寫,紀錄照樣綁這一版的指紋;不然只記總表並說原因(開跑時有改動,建出來的 App 就不是這一版,
+-    跑到一半收掉改動也一樣)。同一版已有完整、判完的結果時,不拿這次不完整或沒判完的蓋掉。寫不進去只提醒,不改這次的回傳碼。"""
++    跑到一半收掉改動也一樣;用了替身收集腳本也不寫)。同一份紀錄(同一版)裡已有完整、判完的結果時,這次沒判完、或不完整但通過的不蓋掉它;
++    這次沒過一律蓋掉(重跑出現的失敗是真訊號);重判比既有那筆更早結束的那次也不蓋掉。寫不進去只提醒,不改這次的回傳碼。"""
+     import shlex
+     head = (_nodehome_git(root, "rev-parse", "HEAD") or b"").decode("utf-8", "replace").strip()
+     why = ("開跑時工作目錄有沒提交的改動(建出來的 App 不是這一版)" if steps.get("dirty") is not False else None) \
++        or (f"記憶體收集腳本換成了 {steps['collector_override']}(LUMOS_E2E_COLLECT,測試用替身)" if steps.get("collector_override") else None) \
+         or _e2e_precheck(root) or (None if head and steps.get("start_head") == head else "開跑後 HEAD 換了")
+     full = e2e_h = None
+     if why is None:
+         full, why = _e2e_config_at(root, head)
+         e2e_h = (full or {}).get("e2e")
+         if why is None and e2e_h != e2e:
+             why = "工作目錄的 e2e 段跟 HEAD 提交的不一樣"
+     fp = None
+     if why is None:
+         fp, why = _e2e_fingerprint(root, head, e2e_h)
+     if why:
+         print(f"這次只記進本機檢測總表,沒寫查證紀錄:{why}")
+         return
+     ended = steps.get("ended") or _e2e_now()
+     kept = []
+ 
+     def _put(rec):
+         fr = rec.setdefault("feature_runs", {})
+         kept.clear()
+         for fc, v in cases.items():
+-            old = fr.get(fc) or {}
+-            if (old.get("commit") == head and old.get("complete") and old.get("result") in ("pass", "fail")
+-                    and (not v["complete"] or v["result"] == "unjudged")):
++            if _e2e_keep_old(fr.get(fc) or {}, v, ended):
+                 kept.append(fc)
+                 continue
+             fr[fc] = dict(v, run_id=steps.get("run_id"), ended=ended, commit=head)
+         rec["history"].append({"kind": "feature", "cases": list(cases), "result": runs["result"],
+                                "run_id": steps.get("run_id"), "ended": ended})
+     p, werr = _e2e_record_update(root, fp, _put)
+     if werr:
+         print(f"提醒:{werr}", file=sys.stderr)
+         return
+     rel = os.path.relpath(p, root)
+     got = "、".join(f"{k} {v['result']}" for k, v in cases.items() if k not in kept)
+     if kept:
+-        print(f"這一版已有完整的結果,這次不完整或沒判完的沒蓋掉它:{'、'.join(kept)}")
++        print(f"這一版已有比較完整或比較新的結果,這次的沒蓋掉它(這次的結果在本機總表):{'、'.join(kept)}")
+     print(f"按功能的結果寫進查證紀錄 {rel}(指紋 {fp[:12]}{(',' + got) if got else ''});"
+           f"推送前要提交它:git add {shlex.quote(rel)} && git commit -m \"chore: 記錄 Android 端到端驗收\"")
+ 
+ 
+ def _e2e_stab_by_name(e2e, steps, names, notices):
+     """記憶體每個情境各判一次:steps 裡 stability 與 stability_judge 的 name 是情境名(None=stability 段本身,check 不加前綴;
+     有名字的 check 寫成「情境:check」)。按功能跑與整套跑共用。"""
+     out = []
+     for name in names:
+         part = {"steps": [x for x in steps.get("steps", []) if x.get("block") not in ("stability", "stability_judge") or x.get("name") == name]}
+@@ -41092,59 +41130,62 @@ def _e2e_history_append(root, steps, runs, mode, blocked=None, run_dir=None):
+             items += [{"kind": k, "name": x[key], "result": x["result"]} for x in blocks[k]]
+     sel = steps.get("selection") if isinstance(steps.get("selection"), dict) else {}
+     rid = steps.get("run_id") or (Path(run_dir).name if run_dir else None)
+     line = {"ts": steps.get("ended") or _e2e_now(), "run_id": rid, "head": steps.get("start_head"),
+             "dirty": steps.get("dirty"), "mode": sel.get("mode", "full") if mode == "partial" else "full",
+             "cases": sel.get("cases", []), "result": (runs or {}).get("result"), "items": items,
+             "perf": blocks.get("macrobench"), "notices": (runs or {}).get("notices", []),
+             "evidence": str(Path(".lumos") / "artifacts" / "android" / str(rid))}
+     if blocked:
+         line["blocked"] = blocked
+-    p = Path(root) / ".lumos" / "artifacts" / "android" / "history.jsonl"
++    if isinstance((runs or {}).get("cases"), dict):   # 按功能跑:每個情境自己的項目,history --case 只列那個情境的
++        line["case_results"] = {fc: {"result": v["result"], "items": v["items"]} for fc, v in runs["cases"].items()}
++    p = Path(root) / E2E_HISTORY_REL
+     text = json.dumps(line, ensure_ascii=False) + "\n"
+     try:
+         p.parent.mkdir(parents=True, exist_ok=True)
+         ok = _local_ledger_append(p, ("\n" if _ledger_tail_needs_newline(p) else "") + text)
+     except OSError:
+         ok = False
+     if not ok:
+         print(f"提醒:檢測總表 {p} 寫不進去,這次的結果只在 {line['evidence']}", file=sys.stderr)
+ 
+ 
+ def _e2e_history_cmd(root, feature=None, case=None, last=20):
+     """lumos android-e2e history:列本機總表,照功能、情境篩,新的在下面。逐行讀(_canary_ledger_rows,壞行跳過)、
+-    只留最後 last 筆;last 要是正整數。"""
++    只留最後 last 筆;last 要是正整數。照情境篩時,結果與沒過的項目只列那個情境自己的(有 case_results 的行)。"""
+     import collections
+     if not isinstance(last, int) or last < 1:
+         print(f"擋下:--last 要是正整數(拿到 {last!r})", file=sys.stderr)
+         return 2
+-    p = Path(root).resolve() / ".lumos" / "artifacts" / "android" / "history.jsonl"
++    p = Path(root).resolve() / E2E_HISTORY_REL
+     if not p.is_file():
+         print("還沒有檢測紀錄(範本腳本跑過一次就會有)")
+         return 0
+     rows = collections.deque(maxlen=last)
+     try:
+         for r in _canary_ledger_rows(p, errors="replace"):
+             cs = r.get("cases") if isinstance(r.get("cases"), list) else []
+             if case and case not in cs:
+                 continue
+             if feature and not any(str(c).startswith(feature + ".") for c in cs):
+                 continue
+             rows.append(r)
+     except OSError as e:
+         print(f"擋下:檢測總表讀不了:{e}", file=sys.stderr)
+         return 2
+     word = {"pass": "通過", "fail": "沒過", "unjudged": "沒判完", None: "沒寫判定"}
+     for r in rows:
+         what = "整套" if r.get("mode") == "full" else "、".join(str(c) for c in r.get("cases") or [])
+-        bad = [f"{i.get('kind')} {i.get('name')}" for i in r.get("items") or [] if isinstance(i, dict) and i.get("result") != "pass"]
+-        res = r.get("result")
++        cr = (r.get("case_results") or {}).get(case) if case and isinstance(r.get("case_results"), dict) else None
++        its, res = (cr.get("items"), cr.get("result")) if isinstance(cr, dict) else (r.get("items"), r.get("result"))
++        bad = [f"{i.get('kind')} {i.get('name')}" for i in its or [] if isinstance(i, dict) and i.get("result") != "pass"]
+         print(f"{r.get('ts')}  {word.get(res, res) if isinstance(res, (str, type(None))) else res}  {what}  {str(r.get('head'))[:8]}"
+               f"{' (有沒提交的改動)' if r.get('dirty') else ''}"
+               + (f"  沒過或沒判完:{'、'.join(bad)}" if bad else "") + (f"  擋下:{r['blocked']}" if r.get("blocked") else "")
+               + f"  證據 {r.get('evidence')}")
+     if not rows:
+         print("沒有符合條件的檢測紀錄")
+     return 0
+ 
+ 
+ def _android_e2e_dispatch(args):
+@@ -41177,20 +41218,22 @@ def _e2e_judge_selected(root, run_dir, steps, serr, no_record, history):
+         print(f"擋下:這次是按功能跑({'、'.join((steps.get('selection') or {}).get('cases') or [])}),只跑一部分的結果不寫紀錄;要留紀錄請整套跑", file=sys.stderr)
+         return 2
+     return None
+ 
+ 
+ def _e2e_judge_target(root, steps, serr):
+     """整套 judge 要寫紀錄的那一版:HEAD 跟開跑時一樣、HEAD 的 e2e 段合格、算得出指紋 → (head, e2e, stability_scenarios, 指紋, 錯誤訊息或 None)。"""
+     head = (_nodehome_git(root, "rev-parse", "HEAD") or b"").decode("utf-8", "replace").strip()
+     if serr is None and steps.get("start_head") != head:
+         serr = f"開跑時是 {str(steps.get('start_head'))[:8]},現在 HEAD 是 {head[:8]}:驗的不是這一版,重跑驗收"
++    if serr is None and steps.get("collector_override"):
++        serr = f"記憶體收集腳本換成了 {steps['collector_override']}(LUMOS_E2E_COLLECT,測試用替身):不是真的收集結果,拿掉這個環境變數重跑"
+     full, cerr = _e2e_config_at(root, head) if head else (None, "讀不到 HEAD")
+     e2e = (full or {}).get("e2e")
+     if cerr is None and not e2e:
+         cerr = "HEAD 的 macrobench.json 沒有 e2e 段"
+     if cerr is None:
+         cerr = _e2e_cfg_err(e2e, full.get("stability"), bool(full.get("results_dirs")), scen=full.get("stability_scenarios"))
+     fp, ferr = _e2e_fingerprint(root, head, e2e) if cerr is None else (None, None)
+     return head, e2e, (full or {}).get("stability_scenarios"), fp, serr or cerr or ferr
+ 
+ 
+@@ -68607,21 +68650,22 @@ def main():
+     if args.cmd == "archive":
+         import datetime
+         return cmd_archive(env, args.days, args.apply, datetime.date.today().isoformat())
+     return 2
+ 
+ 
+ def _guard_dispatch(env, args):
+     """lumos guard 的各子指令(呼叫端統一接住拿鎖逾時與讀寫失敗)。
+     ★為什麼只有 guard 搬成獨立一支★(代碼審 待決問題改存開頭欄位 r5 架構席):guard 十幾個子指令要共用同一組接法(接拿鎖逾時與
+     讀寫失敗、刻意不接 ValueError),搬成一支就只在呼叫處包一個 try,不用每個 return 各包一次;其他子指令群分支少、各自已有 try,
+-    照舊留在 main() 裡內聯,沒有要全部改成這個形狀。
++    照舊留在 main() 裡內聯,沒有要全部改成這個形狀。另一個例外是 android-e2e 的 _android_e2e_dispatch(judge、select、history
++    三個子指令,分派寫成一支;代碼審 code-e2e-by-feature r2 架構對齊席要求把它列在這裡)。
+     guard kill 的配方讀取是唯讀路徑，不走 load_raw_for_edit；非 UTF-8 仍由既有 guard 分派回 rc1，
+     不會被 WriteBlocked 的寫入拒絕語意改成 rc2(代碼審 r6 合約席)。"""
+     if args.gcmd == "list":
+         return cmd_guard_list(env, unbound_only=args.unbound)
+     if args.gcmd == "scaffold":
+         return cmd_guard_scaffold(env, args.node, args.invariant, args.method,
+                                   args.type, args.claim, out_dir=args.out,
+                                   template=args.template, klass=args.klass,
+                                   platform=args.platform)
+     if args.gcmd == "plan":
+diff --git a/scripts/templates/android-e2e-run.sh b/scripts/templates/android-e2e-run.sh
+index 754b8650851fcf240a6098c457f550a6f86ff602..0bc16ab3519a626a6c7b4c47961ee0de48f0a186 100644
+--- a/scripts/templates/android-e2e-run.sh
++++ b/scripts/templates/android-e2e-run.sh
+@@ -8,21 +8,21 @@
+ #   --preflight:只做開跑前檢查(工作目錄、裝置、工具、產物目錄有沒有被忽略、裝置鎖),不碰 App
+ #   挑法(開發中按功能跑:不要求工作目錄乾淨、不寫整套的紀錄;開跑時與跑完都乾淨、HEAD 沒換時,
+ #   按情境的結果寫進這一版紀錄的 feature_runs。不給就整套跑、寫整套的紀錄):
+ #     --changed               看這次改到的檔,挑 e2e.features 對得到的功能
+ #     --feature <功能>[,…]    這些功能的全部使用情境
+ #     --case <功能.情境>[,…]   只跑這些使用情境
+ #     --no-perf / --no-memory  這次不跑效能或記憶體與穩定性(只能配上面三種挑法;整套跑一定全部跑)
+ #   每次跑完都記進本機總表 .lumos/artifacts/android/history.jsonl(lumos android-e2e history 看)
+ # 外部工具:ADB(預設 adb)、MAESTRO(預設 maestro);開了記憶體與穩定性時另要 TP(預設 trace_processor),
+ #   宣告了測試資料時再要 JAVA_HEAP_DUMP(預設 java_heap_dump),跟收集腳本同兩個環境變數;設定在 .lumos/macrobench.json 的 e2e 段
+-#   (記憶體的收集腳本預設是同目錄的 android-stability-collect.sh,測試用 LUMOS_E2E_COLLECT= 換成假的)
++#   (記憶體的收集腳本預設是同目錄的 android-stability-collect.sh,測試用 LUMOS_E2E_COLLECT= 換成假的;換了就只記總表、不寫查證紀錄)
+ # 測試縮短與替換用:LUMOS_E2E_LONG_TIMEOUT(建置、flow、收集與效能的上限,預設 3600 秒)、
+ #   LUMOS_E2E_LOCK_DIR(裝置鎖的目錄,預設 ~/.cache/lumos/android-e2e-lock)、
+ #   LUMOS_E2E_STOP_GRACE(中斷時先送 TERM、等子程序自己收尾的秒數,寬限結束後一律對整組補 KILL,預設 60 秒;收集腳本在裝置沒回應時收尾可能要好幾分鐘)
+ # 回傳碼:跟 lumos android-e2e judge 一樣(0 寫了紀錄且通過、1 寫了紀錄但沒通過、2 沒寫);開跑前檢查沒過回 2 並印「擋下:」
+ set -eu
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || { echo "擋下:驗收腳本要 python3 3.11 以上(用了 -P)" >&2; exit 2; }
+ # -P 與拿掉 PYTHONPATH 的理由同收集腳本 android-stability-collect.sh
+ exec env -u PYTHONPATH PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -P - "$HERE" "$(pwd)" "$@" <<'PY'
+ import glob, hashlib, json, os, re, shutil, signal, subprocess, sys, time
+@@ -388,20 +388,22 @@ class Steps:
+     """steps.json:每一步記回傳碼、時間、輸出存在哪、報告路徑;每記一步就整份原子寫回(被殺也留得下已經跑完的)。"""
+ 
+     def __init__(self, run_dir, head, serial):
+         self.run_dir = run_dir
+         self.data = {"schema": 1, "run_id": run_id, "start_head": head, "started": now(), "ended": None,
+                      "interrupted": False, "device": {"serial": serial}, "apk": {}, "steps": []}
+         if SEL is not None:
+             self.data["selection"] = SEL   # judge 看到這欄就不寫整套的紀錄(只跑了一部分)
+         # 有沒有沒提交的改動:跟開跑前檢查同一套規則(簿記檔不算),所以問 lumos,不自己列
+         self.data["dirty"] = lumos("android-e2e", "judge", "--repo", root, "--precheck")[0] != 0
++        if os.environ.get("LUMOS_E2E_COLLECT"):   # 換了收集腳本(測試用替身):judge 看到就不寫查證紀錄
++            self.data["collector_override"] = COLLECT
+         os.makedirs(os.path.join(run_dir, "logs"), exist_ok=True)
+         self.save()
+ 
+     def save(self):
+         p = os.path.join(self.run_dir, "steps.json")
+         tmp = p + ".tmp"
+         with open(tmp, "w", encoding="utf-8") as f:
+             json.dump(self.data, f, ensure_ascii=False, indent=1)
+         os.replace(tmp, p)
+ 
+@@ -460,35 +462,36 @@ def accept(cfg, serial, st):
+                          name=name, attempt=attempt, report=rep)
+             if rc == 0:
+                 break
+     th = threshold_arg(e2e.get("visual_threshold", 99.5))
+     for v in screens_to_run(cfg):
+         evid = os.path.join(rd, "visual", v)
+         st.step("visual", ["sh", ".maestro/visual-check.sh", v, evid], name=v,
+                 env=dict(env, THRESHOLD=th, MAESTRO_DEVICE=serial))
+     for scn in stab_to_run(cfg):   # None=stability 段本身(整套);有名字=stability_scenarios 的情境,收在 <run-id>.<情境> 目錄
+         sid = run_id if scn is None else f"{run_id}.{scn}"
+-        senv = env if scn is None else dict(env, LUMOS_STABILITY_SCENARIO=scn)
++        # stability 段本身:拿掉 shell 裡殘留的 LUMOS_STABILITY_SCENARIO,不然收集腳本會改用那個情境、結果卻記成段本身
++        senv = {k: v for k, v in env.items() if k != "LUMOS_STABILITY_SCENARIO"} if scn is None else dict(env, LUMOS_STABILITY_SCENARIO=scn)
+         st.step("stability", ["sh", COLLECT, sid], name=scn, env=senv)
+         st.step("stability_judge", [sys.executable, LUMOS, "macrobench", "--repo", root, "--json", "--stability",
+                                     os.path.join(root, ".lumos", "artifacts", "android", sid, "stability.json")],
+                 name=scn, timeout=T_SHORT * 5)
+     st.data["apk"]["installed_sha256_after"] = installed_sha(serial, pkg)
+     st.save()
+     tests = tests_to_run(cfg)
+     if tests:   # 排最後:Macrobenchmark 的 Gradle 指令常會自己裝上、跑完再移除測試用的 App
+         mdir = os.path.join(rd, "macrobench")
+         os.makedirs(mdir, exist_ok=True)
+         for i, t in enumerate(tests):   # 一個測試方法跑一次;{{TEST}} 換成方法名(名字在 lumos 設定檢查已驗過,這裡再驗一次)
+-            # 下一行跟 lumos 的 E2E_BENCH_NAME_RE 同一條規則(測試抽出兩邊比相等)
+-            if t is not None and not re.fullmatch(r"[A-Za-z0-9_.$][A-Za-z0-9_.$#]*", t):
+-                die(f"效能測試方法名只收英數字、點、底線、$ 與 #,開頭不能是 #:{t!r}")
++            # 下一行跟 lumos 的 E2E_BENCH_NAME_RE 同一條規則(測試抽出兩邊比相等);不收 $:原樣換進 sh -c,會被當變數展開
++            if t is not None and not re.fullmatch(r"[A-Za-z0-9_.][A-Za-z0-9_.#]*", t):
++                die(f"效能測試方法名只收英數字、點、底線與 #,開頭不能是 #:{t!r}")
+             cmd = e2e["macrobench_cmd"] if t is None else e2e["macrobench_cmd"].replace("{{TEST}}", t)
+             t0 = time.time()
+             st.step("macrobench", ["sh", "-c", cmd], name=t, env=env)
+             # 每跑完一個方法就收:Macrobenchmark 的結果檔名常每個模組固定,下一個方法會蓋掉;收進各自的子目錄(判定會往下層找)
+             collect_results(cfg, t0, os.path.join(mdir, str(i)))
+         st.step("macrobench_judge", [sys.executable, LUMOS, "macrobench", "--repo", root, "--json", "--results-dir", mdir],
+                 timeout=T_SHORT * 5)
+ 
+ 
+ def judge(run_dir):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8c7a42fd3c5db9a5991961852d6ac34248659460..e4426e6d78180e117eda2b2d09960dae0341baee 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -19168,21 +19168,23 @@ def t_android_e2e_by_feature():
+         (fake / "bench.log").unlink(missing_ok=True)
+         _e2e_tgit(root, "add", "-A")
+         _e2e_tgit(root, "commit", "-qm", "perf map")
+         _e2e_script(root, script, env, "--case", "login.ok", "--no-perf", "run-p2")
+         check("e2e:--no-perf 不跑效能", not (fake / "bench.log").exists())
+         fr = (json.loads(recs(root)[-1].read_text()).get("feature_runs") or {}).get("login.ok", {}) if recs(root) else {}
+         check("e2e:略過情境本來有的效能時紀錄標不完整", fr.get("complete") is False and fr.get("skipped") == ["macrobench"], str(fr))
+         cfg["e2e"]["features"]["perf"] = {"paths": ["perf"], "cases": {"only": {"macrobench": ["Bench#three"]}}}
+         (root / ".lumos/macrobench.json").write_text(json.dumps(cfg))
+         r = _e2e_script(root, script, env, "--case", "perf.only", "run-p3")
+-        check("e2e:沒挑到 flow 時印 UI 這次沒跑", "UI 流程:這次沒跑" in r.stdout and r.returncode == 0, str((r.returncode, r.stdout[-400:], r.stderr[-300:])))
++        check("e2e:沒挑到 flow 時印 UI 這次沒跑", "UI 流程:這次沒跑" in r.stdout, str((r.returncode, r.stdout[-400:], r.stderr[-300:])))
++        check("e2e:一個會判的項目都沒有時整次記成沒判完、回 1", r.returncode == 1 and "Android 端到端驗收:沒判完" in r.stdout,
++              str((r.returncode, r.stdout[-400:])))
+     print("  ✓ t_android_e2e_by_feature")
+ 
+ 
+ def t_android_e2e_history():
+     """S25:每次跑完(整套或按功能、過或沒過)都在本機總表加一行;lumos android-e2e history 照功能、情境篩。"""
+     import json, tempfile
+     with tempfile.TemporaryDirectory() as td:
+         root, fake, env, script = _e2e_feat_env(td)
+         _e2e_script(root, script, env, "run-full")
+         _e2e_script(root, script, env, "--case", "login.ok", "run-c1")
+@@ -19261,41 +19263,53 @@ def t_android_e2e_changed_pick():
+     with tempfile.TemporaryDirectory() as td:   # 同一支 flow 寫成 ./a.yaml 與 a.yaml
+         root, fake, env, script = _e2e_feat_env(td)
+         _e2e_set_cfg(root, lambda c: c["e2e"]["features"]["other"]["cases"].__setitem__("y", {"flows": ["./.maestro/login.yaml"]}))
+         rc, sel, err = _e2e_sel(root, "--case", "login.ok", "--case", "other.y", env=env)
+         check("e2e:同一支 flow 寫法不同只跑一次", rc == 0 and sel and len(sel["flows"]) == 1, str((rc, sel, err)))
+     print("  ✓ t_android_e2e_changed_pick")
+ 
+ 
+ def t_android_e2e_args_and_names():
+     """範本腳本:打錯的旗標、沒配挑法的 --no-perf/--no-memory 在動 App 之前回 2;效能測試方法名在設定檢查就擋
+-    (開頭 #、含空白),Kotlin 巢狀類別的 $ 收;stability_scenarios 的輪數上限跟 stability 段一樣。
++    (開頭 #、含空白、含 $——原樣換進 sh -c 會被當變數展開、跑成別支);功能 paths 不是正規寫法、macrobench_cmd 不是字串也擋;
++    stability_scenarios 的輪數上限跟 stability 段一樣。
+     判準來源是計劃〈按功能與使用情境跑〉與 stability 段既有的 1 到 10000 上限(代碼審 code-e2e-by-feature r1 邊界、通才、正確性席)。"""
+     import tempfile
+     for desc, args, word in (("打錯的旗標", ("--chaged",), "不認得的參數"),
+                              ("--no-memory 沒配挑法", ("--no-memory",), "只能配"),
+                              ("--no-perf 沒配挑法", ("--no-perf", "run-x"), "只能配")):
+         with tempfile.TemporaryDirectory() as td:
+             root, fake, env, script = _e2e_feat_env(td)
+             r = _e2e_script(root, script, env, *args)
+             check("e2e:參數不對時在動 App 之前回 2", r.returncode == 2 and word in r.stderr
+                   and not (fake / "maestro.log").exists() and not (root / ".lumos/artifacts/android/--chaged").exists(),
+                   str((desc, r.returncode, r.stderr[-300:])))
+     stab = {"package": "com.lab", "scenario": "pkg.Leak#cycle", "driver": "true", "warmup": 1, "cycles": 2}
+-    for desc, name, want in (("開頭是 #", "#foo", 2), ("含空白", "Bench one", 2), ("巢狀類別的 $", "Outer$Inner#test", 0)):
++    for desc, name, want in (("開頭是 #", "#foo", 2), ("含空白", "Bench one", 2), ("含 $(sh 會展開成別支)", "Outer$Inner#test", 2),
++                             ("一般方法名", "pkg.Bench#scroll_list", 0)):
+         with tempfile.TemporaryDirectory() as td:
+             e2e = {"macrobench": True, "macrobench_cmd": "sh run.sh {{TEST}}",
+                    "features": {"login": {"paths": ["app"], "cases": {"ok": {"macrobench": [name]}}}}}
+             root = _e2e_proj(td, e2e, {"results_dirs": ["r"]}, commit=False)
+             r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
+             check("e2e:效能測試方法名在設定檢查就判", r.returncode == want and (want == 0 or "效能測試方法名" in r.stderr),
+                   str((desc, r.returncode, r.stderr)))
++    for desc, paths, cmd, word in (("paths 有 //", ["app//src"], None, "正規"), ("paths 只寫 .", ["."], None, "正規"),
++                                   ("macrobench_cmd 不是字串", ["app"], 5, "字串")):
++        with tempfile.TemporaryDirectory() as td:
++            e2e = {"features": {"login": {"paths": paths, "cases": {"ok": {"flows": [".maestro/login.yaml"]}}}}}
++            if cmd is not None:
++                e2e["macrobench_cmd"] = cmd
++            root = _e2e_proj(td, e2e, commit=False)
++            r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
++            check("e2e:對照表寫法不對時設定檢查回 2、不噴錯誤堆疊", r.returncode == 2 and word in r.stderr and "Traceback" not in r.stderr,
++                  str((desc, r.returncode, r.stderr[-300:])))
+     for desc, cyc, want in (("輪數超過上限", 10 ** 9, 2), ("輪數在上限內", 10000, 0)):
+         with tempfile.TemporaryDirectory() as td:
+             scen = {"player": {"scenario": "pkg.Player#cycle", "driver": "true", "cycles": cyc}}
+             root = _e2e_proj(td, None, {"stability": stab, "stability_scenarios": scen, "results_dirs": ["r"]}, commit=False)
+             r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
+             check("e2e:stability_scenarios 的輪數上限跟 stability 段一樣", r.returncode == want and (want == 0 or "10000" in r.stderr),
+                   str((desc, r.returncode, r.stderr)))
+     print("  ✓ t_android_e2e_args_and_names")
+ 
+ 
+@@ -19477,20 +19491,196 @@ def t_android_e2e_lists_match_templates():
+     hit = _re.search(r"scen\[k\] for k in (\([^)]*\))", col)
+     check("收集腳本的情境欄位清單跟 E2E_SCENARIO_KEYS 一樣", bool(hit) and ast.literal_eval(hit.group(1)) == m.E2E_SCENARIO_KEYS,
+           hit.group(1) if hit else "收集腳本找不到那一行")
+     run = (tdir / "android-e2e-run.sh").read_text(encoding="utf-8")
+     hit = _re.search(r're\.fullmatch\(r"([^"]+)", t\)', run)
+     check("驗收腳本的效能方法名規則跟 E2E_BENCH_NAME_RE 一樣", bool(hit) and hit.group(1) == m.E2E_BENCH_NAME_RE.pattern,
+           hit.group(1) if hit else "驗收腳本找不到那一行")
+     print("  ✓ t_android_e2e_lists_match_templates")
+ 
+ 
++def _e2e_rejudge_copy(root, src, dst, mutate):
++    """複製一次按功能跑的 run 目錄成 dst,steps.json 交給 mutate 改(結束時間往後推一分鐘),回新的 run 目錄。"""
++    import json, shutil
++    a = root / ".lumos/artifacts/android"
++    shutil.copytree(a / src, a / dst)
++    st = json.loads((a / dst / "steps.json").read_text())
++    st["run_id"] = dst
++    st["ended"] = (st.get("ended") or "2026-10-26T00:00:00+08:00")[:-9] + "59:59+08:00"
++    mutate(st)
++    (a / dst / "steps.json").write_text(json.dumps(st))
++    return a / dst
++
++
++def t_android_e2e_feature_record_rules():
++    """S27:feature_runs 的覆蓋規則與寫入前提——判讀時工作目錄髒了或 HEAD 換了不寫;這次沒過一律蓋掉先前的通過(重跑的失敗是真訊號);
++    這次沒判完(建置沒過、flow 沒跑到)不蓋掉完整的結果;重判比既有那筆更早的那次不蓋掉;紀錄的 feature_runs 讀不懂就不寫。
++    判準來源是計劃〈按功能與使用情境跑〉與〈指紋〉「重跑出現的失敗就是真訊號」(代碼審 code-e2e-by-feature r2 正確性 F3、通才 F2)。"""
++    import json, tempfile
++
++    def recs(root):
++        d = root / ".lumos" / "e2e-records"
++        return sorted(d.glob("*.json")) if d.exists() else []
++
++    def fr(root):
++        return (json.loads(recs(root)[0].read_text()).get("feature_runs") or {}).get("login.ok", {}) if recs(root) else {}
++
++    def rejudge(root, rd, env):
++        return _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--no-record", env=env)
++    with tempfile.TemporaryDirectory() as td:   # 判讀時才變髒、判讀前 HEAD 換了:都不寫
++        root, fake, env, script = _e2e_feat_env(td)
++        _e2e_script(root, script, env, "--case", "login.ok", "run-j1")
++        check("★前置★ 乾淨時寫了紀錄", fr(root).get("run_id") == "run-j1", str(fr(root)))
++        recs(root)[0].unlink()
++        (root / "notes.txt").write_text("判讀前才加的")
++        r = rejudge(root, root / ".lumos/artifacts/android/run-j1", env)
++        check("e2e:判讀時工作目錄髒了不寫查證紀錄", recs(root) == [] and "沒提交的改動" in r.stdout, str((recs(root), r.stdout[-300:])))
++        (root / "notes.txt").unlink()
++        (root / "README.md").write_text("換一版\n", encoding="utf-8")
++        _e2e_tgit(root, "commit", "-qam", "換一版")
++        r = rejudge(root, root / ".lumos/artifacts/android/run-j1", env)
++        check("e2e:判讀前 HEAD 換了不寫查證紀錄", recs(root) == [] and "HEAD 換了" in r.stdout, str((recs(root), r.stdout[-300:])))
++    with tempfile.TemporaryDirectory() as td:   # 覆蓋規則
++        root, fake, env, script = _e2e_feat_env(td, macrobench=True, macrobench_cmd='echo {{TEST}} >> "$FAKE_DIR/bench.log"')
++        (root / "r").mkdir()
++        (root / "r" / ".keep").write_text("")
++        _e2e_set_cfg(root, lambda c: c["e2e"]["features"]["login"]["cases"]["ok"].__setitem__("macrobench", ["Bench#one"]), commit="perf map")
++        _e2e_script(root, script, env, "--case", "login.ok", "run-k1")
++        check("★前置★ 先有一筆完整的通過", fr(root).get("result") == "pass" and fr(root).get("complete") is True, str(fr(root)))
++        rd = _e2e_rejudge_copy(root, "run-k1", "run-u1", lambda st: st.update(steps=[x for x in st["steps"] if x["block"] != "ui"]))
++        r = rejudge(root, rd, env)
++        check("e2e:這次 flow 沒跑到(沒判完)不蓋掉完整的通過", fr(root).get("run_id") == "run-k1" and "沒蓋掉" in r.stdout, str((fr(root), r.stdout[-300:])))
++        rd = _e2e_rejudge_copy(root, "run-k1", "run-b1", lambda st: [x.update(rc=1) for x in st["steps"] if x["block"] == "build"])
++        r = rejudge(root, rd, env)
++        check("e2e:建置沒過時情境記成沒判完、不蓋掉完整的通過", fr(root).get("run_id") == "run-k1" and "情境 login.ok:沒判完" in r.stdout,
++              str((fr(root), r.stdout[-400:])))
++        (fake / "maestro.n").unlink(missing_ok=True)
++        (fake / "rcs").write_text("1 1 1 1")
++        _e2e_script(root, script, env, "--case", "login.ok", "--no-perf", "run-k2")
++        v = fr(root)
++        check("e2e:這次沒過一律蓋掉先前的通過(就算不完整)", v.get("run_id") == "run-k2" and v.get("result") == "fail", str(v))
++        r = rejudge(root, root / ".lumos/artifacts/android/run-k1", env)
++        check("e2e:重判比既有那筆更早的那次不蓋掉比較新的結果", fr(root).get("run_id") == "run-k2", str((fr(root), r.stdout[-300:])))
++        p = recs(root)[0]
++        rec = json.loads(p.read_text())
++        rec["feature_runs"] = ["壞的"]
++        p.write_text(json.dumps(rec))
++        r = rejudge(root, root / ".lumos/artifacts/android/run-u1", env)
++        check("e2e:紀錄的 feature_runs 讀不懂時不寫、說原因", json.loads(p.read_text())["feature_runs"] == ["壞的"] and "feature_runs" in r.stderr,
++              str((p.read_text()[-200:], r.stderr[-300:])))
++    print("  ✓ t_android_e2e_feature_record_rules")
++
++
++def t_android_e2e_changed_edges():
++    """S23:--changed 的分岔點與改名——主線在分支切出後又前進,只算分支自己的改動;已提交或還沒提交的改名,舊路徑所屬的功能也挑;
++    同時改到共用 flow 時照樣列出來提醒;--case 加 --changed、--changed 對不到時照跑指名的;同一份清單寫兩次只跑一次;
++    讀 git 失敗時擋下、不當成沒改動。判準來源是計劃〈按功能與使用情境跑〉的 --changed 那段(代碼審 code-e2e-by-feature r2 正確性 F4、邊界、資源席)。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:   # 主線前進
++        root, fake, env, script = _e2e_feat_env(td)
++        _e2e_tgit(root, "branch", "-M", "main")
++        _e2e_tgit(root, "checkout", "-qb", "feat")
++        (root / "app/src/main/A.kt").write_text("a2\n", encoding="utf-8")
++        _e2e_tgit(root, "commit", "-qam", "login")
++        _e2e_tgit(root, "checkout", "-q", "main")
++        (root / "app/src/main/B.kt").write_text("別人改的\n", encoding="utf-8")
++        _e2e_tgit(root, "commit", "-qam", "other on main")
++        _e2e_tgit(root, "checkout", "-q", "feat")
++        rc, sel, err = _e2e_sel(root, "--changed", env=env)
++        check("e2e:主線前進時只算分支自己的改動", rc == 0 and sel and sel["cases"] == ["login.ok"], str((rc, sel, err)))
++        (root / "app/src/moved").mkdir()
++        _e2e_tgit(root, "mv", "app/src/main/A.kt", "app/src/moved/A.kt")
++        rc, sel, err = _e2e_sel(root, "--changed", env=env)
++        check("e2e:還沒提交的改名,舊路徑所屬的功能也挑", rc == 0 and sel and "login.ok" in sel["cases"] and "app/src/moved/A.kt" in sel["unmatched"],
++              str((rc, sel, err)))
++        _e2e_tgit(root, "commit", "-qm", "move")
++        rc, sel2, err = _e2e_sel(root, "--changed", env=env)
++        check("e2e:提交後的改名挑到的一樣", rc == 0 and sel2 and sel2["cases"] == sel["cases"], str((rc, sel2, err)))
++    with tempfile.TemporaryDirectory() as td:   # 共用 flow 混合命中、--case 加 --changed、清單內重複
++        root, fake, env, script = _e2e_feat_env(td)
++        (root / ".maestro/shared").mkdir()
++        (root / ".maestro/shared/common.yaml").write_text("- back\n", encoding="utf-8")
++        (root / "app/src/main/A.kt").write_text("a2\n", encoding="utf-8")
++        rc, sel, err = _e2e_sel(root, "--changed", env=env)
++        check("e2e:同時改到共用 flow 時照樣列出來提醒", rc == 0 and sel and ".maestro/shared/common.yaml" in sel["unmatched"], str((rc, sel, err)))
++    with tempfile.TemporaryDirectory() as td:
++        root, fake, env, script = _e2e_feat_env(td)
++        rc, sel, err = _e2e_sel(root, "--case", "other.x", "--changed", env=env)
++        check("e2e:--case 加 --changed、--changed 對不到時照跑指名的", rc == 0 and sel and sel["cases"] == ["other.x"] and "對不到" in sel["note"],
++              str((rc, sel, err)))
++        _e2e_set_cfg(root, lambda c: c["e2e"]["features"]["other"]["cases"]["x"].__setitem__("flows", [".maestro/other.yaml"] * 2))
++        rc, sel, err = _e2e_sel(root, "--case", "other.x", env=env)
++        check("e2e:同一份清單寫兩次只跑一次", rc == 0 and sel and sel["flows"] == [".maestro/other.yaml"], str((rc, sel, err)))
++    with tempfile.TemporaryDirectory() as td:   # 讀 git 失敗
++        root, fake, env, script = _e2e_feat_env(td)
++        m = _load_lumos_inproc()
++        real = m._nodehome_git
++        m._nodehome_git = lambda r, *a, **k: None if a and a[0] == "ls-files" else real(r, *a, **k)
++        try:
++            files, note, gerr = m._e2e_changed_files(root)
++        finally:
++            m._nodehome_git = real
++        check("e2e:讀 git 失敗時擋下、不當成沒改動", gerr and "讀不到改動" in gerr and files == [], str((files, note, gerr)))
++    print("  ✓ t_android_e2e_changed_edges")
++
++
++def t_android_e2e_full_scenarios_judged():
++    """S28:整套 judge 對 stability 段本身與每個 stability_scenarios 各判一次,一個情境沒過整套就沒過;
++    用了替身收集腳本(LUMOS_E2E_COLLECT)時整套不寫查證紀錄;整套跑時 shell 殘留的 LUMOS_STABILITY_SCENARIO 不帶給 stability 段本身。
++    判準來源是計劃〈按功能與使用情境跑〉「整套全部跑」(代碼審 code-e2e-by-feature r2 合約 F2、資安 S2、S3)。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root, fake, env, script, json = _e2e_stab_env(td)
++
++        def res(kind, scen):
++            return json.dumps({"threshold_failures": [], "threshold_passed": [], "threshold_skipped": [],
++                               "stability_unjudged": None, kind: [{"check": "exits", "scenario": scen}]})
++        steps = [{"block": "stability", "rc": 0}, {"block": "stability_judge", "rc": 0, "stdout": "s.json"},
++                 {"block": "stability", "name": "player", "rc": 0}, {"block": "stability_judge", "name": "player", "rc": 0, "stdout": "p.json"},
++                 {"block": "stability", "name": "cart", "rc": 0}, {"block": "stability_judge", "name": "cart", "rc": 0, "stdout": "c.json"}]
++        ui, uif = _e2e_ui(0, _E2E_JUNIT_OK)
++        rd = _e2e_steps(root, _E2E_BASE_STEPS + ui + steps, files=dict(uif, **{"s.json": res("threshold_passed", "pkg.Leak#cycle"),
++                                                                           "p.json": res("threshold_failures", "pkg.Player#cycle"),
++                                                                           "c.json": res("threshold_passed", "pkg.Cart#cycle")}))
++        r, rec = _e2e_judge(root, rd)
++        got = {x["check"]: x["result"] for x in ((rec or {}).get("runs") or {}).get("blocks", {}).get("stability", [])}
++        check("e2e:整套 judge 每個情境各判一次", got == {"exits": "pass", "player:exits": "fail", "cart:exits": "pass"}, str((got, r.stderr[-300:])))
++        check("e2e:一個情境沒過整套就沒過", (rec or {}).get("runs", {}).get("result") == "fail", str(rec))
++        st = json.loads((rd / "steps.json").read_text())
++        st["collector_override"] = "/tmp/fake.sh"
++        (rd / "steps.json").write_text(json.dumps(st))
++        r = _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), env=env)
++        check("e2e:用了替身收集腳本時整套不寫紀錄", r.returncode == 2 and "替身" in r.stderr, str((r.returncode, r.stderr[-300:])))
++        env["LUMOS_STABILITY_SCENARIO"] = "cart"
++        _e2e_script(root, script, env, "run-leak")
++        log = (fake / "collect.log").read_text().splitlines() if (fake / "collect.log").exists() else []
++        check("e2e:整套跑時殘留的情境變數不帶給 stability 段本身", "run-leak" in [x.strip() for x in log], str(log))
++    print("  ✓ t_android_e2e_full_scenarios_judged")
++
++
++def t_android_e2e_history_by_case():
++    """S25:history 照情境篩時只列那個情境自己的結果(別的情境沒過不算到它頭上);--feature 是整個功能名、不是前綴。
++    判準來源是計劃〈檢測紀錄〉「每個情境每一項的結果」(代碼審 code-e2e-by-feature r2 正確性 F7)。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root, fake, env, script = _e2e_feat_env(td)
++        _e2e_set_cfg(root, lambda c: c["e2e"]["features"].__setitem__("log", {"paths": ["app/src/log"], "cases": {"a": {"flows": [".maestro/other.yaml"]}}}),
++                     commit="log feature")
++        (fake / "rcs").write_text("0 1 1")
++        _e2e_script(root, script, env, "--case", "login.ok,other.x", "run-h1")
++        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--case", "login.ok", env=env)
++        check("e2e:history 照情境篩時只列那個情境自己的結果", "通過" in r.stdout and "other.yaml" not in r.stdout, r.stdout)
++        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--feature", "log", env=env)
++        check("e2e:history --feature 不把名字開頭相同的功能算進來", "run-h1" not in r.stdout, r.stdout)
++    print("  ✓ t_android_e2e_history_by_case")
++
++
+ def t_android_e2e_features_config():
+     """S26:功能對照表寫了整套清單沒有的 flow 或畫面、記憶體情境不在 stability_scenarios、效能測試方法卻沒 {{TEST}}、
+     {{TEST}} 卻沒任何情境列效能,macrobench --check-config 回 2 並點名;合格的對照表與多個記憶體情境回 0。"""
+     import tempfile
+     stab = {"package": "com.lab", "scenario": "pkg.Leak#cycle", "driver": "true", "warmup": 1, "cycles": 2}
+     scen = {"player": {"scenario": "pkg.Player#cycle", "driver": "true"}}
+     ok_case = {"flows": [".maestro/login.yaml"]}
+     base = {"features": {"login": {"paths": ["app"], "cases": {"ok": ok_case}}}}
+     bad = [
+         ("flow 不在整套清單", {"features": {"login": {"paths": ["app"], "cases": {"ok": {"flows": [".maestro/nope.yaml"]}}}}}, None, "不在 e2e.flows"),
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index cf44ebf679c4b27af6c0bd1e3612fbd0a3923b14..4f6b4c193154be040490d8653cd35271369e5e9a 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -38,22 +38,22 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:
+ | 準備推送、或改到共用的東西(共用元件、主題、網路層) | 先提交,再不帶挑法整套跑 `sh scripts/templates/android-e2e-run.sh` | 寫這一版查證紀錄的 `runs`,提交它再推 |
+ | 回頭看驗過什麼 | `lumos android-e2e history [--feature <功能>] [--case <情境>]` | — |
+ 
+ - 先 `--preflight` 只驗裝置與工具;缺 Perfetto 工具會在動 App 之前擋。
+ - `--changed` 比的是「HEAD 跟主線分岔點的差異」加工作目錄的改動與沒追蹤的新檔;改到某個情境列的 flow 檔也算那個功能。回 2 說「對不到任何功能」時先看它印的改到的檔:列的是「(沒有改動)」,多半是你直接在主線上提交了(HEAD 就是分岔點),開分支或用 `--feature`;列了檔卻都不在任何功能的 `paths` 裡,才是補對照表或整套跑。不要當成沒事。
+ - `e2e` 段還沒有 `features` 時,三種挑法一律回 2;先照下面補對照表。
+ - 跑完把它印的紀錄檔 `git add` 提交(`.lumos/e2e-records/`,簿記檔,不會讓代碼審留痕失效)。
+ 
+ **新增功能或使用情境時一起補**(同一個提交):
+ 1. 每個使用情境一支 Maestro flow,斷言照需求寫(寫法見 lumos-project-notes reference〈產 maestro UI flow 的派工要求〉),加進 `e2e.flows`。
+-2. `e2e.features.<功能>`:`paths` 列這個功能的程式路徑;`cases.<情境>` 列它的 `flows`、`visual`(有基準圖的畫面,畫面也要在 `e2e.visual` 裡)、`macrobench`(測試方法名,只收英數字、點、底線、`$` 與 `#`、開頭不能是 `#`;`macrobench_cmd` 要帶 `{{TEST}}`)、`stability`(最外層 `stability_scenarios` 裡的情境名)。
+-   新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次。
++2. `e2e.features.<功能>`:`paths` 列這個功能的程式路徑;`cases.<情境>` 列它的 `flows`、`visual`(有基準圖的畫面,畫面也要在 `e2e.visual` 裡)、`macrobench`(測試方法名,只收英數字、點、底線與 `#`、開頭不能是 `#`;不收 `$`,名字原樣換進 shell 會被展開成別支;`macrobench_cmd` 要帶 `{{TEST}}`,帶了之後整套跑也只跑對照表列到的方法)、`stability`(最外層 `stability_scenarios` 裡的情境名)。
++   新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次,各留一份錄製檔在 `.lumos/artifacts/android/<run-id>.<情境>/`,不會自動清。
+ 3. `lumos macrobench --check-config` 回 0 才算接好。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
+ 
+ **紅了看哪裡**:UI 流程沒過看終端印的報告路徑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。目前推送前檢查還不會擋沒驗收的推送,也還沒有放行指令。
+ 
+ ## L0:有沒有變慢、有沒有達門檻
+ 
+ 1. 跑專案的 Macrobenchmark(實體裝置、USB、先 `adb shell svc power stayon usb`;跑前刪掉裝置上 `/sdcard/Android/media/<benchmark 套件>/` 舊檔)。
+ 2. 記下這次的輸入:啟動參數(`am instrument -e …`、intent extras)、測試資料、Feature Flag。基準與候選兩邊都記;同一個 APK 只換參數時,這是兩邊唯一的差異,沒記就證明不了差在哪。
+ 3. 跑前跑後各記一次裝置狀態(L0 是推送前的綁定測試閘代跑、你拿到時已經跑完的話,當下補量一次,收據 gaps 寫明是事後量的):型號、`ro.build.fingerprint`、電量、`dumpsys thermalservice` 的 Thermal Status;從裝置 `pm path` 拉實際安裝的 APK 算 sha256(同一份原始碼重建的 APK 雜湊會不同,只記建置產物不夠)。
+ 4. 拉回結果 JSON 與每輪 `.perfetto-trace` 到 artifacts 目錄,算 sha256 與大小。
+diff --git a/skills/lumos-project-notes/commands/04-自檢與健康.md b/skills/lumos-project-notes/commands/04-自檢與健康.md
+index d033be93f71844afe84177fdb5fabf226ff62b81..2032dc380e56dd4a445813b3827ceaaf08e2f498 100644
+--- a/skills/lumos-project-notes/commands/04-自檢與健康.md
++++ b/skills/lumos-project-notes/commands/04-自檢與健康.md
+@@ -13,15 +13,15 @@
+ | 「照清單把一筆過期的句子改掉」 | `lumos drift fix <節點> <行號> --kind <c1..c6 或 count> [--dry-run]`;count 把標籤與句子裡恰好一個舊數字改成現值(句子裡找不到或不只一個就擋下、請手改),c1 可加 `--date`、c2 `--close --status <結案值> --reason "…"` 或 `--keep --reason "…"`(結案時摘要的 DECISION: 行還寫待定會擋下,加 `--decision "<結論>"` 換成「[今天] 結論」;還有沒結案的回頭條件也擋下,逐行加 `[closed:日期 理由]`,或確定結案後還要回頭量的加 `--keep-revisits "<理由>"` 照常結案)、c6 `--settled "<結論>" [--by <節點>] [--date YYYY-MM-DD]`(在待定子句結尾補「(已裁定:日期 結論,見 [[…]])」;待定子句連到好幾篇時要 `--by`;表格行請手改)、c3 `--status <值> [--by <節點>] [--reason "…"]`(`--reason` 選填,接在補的那一行最後;要新版工具,消費專案先 `lumos update`)、c4 只列證據(這篇第一次被提交的提交、卷證目錄——同一個提交加進來的與計劃名比對到的都列、標來源)、範本句與一條預填好的 `lumos set <節點> valid_under …`(把 `<整項新內容>` 換成改寫後的整句、範本句的 `<卷證>` 換成從清單挑的目錄再貼;c4 不自己寫檔、不進修復帳,set 改完先提交再對同一篇跑別的 drift fix)、c5 不帶參數 | 那篇要在版控裡而且乾淨(或只有工具自己的改動);改完寫修復帳 `governance/drift-fixes.jsonl`,跟筆記一起提交;驗證失敗照訊息 `git checkout --` 還原,工具不自動還原 | 手改容易漏句、改錯日期 |
+ | 「程式改了(函式、類別、旗標、程式檔被刪或改名),筆記還在講舊名稱嗎?」 | 推送時自動跑;手動 `lumos drift check --diff <起點>..<終點>`(舊句檢查 m1,跟 c1–c5 同一支指令) | 結論行一行(「這次推送消失了 N 個名稱,筆記裡還在講的——要處理 A 筆、只列出 B 筆」或「沒有名稱消失」、「沒跑完」…);要處理=這次改到的程式檔的家筆記或摘要行,其他只列出;每筆後面印改法:改成歷史說法或刪掉,照留就貼那條 `drift ack … --kind m1 --name=…`。開關 `.lumos/config.json` 的 `drift_check.old_sentence`(block/warn/off,沒寫就照總開關 `drift_check.gate`:沒寫 gate 是 block 擋、gate 寫 warn 只提醒、gate 寫 off 這項也不跑;明寫的值不受 gate 影響,例如 gate=off 加 old_sentence=block 照跑照擋;設定檔讀不成 JSON 或不是物件一律照預設 block);只看 Python 的定義名與旗標,其他語言只看被刪的路徑;`drift scan`、doctor、考試都不跑它 | 刪掉或改名的東西,筆記還叫人去找 |
+ | 「這一行確定照留」 | 表態前先看 `lumos drift scan` 有沒有在那條底下印「寫下時就已成立」:被標了就改成真的會發生的條件或刪掉;真的排進某篇了才照留,並用 `--tracked-in <Issue 或計劃>` 綁那篇(推送時這次新寫就已成立的只認綁了去處的照留;表態後標記照印,不會因表態消失);回頭條件與撤除條件的照留沒綁去處 30 天後失效、綁的那篇收尾也失效,drift scan 與 doctor 會重新列;`lumos drift ack <節點> <行號> --kind <種類> --reason "…"`;RULE 撤除條件(retire)的行號給擋下訊息列的那個(那一條的第一行,欄位寫在續行也一樣,給續行會被擋);舊句檢查(m1)要再帶觸發的名稱,一個名稱一個 `--name=<名稱>`(一律等號寫法,旗標名稱像 `--name=--restore` 才不會被當成選項;直接貼 check 印的那條,把 `<為什麼照留>` 換成真理由);回頭重讀判定點出的規則類條目(RULE:、★INVARIANT★、帶測試綁定的摘要條目)用 `--kind reread`,行號給那一條的開頭行(擋下訊息列的那個;單行 summary 給 `summary:` 那一行),工作目錄要有點出它的判定紀錄,細節見 `06-代碼審與推送.md` | 表態要提交才算;回頭條件與撤除條件的照留記期限或綁的那篇;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;m1 記名稱清單,同一行分幾次表態的名稱會合起來算,之後同一行又有新名稱消失就重新列出 | 推送閘每次都唸同一筆 |
+ | 「一份文件前後寫的數字/設定對不對得上?」 | `lumos fold-check <md>` | value-drift=前後不一致;reverse-omission=只寫一邊 | — |
+ | 「文件裡引的 檔案:行號 還對嗎?」 | `lumos refcheck <md> [--repo …]` | ok/missing/out_of_range | 引用過期沒人知道 |
+ | 「.lumos/lint.json 宣告的 linter 真的跑得動嗎?」 | `lumos lint-check [--smoke]` | 宣告了跑不動會紅 | — |
+ | 「專案依賴版本落後了嗎?」 | `lumos lint-watch` | 對比 registry 最新版 | — |
+ | 「Compose 可組合指標退步了嗎?」 | `lumos compose-metrics` | 對 baseline 比 | — |
+ | 「Android 啟動或滑動比上次慢了嗎?有沒有達驗收門檻?」 | `lumos macrobench` | 讀 Macrobenchmark 結果檔對基準比;有 `.lumos/macrobench-thresholds.json` 時另判人裁門檻;都只提醒 | — |
+ | 「這個 Android 畫面開開關關會不會漏記憶體、有沒有崩潰?」 | `lumos macrobench --stability <stability.json>` | 對收集腳本(`scripts/templates/android-stability-collect.sh`)寫的結果檔判門檻檔裡寫了 `check` 的條目:原生沒人指著的記憶體、Java 類別增長、SDK 實例數、官方記憶體上限、崩潰與 ANR、StrictMode、凍結幀;只提醒 | `--check-config` 只驗設定與門檻檔 |
+-| 「Android 改了畫面或功能,推之前在真機上整套驗收過了嗎?」 | 專案根 `sh scripts/templates/android-e2e-run.sh`(`lumos update` 裝進專案的範本;先 `--preflight` 只驗設定與裝置;開發中按功能跑加 `--changed`(看改到的檔挑 `e2e.features` 的功能)、`--feature <功能>` 或 `--case <功能.情境>`,可再加 `--no-perf`、`--no-memory`(這兩個只能配挑法)。按功能跑不要求工作目錄乾淨、不寫整套的紀錄;開跑時與跑完都乾淨、HEAD 沒換時,按情境的結果寫進這一版紀錄的 `feature_runs`,要提交它。每次都記進本機總表(擋下沒寫紀錄的那次也記),`lumos android-e2e history` 看);判讀單獨重跑是 `lumos android-e2e judge <結果目錄>`,按功能跑的目錄要加 `--no-record` | 讀 `.lumos/macrobench.json` 的 `e2e` 段,依序建置、安裝、Maestro UI flow(失敗重跑一次)、截圖比對、穩定性收集、Macrobenchmark,寫查證紀錄 `.lumos/e2e-records/<指紋>.json`;0=通過、1=有一段沒過、2=沒寫紀錄(設定不合格、工作目錄有未提交改動、跑到一半 HEAD 變了);改動要先提交再跑 | 推送前檢查與放行指令在第二批,現在不會擋推送 |
++| 「Android 改了畫面或功能,推之前在真機上整套驗收過了嗎?」 | 專案根 `sh scripts/templates/android-e2e-run.sh`(`lumos update` 裝進專案的範本;先 `--preflight` 只驗設定與裝置;開發中按功能跑加 `--changed`(看改到的檔挑 `e2e.features` 的功能)、`--feature <功能>` 或 `--case <功能.情境>`,可再加 `--no-perf`、`--no-memory`(這兩個只能配挑法)。按功能跑不要求工作目錄乾淨、不寫整套的紀錄;開跑時與跑完都乾淨、HEAD 沒換時,按情境的結果寫進這一版紀錄的 `feature_runs`,要提交它。每次都記進本機總表(擋下沒寫紀錄的那次也記),`lumos android-e2e history` 看);判讀單獨重跑是 `lumos android-e2e judge <結果目錄>`,按功能跑的目錄要加 `--no-record` | 讀 `.lumos/macrobench.json` 的 `e2e` 段,依序建置、安裝、Maestro UI flow(失敗重跑一次)、截圖比對、穩定性收集、Macrobenchmark,寫查證紀錄 `.lumos/e2e-records/<指紋>.json`;整套跑:0=通過、1=有一段沒過、2=沒寫紀錄(設定不合格、工作目錄有未提交改動、跑到一半 HEAD 變了),改動要先提交再跑;按功能跑:0=挑到的都過、1=有沒過或沒判完(一個會判的項目都沒有也算沒判完)、2=挑不到或設定不合格,有沒有寫進紀錄看終端最後那行(開跑時有改動就只記總表) | 推送前檢查與放行指令在第二批,現在不會擋推送 |
+ | 「測試檔/hook 有沒有被動過?」 | `lumos anchor verify`;刻意改了就 `lumos anchor approve --note "<理由>"` | 不符 rc1 | pre-push 擋 |
+ | 「現在到底有幾層防護真的生效?」 | `lumos enforcement` | 各層 active/inactive/degraded/unknown + N/M | 唯讀,不擋 |
+ 
+ doctor 各段怎麼讀:段名已經是人話;`[X]` 只是段碼。紅的段落先修,提醒段有空再清。筆記格子的過期提醒在 S17(作廢行的 `[被取代:]` 指不到或也作廢了)、S18(RULE 的度量式撤除條件成立,或寫法不合)、S19(FACT/FLOW/DEP 超過確認週期),三段都不計入問題數;S20 列全庫指不到真測試的 `[test:]`、作廢條目還掛活測試、佔位字、寫錯的 `[test-gone:]`,也不計入問題數(推送時只查碰到的那幾篇,擋不擋看 `note_shape.test_refs`:沒設是 warn、設 block 才擋);S20 另列一類散文撤除候選「條款仍掛 `[test:]` 或還沒寫成已撤除的 `[manual:]`,而下一層寫了撤除」:真的撤除就標 `[status:superseded]`、把綁定改寫成 `[manual:已撤除,見 …]`;P2 列殺傷力配方的原文對不上程式(找不到或不只一處)、原文對得上而最近一次真跑卻判 survived 的、以及配方驗的測試不在合約的測試清單上的,只提醒不擋,怎麼修見 06 的「配方的原文在程式裡找不到或不只一處」「P2 段說有配方最近一次真跑判 survived」「配方驗的測試不在合約的測試清單上」三列;S17、S18 要讀本機帳,`--ci` 不跑。
