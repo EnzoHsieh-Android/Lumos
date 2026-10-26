@@ -532,15 +532,23 @@ def android_scene(en):
           "記憶體類的檢查沒過時，虛線從 L0 直接跳到 L3。哪一層沒問題就記下並停在那一層；全部寫進可重跑、並由不知前因的 AI 再判一次的查證紀錄。")
     return title,746,b,desc
 
-ANDROID_ACCEPTANCE_TITLES={"en":"Android: a full device check before push.","zh":"Android：推之前在實機上整套驗收一次"}   # validate 也用它認圖,改標題只改這裡
+ANDROID_ACCEPTANCE_TITLES={"en":"Android: check by feature, then the whole app.","zh":"Android：開發中按功能驗，推之前整套驗"}   # validate 也用它認圖,改標題只改這裡
 
 def android_acceptance_scene(en):
     title=ANDROID_ACCEPTANCE_TITLES["en" if en else "zh"]
-    b=text(38,128,"Each step names its tool; memory or speed anomalies go to the layered check." if en else "每一步都寫出用的工具；記憶體或效能有異常，才接到分層查證往下找原因。",
+    b=text(38,128,"By feature or use case while developing, whole app before push; every run is logged." if en else "開發中按功能或使用情境跑，推之前整套跑；每一次都留檢測紀錄。",
            17 if en else 20,"muted")
+    # 怎麼叫:四種挑法(整套寫整套的紀錄;其餘按功能,乾淨時按情境記進這一版紀錄)
+    b+='<g data-kind="android-e2e-invoke">'+rect(38,146,684,70,"#14243a","#344967",14)
+    b+=text(58,172,"How to run" if en else "怎麼叫",17,"green",weight=650)
+    for k,(lab,c) in enumerate((("Whole app (push)" if en else "整套（推送前）","green"),("--changed","blue"),
+                                ("--feature" if en else "--feature 功能","blue"),("--case" if en else "--case 情境","blue"))):
+        b+=badge(58+k*164,180,lab,c,154)
+    b+='</g>'
+    b+='<g transform="translate(0,86)">'
     b+='<g data-kind="android-e2e-preflight">'+rect(38,150,684,58,"#14243a","#344967",14)
     b+=text(58,177,"Preflight" if en else "開跑前檢查",20,"green",weight=650)
-    b+=text(58,199,"Device, tools, clean tree; fails → stop, app untouched" if en else "裝置、工具、工作目錄乾淨；不過就停下，不碰 App",15 if en else 16,"muted")
+    b+=text(58,199,"Device, tools (whole app: clean tree); fails → stop" if en else "裝置、工具（整套跑還要工作目錄乾淨）；不過就停下",15 if en else 16,"muted")
     b+=badge(488,164,"adb · git","green",220)+'</g>'
     b+=path("M380 208V222","line",2)+arrow(380,226,"down")
     steps=[
@@ -560,27 +568,29 @@ def android_acceptance_scene(en):
         b+=badge(488,y+14,tool,c,220)+'</g>'
         b+=path(f"M380 {y+58}V{y+70}","line",2,"6 6",True)+arrow(380,y+74,"down")
     b+='<g data-kind="android-e2e-judge">'+rect(38,600,684,58,"#14243a","#344967",14)
-    b+=text(58,627,"Judge and write the record" if en else "判過不過、寫查證紀錄",20,"green",weight=650)
-    b+=text(58,649,"Tied to this version of the app code and test materials" if en else "紀錄綁在這一版 App 程式與驗收素材上",15 if en else 16,"muted")
+    b+=text(58,627,"Judge and log the run" if en else "判過不過、記檢測紀錄",20,"green",weight=650)
+    b+=text(58,649,"Once committed, results go into this version's record" if en else "已提交時，結果寫進這一版的查證紀錄",15 if en else 16,"muted")
     b+=badge(488,614,"lumos android-e2e judge","green",220)+'</g>'
     # 判完分兩條路:通過就提交紀錄推送;有異常就接到分層查證(上一張圖),先判有沒有異常再往下
     b+=path("M220 658V676","line",2)+arrow(220,680,"down")+path("M540 658V676","coral",2,"6 6",True)+arrow(540,680,"down","coral")
     b+='<g data-kind="android-e2e-outcome" data-outcome="pass">'+rect(38,684,330,104)+rect(39,685,4,102,C["green"],"none",2)
     b+=text(58,716,"Passed" if en else "通過",20,"green",weight=650)
-    b+=text(58,744,"Commit the record, then push" if en else "提交這份紀錄，再推送",15 if en else 16,"muted")
-    b+=text(58,770,"A slowdown only warns; it still passes" if en else "效能變慢只印提醒，照樣算通過",14 if en else 15,"muted")+'</g>'
+    b+=text(58,744,"Whole app: commit the record, push" if en else "整套跑：提交查證紀錄，再推送",15 if en else 16,"muted")
+    b+=text(58,770,"By feature: a clean run is recorded too" if en else "按功能跑：從頭到尾都乾淨也記進紀錄",14 if en else 15,"muted")+'</g>'
     b+='<g data-kind="android-e2e-outcome" data-outcome="dig">'+rect(392,684,330,104)+rect(393,685,4,102,C["coral"],"none",2)
     b+=text(412,716,"Failed, or a slowdown warning" if en else "沒過，或印了變慢的提醒",20,"coral",weight=650)
     b+=text(412,744,"UI or screenshots: see the report, diff" if en else "UI、截圖沒過：看終端印的報告與差異圖",14 if en else 15,"muted")
     b+=text(412,770,"Memory or slower: layered check, L0 first" if en else "記憶體沒過或變慢：接上一張圖，L0 先判",14 if en else 15,"muted")+'</g>'
     b+=text(380,822,"Build failed, a tool is missing, or it was interrupted: fix the setup and rerun" if en else "建置失敗、缺工具、跑到一半被中斷：是環境的問題，修好再跑",15 if en else 16,"muted","middle")
-    desc=("Android full check before push. A preflight with adb and git checks the device, tools, and that the working tree is clean; if it fails the script stops and never touches the app. "
+    b+=text(380,848,"Every run goes into the local check log; with uncommitted changes, only there" if en else "每一次都記進本機檢測總表；開跑時有沒提交的改動就只記總表",15 if en else 16,"muted","middle")
+    b+='</g>'
+    desc=("Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case), or as a whole-app check before pushing. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. "
           "Five steps then run in order, each with its tool: Gradle and adb build and install the app and record its fingerprint; Maestro taps through the flow files, retrying once; visual-check.sh compares screenshots with approved baselines at 99.5 percent; dumpsys and Perfetto watch memory, crashes and StrictMode while a screen opens and closes; Macrobenchmark compares speed with the saved baseline and only warns. "
-          "lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push; a slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again.") if en else (
-          "Android 推送前整套驗收。先用 adb 與 git 做開跑前檢查：裝置、工具、工作目錄是否乾淨；不過就停下，完全不碰 App。"
+          "lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push; a slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).") if en else (
+          "Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case),推之前整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。"
           "接著依序五步，各自寫出工具：Gradle 與 adb 建置安裝並記下檔案指紋；Maestro 照流程檔點一遍、沒過重跑一次；visual-check.sh 拿截圖跟人看過的基準圖比、門檻 99.5%；dumpsys 與 Perfetto 在反覆開關畫面時看漏記憶體、閃退與違規；Macrobenchmark 跟存好的基準比效能，只提醒。"
-          "lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送，效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。")
-    return title,850,b,desc
+          "lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送，效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。")
+    return title,962,b,desc
 
 SCENES={"map":("00 / THE SYSTEM",map_scene),
         "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
@@ -592,7 +602,7 @@ SCENES={"map":("00 / THE SYSTEM",map_scene),
         "review-overview":("03 / REVIEW",review_scene),
         "swiss-cheese":("QUALITY / FIVE LAYERS",swiss_cheese_scene),
         "android-e2e":("ANDROID / EVIDENCE BY LAYER",android_scene),
-        "android-acceptance":("ANDROID / FULL CHECK BEFORE PUSH",android_acceptance_scene),
+        "android-acceptance":("ANDROID / DEVICE ACCEPTANCE",android_acceptance_scene),
         "writeback-overview":("04 / WRITE-BACK",writeback_scene),
         "evals-overview":("EVALS / FEEDBACK",evals_scene)}
 
@@ -609,7 +619,7 @@ def validate_android_acceptance(root,ns):
     if root.find("s:title",ns).text not in set(ANDROID_ACCEPTANCE_TITLES.values()):
         return
     assert [el.get("data-step") for el in root.findall(".//*[@data-kind='android-e2e-step']")]==["1","2","3","4","5"]
-    for kind in ("android-e2e-preflight","android-e2e-judge"):
+    for kind in ("android-e2e-invoke","android-e2e-preflight","android-e2e-judge"):
         assert len(root.findall(f".//*[@data-kind='{kind}']"))==1, kind
     assert [el.get("data-outcome") for el in root.findall(".//*[@data-kind='android-e2e-outcome']")]==["pass","dig"]
 

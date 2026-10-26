@@ -4,10 +4,18 @@
 # lumos Android 端到端驗收:在主機端依序建 APK、裝上、跑 Maestro flow、截圖比對、記憶體與穩定性、效能,
 # 每一步寫進 .lumos/artifacts/android/<run-id>/steps.json,最後交給 lumos android-e2e judge 判與寫查證紀錄。
 # 不判過不過(判定在 lumos)。單一來源在工具鏈 scripts/templates/,消費專案照抄;規則單源 Projects/Android端到端驗收_計劃。
-# 用法:在專案根目錄跑 sh scripts/templates/android-e2e-run.sh [--preflight] [run-id]
+# 用法:在專案根目錄跑 sh scripts/templates/android-e2e-run.sh [--preflight] [挑法] [run-id]
 #   --preflight:只做開跑前檢查(工作目錄、裝置、工具、產物目錄有沒有被忽略、裝置鎖),不碰 App
+#   挑法(開發中按功能跑:不要求工作目錄乾淨、不寫整套的紀錄;開跑時與跑完都乾淨、HEAD 沒換時,
+#   按情境的結果寫進這一版紀錄的 feature_runs。不給就整套跑、寫整套的紀錄):
+#     --changed               看這次改到的檔,挑 e2e.features 對得到的功能
+#     --feature <功能>[,…]    這些功能的全部使用情境
+#     --case <功能.情境>[,…]   只跑這些使用情境
+#     --no-perf / --no-memory  這次不跑效能或記憶體與穩定性(只能配上面三種挑法;整套跑一定全部跑)
+#   每次跑完都記進本機總表 .lumos/artifacts/android/history.jsonl(lumos android-e2e history 看)
 # 外部工具:ADB(預設 adb)、MAESTRO(預設 maestro);開了記憶體與穩定性時另要 TP(預設 trace_processor),
 #   宣告了測試資料時再要 JAVA_HEAP_DUMP(預設 java_heap_dump),跟收集腳本同兩個環境變數;設定在 .lumos/macrobench.json 的 e2e 段
+#   (記憶體的收集腳本預設是同目錄的 android-stability-collect.sh,測試用 LUMOS_E2E_COLLECT= 換成假的;換了就只記總表、不寫查證紀錄)
 # 測試縮短與替換用:LUMOS_E2E_LONG_TIMEOUT(建置、flow、收集與效能的上限,預設 3600 秒)、
 #   LUMOS_E2E_LOCK_DIR(裝置鎖的目錄,預設 ~/.cache/lumos/android-e2e-lock)、
 #   LUMOS_E2E_STOP_GRACE(中斷時先送 TERM、等子程序自己收尾的秒數,寬限結束後一律對整組補 KILL,預設 60 秒;收集腳本在裝置沒回應時收尾可能要好幾分鐘)
@@ -21,7 +29,27 @@ import glob, hashlib, json, os, re, shutil, signal, subprocess, sys, time
 here, root = sys.argv[1], sys.argv[2]
 argv = sys.argv[3:]
 PREFLIGHT = "--preflight" in argv
-rest = [a for a in argv if a != "--preflight"]
+PICK, FLAGS, rest, BAD, _i = {"--feature": [], "--case": []}, set(), [], [], 0
+while _i < len(argv):   # --feature a,b / --feature=a,b;值缺了記成空字串,交給 lumos select 擋
+    a = argv[_i]
+    key = next((k for k in PICK if a == k or a.startswith(k + "=")), None)
+    if key:
+        if a == key:
+            _i += 1
+            a = argv[_i] if _i < len(argv) else ""
+        else:
+            a = a.split("=", 1)[1]
+        PICK[key] += [b.strip() for b in a.split(",")] or [""]
+    elif a in ("--changed", "--no-perf", "--no-memory"):
+        FLAGS.add(a)
+    elif a.startswith("-") and a != "--preflight":   # 打錯的旗標不准當成 run-id(會不帶挑法整套跑)
+        BAD.append(a)
+    elif a != "--preflight":
+        rest.append(a)
+    _i += 1
+SELECTIVE = bool(PICK["--feature"] or PICK["--case"] or "--changed" in FLAGS)
+COLLECT = os.environ.get("LUMOS_E2E_COLLECT") or os.path.join(here, "android-stability-collect.sh")
+SEL = None   # 按功能跑時,lumos android-e2e select 挑出來的東西(flows、visual、macrobench、stability)
 run_id = rest[0] if rest else time.strftime("e2e-%Y%m%d-%H%M%S")
 ADB, MAESTRO = os.environ.get("ADB", "adb"), os.environ.get("MAESTRO", "maestro")
 TP, JHD = os.environ.get("TP", "trace_processor"), os.environ.get("JAVA_HEAP_DUMP", "java_heap_dump")
@@ -243,15 +271,61 @@ def gradle_modules():
     return mods
 
 
+def select():
+    """按功能跑:叫 lumos android-e2e select 挑(--changed 的分岔點、對照表檢查都在那邊),挑不到就擋。"""
+    args = ["android-e2e", "select", "--repo", root]
+    for k, vs in PICK.items():
+        for v in vs:
+            args += [k, v]
+    args += sorted(FLAGS)
+    rc, out, err = lumos(*args)
+    if rc != 0:
+        die((err or out).strip().removeprefix("擋下:") or "lumos android-e2e select 沒挑到")
+    try:
+        return json.loads(out)
+    except ValueError:
+        die(f"lumos android-e2e select 的輸出讀不懂:{out[:200]!r}")
+
+
+def tests_to_run(cfg):
+    """這次要跑的效能測試方法;macrobench_cmd 沒帶 {{TEST}} 時是 [None](整條指令跑一次)。"""
+    e2e = cfg["e2e"]
+    if not e2e.get("macrobench"):
+        return []
+    if SEL is not None:
+        return SEL["macrobench"]
+    if "{{TEST}}" not in e2e["macrobench_cmd"]:
+        return [None]
+    feats = e2e.get("features") or {}
+    return list(dict.fromkeys(t for f in feats.values() for c in f["cases"].values() for t in c.get("macrobench", [])))
+
+
+def stab_to_run(cfg):
+    """這次要跑的記憶體情境:整套跑是 [None](stability 段本身)加上 stability_scenarios 每個情境;按功能跑是挑到的情境名。"""
+    if not cfg["e2e"].get("stability"):
+        return []
+    return SEL["stability"] if SEL is not None else [None, *(cfg.get("stability_scenarios") or {})]
+
+
+def flows_to_run(cfg):
+    return SEL["flows"] if SEL is not None else cfg["e2e"]["flows"]
+
+
+def screens_to_run(cfg):
+    return SEL["visual"] if SEL is not None else (cfg["e2e"].get("visual") or [])
+
+
 def preflight(cfg, serial, run_dir):
     """動 App 之前的檢查:run-id、工具、工作目錄、產物目錄、裝置、截圖素材、裝置鎖。"""
     e2e = cfg["e2e"]
+    if run_id.lower() == "history.jsonl":   # 本機總表 .lumos/artifacts/android/history.jsonl 跟 run 目錄在同一層(macOS 預設不分大小寫)
+        die("run-id 不能叫 history.jsonl(那是本機檢測總表的檔名,不分大小寫)")
     if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id) or set(run_id) <= {"."}:
         die(f"run-id 只收英數字、點、底線與連字號,也不能只有點:{run_id!r}")
     for tool in (ADB, MAESTRO):
         if not shutil.which(tool):
             die(f"找不到 {tool};用環境變數 ADB=、MAESTRO= 指定")
-    if e2e.get("stability"):   # 收集腳本自己也查,但要等建置、安裝、UI、截圖都跑完才輪到它,缺工具就白跑一趟
+    if stab_to_run(cfg):   # 收集腳本自己也查,但要等建置、安裝、UI、截圖都跑完才輪到它,缺工具就白跑一趟
         st = cfg.get("stability") or {}
         # 下一行跟收集腳本判「要不要錄快照」那一行逐字相同(測試抽出兩邊那一行比相等)
         test_data = bool((st.get("test_data") or {}).get("value"))
@@ -261,11 +335,13 @@ def preflight(cfg, serial, run_dir):
         for name, var, tool in need:
             if not shutil.which(tool):
                 die(f"找不到 {name}(記憶體與穩定性要用,找的是 {tool});用環境變數 {var}= 指定")
-    rc, out, err = lumos("android-e2e", "judge", "--repo", root, "--precheck")
-    if rc != 0:
-        die((err or out).strip().removeprefix("擋下:") or "工作目錄不能開跑")
-    if os.path.exists(os.path.join(run_dir, "steps.json")):
-        die(f"run-id {run_id} 已經跑過了;換一個 run-id(不給就用日期時間)")
+    if not SELECTIVE:   # 按功能跑不寫整套的紀錄,開發中本來就有沒提交的改動,不要求工作目錄乾淨
+        rc, out, err = lumos("android-e2e", "judge", "--repo", root, "--precheck")
+        if rc != 0:
+            die((err or out).strip().removeprefix("擋下:") or "工作目錄不能開跑")
+    taken = [d for d in [run_dir] + [f"{run_dir}.{s}" for s in stab_to_run(cfg) if s] if os.path.exists(d)]
+    if taken:   # 包括「另一次的 run-id.情境」記憶體目錄:撞到要等建置、UI 跑完才在收集腳本被擋
+        die(f"run-id {run_id} 已經跑過或被佔用了({'、'.join(os.path.relpath(d, root) for d in taken)} 已存在);換一個 run-id(不給就用日期時間)")
     for rel in ("steps.json", "ui/x.xml", "visual/x/x.png", "logs/x.out", "macrobench/x.json"):
         if run(["git", "-C", root, "check-ignore", "-q", os.path.join(run_dir, rel)])[0] != 0:
             die(".lumos/artifacts/ 沒被 git 忽略;先在 .gitignore 加一行 .lumos/artifacts/ 再跑(截圖與報告可能含使用者資料)")
@@ -275,7 +351,7 @@ def preflight(cfg, serial, run_dir):
     pw = adb(serial, "shell", "dumpsys power")[1]
     if "isKeyguardShowing=true" in win or "mShowingLockscreen=true" in win or ("mWakefulness=" in pw and "mWakefulness=Awake" not in pw):
         die(f"裝置 {serial} 鎖著或螢幕沒亮;解鎖、讓螢幕亮著再跑")
-    for v in e2e.get("visual") or []:
+    for v in screens_to_run(cfg):
         for f in (".maestro/visual-check.sh", f".maestro/{v}.yaml", f".maestro/baseline/{v}.png"):
             if not os.path.exists(os.path.join(root, f)):
                 die(f"截圖要用的 {f} 不在;照 toolkit 的 README 裝好、錄好基準圖再跑")
@@ -318,6 +394,10 @@ class Steps:
         self.run_dir = run_dir
         self.data = {"schema": 1, "run_id": run_id, "start_head": head, "started": now(), "ended": None,
                      "interrupted": False, "device": {"serial": serial}, "apk": {}, "steps": []}
+        if SEL is not None:
+            self.data["selection"] = SEL   # judge 看到這欄就不寫整套的紀錄(只跑了一部分)
+        # 有沒有沒提交的改動:跟開跑前檢查同一套規則(簿記檔不算),所以問 lumos,不自己列
+        self.data["dirty"] = lumos("android-e2e", "judge", "--repo", root, "--precheck")[0] != 0
         os.makedirs(os.path.join(run_dir, "logs"), exist_ok=True)
         self.save()
 
@@ -374,7 +454,7 @@ def accept(cfg, serial, st):
     dev["release"] = adb(serial, "shell", "getprop ro.build.version.release")[1].strip()
     st.save()
     os.makedirs(os.path.join(rd, "ui"), exist_ok=True)
-    for f in e2e["flows"]:
+    for f in flows_to_run(cfg):
         # flow 的「名」:跟 lumos 的 _e2e_flow_name 同一套規則(相對路徑去副檔名、/ 換 __);兩邊要一起改
         name = re.sub(r"\.[^./]*$", "", f.strip().rstrip("/").removeprefix("./")).replace("/", "__")
         for attempt in (1, 2):
@@ -384,29 +464,48 @@ def accept(cfg, serial, st):
             if rc == 0:
                 break
     th = threshold_arg(e2e.get("visual_threshold", 99.5))
-    for v in e2e.get("visual") or []:
+    for v in screens_to_run(cfg):
         evid = os.path.join(rd, "visual", v)
         st.step("visual", ["sh", ".maestro/visual-check.sh", v, evid], name=v,
                 env=dict(env, THRESHOLD=th, MAESTRO_DEVICE=serial))
-    if e2e.get("stability"):
-        st.step("stability", ["sh", os.path.join(here, "android-stability-collect.sh"), run_id], env=env)
-        st.step("stability_judge", [sys.executable, LUMOS, "macrobench", "--repo", root, "--json",
-                                    "--stability", os.path.join(rd, "stability.json")], timeout=T_SHORT * 5)
+    if stab_to_run(cfg) and os.environ.get("LUMOS_E2E_COLLECT"):   # 這次真的要收記憶體、又換了收集腳本(測試用替身):judge 看到就不寫查證紀錄
+        st.data["collector_override"] = COLLECT
+    for scn in stab_to_run(cfg):   # None=stability 段本身(整套);有名字=stability_scenarios 的情境,收在 <run-id>.<情境> 目錄
+        sid = run_id if scn is None else f"{run_id}.{scn}"
+        # stability 段本身:拿掉 shell 裡殘留的 LUMOS_STABILITY_SCENARIO,不然收集腳本會改用那個情境、結果卻記成段本身
+        senv = {k: v for k, v in env.items() if k != "LUMOS_STABILITY_SCENARIO"} if scn is None else dict(env, LUMOS_STABILITY_SCENARIO=scn)
+        if st.step("stability", ["sh", COLLECT, sid], name=scn, env=senv) is None:   # 逾時或跑不起來:裝置多半掉了,剩下的情境不再一個個等滿上限(沒跑到的判成沒判完)
+            say(f"記憶體情境 {scn or 'stability 段本身'} 逾時或跑不起來,剩下的情境與效能這次都不跑")
+            st.data["device_stuck"] = True
+            break
+        st.step("stability_judge", [sys.executable, LUMOS, "macrobench", "--repo", root, "--json", "--stability",
+                                    os.path.join(root, ".lumos", "artifacts", "android", sid, "stability.json")],
+                name=scn, timeout=T_SHORT * 5)
     st.data["apk"]["installed_sha256_after"] = installed_sha(serial, pkg)
     st.save()
-    if e2e.get("macrobench"):   # 排最後:Macrobenchmark 的 Gradle 指令常會自己裝上、跑完再移除測試用的 App
-        t0 = time.time()
-        st.step("macrobench", ["sh", "-c", e2e["macrobench_cmd"]], env=env)
+    tests = [] if st.data.get("device_stuck") else tests_to_run(cfg)   # 記憶體那段已經卡住:裝置多半掉了,效能不再對著它等一輪上限
+    if tests:   # 排最後:Macrobenchmark 的 Gradle 指令常會自己裝上、跑完再移除測試用的 App
         mdir = os.path.join(rd, "macrobench")
         os.makedirs(mdir, exist_ok=True)
-        collect_results(cfg, t0, mdir)
+        for i, t in enumerate(tests):   # 一個測試方法跑一次;{{TEST}} 換成方法名(名字在 lumos 設定檢查已驗過,這裡再驗一次)
+            # 下一行跟 lumos 的 E2E_BENCH_NAME_RE 同一條規則(測試抽出兩邊比相等);不收 $:原樣換進 sh -c,會被當變數展開
+            if t is not None and not re.fullmatch(r"[A-Za-z0-9_.][A-Za-z0-9_.#]*", t):
+                die(f"效能測試方法名只收英數字、點、底線與 #,開頭不能是 #:{t!r}")
+            cmd = e2e["macrobench_cmd"] if t is None else e2e["macrobench_cmd"].replace("{{TEST}}", t)
+            t0 = time.time()
+            if st.step("macrobench", ["sh", "-c", cmd], name=t, env=env) is None:   # 逾時或跑不起來:剩下的方法不再一個個等滿上限
+                say(f"效能測試 {t or '(整條效能指令)'} 逾時或跑不起來,剩下的效能方法這次不跑")
+                break
+            # 每跑完一個方法就收:Macrobenchmark 的結果檔名常每個模組固定,下一個方法會蓋掉;收進各自的子目錄(判定會往下層找)
+            collect_results(cfg, t0, os.path.join(mdir, str(i)))
         st.step("macrobench_judge", [sys.executable, LUMOS, "macrobench", "--repo", root, "--json", "--results-dir", mdir],
                 timeout=T_SHORT * 5)
 
 
 def judge(run_dir):
     try:
-        p = subprocess.run([sys.executable, LUMOS, "android-e2e", "judge", run_dir, "--repo", root], timeout=T_SHORT * 5)
+        p = subprocess.run([sys.executable, LUMOS, "android-e2e", "judge", run_dir, "--repo", root, "--history"]
+                           + (["--no-record"] if SELECTIVE else []), timeout=T_SHORT * 5)
     except subprocess.TimeoutExpired:
         say(f"擋下:lumos android-e2e judge 逾時({T_SHORT * 5} 秒);結果在 {run_dir},可以自己再跑一次 judge")
         return 2
@@ -417,7 +516,16 @@ def main():
     for s in INTERRUPTS:
         signal.signal(s, on_term)
     signal.signal(signal.SIGINT, on_int)
+    global SEL
+    if BAD:
+        die(f"不認得的參數:{' '.join(BAD)}(認得 --preflight、--changed、--feature、--case、--no-perf、--no-memory)")
+    if len(rest) > 1:   # 例:--feature login home —— 第二個字會被當成 run-id、後面的被丟掉
+        die(f"多出來的參數:{' '.join(rest[1:])}(run-id 只能給一個;多個功能或情境用逗號連起來,例 --feature login,home)")
+    if not SELECTIVE and FLAGS & {"--no-perf", "--no-memory"}:
+        die("--no-perf、--no-memory 只能配 --changed、--feature 或 --case;整套跑一定全部跑(推送前要留整套的紀錄)")
     cfg = load_config()
+    if SELECTIVE:
+        SEL = select()
     serial = pick_serial(cfg["e2e"])
     run_dir = os.path.join(root, ".lumos", "artifacts", "android", run_id)
     preflight(cfg, serial, run_dir)

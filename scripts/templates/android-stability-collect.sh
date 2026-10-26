@@ -5,6 +5,7 @@
 # 不判過不過(判定在 lumos macrobench --stability)。單一來源在工具鏈 scripts/templates/,消費專案照抄;規則單源 Projects/Android記憶體與穩定性驗收_計劃。
 # 用法:在專案根目錄跑 sh scripts/templates/android-stability-collect.sh [run-id]
 # 外部工具:ADB(預設 adb)、TP(trace_processor)、JAVA_HEAP_DUMP(skill 的 java_heap_dump,宣告了測試資料才用)
+# 選情境:LUMOS_STABILITY_SCENARIO=<stability_scenarios 的情境名>(範本腳本按功能跑時帶;不帶就用 stability 段本身)
 # 測試縮短用:LUMOS_STABILITY_SETTLE(等 App 起來、等日誌跟上,預設 2 秒)、LUMOS_STABILITY_STOP_TIMEOUT(等錄製停下,預設 30 秒)、
 #   LUMOS_STABILITY_LONG_TIMEOUT(驅動、原生掃描、快照與查詢的上限,預設 1800 秒)
 # 回傳碼:結果檔寫出來回 0(哪一段沒收到寫在那個來源的 status);設定讀不了、必要工具找不到、run-id 不合法或用過、
@@ -120,6 +121,13 @@ def load_config():
     st = cfg.get("stability")
     if not isinstance(st, dict):
         die(".lumos/macrobench.json 沒有 stability 段")
+    name = os.environ.get("LUMOS_STABILITY_SCENARIO")
+    if name:   # 按功能跑:用 stability_scenarios 的這個情境蓋過 stability 段的 scenario、driver(與選填的 warmup、cycles)
+        scen = (cfg.get("stability_scenarios") or {}).get(name)
+        if not isinstance(scen, dict):
+            die(f"LUMOS_STABILITY_SCENARIO={name} 不在 .lumos/macrobench.json 的 stability_scenarios 裡")
+        # 下一行的欄位清單跟 lumos 的 E2E_SCENARIO_KEYS 一樣(測試抽出兩邊比相等)
+        st = dict(st, **{k: scen[k] for k in ("scenario", "driver", "warmup", "cycles") if k in scen})
     return st
 
 

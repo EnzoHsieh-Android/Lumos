@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-24
-updated: 2026-10-24
+updated: 2026-10-26
 responsibility: 負責在主機端排順序、用 adb 與 trace_processor 收記憶體與穩定性資料寫成 stability.json(收集腳本、兩支查詢範本、錄製設定);不負責判過不過(判定在 lumos macrobench --stability),也不負責驅動 App(驅動指令由消費專案提供)
 aliases: []
 about_code:
@@ -44,6 +44,7 @@ summary: |-
   WHY:快照裡的類別名照原樣寫進結果檔、印出時只清控制字元,不擋一般文字 [出處:2026-10-24 代碼審 r3 資安席] [因:合法的 Java 類別名可以是任何語言的字,擋了會誤擋;換行與控制字元已清,偽造不出一行判定] [不選:只收符合某種字元集的類別名(會把正常的非英文類別名當壞資料)]
   WHY:git rev-parse 回 128 而且錯誤不是「不是 git repo」時(safe.directory、權限)回 2 擋下,不當成不是 repo [出處:2026-10-24 代碼審 r4 資安席] [因:當成不是 repo 會整段跳過 git 忽略檢查,修好 git 之後一個 git add -A 快照就進版控] [test:t_android_memstab_collect_edges]
   WHY:收到第一個中斷就把所有中斷設成忽略、印一行「收尾中、最久約 4 分鐘」,收尾結束時照裝置有沒有回應改說法 [出處:2026-10-24 代碼審 r4 資源席、資安席] [因:兩個訊號同時到時第二個會打斷收尾;忽略期間按 Ctrl-C 沒反應要讓人知道;裝置離線時說「已停、已刪」會讓人以為裝置乾淨] [test:t_android_memstab_collect_signals]
+  WHY:帶 LUMOS_STABILITY_SCENARIO=<名> 時用 macrobench.json 最外層 stability_scenarios 那個情境蓋過 stability 段的 scenario、driver(與選填的 warmup、cycles),名字不在裡面就擋;能蓋過的欄位清單跟 lumos 的 E2E_SCENARIO_KEYS 一樣 [出處:2026-10-26 端到端驗收按功能與使用情境跑] [因:記憶體要能按功能挑情境;情境以外的設定(套件、測試資料、StrictMode)沿用同一段,不重寫一份] [test:t_android_memstab_collect_scenario] [test:t_android_e2e_lists_match_templates]
   SEE:[[Systems/macrobenchmark-adapter]] [[Projects/Android記憶體與穩定性驗收_計劃]]
 verified_by:
   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"

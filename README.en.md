@@ -354,24 +354,27 @@ When one of the first four (the memory ones) fails, it jumps straight to L3: the
 - It reminds, it does not block pushes: millisecond numbers drift with the phone and its temperature, so they are not suited to a hard gate.
 - Memory snapshots are off by default: a project must first write down who agreed, and on which day, to run on test data only; snapshots stay on the local machine, each later run of the collection script deletes those older than 7 days, nothing is deleted if it is not run again, and you delete them yourself when done.
 - The allowed margin for "counts as slower" is provisional (10% by default, with a 1 ms floor) and will be reset from repeated real-device runs.
-- Speed and memory are now part of the "full check before pushing" below; running `lumos macrobench` on its own still only warns.
+- Speed and memory are now part of the "Device acceptance" section below; running `lumos macrobench` on its own still only warns.
 
 **To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (Chinese).
 
 </details>
 
-### Full check before pushing (end-to-end acceptance)
+### Device acceptance: by feature while developing, the whole app before pushing (end-to-end acceptance)
 
-**After changing a screen or feature, run the whole app once on a real device before pushing, and keep the result as a verification record.** One script does five things in order: build and install the app, tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, open and close a screen repeatedly to check memory and stability, and run the speed tests. `lumos android-e2e judge` then decides pass or fail. The record is tied to "this version of the app code and test materials": change the app code, a flow file, a baseline image or a threshold, and the record no longer counts.
+**One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail.
 
 ```
-sh scripts/templates/android-e2e-run.sh --preflight   # only checks the device, tools and working tree
-sh scripts/templates/android-e2e-run.sh               # run the whole thing once
+sh scripts/templates/android-e2e-run.sh --changed                  # while developing: run the use cases of the features your changes touch
+sh scripts/templates/android-e2e-run.sh --feature player           # every use case of this feature
+sh scripts/templates/android-e2e-run.sh --case player.open-close   # just this use case (add --no-perf or --no-memory to skip those parts)
+sh scripts/templates/android-e2e-run.sh                            # before pushing: the whole app, writes the verification record
+lumos android-e2e history                                          # the last 20 checks (filter with --feature, --case; --last for more)
 ```
 
 <p align="center">
   <a href="assets/android-acceptance-en.svg">
-    <img src="assets/android-acceptance-en.svg" alt="Android full check before push: a preflight with adb and git (stops without touching the app if it fails), then build and install (Gradle, adb), UI flows (Maestro), screenshots (visual-check.sh), memory and stability (dumpsys, Perfetto), and speed (Macrobenchmark, warns only); lumos android-e2e judge decides and writes a verification record. If it passed, commit the record and push; if UI flows or screenshots failed, read the report and diff image; if memory failed or a slowdown warning appeared, go to the layered check above, where L0 first decides whether there is an anomaly; a failed build, a missing tool or an interruption is a setup problem to fix and rerun" width="760">
+    <img src="assets/android-acceptance-en.svg" alt="Android device acceptance: by feature or use case while developing (--changed, --feature, --case), the whole app before pushing; a preflight with adb and git (stops without touching the app if it fails), then build and install (Gradle, adb), UI flows (Maestro), screenshots (visual-check.sh), memory and stability (dumpsys, Perfetto), and speed (Macrobenchmark, warns only); lumos android-e2e judge decides and writes a verification record. If it passed, commit the record and push; if UI flows or screenshots failed, read the report and diff image; if memory failed or a slowdown warning appeared, go to the layered check above, where L0 first decides whether there is an anomaly; a failed build, a missing tool or an interruption is a setup problem to fix and rerun" width="760">
   </a>
 </p>
 
@@ -380,14 +383,33 @@ sh scripts/templates/android-e2e-run.sh               # run the whole thing once
 
 **Setup.** Add an `e2e` section to the project's `.lumos/macrobench.json`: which folders count as app code, how to build, where the APK is, which flow files to run; screenshots, memory and stability, and speed each run only when switched on. For screenshots, install [maestro-visual-toolkit](https://github.com/EnzoHsieh-Android/maestro-visual-toolkit) into the project and record baselines first. `lumos update` copies the script into the project's `scripts/templates/`. Details in [Android end-to-end acceptance](docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md) (Chinese).
 
-**Why commit first.** The record is tied to a commit, so the script refuses to run with uncommitted changes, and writes no record if the version changes mid-run. The order is: change code → commit → run the check → commit the record separately.
+**Feature map.** Add `features` to the `e2e` section: each feature lists the code paths it owns (`--changed` uses them to find features from changed files) and its use cases; each use case lists its flow files, screenshot screens, speed test methods and memory scenarios. Write `{{TEST}}` in the speed command and it is replaced with the chosen test method; memory scenarios live in the top-level `stability_scenarios`, one screen-cycling driver each. A map that names a flow or scenario that does not exist is rejected when the configuration is checked.
+
+**Two ways to split a run.** While developing you can run only part of it, sliced two ways that stack:
+
+| Slice | How | What runs |
+|---|---|---|
+| By feature | `--changed` (from changed files), `--feature <feature>`, `--case <feature.case>`; join several with commas | Only the chosen use cases' flows, screenshots, speed methods and memory scenarios |
+| By check | Add `--no-perf`, `--no-memory` (only together with a choice above; a whole-app run always runs everything) | Skips speed or memory and stability; those use cases are recorded as incomplete |
+
+For example `--case list.scroll --no-perf --no-memory` runs only that use case's UI flow and screenshots, with a result in under a minute. A use case that lists only speed, or whose checks were all skipped, has nothing that passes or fails, so it is recorded as not judged and returns 1 rather than counting as passed.
+
+**Separating use cases in the notes and binding the tests.** The feature map says what runs; the graph note says why the use case must hold and what breaks if it changes. The two are matched by the same use-case name:
+
+- One Systems note per feature (the home of that feature's code); each use case gets a contract line in its summary, for example `KEY:★INVARIANT★ the list shows its first row on open [test:ui:list_first_row]`. If you are not sure it is a contract, do not mark it; write a sentence in the body pointing at the flow file instead.
+- In `[test:ui:<name>]`, `ui` is a platform name: add `"ui": {"profile": "maestro", "root": "."}` to `platforms` in `.lumos/config.json` (with more than one platform, also set `default_platform`). `<name>` matches the `name:` field in the flow's yaml and must start with an English letter or underscore (for example `name: list_first_row`); a name starting with Chinese is not recognised.
+- The same flow file is also listed in that use case's `flows` in the feature map. Nothing links the two mechanically yet; they line up by the same use-case name and the same flow file, so change both together.
+
+**Two kinds of record.** Every run (whole app or by feature, passed or failed, interrupted, or stopped by the judge without a record) adds a line to the local check log `.lumos/artifacts/android/history.jsonl`: when, which version, whether there were uncommitted changes, which use cases were chosen, each item's result, and where the evidence is. When the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version: a whole-app run fills `runs`, a by-feature run records its use cases in `feature_runs` (one entry per use case; it is marked incomplete when speed or memory it has was skipped, or when it lists only speed and nothing that passes or fails; a failure always replaces the earlier result; only a run that was not fully judged, or an incomplete pass, keeps the complete result already there). The record is tied to "this version of the app code and test materials": change the app code, a flow file, a baseline image or a threshold, and it no longer counts.
+
+**Why commit first.** The verification record is tied to a commit, so a whole-app run refuses to start with uncommitted changes. A by-feature run still runs, but if there were uncommitted changes when it started it only writes the local log (the app it built is not this version, even if the changes are put away mid-run). Nothing is recorded if the version changes mid-run. The order is: change code → commit → run the check → commit the record separately.
 
 **Reading the result.**
 
-- **Passed**: the record is written; commit it and push. A slowdown only adds a warning and still passes.
-- **Failed**: if any part failed, the result is failed, and the terminal shows which part. A failed UI flow comes with its report path and a failed screenshot with its match rate and diff image, so read those; when memory fails, the raw numbers are in this run's artifacts (`.lumos/artifacts/android/<run-id>/stability.json`), and the layered check above takes it from there.
+- **Passed**: for a whole-app run the record is written; commit it and push. For a by-feature run, the last line says whether the result went into the record (with uncommitted changes at the start it only goes into the local log). A slowdown only adds a warning and still passes.
+- **Failed**: if any part failed, the result is failed, and the terminal shows which part. A failed UI flow comes with its report path and a failed screenshot with its match rate and diff image, so read those; when memory fails, the raw numbers are in this run's artifacts: the `stability` section itself in `.lumos/artifacts/android/<run-id>/stability.json`, other memory scenarios next to it in `<run-id>.<scenario>/stability.json`; the layered check above takes it from there. Each scenario keeps its own recording and nothing is cleaned up automatically, so delete old ones yourself.
 - **Not judged**: nothing failed, but a part could not run, for example a failed build or install, or the run was interrupted (an interruption still writes this record). That is a setup problem: fix it and run again.
-- **No record**: the preflight stopped (bad configuration, uncommitted changes, or the memory part is on but a Perfetto tool is missing), or the version changed mid-run. Fix it and run again.
+- **No record**: the preflight stopped (bad configuration, uncommitted changes on a whole-app run, the memory part is chosen but a Perfetto tool is missing, or `--changed` matched no feature), or the version changed mid-run. Fix it and run again.
 
 A failed UI flow is retried once; it only counts as failed if both runs fail. Speed still only warns, for the same reason as above: millisecond numbers drift.
 
@@ -396,6 +418,7 @@ A failed UI flow is retried once; it only counts as failed if both runs fail. Sp
 **Experiment results** (same SM-X710 tablet, same lab app):
 
 - With all four parts on, the full run passed in about 3 minutes (build cached, speed at 5 rounds; the recommended 20 rounds adds a few minutes).
+- Split runs (same tablet): the list use case's UI and screenshot alone took about 33 seconds, the player's memory scenario alone about 43 seconds, the list use case with speed about 2 minutes; `--changed` after editing the list code picked only the list use case; the runs that skipped speed or memory were recorded as incomplete and did not replace the earlier complete result for the same version; the player use case has only memory, so `--no-memory` recorded it as not judged and returned 1. The list's speed test occasionally fails on its own (it reaches the bottom on the second swipe); that only warns, does not affect passing, and passed on a rerun.
 - Making the app skip releasing a C/C++ library when the screen closes: judged failed, with only the "C/C++ memory nobody points to" item red and everything else passing.
 - Scenario test: asking the AI in plain words to "make the list text bigger, check it, then commit", without mentioning end-to-end acceptance. Before the manual was updated, the AI had to read the tool's source code to find this check; afterwards the same task found it straight from the manual and ran all four parts in the order commit → check → commit record, and passed.
 
@@ -403,6 +426,7 @@ A failed UI flow is retried once; it only counts as failed if both runs fail. Sp
 
 - It does not block pushing yet: forgetting to run it, or failing it, still lets you push.
 - Screenshot comparison catches layout shifts but not a change of a few characters; write key text into the flow file as "this text must be visible".
+- `--changed` only knows the code paths and the use cases' flow files listed in the feature map; changed files in the app folders, under `.maestro/` (flows, shared flows, screenshot material) or in the acceptance config and thresholds that match no feature are listed (ordinary docs are not), and the whole-app run before pushing still covers them. It compares against where the branch left the main line; when you work directly on main, it compares against that branch's remote counterpart, so commits you have not pushed are still seen.
 - Verified only on one tablet and one lab app.
 
 </details>

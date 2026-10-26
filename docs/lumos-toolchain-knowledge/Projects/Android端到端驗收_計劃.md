@@ -17,6 +17,13 @@ related:
   - "[[Projects/Android記憶體與穩定性驗收_計劃]]"
   - "[[Projects/Android側UI測試綁圖譜工作流_計劃]]"
   - "[[Projects/截圖基準驗收流程_計劃]]"
+decisions:
+  - content: e2e 段開了記憶體時,macrobench.json 最外層的 stability 段與 stability_scenarios 也算進指紋(改 S2 的「其他段都不影響指紋」)
+    id: d1
+    context: 代碼審 code-e2e-by-feature r4 正確性席:記憶體情境的 driver、cycles 改弱後指紋不變,同一版舊的通過紀錄照樣算數;計劃〈查證紀錄〉的原則是驗收的範圍或標準變了就該重驗,門檻檔本來就算進指紋。考慮過:照舊不算(記憶體標準能在指紋外改弱);整份 macrobench.json 都算(改效能容差、results_dirs 也要重跑實機,太嚴)
+    why_chosen: stability 段與情境決定記憶體這塊驗得多嚴,跟門檻檔同一類;只在 e2e 段開了記憶體時才算,沒開的專案指紋不變。代價:開了記憶體的專案升上這版後,既有紀錄全部對不上、要重跑一次
+    decided: 2026-10-26
+    valid: true
 ---
 # Android端到端驗收_計劃
 
@@ -107,12 +114,13 @@ WHY:毫秒類第一版只提醒 [出處:2026-10-25 Enzo 選「毫秒類先只提
 
 - `schema`:格式版本(第一版是 1);判定遇到比自己新的版本就擋,請人更新 lumos。
 - `fingerprint`:對一個提交的檔案樹,用那個提交的 `e2e` 段,取 `app_dirs` 底下(扣掉 `exclude`)與驗收素材的每一個項目,用 `git ls-tree -r -z` 的 mode、型別、物件編號與路徑,依路徑的位元組順序排好,每一項寫成「mode、物件編號、路徑」三段、段與段之間用 NUL 分開、每項後接換行;最後再接一行「`e2e-config`、NUL、`e2e` 段的 sha256」(段落先寫成鍵排序、不留空白、不轉義中文的 JSON 再算),整串算 sha256。只取 `e2e` 段不取整個 `macrobench.json`:改效能基準或 `results_dirs` 不用重跑 E2E。用 git 物件編號而不讀檔案內容:上萬檔的目錄也是一次 git 呼叫、子模組用它記的提交編號、符號連結用它指向的路徑、Git LFS 用指標檔,改權限(mode)也會讓指紋變。
-- `runs`:最近一次的完整結果(每一次 judge 覆蓋這一欄,不動 `waivers` 與 `history`;只有放行的紀錄是 null):result(pass、fail、unjudged)、run-id、開始與結束時間(本機時區、帶時差的 ISO 格式)、裝置型號與系統版本、建出的 APK 與裝置上實際安裝那份的 sha256、判定的提交編號、四塊明細(每支 flow 的結果與是否不穩定、每個畫面的結果與原因、效能與記憶體每條的結果與原因)、`notices`(只提醒的項目)。
-- `history`:每次 judge 追加一筆(result、run-id、結束時間),只增不刪;RETIRE-IF 從這裡數。
+- `runs`:最近一次整套跑的完整結果(每一次整套 judge 覆蓋這一欄,按功能跑不碰它,不動 `waivers` 與 `history`;只有放行的紀錄是 null):result(pass、fail、unjudged)、run-id、開始與結束時間(本機時區、帶時差的 ISO 格式)、裝置型號與系統版本、建出的 APK 與裝置上實際安裝那份的 sha256、判定的提交編號、四塊明細(每支 flow 的結果與是否不穩定、每個畫面的結果與原因、效能與記憶體每條的結果與原因)、`notices`(只提醒的項目)。
+- `history`:每次 judge 追加一筆(result、run-id、結束時間;按功能跑的那筆另帶 `kind: feature` 與挑到的情境),只增不刪;RETIRE-IF 從這裡數時只數沒有 `kind` 的整套那幾筆,按功能的通過不算整版驗過。
+- `feature_runs`:按功能跑的結果,`功能.情境` → result、complete、skipped、每項結果、run_id、ended、commit(見〈按功能與使用情境跑〉);整套跑不碰它。整套跑比某個情境的 `feature_runs` 晚而且沒過時,兩邊會說不同的話:推送前檢查(下一批)要比兩邊的結束時間,取較新的那個。
 - `waivers`:每筆放行的人或 AI、誰、時間、理由、有沒有被人看過。
 - 寫一半被殺留下的 `<指紋>.json.<…>.tmp-wlf` 暫存檔,判定只讀 `<指紋>.json`,不受影響。
 - 原始檔只在本機;紀錄只放摘要與數字。
-- 改了 `app_dirs`、`exclude`、驗收素材或 `e2e` 段本身,指紋就全變、舊紀錄都對不上,要重跑一次:這是刻意的(驗收的範圍或標準變了就該重驗),不做舊紀錄遷移。舊紀錄檔不自動刪,一份只有幾 KB;run 目錄在被 git 忽略的產物目錄,清理照產物目錄既有做法由人清。
+- 改了 `app_dirs`、`exclude`、驗收素材或 `e2e` 段本身,指紋就全變、舊紀錄都對不上,要重跑一次:這是刻意的(驗收的範圍或標準變了就該重驗),不做舊紀錄遷移。舊紀錄檔不自動刪,一份只有幾 KB;run 目錄在被 git 忽略的產物目錄,清理照產物目錄既有做法由人清;每個記憶體情境另有 `<run-id>.<情境>` 目錄(錄製檔與日誌),整套跑一次就多 1+情境數份,收集腳本只清七天前的記憶體快照,其餘也由人清。
 - 同一個指紋重跑、這次沒過,會蓋掉先前的 pass:最近一次的結果才算數(重跑出現的失敗就是真訊號),先前通過的次數留在 `history`。
 
 ## 這次要改到的地方
@@ -161,10 +169,84 @@ WHY:毫秒類第一版只提醒 [出處:2026-10-25 Enzo 選「毫秒類先只提
 - 放行:AI 放行會出現在推送那一行、doctor 與 enforcement;人答 n 不會產生放行;人標看過後不再列。
 - 鎖:kill -9 中斷後下一次驗收能接手;兩個工作樹對同一台裝置同時開跑,後到的被擋。
 
+## 按功能與使用情境跑(開發中檢測)
+
+2026-10-26 Enzo 要的:開發中不跑整套,只跑當下開發的那個功能,或那個功能的某一個使用情境;四塊(UI 流程、截圖、效能、記憶體與穩定性)都要能按功能挑;整個檢測過程要能彈性調用、能自動化,而且每次都有檢測紀錄。這一節取代 2026-10-26 稍早寫的「--only 按塊挑」(按 ui、visual 這種大類挑,Enzo 說粒度不對)。
+
+狀態:2026-10-26 Enzo 說「直接開工」,沒另開設計審,已實作在 EnzoHsieh-Android/e2e-only 分支,走代碼審;開發完在實驗室實跑。
+
+### 一個使用情境是什麼
+
+| 塊 | 一個使用情境 |
+|---|---|
+| UI 流程 | 一支 Maestro flow |
+| 截圖 | 一個畫面的截圖 flow(toolkit 的 `<畫面>_visual`) |
+| 效能 | 一個 Macrobenchmark 測試方法(例如 `ScrollBenchmark#scrollList`) |
+| 記憶體與穩定性 | 一個反覆開關畫面的驅動情境(例如播放器畫面開關) |
+
+### 功能對照表(設定的單一來源)
+
+`.lumos/macrobench.json` 的 `e2e` 段加 `features`:每個功能列它的程式路徑與使用情境,每個情境列它的四種東西。flow 與截圖畫面要是整套清單(`flows`、`visual`)裡有的;效能寫測試方法名;記憶體寫 `stability_scenarios` 裡的情境名。
+
+```json
+"features": {
+  "player": {
+    "paths": ["app/src/main/java/com/example/mblab/PlayerActivity.kt", "app/src/main/java/com/example/mblab/sdk/"],
+    "cases": {
+      "open-close": {"flows": [".maestro/player_open.yaml"], "visual": [], "macrobench": [],
+                     "stability": ["player_cycle"]}
+    }
+  },
+  "list": {
+    "paths": ["app/src/main/java/com/example/mblab/MainActivity.kt"],
+    "cases": {
+      "scroll": {"flows": [".maestro/list.yaml"], "visual": ["main_visual"], "macrobench": ["ScrollBenchmark#scrollList"],
+                 "stability": []}
+    }
+  }
+}
+```
+
+- 不另外用 Maestro 的 tags 標功能:效能與記憶體的測試寫在 Kotlin 裡貼不了標籤,兩套標法會漂;對照表一處寫齊。
+- 效能:`macrobench_cmd` 可以帶 `{{TEST}}`,按功能跑時換成選到的測試方法、一個方法跑一次(例如 `sh scripts/run-bench.sh {{TEST}}`);情境列了效能測試方法卻沒帶 `{{TEST}}`,設定檢查就擋(S26)。帶了 `{{TEST}}` 之後,整套跑也只跑對照表列到的方法,沒列進任何情境的 Macrobenchmark 方法不會跑。方法名原樣換進 `sh -c`,所以不收 `$`(會被當變數展開、跑成別支)。
+- 記憶體:可以有多個情境,寫在 `macrobench.json` 最外層、跟 `stability` 段並列的 `stability_scenarios`(情境名 → 蓋過 `stability` 段的 scenario、driver、warmup、cycles),收集腳本照選到的情境跑;門檻檔照舊用情境名對條目。原本只有一個情境的寫法照舊認得。
+- 對照表裡寫了整套清單沒有的 flow 或畫面、門檻檔沒有的情境,`macrobench --check-config` 擋。
+
+### 怎麼叫
+
+```
+sh scripts/templates/android-e2e-run.sh                            # 整套(推送前):全部跑、寫正式查證紀錄
+sh scripts/templates/android-e2e-run.sh --changed                  # 自動:看這次改到的檔,挑對應功能的全部情境
+sh scripts/templates/android-e2e-run.sh --feature player           # 指定功能:這個功能的全部情境
+sh scripts/templates/android-e2e-run.sh --case player.open-close   # 指定情境(可以逗號接多個)
+  加 --no-perf / --no-memory:這次不跑效能或記憶體(那兩塊一個情境要好幾分鐘)
+```
+
+- 建置與安裝每次都跑。
+- `--changed` 比的是「HEAD 加上工作目錄沒提交的改動與沒追蹤的新檔」跟分岔點(主線)的差異,檔案落在哪個功能的 `paths` 裡就挑那個功能;一個功能都對不到時不靜默放過,印出改到的檔、提示補對照表或整套跑,回 2。
+- 按功能跑不要求工作目錄乾淨(開發中本來就有沒提交的改動)。
+- 改到的檔有些對得到功能、有些對不到時,`--changed` 照跑對得到的功能,另外列出「這些檔沒有對應功能」,提醒補對照表(推送前的整套跑照樣會驗到它們)。
+
+### 檢測紀錄
+
+- 每一次跑(整套或按功能)都在本機總表 `.lumos/artifacts/android/history.jsonl` 加一行:時間、run-id、HEAD、工作目錄有沒有沒提交的改動、怎麼挑的(整套、`--changed`、`--feature`、`--case` 與挑到的功能和情境)、每一項的結果(按功能跑另記每個情境自己的結果與項目,`history --case` 只列那個情境的)、證據目錄;judge 擋下沒寫紀錄的那次也記、附原因。總表在被 git 忽略的產物目錄裡,不進版控。
+- `lumos android-e2e history [--feature <功能>] [--case <情境>] [--last N]` 列出歷史;每一行附證據目錄。
+- 正式的查證紀錄(`.lumos/e2e-records/<指紋>.json`):整套跑寫 `runs`;按功能跑在工作目錄乾淨、HEAD 沒換時,把每個情境的結果寫進同一份紀錄的 `feature_runs`(`功能.情境` → result、complete、skipped、每項結果、run_id、ended、commit),不碰 `runs`;用了 `--no-perf`、`--no-memory` 而那個情境本來有那塊時 complete 是 false。沒提交時只記總表並說原因。判讀走 `judge --no-record`(名字沿用;意思是「不寫整套的 runs」),`steps.json` 帶 `selection` 欄,judge 沒帶 `--no-record` 讀到有 `selection` 的就拒寫、回 2。
+- 2026-10-26 Enzo 裁「只針對功能開發寫正式檢驗紀錄也算合理」(開發是按功能分派的):推送前檢查(下一批)要能按「這次改動碰到哪些功能」去要那些功能的 `feature_runs`,碰到共用程式(對照表要能標 `shared`)或對不到功能的檔才要整套 `runs`;判法在下一批設計,這一批只把紀錄寫出來。
+- 終端在四塊結果之後照情境各列一行:「情境 player.open-close:沒過;沒過或沒判完:stability player」,最後一行講結果有沒有寫進查證紀錄;是哪一個 check 沒過看上面的「✗ 記憶體 player:native_unreachable」那行,證據目錄看總表或 `history`。
+
+### 不做
+
+- 不從圖譜的功能筆記推功能(那要讀 vault,端到端驗收目前是 vault-free 的);對照表寫在專案設定。
+- 不做「只判記憶體某一項」:一個情境的開關資料是一起收的,只判一項省不了時間。
+
+WHY:按功能跑的結果另存在查證紀錄的 feature_runs,不寫進整套的 runs;沒提交時只記總表 [出處:2026-10-26 Enzo 先要完善的檢測紀錄,後裁「只針對功能開發寫正式檢驗紀錄也算合理」] [因:開發按功能分派,每次逼整套跑不實際;但 runs 代表「這一版整套驗過」,混在一起推送前檢查就分不出驗了哪些;沒提交的版本對不上任何提交,不寫] [不選:按功能跑只記總表(原案,被 Enzo 改掉);寫進 runs 並標部分]
+WHY:功能對照表寫在專案設定,不用 Maestro tags [出處:同上] [因:效能與記憶體的測試在 Kotlin 裡貼不了標籤,兩套標法會漂] [不選:flow 用 tags、其他用設定]
+
 ## 條款
 
 - [S1] 當 `.lumos/macrobench.json` 的 `e2e` 段缺必填欄位(app_dirs、package、build、apk、flows)、型別不對、`visual_threshold` 不是 99.5 到 100 之間的數字、`package` 含英數字底線與點以外的字元、路徑跳出專案根、`app_dirs` 有一項不存在或包住 `.lumos/`、兩支 flow 同名、跟 `stability` 段的 package 或 adb_serial 不一致、或要了記憶體與穩定性卻有 `stability_checks` 列的 check 在門檻檔裡沒有情境相符的條目時,`lumos macrobench --check-config` 應回 2 並印出哪個欄位哪裡壞;只有 `e2e` 段的合格設定檔回 0 [test:t_android_e2e_config_strict]
-- [S2] 當計算指紋時,lumos 應只從指定提交的檔案樹與那個提交的 `e2e` 段,用每一項的 mode、物件編號與路徑(NUL 分隔、依路徑位元組排序)算 `app_dirs` 扣掉 `exclude` 加上驗收素材,再接 `e2e` 段的正規化雜湊;目錄外的檔、預設排除的單元測試、工作目錄沒提交的改動、提交編號、`macrobench.json` 其他段都不影響指紋;目錄內任一檔內容或權限改了、換了基準圖、改了共用 flow 或門檻、改了 `e2e` 段,指紋就變;`app/src` 不含 `app/src2`;子模組與符號連結不讓計算出錯 [test:t_android_e2e_fingerprint]
+- [S2] 當計算指紋時,lumos 應只從指定提交的檔案樹與那個提交的 `e2e` 段,用每一項的 mode、物件編號與路徑(NUL 分隔、依路徑位元組排序)算 `app_dirs` 扣掉 `exclude` 加上驗收素材,再接 `e2e` 段的正規化雜湊;目錄外的檔、預設排除的單元測試、工作目錄沒提交的改動、提交編號、`macrobench.json` 其他段都不影響指紋(例外:`e2e` 段開了記憶體時,最外層的 `stability` 段與 `stability_scenarios` 也算進去,它們決定記憶體驗得多嚴);目錄內任一檔內容或權限改了、換了基準圖、改了共用 flow 或門檻、改了 `e2e` 段,指紋就變;`app/src` 不含 `app/src2`;子模組與符號連結不讓計算出錯 [test:t_android_e2e_fingerprint]
 - [S3] 當判 UI 流程時,`lumos android-e2e judge` 應照 `steps.json` 的回傳碼與每次嘗試的報告判:回傳碼 0、至少一個測試案例、沒有失敗才算那一次過;第一次過→過;第一次沒過、第二次過→過並標不穩定;兩次都沒過、或回傳碼 0 但報告零案例→沒過 [test:t_android_e2e_judge_ui]
 - [S4] 當判截圖比對時,judge 應在 visual-check.sh 回傳碼是 0 時才算那個畫面過;回傳碼 1 或 2、或缺結果都算沒過並從存下的輸出記原因,不相符時記相符率與差異圖路徑;沒設定 `visual` 時這塊記成未設定、不影響 result [test:t_android_e2e_judge_visual]
 - [S5] 當判效能與記憶體時,judge 應把效能退步、毫秒類門檻沒達、沒有基準、輪數不足、這塊沒跑成都只寫進 notices;記憶體與穩定性只看帶 check 且在 `stability_checks` 裡的條目:在 failures 時 result 是 fail,在 skipped、整段沒判、或那個 check 沒出現在任何清單時 result 是 unjudged;frozen 只寫 notices [test:t_android_e2e_judge_perf_memory]
@@ -184,11 +266,21 @@ WHY:毫秒類第一版只提醒 [出處:2026-10-25 Enzo 選「毫秒類先只提
 - [S19] 當在 macrobench-lab 上照〈實驗室驗收〉逐組跑時,每一組都應照預期(UI 正常版 5 次全過、截圖同版本 3 次全相符、應該擋的全擋、不該擋的全放);任一組不照預期就算沒過,修好重跑那一組 [manual:SM-X710 上逐組跑,每組結果寫進驗證紀錄]
 - [S20] 當在 Citrus_KDS 上接 E2E 驗收時,至少 UI 流程這塊應跑得起來、紀錄寫得出來、推送檢查認得它,並記下一次驗收實際花多少時間;超過 30 分鐘時在驗證紀錄寫一條縮短的回頭條件;Enzo 不同意升 benchmark-macro 時,效能與記憶體兩塊在 KDS 不開、照實寫進驗證紀錄 [manual:SM-X710 上跑一次,時間、各塊結果與沒開的塊寫進驗證紀錄]
 - [S21] 當 AI 照 lumos-android-evidence skill 接 E2E 驗收時,skill 應寫明接入順序、怎麼跑、紅了看哪裡、怎麼放行、AI 放行會被列出來、怎麼整道關掉一次 [manual:讀 skill 的 E2E 驗收一節,六件事都寫到]
+- [S22] 當範本腳本帶 `--case <功能>.<情境>` 或 `--feature <功能>` 跑時,它應建置、安裝,只跑對照表裡那些情境列的 flow、截圖、效能測試方法與記憶體情境,呼叫 `judge --no-record`;選到的都過時回 0、有沒過或沒判完時回 1;工作目錄有沒提交的改動時照樣開跑,不寫整套的 `runs`(按情境的結果寫不寫見 S27);終端最後照情境各列一行結果 [test:t_android_e2e_by_feature] [test:t_android_e2e_memory_by_case]
+- [S23] 當帶 `--changed` 跑時,範本腳本應用「HEAD 加工作目錄改動與沒追蹤的新檔(逐檔)」對分岔點的差異挑出 `paths` 對得到的功能(改名的舊路徑也算;讀 git 失敗時回 2,不當成沒改動),改到的是某個情境列的 flow 檔時也挑那個功能,改到共用 flow、截圖素材、驗收設定或門檻卻對不到功能時列出來提醒;同時用 `--case` 而 `--changed` 對不到時照跑指名的;一個功能都對不到時回 2 並印出改到的檔與「補對照表或整套跑」;`--no-perf`、`--no-memory` 時不跑那兩塊,也不查那兩塊要的工具,沒配挑法時回 2;不認得的 `-` 開頭參數回 2 [test:t_android_e2e_by_feature] [test:t_android_e2e_changed_pick] [test:t_android_e2e_memory_by_case] [test:t_android_e2e_args_and_names] [test:t_android_e2e_changed_edges]
+- [S24] 當 judge 沒帶 `--no-record`、讀到的 `steps.json` 有 `selection` 欄時,應拒絕寫紀錄並回 2;帶 `--no-record` 時只判選到的情境、不寫整套的 `runs` [test:t_android_e2e_by_feature]
+- [S25] 當每一次範本腳本跑完(整套或按功能、過或沒過、被中斷)時,它應在 `.lumos/artifacts/android/history.jsonl` 加一行,含時間、run-id、HEAD、工作目錄有沒有改動、挑法、每一項的結果與證據目錄,judge 擋下沒寫紀錄的那次也記、附原因;`lumos android-e2e history` 照 `--feature`、`--case`、`--last`(正整數)篩出來 [test:t_android_e2e_history] [test:t_android_e2e_history_edges] [test:t_android_e2e_history_by_case]
+- [S26] 當對照表寫了整套清單沒有的 flow 或畫面、門檻檔沒有的記憶體情境、或 `macrobench_cmd` 沒帶 `{{TEST}}` 卻有情境列了效能測試方法時,`macrobench --check-config` 應回 2 並點名;效能測試方法名不合規則(開頭 #、含空白、含 $)、功能 `paths` 不是正規寫法(`//`、`/./`、只寫 `.` 或 `./.`、反斜線、萬用字元;app_dirs、flows 同一套規則)、`macrobench_cmd` 不是字串、或 `stability_scenarios` 的輪數超過 10000 也回 2;原本只有一個記憶體情境的 `stability` 寫法照舊合格 [test:t_android_e2e_features_config] [test:t_android_e2e_args_and_names]
+- [S27] 當按功能跑時開跑時與判讀時工作目錄都乾淨、HEAD 沒換,judge 應把每個挑到的情境寫進這一版查證紀錄的 `feature_runs`(result 照那個情境自己的項目算;略過情境本來有的效能或記憶體時 complete 是 false;一個會判的項目都沒有時 result 是 unjudged、complete 是 false),不碰 `runs`;同一版已有完整、判完的結果時,這次沒判完、或不完整但通過的不蓋掉它,這次沒過一律蓋掉,重判比既有那筆更早結束的那次也不蓋掉;一個情境沒判完時整次結果也是沒判完、回 1;之後整套跑寫 `runs` 時不蓋掉 `feature_runs` [test:t_android_e2e_by_feature] [test:t_android_e2e_feature_record_trust] [test:t_android_e2e_feature_record_rules]
+- [S28] 當整套跑時,記憶體應收 `stability` 段本身加 `stability_scenarios` 每個情境、各判一次(段本身不帶 shell 殘留的情境變數);用了替身收集腳本(`LUMOS_E2E_COLLECT`)時不寫查證紀錄;多個效能測試方法時每跑完一個就收一次結果 [test:t_android_e2e_memory_by_case] [test:t_android_e2e_perf_per_method] [test:t_android_e2e_full_scenarios_judged]
 
 ## 審計修正紀錄
 
 - r1(2026-10-25,6 席:正確性、守衛、邊界、整合、通才、架構對齊):55 條/blocking 32/CI 在 PR 不跑、放行太便宜、APK 沒綁原始碼、紀錄格式與讀法、指紋定義、範本腳本介面、判定分流、接線清單;Enzo 另裁 AI 可放行但要通知、第一版只擋本機推送;55 條全折。
 - r2(2026-10-25,6 席同上鏡頭、全新代理):59 條/blocking 33/回退指錯檔、指紋選檔設定與 `e2e` 段雜湊、分岔點算法與 CI、判不清改成擋、驗收中途換版與髒樹範圍、終端答 n、只有放行的紀錄、AI 放行通知落點、RETIRE-IF 資料來源、只有 e2e 段的設定檔、對照表句子正本、鎖殘留與原子寫入;折 58 條、放行 1 條(舊版 lumos 沒有這道判定時不另加版本探測,見 r2-intake.md)。
+- 2026-10-26 先加〈只跑某一塊〉(--only 按大類挑),同日 Enzo 說粒度要到功能與使用情境,改寫成〈按功能與使用情境跑〉與 S22–S27,--only 那版沒推就改掉。新設計動到設定格式與收集腳本,spec-gate 判計劃風險高;Enzo 說「直接開工」,沒另開設計審,實作走代碼審、開發完在實驗室實跑。
+- 代碼審 code-e2e-by-feature r1(2026-10-26,7 席:正確性、資源、邊界、合約、通才、資安、架構對齊):43 條/blocking 6/按功能跑「不寫紀錄」的說法與實作相反、測試沒守住分岔點與記憶體情境、--changed 漏挑新目錄與 flow 檔、開跑時髒卻記成這一版驗過、總表另起寫法、整套跑漏了記憶體情境;43 條全折,補 S28。
+- 代碼審 code-e2e-by-feature r2(2026-10-26,7 席同上):30 條/blocking 7/效能方法名收了 $ 被 sh 展開成別支、不蓋掉完整結果的條件把真失敗也蓋掉、沒有會判項目時三處說法矛盾、紀錄前提與分岔點與整套各判一次沒有測試守住,另有 --changed 邊角、替身收集腳本與殘留情境變數、總表按情境;30 條全折。卷證 governance/review-reports/code-e2e-by-feature/。
 - 卷證:governance/review-reports/android端到端驗收/(r1-intake.md、r2-intake.md 有逐條重現與去向)
 
 ## 回退
