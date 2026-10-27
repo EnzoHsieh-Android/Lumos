@@ -21281,13 +21281,150 @@ def t_android_e2e_coverage_doctor_line():
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         root = _e2eg_proj(td, vault=True)
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(body="流程見 .maestro/login.yaml 與 .maestro/other.yaml")})
         r = _e2e_run(root, "doctor", env=_e2eg_env())
         check("e2e coverage S5:沒有缺口→doctor 不印那一行", "功能對照表有" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-300:])
         _e2eg_commit(root, {"app/src/main/Z.kt": "z\n"})
         r = _e2e_run(root, "doctor", env=_e2eg_env())
-        check("e2e coverage S5:有缺口→doctor 印三個數字與指令", "功能對照表有 1 支程式檔沒歸屬、0 個功能沒有會判的情境、0 份驗收素材沒人用"
+        check("e2e coverage S5:有缺口→doctor 印數字與指令(有知識圖譜時多一段情境沒有筆記提到)",
+              "功能對照表有 1 支程式檔沒歸屬、0 個功能沒有會判的情境、0 份驗收素材沒人用、0 個情境沒有筆記提到"
               in r.stdout + r.stderr and "lumos android-e2e coverage" in r.stdout + r.stderr, (r.stdout + r.stderr)[-400:])
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(body="流程見 .maestro/login.yaml")})
+        r = _e2e_run(root, "doctor", env=_e2eg_env())
+        check("e2e 情境筆記 S4:有情境沒有筆記提到→doctor 那一行算進去", "、1 個情境沒有筆記提到" in r.stdout + r.stderr, (r.stdout + r.stderr)[-400:])
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n"})
+        line = _load_lumos()._e2e_coverage_line(root) or ""
+        check("e2e 情境筆記 S4:沒有知識圖譜→doctor 那一行照印、不加情境那一段",
+              line.startswith("功能對照表有 1 支程式檔沒歸屬") and "情境沒有筆記提到" not in line, line)
     print("  ✓ t_android_e2e_coverage_doctor_line")
+
+
+# 情境與筆記對照(單源 Projects/端到端情境對照筆記_計劃)
+_E2ENOTE_REL = "docs/t-knowledge/Systems/登入.md"
+
+
+def _e2enote(keys=(), body=""):
+    """一篇 Systems 筆記:keys 是摘要裡的 KEY 行,body 是正文。"""
+    summ = "".join(f"  {k}\n" for k in keys) or "  WHY:測試用 [出處:t] [因:t]\n"
+    return f"---\ntype: system\nsummary: |\n{summ}---\n# 登入\n\n{body}\n"
+
+
+def _e2enote_proj(td, platforms=None):
+    """有知識圖譜、ui 平台用 maestro 的假專案:login.yaml 的 name 是 login_ok,other.yaml 的 name 是 other_x。"""
+    import json
+    root = _e2eg_proj(td, vault=True)
+    cfg = {"platforms": platforms if platforms is not None else {"ui": {"profile": "maestro", "root": "."}}}
+    _e2eg_commit(root, {".maestro/login.yaml": "appId: com.lab\nname: login_ok\n---\n- launchApp\n",
+                        ".maestro/other.yaml": "appId: com.lab\nname: other_x\n---\n- launchApp\n",
+                        ".lumos/config.json": json.dumps(cfg)})
+    return root
+
+
+def t_android_e2e_coverage_cases_without_notes():
+    """S1:列了流程檔的情境,流程檔沒被任何筆記的合約行綁到、全文也沒提到路徑 → 列「功能.情境」;
+    有一支被綁到或被提到就不列;沒有流程檔的情境不列。判準來源是計劃〈報告多列什麼〉第 4 項。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td)
+        r, d = _e2ecov_run(root, "--json")
+        check("★對照★ 沒有任何筆記時兩個情境都列", r.returncode == 0 and d and d["cases_without_notes"] == ["login.ok", "other.x"], str((r.stderr[-300:], d)))
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 登入成功看得到首頁 [test:ui:login_ok]"])})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:合約行綁到流程檔的 name → 那個情境不列", d and d["cases_without_notes"] == ["other.x"], str(d))
+        _e2eg_commit(root, {"docs/t-knowledge/Systems/其他.md": _e2enote(body="這個情境的流程是 `.maestro/other.yaml`")})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:正文提到流程檔路徑也算 → 不列", d and d["cases_without_notes"] == [], str(d))
+        r, _d = _e2ecov_run(root)
+        check("e2e 情境筆記 S1:文字版印這一項", "沒有筆記提到的情境(合約行沒綁、正文也沒寫它的流程檔):無" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td)
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★DEBT★ 登入成功看得到首頁 [test:ui:login_ok]"], body="login_ok")})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:只有合約行(★INVARIANT★)的綁定算,★DEBT★ 行與正文寫名字不算", d and "login.ok" in d["cases_without_notes"], str(d))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td, platforms={"ui": {"profile": "maestro", "root": "."}, "py": {"profile": "python", "root": "."}})
+        (root / ".lumos" / "config.json").write_text('{"default_platform": "ui", "platforms": {"ui": {"profile": "maestro", "root": "."}, '
+                                                     '"py": {"profile": "python", "root": "."}}}', encoding="utf-8")
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 同名的單元測試 [test:py:login_ok]"])})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:綁到別的平台(不是 maestro)的同名測試不算", d and "login.ok" in d["cases_without_notes"]
+              and d["note_flows_not_in_cases"] == [], str((r.stderr[-300:], d)))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td, vault=True, e2e={"macrobench": True, "macrobench_cmd": "true {{TEST}}",
+                                               "features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}},
+                                                            "bench": {"paths": ["app/src/main/B.kt"], "cases": {"s": {"macrobench": ["Bench#scroll"]}}}}},
+                           top={"results_dirs": ["r"]})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:沒有流程檔的情境不列", r.returncode == 0 and d and d["cases_without_notes"] == ["login.ok"], str((r.stderr[-300:], d)))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td)
+        _e2e_set_cfg(root, lambda c: c["e2e"]["features"]["login"]["cases"]["ok"].update(flows=[".maestro/login.yaml", ".maestro/other.yaml"]),
+                     commit="兩支流程")
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 登入成功看得到首頁 [test:ui:login_ok]"])})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:情境列兩支流程檔、只有一支被綁到 → 不列(另一個只列 other 的情境照列)",
+              d and d["cases_without_notes"] == ["other.x"], str((r.stderr[-300:], d)))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td)
+        _e2e_set_cfg(root, lambda c: (c["e2e"].update(flows=["./.maestro/login.yaml", "./.maestro/other.yaml"]),
+                                      c["e2e"]["features"]["login"]["cases"]["ok"].update(flows=["./.maestro/login.yaml"]),
+                                      c["e2e"]["features"]["other"]["cases"]["x"].update(flows=["./.maestro/other.yaml"])), commit="./ 開頭")
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 登入成功看得到首頁 [test:ui:login_ok]"], body="流程是 .maestro/other.yaml")})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S1:對照表寫 ./ 開頭時,綁定與正文提到(沒有 ./)都對得上", r.returncode == 0 and d and d["cases_without_notes"] == []
+              and d["note_flows_not_in_cases"] == [], str((r.stderr[-300:], d)))
+    for body, want in (("流程是 old/.maestro/login.yaml", True), ("流程是 .maestro/login.yaml.bak", True), ("流程是 x.maestro/login.yaml", True), ("流程是 .maestro/login.yaml/x", True),
+                       ("流程是 `./.maestro/login.yaml`", False), ("流程是.maestro/login.yaml。", False), ("(.maestro/login.yaml)", False)):
+        with tempfile.TemporaryDirectory() as td:
+            root = _e2enote_proj(td)
+            _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(body=body)})
+            r, d = _e2ecov_run(root, "--json")
+            check(f"e2e 情境筆記 S1:正文寫「{body}」→ login.ok {'照列' if want else '不列'}(路徑前後要是邊界)",
+                  d and ("login.ok" in d["cases_without_notes"]) is want, str((r.stderr[-300:], d)))
+    print("  ✓ t_android_e2e_coverage_cases_without_notes")
+
+
+def t_android_e2e_coverage_note_flows_not_in_cases():
+    """S2:合約行綁到 maestro 平台的名字對不到任何情境列的流程檔 → 列出筆記與名字;對照表 e2e.flows 有列但沒有情境用到的也算。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td)
+        _e2eg_commit(root, {".maestro/spare.yaml": "appId: com.lab\nname: spare_flow\n---\n- launchApp\n",
+                            _E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 登入成功看得到首頁 [test:ui:login_ok]",
+                                                    "KEY:★INVARIANT★ 已經刪掉的流程 [test:ui:ghost_flow]",
+                                                    "KEY:★INVARIANT★ 備用流程沒有情境用 [test:ui:spare_flow]"])})
+        _e2e_set_cfg(root, lambda c: c["e2e"].update(flows=c["e2e"]["flows"] + [".maestro/spare.yaml"]), commit="spare")
+        r, d = _e2ecov_run(root, "--json")
+        got = d["note_flows_not_in_cases"] if d else None
+        check("e2e 情境筆記 S2:綁了對不到情境的名字列出筆記與名字;對得到的(login_ok)不列",
+              got == [{"note": "Systems/登入.md", "name": "ghost_flow"}, {"note": "Systems/登入.md", "name": "spare_flow"}], str((r.stderr[-300:], d)))
+        r, _d = _e2ecov_run(root)
+        check("e2e 情境筆記 S2:文字版印名字與筆記", "ghost_flow(Systems/登入.md)" in r.stdout, r.stdout)
+    print("  ✓ t_android_e2e_coverage_note_flows_not_in_cases")
+
+
+def t_android_e2e_coverage_notes_absent():
+    """S3:沒有知識圖譜 → 文字版一行說明、--json 兩項是 null;平台設定讀不懂 → 只看正文提到路徑並印原因;都回 0。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S3:沒有知識圖譜→兩項是 null、回 0", r.returncode == 0 and d and d["cases_without_notes"] is None
+              and d["note_flows_not_in_cases"] is None, str((r.stderr[-300:], d)))
+        r, _d = _e2ecov_run(root)
+        check("e2e 情境筆記 S3:沒有知識圖譜→文字版一行說明", r.returncode == 0 and "沒有知識圖譜,不看" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2enote_proj(td, platforms={"ui": {"profile": "no-such-profile"}})
+        _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 登入成功看得到首頁 [test:ui:login_ok]"],
+                                                   body="流程是 .maestro/other.yaml")})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e 情境筆記 S3:平台設定讀不懂→綁定不算、正文提到照算,回 0", r.returncode == 0 and d and d["cases_without_notes"] == ["login.ok"]
+              and d["note_flows_not_in_cases"] == [], str((r.stderr[-300:], d)))
+        r, _d = _e2ecov_run(root)
+        check("e2e 情境筆記 S3:平台設定讀不懂→印原因", "平台設定讀不懂" in r.stdout and "no-such-profile" in r.stdout, r.stdout)
+    print("  ✓ t_android_e2e_coverage_notes_absent")
 
 
 def t_android_e2e_coverage_worktree_cfg():

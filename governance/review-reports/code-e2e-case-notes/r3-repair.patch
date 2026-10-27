@@ -1,0 +1,77 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/端到端情境對照筆記_計劃.md b/docs/lumos-toolchain-knowledge/Projects/端到端情境對照筆記_計劃.md
+index cdf5699eb15f9a2741d7004dc29c6c94149f492c..83027df3167f39b2d64737e7855a2f417a5ed3d9 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/端到端情境對照筆記_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/端到端情境對照筆記_計劃.md
+@@ -65,13 +65,16 @@ RETIRE-IF: 上線三個月後,KDS 與 macrobench-lab 兩個專案的這兩項一
+ - [S3] 當專案沒有知識圖譜時,報告應在文字版印一行說明、`--json` 這兩項給 `null`,平台設定讀不懂時只看正文提到路徑並印原因,都回 0 [test:t_android_e2e_coverage_notes_absent]
+ - [S4] 當有沒有筆記的情境時,`lumos doctor` AE 段那一行應多印「N 個情境沒有筆記提到」;沒有知識圖譜時不加這一段 [test:t_android_e2e_coverage_doctor_line]
+ - [S5] 當在 macrobench-lab 跑涵蓋報告時,應列出還沒寫筆記的情境,補一行合約後再跑應不再列 [manual:實驗室副本上跑一次、補一行合約再跑一次,兩次輸出貼進驗證紀錄]
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-27,單審+架構對齊兩席):5 條/blocking 3/流程檔名字改走既有的測試名索引、正文提到路徑加邊界、補多流程與 `./` 開頭的測試;卷證在 governance/review-reports/code-e2e-case-notes/。
+   - 例:情境 `login.ok` 列 `login.yaml`、`other.yaml` 兩支,只有 login 被合約綁到 → 不列;把判斷改成每一支都要有筆記,測試轉紅 [test:t_android_e2e_coverage_cases_without_notes]。
+   - 例:筆記正文寫 `old/.maestro/login.yaml` → `login.ok` 照列;寫 `` `./.maestro/login.yaml` `` → 不列 [test:t_android_e2e_coverage_cases_without_notes]。
+ 
++- r2(2026-10-27,單審+架構對齊兩席):2 條/blocking 0/折 1 條(路徑後面再接斜線不算提到,照規格補齊結尾邊界)、放行 1 條(圖譜快照不走證據用的 NFC 碰撞檢查);卷證同上。
++  - 例:正文寫 `.maestro/login.yaml/x` → 改前算提到、`login.ok` 不列;改後照列 [test:t_android_e2e_coverage_cases_without_notes]。
++
+ ## 回退
+ 
+ - 兩項與 doctor 那一段是新增的,回退就是撤掉那次提交;不寫任何檔與帳。
+diff --git a/scripts/lumos b/scripts/lumos
+index e331e095f98604f712a502476dfbaf63bd062388..49fb0d93651a521e2070eeacef9a67253b9317ed 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -42212,22 +42212,22 @@ def _e2e_note_refs(root):
+ 
+ def _e2e_note_gaps(root, feats):
+     """情境與筆記對不上的兩種(單源 Projects/端到端情境對照筆記_計劃〈報告多列什麼〉)→ (沒有筆記提到的「功能.情境」,
+     筆記綁了、沒有情境列到的 [{"note", "name"}], 說明清單);沒有知識圖譜時前兩項是 None。"""
+     refs = _e2e_note_refs(root)
+     if refs is None:
+         return None, None, []
+     binds, texts, names, info = refs
+     case_flows = {f"{fn}.{cn}": [_e2e_norm(x) for x in c.get("flows") or []] for fn, v in feats.items() for cn, c in v["cases"].items()}
+     bound = {n for _r, n in binds}
+-    # 正文提到:前後要是邊界(別的路徑的尾巴、多一段副檔名都不算);前面可以多一個 ./;邊界只看英數與路徑符號,中文緊貼照算
+-    pats = {f: re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?" + re.escape(f) + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])")
++    # 正文提到:前後要是邊界(別的路徑的尾巴、多一段副檔名、後面再接一層斜線都不算);前面可以多一個 ./;邊界只看英數與路徑符號,中文緊貼照算
++    pats = {f: re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?" + re.escape(f) + r"(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])")
+             for fl in case_flows.values() for f in fl}
+ 
+     def seen(flow):
+         return bool(names.get(flow, set()) & bound) or any(pats[flow].search(t) for _r, t in texts)
+     no_notes = sorted(k for k, fl in case_flows.items() if fl and not any(seen(f) for f in fl))
+     in_cases = set().union(*(names.get(f, set()) for fl in case_flows.values() for f in fl))
+     stray = [{"note": r, "name": n} for r, n in sorted(set(binds)) if n not in in_cases]
+     return no_notes, stray, info
+ 
+ 
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1397d0d5cb342189db282dfab1c12186f78929a4..3292aa04b0f8867ea0ed1acbb20213d8e64907be 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21368,21 +21368,21 @@ def t_android_e2e_coverage_cases_without_notes():
+               d and d["cases_without_notes"] == ["other.x"], str((r.stderr[-300:], d)))
+     with tempfile.TemporaryDirectory() as td:
+         root = _e2enote_proj(td)
+         _e2e_set_cfg(root, lambda c: (c["e2e"].update(flows=["./.maestro/login.yaml", "./.maestro/other.yaml"]),
+                                       c["e2e"]["features"]["login"]["cases"]["ok"].update(flows=["./.maestro/login.yaml"]),
+                                       c["e2e"]["features"]["other"]["cases"]["x"].update(flows=["./.maestro/other.yaml"])), commit="./ 開頭")
+         _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(["KEY:★INVARIANT★ 登入成功看得到首頁 [test:ui:login_ok]"], body="流程是 .maestro/other.yaml")})
+         r, d = _e2ecov_run(root, "--json")
+         check("e2e 情境筆記 S1:對照表寫 ./ 開頭時,綁定與正文提到(沒有 ./)都對得上", r.returncode == 0 and d and d["cases_without_notes"] == []
+               and d["note_flows_not_in_cases"] == [], str((r.stderr[-300:], d)))
+-    for body, want in (("流程是 old/.maestro/login.yaml", True), ("流程是 .maestro/login.yaml.bak", True), ("流程是 x.maestro/login.yaml", True),
++    for body, want in (("流程是 old/.maestro/login.yaml", True), ("流程是 .maestro/login.yaml.bak", True), ("流程是 x.maestro/login.yaml", True), ("流程是 .maestro/login.yaml/x", True),
+                        ("流程是 `./.maestro/login.yaml`", False), ("流程是.maestro/login.yaml。", False), ("(.maestro/login.yaml)", False)):
+         with tempfile.TemporaryDirectory() as td:
+             root = _e2enote_proj(td)
+             _e2eg_commit(root, {_E2ENOTE_REL: _e2enote(body=body)})
+             r, d = _e2ecov_run(root, "--json")
+             check(f"e2e 情境筆記 S1:正文寫「{body}」→ login.ok {'照列' if want else '不列'}(路徑前後要是邊界)",
+                   d and ("login.ok" in d["cases_without_notes"]) is want, str((r.stderr[-300:], d)))
+     print("  ✓ t_android_e2e_coverage_cases_without_notes")
+ 
+ 

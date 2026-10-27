@@ -71,10 +71,13 @@ summary: |-
   WHY:推送前判定的各段用例外(_E2eGateStop)帶結果提早結束,不照安全證據閘「階段回傳 done、呼叫端判非空」的寫法 [出處:2026-10-27 代碼審 code-e2e-gate r2 架構對齊席] [因:判定有十來個會提早結束的點(出口、沒用 E2E、不要求、放行、各種判不清),分散在被拆小的階段函式裡,逐層回傳要每層多一個判斷;例外只在這一道內部用,入口 _e2e_gate_evaluate 一律接住轉成結果,對外介面跟鄰居一樣是結果 dict] [不選:逐層回傳 done(每個階段函式多一層判斷,拆函式時降的複雜度又加回去)] [代價:讀程式的人要知道 _e2e_gate_done 不會回來]
   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
   WHY:lumos android-e2e coverage 只報告功能對照表的缺口、不擋,範圍判斷與逐檔歸屬跟推送前判定共用同一支(_e2e_scope_hit、_e2e_file_owner),沒歸屬的程式檔按所在資料夾彙總、共用程式另列支數;設定讀工作目錄,補完對照表不用先提交就看得到 [出處:[[Projects/端到端驗收對照表涵蓋報告_計劃]] 2026-10-27 Enzo 照「只報告、預設按目錄分組」開工] [因:缺歸屬的後果推送前檢查已經會擋(要求整套跑);事先列出來是讓人在推送前補對照表] [不選:擋推送(重複擋同一件事);從程式的 import 猜歸屬(猜錯比列出來更糟)] [test:t_android_e2e_coverage_unowned] [test:t_android_e2e_coverage_doctor_line] [test:t_android_e2e_coverage_same_as_gate] [test:t_android_e2e_coverage_worktree_cfg]
+  WHY:涵蓋報告另列情境與筆記對不上的兩種(列了流程檔卻沒有筆記綁到或正文提到的情境、筆記合約綁了卻沒有情境列到的流程),只報告不擋;綁定照合約測試綁定那一套解、只認 maestro 平台,正文寫流程檔路徑也算提到 [出處:[[Projects/端到端情境對照筆記_計劃]] 2026-10-27 Enzo 回「我覺得可以補」] [因:對照表管跑什麼、筆記管為什麼要成立,兩邊靠同一支流程檔對上,沒有機器看會悄悄分岔] [不選:擋推送(合約照不確定就不標的鐵則,不能逼每個情境都有合約);只認合約行(README 教不確定就寫在正文)] [test:t_android_e2e_coverage_cases_without_notes] [test:t_android_e2e_coverage_note_flows_not_in_cases] [test:t_android_e2e_coverage_notes_absent]
+  WHY:涵蓋報告的情境與筆記對照用 load_vault_safe 讀整個圖譜、不沿用 doctor 手上的 env,流程檔名字從 maestro 平台的測試名索引(_platform_name_files)反查 [出處:[[Projects/端到端情境對照筆記_計劃]] 2026-10-27 代碼審架構對齊席] [因:要全文找流程檔路徑,load_vault 的筆記物件不留正文;名字索引跟殘留索引共用一支,測試檔篩選改了兩邊一起變] [不選:自己讀流程檔的 name:(第二套走訪);doctor 傳 env 進來(筆記物件沒有正文,還是要重讀)]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
   - "[[Verification/2026-10-26_AI自己選分塊跑法探針]]"
+  - "[[Verification/端到端情境對照筆記_實驗室實測]]"
 ---
 # android-e2e-acceptance
 

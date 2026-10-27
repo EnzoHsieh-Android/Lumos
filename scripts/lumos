@@ -26381,6 +26381,22 @@ def _residual_scan(env, notes=None):
     return out
 
 
+def _platform_name_files(p):
+    """一個平台(load_platforms 的一格)的測試名 → 所在檔(絕對路徑集合)。走 _walk_test_files(同一份測試檔篩選)、
+    先剝註解(_strip_test_comments,跟 discover_test_methods 同一套)再比對 profile 的方法正規式;
+    殘留索引(_residual_test_files)與涵蓋報告的情境對照(_e2e_note_refs)共用這一支。"""
+    where = {}
+    strip = p["profile"].get("comment_strip", "c-style")
+    _titled = p["profile"].get("name_filter") in _TITLED_FILTERS
+    for fpath, txt in _walk_test_files(p["root"], p["profile"], with_path=True):
+        for m in p["profile"]["method_re"].finditer(_strip_test_comments(txt, strip)):
+            _nm = _test_name_of_match(m, unescape=_titled,   # 取名同 discover_test_methods
+                                      edge_strict=p["profile"].get("name_filter") == "regex_tail")
+            if _nm is not None:
+                where.setdefault(_nm, set()).add(fpath)
+    return where
+
+
 def _residual_test_files(repo_root, inv_bodies):
     """合約行綁的測試名 → {合約內文: 測試所在的檔(repo 相對路徑,排序去重)}。pitfalls 把這些檔整檔算命中(代碼審 r2 G1)。
     走 _walk_test_files(同一份測試檔篩選)、先剝註解(_strip_test_comments,跟 discover_test_methods 同一套)再比對 profile 的方法正規式;
@@ -26403,16 +26419,7 @@ def _residual_test_files(repo_root, inv_bodies):
             if not p:
                 continue
             if plat not in cache:
-                where = {}
-                strip = p["profile"].get("comment_strip", "c-style")
-                for fpath, txt in _walk_test_files(p["root"], p["profile"], with_path=True):
-                    _titled = p["profile"].get("name_filter") in _TITLED_FILTERS
-                    for m in p["profile"]["method_re"].finditer(_strip_test_comments(txt, strip)):
-                        _nm = _test_name_of_match(m, unescape=_titled,   # 取名同 discover_test_methods
-                                                  edge_strict=p["profile"].get("name_filter") == "regex_tail")
-                        if _nm is not None:
-                            where.setdefault(_nm, set()).add(fpath)
-                cache[plat] = where
+                cache[plat] = _platform_name_files(p)
             for fpath in cache[plat].get(name, ()):
                 try:
                     files.add(Path(fpath).resolve().relative_to(rr).as_posix())
@@ -42161,9 +42168,73 @@ def _e2e_coverage_report(root, e2e, files):
                       if not any(c.get(k) for c in v["cases"].values() for k in ("flows", "visual", "stability")))
     used_flows = {_e2e_norm(x) for v in feats.values() for c in v["cases"].values() for x in c.get("flows") or []}
     used_screens = {x for v in feats.values() for c in v["cases"].values() for x in c.get("visual") or []}
+    no_notes, stray, info = _e2e_note_gaps(root, feats)
     return {"unowned": unowned, "shared": shared, "features_without_judged_cases": no_cases,
             "unused_flows": [f for f in e2e.get("flows") or [] if _e2e_norm(f) not in used_flows],
-            "unused_screens": [s for s in e2e.get("visual") or [] if s not in used_screens]}
+            "unused_screens": [s for s in e2e.get("visual") or [] if s not in used_screens],
+            "cases_without_notes": no_notes, "note_flows_not_in_cases": stray, "notes_info": info}
+
+
+def _e2e_note_refs(root):
+    """圖譜裡跟流程檔有關的三樣 → (合約行綁到 maestro 平台的 [(筆記, 名字)], [(筆記, 全文)], {流程檔 repo 相對路徑: 它的名字集合},
+    說明清單);沒有知識圖譜 → None。綁定照合約測試綁定那一套解(extract_contracts、resolve_test_refs、load_platforms),
+    流程檔的名字從 maestro 平台的測試名索引反查(_platform_name_files,跟殘留索引同一支);
+    整個圖譜用 load_vault_safe 讀:要全文找流程檔路徑,load_vault 的筆記物件不留正文。"""
+    vault = find_vault(Path(root)) if root is not None else None   # 沒給專案根(只算對照表本身的呼叫)等同沒有知識圖譜
+    if vault is None:
+        return None
+    snap, info = load_vault_safe(vault), []
+    if snap["errors"] or snap["unreadable"]:
+        info.append(f"圖譜有 {len(snap['errors']) + len(snap['unreadable'])} 處讀不到,情境與筆記的對照可能多列")
+    try:
+        pd = load_platforms(Path(root))
+        split, default = (pd["platforms"] if pd["multiplatform"] else {}), pd["default_platform"]
+        mplats = {p for p, v in pd["platforms"].items() if v.get("profile_name") == "maestro"}
+    except (ValueError, OSError) as e:
+        split, default, mplats = {}, None, set()
+        info.append(f"平台設定讀不懂({e}),只看筆記正文有沒有提到流程檔路徑")
+    binds = []
+    for rel, text in snap["texts"] if mplats else []:
+        for inv in extract_contracts(_note_from_text(rel, text))[0]:
+            try:
+                binds += [(rel, name) for plat, name in resolve_test_refs(inv, split, default) if plat in mplats]
+            except ValueError:
+                continue   # 平台前綴寫錯的合約由 doctor 的合約檢查報,這裡不重報
+    return binds, snap["texts"], _e2e_flow_name_index(root, pd, mplats) if mplats else {}, info
+
+
+def _e2e_flow_name_index(root, pd, mplats):
+    """maestro 平台的測試名索引(_platform_name_files)反過來 → {流程檔 repo 相對路徑: 它的名字集合};平台根在專案外的檔不收。"""
+    out, rr = {}, Path(root).resolve()
+    for plat in sorted(mplats):
+        for name, files in _platform_name_files(pd["platforms"][plat]).items():
+            for f in files:
+                try:
+                    out.setdefault(Path(f).resolve().relative_to(rr).as_posix(), set()).add(name)
+                except ValueError:
+                    continue   # 平台根在專案外:對照表的路徑對不到它
+    return out
+
+
+def _e2e_note_gaps(root, feats):
+    """情境與筆記對不上的兩種(單源 Projects/端到端情境對照筆記_計劃〈報告多列什麼〉)→ (沒有筆記提到的「功能.情境」,
+    筆記綁了、沒有情境列到的 [{"note", "name"}], 說明清單);沒有知識圖譜時前兩項是 None。"""
+    refs = _e2e_note_refs(root)
+    if refs is None:
+        return None, None, []
+    binds, texts, names, info = refs
+    case_flows = {f"{fn}.{cn}": [_e2e_norm(x) for x in c.get("flows") or []] for fn, v in feats.items() for cn, c in v["cases"].items()}
+    bound = {n for _r, n in binds}
+    # 正文提到:前後要是邊界(別的路徑的尾巴、多一段副檔名、後面再接一層斜線都不算);前面可以多一個 ./;邊界只看英數與路徑符號,中文緊貼照算
+    pats = {f: re.compile(r"(?<![A-Za-z0-9_./-])(?:\./)?" + re.escape(f) + r"(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])")
+            for fl in case_flows.values() for f in fl}
+
+    def seen(flow):
+        return bool(names.get(flow, set()) & bound) or any(pats[flow].search(t) for _r, t in texts)
+    no_notes = sorted(k for k, fl in case_flows.items() if fl and not any(seen(f) for f in fl))
+    in_cases = set().union(*(names.get(f, set()) for fl in case_flows.values() for f in fl))
+    stray = [{"note": r, "name": n} for r, n in sorted(set(binds)) if n not in in_cases]
+    return no_notes, stray, info
 
 
 def _e2e_coverage_input(root, changed, timeout=120):
@@ -42185,7 +42256,7 @@ def _e2e_coverage_input(root, changed, timeout=120):
 
 
 def _e2e_coverage_cmd(root, changed=False, files_mode=False, as_json=False):
-    """lumos android-e2e coverage:功能對照表的三種缺口,只讀、不擋。rc 0=印得出報告(不論有沒有缺口);2=設定讀不懂、不合格、沒有 features。"""
+    """lumos android-e2e coverage:功能對照表的三種缺口與情境、筆記對不上的兩種,只讀、不擋。rc 0=印得出報告(不論有沒有缺口);2=設定讀不懂、不合格、沒有 features。"""
     import json
     root = Path(root).resolve()
     e2e, files, note, err = _e2e_coverage_input(root, changed)
@@ -42209,6 +42280,14 @@ def _e2e_coverage_cmd(root, changed=False, files_mode=False, as_json=False):
     print(f"  沒有會判情境的功能(情境都只列效能,按功能判時等於沒驗):{_e2e_cov_names(rep['features_without_judged_cases'])}")
     print(f"  沒人用的流程檔(按功能跑永遠跑不到):{_e2e_cov_names(rep['unused_flows'])}")
     print(f"  沒人用的截圖畫面:{_e2e_cov_names(rep['unused_screens'])}")
+    if rep["cases_without_notes"] is None:
+        print("  情境與筆記的對照:沒有知識圖譜,不看")
+    else:
+        for m in rep["notes_info"]:
+            print(f"  說明:{_esc_clean(m, 300)}")
+        print(f"  沒有筆記提到的情境(合約行沒綁、正文也沒寫它的流程檔):{_e2e_cov_names(rep['cases_without_notes'])}")
+        stray = [f"{x['name']}({x['note']})" for x in rep["note_flows_not_in_cases"]]
+        print(f"  筆記綁了、對照表的情境沒列的流程:{_e2e_cov_names(stray)}")
     if rep["unowned"] and not files_mode:
         print("  逐檔列:lumos android-e2e coverage --files;補進對照表的 features.<功能>.paths,或大家共用的列進 shared_paths")
     return 0
@@ -42220,7 +42299,7 @@ def _e2e_cov_names(xs):
 
 
 def _e2e_coverage_line(root):
-    """doctor 的 AE 段那一行:三個數字都是 0、或算不出來(10 秒上限)→ None。"""
+    """doctor 的 AE 段那一行:數字都是 0、或算不出來(10 秒上限)→ None;有知識圖譜才多印「幾個情境沒有筆記提到」。"""
     try:
         e2e, files, _note, err = _e2e_coverage_input(Path(root), False, timeout=10)
         if err:
@@ -42231,9 +42310,11 @@ def _e2e_coverage_line(root):
     n1 = sum(u["unowned"] for u in rep["unowned"])
     n2 = len(rep["features_without_judged_cases"])
     n3 = len(rep["unused_flows"]) + len(rep["unused_screens"])
-    if not (n1 or n2 or n3):
+    n4 = rep["cases_without_notes"]
+    if not (n1 or n2 or n3 or n4):
         return None
-    return f"功能對照表有 {n1} 支程式檔沒歸屬、{n2} 個功能沒有會判的情境、{n3} 份驗收素材沒人用;看:lumos android-e2e coverage"
+    tail = "" if n4 is None else f"、{len(n4)} 個情境沒有筆記提到"
+    return f"功能對照表有 {n1} 支程式檔沒歸屬、{n2} 個功能沒有會判的情境、{n3} 份驗收素材沒人用{tail};看:lumos android-e2e coverage"
 
 
 def _e2e_check_cmd(root, at_sha=None, branch=None, range_start=None):
