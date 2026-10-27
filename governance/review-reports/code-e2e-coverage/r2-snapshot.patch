@@ -1,0 +1,897 @@
+diff --git a/README.en.md b/README.en.md
+index 66c31bc3..c38e7cf3 100644
+--- a/README.en.md
++++ b/README.en.md
+@@ -353,45 +353,45 @@ When one of the first four (the memory ones) fails, it jumps straight to L3: the
+ - Verified on one tablet and one lab app only; the numbers do not represent a production app, and tools may behave differently on other brands.
+ - It reminds, it does not block pushes: millisecond numbers drift with the phone and its temperature, so they are not suited to a hard gate.
+ - Memory snapshots are off by default: a project must first write down who agreed, and on which day, to run on test data only; snapshots stay on the local machine, each later run of the collection script deletes those older than 7 days, nothing is deleted if it is not run again, and you delete them yourself when done.
+ - The allowed margin for "counts as slower" is provisional (10% by default, with a 1 ms floor) and will be reset from repeated real-device runs.
+ - Speed and memory are now part of the "Device acceptance" section below; running `lumos macrobench` on its own still only warns.
+ 
+ **To start:** after running Macrobenchmark in an Android project, run `lumos macrobench` (add `--update-baseline` the first time to save a baseline); when it reports a problem, ask the AI to follow the `lumos-android-evidence` skill layer by layer. Configuration and standards are described in [Macrobenchmark acceptance limits](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) and [memory and stability checks](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md) (Chinese).
+ 
+ </details>
+ 
+-### Device acceptance: by feature while developing, the whole app before pushing (end-to-end acceptance)
++### Device acceptance: by feature while developing, a record for this version before pushing (end-to-end acceptance)
+ 
+ **One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record; pushing is blocked for a version without a passing record, and running each feature your changes touch by feature also counts.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail.
+ 
+ ```
+ sh scripts/templates/android-e2e-run.sh --changed                  # while developing: run the use cases of the features your changes touch
+ sh scripts/templates/android-e2e-run.sh --feature player           # every use case of this feature
+ sh scripts/templates/android-e2e-run.sh --case player.open-close   # just this use case (add --no-perf or --no-memory to skip those parts)
+ sh scripts/templates/android-e2e-run.sh                            # the whole app, writes the verification record
+ lumos android-e2e history                                          # the last 20 checks (filter with --feature, --case; --last for more)
+ lumos android-e2e check                                            # before pushing, see whether the push check would block and why
+ ```
+ 
+ <p align="center">
+   <a href="assets/android-acceptance-en.svg">
+-    <img src="assets/android-acceptance-en.svg" alt="Android device acceptance: by feature or use case while developing (--changed, --feature, --case), the whole app before pushing; a preflight with adb and git (stops without touching the app if it fails), then build and install (Gradle, adb), UI flows (Maestro), screenshots (visual-check.sh), memory and stability (dumpsys, Perfetto), and speed (Macrobenchmark, warns only); lumos android-e2e judge decides and writes a verification record. If it passed, commit the record and push; if UI flows or screenshots failed, read the report and diff image; if memory failed or a slowdown warning appeared, go to the layered check above, where L0 first decides whether there is an anomaly; a failed build, a missing tool or an interruption is a setup problem to fix and rerun" width="760">
++    <img src="assets/android-acceptance-en.svg" alt="Android device acceptance: by feature or use case while developing (--changed, --feature, --case; --no-perf and --no-memory skip speed or memory), or the whole app; a preflight with adb and git (stops without touching the app if it fails), then build and install (Gradle, adb), UI flows (Maestro), screenshots (visual-check.sh), memory and stability (dumpsys, Perfetto), and speed (Macrobenchmark, warns only); lumos android-e2e judge decides and writes a verification record. If it passed, commit the record and push; the push check accepts the whole app, or every changed feature run by feature; if UI flows or screenshots failed, read the report and diff image; if memory failed or a slowdown warning appeared, go to the layered check above, where L0 first decides whether there is an anomaly; a failed build, a missing tool or an interruption is a setup problem to fix and rerun" width="760">
+   </a>
+ </p>
+ 
+ <details>
+ <summary>How to set it up, how to read the result, experiment results and limits</summary>
+ 
+ **Setup.** Add an `e2e` section to the project's `.lumos/macrobench.json`: which folders count as app code, how to build, where the APK is, which flow files to run; screenshots, memory and stability, and speed each run only when switched on. For screenshots, install [maestro-visual-toolkit](https://github.com/EnzoHsieh-Android/maestro-visual-toolkit) into the project and record baselines first. `lumos update` copies the script into the project's `scripts/templates/`. Details in [Android end-to-end acceptance](docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md) (Chinese).
+ 
+-**Feature map.** Add `features` to the `e2e` section: each feature lists the code paths it owns (`--changed` uses them to find features from changed files) and its use cases; each use case lists its flow files, screenshot screens, speed test methods and memory scenarios. Write `{{TEST}}` in the speed command and it is replaced with the chosen test method; memory scenarios live in the top-level `stability_scenarios`, one screen-cycling driver each. A map that names a flow or scenario that does not exist is rejected when the configuration is checked. Code that everyone shares (networking, shared components, `Application`) goes into `shared_paths` in the `e2e` section: changing it before a push requires a whole-app run (the paths must sit under `app_dirs`; add an outside module to `app_dirs` first).
++**Feature map.** Add `features` to the `e2e` section: each feature lists the code paths it owns (`--changed` uses them to find features from changed files) and its use cases; each use case lists its flow files, screenshot screens, speed test methods and memory scenarios. Write `{{TEST}}` in the speed command and it is replaced with the chosen test method; memory scenarios live in the top-level `stability_scenarios`, one screen-cycling driver each. A map that names a flow or scenario that does not exist is rejected when the configuration is checked. Code that everyone shares (networking, shared components, `Application`) goes into `shared_paths` in the `e2e` section: changing it before a push requires a whole-app run (the paths must sit under `app_dirs`; add an outside module to `app_dirs` first). To see whether the map is complete, run `lumos android-e2e coverage`: it lists app code files that belong to no feature (grouped by folder; `--files` lists each file, `--changed` looks only at what you changed), features whose use cases list only speed tests, and flow files and screenshot screens no use case uses, plus how many shared files sit under `shared_paths`; it reads the configuration in your working directory, so you can rerun it right after editing the map without committing first; it only reports and blocks nothing.
+ 
+ **Two ways to split a run.** While developing you can run only part of it, sliced two ways that stack:
+ 
+ | Slice | How | What runs |
+ |---|---|---|
+ | By feature | `--changed` (from changed files), `--feature <feature>`, `--case <feature.case>`; join several with commas | Only the chosen use cases' flows, screenshots, speed methods and memory scenarios |
+ | By check | Add `--no-perf`, `--no-memory` (only together with a choice above; a whole-app run always runs everything) | Skips speed or memory and stability; those use cases are recorded as incomplete |
+ 
+ For example `--case list.scroll --no-perf --no-memory` runs only that use case's UI flow and screenshots, with a result in under a minute. A use case that lists only speed, or whose checks were all skipped, has nothing that passes or fails, so it is recorded as not judged and returns 1 rather than counting as passed.
+ 
+diff --git a/README.md b/README.md
+index cacc14b1..7dd6e21d 100644
+--- a/README.md
++++ b/README.md
+@@ -353,45 +353,45 @@ Android App 改完之後，Lumos 在真的手機或平板上確認兩件事：**
+ - 只在一台平板、一個實驗用 App 上驗過，數字不代表正式 App；換了手機品牌，工具的行為可能不同。
+ - 只提醒、不擋推送：毫秒數字會隨手機和溫度浮動，不適合當成硬性關卡。
+ - 記憶體快照預設不錄：專案要先寫下「誰、在哪一天同意只用測試資料跑」，才會錄；快照只放在本機，之後每次跑收集腳本會順手刪掉超過 7 天的，不再跑就不會自動刪，用完要自己刪。
+ - 判斷「算不算變慢」的容許誤差目前是暫定值（預設 10%，另有 1 毫秒的下限），之後會用多次實機重跑的資料重訂。
+ - 效能、記憶體已經接進下面的「實機驗收」；單獨跑 `lumos macrobench` 時照舊只提醒。
+ 
+ **怎麼開始用：** 在 Android 專案跑完 Macrobenchmark 後執行 `lumos macrobench`（第一次加 `--update-baseline` 存成基準）；它報出問題時，請 AI 照 `lumos-android-evidence` skill 一層一層查。設定檔與標準的寫法見 [Macrobenchmark 驗收門檻](docs/lumos-toolchain-knowledge/Projects/Macrobenchmark驗收門檻_計劃.md) 與 [記憶體與穩定性驗收](docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md)。
+ 
+ </details>
+ 
+-### 實機驗收：開發中按功能跑，推之前整套跑（端到端驗收）
++### 實機驗收：開發中按功能跑，推送前要有這一版的紀錄（端到端驗收）
+ 
+ **同一支腳本，開發中只跑你正在做的那個功能、甚至只跑它的一個使用情境；推之前把 App 從頭到尾驗一遍，結果寫成一份查證紀錄；推送前會擋沒驗過的版本，這次改到的功能都按功能跑過、通過也算。** 每個使用情境可以有四樣東西：照 Maestro（一種用文字寫好「點哪裡、輸入什麼」的畫面自動操作工具）的流程檔實際點一遍、拍畫面跟人看過的基準圖比、跑效能測試、反覆開關畫面看記憶體與穩定性。每次跑都先建置並安裝 App，跑完由 `lumos android-e2e judge` 判過不過。
+ 
+ ```
+ sh scripts/templates/android-e2e-run.sh --changed                  # 開發中：看這次改到的檔，只跑對應功能的使用情境
+ sh scripts/templates/android-e2e-run.sh --feature player           # 只跑這個功能的全部使用情境
+ sh scripts/templates/android-e2e-run.sh --case player.open-close   # 只跑這一個使用情境（加 --no-perf、--no-memory 可略過效能或記憶體）
+ sh scripts/templates/android-e2e-run.sh                            # 整套跑一次，寫查證紀錄
+ lumos android-e2e history                                          # 看最近 20 次檢測的紀錄（可加 --feature、--case 篩，--last 改筆數）
+ lumos android-e2e check                                            # 推之前先看推送前檢查會不會擋、為什麼
+ ```
+ 
+ <p align="center">
+   <a href="assets/android-acceptance-zh.svg">
+-    <img src="assets/android-acceptance-zh.svg" alt="Android 實機驗收：開發中用 --changed、--feature、--case 按功能或使用情境跑，推之前整套跑；先用 adb、git 做開跑前檢查（不過就停下、不碰 App），再依序建置並安裝（Gradle、adb）、UI 流程（Maestro）、截圖比對（visual-check.sh）、記憶體與穩定性（dumpsys、Perfetto）、效能（Macrobenchmark，只提醒）；lumos android-e2e judge 判過不過並寫查證紀錄。通過就提交紀錄再推送；UI 或截圖沒過就看報告與差異圖，記憶體沒過或印了變慢的提醒，就接到上一張圖的分層查證，L0 先判有沒有異常再往下；建置失敗、缺工具、中斷是環境問題，修好再跑" width="760">
++    <img src="assets/android-acceptance-zh.svg" alt="Android 實機驗收：開發中用 --changed、--feature、--case 按功能或使用情境跑（--no-perf、--no-memory 可略過效能或記憶體），或整套跑；先用 adb、git 做開跑前檢查（不過就停下、不碰 App），再依序建置並安裝（Gradle、adb）、UI 流程（Maestro）、截圖比對（visual-check.sh）、記憶體與穩定性（dumpsys、Perfetto）、效能（Macrobenchmark，只提醒）；lumos android-e2e judge 判過不過並寫查證紀錄。通過就提交紀錄再推送，推送前檢查認整套、或改到的功能都按功能跑過；UI 或截圖沒過就看報告與差異圖，記憶體沒過或印了變慢的提醒，就接到上一張圖的分層查證，L0 先判有沒有異常再往下；建置失敗、缺工具、中斷是環境問題，修好再跑" width="760">
+   </a>
+ </p>
+ 
+ <details>
+ <summary>看怎麼接、結果怎麼讀、實驗結果與限制</summary>
+ 
+ **怎麼接。** 在專案的 `.lumos/macrobench.json` 加一段 `e2e`：哪些目錄算 App 程式、怎麼建置、APK 在哪、要跑哪幾支流程檔；截圖比對、記憶體與穩定性、效能三塊各自要開才會跑。截圖比對用 [maestro-visual-toolkit](https://github.com/EnzoHsieh-Android/maestro-visual-toolkit) 先裝進專案、錄好基準圖。`lumos update` 會把驗收腳本裝進專案的 `scripts/templates/`。寫法見 [Android 端到端驗收](docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md)。
+ 
+-**功能對照表。** 在 `e2e` 段加 `features`：每個功能寫它管哪些程式路徑（`--changed` 靠這個從改到的檔找出功能）、有哪些使用情境，每個情境列它的流程檔、截圖畫面、效能測試方法、記憶體情境。效能指令裡寫 `{{TEST}}`，會換成挑到的測試方法；記憶體情境寫在最外層的 `stability_scenarios`，一個情境一個開關畫面的驅動。對照表寫了不存在的流程檔或情境，檢查設定時就擋下。大家共用的程式（網路層、共用元件、`Application`）列進 `e2e` 段的 `shared_paths`：推送前改到它們就要整套跑（要在 `app_dirs` 底下；寫在外面的模組要先加進 `app_dirs`）。
++**功能對照表。** 在 `e2e` 段加 `features`：每個功能寫它管哪些程式路徑（`--changed` 靠這個從改到的檔找出功能）、有哪些使用情境，每個情境列它的流程檔、截圖畫面、效能測試方法、記憶體情境。效能指令裡寫 `{{TEST}}`，會換成挑到的測試方法；記憶體情境寫在最外層的 `stability_scenarios`，一個情境一個開關畫面的驅動。對照表寫了不存在的流程檔或情境，檢查設定時就擋下。大家共用的程式（網路層、共用元件、`Application`）列進 `e2e` 段的 `shared_paths`：推送前改到它們就要整套跑（要在 `app_dirs` 底下；寫在外面的模組要先加進 `app_dirs`）。對照表寫得夠不夠，跑 `lumos android-e2e coverage` 看：列出沒歸屬到任何功能的程式檔（按資料夾彙總，`--files` 逐檔列，`--changed` 只看這次改到的）、情境都只列效能的功能、沒有情境用到的流程檔與截圖畫面，另印落在 `shared_paths` 的共用程式幾支；讀的是工作目錄的設定，補完對照表不用先提交就能再跑一次確認；只報告、不擋。
+ 
+ **兩種分塊。** 開發中可以只跑一部分，分兩個方向切，兩個方向可以疊著用：
+ 
+ | 切法 | 怎麼叫 | 跑什麼 |
+ |---|---|---|
+ | 按功能 | `--changed`（看改到的檔）、`--feature <功能>`、`--case <功能.情境>`；多個用逗號連起來 | 只跑挑到的情境列的流程檔、截圖、效能方法、記憶體情境 |
+ | 按檢測 | 再加 `--no-perf`、`--no-memory`（只能配上面的挑法；整套跑一定全部跑） | 略過效能或記憶體與穩定性，那幾個情境的紀錄標「不完整」 |
+ 
+ 例如 `--case list.scroll --no-perf --no-memory` 只跑那個情境的 UI 流程與截圖，幾十秒就有結果。一個情境如果只列了效能、或該跑的都被略過了，沒有會判過不過的項目，就記成「沒判完」、回 1，不會當成通過。
+ 
+diff --git a/assets/android-acceptance-en.svg b/assets/android-acceptance-en.svg
+index 5488f5f3..6255aaf5 100644
+--- a/assets/android-acceptance-en.svg
++++ b/assets/android-acceptance-en.svg
+@@ -1,17 +1,17 @@
+-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="962" viewBox="0 0 760 962" role="img" aria-labelledby="title desc">
+-<title id="title">Android: check by feature, then the whole app.</title>
+-<desc id="desc">Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case), or as a whole-app check before pushing. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. Five steps then run in order, each with its tool: Gradle and adb build and install the app and record its fingerprint; Maestro taps through the flow files, retrying once; visual-check.sh compares screenshots with approved baselines at 99.5 percent; dumpsys and Perfetto watch memory, crashes and StrictMode while a screen opens and closes; Macrobenchmark compares speed with the saved baseline and only warns. lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push; a slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).</desc>
++<svg xmlns="http://www.w3.org/2000/svg" width="760" height="994" viewBox="0 0 760 994" role="img" aria-labelledby="title desc">
++<title id="title">Android: check by feature, push with a record.</title>
++<desc id="desc">Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case; --no-perf and --no-memory skip speed or memory, only together with one of those), or as a whole-app check. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. Five steps then run in order, each with its tool: Gradle and adb build and install the app and record its fingerprint; Maestro taps through the flow files, retrying once; visual-check.sh compares screenshots with approved baselines at 99.5 percent; dumpsys and Perfetto watch memory, crashes and StrictMode while a screen opens and closes; Macrobenchmark compares speed with the saved baseline and only warns. lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push: the push check reads the record from the pushed commit and lets it through when the whole app passed, or when every use case of each feature the changes touch passed by feature; shared code, a file that belongs to no feature, or a changed acceptance configuration needs the whole app. A slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).</desc>
+ <defs>
+   <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#122139"/><stop offset="1" stop-color="#090f1e"/></linearGradient>
+   <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1b2e48"/><stop offset="1" stop-color="#111d31"/></linearGradient>
+   <radialGradient id="halo"><stop stop-color="#73b8d7" stop-opacity=".12"/><stop offset="1" stop-color="#73b8d7" stop-opacity="0"/></radialGradient>
+   <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#718da9" opacity=".15"/></pattern>
+ </defs>
+-<rect x=".5" y=".5" width="759" height="961" rx="20" fill="url(#bg)" stroke="#35465e"/>
+-<rect x="1" y="1" width="758" height="960" rx="20" fill="url(#grid)"/>
++<rect x=".5" y=".5" width="759" height="993" rx="20" fill="url(#bg)" stroke="#35465e"/>
++<rect x="1" y="1" width="758" height="992" rx="20" fill="url(#grid)"/>
+ <ellipse cx="420" cy="190" rx="335" ry="185" fill="url(#halo)"/>
+ <g font-family="Inter, 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif">
+-<text x="34" y="34" font-size="13" fill="#b5c4db" text-anchor="start" font-weight="650">ANDROID / DEVICE ACCEPTANCE</text><text x="34" y="76" font-size="30" fill="#edf3ff" text-anchor="start" font-weight="650">Android: check by feature, then the whole app.</text><path d="M34 99H726" fill="none" stroke="#283d58" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"></path><text x="726" y="34" font-size="13" fill="#b5c4db" text-anchor="end" font-weight="650">LUMOS</text>
+-<text x="38" y="128" font-size="17" fill="#b5c4db" text-anchor="start" font-weight="450">By feature or use case while developing, whole app before push; every run is logged.</text><g data-kind="android-e2e-invoke"><rect x="38" y="146" width="684" height="70" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="172" font-size="17" fill="#75e5bd" text-anchor="start" font-weight="650">How to run</text><rect x="58" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="72" cy="195" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="84" y="201" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">Whole app (push)</text><rect x="222" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="236" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="248" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--changed</text><rect x="386" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="400" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="412" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--feature</text><rect x="550" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="564" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="576" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--case</text></g><g transform="translate(0,86)"><g data-kind="android-e2e-preflight"><rect x="38" y="150" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="177" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">Preflight</text><text x="58" y="199" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">Device, tools (whole app: clean tree); fails → stop</text><rect x="488" y="164" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="179" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="185" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">adb · git</text></g><path d="M380 208V222" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="374,217 380,226 386,217" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="1"><rect x="38" y="230" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="231" width="4" height="56" rx="2" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="58" y="255" font-size="15" fill="#8bbfff" text-anchor="start" font-weight="700">1</text><text x="86" y="255" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Build and install</text><text x="86" y="278" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Build, install, record its fingerprint · must pass</text><rect x="488" y="244" width="220" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="502" cy="259" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="514" y="265" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">Gradle · adb</text></g><path d="M380 288V300" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,295 380,304 386,295" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="2"><rect x="38" y="304" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="305" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="329" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">2</text><text x="86" y="329" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">UI flows</text><text x="86" y="352" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Tap through each flow file, one retry · must pass</text><rect x="488" y="318" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="333" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="339" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">Maestro</text></g><path d="M380 362V374" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,369 380,378 386,369" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="3"><rect x="38" y="378" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="379" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="403" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">3</text><text x="86" y="403" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Screenshots</text><text x="86" y="426" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Compare with approved baselines (99.5%) · must pass</text><rect x="488" y="392" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="407" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="413" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">visual-check.sh</text></g><path d="M380 436V448" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,443 380,452 386,443" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="4"><rect x="38" y="452" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="453" width="4" height="56" rx="2" fill="#c5adff" stroke="none" stroke-width="1"/><text x="58" y="477" font-size="15" fill="#c5adff" text-anchor="start" font-weight="700">4</text><text x="86" y="477" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Memory &amp; stability</text><text x="86" y="500" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Open/close: leaks, crashes, StrictMode · must pass</text><rect x="488" y="466" width="220" height="31" rx="15" fill="#14243a" stroke="#c5adff" stroke-width="0.7"/><circle cx="502" cy="481" r="3" fill="#c5adff" stroke="none" stroke-width="1"/><text x="514" y="487" font-size="14" fill="#c5adff" text-anchor="start" font-weight="600">dumpsys · Perfetto</text></g><path d="M380 510V522" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,517 380,526 386,517" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="5"><rect x="38" y="526" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="527" width="4" height="56" rx="2" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="58" y="551" font-size="15" fill="#f3d18e" text-anchor="start" font-weight="700">5</text><text x="86" y="551" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Speed</text><text x="86" y="574" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Compare with the saved baseline · warns only</text><rect x="488" y="540" width="220" height="31" rx="15" fill="#14243a" stroke="#f3d18e" stroke-width="0.7"/><circle cx="502" cy="555" r="3" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="514" y="561" font-size="14" fill="#f3d18e" text-anchor="start" font-weight="600">Macrobenchmark</text></g><path d="M380 584V596" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,591 380,600 386,591" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-judge"><rect x="38" y="600" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="627" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">Judge and log the run</text><text x="58" y="649" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">Once committed, results go into this version&#x27;s record</text><rect x="488" y="614" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="629" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="635" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">lumos android-e2e judge</text></g><path d="M220 658V676" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="214,671 220,680 226,671" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M540 658V676" fill="none" stroke="#ffb4aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="534,671 540,680 546,671" fill="none" stroke="#ffb4aa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-outcome" data-outcome="pass"><rect x="38" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="685" width="4" height="102" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="716" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">Passed</text><text x="58" y="744" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">Whole app: commit the record, push</text><text x="58" y="770" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">By feature: a clean run is recorded too</text></g><g data-kind="android-e2e-outcome" data-outcome="dig"><rect x="392" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="393" y="685" width="4" height="102" rx="2" fill="#ffb4aa" stroke="none" stroke-width="1"/><text x="412" y="716" font-size="20" fill="#ffb4aa" text-anchor="start" font-weight="650">Failed, or a slowdown warning</text><text x="412" y="744" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">UI or screenshots: see the report, diff</text><text x="412" y="770" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Memory or slower: layered check, L0 first</text></g><text x="380" y="822" font-size="15" fill="#b5c4db" text-anchor="middle" font-weight="450">Build failed, a tool is missing, or it was interrupted: fix the setup and rerun</text><text x="380" y="848" font-size="15" fill="#b5c4db" text-anchor="middle" font-weight="450">Every run goes into the local check log; with uncommitted changes, only there</text></g>
++<text x="34" y="34" font-size="13" fill="#b5c4db" text-anchor="start" font-weight="650">ANDROID / DEVICE ACCEPTANCE</text><text x="34" y="76" font-size="30" fill="#edf3ff" text-anchor="start" font-weight="650">Android: check by feature, push with a record.</text><path d="M34 99H726" fill="none" stroke="#283d58" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"></path><text x="726" y="34" font-size="13" fill="#b5c4db" text-anchor="end" font-weight="650">LUMOS</text>
++<text x="38" y="128" font-size="17" fill="#b5c4db" text-anchor="start" font-weight="450">By feature while developing; the push needs a passing record, whole app or by feature.</text><g data-kind="android-e2e-invoke"><rect x="38" y="146" width="684" height="102" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="172" font-size="17" fill="#75e5bd" text-anchor="start" font-weight="650">How to run</text><rect x="58" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="72" cy="195" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="84" y="201" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">Whole app</text><rect x="222" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="236" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="248" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--changed</text><rect x="386" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="400" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="412" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--feature</text><rect x="550" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="564" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="576" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--case</text><text x="58" y="233" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">By check (only with a choice above)</text><rect x="386" y="214" width="154" height="31" rx="15" fill="#14243a" stroke="#f3d18e" stroke-width="0.7"/><circle cx="400" cy="229" r="3" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="412" y="235" font-size="14" fill="#f3d18e" text-anchor="start" font-weight="600">--no-perf</text><rect x="550" y="214" width="154" height="31" rx="15" fill="#14243a" stroke="#c5adff" stroke-width="0.7"/><circle cx="564" cy="229" r="3" fill="#c5adff" stroke="none" stroke-width="1"/><text x="576" y="235" font-size="14" fill="#c5adff" text-anchor="start" font-weight="600">--no-memory</text></g><g transform="translate(0,118)"><g data-kind="android-e2e-preflight"><rect x="38" y="150" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="177" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">Preflight</text><text x="58" y="199" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">Device, tools (whole app: clean tree); fails → stop</text><rect x="488" y="164" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="179" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="185" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">adb · git</text></g><path d="M380 208V222" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="374,217 380,226 386,217" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="1"><rect x="38" y="230" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="231" width="4" height="56" rx="2" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="58" y="255" font-size="15" fill="#8bbfff" text-anchor="start" font-weight="700">1</text><text x="86" y="255" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Build and install</text><text x="86" y="278" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Build, install, record its fingerprint · must pass</text><rect x="488" y="244" width="220" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="502" cy="259" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="514" y="265" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">Gradle · adb</text></g><path d="M380 288V300" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,295 380,304 386,295" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="2"><rect x="38" y="304" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="305" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="329" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">2</text><text x="86" y="329" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">UI flows</text><text x="86" y="352" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Tap through each flow file, one retry · must pass</text><rect x="488" y="318" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="333" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="339" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">Maestro</text></g><path d="M380 362V374" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,369 380,378 386,369" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="3"><rect x="38" y="378" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="379" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="403" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">3</text><text x="86" y="403" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Screenshots</text><text x="86" y="426" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Compare with approved baselines (99.5%) · must pass</text><rect x="488" y="392" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="407" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="413" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">visual-check.sh</text></g><path d="M380 436V448" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,443 380,452 386,443" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="4"><rect x="38" y="452" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="453" width="4" height="56" rx="2" fill="#c5adff" stroke="none" stroke-width="1"/><text x="58" y="477" font-size="15" fill="#c5adff" text-anchor="start" font-weight="700">4</text><text x="86" y="477" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Memory &amp; stability</text><text x="86" y="500" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Open/close: leaks, crashes, StrictMode · must pass</text><rect x="488" y="466" width="220" height="31" rx="15" fill="#14243a" stroke="#c5adff" stroke-width="0.7"/><circle cx="502" cy="481" r="3" fill="#c5adff" stroke="none" stroke-width="1"/><text x="514" y="487" font-size="14" fill="#c5adff" text-anchor="start" font-weight="600">dumpsys · Perfetto</text></g><path d="M380 510V522" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,517 380,526 386,517" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="5"><rect x="38" y="526" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="527" width="4" height="56" rx="2" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="58" y="551" font-size="15" fill="#f3d18e" text-anchor="start" font-weight="700">5</text><text x="86" y="551" font-size="19" fill="#edf3ff" text-anchor="start" font-weight="600">Speed</text><text x="86" y="574" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Compare with the saved baseline · warns only</text><rect x="488" y="540" width="220" height="31" rx="15" fill="#14243a" stroke="#f3d18e" stroke-width="0.7"/><circle cx="502" cy="555" r="3" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="514" y="561" font-size="14" fill="#f3d18e" text-anchor="start" font-weight="600">Macrobenchmark</text></g><path d="M380 584V596" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,591 380,600 386,591" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-judge"><rect x="38" y="600" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="627" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">Judge and log the run</text><text x="58" y="649" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">Once committed, results go into this version&#x27;s record</text><rect x="488" y="614" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="629" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="635" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">lumos android-e2e judge</text></g><path d="M220 658V676" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="214,671 220,680 226,671" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M540 658V676" fill="none" stroke="#ffb4aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="534,671 540,680 546,671" fill="none" stroke="#ffb4aa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-outcome" data-outcome="pass"><rect x="38" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="685" width="4" height="102" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="716" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">Passed</text><text x="58" y="744" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">Commit the record, then push</text><text x="58" y="770" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Push check: whole app or each changed feature</text></g><g data-kind="android-e2e-outcome" data-outcome="dig"><rect x="392" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="393" y="685" width="4" height="102" rx="2" fill="#ffb4aa" stroke="none" stroke-width="1"/><text x="412" y="716" font-size="20" fill="#ffb4aa" text-anchor="start" font-weight="650">Failed, or a slowdown warning</text><text x="412" y="744" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">UI or screenshots: see the report, diff</text><text x="412" y="770" font-size="14" fill="#b5c4db" text-anchor="start" font-weight="450">Memory or slower: layered check, L0 first</text></g><text x="380" y="822" font-size="15" fill="#b5c4db" text-anchor="middle" font-weight="450">Build failed, a tool is missing, or it was interrupted: fix the setup and rerun</text><text x="380" y="848" font-size="15" fill="#b5c4db" text-anchor="middle" font-weight="450">Every run goes into the local check log; with uncommitted changes, only there</text></g>
+ </g>
+ </svg>
+diff --git a/assets/android-acceptance-zh.svg b/assets/android-acceptance-zh.svg
+index 7e98f64d..2e2e84f3 100644
+--- a/assets/android-acceptance-zh.svg
++++ b/assets/android-acceptance-zh.svg
+@@ -1,17 +1,17 @@
+-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="962" viewBox="0 0 760 962" role="img" aria-labelledby="title desc">
+-<title id="title">Android：開發中按功能驗，推之前整套驗</title>
+-<desc id="desc">Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case),推之前整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。接著依序五步，各自寫出工具：Gradle 與 adb 建置安裝並記下檔案指紋；Maestro 照流程檔點一遍、沒過重跑一次；visual-check.sh 拿截圖跟人看過的基準圖比、門檻 99.5%；dumpsys 與 Perfetto 在反覆開關畫面時看漏記憶體、閃退與違規；Macrobenchmark 跟存好的基準比效能，只提醒。lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送，效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。</desc>
++<svg xmlns="http://www.w3.org/2000/svg" width="760" height="994" viewBox="0 0 760 994" role="img" aria-labelledby="title desc">
++<title id="title">Android：開發中按功能驗，推送前要有紀錄</title>
++<desc id="desc">Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case;--no-perf、--no-memory 略過效能或記憶體,只配這三種挑法),或整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。接著依序五步，各自寫出工具：Gradle 與 adb 建置安裝並記下檔案指紋；Maestro 照流程檔點一遍、沒過重跑一次；visual-check.sh 拿截圖跟人看過的基準圖比、門檻 99.5%；dumpsys 與 Perfetto 在反覆開關畫面時看漏記憶體、閃退與違規；Macrobenchmark 跟存好的基準比效能，只提醒。lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送：推送前檢查從被推送的提交讀紀錄，整套通過、或改到的每個功能的情境都按功能通過就放行，改到共用程式、對不到功能的檔或改了驗收設定就要整套；效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。</desc>
+ <defs>
+   <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#122139"/><stop offset="1" stop-color="#090f1e"/></linearGradient>
+   <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1b2e48"/><stop offset="1" stop-color="#111d31"/></linearGradient>
+   <radialGradient id="halo"><stop stop-color="#73b8d7" stop-opacity=".12"/><stop offset="1" stop-color="#73b8d7" stop-opacity="0"/></radialGradient>
+   <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#718da9" opacity=".15"/></pattern>
+ </defs>
+-<rect x=".5" y=".5" width="759" height="961" rx="20" fill="url(#bg)" stroke="#35465e"/>
+-<rect x="1" y="1" width="758" height="960" rx="20" fill="url(#grid)"/>
++<rect x=".5" y=".5" width="759" height="993" rx="20" fill="url(#bg)" stroke="#35465e"/>
++<rect x="1" y="1" width="758" height="992" rx="20" fill="url(#grid)"/>
+ <ellipse cx="420" cy="190" rx="335" ry="185" fill="url(#halo)"/>
+ <g font-family="Inter, 'PingFang TC', 'Noto Sans TC', 'Microsoft JhengHei', system-ui, sans-serif">
+-<text x="34" y="34" font-size="13" fill="#b5c4db" text-anchor="start" font-weight="650">ANDROID / DEVICE ACCEPTANCE</text><text x="34" y="76" font-size="30" fill="#edf3ff" text-anchor="start" font-weight="650">Android：開發中按功能驗，推之前整套驗</text><path d="M34 99H726" fill="none" stroke="#283d58" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"></path><text x="726" y="34" font-size="13" fill="#b5c4db" text-anchor="end" font-weight="650">LUMOS</text>
+-<text x="38" y="128" font-size="20" fill="#b5c4db" text-anchor="start" font-weight="450">開發中按功能或使用情境跑，推之前整套跑；每一次都留檢測紀錄。</text><g data-kind="android-e2e-invoke"><rect x="38" y="146" width="684" height="70" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="172" font-size="17" fill="#75e5bd" text-anchor="start" font-weight="650">怎麼叫</text><rect x="58" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="72" cy="195" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="84" y="201" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">整套（推送前）</text><rect x="222" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="236" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="248" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--changed</text><rect x="386" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="400" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="412" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--feature 功能</text><rect x="550" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="564" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="576" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--case 情境</text></g><g transform="translate(0,86)"><g data-kind="android-e2e-preflight"><rect x="38" y="150" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="177" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">開跑前檢查</text><text x="58" y="199" font-size="16" fill="#b5c4db" text-anchor="start" font-weight="450">裝置、工具（整套跑還要工作目錄乾淨）；不過就停下</text><rect x="488" y="164" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="179" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="185" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">adb · git</text></g><path d="M380 208V222" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="374,217 380,226 386,217" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="1"><rect x="38" y="230" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="231" width="4" height="56" rx="2" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="58" y="255" font-size="15" fill="#8bbfff" text-anchor="start" font-weight="700">1</text><text x="86" y="255" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">建置並安裝</text><text x="86" y="278" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">建 APK、裝上平板、記下檔案指紋；必須過</text><rect x="488" y="244" width="220" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="502" cy="259" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="514" y="265" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">Gradle · adb</text></g><path d="M380 288V300" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,295 380,304 386,295" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="2"><rect x="38" y="304" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="305" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="329" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">2</text><text x="86" y="329" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">UI 流程</text><text x="86" y="352" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">照流程檔點一遍，沒過重跑一次；必須過</text><rect x="488" y="318" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="333" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="339" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">Maestro</text></g><path d="M380 362V374" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,369 380,378 386,369" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="3"><rect x="38" y="378" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="379" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="403" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">3</text><text x="86" y="403" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">截圖比對</text><text x="86" y="426" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">跟人看過的基準圖比，門檻 99.5%；必須過</text><rect x="488" y="392" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="407" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="413" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">visual-check.sh</text></g><path d="M380 436V448" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,443 380,452 386,443" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="4"><rect x="38" y="452" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="453" width="4" height="56" rx="2" fill="#c5adff" stroke="none" stroke-width="1"/><text x="58" y="477" font-size="15" fill="#c5adff" text-anchor="start" font-weight="700">4</text><text x="86" y="477" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">記憶體與穩定性</text><text x="86" y="500" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">反覆開關畫面：漏記憶體、閃退、違規；必須過</text><rect x="488" y="466" width="220" height="31" rx="15" fill="#14243a" stroke="#c5adff" stroke-width="0.7"/><circle cx="502" cy="481" r="3" fill="#c5adff" stroke="none" stroke-width="1"/><text x="514" y="487" font-size="14" fill="#c5adff" text-anchor="start" font-weight="600">dumpsys · Perfetto</text></g><path d="M380 510V522" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,517 380,526 386,517" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="5"><rect x="38" y="526" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="527" width="4" height="56" rx="2" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="58" y="551" font-size="15" fill="#f3d18e" text-anchor="start" font-weight="700">5</text><text x="86" y="551" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">效能</text><text x="86" y="574" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">跟存好的基準比；只提醒</text><rect x="488" y="540" width="220" height="31" rx="15" fill="#14243a" stroke="#f3d18e" stroke-width="0.7"/><circle cx="502" cy="555" r="3" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="514" y="561" font-size="14" fill="#f3d18e" text-anchor="start" font-weight="600">Macrobenchmark</text></g><path d="M380 584V596" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,591 380,600 386,591" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-judge"><rect x="38" y="600" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="627" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">判過不過、記檢測紀錄</text><text x="58" y="649" font-size="16" fill="#b5c4db" text-anchor="start" font-weight="450">已提交時，結果寫進這一版的查證紀錄</text><rect x="488" y="614" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="629" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="635" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">lumos android-e2e judge</text></g><path d="M220 658V676" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="214,671 220,680 226,671" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M540 658V676" fill="none" stroke="#ffb4aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="534,671 540,680 546,671" fill="none" stroke="#ffb4aa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-outcome" data-outcome="pass"><rect x="38" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="685" width="4" height="102" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="716" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">通過</text><text x="58" y="744" font-size="16" fill="#b5c4db" text-anchor="start" font-weight="450">整套跑：提交查證紀錄，再推送</text><text x="58" y="770" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">按功能跑：從頭到尾都乾淨也記進紀錄</text></g><g data-kind="android-e2e-outcome" data-outcome="dig"><rect x="392" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="393" y="685" width="4" height="102" rx="2" fill="#ffb4aa" stroke="none" stroke-width="1"/><text x="412" y="716" font-size="20" fill="#ffb4aa" text-anchor="start" font-weight="650">沒過，或印了變慢的提醒</text><text x="412" y="744" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">UI、截圖沒過：看終端印的報告與差異圖</text><text x="412" y="770" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">記憶體沒過或變慢：接上一張圖，L0 先判</text></g><text x="380" y="822" font-size="16" fill="#b5c4db" text-anchor="middle" font-weight="450">建置失敗、缺工具、跑到一半被中斷：是環境的問題，修好再跑</text><text x="380" y="848" font-size="16" fill="#b5c4db" text-anchor="middle" font-weight="450">每一次都記進本機檢測總表；開跑時有沒提交的改動就只記總表</text></g>
++<text x="34" y="34" font-size="13" fill="#b5c4db" text-anchor="start" font-weight="650">ANDROID / DEVICE ACCEPTANCE</text><text x="34" y="76" font-size="30" fill="#edf3ff" text-anchor="start" font-weight="650">Android：開發中按功能驗，推送前要有紀錄</text><path d="M34 99H726" fill="none" stroke="#283d58" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"></path><text x="726" y="34" font-size="13" fill="#b5c4db" text-anchor="end" font-weight="650">LUMOS</text>
++<text x="38" y="128" font-size="20" fill="#b5c4db" text-anchor="start" font-weight="450">開發中按功能跑；推送前要有這一版通過的紀錄，整套或按功能都算。</text><g data-kind="android-e2e-invoke"><rect x="38" y="146" width="684" height="102" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="172" font-size="17" fill="#75e5bd" text-anchor="start" font-weight="650">怎麼叫</text><rect x="58" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="72" cy="195" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="84" y="201" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">整套</text><rect x="222" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="236" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="248" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--changed</text><rect x="386" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="400" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="412" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--feature 功能</text><rect x="550" y="180" width="154" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="564" cy="195" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="576" y="201" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">--case 情境</text><text x="58" y="233" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">按檢測（只配上面的挑法）</text><rect x="386" y="214" width="154" height="31" rx="15" fill="#14243a" stroke="#f3d18e" stroke-width="0.7"/><circle cx="400" cy="229" r="3" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="412" y="235" font-size="14" fill="#f3d18e" text-anchor="start" font-weight="600">--no-perf</text><rect x="550" y="214" width="154" height="31" rx="15" fill="#14243a" stroke="#c5adff" stroke-width="0.7"/><circle cx="564" cy="229" r="3" fill="#c5adff" stroke="none" stroke-width="1"/><text x="576" y="235" font-size="14" fill="#c5adff" text-anchor="start" font-weight="600">--no-memory</text></g><g transform="translate(0,118)"><g data-kind="android-e2e-preflight"><rect x="38" y="150" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="177" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">開跑前檢查</text><text x="58" y="199" font-size="16" fill="#b5c4db" text-anchor="start" font-weight="450">裝置、工具（整套跑還要工作目錄乾淨）；不過就停下</text><rect x="488" y="164" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="179" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="185" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">adb · git</text></g><path d="M380 208V222" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="374,217 380,226 386,217" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="1"><rect x="38" y="230" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="231" width="4" height="56" rx="2" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="58" y="255" font-size="15" fill="#8bbfff" text-anchor="start" font-weight="700">1</text><text x="86" y="255" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">建置並安裝</text><text x="86" y="278" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">建 APK、裝上平板、記下檔案指紋；必須過</text><rect x="488" y="244" width="220" height="31" rx="15" fill="#14243a" stroke="#8bbfff" stroke-width="0.7"/><circle cx="502" cy="259" r="3" fill="#8bbfff" stroke="none" stroke-width="1"/><text x="514" y="265" font-size="14" fill="#8bbfff" text-anchor="start" font-weight="600">Gradle · adb</text></g><path d="M380 288V300" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,295 380,304 386,295" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="2"><rect x="38" y="304" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="305" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="329" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">2</text><text x="86" y="329" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">UI 流程</text><text x="86" y="352" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">照流程檔點一遍，沒過重跑一次；必須過</text><rect x="488" y="318" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="333" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="339" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">Maestro</text></g><path d="M380 362V374" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,369 380,378 386,369" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="3"><rect x="38" y="378" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="379" width="4" height="56" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="403" font-size="15" fill="#75e5bd" text-anchor="start" font-weight="700">3</text><text x="86" y="403" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">截圖比對</text><text x="86" y="426" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">跟人看過的基準圖比，門檻 99.5%；必須過</text><rect x="488" y="392" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="407" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="413" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">visual-check.sh</text></g><path d="M380 436V448" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,443 380,452 386,443" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="4"><rect x="38" y="452" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="453" width="4" height="56" rx="2" fill="#c5adff" stroke="none" stroke-width="1"/><text x="58" y="477" font-size="15" fill="#c5adff" text-anchor="start" font-weight="700">4</text><text x="86" y="477" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">記憶體與穩定性</text><text x="86" y="500" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">反覆開關畫面：漏記憶體、閃退、違規；必須過</text><rect x="488" y="466" width="220" height="31" rx="15" fill="#14243a" stroke="#c5adff" stroke-width="0.7"/><circle cx="502" cy="481" r="3" fill="#c5adff" stroke="none" stroke-width="1"/><text x="514" y="487" font-size="14" fill="#c5adff" text-anchor="start" font-weight="600">dumpsys · Perfetto</text></g><path d="M380 510V522" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,517 380,526 386,517" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-step" data-step="5"><rect x="38" y="526" width="684" height="58" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="527" width="4" height="56" rx="2" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="58" y="551" font-size="15" fill="#f3d18e" text-anchor="start" font-weight="700">5</text><text x="86" y="551" font-size="20" fill="#edf3ff" text-anchor="start" font-weight="600">效能</text><text x="86" y="574" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">跟存好的基準比；只提醒</text><rect x="488" y="540" width="220" height="31" rx="15" fill="#14243a" stroke="#f3d18e" stroke-width="0.7"/><circle cx="502" cy="555" r="3" fill="#f3d18e" stroke="none" stroke-width="1"/><text x="514" y="561" font-size="14" fill="#f3d18e" text-anchor="start" font-weight="600">Macrobenchmark</text></g><path d="M380 584V596" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="374,591 380,600 386,591" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-judge"><rect x="38" y="600" width="684" height="58" rx="14" fill="#14243a" stroke="#344967" stroke-width="1"/><text x="58" y="627" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">判過不過、記檢測紀錄</text><text x="58" y="649" font-size="16" fill="#b5c4db" text-anchor="start" font-weight="450">已提交時，結果寫進這一版的查證紀錄</text><rect x="488" y="614" width="220" height="31" rx="15" fill="#14243a" stroke="#75e5bd" stroke-width="0.7"/><circle cx="502" cy="629" r="3" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="514" y="635" font-size="14" fill="#75e5bd" text-anchor="start" font-weight="600">lumos android-e2e judge</text></g><path d="M220 658V676" fill="none" stroke="#526986" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path><polyline points="214,671 220,680 226,671" fill="none" stroke="#526986" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M540 658V676" fill="none" stroke="#ffb4aa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="6 6"><animate attributeName="stroke-dashoffset" values="0;-40" dur="2s" repeatCount="indefinite"/></path><polyline points="534,671 540,680 546,671" fill="none" stroke="#ffb4aa" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/><g data-kind="android-e2e-outcome" data-outcome="pass"><rect x="38" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="39" y="685" width="4" height="102" rx="2" fill="#75e5bd" stroke="none" stroke-width="1"/><text x="58" y="716" font-size="20" fill="#75e5bd" text-anchor="start" font-weight="650">通過</text><text x="58" y="744" font-size="16" fill="#b5c4db" text-anchor="start" font-weight="450">提交查證紀錄，再推送</text><text x="58" y="770" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">推送前檢查：整套，或改到的功能都跑過</text></g><g data-kind="android-e2e-outcome" data-outcome="dig"><rect x="392" y="684" width="330" height="104" rx="18" fill="url(#panel)" stroke="#304461" stroke-width="1"/><rect x="393" y="685" width="4" height="102" rx="2" fill="#ffb4aa" stroke="none" stroke-width="1"/><text x="412" y="716" font-size="20" fill="#ffb4aa" text-anchor="start" font-weight="650">沒過，或印了變慢的提醒</text><text x="412" y="744" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">UI、截圖沒過：看終端印的報告與差異圖</text><text x="412" y="770" font-size="15" fill="#b5c4db" text-anchor="start" font-weight="450">記憶體沒過或變慢：接上一張圖，L0 先判</text></g><text x="380" y="822" font-size="16" fill="#b5c4db" text-anchor="middle" font-weight="450">建置失敗、缺工具、跑到一半被中斷：是環境的問題，修好再跑</text><text x="380" y="848" font-size="16" fill="#b5c4db" text-anchor="middle" font-weight="450">每一次都記進本機檢測總表；開跑時有沒提交的改動就只記總表</text></g>
+ </g>
+ </svg>
+diff --git a/assets/readme-diagrams/generate.py b/assets/readme-diagrams/generate.py
+index 9066367f..028c31d0 100644
+--- a/assets/readme-diagrams/generate.py
++++ b/assets/readme-diagrams/generate.py
+@@ -525,34 +525,36 @@ def android_scene(en):
+     desc=("Android verification flow. Two inputs: Macrobenchmark results with a recording of each run, and a memory and stability run that opens and closes a screen many times. "
+           "L0 uses lumos macrobench to compare with the saved baseline and the standards people agreed on. Only when it finds a problem does L1 read a Perfetto recording with trace_processor, following Google's official android-profiler skill, to find where the app is stuck; "
+           "L2 uses simpleperf from the Android NDK to point at the function and line; L3 uses Perfetto's heap_profile and java_heap_dump, only after a person agrees to run on test data only. The memory and stability run gathers data with dumpsys, Perfetto, and logcat. "
+           "A dashed shortcut takes failed memory checks from L0 straight to L3. Any layer with nothing wrong is recorded and the check stops there; everything goes into an evidence record that can be rerun and is re-judged by an AI with no background.") if en else (
+           "Android 驗證流程。兩種輸入：Macrobenchmark 的結果（含每次的執行紀錄），以及反覆開關畫面的記憶體與穩定性收集。"
+           "L0 由 lumos macrobench 跟存好的基準比、對照人訂的標準；有問題才到 L1，用 trace_processor 讀 Perfetto 錄下的紀錄，照 Google 官方 android-profiler skill 找出卡在哪；"
+           "L2 用 Android NDK 附的 simpleperf 指到函式與行號；L3 用 Perfetto 附的 heap_profile 與 java_heap_dump 查記憶體，要先有人同意只用測試資料。記憶體與穩定性收集用 dumpsys、Perfetto、logcat 收資料。"
+           "記憶體類的檢查沒過時，虛線從 L0 直接跳到 L3。哪一層沒問題就記下並停在那一層；全部寫進可重跑、並由不知前因的 AI 再判一次的查證紀錄。")
+     return title,746,b,desc
+ 
+-ANDROID_ACCEPTANCE_TITLES={"en":"Android: check by feature, then the whole app.","zh":"Android：開發中按功能驗，推之前整套驗"}   # validate 也用它認圖,改標題只改這裡
++ANDROID_ACCEPTANCE_TITLES={"en":"Android: check by feature, push with a record.","zh":"Android：開發中按功能驗，推送前要有紀錄"}   # validate 也用它認圖,改標題只改這裡
+ 
+ def android_acceptance_scene(en):
+     title=ANDROID_ACCEPTANCE_TITLES["en" if en else "zh"]
+-    b=text(38,128,"By feature or use case while developing, whole app before push; every run is logged." if en else "開發中按功能或使用情境跑，推之前整套跑；每一次都留檢測紀錄。",
++    b=text(38,128,"By feature while developing; the push needs a passing record, whole app or by feature." if en else "開發中按功能跑；推送前要有這一版通過的紀錄，整套或按功能都算。",
+            17 if en else 20,"muted")
+-    # 怎麼叫:四種挑法(整套寫整套的紀錄;其餘按功能,乾淨時按情境記進這一版紀錄)
+-    b+='<g data-kind="android-e2e-invoke">'+rect(38,146,684,70,"#14243a","#344967",14)
++    # 怎麼叫:兩排。按功能(整套或三種挑法)、按檢測(略過效能或記憶體,只配挑法)
++    b+='<g data-kind="android-e2e-invoke">'+rect(38,146,684,102,"#14243a","#344967",14)
+     b+=text(58,172,"How to run" if en else "怎麼叫",17,"green",weight=650)
+-    for k,(lab,c) in enumerate((("Whole app (push)" if en else "整套（推送前）","green"),("--changed","blue"),
++    for k,(lab,c) in enumerate((("Whole app" if en else "整套","green"),("--changed","blue"),
+                                 ("--feature" if en else "--feature 功能","blue"),("--case" if en else "--case 情境","blue"))):
+         b+=badge(58+k*164,180,lab,c,154)
++    b+=text(58,233,"By check (only with a choice above)" if en else "按檢測（只配上面的挑法）",14 if en else 15,"muted")
++    b+=badge(386,214,"--no-perf","gold",154)+badge(550,214,"--no-memory","purple",154)
+     b+='</g>'
+-    b+='<g transform="translate(0,86)">'
++    b+='<g transform="translate(0,118)">'
+     b+='<g data-kind="android-e2e-preflight">'+rect(38,150,684,58,"#14243a","#344967",14)
+     b+=text(58,177,"Preflight" if en else "開跑前檢查",20,"green",weight=650)
+     b+=text(58,199,"Device, tools (whole app: clean tree); fails → stop" if en else "裝置、工具（整套跑還要工作目錄乾淨）；不過就停下",15 if en else 16,"muted")
+     b+=badge(488,164,"adb · git","green",220)+'</g>'
+     b+=path("M380 208V222","line",2)+arrow(380,226,"down")
+     steps=[
+       ("Build and install" if en else "建置並安裝","Build, install, record its fingerprint · must pass" if en else "建 APK、裝上平板、記下檔案指紋；必須過","Gradle · adb","blue"),
+       ("UI flows" if en else "UI 流程","Tap through each flow file, one retry · must pass" if en else "照流程檔點一遍，沒過重跑一次；必須過","Maestro","green"),
+       ("Screenshots" if en else "截圖比對","Compare with approved baselines (99.5%) · must pass" if en else "跟人看過的基準圖比，門檻 99.5%；必須過","visual-check.sh","green"),
+       ("Memory & stability" if en else "記憶體與穩定性","Open/close: leaks, crashes, StrictMode · must pass" if en else "反覆開關畫面：漏記憶體、閃退、違規；必須過","dumpsys · Perfetto","purple"),
+@@ -568,36 +570,36 @@ def android_acceptance_scene(en):
+         b+=badge(488,y+14,tool,c,220)+'</g>'
+         b+=path(f"M380 {y+58}V{y+70}","line",2,"6 6",True)+arrow(380,y+74,"down")
+     b+='<g data-kind="android-e2e-judge">'+rect(38,600,684,58,"#14243a","#344967",14)
+     b+=text(58,627,"Judge and log the run" if en else "判過不過、記檢測紀錄",20,"green",weight=650)
+     b+=text(58,649,"Once committed, results go into this version's record" if en else "已提交時，結果寫進這一版的查證紀錄",15 if en else 16,"muted")
+     b+=badge(488,614,"lumos android-e2e judge","green",220)+'</g>'
+     # 判完分兩條路:通過就提交紀錄推送;有異常就接到分層查證(上一張圖),先判有沒有異常再往下
+     b+=path("M220 658V676","line",2)+arrow(220,680,"down")+path("M540 658V676","coral",2,"6 6",True)+arrow(540,680,"down","coral")
+     b+='<g data-kind="android-e2e-outcome" data-outcome="pass">'+rect(38,684,330,104)+rect(39,685,4,102,C["green"],"none",2)
+     b+=text(58,716,"Passed" if en else "通過",20,"green",weight=650)
+-    b+=text(58,744,"Whole app: commit the record, push" if en else "整套跑：提交查證紀錄，再推送",15 if en else 16,"muted")
+-    b+=text(58,770,"By feature: a clean run is recorded too" if en else "按功能跑：從頭到尾都乾淨也記進紀錄",14 if en else 15,"muted")+'</g>'
++    b+=text(58,744,"Commit the record, then push" if en else "提交查證紀錄，再推送",15 if en else 16,"muted")
++    b+=text(58,770,"Push check: whole app or each changed feature" if en else "推送前檢查：整套，或改到的功能都跑過",14 if en else 15,"muted")+'</g>'
+     b+='<g data-kind="android-e2e-outcome" data-outcome="dig">'+rect(392,684,330,104)+rect(393,685,4,102,C["coral"],"none",2)
+     b+=text(412,716,"Failed, or a slowdown warning" if en else "沒過，或印了變慢的提醒",20,"coral",weight=650)
+     b+=text(412,744,"UI or screenshots: see the report, diff" if en else "UI、截圖沒過：看終端印的報告與差異圖",14 if en else 15,"muted")
+     b+=text(412,770,"Memory or slower: layered check, L0 first" if en else "記憶體沒過或變慢：接上一張圖，L0 先判",14 if en else 15,"muted")+'</g>'
+     b+=text(380,822,"Build failed, a tool is missing, or it was interrupted: fix the setup and rerun" if en else "建置失敗、缺工具、跑到一半被中斷：是環境的問題，修好再跑",15 if en else 16,"muted","middle")
+     b+=text(380,848,"Every run goes into the local check log; with uncommitted changes, only there" if en else "每一次都記進本機檢測總表；開跑時有沒提交的改動就只記總表",15 if en else 16,"muted","middle")
+     b+='</g>'
+-    desc=("Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case), or as a whole-app check before pushing. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. "
++    desc=("Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case; --no-perf and --no-memory skip speed or memory, only together with one of those), or as a whole-app check. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. "
+           "Five steps then run in order, each with its tool: Gradle and adb build and install the app and record its fingerprint; Maestro taps through the flow files, retrying once; visual-check.sh compares screenshots with approved baselines at 99.5 percent; dumpsys and Perfetto watch memory, crashes and StrictMode while a screen opens and closes; Macrobenchmark compares speed with the saved baseline and only warns. "
+-          "lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push; a slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).") if en else (
+-          "Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case),推之前整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。"
++          "lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push: the push check reads the record from the pushed commit and lets it through when the whole app passed, or when every use case of each feature the changes touch passed by feature; shared code, a file that belongs to no feature, or a changed acceptance configuration needs the whole app. A slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).") if en else (
++          "Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case;--no-perf、--no-memory 略過效能或記憶體,只配這三種挑法),或整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。"
+           "接著依序五步，各自寫出工具：Gradle 與 adb 建置安裝並記下檔案指紋；Maestro 照流程檔點一遍、沒過重跑一次；visual-check.sh 拿截圖跟人看過的基準圖比、門檻 99.5%；dumpsys 與 Perfetto 在反覆開關畫面時看漏記憶體、閃退與違規；Macrobenchmark 跟存好的基準比效能，只提醒。"
+-          "lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送，效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。")
+-    return title,962,b,desc
++          "lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送：推送前檢查從被推送的提交讀紀錄，整套通過、或改到的每個功能的情境都按功能通過就放行，改到共用程式、對不到功能的檔或改了驗收設定就要整套；效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。")
++    return title,994,b,desc
+ 
+ SCENES={"map":("00 / THE SYSTEM",map_scene),
+         "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
+         "first-change":("START / NATURAL LANGUAGE",first_scene),
+         "graph-demo":("01 / KNOWLEDGE",graph_scene),
+         "case-review":("CASE / REAL REVIEW",case_scene),
+         "dispatch-overview":("02 / DISPATCH",dispatch_scene),
+         "risk-review":("02-03 / REVIEW BY RISK",risk_review_scene),
+         "review-overview":("03 / REVIEW",review_scene),
+         "swiss-cheese":("QUALITY / FIVE LAYERS",swiss_cheese_scene),
+diff --git a/docs/lumos-toolchain-knowledge/Projects/端到端驗收對照表涵蓋報告_計劃.md b/docs/lumos-toolchain-knowledge/Projects/端到端驗收對照表涵蓋報告_計劃.md
+new file mode 100644
+index 00000000..e97f4824
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/端到端驗收對照表涵蓋報告_計劃.md
+@@ -0,0 +1,74 @@
++---
++type: project
++status: doing
++created: 2026-10-27
++updated: 2026-10-27
++tags:
++  - type/project
++  - status/doing
++  - scope/stack-knowledge
++lands_in:
++  - Systems/android-e2e-acceptance
++related:
++  - "[[Projects/Android端到端驗收_計劃]]"
++---
++# 端到端驗收對照表涵蓋報告_計劃
++
++白話:Android 端到端驗收的功能對照表(`.lumos/macrobench.json` 的 `e2e.features`)寫得夠不夠,現在只有推送那一刻才知道:改到一支沒歸屬的檔,推送前檢查就要求整套跑。這份計劃加一個只讀的報告 `lumos android-e2e coverage`,事先列出對照表的三種缺口:沒歸屬的程式檔、沒有會判情境的功能、沒人用的驗收素材。只報告、不擋。2026-10-27 Enzo 照「只報告、預設按目錄分組」的方向開工。
++
++PRIOR-ART: 最小解在既有的 `lumos android-e2e` 子指令底下多一個只讀報告;世界解過:測試涵蓋率工具(coverage.py、JaCoCo)報「哪些程式沒被測試碰到」,Nx 的 `project.json` 沒歸屬到專案的檔會在 `nx graph` 裡顯示成孤兒;借用「按目錄彙總、加旗標才逐檔」的報法(coverage.py 的 `--skip-covered`、JaCoCo 按套件彙總)。範圍判斷與逐檔歸屬沿用推送前判定的 `_e2e_scope_hit` 與 `_e2e_file_owner`(推送前判定的 `_e2e_gate_owners` 也呼叫它)([[Projects/Android端到端驗收_計劃]]〈推送前怎麼按功能判〉),不另寫一套;整棵樹逐檔查歸屬時先用 `_e2e_owner_ctx` 建一次索引(跟推送前判定同一支),不每支檔重新正規化對照表;讀不到設定的擋下訊息走共用的 `_say_block`(推送前判定那邊定的單一出口,有靜態守衛測試)。自建只有報告本身。
++RETIRE-IF: 上線三個月後,兩個真實專案的治理帳裡推送前判定因「對不到任何功能」要求整套跑的次數是 0、而且使用者沒提過這個報告,就把這個子指令與 doctor 那一行撤掉。
++
++## 報告列什麼
++
++1. 沒歸屬的程式檔:工作目錄已追蹤的檔裡(`git ls-files`;設定也讀工作目錄,補完對照表不用先提交),指紋範圍內(`_e2e_scope_hit` 判在範圍)、不在任何功能的 `paths` 底下、也不在 `shared_paths` 底下的檔。驗收素材(`.maestro/`、門檻檔、`flows` 列的檔)不算程式檔,不列在這一項。預設按資料夾彙總:每個有沒歸屬檔的資料夾一行「資料夾、幾支沒歸屬、這個資料夾共幾支」,資料夾是檔案所在的那一層(取 `app_dirs` 底下第一層的話,通常整個 `app/src` 只剩一列,看不出缺在哪);加 `--files` 才逐檔列。落在 `shared_paths` 底下的另印一行「共用程式幾支」:推送前判定對它們一樣要求整套跑,所以「沒歸屬」加「共用程式」正好是推送前會要求整套跑的那批。
++2. 沒有會判情境的功能:功能底下每個情境都只列了效能(推送前按功能判時這種情境不用驗,等於這個功能沒驗)。
++3. 沒人用的驗收素材:`e2e.flows` 裡沒有任何情境列到的流程檔、`e2e.visual` 裡沒有任何情境列到的截圖畫面。整套跑照樣跑它們,但按功能跑永遠不會跑到。
++
++- `--changed`:第 1 項只看這次改到的檔(改到的檔清單照 `--changed` 挑功能那一套,`_e2e_changed_files`),開發中就知道推送時會不會因為「對不到任何功能」被要求整套跑;第 2、3 項照常列。
++- `--json`:印成 JSON(三項各一個清單),給 AI 讀。
++- 回傳碼:報告印得出來就回 0,不論有沒有缺口;設定讀不懂、`e2e` 段不合格、沒有 `features` 回 2 並說原因。
++
++## 還有哪裡看得到
++
++- `lumos doctor` 的 AE 段(還沒人看過的 AI 放行那一段)多一行「功能對照表有 N 支程式檔沒歸屬、M 個功能沒有會判的情境、K 份驗收素材沒人用;看:lumos android-e2e coverage」,三個數字都是 0 就不印;看的是工作目錄(跟報告本身同一份),算不出來就不印。
++- skill lumos-android-evidence〈新增功能或使用情境時一起補〉那段加一句:補完對照表跑一次 `lumos android-e2e coverage --changed`。
++
++## 不做
++
++- 不擋推送、不擋提交:缺歸屬的後果推送前檢查已經會擋(要求整套跑)。
++- 不推功能歸屬(不從程式的 import 或目錄名猜哪支檔屬於哪個功能):猜錯比列出來更糟,歸屬由人寫進對照表。
++- 不看程式內容判斷「這支檔重不重要」:只看路徑。
++
++## 這次要改到的地方
++
++- `scripts/lumos`:`android-e2e coverage` 子指令與它的「什麼時候用」;doctor AE 段多一行。家是 [[Systems/android-e2e-acceptance]]。
++- skill lumos-android-evidence 那一句;README 中英兩版的〈功能對照表〉段落補一句報告怎麼用。
++
++## 實務隱患
++
++- 已排除:金流:只讀設定與檔案樹,不碰交易。
++- 已排除:對外送出:只印到終端,不送任何外部服務。
++- 已排除:不可逆:只讀,不寫任何檔、不寫治理帳。
++- 已排除:守衛面:不擋推送也不擋提交,只印報告;推送前判定的行為不變(共用函式不改)。
++- 大專案上萬支檔:第 1 項要列整棵樹,`git ls-files` 照推送前判定帶 pathspec 只列 `app_dirs` 與驗收素材;doctor 那一行要算同一份,doctor 本身沒有時間預算,所以那一行另設 10 秒上限,超過就不印(只少一行提醒)。
++
++## 條款
++
++- [S1] 當功能對照表有程式檔不在任何功能的 `paths`、也不在 `shared_paths` 底下時,`lumos android-e2e coverage` 應按目錄彙總列出(目錄、沒歸屬幾支、共幾支),加 `--files` 時逐檔列;單元測試檔(預設排除)、驗收素材、指紋範圍外的檔不列;回 0 [test:t_android_e2e_coverage_unowned]
++- [S2] 當一個功能每個情境都只列了效能時,報告應把它列成沒有會判情境的功能;`e2e.flows` 或 `e2e.visual` 有沒被任何情境列到的項目時,應列成沒人用的驗收素材 [test:t_android_e2e_coverage_cases_and_materials]
++- [S3] 當帶 `--changed` 時,第 1 項應只看這次改到的檔(跟 `--changed` 挑功能同一份改動清單),第 2、3 項照常;帶 `--json` 時三項各印成一個清單 [test:t_android_e2e_coverage_changed_json]
++- [S4] 當設定讀不懂、`e2e` 段不合格或沒有 `features` 時,報告應回 2 並說原因 [test:t_android_e2e_coverage_bad_config]
++- [S5] 當工作目錄的功能對照表有缺口時,`lumos doctor` 的 AE 段應多印一行三個數字與看的指令;三個數字都是 0、或算超過 10 秒時不印 [test:t_android_e2e_coverage_doctor_line]
++- [S6] 當在 macrobench-lab 上新增一支不在任何功能的程式檔時,`lumos android-e2e coverage --changed` 應列出它,補進對照表後再跑應不再列 [manual:實驗室副本上加一支檔跑一次、補對照表再跑一次,兩次輸出貼進驗證紀錄]
++
++## 審計修正紀錄
++
++- r1(2026-10-27,單審+架構對齊兩席):6 條/blocking 2/設定改讀工作目錄、逐檔歸屬跟推送前判定共用一支、另列共用程式;卷證在 governance/review-reports/code-e2e-coverage/。
++  - 例:提交 Z.kt(不在任何功能)後在工作目錄把它補進 `login.paths`、不提交 → 改前仍列 1 支沒歸屬,改後列 0 支 [test:t_android_e2e_coverage_worktree_cfg]。
++  - 例:檔同時在功能 paths 與 shared_paths 底下 → 推送前判定要整套,報告列在共用程式 [test:t_android_e2e_coverage_same_as_gate]。
++  - 文字版印的資料夾、檔名、功能名都經 `_esc_clean`(跟 e2e 區其他輸出同一套);這輪有重大發現、放行欄必須是空的,所以外來文字這條照折、沒有用「自用框架」那條放行 [test:t_android_e2e_coverage_same_as_gate]。
++
++## 回退
++
++- 子指令與 doctor 那一行是新增的,回退就是撤掉那次提交;不寫任何檔與帳,撤掉不留殘局。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+index 509398a1..86d74d22 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
++++ b/docs/lumos-toolchain-knowledge/Systems/README圖產生器.md
+@@ -47,10 +47,11 @@ verified_by:
+ - 2026-09-30:新增 drift-guard 圖(從寫下筆記到推送程式碼,三道關卡各標擋下或提醒),由 Codex(gpt-6-astra)依事實清單起稿、Claude 核對後把第 1 道的標籤移到真正被擋的那一行。
+ - 2026-09-30:drift-guard 圖第 1 道加「新寫『還沒有退款頁面』這類句子只提醒改成回頭條件」、第 3 道加「回頭條件成立 → 擋下」(用具體例子取代抽象的「還沒有 X」,使用者覺得 X 太抽象),對應提交時的否定現況句提醒([[Projects/否定現況句配回頭條件_計劃]])與推送前的回頭條件檢查;圖高 710 → 787。
+ - 2026-09-30:drift-guard 左側直線原本畫到第 3 個圓圈下方(多出一截),改成停在第 3 個圓圈中心、被圓圈蓋住。README 拿掉「一個真實的例子」一節(使用者裁),case-review 圖不再被 README 引用,產生器與圖檔先留著,要放回時不用重畫。
+ - 2026-10-01:evals-overview 圖重畫成跟 drift-guard 同一套版型:四種每週檢查(審查回放、查詢考卷、情境探針、推播漏網)→ 每週留紀錄 → 退步或沒過通知人 → 修規則或補測試 → 下週再量。四種的排程與「推播漏網只留紀錄不通知」都對過 governance/autonomous-loop.sh 的各個週跑段;README 新增 evals 一章引用它,取代「怎麼運作」裡外圈那段。(通知與排程範圍的說法 2026-10-10 改過,見下方 2026-10-10 那條。)
+ - 2026-10-01:drift-guard 第 3 道加一列「程式和管它的筆記一起改:請 AI 重讀整篇舊句 → 只提醒」,對應推送前的回頭重讀提醒([[Projects/守檔筆記對照改動_計劃]]);第 3 格高 203 → 242、圖高 787 → 826。這次先手改了兩張 SVG,提交時被「常一起改」的提醒抓到才補產生器,補完重產的結果跟手改的逐位元組相同。(這列 2026-10-09 起改成「先請 AI 重讀(本機擋)」,見下方 2026-10-09 那條。)
+ - 2026-10-05:drift-guard 補上 10/2 之後上線的防線:第 1 道加「回頭條件寫在句中或表格 → 提交時擋下」;第 3 道加「規則的撤除條件成立 → 擋下」「綁的測試名稱找不到 → 只提醒(專案可設成擋)」「連到已收尾的筆記、同一句還寫待定 → 只提醒」。擋或提醒都對過程式預設(筆記形狀擋預設擋、測試綁定預設提醒、c6 推送前只列出)。第 1 格高 200 → 231、第 3 格 242 → 359、圖高 826 → 974。數量標記與結 Issue 前的擋不在這三個時間點,只寫進 README 正文、不上圖。
+ - 2026-10-09:drift-guard 第 3 道兩列改成擋下:「名稱或路徑消失、筆記還在提」(舊句檢查沒寫子開關時照總開關,預設擋)、「程式和管它的筆記一起改:先請 AI 重讀(本機擋)」(回頭重讀在推送前掛鉤帶 `--gate` 擋、CI 只提醒),中英兩版與替代文字一起改,對應 [[Projects/舊句兩道轉擋_計劃]];英文那列縮成「Code and note changed: AI rereads first (local)」免得跟標籤擠在一起。改產生器重產,沒手改 SVG。
+ - 2026-10-10:README 照程式改正說法時,兩張圖的字跟著改:drift-guard 底下那行從「除了兩項一定擋下的檢查、其餘可由專案改成提醒」改成「只有部分檢查能由專案改成提醒」(能調的只有舊說法、回頭重讀、筆記寫法等幾類,高風險沒審查紀錄、驗證器被改、全套測試、缺 Python 3.14 都沒有開關);evals-overview 改成「主要在 Lumos 自己的 repo 排程執行」、通知那格改「出問題時通知人」,替代說明講清只有審查回放與情境探針出問題才通知、查詢考卷分數退步只記錄。中英兩版一起改產生器重產,沒手改 SVG;用無頭 Chrome(--virtual-time-budget)轉圖、中英四張都看過,字沒超出框(先用了 qlmanage,被審查點出會截到動畫第一格、見上面的坑,改用 Chrome 重看)。查詢考卷的通知門檻是「計分觸及的候選筆記沒標過的比例」,不是題目沒標答案,desc 照這個寫。
+ - 2026-09-30:case-review 圖改成三格因果圖(整個目錄免查、只認檔名、比對內容),原本的逐輪報告數與條數圖讀者看不懂;由 Codex(gpt-6-astra)起稿,事實對回 governance/review-reports/code-工具自裝檔不算消費專案/ 與事故筆記。
+ - 2026-10-25:新增 android-e2e 圖(Android 在實機上逐層查:兩種輸入 → L0 判定 → L1 用 Google 官方 android-profiler skill 分析 Trace → L2 行號 → L3 記憶體,右側虛線是記憶體類 check 從 L0 直達 L3 的捷徑,底部是查證紀錄);README 新增〈Android:在實機上驗效能與記憶體〉一章引用它。使用者要求不用「收據」兩字,圖與 README 一律寫「查證紀錄」(英文 evidence record);skill 與計劃內部仍叫收據。英文副標原本超出框,縮短後中英兩版都用無頭 Chrome 截圖看過。同日使用者要求敘述白話,android-e2e 圖上的子標也改成跟 README 正文同一套白話用詞(例:「判人裁門檻」→「對照人訂的標準」、「誰配置、誰留住記憶體」→「誰在佔記憶體、為什麼不釋放」)。代碼審 r1 架構對齊席抓到整批換詞時把 data-kind 也換成帶空白的 `android-evidence record`,改回單詞 `android-record`;產生器說明檔的場景數(12)、圖檔數(24)與場景清單一併補上。r3 起 validate 對 android-e2e 圖另驗四層依序是 L0–L3、輸入、記憶體捷徑、查證紀錄各一個(改壞一層的編號 --check 會紅);中文 L2 徽章改「Android 工具」免得跟 L1 的「Google 官方」混成同一個東西,替代文字也改成跟正文同一套白話。r4 起 android-e2e 的標題只寫在 `ANDROID_TITLES` 一處,場景與 validate 共用(之前各寫一份,只改其中一份時結構檢查會整段不跑、照樣綠)。這段檢查放在獨立的 `validate_android`,不塞進 `validate` 本體(塞進去會讓 validate 超過複雜度上限被新增告警閘擋下)。產生器的說明文字與註解別用長破折號「–」(ruff RUF002/RUF003 會當成新增告警擋推送),範圍寫成「L0 到 L3」。同日使用者要求圖上也寫出工具:android-e2e 各層副標改成點名工具(L1 Perfetto 與 trace_processor、L2 simpleperf(NDK 附)、L3 heap_profile 與 java_heap_dump),記憶體收集框寫 dumpsys、Perfetto、logcat,替代文字同步;跟 README 正文的「各層用的工具一覽」同一套說法。英文收集框原本寫 per run(會被讀成每一輪各收一次),改成 Collects with dumpsys · Perfetto · logcat;中間試過 to collect data,截圖看到超出框才換成短句。
++- 2026-10-27:android-acceptance 圖的「怎麼叫」框改兩排(按功能:整套、`--changed`、`--feature`、`--case`;按檢測:`--no-perf`、`--no-memory`,只配挑法),框加高 32、下面整塊往下移、總高 962→994;標題與「通過」那格改成推送前要有這一版的紀錄(整套,或改到的功能都按功能跑過),中英替代文字一起改,對應 [[Projects/Android端到端驗收_計劃]]〈推送前怎麼按功能判〉。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index 181ed434..90d94447 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -63,20 +63,21 @@ summary: |-
+   PITFALL:doctor、waive --ack 與開場掛鉤數 AI 放行待看的結果各說各話,深層巢狀的紀錄讓 waive --list 崩潰,500 份 2MB 的大清單讓開場掛鉤超過外層 10 秒 [出處:2026-10-27 代碼審 code-e2e-gate r2 邊界、資源、合約席] [根因:三處讀紀錄各寫一套(lumos 先限深再數、掛鉤直接數;太大的檔一邊佔名額一邊不佔),只限份數與單份大小、沒限總時間,json 解析遞迴爆掉的 RecursionError 沒接] [修法:同一套寬鬆讀法(只 json.loads、太大的佔名額不讀、總時間 3 秒、沒讀到的份數講出來),掛鉤的 _e2e_ai_pending_one 跟 lumos 逐字相同、測試比原文] [test:t_android_e2e_record_scan]
+   WHY:e2e 的外來文字兩層看門:源頭——設定的路徑(_e2e_relpath_err,類別用共用的 _path_special_chars)與從 git 取來的改到的檔名都拒收控制字元與看不見的字元;出口——底層的 _out_clean 與 _say_block(macrobench 也用),e2e 區不准自己印「擋下:」,有一支掃語法樹的測試守 [出處:2026-10-27 代碼審 code-e2e-gate r4 資安、邊界、架構對齊席,r5 資安、正確性、邊界、通才、合約、架構對齊席] [因:r1–r5 每輪都在一個沒經過出口的輸出點找到原樣回顯;清單式地補出口每輪都漏一處,所以改成源頭擋加一條會自動抓新漏網的規則] [不選:逐個印出點補(每輪漏一處)、e2e 專屬的清理函式(macrobench 往上呼叫,跨層)] [test:t_android_e2e_say_single_exit]
+   WHY:寫入端驗紀錄跟判定端同一套(含結束時間),所以結束時間讀不懂的舊紀錄連 judge 重跑都不覆蓋,只能修好或刪掉 [出處:2026-10-27 代碼審 code-e2e-gate r3 合約席、r4 正確性席] [因:寫得進去卻照樣被擋的放行、重跑之後照樣讀不懂的紀錄都比明著擋更糟;擋下訊息講明「修好或刪掉」] [不選:重跑時整份換掉 runs(其他欄位的壞資料照留,還是讀不懂)] [test:t_android_e2e_record_unreadable]
+   WHY:主線在分岔後改了驗收設定時,另用主線設定算一次兩端指紋(多兩次 ls-tree),只在兩邊設定不同時才算 [出處:2026-10-27 代碼審 code-e2e-gate r3 資安席、r4 資源席] [因:照這一版的範圍看沒改到、照主線的範圍看可能改到;兩邊設定一樣時不多花] [代價:設定不同的推送多吃一點 60 秒預算] [test:t_android_e2e_gate_mainline_wider]
+   PITFALL:擋下訊息的外來文字逐點清,每輪漏一處:r2 清了檔名,r3 又找到設定值回顯與紀錄鍵名 [出處:2026-10-27 代碼審 code-e2e-gate r2 資安席、r3 資安、合約、通才席] [根因:清理寫在組字串的每一處,新的回顯點沒人記得] [修法:結果出口 _e2e_gate_out 統一清原因與清單裡的字串] [test:t_android_e2e_gate_output_clean]
+   PITFALL:開場提示與 doctor 說「另有幾份沒讀,看 waive --list、標 --ack --all」,那兩個指令卻跟它們用同一個 500 份名額,名額外那份永遠看不到也標不掉 [出處:2026-10-27 代碼審 code-e2e-gate r3 正確性、邊界、合約、通才、資源席] [根因:把給「看一眼」用的份數上限套到人明著下的指令上] [修法:--list 與 --ack 讀全部、只留時間上限] [test:t_android_e2e_waive_all_records]
+   PITFALL:歸屬查表逐層 join 前綴,路徑深一萬層時一百多支檔就吃掉 60 秒預算 [出處:2026-10-27 代碼審 code-e2e-gate r3 資源席(r2 修補引入)] [根因:修平方工作量時只看了檔數乘路徑數,沒看單一路徑的長度] [修法:只查到功能路徑最深那一層] [test:t_android_e2e_scope_perf]
+   PITFALL:主線採用 E2E 之前分出去的舊分支只改文件也被推送前判定擋下,訊息還說 App 不一樣 [出處:2026-10-27 代碼審 code-e2e-gate r2 正確性、通才席] [根因:r1 為了「只改設定也要驗」加的設定比較要求兩端都有 e2e 段,兩端都沒有時永遠算不一樣] [修法:兩端都沒有 e2e 段也算設定一樣] [test:t_android_e2e_gate_cfg_sides]
+   WHY:推送前判定的各段用例外(_E2eGateStop)帶結果提早結束,不照安全證據閘「階段回傳 done、呼叫端判非空」的寫法 [出處:2026-10-27 代碼審 code-e2e-gate r2 架構對齊席] [因:判定有十來個會提早結束的點(出口、沒用 E2E、不要求、放行、各種判不清),分散在被拆小的階段函式裡,逐層回傳要每層多一個判斷;例外只在這一道內部用,入口 _e2e_gate_evaluate 一律接住轉成結果,對外介面跟鄰居一樣是結果 dict] [不選:逐層回傳 done(每個階段函式多一層判斷,拆函式時降的複雜度又加回去)] [代價:讀程式的人要知道 _e2e_gate_done 不會回來]
+   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
++  WHY:lumos android-e2e coverage 只報告功能對照表的缺口、不擋,範圍判斷與逐檔歸屬跟推送前判定共用同一支(_e2e_scope_hit、_e2e_file_owner),沒歸屬的程式檔按所在資料夾彙總、共用程式另列支數;設定讀工作目錄,補完對照表不用先提交就看得到 [出處:[[Projects/端到端驗收對照表涵蓋報告_計劃]] 2026-10-27 Enzo 照「只報告、預設按目錄分組」開工] [因:缺歸屬的後果推送前檢查已經會擋(要求整套跑);事先列出來是讓人在推送前補對照表] [不選:擋推送(重複擋同一件事);從程式的 import 猜歸屬(猜錯比列出來更糟)] [test:t_android_e2e_coverage_unowned] [test:t_android_e2e_coverage_doctor_line] [test:t_android_e2e_coverage_same_as_gate] [test:t_android_e2e_coverage_worktree_cfg]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
+   - "[[Verification/2026-10-26_AI自己選分塊跑法探針]]"
+ ---
+ # android-e2e-acceptance
+ 
+ 白話:Android App 推送前在實機上跑一次端到端驗收的那一套。範本腳本負責碰裝置、把每一步的結果寫成 steps.json;lumos 只讀這些結果判過不過,再寫一份綁在「App 程式與驗收素材內容」上的查證紀錄。設計與條款的單源在 [[Projects/Android端到端驗收_計劃]],這裡只記現在怎麼運作、程式碼看不出來的理由。
+ 
+ ## 怎麼跑
+diff --git a/scripts/lumos b/scripts/lumos
+index 8b712dd9..461c1c18 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4148,22 +4148,25 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+             elif _wv:
+                 _bits.append(f"放行清單有 {len(_wv)} 條")
+             if _bits:
+                 warn_soft(_bits, "新增告警閘的放行狀況(提醒,不擋):",
+                           "自動放行多代表檢查根本沒在跑;逐條放行多代表規則跟這個專案不合。"
+                           "看放行了什麼:lumos lint-waive --list")
+         print()
+     # Android 端到端驗收:還沒人看過的 AI 放行(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 5 步;只提醒,--ci 不變紅)。
+     # 專案有查證紀錄目錄才出這一段,沒用 Android 驗收的專案不多一段
+     _aer = _vault_repo_root(env)
+-    if _aer is not None and (_aer / E2E_RECORDS_DIR).is_dir():
+-        section("AE", "Android 端到端驗收有沒有還沒人看過的 AI 放行(提醒,不擋)")
++    _acov = _e2e_coverage_line(_aer) if _aer is not None and (_aer / ".lumos" / "macrobench.json").is_file() else None
++    if _aer is not None and ((_aer / E2E_RECORDS_DIR).is_dir() or _acov):
++        section("AE", "Android 端到端驗收有沒有還沒人看過的 AI 放行、功能對照表有沒有缺口(提醒,不擋)")
++        if _acov:
++            warn_soft([_acov], "功能對照表有缺口(提醒,不擋):", "補進 features.<功能>.paths 或 shared_paths,情境列會判的項目")
+         _aip, _aun, _abig = _e2e_ai_pending_all(_aer)
+         if _aip or _aun or _abig:
+             # 沒讀到的份數排前面:warn_soft 預設只印前三條
+             warn_soft(([f"另有 {_abig} 份紀錄超過 {E2E_RECORD_FILE_MAX // 1024 // 1024}MB 沒讀(裡面的放行看不到;修好或刪掉)"] if _abig else [])
+                       + ([f"另有 {_aun} 份沒讀(超過 {E2E_RECORD_SCAN_MAX} 份或讀超過 {E2E_RECORD_SCAN_SEC:g} 秒;照修改時間由新到舊讀)"] if _aun else [])
+                       + [f"{fp[:12]}… 有 {n} 筆" for fp, n in _aip[:10]] + ([f"…另有 {len(_aip) - 10} 份紀錄"] if len(_aip) > 10 else []),
+                       "Android 端到端驗收有 AI 放行還沒人看過(提醒,不擋):",
+                       "AI 在沒有互動終端時放行的,要人看過:lumos android-e2e waive --list;看過標記:lumos android-e2e waive --ack --all")
+         else:
+             ok("沒有還沒人看過的 AI 放行")
+@@ -41574,36 +41577,49 @@ def _e2e_gate_need(root, base, sha, e2e, base_full, full, deadline):
+     need, perf_only = [], []
+     for fn in sorted(owners):
+         for cn, c in feats[fn]["cases"].items():
+             (need if any(c.get(k) for k in ("flows", "visual", "stability")) else perf_only).append(f"{fn}.{cn}")
+     return "cases", need, perf_only
+ 
+ 
+ def _e2e_gate_owners(files, e2e, feats, deadline=None):
+     """改到的檔(已在指紋範圍)→ (要整套的原因清單, 歸屬到的功能集合):落在 shared_paths 底下、或對不到任何功能都算要整套。
+     每 1000 支查一次截止時間:這段是純 Python 迴圈,不查的話大改動跑完才在下一次 git 呼叫逾時、原因講錯。"""
+-    shared = [_e2e_norm(x) for x in e2e.get("shared_paths") or []]
+-    index = _e2e_owner_index(feats)
++    ctx = _e2e_owner_ctx(e2e, feats)
+     why, owners = [], set()
+     for i, f in enumerate(files):
+         if i % 1000 == 0:
+             _secev_deadline_check(deadline)
+-        if any(_e2e_under(f, d) for d in shared):
++        kind, got = _e2e_file_owner(f, ctx)
++        if kind == "shared":
+             why.append(f"{_esc_clean(f, 200)}(共用程式,列在 shared_paths)")
+-            continue
+-        got = _e2e_owners(f, feats, index)
+-        if not got:
++        elif kind == "none":
+             why.append(f"{_esc_clean(f, 200)}(對不到任何功能)")   # 檔名是被推送提交的作者可控的:擋下訊息會進 AI 視野(代碼審 r2 資安席)
+         owners.update(got)
+     return why, owners
+ 
+ 
++def _e2e_owner_ctx(e2e, feats):
++    """逐檔判歸屬要的前置(正規化過的 shared_paths、功能歸屬查表):整批檔只算一次。"""
++    return [_e2e_norm(x) for x in e2e.get("shared_paths") or []], feats, _e2e_owner_index(feats)
++
++
++def _e2e_file_owner(f, ctx):
++    """一支檔(已在指紋範圍)的歸屬 → ("shared", 空集合) / ("none", 空集合) / ("owned", 功能集合)。
++    推送前判定(_e2e_gate_owners)與涵蓋報告(_e2e_coverage_report)共用這一支:shared 先判,落在底下就算共用、不再看功能。"""
++    shared, feats, index = ctx
++    if any(_e2e_under(f, d) for d in shared):
++        return "shared", set()
++    got = _e2e_owners(f, feats, index)
++    return ("owned", got) if got else ("none", set())
++
++
+ def _e2e_gate_by_feature(rec, e2e, need):
+     """要驗的情境逐一看 feature_runs → [沒過的 (情境, 原因)]。"""
+     feats = e2e.get("features") or {}
+     runs = rec.get("runs")
+     rt = _e2e_ts(runs.get("ended")) if isinstance(runs, dict) and runs.get("result") == "fail" else None
+     bad = []
+     for fc in need:
+         fn, _, cn = fc.partition(".")
+         v = (rec.get("feature_runs") or {}).get(fc)
+         if not isinstance(v, dict):
+@@ -42112,20 +42128,120 @@ def _e2e_waive_cmd(root, fp, commit, note, list_mode=False, ack=None, ack_all=Fa
+                         extra={"fingerprint": fp, "by": by})
+     rel = os.path.relpath(p, root)
+     print(f"放行記在 {rel}({'人放的' if by == 'human' else 'AI 放的:沒有互動終端'});推送前要提交它:"
+           f"git add {shlex.quote(rel)} && git commit -m \"chore: 放行 Android 端到端驗收\"")
+     if by == "ai":
+         print("這筆是 AI 放行:推送、lumos doctor 與開場提示會一直列出來,直到人用 lumos android-e2e waive --ack 看過。")
+     return 0
+ 
+ 
+ 
++def _e2e_coverage_report(root, e2e, files):
++    """功能對照表的三種缺口(單源 Projects/端到端驗收對照表涵蓋報告_計劃〈報告列什麼〉)→ dict。
++    files:要看歸屬的檔(整棵樹或這次改到的);範圍判斷與逐檔歸屬跟推送前判定共用同一套(_e2e_scope_hit、_e2e_file_owner),
++    所以「沒歸屬」加「共用程式」正好是推送前判定要整套跑的那批。"""
++    feats = e2e.get("features") or {}
++    dirs = _e2e_scope_dirs(e2e)
++    ctx = _e2e_owner_ctx(e2e, feats)   # 整棵樹幾萬支檔時只正規化一次對照表
++    groups, shared = {}, []
++    for f in files:
++        app, inside = _e2e_scope_hit(f, e2e, dirs)
++        if app is None or not inside:   # 驗收素材、單元測試、範圍外的檔不算程式檔
++            continue
++        g = groups.setdefault(os.path.dirname(f) or ".", {"unowned": [], "total": 0})
++        g["total"] += 1
++        kind, _got = _e2e_file_owner(f, ctx)
++        if kind == "none":
++            g["unowned"].append(f)
++        elif kind == "shared":
++            shared.append(f)
++    unowned = [{"dir": d, "unowned": len(g["unowned"]), "total": g["total"], "files": g["unowned"]}
++               for d, g in sorted(groups.items()) if g["unowned"]]
++    no_cases = sorted(fn for fn, v in feats.items()
++                      if not any(c.get(k) for c in v["cases"].values() for k in ("flows", "visual", "stability")))
++    used_flows = {_e2e_norm(x) for v in feats.values() for c in v["cases"].values() for x in c.get("flows") or []}
++    used_screens = {x for v in feats.values() for c in v["cases"].values() for x in c.get("visual") or []}
++    return {"unowned": unowned, "shared": shared, "features_without_judged_cases": no_cases,
++            "unused_flows": [f for f in e2e.get("flows") or [] if _e2e_norm(f) not in used_flows],
++            "unused_screens": [s for s in e2e.get("visual") or [] if s not in used_screens]}
++
++
++def _e2e_coverage_input(root, changed, timeout=120):
++    """涵蓋報告要的設定與檔案清單 → (e2e 段, 檔案清單, 說明, 錯誤訊息或 None)。設定讀工作目錄(跟 --changed 挑功能、
++    macrobench --check-config 同一套驗法):補完對照表還沒提交就看得到結果(代碼審 code-e2e-coverage r1 單審席);
++    檔案清單預設是工作目錄已追蹤的檔(git ls-files,帶 pathspec 只列 app_dirs),--changed 時是 --changed 挑功能那一份改動清單。"""
++    e2e, _scen, err = _e2e_worktree_e2e(root)
++    if err is None and not e2e.get("features"):
++        err = "e2e 段沒有 features(功能對照表);先補,見 Projects/Android端到端驗收_計劃〈按功能與使用情境跑〉"
++    if err:
++        return None, None, "", err
++    if changed:
++        files, note, gerr = _e2e_changed_files(root)
++        return e2e, files, note, gerr
++    raw = _nodehome_git(root, "--literal-pathspecs", "ls-files", "-z", "--", *_e2e_scope_dirs(e2e)[0], timeout=timeout)
++    if raw is None:
++        return None, None, "", "列不出工作目錄已追蹤的檔(git 失敗或逾時)"
++    return e2e, _nodehome_split_z(raw), "", None
++
++
++def _e2e_coverage_cmd(root, changed=False, files_mode=False, as_json=False):
++    """lumos android-e2e coverage:功能對照表的三種缺口,只讀、不擋。rc 0=印得出報告(不論有沒有缺口);2=設定讀不懂、不合格、沒有 features。"""
++    import json
++    root = Path(root).resolve()
++    e2e, files, note, err = _e2e_coverage_input(root, changed)
++    if err:
++        _say_block(err)
++        return 2
++    rep = _e2e_coverage_report(root, e2e, files)
++    if as_json:
++        print(json.dumps(dict(rep, changed=changed, note=note), ensure_ascii=False))
++        return 0
++    if note:
++        print(f"說明:{note}")
++    print(f"功能對照表涵蓋報告({'這次改到的檔' if changed else '工作目錄已追蹤的檔'}):")
++    print(f"  沒歸屬的程式檔:{sum(u['unowned'] for u in rep['unowned'])} 支" + ("(改到它們時,推送前檢查會要求整套跑)" if rep["unowned"] else ""))
++    for u in rep["unowned"]:
++        print(f"    {_esc_clean(u['dir'], 200)}/  沒歸屬 {u['unowned']} 支 / 共 {u['total']} 支")
++        for f in u["files"] if files_mode else []:
++            print(f"      {_esc_clean(f, 200)}")
++    if rep["shared"]:
++        print(f"  共用程式(列在 shared_paths):{len(rep['shared'])} 支(改到它們時,推送前檢查也會要求整套跑)")
++    print(f"  沒有會判情境的功能(情境都只列效能,按功能判時等於沒驗):{_e2e_cov_names(rep['features_without_judged_cases'])}")
++    print(f"  沒人用的流程檔(按功能跑永遠跑不到):{_e2e_cov_names(rep['unused_flows'])}")
++    print(f"  沒人用的截圖畫面:{_e2e_cov_names(rep['unused_screens'])}")
++    if rep["unowned"] and not files_mode:
++        print("  逐檔列:lumos android-e2e coverage --files;補進對照表的 features.<功能>.paths,或大家共用的列進 shared_paths")
++    return 0
++
++
++def _e2e_cov_names(xs):
++    """涵蓋報告文字版的名字清單:每個經 _esc_clean(檔名、功能名是設定作者寫的,跟 e2e 區其他輸出同一套清理),空的印「無」。"""
++    return "、".join(_esc_clean(x, 200) for x in xs) or "無"
++
++
++def _e2e_coverage_line(root):
++    """doctor 的 AE 段那一行:三個數字都是 0、或算不出來(10 秒上限)→ None。"""
++    try:
++        e2e, files, _note, err = _e2e_coverage_input(Path(root), False, timeout=10)
++        if err:
++            return None
++        rep = _e2e_coverage_report(root, e2e, files)
++    except (OSError, ValueError, KeyError, TypeError):
++        return None
++    n1 = sum(u["unowned"] for u in rep["unowned"])
++    n2 = len(rep["features_without_judged_cases"])
++    n3 = len(rep["unused_flows"]) + len(rep["unused_screens"])
++    if not (n1 or n2 or n3):
++        return None
++    return f"功能對照表有 {n1} 支程式檔沒歸屬、{n2} 個功能沒有會判的情境、{n3} 份驗收素材沒人用;看:lumos android-e2e coverage"
++
++
+ def _e2e_check_cmd(root, at_sha=None, branch=None, range_start=None):
+     """lumos android-e2e check:推送前那道 Android E2E 判定單獨跑一次、印成 JSON(推之前先看會不會擋;code-loop check 用同一支)。
+     rc 0=不擋(包括不用 E2E 的專案)、1=會擋、2=給的提交不存在。"""
+     import json
+     root = Path(root).resolve()
+     sha = (_nodehome_git(root, "rev-parse", "--verify", "-q", f"{at_sha or 'HEAD'}^{{commit}}") or b"").decode().strip()
+     if not _LENS_SHA_RE.match(sha):
+         _say_block(f"找不到提交 {at_sha or 'HEAD'}")
+         return 2
+     br = branch or (_nodehome_git(root, "symbolic-ref", "-q", "--short", "HEAD") or b"").decode().strip() or None
+@@ -42136,33 +42252,35 @@ def _e2e_check_cmd(root, at_sha=None, branch=None, range_start=None):
+             up = (_nodehome_git(root, "rev-parse", "-q", "--verify", ref) or b"").decode().strip()
+             if up:
+                 range_start = up
+                 break
+     rep_ = _e2e_gate_evaluate(root, sha, pushed_branch=br, range_start=range_start)
+     print(json.dumps(rep_, ensure_ascii=False))
+     return 1 if rep_["status"] == "blocked" else 0
+ 
+ 
+ def _android_e2e_dispatch(args):
+-    """lumos android-e2e 的子指令分派(judge、select、history、waive、check)。"""
++    """lumos android-e2e 的子指令分派(judge、select、history、waive、check、coverage)。"""
+     def split(xs):
+         return [y.strip() for x in xs for y in x.split(",") if y.strip()]
+     if args.e2ecmd == "select":
+         return _e2e_select_cmd(args.e2e_repo, split(args.e2e_features), split(args.e2e_cases), args.e2e_changed,
+                                args.e2e_no_perf, args.e2e_no_memory)
+     if args.e2ecmd == "history":
+         return _e2e_history_cmd(args.e2e_repo, args.e2e_feature, args.e2e_case, args.e2e_last)
+     if args.e2ecmd == "waive":
+         return _e2e_waive_cmd(args.e2e_repo, args.e2e_fp, args.e2e_commit, args.e2e_note, list_mode=args.e2e_list,
+                               ack=args.e2e_ack, ack_all=args.e2e_ack_all)
+     if args.e2ecmd == "check":
+         return _e2e_check_cmd(args.e2e_repo, args.e2e_at_sha, args.e2e_branch, args.e2e_range_start)
++    if args.e2ecmd == "coverage":
++        return _e2e_coverage_cmd(args.e2e_repo, changed=args.e2e_changed, files_mode=args.e2e_files, as_json=args.e2e_json)
+     return _e2e_judge_cmd(args.e2e_repo, args.e2e_run_dir, precheck_only=args.e2e_precheck, no_record=args.e2e_no_record,
+                           history=args.e2e_history)
+ 
+ 
+ def _e2e_judge_selected(root, run_dir, steps, serr, no_record, history):
+     """judge 裡按功能跑的兩條路:--no-record 走 _e2e_judge_partial;沒帶卻讀到 selection 就拒寫、回 2
+     (只跑一部分的結果寫進整套的 runs 會被當成整套驗過;先講這個,不讓髒樹訊息蓋過)。其他情況回 None 交回整套那條路。"""
+     if no_record:
+         if serr:
+             _say_block(serr)
+@@ -67741,20 +67859,21 @@ HELP_WHEN = {
+     "seat-check": "派工單要查的材料,審查報告有沒有都碰到;引句有沒有超出範圍。",
+     "lint-watch": "專案依賴版本落後 registry 最新版了嗎。",
+     "compose-metrics": "Compose 可組合指標有沒有比 baseline 退步。",
+     "macrobench": "Android 專案跑完 Macrobenchmark 後:啟動時間、滑動每幀耗時有沒有比基準變慢(只提醒,不擋)。",
+     "android-e2e": "Android 專案改了畫面或功能、推送之前,在真機上整套驗收(建置、安裝、UI flow、截圖、穩定性、效能)。平常跑專案裡的 scripts/templates/android-e2e-run.sh,它最後會叫這支判讀。",
+     "android-e2e select": "按功能與使用情境挑這次要跑的 flow、截圖、效能測試與記憶體情境,印成 JSON;範本腳本 --changed、--feature、--case 時會叫它,也可以自己跑來看會挑到什麼。",
+     "android-e2e history": "看本機檢測總表:每次跑驗收(整套或按功能)的時間、版本、挑了哪些情境、哪幾項沒過、證據在哪;可照 --feature、--case 篩。",
+     "android-e2e judge": "範本腳本跑完後判過不過、寫查證紀錄 .lumos/e2e-records/<指紋>.json;只想重判同一份結果時單獨跑。回 0 通過、1 有一段沒過、2 沒寫紀錄。",
+     "android-e2e waive": "推送前的 Android 端到端驗收擋下、確定是誤擋時放行那一版(照擋下訊息印的那一行跑,要寫理由);--list 看所有放行,--ack 把 AI 放行標成看過。",
+     "android-e2e check": "推之前想先知道推送前那道 Android 端到端驗收會不會擋、為什麼擋;印成 JSON,不寫任何東西。",
++    "android-e2e coverage": "補完功能對照表、或改了程式想知道推送時會不會被要求整套跑:列出沒歸屬到任何功能的程式檔、沒有會判情境的功能、沒人用的流程檔與截圖畫面。",
+     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
+     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
+     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
+     "note-audit prepare": "推送前要審新寫的筆記時:算出這段範圍還沒被判定涵蓋的行,切成清單檔(每份最多 150 行)給判定者。",
+     "note-audit record": "判定者交回報告後:照信任方向逐行收進判定檔(重的照收、輕的要來源對、上下文沒變才收)。",
+     "note-audit check": "推之前自己先查一次:這段推送新寫的筆記行是不是都被已提交的判定涵蓋了(沒有就 rc1)。",
+     "note-audit skip": "真的來不及審時:把從沒被判過的行記成略過(要理由、會留帳;判過推得出的不能略過)。",
+     "test-durations refresh": "CI 各份測試又不平均時、或每月一次:把 .lumos/test-durations-run*.json 的實測秒數合進 governance/test-durations.json,讀完刪掉。",
+     "note-audit reread-prepare": "推送前回頭重讀守檔筆記:這次改到的程式檔的家、而且這次也改過的筆記,每篇出一份項目檔給判定者問「哪幾行被這次改動弄得不成立了」。",
+     "note-audit reread-record": "判定者交回報告後:把點出的行記成對照紀錄(governance/reread-verdicts/,提交才算)。",
+@@ -68867,20 +68986,25 @@ def main():
+     aew.add_argument("--commit", dest="e2e_commit", default=None, help="被擋下的那個提交(擋下訊息印的;記在放行裡)")
+     aew.add_argument("--note", dest="e2e_note", default=None, help="為什麼放行(去掉空白後至少 10 個字)")
+     aew.add_argument("--list", dest="e2e_list", action="store_true", help="列出所有紀錄裡的放行與有沒有被人看過")
+     aew.add_argument("--ack", dest="e2e_ack", nargs="*", default=None, metavar="指紋", help="把這幾份紀錄裡的 AI 放行標成看過(終端答 y 才算)")
+     aew.add_argument("--all", dest="e2e_ack_all", action="store_true", help="配 --ack:把全部紀錄裡還沒人看過的 AI 放行都標成看過")
+     aec = aesub.add_parser("check", help="推送前那道判定單獨跑一次,印成 JSON(推之前先看會不會擋)")
+     aec.add_argument("--repo", dest="e2e_repo", default=".", help="專案根目錄(預設 .)")
+     aec.add_argument("--at-sha", dest="e2e_at_sha", default=None, help="要判的提交(預設 HEAD)")
+     aec.add_argument("--branch", dest="e2e_branch", default=None, help="要推的分支名(預設目前分支)")
+     aec.add_argument("--range-start", dest="e2e_range_start", default=None, help="推的是主線本身時,推送前的主線位置")
++    aev = aesub.add_parser("coverage", help="功能對照表的缺口:沒歸屬的程式檔、沒有會判情境的功能、沒人用的驗收素材(只讀、不擋)")
++    aev.add_argument("--repo", dest="e2e_repo", default=".", help="專案根目錄(預設 .)")
++    aev.add_argument("--changed", dest="e2e_changed", action="store_true", help="沒歸屬那一項只看這次改到的檔(跟 --changed 挑功能同一份改動清單)")
++    aev.add_argument("--files", dest="e2e_files", action="store_true", help="沒歸屬的檔逐檔列(預設按資料夾彙總)")
++    aev.add_argument("--json", dest="e2e_json", action="store_true", help="印成 JSON")
+     aej.add_argument("--precheck", dest="e2e_precheck", action="store_true",
+                      help="只看工作目錄能不能開跑(簿記檔以外沒有改動、沒有沒追蹤的新檔):可以回 0,不行回 2")
+ 
+     cc = sub.add_parser("cochange", help="co-change 漏改守衛(vault-free):git 歷史挖共改規則,commit 時警告漏改夥伴(advisory)")
+     ccsub = cc.add_subparsers(dest="cccmd", required=True)
+     ccr = ccsub.add_parser("rules", help="列告警規則集(預設套 config 門檻;--all 解除 confidence 門檻)")
+     ccr.add_argument("--all", action="store_true", dest="coch_all",
+                      help="解除 confidence 門檻(support 硬底線 2 仍全域生效)")
+     ccr.add_argument("--repo", dest="coch_repo", default=None, help="repo root(預設 cwd 逐層向上找 .git)")
+     ccr.add_argument("--json", action="store_true", dest="coch_json", help="輸出 JSON manifest")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9efea664..4d95d505 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21180,20 +21180,194 @@ def t_android_e2e_scope_shared():
+         _rc, d = _e2eg_check(root)
+         check("e2e scope S37:兩邊挑到同一批情境", sel.get("cases") == d.get("cases") == ["login.ok"], str((sel, d)))
+         check("e2e scope S37:單元測試檔兩邊都不算(--changed 不列成對不到功能)", "app/src/test/T.kt" not in (sel.get("unmatched") or []), str(sel))
+         m = _load_lumos()
+         e2e = json.loads((root / ".lumos" / "macrobench.json").read_text(encoding="utf-8"))["e2e"]
+         for f, want in (("app/src/main/A.kt", True), ("app/src/test/T.kt", False), (".maestro/login.yaml", True), ("README.md", False)):
+             check(f"e2e scope S37:{f} 在不在指紋範圍={want}", m._e2e_scope_hit(f, e2e)[1] is want)
+     print("  ✓ t_android_e2e_scope_shared")
+ 
+ 
++# ── Android 端到端驗收:功能對照表涵蓋報告(單源 Projects/端到端驗收對照表涵蓋報告_計劃)──
++def _e2ecov_run(root, *args):
++    import json
++    r = _e2e_run(root, "android-e2e", "coverage", "--repo", str(root), *args, env=_e2eg_env())
++    try:
++        d = json.loads(r.stdout) if "--json" in args else None
++    except ValueError:
++        d = None
++    return r, d
++
++
++def t_android_e2e_coverage_unowned():
++    """S1:不在任何功能 paths、也不在 shared_paths 的程式檔按資料夾彙總列出(資料夾、沒歸屬幾支、共幾支),--files 逐檔列;
++    單元測試檔(預設排除)、驗收素材、指紋範圍外的檔不列;回 0。判準來源是計劃〈報告列什麼〉第 1 項。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td, e2e={"shared_paths": ["app/src/main/net/"]})
++        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n", "app/src/main/Y.kt": "y\n", "app/src/main/net/Http.kt": "h\n",
++                            "app/src/test/Z2.kt": "t\n", "docs/x.md": "x\n"})
++        r, d = _e2ecov_run(root, "--json")
++        u = {x["dir"]: x for x in d["unowned"]} if d else {}
++        check("e2e coverage S1:回 0", r.returncode == 0, r.stderr[-200:])
++        check("e2e coverage S1:沒歸屬的兩支在 app/src/main 那一列、共幾支也對(A、B、Y、Z 四支;net 在子資料夾另算)",
++              set(u) == {"app/src/main"} and u["app/src/main"]["unowned"] == 2 and u["app/src/main"]["total"] == 4
++              and sorted(u["app/src/main"]["files"]) == ["app/src/main/Y.kt", "app/src/main/Z.kt"], str(d))
++        check("e2e coverage S1:shared_paths、單元測試、驗收素材、範圍外的檔都不列",
++              not any(k.startswith(("app/src/main/net", "app/src/test", ".maestro", "docs")) for k in u), str(u))
++        r, _d = _e2ecov_run(root)
++        check("e2e coverage S1:預設按資料夾彙總、不逐檔列", "app/src/main/  沒歸屬 2 支 / 共 4 支" in r.stdout and "app/src/main/Z.kt" not in r.stdout, r.stdout)
++        r, _d = _e2ecov_run(root, "--files")
++        check("e2e coverage S1:--files 逐檔列", "app/src/main/Z.kt" in r.stdout and "app/src/main/Y.kt" in r.stdout, r.stdout)
++    print("  ✓ t_android_e2e_coverage_unowned")
++
++
++def t_android_e2e_coverage_cases_and_materials():
++    """S2:功能每個情境都只列效能 → 列成沒有會判情境的功能;e2e.flows、e2e.visual 有沒被任何情境列到的 → 列成沒人用的驗收素材。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td, e2e={"macrobench": True, "macrobench_cmd": "true {{TEST}}", "visual": ["home_visual"],
++                                   "features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}},
++                                                "bench": {"paths": ["app/src/main/B.kt"], "cases": {"s": {"macrobench": ["Bench#scroll"]}}}}},
++                           top={"results_dirs": ["r"]})
++        r, d = _e2ecov_run(root, "--json")
++        check("e2e coverage S2:只列效能的功能列出來", r.returncode == 0 and d and d["features_without_judged_cases"] == ["bench"], str((r.stderr[-200:], d)))
++        check("e2e coverage S2:沒人用的流程檔與畫面列出來", d and d["unused_flows"] == [".maestro/other.yaml"] and d["unused_screens"] == ["home_visual"], str(d))
++    print("  ✓ t_android_e2e_coverage_cases_and_materials")
++
++
++def t_android_e2e_coverage_changed_json():
++    """S3:--changed 時沒歸屬那一項只看這次改到的檔(跟 --changed 挑功能同一份改動清單,含沒提交的新檔);--json 三項各一個清單。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td)
++        _e2e_tgit(root, "checkout", "-q", "main")
++        _e2eg_commit(root, {"app/src/main/Old.kt": "old\n"})   # 主線上本來就沒歸屬的檔
++        _e2e_tgit(root, "checkout", "-q", "feat")
++        _e2e_tgit(root, "rebase", "-q", "main")
++        (root / "app" / "src" / "main" / "New.kt").write_text("n\n", encoding="utf-8")   # 這次新加、還沒提交
++        r, d = _e2ecov_run(root, "--changed", "--json")
++        files = [f for u in (d or {}).get("unowned", []) for f in u["files"]]
++        check("e2e coverage S3:--changed 只列這次改到的(含沒提交的新檔)", r.returncode == 0 and files == ["app/src/main/New.kt"], str((r.stderr[-200:], d)))
++        check("e2e coverage S3:--json 三項各一個清單", d and all(isinstance(d.get(k), list) for k in
++                                                       ("unowned", "features_without_judged_cases", "unused_flows", "unused_screens")), str(d))
++        r, d = _e2ecov_run(root, "--json")
++        files = sorted(f for u in (d or {}).get("unowned", []) for f in u["files"])
++        check("★對照★ 不帶 --changed 看工作目錄已追蹤的檔(沒加進 git 的新檔不在裡面)", files == ["app/src/main/Old.kt"], str(d))
++    print("  ✓ t_android_e2e_coverage_changed_json")
++
++
++def t_android_e2e_coverage_bad_config():
++    """S4:設定讀不懂、e2e 段不合格、沒有 features 時回 2 並說原因。"""
++    import tempfile
++    for desc, mutate, word in (("沒有 features", lambda c: c["e2e"].pop("features"), "features"),
++                               ("e2e 段不合格", lambda c: c["e2e"].update(visual_threshold=1), "visual_threshold"),
++                               ("沒有 e2e 段", lambda c: c.pop("e2e"), "results_dirs")):
++        with tempfile.TemporaryDirectory() as td:
++            root = _e2eg_proj(td)
++            _e2e_set_cfg(root, mutate, commit=desc)
++            r, _d = _e2ecov_run(root)
++            check(f"e2e coverage S4:{desc}→回 2 並說原因", r.returncode == 2 and word in r.stderr, str((desc, r.returncode, r.stderr[-200:])))
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td)
++        (root / ".lumos" / "macrobench.json").write_text("{not json", encoding="utf-8")
++        _e2e_tgit(root, "commit", "-qam", "broken")
++        r, _d = _e2ecov_run(root)
++        check("e2e coverage S4:設定讀不懂→回 2", r.returncode == 2 and "JSON 格式壞了" in r.stderr, r.stderr[-200:])
++    print("  ✓ t_android_e2e_coverage_bad_config")
++
++
++def t_android_e2e_coverage_doctor_line():
++    """S5:功能對照表有缺口時 lumos doctor 的 AE 段多印一行三個數字與看的指令;三個數字都是 0 時不印。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td, vault=True)
++        r = _e2e_run(root, "doctor", env=_e2eg_env())
++        check("e2e coverage S5:沒有缺口→doctor 不印那一行", "功能對照表有" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-300:])
++        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n"})
++        r = _e2e_run(root, "doctor", env=_e2eg_env())
++        check("e2e coverage S5:有缺口→doctor 印三個數字與指令", "功能對照表有 1 支程式檔沒歸屬、0 個功能沒有會判的情境、0 份驗收素材沒人用"
++              in r.stdout + r.stderr and "lumos android-e2e coverage" in r.stdout + r.stderr, (r.stdout + r.stderr)[-400:])
++    print("  ✓ t_android_e2e_coverage_doctor_line")
++
++
++def t_android_e2e_coverage_worktree_cfg():
++    """補完對照表、還沒提交就跑涵蓋報告(技能文件教的順序):讀工作目錄的設定,剛補的檔不再列成沒歸屬;
++    HEAD 還沒有 features、工作目錄剛補上也照樣印得出報告(代碼審 code-e2e-coverage r1 單審席)。"""
++    import json, tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td)
++        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n"})
++        p = root / ".lumos" / "macrobench.json"
++        cfg = json.loads(p.read_text(encoding="utf-8"))
++        r, d = _e2ecov_run(root, "--json")
++        check("★前置★ 補表之前 Z.kt 列成沒歸屬", r.returncode == 0 and [f for u in d["unowned"] for f in u["files"]] == ["app/src/main/Z.kt"], str(d))
++        cfg["e2e"]["features"]["login"]["paths"].append("app/src/main/Z.kt")
++        p.write_text(json.dumps(cfg), encoding="utf-8")   # 不提交
++        for args in ((), ("--changed",)):
++            r, d = _e2ecov_run(root, *args, "--json")
++            check(f"e2e coverage 工作目錄設定:{args or '整棵樹'} 補表後不提交就不再列", r.returncode == 0 and d and d["unowned"] == [], str((r.stderr[-200:], d)))
++        (root / "app" / "src" / "main" / "Staged.kt").write_text("s\n", encoding="utf-8")
++        _e2e_tgit(root, "add", "app/src/main/Staged.kt")   # 加進 git、還沒提交
++        r, d = _e2ecov_run(root, "--json")
++        check("e2e coverage 工作目錄設定:整棵樹看已追蹤的檔(加進 git 還沒提交的新檔也列)",
++              r.returncode == 0 and d and [f for u in d["unowned"] for f in u["files"]] == ["app/src/main/Staged.kt"], str((r.stderr[-200:], d)))
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td)
++        p = root / ".lumos" / "macrobench.json"
++        full = p.read_text(encoding="utf-8")
++        _e2e_set_cfg(root, lambda c: c["e2e"].pop("features"), commit="還沒有對照表")
++        p.write_text(full, encoding="utf-8")   # 工作目錄剛補上 features,還沒提交
++        r, _d = _e2ecov_run(root)
++        check("e2e coverage 工作目錄設定:HEAD 沒有 features、工作目錄剛補上→印得出報告", r.returncode == 0, r.stderr[-200:])
++    print("  ✓ t_android_e2e_coverage_worktree_cfg")
++
++
++def t_android_e2e_coverage_judged_keys():
++    """只有截圖或只有記憶體情境的功能有會判的情境,不能列成「沒有會判情境」;跟推送前判定分「需驗/只列效能」同一組鍵。"""
++    m = _load_lumos()
++    feats = {"vis": {"paths": ["a/V.kt"], "cases": {"v": {"visual": ["home_visual"]}}},
++             "stab": {"paths": ["a/S.kt"], "cases": {"s": {"stability": ["player"]}}},
++             "flow": {"paths": ["a/F.kt"], "cases": {"f": {"flows": [".maestro/f.yaml"]}}},
++             "bench": {"paths": ["a/B.kt"], "cases": {"b": {"macrobench": ["Bench#scroll"]}}}}
++    rep = m._e2e_coverage_report(None, {"app_dirs": ["a/"], "flows": [".maestro/f.yaml"], "visual": ["home_visual"], "features": feats}, [])
++    check("e2e coverage 會判情境:只有 bench 列出來", rep["features_without_judged_cases"] == ["bench"], str(rep))
++    print("  ✓ t_android_e2e_coverage_judged_keys")
++
++
++def t_android_e2e_coverage_same_as_gate():
++    """涵蓋報告列的「沒歸屬」加「共用程式」,正好等於推送前判定要整套跑的那批檔(共用同一支逐檔判定):
++    同時在功能 paths 與 shared_paths 底下的檔,兩邊都當共用(代碼審 code-e2e-coverage r1 架構對齊席、單審席)。"""
++    import json, tempfile
++    m = _load_lumos()
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td, e2e={"shared_paths": ["app/src/main/net/"]})
++        cfg = json.loads((root / ".lumos" / "macrobench.json").read_text(encoding="utf-8"))
++        cfg["e2e"]["features"]["login"]["paths"].append("app/src/main/net/")
++        (root / ".lumos" / "macrobench.json").write_text(json.dumps(cfg), encoding="utf-8")
++        _e2eg_commit(root, {".lumos/macrobench.json": json.dumps(cfg), "app/src/main/Z.kt": "z\n", "app/src/main/net/Http.kt": "h\n"})
++        e2e = cfg["e2e"]
++        files = ["app/src/main/A.kt", "app/src/main/Z.kt", "app/src/main/net/Http.kt"]
++        why, _own = m._e2e_gate_owners(files, e2e, e2e["features"])
++        gate = {f for f in files if any(w.startswith(f + "(") for w in why)}
++        r, d = _e2ecov_run(root, "--json")
++        cov = {f for u in (d or {}).get("unowned", []) for f in u["files"]} | set((d or {}).get("shared") or [])
++        check("★前置★ 推送判定要整套的是 Z 與 Http", gate == {"app/src/main/Z.kt", "app/src/main/net/Http.kt"}, str(why))
++        check("e2e coverage 跟推送判定同口徑:沒歸屬+共用=要整套的那批", r.returncode == 0 and cov == gate, str((r.stderr[-200:], d)))
++        r, _d = _e2ecov_run(root)
++        check("e2e coverage 文字版列共用程式支數", "共用程式(列在 shared_paths):1 支" in r.stdout, r.stdout)
++        _e2eg_commit(root, {"app/src/main/E\x1b[2JX.kt": "e\n"})
++        r, _d = _e2ecov_run(root, "--files")
++        check("e2e coverage 文字版:檔名裡的控制字元經清理才印(同 e2e 區其他輸出)", r.returncode == 0 and "\x1b" not in r.stdout and "E" in r.stdout, repr(r.stdout[-300:]))
++    print("  ✓ t_android_e2e_coverage_same_as_gate")
++
++
+ def _e2e_rejudge_copy(root, src, dst, mutate):
+     """複製一次按功能跑的 run 目錄成 dst,steps.json 交給 mutate 改(結束時間往後推一分鐘),回新的 run 目錄。"""
+     import datetime as _dt, json, shutil
+     a = root / ".lumos/artifacts/android"
+     shutil.copytree(a / src, a / dst)
+     st = json.loads((a / dst / "steps.json").read_text())
+     st["run_id"] = dst
+     st["ended"] = (_dt.datetime.fromisoformat(st["ended"]) + _dt.timedelta(minutes=1)).isoformat(timespec="seconds")
+     mutate(st)
+     (a / dst / "steps.json").write_text(json.dumps(st))
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index 173891fe..3f33772d 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -42,21 +42,21 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:
+ - 先 `--preflight` 只驗裝置與工具;缺 Perfetto 工具會在動 App 之前擋。開發中工作目錄有改動時要帶挑法一起驗(`--preflight --changed` 或 `--preflight --feature <功能>`),單獨的 `--preflight` 是整套跑的前置、會要求工作目錄乾淨。
+ - `--changed` 比的是「HEAD 跟主線分岔點的差異」加工作目錄的改動與沒追蹤的新檔;改到某個情境列的 flow 檔也算那個功能。回 2 說「對不到任何功能」時先看它印的改到的檔:列的是「(沒有改動)」,多半是你直接在主線上提交了(HEAD 就是分岔點),開分支或用 `--feature`;列了檔卻都不在任何功能的 `paths` 裡,才是補對照表或整套跑。不要當成沒事。
+ - `e2e` 段還沒有 `features` 時,三種挑法一律回 2;先照下面補對照表。
+ - 跑完把它印的紀錄檔 `git add` 提交(`.lumos/e2e-records/`,簿記檔,不會讓代碼審留痕失效)。
+ 
+ **新增功能或使用情境時一起補**(同一個提交):
+ 1. 每個使用情境一支 Maestro flow,斷言照需求寫(寫法見 lumos-project-notes reference〈產 maestro UI flow 的派工要求〉),加進 `e2e.flows`。
+ 2. `e2e.features.<功能>`:`paths` 列這個功能的程式路徑;`cases.<情境>` 列它的 `flows`、`visual`(有基準圖的畫面,畫面也要在 `e2e.visual` 裡)、`macrobench`(測試方法名,只收英數字、點、底線與 `#`、開頭不能是 `#`;不收 `$`,名字原樣換進 shell 會被展開成別支;`macrobench_cmd` 要帶 `{{TEST}}`,帶了之後整套跑也只跑對照表列到的方法)、`stability`(最外層 `stability_scenarios` 裡的情境名)。
+    大家共用的程式列進 `e2e.shared_paths`(路徑寫法同 `paths`,要在 `app_dirs` 底下):推送前改到它就要整套跑。
+    新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次,各留一份錄製檔在 `.lumos/artifacts/android/<run-id>.<情境>/`,不會自動清。
+-3. `lumos macrobench --check-config` 回 0 才算接好。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
++3. `lumos macrobench --check-config` 回 0 才算接好;再跑 `lumos android-e2e coverage --changed`,看這次改到的檔是不是都歸屬到功能(沒歸屬的,推送時會被要求整套跑)。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
+ 
+ **紅了看哪裡**:UI 流程沒過看終端印的報告路徑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。
+ 
+ **推送前被擋下**:照訊息跑它印的那一行(`--case <功能.情境>` 或整套),跑完提交紀錄再推。確定是誤擋(例如裝置狀態造成的)才用它印的 `lumos android-e2e waive <完整指紋> --commit <提交> --note "<理由>"` 放行:你沒有互動終端,會記成 AI 放行,推送、`lumos doctor` 與開場提示會一直列給人看,直到人用 `--ack` 看過;不要為了讓推送過而放行,放行前先跟使用者講。只這一次整道先不跑:`LUMOS_SKIP_ANDROID_E2E=1 git push`(會記帳,也要跟使用者講)。
+ 
+ ## L0:有沒有變慢、有沒有達門檻
+ 
+ 1. 跑專案的 Macrobenchmark(實體裝置、USB、先 `adb shell svc power stayon usb`;跑前刪掉裝置上 `/sdcard/Android/media/<benchmark 套件>/` 舊檔)。
+ 2. 記下這次的輸入:啟動參數(`am instrument -e …`、intent extras)、測試資料、Feature Flag。基準與候選兩邊都記;同一個 APK 只換參數時,這是兩邊唯一的差異,沒記就證明不了差在哪。
+ 3. 跑前跑後各記一次裝置狀態(L0 是推送前的綁定測試閘代跑、你拿到時已經跑完的話,當下補量一次,收據 gaps 寫明是事後量的):型號、`ro.build.fingerprint`、電量、`dumpsys thermalservice` 的 Thermal Status;從裝置 `pm path` 拉實際安裝的 APK 算 sha256(同一份原始碼重建的 APK 雜湊會不同,只記建置產物不夠)。

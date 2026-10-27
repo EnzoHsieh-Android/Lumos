@@ -532,20 +532,22 @@ def android_scene(en):
           "記憶體類的檢查沒過時，虛線從 L0 直接跳到 L3。哪一層沒問題就記下並停在那一層；全部寫進可重跑、並由不知前因的 AI 再判一次的查證紀錄。")
     return title,746,b,desc
 
-ANDROID_ACCEPTANCE_TITLES={"en":"Android: check by feature, then the whole app.","zh":"Android：開發中按功能驗，推之前整套驗"}   # validate 也用它認圖,改標題只改這裡
+ANDROID_ACCEPTANCE_TITLES={"en":"Android: check by feature, push with a record.","zh":"Android：開發中按功能驗，推送前要有紀錄"}   # validate 也用它認圖,改標題只改這裡
 
 def android_acceptance_scene(en):
     title=ANDROID_ACCEPTANCE_TITLES["en" if en else "zh"]
-    b=text(38,128,"By feature or use case while developing, whole app before push; every run is logged." if en else "開發中按功能或使用情境跑，推之前整套跑；每一次都留檢測紀錄。",
+    b=text(38,128,"By feature while developing; the push needs a passing record, whole app or by feature." if en else "開發中按功能跑；推送前要有這一版通過的紀錄，整套或按功能都算。",
            17 if en else 20,"muted")
-    # 怎麼叫:四種挑法(整套寫整套的紀錄;其餘按功能,乾淨時按情境記進這一版紀錄)
-    b+='<g data-kind="android-e2e-invoke">'+rect(38,146,684,70,"#14243a","#344967",14)
+    # 怎麼叫:兩排。按功能(整套或三種挑法)、按檢測(略過效能或記憶體,只配挑法)
+    b+='<g data-kind="android-e2e-invoke">'+rect(38,146,684,102,"#14243a","#344967",14)
     b+=text(58,172,"How to run" if en else "怎麼叫",17,"green",weight=650)
-    for k,(lab,c) in enumerate((("Whole app (push)" if en else "整套（推送前）","green"),("--changed","blue"),
+    for k,(lab,c) in enumerate((("Whole app" if en else "整套","green"),("--changed","blue"),
                                 ("--feature" if en else "--feature 功能","blue"),("--case" if en else "--case 情境","blue"))):
         b+=badge(58+k*164,180,lab,c,154)
+    b+=text(58,233,"By check (only with a choice above)" if en else "按檢測（只配上面的挑法）",14 if en else 15,"muted")
+    b+=badge(386,214,"--no-perf","gold",154)+badge(550,214,"--no-memory","purple",154)
     b+='</g>'
-    b+='<g transform="translate(0,86)">'
+    b+='<g transform="translate(0,118)">'
     b+='<g data-kind="android-e2e-preflight">'+rect(38,150,684,58,"#14243a","#344967",14)
     b+=text(58,177,"Preflight" if en else "開跑前檢查",20,"green",weight=650)
     b+=text(58,199,"Device, tools (whole app: clean tree); fails → stop" if en else "裝置、工具（整套跑還要工作目錄乾淨）；不過就停下",15 if en else 16,"muted")
@@ -575,8 +577,8 @@ def android_acceptance_scene(en):
     b+=path("M220 658V676","line",2)+arrow(220,680,"down")+path("M540 658V676","coral",2,"6 6",True)+arrow(540,680,"down","coral")
     b+='<g data-kind="android-e2e-outcome" data-outcome="pass">'+rect(38,684,330,104)+rect(39,685,4,102,C["green"],"none",2)
     b+=text(58,716,"Passed" if en else "通過",20,"green",weight=650)
-    b+=text(58,744,"Whole app: commit the record, push" if en else "整套跑：提交查證紀錄，再推送",15 if en else 16,"muted")
-    b+=text(58,770,"By feature: a clean run is recorded too" if en else "按功能跑：從頭到尾都乾淨也記進紀錄",14 if en else 15,"muted")+'</g>'
+    b+=text(58,744,"Commit the record, then push" if en else "提交查證紀錄，再推送",15 if en else 16,"muted")
+    b+=text(58,770,"Push check: whole app or each changed feature" if en else "推送前檢查：整套，或改到的功能都跑過",14 if en else 15,"muted")+'</g>'
     b+='<g data-kind="android-e2e-outcome" data-outcome="dig">'+rect(392,684,330,104)+rect(393,685,4,102,C["coral"],"none",2)
     b+=text(412,716,"Failed, or a slowdown warning" if en else "沒過，或印了變慢的提醒",20,"coral",weight=650)
     b+=text(412,744,"UI or screenshots: see the report, diff" if en else "UI、截圖沒過：看終端印的報告與差異圖",14 if en else 15,"muted")
@@ -584,13 +586,13 @@ def android_acceptance_scene(en):
     b+=text(380,822,"Build failed, a tool is missing, or it was interrupted: fix the setup and rerun" if en else "建置失敗、缺工具、跑到一半被中斷：是環境的問題，修好再跑",15 if en else 16,"muted","middle")
     b+=text(380,848,"Every run goes into the local check log; with uncommitted changes, only there" if en else "每一次都記進本機檢測總表；開跑時有沒提交的改動就只記總表",15 if en else 16,"muted","middle")
     b+='</g>'
-    desc=("Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case), or as a whole-app check before pushing. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. "
+    desc=("Android device acceptance. It runs by feature or by use case while developing (--changed picks features from the changed files, --feature, --case; --no-perf and --no-memory skip speed or memory, only together with one of those), or as a whole-app check. A preflight with adb and git checks the device and tools, and for a whole-app run that the working tree is clean; if it fails the script stops and never touches the app. "
           "Five steps then run in order, each with its tool: Gradle and adb build and install the app and record its fingerprint; Maestro taps through the flow files, retrying once; visual-check.sh compares screenshots with approved baselines at 99.5 percent; dumpsys and Perfetto watch memory, crashes and StrictMode while a screen opens and closes; Macrobenchmark compares speed with the saved baseline and only warns. "
-          "lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push; a slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).") if en else (
-          "Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case),推之前整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。"
+          "lumos android-e2e judge decides and writes a verification record tied to this version. If it passed, commit the record and push: the push check reads the record from the pushed commit and lets it through when the whole app passed, or when every use case of each feature the changes touch passed by feature; shared code, a file that belongs to no feature, or a changed acceptance configuration needs the whole app. A slowdown only adds a warning. If UI flows or screenshots failed, read the report and diff image the terminal points to; if memory failed or a slowdown warning appeared, go to the layered check, where L0 first decides whether there is an anomaly and only then digs into L1, L2 and L3. A failed build, a missing tool or an interruption is a setup problem: fix it and run again. Every run goes into the local check log; when the working tree was clean from start to judgement and the version did not change, the results also go into the verification record for this version (whole-app runs and by-feature runs alike).") if en else (
+          "Android 實機驗收。開發中按功能或使用情境跑(--changed 從改到的檔挑功能、--feature、--case;--no-perf、--no-memory 略過效能或記憶體,只配這三種挑法),或整套跑。先用 adb 與 git 做開跑前檢查：裝置、工具，整套跑還要工作目錄乾淨；不過就停下，完全不碰 App。"
           "接著依序五步，各自寫出工具：Gradle 與 adb 建置安裝並記下檔案指紋；Maestro 照流程檔點一遍、沒過重跑一次；visual-check.sh 拿截圖跟人看過的基準圖比、門檻 99.5%；dumpsys 與 Perfetto 在反覆開關畫面時看漏記憶體、閃退與違規；Macrobenchmark 跟存好的基準比效能，只提醒。"
-          "lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送，效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。")
-    return title,962,b,desc
+          "lumos android-e2e judge 判過不過，寫一份綁在這一版的查證紀錄。通過就提交紀錄再推送：推送前檢查從被推送的提交讀紀錄，整套通過、或改到的每個功能的情境都按功能通過就放行，改到共用程式、對不到功能的檔或改了驗收設定就要整套；效能變慢只多印提醒；UI 流程或截圖沒過，就看終端指的報告與差異圖；記憶體沒過或印了變慢提醒，才接到分層查證，L0 先判有沒有異常，再往 L1、L2、L3 查；建置失敗、缺工具或跑到一半被中斷是環境的問題，修好再跑。每一次都記進本機檢測總表；從開跑到判讀工作目錄都乾淨、版本沒換時，結果也寫進這一版的查證紀錄(整套跑與按功能跑都算)。")
+    return title,994,b,desc
 
 SCENES={"map":("00 / THE SYSTEM",map_scene),
         "drift-guard":("NOTES / DRIFT CHECKS",drift_scene),
