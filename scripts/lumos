@@ -4155,8 +4155,11 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
     # Android 端到端驗收:還沒人看過的 AI 放行(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 5 步;只提醒,--ci 不變紅)。
     # 專案有查證紀錄目錄才出這一段,沒用 Android 驗收的專案不多一段
     _aer = _vault_repo_root(env)
-    if _aer is not None and (_aer / E2E_RECORDS_DIR).is_dir():
-        section("AE", "Android 端到端驗收有沒有還沒人看過的 AI 放行(提醒,不擋)")
+    _acov = _e2e_coverage_line(_aer) if _aer is not None and (_aer / ".lumos" / "macrobench.json").is_file() else None
+    if _aer is not None and ((_aer / E2E_RECORDS_DIR).is_dir() or _acov):
+        section("AE", "Android 端到端驗收有沒有還沒人看過的 AI 放行、功能對照表有沒有缺口(提醒,不擋)")
+        if _acov:
+            warn_soft([_acov], "功能對照表有缺口(提醒,不擋):", "補進 features.<功能>.paths 或 shared_paths,情境列會判的項目")
         _aip, _aun, _abig = _e2e_ai_pending_all(_aer)
         if _aip or _aun or _abig:
             # 沒讀到的份數排前面:warn_soft 預設只印前三條
@@ -41581,20 +41584,33 @@ def _e2e_gate_need(root, base, sha, e2e, base_full, full, deadline):
 def _e2e_gate_owners(files, e2e, feats, deadline=None):
     """改到的檔(已在指紋範圍)→ (要整套的原因清單, 歸屬到的功能集合):落在 shared_paths 底下、或對不到任何功能都算要整套。
     每 1000 支查一次截止時間:這段是純 Python 迴圈,不查的話大改動跑完才在下一次 git 呼叫逾時、原因講錯。"""
-    shared = [_e2e_norm(x) for x in e2e.get("shared_paths") or []]
-    index = _e2e_owner_index(feats)
+    ctx = _e2e_owner_ctx(e2e, feats)
     why, owners = [], set()
     for i, f in enumerate(files):
         if i % 1000 == 0:
             _secev_deadline_check(deadline)
-        if any(_e2e_under(f, d) for d in shared):
+        kind, got = _e2e_file_owner(f, ctx)
+        if kind == "shared":
             why.append(f"{_esc_clean(f, 200)}(共用程式,列在 shared_paths)")
-            continue
-        got = _e2e_owners(f, feats, index)
-        if not got:
+        elif kind == "none":
             why.append(f"{_esc_clean(f, 200)}(對不到任何功能)")   # 檔名是被推送提交的作者可控的:擋下訊息會進 AI 視野(代碼審 r2 資安席)
         owners.update(got)
     return why, owners
+
+
+def _e2e_owner_ctx(e2e, feats):
+    """逐檔判歸屬要的前置(正規化過的 shared_paths、功能歸屬查表):整批檔只算一次。"""
+    return [_e2e_norm(x) for x in e2e.get("shared_paths") or []], feats, _e2e_owner_index(feats)
+
+
+def _e2e_file_owner(f, ctx):
+    """一支檔(已在指紋範圍)的歸屬 → ("shared", 空集合) / ("none", 空集合) / ("owned", 功能集合)。
+    推送前判定(_e2e_gate_owners)與涵蓋報告(_e2e_coverage_report)共用這一支:shared 先判,落在底下就算共用、不再看功能。"""
+    shared, feats, index = ctx
+    if any(_e2e_under(f, d) for d in shared):
+        return "shared", set()
+    got = _e2e_owners(f, feats, index)
+    return ("owned", got) if got else ("none", set())
 
 
 def _e2e_gate_by_feature(rec, e2e, need):
@@ -42119,6 +42135,107 @@ def _e2e_waive_cmd(root, fp, commit, note, list_mode=False, ack=None, ack_all=Fa
 
 
 
+def _e2e_coverage_report(root, e2e, files):
+    """功能對照表的三種缺口(單源 Projects/端到端驗收對照表涵蓋報告_計劃〈報告列什麼〉)→ dict。
+    files:要看歸屬的檔(整棵樹或這次改到的);範圍判斷與逐檔歸屬跟推送前判定共用同一套(_e2e_scope_hit、_e2e_file_owner),
+    所以程式檔裡「沒歸屬」加「共用程式」正好是推送前判定要整套跑的那批;驗收素材(.maestro/ 底下、門檻檔)不列,
+    改到沒被任何情境列到的素材(例如基準圖、門檻檔)推送前判定照樣要求整套跑(代碼審 code-e2e-coverage r2 兩席)。"""
+    feats = e2e.get("features") or {}
+    dirs = _e2e_scope_dirs(e2e)
+    ctx = _e2e_owner_ctx(e2e, feats)   # 整棵樹幾萬支檔時只正規化一次對照表
+    groups, shared = {}, []
+    for f in files:
+        app, inside = _e2e_scope_hit(f, e2e, dirs)
+        if app is None or not inside:   # 驗收素材、單元測試、範圍外的檔不算程式檔
+            continue
+        g = groups.setdefault(os.path.dirname(f) or ".", {"unowned": [], "total": 0})
+        g["total"] += 1
+        kind, _got = _e2e_file_owner(f, ctx)
+        if kind == "none":
+            g["unowned"].append(f)
+        elif kind == "shared":
+            shared.append(f)
+    unowned = [{"dir": d, "unowned": len(g["unowned"]), "total": g["total"], "files": g["unowned"]}
+               for d, g in sorted(groups.items()) if g["unowned"]]
+    no_cases = sorted(fn for fn, v in feats.items()
+                      if not any(c.get(k) for c in v["cases"].values() for k in ("flows", "visual", "stability")))
+    used_flows = {_e2e_norm(x) for v in feats.values() for c in v["cases"].values() for x in c.get("flows") or []}
+    used_screens = {x for v in feats.values() for c in v["cases"].values() for x in c.get("visual") or []}
+    return {"unowned": unowned, "shared": shared, "features_without_judged_cases": no_cases,
+            "unused_flows": [f for f in e2e.get("flows") or [] if _e2e_norm(f) not in used_flows],
+            "unused_screens": [s for s in e2e.get("visual") or [] if s not in used_screens]}
+
+
+def _e2e_coverage_input(root, changed, timeout=120):
+    """涵蓋報告要的設定與檔案清單 → (e2e 段, 檔案清單, 說明, 錯誤訊息或 None)。設定讀工作目錄(跟 --changed 挑功能、
+    macrobench --check-config 同一套驗法):補完對照表還沒提交就看得到結果(代碼審 code-e2e-coverage r1 單審席);
+    檔案清單預設是工作目錄已追蹤的檔(git ls-files,帶 pathspec 只列 app_dirs),--changed 時是 --changed 挑功能那一份改動清單。"""
+    e2e, _scen, err = _e2e_worktree_e2e(root)
+    if err is None and not e2e.get("features"):
+        err = "e2e 段沒有 features(功能對照表);先補,見 Projects/Android端到端驗收_計劃〈按功能與使用情境跑〉"
+    if err:
+        return None, None, "", err
+    if changed:
+        files, note, gerr = _e2e_changed_files(root)
+        return e2e, files, note, gerr
+    raw = _nodehome_git(root, "--literal-pathspecs", "ls-files", "-z", "--", *_e2e_scope_dirs(e2e)[0], timeout=timeout)
+    if raw is None:
+        return None, None, "", "列不出工作目錄已追蹤的檔(git 失敗或逾時)"
+    return e2e, _nodehome_split_z(raw), "", None
+
+
+def _e2e_coverage_cmd(root, changed=False, files_mode=False, as_json=False):
+    """lumos android-e2e coverage:功能對照表的三種缺口,只讀、不擋。rc 0=印得出報告(不論有沒有缺口);2=設定讀不懂、不合格、沒有 features。"""
+    import json
+    root = Path(root).resolve()
+    e2e, files, note, err = _e2e_coverage_input(root, changed)
+    if err:
+        _say_block(err)
+        return 2
+    rep = _e2e_coverage_report(root, e2e, files)
+    if as_json:
+        print(json.dumps(dict(rep, changed=changed, note=note), ensure_ascii=False))
+        return 0
+    if note:
+        print(f"說明:{note}")
+    print(f"功能對照表涵蓋報告({'這次改到的檔' if changed else '工作目錄已追蹤的檔'}):")
+    print(f"  沒歸屬的程式檔:{sum(u['unowned'] for u in rep['unowned'])} 支" + ("(改到它們時,推送前檢查會要求整套跑)" if rep["unowned"] else ""))
+    for u in rep["unowned"]:
+        print(f"    {_esc_clean(u['dir'], 200)}/  沒歸屬 {u['unowned']} 支 / 共 {u['total']} 支")
+        for f in u["files"] if files_mode else []:
+            print(f"      {_esc_clean(f, 200)}")
+    if rep["shared"]:
+        print(f"  共用程式(列在 shared_paths):{len(rep['shared'])} 支(改到它們時,推送前檢查也會要求整套跑)")
+    print(f"  沒有會判情境的功能(情境都只列效能,按功能判時等於沒驗):{_e2e_cov_names(rep['features_without_judged_cases'])}")
+    print(f"  沒人用的流程檔(按功能跑永遠跑不到):{_e2e_cov_names(rep['unused_flows'])}")
+    print(f"  沒人用的截圖畫面:{_e2e_cov_names(rep['unused_screens'])}")
+    if rep["unowned"] and not files_mode:
+        print("  逐檔列:lumos android-e2e coverage --files;補進對照表的 features.<功能>.paths,或大家共用的列進 shared_paths")
+    return 0
+
+
+def _e2e_cov_names(xs):
+    """涵蓋報告文字版的名字清單:每個經 _esc_clean(檔名、功能名是設定作者寫的,跟 e2e 區其他輸出同一套清理),空的印「無」。"""
+    return "、".join(_esc_clean(x, 200) for x in xs) or "無"
+
+
+def _e2e_coverage_line(root):
+    """doctor 的 AE 段那一行:三個數字都是 0、或算不出來(10 秒上限)→ None。"""
+    try:
+        e2e, files, _note, err = _e2e_coverage_input(Path(root), False, timeout=10)
+        if err:
+            return None
+        rep = _e2e_coverage_report(root, e2e, files)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    n1 = sum(u["unowned"] for u in rep["unowned"])
+    n2 = len(rep["features_without_judged_cases"])
+    n3 = len(rep["unused_flows"]) + len(rep["unused_screens"])
+    if not (n1 or n2 or n3):
+        return None
+    return f"功能對照表有 {n1} 支程式檔沒歸屬、{n2} 個功能沒有會判的情境、{n3} 份驗收素材沒人用;看:lumos android-e2e coverage"
+
+
 def _e2e_check_cmd(root, at_sha=None, branch=None, range_start=None):
     """lumos android-e2e check:推送前那道 Android E2E 判定單獨跑一次、印成 JSON(推之前先看會不會擋;code-loop check 用同一支)。
     rc 0=不擋(包括不用 E2E 的專案)、1=會擋、2=給的提交不存在。"""
@@ -42143,7 +42260,7 @@ def _e2e_check_cmd(root, at_sha=None, branch=None, range_start=None):
 
 
 def _android_e2e_dispatch(args):
-    """lumos android-e2e 的子指令分派(judge、select、history、waive、check)。"""
+    """lumos android-e2e 的子指令分派(judge、select、history、waive、check、coverage)。"""
     def split(xs):
         return [y.strip() for x in xs for y in x.split(",") if y.strip()]
     if args.e2ecmd == "select":
@@ -42156,6 +42273,8 @@ def _android_e2e_dispatch(args):
                               ack=args.e2e_ack, ack_all=args.e2e_ack_all)
     if args.e2ecmd == "check":
         return _e2e_check_cmd(args.e2e_repo, args.e2e_at_sha, args.e2e_branch, args.e2e_range_start)
+    if args.e2ecmd == "coverage":
+        return _e2e_coverage_cmd(args.e2e_repo, changed=args.e2e_changed, files_mode=args.e2e_files, as_json=args.e2e_json)
     return _e2e_judge_cmd(args.e2e_repo, args.e2e_run_dir, precheck_only=args.e2e_precheck, no_record=args.e2e_no_record,
                           history=args.e2e_history)
 
@@ -67748,6 +67867,7 @@ HELP_WHEN = {
     "android-e2e judge": "範本腳本跑完後判過不過、寫查證紀錄 .lumos/e2e-records/<指紋>.json;只想重判同一份結果時單獨跑。回 0 通過、1 有一段沒過、2 沒寫紀錄。",
     "android-e2e waive": "推送前的 Android 端到端驗收擋下、確定是誤擋時放行那一版(照擋下訊息印的那一行跑,要寫理由);--list 看所有放行,--ack 把 AI 放行標成看過。",
     "android-e2e check": "推之前想先知道推送前那道 Android 端到端驗收會不會擋、為什麼擋;印成 JSON,不寫任何東西。",
+    "android-e2e coverage": "補完功能對照表、或改了程式想知道推送時會不會被要求整套跑:列出沒歸屬到任何功能的程式檔、沒有會判情境的功能、沒人用的流程檔與截圖畫面。",
     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
@@ -68874,6 +68994,11 @@ def main():
     aec.add_argument("--at-sha", dest="e2e_at_sha", default=None, help="要判的提交(預設 HEAD)")
     aec.add_argument("--branch", dest="e2e_branch", default=None, help="要推的分支名(預設目前分支)")
     aec.add_argument("--range-start", dest="e2e_range_start", default=None, help="推的是主線本身時,推送前的主線位置")
+    aev = aesub.add_parser("coverage", help="功能對照表的缺口:沒歸屬的程式檔、沒有會判情境的功能、沒人用的驗收素材(只讀、不擋)")
+    aev.add_argument("--repo", dest="e2e_repo", default=".", help="專案根目錄(預設 .)")
+    aev.add_argument("--changed", dest="e2e_changed", action="store_true", help="沒歸屬那一項只看這次改到的檔(跟 --changed 挑功能同一份改動清單)")
+    aev.add_argument("--files", dest="e2e_files", action="store_true", help="沒歸屬的檔逐檔列(預設按資料夾彙總)")
+    aev.add_argument("--json", dest="e2e_json", action="store_true", help="印成 JSON")
     aej.add_argument("--precheck", dest="e2e_precheck", action="store_true",
                      help="只看工作目錄能不能開跑(簿記檔以外沒有改動、沒有沒追蹤的新檔):可以回 0,不行回 2")
 

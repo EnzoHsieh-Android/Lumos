@@ -21187,6 +21187,180 @@ def t_android_e2e_scope_shared():
     print("  ✓ t_android_e2e_scope_shared")
 
 
+# ── Android 端到端驗收:功能對照表涵蓋報告(單源 Projects/端到端驗收對照表涵蓋報告_計劃)──
+def _e2ecov_run(root, *args):
+    import json
+    r = _e2e_run(root, "android-e2e", "coverage", "--repo", str(root), *args, env=_e2eg_env())
+    try:
+        d = json.loads(r.stdout) if "--json" in args else None
+    except ValueError:
+        d = None
+    return r, d
+
+
+def t_android_e2e_coverage_unowned():
+    """S1:不在任何功能 paths、也不在 shared_paths 的程式檔按資料夾彙總列出(資料夾、沒歸屬幾支、共幾支),--files 逐檔列;
+    單元測試檔(預設排除)、驗收素材、指紋範圍外的檔不列;回 0。判準來源是計劃〈報告列什麼〉第 1 項。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td, e2e={"shared_paths": ["app/src/main/net/"]})
+        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n", "app/src/main/Y.kt": "y\n", "app/src/main/net/Http.kt": "h\n",
+                            "app/src/test/Z2.kt": "t\n", "docs/x.md": "x\n"})
+        r, d = _e2ecov_run(root, "--json")
+        u = {x["dir"]: x for x in d["unowned"]} if d else {}
+        check("e2e coverage S1:回 0", r.returncode == 0, r.stderr[-200:])
+        check("e2e coverage S1:沒歸屬的兩支在 app/src/main 那一列、共幾支也對(A、B、Y、Z 四支;net 在子資料夾另算)",
+              set(u) == {"app/src/main"} and u["app/src/main"]["unowned"] == 2 and u["app/src/main"]["total"] == 4
+              and sorted(u["app/src/main"]["files"]) == ["app/src/main/Y.kt", "app/src/main/Z.kt"], str(d))
+        check("e2e coverage S1:shared_paths、單元測試、驗收素材、範圍外的檔都不列",
+              not any(k.startswith(("app/src/main/net", "app/src/test", ".maestro", "docs")) for k in u), str(u))
+        r, _d = _e2ecov_run(root)
+        check("e2e coverage S1:預設按資料夾彙總、不逐檔列", "app/src/main/  沒歸屬 2 支 / 共 4 支" in r.stdout and "app/src/main/Z.kt" not in r.stdout, r.stdout)
+        r, _d = _e2ecov_run(root, "--files")
+        check("e2e coverage S1:--files 逐檔列", "app/src/main/Z.kt" in r.stdout and "app/src/main/Y.kt" in r.stdout, r.stdout)
+    print("  ✓ t_android_e2e_coverage_unowned")
+
+
+def t_android_e2e_coverage_cases_and_materials():
+    """S2:功能每個情境都只列效能 → 列成沒有會判情境的功能;e2e.flows、e2e.visual 有沒被任何情境列到的 → 列成沒人用的驗收素材。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td, e2e={"macrobench": True, "macrobench_cmd": "true {{TEST}}", "visual": ["home_visual"],
+                                   "features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}},
+                                                "bench": {"paths": ["app/src/main/B.kt"], "cases": {"s": {"macrobench": ["Bench#scroll"]}}}}},
+                           top={"results_dirs": ["r"]})
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e coverage S2:只列效能的功能列出來", r.returncode == 0 and d and d["features_without_judged_cases"] == ["bench"], str((r.stderr[-200:], d)))
+        check("e2e coverage S2:沒人用的流程檔與畫面列出來", d and d["unused_flows"] == [".maestro/other.yaml"] and d["unused_screens"] == ["home_visual"], str(d))
+    print("  ✓ t_android_e2e_coverage_cases_and_materials")
+
+
+def t_android_e2e_coverage_changed_json():
+    """S3:--changed 時沒歸屬那一項只看這次改到的檔(跟 --changed 挑功能同一份改動清單,含沒提交的新檔);--json 三項各一個清單。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        _e2e_tgit(root, "checkout", "-q", "main")
+        _e2eg_commit(root, {"app/src/main/Old.kt": "old\n"})   # 主線上本來就沒歸屬的檔
+        _e2e_tgit(root, "checkout", "-q", "feat")
+        _e2e_tgit(root, "rebase", "-q", "main")
+        (root / "app" / "src" / "main" / "New.kt").write_text("n\n", encoding="utf-8")   # 這次新加、還沒提交
+        r, d = _e2ecov_run(root, "--changed", "--json")
+        files = [f for u in (d or {}).get("unowned", []) for f in u["files"]]
+        check("e2e coverage S3:--changed 只列這次改到的(含沒提交的新檔)", r.returncode == 0 and files == ["app/src/main/New.kt"], str((r.stderr[-200:], d)))
+        check("e2e coverage S3:--json 三項各一個清單", d and all(isinstance(d.get(k), list) for k in
+                                                       ("unowned", "features_without_judged_cases", "unused_flows", "unused_screens")), str(d))
+        r, d = _e2ecov_run(root, "--json")
+        files = sorted(f for u in (d or {}).get("unowned", []) for f in u["files"])
+        check("★對照★ 不帶 --changed 看工作目錄已追蹤的檔(沒加進 git 的新檔不在裡面)", files == ["app/src/main/Old.kt"], str(d))
+    print("  ✓ t_android_e2e_coverage_changed_json")
+
+
+def t_android_e2e_coverage_bad_config():
+    """S4:設定讀不懂、e2e 段不合格、沒有 features 時回 2 並說原因。"""
+    import tempfile
+    for desc, mutate, word in (("沒有 features", lambda c: c["e2e"].pop("features"), "features"),
+                               ("e2e 段不合格", lambda c: c["e2e"].update(visual_threshold=1), "visual_threshold"),
+                               ("沒有 e2e 段", lambda c: c.pop("e2e"), "results_dirs")):
+        with tempfile.TemporaryDirectory() as td:
+            root = _e2eg_proj(td)
+            _e2e_set_cfg(root, mutate, commit=desc)
+            r, _d = _e2ecov_run(root)
+            check(f"e2e coverage S4:{desc}→回 2 並說原因", r.returncode == 2 and word in r.stderr, str((desc, r.returncode, r.stderr[-200:])))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        (root / ".lumos" / "macrobench.json").write_text("{not json", encoding="utf-8")
+        _e2e_tgit(root, "commit", "-qam", "broken")
+        r, _d = _e2ecov_run(root)
+        check("e2e coverage S4:設定讀不懂→回 2", r.returncode == 2 and "JSON 格式壞了" in r.stderr, r.stderr[-200:])
+    print("  ✓ t_android_e2e_coverage_bad_config")
+
+
+def t_android_e2e_coverage_doctor_line():
+    """S5:功能對照表有缺口時 lumos doctor 的 AE 段多印一行三個數字與看的指令;三個數字都是 0 時不印。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td, vault=True)
+        r = _e2e_run(root, "doctor", env=_e2eg_env())
+        check("e2e coverage S5:沒有缺口→doctor 不印那一行", "功能對照表有" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-300:])
+        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n"})
+        r = _e2e_run(root, "doctor", env=_e2eg_env())
+        check("e2e coverage S5:有缺口→doctor 印三個數字與指令", "功能對照表有 1 支程式檔沒歸屬、0 個功能沒有會判的情境、0 份驗收素材沒人用"
+              in r.stdout + r.stderr and "lumos android-e2e coverage" in r.stdout + r.stderr, (r.stdout + r.stderr)[-400:])
+    print("  ✓ t_android_e2e_coverage_doctor_line")
+
+
+def t_android_e2e_coverage_worktree_cfg():
+    """補完對照表、還沒提交就跑涵蓋報告(技能文件教的順序):讀工作目錄的設定,剛補的檔不再列成沒歸屬;
+    HEAD 還沒有 features、工作目錄剛補上也照樣印得出報告(代碼審 code-e2e-coverage r1 單審席)。"""
+    import json, tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        _e2eg_commit(root, {"app/src/main/Z.kt": "z\n"})
+        p = root / ".lumos" / "macrobench.json"
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+        r, d = _e2ecov_run(root, "--json")
+        check("★前置★ 補表之前 Z.kt 列成沒歸屬", r.returncode == 0 and [f for u in d["unowned"] for f in u["files"]] == ["app/src/main/Z.kt"], str(d))
+        cfg["e2e"]["features"]["login"]["paths"].append("app/src/main/Z.kt")
+        p.write_text(json.dumps(cfg), encoding="utf-8")   # 不提交
+        for args in ((), ("--changed",)):
+            r, d = _e2ecov_run(root, *args, "--json")
+            check(f"e2e coverage 工作目錄設定:{args or '整棵樹'} 補表後不提交就不再列", r.returncode == 0 and d and d["unowned"] == [], str((r.stderr[-200:], d)))
+        (root / "app" / "src" / "main" / "Staged.kt").write_text("s\n", encoding="utf-8")
+        _e2e_tgit(root, "add", "app/src/main/Staged.kt")   # 加進 git、還沒提交
+        r, d = _e2ecov_run(root, "--json")
+        check("e2e coverage 工作目錄設定:整棵樹看已追蹤的檔(加進 git 還沒提交的新檔也列)",
+              r.returncode == 0 and d and [f for u in d["unowned"] for f in u["files"]] == ["app/src/main/Staged.kt"], str((r.stderr[-200:], d)))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        p = root / ".lumos" / "macrobench.json"
+        full = p.read_text(encoding="utf-8")
+        _e2e_set_cfg(root, lambda c: c["e2e"].pop("features"), commit="還沒有對照表")
+        p.write_text(full, encoding="utf-8")   # 工作目錄剛補上 features,還沒提交
+        r, _d = _e2ecov_run(root)
+        check("e2e coverage 工作目錄設定:HEAD 沒有 features、工作目錄剛補上→印得出報告", r.returncode == 0, r.stderr[-200:])
+    print("  ✓ t_android_e2e_coverage_worktree_cfg")
+
+
+def t_android_e2e_coverage_judged_keys():
+    """只有截圖或只有記憶體情境的功能有會判的情境,不能列成「沒有會判情境」;跟推送前判定分「需驗/只列效能」同一組鍵。"""
+    m = _load_lumos()
+    feats = {"vis": {"paths": ["a/V.kt"], "cases": {"v": {"visual": ["home_visual"]}}},
+             "stab": {"paths": ["a/S.kt"], "cases": {"s": {"stability": ["player"]}}},
+             "flow": {"paths": ["a/F.kt"], "cases": {"f": {"flows": [".maestro/f.yaml"]}}},
+             "bench": {"paths": ["a/B.kt"], "cases": {"b": {"macrobench": ["Bench#scroll"]}}}}
+    rep = m._e2e_coverage_report(None, {"app_dirs": ["a/"], "flows": [".maestro/f.yaml"], "visual": ["home_visual"], "features": feats}, [])
+    check("e2e coverage 會判情境:只有 bench 列出來", rep["features_without_judged_cases"] == ["bench"], str(rep))
+    print("  ✓ t_android_e2e_coverage_judged_keys")
+
+
+def t_android_e2e_coverage_same_as_gate():
+    """涵蓋報告列的「沒歸屬」加「共用程式」,正好等於推送前判定要整套跑的那批檔(共用同一支逐檔判定):
+    同時在功能 paths 與 shared_paths 底下的檔,兩邊都當共用(代碼審 code-e2e-coverage r1 架構對齊席、單審席)。"""
+    import json, tempfile
+    m = _load_lumos()
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td, e2e={"shared_paths": ["app/src/main/net/"]})
+        cfg = json.loads((root / ".lumos" / "macrobench.json").read_text(encoding="utf-8"))
+        cfg["e2e"]["features"]["login"]["paths"].append("app/src/main/net/")
+        (root / ".lumos" / "macrobench.json").write_text(json.dumps(cfg), encoding="utf-8")
+        _e2eg_commit(root, {".lumos/macrobench.json": json.dumps(cfg), "app/src/main/Z.kt": "z\n", "app/src/main/net/Http.kt": "h\n"})
+        e2e = cfg["e2e"]
+        files = ["app/src/main/A.kt", "app/src/main/Z.kt", "app/src/main/net/Http.kt"]
+        why, _own = m._e2e_gate_owners(files, e2e, e2e["features"])
+        gate = {f for f in files if any(w.startswith(f + "(") for w in why)}
+        r, d = _e2ecov_run(root, "--json")
+        cov = {f for u in (d or {}).get("unowned", []) for f in u["files"]} | set((d or {}).get("shared") or [])
+        check("★前置★ 推送判定要整套的是 Z 與 Http", gate == {"app/src/main/Z.kt", "app/src/main/net/Http.kt"}, str(why))
+        check("e2e coverage 跟推送判定同口徑:沒歸屬+共用=要整套的那批", r.returncode == 0 and cov == gate, str((r.stderr[-200:], d)))
+        r, _d = _e2ecov_run(root)
+        check("e2e coverage 文字版列共用程式支數", "共用程式(列在 shared_paths):1 支" in r.stdout, r.stdout)
+        _e2eg_commit(root, {"app/src/main/E\x1b[2JX.kt": "e\n"})
+        r, _d = _e2ecov_run(root, "--files")
+        check("e2e coverage 文字版:檔名裡的控制字元經清理才印(同 e2e 區其他輸出)", r.returncode == 0 and "\x1b" not in r.stdout and "E" in r.stdout, repr(r.stdout[-300:]))
+    print("  ✓ t_android_e2e_coverage_same_as_gate")
+
+
 def _e2e_rejudge_copy(root, src, dst, mutate):
     """複製一次按功能跑的 run 目錄成 dst,steps.json 交給 mutate 改(結束時間往後推一分鐘),回新的 run 目錄。"""
     import datetime as _dt, json, shutil

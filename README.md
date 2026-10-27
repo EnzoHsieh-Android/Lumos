@@ -360,7 +360,7 @@ Android App 改完之後，Lumos 在真的手機或平板上確認兩件事：**
 
 </details>
 
-### 實機驗收：開發中按功能跑，推之前整套跑（端到端驗收）
+### 實機驗收：開發中按功能跑，推送前要有這一版的紀錄（端到端驗收）
 
 **同一支腳本，開發中只跑你正在做的那個功能、甚至只跑它的一個使用情境；推之前把 App 從頭到尾驗一遍，結果寫成一份查證紀錄；推送前會擋沒驗過的版本，這次改到的功能都按功能跑過、通過也算。** 每個使用情境可以有四樣東西：照 Maestro（一種用文字寫好「點哪裡、輸入什麼」的畫面自動操作工具）的流程檔實際點一遍、拍畫面跟人看過的基準圖比、跑效能測試、反覆開關畫面看記憶體與穩定性。每次跑都先建置並安裝 App，跑完由 `lumos android-e2e judge` 判過不過。
 
@@ -375,7 +375,7 @@ lumos android-e2e check                                            # 推之前�
 
 <p align="center">
   <a href="assets/android-acceptance-zh.svg">
-    <img src="assets/android-acceptance-zh.svg" alt="Android 實機驗收：開發中用 --changed、--feature、--case 按功能或使用情境跑，推之前整套跑；先用 adb、git 做開跑前檢查（不過就停下、不碰 App），再依序建置並安裝（Gradle、adb）、UI 流程（Maestro）、截圖比對（visual-check.sh）、記憶體與穩定性（dumpsys、Perfetto）、效能（Macrobenchmark，只提醒）；lumos android-e2e judge 判過不過並寫查證紀錄。通過就提交紀錄再推送；UI 或截圖沒過就看報告與差異圖，記憶體沒過或印了變慢的提醒，就接到上一張圖的分層查證，L0 先判有沒有異常再往下；建置失敗、缺工具、中斷是環境問題，修好再跑" width="760">
+    <img src="assets/android-acceptance-zh.svg" alt="Android 實機驗收：開發中用 --changed、--feature、--case 按功能或使用情境跑（--no-perf、--no-memory 可略過效能或記憶體），或整套跑；先用 adb、git 做開跑前檢查（不過就停下、不碰 App），再依序建置並安裝（Gradle、adb）、UI 流程（Maestro）、截圖比對（visual-check.sh）、記憶體與穩定性（dumpsys、Perfetto）、效能（Macrobenchmark，只提醒）；lumos android-e2e judge 判過不過並寫查證紀錄。通過就提交紀錄再推送，推送前檢查認整套、或改到的功能都按功能跑過；UI 或截圖沒過就看報告與差異圖，記憶體沒過或印了變慢的提醒，就接到上一張圖的分層查證，L0 先判有沒有異常再往下；建置失敗、缺工具、中斷是環境問題，修好再跑" width="760">
   </a>
 </p>
 
@@ -384,7 +384,7 @@ lumos android-e2e check                                            # 推之前�
 
 **怎麼接。** 在專案的 `.lumos/macrobench.json` 加一段 `e2e`：哪些目錄算 App 程式、怎麼建置、APK 在哪、要跑哪幾支流程檔；截圖比對、記憶體與穩定性、效能三塊各自要開才會跑。截圖比對用 [maestro-visual-toolkit](https://github.com/EnzoHsieh-Android/maestro-visual-toolkit) 先裝進專案、錄好基準圖。`lumos update` 會把驗收腳本裝進專案的 `scripts/templates/`。寫法見 [Android 端到端驗收](docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md)。
 
-**功能對照表。** 在 `e2e` 段加 `features`：每個功能寫它管哪些程式路徑（`--changed` 靠這個從改到的檔找出功能）、有哪些使用情境，每個情境列它的流程檔、截圖畫面、效能測試方法、記憶體情境。效能指令裡寫 `{{TEST}}`，會換成挑到的測試方法；記憶體情境寫在最外層的 `stability_scenarios`，一個情境一個開關畫面的驅動。對照表寫了不存在的流程檔或情境，檢查設定時就擋下。大家共用的程式（網路層、共用元件、`Application`）列進 `e2e` 段的 `shared_paths`：推送前改到它們就要整套跑（要在 `app_dirs` 底下；寫在外面的模組要先加進 `app_dirs`）。
+**功能對照表。** 在 `e2e` 段加 `features`：每個功能寫它管哪些程式路徑（`--changed` 靠這個從改到的檔找出功能）、有哪些使用情境，每個情境列它的流程檔、截圖畫面、效能測試方法、記憶體情境。效能指令裡寫 `{{TEST}}`，會換成挑到的測試方法；記憶體情境寫在最外層的 `stability_scenarios`，一個情境一個開關畫面的驅動。對照表寫了不存在的流程檔或情境，檢查設定時就擋下。大家共用的程式（網路層、共用元件、`Application`）列進 `e2e` 段的 `shared_paths`：推送前改到它們就要整套跑（要在 `app_dirs` 底下；寫在外面的模組要先加進 `app_dirs`）。對照表寫得夠不夠，跑 `lumos android-e2e coverage` 看：列出沒歸屬到任何功能的程式檔（按資料夾彙總，`--files` 逐檔列，`--changed` 只看這次改到的）、情境都只列效能的功能、沒有情境用到的流程檔與截圖畫面，另印落在 `shared_paths` 的共用程式幾支；讀的是工作目錄的設定，補完對照表不用先提交就能再跑一次確認；只報告、不擋。
 
 **兩種分塊。** 開發中可以只跑一部分，分兩個方向切，兩個方向可以疊著用：
 

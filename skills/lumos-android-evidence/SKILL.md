@@ -49,7 +49,7 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:�
 2. `e2e.features.<功能>`:`paths` 列這個功能的程式路徑;`cases.<情境>` 列它的 `flows`、`visual`(有基準圖的畫面,畫面也要在 `e2e.visual` 裡)、`macrobench`(測試方法名,只收英數字、點、底線與 `#`、開頭不能是 `#`;不收 `$`,名字原樣換進 shell 會被展開成別支;`macrobench_cmd` 要帶 `{{TEST}}`,帶了之後整套跑也只跑對照表列到的方法)、`stability`(最外層 `stability_scenarios` 裡的情境名)。
    大家共用的程式列進 `e2e.shared_paths`(路徑寫法同 `paths`,要在 `app_dirs` 底下):推送前改到它就要整套跑。
    新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次,各留一份錄製檔在 `.lumos/artifacts/android/<run-id>.<情境>/`,不會自動清。
-3. `lumos macrobench --check-config` 回 0 才算接好。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
+3. `lumos macrobench --check-config` 回 0 才算接好;再跑 `lumos android-e2e coverage --changed`,看這次改到的檔是不是都歸屬到功能(沒歸屬的,推送時會被要求整套跑)。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
 
 **紅了看哪裡**:UI 流程沒過看終端印的報告路徑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。
 

@@ -70,6 +70,7 @@ summary: |-
   PITFALL:主線採用 E2E 之前分出去的舊分支只改文件也被推送前判定擋下,訊息還說 App 不一樣 [出處:2026-10-27 代碼審 code-e2e-gate r2 正確性、通才席] [根因:r1 為了「只改設定也要驗」加的設定比較要求兩端都有 e2e 段,兩端都沒有時永遠算不一樣] [修法:兩端都沒有 e2e 段也算設定一樣] [test:t_android_e2e_gate_cfg_sides]
   WHY:推送前判定的各段用例外(_E2eGateStop)帶結果提早結束,不照安全證據閘「階段回傳 done、呼叫端判非空」的寫法 [出處:2026-10-27 代碼審 code-e2e-gate r2 架構對齊席] [因:判定有十來個會提早結束的點(出口、沒用 E2E、不要求、放行、各種判不清),分散在被拆小的階段函式裡,逐層回傳要每層多一個判斷;例外只在這一道內部用,入口 _e2e_gate_evaluate 一律接住轉成結果,對外介面跟鄰居一樣是結果 dict] [不選:逐層回傳 done(每個階段函式多一層判斷,拆函式時降的複雜度又加回去)] [代價:讀程式的人要知道 _e2e_gate_done 不會回來]
   SEE:[[Projects/Android端到端驗收_計劃]] [[Systems/android-stability-collector]] [[Systems/macrobenchmark-adapter]]
+  WHY:lumos android-e2e coverage 只報告功能對照表的缺口、不擋,範圍判斷與逐檔歸屬跟推送前判定共用同一支(_e2e_scope_hit、_e2e_file_owner),沒歸屬的程式檔按所在資料夾彙總、共用程式另列支數;設定讀工作目錄,補完對照表不用先提交就看得到 [出處:[[Projects/端到端驗收對照表涵蓋報告_計劃]] 2026-10-27 Enzo 照「只報告、預設按目錄分組」開工] [因:缺歸屬的後果推送前檢查已經會擋(要求整套跑);事先列出來是讓人在推送前補對照表] [不選:擋推送(重複擋同一件事);從程式的 import 猜歸屬(猜錯比列出來更糟)] [test:t_android_e2e_coverage_unowned] [test:t_android_e2e_coverage_doctor_line] [test:t_android_e2e_coverage_same_as_gate] [test:t_android_e2e_coverage_worktree_cfg]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
