@@ -1866,12 +1866,12 @@ def _ledger_tail_needs_newline(path):
         os.close(fd)
 
 
-def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False, head_sha=None, nodes=None, nodes_cap=None):
+def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False, head_sha=None, nodes=None, nodes_cap=None, ref=None):
     """整行(照 _ledger_append 的量法,量 _gate_event_build 組出的完整事件)超過 4096 位元組:extra[list_key] 從尾端丟到裝得下,
     丟了就記 extra[list_key + "_truncated"];清單丟光(或本來沒有)仍超過、而且給了 nodes_cap,nodes 多於它就截到 nodes_cap 並記同一個旗標。
     list_key 也可以給一串鍵:照順序丟,前一個丟光還超過才丟下一個,各鍵記自己的旗標;nodes 截掉時記第一個鍵的旗標
     (回頭重讀的帳先丟第二層的 rows、再丟第一層的 layer1_fps)。再超過照寫(帳的寫入端沒有硬上限,4096 是讓帳長得慢的政策值)。
-    回傳 nodes(可能被截過),呼叫端拿它寫帳——★量的跟寫的是同一行:head_sha 要傳寫帳時那一個★(不傳時 _gate_event 寫帳才補 HEAD,
+    回傳 nodes(可能被截過),呼叫端拿它寫帳——★量的跟寫的是同一行:head_sha、ref 要傳寫帳時那一個★(不傳時 _gate_event 寫帳才補 HEAD,
     量的那一行就少了 commit 與 head_sha 兩欄;代碼審發現回頭重讀那一筆沒傳,部分輸入寫出 4156 位元組)。
     舊句檢查帳、筆記形狀擋的放寬帳、回頭重讀有東西那一筆共用(Projects/舊行尾追加不算新寫_計劃〈做法〉5)。
     留幾筆用二分找(整行長度隨筆數單調),不逐筆丟——逐筆重量是平方時間,兩萬筆要幾十秒(代碼審 r1 四席實量)。"""
@@ -1880,7 +1880,7 @@ def _gate_event_fit(repo_root, gate, kind, note, extra, list_key, *, hard=False,
     keys = (list_key,) if isinstance(list_key, str) else tuple(list_key)
 
     def size():
-        ev = _gate_event_build(repo_root, gate, kind, note, hard=hard, head_sha=head_sha, nodes=nodes, extra=extra)
+        ev = _gate_event_build(repo_root, gate, kind, note, hard=hard, head_sha=head_sha, ref=ref, nodes=nodes, extra=extra)
         return len((_j.dumps(ev, ensure_ascii=False) + "\n").encode("utf-8"))
     for key in keys:
         _gate_event_fit_drop(extra, key, size)
@@ -4151,6 +4151,22 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 warn_soft(_bits, "新增告警閘的放行狀況(提醒,不擋):",
                           "自動放行多代表檢查根本沒在跑;逐條放行多代表規則跟這個專案不合。"
                           "看放行了什麼:lumos lint-waive --list")
+        print()
+    # Android 端到端驗收:還沒人看過的 AI 放行(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 5 步;只提醒,--ci 不變紅)。
+    # 專案有查證紀錄目錄才出這一段,沒用 Android 驗收的專案不多一段
+    _aer = _vault_repo_root(env)
+    if _aer is not None and (_aer / E2E_RECORDS_DIR).is_dir():
+        section("AE", "Android 端到端驗收有沒有還沒人看過的 AI 放行(提醒,不擋)")
+        _aip, _aun, _abig = _e2e_ai_pending_all(_aer)
+        if _aip or _aun or _abig:
+            # 沒讀到的份數排前面:warn_soft 預設只印前三條
+            warn_soft(([f"另有 {_abig} 份紀錄超過 {E2E_RECORD_FILE_MAX // 1024 // 1024}MB 沒讀(裡面的放行看不到;修好或刪掉)"] if _abig else [])
+                      + ([f"另有 {_aun} 份沒讀(超過 {E2E_RECORD_SCAN_MAX} 份或讀超過 {E2E_RECORD_SCAN_SEC:g} 秒;照修改時間由新到舊讀)"] if _aun else [])
+                      + [f"{fp[:12]}… 有 {n} 筆" for fp, n in _aip[:10]] + ([f"…另有 {len(_aip) - 10} 份紀錄"] if len(_aip) > 10 else []),
+                      "Android 端到端驗收有 AI 放行還沒人看過(提醒,不擋):",
+                      "AI 在沒有互動終端時放行的,要人看過:lumos android-e2e waive --list;看過標記:lumos android-e2e waive --ack --all")
+        else:
+            ok("沒有還沒人看過的 AI 放行")
         print()
 
     if ci:
@@ -16004,6 +16020,8 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 "ci", "code-loop", "design-loop", "kill", "signoff", "bound-tests",
                 # 2026-10-20 安全證據閘:擋下、降級放行、例外首次使用都記在這個閘名下(Projects/安全主張驗收閘_計劃〈四〉)
                 "security-evidence",
+                # 2026-10-26 Android 端到端驗收推送前判定:擋下、按功能放行、環境變數關掉、放行(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 4、5 步)
+                "android-e2e",
                 "daily-wrapper", "ledger-growth",
                 # #19 S1:擋人/放行/被跳過的事件會用到這兩個閘名(code-loop 已在上面)
                 "anchor", "pitfalls",
@@ -19342,6 +19360,24 @@ def _esc_clean(v, limit=200):
                           or "\ud800" <= ch <= "\udfff") else ch for ch in str(v))
     return out if len(out) <= limit else out[:limit] + "…"
 
+
+
+_PREPUSH_ESCAPE_MARKERS = ("受波及合約的測試沒過", "tier=high 且")   # pre-push 拿來判要不要記逃逸帳的兩串字(t_android_e2e_say_single_exit 盯兩邊一樣)
+
+
+def _out_clean(v, limit=4000):
+    """擋下訊息與判定結果裡的外來文字(設定值、紀錄鍵名、檔名)→ _esc_clean 之外再清換行類(U+2028/2029)、方向標記與 BOM,
+    並拆開 pre-push 記逃逸帳的兩串字。★底層共用★:macrobench 與 Android 端到端驗收都用(代碼審 code-e2e-gate r5 架構對齊席:
+    原本是 e2e 專屬函式、macrobench 往上呼叫它);e2e 區不准自己再印「擋下:」(t_android_e2e_say_single_exit 掃語法樹)。"""
+    t = re.sub("[\u2028\u2029\u200e\u200f\ufeff]", " ", _esc_clean(str(v), limit))
+    for mk in _PREPUSH_ESCAPE_MARKERS:
+        t = t.replace(mk, mk[:2] + " " + mk[2:])
+    return t
+
+
+def _say_block(msg):
+    """「擋下:」那一行:訊息常帶外來文字,印之前一律過 _out_clean(單一出口)。"""
+    print(f"擋下:{_out_clean(msg, 2000)}", file=sys.stderr)
 
 
 def _git_head(repo_root):
@@ -33558,27 +33594,58 @@ def _install_hooks_py(root: Path):
     _sync_global_from_project(root)
 
 
-def _confirm_tty(prompt):
+def _confirm_tty(prompt, stdin_timeout=False):
     """三階互動確認(curl|bash 安全;設計:Projects/bootstrap一鍵對稱_計劃 std F1/F2/F3):
     回 True(答 y/yes)/False(其他答案=拒絕)/None(非互動或無人回答→呼叫端跳過)。
     ①stdin.isatty→input();EOFError 落入②非當 False(isatty 撒謊時別誤判拒絕)
     ②os.open(tty,O_RDWR) 低階 fd(★r+ 開法對 tty 會炸 not seekable★)+os.write prompt
       +select timeout(有控制終端≠有人回答,防 readline 永久掛)+os.read
     ③皆不可→None。嚴禁在非 isatty 時讀 sys.stdin(curl|bash 下那是腳本殘文管線)。
-    測試接縫:LUMOS_TTY(預設 /dev/tty;單元測指 pty slave)/LUMOS_TTY_TIMEOUT(預設 30s)。"""
-    import os, select
+    測試接縫:LUMOS_TTY(預設 /dev/tty;單元測指 pty slave)/LUMOS_TTY_TIMEOUT(預設 30s)。
+    stdin_timeout=True(android-e2e waive 與 --ack 用):①那條路也等 LUMOS_TTY_TIMEOUT 秒,沒人答回 None——
+    掛著虛擬終端、沒有人在的流程才不會永遠等(設計審 android端到端驗收 r3 資源席);其他呼叫端照舊。"""
     def _norm(ans):
         return ans.strip().lower() in ("y", "yes")   # 嚴格答案+預設 N(F2-B 殘文緩解)
+    timeout = _confirm_tty_timeout()
     if sys.stdin.isatty():
         try:
-            return _norm(input(prompt))
+            if not stdin_timeout:
+                return _norm(input(prompt))
+            line = _confirm_tty_stdin(prompt, timeout)
+            if line is None:
+                return None
+            if line:                                 # 空字串=讀到 EOF(isatty 撒謊)→ 試 ②
+                return _norm(line)
         except EOFError:
             pass                                     # isatty 撒謊 → 試 ②(F2-A)
-    tty_path = os.environ.get("LUMOS_TTY", "/dev/tty")
+    return _confirm_tty_dev(prompt, timeout, _norm)
+
+
+def _confirm_tty_timeout():
+    """LUMOS_TTY_TIMEOUT(秒,預設 30);讀不懂、負數、NaN、無限大都用預設——select 收到負數或 NaN 會丟 ValueError(代碼審 code-e2e-gate r1 邊界席)。"""
     try:
-        timeout = float(os.environ.get("LUMOS_TTY_TIMEOUT", "30"))
+        t = float(os.environ.get("LUMOS_TTY_TIMEOUT", "30"))
     except ValueError:
-        timeout = 30.0
+        return 30.0
+    return t if 0 <= t <= 86400 else 30.0   # 上界:大到 select 收不下(time_t 溢位)會丟 OverflowError(代碼審 r2 資源席)
+
+
+def _confirm_tty_stdin(prompt, timeout):
+    """_confirm_tty 第 ① 階帶逾時(stdin_timeout):等 timeout 秒沒人答回 None;讀到 EOF 回空字串(呼叫端改試第 ② 階)。"""
+    import select
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
+    readable, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not readable:
+        print("\n(無回應,視為略過)")
+        return None
+    return sys.stdin.readline()
+
+
+def _confirm_tty_dev(prompt, timeout, _norm):
+    """_confirm_tty 第 ② 階:開控制終端(LUMOS_TTY)問,等 timeout 秒;開不了或沒人答回 None。"""
+    import os, select
+    tty_path = os.environ.get("LUMOS_TTY", "/dev/tty")
     try:
         # session leader 開測試 pty 時不可把它收作控制終端；關閉 master 否則會送 SIGHUP。
         fd = os.open(tty_path, os.O_RDWR | getattr(os, "O_NOCTTY", 0))
@@ -40222,7 +40289,7 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
     stab, serr = _macrobench_stab_load(stability_path) if stability_path else (None, None)
     eerr = _macrobench_e2e_args_err(cfg, thresholds, results_dir, update_baseline) if not (err or terr) else None
     if err or terr or serr or eerr:
-        print(f"擋下:{err or terr or serr or eerr}", file=sys.stderr)
+        _say_block(err or terr or serr or eerr)
         return 2
     if results_dir is not None:   # 端到端驗收:這次只讀這個目錄(不讀 results_dirs,免得吃到上次的舊結果);基準與門檻照舊用專案的
         cfg = dict(cfg or MACROBENCH_DEFAULTS, results_dirs=[str(Path(results_dir).resolve())])
@@ -40250,7 +40317,7 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
         res.update(_macrobench_compare(baseline, current, cfg))
     judged, terr = _macrobench_check_thresholds(thresholds, current)   # 門檻是絕對值,有沒有基準都照判
     if terr:
-        print(f"擋下:{terr}", file=sys.stderr)
+        _say_block(terr)
         return 2
     for k, v in stab_res.items():
         judged[k].extend(v)
@@ -40280,8 +40347,13 @@ def _e2e_relpath_err(p, what):
     import posixpath
     if not isinstance(p, str) or not p.strip():
         return f"{what} 要是非空字串"
+    if _path_special_chars(p, extra={"Co", "Cn"}):
+        # 源頭擋:路徑會被印進擋下訊息與報告(進 AI 視野);類別用共用的 _PATH_SPECIAL_CATS 加私用區與未指派(代碼審 r4 資安席、r5 架構對齊、邊界席)
+        return f"{what} 不能有控制字元、換行、看不見的格式字元或代理字元:{_out_clean(p, 80)}"
+    if _e2e_norm(p).count("/") >= E2E_PATH_DEPTH_MAX:   # 照正規化後算(結尾斜線、./ 開頭不算一層;r5 正確性、邊界席)
+        return f"{what} 超過 {E2E_PATH_DEPTH_MAX} 層:{_out_clean(p, 80)}"
     q = p.strip().rstrip("/")
-    if q.startswith("/") or re.match(r"[A-Za-z]:[\\/]", q) or "\\" in q:
+    if q.startswith("/") or _e2e_norm(p).startswith("/") or re.match(r"[A-Za-z]:[\\/]", q) or "\\" in q:   # .//x 去掉 ./ 之後是絕對路徑(r3 邊界席)
         return f"{what} 要是相對專案根的路徑(用 / 分隔):{p}"
     if q in ("", ".") or _e2e_norm(p) in ("", ".") or ".." in q.split("/"):   # ./. 這類去掉開頭 ./ 之後也是專案根
         return f"{what} 不准指專案根本身或跳出專案根:{p}"
@@ -40308,12 +40380,18 @@ def _e2e_flow_name(p):
     return base.replace("/", "__")
 
 
+E2E_PATH_LIST_MAX = 200    # app_dirs、exclude、shared_paths 最多幾項:範圍判斷逐檔逐項比(代碼審 r4 資源席;r5 資源席量 1000 項最壞每檔 0.15ms,降到 200);flows 用集合查,不限
+E2E_PATH_DEPTH_MAX = 64    # 設定裡的路徑最多幾層:歸屬查表逐層組前綴(代碼審 r4 通才席)
+
+
 def _e2e_list_err(e2e, key, required):
     v = e2e.get(key)
     if v is None and not required:
         return None
     if not isinstance(v, list) or (required and not v):
         return f"{key} 要是{'至少一項的' if required else ''}清單"
+    if key != "flows" and len(v) > E2E_PATH_LIST_MAX:
+        return f"{key} 最多 {E2E_PATH_LIST_MAX} 項(現在 {len(v)} 項)"
     return None
 
 
@@ -40330,8 +40408,8 @@ def _e2e_paths_err(e2e):
     for d in e2e["app_dirs"]:
         if _e2e_under(".lumos", _e2e_norm(d)) or _e2e_under(_e2e_norm(d), ".lumos"):
             return f"app_dirs 的 {d} 包住或位在 .lumos/(紀錄自己會變成 App 程式的一部分)"
-    names = [_e2e_flow_name(f) for f in e2e["flows"]]
-    dup = sorted({n for n in names if names.count(n) > 1})
+    from collections import Counter
+    dup = sorted(n for n, k in Counter(_e2e_flow_name(f) for f in e2e["flows"]).items() if k > 1)   # 計數,不逐條 count(上萬條是平方;r3 資源席)
     if dup:
         return f"flows 有同名的 flow(報告檔會互蓋):{'、'.join(dup)}"
     return _e2e_relpath_err(e2e.get("apk"), "apk")
@@ -40461,6 +40539,25 @@ def _e2e_feature_head_err(fn, f, name_ok):
     return None
 
 
+def _e2e_shared_paths_err(e2e):
+    """e2e 段的 shared_paths(共用程式;推送前按功能判時改到它就要整套):字串清單,路徑寫法同 features 的 paths,
+    跟 paths 一樣不驗存不存在。回錯誤訊息或 None。"""
+    sp = e2e.get("shared_paths")
+    if sp is None:
+        return None
+    if not isinstance(sp, list) or not all(isinstance(x, str) for x in sp):
+        return "shared_paths 要是字串清單(大家共用的程式路徑)"
+    if len(sp) > E2E_PATH_LIST_MAX:
+        return f"shared_paths 最多 {E2E_PATH_LIST_MAX} 項(現在 {len(sp)} 項)"
+    err = next((e for e in (_e2e_relpath_err(x, "shared_paths 的一項") for x in sp) if e), None)
+    if err:
+        return err
+    # 推送前判定只看 app_dirs 裡的改動:寫在外面等於沒寫,改到它什麼都不要求(代碼審 code-e2e-gate r3 合約席)
+    apps = [_e2e_norm(d) for d in e2e.get("app_dirs") or [] if isinstance(d, str)]
+    out = [x for x in sp if not any(_e2e_under(_e2e_norm(x), a) for a in apps)]
+    return f"shared_paths 的 {_out_clean('、'.join(out), 200)} 不在 app_dirs 底下(推送前判定只看 app_dirs 裡的改動;共用模組要先加進 app_dirs)" if out else None
+
+
 def _e2e_features_err(e2e, scen):
     """e2e 段的 features(功能對照表,單源計劃〈按功能與使用情境跑〉):功能 → {paths, cases: 情境 → {flows, visual, macrobench, stability}}。
     flow 與畫面要在整套清單裡;效能要 macrobench_cmd 帶 {{TEST}};記憶體情境要在 stability_scenarios 裡。"""
@@ -40468,6 +40565,9 @@ def _e2e_features_err(e2e, scen):
     cmd = e2e.get("macrobench_cmd") or ""
     if not isinstance(cmd, str):
         return "macrobench_cmd 要是字串"
+    err = _e2e_shared_paths_err(e2e)
+    if err:
+        return err
     if feats is None:
         return "macrobench_cmd 帶 {{TEST}} 時要有 features 列出效能測試方法" if "{{TEST}}" in cmd else None
     if not isinstance(feats, dict) or not feats:
@@ -40540,18 +40640,77 @@ def _e2e_default_excluded(p):
     return any(parts[i] == "src" and parts[i + 1] in ("test", "androidTest") for i in range(len(parts) - 2))
 
 
-def _e2e_fingerprint(root, rev, e2e, full=None):
+def _e2e_scope_dirs(e2e):
+    """指紋範圍 → (app_dirs, exclude, 驗收素材清單, (驗收素材目錄與門檻檔, flows 集合, flows 最深幾層));
+    前三項給算指紋時的 git pathspec,第四項給 _e2e_scope_hit 查表;兩邊共用這一支。"""
+    flows = [_e2e_norm(f) for f in e2e["flows"]]
+    fset = set(flows)
+    # 第四項給 _e2e_scope_hit 查表用:驗收素材目錄與門檻檔(固定幾項)逐一比,flows 用集合按前綴查(上萬條 flows 時逐條比是平方;r3 資源席)
+    return ([_e2e_norm(d) for d in e2e["app_dirs"]], [_e2e_norm(d) for d in e2e.get("exclude") or []],
+            [*E2E_MATERIAL_DIRS, E2E_THRESHOLDS, *flows],
+            ([*E2E_MATERIAL_DIRS, E2E_THRESHOLDS], fset, max((k.count("/") + 1 for k in fset), default=0)))
+
+
+def _e2e_scope_hit(p, e2e, dirs=None):
+    """p(相對專案根)在不在指紋範圍 → (包住它的 app_dirs 項目或 None, 在不在範圍)。app_dirs 底下扣掉 exclude
+    (沒寫 exclude 時扣預設的單元測試目錄),加上驗收素材。★算指紋、--changed 與推送前判定共用這一支★
+    (計劃〈推送前怎麼按功能判〉:三處各寫一套範圍,接手的人要猜哪一套準;設計審 r3 架構對齊席)。"""
+    apps, excl, _mats, (mdirs, fset, fmaxd) = dirs or _e2e_scope_dirs(e2e)
+    app = next((d for d in apps if _e2e_under(p, d)), None)
+    inside = app is not None and not (any(_e2e_under(p, x) for x in excl) or ("exclude" not in e2e and _e2e_default_excluded(p)))
+    return app, inside or any(_e2e_under(p, m) for m in mdirs) or any(x in fset for x in _e2e_prefixes(p, fmaxd))
+
+
+def _e2e_owner_index(feats):
+    """功能對照表 → (正規化後的 path → 功能名集合, 正規化後的 flow → 功能名集合, 功能名的原順序, path 最深幾層)。
+    改到的檔很多時只正規化一次(代碼審 code-e2e-gate r1 資源席),查的時候按改到的檔的每一層前綴查表,
+    不逐條比功能路徑(十萬支檔對上萬條路徑時逐條比要一分多鐘,代碼審 r2 資源席)。"""
+    by_path, by_flow = {}, {}
+    for fn, v in feats.items():
+        for x in v["paths"]:
+            by_path.setdefault(_e2e_norm(x), set()).add(fn)
+        for c in v["cases"].values():
+            for x in c.get("flows", []):
+                by_flow.setdefault(_e2e_norm(x), set()).add(fn)
+    return by_path, by_flow, list(feats), max((k.count("/") + 1 for k in by_path), default=0)
+
+
+def _e2e_prefixes(f, maxd):
+    """f 的前 maxd 層上層目錄(含 f 本身,如果它不超過 maxd 層)→ 逐一產生。只切前 maxd 段:路徑深一萬層時
+    逐層 join 整串是平方工作量(代碼審 code-e2e-gate r3 資源席);查表的鍵最多 maxd 層,更深的前綴不可能命中。"""
+    pre = None
+    for seg in f.split("/", maxd)[:maxd]:
+        pre = seg if pre is None else pre + "/" + seg
+        yield pre
+
+
+def _e2e_owners(f, feats, index=None):
+    """改到的檔 f 屬於哪些功能(paths 包住它,或某個情境的 flows 列了它)→ 功能名清單(照對照表的順序);
+    --changed、推送前判定與涵蓋報告共用。index 給了就用 _e2e_owner_index 先建好的那份。
+    paths 包住 f = f 本身或它的某一層上層目錄就是那條路徑(同 _e2e_under 的整段比對)。"""
+    by_path, by_flow, order, maxd = index or _e2e_owner_index(feats)
+    hit = set(by_flow.get(_e2e_norm(f), ()))
+    for pre in _e2e_prefixes(f, maxd):
+        hit |= by_path.get(pre, set())
+    return [fn for fn in order if fn in hit]
+
+
+def _e2e_fingerprint(root, rev, e2e, full=None, allow_missing=False, deadline=None):
     """對提交 rev 的檔案樹與那份 e2e 段算指紋(單源計劃〈查證紀錄〉)→ (指紋, None) / (None, 錯誤訊息)。
     只用 git ls-tree 的 mode、物件編號與路徑(不讀檔案內容),依路徑位元組排序、NUL 分隔,最後接 e2e 段的正規化雜湊。
     e2e 段開了記憶體(stability)時,full(那個提交的整份 macrobench.json)的 stability 段與 stability_scenarios 也接進去:
-    它們決定記憶體驗得多嚴(driver、輪數、情境),改弱了舊的通過不該照樣算數(代碼審 code-e2e-by-feature r4 正確性席)。"""
+    它們決定記憶體驗得多嚴(driver、輪數、情境),改弱了舊的通過不該照樣算數(代碼審 code-e2e-by-feature r4 正確性席)。
+    ls-tree 帶 pathspec 只列範圍內的路徑(上萬檔的 repo 不整棵列;字面比對,後面照樣用 _e2e_scope_hit 篩)。
+    allow_missing:這一端的樹沒有某個 app_dirs 項目時當成空的照算(推送前判定的分岔點那一端:分支新加的模組);
+    deadline:推送前判定的整道截止時間,git 的上限拿剩下的(用完丟 _SecevTimeout)。"""
     import hashlib, json
-    raw = _nodehome_git(root, "ls-tree", "-r", "-z", "--full-tree", rev, timeout=120)
+    dirs = _e2e_scope_dirs(e2e)
+    t = _secev_git_left(deadline, 120) if deadline is not None else 120
+    roots = dirs[0] + list(E2E_MATERIAL_DIRS) + [E2E_THRESHOLDS]
+    spec = roots + [f for f in dirs[2] if not any(_e2e_under(f, r) for r in roots)]   # flow 多半在 .maestro 底下:不重複列(每多一個 pathspec ls-tree 就慢一點)
+    raw = _nodehome_git(root, "--literal-pathspecs", "ls-tree", "-r", "-z", "--full-tree", rev, "--", *spec, timeout=t)
     if raw is None:
         return None, f"列不出 {rev[:8]} 的檔案樹"
-    apps = [_e2e_norm(d) for d in e2e["app_dirs"]]
-    excl = [_e2e_norm(d) for d in e2e.get("exclude") or []]
-    mats = list(E2E_MATERIAL_DIRS) + [E2E_THRESHOLDS] + [_e2e_norm(f) for f in e2e["flows"]]
     seen_app = set()
     items = {}
     for ent in raw.split(b"\0"):
@@ -40559,16 +40718,14 @@ def _e2e_fingerprint(root, rev, e2e, full=None):
             continue
         meta, _, pb = ent.partition(b"\t")
         mode, _typ, oid = meta.decode().split()
-        p = os.fsdecode(pb)
-        hit_app = next((d for d in apps if _e2e_under(p, d)), None)
-        if hit_app is not None:
-            seen_app.add(hit_app)
-            if any(_e2e_under(p, x) for x in excl) or ("exclude" not in e2e and _e2e_default_excluded(p)):
-                hit_app = None
-        if hit_app is not None or any(_e2e_under(p, m) for m in mats):
+        ps = os.fsdecode(pb)
+        app, inside = _e2e_scope_hit(ps, e2e, dirs)
+        if app is not None:   # 包住它的每一項都算看到(app_dirs 一項包住另一項時,只記第一項會把另一項判成不存在;代碼審 r2 邊界席)
+            seen_app.update(d for d in dirs[0] if _e2e_under(ps, d))
+        if inside:
             items[pb] = (mode, oid)
-    gone = [d for d in apps if d not in seen_app]
-    if gone:
+    gone = [d for d in dirs[0] if d not in seen_app]
+    if gone and not allow_missing:
         return None, f"app_dirs 的 {'、'.join(gone)} 在 {rev[:8]} 的檔案樹裡不存在"
     h = hashlib.sha256()
     for pb in sorted(items):
@@ -40584,6 +40741,11 @@ def _e2e_fingerprint(root, rev, e2e, full=None):
 
 def _e2e_record_path(root, fp):
     return Path(root) / E2E_RECORDS_DIR / f"{fp}.json"
+
+
+def _e2e_strs(x):
+    """x 是字串清單嗎(紀錄欄位型別檢查用)。"""
+    return isinstance(x, list) and all(isinstance(i, str) for i in x)
 
 
 def _e2e_record_err(rec, fp):
@@ -40603,6 +40765,14 @@ def _e2e_record_err(rec, fp):
     fr = rec.get("feature_runs", {})
     if not isinstance(fr, dict) or any(not isinstance(v, dict) or v.get("result") not in E2E_RESULTS for v in fr.values()):
         return "feature_runs 要是「功能.情境 → {result: pass、fail、unjudged 之一, …}」"
+    # 判定會讀到的欄位型別也在這裡驗:型別不對時當成讀不懂(擋下叫人修紀錄),不走到判定內部出錯(代碼審 r3 邊界席)
+    ran = runs.get("ran") if isinstance(runs, dict) else None
+    if ran is not None and (not isinstance(ran, dict) or not all(_e2e_strs(ran.get(k, [])) for k in ("flows", "visual", "stability_checks"))):
+        return "runs.ran 要是 {flows, visual, stability_checks: 字串清單}"
+    for k, v in fr.items():
+        if not _e2e_strs(v.get("skipped", [])) or not isinstance(v.get("items", []), list) \
+                or not all(isinstance(i, dict) and isinstance(i.get("name"), str) for i in v.get("items", [])):
+            return f"feature_runs 的 {k}:skipped 要是字串清單、items 要是 {{kind, name, result}} 清單"
     return None
 
 
@@ -40691,8 +40861,8 @@ def _e2e_load_json(path, scrub=True):
     import json
     try:
         raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, TypeError, ValueError) as e:
-        return None, f"讀不了 {path}:{e}"
+    except (OSError, TypeError, ValueError, RecursionError) as e:   # RecursionError:深到 json 自己遞迴爆掉(代碼審 code-e2e-gate r2 邊界席)
+        return None, f"讀不了 {path}:{'巢狀太深(RecursionError)' if isinstance(e, RecursionError) else e}"   # 其他照原訊息,保留位置(r3 通才席)
     if not _events_depth_ok(raw, 20):
         return None, f"{path} 巢狀太深"
     return (_macrobench_stab_scrub(raw) if scrub else _e2e_fix_surrogates(raw)), None
@@ -40813,29 +40983,38 @@ def _e2e_now():
 
 
 def _e2e_record_update(root, fp, mutate):
-    """讀出整份紀錄、交給 mutate 改、整份寫回;包在讀改寫鎖裡(照 lint-waive),寫入用 _write_lf。
+    """讀出整份紀錄、交給 mutate 改、整份寫回;包在讀改寫鎖裡(_vault_write_lock,照 lint-waive;殘留鎖不自動接手,
+    擋下訊息印鎖檔位置與人工清鎖的前提),寫入用 _write_lf。
     紀錄讀不懂就不寫(回錯誤訊息),不拿空白紀錄蓋掉它。"""
     import json
     p = _e2e_record_path(root, fp)
     bad = _repo_path_unsafe(root, p.relative_to(root))   # 陌生專案提交一個捷徑就能把紀錄寫到專案外(代碼審 code-e2e-by-feature r3 資安席);逐層擋捷徑走共用守衛
     if bad:
         return None, f"查證紀錄不寫:{_repo_path_unsafe_why(root, p.relative_to(root), bad)}"
-    with _vault_write_lock(p):
-        if p.exists():
-            rec, err = _e2e_load_json(p, scrub=False)
-            err = err or _e2e_record_err(rec, fp)
-            if err:
-                return None, f"{p} 讀不懂({err});先看過再決定刪掉或修好,這次不寫"
-        else:
-            rec = {"schema": E2E_SCHEMA, "fingerprint": fp, "runs": None, "history": [], "waivers": []}
-        rec.setdefault("history", [])
-        rec.setdefault("waivers", [])
-        mutate(rec)
-        try:
+    try:
+        with _vault_write_lock(p):
+            if p.exists():
+                if p.lstat().st_size > E2E_RECORD_FILE_MAX:   # 掃描與判定都不讀這麼大的紀錄,寫回也不整份讀進來(代碼審 r3 資源席)
+                    return None, f"{p} 超過單份紀錄的大小上限({E2E_RECORD_FILE_MAX // 1024 // 1024}MB);先看過再決定刪掉或修好,這次不寫"
+                rec, err = _e2e_load_json(p, scrub=False)
+                # 跟推送前判定同一套「讀不懂」(含結束時間):寫得進去卻照樣被擋的放行不寫(代碼審 r3 合約、正確性席)
+                err = err or _e2e_record_err(rec, fp) or _e2e_gate_times_err(rec)
+                if err:
+                    return None, f"{p} 讀不懂({err});先看過再決定刪掉或修好,這次不寫"
+            else:
+                rec = {"schema": E2E_SCHEMA, "fingerprint": fp, "runs": None, "history": [], "waivers": []}
+            rec.setdefault("history", [])
+            rec.setdefault("waivers", [])
+            mutate(rec)
+            data = json.dumps(rec, ensure_ascii=False, indent=1) + "\n"
+            if len(data.encode("utf-8")) > E2E_RECORD_FILE_MAX:   # 寫完會超過上限:判定會擋它,寫進去的放行不生效(r5 通才席)
+                return None, f"{p} 寫完會超過單份紀錄的大小上限({E2E_RECORD_FILE_MAX // 1024 // 1024}MB);先清掉用不到的歷史再寫,這次不寫"
             p.parent.mkdir(parents=True, exist_ok=True)
-            _write_lf(p, json.dumps(rec, ensure_ascii=False, indent=1) + "\n")
-        except OSError as e:   # 權限、磁碟滿:回錯誤訊息交給呼叫端(按功能跑只提醒、整套跑擋下),不丟堆疊
-            return None, f"{p} 寫不進去({e.strerror or e})"
+            _write_lf(p, data)
+    except WriteBlocked as e:
+        return None, f"查證紀錄不寫:{e}"
+    except OSError as e:   # 權限、磁碟滿:回錯誤訊息交給呼叫端(按功能跑只提醒、整套跑擋下),不丟堆疊
+        return None, f"{p} 寫不進去({e.strerror or e})"
     return p, None
 
 
@@ -40888,16 +41067,18 @@ def _e2e_changed_features(root, e2e, feats):
     files, note, gerr = _e2e_changed_files(root)
     if gerr:
         return None, None, note, gerr
+    weird = [f for f in files if _path_special_chars(f, surrogate=False)]
+    if weird:   # 源頭擋,同推送前判定(代碼審 r5 資安席)
+        return None, None, note, f"改到的檔有 {len(weird)} 支檔名帶控制字元或看不見的字元:先改名(不印這種檔名)"
     hit, unmatched = set(), []
-    all_flows = {_e2e_norm(x) for x in e2e.get("flows") or []}
+    dirs = _e2e_scope_dirs(e2e)
+    index = _e2e_owner_index(feats)   # 只建一次(代碼審 code-e2e-gate r3 通才、正確性席:逐檔重建)
     for f in files:
-        owners = [fn for fn, v in feats.items() if any(_e2e_under(f, _e2e_norm(x)) for x in v["paths"])
-                  or any(_e2e_norm(x) == _e2e_norm(f) for c in v["cases"].values() for x in c.get("flows", []))]
+        owners = _e2e_owners(f, feats, index)
         if owners:
             hit.update(owners)
-        elif (_e2e_norm(f) in all_flows or _e2e_under(f, ".maestro") or f in (".lumos/macrobench.json", ".lumos/macrobench-thresholds.json")
-              or any(_e2e_under(f, _e2e_norm(d)) for d in e2e["app_dirs"])):
-            unmatched.append(f)   # 共用 flow、截圖素材、設定與門檻也會改驗收結果:有別的命中時照樣列出來提醒
+        elif f == ".lumos/macrobench.json" or _e2e_scope_hit(f, e2e, dirs)[1]:
+            unmatched.append(f)   # 共用 flow、截圖素材、設定與門檻也會改驗收結果:有別的命中時照樣列出來提醒(範圍判斷跟算指紋同一支)
     if hit:
         return hit, unmatched, note, None
     shown = "、".join(files[:10]) + (f" 等 {len(files)} 支" if len(files) > 10 else "") if files else "(沒有改動)"
@@ -40979,7 +41160,7 @@ def _e2e_select_cmd(root, features, cases, changed, no_perf, no_memory):
     if err is None:
         sel, err = _e2e_select(root, e2e, scen, features, cases, changed, no_perf, no_memory)
     if err:
-        print(f"擋下:{err}", file=sys.stderr)
+        _say_block(err)
         return 2
     print(json.dumps(sel, ensure_ascii=False))
     return 0
@@ -40997,7 +41178,7 @@ def _e2e_judge_partial(root, run_dir, steps):
     if err is None and any(fc.partition(".")[2] not in ((e2e.get("features") or {}).get(fc.partition(".")[0]) or {}).get("cases", {}) for fc in sel["cases"]):
         err = f"steps.json 挑到的情境 {'、'.join(sel['cases'])} 有的已經不在功能對照表裡(開跑後改了設定)"
     if err:
-        print(f"擋下:{err}", file=sys.stderr)
+        _say_block(err)
         return 2, None, err
     runs = _e2e_evaluate_selected(e2e, steps, run_dir, sel)
     cases = _e2e_case_results(e2e, sel, runs)
@@ -41007,7 +41188,7 @@ def _e2e_judge_partial(root, run_dir, steps):
     runs["cases"] = cases
     print(f"(按功能跑:{'、'.join(sel['cases'])})")
     if sel.get("unmatched"):
-        print(f"  ! 這些改到的檔沒有對應功能(推送前的整套跑照樣會驗到):{'、'.join(sel['unmatched'])}")
+        print(f"  ! 這些改到的檔沒有對應功能(推送前的整套跑照樣會驗到):{_out_clean('、'.join(sel['unmatched']), 2000)}")
     _e2e_print_runs(runs)
     word = {"pass": "通過", "fail": "沒過", "unjudged": "沒判完"}
     for fc, v in cases.items():
@@ -41178,7 +41359,7 @@ def _e2e_history_cmd(root, feature=None, case=None, last=20):
     只留最後 last 筆;last 要是正整數。照情境篩時,結果與沒過的項目只列那個情境自己的(有 case_results 的行)。"""
     import collections
     if not isinstance(last, int) or last < 1:
-        print(f"擋下:--last 要是正整數(拿到 {last!r})", file=sys.stderr)
+        _say_block(f"--last 要是正整數(拿到 {last!r})")
         return 2
     p = Path(root).resolve() / E2E_HISTORY_REL
     if not p.is_file():
@@ -41194,7 +41375,7 @@ def _e2e_history_cmd(root, feature=None, case=None, last=20):
                 continue
             rows.append(r)
     except OSError as e:
-        print(f"擋下:檢測總表讀不了:{e}", file=sys.stderr)
+        _say_block(f"檢測總表讀不了:{e}")
         return 2
     word = {"pass": "通過", "fail": "沒過", "unjudged": "沒判完", None: "沒寫判定"}
     for r in rows:
@@ -41211,8 +41392,758 @@ def _e2e_history_cmd(root, feature=None, case=None, last=20):
     return 0
 
 
+E2E_GATE_BUDGET_SEC = _SECEV_BUDGET_SEC   # 整道判定的時間預算,照安全證據閘(計劃〈資料怎麼流〉第 4 步)
+E2E_FP_RE = re.compile(r"[0-9a-f]{64}")
+E2E_RUN_CMD = "sh scripts/templates/android-e2e-run.sh"
+E2E_BASELINE_DIR = ".maestro/baseline"   # 截圖基準圖:每個畫面一張 <畫面名>.png(toolkit 的 visual-check.sh 照這個位置找)
+
+
+class _E2eGateStop(Exception):
+    """推送前判定提早結束:帶著要回的結果(擋下、不跑、不要求)。"""
+
+    def __init__(self, out):
+        super().__init__(out.get("reason", ""))
+        self.out = out
+
+
+def _e2e_gate_out(status, reason="", **kw):
+    """推送前判定的結果。status:none(這個專案不用 E2E,輸出一字不變)、ci、skipped-env、not-required、pass、waived、
+    pass-by-feature、blocked。
+    ★外來文字在這裡統一清★:原因與清單裡的字串(被推送提交的設定值、紀錄的鍵名、檔名)換掉控制字元——擋下訊息與治理帳都從這裡拿,
+    會進 AI 的視野;逐點補每輪都漏一處(代碼審 code-e2e-gate r2 只補了檔名、r3 資安、合約、通才席又找到設定值與紀錄鍵名)。"""
+    def clean(v):
+        if isinstance(v, str):
+            return _out_clean(v)
+        if isinstance(v, (list, tuple)):
+            return type(v)(clean(x) for x in v)
+        return v
+    return {"status": status, "reason": clean(reason), **{k: clean(v) for k, v in kw.items()}}
+
+
+def _e2e_gate_block(reason, **kw):
+    raise _E2eGateStop(_e2e_gate_out("blocked", reason, **kw))
+
+
+def _e2e_ts(x):
+    """紀錄裡的時間 → 帶時區的時間;不是字串、不是 ISO、沒帶時差 → None(推送前判定拿它比先後,讀不懂就擋)。"""
+    import datetime as _dt
+    if not isinstance(x, str):
+        return None
+    try:
+        t = _dt.datetime.fromisoformat(x)
+        t.timestamp()
+    except (ValueError, OverflowError, OSError):
+        return None
+    return t if t.tzinfo is not None else None
+
+
+def _e2e_tree_blob(root, rev, rel, deadline, limit=None):
+    """提交 rev 的樹裡 rel 那支檔 → (位元組或 None, 錯誤訊息或 None, 是不是 git 暫時讀不出);不在樹裡回 (None, None, False)。
+    第三格照 _push_rev 的「查詢本身失敗了嗎」:git 失敗或逾時、物件缺是暫時的(不是檔案內容的問題;代碼審 r5 架構對齊席)。
+    ★讀不到不等於沒有★(設計審 r3 資源席):先用 ls-tree 看那個路徑在不在樹裡,在樹裡卻讀不出內容(物件缺、git 失敗)就回錯誤。"""
+    ls = _nodehome_git(root, "--literal-pathspecs", "ls-tree", "-z", rev, "--", rel, timeout=_secev_git_left(deadline))
+    if ls is None:
+        return None, f"列不出 {rev[:8]} 的 {rel}(git 失敗或逾時)", True
+    if not ls.strip(b"\0"):
+        return None, None, False
+    sizes = _nodehome_cat_sizes(root, [f"{rev}:{rel}"], timeout=_secev_git_left(deadline))
+    if sizes is None or sizes[0] is None:
+        return None, f"{rev[:8]} 的 {rel} 在樹裡卻讀不出內容(物件缺或 git 失敗)", True
+    if sizes[0] > (limit or _SECEV_FILE_MAX):   # 先問大小再讀:被推送提交裡的檔是作者可控的,整份讀進記憶體才比會吃掉幾倍大小(代碼審 r1 資源席)
+        return None, f"{rev[:8]} 的 {rel} 超過單檔上限({(limit or _SECEV_FILE_MAX) // 1024 // 1024}MB)", False
+    raw = _nodehome_git(root, "cat-file", "blob", f"{rev}:{rel}", timeout=_secev_git_left(deadline))
+    if raw is None:
+        return None, f"{rev[:8]} 的 {rel} 在樹裡卻讀不出內容(物件缺或 git 失敗)", True
+    return raw, None, False
+
+
+def _e2e_tree_json(root, rev, rel, deadline, limit=None):
+    """提交 rev 的樹裡 rel 那份 JSON 物件 → (dict 或 None, 錯誤訊息或 None, 是不是 git 暫時讀不出);不在樹裡回 (None, None, False)。
+    嚴格 UTF-8、不收 BOM(macrobench --check-config 擋 BOM,推送前判定讀提交樹不經那一道,自己再擋一次)。"""
+    import json
+    raw, err, transient = _e2e_tree_blob(root, rev, rel, deadline, limit)
+    if raw is None:
+        return None, err, transient
+    try:
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raise ValueError("BOM")
+        d = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError, RecursionError):   # 巢狀深到遞迴爆掉也是讀不懂,不是判定內部出錯(r3 資源席)
+        d = None
+    if not isinstance(d, dict):
+        return None, f"{rev[:8]} 的 {rel} 讀不懂(不是合格的 UTF-8 JSON 物件)", False
+    return d, None, False
+
+
+def _e2e_mem_canon(full):
+    import json
+    return json.dumps({k: (full or {}).get(k) for k in ("stability", "stability_scenarios")}, sort_keys=True,
+                      separators=(",", ":"), ensure_ascii=False)
+
+
+def _e2e_canon(e2e):
+    import json
+    return json.dumps(e2e, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def _e2e_waiver_ok(w):
+    """一筆放行算不算數:by 是 human 或 ai、note 是非空字串;[{}]、[null] 這種不算,也不算讀不懂。"""
+    return isinstance(w, dict) and w.get("by") in ("human", "ai") and isinstance(w.get("note"), str) and bool(w["note"].strip())
+
+
+def _e2e_ai_pending(rec):
+    """紀錄裡還沒人看過的 AI 放行筆數。"""
+    return _e2e_ai_pending_one(rec, (rec or {}).get("fingerprint"))   # 單源:跟 doctor、--ack 與開場掛鉤同一支(r3 通才席)
+
+
+def _e2e_gate_times_err(rec):
+    """runs 的結束時間與 feature_runs 每一筆的 ended 都要讀得懂(帶時差的 ISO);讀不懂回錯誤訊息(判不清就擋)。"""
+    runs = rec.get("runs")
+    if runs is not None and _e2e_ts(runs.get("ended")) is None:
+        return "整套結果(runs)的結束時間讀不懂"
+    for k, v in (rec.get("feature_runs") or {}).items():
+        if _e2e_ts(v.get("ended")) is None:
+            return f"按功能結果 {k} 的結束時間(ended)讀不懂"
+    return None
+
+
+def _e2e_present(root, rev, rels, deadline):
+    """提交 rev 的樹裡,rels 之中有哪些路徑存在 → 集合(正規化後的路徑)。"""
+    if not rels:
+        return set()
+    raw = _nodehome_git(root, "--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", *rels,
+                        timeout=_secev_git_left(deadline))
+    if raw is None:
+        _e2e_gate_block(f"列不出 {rev[:8]} 的驗收素材(git 失敗或逾時)")
+    got = {os.fsdecode(x) for x in raw.split(b"\0") if x}
+    return {r for r in rels if r in got}
+
+
+def _e2e_runs_missing(root, sha, runs, ml_e2e, ml_full, sel_full, deadline):
+    """整套結果有沒有涵蓋主線版要求的塊(S9)→ 少了的清單。主線版每支 flow、每個畫面、要了的記憶體 check 都要在紀錄的 ran 裡;
+    被推送提交刪掉或改名的 flow(檔不在了)、基準圖不在了的畫面、拿掉的記憶體情境不算缺。"""
+    ran = runs.get("ran") or {}
+    flows = [_e2e_norm(f) for f in ml_e2e.get("flows") or []]
+    screens = list(ml_e2e.get("visual") or [])
+    have = _e2e_present(root, sha, flows + [f"{E2E_BASELINE_DIR}/{s}.png" for s in screens], deadline)
+    ran_flows = {_e2e_norm(f) for f in ran.get("flows") or []}
+    miss = [f"flow {f}" for f in flows if f in have and f not in ran_flows]
+    miss += [f"畫面 {s}" for s in screens if f"{E2E_BASELINE_DIR}/{s}.png" in have and s not in set(ran.get("visual") or [])]
+    if ml_e2e.get("stability"):
+        checks = list(ml_e2e.get("stability_checks", E2E_STAB_CHECKS))
+        scens = [n for n in ((ml_full or {}).get("stability_scenarios") or {}) if n in ((sel_full or {}).get("stability_scenarios") or {})]
+        want = checks + [f"{n}:{c}" for n in scens for c in checks]
+        got = set(ran.get("stability_checks") or [])
+        miss += [f"記憶體 {c}" for c in want if c not in got]
+    return miss
+
+
+def _e2e_case_covered(v, c):
+    """一筆 feature_runs 有沒有涵蓋情境 c 列的 flow、畫面與記憶體情境 → 少了的清單。"""
+    items = v.get("items") if isinstance(v.get("items"), list) else []
+    got = {(i.get("kind"), _e2e_norm(i.get("name")) if i.get("kind") == "ui" else i.get("name"))
+           for i in items if isinstance(i, dict) and isinstance(i.get("name"), str)}
+    want = ([("ui", _e2e_norm(f)) for f in c.get("flows") or []] + [("visual", x) for x in c.get("visual") or []]
+            + [("stability", x) for x in c.get("stability") or []])
+    return [f"{k} {n}" for k, n in want if (k, n) not in got]
+
+
+def _e2e_gate_need(root, base, sha, e2e, base_full, full, deadline):
+    """按功能那條路:這次改動要整套,還是要哪些情境(計劃〈推送前怎麼按功能判〉第 3、4 步)
+    → ("full", [原因…]) 或 ("cases", [要驗的 功能.情境], [只列效能、不用驗的 功能.情境])。"""
+    base_e2e = (base_full or {}).get("e2e")
+    if not isinstance(base_e2e, dict) or _e2e_canon(base_e2e) != _e2e_canon(e2e):
+        return "full", ["驗收設定(e2e 段)跟分岔點不一樣"]
+    if e2e.get("stability") and _e2e_mem_canon(base_full) != _e2e_mem_canon(full):
+        return "full", ["記憶體設定(stability 段或 stability_scenarios)跟分岔點不一樣"]
+    raw = _nodehome_git(root, "diff", "--name-only", "-z", "--no-renames", base, sha, timeout=_secev_git_left(deadline))
+    if raw is None:
+        _e2e_gate_block("列不出這次改了哪些檔(git diff 失敗或逾時)")
+    dirs = _e2e_scope_dirs(e2e)
+    allf = _nodehome_split_z(raw)
+    weird = [f for f in allf if _path_special_chars(f, surrogate=False)]
+    if weird:   # 源頭擋:檔名帶控制字元或看不見的字元時判不清、也不把它印出來(代碼審 r5 資安、正確性席:下游輸出點逐一清每輪都漏)
+        _e2e_gate_block(f"這次改到的檔有 {len(weird)} 支檔名帶控制字元或看不見的字元:先改名再推(擋下訊息不印這種檔名)", commit=sha)
+    files = [f for f in allf if _e2e_scope_hit(f, e2e, dirs)[1]]
+    if not files:
+        return "full", ["指紋變了,但說不出指紋範圍裡改了哪支檔"]
+    feats = e2e.get("features") or {}
+    why, owners = _e2e_gate_owners(files, e2e, feats, deadline)
+    if why:
+        return "full", why
+    need, perf_only = [], []
+    for fn in sorted(owners):
+        for cn, c in feats[fn]["cases"].items():
+            (need if any(c.get(k) for k in ("flows", "visual", "stability")) else perf_only).append(f"{fn}.{cn}")
+    return "cases", need, perf_only
+
+
+def _e2e_gate_owners(files, e2e, feats, deadline=None):
+    """改到的檔(已在指紋範圍)→ (要整套的原因清單, 歸屬到的功能集合):落在 shared_paths 底下、或對不到任何功能都算要整套。
+    每 1000 支查一次截止時間:這段是純 Python 迴圈,不查的話大改動跑完才在下一次 git 呼叫逾時、原因講錯。"""
+    shared = [_e2e_norm(x) for x in e2e.get("shared_paths") or []]
+    index = _e2e_owner_index(feats)
+    why, owners = [], set()
+    for i, f in enumerate(files):
+        if i % 1000 == 0:
+            _secev_deadline_check(deadline)
+        if any(_e2e_under(f, d) for d in shared):
+            why.append(f"{_esc_clean(f, 200)}(共用程式,列在 shared_paths)")
+            continue
+        got = _e2e_owners(f, feats, index)
+        if not got:
+            why.append(f"{_esc_clean(f, 200)}(對不到任何功能)")   # 檔名是被推送提交的作者可控的:擋下訊息會進 AI 視野(代碼審 r2 資安席)
+        owners.update(got)
+    return why, owners
+
+
+def _e2e_gate_by_feature(rec, e2e, need):
+    """要驗的情境逐一看 feature_runs → [沒過的 (情境, 原因)]。"""
+    feats = e2e.get("features") or {}
+    runs = rec.get("runs")
+    rt = _e2e_ts(runs.get("ended")) if isinstance(runs, dict) and runs.get("result") == "fail" else None
+    bad = []
+    for fc in need:
+        fn, _, cn = fc.partition(".")
+        v = (rec.get("feature_runs") or {}).get(fc)
+        if not isinstance(v, dict):
+            bad.append((fc, "這一版沒有按功能跑過"))
+        elif v.get("result") != "pass":
+            bad.append((fc, {"fail": "沒過", "unjudged": "沒判完"}.get(v.get("result"), "結果不認得")))
+        elif "stability" in (v.get("skipped") or []):
+            bad.append((fc, "略過了記憶體(--no-memory)"))
+        elif _e2e_case_covered(v, feats[fn]["cases"][cn]):
+            bad.append((fc, "少了 " + "、".join(_e2e_case_covered(v, feats[fn]["cases"][cn]))))
+        elif rt is not None and rt >= _e2e_ts(v["ended"]):
+            bad.append((fc, "之後整套跑沒過"))
+    return bad
+
+
+def _e2e_waive_hint(fp, sha):
+    return f'lumos android-e2e waive {fp} --commit {sha} --note "<理由>"'
+
+
+def _e2e_gate_done(status, reason="", **kw):
+    """判定提早結束、不是擋下(這個專案不用 E2E、不要求、在 CI 裡):丟 _E2eGateStop 帶著要回的結果。"""
+    raise _E2eGateStop(_e2e_gate_out(status, reason, **kw))
+
+
+def _e2e_gate_resolve(root, sha, deadline):
+    """要推的提交 → 完整編號。讀不到時先看工作目錄有沒有 e2e 段(照安全證據閘 _secev_worktree_trace):
+    沒有就是不用 E2E 的專案,一字不印;有才擋。"""
+    full_sha, failed = _push_rev(root, sha, deadline=deadline)
+    if full_sha:
+        return full_sha
+    cfg = root / ".lumos" / "macrobench.json"
+    wt, werr = _e2e_load_json(cfg, scrub=False) if cfg.exists() else (None, None)
+    if werr is None and not (isinstance(wt, dict) and wt.get("e2e")):
+        _e2e_gate_done("none")
+    _e2e_gate_block(f"讀不到要推的提交 {str(sha)[:40]}" + ("(git 失敗或逾時)" if failed else ""))
+
+
+def _e2e_parent(root, sha, deadline):
+    """sha 的第一個上一版 → (提交編號、根提交時是 "", 錯誤訊息或 None)。照 _push_rev(既有的「查詢本身失敗了嗎」;代碼審 r5 架構對齊席):
+    git 失敗算錯誤;查不到上一版時,淺層 clone 截斷的歷史跟根提交分不出,也算錯誤(r5 邊界席:原本被當成根提交而放行)。"""
+    p, failed = _push_rev(root, f"{sha}^1", deadline)
+    if failed:
+        return None, f"查不出 {sha[:8]} 的上一版(git 失敗或逾時)"
+    if p:
+        return p, None
+    sh = (_nodehome_git(root, "rev-parse", "--is-shallow-repository", timeout=_secev_git_left(deadline)) or b"").decode().strip()
+    if sh != "false":
+        return None, f"{sha[:8]} 沒有上一版:淺層 clone 截斷了歷史(或查不出),分不出是不是根提交;git fetch --unshallow 再推"
+    return "", None
+
+
+def _e2e_gate_uses(root, sha, pushed_branch, deadline):
+    """被推送提交的設定 → (整份, e2e 段);被推送提交與主線候選都沒有 e2e 段 → 這個專案不用 E2E(輸出一字不變)。"""
+    pushed_full, perr, _t = _e2e_tree_json(root, sha, ".lumos/macrobench.json", deadline)
+    if perr:
+        _e2e_gate_block(f"被推送提交的 macrobench.json {perr}")
+    pushed_e2e = (pushed_full or {}).get("e2e")
+    if pushed_e2e:
+        return pushed_full, pushed_e2e
+    cands, cerr = _secev_mainline_cands(root, pushed_branch, deadline)
+    found = False
+    for _n, s in cands:
+        mf, merr, _t = _e2e_tree_json(root, s, ".lumos/macrobench.json", deadline)
+        if merr:
+            _e2e_gate_block(f"主線候選的 macrobench.json {merr}")
+        found = found or bool((mf or {}).get("e2e"))
+    if not found and (cerr or not cands) and pushed_full is None:
+        # 主線候選查不到(查詢失敗或一個都沒有)、被推送提交又整個沒有設定檔:上一版有 e2e 段就是這次刪掉了;上一版判不出(git 失敗、
+        # 淺層 clone 截斷)也擋,判不清就擋(代碼審 code-e2e-gate r3 資安席、r5 邊界席)
+        parent, gerr = _e2e_parent(root, sha, deadline)
+        prev, _perr, _t = _e2e_tree_json(root, parent, ".lumos/macrobench.json", deadline) if parent else (None, None, False)
+        if gerr or _perr or (prev or {}).get("e2e"):
+            _e2e_gate_block(f"查不到主線({cerr or '一個主線候選都沒有'}),而{gerr or '這個提交拿掉了上一版還有的 macrobench.json 驗收設定'}")
+    if not found and not (cerr and pushed_full is not None):
+        _e2e_gate_done("none")
+    return pushed_full, pushed_e2e
+
+
+def _e2e_gate_mainline(root, sha, pushed_branch, range_start, deadline):
+    """主線與分岔點 → (主線版整份設定, 主線版 e2e 段, 分岔點);主線版沒有 e2e 段 → 不要求;找不到、不合格、算不出 → 擋。"""
+    ml, why, code = _secev_mainline(root, sha, pushed_branch, range_start, deadline)
+    if code:
+        _e2e_gate_block(f"找不到主線:{why}")
+    if ml is None:
+        _e2e_gate_done("not-required", f"{why};主線版沒有 e2e 段")
+    ml_full, merr, _t = _e2e_tree_json(root, ml, ".lumos/macrobench.json", deadline)
+    if merr:
+        _e2e_gate_block(f"主線版的 macrobench.json {merr}")
+    ml_e2e = (ml_full or {}).get("e2e")
+    if not ml_e2e:
+        _e2e_gate_done("not-required", "主線版沒有 e2e 段")
+    err = _e2e_cfg_err(ml_e2e, ml_full.get("stability"), bool(ml_full.get("results_dirs")), scen=ml_full.get("stability_scenarios"))
+    if err:
+        _e2e_gate_block(f"主線版的 e2e 段不合格:{err}")
+    mb = _secev_git(root, "merge-base", ml, sha, deadline=deadline)
+    base = mb.stdout.strip() if mb is not None and mb.returncode == 0 else ""
+    if not _LENS_SHA_RE.match(base):
+        _e2e_gate_block("算不出被推送提交跟主線的分岔點(沒有共同祖先,或淺層 clone 截斷了歷史)")
+    return ml_full, ml_e2e, base
+
+
+def _e2e_gate_fps(root, base, sha, pushed, ml, base_full, deadline):
+    """兩端指紋(同一份設定:被推送提交的 e2e 段,沒有就用主線版的)→ (選檔設定, 整份設定, 被推送提交的指紋)。
+    pushed、ml 各是 (整份, e2e 段)。兩端指紋相同、而且分岔點的設定也一樣 → 不要求;被推送提交沒有 e2e 段 → 擋
+    (分岔點有這一段:這次拿掉了;沒有:舊分支,叫人先合主線)。
+    ★只改設定也要驗★:兩端用同一份設定算指紋,只改 .lumos/macrobench.json(拿掉 flow、關掉記憶體、整段刪掉)時兩端指紋一樣,
+    所以另外比分岔點的 e2e 段與記憶體設定(代碼審 code-e2e-gate r1 資安、正確性席)。"""
+    if pushed[1]:
+        err = _e2e_cfg_err(pushed[1], pushed[0].get("stability"), bool(pushed[0].get("results_dirs")),
+                           scen=pushed[0].get("stability_scenarios"))
+        if err:
+            _e2e_gate_block(f"被推送提交的 e2e 段不合格:{err}")
+    sel_full, sel = pushed if pushed[1] else ml
+    fp_base, ferr = _e2e_fingerprint(root, base, sel, sel_full, allow_missing=True, deadline=deadline)
+    fp, ferr2 = (None, None) if ferr else _e2e_fingerprint(root, sha, sel, sel_full, deadline=deadline)
+    if ferr or ferr2:
+        _e2e_gate_block(ferr or ferr2)
+    base_e2e = (base_full or {}).get("e2e")
+    # 跟被推送提交自己的設定比(不是跟算指紋用的那份:被推送提交沒有 e2e 段時那份是主線版的,比了永遠一樣)。
+    # 兩端都沒有 e2e 段(主線採用 E2E 之前分出去的舊分支)也算一樣:只改文件的舊分支不要求(代碼審 code-e2e-gate r2 正確性、通才席)
+    same_e2e = ((base_e2e is None and not pushed[1])
+                or (isinstance(base_e2e, dict) and isinstance(pushed[1], dict) and _e2e_canon(base_e2e) == _e2e_canon(pushed[1])))
+    same_cfg = same_e2e and (not (pushed[1] or sel).get("stability") or _e2e_mem_canon(base_full) == _e2e_mem_canon(pushed[0]))
+    if fp == fp_base and same_cfg and pushed[1] and isinstance(ml[1], dict) and _e2e_canon(ml[1]) != _e2e_canon(pushed[1]):
+        # 分岔後主線改了驗收設定(例如 app_dirs 多一個模組):照這一版的範圍看沒改到,照主線的範圍看可能改到了(代碼審 code-e2e-gate r3 資安席)
+        mb, e1 = _e2e_fingerprint(root, base, ml[1], ml[0], allow_missing=True, deadline=deadline)
+        mh, e2 = (None, None) if e1 else _e2e_fingerprint(root, sha, ml[1], ml[0], allow_missing=True, deadline=deadline)
+        if e1 or e2 or mb != mh:
+            _e2e_gate_block("這一版的驗收設定跟主線不一樣,照主線的範圍看這次改到了要驗收的檔:先把主線合進來再驗收", commit=sha, merge_main=True)
+    if fp == fp_base and same_cfg:
+        _e2e_gate_done("not-required", "App 程式、驗收素材與驗收設定都跟分岔點一樣", fp=fp)
+    if not pushed[1] and base_e2e:
+        # 不叫人合主線:三方合併保留分支這邊的刪除,合了也補不回(代碼審 r2 正確性、合約席)
+        _e2e_gate_block("這個提交拿掉了 e2e 段(分岔點還有):刻意關掉驗收的那一次推送用 LUMOS_SKIP_ANDROID_E2E=1 關掉,合進主線後判定就不跑",
+                        commit=sha, removed=True)
+    if not pushed[1]:
+        what = "App 程式卻跟分岔點不一樣" if fp != fp_base else "記憶體設定卻跟分岔點不一樣(主線開著記憶體驗收)"   # 訊息講真正不一樣的那一塊(r3 邊界席)
+        _e2e_gate_block(f"這個提交沒有 e2e 段,{what}:先把主線合進來再驗收;刻意刪掉的那一次用 LUMOS_SKIP_ANDROID_E2E=1 關掉",
+                        commit=sha, merge_main=True)
+    return sel, sel_full, fp
+
+
+def _e2e_gate_load(root, sha, fp, need, deadline):
+    """從被推送提交的樹讀這一版的紀錄 → (紀錄, 結果裡共用的欄位);沒提交、沒有、讀不懂 → 擋。"""
+    rel = f"{E2E_RECORDS_DIR}/{fp}.json"
+    info = {"fp": fp, "commit": sha, "record": rel, "need": need[0], "full_why": need[1] if need[0] == "full" else [],
+            "cases": need[1] if need[0] == "cases" else [], "perf_only": need[2] if need[0] == "cases" else []}
+    # 單份上限跟寫入、掃描同一個(E2E_RECORD_FILE_MAX):超過就擋,裡面的放行不生效(代碼審 r4 正確性、合約席:原本判定讀到 16MB)
+    rec, rerr, transient = _e2e_tree_json(root, sha, rel, deadline, limit=E2E_RECORD_FILE_MAX)
+    if rerr:
+        # git 讀不出(暫時的)不叫人刪紀錄;讀出來卻讀不懂、或太大才是紀錄本身的問題(r3 通才席;r5 改成第三格旗標)
+        _e2e_gate_block(f"查證紀錄 {rerr}", bad_record=not transient, **info)
+    if rec is None:
+        if (Path(root) / rel).exists():
+            _e2e_gate_block(f"這一版的查證紀錄還沒提交:{rel}", uncommitted=True, **info)
+        want = ("要整套跑:" + "、".join(info["full_why"][:5])) if need[0] == "full" else ("按功能跑這幾個情境就夠:" + "、".join(info["cases"]))
+        _e2e_gate_block(f"這一版沒有查證紀錄(沒驗收過、或驗收時的版本不是這一版);{want}", **info)
+    rerr = _e2e_record_err(rec, fp) or _e2e_gate_times_err(rec)
+    if rerr:
+        # bad_record:放行與重跑都不覆蓋讀不懂的紀錄(_e2e_record_update 用同一套判斷),擋下訊息改叫人修好或刪掉(代碼審 r2 正確性席);
+        # schema 比較新是新版 lumos 寫的,叫人更新、不叫人刪(r3 通才席)
+        newer = isinstance(rec, dict) and _secev_int(rec.get("schema")) and rec["schema"] > E2E_SCHEMA
+        _e2e_gate_block(f"查證紀錄讀不懂:{rerr}", **({"newer_schema": True} if newer else {"bad_record": True}), **info)
+    info["pending_ai"] = _e2e_ai_pending(rec)
+    return rec, info
+
+
+def _e2e_gate_full_note(root, sha, rec, info, ml, sel_full, deadline, base_full=None):
+    """整套那條路(判定順序第 2 步):整套 pass 且涵蓋、沒有較新的 fail → 放行(丟 _E2eGateStop);
+    其他回一句說明整套結果為什麼不能用(給擋下訊息)。ml 是 (主線版整份, 主線版 e2e 段)。"""
+    runs = rec.get("runs")
+    if not isinstance(runs, dict):
+        return ""
+    if runs.get("result") != "pass":
+        return f"整套結果是{ {'fail': '沒過', 'unjudged': '沒判完'}.get(runs.get('result'), '?') }"
+    miss = _e2e_runs_missing(root, sha, runs, ml[1], ml[0], sel_full, deadline)
+    if miss:
+        # 主線的驗收設定跟這一版不同(多半是分岔後主線才加的要求):這一版照自己的設定重跑補不到,要先合主線(代碼審 r3 正確性席)
+        # 主線分岔後改了(主線跟分岔點不同)→ 先合主線;主線跟分岔點一樣、是這一版自己改了 → 合主線補不回(三方合併保留這邊),叫人改回去(r4 通才席)
+        def _cfg(full):
+            return (_e2e_canon((full or {}).get("e2e")), _e2e_mem_canon(full))
+        if _cfg(ml[0]) != _cfg(sel_full):
+            info["mainline_newer" if _cfg(ml[0]) != _cfg(base_full) else "cfg_weakened"] = True
+        return f"整套結果沒涵蓋主線版要求的:{'、'.join(miss[:8])}"
+    rt = _e2e_ts(runs["ended"])
+    newer = sorted(k for k, v in (rec.get("feature_runs") or {}).items() if v.get("result") == "fail" and _e2e_ts(v["ended"]) >= rt)
+    if newer:
+        _e2e_gate_block(f"整套跑過了,但之後按功能跑 {'、'.join(newer)} 沒過(最新的結果說沒過)", bad_cases=[(k, "沒過") for k in newer], **info)
+    _e2e_gate_done("pass", "整套跑過且通過", **info)
+    return ""
+
+
+def _e2e_gate_escape():
+    """這一道的兩個出口:在 CI 裡(第一版只在本機推送時判)、LUMOS_SKIP_ANDROID_E2E=1(這一次整道不跑、記帳)→ 結果或 None。"""
+    if _in_ci():
+        return _e2e_gate_out("ci", "第一版只在本機推送時判")
+    if os.environ.get("LUMOS_SKIP_ANDROID_E2E") == "1":
+        return _e2e_gate_out("skipped-env", "LUMOS_SKIP_ANDROID_E2E=1:這一次整道不跑")
+    return None
+
+
+def _e2e_gate_body(root, sha, pushed_branch, range_start, deadline):
+    """推送前判定的本體(單源計劃〈資料怎麼流〉第 4 步與〈推送前怎麼按功能判〉):照順序走各階段,
+    每個階段要提早結束(擋下、不跑、不要求、放行)就丟 _E2eGateStop。"""
+    sha = _e2e_gate_resolve(root, sha, deadline)
+    pushed = _e2e_gate_uses(root, sha, pushed_branch, deadline)
+    esc = _e2e_gate_escape()
+    if esc:
+        return esc
+    ml_full, ml_e2e, base = _e2e_gate_mainline(root, sha, pushed_branch, range_start, deadline)
+    base_full, berr, _t = _e2e_tree_json(root, base, ".lumos/macrobench.json", deadline)
+    if berr:
+        _e2e_gate_block(f"分岔點的 macrobench.json {berr}")
+    sel, sel_full, fp = _e2e_gate_fps(root, base, sha, pushed, (ml_full, ml_e2e), base_full, deadline)
+    need = _e2e_gate_need(root, base, sha, sel, base_full, sel_full, deadline)
+    if need[0] == "cases" and not need[1]:
+        # 改到的功能情境都只列了效能(只提醒):沒有要驗的情境,不要求紀錄(計劃〈推送前怎麼按功能判〉第 4 步;代碼審 r1 邊界、正確性席)
+        return _e2e_gate_out("pass-by-feature", "這次改到的功能情境都只列了效能(只提醒),沒有要驗的情境", fp=fp, commit=sha,
+                             need="cases", cases=[], perf_only=need[2], full_why=[])
+    rec, info = _e2e_gate_load(root, sha, fp, need, deadline)
+    if any(_e2e_waiver_ok(w) for w in rec.get("waivers") or []):
+        return _e2e_gate_out("waived", "這一版有放行", **info)
+    note = _e2e_gate_full_note(root, sha, rec, info, (ml_full, ml_e2e), sel_full, deadline, base_full)
+    tail = f";{note}" if note else ""
+    if need[0] == "full":
+        _e2e_gate_block("這次改動要整套驗收:" + "、".join(need[1][:8]) + tail, runs_note=note, **info)
+    bad = _e2e_gate_by_feature(rec, sel, need[1])
+    if bad:
+        _e2e_gate_block("按功能驗收還不夠:" + "、".join(f"{k}({w})" for k, w in bad[:8]) + tail, bad_cases=bad, runs_note=note, **info)
+    return _e2e_gate_out("pass-by-feature", "按功能放行", **info)
+
+
+def _e2e_gate_evaluate(root, sha, pushed_branch=None, range_start=None, budget=None):
+    """code-loop check 的 Android E2E 判定(單源 Projects/Android端到端驗收_計劃〈資料怎麼流〉第 4 步):判不清就擋,不走 fail-open。
+    整道 60 秒預算(照安全證據閘);用完、或內部出錯都擋並說原因。"""
+    import time
+    b = E2E_GATE_BUDGET_SEC if budget is None else budget   # 呼叫時才讀常數:測試在行程內改得到(照安全證據閘的 _SECEV_BUDGET_SEC)
+    deadline = time.monotonic() + b
+    timeout = _e2e_gate_out("blocked", f"判定超過 {b:g} 秒還沒算完(git 太慢或檔案樹太大);這一次先關掉:LUMOS_SKIP_ANDROID_E2E=1 git push",
+                            gate_code="evaluation_timeout")
+    try:
+        out = _e2e_gate_body(Path(root), sha, pushed_branch, range_start, deadline)
+    except _E2eGateStop as e:
+        # 預算用完時 git 呼叫回「失敗」(沒時間就不跑):那時擋下的原因一律講成逾時,不讓人以為是提交或紀錄壞了
+        out = timeout if e.out["status"] == "blocked" and time.monotonic() >= deadline else e.out
+    except _SecevTimeout:
+        out = timeout
+    except Exception as e:   # 判不清就擋:工具自己的毛病也擋(不走 fail-open),出口是環境變數
+        out = _e2e_gate_out("blocked", f"判定內部出錯({type(e).__name__}: {str(e)[:120]});這一次先關掉:LUMOS_SKIP_ANDROID_E2E=1 git push",
+                            gate_code="evaluation_error")
+    # 前段(讀要推的提交、讀設定)就擋下或逾時時,CI 與環境變數的出口照樣有效:擋下訊息叫人設的變數要真的關得掉
+    # (代碼審 code-e2e-gate r1 通才、邊界、正確性、合約席;本體讀完設定之後也先看這兩個出口)
+    return (_e2e_gate_escape() or out) if out["status"] == "blocked" else out
+
+
+def _e2e_who(root):
+    import getpass
+    r = _nodehome_git(root, "config", "user.name")
+    name = (r or b"").decode("utf-8", "replace").strip()
+    if name:
+        return name
+    try:
+        return getpass.getuser()
+    except (KeyError, OSError):   # 沒有登入帳號(容器、沒設 USER)
+        return "unknown"
+
+
+def _e2e_head_fp(root):
+    """不帶指紋時放行 HEAD 那一版 → (指紋, HEAD, 錯誤訊息或 None)。"""
+    head = (_nodehome_git(root, "rev-parse", "HEAD") or b"").decode("utf-8", "replace").strip()
+    if not head:
+        return None, None, "讀不到 HEAD"
+    full, err = _e2e_config_at(root, head)
+    e2e = (full or {}).get("e2e")
+    if err or not e2e:
+        return None, head, err or "HEAD 的 macrobench.json 沒有 e2e 段:先把主線合進來"
+    err = _e2e_cfg_err(e2e, full.get("stability"), bool(full.get("results_dirs")), scen=full.get("stability_scenarios"))
+    if err:
+        return None, head, f"HEAD 的 e2e 段不合格:{err}"
+    fp, err = _e2e_fingerprint(root, head, e2e, full)
+    return fp, head, err
+
+
+E2E_RECORD_SCAN_MAX = 500                  # doctor、waive --list/--ack 與開場掛鉤最多讀幾份紀錄(照修改時間由新到舊)
+E2E_RECORD_FILE_MAX = 2 * 1024 * 1024      # 單份紀錄的大小上限;開場掛鉤 lumos-entry-hook.py 的 _e2e_ai_line 是同一組數字的複本(有測試盯兩邊算出一樣)
+E2E_RECORD_SCAN_SEC = 3.0                  # 開場掛鉤與 doctor 數 AI 放行待看的總時間上限(掛鉤外層只給 10 秒;500 份各 2MB 的大清單要讀幾十秒,
+                                           # 代碼審 code-e2e-gate r2 資源席);用完就停、講另有幾份沒讀。掛鉤有同一個數字的複本
+
+
+def _e2e_record_files(root, cap=E2E_RECORD_SCAN_MAX):
+    """工作目錄 .lumos/e2e-records/ 裡要讀的紀錄檔 → [(指紋, 路徑或 None)]:檔名是 64 碼指紋;只讀一般檔(lstat,不跟著捷徑走:
+    捷徑指到 /dev/zero 這類裝置會讀不完);超過單份上限的給 None(照樣佔一個名額,開場掛鉤同一套算法);照修改時間由新到舊取前
+    E2E_RECORD_SCAN_MAX 份(代碼審 code-e2e-gate r1 邊界、資源席)→ (那幾份, 超過上限沒取的份數)。
+    cap=None 不設份數上限:waive --list 與 --ack 是人明著下的指令,開場提示與 doctor 叫人用它們看名額外的那幾份(r3 五席)。"""
+    import stat as _st
+    d = Path(root) / E2E_RECORDS_DIR
+    rows = []
+    for p in d.iterdir() if d.is_dir() and not d.is_symlink() else []:
+        if p.suffix != ".json" or not E2E_FP_RE.fullmatch(p.stem):
+            continue
+        try:
+            st = p.lstat()
+        except OSError:
+            continue
+        if not _st.S_ISREG(st.st_mode):
+            continue
+        rows.append((st.st_mtime, p.stem, p if st.st_size <= E2E_RECORD_FILE_MAX else None))
+    rows.sort(key=lambda r: (-r[0], r[1]))
+    if cap is None:
+        return [(fp, path) for _m, fp, path in rows], 0
+    return [(fp, path) for _m, fp, path in rows[:cap]], max(0, len(rows) - cap)
+
+
+def _e2e_ai_pending_one(rec, fp):
+    """一份紀錄裡還沒人看過的 AI 放行筆數;不是物件、指紋對不上、放行不是清單都算 0(放行算數的條件同 _e2e_waiver_ok)。
+    ★開場掛鉤 lumos-entry-hook.py 有一份同名的逐字複本★(掛鉤不能 import lumos;t_android_e2e_ai_count_copies_agree 比兩邊的原文)。"""
+    if not isinstance(rec, dict) or rec.get("fingerprint") != fp or not isinstance(rec.get("waivers", []), list):
+        return 0
+    return sum(1 for w in rec.get("waivers") or [] if isinstance(w, dict) and w.get("by") == "ai"
+               and isinstance(w.get("note"), str) and w["note"].strip() and w.get("acked") is not True)
+
+
+def _e2e_ai_pending_all(root, budget=None, cap=E2E_RECORD_SCAN_MAX):
+    """工作目錄裡的紀錄(_e2e_record_files 挑的那幾份)的 AI 放行待看 → ([(指紋, 筆數)], 沒讀到的份數, 超過單份上限沒讀的份數)
+    (doctor、--ack 用;舊指紋的也算)。太大的另計:裡面可能有已經生效過的 AI 放行,要人修好或刪掉(代碼審 r5 合約席)。
+    跟開場掛鉤的 _e2e_ai_line 同一套寬鬆規則與名額算法:只 json.loads、不要求整份紀錄合格,一份讀不懂(含遞迴爆掉)只跳過那一份;
+    太大的佔名額不讀;讀超過 budget 秒(預設 E2E_RECORD_SCAN_SEC)就停,沒讀到的併進份數(代碼審 code-e2e-gate r2 邊界、資源、合約席)。"""
+    import json, time
+    files, unread = _e2e_record_files(root, cap=cap)
+    end = time.monotonic() + (E2E_RECORD_SCAN_SEC if budget is None else budget)
+    out, big = [], 0
+    for i, (fp, path) in enumerate(files):
+        if time.monotonic() >= end:
+            unread += len(files) - i
+            break
+        if path is None:   # 太大的不讀、另計(不混進讀超過時間;r5 合約、正確性席)
+            big += 1
+            continue
+        try:
+            rec = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        n = _e2e_ai_pending_one(rec, fp)
+        if n:
+            out.append((fp, n))
+    return out, unread, big
+
+
+def _e2e_waive_list(root, budget=60):
+    """waive --list:讀全部紀錄、邊讀邊印(不把幾千份紀錄留在記憶體裡;代碼審 r4 資源、正確性席),讀超過 budget 秒就停並講沒讀到幾份;
+    太大的、讀不懂的各自標明。"""
+    import time
+    files, _u = _e2e_record_files(root, cap=None)
+    end = time.monotonic() + budget
+    n = skipped = 0
+    for i, (fp, path) in enumerate(files):
+        if time.monotonic() >= end:
+            skipped += len(files) - i
+            print(f"注意:較舊的 {len(files) - i} 份沒列出(讀超過 {budget:g} 秒;每次都從最新的開始讀,要看到它們先把用不到的舊紀錄移走)",
+                  file=sys.stderr)
+            break
+        if path is None:
+            print(f"  ? {fp[:12]}… 紀錄超過 {E2E_RECORD_FILE_MAX // 1024 // 1024}MB,沒讀(推送前判定也會擋它;修好或刪掉)")
+            skipped += 1
+            continue
+        rec, err = _e2e_load_json(path, scrub=False)
+        if err or _e2e_record_err(rec, fp):
+            print(f"  ? {fp[:12]}… 紀錄讀不懂")
+            skipped += 1
+            continue
+        for w in rec.get("waivers") or []:
+            if not _e2e_waiver_ok(w):
+                continue
+            n += 1
+            seen = "人放的" if w["by"] == "human" else ("AI 放的,已看過" if w.get("acked") is True else "AI 放的,還沒人看過")
+            print(f"  {fp}  {_esc_clean(str(w.get('at', '?')), 40)}  {_esc_clean(str(w.get('who', '?')), 40)}({seen}):{_esc_clean(w['note'], 80)}")
+    if not n:
+        print("讀到的紀錄裡沒有放行(有些紀錄沒讀到,見上面)。" if skipped else "沒有任何放行。")   # 沒讀完不說「沒有」(r5 正確性、邊界席)
+    return 0
+
+
+def _e2e_ack_targets(root, fps, ack_all):
+    """--ack 要標的紀錄 → (有待看 AI 放行的指紋清單, 時間到了沒讀到的份數, 錯誤訊息或 None)。
+    人明著要標:讀全部紀錄(不設份數上限)、時間給 60 秒(開場提示與 doctor 的 3 秒只是看一眼)。"""
+    if not fps and not ack_all:
+        return None, (0, 0), "--ack 後面要給指紋(waive --list 印的那一串),或加 --all 標全部"
+    rows, unread, big = _e2e_ai_pending_all(root, budget=60, cap=None)
+    pend = dict(rows)
+    targets = sorted(pend) if ack_all else fps
+    bad = [x for x in targets if not E2E_FP_RE.fullmatch(x)]
+    if bad:
+        return None, (0, 0), f"指紋要完整 64 碼(waive --list 印的那一串):{'、'.join(bad)}"
+    return [x for x in targets if x in pend], (unread, big), None
+
+
+def _e2e_waive_ack(root, fps, ack_all):
+    """標成看過:只有終端答 y 才算;答別的或沒人答不標(計劃〈資料怎麼流〉第 5 步)。"""
+    targets, (unread, big), err = _e2e_ack_targets(root, fps, ack_all)
+    if err:
+        _say_block(err)
+        return 2
+    _e2e_ack_notes(unread, big)
+    if not targets:
+        print("沒有還沒人看過的 AI 放行。")
+        return 0
+    try:
+        ans = _confirm_tty(f"把 {len(targets)} 份紀錄裡的 AI 放行標成看過嗎?[y/N] ", stdin_timeout=True)
+    except KeyboardInterrupt:
+        ans = False
+    if ans is not True:
+        print("沒標成看過(只有終端答 y 才算)。", file=sys.stderr)
+        return 1
+    return _e2e_ack_write(root, targets)
+
+
+def _e2e_ack_notes(unread, big):
+    """--ack 沒讀到的兩種(讀超過時間、單份太大)各講一行。"""
+    if unread:
+        print(f"注意:另有 {unread} 份沒讀(讀超過 60 秒),那幾份這次沒標;再跑一次這個指令", file=sys.stderr)
+    if big:
+        print(f"注意:另有 {big} 份紀錄超過 {E2E_RECORD_FILE_MAX // 1024 // 1024}MB 沒讀(裡面的放行看不到、標不了,推送前判定也擋它);"
+              "修好或刪掉 waive --list 標「超過」的那幾份", file=sys.stderr)
+
+
+def _e2e_ack_write(root, targets):
+    """終端答了 y 之後逐份標看過 → rc(有一份寫不進去就 2)。"""
+    who, now = _e2e_who(root), _e2e_now()
+
+    def _ack(rec):
+        for w in rec.get("waivers") or []:
+            if _e2e_waiver_ok(w) and w["by"] == "ai" and w.get("acked") is not True:
+                w.update(acked=True, acked_by=who, acked_at=now)
+    bad = []
+    for fp in targets:   # 一份寫不進去(讀不懂、鎖住)不停在半路:其他份照標,最後講哪幾份沒標(代碼審 r2 合約席)
+        _p, err = _e2e_record_update(root, fp, _ack)
+        if err:
+            bad.append((fp, err))
+    done = len(targets) - len(bad)
+    if done:
+        print(f"標好了 {done} 份;改完的紀錄要提交,別台機器才看得到:git add {E2E_RECORDS_DIR} && git commit -m \"chore: 標記看過 AI 放行\"")
+    for fp, err in bad:
+        _say_block(f"{fp[:12]}… 沒標:{err}")
+    return 2 if bad else 0
+
+
+def _e2e_waive_target(root, fp):
+    """要放行的指紋 → (指紋, HEAD 或 None, 錯誤訊息或 None):給了只收完整 64 碼;沒給算 HEAD 那一版並印出來。"""
+    if fp is not None:
+        return (fp, None, None) if E2E_FP_RE.fullmatch(fp) else (None, None, f"指紋要完整 64 碼(擋下訊息印的那一串),不收縮寫:{fp}")
+    fp, head, err = _e2e_head_fp(root)
+    if err:
+        return None, None, f"算不出 HEAD 那一版的指紋:{err}"
+    print(f"放行 HEAD({head[:8]})那一版,指紋 {fp}")
+    return fp, head, None
+
+
+def _e2e_waive_commit(root, commit):
+    """放行紀錄的 commit 欄位 → (完整 40 碼, 錯誤訊息或 None):給了就只收這個 repo 解得到的提交(完整或縮寫),沒給就是 HEAD
+    (計劃〈查證紀錄〉;代碼審 code-e2e-gate r2 邊界、通才席:原本原樣寫進紀錄與治理帳,沒給時存成 null)。"""
+    want = commit or "HEAD"
+    if commit and not re.fullmatch(r"[0-9a-fA-F]{4,40}", commit):
+        return None, f"--commit 要是提交編號(完整或縮寫的十六進位):{_esc_clean(commit, 40)}"
+    full = (_nodehome_git(root, "rev-parse", "-q", "--verify", f"{want}^{{commit}}") or b"").decode().strip()
+    # 給的十六進位剛好也是分支或 tag 名時 rev-parse 先認名字:解出來的提交要以給的那串開頭(r3 邊界席)
+    if not re.fullmatch(r"[0-9a-f]{40}", full) or (commit and not full.startswith(commit.lower())):
+        return None, f"這個 repo 裡找不到提交 {_esc_clean(want, 40)}"
+    return full, None
+
+
+def _e2e_waive_cmd(root, fp, commit, note, list_mode=False, ack=None, ack_all=False):
+    """lumos android-e2e waive:放行一版驗收(單源計劃〈資料怎麼流〉第 5 步)。rc 0=放了;1=沒放(終端答了別的、按了 Ctrl-C);
+    2=參數不對(理由太短、指紋不是完整 64 碼、算不出指紋)、寫不進去。"""
+    import shlex
+    root = Path(root).resolve()
+    if list_mode:
+        return _e2e_waive_list(root)
+    if ack is not None or ack_all:
+        return _e2e_waive_ack(root, ack or [], ack_all)
+    if len(re.sub(r"\s", "", note or "")) < 10:
+        _say_block("放行要寫理由,去掉空白後至少 10 個字(--note)")
+        return 2
+    fp, head, err = _e2e_waive_target(root, fp)
+    if err:
+        _say_block(err)
+        return 2
+    commit, err = _e2e_waive_commit(root, commit or head)
+    if err:
+        _say_block(err)
+        return 2
+    try:
+        ans = _confirm_tty(f"確定放行指紋 {fp[:12]}… 這一版的 Android 端到端驗收嗎?[y/N] ", stdin_timeout=True)
+    except KeyboardInterrupt:
+        print("\n沒放行(按了 Ctrl-C)。", file=sys.stderr)
+        return 1
+    if ans is False:
+        print("沒放行(終端答的不是 y)。", file=sys.stderr)
+        return 1
+    by = "human" if ans is True else "ai"
+    w = {"by": by, "who": _e2e_who(root) if by == "human" else "ai", "at": _e2e_now(), "note": note.strip(), "acked": by == "human",
+         "commit": commit}
+    p, err = _e2e_record_update(root, fp, lambda rec: rec["waivers"].append(w))
+    if err:
+        _say_block(err)
+        return 2
+    _gate_event_or_warn(root, "android-e2e", "waived", note.strip()[:200], head_sha=commit,
+                        extra={"fingerprint": fp, "by": by})
+    rel = os.path.relpath(p, root)
+    print(f"放行記在 {rel}({'人放的' if by == 'human' else 'AI 放的:沒有互動終端'});推送前要提交它:"
+          f"git add {shlex.quote(rel)} && git commit -m \"chore: 放行 Android 端到端驗收\"")
+    if by == "ai":
+        print("這筆是 AI 放行:推送、lumos doctor 與開場提示會一直列出來,直到人用 lumos android-e2e waive --ack 看過。")
+    return 0
+
+
+
+def _e2e_check_cmd(root, at_sha=None, branch=None, range_start=None):
+    """lumos android-e2e check:推送前那道 Android E2E 判定單獨跑一次、印成 JSON(推之前先看會不會擋;code-loop check 用同一支)。
+    rc 0=不擋(包括不用 E2E 的專案)、1=會擋、2=給的提交不存在。"""
+    import json
+    root = Path(root).resolve()
+    sha = (_nodehome_git(root, "rev-parse", "--verify", "-q", f"{at_sha or 'HEAD'}^{{commit}}") or b"").decode().strip()
+    if not _LENS_SHA_RE.match(sha):
+        _say_block(f"找不到提交 {at_sha or 'HEAD'}")
+        return 2
+    br = branch or (_nodehome_git(root, "symbolic-ref", "-q", "--short", "HEAD") or b"").decode().strip() or None
+    if range_start is None and br in ("main", "master"):
+        # 直接在主線上開發:推送前的主線位置就是這條分支的遠端對應(upstream,沒設就 origin/<分支>),照 --changed 那套
+        # (代碼審 code-e2e-gate r1 合約席:不帶的話被當成新 repo 或找不到主線)
+        for ref in (f"{br}@{{upstream}}", f"refs/remotes/origin/{br}"):
+            up = (_nodehome_git(root, "rev-parse", "-q", "--verify", ref) or b"").decode().strip()
+            if up:
+                range_start = up
+                break
+    rep_ = _e2e_gate_evaluate(root, sha, pushed_branch=br, range_start=range_start)
+    print(json.dumps(rep_, ensure_ascii=False))
+    return 1 if rep_["status"] == "blocked" else 0
+
+
 def _android_e2e_dispatch(args):
-    """lumos android-e2e 的子指令分派(judge、select、history)。"""
+    """lumos android-e2e 的子指令分派(judge、select、history、waive、check)。"""
     def split(xs):
         return [y.strip() for x in xs for y in x.split(",") if y.strip()]
     if args.e2ecmd == "select":
@@ -41220,6 +42151,11 @@ def _android_e2e_dispatch(args):
                                args.e2e_no_perf, args.e2e_no_memory)
     if args.e2ecmd == "history":
         return _e2e_history_cmd(args.e2e_repo, args.e2e_feature, args.e2e_case, args.e2e_last)
+    if args.e2ecmd == "waive":
+        return _e2e_waive_cmd(args.e2e_repo, args.e2e_fp, args.e2e_commit, args.e2e_note, list_mode=args.e2e_list,
+                              ack=args.e2e_ack, ack_all=args.e2e_ack_all)
+    if args.e2ecmd == "check":
+        return _e2e_check_cmd(args.e2e_repo, args.e2e_at_sha, args.e2e_branch, args.e2e_range_start)
     return _e2e_judge_cmd(args.e2e_repo, args.e2e_run_dir, precheck_only=args.e2e_precheck, no_record=args.e2e_no_record,
                           history=args.e2e_history)
 
@@ -41229,7 +42165,7 @@ def _e2e_judge_selected(root, run_dir, steps, serr, no_record, history):
     (只跑一部分的結果寫進整套的 runs 會被當成整套驗過;先講這個,不讓髒樹訊息蓋過)。其他情況回 None 交回整套那條路。"""
     if no_record:
         if serr:
-            print(f"擋下:{serr}", file=sys.stderr)
+            _say_block(serr)
             if history:
                 _e2e_history_append(root, steps, None, "partial", blocked=serr, run_dir=run_dir)
             return 2
@@ -41239,7 +42175,7 @@ def _e2e_judge_selected(root, run_dir, steps, serr, no_record, history):
         return rc
     if serr is None and "selection" in steps:
         why = f"這次是按功能跑({'、'.join((steps.get('selection') or {}).get('cases') or [])}),只跑一部分的結果不寫整套的紀錄;重判要加 --no-record,要留整套的紀錄請整套跑"
-        print(f"擋下:{why}", file=sys.stderr)
+        _say_block(why)
         if history:
             _e2e_history_append(root, steps, None, "partial", blocked=why, run_dir=run_dir)
         return 2
@@ -41265,7 +42201,7 @@ def _e2e_judge_target(root, steps, serr):
 
 def _e2e_full_blocked(root, steps, runs, why, history, run_dir):
     """整套 judge 擋下、沒寫紀錄:印原因;範本腳本帶 --history 時那次也記進總表、附原因(S25 每一次都記)→ 2。"""
-    print(f"擋下:{why}", file=sys.stderr)
+    _say_block(why)
     if history:
         _e2e_history_append(root, steps, runs, "full", blocked=why, run_dir=run_dir)
     return 2
@@ -41280,10 +42216,10 @@ def _e2e_judge_cmd(root, run_dir, precheck_only=False, no_record=False, history=
     root = Path(root).resolve()
     err = _e2e_precheck(root)
     if precheck_only:
-        print(f"擋下:{err}" if err else "工作目錄乾淨,可以開跑。", file=sys.stderr if err else sys.stdout)
+        _say_block(err) if err else print("工作目錄乾淨,可以開跑。")
         return 2 if err else 0
     if not run_dir:
-        print("擋下:要給 run 目錄(範本腳本印的那個 .lumos/artifacts/android/<run-id>),或用 --precheck 只看能不能開跑", file=sys.stderr)
+        _say_block("要給 run 目錄(範本腳本印的那個 .lumos/artifacts/android/<run-id>),或用 --precheck 只看能不能開跑")
         return 2
     run_dir = Path(run_dir).resolve()
     steps, serr = _e2e_load_json(run_dir / "steps.json")
@@ -65153,7 +66089,7 @@ def _codeloop_kg_finish(v, blocks, keep_going, tier):
     out["tier"] = tier
     out["blocks"] = [{"reason_kind": b.get("reason_kind") or "?", "reason": b.get("reason", "")} for b in blocks]
     for b in blocks:   # 各道的明細照原本的鍵放著,印訊息那段各取各的
-        for k in ("bound_tests", "dispositions", "lint_new", "security_evidence"):
+        for k in ("bound_tests", "dispositions", "lint_new", "security_evidence", "android_e2e"):
             if k in b:
                 out[k] = b[k]
     return out
@@ -65211,7 +66147,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
                             keep_going=False):
     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
     AND 無有效 pass/skip 留痕 → blocked=True。
-    keep_going(code-loop check --keep-going,Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):五道判定(安全證據、合約測試、表態、新增告警、
+    keep_going(code-loop check --keep-going,Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):六道判定(安全證據、Android 端到端驗收、合約測試、表態、新增告警、
     代碼審留痕)都跑完,擋下累積進 blocks;★所有 return 都經過收尾函式 _fin★——清單非空就回擋下,放行站點不能蓋掉前面記下的擋下。
     不帶時 _fin 原樣交回,行為與回傳一字不變。
     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
@@ -65229,6 +66165,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     _codeloop_guard_verdict.last_lint_new = None
     _codeloop_guard_verdict.last_arch = None
     _codeloop_guard_verdict.last_security = None
+    _codeloop_guard_verdict.last_e2e = None
     marker_sha = at_sha or _codeloop_git_head(repo_root)
     marker_branch = branch or _codeloop_git_branch(repo_root)
     raw_range = diff_range        # 改寫全零起點之前的原值:合併提交認合進來那一側要拿它比第一個母
@@ -65241,6 +66178,11 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     _sec_stop = kg.hit(_codeloop_security_step(repo_root, marker_sha, marker_branch, raw_range))
     if _sec_stop:
         return _sec_stop
+    # 1.6 Android 端到端驗收(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 4 步):跟安全證據一樣排在所有放行早退之前、不看 tier;
+    # 這個專案(被推送提交與主線候選)沒有 e2e 段回 None,輸出一字不變
+    _e2e_stop = kg.hit(_codeloop_e2e_step(repo_root, marker_sha, marker_branch, raw_range))
+    if _e2e_stop:
+        return _e2e_stop
 
     if not marker_sha:
         _gate_failopen(repo_root, "code-loop", "無法取得 HEAD sha")
@@ -65315,7 +66257,7 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
 
     # 3.5 表態閘(Projects/棧別提問表態閘_計劃,2026-09-09):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。
     # 判定順序=合約測試(2.5)→表態(3.5)→新增告警(3.6)→審查留痕(4/5)。兩種模式:不帶 keep_going 是序列早退,先中的先報、修完再跑
-    # (r3 架構對齊席 A1 要求講明);帶 keep_going(推送前掛鉤用)五道(安全證據排最前)都判完、擋下全記進 blocks,所有回傳經 _fin 一處判。
+    # (r3 架構對齊席 A1 要求講明);帶 keep_going(推送前掛鉤用)六道(安全證據排最前、Android 端到端驗收其次)都判完、擋下全記進 blocks,所有回傳經 _fin 一處判。
     dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": []}
     # 適用範圍(r3 邊界席 B1):算「哪些題適用」用 merge-base(主線, at_sha)..at_sha——把主線合進分支再推分支,
     # 推送範圍(remote..local)會把主線帶進來的碼算成本次要表態;推主線本身、或算不出主線/merge-base 才用推送範圍。tier 照舊用推送範圍。
@@ -65409,6 +66351,29 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     # 5. 無留痕
     return _fin(_codeloop_review_block(repo_root, marker_sha, raw_range, merge_cache, tier,
                                        "tier=high 且無留痕(尚未跑 code-loop pass/skip)"))
+
+
+def _codeloop_e2e_step(repo_root, marker_sha, marker_branch, raw_range):
+    """code-loop check 的 Android 端到端驗收那一道:不看 tier、排在所有放行早退之前(判定本體是 _e2e_gate_evaluate,
+    android-e2e check 同一支)。這個專案不用 E2E 回 None、不寫治理帳;擋了回帶 reason_kind=android_e2e 的擋下 dict。
+    結果放 _codeloop_guard_verdict.last_e2e(放行與擋下的提醒行由 _cl_say_e2e_notes 印)。"""
+    rng = _lens_range_ok(raw_range) if raw_range else None
+    rep = _e2e_gate_evaluate(repo_root, marker_sha or "HEAD", pushed_branch=marker_branch, range_start=rng[0] if rng else None)
+    _codeloop_guard_verdict.last_e2e = rep
+    # ci 也記:本機 shell 殘留 CI 變數時同一個出口會被意外走過,沒帳就沒人知道(代碼審 code-e2e-gate r2 資安席)
+    ev = {"ci": ("ci", False), "skipped-env": ("skipped-env", False), "pass-by-feature": ("passed-by-feature", False),
+          "blocked": ("blocked", True)}.get(rep["status"])
+    if ev:
+        extra = {"fingerprint": rep.get("fp"), "commit": rep.get("commit") or marker_sha, "cases": list(rep.get("cases") or []),
+                 "gate_code": rep.get("gate_code")}
+        note = rep["reason"][:200]
+        _gate_event_fit(repo_root, "android-e2e", ev[0], note, extra, "cases", hard=ev[1], head_sha=marker_sha,
+                        ref=marker_branch)   # 情境多時從尾端截、記 cases_truncated
+        _gate_event_or_warn(repo_root, "android-e2e", ev[0], note, hard=ev[1], head_sha=marker_sha, ref=marker_branch, extra=extra)
+    if rep["status"] != "blocked":
+        return None
+    return {"blocked": True, "reason_kind": "android_e2e", "reason": f"Android 端到端驗收:{rep['reason']}", "tier": "unknown",
+            "android_e2e": rep}
 
 
 def _codeloop_security_step(repo_root, marker_sha, marker_branch, raw_range, *, today=None, budget=None):
@@ -65863,7 +66828,7 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
     dispositions <檔> → 棧別提問表態(表態閘 2026-09-09;派審查員之前寫,skip 也要先表態);
     recall-miss <id> → 審查席抓到未觸發題的問題時登記一筆;
     check → 跑判定式回報 verdict(blocked=合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕);--json 輸出 verdict dict。
-    check --keep-going(推送前掛鉤用)→ 五道判定(安全證據、合約測試、表態、新增告警、代碼審留痕)都跑完、每道擋下各印各的訊息,最後多印一行 LUMOS-BLOCKS:<種類,…>(掛鉤唯一的機讀通道)。
+    check --keep-going(推送前掛鉤用)→ 六道判定(安全證據、Android 端到端驗收、合約測試、表態、新增告警、代碼審留痕)都跑完、每道擋下各印各的訊息,最後多印一行 LUMOS-BLOCKS:<種類,…>(掛鉤唯一的機讀通道)。
     rc: 0=OK / 1=check:blocked / 2=參數錯。
     """
     # resolve repo root
@@ -65937,6 +66902,9 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
             verdict["dispositions"] = dv
         if getattr(_codeloop_guard_verdict, "last_arch", None):
             verdict["arch_target"] = list(_codeloop_guard_verdict.last_arch)
+        _erep = getattr(_codeloop_guard_verdict, "last_e2e", None)
+        if as_json and _erep and _erep.get("status") != "none" and "android_e2e" not in verdict:
+            verdict["android_e2e"] = _erep
         _srep = getattr(_codeloop_guard_verdict, "last_security", None)
         if as_json and "security_evidence" not in verdict:
             verdict["security_evidence"] = (dict({"status": "no_registration"}, **({"warnings": _srep["warnings"]} if _srep and _srep.get("warnings") else {}))
@@ -65989,9 +66957,87 @@ def _cl_say_block(kind, reason, verdict, dv, branch, head_sha, diff_range, marke
         _cl_say_lint_block(reason, verdict, branch, head_sha)
     elif kind == "security_evidence":
         _cl_say_sec_block(verdict)
+    elif kind == "android_e2e":
+        _cl_say_e2e_block(verdict)
     else:
         print(f"⚠ code-loop check: BLOCKED——這次高風險改動還不能推(分支 {branch},版本 {head_sha[:8]}):{reason}",
               file=sys.stderr)
+
+
+def _cl_say_e2e_block(verdict):
+    """Android 端到端驗收那一道的擋下訊息(三段式:發生什麼 → 為何在意 → 指令獨立一行)。不印 pre-push 記逃逸帳認的那兩串字。"""
+    rep = verdict.get("android_e2e") or {}
+    _say_block(f"Android 端到端驗收——{rep.get('reason', '')}")
+    if rep.get("record"):
+        print(f"  紀錄:{rep['record']}(從被推送的提交讀,不讀工作目錄)", file=sys.stderr)
+    for k, w in (rep.get("bad_cases") or [])[:10]:
+        print(f"  - {k}:{w}", file=sys.stderr)
+    if rep.get("removed"):
+        print("在意的原因:主線還要求這個專案做 Android 端到端驗收,這一版卻拿掉了驗收設定;合進主線之後這道就不再跑,所以這一次要明著關掉、留帳。",
+              file=sys.stderr)
+    else:
+        print("在意的原因:這一版的 App 程式或驗收素材跟主線分岔點不一樣,推上去之前要有一份通過(或有人放行)的實機驗收紀錄。", file=sys.stderr)
+    print("接下來:", file=sys.stderr)
+    _cl_say_e2e_next(rep)
+    if rep.get("fp") and not rep.get("bad_record") and not rep.get("newer_schema"):
+        print("  確定是誤擋才放行(<理由> 換成為什麼是誤擋,至少 10 個字;會記成人或 AI 放的、被統計):", file=sys.stderr)
+        print(f"    {_e2e_waive_hint(rep['fp'], rep.get('commit') or '')}", file=sys.stderr)
+        # 沒有互動終端時放行記成 AI 放的、當下就算數:講明後果,讓 AI 照做之前先跟使用者講(代碼審 code-e2e-gate r2 資安席)
+        print("    (沒有互動終端時記成 AI 放行:推送、doctor 與開場提示會一直列到人看過;AI 放行前先跟使用者講一聲)", file=sys.stderr)
+    print("  這一次整道先關掉(會留帳):LUMOS_SKIP_ANDROID_E2E=1 git push", file=sys.stderr)
+
+
+def _cl_say_e2e_next(rep):
+    """Android 端到端驗收擋下訊息的「接下來」:依擋下種類給一行指令(拿掉驗收設定那種只有最後那行的環境變數)。"""
+    if rep.get("removed"):
+        return
+    if rep.get("newer_schema"):
+        print("    lumos update   # 這份紀錄是比較新的 lumos 寫的:更新 lumos 再推,紀錄本身不要動", file=sys.stderr)
+    elif rep.get("bad_record"):
+        print(f"    修好或刪掉 {rep['record']}(讀不懂的紀錄,放行與重跑都不會覆蓋它);改完提交再推", file=sys.stderr)
+    elif rep.get("merge_main"):
+        print("    git merge <主線>   # 或 rebase 到主線;合進來之後才有主線的 e2e 段與驗收設定,驗收與放行才算得出指紋", file=sys.stderr)
+    elif rep.get("uncommitted"):
+        print(f"    git add {rep['record']} && git commit -m \"chore: 記錄 Android 端到端驗收\"", file=sys.stderr)
+    elif rep.get("need") == "cases" and (rep.get("bad_cases") or rep.get("cases")):
+        _cl_say_e2e_cases(rep)
+    elif rep.get("fp"):
+        _cl_say_e2e_full(rep)
+
+
+def _cl_say_e2e_cases(rep):
+    """按功能那條路缺的情境 → 一行 --case 指令(最多列 10 個)。"""
+    todo = [k for k, _w in rep.get("bad_cases") or []] or rep["cases"]
+    more = f"(另有 {len(todo) - 10} 個,看 lumos android-e2e check)" if len(todo) > 10 else ""
+    print("    " + E2E_RUN_CMD + "".join(f" --case {k}" for k in todo[:10]) + f"   # 跑完提交紀錄再推{more}", file=sys.stderr)
+
+
+def _cl_say_e2e_full(rep):
+    """要整套跑的那條路:主線較新先合主線、這一版自己改弱先改回,再整套跑。"""
+    if rep.get("mainline_newer"):
+        print("    git merge <主線>   # 主線的驗收要求比這一版新(照這一版的設定重跑補不到);合進來之後再整套跑", file=sys.stderr)
+    elif rep.get("cfg_weakened"):
+        print("    # 這一版自己改了 .lumos/macrobench.json 的驗收設定、少了主線還要求的:先改回跟主線一樣,再整套跑", file=sys.stderr)
+    print(f"    {E2E_RUN_CMD}   # 整套跑,跑完提交紀錄再推", file=sys.stderr)
+
+
+def _cl_say_e2e_notes():
+    """Android 端到端驗收的提醒行(放行與擋下都印;都以「提醒」開頭,pre-push 在放行路徑只轉印含「提醒」等字的行)。"""
+    rep = getattr(_codeloop_guard_verdict, "last_e2e", None)
+    if not rep:
+        return
+    st = rep.get("status")
+    if st == "ci":
+        print("  提醒:Android 端到端驗收第一版只在本機推送時判,這次偵測到 CI(CI 或 GITHUB_ACTIONS 有設)所以沒判、已記帳;"
+              "不是在 CI 裡就清掉這兩個變數再推")
+    elif st == "skipped-env":
+        print("  提醒:Android 端到端驗收這一次沒跑(LUMOS_SKIP_ANDROID_E2E=1,已記帳)")
+    elif st == "pass-by-feature":
+        print(f"  提醒:按功能放行:驗了 {'、'.join(rep.get('cases') or []) or '(沒有要驗的情境)'};這一版沒有整套驗過")
+        if rep.get("perf_only"):
+            print(f"  提醒:沒驗:{'、'.join(rep['perf_only'])}(只列效能)")
+    if rep.get("pending_ai"):
+        print(f"  提醒:有 {rep['pending_ai']} 筆 AI 放行還沒人看過;看:lumos android-e2e waive --list;看過標記:lumos android-e2e waive --ack {rep.get('fp')}")
 
 
 def _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha):
@@ -66041,6 +67087,9 @@ def _cl_say_lint_block(reason, verdict, branch, head_sha):
 def _cl_say_ok_extras(dv):
     """code-loop check 放行時印的表態閘與新增告警閘小結(從 cmd_code_loop 搬出來、內容不變);有資安登記時另印安全證據一行
     與 7 天內到期的提醒(沒登記的專案一字不多)。"""
+    _er = getattr(_codeloop_guard_verdict, "last_e2e", None)
+    if _er and _er.get("status") in ("pass", "waived", "not-required"):
+        print(f"  Android 端到端驗收:{_er['reason']}")
     _sr = getattr(_codeloop_guard_verdict, "last_security", None)
     if _sr and _sr.get("status") != "no_registration":
         print(f"  安全證據:必驗集合 {len(_sr.get('controls') or [])} 條都 sound 或 excepted"
@@ -66072,6 +67121,7 @@ def _cl_say_tail(verdict, dv, bt, bt_blocked):
     """code-loop check 擋下與放行都印的尾段:表態警告、張力、目標架構、合約測試狀態(從 cmd_code_loop 搬出來、內容不變;
     合約測試那幾句照 bt_blocked 選:不帶 --keep-going 時它就是 blocked,帶的話是「合約測試有沒有記成擋下」)。"""
     _cl_say_tensions(dv)
+    _cl_say_e2e_notes()
     for _x in getattr(_codeloop_guard_verdict, "last_arch", None) or []:
         print(f"  {_x}")
     if bt is not None:
@@ -66696,6 +67746,8 @@ HELP_WHEN = {
     "android-e2e select": "按功能與使用情境挑這次要跑的 flow、截圖、效能測試與記憶體情境,印成 JSON;範本腳本 --changed、--feature、--case 時會叫它,也可以自己跑來看會挑到什麼。",
     "android-e2e history": "看本機檢測總表:每次跑驗收(整套或按功能)的時間、版本、挑了哪些情境、哪幾項沒過、證據在哪;可照 --feature、--case 篩。",
     "android-e2e judge": "範本腳本跑完後判過不過、寫查證紀錄 .lumos/e2e-records/<指紋>.json;只想重判同一份結果時單獨跑。回 0 通過、1 有一段沒過、2 沒寫紀錄。",
+    "android-e2e waive": "推送前的 Android 端到端驗收擋下、確定是誤擋時放行那一版(照擋下訊息印的那一行跑,要寫理由);--list 看所有放行,--ack 把 AI 放行標成看過。",
+    "android-e2e check": "推之前想先知道推送前那道 Android 端到端驗收會不會擋、為什麼擋;印成 JSON,不寫任何東西。",
     "home": "每支程式檔有沒有一篇管它的節點、寫回有沒有落在改到那支檔的那一篇(提交前與推送前擋新違規)。",
     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
@@ -67809,6 +68861,19 @@ def main():
     aeh.add_argument("--feature", dest="e2e_feature", default=None, help="只列跑到這個功能的")
     aeh.add_argument("--case", dest="e2e_case", default=None, help="只列跑到這個情境的(功能.情境)")
     aeh.add_argument("--last", dest="e2e_last", type=int, default=20, help="最多列幾筆(預設 20)")
+    aew = aesub.add_parser("waive", help="放行一版驗收(推送前那道擋下時的出口;終端確認,沒有互動終端記成 AI 放行)")
+    aew.add_argument("e2e_fp", nargs="?", default=None, help="要放行的那一版指紋(完整 64 碼;擋下訊息印的那一串;不給就放行 HEAD 那一版)")
+    aew.add_argument("--repo", dest="e2e_repo", default=".", help="專案根目錄(預設 .)")
+    aew.add_argument("--commit", dest="e2e_commit", default=None, help="被擋下的那個提交(擋下訊息印的;記在放行裡)")
+    aew.add_argument("--note", dest="e2e_note", default=None, help="為什麼放行(去掉空白後至少 10 個字)")
+    aew.add_argument("--list", dest="e2e_list", action="store_true", help="列出所有紀錄裡的放行與有沒有被人看過")
+    aew.add_argument("--ack", dest="e2e_ack", nargs="*", default=None, metavar="指紋", help="把這幾份紀錄裡的 AI 放行標成看過(終端答 y 才算)")
+    aew.add_argument("--all", dest="e2e_ack_all", action="store_true", help="配 --ack:把全部紀錄裡還沒人看過的 AI 放行都標成看過")
+    aec = aesub.add_parser("check", help="推送前那道判定單獨跑一次,印成 JSON(推之前先看會不會擋)")
+    aec.add_argument("--repo", dest="e2e_repo", default=".", help="專案根目錄(預設 .)")
+    aec.add_argument("--at-sha", dest="e2e_at_sha", default=None, help="要判的提交(預設 HEAD)")
+    aec.add_argument("--branch", dest="e2e_branch", default=None, help="要推的分支名(預設目前分支)")
+    aec.add_argument("--range-start", dest="e2e_range_start", default=None, help="推的是主線本身時,推送前的主線位置")
     aej.add_argument("--precheck", dest="e2e_precheck", action="store_true",
                      help="只看工作目錄能不能開跑(簿記檔以外沒有改動、沒有沒追蹤的新檔):可以回 0,不行回 2")
 
@@ -67991,7 +69056,7 @@ def main():
             _clp.add_argument("--bound-tests-advisory", dest="cl_bound_advisory", action="store_true",
                               help="受波及合約測試紅了只提醒不擋(pre-push 對低風險推送用;高風險不帶,照擋)")
             _clp.add_argument("--keep-going", dest="cl_keep_going", action="store_true",
-                              help="五道判定(安全證據、合約測試、表態、新增告警、代碼審留痕)都跑完、每道擋下各印各的,最後多印一行 LUMOS-BLOCKS:(推送前掛鉤用;不帶時第一道擋下就停)")
+                              help="六道判定(安全證據、Android 端到端驗收、合約測試、表態、新增告警、代碼審留痕)都跑完、每道擋下各印各的,最後多印一行 LUMOS-BLOCKS:(推送前掛鉤用;不帶時第一道擋下就停)")
             _clp.add_argument("--security-only", dest="cl_security_only", action="store_true",
                               help="只跑安全證據那一道(tag 與其他非分支 ref 用;配 --at-sha)")
         _clp.add_argument("--repo", dest="cl_repo", default=None,

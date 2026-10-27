@@ -362,14 +362,15 @@ When one of the first four (the memory ones) fails, it jumps straight to L3: the
 
 ### Device acceptance: by feature while developing, the whole app before pushing (end-to-end acceptance)
 
-**One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail.
+**One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record; pushing is blocked for a version without a passing record, and running each feature your changes touch by feature also counts.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail.
 
 ```
 sh scripts/templates/android-e2e-run.sh --changed                  # while developing: run the use cases of the features your changes touch
 sh scripts/templates/android-e2e-run.sh --feature player           # every use case of this feature
 sh scripts/templates/android-e2e-run.sh --case player.open-close   # just this use case (add --no-perf or --no-memory to skip those parts)
-sh scripts/templates/android-e2e-run.sh                            # before pushing: the whole app, writes the verification record
+sh scripts/templates/android-e2e-run.sh                            # the whole app, writes the verification record
 lumos android-e2e history                                          # the last 20 checks (filter with --feature, --case; --last for more)
+lumos android-e2e check                                            # before pushing, see whether the push check would block and why
 ```
 
 <p align="center">
@@ -383,7 +384,7 @@ lumos android-e2e history                                          # the last 20
 
 **Setup.** Add an `e2e` section to the project's `.lumos/macrobench.json`: which folders count as app code, how to build, where the APK is, which flow files to run; screenshots, memory and stability, and speed each run only when switched on. For screenshots, install [maestro-visual-toolkit](https://github.com/EnzoHsieh-Android/maestro-visual-toolkit) into the project and record baselines first. `lumos update` copies the script into the project's `scripts/templates/`. Details in [Android end-to-end acceptance](docs/lumos-toolchain-knowledge/Projects/Android端到端驗收_計劃.md) (Chinese).
 
-**Feature map.** Add `features` to the `e2e` section: each feature lists the code paths it owns (`--changed` uses them to find features from changed files) and its use cases; each use case lists its flow files, screenshot screens, speed test methods and memory scenarios. Write `{{TEST}}` in the speed command and it is replaced with the chosen test method; memory scenarios live in the top-level `stability_scenarios`, one screen-cycling driver each. A map that names a flow or scenario that does not exist is rejected when the configuration is checked.
+**Feature map.** Add `features` to the `e2e` section: each feature lists the code paths it owns (`--changed` uses them to find features from changed files) and its use cases; each use case lists its flow files, screenshot screens, speed test methods and memory scenarios. Write `{{TEST}}` in the speed command and it is replaced with the chosen test method; memory scenarios live in the top-level `stability_scenarios`, one screen-cycling driver each. A map that names a flow or scenario that does not exist is rejected when the configuration is checked. Code that everyone shares (networking, shared components, `Application`) goes into `shared_paths` in the `e2e` section: changing it before a push requires a whole-app run (the paths must sit under `app_dirs`; add an outside module to `app_dirs` first).
 
 **Two ways to split a run.** While developing you can run only part of it, sliced two ways that stack:
 
@@ -393,6 +394,8 @@ lumos android-e2e history                                          # the last 20
 | By check | Add `--no-perf`, `--no-memory` (only together with a choice above; a whole-app run always runs everything) | Skips speed or memory and stability; those use cases are recorded as incomplete |
 
 For example `--case list.scroll --no-perf --no-memory` runs only that use case's UI flow and screenshots, with a result in under a minute. A use case that lists only speed, or whose checks were all skipped, has nothing that passes or fails, so it is recorded as not judged and returns 1 rather than counting as passed.
+
+**The push check blocks.** Before a push, the check reads this version's verification record from the commit being pushed (so commit the record first): a whole-app run that passed lets it through; without one, it looks at which feature each changed file belongs to, and if every use case of those features was run by feature and passed, it also lets it through and prints an extra "passed by feature" line. Changing `shared_paths`, a file that matches no feature, or the acceptance configuration itself requires a whole-app run. When it blocks, the terminal prints the command to run; if it is a false block and the message prints a waive line, use it (some blocks print none, such as an invalid config, a missing mainline or fork point, a timeout, an unreadable or oversized record, or a version without or with a removed e2e section; follow what they say instead), `lumos android-e2e waive <fingerprint> --commit <commit> --note "<reason>"`: answering y in a terminal counts as a person's waiver, with no interactive terminal it counts as the AI's, and the push, `lumos doctor` and the session-start notice (in projects with a knowledge graph) keep listing it until a person marks it seen with `lumos android-e2e waive --ack --all`. To skip the whole check just this once: `LUMOS_SKIP_ANDROID_E2E=1 git push` (recorded). A project that does not use end-to-end acceptance sees not a single line from this check.
 
 **Separating use cases in the notes and binding the tests.** The feature map says what runs; the graph note says why the use case must hold and what breaks if it changes. The two are matched by the same use-case name:
 
@@ -424,9 +427,10 @@ A failed UI flow is retried once; it only counts as failed if both runs fail. Sp
 
 **Current limits.**
 
-- It does not block pushing yet: forgetting to run it, or failing it, still lets you push.
+- It only blocks local pushes: CI does not run this check, and skipping the push hooks (`git push --no-verify`) gets past it.
+- When a push passes by feature, code that other features also use but that is not listed in `shared_paths` can break those other features without the push check noticing.
 - Screenshot comparison catches layout shifts but not a change of a few characters; write key text into the flow file as "this text must be visible".
-- `--changed` only knows the code paths and the use cases' flow files listed in the feature map; changed files in the app folders, under `.maestro/` (flows, shared flows, screenshot material) or in the acceptance config and thresholds that match no feature are listed (ordinary docs are not), and the whole-app run before pushing still covers them. It compares against where the branch left the main line; when you work directly on main, it compares against that branch's remote counterpart, so commits you have not pushed are still seen.
+- `--changed` only knows the code paths and the use cases' flow files listed in the feature map; changed files in the app folders, under `.maestro/` (flows, shared flows, screenshot material) or in the acceptance config and thresholds that match no feature are listed (ordinary docs are not), and the push check asks for a whole-app run when it sees such files. It compares against where the branch left the main line; when you work directly on main, it compares against that branch's remote counterpart, so commits you have not pushed are still seen.
 - Verified only on one tablet and one lab app.
 
 </details>

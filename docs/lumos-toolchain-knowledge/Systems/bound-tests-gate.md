@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-10-20
+updated: 2026-10-26
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 aliases:
@@ -48,6 +48,7 @@ summary: |-
   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]測試指令用 {python} 佔位符,由 lumos 代入自己那支直譯器並依平台加引號;原本吃 PATH 上的 python3,3.14 只以 python3.14 存在的機器會把每一支綁定測試跑紅、被當成「證不出跑過」擋推送。三處代入點(guard kill、合約測試閘本體、過濾探針)都經同一支函式 [test:t_test_run_cmd_uses_running_python]
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]pre-push 有 scripts/lumos 卻找不到 Python 3.14 就擋下,不再像以前「找不到 python 就放行、找到 3.9 就拿 3.9 跑」;沒有 scripts/lumos 的 repo 照舊放行 [test:t_hooks_block_without_python314]
+  WHY:pp_cl_reason 加第六種 android_e2e,逃生路文字補 Android 端到端驗收那條(跑驗收、提交紀錄、waive 放行、LUMOS_SKIP_ANDROID_E2E=1);ci.yml 的擋下說明不加這一種 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [因:CI 不跑這道,列進 ci.yml 是永遠不會出現的死條目;種類名帶數字,兩支守衛測試抽種類名的樣式改成收數字] [test:t_prepush_cl_reason_table_matches_lumos] [test:t_prepush_cl_reason_sentences_match_plan]
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
@@ -150,7 +151,7 @@ PITFALL:在原生 Windows 的 Python 上推送時,全套測試每一片一起跑
 
 WHY:推送行程的環境帶一個放了 sitecustomize 的 PYTHONPATH,就能讓換群組那段與其他每個 `$PY` 閘一啟動就回 0;掛鉤不為這件事加機制 [出處:第四輪代碼審資安席] [因:要先刻意放一支 sitecustomize、再讓推送行程的環境指過去才成立,屬刻意設定環境的手法,在工具鏈的資安範圍外(工具鏈本身的資安只看提示注入、讀寫與執行越界、非刻意的一步繞過;見 Systems/pitfalls-code-loop 工具鏈資安範圍 RULE);非刻意殘留、別的程序帶進來的 PYTHONPATH 屬那條 RULE 的第 ③ 類、照審;而且每個 `$PY` 閘都一樣,不是換群組那段獨有、修補前就有] [不選:整支掛鉤統一給 `$PY` 加 `-I` 或清掉 PYTHONPATH——改動面是每一支閘,換到的只是「已經能改環境的人」多走一步]
 
-找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的五道(含有資安登記時的安全證據)怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
+找不到 Python 3.14、暫存目錄建不起來、使用者中斷這幾種前提壞掉的,照舊立刻結束、不收集;找不到 `scripts/lumos` 照舊提醒後放行 [test:t_prepush_stops_without_python]。代碼審判定內部的六道(含有資安登記時的安全證據、有 e2e 段時的 Android 端到端驗收)怎麼一次判完見 [[Systems/pitfalls-code-loop]]〈code-loop check --keep-going〉。
 
 ## 名稱篩選的跳脫與撞名(2026-10-15)
 

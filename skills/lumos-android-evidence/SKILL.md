@@ -1,6 +1,6 @@
 ---
 name: lumos-android-evidence
-description: Android 在實機上驗收與查效能。①改了畫面或功能:開發中用 android-e2e-run.sh --changed/--feature/--case 只驗正在做的功能,推之前整套跑一次寫查證紀錄;新增功能或使用情境時補 e2e.features 對照表與 flow。②效能問題逐層查到哪一行並留收據:L0 看 Macrobenchmark 有沒有變慢或沒達門檻,有才 L1 用 Perfetto Trace 跑官方分析,指到 App 自己的程式在算才 L2 用 simpleperf 指到行號,熱點是記憶體才 L3(要人裁)。觸發:Android 改了畫面或功能要驗、準備推送、新增畫面或使用情境、滑動卡、啟動慢、lumos macrobench 報退步、要留效能驗證證據。
+description: Android 在實機上驗收與查效能。①改了畫面或功能:開發中用 android-e2e-run.sh --changed/--feature/--case 只驗正在做的功能,推之前要有這一版通過的查證紀錄(整套跑過,或改到的功能都按功能跑過),推送前檢查擋下時照它印的指令跑;新增功能或使用情境時補 e2e.features 對照表與 flow。②效能問題逐層查到哪一行並留收據:L0 看 Macrobenchmark 有沒有變慢或沒達門檻,有才 L1 用 Perfetto Trace 跑官方分析,指到 App 自己的程式在算才 L2 用 simpleperf 指到行號,熱點是記憶體才 L3(要人裁)。觸發:Android 改了畫面或功能要驗、準備推送、新增畫面或使用情境、滑動卡、啟動慢、lumos macrobench 報退步、要留效能驗證證據。
 ---
 
 # lumos-android-evidence:Android 效能逐層診斷與驗證收據
@@ -35,7 +35,8 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:�
 |---|---|---|
 | 開發中改了某個功能 | `sh scripts/templates/android-e2e-run.sh --changed`(看改到的檔挑功能);知道是哪個就 `--feature <功能>` 或 `--case <功能.情境>` | 每次都記本機總表;開跑到判讀工作目錄都乾淨、HEAD 沒換時,也寫進這一版查證紀錄的 `feature_runs`(要提交它) |
 | 只想快速看 UI,效能或記憶體太慢 | 加 `--no-perf` 或 `--no-memory`(只能配上面的挑法) | 同上;情境本來有那一塊時那筆標不完整;這次沒過一律蓋掉先前的,只有沒判完或不完整但通過時才保留同一版既有的完整結果 |
-| 準備推送、或改到共用的東西(共用元件、主題、網路層) | 先提交,再不帶挑法整套跑 `sh scripts/templates/android-e2e-run.sh` | 寫這一版查證紀錄的 `runs`,提交它再推 |
+| 準備推送 | 先提交,再 `lumos android-e2e check` 看推送前檢查會不會擋:說按功能就夠就跑它列的 `--case`,說要整套就不帶挑法整套跑 `sh scripts/templates/android-e2e-run.sh` | 按功能的寫進 `feature_runs`、整套的寫進 `runs`;提交紀錄再推 |
+| 改到共用的東西(共用元件、主題、網路層) | 整套跑;那些路徑要列在 `e2e.shared_paths`,推送前檢查才知道改到它要整套 | 同上 |
 | 回頭看驗過什麼 | `lumos android-e2e history [--feature <功能>] [--case <情境>]` | — |
 
 - 先 `--preflight` 只驗裝置與工具;缺 Perfetto 工具會在動 App 之前擋。開發中工作目錄有改動時要帶挑法一起驗(`--preflight --changed` 或 `--preflight --feature <功能>`),單獨的 `--preflight` 是整套跑的前置、會要求工作目錄乾淨。
@@ -46,10 +47,13 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:�
 **新增功能或使用情境時一起補**(同一個提交):
 1. 每個使用情境一支 Maestro flow,斷言照需求寫(寫法見 lumos-project-notes reference〈產 maestro UI flow 的派工要求〉),加進 `e2e.flows`。
 2. `e2e.features.<功能>`:`paths` 列這個功能的程式路徑;`cases.<情境>` 列它的 `flows`、`visual`(有基準圖的畫面,畫面也要在 `e2e.visual` 裡)、`macrobench`(測試方法名,只收英數字、點、底線與 `#`、開頭不能是 `#`;不收 `$`,名字原樣換進 shell 會被展開成別支;`macrobench_cmd` 要帶 `{{TEST}}`,帶了之後整套跑也只跑對照表列到的方法)、`stability`(最外層 `stability_scenarios` 裡的情境名)。
+   大家共用的程式列進 `e2e.shared_paths`(路徑寫法同 `paths`,要在 `app_dirs` 底下):推送前改到它就要整套跑。
    新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次,各留一份錄製檔在 `.lumos/artifacts/android/<run-id>.<情境>/`,不會自動清。
 3. `lumos macrobench --check-config` 回 0 才算接好。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
 
-**紅了看哪裡**:UI 流程沒過看終端印的報告路徑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。目前推送前檢查還不會擋沒驗收的推送,也還沒有放行指令。
+**紅了看哪裡**:UI 流程沒過看終端印的報告路徑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。
+
+**推送前被擋下**:照訊息跑它印的那一行(`--case <功能.情境>` 或整套),跑完提交紀錄再推。確定是誤擋(例如裝置狀態造成的)才用它印的 `lumos android-e2e waive <完整指紋> --commit <提交> --note "<理由>"` 放行:你沒有互動終端,會記成 AI 放行,推送、`lumos doctor` 與開場提示會一直列給人看,直到人用 `--ack` 看過;不要為了讓推送過而放行,放行前先跟使用者講。只這一次整道先不跑:`LUMOS_SKIP_ANDROID_E2E=1 git push`(會記帳,也要跟使用者講)。
 
 ## L0:有沒有變慢、有沒有達門檻
 
