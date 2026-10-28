@@ -22,6 +22,7 @@ summary: |-
   REVISIT:2027-01-31 看 room-guard 的擋下、跳過帳與誤擋回報,決定要不要在 CI 補一步(推送時加 --no-verify 就繞得過推送前掛鉤)
 verified_by:
   - "[[Verification/2026-10-28_Room守衛實驗專案實跑]]"
+  - "[[Verification/2026-10-29_Room守衛推送觸發實跑]]"
 ---
 # room-guard
 
