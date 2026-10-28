@@ -2,20 +2,22 @@
 type: system
 status: doing
 created: 2026-10-24
-updated: 2026-10-26
-responsibility: 負責在主機端排順序、用 adb 與 trace_processor 收記憶體與穩定性資料寫成 stability.json(收集腳本、兩支查詢範本、錄製設定);不負責判過不過(判定在 lumos macrobench --stability),也不負責驅動 App(驅動指令由消費專案提供)
+updated: 2026-10-28
+responsibility: 負責在主機端排順序、用 adb 與 trace_processor 收記憶體與穩定性資料寫成 stability.json(收集腳本、三支查詢範本、兩份錄製設定;設定替情境打開 native_retained 時另跑一段只錄 heapprofd、取原生配置排行);不負責判過不過與印排行(在 lumos macrobench --stability),也不負責驅動 App(驅動指令由消費專案提供)
 aliases: []
 about_code:
   - scripts/templates/android-stability-collect.sh
   - scripts/templates/android-stability-cycle.sql
   - scripts/templates/android-heap-classes.sql
   - scripts/templates/android-stability-record.pbtxt
+  - scripts/templates/android-stability-heapprofd.pbtxt
+  - scripts/templates/android-stability-native.sql
 tags:
   - type/system
   - status/doing
   - scope/stack-knowledge
 summary: |-
-  WHY:收集腳本在主機端排全部順序(讀結束紀錄、跑暖機、掃原生、錄快照、邊錄追蹤檔邊跑量測、再掃再錄、再讀結束紀錄),驅動只負責開關畫面 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]] 設計審 r1] [因:Macrobenchmark 在裝置上跑,插不進主機端錄快照與原生掃描的時間點;子案二換成 Maestro 時只換驅動指令] [test:t_android_memstab_collect_driver_status]
+  WHY:收集腳本在主機端排全部順序(讀結束紀錄、跑暖機、掃原生、錄快照、邊錄追蹤檔邊跑量測、再掃再錄、再讀結束紀錄;設定替這個情境打開 native_retained 時,全部讀完之後再停 App、重跑暖機與量測、只錄 heapprofd),驅動只負責開關畫面 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]] 設計審 r1] [因:Macrobenchmark 在裝置上跑,插不進主機端錄快照與原生掃描的時間點;子案二換成 Maestro 時只換驅動指令] [test:t_android_memstab_collect_driver_status]
   WHY:結束紀錄用前後兩次比對(pid 加 timestamp),不用時間過濾 [出處:2026-10-24 實驗室實測] [因:dumpsys activity exit-info 的時間是裝置本地時間不帶時區,前後比對不用換時區、不受主機與裝置時鐘偏差影響] [test:t_android_memstab_exit_info_diff]
   WHY:先掃原生、再錄快照 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]] 設計審 r3] [因:錄快照時在行程裡的配置不能算進掃描]
   PITFALL:日誌串流在驅動一結束就關掉,最後幾行還沒寫出來就被丟掉,StrictMode 違規會漏 [出處:2026-10-24 實作時測試抓到(假驅動瞬間結束)] [根因:串流是另一個子程序,輸出有延遲] [修法:驅動結束後先等 SETTLE 秒(預設 2)再關串流,關之前確認串流還活著,一開就斷記 failed] [test:t_android_memstab_collect_never_fakes_ok]
@@ -46,6 +48,10 @@ summary: |-
   WHY:收到第一個中斷就把所有中斷設成忽略、印一行「收尾中、最久約 4 分鐘」,收尾結束時照裝置有沒有回應改說法 [出處:2026-10-24 代碼審 r4 資源席、資安席] [因:兩個訊號同時到時第二個會打斷收尾;忽略期間按 Ctrl-C 沒反應要讓人知道;裝置離線時說「已停、已刪」會讓人以為裝置乾淨] [test:t_android_memstab_collect_signals]
   WHY:帶 LUMOS_STABILITY_SCENARIO=<名> 時用 macrobench.json 最外層 stability_scenarios 那個情境蓋過 stability 段的 scenario、driver(與選填的 warmup、cycles),名字不在裡面就擋;能蓋過的欄位清單跟 lumos 的 E2E_SCENARIO_KEYS 一樣 [出處:2026-10-26 端到端驗收按功能與使用情境跑] [因:記憶體要能按功能挑情境;情境以外的設定(套件、測試資料、StrictMode)沿用同一段,不重寫一份] [test:t_android_memstab_collect_scenario] [test:t_android_e2e_lists_match_templates]
   SEE:[[Systems/macrobenchmark-adapter]] [[Projects/Android記憶體與穩定性驗收_計劃]]
+  WHY:原生配置排行那段排在既有量測全部讀完之後、pid 驅動與結束紀錄另存在 native_retained 段,出意外寫 failed 不連累第一段,收到中斷照樣往上丟回 2 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r2、r4] [因:heapprofd 掛在 malloc 上會拖慢 App,跟量測同一段錄會改掉凍結幀與峰值;except Exception 會把繼承它的 Terminated 一起吞掉] [不選:先寫第一段結果檔再原子替換(跟「被中斷就不寫結果檔、回 2」的既有合約打架)] [test:t_android_native_collect_ok] [test:t_android_native_phase_exception] [test:t_android_native_collect_sigterm]
+  WHY:e2e 範本用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限,第一段秒數加預估(第一段兩倍加 NATIVE_TAIL:停錄等待加拉檔上限加查詢預估,預設 180 秒)超過就不跑第二段、寫 failed 時間不夠;跑的話驅動與查詢的上限也從同一個上限時刻扣 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,第二段把整步推過上限時第一段量好的判定也一起丟] [test:t_android_native_collect_budget]
+  PITFALL:trace_processor 的 csv 輸出不跳脫字串裡的引號與換行,函式名含逗號或引號時照逗號切會切錯格 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4 本機實測] [根因:輸出只在字串外加引號] [修法:原生配置排行的文字欄在 SQL 裡 hex(),Python 端解回;三支查詢共用 tp_rows 一套切法] [test:t_android_native_collect_ok] [test:t_android_native_shared_tp]
+  PITFALL:.so 沒解壓、直接從 APK 載入時 mapping 名是 …/base.apk!libfoo.so,取路徑最後一段會變成 base.apk!libc++_shared.so,配置器比對落空 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4 上網查證(libunwindstack GetFullName)] [根因:APK 內嵌的 .so 名稱接在 ! 後面] [修法:有 ! 時取最後一個 ! 之後] [test:t_android_native_query_apk_soname]
 verified_by:
   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
 ---
@@ -53,4 +59,4 @@ verified_by:
 
 白話:Android 記憶體與穩定性驗收的「收集」那一段。工具鏈範本 `scripts/templates/android-stability-collect.sh` 照抄進消費專案後,在專案根目錄跑,讀 `.lumos/macrobench.json` 的 stability 段,用 adb 對連著的裝置排好整個流程,寫出 `.lumos/artifacts/android/<run-id>/stability.json`;過不過交給 [[Systems/macrobenchmark-adapter]] 的 `lumos macrobench --stability`。它是第一支會接裝置的範本,外部工具用環境變數找:`ADB`、`TP`(trace_processor)、`JAVA_HEAP_DUMP`(skill 的 java_heap_dump,只有宣告了測試資料才用)。
 
-`scripts/templates/android-stability-cycle.sql` 對量測期間那一份追蹤檔算峰值、凍結幀、主執行緒最長阻塞與幀數;`scripts/templates/android-heap-classes.sql` 對一份 Java 快照算每個類別還有人指著的實例數;`scripts/templates/android-stability-record.pbtxt` 是量測期間的 Perfetto 錄製設定。兩支查詢都只用標準 SQLite 語法,測試用 Python 內建的 sqlite3 照 Perfetto 文件建同名的表跑,真的 trace_processor 上跑不跑得動由實驗室人工驗收證明。設定欄位、七種檢查與判定規則的單源在 [[Projects/Android記憶體與穩定性驗收_計劃]]。
+`scripts/templates/android-stability-cycle.sql` 對量測期間那一份追蹤檔算峰值、凍結幀、主執行緒最長阻塞與幀數;`scripts/templates/android-heap-classes.sql` 對一份 Java 快照算每個類別還有人指著的實例數;`scripts/templates/android-stability-record.pbtxt` 是量測期間的 Perfetto 錄製設定;設定替情境打開 native_retained 時,`scripts/templates/android-stability-heapprofd.pbtxt` 是第二段只錄 heapprofd 的錄製設定,`scripts/templates/android-stability-native.sql` 對那份錄檔算原生配置排行(文字欄 hex 輸出)。三支查詢都只用標準 SQLite 語法,測試用 Python 內建的 sqlite3 照 Perfetto 文件建同名的表跑,真的 trace_processor 上跑不跑得動由實驗室人工驗收證明。設定欄位、七種檢查與判定規則的單源在 [[Projects/Android記憶體與穩定性驗收_計劃]]。

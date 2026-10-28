@@ -31,7 +31,8 @@
   "contract_refs": [{"contract": "Systems/結帳流程 ★INVARIANT★ 從主頁進結帳…", "threshold": "frameOverrunMs P90 ≤ 0", "result": "沒達(3.6)"}],
   "artifact_store": {"where": "本機 <專案>/.lumos/artifacts/android/<run-id>/", "keep_until": "<日期或人裁>", "how_to_get": "找 <誰> 或 <儲存位置>"},
   "layers": [
-    {"layer": "L0", "why_escalated": null, "tool": "lumos macrobench", "result": "3 項變慢", "artifacts": ["macrobench-compare"]},
+    {"layer": "L0", "why_escalated": null, "tool": "lumos macrobench", "result": "3 項變慢", "artifacts": ["macrobench-compare"],
+     "native_retained": [{"func": "<照抄 --json 的 sites 前 5 筆,L0 通過而排行有內容時才有這欄>", "so": "…", "caller": "…", "retained": 0}]},
     {"layer": "L1", "why_escalated": "L0 退步:frameOverrunMs P90 跨零", "tool": "android-profiler perfetto-trace-analysis",
      "result": "主嫌 obtainView,Running 99.9%,無子 slice", "queries": ["Q17", "Q26"]},
     {"layer": "L2", "why_escalated": "Q26:obtainView cpu≈wall 且無子 slice", "tool": "simpleperf --call-graph fp",
@@ -106,7 +107,8 @@ cp scripts/templates/android-receipt-rerun.sh .lumos/receipts/<run-id>/rerun.sh
   "strictmode": true, "category": "app"}}
 ```
 
-- `driver` 跑兩次(暖機、量測),`{{CYCLES}}` 換成輪數,環境變數 `CYCLES` 與 `ANDROID_SERIAL`(設了 `adb_serial` 時)也會給。
+- `driver` 跑兩次(暖機、量測),`{{CYCLES}}` 換成輪數,環境變數 `CYCLES` 與 `ANDROID_SERIAL`(設了 `adb_serial` 時)也會給;打開原生配置排行的情境再多跑兩次(第二段的暖機與量測)。
+- `native_retained`(選填,預設不寫=全部不跑):要列原生配置排行的情境名清單,`"@default"` 代表沒指定情境的 stability 段本身,其他名字要是 `stability_scenarios` 裡的情境。打開的情境在既有量測讀完之後另跑一段 W+N 輪只錄 heapprofd(要 `test_data` 的 value 是 true、Android 11 以上、App 是 profileable 或 debuggable),驗收多花約一段量測的時間;情境含下單這類後端副作用時,第二段會再多下 W+N 次。結果寫在 `stability.json` 的 `native_retained` 段,`lumos macrobench --stability` 印前 20 個,只提醒不擋。
 - `test_data` 不寫就不錄 Java 快照,java_growth 與 instances 列成跳過。範例的裁定人與日期是佔位,不能照抄:要先問人「這個專案是不是只在測試帳號與假資料下跑」,照對方的回答填真的人名與日期(--check-config 只擋得住 <裁定的人>、<YYYY-MM-DD> 這種原樣照抄的佔位,改成別的假名字它分不出來;真正的防線是先問人)。
 - `strictmode` 寫 true 的前提是測試建置真的打開了 StrictMode 的 VM 規則並 `penaltyLog()`;宣告了卻沒開,零筆照樣判通過。
 - release 建置開 R8 時加 `"mapping": "app/build/outputs/mapping/benchmark/mapping.txt"`,類別名才還原得回來。
@@ -116,9 +118,9 @@ cp scripts/templates/android-receipt-rerun.sh .lumos/receipts/<run-id>/rerun.sh
 - 主機的 `python3` 要 3.11 以上(腳本用 `python3 -P`;工具鏈本身要求 3.14)。
 - run-id 只收英數字、點、底線與連字號,也不能只有點(它會用在裝置上的路徑);不給就用 `stability-<日期時間>`。
 - 專案是 git repo 時,`.lumos/artifacts/` 要先在 `.gitignore` 裡,不然腳本回 2、不碰裝置。
-- 保留:每次開跑時只自動刪超過 7 天的 `heap-*.pftrace`(不再跑就不會刪);`cycle.pftrace`(量測那段的追蹤檔)、`record.pbtxt`(錄製設定)、`logcat.txt`(只有違規行)、`stability.json` 不自動刪;原始日誌 `logcat.raw` 不管成不成都在收集結束前刪掉。整個 run 目錄不進版控,用完自己刪。
-- `java_heap_dump` 逾時或被中斷時,它在裝置 `/data/misc/perfetto-traces/` 底下的暫存快照(`java-profile-*`)可能留著;收集腳本只清自己的 `lumos-stability-<run-id>.*`,那份要自己 `adb shell ls` 看過再刪。
-- 測試縮短用的環境變數:`LUMOS_STABILITY_SETTLE`(預設 2 秒)、`LUMOS_STABILITY_STOP_TIMEOUT`(30 秒)、`LUMOS_STABILITY_LONG_TIMEOUT`(1800 秒),平常不用設。
+- 保留:每次開跑時只自動刪超過 7 天的 `heap-*.pftrace`(含原生配置排行那段的 `heap-native.pftrace`;不再跑就不會刪);`cycle.pftrace`(量測那段的追蹤檔)、`record.pbtxt` 與 `record-native.pbtxt`(錄製設定)、`logcat.txt`(只有違規行)、`stability.json` 不自動刪;原始日誌 `logcat.raw` 不管成不成都在收集結束前刪掉。整個 run 目錄不進版控,用完自己刪。
+- `java_heap_dump` 逾時或被中斷時,它在裝置 `/data/misc/perfetto-traces/` 底下的暫存快照(`java-profile-*`)可能留著;收集腳本只清自己的 `lumos-stability-<run-id>.*` 與 `lumos-native-<run-id>.*`,那份要自己 `adb shell ls` 看過再刪;主機當掉或 adb 斷線時這兩種也可能留著,先 `adb shell ls /data/misc/perfetto-traces/ /data/misc/perfetto-configs/` 列出來,只挑 `lumos-stability-<這次的 run-id>.` 與 `lumos-native-<這次的 run-id>.` 開頭的,對每一個寫完整路徑刪(同目錄別的檔可能是別人正在錄的)。
+- 測試縮短用的環境變數:`LUMOS_STABILITY_SETTLE`(預設 2 秒)、`LUMOS_STABILITY_STOP_TIMEOUT`(30 秒)、`LUMOS_STABILITY_LONG_TIMEOUT`(1800 秒),平常不用設。`LUMOS_STABILITY_STEP_BUDGET_S` 由端到端範本傳(這一步的上限秒數),預估原生配置排行那段跑不完就不跑、寫 failed「時間不夠」;手動跑不用設。
 
 門檻檔 `.lumos/macrobench-thresholds.json` 的寫了 `check` 的條目(`scenario` 要等於 stability 段的 scenario;另加 `contract`、`decided_by`、`decided_at`):
 

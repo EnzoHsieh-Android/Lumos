@@ -2,8 +2,8 @@
 type: system
 status: doing
 created: 2026-10-21
-updated: 2026-10-24
-responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢,照專案的人裁門檻檔判驗收門檻,並讀收集腳本寫的 stability.json 判記憶體與穩定性(--stability);不負責建置或執行基準測試、不接裝置(接裝置的是收集腳本,家在 Systems/android-stability-collector)、不擋推送、不從量測產生門檻
+updated: 2026-10-28
+responsibility: 負責 lumos macrobench:讀 Android 專案自己跑出的 Macrobenchmark 結果檔、跟基準比、只報變慢,照專案的人裁門檻檔判驗收門檻,並讀收集腳本寫的 stability.json 判記憶體與穩定性(--stability)、列原生配置排行(native_retained,只列不判);不負責建置或執行基準測試、不接裝置(接裝置的是收集腳本,家在 Systems/android-stability-collector)、不擋推送、不從量測產生門檻
 aliases: []
 about_code:
   - scripts/lumos
@@ -40,6 +40,8 @@ summary: |-
   WHY:讀結果檔時先限深(20 層)、字串過 _esc_clean;數字欄位負數一律當量不到 [出處:2026-10-24 代碼審 r3 邊界席] [因:孤立代理字元讓 --json 印到 UTF-8 時整支崩;這些欄位是次數、位元組、時間,-1 以外的負數只會是手改或壞掉的檔] [test:t_android_memstab_unreadable_never_passes]
   WHY:門檻檔的條目寫了 check(native_unreachable、java_growth、instances、peak_vitals、exits、strictmode、frozen)就對 --stability 給的 stability.json 判記憶體與穩定性,沒寫 check 的照舊對 Macrobenchmark 結果檔判、判定結果不變;驗證多了一項:decided_by 寫成 <裁定的人> 這種佔位會被擋(跟 check 條目共用署名檢查);有 stability 段時 results_dirs 可以不填,沒有 macrobench.json 也照判 check 條目 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]]] [因:這幾種檢查不是單一上下限,硬塞進 max 會寫出假數字;只做穩定性的專案沒有 Macrobenchmark 結果目錄] [不選:另開門檻檔或指令(多一種做法)] [test:t_android_memstab_check_compat]
   WHY:stability.json 每個來源帶 status,不是 ok 的、值是 -1 或不是有限數的,用到它的檢查一律列成跳過不列通過;驅動沒跑完時只跳過需要完整 N 輪的五種,exits 與 strictmode 照判 [出處:[[Projects/Android記憶體與穩定性驗收_計劃]] 設計審 r1–r3] [因:這類守衛最常見的失效是讀不到所以全綠;App 在量測輪崩潰時驅動一定跟著失敗,這時正是 exits 該判不過] [test:t_android_memstab_source_not_ok_skipped]
+  WHY:原生配置排行放進結果的固定鍵 native_retained({enabled, status, reason, sites}),一開始就放進初始字典,主路徑與只有 stability 的路徑都印;不進 threshold_failures、不改回傳碼;形狀不對整段不採用、印一行 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r2、r4] [因:排行一定會列出快取與池,拿來擋會每次都擋;skill 走 --json,沒有固定鍵就分不出「沒打開」「沒跑成」與「零筆」] [不選:線性增長超過門檻就擋推送(d2;分漲停的判法在 [[Projects/原生記憶體增長判法_計劃]] 還沒量準)] [test:t_android_native_lumos_no_verdict_change] [test:t_android_native_lumos_paths] [test:t_android_native_lumos_shape]
+  WHY:stability.native_retained 的型別在 _macrobench_stab_optional_err 驗,名字要對到 stability_scenarios 或 "@default" 那條放 _macrobench_stab_top_err;不寫進 stability_scenarios、不改情境名規則 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r2] [因:舊版 lumos 不驗 stability 段的未知鍵,退回舊版時設定不會被擋;跨段檢查只有最外層拿得到 stability_scenarios] [test:t_android_native_config]
 verified_by:
   - "[[Verification/2026-10-21_Macrobenchmark退步提醒]]"
   - "[[Verification/2026-10-23_macrobench實機端到端]]"

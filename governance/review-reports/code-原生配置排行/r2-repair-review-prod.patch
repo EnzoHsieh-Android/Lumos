@@ -1,0 +1,515 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 0cc4baf0a5b7d99632c39b23db98ead1fdb0cbee..64dd07fcd9478821ba1ec0bc4e6614d87023035b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40040,21 +40040,20 @@ def _macrobench_stab_native_unreachable(t, stab, rec):
+     if not isinstance(b, dict) or not isinstance(a, dict):   # 跟 heap 同一條:形狀不對列成跳過,不噴例外(代碼審 r2 邊界席)
+         return None, "unreachable 缺 before 或 after(或不是物件)"
+     vals = [_macrobench_stab_val(x) for x in (b.get("bytes"), a.get("bytes"), b.get("allocations"), a.get("allocations"))]
+     if None in vals:
+         return None, "unreachable 的位元組或塊數缺了、不是有限數或是負數(-1 是量不到)"
+     rec.update(delta_bytes=vals[1] - vals[0], delta_allocations=vals[3] - vals[2], max_bytes=t.get("max_bytes", 0))
+     return rec["delta_bytes"] > rec["max_bytes"], None
+ 
+ 
+ MACROBENCH_NATIVE_SHOW = 20   # 原生配置排行最多印幾個(結果檔最多 200 個,--json 全帶)
+-MACROBENCH_NATIVE_BAD = "結果檔形狀不對:"   # 形狀不對時 reason 的開頭:印成另一句,跟「沒跑成」分開
+ 
+ 
+ def _macrobench_native_off(why):
+     return {"enabled": False, "status": "unsupported", "reason": why, "sites": []}
+ 
+ 
+ def _macrobench_native_sites_err(sites):
+     """原生配置排行 sites 的形狀(收集腳本寫的;單源 Projects/原生記憶體增長提示_計劃〈打算怎麼做〉第 5 步)。回哪裡不對或 None。"""
+     if not isinstance(sites, list):
+         return "sites 不是清單"
+@@ -40063,58 +40062,58 @@ def _macrobench_native_sites_err(sites):
+             return f"sites 第 {i} 項不是物件或缺 func、so、caller"
+         if not all(isinstance(x.get(k), bool) for k in ("symbol", "system")):
+             return f"sites 第 {i} 項的 symbol、system 要是 true 或 false"
+         if not _secev_int(x.get("retained")) or x["retained"] < 0:
+             return f"sites 第 {i} 項的 retained 要是非負整數"
+     return None
+ 
+ 
+ def _macrobench_native_retained(stab):
+     """結果檔的 native_retained 段 → macrobench 結果的固定鍵 {enabled, status, reason, sites}。只提醒,不進任何判定;
+-    形狀不對整段不採用(reason 以 MACROBENCH_NATIVE_BAD 開頭),不噴例外。"""
++    形狀不對整段不採用(寫成 failed、原因是「結果檔形狀不對:哪裡」),不噴例外。"""
+     sec = stab.get("native_retained")
+     if sec is None:
+         return _macrobench_native_off("結果檔沒有 native_retained 段")
+     bad = None
+     if not isinstance(sec, dict):
+         bad = "native_retained 不是物件"
+     elif not isinstance(sec.get("enabled"), bool):
+         bad = "enabled 要是 true 或 false"
+     elif sec.get("status") not in ("ok", "failed", "unsupported"):
+         bad = "status 只能是 ok、failed、unsupported"
+     elif sec["status"] == "ok":
+         bad = _macrobench_native_sites_err(sec.get("sites"))
+     if bad:
+-        return {"enabled": True, "status": "failed", "reason": MACROBENCH_NATIVE_BAD + bad, "sites": []}
++        return {"enabled": True, "status": "failed", "reason": f"結果檔形狀不對:{bad}", "sites": []}
+     reason = sec.get("reason") if isinstance(sec.get("reason"), str) else ("" if sec["status"] == "ok" else "沒寫原因")
+     sites = sec["sites"][:200] if sec["status"] == "ok" else []
+     return {"enabled": sec["enabled"], "status": sec["status"], "reason": reason or None, "sites": sites}
+ 
+ 
+ def _macrobench_native_print(nr):
+     """原生配置排行的文字輸出(獨立於門檻輸出,只提醒):沒打開不印;打開了沒跑成或形狀不對印一行;ok 印前 MACROBENCH_NATIVE_SHOW 個。"""
+     if not nr["enabled"]:
+         return
+     if nr["status"] != "ok":
+-        r = nr["reason"] or "沒寫原因"
+-        print(f"原生配置排行的{_events_clean(r, 500)}" if r.startswith(MACROBENCH_NATIVE_BAD)
+-              else f"原生配置排行沒跑成:{_events_clean(r, 500)}(只提醒,不擋推送)")
++        print(f"原生配置排行沒跑成:{_events_clean(nr['reason'] or '沒寫原因', 500)}(只提醒,不擋推送)")
+         return
+     if not nr["sites"]:
+         print("原生配置排行:沒有結束時還留著 1 MiB 以上的呼叫位置(只提醒,不擋推送)。")
+         return
+     print(f"原生配置排行(只提醒,不擋推送;前 {min(len(nr['sites']), MACROBENCH_NATIVE_SHOW)} 個,共 {len(nr['sites'])} 個):"
+           "量測結束時還留著、而且是開錄之後才配的原生配置,含快取與池,不代表漏")
+     for i, x in enumerate(nr["sites"][:MACROBENCH_NATIVE_SHOW], 1):
+         tags = "".join(t for t, on in (("(沒有符號)", not x["symbol"]), ("(系統函式庫)", x["system"])) if on)
+-        line = f"{x['func']} @ {x['so']} ← {x['caller']}:還留著 {x['retained'] / 1048576:.1f} MiB({x['retained']} 位元組){tags}"
+-        print(f"  {i}. {_events_clean(line, 500)}")
++        tenth = x["retained"] * 10 // 1048576   # 整數算:超大整數轉 float 會溢位
++        # 三段文字各自清、各自截,數字接在後面:整行一起截時長的模板名會把「還留著多少」截掉
++        print(f"  {i}. {_events_clean(x['func'], 200)} @ {_events_clean(x['so'], 120)} ← {_events_clean(x['caller'], 200)}:"
++              f"還留著 {tenth // 10}.{tenth % 10} MiB({x['retained']} 位元組){tags}")
+ 
+ 
+ def _macrobench_stab_heap(stab):
+     s, why = _macrobench_stab_src(stab, "heap")
+     if why:
+         return None, None, why
+     b, a = s.get("before"), s.get("after")
+     if not isinstance(b, dict) or not isinstance(a, dict):
+         return None, None, "heap 缺 before 或 after(或不是物件)"
+     seen = s.get("classes_seen") or {}
+diff --git a/scripts/templates/android-stability-collect.sh b/scripts/templates/android-stability-collect.sh
+index 3a68f139b409d6c9e5e31ca40b2a0f88fb2b473a..47b6cc342318fccf6d67c8dfce471cba5d1b49ff 100644
+--- a/scripts/templates/android-stability-collect.sh
++++ b/scripts/templates/android-stability-collect.sh
+@@ -11,32 +11,34 @@
+ # 原生配置排行:設定的 stability.native_retained 列了這次的情境("@default" 是沒指定情境那一段)時,既有量測讀完之後另跑一段 N 輪只錄 heapprofd;
+ #   LUMOS_STABILITY_STEP_BUDGET_S(e2e 範本傳這一步的上限秒數)預估不夠就不跑那一段;沒設就不限制
+ # 回傳碼:結果檔寫出來回 0(哪一段沒收到寫在那個來源的 status);設定讀不了、必要工具找不到、run-id 不合法或用過、
+ #   產物沒被 git 忽略、mapping 檔不在、被中斷都回 2 並印「擋下:」,不寫結果檔
+ set -eu
+ HERE=$(cd "$(dirname "$0")" && pwd)
+ python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || { echo "擋下:收集腳本要 python3 3.11 以上(用了 -P)" >&2; exit 2; }
+ # -P:不把目前目錄放進模組搜尋路徑(在放了外來 .py 的目錄執行也不會載入它);拿掉 PYTHONPATH,殘留的路徑也不載入;
+ # 不用 -I,-I 會連 PYTHONUTF8 一起忽略(代碼審 r1 架構對齊席、r2 資安席)
+ exec env -u PYTHONPATH PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -P - "$HERE" "$(pwd)" "${1:-}" <<'PY'
+-import json, os, re, shutil, signal, subprocess, sys, tempfile, time
++import json, math, os, re, shutil, signal, subprocess, sys, tempfile, time
+ here, root, run_id = sys.argv[1], sys.argv[2], sys.argv[3] or time.strftime("stability-%Y%m%d-%H%M%S")
+ ADB, TP, JHD = os.environ.get("ADB", "adb"), os.environ.get("TP", "trace_processor"), os.environ.get("JAVA_HEAP_DUMP", "java_heap_dump")
+ T_SHORT = 120   # 秒:一般 adb 呼叫
+ T_LONG = float(os.environ.get("LUMOS_STABILITY_LONG_TIMEOUT", "1800"))   # 秒:驅動、原生掃描與快照查詢的上限(測試縮短用)
+ SETTLE = float(os.environ.get("LUMOS_STABILITY_SETTLE", "2"))   # 等 App 起來、等日誌串流跟上的秒數(測試縮短用)
+ STOP_WAIT = float(os.environ.get("LUMOS_STABILITY_STOP_TIMEOUT", "30"))   # 送 TERM 後等錄製結束的秒數,等完還在就補 KILL
+ REAP = 10   # 秒:整組殺掉之後等管線關掉的上限
+ GROUPS = []   # 正在跑的子程序(每個都自成程序群組):被中斷時整組收掉
+ ARTIFACTS = ("stability.json", "logcat.txt", "logcat.raw", "cycle.pftrace", "record.pbtxt", "heap-before.pftrace", "heap-after.pftrace")
+ NATIVE_ARTIFACTS = ("heap-native.pftrace", "record-native.pbtxt")   # 原生配置排行那一段才寫:只在這次情境打開時檢查有沒有被 git 忽略
+ NATIVE_MIN_SDK = 30   # heapprofd 只接已經在跑的行程(no_startup)要 Android 11 以上
++NATIVE_TEMPLATES = ("android-stability-heapprofd.pbtxt", "android-stability-native.sql")   # 打開時開跑前就查在不在:消費專案只抄了收集腳本時不白跑暖機
++NATIVE_MARGIN = 180   # 秒:第二段的驅動與查詢要在「這一步上限」之前這麼多秒結束,留給停錄(最多 STOP_WAIT)、拉檔(T_SHORT)與寫結果檔
+ EXIT_TYPES = {3: "low_memory", 4: "crash", 5: "native_crash", 6: "anr"}
+ 
+ 
+ def die(msg):
+     print(f"擋下:{msg}", file=sys.stderr)
+     sys.exit(2)
+ 
+ 
+ INTERRUPTS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)   # 轉成例外、走 cleanup 的訊號(Ctrl-C 是 KeyboardInterrupt,另外接)
+ 
+@@ -217,25 +219,25 @@ def native_heap_kb(pkg):
+     m = re.search(r"^\s*Native Heap:\s+(\d+)", out, re.M)
+     return int(m.group(1)) if rc == 0 and m else None
+ 
+ 
+ def pidof(pkg):
+     rc, out, _ = shell(f"pidof {pkg}")
+     v = out.strip().split()
+     return int(v[0]) if rc == 0 and v and v[0].isdigit() else None
+ 
+ 
+-def driver(cmd, n, serial):
++def driver(cmd, n, serial, timeout=T_LONG):
+     env = dict(os.environ, CYCLES=str(n))
+     if serial:
+         env["ANDROID_SERIAL"] = serial
+-    rc, out, err = run(["sh", "-c", cmd.replace("{{CYCLES}}", str(n))], timeout=T_LONG, env=env)
++    rc, out, err = run(["sh", "-c", cmd.replace("{{CYCLES}}", str(n))], timeout=timeout, env=env)
+     text = out + err
+     if rc != 0:
+         return {"rc": rc, "ok": False, "why": f"驅動回 {rc}:{text.strip()[-200:]}"}
+     # 輸出出現任何 INSTRUMENTATION_ 開頭的行就是 UI Automator:要有 INSTRUMENTATION_CODE: -1 且沒有 FAILURES!!!
+     # (INSTRUMENTATION_FAILED、INSTRUMENTATION_ABORTED 這類啟動失敗回傳碼照樣可能是 0;代碼審 r1 正確性席)
+     if re.search(r"^INSTRUMENTATION_", text, re.M) and ("INSTRUMENTATION_CODE: -1" not in text or "FAILURES!!!" in text):
+         return {"rc": rc, "ok": False, "why": "UI Automator 驅動沒有成功結束(沒有 INSTRUMENTATION_CODE: -1、或有 FAILURES!!!、INSTRUMENTATION_FAILED)"}
+     return {"rc": rc, "ok": True}
+ 
+ 
+@@ -246,28 +248,28 @@ def load_mapping(path):
+         return m
+     if not os.path.isfile(os.path.join(root, path)):
+         die(f"stability.mapping 指的檔不存在:{path}")
+     for line in open(os.path.join(root, path), encoding="utf-8", errors="replace"):
+         g = re.match(r"(\S+) -> (\S+):$", line.rstrip())
+         if g:
+             m[g.group(2)] = g.group(1)
+     return m
+ 
+ 
+-def tp_rows(template, trace, pkg):
++def tp_rows(template, trace, pkg, timeout=T_LONG):
+     """讀 .sql 範本、換掉 __PROCESS__、寫暫存檔、跑 trace_processor,輸出每行照逗號切、去掉引號。回 (回傳碼, 列的清單, 標準錯誤);
+     三支查詢共用這一套切法(原生配置排行的文字欄在 SQL 裡 hex 過,照逗號切也切得對)。"""
+     q = open(os.path.join(here, template), encoding="utf-8").read().replace("__PROCESS__", pkg)
+     with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
+         f.write(q)
+     try:
+-        rc, out, err = run([TP, trace, "-q", f.name], timeout=T_LONG)
++        rc, out, err = run([TP, trace, "-q", f.name], timeout=timeout)
+     finally:
+         os.unlink(f.name)
+     return rc, [[c.strip('"') for c in line.split(",")] for line in out.splitlines()], err
+ 
+ 
+ def heap_counts(trace, pkg, mapping):
+     rc, rows, err = tp_rows("android-heap-classes.sql", trace, pkg)
+     if rc != 0:
+         return None, f"trace_processor 算不了快照:{err.strip()[-200:] or rc}"
+     counts = {}
+@@ -394,20 +396,23 @@ def preflight(st, native_on=False):
+     if test_data and not shutil.which(JHD):
+         die(f"宣告了測試資料要錄快照,但找不到 {JHD};用 JAVA_HEAP_DUMP= 指定")
+     run_dir = os.path.join(root, ".lumos", "artifacts", "android", run_id)
+     if os.path.exists(os.path.join(run_dir, "stability.json")):   # 沿用舊目錄的話,這次中斷時舊結果檔會被當成這次的(代碼審 r2 正確性席)
+         die(f"run-id {run_id} 已經有結果檔了;換一個 run-id(不給就用日期時間)")
+     g_rc, _, g_err = run(["git", "-C", root, "rev-parse", "--is-inside-work-tree"])
+     if g_rc not in (0, None) and "not a git repository" not in g_err:   # git 自己壞了(safe.directory 等)不能當成不是 repo(代碼審 r4 資安席)
+         die(f"git 判不了這裡是不是 repo:{g_err.strip()[-200:]};先修好 git 再跑(產物不准進版控,判不了就不跑)")
+     in_git = g_rc == 0
+     # 快照、日誌與結果檔不准進版控(代碼審 r1 資安席);每種會寫出的檔名都問一次,.gitignore 只寫 *.json 時快照照樣會進版控(r2 資安席)
++    gone = [n for n in NATIVE_TEMPLATES if native_on and not os.path.isfile(os.path.join(here, n))]
++    if gone:
++        die(f"設定替這個情境打開了 native_retained,但收集腳本旁邊沒有 {'、'.join(gone)};從工具鏈補上這兩支範本(lumos update)再跑")
+     loose = [n for n in ARTIFACTS + (NATIVE_ARTIFACTS if native_on else ()) if in_git and run(["git", "-C", root, "check-ignore", "-q", os.path.join(run_dir, n)])[0] != 0]
+     if loose:
+         die(f".lumos/artifacts/ 底下這些檔沒被 git 忽略:{'、'.join(loose)};先在 .gitignore 加一行 .lumos/artifacts/ 再跑(快照與日誌可能含使用者資料)")
+     return test_data, run_dir
+ 
+ 
+ def device_info(st):
+     res = {"scenario": st["scenario"], "warmup": st["warmup"], "cycles": st["cycles"], "category": st.get("category", "app")}
+     res["device_model"] = shell("getprop ro.product.model")[1].strip()
+     sdk = shell("getprop ro.build.version.sdk")[1].strip()
+@@ -466,29 +471,36 @@ def strictmode_result(st, started, died, raw, run_dir):
+ def heap_result(test_data, before, after, why, mapping):
+     if before is None or after is None:
+         return src({}, why, "unsupported" if not test_data else "failed")
+     declared = declared_classes()
+     declared |= {f"java.lang.Class<{c}>" for c in declared}   # 宣告類別沒有實例時,靠它的類別物件證明載入過
+     keep = {c for c in set(before) | set(after) if before.get(c) != after.get(c) or c in declared}
+     return {"status": "ok", "before": {c: before[c] for c in keep if c in before}, "after": {c: after[c] for c in keep if c in after},
+             "classes_seen": {"before": len(before), "after": len(after)}, "class_names": "mapping" if mapping else "raw"}
+ 
+ 
++def fresh_launch(pkg):
++    """從乾淨的行程開始:停 App、讀結束紀錄、啟動、等它起來。回 (結束紀錄 status, 紀錄清單或原因, pid)。
++    不停的話上一次留下的物件會算進這一次(2026-10-24 實驗室連跑兩次時抓到);停完才讀結束紀錄,停 App 自己產生的那筆不會被當成測試期間的。"""
++    shell(f"am force-stop {pkg}")
++    ex_status, ex = read_exits(pkg)
++    shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
++    time.sleep(SETTLE)
++    return ex_status, ex, pidof(pkg)
++
++
+ def measure(st, test_data, run_dir, mapping, state):
+     """裝置上的整段流程;state 收著被中斷時要收掉的錄製與日誌串流。"""
+     pkg, n, w, serial = st["package"], st["cycles"], st["warmup"], st.get("adb_serial")
+     res = device_info(st)
+-    shell(f"am force-stop {pkg}")   # 從乾淨的行程開始:不停的話上一次留下的物件會算進這一次(2026-10-24 實驗室連跑兩次時抓到)
+-    ex_status, ex_before = read_exits(pkg)   # 停完才讀,停 App 自己產生的那筆結束紀錄不會被當成測試期間的
+-    shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+-    time.sleep(SETTLE)
+-    pids = [pidof(pkg)]
++    ex_status, ex_before, pid0 = fresh_launch(pkg)
++    pids = [pid0]
+     d_warm = driver(st["driver"], w, serial)
+     pids.append(pidof(pkg))
+     u_before, u_why = unreachable(pids[-1]) if pids[-1] else (None, "App 沒在跑")   # 先掃再錄快照:錄快照時的配置不算進掃描
+     nh_before = native_heap_kb(pkg)
+     h_before, h_why = snapshot(pkg, run_dir, "before", mapping) if test_data else (None, "沒宣告測試資料(stability.test_data),不錄快照")
+     t0 = shell("date '+%m-%d %H:%M:%S.000'")[1].strip()
+     state["rec"] = start_record(pkg, run_dir, st.get("max_record_s", 600), state)
+     _, raw = start_logcat(st, pids[-1], t0, run_dir, state)
+     d_cyc = driver(st["driver"], n, serial)
+     # 停完才從 state 拿掉:等日誌跟上、等錄製停下的那幾秒被中斷時,cleanup 還找得到它們(代碼審 r2 正確性席、資源席)
+@@ -522,157 +534,161 @@ def measure(st, test_data, run_dir, mapping, state):
+ def native_sites(rows):
+     """原生配置排行查詢的 site 列 → sites 清單(文字欄 hex 解回 UTF-8);照結束累計降冪、函式名、.so、系統旗標升冪,最多 200 個。"""
+     def txt(h):
+         return bytes.fromhex(h).decode("utf-8", "replace")
+     sites = [{"func": txt(c[1]), "so": txt(c[2]), "caller": txt(c[3]), "symbol": c[4] == "1", "system": c[5] == "1", "retained": int(c[6])}
+              for c in rows if c[0] == "site" and len(c) == 7]
+     sites.sort(key=lambda x: (-x["retained"], x["func"], x["so"], x["system"]))
+     return sites[:200]
+ 
+ 
+-def native_query(trace, pkg):
++def native_query(trace, pkg, timeout=T_LONG):
+     """跑原生配置排行的查詢。回 (sites, None) / (None, 原因);跑完之後的檢查順序寫死:逾時 → stats 有 error 或 data_loss → 一列記帳都沒有。"""
+-    rc, rows, err = tp_rows("android-stability-native.sql", trace, pkg)
++    rc, rows, err = tp_rows("android-stability-native.sql", trace, pkg, timeout)
+     if rc is None and err.startswith("逾時"):
+         return None, "查詢逾時"
+     if rc != 0:
+         return None, f"trace_processor 算不了原生配置記帳:{err.strip()[-200:] or rc}"
+     try:
+         stats = [bytes.fromhex(c[1]).decode("utf-8", "replace") for c in rows if c[0] == "stat" and len(c) == 7]
+         n = next((int(c[6]) for c in rows if c[0] == "rows" and len(c) == 7), None)
+         sites = native_sites(rows)
+     except ValueError:
+         return None, "原生配置排行查詢的輸出看不懂(hex 或數字格式不對)"
+     if stats:
+         return None, "錄製有錯誤或資料遺失:" + "、".join(stats)[:300]
+     if not n:
+         return None, "沒錄到原生配置記帳(App 不是 profileable、或主行程名不是套件名)"
+     return sites, None
+ 
+ 
+-def native_skip(st, scen, res, elapsed):
+-    """原生配置排行那段要不要跑:回 (enabled, 狀態, 原因) 或 None(跑)。順序寫死,第一個不成立的就是結果。"""
+-    if (scen or "@default") not in (st.get("native_retained") or []):
++def native_on(st, scen):
++    """這次的情境有沒有在 stability.native_retained 清單裡("@default" 是沒指定情境的那一段)。"""
++    return (scen or "@default") in (st.get("native_retained") or [])
++
++
++def native_skip(st, scen, test_data, res, elapsed):
++    """原生配置排行那段要不要跑:回 (enabled, 狀態, 原因) 或 None(跑)。順序寫死,第一個不成立的就是結果。
++    test_data 是 preflight 讀好的那一個值(兩支範本各只准一處讀 stability.test_data)。"""
++    if not native_on(st, scen):
+         return False, "unsupported", "設定沒替這個情境打開 native_retained"
+-    if (st.get("test_data") or {}).get("value") is not True:
++    if not test_data:
+         return True, "unsupported", "沒宣告測試資料(stability.test_data)"
+     if res.get("android_sdk") is None:
+         return True, "unsupported", "讀不到 Android 版本"
+     if res["android_sdk"] < NATIVE_MIN_SDK:
+         return True, "unsupported", "Android 版本不支援(只接已在跑的行程要 Android 11 以上)"
+     if res["driver"]["status"] != "ok" or res["pids"]["status"] != "ok":
+         return True, "failed", "第一段沒跑成,不跑第二段"
+     budget = os.environ.get("LUMOS_STABILITY_STEP_BUDGET_S")
+     if budget and elapsed + (2 * elapsed + 120) > float(budget):   # 第二段預估 = 第一段的兩倍加停錄、拉檔、查詢的 120 秒
+         return True, "failed", f"時間不夠,不跑第二段(第一段 {elapsed:.0f} 秒,這一步上限 {float(budget):.0f} 秒)"
+     return None
+ 
+ 
+-def native_run(st, run_dir, state):
++def native_run(st, run_dir, state, deadline=None):
+     """原生配置排行那段:停 App → 啟動 → 讀結束紀錄與 pid → 暖機 W 輪 → 開 heapprofd → 驅動量測 N 輪 → 停錄 → 讀 pid 與結束紀錄 → 查詢。
+     pid、驅動結果與結束紀錄只寫進這一段,不碰既有量測的欄位。回這一段的內容(enabled 與 status 都在)。"""
+     pkg, n, w, serial = st["package"], st["cycles"], st["warmup"], st.get("adb_serial")
++    def left():   # 每次驅動與查詢的上限:有 deadline(e2e 傳了這一步的上限)時不超過剩下的秒數,逾時寫 failed,不讓整步被砍
++        return T_LONG if deadline is None else max(1.0, min(T_LONG, deadline - time.time()))
+     sec = {"enabled": True}
+-    shell(f"am force-stop {pkg}")
+-    shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+-    time.sleep(SETTLE)
+-    ex_status, ex_before = read_exits(pkg)
+-    pids = [pidof(pkg)]
+-    d_warm, d_cyc, trace, t_why = driver(st["driver"], w, serial), None, None, None
++    ex_status, ex_before, pid0 = fresh_launch(pkg)
++    pids = [pid0]
++    d_warm, d_cyc, trace, t_why = driver(st["driver"], w, serial, left()), None, None, None
+     if d_warm["ok"]:   # 暖機就失敗:不開錄(這一段已經是 failed)
+         state["rec"] = start_record(pkg, run_dir, st.get("max_record_s", 600), state,
+                                     "android-stability-heapprofd.pbtxt", "lumos-native", "record-native.pbtxt")
+         rec = state["rec"]
+         if rec[0]:
+-            d_cyc = driver(st["driver"], n, serial)
++            d_cyc = driver(st["driver"], n, serial, left())
+             trace, t_why = stop_record(rec, run_dir, "heap-native.pftrace")   # 停錄時 heapprofd 補最後一次傾印,排行只用它
+         else:
+             t_why = rec[1]
+         del state["rec"]   # 停完(或沒開成、start_record 已收)才拿掉:停錄那幾秒被中斷時 cleanup 還找得到
+     pids.append(pidof(pkg))
+     ex_status2, ex_after = read_exits(pkg)
+     new = exit_diff(ex_before, ex_after) if ex_status == "ok" and ex_status2 == "ok" else None
+     sec.update(pids=pids, driver={"warmup": d_warm, "cycles": d_cyc}, exits_new=new)
+     bad = next((d for d in (d_warm, d_cyc) if d and not d["ok"]), None)
+     if bad:
+         why = f"驅動失敗:{bad['why']}"
+     elif new is None:
+         why = "讀不到第二段的結束紀錄"
+     elif new:
+         why = f"第二段期間 App 結束({'、'.join(e['type'] for e in new)})"
+     elif not pids[0] or pids[0] != pids[-1]:
+         why = "行程換了(第二段前後 pid 不同或讀不到)"
+     else:
+         why = t_why
+     if why is None:
+-        sites, why = native_query(trace, pkg)
+-    if why is not None:
+-        return dict(sec, status="failed", reason=why)
+-    return dict(sec, status="ok", main_process_only=True, sites=sites)
++        sites, why = native_query(trace, pkg, left())
++    return dict(sec, **src({"main_process_only": True, "sites": sites} if why is None else {}, why))
+ 
+ 
+-def native_phase(st, scen, res, run_dir, state, elapsed):
+-    """原生配置排行那段的外殼:判要不要跑、跑的時候出意外寫成 failed;收到中斷照樣往上丟(交給 main 收尾、回 2)。
+-    不管哪一種,離開前都收掉這一段的錄製。"""
+-    skip = native_skip(st, scen, res, elapsed)
++def native_phase(st, scen, test_data, res, run_dir, state, elapsed, deadline=None):
++    """原生配置排行那段的外殼:判要不要跑、跑的時候出意外先收掉這一段的錄製再寫成 failed(收不掉就在原因裡照實寫);
++    收到中斷照樣往上丟,錄製留在 state 交給 main 的 cleanup 收(跟中斷在第一段時同一條路)。"""
++    skip = native_skip(st, scen, test_data, res, elapsed)
+     if skip:
+         enabled, status, why = skip
+-        return {"enabled": enabled, "status": status, "reason": why}
++        return {"enabled": enabled, **src({}, why, status)}
+     try:
+-        return native_run(st, run_dir, state)
++        return native_run(st, run_dir, state, deadline)
+     except Terminated:
+         raise
+     except Exception as e:
+-        return {"enabled": True, "status": "failed", "reason": f"第二段出了意外({type(e).__name__})"}
+-    finally:
+         rec = state.pop("rec", None)
+-        if rec and not abort_record(rec):
+-            state["device_dirty"] = True   # 收不掉:被中斷時 main 照實寫裝置上可能還留著
++        gone = abort_record(rec) if rec else True
++        why = f"第二段出了意外({type(e).__name__}:{str(e)[:200]})"
++        return {"enabled": True, **src({}, why if gone else why + ";裝置上 lumos-native 的錄製與暫存可能還留著")}
+ 
+ 
+ def cleanup(state):
+     """被 SIGTERM、SIGHUP、Ctrl-C 或例外中斷時:收掉驅動整組子程序、日誌串流,停掉裝置上的錄製並刪暫存。
+     先擋掉後面再來的中斷、先刪原始日誌(本機、一下就好),再做可能卡 120 秒的裝置呼叫:連按兩次 Ctrl-C 也不留日誌(代碼審 r3 正確性席、資源席)。"""
+     stop_listening()
+     drop_raw(state.get("raw"))
+     print("收集被中斷,收尾中(停裝置錄製、刪暫存;裝置沒回應時最久約 4 分鐘,這段時間按 Ctrl-C 沒有用)…", file=sys.stderr)
+     for p in list(GROUPS):
+         kill_group(p)
+     lc = state.get("lc")
+     if lc is not None:
+         lc.kill()
+     rec = state.get("rec")
+-    return abort_record(rec) if rec else not state.get("device_dirty")
++    return abort_record(rec) if rec else True
+ 
+ 
+ def main():
+     for s in INTERRUPTS:   # SIGHUP:關掉終端機分頁、ssh 斷線;子程序各自成組收不到,要靠這裡收(代碼審 r3 資源席、資安席)
+         signal.signal(s, on_term)
+     signal.signal(signal.SIGINT, on_int)
+     t_start = time.time()
+     st, scen = load_config()
+     if st.get("adb_serial"):
+         os.environ["ANDROID_SERIAL"] = st["adb_serial"]
+     budget = os.environ.get("LUMOS_STABILITY_STEP_BUDGET_S")
+-    if budget:
+-        try:
+-            float(budget)
+-        except ValueError:
+-            die(f"LUMOS_STABILITY_STEP_BUDGET_S 要是秒數:{budget!r}")
+-    test_data, run_dir = preflight(st, (scen or "@default") in (st.get("native_retained") or []))
++    try:
++        b = float(budget) if budget else None
++    except ValueError:
++        b = math.nan
++    if b is not None and not (math.isfinite(b) and b > 0):   # nan 跟什麼比都是 False,不擋會等於沒有上限
++        die(f"LUMOS_STABILITY_STEP_BUDGET_S 要是大於 0 的秒數:{budget!r}")
++    deadline = None if b is None else t_start + b - NATIVE_MARGIN
++    test_data, run_dir = preflight(st, native_on(st, scen))
+     os.makedirs(run_dir, exist_ok=True)
+     prune_old_snapshots()
+     mapping = load_mapping(st.get("mapping"))
+     state = {}
+     try:
+         res = measure(st, test_data, run_dir, mapping, state)
+-        res["native_retained"] = native_phase(st, scen, res, run_dir, state, time.time() - t_start)
++        res["native_retained"] = native_phase(st, scen, test_data, res, run_dir, state, time.time() - t_start, deadline)
+     except (Terminated, KeyboardInterrupt):
+         device_ok = cleanup(state)
+         dev = ("裝置上的錄製已停、暫存已刪" if device_ok else
+                "裝置沒回應,錄製與暫存可能還在(接上後 adb shell ls /data/misc/perfetto-traces/ 看過再刪)")   # 照實寫(代碼審 r4 資安席)
+         print(f"擋下:收集被中斷,沒寫結果檔;{dev};原始日誌已刪,{run_dir} 裡已經錄到的快照與追蹤檔留著(可能含使用者資料,用完自己刪)",
+               file=sys.stderr)
+         sys.exit(2)
+     except BaseException:
+         cleanup(state)
+         raise
+diff --git a/scripts/templates/android-stability-native.sql b/scripts/templates/android-stability-native.sql
+index 5db682685be7e81217780af7e1cd7f903fd13c26..566b84f29585b01c50239ea93d672b252043164e 100644
+--- a/scripts/templates/android-stability-native.sql
++++ b/scripts/templates/android-stability-native.sql
+@@ -2,21 +2,22 @@
+ -- SPDX-License-Identifier: MIT
+ --
+ -- 記憶體與穩定性收集:原生配置排行(heapprofd 那一段錄檔),給收集腳本(android-stability-collect.sh)寫進 stability.json 的 native_retained
+ -- 每列第一欄 kind 分三種:
+ --   site  排行的一列:a 函式、b 所在 .so、c 呼叫者(三格都是 hex 過的 UTF-8)、d 有沒有符號、e 是不是系統函式庫、f 結束時還留著的位元組
+ --   rows  heap_profile_allocation 的總列數(f)
+ --   stat  stats 裡等級是 error 或 data_loss、值不是 0 的一項:a 名字(hex)、f 值
+ -- 文字欄用 hex 輸出:trace_processor 的 csv 輸出不跳脫字串裡的引號與換行,hex 之後照逗號切就切得對
+ -- 呼叫位置:從 malloc 那一框往上走,跳過配置器那幾層(libc、libc++、libstdc++ 裡的全部框架,malloc 家族的函式名,
+ --   operator new 與標準庫容器的 mangle 名前綴),第一個不是的框架;回溯失敗的 ERROR 偽框架與整條都是配置器時記成 ?
+--- 呼叫者:呼叫位置往上第一個不在 libart.so 的框架;同一呼叫位置有幾個呼叫者時取結束累計加總最大的那個
++-- 呼叫者:呼叫位置往上第一個不在 libart.so 的框架(是 ERROR 偽框架時記成 ?);同一呼叫位置有幾個呼叫者時取結束累計加總最大的那個,
++--   一樣大時有名字的排在 ? 前面、再照名字升冪
+ -- 只留結束累計至少 1 MiB 的呼叫位置,照累計降冪、函式名、.so、系統旗標升冪取前 200 個
+ -- 規則單源 Projects/原生記憶體增長提示_計劃〈排行怎麼算〉
+ with recursive
+ leaf(cs, retained) as (
+   select callsite_id, sum(size) from heap_profile_allocation where heap_name = 'libc.malloc' group by callsite_id
+ ),
+ walk(leaf, cs, step) as (
+   select cs, cs, 0 from leaf
+   union all
+   select w.leaf, c.parent_id, w.step + 1 from walk w join stack_profile_callsite c on c.id = w.cs where c.parent_id is not null
+@@ -59,29 +60,29 @@ site as (
+ caller_step(leaf, step) as (
+   select s.leaf, min(f.step) from site s join fr2 f on f.leaf = s.leaf and f.step > s.step
+   where not s.unknown and f.so != 'libart.so' group by s.leaf
+ ),
+ leafrow as (
+   select s.retained,
+     case when s.unknown then '?' else s.func end as func,
+     case when s.unknown then '?' else s.so end as so,
+     case when s.unknown then 0 else s.sys end as sys,
+     case when s.unknown then 0 else s.sym end as sym,
+-    case when s.unknown or cf.func is null then '?' else cf.func end as caller
++    case when s.unknown or cf.func is null or coalesce(cf.fname glob 'ERROR *', 0) then '?' else cf.func end as caller
+   from site s left join caller_step c on c.leaf = s.leaf
+   left join fr2 cf on cf.leaf = s.leaf and cf.step = c.step
+ ),
+ per_caller as (
+   select func, so, sys, caller, sum(retained) as r from leafrow group by func, so, sys, caller
+ ),
+ pick as (
+-  select func, so, sys, caller, row_number() over (partition by func, so, sys order by r desc, caller) as rn from per_caller
++  select func, so, sys, caller, row_number() over (partition by func, so, sys order by r desc, caller = '?', caller) as rn from per_caller
+ ),
+ agg as (
+   select func, so, sys, max(sym) as sym, sum(retained) as retained from leafrow group by func, so, sys having sum(retained) >= 1048576
+ ),
+ top as (
+   select a.func, a.so, a.sys, a.sym, a.retained, p.caller from agg a
+   join pick p on p.func = a.func and p.so = a.so and p.sys = a.sys and p.rn = 1
+   order by a.retained desc, a.func, a.so, a.sys limit 200
+ )
+ select 'site' as kind, hex(substr(func, 1, 500)) as a, hex(so) as b, hex(substr(caller, 1, 500)) as c, sym as d, sys as e, retained as f from top

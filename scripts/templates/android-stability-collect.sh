@@ -8,15 +8,18 @@
 # 選情境:LUMOS_STABILITY_SCENARIO=<stability_scenarios 的情境名>(範本腳本按功能跑時帶;不帶就用 stability 段本身)
 # 測試縮短用:LUMOS_STABILITY_SETTLE(等 App 起來、等日誌跟上,預設 2 秒)、LUMOS_STABILITY_STOP_TIMEOUT(等錄製停下,預設 30 秒)、
 #   LUMOS_STABILITY_LONG_TIMEOUT(驅動、原生掃描、快照與查詢的上限,預設 1800 秒)
+# 原生配置排行:設定的 stability.native_retained 列了這次的情境("@default" 是沒指定情境那一段)時,既有量測讀完之後另跑一段 N 輪只錄 heapprofd;
+#   LUMOS_STABILITY_STEP_BUDGET_S(e2e 範本傳這一步的上限秒數)預估不夠就不跑那一段;沒設就不限制
 # 回傳碼:結果檔寫出來回 0(哪一段沒收到寫在那個來源的 status);設定讀不了、必要工具找不到、run-id 不合法或用過、
-#   產物沒被 git 忽略、mapping 檔不在、被中斷都回 2 並印「擋下:」,不寫結果檔
+#   產物沒被 git 忽略、mapping 檔不在、LUMOS_STABILITY_STEP_BUDGET_S 不是大於 0 的秒數、打開了 native_retained 卻少了它的兩支範本、
+#   被中斷都回 2 並印「擋下:」,不寫結果檔
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null || { echo "擋下:收集腳本要 python3 3.11 以上(用了 -P)" >&2; exit 2; }
 # -P:不把目前目錄放進模組搜尋路徑(在放了外來 .py 的目錄執行也不會載入它);拿掉 PYTHONPATH,殘留的路徑也不載入;
 # 不用 -I,-I 會連 PYTHONUTF8 一起忽略(代碼審 r1 架構對齊席、r2 資安席)
 exec env -u PYTHONPATH PYTHONUTF8=1 PYTHONIOENCODING=utf-8 python3 -P - "$HERE" "$(pwd)" "${1:-}" <<'PY'
-import json, os, re, shutil, signal, subprocess, sys, tempfile, time
+import json, math, os, re, shutil, signal, subprocess, sys, tempfile, time
 here, root, run_id = sys.argv[1], sys.argv[2], sys.argv[3] or time.strftime("stability-%Y%m%d-%H%M%S")
 ADB, TP, JHD = os.environ.get("ADB", "adb"), os.environ.get("TP", "trace_processor"), os.environ.get("JAVA_HEAP_DUMP", "java_heap_dump")
 T_SHORT = 120   # 秒:一般 adb 呼叫
@@ -26,6 +29,13 @@ STOP_WAIT = float(os.environ.get("LUMOS_STABILITY_STOP_TIMEOUT", "30"))   # 送 
 REAP = 10   # 秒:整組殺掉之後等管線關掉的上限
 GROUPS = []   # 正在跑的子程序(每個都自成程序群組):被中斷時整組收掉
 ARTIFACTS = ("stability.json", "logcat.txt", "logcat.raw", "cycle.pftrace", "record.pbtxt", "heap-before.pftrace", "heap-after.pftrace")
+NATIVE_ARTIFACTS = ("heap-native.pftrace", "record-native.pbtxt")   # 原生配置排行那一段才寫:只在這次情境打開時檢查有沒有被 git 忽略
+NATIVE_MIN_SDK = 30   # heapprofd 只接已經在跑的行程(no_startup)要 Android 11 以上
+NATIVE_TEMPLATES = ("android-stability-heapprofd.pbtxt", "android-stability-native.sql")   # 打開時開跑前就查在不在:消費專案只抄了收集腳本時不白跑暖機
+NATIVE_QUERY_S = 30   # 秒:第二段查詢的預估
+NATIVE_TAIL = STOP_WAIT + T_SHORT + NATIVE_QUERY_S   # 驅動跑完之後停錄(最多 STOP_WAIT)、拉檔(adb pull 的 T_SHORT)、查詢的預估,預設 180 秒;
+#   「跑不跑」的預估與驅動的截止時間都用它,兩邊不會互相矛盾;從既有上限組出來,改了 STOP_WAIT 或 T_SHORT 會跟著變
+NATIVE_FINISH = 15   # 秒:查詢要在這一步上限之前這麼多秒結束,留給寫結果檔
 EXIT_TYPES = {3: "low_memory", 4: "crash", 5: "native_crash", 6: "anr"}
 
 
@@ -110,6 +120,7 @@ def shell(cmd, timeout=T_SHORT):
 
 
 def load_config():
+    """回 (這次用的 stability 設定, 情境名或 None):None 是沒指定情境的 stability 段本身。"""
     lumos = os.path.join(here, "..", "lumos")
     rc, out, err = run([sys.executable, lumos, "macrobench", "--repo", root, "--check-config"])
     if rc != 0:
@@ -128,7 +139,7 @@ def load_config():
             die(f"LUMOS_STABILITY_SCENARIO={name} 不在 .lumos/macrobench.json 的 stability_scenarios 裡")
         # 下一行的欄位清單跟 lumos 的 E2E_SCENARIO_KEYS 一樣(測試抽出兩邊比相等)
         st = dict(st, **{k: scen[k] for k in ("scenario", "driver", "warmup", "cycles") if k in scen})
-    return st
+    return st, name or None
 
 
 def prune_old_snapshots():
@@ -219,11 +230,11 @@ def pidof(pkg):
     return int(v[0]) if rc == 0 and v and v[0].isdigit() else None
 
 
-def driver(cmd, n, serial):
+def driver(cmd, n, serial, timeout=T_LONG):
     env = dict(os.environ, CYCLES=str(n))
     if serial:
         env["ANDROID_SERIAL"] = serial
-    rc, out, err = run(["sh", "-c", cmd.replace("{{CYCLES}}", str(n))], timeout=T_LONG, env=env)
+    rc, out, err = run(["sh", "-c", cmd.replace("{{CYCLES}}", str(n))], timeout=timeout, env=env)
     text = out + err
     if rc != 0:
         return {"rc": rc, "ok": False, "why": f"驅動回 {rc}:{text.strip()[-200:]}"}
@@ -248,19 +259,25 @@ def load_mapping(path):
     return m
 
 
-def heap_counts(trace, pkg, mapping):
-    q = open(os.path.join(here, "android-heap-classes.sql"), encoding="utf-8").read().replace("__PROCESS__", pkg)
+def tp_rows(template, trace, pkg, timeout=T_LONG):
+    """讀 .sql 範本、換掉 __PROCESS__、寫暫存檔、跑 trace_processor,輸出每行照逗號切、去掉引號。回 (回傳碼, 列的清單, 標準錯誤);
+    三支查詢共用這一套切法(原生配置排行的文字欄在 SQL 裡 hex 過,照逗號切也切得對)。"""
+    q = open(os.path.join(here, template), encoding="utf-8").read().replace("__PROCESS__", pkg)
     with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
         f.write(q)
     try:
-        rc, out, err = run([TP, trace, "-q", f.name], timeout=T_LONG)
+        rc, out, err = run([TP, trace, "-q", f.name], timeout=timeout)
     finally:
         os.unlink(f.name)
+    return rc, [[c.strip('"') for c in line.split(",")] for line in out.splitlines()], err
+
+
+def heap_counts(trace, pkg, mapping):
+    rc, rows, err = tp_rows("android-heap-classes.sql", trace, pkg)
     if rc != 0:
         return None, f"trace_processor 算不了快照:{err.strip()[-200:] or rc}"
     counts = {}
-    for line in out.splitlines()[1:]:
-        cells = [c.strip('"') for c in line.split(",")]
+    for cells in rows[1:]:
         if len(cells) >= 2 and cells[-1].isdigit():
             name = deobfuscate(",".join(cells[:-1]), mapping)
             counts[name] = counts.get(name, 0) + int(cells[-1])
@@ -287,28 +304,23 @@ def snapshot(pkg, out_dir, tag, mapping):
 
 
 def cycle_numbers(trace, pkg):
-    q = open(os.path.join(here, "android-stability-cycle.sql"), encoding="utf-8").read().replace("__PROCESS__", pkg)
-    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
-        f.write(q)
-    try:
-        rc, out, err = run([TP, trace, "-q", f.name], timeout=T_LONG)
-    finally:
-        os.unlink(f.name)
-    rows = [line for line in out.splitlines() if line.startswith('"cycle"')]
+    rc, rows, err = tp_rows("android-stability-cycle.sql", trace, pkg)
+    rows = [cells for cells in rows if cells[0] == "cycle"]
     if rc != 0 or not rows:
         return None, f"trace_processor 算不了追蹤檔:{err.strip()[-200:] or rc}"
-    v = [c.strip('"') for c in rows[0].split(",")]
+    v = rows[0]
     keys = ("peak_anon_swap_kb", "frozen_frames", "max_main_block_ms", "frames")
     return {k: (float(x) if "." in x else int(x)) for k, x in zip(keys, v[1:])}, None
 
 
-def start_record(pkg, run_dir, max_s, state):
-    cfg = open(os.path.join(here, "android-stability-record.pbtxt"), encoding="utf-8").read()
+def start_record(pkg, run_dir, max_s, state, template="android-stability-record.pbtxt", prefix="lumos-stability", local_cfg="record.pbtxt"):
+    """開錄:量測那段用預設值;原生配置排行那段換 heapprofd 的設定範本、裝置上的檔名前綴與本機設定檔名(前綴不同,不會跟某個 run-id 撞名)。"""
+    cfg = open(os.path.join(here, template), encoding="utf-8").read()
     cfg = cfg.replace("__PROCESS__", pkg).replace("__DURATION_MS__", str(int(max_s * 1000)))
-    local = os.path.join(run_dir, "record.pbtxt")
+    local = os.path.join(run_dir, local_cfg)
     open(local, "w", encoding="utf-8").write(cfg)
     # 設定放 /data/misc/perfetto-configs/:放 /data/local/tmp 時 perfetto 讀不到(2026-10-24 SM-X710 實機 errno 13)
-    remote_cfg, remote_trace = f"/data/misc/perfetto-configs/lumos-stability-{run_id}.pbtxt", f"/data/misc/perfetto-traces/lumos-stability-{run_id}.pftrace"
+    remote_cfg, remote_trace = f"/data/misc/perfetto-configs/{prefix}-{run_id}.pbtxt", f"/data/misc/perfetto-traces/{prefix}-{run_id}.pftrace"
     state["rec"] = (None, remote_cfg, remote_trace)   # 推設定之前先登記:錄製開起來、pid 還沒回來時被中斷,cleanup 照樣收得到(代碼審 r3 正確性席、資源席)
     adb("push", local, remote_cfg)
     rc, out, err = shell(f"perfetto --background --txt -c {remote_cfg} -o {remote_trace}")
@@ -332,7 +344,7 @@ def perfetto_alive(pid, tries=3):
     return None
 
 
-def stop_record(rec, run_dir):
+def stop_record(rec, run_dir, local_trace="cycle.pftrace"):
     pid, remote_cfg, remote_trace = rec
     try:
         alive = perfetto_alive(pid)   # None(連問三次都不知道)照樣送 TERM、等它停,但追蹤檔不採用(見下)
@@ -347,7 +359,7 @@ def stop_record(rec, run_dir):
             return None, "問不到錄製在量測結束時還在不在(ps 連問三次都失敗),追蹤檔可能只錄到一半,不採用"
         if alive is False:
             return None, "錄製在 N 輪跑完前就到了上限(stability.max_record_s)"
-        local = os.path.join(run_dir, "cycle.pftrace")
+        local = os.path.join(run_dir, local_trace)
         rc = adb("pull", remote_trace, local)[0]
         return (local, None) if rc == 0 and os.path.isfile(local) else (None, "拉不回追蹤檔")
     finally:
@@ -377,8 +389,8 @@ def src(value, why, status_if_none="failed"):
     return {"status": "ok", **value} if why is None else {"status": status_if_none, "reason": why}
 
 
-def preflight(st):
-    """動裝置之前的檢查:run-id、工具、產物目錄有沒有被 git 忽略。回 (是否錄快照, run 目錄)。"""
+def preflight(st, native=False):
+    """動裝置之前的檢查:run-id、工具、產物目錄有沒有被 git 忽略(原生配置排行那段的兩支範本與兩個檔名只在 native 時問)。回 (是否錄快照, run 目錄)。"""
     if not re.fullmatch(r"[A-Za-z0-9._-]+", run_id) or set(run_id) <= {"."}:
         die(f"run-id 只收英數字、點、底線與連字號,也不能只有點(它會用在裝置上的路徑):{run_id!r}")
     for tool in (ADB, TP):
@@ -395,7 +407,10 @@ def preflight(st):
         die(f"git 判不了這裡是不是 repo:{g_err.strip()[-200:]};先修好 git 再跑(產物不准進版控,判不了就不跑)")
     in_git = g_rc == 0
     # 快照、日誌與結果檔不准進版控(代碼審 r1 資安席);每種會寫出的檔名都問一次,.gitignore 只寫 *.json 時快照照樣會進版控(r2 資安席)
-    loose = [n for n in ARTIFACTS if in_git and run(["git", "-C", root, "check-ignore", "-q", os.path.join(run_dir, n)])[0] != 0]
+    gone = [n for n in NATIVE_TEMPLATES if native and not os.path.isfile(os.path.join(here, n))]
+    if gone:
+        die(f"設定替這個情境打開了 native_retained,但收集腳本旁邊沒有 {'、'.join(gone)};從工具鏈補上這兩支範本(lumos update)再跑")
+    loose = [n for n in ARTIFACTS + (NATIVE_ARTIFACTS if native else ()) if in_git and run(["git", "-C", root, "check-ignore", "-q", os.path.join(run_dir, n)])[0] != 0]
     if loose:
         die(f".lumos/artifacts/ 底下這些檔沒被 git 忽略:{'、'.join(loose)};先在 .gitignore 加一行 .lumos/artifacts/ 再跑(快照與日誌可能含使用者資料)")
     return test_data, run_dir
@@ -467,15 +482,22 @@ def heap_result(test_data, before, after, why, mapping):
             "classes_seen": {"before": len(before), "after": len(after)}, "class_names": "mapping" if mapping else "raw"}
 
 
+def fresh_launch(pkg):
+    """從乾淨的行程開始:停 App、讀結束紀錄、啟動、等它起來。回 (結束紀錄 status, 紀錄清單或原因, pid)。
+    不停的話上一次留下的物件會算進這一次(2026-10-24 實驗室連跑兩次時抓到);停完才讀結束紀錄,停 App 自己產生的那筆不會被當成測試期間的。"""
+    shell(f"am force-stop {pkg}")
+    ex_status, ex = read_exits(pkg)
+    shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
+    time.sleep(SETTLE)
+    return ex_status, ex, pidof(pkg)
+
+
 def measure(st, test_data, run_dir, mapping, state):
     """裝置上的整段流程;state 收著被中斷時要收掉的錄製與日誌串流。"""
     pkg, n, w, serial = st["package"], st["cycles"], st["warmup"], st.get("adb_serial")
     res = device_info(st)
-    shell(f"am force-stop {pkg}")   # 從乾淨的行程開始:不停的話上一次留下的物件會算進這一次(2026-10-24 實驗室連跑兩次時抓到)
-    ex_status, ex_before = read_exits(pkg)   # 停完才讀,停 App 自己產生的那筆結束紀錄不會被當成測試期間的
-    shell(f"monkey -p {pkg} -c android.intent.category.LAUNCHER 1")
-    time.sleep(SETTLE)
-    pids = [pidof(pkg)]
+    ex_status, ex_before, pid0 = fresh_launch(pkg)
+    pids = [pid0]
     d_warm = driver(st["driver"], w, serial)
     pids.append(pidof(pkg))
     u_before, u_why = unreachable(pids[-1]) if pids[-1] else (None, "App 沒在跑")   # 先掃再錄快照:錄快照時的配置不算進掃描
@@ -513,6 +535,118 @@ def measure(st, test_data, run_dir, mapping, state):
     return res
 
 
+def native_sites(rows):
+    """原生配置排行查詢的 site 列 → sites 清單(文字欄 hex 解回 UTF-8);照結束累計降冪、函式名、.so、系統旗標升冪,最多 200 個。"""
+    def txt(h):
+        return bytes.fromhex(h).decode("utf-8", "replace")
+    sites = [{"func": txt(c[1]), "so": txt(c[2]), "caller": txt(c[3]), "symbol": c[4] == "1", "system": c[5] == "1", "retained": int(c[6])}
+             for c in rows if c[0] == "site" and len(c) == 7]
+    sites.sort(key=lambda x: (-x["retained"], x["func"], x["so"], x["system"]))
+    return sites[:200]
+
+
+def native_query(trace, pkg, timeout=T_LONG):
+    """跑原生配置排行的查詢。回 (sites, None) / (None, 原因);跑完之後的檢查順序寫死:跑不起來或逾時(原因帶 run 的說法)
+    → stats 有 error 或 data_loss → 一列記帳都沒有。"""
+    rc, rows, err = tp_rows("android-stability-native.sql", trace, pkg, timeout)
+    if rc != 0:
+        return None, f"trace_processor 算不了原生配置記帳:{err.strip()[-200:] or rc}"
+    try:
+        stats = [bytes.fromhex(c[1]).decode("utf-8", "replace") for c in rows if c[0] == "stat" and len(c) == 7]
+        n = next((int(c[6]) for c in rows if c[0] == "rows" and len(c) == 7), None)
+        sites = native_sites(rows)
+    except ValueError:
+        return None, "原生配置排行查詢的輸出看不懂(hex 或數字格式不對)"
+    if stats:
+        return None, "錄製有錯誤或資料遺失:" + "、".join(stats)[:300]
+    if not n:
+        return None, "沒錄到原生配置記帳(App 不是 profileable、或主行程名不是套件名)"
+    return sites, None
+
+
+def native_on(st, scen):
+    """這次的情境有沒有在 stability.native_retained 清單裡("@default" 是沒指定情境的那一段)。"""
+    return (scen or "@default") in (st.get("native_retained") or [])
+
+
+def native_skip(st, scen, test_data, res, elapsed, remaining=None):
+    """原生配置排行那段要不要跑:回 (enabled, 狀態, 原因) 或 None(跑)。順序寫死,第一個不成立的就是結果。
+    test_data 是 preflight 讀好的那一個值(兩支範本各只准一處讀 stability.test_data);remaining 是離這一步上限還剩幾秒(沒設上限是 None)。"""
+    if not native_on(st, scen):
+        return False, "unsupported", "設定沒替這個情境打開 native_retained"
+    if not test_data:
+        return True, "unsupported", "沒宣告測試資料(stability.test_data)"
+    if res.get("android_sdk") is None:
+        return True, "unsupported", "讀不到 Android 版本"
+    if res["android_sdk"] < NATIVE_MIN_SDK:
+        return True, "unsupported", "Android 版本不支援(只接已在跑的行程要 Android 11 以上)"
+    if res["driver"]["status"] != "ok" or res["pids"]["status"] != "ok":
+        return True, "failed", "第一段沒跑成,不跑第二段"
+    if remaining is not None and 2 * elapsed + NATIVE_TAIL > remaining:   # 第二段預估 = 第一段的兩倍(驅動)加停錄、拉檔、查詢
+        return True, "failed", f"時間不夠,不跑第二段(第一段 {elapsed:.1f} 秒,這一步只剩 {max(remaining, 0):.1f} 秒,第二段預估要 {2 * elapsed + NATIVE_TAIL:.1f} 秒)"
+    return None
+
+
+def native_run(st, run_dir, state, end=None):
+    """原生配置排行那段:停 App → 讀結束紀錄 → 啟動 → 讀 pid(fresh_launch,跟第一段同一支)→ 暖機 W 輪 → 開 heapprofd → 驅動量測 N 輪
+    → 停錄 → 讀 pid 與結束紀錄 → 查詢。pid、驅動結果與結束紀錄只寫進這一段,不碰既有量測的欄位。回這一段的內容(enabled 與 status 都在)。
+    end 是這一步上限的時刻(沒設是 None):驅動要在它之前 NATIVE_TAIL 秒結束(留給停錄、拉檔、查詢),查詢要在它之前 NATIVE_FINISH 秒結束;逾時寫 failed,不讓整步被砍。"""
+    pkg, n, w, serial = st["package"], st["cycles"], st["warmup"], st.get("adb_serial")
+    def left(reserve):
+        return T_LONG if end is None else max(1.0, min(T_LONG, end - reserve - time.time()))
+    sec = {"enabled": True}
+    ex_status, ex_before, pid0 = fresh_launch(pkg)
+    pids = [pid0]
+    d_warm, d_cyc, trace, t_why = driver(st["driver"], w, serial, left(NATIVE_TAIL)), None, None, None
+    if d_warm["ok"]:   # 暖機就失敗:不開錄(這一段已經是 failed)
+        state["rec"] = start_record(pkg, run_dir, st.get("max_record_s", 600), state,
+                                    "android-stability-heapprofd.pbtxt", "lumos-native", "record-native.pbtxt")
+        rec = state["rec"]
+        if rec[0]:
+            d_cyc = driver(st["driver"], n, serial, left(NATIVE_TAIL))
+            trace, t_why = stop_record(rec, run_dir, "heap-native.pftrace")   # 停錄時 heapprofd 補最後一次傾印,排行只用它
+        else:
+            t_why = rec[1]
+        del state["rec"]   # 停完(或沒開成、start_record 已收)才拿掉:停錄那幾秒被中斷時 cleanup 還找得到
+    pids.append(pidof(pkg))
+    ex_status2, ex_after = read_exits(pkg)
+    new = exit_diff(ex_before, ex_after) if ex_status == "ok" and ex_status2 == "ok" else None
+    sec.update(pids=pids, driver={"warmup": d_warm, "cycles": d_cyc}, exits_new=new)
+    bad = next((d for d in (d_warm, d_cyc) if d and not d["ok"]), None)
+    if bad:
+        why = f"驅動失敗:{bad['why']}"
+    elif new is None:
+        why = "讀不到第二段的結束紀錄"
+    elif new:
+        why = f"第二段期間 App 結束({'、'.join(e['type'] for e in new)})"
+    elif not pids[0] or pids[0] != pids[-1]:
+        why = "行程換了(第二段前後 pid 不同或讀不到)"
+    else:
+        why = t_why
+    if why is None:
+        sites, why = native_query(trace, pkg, left(NATIVE_FINISH))
+    return dict(sec, **src({"main_process_only": True, "sites": sites} if why is None else {}, why))
+
+
+def native_phase(st, scen, test_data, res, run_dir, state, elapsed, end=None):
+    """原生配置排行那段的外殼:判要不要跑、跑的時候出意外先收掉這一段的錄製再寫成 failed(收不掉就在原因裡照實寫);
+    收到中斷照樣往上丟,錄製留在 state 交給 main 的 cleanup 收(跟中斷在第一段時同一條路)。"""
+    skip = native_skip(st, scen, test_data, res, elapsed, None if end is None else end - time.time())
+    if skip:
+        enabled, status, why = skip
+        return {"enabled": enabled, **src({}, why, status)}
+    try:
+        return native_run(st, run_dir, state, end)
+    except Terminated:
+        raise
+    except Exception as e:
+        rec = state.get("rec")
+        gone = abort_record(rec) if rec else True   # 收完才從 state 拿掉:收的那幾秒被中斷時 cleanup 還收得到、不會誤報已收乾淨
+        state.pop("rec", None)
+        why = f"第二段出了意外({type(e).__name__}:{str(e)[:200]})"
+        return {"enabled": True, **src({}, why if gone else why + ";裝置上 lumos-native 的錄製與暫存可能還留著")}
+
+
 def cleanup(state):
     """被 SIGTERM、SIGHUP、Ctrl-C 或例外中斷時:收掉驅動整組子程序、日誌串流,停掉裝置上的錄製並刪暫存。
     先擋掉後面再來的中斷、先刪原始日誌(本機、一下就好),再做可能卡 120 秒的裝置呼叫:連按兩次 Ctrl-C 也不留日誌(代碼審 r3 正確性席、資源席)。"""
@@ -532,20 +666,31 @@ def main():
     for s in INTERRUPTS:   # SIGHUP:關掉終端機分頁、ssh 斷線;子程序各自成組收不到,要靠這裡收(代碼審 r3 資源席、資安席)
         signal.signal(s, on_term)
     signal.signal(signal.SIGINT, on_int)
-    st = load_config()
+    t_start = time.time()
+    st, scen = load_config()
     if st.get("adb_serial"):
         os.environ["ANDROID_SERIAL"] = st["adb_serial"]
-    test_data, run_dir = preflight(st)
+    budget = os.environ.get("LUMOS_STABILITY_STEP_BUDGET_S")
+    try:
+        b = float(budget) if budget else None
+    except ValueError:
+        b = math.nan
+    if b is not None and not (math.isfinite(b) and b > 0):   # nan 跟什麼比都是 False,不擋會等於沒有上限
+        die(f"LUMOS_STABILITY_STEP_BUDGET_S 要是大於 0 的秒數:{budget!r}")
+    end = None if b is None else t_start + b   # 這一步上限的時刻:只在這裡讀一次,第二段的預估與截止時間都從它算
+    test_data, run_dir = preflight(st, native_on(st, scen))
     os.makedirs(run_dir, exist_ok=True)
     prune_old_snapshots()
     mapping = load_mapping(st.get("mapping"))
     state = {}
     try:
         res = measure(st, test_data, run_dir, mapping, state)
+        res["native_retained"] = native_phase(st, scen, test_data, res, run_dir, state, time.time() - t_start, end)
     except (Terminated, KeyboardInterrupt):
         device_ok = cleanup(state)
         dev = ("裝置上的錄製已停、暫存已刪" if device_ok else
-               "裝置沒回應,錄製與暫存可能還在(接上後 adb shell ls /data/misc/perfetto-traces/ 看過再刪)")   # 照實寫(代碼審 r4 資安席)
+               "裝置沒回應,錄製與暫存可能還在(接上後 adb shell ls /data/misc/perfetto-traces/ /data/misc/perfetto-configs/,"
+               "只刪 lumos-stability- 與 lumos-native- 開頭的)")   # 照實寫(代碼審 r4 資安席)
         print(f"擋下:收集被中斷,沒寫結果檔;{dev};原始日誌已刪,{run_dir} 裡已經錄到的快照與追蹤檔留著(可能含使用者資料,用完自己刪)",
               file=sys.stderr)
         sys.exit(2)

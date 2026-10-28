@@ -1,0 +1,321 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index fe356bfbdaf5b1ad08bda8370ba15330768ba65d..ba96b54124009109bfee6c6b8256e79f6a779041 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -18539,34 +18539,46 @@ def t_android_native_query_allocator():
+     沒有符號寫 .so+0x相對位址;整條都是配置器、或碰到 ERROR 偽框架記成 ?;前綴用 GLOB 比(LIKE 的底線是萬用字元)。"""
+     cxx = ("_Znwm", "/data/app/~~x/com.lab-1/lib/arm64/libc++_shared.so", 8)
+     got = _ms_native([
+         (2 * _MS_MIB, [*_ms_jni("Java_viaNew"), cxx, _MS_MALLOC]),
+         (3 * _MS_MIB, [*_ms_jni("Java_viaVector"), ("_ZNSt6vectorIiSaIiEE7reserveEm", _MS_SDK, 200), ("_Znam", _MS_SDK, 210), _MS_MALLOC]),
+         (4 * _MS_MIB, [*_ms_jni("Java_viaWrap"), ("__wrap_malloc", _MS_SDK, 220), _MS_MALLOC]),
+         (5 * _MS_MIB, [*_ms_jni("Java_likeTrap"), ("xZnwFoo", _MS_SDK, 230), _MS_MALLOC]),
+         (6 * _MS_MIB, [*_ms_jni("Java_noSym"), (None, _MS_SDK, 0x1234), _MS_MALLOC]),
+         (7 * _MS_MIB, [*_ms_jni("Java_emptyName"), ("", _MS_SDK, None), _MS_MALLOC]),
+         (8 * _MS_MIB, [("calloc", _MS_LIBC, 1), ("_ZnwmRKSt9nothrow_t", "/system/lib64/libc++.so", 2), _MS_MALLOC]),
+-        (9 * _MS_MIB, [*_ms_jni("Java_aboveError"), ("ERROR 2", None, None), _MS_MALLOC])])
++        (9 * _MS_MIB, [*_ms_jni("Java_aboveError"), ("ERROR 2", None, None), _MS_MALLOC]),
++        (10 * _MS_MIB, [*_ms_jni("Java_viaScudo"), ("scudo::Allocator::allocate", _MS_LIBC, 3), _MS_MALLOC]),
++        (11 * _MS_MIB, [*_ms_jni("Java_viaStdcxx"), ("odd_internal", "/data/app/~~x/com.lab-1/lib/arm64/libstdc++.so", 4), _MS_MALLOC]),
++        (12 * _MS_MIB, [*_ms_jni("Java_viaConstStd"), ("_ZNKSt6vectorIiE4sizeEv", _MS_SDK, 5), _MS_MALLOC])]
++        + [((20 + i) * _MS_MIB, [*_ms_jni(f"Java_name{i}"), (name, _MS_SDK, 300 + i), _MS_MALLOC])
++           for i, name in enumerate(("malloc", "calloc", "realloc", "posix_memalign", "memalign", "aligned_alloc",
++                                     "__libc_malloc", "je_malloc", "tc_malloc", "__wrap_malloc"))])
+     check("前置:範本在", got is not None)
+     if got is None:
+         return
+     by = {s[5] // _MS_MIB: s for s in got["sites"]}
+     check("operator new 在 libc++_shared.so:整支跳過,算到呼叫它的 SDK 函式", by.get(2, ())[:2] == ("Java_viaNew", "libfakesdk.so"), str(got))
+     check("靜態連結進 SDK 的標準庫容器(_ZNSt)與 _Znam 跳過", by.get(3, ())[:1] == ("Java_viaVector",), str(got))
+     check("SDK 自己的 __wrap_malloc 照名單跳過", by.get(4, ())[:1] == ("Java_viaWrap",), str(got))
+     check("xZnwFoo 不是 _Znw 開頭:是呼叫位置(LIKE 的 _ 會把它當成配置器)", by.get(5, ())[:1] == ("xZnwFoo",), str(got))
+     check("name 是 NULL:寫成 .so 名稱+0x 相對位址、標沒有符號", by.get(6, ())[:2] == ("libfakesdk.so+0x1234", "libfakesdk.so") and by[6][3] == 0, str(got))
+     check("name 是空字串、rel_pc 也是 NULL:寫成 +0x?、標沒有符號", by.get(7, ())[:1] == ("libfakesdk.so+0x?",) and by[7][3] == 0, str(got))
+     unknown = [x for x in got["sites"] if x[0] == "?"]
+     check("整條都是配置器(8 MiB)與配置器上面是 ERROR 偽框架(9 MiB)都記成 ?,歸併成同一列", unknown == [("?", "?", "?", 0, 0, 17 * _MS_MIB)], str(got))
+     check("有符號的呼叫位置標有符號", by.get(2, (0,) * 6)[3] == 1, str(got))
++    check("libc.so 裡名字不在名單上的框架(scudo 內部)照樣整支跳過", by.get(10, ())[:1] == ("Java_viaScudo",), str(got))
++    check("libstdc++.so 裡名字不在名單上的框架照樣整支跳過", by.get(11, ())[:1] == ("Java_viaStdcxx",), str(got))
++    check("_ZNKSt 開頭的標準庫容器跳過", by.get(12, ())[:1] == ("Java_viaConstStd",), str(got))
++    for i, name in enumerate(("malloc", "calloc", "realloc", "posix_memalign", "memalign", "aligned_alloc",
++                              "__libc_malloc", "je_malloc", "tc_malloc", "__wrap_malloc")):
++        check(f"名單上的 {name} 放在 SDK 自己的 .so 裡也跳過", by.get(20 + i, ())[:1] == (f"Java_name{i}",), str(by.get(20 + i)))
+ 
+ 
+ def t_android_native_query_apk_soname():
+     """S25:.so 沒解壓、直接從 APK 載入時 mapping 名是 …/base.apk!libfoo.so:.so 名稱取 ! 之後,配置器比對照樣命中。"""
+     apk = "/data/app/~~x/com.lab-1/base.apk"
+     got = _ms_native([(2 * _MS_MIB, [("com.lab.A.run", _MS_APP, 1), _MS_TRAMP, ("Java_fromApk", apk + "!libfakesdk.so", 5),
+                                      ("_Znwm", apk + "!libc++_shared.so", 6), _MS_MALLOC])])
+     check("前置:範本在", got is not None)
+     if got is None:
+         return
+@@ -18706,41 +18718,51 @@ def _ms_native_collect(td, stability=None, setup=None, env=None, scenarios=None,
+ 
+ 
+ def t_android_native_collect_ok():
+     """S22、S27、S4 的收集腳本那一半:打開時另跑一段只錄 heapprofd,ok 的段帶 enabled、main_process_only、sites(hex 解回、含引號逗號換行照樣切對);
+     錄檔是 run 目錄第一層的 heap-native.pftrace;既有量測的 pids、exits、unreachable、native_heap_kb 跟沒打開時一樣。"""
+     import tempfile
+     odd = 'a"b,c\nd'
+     def setup(fake):
+         _ms_native_out(fake, sites=[(odd, "lib,x.so", 'call"er', 0, 1, 3 * _MS_MIB), ("Java_b", "libfakesdk.so", "?", 1, 0, 2 * _MS_MIB)])
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+-        r, d, fake, root = _ms_native_collect(td, setup=setup)
++        r, d, fake, root = _ms_native_collect(td, setup=setup, stability={"max_record_s": 7})
+         nr = d.get("native_retained", {})
+         check("收集腳本回 0", r.returncode == 0, r.stdout + r.stderr)
+         check("段是 ok、enabled true、只量主行程", nr.get("status") == "ok" and nr.get("enabled") is True and nr.get("main_process_only") is True, str(nr)[:400])
+         check("文字欄含引號、逗號、換行照樣切對(hex 解回)",
+               nr.get("sites", [{}])[0] == {"func": odd, "so": "lib,x.so", "caller": 'call"er', "symbol": False, "system": True, "retained": 3 * _MS_MIB}, str(nr)[:400])
+         check("照結束累計降冪", [x["retained"] for x in nr.get("sites", [])] == [3 * _MS_MIB, 2 * _MS_MIB], str(nr)[:400])
+         run_dir = root / ".lumos" / "artifacts" / "android" / "run1"
+         check("錄檔在 run 目錄第一層、檔名符合 heap-*.pftrace(7 天刪的樣式)", (run_dir / "heap-native.pftrace").is_file(), str(list(run_dir.iterdir())))
+         tpl = (fake / "tp_native.log").read_text() if (fake / "tp_native.log").exists() else ""
+         check("查詢跑在那份錄檔上", str(run_dir / "heap-native.pftrace") in tpl, tpl)
+         cfg = (run_dir / "record-native.pbtxt").read_text(encoding="utf-8") if (run_dir / "record-native.pbtxt").is_file() else ""
+         cfg = "\n".join(x for x in cfg.splitlines() if not x.startswith("#"))   # 註解裡寫了「不設 continuous_dump_config」
+         check("錄製設定是 heapprofd、只接已在跑的主行程、沒有連續傾印", 'name: "android.heapprofd"' in cfg and 'process_cmdline: "com.lab"' in cfg
+               and "no_startup: true" in cfg and "continuous_dump" not in cfg, cfg[-400:])
++        check("只有一個 process_cmdline、取樣間隔 4096、錄製上限照 stability.max_record_s(7 秒 → 7000 毫秒)", cfg.count("process_cmdline:") == 1
++              and "sampling_interval_bytes: 4096" in cfg and "duration_ms: 7000" in cfg, cfg[-400:])
+         log = (fake / "adb.log").read_text()
+         check("裝置上的檔名用 lumos-native- 前綴,停錄後刪掉", "/data/misc/perfetto-traces/lumos-native-run1.pftrace" in log
+               and "rm -f /data/misc/perfetto-configs/lumos-native-run1.pbtxt /data/misc/perfetto-traces/lumos-native-run1.pftrace" in log, log[-600:])
+         drv = (fake / "driver.log").read_text().split()
+         check("第二段另跑暖機 2 輪、量測 5 輪(共四次驅動)", drv == ["2", "5", "2", "5"], str(drv))
+         check("正常跑完:兩段各停一次錄製,停完的那份不會再送一次 TERM", log.count("kill -TERM 4321") == 2, str(log.count("kill -TERM 4321")))
++        cmds = log.splitlines()
++        at = [i for i, x in enumerate(cmds) if "am force-stop com.lab" in x]
++        ex = [i for i, x in enumerate(cmds) if "dumpsys activity exit-info" in x]
++        mk = [i for i, x in enumerate(cmds) if x.startswith("shell monkey -p com.lab")]
++        nat = next((i for i, x in enumerate(cmds) if "lumos-native-run1" in x), None)
++        check("第二段從乾淨的行程開始:兩段各停一次 App、各啟動一次", len(at) == 2 and len(mk) == 2, str((at, mk)))
++        check("第二段先停 App、停完才讀結束紀錄、再啟動,都在開 heapprofd 之前", nat is not None and len(at) == 2 and len(mk) == 2
++              and at[1] < min(i for i in ex if i > at[1]) < mk[1] < nat, str((at, ex, mk, nat)))
+         on = d
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         _, off, _, _ = _ms_native_collect(td, stability={"native_retained": None})
+     for k in ("pids", "exits", "unreachable", "native_heap_kb", "driver", "cycle_trace", "heap"):
+         check(f"既有的 {k} 跟沒打開時一樣", on.get(k) == off.get(k), f"{on.get(k)} vs {off.get(k)}")
+ 
+ 
+ def t_android_native_collect_off():
+     """S6:沒打開(沒寫、或這次的情境不在清單)→ enabled false、unsupported;打開了但沒宣告測試資料、讀不到版本、版本低於 30 → enabled true、unsupported;
+     都不跑第二段、不錄檔,原因照順序取第一個不成立的。"""
+@@ -18800,22 +18822,23 @@ def t_android_native_collect_failures():
+     cases = [
+         ("第一段驅動失敗", {"driver_rc": 1}, None, None, "第一段沒跑成"),
+         ("第一段讀不到 pid", {"pids": ("100", "", "100")}, None, None, "第一段沒跑成"),
+         ("第二段讀不到結束紀錄", {}, files(**{"exitinfo.2": "garbage\n"}), None, "讀不到第二段的結束紀錄"),
+         ("第二段讀不到 pid", {"pids": ("100", "100", "100", "", "100")}, None, None, "行程換了"),
+         ("第二段前後兩次都讀不到 pid", {"pids": ("100", "100", "100", "", "")}, None, None, "行程換了"),
+         ("第二段暖機失敗", {}, files(driver_fail_at="3"), None, "驅動失敗"),
+         ("第二段量測失敗", {}, files(driver_fail_at="4"), None, "驅動失敗"),
+         ("第二段期間 App 崩潰", {}, files(**{"exitinfo.2": _MS_EXIT_HEAD, "exitinfo.3": _MS_EXIT_HEAD + pkg + crash}), None, "第二段期間 App 結束(crash)"),
+         ("第二段前後 pid 不同", {"pids": ("100", "100", "100", "100", "200")}, None, None, "行程換了"),
+-        ("查詢跑不起來", {}, files(native_fails="1"), None, "算不了原生配置記帳"),
+-        ("查詢逾時(同時有 stat 也先報逾時)", {}, files(native_hang="1"), {"LUMOS_STABILITY_LONG_TIMEOUT": "3"}, "查詢逾時"),
++        ("查詢跑不起來(原因帶 trace_processor 的錯誤尾巴)", {}, files(native_fails="1"), None, "trace is corrupt"),
++        ("查詢輸出的 hex 壞掉", {}, files(**{"native.out": '"site","ZZ","00","00",1,0,5\n"rows","","","",0,0,3\n'}), None, "看不懂"),
++        ("查詢逾時(同時有 stat 也先報逾時)", {}, files(native_hang="1"), {"LUMOS_STABILITY_LONG_TIMEOUT": "3"}, "逾時("),
+         ("stats 有 data_loss(同時一列都沒有也先報 stat)", {},
+          lambda fake: _ms_native_out(fake, sites=(), rows=0, stats=[("heapprofd_buffer_overran", 3)]), None, "heapprofd_buffer_overran"),
+         ("一列記帳都沒有", {}, lambda fake: _ms_native_out(fake, sites=(), rows=0), None, "沒錄到原生配置記帳"),
+     ]
+     for desc, kw, setup, env, want in cases:
+         with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+             if desc.startswith("查詢逾時"):
+                 base = setup
+                 def setup(fake, base=base):
+                     base(fake)
+@@ -18836,30 +18859,27 @@ def t_android_native_collect_failures():
+ def t_android_native_collect_budget():
+     """S23:有設 LUMOS_STABILITY_STEP_BUDGET_S、開跑到現在的秒數加第二段預估(第一段的兩倍加 120 秒)超過它 → 不跑第二段、寫 failed「時間不夠」;
+     夠就照跑;值不是數字 → 開跑前擋下回 2。"""
+     import tempfile
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         r, d, fake, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": "121"})
+         nr = d.get("native_retained", {})
+         check("上限 121 秒(預估至少 120 秒加第一段的三倍)→ failed 時間不夠、不跑第二段",
+               nr.get("status") == "failed" and "時間不夠" in str(nr.get("reason")) and "lumos-native" not in (fake / "adb.log").read_text(), str(nr))
+         check("第一段照樣寫出、判定欄位都在", d.get("driver", {}).get("status") == "ok" and "exits" in d, str(d)[:300])
+-    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:   # 預估過了、但剩下的時間不夠驅動跑完:驅動在「上限扣 180 秒」時被砍,寫 failed、照樣寫出結果檔
+-        import time
+-        t0 = time.time()
+-        r, d, fake, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": "200"},
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:   # 預估過了、但剩下的時間不夠驅動跑完:驅動在「上限扣 120 秒」時被砍,寫 failed、照樣寫出結果檔
++        r, d, fake, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": "140"},
+                                            setup=lambda fake: (fake / "driver_sleep_at").write_text("3", encoding="utf-8"))
+         nr = d.get("native_retained", {})
+-        check("上限 200 秒、第二段暖機要睡 30 秒 → 在剩下的時間內被砍、failed 驅動失敗(逾時)、照樣回 0",
++        check("上限 140 秒、第二段暖機要睡 30 秒 → 驅動在上限扣 120 秒時被砍、failed 驅動失敗(逾時)、照樣回 0(main 有把上限交給第二段)",
+               r.returncode == 0 and nr.get("status") == "failed" and "驅動失敗" in str(nr.get("reason")) and "逾時" in str(nr.get("reason")),
+               r.stderr[-300:] + str(nr))
+-        check("沒有等滿 30 秒", time.time() - t0 < 30, f"{time.time() - t0:.1f}s")
+         _ms_orphans(fake, "driver|sleeper")
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         _, d, _, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": "100000"})
+         check("上限夠 → 照跑、ok", d.get("native_retained", {}).get("status") == "ok", str(d.get("native_retained")))
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         r, d, fake, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": "一小時"})
+         check("上限不是數字 → 回 2 擋下、沒碰裝置", r.returncode == 2 and "LUMOS_STABILITY_STEP_BUDGET_S" in r.stderr
+               and not (fake / "adb.log").exists(), r.stderr[-300:])
+ 
+ 
+@@ -18906,21 +18926,21 @@ def _ms_collector_ns(td):
+ def t_android_native_phase_exception():
+     """S8、S28 的函式那一半:第二段丟出意外例外 → 先收掉第二段的錄製(abort_record 拿到它、state 裡的錄製槽清掉)再寫 failed 附例外類型與訊息;
+     收不掉就在原因裡照實寫裝置上可能還留著;丟 Terminated 照樣往上丟,錄製留在 state 給 main 的 cleanup 收(跟中斷在第一段時同一條路)。"""
+     import tempfile
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         ns = _ms_collector_ns(td)
+         calls = []
+         ns["abort_record"] = lambda rec: calls.append(rec) or True
+         rec = ("4321", "/data/misc/perfetto-configs/lumos-native-run1.pbtxt", "/data/misc/perfetto-traces/lumos-native-run1.pftrace")
+         def boom(exc):
+-            def f(st, run_dir, state, deadline=None):
++            def f(st, run_dir, state, end=None):
+                 state["rec"] = rec
+                 raise exc
+             return f
+         st = {"native_retained": ["@default"]}
+         res = {"android_sdk": 36, "driver": {"status": "ok"}, "pids": {"status": "ok"}}
+         ns["native_run"] = boom(RuntimeError("x"))
+         state = {}
+         out = ns["native_phase"](st, None, True, res, td, state, 1.0)
+         check("意外例外 → failed、enabled true、原因帶例外類型與訊息", out == {"enabled": True, "status": "failed", "reason": "第二段出了意外(RuntimeError:x)"}, str(out))
+         check("寫 failed 之前收掉了第二段的錄製", calls == [rec] and "rec" not in state, str((calls, state)))
+@@ -18933,68 +18953,81 @@ def t_android_native_phase_exception():
+         ns["native_run"] = boom(ns["Terminated"]())
+         state, raised = {}, False
+         try:
+             ns["native_phase"](st, None, True, res, td, state, 1.0)
+         except ns["Terminated"]:
+             raised = True
+         check("Terminated 不被吞掉、照樣往上丟", raised)
+         check("往上丟時錄製還在 state,交給 main 的 cleanup 收(這裡不先收)", state.get("rec") == rec and calls == [], str((calls, state)))
+         ns["stop_listening"] = lambda: None
+         check("cleanup 收得到那份錄製", ns["cleanup"](state) is True and calls == [rec], str(calls))
++        def abort_interrupted(r):
++            raise ns["Terminated"]()
++        ns["abort_record"] = abort_interrupted
++        ns["native_run"] = boom(RuntimeError("x"))
++        state, raised = {}, False
++        try:
++            ns["native_phase"](st, None, True, res, td, state, 1.0)
++        except ns["Terminated"]:
++            raised = True
++        check("意外例外後收錄製的那幾秒被中斷:錄製還在 state,cleanup 還收得到、不會誤報已收乾淨", raised and state.get("rec") == rec, str(state))
+ 
+ 
+ def t_android_native_budget_rule():
+-    """S23 的函式那一半:預估 = 第一段秒數的兩倍加 120 秒,開跑到現在加預估「超過」上限才不跑(剛好等於照跑);
+-    沒設上限不限制;第二段每次驅動與查詢的上限不超過「這一步上限扣 NATIVE_MARGIN 秒」剩下的時間。"""
+-    import os, tempfile, time
++    """S23 的函式那一半:預估 = 第一段秒數的兩倍加 NATIVE_TAIL(120 秒),剩下的秒數「不到」預估才不跑(剛好等於照跑);沒設上限不限制;
++    跑的話每次驅動的上限不超過「上限時刻扣 NATIVE_TAIL」、查詢不超過「扣 NATIVE_FINISH」剩下的時間、也不超過 T_LONG;
++    預估放行時驅動至少還有第一段兩倍的秒數(預估與截止用同一個保留量,不會放行一段注定被砍的第二段)。"""
++    import tempfile, time
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         ns = _ms_collector_ns(td)
+         st = {"native_retained": ["@default"]}
+         res = {"android_sdk": 36, "driver": {"status": "ok"}, "pids": {"status": "ok"}}
+-        old = os.environ.get("LUMOS_STABILITY_STEP_BUDGET_S")
+-        try:
+-            os.environ["LUMOS_STABILITY_STEP_BUDGET_S"] = "420"
+-            check("第一段 100 秒、上限 420(100 + 2×100 + 120 = 420)→ 照跑", ns["native_skip"](st, None, True, res, 100.0) is None)
+-            os.environ["LUMOS_STABILITY_STEP_BUDGET_S"] = "419"
+-            got = ns["native_skip"](st, None, True, res, 100.0)
+-            check("上限 419 → failed 時間不夠", got and got[1] == "failed" and "時間不夠" in got[2], str(got))
+-            del os.environ["LUMOS_STABILITY_STEP_BUDGET_S"]
+-            check("沒設上限 → 不限制", ns["native_skip"](st, None, True, res, 10 ** 6) is None)
+-        finally:
+-            if old is None:
+-                os.environ.pop("LUMOS_STABILITY_STEP_BUDGET_S", None)
+-            else:
+-                os.environ["LUMOS_STABILITY_STEP_BUDGET_S"] = old
++        check("第一段 100 秒、剩 320 秒(2×100 + 120 = 320)→ 照跑", ns["native_skip"](st, None, True, res, 100.0, 320.0) is None)
++        got = ns["native_skip"](st, None, True, res, 100.0, 319.0)
++        check("剩 319 秒 → failed 時間不夠", got and got[1] == "failed" and "時間不夠" in got[2], str(got))
++        check("沒設上限 → 不限制", ns["native_skip"](st, None, True, res, 10 ** 6, None) is None)
+         seen = []
+         ns["shell"] = lambda cmd, timeout=None: (0, "", "")
+         ns["read_exits"] = lambda pkg: ("ok", [])
+         ns["pidof"] = lambda pkg: 100
+         ns["SETTLE"] = 0
+         ns["driver"] = lambda cmd, n, serial, timeout=None: seen.append(("driver", timeout)) or {"rc": 0, "ok": True}
+         ns["start_record"] = lambda *a: ("4321", "c", "t")
+         ns["stop_record"] = lambda rec, run_dir, local: ("/x/heap-native.pftrace", None)
+         ns["native_query"] = lambda trace, pkg, timeout=None: seen.append(("query", timeout)) or ([], None)
+         stc = {"package": "com.lab", "cycles": 5, "warmup": 2, "driver": "d {{CYCLES}}"}
+-        out = ns["native_run"](stc, td, {}, time.time() + 50)
++        out = ns["native_run"](stc, td, {}, time.time() + 200)
+         check("前置:第二段走完、ok", out.get("status") == "ok", str(out))
+-        check("有 deadline:兩次驅動與查詢的上限都不超過剩下的 50 秒", len(seen) == 3 and all(0 < t <= 50 for _, t in seen), str(seen))
++        drv = [t for k, t in seen if k == "driver"]
++        qry = [t for k, t in seen if k == "query"]
++        check("剩 200 秒:兩次驅動的上限在 80 秒以內(扣 120)、查詢在 185 秒以內(扣 15)", len(drv) == 2 and all(70 < t <= 80 for t in drv)
++              and len(qry) == 1 and 175 < qry[0] <= 185, str(seen))
++        seen.clear()
++        e = 10.0
++        remaining = 2 * e + ns["NATIVE_TAIL"]
++        check("前置:剩下的秒數剛好過預估", ns["native_skip"](st, None, True, res, e, remaining) is None)
++        ns["native_run"](stc, td, {}, time.time() + remaining)
++        check("預估放行時驅動至少還有第一段兩倍的秒數(不會只拿到 1 秒)", all(t >= 2 * e - 1 for k, t in seen if k == "driver"), str(seen))
++        seen.clear()
++        ns["native_run"](stc, td, {}, time.time() + 10 ** 7)
++        check("上限很遠:驅動與查詢都不超過 T_LONG", len(seen) == 3 and all(t == ns["T_LONG"] for _, t in seen), str(seen))
+         seen.clear()
+         ns["native_run"](stc, td, {}, None)
+-        check("沒有 deadline:上限照舊是 T_LONG", len(seen) == 3 and all(t == ns["T_LONG"] for _, t in seen), str(seen))
++        check("沒有上限:驅動與查詢都是 T_LONG", len(seen) == 3 and all(t == ns["T_LONG"] for _, t in seen), str(seen))
+ 
+ 
+ def t_android_native_budget_values():
+     """S23 的設定那一半:LUMOS_STABILITY_STEP_BUDGET_S 是 nan、inf、0、負數或不是數字 → 開跑前擋下回 2、不碰裝置(nan 跟什麼比都是 False,不擋等於沒有上限)。"""
+     import tempfile
+     for v in ("nan", "inf", "0", "-5", "一小時"):
+         with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+-            r, d, fake, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": v})
++            r, _, fake, _ = _ms_native_collect(td, env={"LUMOS_STABILITY_STEP_BUDGET_S": v})
+             check(f"上限 {v} → 回 2 擋下、沒碰裝置", r.returncode == 2 and "LUMOS_STABILITY_STEP_BUDGET_S" in r.stderr and not (fake / "adb.log").exists(), r.stderr[-300:])
+ 
+ 
+ def t_android_native_templates_present():
+     """打開 native_retained 時,收集腳本旁邊少了 heapprofd 錄製設定或原生查詢範本 → 開跑前擋下回 2、點名缺哪支、不碰裝置(消費專案只抄了收集腳本時不白跑暖機);
+     沒打開時照常跑。"""
+     import os, shutil, subprocess as sp, tempfile
+     src = Path(GRAPHCTL).resolve().parent
+     for missing in ("android-stability-heapprofd.pbtxt", "android-stability-native.sql"):
+         for on in (True, False):
+@@ -19073,20 +19106,29 @@ def t_android_native_lumos_print():
+         nr = d.get("native_retained", {})
+         check("--json 帶全部 25 個、順序照結果檔", [x["retained"] for x in nr.get("sites", [])] == [x["retained"] for x in sites], str(nr)[:300])
+         out = rt.stdout
+         lines = [x for x in out.splitlines() if re.match(r"\s+\d+\. ", x)]
+         check("文字輸出只印 20 個、照順序", len(lines) == 20 and lines[0].strip().startswith("1. fn00") and lines[19].strip().startswith("20. fn19"), out[-800:])
+         check("開頭一行寫明只含開錄後配的、含快取與池、不代表漏、只提醒", "開錄之後才配" in out and "含快取與池" in out and "不代表漏" in out and "只提醒" in out, out[-800:])
+         check("每行有函式、.so、呼叫者、還留著多少", "fn00 @ libfakesdk.so ← com.lab.C.c00:還留著 30.0 MiB" in out, out[-800:])
+         check("沒有符號、系統函式庫有標記", "fn01" in out and "(沒有符號)" in lines[1] and "(系統函式庫)" in lines[2] and "(沒有符號)" not in lines[0], out[-800:])
+         check("控制字元與分行字元印出前清掉", "\x1b" not in out and "\u2028" not in out and "fn03" in lines[3], repr(lines[3]))
+         check("回傳碼照舊 0", r.returncode == 0 and rt.returncode == 0)
++    with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
++        frac = [{"func": "half", "so": "s.so", "caller": "c", "symbol": True, "system": False, "retained": 1572864},
++                {"func": "almost2", "so": "s.so", "caller": "c", "symbol": True, "system": False, "retained": 2 * _MS_MIB - 1}]
++        _, r, d, rt = _ms_root(td, [_ms_thr("exits")], _ms_result(native_retained=_ms_native_sec(frac + sites * 10)))
++        check("1.5 MiB 印成 1.5、差 1 位元組到 2 MiB 捨去成 1.9", "還留著 1.5 MiB(1572864 位元組)" in rt.stdout and "還留著 1.9 MiB(2097151 位元組)" in rt.stdout,
++              rt.stdout[-600:])
++        check("--json 最多帶 200 個", len(d.get("native_retained", {}).get("sites", [])) == 200, str(len(d.get("native_retained", {}).get("sites", []))))
++        check("--json 的函式名也清掉控制字元與分行字元", all("\x1b" not in x["func"] and "\u2028" not in x["func"] for x in d.get("native_retained", {}).get("sites", [])),
++              str([x["func"] for x in d.get("native_retained", {}).get("sites", [])][:6]))
+     long = [{"func": "f" * 500, "so": "libfakesdk.so", "caller": "c" * 500, "symbol": False, "system": True, "retained": 5 * _MS_MIB},
+             {"func": "huge", "so": "s.so", "caller": "c", "symbol": True, "system": False, "retained": 10 ** 400}]
+     with tempfile.TemporaryDirectory(prefix="gctl-ms-") as td:
+         _, r, d, rt = _ms_root(td, [_ms_thr("exits")], _ms_result(native_retained=_ms_native_sec(long)))
+         lines = [x for x in rt.stdout.splitlines() if re.match(r"\s+\d+\. ", x)]
+         check("函式名與呼叫者各 500 字:還留著多少與標記照樣印得出來", len(lines) == 2 and "還留著 5.0 MiB(5242880 位元組)(沒有符號)(系統函式庫)" in lines[0],
+               rt.stdout[-400:] + rt.stderr[-300:])
+         check("retained 是超大整數:不噴例外、照樣印數字", rt.returncode == 0 and "Traceback" not in rt.stderr and len(lines) == 2 and "MiB(1" in lines[1],
+               rt.stderr[-300:])
+ 
