@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-25
-updated: 2026-10-27
+updated: 2026-10-28
 responsibility: 負責 Android 端到端驗收:範本腳本在主機端依序建 APK、裝上、跑 Maestro flow、截圖比對、記憶體與穩定性、效能並寫 steps.json,lumos android-e2e judge 判四塊、算內容指紋、寫 .lumos/e2e-records/ 的查證紀錄,macrobench.json 的 e2e 段格式,以及 code-loop check 的 Android E2E 那一道(推送前判定、按功能放行)、android-e2e waive 放行與 AI 放行待看的通知。不負責記憶體收集本身(Systems/android-stability-collector)、效能判定與 --results-dir 以外的 macrobench 行為(Systems/macrobenchmark-adapter)、截圖比對的實作(使用者的 maestro-visual-toolkit)、pre-push 的擋下原因表(Systems/bound-tests-gate)
 aliases: []
 about_code:
@@ -73,6 +73,13 @@ summary: |-
   WHY:lumos android-e2e coverage 只報告功能對照表的缺口、不擋,範圍判斷與逐檔歸屬跟推送前判定共用同一支(_e2e_scope_hit、_e2e_file_owner),沒歸屬的程式檔按所在資料夾彙總、共用程式另列支數;設定讀工作目錄,補完對照表不用先提交就看得到 [出處:[[Projects/端到端驗收對照表涵蓋報告_計劃]] 2026-10-27 Enzo 照「只報告、預設按目錄分組」開工] [因:缺歸屬的後果推送前檢查已經會擋(要求整套跑);事先列出來是讓人在推送前補對照表] [不選:擋推送(重複擋同一件事);從程式的 import 猜歸屬(猜錯比列出來更糟)] [test:t_android_e2e_coverage_unowned] [test:t_android_e2e_coverage_doctor_line] [test:t_android_e2e_coverage_same_as_gate] [test:t_android_e2e_coverage_worktree_cfg]
   WHY:涵蓋報告另列情境與筆記對不上的兩種(列了流程檔卻沒有筆記綁到或正文提到的情境、筆記合約綁了卻沒有情境列到的流程),只報告不擋;綁定照合約測試綁定那一套解、只認 maestro 平台,正文寫流程檔路徑也算提到 [出處:[[Projects/端到端情境對照筆記_計劃]] 2026-10-27 Enzo 回「我覺得可以補」] [因:對照表管跑什麼、筆記管為什麼要成立,兩邊靠同一支流程檔對上,沒有機器看會悄悄分岔] [不選:擋推送(合約照不確定就不標的鐵則,不能逼每個情境都有合約);只認合約行(README 教不確定就寫在正文)] [test:t_android_e2e_coverage_cases_without_notes] [test:t_android_e2e_coverage_note_flows_not_in_cases] [test:t_android_e2e_coverage_notes_absent]
   WHY:涵蓋報告的情境與筆記對照用 load_vault_safe 讀整個圖譜、不沿用 doctor 手上的 env,流程檔名字從 maestro 平台的測試名索引(_platform_name_files)反查 [出處:[[Projects/端到端情境對照筆記_計劃]] 2026-10-27 代碼審架構對齊席] [因:要全文找流程檔路徑,load_vault 的筆記物件不留正文;名字索引跟殘留索引共用一支,測試檔篩選改了兩邊一起變] [不選:自己讀流程檔的 name:(第二套走訪);doctor 傳 env 進來(筆記物件沒有正文,還是要重讀)]
+  WHY:範本腳本開跑前問 maestro test --help,認得 --test-output-dir 與 --debug-output 才在每次嘗試帶上(現場放 run 目錄的 ui/<名>.try<N>/),不認得就提醒、照跑 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]]] [因:舊版 Maestro 帶了不認得的旗標每支 flow 都會紅,等於誤擋] [不選:一律帶(舊版全紅);要求升級才准跑(擋人)] [test:t_android_e2e_evidence_flags]
+  WHY:flow 那次沒過時只讀 crash 緩衝(logcat -b crash -d -T),時間用那次嘗試開跑前讀的裝置時間,讀不到時間就不讀;不清裝置日誌 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]] 決策 d1,Enzo 2026-10-27 裁] [因:整份日誌常含帳號、權杖、網址(同收集腳本不留整份日誌那條);不帶 -T 會收到之前的舊崩潰] [不選:App 行程的全部日誌;先 logcat -c 清掉再讀(會清掉別的工具要的日誌)] [test:t_android_e2e_crash_log]
+  WHY:不穩帳只記在本機總表(UI 項目第二次才過帶 flaky),每支 flow 看自己最近 20 筆判出過或沒過的紀錄,3 筆以上在判定後點名,只提醒不改判定 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]]] [因:查證紀錄每版一份,跨版本的次數只有本機總表數得出;隔離不穩的 flow 等於放寬擋法,要先有數字再請人裁] [不選:照 Delivery Hero 自動隔離;寫進提交的查證紀錄] [test:t_android_e2e_flaky_notice]
+  WHY:不穩帳(點名與 history --flaky 共用 _e2e_flaky_tally)同一個 run_id 重判多寫的總表行,每支 flow 只算一次、取最後一個判出結果的那次(被擋下、項目空的重判行不蓋掉判定;哪幾行算同一次執行照 _e2e_run_key:run_id 轉字串比、只有 None 算沒有,同 _ci_latest_attempts 的判法);history --flaky 的 --last 數不同執行、重判行不佔名額;不共用 _ci_latest_attempts(它靠嘗試次數與結論欄位取最壞、吃整份清單、掛鉤裡有逐字複本,總表沒有這兩個欄位) [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:judge 擋下訊息本身教人用 --no-record 重判,每次都追加一行總表,不去重會把一次不穩湊成三次而誤點名] [不選:改成重判不寫總表(會丟掉擋下原因的歷史)] [test:t_android_e2e_flaky_notice]
+  WHY:按功能跑時總表 case_results 的 UI 項目照整次結果補「第二次才過」,提交的查證紀錄 feature_runs 不帶 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:history --case 讀 case_results,原本由 _e2e_case_results 重組、沒有這個欄位,照情境篩就一律看不到不穩] [不選:在 _e2e_case_results 加欄位(會連查證紀錄一起改,計劃不把不穩帳放進綁版本的紀錄)] [test:t_android_e2e_flaky_history]
+  WHY:從總表讀回的每一行在印出函式裡收成一個出口過 _out_clean(_e2e_print_runs 內部的 say、history 與不穩彙總整行清),新加印出行走同一個出口就自動清 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r2、r4 架構對齊與單審席] [因:r2 只清新欄位、r4 又漏了問題與提醒行,逐行補每輪漏一處] [不選:每個印出點各自包一層] [test:t_android_e2e_judge_evidence]
+  WHY:history 的逐行讀與篩選(含 --flaky 按執行歸併)放在 _e2e_history_rows,_e2e_history_cmd 只管擋下與印出 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 壓提交後 pitfalls 抓到新增告警] [因:按執行歸併那段讓 _e2e_history_cmd 複雜度到 12,超過推送前新增告警閘的上限 10] [不選:lint-waive 放行(不是誤報)] [test:t_android_e2e_flaky_history]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"

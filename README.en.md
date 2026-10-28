@@ -362,7 +362,7 @@ When one of the first four (the memory ones) fails, it jumps straight to L3: the
 
 ### Device acceptance: by feature while developing, a record for this version before pushing (end-to-end acceptance)
 
-**One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record; pushing is blocked for a version without a passing record, and running each feature your changes touch by feature also counts.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail.
+**One script: while developing, run only the feature you are working on, or just one of its use cases; before pushing, check the whole app and keep the result as a verification record; pushing is blocked for a version without a passing record, and running each feature your changes touch by feature also counts.** Each use case can have four things: tap through Maestro (a tool that drives the screen from a text script of what to tap and type) flow files, compare screenshots against baselines a person approved, run speed tests, and open and close a screen repeatedly to check memory and stability. Every run builds and installs the app first; `lumos android-e2e judge` then decides pass or fail. When a UI flow fails, the terminal prints, after that flow, what Maestro left behind (the step log and failure screenshots) and any app crash from that attempt; flows that often needed a retry to pass are named after the check.
 
 ```
 sh scripts/templates/android-e2e-run.sh --changed                  # while developing: run the use cases of the features your changes touch
@@ -370,6 +370,7 @@ sh scripts/templates/android-e2e-run.sh --feature player           # every use c
 sh scripts/templates/android-e2e-run.sh --case player.open-close   # just this use case (add --no-perf or --no-memory to skip those parts)
 sh scripts/templates/android-e2e-run.sh                            # the whole app, writes the verification record
 lumos android-e2e history                                          # the last 20 checks (filter with --feature, --case; --last for more)
+lumos android-e2e history --flaky                                  # which UI flows have often needed a retry to pass
 lumos android-e2e check                                            # before pushing, see whether the push check would block and why
 ```
 

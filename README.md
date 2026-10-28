@@ -362,7 +362,7 @@ Android App 改完之後，Lumos 在真的手機或平板上確認兩件事：**
 
 ### 實機驗收：開發中按功能跑，推送前要有這一版的紀錄（端到端驗收）
 
-**同一支腳本，開發中只跑你正在做的那個功能、甚至只跑它的一個使用情境；推之前把 App 從頭到尾驗一遍，結果寫成一份查證紀錄；推送前會擋沒驗過的版本，這次改到的功能都按功能跑過、通過也算。** 每個使用情境可以有四樣東西：照 Maestro（一種用文字寫好「點哪裡、輸入什麼」的畫面自動操作工具）的流程檔實際點一遍、拍畫面跟人看過的基準圖比、跑效能測試、反覆開關畫面看記憶體與穩定性。每次跑都先建置並安裝 App，跑完由 `lumos android-e2e judge` 判過不過。
+**同一支腳本，開發中只跑你正在做的那個功能、甚至只跑它的一個使用情境；推之前把 App 從頭到尾驗一遍，結果寫成一份查證紀錄；推送前會擋沒驗過的版本，這次改到的功能都按功能跑過、通過也算。** 每個使用情境可以有四樣東西：照 Maestro（一種用文字寫好「點哪裡、輸入什麼」的畫面自動操作工具）的流程檔實際點一遍、拍畫面跟人看過的基準圖比、跑效能測試、反覆開關畫面看記憶體與穩定性。每次跑都先建置並安裝 App，跑完由 `lumos android-e2e judge` 判過不過。UI 流程沒過時，終端會在那支流程後面印出 Maestro 留下的現場（逐步記錄、失敗截圖）與那段時間的閃退紀錄；常要重跑一次才過的流程，判完會被點名。
 
 ```
 sh scripts/templates/android-e2e-run.sh --changed                  # 開發中：看這次改到的檔，只跑對應功能的使用情境
@@ -370,6 +370,7 @@ sh scripts/templates/android-e2e-run.sh --feature player           # 只跑這�
 sh scripts/templates/android-e2e-run.sh --case player.open-close   # 只跑這一個使用情境（加 --no-perf、--no-memory 可略過效能或記憶體）
 sh scripts/templates/android-e2e-run.sh                            # 整套跑一次，寫查證紀錄
 lumos android-e2e history                                          # 看最近 20 次檢測的紀錄（可加 --feature、--case 篩，--last 改筆數）
+lumos android-e2e history --flaky                                  # 哪些 UI 流程最近常要重跑一次才過
 lumos android-e2e check                                            # 推之前先看推送前檢查會不會擋、為什麼
 ```
 

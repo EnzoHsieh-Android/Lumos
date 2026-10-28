@@ -37,7 +37,7 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:�
 | 只想快速看 UI,效能或記憶體太慢 | 加 `--no-perf` 或 `--no-memory`(只能配上面的挑法) | 同上;情境本來有那一塊時那筆標不完整;這次沒過一律蓋掉先前的,只有沒判完或不完整但通過時才保留同一版既有的完整結果 |
 | 準備推送 | 先提交,再 `lumos android-e2e check` 看推送前檢查會不會擋:說按功能就夠就跑它列的 `--case`,說要整套就不帶挑法整套跑 `sh scripts/templates/android-e2e-run.sh` | 按功能的寫進 `feature_runs`、整套的寫進 `runs`;提交紀錄再推 |
 | 改到共用的東西(共用元件、主題、網路層) | 整套跑;那些路徑要列在 `e2e.shared_paths`,推送前檢查才知道改到它要整套 | 同上 |
-| 回頭看驗過什麼 | `lumos android-e2e history [--feature <功能>] [--case <情境>]` | — |
+| 回頭看驗過什麼 | `lumos android-e2e history [--feature <功能>] [--case <情境>]`;哪些 flow 常靠重跑才過加 `--flaky` | — |
 
 - 先 `--preflight` 只驗裝置與工具;缺 Perfetto 工具會在動 App 之前擋。開發中工作目錄有改動時要帶挑法一起驗(`--preflight --changed` 或 `--preflight --feature <功能>`),單獨的 `--preflight` 是整套跑的前置、會要求工作目錄乾淨。
 - `--changed` 比的是「HEAD 跟主線分岔點的差異」加工作目錄的改動與沒追蹤的新檔;改到某個情境列的 flow 檔也算那個功能。回 2 說「對不到任何功能」時先看它印的改到的檔:列的是「(沒有改動)」,多半是你直接在主線上提交了(HEAD 就是分岔點),開分支或用 `--feature`;列了檔卻都不在任何功能的 `paths` 裡,才是補對照表或整套跑。不要當成沒事。
@@ -51,7 +51,7 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:�
    新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次,各留一份錄製檔在 `.lumos/artifacts/android/<run-id>.<情境>/`,不會自動清。
 3. `lumos macrobench --check-config` 回 0 才算接好;再跑 `lumos android-e2e coverage --changed`,看這次改到的檔是不是都歸屬到功能(沒歸屬的,推送時會被要求整套跑)。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
 
-**紅了看哪裡**:UI 流程沒過看終端印的報告路徑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。
+**紅了看哪裡**:UI 流程沒過或第二次才過,先看終端在那支 flow 後面印的「現場」(Maestro 的逐步記錄、失敗截圖與畫面結構,`debug/` 底下是 maestro.log)與「閃退紀錄」(那次嘗試期間的 App 崩潰堆疊,只收 crash 緩衝;沒有這一項就是沒閃退),再看報告路徑;沒印現場是 Maestro 太舊(開跑時會提醒)。判定結束印「不穩帳」點名的 flow,是最近常靠重跑才過:看它第一次的現場,修 flow 的等待或 App 的時序,不要加重跑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。
 
 **推送前被擋下**:照訊息跑它印的那一行(`--case <功能.情境>` 或整套),跑完提交紀錄再推。確定是誤擋(例如裝置狀態造成的)才用它印的 `lumos android-e2e waive <完整指紋> --commit <提交> --note "<理由>"` 放行:你沒有互動終端,會記成 AI 放行,推送、`lumos doctor` 與開場提示會一直列給人看,直到人用 `--ack` 看過;不要為了讓推送過而放行,放行前先跟使用者講。只這一次整道先不跑:`LUMOS_SKIP_ANDROID_E2E=1 git push`(會記帳,也要跟使用者講)。
 

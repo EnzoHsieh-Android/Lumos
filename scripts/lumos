@@ -40816,8 +40816,22 @@ def _e2e_steps(steps, block, name=None):
     return [s for s in steps.get("steps", []) if s.get("block") == block and (name is None or s.get("name") == name)]
 
 
+def _e2e_ui_evidence(tries):
+    """沒過那幾次的現場 → {"dirs": Maestro 現場目錄, "crashes": 閃退紀錄檔},只列真的存在的,兩樣都沒有回 None;
+    分欄照 steps.json 的 dir/crash 帶過來,印的時候不靠檔名猜。steps.json 是範本腳本寫的,欄位不對就當沒有。"""
+    got = {"dirs": [], "crashes": []}
+    for t in tries:
+        ev = t.get("evidence") if isinstance(t.get("evidence"), dict) else {}
+        for key, out in (("dir", got["dirs"]), ("crash", got["crashes"])):
+            v = ev.get(key)
+            if isinstance(v, str) and v and os.path.exists(v):
+                out.append(v)
+    return got if got["dirs"] or got["crashes"] else None
+
+
 def _e2e_judge_ui(e2e, steps):
-    """每支 flow:第一次過→過;第一次沒過、第二次過→過且標不穩定;兩次都沒過→沒過;沒跑到→沒判到。"""
+    """每支 flow:第一次過→過;第一次沒過、第二次過→過且標不穩定;兩次都沒過→沒過;沒跑到→沒判到。
+    沒過或第二次才過的,另帶沒過那幾次的現場路徑(fail_evidence,只列存在的;Projects/E2E紅燈現場與不穩帳_計劃 S3)。"""
     out = []
     for f in e2e["flows"]:
         name = _e2e_flow_name(f)
@@ -40836,6 +40850,9 @@ def _e2e_judge_ui(e2e, steps):
             why.append(f"第 {i + 1} 次:{w}")
         else:
             out.append({"flow": f, "result": "fail", "reason": ";".join(why), "reports": [t.get("report") for t in tries[:2]]})
+        ev = _e2e_ui_evidence(tries[:len(why)])   # why 有幾條就是沒過了幾次,現場只看那幾次
+        if ev:
+            out[-1]["fail_evidence"] = ev   # 不叫 evidence:steps.json 每次嘗試的 evidence、總表的 evidence(run 目錄)是別的形狀
     return out
 
 
@@ -41212,7 +41229,8 @@ def _e2e_judge_partial(root, run_dir, steps):
 def _e2e_case_results(e2e, sel, runs):
     """按功能跑的結果拆回每個情境 → {功能.情境: {result, items, complete, skipped[, reason]}}。效能照舊只提醒、不影響 result;
     情境本來有效能或記憶體、這次用 --no-perf/--no-memory 略過了,complete 是 False;一個會判的項目都沒有時 result 是 unjudged、
-    complete 是 False(推送前檢查要不要認由下一批定)。"""
+    complete 是 False(推送前檢查要不要認由下一批定)。
+    items 不帶「第二次才過」(查證紀錄綁版本,不放不穩帳);本機總表那份由 _e2e_history_append 照整次 UI 結果補,這裡加欄位時一起看那邊。"""
     blocks, probs = runs["blocks"], runs["problems"]
     ui = {_e2e_norm(x["flow"]): x["result"] for x in blocks["ui"]} if isinstance(blocks["ui"], list) else {}
     vis = {x["screen"]: x["result"] for x in blocks["visual"]} if isinstance(blocks["visual"], list) else {}
@@ -41336,7 +41354,7 @@ def _e2e_history_append(root, steps, runs, mode, blocked=None, run_dir=None):
     items = []
     blocks = (runs or {}).get("blocks") or {}
     for x in blocks.get("ui") if isinstance(blocks.get("ui"), list) else []:
-        items.append({"kind": "ui", "name": x["flow"], "result": x["result"]})
+        items.append({"kind": "ui", "name": x["flow"], "result": x["result"], **({"flaky": True} if x.get("flaky") else {})})
     for k, key in (("visual", "screen"), ("stability", "check")):
         if isinstance(blocks.get(k), list):
             items += [{"kind": k, "name": x[key], "result": x["result"]} for x in blocks[k]]
@@ -41350,7 +41368,11 @@ def _e2e_history_append(root, steps, runs, mode, blocked=None, run_dir=None):
     if blocked:
         line["blocked"] = blocked
     if isinstance((runs or {}).get("cases"), dict):   # 按功能跑:每個情境自己的項目,history --case 只列那個情境的
-        line["case_results"] = {fc: {"result": v["result"], "items": v["items"]} for fc, v in runs["cases"].items()}
+        # 情境的項目是 _e2e_case_results 重組的(查證紀錄也用它,不帶不穩),第二次才過照整次的 UI 結果補回總表這份
+        shaky = {_e2e_norm(x["flow"]) for x in blocks.get("ui") if x.get("flaky")} if isinstance(blocks.get("ui"), list) else set()
+        line["case_results"] = {fc: {"result": v["result"], "items": [
+            dict(i, flaky=True) if i.get("kind") == "ui" and _e2e_norm(i.get("name")) in shaky else i for i in v["items"]]}
+            for fc, v in runs["cases"].items()}
     p = Path(root) / E2E_HISTORY_REL
     text = json.dumps(line, ensure_ascii=False) + "\n"
     try:
@@ -41362,12 +41384,128 @@ def _e2e_history_append(root, steps, runs, mode, blocked=None, run_dir=None):
         ok = False
     if not ok:
         print(f"提醒:檢測總表 {p} 寫不進去,這次的結果只在 {line['evidence']}", file=sys.stderr)
+        return
+    _e2e_flaky_notify(p, items)
 
 
-def _e2e_history_cmd(root, feature=None, case=None, last=20):
+def _e2e_flaky_notify(p, items):
+    """記完總表後的不穩帳點名:這次判出過或沒過的每支 flow,在它自己最近 E2E_FLAKY_WINDOW 筆裡第二次才過到 E2E_FLAKY_MIN 筆就印一行。
+    只提醒,讀不到總表就不印(Projects/E2E紅燈現場與不穩帳_計劃 S5)。"""
+    flows = [i["name"] for i in items if _e2e_ui_judged(i)]
+    try:
+        counts = _e2e_flaky_counts(p, flows) if flows else {}
+    except OSError:
+        counts = {}
+    for fl, (k, n) in counts.items():
+        if k >= E2E_FLAKY_MIN:
+            print(_out_clean(f"  ! 不穩帳:{fl} 最近 {n} 次裡 {k} 次第二次才過;先看那幾次第一次的現場(lumos android-e2e history --flaky 列證據目錄),"
+                             "修 flow 的等待或 App 的時序,不要靠重跑", 1000))
+
+
+E2E_FLAKY_WINDOW = 20   # 不穩帳:每支 flow 看它自己最近幾筆判出過或沒過的紀錄(Projects/E2E紅燈現場與不穩帳_計劃〈不穩帳〉;REVISIT 會重定)
+E2E_FLAKY_MIN = 3       # 窗口裡第二次才過到幾筆就點名
+
+
+def _e2e_ui_judged(i):
+    """總表一個項目是不是「判出過或沒過的 UI flow」——不穩帳的點名與 history --flaky 都只數這種(沒判到的不算進分母)。"""
+    return isinstance(i, dict) and i.get("kind") == "ui" and isinstance(i.get("name"), str) and i.get("result") in ("pass", "fail")
+
+
+def _e2e_run_key(r, n):
+    """總表一行屬於哪一次執行:有 run_id 就用它轉字串(一筆存數字、一筆存字串也算同一次),沒有就是第 n 行自己一次。
+    哪些算「沒有 run_id」跟 _ci_latest_attempts 一樣只看 None;那支是 CI 的「嘗試次數大的贏、同一次取比較糟的結論」、
+    吃整份清單、還有掛鉤裡的逐字複本,總表沒有嘗試次數與結論欄位,語意不同不共用。"""
+    rid = r.get("run_id")
+    return ("run", str(rid)) if rid is not None else ("row", n)
+
+
+def _e2e_flaky_tally(rows, flows=None, window=None):
+    """不穩帳點名與 history --flaky 共用的數法:rows 逐筆是 (總表一行, 它的項目清單) → {flow: OrderedDict(執行鍵 → (第二次才過?, 證據目錄))}。
+    每支 flow 只收判出過或沒過的項目(_e2e_ui_judged);同一次執行(run_id)重判會在總表多寫幾行,每支 flow 留它最後一個判出結果的那次——
+    重判被擋下、項目是空的那行不會蓋掉真的判定;哪幾行算同一次執行照 _e2e_run_key。
+    flows 給了只數這幾支;window 給了每支只留最近 window 次。rows 可以是逐行讀的產生器,不整本載入;每筆 O(1)。"""
+    import collections
+    per = {}
+    for n, (r, its) in enumerate(rows):
+        key = _e2e_run_key(r, n)
+        for i in its:
+            if not _e2e_ui_judged(i) or (flows is not None and i["name"] not in flows):
+                continue
+            od = per.setdefault(i["name"], collections.OrderedDict())
+            od[key] = (i.get("flaky") is True, r.get("evidence"))   # 同一次執行再出現:換成後面那次的判定,位置照第一次出現
+            if window and len(od) > window:
+                od.popitem(last=False)
+    return per
+
+
+def _e2e_flaky_counts(p, flows, window=E2E_FLAKY_WINDOW):
+    """本機總表裡每支 flow 自己最近 window 次「判出過或沒過」→ {flow: (第二次才過的次數, 次數)}(數法見 _e2e_flaky_tally)。
+    逐行讀(_canary_ledger_rows,壞行跳過)。"""
+    rows = ((r, r.get("items") if isinstance(r.get("items"), list) else []) for r in _canary_ledger_rows(p, errors="replace"))
+    per = _e2e_flaky_tally(rows, set(flows), window)
+    return {f: (sum(v for v, _ev in per[f].values()), len(per[f])) if f in per else (0, 0) for f in flows}
+
+
+def _e2e_flaky_report(rows, n_runs):
+    """history --flaky:rows(已照功能、情境篩過、只留最後 --last 次執行的全部行)裡每支有第二次才過的 flow 一行,多的排前面
+    (數法見 _e2e_flaky_tally);n_runs 是這幾行涵蓋幾次執行。"""
+    hit = []
+    for f, od in _e2e_flaky_tally(rows).items():
+        shaky = [ev for v, ev in od.values() if v]
+        if shaky:
+            hit.append((f, len(shaky), len(od), shaky[-1]))
+    if not hit:
+        print(f"最近 {n_runs} 次執行的紀錄裡沒有第二次才過的 flow")
+    for f, k, n, ev in sorted(hit, key=lambda x: -x[1]):
+        print(_out_clean(f"{f}  {n} 次裡 {k} 次第二次才過  最近一次證據 {ev}", 1000))
+
+
+def _e2e_history_items(r, case=None):
+    """總表一行的 (項目清單, 結果);照情境篩時只看那個情境自己的(有 case_results 的行)。"""
+    cr = (r.get("case_results") or {}).get(case) if case and isinstance(r.get("case_results"), dict) else None
+    its, res = (cr.get("items"), cr.get("result")) if isinstance(cr, dict) else (r.get("items"), r.get("result"))
+    return (its if isinstance(its, list) else []), res
+
+
+def _e2e_history_line(r, its, res):
+    """lumos android-e2e history 印的一行:時間、結果、跑了什麼、版本、沒過的項目、第二次才過的 flow、擋下原因、證據目錄。
+    整行都是從總表讀出的字,印前整行過一次 _out_clean(單一出口,不逐欄各清各的)。"""
+    word = {"pass": "通過", "fail": "沒過", "unjudged": "沒判完", None: "沒寫判定"}
+    what = "整套" if r.get("mode") == "full" else ("、".join(str(c) for c in r.get("cases") or []) or "按功能")
+    bad = [f"{i.get('kind')} {i.get('name')}" for i in its if isinstance(i, dict) and i.get("result") != "pass"]
+    shaky = [str(i.get("name")) for i in its if isinstance(i, dict) and i.get("kind") == "ui" and i.get("flaky") is True]
+    return _out_clean(f"{r.get('ts')}  {word.get(res, res) if isinstance(res, (str, type(None))) else res}  {what}  {str(r.get('head'))[:8]}"
+                      f"{' (有沒提交的改動)' if r.get('dirty') else ''}"
+                      + (f"  沒過或沒判完:{'、'.join(bad)}" if bad else "") + (f"  第二次才過:{'、'.join(shaky)}" if shaky else "")
+                      + (f"  擋下:{r['blocked']}" if r.get("blocked") else "")
+                      + f"  證據 {r.get('evidence')}", 8000)
+
+
+def _e2e_history_rows(p, feature, case, last, flaky):
+    """逐行讀總表(_canary_ledger_rows,壞行跳過),照 --case、--feature 篩,留最後 last 筆;cases 不是清單當空的。
+    flaky 時改回 OrderedDict:--last 數的是不同執行(重判多寫的行不佔名額),每次執行留它的全部行給 _e2e_flaky_tally 判。
+    讀不了照樣丟 OSError,由呼叫端擋下。"""
+    import collections
+    rows = collections.deque(maxlen=last)
+    runs = collections.OrderedDict()
+    for n, r in enumerate(_canary_ledger_rows(p, errors="replace")):
+        cs = r.get("cases") if isinstance(r.get("cases"), list) else []
+        if case and case not in cs:
+            continue
+        if feature and not any(str(c).startswith(feature + ".") for c in cs):
+            continue
+        if not flaky:
+            rows.append(r)
+            continue
+        runs.setdefault(_e2e_run_key(r, n), []).append(r)
+        if len(runs) > last:
+            runs.popitem(last=False)
+    return runs if flaky else rows
+
+
+def _e2e_history_cmd(root, feature=None, case=None, last=20, flaky=False):
     """lumos android-e2e history:列本機總表,照功能、情境篩,新的在下面。逐行讀(_canary_ledger_rows,壞行跳過)、
     只留最後 last 筆;last 要是正整數。照情境篩時,結果與沒過的項目只列那個情境自己的(有 case_results 的行)。"""
-    import collections
     if not isinstance(last, int) or last < 1:
         _say_block(f"--last 要是正整數(拿到 {last!r})")
         return 2
@@ -41375,29 +41513,17 @@ def _e2e_history_cmd(root, feature=None, case=None, last=20):
     if not p.is_file():
         print("還沒有檢測紀錄(範本腳本跑過一次就會有)")
         return 0
-    rows = collections.deque(maxlen=last)
     try:
-        for r in _canary_ledger_rows(p, errors="replace"):
-            cs = r.get("cases") if isinstance(r.get("cases"), list) else []
-            if case and case not in cs:
-                continue
-            if feature and not any(str(c).startswith(feature + ".") for c in cs):
-                continue
-            rows.append(r)
+        got = _e2e_history_rows(p, feature, case, last, flaky)
     except OSError as e:
         _say_block(f"檢測總表讀不了:{e}")
         return 2
-    word = {"pass": "通過", "fail": "沒過", "unjudged": "沒判完", None: "沒寫判定"}
-    for r in rows:
-        what = "整套" if r.get("mode") == "full" else ("、".join(str(c) for c in r.get("cases") or []) or "按功能")
-        cr = (r.get("case_results") or {}).get(case) if case and isinstance(r.get("case_results"), dict) else None
-        its, res = (cr.get("items"), cr.get("result")) if isinstance(cr, dict) else (r.get("items"), r.get("result"))
-        bad = [f"{i.get('kind')} {i.get('name')}" for i in its or [] if isinstance(i, dict) and i.get("result") != "pass"]
-        print(f"{r.get('ts')}  {word.get(res, res) if isinstance(res, (str, type(None))) else res}  {what}  {str(r.get('head'))[:8]}"
-              f"{' (有沒提交的改動)' if r.get('dirty') else ''}"
-              + (f"  沒過或沒判完:{'、'.join(bad)}" if bad else "") + (f"  擋下:{r['blocked']}" if r.get("blocked") else "")
-              + f"  證據 {r.get('evidence')}")
-    if not rows:
+    if flaky:
+        _e2e_flaky_report([(r, _e2e_history_items(r, case)[0]) for rs in got.values() for r in rs], len(got))
+        return 0
+    for r in got:
+        print(_e2e_history_line(r, *_e2e_history_items(r, case)))
+    if not got:
         print("沒有符合條件的檢測紀錄")
     return 0
 
@@ -42348,7 +42474,7 @@ def _android_e2e_dispatch(args):
         return _e2e_select_cmd(args.e2e_repo, split(args.e2e_features), split(args.e2e_cases), args.e2e_changed,
                                args.e2e_no_perf, args.e2e_no_memory)
     if args.e2ecmd == "history":
-        return _e2e_history_cmd(args.e2e_repo, args.e2e_feature, args.e2e_case, args.e2e_last)
+        return _e2e_history_cmd(args.e2e_repo, args.e2e_feature, args.e2e_case, args.e2e_last, flaky=args.e2e_flaky)
     if args.e2ecmd == "waive":
         return _e2e_waive_cmd(args.e2e_repo, args.e2e_fp, args.e2e_commit, args.e2e_note, list_mode=args.e2e_list,
                               ack=args.e2e_ack, ack_all=args.e2e_ack_all)
@@ -42452,28 +42578,34 @@ def _e2e_judge_cmd(root, run_dir, precheck_only=False, no_record=False, history=
 
 
 def _e2e_print_runs(runs):
+    """judge 印給人看的結果。flow 名稱、畫面名、原因、現場路徑、工具問題與提醒都來自設定、steps.json 與它指到的輸出檔,
+    每一行印前都過 _out_clean(單一出口,跟 history 與不穩帳點名同一套)。"""
+    def say(line):
+        print(_out_clean(line, 4000))
     mark = {"pass": "✓", "fail": "✗", "unjudged": "?"}
-    print(f"Android 端到端驗收:{ {'pass': '通過', 'fail': '沒過', 'unjudged': '沒判完'}[runs['result']] }")
+    say(f"Android 端到端驗收:{ {'pass': '通過', 'fail': '沒過', 'unjudged': '沒判完'}[runs['result']] }")
     for p in runs["problems"]:
-        print(f"  ? {p}")
+        say(f"  ? {p}")
     if isinstance(runs["blocks"]["ui"], str):   # 按功能跑沒挑到任何 flow
-        print(f"  - UI 流程:{runs['blocks']['ui']}")
+        say(f"  - UI 流程:{runs['blocks']['ui']}")
     for x in runs["blocks"]["ui"] if isinstance(runs["blocks"]["ui"], list) else []:
         extra = "(第二次才過,不穩定)" if x.get("flaky") else (f":{x['reason']}" if x.get("reason") else "")
         rp = f";報告 {x['reports'][-1]}" if x.get("reports") and x["result"] != "pass" else ""
-        print(f"  {mark[x['result']]} UI 流程 {x['flow']}{extra}{rp}")
+        ev = x.get("fail_evidence") if isinstance(x.get("fail_evidence"), dict) else {}
+        rp += "".join(f";{label} {'、'.join(ev[k])}" for k, label in (("dirs", "現場"), ("crashes", "閃退紀錄")) if ev.get(k))
+        say(f"  {mark[x['result']]} UI 流程 {x['flow']}{extra}{rp}")
     for name, key, label in (("visual", "screen", "截圖"), ("stability", "check", "記憶體")):
         b = runs["blocks"][name]
         if isinstance(b, str):
-            print(f"  - {label}:{b}")
+            say(f"  - {label}:{b}")
             continue
         for x in b:
             extra = f":{x['reason']}" if x.get("reason") else ""
             extra += f"(相符率 {x['match_pct']}%,差異圖 {x['diff_image']})" if x.get("diff_image") else ""
-            print(f"  {mark[x['result']]} {label} {x[key]}{extra}")
-    print(f"  - 效能:{runs['blocks']['macrobench']}")
+            say(f"  {mark[x['result']]} {label} {x[key]}{extra}")
+    say(f"  - 效能:{runs['blocks']['macrobench']}")
     for n in runs["notices"]:
-        print(f"  ! {n}")
+        say(f"  ! {n}")
 
 
 def _lint_watch_mode(repo_root, as_json):
@@ -69062,6 +69194,7 @@ def main():
     aeh.add_argument("--feature", dest="e2e_feature", default=None, help="只列跑到這個功能的")
     aeh.add_argument("--case", dest="e2e_case", default=None, help="只列跑到這個情境的(功能.情境)")
     aeh.add_argument("--last", dest="e2e_last", type=int, default=20, help="最多列幾筆(預設 20)")
+    aeh.add_argument("--flaky", dest="e2e_flaky", action="store_true", help="改列不穩帳:最近 --last 筆裡每支第二次才過的 flow 幾次裡幾次")
     aew = aesub.add_parser("waive", help="放行一版驗收(推送前那道擋下時的出口;終端確認,沒有互動終端記成 AI 放行)")
     aew.add_argument("e2e_fp", nargs="?", default=None, help="要放行的那一版指紋(完整 64 碼;擋下訊息印的那一串;不給就放行 HEAD 那一版)")
     aew.add_argument("--repo", dest="e2e_repo", default=".", help="專案根目錄(預設 .)")

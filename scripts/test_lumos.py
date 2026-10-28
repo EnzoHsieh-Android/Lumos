@@ -18947,9 +18947,16 @@ if a == ["get-state"]:
     print(open(os.path.join(d, "state")).read().strip() if os.path.exists(os.path.join(d, "state")) else "device"); sys.exit(0)
 if a[:1] == ["install"]:
     shutil.copy(a[-1], os.path.join(d, "installed.apk")); print("Success"); sys.exit(0)
+if a[:1] == ["logcat"]:   # crash 緩衝:FAKE_DIR/crash 有內容就印
+    p = os.path.join(d, "crash")
+    print(open(p).read() if os.path.exists(p) else "", end=""); sys.exit(0)
 if a[:1] == ["shell"]:
     c = " ".join(a[1:])
-    if c == "dumpsys window":
+    if c.startswith("date"):
+        if os.path.exists(os.path.join(d, "no_date")):
+            sys.exit(1)
+        print("10-27 14:00:00.000")
+    elif c == "dumpsys window":
         print(open(os.path.join(d, "window")).read() if os.path.exists(os.path.join(d, "window")) else "isKeyguardShowing=false")
     elif c == "dumpsys power":
         print("mWakefulness=Awake")
@@ -18970,8 +18977,16 @@ _E2E_FAKE_MAESTRO = r"""#!/usr/bin/env python3
 import os, sys, time
 d = os.environ["FAKE_DIR"]
 a = sys.argv[1:]
+if a[:2] == ["test", "--help"]:   # 範本腳本開跑前問旗標;舊版(maestro_old)沒有現場那兩個旗標
+    print("Usage: maestro test [--format=<format>] [--output=<output>]" if os.path.exists(os.path.join(d, "maestro_old"))
+          else "Usage: maestro test [--debug-output=<debugOutput>] [--flatten-debug-output] [--test-output-dir=<testOutputDir>]")
+    sys.exit(0)
 open(os.path.join(d, "maestro.log"), "a").write(" ".join(a) + "\n")
 rep, flow = a[a.index("--output") + 1], a[-1]
+for flag, fname in (("--test-output-dir", "manifest.json"), ("--debug-output", "maestro.log")):   # 照真的 Maestro 寫進給的目錄
+    if flag in a:
+        os.makedirs(a[a.index(flag) + 1], exist_ok=True)
+        open(os.path.join(a[a.index(flag) + 1], fname), "w").write("x")
 if os.path.exists(os.path.join(d, "maestro_ignore_term")):   # 自己不理 TERM:驗寬限到期或寬限中再被中斷時要補 KILL
     import signal
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -19470,13 +19485,305 @@ def t_android_e2e_history_edges():
     print("  ✓ t_android_e2e_history_edges")
 
 
+_E2E_UI_TRY = ".lumos/artifacts/android/{}/ui/.maestro__login.try{}"
+
+
+def _e2e_ev_run(td, rcs="0", crash=None, old=False, no_date=False, rid="run-e1"):
+    """跑一次範本腳本(一支 flow):rcs 是每次嘗試的回傳碼;crash 是 crash 緩衝的內容;old 模擬舊版 Maestro;no_date 讀不到裝置時間。
+    回 (root, fake, 結果, maestro 每次的參數行, adb 讀日誌的參數行)。root 取 resolve:腳本用 pwd 取專案根,macOS 暫存目錄會變成 /private/var/…"""
+    root, fake, env, script = _e2e_script_env(td)
+    root = root.resolve()
+    (fake / "rcs").write_text(rcs)
+    for name, on, body in (("crash", crash is not None, crash or ""), ("maestro_old", old, "1"), ("no_date", no_date, "1")):
+        if on:
+            (fake / name).write_text(body)
+    r = _e2e_script(root, script, env, rid)
+    ml = (fake / "maestro.log").read_text().splitlines() if (fake / "maestro.log").exists() else []
+    lc = [ln for ln in (fake / "adb.log").read_text().splitlines() if "logcat" in ln] if (fake / "adb.log").exists() else []
+    return root, fake, r, ml, lc
+
+
+def _e2e_login_line(r):
+    return next((ln for ln in r.stdout.splitlines() if "UI 流程 .maestro/login.yaml" in ln), "")
+
+
+def t_android_e2e_evidence_flags():
+    """S1(Projects/E2E紅燈現場與不穩帳_計劃):Maestro 的 test --help 列了現場兩個旗標時,每次跑 flow(含重跑那次)都帶
+    --test-output-dir <run>/ui/<名>.try<N> 與 --debug-output <同>/debug --flatten-debug-output;舊版沒列時都不帶、印提醒、照常跑完。
+    判準來源:計劃〈一次 UI 流程多留什麼〉第 1、2 步與 Maestro 2.10 的 maestro test --help。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root, _fake, r, ml, _lc = _e2e_ev_run(td, rcs="1 0")
+        check("e2e 現場旗標:兩次嘗試都跑了", len(ml) == 2, str(ml))
+        for n, ln in enumerate(ml, 1):
+            d = str(root / _E2E_UI_TRY.format("run-e1", n))
+            check(f"e2e 現場旗標:第 {n} 次帶 --test-output-dir 指到這次的嘗試目錄", f"--test-output-dir {d} " in ln, ln)
+            check(f"e2e 現場旗標:第 {n} 次帶 --debug-output 與 --flatten-debug-output", f"--debug-output {d}/debug " in ln and "--flatten-debug-output" in ln, ln)
+        check("e2e 現場旗標:多留證據不改判定", r.returncode == 0, str((r.returncode, r.stdout[-300:], r.stderr[-300:])))
+    with tempfile.TemporaryDirectory() as td:
+        _root, _fake, r, ml, _lc = _e2e_ev_run(td, old=True)
+        check("e2e 現場旗標:舊版 Maestro 不帶現場旗標", len(ml) == 1 and "--test-output-dir" not in ml[0] and "--debug-output" not in ml[0], str(ml))
+        check("e2e 現場旗標:舊版 Maestro 印提醒、照常通過", r.returncode == 0 and "提醒" in r.stderr and "--test-output-dir" in r.stderr, str((r.returncode, r.stderr[-400:])))
+    print("  ✓ t_android_e2e_evidence_flags")
+
+
+def t_android_e2e_crash_log():
+    """S2(同計劃、決策 d1):某次嘗試回傳碼不是 0 時,用那次開跑前讀的裝置時間讀 crash 緩衝(logcat -b crash -d -T),有內容才寫成
+    <名>.try<N>.crash.txt;回傳碼 0 時不讀;讀不到裝置時間不讀;任何情況都不清日誌、不讀別的緩衝;steps.json 那一步記 evidence。"""
+    import json, re, tempfile
+    with tempfile.TemporaryDirectory() as td:   # 第一次沒過(App 閃退)、第二次過
+        root, _fake, r, _ml, lc = _e2e_ev_run(td, rcs="1 0", crash="FATAL EXCEPTION: main\nProcess: com.lab, PID: 42\n")
+        check("e2e 閃退紀錄:只在沒過的那次讀一次 crash 緩衝、用開跑前的裝置時間", lc == ["-s SER1 logcat -b crash -d -T 10-27 14:00:00.000"], str(lc))
+        c1 = root / (_E2E_UI_TRY.format("run-e1", 1) + ".crash.txt")
+        check("e2e 閃退紀錄:沒過那次寫成檔", c1.is_file() and "FATAL EXCEPTION" in c1.read_text(), str(c1))
+        check("e2e 閃退紀錄:過的那次沒有檔", not (root / (_E2E_UI_TRY.format("run-e1", 2) + ".crash.txt")).exists())
+        steps = json.loads((root / ".lumos/artifacts/android/run-e1/steps.json").read_text())
+        ev = [s.get("evidence") for s in steps["steps"] if s.get("block") == "ui"]
+        check("e2e 閃退紀錄:steps.json 每次嘗試記下現場目錄與閃退紀錄", ev == [{"dir": str(root / _E2E_UI_TRY.format("run-e1", 1)), "crash": str(c1)},
+                                                                          {"dir": str(root / _E2E_UI_TRY.format("run-e1", 2)), "crash": None}], str(ev))
+    with tempfile.TemporaryDirectory() as td:   # 沒過但 crash 緩衝是空的:讀了、不寫檔
+        root, _fake, r, _ml, lc = _e2e_ev_run(td, rcs="1 1")
+        check("e2e 閃退紀錄:沒閃退時不寫檔", len(lc) == 2 and not list((root / ".lumos/artifacts/android/run-e1/ui").glob("*.crash.txt")), str(lc))
+    with tempfile.TemporaryDirectory() as td:   # 讀不到裝置時間:兩次都沒過也不讀
+        root, _fake, r, _ml, lc = _e2e_ev_run(td, rcs="1 1", crash="FATAL EXCEPTION\n", no_date=True)
+        check("e2e 閃退紀錄:讀不到裝置時間就不讀 crash 緩衝", lc == [] and not list((root / ".lumos/artifacts/android/run-e1/ui").glob("*.crash.txt")), str(lc))
+    with tempfile.TemporaryDirectory() as td:   # 第一次就過:不讀(crash 緩衝裡就算有舊內容也不收)
+        root, _fake, r, _ml, lc = _e2e_ev_run(td, crash="FATAL EXCEPTION\n")
+        check("e2e 閃退紀錄:第一次就過時不讀 crash 緩衝", lc == [] and r.returncode == 0, str(lc))
+    # 讀裝置時間的格式跟收集腳本同一套(logcat -T 吃這個格式);兩支是獨立腳本、彼此 import 不到,抽出兩邊的 date 格式比相等
+    fmts = [re.findall(r"date '(\+[^']+)'", (Path(GRAPHCTL).resolve().parent / "templates" / n).read_text(encoding="utf-8"))
+            for n in ("android-e2e-run.sh", "android-stability-collect.sh")]
+    check("e2e 閃退紀錄:裝置時間格式跟收集腳本逐字相同", len(fmts[0]) == 1 and fmts[0] == fmts[1], str(fmts))
+    print("  ✓ t_android_e2e_crash_log")
+
+
+def t_android_e2e_judge_evidence():
+    """S3(同計劃):flow 沒過或第二次才過時,judge 的 UI 結果帶沒過那幾次的現場路徑(只列真的存在的),終端印在那支 flow 後面
+    (目錄印「現場」、閃退紀錄檔印「閃退紀錄」);第一次就過的不印。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:   # 第二次才過:只印第一次的
+        root, _fake, r, _ml, _lc = _e2e_ev_run(td, rcs="1 0", crash="FATAL EXCEPTION\n")
+        c1 = root / (_E2E_UI_TRY.format("run-e1", 1) + ".crash.txt")
+        line = _e2e_login_line(r)
+        check("e2e 現場:第二次才過的 flow 後面印第一次的現場與閃退紀錄", "第二次才過" in line and f"現場 {root / _E2E_UI_TRY.format('run-e1', 1)}" in line
+              and f"閃退紀錄 {c1}" in line and _E2E_UI_TRY.format("run-e1", 2) not in line, line or r.stdout[-400:])
+    with tempfile.TemporaryDirectory() as td:   # 兩次都沒過、沒閃退:兩次的現場都印,不印閃退紀錄
+        root, _fake, r, _ml, _lc = _e2e_ev_run(td, rcs="1 1")
+        line = _e2e_login_line(r)
+        check("e2e 現場:兩次都沒過時兩次的現場都印、沒有閃退紀錄字樣", r.returncode == 1 and f"現場 {root / _E2E_UI_TRY.format('run-e1', 1)}" in line
+              and str(root / _E2E_UI_TRY.format("run-e1", 2)) in line and "閃退紀錄" not in line, str((r.returncode, line)))
+    with tempfile.TemporaryDirectory() as td:   # 第一次就過:不印
+        _root, _fake, r, _ml, _lc = _e2e_ev_run(td)
+        check("e2e 現場:第一次就過時不印現場", "現場" not in _e2e_login_line(r) and r.returncode == 0, _e2e_login_line(r))
+    with tempfile.TemporaryDirectory() as td:   # judge 單獨判:不存在的路徑不列;現場目錄與閃退紀錄分欄帶(不靠檔名猜哪個是哪個)
+        root = _e2e_proj(td)
+        rd = root / ".lumos/artifacts/android/r1"
+        (rd / "ui/l.try1").mkdir(parents=True)
+        (rd / "ui/l.try2.log").write_text("FATAL EXCEPTION\n")   # 閃退紀錄檔名不照慣例也要分得出
+        steps = [{"block": "ui", "name": ".maestro__login", "attempt": 1, "rc": 1, "report": "ui/l.try1.xml",
+                  "evidence": {"dir": str(rd / "ui/l.try1"), "crash": str(rd / "ui/l.try1.crash.txt")}},
+                 {"block": "ui", "name": ".maestro__login", "attempt": 2, "rc": 1, "report": "ui/l.try2.xml",
+                  "evidence": {"dir": str(rd / "ui/l.try2"), "crash": str(rd / "ui/l.try2.log")}}]
+        rd = _e2e_steps(root, _E2E_BASE_STEPS + steps, files={"ui/l.try1.xml": _E2E_JUNIT_FAIL, "ui/l.try2.xml": _E2E_JUNIT_FAIL})
+        r, rec = _e2e_judge(root, rd)
+        got = (rec or {}).get("runs", {}).get("blocks", {}).get("ui", [{}])[0].get("fail_evidence")
+        check("e2e 現場:judge 只帶真的存在的現場路徑、目錄與閃退紀錄分欄",
+              got == {"dirs": [str(rd / "ui/l.try1")], "crashes": [str(rd / "ui/l.try2.log")]}, str((got, r.stdout[-300:])))
+        line = _e2e_login_line(r)
+        check("e2e 現場:閃退紀錄照欄位印、不看檔名", f"閃退紀錄 {rd / 'ui/l.try2.log'}" in line and f"現場 {rd / 'ui/l.try1'}" in line
+              and f"現場 {rd / 'ui/l.try1'}、" not in line, line or r.stdout[-300:])
+    import contextlib
+    import io
+    buf = io.StringIO()   # judge 印的 UI 行:flow 名稱與現場路徑是外來文字,整行印前清掉控制字元
+    runs = {"result": "fail", "problems": ["build 回 1:\x1b[31mBOOM"], "notices": ["提醒\x1b[0m"],
+            "blocks": {"ui": [{"flow": "a\x1b[31mb.yaml", "result": "fail", "reason": "第 1 次:回傳碼 1",
+                               "fail_evidence": {"dirs": ["/r/ui/x\x1b[0m.try1"], "crashes": []}}],
+                       "visual": [{"screen": "s\x1b[31m", "result": "fail", "reason": "相符率 90%"}], "stability": "未設定", "macrobench": "未設定"}}
+    with contextlib.redirect_stdout(buf):
+        _load_lumos_inproc()._e2e_print_runs(runs)
+    check("e2e 現場:judge 印的每一行(UI、工具問題、截圖、提醒)都清掉控制字元",
+          all(t in buf.getvalue() for t in ("UI 流程 a", "現場 /r/ui/x", "? build 回 1:", "截圖 s", "! 提醒")) and "\x1b" not in buf.getvalue(),
+          repr(buf.getvalue()))
+    print("  ✓ t_android_e2e_judge_evidence")
+
+
+def _e2e_flaky_rows(root, rows):
+    """在本機總表墊幾筆舊紀錄:rows 是 (run_id, {flow: 結果}),結果寫 "flaky" 表示第二次才過。"""
+    import json
+    p = root / ".lumos/artifacts/android/history.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "a", encoding="utf-8") as f:
+        for rid, res in rows:
+            items = [dict({"kind": "ui", "name": fl, "result": "pass" if r == "flaky" else r}, **({"flaky": True} if r == "flaky" else {}))
+                     for fl, r in res.items()]
+            f.write(json.dumps({"ts": "2026-10-20T10:00:00+08:00", "run_id": rid, "head": "a" * 40, "dirty": False, "mode": "partial",
+                                "cases": ["login.ok"], "result": "pass", "items": items, "perf": None, "notices": [],
+                                "evidence": f".lumos/artifacts/android/{rid}"}, ensure_ascii=False) + "\n")
+
+
+def _e2e_flaky_run(root, fake, env, script, rid, rcs="1 0"):
+    """按情境跑一次 login.ok;rcs 預設第一次沒過、第二次過(第二次才過)。"""
+    (fake / "maestro.n").unlink(missing_ok=True)
+    (fake / "rcs").write_text(rcs)
+    return _e2e_script(root, script, env, "--case", "login.ok", rid)
+
+
+_E2E_LOGIN = ".maestro/login.yaml"
+
+
+def t_android_e2e_flaky_mark():
+    """S4(同計劃〈不穩帳〉第 1 步):第二次才過時本機總表那一項多 "flaky": true;第一次就過、沒過的項目不帶這個鍵。"""
+    import json, tempfile
+
+    def last_items(root, case=None):
+        row = json.loads((root / ".lumos/artifacts/android/history.jsonl").read_text().splitlines()[-1])
+        return row["case_results"][case]["items"] if case else row["items"]
+    with tempfile.TemporaryDirectory() as td:
+        root, fake, env, script = _e2e_feat_env(td)
+        for rid, rcs, want in (("run-a1", "1 0", {"result": "pass", "flaky": True}), ("run-a2", "0", {"result": "pass"}),
+                               ("run-a3", "1 1", {"result": "fail"})):
+            _e2e_flaky_run(root, fake, env, script, rid, rcs=rcs)
+            check(f"e2e 不穩帳:{rid} 的總表項目", last_items(root) == [dict({"kind": "ui", "name": _E2E_LOGIN}, **want)], str(last_items(root)))
+            check(f"e2e 不穩帳:{rid} 的總表裡那個情境自己的項目", last_items(root, "login.ok") == [dict({"kind": "ui", "name": _E2E_LOGIN}, **want)],
+                  str(last_items(root, "login.ok")))
+    print("  ✓ t_android_e2e_flaky_mark")
+
+
+def t_android_e2e_flaky_notice():
+    """S5(同計劃〈不穩帳〉第 2 步):判定記完總表後,這次跑到的 flow 在它自己最近 20 筆判出過或沒過的紀錄裡第二次才過到 3 筆就點名;
+    2 筆不點、窗口外的不算、沒判到的不算進分母;回傳碼與紀錄不因此改變。"""
+    import json, tempfile
+    L = _E2E_LOGIN
+    with tempfile.TemporaryDirectory() as td:   # 之前 2 筆 + 這次 = 3 筆;中間一筆沒判到不算進分母
+        root, fake, env, script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("old1", {L: "flaky"}), ("old2", {L: "pass"}), ("old3", {L: "unjudged"}), ("old4", {L: "flaky"})])
+        r = _e2e_flaky_run(root, fake, env, script, "run-b1")
+        line = next((ln for ln in r.stdout.splitlines() if "不穩帳" in ln), "")
+        check("e2e 不穩帳:3 次第二次才過就點名(沒判到的不算進分母)", L in line and "最近 4 次裡 3 次第二次才過" in line, r.stdout[-500:])
+        recs = sorted((root / ".lumos/e2e-records").glob("*.json"))
+        fr = (json.loads(recs[-1].read_text()).get("feature_runs") or {}).get("login.ok", {}) if recs else {}
+        check("e2e 不穩帳:點名不改回傳碼與紀錄", r.returncode == 0 and fr.get("result") == "pass", str((r.returncode, fr)))
+    with tempfile.TemporaryDirectory() as td:   # 1 筆舊的 + 這次 = 2 筆
+        root, fake, env, script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("old1", {L: "flaky"})])
+        r = _e2e_flaky_run(root, fake, env, script, "run-c1")
+        check("e2e 不穩帳:2 筆不點名", "不穩帳" not in r.stdout, r.stdout[-400:])
+    with tempfile.TemporaryDirectory() as td:   # 2 筆舊的不穩之後 19 筆正常,這次再不穩 → 窗口 20 筆裡只有 1 筆;再補 2 筆才點名
+        root, fake, env, script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("old1", {L: "flaky"}), ("old2", {L: "flaky"})] + [(f"ok{i}", {L: "pass"}) for i in range(19)])
+        r = _e2e_flaky_run(root, fake, env, script, "run-d1")
+        check("e2e 不穩帳:窗口外的不穩不算", "不穩帳" not in r.stdout, r.stdout[-400:])
+        _e2e_flaky_rows(root, [("old9", {L: "flaky"})])
+        r = _e2e_flaky_run(root, fake, env, script, "run-d2")
+        line = next((ln for ln in r.stdout.splitlines() if "不穩帳" in ln), "")
+        check("e2e 不穩帳:窗口內補到 3 筆就點名、分母封頂 20", "最近 20 次裡 3 次第二次才過" in line, r.stdout[-400:])
+    with tempfile.TemporaryDirectory() as td:   # 1 筆舊的 + 這次 = 2 次;同一個 run 目錄重判兩次不算新的一次,不該湊到 3 筆
+        root, fake, env, script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("old1", {L: "flaky"})])
+        _e2e_flaky_run(root, fake, env, script, "run-e1")
+        rd = root / ".lumos/artifacts/android/run-e1"
+        outs = [_e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--no-record", "--history", env=env).stdout
+                for _ in range(2)]
+        check("e2e 不穩帳:同一次執行重判不重複算進點名", not any("不穩帳" in o for o in outs), outs[-1][-400:])
+    import contextlib
+    import io
+    with tempfile.TemporaryDirectory() as td:   # 點名那行的 flow 名稱是外來文字:整行印前清掉控制字元
+        root = Path(td)
+        bad = "a\x1b[31mb.yaml"
+        _e2e_flaky_rows(root, [(f"n{k}", {bad: "flaky"}) for k in range(3)])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _load_lumos_inproc()._e2e_flaky_notify(root / ".lumos/artifacts/android/history.jsonl",
+                                                   [{"kind": "ui", "name": bad, "result": "pass", "flaky": True}])
+        check("e2e 不穩帳:點名那行清掉控制字元", "不穩帳:a" in buf.getvalue() and "\x1b" not in buf.getvalue(), repr(buf.getvalue()))
+    print("  ✓ t_android_e2e_flaky_notice")
+
+
+def t_android_e2e_flaky_history():
+    """S6(同計劃〈不穩帳〉第 3 步):history --flaky 對最近 --last 筆紀錄每支有第二次才過的 flow 印一行(幾次裡幾次、最近一次的證據目錄),
+    沒有就印一句沒有;一般 history 每行列出那一筆第二次才過的 flow。"""
+    import json
+    import tempfile
+    L, OTHER = _E2E_LOGIN, ".maestro/other.yaml"
+    with tempfile.TemporaryDirectory() as td:
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("h1", {L: "flaky", OTHER: "pass"}), ("h2", {L: "pass", OTHER: "pass"}), ("h3", {L: "flaky", OTHER: "fail"})])
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+        lines = [ln for ln in r.stdout.splitlines() if L in ln]
+        check("e2e 不穩帳:history --flaky 一支 flow 一行、幾次裡幾次、最近一次的證據目錄",
+              r.returncode == 0 and len(lines) == 1 and "3 次裡 2 次" in lines[0] and ".lumos/artifacts/android/h3" in lines[0], r.stdout)
+        check("e2e 不穩帳:沒有不穩的 flow 不列", OTHER not in r.stdout, r.stdout)
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--last", "1", env=env)
+        check("e2e 不穩帳:--last 限定看幾筆", "1 次裡 1 次" in r.stdout, r.stdout)
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), env=env)
+        h1 = next((ln for ln in r.stdout.splitlines() if "android/h1" in ln), "")
+        h2 = next((ln for ln in r.stdout.splitlines() if "android/h2" in ln), "")
+        check("e2e 不穩帳:一般 history 列出那一筆第二次才過的 flow", f"第二次才過:{L}" in h1 and "第二次才過" not in h2, r.stdout)
+    with tempfile.TemporaryDirectory() as td:   # 真的按情境跑一次(總表那行有 case_results):照情境篩也看得到第二次才過
+        root, fake, env, script = _e2e_feat_env(td)
+        _e2e_flaky_run(root, fake, env, script, "run-h1")
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--case", "login.ok", env=env)
+        check("e2e 不穩帳:history --flaky --case 看得到那個情境第二次才過的 flow", f"{L}  1 次裡 1 次" in r.stdout, r.stdout)
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--case", "login.ok", env=env)
+        check("e2e 不穩帳:history --case 那行列出第二次才過的 flow", f"第二次才過:{L}" in r.stdout, r.stdout)
+        rd = root / ".lumos/artifacts/android/run-h1"   # 同一個 run 目錄重判兩次:總表多兩行,但還是同一次執行
+        for _ in range(2):
+            _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--no-record", "--history", env=env)
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+        check("e2e 不穩帳:同一次執行重判不重複算", f"{L}  1 次裡 1 次" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:   # 超過 --last 次執行時丟最舊的那次;「沒有」那句講的是最近幾次執行
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("A", {L: "pass"}), ("B", {L: "pass"}), ("C", {L: "flaky"})])
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--last", "2", env=env)
+        check("e2e 不穩帳:--last 留最近的、丟最舊的", f"{L}  2 次裡 1 次" in r.stdout and "android/C" in r.stdout, r.stdout)
+        _e2e_flaky_rows(root, [("D", {L: "pass"}), ("E", {L: "pass"}), ("E", {L: "pass"})])   # E 重判一次:3 行、2 次執行
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--last", "2", env=env)
+        check("e2e 不穩帳:最近 2 次都沒有時說「最近 2 次執行」沒有", "最近 2 次執行的紀錄裡沒有第二次才過的 flow" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:   # 沒判到的那次不算進分母(跟點名同一套數法)
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("u1", {L: "flaky"}), ("u2", {L: "unjudged"}), ("u3", {L: "pass"})])
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+        check("e2e 不穩帳:history --flaky 沒判到的不算進分母", f"{L}  2 次裡 1 次" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:   # 同一次執行後來被擋下的重判(項目是空的)不蓋掉真的判定;run_id 存數字或字串都算同一次
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("R1", {L: "flaky"}), ("R1", {}), ("7", {L: "pass"})])
+        with open(root / ".lumos/artifacts/android/history.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps({"run_id": 7, "cases": ["login.ok"], "result": "pass", "items": [{"kind": "ui", "name": L, "result": "pass"}],
+                                "evidence": ".lumos/artifacts/android/7"}) + "\n")
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+        check("e2e 不穩帳:history --flaky 被擋下的空重判不蓋掉判定、數字與字串 run_id 算同一次", f"{L}  2 次裡 1 次" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:   # --last 數的是不同執行:重判多寫的行不佔名額,窗口裡較早那次的不穩照樣算到
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("R1", {L: "flaky"})] + [(f"R{n}", {L: "pass"}) for n in range(2, 6)] + [("R5", {L: "pass"})] * 2)
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--last", "5", env=env)
+        check("e2e 不穩帳:history --flaky --last 數不同執行、重判行不佔名額", f"{L}  5 次裡 1 次" in r.stdout, r.stdout)
+    with tempfile.TemporaryDirectory() as td:   # flow 名稱是外來文字(設定檔寫的):印出前清掉控制字元
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("h1", {"a\x1b[31mb.yaml": "flaky"})])
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), env=env)
+        line = next((ln for ln in r.stdout.splitlines() if "android/h1" in ln), "")
+        check("e2e 不穩帳:一般 history 的第二次才過清單清掉控制字元", "第二次才過:a" in line and "\x1b" not in line, repr(line))
+        _e2e_flaky_rows(root, [("h2", {"c\x1b[31md.yaml": "fail"})])
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), env=env)
+        line = next((ln for ln in r.stdout.splitlines() if "android/h2" in ln), "")
+        check("e2e 不穩帳:一般 history 的沒過清單也清掉控制字元(整行一個出口)", "ui c" in line and "\x1b" not in line, repr(line))
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+        check("e2e 不穩帳:history --flaky 那行清掉控制字元", "1 次裡 1 次" in r.stdout and "\x1b" not in r.stdout, repr(r.stdout))
+    with tempfile.TemporaryDirectory() as td:
+        root, _fake, env, _script = _e2e_feat_env(td)
+        _e2e_flaky_rows(root, [("h1", {L: "pass"})])
+        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+        check("e2e 不穩帳:沒有不穩的 flow 時印一句沒有", r.returncode == 0 and "沒有第二次才過的 flow" in r.stdout, r.stdout)
+    print("  ✓ t_android_e2e_flaky_history")
+
+
 def t_android_e2e_perf_per_method():
     """多個效能測試方法:每跑完一個就收一次結果、收進各自的子目錄(Macrobenchmark 的結果檔名常固定,下一個會蓋掉)。
     判準來源是 Macrobenchmark 結果檔的命名(代碼審 code-e2e-by-feature r1 通才 F1)。"""
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         cmd = 'mkdir -p r && echo {{TEST}} > r/m-benchmarkData.json'
-        root, fake, env, script = _e2e_feat_env(td, macrobench=True, macrobench_cmd=cmd)
+        root, _fake, env, script = _e2e_feat_env(td, macrobench=True, macrobench_cmd=cmd)
 
         def perf(c):
             c["e2e"]["features"]["login"]["cases"]["ok"]["macrobench"] = ["Bench#one"]
