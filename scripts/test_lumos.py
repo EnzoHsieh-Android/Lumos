@@ -37889,12 +37889,12 @@ def t_ci_status_and_gov():
         "branch": "main", "workflow": "CI", "conclusion": "failure", "title": "bad",
         "url": "u", "failed_step": "build/test", "dedup_key": "7:1:failure"},
         ensure_ascii=False) + "\n", encoding="utf-8")
-    # gov 第 7 源
-    r = _ci_run(root, v, env, "gov")
+    # gov 第 7 源(帶 --since 9999:紀錄時間寫死,預設只看近 90 天,2026-10-28 起寫死的那筆掉出範圍而翻紅)
+    r = _ci_run(root, v, env, "gov", "--since", "9999")
     check("gov 見得到 CI 事件", "ci" in r.stdout and "failure" in r.stdout, r.stdout[-400:])
     # 總開關:移除 ci 區塊 → gov 不 load
     (root / ".lumos" / "config.json").write_text("{}", encoding="utf-8")
-    r = _ci_run(root, v, env, "gov")
+    r = _ci_run(root, v, env, "gov", "--since", "9999")
     check("gov 總開關:移除宣告後不顯示", "failure" not in r.stdout, r.stdout[-300:])
 
 
@@ -94497,7 +94497,7 @@ def t_drift_m1_review_r1_ledger_kinds_and_umask():
     with open(log, "a", encoding="utf-8") as fh:
         fh.write(_j.dumps(ev, ensure_ascii=False) + "\n")
         fh.write(_j.dumps(dict(ev, note="m1那筆", detail="m1那筆", check="old-sentence"), ensure_ascii=False) + "\n")
-    r = run(vault, "gov", "--full")
+    r = run(vault, "gov", "--since", "9999", "--full")   # 紀錄時間寫死,預設只看近 90 天
     check("③同提交、同筆記、同 kind 的 c 類與 m1 兩筆,gov 去重後都在", "c類那筆" in r.stdout and "m1那筆" in r.stdout, r.stdout[-800:])
 
 
