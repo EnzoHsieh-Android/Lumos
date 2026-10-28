@@ -105,11 +105,11 @@ flowchart LR
     class NEW,N1,N2,N3,N4 new
 ```
 
-## 3. CLI 子命令家族 (95 個頂層命令)
+## 3. CLI 子命令家族 (96 個頂層命令)
 
 ```mermaid
 flowchart TB
-    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 95 個頂層命令)"]
+    ROOT["lumos &lt;cmd&gt;<br/>(python3 標準庫 · 零依賴 · 96 個頂層命令)"]
 
     ROOT --> READ["讀取 / 導航"]
     ROOT --> HEALTH["巡檢 / 治理"]
@@ -139,7 +139,7 @@ flowchart TB
     class R,H,W,G,LP,I,ST,C,L leaf
 ```
 
-> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 95 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
+> `guard`/`anchor`/`canary`/`loop`/`code-loop` 各帶子命令(如 `anchor verify`);上面共 96 個頂層命令,權威清單以 `lumos --help` 為準(**分類小計刻意不寫**:只有總數有機械守衛,寫了沒守的數字就是新漂移面)。
 
 ## 4. 筆記怎麼跟上程式碼:五段接力
 

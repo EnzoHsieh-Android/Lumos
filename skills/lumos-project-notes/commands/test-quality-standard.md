@@ -63,6 +63,24 @@
 
 來源(核對時的版本要記下):[user-event options:advanceTimers](https://testing-library.com/docs/user-event/options#advancetimers)、[Using Fake Timers](https://testing-library.com/docs/using-fake-timers)、[Vitest vi.useFakeTimers / setSystemTime / stubGlobal](https://vitest.dev/api/vi.html)。
 
+### Android 資料層(Room)的撰寫補充
+
+沿共用規範驗需求答案與相關故障;資料層另有兩條分工(2026-10-28 官方文件核對,單源=[[Projects/Room資料庫測試守衛_計劃]]):**mock DAO 只證 Repository 自己的邏輯**(合併、快取、錯誤處理),SQL 根本沒執行;查詢、資料限制、交易、升級要用真的 Room。真的 Room 用**記憶體資料庫**(`Room.inMemoryDatabaseBuilder`,每支測試乾淨開始、關掉就消失);跑在哪:純 Android 模組放 `androidTest` 在裝置或模擬器上跑(交給 CI 或 Android 端到端驗收),Room KMP 專案可在本機 JVM 跑並搭 `BundledSQLiteDriver`(電腦與手機用同一份 SQLite);官方**不建議用 Robolectric 跑 Room**(電腦上的 SQLite 版本可能跟手機不同)。
+
+- **查詢**:先寫入涵蓋「該出現、不該出現、排序邊界」的資料,再斷言回傳的內容與順序;不要只斷言筆數或「不是空的」。
+- **資料限制**:主鍵、唯一索引、外鍵(Room 宣告了 `ForeignKey` 就會開外鍵檢查)各寫一支:違反時丟 `SQLiteConstraintException`,而且資料沒被改;衝突策略是 `REPLACE` 或 `IGNORE` 的,改成斷言覆蓋或略過後的結果。
+- **交易**:`@Transaction` 方法或 `withTransaction` 區塊,讓後半步失敗(例如第二筆主鍵重複),斷言前半步也撤回、舊資料原樣在;只測成功路徑證不了交易。
+- **升級**:`exportSchema` 要開、`schemas/<類別完整名稱>/<版本>.json` 要提交;每一步升級用 `MigrationTestHelper` 先 `createDatabase(舊版)` 用原始 SQL 塞資料,再 `runMigrationsAndValidate(新版, …)` 驗結構與資料都還在;另有一支跑完全部升級的測試(官方建議,`addMigrations(*全部)` 從最舊版開到最新版)。Room 2 是 `androidx.room`、Room 3 是 `androidx.room3`,後者的 `MigrationTestHelper` 要帶 driver 與資料庫檔。社群做法(非官方):用 Robolectric 跑升級測試時,結構檔要加進 debug 的 assets,測試資料夾的 assets 讀不到。升級測試一跑就丟 `AbstractMethodError`(kotlinx.serialization 的方法)時,多半是 Android 測試套件的依賴版本被鎖成跟 App 一樣、App 這邊的 kotlinx-serialization 比 room-testing 要的舊而被降版;在 App 端明確加較新的 `kotlinx-serialization-core`(2026-10-28 Room 2.8.5 實測要 1.8.1)。
+- **Flow/LiveData 重送**:收第一次發出的值、寫入、斷言下一次發出的值;Room 只要表有寫入就會重送(值沒變也送),畫面層要的是「值變了才更新」時另驗 `distinctUntilChanged`。LiveData 要搭 `InstantTaskExecutorRule` 或 `observeForever`。
+- **TypeConverter**:經 DAO 寫進去再讀出來一圈,斷言值相等,另測 null、時區、極端值;只單獨呼叫轉換函式證不了 Room 有用到它。
+- **預載資料庫(createFromAsset)**:第一次開啟時斷言預載的資料讀得到;資產檔的結構要跟目前版本一致,不一致 Room 會在開啟時丟例外,升版時連資產檔一起測。
+
+故障挑本次需求:拿掉查詢的 WHERE 條件、拿掉 `@Transaction`、刪掉一條 Migration、把衝突策略改掉,確認對應斷言翻紅。
+
+推送前的 Room 守衛(`lumos room-guard`)只證「有升級路徑、有結構檔、有沒被 mock 的測試呼叫到改到的 DAO 方法」,不證測試跑過或寫得對;寫得對要靠這一節與審查。
+
+來源(核對時的版本要記下):[Room 測試與除錯](https://developer.android.com/training/data-storage/room/testing-db)、[Room 資料庫升級](https://developer.android.com/training/data-storage/room/migrating-db-versions)、[預載資料庫](https://developer.android.com/training/data-storage/room/prepopulate)。
+
 ### C#、Android、iOS 的原生收證接入
 
 沿已安裝 `lumos test-quality capture/check` 保存 JUnit；原生 runner 必須實際執行、report 全新、`--target` 指向真正案例。reporter／橋接腳本、設定、runtime 及 lock 用 `--context` 綁定，原始報告與退出碼一起歸檔。以下是固定消費案例的部分原生資格，完整考卷仍逐項驗，不自動升格整棧 synthetic-verified。

@@ -1,0 +1,629 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Room資料庫測試守衛_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Room資料庫測試守衛_計劃.md
+index e0c0e0c69de91d93b7b167f2b8d33198a88167a4..0ac189e39110517d86ee720ee9d1ea45505ba07a 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Room資料庫測試守衛_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Room資料庫測試守衛_計劃.md
+@@ -154,15 +154,18 @@ REVISIT:2027-04-28 數治理帳裡 room-guard 各類筆數對照 RETIRE-IF 判
+ 
+ ## 合約候選
+ 
+ - 升級路徑缺口在判得出的寫法下一定擋(`Migration`/`AutoMigration` 整數字面),判不出的寫法才降成提醒——改成「判不出也擋」會讓工廠函式寫法的專案永遠推不上去,改成「缺口也只提醒」等於拿掉這道的主要功能。候選,不等於已標。
+ - 結構檔改寫只擋主線分岔點上已有的版本。候選,不等於已標。
+ 
+ ## 實作偏離紀錄
+ 
+ - 2026-10-28 實作:結構檔「讀不懂就擋」收窄成「看得出是 Room 結構檔(含 formatVersion 或 identityHash 字樣)卻讀不懂才擋」。原文照字面實作時,`res/raw/1.json` 這類同形狀但不是 Room 的資源檔壞掉也會擋推送;收窄後 [S38] 的合併衝突情境照擋。
+ - 2026-10-28 實作:有觸發而放行的 passed 照鄰居(存量漂移、每支檔有家)記在本機帳 `docs/.governance-local.jsonl`,不進版控帳——每次推送一筆沒資訊的行是帳本雜訊;RETIRE-IF 數 passed 時要連本機帳一起看。
++- 2026-10-28 代碼審 r1:「這一版的結構檔沒提交」([S5])只判這次碰到的資料庫(它的原始碼、版本常數的定義檔或結構檔目錄有改);整個專案一個結構檔都沒有時改成只提醒怎麼設匯出位置。原文照字面實作時,沒設匯出位置的專案只要碰到 Room 就被擋,訊息教的「把 N.json 加進提交」做不到;主線上本來就有的缺口也會擋碰到別處的推送。[test: t_room_mig_never_exported_warns_not_blocks]
++- 2026-10-28 代碼審 r1:`version =` 寫成常數時,[S5] 那一條到非測試原始碼找 `val/int 名稱 = 整數` 的定義,恰好一個值才用;改到定義它的檔也算碰到 Room。原文「常數版本號不用從原始碼猜」只講升級路徑那半(仍以結構檔為準),[S5] 照字面只認整數字面時,只改常數升版、忘了提交結構檔的推送整個不觸發。[test: t_room_mig_constant_bump_without_schema_blocks]
++- 2026-10-28 代碼審 r1:純刪除的那段只在刪除點前後兩行都落在同一個方法裡時才算改到它([S26] 方法裡刪一行照舊要求測試)。原文「刪除點前後兩行」照字面實作時,整段刪掉一個方法會要求相鄰、沒改過的方法補測試。[test: t_room_dao_whole_method_deletion_no_neighbor]
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-10-28,4 席:正確性、邊界、通才、架構對齊,全 sonnet;只有同一家模型審過):去重成 15 組根因、全折(折入後派鏡像核對,補齊 7 處折得不完整、6 處前後不一致、2 處程式宣稱不符),只放行 1 條(席位自述引用都對得上、沒有缺陷);blocking 20 條(正確性 8、邊界 8、通才 3、架構 1;架構那條原標 minor 又標 blocking 是,退回該席重判後改 major)。卷證 `governance/review-reports/room資料庫測試守衛/`。結論:原稿以「改動的 `@Database` 檔」為入口太窄、範圍照錯了變數、DAO 測試認定太死;改成以結構檔為準、起點交給 `_push_range_start`、DAO 測試改成「呼叫到且沒 mock、全庫有真 Room」。
+ - r1 新增機制的最小解檢查:`passed` 帳(不加就分不出「沒人用 Room」與「用了都過」,RETIRE-IF 量不出來);`--push-remote/--pushed-ref`(不加就只能用掛鉤的空樹退路,推 tag 會把整個 repo 當新改動);其他折法都是改判斷規則或重用既有工具,沒有新設定鍵。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/room-guard.md b/docs/lumos-toolchain-knowledge/Systems/room-guard.md
+index 6478e75473d5b727f1d1355be1573ecae6ad242e..613c4f784dcf54d6823dddeefb8e49fe6d598e86 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/room-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/room-guard.md
+@@ -11,20 +11,22 @@ about_code:
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   WHY:升級那半以 Room 匯出的結構檔為準,不從原始碼猜版本號 [出處:[[Projects/Room資料庫測試守衛_計劃]] 設計審 r1] [因:版本號常寫成常數、類別名前常疊 @TypeConverters、巢狀類別與搬套件都讓原始碼解析猜錯;結構檔目錄名就是 Room 自己認的類別完整名稱] [不選:只看改動的 @Database 檔(改常數檔、刪 Migration 都漏掉)] [test:t_room_mig_constant_version_uses_schema]
+   WHY:升級那半跟「與主線的分岔點」比,不跟這次推送的起點比 [出處:同計劃設計審 r1] [因:主線上的版本才可能已經發給使用者;只在分支上的版本反覆編譯改寫、退回、刪掉都是正常開發] [不選:跟範圍起點比(第二次推送就把自己分支上的版本當成已發布)] [test:t_room_mig_schema_rewrite_branch_only_passes]
+   WHY:DAO 測試認「沒 mock 這個 DAO 的測試以 .方法名( 呼叫它」加「全庫至少一支真 Room 測試」,不要求同一支檔有 Room 建法 [出處:同計劃設計審 r1] [因:資料庫常建在基底類別、JUnit Rule 或 Hilt 測試模組] [代價:名字撞名的方法會被別的 DAO 的測試放行] [test:t_room_dao_test_via_base_class_passes]
+   WHY:判不清一律講一句放行並記帳,跟 Android 端到端驗收的判不清就擋刻意不同 [出處:同計劃〈實務隱患〉] [因:這道是靜態看程式碼形狀,git 算不出來時擋下等於工具壞了就擋所有人] [test:t_room_guard_range_start_tag_and_empty]
+   SEE:[[Systems/test-quality-cli]] [[Systems/bound-tests-gate]] [[Projects/Room資料庫測試守衛_計劃]]
++  WHY:原始碼那邊的「這一版結構檔沒提交」只判這次碰到的資料庫,整個專案一個結構檔都沒有時只提醒怎麼開匯出 [出處:代碼審 code-room資料庫測試守衛 r1 正確性席] [因:沒設匯出位置時訊息教的補法做不到;主線上本來就有的缺口不該擋碰到別處的推送] [不選:每次碰到 Room 就判全部資料庫] [test:t_room_mig_never_exported_warns_not_blocks]
++  REVISIT:2027-01-31 看 room-guard 的擋下、跳過帳與誤擋回報,決定要不要在 CI 補一步(推送時加 --no-verify 就繞得過推送前掛鉤)
+ verified_by:
+   - "[[Verification/2026-10-28_Room守衛實驗專案實跑]]"
+ ---
+ # room-guard
+ 
+ 推送前看 Android 專案的 Room 資料庫與 DAO 有沒有該有的升級路徑、結構檔與測試。子指令與它的判斷都在 `scripts/lumos`(函式名都以 `_rg_` 開頭,入口 `cmd_room_guard`),推送前掛鉤 `scripts/hooks/pre-push` 裡排在存量漂移之後、回頭重讀之前的那一段呼叫它。
+ 
+ - 範圍起點與主線候選沿用推送閘的共用算法(掛鉤帶遠端與 ref 時同存量漂移檢查),這裡不另算一份;那套的家見 [[Systems/bound-tests-gate]] 列的推送閘順序。
+ - 測試要怎麼寫才對(七種情況、mock 與真 Room 的分工、故障挑選)不在這裡判,寫在測試品質規範的 Room 一節,家在 [[Systems/test-quality-cli]]。
+ - 設定鍵:`.lumos/config.json` 的 `room_guard.gate`、`room_guard.dao`(各 block/warn/off)、`room_guard.allow_destructive`(類別完整名稱清單);單次跳過 `LUMOS_SKIP_ROOM_GUARD=1`。治理帳閘名 `room-guard`:blocked、warned、skipped、skipped-env 記版控帳,有觸發而放行的 passed 記本機帳。
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index b234d50491e6e53390d35270dae15ae9d2ba5e86..ac33c8bf7053ca8a7f79c945fd6c5fd36caa6100 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -689,21 +689,21 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
+       echo "逃生:照上面每一筆的 lumos drift fix 指令改掉、或 lumos drift ack 表態照留(兩種都要提交進去才算),再推;誤擋就 LUMOS_SKIP_DRIFT_CHECK=1 git push 單次略過(會留帳);整個專案先只提醒 → .lumos/config.json 的 drift_check.gate 設成 warn(舊句檢查沒明寫 drift_check.old_sentence 就跟著只提醒);上面是「擋下:舊句檢查」而專案明寫了 old_sentence=block 的話,要改的是 drift_check.old_sentence(設成 warn)。"
+       echo ""
+     } >&2
+     pp_record_block drift "$_rref" "圖譜裡有句子跟這次推送改過的狀態對不上(存量漂移)"
+   elif [[ "$dr_rc" -ne 0 ]]; then
+     echo "漂移檢查沒能跑完(工具錯誤或 git 太慢),這次沒檢查;CI 會再檢查一次。(上面如果印了「擋下:」,指的是這道檢查自己沒跑成,推送沒有被擋。)" >&2
+   fi
+   # Room 守衛(Projects/Room資料庫測試守衛_計劃〈做法〉6):Android 專案改了 Room 資料庫或 DAO 時,升級路徑、結構檔、升級測試、
+   # 改到的 DAO 方法有沒有真 Room 測試。範圍照存量漂移那段原樣交 遠端舊值..本地頂端 加遠端名與遠端 ref,起點由 lumos 的
+   # _push_range_start 算;分支與 tag 都跑;沒碰到 Room 的推送它自己安靜放行。模式讀被推頂端的 .lumos/config.json(room_guard.gate/dao)。
+-  # 回傳碼:1 → 擋;128 以上 → 整支掛鉤停下;其他非零(含舊版 lumos 沒有這個子命令回 2)→ 講一句「這次沒檢查」再放行。CI 第一版不接。
++  # 回傳碼:1 → 擋;128 以上 → 整支掛鉤停下;其他非零(含舊版 lumos 沒有這個子命令回 2)→ 講一句「這次沒檢查」再放行。CI 不接,回頭條件在 Systems/room-guard 的 REVISIT。
+   rg_rc=0
+   "$PY" "$GRAPHCTL" room-guard --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref" \
+     --repo "$REPO_ROOT" || rg_rc=$?
+   pp_stop_if_signaled "$rg_rc" "Room 守衛"
+   if [[ "$rg_rc" -eq 1 ]]; then
+     {
+       echo ""
+       echo "逃生:照上面每一條補(升級路徑、這一版的結構檔、升級測試、改到的 DAO 方法用真 Room 寫測試),再推;確定還沒發布的結構檔改寫或其他誤擋就 LUMOS_SKIP_ROOM_GUARD=1 git push 單次略過(會留帳);只鬆 DAO 那半 → .lumos/config.json 的 room_guard.dao 設成 warn;整道先只提醒 → room_guard.gate 設成 warn;純快取的資料庫列進 room_guard.allow_destructive。"
+       echo ""
+     } >&2
+diff --git a/scripts/lumos b/scripts/lumos
+index cf89cbb171a9a377d053074172341b908be2214b..dc1db0eb4130042c9abb0a85b6efcfe4409f26ed 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -6742,34 +6742,36 @@ def _lazy_re(pattern, flags=0):
+         r = _LAZY_RE_CACHE[(pattern, flags)] = re.compile(pattern, flags)
+     return r
+ 
+ 
+ _C_STRIP_PAT = (r'"""[^"]*+(?:"(?!"")[^"]*+)*+(?:"""|\Z)' r"|'''[^']*+(?:'(?!'')[^']*+)*+(?:'''|\Z)"
+                 r'|@"[^"]*+(?:""[^"]*+)*+"?'
+                 r"|'[^'\\\n]*+(?:\\.[^'\\\n]*+)*+'?|\"[^\"\\\n]*+(?:\\.[^\"\\\n]*+)*+\"?|`[^`\\]*+(?:\\.[^`\\]*+)*+`?"
+                 r"|//[^\n]*+|/\*[^*]*+(?:\*++[^*/][^*]*+)*+(?:\*++/)?")   # 用時加 re.S
+ 
+ 
+-def _strip_c_comments(txt, blank_strings=False):
++def _strip_c_comments(txt, blank_strings=False, keep_newlines=False):
+     """剝 C 式註解(字串裡的 // 與 /* 不算),全庫只有這一支(測試檔剝註解、Kotlin 建置檔剝註解都呼叫它;合併主線 r3 G1 與
+     測試名收自由字串的 _C_STRIP_PAT,不留兩套掃描)。blank_strings=True 時把字串內容清空、保留引號(java 的 c-style+strings:
+-    測試方法掃描不被字串裡的假簽章騙)。掃描本體是 _C_STRIP_PAT(多行字串、反引號、佔有式量詞,見上)。"""
++    測試方法掃描不被字串裡的假簽章騙)。keep_newlines=True 時剝掉的註解與清空的字串內容換成同樣多的換行(Room 守衛:
++    行號要對得上差異)。掃描本體是 _C_STRIP_PAT(多行字串、反引號、佔有式量詞,見上)。"""
+     def _one(mo):
+         tok = mo.group(0)
++        nl = "\n" * tok.count("\n") if keep_newlines else ""
+         if tok[:2] in ("//", "/*"):
+-            return ""
++            return nl
+         if not blank_strings:
+             return tok
+         for q in ('"""', "'''", '@"'):
+             if tok.startswith(q):
+-                return q + (q if q != '@"' else '"')
+-        return tok[0] * 2
++                return q + nl + (q if q != '@"' else '"')
++        return tok[0] + nl + tok[0]
+     return _lazy_re(_C_STRIP_PAT, re.S).sub(_one, txt)
+ 
+ 
+ def _anchor_migration_hint(pentry, name):
+     """綁定找不到時,這個名字是不是在「副檔名對、檔名不合測試檔名錨」的檔裡宣告(Playwright 2026-10-15 起只掃 *.spec.*/*.test.*,
+     自訂 testMatch 的專案舊綁定會變懸空,代碼審 code-測試名收自由字串 r1 正確性席)→ 一句提示,或空字串。只在綁定已經不是真測試時才查。
+     「名字 → 檔」對照依 (平台根, profile 名, 檔名錨) 掃一次快取(代碼審 r2:原本每條懸空重掃整個 repo);取名同 discover_test_methods。"""
+     import fnmatch
+     prof = (pentry or {}).get("profile") or {}
+     globs = prof.get("file_name_match")
+@@ -46908,31 +46910,22 @@ _RG_ROOM_MOCKED_RE = re.compile(r"\bmock(?:k)?Static\s*\(\s*Room\b")
+ 
+ def _rg_is_test_path(p):
+     """[S37] 測試路徑:有一段 src/<名稱>/,名稱是 test、以 test 或 androidTest 開頭,或以 Test 結尾。"""
+     for n in re.findall(r"(?:^|/)src/([^/]+)/", p):
+         if n.startswith(("test", "androidTest")) or n.endswith("Test"):
+             return True
+     return False
+ 
+ 
+ def _rg_strip(txt):
+-    """剝程式註解並清空字串內容,★保留換行★(行號要對得上差異);掃描式重用 _C_STRIP_PAT,不另寫一套。"""
+-    def _one(mo):
+-        tok = mo.group(0)
+-        nl = "\n" * tok.count("\n")
+-        if tok[:2] in ("//", "/*"):
+-            return nl
+-        for q in ('"""', "'''"):
+-            if tok.startswith(q):
+-                return q + nl + q
+-        return tok[0] + nl + tok[0]
+-    return _lazy_re(_C_STRIP_PAT, re.S).sub(_one, txt)
++    """剝程式註解並清空字串內容,★保留換行★(行號要對得上差異);走全庫共用的 _strip_c_comments。"""
++    return _strip_c_comments(txt, blank_strings=True, keep_newlines=True)
+ 
+ 
+ def _rg_balanced(s, i):
+     """s[i] 是左括號 → 對應右括號的位置(找不到回 len(s))。字串與註解要先剝掉。"""
+     depth = 0
+     for j in range(i, len(s)):
+         c = s[j]
+         if c in "([{":
+             depth += 1
+         elif c in ")]}":
+@@ -46998,22 +46991,23 @@ def _rg_databases(text):
+     out = []
+     for m in re.finditer(r"@(?:androidx\.room3?\.)?Database\s*\(", text):
+         i = m.end() - 1
+         j = _rg_balanced(text, i)
+         args = text[i + 1:j]
+         # 其後的註記(@TypeConverters(Converters::class) 這類)不用另外跳:`X::class`、`X.class` 都不是「class 名稱」的形狀
+         cm = re.search(r"\bclass\s+(\w+)", text[j + 1:])
+         if not cm:
+             continue
+         vm = re.search(r"\bversion\s*=\s*([^,)\]]+)", args)
+-        ver = int(vm.group(1).strip()) if vm and re.fullmatch(r"\d{1,9}", vm.group(1).strip()) else None
+-        out.append({"name": cm.group(1), "version": ver,
++        expr = vm.group(1).strip() if vm else ""
++        ver = int(expr) if re.fullmatch(r"\d{1,9}", expr) else None
++        out.append({"name": cm.group(1), "version": ver, "expr": expr,
+                     "export_false": bool(re.search(r"\bexportSchema\s*=\s*false\b", args))})
+     return out
+ 
+ 
+ def _rg_package(text):
+     m = re.search(r"^\s*package\s+([\w.]+)", text, re.M)
+     return m.group(1) if m else ""
+ 
+ 
+ def _rg_reach(edges, src, dst):
+@@ -47116,57 +47110,81 @@ def _rg_mig_state(root, where):
+             continue
+         t = _rg_strip(_rg_text(read, p) or "")
+         e, u = _rg_edges(t)
+         edges += e
+         unres += u
+         destructive = destructive or "fallbackToDestructiveMigration" in t
+     return edges, unres, destructive
+ 
+ 
+ def _rg_fork_point(root, tip, push):
+-    """終點跟主線的分岔點 → sha 或 None(找不到主線)。掛鉤帶了遠端與 ref 就照推送閘的主線候選(_push_mainlines),
++    """終點跟主線的分岔點 → sha 或 None(找不到主線、git 失敗)。掛鉤帶了遠端與 ref 就問推送閘共用的 _push_range_start,
+     手動跑照 _lens_default_base(含本機 main/master)。"""
+     if not push:
+         return _lens_default_base(root, tip=tip, include_local=True)
+-    mls, err = _push_mainlines(root, push[0], push[1])
+-    if err or not mls:
+-        return None
+-    r = _lens_git(root, "merge-base", "--all", tip, *[sha for _n, sha in mls])
+-    bases = r.stdout.split() if (r is not None and r.returncode == 0) else []
+-    if not bases:
+-        return None
+-    start, _why = _push_pick_base(root, bases, None, [], "主線")
+-    return start if start and start != _PUSH_START_UNKNOWN else None
++    start, _why = _push_range_start(root, "0" * 40, tip, push[0], push[1])     # 舊值全 0 = 只問跟主線的分岔點;起點只在那裡算一處
++    return None if start in (None, _PUSH_START_UNKNOWN, _EMPTY_TREE_SHA) else start
+ 
+ 
+ def _rg_db_sources(root, tip):
+-    """終點非測試路徑裡的 @Database → {類別完整名稱: {name, version, export_false, path}}。"""
++    """終點非測試路徑裡的 @Database → {類別完整名稱: {name, version, export_false, path, const_files}}。
++    version 寫成常數(`version = DB_VERSION`、`Db.VERSION`)時到非測試原始碼找 `val/int 名稱 = 整數` 的定義:恰好一個值才用,
++    const_files 記定義它的檔(只改常數檔升版也要觸發,代碼審 r1 正確性席);找不到或好幾個值照舊 None(版本從結構檔讀)。"""
+     read = _nodehome_reader(root, tip)
+     db_src = {}
+     for p in _rg_grep(root, tip, "Database") or []:
+         if _rg_is_test_path(p):
+             continue
+         t = _rg_strip(_rg_text(read, p) or "")
+         pkg = _rg_package(t)
+         for d in _rg_databases(t):
+-            db_src[(pkg + "." if pkg else "") + d["name"]] = dict(d, path=p)
++            db_src[(pkg + "." if pkg else "") + d["name"]] = dict(d, path=p, const_files=())
++    for d in db_src.values():
++        name = d["expr"].rsplit(".", 1)[-1] if d["version"] is None and re.fullmatch(r"[A-Za-z_]\w*(?:\.\w+)*", d["expr"]) else ""
++        if name:
++            d["version"], d["const_files"] = _rg_const_value(root, tip, read, name)
+     return db_src
+ 
+ 
++def _rg_const_value(root, tip, read, name):
++    """非測試原始碼裡整數常數 name 的定義 → (值或 None, 定義它的檔)。值恰好一種才算數。"""
++    pat = re.compile(rf"\b(?:val|int)\s+{re.escape(name)}\s*(?::\s*Int\s*)?=\s*(\d{{1,9}})\b")
++    vals, files = set(), []
++    for p in _rg_grep(root, tip, name) or []:
++        if _rg_is_test_path(p):
++            continue
++        found = {int(m.group(1)) for m in pat.finditer(_rg_strip(_rg_text(read, p) or ""))}
++        if found:
++            vals |= found
++            files.append(p)
++    return (vals.pop() if len(vals) == 1 else None), tuple(files)
++
++
+ def _rg_check_sources(db_src, tip_s, changed, allow, out):
+-    """原始碼那邊的兩條:這一版的結構檔沒提交([S5])、沒匯出結構檔只提醒([S17])。"""
++    """原始碼那邊的兩條:這一版的結構檔沒提交([S5])、沒匯出結構檔只提醒([S17])。只判這次碰到的資料庫(它的原始碼、
++    版本常數的定義檔或結構檔目錄有改);整個 repo 一個結構檔都沒有 = 沒設匯出位置,只提醒一次怎麼開、不擋——
++    這時「把 N.json 加進提交」做不到(代碼審 r1 正確性席)。"""
++    if db_src and not tip_s:
++        if any(not d["export_false"] for d in db_src.values()):
++            out["warns"].append("整個專案找不到任何 Room 結構檔(schemas/<類別完整名稱>/<版本>.json),多半沒設匯出位置,這道判不了升級——"
++                                "在 build.gradle 加 room { schemaDirectory(\"$projectDir/schemas\") }(或 KSP 參數 room.schemaLocation),"
++                                "編譯一次把 schemas 加進提交")
++        return
+     for fq, d in db_src.items():
+         tq = fq if fq in tip_s else next((k for k in tip_s if k.endswith("." + d["name"])), None)
+         if d["export_false"]:
+             if d["path"] in changed:
+                 out["warns"].append(f"{fq} 寫了 exportSchema = false,沒匯出結構檔,這道判不了它的升級")
+             continue
++        if not (d["path"] in changed or set(d["const_files"]) & changed
++                or any(f"/{tq or fq}/" in f"/{c}" for c in changed)):
++            continue
+         top = max(tip_s.get(tq, {}) or [0])
+         if d["version"] is not None and d["version"] > top and fq not in allow:
+             out["problems"].append(("schema", f"{fq} 的 @Database 寫 version = {d['version']},結構檔最大只到 {top}:這一版的結構檔沒提交"
+                                               f"(多半沒重新編譯或沒加進提交)——編譯一次,把 {fq}/{d['version']}.json 加進提交"))
+ 
+ 
+ def _rg_check_rewrites(fq, tq, fvs, ctx, out):
+     """主線分岔點上已有的結構檔:被刪([S15])或 identityHash 被改([S8])。"""
+     tvs, owner = ctx["tip_s"][tq], ctx["hash_owner"]
+     for v, h in fvs.items():
+@@ -47311,40 +47329,41 @@ def _rg_methods(text, java):
+             continue
+         j = _rg_balanced(text, k + dm.end() - 1) + 1
+         last = text.count("\n", 0, max(_rg_method_end(text, j), j - 1)) + 1
+         out.append((dm.group(1), i + 1, last, "Transaction" in anns))
+         i = last
+     return out
+ 
+ 
+ def _rg_hunks(root, start, tip):
+     """起點..終點的 .kt/.java 差異(帶改名偵測)→ ({終點路徑: 改動行集合}, {終點路徑: 起點路徑或 None(新檔)}) 或 None。
+-    改動行 = 新增的行;純刪除的那段算刪除點前後兩行([S26])。"""
++    改動行 = 新增的行;純刪除的那段記成刪除點前後兩行之間的 c+0.5——方法範圍 s..e 含它,等於前後兩行都在這個方法裡
++    ([S26] 方法裡刪一行要測試;整段刪掉一個方法時前後兩行分屬兩個方法,鄰居不算改到,代碼審 r1 正確性席)。"""
+     r = _lens_git(root, "diff", "-M", "-U0", "--no-color", "--no-ext-diff", start, tip, "--", "*.kt", "*.java",
+                   quote=True, binary=True)
+     if r is None or r.returncode != 0:
+         return None
+     touched, origin, st, newfile = {}, {}, {"cur": "", "old": ""}, False
+     for ln in _diff_text_lines(r.stdout):
+         if ln.startswith("diff --git "):
+             newfile = False
+         if ln.startswith("new file mode"):
+             newfile = True
+         m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", ln)     # 先認區段行:_lens_diff_header 也把 @@ 當檔頭
+         if not m:
+             if _lens_diff_header(ln, st) and ln.startswith("+++ ") and st["cur"]:
+                 origin[st["cur"]] = None if newfile else (st["old"] or st["cur"])
+             continue
+         if st["cur"]:
+             c, cnt = int(m.group(1)), int(m.group(2) if m.group(2) is not None else 1)
+             s = touched.setdefault(st["cur"], set())
+-            s.update(range(c, c + cnt) if cnt else (c, c + 1))
++            s.update(range(c, c + cnt) if cnt else (c + 0.5,))
+     return touched, origin
+ 
+ 
+ def _rg_dao_changes(root, tip, touched, origin):
+     """這次改到的 DAO 方法與型別轉換函式 → ([(DAO 名, 方法名)], [型別轉換函式名])。"""
+     read = _nodehome_reader(root, tip)
+     need, convs = [], []
+     for p in sorted(touched):
+         if _rg_is_test_path(p) or not p.endswith(_RG_SRC_EXTS):
+             continue
+@@ -47361,33 +47380,44 @@ def _rg_dao_changes(root, tip, touched, origin):
+                 convs.append(m.group(1) or m.group(2))
+     return need, convs
+ 
+ 
+ def _rg_tests_calling(root, tip, read, name, pat):
+     """終點測試路徑裡、剝過註解後符合 pat 的檔(先用固定字串 name 粗篩)。"""
+     return [p for p in (_rg_grep(root, tip, name) or [])
+             if _rg_is_test_path(p) and pat.search(_rg_strip(_rg_text(read, p) or ""))]
+ 
+ 
++def _rg_mock_re(dao):
++    """這支測試把 dao 做成 mock 了嗎(code-room資料庫測試守衛 r1 正確性席:原本只認 mockk<Dao>(),四種常見寫法放行)。
++    四種形狀,不分 mockk / mockito:型別當泛型參數 `mockk<Dao>()`、`mock<Dao>()`;傳類別進去 `mockk(Dao::class)`、
++    `Mockito.mock(Dao::class.java)`、`mock(Dao.class)`;型別標在變數上 `val dao: Dao = mockk(...)`;欄位註記
++    `@MockK`、`@RelaxedMockK`、`@Mock` 接(可跨行的)宣告,Kotlin `lateinit var x: Dao`、Java `private Dao x;`。"""
++    d = re.escape(dao)
++    return re.compile(rf"\bmock[kK]?\s*<\s*{d}\s*>"
++                      rf"|\bmock[kK]?\s*\(\s*{d}\s*(?:::|\.)class\b"
++                      rf"|:\s*{d}\s*\??\s*=\s*(?:[\w.]+\.)?mock[kK]?\s*[<(]"
++                      rf"|@(?:Relaxed)?Mock[kK]?\b(?:\([^)]*\))?[\w \t\n]*?(?::\s*)?\b{d}\b")
++
++
+ def _rg_dao_need_tests(root, tip, read, need, out):
+     """改到的 DAO 方法:全庫要有真 Room 測試([S25]),每個方法要有沒 mock 這個 DAO 的測試呼叫它([S22][S24])。"""
+     real = [p for p in _rg_tests_calling(root, tip, read, "atabaseBuilder", _RG_BUILDER_RE)
+             if not _RG_ROOM_MOCKED_RE.search(_rg_strip(_rg_text(read, p) or ""))]
+     if not real:
+         out["dao"].append("改到的 DAO 方法沒有任何用真 Room 的測試(測試路徑裡找不到 inMemoryDatabaseBuilder 或 databaseBuilder):"
+                           + "、".join(f"{d}.{m}" for d, m in need)
+                           + "——mock DAO 證不了 SQL、資料限制與交易;用記憶體資料庫寫一支測試")
+         return
+     for dao, name in need:
+         hits = _rg_tests_calling(root, tip, read, name, re.compile(rf"\.{re.escape(name)}\s*\("))
+-        mock_re = re.compile(rf"mockk\s*<\s*{dao}\s*>|mockk\s*\(\s*{dao}\b|mock\s*\(\s*{dao}\s*(?:::|\.)class"
+-                             rf"|@MockK?\b[^\n]*\n?\s*(?:\w+\s+)*\w+\s*:\s*{dao}\b|@Mock\b\s+(?:\w+\s+)*{dao}\s+\w+")
++        mock_re = _rg_mock_re(dao)
+         if any(not mock_re.search(_rg_strip(_rg_text(read, p) or "")) for p in hits):
+             continue
+         why = f"只有把 {dao} 做成 mock 的測試呼叫它,mock 的測試不算" if hits else f"沒有測試以 .{name}( 呼叫它"
+         out["dao"].append(f"{dao}.{name} 這次改了,{why}——補一支用真的 Room(記憶體資料庫)驗結果的測試")
+ 
+ 
+ def _rg_dao_half(root, start, tip, out):
+     """DAO 與型別轉換那半([S22] 到 [S29]):problems/warns 寫進 out["dao"]/out["warns"];回判了幾個方法。"""
+     hk = _rg_hunks(root, start, tip)
+     if hk is None:
+@@ -47412,35 +47442,34 @@ def _rg_triggered(root, start, tip):
+     hit = False
+     rs, rt = _nodehome_reader(root, start), _nodehome_reader(root, tip)
+     for p in paths:
+         if _RG_SCHEMA_PATH_RE.search(p):
+             hit = True
+             break
+         if p.endswith(_RG_SRC_EXTS) and not _rg_is_test_path(p) and any(
+                 _RG_TRIGGER_RE.search(_rg_text(rd, p) or "") for rd in (rs, rt)):
+             hit = True
+             break
++    if not hit:                                    # version 寫常數:改到定義它的檔也算
++        hit = any(set(d["const_files"]) & set(paths) for d in _rg_db_sources(root, tip).values())
+     if not hit and start != _EMPTY_TREE_SHA:      # 改名的舊路徑
+         r2 = _lens_git(root, "diff", "--name-only", "--no-renames", "-z", start, tip, quote=True)
+         for p in (r2.stdout.split("\0") if (r2 is not None and r2.returncode == 0) else []):
+             if p.endswith(_RG_SRC_EXTS) and not _rg_is_test_path(p) and _RG_TRIGGER_RE.search(_rg_text(rs, p) or ""):
+                 hit = True
+                 break
+     return hit, set(paths)
+ 
+ 
+ def _rg_root(repo):
+     """--repo 或目前所在的 git 專案根 → Path 或 None(不是 git 專案,已講一句)。"""
+-    root = Path(repo).resolve() if repo else None
+-    if root is None:
+-        r = _lens_git(".", "rev-parse", "--show-toplevel")
+-        root = Path(r.stdout.strip()) if (r is not None and r.returncode == 0) else None
++    root = _note_audit_root(repo)
+     if root is None or not _is_git_worktree(root):
+         print("Room 守衛:這裡不是 git 專案,跳過", file=sys.stderr)
+         return None
+     return root
+ 
+ 
+ def _rg_precheck(root, diff_range, push_remote, pushed_ref):
+     """參數、單次跳過、淺層 clone → 要直接回的回傳碼,或 None(往下判)。"""
+     if (push_remote is None) != (pushed_ref is None):
+         print("擋下:--push-remote 與 --pushed-ref 要一起給(掛鉤會兩個都帶;手動跑兩個都不給)", file=sys.stderr)
+@@ -47463,21 +47492,21 @@ def _rg_precheck(root, diff_range, push_remote, pushed_ref):
+ def _rg_range(root, diff_range, push):
+     """範圍 → (終點, 起點) 或要直接回的回傳碼。起點照推送閘的共用算法([S36]);沒有新東西或判不了講一句、記 skipped。"""
+     a, b = _lens_range_ok(diff_range)
+     tip = _lens_full_sha(root, b)
+     if tip is None:
+         if _ZERO_SHA_RE.fullmatch(b):
+             print("Room 守衛:範圍終點是全 0(刪除分支),沒有要查的東西", file=sys.stderr)
+             return 0
+         print(f"擋下:範圍 {diff_range} 的終點在本機找不到——範圍寫錯了?", file=sys.stderr)
+         return 2
+-    start, why = _push_range_start(root, a, tip, *push) if push else _lens_push_base(root, a, tip)
++    start, why = _note_audit_start(root, a, tip, push)
+     if start is None or start == _PUSH_START_UNKNOWN:
+         word = why or "終點已在主線上,沒有新東西"
+         print(f"Room 守衛:{word}{'——這次沒檢查' if start == _PUSH_START_UNKNOWN else ''}", file=sys.stderr)
+         _gate_event_or_warn(root, "room-guard", "skipped", word)
+         return 0
+     return tip, start
+ 
+ 
+ def _rg_report(root, tip, cfg, out, counts):
+     """印提醒與擋下(三段式:發生什麼 → 為何在意 → 指令獨立一行)並記帳 → 回傳碼。"""
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9cc576d5616f7a7293bc7cc565020b456b48e86d..71478e1cc7470668751c7824f8ef9832364a6c32 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -117233,12 +117233,167 @@ def t_prepush_room_guard_wired():
+     check("②有叫 room-guard,帶遠端舊值..頂端、--push-remote、--pushed-ref",
+           f"--diff {base}..{head}" in call and "--push-remote" in call and "--pushed-ref refs/heads/main" in call, call)
+     check("②回 1 → 擋下、全套沒跑", rc == 1 and "SUITE" not in lines, f"rc={rc} {out[-300:]}")
+     check("②印逃生段", "LUMOS_SKIP_ROOM_GUARD=1" in out and "room_guard.dao" in out, out[-500:])
+     rows = _ppc_rows(out) or []
+     check("②彙總裡有一筆 room-guard", any(g == "room-guard" for g, _r in rows), str(rows))
+     rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_RCS="room-guard:2")
+     check("③回 2 → 印這次沒檢查、照推(全套有跑)", "Room 守衛這次沒檢查(rc=2)" in out and "SUITE" in lines, f"rc={rc} {out[-300:]}")
+ 
+ 
++# ── 代碼審 code-room資料庫測試守衛 r1 折入(2026-10-28)──
++def t_room_dao_mock_forms_all_count():
++    """[r1 正確性 F1] mock 這個 DAO 的常見寫法都要認得:型別標在變數上、mockito-kotlin 的 mock<…>()、@MockK/@RelaxedMockK
++    欄位、Java 的 @Mock 欄位與 Mockito.mock(…class)。判準來源:席位實測後四種只有 mockk<OrderDao>() 擋得下。"""
++    print("t_room_dao_mock_forms_all_count")
++    dao2 = ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
++            '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n']
++    kt = {"型別在變數上加 mockk(relaxed)": "    val dao: OrderDao = mockk(relaxed = true)\n",
++          "型別在變數上加 mockk()": "    private val dao: OrderDao = mockk()\n",
++          "mockito-kotlin mock<>": "    val dao = mock<OrderDao>()\n",
++          "mockk<>(relaxed)": "    val dao = mockk<OrderDao>(relaxed = true)\n",
++          "@RelaxedMockK 同一行": "    @RelaxedMockK lateinit var dao: OrderDao\n",
++          "@MockK 換行": "    @MockK\n    lateinit var dao: OrderDao\n",
++          "Mockito.mock(::class.java)": "    private val dao = Mockito.mock(OrderDao::class.java)\n"}
++    for name, decl in kt.items():
++        root = _rg_repo()
++        _rg_dao(root, dao2)
++        _nh_file(root, "app/src/test/java/p/RepoTest.kt", "package p\nclass RepoTest {\n" + decl
++                 + "    fun t() { coEvery { dao.getUnpaid() } returns emptyList() }\n}\n")
++        _nh_commit(root, "mock test")
++        rc, out = _rg(root)
++        check(f"F1:{name} 算 mock、擋下", rc == 1 and "mock 的測試不算" in out, out[-500:])
++    for name, decl in {"Java @Mock 同一行": "    @Mock OrderDao dao;\n", "Java @Mock 換行加 private": "    @Mock\n    private OrderDao dao;\n",
++                       "Java Mockito.mock(.class)": "    OrderDao dao = Mockito.mock(OrderDao.class);\n"}.items():
++        root = _rg_repo()
++        _rg_dao(root, dao2)
++        _nh_file(root, "app/src/test/java/p/RepoTest.java", "package p;\nclass RepoTest {\n" + decl
++                 + "    void t() { dao.getUnpaid(); }\n}\n")
++        _nh_commit(root, "mock test java")
++        rc, out = _rg(root)
++        check(f"F1:{name} 算 mock、擋下", rc == 1 and "mock 的測試不算" in out, out[-500:])
++    # 對照:同一支測試 mock 了別的型別、DAO 是真的 → 不算 mock
++    root = _rg_repo()
++    _rg_dao(root, dao2)
++    _rg_daotest(root, calls=("getAll", "getUnpaid"), extra="    val clock: Clock = mockk()\n    val other = mockk<Clock>()\n"
++                                                         "    @MockK lateinit var api: OrderApi\n")
++    _nh_commit(root, "real dao, other mocks")
++    rc, out = _rg(root)
++    check("F1 對照:mock 別的型別、DAO 用真的 → 放行", rc == 0, out[-500:])
++
++
++def t_room_mig_never_exported_warns_not_blocks():
++    """[r1 正確性 F2] 整個 repo 從沒提交過結構檔(沒設 schemaDirectory)時,只提醒怎麼開匯出,不擋;
++    已有結構檔、這一版沒提交的照擋([S5])。判準來源:席位實測 version = 3 沒有任何 .json,只加有測試的 DAO 方法也被擋。"""
++    print("t_room_mig_never_exported_warns_not_blocks")
++    root = _nh_repo()
++    _nh_git(root, "checkout", "-q", "-b", "main")
++    _rg_db(root, 3)
++    _rg_dao(root)
++    _rg_daotest(root)
++    _nh_commit(root, "room v3 no schemas")
++    _nh_git(root, "checkout", "-q", "-b", "feat")
++    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
++                   '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n'])
++    _rg_daotest(root, calls=("getAll", "getUnpaid"))
++    _nh_commit(root, "dao method")
++    rc, out = _rg(root)
++    check("F2:沒匯出過結構檔 → 不擋", rc == 0, out[-600:])
++    check("F2:提醒教開匯出(schemaDirectory)", "提醒:" in out and "schemaDirectory" in out, out[-600:])
++    check("F2:不再印做不到的「結構檔最大只到 0」", "最大只到 0" not in out, out[-600:])
++    _rg_db(root, 4)
++    _nh_commit(root, "bump 4 still no schemas")
++    rc, out = _rg(root)
++    check("F2:升版但從沒匯出 → 照樣只提醒", rc == 0 and "schemaDirectory" in out, out[-600:])
++
++
++def t_room_mig_untouched_db_old_gap_not_blocked():
++    """[r1 正確性 F2 同族] 主線上本來就缺一版結構檔(version = 2、只有 1.json),這次只改 DAO → 不拿舊帳擋;
++    這次改了那個資料庫的原始碼 → 照擋([S5])。"""
++    print("t_room_mig_untouched_db_old_gap_not_blocked")
++    root = _nh_repo()
++    _nh_git(root, "checkout", "-q", "-b", "main")
++    _rg_db(root, 2)
++    _rg_schema(root, 1)
++    _rg_dao(root)
++    _rg_daotest(root)
++    _nh_commit(root, "main with old gap")
++    _nh_git(root, "checkout", "-q", "-b", "feat")
++    _rg_dao(root, ['    @Query("SELECT * FROM orders ORDER BY id")\n    suspend fun getAll(): List<Order>\n'])
++    _nh_commit(root, "dao only")
++    rc, out = _rg(root)
++    check("F2 同族:沒碰到的資料庫、舊缺口不擋", rc == 0 and "2.json" not in out, out[-600:])
++    _rg_db(root, 2, extra=", exportSchema = true")
++    _nh_commit(root, "touch db")
++    rc, out = _rg(root)
++    check("F2 同族:碰到那個資料庫 → 照擋", rc == 1 and "p.AppDb/2.json" in out, out[-600:])
++
++
++def t_room_dao_whole_method_deletion_no_neighbor():
++    """[r1 正確性 F3] 整段刪掉一個 DAO 方法,不要求相鄰、沒改過的方法補測試;方法裡面刪一行照舊要求([S26])。"""
++    print("t_room_dao_whole_method_deletion_no_neighbor")
++    ms = {n: f'    @Query("SELECT * FROM orders WHERE k = \'{n}\'")\n    suspend fun {n}(): List<Order>\n'
++          for n in ("getAll", "alpha", "old", "beta")}
++    for drop_blank in (False, True):
++        root = _nh_repo()
++        _nh_git(root, "checkout", "-q", "-b", "main")
++        _rg_dao(root, list(ms.values()))
++        _rg_daotest(root)
++        _nh_commit(root, "dao")
++        _nh_git(root, "checkout", "-q", "-b", "feat")
++        _rg_dao(root, [ms["getAll"], ms["alpha"], ms["beta"]])
++        if drop_blank:     # 換一種刪法:連前面那個空行一起刪,刪除點落在 alpha 最後一行之後
++            p = root / _RG_DAO
++            p.write_text(p.read_text(encoding="utf-8").replace(ms["alpha"] + "\n", ms["alpha"]), encoding="utf-8")
++        _nh_commit(root, "drop old")
++        rc, out = _rg(root)
++        check(f"F3:整段刪掉方法 → 放行(連空行={drop_blank})", rc == 0, out[-600:])
++        check(f"F3:不點名鄰居(連空行={drop_blank})", "OrderDao.beta" not in out and "OrderDao.alpha" not in out, out[-600:])
++
++
++def t_room_mig_constant_bump_without_schema_blocks():
++    """[r1 正確性 F4] version 寫常數、只改常數檔升版、沒提交新結構檔 → 要觸發並擋;常數有兩個不同值判不出 → 不擋。"""
++    print("t_room_mig_constant_bump_without_schema_blocks")
++    for const_old, const_new, cfile in (("const val DB_VERSION = 1", "const val DB_VERSION = 2", "Consts.kt"),
++                                        ("const val DB_VERSION: Int = 1", "const val DB_VERSION: Int = 2", "Consts.kt"),
++                                        ("public static final int DB_VERSION = 1;", "public static final int DB_VERSION = 2;", "Consts.java")):
++        root = _nh_repo()
++        _nh_git(root, "checkout", "-q", "-b", "main")
++        _nh_file(root, _RG_DB, "package p\n@Database(entities = [Order::class], version = DB_VERSION)\nabstract class AppDb : RoomDatabase()\n")
++        _nh_file(root, f"app/src/main/java/p/{cfile}", f"package p\nclass C {{\n{const_old}\n}}\n")
++        _rg_schema(root, 1)
++        _nh_commit(root, "v1")
++        _nh_git(root, "checkout", "-q", "-b", "feat")
++        _nh_file(root, f"app/src/main/java/p/{cfile}", f"package p\nclass C {{\n{const_new}\n}}\n")
++        _nh_commit(root, "bump const only")
++        rc, out = _rg(root)
++        check(f"F4:只改常數升版、沒結構檔 → 擋({const_new})", rc == 1 and "AppDb/2.json" in out, out[-600:])
++    root = _nh_repo()
++    _nh_git(root, "checkout", "-q", "-b", "main")
++    _nh_file(root, _RG_DB, "package p\n@Database(entities = [Order::class], version = DB_VERSION)\nabstract class AppDb : RoomDatabase()\n")
++    _nh_file(root, "app/src/main/java/p/Consts.kt", "package p\nconst val DB_VERSION = 1\n")
++    _nh_file(root, "app/src/main/java/q/Other.kt", "package q\nconst val DB_VERSION = 7\n")
++    _rg_schema(root, 1)
++    _nh_commit(root, "v1")
++    _nh_git(root, "checkout", "-q", "-b", "feat")
++    _nh_file(root, "app/src/main/java/p/Consts.kt", "package p\nconst val DB_VERSION = 2\n")
++    _nh_commit(root, "bump ambiguous")
++    rc, out = _rg(root)
++    check("F4 對照:同名常數兩個值判不出 → 不擋", rc == 0, out[-600:])
++
++
++def t_strip_c_comments_keep_newlines():
++    """[r1 架構對齊 F1] Room 守衛剝註解走共用的 _strip_c_comments(keep_newlines=True),行號對得上;預設行為不變。"""
++    m = _load_lumos_inproc()
++    src = 'val a = 1 /* x\n y */ val s = """q\n// not\n"""\n// c\nfun f() {}\n'
++    out = m._strip_c_comments(src, blank_strings=True, keep_newlines=True)
++    check("架構 F1:換行數不變", out.count("\n") == src.count("\n"), repr(out))
++    check("架構 F1:fun f 還在原來那一行", out.split("\n")[5] == "fun f() {}", repr(out))
++    check("架構 F1:字串內容清空", "not" not in out and "q" not in out.split("\n")[1], repr(out))
++    check("架構 F1:預設不保留換行(舊呼叫端不變)", m._strip_c_comments(src).count("\n") < src.count("\n"), "")
++    import inspect as _i
++    own = _i.getsource(m._rg_strip) if hasattr(m, "_rg_strip") else ""
++    check("架構 F1:Room 守衛不再有自己的掃描(只轉呼叫共用那支)", "_C_STRIP_PAT" not in own, own)
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 1b1aaadf4b2e9350842aa7a05c77c99c2a7e701f..81fa2451d4c85120d56847e226b276bbb09bd94e 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -28,20 +28,20 @@
+ 
+ ## 二、十類子檔(按情境分)
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff / events |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 寫／掃測試、寫回圖譜(品質、分類、Issue、決策) | `commands/03-寫回圖譜.md` | new / set / summary-add / summary-line / updated-sync / append / remove / decision-add·supersede·reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh / test-quality |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots / doctor / stale / gov / drift-history / drift exam / drift scan·fix·ack(存量漂移) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / macrobench / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / room-guard / note-audit prepare·record·check·skip(筆記內容審)·reread-prepare·record·check(回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait·ci-status / push-range / test-durations / push-summary / 離線收斂評測 |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / room-guard / note-audit prepare·record·check·skip(筆記內容審)·reread-{prepare,record,check}(回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait·ci-status / push-range / test-durations / push-summary / 離線收斂評測 |
+ | 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ | 功能碰登入、權限、付款、個資 | `commands/10-資安護欄.md` | 登記 / 證據 / 人審簽章 / 擋下代碼 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼,再查脈絡**(理由、限制、事故)。改 code 前跑 `lumos impact --file <檔>`;不解釋可以,不查不行。筆記與程式衝突怎麼裁,照專案 CLAUDE.md／AGENTS.md 的紀律區塊。
+ 2. 改了會影響行為、決策、驗證的 code,當次寫回圖譜。**先問程式碼推不推得出來**:推得出來的別抄;程式碼答不了的現況同一行帶 `[來源:…]`;理由用 `WHY:`、限制用 `RULE:`(退場條件)、事故用 `PITFALL:`(防回歸)。刪除的測試改 `[test-gone:名稱]`。詳見 `commands/03-寫回圖譜.md`。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
