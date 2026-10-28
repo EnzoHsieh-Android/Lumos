@@ -1,0 +1,96 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index 2c042b68..a5aa5675 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -78,6 +78,7 @@ summary: |-
+   WHY:不穩帳只記在本機總表(UI 項目第二次才過帶 flaky),每支 flow 看自己最近 20 筆判出過或沒過的紀錄,3 筆以上在判定後點名,只提醒不改判定 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]]] [因:查證紀錄每版一份,跨版本的次數只有本機總表數得出;隔離不穩的 flow 等於放寬擋法,要先有數字再請人裁] [不選:照 Delivery Hero 自動隔離;寫進提交的查證紀錄] [test:t_android_e2e_flaky_notice]
+   WHY:不穩帳(點名與 history --flaky 共用 _e2e_flaky_tally)同一個 run_id 重判多寫的總表行,每支 flow 只算一次、取最後一個判出結果的那次(被擋下、項目空的重判行不蓋掉判定;哪幾行算同一次執行照 _e2e_run_key:run_id 轉字串比、只有 None 算沒有,同 _ci_latest_attempts 的判法);history --flaky 的 --last 數不同執行、重判行不佔名額;不共用 _ci_latest_attempts(它靠嘗試次數與結論欄位取最壞、吃整份清單、掛鉤裡有逐字複本,總表沒有這兩個欄位) [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:judge 擋下訊息本身教人用 --no-record 重判,每次都追加一行總表,不去重會把一次不穩湊成三次而誤點名] [不選:改成重判不寫總表(會丟掉擋下原因的歷史)] [test:t_android_e2e_flaky_notice]
+   WHY:按功能跑時總表 case_results 的 UI 項目照整次結果補「第二次才過」,提交的查證紀錄 feature_runs 不帶 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:history --case 讀 case_results,原本由 _e2e_case_results 重組、沒有這個欄位,照情境篩就一律看不到不穩] [不選:在 _e2e_case_results 加欄位(會連查證紀錄一起改,計劃不把不穩帳放進綁版本的紀錄)] [test:t_android_e2e_flaky_history]
++  WHY:從總表讀回的每一行在印出函式裡收成一個出口過 _out_clean(_e2e_print_runs 內部的 say、history 與不穩彙總整行清),新加印出行走同一個出口就自動清 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r2、r4 架構對齊與單審席] [因:r2 只清新欄位、r4 又漏了問題與提醒行,逐行補每輪漏一處] [不選:每個印出點各自包一層] [test:t_android_e2e_judge_evidence]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
+diff --git a/scripts/lumos b/scripts/lumos
+index 31cf0703..7606767b 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -42571,30 +42571,34 @@ def _e2e_judge_cmd(root, run_dir, precheck_only=False, no_record=False, history=
+ 
+ 
+ def _e2e_print_runs(runs):
++    """judge 印給人看的結果。flow 名稱、畫面名、原因、現場路徑、工具問題與提醒都來自設定、steps.json 與它指到的輸出檔,
++    每一行印前都過 _out_clean(單一出口,跟 history 與不穩帳點名同一套)。"""
++    def say(line):
++        print(_out_clean(line, 4000))
+     mark = {"pass": "✓", "fail": "✗", "unjudged": "?"}
+-    print(f"Android 端到端驗收:{ {'pass': '通過', 'fail': '沒過', 'unjudged': '沒判完'}[runs['result']] }")
++    say(f"Android 端到端驗收:{ {'pass': '通過', 'fail': '沒過', 'unjudged': '沒判完'}[runs['result']] }")
+     for p in runs["problems"]:
+-        print(f"  ? {p}")
++        say(f"  ? {p}")
+     if isinstance(runs["blocks"]["ui"], str):   # 按功能跑沒挑到任何 flow
+-        print(f"  - UI 流程:{runs['blocks']['ui']}")
++        say(f"  - UI 流程:{runs['blocks']['ui']}")
+     for x in runs["blocks"]["ui"] if isinstance(runs["blocks"]["ui"], list) else []:
+         extra = "(第二次才過,不穩定)" if x.get("flaky") else (f":{x['reason']}" if x.get("reason") else "")
+         rp = f";報告 {x['reports'][-1]}" if x.get("reports") and x["result"] != "pass" else ""
+         ev = x.get("fail_evidence") if isinstance(x.get("fail_evidence"), dict) else {}
+         rp += "".join(f";{label} {'、'.join(ev[k])}" for k, label in (("dirs", "現場"), ("crashes", "閃退紀錄")) if ev.get(k))
+-        print(_out_clean(f"  {mark[x['result']]} UI 流程 {x['flow']}{extra}{rp}", 4000))   # flow 名稱與現場路徑來自設定與 steps.json
++        say(f"  {mark[x['result']]} UI 流程 {x['flow']}{extra}{rp}")
+     for name, key, label in (("visual", "screen", "截圖"), ("stability", "check", "記憶體")):
+         b = runs["blocks"][name]
+         if isinstance(b, str):
+-            print(f"  - {label}:{b}")
++            say(f"  - {label}:{b}")
+             continue
+         for x in b:
+             extra = f":{x['reason']}" if x.get("reason") else ""
+             extra += f"(相符率 {x['match_pct']}%,差異圖 {x['diff_image']})" if x.get("diff_image") else ""
+-            print(f"  {mark[x['result']]} {label} {x[key]}{extra}")
+-    print(f"  - 效能:{runs['blocks']['macrobench']}")
++            say(f"  {mark[x['result']]} {label} {x[key]}{extra}")
++    say(f"  - 效能:{runs['blocks']['macrobench']}")
+     for n in runs["notices"]:
+-        print(f"  ! {n}")
++        say(f"  ! {n}")
+ 
+ 
+ def _lint_watch_mode(repo_root, as_json):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 699a4437..387ea92f 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -19595,13 +19595,14 @@ def t_android_e2e_judge_evidence():
+     import contextlib
+     import io
+     buf = io.StringIO()   # judge 印的 UI 行:flow 名稱與現場路徑是外來文字,整行印前清掉控制字元
+-    runs = {"result": "fail", "problems": [], "notices": [],
++    runs = {"result": "fail", "problems": ["build 回 1:\x1b[31mBOOM"], "notices": ["提醒\x1b[0m"],
+             "blocks": {"ui": [{"flow": "a\x1b[31mb.yaml", "result": "fail", "reason": "第 1 次:回傳碼 1",
+                                "fail_evidence": {"dirs": ["/r/ui/x\x1b[0m.try1"], "crashes": []}}],
+-                       "visual": "未設定", "stability": "未設定", "macrobench": "未設定"}}
++                       "visual": [{"screen": "s\x1b[31m", "result": "fail", "reason": "相符率 90%"}], "stability": "未設定", "macrobench": "未設定"}}
+     with contextlib.redirect_stdout(buf):
+         _load_lumos_inproc()._e2e_print_runs(runs)
+-    check("e2e 現場:judge 的 UI 行清掉控制字元", "UI 流程 a" in buf.getvalue() and "現場 /r/ui/x" in buf.getvalue() and "\x1b" not in buf.getvalue(),
++    check("e2e 現場:judge 印的每一行(UI、工具問題、截圖、提醒)都清掉控制字元",
++          all(t in buf.getvalue() for t in ("UI 流程 a", "現場 /r/ui/x", "? build 回 1:", "截圖 s", "! 提醒")) and "\x1b" not in buf.getvalue(),
+           repr(buf.getvalue()))
+     print("  ✓ t_android_e2e_judge_evidence")
+ 
+@@ -19730,6 +19731,14 @@ def t_android_e2e_flaky_history():
+             _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--no-record", "--history", env=env)
+         r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", env=env)
+         check("e2e 不穩帳:同一次執行重判不重複算", f"{L}  1 次裡 1 次" in r.stdout, r.stdout)
++    with tempfile.TemporaryDirectory() as td:   # 超過 --last 次執行時丟最舊的那次;「沒有」那句講的是最近幾次執行
++        root, _fake, env, _script = _e2e_feat_env(td)
++        _e2e_flaky_rows(root, [("A", {L: "pass"}), ("B", {L: "pass"}), ("C", {L: "flaky"})])
++        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--last", "2", env=env)
++        check("e2e 不穩帳:--last 留最近的、丟最舊的", f"{L}  2 次裡 1 次" in r.stdout and "android/C" in r.stdout, r.stdout)
++        _e2e_flaky_rows(root, [("D", {L: "pass"}), ("E", {L: "pass"}), ("E", {L: "pass"})])   # E 重判一次:3 行、2 次執行
++        r = _e2e_run(root, "android-e2e", "history", "--repo", str(root), "--flaky", "--last", "2", env=env)
++        check("e2e 不穩帳:最近 2 次都沒有時說「最近 2 次執行」沒有", "最近 2 次執行的紀錄裡沒有第二次才過的 flow" in r.stdout, r.stdout)
+     with tempfile.TemporaryDirectory() as td:   # 沒判到的那次不算進分母(跟點名同一套數法)
+         root, _fake, env, _script = _e2e_feat_env(td)
+         _e2e_flaky_rows(root, [("u1", {L: "flaky"}), ("u2", {L: "unjudged"}), ("u3", {L: "pass"})])

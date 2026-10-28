@@ -50,6 +50,7 @@ while _i < len(argv):   # --feature a,b / --feature=a,b;值缺了記成空字串
 SELECTIVE = bool(PICK["--feature"] or PICK["--case"] or "--changed" in FLAGS)
 COLLECT = os.environ.get("LUMOS_E2E_COLLECT") or os.path.join(here, "android-stability-collect.sh")
 SEL = None   # 按功能跑時,lumos android-e2e select 挑出來的東西(flows、visual、macrobench、stability)
+EVIDENCE = False   # 這版 Maestro 認不認得現場那兩個旗標(開跑前檢查問 maestro test --help 決定)
 run_id = rest[0] if rest else time.strftime("e2e-%Y%m%d-%H%M%S")
 ADB, MAESTRO = os.environ.get("ADB", "adb"), os.environ.get("MAESTRO", "maestro")
 TP, JHD = os.environ.get("TP", "trace_processor"), os.environ.get("JAVA_HEAP_DUMP", "java_heap_dump")
@@ -325,6 +326,10 @@ def preflight(cfg, serial, run_dir):
     for tool in (ADB, MAESTRO):
         if not shutil.which(tool):
             die(f"找不到 {tool};用環境變數 ADB=、MAESTRO= 指定")
+    global EVIDENCE
+    EVIDENCE = maestro_has_evidence_flags()
+    if not EVIDENCE:   # 不擋:帶了不認得的旗標每支 flow 都會紅,等於誤擋;只是紅燈時少一份現場
+        say("提醒:這版 Maestro 的 maestro test 沒有 --test-output-dir 與 --debug-output(2.x 才有),這次 flow 紅了不留 Maestro 現場;升級 Maestro 才會留")
     if stab_to_run(cfg):   # 收集腳本自己也查,但要等建置、安裝、UI、截圖都跑完才輪到它,缺工具就白跑一趟
         st = cfg.get("stability") or {}
         # 下一行跟收集腳本判「要不要錄快照」那一行逐字相同(測試抽出兩邊那一行比相等)
@@ -362,6 +367,33 @@ def preflight(cfg, serial, run_dir):
     holder = lock_holder(serial)
     if holder:
         die(f"裝置 {serial} 有另一次驗收在跑(程序 {holder});等它跑完再開")
+
+
+def maestro_has_evidence_flags():
+    """maestro test --help 列了現場那兩個旗標才帶(Projects/E2E紅燈現場與不穩帳_計劃〈一次 UI 流程多留什麼〉第 1 步)。"""
+    rc, out, err = run([MAESTRO, "test", "--help"])
+    text = (out or "") + (err or "")
+    return rc is not None and "--test-output-dir" in text and "--debug-output" in text
+
+
+def device_time(serial):
+    """裝置現在的時間,格式同收集腳本(logcat -T 吃這個格式);讀不到回 None。"""
+    rc, out, _ = adb(serial, "shell", "date '+%m-%d %H:%M:%S.000'")
+    stamp = out.strip()
+    return stamp if rc == 0 and re.fullmatch(r"\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}", stamp) else None
+
+
+def crash_log(serial, since, dest):
+    """沒過的那次:只讀 crash 緩衝、只讀 since 之後的,有內容才寫成 dest;不清裝置日誌、不讀其他緩衝
+    (整份日誌常含帳號、權杖、網址,見計劃決策 d1)。since 是 None(讀不到裝置時間)就不讀,不退回讀整個緩衝。回寫出的路徑或 None。"""
+    if not since:
+        return None
+    rc, out, _ = adb(serial, "logcat", "-b", "crash", "-d", "-T", since)
+    if rc != 0 or not out.strip():
+        return None
+    with open(dest, "w", encoding="utf-8") as f:
+        f.write(out)
+    return dest
 
 
 def sha256_file(p):
@@ -459,8 +491,15 @@ def accept(cfg, serial, st):
         name = re.sub(r"\.[^./]*$", "", f.strip().rstrip("/").removeprefix("./")).replace("/", "__")
         for attempt in (1, 2):
             rep = os.path.join(rd, "ui", f"{name}.try{attempt}.xml")
-            rc = st.step("ui", [MAESTRO, "--udid", serial, "test", "--format", "junit", "--output", rep, f],
+            ev = os.path.join(rd, "ui", f"{name}.try{attempt}")   # 這次嘗試的 Maestro 現場;通過的也留(第二次才過時,第一次的現場正是要看的)
+            flags = ["--test-output-dir", ev, "--debug-output", os.path.join(ev, "debug"), "--flatten-debug-output"] if EVIDENCE else []
+            since = device_time(serial)
+            rc = st.step("ui", [MAESTRO, "--udid", serial, "test", "--format", "junit", "--output", rep, *flags, f],
                          name=name, attempt=attempt, report=rep)
+            # 跑完才知道的欄位照這支腳本的慣例直接補進資料再存(同 collector_override);這一步已先存過,收閃退紀錄出錯也不會丟掉它
+            crash = crash_log(serial, since, f"{ev}.crash.txt") if rc != 0 else None
+            st.data["steps"][-1]["evidence"] = {"dir": ev if EVIDENCE else None, "crash": crash}
+            st.save()
             if rc == 0:
                 break
     th = threshold_arg(e2e.get("visual_threshold", 99.5))
