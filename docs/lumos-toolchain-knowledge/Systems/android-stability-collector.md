@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-24
-updated: 2026-10-28
+updated: 2026-10-29
 responsibility: 負責在主機端排順序、用 adb 與 trace_processor 收記憶體與穩定性資料寫成 stability.json(收集腳本、三支查詢範本、兩份錄製設定;設定替情境打開 native_retained 時另跑一段只錄 heapprofd、取原生配置排行);不負責判過不過與印排行(在 lumos macrobench --stability),也不負責驅動 App(驅動指令由消費專案提供)
 aliases: []
 about_code:
@@ -52,8 +52,10 @@ summary: |-
   WHY:e2e 範本用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限,第一段秒數加預估(第一段兩倍加 NATIVE_TAIL:停錄等待加拉檔上限加查詢預估,預設 180 秒)超過就不跑第二段、寫 failed 時間不夠;跑的話驅動與查詢的上限也從同一個上限時刻扣 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,第二段把整步推過上限時第一段量好的判定也一起丟] [test:t_android_native_collect_budget]
   PITFALL:trace_processor 的 csv 輸出不跳脫字串裡的引號與換行,函式名含逗號或引號時照逗號切會切錯格 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4 本機實測] [根因:輸出只在字串外加引號] [修法:原生配置排行的文字欄在 SQL 裡 hex(),Python 端解回;三支查詢共用 tp_rows 一套切法] [test:t_android_native_collect_ok] [test:t_android_native_shared_tp]
   PITFALL:.so 沒解壓、直接從 APK 載入時 mapping 名是 …/base.apk!libfoo.so,取路徑最後一段會變成 base.apk!libc++_shared.so,配置器比對落空 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4 上網查證(libunwindstack GetFullName)] [根因:APK 內嵌的 .so 名稱接在 ! 後面] [修法:有 ! 時取最後一個 ! 之後] [test:t_android_native_query_apk_soname]
+  PITFALL:原生配置排行的呼叫者印成 art_jni_trampoline,沒指到 App 的函式 [出處:2026-10-28 SM-X710 實機驗收(macrobench-lab-native-growth,代碼審四輪與測試都沒抓到)] [根因:JNI 跳板放在 dalvik-cache 的 boot.oat、不在 libart.so,只跳過 libart.so 的框架擋不到它;同一台裝置鎖定畫面那次的呼叫鏈沒有這一框(什麼情況下才出現沒查),假資料只造了 libart.so 那種形狀] [修法:選呼叫者時另外跳過名字是 art_jni_trampoline 的框架] [test:t_android_native_query_caller_jni_trampoline]
 verified_by:
   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
+  - "[[Verification/2026-10-29_原生配置排行實機驗收]]"
 ---
 # android-stability-collector
 

@@ -49,6 +49,7 @@ verified_by:
   - "[[Verification/2026-10-23_Android介面寫法分流實驗室驗收]]"
   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
   - "[[Verification/2026-10-24_效能判定規則實機評測]]"
+  - "[[Verification/2026-10-29_原生配置排行實機驗收]]"
 ---
 # macrobenchmark-adapter
 

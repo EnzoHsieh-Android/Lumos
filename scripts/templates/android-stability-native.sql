@@ -9,7 +9,7 @@
 -- 文字欄用 hex 輸出:trace_processor 的 csv 輸出不跳脫字串裡的引號與換行,hex 之後照逗號切就切得對
 -- 呼叫位置:從 malloc 那一框往上走,跳過配置器那幾層(libc、libc++、libstdc++ 裡的全部框架,malloc 家族的函式名,
 --   operator new 與標準庫容器的 mangle 名前綴),第一個不是的框架;回溯失敗的 ERROR 偽框架與整條都是配置器時記成 ?
--- 呼叫者:呼叫位置往上第一個不在 libart.so 的框架(是 ERROR 偽框架時記成 ?);同一呼叫位置有幾個呼叫者時取結束累計加總最大的那個,
+-- 呼叫者:呼叫位置往上第一個不是 ART 的框架(跳過 libart.so 裡的框架與 boot.oat 裡的 JNI 跳板 art_jni_trampoline;是 ERROR 偽框架時記成 ?);同一呼叫位置有幾個呼叫者時取結束累計加總最大的那個,
 --   一樣大時有名字的排在 ? 前面、再照名字升冪
 -- 只留結束累計至少 1 MiB 的呼叫位置,照累計降冪、函式名、.so、系統旗標升冪取前 200 個
 -- 規則單源 Projects/原生記憶體增長提示_計劃〈排行怎麼算〉
@@ -60,7 +60,7 @@ site as (
 ),
 caller_step(leaf, step) as (
   select s.leaf, min(f.step) from site s join fr2 f on f.leaf = s.leaf and f.step > s.step
-  where not s.unknown and f.so != 'libart.so' group by s.leaf
+  where not s.unknown and f.so != 'libart.so' and coalesce(f.fname, '') != 'art_jni_trampoline' group by s.leaf
 ),
 leafrow as (
   select s.retained,

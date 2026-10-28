@@ -18478,6 +18478,9 @@ _MS_ART = "/apex/com.android.art/lib64/libart.so"
 _MS_APP = "/data/app/~~x/com.lab-1/oat/arm64/base.odex"
 _MS_MALLOC = ("malloc", _MS_LIBC, 16)
 _MS_TRAMP = ("art_quick_generic_jni_trampoline", _MS_ART, 32)
+_MS_BOOT = "/data/misc/apexdata/com.android.art/dalvik-cache/arm64/boot.oat"   # 真機的 JNI 跳板 art_jni_trampoline 放在這裡
+_MS_BOOT_FW = "/system/framework/arm64/boot-framework.oat"   # 系統框架的 Java 方法(正當的呼叫者)放在這裡
+_MS_VDEX = "/data/app/~~x/com.lab-1/oat/arm64/base.vdex"
 _MS_MIB = 1048576
 
 
@@ -18627,6 +18630,35 @@ def t_android_native_query_caller():
     check("連跳兩層 libart.so 才到 App 的函式", by.get("Java_deep", ())[2:3] == ("com.lab.B.deep",), str(got))
     check("呼叫位置上面是 ERROR 偽框架:呼叫者記成 ?(不印 ERROR 2)", by.get("Java_err", ())[2:3] == ("?",), str(got))
     check("? 跟有名字的呼叫者一樣多:取有名字的 bar(? 的字元排在字母前面)", by.get("Java_errtie", ())[2:3] == ("bar",), str(got))
+
+
+def t_android_native_query_caller_jni_trampoline():
+    """S21 的真機形狀(2026-10-28 SM-X710 實機驗收抓到):JNI 跳板 art_jni_trampoline 在 dalvik-cache 的 boot.oat 裡、不在 libart.so,
+    上面還隔著 libart.so 的 nterp_helper;呼叫者要跳過它們,指到 App 那一層的 FakeNativeSdk$Companion.nativeCreate。
+    跳過只認這個名字:boot.oat、boot-framework.oat 裡有名字的系統框架方法照樣是呼叫者,沒有符號的呼叫者也照樣保留(不能改成整個 .oat 都跳)。"""
+    sdk_apk = "/data/app/~~x/com.lab-1/base.apk!libfakesdk.so"
+    chain = [("com.lab.PlayerActivity.onCreate", _MS_VDEX, 1), ("nterp_helper", _MS_ART, 2), ("com.lab.sdk.FakeNativeSdk.<init>", _MS_VDEX, 3),
+             ("nterp_helper", _MS_ART, 4), ("com.lab.sdk.FakeNativeSdk$Companion.nativeCreate", _MS_VDEX, 5), ("nterp_helper", _MS_ART, 6),
+             ("art_jni_trampoline", _MS_BOOT, 7), ("Java_com_lab_sdk_FakeNativeSdk_nativeCreate", sdk_apk, 8), _MS_MALLOC]
+    from_framework = [("android.app.Activity.performCreate", _MS_BOOT, 1), ("android.graphics.Bitmap.nativeCreate", _MS_BOOT_FW, 2),
+                      ("Java_fromFramework", _MS_SDK, 3), _MS_MALLOC]
+    from_boot = [("android.app.ActivityThread.main", _MS_BOOT, 1), ("android.app.Activity.performCreate", _MS_BOOT, 2),
+                 ("Java_fromBoot", _MS_SDK, 4), _MS_MALLOC]
+    no_symbol = [("com.lab.A.run", _MS_VDEX, 1), (None, "/memfd:jit-cache (deleted)", 0x2a), ("Java_fromJit", _MS_SDK, 5), _MS_MALLOC]
+    art_named = [("art.studio.Canvas.draw", _MS_VDEX, 1), ("Java_fromArtApp", _MS_SDK, 6), _MS_MALLOC]   # App 自己的套件剛好叫 art
+    got = _ms_native([(10 * _MS_MIB, chain), (11 * _MS_MIB, from_framework), (12 * _MS_MIB, from_boot), (13 * _MS_MIB, no_symbol),
+                      (14 * _MS_MIB, art_named)])
+    check("前置:範本在", got is not None)
+    if got is None:
+        return
+    by = {s[0]: s for s in got["sites"]}
+    check("呼叫位置是 SDK 的 JNI 函式、.so 名稱取 ! 之後", by.get("Java_com_lab_sdk_FakeNativeSdk_nativeCreate", ())[1:2] == ("libfakesdk.so",), str(got))
+    check("呼叫者跳過 boot.oat 裡的 art_jni_trampoline 與 libart.so 的 nterp_helper,指到 App 的 Companion.nativeCreate",
+          by.get("Java_com_lab_sdk_FakeNativeSdk_nativeCreate", ())[2:3] == ("com.lab.sdk.FakeNativeSdk$Companion.nativeCreate",), str(got))
+    check("boot-framework.oat 裡有名字的系統方法照樣是呼叫者(不能整個 .oat 都跳)", by.get("Java_fromFramework", ())[2:3] == ("android.graphics.Bitmap.nativeCreate",), str(got))
+    check("boot.oat 裡跳板以外、有名字的系統方法照樣是呼叫者", by.get("Java_fromBoot", ())[2:3] == ("android.app.Activity.performCreate",), str(got))
+    check("沒有符號的呼叫者照樣保留(寫成 .so 名稱+0x 相對位址)", by.get("Java_fromJit", ())[2:3] == ("memfd:jit-cache (deleted)+0x2a",), str(got))
+    check("App 自己名字以 art 開頭的函式照樣是呼叫者(只跳精確等於 art_jni_trampoline 的)", by.get("Java_fromArtApp", ())[2:3] == ("art.studio.Canvas.draw",), str(got))
 
 
 def t_android_native_query_merge():
