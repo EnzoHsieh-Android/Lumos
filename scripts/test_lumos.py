@@ -117895,6 +117895,91 @@ def t_room_typeconverter_warns():
     check("型別轉換只提醒", rc == 0 and "提醒" in out and "fromInstant" in out, out[-600:])
 
 
+def t_room_column_typeconverter_warns():
+    """[S43] Room 3 把 @TypeConverter 改名成 @ColumnTypeConverter:只改這支轉換器檔也要觸發,沒測試 → 0 並提醒。
+    判準來源:2026-10-29 Room 3.0.3 實驗專案實跑,新名字整段沒提醒、換回舊名字才有。Kotlin 短名、完整名、Java 寫法各一支;
+    類別上的 @ColumnTypeConverters(Converters::class) 不是轉換函式,不該被當成一支。"""
+    print("t_room_column_typeconverter_warns")
+    root = _rg_repo()
+    _nh_file(root, "app/src/main/java/p/Converters.kt",
+             "package p\n@ColumnTypeConverters(Other::class)\nclass Converters {\n    @ColumnTypeConverter\n"
+             "    fun fromInstant(v: Instant?): Long? = v?.toEpochMilli()\n\n    @androidx.room3.ColumnTypeConverter\n"
+             "    fun toInstant(v: Long?): Instant? = v?.let(Instant::ofEpochMilli)\n\n"
+             "    @ColumnTypeConverter\n    @Suppress(\"unused\")\n    fun fromUuid(v: UUID?): String? = v?.toString()\n}\n")
+    _nh_file(root, "app/src/main/java/p/JConverters.java",
+             "package p;\npublic class JConverters {\n    @ColumnTypeConverter\n"
+             "    public static Long fromDate(Date d) { return d == null ? null : d.getTime(); }\n\n"
+             "    @ColumnTypeConverter\n    @SuppressWarnings(\"unused\")\n"
+             "    public static Date toDate(Long v) {\n        if (v == null) return null;\n"
+             "        return new Date(v);\n    }\n}\n")
+    _nh_commit(root, "room3 conv")
+    rc, out = _rg(root)
+    check("Room 3 轉換器只改它也觸發、只提醒", rc == 0 and "提醒" in out, out[-600:])
+    for name in ("fromInstant", "toInstant", "fromUuid", "fromDate", "toDate"):
+        check(f"點名 {name}", f"型別轉換 {name} " in out, out[-600:])
+    check("類別註記與夾在中間的註記不當成轉換函式",
+          not any(f"型別轉換 {n} " in out for n in ("Other", "Converters", "Suppress", "SuppressWarnings")), out[-600:])
+    # 只改多行本體裡的一行:範圍要算到本體結束(跟 DAO 方法同一套切法),不是只到函式名那一行;沒改到的那支不點名
+    _nh_git(root, "checkout", "-q", "-b", "body")
+    _nh_file(root, "app/src/main/java/p/JConverters.java",
+             "package p;\npublic class JConverters {\n    @ColumnTypeConverter\n"
+             "    public static Long fromDate(Date d) { return d == null ? null : d.getTime(); }\n\n"
+             "    @ColumnTypeConverter\n    @SuppressWarnings(\"unused\")\n"
+             "    public static Date toDate(Long v) {\n        if (v == null) return null;\n"
+             "        return new Date(v * 1000);\n    }\n}\n")
+    _nh_commit(root, "body only")
+    rc, out = _rg(root, rng="feat..body")
+    check("只改本體也點名 toDate", rc == 0 and "型別轉換 toDate " in out, out[-600:])
+    check("沒改到的 fromDate 不點名", "型別轉換 fromDate " not in out, out[-600:])
+
+
+def t_room_java_typeuse_and_annotation_run():
+    """[S43] 同 DAO 方法一套切法(代碼審 code-room3轉換器 r2):Java 把 @Nullable 寫在修飾字之後也要認得宣告名,
+    DAO 方法與轉換函式都是;範圍從整串註記的第一行起算,只改疊在轉換註記上面那個註記也算改到。"""
+    print("t_room_java_typeuse_and_annotation_run")
+    root = _rg_repo()
+    _nh_file(root, "app/src/main/java/p/JOrderDao.java",
+             "package p;\n@Dao\npublic interface JOrderDao {\n    @Query(\"SELECT 1\")\n"
+             "    public @Nullable Integer ping();\n}\n")
+    _nh_file(root, "app/src/main/java/p/JConv.java",
+             "package p;\npublic class JConv {\n    @ColumnTypeConverter\n"
+             "    public static @Nullable Long box(@Nullable Long v) { return v; }\n\n"
+             "    @Deprecated\n    @ColumnTypeConverter\n    public static Long unbox(Long v) { return v; }\n}\n")
+    _nh_commit(root, "java typeuse")
+    rc, out = _rg(root)
+    check("DAO 方法 @Nullable 在修飾字後也要求測試", rc == 1 and "JOrderDao.ping" in out, out[-800:])
+    check("轉換函式 @Nullable 在修飾字後也點名", "型別轉換 box " in out, out[-800:])
+    _nh_git(root, "checkout", "-q", "-b", "ann")
+    _nh_file(root, "app/src/main/java/p/JConv.java",
+             "package p;\npublic class JConv {\n    @ColumnTypeConverter\n"
+             "    public static @Nullable Long box(@Nullable Long v) { return v; }\n\n"
+             "    @Deprecated(since = \"3\")\n    @ColumnTypeConverter\n    public static Long unbox(Long v) { return v; }\n}\n")
+    _nh_commit(root, "upper annotation only")
+    rc, out = _rg(root, rng="feat..ann")
+    check("只改上面那個註記也點名 unbox", rc == 0 and "型別轉換 unbox " in out, out[-600:])
+    check("沒改到的 box 不點名", "型別轉換 box " not in out, out[-600:])
+
+
+def t_room_mig_never_exported_hint_room3():
+    """[S44] 整個專案沒有結構檔時,教開匯出的那句同時給 Room 2 的 room { … } 與 Room 3 的 room3 { … }
+    (Room 3 的 Gradle 外掛改叫 androidx.room3、設定區塊叫 room3;KSP 參數仍是 room.schemaLocation,2026-10-29 從 room3-compiler 3.0.3 查證)。"""
+    print("t_room_mig_never_exported_hint_room3")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 3)
+    _rg_dao(root)
+    _rg_daotest(root)
+    _nh_commit(root, "room v3 no schemas")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_db(root, 4)
+    _nh_commit(root, "bump 4 still no schemas")
+    rc, out = _rg(root)
+    check("只提醒", rc == 0 and "提醒:" in out, out[-600:])
+    check("給 Room 2 寫法", 'room { schemaDirectory("$projectDir/schemas") }' in out, out[-600:])
+    check("給 Room 3 寫法", 'room3 { schemaDirectory("$projectDir/schemas") }' in out, out[-600:])
+    check("KSP 參數照舊", "room.schemaLocation" in out, out[-600:])
+
+
 def t_room_dao_warn_separate_from_migration():
     """[S30] room_guard.dao=warn:DAO 只提醒,升級照擋。"""
     print("t_room_dao_warn_separate_from_migration")

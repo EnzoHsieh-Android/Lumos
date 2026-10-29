@@ -2,7 +2,7 @@
 type: project
 status: doing
 created: 2026-10-28
-updated: 2026-10-28
+updated: 2026-10-29
 tags:
   - type/project
   - status/doing
@@ -11,6 +11,7 @@ summary: |-
   FLAG:TECHNICAL
   WHY:推送前加一道 Room 守衛,只判程式碼看得出來的事:資料庫升版時升級路徑、新版本的結構檔、升級測試有沒有跟上,主線上已有的結構檔有沒有被改或刪;這次改到的 DAO 方法有沒有沒被 mock 的測試呼叫到它(全庫要有真 Room 測試);型別轉換只提醒 [出處:2026-10-28 Enzo 裁「做 1、2」「希望覆蓋到 Room 的所有測試情況」並選「規範全寫、檢查加 DAO」] [因:升級出錯會在使用者手機上閃退或清資料、DAO 只用 mock 測證不了 SQL,而官方與社群都沒有現成的推送前檢查] [不選:題組表態(只問不擋)、推送前故障注入(要編譯跑 Android 測試,太慢)]
   WHY:測試品質規範補 Android 資料層一節,把七種情況(查詢、資料限制、交易、升級、Flow/LiveData 重送、型別轉換、預載資料庫)的測法寫齊 [出處:2026-10-28 乾淨 agent 盤點] [因:規範裡 Laravel 有整段資料庫測試,Android 只有一句;AI 寫測試時先讀這份;測試寫得對不對機械判不了,只能靠規範與審查]
+  REVISIT:2027-01-31 看接上 room-guard 的專案有沒有把 Room 方法註記或轉換註記跟別的程式碼寫在同一行(認不出:轉換器漏提醒、DAO 方法漏要求測試),有就讓 _rg_methods 從行中間的註記也開始找
 lands_in:
   - Systems/room-guard
   - Systems/test-quality-cli
@@ -53,7 +54,7 @@ REVISIT:2027-04-28 數治理帳裡 room-guard 各類筆數對照 RETIRE-IF 判�
    - **重用既有工具,不另寫**:git 呼叫走 `_lens_git`;範圍與狀態用 `_lens_range_ok`、`_lens_full_sha`、`_is_git_worktree`;列終點檔案用 `_nodehome_list`、讀提交裡的檔(含 `.lumos/config.json`)用 `_nodehome_reader`;差異解析用 `_diff_text_lines` 與 `_lens_diff_header`;設定照 `_note_shape_config` 的形狀寫一支讀終點文字、壞值回預設並附提醒字串的解析;剝程式註解重用 `_strip_c_comments` 背後的同一個掃描式 `_C_STRIP_PAT`,換一個替換函式:程式註解與字串內容換成空白、**保留換行**(行號才對得上差異),所以字串裡與程式註解裡的 `Migration(1, 2)` 都不算。
    - **測試路徑**:路徑裡有一段 `src/<名稱>/`,而 `<名稱>` 是 `test`、以 `test` 或 `androidTest` 開頭(`testDebug`、`testFixtures`、`androidTestDebug`),或以 `Test` 結尾(`jvmTest`、`commonTest`、`androidUnitTest`、`androidInstrumentedTest`);其他都是非測試路徑。找 `@Database`、`@Dao`、`Migration` 一律只看非測試路徑的 `.kt`/`.java`。
    - **結構檔**:路徑形狀 `<…>/<類別完整名稱>/<整數>.json`(預設套件沒有點也算);內容是帶 `formatVersion` 與 `database.identityHash` 的 JSON 才算 Room 結構檔。形狀對、看得出是 Room 結構檔(含 `formatVersion` 或 `identityHash` 字樣)卻讀不懂(合併衝突標記、截斷、非 UTF-8)→ 擋,訊息說「結構檔讀不懂」,不說「缺」;不含這兩個字樣的同形狀 json(例如資源檔)不算,不擋。
-   - **觸發**:範圍裡的改動(含刪除與改名)碰到結構檔,或碰到起點或終點內容含 `@Database`、`@Dao`、`@TypeConverter`、`Migration`、`AutoMigration` 字樣的非測試 `.kt`/`.java` 檔才判;都沒碰到 → rc0、不印、不記帳。原始碼不是 UTF-8 時用替換字元讀,不中斷。
+   - **觸發**:範圍裡的改動(含刪除與改名)碰到結構檔,或碰到起點或終點內容含 `@Database`、`@Dao`、`@TypeConverter`(Room 3 改名 `@ColumnTypeConverter`)、`Migration`、`AutoMigration` 字樣的非測試 `.kt`/`.java` 檔才判;都沒碰到 → rc0、不印、不記帳。原始碼不是 UTF-8 時用替換字元讀,不中斷。
    - **用詞**:下面「註記」指 `@` 開頭的 annotation,「程式註解」指 `//` 與 `/* */`。
 2. **升級那半(以 Room 自己匯出的結構檔為準)**:
    - **資料庫與版本**:一個資料庫 = 一個結構檔目錄(目錄名就是類別完整名稱,巢狀類別、常數版本號、`@TypeConverters(Converters::class)` 這類都不用從原始碼猜;同一支檔有好幾個 `@Database` 也各自一個目錄)。某個提交上的「目前版本」= 該目錄裡最大的整數。終點若找得到這個類別的 `@Database` 註記、而且 `version =` 是整數字面,這個數比結構檔最大值還大 → 擋「這一版的結構檔沒提交(多半沒重新編譯或沒加進提交)」。找類別:平衡括號跳過整個 `@Database(...)` 與其後其他註記,取第一個 `class 名稱`,巢狀時前面接外層類別名。
@@ -68,7 +69,7 @@ REVISIT:2027-04-28 數治理帳裡 room-guard 各類筆數對照 RETIRE-IF 判�
    - **DAO 與方法**:非測試路徑含 `@Dao` 的 `.kt`/`.java`。方法 = 宣告(`fun 名稱(` 或 Java 方法簽章)正上方連續的註記行裡,有 `@Query`、`@Insert`、`@Update`、`@Delete`、`@Upsert`、`@RawQuery`、`@Transaction` 其中之一;疊好幾個註記也只算一個方法。**範圍**:從正上方連續註記的第一行,到宣告結束——沒有本體到參數括號閉合那一行,有本體到對應的右大括號,`=` 單行運算式到那一行。範圍以外的行(輔助函式、companion、檔尾)不算任何方法的。
    - **改到**:差異用 git 的改名偵測對應起點檔;終點上的改動行 = 每段差異新增的行,純刪除的那段算刪除點前後兩行。方法範圍跟改動行有交集,或方法在起點不存在,就算改到;只搬家改套件名的 DAO,只有真的改了的行算。
    - **測試認定**:測試路徑裡有一支檔以 `.方法名(` 的成員呼叫形式提到它,而且那支檔沒有把這個 DAO 型別做成 mock(`mockk<名稱>`、`mockk(名稱`、`mock(名稱::class`、`mock(名稱.class`,或 `@MockK`/`@Mock` 標在型別是這個 DAO 的屬性上)。資料庫建在基底類別、JUnit Rule 或 Hilt 測試模組都可以,不要求同一支檔有建法;但**整個終點的測試路徑裡至少要有一支檔用到真的 Room 建法**(`inMemoryDatabaseBuilder` 或 `databaseBuilder`;同一支檔有 `mockkStatic(Room` 或 `mockStatic(Room` 的不算),一支都沒有 → 這半全部擋,訊息說「沒有任何用真 Room 的測試」。
-   - **型別轉換**:改到的 `@TypeConverter` 函式沒有任何測試提到 → 只提醒(常見的測法是經 DAO 存取一圈,名字不會出現在測試裡)。
+   - **型別轉換**:改到的 `@TypeConverter`(Room 3 的 `@ColumnTypeConverter`)函式沒有任何測試提到 → 只提醒(常見的測法是經 DAO 存取一圈,名字不會出現在測試裡)。
 4. **開關與逃生**:`room_guard.gate` 為 `block`(預設)/`warn`/`off`,管整道;`room_guard.dao` 同三值,只管 DAO 與型別轉換那半;壞值照預設並印提醒(同 `_note_shape_config`)。`LUMOS_SKIP_ROOM_GUARD=1` 單次跳過並記 skipped-env。淺層 clone → 一句、記 skipped-env。`--diff` 格式不對 → rc2;終點全 0(刪分支)→ 一句、rc0;單次 git 逾時 → 一句「這次沒檢查」、rc0、記 skipped。
 5. **治理帳**:閘名 `room-guard` 加進 `_KNOWN_GATES`。記 blocked(附這次擋的種類:升級/結構檔/DAO)、warned、skipped、skipped-env;**有觸發而放行時記一筆 passed**,只帶判了幾個資料庫、幾個 DAO 方法(RETIRE-IF 要分得出「沒人用 Room」跟「用了都過」);沒觸發不記。
 6. **接進推送前掛鉤**:照存量漂移那段的形狀,排在存量漂移那段之後、回頭重讀那段之前(不放在筆記形狀擋那個 `if` 區塊裡):`room-guard --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref"`,分支與 tag 都跑;先過 `pp_stop_if_signaled`;回 1 → 印逃生段(照上面各條修、確定還沒發布的結構檔改寫單次跳過 `LUMOS_SKIP_ROOM_GUARD=1`、整個專案先只提醒 `room_guard.gate: warn`、只鬆 DAO 那半 `room_guard.dao: warn`)並 `pp_record_block room-guard`(所有閘跑完、全套測試前統一擋);其他非零(含舊版 lumos 沒有這個子指令回 2)→ 印「Room 守衛這次沒檢查(rc=N),放行」。CI 第一版不接。
@@ -119,6 +120,9 @@ REVISIT:2027-04-28 數治理帳裡 room-guard 各類筆數對照 RETIRE-IF 判�
 - [S40] 當讀 `_KNOWN_GATES`、`lumos --help`、INDEX.md 與 06-代碼審與推送.md 時,都應有 room-guard。[test: t_room_guard_registered]
 - [S41] 當讀 test-quality-standard.md 時,應有 Android 資料層(Room)一節,依序提到查詢、資料限制、交易、升級、Flow、TypeConverter、createFromAsset 七種情況,並提到記憶體資料庫、`MigrationTestHelper`、`BundledSQLiteDriver`、官方不建議 Robolectric、mock DAO 證不了 SQL、故障挑選;03-寫回圖譜.md〈實作測試品質〉有一句指到那一節。[test: t_test_quality_standard_android_room_section]
 - [S42] 當在實驗專案 macrobench-lab(本機 `/Users/enzo/orca/workspaces/macrobench-lab`,另開獨立工作樹做)加 Room 資料庫 v1(含 DAO 與真 Room 測試)、再升 v2 時,漏了 Migration、新 DAO 方法沒測試各自應被這道擋下,補齊後應放行,而且升級測試與 DAO 測試在裝置上實跑是綠的、故意改壞查詢或拿掉交易時會翻紅。[manual: 實驗專案的獨立工作樹裡實跑 room-guard 與裝置測試,收據記進 Verification]
+- [S43] 當改到的轉換函式標的是 Room 3 的 `@ColumnTypeConverter`(短名或 `@androidx.room3.ColumnTypeConverter`,Kotlin 或 Java,註記與函式宣告之間夾著別的帶括號註記也算)、而且沒有測試提到時,只改這支轉換器檔也應觸發,回 0 並逐支點名提醒;類別上的 `@ColumnTypeConverters(…)` 與夾在中間的註記名不應被當成轉換函式;只改多行本體裡的一行、或只改疊在轉換註記上面的另一個註記也算改到,沒改到的鄰居不點名;Java 把 `@Nullable` 這類不帶括號的註記寫在修飾字之後(`public static @Nullable Long f(`)時,轉換函式與 DAO 方法都應認得宣告名。[test: t_room_column_typeconverter_warns] [test: t_room_java_typeuse_and_annotation_run]
+- [S44] 當整個專案找不到結構檔而提醒怎麼開匯出時,應同時給 Room 2 的 `room { schemaDirectory("$projectDir/schemas") }` 與 Room 3 的 `room3 { schemaDirectory("$projectDir/schemas") }`,KSP 參數照舊寫 `room.schemaLocation`。[test: t_room_mig_never_exported_hint_room3]
+- [S45] 當實驗專案改用 Room 3.0.3 後重跑 [S42] 那組推送情境(加上 Room 2 升 Room 3 本身、Room 3 的 `Migration(a, b) { connection -> … }` 寫法)時,每個情境應得到跟 Room 2 相同的擋下或放行,裝置上的升級與 DAO 測試是綠的、故意改壞升級時會翻紅;`@ColumnTypeConverter` 那個情境推送時用的是修正前的守衛(沒提醒,就是這個缺口),修正後的守衛改在實驗專案的另一份 clone 裡對同一份改動手動跑 `lumos room-guard`。[manual: 實驗專案的 Room 3 分支逐一 git push,轉換器情境另用修正後的 lumos 手動跑,收據記進 Verification]
 
 ## 回退(由後往前)
 
@@ -149,7 +153,9 @@ REVISIT:2027-04-28 數治理帳裡 room-guard 各類筆數對照 RETIRE-IF 判�
 - 跑完全部升級的測試只認「有這種寫法」,不證陣列裡真的放了新的那條。
 - Kotlin 允許巢狀區塊程式註解,剝程式註解的掃描式不處理巢狀;巢狀程式註解裡的 `Migration(1, 2)` 可能被算成路徑。
 - 資料庫沒匯出結構檔(`exportSchema = false`)時升級那半判不了,只提醒。
-- 結構檔目錄形狀 `<類別完整名稱>/<版本>.json` 是 Room 2 的慣例(實驗專案用 Room 2.8.5 實測);Room 3 沒找到官方明文寫目錄形狀,接 Room 3 專案時要先實測一次。
+- 結構檔目錄形狀 `<類別完整名稱>/<版本>.json`:Room 2.8.5 與 Room 3.0.3 都在實驗專案實測過,Room 3 重新產生的舊版結構檔跟 Room 2 的逐字相同;官方 Room 3 說明另提到依 flavor 分子目錄(`schemas/<flavor>/<類別完整名稱>/<版本>.json`),路徑比對取的是版本檔上一層、形狀照樣對,但沒實測過。
+- Kotlin 多平台專案(資料庫放在共用目錄)沒實測;測試路徑規則認得 `commonTest`、`androidInstrumentedTest` 這類目錄,是讀程式碼得出的。
+- DAO 方法與型別轉換函式用同一支切法(同一個函式,只差認哪幾種註記):Kotlin 用 `=` 寫的單一運算式本體,範圍只算到 `=` 那一行——換行接續、或同一行開頭的 `= v?.let {`、`= when (x) {` 區塊,只改後面幾行時不算改到(型別轉換只提醒,DAO 那半可能漏要求測試);宣告名前面修飾字之間夾著帶括號的註記(`public @Size(max = 3) List f(`)時認不出宣告名,這支不算進去。這套切法只從行首是 `@` 的行開始找,註記跟別的程式碼寫在同一行(`class Conv { @TypeConverter fun a(…) }`、`companion object { @JvmStatic @ColumnTypeConverter fun a(…) }`)時認不出;型別轉換那半在代碼審 code-room3轉換器 r2 改走這套切法前認得,r3 抓到後使用者裁放行(只提醒那半、官方範例註記都獨佔一行)。
 - 資料限制(主鍵、唯一、外鍵)、Flow 重送、預載資料庫這三種情況沒有可靠的程式碼訊號對應到「該有哪支測試」,只寫在規範裡、守衛不判。
 
 ## 合約候選
@@ -164,8 +170,11 @@ REVISIT:2027-04-28 數治理帳裡 room-guard 各類筆數對照 RETIRE-IF 判�
 - 2026-10-28 代碼審 r1:「這一版的結構檔沒提交」([S5])只判這次碰到的資料庫(它的原始碼、版本常數的定義檔或結構檔目錄有改);整個專案一個結構檔都沒有時改成只提醒怎麼設匯出位置。原文照字面實作時,沒設匯出位置的專案只要碰到 Room 就被擋,訊息教的「把 N.json 加進提交」做不到;主線上本來就有的缺口也會擋碰到別處的推送。[test: t_room_mig_never_exported_warns_not_blocks]
 - 2026-10-28 代碼審 r1:`version =` 寫成常數時,[S5] 那一條到非測試原始碼找 `val/int 名稱 = 整數` 的定義,恰好一個值才用;改到定義它的檔也算碰到 Room。原文「常數版本號不用從原始碼猜」只講升級路徑那半(仍以結構檔為準),[S5] 照字面只認整數字面時,只改常數升版、忘了提交結構檔的推送整個不觸發。[test: t_room_mig_constant_bump_without_schema_blocks]
 - 2026-10-28 代碼審 r1 到 r3:刪掉的行改對回舊檔——舊檔某個 DAO 方法被刪到一部分(不是整段刪掉)、終點還在,就算改到它;終點同名函式還在但 Room 註記全拿掉了也算([S26] 方法裡刪一行、刪最上面的註記行都要求測試;整段刪掉的方法不要求,同名多載刪掉一個不牽連留下的那個,鄰居沒被刪到也不要求)。原文「刪除點前後兩行」照字面實作時,整段刪掉一個方法會要求相鄰、沒改過的方法補測試;r1 改成「前後兩行都在同一個方法裡」又漏掉刪方法最上面那一行。[test: t_room_dao_whole_method_deletion_no_neighbor] [test: t_room_dao_partial_deletion_edges_required]
+- 2026-10-29 Room 3 實測後補:Room 3.0.3 把 `@TypeConverter` 改名成 `@ColumnTypeConverter`,原本只認舊名字,Room 3 專案的轉換器提醒整段沒出現、只改轉換器檔時整道不觸發;觸發與找轉換函式兩處都改成兩個名字都認([S43])。代碼審 code-room3轉換器 r1:Java 轉換函式與註記之間夾著 `@SuppressWarnings("x")` 這類帶括號註記時,舊的比對把註記名當成函式名(Room 2 的 `@TypeConverter` 也一樣),範圍也只算到函式名那一行;改成沿用 DAO 方法的切法——先跳過整串註記再取名,範圍算到本體結束。代碼審 r2:r1 那版是把 DAO 的切法抄一份,起點卻取轉換註記那一行(DAO 取整串註記第一行),而且取名規則不收 `@`,Java 寫 `public static @Nullable Long f(` 修前認得、修後漏掉;改成轉換函式直接呼叫 DAO 方法那支切法函式,取名規則放行修飾字之間不帶括號的註記,DAO 方法原本同樣漏掉的這種寫法一起補上。沒匯出結構檔的提醒原本只教 Room 2 的 `room { … }`,Room 3 照抄會設錯區塊,補上 `room3 { … }`([S44])。
 
 ## 審計修正紀錄
 
 - r1(2026-10-28,4 席:正確性、邊界、通才、架構對齊,全 sonnet;只有同一家模型審過):去重成 15 組根因、全折(折入後派鏡像核對,補齊 7 處折得不完整、6 處前後不一致、2 處程式宣稱不符),只放行 1 條(席位自述引用都對得上、沒有缺陷);blocking 20 條(正確性 8、邊界 8、通才 3、架構 1;架構那條原標 minor 又標 blocking 是,退回該席重判後改 major)。卷證 `governance/review-reports/room資料庫測試守衛/`。結論:原稿以「改動的 `@Database` 檔」為入口太窄、範圍照錯了變數、DAO 測試認定太死;改成以結構檔為準、起點交給 `_push_range_start`、DAO 測試改成「呼叫到且沒 mock、全庫有真 Room」。
 - r1 新增機制的最小解檢查:`passed` 帳(不加就分不出「沒人用 Room」與「用了都過」,RETIRE-IF 量不出來);`--push-remote/--pushed-ref`(不加就只能用掛鉤的空樹退路,推 tag 會把整個 repo 當新改動);其他折法都是改判斷規則或重用既有工具,沒有新設定鍵。
+- code-room3轉換器 r1(2026-10-29,2 席:正確性、架構對齊,全 sonnet;只有同一家模型審過):2 條/blocking 1/Java 夾註記點錯函式名(原有缺陷,這次條款寫成已涵蓋)折入並順手補了本體範圍,[S45] 改成照實寫轉換器情境怎麼驗的。卷證 `governance/review-reports/code-room3轉換器/`。
+- code-room3轉換器 r2(2026-10-29,2 席:正確性、架構對齊,全 sonnet;只有同一家模型審過):3 條/blocking 0/r1 修補帶出一條回歸(Java 型別註記在修飾字之後漏認),改成轉換函式與 DAO 方法共用同一支切法一次補掉,起點不一致與 Kotlin 區塊本體的界線寫清楚。卷證同上。

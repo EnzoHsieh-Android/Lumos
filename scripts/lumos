@@ -46979,10 +46979,11 @@ def _doctor_test_ref_lines(env, repo_root):
 # 只證「程式碼裡有路徑、結構檔、有測試提到」,不證測試跑過或寫得對(計劃〈誠實界線〉)。
 
 _RG_GATE_VALUES = ("block", "warn", "off")
-_RG_TRIGGER_RE = re.compile(r"@(?:androidx\.room3?\.)?(?:Database|Dao|TypeConverter)\b|(?<![\w.])(?:Auto)?Migration\s*\(")
+_RG_TRIGGER_RE = re.compile(r"@(?:androidx\.room3?\.)?(?:Database|Dao|(?:Column)?TypeConverter)\b|(?<![\w.])(?:Auto)?Migration\s*\(")
 _RG_SCHEMA_PATH_RE = re.compile(r"(?:^|/)([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)/(\d{1,9})\.json$")
 _RG_SRC_EXTS = (".kt", ".java")
 _RG_METHOD_ANNS = frozenset(("Query", "Insert", "Update", "Delete", "Upsert", "RawQuery", "Transaction"))
+_RG_CONVERTER_ANNS = frozenset(("TypeConverter", "ColumnTypeConverter"))     # Room 3 改名成 ColumnTypeConverter
 _RG_BUILDER_RE = re.compile(r"\b(?:inMemoryDatabaseBuilder|databaseBuilder)\s*[(<]")
 _RG_ROOM_MOCKED_RE = re.compile(r"\bmock(?:k)?Static\s*\(\s*Room\b")
 
@@ -47248,7 +47249,8 @@ def _rg_check_sources(db_src, tip_s, changed, allow, out):
     if db_src and not tip_s:
         if any(not d["export_false"] for d in db_src.values()):
             out["warns"].append("整個專案找不到任何 Room 結構檔(schemas/<類別完整名稱>/<版本>.json),多半沒設匯出位置,這道判不了升級——"
-                                "在 build.gradle 加 room { schemaDirectory(\"$projectDir/schemas\") }(或 KSP 參數 room.schemaLocation),"
+                                "在 build.gradle 加 room { schemaDirectory(\"$projectDir/schemas\") }(Room 3 寫 room3 { schemaDirectory(\"$projectDir/schemas\") };"
+                                "或 KSP 參數 room.schemaLocation),"
                                 "編譯一次把 schemas 加進提交")
         return
     for fq, d in db_src.items():
@@ -47390,8 +47392,9 @@ def _rg_annotations(text, k):
             k = _rg_balanced(text, k) + 1
 
 
-def _rg_methods(text, java):
-    """剝過的 DAO 原始碼 → [(名稱, 起行, 迄行, 是交易方法)](行號從 1 起)。方法 = 宣告正上方連續註記裡有 Room 的方法註記。"""
+def _rg_methods(text, java, kinds=_RG_METHOD_ANNS):
+    """剝過的原始碼 → [(名稱, 起行, 迄行, 是交易方法)](行號從 1 起)。方法 = 宣告正上方連續註記裡有 kinds 之一(預設 DAO 的方法註記;
+    型別轉換函式傳 _RG_CONVERTER_ANNS,同一套切法,代碼審 code-room3轉換器 r2)。宣告名前面的修飾字之間可夾不帶括號的註記(`public @Nullable Integer f(`)。"""
     lines = text.split("\n")
     offs, o = [], 0
     for ln in lines:
@@ -47403,8 +47406,8 @@ def _rg_methods(text, java):
             i += 1
             continue
         anns, k = _rg_annotations(text, offs[i])
-        dm = re.match(r"[^(@{};]*?\b(\w+)\s*(?:<[^>]*>)?\s*\(", text[k:], re.S)
-        if not dm or not (anns & _RG_METHOD_ANNS) or (not java and "fun " not in text[k:k + dm.end()]):
+        dm = re.match(r"(?:[^(@{};]|@[\w.]+(?=\s))*?\b(\w+)\s*(?:<[^>]*>)?\s*\(", text[k:], re.S)
+        if not dm or not (anns & kinds) or (not java and "fun " not in text[k:k + dm.end()]):
             i = text.count("\n", 0, k) + 1
             continue
         j = _rg_balanced(text, k + dm.end() - 1) + 1
@@ -47439,8 +47442,7 @@ def _rg_spans(t, java):
     cm = re.search(r"@(?:androidx\.room3?\.)?Dao\b[^{]*?\b(?:interface|class)\s+(\w+)", t, re.S)
     dao = cm.group(1) if cm else ("" if re.search(r"@(?:androidx\.room3?\.)?Dao\b", t) else None)
     ms = [(n, a, b) for n, a, b, _tx in _rg_methods(t, java)] if dao is not None else []
-    cs = [(m.group(1) or m.group(2), t.count("\n", 0, m.start()) + 1, t.count("\n", 0, m.end()) + 1)
-          for m in re.finditer(r"@(?:androidx\.room3?\.)?TypeConverter\b[\s\S]*?\bfun\s+(\w+)|@TypeConverter\b[^;{]*?\b(\w+)\s*\(", t)]
+    cs = [(n, a, b) for n, a, b, _tx in _rg_methods(t, java, _RG_CONVERTER_ANNS)]
     return dao, ms, cs
 
 
