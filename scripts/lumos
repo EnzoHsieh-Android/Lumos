@@ -31981,6 +31981,8 @@ _VENDORED_TREE_FILES = (
     "scripts/templates/android-stability-cycle.sql",  # 記憶體與穩定性:量測期間追蹤檔的峰值、凍結幀、最長阻塞
     "scripts/templates/android-heap-classes.sql",  # 記憶體與穩定性:Java 快照每個類別還有人指著的實例數
     "scripts/templates/android-stability-record.pbtxt",  # 記憶體與穩定性:量測期間的 Perfetto 錄製設定
+    "scripts/templates/android-stability-heapprofd.pbtxt",  # 記憶體與穩定性:原生配置排行那一段的 heapprofd 錄製設定
+    "scripts/templates/android-stability-native.sql",  # 記憶體與穩定性:原生配置排行(結束時還留著最多的呼叫位置)
     "scripts/templates/android-e2e-run.sh",  # Android 端到端驗收:依序建 APK、裝上、跑四塊、寫 steps.json 再交給 judge
 )
 _VENDORED_ALL = frozenset(_VENDORED_TOOLKIT + _VENDORED_TREE_FILES)
@@ -39484,7 +39486,12 @@ def _macrobench_stab_top_err(raw):
         if err:
             return f"macrobench.json 的 stability 段:{err}"
     err = _e2e_scenarios_err(raw.get("stability_scenarios"))
-    return f"macrobench.json 的 {err}" if err else None
+    if err:
+        return f"macrobench.json 的 {err}"
+    names = (raw.get("stability") or {}).get("native_retained") or []
+    bad = [n for n in names if n != "@default" and n not in (raw.get("stability_scenarios") or {})]
+    return (f"macrobench.json 的 stability.native_retained 列了不存在的情境:{'、'.join(_out_clean(n, 80) for n in bad)}"
+            f"(要是 stability_scenarios 裡的情境名,或代表沒指定情境那一段的 \"@default\")") if bad else None
 
 
 def _macrobench_config(repo):
@@ -39574,6 +39581,9 @@ def _macrobench_stab_optional_err(st):
     for k in ("adb_serial", "mapping"):
         if k in st and (not isinstance(st[k], str) or not st[k].strip()):
             return f"{k} 要是非空字串"
+    nr = st.get("native_retained", [])
+    if not isinstance(nr, list) or not all(isinstance(x, str) and x.strip() for x in nr) or len(set(nr)) != len(nr):
+        return "native_retained 要是情境名的清單(非空字串、不重複;\"@default\" 代表沒指定情境那一段)"
     return None
 
 
@@ -40040,6 +40050,72 @@ def _macrobench_stab_native_unreachable(t, stab, rec):
     return rec["delta_bytes"] > rec["max_bytes"], None
 
 
+MACROBENCH_NATIVE_SHOW = 20   # 原生配置排行最多印幾個(結果檔最多 200 個,--json 全帶)
+
+
+def _macrobench_native_off(why):
+    return {"enabled": False, "status": "unsupported", "reason": why, "sites": []}
+
+
+def _macrobench_native_sites_err(sites):
+    """原生配置排行 sites 的形狀(收集腳本寫的;單源 Projects/原生記憶體增長提示_計劃〈打算怎麼做〉第 5 步)。回哪裡不對或 None。"""
+    if not isinstance(sites, list):
+        return "sites 不是清單"
+    for i, x in enumerate(sites, 1):
+        if not isinstance(x, dict) or not all(isinstance(x.get(k), str) for k in ("func", "so", "caller")):
+            return f"sites 第 {i} 項不是物件或缺 func、so、caller"
+        if not all(isinstance(x.get(k), bool) for k in ("symbol", "system")):
+            return f"sites 第 {i} 項的 symbol、system 要是 true 或 false"
+        if not _secev_int(x.get("retained")) or x["retained"] < 0:
+            return f"sites 第 {i} 項的 retained 要是非負整數"
+    return None
+
+
+def _macrobench_native_retained(stab):
+    """結果檔的 native_retained 段 → macrobench 結果的固定鍵 {enabled, status, reason, sites}。只提醒,不進任何判定;
+    形狀不對整段不採用(寫成 failed、原因是「結果檔形狀不對:哪裡」),不噴例外。"""
+    sec = stab.get("native_retained")
+    if sec is None:
+        return _macrobench_native_off("結果檔沒有 native_retained 段")
+    bad = None
+    if not isinstance(sec, dict):
+        bad = "native_retained 不是物件"
+    elif not isinstance(sec.get("enabled"), bool):
+        bad = "enabled 要是 true 或 false"
+    elif sec.get("status") not in ("ok", "failed", "unsupported"):
+        bad = "status 只能是 ok、failed、unsupported"
+    elif sec["status"] == "ok":
+        bad = _macrobench_native_sites_err(sec.get("sites"))
+    if bad:
+        return {"enabled": True, "status": "failed", "reason": f"結果檔形狀不對:{bad}", "sites": []}
+    reason = sec.get("reason") if isinstance(sec.get("reason"), str) else ("" if sec["status"] == "ok" else "沒寫原因")
+    # 函式名與 .so 名是被量 App 的符號(外部可控):--json 也跟文字輸出一樣先過 _events_clean,skill 抄進收據的就是這一份
+    # 只照固定六個鍵重組:結果檔多塞的鍵不帶進 --json
+    sites = [{**{k: _events_clean(x[k], 500) for k in ("func", "so", "caller")}, **{k: x[k] for k in ("symbol", "system", "retained")}}
+             for x in sec["sites"][:200]] if sec["status"] == "ok" else []
+    return {"enabled": sec["enabled"], "status": sec["status"], "reason": _events_clean(reason, 500) or None, "sites": sites}
+
+
+def _macrobench_native_print(nr):
+    """原生配置排行的文字輸出(獨立於門檻輸出,只提醒):沒打開不印;打開了沒跑成或形狀不對印一行;ok 印前 MACROBENCH_NATIVE_SHOW 個。"""
+    if not nr["enabled"]:
+        return
+    if nr["status"] != "ok":
+        print(f"原生配置排行沒跑成:{_events_clean(nr['reason'] or '沒寫原因', 500)}(只提醒,不擋推送)")
+        return
+    if not nr["sites"]:
+        print("原生配置排行:沒有結束時還留著 1 MiB 以上的呼叫位置(只提醒,不擋推送)。")
+        return
+    print(f"原生配置排行(只提醒,不擋推送;前 {min(len(nr['sites']), MACROBENCH_NATIVE_SHOW)} 個,共 {len(nr['sites'])} 個):"
+          "量測結束時還留著、而且是開錄之後才配的原生配置,含快取與池,不代表漏")
+    for i, x in enumerate(nr["sites"][:MACROBENCH_NATIVE_SHOW], 1):
+        tags = "".join(t for t, on in (("(沒有符號)", not x["symbol"]), ("(系統函式庫)", x["system"])) if on)
+        tenth = x["retained"] * 10 // 1048576   # 整數算:超大整數轉 float 會溢位
+        # 三段文字各自清、各自截,數字接在後面:整行一起截時長的模板名會把「還留著多少」截掉
+        print(f"  {i}. {_events_clean(x['func'], 200)} @ {_events_clean(x['so'], 120)} ← {_events_clean(x['caller'], 200)}:"
+              f"還留著 {tenth // 10}.{tenth % 10} MiB({x['retained']} 位元組){tags}")
+
+
 def _macrobench_stab_heap(stab):
     s, why = _macrobench_stab_src(stab, "heap")
     if why:
@@ -40273,6 +40349,7 @@ def _macrobench_without_results(cfg, res, stab_res, thresholds, as_json, update_
     if cfg is None and not any(res[k] for k in ("threshold_failures", "threshold_passed", "threshold_skipped")):
         print("這個專案沒接 Macrobenchmark 退步提醒(沒有 .lumos/macrobench.json),沒有東西可比。")
     _macrobench_print_thresholds(res)
+    _macrobench_native_print(res["native_retained"])
     return 0
 
 
@@ -40313,7 +40390,8 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
     res = {"regressions": [], "listed": [], "new": [], "missing": [], "device_changed": [], "checked": 0,
            "failed": [], "baseline_missing": False, "baseline_unreadable": False,
            "threshold_failures": [], "threshold_passed": [], "threshold_skipped": [],
-           "stability_unjudged": None, "low_iterations": []}   # 鍵固定、沒東西可判時才填字串(代碼審 r4 架構對齊席)
+           "stability_unjudged": None, "low_iterations": [],   # 鍵固定、沒東西可判時才填字串(代碼審 r4 架構對齊席)
+           "native_retained": _macrobench_native_retained(stab) if stab is not None else _macrobench_native_off("沒給 --stability")}
     stab_res = _macrobench_judge_stability(thresholds, stab)   # 記憶體與穩定性:只看 stability.json,有沒有接 Macrobenchmark 都照判
     _macrobench_stab_unjudged(res, stab, thresholds, as_json)
     if cfg is None or not cfg["results_dirs"]:
@@ -40341,6 +40419,7 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
     else:
         _macrobench_print(res, cfg)
         _macrobench_print_thresholds(res)
+        _macrobench_native_print(res["native_retained"])
     return 0
 
 

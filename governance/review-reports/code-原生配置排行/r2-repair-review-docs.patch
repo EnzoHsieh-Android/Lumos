@@ -1,0 +1,203 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md
+index b44ffda02a24b977c778595a55806f4f8e2bb746..fd52aaa31663a74dd7649d14e085a9cd21a034cd 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android記憶體與穩定性驗收_計劃.md
+@@ -57,32 +57,33 @@ REVISIT:2027-04-30 第一個真實專案用收集腳本跑過之後,確認 `dump
+ | instances | N 輪後那份 Java 快照 | 宣告的類別實例數超過上限 | `class`、`max` |
+ | peak_vitals | N 輪期間追蹤檔的匿名常駐記憶體加 swap 最大值 | 超過裝置分級的官方前景上限 | 無 |
+ | exits | 前後兩次系統結束紀錄的差異、三次 pid | 多出崩潰、原生崩潰、ANR、低記憶體被殺、記憶體上限任一筆,或 pid 變了 | 無 |
+ | strictmode | N 輪期間這個 pid 的日誌 | 有一筆 StrictMode 違規 | 無 |
+ | frozen | N 輪期間的追蹤檔 | 有一幀超過 700ms;設了阻塞上限時最長阻塞超過上限 | `max_block_ms`(選填) |
+ 
+ 另外 Native Heap 前後兩個數字只回報,當原生那項的佐證。SDK 自己留著登記、還指著那塊記憶體時沒人指著的掃描是 0,這種要看哪個呼叫位置留著:替那個情境打開 `stability.native_retained`,收集腳本另跑一段列原生配置排行(只提醒,見 [[Projects/原生記憶體增長提示_計劃]])。
+ 
+ ## 資料怎麼流
+ 
+-1. 設定:`.lumos/macrobench.json` 加 `stability` 段:`package`、`scenario`、`driver`(驅動指令,`{{CYCLES}}` 會換成輪數)、`warmup`(W,1 到 10000)、`cycles`(N,1 到 10000)、`test_data`(帶署名與日期的宣告)、`strictmode`(true 或 false)、`category`(app 或 game,預設 app)、`max_record_s`(預設 600)、`adb_serial`(選填,多台裝置時的 adb 序號)、`mapping`(選填,R8 的 mapping.txt 路徑)。驅動指令例:UI Automator 用自己測自己的測試 `adb shell am instrument -w -e class <測試類別>#<方法> -e cycles {{CYCLES}} <測試套件>/androidx.test.runner.AndroidJUnitRunner`;子案二用 `maestro test -e CYCLES={{CYCLES}} <flow>`(flow 照上面那條 WHY 的規範寫)。設定檔裡的驅動指令由收集腳本執行,跟專案自己的建置腳本同一個信賴等級。
++1. 設定:`.lumos/macrobench.json` 加 `stability` 段:`package`、`scenario`、`driver`(驅動指令,`{{CYCLES}}` 會換成輪數)、`warmup`(W,1 到 10000)、`cycles`(N,1 到 10000)、`test_data`(帶署名與日期的宣告)、`strictmode`(true 或 false)、`category`(app 或 game,預設 app)、`max_record_s`(預設 600)、`adb_serial`(選填,多台裝置時的 adb 序號)、`mapping`(選填,R8 的 mapping.txt 路徑)。驅動指令例:UI Automator 用自己測自己的測試 `adb shell am instrument -w -e class <測試類別>#<方法> -e cycles {{CYCLES}} <測試套件>/androidx.test.runner.AndroidJUnitRunner`;子案二用 `maestro test -e CYCLES={{CYCLES}} <flow>`(flow 照上面那條 WHY 的規範寫)。設定檔裡的驅動指令由收集腳本執行,跟專案自己的建置腳本同一個信賴等級。 選填 `native_retained`:要列原生配置排行的情境名清單(`"@default"` 是沒指定情境那一段,見 [[Projects/原生記憶體增長提示_計劃]])。
+ 2. 收集(工具鏈範本 `scripts/templates/android-stability-collect.sh`,照抄進消費專案;跟收據重跑腳本一樣是 sh 外殼包 python3,不靠第三方套件;trace_processor 用 `TP`、快照腳本用 `JAVA_HEAP_DUMP` 找;每個 adb、驅動、trace_processor 與快照呼叫都用 python 的逾時;每個子程序都自成程序群組,逾時或被中斷時整組殺;中途失敗也刪暫存檔與裝置上的暫存檔;設定讀不了、必要工具找不到、python3 不到 3.11、run-id 不合法或已經有結果檔、產物沒被 git 忽略、mapping 檔不在、被 SIGTERM、SIGHUP、SIGQUIT 或 Ctrl-C 中斷時回 2 並印「擋下:」、不寫結果檔,其餘情況都寫出結果檔並回 0,哪一段沒收到寫在那個來源的 status):
+    1. 刪產物目錄底下超過 7 天的 `heap-*.pftrace`(只刪這個樣式);讀裝置 MemTotal、Android 版本與機型。
+    2. 先停 App(`am force-stop`),停完讀一次結束紀錄(前),再啟動 App,記 pid;跑暖機驅動;再讀 pid。
+    3. 掃一次沒人指著的原生記憶體;讀 Native Heap;test_data 宣告為 true 才錄第一份 Java 快照(先掃再錄,錄快照時在行程裡的配置不會算進掃描)。
+    4. 記下裝置時間,開始錄追蹤檔、開始串流這個 pid 從那個時間起的日誌,跑量測驅動,停止錄製與串流。
+    5. 讀 pid;再掃一次沒人指著的原生記憶體;讀 Native Heap;test_data 宣告為 true 才錄第二份 Java 快照。
+    6. 讀一次結束紀錄(後),比出多的那幾筆並分類;從日誌串流挑出 StrictMode 行。
+    7. 先確認套件名只含英數字、底線與點(跟 skill 替換 `__PROCESS__` 前的檢查一樣),再用兩支查詢範本算數字(`android-stability-cycle.sql` 對追蹤檔、`android-heap-classes.sql` 對兩份快照),寫成 `.lumos/artifacts/android/<run-id>/stability.json`。
+-3. 結果檔欄位:`scenario`、`device_model`、`android_sdk`、`total_mem_mb`、`category`、`warmup`、`cycles`;每個來源一段,各帶 `status` 與 `reason`:`driver`(warmup、cycles 各自的回傳碼與判讀)、`pids`(三次)、`unreachable`(before、after 各自的 bytes、allocations)、`heap`(before、after:只存有增減的類別與門檻檔宣告的類別,類別名對實例數;沒錄時 status 是 unsupported)、`native_heap_kb`(before、after)、`cycle_trace`(peak_anon_swap_kb、frozen_frames、max_main_block_ms、frames)、`exits`(新增的每筆 reason、type、pid、timestamp、desc)、`strictmode`(每筆違規種類)。
++   8. 設定替這個情境打開 `native_retained` 時,全部讀完之後再停 App、重跑暖機與量測、只錄 heapprofd,算原生配置排行寫進結果檔的 `native_retained` 段(判斷順序、時間上限與失敗原因見 [[Projects/原生記憶體增長提示_計劃]])。
++3. 結果檔欄位:`scenario`、`device_model`、`android_sdk`、`total_mem_mb`、`category`、`warmup`、`cycles`;每個來源一段,各帶 `status` 與 `reason`:`driver`(warmup、cycles 各自的回傳碼與判讀)、`pids`(三次)、`unreachable`(before、after 各自的 bytes、allocations)、`heap`(before、after:只存有增減的類別與門檻檔宣告的類別,類別名對實例數;沒錄時 status 是 unsupported)、`native_heap_kb`(before、after)、`cycle_trace`(peak_anon_swap_kb、frozen_frames、max_main_block_ms、frames)、`exits`(新增的每筆 reason、type、pid、timestamp、desc)、`strictmode`(每筆違規種類)。 另有 `native_retained`(enabled、status、reason;ok 時加 main_process_only 與 sites,沒打開時 enabled 是 false)。
+ 4. 判定(`lumos macrobench --stability <結果檔>`):只判門檻檔裡寫了 `check` 的條目;沒給 `--stability` 時這些條目列成跳過、原因寫「沒給結果檔」;driver 來源不是 ok 時,需要完整 N 輪的五種列成跳過、exits 與 strictmode 照判;結果檔讀不了或格式不對回 2 並印「擋下:」;輸出沿用 threshold_failures、threshold_passed、threshold_skipped,每筆帶 `check` 與那一種的明細(java_growth 列出增長的類別與增加量,native_unreachable 印差值位元組與塊數,exits 印每筆種類);文字輸出照 `check` 分支印(不靠 metric、stat 欄位);`--stability` 的相對路徑照目前目錄解;跟 `--update-baseline` 一起給時,基準照舊只更新 Macrobenchmark 結果檔那部分;只提醒、回 0。
+-5. 診斷(skill):skill 看 threshold_failures 每筆的 `check` 欄位決定往哪走:native_unreachable 或 java_growth、instances 沒過,`stability.test_data` 的 value 是 true 時直接進 L3、不是時停在 L0 記 `[GAP] L3 未授權`,不先走 L1、L2(那兩層看 CPU 時間,記憶體問題在那裡看不到):Java 那側在第二份快照上查支配樹找到留住的欄位;原生那側用 heapprofd 重跑一次 N 輪,看沒釋放的配置是誰呼叫的;第三方 .so 沒有符號時停在「哪支 .so、哪個位移、App 哪個函式呼叫的」,標成第三方沒有符號(原生堆積分析對 Java 那幾層只記函式、不記行號,2026-10-24 實驗室實測);peak_vitals 沒過也進 L3。frozen 沒過照原本 L1;exits 沒過看 stability.json 的 exits.new,strictmode 沒過看 run 目錄的 logcat.txt(只留違規那幾行)。
++5. 診斷(skill):skill 看 threshold_failures 每筆的 `check` 欄位決定往哪走:native_unreachable 或 java_growth、instances 沒過,`stability.test_data` 的 value 是 true 時直接進 L3、不是時停在 L0 記 `[GAP] L3 未授權`,不先走 L1、L2(那兩層看 CPU 時間,記憶體問題在那裡看不到):Java 那側在第二份快照上查支配樹找到留住的欄位;原生那側用 heapprofd 重跑一次 N 輪,看沒釋放的配置是誰呼叫的;第三方 .so 沒有符號時停在「哪支 .so、哪個位移、App 哪個函式呼叫的」,標成第三方沒有符號(原生堆積分析對 Java 那幾層只記函式、不記行號,2026-10-24 實驗室實測);peak_vitals 沒過也進 L3。frozen 沒過照原本 L1;exits 沒過看 stability.json 的 exits.new,strictmode 沒過看 run 目錄的 logcat.txt(只留違規那幾行)。 原生那側先看 `--json` 的 `native_retained` 排行(有打開、ok 時),沒拿到才手動錄 heapprofd([[Projects/原生記憶體增長提示_計劃]])。
+ 6. 收據:兩支查詢範本可整份貼進收據,用現有的重跑腳本從追蹤檔與快照重算;查詢第一欄是字串鍵(追蹤檔那支輸出一列、鍵是 cycle;快照那支每個類別一列、鍵是類別名,同名類別出現在不同 classloader 時加總成一列);兩份快照各寫一條查詢,快照那兩條只記錄、不比對,收據驗不到快照內容,java_growth 與 instances 由 lumos 判定;空值用 COALESCE 換成 -1,重跑比對才寫得出 expect;快照那兩條查詢在收據寫 `expect=-`(只記錄、不比對),所以快照 7 天後被刪也不會讓重跑誤報成比對不符;追蹤檔那條照常寫 expect。
+ 
+ REVISIT:2026-12-31 看 CI 跑測試的映像有沒有 zh_TW.BIG5 語系;沒有的話 S24 的「Big5 語系下輸出照樣是 UTF-8」在 CI 只印略過、驗不到,要嘛在 CI 裝語系,要嘛改用不靠系統語系的方式模擬非 UTF-8 輸出
+ 
+ ## 這次要改到的地方
+ 
+ - 工具鏈 `scripts/lumos`:`lumos macrobench` 加 `--stability` 與門檻的 `check` 欄位與七種判定;門檻驗證只對沒寫 `check` 的條目套原規則;有 `stability` 段時 `results_dirs` 可以不填(這時 `--update-baseline` 印「這個專案的 macrobench.json 沒有 results_dirs,沒有 Macrobenchmark 結果可以更新基準。」回 0;連 macrobench.json 都沒有時改說沒有設定檔);`stability` 段的欄位由 lumos 驗(收集腳本開跑前呼叫 `lumos macrobench --check-config` 驗一次,驗不過就擋下),不在收集腳本另寫一套;沒有 `.lumos/macrobench.json` 但給了 `--stability` 時照判;判定輸出與印字照 `check` 分支;數字走既有的只收有限數檢查。
+ - 工具鏈範本 `scripts/templates/`:新增收集腳本、兩支查詢範本、錄製設定(`android-stability-record.pbtxt`,用 # 註解寫 SPDX),帶 SPDX 檔頭、登記工具組複製清單;範本檔頭寫明註解不以分號結尾(收據重跑腳本拿第一個分號當查詢結尾)。
+ - 新家節點 [[Systems/android-stability-collector]]:管收集腳本、兩支查詢範本與錄製設定,負責範圍寫「在主機端排順序、用 adb 收記憶體與穩定性資料寫成結果檔;不判過不過(判定在 lumos macrobench)」;它是第一支會接裝置的範本。
+ - 家節點 [[Systems/macrobenchmark-adapter]]:負責範圍加「讀收集結果檔判記憶體與穩定性」,「不接裝置」照留(Lumos 本體不接,接裝置的是收集腳本)。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/原生記憶體增長提示_計劃.md b/docs/lumos-toolchain-knowledge/Projects/原生記憶體增長提示_計劃.md
+index 34ad20b0291b70e8c9d3a053d9a4e138d42548c6..2c139ef6cd4642feac99cddf725d0bf2793dec00 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/原生記憶體增長提示_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/原生記憶體增長提示_計劃.md
+@@ -130,39 +130,39 @@ duration_ms: 120000
+ ```
+ 
+ ## 排行怎麼算
+ 
+ 收集腳本取數、lumos 排與印(收集腳本照既有慣例只縮減資料、不判過不過):
+ 
+ 1. 呼叫位置(收集腳本):從 malloc 那一框往上走,跳過「配置器那幾層」,第一個不是的框架就是呼叫位置。
+    - .so 名稱先取「所在 .so」:mapping 名有「!」時取最後一個「!」之後的部分(.so 未解壓、直接從 APK 載入時,名稱是 `…/base.apk!libfoo.so`,見 r4-intake 的查證),沒有就取路徑最後一段;mapping 沒有名字時記「?」。
+    - 配置器那幾層:所在 .so 是 libc.so、libc++.so、libc++_shared.so、libstdc++.so(這幾支裡的全部框架都跳過,歸責給呼叫它們的 SDK);或函式名(heapprofd 存的是未還原的 mangle 名)精確等於 malloc、calloc、realloc、posix_memalign、memalign、aligned_alloc、__libc_malloc、je_malloc、tc_malloc、__wrap_malloc;或以 _Znw、_Zna(operator new 系列)、_ZNSt、_ZNKSt(靜態連結進 SDK 的標準庫容器內部)開頭——比對前綴用 GLOB,不用 LIKE(底線在 LIKE 裡是萬用字元)。
+    - 函式名以「ERROR 」開頭的是回溯失敗時補上的偽框架,跟「整條都是配置器」一樣記成「?」。
+-   - 呼叫者:呼叫位置往上的第一個不在 libart.so 的框架(跳過 ART 的 JNI 跳板);沒有就記「?」。
++   - 呼叫者:呼叫位置往上的第一個不在 libart.so 的框架(跳過 ART 的 JNI 跳板);沒有、或那一框是 ERROR 偽框架,就記「?」。
+    - name 是 NULL 或空字串當沒有符號,函式名寫成「.so 名稱+0x相對位址」(rel_pc 也是 NULL 時寫 +0x?)並標沒有符號;沒有符號時是按呼叫點歸併,同一個沒有名字的函式裡的不同呼叫點會分成不同列。函式名與呼叫者存檔前截到 500 字元。
+    - 系統函式庫:mapping 完整路徑在 /system/、/apex/、/vendor/、/product/、/system_ext/、/odm/ 底下。
+-2. 數字(收集腳本):每個 callsite 結束時還沒釋放的量 = 它所有列的 size 加總(heapprofd 只記開錄之後的配置;停錄時會傾印一次,錄製設定的 data_source_stop_timeout_ms 內沒寫完就不補、stats 記 heapprofd_non_finalized_profile,照〈打算怎麼做〉第 4 步寫 failed)。先對不重複的 callsite 往上找呼叫位置,再歸併到呼叫位置(函式、.so 名稱、系統旗標三者當鍵;系統與非系統的同名 .so 不會混在一起,兩支都在 App 底下的同名 .so 會併成一列),再篩結束累計至少 1 MiB(1048576 位元組)的,照結束累計降冪、函式名升冪、.so 升冪、系統旗標升冪取前 200 個;呼叫者取「從它進來的那些 callsite 結束累計加總」最大的那個,並列照呼叫者名字升冪。1 MiB 只在這裡篩一次。
++2. 數字(收集腳本):每個 callsite 結束時還沒釋放的量 = 它所有列的 size 加總(heapprofd 只記開錄之後的配置;停錄時會傾印一次,錄製設定的 data_source_stop_timeout_ms 內沒寫完就不補、stats 記 heapprofd_non_finalized_profile,照〈打算怎麼做〉第 4 步寫 failed)。先對不重複的 callsite 往上找呼叫位置,再歸併到呼叫位置(函式、.so 名稱、系統旗標三者當鍵;系統與非系統的同名 .so 不會混在一起,兩支都在 App 底下的同名 .so 會併成一列),再篩結束累計至少 1 MiB(1048576 位元組)的,照結束累計降冪、函式名升冪、.so 升冪、系統旗標升冪取前 200 個;呼叫者取「從它進來的那些 callsite 結束累計加總」最大的那個,並列時有名字的排在「?」前面、再照呼叫者名字升冪。1 MiB 只在這裡篩一次。
+ 3. 排與印(lumos):保持收集腳本的順序,最多印 20 個;每行印函式、所在 .so、呼叫者、結束時還留著多少、有沒有符號、是不是系統函式庫;最上面一行寫明「量測結束時還留著、而且是開錄之後才配的原生配置,含快取與池,不代表漏」;ok 但一個都沒有時印一行「原生配置排行:沒有結束時還留著 1 MiB 以上的呼叫位置」。函式名照存的 mangle 名印,不在 lumos 還原。
+ 
+ ## 打算怎麼做
+ 
+ 1. 預設關,按情境打開(d4):`stability` 段加一個選填鍵 `native_retained`,值是情境名的清單,`"@default"` 代表沒指定情境的那一段(沒設 LUMOS_STABILITY_SCENARIO;情境名只收英數字、底線、連字號,這個名字不會跟情境撞;既有程式內部用 None 代表這一段,設定檔裡要有個字面名才寫得出來,reference.md 的設定表寫明);沒寫等於空清單。型別(清單、元素是非空字串、不重複)照其他 stability 選填鍵在 `_macrobench_stab_optional_err` 驗;名字要對到 `stability_scenarios` 或是 "@default" 這條跨段檢查放 `_macrobench_stab_top_err`(那裡拿得到 `stability_scenarios`);不合格回 2 擋下。**不寫進 `stability_scenarios`、不動 E2E_SCENARIO_KEYS、不改既有情境名規則**:舊版 lumos 不驗 stability 段的未知鍵,退回舊版時設定不會被擋下。收集腳本的 `load_config` 把這次的情境名一起回傳(e2e 測試用正規式抓的 `scen[k] for k in (…)` 那一行不動),`preflight` 與 `measure` 都要拿到它。
+ 2. 判斷順序寫死,第一個不成立的就是結果檔那段的狀態與原因(結果檔那段一律帶 `enabled`:這次的情境有沒有在 `native_retained` 清單裡):不在清單裡 → `enabled: false`、unsupported「設定沒替這個情境打開 native_retained」;以下都是 `enabled: true`:`stability.test_data` 的 value 不是 true(d3,只看 stability 段)→ unsupported「沒宣告測試資料」;android_sdk 讀不到 → unsupported「讀不到 Android 版本」;android_sdk 低於 30(只接已在跑的行程要 Android 11 以上)→ unsupported「Android 版本不支援」;第一段驅動失敗或 pid 讀不到 → failed「第一段沒跑成,不跑第二段」;時間預算不夠(第 3 步)→ failed「時間不夠,不跑第二段」;其餘才跑第二段。
+-3. 第二段排在既有量測全部讀完之後(第二次讀結束紀錄之後),結果檔照舊在全部做完後一次寫出(不先寫第一段;被中斷照舊不寫結果檔、回 2,跟既有「同一個 run-id 已有結果檔就擋」的規則與檔頭說明一致):停 App → 啟動 → 讀結束紀錄與 pid → 暖機 W 輪 → 開 heapprofd → 驅動量測 N 輪 → 停錄 → 讀 pid 與結束紀錄。
+-   - 時間預算:e2e 範本叫收集腳本時用環境變數 `LUMOS_STABILITY_STEP_BUDGET_S` 傳這一步的上限(它自己的 T_LONG);收集腳本記第一段從開跑到讀完的秒數,第二段預估等於第一段的兩倍加 120 秒(停錄、拉檔、查詢),開跑到現在的秒數加預估超過預算就不跑第二段、寫 failed「時間不夠」;沒設這個變數(人手動跑)不限制。這樣第二段不會把整步推過 e2e 的上限、連累第一段的判定。
+-   - 例外:第二段包在 try 裡,先 `except Terminated: raise`(收到 SIGTERM、SIGHUP、SIGQUIT 時既有程式會丟 Terminated,它繼承 Exception,要先放行,交給 main 照既有流程收尾、回 2),再 `except Exception` 寫成 failed 附例外類型;不管哪一種,離開第二段前都先 `abort_record(state.get("rec"))` 收掉錄製、清掉 state 裡的錄製槽。
+-   - 第二段的 pid、驅動結果、前後結束紀錄寫在新段落裡,**不碰既有的 pids、exits、unreachable、native_heap_kb**;任何一次驅動回 ok false → failed「驅動失敗」附 why;第二段期間 App 結束 → failed「第二段期間 App 結束(類型)」;前後 pid 不同 → failed「行程換了」。
+-   - 錄製沿用 `start_record`、`stop_record`,參數改成設定範本、遠端檔名前綴、本機錄檔名、本機設定檔名(第一段照舊傳原本的值;上限訊息裡的設定鍵兩段都是 stability.max_record_s,實作時沒另開參數):設定範本另開 `android-stability-heapprofd.pbtxt`(`__PROCESS__`、`__DURATION_MS__` 佔位,時長照 `stability.max_record_s`;不設 continuous_dump_config,排行只要停錄那一次傾印;`data_source_stop_timeout_ms` 用預設 5000),遠端檔名 `lumos-native-<run-id>.*`(跟第一段的 `lumos-stability-` 前綴不同,不會跟某個 run-id 撞名),本機 `heap-native.pftrace`(放 run 目錄第一層、符合既有 7 天刪的樣式)與 `record-native.pbtxt`;這兩個檔名只在這次情境打開時才加進開跑前的 git 忽略檢查。第一段的錄製從 state 拿掉之後才開第二段,沿用同一個 `state["rec"]` 槽,中斷時既有 cleanup 照舊收得到;停錄等最後一次傾印用既有 stop_record(STOP_WAIT 30 秒,大於 5 秒預設)。
++3. 第二段排在既有量測全部讀完之後(第二次讀結束紀錄之後),結果檔照舊在全部做完後一次寫出(不先寫第一段;被中斷照舊不寫結果檔、回 2,跟既有「同一個 run-id 已有結果檔就擋」的規則與檔頭說明一致):停 App → 讀結束紀錄 → 啟動 → 讀 pid → 暖機 W 輪 → 開 heapprofd → 驅動量測 N 輪 → 停錄 → 讀 pid 與結束紀錄(停 App、讀結束紀錄、啟動、讀 pid 跟第一段共用同一支 fresh_launch)。
++   - 時間預算:e2e 範本叫收集腳本時用環境變數 `LUMOS_STABILITY_STEP_BUDGET_S` 傳這一步的上限(它自己的 T_LONG);收集腳本記第一段從開跑到讀完的秒數,第二段預估等於第一段的兩倍加 120 秒(停錄、拉檔、查詢),開跑到現在的秒數加預估超過預算就不跑第二段、寫 failed「時間不夠」;沒設這個變數(人手動跑)不限制;值不是大於 0 的有限秒數(nan、inf、0、負數、不是數字)開跑前就擋下回 2。預估過了之後,第二段每次驅動與查詢的上限也不超過「開跑時間加這一步上限、扣 180 秒」剩下的時間(留給停錄、拉檔與寫結果檔),逾時照驅動失敗或查詢逾時寫 failed。這樣第二段不會把整步推過 e2e 的上限、連累第一段的判定。
++   - 例外:第二段包在 try 裡,先 `except Terminated: raise`(收到 SIGTERM、SIGHUP、SIGQUIT 時既有程式會丟 Terminated,它繼承 Exception,要先放行,交給 main 照既有流程收尾、回 2;錄製留在 state 的錄製槽,由 main 的 cleanup 收,跟中斷在第一段時同一條路),再 `except Exception`:先從 state 拿出錄製、`abort_record` 收掉,再寫成 failed 附例外類型與訊息(前 200 字);收不掉時原因後面加一句裝置上 lumos-native 的錄製與暫存可能還留著。
++   - 第二段的 pid、驅動結果、前後結束紀錄寫在新段落裡,**不碰既有的 pids、exits、unreachable、native_heap_kb**;任何一次驅動回 ok false → failed「驅動失敗」附 why;前後任一次讀不到結束紀錄 → failed「讀不到第二段的結束紀錄」(判不出第二段期間 App 有沒有結束,寧可不採用);第二段期間 App 結束 → failed「第二段期間 App 結束(類型)」;前後 pid 不同或讀不到 → failed「行程換了」;順序照這一句。
++   - 錄製沿用 `start_record`、`stop_record`,參數改成設定範本、遠端檔名前綴、本機錄檔名、本機設定檔名(第一段照舊傳原本的值;上限訊息裡的設定鍵兩段都是 stability.max_record_s,實作時沒另開參數):設定範本另開 `android-stability-heapprofd.pbtxt`(`__PROCESS__`、`__DURATION_MS__` 佔位,時長照 `stability.max_record_s`;不設 continuous_dump_config,排行只要停錄那一次傾印;`data_source_stop_timeout_ms` 用預設 5000),遠端檔名 `lumos-native-<run-id>.*`(跟第一段的 `lumos-stability-` 前綴不同,不會跟某個 run-id 撞名),本機 `heap-native.pftrace`(放 run 目錄第一層、符合既有 7 天刪的樣式)與 `record-native.pbtxt`;這兩個檔名只在這次情境打開時才加進開跑前的 git 忽略檢查;打開時開跑前也查收集腳本旁邊有沒有這兩支新範本(`android-stability-heapprofd.pbtxt`、`android-stability-native.sql`),少了就擋下回 2、點名缺哪支(消費專案只抄了收集腳本時,不白跑暖機才發現)。第一段的錄製從 state 拿掉之後才開第二段,沿用同一個 `state["rec"]` 槽,中斷時既有 cleanup 照舊收得到;停錄等最後一次傾印用既有 stop_record(STOP_WAIT 30 秒,大於 5 秒預設)。
+    - 第二段結束時不停 App:heapprofd 的客戶端在下一次記錄失敗時自己關掉記帳(r3-intake 的查證),收集腳本結束時的 App 狀態跟沒打開時一樣。
+ 4. 收集腳本的查詢放新的範本 `android-stability-native.sql`(照既有 .sql 範本,用標準 SQLite 與 android-ui-attribution.sql 用過的 WITH RECURSIVE;用到的表與欄位:heap_profile_allocation 的 size、callsite_id、heap_name,stack_profile_callsite、stack_profile_frame 的 name 與 rel_pc、stack_profile_mapping 的 name,stats 的 name、severity、value),整支一條語句(照既有範本只在最後一行有分號),用 UNION ALL 回三種列、第一欄 `kind` 區分:`site`(排行的每一列)、`rows`(heap_profile_allocation 的總列數一列)、`stat`(stats 裡 severity 是 error 或 data_loss、值非 0 的每一項);文字欄位(函式、.so、呼叫者)在 SQL 裡用 hex() 輸出、Python 端解回來——trace_processor 的 csv 輸出不跳脫字串裡的引號與換行(r4-intake 本機實測),hex 之後每一格都只有十六進位字元與數字,照既有的逗號切法就切得對,不用 csv 模組。「讀範本、換佔位、寫暫存檔、跑 TP、切成列」抽成一支共用函式,既有的 heap_counts、cycle_numbers 一起改用它(切法不變,用既有測試守);跟第一段用同一個 TP;測試照既有 .sql 範本的做法,用 Python 內建 sqlite 對假表跑。跑完的檢查順序寫死:查詢超過收集腳本的 T_LONG → failed「查詢逾時」;有 `stat` 列 → failed 附那幾項的名字(例如 heapprofd_rejected_concurrent 是同一行程已有別的 heapprofd 工作階段、heapprofd_buffer_overran 是緩衝溢位、heapprofd_non_finalized_profile 是最後一次傾印沒寫完);`rows` 是 0 → failed「沒錄到原生配置記帳(App 不是 profileable、或主行程名不是套件名)」;其餘 ok(`site` 列可以是 0 列,代表沒有 1 MiB 以上的)。事前不偵測 profileable:沒有可靠的事前判法,沒錄到時照上一句寫原因。
+ 5. 結果檔新段落 `native_retained`:`enabled`(true/false)、`status` 只用既有的 ok、failed、unsupported 加 reason(沿用 `src()`);ok 時另存 `main_process_only: true`(process_cmdline 是套件名,只量主行程),以及 `sites` 清單,每一項有 `func`、`so`、`caller`、`symbol`(true/false)、`system`(true/false)、`retained`(結束時還沒釋放的位元組整數);照〈排行怎麼算〉第 2 條的順序、最多 200 項。收集腳本不判漲停。
+-6. lumos 讀結果檔的 `native_retained`,放進 macrobench 結果的固定鍵 `native_retained`:物件 `{enabled, status, reason, sites}`,一開始就放進結果的初始字典(跟 stability_unjudged 同處;沒給 `--stability` 時是 `{enabled: false, status: "unsupported", reason: "沒給 --stability", sites: []}`),有給 `--stability` 就在載入結果檔之後算,有結果目錄的主路徑與只有 stability 的路徑都算、都印。結果檔沒有這段(舊收集腳本)→ `enabled: false`、unsupported「結果檔沒有 native_retained 段」、不印;`enabled` 是 false → 不印;`enabled` 是 true 但 status 不是 ok → 印一行「原生配置排行沒跑成:<原因>」;形狀照鄰居 `_macrobench_stab_native_unreachable` 的慣例驗——段不是物件、`sites` 不是清單、某項不是物件或缺欄位、`retained` 不是非負整數(`_secev_int` 加非負)時,整段不採用、印一行「原生配置排行的結果檔形狀不對:<哪裡>」,不噴例外、不改回傳碼。印的函式獨立於門檻輸出,標「只提醒,不擋推送」,照〈排行怎麼算〉第 3 條印,每行過 `_events_clean(…, 500)`(跟鄰近 stability 輸出同一支)。只提醒,不進 threshold_failures、不影響回傳碼與推送前檢查(d2)。
++6. lumos 讀結果檔的 `native_retained`,放進 macrobench 結果的固定鍵 `native_retained`:物件 `{enabled, status, reason, sites}`,一開始就放進結果的初始字典(跟 stability_unjudged 同處;沒給 `--stability` 時是 `{enabled: false, status: "unsupported", reason: "沒給 --stability", sites: []}`),有給 `--stability` 就在載入結果檔之後算,有結果目錄的主路徑與只有 stability 的路徑都算、都印。結果檔沒有這段(舊收集腳本)→ `enabled: false`、unsupported「結果檔沒有 native_retained 段」、不印;`enabled` 是 false → 不印;`enabled` 是 true 但 status 不是 ok → 印一行「原生配置排行沒跑成:<原因>」;形狀照鄰居 `_macrobench_stab_native_unreachable` 的慣例驗——段不是物件、`sites` 不是清單、某項不是物件或缺欄位、`retained` 不是非負整數(`_secev_int` 加非負)時,整段不採用(寫成 failed、原因是「結果檔形狀不對:<哪裡>」)、照沒跑成那一行印,不噴例外、不改回傳碼。印的函式獨立於門檻輸出,標「只提醒,不擋推送」,照〈排行怎麼算〉第 3 條印,函式名、.so 名、呼叫者各自過 `_events_clean`(跟鄰近 stability 輸出同一支;各截 200、120、200 字),大小接在後面、用整數算 MiB,長名字不會把「還留著多少」截掉、超大整數不會溢位。只提醒,不進 threshold_failures、不影響回傳碼與推送前檢查(d2)。
+ 7. skill lumos-android-evidence:L0 的往下條件不變(排行一定會列出快取與池,拿它當往下條件會每次都往下);`native_retained` 鍵不存在、或 `enabled` 是 true 但 status 不是 ok、或 reason 是「結果檔沒有 native_retained 段」= 沒拿到排行,照舊手動錄 L3,不當成零筆;L3 原生那段改成先看這份排行,沒打開的情境照舊手動錄;收據裡從排行來的呼叫位置標 [INFERRED](heapprofd 是取樣估計)。reference.md 的設定表(含 "@default")、「driver 跑幾次」、保留清單、「收集腳本只清自己的 lumos-stability-<run-id>.*」那句(加上 lumos-native-<run-id>.*)一起改。排行不寫進 e2e 的本機總表。兩支新範本檔登記進 `_VENDORED_TREE_FILES`、加 SPDX 檔頭;測試那邊要一起改的:`_MS_FAKE_TP` 照查詢內容分流要加一支認 native 查詢、`_ms_sql` 的假表要加 heap_profile_allocation、stack_profile_*、stats、`t_android_memstab_vendored` 與 `t_android_memstab_templates_receipt_safe` 的檔名清單、假 adb 認 lumos-native-* 的錄製、e2e 範本傳預算變數。筆記要改三篇 Systems:android-stability-collector(about_code 加兩支範本、負責範圍、第一條 WHY 的量測順序)、macrobenchmark-adapter(負責範圍加「列原生配置排行,不判」)、android-e2e-acceptance(記憶體設定指紋會因 native_retained 變、收集步驟傳預算)。實作後把 [[Projects/Android記憶體與穩定性驗收_計劃]] 那句「只剩 Native Heap 前後數字當線索」改成指到這份排行、「用同一條驅動指令呼叫兩次」補上打開時的第二段;[[Projects/Android逐層診斷_計劃]] 的分層 WHY 的例外欄補一條:打開 native_retained 的情境在收集階段就錄 heapprofd。
+ 
+ ## 跟舊否決的差別
+ 
+ - [[Projects/Android逐層診斷_計劃]] 否決過「每次都錄 Trace+CPU 取樣+記憶體」(慢、改變被量對象、留下不必要的敏感檔):那條仍成立,本計劃照它改成按情境打開、預設關(d4),慢與錄檔只落在人主動打開的情境上,不是每次驗收都錄。
+ - [[Projects/Android記憶體與穩定性驗收_計劃]] 原生洩漏判法否決過「只看 Native Heap 趨勢」:那條否決的對象是整個行程的 Native Heap 總量(有升有降,判不出是誰);本計劃看的是 heapprofd 按呼叫位置記的未釋放量,不判趨勢,只列結束時留著最多的,而且只提醒不擋(d2)。
+ - 同一篇 Java 洩漏判法否決過「每輪結束值判趨勢」:那條的對象是每輪結束時的 Java 堆積總量(實驗室沒有洩漏時五輪忽高忽低兩倍);本計劃不判趨勢、只列每個呼叫位置結束時的未釋放量,同樣只提醒。
+ 
+ ## 實務隱患
+ 
+@@ -189,32 +189,33 @@ REVISIT:2027-01-31 看兩個真實專案的 run 目錄有沒有超過 7 天還
+ - [S2] 當某個呼叫位置的結束累計不到 1 MiB 時,收集腳本應不存它、排行不列 [test:t_android_native_query_threshold]
+ - [S24] 當 status 是 ok 而且沒有任何呼叫位置過 1 MiB 時,lumos 應印一行「沒有結束時還留著 1 MiB 以上的呼叫位置」 [test:t_android_native_lumos_empty_and_off]
+ - [S3] 當 malloc 的上一層是配置器(〈排行怎麼算〉第 1 條列的那幾支 .so 與函式名、前綴)時,呼叫位置應是第一個不是配置器的框架;name 是 NULL 或空字串時應寫成 .so 名稱加相對位址並標沒有符號;整條都是配置器、或碰到 ERROR 偽框架時呼叫位置應記成「?」 [test:t_android_native_query_allocator]
+ - [S25] 當 mapping 名稱是 `…/base.apk!libc++_shared.so` 這種 APK 內嵌的形式時,.so 名稱應取「!」之後的部分,配置器比對照樣命中 [test:t_android_native_query_apk_soname]
+ - [S26] 當 mapping 完整路徑在 /system/、/apex/、/vendor/、/product/、/system_ext/、/odm/ 底下時,system 應是 true;mapping 沒有名字時 .so 應是「?」、system 是 false [test:t_android_native_query_system_flag]
+ - [S21] 當同一個呼叫位置從幾個呼叫者進來時,caller 應是從它進來的 callsite 結束累計加總最大的那個(跳過 libart.so 的框架),並列照呼叫者名字升冪,沒有就是「?」 [test:t_android_native_query_caller]
+ - [S12] 當同一個有符號的函式從幾條不同的呼叫鏈進來、每條都不到 1 MiB 但加總至少 1 MiB 時,排行應把它當一個呼叫位置列出 [test:t_android_native_query_merge]
+ - [S27] 當函式名或 .so 名含引號、逗號或換行時,收集腳本應照樣切對每一格(文字欄位用 hex 輸出) [test:t_android_native_collect_ok]
+ - [S22] 當收集腳本寫出 ok 的 `native_retained` 段時,應帶 `enabled: true`、`main_process_only: true`,錄檔應是 run 目錄第一層的 heap-native.pftrace(符合既有 7 天刪的樣式) [test:t_android_native_collect_ok]
+ - [S4] 當排行列出或沒列出呼叫位置、或第二段 App 結束、驅動失敗、丟出意外例外時,lumos 的判定結果、回傳碼、推送前檢查,以及結果檔既有的 pids、exits、unreachable、native_heap_kb 應都不變 [test:t_android_native_collect_ok] [test:t_android_native_collect_failures] [test:t_android_native_lumos_no_verdict_change]
+-- [S28] 當第二段收到 SIGTERM 時,收集腳本應照既有流程收尾、不寫結果檔、回 2(第二段的例外處理不能吞掉 Terminated) [test:t_android_native_collect_sigterm] [test:t_android_native_phase_exception]
+-- [S8] 當第二段丟出意外例外時,收集腳本應先收掉第二段的錄製與裝置暫存,再寫 failed [test:t_android_native_phase_exception]
+-- [S23] 當有設 LUMOS_STABILITY_STEP_BUDGET_S、而且開跑到現在的秒數加第二段預估超過它時,收集腳本應不跑第二段、寫 failed「時間不夠」 [test:t_android_native_collect_budget]
++- [S28] 當第二段收到 SIGTERM 時,收集腳本應照既有流程收尾(錄製由 main 的 cleanup 收)、不寫結果檔、回 2(第二段的例外處理不能吞掉 Terminated) [test:t_android_native_collect_sigterm] [test:t_android_native_phase_exception]
++- [S8] 當第二段丟出意外例外時,收集腳本應先收掉第二段的錄製與裝置暫存,再寫 failed 附例外類型與訊息;收不掉時原因應寫明裝置上可能還留著 [test:t_android_native_phase_exception]
++- [S23] 當有設 LUMOS_STABILITY_STEP_BUDGET_S、而且開跑到現在的秒數加第二段預估超過它時,收集腳本應不跑第二段、寫 failed「時間不夠」;預估過了時,第二段每次驅動與查詢的上限應不超過這一步上限扣 180 秒剩下的時間;值不是大於 0 的有限秒數時應開跑前擋下回 2;端到端範本應把這一步的上限傳下去 [test:t_android_native_collect_budget] [test:t_android_native_budget_rule] [test:t_android_native_budget_values] [test:t_android_native_e2e_passes_budget]
+ - [S6] 當設定沒寫 `stability.native_retained`、或這次的情境不在清單裡時,結果檔那段應是 `enabled: false`、unsupported;沒宣告測試資料、android_sdk 讀不到、或 android_sdk 低於 30 時應是 `enabled: true`、unsupported;兩種都不跑第二段、不錄檔,照〈打算怎麼做〉第 2 步的順序寫第一個不成立的原因 [test:t_android_native_collect_off]
+ - [S13] 當 `stability.native_retained` 不是清單、元素不是非空字串、有重複、或名字對不到 `stability_scenarios` 也不是 "@default" 時,lumos 應回 2 擋下 [test:t_android_native_config]
+-- [S7] 當查詢逾時、有 stat 列、rows 是 0、第一段沒跑成、第二段任何一次驅動回 ok false、第二段期間 App 結束、或第二段前後 pid 不同時,結果檔那段應寫 failed 附原因,跑完後的三項照〈打算怎麼做〉第 4 步的順序取第一個 [test:t_android_native_collect_failures] [test:t_android_native_query_kinds]
++- [S7] 當查詢逾時、有 stat 列、rows 是 0、第一段沒跑成、第二段任何一次驅動回 ok false、第二段讀不到結束紀錄、第二段期間 App 結束、或第二段前後 pid 不同或讀不到時,結果檔那段應寫 failed 附原因,跑完後的三項照〈打算怎麼做〉第 4 步的順序取第一個 [test:t_android_native_collect_failures] [test:t_android_native_query_kinds]
+ - [S14] 當錄製成功、stats 只有 info 等級的 heapprofd 計數非 0 時,結果檔那段應寫 ok [test:t_android_native_query_kinds]
+ - [S18] 當這次的情境沒有打開 `native_retained` 時,開跑前的 git 忽略檢查應不檢查 heap-native.pftrace 與 record-native.pbtxt [test:t_android_native_preflight_ignore]
++- [S29] 當這次的情境打開了 `native_retained`、收集腳本旁邊卻少了 heapprofd 錄製設定或原生查詢範本時,收集腳本應開跑前擋下回 2、點名缺哪支、不碰裝置 [test:t_android_native_templates_present]
+ - [S9] 當結果檔沒有 `native_retained` 段、或段裡 `enabled` 是 false 時,lumos 應不印排行、回傳碼不變;沒給 `--stability` 時鍵是 `{enabled: false, status: unsupported, reason: 沒給 --stability, sites: []}` [test:t_android_native_lumos_empty_and_off]
+ - [S15] 當 `native_retained` 段的 `enabled` 是 true 但 status 不是 ok 時,lumos 應印一行「原生配置排行沒跑成」加原因,回傳碼不變 [test:t_android_native_lumos_not_ok]
+ - [S16] 當專案只有 stability 段、沒有 Macrobenchmark 結果目錄時,lumos 的文字與 `--json` 輸出應照樣帶 `native_retained` [test:t_android_native_lumos_paths]
+-- [S10] 當 `native_retained` 段的形狀不對(不是物件、sites 不是清單、某項不是物件或缺欄位、retained 不是非負整數)時,lumos 應整段不採用、印一行說哪裡不對,不噴例外、回傳碼不變 [test:t_android_native_lumos_shape]
++- [S10] 當 `native_retained` 段的形狀不對(不是物件、sites 不是清單、某項不是物件或缺欄位、retained 不是非負整數)時,lumos 應整段不採用、印一行說哪裡不對,不噴例外、回傳碼不變;retained 是超大整數、函式名或呼叫者長到上限時,印出的那一行應照樣看得到還留著多少 [test:t_android_native_lumos_shape]
+ - [S11] 當呼叫位置超過上限時,收集腳本應只存結束累計最大的 200 個(並列照函式名、.so、系統旗標升冪),函式名與呼叫者截到 500 字元;lumos 應只印前 20 個,函式名裡的控制字元印出前應已清掉 [test:t_android_native_query_cap] [test:t_android_native_lumos_print]
+ - [S20] 當收集腳本讀任何一支 .sql 範本的輸出時,應走同一支共用函式;既有 heap_counts 與 cycle_numbers 的結果應不變 [test:t_android_native_shared_tp]
+ - [S19] 當 lumos 的輸出沒有 `native_retained` 鍵、或 enabled 是 true 但 status 不是 ok 時,skill 應照舊手動錄 L3、不當成零筆 [manual:讀 skill lumos-android-evidence 的 L3 原生那段,核對有這句,而且 L0 的往下條件沒有加排行]
+ - [S5] 當實驗室分別埋入三種情境(沒人指著的漏、SDK 內部留登記、上限固定的池)與正常版時,前兩種應列出並點到埋的那個 JNI 函式,池照實列出(含快取與池),正常版的那個函式結束累計不超過一輪的配置量(2 MB) [manual:macrobench-lab 實機各跑一次,正式版程式寫完後重跑;另用 .so 不解壓(extractNativeLibs=false)的建置跑一次,核對 .so 名稱]
+ 
+ ## 回退
+ 
+ 逐項:
+ - 收集腳本:拿掉第二段、`android-stability-heapprofd.pbtxt`、`android-stability-native.sql`,以及 start_record、stop_record 加的參數與預算檢查(同一支檔同一次還原);共用解析函式可以留著(第一段改用它之後切法不變),要還原就跟 heap_counts、cycle_numbers 的呼叫端一起還原,不要只還一邊;結果檔不再有 `native_retained` 段,新版 lumos 讀到沒有這段的結果檔把鍵寫成 enabled false、不印。e2e 範本傳的預算變數舊收集腳本不讀,留著無害。
+ - lumos:拿掉排行與 `native_retained` 鍵的驗證;設定裡已寫的 `stability.native_retained` 會被舊版忽略(stability 段不驗未知鍵),不會擋下。因為別的原因退回時**預設留著那個鍵**:刪掉會讓 e2e 的記憶體設定指紋再變一次、每條分支推送前要整套重跑,等下次本來就要改記憶體設定時一起刪;**因為金流副作用退回時要連鍵一起刪**(或改成 `[]`),接受整套重跑——不刪的話之後有人重新套回程式就立刻恢復多跑。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+index 32d8abbb9d3b5bccf239b3eaa3aab5f0f0575063..b110b36292a102543842011fc5fc90f03514a188 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-e2e-acceptance.md
+@@ -73,21 +73,21 @@ summary: |-
+   WHY:lumos android-e2e coverage 只報告功能對照表的缺口、不擋,範圍判斷與逐檔歸屬跟推送前判定共用同一支(_e2e_scope_hit、_e2e_file_owner),沒歸屬的程式檔按所在資料夾彙總、共用程式另列支數;設定讀工作目錄,補完對照表不用先提交就看得到 [出處:[[Projects/端到端驗收對照表涵蓋報告_計劃]] 2026-10-27 Enzo 照「只報告、預設按目錄分組」開工] [因:缺歸屬的後果推送前檢查已經會擋(要求整套跑);事先列出來是讓人在推送前補對照表] [不選:擋推送(重複擋同一件事);從程式的 import 猜歸屬(猜錯比列出來更糟)] [test:t_android_e2e_coverage_unowned] [test:t_android_e2e_coverage_doctor_line] [test:t_android_e2e_coverage_same_as_gate] [test:t_android_e2e_coverage_worktree_cfg]
+   WHY:涵蓋報告另列情境與筆記對不上的兩種(列了流程檔卻沒有筆記綁到或正文提到的情境、筆記合約綁了卻沒有情境列到的流程),只報告不擋;綁定照合約測試綁定那一套解、只認 maestro 平台,正文寫流程檔路徑也算提到 [出處:[[Projects/端到端情境對照筆記_計劃]] 2026-10-27 Enzo 回「我覺得可以補」] [因:對照表管跑什麼、筆記管為什麼要成立,兩邊靠同一支流程檔對上,沒有機器看會悄悄分岔] [不選:擋推送(合約照不確定就不標的鐵則,不能逼每個情境都有合約);只認合約行(README 教不確定就寫在正文)] [test:t_android_e2e_coverage_cases_without_notes] [test:t_android_e2e_coverage_note_flows_not_in_cases] [test:t_android_e2e_coverage_notes_absent]
+   WHY:涵蓋報告的情境與筆記對照用 load_vault_safe 讀整個圖譜、不沿用 doctor 手上的 env,流程檔名字從 maestro 平台的測試名索引(_platform_name_files)反查 [出處:[[Projects/端到端情境對照筆記_計劃]] 2026-10-27 代碼審架構對齊席] [因:要全文找流程檔路徑,load_vault 的筆記物件不留正文;名字索引跟殘留索引共用一支,測試檔篩選改了兩邊一起變] [不選:自己讀流程檔的 name:(第二套走訪);doctor 傳 env 進來(筆記物件沒有正文,還是要重讀)]
+   WHY:範本腳本開跑前問 maestro test --help,認得 --test-output-dir 與 --debug-output 才在每次嘗試帶上(現場放 run 目錄的 ui/<名>.try<N>/),不認得就提醒、照跑 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]]] [因:舊版 Maestro 帶了不認得的旗標每支 flow 都會紅,等於誤擋] [不選:一律帶(舊版全紅);要求升級才准跑(擋人)] [test:t_android_e2e_evidence_flags]
+   WHY:flow 那次沒過時只讀 crash 緩衝(logcat -b crash -d -T),時間用那次嘗試開跑前讀的裝置時間,讀不到時間就不讀;不清裝置日誌 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]] 決策 d1,Enzo 2026-10-27 裁] [因:整份日誌常含帳號、權杖、網址(同收集腳本不留整份日誌那條);不帶 -T 會收到之前的舊崩潰] [不選:App 行程的全部日誌;先 logcat -c 清掉再讀(會清掉別的工具要的日誌)] [test:t_android_e2e_crash_log]
+   WHY:不穩帳只記在本機總表(UI 項目第二次才過帶 flaky),每支 flow 看自己最近 20 筆判出過或沒過的紀錄,3 筆以上在判定後點名,只提醒不改判定 [出處:[[Projects/E2E紅燈現場與不穩帳_計劃]]] [因:查證紀錄每版一份,跨版本的次數只有本機總表數得出;隔離不穩的 flow 等於放寬擋法,要先有數字再請人裁] [不選:照 Delivery Hero 自動隔離;寫進提交的查證紀錄] [test:t_android_e2e_flaky_notice]
+   WHY:不穩帳(點名與 history --flaky 共用 _e2e_flaky_tally)同一個 run_id 重判多寫的總表行,每支 flow 只算一次、取最後一個判出結果的那次(被擋下、項目空的重判行不蓋掉判定;哪幾行算同一次執行照 _e2e_run_key:run_id 轉字串比、只有 None 算沒有,同 _ci_latest_attempts 的判法);history --flaky 的 --last 數不同執行、重判行不佔名額;不共用 _ci_latest_attempts(它靠嘗試次數與結論欄位取最壞、吃整份清單、掛鉤裡有逐字複本,總表沒有這兩個欄位) [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:judge 擋下訊息本身教人用 --no-record 重判,每次都追加一行總表,不去重會把一次不穩湊成三次而誤點名] [不選:改成重判不寫總表(會丟掉擋下原因的歷史)] [test:t_android_e2e_flaky_notice]
+   WHY:按功能跑時總表 case_results 的 UI 項目照整次結果補「第二次才過」,提交的查證紀錄 feature_runs 不帶 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:history --case 讀 case_results,原本由 _e2e_case_results 重組、沒有這個欄位,照情境篩就一律看不到不穩] [不選:在 _e2e_case_results 加欄位(會連查證紀錄一起改,計劃不把不穩帳放進綁版本的紀錄)] [test:t_android_e2e_flaky_history]
+   WHY:從總表讀回的每一行在印出函式裡收成一個出口過 _out_clean(_e2e_print_runs 內部的 say、history 與不穩彙總整行清),新加印出行走同一個出口就自動清 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r2、r4 架構對齊與單審席] [因:r2 只清新欄位、r4 又漏了問題與提醒行,逐行補每輪漏一處] [不選:每個印出點各自包一層] [test:t_android_e2e_judge_evidence]
+   WHY:history 的逐行讀與篩選(含 --flaky 按執行歸併)放在 _e2e_history_rows,_e2e_history_cmd 只管擋下與印出 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 壓提交後 pitfalls 抓到新增告警] [因:按執行歸併那段讓 _e2e_history_cmd 複雜度到 12,超過推送前新增告警閘的上限 10] [不選:lint-waive 放行(不是誤報)] [test:t_android_e2e_flaky_history]
+-  WHY:範本叫收集腳本時用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限(T_LONG);專案把 stability.native_retained 寫進設定等於改了記憶體設定,記憶體設定指紋會變、推送前要重跑整套 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,原生配置排行那段跑不完時會連第一段的判定一起丟] [test:t_android_native_collect_budget]
++  WHY:範本叫收集腳本時用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限(T_LONG);專案把 stability.native_retained 寫進設定等於改了記憶體設定,記憶體設定指紋會變、推送前要重跑整套 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,原生配置排行那段跑不完時會連第一段的判定一起丟] [test:t_android_native_e2e_passes_budget]
+ verified_by:
+   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
+   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
+   - "[[Verification/2026-10-26_AI自己選分塊跑法探針]]"
+   - "[[Verification/端到端情境對照筆記_實驗室實測]]"
+ ---
+ # android-e2e-acceptance
+ 
+ 白話:Android App 推送前在實機上跑一次端到端驗收的那一套。範本腳本負責碰裝置、把每一步的結果寫成 steps.json;lumos 只讀這些結果判過不過,再寫一份綁在「App 程式與驗收素材內容」上的查證紀錄。設計與條款的單源在 [[Projects/Android端到端驗收_計劃]],這裡只記現在怎麼運作、程式碼看不出來的理由。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/android-stability-collector.md b/docs/lumos-toolchain-knowledge/Systems/android-stability-collector.md
+index c40417a33e391a894b1af6b9e815c80f59d992b6..ca1f54d3cb7db6157f7b7170952adbbecc645439 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/android-stability-collector.md
++++ b/docs/lumos-toolchain-knowledge/Systems/android-stability-collector.md
+@@ -52,11 +52,11 @@ summary: |-
+   WHY:e2e 範本用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限,第一段秒數加預估(第一段兩倍加 120 秒)超過就不跑第二段、寫 failed 時間不夠 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,第二段把整步推過上限時第一段量好的判定也一起丟] [test:t_android_native_collect_budget]
+   PITFALL:trace_processor 的 csv 輸出不跳脫字串裡的引號與換行,函式名含逗號或引號時照逗號切會切錯格 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4 本機實測] [根因:輸出只在字串外加引號] [修法:原生配置排行的文字欄在 SQL 裡 hex(),Python 端解回;三支查詢共用 tp_rows 一套切法] [test:t_android_native_collect_ok] [test:t_android_native_shared_tp]
+   PITFALL:.so 沒解壓、直接從 APK 載入時 mapping 名是 …/base.apk!libfoo.so,取路徑最後一段會變成 base.apk!libc++_shared.so,配置器比對落空 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4 上網查證(libunwindstack GetFullName)] [根因:APK 內嵌的 .so 名稱接在 ! 後面] [修法:有 ! 時取最後一個 ! 之後] [test:t_android_native_query_apk_soname]
+ verified_by:
+   - "[[Verification/2026-10-24_Android記憶體與穩定性實驗室驗收]]"
+ ---
+ # android-stability-collector
+ 
+ 白話:Android 記憶體與穩定性驗收的「收集」那一段。工具鏈範本 `scripts/templates/android-stability-collect.sh` 照抄進消費專案後,在專案根目錄跑,讀 `.lumos/macrobench.json` 的 stability 段,用 adb 對連著的裝置排好整個流程,寫出 `.lumos/artifacts/android/<run-id>/stability.json`;過不過交給 [[Systems/macrobenchmark-adapter]] 的 `lumos macrobench --stability`。它是第一支會接裝置的範本,外部工具用環境變數找:`ADB`、`TP`(trace_processor)、`JAVA_HEAP_DUMP`(skill 的 java_heap_dump,只有宣告了測試資料才用)。
+ 
+-`scripts/templates/android-stability-cycle.sql` 對量測期間那一份追蹤檔算峰值、凍結幀、主執行緒最長阻塞與幀數;`scripts/templates/android-heap-classes.sql` 對一份 Java 快照算每個類別還有人指著的實例數;`scripts/templates/android-stability-record.pbtxt` 是量測期間的 Perfetto 錄製設定。兩支查詢都只用標準 SQLite 語法,測試用 Python 內建的 sqlite3 照 Perfetto 文件建同名的表跑,真的 trace_processor 上跑不跑得動由實驗室人工驗收證明。設定欄位、七種檢查與判定規則的單源在 [[Projects/Android記憶體與穩定性驗收_計劃]]。
++`scripts/templates/android-stability-cycle.sql` 對量測期間那一份追蹤檔算峰值、凍結幀、主執行緒最長阻塞與幀數;`scripts/templates/android-heap-classes.sql` 對一份 Java 快照算每個類別還有人指著的實例數;`scripts/templates/android-stability-record.pbtxt` 是量測期間的 Perfetto 錄製設定;設定替情境打開 native_retained 時,`scripts/templates/android-stability-heapprofd.pbtxt` 是第二段只錄 heapprofd 的錄製設定,`scripts/templates/android-stability-native.sql` 對那份錄檔算原生配置排行(文字欄 hex 輸出)。三支查詢都只用標準 SQLite 語法,測試用 Python 內建的 sqlite3 照 Perfetto 文件建同名的表跑,真的 trace_processor 上跑不跑得動由實驗室人工驗收證明。設定欄位、七種檢查與判定規則的單源在 [[Projects/Android記憶體與穩定性驗收_計劃]]。
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index a55514e15ed980020a8266864c206f35d884dde2..3ab5b2ac02414f95f2f71eeefab1381d83265807 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -59,21 +59,21 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:
+ 
+ 1. 跑專案的 Macrobenchmark(實體裝置、USB、先 `adb shell svc power stayon usb`;跑前刪掉裝置上 `/sdcard/Android/media/<benchmark 套件>/` 舊檔)。
+ 2. 記下這次的輸入:啟動參數(`am instrument -e …`、intent extras)、測試資料、Feature Flag。基準與候選兩邊都記;同一個 APK 只換參數時,這是兩邊唯一的差異,沒記就證明不了差在哪。
+ 3. 跑前跑後各記一次裝置狀態(L0 是推送前的綁定測試閘代跑、你拿到時已經跑完的話,當下補量一次,收據 gaps 寫明是事後量的):型號、`ro.build.fingerprint`、電量、`dumpsys thermalservice` 的 Thermal Status;從裝置 `pm path` 拉實際安裝的 APK 算 sha256(同一份原始碼重建的 APK 雜湊會不同,只記建置產物不夠)。
+ 4. 拉回結果 JSON 與每輪 `.perfetto-trace` 到 artifacts 目錄,算 sha256 與大小。
+ 5. `lumos macrobench --json` 比對基準,輸出存成 artifact,並把比對用的設定與指令寫進 report.md(L0 的重跑方式)。
+    - 基準是專案自己存的 `.lumos/macrobench-baseline.json`:在專案根直接跑。
+    - 基準是另一次執行(例如同一天先跑的正常版):不要覆蓋專案的基準檔。另建一個暫存目錄,放 `.lumos/macrobench.json`(`results_dirs` 寫基準那次的絕對路徑),並把專案的 `.lumos/macrobench-thresholds.json` 複製進暫存目錄的 `.lumos/`(門檻是從 `--repo` 指的目錄讀的,沒複製就一條門檻都不判),`lumos macrobench --repo <暫存目錄> --update-baseline`,再把 `results_dirs` 改成候選那次的路徑跑 `--json`;收據 `scenario.baseline_run_id` 旁寫明基準是這樣產生的。
+ 6. 找 L1 要對照的基準 Trace:專案基準檔(`.lumos/macrobench-baseline.json`)只有統計值,但每個情境的 `source` 記了它來自哪個結果檔與 sha256;去 artifacts 找雜湊對得上的那次執行,用同一次留下的 Trace。基準是舊版工具存的(沒有 `source`)或那次的 artifacts 已經不在,就用同裝置、同情境、最近一次正常版執行代替,收據寫明它不是基準的來源;都沒有就先用目前正常版的程式重跑一次。
+ 7. 檢查有效輪與輪數:專案的 Macrobenchmark 預設 iterations 寫 20(2026-10-24 實機評測:5 輪時拿另一個時段的基準比會誤報,20 輪歸零);`--json` 的 `low_iterations` 不是空的,收據 gaps 記哪幾個情境只跑了幾輪。基準與現況都至少 20 輪時,啟動類只看中位數差幅;少於 20 輪照舊要超出基準最大值。各輪的變異係數在基準檔每個情境的 `cv`,抄進收據。再讀結果檔每輪 `frameCount.runs`(滑動)或每輪啟動時間;某幾輪畫格數明顯少一截,先懷疑量測腳本沒真的操作到(例:清單已停在底部),在收據 `valid_iterations` 記下來,L1 時用 Trace 確認。
+-8. **往下條件**:`--json` 的 `regressions` 不是空的(比基準變慢),或 `threshold_failures` 不是空的(沒達人裁的驗收門檻)。有跑記憶體與穩定性收集(`sh scripts/templates/android-stability-collect.sh`,寫出 `.lumos/artifacts/android/<run-id>/stability.json`)時,L0 改跑 `lumos macrobench --json --stability <那份結果檔>`;`threshold_failures` 每筆有 `check` 欄位的照它走:`native_unreachable`、`java_growth`、`instances` → 直接 **L3**(L1、L2 看 CPU 時間,記憶體問題在那裡看不到;專案的 `stability.test_data` 沒寫或 value 不是 true 時不往下,收據記 `[GAP] L3 未授權` 並列出哪條 check 沒過,請人裁要不要宣告);`frozen` → L1;`exits` → 看 `stability.json` 的 `exits.new`(每筆新的結束紀錄),`strictmode` → 看 run 目錄的 `logcat.txt`(只留違規那幾行);`peak_vitals` → L3(沒有宣告時同上,記 `[GAP] L3 未授權`)。都沒有 → 收據記 `L0 通過` 後停,不錄 L2、L3。結果有 `stability_unjudged` 一欄時(給了結果檔、門檻檔卻沒有 check 條目),不能記成 L0 通過:收據 gaps 記「記憶體與穩定性沒有門檻可判」並請人補門檻。`threshold_skipped` 裡的門檻(換了裝置、情境沒跑到)要寫進收據 gaps,不能當成達標。
++8. **往下條件**:`--json` 的 `regressions` 不是空的(比基準變慢),或 `threshold_failures` 不是空的(沒達人裁的驗收門檻)。有跑記憶體與穩定性收集(`sh scripts/templates/android-stability-collect.sh`,寫出 `.lumos/artifacts/android/<run-id>/stability.json`)時,L0 改跑 `lumos macrobench --json --stability <那份結果檔>`;`threshold_failures` 每筆有 `check` 欄位的照它走:`native_unreachable`、`java_growth`、`instances` → 直接 **L3**(L1、L2 看 CPU 時間,記憶體問題在那裡看不到;專案的 `stability.test_data` 沒寫或 value 不是 true 時不往下,收據記 `[GAP] L3 未授權` 並列出哪條 check 沒過,請人裁要不要宣告);`frozen` → L1;`exits` → 看 `stability.json` 的 `exits.new`(每筆新的結束紀錄),`strictmode` → 看 run 目錄的 `logcat.txt`(只留違規那幾行);`peak_vitals` → L3(沒有宣告時同上,記 `[GAP] L3 未授權`)。都沒有 → 收據記 `L0 通過` 後停,不錄 L2、L3;結果的 `native_retained` 是 enabled true、ok 而且 `sites` 不是空的時,把前幾名照抄進收據的提醒(標 `[INFERRED] heapprofd 取樣估計`,含快取與池、不代表漏),讓人看得到 SDK 自己留著登記這類掃描抓不到的配置,但不因此往下。結果有 `stability_unjudged` 一欄時(給了結果檔、門檻檔卻沒有 check 條目),不能記成 L0 通過:收據 gaps 記「記憶體與穩定性沒有門檻可判」並請人補門檻。`threshold_skipped` 裡的門檻(換了裝置、情境沒跑到)要寫進收據 gaps,不能當成達標。
+ 9. 沒達門檻的那幾條各帶 `contract`(功能節點的合約行):照抄進收據 `contract_refs`,寫回時對到那個功能節點。
+ 
+ ## L1:卡在哪、在算還是在等
+ 
+ 照官方 `$SKILL_ROOT/analysis/workflows/perfetto-trace-analysis/perfetto_trace_analysis.md` 的 Step 1–4 做,含 Step 2 triage 與 Step 3 每個候選的 per_candidate_analysis(skill 要你派子代理的地方就派)。
+ 
+ - 從記憶體與穩定性收集過來的(`frozen` 沒過):主要對象是 run 目錄的 `cycle.pftrace`(N 輪合在一份、沒有逐輪 Trace 也沒有基準 Trace),直接從凍結幀與主執行緒最長阻塞那段往下 triage,不做基準 A/B,收據 gaps 記「沒有基準 Trace」;下面這幾條照 Macrobenchmark 結果檔挑輪次的做法不適用。
+ - 用 L0 那次執行留下的 Trace,不另錄。主要對象挑「有效輪裡超時格最多」的那一輪:超時格數用結果檔 `sampledMetrics.frameOverrunMs.runs[i]` 裡大於 0 的個數(不要用 Trace 的 jank_type,Samsung 上幾乎每格都標 Buffer Stuffing);基準取同一輪次。
+ - triage(Step 2)的派工也附基準 Trace 路徑,要求每個候選附基準同名 slice 的次數與耗時;基準也有同樣量的(例如每格都在的無障礙 binder 呼叫),是本來就有的成本,不算這次的退步。
+ - 官方流程要你寫的 `perfetto_analysis_report.md` 不另寫檔,內容併進收據的 report.md(子代理只在回報裡給結果)。

@@ -80,6 +80,7 @@ summary: |-
   WHY:按功能跑時總表 case_results 的 UI 項目照整次結果補「第二次才過」,提交的查證紀錄 feature_runs 不帶 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r1] [因:history --case 讀 case_results,原本由 _e2e_case_results 重組、沒有這個欄位,照情境篩就一律看不到不穩] [不選:在 _e2e_case_results 加欄位(會連查證紀錄一起改,計劃不把不穩帳放進綁版本的紀錄)] [test:t_android_e2e_flaky_history]
   WHY:從總表讀回的每一行在印出函式裡收成一個出口過 _out_clean(_e2e_print_runs 內部的 say、history 與不穩彙總整行清),新加印出行走同一個出口就自動清 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r2、r4 架構對齊與單審席] [因:r2 只清新欄位、r4 又漏了問題與提醒行,逐行補每輪漏一處] [不選:每個印出點各自包一層] [test:t_android_e2e_judge_evidence]
   WHY:history 的逐行讀與篩選(含 --flaky 按執行歸併)放在 _e2e_history_rows,_e2e_history_cmd 只管擋下與印出 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 壓提交後 pitfalls 抓到新增告警] [因:按執行歸併那段讓 _e2e_history_cmd 複雜度到 12,超過推送前新增告警閘的上限 10] [不選:lint-waive 放行(不是誤報)] [test:t_android_e2e_flaky_history]
+  WHY:範本叫收集腳本時用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限(T_LONG);專案把 stability.native_retained 寫進設定等於改了記憶體設定,記憶體設定指紋會變、推送前要重跑整套 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,原生配置排行那段跑不完時會連第一段的判定一起丟] [test:t_android_native_e2e_passes_budget]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"

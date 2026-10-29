@@ -513,6 +513,7 @@ def accept(cfg, serial, st):
         sid = run_id if scn is None else f"{run_id}.{scn}"
         # stability 段本身:拿掉 shell 裡殘留的 LUMOS_STABILITY_SCENARIO,不然收集腳本會改用那個情境、結果卻記成段本身
         senv = {k: v for k, v in env.items() if k != "LUMOS_STABILITY_SCENARIO"} if scn is None else dict(env, LUMOS_STABILITY_SCENARIO=scn)
+        senv["LUMOS_STABILITY_STEP_BUDGET_S"] = f"{T_LONG:g}"   # 這一步的上限:收集腳本預估原生配置排行那段跑不完就不跑,不連累量測那段
         if st.step("stability", ["sh", COLLECT, sid], name=scn, env=senv) is None:   # 逾時或跑不起來:裝置多半掉了,剩下的情境不再一個個等滿上限(沒跑到的判成沒判完)
             say(f"記憶體情境 {scn or 'stability 段本身'} 逾時或跑不起來,剩下的情境與效能這次都不跑")
             st.data["device_stuck"] = True
