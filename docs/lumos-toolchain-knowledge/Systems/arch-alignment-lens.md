@@ -92,3 +92,7 @@ REVISIT:2027-04-09 人裁目標架構宣告要不要撤:看各專案 lumos docto
 ## 前端分層目標架構範本(2026-10-15,[[Projects/前端框架從vue分出_計劃]] F7)
 
 使用說明多一份 `target-arch-frontend-template.md`(放在 lumos-project-notes 的 commands/ 底下,形狀照 DDD 那份):五條 RULE 行——只有 API 層碰網路、API 層回型別化結果、domain 只放純函式且時間亂數從參數進來、狀態放最近共同父元件、測試照使用者看得到的行為驗;從 order-web 的目標架構一般化,不綁 React。06 的 arch_targets 那一列與技能首頁都指到它。測試 t_arch_target_frontend_template_valid、t_arch_target_frontend_template_linked_from_usage。
+
+## Android 的 MVVM 加 DDD 目標架構範本(2026-10-29,[[Projects/Android的MVVM與DDD目標架構範本_計劃]])
+
+使用說明多一份 `target-arch-android-template.md`(形狀照 DDD 那份):十二條 RULE 行——DDD 六條換成 Android 寫法(domain 純 Kotlin、不變規則在聚合根、聚合之間用識別碼、Repository 不往上丟資料庫實體、值物件不可變、用例只協調)、MVVM 四條(ViewModel 不收畫面元件與 Repository、只露唯讀 UI 狀態、不寫業務規則、畫面只渲染與送事件)、深模組與測試邊界各一條;另附一份在示範專案跑過的 Konsist 架構測試骨架,讓七條的結構面由機器守、審查席補看語意。06 的 arch_targets 那一列與技能首頁都指到它。測試 t_arch_target_android_template_valid、t_arch_target_android_template_linked_from_usage、t_arch_target_android_template_konsist_names_match。

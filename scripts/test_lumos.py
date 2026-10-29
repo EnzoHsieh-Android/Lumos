@@ -109187,6 +109187,69 @@ def t_arch_target_frontend_template_linked_from_usage():
     check("S21:技能首頁指到前端範本", "target-arch-frontend-template.md" in (base / "SKILL.md").read_text(encoding="utf-8"), "")
 
 
+
+# ── Android 的 MVVM 加 DDD 目標架構範本(2026-10-29,Projects/Android的MVVM與DDD目標架構範本_計劃;形狀照前端範本那兩支)──
+_ANDROID_TEMPLATE = "skills/lumos-project-notes/commands/target-arch-android-template.md"
+
+
+def _android_template_block():
+    _need_src(_ANDROID_TEMPLATE)
+    text = (Path(GRAPHCTL).resolve().parent.parent / _ANDROID_TEMPLATE).read_text(encoding="utf-8")
+    section = text.split("\n## 範本\n", 1)[1].split("\n## ", 1)[0] if "\n## 範本\n" in text else ""
+    body = section.split("```markdown\n", 1)[1].split("\n```", 1)[0] if "```markdown\n" in section else ""
+    check("前置:「## 範本」那一節有一個 markdown 圍欄", bool(body), section[:200])
+    return body
+
+
+def t_arch_target_android_template_valid():
+    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S1] 日期佔位換成實際日期存成節點:lint 0 問題、規則讀法讀到十二條有效 RULE 行;
+    沒換佔位照抄時 lint 印日期格式警告。翻紅:範本任一條 RULE 少了必有鍵 → 規則數或 lint 翻紅;範本寫死日期 → 前置翻紅。"""
+    import datetime as _dt
+    block = _android_template_block()
+    check("前置:範本用日期佔位而不是寫死日期", "<採用日>" in block and "<回頭日>" in block, block[:200])
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()
+    filled = block.replace("<採用日>", today.isoformat()).replace("<回頭日>", (today + _dt.timedelta(days=365)).isoformat())
+    v = mkvault()
+    (v / "Systems" / "Android目標架構.md").write_text(filled, encoding="utf-8")
+    r = run(v, "lint", "Systems/Android目標架構")
+    check("S1:換好日期後 lint 0 問題", r.returncode == 0 and "0 問題" in r.stdout, r.stdout[-500:])
+    m = _load_lumos_inproc()
+    rules = m._arch_target_note_rules(m._note_from_text("Systems/Android目標架構.md", filled))
+    check("S1:讀到十二條有效規則、沒有一條算過期", len(rules) == 12 and not any(e for _t, e in rules), str(rules)[:300])
+    (v / "Systems" / "Android目標架構.md").write_text(block, encoding="utf-8")
+    r2 = run(v, "lint", "Systems/Android目標架構")
+    check("S1:沒換佔位照抄 → 印日期格式警告",
+          "[since:<採用日>] 日期要寫成 YYYY-MM-DD" in r2.stdout and "[until:<回頭日>] 日期要寫成 YYYY-MM-DD" in r2.stdout, r2.stdout[-400:])
+
+
+def t_arch_target_android_template_linked_from_usage():
+    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S2] 06 的 arch_targets 那一列同時提到三份範本;技能首頁指到 Android 範本。"""
+    _need_src("skills/lumos-project-notes/commands/06-代碼審與推送.md", "skills/lumos-project-notes/SKILL.md")
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes"
+    six = (base / "commands" / "06-代碼審與推送.md").read_text(encoding="utf-8")
+    rows = [ln for ln in six.split("\n") if ln.startswith("|") and "arch_targets" in ln]
+    names = ("target-arch-ddd-template.md", "target-arch-frontend-template.md", "target-arch-android-template.md")
+    check("S2:06 的 arch_targets 那一列三份範本都提到", any(all(n in ln for n in names) for ln in rows), str(rows)[:300])
+    check("S2:技能首頁指到 Android 範本", "target-arch-android-template.md" in (base / "SKILL.md").read_text(encoding="utf-8"), "")
+
+
+def t_arch_target_android_template_konsist_names_match():
+    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S3] Konsist 骨架的對照表與 Kotlin 圍欄裡的測試函式兩邊一致:
+    表上的名字都有同名 @Test 函式、圍欄裡每支 @Test 函式都列在表上。
+    翻紅:改了骨架裡的測試名沒同步對照表(或反過來)→ 兩個集合不等。"""
+    import re
+    _need_src(_ANDROID_TEMPLATE)
+    text = (Path(GRAPHCTL).resolve().parent.parent / _ANDROID_TEMPLATE).read_text(encoding="utf-8")
+    section = text.split("\n## Konsist 骨架\n", 1)[1].split("\n## ", 1)[0] if "\n## Konsist 骨架\n" in text else ""
+    table = [ln for ln in section.split("\n") if ln.startswith("|") and "`" in ln]
+    listed = {n for ln in table for n in re.findall(r"`([a-z][A-Za-z]+)`", ln.split("|")[2])}
+    fences = re.findall(r"```kotlin\n(.*?)\n```", section, re.S)
+    code = next((f for f in fences if "class ArchitectureRulesTest" in f), "")
+    defined = set(re.findall(r"@Test\s+fun (\w+)\(\)", code))
+    check("前置:對照表與骨架都讀得到七支以上", len(listed) >= 7 and len(defined) >= 7, f"{listed} / {defined}")
+    check("S3:對照表的測試名與骨架的 @Test 函式一致", listed == defined, f"只在表上 {listed - defined};只在骨架 {defined - listed}")
+
+
 # ── Kotlin 伺服端不列 Android 題(2026-10-15,Projects/前端框架從vue分出_計劃 B10、決策 d2)──
 _KT_SPRING_GRADLE = 'plugins {\n    id("org.springframework.boot") version "3.3.0"\n    kotlin("jvm")\n}\n'
 _KT_ANDROID_ALIAS_GRADLE = 'plugins {\n    alias(libs.plugins.android.application)\n}\ndependencies {\n    implementation("io.ktor:ktor-client-android:2.3.0")\n}\n'
