@@ -117402,5 +117402,993 @@ def t_secev_r3_limits_d19_sentence():
           any("直接寫 .lumos/security-approvals.jsonl" in x and "自簽" in x for x in lim), str(lim))
 
 
+# ── Room 守衛(Projects/Room資料庫測試守衛_計劃)──────────────────────────────────────────────
+# 測試專案:main 上有資料庫第 1 版(結構檔、DAO、一支真 Room 測試),再從 main 開 feat 分支做這次的改動;
+# 範圍一律 main..HEAD,主線分岔點靠本機 main 找(手動模式的主線候選含本機 main/master)。
+
+_RG_DB = "app/src/main/java/p/AppDb.kt"
+_RG_DAO = "app/src/main/java/p/OrderDao.kt"
+_RG_MIG = "app/src/main/java/p/Migrations.kt"
+_RG_DAOTEST = "app/src/androidTest/java/p/OrderDaoTest.kt"
+_RG_MIGTEST = "app/src/androidTest/java/p/MigrationTest.kt"
+
+
+def _rg_schema(root, ver, h=None, fq="p.AppDb", raw=None):
+    import json as _j
+    body = raw if raw is not None else _j.dumps({"formatVersion": 1, "database": {"version": ver, "identityHash": h or f"hash{ver}",
+                                                                                  "entities": []}}, indent=2)
+    return _nh_file(root, f"app/schemas/{fq}/{ver}.json", body + "\n")
+
+
+def _rg_db(root, version, between="", auto="", extra=""):
+    ann = f"@Database(entities = [Order::class], version = {version}{auto}{extra})"
+    _nh_file(root, _RG_DB, f"package p\n\nimport androidx.room.Database\n\n{ann}\n{between}abstract class AppDb : RoomDatabase() {{\n"
+                           "    abstract fun orderDao(): OrderDao\n}\n")
+
+
+def _rg_dao(root, methods=None):
+    methods = methods if methods is not None else [
+        '    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n']
+    _nh_file(root, _RG_DAO, "package p\n\nimport androidx.room.Dao\n\n@Dao\ninterface OrderDao {\n" + "\n".join(methods) + "}\n")
+
+
+def _rg_daotest(root, calls=("getAll",), builder=True, extra=""):
+    b = "        db = Room.inMemoryDatabaseBuilder(ctx, AppDb::class.java).build()\n" if builder else ""
+    body = "".join(f"        db.orderDao().{c}()\n" for c in calls)
+    _nh_file(root, _RG_DAOTEST, "package p\n\nclass OrderDaoTest {\n    fun setUp() {\n" + b + "    }\n    fun t() {\n" + body
+             + "    }\n" + extra + "}\n")
+
+
+def _rg_repo(cfg=None):
+    """main 上:AppDb 第 1 版、1.json、OrderDao.getAll、一支真 Room 測試;簽出新分支 feat。"""
+    root = _nh_repo(cfg)
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 1)
+    _rg_schema(root, 1)
+    _rg_dao(root)
+    _rg_daotest(root)
+    _nh_commit(root, "room v1")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    return root
+
+
+def _rg_migtest(root, line="        helper.runMigrationsAndValidate(TEST_DB, 2, true, MIGRATION_1_2)\n"):
+    _nh_file(root, _RG_MIGTEST, "package p\n\nclass MigrationTest {\n    val helper = MigrationTestHelper(inst, AppDb::class.java)\n"
+                                "    fun migrate() {\n" + line + "    }\n}\n")
+
+
+def _rg(root, *args, env=None, rng="main..HEAD"):
+    import subprocess as sp, os as _os
+    e = dict(_os.environ)
+    e.pop("LUMOS_SKIP_ROOM_GUARD", None)
+    if env:
+        e.update(env)
+    a = list(args) if args else ["--diff", rng]
+    r = sp.run([sys.executable, GRAPHCTL, "room-guard", *a, "--repo", str(root)], capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _rg_v2(root, mig="val MIGRATION_1_2 = object : Migration(1, 2) {}\n", test=True, schema=True):
+    """升到第 2 版的完整改動(可逐項拿掉)。"""
+    _rg_db(root, 2)
+    if schema:
+        _rg_schema(root, 2)
+    if mig is not None:
+        _nh_file(root, _RG_MIG, "package p\n\n" + mig)
+    if test:
+        _rg_migtest(root)
+
+
+def _rg_gov(root, kind=None):
+    import json as _j
+    evs = []
+    for name in (".governance-log.jsonl", ".governance-local.jsonl"):     # 有觸發而放行(passed)是例行觀察,寫本機帳
+        p = root / "docs" / name
+        if p.exists():
+            evs += [_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    return [e for e in evs if e.get("gate") == "room-guard" and (kind is None or e.get("kind") == kind)]
+
+
+def t_room_mig_bump_without_path_blocks():
+    """[S1] 結構檔從 1 長到 2、沒有任何升級路徑 → 回 1,點名資料庫與 1→2。"""
+    print("t_room_mig_bump_without_path_blocks")
+    root = _rg_repo()
+    _rg_v2(root, mig=None)
+    _nh_commit(root, "v2 no path")
+    rc, out = _rg(root)
+    check("缺路徑擋下", rc == 1, out[-800:])
+    check("點名資料庫與缺的那一步", "p.AppDb" in out and "1→2" in out, out[-800:])
+
+
+def t_room_mig_bump_with_all_parts_passes():
+    """[S2] 路徑、結構檔、升級測試都齊 → 回 0。"""
+    print("t_room_mig_bump_with_all_parts_passes")
+    root = _rg_repo()
+    _rg_v2(root)
+    _nh_commit(root, "v2 full")
+    rc, out = _rg(root)
+    check("齊全放行", rc == 0, out[-800:])
+
+
+def t_room_mig_automigration_forms_count():
+    """[S3] AutoMigration 三種寫法都算路徑。"""
+    print("t_room_mig_automigration_forms_count")
+    for form in ("AutoMigration(from = 1, to = 2)", "AutoMigration(to = 2, from = 1)", "AutoMigration(1, 2)",
+                 "AutoMigration(from = 1, to = 2, spec = S::class)"):
+        root = _rg_repo()
+        _rg_v2(root, mig=None)
+        _rg_db(root, 2, auto=f", autoMigrations = [{form}]")
+        _nh_commit(root, "auto")
+        rc, out = _rg(root)
+        check(f"{form} 算路徑(不是當成判不出的寫法放行)", rc == 0 and "判不出" not in out, out[-600:])
+
+
+def t_room_mig_multistep_path():
+    """[S4] 1→3 只有 Migration(1, 3) 與 3.json → 0;只有 Migration(1, 2) → 1 並點名 2→3。"""
+    print("t_room_mig_multistep_path")
+    root = _rg_repo()
+    _rg_db(root, 3)
+    _rg_schema(root, 3)
+    _nh_file(root, _RG_MIG, "package p\nval M13 = object : Migration(1, 3) {}\n")
+    _rg_migtest(root, "        helper.runMigrationsAndValidate(TEST_DB, 3, true, M13)\n")
+    _nh_commit(root, "v3")
+    rc, out = _rg(root)
+    check("Migration(1, 3) 跨兩版、不要求 2.json", rc == 0, out[-600:])
+    _nh_file(root, _RG_MIG, "package p\nval M12 = object : Migration(1, 2) {}\n")
+    _nh_commit(root, "only 1-2")
+    rc, out = _rg(root)
+    check("只有 1→2 時擋並點名 2→3", rc == 1 and "2→3" in out, out[-600:])
+
+
+def t_room_mig_missing_schema_json_blocks():
+    """[S5] 註記寫 version = 2、結構檔最大只有 1 → 擋,說這一版結構檔沒提交。"""
+    print("t_room_mig_missing_schema_json_blocks")
+    root = _rg_repo()
+    _rg_v2(root, schema=False)
+    _nh_commit(root, "no json")
+    rc, out = _rg(root)
+    check("缺結構檔擋下", rc == 1 and "結構檔沒提交" in out, out[-600:])
+
+
+def t_room_mig_missing_test_blocks():
+    """[S6] 路徑與結構檔都有、沒升級測試 → 擋。"""
+    print("t_room_mig_missing_test_blocks")
+    root = _rg_repo()
+    _rg_v2(root, test=False)
+    _nh_commit(root, "no test")
+    rc, out = _rg(root)
+    check("缺升級測試擋下", rc == 1 and "升級測試" in out, out[-600:])
+    _rg_migtest(root, "        helper.runMigrationsAndValidate(TEST_DB, 12, true, MIGRATION_1_2)\n")
+    _nh_commit(root, "wrong number")
+    rc, out = _rg(root)
+    check("只出現 12 不算帶 2(獨立數字)", rc == 1, out[-600:])
+
+
+def t_room_mig_migrate_all_test_counts():
+    """[S7] 跑完全部升級的寫法算升級測試。"""
+    print("t_room_mig_migrate_all_test_counts")
+    root = _rg_repo()
+    _rg_v2(root, test=False)
+    _rg_migtest(root, "        Room.databaseBuilder(ctx, AppDb::class.java, TEST_DB).addMigrations(*ALL_MIGRATIONS).build()\n")
+    _nh_commit(root, "migrate all")
+    rc, out = _rg(root)
+    check("addMigrations(* 算升級測試", rc == 0, out[-600:])
+
+
+def t_room_mig_schema_changed_on_mainline_blocks():
+    """[S8] 主線分岔點就有的 1.json 雜湊變了 → 擋,講升版號與還沒發布可單次跳過。"""
+    print("t_room_mig_schema_changed_on_mainline_blocks")
+    root = _rg_repo()
+    _rg_schema(root, 1, h="changed")
+    _nh_commit(root, "rewrite 1")
+    rc, out = _rg(root)
+    check("主線已有的結構檔被改寫擋下", rc == 1, out[-600:])
+    check("訊息講升版號與單次跳過", "版號" in out and "LUMOS_SKIP_ROOM_GUARD=1" in out, out[-600:])
+
+
+def t_room_mig_schema_rewrite_branch_only_passes():
+    """[S9] 只在分支上的 2.json 第二次推送被改寫 → 0。"""
+    print("t_room_mig_schema_rewrite_branch_only_passes")
+    root = _rg_repo()
+    _rg_v2(root)
+    _nh_commit(root, "v2")
+    old = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _rg_schema(root, 2, h="again")
+    _nh_commit(root, "v2 again")
+    rc, out = _rg(root, rng=f"{old}..HEAD")
+    check("分支上的版本改寫不擋", rc == 0, out[-600:])
+
+
+def t_room_mig_schema_reformat_passes():
+    """[S10] 只改排版、雜湊相同 → 0。"""
+    print("t_room_mig_schema_reformat_passes")
+    root = _rg_repo()
+    _rg_schema(root, 1, raw='{"formatVersion":1,"database":{"version":1,"identityHash":"hash1","entities":[]}}')
+    _nh_commit(root, "reformat")
+    rc, out = _rg(root)
+    check("排版不同雜湊相同放行", rc == 0, out[-600:])
+
+
+def t_room_mig_downgrade_blocks():
+    """[S11] 主線上最大 2、終點變 1 → 擋;2 只在分支上被退回 → 0。"""
+    print("t_room_mig_downgrade_blocks")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 2)
+    _rg_schema(root, 1)
+    _rg_schema(root, 2)
+    _nh_file(root, _RG_MIG, "package p\nval M = object : Migration(1, 2) {}\n")
+    _rg_dao(root)
+    _rg_daotest(root)
+    _nh_commit(root, "v2 on main")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _nh_git(root, "rm", "-q", "app/schemas/p.AppDb/2.json")
+    _rg_db(root, 1)
+    _nh_commit(root, "down")
+    rc, out = _rg(root)
+    check("主線上的版本被降擋下", rc == 1 and "降版" in out, out[-600:])
+    root = _rg_repo()
+    _rg_v2(root)
+    _nh_commit(root, "v2")
+    _nh_git(root, "rm", "-q", "app/schemas/p.AppDb/2.json")
+    _rg_db(root, 1)
+    _nh_commit(root, "revert v2")
+    rc, out = _rg(root)
+    check("只在分支上的升版被退回不擋", rc == 0, out[-600:])
+
+
+def t_room_mig_constant_version_uses_schema():
+    """[S12] version 寫常數、只改常數檔並新增 2.json、沒寫 Migration → 擋(版本從結構檔讀)。"""
+    print("t_room_mig_constant_version_uses_schema")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _nh_file(root, _RG_DB, "package p\n@Database(entities = [Order::class], version = DB_VERSION)\nabstract class AppDb : RoomDatabase()\n")
+    _nh_file(root, "app/src/main/java/p/Consts.kt", "package p\nconst val DB_VERSION = 1\n")
+    _rg_schema(root, 1)
+    _nh_commit(root, "v1")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _nh_file(root, "app/src/main/java/p/Consts.kt", "package p\nconst val DB_VERSION = 2\n")
+    _rg_schema(root, 2)
+    _nh_commit(root, "v2 const")
+    rc, out = _rg(root)
+    check("常數版本從結構檔判出缺路徑", rc == 1 and "1→2" in out, out[-600:])
+
+
+def t_room_mig_unresolvable_migration_warns():
+    """[S13] 路徑有缺口、但有參數不是整數字面的 Migration 寫法 → 0 並提醒。"""
+    print("t_room_mig_unresolvable_migration_warns")
+    root = _rg_repo()
+    _rg_v2(root, mig="fun migration(a: Int, b: Int) = object : Migration(a, b) {}\nval M = migration(1, 2)\n")
+    _nh_commit(root, "factory")
+    rc, out = _rg(root)
+    check("判不出的寫法只提醒", rc == 0 and "提醒" in out and "判不出" in out, out[-600:])
+
+
+def t_room_mig_deleted_migration_blocks():
+    """[S14] 版本沒變、刪掉主線上原本讓 1 能升到 2 的 Migration → 擋。"""
+    print("t_room_mig_deleted_migration_blocks")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 2)
+    _rg_schema(root, 1)
+    _rg_schema(root, 2)
+    _nh_file(root, _RG_MIG, "package p\nval M = object : Migration(1, 2) {}\n")
+    _nh_commit(root, "v2 main")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _nh_git(root, "rm", "-q", _RG_MIG)
+    _nh_commit(root, "del mig")
+    rc, out = _rg(root)
+    check("刪掉升級路徑擋下", rc == 1 and "1→2" in out, out[-600:])
+
+
+def t_room_mig_schema_delete_and_move():
+    """[S15] 主線上的 1.json 被刪、對不到同雜湊 → 擋;整個目錄改套件名搬家(同雜湊)→ 視為同一個資料庫照常判。"""
+    print("t_room_mig_schema_delete_and_move")
+    root = _rg_repo()
+    _nh_git(root, "rm", "-q", "app/schemas/p.AppDb/1.json")
+    _nh_commit(root, "del json")
+    rc, out = _rg(root)
+    check("刪掉主線上的結構檔擋下", rc == 1 and "被刪" in out, out[-600:])
+    root = _rg_repo()
+    _nh_git(root, "mv", "app/schemas/p.AppDb", "app/schemas/q.AppDb")
+    _nh_file(root, "app/src/main/java/q/AppDb.kt", (root / _RG_DB).read_text(encoding="utf-8").replace("package p", "package q"))
+    _nh_git(root, "rm", "-q", _RG_DB)
+    _nh_commit(root, "move pkg")
+    rc, out = _rg(root)
+    check("搬家同雜湊不擋", rc == 0, out[-600:])
+    _rg_schema(root, 2, fq="q.AppDb")
+    _nh_commit(root, "moved then bump")
+    rc, out = _rg(root)
+    check("搬家後升版仍照判(缺路徑擋)", rc == 1 and "1→2" in out, out[-600:])
+
+
+def t_room_mig_new_database_no_requirement():
+    """[S16] 分岔點上沒有的結構檔目錄(新資料庫)不要求路徑與升級測試。"""
+    print("t_room_mig_new_database_no_requirement")
+    root = _rg_repo()
+    _nh_file(root, "app/src/main/java/p/CacheDb.kt", "package p\n@Database(entities = [C::class], version = 3)\nabstract class CacheDb : RoomDatabase()\n")
+    _rg_schema(root, 3, fq="p.CacheDb")
+    _nh_commit(root, "new db")
+    rc, out = _rg(root)
+    check("新資料庫不要求", rc == 0, out[-600:])
+
+
+def t_room_mig_export_schema_false_warns():
+    """[S17] exportSchema = false → 0 並提醒判不了。"""
+    print("t_room_mig_export_schema_false_warns")
+    root = _rg_repo()
+    _rg_db(root, 2, extra=", exportSchema = false")
+    _nh_commit(root, "no export")
+    rc, out = _rg(root)
+    check("沒匯出只提醒", rc == 0 and "提醒" in out and "沒匯出結構檔" in out, out[-600:])
+
+
+def t_room_mig_class_name_skips_annotations():
+    """[S18] @Database 後接 @TypeConverters(Converters::class) → 點名 AppDb 不是 Converters。"""
+    print("t_room_mig_class_name_skips_annotations")
+    root = _rg_repo()
+    _rg_db(root, 2, between="@TypeConverters(Converters::class)\n")
+    _nh_commit(root, "v2 annot only")
+    rc, out = _rg(root)
+    check("點名 AppDb", rc == 1 and "AppDb" in out and "Converters" not in out, out[-600:])
+
+
+def t_room_mig_java_syntax():
+    """[S19] Java 寫法跟 Kotlin 一樣判。"""
+    print("t_room_mig_java_syntax")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    jdb = "app/src/main/java/p/AppDb.java"
+    _nh_file(root, jdb, "package p;\n@Database(entities = {User.class}, version = 1)\npublic abstract class AppDb extends RoomDatabase {}\n")
+    _rg_schema(root, 1)
+    _nh_commit(root, "j1")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _nh_file(root, jdb, "package p;\n@Database(entities = {User.class}, version = 2)\npublic abstract class AppDb extends RoomDatabase {}\n")
+    _rg_schema(root, 2)
+    _nh_commit(root, "j2")
+    rc, out = _rg(root)
+    check("Java 缺路徑擋下", rc == 1 and "1→2" in out, out[-600:])
+    _nh_file(root, "app/src/main/java/p/Migs.java", "package p;\nclass Migs { static final Migration M = new Migration(1, 2) {}; }\n")
+    _rg_migtest(root)
+    _nh_commit(root, "j mig")
+    rc, out = _rg(root)
+    check("Java new Migration(1, 2) 算路徑", rc == 0, out[-600:])
+
+
+def t_room_guard_strip_keeps_lines():
+    """[S20] 程式註解或字串裡的 Migration(1, 2) 不算;剝完行數不變。"""
+    print("t_room_guard_strip_keeps_lines")
+    mod = _load_lumos_module()
+    src = 'a\n// Migration(1, 2)\n/* x\n Migration(1, 2)\n*/\nval s = "Migration(1, 2)"\nval t = """\nMigration(1, 2)\n"""\nb\n'
+    out = mod._rg_strip(src)
+    check("行數不變", out.count("\n") == src.count("\n"), repr(out))
+    check("剝完沒有 Migration(1, 2)", "Migration(1, 2)" not in out, repr(out))
+    check("程式本體留著", out.startswith("a\n") and out.rstrip("\n").endswith("b"), repr(out))
+    root = _rg_repo()
+    _rg_v2(root, mig='// val M = object : Migration(1, 2) {}\nval s = "Migration(1, 2)"\n')
+    _nh_commit(root, "commented")
+    rc, out = _rg(root)
+    check("註解與字串裡的不算路徑", rc == 1 and "1→2" in out, out[-600:])
+
+
+def t_room_mig_allow_destructive_listed():
+    """[S21] allow_destructive 列出的資料庫升版不要求。"""
+    print("t_room_mig_allow_destructive_listed")
+    root = _rg_repo({"room_guard": {"allow_destructive": ["p.AppDb"]}})
+    _rg_v2(root, mig=None, test=False)
+    _nh_commit(root, "cache bump")
+    rc, out = _rg(root)
+    check("允許清空的不擋", rc == 0, out[-600:])
+
+
+def t_room_dao_new_method_without_test_blocks():
+    """[S22] 新增 @Query getUnpaid、沒有測試 .getUnpaid( → 擋,點名 OrderDao.getUnpaid。"""
+    print("t_room_dao_new_method_without_test_blocks")
+    root = _rg_repo()
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n'])
+    _nh_commit(root, "new dao method")
+    rc, out = _rg(root)
+    check("新方法沒測試擋下", rc == 1 and "OrderDao.getUnpaid" in out, out[-600:])
+    check("沒改的 getAll 不點名", "OrderDao.getAll" not in out, out[-600:])
+
+
+def t_room_dao_test_via_base_class_passes():
+    """[S23] 呼叫 .getUnpaid( 的測試檔自己沒有建法、另一支測試檔有 → 0。"""
+    print("t_room_dao_test_via_base_class_passes")
+    root = _rg_repo()
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n'])
+    _nh_file(root, "app/src/androidTest/java/p/UnpaidTest.kt", "package p\nclass UnpaidTest : BaseDbTest() {\n    fun t() { dao.getUnpaid() }\n}\n")
+    _nh_commit(root, "base class test")
+    rc, out = _rg(root)
+    check("基底類別建資料庫放行", rc == 0, out[-600:])
+
+
+def t_room_dao_mock_only_test_blocks():
+    """[S24] 唯一呼叫 .getUnpaid( 的測試檔 mock 了 OrderDao → 擋,說 mock 不算。"""
+    print("t_room_dao_mock_only_test_blocks")
+    root = _rg_repo()
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n'])
+    _nh_file(root, "app/src/test/java/p/RepoTest.kt", "package p\nclass RepoTest {\n    val dao = mockk<OrderDao>()\n"
+                                                      "    fun t() { coEvery { dao.getUnpaid() } returns emptyList() }\n}\n")
+    _nh_commit(root, "mock test")
+    rc, out = _rg(root)
+    check("只有 mock 的測試擋下", rc == 1 and "mock" in out, out[-600:])
+
+
+def t_room_dao_no_real_room_anywhere_blocks():
+    """[S25] 終點所有測試檔都沒有 Room 建法 → 擋,說沒有任何用真 Room 的測試。"""
+    print("t_room_dao_no_real_room_anywhere_blocks")
+    root = _rg_repo()
+    _rg_daotest(root, calls=("getAll",), builder=False)
+    _rg_dao(root, ['    @Query("SELECT * FROM orders ORDER BY id")\n    suspend fun getAll(): List<Order>\n'])
+    _nh_commit(root, "no builder")
+    rc, out = _rg(root)
+    check("沒有真 Room 測試擋下", rc == 1 and "沒有任何用真 Room 的測試" in out, out[-600:])
+    root = _rg_repo()
+    _rg_daotest(root, calls=("getAll",), builder=True, extra="    init { mockkStatic(Room::class) }\n")
+    _rg_dao(root, ['    @Query("SELECT * FROM orders ORDER BY id")\n    suspend fun getAll(): List<Order>\n'])
+    _nh_commit(root, "mockstatic")
+    rc, out = _rg(root)
+    check("mockkStatic(Room 的檔不算真 Room", rc == 1 and "沒有任何用真 Room 的測試" in out, out[-600:])
+
+
+def t_room_dao_changed_methods_incl_deletion():
+    """[S26] 只刪掉 getPaid 的 @Query 裡一行 → 只要求 getPaid。"""
+    print("t_room_dao_changed_methods_incl_deletion")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    a = '    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n'
+    paid = '    @Query(\n        """SELECT * FROM orders\n        WHERE paid = 1\n        AND deleted = 0\n        """\n    )\n    suspend fun getPaid(): List<Order>\n'
+    _rg_dao(root, [a, paid])
+    _rg_daotest(root)
+    _nh_commit(root, "dao")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_dao(root, [a, paid.replace("        AND deleted = 0\n", "")])      # 整行刪掉,其他行原封不動:差異只有一段純刪除
+    _nh_commit(root, "delete line")
+    rc, out = _rg(root)
+    check("純刪除的方法要測試", rc == 1 and "OrderDao.getPaid" in out, out[-600:])
+    check("沒改的 getAll 不要求", "OrderDao.getAll" not in out, out[-600:])
+
+
+def t_room_dao_transaction_body_change_required():
+    """[S27] @Transaction 方法只改本體 → 算改到。"""
+    print("t_room_dao_transaction_body_change_required")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    tx = '    @Transaction\n    suspend fun replaceAll(o: List<Order>) {\n        deleteAll()\n        insertAll(o)\n    }\n'
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n', tx])
+    _rg_daotest(root)
+    _nh_commit(root, "dao")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   tx.replace("        insertAll(o)\n", "        insertAll(o)\n        log()\n")])
+    _nh_commit(root, "body")
+    rc, out = _rg(root)
+    check("交易方法本體改了要測試", rc == 1 and "OrderDao.replaceAll" in out, out[-600:])
+
+
+def t_room_dao_rename_only_changed_lines():
+    """[S28] DAO 只搬套件(git mv + 改 package)→ 不要求任何方法。"""
+    print("t_room_dao_rename_only_changed_lines")
+    root = _rg_repo()
+    newp = "app/src/main/java/q/OrderDao.kt"
+    (root / "app/src/main/java/q").mkdir(parents=True)
+    _nh_git(root, "mv", _RG_DAO, newp)
+    _nh_file(root, newp, (root / newp).read_text(encoding="utf-8").replace("package p", "package q"))
+    _rg_daotest(root, calls=())
+    _nh_commit(root, "move dao")
+    rc, out = _rg(root)
+    check("只搬家不要求", rc == 0, out[-600:])
+
+
+def t_room_typeconverter_warns():
+    """[S29] 新增 @TypeConverter 沒測試 → 0 並提醒。"""
+    print("t_room_typeconverter_warns")
+    root = _rg_repo()
+    _nh_file(root, "app/src/main/java/p/Converters.kt",
+             "package p\nclass Converters {\n    @TypeConverter\n    fun fromInstant(v: Instant?): Long? = v?.toEpochMilli()\n}\n")
+    _nh_commit(root, "conv")
+    rc, out = _rg(root)
+    check("型別轉換只提醒", rc == 0 and "提醒" in out and "fromInstant" in out, out[-600:])
+
+
+def t_room_dao_warn_separate_from_migration():
+    """[S30] room_guard.dao=warn:DAO 只提醒,升級照擋。"""
+    print("t_room_dao_warn_separate_from_migration")
+    root = _rg_repo({"room_guard": {"dao": "warn"}})
+    _rg_v2(root, mig=None)
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT 1")\n    suspend fun ping(): Int\n'])
+    _nh_commit(root, "both")
+    rc, out = _rg(root)
+    check("升級照擋", rc == 1 and "1→2" in out, out[-800:])
+    check("DAO 那條是提醒", "OrderDao.ping" in out and "提醒" in out, out[-800:])
+    root = _rg_repo({"room_guard": {"dao": "warn"}})
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT 1")\n    suspend fun ping(): Int\n'])
+    _nh_commit(root, "dao only")
+    rc, out = _rg(root)
+    check("只有 DAO 時 warn 放行", rc == 0, out[-600:])
+
+
+def t_room_guard_unrelated_diff_silent():
+    """[S31] 沒碰到 Room 的改動:0、不印、不記帳。"""
+    print("t_room_guard_unrelated_diff_silent")
+    root = _rg_repo()
+    _nh_file(root, "app/src/main/java/p/Util.kt", "package p\nfun x() = 1\n")
+    _nh_commit(root, "util")
+    rc, out = _rg(root)
+    check("放行", rc == 0, out)
+    check("不印", out.strip() == "", out)
+    check("不記帳", _rg_gov(root) == [], str(_rg_gov(root)))
+
+
+def t_room_guard_records_passed_when_triggered():
+    """[S32] 有觸發而全部通過 → 記一筆 passed,帶資料庫數與 DAO 方法數。"""
+    print("t_room_guard_records_passed_when_triggered")
+    root = _rg_repo()
+    _rg_v2(root)
+    _nh_commit(root, "v2")
+    rc, out = _rg(root)
+    ev = _rg_gov(root, "passed")
+    check("放行", rc == 0, out[-600:])
+    check("記一筆 passed 帶計數", len(ev) == 1 and ev[0].get("databases") == 1 and ev[0].get("dao_methods") == 0, str(ev))
+
+
+def t_room_guard_skip_env_records():
+    """[S33] LUMOS_SKIP_ROOM_GUARD=1 → 0、記 skipped-env。"""
+    print("t_room_guard_skip_env_records")
+    root = _rg_repo()
+    _rg_v2(root, mig=None)
+    _nh_commit(root, "bad")
+    rc, out = _rg(root, env={"LUMOS_SKIP_ROOM_GUARD": "1"})
+    check("跳過放行", rc == 0, out[-600:])
+    check("記 skipped-env", len(_rg_gov(root, "skipped-env")) == 1, str(_rg_gov(root)))
+
+
+def t_room_guard_gate_modes():
+    """[S34] gate=warn 提醒並記 warned;off 不判;不認得的值照 block 並提醒。"""
+    print("t_room_guard_gate_modes")
+    for mode, want_rc, want in (("warn", 0, "warned"), ("off", 0, None), ("Block", 1, "blocked")):
+        root = _rg_repo({"room_guard": {"gate": mode}})
+        _rg_v2(root, mig=None)
+        _nh_commit(root, "bad")
+        rc, out = _rg(root)
+        check(f"gate={mode} 回 {want_rc}", rc == want_rc, out[-600:])
+        if want:
+            check(f"gate={mode} 記 {want}", len(_rg_gov(root, want)) == 1, str(_rg_gov(root)))
+        else:
+            check("off 不記帳", _rg_gov(root) == [], str(_rg_gov(root)))
+        if mode == "Block":
+            check("不認得的值印提醒", "提醒" in out and "Block" in out, out[-600:])
+
+
+def t_room_guard_reads_tip_not_worktree():
+    """[S35] Migration 只在工作目錄沒提交 → 照樣擋。"""
+    print("t_room_guard_reads_tip_not_worktree")
+    root = _rg_repo()
+    _rg_v2(root, mig=None)
+    _nh_commit(root, "bad")
+    _nh_file(root, _RG_MIG, "package p\nval M = object : Migration(1, 2) {}\n")
+    rc, out = _rg(root)
+    check("沒提交的不算", rc == 1, out[-600:])
+
+
+def t_room_guard_range_start_tag_and_empty():
+    """[S36] 推 tag 照 _push_range_start(不從空樹比);合過主線、主線改的 DAO 不要求;起點空樹 → 0、這次不判、記 skipped。"""
+    print("t_room_guard_range_start_tag_and_empty")
+    import subprocess as sp
+    root = _rg_repo()
+    bare = Path(tempfile.mkdtemp(prefix="gctl-rg-remote-")) / "r.git"
+    sp.run(["git", "init", "-q", "--bare", str(bare)], capture_output=True)
+    _nh_git(root, "remote", "add", "origin", str(bare))
+    _nh_git(root, "push", "-q", "origin", "main")
+    _nh_git(root, "fetch", "-q", "origin")
+    _nh_git(root, "remote", "set-head", "origin", "main")
+    _nh_git(root, "tag", "v1.0")
+    z = "0" * 40
+    rc, out = _rg(root, "--diff", f"{z}..HEAD", "--push-remote", "origin", "--pushed-ref", "refs/tags/v1.0")
+    check("推 tag 不把整個 repo 當新改動", rc == 0 and "OrderDao.getAll" not in out, out[-600:])
+    # 主線上改了 DAO(新方法沒測試),feat 合進主線後再推:主線那邊的方法不算這次的
+    _nh_git(root, "checkout", "-q", "main")
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT 2")\n    suspend fun onMain(): Int\n'])
+    _nh_commit(root, "main dao")
+    _nh_git(root, "push", "-q", "origin", "main")
+    _nh_git(root, "fetch", "-q", "origin")
+    _nh_git(root, "checkout", "-q", "feat")
+    _nh_file(root, "README.md", "# x\n")
+    _nh_commit(root, "feat work")
+    old = _nh_git(root, "rev-parse", "HEAD").stdout.strip()
+    _nh_git(root, "push", "-q", "origin", "feat")
+    _nh_git(root, "merge", "-q", "--no-edit", "main")
+    rc, out = _rg(root, "--diff", f"{old}..HEAD", "--push-remote", "origin", "--pushed-ref", "refs/heads/feat")
+    check("合過主線、主線那邊的 DAO 方法不要求", "OrderDao.onMain" not in out and rc == 0, out[-600:])
+    # 起點空樹:沒有遠端、沒有主線的新 repo
+    root = _nh_repo()
+    _rg_db(root, 1)
+    _rg_schema(root, 1)
+    _rg_dao(root)
+    _nh_commit(root, "first")
+    rc, out = _rg(root, "--diff", f"{z}..HEAD", "--push-remote", "origin", "--pushed-ref", "refs/heads/master")
+    check("起點空樹這次不判", rc == 0 and "這次不判" in out, out[-600:])
+    check("記 skipped", len(_rg_gov(root, "skipped")) == 1, str(_rg_gov(root)))
+
+
+def t_room_guard_test_path_variants():
+    """[S37] testDebug、androidTestDebug 算測試路徑;androidTestDebug 裡的 Migration 不算路徑。"""
+    print("t_room_guard_test_path_variants")
+    mod = _load_lumos_module()
+    for p, want in (("app/src/test/A.kt", True), ("app/src/androidTest/A.kt", True), ("app/src/testDebug/A.kt", True),
+                    ("app/src/androidTestDebug/A.kt", True), ("app/src/testFixtures/A.kt", True), ("shared/src/jvmTest/A.kt", True),
+                    ("app/src/androidUnitTest/A.kt", True), ("app/src/main/A.kt", False), ("app/src/debug/A.kt", False),
+                    ("app/src/contest/A.kt", False)):
+        check(f"{p} → {want}", mod._rg_is_test_path(p) == want, p)
+    root = _rg_repo()
+    _rg_v2(root, mig=None)
+    _nh_file(root, "app/src/androidTestDebug/java/p/M.kt", "package p\nval M = object : Migration(1, 2) {}\n")
+    _nh_commit(root, "mig in test dir")
+    rc, out = _rg(root)
+    check("測試路徑裡的 Migration 不算", rc == 1 and "1→2" in out, out[-600:])
+
+
+def t_room_mig_unreadable_schema_blocks():
+    """[S38] 2.json 有合併衝突標記 → 擋,說讀不懂。"""
+    print("t_room_mig_unreadable_schema_blocks")
+    root = _rg_repo()
+    _rg_v2(root)
+    _rg_schema(root, 2, raw='<<<<<<< HEAD\n{"formatVersion":1}\n=======\n{}\n>>>>>>> x')
+    _nh_commit(root, "conflict")
+    rc, out = _rg(root)
+    check("讀不懂的結構檔擋下", rc == 1 and "讀不懂" in out, out[-600:])
+
+
+def t_room_guard_registered():
+    """[S40] _KNOWN_GATES、--help、INDEX.md、06 都有 room-guard。"""
+    print("t_room_guard_registered")
+    import subprocess as sp
+    mod = _load_lumos_module()
+    check("_KNOWN_GATES 有 room-guard", "room-guard" in mod._KNOWN_GATES, "")
+    h = sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True).stdout
+    check("--help 列出 room-guard", "room-guard" in h, h[-300:])
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands"
+    for f in ("INDEX.md", "06-代碼審與推送.md"):
+        check(f"{f} 有 room-guard", "room-guard" in (base / f).read_text(encoding="utf-8"), f)
+
+
+def t_test_quality_standard_android_room_section():
+    """[S41] 測試品質規範有 Android 資料層(Room)一節,七種情況依序出現與幾個關鍵詞;03 有一句指過去。"""
+    print("t_test_quality_standard_android_room_section")
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands"
+    t = (base / "test-quality-standard.md").read_text(encoding="utf-8")
+    i = t.find("### Android 資料層(Room)")
+    check("有那一節", i >= 0, "")
+    sec = t[i:t.find("\n### ", i + 5)] if i >= 0 else ""
+    pos = [sec.find(w) for w in ("查詢", "資料限制", "交易", "升級", "Flow", "TypeConverter", "createFromAsset")]
+    check("七種情況依序出現", all(p >= 0 for p in pos) and pos == sorted(pos), str(pos))
+    for w in ("記憶體資料庫", "MigrationTestHelper", "BundledSQLiteDriver", "Robolectric", "mock", "故障"):
+        check(f"提到 {w}", w in sec, "")
+    t3 = (base / "03-寫回圖譜.md").read_text(encoding="utf-8")
+    check("03 指到那一節", "Android 資料層(Room)" in t3, "")
+
+
+def t_prepush_room_guard_wired():
+    """[S39] 推送前掛鉤:Room 守衛回 1 → 印逃生段、記一筆 room-guard 擋下、全套沒跑;回 2(舊版 lumos)→ 印這次沒檢查、照推;
+    呼叫帶遠端舊值..頂端、--push-remote、--pushed-ref;排在存量漂移之後、回頭重讀之前;中斷就停清單有這一行。"""
+    print("t_prepush_room_guard_wired")
+    import re
+    _need_src("scripts/hooks/pre-push")
+    hook = Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
+    txt = hook.read_text(encoding="utf-8")
+    check("①中斷就停清單有 room-guard", re.search(r"^# 中斷就停:room-guard\|Room 守衛\|", txt, flags=re.M) is not None, "")
+    i_dr, i_rg, i_rr = txt.find('"$GRAPHCTL" drift check'), txt.find('"$GRAPHCTL" room-guard'), txt.find("note-audit reread-check")
+    check("①排在存量漂移之後、回頭重讀之前", 0 < i_dr < i_rg < i_rr, f"{i_dr} {i_rg} {i_rr}")
+    root, base, head = _ppc_repo()
+    normal = f"refs/heads/main {head} refs/heads/main {base}\n"
+    rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_RCS="room-guard:1")
+    call = next((ln for ln in lines if ln.startswith("room-guard ")), "")
+    check("②有叫 room-guard,帶遠端舊值..頂端、--push-remote、--pushed-ref",
+          f"--diff {base}..{head}" in call and "--push-remote" in call and "--pushed-ref refs/heads/main" in call, call)
+    check("②回 1 → 擋下、全套沒跑", rc == 1 and "SUITE" not in lines, f"rc={rc} {out[-300:]}")
+    check("②印逃生段", "LUMOS_SKIP_ROOM_GUARD=1" in out and "room_guard.dao" in out, out[-500:])
+    rows = _ppc_rows(out) or []
+    check("②彙總裡有一筆 room-guard", any(g == "room-guard" for g, _r in rows), str(rows))
+    rc, lines, out = _ppc_run(root, normal, FAKE_NEW="1", FAKE_RCS="room-guard:2")
+    check("③回 2 → 印這次沒檢查、照推(全套有跑)", "Room 守衛這次沒檢查(rc=2)" in out and "SUITE" in lines, f"rc={rc} {out[-300:]}")
+
+
+# ── 代碼審 code-room資料庫測試守衛 r1 折入(2026-10-28)──
+def t_room_dao_mock_forms_all_count():
+    """[r1 正確性 F1] mock 這個 DAO 的常見寫法都要認得:型別標在變數上、mockito-kotlin 的 mock<…>()、@MockK/@RelaxedMockK
+    欄位、Java 的 @Mock 欄位與 Mockito.mock(…class)。判準來源:席位實測後四種只有 mockk<OrderDao>() 擋得下。"""
+    print("t_room_dao_mock_forms_all_count")
+    dao2 = ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+            '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n']
+    kt = {"型別在變數上加 mockk(relaxed)": "    val dao: OrderDao = mockk(relaxed = true)\n",
+          "型別在變數上加 mockk()": "    private val dao: OrderDao = mockk()\n",
+          "mockito-kotlin mock<>": "    val dao = mock<OrderDao>()\n",
+          "mockk<>(relaxed)": "    val dao = mockk<OrderDao>(relaxed = true)\n",
+          "@RelaxedMockK 同一行": "    @RelaxedMockK lateinit var dao: OrderDao\n",
+          "@MockK 換行": "    @MockK\n    lateinit var dao: OrderDao\n",
+          "Mockito.mock(::class.java)": "    private val dao = Mockito.mock(OrderDao::class.java)\n"}
+    for name, decl in kt.items():
+        root = _rg_repo()
+        _rg_dao(root, dao2)
+        _nh_file(root, "app/src/test/java/p/RepoTest.kt", "package p\nclass RepoTest {\n" + decl
+                 + "    fun t() { coEvery { dao.getUnpaid() } returns emptyList() }\n}\n")
+        _nh_commit(root, "mock test")
+        rc, out = _rg(root)
+        check(f"F1:{name} 算 mock、擋下", rc == 1 and "mock 的測試不算" in out, out[-500:])
+    for name, decl in {"Java @Mock 同一行": "    @Mock OrderDao dao;\n", "Java @Mock 換行加 private": "    @Mock\n    private OrderDao dao;\n",
+                       "Java Mockito.mock(.class)": "    OrderDao dao = Mockito.mock(OrderDao.class);\n"}.items():
+        root = _rg_repo()
+        _rg_dao(root, dao2)
+        _nh_file(root, "app/src/test/java/p/RepoTest.java", "package p;\nclass RepoTest {\n" + decl
+                 + "    void t() { dao.getUnpaid(); }\n}\n")
+        _nh_commit(root, "mock test java")
+        rc, out = _rg(root)
+        check(f"F1:{name} 算 mock、擋下", rc == 1 and "mock 的測試不算" in out, out[-500:])
+    # 對照:同一支測試 mock 了別的型別、DAO 是真的 → 不算 mock
+    root = _rg_repo()
+    _rg_dao(root, dao2)
+    _rg_daotest(root, calls=("getAll", "getUnpaid"), extra="    val clock: Clock = mockk()\n    val other = mockk<Clock>()\n"
+                                                         "    @MockK lateinit var api: OrderApi\n")
+    _nh_commit(root, "real dao, other mocks")
+    rc, out = _rg(root)
+    check("F1 對照:mock 別的型別、DAO 用真的 → 放行", rc == 0, out[-500:])
+
+
+def t_room_mig_never_exported_warns_not_blocks():
+    """[r1 正確性 F2] 整個 repo 從沒提交過結構檔(沒設 schemaDirectory)時,只提醒怎麼開匯出,不擋;
+    已有結構檔、這一版沒提交的照擋([S5])。判準來源:席位實測 version = 3 沒有任何 .json,只加有測試的 DAO 方法也被擋。"""
+    print("t_room_mig_never_exported_warns_not_blocks")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 3)
+    _rg_dao(root)
+    _rg_daotest(root)
+    _nh_commit(root, "room v3 no schemas")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n'])
+    _rg_daotest(root, calls=("getAll", "getUnpaid"))
+    _nh_commit(root, "dao method")
+    rc, out = _rg(root)
+    check("F2:沒匯出過結構檔 → 不擋", rc == 0, out[-600:])
+    check("F2:提醒教開匯出(schemaDirectory)", "提醒:" in out and "schemaDirectory" in out, out[-600:])
+    check("F2:不再印做不到的「結構檔最大只到 0」", "最大只到 0" not in out, out[-600:])
+    _rg_db(root, 4)
+    _nh_commit(root, "bump 4 still no schemas")
+    rc, out = _rg(root)
+    check("F2:升版但從沒匯出 → 照樣只提醒", rc == 0 and "schemaDirectory" in out, out[-600:])
+
+
+def t_room_mig_untouched_db_old_gap_not_blocked():
+    """[r1 正確性 F2 同族] 主線上本來就缺一版結構檔(version = 2、只有 1.json),這次只改 DAO → 不拿舊帳擋;
+    這次改了那個資料庫的原始碼 → 照擋([S5])。"""
+    print("t_room_mig_untouched_db_old_gap_not_blocked")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 2)
+    _rg_schema(root, 1)
+    _rg_dao(root)
+    _rg_daotest(root)
+    _nh_commit(root, "main with old gap")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_dao(root, ['    @Query("SELECT * FROM orders ORDER BY id")\n    suspend fun getAll(): List<Order>\n'])
+    _nh_commit(root, "dao only")
+    rc, out = _rg(root)
+    check("F2 同族:沒碰到的資料庫、舊缺口不擋", rc == 0 and "2.json" not in out, out[-600:])
+    _rg_db(root, 2, extra=", exportSchema = true")
+    _nh_commit(root, "touch db")
+    rc, out = _rg(root)
+    check("F2 同族:碰到那個資料庫 → 照擋", rc == 1 and "p.AppDb/2.json" in out, out[-600:])
+
+
+def t_room_dao_whole_method_deletion_no_neighbor():
+    """[r1 正確性 F3] 整段刪掉一個 DAO 方法,不要求相鄰、沒改過的方法補測試;方法裡面刪一行照舊要求([S26])。"""
+    print("t_room_dao_whole_method_deletion_no_neighbor")
+    ms = {n: f'    @Query("SELECT * FROM orders WHERE k = \'{n}\'")\n    suspend fun {n}(): List<Order>\n'
+          for n in ("getAll", "alpha", "old", "beta")}
+    for drop_blank in (False, True):
+        root = _nh_repo()
+        _nh_git(root, "checkout", "-q", "-b", "main")
+        _rg_dao(root, list(ms.values()))
+        _rg_daotest(root)
+        _nh_commit(root, "dao")
+        _nh_git(root, "checkout", "-q", "-b", "feat")
+        _rg_dao(root, [ms["getAll"], ms["alpha"], ms["beta"]])
+        if drop_blank:     # 換一種刪法:連前面那個空行一起刪,刪除點落在 alpha 最後一行之後
+            p = root / _RG_DAO
+            p.write_text(p.read_text(encoding="utf-8").replace(ms["alpha"] + "\n", ms["alpha"]), encoding="utf-8")
+        _nh_commit(root, "drop old")
+        rc, out = _rg(root)
+        check(f"F3:整段刪掉方法 → 放行(連空行={drop_blank})", rc == 0, out[-600:])
+        check(f"F3:不點名鄰居(連空行={drop_blank})", "OrderDao.beta" not in out and "OrderDao.alpha" not in out, out[-600:])
+
+
+def t_room_mig_constant_bump_without_schema_blocks():
+    """[r1 正確性 F4] version 寫常數、只改常數檔升版、沒提交新結構檔 → 要觸發並擋;常數有兩個不同值判不出 → 不擋。"""
+    print("t_room_mig_constant_bump_without_schema_blocks")
+    for const_old, const_new, cfile in (("const val DB_VERSION = 1", "const val DB_VERSION = 2", "Consts.kt"),
+                                        ("const val DB_VERSION: Int = 1", "const val DB_VERSION: Int = 2", "Consts.kt"),
+                                        ("public static final int DB_VERSION = 1;", "public static final int DB_VERSION = 2;", "Consts.java")):
+        root = _nh_repo()
+        _nh_git(root, "checkout", "-q", "-b", "main")
+        _nh_file(root, _RG_DB, "package p\n@Database(entities = [Order::class], version = DB_VERSION)\nabstract class AppDb : RoomDatabase()\n")
+        _nh_file(root, f"app/src/main/java/p/{cfile}", f"package p\nclass C {{\n{const_old}\n}}\n")
+        _rg_schema(root, 1)
+        _nh_commit(root, "v1")
+        _nh_git(root, "checkout", "-q", "-b", "feat")
+        _nh_file(root, f"app/src/main/java/p/{cfile}", f"package p\nclass C {{\n{const_new}\n}}\n")
+        _nh_commit(root, "bump const only")
+        rc, out = _rg(root)
+        check(f"F4:只改常數升版、沒結構檔 → 擋({const_new})", rc == 1 and "AppDb/2.json" in out, out[-600:])
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _nh_file(root, _RG_DB, "package p\n@Database(entities = [Order::class], version = DB_VERSION)\nabstract class AppDb : RoomDatabase()\n")
+    _nh_file(root, "app/src/main/java/p/Consts.kt", "package p\nconst val DB_VERSION = 1\n")
+    _nh_file(root, "app/src/main/java/q/Other.kt", "package q\nconst val DB_VERSION = 7\n")
+    _rg_schema(root, 1)
+    _nh_commit(root, "v1")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _nh_file(root, "app/src/main/java/p/Consts.kt", "package p\nconst val DB_VERSION = 2\n")
+    _nh_commit(root, "bump ambiguous")
+    rc, out = _rg(root)
+    check("F4 對照:同名常數兩個值判不出 → 不擋", rc == 0, out[-600:])
+
+
+def t_strip_c_comments_keep_newlines():
+    """[r1 架構對齊 F1] Room 守衛剝註解走共用的 _strip_c_comments(keep_newlines=True),行號對得上;預設行為不變。"""
+    m = _load_lumos_inproc()
+    src = 'val a = 1 /* x\n y */ val s = """q\n// not\n"""\n// c\nfun f() {}\n'
+    out = m._strip_c_comments(src, blank_strings=True, keep_newlines=True)
+    check("架構 F1:換行數不變", out.count("\n") == src.count("\n"), repr(out))
+    check("架構 F1:fun f 還在原來那一行", out.split("\n")[5] == "fun f() {}", repr(out))
+    check("架構 F1:字串內容清空", "not" not in out and "q" not in out.split("\n")[1], repr(out))
+    check("架構 F1:預設不保留換行(舊呼叫端不變)", m._strip_c_comments(src).count("\n") < src.count("\n"), "")
+    import inspect as _i
+    own = _i.getsource(m._rg_strip) if hasattr(m, "_rg_strip") else ""
+    check("架構 F1:Room 守衛不再有自己的掃描(只轉呼叫共用那支)", "_C_STRIP_PAT" not in own, own)
+
+
+# ── 代碼審 code-room資料庫測試守衛 r2 折入(2026-10-28)──
+def t_room_dao_partial_deletion_edges_required():
+    """[r2 正確性 F1] 純刪除只要刪到某個方法的一部分、方法還在,就算改到它——刪最上面的註記行、最後一行都算;
+    整段刪掉的方法不要求、鄰居不要求(r1)。判準來源:席位實測只刪 @Transaction 那行修後 rc0。"""
+    print("t_room_dao_partial_deletion_edges_required")
+    get_all = '    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n'
+    tx = '    @Transaction\n    @Query("SELECT * FROM orders WHERE id = :id")\n    suspend fun getTx(id: Long): Order\n'
+    body = '    @Transaction\n    suspend fun replaceAll(o: List<Order>) {\n        deleteAll()\n        insertAll(o)\n    }\n'
+    for name, before, after, who in (
+            ("刪最上面的 @Transaction", [get_all, tx], [get_all, tx.replace("    @Transaction\n", "")], "OrderDao.getTx"),
+            ("刪本體最後一行", [get_all, body], [get_all, body.replace("        insertAll(o)\n", "")], "OrderDao.replaceAll"),
+            ("刪第一個方法最上面的註記", [tx, get_all], [tx.replace("    @Transaction\n", ""), get_all], "OrderDao.getTx"),
+            # 上面新增一個有測試的方法讓新舊行號錯開:刪掉的舊行要對回舊檔的方法,拿新檔對會對到 getAll
+            ("上面加方法、下面刪註記", [get_all, tx], [get_all.replace("getAll", "getAll2").replace("orders", "orders2") + "\n"
+                                                       + get_all.replace("getAll", "getAll3").replace("orders", "orders3") + "\n"
+                                                       + get_all, tx.replace("    @Transaction\n", "")], "OrderDao.getTx"),
+            # 註記行換成空白行:新的那行不在任何方法裡,只有舊那一側看得出 getTx 被改
+            ("註記行換成空白行", [get_all, tx], [get_all, tx.replace("    @Transaction\n", "\n")], "OrderDao.getTx")):
+        root = _nh_repo()
+        _nh_git(root, "checkout", "-q", "-b", "main")
+        _rg_dao(root, before)
+        _rg_daotest(root)
+        _nh_commit(root, "dao")
+        _nh_git(root, "checkout", "-q", "-b", "feat")
+        _rg_dao(root, after)
+        _rg_daotest(root, calls=("getAll", "getAll2", "getAll3"))
+        _nh_commit(root, "partial delete")
+        rc, out = _rg(root)
+        check(f"r2 F1:{name} → 要求那個方法", rc == 1 and who in out, out[-600:])
+        check(f"r2 F1:{name} → 不點名沒改的 getAll", "OrderDao.getAll" not in out, out[-600:])
+
+
+def t_room_mig_never_exported_export_false_still_warns():
+    """[r2 正確性 F2] 整個專案沒有結構檔、資料庫寫了 exportSchema = false 而且這次改了 → [S17] 的提醒照印。"""
+    print("t_room_mig_never_exported_export_false_still_warns")
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_db(root, 2, extra=", exportSchema = false")
+    _rg_dao(root)
+    _rg_daotest(root)
+    _nh_commit(root, "v2 export false, no schemas")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_db(root, 3, extra=", exportSchema = false")
+    _nh_commit(root, "bump 3")
+    rc, out = _rg(root)
+    check("r2 F2:放行", rc == 0, out[-600:])
+    check("r2 F2:exportSchema = false 的提醒照印", "exportSchema = false" in out and "提醒:" in out, out[-600:])
+
+
+# ── 代碼審 code-room資料庫測試守衛 r3 折入(2026-10-28,上限輪)──
+def t_room_dao_overload_whole_removed_not_required():
+    """[r3 正確性 F1] 同名多載整段刪掉其中一個,留下的那個沒改 → 不要求;只刪到某個多載的一部分 → 要求。"""
+    print("t_room_dao_overload_whole_removed_not_required")
+    get_all = '    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n'
+    one = '    @Query("SELECT * FROM orders WHERE id = :id")\n    suspend fun getById(id: Long): Order\n'
+    two = '    @Transaction\n    @Query("SELECT * FROM orders WHERE id = :id AND x = :x")\n    suspend fun getById(id: Long, x: Int): Order\n'
+    for name, after, expect_rc in (("整段刪掉第二個多載", [get_all, one], 0),
+                                   ("只刪第二個多載的 @Transaction", [get_all, one, two.replace("    @Transaction\n", "")], 1)):
+        root = _nh_repo()
+        _nh_git(root, "checkout", "-q", "-b", "main")
+        _rg_dao(root, [get_all, one, two])
+        _rg_daotest(root)
+        _nh_commit(root, "dao")
+        _nh_git(root, "checkout", "-q", "-b", "feat")
+        _rg_dao(root, after)
+        _nh_commit(root, "change")
+        rc, out = _rg(root)
+        check(f"r3 F1:{name} → rc {expect_rc}", rc == expect_rc, out[-600:])
+
+
+def t_room_dao_only_annotation_removed_required():
+    """[r3 正確性 F2] 方法只有 @Transaction 一個 Room 註記,刪掉它(函式還在、不再是 Room 方法)→ 照樣要求測試;
+    Java 的 DAO 同理。判準來源:席位兩版實跑都 rc0(原有漏查)。"""
+    print("t_room_dao_only_annotation_removed_required")
+    kt = ("app/src/main/java/p/OrderDao.kt",
+          "package p\n\nimport androidx.room.Dao\n\n@Dao\nabstract class OrderDao {\n"
+          '    @Query("SELECT * FROM orders")\n    abstract suspend fun getAll(): List<Order>\n\n'
+          "    @Transaction\n    open suspend fun repl(o: List<Order>) {\n        a()\n        b()\n    }\n}\n")
+    jv = ("app/src/main/java/p/OrderDao.java",
+          "package p;\n\nimport androidx.room.Dao;\n\n@Dao\npublic abstract class OrderDao {\n"
+          '    @Query("SELECT * FROM orders")\n    public abstract List<Order> getAll();\n\n'
+          "    @Transaction\n    public void repl(List<Order> o) {\n        a();\n        b();\n    }\n}\n")
+    for path, src in (kt, jv):
+        root = _nh_repo()
+        _nh_git(root, "checkout", "-q", "-b", "main")
+        _nh_file(root, path, src)
+        _rg_daotest(root)
+        _nh_commit(root, "dao")
+        _nh_git(root, "checkout", "-q", "-b", "feat")
+        _nh_file(root, path, src.replace("    @Transaction\n", ""))
+        _nh_commit(root, "drop tx")
+        rc, out = _rg(root)
+        check(f"r3 F2:{path.rsplit('.', 1)[-1]} 拿掉唯一的 @Transaction → 要求 repl", rc == 1 and "OrderDao.repl" in out, out[-600:])
+        check(f"r3 F2:{path.rsplit('.', 1)[-1]} 不點名沒改的 getAll", "OrderDao.getAll" not in out, out[-600:])
+
+
+def t_room_dao_renamed_file_maps_old_path():
+    """[r3 同族] DAO 檔搬家(改名偵測)又刪掉某方法的註記 → 舊檔要用搬家前的路徑讀,照樣要求那個方法。"""
+    print("t_room_dao_renamed_file_maps_old_path")
+    get_all = '    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n'
+    tx = '    @Transaction\n    @Query("SELECT * FROM orders WHERE id = :id")\n    suspend fun getTx(id: Long): Order\n'
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_dao(root, [get_all, tx])
+    _rg_daotest(root)
+    _nh_commit(root, "dao")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    src = (root / _RG_DAO).read_text(encoding="utf-8").replace("    @Transaction\n", "")
+    (root / _RG_DAO).unlink()
+    _nh_file(root, _RG_DAO.replace("/p/", "/p/data/"), src)
+    _nh_git(root, "add", "-A")
+    _nh_commit(root, "move and drop tx")
+    rc, out = _rg(root)
+    check("r3 同族:搬家加刪註記 → 要求 getTx", rc == 1 and "OrderDao.getTx" in out, out[-600:])
+    check("r3 同族:不點名沒改的 getAll", "OrderDao.getAll" not in out, out[-600:])
+
+
+def t_room_dao_last_line_change_required():
+    """[r3 改壞補洞] 只改方法的最後一行(單行宣告的回傳型別)→ 要求那個方法;新增行的行號差一就會落到右大括號、漏掉。"""
+    print("t_room_dao_last_line_change_required")
+    get_all = '    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n'
+    paid = '    @Query("SELECT * FROM orders WHERE paid = 1")\n    suspend fun getPaid(): List<Order>\n'
+    root = _nh_repo()
+    _nh_git(root, "checkout", "-q", "-b", "main")
+    _rg_dao(root, [get_all, paid])
+    _rg_daotest(root)
+    _nh_commit(root, "dao")
+    _nh_git(root, "checkout", "-q", "-b", "feat")
+    _rg_dao(root, [get_all, paid.replace("List<Order>", "Flow<List<Order>>")])
+    _nh_commit(root, "return type")
+    rc, out = _rg(root)
+    check("r3:只改最後一行 → 要求 getPaid", rc == 1 and "OrderDao.getPaid" in out, out[-600:])
+    check("r3:不點名沒改的 getAll", "OrderDao.getAll" not in out, out[-600:])
+
+
 if __name__ == "__main__":
     sys.exit(main())
