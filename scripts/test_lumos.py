@@ -92022,7 +92022,7 @@ def t_reread_block_hook_and_ci_wiring():
     repo = Path(GRAPHCTL).resolve().parent.parent
     hook = (repo / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8").replace("\\\n", " ")
     ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    calls = [ln for ln in hook.split("\n") if "note-audit reread-check" in ln and not ln.lstrip().startswith("#")]
+    calls = [ln for ln in hook.split("\n") if '"$GRAPHCTL" note-audit reread-check' in ln and not ln.lstrip().startswith("#")]
     check("①[S23]掛鉤的 reread-check 呼叫帶 --gate、標準錯誤不丟", len(calls) == 1 and "--gate" in calls[0] and "2>/dev/null" not in calls[0],
           str(calls))
     steps = _re.split(r"(?m)^      - name: ", ci)
