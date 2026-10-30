@@ -15723,6 +15723,197 @@ def t_arch_target_lens_trusts_mainline_base_only():
     print("  ✓ t_arch_target_lens_trusts_mainline_base_only")
 
 
+def _arch_legacy(*files):
+    import json as _j
+    return _j.dumps({"files": list(files)}, ensure_ascii=False)
+
+
+_ARCH_OLD = "app/Domain/Order/OrderOld.py"
+_ARCH_HELPER = "app/Domain/Legacy/OldHelper.py"
+
+
+def _arch_grad_repo(legacy_text=None, cfg_text=None):
+    """main 上宣告(預設 app/Domain/** → 目標節點);legacy_text 不是 None 就寫成 .lumos/arch-legacy.json。另有一支中文檔名的舊檔
+    (NFC 寫法)供正規化比對。切到 feat。回 (d, g, w, c, base)。"""
+    extra = {_ARCH_CAFE: "def cafe():\n    return 1\n"}
+    if legacy_text is not None:
+        extra[".lumos/arch-legacy.json"] = legacy_text
+    return _arch_target_repo(cfg_text or _arch_cfg(("app/Domain/**", _ARCH_NODE)), _arch_node_text(), extra)
+
+
+_ARCH_CAFE = unicodedata.normalize("NFC", "app/Domain/Order/Café.py")
+_ARCH_CAFE_NFD = unicodedata.normalize("NFD", _ARCH_CAFE)
+
+
+def t_arch_target_graduate_same_branch():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S5] 起點版舊檔清單上的檔照鄰居;宣告不動時從清單刪掉的改動檔當場照目標審(畢業)。
+    宣告有改、頂端清單讀不懂 → 不畢業;頂端整份刪掉 → 清單上改動的檔全畢業;頂端多出的行不改判定;起點沒有或讀不懂清單 → 清單不起作用;
+    改名的新路徑照目標;清單讀可信版本(分叉點),修補輪的範圍起點是分支自己的提交也不讀它;清單與改動檔兩邊轉 NFC 再比。
+    翻紅釘:畢業不比宣告 → B 翻紅;不讀清單 → A 的 OldHelper 翻紅;清單改讀範圍起點 → I 翻紅;拿掉 NFC → J 翻紅。
+    同一案的多個情境開在同一個 repo 的不同分支;只有 A、B、I 走推送前分級與派工鏡頭的子程序(守接線),其餘在同一個程序裡呼叫
+    分級用的那幾支函式(代碼審 r1 資源席:每個情境各起一次 lumos 子程序,這支測試要 50 秒以上)。"""
+    m = _load_lumos_module()
+    def tg(arch):
+        return set((arch.get("targets") or {}).get(_ARCH_NODE, []))
+    both = _arch_legacy(_ARCH_OLD, _ARCH_HELPER, _ARCH_CAFE_NFD)
+    d, g, w, c, base = _arch_grad_repo(both)
+    def inproc(d, base, head):
+        rules, _w = m._arch_targets_at(d, base)   # 同分級:起點在主線上,可信版本就是起點
+        targets = m._arch_target_split(m._arch_target_changed_files(d, base, head), rules)
+        return {"targets": m._arch_legacy_apply(d, base, head, targets, rules)}
+    def branch(name, mutate, touch=(_ARCH_OLD, _ARCH_HELPER), e2e=False):
+        g("checkout", "-q", "-b", name, base)
+        for f in touch:
+            w(f, "def changed():\n    return 2\n")
+        mutate()
+        head = c(name)
+        return _arch_pitfalls(d, f"{base}..HEAD") if e2e else inproc(d, base, head)
+    arch = branch("a", lambda: w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER, _ARCH_CAFE_NFD)), e2e=True)
+    check("A: 從清單刪掉的改動檔畢業、照目標", _ARCH_OLD in tg(arch), str(arch)[:500])
+    check("A: 還在清單上的改動檔照鄰居", _ARCH_HELPER not in tg(arch) and _ARCH_HELPER in (arch.get("files") or {}), str(arch)[:500])
+    r, data = _arch_lens(d, f"{base}..HEAD", "--arch-target")
+    t = data.get("arch_text", "")
+    check("A: 派工鏡頭同樣附畢業的檔、不附清單上的檔", _ARCH_OLD in t and _ARCH_HELPER not in t, t[:600])
+    def decl_changed():
+        w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER, _ARCH_CAFE_NFD))
+        w(".lumos/config.json", _arch_cfg(("app/Domain/Gone/**", "none"), ("app/Domain/**", _ARCH_NODE)))
+    arch = branch("b", decl_changed, e2e=True)
+    check("B: 宣告有改 → 不畢業", _ARCH_OLD not in tg(arch), str(arch)[:500])
+    r, data = _arch_lens(d, f"{base}..HEAD", "--arch-target")
+    check("B: 派工鏡頭也不畢業", _ARCH_OLD not in data.get("arch_text", ""), data.get("arch_text", "")[:400])
+    arch = branch("c", lambda: w(".lumos/arch-legacy.json", '{"files": [broken'))
+    check("C: 頂端清單讀不懂 → 不畢業,起點清單照用", not ({_ARCH_OLD, _ARCH_HELPER} & tg(arch)), str(arch)[:500])
+    arch = branch("dd", lambda: g("rm", "-q", ".lumos/arch-legacy.json"))
+    check("D: 頂端整份刪掉 → 清單上改動的檔全畢業", {_ARCH_OLD, _ARCH_HELPER} <= tg(arch), str(arch)[:500])
+    def add_line():
+        w("app/Domain/Payment/New.py", "def new():\n    return 1\n")
+        w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER, _ARCH_CAFE_NFD, "app/Domain/Payment/New.py"))
+    arch = branch("e", add_line)
+    check("E: 頂端多出的行不讓新檔變舊檔", "app/Domain/Payment/New.py" in tg(arch), str(arch)[:500])
+    check("E: 頂端多出行不取消別支的畢業", _ARCH_OLD in tg(arch), str(arch)[:500])
+    arch = branch("g", lambda: g("mv", _ARCH_OLD, "app/Domain/Order/OrderNew.py"), touch=())
+    check("G: 改名的新路徑不在起點清單 → 照目標", "app/Domain/Order/OrderNew.py" in tg(arch), str(arch)[:500])
+    arch = branch("j1", lambda: None, touch=(_ARCH_CAFE,))
+    check("J: 清單寫 NFD、改動檔是 NFC → 照樣認得是舊檔", _ARCH_CAFE not in tg(arch), str(arch)[:500])
+    arch = branch("j2", lambda: w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_OLD, _ARCH_HELPER)), touch=(_ARCH_CAFE,))
+    check("J: 從清單刪掉 NFD 那行 → 畢業", _ARCH_CAFE in tg(arch), str(arch)[:500])
+    d, g, w, c, base = _arch_grad_repo(None)
+    g("checkout", "-q", "-b", "f", base)
+    w(".lumos/arch-legacy.json", both)
+    c1 = c("branch adds legacy list")
+    w(_ARCH_OLD, "def changed():\n    return 2\n")
+    w(_ARCH_HELPER, "def changed():\n    return 2\n")
+    c2 = c("change both")
+    arch = inproc(d, base, c2)
+    check("F: 起點沒有清單 → 分支自己加的清單不起作用", {_ARCH_OLD, _ARCH_HELPER} <= tg(arch), str(arch)[:500])
+    check("I 前置:範圍起點是分支自己的提交、那一版有清單", "OrderOld" in g("show", f"{c1}:.lumos/arch-legacy.json").stdout)
+    arch = _arch_pitfalls(d, f"{c1}..{c2}")
+    check("I: 修補輪範圍起點有清單也不讀它,照分叉點版判 → 照目標", {_ARCH_OLD, _ARCH_HELPER} <= tg(arch), str(arch)[:500])
+    r, data = _arch_lens(d, f"{c1}..{c2}", "--arch-target")
+    t = data.get("arch_text", "")
+    check("I: 派工鏡頭同樣照分叉點版判", _ARCH_OLD in t and _ARCH_HELPER in t, f"rc={r.returncode} {t[:500]}")
+    d, g, w, c, base = _arch_grad_repo('{"files": "not-a-list"}')
+    w(_ARCH_OLD, "def changed():\n    return 2\n")
+    w(_ARCH_HELPER, "def changed():\n    return 2\n")
+    arch = inproc(d, base, c("h"))
+    check("H: 起點清單形狀不對 → 清單不起作用", {_ARCH_OLD, _ARCH_HELPER} <= tg(arch), str(arch)[:500])
+    w(".lumos/arch-legacy.json", '{"files": ["app/Domain/Order/OrderOld.py", 1]}')
+    mixed = c("mixed element")
+    check("H2: 清單混了不是字串的元素 → 讀不懂、不丟例外(代碼審 r2 邊界席:拿掉元素檢查會讓推送前分級崩潰)",
+          m._arch_legacy_at(d, mixed) == (set(), "unreadable"), str(m._arch_legacy_at(d, mixed)))
+    print("  ✓ t_arch_target_graduate_same_branch")
+
+
+def t_arch_target_graduate_check_note():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S6] code-loop check:清單少了行印「比起點少了 N 行,其中 M 支這次有改動」、不印下次推送才生效;
+    多了行印「比起點多了 N 行」;宣告同時有改照印「下次推送才生效」、不印畢業行;沒有任何宣告時兩行都不印。
+    翻紅釘:拿掉宣告相同的條件 → B 翻紅;M 改成 N → A2 翻紅;不看有沒有宣告 → K 翻紅。"""
+    d, g, w, c, base = _arch_grad_repo(_arch_legacy(_ARCH_OLD, _ARCH_HELPER))
+    def mk(name, mutate, repo=None):
+        dd, gg, ww, cc, bb = repo or (d, g, w, c, base)
+        gg("checkout", "-q", "-b", name, bb)
+        ww(_ARCH_OLD, "def order_old():\n    return 2\n")
+        mutate(ww)
+        sha = cc(name)
+        r = run(dd, "code-loop", "check", "--diff", f"{bb}..{sha}", "--at-sha", sha, "--branch", name, "--repo", str(dd))
+        return r.stdout + r.stderr
+    out = mk("a", lambda w: w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER)))
+    check("A: 印少了 1 行、其中 1 支有改動已照目標審", "舊檔清單比起點少了 1 行,其中 1 支這次有改動、已照目標審" in out, out[-800:])
+    check("A: 不印下次推送才生效", "下次推送才生效" not in out, out[-800:])
+    out = mk("a2", lambda w: w(".lumos/arch-legacy.json", _arch_legacy()))
+    nolist = _arch_grad_repo(None)
+    out_l = mk("l", lambda w: w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER)), repo=nolist)
+    check("L: 起點沒有清單、分支新增清單 → 印多了 1 行(代碼審 r2:說明行要讀頂端版清單)", "舊檔清單比起點多了 1 行" in out_l, out_l[-800:])
+    check("A2: 少了 2 行、只有 1 支這次有改動", "舊檔清單比起點少了 2 行,其中 1 支這次有改動、已照目標審" in out, out[-800:])
+    out = mk("e", lambda w: w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_OLD, _ARCH_HELPER, "app/Domain/Payment/New.py")))
+    check("E: 印多了 1 行", "舊檔清單比起點多了 1 行" in out, out[-800:])
+    def both(w):
+        w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER))
+        w(".lumos/config.json", _arch_cfg(("app/Domain/Gone/**", "none"), ("app/Domain/**", _ARCH_NODE)))
+    out = mk("b", both)
+    check("B: 宣告有改 → 印下次推送才生效", "下次推送才生效" in out, out[-800:])
+    check("B: 宣告有改 → 不印畢業行", "已照目標審" not in out, out[-800:])
+    nodecl = _arch_target_repo("{}", _arch_node_text(), {".lumos/arch-legacy.json": _arch_legacy(_ARCH_OLD, _ARCH_HELPER)})
+    out = mk("k", lambda w: w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_HELPER, "app/x/New.py")), repo=nodecl)
+    check("K: 沒有任何宣告 → 不印清單說明行", "舊檔清單" not in out, out[-800:])
+    print("  ✓ t_arch_target_graduate_check_note")
+
+
+def t_arch_target_legacy_doctor_lines():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S9] doctor:有舊檔清單只多一行摘要(幾支、幾支已不存在、幾支沒被判給目標節點,
+    被 none 命中的也算沒被判給);讀不懂改印讀不懂、git 失敗另印讀不到;列檔失敗時不把整份清單報成已不存在;
+    回傳碼跟同一個 repo 加清單之前一樣。翻紅釘:兩個計數對調或漏算 none → 數字翻紅;git 失敗說成讀不懂 → 讀不到那條翻紅。"""
+    cfg = _arch_cfg(("app/Domain/Legacy/**", "none"), ("app/Domain/**", _ARCH_NODE))
+    d, g, w, c, base = _arch_grad_repo(None, cfg)
+    r0 = run(d / "docs" / "t-knowledge", "doctor", "--verbose")
+    check("沒有清單不印", "舊檔清單" not in r0.stdout, r0.stdout[-400:])
+    w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_OLD, "app/Domain/Order/Gone1.py", "app/Domain/Order/Gone2.py",
+                                              "app/Domain/Order/Gone3.py", "app/Billing/Invoice.py", "app/Domain/Legacy/Other.py"))
+    c("add legacy list")
+    r = run(d / "docs" / "t-knowledge", "doctor", "--verbose")
+    hits = [ln for ln in r.stdout.splitlines() if "舊檔清單" in ln]
+    check("摘要只有一行", len(hits) == 1, "\n".join(hits) or r.stdout[-800:])
+    check("摘要數字對:6 支、已不存在 3、沒被判給目標節點 2(範圍外一支、none 一支)",
+          bool(hits) and "6 支" in hits[0] and "已不存在 3" in hits[0] and "沒被判給目標節點 2" in hits[0], "\n".join(hits))
+    check("回傳碼跟同一個 repo 加清單之前一樣", r.returncode == r0.returncode, f"{r.returncode} vs {r0.returncode}")
+    w(".lumos/arch-legacy.json", '{"files": [broken')
+    c("break list")
+    r1 = run(d / "docs" / "t-knowledge", "doctor", "--verbose")
+    check("讀不懂印一行讀不懂", any("舊檔清單" in ln and "讀不懂" in ln for ln in r1.stdout.splitlines()), r1.stdout[-800:])
+    d2, g2, w2, c2, base2 = _arch_target_repo("{}", _arch_node_text(), {".lumos/arch-legacy.json": _arch_legacy(_ARCH_OLD)})
+    r2 = run(d2 / "docs" / "t-knowledge", "doctor", "--verbose")
+    check("沒有宣告也印清單摘要(全部沒被判給目標節點)",
+          any("舊檔清單 1 支" in ln and "沒被判給目標節點 1" in ln for ln in r2.stdout.splitlines()), r2.stdout[-800:])
+    from unittest.mock import patch
+    m = _load_lumos_module()
+    rules = [("app/Domain/**", _ARCH_NODE)]
+    w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_OLD, "app/Domain/Order/Gone1.py"))
+    c("fix list")
+    listing, problems = m._arch_legacy_doctor_lines(d, rules, None)
+    check("列檔失敗 → 已不存在寫算不出,不報成整份", bool(listing) and "已不存在 算不出" in listing[0] and "已不存在 2" not in listing[0], str(listing))
+    w(".lumos/arch-legacy.json", _arch_legacy(_ARCH_CAFE))
+    c("nfc list")
+    listing, problems = m._arch_legacy_doctor_lines(d, rules, [_ARCH_CAFE_NFD])
+    check("git 列出 NFD、清單寫 NFC → 認得是同一支、不算已不存在", bool(listing) and "已不存在 0" in listing[0], str(listing))
+    with patch.object(m, "_lumos_config_at_ref", lambda *a, **k: (None, "git-failed")):
+        listing, problems = m._arch_legacy_doctor_lines(d, rules, [])
+    check("git 失敗 → 印讀不到、不說讀不懂", bool(problems) and "讀不到" in problems[0] and "讀不懂" not in problems[0], str(problems))
+    print("  ✓ t_arch_target_legacy_doctor_lines")
+
+
+def t_arch_target_spec_lens_reads_legacy():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S11] 設計審派工鏡頭:計劃提到的檔在目前提交的舊檔清單上 → 照鄰居、不列進目標段。
+    翻紅釘:設計審路不讀清單 → OrderOld 出現在目標段。"""
+    d, g, w, c, base = _arch_grad_repo(_arch_legacy(_ARCH_OLD))
+    w("docs/t-knowledge/Projects/新模組_計劃.md", "---\ntype: project\nstatus: doing\n---\n# 新模組\n\n要改 `app/Domain/Order/OrderOld.py`,新增 `app/Domain/Payment/Payment.py`。\n")
+    c("plan")
+    r, data = _arch_lens(d, "--spec", "docs/t-knowledge/Projects/新模組_計劃.md", "--arch-target")
+    t = data.get("arch_text", "")
+    check("新檔列進目標段", "app/Domain/Payment/Payment.py" in t, f"rc={r.returncode} {str(data)[:400]}")
+    check("清單上的舊檔不列進目標段", _ARCH_OLD not in t, t[:600])
+    print("  ✓ t_arch_target_spec_lens_reads_legacy")
+
+
 def t_arch_target_control_chars_never_reach_prompt():
     """[代碼審 r1 COR-2] 分支可控的檔名含換行時不准進目標段(會在框外另起一行假指令);宣告的 path/node 有控制字元算壞宣告。
     翻紅釘:拿掉控制字元過濾 → ①翻紅。"""
