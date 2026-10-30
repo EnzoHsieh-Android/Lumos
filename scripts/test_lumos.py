@@ -82286,7 +82286,7 @@ for part in filter(None, os.environ.get('FAKE_RCS', '').split(',')):
     k, _, v = part.partition(':')
     rcs[k] = int(v)
 if c == 'python-path':
-    print(sys.executable); sys.exit(0)
+    print(os.environ.get('FAKE_PY_PATH') or sys.executable); sys.exit(0)
 key = c + ('-help' if '--help' in a else '')
 if c and key == os.environ.get('FAKE_SIG_CMD'):
     os.kill(os.getpid(), signal.SIGTERM)
@@ -82297,6 +82297,8 @@ if c and c == os.environ.get('FAKE_RM_TMP_CMD'):
     for p in glob.glob(os.path.join(os.environ.get('TMPDIR', '/nonexistent'), 'lumos-prepush-*')):
         if os.path.isdir(p):
             shutil.rmtree(p, ignore_errors=True)
+if c == 'push-range' and os.environ.get('FAKE_PUSH_RANGE'):
+    print(os.environ['FAKE_PUSH_RANGE']); sys.exit(0)
 if c == 'code-loop' and '--help' in a:
     print('usage: lumos code-loop check [--json] [--diff A..B]' + (' [--keep-going]' if new else ''))
     sys.exit(0)
@@ -82320,7 +82322,7 @@ if c in rcs:
 if c == 'impact' and '--json' in a:
     print(json.dumps({'range': 'x', 'files': [], 'results': [], 'sync': {'touched_nodes': [], 'missing': []}, 'meta': {}}))
 elif c == 'pitfalls' and '--json' in a:
-    print(json.dumps({'tier': 'standard'}))
+    print(os.environ.get('FAKE_PITFALLS_JSON') or json.dumps({'tier': 'standard'}))
 sys.exit(0)
 '''
 
@@ -82415,14 +82417,14 @@ def _ppc_sigint_default():
     signal.signal(signal.SIGINT, signal.SIG_DFL)
 
 
-def _ppc_run(root, stdin, hook=None, **env):
-    """用 /bin/bash(macOS 上是 3.2)真的跑推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。"""
+def _ppc_run(root, stdin, hook=None, hook_argv=(), **env):
+    """用 /bin/bash(macOS 上是 3.2)真的跑推送前掛鉤 → (rc, 假 lumos 的呼叫紀錄, 輸出)。hook_argv=git 傳給掛鉤的參數(遠端名、網址)。"""
     import subprocess as sp
     hook = hook or Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push"
     _ppc_set_new(root, env.get("FAKE_NEW") == "1")
     log = root / "argv.log"
     log.unlink(missing_ok=True)
-    r = sp.run(["/bin/bash", str(hook)], cwd=str(root), input=stdin, capture_output=True, text=True,
+    r = sp.run(["/bin/bash", str(hook), *hook_argv], cwd=str(root), input=stdin, capture_output=True, text=True,
                env=_ppc_env(root, env), timeout=300, preexec_fn=_ppc_sigint_default)
     lines = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
     return r.returncode, lines, r.stdout + r.stderr
@@ -82948,6 +82950,185 @@ def t_prepush_test_logs_inside_tmp():
                   kept is not None and left() == [kept.name] and kept.parent == tmp, f"{left()} {kept}")
     finally:
         _ppc_cleanup(root)
+
+
+def _ppc_last_line(text):
+    """輸出裡最後一個非空行(去頭尾空白);全空回空字串。"""
+    rows = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    return rows[-1] if rows else ""
+
+
+_PPC_NEXT_DROP = ("--repo", "--from-json", "--touched-from")   # 只是工作目錄與這次推送的暫存檔,照抄重跑時不存在,重查指令刻意不帶
+
+
+def _ppc_call_tokens(tokens):
+    """呼叫的參數去掉 _PPC_NEXT_DROP 與它的值、也去掉空字串(假 lumos 用空白接起來記,空參數記不下來)。"""
+    out, skip = [], False
+    for x in tokens:
+        if skip:
+            skip = False
+        elif x in _PPC_NEXT_DROP:
+            skip = True
+        elif x:
+            out.append(x)
+    return out
+
+
+def _ppc_next_matches_call(last, lines):
+    """最後一行的 lumos 指令,是不是假 lumos 收到的某一筆真實呼叫 → (argv, 對到的呼叫或 None)。"""
+    import shlex
+    argv = shlex.split(last.split(":", 1)[-1])[1:]
+    want = _ppc_call_tokens(argv)
+    return argv, next((ln for ln in lines if _ppc_call_tokens(ln.split(" ")) == want), None)
+
+
+def t_prepush_next_step_is_the_call_the_gate_ran():
+    """真跑掛鉤、每道閘各擋一次:掛鉤輸出的最後一行,要跟那道閘剛才實際收到的呼叫一字不差(只差 --repo 與暫存檔旗標)。
+    判準是假 lumos 記下的真實呼叫,不是掛鉤自己的字串,所以各閘範圍不同的形狀都驗得到:①一般推送、一次推兩個 ref 指第一個;
+    ②新分支首推(三套範圍互不相同);③帶 shell 特殊字元與中文的分支名、遠端名,整行貼進 shell 參數不走樣;④推標籤的安全證據;
+    ⑤代碼審沒給 LUMOS-BLOCKS 行;⑥舊版 lumos 走簡版彙總也有下一步;⑦每條印出來的 lumos 指令交給真的 lumos 解析一次。
+    翻紅釘:任一道改用共用範圍或別道的範圍 → ②紅;拿掉分支名、ref 名或遠端名的引號 → ③紅;推標籤那道漏 --security-only → ④紅;
+    簡版路徑不印 → ⑥紅;某閘的旗標打錯 → ⑦紅。真的 git push 在掛鉤之後還會印自己的 failed to push,那行這裡驗不到也改不了。"""
+    print("t_prepush_next_step_is_the_call_the_gate_ran")
+    _need_src("scripts/hooks/pre-push")
+    import shlex
+    import subprocess as sp
+    root, base, head = _ppc_repo()
+    gates = (*_PPC_GATES, ("room-guard", {"FAKE_RCS": "room-guard:1"}))
+    printed = {}
+    pbin = root.with_name(root.name + "-tmp") / "bin"
+    pbin.mkdir(parents=True)
+    got = pbin / "argv.txt"
+    (pbin / "lumos").write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {shlex.quote(str(got))}\n', encoding="utf-8")
+    (pbin / "lumos").chmod(0o755)
+
+    def pasted(last):
+        """把最後一行冒號後整段貼進真的 shell 跑,回 lumos 收到的參數(Python 斷詞不會在分號斷開,要真的跑才驗得到引號)。"""
+        got.unlink(missing_ok=True)
+        sp.run(["/bin/bash", "-c", last.split(":", 1)[-1]], env={"PATH": f"{pbin}:/usr/bin:/bin"}, capture_output=True, text=True)
+        return got.read_text(encoding="utf-8").splitlines() if got.exists() else None
+
+    def expect(label, stdin, **env):
+        rc, lines, out = _ppc_run(root, stdin, FAKE_NEW="1", **env)
+        last = _ppc_last_line(out)
+        ok = rc == 1 and last.startswith("下一步:lumos ") and "--no-verify" not in last
+        argv, call = _ppc_next_matches_call(last, lines) if ok else ([], None)
+        check(f"{label}:最後一行就是閘收到的那筆呼叫", call is not None, f"{last}\n{lines}\n{out[-400:]}")
+        return last, argv
+    try:
+        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
+        bl = root / "governance" / "anchor-baseline.json"
+        for gate, env in gates:
+            if env is None:
+                bl.write_text("{}\n\n", encoding="utf-8")
+                rc, _lines, out = _ppc_run(root, stdin, FAKE_NEW="1")
+                _nh_git(root, "checkout", "--", "governance/anchor-baseline.json")
+                last = _ppc_last_line(out)
+                check("①anchor-baseline:最後一行是把簽名檔提交", rc == 1 and last.startswith("下一步:git add governance/anchor-baseline.json && git commit"), last)
+            else:
+                _last, printed[gate] = expect(f"①{gate}", stdin, **env)
+        rc, _lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_RCS="home:1,drift:1")
+        check("①兩道都擋 → 指第一筆", rc == 1 and "home check" in _ppc_last_line(out), _ppc_last_line(out))
+        last, argv = expect("①一次推兩個 ref", f"refs/heads/a {head} refs/heads/a {base}\nrefs/heads/b {head} refs/heads/b {base}\n", FAKE_RCS="code-loop:1")
+        check("①兩個 ref 都擋 → 指第一個", argv[argv.index("--branch") + 1] == "a", last)
+        _nh_git(root, "update-ref", "refs/remotes/Lumos/main", base)   # 遠端已知 base:home 的起點才不會退回空樹
+        zero = "0" * 40
+        first = f"refs/heads/feat {head} refs/heads/feat {zero}\n"
+        hrange, brange = f"{base}..{head}", f"{head}..{head}"   # push-range 的答案故意跟 home 那條不同,三套範圍才分得開
+        for gate in ("home", "note-shape", "spec-gate", "code-loop", "drift", "room-guard"):
+            last, argv = expect(f"②新分支首推 {gate}", first, FAKE_RCS=f"{gate}:1", FAKE_PUSH_RANGE=brange)
+            if gate in ("drift", "room-guard"):
+                check(f"②{gate} 原樣帶全零舊值與遠端 ref", f"{zero}..{head}" in argv and "refs/heads/feat" in argv, last)
+            else:
+                check(f"②{gate} 用自己那一套範圍", (hrange if gate in ("home", "note-shape") else brange) in argv, last)
+        oddref = "refs/heads/feat;'中x"
+        odd = f"{oddref} {head} {oddref} {base}\n"
+        for gate in ("code-loop", "drift"):
+            last, argv = expect(f"③分支名帶分號、單引號與中文 {gate}", odd, FAKE_RCS=f"{gate}:1")
+            check(f"③{gate}:中文照原樣印,整行貼進 shell 參數不走樣", "中x" in last and pasted(last) == argv, f"{last}\n{pasted(last)}")
+        remote = "https://example.test/r?a=1&b=2"
+        last, argv = expect("③遠端名是帶 & 的網址 drift", stdin, hook_argv=(remote,), FAKE_RCS="drift:1")
+        check("③遠端名整行貼進 shell 不走樣", remote in argv and pasted(last) == argv, f"{last}\n{pasted(last)}")
+        with (root / "scripts" / "lumos").open("a", encoding="utf-8") as f:
+            f.write('# 掛鉤讀檔認得的樣子:"--security-only"\n')
+        last, argv = expect("④推標籤的安全證據", f"refs/tags/v1 {head} refs/tags/v1 {zero}\n", FAKE_RCS="code-loop:1")
+        check("④指令是安全證據那一道", "--security-only" in argv and "--diff" not in argv, last)
+        expect("⑤代碼審沒給種類行", stdin, FAKE_RCS="code-loop:1", FAKE_CL_LINE="NONE")
+        rc, _lines, out = _ppc_run(root, stdin, FAKE_RCS="home:1")
+        check("⑥舊版 lumos:簡版彙總之後最後一行照樣是下一步", rc == 1 and "簡版彙總" in out and _ppc_last_line(out).startswith("下一步:lumos home check --diff "), out[-400:])
+        for gate, argv in printed.items():
+            # 不帶 --help:help 一讀到就結束,後面的旗標寫錯不會被抓到。指令在假 repo 裡可能回非零,這裡只看參數解析(訊息是 lumos 自己的中文版)
+            p = sp.run([sys.executable, GRAPHCTL, *[x for x in argv if x]], capture_output=True, text=True, cwd=str(root))
+            check(f"⑦{gate}:真的 lumos 認得這行指令", not any(x in p.stderr for x in ("這個指令", "不認得這幾個參數", "少了必須要給的", "這個值")), p.stderr[-300:])
+    finally:
+        _ppc_cleanup(root)
+
+
+def t_prepush_blocked_last_line_is_next_step():
+    """全套測試紅與自主迴圈那支紅(這兩條路不經彙總)→ 最後一行是重跑指令,不是 git push --no-verify。
+    純文件推送時自主迴圈只跑 -k real_claude_md,重跑指令要照實帶上;直譯器路徑有空白時照抄不會斷。
+    翻紅釘:全套紅的段落拿掉下一步 → 紅;自主迴圈那段拿掉 → 紅;漏實際的 -k → ②紅;直譯器不加引號 → ③紅。"""
+    print("t_prepush_blocked_last_line_is_next_step")
+    _need_src("scripts/hooks/pre-push")
+    import shlex
+    root, base, head = _ppc_repo()
+    try:
+        (root / "scripts" / "test_autonomous_loop.py").write_text(_PPC_AUTOLOOP, encoding="utf-8")
+        stdin = f"refs/heads/main {head} refs/heads/main {base}\n"
+        for label, env, want in (("全套測試", {"FAKE_SUITE_RED": "1"}, "scripts/test_lumos.py --ff -x"),
+                                 ("自主迴圈那支", {"FAKE_AUTOLOOP_RED": "1"}, "scripts/test_autonomous_loop.py")):
+            rc, _lines, out = _ppc_run(root, stdin, FAKE_NEW="1", **env)
+            last = _ppc_last_line(out)
+            check(f"{label}紅 → 最後一行是重跑指令", rc == 1 and last.startswith("下一步:") and want in last and "--no-verify" not in last, last)
+        rc, _lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_AUTOLOOP_RED="1", FAKE_PITFALLS_JSON='{"tier": "standard", "suite": "docs"}')
+        last = _ppc_last_line(out)
+        check("②純文件推送:重跑指令帶實際跑的 -k", rc == 1 and last.endswith("scripts/test_autonomous_loop.py -k real_claude_md"), last)
+        spaced = root.with_name(root.name + "-tmp") / "有 空白" / "python"
+        spaced.parent.mkdir(parents=True)
+        spaced.symlink_to(sys.executable)
+        for label, env in (("全套測試", {"FAKE_SUITE_RED": "1"}), ("自主迴圈那支", {"FAKE_AUTOLOOP_RED": "1"})):
+            rc, _lines, out = _ppc_run(root, stdin, FAKE_NEW="1", FAKE_PY_PATH=str(spaced), **env)
+            last = _ppc_last_line(out)
+            check(f"③{label}:直譯器路徑有空白,照抄不會斷", shlex.split(last.split(":", 1)[-1])[0] == str(spaced), last)
+    finally:
+        _ppc_cleanup(root)
+
+
+def t_superseded_contract_not_sent():
+    """標了 [status:superseded] 的合約行不再送出:派工鏡頭兩條路、規格閘的相依回歸、改檔推播的合約徽章都不算它;
+    還生效的行照舊,句子裡只是提到作廢字樣的也照舊。翻紅釘:_contract_key_matches 不濾 → ①②紅;_impact_contract 不濾 → ③紅。"""
+    print("t_superseded_contract_not_sent")
+    import types
+    m = _load_lumos_module()
+    live = "KEY:★INVARIANT★ 還生效 [test:t_a]"
+    prose = "KEY:★INVARIANT★ 別寫 status:superseded 這幾個字以外的作廢法 [test:t_b]"
+    text = "\n".join([
+        live, prose,
+        "KEY:★INVARIANT★ 舊的 [test:t_c] [status:superseded] [被取代:Systems/新]",
+        "KEY:★IRREVERSIBLE★ 舊的 [status:SUPERSEDED] [被取代:無 不用了]",
+        "KEY:★CHECKPOINT★ 舊的 [status:superseded] [被取代:無 不用了]",
+    ])
+    check("①掃描只留還生效的兩行", [s for s, _m in m._contract_key_matches(text)] == [live, prose], m._contract_key_matches(text))
+    check("①帶種類的回傳同樣濾", [k for _s, _m, k in m._contract_key_matches(text, with_kind=True)] == ["INVARIANT", "INVARIANT"])
+    check("②派工鏡頭印的行", m._lens_contract_lines(text) == [live, prose], m._lens_contract_lines(text))
+    check("②派工鏡頭分類用的列", [s for _k, s in m._lens_contract_rows(text)] == [live, prose])
+    check("②規格閘相依回歸的合約文字", len(m._contract_texts(text)) == 2 and all("舊的" not in x for x in m._contract_texts(text)))
+
+    def note_with(summary_text):
+        n = m.Note()
+        n.fields = {"type": "system", "status": "doing", "summary": summary_text}
+        return n
+    check("③只剩作廢的 INVARIANT → 沒有合約徽章", m._impact_contract(note_with("KEY:★INVARIANT★ x [status:superseded]"))[0] is None)
+    check("③作廢的 COMBO 不算", m._impact_contract(note_with("KEY:★INVARIANT★ ★COMBO★ x [status:superseded]"))[1] is False)
+    check("③只剩作廢的 IRREVERSIBLE → 沒有合約徽章", m._impact_contract(note_with("KEY:★IRREVERSIBLE★ x [status:superseded]"))[0] is None)
+    check("③還生效的 INVARIANT 不受影響", m._impact_contract(note_with("KEY:★INVARIANT★ x\nKEY:★IRREVERSIBLE★ y [status:superseded]"))[0] == "INVARIANT")
+
+    def door(summary_text):
+        plan = m.Note()
+        plan.fields = {"type": "project", "status": "doing"}
+        return m._door_linked_signals(types.SimpleNamespace(notes={"Systems/A.md": note_with(summary_text)}), plan, "看 [[Systems/A]]")
+    check("④計劃連到的節點只有作廢的 ★IRREVERSIBLE★ → 不算風險訊號", door("KEY:★IRREVERSIBLE★ x [status:superseded]") == [], door("KEY:★IRREVERSIBLE★ x [status:superseded]"))
+    check("④還生效的 ★IRREVERSIBLE★ 照算", [w for _n, w in door("KEY:★IRREVERSIBLE★ x")] == ["★IRREVERSIBLE★"], door("KEY:★IRREVERSIBLE★ x"))
 
 
 def t_prepush_summary_records_event():
@@ -91841,7 +92022,7 @@ def t_reread_block_hook_and_ci_wiring():
     repo = Path(GRAPHCTL).resolve().parent.parent
     hook = (repo / "scripts" / "hooks" / "pre-push").read_text(encoding="utf-8").replace("\\\n", " ")
     ci = (repo / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    calls = [ln for ln in hook.split("\n") if "note-audit reread-check" in ln and not ln.lstrip().startswith("#")]
+    calls = [ln for ln in hook.split("\n") if '"$GRAPHCTL" note-audit reread-check' in ln and not ln.lstrip().startswith("#")]
     check("①[S23]掛鉤的 reread-check 呼叫帶 --gate、標準錯誤不丟", len(calls) == 1 and "--gate" in calls[0] and "2>/dev/null" not in calls[0],
           str(calls))
     steps = _re.split(r"(?m)^      - name: ", ci)

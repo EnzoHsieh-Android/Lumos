@@ -98,16 +98,30 @@ pp_stop_if_signaled() {
 # ★擋下改成記下★(Projects/推送前一次列出全部擋下原因_計劃〈做法〉1):全套測試之前的 9 道閘擋下時不再 exit 1,改叫這一支、
 # 照原樣印完該道的說明後繼續下一道;全部跑完在判斷點統一 exit 1(承襲 pre-commit 的 Gate L 寫法)。
 # ★擋不擋只看記憶體裡的兩個純量★:先設旗標與筆數,才追加暫存檔;追加失敗(磁碟滿、暫存目錄被刪)不影響擋下,
-# 暫存檔只拿來印彙總。純量不用陣列:bash 3.2 搭 set -u 展開空陣列會出錯。$1=閘名 $2=ref 或空 $3=一句原因(寫死的,不放工具輸出)。
+# 暫存檔只拿來印彙總。純量不用陣列:bash 3.2 搭 set -u 展開空陣列會出錯。$1=閘名 $2=ref 或空 $3=一句原因(寫死的,不放工具輸出)
+# $4=重查指令:那道閘剛才實際跑的那一條(各閘的範圍不同,不能共用一個範圍;--repo 與只活在這次推送的暫存檔旗標不寫)。
 _PP_BLOCKED=0
 _PP_NBLK=0
+_PP_FIRST_NEXT=""   # 第一筆擋下那道閘的重查指令,全部閘判完印成掛鉤輸出的最後一行(之後 git 還會印自己的 failed to push 那行,那行改不了)
 pp_record_block() {
   _PP_BLOCKED=1
   _PP_NBLK=$((_PP_NBLK + 1))
+  [[ "$_PP_NBLK" -gt 1 ]] || _PP_FIRST_NEXT="${4:-}"
   local _g="${1//[$'\t\n']/ }" _r="${2//[$'\t\n']/ }" _w="${3//[$'\t\n']/ }"
   [[ -n "$_r" ]] || _r="-"   # 空欄寫 -:用 tab 當分隔讀回時,連續兩個 tab 會被合成一個(/bin/bash 3.2.57 實測)
   # 重導向包成一組:2>/dev/null 寫在 >> 後面時,開檔失敗的訊息在 stderr 被導走之前就印出來了(代碼審 r1 邊界席,/bin/bash 3.2 實測)
   { printf '%s\t%s\t%s\n' "$_g" "$_r" "$_w" >> "$_PP_TMP/blocks"; } 2>/dev/null || true
+}
+
+# 給人照抄的指令裡的一個參數:只含安全字元照原樣,其他整段包單引號。不用 printf %q:/bin/bash 3.2 在非 UTF-8 語系會把中文逐位元組跳脫成亂碼。
+pp_q() {
+  case "$1" in
+    "" | *[!A-Za-z0-9_./:@%+=,-]*)
+      local _s=${1//\'/\'\\\'\'}
+      printf "'%s'" "$_s"
+      ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
 # push-summary 回非零或不存在(舊版 lumos)時的簡版彙總:觀測失效不得改變擋下,這裡印完照樣 exit 1。
@@ -379,7 +393,7 @@ if [[ "$av_rc" -ne 0 ]]; then
     echo "  3. 真的要先推 → git push --no-verify(CI 之後會發現少了簽名紀錄)"
     echo ""
   } >&2
-  pp_record_block anchor "" "裁判檔(測試程式、掛鉤)跟登記過的版本不一樣,沒簽名"
+  pp_record_block anchor "" "裁判檔(測試程式、掛鉤)跟登記過的版本不一樣,沒簽名" "lumos anchor verify"
 fi
 
 # ★簽名檔要跟著推★(2026-09-06 實際被 CI 咬到):上面那道拿的是「工作目錄現在的樣子」,
@@ -397,7 +411,7 @@ if [[ -f "$REPO_ROOT/$_BASELINE" ]] && ! git -C "$REPO_ROOT" diff --quiet -- "$_
     echo "       git add $_BASELINE && git commit -m \"gov: 錨點簽名\""
     echo ""
   } >&2
-  pp_record_block anchor-baseline "" "簽名檔改過了但沒提交"
+  pp_record_block anchor-baseline "" "簽名檔改過了但沒提交" "git add $_BASELINE && git commit -m \"gov: 錨點簽名\""
 fi
 
 # ══ 閘的順序(2026-09-06 全 repo 審視 #12 重排)══
@@ -437,7 +451,7 @@ if [[ "$dc_rc" -ne 0 ]]; then
     echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
     echo ""
   } >&2
-  pp_record_block doctor "" "知識庫健康檢查發現問題"
+  pp_record_block doctor "" "知識庫健康檢查發現問題" "lumos doctor --ci"
 fi
 
 
@@ -506,7 +520,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
         echo "逃生:照上面的指令替檔安家、或把說明改寫進對的那篇,再推;整個專案先改成只提醒 → .lumos/config.json 的 node_home.gate 設成 warn;緊急硬推 git push --no-verify(本機不留痕)。"
         echo ""
       } >&2
-      pp_record_block home "$_rref" "有程式檔沒有家,或說明寫進了別人的家"
+      pp_record_block home "$_rref" "有程式檔沒有家,或說明寫進了別人的家" "lumos home check --diff $_hrange"
     fi
     # 筆記形狀擋(Projects/筆記形狀擋_計劃):同一段範圍再查一次,接住 --no-verify 跳過提交前那道的;範圍算法同上(不用空樹兜底)
     ns_rc=0
@@ -518,7 +532,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
         echo "逃生:照上面改寫(行號改成函式名或測試名、或釘版本 路徑@<提交編號>:行號;現況描述刪掉或帶 [來源:…]);碰到的筆記有指不到的測試名 → 改成真名、測試已刪寫 [test-gone:名稱];誤擋就 LUMOS_SKIP_NOTE_SHAPE=1 單次跳過(會留帳);只關測試綁定那組 → .lumos/config.json 的 note_shape.test_refs 設成 warn;整個專案先只提醒 → note_shape.gate 設成 warn。"
         echo ""
       } >&2
-      pp_record_block note-shape "$_rref" "筆記形狀不合(行號引用、沒帶來源的現況描述、指不到的測試名)"
+      pp_record_block note-shape "$_rref" "筆記形狀不合(行號引用、沒帶來源的現況描述、指不到的測試名)" "lumos note-shape --diff $_hrange"
     fi
   fi
 
@@ -565,7 +579,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   if [[ "$sg_rc" -eq 1 ]]; then
     echo "" >&2
     echo "風險低計劃的條款測試沒全綠(或留痕過期),推送擋下:把測試做綠、或重跑 lumos spec-gate <計劃> 之後再推。" >&2
-    pp_record_block spec-gate "$_rref" "風險低計劃的條款測試沒全綠(或雙向門留痕過期)"
+    pp_record_block spec-gate "$_rref" "風險低計劃的條款測試沒全綠(或雙向門留痕過期)" "lumos spec-gate --push-check $_brange"
   fi
   if [[ "$_rref" == refs/heads/* ]]; then
     _rbranch="${_rref#refs/heads/}"
@@ -576,6 +590,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
     # pitfalls 沒吐 JSON(暫時失敗)就不帶 advisory:讓 check 自己算 tier 決定擋不擋(r1 外家 finder f4/否決 f3)
     _ba=(); [[ -n "$pf_json" && "$_tier_high" -eq 0 ]] && _ba=(--bound-tests-advisory)
     _kg=(); [[ "$_CL_KG" -eq 1 ]] && _kg=(--keep-going)
+    _cl_next="lumos code-loop check --diff $_brange --at-sha $_lsha --branch $(pp_q "$_rbranch")${_ba+ ${_ba[*]}}${_kg+ ${_kg[*]}}"
     _cl_out="$("$PY" "$GRAPHCTL" code-loop check --diff "$_brange" --at-sha "$_lsha" --branch "$_rbranch" \
       --repo "$REPO_ROOT" ${_fj+"${_fj[@]}"} ${_ba+"${_ba[@]}"} ${_kg+"${_kg[@]}"} 2>&1)" || cl_rc=$?
     pp_stop_if_signaled "$cl_rc" "code-loop check"
@@ -612,11 +627,11 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
         for _k in ${_cl_ks+"${_cl_ks[@]}"}; do
           _k="${_k// /}"
           [[ -n "$_k" ]] || continue
-          pp_record_block code-loop "$_rref" "$(pp_cl_reason "$_k")"
+          pp_record_block code-loop "$_rref" "$(pp_cl_reason "$_k")" "$_cl_next"
           _cl_n=$((_cl_n + 1))
         done
       fi
-      [[ "$_cl_n" -gt 0 ]] || pp_record_block code-loop "$_rref" "$(pp_cl_reason "")"
+      [[ "$_cl_n" -gt 0 ]] || pp_record_block code-loop "$_rref" "$(pp_cl_reason "")" "$_cl_next"
     else
       # rc=0(已收斂/已表態/skip):check 的提醒行(低風險合約測試紅、設定檔警告、表態閘小結)原樣給人看;rc≠0/1(異常,128 以上除外):fail-open 放行
       [ -n "$_cl_out" ] && { printf '%s\n' "$_cl_out" | grep -E '提醒|受波及合約測試|表態閘|安全證據' >&2 || true; }
@@ -649,7 +664,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
           echo "逃生路:推的是 $_rref,安全證據那一道照樣判。重收證據;真要先放行由使用者在核可鏈簽例外或 gate_setting 降成只提醒(不准跳過檢查)。"
           echo ""
         } >&2
-        pp_record_block code-loop "$_rref" "$(pp_cl_reason security_evidence)"
+        pp_record_block code-loop "$_rref" "$(pp_cl_reason security_evidence)" "lumos code-loop check --security-only --at-sha $_lsha"
       else
         [ -n "$_sec_out" ] && { printf '%s\n' "$_sec_out" | grep -E '提醒|安全證據|沿用結果' >&2 || true; }
       fi
@@ -679,6 +694,8 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   # 回傳碼:1 → 擋;128 以上(被訊號殺掉,多半是 Ctrl-C)→ 整支掛鉤停下、不放行、不往下跑全套;
   # 其他非零(工具錯誤、git 太慢逾時、舊版工具沒有 drift 子命令)→ 講一句「這次沒檢查」再放行,
   # 跟每支檔有家、筆記形狀擋的「只認 rc1 擋」同一種處理(代碼審 r1 併發回滾席)。
+  # 下面三道原樣交的遠端名與遠端 ref,重查指令照實帶上;遠端名可能是網址、ref 名可能帶 shell 特殊字元,要引號
+  _push_args="--push-remote $(pp_q "$_PP_REMOTE") --pushed-ref $(pp_q "$_rref")"
   dr_rc=0
   "$PY" "$GRAPHCTL" drift check --diff "$_rsha..$_lsha" --push-remote "$_PP_REMOTE" --pushed-ref "$_rref" \
     --repo "$REPO_ROOT" || dr_rc=$?
@@ -689,7 +706,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       echo "逃生:照上面每一筆的 lumos drift fix 指令改掉、或 lumos drift ack 表態照留(兩種都要提交進去才算),再推;誤擋就 LUMOS_SKIP_DRIFT_CHECK=1 git push 單次略過(會留帳);整個專案先只提醒 → .lumos/config.json 的 drift_check.gate 設成 warn(舊句檢查沒明寫 drift_check.old_sentence 就跟著只提醒);上面是「擋下:舊句檢查」而專案明寫了 old_sentence=block 的話,要改的是 drift_check.old_sentence(設成 warn)。"
       echo ""
     } >&2
-    pp_record_block drift "$_rref" "圖譜裡有句子跟這次推送改過的狀態對不上(存量漂移)"
+    pp_record_block drift "$_rref" "圖譜裡有句子跟這次推送改過的狀態對不上(存量漂移)" "lumos drift check --diff $_rsha..$_lsha $_push_args"
   elif [[ "$dr_rc" -ne 0 ]]; then
     echo "漂移檢查沒能跑完(工具錯誤或 git 太慢),這次沒檢查;CI 會再檢查一次。(上面如果印了「擋下:」,指的是這道檢查自己沒跑成,推送沒有被擋。)" >&2
   fi
@@ -707,7 +724,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       echo "逃生:照上面每一條補(升級路徑、這一版的結構檔、升級測試、改到的 DAO 方法用真 Room 寫測試),再推;確定還沒發布的結構檔改寫或其他誤擋就 LUMOS_SKIP_ROOM_GUARD=1 git push 單次略過(會留帳);只鬆 DAO 那半 → .lumos/config.json 的 room_guard.dao 設成 warn;整道先只提醒 → room_guard.gate 設成 warn;純快取的資料庫列進 room_guard.allow_destructive。"
       echo ""
     } >&2
-    pp_record_block room-guard "$_rref" "Room 資料庫升級或 DAO 測試有缺口(Room 守衛)"
+    pp_record_block room-guard "$_rref" "Room 資料庫升級或 DAO 測試有缺口(Room 守衛)" "lumos room-guard --diff $_rsha..$_lsha $_push_args"
   elif [[ "$rg_rc" -ne 0 ]]; then
     echo "Room 守衛這次沒檢查(rc=$rg_rc),放行。" >&2
   fi
@@ -733,7 +750,7 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
       echo "逃生:照上面每一層的改法處理(派判定者記紀錄、改掉那句或 lumos drift ack --kind reread 表態,都要提交進去才算),再推;誤擋就 LUMOS_SKIP_REREAD_CHECK=1 git push 單次略過(會留帳);整個專案先只提醒 → .lumos/config.json 的 note_reread.gate 設成 warn(要提交進被推的提交才算;設定檔不在簿記清單,提交它會讓已過的代碼審留痕失效)。"
       echo ""
     } >&2
-    pp_record_block reread "$_rref" "改到的程式檔的家筆記沒對照過這一版(回頭重讀)"
+    pp_record_block reread "$_rref" "改到的程式檔的家筆記沒對照過這一版(回頭重讀)" "lumos note-audit reread-check --gate --diff $_rsha..$_lsha $_push_args"
   elif [[ "$rr_rc" -ne 0 ]]; then
     echo "回頭重讀檢查沒能跑完(rc=$rr_rc,工具錯誤或舊版工具不認得 --gate),這次沒檢查。(上面如果印了「擋下:」,指的是這道檢查自己沒跑成,推送沒有被擋。)" >&2
   fi
@@ -755,6 +772,7 @@ if [[ "$_PP_BLOCKED" -eq 1 ]]; then
   ps_rc=0
   "$PY" "$GRAPHCTL" push-summary --blocks-file "$_PP_TMP/blocks" --count "$_PP_NBLK" --refs "$_PP_NREFS" --repo "$REPO_ROOT" || ps_rc=$?
   [[ "$ps_rc" -eq 0 ]] || pp_plain_summary
+  [[ -z "$_PP_FIRST_NEXT" ]] || echo "下一步:$_PP_FIRST_NEXT" >&2
   exit 1
 fi
 
@@ -816,6 +834,8 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
       echo "兩條路選一條:"
       echo "  1. 修到全綠再推(正常做法)。"
       echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+      echo ""
+      echo "下一步:$(pp_q "$PY") scripts/test_autonomous_loop.py${_AUTOLOOP_ARGS+ ${_AUTOLOOP_ARGS[*]}}"
       echo ""
     } >&2
     exit 1
@@ -960,6 +980,8 @@ runpy.run_path(p[1], run_name="__main__")'
       echo "  1. 修到全綠再推。只重跑紅的那幾支:"
       echo "       $PY scripts/test_lumos.py --ff -x"
       echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+      echo ""
+      echo "下一步:$(pp_q "$PY") scripts/test_lumos.py --ff -x"
       echo ""
     } >&2
     exit 1
