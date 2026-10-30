@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-10-26
+updated: 2026-10-31
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 aliases:
@@ -49,6 +49,8 @@ summary: |-
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]測試指令用 {python} 佔位符,由 lumos 代入自己那支直譯器並依平台加引號;原本吃 PATH 上的 python3,3.14 只以 python3.14 存在的機器會把每一支綁定測試跑紅、被當成「證不出跑過」擋推送。三處代入點(guard kill、合約測試閘本體、過濾探針)都經同一支函式 [test:t_test_run_cmd_uses_running_python]
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]pre-push 有 scripts/lumos 卻找不到 Python 3.14 就擋下,不再像以前「找不到 python 就放行、找到 3.9 就拿 3.9 跑」;沒有 scripts/lumos 的 repo 照舊放行 [test:t_hooks_block_without_python314]
   WHY:pp_cl_reason 加第六種 android_e2e,逃生路文字補 Android 端到端驗收那條(跑驗收、提交紀錄、waive 放行、LUMOS_SKIP_ANDROID_E2E=1);ci.yml 的擋下說明不加這一種 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [因:CI 不跑這道,列進 ci.yml 是永遠不會出現的死條目;種類名帶數字,兩支守衛測試抽種類名的樣式改成收數字] [test:t_prepush_cl_reason_table_matches_lumos] [test:t_prepush_cl_reason_sentences_match_plan]
+  WHY:[2026-10-30 Enzo 裁]推送被擋時掛鉤輸出的最後一行改成第一筆擋下那道閘實際跑的指令(`下一步:…`),全套測試紅與自主迴圈紅兩條不經彙總的路也各補一行重跑指令;重查會印該道修法,所以不把修法再抄一份;指令由各閘交給 `pp_record_block`,掛鉤自己印、不經 lumos,所以配舊版 lumos 走簡版彙總時也有 [出處:2026-10-30 研究報告現況核對抽 5 道閘] [因:原本最後一行是散文或 git push --no-verify,而受控實驗顯示訊息指名下一個做得到的呼叫才恢復得好(2609.35381 v2,OpenAI 模型與無終端情境,套到 Claude 是推論)] [不選:lumos 依閘名查表再填一個共用範圍(各閘範圍不同,新分支首推與推標籤會重查到別的東西,2026-10-30 代碼審抓到);只調換各閘順序(全套前的閘最後印的是彙總,換了也看不到);印預演指令(預演沒落地)] [test:t_prepush_next_step_is_the_call_the_gate_ran] [test:t_prepush_blocked_last_line_is_next_step]
+  PITFALL:被擋時「最後一行是重查指令」只到掛鉤輸出為止,真的 git push 之後還會印自己的 error: failed to push some refs 那行 [出處:2026-10-30 代碼審實測] [根因:那行由 git 在掛鉤回非零後印,掛鉤管不到] [防回歸:量代理被擋後的行為時,要把這行算進它讀到的最後一句]
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
