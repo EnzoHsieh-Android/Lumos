@@ -11,7 +11,9 @@ subprocess 呼叫 `lumos impact --file <path> --repo <repo> --json` → 依 rc �
 rc 協定:
   rc 0   = 成功 (影響集有/無皆算,json 照出)
   rc 3   = vault 找不到 → 印一行 debug,不注入,放行
-  其他非 0 = 內部錯 → fail-open 純靜默放行
+  其他非 0 = 內部錯 → fail-open 放行
+沒跑成(找不到 lumos、逾時、啟動失敗、非 0、輸出讀不懂、repo 有圖譜卻回 rc 3)時:
+  圖譜專案裡附一段固定說明(同會談同原因只講一次)並記事件;不是圖譜專案照舊靜默。
 
 additionalContext 注入 → Task 11 實作。
 """
@@ -776,10 +778,87 @@ def _sibling_worktree_root(file_path: str, repo: str) -> str | None:
     return str(root) if mine is not None and mine == theirs else None
 
 
+# ── ★沒跑成要出聲★(Projects/改檔前推播失敗出聲_計劃)──────────────────────────
+# 原本六條失敗路徑都靜默放行:AI 分不出「這支檔沒有相關筆記」和「推播壞了」,
+# hook 事件帳也把它們記成 ok(吞掉失敗後照樣正常結束)。形狀照抄派工鏡頭 hook:
+# 固定字彙原因、不轉 lumos 的錯誤原文;帶原因那句進注入框,工具寫死的指示放框外。
+# ★只在圖譜專案裡講★:hook 全域安裝,沒圖譜的 repo 每次改檔都會跑,那裡「找不到圖譜」是常態。
+IMPACT_FAIL_REASONS = {
+    "no_lumos": "找不到可用的 lumos(沒裝,或執行檔權限不安全被拒用)",
+    "timeout": "查詢逾時",
+    "spawn": "lumos 啟動失敗",
+    "rc": "lumos 查詢出錯(結束碼 {rc})",
+    "bad_output": "lumos 的輸出讀不懂",
+    "no_vault": "lumos 說找不到圖譜,但這個專案底下有圖譜目錄",
+}
+FAIL_NOTE = "LUMOS-IMPACT:改檔前的筆記推播這次沒跑成({why});沒看到推播不代表沒有相關筆記。"
+FAIL_TAIL = "要查就自己跑 lumos impact --file <檔>。這個會談之後同一個原因不再重複提醒。"
+
+
+def _has_graph(repo) -> bool:
+    """repo 底下找不找得到圖譜。★規則是 lumos `_vault_in` 的複本★(hook import 不到 lumos),
+    由 t_impact_hook_graph_check_agrees 逐佈局對照;讀不到目錄一律當不是。"""
+    try:
+        d = Path(repo)
+        docs = d / "docs"
+        if docs.is_dir():
+            if any(sub.is_dir() and sub.name.endswith("-knowledge") for sub in docs.iterdir()):
+                return True
+            if (docs / "knowledge").is_dir():
+                return True
+        return (d / "MOC").is_dir() and ((d / "Verification").is_dir() or (d / "Systems").is_dir())
+    except OSError:
+        return False
+
+
+def _mark_event(kind, note) -> None:
+    """吞掉失敗的地方自己記一筆掛鉤事件(_hookevent.mark),不然共用的 guard 會記成 ok。
+    記不到不影響本業;★寬接 Exception 是刻意的★(同派工鏡頭 hook 的同名函式)。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from _hookevent import mark
+        mark(kind, note)
+    except Exception:
+        return
+
+
+def _voice_once(session_id: str, code: str) -> bool:
+    """同會談同原因只講一次:記號放冷卻窗同一個暫存目錄(跟著 24 小時惰性清理走)。
+    沒有會談編號、或記號寫不進去時寧可多講一次。"""
+    if not session_id:
+        return True
+    marker = Path(tempfile.gettempdir()) / f"lumos-impact-{session_id}" / f"voice-{code}"
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=False)   # 原子的「不存在才建」,已存在丟 FileExistsError
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return True
+
+
+def _fail_notes(fails: list, session_id: str) -> list[str]:
+    """這次所有沒跑成的(代碼, 結束碼)→ 記一筆事件 + 每個還沒講過的原因一段說明。"""
+    codes = [c for c, _rc in fails]
+    _mark_event("timeout" if all(c == "timeout" for c in codes) else "error",
+                "impact 沒跑成:" + ",".join(dict.fromkeys(codes)))
+    notes, seen = [], set()
+    for code, rc in fails:
+        if code in seen:
+            continue
+        seen.add(code)
+        if _voice_once(session_id, code):
+            why = IMPACT_FAIL_REASONS[code].format(rc=int(rc) if isinstance(rc, int) else "?")
+            notes.append(_frame_injected(FAIL_NOTE.format(why=why)) + "\n" + FAIL_TAIL)
+    return notes
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
     except json.JSONDecodeError:
+        _mark_event("error", "impact hook 收到的輸入讀不懂")   # 判不出是不是圖譜專案,只記不講
         return 0  # fail-open
 
     # 只處理 Edit/Write/MultiEdit
@@ -795,13 +874,34 @@ def main() -> int:
         return 0  # 放行:非 code 或排除路徑
     if not repo:
         return 0  # fail-open
+    session_id = payload.get("session_id", "")
     lumos = _find_lumos_script()
     if lumos is None:
-        return 0  # lumos 不在 PATH/repo → fail-open
+        # lumos 不在 PATH/repo 或不可信 → fail-open;圖譜專案裡講一聲
+        if _has_graph(_sibling_worktree_root(paths[0], repo) or repo):
+            _emit_chunks(_fail_notes([("no_lumos", None)], session_id))
+        return 0
+    chunks, fails, skipped = _query_files(payload, paths, overflow, repo, session_id, lumos)
+    if skipped:
+        # ★檔名也是 repo 控制的自由文字★(2026-09-07 外家審查席):它接在 builder 產物之外,
+        # 所以要自己消毒 + 自己框,不然這一段等於框外的裸文字。
+        chunks.append(_frame_injected(
+            "(多檔 patch 只算了前 " + str(len(paths) - len([s for s in skipped if s in paths]))
+            + " 檔,其餘只列名:" + ",".join(_plain_label(x, cap=80) for x in skipped[:10]) + ")"))
+    if fails:
+        chunks.extend(_fail_notes(fails, session_id))
+    if not chunks or all(c.startswith("(多檔") for c in chunks):
+        return 0
+    _emit_chunks(chunks)
+    return 0
+
+
+def _query_files(payload: dict, paths: list[str], overflow: list[str], repo: str, session_id: str, lumos: str):
+    """逐檔叫 lumos impact(從 main 搬出來,行為不變):回(可注入的段落, 圖譜專案裡沒跑成的(代碼, 結束碼), 只列名的檔)。"""
     # 多檔(Codex apply_patch):逐檔算、合併輸出;總預算 APPLY_PATCH_BUDGET_SEC,超預算後面的只列名
-    session_id = payload.get("session_id", "")
     t0 = time.monotonic()
     chunks: list[str] = []
+    fails: list = []
     skipped: list[str] = list(overflow)
     for i, fp in enumerate(paths):
         left = APPLY_PATCH_BUDGET_SEC - (time.monotonic() - t0)
@@ -820,28 +920,89 @@ def main() -> int:
         _cap = _inner_budget(elapsed=(time.monotonic() - t0), default=30)
         tmo = _cap if len(paths) == 1 else min(_cap, max(3.0, left))
         # worktree 裡的檔要拿那個 worktree 當 repo,否則 0 筆且靜默(見 _sibling_worktree_root)
-        ctx = _impact_for_file(payload, _sibling_worktree_root(fp, repo) or repo, fp, session_id, lumos, timeout=tmo)
+        frepo = _sibling_worktree_root(fp, repo) or repo
+        f_fails: list = []
+        ctx = _impact_for_file(payload, frepo, fp, session_id, lumos, timeout=tmo, fails=f_fails)
         if ctx:
             chunks.append(ctx)
-    if skipped:
-        # ★檔名也是 repo 控制的自由文字★(2026-09-07 外家審查席):它接在 builder 產物之外,
-        # 所以要自己消毒 + 自己框,不然這一段等於框外的裸文字。
-        chunks.append(_frame_injected(
-            "(多檔 patch 只算了前 " + str(len(paths) - len([s for s in skipped if s in paths]))
-            + " 檔,其餘只列名:" + ",".join(_plain_label(x, cap=80) for x in skipped[:10]) + ")"))
-    if not chunks or all(c.startswith("(多檔") for c in chunks):
-        return 0
+        if f_fails and _has_graph(frepo):
+            fails.extend(f_fails)
+    return chunks, fails, skipped
+
+
+def _emit_chunks(chunks: list[str]) -> None:
+    if not chunks:
+        return
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
-        # 每個 chunk 各自已經框過(builder 產物 + 上面那段自己框的),接起來就是多個框並排。
+        # 每個 chunk 各自已經框過(builder 產物、多檔列名、失敗說明各自框),接起來就是多個框並排。
         # 不在這裡再包一層——會變框中框,邊界反而更難讀。
         "additionalContext": "\n\n".join(chunks),   # framed-upstream
     }}, ensure_ascii=False))
-    return 0
 
 
-def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, lumos: str, timeout: float = 30.0) -> str | None:
-    """單檔:TTL 冷卻窗 → 叫 lumos impact → 回可注入的文字(None=不注入)。內容與舊 main 逐字等價,只是不直接 print。"""
+def _ttl_min(repo: str) -> int:
+    """冷卻窗分鐘數:.lumos/impact.json 的 ttl_min,讀不到或型別不對用預設 20(從 _impact_for_file 搬出來,行為不變)。"""
+    ttl_min = 20  # 預設
+    try:
+        impact_cfg_path = Path(repo) / ".lumos" / "impact.json"
+        if impact_cfg_path.is_file():
+            cfg = json.loads(impact_cfg_path.read_text(encoding="utf-8"))
+            ttl_raw = cfg.get("ttl_min", 20)
+            if isinstance(ttl_raw, (int, float)) and not isinstance(ttl_raw, bool):
+                ttl_min = max(1, int(ttl_raw))  # m-4: 截斷兜底,防 0.5 → 0 → TTL 恆觸發
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return ttl_min
+
+
+def _run_impact(cmd: list, stdin_payload: str, timeout: float, repo: str, fails: list) -> dict | None:
+    """叫 lumos impact 並照 rc 協定分類(從 _impact_for_file 搬出來,行為不變):成功回解析好的 JSON,
+    其他回 None,沒跑成時把(原因代碼, 結束碼)放進 fails。"""
+    try:
+        result = subprocess.run(
+            cmd,
+            input=stdin_payload,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+        fails.append(("timeout" if isinstance(e, subprocess.TimeoutExpired) else "spawn", None))
+        return None  # fail-open
+    rc = result.returncode
+    if rc == 3:
+        # vault 找不到 → 印一行 debug,不注入,放行
+        print(
+            f"[impact-hook] vault 未找到 (rc=3)。非圖譜專案或 --repo={repo} 路徑下無 docs/*-knowledge/。",
+            file=sys.stderr,
+        )
+        fails.append(("no_vault", None))   # 非圖譜專案的 rc3 是常態,main 會因為沒有圖譜目錄而不講
+        return None
+    if rc != 0:
+        fails.append(("rc", rc))   # 其他非 0 → fail-open;只帶整數,不轉錯誤原文
+        return None
+    # rc == 0: ranked schema {file, results, meta}
+    try:
+        return json.loads(result.stdout.strip().splitlines()[-1])
+    except (json.JSONDecodeError, ValueError, IndexError):
+        fails.append(("bad_output", None))
+        return None
+
+
+def _ranked_ctx(impact_data) -> str:
+    """可注入的文字;判空與 inject_ranked_context 同一條:results/stack_questions/lane 皆空 → 空字串(lane-only 也注入)。"""
+    if not impact_data:
+        return ""
+    has = impact_data.get("results") or _stack_section(impact_data) or impact_data.get("lane")
+    return build_ranked_context(impact_data) if has else ""
+
+
+def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, lumos: str, timeout: float = 30.0,
+                     fails: list | None = None) -> str | None:
+    """單檔:TTL 冷卻窗 → 叫 lumos impact → 回可注入的文字(None=不注入)。內容與舊 main 逐字等價,只是不直接 print。
+    沒跑成時把(原因代碼, 結束碼)放進 fails;是不是圖譜專案、要不要講由 main 判。"""
+    fails = fails if fails is not None else []
 
     # 絕對路徑:若 file_path 是相對路徑,補上 repo
     if not Path(file_path).is_absolute():
@@ -851,17 +1012,7 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
 
     # TTL 冷卻窗:讀 .lumos/impact.json 的 ttl_min(預設 20min)
     if session_id:
-        ttl_min = 20  # 預設
-        try:
-            impact_cfg_path = Path(repo) / ".lumos" / "impact.json"
-            if impact_cfg_path.is_file():
-                cfg = json.loads(impact_cfg_path.read_text(encoding="utf-8"))
-                ttl_raw = cfg.get("ttl_min", 20)
-                if isinstance(ttl_raw, (int, float)) and not isinstance(ttl_raw, bool):
-                    ttl_min = max(1, int(ttl_raw))  # m-4: 截斷兜底,防 0.5 → 0 → TTL 恆觸發
-        except (OSError, json.JSONDecodeError, ValueError):
-            pass
-
+        ttl_min = _ttl_min(repo)
         in_cooldown = not _ttl_should_inject(session_id, file_path_abs, ttl_sec=ttl_min * 60, mark=False)
         ttl_token = _ttl_mark(session_id, file_path_abs) if not in_cooldown else None   # 判定後立刻寫(窗口同舊版);沒注入再用 token 撤
     else:
@@ -878,50 +1029,12 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
            "--ranked", "--stdin-payload", "--json"]
     if in_cooldown:
         cmd.append("--incidents-only")
-    try:
-        result = subprocess.run(
-            cmd,
-            input=stdin_payload,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs, ttl_token)
-        return None  # fail-open
-
-    rc = result.returncode
-
-    if rc != 0 and session_id and not in_cooldown:
-        _ttl_unmark(session_id, file_path_abs, ttl_token)   # 沒注入不開冷卻窗
-    if rc == 3:
-        # vault 找不到 → 印一行 debug,不注入,放行
-        print(
-            f"[impact-hook] vault 未找到 (rc=3)。非圖譜專案或 --repo={repo} 路徑下無 docs/*-knowledge/。",
-            file=sys.stderr,
-        )
-        return None
-
-    if rc != 0:
-        # 其他非 0 → fail-open 純靜默
-        return None
-
-    # rc == 0: ranked schema {file, results, meta}
-    try:
-        impact_data = json.loads(result.stdout.strip().splitlines()[-1])
-    except (json.JSONDecodeError, ValueError, IndexError):
-        impact_data = None
-    if not impact_data:
-        if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs, ttl_token)
-        return None
-    # 判空與 inject_ranked_context 同一條:results/stack_questions/lane 皆空 → 不注入(lane-only 也注入)
-    has = impact_data.get("results") or _stack_section(impact_data) or impact_data.get("lane")
-    ctx = build_ranked_context(impact_data) if has else ""
+    impact_data = _run_impact(cmd, stdin_payload, timeout, repo, fails)
+    ctx = _ranked_ctx(impact_data)
     if not ctx.strip():
+        # 沒注入(沒跑成、輸出空、零命中)一律撤冷卻標記:零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
         if session_id and not in_cooldown:
-            _ttl_unmark(session_id, file_path_abs, ttl_token)   # 零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
+            _ttl_unmark(session_id, file_path_abs, ttl_token)
         return None
     return ctx
 

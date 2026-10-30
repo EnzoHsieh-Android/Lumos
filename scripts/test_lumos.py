@@ -51670,6 +51670,215 @@ def t_impact_hook_repo_follows_worktree():
     check("git 查詢失敗(逾時):退回啟動目錄,不中斷推播", got == str(main_repo), f"got={got}")
 
 
+def _impact_hook_voice_mod(tag):
+    """載入推播 hook(失敗出聲那組測試共用);每次新模組,避免上一支測試 patch 過的狀態留著。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_voice_" + tag, hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_voice_" + tag, loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def _impact_hook_voice_run(m, repo, runner, sid, files=("a.py",), lumos="/bin/true", stdin_text=None):
+    """跑一次 hook 的 main:回 (rc, additionalContext 或 None, 記到的事件清單)。
+    事件回報函式用假的 _hookevent 模組接住(hook 吞掉失敗時要自己 import 它呼叫 mark)。"""
+    import io as _io, json as _j, os as _os, sys as _sys, types as _types
+    from unittest.mock import patch
+    marks = []
+    fake = _types.ModuleType("_hookevent")
+    def _mark(kind, note=""):
+        marks.append(kind)
+    fake.mark = _mark
+    if len(files) == 1:
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": files[0]}}
+    else:
+        body = "\n".join(f"*** Update File: {f}\n@@\n-x=1\n+x=2" for f in files)
+        payload = {"tool_name": "apply_patch", "tool_input": {"command": f"*** Begin Patch\n{body}\n*** End Patch"}}
+    payload.update({"cwd": str(repo), "session_id": sid})
+    text = stdin_text if stdin_text is not None else _j.dumps(payload)
+    buf = _io.StringIO()
+    with patch.object(m.sys, "stdin", _io.StringIO(text)), patch.object(m.subprocess, "run", runner), \
+         patch.object(m, "_find_lumos_script", lambda: lumos), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(repo)}), \
+         patch.dict(_sys.modules, {"_hookevent": fake}), patch.object(m.sys, "stdout", buf), patch.object(m.sys, "stderr", _io.StringIO()):
+        rc = m.main()
+    out = buf.getvalue().strip()
+    ctx = _j.loads(out)["hookSpecificOutput"]["additionalContext"] if out else None
+    return rc, ctx, marks
+
+
+def _impact_hook_voice_repo(graph=True):
+    """暫存 repo:a.py、b.py;graph=True 時多一個 docs/t-knowledge 圖譜目錄。呼叫端用完自己刪。"""
+    import tempfile as _tf
+    d = Path(_tf.mkdtemp(prefix="gctl-hookvoice-")).resolve()
+    for f in ("a.py", "b.py"):
+        (d / f).write_text("x=1\n", encoding="utf-8")
+    if graph:
+        (d / "docs" / "t-knowledge" / "Systems").mkdir(parents=True)
+    return d
+
+
+class _ImpactHookR:
+    """假 subprocess 結果。"""
+    def __init__(self, rc=0, out=""):
+        self.returncode = rc
+        self.stdout, self.stderr = out, "內部錯誤原文 ─────不該出現在說明裡"
+
+
+def _impact_hook_voice_runners(m):
+    """六種失敗(名稱 → (subprocess 替身, 找 lumos 的回傳, 說明裡要有的原因字樣))。"""
+    import json as _j
+    def boom_timeout(*a, **k): raise m.subprocess.TimeoutExpired("lumos", 30)
+    def boom_os(*a, **k): raise OSError("exec format error")
+    def ok_empty(*a, **k):
+        return _ImpactHookR(0, _j.dumps({"results": [], "stack_questions": [], "lane": []}))
+    return {
+        "找不到 lumos": (ok_empty, None, "找不到可用的 lumos"),
+        "逾時": (boom_timeout, "/bin/true", "逾時"),
+        "啟動失敗": (boom_os, "/bin/true", "啟動失敗"),
+        "非零結束碼": (lambda *a, **k: _ImpactHookR(1), "/bin/true", "結束碼 1"),
+        "輸出讀不懂": (lambda *a, **k: _ImpactHookR(0, "not json"), "/bin/true", "讀不懂"),
+        "回找不到圖譜": (lambda *a, **k: _ImpactHookR(3), "/bin/true", "找不到圖譜"),
+    }
+
+
+def t_impact_hook_six_failures_voiced():
+    """改檔前推播失敗出聲 S1:圖譜專案裡六種沒跑成的情況,各要在附加脈絡講一句(框內原因、框外指令),回 0、不留冷卻標記;
+    不是圖譜專案、或查成功零命中時照舊安靜、不記事件。
+    原本六條路都靜默放行,AI 分不出「沒有相關筆記」和「推播壞了」(Projects/改檔前推播失敗出聲_計劃)。"""
+    import json as _j, os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s1")
+    d = _impact_hook_voice_repo(graph=True)
+    try:
+        for name, (runner, lumos, want) in _impact_hook_voice_runners(m).items():
+            sid = "voice-s1-" + _os.urandom(3).hex()
+            rc, ctx, _ = _impact_hook_voice_run(m, d, runner, sid, lumos=lumos)
+            ctx = ctx or ""
+            inside = ctx.split(m._FRAME_OPEN, 1)[-1].split(m._FRAME_CLOSE, 1)[0] if m._FRAME_OPEN in ctx else ""
+            outside = ctx.split(m._FRAME_CLOSE, 1)[-1] if m._FRAME_CLOSE in ctx else ""
+            check(f"推播失敗出聲[{name}]: 回 0", rc == 0, f"rc={rc}")
+            check(f"推播失敗出聲[{name}]: 框內有 LUMOS-IMPACT 與原因「{want}」", "LUMOS-IMPACT:" in inside and want in inside, repr(ctx[:300]))
+            check(f"推播失敗出聲[{name}]: 框外有自己查的指令", "lumos impact --file" in outside, repr(outside[:200]))
+            check(f"推播失敗出聲[{name}]: 不轉 lumos 的錯誤原文", "內部錯誤原文" not in ctx and "exec format" not in ctx, repr(ctx[:300]))
+            check(f"推播失敗出聲[{name}]: 不留冷卻標記", not m._ttl_marker_path(sid, str(d / "a.py")).exists())
+        # 對照組:不是圖譜專案時同樣六種失敗照舊安靜、不記事件(hook 全域安裝,沒圖譜的 repo 每次改檔都會跑);
+        # 圖譜專案裡查成功但零命中也照舊安靜。
+        g = _impact_hook_voice_repo(graph=False)
+        try:
+            for name, (runner, lumos, _w) in _impact_hook_voice_runners(m).items():
+                rc, ctx, marks = _impact_hook_voice_run(m, g, runner, "voice-s1q-" + _os.urandom(3).hex(), lumos=lumos)
+                check(f"非圖譜專案[{name}]: 不輸出、不記事件", rc == 0 and ctx is None and marks == [], f"rc={rc} ctx={ctx!r:.120} marks={marks}")
+        finally:
+            _sh.rmtree(g, ignore_errors=True)
+        def ok_empty(*a, **k):
+            return _ImpactHookR(0, _j.dumps({"results": [], "stack_questions": [], "lane": []}))
+        rc, ctx, marks = _impact_hook_voice_run(m, d, ok_empty, "voice-s1z-" + _os.urandom(3).hex())
+        check("圖譜專案零命中: 不輸出、不記事件", rc == 0 and ctx is None and marks == [], f"rc={rc} ctx={ctx!r:.120} marks={marks}")
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_failure_voice_once():
+    """改檔前推播失敗出聲 S3:同會談同原因只講一次(lumos 長期壞掉時每次改檔都講就是噪音);換原因、換會談照講。"""
+    import os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s3")
+    d = _impact_hook_voice_repo(graph=True)
+    runners = _impact_hook_voice_runners(m)
+    try:
+        sid = "voice-s3-" + _os.urandom(3).hex()
+        t_run, t_lumos, _ = runners["逾時"]
+        _, first, _ = _impact_hook_voice_run(m, d, t_run, sid, lumos=t_lumos)
+        _, second, marks2 = _impact_hook_voice_run(m, d, t_run, sid, files=("b.py",), lumos=t_lumos)
+        check("同會談同原因: 第一次講", first is not None and "LUMOS-IMPACT:" in first, repr(first))
+        check("同會談同原因: 第二次不講(事件照記)", second is None and marks2 == ["timeout"], f"{second!r:.120} {marks2}")
+        r_run, r_lumos, _ = runners["非零結束碼"]
+        _, other, _ = _impact_hook_voice_run(m, d, r_run, sid, lumos=r_lumos)
+        check("同會談換原因: 照講", other is not None and "結束碼 1" in other, repr(other))
+        _, fresh, _ = _impact_hook_voice_run(m, d, t_run, "voice-s3b-" + _os.urandom(3).hex(), lumos=t_lumos)
+        check("換會談同原因: 照講", fresh is not None and "逾時" in fresh, repr(fresh))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_failure_voice_multifile():
+    """改檔前推播失敗出聲 S4:一次改兩支檔(Codex apply_patch),一支查到筆記、一支查詢失敗 → 推播與說明都要在。"""
+    import json as _j, os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s4")
+    d = _impact_hook_voice_repo(graph=True)
+    hit = _j.dumps({"results": [{"node": "Systems/x.md", "kind": "direct", "pinned": True, "score": 0.9, "contract": "INVARIANT"}],
+                    "stack_questions": [], "lane": []})
+    def runner(argv, *a, **k):
+        f = argv[argv.index("--file") + 1]
+        return _ImpactHookR(0, hit) if f.endswith("a.py") else _ImpactHookR(1)
+    try:
+        rc, ctx, marks = _impact_hook_voice_run(m, d, runner, "voice-s4-" + _os.urandom(3).hex(), files=("a.py", "b.py"))
+        ctx = ctx or ""
+        check("多檔一成一敗: 回 0", rc == 0, f"rc={rc}")
+        check("多檔一成一敗: 有那支的推播", "Systems/x" in ctx, repr(ctx[:300]))
+        check("多檔一成一敗: 有失敗說明", "LUMOS-IMPACT:" in ctx and "結束碼 1" in ctx, repr(ctx[:300]))
+        check("多檔一成一敗: 記 error", marks == ["error"], str(marks))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_failure_marks_event():
+    """改檔前推播失敗出聲 S5:吞掉失敗的地方要自己回報事件,不然共用的 guard 把它記成 ok(事件帳 285 筆全 ok 的原因)。
+    逾時記 timeout、其他與輸入讀不懂記 error、多檔混合記 error;成功、零命中、非圖譜專案不記。"""
+    import json as _j, os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s5")
+    d = _impact_hook_voice_repo(graph=True)
+    runners = _impact_hook_voice_runners(m)
+    try:
+        for name, (runner, lumos, _w) in runners.items():
+            _, _, marks = _impact_hook_voice_run(m, d, runner, "voice-s5-" + _os.urandom(3).hex(), lumos=lumos)
+            want = ["timeout"] if name == "逾時" else ["error"]
+            check(f"事件回報[{name}]: {want}", marks[-1:] == want and len(set(marks)) == 1, str(marks))
+        _, ctx, marks = _impact_hook_voice_run(m, d, runners["逾時"][0], "voice-s5x-" + _os.urandom(3).hex(), stdin_text="{not json")
+        check("事件回報[輸入讀不懂]: error、不出聲", marks == ["error"] and ctx is None, f"{marks} {ctx!r:.80}")
+        def mixed(argv, *a, **k):
+            if argv[argv.index("--file") + 1].endswith("a.py"):
+                raise m.subprocess.TimeoutExpired("lumos", 30)
+            return _ImpactHookR(1)
+        _, _, marks = _impact_hook_voice_run(m, d, mixed, "voice-s5m-" + _os.urandom(3).hex(), files=("a.py", "b.py"))
+        check("事件回報[多檔逾時+出錯]: 最後記 error", marks[-1:] == ["error"], str(marks))
+        hit = _j.dumps({"results": [{"node": "Systems/x.md", "kind": "direct", "pinned": True, "score": 0.9}], "stack_questions": [], "lane": []})
+        _, _, marks = _impact_hook_voice_run(m, d, lambda *a, **k: _ImpactHookR(0, hit), "voice-s5ok-" + _os.urandom(3).hex())
+        check("事件回報[成功]: 不呼叫", marks == [], str(marks))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_graph_check_agrees():
+    """改檔前推播失敗出聲 S6:hook import 不到 lumos,判斷「是不是圖譜專案」只能複製一份規則;跟 lumos 的 _vault_in 逐佈局對照,不准漂。"""
+    import os as _os, shutil as _sh, tempfile as _tf
+    m = _impact_hook_voice_mod("s6")
+    L = _load_lumos_inproc()
+    cases = {
+        "docs/x-knowledge": (["docs/x-knowledge"], []),
+        "docs/knowledge": (["docs/knowledge"], []),
+        "獨立圖譜根(MOC+Systems)": (["MOC", "Systems"], []),
+        "獨立圖譜根(MOC+Verification)": (["MOC", "Verification"], []),
+        "只有 MOC": (["MOC"], []),
+        "docs 底下只有一般目錄": (["docs/guide"], []),
+        "docs/x-knowledge 是檔案不是目錄": (["docs"], ["docs/x-knowledge"]),
+        "沒有 docs": ([], []),
+    }
+    for name, (dirs, files) in cases.items():
+        base = Path(_tf.mkdtemp(prefix="gctl-hookvault-"))
+        try:
+            for x in dirs:
+                (base / x).mkdir(parents=True, exist_ok=True)
+            for x in files:
+                (base / x).write_text("", encoding="utf-8")
+            want = L._vault_in(base) is not None
+            check(f"圖譜判定跟 lumos 一致[{name}]", m._has_graph(str(base)) == want, f"hook={m._has_graph(str(base))} lumos={want}")
+        finally:
+            _sh.rmtree(base, ignore_errors=True)
+    check("圖譜判定: repo 不存在 → False、不丟例外", m._has_graph(str(Path(_tf.gettempdir()) / ("nope-" + _os.urandom(4).hex()))) is False)
+
+
 def t_lens_recount_classify():
     """code-loop r1 正確性/邊界席:recount.py 的 Bash 分類與 pinned 解析要有測試(重導向/sed -i/heredoc 就近/事故行/含空白路徑/同名 stem)。"""
     _need_src("governance/eval/lens-utilization/recount.py")   # 消費專案沒有 governance/eval/,test_lumos.py 卻會被裝進去(推播miss量測 S5)
