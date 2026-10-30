@@ -37,9 +37,11 @@ RETIRE-IF:2027-04-29 人裁時,若 Enzo 手上沒有任何 Android 專案在 arc
 
 ## 驗收條款
 
-- [S1] 當 Android 範本區塊的日期佔位換成實際日期存成節點時,lumos lint 應回報 0 問題,目標架構規則讀法應讀到十二條有效 RULE 行;沒換佔位照抄時 lint 應印日期格式警告。 [test: t_arch_target_android_template_valid]
+- [S1] 當產生器在 single、all、required、full、deep、any 這組產出節點時,lumos lint 應回報 0 問題,目標架構規則讀法應讀到十二條有效 RULE 行、沒有一條過期,也沒有留下日期佔位。 [test: t_arch_target_android_template_valid]
 - [S2] 當使用說明 06 的 arch_targets 那一列被讀時,應同時提到 DDD、前端、Android 三份範本的檔名;技能首頁應指到 Android 範本。 [test: t_arch_target_android_template_linked_from_usage]
-- [S3] 當讀 Android 範本的 Konsist 骨架時,對照表列出的每個測試名應在 Kotlin 圍欄裡有同名的測試函式,圍欄裡的每個測試函式也應出現在對照表。 [test: t_arch_target_android_template_konsist_names_match]
+- [S3] 當產生器在同一組產出節點與 Konsist 架構測試時,RULE 行綁的每個測試名應在架構測試裡有同名測試函式,架構測試的每個測試函式也應被 RULE 行或命名慣例認領。 [test: t_arch_target_android_template_konsist_names_match]
+
+2026-10-30 起範本內容改由產生器 `lumos arch-template android` 提供([[Projects/Android目標架構開關與舊檔畢業_計劃]]〈做法〉10):技能文件不再有照抄的範本區塊與 Konsist 骨架,S1、S3 綁的兩支測試名不變,條款句改成產生器在 single、all、required、full、deep、any 這一組的產出(跟原本的十二條同組;原本 S1 的「沒換佔位照抄」那半不再適用,產生器直接填日期)。
 
 ## 回退
 
