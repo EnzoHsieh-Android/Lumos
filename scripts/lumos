@@ -31987,6 +31987,7 @@ _VENDORED_TREE_FILES = (
     "scripts/templates/android-stability-record.pbtxt",  # 記憶體與穩定性:量測期間的 Perfetto 錄製設定
     "scripts/templates/android-stability-heapprofd.pbtxt",  # 記憶體與穩定性:原生配置排行那一段的 heapprofd 錄製設定
     "scripts/templates/android-stability-native.sql",  # 記憶體與穩定性:原生配置排行(結束時還留著最多的呼叫位置)
+    "scripts/templates/android-arch-target.md",  # Android 目標架構的開關資料(lumos arch-template android 讀它組出節點與架構測試)
     "scripts/templates/android-e2e-run.sh",  # Android 端到端驗收:依序建 APK、裝上、跑四塊、寫 steps.json 再交給 judge
 )
 _VENDORED_ALL = frozenset(_VENDORED_TOOLKIT + _VENDORED_TREE_FILES)
@@ -57761,6 +57762,270 @@ def _arch_target_vault_rel(root, ref):
     return f"docs/{slugs[0]}/" if slugs else None
 
 
+# ── Android 目標架構產生器(Projects/Android目標架構開關與舊檔畢業_計劃〈做法〉1 到 4、8、9)──
+# 開關表是旗標與資料檔條件的唯一來源:技能文件列的開關與選項要跟這張表一字不差(有測試比對)。
+_ARCH_TPL_ANDROID = "scripts/templates/android-arch-target.md"
+_ARCH_TPL_SWITCHES = {          # 開關 → 選項(順序=技能文件開關表的順序)
+    "modules": ("single", "multi"),
+    "legacy": ("all", "new-only"),
+    "usecase": ("required", "optional"),
+    "ddd": ("full", "lite"),
+    "interfaces": ("deep", "always"),
+    "ui_state": ("single", "any"),
+}
+_ARCH_TPL_PRINTS = ("node", "targets", "legacy", "test")
+_ARCH_TPL_BLOCK_RE = re.compile(r"^=== (node|rule|code|test) (\S+)( convention)?$")
+_ARCH_TPL_TEST_FUN_RE = re.compile(r"@Test\s+fun (\w+)\(\)")
+_ARCH_TPL_ROOT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+
+
+def _arch_tpl_blocks(text):
+    """開關資料檔 → [(種類, 條件 dict 或 None(一律), 是否命名慣例, 內文)];格式錯回 (None, 原因)。
+    條件裡的開關與選項要在 _ARCH_TPL_SWITCHES 裡(資料檔寫錯字不能靜默變成永遠不收)。"""
+    blocks, cur = [], None
+    for ln in text.split("\n"):
+        if ln.startswith("==="):
+            m = _ARCH_TPL_BLOCK_RE.match(ln)
+            if not m:
+                return None, f"看不懂的塊頭:{ln}"
+            cond = None
+            if m.group(2) != "*":
+                cond = {}
+                for part in m.group(2).split(","):
+                    k, eq, v = part.partition("=")
+                    if not eq or v not in _ARCH_TPL_SWITCHES.get(k, ()) or k in cond:
+                        return None, f"塊頭的條件寫錯:{ln}"
+                    cond[k] = v
+            cur = [m.group(1), cond, bool(m.group(3)), []]
+            blocks.append(cur)
+        elif cur is not None:
+            cur[3].append(ln)
+    if not blocks:
+        return None, "沒有任何塊"
+    return [(k, c, conv, "\n".join(body).strip("\n")) for k, c, conv, body in blocks], None
+
+
+def _arch_tpl_fill(text, slots):
+    """佔位字一次掃描替換;表外的佔位字回 (None, 名字)——資料檔多了產生器不認得的佔位字不能原樣漏進產出。"""
+    missing = sorted({m.group(1) for m in _NOTE_TEMPLATE_SLOT_RE.finditer(text) if m.group(1) not in slots})
+    if missing:
+        return None, "、".join(missing)
+    return _NOTE_TEMPLATE_SLOT_RE.sub(lambda m: slots[m.group(1)], text), None
+
+
+def _arch_tpl_compose(blocks, sw, slots):
+    """照開關組出 (節點, 測試檔);資料檔的問題(一塊不是剛好一支測試、兩支同名、表外佔位字)回 (None, 原因)。"""
+    node, test, funs = [], [], []
+    for kind, cond, _conv, body in blocks:
+        if cond and any(sw[k] != v for k, v in cond.items()):
+            continue
+        if kind in ("rule", "node"):
+            node.append("  " + body.strip() if kind == "rule" else body)
+            continue
+        test.append(body)
+        got = _ARCH_TPL_TEST_FUN_RE.findall(body) if kind == "test" else [None]
+        if len(got) != 1:
+            return None, f"一個 test 塊要剛好一支 @Test 函式,這塊有 {len(got)} 支"
+        funs += [f for f in got if f]
+    if len(set(funs)) != len(funs):
+        return None, "同一組開關收進了兩支同名的測試(資料檔的條件沒互斥)"
+    out = []
+    for part in ("\n".join(node) + "\n", "\n".join(test) + "\n"):
+        filled, bad = _arch_tpl_fill(part, slots)
+        if filled is None:
+            return None, f"資料檔有產生器不認得的佔位字:{bad}"
+        out.append(filled)
+    return tuple(out), None
+
+
+def _arch_tpl_scope_error(scope):
+    """--scope(已去掉結尾斜線)不合法的原因;合法回 None(計劃〈做法〉2 的清單)。"""
+    if _config_glob_error(scope):   # 跟 arch_targets 的樣式共用:空白、./ 或 / 開頭、反斜線(代碼審 r1 架構對齊席 A1)
+        return "是空的、以 ./ 或 / 開頭,或有反斜線(要寫成 repo 相對、用 / 分段的路徑)"
+    if scope == ".":
+        return "是點號(整個 repo 不能當範圍)"
+    if _path_special_chars(scope):
+        return "有控制字元"
+    if any(ch in scope for ch in "*?["):
+        return "有萬用字元(* ? [ 都不收;範圍要寫成實際的目錄)"
+    segs = scope.split("/")
+    if any(s in ("", ".", "..") for s in segs):
+        return "有空段、. 段或 .. 段"
+    if len(segs) < 2:
+        return "少於兩段(一段的範圍太寬,寫到模組或套件那層)"
+    return None
+
+
+def _arch_tpl_until(today):
+    """回頭日:一年後同月同日;2 月 29 日退到 28 日。"""
+    try:
+        return today.replace(year=today.year + 1)
+    except ValueError:
+        return today.replace(year=today.year + 1, day=28)
+
+
+def _arch_tpl_test_path(scope, root_pkg):
+    """架構測試建議存放位置:範圍裡有 /src/main/ 就取它前面那段當模組;沒有就讓人自己填模組。"""
+    mod = scope.split("/src/main/", 1)[0] if "/src/main/" in scope else "<模組>"
+    return f"{mod}/src/test/java/{root_pkg.replace('.', '/')}/arch/ArchitectureRulesTest.kt"
+
+
+def _arch_tpl_args_error(stack, root_pkg, switches, section):
+    """不碰 git 就判得出的參數錯誤 → 原因或 None。"""
+    if stack != "android":
+        return f"目前只有 android 的產生器,你給的是 {stack!r}"
+    miss = [k for k in _ARCH_TPL_SWITCHES if switches.get(k) is None]
+    if miss:
+        return "六個開關都要照訪談答案明給,沒有預設值;少了:" + "、".join("--" + k.replace("_", "-") for k in miss)
+    if not root_pkg or not _ARCH_TPL_ROOT_RE.fullmatch(root_pkg):
+        return f"--root 要是 Kotlin 套件名(例:com.example.app),你給的是 {root_pkg!r}"
+    if section is not None and section not in _ARCH_TPL_PRINTS:
+        return f"--print 只收 {'、'.join(_ARCH_TPL_PRINTS)}"
+    if section == "legacy" and switches["legacy"] == "all":
+        return "--legacy all 不產舊檔清單(範圍內全部照目標審),沒有 legacy 這一段"
+    return None
+
+
+def _arch_tpl_scopes(root, scopes):
+    """--scope 清單 → ({範圍: [底下 git 已追蹤的檔(NFC、排序)]}(依給的順序), None) 或 (None, 原因)。"""
+    if not scopes:
+        return None, "至少要給一個 --scope(多模組每個模組各給一個)"
+    norm = []
+    for s in scopes:
+        s2 = nfc(str(s).rstrip("/"))
+        why = _arch_tpl_scope_error(s2)
+        if why:
+            return None, f"--scope {s!r} {why}"
+        if s2 in norm:
+            return None, f"--scope {s2!r} 給了兩次"
+        norm.append(s2)
+    r = _lens_git(root, "ls-files", "-z")
+    if r is None or r.returncode != 0:
+        return None, "git ls-files 跑不起來,算不出範圍底下有哪些檔"
+    tracked = sorted({nfc(x) for x in r.stdout.split("\0") if x})
+    under = {s: [f for f in tracked if f.startswith(s + "/")] for s in norm}
+    empty = [s for s in norm if not under[s]]
+    if empty:
+        return None, "這些 --scope 底下沒有任何 git 已追蹤的檔(打錯字,或模組還沒建檔):" + "、".join(empty)
+    return under, None
+
+
+def _arch_tpl_konsist_test(f):
+    """Konsist 0.17.3 會不會把這支檔當測試原始碼集(scopeFromProduction 不掃)。照它的算法(反組譯 KoSourceSetProviderCore、
+    KoScopeCreatorCore 查證):原始碼集名稱 = projectPath(開頭帶 /)取第一個 /src/ 之後、再取到下一個 / 之前——沒有 /src/ 時
+    整串不變,取到第一個 / 之前就是空字串;再取第一個冒號之後、轉小寫,含 test 就是測試。
+    代碼審 r3 F23:原本用「路徑任一處 src/<含 test>/」的正規式,多個 src/ 段時判法不同;r4 F42:沒有 /src/ 時原本取第一段,
+    冒號原本取最後一個,都跟 Konsist 不同。"""
+    p = "/" + f
+    after = p.split("/src/", 1)[1] if "/src/" in p else p
+    return "test" in after.split("/", 1)[0].split(":", 1)[-1].lower()
+
+
+def _arch_tpl_legacy_file(f):
+    """這支範圍內的檔要不要進舊檔清單:架構對齊會拿來審(跟分目標節點同一支判定 _arch_code_file),或架構測試會掃
+    (不在 Konsist 認的測試原始碼集裡的 .kt),兩邊有一邊會看就收。代碼審 r1 F4:原本自訂排除三種測試目錄,androidTest、
+    testFixtures 的舊檔沒進清單;r2 F1、F13:只照 _arch_code_file 又漏了 src/main 底下路徑有 test/ 段的正式程式,Konsist 照掃。"""
+    return _arch_code_file(f) or (f.endswith(".kt") and not _arch_tpl_konsist_test(f))
+
+
+def _arch_tpl_legacy(under):
+    """舊檔清單原文 → (JSON 文字, None) 或 (None, 原因)。收哪些檔見 _arch_tpl_legacy_file。"""
+    import json as _j
+    files = sorted({f for fs in under.values() for f in fs if _arch_tpl_legacy_file(f)})
+    bad = [f for f in files if '"' in f or "\\" in f or _path_special_chars(f)]
+    if bad:
+        return None, "這些檔名有雙引號、反斜線或控制字元,舊檔清單不收(先改名再跑):\n  " + "\n  ".join(repr(f) for f in bad)
+    return _j.dumps({"files": files}, ensure_ascii=False, indent=2) + "\n", None
+
+
+def _arch_tpl_print_preview(root, parts, node, scope0, root_pkg, sw_text):
+    """不帶 --print:四段預覽,每段前面一行標存放位置。"""
+    vrel = _arch_target_vault_rel(root, "HEAD") or "docs/<名>-knowledge/"
+    where = {
+        "node": f"存成 {vrel}{node}.md(存完跑 lumos lint {node})",
+        "targets": "把 arch_targets 併進 .lumos/config.json(已經有 arch_targets 就合併成一份,第一條命中算數)",
+        "legacy": f"存成 {_ARCH_LEGACY_REL}(採用之後不要重產)",
+        "test": f"存成 {_arch_tpl_test_path(scope0, root_pkg)}(位置照專案的單元測試目錄改;依賴 com.lemonappdev:konsist)",
+    }
+    print(f"預覽(開關:{sw_text});lumos 不寫任何檔,單段原文用 --print <段名> 取")
+    for k in _ARCH_TPL_PRINTS:
+        if parts[k] is None:
+            print(f"\n── {k}:--legacy all 不產舊檔清單 ──")
+            continue
+        print(f"\n── {k}:{where[k]} ──")
+        sys.stdout.write(parts[k])
+
+
+def _arch_tpl_targets(norm, node):
+    """每個範圍一條 <範圍>/** 的宣告,交給讀宣告的同一支函式讀一次;讀出的條數不同就拒絕 → (宣告 dict, None) 或 (None, 原因)。"""
+    targets = {"arch_targets": [{"path": f"{s}/**", "node": node} for s in norm]}
+    rules, warns = _arch_targets_config(targets)
+    if warns or len(rules) != len(norm):
+        return None, "產出的宣告讀宣告的函式讀不進去:" + ";".join(warns or [f"讀出 {len(rules)} 條,--scope 有 {len(norm)} 個"])
+    return targets, None
+
+
+def _arch_tpl_render(root, switches, root_pkg, norm, node, sw_text):
+    """讀開關資料檔、填佔位字、照開關組出 → ((節點, 測試檔), None) 或 (None, 原因)。"""
+    import datetime as _dt
+    import json as _j
+    text = _note_template_fill(root, _ARCH_TPL_ANDROID, {})
+    if text is None:
+        return None, "找不到這支檔(跑一次 lumos update)"
+    blocks, why = _arch_tpl_blocks(text)
+    if blocks is None:
+        return None, why
+    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()
+    slots = {
+        "FIELDS": f"[依據:人] [since:{today.isoformat()}] [retire:人裁] [until:{_arch_tpl_until(today).isoformat()}] [confirmed:{today.isoformat()}]",
+        "ROOT": root_pkg,
+        # JSON 字串大致就是 Kotlin 字串字面值,只差 $ 會被當樣板(代碼審 r1 正確性席 F2)
+        "SCOPE_LIST": ", ".join(_j.dumps(s, ensure_ascii=False).replace("$", "\\$") for s in norm),
+        "SCOPE_TEXT": "、".join(f"`{s}`" for s in norm),
+        "NODE_TITLE": node.split("/")[-1],
+        "SWITCHES": sw_text,
+    }
+    return _arch_tpl_compose(blocks, switches, slots)
+
+
+def cmd_arch_template(stack, root_pkg, scopes, switches, node="Systems/Android目標架構", section=None):
+    """lumos arch-template android:照六個開關組出目標架構節點、arch_targets、舊檔清單(new-only)、Konsist 架構測試。
+    只讀不寫:--print 印單段原文(讓人重導向或用寫檔工具存),不帶印四段預覽加存放位置。拒絕一律 rc 2。"""
+    import json as _j
+
+    def fail(msg):
+        print(f"擋下:{msg}", file=sys.stderr)
+        return 2
+    why = _arch_tpl_args_error(stack, root_pkg, switches, section)
+    if why:
+        return fail(why)
+    root = _lens_repo_root(None)
+    if root is None:
+        return fail("目前目錄不在 git 專案裡")
+    under, why = _arch_tpl_scopes(root, scopes)
+    if under is None:
+        return fail(why)
+    norm = list(under)
+    targets, why = _arch_tpl_targets(norm, node)
+    if targets is None:
+        return fail(why)
+    legacy = None
+    if switches["legacy"] == "new-only":
+        legacy, why = _arch_tpl_legacy(under)
+        if legacy is None:
+            return fail(why)
+    sw_text = "、".join(f"{k}={switches[k]}" for k in _ARCH_TPL_SWITCHES)
+    got, why = _arch_tpl_render(root, switches, root_pkg, norm, node, sw_text)
+    if got is None:
+        return fail(f"開關資料檔 {_ARCH_TPL_ANDROID}:{why}")
+    parts = {"node": got[0], "targets": _j.dumps(targets, ensure_ascii=False, indent=2) + "\n", "legacy": legacy, "test": got[1]}
+    if section is not None:
+        sys.stdout.write(parts[section])
+        return 0
+    _arch_tpl_print_preview(root, parts, node, norm[0], root_pkg, sw_text)
+    return 0
+
+
 _ARCH_QUESTIONS = [
     "分層與依賴方向:新碼放的層、它呼叫誰、誰呼叫它,跟對照檔一樣嗎?有沒有跨層直呼?",
     "命名與錯誤處理:命名慣例、例外/錯誤回傳、日誌方式,跟對照檔一樣嗎?",
@@ -68955,6 +69220,7 @@ HELP_WHEN = {
     "anchor": "測試 / hook 檔有沒有被動過:verify 比對,approve 核可並留痕。",
     "python-path": "git 掛鉤用來挑直譯器:印一支 Python 3.14 以上的絕對路徑;有設 LUMOS_PYTHON 就只認它,不合格回 2 並說明。",
     "enforcement": "各層防護現在到底有沒有生效(唯讀):hooks 註冊了嗎、pre-commit/pre-push 接了嗎、CI/anchor 在不在。",
+    "arch-template": "Android 專案要採用目標架構(MVVM 加 DDD)時:先照技能文件 target-arch-android-template.md 問人六個開關,再敲 `lumos arch-template android --root <根套件> --scope <目錄> --modules … --legacy … --usecase … --ddd … --interfaces … --ui-state …` 看預覽,用 `--print node|targets|legacy|test` 取單段原文存檔。只讀,不寫任何檔。",
     "spec-freeze": "設計審派工前凍結計劃:計劃在會談目錄時敲 `lumos spec-freeze <計劃> --out governance/review-reports/<編號>/rN-snapshot.md`;計劃在別的工作樹時,先在那裡敲 `lumos spec-freeze <計劃>`(不帶 --out,只建不掛分支的提交、印那一行),再回會談目錄敲 `lumos spec-freeze <完整提交編號>:<路徑> --out governance/review-reports/<編號>/rN-snapshot.md`。印的那行 `LUMOS-SPEC: <完整提交編號>:<路徑>` 貼進派工詞(只對 Claude 編排有效)。不動分支、ref 與 index;--out 只收執行所在 repo 的 governance/review-reports/ 底下,已存在而且內容不同就拒絕。",
     "dispatch-lens": "代碼審派工詞的固定席鏡頭:Claude 側 hook 自動叫;Codex 編排時派工前一刻敲 `--arm <base>..<head> --seats N`(子代理開場各領一席,10 分 TTL),派完 `--disarm`。手動看內容給 <base>..<head>(從 base 讀,合約行原文附上、隱藏字元轉成看得見的寫法;base 不在主線→rc4 放行)。",
     "verify": "比對驗證器檔案指紋與基準線,不符 rc1。",
@@ -69895,6 +70161,17 @@ def main():
                    help="凍結快照寫到哪:只收執行所在 repo 的 governance/review-reports/ 底下(例:governance/review-reports/<編號>/rN-snapshot.md);"
                         "已存在而且內容不同就拒絕,要凍新的一輪換新的檔名。計劃在別的工作樹時,在那裡不帶 --out(只建提交、印那一行),回會談目錄用提交寫法帶 --out")
     p.add_argument("--json", dest="freeze_json", action="store_true", help="JSON:{line,spec_commit,spec_blob,spec_path,out};失敗印 {freeze_fail}")
+    p = sub.add_parser("arch-template", help="採用目標架構時:照訪談的六個開關組出節點、arch_targets、舊檔清單與 Konsist 架構測試(只讀,印到終端)")
+    p.add_argument("at_stack", choices=["android"], help="技術棧(目前只有 android)")
+    p.add_argument("--root", dest="at_root", required=True, help="根套件(例:com.example.app)")
+    p.add_argument("--scope", dest="at_scope", action="append", default=[],
+                   help="套用目標架構的目錄(repo 相對、至少兩段、不收萬用字元;可重複,多模組每個模組各給一個)")
+    for _k, _opts in _ARCH_TPL_SWITCHES.items():
+        p.add_argument("--" + _k.replace("_", "-"), dest="at_" + _k, choices=list(_opts), default=None,
+                       help=f"開關 {_k}:{' / '.join(_opts)}(沒有預設值,照訪談答案明給)")
+    p.add_argument("--node", dest="at_node", default="Systems/Android目標架構", help="目標節點(預設 Systems/Android目標架構)")
+    p.add_argument("--print", dest="at_print", choices=list(_ARCH_TPL_PRINTS), default=None,
+                   help="只印這一段的原文(node / targets / legacy / test);不帶印四段預覽加存放位置")
     p = sub.add_parser("impact", help="動手前算出哪些知識圖譜節點會被 code 改動波及")
     p.add_argument("--file", dest="impact_file", help="被改動的 code 檔路徑(單檔模式;與 --diff/--node 三擇一)")
     p.add_argument("--node", dest="impact_node", help="[M4/S2] typed hop-1 第三模式:列「誰以 verified_by/plan_refs 指向該節點」(單層;與 --depth 互斥)")
@@ -70373,6 +70650,10 @@ def main():
         return cmd_lint_waive(key=args.waive_key, note=args.waive_note, repo=args.waive_repo,
                               as_json=args.waive_json, show=args.waive_list,
                               rule=args.waive_rule, file_rel=args.waive_file)
+    if args.cmd == "arch-template":
+        return cmd_arch_template(args.at_stack, args.at_root, args.at_scope,
+                                 {k: getattr(args, "at_" + k) for k in _ARCH_TPL_SWITCHES},
+                                 node=args.at_node, section=args.at_print)
     if args.cmd == "spec-freeze":
         return cmd_spec_freeze(args.freeze_plan, args.freeze_out, as_json=args.freeze_json)
     if args.cmd == "dispatch-lens":

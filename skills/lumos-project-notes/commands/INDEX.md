@@ -24,7 +24,7 @@
 | 「我 push 了,CI 跑得怎樣?」 | `lumos ci-wait`(等結果)/ `lumos ci-status`(看上次) | 結果會進治理帳,`gh run list` 不會 |
 | 「做完了,要留驗證紀錄 / 改狀態 / 記決策」 | `lumos new verification <名> --plan <計劃> --systems <節點>` / `lumos set` / `lumos decision-add` | 手改開頭欄位會漏同步、長假筆記,lint 擋 |
 | 「這批改動要不要過審才能推?」 | `lumos pitfalls --diff <merge-base>..HEAD` 看 `tier:` | pre-push 會算同一件事,high 沒留痕就擋 |
-| 「接手一個沒圖譜的舊專案,想搞懂某塊再動手」 | 開 `commands/09-節點還原.md` 走七步 | 圖譜是空的,search 必 0 筆;直接硬讀 code 會漏承重牆與 why |
+| 「接手一個沒圖譜的舊專案,想搞懂某塊再動手」 | 開 `commands/09-節點還原.md` 走七步 | 圖譜是空的,search 必 0 筆 |
 
 ## 二、十類子檔(按情境分)
 
@@ -35,7 +35,7 @@
 | 寫／掃測試、寫回圖譜(品質、分類、Issue、決策) | `commands/03-寫回圖譜.md` | new / set / summary-add / summary-line / updated-sync / append / remove / decision-add·supersede·reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh / test-quality |
 | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots / doctor / stale / gov / drift-history / drift exam / drift scan·fix·ack(存量漂移) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / macrobench / anchor |
 | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / room-guard / note-audit prepare·record·check·skip(筆記內容審)·reread-{prepare,record,check}(回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait·ci-status / push-range / test-durations / push-summary / 離線收斂評測 |
+| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check / room-guard / note-audit prepare·record·check·skip(筆記內容審)·reread-{prepare,record,check}(回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait·ci-status / arch-template / push-range / test-durations / push-summary / 離線收斂評測 |
 | 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
 | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
 | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |

@@ -64,6 +64,7 @@ Enzo 裁:不挑邊、把兩邊端上來。落成三塊(設計與審查在 [[Proj
 - 宣告只讀改動起點那一版。被審的分支不能在同一次推送裡加宣告、放寬規則、再寫新寫法來決定自己怎麼被審;分支改的宣告下一次推送才生效。設計審沒有改動範圍,讀 HEAD,因為設計審不放行程式。
 - 舊檔清單 `.lumos/arch-legacy.json`(`{"files": [路徑…]}`):列在上面、又被宣告判給目標節點的檔照鄰居審,跟宣告讀同一版。它跟 none 分工:none 是目錄級的長期排除(樣式,第一條命中算數),舊檔清單是採用當下凍結的逐檔名單(整條路徑比對、兩邊先轉 NFC,不當萬用字元,沒有條數上限);被 none 命中的檔不看清單。不擴充 arch_targets 加欄位的理由:宣告形狀只收兩欄,舊版 lumos 讀到多一欄的宣告會整份不用,獨立檔被舊版忽略就好。
 - 畢業是「下一次推送才生效」唯一的例外(Enzo 2026-10-30 裁,[[Projects/Android目標架構開關與舊檔畢業_計劃]]):宣告一字不改時,起點版清單有、這次頂端版沒有的改動檔,當場照目標審;規則原文照讀起點版。宣告有任何不同、頂端清單讀不懂、沒有可信起點版都不畢業。頂端多出的行不影響審查(照讀起點版清單),但工作目錄裡的架構測試會跳過它們,所以 code-loop check 會印「舊檔清單比起點多了 N 行」讓人看得到。起點版清單不存在或讀不懂時清單不起作用,一律照目標審:失敗方向是多審,不是漏審。改名不特別處理,新路徑不在清單上就照目標審。
+- Android 專案的目標節點、宣告、舊檔清單與 Konsist 架構測試由產生器 `lumos arch-template android` 照六個開關組出(只讀,印到終端);開關資料檔與產生器的設計脈絡在 [[Systems/android-arch-template]]。產生器產出的宣告會先交給本篇讀宣告的同一支函式讀一次,讀不進去就拒絕。
 - 形狀照抄角色鏡頭的 review_roles:有序清單、第一條命中算數(所以沒有「範圍重疊」這種錯誤,要排除舊碼就在前面放一條 node 為 none)、壞宣告整份不用、警告不回填專案原值。
 - 第一段是萬用字元的樣式(**、**/*.php、*.cs)整份不用:比對時開頭的 **/ 會被去掉再試,這些樣式等於整個 repo 或整個語言,是變相的全域開關。
 - 規則不另立語法,用既有 RULE 摘要行:那種寫法已經有生命週期欄位與測試綁定檢查;另立一種會繞過這些把關。審查席引規則用原文,不用編號,規則改寫時舊引用不會錯位。
@@ -97,4 +98,4 @@ REVISIT:2027-04-09 人裁目標架構宣告要不要撤:看各專案 lumos docto
 
 ## Android 的 MVVM 加 DDD 目標架構範本(2026-10-29,[[Projects/Android的MVVM與DDD目標架構範本_計劃]])
 
-使用說明多一份 `target-arch-android-template.md`(形狀照 DDD 那份):十二條 RULE 行——DDD 六條換成 Android 寫法(domain 純 Kotlin、不變規則在聚合根、聚合之間用識別碼、Repository 不往上丟資料庫實體、值物件不可變、用例只協調)、MVVM 四條(ViewModel 不收畫面元件與 Repository、只露唯讀 UI 狀態、不寫業務規則、畫面只渲染與送事件)、深模組與測試邊界各一條;另附一份在示範專案跑過的 Konsist 架構測試骨架,讓七條的結構面由機器守、審查席補看語意。06 的 arch_targets 那一列與技能首頁都指到它。測試 t_arch_target_android_template_valid、t_arch_target_android_template_linked_from_usage、t_arch_target_android_template_konsist_names_match。
+2026-10-29 初版是使用說明裡一份照抄的範本(十二條 RULE 行加一份 Konsist 架構測試骨架);2026-10-30 起內容改由產生器 `lumos arch-template android` 照六個開關組出([[Projects/Android目標架構開關與舊檔畢業_計劃]]),使用說明 `target-arch-android-template.md` 改成訪談題目、開關表與採用步驟,規則與測試的原文在開關資料檔,設計脈絡見 [[Systems/android-arch-template]]。預設那組開關(single、all、required、full、deep、any)產出的還是原本那十二條。06 的 arch_targets 那一列與技能首頁都指到使用說明。測試 t_arch_target_android_template_valid、t_arch_target_android_template_konsist_names_match 守預設那組的產出,t_arch_target_android_template_linked_from_usage 守指路;64 種組合另由 t_arch_template_android_all_combos 守。

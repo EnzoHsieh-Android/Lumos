@@ -51670,6 +51670,215 @@ def t_impact_hook_repo_follows_worktree():
     check("git 查詢失敗(逾時):退回啟動目錄,不中斷推播", got == str(main_repo), f"got={got}")
 
 
+def _impact_hook_voice_mod(tag):
+    """載入推播 hook(失敗出聲那組測試共用);每次新模組,避免上一支測試 patch 過的狀態留著。"""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+    loader = SourceFileLoader("impact_hook_voice_" + tag, hook_path)
+    spec = importlib.util.spec_from_loader("impact_hook_voice_" + tag, loader)
+    m = importlib.util.module_from_spec(spec)
+    loader.exec_module(m)
+    return m
+
+
+def _impact_hook_voice_run(m, repo, runner, sid, files=("a.py",), lumos="/bin/true", stdin_text=None):
+    """跑一次 hook 的 main:回 (rc, additionalContext 或 None, 記到的事件清單)。
+    事件回報函式用假的 _hookevent 模組接住(hook 吞掉失敗時要自己 import 它呼叫 mark)。"""
+    import io as _io, json as _j, os as _os, sys as _sys, types as _types
+    from unittest.mock import patch
+    marks = []
+    fake = _types.ModuleType("_hookevent")
+    def _mark(kind, note=""):
+        marks.append(kind)
+    fake.mark = _mark
+    if len(files) == 1:
+        payload = {"tool_name": "Edit", "tool_input": {"file_path": files[0]}}
+    else:
+        body = "\n".join(f"*** Update File: {f}\n@@\n-x=1\n+x=2" for f in files)
+        payload = {"tool_name": "apply_patch", "tool_input": {"command": f"*** Begin Patch\n{body}\n*** End Patch"}}
+    payload.update({"cwd": str(repo), "session_id": sid})
+    text = stdin_text if stdin_text is not None else _j.dumps(payload)
+    buf = _io.StringIO()
+    with patch.object(m.sys, "stdin", _io.StringIO(text)), patch.object(m.subprocess, "run", runner), \
+         patch.object(m, "_find_lumos_script", lambda: lumos), patch.dict(_os.environ, {"CLAUDE_PROJECT_DIR": str(repo)}), \
+         patch.dict(_sys.modules, {"_hookevent": fake}), patch.object(m.sys, "stdout", buf), patch.object(m.sys, "stderr", _io.StringIO()):
+        rc = m.main()
+    out = buf.getvalue().strip()
+    ctx = _j.loads(out)["hookSpecificOutput"]["additionalContext"] if out else None
+    return rc, ctx, marks
+
+
+def _impact_hook_voice_repo(graph=True):
+    """暫存 repo:a.py、b.py;graph=True 時多一個 docs/t-knowledge 圖譜目錄。呼叫端用完自己刪。"""
+    import tempfile as _tf
+    d = Path(_tf.mkdtemp(prefix="gctl-hookvoice-")).resolve()
+    for f in ("a.py", "b.py"):
+        (d / f).write_text("x=1\n", encoding="utf-8")
+    if graph:
+        (d / "docs" / "t-knowledge" / "Systems").mkdir(parents=True)
+    return d
+
+
+class _ImpactHookR:
+    """假 subprocess 結果。"""
+    def __init__(self, rc=0, out=""):
+        self.returncode = rc
+        self.stdout, self.stderr = out, "內部錯誤原文 ─────不該出現在說明裡"
+
+
+def _impact_hook_voice_runners(m):
+    """六種失敗(名稱 → (subprocess 替身, 找 lumos 的回傳, 說明裡要有的原因字樣))。"""
+    import json as _j
+    def boom_timeout(*a, **k): raise m.subprocess.TimeoutExpired("lumos", 30)
+    def boom_os(*a, **k): raise OSError("exec format error")
+    def ok_empty(*a, **k):
+        return _ImpactHookR(0, _j.dumps({"results": [], "stack_questions": [], "lane": []}))
+    return {
+        "找不到 lumos": (ok_empty, None, "找不到可用的 lumos"),
+        "逾時": (boom_timeout, "/bin/true", "逾時"),
+        "啟動失敗": (boom_os, "/bin/true", "啟動失敗"),
+        "非零結束碼": (lambda *a, **k: _ImpactHookR(1), "/bin/true", "結束碼 1"),
+        "輸出讀不懂": (lambda *a, **k: _ImpactHookR(0, "not json"), "/bin/true", "讀不懂"),
+        "回找不到圖譜": (lambda *a, **k: _ImpactHookR(3), "/bin/true", "找不到圖譜"),
+    }
+
+
+def t_impact_hook_six_failures_voiced():
+    """改檔前推播失敗出聲 S1:圖譜專案裡六種沒跑成的情況,各要在附加脈絡講一句(框內原因、框外指令),回 0、不留冷卻標記;
+    不是圖譜專案、或查成功零命中時照舊安靜、不記事件。
+    原本六條路都靜默放行,AI 分不出「沒有相關筆記」和「推播壞了」(Projects/改檔前推播失敗出聲_計劃)。"""
+    import json as _j, os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s1")
+    d = _impact_hook_voice_repo(graph=True)
+    try:
+        for name, (runner, lumos, want) in _impact_hook_voice_runners(m).items():
+            sid = "voice-s1-" + _os.urandom(3).hex()
+            rc, ctx, _ = _impact_hook_voice_run(m, d, runner, sid, lumos=lumos)
+            ctx = ctx or ""
+            inside = ctx.split(m._FRAME_OPEN, 1)[-1].split(m._FRAME_CLOSE, 1)[0] if m._FRAME_OPEN in ctx else ""
+            outside = ctx.split(m._FRAME_CLOSE, 1)[-1] if m._FRAME_CLOSE in ctx else ""
+            check(f"推播失敗出聲[{name}]: 回 0", rc == 0, f"rc={rc}")
+            check(f"推播失敗出聲[{name}]: 框內有 LUMOS-IMPACT 與原因「{want}」", "LUMOS-IMPACT:" in inside and want in inside, repr(ctx[:300]))
+            check(f"推播失敗出聲[{name}]: 框外有自己查的指令", "lumos impact --file" in outside, repr(outside[:200]))
+            check(f"推播失敗出聲[{name}]: 不轉 lumos 的錯誤原文", "內部錯誤原文" not in ctx and "exec format" not in ctx, repr(ctx[:300]))
+            check(f"推播失敗出聲[{name}]: 不留冷卻標記", not m._ttl_marker_path(sid, str(d / "a.py")).exists())
+        # 對照組:不是圖譜專案時同樣六種失敗照舊安靜、不記事件(hook 全域安裝,沒圖譜的 repo 每次改檔都會跑);
+        # 圖譜專案裡查成功但零命中也照舊安靜。
+        g = _impact_hook_voice_repo(graph=False)
+        try:
+            for name, (runner, lumos, _w) in _impact_hook_voice_runners(m).items():
+                rc, ctx, marks = _impact_hook_voice_run(m, g, runner, "voice-s1q-" + _os.urandom(3).hex(), lumos=lumos)
+                check(f"非圖譜專案[{name}]: 不輸出、不記事件", rc == 0 and ctx is None and marks == [], f"rc={rc} ctx={ctx!r:.120} marks={marks}")
+        finally:
+            _sh.rmtree(g, ignore_errors=True)
+        def ok_empty(*a, **k):
+            return _ImpactHookR(0, _j.dumps({"results": [], "stack_questions": [], "lane": []}))
+        rc, ctx, marks = _impact_hook_voice_run(m, d, ok_empty, "voice-s1z-" + _os.urandom(3).hex())
+        check("圖譜專案零命中: 不輸出、不記事件", rc == 0 and ctx is None and marks == [], f"rc={rc} ctx={ctx!r:.120} marks={marks}")
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_failure_voice_once():
+    """改檔前推播失敗出聲 S3:同會談同原因只講一次(lumos 長期壞掉時每次改檔都講就是噪音);換原因、換會談照講。"""
+    import os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s3")
+    d = _impact_hook_voice_repo(graph=True)
+    runners = _impact_hook_voice_runners(m)
+    try:
+        sid = "voice-s3-" + _os.urandom(3).hex()
+        t_run, t_lumos, _ = runners["逾時"]
+        _, first, _ = _impact_hook_voice_run(m, d, t_run, sid, lumos=t_lumos)
+        _, second, marks2 = _impact_hook_voice_run(m, d, t_run, sid, files=("b.py",), lumos=t_lumos)
+        check("同會談同原因: 第一次講", first is not None and "LUMOS-IMPACT:" in first, repr(first))
+        check("同會談同原因: 第二次不講(事件照記)", second is None and marks2 == ["timeout"], f"{second!r:.120} {marks2}")
+        r_run, r_lumos, _ = runners["非零結束碼"]
+        _, other, _ = _impact_hook_voice_run(m, d, r_run, sid, lumos=r_lumos)
+        check("同會談換原因: 照講", other is not None and "結束碼 1" in other, repr(other))
+        _, fresh, _ = _impact_hook_voice_run(m, d, t_run, "voice-s3b-" + _os.urandom(3).hex(), lumos=t_lumos)
+        check("換會談同原因: 照講", fresh is not None and "逾時" in fresh, repr(fresh))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_failure_voice_multifile():
+    """改檔前推播失敗出聲 S4:一次改兩支檔(Codex apply_patch),一支查到筆記、一支查詢失敗 → 推播與說明都要在。"""
+    import json as _j, os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s4")
+    d = _impact_hook_voice_repo(graph=True)
+    hit = _j.dumps({"results": [{"node": "Systems/x.md", "kind": "direct", "pinned": True, "score": 0.9, "contract": "INVARIANT"}],
+                    "stack_questions": [], "lane": []})
+    def runner(argv, *a, **k):
+        f = argv[argv.index("--file") + 1]
+        return _ImpactHookR(0, hit) if f.endswith("a.py") else _ImpactHookR(1)
+    try:
+        rc, ctx, marks = _impact_hook_voice_run(m, d, runner, "voice-s4-" + _os.urandom(3).hex(), files=("a.py", "b.py"))
+        ctx = ctx or ""
+        check("多檔一成一敗: 回 0", rc == 0, f"rc={rc}")
+        check("多檔一成一敗: 有那支的推播", "Systems/x" in ctx, repr(ctx[:300]))
+        check("多檔一成一敗: 有失敗說明", "LUMOS-IMPACT:" in ctx and "結束碼 1" in ctx, repr(ctx[:300]))
+        check("多檔一成一敗: 記 error", marks == ["error"], str(marks))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_failure_marks_event():
+    """改檔前推播失敗出聲 S5:吞掉失敗的地方要自己回報事件,不然共用的 guard 把它記成 ok(事件帳 285 筆全 ok 的原因)。
+    逾時記 timeout、其他與輸入讀不懂記 error、多檔混合記 error;成功、零命中、非圖譜專案不記。"""
+    import json as _j, os as _os, shutil as _sh
+    m = _impact_hook_voice_mod("s5")
+    d = _impact_hook_voice_repo(graph=True)
+    runners = _impact_hook_voice_runners(m)
+    try:
+        for name, (runner, lumos, _w) in runners.items():
+            _, _, marks = _impact_hook_voice_run(m, d, runner, "voice-s5-" + _os.urandom(3).hex(), lumos=lumos)
+            want = ["timeout"] if name == "逾時" else ["error"]
+            check(f"事件回報[{name}]: {want}", marks[-1:] == want and len(set(marks)) == 1, str(marks))
+        _, ctx, marks = _impact_hook_voice_run(m, d, runners["逾時"][0], "voice-s5x-" + _os.urandom(3).hex(), stdin_text="{not json")
+        check("事件回報[輸入讀不懂]: error、不出聲", marks == ["error"] and ctx is None, f"{marks} {ctx!r:.80}")
+        def mixed(argv, *a, **k):
+            if argv[argv.index("--file") + 1].endswith("a.py"):
+                raise m.subprocess.TimeoutExpired("lumos", 30)
+            return _ImpactHookR(1)
+        _, _, marks = _impact_hook_voice_run(m, d, mixed, "voice-s5m-" + _os.urandom(3).hex(), files=("a.py", "b.py"))
+        check("事件回報[多檔逾時+出錯]: 最後記 error", marks[-1:] == ["error"], str(marks))
+        hit = _j.dumps({"results": [{"node": "Systems/x.md", "kind": "direct", "pinned": True, "score": 0.9}], "stack_questions": [], "lane": []})
+        _, _, marks = _impact_hook_voice_run(m, d, lambda *a, **k: _ImpactHookR(0, hit), "voice-s5ok-" + _os.urandom(3).hex())
+        check("事件回報[成功]: 不呼叫", marks == [], str(marks))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_impact_hook_graph_check_agrees():
+    """改檔前推播失敗出聲 S6:hook import 不到 lumos,判斷「是不是圖譜專案」只能複製一份規則;跟 lumos 的 _vault_in 逐佈局對照,不准漂。"""
+    import os as _os, shutil as _sh, tempfile as _tf
+    m = _impact_hook_voice_mod("s6")
+    L = _load_lumos_inproc()
+    cases = {
+        "docs/x-knowledge": (["docs/x-knowledge"], []),
+        "docs/knowledge": (["docs/knowledge"], []),
+        "獨立圖譜根(MOC+Systems)": (["MOC", "Systems"], []),
+        "獨立圖譜根(MOC+Verification)": (["MOC", "Verification"], []),
+        "只有 MOC": (["MOC"], []),
+        "docs 底下只有一般目錄": (["docs/guide"], []),
+        "docs/x-knowledge 是檔案不是目錄": (["docs"], ["docs/x-knowledge"]),
+        "沒有 docs": ([], []),
+    }
+    for name, (dirs, files) in cases.items():
+        base = Path(_tf.mkdtemp(prefix="gctl-hookvault-"))
+        try:
+            for x in dirs:
+                (base / x).mkdir(parents=True, exist_ok=True)
+            for x in files:
+                (base / x).write_text("", encoding="utf-8")
+            want = L._vault_in(base) is not None
+            check(f"圖譜判定跟 lumos 一致[{name}]", m._has_graph(str(base)) == want, f"hook={m._has_graph(str(base))} lumos={want}")
+        finally:
+            _sh.rmtree(base, ignore_errors=True)
+    check("圖譜判定: repo 不存在 → False、不丟例外", m._has_graph(str(Path(_tf.gettempdir()) / ("nope-" + _os.urandom(4).hex()))) is False)
+
+
 def t_lens_recount_classify():
     """code-loop r1 正確性/邊界席:recount.py 的 Bash 分類與 pinned 解析要有測試(重導向/sed -i/heredoc 就近/事故行/含空白路徑/同名 stem)。"""
     _need_src("governance/eval/lens-utilization/recount.py")   # 消費專案沒有 governance/eval/,test_lumos.py 卻會被裝進去(推播miss量測 S5)
@@ -109560,38 +109769,156 @@ def t_arch_target_frontend_template_linked_from_usage():
 
 
 
-# ── Android 的 MVVM 加 DDD 目標架構範本(2026-10-29,Projects/Android的MVVM與DDD目標架構範本_計劃;形狀照前端範本那兩支)──
+# ── Android 目標架構範本(2026-10-29 起;2026-10-30 起內容改由產生器 lumos arch-template android 提供,
+#    Projects/Android目標架構開關與舊檔畢業_計劃〈做法〉10:舊兩支改測產生器在 single、all、required、full、deep、any 這一組的產出)──
 _ANDROID_TEMPLATE = "skills/lumos-project-notes/commands/target-arch-android-template.md"
+_ARCH_TPL_DEFAULT = {"modules": "single", "legacy": "all", "usecase": "required", "ddd": "full", "interfaces": "deep", "ui_state": "any"}
+_ARCH_TPL_SCOPE = "app/src/main/java/com/ex/app"
+_ARCH_TPL_SCOPE2 = "core/domain/src/main/java/com/ex/app"
+_ARCH_TPL_CONVENTIONS = {"viewModelsAreNamedAndPlaced"}   # 判準:命名慣例,不對應任何 RULE 行(範本 2026-10-29 的對照表就這樣標)
 
 
-def _android_template_block():
-    _need_src(_ANDROID_TEMPLATE)
-    text = (Path(GRAPHCTL).resolve().parent.parent / _ANDROID_TEMPLATE).read_text(encoding="utf-8")
-    section = text.split("\n## 範本\n", 1)[1].split("\n## ", 1)[0] if "\n## 範本\n" in text else ""
-    body = section.split("```markdown\n", 1)[1].split("\n```", 1)[0] if "```markdown\n" in section else ""
-    check("前置:「## 範本」那一節有一個 markdown 圍欄", bool(body), section[:200])
-    return body
+def _arch_tpl_repo():
+    """產生器用的臨時 repo:兩個範圍目錄各有正式程式,另有測試目錄的檔(不該進舊檔清單)。回 (d, g, w, c)。"""
+    d, g, w, c = _role_git_repo()
+    w(f"{_ARCH_TPL_SCOPE}/domain/Order.kt", "package com.ex.app.domain\n\nclass Order\n")
+    w(f"{_ARCH_TPL_SCOPE}/presentation/CartViewModel.kt", "package com.ex.app.presentation\n\nclass CartViewModel\n")
+    w("app/src/test/java/com/ex/app/OrderTest.kt", "class OrderTest\n")
+    w(f"{_ARCH_TPL_SCOPE2}/domain/Money.kt", "package com.ex.app.domain\n\nclass Money\n")
+    c("init")
+    return d, g, w, c
+
+
+def _arch_tpl_call(m, repo, sw, scopes=(_ARCH_TPL_SCOPE,), section=None, node="Systems/Android目標架構", root="com.ex.app"):
+    """在同一個程序裡叫產生器(cwd 切到 repo、收 stdout 與 stderr)→ (rc, out, err)。64 種組合各起一次子程序太慢。"""
+    import contextlib, io, os
+    out, err, old = io.StringIO(), io.StringIO(), os.getcwd()
+    os.chdir(repo)
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = m.cmd_arch_template("android", root, list(scopes), dict(sw), node=node, section=section)
+    finally:
+        os.chdir(old)
+    return rc, out.getvalue(), err.getvalue()
+
+
+def _arch_tpl_kotlin_legacy_reader(test_text):
+    """從產出的 Kotlin 架構測試抽出讀舊檔清單的兩條正規式原文,編成 Python 的讀法 → 函式(文字 → 路徑集合或 None=不認)。
+    那兩條只用 Java 與 Python 意思相同的語法(資料檔註解寫明);Kotlin 那邊讀檔後原樣交給正規式(BOM 在正規式裡處理),這裡也原樣跑。
+    Java 跟 Python 在資源上的差別(重複群組遞迴)這裡看不到,另由 _arch_tpl_java_legacy_read 用真的 Java 跑。"""
+    import re
+    pats = _arch_tpl_kotlin_legacy_patterns(test_text)
+    if pats is None:
+        return None
+    doc, item = re.compile(pats[0]), re.compile(pats[1])
+
+    def read(text):
+        m = doc.search(text)
+        return None if m is None else {unicodedata.normalize("NFC", x) for x in item.findall(m.group(1))}
+    return read
+
+
+def _arch_tpl_kotlin_legacy_patterns(test_text):
+    import re
+    pats = re.findall(r'val legacy(?:Doc|Item) = Regex\("""(.*?)"""\)', test_text)
+    return pats if len(pats) == 2 else None
+
+
+_ARCH_TPL_JAVA_READER = """import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
+import java.util.*;
+import java.util.regex.*;
+public class LegacyRead {
+  static byte[] unhex(String h) { byte[] b = new byte[h.length() / 2];
+    for (int i = 0; i < b.length; i++) b[i] = (byte) Integer.parseInt(h.substring(2 * i, 2 * i + 2), 16); return b; }
+  static String hex(byte[] b) { StringBuilder sb = new StringBuilder(); for (byte x : b) sb.append(String.format("%02x", x & 0xff)); return sb.toString(); }
+  public static void main(String[] a) throws Exception {
+    Pattern doc = Pattern.compile(new String(Files.readAllBytes(Paths.get(a[0])), StandardCharsets.UTF_8));
+    Pattern item = Pattern.compile(new String(Files.readAllBytes(Paths.get(a[1])), StandardCharsets.UTF_8));
+    for (String line : Files.readAllLines(Paths.get(a[2]))) {
+      String s = new String(unhex(line), StandardCharsets.UTF_8);
+      try {
+        Matcher m = doc.matcher(s);
+        if (!m.find()) { System.out.println("N"); continue; }
+        List<String> out = new ArrayList<>(); Matcher it = item.matcher(m.group(1));
+        while (it.find()) out.add(it.group(1));
+        System.out.println("Y " + hex(String.join("\\n", out).getBytes(StandardCharsets.UTF_8)));
+      } catch (StackOverflowError e) { System.out.println("SOE"); }
+    }
+  }
+}
+"""
+
+
+def _arch_tpl_java_legacy_read(test_text, inputs):
+    """用真的 Java(java.util.regex,Kotlin 的 Regex 底下就是它)跑產出 Kotlin 裡那兩條正規式 → [None(不認)| 路徑集合 | "SOE"];
+    機器上沒有能用的 java(找不到、java -version 跑不起來——例如 macOS 沒裝 JDK 時的存根——或版本低於 11)回 None,呼叫端印一行「沒驗到」;
+    找得到、能用,之後編譯或執行失敗、逾時都回一筆失敗訊息讓斷言紅,不當成沒有 java(代碼審 r4 F52)。
+    Java 程式只用 Java 11 就有的 API(r4 F43:HexFormat 要 17);輸入逐筆轉十六進位一行,避開換行與編碼問題。"""
+    import re
+    import shutil
+    java = shutil.which("java")
+    pats = _arch_tpl_kotlin_legacy_patterns(test_text)
+    if not java or pats is None:
+        return None
+    try:
+        v = subprocess.run([java, "-version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    major = re.search(r'version "(?:1\.)?(\d+)', v.stderr + v.stdout) if v.returncode == 0 else None
+    if major is None or int(major.group(1)) < 11:   # `java 檔名.java` 單檔執行要 Java 11 起
+        return None
+    d = Path(tempfile.mkdtemp(prefix="gctl-java-"))
+    (d / "doc.txt").write_text(pats[0], encoding="utf-8")
+    (d / "item.txt").write_text(pats[1], encoding="utf-8")
+    (d / "in.txt").write_text("".join(t.encode("utf-8").hex() + "\n" for t in inputs), encoding="ascii")
+    (d / "LegacyRead.java").write_text(_ARCH_TPL_JAVA_READER, encoding="utf-8")
+    try:
+        r = subprocess.run([java, str(d / "LegacyRead.java"), str(d / "doc.txt"), str(d / "item.txt"), str(d / "in.txt")],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [f"java 跑不完:{type(e).__name__}"]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    if r.returncode != 0:
+        return ["java 失敗:" + r.stderr[-300:]]
+    out = []
+    for ln in r.stdout.splitlines():
+        if ln == "N":
+            out.append(None)
+        elif ln == "SOE":
+            out.append("SOE")
+        else:
+            raw = bytes.fromhex(ln[2:]).decode("utf-8")
+            out.append({unicodedata.normalize("NFC", x) for x in raw.split("\n")} if raw else set())
+    return out
+
+
+def _arch_tpl_rule_lines(node_text):
+    import re
+    return [ln.strip() for ln in node_text.split("\n") if re.match(r"\s+RULE:", ln)]
+
+
+def _arch_tpl_funs(test_text):
+    import re
+    return set(re.findall(r"@Test\s+fun (\w+)\(\)", test_text))
 
 
 def t_arch_target_android_template_valid():
-    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S1] 日期佔位換成實際日期存成節點:lint 0 問題、規則讀法讀到十二條有效 RULE 行;
-    沒換佔位照抄時 lint 印日期格式警告。翻紅:範本任一條 RULE 少了必有鍵 → 規則數或 lint 翻紅;範本寫死日期 → 前置翻紅。"""
-    import datetime as _dt
-    block = _android_template_block()
-    check("前置:範本用日期佔位而不是寫死日期", "<採用日>" in block and "<回頭日>" in block, block[:200])
-    today = _dt.datetime.now(_dt.timezone.utc).astimezone().date()
-    filled = block.replace("<採用日>", today.isoformat()).replace("<回頭日>", (today + _dt.timedelta(days=365)).isoformat())
-    v = mkvault()
-    (v / "Systems" / "Android目標架構.md").write_text(filled, encoding="utf-8")
-    r = run(v, "lint", "Systems/Android目標架構")
-    check("S1:換好日期後 lint 0 問題", r.returncode == 0 and "0 問題" in r.stdout, r.stdout[-500:])
+    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S1] 產生器在 single、all、required、full、deep、any 這組的節點:lint 0 問題、
+    規則讀法讀到十二條有效 RULE 行、沒有一條算過期、沒有留下日期佔位。
+    翻紅:資料檔任一條 RULE 少了必有鍵或條件寫錯 → 規則數或 lint 翻紅;產生器不填日期 → 佔位檢查翻紅。"""
     m = _load_lumos_inproc()
-    rules = m._arch_target_note_rules(m._note_from_text("Systems/Android目標架構.md", filled))
+    d, _g, _w, _c = _arch_tpl_repo()
+    rc, node, err = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="node")
+    check("前置:產生器印得出節點", rc == 0 and node.startswith("---\n"), err[-300:])
+    check("S1:產出沒有留下佔位字", "{{" not in node and "<採用日>" not in node, node[:300])
+    v = mkvault()
+    (v / "Systems" / "Android目標架構.md").write_text(node, encoding="utf-8")
+    r = run(v, "lint", "Systems/Android目標架構")
+    check("S1:lint 0 問題", r.returncode == 0 and "0 問題" in r.stdout, r.stdout[-500:])
+    rules = m._arch_target_note_rules(m._note_from_text("Systems/Android目標架構.md", node))
     check("S1:讀到十二條有效規則、沒有一條算過期", len(rules) == 12 and not any(e for _t, e in rules), str(rules)[:300])
-    (v / "Systems" / "Android目標架構.md").write_text(block, encoding="utf-8")
-    r2 = run(v, "lint", "Systems/Android目標架構")
-    check("S1:沒換佔位照抄 → 印日期格式警告",
-          "[since:<採用日>] 日期要寫成 YYYY-MM-DD" in r2.stdout and "[until:<回頭日>] 日期要寫成 YYYY-MM-DD" in r2.stdout, r2.stdout[-400:])
 
 
 def t_arch_target_android_template_linked_from_usage():
@@ -109606,20 +109933,384 @@ def t_arch_target_android_template_linked_from_usage():
 
 
 def t_arch_target_android_template_konsist_names_match():
-    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S3] Konsist 骨架的對照表與 Kotlin 圍欄裡的測試函式兩邊一致:
-    表上的名字都有同名 @Test 函式、圍欄裡每支 @Test 函式都列在表上。
-    翻紅:改了骨架裡的測試名沒同步對照表(或反過來)→ 兩個集合不等。"""
+    """[Projects/Android的MVVM與DDD目標架構範本_計劃 S3] 產生器在預設那組的節點與架構測試兩邊一致:RULE 行綁的測試名都有同名 @Test 函式、
+    每支 @Test 函式都被 RULE 行或命名慣例認領,而且八支以上。
+    翻紅:改了資料檔裡的測試名沒同步 RULE 行的 [test:](或反過來)→ 兩個集合不等。"""
+    import re
+    m = _load_lumos_inproc()
+    d, _g, _w, _c = _arch_tpl_repo()
+    _rc, node, _e = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="node")
+    _rc, test, _e = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="test")
+    bound = {t for ln in _arch_tpl_rule_lines(node) for t in re.findall(r"\[test:(\w+)\]", ln)}
+    defined = _arch_tpl_funs(test)
+    check("前置:兩邊都讀得到七支以上", len(bound) >= 7 and len(defined) >= 8, f"{bound} / {defined}")
+    check("S3:RULE 行綁的測試名與 @Test 函式一致(差的只有命名慣例)", defined == bound | _ARCH_TPL_CONVENTIONS,
+          f"只在規則 {bound - defined};只在測試 {defined - bound - _ARCH_TPL_CONVENTIONS}")
+
+
+def t_arch_template_android_all_combos():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S1] 六個開關 64 種組合逐一產出:節點 lint 0 問題、
+    有效 RULE 行數=9 條共通+ddd=full 的 3 條+modules=multi 的 1 條、沒有過期;RULE 綁的測試都在同份 Konsist 檔、
+    Konsist 檔的測試都被 RULE 或命名慣例認領;arch_targets 經讀宣告的函式讀出的條數=--scope 個數(multi 給兩個範圍)。
+    判準:規則數由計劃〈做法〉9 的開關語意推出(lite 拿掉三條聚合類、multi 多一條模組依賴,其餘開關只換寫法不增減)。
+    lint 一次只收一篇、64 篇各起一次子程序太慢:各組合的節點只差 RULE 行與正文的標題、開關註記,所以把 64 組出現過的 RULE 行
+    聯集放進預設組的框架 lint 一次(每一行都被 lint 看過),另把預設組與六個開關全部反過來那組整篇各 lint 一次。
+    翻紅:資料檔某塊條件寫錯(兩塊同時收或都不收)→ 該組合的規則數或測試名對不上;某條 RULE 缺必有鍵 → 聯集那篇 lint 翻紅。"""
+    import itertools, json as _j, re
+    m = _load_lumos_inproc()
+    d, _g, _w, _c = _arch_tpl_repo()
+    keys = list(_ARCH_TPL_DEFAULT)
+    opts = {"modules": ("single", "multi"), "legacy": ("all", "new-only"), "usecase": ("required", "optional"),
+            "ddd": ("full", "lite"), "interfaces": ("deep", "always"), "ui_state": ("single", "any")}
+    v = mkvault()
+    bad, n, union, full = [], 0, [], {}
+    for vals in itertools.product(*(opts[k] for k in keys)):
+        sw = dict(zip(keys, vals))
+        scopes = (_ARCH_TPL_SCOPE, _ARCH_TPL_SCOPE2) if sw["modules"] == "multi" else (_ARCH_TPL_SCOPE,)
+        name = f"Systems/Android目標架構{n}"
+        got = {s: _arch_tpl_call(m, d, sw, scopes=scopes, section=s, node=name) for s in ("node", "targets", "test")}
+        if any(rc != 0 for rc, _o, _e in got.values()):
+            bad.append((sw, "產生器失敗", [e for _r, _o, e in got.values()]))
+            continue
+        node, test = got["node"][1], got["test"][1]
+        n += 1
+        union += [ln for ln in _arch_tpl_rule_lines(node) if ln not in union]
+        if all(sw[k] == _ARCH_TPL_DEFAULT[k] for k in keys) or all(sw[k] != _ARCH_TPL_DEFAULT[k] for k in keys):
+            full[name] = node
+        rules = m._arch_target_note_rules(m._note_from_text(f"{name}.md", node))
+        want = 9 + (3 if sw["ddd"] == "full" else 0) + (1 if sw["modules"] == "multi" else 0)
+        if len(rules) != want or any(e for _t, e in rules):
+            bad.append((sw, f"規則 {len(rules)} 條,應為 {want}"))
+        bound = {t for ln in _arch_tpl_rule_lines(node) for t in re.findall(r"\[test:(\w+)\]", ln)}
+        funs = _arch_tpl_funs(test)
+        if not bound <= funs or not funs <= bound | _ARCH_TPL_CONVENTIONS:
+            bad.append((sw, f"規則綁了沒定義 {bound - funs};定義了沒人認領 {funs - bound - _ARCH_TPL_CONVENTIONS}"))
+        t_rules, t_warns = m._arch_targets_config(_j.loads(got["targets"][1]))
+        if t_warns or len(t_rules) != len(scopes):
+            bad.append((sw, f"宣告讀出 {len(t_rules)} 條、警告 {t_warns}"))
+    check("S1:64 種組合都產得出來、規則數與測試名都對得上", n == 64 and not bad, str(bad[:3]))
+    check("前置:整篇 lint 的兩組都產出了、聯集至少二十條", len(full) == 2 and len(union) >= 20, f"{list(full)} / {len(union)}")
+    frame = next(iter(full.values())).split("\n")
+    head = [ln for ln in frame[:frame.index("summary: |-") + 1]]
+    tail = frame[frame.index("---", 1):]
+    full["Systems/Android目標架構聯集"] = "\n".join(head + ["  " + ln for ln in union] + tail)
+    for name, text in full.items():
+        (v / f"{name}.md").write_text(text, encoding="utf-8")
+        r = run(v, "lint", name)
+        check(f"S1:{name.split('/')[-1]} lint 0 問題", r.returncode == 0 and "0 問題" in r.stdout, r.stdout[-600:])
+
+
+def t_arch_template_android_switch_effects():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S2] 從預設組只切一個開關,產出只在那個開關負責的地方不同。
+    判準來自計劃〈做法〉9:usecase=optional 換掉用例與 ViewModel 建構子兩條、測試不再擋 Repository 結尾而改擋 data 層四種結尾;
+    ddd=lite 少三條規則與三支聚合類測試、RULE 行沒有「聚合」;interfaces=always 換掉深模組那條、用例測試認 UseCaseImpl、多一支介面測試;
+    ui_state=single 換掉唯讀狀態那條與它的測試;modules=multi 只多一條模組依賴、測試檔除了開頭的開關註記一字不差。
+    翻紅:任一開關多換或少換一條規則或一支測試 → 對應的差集條數翻紅。"""
+    import re
+    m = _load_lumos_inproc()
+    d, _g, _w, _c = _arch_tpl_repo()
+
+    def gen(**flip):
+        sw = dict(_ARCH_TPL_DEFAULT, **flip)
+        node = _arch_tpl_call(m, d, sw, section="node")[1]
+        test = _arch_tpl_call(m, d, sw, section="test")[1]
+        return set(_arch_tpl_rule_lines(node)), test, _arch_tpl_funs(test)
+    b_rules, b_test, b_funs = gen()
+    check("前置:預設組十二條規則、九支測試", len(b_rules) == 12 and len(b_funs) == 9, f"{len(b_rules)} / {b_funs}")
+    req = re.search(r"fun viewModelDependsOnUseCasesNotFrameworkOrRepository\(\)\s*\{.*?\n    \}", b_test, re.S)
+    check("S2:usecase=required 的 ViewModel 測試不比 optional 鬆:Repository 之外也擋 RepositoryImpl、DataSource、Dao、Api(代碼審 r1 F5)",
+          bool(req) and all(f'"{x}"' in req.group(0) for x in ("Repository", "RepositoryImpl", "DataSource", "Dao", "Api"))
+          and "dataSuffixes.any { type.endsWith(it) }" in req.group(0), "")
+
+    rules, test, funs = gen(usecase="optional")
+    gone, new = b_rules - rules, rules - b_rules
+    check("S2:usecase=optional 只換用例與 ViewModel 建構子兩條",
+          len(gone) == 2 and len(new) == 2 and all(("用例" in x or "建構子" in x) for x in gone | new), str(new)[:300])
+    vm_rule = next((x for x in new if "建構子" in x), "")
+    check("S2:usecase=optional 的 ViewModel 規則收 Repository 介面、只禁 data 層實作與資料來源",
+          "Repository 介面" in vm_rule and "不直接收 Repository" not in vm_rule and "RepositoryImpl" in vm_rule, vm_rule)
+    vm_fun = re.search(r"fun viewModelDependsOn\w+\(\)\s*\{.*?\n    \}", test, re.S)
+    body = vm_fun.group(0) if vm_fun else ""
+    check("S2:usecase=optional 的 ViewModel 測試不再擋 Repository 結尾,改擋 RepositoryImpl、DataSource、Dao、Api",
+          'endsWith("Repository")' not in body and all(f'"{s}"' in body for s in ("RepositoryImpl", "DataSource", "Dao", "Api")), body[:400])
+
+    rules, test, funs = gen(ddd="lite")
+    check("S2:ddd=lite 剩九條、RULE 行不含「聚合」", len(rules) == 9 and not any("聚合" in x for x in rules), str([x for x in rules if "聚合" in x])[:200])
+    check("S2:ddd=lite 少的正好是三支聚合類測試",
+          b_funs - funs == {"aggregateRootsHideMutableState", "aggregatesReferenceOthersByIdOnly", "valueObjectsAreImmutable"} and funs <= b_funs,
+          str(b_funs - funs))
+
+    rules, test, funs = gen(interfaces="always")
+    gone, new = b_rules - rules, rules - b_rules
+    check("S2:interfaces=always 拿掉深模組那條、換成一律介面那條",
+          len(gone) == 1 and "深模組" in next(iter(gone)) and len(new) == 1 and "一律寫成介面" in next(iter(new)), str(new)[:200])
+    uc = re.search(r"fun useCasesExposeSingleInvoke\(\)\s*\{.*?\n    \}", test, re.S)
+    check("S2:interfaces=always 的用例測試篩選認 UseCaseImpl", bool(uc) and 'endsWith("UseCaseImpl")' in uc.group(0), "")
+    check("S2:interfaces=always 多一支介面測試", funs - b_funs == {"implementationsImplementSameNameInterface"} and b_funs <= funs, str(funs - b_funs))
+
+    rules, test, funs = gen(ui_state="single")
+    gone, new = b_rules - rules, rules - b_rules
+    check("S2:ui_state=single 換成單一 uiState 那條", len(gone) == 1 and len(new) == 1 and "只公開一個 uiState" in next(iter(new)), str(new)[:200])
+    check("S2:ui_state=single 的測試跟著換", funs ^ b_funs == {"viewModelExposesReadOnlyState", "viewModelExposesSingleUiState"}, str(funs ^ b_funs))
+
+    rules, test, funs = gen(modules="multi")
+    check("S2:modules=multi 只多一條模組依賴規則", rules > b_rules and len(rules - b_rules) == 1 and "模組依賴" in next(iter(rules - b_rules)), "")
+
+    def strip(t):
+        return "\n".join(ln for ln in t.split("\n") if "開關:" not in ln)
+    check("S2:modules=multi 的測試檔只差開頭的開關註記(分層與 Android 匯入兩支照留)",
+          strip(test) == strip(b_test) and {"layersDependOnlyInward", "domainHasNoAndroidImports"} <= funs, "")
+
+
+def t_arch_template_android_legacy_modes():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S3] legacy=new-only 的舊檔清單是 {"files": [...]}:列出範圍底下 git 已追蹤、
+    架構對齊會拿來審或架構測試會掃的每支檔(含 xml、gradle 腳本、圖片、androidTest、testFixtures、integrationTest、src/main 底下 test/ 段的 .kt;
+    兩邊都不看的 src/test、.md 不收),
+    不含前綴相同的鄰目錄,轉 NFC、依字典序,方括號與星號照字面;檔名含雙引號、反斜線或控制字元時拒絕;legacy=all 不產清單。
+    判準:期望清單在這裡逐支手寫;另對範圍內每支檔比對「在清單上」⇔「架構對齊分目標時會命中這條宣告」(代碼審 r1 正確性席 F4:
+    清單漏收的舊檔採用後一碰就照目標審)。
+    翻紅:清單改用自訂的測試目錄排除 → androidTest、testFixtures 那兩支漏掉;只照架構對齊的判定 → mysrc/test/Q.kt 漏掉(代碼審 r2);
+    不轉 NFC → Café 那支對不上;範圍比對不以斜線為界 → cartx 混進來。"""
+    import json as _j
+    import re
+    m = _load_lumos_inproc()
+    d, g, w, c = _role_git_repo()
+    g("config", "core.precomposeunicode", "false")   # macOS 的 git 預設把 NFD 檔名轉成 NFC 再印,關掉才跟 Linux 一樣吐 NFD、守得到產生器自己的 NFC
+    sc = "feature/cart"
+    cafe_nfd = unicodedata.normalize("NFD", f"{sc}/src/main/java/x/Café.kt")
+    for rel in (f"{sc}/src/main/java/x/A.kt", f"{sc}/src/main/res/layout/b.xml", f"{sc}/build.gradle.kts",
+                f"{sc}/src/main/java/x/a[1]*.kt", cafe_nfd, f"{sc}/src/main/java/mysrc/test/Q.kt",
+                f"{sc}/src/test/java/x/ATest.kt", f"{sc}/src/androidTest/java/x/B.kt", f"{sc}/src/testFixtures/java/x/F.kt",
+                f"{sc}/src/main/res/drawable/p.png", f"{sc}/README.md", f"{sc}/src/integrationTest/java/x/I.kt",
+                f"{sc}/src/androidTest/java/x/test/H.kt", f"{sc}/src/main/java/x/src/test/Z.kt", "feature/cartx/src/main/java/x/Z.kt"):
+        w(rel, "x\n")
+    c("init")
+    sw = dict(_ARCH_TPL_DEFAULT, legacy="new-only")
+    rc, out, err = _arch_tpl_call(m, d, sw, scopes=(sc,), section="legacy")
+    want = sorted([f"{sc}/build.gradle.kts", f"{sc}/src/main/java/x/A.kt", f"{sc}/src/main/java/mysrc/test/Q.kt",
+                   f"{sc}/src/main/java/x/src/test/Z.kt",
+                   f"{sc}/src/integrationTest/java/x/I.kt",
+                   unicodedata.normalize("NFC", f"{sc}/src/main/java/x/Café.kt"), f"{sc}/src/main/java/x/a[1]*.kt",
+                   f"{sc}/src/main/res/layout/b.xml", f"{sc}/src/main/res/drawable/p.png",
+                   f"{sc}/src/androidTest/java/x/B.kt", f"{sc}/src/testFixtures/java/x/F.kt"])
+    try:
+        got = _j.loads(out)
+    except ValueError:
+        got = None
+    check("S3:new-only 印出 {\"files\": [...]} 的 JSON", rc == 0 and isinstance(got, dict) and list(got) == ["files"], (out + err)[-300:])
+    check("S3:清單正好是範圍內架構對齊會審或架構測試會掃的檔(含 xml、gradle、圖片、androidTest、testFixtures、integrationTest、src/main 底下 test/ 段的 .kt;不含 src/test、.md、鄰目錄),NFC、字典序、方括號星號照字面",
+          (got or {}).get("files") == want, f"{(got or {}).get('files')} ≠ {want}")
+    listed = set((got or {}).get("files") or [])
+    tracked = [unicodedata.normalize("NFC", x) for x in g("ls-files", "-z").stdout.split("\0") if x.startswith(sc + "/")]
+    rules = [(sc + "/**", "Systems/Android目標架構")]
+    # 判準:架構對齊那頭問審查用的函式;架構測試那頭照 Konsist 0.17.3 的算法在這裡用另一種寫法重寫
+    # (第一個 src/ 段之後那段是原始碼集名稱,取第一個冒號之後、轉小寫含 test 就是測試;沒有 src/ 段時名稱是空字串)
+    def konsist_scans(f):
+        m = re.match(r"(?:[^/]*/)*?src/([^/]*)/", f)
+        name = m.group(1).partition(":")[2] or m.group(1) if m else ""
+        return f.endswith(".kt") and "test" not in name.lower()
+    odd = [f for f in tracked if (f in listed) != (m._arch_target_rule_index(f, rules) is not None or konsist_scans(f))]
+    check("S3:範圍內每支檔「在清單上」⇔「架構對齊會審或架構測試會掃」", len(tracked) == 14 and not odd, f"{len(tracked)} / {odd}")
+    # 代碼審 r4 F41、F51、F42:Konsist 判法只有在多個 src/ 段、沒有 src/ 段、多個冒號時跟簡化寫法不同,逐案直接問
+    cases = {"feature/cart/src/main/java/x/src/test/Z.kt": False, "tests/app/N.kt": False, "app/src/androidTest/x/A.kt": True,
+             "app/src/x:test:main/y/A.kt": True, "app/src/x:main:test/y/A.kt": True, "app/src/a:b/y/test/A.kt": False}
+    wrong = {f: m._arch_tpl_konsist_test(f) for f, want_t in cases.items() if m._arch_tpl_konsist_test(f) != want_t}
+    check("S3:Konsist 判測試原始碼集照它的算法(第一個 src/ 段、沒有 src/ 是空字串、第一個冒號之後)", not wrong, str(wrong))
+    test_new = _arch_tpl_call(m, d, sw, scopes=(sc,), section="test")[1]
+    reader = _arch_tpl_kotlin_legacy_reader(test_new)
+    check("S3:產生器寫出的清單,產出的架構測試讀得進去、讀出同一份", reader is not None and reader(out) == set(want), "")
+    rc_all, out_all, err_all = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, scopes=(sc,), section="legacy")
+    rc_pv, pv, _e = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, scopes=(sc,))
+    check("S3:legacy=all 不產舊檔清單(--print legacy 拒絕、預覽沒有 files)",
+          rc_all == 2 and not out_all and "不產舊檔清單" in err_all and rc_pv == 0 and '"files"' not in pv, err_all[-200:])
+    for label, bad_name in (("雙引號", 'q"x.kt'), ("反斜線", "b\\x.kt"), ("控制字元", "c\x01x.kt")):
+        g("checkout", "-q", "-b", f"bad{label}", "main")
+        w(f"{sc}/src/main/java/x/{bad_name}", "x\n")
+        c(f"add {label}")
+        rc_b, out_b, err_b = _arch_tpl_call(m, d, sw, scopes=(sc,), section="legacy")
+        check(f"S3:檔名含{label}時拒絕並列出那支", rc_b == 2 and not out_b and repr(f"{sc}/src/main/java/x/{bad_name}") in err_b, err_b[-300:])
+        g("checkout", "-q", "main")
+
+
+def t_arch_template_android_scope_and_print():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S4] --scope 不合法(空、點號、./ 或 / 開頭、反斜線、控制字元、萬用字元、空段或 .. 段、
+    少於兩段、底下沒有 git 已追蹤的檔)一律 rc 2 說明;結尾斜線去掉;--print 只印那一段原文;跑完專案裡沒有多出或改動任何檔(走子程序)。
+    翻紅:拿掉任一道 --scope 檢查 → 對應那一行 rc 變 0;--print 混進標題 → 原文檢查翻紅。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    d, g, _w, _c = _arch_tpl_repo()
+    # 每個壞範圍除了要測的那一項,其他都合法(至少兩段、底下有檔);比對拒絕原因,同一個輸入被別道檢查擋下也算沒守住
+    glob_bad = "以 ./ 或 / 開頭,或有反斜線"
+    for s, why in (("", glob_bad), ("  ", glob_bad), (".", "是點號"), ("./app/src", glob_bad), ("/app/src", glob_bad),
+                   ("app\\src/main", glob_bad), ("app/s\x01rc", "控制字元"), ("app/src/*", "萬用字元"), ("app/sr?", "萬用字元"),
+                   ("app/[s]rc", "萬用字元"), ("app//src", "空段"), ("app/../app/src", "空段"), ("app/./src", "空段"),
+                   ("app", "少於兩段"), ("nothere/src", "沒有任何 git 已追蹤的檔")):
+        rc, out, err = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, scopes=(s,), section="targets")
+        check(f"S4:--scope {s!r} 拒絕並說明「{why}」", rc == 2 and not out and "--scope" in err and why in err, f"rc={rc} {err[-200:]}")
+    rc, out, _e = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, scopes=(_ARCH_TPL_SCOPE + "/",), section="targets")
+    check("S4:結尾斜線去掉", rc == 0 and _j.loads(out)["arch_targets"][0]["path"] == _ARCH_TPL_SCOPE + "/**", out[:200])
+    before = g("status", "--porcelain", "--untracked-files=all", "--ignored").stdout
+    flags = ["arch-template", "android", "--root", "com.ex.app", "--scope", _ARCH_TPL_SCOPE] + \
+            [x for k, v in _ARCH_TPL_DEFAULT.items() for x in ("--" + k.replace("_", "-"), v)]
+    outs = {}
+    for sec in ("node", "targets", "test", None):
+        r = subprocess.run([sys.executable, GRAPHCTL, *flags, *(["--print", sec] if sec else [])], capture_output=True, text=True, cwd=str(d))
+        outs[sec] = r
+    check("S4:四次子程序都 rc 0", all(r.returncode == 0 for r in outs.values()), str({k: r.stderr[-200:] for k, r in outs.items() if r.returncode}))
+    check("S4:--print node 只印節點原文", outs["node"].stdout.startswith("---\n") and "── " not in outs["node"].stdout, outs["node"].stdout[:120])
+    check("S4:--print targets 只印宣告原文(整段讀得成 JSON)", list(_j.loads(outs["targets"].stdout)) == ["arch_targets"], outs["targets"].stdout[:120])
+    check("S4:--print test 只印架構測試原文", outs["test"].stdout.startswith("// 架構規則測試") and outs["test"].stdout.rstrip().endswith("}")
+          and "── " not in outs["test"].stdout, outs["test"].stdout[:120])
+    check("S4:不帶 --print 印四段預覽,每段標存放位置",
+          all(f"── {k}:" in outs[None].stdout for k in ("node", "targets", "legacy", "test")) and ".lumos/config.json" in outs[None].stdout, outs[None].stdout[:300])
+    after = g("status", "--porcelain", "--untracked-files=all", "--ignored").stdout
+    check("S4:跑完專案裡沒有多出或改動任何檔", before == after == "", after[:300])
+
+
+def t_arch_template_android_doc_matches_switches():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S7] 技能文件〈開關〉表列的旗標與選項,跟產生器 --help 實際收的完全一致。
+    判準:兩邊各自從原文讀(文件表格、argparse 印的 {選項}),不從產生器的開關表抄。
+    翻紅:文件改了一個選項名、或產生器加了開關沒寫進文件 → 兩個 dict 不等。"""
     import re
     _need_src(_ANDROID_TEMPLATE)
     text = (Path(GRAPHCTL).resolve().parent.parent / _ANDROID_TEMPLATE).read_text(encoding="utf-8")
-    section = text.split("\n## Konsist 骨架\n", 1)[1].split("\n## ", 1)[0] if "\n## Konsist 骨架\n" in text else ""
-    table = [ln for ln in section.split("\n") if ln.startswith("|") and "`" in ln]
-    listed = {n for ln in table for n in re.findall(r"`([a-z][A-Za-z]+)`", ln.split("|")[2])}
-    fences = re.findall(r"```kotlin\n(.*?)\n```", section, re.S)
-    code = next((f for f in fences if "class ArchitectureRulesTest" in f), "")
-    defined = set(re.findall(r"@Test\s+fun (\w+)\(\)", code))
-    check("前置:對照表與骨架都讀得到七支以上", len(listed) >= 7 and len(defined) >= 7, f"{listed} / {defined}")
-    check("S3:對照表的測試名與骨架的 @Test 函式一致", listed == defined, f"只在表上 {listed - defined};只在骨架 {defined - listed}")
+    section = text.split("\n## 開關\n", 1)[1].split("\n## ", 1)[0] if "\n## 開關\n" in text else ""
+    doc = {}
+    for ln in section.split("\n"):
+        cells = ln.split("|")
+        if not ln.startswith("|") or len(cells) < 4:
+            continue
+        flag = re.findall(r"`(--[a-z-]+)`", cells[1])
+        if flag:
+            doc[flag[0]] = set(re.findall(r"`([a-z-]+)`", cells[2]))
+    r = subprocess.run([sys.executable, GRAPHCTL, "arch-template", "--help"], capture_output=True, text=True)
+    helped = {f"--{k}": set(v.split(",")) for k, v in re.findall(r"--([a-z-]+) \{([a-z,-]+)\}", r.stdout) if k != "print"}
+    check("前置:文件表與 --help 都讀到六個開關", len(doc) == 6 and len(helped) == 6, f"{doc} / {helped}")
+    check("S7:文件的開關與選項跟產生器實際收的一致", doc == helped, f"文件 {doc} ≠ 產生器 {helped}")
+
+
+def t_arch_template_android_konsist_legacy_shape():
+    """[Projects/Android目標架構開關與舊檔畢業_計劃 S8] 產出的 Konsist 檔:往上找 .lumos/config.json、找不到就 error;範圍目錄寫成常數;
+    聚合根名單取自全部正式程式(all)、受檢查的是過濾後的範圍(scope);new-only 讀舊檔清單的 files 陣列、檔不存在或取不出就失敗;
+    all 不碰舊檔清單。翻紅:聚合根名單改從 scope 算、new-only 不讀清單、all 也讀清單 → 各自那一行翻紅。"""
+    import re
+    m = _load_lumos_inproc()
+    d, _g, _w, _c = _arch_tpl_repo()
+    new = _arch_tpl_call(m, d, dict(_ARCH_TPL_DEFAULT, legacy="new-only"), scopes=(_ARCH_TPL_SCOPE, _ARCH_TPL_SCOPE2), section="test")[1]
+    old = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="test")[1]
+    for label, t in (("new-only", new), ("all", old)):
+        check(f"S8:{label} 往上找 .lumos/config.json 當根、找不到就 error",
+              re.search(r'generateSequence\(File\(System\.getProperty\("user\.dir"\)\)[^\n]*\n[^\n]*\.lumos/config\.json[^\n]*\n\s*\?: error\(', t) is not None, "")
+        check(f"S8:{label} 聚合根名單取自全部正式程式、檢查的是範圍內的", "val rootNames = all.classes()" in t
+              and "scope.classes().filter { it.hasAnnotationWithName(\"AggregateRoot\") }.forEach" in t and "val scope = all.slice" in t, "")
+    check("S8:範圍目錄寫成常數(兩個範圍都在)", f'private val scopeDirs = listOf("{_ARCH_TPL_SCOPE}", "{_ARCH_TPL_SCOPE2}")' in new, "")
+    check("S8:new-only 讀舊檔清單的 files 陣列,檔不存在或取不出就失敗",
+          'readLegacyFiles(File(repoRoot, ".lumos/arch-legacy.json"))' in new and "check(f.isFile)" in new
+          and '?: error("舊檔清單 ${f.path} 的形狀架構測試不認' in new and "rel !in legacyFiles" in new, "")
+    check("S8:all 的產出不讀舊檔清單", "arch-legacy" not in old and "legacyFiles" not in old, "")
+    # 代碼審 r1 正確性席 F1:Kotlin 那邊判範圍與清單的幾行要跟 lumos 一致(斜線為界、兩邊轉 NFC);工具鏈 repo 編譯不到 Kotlin,只能釘原文
+    for label, t in (("new-only", new), ("all", old)):
+        check(f"S8:{label} 範圍以斜線為界、相對路徑轉 NFC、範圍常數也轉 NFC",
+              'scopeDirs.any { rel == it || rel.startsWith("$it/") }' in t
+              and "nfc(File(path).canonicalFile.relativeTo(repoRoot).invariantSeparatorsPath)" in t
+              and ".map { nfc(it) }" in t, "")
+    check("S8:new-only 清單的每個字串轉 NFC 再比", ".map { nfc(it.groupValues[1]) }" in new, "")
+    dom = re.search(r"fun domainHasNoAndroidImports\(\)\s*\{.*?\n    \}", new, re.S)
+    check("S8:領域層測試照 RULE 寫的範圍擋 Android、AndroidX、Retrofit 與常見序列化框架的 import(代碼審 r3 F24)",
+          bool(dom) and all(f'"{x}"' in dom.group(0) for x in ("android.", "androidx.", "retrofit2.", "kotlinx.serialization.",
+                                                               "com.squareup.moshi.", "com.google.gson.", "com.fasterxml.jackson."))
+          and "frameworkPrefixes.any { imp.name.startsWith(it) }" in dom.group(0), "")
+    # 代碼審 r2 F11:Kotlin 讀清單原本只比對原文,改壞照綠。改成兩條 Java 與 Python 同義的正規式,這裡抽出來實際跑,
+    # 判準是標準 JSON(lumos 讀清單用的就是它):Kotlin 讀得進去的,JSON 一定也讀得進去而且讀出同一份;產生器寫得出的形狀一定讀得進去
+    import json as _j
+    read = _arch_tpl_kotlin_legacy_reader(new)
+    check("前置:產出的 Kotlin 抽得到兩條讀清單的正規式", read is not None, "")
+    must_read = {
+        '{"files": []}': set(), '{\n  "files": []\n}\n': set(), '{"files":["a.kt"]}': {"a.kt"},
+        '{\r\n  "files": [\r\n    "a/b.kt",\r\n    "c[1]*.kt"\r\n  ]\r\n}\r\n': {"a/b.kt", "c[1]*.kt"},
+        '\ufeff{"files": ["é.kt"]}': {"é.kt"}, '{"files": ["e\u0301.kt"]}': {"é.kt"},
+    }
+    must_reject = ['{"files": ["a.kt",]}', '{"files": [,"a.kt"]}', '{"files": ["a.kt" "b.kt"]}', '{"files": ["a.kt"]',
+                   '{"files": ["a.kt"]}}', '{"x": 1, "files": ["a.kt"]}', '{"files": ["a.kt"], "x": 1}', '["a.kt"]',
+                   '{"meta": {"files": ["a.kt"]}}', '{"files": ["a\\u0041.kt"]}', '{"files": ["a\x01.kt"]}',
+                   '{"files": [1]}', '{"files":\u00a0["a.kt"]}', '{"files": "a.kt"}', '', '{"files": ["a.kt"]} x',
+                   # 代碼審 r3:開頭有雜字(F31);檔尾是 Java 的 $ 會跳過、Python 的不會的行終止符(F22、F32);BOM 不在最前面
+                   'x{"files": ["a.kt"]}', '{"files": ["a.kt"]}\u0085', '{"files": ["a.kt"]}\u2028', '{"files": ["a.kt"]}\u2029',
+                   ' \ufeff{"files": []}']
+    bad_read = {t: read(t) for t in must_read if read and read(t) != must_read[t]}
+    bad_rej = [t for t in must_reject if read and read(t) is not None]
+    check("S8:產生器寫得出的形狀(空陣列、CRLF、BOM、方括號星號、NFD)Kotlin 都讀得進去、讀出 NFC", read is not None and not bad_read, str(bad_read)[:300])
+    check("S8:尾逗號、少逗號、少括號、多欄位、巢狀、跳脫、控制字元、非字串、不換行空白、尾巴多字 Kotlin 都不認", read is not None and not bad_rej, str(bad_rej)[:300])
+
+    def json_files(t):
+        try:
+            d = _j.loads(t.removeprefix("\ufeff"))
+        except ValueError:
+            return None
+        fs = d.get("files") if isinstance(d, dict) else None
+        return {unicodedata.normalize("NFC", x) for x in fs} if isinstance(fs, list) and all(isinstance(x, str) for x in fs) else None
+    looser = [t for t in list(must_read) + must_reject if read and read(t) is not None and read(t) != json_files(t)]
+    check("S8:Kotlin 讀得進去的,標準 JSON 也讀得進去而且讀出同一份(只會比 lumos 嚴、不會比它寬)", read is not None and not looser, str(looser)[:300])
+    # 代碼審 r3 F21:Java 對一般的重複群組逐次遞迴,清單兩千多條就堆疊溢位,Python 的 re 看不到;有 java 就用真的 Java 跑同一批
+    big = "{\n  \"files\": [\n" + ",\n".join(f'    "feature/cart/src/main/java/com/ex/C{i}.kt"' for i in range(50000)) + "\n  ]\n}\n"
+    inputs = list(must_read) + must_reject + [big]
+    want_java = [must_read[t] for t in must_read] + [None] * len(must_reject) + [{f"feature/cart/src/main/java/com/ex/C{i}.kt" for i in range(50000)}]
+    got_java = _arch_tpl_java_legacy_read(new, inputs)
+    if got_java is None:
+        print("  ⚠ S8:這台機器沒有能用的 java,「用真的 Java 跑讀清單正規式」那幾條這次沒驗到(CI 的 ubuntu 有 java)")
+    else:
+        bad_java = [(inputs[i][:40], (got_java[i] if not isinstance(got_java[i], set) else len(got_java[i])) if i < len(got_java) else "沒有結果")
+                    for i in range(len(inputs)) if i >= len(got_java) or got_java[i] != want_java[i]]
+        check("S8:真的 Java 跑同一批輸入,判法跟上面一樣;5 萬條的清單讀得進去、不堆疊溢位", len(got_java) == len(inputs) and not bad_java,
+              (str(got_java[:1]) if len(got_java) != len(inputs) else str(bad_java))[:300])
+    # F2:範圍路徑裡的 $ 在 Kotlin 字串會被當樣板
+    d2, _g2, w2, c2 = _role_git_repo()
+    w2("feature/$gen/src/main/X.kt", "x\n")
+    c2("init")
+    t2 = _arch_tpl_call(m, d2, _ARCH_TPL_DEFAULT, scopes=("feature/$gen",), section="test")[1]
+    check("S8:範圍路徑的 $ 在 Kotlin 字串裡跳脫成 \\$", 'listOf("feature/\\$gen")' in t2, t2[:0] + str([ln for ln in t2.split("\n") if "scopeDirs =" in ln]))
+    # 2026-10-30 在 macrobench-lab 實測:Konsist 的 assertArchitecture 只要有一層在範圍內一支檔都沒有就直接失敗,new-only 剛採用時整支紅
+    check("S8:分層不用 assertArchitecture(空的層會讓它直接失敗)", all(".assertArchitecture" not in t and "KoArchitectureCreator" not in t for t in (new, old)), "")
+
+
+def t_arch_template_android_rejects_bad_input():
+    """產生器的其他拒絕(計劃〈做法〉1、2;條款外的補充):六個開關少一個、--root 不是 Kotlin 套件名、開關資料檔本身寫壞
+    (看不懂的塊頭、條件裡的開關或選項打錯字、同一組開關收進兩支同名測試、資料檔有產生器不認得的佔位字)一律 rc 2 不印產出;
+    專案自己放的資料檔優先於工具安裝的那份(同既有範本讀法)。
+    翻紅:拿掉條件的開關名檢查 → 打錯字那塊被靜默略過、rc 0;拿掉佔位字檢查 → {{OOPS}} 原樣漏進產出、rc 0。"""
+    m = _load_lumos_inproc()
+    d, _g, w, _c = _arch_tpl_repo()
+    for k in _ARCH_TPL_DEFAULT:
+        sw = {x: v for x, v in _ARCH_TPL_DEFAULT.items() if x != k}
+        sw[k] = None
+        rc, out, err = _arch_tpl_call(m, d, sw, section="node")
+        check(f"少給 {k} → 拒絕並點名", rc == 2 and not out and "--" + k.replace("_", "-") in err, err[-200:])
+    for root in ("", "com..ex", "1com.ex", "com.ex-app", "com.ex;x", "com.ex\nimport"):
+        rc, out, err = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="test", root=root)
+        check(f"--root {root!r} 拒絕", rc == 2 and not out and "--root" in err, err[-200:])
+    rc, out, err = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="targets", node="Notes/X")
+    check("--node 不是 Systems/<名> → 產出的宣告讀不進去、拒絕", rc == 2 and not out and "讀不進去" in err, err[-200:])
+    rc, out, err = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, scopes=(_ARCH_TPL_SCOPE, _ARCH_TPL_SCOPE + "/"), section="targets")
+    check("同一個 --scope 給兩次(含結尾斜線寫法)→ 拒絕", rc == 2 and not out and "兩次" in err, err[-200:])
+    head = "=== node *\n---\ntype: system\nsummary: |-\n=== rule *\nRULE:x {{FIELDS}}\n=== node *\n---\n# {{NODE_TITLE}}\n=== code *\nclass T {\n"
+    tail = "=== code *\n}\n"
+    ok_test = "=== test *\n    @Test\n    fun a() {}\n"
+    cases = (
+        ("自己的資料檔優先", head + ok_test + tail, 0, ""),
+        ("看不懂的塊頭", head + "=== tests *\n" + tail, 2, "看不懂的塊頭"),
+        ("條件的開關打錯字", head + "=== test dddd=full\n    @Test\n    fun b() {}\n" + tail, 2, "條件寫錯"),
+        ("條件的選項打錯字", head + "=== test ddd=ful\n    @Test\n    fun b() {}\n" + tail, 2, "條件寫錯"),
+        ("同一組收進兩支同名測試", head + ok_test + "=== test ddd=full\n    @Test\n    fun a() {}\n" + tail, 2, "同名"),
+        ("一塊測試沒有 @Test 函式", head + ok_test + "=== test *\n    fun helper() {}\n" + tail, 2, "剛好一支"),
+        ("不認得的佔位字", head + "=== test *\n    // {{OOPS}}\n    @Test\n    fun a() {}\n" + tail, 2, "OOPS"),
+    )
+    for label, text, want_rc, want_err in cases:
+        w("scripts/templates/android-arch-target.md", text)
+        rc, out, err = _arch_tpl_call(m, d, _ARCH_TPL_DEFAULT, section="test")
+        if want_rc == 0:
+            check(f"資料檔:{label}(產出照專案那份)", rc == 0 and "fun a()" in out and "Konsist" not in out, (out + err)[-200:])
+        else:
+            check(f"資料檔:{label} → 拒絕", rc == 2 and not out and want_err in err, err[-200:])
 
 
 # ── Kotlin 伺服端不列 Android 題(2026-10-15,Projects/前端框架從vue分出_計劃 B10、決策 d2)──
