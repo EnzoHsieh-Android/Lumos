@@ -65474,6 +65474,109 @@ def t_tension_lens_and_gov():
         shutil.rmtree(root, ignore_errors=True)
 
 
+# Projects/Kotlin慣例對齊Android官方與本機detekt_計劃:判準來源是 Android 官方三頁(架構建議頁 2026-10-05、
+# UI 事件頁 2026-05-18、狀態還原頁 2026-10-07)與本機 detekt 1.23.8 的實跑結果,不是 lumos 自己的實作。
+_KT_LEAKS_WHEN_BEFORE = ['\\bContext\\b', 'companion object', 'WeakReference', '\\bActivity\\b', '\\bView\\b', 'WeakReference',
+                         'static\\s+(?:final\\s+)?(?:Context|Activity|View)\\b', 'TimerTask', 'registerReceiver']
+
+
+def _kt_question(m, qid):
+    return next(s for s in m._STACK_QUESTION_SPECS["kt"] if s["id"] == qid)
+
+
+def _kotlin_idioms_text():
+    _need_src("skills/kotlin-idioms/SKILL.md")
+    return (Path(GRAPHCTL).parent.parent / "skills" / "kotlin-idioms" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def t_kt_flow_question_events_as_state():
+    """[S1]Flow 審查題與效能檢核目錄那一列不再教「事件=SharedFlow」,改要求一次性結果化成畫面狀態。
+    守的錯:官方 UI 事件頁明講不要用 Channel 或其他串流送一次性事件(沒人收時會漏),審查題卻教反方向。
+    翻紅釘:把任一處改回「事件=SharedFlow」或拿掉「化成畫面狀態」→ 紅。"""
+    _need_src("docs/lumos-toolchain-knowledge/Systems/效能檢核目錄.md")
+    m = _load_lumos_inproc()
+    q = _kt_question(m, "kt-flow")["q"]
+    check("S1:Flow 題要求一次性結果化成畫面狀態", "化成畫面狀態" in q, q)
+    check("S1:Flow 題不再寫事件=SharedFlow", "事件=SharedFlow" not in q, q)
+    cat = Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge" / "Systems" / "效能檢核目錄.md"
+    row = next((ln for ln in cat.read_text(encoding="utf-8").splitlines() if ln.startswith("| **Channel/Flow 適用性**")), "")
+    check("前置:效能檢核目錄找得到 Channel/Flow 適用性那一列", bool(row), "")
+    check("S1:目錄那一列同步要求化成畫面狀態、不再寫事件廣播=SharedFlow",
+          "化成畫面狀態" in row and "事件廣播=SharedFlow" not in row, row)
+    print("  ✓ t_kt_flow_question_events_as_state")
+
+
+def t_kt_leaks_question_viewmodel_context():
+    """[S2]洩漏審查題問到 ViewModel 收 Context／繼承 AndroidViewModel(官方架構建議頁:ViewModel 不持 Context、不用 AndroidViewModel),
+    觸發字跟改之前一字不差(這份計劃刻意不改擋下條件,加觸發字另開計劃走設計審)。
+    翻紅釘:題目拿掉 AndroidViewModel → 紅;順手在 when 加字 → 紅。"""
+    m = _load_lumos_inproc()
+    spec = _kt_question(m, "kt-leaks")
+    check("S2:洩漏題問到 ViewModel 收 Context 或繼承 AndroidViewModel",
+          "AndroidViewModel" in spec["q"] and "ViewModel 有沒有收 Context" in spec["q"], spec["q"])
+    check("S2:觸發字清單跟改之前一字不差(不改擋下條件)", list(spec["when"]) == _KT_LEAKS_WHEN_BEFORE, str(spec["when"]))
+    print("  ✓ t_kt_leaks_question_viewmodel_context")
+
+
+def t_kotlin_idioms_android_official_rules():
+    """[S3]Kotlin 慣例手冊有四條對齊官方的條款,而且審查鏡頭寫的條號範圍涵蓋到手冊實際的最後一條。
+    守的錯:①官方強烈建議的事件化成狀態、ViewModel 不碰 Context、程序被殺後的狀態還原、假實作測試沒進手冊;
+    ②加了新條款卻沒改「對照 R1 到 Rn 逐條掃」,審查員不會看新條款。
+    翻紅釘:刪掉任一條的標題 → 紅;審查鏡頭留在 R1 到 R18 → 紅。"""
+    import re as _re
+    t = _kotlin_idioms_text()
+    heads = _re.findall(r"^### R(\d+)\. (.+)$", t, flags=_re.M)
+    nums = [int(n) for n, _ in heads]
+    check("前置:讀到條款標題且條號連續從 1 起", nums == list(range(1, len(nums) + 1)), str(nums))
+    titles = " ".join(h for _, h in heads)
+    for need in ("化成狀態", "AndroidViewModel", "程序被系統殺掉", "假實作"):
+        check(f"S3:手冊有「{need}」那條", need in titles, titles[-400:])
+    # 這四條只適用 Android、每條要有自己的依據行(代碼審 r2 正確性席 G2:原本只驗標題,標題改掉、依據行刪光照綠)
+    check("S3:新條款放在「只有 Android 專案適用」那一節", "## 五、Android 特有（只有 Android 專案適用）" in t, "")
+    for n in (19, 20, 21, 22):
+        body = t.split(f"### R{n}. ", 1)[-1].split("\n### ", 1)[0].split("\n## ", 1)[0]
+        check(f"S3:R{n} 有自己的依據行", f"### R{n}. " in t and "\n- 依據：" in body, body[-300:])
+    lens = _re.search("對照 kotlin-idioms 的 R1\u2013R(\\d+) 逐條掃", t)   # 手冊用的是長破折號 U+2013
+    check("S3:審查鏡頭的條號範圍涵蓋到最後一條", bool(lens) and int(lens.group(1)) == max(nums), (lens.group(0) if lens else "找不到審查鏡頭那句"))
+    print("  ✓ t_kotlin_idioms_android_official_rules")
+
+
+def t_kotlin_idioms_detekt_snippet_runs():
+    """[S4]把慣例手冊〈機檢接線〉的 detekt 設定範例照抄跑一次,detekt 要真的分析完、而且範例開的規則真的生效。
+    判準來源:detekt 自己的行為——1.23.8 對不存在的規則以 3 結束、設定的 YAML 壞掉(少括號、型別不對)以 1 結束,
+    兩種都一條不檢查;分析完有發現時以 2 結束。所以斷言「退出碼 2,且範例開的 GlobalCoroutineUsage 抓到樣本那一行」:
+    設定沒載入、整次沒跑、或範例把那條規則關掉,都會紅(代碼審 r1 正確性席 F1:原本只排除退出碼 3,YAML 壞掉照綠)。
+    翻紅釘:範例加回 CoroutineLaunchedInTestWithoutRunTest(1.23 系列沒有)→ 紅;範例刪掉一個右大括號 → 紅。
+    本機沒有 detekt 時照實印沒驗到(同 dart 真機段的寫法;_SrcOnly 專指缺來源 repo 的產物,不拿來表示缺外部工具)。"""
+    import re as _re, shutil as _sh, subprocess as _sp, tempfile as _tf
+    t = _kotlin_idioms_text()
+    sec = t.split("## 機檢接線", 1)
+    check("前置:手冊有〈機檢接線〉段", len(sec) == 2, "")
+    blk = _re.search(r"```yaml\n(.*?)```", sec[1], flags=_re.S)
+    check("前置:〈機檢接線〉段有 yaml 設定範例", bool(blk), sec[1][:300])
+    detekt = _sh.which("detekt")
+    if not detekt:
+        print("  ⚠ 這台沒有 detekt,照抄設定範例實跑那段沒驗到(只驗到範例存在)")
+        return
+    root = Path(_tf.mkdtemp(prefix="lumos-kt-idioms-detekt-"))
+    try:
+        (root / "src" / "p").mkdir(parents=True)
+        # 樣本:import 之後寫 GlobalScope.launch——GlobalCoroutineUsage 不需型別資訊,只給 --input 也會報(2026-11-01 實測)
+        (root / "src" / "p" / "A.kt").write_text(
+            "package p\n\nimport kotlinx.coroutines.GlobalScope\nimport kotlinx.coroutines.launch\n\n"
+            "fun g() {\n    GlobalScope.launch { println(1) }\n}\n", encoding="utf-8")
+        (root / "idioms.yml").write_text(blk.group(1), encoding="utf-8")
+        r = _sp.run([detekt, "--input", str(root / "src"), "--build-upon-default-config", "--config", str(root / "idioms.yml")],
+                    capture_output=True, text=True, timeout=300)
+        out = r.stdout + r.stderr
+        check("S4:照抄範例跑 detekt 有分析完(退出碼 2=分析完有發現;1=設定壞掉、3=規則不存在都算沒跑)",
+              r.returncode == 2, f"rc={r.returncode} {out[-400:]}")
+        check("S4:範例開的 GlobalCoroutineUsage 真的抓到樣本那一行", "A.kt:7" in out and "[GlobalCoroutineUsage]" in out, out[-400:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_kotlin_idioms_detekt_snippet_runs")
+
+
 def t_tension_doc_sync():
     """[張力 S6]口徑住在九處文字,漂移守衛釘九處都含「tension」(同 t_marker_doc_sync 形狀;消費端沒 skills/vault → _SrcOnly)。"""
     repo = Path(__file__).resolve().parent.parent
