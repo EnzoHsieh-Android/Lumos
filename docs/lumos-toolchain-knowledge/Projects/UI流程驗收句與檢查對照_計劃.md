@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-01
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/stack-knowledge
 lands_in:
   - Systems/android-e2e-acceptance
