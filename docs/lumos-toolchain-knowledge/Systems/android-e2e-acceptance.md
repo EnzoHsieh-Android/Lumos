@@ -2,12 +2,13 @@
 type: system
 status: doing
 created: 2026-10-25
-updated: 2026-10-28
+updated: 2026-11-01
 responsibility: 負責 Android 端到端驗收:範本腳本在主機端依序建 APK、裝上、跑 Maestro flow、截圖比對、記憶體與穩定性、效能並寫 steps.json,lumos android-e2e judge 判四塊、算內容指紋、寫 .lumos/e2e-records/ 的查證紀錄,macrobench.json 的 e2e 段格式,以及 code-loop check 的 Android E2E 那一道(推送前判定、按功能放行)、android-e2e waive 放行與 AI 放行待看的通知。不負責記憶體收集本身(Systems/android-stability-collector)、效能判定與 --results-dir 以外的 macrobench 行為(Systems/macrobenchmark-adapter)、截圖比對的實作(使用者的 maestro-visual-toolkit)、pre-push 的擋下原因表(Systems/bound-tests-gate)
 aliases: []
 about_code:
   - scripts/lumos
   - scripts/templates/android-e2e-run.sh
+  - skills/lumos-android-evidence/SKILL.md
 tags:
   - type/system
   - status/doing
@@ -81,11 +82,19 @@ summary: |-
   WHY:從總表讀回的每一行在印出函式裡收成一個出口過 _out_clean(_e2e_print_runs 內部的 say、history 與不穩彙總整行清),新加印出行走同一個出口就自動清 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 r2、r4 架構對齊與單審席] [因:r2 只清新欄位、r4 又漏了問題與提醒行,逐行補每輪漏一處] [不選:每個印出點各自包一層] [test:t_android_e2e_judge_evidence]
   WHY:history 的逐行讀與篩選(含 --flaky 按執行歸併)放在 _e2e_history_rows,_e2e_history_cmd 只管擋下與印出 [出處:2026-10-28 代碼審 code-E2E紅燈現場與不穩帳 壓提交後 pitfalls 抓到新增告警] [因:按執行歸併那段讓 _e2e_history_cmd 複雜度到 12,超過推送前新增告警閘的上限 10] [不選:lint-waive 放行(不是誤報)] [test:t_android_e2e_flaky_history]
   WHY:範本叫收集腳本時用 LUMOS_STABILITY_STEP_BUDGET_S 傳這一步的上限(T_LONG);專案把 stability.native_retained 寫進設定等於改了記憶體設定,記憶體設定指紋會變、推送前要重跑整套 [出處:[[Projects/原生記憶體增長提示_計劃]] 設計審 r4] [因:收集腳本不知道 e2e 的單步上限,原生配置排行那段跑不完時會連第一段的判定一起丟] [test:t_android_native_e2e_passes_budget]
+  WHY:judge 只把每支 flow 通過那次的算數檢查記進紀錄(checks:count 與 labels,讀不到記 null 加成因代碼),擋不擋由推送檢查依主線判 [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 設計審 r1] [因:judge 拿不到主線,在 judge 判新舊要另寫一套挑主線、本機與推送時還會算出不同結果] [test:t_android_e2e_checks_recorded] [test:t_android_e2e_checks_unreadable_null]
+  WHY:數檢查只看 commands.json 最外層攤平清單裡狀態 COMPLETED 的 assertConditionCommand 與 assertScreenshotCommand,不往父指令內容裡找;WARNED、SKIPPED、AI 類不算 [出處:2026-11-01 SM-X710 實測] [因:子流程與 repeat 的每次執行各自一筆,父指令內容裡的副本沒有狀態,往裡找會重複計數] [test:t_android_e2e_checks_warned_skipped_ai_not_counted]
+  WHY:查證紀錄另用 E2E_RECORD_SCHEMA(2),steps.json 維持 E2E_SCHEMA(1) [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 設計審 r3 三席] [因:兩者原本共用一個版本號、judge 對 steps.json 要求完全相等,只升一個會讓還沒更新範本腳本的專案驗收整條失效] [test:t_android_e2e_record_checks_type]
+  WHY:新流程零檢查、新情境沒寫驗收句或沒對到、單向門沒人點頭,只在整套通過那一刻判、排在放行之後;放行(人或 AI)蓋得過,舊情境與舊流程只列出不擋 [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 決策 d1、d3] [因:不溯及既往;放行規則只留一套,AI 放行照舊持續列出] [test:t_android_e2e_gate_new_rules_order_and_waiver] [test:t_android_e2e_gate_legacy_listed_not_blocked]
+  WHY:讀不到執行紀錄的每個成因代碼各配一個處方(E2E_CHECKS_FIX),工具類附放行指令,同一次有內容類擋下就不附 [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 設計審 r4] [因:成因與處方對不上的問題連續四輪各冒一支,一張表一次對齊] [test:t_android_e2e_gate_new_flow_checks] [test:t_android_e2e_gate_new_rules_next_step]
+  WHY:寫驗收句、單向門宣告、另派代理審與 label 寫法的程序寫在 `skills/lumos-android-evidence/SKILL.md` 的「新增功能或使用情境時一起補」,是程序不是機械擋;機械地板只在推送檢查 [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 做法 2] [因:預期結果照需求寫、不照程式抄這類判斷擋不了,只能寫進代理照做的流程]
 verified_by:
   - "[[Verification/2026-10-25_端到端驗收實機初跑]]"
   - "[[Verification/2026-10-25_端到端驗收四塊實跑與情境實驗]]"
   - "[[Verification/2026-10-26_AI自己選分塊跑法探針]]"
   - "[[Verification/端到端情境對照筆記_實驗室實測]]"
+  - "[[Verification/2026-10-31_無檢查流程實機放行]]"
+  - "[[Verification/2026-11-01_UI流程驗收句對照實作驗證]]"
 ---
 # android-e2e-acceptance
 
@@ -122,7 +131,7 @@ lumos android-e2e check
 
 印成 JSON,不寫任何東西;回 0 不擋(包括沒用 E2E 的專案)、1 會擋。判定順序與按功能那段的規則在 [[Projects/Android端到端驗收_計劃]]〈資料怎麼流〉第 4 步與〈推送前怎麼按功能判〉,這裡不複述。紀錄從被推送提交的樹讀,不讀工作目錄:跑完驗收要先提交紀錄再推。
 
-擋下時訊息照實際需要給指令:要整套的印整套跑,只要按功能的印 `--case <功能.情境>`,紀錄沒提交的印提交指令,被推送提交沒有 e2e 段(分岔點也沒有)、或主線的驗收要求比這一版新的叫人先合主線,這次拿掉了 e2e 段(分岔點還有)的只給環境變數那條路(合主線補不回被刪的段);能放行時另印一行帶完整指紋與 `--commit` 的放行指令。
+擋下時訊息照實際需要給指令:要整套的印整套跑,只要按功能的印 `--case <功能.情境>`,紀錄沒提交的印提交指令,被推送提交沒有 e2e 段(分岔點也沒有)、或主線的驗收要求比這一版新的叫人先合主線,這次拿掉了 e2e 段(分岔點還有)的只給環境變數那條路(合主線補不回被刪的段),新情境或新流程不合格的逐條印處方(「改設定或流程再跑整套」,讀不到執行紀錄的照成因表印),不印整套重跑那一行;能放行時另印一行帶完整指紋與 `--commit` 的放行指令,但同一次有內容類的新規則擋下時不印(先把內容改好)。
 
 放行與看過:
 
