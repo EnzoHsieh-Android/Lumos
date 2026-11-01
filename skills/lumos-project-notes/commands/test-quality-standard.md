@@ -107,6 +107,7 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
 - **每個單元都要有邊界**:負數、零與邊界值;每一種網路錯誤;壞資料(例如格式錯的 JSON);存檔時儲存空間滿;流程進行到一半物件被重建(例如畫面旋轉)。只有正常路徑不算。
 - **不要寫的**:驗框架或函式庫本身行為的測試;Activity、Fragment、Service 這類入口(它們不該有業務邏輯,交給畫面測試)。
 - **碰到 Android 框架時的選擇順序**:先把框架依賴移出被測的類別 → 用假實作頂替 → Robolectric(官方說單元測試只在舊碼或依賴 Android 類別的 API 時當最後手段)。Room 不用 Robolectric 跑(見前面的〈Android 資料層(Room)〉節)。
+- **加測試函式庫前看實際版本**:協程這類函式庫常被別的套件拉高,build 檔宣告的版本不是實際用的;先用 `./gradlew :<模組>:dependencies --configuration <變體>RuntimeClasspath` 看解析後的版本,測試函式庫對齊它(演練實測:宣告 1.5.1、實際 1.9.0,照宣告會以為沒有 `runTest`)。
 - **跑在哪、什麼時候跑**:小測試多、大測試少;單元測試在本機 JVM 跑,每次提交跑、只跑受影響的模組。
 
 **怎麼寫才算數**
@@ -120,6 +121,7 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
   - `viewModelScope` 寫死主執行緒:本機測試用 `MainDispatcherRule` 把 Main 換成測試 dispatcher(儀器測試不換);這個規則的屬性要宣告在其他用到 dispatcher 的屬性前面,不然那些 dispatcher 拿不到同一個排程器。
   - 預設用 `StandardTestDispatcher`(新協程排隊,行為接近正式環境),排完用 `advanceUntilIdle()`、`runCurrent()` 或 `advanceTimeBy()` 推進;`UnconfinedTestDispatcher` 會馬上開跑、跟正式環境不同,測併發時不用它。
   - 不會自己結束的協程(例如一直收集的),注入 `backgroundScope`,測試結束自動取消。
+  - 儀器測試不換 Main 時,工作跑在真的執行緒上,`runTest` 裡的 `withTimeout` 卻用虛擬時間,測試執行緒一閒就快轉、提早逾時;要等真執行緒的結果,把等待包進 `withContext(Dispatchers.Default) { withTimeout(…) }` 改用真時間(協程測試函式庫說明:`Dispatchers.Default` 不走虛擬時間;演練實測)。
   - 不用 `Thread.sleep` 或真實時間等結果,用虛擬時間;非同步工作改用可控制的 dispatcher,固定等待只會讓測試又慢又不穩。
 - **Flow**:
   - StateFlow 斷言 `value`,不去收每個中間值(值變得快時,收集的一方只保證拿到最新那個)。
@@ -134,17 +136,21 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
 
 **什麼證據才算過**
 
-- **指令與報告**:`./gradlew :<模組>:test<變體>UnitTest`(例 `testDebugUnitTest`),單支用 `--tests '<完整類名>.<方法>'`;XML 在 `<模組>/build/test-results/`、HTML 在 `<模組>/build/reports/tests/`。收證照上一節:用 `lumos test-quality capture` 保存原始 XML 與退出碼,`--target` 指到真正的案例。
+- **指令與報告**:`./gradlew :<模組>:test<變體>UnitTest`(例 `testDebugUnitTest`),單支用 `--tests '<完整類名>.<方法>'`;XML 在 `<模組>/build/test-results/`、HTML 在 `<模組>/build/reports/tests/`。收證照上一節:用 `lumos test-quality capture` 保存原始 XML 與退出碼,`--target` 指到真正的案例。Gradle 看到輸入沒變會跳過測試、舊報告留著,`capture` 要求報告在跑之前不存在:先刪掉那份 XML,命令在任務名後面加 `--rerun`(Gradle 7.6 起才有;更舊的用 `--rerun-tasks`,整個建置都重跑)。`--report` 一次只收一個檔,Gradle 每個測試類別各寫一份,收據按類別收。同一個錯讓同一類別好幾支紅時,`--target` 要全部列上(核對只准目標紅);其中有的是「當掉」紅(見下面),就用 `--tests` 縮到用斷言抓到的那幾支再收。收據裡存著當時的歸因結果(不記工具版本),收證工具換了版本之後,同一份報告重算的結果跟記錄不同時,舊收據核對會回 `recorded test outcomes differ from raw report`(記錄的結果跟原始報告重算的不同),要重收,不是偽造。
 - **不算過的證據**:
-  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(`filter.isFailOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例。
+  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(Kotlin DSL 的 `filter.isFailOnNoMatchingTests`、Groovy 的 `filter.failOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例;這時沒有新報告,收證在讀報告那一步就判無效(`--target` 是報告存在時才輪到的下一道)。
   - 編譯錯、逾時、只跑到檔案包裝案例。
   - 開了 `isReturnDefaultValues` 才變綠。
   - 本機或 Robolectric 綠,拿去當裝置實跑的證據。
   - 重試到過才綠:官方說重試只是保住開發速度,不穩的測試一定要修。
+  - 錯是被「當掉」抓到的:假實作遇到沒排好的呼叫就丟例外時,多出來的呼叫會讓測試以例外失敗,收證不算它抓到錯;每條需求至少要有一支用斷言抓。反過來,假實作要丟一般例外(例如 `IllegalStateException`),不要用 `fail()` 或 `assertThat` 自我檢查——收證只看例外型別,假實作丟的斷言失敗會被算成抓到錯。
+  - 裝置那一路收得到哪些失敗:AGP 的儀器報告不寫例外型別,收證只認第一行剛好是 `java.lang.AssertionError`(可帶訊息)或 `org.junit.ComparisonFailure`、而且從第一個堆疊行起(含這一行)第一個 `Caused by:` 之前有 JUnit `Assert` 或 Hamcrest `MatcherAssert.assertThat` 堆疊的失敗,也就是 JUnit 的 `assertEquals`(數字或字串)、`assertTrue`(帶不帶訊息都行)、Hamcrest 的 `assertThat` 這類;Truth 與 JUnit 的 `assertArrayEquals` 在裝置上第一行沒有型別名,收不到,要拿故障收據就改用上面那幾種,或在本機那路收。本機報告有型別,Truth 的 `assertThat` 與 `assertArrayEquals` 收得到;Truth 的 `Expect` 規則丟的 `Truth$SimpleAssertionError` 也會包住不是斷言的例外,收不到。
+  - 裝置那一路收證時用類別篩選(`-Pandroid.testInstrumentationRunnerArguments.class=<類名>`)只跑這次的測試:專案原有的範本測試若在這個變體必紅,原版那份收據就不是全綠。
 - **涵蓋率只拿來找漏**:官方說它找得出沒測到的地方,但不能當測試策略好不好的唯一指標。要量就用 AGP 的 `enableUnitTestCoverage = true`(會自動套 JaCoCo)或 Kover;兩者算出的分支涵蓋率可能不同,不跨工具比數字。
 - **故障證明挑本次需求**(共用規範第 5 條):例如拿掉 ViewModel 更新狀態那一行、讓假 Repository 丟錯、刪掉一個邊界檢查,確認對應的斷言翻紅、還原後翻綠。社群:變異測試(Pitest 的 Android 外掛、arcmutate 的 Kotlin 外掛)可以補,但有人回報協程程式碼會產生大量雜訊,不當必要條件。
+- **機器抓不到、要靠審查的**(演練實測,見 [[Verification/2026-11-01_Android單元測試標準實機演練]]):預期值照抄實作算法(故障證明照樣判抓到)、用 `Thread.sleep` 等結果(detekt 不帶型別資訊不報,不在協程裡也不報)、build 檔開了 `returnDefaultValues`;Kotlin 的 `test-quality scan` 要裝 Semgrep 並帶 `--semgrep <semgrep 執行檔>` 才會掃,沒有就回「不完整、零候選」,等於沒掃,不能當通過;規則只有 `assertEquals(x, x)`,Truth 寫法的自比不在內。
 
-來源(核對當天看到的更新日期):[要測什麼](https://developer.android.com/training/testing/fundamentals/what-to-test)(2026-03-05)、[測試策略](https://developer.android.com/training/testing/fundamentals/strategies)(2026-10-08)、[測試替身](https://developer.android.com/training/testing/fundamentals/test-doubles)(2026-03-05)、[本機單元測試](https://developer.android.com/training/testing/local-tests)(2026-10-23)、[命令列測試](https://developer.android.com/studio/test/command-line)(2026-10-15)、[協程測試](https://developer.android.com/kotlin/coroutines/test)(2026-09-22)、[Flow 測試](https://developer.android.com/kotlin/flow/test)(2026-09-24)、[Robolectric](https://developer.android.com/training/testing/local-tests/robolectric)(2026-03-05)、[截圖測試](https://developer.android.com/training/testing/ui-tests/screenshot)(2026-10-08)、[測試穩定性](https://developer.android.com/training/testing/instrumented-tests/stability)(2026-03-05)、[Hilt 測試](https://developer.android.com/training/dependency-injection/hilt-testing)、[Gradle 測試篩選](https://docs.gradle.org/current/kotlin-dsl/gradle/org.gradle.api.tasks.testing/-test-filter/is-fail-on-no-matching-tests.html)、[程式碼涵蓋率](https://developer.android.com/studio/test/coverage-report);社群:[Now in Android 測試策略](https://github.com/android/nowinandroid/wiki/Testing-strategy-and-how-to-test)、[Turbine](https://github.com/cashapp/turbine)、[Pitest 與協程的雜訊回報](https://github.com/hcoles/pitest/issues/579)。
+來源(核對當天看到的更新日期):[要測什麼](https://developer.android.com/training/testing/fundamentals/what-to-test)(2026-03-05)、[測試策略](https://developer.android.com/training/testing/fundamentals/strategies)(2026-10-08)、[測試替身](https://developer.android.com/training/testing/fundamentals/test-doubles)(2026-03-05)、[本機單元測試](https://developer.android.com/training/testing/local-tests)(2026-10-23)、[命令列測試](https://developer.android.com/studio/test/command-line)(2026-10-15)、[協程測試](https://developer.android.com/kotlin/coroutines/test)(2026-09-22)、[Flow 測試](https://developer.android.com/kotlin/flow/test)(2026-09-24)、[Robolectric](https://developer.android.com/training/testing/local-tests/robolectric)(2026-03-05)、[截圖測試](https://developer.android.com/training/testing/ui-tests/screenshot)(2026-10-08)、[測試穩定性](https://developer.android.com/training/testing/instrumented-tests/stability)(2026-03-05)、[Hilt 測試](https://developer.android.com/training/dependency-injection/hilt-testing)、[Gradle 測試篩選](https://docs.gradle.org/current/kotlin-dsl/gradle/org.gradle.api.tasks.testing/-test-filter/is-fail-on-no-matching-tests.html)、[程式碼涵蓋率](https://developer.android.com/studio/test/coverage-report)、[kotlinx-coroutines-test 說明](https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md)(2026-11-01 核對);社群:[Now in Android 測試策略](https://github.com/android/nowinandroid/wiki/Testing-strategy-and-how-to-test)、[Turbine](https://github.com/cashapp/turbine)、[Pitest 與協程的雜訊回報](https://github.com/hcoles/pitest/issues/579)。
 
 ### 適配器資格考卷
 

@@ -113853,6 +113853,7 @@ def _sg_junit(cases):
         cls, name = cid.split("::", 1)
         inner = {"passed": "", "failure": '<failure type="AssertionError" message="boom"/>',
                  "failure_rt": '<failure type="java.lang.IllegalStateException" message="boom"/>',
+                 "failure_truth": '<failure type="com.google.common.truth.ComparisonFailureWithFacts" message="boom"/>',
                  "error": '<error type="RuntimeError" message="x"/>', "skipped": "<skipped/>"}[st]
         rows.append(f'<testcase classname="{cls}" name="{name}">{inner}</testcase>')
     return ("<testsuite>" + "".join(rows) + "</testsuite>").encode("utf-8")
@@ -113970,8 +113971,10 @@ class _SgRepo:
             rep = _sg_junit(cases)
             tq_cases = []
             for cid, st in cases:
-                tq_cases.append({"id": cid, "status": "failure" if st == "failure_rt" else st, "assertion_failure": st == "failure",
+                tq_cases.append({"id": cid, "status": "failure" if st in ("failure_rt", "failure_truth") else st,
+                                 "assertion_failure": st in ("failure", "failure_truth"),
                                  "reason": ("AssertionError boom " if st == "failure" else
+                                            "com.google.common.truth.ComparisonFailureWithFacts boom " if st == "failure_truth" else
                                             "java.lang.IllegalStateException boom " if st == "failure_rt" else
                                             "RuntimeError x " if st == "error" else "")})
             snaps = [{"role": "implementation", "path": ap.get(impl_path, f"{cwd}/{impl_path}"), "artifact": "snapshot-0.txt",
@@ -114391,6 +114394,42 @@ def t_secev_s07_fault_not_real_detection():
     rep = _sg_eval(r)
     check("S7 拿掉防護照綠 → failed:survived(有缺陷,不是 invalid)", _sg_kind(rep, "fault_sensitivity").get("verdict") == "failed"
           and "failed:survived" in _sg_codes(rep, "fault_sensitivity"), str(_sg_codes(rep, "fault_sensitivity")))
+
+
+def t_secev_tq_truth_fault_counts_like_assertion():
+    """[Projects/Android單元測試標準實機演練_計劃 S5] 安全證據閘的 fault_sensitivity 路徑跟收證共用斷言歸因:故障版目標用 Truth
+    (com.google.common.truth.ComparisonFailureWithFacts)失敗時,判定要跟一般 AssertionError 失敗一樣,不再是 invalid:nonassertion_failure。
+    守的錯:文件說「這條路放行 Truth 故障收據」,歸因改回去或安全閘另走一套時,這條放行面會悄悄消失或跟收證不一致。
+    翻紅釘:把 Truth 兩型別從 assertion_failure 拿掉 → 收據記的結果跟重算不同、判定變 invalid → 紅。"""
+    def codes(fault):
+        r = _SgRepo()
+        r.capture(fault_cases=fault)
+        r.commit()
+        rep = _sg_eval(r)
+        return _sg_kind(rep, "fault_sensitivity").get("verdict"), _sg_codes(rep, "fault_sensitivity")
+    plain = codes([("t::illegal", "failure"), ("t::other", "passed")])
+    truth = codes([("t::illegal", "failure_truth"), ("t::other", "passed")])
+    check("前置:一般斷言失敗不是 invalid", plain[0] != "invalid", str(plain))
+    check("演練 S5:Truth 斷言失敗的判定跟一般斷言失敗一樣", truth == plain, f"truth={truth} plain={plain}")
+    check("演練 S5:Truth 斷言失敗不是 nonassertion_failure", "invalid:nonassertion_failure" not in truth[1], str(truth))
+
+
+def t_secev_tq_truth_junit_declared_is_assertion_failed():
+    """[Projects/Android單元測試標準實機演練_計劃 S5] 安全證據閘 JUnit 宣告那條路:非法案例用 Truth 斷言失敗時記成
+    failed:assertion_failed(跟一般斷言失敗一樣),不再是 invalid:nonassertion_failure;兩者都不放行。
+    守的錯:歸因改回去或這條路另走一套時,文件寫的「從無效變成斷言失敗」悄悄不成立。
+    翻紅釘:把 Truth 兩型別從 assertion_failure 拿掉 → 這條路回到 nonassertion_failure → 紅。"""
+    def codes(state):
+        r = _SgRepo()
+        r.files["reports/behavior.xml"] = _sg_junit([("t::illegal", state), ("t::legit", "passed"), ("t::pre", "passed")])
+        r.commit()
+        rep = _sg_eval(r)
+        return _sg_kind(rep, "behavior").get("verdict"), _sg_codes(rep, "behavior")
+    plain, truth, rt = codes("failure"), codes("failure_truth"), codes("failure_rt")
+    check("前置:一般斷言失敗記成 failed:assertion_failed", "failed:assertion_failed" in plain[1], str(plain))
+    check("前置:一般例外記成 invalid:nonassertion_failure", "invalid:nonassertion_failure" in rt[1], str(rt))
+    check("演練 S5:Truth 斷言失敗跟一般斷言失敗同判定", truth == plain, f"truth={truth} plain={plain}")
+    check("演練 S5:兩者都不是 qualified", plain[0] != "qualified" and truth[0] != "qualified", f"{plain} {truth}")
 
 
 def t_secev_s08_s20_oracle_needs_review():
@@ -120065,6 +120104,46 @@ def t_test_quality_standard_android_unit_section():
     t3 = (base / "03-寫回圖譜.md").read_text(encoding="utf-8")
     check("S1:03 指到這一節", "〈Android 本機單元測試的驗收標準〉" in t3, "")
     print("  ✓ t_test_quality_standard_android_unit_section")
+
+
+def t_test_quality_drill_cli_cases_present():
+    """[Projects/Android單元測試標準實機演練_計劃 S5] 收證工具的家(Systems/test-quality-cli)那條 PITFALL 防回歸列的收證歸因正反例方法都還在收證工具的測試檔裡。
+    守的錯:S5 綁的 t_test_quality_cli 只看整份退出碼,刪掉或改名其中一支仍綠。
+    翻紅釘:刪掉任一支或改名 → 紅。"""
+    _need_src("scripts/test_test_quality_cli.py")
+    t = (Path(GRAPHCTL).resolve().parent / "test_test_quality_cli.py").read_text(encoding="utf-8")
+    for name in ("test_truth_local_assertion_types_are_attributed", "test_truth_expect_rule_type_is_not_attributed",
+                 "test_truth_lookalike_types_are_not_attributed", "test_truth_device_text_without_type_is_not_attributed",
+                 "test_runtime_exception_mentioning_truth_type_is_not_attributed",
+                 "test_device_comparison_failure_and_bare_assertion_are_attributed",
+                 "test_device_hamcrest_and_caused_by_in_message_are_attributed",
+                 "test_local_array_comparison_failure_is_attributed_device_text_is_not",
+                 "test_device_attribution_is_linear_on_many_newlines",
+                 "test_device_runtime_around_comparison_failure_is_not_attributed"):
+        check(f"演練 S5:{name} 在", f"def {name}(self)" in t, "")
+    print("  ✓ t_test_quality_drill_cli_cases_present")
+
+
+def t_test_quality_standard_android_drill_lessons():
+    """[Projects/Android單元測試標準實機演練_計劃 S6] 實機演練補進〈Android 本機單元測試的驗收標準〉的幾條還在:
+    看實際解析版本、Gradle 跳過測試要 --rerun、混著當掉紅要縮小篩選、裝置那路收得到哪些斷言、裝置收證用類別篩選、
+    Kotlin 靜態掃描要帶 --semgrep,而且「機器抓不到」那條指回演練的驗證紀錄。
+    守的錯:這幾條被刪或改回演練前的說法(例如「裝置那路用 JUnit Assert 就收得到」不提 ComparisonFailure),下一個照標準收證的人又撞同一道牆。
+    翻紅釘:刪掉任一條、把指回驗證紀錄的連結拿掉 → 紅。"""
+    _need_src("skills/lumos-project-notes/commands/test-quality-standard.md")
+    t = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands" / "test-quality-standard.md").read_text(encoding="utf-8")
+    i = t.find("### Android 本機單元測試的驗收標準")
+    check("前置:找得到這一節", i >= 0, "")
+    sec = t[i:t.find("\n### ", i + 5)] if i >= 0 else ""
+    for label, w in (("看實際解析版本", "RuntimeClasspath"), ("Gradle 跳過測試要強制重跑", "`--rerun`(Gradle 7.6"),
+                     ("舊 Gradle 的替代", "--rerun-tasks"), ("混著當掉紅要縮小篩選", "縮到用斷言抓到的那幾支"),
+                     ("裝置那路認得字串比較", "org.junit.ComparisonFailure"), ("裝置收證用類別篩選", "testInstrumentationRunnerArguments.class"),
+                     ("Truth 的 Expect 規則收不到", "Truth$SimpleAssertionError"), ("靜態掃描要帶旗標", "--semgrep"),
+                     ("儀器測試等真執行緒用真時間", "withContext(Dispatchers.Default)"), ("當掉紅不算抓到錯", "錯是被「當掉」抓到的"),
+                     ("收據存著歸因結果、重算不同會被拒", "recorded test outcomes differ from raw report")):
+        check(f"S6:{label}", w in sec, w)
+    check("S6:機器抓不到那條指回演練驗證紀錄", "[[Verification/2026-11-01_Android單元測試標準實機演練]]" in sec, "")
+    print("  ✓ t_test_quality_standard_android_drill_lessons")
 
 
 def t_prepush_room_guard_wired():
