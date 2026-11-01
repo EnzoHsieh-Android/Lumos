@@ -120042,6 +120042,31 @@ def t_test_quality_standard_android_room_section():
     check("03 指到那一節", "Android 資料層(Room)" in t3, "")
 
 
+def t_test_quality_standard_android_unit_section():
+    """[Projects/Android本機單元測試驗收標準_計劃 S1] 測試品質標準有〈Android 本機單元測試的驗收標準〉一節,
+    緊接在原生收證那一節之後、三段依序、幾個關鍵詞在;03〈實作測試品質〉有一句指過去。
+    守的錯:這一節被搬走或刪掉、三段被掏空只留標題、03 的指路斷掉,讀標準的人找不到 Android 單元測試的驗收條件。
+    翻紅釘:刪掉這一節、把它移到別節後面、拿掉「什麼證據才算過」那段 → 紅。"""
+    _need_src("skills/lumos-project-notes/commands/test-quality-standard.md", "skills/lumos-project-notes/commands/03-寫回圖譜.md")
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands"
+    t = (base / "test-quality-standard.md").read_text(encoding="utf-8")
+    heads = [ln for ln in t.splitlines() if ln.startswith("### ")]
+    native = next((k for k, h in enumerate(heads) if h.startswith("### C#、Android、iOS 的原生收證接入")), -1)
+    check("前置:找得到原生收證那一節", native >= 0, str(heads))
+    check("S1:新的一節緊接在原生收證之後",
+          native >= 0 and native + 1 < len(heads) and heads[native + 1] == "### Android 本機單元測試的驗收標準", str(heads))
+    i = t.find("### Android 本機單元測試的驗收標準")
+    sec = t[i:t.find("\n### ", i + 5)] if i >= 0 else ""
+    pos = [sec.find(w) for w in ("**要有哪些**", "**怎麼寫才算數**", "**什麼證據才算過**")]
+    check("S1:三段依序出現", all(p >= 0 for p in pos) and pos == sorted(pos), str(pos))
+    for w in ("MainDispatcherRule", "isReturnDefaultValues", "Robolectric", "零選中", "故障"):
+        check(f"S1:提到 {w}", w in sec, "")
+    check("S1:這一節開頭指回單源計劃(兄弟節都有)", "單源=[[Projects/Android本機單元測試驗收標準_計劃]]" in sec, "")
+    t3 = (base / "03-寫回圖譜.md").read_text(encoding="utf-8")
+    check("S1:03 指到這一節", "〈Android 本機單元測試的驗收標準〉" in t3, "")
+    print("  ✓ t_test_quality_standard_android_unit_section")
+
+
 def t_prepush_room_guard_wired():
     """[S39] 推送前掛鉤:Room 守衛回 1 → 印逃生段、記一筆 room-guard 擋下、全套沒跑;回 2(舊版 lumos)→ 印這次沒檢查、照推;
     呼叫帶遠端舊值..頂端、--push-remote、--pushed-ref;排在存量漂移之後、回頭重讀之前;中斷就停清單有這一行。"""

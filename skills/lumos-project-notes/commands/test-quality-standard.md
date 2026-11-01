@@ -97,6 +97,55 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
 
 原生工具參考：[VSTest dotnet test](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-test-vstest)、[JUnit logger](https://github.com/spekt/junit.testlogger)、[Android命令列測試](https://developer.android.com/studio/test/command-line)、[xcbeautify](https://github.com/cpisciotta/xcbeautify)、[Xcode測試結果](https://developer.apple.com/documentation/xcode/running-tests-and-interpreting-results)。
 
+### Android 本機單元測試的驗收標準
+
+沿共用規範驗需求答案與相關故障。這一節講跑在電腦 JVM 上的本機單元測試(`src/test`):要有哪些、怎麼寫才算數、跑出什麼證據才算驗收過;資料庫照前面的〈Android 資料層(Room)〉節,裝置上的畫面與流程照 lumos-android-evidence 的端到端驗收。官方條目 2026-11-01 核對,各頁當天的更新日期列在最後;標「社群」的是非官方做法(單源=[[Projects/Android本機單元測試驗收標準_計劃]])。
+
+**要有哪些**
+
+- **必有的單元**:ViewModel(含它對外的狀態與 Flow)、資料層的 Repository 與資料來源、領域層的用例、字串與數學這類工具類別。
+- **每個單元都要有邊界**:負數、零與邊界值;每一種網路錯誤;壞資料(例如格式錯的 JSON);存檔時儲存空間滿;流程進行到一半物件被重建(例如畫面旋轉)。只有正常路徑不算。
+- **不要寫的**:驗框架或函式庫本身行為的測試;Activity、Fragment、Service 這類入口(它們不該有業務邏輯,交給畫面測試)。
+- **碰到 Android 框架時的選擇順序**:先把框架依賴移出被測的類別 → 用假實作頂替 → Robolectric(官方說單元測試只在舊碼或依賴 Android 類別的 API 時當最後手段)。Room 不用 Robolectric 跑(見前面的〈Android 資料層(Room)〉節)。
+- **跑在哪、什麼時候跑**:小測試多、大測試少;單元測試在本機 JVM 跑,每次提交跑、只跑受影響的模組。
+
+**怎麼寫才算數**
+
+- **替身**:假實作優先(實作同一個介面、資料放記憶體,放在 `src/test` 或共用的測試模組);mock 與 stub 次之,spy 避免,複雜的 mock 不寫。先看函式庫有沒有官方提供的測試用假實作。社群:Now in Android 整個專案不用 mock 套件,一律假實作。
+- **不用 Hilt 建被測物件**:建構子注入的類別在單元測試裡直接建、傳假實作進去;Hilt(`@HiltAndroidTest`)留給整合測試。
+- **不開 `isReturnDefaultValues`**(Groovy 寫 `unitTests.returnDefaultValues = true`):官方說回傳 null 與零會讓該失敗的測試通過,只當最後手段;真的開了,設定旁邊寫理由。
+- **協程**:
+  - 一支測試一個 `runTest`,寫成運算式本體;`runTest` 會跳過 `delay`,整支測試預設 60 秒逾時。
+  - 被測程式用的 dispatcher 要能注入;同一支測試裡的所有測試 dispatcher 共用同一個排程器(`StandardTestDispatcher(testScheduler)`)。
+  - `viewModelScope` 寫死主執行緒:本機測試用 `MainDispatcherRule` 把 Main 換成測試 dispatcher(儀器測試不換);這個規則的屬性要宣告在其他用到 dispatcher 的屬性前面,不然那些 dispatcher 拿不到同一個排程器。
+  - 預設用 `StandardTestDispatcher`(新協程排隊,行為接近正式環境),排完用 `advanceUntilIdle()`、`runCurrent()` 或 `advanceTimeBy()` 推進;`UnconfinedTestDispatcher` 會馬上開跑、跟正式環境不同,測併發時不用它。
+  - 不會自己結束的協程(例如一直收集的),注入 `backgroundScope`,測試結束自動取消。
+  - 不用 `Thread.sleep` 或真實時間等結果,用虛擬時間;非同步工作改用可控制的 dispatcher,固定等待只會讓測試又慢又不穩。
+- **Flow**:
+  - StateFlow 斷言 `value`,不去收每個中間值(值變得快時,收集的一方只保證拿到最新那個)。
+  - `stateIn` 配 `WhileSubscribed` 或 `Lazily` 的,就算只斷言 `value`,也要先起一個空的收集者:`backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }`,不然上游不會跑、`value` 永遠是初始值。
+  - 有限的流用 `first()`、`toList()`、`take(n).toList()`;不會結束的流在 `backgroundScope` 收,不然 `toList()` 永遠不回來。
+  - 被測對象收別人的流時,把來源換成可以從測試推值的假實作(`MutableSharedFlow` 加一個 `emit`)。
+  - 社群:用 Turbine 時,每個發出的值都要收掉,或用 `cancelAndIgnoreRemainingEvents()` 明講不管;錯誤用 `awaitError()` 收;不要用 `runCurrent()` 去推 Turbine。
+  - ViewModel 的一次性結果化成狀態後(kotlin-idioms R19),測「出現在狀態裡 → 呼叫已顯示 → 從狀態清掉」三步。
+- **斷言與命名**:斷言輸出、狀態、寫入結果或錯誤理由(共用規範第 3 條);測試名照官方範例的形式 `被測對象_動作或輸入_預期結果`。
+- **Compose 畫面行為在本機跑**(選配):測試放 `src/test`,加 `@RunWith(RobolectricTestRunner::class)` 與 `createComposeRule()`,`isIncludeAndroidResources = true`;適合「點了按鈕畫面有變」這類行為。Robolectric 沒有螢幕、部分 API 只部分支援(系統 UI、WebView 不支援),這些照樣要上裝置驗。
+- **截圖測試**(選配):官方推薦用來驗 Compose 的視覺;官方工具是 Compose Preview Screenshot Testing(實驗性),Robolectric 要搭第三方函式庫(社群:Now in Android 用 Roborazzi)。張數要少、每張給獨特的回饋;容差門檻會漏掉門檻以下的差異;參考圖在固定環境(例如 CI)產,不同作業系統的渲染不一樣。
+
+**什麼證據才算過**
+
+- **指令與報告**:`./gradlew :<模組>:test<變體>UnitTest`(例 `testDebugUnitTest`),單支用 `--tests '<完整類名>.<方法>'`;XML 在 `<模組>/build/test-results/`、HTML 在 `<模組>/build/reports/tests/`。收證照上一節:用 `lumos test-quality capture` 保存原始 XML 與退出碼,`--target` 指到真正的案例。
+- **不算過的證據**:
+  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(`filter.isFailOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例。
+  - 編譯錯、逾時、只跑到檔案包裝案例。
+  - 開了 `isReturnDefaultValues` 才變綠。
+  - 本機或 Robolectric 綠,拿去當裝置實跑的證據。
+  - 重試到過才綠:官方說重試只是保住開發速度,不穩的測試一定要修。
+- **涵蓋率只拿來找漏**:官方說它找得出沒測到的地方,但不能當測試策略好不好的唯一指標。要量就用 AGP 的 `enableUnitTestCoverage = true`(會自動套 JaCoCo)或 Kover;兩者算出的分支涵蓋率可能不同,不跨工具比數字。
+- **故障證明挑本次需求**(共用規範第 5 條):例如拿掉 ViewModel 更新狀態那一行、讓假 Repository 丟錯、刪掉一個邊界檢查,確認對應的斷言翻紅、還原後翻綠。社群:變異測試(Pitest 的 Android 外掛、arcmutate 的 Kotlin 外掛)可以補,但有人回報協程程式碼會產生大量雜訊,不當必要條件。
+
+來源(核對當天看到的更新日期):[要測什麼](https://developer.android.com/training/testing/fundamentals/what-to-test)(2026-03-05)、[測試策略](https://developer.android.com/training/testing/fundamentals/strategies)(2026-10-08)、[測試替身](https://developer.android.com/training/testing/fundamentals/test-doubles)(2026-03-05)、[本機單元測試](https://developer.android.com/training/testing/local-tests)(2026-10-23)、[命令列測試](https://developer.android.com/studio/test/command-line)(2026-10-15)、[協程測試](https://developer.android.com/kotlin/coroutines/test)(2026-09-22)、[Flow 測試](https://developer.android.com/kotlin/flow/test)(2026-09-24)、[Robolectric](https://developer.android.com/training/testing/local-tests/robolectric)(2026-03-05)、[截圖測試](https://developer.android.com/training/testing/ui-tests/screenshot)(2026-10-08)、[測試穩定性](https://developer.android.com/training/testing/instrumented-tests/stability)(2026-03-05)、[Hilt 測試](https://developer.android.com/training/dependency-injection/hilt-testing)、[Gradle 測試篩選](https://docs.gradle.org/current/kotlin-dsl/gradle/org.gradle.api.tasks.testing/-test-filter/is-fail-on-no-matching-tests.html)、[程式碼涵蓋率](https://developer.android.com/studio/test/coverage-report);社群:[Now in Android 測試策略](https://github.com/android/nowinandroid/wiki/Testing-strategy-and-how-to-test)、[Turbine](https://github.com/cashapp/turbine)、[Pitest 與協程的雜訊回報](https://github.com/hcoles/pitest/issues/579)。
+
 ### 適配器資格考卷
 
 接入的每個語言／framework／runner/report組合都保存這些控制：

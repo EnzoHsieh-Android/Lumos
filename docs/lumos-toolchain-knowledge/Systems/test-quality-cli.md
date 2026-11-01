@@ -75,6 +75,10 @@ PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器
 
 - `commands/test-quality-standard.md` 加〈Android 資料層(Room)的撰寫補充〉:mock DAO 只證 Repository 邏輯、真的 Room 用記憶體資料庫;查詢、資料限制、交易、升級、Flow/LiveData 重送、型別轉換、預載資料庫七種情況各一條;官方不建議 Robolectric 跑 Room、Room KMP 用 `BundledSQLiteDriver`;升級用 `MigrationTestHelper` 加跑完全部升級的那支;Robolectric 跑升級測試要把結構檔放進 debug assets 標明是社群做法。`03-寫回圖譜.md` 那一句一併指過去。推送前的機械檢查在 [[Systems/room-guard]]。綁的測試 `t_test_quality_standard_android_room_section`。
 
+## 測試品質接入標準的 Android 本機單元測試節(2026-11-01,[[Projects/Android本機單元測試驗收標準_計劃]])
+
+- `commands/test-quality-standard.md` 在原生收證那一節之後加〈Android 本機單元測試的驗收標準〉,分「要有哪些」「怎麼寫才算數」「什麼證據才算過」三段:必有單元與邊界情況、Robolectric 是最後手段、不開 `isReturnDefaultValues`;協程(一支一個 `runTest`、共用排程器、`MainDispatcherRule`、`backgroundScope`)與 Flow(斷言 `value`、`stateIn` 先起收集者)的寫法;零選中、靠預設回傳值才綠、本機綠當裝置綠、重試到過都不算過。放在原生收證之後是 Enzo 選的:驗收條件跟收證規則放在一起讀。`03-寫回圖譜.md` 那一句一併指過去。綁的測試 `t_test_quality_standard_android_unit_section`。
+
 ## 給安全證據閘用的讀法(2026-10-20,[[Projects/安全主張驗收閘_計劃]])
 
 - `junit()` 改成自訂 XMLParser target 邊解析邊數深度(超過 64 層立刻停)、每個案例處理完就清掉元素,不先建整棵樹;拒收改丟帶原因代碼的 `JUnitRejected`(`ValueError` 子類別,既有呼叫端照樣接得到),訊息字串與優先序不變。C 版解析器的 iterparse 不收自訂 builder,所以不用 iterparse。拒 DTD 只有 `NoDtdTreeBuilder` 一處(target 委派給它),丟 `JUnitRejected("report_unparseable", 原訊息)`,安全證據閘不比對訊息字串;XML 語法錯照舊是 `ET.ParseError`(型別本身就分得出來)[test:t_secev_r1_junit_dtd_typed_rejection]。
