@@ -281,7 +281,7 @@ class QualityCLI(unittest.TestCase):
         from test_quality import junit
 
         # 2026-11-01 平板實跑(JUnit 4.13.2 附的 Hamcrest):第一行 AssertionError、堆疊是 MatcherAssert;
-        # 字串 assertEquals 的訊息自己帶一行 Caused by,要在第一個堆疊行之後才切;前導空行與 CRLF 也照認
+        # 字串 assertEquals 的訊息自己帶一行 Caused by,要從第一個堆疊行起(含這一行)才切;前導空行與 CRLF 也照認
         for text in (
             b"java.lang.AssertionError:\nExpected: is <2>\nbut: was <1>\nat org.hamcrest.MatcherAssert.assertThat(MatcherAssert.java:20)\nat com.example.SampleTest.hamcrestThat(SampleTest.kt:20)",
             b"org.junit.ComparisonFailure: expected:<Request failed[\nCaused by: timeout]> but was:<Request failed[]>\nat org.junit.Assert.assertEquals(Assert.java:115)\nat com.example.SampleTest.messageWithCausedByLine(SampleTest.kt:21)",
@@ -332,6 +332,42 @@ class QualityCLI(unittest.TestCase):
         ):
             rows = junit(b'<testsuite><testcase name="x"><failure>' + text.replace(b"<", b"&lt;").replace(b">", b"&gt;") + b"</failure></testcase></testsuite>")
             self.assertFalse(rows[0]["assertion_failure"], text[:40])
+
+    def _device_rows(self, text):
+        from test_quality import junit
+        return junit(b'<testsuite><testcase name="x"><failure>' + text.replace(b"<", b"&lt;").replace(b">", b"&gt;") + b"</failure></testcase></testsuite>")
+
+    def test_device_indented_frames_are_attributed(self):
+        # 裝置報告的堆疊行常帶 tab 或空白縮排;判定要容許縮排,改成只認行首 at 會把它判成不是斷言(往拒收錯)
+        text = b"java.lang.AssertionError: expected:<10> but was:<0>\n\tat org.junit.Assert.fail(Assert.java:88)\n    at com.example.SampleTest.a(SampleTest.kt:12)"
+        self.assertIsNone(re.search(rb"\nat ", text), "前置:樣本裡的堆疊行都有縮排")
+        self.assertTrue(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_first_line_trailing_space_is_stripped(self):
+        # 第一行尾端帶空白或 CR、而且沒有冒號(assertTrue 沒給訊息)時,要先去空白再比對型別名
+        text = b"java.lang.AssertionError  \r\nat org.junit.Assert.fail(Assert.java:86)\r\nat com.example.SampleTest.b(SampleTest.kt:14)"
+        first = text.split(b"\n", 1)[0]
+        self.assertTrue(first != first.strip() and b":" not in first, "前置:第一行尾端有空白、沒有冒號")
+        self.assertTrue(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_assert_phrase_needs_word_boundary(self):
+        # 堆疊段裡出現 xformat org.junit.Assert.fail( 這種前面黏著字的,不是 Assert 的堆疊行
+        text = b"java.lang.AssertionError: x\nat com.example.Helper.check(Helper.kt:9)\nxformat org.junit.Assert.fail(fake)"
+        self.assertIn(b"at org.junit.Assert.fail(", text, "前置:樣本含這個片語,只是前面黏著字")
+        self.assertFalse(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_assert_frame_must_be_fail_or_assert(self):
+        # org.junit.Assert 底下不是 fail/assert 開頭的方法(例如自己包的 format)不算斷言堆疊
+        text = b"java.lang.AssertionError: x\nat org.junit.Assert.format(Assert.java:1)\nat com.example.SampleTest.c(SampleTest.kt:3)"
+        self.assertIsNotNone(re.search(rb"at org\.junit\.Assert\.\w+\(", text), "前置:樣本有 org.junit.Assert 的堆疊行")
+        self.assertFalse(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_message_mentioning_assert_frame_counts_from_first_frame(self):
+        # 第一行訊息自己含 at org.junit.Assert.fail( 又接一般堆疊:斷言堆疊要從第一個堆疊行起找,不從開頭找
+        text = b"java.lang.AssertionError: helper said at org.junit.Assert.fail(Assert.java:86)\nat com.example.Helper.check(Helper.kt:9)"
+        self.assertIn(b"at org.junit.Assert.fail(", text.split(b"\n", 1)[0], "前置:第一行訊息含斷言堆疊樣字串")
+        self.assertIn(b"\nat com.example.Helper.check(", text, "前置:後面接的是一般堆疊")
+        self.assertFalse(self._device_rows(text)[0]["assertion_failure"])
 
     def test_runtime_exception_mentioning_truth_type_is_not_attributed(self):
         from test_quality import junit

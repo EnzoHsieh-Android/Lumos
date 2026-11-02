@@ -1,0 +1,180 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e7aebc41e..f351816f3 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -120712,20 +120712,31 @@ def t_tq_guard_skip_added():
+     check("S1 r4 assume 字串常值裡多一個空白(條件變成永遠不成立)要列", ("tq/skip-added", T) in _tqg_rules(root, b41, h41), _tqg_rules(root, b41, h41))
+     two = "    @Test fun a() { assumeTrue(ok) }\n    @Test fun b() { assertEquals(1, f()) }\n"
+     b42 = commit({T: _tqg_kt(two)})
+     h42 = commit({T: _tqg_kt(two.replace("assertEquals(1,", "assertEquals(2,"))})
+     check("S1 r4 一行寫完的 assume 不吞進下一支測試:只改下一支的斷言不列跳過", ("tq/skip-added", T) not in _tqg_rules(root, b42, h42), _tqg_rules(root, b42, h42))
+     ch = "    @Test\n    fun a() {\n        TruthJUnit.assume()\n            .that(isEmu())\n            .isTrue()\n        assertEquals(1, f())\n    }\n"
+     b43 = commit({T: _tqg_kt(ch)})
+     h43 = commit({T: _tqg_kt(ch.replace(".that(isEmu())", ".that(false)"))})
+     check("S1 r4 Truth 的 assume 鏈寫在下一行、條件改掉要列", ("tq/skip-added", T) in _tqg_rules(root, b43, h43), _tqg_rules(root, b43, h43))
+ 
++    # 代碼審 r5:身分只在字串外面整理空白——字串常值頭尾多一個空白、逗號後的空白拿掉,條件都變了,要列;字串外的空白重排照樣不列
++    for nm, new in (("頭", '" ci"'), ("尾", '"ci "'), ("逗號", '"a,b"')):
++        src = "    @Test\n    fun a() {\n        assumeTrue(env == " + ('"a, b"' if nm == "逗號" else '"ci"') + ")\n        assertEquals(1, f())\n    }\n"
++        b50 = commit({T: _tqg_kt(src)})
++        h50 = commit({T: _tqg_kt(src.replace('"a, b"' if nm == "逗號" else '"ci"', new))})
++        check(f"S1 r5 assume 字串常值{nm}的空白改了要列", ("tq/skip-added", T) in _tqg_rules(root, b50, h50), _tqg_rules(root, b50, h50))
++    sp5 = "    @Test\n    fun a() {\n        assumeTrue(env == \"c i\")\n        assertEquals(1, f())\n    }\n"
++    b51 = commit({T: _tqg_kt(sp5)})
++    h51 = commit({T: _tqg_kt(sp5.replace("assumeTrue(env == \"c i\")", "assumeTrue( env==\"c i\" )"))})
++    check("S1 r5 字串外的空白重排、字串內容不變不列", ("tq/skip-added", T) not in _tqg_rules(root, b51, h51), _tqg_rules(root, b51, h51))
++
+ 
+ def t_tq_guard_test_removed():
+     """[S2] 測試函式不見、整支測試檔被刪或改名成非測試檔要列 tq/test-removed(同檔合一條);改名不改本體、原樣搬家不列。
+     守的錯:AI 刪掉紅的測試。翻紅釘:本體簽名配對改成多對一、同名多載不給號、刪檔不算 → 紅。"""
+     T = _TQG_T
+     a = "    @Test\n    fun a() { assertEquals(1, f()) }\n"
+     b = "    @Test\n    fun b() { assertEquals(2, g()) }\n"
+     c = "    @Test\n    fun `回傳 3`() { assertEquals(3, h()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(a, b, c)})
+     h = commit({T: _tqg_kt(a)})
+@@ -120986,20 +120997,36 @@ def t_tq_guard_catch_no_fail():
+ 
+ 
+     # 代碼審 r4:catch 裡用 Kotest 中綴斷言、check(、require( 檢查例外,不算吞斷言
+     kc1 = "    @Test\n    fun s7() { try { foo(); fail(\"x\") } catch (e: AssertionError) { e.message shouldBe \"x\" } }\n"
+     kc2 = "    @Test\n    fun s8() { try { foo(); fail(\"x\") } catch (e: Throwable) { check(e is IllegalStateException) } }\n"
+     kc3 = "    @Test\n    fun s9() { try { foo(); fail(\"x\") } catch (e: Throwable) { require(e is IllegalStateException) } }\n"
+     h5 = commit({T: _tqg_kt(old, kc1, kc2, kc3)})
+     got5 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h5) if c["rule"] == "tq/catch-no-fail"}
+     check("S6 r4 catch 用 shouldBe、check(、require( 檢查不列", not ({"s7", "s8", "s9"} & got5), got5)
+ 
++    # 代碼審 r5:catch 裡恆成立的 check(true)/require(true)、只是名字以 should 開頭的變數或方法,都不算檢查;
++    # Kotest 中綴斷言只認 `a shouldBe b` 的寫法,try 那側也算斷言
++    sw = {
++        "w1": "    @Test\n    fun w1() { try { foo(); fail(\"x\") } catch (e: Throwable) { check(true) } }\n",
++        "w2": "    @Test\n    fun w2() { try { foo(); fail(\"x\") } catch (e: Throwable) { require(true) } }\n",
++        "w3": "    @Test\n    fun w3() { try { foo(); fail(\"x\") } catch (e: Throwable) { val shouldRetry: Boolean = false } }\n",
++        "w4": "    @Test\n    fun w4() { try { foo(); fail(\"x\") } catch (e: Throwable) { logger.shouldLog(e) } }\n",
++        "w5": "    @Test\n    fun w5() { try { result shouldBe 5 } catch (e: AssertionError) { println(e) } }\n",
++    }
++    keep = "    @Test\n    fun w6() { try { cleanup() } catch (e: Exception) { logger.shouldReport(e) }\n        assertEquals(1, f()) }\n"
++    h6 = commit({T: _tqg_kt(old, *sw.values(), keep)})
++    got6 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h6) if c["rule"] == "tq/catch-no-fail"}
++    for k in sw:
++        check(f"S6 r5 {k} 吞掉斷言要列", k in got6, got6)
++    check("S6 r5 w6 catch 只是叫 should 開頭的方法、try 沒斷言不列", "w6" not in got6, got6)
++
+ 
+ def t_tq_guard_timeout_and_snapshot():
+     """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+     翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+     T = _TQG_T
+     body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     h = commit({T: _tqg_kt(body.replace("30", "300"))})
+     check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+@@ -121276,36 +121303,67 @@ def t_tq_guard_cli_contract():
+     b43 = commit({M: blob})
+     h43 = commit({M: blob.replace("fun a() = 1", "fun a() = 2")})
+     check("S11 r3 正式程式檔有超長行、只改別處:不列太大", ("tq/too-large", M) not in _tqg_rules(root, b43, h43), _tqg_rules(root, b43, h43))
+     longc = small + "// " + "x" * 20001 + "\n"
+     b44 = commit({M: None, T: small})
+     h44 = commit({T: longc.replace("    @Test fun a()", "    @Ignore\n    @Test fun a()")})
+     r44 = _tqg_rules(root, b44, h44)
+     check("S11 r3 測試檔有超長行:列太大,同檔加的跳過照樣列", ("tq/too-large", T) in r44 and ("tq/skip-added", T) in r44, r44)
+     check("S11 r3 CRLF 檔剛好 2 萬字的行不算超長", not m._tg_has_long_line("x" * 20000 + "\r\ny\r\n"), "")
+ 
+-    # 代碼審 r4:每層都有一支測試的深巢狀類別,函式鍵總長不跟深度平方成長;太大訊息不再說「沒有比對」
++    # 代碼審 r4:每層都有一支測試的深巢狀類別,函式鍵總長不跟深度平方成長
+     each = "package x\n" + "".join(f"class C{i} {{\n    @Test fun t{i}() {{ assertEquals(1, f()) }}\n" for i in range(20000)) + "}\n" * 20000
+     import tracemalloc as _tm2
+     t0 = _time.monotonic()
+     _tm2.start()
+     fns_each = m._tg_functions(each, False)[0]
+     _peak2 = _tm2.get_traced_memory()[1]
+     _tm2.stop()
+     check("★前置★ 每層的測試都切得出來", len(fns_each) == 20000, len(fns_each))
+     check("S11 r4 2 萬層每層一支測試:10 秒內、記憶體峰值 300 MB 內、每把函式鍵都不超過 400 字",
+           _time.monotonic() - t0 < 10 and _peak2 < 300 * 2**20 and max(len(k) for k in fns_each) <= 400,
+           (_time.monotonic() - t0, _peak2 // 2**20, max(len(k) for k in fns_each)))
+     import re as _re4
+     _bad_tail = [k for k in fns_each if not _re4.search(r"(?:^|[.…])C(\d+)\.t\1$", k)]
+     check("S11 r4 每一把函式鍵的結尾都是自己那一層的類別名(換成摘要的那幾層也一樣)", not _bad_tail, _bad_tail[:2])
+-    check("S11 r4 太大的訊息說的是「超過的部分沒有比對」", "超過的部分沒有比對" in m._TG_WHY["tq/too-large"][0], m._TG_WHY["tq/too-large"])
++
++    # 代碼審 r5:catch 的括號一直沒收尾、類別名後面接大段空白、fun 後面的角括號沒收尾——三種形狀都要跟長度成正比
++    many = "{\n" + "try{}catch(a\n" * 16000 + ")\n" * 16000 + "}\n"
++    check("★前置★ 病態 catch 真的有 try 給它看", many.count("try{}") == 16000, many.count("try{}"))
++    t0 = _time.monotonic()
++    m._tg_catch_no_fail({"mbody": many})
++    check("S11 r5 1 萬 6 千個 catch( 括號擠在最後:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
++    ws = "package x\n" + " ".join(f"class A{i}" for i in range(1800)) + "\n" + (" " * 19999 + "\n") * 120 + "{\n    @Test fun t() { assertEquals(1, f()) }\n}\n"
++    t0 = _time.monotonic()
++    keys_ws = list(m._tg_functions(ws, False)[0])
++    check("★前置★ 大段空白之後的類別本體與測試都切得出來", keys_ws == ["A1799.t"], keys_ws)
++    check("S11 r5 1800 個類別宣告後接 240 萬字空白:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
++    # 宣告找不到名字(`fun <T>()`)時每一行都會再找一次名字;每行都在單行上限內,不會被抹行擋在外面
++    gen = "package x\nclass A {\n    @Test fun <T>() {\n" + ("        " + "fun <" * 3990 + "\n") * 40 + "        assertEquals(1, f())\n    }\n}\n"
++    check("★前置★ 每行都在單行上限內", max(map(len, gen.split("\n"))) <= m._TG_MAX_LINE_CHARS, max(map(len, gen.split("\n"))))
++    t0 = _time.monotonic()
++    m._tg_functions(gen, False)
++    check("S11 r5 40 行各 3990 個沒收尾的 fun <:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
++    # 代碼審 r5:路徑摘要裡的雜湊真的在分辨——兩個頂層類別底下各有一條最內層 100 字相同的深鏈,函式鍵不同、也不靠 #2 排序
++    chain = "".join(f"class Inner{i}x{'y' * 20} {{\n" for i in range(12))
++    two = "package x\nclass P {\n" + chain + "    @Test fun t() { assertEquals(1, f()) }\n" + "}\n" * 12 + "}\nclass Q {\n" + chain + \
++        "    @Test fun t() { assertEquals(1, f()) }\n" + "}\n" * 12 + "}\n"
++    keys_two = list(m._tg_functions(two, False)[0])
++    check("★前置★ 兩條鏈都超過路徑上限、結尾相同", len(keys_two) == 2 and all(k.startswith("#") for k in keys_two) and keys_two[0][-100:] == keys_two[1][-100:], keys_two)
++    check("S11 r5 結尾相同的兩條深鏈,函式鍵靠雜湊分開、不靠 #2", keys_two[0] != keys_two[1] and not any(k.endswith("#2") for k in keys_two), keys_two)
++    # 代碼審 r5:縮範圍後說明文字不再宣稱比對建置檔與 CI;整支檔太大的訊息說整支沒比對
++    hlp = run("--help").stdout
++    top = [ln for ln in sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True, stdin=sp.DEVNULL,
++                               env=_e2e_isolated_env()).stdout.splitlines() if "測試防竄改比對" in ln]
++    check("★前置★ 兩份說明都讀得到", "什麼時候用" in hlp and len(top) == 1, (hlp[:200], top))
++    check("S11 r5 test-guard 的說明不再說會比對建置檔或 CI", not any(w in hlp + top[0] for w in ("CI", "建置", "Gradle")), (hlp[:300], top))
++    check("S11 r5 太大的訊息分得出整支沒比與只有超長行沒比", "整支" in m._TG_WHY["tq/too-large"][0] and "超長行" in m._TG_WHY["tq/too-large"][0], m._TG_WHY["tq/too-large"])
+ 
+ 
+ def t_rg_methods_expression_body_and_backtick():
+     """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+     Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+     翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+     import time as _time
+     m = _tqg_module()
+     kt = ("class T {\n"
+           "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
+@@ -121360,20 +121418,36 @@ def t_rg_methods_expression_body_and_backtick():
+         for i, ch in enumerate(txt):
+             if ch in "([{" and i in bm and m._rg_balanced(txt, i) != bm[i]:
+                 bad.append((txt, i))
+     check("S16 r2 _rg_bracket_map 與 _rg_balanced 在 300 組隨機字串上配對一致", not bad, bad[:3])
+ 
+     # 代碼審 r4:父型別一行接一行(行尾逗號)也接著看
+     src4 = "class FooTest : Base(),\n    Other {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"
+     keys4 = list(m._tg_functions(src4, False)[0])
+     check("S16 r4 父型別行尾逗號換行的類別路徑還在", keys4 == ["FooTest.t"], keys4)
+ 
++    # 代碼審 r5:行尾逗號或冒號後面接長註解、行尾空白、空行、註解行,CRLF 換行,類別路徑都還在
++    shapes = {
++        "長註解": "class FooTest : Base(),   // " + "說明" * 40 + "\n    Other {\n",
++        "行尾空白": "class FooTest : Base()," + " " * 80 + "\n    Other {\n",
++        "冒號換行": "class FooTest :\n    Base() {\n",
++        "冒號接空行與註解行": "class FooTest :\n\n    // legacy\n    Base() {\n",
++        "CRLF 空行": "class FooTest\r\n\r\n{\r\n",
++        "CRLF 冒號": "class FooTest :\r\n    Base() {\r\n",
++    }
++    for nm, head in shapes.items():
++        k5 = list(m._tg_functions(head + "    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
++        check(f"S16 r5 {nm}:類別路徑還在", k5 == ["FooTest.t"], k5)
++    # 代碼審 r5:buildSrc、build-logic 底下的測試仍是測試檔(只有它們的正式程式與建置腳本不歸類)
++    for pth in ("buildSrc/src/test/kotlin/FooTest.kt", "build-logic/convention/src/test/kotlin/FooTest.kt"):
++        check(f"S16 r5 {pth} 是測試檔", m._tg_kind(pth) == "test", m._tg_kind(pth))
++
+ 
+ # ── 作弊比對接進新增告警閘(Projects/Android測試防竄改檢查_計劃 S12–S15)──────────────────────────
+ def _tqg_gate_repo(config=None):
+     """推送前判定用的暫存專案:main 上有一支測試、docs/t-knowledge(治理帳才寫得進去),切到 feat 還沒改 → (root, commit 函式)。"""
+     import json as _j
+     root = Path(tempfile.mkdtemp(prefix="gctl-tqgg-"))
+     _e2e_tgit(root, "init", "-q")
+     files = {_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n"),
+              "docs/t-knowledge/.keep": ""}
+     if config is not None:

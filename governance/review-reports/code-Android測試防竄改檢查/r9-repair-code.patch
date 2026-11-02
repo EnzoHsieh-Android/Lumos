@@ -1,0 +1,55 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index d78a59426..785c6293f 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48802,22 +48802,24 @@ def _tg_pairs(old, new, kotlin_test=False):
+                 left.remove(st)
+             else:
+                 rest.append(st)
+         out.extend(zip(rest, left))
+     return out
+ 
+ 
+ _TG_TRY = re.compile(r"\btry\s*\{")
+ _TG_CATCH = re.compile(r"\s*catch\s*\(")
+ _TG_OPEN_BRACE = re.compile(r"\s*\{")
+-# catch 接得住斷言失敗的型別:AssertionError 本身、或比它寬的 Error、Throwable(Kotlin 與 Java 寫法都認)
+-_TG_CATCH_ASSERT = re.compile(r"\b(?:AssertionError|AssertionFailedError|Error|Throwable)\b")
++# catch 接得住斷言失敗的型別:名字以 Error 或 Failure 結尾(AssertionError 與各框架的子類別 ComparisonFailure、AssertionFailedError、
++# MultipleFailuresError、MockitoAssertionError 都這樣命名)或是 Throwable;照字尾認、不逐一列子類別(代碼審 r8:字表漏掉子類別),
++# 判錯的方向是多列(自訂的 Result.Error 也算)
++_TG_CATCH_ASSERT = re.compile(r"\b(?:\w*(?:Error|Failure)|Throwable)\b")
+ _TG_TRY_OK = re.compile(r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?:fail|assertThrows|assertFailsWith|assertFails)\s*[({<]")
+ _TG_RUNCATCH = re.compile(r"\brunCatching\s*\{")
+ _TG_FAIL_CALL = re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")
+ _TG_THROW = re.compile(r"\bthrow\b")
+ _TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\(")       # Kotlin 標準庫的檢查,不成立就丟例外
+ _TG_NONSPACE = re.compile(r"\S")
+ 
+ 
+ def _tg_catch_no_fail(fn):
+     """try 沒有 fail、catch 裡斷言或是空的;try 裡有斷言、catch 接住斷言失敗卻不再丟出;runCatching 裡斷言沒接 getOrThrow。
+@@ -49287,21 +49289,22 @@ def _tg_fn_cands(path, k, f, prev, kt):
+ 
+ 
+ # 抓不到的,跟測試品質標準〈推送前的防竄改檢查〉的「抓不到」那條是同一份(去掉反引號後逐句對得上,t_tq_guard_cli_contract 釘住)
+ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認)",
+               "實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查",
+               "預期值先放進變數再斷言(val expected = 88)、參數化測試刪資料列、本體有改的改名(只列成刪除)、"
+               "逾時換單位(5.seconds 改 5.minutes)或整行新增的逾時、CI 的 timeout-minutes",
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助、"
+               "同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources",
+               "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一版不比(之後另做);"
+-              "把測試檔搬進 Gradle 不編譯的目錄",
++              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡出現 throw 字(含條件式、死分支、lambda 裡)或呼叫名字叫 fail 的方法(含 promise.fail(e))"
++              "就當成重丟或明確失敗、不列",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+               "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large;assume 敘述超過 2000 字的尾段不進身分;"
+               "用單獨的 CR 或 Java 的 \\u000a 提前結束行註解",
+               "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
+               "測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算",
+               "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。

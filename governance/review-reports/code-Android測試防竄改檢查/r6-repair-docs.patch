@@ -1,0 +1,295 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md
+index 1cbdd8313..c88b2923c 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md
+@@ -15,21 +15,21 @@ related:
+ lands_in:
+   - Systems/test-quality-cli
+   - Systems/pitfalls-lint-adapter
+   - Systems/test-guard
+   - Systems/pitfalls-code-loop
+   - Systems/test-quality-multilang
+   - Systems/room-guard
+ ---
+ # Android測試防竄改檢查_計劃
+ 
+-> 白話:讓 AI 寫測試時,最常見的壞事有兩種:一是它為了讓測試過,去改測試、跳過測試、改建置設定;二是它寫出永遠綠的測試(沒有斷言、例外被吞掉、實際值換成常數)。這份計劃做一支「比對改動前後」的工具,在推送前把這些寫法列成候選擋下來,誤報用既有的放行指令附理由放過、AI 放的事後要人看過;同時照論文全文研讀的結論改寫測試品質標準,處理上一輪延後的六條小問題,再到考場 mOrangePos 實跑壞例子、拿它的真實歷史量誤報。
++> 白話:讓 AI 寫測試時,最常見的壞事有兩種:一是它為了讓測試過,去改測試、跳過測試、改建置設定(建置設定這一批不比,見〈第二批〉);二是它寫出永遠綠的測試(沒有斷言、例外被吞掉、實際值換成常數)。這份計劃做一支「比對改動前後」的工具,在推送前把這些寫法列成候選擋下來,誤報用既有的放行指令附理由放過、AI 放的事後要人看過;同時照論文全文研讀的結論改寫測試品質標準,處理上一輪延後的六條小問題,再到考場 mOrangePos 實跑壞例子、拿它的真實歷史量誤報。
+ 
+ ## 問題與最小解
+ 
+ 立案(2026-11-02,Enzo 原話依序):「上網印證一下，我們的測試驗證覆蓋完全了嗎」→「先以Android為強化主軸」→「論文看全文，我們避免掉人家已經做過的實驗、吸收結論，再照建議看怎麼調整」→「不用等CI，直接開計劃、規劃實作，然後開始作業，給你最高裁量權＆簽核權，有問題就上網搜別人印證過的解法，把功能優化做好做滿」。
+ 
+ 研讀:六組代理讀了約四十篇論文與官方文件的全文(預期答案問題、AI 作弊、變異測試實務、測試壞味道、不穩測試與屬性測試、2026 下半年新研究),另派一個沒看過結論的代理只拿原始問題核對標準缺口。報告去掉本機路徑後放在 `governance/eval/results/ai-test-verification-research-20261102/`。這份計劃只吸收它們已經量過的結論,不重做;它們沒量過、我們真的需要的,列在〈第二批〉。
+ 
+ 吸收的結論(出處都在研讀報告):
+ - AI 看得到實作時,會把錯的行為寫成預期值:把錯寫成預期的測試是抓到錯的 3.5–6.5 倍(Python,145 個 PR),給有錯的程式時被誤導的測試多約 8 倍(Java,11 個模型);把實作從眼前拿掉、只給意圖描述才明顯有用;在提示裡警告「程式可能有錯」沒有改變結果(這點只在 gpt-4o-mini 上測過);一直修到變綠會把強斷言改弱。
+ - AI 會為了讓測試過而作弊:測試可寫時直接改測試最常見;設成唯讀擋得住改測試,擋不住寫死測試輸入、查表、只做測試碰得到的路徑;LLM 當作弊偵測器最好約 63%,語意型幾乎抓不到;可靠的做法是「寬規則篩候選 → 人裁」,誤報要有正式出口。Google 的 Android Bench 2.0 在 Android 上看到改截圖容差、註解掉 `@Test`、DAO 回傳寫死資料。
+@@ -74,21 +74,21 @@ RETIRE-IF: 人工抽查放行檔(`lumos lint-waive --list`,每筆記著規則代
+ 
+ ### 一、比對工具 `lumos test-guard`
+ 
+ **用法與退出碼**(照 Room 守衛 `cmd_room_guard`):`lumos test-guard --diff <起點>..<終點> [--repo <根>] [--json]`,範圍用 `_rg_range` 解(只收兩個點的寫法);沒有候選 0、有候選 1;不是 git 專案回 0 並印一句「不是 git 專案,沒比」;參數錯或終點解不出來回 2。新增告警閘呼叫它時直接傳已經算好的兩端,不再解析範圍字串。
+ 
+ **比對起點**(指令與閘都先做這一步,`--json` 與擋下訊息印出實際用的起點):比對從「跟主線的分岔點」起算——先用 `_lens_default_base(root, tip=終點, include_local=False)`(只看遠端主線;本機 main 上還沒推出去的提交不能當成已在主線,代碼審 r2 改定),沒有遠端主線才退回 `include_local=True`(Room 守衛手動跑用的同一支);找得到、而且不等於終點本身,就用它;找不到(沒有主線、推的就是主線)照給的起點。這樣合過主線之後推送,主線上的改動不會算到推送者頭上;同一條分支先前推送已經處理過的候選,不是改掉了就是已在放行檔,不會重複擋。給的起點是空樹而找不到主線時,照比對、全部只印不擋,並寫一筆治理帳(閘名 `lint-new`、`no-baseline`,跟關閘的 `skipped` 分開數)。
+ 
+ **讀法**(全部借既有函式):
+ - 改了哪些檔:用 `_lens_git_dl` 跑 `git diff --raw -z -M --no-abbrev --no-ext-diff --no-textconv <起點> <終點>`,輸出照位元組讀,含刪除與改名、帶改動後的 git 物件編號(截圖基準圖與太大檔的指紋要綁它;`_nodehome_name_status` 只解檔名狀態、拿不到物件編號,所以這裡讀 `--raw`)。檔名不是合法 UTF-8 或含換行的,各列一條 `tq/unreadable`,不讓替換字元把它變成讀不到的空檔。
+ - 檔案內容:兩端合成一批,用 `_nodehome_cat_blobs_capped` 批次讀原始位元組(先問大小再讀內容,總共兩個 git 行程;不經轉換程式),單檔上限 5 MB 或 10 萬行、一次推送總量上限 200 MB,超過的列 `tq/too-large`;不存在的那一端(新增檔沒有改動前、刪除檔沒有改動後)當空檔;內容照 UTF-8 解,不是 UTF-8 的位元組換成替換字元。
+-- 剝字串與註解:擴充全庫唯一那支 `_strip_c_comments`,加 `keep_length=True` 選項——剝掉的部分換成等長的空白(換行照留),位置跟原文一一對應;掃描樣式照舊是 `_C_STRIP_PAT`,不另寫一套,既有呼叫端輸出不變。依檔類用不同模式:測試檔分三種用法——找結構(函式範圍、括號配對)時連字串內容一起清(字串裡的括號不干擾配對)、取斷言敘述時在剝過的文字找位置再回原文取字(字串預期值保留)、算本體簽名與逐行規則(跳過標記、門檻字樣)時只剝註解留字串;建置檔、正式程式檔只剝註解、留字串(`exclude("…Test…")`、`dependsOn("test")`、`"robolectric"` 要看字串內容);CI 的 yml 不走 C 式剝法(`https://` 不是註解),只剝前面是空白而且不在引號裡的 `#` 註解,行尾 `\` 的續行併進同一行。
++- 剝字串與註解:擴充全庫唯一那支 `_strip_c_comments`,加 `keep_length=True` 選項——剝掉的部分換成等長的空白(換行照留),位置跟原文一一對應;掃描樣式照舊是 `_C_STRIP_PAT`,不另寫一套,既有呼叫端輸出不變。依檔類用不同模式:測試檔分三種用法——找結構(函式範圍、括號配對)時連字串內容一起清(字串裡的括號不干擾配對)、取斷言敘述時在剝過的文字找位置再回原文取字(字串預期值保留)、算本體簽名與逐行規則(跳過標記、門檻字樣)時只剝註解留字串;正式程式檔只剝註解、留字串(`"robolectric"` 要看字串內容);建置檔與 CI 檔這一批不比(第二批另議剝法)。
+ - 測試函式:`_rg_methods(text, java, kinds=<測試註記>)` 加 `_rg_annotations`、`_rg_balanced`、`_rg_method_end`。測試註記:`Test`、`ParameterizedTest`、`RepeatedTest`、`TestFactory`、`TestTemplate`、`Theory`(`_rg_annotations` 取短名,`org.junit.Test`、`kotlin.test.Test` 都算)。既有函式要擴充的幾處(都補 Room 守衛那邊的回歸測試;`Systems/room-guard` 寫一句「這幾支被 test-guard 共用,改動兩邊測試一起跑」):
+   - 運算式本體:`fun x() = …` 的本體改成「`=` 之後,小括號與中括號深度為 0 時遇到左大括號就配到對應的右大括號;深度為 0 的換行而且已經看過內容、下一行不是接續(開頭是 `.`、`?.`、`?:`、`{`、運算子或右括號)時結束」——`= runTest {`、`= runTest(d) {`、`=` 換行再接 `runTest {` 或接單行斷言都涵蓋。這會改變 Room 守衛對 `open fun x() = db.withTransaction { … }` 這類 DAO 方法的範圍(從只到第一行變成整個區塊),是修正不是不變,Room 守衛補一支這種寫法的回歸測試。
+   - 反引號函式名:剝字串會把反引號整段清空,原本的宣告比對要求名稱是英數字,整支測試會被跳過;改成也認一對反引號,名稱由呼叫端回原文那一行取(含空白與括號的完整名稱)。
+   - 效能:先判註記對不對、再找宣告;宣告只在註記後 600 個字元內找(同 `KOTLIN_TEST_RE` 的上限)——註記後面一直沒有左括號時,不限長的比對每個註記都掃到檔尾;行號用預先算好的行首位置二分搜尋,不每次從檔頭數換行。草稿實測(2026-11-02,會談暫存區):「`@A` 換行 `val x = 1`」重複 5 萬次的檔從十幾秒降到 0.05 秒;5 萬個全是 `@Test` 的病態檔 2.5 秒。
+   - `_rg_split_args` 加 `angle=False` 選項:不把 `<`、`>` 當括號(比較運算 `a > b`、lambda 箭頭 `x -> x` 會讓深度歪掉);Room 守衛照舊預設把泛型的 `<>` 當括號。
+ - 函式鍵:類別路徑加名稱,沿著剝過的原文追蹤 `class`/`object`/`interface` 的大括號深度;同一類別裡同名的多載,第二個起加 `#2`、`#3`(依出現順序,用計數器給號,不逐個試名字——逐個試在幾萬支同名測試時是平方級)。
+ - 括號配對:每支函式在剝過的本體上一趟算出所有括號的對應表,斷言、try、runCatching 都查這張表,不各自重掃(極深巢狀不會變平方級)。剝完之後小括號或大括號總數配不平、或內容含 NUL,那支檔列 `tq/unparsable`,函式級規則不判。
+ - 路徑分類:測試路徑優先(`buildSrc/` 底下的 `src/test` 也是測試檔,不是建置檔);測試路徑用 `_rg_is_test_path`(有一段 `src/<名稱>/`,名稱是 `test`、以 `test` 或 `androidTest` 開頭,或以 `Test` 結尾,所以 `commonTest`、`jvmTest`、`androidUnitTest`、`screenshotTest` 都算);檔名以 `Test`/`Tests` 結尾但不在 `src/main` 底下的也算。改動前與改動後兩個路徑任一邊是測試檔就當測試檔(改名成 `.disabled`、搬進 `src/main` 都看得到)。
+ 
+ **三類檔**(下面的建置檔與 CI 檔兩行留作〈第二批〉的定義,這一批不比):
+@@ -116,30 +116,30 @@ RETIRE-IF: 人工抽查放行檔(`lumos lint-waive --list`,每筆記著規則代
+ |---|---|---|
+ | `tq/skip-added` | 測試檔裡 `@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assume…(`、`assumeTrue(`/`assumeFalse(`/`assumeNotNull(`/`assumeThat(`、`Assumptions.assume…(`、`TruthJUnit.assume(` 的命中次數差大於 0(`@Disabled…`、`@Enabled(On|If|For)…` 條件式與完整類別名寫法也算;assume 與門檻的身分是整個敘述,見〈次數差的身分〉);或改動前就有的測試函式新加了 `expected =` | 給一支紅的測試加 `@Ignore` |
+ | `tq/test-removed` | 改動前的測試函式(函式鍵)在改動後找不到,而且沒有跟這次改動裡任何一支「新出現的」函式本體簽名相同(一對一配對:兩支一樣的刪兩支只加一支,另一支照樣算刪除;本體簽名是空的不算改名證據);測試檔改名成非測試檔或被刪,裡面的函式一樣算;同一支檔的刪除合成一條,列出被刪的函式名,指紋綁那一組函式鍵 | 刪掉一支紅的測試;本體一字不改只改名、原樣搬到另一支測試檔不列 |
+ | `tq/assert-weakened` | 改動前後都有的同一個函式鍵(或本體簽名配上的改名),斷言敘述變少、強斷言變少,或常值斷言變多 | `assertEquals(3, n)` 改成 `assertTrue(n > 0)`;`assertTrue(r.isValid())` 改成 `assertTrue(true)`;`assertEquals(88, calc.total())` 改成 `assertEquals(88, 88)` |
+ | `tq/expected-changed` | 改動前後都有的同一個函式鍵,兩邊的斷言敘述清單用最長共同子序列對齊,被替換的那幾對裡,除了預期值的位置之外全部相同、預期值的位置不同(含方向互換) | `assertEquals(88, total)` 改成 `assertEquals(90, total)`;跨行的斷言、字串預期值、`State.Loading` 改 `State.Error`、`assertTrue` 改 `assertFalse` 都算;只改 `total(listOf(40, 48))` 的參數不列;只改訊息字串不列;中間插一條斷言不讓後面錯位 |
+ | `tq/no-assertion` | 新增的測試函式,或本體簽名、註記有變的測試函式,一個斷言字都沒有 | 只呼叫 `vm.load()` 不檢查任何結果 |
+ | `tq/catch-no-fail` | 新增或本體有變的測試函式裡有 `try { … } catch (…) { … }`,catch 區塊有斷言字或是空的,而 try 區塊沒有 `fail(`、`assertThrows`、`assertFailsWith`(catch 區塊裡有 `fail(`,也就是預期不丟例外的寫法,不列);或 try 裡有斷言(含結尾的 `fail(`,它丟的也是 AssertionError)而 catch 接得住 AssertionError(或 Error、Throwable)、catch 裡不檢查也不重丟(catch 裡有斷言字、Kotest 中綴斷言、`check(`、`require(` 算有檢查;代碼審 r3、r4 改定);或 `runCatching { … }` 裡有斷言字、而後面沒有接 `.getOrThrow()` | 不丟例外時測試照樣綠 |
+ | `tq/build-config`(第二批,這一批不比) | 建置檔(留字串、剝註解)裡下面這些的命中次數差大於 0,三種寫法都認(Kotlin 的 `x = v`、Groovy 的 `x v`、Provider 的 `x.set(v)`):`ignoreFailures` 設成 true(不限在測試區塊,點號寫法 `test.ignoreFailures = true` 也算;只排除外層或同一行開的區塊是靜態檢查外掛或報表(detekt、ktlint、kotlinter、spotless、checkstyle、pmd、spotbugs、findbugs、animalsniffer、lint、jacoco、kover)而且不是測試任務的;比對的是區塊開頭左大括號之前那段,不是同一行後面的字)、`excludeTestsMatching`、`failOnNoMatchingTests`/`isFailOnNoMatchingTests`/`failOnNoDiscoveredTests` 設成 false、`returnDefaultValues`/`isReturnDefaultValues` 設成 true、`failOnPassedAfterRetry` 設成 false、`notAnnotation`/`notClass`/`notPackage`;所在區塊(含外層)是測試任務(`test {`、`tasks.test`、`withType<Test>`、`named<Test>`、`unitTests.all`;或區塊開頭、同一行裡有引號整個是含 test 的任務名:`"testDebugUnitTest"`、`":app:testDebugUnitTest"`,所以 findByName、`tasks[…]`、getByPath、`it.name ==` 都認得;檔名樣式與類別名有 `*` `/` `.` 不算,`"jacocoTestReport"` 這類報表外掛的任務名不算;`tasks.matching { … }` 換行 `}.configureEach {` 這種同一行接著開的區塊也算;`testCoverage {`、`testOptions {` 不算;代碼審 r3 改定,r2 版要求要有點名呼叫的字樣,漏了 findByName 這類寫法)時的 `enabled` 設成 false、`onlyIf { false }`、`exclude` 的字串含 `Test`、新增 `excludeTags`/`excludeCategories`/`excludeEngines`;重試外掛 `org.gradle.test-retry` 或 `maxRetries` 的命中次數差大於 0,但改動後的任何建置檔(用 `git grep` 查一次)都沒有 `failOnPassedAfterRetry` 設成 true;改動前有、改動後沒了(含被註解掉)的 `dependsOn("test")`、`check.dependsOn` | `tasks.withType<Test> { ignoreFailures = true }`;JaCoCo 報表的 `exclude: ['**/*Test*.*']` 不在測試任務區塊,不列 |
+ | `tq/ci-config`(第二批,這一批不比) | CI 檔(只剝 `#` 註解、併續行)裡呼叫 Gradle 的指令(含 `gradlew`、`gradle ` 指令、Gradle 官方 Action 的 `arguments:`、Bitrise 的 `gradle_task:`)的 `-x`/`--exclude-task` 接含 `test` 或 `check` 的任務名、行尾 `\|\| true` 的命中次數差大於 0;放寬鍵(`continue-on-error: true`、`allow_failure: true`、`if: false`、Azure 的 `continueOnError: true`、Bitrise 的 `is_skippable: true`、Codemagic 的 `ignore_failure: true`)所在的區塊(縮排比它淺的最近一行到下一個同層,步驟層與工作層都算)裡有 Gradle 呼叫時的次數差大於 0;改動前呼叫的 Gradle 測試或 check 任務,改動後呼叫它的次數變少(照 `&&`、`\|\|`、`;`、`\|` 切段,只看有 Gradle 呼叫的段,跳過旗標與 `-x`、`--tests` 這類旗標帶的參數,任務名黏著的 `)` `>` 這類標點拿掉,剩下的才是任務名;加旗標、改篩選、`-x` 寫在任務前面都不影響;`-x` 也認 `-xtest`、`--exclude-task=test`;行尾的 `\|\| true` 也認 `\|\| :`、`\|\| exit 0`、`\|\| echo …`) | `./gradlew build -x test`(含反斜線續行);`pytest -x tests/`、`mkdir -p a \|\| true` 不列 |
+ | `tq/timeout-raised` | 同一個函式(含註記那幾行)裡(建置檔的逾時移到第二批),改動前有、改動後沒有的逾時行(`timeout`、`Timeout`、`withTimeout(`,不分大小寫),配上改動後有、改動前沒有的逾時行:把數字換成佔位後一樣,而改動後的最大數字比較大 | `@Test(timeout = 30)` 改成 `45` |
+-| `tq/snapshot-changed` | 截圖基準圖有新增、修改或刪除(同一個目錄合成一條,指紋綁那批檔的路徑與 git 物件編號);或測試檔、建置檔裡 `changeThreshold`、`maxDistance`、`ImageComparator`、`roborazzi.test.record` 的命中次數差大於 0 | 功能改動跟重錄的基準圖放在同一批 |
++| `tq/snapshot-changed` | 截圖基準圖有新增、修改或刪除(同一個目錄合成一條,指紋綁那批檔的路徑與 git 物件編號);或測試檔裡 `changeThreshold`、`maxDistance`、`ImageComparator`、`roborazzi.test.record` 的命中次數差大於 0 | 功能改動跟重錄的基準圖放在同一批 |
+ | `tq/test-env-sniff` | 正式程式檔(留字串、剝註解)裡 `"robolectric"`(不分大小寫)、`isRunningTest`、`isRobolectric`、`Class.forName("org.junit`、`Class.forName("androidx.test`、`Class.forName("org.robolectric` 的命中次數差大於 0(`Build.FINGERPRINT` 單獨出現不算,模擬器偵測常用) | 程式偵測到在測試裡就走另一條路 |
+ | `tq/too-large` | 三類檔(截圖除外)任一端超過比對工具自己的上限(單檔 5 MB 或 10 萬行、一次推送總量 200 MB;測試檔有一行超過 2 萬字也列一條,那幾行抹掉後其餘照比(代碼審 r3 改定:只套測試檔、不再整支不解析);不借新增告警閘那兩個給慢工具調小的設定);指紋綁路徑與改動後的 git 物件編號(那支檔再改要再看一次) | 不靜默略過 |
+ | `tq/unparsable` | 剝完字串與註解後括號總數配不平,或內容含 NUL,那支檔的函式級規則判不了;指紋綁路徑與 git 物件編號 | 不靜默略過 |
+ | `tq/unreadable` | 那支檔從 git 讀不出來,或檔名不是 UTF-8、含換行;指紋綁路徑 | 不靜默略過 |
+ 
+-- 次數差的身分(代碼審 r1、r2 改定,原本寫的是「函式名加本體簽名」):測試檔用(規則代號、函式名(類別層級的註記用「檔:路徑」)、種類),種類是:跳過註記一律算「跳過」(`@Ignore` 換 `@Disabled`、改跳過理由、只改本體都不算新增),assume 呼叫與比對門檻是整個敘述去掉空白(括號配平、跨行照接;條件改成永遠跳過、門檻數值調高都算新增,只換行重排、改同一行別的斷言不算;代碼審 r3 改定,原本只取一行);測試檔改名或搬家時兩邊都用新路徑;跨這次改動的全部測試檔一起算(測試原樣搬到另一支檔、類別名跟著變,帶過去的註記也不會被當成新增);建置檔用(規則代號、所在區塊的開頭、正規化後的那一行);CI 檔用(規則代號、所屬區塊的開頭、正規化後的指令);正規化是壓掉空白與行尾差異。整檔重新縮排、換行尾、函式搬位置都不會讓舊命中變成新增。
++- 次數差的身分(代碼審 r1、r2 改定,原本寫的是「函式名加本體簽名」):測試檔用(規則代號、函式名(類別層級的註記用「檔:路徑」)、種類),種類是:跳過註記一律算「跳過」(`@Ignore` 換 `@Disabled`、改跳過理由、只改本體都不算新增),assume 呼叫與比對門檻是整個敘述、字串外的空白整理過(字串常值原樣,頭尾與逗號後的空白都算內容,代碼審 r5 改定;括號配平、跨行照接;條件改成永遠跳過、門檻數值調高都算新增,只換行重排、改同一行別的斷言不算;代碼審 r3 改定,原本只取一行);測試檔改名或搬家時兩邊都用新路徑;跨這次改動的全部測試檔一起算(測試原樣搬到另一支檔、類別名跟著變,帶過去的註記也不會被當成新增)。整檔重新縮排、換行尾、函式搬位置都不會讓舊命中變成新增。
+ - 每條候選帶:規則代號、檔案、行號(刪除類用改動前行號並標 `side: base`)、一句為什麼、該確認什麼、身分字串、指紋。指紋 = sha256(規則代號、檔案、身分、這是第幾個相同身分)前 16 碼;`tq/expected-changed` 的身分是含常值的改動後原文。同一個身分第二次出現,指紋不同,放行第一個不會順帶放掉第二個。新增告警閘既有的指紋不含序號(多出來的幾條共用同一個指紋),這兩種算法並存,寫進 `Systems/pitfalls-lint-adapter`。
+ - 斷言敘述清單的對齊用 `difflib.SequenceMatcher`(不開自動略過);被替換的區塊兩邊一樣長時逐對比,長度不同時只比前面成對的那幾個,多出來或少掉的由「斷言變少、強斷言變少」那條規則接。
+-- 判讀跟輸入大小成正比:剝字串一趟、每支函式的括號對應表一趟、逐行比對一趟,宣告比對有 600 字元上限;斷言、try、fail 的位置每支函式各算一次再用二分查,建置檔與 CI 的區塊開頭用堆疊一趟算,行號在收集命中時記下。代碼審 r1、r2 兩輪都被病態單行輸入打穿平方級,r2 起在外層加一道不靠逐條判斷的上限:測試檔裡超過 2 萬字的行抹掉不比、那支檔另列一條可放行的 `tq/too-large`(代價是那種檔每次要人放行)。r3 又被兩種乘積打穿(很長的區塊開頭乘很多內層行、CI 續行併成的長邏輯行),那兩類在 r4 後隨建置檔與 CI 規則移到第二批。類別本體的泛型改成同一行、最多 400 字的 C 層查找,下一個大括號、括號、換行的位置共用快取;巢狀類別的路徑在開類別時接一次,超過 200 字換成摘要加最內層那段(每層都有測試時,函式鍵總長也跟深度成正比;代碼審 r4 改定)。比對工具每支檔開始前看一次截止時間,超過就丟出「超過截止時間」,單一檔案跑到一半不會被打斷(單檔有 5 MB 上限)。草稿實測:接近 6 萬行、一次改兩千處預期值的測試檔 0.6 秒;300 支檔 0.4 秒;2 萬支同名測試切完不到 5 秒;考場 192 個提交逐一比完 12 秒。
++- 判讀跟輸入大小成正比:剝字串一趟、每支函式的括號對應表一趟、逐行比對一趟,宣告比對有 600 字元上限;斷言、try、fail 的位置每支函式各算一次再用二分查,catch 的括號用同一張括號對應表找右括號,行號在收集命中時記下。代碼審 r1、r2 兩輪都被病態單行輸入打穿平方級,r2 起在外層加一道不靠逐條判斷的上限:測試檔裡超過 2 萬字的行抹掉不比、那支檔另列一條可放行的 `tq/too-large`(代價是那種檔每次要人放行)。r3 又被兩種乘積打穿(很長的區塊開頭乘很多內層行、CI 續行併成的長邏輯行),那兩類在 r4 後隨建置檔與 CI 規則移到第二批。類別本體的泛型改成同一行、最多 400 字的 C 層查找,下一個大括號、括號、換行的位置共用快取;巢狀類別的路徑在開類別時接一次,超過 200 字換成摘要加最內層那段(每層都有測試時,函式鍵總長也跟深度成正比;代碼審 r4 改定)。r5 又找到三處原本就有的乘積形狀,改成跟長度成正比:catch 的型別括號原本用 `[^)]*` 掃到很遠的右括號(很多 try 乘距離)、類別名後面接大段空白時每個宣告各掃一次(宣告數乘空白長)、測試宣告找不到名字時每行再找一次名字而泛型角括號沒有上限;換行後第一個非空白字與一行最後一個非空白字每個位置只找一次。比對工具每支檔開始前看一次截止時間,超過就丟出「超過截止時間」,單一檔案跑到一半不會被打斷(單檔有 5 MB 上限)。草稿實測:接近 6 萬行、一次改兩千處預期值的測試檔 0.6 秒;300 支檔 0.4 秒;2 萬支同名測試切完不到 5 秒;考場 192 個提交逐一比完 12 秒。
+ - **抓不到的**,寫進工具說明與標準,不宣稱(實作後以工具輸出的清單為準,標準那條由 `t_tq_guard_cli_contract` 釘成逐字同一份;下面是設計時的清單,其中 Kotlin 巢狀區塊註解、版本目錄、lint 與 detekt 基準檔、其他棧屬於範圍外的說明,不列進工具輸出):實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名;預期值先放進變數再斷言(`val expected = 88`);參數化測試刪掉資料列;JUnit 3 那種不標註記、靠 `test` 開頭命名的測試;Kotest 字串式測試與 Spek;本體有改的改名(只列成刪除);逾時換單位(`5.seconds` 改 `5.minutes`)、整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外(`println(e)`)的吞法;在測試本體裡提早 `return` 或包一個永假的 `if`;Truth 的 `assume()` 以外的自訂跳過輔助;JUnit 5 的測試改成 `private` 或 `static`(不再被執行;修飾詞改動不算測試有變);不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵);Kotlin 巢狀的區塊註解(剝註解那支不認巢狀);把測試檔搬進 Gradle 不編譯的目錄但路徑仍像測試目錄(工具不讀 `sourceSets` 的實際範圍);版本目錄 `libs.versions.toml`(只放版本,不放測試設定);lint 與 detekt 的基準檔改動(那是靜態檢查的放行,不是測試);Jenkinsfile 的 `catchError` 這類 Groovy 包裝(Jenkinsfile 只認呼叫 Gradle 的行);同一處先被合理放行、之後重新啟用又被同樣改回(指紋相同,會沿用舊放行);Python 等其他棧(見〈第二批〉)。
+ - **已知的誤報**,有放行出口、在考場量測(S22)時一併記:只靠專案自訂的斷言輔助(例如 `checkState(...)`、`ensureX(...)`、`intended(...)`)的測試會被列成 `tq/no-assertion`;新模組照範本抄來的 `isReturnDefaultValues = true`、Robolectric 測試必帶的 `@Config(sdk = …)` 每處各算一條。這次不加宣告口,等考場量出這類誤報的實際比例再決定(多就在第二批加,照收證工具掃描既有的 `--check-helper` 寫法)。一次大重構產生上百條候選時沒有整批放行,出口是那一次設環境變數 `LUMOS_SKIP_LINT_NEW=1`(有候選或比對出錯時留帳;只認 1);這次不加批次放行,因為「測試被刪」與「基準圖」已經按檔案、按目錄合成一條,剩下會大量出現的只有預期值大批改動,那正是要人逐條看的。
+ 
+ ### 二、併進新增告警閘
+ 
+ - **判定順序**:閘的模式照舊從工作目錄的 `.lumos/config.json` 讀(`_lint_new_config`,既有測試與 `docs/指令參考.md` 那句「`lint_new` 讀工作目錄那份」不變);例外是**這次的推送範圍本身把 `lint_new.gate` 放寬了**——用 `_nodehome_reader` 從 git 取推送範圍給的起點(換成比對起點之前的那一個)與終點兩個版本的設定檔位元組,交給 `_lint_new_config(text=…, from_snapshot=True)` 解出 `lint_new.gate`(沒寫當 block),終點比起點寬(block 改成 warn 或 off、warn 改成 off),這次照起點的值判並印一行「提醒:這次推送把新增告警閘放寬,照放寬前的設定判;放寬從下一次推送起生效」,寫一筆治理帳(`lint-new`、`relax-deferred`)。只在工作目錄改、沒提交時,本機照工作目錄的值(既有行為)。接著:模式是 off 或設了 `LUMOS_SKIP_LINT_NEW` 時見〈關閘留帳〉→ 算出兩端 → 比對工具 → 有沒有宣告檢查工具 → 既有流程。比對候選轉成告警的形狀(`key`、`rule`、`file`、`line`、`message`,另加 `verify`),扣掉放行檔裡已有的,剩下的併進「新增告警」清單。沒宣告檢查工具、或這次沒有要掃的程式碼檔時,只要有作弊候選照樣判,沒有候選才回原本的狀態。
+ - 只有改動碰到三類檔(含刪除與改名,從自己那份 `--raw` 清單判)才跑比對;沒碰到就不跑。觸發條件只看路徑與副檔名,不判是不是 Android:任何 Kotlin 或 Java 專案(含 JVM 後端)改到測試檔或正式程式檔都會跑,截圖基準圖不分技術棧都會跑;建置檔與 CI 檔這一批不比(第二批)。
+ - **比對出錯擋下**:比對工具在 `_lint_new_verdict` 裡自己包住例外與截止時間,記成「沒跑完」裡的一種(`kind: guard`,跟既有的「時間預算沒跑到」同類),會擋;不會漏到外層 `_codeloop_lint_new_step` 的 fail-open。`_lint_new_classify` 的擋下理由與 `_cl_say_lint_block` 的訊息對 `guard` 另寫一句(「作弊比對沒跑完:<原因>」),不套「因為時間預算沒跑到」與放行指令。不照新增告警閘「環境不可用就自動放行」的老路:Android 端到端驗收那道閘當初就否決過「照新增告警閘出錯就放行」,決定是判不清就擋(見 `lumos rejections` 的那一筆);既有閘的「時間預算沒跑到」「檔太大」也都是擋。單一怪檔不會讓整道卡住:配不平、含 NUL、太大、讀不出來都落到可放行的候選(`tq/unparsable` 等),只有比對工具本身的程式錯才走「沒跑完」;那時同一次推送的出口是 `LUMOS_SKIP_LINT_NEW=1`(比對出錯也會留一筆 `skipped-env` 帳;只認 1,殘留的 0 或 false 不關閘;改設定在同一次推送不算數)。
+ - **放行檔讀不了**時:比對沒有候選 → 照既有的自動放行並記帳;有候選 → 擋下,理由寫「放行檔 `.lumos/lint-waivers.json` 讀不了,先修好它再放行」,不再印放行指令(那時放行指令一定失敗),也不記自動放行的帳。兩端算不出來時照舊自動放行並記帳(連改了哪些檔都不確定)。
+ - **warn 要印、推送時看得到**:設成 warn 時,新增告警(含比對候選)逐條印出來,每行以「提醒:」開頭(推送掛鉤 `pre-push` 只轉印含「提醒」等幾個字的行,Android 端到端驗收的同類輸出也是這樣開頭),小結寫「提醒:新增告警閘只報不擋,有 N 條」;只有比對在跑、沒有檢查命令時,不印「跑了 0 條檢查命令」。有比對候選時寫一筆治理帳(`lint-new`、`warned`、候選條數)。
+@@ -192,65 +192,65 @@ RETIRE-IF: 人工抽查放行檔(`lumos lint-waive --list`,每筆記著規則代
+ 六條是 [[Issues/收證歸因第三輪留下的小問題]] 的症狀 1–6(收證工具「認得 Truth 與裝置字串比較」那次代碼審跑滿三輪時延後的 minor)。
+ 
+ - 第一條:只補測試、不改判定,在 `scripts/test_test_quality_cli.py` 各加一支放寬就紅的測試:堆疊行的縮排、第一行去空白、Assert 片語前的字界、`fail|assert` 的限定、「第一行訊息自己含 `at org.junit.Assert.fail(` 又接一般堆疊時從第一個堆疊行起算」。每支先寫前置斷言證明那個樣本真的走到被測的那條分支(`Systems/測試假綠形態` 的規矩)。
+ - 第二條:**不改判定**,改成照實記錄的已知取捨。r1 設計審實測,原本想的「改看報告尾端連續的堆疊區塊」會把現有一筆合法案例(訊息自帶 `Caused by:` 緊貼真實堆疊)判錯,也認不得真機輸出的 `... 27 trimmed` 截斷行;訊息裡的堆疊樣字串與真正的 `Caused by:` 在文字上分不出來,往拒收的方向錯是比較安全的那一邊。Issue 那條改寫成這個結論,標準補那一句(見做法四)。
+ - 第三條:安全證據閘補一支「裝置文字(沒有型別欄)的字串比較故障收據算抓到錯」的測試,測試輔助加一種沒有型別欄的失敗狀態。
+ - 第四到六條:錯字、舊註解、說明檔的層數與 WHY 用詞、三處承認句補回頭條件。順手清掉那篇 Issue 開頭空的重複標題。
+ - 這次不改 `scripts/test_quality.py`,掛在它身上的三條回頭條件(2026-11-08 到期)不受這份計劃觸發,照它們原本的時程處理。
+ 
+ ### 六、考場實跑與誤報量測
+ 
+-- 考場本機分支上,每條規則各做一個壞改動提交(例如給測試加 `@Ignore`、刪一支測試、把強斷言改弱、把實際值換成常值、改預期值(單行、跨行、字串各一)、加沒斷言的測試、加 try/catch 沒 `fail()`、build 檔加 `ignoreFailures = true`(Kotlin 與 Groovy 各一)、加一個 CI 檔 `-x test`(含續行)、調大逾時、重錄一張基準圖、正式程式碼偵測 robolectric、在同一次推送把閘設成 off),逐一跑比對工具,記哪條抓到;再做幾個正常改動當對照(新增有斷言的測試、本體不變只改測試名、把測試原樣搬到另一支檔、整檔重新縮排、改正式程式碼),不應出候選。
++- 考場本機分支上,每條規則各做一個壞改動提交(例如給測試加 `@Ignore`、刪一支測試、把強斷言改弱、把實際值換成常值、改預期值(單行、跨行、字串各一)、加沒斷言的測試、加 try/catch 沒 `fail()`、build 檔加 `ignoreFailures = true`(Kotlin 與 Groovy 各一)、加一個 CI 檔 `-x test`(含續行;這三種在代碼審 r4 縮範圍後不再列,留作第二批的對照)、調大逾時、重錄一張基準圖、正式程式碼偵測 robolectric、在同一次推送把閘設成 off),逐一跑比對工具,記哪條抓到;再做幾個正常改動當對照(新增有斷言的測試、本體不變只改測試名、把測試原樣搬到另一支檔、整檔重新縮排、改正式程式碼),不應出候選。
+ - 拿考場 develop 的真實歷史(唯讀,不動 develop),對有改到測試、建置或 CI 檔的非合併提交逐一跑比對工具(合併提交跟第一個父提交比會把另一條分支的改動算進來,不算);每條候選人工裁成三類:作弊樣的改動、合理改動(例如把幾支測試重寫成整張表逐項比對)、規則判錯;規則判錯的比例寫進驗證紀錄,判錯多的規則當輪收窄。草稿跑過兩次:第一版 192 個非合併提交、38 條候選;第二輪折入後(字串常值看得到、改名一對一)44 條,其中「測試被刪」26 條、「預期值被改」14 條;另有 1 個提交是 repo 的第一個提交、沒有上一版可比(真推送時那種情況走空樹起點)。正式版實跑(2026-11-02)涵蓋全部 776 個非合併提交(第一個提交跟空樹比):44 條、0 個錯誤,裁定與規則判錯率見 [[Verification/2026-11-02_Android測試防竄改檢查實跑]]。公開卷證裡考場的檔名與測試名換代稱。
+ - Semgrep 在考場的測試目錄實跑一次自比規則(上一輪沒裝,沒跑到);跑過就把上一份計劃那行「Kotlin 靜態掃描這次沒跑」的回頭條件標成已結案。
+ - 卷證照上一輪的做法:公開 repo 只放去識別化摘要(`governance/eval/results/android-test-guard-drill-20261102/`(新增)),完整卷證留在考場本機分支。
+ - 去識別化範圍照使用者 2026-11-01 明列的:考場的套件名、類別名、測試名與本機路徑不進公開 repo(專案名可以寫)。考場的短提交編號與本機分支名不再寫進新的公開筆記、標準與評測摘要;代碼審與設計審的卷證(凍結審材、席報告、設計審快照)保留當時的寫法——那些檔的指紋已寫進治理帳,改一個字處置閘就判不過,短編號只在考場本機解得開、不含業務內容(代碼審 r2 資安、合約兩席點名,取捨照實報給使用者)。
+ 
+ ## 第二批(另開計劃,這批推上去之後接著做)
+ 
+ - 建置檔與 CI 的作弊比對(原條款 S7、S8,代碼審 r4 後移出這一批):四輪代碼審裡這兩類的 major 佔大宗,用正規式猜 Gradle DSL 與 shell 的寫法,每輪都被新寫法打穿(字串模板的任務名、一行開兩個區塊、鏈結換行、路徑形式的 gradle、病態長行的回溯)。另開計劃時先做最小實驗比較別的做法(例如讀 Gradle 的任務圖或 `--dry-run` 的實際任務清單、只認少數固定寫法加人工放行),再寫條款。原條款留在這裡當起點:
+   - 建置檔(原 S7):當建置檔新增 `ignoreFailures = true`、Groovy 的 `ignoreFailures true`、`failOnPassedAfterRetry.set(false)`、`excludeTestsMatching`、`isFailOnNoMatchingTests = false`、`isReturnDefaultValues = true`、`test { … }` 或 `withType<Test>` 區塊裡的 `enabled = false`(跨行、外層區塊裡夾著已關閉的內層區塊也算)、拿掉或註解掉 `dependsOn("test")`、或開重試外掛卻沒有任何建置檔設 `failOnPassedAfterRetry` 為 true 時,應列 `tq/build-config`;點號寫法 `tasks.test.ignoreFailures = true`、重試區塊或 `subprojects { … }` 裡的 `ignoreFailures`、`getByName("testDebugUnitTest")`、findByName、`tasks[…]`、getByPath、`it.name ==`、`withType<Test>` 裡巢狀的區塊、換行的 `tasks.matching {` … `}.configureEach {` 裡的 `enabled = false`,同一行帶 jacoco 字樣的 `tasks.test { ignoreFailures = true; … }`、測試區塊新增 `excludeTags` 也列;照標準開重試(`.set(true)` 或 `= true`)、依賴宣告的 `exclude(group = …)`、JaCoCo 報表的 `exclude: ['**/*Test*.*']` 與 Kotlin 寫法 `exclude("**/*Test*.*")`、`fileTree` 的 exclude、detekt(含 `configure<DetektExtension>`、內層 `reports {}`)與 kotlinter 的 `ignoreFailures`、任務的 `dependsOn("testX")` 不列;`failOnPassedAfterRetry = true` 只寫在行註解或區塊註解裡不算設定。
+   - CI(原 S8):當 CI 檔有這幾種改動時,比對工具應列 `tq/ci-config`:呼叫 Gradle 的指令新增 `-x test`(含反斜線續行、Gradle 官方 Action 的 `arguments:`)或行尾 `|| true`、含 Gradle 呼叫的步驟或工作(GitHub 工作層級、GitLab 的 job)加 `continue-on-error: true` 或 `allow_failure: true`、刪掉呼叫 Gradle 測試任務的指令(`-x` 寫在任務前面、`&&` 串接的後半段、子殼層與 `$()` 裡、轉向黏著的任務被拿掉也算)、新增 `-xtest`、`--exclude-task=test`、`|| exit 0`、`|| echo …`;`pytest -x tests/`、`mkdir -p a || true`、不含 Gradle 呼叫的區塊加 `continue-on-error: true`、加 `-x lint`、拿掉 `--tests` 篩選或 `-PtestMode` 這類參數、檔名 `build.gradle` 後面接 `|| echo`(那不是在叫 Gradle)不列;網址後面接的 `|| true` 不被當成註解吞掉。
+ 
+ - 變異測試收證:從改動算出要變異的類別、驗每個模組的 `mutations.xml` 是新的而且變異數大於 0、存活變異列成審查清單;在考場實跑免費 PIT 量協程雜訊比例,再決定要不要建議 arcmutate。
+ - 穩定性收證:同一個收證命令跑原順序、反轉、打亂順序各一次,全綠才算;先做最小實驗確認 `RobolectricTestRunner` 吃不吃 `@OrderWith`。
+ - 第二個考場:找一個有 SavedStateHandle 或資料層的類別,實跑 `ViewModelScenario.recreate()`。
+ - 在 Kotlin 上實測「答案表先行、不給實作」能擋掉多少把錯寫成預期的測試(論文全是 Java 或 Python)。
+ - 上一份計劃留下的回頭條件(Gradle 把包裝例外記成內層型別、裝置那路打錯類名誰擋、App 啟動的網路流量、收據重收、其他棧重跑)。
+ 
+-REVISIT:2026-12-15 第二批計劃開了沒有;沒開就把上面五項逐項開成計劃或 Issue
++REVISIT:2026-12-15 第二批計劃開了沒有;沒開就把上面六項逐項開成計劃或 Issue
+ REVISIT:2026-12-15 比對工具只認 Kotlin 與 Java;Python(pytest 的 skip、unittest 的 skip)與 Swift、C# 的同類規則還沒有,第二批評估要不要加
+ REVISIT:2026-12-15 Semgrep 的 Truth 與 Hamcrest 自比規則只在考場實跑過;CI 或預設環境裝了 Semgrep 時補一支真跑的測試
+ REVISIT:2026-12-15 考場量測裡「只靠自訂斷言輔助」與「新模組範本設定」兩類誤報的比例;多就在第二批加宣告口
+ REVISIT:2026-12-15 起點是空樹又找不到主線時比對只印不擋(新 repo 第一次推送、CI 淺層 clone);數一次這種推送實際發生幾次(`no-baseline` 帳),多就改成照比對照擋
+ 
+ ## 驗收條款
+ 
+-- [S1] 當改動在測試檔新增 `@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()` 或給既有測試函式加上 `expected =`、或把既有 assume 的條件改掉(例如改成 `assumeTrue(false)`,條件寫成多行也算)時,比對工具應各列一條 `tq/skip-added` 候選;整行是註解的、新寫的測試帶 `expected =`、整檔重新縮排後舊的 `@Ignore`、測試原樣搬到另一支檔帶過去的 `@Ignore`、類別層級 `@Ignore` 的檔改名或搬目錄、同一個 assume 只換行重排、只改 assume 同一行的斷言都不列;同一支檔加兩個相同的 `@Ignore` 得到兩個不同指紋。 [test:t_tq_guard_skip_added]
++- [S1] 當改動在測試檔新增 `@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()` 或給既有測試函式加上 `expected =`、或把既有 assume 的條件改掉(例如改成 `assumeTrue(false)`,條件寫成多行也算)時,比對工具應各列一條 `tq/skip-added` 候選;整行是註解的、新寫的測試帶 `expected =`、整檔重新縮排後舊的 `@Ignore`、測試原樣搬到另一支檔帶過去的 `@Ignore`、類別層級 `@Ignore` 的檔改名或搬目錄、同一個 assume 只換行重排、只改 assume 同一行的斷言、字串外的空白重排都不列;assume 字串常值裡多或少一個空白(字詞中間、頭尾、逗號後)要列;一行寫完的 assume 不吞進下一支測試、Truth 的 assume 鏈寫在下一行也算同一個敘述;同一支檔加兩個相同的 `@Ignore` 得到兩個不同指紋。 [test:t_tq_guard_skip_added]
+ - [S2] 當改動前的測試函式在改動後不見、整支測試檔被刪或被改名成非測試檔時,應列 `tq/test-removed`(同一支檔合成一條、列出被刪的函式名);一行寫完的測試被刪、只差字串常值的兄弟測試被刪、兩支一樣的刪兩支只加回一支時要列;本體一字不改只改名、原樣搬到另一支測試檔時不列;巢狀類別裡同名的兩支只刪一支時要列。 [test:t_tq_guard_test_removed]
+ - [S3] 當同一函式的斷言敘述變少(同一行好幾個中綴斷言照個數算)、強斷言變少(例如 `assertEquals(3, n)` 改成 `assertTrue(n > 0)`)或常值斷言變多(例如 `assertTrue(r.isValid())` 改成 `assertTrue(true)`、`assertEquals(88, calc.total())` 改成 `assertEquals(88, 88)`)、或改成恆真寫法(`assertTrue(1L == 1L)`、`assertFalse(x && false)`)時,應列 `tq/assert-weakened`;斷言數不變、只改被測呼叫的參數、兩行中綴斷言合成一行時不列。 [test:t_tq_guard_assert_weakened]
+ - [S4] 當同一函式裡一個斷言的預期值被改(單行、跨行、字串、`assertEquals("訊息", 88, total)` 的 88、匯入 kotlin.test 時 `assertEquals("Alice", name, "訊息")` 的 `"Alice"`、容差 `0.01` 改 `0.1`、`State.Loading` 改 `State.Error`、`assertTrue` 改 `assertFalse`、參數裡有 lambda 箭頭或比較運算、連續好幾個斷言一起改)時,應列 `tq/expected-changed`;只改被測呼叫的參數(`total(listOf(40, 48))` 改成 `total(listOf(48, 40))`)、只改訊息字串、改被測呼叫名、中間插一條斷言時不列。 [test:t_tq_guard_expected_changed]
+ - [S5] 當新增或本體有變的測試函式沒有任何斷言字時,應列 `tq/no-assertion`;用 Truth、Turbine、MockK `verify`、Espresso `.check(`、Kotest `shouldBe`、`captureRoboImage`、Kotlin 的 `assert(`、`thrown.expect(`、`@Test(expected = …)` 的測試,運算式本體 `= runTest { … }`、`= runTest(d) { … }`、`=` 換行接 `runTest {` 裡有斷言的測試,反引號函式名的測試不列;本體沒變的舊測試不列。 [test:t_tq_guard_no_assertion]
+-- [S6] 當 try 區塊沒有 `fail(`/`assertThrows`/`assertFailsWith` 而 catch 區塊有斷言字或是空的、或 `runCatching { … }` 裡有斷言而後面沒接 `.getOrThrow()` 時,應列 `tq/catch-no-fail`;catch 裡有 `fail(`、try 結尾有 `fail(`、try 裡有 `fail(` 而 catch 接 `Throwable` 再斷言型別、catch 把例外重新丟出、`runCatching { … }.getOrThrow()` 時不列;try 結尾補 `fail()` 而 catch 接得住 AssertionError(或更寬)又只印出或是空的,照樣要列(fail 丟的也是 AssertionError)。 [test:t_tq_guard_catch_no_fail]
++- [S6] 當 try 區塊沒有 `fail(`/`assertThrows`/`assertFailsWith` 而 catch 區塊有斷言字或是空的、或 `runCatching { … }` 裡有斷言而後面沒接 `.getOrThrow()` 時,應列 `tq/catch-no-fail`;catch 裡有 `fail(`、try 結尾有 `fail(`、try 裡有 `fail(` 而 catch 接 `Throwable` 再斷言型別、catch 把例外重新丟出、`runCatching { … }.getOrThrow()` 時不列;try 結尾補 `fail()` 而 catch 接得住 AssertionError(或更寬)又只印出或是空的,照樣要列(fail 丟的也是 AssertionError);catch 用 Kotest 中綴斷言(`e.message shouldBe "x"`)、`check(…)`、`require(…)` 檢查不列,但恆成立的 `check(true)`、`require(true)`,名字以 should 開頭的變數或方法(`shouldRetry`、`logger.shouldLog(e)`)不算檢查;try 裡只有 Kotest 中綴斷言而 catch 接住 AssertionError 不檢查也要列。 [test:t_tq_guard_catch_no_fail]
+ - [S9] 當逾時數字被調大(含寫在 `@Test(timeout = …)` 註記上)、截圖基準圖有變或比對門檻字樣新增時,應列 `tq/timeout-raised` 或 `tq/snapshot-changed`(同一目錄的基準圖合成一條);逾時被調小、路徑任一段是 docs、fastlane、metadata 的圖、測試目錄 `assets/` 底下的圖不列。 [test:t_tq_guard_timeout_and_snapshot]
+ - [S10] 當正式程式檔新增 `"robolectric"` 或 `Class.forName("org.junit…")` 時,應列 `tq/test-env-sniff`;同樣的字出現在測試檔、正式程式只用 `Build.FINGERPRINT` 時不列。 [test:t_tq_guard_test_env_sniff]
+-- [S11] 當執行 `lumos test-guard --diff` 時,沒有候選應回 0、有候選回 1、不是 git 專案回 0 並說明、參數錯或終點解不出來回 2;`--json` 每條候選有規則代號、檔案、行號、原因、該確認什麼、指紋;上下文位移與整檔重新縮排後指紋不變;檔案加 `-diff` 的 `.gitattributes` 照樣抓得到;檔名不是 UTF-8 列 `tq/unreadable`、內容含 NUL 列 `tq/unparsable`、超過單檔上限列 `tq/too-large`,測試檔有一行超過 2 萬字也列(其餘照比,同檔加的跳過照樣列;正式程式檔不套這道),其他檔照比;合過主線之後推送,主線上刪掉的測試不算進來,本機 main 上還沒推出去的提交照樣算進來(分岔點優先取遠端主線);接近 6 萬行、改約兩千處的測試檔,「`@A` 換行 `val x = 1`」重複 5 萬次的檔,3000 層巢狀的斷言,與一次改 300 支檔,以及同一支函式 8 萬個 assume、5000 層巢狀 try,都應在 30 秒內比完;30 行沒收尾的泛型 10 秒內、250 行 5 秒內;2 萬層巢狀類別 5 秒內、記憶體峰值 200 MB 內,每層都有一支測試時 10 秒內、300 MB 內、每把函式鍵不超過 400 字;建置檔與 CI 檔改了不出候選(這一批不比)。 [test:t_tq_guard_cli_contract]
++- [S11] 當執行 `lumos test-guard --diff` 時,沒有候選應回 0、有候選回 1、不是 git 專案回 0 並說明、參數錯或終點解不出來回 2;`--json` 每條候選有規則代號、檔案、行號、原因、該確認什麼、指紋;上下文位移與整檔重新縮排後指紋不變;檔案加 `-diff` 的 `.gitattributes` 照樣抓得到;檔名不是 UTF-8 列 `tq/unreadable`、內容含 NUL 列 `tq/unparsable`、超過單檔上限列 `tq/too-large`,測試檔有一行超過 2 萬字也列(其餘照比,同檔加的跳過照樣列;正式程式檔不套這道),其他檔照比;合過主線之後推送,主線上刪掉的測試不算進來,本機 main 上還沒推出去的提交照樣算進來(分岔點優先取遠端主線);接近 6 萬行、改約兩千處的測試檔,「`@A` 換行 `val x = 1`」重複 5 萬次的檔,3000 層巢狀的斷言,與一次改 300 支檔,以及同一支函式 8 萬個 assume、5000 層巢狀 try,都應在 30 秒內比完;30 行沒收尾的泛型 10 秒內、250 行 5 秒內;2 萬層巢狀類別 5 秒內、記憶體峰值 200 MB 內,每層都有一支測試時 10 秒內、300 MB 內、每把函式鍵不超過 400 字;1 萬 6 千個 `catch(` 的右括號擠在最後、1800 個類別宣告後接 240 萬字空白、40 行各 3990 個沒收尾的 `fun <` 各 3 秒內;兩個頂層類別底下最內層 100 字相同的深鏈,函式鍵靠摘要裡的雜湊分開;建置檔與 CI 檔改了不出候選(這一批不比);`test-guard` 的說明不宣稱比對建置檔或 CI,太大的訊息分得出整支沒比與只有超長行沒比。 [test:t_tq_guard_cli_contract]
+ - [S12] 當推送的改動有作弊候選時,新增告警閘應把它們算進新增告警並擋下(設定是 block 時),即使專案沒宣告任何檢查工具;`lumos lint-waive <指紋> --note` 放行後同一條不再擋;改動沒碰到三類檔時不跑比對;`tq/` 候選最多印 50 條、超過時印列出全部的指令;放行檔讀不了而有候選時擋下並說先修放行檔,不印放行指令、不記自動放行。 [test:t_lint_new_includes_test_guard]
+-- [S13] 當比對工具丟出非預期例外或超過截止時間時,新增告警閘應記成沒跑完並擋下(不走 fail-open),擋下訊息寫「作弊比對沒跑完」而不是時間預算;起點是空樹而找不到主線分岔點時只印不擋並寫一筆 `no-baseline` 帳;git 讀不出改動的內容(逾時或失敗)也記成沒跑完,不列成可放行的 `tq/unreadable`;`LUMOS_SKIP_LINT_NEW` 只認 1,設成 0 或 false 照常判;這幾筆帳由 `_codeloop_lint_new_step` 寫,判定函式只回傳。 [test:t_lint_new_test_guard_failure_blocks]
++- [S13] 當比對工具丟出非預期例外或超過截止時間時,新增告警閘應記成沒跑完並擋下(不走 fail-open),擋下訊息寫「作弊比對沒跑完」而不是時間預算;起點是空樹而找不到主線分岔點時只印不擋並寫一筆 `no-baseline` 帳;git 讀不出改動的內容(逾時或失敗)也記成沒跑完,不列成可放行的 `tq/unreadable`;`LUMOS_SKIP_LINT_NEW` 只認 1,設成 0 或 false 照常判;這幾筆帳由 `_codeloop_lint_new_step` 寫,判定函式只回傳;自動放行的另外三個出口(依賴宣告壞掉、放行檔壞掉、git 算不出改動清單)各寫原因。 [test:t_lint_new_test_guard_failure_blocks]
+ - [S14] 當閘的設定是 warn、off、`LUMOS_SKIP_LINT_NEW`,或這次範圍把 `lint_new.gate` 放寬時,新增告警閘應這樣處理:warn 逐條印出新增告警、每行以「提醒:」開頭、小結寫「只報不擋」,有比對候選時寫一筆 `warned` 帳;off 或環境變數跳過時比對照樣在背後跑,有候選或比對出錯才各寫一筆 `skipped`/`skipped-env` 治理帳、都沒有不寫;範圍本身把它放寬(從 git 讀起點與終點兩版比)時這次照起點的值判、印提醒並寫一筆 `relax-deferred` 帳;只在工作目錄改、沒提交時照工作目錄的值(既有行為,`t_lint_gate_modes` 照綠)。 [test:t_lint_new_warn_off_and_relax]
+-- [S15] 當執行 `lint-waive` 時,理由少於 10 個字或沒有實字應被拒;終端有人答 y 才記 `origin: human`,答 n 不放行、回 1,沒有互動終端、逾時或讀不到回答記 `origin: ai`;`by` 欄照舊記使用者帳號;`lint-waive --list` 與健檢應列出還沒人看過的 AI 放行;`lint-waive --ack --all` 在沒有互動終端時應拒絕、在互動終端確認後標成看過;沒有 `origin` 欄的舊紀錄(不管 `by` 寫什麼)當人放的。 [test:t_lint_waive_ai_marking]
+-- [S16] 當找測試函式時,運算式本體 `= runTest { … }`、`= runTest(d) { … }`、`=` 換行接 `runTest {` 應配到對應的右大括號、反引號函式名(含空白與括號)應被找到並從原文取得完整名稱、「`@A` 換行 `val x = 1`」重複 5 萬次的檔應在 5 秒內切完;Room 守衛的 DAO 方法擷取除了 `= db.withTransaction { … }` 這類運算式本體改成整個區塊之外不變,`_rg_split_args` 預設照舊把 `<>` 當括號;`_strip_c_comments` 的既有呼叫輸出不變。 [test:t_rg_methods_expression_body_and_backtick]
++- [S15] 當執行 `lint-waive` 時,理由少於 10 個字或沒有實字應被拒;終端有人答 y 才記 `origin: human`,答 n 不放行、回 1,沒有互動終端、逾時或讀不到回答記 `origin: ai`;`by` 欄照舊記使用者帳號;`lint-waive --list` 與健檢應列出還沒人看過的 AI 放行;`lint-waive --ack --all` 在沒有互動終端時應拒絕、在互動終端確認後標成看過;沒有 `origin` 欄的舊紀錄(不管 `by` 寫什麼)當人放的;`--list` 印出的理由、檔名、規則欄都不帶控制字元。 [test:t_lint_waive_ai_marking]
++- [S16] 當找測試函式時,運算式本體 `= runTest { … }`、`= runTest(d) { … }`、`=` 換行接 `runTest {` 應配到對應的右大括號、反引號函式名(含空白與括號)應被找到並從原文取得完整名稱、「`@A` 換行 `val x = 1`」重複 5 萬次的檔應在 5 秒內切完;Room 守衛的 DAO 方法擷取除了 `= db.withTransaction { … }` 這類運算式本體改成整個區塊之外不變,`_rg_split_args` 預設照舊把 `<>` 當括號;`_strip_c_comments` 的既有呼叫輸出不變;比對工具的類別路徑在父型別換行時接得上(行尾逗號或冒號後接長註解、行尾空白、空行、註解行,CRLF 換行),`buildSrc/`、`build-logic/` 底下的測試仍算測試檔。 [test:t_rg_methods_expression_body_and_backtick]
+ - [S17] 當在考場用 Semgrep 1.183.0 對含做法三那幾種自比寫法的 Kotlin 與 Java 測試檔跑 `lumos test-quality scan --semgrep` 時,每一種都應列成候選、`assertThat(f()).isEqualTo(3)` 不列,結果記在驗證紀錄;收證工具掃描的測試照樣全綠。 [manual:看驗證紀錄的 Semgrep 實跑輸出與掃描測試結果]
+ - [S18] 當讀測試品質標準時,應寫到:答案表先行而且寫的人看不到實作、現有程式上紅了不准改預期值、矛盾時停下回報、推送前的防竄改檢查(它自己一個二級標題)與它抓不到的與升級說明、AI 放的放行要人看過、重試後才過不算(`failOnPassedAfterRetry`)、原順序反轉與打亂順序與次數、Orchestrator 與 `clearPackageData`、`ViewModelScenario.recreate()`、範本測試、變異測試只變異改到的類別與每模組要有新報告、arcmutate 的事實、屬性測試的審法與不採用 jqwik、不採用的壞味道,而且連到研讀報告與這份計劃;`03-寫回圖譜.md` 的〈實作測試品質〉有一句指到新節。 [test:t_test_quality_standard_ai_test_guard]
+ - [S19] 當收證工具裝置那路判定的縮排、第一行去空白、字界、`fail|assert` 限定或「從第一個堆疊行起算」任一條被放寬時,收證工具的測試應翻紅。 [test:t_test_quality_cli]
+ - [S20] 當安全證據閘的故障敏感度那條路核對沒有型別欄的裝置字串比較故障收據時,應算抓到錯。 [test:t_secev_tq_device_text_fault_counts_like_assertion]
+-- [S21] 當在考場對每條規則的壞改動跑比對工具時,每條都應被對應規則抓到;正常改動的對照組不應出候選;結果記在驗證紀錄。 [manual:看驗證紀錄的考場對照表與公開卷證]
++- [S21] 當在考場對這一批每條規則的壞改動跑比對工具時(建置檔與 CI 的壞改動在代碼審 r4 縮範圍後不列,留作第二批的對照),每條都應被對應規則抓到;正常改動的對照組不應出候選;結果記在驗證紀錄。 [manual:看驗證紀錄的考場對照表與公開卷證]
+ - [S22] 當拿考場 develop 的真實歷史跑比對工具時,每條候選應有人工裁定(作弊樣、合理改動、規則判錯)與規則判錯率,判錯多的規則有收窄紀錄。 [manual:看驗證紀錄的誤報量測表]
+ - [S23] 當新頂層指令 `lumos test-guard` 上線時,說明表、指令總數(兩份文件)、子命令全覽與指令索引都應提到它。 [test:t_test_guard_registered]
+ 
+ 每條 `[test:]` 的測試照 `Systems/測試假綠形態` 的規矩:先寫前置斷言證明樣本真的走到被測的那條路(例如 S14 先證明 off 時比對真的跑了、S19 先證明樣本真的走到那條判定分支),再斷言結果;實作時每道判斷逐條改壞一次,確認對應的檢查各自會紅。
+ 
+ ## 回退
+ 
+ - 工具鏈:還原這份計劃、比對工具與它的測試、新增告警閘那幾段(含訊息與留帳)、`lint-waive` 的理由門檻與 `origin` 標記、`_rg_methods`/`_rg_method_end`/`_rg_annotations`/`_rg_split_args`/`_strip_c_comments` 的擴充、Semgrep 規則與配套指紋表、標準改寫與 `03-寫回圖譜.md` 的導覽句、`docs/指令參考.md`/`docs/command-reference.md`/`06-代碼審與推送.md`/`INDEX.md`/`ARCHITECTURE.md`/`reference.md` 的同步、六條小修、驗證紀錄與卷證的提交(同一個提交,一起還原)。還原後推送前不再看作弊候選;已寫進放行檔的 `tq/` 放行與 `origin` 欄留著無害(指紋不再出現,舊版不讀 `origin`)。Room 守衛對運算式本體 DAO 方法的範圍回到只到第一行。
+ - 只想關掉作弊比對、不還原程式:專案在 `.lumos/config.json` 把 `lint_new.gate` 設成 `warn`(只報不擋、印出)或 `off`(連原本的新增告警一起關),提交後從下一次推送起生效;單次推送用 `LUMOS_SKIP_LINT_NEW=1`。off 與環境變數跳過時有候選或比對出錯才留帳。
+ - 考場:演練提交只在本機分支;刪分支前先打包 `drill-evidence/`。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 7b83a4da9..0571d6331 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -14,27 +14,30 @@ tags:
+ summary: |-
+   WHY:比對從跟主線的分岔點起算,不從推送範圍的起點 [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法一] [因:合過主線之後推送,主線上別人刪的測試不該算到推送者頭上;同一條分支先前推送的候選不是改掉了就是已在放行檔] [不選:照推送範圍的起點比(合主線後誤擋)] [test:t_tq_guard_cli_contract]
+   WHY:比對自己出錯(程式錯、逾時、git 算不出改動)記成沒跑完並擋下,不照新增告警閘「環境不可用就自動放行」 [出處:[[Projects/Android測試防竄改檢查_計劃]] 〈二〉] [因:Android 端到端驗收否決過出錯就放行;自動放行是已知的繞道向量] [不選:fail-open] [代價:比對程式錯時那一次推送要用 LUMOS_SKIP_LINT_NEW(留帳)] [test:t_lint_new_test_guard_failure_blocks]
+   PITFALL:測試檔改名成非測試檔時,被刪測試的候選記在新檔名上 [出處:2026-11-02 實作時測試先紅] [根因:候選路徑取改動後路徑,改名成非測試檔時那支已經不是測試檔] [修法:改動後不是測試檔就記在原本那支] [test:t_tq_guard_test_removed]
+   SEE:[[Projects/Android測試防竄改檢查_計劃]] [[Systems/pitfalls-lint-adapter]] [[Systems/room-guard]] [[Systems/test-quality-cli]]
+   WHY:設定 off 或 LUMOS_SKIP_LINT_NEW 時比對照樣在背後跑、有候選或比對自己出錯才記一筆帳(出錯也記是代碼審 r2 改定:比對壞了被擋、用環境變數繞過那次要留得下痕跡),跟 Room 守衛、筆記形狀擋的 off 等於不執行刻意不同 [出處:[[Projects/Android測試防竄改檢查_計劃]] 〈二〉關閘留帳] [因:讓「關閘放過了什麼」有痕跡] [代價:off 的專案仍付比對成本] [test:t_lint_new_warn_off_and_relax]
+   WHY:推送範圍本身把 lint_new.gate 放寬時,這一次照起點那一版的值判 [出處:[[Projects/Android測試防竄改檢查_計劃]] 〈二〉] [因:不然同一次推送就能先關閘再帶進作弊改動] [不選:一律照工作目錄(只在沒提交時保留這個既有行為)] [test:t_lint_new_warn_off_and_relax]
+   WHY:候選指紋用規則、檔案、函式級規則用函式鍵(類別路徑加函式名),跳過與門檻用函式名(不帶類別;類別層級的註記用所在檔),再加那條規則的細節(跳過種類、assume 或比對門檻的整個敘述、斷言數、改後那一句)、第幾個,不帶行號(代碼審 r1–r3 改定) [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法一] [因:上下文位移、整檔重新縮排、原樣搬家不該讓放行失效] [test:t_tq_guard_cli_contract]
+   WHY:AI 放的放行(沒有互動終端)只讓它事後可見、不擋推送,判法照搬 Android 端到端驗收 [出處:[[Projects/Android測試防竄改檢查_計劃]] 〈二〉] [因:AI 照抄擋下訊息的放行指令仍推得出去,能做到的是人一定看得到它放了什麼] [不選:AI 放行一律擋(無人看顧流程整個卡住)] [test:t_lint_waive_ai_marking]
+   PITFALL:建置檔 enabled = 換行接 false 時逐行比對看不到 [出處:2026-11-02 實作時測試先紅] [根因:建置檔規則逐行比對] [修法:行尾是 = 的把下一行接上來一起判] [repro:計劃第二批原 S7 的 test 區塊 enabled = 換行 false] [status:superseded] [被取代:代碼審 r4 使用者裁定縮範圍,建置檔與 CI 規則移到 [[Projects/Android測試防竄改檢查_計劃]] 第二批]
+-  WHY:跳過註記的身分是「函式名 + 跳過」,不帶類別、本體與註記種類;類別層級的註記另以所在檔區分(改名或搬家時兩邊都用新路徑);assume 呼叫與比對門檻改帶整個敘述去掉空白(代碼審 r2:條件改成永遠跳過、門檻調高原本不算新增;r3:只取一行時多行寫法漏抓、換行重排與改同一行斷言被誤列) [出處:[[Projects/Android測試防竄改檢查_計劃]] 代碼審 r1 正確性、通才、邊界、資源四席] [因:帶本體簽名時只改本體就把早就跳過的測試列成新增、@Ignore 換 @Disabled 也列;類別層級註記跨檔合算會一支拿掉一支加上互抵] [代價:不同類別裡同名的兩支測試一支拿掉跳過、另一支加上會互抵(寫進抓不到清單)] [test:t_tq_guard_skip_added]
++  WHY:跳過註記的身分是「函式名 + 跳過」,不帶類別、本體與註記種類;類別層級的註記另以所在檔區分(改名或搬家時兩邊都用新路徑);assume 呼叫與比對門檻改帶整個敘述、字串外的空白整理過(字串常值原樣,代碼審 r5;代碼審 r2:條件改成永遠跳過、門檻調高原本不算新增;r3:只取一行時多行寫法漏抓、換行重排與改同一行斷言被誤列) [出處:[[Projects/Android測試防竄改檢查_計劃]] 代碼審 r1 正確性、通才、邊界、資源四席] [因:帶本體簽名時只改本體就把早就跳過的測試列成新增、@Ignore 換 @Disabled 也列;類別層級註記跨檔合算會一支拿掉一支加上互抵] [代價:不同類別裡同名的兩支測試一支拿掉跳過、另一支加上會互抵(寫進抓不到清單)] [test:t_tq_guard_skip_added]
+   WHY:比對花掉的時間不算進檢查命令的時間預算,最壞情況整道閘的時間是預算的兩倍 [出處:代碼審 r1 資源席] [因:共用預算時比對先跑會讓調小預算的專案被判「時間預算沒跑到」而誤擋] [不選:比對另設比例預算(多一個設定鍵)] [代價:慢機器上整道閘最多跑到預算的兩倍] [test:t_lint_new_includes_test_guard]
+   WHY:測試檔裡超過 2 萬字的行抹掉不比、那支檔另列一條可放行的 tq/too-large(正式程式檔的判讀是逐行一條正規式,不設這道;建置檔與 CI 這一批不比) [出處:代碼審 r2 資源、邊界、正確性三席] [因:規模那一族連兩輪被病態單行輸入打穿平方級,逐點補線性補不完;外層看門不靠逐條判斷,判錯的代價從推送卡到超時變成多一條要人放行的候選] [不選:繼續逐點補(第三輪仍會有漏網的那一處);整支不解析(r3 資安席:加一行長註解就把同檔作弊壓成一條)] [代價:壓縮檔、產生的程式一行很長時每次都要人放行] [test:t_tq_guard_cli_contract]
+   WHY:比對起點的分岔點先只看遠端主線,沒有遠端主線才退回本機 main [出處:代碼審 r2 資安席] [因:本機 main 上還沒推出去的提交沒有任何一次推送比對過,算進主線就把那段改動從比對範圍扣掉;回頭重讀的分岔點同一個理由不收本機主線] [不選:照 Room 守衛手動跑的寫法連本機主線一起算] [test:t_tq_guard_cli_contract]
+   WHY:建置檔的 ignoreFailures 不限在測試區塊,只排除外層或同一行開的區塊是靜態檢查外掛或報表(而且不是測試任務)的;點名測試任務看引號裡是不是整個含 test 的任務名形狀(報表外掛的任務名不算) [出處:代碼審 r2 正確性、通才、邊界、合約四席] [因:第一輪把 ignoreFailures 收窄到測試區塊,點號寫法與重試區塊全漏;「引號裡含 test 就算」又把 JaCoCo 的 exclude 誤擋] [不選:只看區塊開頭(漏同一行寫完的);要有 named、matching 這類呼叫字樣(r3:漏 findByName、tasks[…]、getByPath)] [status:superseded] [被取代:代碼審 r4 使用者裁定縮範圍,建置檔與 CI 規則移到 [[Projects/Android測試防竄改檢查_計劃]] 第二批]
+   WHY:LUMOS_SKIP_LINT_NEW 只認 1,設成 0 或 false 照常判 [出處:代碼審 r3 資安席] [因:同族的 LUMOS_SKIP_ROOM_GUARD、LUMOS_SKIP_NOTE_SHAPE 都只認 1;殘留或照字面設成 0 的環境變數會無聲關掉整道閘連同作弊比對] [不選:有設就關(原寫法)] [test:t_lint_new_test_guard_failure_blocks]
+   WHY:建置檔與 CI 檔這一批不比,移到計劃第二批另做 [出處:代碼審 r4 使用者裁定縮範圍] [因:四輪代碼審裡這兩類的 major 佔大宗,用正規式猜 Gradle DSL 與 shell 的寫法每輪都被新寫法打穿(字串模板任務名、一行開兩個區塊、鏈結換行、路徑形式的 gradle、病態長行回溯)] [不選:再補一輪字表] [代價:這一批推上去之後,建置檔與 CI 讓測試不跑或失敗不算的改動不會被列,寫在標準的抓不到清單] [test:t_tq_guard_cli_contract]
+   REVISIT:2026-12-15 建置檔與 CI 的作弊比對(計劃第二批)開計劃了沒;沒開就重新排程,並確認標準的抓不到清單還寫著這個缺口
++  PITFALL:單行上限之內仍有三種乘積形狀讓比對跑過 30 秒(catch 型別括號掃到很遠的右括號、類別名後接大段空白、測試宣告找不到名字時泛型角括號沒上限) [出處:代碼審 r5 邊界、資源席] [根因:每個命中各自往後掃同一段很遠的文字,外層的單行上限擋不到] [修法:catch 括號用共用的括號對應表、換行後第一個非空白字與一行最後一個非空白字每個位置只找一次、角括號最多看 _TG_MAX_GENERIC_CHARS 字] [test:t_tq_guard_cli_contract]
++  WHY:catch 判讀另用窄的 Kotest 中綴認法(前後是空白的 a shouldBe b 形狀),恆成立的 check(true)、require(true) 不算檢查 [出處:代碼審 r5 正確性、邊界、資安三席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列] [不選:改寬判法本身(「沒斷言」規則會把 x.shouldBe(5) 這種呼叫寫法誤列)] [test:t_tq_guard_catch_no_fail]
++  REVISIT:2026-12-15 一次推送的測試檔總量接近 200 MB 時峰值記憶體約為內容的 16 到 23 倍(代碼審 r5 資源席量測,原有設計);第二批評估逐檔放掉原文與切段
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-11-02_Android測試防竄改檢查實跑.md b/docs/lumos-toolchain-knowledge/Verification/2026-11-02_Android測試防竄改檢查實跑.md
+index e09ddd428..57eda97a1 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-11-02_Android測試防竄改檢查實跑.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-11-02_Android測試防竄改檢查實跑.md
+@@ -12,21 +12,21 @@ plan_refs:
+   - "[[Projects/Android測試防竄改檢查_計劃]]"
+ ---
+ # 2026-11-02_Android測試防竄改檢查實跑
+ 
+ > 白話:在一個真的 Android 專案上,故意做每一種「讓測試變得不會紅」的壞改動,看比對工具抓不抓得到;再拿它整段開發歷史跑一次,看平常的正常改動會被誤列多少。
+ 
+ 公開摘要在 `governance/eval/results/android-test-guard-drill-20261102/`(去識別化);完整卷證在考場本機分支。
+ 
+ ## 考場對照表([S21])
+ 
+-- 15 個壞改動各從考場同一個提交長出來(用暫存索引造提交,不碰考場工作目錄),**每一個都被對應規則抓到**:加 `@Ignore`、刪測試、強斷言改弱、實際值換成常值、改預期值(單行、跨行字串、字串常值)、加沒斷言的測試、try/catch 沒 `fail()`、建置檔 `ignoreFailures`(Groovy 與 Kotlin 各一)、CI 加續行的 `-x test`、調大逾時、重錄基準圖、正式程式偵測 robolectric。
++- 15 個壞改動各從考場同一個提交長出來(用暫存索引造提交,不碰考場工作目錄),**每一個都被對應規則抓到**(當時的規則;建置檔與 CI 的三個在代碼審 r4 縮範圍後不再列,見文末的縮範圍說明):加 `@Ignore`、刪測試、強斷言改弱、實際值換成常值、改預期值(單行、跨行字串、字串常值)、加沒斷言的測試、try/catch 沒 `fail()`、建置檔 `ignoreFailures`(Groovy 與 Kotlin 各一)、CI 加續行的 `-x test`、調大逾時、重錄基準圖、正式程式偵測 robolectric。
+ - 5 個正常改動**零候選**:新增有斷言的測試、本體不變只改測試名、測試原樣搬到另一支檔、整檔重新縮排、改正式程式碼。
+ - 同一次推送把閘設成 off 又加 `@Ignore`:照放寬前的 block 判、擋下;考場工作目錄的設定也改成 off 再判一次,寫出 `relax-deferred` 帳與提醒(判完已還原工作目錄)。
+ 
+ ## 真實歷史與誤報([S22])
+ 
+ - develop 全部 776 個非合併提交逐一跟上一個提交比(第一個提交跟空樹比):44 條候選、落在 27 個提交、0 個錯誤,全部 46 秒、單次最慢 0.15 秒。
+ - 裁定:**作弊樣 0 條、合理改動 42 條、規則判錯 2 條(4.5%)**。合理改動都是提交說明載明的需求或契約變更(功能改版、輸出格式改、對外契約改版、砍掉沒人用的功能)。
+ - 方法照實講:抽看了 5 條的實際差異(兩條規則判錯都是看差異判的),其餘 39 條依提交說明判,沒有逐條看差異。
+ - 兩條規則判錯:
+   - `tq/unparsable`:一支新增的測試輔助檔,原始碼裡寫了一個真的 NUL 字元當字元常值,被當成解析不了。**不收窄**:條款 [S11] 要含 NUL 的檔列成這條(NUL 通常是二進位檔或編碼壞掉),一年多的歷史只出現一次、新增檔放行一次就好。
+diff --git a/skills/lumos-project-notes/commands/test-quality-standard.md b/skills/lumos-project-notes/commands/test-quality-standard.md
+index 2585f672b..4a8349146 100644
+--- a/skills/lumos-project-notes/commands/test-quality-standard.md
++++ b/skills/lumos-project-notes/commands/test-quality-standard.md
+@@ -29,21 +29,21 @@
+ 
+ 審查 AI 寫的測試另外問這幾題:預期值從哪來(需求、人工確認、獨立參考,不是程式目前的輸出);有沒有明知漏了需求還照交;有沒有多出沒人要的別名或退路(只為了讓某支測試過);截圖基準圖有變要看新舊比較圖,不只看「重錄了」;mock 與假資料的形狀要照真實上游輸出(抓一次真輸出當樣本),不用手寫的簡化形狀。
+ 
+ 合法性質測試、确定性與 snapshot 可提供補充證據，配獨立已知答案或其他足夠約束。例如只驗排序兩次等於一次，永遠回傳空陣列也能過；再驗元素保留、順序與已知例子。snapshot 要交代核對來源，批量接受目前輸出不能當需求正確。靜態命中先核對目的，不因形式相似自動刪除。
+ 
+ ## 推送前的防竄改檢查
+ 
+ 推送前的新增告警閘會跑 `lumos test-guard`(作弊比對,單源 [[Projects/Android測試防竄改檢查_計劃]]):從跟主線的分岔點起,比對這次改動前後兩版,列出讓測試變得不會紅的改動。規則代號都以 `tq/` 開頭,每條是**候選不是定罪**,擋下訊息每條附「該確認什麼」。
+ 
+ - **抓什麼**:測試檔新增跳過標記(`@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()`、既有 assume 的條件被改(多行寫法也算)、既有測試加 `expected =`);測試函式被刪或整支測試檔被刪;同一函式斷言變少、強斷言變少、常值斷言變多;斷言的預期值被改;新增或本體有變的測試沒有斷言;try 沒有 `fail(` 而 catch 裡斷言或是空的;try 裡有斷言(含結尾的 `fail(`)而 catch 接得住 AssertionError 卻不檢查也不重丟;測試的逾時調大;截圖基準圖有變或測試裡的比對門檻新增或調高;正式程式偵測測試環境(`"robolectric"`、`Class.forName("org.junit…")`)。單一怪檔(太大、含 NUL、檔名不是 UTF-8)各自列成可放行的候選、不解析;測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的候選、其餘照比。
+-- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一批不比,移到第二批;把測試檔搬進 Gradle 不編譯的目錄;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
++- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一版不比(之後另做);把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立的斷言(`assertTrue(true)`)算有檢查;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
+ - **怎麼放行**:改動是需求要的,就照擋下訊息印好的指令放行,理由寫「為什麼這個改動是需求要的」(去掉空白至少 10 個字):`lumos lint-waive <指紋> --rule <規則> --file <檔> --note "<理由>"`。放行檔 `.lumos/lint-waivers.json` 要一起提交。
+ - **AI 放的放行要人看過**:放行時終端有人答 y 才記成人放的;沒有互動終端記成 AI 放的,推送前小結與健檢會一直列出來,直到人在終端跑 `lumos lint-waive --ack --all`。
+ - **比對自己壞了**:擋下訊息寫「作弊比對沒跑完」;這一次要先過用 `LUMOS_SKIP_LINT_NEW=1`(只認 1;會留一筆 `skipped-env` 帳,寫比對出錯的原因)。
+ - **升級說明**:觸發只看路徑與副檔名,不判是不是 Android——任何 Kotlin/Java 專案(含 JVM 後端)改到測試檔或正式程式檔都會跑,截圖基準圖不分技術棧都會跑;建置檔與 CI 檔這一批不比(在計劃的第二批)。不想擋的專案把 `.lumos/config.json` 的 `lint_new.gate` 設成 warn(只報不擋)或 off(比對照樣在背後跑、有候選或比對出錯時留帳);提交後從下一次推送起生效,同一次推送照放寬前的值判。
+ 
+ ## 工具接入：統一證據，按棧接 runner
+ 
+ 使用各專案既有 runner，选配成熟 mutation 工具。Lumos 不自建通用多語言解析器或 mutation engine，也不靠記帳欄位宣稱語意正確。所有執行限隔離的本機、可信 fixture；外部服務、資料庫、副作用須另設隔離，暫存原始碼不能代替環境隔離。
+ 
+ | 棧 | 本機測試入口（由專案固定實際命令） | 抓錯工具方向 | 资格需分開驗的範圍 |
+@@ -128,21 +128,21 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
+ - **每個單元都要有邊界**:負數、零與邊界值;每一種網路錯誤;壞資料(例如格式錯的 JSON);存檔時儲存空間滿;流程進行到一半物件被重建(例如畫面旋轉)。只有正常路徑不算。
+ - **不要寫的**:驗框架或函式庫本身行為的測試;Activity、Fragment、Service 這類入口(它們不該有業務邏輯,交給畫面測試)。
+ - **碰到 Android 框架時的選擇順序**:先把框架依賴移出被測的類別 → 用假實作頂替 → Robolectric(官方說單元測試只在舊碼或依賴 Android 類別的 API 時當最後手段)。Room 不用 Robolectric 跑(見前面的〈Android 資料層(Room)〉節)。
+ - **加測試函式庫前看實際版本**:協程這類函式庫常被別的套件拉高,build 檔宣告的版本不是實際用的;先用 `./gradlew :<模組>:dependencies --configuration <變體>RuntimeClasspath` 看解析後的版本,測試函式庫對齊它(演練實測:宣告 1.5.1、實際 1.9.0,照宣告會以為沒有 `runTest`)。
+ - **跑在哪、什麼時候跑**:小測試多、大測試少;單元測試在本機 JVM 跑,每次提交跑、只跑受影響的模組。
+ 
+ **怎麼寫才算數**
+ 
+ - **替身**:假實作優先(實作同一個介面、資料放記憶體,放在 `src/test` 或共用的測試模組);mock 與 stub 次之,spy 避免,複雜的 mock 不寫。先看函式庫有沒有官方提供的測試用假實作。社群:Now in Android 整個專案不用 mock 套件,一律假實作。
+ - **不用 Hilt 建被測物件**:建構子注入的類別在單元測試裡直接建、傳假實作進去;Hilt(`@HiltAndroidTest`)留給整合測試。
+-- **不開 `isReturnDefaultValues`**(Groovy 寫 `unitTests.returnDefaultValues = true`):官方說回傳 null 與零會讓該失敗的測試通過,只當最後手段;真的開了,設定旁邊寫理由,推送時另外在放行理由寫同一件事(推送前的防竄改檢查會把它列成候選)。
++- **不開 `isReturnDefaultValues`**(Groovy 寫 `unitTests.returnDefaultValues = true`):官方說回傳 null 與零會讓該失敗的測試通過,只當最後手段;真的開了,設定旁邊寫理由,推送時另外在放行理由寫同一件事(推送前的防竄改檢查這一版不比建置檔,這種改動要靠審查看到)。
+ - **協程**:
+   - 一支測試一個 `runTest`,寫成運算式本體;`runTest` 會跳過 `delay`,整支測試預設 60 秒逾時。
+   - 被測程式用的 dispatcher 要能注入;同一支測試裡的所有測試 dispatcher 共用同一個排程器(`StandardTestDispatcher(testScheduler)`)。
+   - `viewModelScope` 寫死主執行緒:本機測試用 `MainDispatcherRule` 把 Main 換成測試 dispatcher(儀器測試不換);這個規則的屬性要宣告在其他用到 dispatcher 的屬性前面,不然那些 dispatcher 拿不到同一個排程器。
+   - 預設用 `StandardTestDispatcher`(新協程排隊,行為接近正式環境),排完用 `advanceUntilIdle()`、`runCurrent()` 或 `advanceTimeBy()` 推進;`UnconfinedTestDispatcher` 會馬上開跑、跟正式環境不同,測併發時不用它。
+   - 不會自己結束的協程(例如一直收集的),注入 `backgroundScope`,測試結束自動取消。
+   - 儀器測試不換 Main 時,工作跑在真的執行緒上,`runTest` 裡的 `withTimeout` 卻用虛擬時間,測試執行緒一閒就快轉、提早逾時;要等真執行緒的結果,把等待包進 `withContext(Dispatchers.Default) { withTimeout(…) }` 改用真時間(協程測試函式庫說明:`Dispatchers.Default` 不走虛擬時間;演練實測)。
+   - 不用 `Thread.sleep` 或真實時間等結果,用虛擬時間;非同步工作改用可控制的 dispatcher,固定等待只會讓測試又慢又不穩。
+ - **Flow**:
+   - StateFlow 斷言 `value`,不去收每個中間值(值變得快時,收集的一方只保證拿到最新那個)。
+@@ -152,21 +152,21 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
+   - 社群:用 Turbine 時,每個發出的值都要收掉,或用 `cancelAndIgnoreRemainingEvents()` 明講不管;錯誤用 `awaitError()` 收;不要用 `runCurrent()` 去推 Turbine。
+   - ViewModel 的一次性結果化成狀態後(kotlin-idioms R19),測「出現在狀態裡 → 呼叫已顯示 → 從狀態清掉」三步。
+ - **斷言與命名**:斷言輸出、狀態、寫入結果或錯誤理由(共用規範第 3 條);測試名照官方範例的形式 `被測對象_動作或輸入_預期結果`。
+ - **Compose 畫面行為在本機跑**(選配):測試放 `src/test`,加 `@RunWith(RobolectricTestRunner::class)` 與 `createComposeRule()`,`isIncludeAndroidResources = true`;適合「點了按鈕畫面有變」這類行為。Robolectric 沒有螢幕、部分 API 只部分支援(系統 UI、WebView 不支援),這些照樣要上裝置驗。
+ - **截圖測試**(選配):官方推薦用來驗 Compose 的視覺;官方工具是 Compose Preview Screenshot Testing(實驗性),Robolectric 要搭第三方函式庫(社群:Now in Android 用 Roborazzi)。張數要少、每張給獨特的回饋;容差門檻會漏掉門檻以下的差異;參考圖在固定環境(例如 CI)產,不同作業系統的渲染不一樣。
+ 
+ **什麼證據才算過**
+ 
+ - **指令與報告**:`./gradlew :<模組>:test<變體>UnitTest`(例 `testDebugUnitTest`),單支用 `--tests '<完整類名>.<方法>'`;XML 在 `<模組>/build/test-results/`、HTML 在 `<模組>/build/reports/tests/`。收證照上一節:用 `lumos test-quality capture` 保存原始 XML 與退出碼,`--target` 指到真正的案例。Gradle 看到輸入沒變會跳過測試、舊報告留著,`capture` 要求報告在跑之前不存在:先刪掉那份 XML,命令在任務名後面加 `--rerun`(Gradle 7.6 起才有;更舊的用 `--rerun-tasks`,整個建置都重跑)。`--report` 一次只收一個檔,Gradle 每個測試類別各寫一份,收據按類別收。同一個錯讓同一類別好幾支紅時,`--target` 要全部列上(核對只准目標紅);其中有的是「當掉」紅(見下面),就用 `--tests` 縮到用斷言抓到的那幾支再收。收據裡存著當時的歸因結果(不記工具版本),收證工具換了版本之後,同一份報告重算的結果跟記錄不同時,舊收據核對會回 `recorded test outcomes differ from raw report`(記錄的結果跟原始報告重算的不同),要重收,不是偽造。
+ - **不算過的證據**:
+-  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(Kotlin DSL 的 `filter.isFailOnNoMatchingTests`、Groovy 的 `filter.failOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例(關掉它的改動推送前會被列成作弊候選,要附理由放行);這時沒有新報告,收證在讀報告那一步就判無效(`--target` 是報告存在時才輪到的下一道)。
++  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(Kotlin DSL 的 `filter.isFailOnNoMatchingTests`、Groovy 的 `filter.failOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例(推送前的防竄改檢查這一版不比建置檔,關掉它的改動要靠審查看到);這時沒有新報告,收證在讀報告那一步就判無效(`--target` 是報告存在時才輪到的下一道)。
+   - 編譯錯、逾時、只跑到檔案包裝案例。
+   - 開了 `isReturnDefaultValues` 才變綠。
+   - 本機或 Robolectric 綠,拿去當裝置實跑的證據。
+   - 重試到過才綠:官方說重試只是保住開發速度,不穩的測試一定要修。本機用 test-retry 外掛時設 `failOnPassedAfterRetry`(Kotlin DSL 寫 `failOnPassedAfterRetry.set(true)`)為 true,讓「重試後才過」變成建置失敗;它預設是 false,等於把不穩吞掉。裝置那路這個外掛管不到,重試後才過要寫進報告。
+   - 錯是被「當掉」抓到的:假實作遇到沒排好的呼叫就丟例外時,多出來的呼叫會讓測試以例外失敗,收證不算它抓到錯;每條需求至少要有一支用斷言抓。反過來,假實作要丟一般例外(例如 `IllegalStateException`),不要用 `fail()` 或 `assertThat` 自我檢查——收證只看例外型別,假實作丟的斷言失敗會被算成抓到錯。
+   - 裝置那一路收得到哪些失敗:AGP 的儀器報告不寫例外型別,收證只認第一行剛好是 `java.lang.AssertionError`(可帶訊息)或 `org.junit.ComparisonFailure`、而且從第一個堆疊行起(含這一行)第一個 `Caused by:` 之前有 JUnit `Assert` 或 Hamcrest `MatcherAssert.assertThat` 堆疊的失敗,也就是 JUnit 的 `assertEquals`(數字或字串)、`assertTrue`(帶不帶訊息都行)、Hamcrest 的 `assertThat` 這類;Truth 與 JUnit 的 `assertArrayEquals` 在裝置上第一行沒有型別名,收不到,要拿故障收據就改用上面那幾種,或在本機那路收。本機報告有型別,Truth 的 `assertThat` 與 `assertArrayEquals` 收得到;Truth 的 `Expect` 規則丟的 `Truth$SimpleAssertionError` 也會包住不是斷言的例外,收不到。失敗訊息本身同時含像堆疊的一行(`at …(`)與 `Caused by:` 時,會被判成不是斷言(往拒收的方向錯,不會誤放行);遇到時改訊息,或在本機那路收。
+   - 裝置那一路收證時用類別篩選(`-Pandroid.testInstrumentationRunnerArguments.class=<類名>`)只跑這次的測試:專案原有的範本測試若在這個變體必紅,原版那份收據就不是全綠。專案建立時附的 `ExampleUnitTest`、`ExampleInstrumentedTest` 這類範本測試刪掉或換成真測試,不算進任何證據。
+ - **穩定與隔離**:
+   - 新測試在 PR 跑原順序 1 次、反轉 1 次、打亂順序約 20 次都要綠(JUnit 4.13 起的 `Ordering.shuffledBy`,配 `@OrderWith` 或 `Request.orderWith`;種子要印出來才能重放)。這只抓得到常壞的:研讀引的量測是重跑 10 次只找到約四分之一的不穩測試(`flaky-pbt.md`)。`@FixMethodOrder` 的類別不會被重排,它本身就是順序依賴的宣告,審查時問它還需不需要。
+   - 裝置測試在 PR 跑 3–5 次。

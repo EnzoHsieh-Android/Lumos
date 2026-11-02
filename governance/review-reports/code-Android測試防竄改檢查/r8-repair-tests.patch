@@ -1,0 +1,179 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6ddc1a482..b8ce3656b 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -120970,79 +120970,92 @@ def t_tq_guard_catch_no_fail():
+     h = commit({T: _tqg_kt(old, *(b for b, _w in cases.values()))})
+     got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h) if c["rule"] == "tq/catch-no-fail"}
+     for k, (_b, want) in cases.items():
+         check(f"S6 {k} {'要列' if want else '不列'}", (k in got) == want, got)
+ 
+     # 代碼審 r1:try 有斷言、catch 只印記錄把斷言失敗吞掉
+     swallow = "    @Test\n    fun s1() {\n        try {\n            assertEquals(5, f(1))\n        } catch (e: AssertionError) {\n            println(e)\n        }\n    }\n"
+     h2 = commit({T: _tqg_kt(old, swallow)})
+     check("S6 r1 catch 只印記錄吞掉斷言失敗要列", ("tq/catch-no-fail", T) in _tqg_rules(root, base, h2), _tqg_rules(root, base, h2))
+ 
+-    # 代碼審 r2:try 有 fail、catch 接 Throwable 不算吞;catch 重丟不算吞
++    # 代碼審 r2:catch 重丟不算吞。try 有 fail、catch 接 Throwable 再斷言型別:代碼審 r7 起照 Error Prone 的 AssertionFailureIgnored 列
++    # (接得住 AssertionError 的 catch 不看內容;這種寫法要附理由放行或改 assertThrows)
+     ok1 = "    @Test\n    fun s2() {\n        try { h(); fail(\"should throw\") } catch (e: Throwable) { assertTrue(e is IllegalStateException) }\n    }\n"
+     ok2 = "    @Test\n    fun s3() {\n        try {\n            assertEquals(5, f(1))\n        } catch (e: AssertionError) {\n            println(e)\n            throw e\n        }\n    }\n"
+     h3 = commit({T: _tqg_kt(old, ok1, ok2)})
+     got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h3) if c["rule"] == "tq/catch-no-fail"}
+-    check("S6 r2 try 有 fail、catch 接 Throwable 不列", "s2" not in got, got)
++    check("S6 r7 try 有 fail、catch 接 Throwable 再斷言型別也列(只看結構)", "s2" in got, got)
+     check("S6 r2 catch 重丟不列", "s3" not in got, got)
+ 
+     # 代碼審 r3:try 結尾補 fail() 不能讓「catch 接得住斷言失敗、只印出或空的」躲過(fail 丟的也是 AssertionError)
+     bad1 = "    @Test\n    fun s4() { try { assertEquals(5, f(1)); fail(\"x\") } catch (e: Throwable) { println(e) } }\n"
+     bad2 = "    @Test\n    fun s5() {\n        try {\n            assertEquals(5, f(1))\n            fail()\n        } catch (e: AssertionError) {\n        }\n    }\n"
+     keep = "    @Test\n    fun s6() { try { h(); fail(\"x\") } catch (e: IllegalStateException) { } }\n"
+     h4 = commit({T: _tqg_kt(old, bad1, bad2, keep)})
+     got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h4) if c["rule"] == "tq/catch-no-fail"}
+     check("S6 r3 try 補 fail、catch 接 Throwable 只印出要列", "s4" in got, got)
+     check("S6 r3 try 補 fail、catch 接 AssertionError 是空的要列", "s5" in got, got)
+     check("S6 r3 預期例外的寫法(try 結尾 fail、catch 接特定例外)不列", "s6" not in got, got)
+ 
+ 
+-    # 代碼審 r4:catch 裡用 Kotest 中綴斷言、check(、require( 檢查例外,不算吞斷言
++    # 代碼審 r4 原本讓 catch 裡的 shouldBe、check(、require( 算有檢查而不列;代碼審 r7 起接得住 AssertionError 的 catch 不看內容,一律列
+     kc1 = "    @Test\n    fun s7() { try { foo(); fail(\"x\") } catch (e: AssertionError) { e.message shouldBe \"x\" } }\n"
+     kc2 = "    @Test\n    fun s8() { try { foo(); fail(\"x\") } catch (e: Throwable) { check(e is IllegalStateException) } }\n"
+     kc3 = "    @Test\n    fun s9() { try { foo(); fail(\"x\") } catch (e: Throwable) { require(e is IllegalStateException) } }\n"
+     h5 = commit({T: _tqg_kt(old, kc1, kc2, kc3)})
+     got5 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h5) if c["rule"] == "tq/catch-no-fail"}
+-    check("S6 r4 catch 用 shouldBe、check(、require( 檢查不列", not ({"s7", "s8", "s9"} & got5), got5)
++    check("S6 r7 catch 接得住 AssertionError,裡面用 shouldBe、check(、require( 也列", {"s7", "s8", "s9"} <= got5, got5)
+ 
+     # 代碼審 r5:catch 裡恆成立的 check(true)/require(true)、只是名字以 should 開頭的變數或方法,都不算檢查;
+     # Kotest 中綴斷言只認 `a shouldBe b` 的寫法,try 那側也算斷言
+     sw = {
+         "w1": "    @Test\n    fun w1() { try { foo(); fail(\"x\") } catch (e: Throwable) { check(true) } }\n",
+         "w2": "    @Test\n    fun w2() { try { foo(); fail(\"x\") } catch (e: Throwable) { require(true) } }\n",
+         "w3": "    @Test\n    fun w3() { try { foo(); fail(\"x\") } catch (e: Throwable) { val shouldRetry: Boolean = false } }\n",
+         "w4": "    @Test\n    fun w4() { try { foo(); fail(\"x\") } catch (e: Throwable) { logger.shouldLog(e) } }\n",
+         "w5": "    @Test\n    fun w5() { try { result shouldBe 5 } catch (e: AssertionError) { println(e) } }\n",
+     }
+     keep = "    @Test\n    fun w6() { try { cleanup() } catch (e: Exception) { logger.shouldReport(e) }\n        assertEquals(1, f()) }\n"
+     h6 = commit({T: _tqg_kt(old, *sw.values(), keep)})
+     got6 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h6) if c["rule"] == "tq/catch-no-fail"}
+     for k in sw:
+         check(f"S6 r5 {k} 吞掉斷言要列", k in got6, got6)
+-    check("S6 r5 w6 catch 只是叫 should 開頭的方法、try 沒斷言不列", "w6" not in got6, got6)
++    check("S6 r7 w6 try 沒 fail、catch 叫 should 開頭的方法:寬判成有斷言而列(判錯的代價是多一條可放行的候選)", "w6" in got6, got6)
+ 
+-    # 代碼審 r6:Kotest 匹配器照名字認(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldThrow…),中綴與點號呼叫都算;
+-    # shouldRetry、shouldLog 這種一般名字不算。catch 兩個子句與 try 側都要照這個認
++    # 代碼審 r6 加的 Kotest 點號呼叫案例;代碼審 r7 起接得住 AssertionError 的 catch 不看內容(d2–d4 列),try 沒 fail 時 catch 裡 should 開頭的字寬判成斷言(d6 列)
+     dc = {
+         "d1": ("    @Test\n    fun d1() { try { foo() } catch (e: Exception) { e.message.shouldNotBeNull() } }\n", True),
+-        "d2": ("    @Test\n    fun d2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.shouldBeInstanceOf<IllegalStateException>() } }\n", False),
+-        "d3": ("    @Test\n    fun d3() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message.shouldBe(\"x\") } }\n", False),
+-        "d4": ("    @Test\n    fun d4() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldBe(\"x\") } }\n", False),
++        "d2": ("    @Test\n    fun d2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.shouldBeInstanceOf<IllegalStateException>() } }\n", True),
++        "d3": ("    @Test\n    fun d3() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message.shouldBe(\"x\") } }\n", True),
++        "d4": ("    @Test\n    fun d4() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldBe(\"x\") } }\n", True),
+         "d5": ("    @Test\n    fun d5() { try { f().shouldBe(5) } catch (e: Throwable) { println(e) } }\n", True),
+         "d6": ("    @Test\n    fun d6() { try { foo() } catch (e: IllegalStateException) { if (n < 3 && shouldRetry && ok) { n++ } }\n"
+-               "        assertEquals(1, f()) }\n", False),
++               "        assertEquals(1, f()) }\n", True),
+     }
+     h7 = commit({T: _tqg_kt(old, *(b for b, _w in dc.values()))})
+     got7 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h7) if c["rule"] == "tq/catch-no-fail"}
+     for k, (_b, want) in dc.items():
+         check(f"S6 r6 {k} {'要列' if want else '不列'}", (k in got7) == want, got7)
+ 
++    # 代碼審 r7:只看結構——名字剛好是 should 開頭的一般方法擋不住;catch 本體裡出現 Error 字不算型別;catch 裡 fail( 或重丟不算吞
++    st = {
++        "e1": ("    @Test\n    fun e1() { try { foo(); fail(\"x\") } catch (e: AssertionError) { shouldNotify(e) } }\n", True),
++        "e2": ("    @Test\n    fun e2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldInclude \"boom\" } }\n", True),
++        "e3": ("    @Test\n    fun e3() { try { assertEquals(1, f()) } catch (e: IllegalStateException) { foo(Error()) } }\n", False),
++        "e4": ("    @Test\n    fun e4() { try { assertEquals(1, f()) } catch (e: AssertionError) { fail(\"wrapped\") } }\n", False),
++        "e5": ("    @Test\n    fun e5() { try { assertEquals(1, f()) } catch (e: Error) { log(e); throw e } }\n", False),
++    }
++    h8 = commit({T: _tqg_kt(old, *(b for b, _w in st.values()))})
++    got8 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h8) if c["rule"] == "tq/catch-no-fail"}
++    for k, (_b, want) in st.items():
++        check(f"S6 r7 {k} {'要列' if want else '不列'}", (k in got8) == want, got8)
++
+ 
+ def t_tq_guard_timeout_and_snapshot():
+     """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+     翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+     T = _TQG_T
+     body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     h = commit({T: _tqg_kt(body.replace("30", "300"))})
+     check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+@@ -121382,20 +121395,44 @@ def t_tq_guard_cli_contract():
+     t0 = _time.monotonic()
+     m._tg_catch_no_fail({"mbody": nest})
+     check("S11 r6 1 萬 2 千層巢狀 catch 型別括號:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
+     # 代碼審 r6:skill 參考頁的子命令全覽不再說會比對建置檔或 CI
+     import pathlib as _pl
+     ref = (_pl.Path(GRAPHCTL).parent.parent / "skills/lumos-project-notes/reference.md").read_text(encoding="utf-8")
+     tg = [seg.split("）")[0] for seg in ref.split(" / ") if "`test-guard`" in seg]
+     check("★前置★ 參考頁找得到 test-guard 那一段", len(tg) == 1, len(tg))
+     check("S11 r6 參考頁的 test-guard 說明不提建置檔或 CI", not any(w in tg[0] for w in ("CI", "建置")), tg[:1])
+ 
++    # 代碼審 r7:通用的倍增耗時檢查——十幾種觸發字各自重複 N 次與 4N 次,切函式、catch 判讀、跳過與門檻擷取的總耗時不超過 8 倍
++    # (線性約 4 倍、平方級約 16 倍);每行都在單行上限內。只是一張網:只網得到列在這裡的觸發字
++    def _tq_work(src):
++        fns = m._tg_functions(src, False)[0]
++        for f in fns.values():
++            m._tg_catch_no_fail(f)
++        m._tg_test_hits(src, fns, T)
++    toks = ["try{}catch(", "try{}catch(a){}", "catch(", "class A ", "class A :\n", "fun <", "@Test fun t() {}", "assumeTrue(", "assertEquals(",
++            "x shouldBe ", "(", "{", "\"", "`", "<", ",\n", "　", "/*", "runCatching{"]
++    for tok in toks:
++        per = max(1, 15000 // len(tok))
++        def mk(n, tok=tok, per=per):
++            body = "".join(tok * min(per, n - i) + "\n" for i in range(0, n, per))
++            return "package x\nclass A {\n    @Test fun a() {\n" + body + "    }\n}\n"
++        n = 6000
++        check(f"★前置★ 倍增 {tok!r}:每行都在單行上限內", max(map(len, mk(4 * n).split("\n"))) <= m._TG_MAX_LINE_CHARS, tok)
++        t0 = _time.monotonic()
++        _tq_work(mk(n))
++        t1 = _time.monotonic()
++        _tq_work(mk(4 * n))
++        t2 = _time.monotonic()
++        small, big = max(t1 - t0, 0.02), t2 - t1
++        check(f"S11 r7 倍增 {tok!r}:輸入 4 倍、耗時不超過 8 倍", big <= 8 * small, (round(small, 3), round(big, 3)))
++
+ 
+ def t_rg_methods_expression_body_and_backtick():
+     """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+     Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+     翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+     import time as _time
+     m = _tqg_module()
+     kt = ("class T {\n"
+           "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
+           "    @Test fun b() =\n        runTest {\n            assertEquals(2, g())\n        }\n"
+@@ -121472,20 +121509,25 @@ def t_rg_methods_expression_body_and_backtick():
+     for pth in ("buildSrc/src/test/kotlin/FooTest.kt", "build-logic/convention/src/test/kotlin/FooTest.kt"):
+         check(f"S16 r5 {pth} 是測試檔", m._tg_kind(pth) == "test", m._tg_kind(pth))
+ 
+     # 代碼審 r6:行尾逗號後是 FF、VT、全形空白也算空白;測試宣告的泛型巢狀(fun <T : List<Int>> t())也找得到名字
+     for nm, ws in (("FF", "\f"), ("VT", "\v"), ("全形空白", "　")):
+         k6 = list(m._tg_functions("class FooTest : Base()," + ws + "\n    Other {\n    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
+         check(f"S16 r6 行尾逗號後接 {nm}:類別路徑還在", k6 == ["FooTest.t"], k6)
+     k7 = list(m._tg_functions("class A {\n    @Test fun <T : List<Int>> t() { assertEquals(1, f()) }\n}\n", False)[0])
+     check("S16 r6 泛型巢狀的測試宣告找得到名字", k7 == ["A.t"], k7)
+ 
++    # 代碼審 r7:換行後第一個非空白字也認全部空白字(全形空白、FF 在下一行開頭)
++    for nm, ws in (("全形空白", "　"), ("FF", "\f")):
++        k8 = list(m._tg_functions("class FooTest\n" + ws + "{\n    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
++        check(f"S16 r7 換行後是 {nm} 再接大括號:類別路徑還在", k8 == ["FooTest.t"], k8)
++
+ 
+ # ── 作弊比對接進新增告警閘(Projects/Android測試防竄改檢查_計劃 S12–S15)──────────────────────────
+ def _tqg_gate_repo(config=None):
+     """推送前判定用的暫存專案:main 上有一支測試、docs/t-knowledge(治理帳才寫得進去),切到 feat 還沒改 → (root, commit 函式)。"""
+     import json as _j
+     root = Path(tempfile.mkdtemp(prefix="gctl-tqgg-"))
+     _e2e_tgit(root, "init", "-q")
+     files = {_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n"),
+              "docs/t-knowledge/.keep": ""}
+     if config is not None:

@@ -11,6 +11,14 @@
 - **需求判準**：独立案例能否指出程式和測試共同誤解需求？由審查者核對來源與案例，JSON 填了 `oracle_source` 不能當證明。
 - **抓錯能力**：原缺陷或相關故障是否使目標行為斷言紅，還原後綠？它只能證明對所選錯誤敏感，不能證明 expected 正確、所有錯誤均被覆蓋。
 
+**讓 AI 寫測試**(單源 [[Projects/Android測試防竄改檢查_計劃]],研讀報告在 `governance/eval/results/ai-test-verification-research-20261102/`):
+
+- **答案表先行、寫的人看不到實作**:先開一個看不到實作本體的乾淨代理,只給需求、方法簽名與公開介面,產出「輸入→預期」答案表並提交;之後才讓 AI 讀實作、寫測試程式。研讀:看得到實作時,AI 會把程式目前的(錯的)輸出寫成預期值,抓錯率掉 9%–18%(`oracle.md`、`latest.md`)。
+- **現有程式上紅了不准改預期值**:新測試在現有程式上紅,先對照需求來源判斷是程式錯還是測試錯;不准把預期值改成程式目前的輸出。
+- **矛盾時停下回報**:AI 發現需求之間、或需求跟既有測試互相矛盾時,停下回報給人,不自己挑一邊(研讀:測試跟規格矛盾時,Claude 系模型的作弊超過 79% 是直接改測試;提示裡要它發現矛盾就停下說明,在小題目上把作弊率從 92% 壓到 1%,在 SWE-bench 上效果小很多,`hacking.md`)。
+- **用 AI 審預期值時不給它實作本體**。
+- 研讀的邊界:「在提示裡警告程式可能有錯沒用」只在 gpt-4o-mini 上測過;「不給實作」的效果在 Kotlin 上還沒人量過(計劃〈第二批〉)。
+
 修 bug 與關鍵守衛沿共用規範提供實跑紅綠證據。其他測試按風險選取有代表性的故障，不要求每支測試、每輪審查跑全套 mutation。保留真正情境與拒絕原因的前置斷言，避免另一道守衛替目標代打。測試在修復版本來就紅時，先處理基準，不能把故障結果算檢出。
 
 ## 審查時：再看重構是否讓測試不必要地壞掉
@@ -19,7 +27,20 @@
 
 重構等價性必须另有理由：需求域內的推導、獨立案例或可信參考；不能只因受測測試都綠就宣稱等價。必要結構測試按結構合約裁定，不用這項強迫它們承受破壞結構合約的重構。
 
+審查 AI 寫的測試另外問這幾題:預期值從哪來(需求、人工確認、獨立參考,不是程式目前的輸出);有沒有明知漏了需求還照交;有沒有多出沒人要的別名或退路(只為了讓某支測試過);截圖基準圖有變要看新舊比較圖,不只看「重錄了」;mock 與假資料的形狀要照真實上游輸出(抓一次真輸出當樣本),不用手寫的簡化形狀。
+
 合法性質測試、确定性與 snapshot 可提供補充證據，配獨立已知答案或其他足夠約束。例如只驗排序兩次等於一次，永遠回傳空陣列也能過；再驗元素保留、順序與已知例子。snapshot 要交代核對來源，批量接受目前輸出不能當需求正確。靜態命中先核對目的，不因形式相似自動刪除。
+
+## 推送前的防竄改檢查
+
+推送前的新增告警閘會跑 `lumos test-guard`(作弊比對,單源 [[Projects/Android測試防竄改檢查_計劃]]):從跟主線的分岔點起,比對這次改動前後兩版,列出讓測試變得不會紅的改動。規則代號都以 `tq/` 開頭,每條是**候選不是定罪**,擋下訊息每條附「該確認什麼」。
+
+- **抓什麼**:測試檔新增跳過標記(`@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()`、既有 assume 的條件被改(多行寫法也算)、既有測試加 `expected =`);測試函式被刪或整支測試檔被刪;同一函式斷言變少、強斷言變少、常值斷言變多;斷言的預期值被改;新增或本體有變的測試沒有斷言;try 沒有 `fail(` 而 catch 裡斷言或是空的;try 裡有斷言(含結尾的 `fail(`)而 catch 接得住 AssertionError(型別名字以 Error、Failure 結尾或是 Throwable,含 JUnit 的 ComparisonFailure)、又不重丟(不看 catch 裡寫了什麼檢查,照 Error Prone 的 AssertionFailureIgnored);測試的逾時調大;截圖基準圖有變或測試裡的比對門檻新增或調高;正式程式偵測測試環境(`"robolectric"`、`Class.forName("org.junit…")`)。單一怪檔(太大、含 NUL、檔名不是 UTF-8)各自列成可放行的候選、不解析;測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的候選、其餘照比。
+- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一版不比(之後另做);把測試檔搬進 Gradle 不編譯的目錄;catch 裡出現 `throw` 字(含條件式、死分支、lambda 裡)或呼叫名字叫 `fail` 的方法(含 `promise.fail(e)`)就當成重丟或明確失敗、不列;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
+- **怎麼放行**:改動是需求要的,就照擋下訊息印好的指令放行,理由寫「為什麼這個改動是需求要的」(去掉空白至少 10 個字):`lumos lint-waive <指紋> --rule <規則> --file <檔> --note "<理由>"`。放行檔 `.lumos/lint-waivers.json` 要一起提交。
+- **AI 放的放行要人看過**:放行時終端有人答 y 才記成人放的;沒有互動終端記成 AI 放的,推送前小結與健檢會一直列出來,直到人在終端跑 `lumos lint-waive --ack --all`。
+- **比對自己壞了**:擋下訊息寫「作弊比對沒跑完」;這一次要先過用 `LUMOS_SKIP_LINT_NEW=1`(只認 1;會留一筆 `skipped-env` 帳,寫比對出錯的原因)。
+- **升級說明**:觸發只看路徑與副檔名,不判是不是 Android——任何 Kotlin/Java 專案(含 JVM 後端)改到測試檔或正式程式檔都會跑,截圖基準圖不分技術棧都會跑;建置檔與 CI 檔這一批不比(在計劃的第二批)。不想擋的專案把 `.lumos/config.json` 的 `lint_new.gate` 設成 warn(只報不擋)或 off(比對照樣在背後跑、有候選或比對出錯時留帳);提交後從下一次推送起生效,同一次推送照放寬前的值判。
 
 ## 工具接入：統一證據，按棧接 runner
 
@@ -114,7 +135,7 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
 
 - **替身**:假實作優先(實作同一個介面、資料放記憶體,放在 `src/test` 或共用的測試模組);mock 與 stub 次之,spy 避免,複雜的 mock 不寫。先看函式庫有沒有官方提供的測試用假實作。社群:Now in Android 整個專案不用 mock 套件,一律假實作。
 - **不用 Hilt 建被測物件**:建構子注入的類別在單元測試裡直接建、傳假實作進去;Hilt(`@HiltAndroidTest`)留給整合測試。
-- **不開 `isReturnDefaultValues`**(Groovy 寫 `unitTests.returnDefaultValues = true`):官方說回傳 null 與零會讓該失敗的測試通過,只當最後手段;真的開了,設定旁邊寫理由。
+- **不開 `isReturnDefaultValues`**(Groovy 寫 `unitTests.returnDefaultValues = true`):官方說回傳 null 與零會讓該失敗的測試通過,只當最後手段;真的開了,設定旁邊寫理由,推送時另外在放行理由寫同一件事(推送前的防竄改檢查這一版不比建置檔,這種改動要靠審查看到)。
 - **協程**:
   - 一支測試一個 `runTest`,寫成運算式本體;`runTest` 會跳過 `delay`,整支測試預設 60 秒逾時。
   - 被測程式用的 dispatcher 要能注入;同一支測試裡的所有測試 dispatcher 共用同一個排程器(`StandardTestDispatcher(testScheduler)`)。
@@ -138,19 +159,32 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
 
 - **指令與報告**:`./gradlew :<模組>:test<變體>UnitTest`(例 `testDebugUnitTest`),單支用 `--tests '<完整類名>.<方法>'`;XML 在 `<模組>/build/test-results/`、HTML 在 `<模組>/build/reports/tests/`。收證照上一節:用 `lumos test-quality capture` 保存原始 XML 與退出碼,`--target` 指到真正的案例。Gradle 看到輸入沒變會跳過測試、舊報告留著,`capture` 要求報告在跑之前不存在:先刪掉那份 XML,命令在任務名後面加 `--rerun`(Gradle 7.6 起才有;更舊的用 `--rerun-tasks`,整個建置都重跑)。`--report` 一次只收一個檔,Gradle 每個測試類別各寫一份,收據按類別收。同一個錯讓同一類別好幾支紅時,`--target` 要全部列上(核對只准目標紅);其中有的是「當掉」紅(見下面),就用 `--tests` 縮到用斷言抓到的那幾支再收。收據裡存著當時的歸因結果(不記工具版本),收證工具換了版本之後,同一份報告重算的結果跟記錄不同時,舊收據核對會回 `recorded test outcomes differ from raw report`(記錄的結果跟原始報告重算的不同),要重收,不是偽造。
 - **不算過的證據**:
-  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(Kotlin DSL 的 `filter.isFailOnNoMatchingTests`、Groovy 的 `filter.failOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例;這時沒有新報告,收證在讀報告那一步就判無效(`--target` 是報告存在時才輪到的下一道)。
+  - 零選中:篩選沒選到任何測試。Gradle 預設這時會失敗(Kotlin DSL 的 `filter.isFailOnNoMatchingTests`、Groovy 的 `filter.failOnNoMatchingTests` 預設開;Gradle 9 起另有 `failOnNoDiscoveredTests`,有測試原始碼卻沒發現測試也失敗,預設開);專案把它們關掉時,退出碼 0 不代表有跑,要數 XML 裡的案例(推送前的防竄改檢查這一版不比建置檔,關掉它的改動要靠審查看到);這時沒有新報告,收證在讀報告那一步就判無效(`--target` 是報告存在時才輪到的下一道)。
   - 編譯錯、逾時、只跑到檔案包裝案例。
   - 開了 `isReturnDefaultValues` 才變綠。
   - 本機或 Robolectric 綠,拿去當裝置實跑的證據。
-  - 重試到過才綠:官方說重試只是保住開發速度,不穩的測試一定要修。
+  - 重試到過才綠:官方說重試只是保住開發速度,不穩的測試一定要修。本機用 test-retry 外掛時設 `failOnPassedAfterRetry`(Kotlin DSL 寫 `failOnPassedAfterRetry.set(true)`)為 true,讓「重試後才過」變成建置失敗;它預設是 false,等於把不穩吞掉。裝置那路這個外掛管不到,重試後才過要寫進報告。
   - 錯是被「當掉」抓到的:假實作遇到沒排好的呼叫就丟例外時,多出來的呼叫會讓測試以例外失敗,收證不算它抓到錯;每條需求至少要有一支用斷言抓。反過來,假實作要丟一般例外(例如 `IllegalStateException`),不要用 `fail()` 或 `assertThat` 自我檢查——收證只看例外型別,假實作丟的斷言失敗會被算成抓到錯。
-  - 裝置那一路收得到哪些失敗:AGP 的儀器報告不寫例外型別,收證只認第一行剛好是 `java.lang.AssertionError`(可帶訊息)或 `org.junit.ComparisonFailure`、而且從第一個堆疊行起(含這一行)第一個 `Caused by:` 之前有 JUnit `Assert` 或 Hamcrest `MatcherAssert.assertThat` 堆疊的失敗,也就是 JUnit 的 `assertEquals`(數字或字串)、`assertTrue`(帶不帶訊息都行)、Hamcrest 的 `assertThat` 這類;Truth 與 JUnit 的 `assertArrayEquals` 在裝置上第一行沒有型別名,收不到,要拿故障收據就改用上面那幾種,或在本機那路收。本機報告有型別,Truth 的 `assertThat` 與 `assertArrayEquals` 收得到;Truth 的 `Expect` 規則丟的 `Truth$SimpleAssertionError` 也會包住不是斷言的例外,收不到。
-  - 裝置那一路收證時用類別篩選(`-Pandroid.testInstrumentationRunnerArguments.class=<類名>`)只跑這次的測試:專案原有的範本測試若在這個變體必紅,原版那份收據就不是全綠。
+  - 裝置那一路收得到哪些失敗:AGP 的儀器報告不寫例外型別,收證只認第一行剛好是 `java.lang.AssertionError`(可帶訊息)或 `org.junit.ComparisonFailure`、而且從第一個堆疊行起(含這一行)第一個 `Caused by:` 之前有 JUnit `Assert` 或 Hamcrest `MatcherAssert.assertThat` 堆疊的失敗,也就是 JUnit 的 `assertEquals`(數字或字串)、`assertTrue`(帶不帶訊息都行)、Hamcrest 的 `assertThat` 這類;Truth 與 JUnit 的 `assertArrayEquals` 在裝置上第一行沒有型別名,收不到,要拿故障收據就改用上面那幾種,或在本機那路收。本機報告有型別,Truth 的 `assertThat` 與 `assertArrayEquals` 收得到;Truth 的 `Expect` 規則丟的 `Truth$SimpleAssertionError` 也會包住不是斷言的例外,收不到。失敗訊息本身同時含像堆疊的一行(`at …(`)與 `Caused by:` 時,會被判成不是斷言(往拒收的方向錯,不會誤放行);遇到時改訊息,或在本機那路收。
+  - 裝置那一路收證時用類別篩選(`-Pandroid.testInstrumentationRunnerArguments.class=<類名>`)只跑這次的測試:專案原有的範本測試若在這個變體必紅,原版那份收據就不是全綠。專案建立時附的 `ExampleUnitTest`、`ExampleInstrumentedTest` 這類範本測試刪掉或換成真測試,不算進任何證據。
+- **穩定與隔離**:
+  - 新測試在 PR 跑原順序 1 次、反轉 1 次、打亂順序約 20 次都要綠(JUnit 4.13 起的 `Ordering.shuffledBy`,配 `@OrderWith` 或 `Request.orderWith`;種子要印出來才能重放)。這只抓得到常壞的:研讀引的量測是重跑 10 次只找到約四分之一的不穩測試(`flaky-pbt.md`)。`@FixMethodOrder` 的類別不會被重排,它本身就是順序依賴的宣告,審查時問它還需不需要。
+  - 裝置測試在 PR 跑 3–5 次。
+  - Robolectric 每支測試給新的 Application,但 App 自己的單例與靜態快取不會重設,這類最該打亂順序跑;`RobolectricTestRunner` 吃不吃 `@OrderWith` 還沒人驗過(計劃〈第二批〉),先做最小實驗再用。
+  - 裝置測試開 Orchestrator 加 `clearPackageData`(`testInstrumentationRunnerArguments clearPackageData: 'true'`,每支測試跑完清掉 App 資料),代價是每支都重啟 App。
+- **畫面重建與程序被回收**:用 `ViewModelScenario.recreate()`(lifecycle-viewmodel-testing 2.9.0 起)模擬程序被回收再還原,斷言 SavedStateHandle 存的狀態還在。
 - **涵蓋率只拿來找漏**:官方說它找得出沒測到的地方,但不能當測試策略好不好的唯一指標。要量就用 AGP 的 `enableUnitTestCoverage = true`(會自動套 JaCoCo)或 Kover;兩者算出的分支涵蓋率可能不同,不跨工具比數字。
-- **故障證明挑本次需求**(共用規範第 5 條):例如拿掉 ViewModel 更新狀態那一行、讓假 Repository 丟錯、刪掉一個邊界檢查,確認對應的斷言翻紅、還原後翻綠。社群:變異測試(Pitest 的 Android 外掛、arcmutate 的 Kotlin 外掛)可以補,但有人回報協程程式碼會產生大量雜訊,不當必要條件。
-- **機器抓不到、要靠審查的**(演練實測,見 [[Verification/2026-11-01_Android單元測試標準實機演練]]):預期值照抄實作算法(故障證明照樣判抓到)、用 `Thread.sleep` 等結果(detekt 不帶型別資訊不報,不在協程裡也不報)、build 檔開了 `returnDefaultValues`;Kotlin 的 `test-quality scan` 要裝 Semgrep 並帶 `--semgrep <semgrep 執行檔>` 才會掃,沒有就回「不完整、零候選」,等於沒掃,不能當通過;規則只有 `assertEquals(x, x)`,Truth 寫法的自比不在內。
+- **故障證明挑本次需求**(共用規範第 5 條):例如拿掉 ViewModel 更新狀態那一行、讓假 Repository 丟錯、刪掉一個邊界檢查,確認對應的斷言翻紅、還原後翻綠。
+- **變異測試**(選配,補故障證明):
+  - 只變異這次改到的類別(依 `git diff` 算出類別、當 `targetClasses` 傳給 PIT)、每行只送一個存活變異;先排除日誌、時間、設定旗標與產生的程式碼(Hilt、`R`、`BuildConfig`、`ComposableSingletons`)。
+  - 存活變異當審查意見逐條處置,不設分數門檻(研讀:Google 開發者一開始把 85% 的回報變異判成沒產值,`mutation.md`)。
+  - 每個目標模組都要真的產生新報告而且變異數大於 0,不然判沒跑。實例:有專案「只提醒」的排程因原本的測試沒全綠,13 個套用的模組只有 4 個開跑、3 個有結果,工作狀態卻顯示成功。
+  - 事實:免費 PIT 沒有官方的協程過濾,PIT 維護者 2022 年以「改用 arcmutate 的 Kotlin 外掛」結案(付費,開源專案免費);arcmutate 的 Android 外掛仍是 beta、不支援裝置測試;`pl.droidsonroids.pitest` 是社群維護、自稱實驗性的 Gradle 外掛,跟 arcmutate 的 Android 外掛是兩回事。
+- **屬性測試**(選配):金額拆帳、四捨五入、格式化與解析來回這類純函式可以加 Kotest 的屬性測試(`kotest-property` 可單獨用在 JUnit4 本機測試)。屬性只收需求明寫的;審查時查輸入範圍有沒有被 `assume` 或篩選把會觸發錯的輸入排掉,用「把輸出故意改到違反屬性」做故障證明。jqwik 1.10 起附反 AI 使用條款,並在每次執行時往輸出印字,不採用。
+- **機器抓不到、要靠審查的**(演練實測,見 [[Verification/2026-11-01_Android單元測試標準實機演練]]):預期值照抄實作算法(故障證明照樣判抓到)、用 `Thread.sleep` 等結果(detekt 不帶型別資訊不報,不在協程裡也不報)、build 檔開了 `returnDefaultValues`;Kotlin 的 `test-quality scan` 要裝 Semgrep 並帶 `--semgrep <semgrep 執行檔>` 才會掃,沒有就回「不完整、零候選」,等於沒掃,不能當通過;自比規則認 JUnit 的 `assertEquals(x, x)`、Truth 與 AssertJ 的 `assertThat(x).isEqualTo(x)`、`assertWithMessage(…).that(x).isEqualTo(x)`、Hamcrest 的 `assertThat(x, equalTo(x))`(Java 另認 `is(x)`),帶類別前綴的也認,`$X` 是有副作用的呼叫時會誤報。實作裡寫死測試輸入、查表、只做測試碰得到的路徑,只能靠 AI 看不到的組合或往返測試與審查。
+- **不採用的壞味道**:寫死數字(Magic Number)、一堆沒附說明的斷言(Assertion Roulette)、Eager Test、Lazy Test、Dependent Test 不當品質規則——研讀:寫死數字與 Lazy Test 連人寫的測試都 100% 命中、Assertion Roulette 人寫的也有 98.83%,沒有區辨力;Assertion Roulette 與 Eager Test 的規則式偵測誤判高,判對了也幾乎不代表可維護性問題(39 套被判 Eager 的人寫測試只有 4 套真的不連貫);Dependent Test 有一個工具的 30 筆判定全是誤報(`smells.md`)。真正該抓的是沒有斷言、設定失敗卻被當成預期例外。測試數量、斷言數量、涵蓋率都不當品質分數。
 
-來源(核對當天看到的更新日期):[要測什麼](https://developer.android.com/training/testing/fundamentals/what-to-test)(2026-03-05)、[測試策略](https://developer.android.com/training/testing/fundamentals/strategies)(2026-10-08)、[測試替身](https://developer.android.com/training/testing/fundamentals/test-doubles)(2026-03-05)、[本機單元測試](https://developer.android.com/training/testing/local-tests)(2026-10-23)、[命令列測試](https://developer.android.com/studio/test/command-line)(2026-10-15)、[協程測試](https://developer.android.com/kotlin/coroutines/test)(2026-09-22)、[Flow 測試](https://developer.android.com/kotlin/flow/test)(2026-09-24)、[Robolectric](https://developer.android.com/training/testing/local-tests/robolectric)(2026-03-05)、[截圖測試](https://developer.android.com/training/testing/ui-tests/screenshot)(2026-10-08)、[測試穩定性](https://developer.android.com/training/testing/instrumented-tests/stability)(2026-03-05)、[Hilt 測試](https://developer.android.com/training/dependency-injection/hilt-testing)、[Gradle 測試篩選](https://docs.gradle.org/current/kotlin-dsl/gradle/org.gradle.api.tasks.testing/-test-filter/is-fail-on-no-matching-tests.html)、[程式碼涵蓋率](https://developer.android.com/studio/test/coverage-report)、[kotlinx-coroutines-test 說明](https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md)(2026-11-01 核對);社群:[Now in Android 測試策略](https://github.com/android/nowinandroid/wiki/Testing-strategy-and-how-to-test)、[Turbine](https://github.com/cashapp/turbine)、[Pitest 與協程的雜訊回報](https://github.com/hcoles/pitest/issues/579)。
+來源(核對當天看到的更新日期):[要測什麼](https://developer.android.com/training/testing/fundamentals/what-to-test)(2026-03-05)、[測試策略](https://developer.android.com/training/testing/fundamentals/strategies)(2026-10-08)、[測試替身](https://developer.android.com/training/testing/fundamentals/test-doubles)(2026-03-05)、[本機單元測試](https://developer.android.com/training/testing/local-tests)(2026-10-23)、[命令列測試](https://developer.android.com/studio/test/command-line)(2026-10-15)、[協程測試](https://developer.android.com/kotlin/coroutines/test)(2026-09-22)、[Flow 測試](https://developer.android.com/kotlin/flow/test)(2026-09-24)、[Robolectric](https://developer.android.com/training/testing/local-tests/robolectric)(2026-03-05)、[截圖測試](https://developer.android.com/training/testing/ui-tests/screenshot)(2026-10-08)、[測試穩定性](https://developer.android.com/training/testing/instrumented-tests/stability)(2026-03-05)、[Hilt 測試](https://developer.android.com/training/dependency-injection/hilt-testing)、[Gradle 測試篩選](https://docs.gradle.org/current/kotlin-dsl/gradle/org.gradle.api.tasks.testing/-test-filter/is-fail-on-no-matching-tests.html)、[程式碼涵蓋率](https://developer.android.com/studio/test/coverage-report)、[kotlinx-coroutines-test 說明](https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md)(2026-11-01 核對)、[ViewModelScenario](https://developer.android.com/reference/androidx/lifecycle/viewmodel/testing/ViewModelScenario)(2026-11-02 核對,recreate 標 2.9.0 加入)、[Gradle test-retry 外掛](https://github.com/gradle/test-retry-gradle-plugin)、[JUnit 4.13 Ordering](https://junit.org/junit4/javadoc/4.13/org/junit/runner/manipulation/Ordering.html)、[Orchestrator](https://developer.android.com/training/testing/instrumented-tests/androidx-test-libraries/runner#use-android);研讀報告(論文全文、2026-11-02):`governance/eval/results/ai-test-verification-research-20261102/` 的 `oracle.md`、`hacking.md`、`mutation.md`、`smells.md`、`flaky-pbt.md`、`latest.md`,怎麼落到工具與標準見 [[Projects/Android測試防竄改檢查_計劃]];社群:[Now in Android 測試策略](https://github.com/android/nowinandroid/wiki/Testing-strategy-and-how-to-test)、[Turbine](https://github.com/cashapp/turbine)、[Pitest 與協程的雜訊回報](https://github.com/hcoles/pitest/issues/579)。
 
 ### 適配器資格考卷
 
