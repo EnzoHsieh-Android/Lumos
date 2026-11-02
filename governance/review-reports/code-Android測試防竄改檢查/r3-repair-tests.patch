@@ -1,0 +1,531 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1a0a3a129..e2d5ccd68 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -120661,20 +120661,38 @@ def t_tq_guard_skip_added():
+     h12 = commit({T: _tqg_kt(ig.replace("f())", "f(2))"))})
+     check("S1 r1 早就跳過的測試只改本體不列", ("tq/skip-added", T) not in _tqg_rules(root, b12, h12), _tqg_rules(root, b12, h12))
+     h13 = commit({T: _tqg_kt(ig.replace("@Ignore(\"flaky\")", "@Disabled(\"flaky\")"))})
+     check("S1 r1 @Ignore 換成 @Disabled(跳過數不變)不列", ("tq/skip-added", T) not in _tqg_rules(root, h12, h13), _tqg_rules(root, h12, h13))
+     two = "package x\nclass CalcTest {\n    class A {\n        @Test fun t() { assertEquals(1, f()) }\n    }\n    class B {\n        @Test fun t() { assertEquals(2, f()) }\n    }\n}\n"
+     b14 = commit({T: two})
+     h14 = commit({T: two.replace("    class A {", "    @Ignore\n    class A {").replace("    class B {", "    @Ignore\n    class B {")})
+     keys = [c["key"] for c in _tqg_cands(root, b14, h14) if c["rule"] == "tq/skip-added"]
+     check("S1 r1 同一支檔兩處相同的類別層級 @Ignore:兩條、指紋不同", len(keys) == 2 and len(set(keys)) == 2, keys)
+ 
++    # 代碼審 r2:assume 的條件改成永遠跳過、Truth 的 assume、類別層級跳過的檔改名不算新增
++    am = "    @Test\n    fun a() {\n        assumeTrue(BuildConfig.HAS_EMU)\n        assertEquals(1, f())\n    }\n"
++    b20 = commit({T: _tqg_kt(am)})
++    for label, cond in (("assumeTrue(false)", "assumeTrue(false)"), ("加 && CI 條件", "assumeTrue(BuildConfig.HAS_EMU && System.getenv(\"CI\") == null)")):
++        h = commit({T: _tqg_kt(am.replace("assumeTrue(BuildConfig.HAS_EMU)", cond))})
++        check(f"S1 r2 既有 assume 改成 {label} 要列", ("tq/skip-added", T) in _tqg_rules(root, b20, h), _tqg_rules(root, b20, h))
++    b21 = commit({T: _tqg_kt(p0)})
++    h21 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        TruthJUnit.assume().that(isCi()).isFalse()\n        assertEquals(1, f())\n    }\n")})
++    check("S1 r2 新增 TruthJUnit.assume() 要列", ("tq/skip-added", T) in _tqg_rules(root, b21, h21), _tqg_rules(root, b21, h21))
++    import subprocess as _sp
++    Old, New = "app/src/test/java/x/OldTest.kt", "app/src/test/java/y/OldTest.kt"
++    b22 = commit({T: None, Old: "package x\n@Ignore(\"flaky\")\nclass OldTest {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"})
++    (root / New).parent.mkdir(parents=True, exist_ok=True)
++    _sp.run(["git", "-C", str(root), "mv", Old, New], capture_output=True)
++    h22 = commit({New: "package y\n@Ignore(\"flaky\")\nclass OldTest {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"})
++    check("★前置★ git 把它認成改名", any(x[0] == "R" for x in _tqg_module()._tg_changes(root, b22, h22)), "")
++    check("S1 r2 類別層級 @Ignore 的檔搬目錄不列", ("tq/skip-added", New) not in _tqg_rules(root, b22, h22), _tqg_rules(root, b22, h22))
++
+ 
+ def t_tq_guard_test_removed():
+     """[S2] 測試函式不見、整支測試檔被刪或改名成非測試檔要列 tq/test-removed(同檔合一條);改名不改本體、原樣搬家不列。
+     守的錯:AI 刪掉紅的測試。翻紅釘:本體簽名配對改成多對一、同名多載不給號、刪檔不算 → 紅。"""
+     T = _TQG_T
+     a = "    @Test\n    fun a() { assertEquals(1, f()) }\n"
+     b = "    @Test\n    fun b() { assertEquals(2, g()) }\n"
+     c = "    @Test\n    fun `回傳 3`() { assertEquals(3, h()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(a, b, c)})
+     h = commit({T: _tqg_kt(a)})
+@@ -120742,20 +120760,35 @@ def t_tq_guard_assert_weakened():
+     base_b = "    @Test\n    fun a() {\n        assertTrue(r.isValid())\n        assertEquals(3, n)\n    }\n"
+     b5 = commit({T: _tqg_kt(base_b)})
+     for after in ("assertTrue(r.isValid() || true)", "assertTrue(1 == 1)", "assertTrue(!false)"):
+         h = commit({T: _tqg_kt(base_b.replace("assertTrue(r.isValid())", after))})
+         check(f"S3 r1 {after} 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+     h = commit({T: _tqg_kt(base_b.replace("assertTrue(r.isValid())", "assertThat(true).isTrue()"))})
+     check("S3 r1 assertThat(true).isTrue() 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+     h = commit({T: _tqg_kt(base_b.replace("assertEquals(3, n)", "assertTrue(n > 0, \"assertEquals 3\")"))})
+     check("S3 r1 字串裡的 assertEquals 不算強斷言", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+ 
++    # 代碼審 r2:數字後綴的恆真、assertFalse(x && false)、同一行多個中綴斷言照個數算
++    h = commit({T: _tqg_kt(base_b.replace("assertTrue(r.isValid())", "assertTrue(1L == 1L)"))})
++    check("S3 r2 assertTrue(1L == 1L) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
++    bf = "    @Test\n    fun a() {\n        assertFalse(r.isEmpty())\n        assertEquals(3, n)\n    }\n"
++    b6 = commit({T: _tqg_kt(bf)})
++    h6 = commit({T: _tqg_kt(bf.replace("assertFalse(r.isEmpty())", "assertFalse(r.isEmpty() && false)"))})
++    check("S3 r2 assertFalse(x && false) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b6, h6), _tqg_rules(root, b6, h6))
++    two = "    @Test\n    fun a() {\n        x shouldBe 1\n        y shouldBe 2\n    }\n"
++    b7 = commit({T: _tqg_kt(two)})
++    h7 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        x shouldBe 1; y shouldBe 2\n    }\n")})
++    check("S3 r2 兩行中綴斷言合成一行不列", ("tq/assert-weakened", T) not in _tqg_rules(root, b7, h7), _tqg_rules(root, b7, h7))
++    b8 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        x shouldBe 1; y shouldBe 2; z shouldBe 3\n    }\n")})
++    h8 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        x shouldBe 1\n    }\n")})
++    check("S3 r2 同一行三個中綴斷言刪成一個要列", ("tq/assert-weakened", T) in _tqg_rules(root, b8, h8), _tqg_rules(root, b8, h8))
++
+ 
+ def t_tq_guard_expected_changed():
+     """[S4] 同一函式裡斷言的預期值被改要列 tq/expected-changed;只改被測參數、訊息、被測呼叫名、中間插一條斷言不列。
+     翻紅釘:預期值位置判錯(JUnit 與 kotlin.test 不分)、參數切法把 < > 當括號、清單不對齊 → 紅。"""
+     T = _TQG_T
+ 
+     def changed(before, after, kt=False):
+         head = "package x\nimport kotlin.test.assertEquals\nimport org.junit.Test\nclass CalcTest {\n" if kt else None
+         wrap = (lambda b: head + b + "\n}\n") if kt else _tqg_kt
+         root, base, commit = _tqg_repo({T: wrap(before)})
+@@ -120802,20 +120835,23 @@ def t_tq_guard_expected_changed():
+     b6 = c5({T: j5 % (fn % '        assertEquals(5, total, "m1")')})
+     h6 = c5({T: j5 % (fn % '        assertEquals(5, total, "m2")')})
+     check("S4 r1 JUnit 5 只改訊息不列", ("tq/expected-changed", T) not in _tqg_rules(r5, b6, h6), _tqg_rules(r5, b6, h6))
+     check("S4 r1 Truth isTrue 改 isFalse 要列", changed(fn % "        assertThat(vm.ready).isTrue()", fn % "        assertThat(vm.ready).isFalse()"), "")
+     check("S4 r1 Truth isEmpty 改 isNotEmpty 要列", changed(fn % "        assertThat(xs).isEmpty()", fn % "        assertThat(xs).isNotEmpty()"), "")
+     r7, b7, c7 = _tqg_repo({T: _tqg_kt(fn % "        assertEquals(1, f(1))\n        assertEquals(1, f(1))")})
+     h7 = c7({T: _tqg_kt(fn % "        assertEquals(5, f(1))\n        assertEquals(5, f(1))")})
+     keys = [c["key"] for c in _tqg_cands(r7, b7, h7) if c["rule"] == "tq/expected-changed"]
+     check("S4 r1 同一支函式兩條相同的預期值改動:兩條、指紋不同", len(keys) == 2 and len(set(keys)) == 2, keys)
+ 
++    # 代碼審 r2:Truth isNull 改 isNotNull
++    check("S4 r2 Truth isNull 改 isNotNull 要列", changed(fn % "        assertThat(vm.error).isNull()", fn % "        assertThat(vm.error).isNotNull()"), "")
++
+ 
+ def t_tq_guard_no_assertion():
+     """[S5] 新增或本體有變的測試沒有任何斷言字要列 tq/no-assertion;各家斷言寫法、運算式本體、反引號名、沒動的舊測試不列。
+     翻紅釘:斷言字表拿掉樣本用到的那幾種(Truth、Turbine、MockK、Espresso、Kotest、Roborazzi、assert、thrown.expect、awaitComplete、
+     expectNoEvents、confirmVerified)、運算式本體只切到第一行、反引號名整支跳過、註記正規化拿掉 → 紅;字表裡沒有樣本的寫法不在這支的保護範圍。"""
+     T = _TQG_T
+     old = "    @Test\n    fun old() { vm.load() }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(old)})
+     ok = {
+         "t1": "    @Test\n    fun t1() { assertThat(f()).isEqualTo(1) }\n",
+@@ -120855,20 +120891,24 @@ def t_tq_guard_no_assertion():
+     check("S5 r1 同一行帶 expected= 的新測試不列", ("tq/no-assertion", T) not in _tqg_rules(r2, h3, h4), _tqg_rules(r2, h3, h4))
+ 
+     # 代碼審 r1 通才席:斷言字表裡這幾種也算有斷言
+     more = {"u1": "    @Test\n    fun u1() = runTest { flow.test { awaitComplete() } }\n",
+             "u2": "    @Test\n    fun u2() = runTest { flow.test { expectNoEvents() } }\n",
+             "u3": "    @Test\n    fun u3() { vm.save(); confirmVerified(repo) }\n"}
+     h5 = c2({T: _tqg_kt(helper, "    @Test(expected = IllegalStateException::class) fun c() { boom() }\n", *more.values())})
+     got = {c["ident"].rsplit(".", 1)[-1] for c in _tqg_cands(r2, h4, h5) if c["rule"] == "tq/no-assertion"}
+     check("S5 r1 awaitComplete、expectNoEvents、confirmVerified 算有斷言", not (got & set(more)), got)
+ 
++    # 代碼審 r2:只改修飾詞(internal、private、Java 去掉 public)不算測試有變
++    h6 = c2({T: _tqg_kt(helper.replace("fun a()", "internal fun a()"))})
++    check("S5 r2 只改修飾詞不列", ("tq/no-assertion", T) not in _tqg_rules(r2, h3, h6), _tqg_rules(r2, h3, h6))
++
+ 
+ def t_tq_guard_catch_no_fail():
+     """[S6] try 沒有 fail 而 catch 有斷言或是空的、runCatching 裡斷言沒接 getOrThrow 要列 tq/catch-no-fail;有 fail、getOrThrow 不列。
+     翻紅釘:try 結尾的 fail 判斷拿掉、空 catch 不算、runCatching 不看 → 紅。"""
+     T = _TQG_T
+     old = "    @Test\n    fun old() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(old)})
+     cases = {
+         "c1": ("    @Test\n    fun c1() {\n        try { boom() } catch (e: IllegalStateException) { assertEquals(\"x\", e.message) }\n    }\n", True),
+         "c2": ("    @Test\n    fun c2() {\n        try { boom() } catch (e: Exception) { }\n    }\n", True),
+@@ -120881,20 +120921,28 @@ def t_tq_guard_catch_no_fail():
+     h = commit({T: _tqg_kt(old, *(b for b, _w in cases.values()))})
+     got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h) if c["rule"] == "tq/catch-no-fail"}
+     for k, (_b, want) in cases.items():
+         check(f"S6 {k} {'要列' if want else '不列'}", (k in got) == want, got)
+ 
+     # 代碼審 r1:try 有斷言、catch 只印記錄把斷言失敗吞掉
+     swallow = "    @Test\n    fun s1() {\n        try {\n            assertEquals(5, f(1))\n        } catch (e: AssertionError) {\n            println(e)\n        }\n    }\n"
+     h2 = commit({T: _tqg_kt(old, swallow)})
+     check("S6 r1 catch 只印記錄吞掉斷言失敗要列", ("tq/catch-no-fail", T) in _tqg_rules(root, base, h2), _tqg_rules(root, base, h2))
+ 
++    # 代碼審 r2:try 有 fail、catch 接 Throwable 不算吞;catch 重丟不算吞
++    ok1 = "    @Test\n    fun s2() {\n        try { h(); fail(\"should throw\") } catch (e: Throwable) { assertTrue(e is IllegalStateException) }\n    }\n"
++    ok2 = "    @Test\n    fun s3() {\n        try {\n            assertEquals(5, f(1))\n        } catch (e: AssertionError) {\n            println(e)\n            throw e\n        }\n    }\n"
++    h3 = commit({T: _tqg_kt(old, ok1, ok2)})
++    got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h3) if c["rule"] == "tq/catch-no-fail"}
++    check("S6 r2 try 有 fail、catch 接 Throwable 不列", "s2" not in got, got)
++    check("S6 r2 catch 重丟不列", "s3" not in got, got)
++
+ 
+ def t_tq_guard_build_config():
+     """[S7] 建置檔放寬測試的設定要列 tq/build-config;照標準開重試、依賴的 exclude、JaCoCo 的排除不列。
+     翻紅釘:_TG_BUILD_RES 與測試區塊規則裡有樣本的那幾條拿掉一條、test 區塊判法只看同一行、dependsOn 拿掉不看 → 紅。"""
+     K = "app/build.gradle.kts"
+     root, base, commit = _tqg_repo({K: "android {\n}\ntasks.withType<Test> {\n}\ndependencies {\n}\n",
+                                     "build.gradle.kts": "plugins { id(\"org.gradle.test-retry\") version \"1.5.8\" }\n"})
+ 
+     def listed(text, at=None, start=None):
+         h = commit({K: text})
+@@ -120944,20 +120992,36 @@ def t_tq_guard_build_config():
+     for label, text in (("named(\"testDebugUnitTest\")", "android {\n}\ntasks.named(\"testDebugUnitTest\") { enabled = false }\n"),
+                         ("unitTests.all", "android {\n    testOptions { unitTests.all { it.enabled = false } }\n}\n"),
+                         ("matching UnitTest", "android {\n}\ntasks.matching { it.name.contains(\"UnitTest\") }.configureEach { enabled = false }\n")):
+         h = commit({K: text})
+         check(f"S7 r1 {label} 關掉要列", ("tq/build-config", K) in _tqg_rules(root, base_a, h), _tqg_rules(root, base_a, h))
+     h = commit({K: "android {\n}\ndetekt {\n    ignoreFailures = true\n}\n"})
+     check("S7 r1 detekt 的 ignoreFailures 不列", ("tq/build-config", K) not in _tqg_rules(root, base_a, h), _tqg_rules(root, base_a, h))
+     h = commit({K: "android {\n}\ntasks.withType<Test> {\n    useJUnitPlatform { excludeTags(\"slow\") }\n    filter { notAnnotation(\"Slow\") }\n}\n"})
+     check("S7 r1 notAnnotation 要列", ("tq/build-config", K) in _tqg_rules(root, base_a, h), _tqg_rules(root, base_a, h))
+ 
++    # 代碼審 r2:ignoreFailures 點號寫法與巢狀都要列;JaCoCo 與依賴的 exclude 不列;多行 matching 與 getByName 要列
++    base_r2 = commit({K: "android {\n}\n"})
++    for label, text in (("tasks.test.ignoreFailures = true", "android {\n}\ntasks.test.ignoreFailures = true\n"),
++                        ("test.ignoreFailures = true", "android {\n}\ntest.ignoreFailures = true\n"),
++                        ("subprojects { test.ignoreFailures = true }", "android {\n}\nsubprojects {\n    test.ignoreFailures = true\n}\n"),
++                        ("retry 區塊裡的 ignoreFailures", "android {\n}\ntasks.withType<Test> {\n    retry {\n        ignoreFailures = true\n    }\n}\n"),
++                        ("多行 matching UnitTest", "android {\n}\ntasks.matching { it.name.contains(\"UnitTest\") }.configureEach {\n    enabled = false\n}\n"),
++                        ("getByName testDebugUnitTest", "android {\n}\ntasks.getByName(\"testDebugUnitTest\") {\n    enabled = false\n}\n")):
++        h = commit({K: text})
++        check(f"S7 r2 {label} 要列", ("tq/build-config", K) in _tqg_rules(root, base_r2, h), _tqg_rules(root, base_r2, h))
++    for label, text in (("JaCoCo Kotlin 單行", "android {\n}\ntasks.register<JacocoReport>(\"jacocoTestReport\") { classDirectories.setFrom(fileTree(\"x\") { exclude(\"**/*Test*.*\") }) }\n"),
++                        ("fileTree exclude", "android {\n}\nval tree = fileTree(\"build/classes\") { exclude(\"**/*Test*.*\") }\n"),
++                        ("依賴的 exclude", "android {\n}\ndependencies {\n    implementation(\"com.x:y:1\") { exclude(\"org.junit.Test\") }\n}\n")):
++        h = commit({K: text})
++        check(f"S7 r2 {label} 不列", ("tq/build-config", K) not in _tqg_rules(root, base_r2, h), _tqg_rules(root, base_r2, h))
++
+ 
+ def t_tq_guard_ci_config():
+     """[S8] CI 檔讓 Gradle 測試失敗不算數的改動要列 tq/ci-config;非 Gradle 的同樣字樣不列;網址後面的 || true 照抓。
+     翻紅釘:續行不合併、Gradle 呼叫判法拿掉官方 Action、工作層級 continue-on-error 不看、yml 的 # 剝法吞掉網址、
+     放寬鍵裡有樣本的那幾種(continue-on-error、allow_failure、if: false、continueOnError)拿掉 → 紅。"""
+     W = ".github/workflows/ci.yml"
+     G = ".gitlab-ci.yml"
+     start = "jobs:\n  b:\n    runs-on: x\n    steps:\n      - run: ./gradlew test\n"
+     root, base, commit = _tqg_repo({W: start})
+     yes = (
+@@ -120994,20 +121058,41 @@ def t_tq_guard_ci_config():
+     for label, a, b in (("加 --stacktrace", start, start.replace("./gradlew test", "./gradlew test --stacktrace")),
+                         ("加 | tee", start, start.replace("./gradlew test", "./gradlew test | tee out.log"))):
+         s0 = commit({G: None, W: a})
+         h = commit({W: b})
+         check(f"S8 r1 {label} 不列", ("tq/ci-config", W) not in _tqg_rules(root, s0, h), _tqg_rules(root, s0, h))
+     for key in ("if: false", "continueOnError: true"):
+         s0 = commit({G: None, W: start})
+         h = commit({W: start.replace("      - run: ./gradlew test\n", "      - run: ./gradlew test\n        " + key + "\n")})
+         check(f"S8 r1 步驟加 {key} 要列", ("tq/ci-config", W) in _tqg_rules(root, s0, h), _tqg_rules(root, s0, h))
+ 
++    # 代碼審 r2:-x 在前、&& 串接、-x 之後的任務被拿掉要列;加 -x lint、拿掉 --tests、拿掉 -P 不列
++    def ci(cmd):
++        return "jobs:\n  b:\n    steps:\n      - run: " + cmd + "\n"
++    for label, a, b in (("-x 在前拿掉測試任務", "./gradlew -x lint test", "./gradlew -x lint assemble"),
++                        ("&& 串接拿掉後半", "./gradlew assembleDebug && ./gradlew testDebugUnitTest", "./gradlew assembleDebug"),
++                        ("-x 之後的 check 被拿掉", "./gradlew clean -x lint check", "./gradlew clean -x lint")):
++        s0 = commit({G: None, W: ci(a)})
++        h = commit({W: ci(b)})
++        check(f"S8 r2 {label} 要列", ("tq/ci-config", W) in _tqg_rules(root, s0, h), _tqg_rules(root, s0, h))
++    for label, a, b in (("加 -x lint", "./gradlew test", "./gradlew -x lint test"),
++                        ("拿掉 --tests 篩選", "./gradlew testDebugUnitTest --tests com.x.Foo", "./gradlew testDebugUnitTest"),
++                        ("拿掉 -PtestMode", "./gradlew assembleDebug -PtestMode=fast", "./gradlew assembleDebug"),
++                        # 旗標帶的參數不是任務:拿掉 --tests 指名的測試類別、拿掉 -x test(重新開測試)都不算拿掉測試任務
++                        ("拿掉 --tests 指名測試類別", "./gradlew testDebugUnitTest --tests FooTest", "./gradlew testDebugUnitTest"),
++                        ("拿掉 -x test", "./gradlew build -x test", "./gradlew build"),
++                        # 照 shell 分隔符切段:跟 Gradle 串在同一行的其他指令裡的 test 不是 Gradle 任務
++                        ("非 Gradle 段的 test 被拿掉", "./gradlew assemble && npm run test", "./gradlew assemble && npm run lint")):
++        s0 = commit({G: None, W: ci(a)})
++        h = commit({W: ci(b)})
++        check(f"S8 r2 {label} 不列", ("tq/ci-config", W) not in _tqg_rules(root, s0, h), _tqg_rules(root, s0, h))
++
+ 
+ def t_tq_guard_timeout_and_snapshot():
+     """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+     翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+     T = _TQG_T
+     body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     h = commit({T: _tqg_kt(body.replace("30", "300"))})
+     check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+@@ -121022,20 +121107,26 @@ def t_tq_guard_timeout_and_snapshot():
+     check("S9 同目錄三張基準圖合成一條", len(got) == 1, got)
+     h5 = commit({T: _tqg_kt(rt.replace("1.seconds", "60.seconds").replace("assertEquals(1, f())",
+                                                                          "assertEquals(1, f()); compare(changeThreshold = 0.5F)"))})
+     check("S9 比對門檻字樣新增要列", ("tq/snapshot-changed", T) in _tqg_rules(root, h4, h5), _tqg_rules(root, h4, h5))
+     others = {"docs/screenshots/a.png": b"\x89P1", "fastlane/metadata/android/en-US/images/phoneScreenshots/a.png": b"\x89P2",
+               "app/src/test/assets/snapshots/x.png": b"\x89P3"}
+     h6 = commit(others)
+     got = [c for c in _tqg_cands(root, h5, h6) if c["rule"] == "tq/snapshot-changed"]
+     check("S9 docs、fastlane、metadata、測試 assets 的圖不列", got == [], got)
+ 
++    # 代碼審 r2:測試檔裡的比對門檻調高要列
++    th = "    @Test\n    fun s() { compare(changeThreshold = 0.01F) }\n"
++    b8 = commit({T: _tqg_kt(th)})
++    h8 = commit({T: _tqg_kt(th.replace("0.01F", "0.5F"))})
++    check("S9 r2 changeThreshold 調高要列", ("tq/snapshot-changed", T) in _tqg_rules(root, b8, h8), _tqg_rules(root, b8, h8))
++
+ 
+ def t_tq_guard_test_env_sniff():
+     """[S10] 正式程式碼新增偵測測試環境的字樣要列 tq/test-env-sniff;測試檔裡、只用 Build.FINGERPRINT 不列。
+     翻紅釘:_TG_SNIFF 拿掉 robolectric 或 Class.forName、測試檔也判 → 紅。"""
+     T = _TQG_T
+     M = "app/src/main/java/x/Calc.kt"
+     root, base, commit = _tqg_repo({M: "package x\nfun a() = 1\n", T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, a()) }\n")})
+     h = commit({M: "package x\nfun a() = if (Build.FINGERPRINT == \"robolectric\") 1 else 2\n"})
+     check("S10 正式程式新增 \"robolectric\" 要列", ("tq/test-env-sniff", M) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({M: "package x\nfun a() = runCatching { Class.forName(\"org.junit.Test\"); 1 }.getOrDefault(2)\n"})
+@@ -121046,22 +121137,25 @@ def t_tq_guard_test_env_sniff():
+                  T: _tqg_kt("    @Test\n    fun a() { check(Build.FINGERPRINT != \"robolectric\"); assertEquals(1, a()) }\n")})
+     check("S10 測試檔裡同樣的字不列", ("tq/test-env-sniff", T) not in _tqg_rules(root, base, h4), _tqg_rules(root, base, h4))
+ 
+     # 代碼審 r1:其他偵測字樣
+     for word in ("isRunningTest", "isRobolectric"):
+         h = commit({M: f"package x\nfun a() = if ({word}()) 1 else 2\n", T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, a()) }\n")})
+         check(f"S10 r1 正式程式新增 {word} 要列", ("tq/test-env-sniff", M) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+ 
+ 
+ def t_tq_guard_cli_contract():
+-    """[S11] lumos test-guard 的退出碼、--json 欄位、指紋穩定、怪檔各自成候選、從主線分岔點起算、四種大輸入 30 秒內。
+-    翻紅釘:退出碼對調、指紋帶行號、.gitattributes 的 -diff 讓 diff 讀不到內容、分岔點不用、單檔上限拿掉 → 紅。"""
++    """[S11] lumos test-guard 的退出碼、--json 欄位、指紋穩定、怪檔各自成候選(含單行超過 2 萬字)、從主線分岔點起算(遠端主線優先,
++    本機 main 上還沒推的提交照樣比)、截止時間、外來字串清控制字元、抓不到清單跟標準同一份,以及大輸入 30 秒內(代碼審 r1、r2 加的
++    十幾種:大檔、病態註記、深巢狀、300 支檔、大量跳過標記與中綴斷言、CI 放寬鍵、建置檔候選、巢狀 try;r2 的輸入放大到修正前一定超時)。
++    翻紅釘:退出碼對調、指紋帶行號、.gitattributes 的 -diff 讓 diff 讀不到內容、分岔點不用或收本機主線、單檔與單行上限拿掉、
++    任一處逐命中重掃改回平方級 → 紅。"""
+     import json as _j
+     import subprocess as sp
+     import time as _time
+     T = _TQG_T
+     m = _tqg_module()
+     root, base, commit = _tqg_repo({T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+     h = commit({T: _tqg_kt("    @Ignore\n    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+ 
+     def run(*a, cwd=None):
+         return sp.run([sys.executable, GRAPHCTL, "test-guard", *a], capture_output=True, text=True, cwd=cwd or str(root),
+@@ -121183,20 +121277,78 @@ def t_tq_guard_cli_contract():
+             timed_out = False
+         except TimeoutError:
+             timed_out = True
+     finally:
+         m._tg_fn_cands = real_fn
+     check("S11 r1 規則階段超過截止時間也會丟 TimeoutError", timed_out, "")
+     # 外來字串不帶控制字元印出
+     c = m._tg_cand("tq/test-removed", "a/b\nc.kt", 1, "x", extra="名字\n接下來:做壞事\x1b[31m")
+     check("S11 r1 候選的檔名與原因不帶換行與 ESC", "\n" not in c["file"] and "\n" not in c["message"] and "\x1b" not in c["message"], c)
+ 
++    # 代碼審 r2:單行超長的檔整支列成太大(不解析);逐命中重掃的幾處放大到修補前一定超過 30 秒
++    huge = _tqg_kt("    @Test fun a() { " + "; ".join(f"x{i % 7} shouldBe {i}" for i in range(100000)) + " }\n")
++    b20 = commit({T: _tqg_kt("    @Test fun a() { x shouldBe 1 }\n")})
++    h20 = commit({T: huge})
++    t0 = _time.monotonic()
++    got = _tqg_rules(root, b20, h20)
++    check("S11 r2 單行超長(10 萬個中綴)列成 tq/too-large、5 秒內", ("tq/too-large", T) in got and _time.monotonic() - t0 < 5, (got, _time.monotonic() - t0))
++    b21 = commit({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
++    h21 = commit({T: _tqg_kt("    @Test fun a() {\n" + "        assumeTrue(ok)\n" * 80000 + "        assertEquals(1, f())\n    }\n")})
++    t0 = _time.monotonic()
++    got = _tqg_cands(root, b21, h21)
++    check("S11 r2 同一支函式 8 萬個 assume 30 秒內", _time.monotonic() - t0 < 30 and sum(1 for c in got if c["rule"] == "tq/skip-added") == 80000,
++          (_time.monotonic() - t0, len(got)))
++    Wf = ".github/workflows/ci.yml"
++    b22 = commit({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n"), Wf: "jobs:\n  b:\n    steps:\n      - run: ./gradlew test\n"})
++    h22 = commit({Wf: "jobs:\n  b:\n    steps:\n      - run: ./gradlew test\n" + "        continue-on-error: true\n" * 40000})
++    t0 = _time.monotonic()
++    _tqg_cands(root, b22, h22)
++    check("S11 r2 4 萬個同層放寬鍵 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
++    Kf = "app/build.gradle.kts"
++    b23 = commit({Kf: "".join(f"implementation(\"a:b{i}:1\")\n" for i in range(12000)) + "tasks.test {\n}\n"})
++    h23 = commit({Kf: "".join(f"implementation(\"a:b{i}:1\")\n" for i in range(12000)) + "tasks.test {\n"
++                  + "".join(f"    filter.excludeTestsMatching(\"a.b.C{i}\")\n" for i in range(12000)) + "}\n"})
++    t0 = _time.monotonic()
++    got = _tqg_cands(root, b23, h23)
++    check("S11 r2 建置檔 1 萬 2 千條候選 30 秒內", _time.monotonic() - t0 < 30 and len(got) >= 12000, (_time.monotonic() - t0, len(got)))
++    big_build = "".join(f"val v{i} = {i}\n" for i in range(90000))
++    b24 = commit({Kf: big_build})
++    h24 = commit({Kf: big_build.replace("val v5 = 5\n", "val v5 = 6\n")})
++    t0 = _time.monotonic()
++    _tqg_cands(root, b24, h24)
++    check("S11 r2 9 萬行建置檔改一行 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
++    nest = _tqg_kt("    @Test fun a() { " + "try { " * 5000 + "x()" + " } catch (e: Exception) { log() }" * 5000 + " }\n")
++    b25 = commit({Kf: None, T: _tqg_kt("    @Test fun a() { x() }\n")})
++    h25 = commit({T: nest})
++    t0 = _time.monotonic()
++    _tqg_cands(root, b25, h25)
++    check("S11 r2 5000 層巢狀 try 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
++    # 本機 main 比遠端主線多出、還沒推的提交不算已在主線
++    r9, b9, c9 = _tqg_repo({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
++    g9 = lambda *a: _sp9.run(["git", "-C", str(r9), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)  # noqa: E731
++    import subprocess as _sp9
++    g9("branch", "-M", "main")
++    g9("remote", "add", "origin", str(r9))          # 登記遠端(不連網,只讓遠端主線那條路認得 origin)
++    g9("update-ref", "refs/remotes/origin/main", b9)
++    c9({T: _tqg_kt("    @Ignore\n    @Test fun a() { assertEquals(1, f()) }\n")})   # 在本機 main 上、還沒推
++    g9("checkout", "-q", "-b", "feat")
++    tip9 = c9({"README.md": "x\n"})
++    got = [x["rule"] for x in _tqg_cands(r9, m._tg_start(r9, "origin/main", tip9), tip9)]
++    check("S11 r2 本機 main 上還沒推的提交照樣比對", "tq/skip-added" in got, got)
++    # 代碼審 r2 合約席:工具印的抓不到清單跟標準是同一份(去掉反引號後逐句對得上;任一邊改了另一邊沒跟上就紅)
++    _std = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands" / "test-quality-standard.md")
++    if _std.is_file():
++        _st = _std.read_text(encoding="utf-8").replace("`", "")
++        _seg = _st.split("- **抓不到**:", 1)[-1].split("。同一份清單也印在", 1)[0]
++        _tool = ";".join(x.split(";候選要人裁")[0] for x in m._TG_LIMITS)
++        check("S11 r2 工具的抓不到清單跟測試品質標準那條逐字相同(少一句、多一句都紅)", _seg == _tool, (_seg[:120], _tool[:120]))
++
+ 
+ def t_rg_methods_expression_body_and_backtick():
+     """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+     Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+     翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+     import time as _time
+     m = _tqg_module()
+     kt = ("class T {\n"
+           "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
+           "    @Test fun b() =\n        runTest {\n            assertEquals(2, g())\n        }\n"
+@@ -121223,20 +121375,35 @@ def t_rg_methods_expression_body_and_backtick():
+     check("S16 angle=False 不把 <> 當括號", m._rg_split_args("a > b, c < d", angle=False) == ["a > b", "c < d"],
+           m._rg_split_args("a > b, c < d", angle=False))
+     src = 'val a = "x // y" // 註解\n/* 多\n行 */ val b = 1\n'
+     check("S16 _strip_c_comments 預設輸出不變", m._strip_c_comments(src) == 'val a = "x // y" \n val b = 1\n', repr(m._strip_c_comments(src)))
+     check("S16 _strip_c_comments 清空字串與保留換行不變",
+           m._strip_c_comments(src, blank_strings=True, keep_newlines=True) == 'val a = "" \n\n val b = 1\n',
+           repr(m._strip_c_comments(src, blank_strings=True, keep_newlines=True)))
+     kl = m._strip_c_comments(src, blank_strings=True, keep_length=True)
+     check("S16 keep_length 位置跟原文一一對應", len(kl) == len(src) and kl.count("\n") == src.count("\n") and kl.index("val b") == src.index("val b"),
+           repr(kl))
++    # 代碼審 r2:類別本體判斷認 @Inject constructor 與巢狀泛型;括號兩支實作在隨機輸入上給一樣的配對
++    for label, src2 in (("@Inject constructor", "class FooTest @Inject constructor(private val a: A) {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"),
++                        ("巢狀泛型", "class FooTest<T : List<String>>(val x: T) {\n    @Test fun t() { assertEquals(1, f()) }\n}\n")):
++        keys = list(m._tg_functions(src2, False)[0])
++        check(f"S16 r2 {label} 的類別路徑還在", keys == ["FooTest.t"], keys)
++    import random as _rnd
++    rng = _rnd.Random(7)
++    bad = []
++    for _k in range(300):
++        txt = "".join(rng.choice("({[]})ab ") for _ in range(rng.randint(1, 60)))
++        bm = m._rg_bracket_map(txt)
++        for i, ch in enumerate(txt):
++            if ch in "([{" and i in bm and m._rg_balanced(txt, i) != bm[i]:
++                bad.append((txt, i))
++    check("S16 r2 _rg_bracket_map 與 _rg_balanced 在 300 組隨機字串上配對一致", not bad, bad[:3])
+ 
+ 
+ # ── 作弊比對接進新增告警閘(Projects/Android測試防竄改檢查_計劃 S12–S15)──────────────────────────
+ def _tqg_gate_repo(config=None):
+     """推送前判定用的暫存專案:main 上有一支測試、docs/t-knowledge(治理帳才寫得進去),切到 feat 還沒改 → (root, commit 函式)。"""
+     import json as _j
+     root = Path(tempfile.mkdtemp(prefix="gctl-tqgg-"))
+     _e2e_tgit(root, "init", "-q")
+     files = {_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n"),
+              "docs/t-knowledge/.keep": ""}
+@@ -121254,20 +121421,21 @@ def _tqg_gate_repo(config=None):
+             f.write_text(body, encoding="utf-8")
+         _e2e_tgit(root, "add", "-A")
+         _e2e_tgit(root, "commit", "-qm", "c", "--allow-empty")
+         return _e2e_tgit(root, "rev-parse", "HEAD").strip()
+     commit(files)
+     _e2e_tgit(root, "branch", "-M", "main")
+     _e2e_tgit(root, "checkout", "-qb", "feat")
+     return root, commit
+ 
+ 
++
+ def _tqg_ignore(root, commit, n=1):
+     """在測試檔替前 n 支測試加 @Ignore 並提交 → 新提交。"""
+     names = "ab"[:n]
+     body = [("    @Ignore\n" if x in names else "") + f"    @Test\n    fun {x}() {{ assertEquals({i + 1}, f()) }}\n" for i, x in enumerate("ab")]
+     return commit({_TQG_T: _tqg_kt(*body)})
+ 
+ 
+ def _tqg_ledger(root, kind=None):
+     import json as _j
+     p = root / "docs" / ".governance-log.jsonl"
+@@ -121392,38 +121560,40 @@ def t_lint_new_includes_test_guard():
+     A3 = "app/src/main/java/x/A.kt"
+     c3({".lumos/lint.json": (r3 / ".lumos" / "lint.json").read_text(encoding="utf-8"), A3: "package x\nfun a() = 1\n"})
+     mb3 = _e2e_tgit(r3, "rev-parse", "HEAD").strip()
+     h3 = c3({A3: "package x\nfun a() = 2\n"})
+     real_guard = m._lint_new_guard
+     m._lint_new_guard = lambda *a, **k: (_t2.sleep(3), real_guard(*a, **k))[1]
+     try:
+         blk, lv8 = _tqg_step(r3, f"{mb3}..{h3}")
+     finally:
+         m._lint_new_guard = real_guard
+-    check("★前置★ 檢查命令真的有宣告", lv8.get("tools_ran") is not None, lv8.get("status"))
++    check("★前置★ 檢查命令真的有跑到(不是早退)", lv8.get("tools_ran") is True, lv8.get("status"))
+     check("S12 r1 比對花的時間不讓檢查命令被判成時間預算沒跑到", blk is None and lv8["ran"], (lv8["status"], lv8["reason"], lv8["undone"]))
+ 
+     # 放行檔壞掉時「接下來」給一條獨立的檢查指令
+     say5 = _tqg_say(m._cl_say_lint_block, lv5["reason"], {"lint_new": lv5}, "feat", h5)
+     check("S12 r1 放行檔壞掉時印一條獨立的檢查指令", "\n    python3 -m json.tool .lumos/lint-waivers.json" in say5, say5[-300:])
+ 
+ 
+ def _tqg_waive(root, key, note, rule, file_rel, tty="/nonexistent-tty", answer=None):
+     """跑 lumos lint-waive(標準輸入接 /dev/null;tty 給虛擬終端時先餵 answer)。"""
+     import subprocess as sp
+     return sp.run([sys.executable, GRAPHCTL, "lint-waive", key, "--note", note, "--rule", rule, "--file", file_rel, "--repo", str(root)],
+                   capture_output=True, text=True, cwd=str(root), stdin=sp.DEVNULL, env=_e2e_isolated_env(_e2eg_env({"LUMOS_TTY": tty})))
+ 
+ 
+ def t_lint_new_test_guard_failure_blocks():
+-    """[S13] 比對工具出例外或逾時記成沒跑完並擋(不走 fail-open)、訊息寫作弊比對沒跑完;空樹起點又找不到主線只印不擋並記 no-baseline;
+-    帳由 _codeloop_lint_new_step 寫,判定函式只回傳。翻紅釘:_lint_new_guard 不包例外、no_baseline 照擋、判定函式自己寫帳 → 紅。"""
++    """[S13] 比對工具出例外或逾時記成沒跑完並擋(不走 fail-open)、訊息寫作弊比對沒跑完並印單次出口;warn 時比對出錯照樣印;
++    空樹起點又找不到主線只印不擋並記 no-baseline;沒宣告檢查工具時範圍算不出來不算自動放行;自動放行帳與放行小結寫的是檢查工具
++    跑不動的原因(不是擋下理由);環境變數跳過時比對出錯也記一筆 skipped-env;帳由 _codeloop_lint_new_step 寫,判定函式只回傳。
++    翻紅釘:_lint_new_guard 不包例外、no_baseline 照擋、判定函式自己寫帳、自動放行原因換回 reason、關閘時出錯不記帳 → 紅。"""
+     m = _tqg_module()
+     root, commit = _tqg_gate_repo()
+     mb = _e2e_tgit(root, "rev-parse", "main").strip()
+     h = commit({"README.md": "x\n"})
+     real = m._tg_analyze
+     for label, exc in (("例外", RuntimeError("壞了")), ("逾時", TimeoutError("超過"))):
+         def boom(*a, **k):
+             raise exc
+         m._tg_analyze = boom
+         try:
+@@ -121484,24 +121654,37 @@ def t_lint_new_test_guard_failure_blocks():
+     (rd / ".lumos" / "lint-deps.json").write_text("{壞", encoding="utf-8")
+     cd({".lumos/lint.json": (rd / ".lumos" / "lint.json").read_text(encoding="utf-8"), ".lumos/lint-deps.json": "{壞"})
+     mbd = _e2e_tgit(rd, "rev-parse", "HEAD").strip()
+     _tqg_ignore(rd, cd)
+     hd = cd({"app/src/main/java/x/A.kt": "package x\nfun a() = 1\n"})   # 正式程式檔也改,檢查工具那一半才走得到讀依賴宣告那一步
+     blk, lvd = _tqg_step(rd, f"{mbd}..{hd}")
+     fo = _tqg_ledger(rd, "fail-open")
+     check("★前置★ 這個樣本既擋下又走自動放行", blk is not None and fo, (lvd["status"], fo))
+     check("S13 r1 自動放行帳寫的是檢查工具跑不動的原因,不是擋下理由", fo and "作弊候選" not in str(fo[-1].get("note")), fo)
+ 
++    # 代碼審 r2:環境變數跳過時比對出錯也留一筆帳
++    m._tg_analyze = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("壞了"))
++    try:
++        lvs = _tqg_verdict(root, f"{mb}..{h}", env={"LUMOS_SKIP_LINT_NEW": "1"})
++    finally:
++        m._tg_analyze = real
++    check("S13 r2 環境變數跳過、比對出錯:也記一筆 skipped-env", [k for k, _n in lvs["events"]] == ["skipped-env"], lvs["events"])
++    # 放行小結印自動放行的真正原因
++    m._codeloop_guard_verdict.last_lint_new = dict(lvd, status="env-unavailable", blocked=False)
++    sayd = _tqg_say(m._cl_say_ok_extras, None)
++    check("S13 r2 放行小結印的是檢查工具跑不動的原因", "自動放行並記帳(" in sayd and "作弊候選" not in sayd.split("自動放行並記帳(")[1].split(")")[0], sayd[-300:])
++
+ 
+ def t_lint_new_warn_off_and_relax():
+-    """[S14] warn 逐條「提醒:」印、有候選記 warned;off 與環境變數跳過時比對照跑、有候選才記帳;推送範圍本身放寬照起點判、記 relax-deferred;
+-    只在工作目錄改照工作目錄。翻紅釘:off 早退不跑比對、放寬偵測拿掉、warn 小結不印逐條 → 紅。"""
++    """[S14] warn 逐條「提醒:」印、有候選記 warned;off 與環境變數跳過時比對照跑、有候選(或比對出錯,見 S13)才記帳;推送範圍本身放寬
++    照起點判、記 relax-deferred(新分支首推的空樹起點改用主線分岔點那一版);沒有主線的新 repo 第一次推送照工作目錄判;
++    只在工作目錄改照工作目錄。翻紅釘:off 早退不跑比對、放寬偵測拿掉、空樹起點不換分岔點、warn 小結不印逐條 → 紅。"""
+     import json as _j
+     m = _tqg_module()
+     # warn
+     root, commit = _tqg_gate_repo({"lint_new": {"gate": "warn"}})
+     mb = _e2e_tgit(root, "rev-parse", "main").strip()
+     h = _tqg_ignore(root, commit)
+     blk, lv = _tqg_step(root, f"{mb}..{h}")
+     check("S14 warn 不擋", blk is None and lv["status"] == "warn" and lv["new"], (lv["status"], lv["reason"]))
+     say = _tqg_say(m._cl_say_ok_extras, None)
+     check("S14 warn 逐條以「提醒:」開頭印出", f"  提醒:{_TQG_T}:" in say and "[tq/skip-added]" in say, say[-400:])
+@@ -121664,13 +121847,18 @@ def t_lint_waive_ai_marking():
+     check("S15 r1 --ack <指紋> 只標那一條", r.returncode == 0 and recs()["k7"].get("acked") is True and recs()["k6"].get("acked") is not True,
+           (r.stderr[-200:], recs()["k6"], recs()["k7"]))
+     import time as _tt
+     led = root / "docs" / ".governance-log.jsonl"
+     led.write_text(led.read_text(encoding="utf-8") if led.is_file() else "", encoding="utf-8")
+     with open(led, "a", encoding="utf-8") as fh:
+         fh.write(_j.dumps({"ts": _tt.strftime("%Y-%m-%dT%H:%M:%S+08:00"), "gate": "lint-new", "kind": "skipped", "hard": False}) + "\n")
+     d = _e2e_run(root, "doctor", "--verbose", env=_e2eg_env()).stdout
+     check("S15 r1 健檢列出關閘時作弊比對有候選沒判的次數", "設定關掉時作弊比對有候選沒判 1 次" in d, d[-600:])
+ 
++    # 代碼審 r2:問人提示標明規則與檔案是放行指令帶入、未核對;放行時間帶時區
++    check("S15 r2 問人提示標明規則與檔案未核對", "未核對" in shown.decode("utf-8", "replace"), shown[-300:])
++    import re as _re2
++    check("S15 r2 放行紀錄的時間帶時區", _re2.search(r"[+-]\d\d:\d\d$", recs()["k6"].get("ts", "")) is not None, recs()["k6"].get("ts"))
++
+ 
+ if __name__ == "__main__":
+     sys.exit(main())

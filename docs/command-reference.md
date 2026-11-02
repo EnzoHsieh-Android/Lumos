@@ -136,7 +136,7 @@ lumos loop fix-check <id> --round rN   # after code review fixes, before the nex
 lumos loop cap-decision <id> --decision extra-round|accept-risk --note "…"   # cap reached without passing: record the human decision (one more round, or accept the risk)
 lumos loop retro <id> --template --write | --check | --record | --skip --note "…"   # after recording a human decision, write the capped-loop retrospective before continuing
 lumos loop escape <id> --stage … --severity … --desc "…"   # a defect attributable to a passed loop was found downstream: log an escape (--list shows the ledger)
-lumos lint-waive <fingerprint> --note "…"   # the new-warning gate blocked a false positive: allow it with a reason, on record (--list shows what was allowed)
+lumos lint-waive <fingerprint> --note "…"   # the new-warning gate blocked a false positive: allow it with a reason (at least 10 characters besides whitespace), on record; answering y at a terminal records a human waiver, no interactive terminal records an AI waiver (origin); --list shows what was allowed and marks AI waivers, --ack --all marks them reviewed
 lumos note-audit reread-prepare --diff A..B --orchestrator claude|codex   # reread: one item file per home note to hand to a judge
 lumos note-audit reread-record --prepared <item file> --report <report>   # record the judge's report as a comparison record (counts once committed)
 lumos note-audit reread-check --diff A..B [--gate]   # the pre-push hook passes --gate and blocks per note_reread.gate; CI and manual runs omit it and only print
@@ -159,7 +159,7 @@ lumos security approvals verify             # verify the exception-approval chai
 
 ## Project switches
 
-These live in the project's `.lumos/config.json`. This table collects the switches in one place and is the reference for defaults and values; some switches also have usage notes in the matching skill manual chapters. Commit any change: most checks read the version in the commit being pushed, but `lint_new` and `stack_questions` read the working-tree copy (an uncommitted change applies locally while CI keeps the committed value), and the commit-time `note_lint` also reads the working tree. Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
+These live in the project's `.lumos/config.json`. This table collects the switches in one place and is the reference for defaults and values; some switches also have usage notes in the matching skill manual chapters. Commit any change: most checks read the version in the commit being pushed, but `lint_new` and `stack_questions` read the working-tree copy (an uncommitted change applies locally while CI keeps the committed value; when the pushed range itself relaxes `lint_new.gate`, this push is judged by the value before the change), and the commit-time `note_lint` also reads the working tree. Unset switches use the defaults below; a broken file or an unrecognised value gets a one-line notice and mostly falls back to the default, except that an unrecognised `note_lint.gate` uses on.
 
 | Switch | Controls | Values | When unset |
 | --- | --- | --- | --- |
@@ -171,7 +171,7 @@ These live in the project's `.lumos/config.json`. This table collects the switch
 | `note_shape.test_refs` | tests bound in touched notes must point to real tests | block / warn / off | warn |
 | `note_shape.slots` | required slots on summary-line prefixes (checked only after the project enables `--slots` in its pre-commit hook, see [07 install and maintenance](../skills/lumos-project-notes/commands/07-安裝維運.md); also governed by `note_shape.gate`) | block / warn / off | block (once enabled) |
 | `node_home.gate` | every code file needs a note that owns it (file ownership) | on / warn / off | on |
-| `lint_new.gate` | new linter warnings | block / warn / off | block |
+| `lint_new.gate` | new linter warnings, including test-tampering candidates (`tq/` rules; with off the comparison still runs in the background and records candidates or its own errors) | block / warn / off | block |
 | `stack_questions.gate` | answering stack performance questions before a push | all / high-only / off | all |
 | `note_shape.negation` | commit-time reminder to turn new negated status sentences into revisit conditions (also governed by `note_shape.gate`; off there turns it off too) | warn / off | warn |
 | `note_shape.tag_hints` | commit-time reminder about summary-line prefixes (also governed by `note_shape.gate`) | warn / off | warn |

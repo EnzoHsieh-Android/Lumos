@@ -14,8 +14,14 @@ BACKEND_TIMEOUT = 40
 PATTERNS = {
     'php': ['$this->assertSame($X, $X, ...)', '$this->assertEquals($X, $X, ...)',
             'expect($X)->toBe($X)', 'expect($X)->toEqual($X)'],
-    'kotlin': ['assertEquals($X, $X, ...)'],
-    'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)'],
+    # Kotlin 不加 Hamcrest 的 is($X):is 在 Kotlin 是保留字,這個樣式解析不出也抓不到;
+    # 帶類別前綴的(Assert.assertEquals、MatcherAssert.assertThat)不帶前綴的樣式抓不到,另用 $Q. 樣式(2026-11-02 Semgrep 1.183.0 實跑)
+    'kotlin': ['assertEquals($X, $X, ...)', '$Q.assertEquals($X, $X, ...)', 'assertThat($X).isEqualTo($X)',
+               '$Q.assertThat($X).isEqualTo($X)', 'assertWithMessage(...).that($X).isEqualTo($X)',
+               'assertThat($X, equalTo($X))', '$Q.assertThat($X, equalTo($X))'],
+    'java': ['assertEquals($X, $X, ...)', 'Assertions.assertEquals($X, $X, ...)', '$Q.assertEquals($X, $X, ...)',
+             'assertThat($X).isEqualTo($X)', '$Q.assertThat($X).isEqualTo($X)', 'assertWithMessage(...).that($X).isEqualTo($X)',
+             'assertThat($X, equalTo($X))', '$Q.assertThat($X, equalTo($X))', 'assertThat($X, is($X))', '$Q.assertThat($X, is($X))'],
     'swift': ['XCTAssertEqual($X, $X, ...)'],
     'csharp': ['Assert.Equal($X, $X)', 'Assert.AreEqual($X, $X, ...)', '$X.Should().Be($X, ...)'],
     'javascript': ['expect($X).toBe($X)', 'expect($X).toEqual($X)', 'assert.equal($X, $X, ...)', 'assert.strictEqual($X, $X, ...)'],

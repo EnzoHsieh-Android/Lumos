@@ -226,6 +226,157 @@ class QualityCLI(unittest.TestCase):
         )
         self.assertTrue(rows[0]["assertion_failure"])
 
+    def test_truth_local_assertion_types_are_attributed(self):
+        from test_quality import junit
+
+        # 2026-11-01 消費專案本機 JVM(AGP 8.13.2、Truth 1.0.1)實跑報告的型別欄
+        for kind in ("com.google.common.truth.ComparisonFailureWithFacts",
+                     "com.google.common.truth.AssertionErrorWithFacts"):
+            rows = junit(
+                ('<testsuite><testcase name="x"><failure type="%s" message="expected: 10&#10;but was : 0">%s: expected: 10</failure></testcase></testsuite>'
+                 % (kind, kind)).encode()
+            )
+            self.assertTrue(rows[0]["assertion_failure"], kind)
+
+    def test_truth_expect_rule_type_is_not_attributed(self):
+        from test_quality import junit
+
+        # Truth 1.0.1 的 Expect 規則收尾時丟 Truth$SimpleAssertionError,測試本體丟一般例外時也包成同一型別
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="com.google.common.truth.Truth$SimpleAssertionError" message="m">t</failure></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+
+    def test_truth_lookalike_types_are_not_attributed(self):
+        from test_quality import junit
+
+        # 精確比對:別家套件的同名型別、型別名後面多字,都不認
+        for kind in ("com.example.ComparisonFailureWithFacts", "com.google.common.truth.ComparisonFailureWithFactsX",
+                     "com.google.common.truth.AssertionErrorWithFactsX", "com.example.ArrayComparisonFailure",
+                     "org.junit.internal.ArrayComparisonFailureX"):
+            rows = junit(('<testsuite><testcase name="x"><failure type="%s" message="m">t</failure></testcase></testsuite>' % kind).encode())
+            self.assertFalse(rows[0]["assertion_failure"], kind)
+
+    def test_truth_device_text_without_type_is_not_attributed(self):
+        from test_quality import junit
+
+        # 同一天平板 SM-X710 儀器報告:Truth 改寫了 toString,沒有型別欄也沒有類別名
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure>expected: 10\nbut was : 0\nat com.example.FooTest$x$1.invokeSuspend(FooTest.kt:98)</failure></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+
+    def test_device_comparison_failure_and_bare_assertion_are_attributed(self):
+        from test_quality import junit
+
+        # 2026-11-01 平板 SM-X710(AGP 8.13.2、JUnit 4.13.2)儀器報告原文,套件名換成 com.example
+        for text in (
+            b"org.junit.ComparisonFailure: expected:<[1]0> but was:<[]0>\nat org.junit.Assert.assertEquals(Assert.java:115)\nat org.junit.Assert.assertEquals(Assert.java:144)\nat com.example.SampleTest.stringEquals(SampleTest.kt:12)",
+            b"java.lang.AssertionError\nat org.junit.Assert.fail(Assert.java:86)\nat org.junit.Assert.assertTrue(Assert.java:41)\nat com.example.SampleTest.bareTrue(SampleTest.kt:14)",
+        ):
+            rows = junit(b'<testsuite><testcase name="x"><failure>' + text.replace(b"<", b"&lt;").replace(b">", b"&gt;") + b"</failure></testcase></testsuite>")
+            self.assertTrue(rows[0]["assertion_failure"], text[:40])
+
+    def test_device_hamcrest_and_caused_by_in_message_are_attributed(self):
+        from test_quality import junit
+
+        # 2026-11-01 平板實跑(JUnit 4.13.2 附的 Hamcrest):第一行 AssertionError、堆疊是 MatcherAssert;
+        # 字串 assertEquals 的訊息自己帶一行 Caused by,要從第一個堆疊行起(含這一行)才切;前導空行與 CRLF 也照認
+        for text in (
+            b"java.lang.AssertionError:\nExpected: is <2>\nbut: was <1>\nat org.hamcrest.MatcherAssert.assertThat(MatcherAssert.java:20)\nat com.example.SampleTest.hamcrestThat(SampleTest.kt:20)",
+            b"org.junit.ComparisonFailure: expected:<Request failed[\nCaused by: timeout]> but was:<Request failed[]>\nat org.junit.Assert.assertEquals(Assert.java:115)\nat com.example.SampleTest.messageWithCausedByLine(SampleTest.kt:21)",
+            b"\r\n\r\njava.lang.AssertionError: expected:<10> but was:<0>\r\nat org.junit.Assert.fail(Assert.java:88)\r\n",
+        ):
+            rows = junit(b'<testsuite><testcase name="x"><failure>' + text.replace(b"<", b"&lt;").replace(b">", b"&gt;") + b"</failure></testcase></testsuite>")
+            self.assertTrue(rows[0]["assertion_failure"], text[:50])
+
+    def test_local_array_comparison_failure_is_attributed_device_text_is_not(self):
+        from test_quality import junit
+
+        # 本機報告有型別 org.junit.internal.ArrayComparisonFailure;平板報告第一行只有訊息、沒有型別名,照樣不認
+        rows = junit(b'<testsuite><testcase name="x"><failure type="org.junit.internal.ArrayComparisonFailure" message="arrays first differed">t</failure></testcase></testsuite>')
+        self.assertTrue(rows[0]["assertion_failure"])
+        rows = junit(b'<testsuite><testcase name="x"><failure>arrays first differed at element [1]; expected:&lt;2&gt; but was:&lt;3&gt;\nat org.junit.Assert.assertArrayEquals(Assert.java:416)</failure></testcase></testsuite>')
+        self.assertFalse(rows[0]["assertion_failure"])
+
+    def test_device_attribution_is_linear_on_many_newlines(self):
+        import time
+        from test_quality import junit
+
+        # 大量連續換行曾讓 Caused by 切分變成二次方;20 萬個換行要在一秒內判完
+        for body in (b"java.lang.AssertionError: x" + b"\n" * 200000 + b"at org.junit.Assert.fail(Assert.java:1)",
+                     b"java.lang.AssertionError: x\nat org.junit.Assert.fail(Assert.java:1)" + b"\n" * 200000 + b"y"):
+            start = time.monotonic()
+            rows = junit(b'<testsuite><testcase name="x"><failure>' + body + b"</failure></testcase></testsuite>")
+            self.assertLess(time.monotonic() - start, 1.0)
+            self.assertTrue(rows[0]["assertion_failure"])
+
+    def test_device_runtime_around_comparison_failure_is_not_attributed(self):
+        from test_quality import junit
+
+        # 同一次平板實跑:訊息提到 ComparisonFailure、或 Caused by 包著它,第一行都是一般例外
+        for text in (
+            b"java.lang.IllegalStateException: org.junit.ComparisonFailure: expected:<10> but was:<0>\nat com.example.SampleTest.runtimeMentioning(SampleTest.kt:16)",
+            b"java.lang.IllegalStateException: wrapped\nat com.example.SampleTest.runtimeCaused(SampleTest.kt:18)\n... 27 trimmed\nCaused by: org.junit.ComparisonFailure: expected:<[1]0> but was:<[]0>\nat org.junit.Assert.assertEquals(Assert.java:115)",
+            b"java.lang.AssertionErrorX: lookalike\nat org.junit.Assert.fail(Assert.java:86)",
+            b"org.junit.ComparisonFailureX: lookalike\nat org.junit.Assert.assertEquals(Assert.java:115)",
+            b"java.lang.AssertionError: x\nat org.hamcrest.Other.assertThat(Other.java:1)",
+            b"java.lang.AssertionError: helper said at org.junit.Assert.fail(Assert.java:86)",
+            b"java.lang.AssertionError: x\nat com.example.Foo.<init>(T.kt:3)\nCaused by: java.lang.IllegalStateException: y\nat org.junit.Assert.fail(Assert.java:86)",
+            b"java.lang.AssertionError: x\nat com.example.Money.plus-abc123(T.kt:3)\nCaused by: java.lang.IllegalStateException: y\nat org.junit.Assert.fail(Assert.java:86)",
+            b"java.lang.AssertionError: x\nat com.example.T$$Lambda$1.run(T.kt:3)\nCaused by: java.lang.IllegalStateException: y\nat org.junit.Assert.fail(Assert.java:86)",
+            b"java.lang.AssertionError: x\nat com.example.T.does the thing(T.kt:3)\nCaused by: java.lang.IllegalStateException: y\nat org.junit.Assert.fail(Assert.java:86)",
+            b"org.junit.ComparisonFailure: thrown by hand\nat com.example.Helper.check(Helper.kt:7)",
+            b"java.lang.AssertionError\nat com.example.Helper.check(Helper.kt:9)",
+            b"java.lang.AssertionError: from helper\nat com.example.Helper.check(Helper.kt:9)\nCaused by: java.lang.IllegalStateException: x\nat org.junit.Assert.fail(Assert.java:86)",
+        ):
+            rows = junit(b'<testsuite><testcase name="x"><failure>' + text.replace(b"<", b"&lt;").replace(b">", b"&gt;") + b"</failure></testcase></testsuite>")
+            self.assertFalse(rows[0]["assertion_failure"], text[:40])
+
+    def _device_rows(self, text):
+        from test_quality import junit
+        return junit(b'<testsuite><testcase name="x"><failure>' + text.replace(b"<", b"&lt;").replace(b">", b"&gt;") + b"</failure></testcase></testsuite>")
+
+    def test_device_indented_frames_are_attributed(self):
+        # 裝置報告的堆疊行常帶 tab 或空白縮排;判定要容許縮排,改成只認行首 at 會把它判成不是斷言(往拒收錯)
+        text = b"java.lang.AssertionError: expected:<10> but was:<0>\n\tat org.junit.Assert.fail(Assert.java:88)\n    at com.example.SampleTest.a(SampleTest.kt:12)"
+        self.assertIsNone(re.search(rb"\nat ", text), "前置:樣本裡的堆疊行都有縮排")
+        self.assertTrue(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_first_line_trailing_space_is_stripped(self):
+        # 第一行尾端帶空白或 CR、而且沒有冒號(assertTrue 沒給訊息)時,要先去空白再比對型別名
+        text = b"java.lang.AssertionError  \r\nat org.junit.Assert.fail(Assert.java:86)\r\nat com.example.SampleTest.b(SampleTest.kt:14)"
+        first = text.split(b"\n", 1)[0]
+        self.assertTrue(first != first.strip() and b":" not in first, "前置:第一行尾端有空白、沒有冒號")
+        self.assertTrue(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_assert_phrase_needs_word_boundary(self):
+        # 堆疊段裡出現 xformat org.junit.Assert.fail( 這種前面黏著字的,不是 Assert 的堆疊行
+        text = b"java.lang.AssertionError: x\nat com.example.Helper.check(Helper.kt:9)\nxformat org.junit.Assert.fail(fake)"
+        self.assertIn(b"at org.junit.Assert.fail(", text, "前置:樣本含這個片語,只是前面黏著字")
+        self.assertFalse(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_assert_frame_must_be_fail_or_assert(self):
+        # org.junit.Assert 底下不是 fail/assert 開頭的方法(例如自己包的 format)不算斷言堆疊
+        text = b"java.lang.AssertionError: x\nat org.junit.Assert.format(Assert.java:1)\nat com.example.SampleTest.c(SampleTest.kt:3)"
+        self.assertIsNotNone(re.search(rb"at org\.junit\.Assert\.\w+\(", text), "前置:樣本有 org.junit.Assert 的堆疊行")
+        self.assertFalse(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_device_message_mentioning_assert_frame_counts_from_first_frame(self):
+        # 第一行訊息自己含 at org.junit.Assert.fail( 又接一般堆疊:斷言堆疊要從第一個堆疊行起找,不從開頭找
+        text = b"java.lang.AssertionError: helper said at org.junit.Assert.fail(Assert.java:86)\nat com.example.Helper.check(Helper.kt:9)"
+        self.assertIn(b"at org.junit.Assert.fail(", text.split(b"\n", 1)[0], "前置:第一行訊息含斷言堆疊樣字串")
+        self.assertIn(b"\nat com.example.Helper.check(", text, "前置:後面接的是一般堆疊")
+        self.assertFalse(self._device_rows(text)[0]["assertion_failure"])
+
+    def test_runtime_exception_mentioning_truth_type_is_not_attributed(self):
+        from test_quality import junit
+
+        rows = junit(
+            b'<testsuite><testcase name="x"><failure type="java.lang.IllegalStateException" message="com.google.common.truth.ComparisonFailureWithFacts"/></testcase></testsuite>'
+        )
+        self.assertFalse(rows[0]["assertion_failure"])
+
     def test_android_runtime_cause_mention_is_not_attributed(self):
         from test_quality import junit
 

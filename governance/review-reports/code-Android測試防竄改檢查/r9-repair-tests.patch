@@ -1,0 +1,107 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index b8ce3656b..c17545006 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -121042,20 +121042,35 @@ def t_tq_guard_catch_no_fail():
+         "e2": ("    @Test\n    fun e2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldInclude \"boom\" } }\n", True),
+         "e3": ("    @Test\n    fun e3() { try { assertEquals(1, f()) } catch (e: IllegalStateException) { foo(Error()) } }\n", False),
+         "e4": ("    @Test\n    fun e4() { try { assertEquals(1, f()) } catch (e: AssertionError) { fail(\"wrapped\") } }\n", False),
+         "e5": ("    @Test\n    fun e5() { try { assertEquals(1, f()) } catch (e: Error) { log(e); throw e } }\n", False),
+     }
+     h8 = commit({T: _tqg_kt(old, *(b for b, _w in st.values()))})
+     got8 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h8) if c["rule"] == "tq/catch-no-fail"}
+     for k, (_b, want) in st.items():
+         check(f"S6 r7 {k} {'要列' if want else '不列'}", (k in got8) == want, got8)
+ 
++    # 代碼審 r8:catch 型別照名字字尾認(AssertionError 的子類別也算);一般例外不列;存成 throwable 不算重丟;failure(、xfail( 不算 fail
++    sub = {
++        "f1": ("    @Test\n    fun f1() { try { assertEquals(\"hello\", greet()) } catch (e: ComparisonFailure) { println(e) } }\n", True),
++        "f2": ("    @Test\n    fun f2() { try { assertEquals(1, f()) } catch (e: MultipleFailuresError) { println(e) } }\n", True),
++        "f3": ("    @Test\n    fun f3() { try { assertEquals(1, f()) } catch (e: org.mockito.exceptions.base.MockitoAssertionError) { println(e) } }\n", True),
++        "f4": ("    @Test\n    fun f4() { try { assertEquals(1, f()) } catch (e: AssertionError) { val throwable = e } }\n", True),
++        "f5": ("    @Test\n    fun f5() { try { assertEquals(1, f()) } catch (e: AssertionError) { failure(e) } }\n", True),
++        "f6": ("    @Test\n    fun f6() { try { assertEquals(1, f()) } catch (e: AssertionError) { xfail(\"a\") } }\n", True),
++        "f7": ("    @Test\n    fun f7() { try { load(); fail(\"x\") } catch (e: IOException) { println(e) } }\n", False),
++    }
++    h9 = commit({T: _tqg_kt(old, *(b for b, _w in sub.values()))})
++    got9 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h9) if c["rule"] == "tq/catch-no-fail"}
++    for k, (_b, want) in sub.items():
++        check(f"S6 r8 {k} {'要列' if want else '不列'}", (k in got9) == want, got9)
++
+ 
+ def t_tq_guard_timeout_and_snapshot():
+     """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+     翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+     T = _TQG_T
+     body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     h = commit({T: _tqg_kt(body.replace("30", "300"))})
+     check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+@@ -121395,43 +121410,56 @@ def t_tq_guard_cli_contract():
+     t0 = _time.monotonic()
+     m._tg_catch_no_fail({"mbody": nest})
+     check("S11 r6 1 萬 2 千層巢狀 catch 型別括號:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
+     # 代碼審 r6:skill 參考頁的子命令全覽不再說會比對建置檔或 CI
+     import pathlib as _pl
+     ref = (_pl.Path(GRAPHCTL).parent.parent / "skills/lumos-project-notes/reference.md").read_text(encoding="utf-8")
+     tg = [seg.split("）")[0] for seg in ref.split(" / ") if "`test-guard`" in seg]
+     check("★前置★ 參考頁找得到 test-guard 那一段", len(tg) == 1, len(tg))
+     check("S11 r6 參考頁的 test-guard 說明不提建置檔或 CI", not any(w in tg[0] for w in ("CI", "建置")), tg[:1])
+ 
+-    # 代碼審 r7:通用的倍增耗時檢查——十幾種觸發字各自重複 N 次與 4N 次,切函式、catch 判讀、跳過與門檻擷取的總耗時不超過 8 倍
++    # 代碼審 r7:通用的倍增耗時檢查——二十種觸發字各自重複 N 次與 4N 次,切函式、catch 判讀、跳過與門檻擷取的總耗時不超過 8 倍
+     # (線性約 4 倍、平方級約 16 倍);每行都在單行上限內。只是一張網:只網得到列在這裡的觸發字
+     def _tq_work(src):
+         fns = m._tg_functions(src, False)[0]
+         for f in fns.values():
+             m._tg_catch_no_fail(f)
+         m._tg_test_hits(src, fns, T)
++    import gc as _gc
++
++    def _best(src):
++        # 代碼審 r8:照 Python 官方 timeit 的建議——重複 5 次取最小(較大的值多半是別的程序干擾)、量行程 CPU 時間、量的時候關垃圾回收
++        best = None
++        was = _gc.isenabled()
++        _gc.disable()
++        try:
++            for _ in range(5):
++                c0 = _time.process_time()
++                _tq_work(src)
++                d = _time.process_time() - c0
++                best = d if best is None else min(best, d)
++        finally:
++            if was:
++                _gc.enable()
++        return best
+     toks = ["try{}catch(", "try{}catch(a){}", "catch(", "class A ", "class A :\n", "fun <", "@Test fun t() {}", "assumeTrue(", "assertEquals(",
+-            "x shouldBe ", "(", "{", "\"", "`", "<", ",\n", "　", "/*", "runCatching{"]
++            "x shouldBe ", "(", "{", "\"", "`", "<", ",\n", "　", "/*", "runCatching{", "try{assertEquals(1,2)}catch(e:Exception){throw e};"]
+     for tok in toks:
+         per = max(1, 15000 // len(tok))
+         def mk(n, tok=tok, per=per):
+             body = "".join(tok * min(per, n - i) + "\n" for i in range(0, n, per))
+             return "package x\nclass A {\n    @Test fun a() {\n" + body + "    }\n}\n"
+         n = 6000
+-        check(f"★前置★ 倍增 {tok!r}:每行都在單行上限內", max(map(len, mk(4 * n).split("\n"))) <= m._TG_MAX_LINE_CHARS, tok)
+-        t0 = _time.monotonic()
+-        _tq_work(mk(n))
+-        t1 = _time.monotonic()
+-        _tq_work(mk(4 * n))
+-        t2 = _time.monotonic()
+-        small, big = max(t1 - t0, 0.02), t2 - t1
+-        check(f"S11 r7 倍增 {tok!r}:輸入 4 倍、耗時不超過 8 倍", big <= 8 * small, (round(small, 3), round(big, 3)))
++        check(f"★前置★ 倍增 {tok!r}:每行都在單行上限內、切得出被測的函式",
++              max(map(len, mk(4 * n).split("\n"))) <= m._TG_MAX_LINE_CHARS and len(m._tg_functions(mk(n), False)[0]) >= 1, tok)
++        small, big = max(_best(mk(n)), 0.005), _best(mk(4 * n))
++        check(f"S11 r8 倍增 {tok!r}:輸入 4 倍、CPU 時間(5 次取最小)不超過 8 倍", big <= 8 * small, (round(small, 4), round(big, 4)))
+ 
+ 
+ def t_rg_methods_expression_body_and_backtick():
+     """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+     Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+     翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+     import time as _time
+     m = _tqg_module()
+     kt = ("class T {\n"
+           "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
