@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-19
+updated: 2026-11-02
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -48,6 +48,8 @@ summary: |-
   VERIFY:[[Verification/2026-06-19_reversibility-governance-ledger]]
   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]post-commit 寫跳過帳★不設 Python 版本下限★:沒有 3.14 的機器正是最常用 --no-verify 的機器,這筆帳不能因為下限寫不進去;它內嵌的「找任何版本 python」清單補上 python3.14,只裝了版本化指令的機器也寫得進去 [test:t_hooks_block_without_python314]
   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]治理帳多一種事件 gate=spec-gate、kind=spec-gate-record(規格閘每次留痕一筆,欄位同審查帳那筆),不在 _GOV_LOCAL_PAIRS、寫進版控那本;doctor S12 段只讀 spec-gate-run,不受影響 [出處:規格閘留痕在乾淨 clone 不見] [因:這是推送閘要讀的留痕,不是例行觀察] [test:t_gov_readers_ignore_spec_gate_record]
+  WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]code-loop 放行事件的 nodes 只在 pass 驗過判定或輕量放行時帶編號;舊事件、skip、沒有審查帳的專案都是空的,統計要限 kind=passed [出處:本案設計審 r2] [因:nodes 非空要能代表驗過] [不選:skip 也收 --loop]
+  WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]pass 被擋落 `kind=blocked`、note 開頭 `pass-refused:`,會併進「硬擋 code-loop」計數且 gov 去重會折同提交連續擋下,要數就讀原檔 [出處:本案設計審 r1] [因:撤除條件要資料] [不選:新開事件種類]
 decisions:
   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
     id: d1

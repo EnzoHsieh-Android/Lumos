@@ -1355,7 +1355,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
                     continue
                 # 規格閘留痕不是審查輪(雙向門放行_計劃 S16);處置閘本來就略過,凍結與回放要同一種讀法,
                 # 不然整個迴圈被判成「有的帶輪次有的不帶」而拒凍(2026-09-26 兩份設計審過閘後凍結被擋)
-                if isinstance(d, dict) and d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d):
+                if _loop_review_row(d, loop_id):
                     raw.append(line)
                     parsed.append(d)
         except OSError as e:
@@ -1366,7 +1366,7 @@ def cmd_loop_replay(env, loop_id, golden=None, freeze=False, spec=None, note=Non
     def _sha(s):
         return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
-    if any(ch in str(loop_id) for ch in ("/", "\\", "..")):
+    if any(ch in str(loop_id) for ch in _LOOP_ID_PATH_CHARS):
         print(f"擋下:loop 編號含路徑字元({loop_id!r})——golden 目錄以編號命名,不受理(目錄安全+週跑掃描只看一層)", file=sys.stderr)
         return 2
     if freeze:
@@ -16082,7 +16082,7 @@ _STATS_ABSENT_DISCLAIMER = (
 # 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
 # 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
 # mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
-_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號", "bound-tests": "no-config/no-pins 也記一筆,採用率看得見", "nodehome-check": "此來源記的是程式檔路徑(另有 pairs 欄記被擋的檔與節點配對)"}
+_STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號", "code-loop": "此來源記的是審查編號(2026-11 起的 pass;舊事件與 skip 是空的)", "bound-tests": "no-config/no-pins 也記一筆,採用率看得見", "nodehome-check": "此來源記的是程式檔路徑(另有 pairs 欄記被擋的檔與節點配對)"}
 
 
 def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, escapes=None):
@@ -17318,10 +17318,31 @@ def _is_outcome_row(d):
     """結局帳列(--outcome;結構上不能帶輪次、不帶報告)。它不是審查輪,讀審查列的入口在讀帳那一處濾掉(跟規格閘留痕同一個位置),呼叫端不再各自重濾。
     實際入口(記帳與迴圈工具小修 代碼審 r1 通才 1、r2 正確性 1/4、r3 邊界 2 與架構 1 逐一查過):
     _canary_ledger_scan(loop next、canary record、跑滿回顧、修正關卡)、_loop_status_read(loop status 各模式與處置閘)、
-    cmd_loop_replay 的讀帳、_spec_gate_ledger_index(推送前的規格閘一族)、cmd_loop_verify_progress、cmd_loop_list、cmd_loop_canary_stats、
+    cmd_loop_replay 的讀帳與 _codeloop_pass_rows(code-loop pass)、_spec_gate_ledger_index(推送前的規格閘一族)、cmd_loop_verify_progress、cmd_loop_list、cmd_loop_canary_stats、
     _loop_first_ts_key、cmd_severity_check、cmd_loop_escape 與 _escape_review_rows_by_loop(逃逸歸因的審查迴圈)。
     ★刻意不濾★:cmd_gov(結局帳本來就是自主迴圈彙總要讀的)、_door_for_loop 與 _auto_escape(只看規格閘留痕或逃逸帳)、run_doctor 的帳檢查。"""
     return isinstance(d, dict) and "outcome" in d
+
+
+_LOOP_ID_PATH_CHARS = ("/", "\\", "..")   # 編號會拼進判定檔目錄與計劃檔名,不准帶這些(凍結、code-loop pass 與找計劃共用)
+
+
+def _loop_review_row(d, loop_id):
+    """這一列算不算這個迴圈的審查列(判定閉包的篩法;凍結、回放與 code-loop pass 共用)。"""
+    return isinstance(d, dict) and d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d)
+
+
+def _light_ratcheted(rows):
+    """light 棘輪:這個編號曾抓到 major 以上,light 從此失效(loop next 的 escalate 與 code-loop pass 共用)。"""
+    return any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rows)
+
+
+def _loop_last_round_spec(rows):
+    """最後一輪自己記的 spec_path(字串、非空),沒記回 None:更早輪次不是這一輪審的東西,不借(loop next 補指令與 code-loop pass 的凍結指令共用)。
+    ★型別要驗★(代碼審 r1 通才席附註:畸形帳的 spec_path 是 list 時直接塞進 f-string 會印出不能執行的指令)。"""
+    rid = rows[-1].get("round") if rows else None
+    tail = [r for r in rows if r.get("round") == rid] if rid else rows[-1:]
+    return next((r["spec_path"] for r in reversed(tail) if isinstance(r.get("spec_path"), str) and r["spec_path"].strip()), None)
 
 
 def _loop_round_format(rows):
@@ -17334,7 +17355,8 @@ def _loop_round_format(rows):
     return "all" if n == len(rows) else "none" if n == 0 else "mixed"
 
 
-_RF_RENUMBER = "  接下來:這個編號記不了這筆,換新編號重記:lumos loop next <新編號> --tier <分級> --orchestrator <claude|codex>"
+_RF_RENUMBER_STEP = "這個編號記不了這筆,換新編號重記:lumos loop next <新編號> --tier <分級> --orchestrator <claude|codex>"
+_RF_RENUMBER = "  接下來:" + _RF_RENUMBER_STEP
 
 
 def _none_reserved_lines(findings_set, folded_set, accepted_set, regression_set, refuted_set):
@@ -18657,7 +18679,7 @@ def _light_gate_fails(rounds, spec, min_seats=None, cur_sha_override=None):
     ★ratchet 沒有開關★:規格閘推送前的輕量審也吃這個預設判法(代碼審 code-規格閘不做節 r7:r6 加的 ratchet=False 讓共用謂詞能略過自己的 ratchet,拿掉)。"""
     # ratchet 最先:任一 caught/none 筆 severity≥major → 永久 FAIL(missed 筆不觸發;
     # none=協議停用制的無植入輪——不納會使停用後 major 輪失去永久升級,閘變寬鬆)
-    if any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rounds):
+    if _light_ratcheted(rounds):
         return "ratchet", []
     if not rounds:
         return "empty", []
@@ -18752,17 +18774,14 @@ def cmd_loop_compress(file, as_json=False):
 # 那是既有的、寫入當下就落的、可重算的東西,不新增任何要人維護的狀態。
 # ★關門事件分成兩組,因為兩本帳認迴圈的方式不一樣★(2026-09-07 代碼審 r1,三席獨立抓到)
 # 設計審那組把迴圈編號寫進 nodes 欄(109 筆全部有);
-# ★code-loop 那組的 nodes 欄永遠是空陣列★(148 筆全空)——因為那本帳認的是「分支 + 版本」
-# 不是迴圈編號,兩套識別體系從來沒建過對應關係。
+# ★code-loop 那組當時 nodes 欄永遠是空陣列★(148 筆全空)——因為那本帳認的是「分支 + 版本」
+# 不是迴圈編號,兩套識別體系從來沒建過對應關係(2026-11 起 pass 才帶編號,舊事件與 skip 仍是空的)。
 # 第一版把兩組混在同一個集合裡用 nodes 比對,結果 code-loop 那半是死碼,
 # 而且**實測有 23 個早就過閘的 code 迴圈被報成「空轉候選」**(code-234 / code-kill / code-cochange …)。
 LOOP_CLOSE_EVENTS = {("design-loop", "converged"), ("design-loop", "cap-reached"),
                      ("design-loop", "rewrite")}
-# code-loop 這組只能從自由文字的 detail 認編號(慣例上 detail 開頭就是編號)。
-# ★這是啟發式,不是保證★:detail 是人寫的欄位,沒有任何機制強制它以編號開頭。
-# 失效方式=編號沒寫在 detail 裡 → 那個迴圈會被報成沒關門(偏保守,不會反過來誤報成關了)。
-# REVISIT:2026-11-07 正解是讓 code-loop pass/skip 收一個 --loop 參數、把編號寫進 nodes,
-#   跟設計審那組同形;那要動到推送閘會呼叫的路徑,本批不做。
+# code-loop 這組:pass 帶 --loop 的事件編號在 nodes(留痕驗過審查_計劃);舊事件與 skip 只能從自由文字的 detail 認編號。
+# ★detail 那條是啟發式,不是保證★:失效方式=編號沒寫在 detail 裡 → 那個迴圈會被報成沒關門(偏保守,不會反過來誤報成關了)。
 LOOP_CLOSE_EVENTS_BY_DETAIL = {("code-loop", "passed"), ("code-loop", "skipped")}
 # ★這兩組以外的 (gate, kind) 都要在下面這張表裡分類過★——新增一種收工事件卻忘了歸類,
 # 守衛會翻紅(t_loop_close_kinds_classified)。沒有這道,新的 kind 只會被靜默當成「沒關門」。
@@ -18836,8 +18855,8 @@ def _loop_close_stamps(env, known_loops=()):
 
     兩條認法(理由見 LOOP_CLOSE_EVENTS 上面那段):
     - 設計審那組:編號寫在 nodes 欄,直接比對。
-    - code-loop 那組:nodes 永遠空,只能從自由文字 detail 認編號——所以要先知道有哪些編號
-      (known_loops,從審查帳來),再看 detail 裡有沒有出現。★啟發式,失效偏保守★。
+    - code-loop 那組:nodes 有編號就直接認(2026-11 起 pass 帶 --loop 寫進去,不靠 known_loops);舊事件與 skip 的 nodes 是空的,
+      只能從自由文字 detail 認編號——所以要先知道有哪些編號(known_loops,從審查帳來),再看 detail 裡有沒有出現。★啟發式,失效偏保守★。
     """
     import json, re as _re
     path = env.vault.parent / ".governance-log.jsonl"
@@ -18863,11 +18882,13 @@ def _loop_close_stamps(env, known_loops=()):
             continue
         gk = (d.get("gate"), d.get("kind"))
         ts = d.get("ts") or ""
-        if gk in LOOP_CLOSE_EVENTS:
-            for n in (d.get("nodes") or []):
-                if isinstance(n, str) and _loop_ts_newer(ts, stamps.get(n, "")):
+        nodes = d.get("nodes") if isinstance(d.get("nodes"), list) else []
+        named = [n for n in nodes if isinstance(n, str) and n]
+        if gk in LOOP_CLOSE_EVENTS or gk in LOOP_CLOSE_EVENTS_BY_DETAIL:
+            for n in named:
+                if _loop_ts_newer(ts, stamps.get(n, "")):
                     stamps[n] = ts
-        elif gk in LOOP_CLOSE_EVENTS_BY_DETAIL and ordered:
+        if gk in LOOP_CLOSE_EVENTS_BY_DETAIL and not named:
             detail = d.get("detail") or ""
             for lid in ordered:
                 if _re.search(r"(?<![\w-])" + _re.escape(lid) + r"(?![\w-])", detail):
@@ -19183,10 +19204,12 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
                 try:
                     d = json.loads(line)
                 except ValueError:
+                    d = None
+                if not isinstance(d, dict):
                     print("擋下:審查記錄檔有讀不懂的行,輪次順序不可信,整個檔先不信"
                           "(修好或搬走壞行再重跑)", file=sys.stderr)
                     return 2
-                if d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d):   # 規格閘留痕(雙向門放行_計劃 S16)與結局帳都不是審查輪
+                if _loop_review_row(d, loop_id):   # 規格閘留痕(雙向門放行_計劃 S16)與結局帳都不是審查輪
                     rounds.append(d)
     except OSError as e:
         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
@@ -19432,7 +19455,7 @@ def _plan_for_loop(env, loop_id):
     """迴圈編號 → 計劃筆記(vault 相對);找不到回 None。
     代碼審編號先去掉 code- 前綴;檔名比對兩邊都做 NFC(Projects/逃逸帳對得起來_計劃 第四節)。"""
     lid = nfc(str(loop_id or ""))
-    if any(ch in lid for ch in ("/", "\\", "..")) or not lid.strip():
+    if any(ch in lid for ch in _LOOP_ID_PATH_CHARS) or not lid.strip():
         return None   # 迴圈編號帶路徑字元不查(r1 資安席:否則拼出的路徑可能跳出 Projects/)
     if lid.startswith("code-"):
         lid = lid[len("code-"):]
@@ -19987,7 +20010,7 @@ def _loop_status_read(env, loop_id, disposal=False, repo=None):
     try:
         if path.exists():
             for d in _canary_ledger_rows(path, bad=bad):
-                if d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d):   # 結局帳不是審查輪
+                if _loop_review_row(d, loop_id):   # 結局帳不是審查輪
                     rounds.append(d)
     except OSError as e:
         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
@@ -20393,20 +20416,22 @@ def _ledger_physical_lines(f):
             return
 
 
-def _canary_ledger_rows(path, errors="strict", bad=None):
+def _canary_ledger_rows(path, errors="strict", bad=None, raw_out=None):
     """審查帳逐行讀的唯一核心(審查輪那一族的 _canary_ledger_scan、規格閘那一族的 _spec_gate_ledger_index、loop status 的 _loop_status_read 共用,
     篩法各在呼叫端;代碼審 code-規格閘不做節 r7 架1、r8 G1):真的逐行——一次只讀一塊、照 _ledger_lines 的規則切出一行就處理一行
     (_ledger_physical_lines;r7 併1 拿掉整本 read_bytes,r8 併2、合4 拿掉只認 \\n 的 `for chunk in f`),丟出解析成物件的列。
     空行跳過;壞行、超深巢狀行(RecursionError)、不是物件的行跳過,bad 給了串列就把那幾行的行號(跟 _ledger_lines 同一套數法)加進去。
     errors="strict":某一行不是 UTF-8 → 丟 UnicodeDecodeError,start/end 換算成整本帳的位元組位置(多位元組字元不含 \\n、\\r 位元組,
-    之前的行都解得開,所以跟整本解碼時在同一個位元組出錯);errors="replace":換成替代字元照讀。檔讀不到 → OSError(開始逐列取時才丟)。"""
+    之前的行都解得開,所以跟整本解碼時在同一個位元組出錯);errors="replace":換成替代字元照讀。檔讀不到 → OSError(開始逐列取時才丟)。
+    raw_out 給了串列就把丟出去那一列的解碼原文(不 strip)依序加進去:判定閉包的 all_row_shas 是對原文算的(留痕驗過審查_計劃)。"""
     import json as _json
     with Path(path).open("rb") as f:
         for no, raw, off in _ledger_physical_lines(f):
             try:
-                line = raw.decode("utf-8", errors=errors).strip()
+                text = raw.decode("utf-8", errors=errors)
             except UnicodeDecodeError as e:
                 raise UnicodeDecodeError(e.encoding, e.object, off + e.start, off + e.end, e.reason) from None
+            line = text.strip()
             if not line:
                 continue
             try:
@@ -20414,6 +20439,8 @@ def _canary_ledger_rows(path, errors="strict", bad=None):
             except (ValueError, RecursionError):
                 d = None
             if isinstance(d, dict):
+                if raw_out is not None:
+                    raw_out.append(text)
                 yield d
             elif bad is not None:
                 bad.append(no)
@@ -22861,8 +22888,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         return 0 if phase == "converged" else 1
 
     # ⓪ escalate:light ratchet 永久態最先短路
-    if light and any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker")
-                     for r in rounds):
+    if light and _light_ratcheted(rounds):
         return emit("escalate", {"note": "這個編號曾抓到 major 以上的問題,light 最寬鬆的規則從此失效——停掉這個編號,開新的(原編號加 -std)換嚴格規則接著審"})
     if not rounds:
         return emit("plant-canary")
@@ -22872,11 +22898,7 @@ def cmd_loop_next(env, loop_id, tier=None, as_json=False, need=2, spec=None, rep
         # 但沒告訴你 spec 在哪。那個資訊就在帳上。
         # ★只有「最後一輪自己記了材料」才敢把指令補完★(代碼審 r1 外家否決席判 major):
         # 拿更早輪次的材料去判最後一輪是明確錯誤的輸入,不是保守退化。
-        # ★型別要驗★(代碼審 r1 通才席附註:畸形帳(spec_path 是 list)會被直接塞進 f-string,
-        # 印出 `--spec [1, 2, 3]` 這種不能執行的指令——不會炸,但「幫你補完指令」的承諾是空話)。
-        _hint = rounds[-1].get("spec_path") if rounds else None
-        if not isinstance(_hint, str) or not _hint.strip():
-            _hint = None
+        _hint = _loop_last_round_spec(rounds)
         if _hint:
             # ★閘的模式與 repo 根都不准猜死★(同席 major):light 帳要 --light,
             # repo 根用 vault 往上找 .git 那支既有的,不是寫死 `.`(從子目錄呼叫就錯)。
@@ -66026,9 +66048,9 @@ def _codeloop_write(repo_root, branch, status, note, head_sha, ts):
         json.dumps(rec, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
+def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts, loop=None):
     """把 code-loop 事件 append 到 docs/.governance-log.jsonl(同 bypass-log 哲學)。
-    vault 找不到 / 非 git repo → 靜默跳過。"""
+    vault 找不到 / 非 git repo → 靜默跳過。loop 給了就寫進 nodes(只有驗過判定或輕量放行的 pass 會給)。"""
     import json
     import subprocess
     # 找 docs 目錄(repo root 下的 docs/)
@@ -66043,7 +66065,7 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
         event = {
             "ts": ts, "commit": commit_short,
             "gate": "code-loop", "kind": status,
-            "hard": False, "nodes": [],
+            "hard": False, "nodes": [loop] if loop else [],
             "detail": note, "branch": branch, "head_sha": head_sha,
         }
         with open(path, "a", encoding="utf-8") as f:
@@ -66051,6 +66073,200 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts):
     except OSError:
         pass
 
+
+
+# ── code-loop pass 寫入前驗凍結判定(Projects/留痕驗過審查_計劃)──────────────────
+# 防的是忘記與順序錯,不是偽造:帳上編號本來就是記帳的人自己填的,所以不驗迴圈跟這條分支有沒有關係。
+# 擋在 pass 不在 check:check 不知道分支對應哪個迴圈,綁定只在 pass 當下才產生;判定是凍結當下的一次性事實,
+# 不像合約測試結果隨提交變。
+_CODELOOP_SKIP_CMD = 'lumos code-loop skip --note "<為什麼不審>"'
+
+
+def _codeloop_refusal(code, why, care, *steps):
+    """擋下一條:(落帳用的代碼, 三段式訊息行)。"""
+    return code, [f"擋下:{why}", f"  在意的原因:{care}", "  接下來:", *(f"    {s}" for s in steps)]
+
+
+def _codeloop_path_arg(path, placeholder):
+    """印給人照抄的路徑:照鄰居走 shlex.quote;帶控制字元的留佔位——清掉就成了另一個路徑,照抄會指到別的檔。"""
+    import shlex as _shlex
+    text = str(path)
+    return _shlex.quote(text) if _esc_clean(text, len(text)) == text else placeholder
+
+
+def _codeloop_pass_spec_arg(repo_root, rows):
+    """印給人照抄的 --spec 值:最後一輪記的材料,檔案要在、要在 repo 裡;取不到留佔位,不猜。"""
+    hint = _loop_last_round_spec(rows)
+    root = Path(repo_root).resolve()
+    try:
+        if not hint or _repo_path_unsafe(root, hint) or not (root / hint).is_file():
+            return "<凍結 patch>"
+    except (OSError, ValueError):       # 路徑含 NUL、解析不動
+        return "<凍結 patch>"
+    return _codeloop_path_arg((root / hint).resolve(), "<凍結 patch>")
+
+
+def _codeloop_freeze_args(repo_root, loop, rows):
+    """凍結指令要印的三個值:編號、--spec、--repo。"""
+    return _rf_qloop(loop), _codeloop_pass_spec_arg(repo_root, rows), _codeloop_path_arg(Path(repo_root).resolve(), "<repo 根>")
+
+
+def _codeloop_pass_precheck(loop):
+    """編號本身的檢查,讀帳之前。"""
+    if not loop:
+        return _codeloop_refusal("no-loop", "這個專案有審查帳,pass 要帶迴圈編號",
+                             "工具要驗這個迴圈真的審完,編號只有這時候才綁得上",
+                             'lumos code-loop pass --loop <編號> --note "<審了什麼>"', f"不審走 {_CODELOOP_SKIP_CMD}")
+    q = _rf_qloop(loop)
+    if any(ch in loop for ch in _LOOP_ID_PATH_CHARS):
+        return _codeloop_refusal("bad-loop", f"迴圈編號含路徑字元({q})", "判定檔目錄以編號命名,這種編號會讀到迴圈以外的檔",
+                             "換成帳上的編號", f"不審走 {_CODELOOP_SKIP_CMD}")
+    if _roster_kind(loop) != "code":
+        return _codeloop_refusal("bad-loop", f"{q} 不是代碼審迴圈,編號要以 code- 開頭",
+                             "留痕記的是代碼審通過,設計審的判定不能代替",
+                             "換成這次代碼審的編號", f"不審走 {_CODELOOP_SKIP_CMD}")
+    return None
+
+
+def _codeloop_pass_rows(ledger, loop):
+    """讀帳 → (這個迴圈的審查列, 對應的原文, 擋下或 None)。壞行範圍是整本帳(歸不到迴圈),同處置閘;
+    非 UTF-8 用替代字元讀不算壞行,因為指紋要跟凍結時同一種解碼。"""
+    bad, raws, rows, texts = [], [], [], []
+    try:
+        for r in _canary_ledger_rows(ledger, errors="replace", bad=bad, raw_out=raws):
+            text = raws.pop()              # 邊讀邊篩:整本帳不留在記憶體裡,只留這個迴圈的列
+            if _loop_review_row(r, loop):
+                rows.append(r)
+                texts.append(text)
+    except OSError as e:
+        return None, None, _codeloop_refusal("ledger-unreadable", f"審查帳讀不到({e.__class__.__name__})",
+                                         "讀不到帳就驗不了判定", "修好 docs/.canary-log.jsonl", f"不審走 {_CODELOOP_SKIP_CMD}")
+    if bad:
+        shown = "、".join(str(n) for n in bad[:5])
+        return None, None, _codeloop_refusal("ledger-bad", f"審查帳第 {shown} 行讀不懂", "壞行可能正好是這個迴圈的紀錄,跳過會判錯輪",
+                                         "修好那幾行(有版控就對照上一版)", f"不審走 {_CODELOOP_SKIP_CMD}")
+    if not rows:
+        return None, None, _codeloop_refusal("no-rows", f"帳上沒有迴圈 {_rf_qloop(loop)} 的審查紀錄", "沒有紀錄就是這個編號沒審過,或打錯了",
+                                         f"lumos loop next {_rf_qloop(loop)} --tier <分級> --orchestrator <claude|codex> 開迴圈",
+                                         f"不審走 {_CODELOOP_SKIP_CMD}")
+    return rows, texts, None
+
+
+def _codeloop_pass_shape(rows, loop):
+    """輪次形狀 → (擋下或 None, 是否輕量放行)。無輪次與混用的帳凍不了,所以這裡不給凍結指令。"""
+    tier, fmt = _loop_anchor_tier(rows), _loop_round_format(rows)
+    if fmt == "mixed" or (fmt == "none" and tier != "light"):
+        return _codeloop_refusal("roundless", f"迴圈 {_rf_qloop(loop)} 的帳{'輪次混用' if fmt == 'mixed' else '沒有輪次'},凍結不了判定",
+                             "沒有判定就驗不了這個迴圈審完沒", _RF_RENUMBER_STEP, f"不審走 {_CODELOOP_SKIP_CMD}"), False
+    if fmt != "none":
+        return None, False
+    if _light_ratcheted(rows):
+        std = _rf_qloop(f"{loop}-std")
+        return _codeloop_refusal("light-ratchet", f"輕量迴圈 {_rf_qloop(loop)} 曾抓到 major 以上,輕量規則已失效",
+                             "這個編號的問題沒有判定能證明收掉了",
+                             f"lumos loop next {std} --tier standard --orchestrator <claude|codex> 開完整迴圈", f"不審走 {_CODELOOP_SKIP_CMD}"), False
+    return None, True
+
+
+def _codeloop_pass_read_verdict(repo_root, loop, rows):
+    """判定檔 → (判定, 擋下或 None)。形狀不對一律擋:replay 對缺欄位是靜默放過,這裡是放行依據不能照抄。"""
+    import json as _j
+    q, spec, repo = _codeloop_freeze_args(repo_root, loop, rows)
+    rel = Path("governance") / "replay" / loop / "verdict.json"
+    path = Path(repo_root) / rel
+    try:
+        unsafe = _repo_path_unsafe(repo_root, rel)
+    except (OSError, ValueError):
+        unsafe = ("outside", path)
+    if unsafe:
+        return None, _codeloop_refusal("bad-verdict", f"判定檔路徑不安全:{_esc_clean(_repo_path_unsafe_why(repo_root, rel, unsafe), 200)}",
+                                       "捷徑可能指到 repo 外,讀到的就不是這個迴圈的判定", f"不審走 {_CODELOOP_SKIP_CMD}")
+    if not os.path.lexists(path):
+        return None, _codeloop_refusal("no-verdict", f"迴圈 {q} 還沒有凍結判定", "判定檔是審查做完的證明,手冊也規定留痕前要凍結",
+                                   f"lumos loop replay {q} --freeze --spec {spec} --repo {repo}",
+                                   f"舊帳形狀凍不成時走 {_CODELOOP_SKIP_CMD}")
+    raw, err = _retro_read_bytes(path, limit=None)
+    try:
+        v = _j.loads(raw.decode("utf-8")) if raw is not None else None
+    except (ValueError, RecursionError):
+        v = None
+    res = v.get("verdict") if isinstance(v, dict) else None
+    ok = (isinstance(res, dict) and type(res.get("rc")) is int and isinstance(res.get("fails", []), list)
+          and isinstance(v.get("round"), str) and v["round"]
+          and isinstance(v.get("all_row_shas"), list) and all(isinstance(x, str) for x in v["all_row_shas"]))
+    if ok:
+        return v, None
+    return None, _codeloop_refusal("bad-verdict", f"判定檔讀不懂({err or '不是合法的判定檔'})", "判定檔壞了就驗不了審查做完沒",
+                               f'lumos loop replay {q} --freeze --spec {spec} --repo {repo} --note "<判定檔壞掉,重凍>"',
+                               f"不審走 {_CODELOOP_SKIP_CMD}")
+
+
+def _codeloop_pass_accept_risk(repo_root, loop, rid):
+    """判定失敗時讀人裁紀錄 → (是否接受風險, 讀帳錯誤或 None)。最新一筆人裁才算,而且要涵蓋判定輪 rid。"""
+    events, err = _retro_gov_events(repo_root, loop)
+    if err:
+        return False, err
+    decisions = [e for e in events if _retro_is_decision(e)]
+    latest = decisions[-1] if decisions else None
+    return bool(latest and latest.get("decision") == "accept-risk" and rid in latest["rounds"]), None
+
+
+def _codeloop_pass_check_verdict(repo_root, loop, rows, raws, verdict):
+    """判定還代表現帳嗎、結果過了嗎 → (擋下或 None, 放行時多印的一句或 None)。先比指紋:判定不代表現帳時結果沒有意義,
+    舊判定失敗而補輪收斂的迴圈才走得出來。雙向比,判定後多一席或多一輪就不代表了;逐字重複列不算變(合併留下的),所以比集合。"""
+    import hashlib
+    q, spec, repo = _codeloop_freeze_args(repo_root, loop, rows)
+    if {hashlib.sha256(t.encode("utf-8")).hexdigest() for t in raws} != set(verdict["all_row_shas"]):
+        return _codeloop_refusal("stale-verdict", f"迴圈 {q} 的帳在凍結之後變了", "判定已經不代表現在的帳",
+                             f'lumos loop replay {q} --freeze --spec {spec} --repo {repo} --note "<凍結後又記了什麼>"',
+                             f"不審走 {_CODELOOP_SKIP_CMD}"), None
+    res = verdict["verdict"]
+    if res["rc"] == 0:
+        return None, None
+    accepted, err = _codeloop_pass_accept_risk(repo_root, loop, verdict["round"])
+    if accepted:
+        return None, f"判定沒過,但最新人裁接受風險(輪 {_esc_clean(verdict['round'], 40)}),照人裁放行"
+    fails = "、".join(_esc_clean(x, 40) for x in res.get("fails", [])[:5] if isinstance(x, str)) or "未列"
+    return _codeloop_refusal("verdict-failed", f"迴圈 {q} 的判定沒過(卡在:{fails})" + (f";治理帳讀不到人裁紀錄({err})" if err else ""),
+                         "留痕代表審查做完,判定沒過就不算",
+                         f"lumos loop status {q} --disposal --spec {spec} --repo {repo} 看原因",
+                         "把問題修完、加一輪再凍結;跑滿上限的走 lumos loop cap-decision",
+                         f"都不適用就走 {_CODELOOP_SKIP_CMD}"), None
+
+
+def _codeloop_pass_verify(repo_root, loop):
+    """pass 寫入前的判定 → (擋下或 None, 要寫進 nodes 的編號或 None, 放行時多印的一句或 None)。"""
+    ledger = Path(repo_root) / "docs" / ".canary-log.jsonl"
+    if not os.path.lexists(ledger):        # vault-free 專案的相容邊界:沒有帳就沒有東西可驗,nodes 不寫,非空才代表驗過
+        return None, None, "這個專案沒有審查帳,沒有驗"
+    refused = _codeloop_pass_precheck(loop)
+    if refused:
+        return refused, None, None
+    rows, raws, refused = _codeloop_pass_rows(ledger, loop)
+    if refused:
+        return refused, None, None
+    refused, light = _codeloop_pass_shape(rows, loop)
+    if refused or light:
+        return refused, None if refused else loop, None
+    verdict, refused = _codeloop_pass_read_verdict(repo_root, loop, rows)
+    if refused:
+        return refused, None, None
+    refused, say = _codeloop_pass_check_verdict(repo_root, loop, rows, raws, verdict)
+    return refused, None if refused else loop, say
+
+
+def _codeloop_pass_gate(repo_root, loop, head_sha, branch):
+    """跑判定、印訊息、擋下就落帳 → (放不放行, 要寫進 nodes 的編號或 None)。"""
+    refused, node, say = _codeloop_pass_verify(repo_root, loop)
+    if refused:
+        code, lines = refused
+        print("\n".join(lines), file=sys.stderr)
+        _gate_event_or_warn(repo_root, "code-loop", "blocked", f"pass-refused:{code} loop={_esc_clean(str(loop or '-'), 200)}",
+                            hard=True, head_sha=head_sha, ref=branch)
+        return False, None
+    if say:
+        print(f"  {say}")
+    return True, node
 
 
 # ── 受波及合約測試真跑閘(Projects/受波及合約測試真跑閘_計劃;design-loop bound-tests-gate-c r1 PASS)────
@@ -67488,7 +67704,7 @@ def _codeloop_record_valid_ex(repo_root, rec_sha, marker_sha, timeout=None):
             # 只丟兩個 sha 的話,人看不出是自己剛做的壓提交造成的,也不知道要重跑哪兩個指令。
             return (False, (f"記錄 sha {rec_sha[:8]} 不是目標 {marker_sha[:8]} 的祖先——多半是壓過提交或 rebase 改寫過歷史"
                            "(內容沒變也一樣失效)。重來:表態 `lumos pitfalls --diff <範圍> --dispositions-template --carry`"
-                           " 再 `lumos code-loop dispositions <檔>`;審查留痕重跑 `lumos code-loop pass --note \"…\"`"), False)
+                           " 再 `lumos code-loop dispositions <檔>`;審查留痕重跑 `lumos code-loop pass --loop <編號> --note \"…\"`"), False)
         # ★--no-renames★:改名偵測只列新路徑,把程式檔改名搬進簿記資料夾(還能順便換副檔名)就看不到「程式檔被刪」;
         # ★-z★:預設會把中文等檔名加引號印出(core.quotepath),簿記資料夾裡的中文檔名就比不到前綴(回頭重讀代碼審 r1 資安席 F4)
         # ★--raw★(回頭重讀代碼審 r3 資安席 F2):連兩邊的檔案模式一起拿,簿記資料夾裡可執行的檔要認得出來;路徑清單跟 --name-only 同一份
@@ -68679,15 +68895,15 @@ def _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note):
 
 
 def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None, disp_file=None, qid=None, bound_advisory=False,
-                  keep_going=False):
+                  keep_going=False, loop=None):
     """code-loop 留痕讀寫。
-    pass  → status=passed(綁 HEAD sha);
+    pass  → status=passed(綁 HEAD sha);有審查帳時要帶 --loop,寫入前驗凍結判定(_codeloop_pass_verify),沒過回 rc2;
     skip  → status=skipped(綁 HEAD sha,留逃生痕);
     dispositions <檔> → 棧別提問表態(表態閘 2026-09-09;派審查員之前寫,skip 也要先表態);
     recall-miss <id> → 審查席抓到未觸發題的問題時登記一筆;
     check → 跑判定式回報 verdict(blocked=合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕);--json 輸出 verdict dict。
     check --keep-going(推送前掛鉤用)→ 六道判定(安全證據、Android 端到端驗收、合約測試、表態、新增告警、代碼審留痕)都跑完、每道擋下各印各的訊息,最後多印一行 LUMOS-BLOCKS:<種類,…>(掛鉤唯一的機讀通道)。
-    rc: 0=OK / 1=check:blocked / 2=參數錯。
+    rc: 0=OK / 1=check:blocked / 2=參數錯或 pass 被擋。
     """
     # resolve repo root
     if repo is not None:
@@ -68732,8 +68948,13 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, 
 
     if subcmd in ("pass", "skip"):
         status = "passed" if subcmd == "pass" else "skipped"
+        node = None
+        if subcmd == "pass":
+            ok, node = _codeloop_pass_gate(repo_root, loop, head_sha, branch)
+            if not ok:
+                return 2
         _codeloop_write(repo_root, branch, status, note or "", head_sha, ts)
-        _codeloop_gov_log(repo_root, branch, status, note or "", head_sha, ts)
+        _codeloop_gov_log(repo_root, branch, status, note or "", head_sha, ts, loop=node)
         label = "✅" if status == "passed" else "⏭"
         what = "審查通過,已留痕" if status == "passed" else "刻意跳過審查,已留痕"
         print(f"{label} code-loop {status}:{what}(分支 {branch},版本 {head_sha[:8]})" + (f"——{note}" if note else ""))
@@ -70938,6 +71159,9 @@ def main():
             _clp.add_argument("--note", default="", help="審查席抓到了什麼(一句;進治理帳)")
         if _clname in ("pass", "skip"):
             _clp.add_argument("--note", default="", help="理由(pass/skip 必填習慣;進治理帳)")
+        if _clname == "pass":
+            _clp.add_argument("--loop", dest="cl_loop", default=None,
+                              help="這次通過的代碼審迴圈編號(code-<主題>);專案有審查帳就必帶,寫入前驗它的凍結判定")
         if _clname == "security-backing":
             _clp.add_argument("cl_sec_control", metavar="control_id", help="護欄 id")
             _clp.add_argument("--supersede", dest="cl_sec_supersede", action="store_true",
@@ -71228,7 +71452,8 @@ def main():
                              qid=getattr(args, "cl_qid", None),
                              from_json=getattr(args, "cl_from_json", None),
                              bound_advisory=getattr(args, "cl_bound_advisory", False),
-                             keep_going=getattr(args, "cl_keep_going", False))
+                             keep_going=getattr(args, "cl_keep_going", False),
+                             loop=getattr(args, "cl_loop", None))
     if args.cmd == "loop" and args.lcmd == "capture-counts":
         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
         return cmd_loop_capture_counts(None, args.finders,
