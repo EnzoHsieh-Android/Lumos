@@ -10737,6 +10737,13 @@ def t_loop_verify_progress():
         log.write_text("{broken\n", encoding="utf-8")
         r = run(vault, "loop", "verify-progress", "V")
         check("壞行 rc2 fail-closed", r.returncode == 2, r.stderr)
+        # fail-closed:合法 JSON 但不是物件,跟壞行同一種結果(代碼審 r2 邊界席:換共用篩法後曾靜默略過、回 rc0)
+        good = _j.dumps({"ts": "t", "kind": "caught", "loop": "V", "auditor": "s1", "severity": "minor"})
+        for junk in ("[]", "null", "42", '"x"'):
+            log.write_text(f"{good}\n{junk}\n", encoding="utf-8")
+            r = run(vault, "loop", "verify-progress", "V")
+            check(f"不是物件的行 rc2 fail-closed:{junk}", r.returncode == 2 and "Traceback" not in r.stderr and "clean_streak" not in r.stdout,
+                  f"rc={r.returncode} {r.stderr[-200:]}")
     finally:
         shutil.rmtree(root)
     print("  ✓ t_loop_verify_progress")
@@ -27513,7 +27520,7 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         # 簿記 commit:pass 剛 append 的治理帳行(+留痕 json,同屬白名單)
         # ★canary-log/bypass-log 也算簿記(2026-08-27 死結根治):審計記帳在 loop 中發生,
         #   pass 後提交它們原本會失效擋推——補進白名單後不失效(Issues/簿記白名單漏canary與bypass帳)
-        (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"x"}\n', encoding="utf-8")
+        (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"code-x","tier":"light"}\n', encoding="utf-8")
         (Path(d) / "docs" / ".bypass-log.jsonl").write_text('{"ts":"t"}\n', encoding="utf-8")
         # 測試耗時表也是簿記(推送與CI提速 代碼審 r1 合約圖譜席:原本只驗它在清單裡,沒驗留痕真的不失效)
         (Path(d) / "governance").mkdir(exist_ok=True)
@@ -27541,12 +27548,421 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         check("★簿記豁免不外溢:code commit 後照樣 blocked rc1★", r2.returncode == 1,
               f"rc={r2.returncode}\n{r2.stdout[:200]}")
         # 收緊釘②:改寫史(amend)→ 留痕 sha 非祖先,拒認
-        run_lumos(["code-loop", "pass", "--note", "re-pass", "--repo", d])
+        check("★前置★ 第二次 pass 真的寫進去,不然下面的拒認是舊留痕代打",
+              run_lumos(["code-loop", "pass", "--note", "re-pass", "--repo", d, "--loop", "code-x"]) == 0, "")
         g("commit", "-q", "--amend", "-m", "more code (amended)")
         r3 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
                      capture_output=True, text=True)
         check("★改寫史後留痕 sha 非祖先 → 拒認 blocked rc1★", r3.returncode == 1,
               f"rc={r3.returncode}\n{r3.stdout[:200]}")
+
+
+# ── code-loop pass 驗凍結判定(Projects/留痕驗過審查_計劃)───────────────────────
+# 假帳與判定檔都手寫,指紋用 hashlib 直接算原始行:判準來自「凍結判定代表現帳」這條規格,不呼叫被測程式。
+
+def _clp_row(loop, rnd="r1", tier="high", sev="minor", **kw):
+    r = {"ts": "2026-10-20T10:00:00+08:00", "kind": "none", "loop": loop, "auditor": "s1", "severity": sev, "tier": tier}
+    if rnd is not None:
+        r["round"] = rnd
+    r.update(kw)
+    return r
+
+
+def _clp_lines(rows):
+    import json as _j
+    return [_j.dumps(r, ensure_ascii=False) for r in rows]
+
+
+def _clp_ledger(d, lines):
+    (Path(d) / "docs").mkdir(exist_ok=True)
+    (Path(d) / "docs" / ".canary-log.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _clp_verdict(d, loop, lines, rc=0, rnd="r1", fails=()):
+    import hashlib as _h
+    import json as _j
+    p = Path(d) / "governance" / "replay" / loop
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "verdict.json").write_text(_j.dumps({
+        "loop": loop, "round": rnd, "engine_rev": "x", "frozen_at": "t", "spec_path": "s", "spec_sha": "s", "rows": lines,
+        "all_row_shas": sorted(_h.sha256(ln.encode("utf-8")).hexdigest() for ln in lines), "files": {},
+        "verdict": {"rc": rc, "fails": list(fails)}}, ensure_ascii=False), encoding="utf-8")
+
+
+def _clp_repo(d, loop="code-x", rows=None, frozen=True, rc=0, fails=()):
+    _git_init_commit(d)
+    lines = _clp_lines(rows if rows is not None else [_clp_row(loop)])
+    _clp_ledger(d, lines)
+    if frozen:
+        _clp_verdict(d, loop, lines, rc=rc, fails=fails)
+    return lines
+
+
+def _clp_pass(d, *args):
+    return subprocess.run([sys.executable, GRAPHCTL, "code-loop", "pass", "--note", "n", "--repo", str(d), *args],
+                          capture_output=True, text=True)
+
+
+def _clp_events(d):
+    import json as _j
+    p = Path(d) / "docs" / ".governance-log.jsonl"
+    if not p.is_file():
+        return []
+    return [e for e in (_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()) if e.get("gate") == "code-loop"]
+
+
+def _clp_blocked(name, d, r, *words):
+    """擋下要同時成立:rc2、不寫 marker、不寫放行事件、不丟 traceback,訊息含這一條該有的字。"""
+    ev = _clp_events(d)
+    check(f"{name}:rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stdout[-200:]}\n{r.stderr[-300:]}")
+    check(f"{name}:不丟 traceback", "Traceback" not in r.stderr, r.stderr[-300:])
+    check(f"{name}:沒寫放行事件", not [e for e in ev if e.get("kind") in ("passed", "skipped")], str(ev)[:200])
+    check(f"{name}:沒寫 marker", _codeloop_read(d, _git_branch(d)) is None, "")
+    check(f"{name}:落了 pass-refused 帳", any(e.get("kind") == "blocked" and e.get("hard") is True
+                                              and str(e.get("note", "")).startswith("pass-refused:") for e in ev), str(ev)[:300])
+    for w in words:
+        check(f"{name}:訊息含 {w}", w in r.stderr, r.stderr[-400:])
+
+
+def t_codeloop_pass_requires_loop():
+    """[S1] 有審查帳時 pass 沒帶編號要擋。應抓到:拿掉這道判定,pass 就回到寫了就算。"""
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        _clp_blocked("沒帶編號", d, _clp_pass(d), "--loop", "skip")
+        ev = [e for e in _clp_events(d) if e.get("kind") == "blocked"]
+        check("擋下帳帶提交與分支", ev and ev[0].get("head_sha") == _git_head(d) and ev[0].get("ref") == _git_branch(d), str(ev)[:300])
+
+
+def t_codeloop_pass_no_ledger_unchanged():
+    """[S2] 沒有審查帳的專案行為不變。帶編號時不寫 nodes,所以 nodes 非空才代表驗過。"""
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "docs").mkdir()
+        r = _clp_pass(d)
+        check("無帳不帶編號:rc0", r.returncode == 0, r.stderr[-200:])
+        check("無帳不帶編號:也講明沒有驗(--repo 指錯時才看得出來)", "沒有驗" in r.stdout, r.stdout[-200:])
+        check("無帳:照舊寫 marker", (_codeloop_read(d, _git_branch(d)) or {}).get("status") == "passed", "")
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "docs").mkdir()
+        r = _clp_pass(d, "--loop", "code-x")
+        check("無帳帶編號:rc0", r.returncode == 0, r.stderr[-200:])
+        check("無帳帶編號:講明沒有驗", "沒有驗" in r.stdout, r.stdout[-200:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "passed"]
+        check("無帳帶編號:nodes 空", len(ev) == 1 and ev[0].get("nodes") == [], str(ev)[:200])
+
+
+def t_codeloop_pass_rejects_bad_loop():
+    """[S3] 編號壞、帳上沒有、帳壞都要擋,而且講得出出口。"""
+    for loop, word in (("code-a/b", "路徑"), ("code-..x", "路徑")):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d)
+            _clp_blocked(f"壞編號 {loop}", d, _clp_pass(d, "--loop", loop), word)
+    # 帳上有列、判定也綠,只有前綴這道能擋:不然擋下的是「帳上沒有」那條
+    for loop in ("design-x", "codestage"):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, loop=loop)
+            _clp_blocked(f"前綴不對 {loop}", d, _clp_pass(d, "--loop", loop), "要以 code- 開頭")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        _clp_blocked("帳上沒有這個編號", d, _clp_pass(d, "--loop", "code-nope"), "loop next", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        _clp_blocked("編號含空白要加引號", d, _clp_pass(d, "--loop", "code-a b"), "'code-a b'")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rows=[_clp_row("code-x", kind="spec-gate")], frozen=False)
+        _clp_blocked("只有規格閘留痕算沒有列", d, _clp_pass(d, "--loop", "code-x"), "loop next")
+    for name, bad in (("語法壞", "{bad"), ("不是物件", "[]"), ("巢狀過深", "[" * 200000)):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d)
+            _clp_ledger(d, [*lines, bad])
+            _clp_blocked(f"壞行:{name}", d, _clp_pass(d, "--loop", "code-x"), "第 2 行", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d)
+        p = Path(d) / "docs" / ".canary-log.jsonl"
+        p.write_bytes(p.read_bytes().replace(b'"s1"', b'"s\xff1"'))
+        _clp_verdict(d, "code-x", [lines[0].replace('"s1"', '"s�1"')])
+        r = _clp_pass(d, "--loop", "code-x")
+        check("非 UTF-8 用替代字元讀、跟凍結同一種解碼:放行", r.returncode == 0, r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        p = Path(d) / "docs" / ".canary-log.jsonl"
+        p.unlink()
+        p.mkdir()
+        _clp_blocked("帳檔讀不到", d, _clp_pass(d, "--loop", "code-x"), "skip")
+
+
+def t_codeloop_pass_checks_verdict():
+    """[S4] 判定檔是放行依據:不在、壞掉都擋;檔案在、結果 0、帳沒變才寫,而且 nodes 帶編號。"""
+    import json as _j
+    with tempfile.TemporaryDirectory() as d:
+        spec = Path(d) / "r1-snapshot.patch"
+        _git_init_commit(d)
+        spec.write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="r1-snapshot.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("判定檔不存在", d, r, "還沒有凍結判定", "--freeze", "--repo", str(spec.resolve()), "skip")
+        check("判定檔不存在:首凍不用 --note", "--note \"<" not in r.stderr.split("舊帳形狀")[0], r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "r0-舊.patch").write_text("x\n", encoding="utf-8")   # 檔案在,只有「只認最後一輪」能擋下借用
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="r0-舊.patch"), _clp_row("code-x", rnd="r2")]))
+        _clp_blocked("最後一輪沒記材料不借更早輪次", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="gone.patch")]))
+        _clp_blocked("材料檔不存在留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+        _git_init_commit(d)
+        (Path(outside) / "外面.patch").write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path=str(Path(outside) / "外面.patch"))]))
+        _clp_blocked("材料在 repo 外留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "a\x1b[31mb.patch").write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="a\x1b[31mb.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("材料檔名含控制字元", d, r, "--freeze", "<凍結 patch>")
+        check("印出的指令不帶控制字元", "\x1b" not in r.stderr, repr(r.stderr[-200:]))
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "s\nq.patch").write_text("x\n", encoding="utf-8")
+        (Path(d) / "s q.patch").write_text("別的檔\n", encoding="utf-8")   # 控制字元換成空格後剛好是另一個真的檔
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="s\nq.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("檔名帶換行不印成另一個檔", d, r, "<凍結 patch>")
+        check("檔名帶換行:沒有指到另一個檔", "s q.patch" not in r.stderr, repr(r.stderr[-300:]))
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "真的").mkdir()
+        (Path(d) / "真的" / "s.patch").write_text("x\n", encoding="utf-8")
+        (Path(d) / "捷徑").symlink_to(Path(d) / "真的")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="捷徑/s.patch")]))
+        _clp_blocked("材料走 repo 內的捷徑留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    import shlex as _shlex
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        name = "空 白$x.patch"
+        (Path(d) / name).write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path=name)]))
+        r = _clp_pass(d, "--loop", "code-x")
+        want = _shlex.quote(str((Path(d) / name).resolve()))
+        _clp_blocked("含空白與錢字號的材料路徑照抄得回來", d, r, f"--spec {want}", f"--repo {_shlex.quote(str(Path(d).resolve()))}")
+    with tempfile.TemporaryDirectory() as parent:
+        d = str(Path(parent) / "r\nq")
+        Path(d).mkdir()
+        _git_init_commit(d)
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="gone.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("repo 路徑帶換行留佔位", d, r, "--repo <repo 根>")
+        check("repo 路徑帶換行:沒有印成另一個路徑", "r q" not in r.stderr, repr(r.stderr[-300:]))
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+        lines = _clp_repo(d, frozen=False)
+        _clp_verdict(outside, "code-x", lines)
+        (Path(d) / "governance").mkdir()
+        (Path(d) / "governance" / "replay").symlink_to(Path(outside) / "governance" / "replay")
+        _clp_blocked("判定檔上層是捷徑", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+    for fails in (5, {"a": 1}, True, "x"):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d, rc=1)
+            p = Path(d) / "governance" / "replay" / "code-x" / "verdict.json"
+            v = _j.loads(p.read_text(encoding="utf-8"))
+            v["verdict"]["fails"] = fails
+            p.write_text(_j.dumps(v), encoding="utf-8")
+            _clp_blocked(f"判定檔壞:fails={fails!r}", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+    for name, body in (("不是 JSON", "{x"), ("不是物件", "[]"), ("巢狀過深", "[" * 200000),
+                       ("缺 verdict", '{"all_row_shas": [], "round": "r1"}'),
+                       ("缺 all_row_shas", '{"verdict": {"rc": 0}, "round": "r1"}'),
+                       ("缺 round", '{"verdict": {"rc": 0}, "all_row_shas": []}'),
+                       ("rc 型別錯", '{"verdict": {"rc": "0"}, "all_row_shas": [], "round": "r1"}')):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d)
+            (Path(d) / "governance" / "replay" / "code-x" / "verdict.json").write_text(body, encoding="utf-8")
+            _clp_blocked(f"判定檔壞:{name}", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        r = _clp_pass(d, "--loop", "code-x")
+        check("判定 rc0 帳沒變:放行", r.returncode == 0, r.stderr[-300:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "passed"]
+        check("放行事件 nodes 帶編號", len(ev) == 1 and ev[0].get("nodes") == ["code-x"], str(ev)[:200])
+        check("marker 綁 HEAD", (_codeloop_read(d, _git_branch(d)) or {}).get("head_sha") == _git_head(d), "")
+
+
+def t_codeloop_pass_accept_risk():
+    """[S5] 判定失敗要有涵蓋判定輪的接受風險人裁才放行。應抓到:只看有沒有人裁、或比到舊的那筆。"""
+    import json as _j
+
+    def retro(d, *decisions):
+        with open(Path(d) / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as f:
+            for dec, rounds in decisions:
+                f.write(_j.dumps({"gate": "loop-retro", "kind": "cap-decision", "loop": "code-x",
+                                  "decision": dec, "rounds": rounds}, ensure_ascii=False) + "\n")
+
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rc=1, fails=["處置集合"])
+        retro(d, ("extra-round", ["r1"]), ("accept-risk", ["r1"]))
+        r = _clp_pass(d, "--loop", "code-x")
+        check("最新人裁接受風險且含判定輪:放行", r.returncode == 0, r.stderr[-300:])
+        check("放行時講明是人裁", "人裁" in r.stdout, r.stdout[-200:])
+    for name, decs in (("沒有人裁", ()), ("最新是再開一輪", (("accept-risk", ["r1"]), ("extra-round", ["r1"]))),
+                       ("人裁不含判定輪", (("accept-risk", ["r0"]),))):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, rc=1, fails=["處置集合"])
+            retro(d, *decs)
+            _clp_blocked(name, d, _clp_pass(d, "--loop", "code-x"), "處置集合", "--disposal", "--spec", "--repo", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rc=1)
+        p = Path(d) / "docs" / ".governance-log.jsonl"
+        p.mkdir()
+        r = _clp_pass(d, "--loop", "code-x")
+        check("治理帳讀不到:rc2", r.returncode == 2, r.stderr[-300:])
+        check("治理帳讀不到:講明人裁讀不到,不說成沒有人裁", "讀不到人裁紀錄" in r.stderr, r.stderr[-300:])
+        check("治理帳讀不到:不丟 traceback", "Traceback" not in r.stderr, r.stderr[-300:])
+        check("治理帳讀不到:不寫 marker", _codeloop_read(d, _git_branch(d)) is None, "")
+
+
+def t_codeloop_pass_stale_verdict():
+    """[S6] 判定要代表現帳。應抓到:用清單比(重複列誤擋)、單向比(少列漏擋)、看結果在比對之前(舊失敗判定走不出來)。"""
+    import shutil
+    for name, change in (("多一列", lambda ls: ls + _clp_lines([_clp_row("code-x", rnd="r2")])), ("少一列", lambda ls: ls[:1])):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d, rows=[_clp_row("code-x", auditor="a"), _clp_row("code-x", auditor="b")])
+            _clp_ledger(d, change(lines))
+            _clp_blocked(f"凍結後{name}", d, _clp_pass(d, "--loop", "code-x"), "--freeze", "--note")
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d, rc=1, fails=["處置集合"])
+        _clp_ledger(d, lines + _clp_lines([_clp_row("code-x", rnd="r2")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        check("舊判定失敗又補輪:給重凍,不叫人看結果", "--note" in r.stderr and "--disposal" not in r.stderr, r.stderr[-300:])
+    for name, extra in (("規格閘留痕", _clp_row("code-x", kind="spec-gate")), ("結局帳列", _clp_row("code-x", rnd=None, outcome="ok")),
+                        ("別的迴圈", _clp_row("code-y"))):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d)
+            _clp_ledger(d, lines + _clp_lines([extra]))
+            r = _clp_pass(d, "--loop", "code-x")
+            check(f"只多{name}:放行", r.returncode == 0, r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d)
+        _clp_ledger(d, lines + lines)
+        r = _clp_pass(d, "--loop", "code-x")
+        check("逐字重複列不算變:放行", r.returncode == 0, r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        padded = [ln + "  " for ln in _clp_lines([_clp_row("code-x")])]
+        _clp_repo(d, frozen=False)
+        _clp_ledger(d, padded)
+        _clp_verdict(d, "code-x", padded)    # replay 對不 strip 的原文算指紋
+        r = _clp_pass(d, "--loop", "code-x")
+        check("帳行尾端有空白:指紋照原文算,放行", r.returncode == 0, r.stderr[-300:])
+    # 真的跑一次凍結:手寫假判定只證明比對邏輯,這裡證明跟 replay 算出的指紋真的相等
+    v, repo, spec, ledger, *_ = _replay_fx(loop="code-rp")
+    try:
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+        run(v, "loop", "replay", "code-rp", "--freeze", "--spec", str(spec), "--repo", str(repo), expect_rc=0)
+        (repo / "docs").mkdir()
+        shutil.copy(ledger, repo / "docs" / ".canary-log.jsonl")
+        r = _clp_pass(repo, "--loop", "code-rp")
+        check("真凍結出來的判定檔:放行", r.returncode == 0, r.stderr[-300:])
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
+
+
+def t_codeloop_pass_light_loop():
+    """[S7] 輕量無輪次不要判定檔,但曾抓到 major 的 light 已失效(同 loop next 的 escalate)。"""
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rows=[_clp_row("code-x", rnd=None, tier="light")], frozen=False)
+        r = _clp_pass(d, "--loop", "code-x")
+        check("light 無輪次乾淨:放行", r.returncode == 0, r.stderr[-300:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "passed"]
+        check("light 放行也帶編號", ev and ev[0].get("nodes") == ["code-x"], str(ev)[:200])
+    for sev in ("major", "blocker"):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, rows=[_clp_row("code-x", rnd=None, tier="light", sev=sev), _clp_row("code-x", rnd=None, tier="light")], frozen=False)
+            _clp_blocked(f"light 曾抓到 {sev}", d, _clp_pass(d, "--loop", "code-x"), "code-x-std", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rows=[_clp_row("code-x", tier="light")], frozen=False)
+        _clp_blocked("light 有輪次照驗判定檔", d, _clp_pass(d, "--loop", "code-x"), "--freeze")
+
+
+def t_codeloop_pass_roundless_dead_end():
+    """[S8] 凍不了的迴圈不給凍結指令。應抓到:照做也走不通的死路訊息。"""
+    cases = (("標準級無輪次", [_clp_row("code-x", rnd=None, tier="standard")]),
+             ("高風險無輪次", [_clp_row("code-x", rnd=None, tier="high")]),
+             ("分級空白無輪次", [_clp_row("code-x", rnd=None, tier=None)]),
+             ("標準級混用", [_clp_row("code-x", tier="standard"), _clp_row("code-x", rnd=None, tier="standard")]),
+             ("light 混用", [_clp_row("code-x", tier="light"), _clp_row("code-x", rnd=None, tier="light")]))
+    for name, rows in cases:
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, rows=rows, frozen=False)
+            r = _clp_pass(d, "--loop", "code-x")
+            _clp_blocked(name, d, r, "skip", "換新編號")
+            check(f"{name}:不給凍結指令", "--freeze" not in r.stderr, r.stderr[-300:])
+
+
+def t_loop_close_reads_nodes_first():
+    """[S9] 放行事件帶編號就認,不靠備註全文,也不靠審查帳知道有這個編號;舊事件照舊比備註。"""
+    import json as _j
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lm_nodes", GRAPHCTL, loader=SourceFileLoader("lm_nodes", GRAPHCTL))
+    lm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lm)
+
+    class E:
+        pass
+    with tempfile.TemporaryDirectory() as d:
+        env = E()
+        env.vault = Path(d) / "docs" / "kg"
+        env.vault.mkdir(parents=True)
+        gov = Path(d) / "docs" / ".governance-log.jsonl"
+        ev = [{"ts": "2026-10-01T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": ["code-new"], "detail": "沒寫編號"},
+              {"ts": "2026-10-02T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": [], "detail": "code-old r1 收斂"},
+              {"ts": "2026-10-03T00:00:00+08:00", "gate": "code-loop", "kind": "blocked", "nodes": ["code-blocked"], "detail": ""},
+              {"ts": "2026-10-04T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": ["code-new"], "detail": "順帶提到 code-other"},
+              {"ts": "2026-10-05T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": 5, "detail": "x"},
+              {"ts": "2026-10-05T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": "code-str", "detail": "x"},
+              {"ts": "2026-10-05T00:00:00+08:00", "gate": "design-loop", "kind": "converged", "nodes": 5}]
+        gov.write_text("".join(_j.dumps(e, ensure_ascii=False) + "\n" for e in ev), encoding="utf-8")
+        stamps, _ = lm._loop_close_stamps(env, ())
+        check("nodes 有編號:不靠 known_loops 也認", stamps.get("code-new") == ev[3]["ts"], str(stamps))
+        check("nodes 不是清單:不崩、不把字串拆成單字元", not [k for k in stamps if len(k) == 1], str(stamps))
+        check("沒有 known_loops:舊事件認不到", "code-old" not in stamps, str(stamps))
+        stamps, _ = lm._loop_close_stamps(env, ("code-old", "code-new", "code-other"))
+        check("舊事件照舊比備註全文", stamps.get("code-old") == ev[1]["ts"], str(stamps))
+        check("有 nodes 就不讀備註:順帶提到的迴圈不算關門", "code-other" not in stamps, str(stamps))
+        check("擋下事件不算關門", "code-blocked" not in stamps, str(stamps))
+
+
+def t_codeloop_skip_unchanged():
+    """[S10] skip 是出口,不驗也不收編號:判定檔缺、帳有壞行都照常留痕。"""
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d, frozen=False)
+        _clp_ledger(d, [*lines, "{bad"])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "skip", "--note", "不審", "--repo", d], capture_output=True, text=True)
+        check("skip 不驗:rc0", r.returncode == 0, r.stderr[-200:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "skipped"]
+        check("skip 事件 nodes 維持空", len(ev) == 1 and ev[0].get("nodes") == [], str(ev)[:200])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "skip", "--note", "x", "--loop", "code-x", "--repo", d], capture_output=True, text=True)
+        check("skip 不收 --loop", r.returncode == 2 and "--loop" in r.stderr, r.stderr[-200:])
+
+
+def t_codeloop_pass_then_check_passes():
+    """放行後 code-loop check 照舊認留痕:這條串起 pass 與推送閘,應抓到 pass 寫了 check 認不得的形狀。"""
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        lines = _clp_lines([_clp_row("code-x")])
+        _clp_ledger(d, lines)
+        _clp_verdict(d, "code-x", lines)
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d], capture_output=True, text=True)
+        check("★前置★ pass 之前 check 擋下", r.returncode == 1, r.stdout[:200])
+        r = _clp_pass(d)
+        check("★前置★ 沒帶編號被擋", r.returncode == 2, r.stderr[-200:])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d], capture_output=True, text=True)
+        check("被擋的 pass 不讓 check 放行", r.returncode == 1, r.stdout[:200])
+        r = _clp_pass(d, "--loop", "code-x")
+        check("帶編號放行", r.returncode == 0, r.stderr[-200:])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d], capture_output=True, text=True)
+        check("放行後 check 認得留痕", r.returncode == 0, r.stdout[:300])
 
 
 # ── code-loop check ──────────────────────────────────────────────────────────
@@ -50690,8 +51106,8 @@ def t_loop_replay_ignores_spec_gate_rows():
     check("回放:帳上有規格閘留痕照樣對得上凍結判定", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
 
 
-def _replay_fx():
-    """loop replay 測試的共用準備:一個 vault(在 git 裡)、一個卷證 repo(rp 迴圈一輪、報告與快照還沒提交)、帳本一列。
+def _replay_fx(loop="rp"):
+    """loop replay 測試的共用準備:一個 vault(在 git 裡)、一個卷證 repo(一個迴圈一輪、報告與快照還沒提交)、帳本一列。
     → (v, repo, spec, ledger, d, rpt, row, hsp)。"""
     import json as _j
     import hashlib as _h
@@ -50721,7 +51137,7 @@ def _replay_fx():
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     hr = _h.sha256(rpt.read_bytes()).hexdigest()
     hs = _h.sha256(snap.read_bytes()).hexdigest()
-    row = {"ts": "2026-08-20T10:00:00+08:00", "kind": "none", "loop": "rp", "round": "r1",
+    row = {"ts": "2026-08-20T10:00:00+08:00", "kind": "none", "loop": loop, "round": "r1",
            "auditor": "s1", "token": "RP1", "severity": "minor", "findings": 1,
            "findings_set": ["f1"], "folded_set": ["f1"], "accepted_set": [],
            "result_sha256": hsp, "reviewed_sha256": hsp,
@@ -63977,11 +64393,11 @@ def t_loop_list_open_loops():
                               "hard": False, "nodes": [loop], "note": "t"}) + "\n")
 
     def close_codeloop(loop, ts, kind="passed"):
-        """★code-loop 那組:nodes 永遠是空的,編號只在自由文字 detail 裡★
-        (2026-09-07 代碼審 r1,三席獨立抓到)。
+        """★code-loop 舊事件:nodes 是空的,編號只在自由文字 detail 裡★
+        (2026-09-07 代碼審 r1,三席獨立抓到;2026-11 起 pass 帶編號,舊事件與 skip 留在這條路上)。
 
         第一版的 fixture 對 code-loop 也塞 `nodes: [loop]`——**那個形狀現實中不存在**,
-        真寫入端 `_codeloop_gov_log` 把 nodes 寫死成 []。於是測試綠、功能死:
+        當時真寫入端 `_codeloop_gov_log` 把 nodes 寫死成 []。於是測試綠、功能死:
         實測 23 個早就過閘的 code 迴圈被報成「空轉候選」。
         這裡照真寫入端的形狀寫,才驗得到那條路。"""
         with open(gov, "a", encoding="utf-8") as f:
@@ -86453,7 +86869,7 @@ _DR_CI_GATE_STEP_FP = {
     "自主迴圈測試": "70b4cb1b0437f13e",
     "Graph doctor (strict)": "2dedc7be727156cd",
     # 2026-10-20 紅燈訊息補「安全證據不合格」(Projects/安全主張驗收閘_計劃〈四〉要跟著改的地方),指令本身沒改
-    "code-loop gate (push 後盾;體檢 #5)": "3d4d823541f94702",
+    "code-loop gate (push 後盾;體檢 #5)": "38ccb9f3fa803a6c",   # 2026-11-02 錯誤提示改成 pass --loop <編號>(Projects/留痕驗過審查_計劃)
     "note-shape gate (筆記形狀擋;--no-verify 後盾)": "6e82ad401c1f6fa6",
     "drift check (存量漂移檢查;--no-verify 後盾)": "f6f6bc3db304d1e7",
     "note reread reminder (回頭重讀守檔筆記;只提醒、不擋)": "e72639490ed32108",
