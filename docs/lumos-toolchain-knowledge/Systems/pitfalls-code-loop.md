@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-10-15
+updated: 2026-11-02
 self_audit: gpt-5.6-sol/2026-10-03
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
@@ -32,6 +32,7 @@ verified_by:
   - "[[Verification/2026-10-06_引用座標修復主線CI]]"
   - "[[Verification/2026-10-06_異常派工單輸入驗證]]"
   - "[[Verification/2026-10-06_派工單輸入修復主線CI]]"
+  - "[[Verification/2026-11-02_留痕驗過審查實作驗證]]"
 summary: |-
   WHY:高風險代碼審的鏡頭5 通才照 Claude Code 官方 `/code-review` 的八角度審法看(範本 §7.9),仍用 Lumos 子代理跑 [出處:[[Projects/原生代碼審當通才席_計劃]];使用者 2026-10-14 裁] [因:要官方的審法,又要保住子代理的唯讀隔離、自寫引句與嚴重度規則] [不選:無頭跑官方工具再轉格式(設計審 r1 四席指出隔離變弱、第二套引句與等級規則、注入假等級行)] [代價:官方更新不會自動跟上,靠回頭條件定期比對] [test:t_templates_generalist_lens_section]
   WHY:[2026-10-07 [[Projects/合併進主線認合進來那側的留痕_計劃]]]推送檢查遇到合併提交時,審查留痕與表態在目標分支沒有或過期時,改認「合進來那一側」的紀錄:第一個母是推送範圍原始起點、第一個母是第二個母的祖先、合併結果只差簿記檔、紀錄從第二個母那棵樹的帳本讀、紀錄那個提交包含第一個母且之後只動簿記檔(不看分支名);判不了一律不認 [出處:PR #28 合進主線後 CI 紅燈;設計審三輪,每條都是審查席實測打穿過的洞] [因:主線檢查只讀 branch=main 的紀錄,高風險合併請求一合進主線就紅] [不選:合併後在主線補記一筆(沒審過任何東西的紀錄)] [test:t_codeloop_check_merge_side_pass] [test:t_codeloop_check_merge_side_dispositions]
@@ -75,6 +76,8 @@ summary: |-
   WHY:風險分級再多一條升 high:改到起點殘留索引 notes 欄記的、存著殘留決策的那篇筆記(整篇算,改哪一段都升);那筆沒記在哪篇(舊索引)而這次改到圖譜的檔 → 也升;頂端索引記的那篇跟起點不同 → 也升。派工鏡頭把這幾筆也列進「這次新增的殘留」;兩版索引或帳任一邊讀不出、時間不夠時印「算不出來」並照附必答題;合約清單真的殘留變化排最前、不在殘留索引的問答標出來排後面,問答列這次新增的先列;這段接鏡頭的時間預算。治理帳讀不出跟刪改問答分成兩句理由 [出處:代碼審 code-審查收斂規則 r5 資安席 F1、正確性席、通才席、邊界席、併發席] [因:反例清單寫在決策內容裡,逐種比對內容被不同手法連續打穿,改成看「動了那篇沒有」的外層看門] [不選:比對決策內容有沒有變(下一種手法又繞過)] [代價:碰到那篇筆記就要過一輪高風險代碼審] [test:t_pitfalls_residual_decision_note_touched] [test:t_dispatch_lens_residual_unreadable_says_so]
   WHY:「不知道殘留決策在哪篇」分成講得出原因的幾種:索引 notes 欄解不出時記 {"unresolved": 原因}(--add/--reindex 寫,指標指的筆記找不到、格式不合或撞名、筆記在 repo 外),理由句照講原因、不叫人跑 --reindex;舊格式(沒有 notes 欄)叫人 --reindex;起點記的路徑不在起點的樹裡(照 git 存的字串比,大小寫不同也算不在)當成不知道在哪;doctor 把舊格式另報一行、不算成內容不一致。「改到圖譜的檔」只認 _vault_slug_of(bare=True,docs/<名>-knowledge/ 與 docs/knowledge/)底下的 .md [出處:代碼審 code-審查收斂規則 r6 正確性席、邊界席、通才席、架構對齊席] [因:解不出的那筆原本每次改圖譜都升 high、理由叫人跑一次修不好的指令;notes 寫錯路徑或大小寫時靜默判 light;圖譜檔判定另寫一套,非 .md 與任何層級叫 Projects 的資料夾都算、圖譜根目錄的指標算不進來] [不選:解不出就不記(跟舊格式分不開);notes 用不分大小寫比(macOS 上對、git 與 CI 上錯)] [代價:圖譜放在 docs/ 以外(獨立 vault)的專案,舊格式或解不出的那筆改了決策筆記判不到,要靠 --reindex 記下路徑] [test:t_pitfalls_residual_note_unresolved_reason] [test:t_pitfalls_residual_note_path_checked] [test:t_pitfalls_residual_note_nfd_path] [test:t_doctor_residual_index_legacy_format] [test:t_pitfalls_residual_graph_file_any_vault]
   WHY:派工鏡頭新增殘留段排序拆級——這次新增(含合約改字)排 0,改到存著殘留決策的筆記與索引記的筆記換了排 1,問答指到不在殘留索引的排 2;起點索引不知道決策在哪篇的那幾筆不逐條展開,彙總成一行(幾筆、原因、這次改了哪幾篇圖譜);時間預算用完時先判兩版有沒有殘留索引、這次有沒有改治理帳,都沒有就不出段;段裡「算不出來」的那次不寫鏡頭快取 [出處:代碼審 code-審查收斂規則 r6 併發席(5000 筆舊格式殘留加 1 筆新增,新增那條出現 0 次)、正確性席] [因:鏡頭一次只列 5 條合約,同排級照節點名排,位置未知的大批舊殘留把真正新增的擠掉;沒殘留的 repo 多一題沒對象的必答題;暫時讀不出被快取到範圍改變] [不選:提高 5 條上限(大索引照樣擠掉)] [test:t_dispatch_lens_residual_new_not_crowded] [test:t_dispatch_lens_residual_no_index_no_section] [test:t_dispatch_lens_residual_unknown_not_cached]
+  WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]`code-loop pass` 寫入前讀凍結判定,有審查帳就必帶 `--loop`;閘放在 pass 不放 check,因為 check 不知道分支對應哪個迴圈,綁定只在 pass 當下才產生 [出處:本案設計審 r1 r2] [因:留痕原本寫了就算,有沒有審完只靠手冊提醒] [不選:pass 內重跑處置閘;code-loop check 讀判定;先只印四週]
+  RULE:`pass` 放行不代表這個迴圈審的是這條分支;判定檔沒有提交或範圍資訊,拿別的綠編號頂替擋不到 [依據:人] [since:2026-11-02] [retire:人裁] [until:2026-12-15] [confirmed:2026-11-02]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1

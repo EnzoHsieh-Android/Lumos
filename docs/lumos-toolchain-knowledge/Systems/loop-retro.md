@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-06
-updated: 2026-10-06
+updated: 2026-11-02
 responsibility: 審查跑滿回顧:人裁紀錄(loop cap-decision)、跑滿回顧檔的骨架/驗證/記帳/跳過(loop retro)、跨迴圈彙整(loop retro-stats),以及五個呼叫端共用的合格回顧判定;不負責處置閘其他七步、canary record 其他寫側檢查、cap-hint 提示(那些歸 loop-convergence-recording)
 aliases: []
 about_code:
@@ -17,7 +17,7 @@ summary: |-
   WHY:[2026-10-05 d7]讀治理帳直接讀原始 jsonl、依檔內順序、壞行跳過,以結構化欄位 loop 逐字比對;不經 gov 的載入器(它以提交與種類去重、保留第一筆,同一提交上兩次 --record 會折成舊的那筆)。寫帳用有回傳值的通用寫入器,寫不進去一律回 1、不印成功 [test:t_cap_retro_record_and_skip_write_gov_log]
   WHY:[2026-10-05 d2]回顧由沒參與這個迴圈的乾淨代理起草歸族、編排者補怎麼避免與行動項(編排者自己寫容易替自己的修法找理由);機器只驗得了起草者不是帳上審查席、不等於補完者,驗不了起草者真的沒看過編排者的看法 [test:t_cap_retro_check_rejects_each_defect]
   WHY:[2026-10-05 計劃〈一〉]不代建卷證資料夾:別處拿「資料夾在不在」判斷是不是暫存迴圈(處置閘的 intake 觀測、doctor 前掃滾動窗);沒有資料夾的迴圈記人裁照記,但不需要回顧 [test:t_cap_retro_out_of_scope_not_checked]
-  WHY:[2026-10-05 計劃〈三〉2]凍結判定不涵蓋第八步:凍結兩趟與回放都印 —、不讀回顧檔,回顧檔也不進凍結閉包(它可能在凍結後補內容,進閉包會讓回放假紅);所以凍結存下的 rc 可能是 0,即使即時問閘第八步是 ✗(目前沒有程式拿凍結判定當放行依據) [test:t_cap_retro_out_of_scope_not_checked]
+  WHY:[2026-10-05 計劃〈三〉2]凍結判定不涵蓋第八步:凍結兩趟與回放都印 —、不讀回顧檔,回顧檔也不進凍結閉包(它可能在凍結後補內容,進閉包會讓回放假紅);所以凍結存下的 rc 可能是 0,即使即時問閘第八步是 ✗(2026-11 起 code-loop pass 讀凍結判定,所以 pass 這條路上跑滿回顧沒人驗,回頭條件在 [[Projects/留痕驗過審查_計劃]]) [出處:審查跑滿回顧計劃〈三〉2] [因:回顧檔可能在凍結後才補內容] [test:t_cap_retro_out_of_scope_not_checked]
   PITFALL:[2026-10-06 實作時讀碼]處置閘的 roster 觀測尾端遇到席位異常會建卷證資料夾,而它跑在第八步之前——只看資料夾在不在,沒有卷證的迴圈問過一次閘、資料夾被建出來之後就會被誤判成要回顧;所以「有卷證資料夾」改成資料夾裡真的有這個編號帳上的席報告(`_retro_has_dossier`),帳讀不動時才退回只看資料夾(寧擋不放) [test:t_cap_retro_out_of_scope_not_checked]
   PITFALL:[2026-10-06 計劃〈實務隱患〉帳壞]審查帳不是 UTF-8 或某列輪次不是字串時,既有讀帳會冒解碼錯誤、分輪會冒 startswith 錯誤;新路徑(canary record 擋點、處置閘第八步、retro --template)各自接住、不丟堆疊,只對有人裁紀錄的迴圈擋(原因碼 cap-ledger-bad;出口是修帳,或最新人裁是 extra-round 時 --skip;最新人裁是 accept-risk 時 --skip 解不了,出口是修帳或改記 extra-round [test:t_cap_retro_accept_risk_ledger_bad_exit]);沒有人裁紀錄的迴圈維持原行為 [test:t_cap_retro_bad_ledger_fail_closed]
   PITFALL:[2026-10-06 代碼審 code-審查跑滿回顧 r1 四席]提示原本印 `lumos loop retro X --template > 回顧檔`,照貼時 shell 先把已寫好的回顧截斷清空、失敗還留 0 位元組檔;改成 `--template --write`(只在檔不存在時以 O_EXCL 建,已存在回 2 不動檔),過期時只叫人改好現有檔再 --record,所有提示與手冊都不再印重導向 [test:t_cap_retro_template_write_no_clobber]

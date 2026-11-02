@@ -1,0 +1,271 @@
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-11-02_留痕驗過審查實作驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-11-02_留痕驗過審查實作驗證.md
+index ac6ddbd42..aa66a460f 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-11-02_留痕驗過審查實作驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-11-02_留痕驗過審查實作驗證.md
+@@ -18,10 +18,12 @@ VERIFY:逐條破壞 27 處判定,每處都讓對應測試翻紅;第一次 4 處
+ - 判準:假帳與判定檔手寫,指紋用 hashlib 直接算原始行,不呼叫被測程式;另有一支真的跑 `loop replay --freeze` 再 `pass`,證明算出來的指紋跟凍結相等。
+ - 第一次沒紅的四處是測試太鬆:前綴(訊息本來就含 code-,而且「帳上沒有」那條代打)、判定檔不存在(掉到壞檔那條)、借更早輪次(舊材料檔不存在)、治理帳讀不到(沒驗訊息)。
+ 
+ VERIFY:用真實審查帳對 327 個 code- 迴圈跑判定:放行 257、人裁放行 3、缺判定檔 52、無輪次 8、判定失敗沒人裁 3、輕量棘輪 2、帳上沒有審查列 2。人裁放行的三個與設計審實測一致。
+ 
+ VERIFY:單次判定約 0.07 秒。審查帳放大 100 倍(554 MB)時,第一版峰值 3GB,改成邊讀邊篩後峰值近零、約 16 秒。
+ 
+ VERIFY:新增告警閘實跑:這批改動沒有新增的規則告警;`cmd_code_loop` 新參數寫在定義第二行,定義行不變,不用登記豁免。受波及合約測試 59 支全綠。
+ 
+ VERIFY:代碼審 r1 修補再破壞 10 處(fails 形狀、判定檔上層捷徑、材料在 repo 外、控制字元、原文不 strip、nodes 型別、有編號不讀備註、無帳也講明、擋下帳帶分支、棘輪),全部翻紅。
++
++VERIFY:代碼審 r2 修補再破壞 7 處(非物件行、共用路徑檢查、材料檔存在、控制字元、引號、repo 路徑、找計劃的路徑字元),全部翻紅。`code-loop pass` 系列 365 支、`loop next` 148 支、`loop list` 19 支全綠。
+diff --git a/scripts/lumos b/scripts/lumos
+index 35e3401a3..895cb4b6d 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17317,21 +17317,21 @@ def _ledger_rel_path(p, root):
+ def _is_outcome_row(d):
+     """結局帳列(--outcome;結構上不能帶輪次、不帶報告)。它不是審查輪,讀審查列的入口在讀帳那一處濾掉(跟規格閘留痕同一個位置),呼叫端不再各自重濾。
+     實際入口(記帳與迴圈工具小修 代碼審 r1 通才 1、r2 正確性 1/4、r3 邊界 2 與架構 1 逐一查過):
+     _canary_ledger_scan(loop next、canary record、跑滿回顧、修正關卡)、_loop_status_read(loop status 各模式與處置閘)、
+     cmd_loop_replay 的讀帳與 _codeloop_pass_rows(code-loop pass)、_spec_gate_ledger_index(推送前的規格閘一族)、cmd_loop_verify_progress、cmd_loop_list、cmd_loop_canary_stats、
+     _loop_first_ts_key、cmd_severity_check、cmd_loop_escape 與 _escape_review_rows_by_loop(逃逸歸因的審查迴圈)。
+     ★刻意不濾★:cmd_gov(結局帳本來就是自主迴圈彙總要讀的)、_door_for_loop 與 _auto_escape(只看規格閘留痕或逃逸帳)、run_doctor 的帳檢查。"""
+     return isinstance(d, dict) and "outcome" in d
+ 
+ 
+-_LOOP_ID_PATH_CHARS = ("/", "\\", "..")   # 判定檔目錄以編號命名,編號不准帶這些(凍結與 code-loop pass 共用)
++_LOOP_ID_PATH_CHARS = ("/", "\\", "..")   # 編號會拼進判定檔目錄與計劃檔名,不准帶這些(凍結、code-loop pass 與找計劃共用)
+ 
+ 
+ def _loop_review_row(d, loop_id):
+     """這一列算不算這個迴圈的審查列(判定閉包的篩法;凍結、回放與 code-loop pass 共用)。"""
+     return isinstance(d, dict) and d.get("loop") == loop_id and d.get("kind") != "spec-gate" and not _is_outcome_row(d)
+ 
+ 
+ def _light_ratcheted(rows):
+     """light 棘輪:這個編號曾抓到 major 以上,light 從此失效(loop next 的 escalate 與 code-loop pass 共用)。"""
+     return any(r.get("kind") in ("caught", "none") and r.get("severity") in ("major", "blocker") for r in rows)
+@@ -19197,20 +19197,22 @@ def cmd_loop_verify_progress(env, loop_id, settle=None, as_json=False):
+     rounds = []
+     try:
+         if path.exists():
+             for line in _ledger_lines(path.read_text(encoding="utf-8")):
+                 line = line.strip()
+                 if not line:
+                     continue
+                 try:
+                     d = json.loads(line)
+                 except ValueError:
++                    d = None
++                if not isinstance(d, dict):
+                     print("擋下:審查記錄檔有讀不懂的行,輪次順序不可信,整個檔先不信"
+                           "(修好或搬走壞行再重跑)", file=sys.stderr)
+                     return 2
+                 if _loop_review_row(d, loop_id):   # 規格閘留痕(雙向門放行_計劃 S16)與結局帳都不是審查輪
+                     rounds.append(d)
+     except OSError as e:
+         print(f"擋下:檔案讀不到({e}): {path}", file=sys.stderr)
+         return 2
+     for i, r in enumerate(rounds, 1):
+         if not isinstance(r.get("kind"), str):
+@@ -19446,21 +19448,21 @@ def _plans_in_range(repo_root, git_range, vault):
+ def _loop_id_for_plan(plan_rel):
+     """計劃檔名 → 迴圈編號:去 _計劃(design-loop skill 的慣例)。"""
+     stem = Path(plan_rel).stem
+     return stem[:-len("_計劃")] if stem.endswith("_計劃") else stem
+ 
+ 
+ def _plan_for_loop(env, loop_id):
+     """迴圈編號 → 計劃筆記(vault 相對);找不到回 None。
+     代碼審編號先去掉 code- 前綴;檔名比對兩邊都做 NFC(Projects/逃逸帳對得起來_計劃 第四節)。"""
+     lid = nfc(str(loop_id or ""))
+-    if any(ch in lid for ch in ("/", "\\", "..")) or not lid.strip():
++    if any(ch in lid for ch in _LOOP_ID_PATH_CHARS) or not lid.strip():
+         return None   # 迴圈編號帶路徑字元不查(r1 資安席:否則拼出的路徑可能跳出 Projects/)
+     if lid.startswith("code-"):
+         lid = lid[len("code-"):]
+     proj = env.vault / "Projects"
+     for cand in (f"{lid}_計劃.md", f"{lid}.md"):
+         if (proj / cand).is_file():
+             return f"Projects/{cand}"
+     for cand in (f"{lid}_計劃.md", f"{lid}.md"):
+         q = _nfc_child(proj, cand) if proj.is_dir() else None
+         if q is not None:
+@@ -66078,31 +66080,42 @@ def _codeloop_gov_log(repo_root, branch, status, note, head_sha, ts, loop=None):
+ # 擋在 pass 不在 check:check 不知道分支對應哪個迴圈,綁定只在 pass 當下才產生;判定是凍結當下的一次性事實,
+ # 不像合約測試結果隨提交變。
+ _CODELOOP_SKIP_CMD = 'lumos code-loop skip --note "<為什麼不審>"'
+ 
+ 
+ def _codeloop_refusal(code, why, care, *steps):
+     """擋下一條:(落帳用的代碼, 三段式訊息行)。"""
+     return code, [f"擋下:{why}", f"  在意的原因:{care}", "  接下來:", *(f"    {s}" for s in steps)]
+ 
+ 
++def _codeloop_path_arg(path, placeholder):
++    """印給人照抄的路徑:照鄰居走 shlex.quote;帶控制字元的留佔位——清掉就成了另一個路徑,照抄會指到別的檔。"""
++    import shlex as _shlex
++    text = str(path)
++    return _shlex.quote(text) if _esc_clean(text, len(text)) == text else placeholder
++
++
+ def _codeloop_pass_spec_arg(repo_root, rows):
+     """印給人照抄的 --spec 值:最後一輪記的材料,檔案要在、要在 repo 裡;取不到留佔位,不猜。"""
+     hint = _loop_last_round_spec(rows)
+     root = Path(repo_root).resolve()
+     try:
+-        path = (root / hint).resolve() if hint else None
++        if not hint or _repo_path_unsafe(root, hint) or not (root / hint).is_file():
++            return "<凍結 patch>"
+     except (OSError, ValueError):       # 路徑含 NUL、解析不動
+-        path = None
+-    if path is None or not path.is_relative_to(root) or not path.is_file():
+         return "<凍結 patch>"
+-    return _rf_qloop(str(path))
++    return _codeloop_path_arg((root / hint).resolve(), "<凍結 patch>")
++
++
++def _codeloop_freeze_args(repo_root, loop, rows):
++    """凍結指令要印的三個值:編號、--spec、--repo。"""
++    return _rf_qloop(loop), _codeloop_pass_spec_arg(repo_root, rows), _codeloop_path_arg(Path(repo_root).resolve(), "<repo 根>")
+ 
+ 
+ def _codeloop_pass_precheck(loop):
+     """編號本身的檢查,讀帳之前。"""
+     if not loop:
+         return _codeloop_refusal("no-loop", "這個專案有審查帳,pass 要帶迴圈編號",
+                              "工具要驗這個迴圈真的審完,編號只有這時候才綁得上",
+                              'lumos code-loop pass --loop <編號> --note "<審了什麼>"', f"不審走 {_CODELOOP_SKIP_CMD}")
+     q = _rf_qloop(loop)
+     if any(ch in loop for ch in _LOOP_ID_PATH_CHARS):
+@@ -66151,21 +66164,21 @@ def _codeloop_pass_shape(rows, loop):
+         std = _rf_qloop(f"{loop}-std")
+         return _codeloop_refusal("light-ratchet", f"輕量迴圈 {_rf_qloop(loop)} 曾抓到 major 以上,輕量規則已失效",
+                              "這個編號的問題沒有判定能證明收掉了",
+                              f"lumos loop next {std} --tier standard --orchestrator <claude|codex> 開完整迴圈", f"不審走 {_CODELOOP_SKIP_CMD}"), False
+     return None, True
+ 
+ 
+ def _codeloop_pass_read_verdict(repo_root, loop, rows):
+     """判定檔 → (判定, 擋下或 None)。形狀不對一律擋:replay 對缺欄位是靜默放過,這裡是放行依據不能照抄。"""
+     import json as _j
+-    q, spec, repo = _rf_qloop(loop), _codeloop_pass_spec_arg(repo_root, rows), _rf_qloop(str(Path(repo_root).resolve()))
++    q, spec, repo = _codeloop_freeze_args(repo_root, loop, rows)
+     rel = Path("governance") / "replay" / loop / "verdict.json"
+     path = Path(repo_root) / rel
+     try:
+         unsafe = _repo_path_unsafe(repo_root, rel)
+     except (OSError, ValueError):
+         unsafe = ("outside", path)
+     if unsafe:
+         return None, _codeloop_refusal("bad-verdict", f"判定檔路徑不安全:{_esc_clean(_repo_path_unsafe_why(repo_root, rel, unsafe), 200)}",
+                                        "捷徑可能指到 repo 外,讀到的就不是這個迴圈的判定", f"不審走 {_CODELOOP_SKIP_CMD}")
+     if not os.path.lexists(path):
+@@ -66195,21 +66208,21 @@ def _codeloop_pass_accept_risk(repo_root, loop, rid):
+         return False, err
+     decisions = [e for e in events if _retro_is_decision(e)]
+     latest = decisions[-1] if decisions else None
+     return bool(latest and latest.get("decision") == "accept-risk" and rid in latest["rounds"]), None
+ 
+ 
+ def _codeloop_pass_check_verdict(repo_root, loop, rows, raws, verdict):
+     """判定還代表現帳嗎、結果過了嗎 → (擋下或 None, 放行時多印的一句或 None)。先比指紋:判定不代表現帳時結果沒有意義,
+     舊判定失敗而補輪收斂的迴圈才走得出來。雙向比,判定後多一席或多一輪就不代表了;逐字重複列不算變(合併留下的),所以比集合。"""
+     import hashlib
+-    q, spec, repo = _rf_qloop(loop), _codeloop_pass_spec_arg(repo_root, rows), _rf_qloop(str(Path(repo_root).resolve()))
++    q, spec, repo = _codeloop_freeze_args(repo_root, loop, rows)
+     if {hashlib.sha256(t.encode("utf-8")).hexdigest() for t in raws} != set(verdict["all_row_shas"]):
+         return _codeloop_refusal("stale-verdict", f"迴圈 {q} 的帳在凍結之後變了", "判定已經不代表現在的帳",
+                              f'lumos loop replay {q} --freeze --spec {spec} --repo {repo} --note "<凍結後又記了什麼>"',
+                              f"不審走 {_CODELOOP_SKIP_CMD}"), None
+     res = verdict["verdict"]
+     if res["rc"] == 0:
+         return None, None
+     accepted, err = _codeloop_pass_accept_risk(repo_root, loop, verdict["round"])
+     if accepted:
+         return None, f"判定沒過,但最新人裁接受風險(輪 {_esc_clean(verdict['round'], 40)}),照人裁放行"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 3cd8c1d5f..74c680eb1 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -10730,20 +10730,27 @@ def t_loop_verify_progress():
+               and d["settle"].get("unsettled") == 1, r.stdout)
+         # fail-closed:結構欄位缺失(kind 缺)
+         with open(log, "a", encoding="utf-8") as f:
+             f.write(_j.dumps({"ts": "t", "loop": "V", "token": "x"}) + "\n")
+         r = run(vault, "loop", "verify-progress", "V")
+         check("kind 缺失 rc2 fail-closed", r.returncode == 2, r.stderr)
+         # fail-closed:壞行
+         log.write_text("{broken\n", encoding="utf-8")
+         r = run(vault, "loop", "verify-progress", "V")
+         check("壞行 rc2 fail-closed", r.returncode == 2, r.stderr)
++        # fail-closed:合法 JSON 但不是物件,跟壞行同一種結果(代碼審 r2 邊界席:換共用篩法後曾靜默略過、回 rc0)
++        good = _j.dumps({"ts": "t", "kind": "caught", "loop": "V", "auditor": "s1", "severity": "minor"})
++        for junk in ("[]", "null", "42", '"x"'):
++            log.write_text(f"{good}\n{junk}\n", encoding="utf-8")
++            r = run(vault, "loop", "verify-progress", "V")
++            check(f"不是物件的行 rc2 fail-closed:{junk}", r.returncode == 2 and "Traceback" not in r.stderr and "clean_streak" not in r.stdout,
++                  f"rc={r.returncode} {r.stderr[-200:]}")
+     finally:
+         shutil.rmtree(root)
+     print("  ✓ t_loop_verify_progress")
+ 
+ 
+ def t_ppr_personalized():
+     """PPR 個人化(原檢索PPR邊權_計劃,檢索用途已消融殺除;personalization 保留為
+     ③ 參數位/通用原語):種子傳播/對稱化/濾後重歸一/空=空dict/None 路徑不變。"""
+     import shutil
+     root = Path(tempfile.mkdtemp(prefix="gctl-ppr-"))
+@@ -27708,22 +27715,54 @@ def t_codeloop_pass_checks_verdict():
+     with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+         _git_init_commit(d)
+         (Path(outside) / "外面.patch").write_text("x\n", encoding="utf-8")
+         _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path=str(Path(outside) / "外面.patch"))]))
+         _clp_blocked("材料在 repo 外留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+     with tempfile.TemporaryDirectory() as d:
+         _git_init_commit(d)
+         (Path(d) / "a\x1b[31mb.patch").write_text("x\n", encoding="utf-8")
+         _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="a\x1b[31mb.patch")]))
+         r = _clp_pass(d, "--loop", "code-x")
+-        _clp_blocked("材料檔名含控制字元", d, r, "--freeze")
++        _clp_blocked("材料檔名含控制字元", d, r, "--freeze", "<凍結 patch>")
+         check("印出的指令不帶控制字元", "\x1b" not in r.stderr, repr(r.stderr[-200:]))
++    with tempfile.TemporaryDirectory() as d:
++        _git_init_commit(d)
++        (Path(d) / "s\nq.patch").write_text("x\n", encoding="utf-8")
++        (Path(d) / "s q.patch").write_text("別的檔\n", encoding="utf-8")   # 控制字元換成空格後剛好是另一個真的檔
++        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="s\nq.patch")]))
++        r = _clp_pass(d, "--loop", "code-x")
++        _clp_blocked("檔名帶換行不印成另一個檔", d, r, "<凍結 patch>")
++        check("檔名帶換行:沒有指到另一個檔", "s q.patch" not in r.stderr, repr(r.stderr[-300:]))
++    with tempfile.TemporaryDirectory() as d:
++        _git_init_commit(d)
++        (Path(d) / "真的").mkdir()
++        (Path(d) / "真的" / "s.patch").write_text("x\n", encoding="utf-8")
++        (Path(d) / "捷徑").symlink_to(Path(d) / "真的")
++        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="捷徑/s.patch")]))
++        _clp_blocked("材料走 repo 內的捷徑留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
++    import shlex as _shlex
++    with tempfile.TemporaryDirectory() as d:
++        _git_init_commit(d)
++        name = "空 白$x.patch"
++        (Path(d) / name).write_text("x\n", encoding="utf-8")
++        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path=name)]))
++        r = _clp_pass(d, "--loop", "code-x")
++        want = _shlex.quote(str((Path(d) / name).resolve()))
++        _clp_blocked("含空白與錢字號的材料路徑照抄得回來", d, r, f"--spec {want}", f"--repo {_shlex.quote(str(Path(d).resolve()))}")
++    with tempfile.TemporaryDirectory() as parent:
++        d = str(Path(parent) / "r\nq")
++        Path(d).mkdir()
++        _git_init_commit(d)
++        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="gone.patch")]))
++        r = _clp_pass(d, "--loop", "code-x")
++        _clp_blocked("repo 路徑帶換行留佔位", d, r, "--repo <repo 根>")
++        check("repo 路徑帶換行:沒有印成另一個路徑", "r q" not in r.stderr, repr(r.stderr[-300:]))
+     with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+         lines = _clp_repo(d, frozen=False)
+         _clp_verdict(outside, "code-x", lines)
+         (Path(d) / "governance").mkdir()
+         (Path(d) / "governance" / "replay").symlink_to(Path(outside) / "governance" / "replay")
+         _clp_blocked("判定檔上層是捷徑", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+     for fails in (5, {"a": 1}, True, "x"):
+         with tempfile.TemporaryDirectory() as d:
+             lines = _clp_repo(d, rc=1)
+             p = Path(d) / "governance" / "replay" / "code-x" / "verdict.json"
