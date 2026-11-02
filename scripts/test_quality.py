@@ -112,6 +112,12 @@ def assertion_failure(node):
         return True
     if kind == 'NUnit.Framework.AssertionException':
         return True
+    # Measured Truth 1.0.1 and JUnit 4.13.2 array-compare local JVM type
+    # attributes; device XML from AGP has no type and both hide the class name
+    # on the first line there, so that path stays unattributed.
+    if kind in ('com.google.common.truth.ComparisonFailureWithFacts', 'com.google.common.truth.AssertionErrorWithFacts',
+                'org.junit.internal.ArrayComparisonFailure'):
+        return True
     if re.fullmatch(r'Xunit\.Sdk\.(?:Equal|NotEqual|True|False|Null|NotNull|Throws|Contains|Empty|Single|Same)Exception', kind):
         return True
     # Measured Node reporter cause; an arbitrary message mentioning assertion
@@ -123,8 +129,17 @@ def assertion_failure(node):
     if not kind:
         # AGP instrumentation XML omits type/message; the first exception and
         # its JUnit assertion frame identify the measured failure origin.
+        # Measured device text (2026-11-01): string assertEquals starts with
+        # ComparisonFailure, assertTrue without a message has no colon, Hamcrest
+        # assertThat has no org.junit.Assert frame; a message line may itself
+        # start with "Caused by:", so only cut at a Caused by after the first frame.
         text = ''.join(node.itertext()).strip()
-        if text.startswith('java.lang.AssertionError:') and re.search(r'\bat org\.junit\.Assert\.(?:fail|assert)\w*\(', text):
+        first = text.split('\n', 1)[0].strip()
+        frame = re.search(r'\n[ \t]*at [^\n(]+\(', text)
+        cause = re.compile(r'\n[ \t]*Caused by:').search(text, frame.start() if frame else len(text))
+        own = text[frame.start():cause.start() if cause else len(text)] if frame else ''
+        if re.fullmatch(r'(?:java\.lang\.AssertionError|org\.junit\.ComparisonFailure)(?::.*)?', first) and re.search(
+                r'\bat (?:org\.junit\.Assert\.(?:fail|assert)\w*|org\.hamcrest\.MatcherAssert\.assertThat)\(', own):
             return True
         return bool(re.match(r'^.+\.swift:\d+(?::\d+)? - XCTAssert(?:Equal|NotEqual|True|False|Nil|NotNil|ThrowsError|NoThrow|GreaterThan|LessThan) failed:', message))
     return False

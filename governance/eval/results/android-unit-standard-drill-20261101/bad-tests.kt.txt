@@ -1,0 +1,115 @@
+package com.example.pos.drill.bad
+
+import android.text.TextUtils
+import com.example.pos.Resource
+import com.example.pos.CategorySource
+import com.example.pos.Category
+import com.example.pos.VoidCategory
+import com.example.pos.category.CategoryVm
+import com.google.common.truth.Truth.assertThat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withTimeoutOrNull
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Before
+import org.junit.Test
+
+/**
+ * 演練用的刻意壞測試:每支示範一種「看起來會過、其實沒驗到需求」的寫法。不併回專案。
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+class BadCategoryVmTest {
+
+    private class RecordingSource(
+        var list: Resource<List<Category>> = Resource.Success(emptyList()),
+        var addRes: Resource<Boolean> = Resource.Success(true),
+        var voidRes: Resource<Boolean> = Resource.Success(true),
+    ) : CategorySource {
+        val addCalls = mutableListOf<List<Category>>()
+        val voidCalls = mutableListOf<List<VoidCategory>>()
+        override fun loadAll(): Flow<Resource<List<Category>>> = flowOf(list)
+        override fun add(items: List<Category>): Flow<Resource<Boolean>> { addCalls += items; return flowOf(addRes) }
+        override fun voidCategories(items: List<VoidCategory>): Flow<Resource<Boolean>> { voidCalls += items; return flowOf(voidRes) }
+    }
+
+    private val dispatcher = StandardTestDispatcher()
+
+    @Before fun setUp() { Dispatchers.setMain(dispatcher) }
+    @After fun tearDown() { Dispatchers.resetMain() }
+
+    // B1 只驗呼叫次數:不看送出的內容、不看成功通知、不看重整
+    @Test
+    fun b1_add_onlyVerifiesCallCount() = runTest(dispatcher) {
+        val source = RecordingSource()
+        val vm = CategoryVm(source)
+        vm.add("Tips", "I", "20")
+        advanceUntilIdle()
+        assertEquals(1, source.addCalls.size)
+    }
+
+    // B2 靠預設回傳值才綠:TextUtils 在本機 JVM 是空殼,開了 returnDefaultValues 永遠回 false
+    @Test
+    fun b2_nextSeq_notEmptyViaTextUtils() = runTest(dispatcher) {
+        val vm = CategoryVm(RecordingSource())
+        assertFalse(TextUtils.isEmpty(vm.nextSeq()))
+    }
+
+    // B3 事件發完才開始收:收不到就拿到 null,斷言寫成「不是 false」所以照過
+    @Test
+    fun b3_delete_collectsEventAfterItFired() = runTest(dispatcher) {
+        val vm = CategoryVm(RecordingSource())
+        vm.delete("10")
+        advanceUntilIdle()
+        val got = withTimeoutOrNull(100) { vm.deleteResult.first() }
+        assertThat(got != false).isTrue()
+    }
+
+    // B4 用真實時間等結果
+    @Test
+    fun b4_loadAll_waitsWithThreadSleep() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val rows = listOf(Category("Tips", "I", "10"))
+        val vm = CategoryVm(RecordingSource(list = Resource.Success(rows)))
+        vm.loadAll()
+        Thread.sleep(300)
+        assertEquals(rows, vm.categories.value)
+    }
+
+    // B6 自己比自己
+    @Test
+    fun b6_nextSeq_comparedWithItself() = runTest(dispatcher) {
+        val vm = CategoryVm(RecordingSource())
+        assertEquals(vm.nextSeq(), vm.nextSeq())
+    }
+
+    // B7 預期值照抄實作的算法(不是從需求推)
+    @Test
+    fun b7_nextSeq_expectedCopiedFromImplementation() = runTest(dispatcher) {
+        val rows = listOf(Category("a", "I", "10"), Category("b", "O", "x"), Category("c", "O", "30"))
+        val vm = CategoryVm(RecordingSource(list = Resource.Success(rows)))
+        vm.loadAll()
+        advanceUntilIdle()
+        val expected = ((rows.mapNotNull { it.seq.toIntOrNull() }.maxOrNull() ?: 0) + 10).toString()
+        assertEquals(expected, vm.nextSeq())
+    }
+
+    // B9 協程根本沒推進就斷言:什麼都沒跑,清單當然「保持不變」
+    @Test
+    fun b9_loadAllError_keepsListButNeverAdvances() = runTest(dispatcher) {
+        val vm = CategoryVm(RecordingSource(list = Resource.Error("boom")))
+        val before = vm.categories.value
+        vm.loadAll()
+        assertEquals(before, vm.categories.value)
+    }
+}
