@@ -1,0 +1,187 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 5f129c0d2..a6f38b111 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48406,21 +48406,21 @@ def _tg_kinds(old, new):
+     """改動前後兩個路徑任一邊是測試檔就當測試檔(改名成 .disabled、搬進 src/main 都看得到)。"""
+     ko, kn = (_tg_kind(old) if old else None), (_tg_kind(new) if new else None)
+     return "test" if "test" in (ko, kn) else (kn or ko)
+ 
+ 
+ def _tg_strip(text, keep_strings=False):
+     """剝註解(keep_strings=False 時連字串內容一起換成空白),位置跟原文一一對應:在剝過的文字找位置、回原文取字。"""
+     return _strip_c_comments(text, blank_strings=not keep_strings, keep_length=True)
+ 
+ 
+-_TG_NAME_RE = re.compile(r"\bfun\s+(?:<[^>\n]{0,%d}>\s*)?" % _TG_MAX_GENERIC_CHARS + r"(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
++_TG_NAME_RE = re.compile(r"\bfun\s+(?:<(?:[^<>\n]|<[^<>\n]{0,%d}>){0,%d}>\s*)?" % (_TG_MAX_GENERIC_CHARS, _TG_MAX_GENERIC_CHARS) + r"(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
+ 
+ 
+ _TG_CLASS_STOP = re.compile(r"[{(\n]")
+ _TG_SUPERTYPE = re.compile(r"(?:extends|implements|where)\b")
+ 
+ 
+ def _tg_class_at(stripped):
+     """剝過的文字 → {行號: 外層類別路徑}。沿大括號深度追 class/object/interface 宣告;`Foo::class` 不算宣告,
+     沒有本體的類別(`data class Row(val a: Int)`)不會把下一個大括號當成自己的本體。路徑在開類別時接一次、存在堆疊上,
+     超過 _TG_MAX_PATH_CHARS 就換成前段加摘要(_tg_path_join):很深的巢狀每層都有測試時,路徑與函式鍵的總長也跟深度成正比。"""
+@@ -48500,38 +48500,35 @@ def _tg_skip_generic(stripped, j):
+         e = stripped.find(">", k, lim)
+         if e < 0:
+             return j
+         opened += stripped.count("<", k, e + 1)
+         closed += 1
+         k = e + 1
+         if opened == closed:
+             return k
+ 
+ 
+-_TG_NONWS = re.compile(r"[^ \t\r\n]")
+-
+-
+ def _tg_next_nonspace(stripped, k, memo):
+-    """位置 k 起第一個不是空白、tab、CR、換行的字的位置(沒有就是文字長度);同一個起點只找一次。"""
++    """位置 k 起第一個不是空白字(含 tab、CR、換行、FF、VT、全形空白)的位置(沒有就是文字長度);同一個起點只找一次。"""
+     key = ("ws", k)
+     if key not in memo:
+-        m = _TG_NONWS.search(stripped, k)
++        m = _TG_NONSPACE.search(stripped, k)
+         memo[key] = m.start() if m else len(stripped)
+     return memo[key]
+ 
+ 
+ def _tg_line_last(stripped, p, memo):
+-    """換行位置 p 那一行最後一個不是空白、tab、CR 的字的位置(整行空白回 -1);同一行只算一次。"""
++    """換行位置 p 那一行最後一個不是空白字的位置(整行空白回 -1);同一行只算一次。"""
+     key = ("last", p)
+     if key not in memo:
+         ls = stripped.rfind("\n", 0, p) + 1
+-        body = stripped[ls:p].rstrip(" \t\r")
++        body = stripped[ls:p].rstrip()
+         memo[key] = ls + len(body) - 1 if body else -1
+     return memo[key]
+ 
+ 
+ def _tg_supertype_next_line(stripped, k, memo):
+     """換行之後的位置 k → 下一個非空白字的位置,如果它是 `{` 或父型別的續寫(`:`、`,`、extends、implements、where);否則 None。"""
+     n = len(stripped)
+     k = _tg_next_nonspace(stripped, k, memo)
+     if k < n and (stripped[k] in "{:," or _TG_SUPERTYPE.match(stripped, k)):
+         return k
+@@ -48812,34 +48809,35 @@ def _tg_pairs(old, new, kotlin_test=False):
+ _TG_TRY = re.compile(r"\btry\s*\{")
+ _TG_CATCH = re.compile(r"\s*catch\s*\(")
+ _TG_OPEN_BRACE = re.compile(r"\s*\{")
+ # catch 接得住斷言失敗的型別:AssertionError 本身、或比它寬的 Error、Throwable(Kotlin 與 Java 寫法都認)
+ _TG_CATCH_ASSERT = re.compile(r"\b(?:AssertionError|AssertionFailedError|Error|Throwable)\b")
+ _TG_TRY_OK = re.compile(r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?:fail|assertThrows|assertFailsWith|assertFails)\s*[({<]")
+ _TG_RUNCATCH = re.compile(r"\brunCatching\s*\{")
+ _TG_FAIL_CALL = re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")
+ _TG_THROW = re.compile(r"\bthrow\b")
+ _TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\((?!\s*true\s*\))")   # Kotlin 標準庫的檢查,不成立就丟例外;恆成立的 check(true) 不算
+-# Kotest 中綴斷言只認 `a shouldBe b` 的形狀(前面空白、後面空白再接值):名字以 should 開頭的變數、`.shouldLog(` 這種方法不算。
+-# _TG_INFIX_RE 是「這支測試有沒有斷言」用的寬判法(寧可多認),catch 判讀要分辨有沒有真的檢查,所以另用這條窄的
+-_TG_INFIX_STRICT = re.compile(r"(?<=\s)should[A-Z]\w*(?=\s+[^\s=:])")
++# Kotest 匹配器照名字認(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldStart…、shouldEnd…、shouldMatch…、shouldThrow…、
++# shouldExist…),中綴(`a shouldBe b`)與點號呼叫(`a.shouldBe(b)`)都算;shouldRetry、shouldLog 這種一般名字、後面接 = 或 : 的宣告不算。
++# _TG_INFIX_RE 是「這支測試有沒有斷言」用的寬判法(寧可多認),catch 判讀要分辨有沒有真的檢查,所以另用這條照名字認的
++_TG_KOTEST_CHECK = re.compile(r"(?<!\w)should(?:Be|Not|Have|Contain|Start|End|Match|Throw|Exist)\w*(?!\w)(?!\s*[=:])")
+ _TG_NONSPACE = re.compile(r"\S")
+ 
+ 
+ def _tg_catch_no_fail(fn):
+     """try 沒有 fail、catch 裡斷言或是空的;try 裡有斷言、catch 接住斷言失敗卻不再丟出;runCatching 裡斷言沒接 getOrThrow。
+-    斷言、fail、throw 的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
++    斷言、fail、throw、catch 型別字的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
+     import bisect
+     b = fn["mbody"]
+     br = _rg_bracket_map(b)
+     pos = {k: [m.start() for m in rx.finditer(b)] for k, rx in
+-           (("assert", _TG_ASSERT_RE), ("infix", _TG_INFIX_STRICT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
++           (("assert", _TG_ASSERT_RE), ("infix", _TG_KOTEST_CHECK), ("ctype", _TG_CATCH_ASSERT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
+             ("throw", _TG_THROW))}
+ 
+     def has(kind, lo, hi):
+         p = pos[kind]
+         i = bisect.bisect_left(p, lo)
+         return i < len(p) and p[i] < hi
+     for t in _TG_TRY.finditer(b):
+         tb_end = br.get(t.end() - 1)
+         c = _TG_CATCH.match(b, tb_end + 1) if tb_end is not None else None
+         close = br.get(c.end() - 1) if c else None
+@@ -48848,21 +48846,21 @@ def _tg_catch_no_fail(fn):
+             continue
+         cs, cb_end = o.end(), br[o.end() - 1]
+         if has("fail", cs, cb_end):
+             continue
+         catch_checks = has("assert", cs, cb_end) or has("infix", cs, cb_end) or has("check", cs, cb_end)
+         # 「try 沒有 fail、catch 裡斷言或是空的」:try 有 fail/assertThrows 是預期例外的寫法,不算
+         if not has("ok", t.end(), tb_end) and (catch_checks or not _TG_NONSPACE.search(b, cs, cb_end)):
+             return True
+         # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError;含 Kotest 中綴斷言)被接得住它的 catch 接住、catch 不檢查也不再丟出:吞掉了
+         tried = has("assert", t.end(), tb_end) or has("infix", t.end(), tb_end)
+-        if _TG_CATCH_ASSERT.search(b, c.end(), close) and tried and not catch_checks and not has("throw", cs, cb_end):
++        if has("ctype", c.end(), close) and tried and not catch_checks and not has("throw", cs, cb_end):
+             return True
+     for r in _TG_RUNCATCH.finditer(b):
+         end = br.get(r.end() - 1)
+         if end is not None and has("assert", r.end(), end) and not re.match(r"\s*\.\s*getOrThrow\s*\(", b[end + 1:end + 60]):
+             return True
+     return False
+ 
+ 
+ # 跳過標記:短名或完整類別名(@org.junit.jupiter.api.Disabled)都認;JUnit 5 的條件式(@DisabledOnOs、@EnabledOnOs…)在 CI 平台上等於關掉
+ _TG_SKIP_ANN_RE = re.compile(r"@(?:[\w.]+\.)?(?:Ignore|Disabled\w*|Enabled(?:On|If|For)\w*|SdkSuppress|FlakyTest)\b|@(?:[\w.]+\.)?Config\s*\(\s*sdk\b")
+@@ -49111,21 +49109,23 @@ def _tg_analyze(root, base, head, deadline=None):
+     if text is None:
+         return None, "git 讀不出改動的內容(逾時或 git 跑不動)"
+     test_files, base_hits, head_hits = [], {}, {}
+     for kind, old, new, new_sha in rows:
+         if deadline is not None and _git_timeout(deadline) <= 0:
+             raise TimeoutError("比對工具超過截止時間")
+         path = new or old
+         b = text.get(("base", old), "") if old else ""
+         h = text.get(("head", new), "") if new else ""
+         if "TOOLARGE" in (b, h) or "UNREADABLE" in (b, h):
+-            cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}") if "TOOLARGE" in (b, h)
++            cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}",
++                                  extra=f"整支檔超過 {_TG_MAX_BYTES // 1_000_000} MB 或 {_TG_MAX_LINES} 行的上限,這支整支沒比對")
++                         if "TOOLARGE" in (b, h)
+                          else _tg_cand("tq/unreadable", path, 0, path))
+         elif kind == "test":
+             if _tg_has_long_line(b) or _tg_has_long_line(h):
+                 # 超長的行(壓縮資料、產生的程式、病態輸入)抹成空行再比:同檔其他改動照樣逐條列,那幾行要人另外看
+                 cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}:line",
+                                       extra=f"有一行超過 {_TG_MAX_LINE_CHARS} 字,那幾行沒比對,其餘照比"))
+                 b, h = _tg_blank_long_lines(b), _tg_blank_long_lines(h)
+             cands += _tg_test_file(test_files, base_hits, head_hits, old, new, new_sha, b, h)
+         else:
+             cands += _tg_main_cands(path, b, h)
+@@ -49289,25 +49289,26 @@ def _tg_fn_cands(path, k, f, prev, kt):
+ 
+ 
+ # 抓不到的,跟測試品質標準〈推送前的防竄改檢查〉的「抓不到」那條是同一份(去掉反引號後逐句對得上,t_tq_guard_cli_contract 釘住)
+ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認)",
+               "實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查",
+               "預期值先放進變數再斷言(val expected = 88)、參數化測試刪資料列、本體有改的改名(只列成刪除)、"
+               "逾時換單位(5.seconds 改 5.minutes)或整行新增的逾時、CI 的 timeout-minutes",
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助、"
+               "同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources",
+               "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一版不比(之後另做);"
+-              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立的斷言(assertTrue(true))算有檢查",
++              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立或空泛的檢查(assertTrue(true)、check(1 == 1)、assertNotNull(e))算有檢查",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+               "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large;assume 敘述超過 2000 字的尾段不進身分;"
+               "用單獨的 CR 或 Java 的 \\u000a 提前結束行註解",
+               "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
++              "測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算",
+               "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。
+     有候選 rc1、沒有 rc0;不是 git 專案講一句 rc0;範圍寫錯或終點找不到 rc2(退出碼照 Room 守衛)。只讀 git,不跑測試、不改檔。"""
+     import json as _json
+     root = _note_audit_root(repo)
+     if root is None or not _is_git_worktree(root):
+         print("test-guard:這裡不是 git 專案,沒比", file=sys.stderr)

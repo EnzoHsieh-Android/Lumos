@@ -1,0 +1,126 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f351816f3..6ddc1a482 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -121013,20 +121013,36 @@ def t_tq_guard_catch_no_fail():
+         "w4": "    @Test\n    fun w4() { try { foo(); fail(\"x\") } catch (e: Throwable) { logger.shouldLog(e) } }\n",
+         "w5": "    @Test\n    fun w5() { try { result shouldBe 5 } catch (e: AssertionError) { println(e) } }\n",
+     }
+     keep = "    @Test\n    fun w6() { try { cleanup() } catch (e: Exception) { logger.shouldReport(e) }\n        assertEquals(1, f()) }\n"
+     h6 = commit({T: _tqg_kt(old, *sw.values(), keep)})
+     got6 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h6) if c["rule"] == "tq/catch-no-fail"}
+     for k in sw:
+         check(f"S6 r5 {k} 吞掉斷言要列", k in got6, got6)
+     check("S6 r5 w6 catch 只是叫 should 開頭的方法、try 沒斷言不列", "w6" not in got6, got6)
+ 
++    # 代碼審 r6:Kotest 匹配器照名字認(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldThrow…),中綴與點號呼叫都算;
++    # shouldRetry、shouldLog 這種一般名字不算。catch 兩個子句與 try 側都要照這個認
++    dc = {
++        "d1": ("    @Test\n    fun d1() { try { foo() } catch (e: Exception) { e.message.shouldNotBeNull() } }\n", True),
++        "d2": ("    @Test\n    fun d2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.shouldBeInstanceOf<IllegalStateException>() } }\n", False),
++        "d3": ("    @Test\n    fun d3() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message.shouldBe(\"x\") } }\n", False),
++        "d4": ("    @Test\n    fun d4() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldBe(\"x\") } }\n", False),
++        "d5": ("    @Test\n    fun d5() { try { f().shouldBe(5) } catch (e: Throwable) { println(e) } }\n", True),
++        "d6": ("    @Test\n    fun d6() { try { foo() } catch (e: IllegalStateException) { if (n < 3 && shouldRetry && ok) { n++ } }\n"
++               "        assertEquals(1, f()) }\n", False),
++    }
++    h7 = commit({T: _tqg_kt(old, *(b for b, _w in dc.values()))})
++    got7 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h7) if c["rule"] == "tq/catch-no-fail"}
++    for k, (_b, want) in dc.items():
++        check(f"S6 r6 {k} {'要列' if want else '不列'}", (k in got7) == want, got7)
++
+ 
+ def t_tq_guard_timeout_and_snapshot():
+     """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+     翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+     T = _TQG_T
+     body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     h = commit({T: _tqg_kt(body.replace("30", "300"))})
+     check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+@@ -121132,20 +121148,22 @@ def t_tq_guard_cli_contract():
+     (root / T).write_bytes((_tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n") + "\0junk").encode())
+     big = "app/src/test/java/x/BigTest.kt"
+     (root / big).write_text("package x\n" + "// x\n" * (m._TG_MAX_LINES + 5), encoding="utf-8")
+     sp.run(["git", "-C", str(root), "add", O, T, big], capture_output=True)
+     sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "odd"], capture_output=True)
+     h5 = sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+     rules = _tqg_rules(root, b5, h5)
+     check("S11 檔名不是 UTF-8 列 tq/unreadable", any(r == "tq/unreadable" for r, _f in rules), rules)
+     check("S11 內容含 NUL 列 tq/unparsable", ("tq/unparsable", T) in rules, rules)
+     check("S11 超過單檔上限列 tq/too-large", ("tq/too-large", big) in rules, rules)
++    big_msg = [c["message"] for c in _tqg_cands(root, b5, h5) if c["rule"] == "tq/too-large" and c["file"] == big]
++    check("S11 r6 整支檔超過上限的訊息說這支整支沒比對", len(big_msg) == 1 and "整支沒比對" in big_msg[0], big_msg)
+     check("S11 其他檔照比", ("tq/skip-added", O) in rules, rules)
+     # 合過主線之後推送,主線上刪掉的測試不算進來
+     r2, _b, c2 = _tqg_repo({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n", "    @Test fun b() { assertEquals(2, g()) }\n")})
+     g = lambda *a: sp.run(["git", "-C", str(r2), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)  # noqa: E731
+     g("branch", "-M", "main")
+     g("checkout", "-q", "-b", "feat")
+     feat1 = c2({"app/src/main/java/x/A.kt": "package x\nfun a() = 1\n"})
+     g("checkout", "-q", "main")
+     c2({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
+     g("checkout", "-q", "feat")
+@@ -121351,20 +121369,33 @@ def t_tq_guard_cli_contract():
+     check("★前置★ 兩條鏈都超過路徑上限、結尾相同", len(keys_two) == 2 and all(k.startswith("#") for k in keys_two) and keys_two[0][-100:] == keys_two[1][-100:], keys_two)
+     check("S11 r5 結尾相同的兩條深鏈,函式鍵靠雜湊分開、不靠 #2", keys_two[0] != keys_two[1] and not any(k.endswith("#2") for k in keys_two), keys_two)
+     # 代碼審 r5:縮範圍後說明文字不再宣稱比對建置檔與 CI;整支檔太大的訊息說整支沒比對
+     hlp = run("--help").stdout
+     top = [ln for ln in sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True, stdin=sp.DEVNULL,
+                                env=_e2e_isolated_env()).stdout.splitlines() if "測試防竄改比對" in ln]
+     check("★前置★ 兩份說明都讀得到", "什麼時候用" in hlp and len(top) == 1, (hlp[:200], top))
+     check("S11 r5 test-guard 的說明不再說會比對建置檔或 CI", not any(w in hlp + top[0] for w in ("CI", "建置", "Gradle")), (hlp[:300], top))
+     check("S11 r5 太大的訊息分得出整支沒比與只有超長行沒比", "整支" in m._TG_WHY["tq/too-large"][0] and "超長行" in m._TG_WHY["tq/too-large"][0], m._TG_WHY["tq/too-large"])
+ 
++    # 代碼審 r6:catch 型別括號裡一層層再包 try/catch,判型別時只查自己那一段的位置表,不重掃內層
++    nest = "{\n" + "try{}catch(\n" * 12000 + "x\n" + "){p()}\n" * 12000 + " assertEquals(1,2)}\n"
++    check("★前置★ 巢狀 catch 括號配得起來", nest.count("(") == nest.count(")") == 2 * 12000 + 1, (nest.count("("), nest.count(")")))
++    t0 = _time.monotonic()
++    m._tg_catch_no_fail({"mbody": nest})
++    check("S11 r6 1 萬 2 千層巢狀 catch 型別括號:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
++    # 代碼審 r6:skill 參考頁的子命令全覽不再說會比對建置檔或 CI
++    import pathlib as _pl
++    ref = (_pl.Path(GRAPHCTL).parent.parent / "skills/lumos-project-notes/reference.md").read_text(encoding="utf-8")
++    tg = [seg.split("）")[0] for seg in ref.split(" / ") if "`test-guard`" in seg]
++    check("★前置★ 參考頁找得到 test-guard 那一段", len(tg) == 1, len(tg))
++    check("S11 r6 參考頁的 test-guard 說明不提建置檔或 CI", not any(w in tg[0] for w in ("CI", "建置")), tg[:1])
++
+ 
+ def t_rg_methods_expression_body_and_backtick():
+     """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+     Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+     翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+     import time as _time
+     m = _tqg_module()
+     kt = ("class T {\n"
+           "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
+           "    @Test fun b() =\n        runTest {\n            assertEquals(2, g())\n        }\n"
+@@ -121434,20 +121465,27 @@ def t_rg_methods_expression_body_and_backtick():
+         "CRLF 空行": "class FooTest\r\n\r\n{\r\n",
+         "CRLF 冒號": "class FooTest :\r\n    Base() {\r\n",
+     }
+     for nm, head in shapes.items():
+         k5 = list(m._tg_functions(head + "    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
+         check(f"S16 r5 {nm}:類別路徑還在", k5 == ["FooTest.t"], k5)
+     # 代碼審 r5:buildSrc、build-logic 底下的測試仍是測試檔(只有它們的正式程式與建置腳本不歸類)
+     for pth in ("buildSrc/src/test/kotlin/FooTest.kt", "build-logic/convention/src/test/kotlin/FooTest.kt"):
+         check(f"S16 r5 {pth} 是測試檔", m._tg_kind(pth) == "test", m._tg_kind(pth))
+ 
++    # 代碼審 r6:行尾逗號後是 FF、VT、全形空白也算空白;測試宣告的泛型巢狀(fun <T : List<Int>> t())也找得到名字
++    for nm, ws in (("FF", "\f"), ("VT", "\v"), ("全形空白", "　")):
++        k6 = list(m._tg_functions("class FooTest : Base()," + ws + "\n    Other {\n    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
++        check(f"S16 r6 行尾逗號後接 {nm}:類別路徑還在", k6 == ["FooTest.t"], k6)
++    k7 = list(m._tg_functions("class A {\n    @Test fun <T : List<Int>> t() { assertEquals(1, f()) }\n}\n", False)[0])
++    check("S16 r6 泛型巢狀的測試宣告找得到名字", k7 == ["A.t"], k7)
++
+ 
+ # ── 作弊比對接進新增告警閘(Projects/Android測試防竄改檢查_計劃 S12–S15)──────────────────────────
+ def _tqg_gate_repo(config=None):
+     """推送前判定用的暫存專案:main 上有一支測試、docs/t-knowledge(治理帳才寫得進去),切到 feat 還沒改 → (root, commit 函式)。"""
+     import json as _j
+     root = Path(tempfile.mkdtemp(prefix="gctl-tqgg-"))
+     _e2e_tgit(root, "init", "-q")
+     files = {_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n"),
+              "docs/t-knowledge/.keep": ""}
+     if config is not None:

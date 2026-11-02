@@ -1,10 +1,10 @@
 # Android 單元測試標準實機演練(2026-11-01)——公開摘要
 
-這是**去識別化之後改寫的摘要**,不是原樣證據:考場是公司私有的消費專案,這裡的類別名、套件名、欄位名換成代稱(`com.example.pos`、`CategoryVm`、`CategorySource`、`Category`、`seq`、`kind`、`name`;考場原有的子套件路徑攤平;剩下的 `com.example.pos.category`、`com.example.pos.drill` 兩層是代稱與演練新增的套件),公開檔不放本機路徑;報告裡的失敗文字也跟著改寫過。不放考場原始碼、代理寫的測試碼、預埋錯誤的 patch 與收據裡的原始碼快照。
+這是**去識別化之後改寫的摘要**,不是原樣證據:考場是公司私有的消費專案,這裡的類別名、套件名、欄位名換成代稱(`com.example.pos`、`CategoryVm`、`CategorySource`、`Category`、`seq`、`kind`、`name`;考場原有的子套件路徑攤平;剩下的 `com.example.pos.category`、`com.example.pos.drill`、`com.example.pos.drill.bad`、`com.example.pos.drill.samples` 四層是代稱與演練新增的套件),公開檔不放本機路徑;報告裡的失敗文字也跟著改寫過。不放考場原始碼、代理寫的測試碼、預埋錯誤的 patch 與收據裡的原始碼快照。
 
 `nextSeq`、`voidCategories`、`VoidCategory` 是代稱或演練時另開的資料來源介面裡的名字;測試方法名(`loadAll_…`、`nextSeq_…` 等)是寫測試的代理在演練中寫的,不是考場原有程式。照原樣保留、不算識別字的:一般英文的方法與屬性名(`loadAll`、`add`、`delete`、`addResult`、`deleteResult`、`error`、`loading`、`categories`)、結果包裝的型別名 `Resource`、Gradle 通用的變體名(`devDebug`)與開發用尾碼(`.dev`)、平板的市售型號。
 
-能重跑的完整卷證(含 patch、收據、平板原始報告、重跑腳本、撤回的設計審那一輪)在考場 repo 的本機分支 `drill/android-unit-test-standard` 的 `drill-evidence/`(考場與測試在提交 8a774ca,卷證補到 c66c81b),只留在演練那台機器、不推。這份摘要不能單獨重跑 `lumos test-quality check`(缺原始碼快照),只供核對結果;收據不記收證工具版本,重跑要用工具鏈驗證紀錄寫的那一版。
+能重跑的完整卷證(含 patch、收據、平板原始報告、重跑腳本、撤回的設計審那一輪)在考場 repo 本機演練分支的 `drill-evidence/`(提交編號只記在考場本機),只留在演練那台機器、不推。這份摘要不能單獨重跑 `lumos test-quality check`(缺原始碼快照),只供核對結果;收據不記收證工具版本,重跑要用工具鏈驗證紀錄寫的那一版。
 
 | 檔 | 內容 |
 |---|---|

@@ -1,0 +1,431 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md
+index c88b2923c..14550f262 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android測試防竄改檢查_計劃.md
+@@ -223,29 +223,29 @@ REVISIT:2026-12-15 Semgrep 的 Truth 與 Hamcrest 自比規則只在考場實跑
+ REVISIT:2026-12-15 考場量測裡「只靠自訂斷言輔助」與「新模組範本設定」兩類誤報的比例;多就在第二批加宣告口
+ REVISIT:2026-12-15 起點是空樹又找不到主線時比對只印不擋(新 repo 第一次推送、CI 淺層 clone);數一次這種推送實際發生幾次(`no-baseline` 帳),多就改成照比對照擋
+ 
+ ## 驗收條款
+ 
+ - [S1] 當改動在測試檔新增 `@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()` 或給既有測試函式加上 `expected =`、或把既有 assume 的條件改掉(例如改成 `assumeTrue(false)`,條件寫成多行也算)時,比對工具應各列一條 `tq/skip-added` 候選;整行是註解的、新寫的測試帶 `expected =`、整檔重新縮排後舊的 `@Ignore`、測試原樣搬到另一支檔帶過去的 `@Ignore`、類別層級 `@Ignore` 的檔改名或搬目錄、同一個 assume 只換行重排、只改 assume 同一行的斷言、字串外的空白重排都不列;assume 字串常值裡多或少一個空白(字詞中間、頭尾、逗號後)要列;一行寫完的 assume 不吞進下一支測試、Truth 的 assume 鏈寫在下一行也算同一個敘述;同一支檔加兩個相同的 `@Ignore` 得到兩個不同指紋。 [test:t_tq_guard_skip_added]
+ - [S2] 當改動前的測試函式在改動後不見、整支測試檔被刪或被改名成非測試檔時,應列 `tq/test-removed`(同一支檔合成一條、列出被刪的函式名);一行寫完的測試被刪、只差字串常值的兄弟測試被刪、兩支一樣的刪兩支只加回一支時要列;本體一字不改只改名、原樣搬到另一支測試檔時不列;巢狀類別裡同名的兩支只刪一支時要列。 [test:t_tq_guard_test_removed]
+ - [S3] 當同一函式的斷言敘述變少(同一行好幾個中綴斷言照個數算)、強斷言變少(例如 `assertEquals(3, n)` 改成 `assertTrue(n > 0)`)或常值斷言變多(例如 `assertTrue(r.isValid())` 改成 `assertTrue(true)`、`assertEquals(88, calc.total())` 改成 `assertEquals(88, 88)`)、或改成恆真寫法(`assertTrue(1L == 1L)`、`assertFalse(x && false)`)時,應列 `tq/assert-weakened`;斷言數不變、只改被測呼叫的參數、兩行中綴斷言合成一行時不列。 [test:t_tq_guard_assert_weakened]
+ - [S4] 當同一函式裡一個斷言的預期值被改(單行、跨行、字串、`assertEquals("訊息", 88, total)` 的 88、匯入 kotlin.test 時 `assertEquals("Alice", name, "訊息")` 的 `"Alice"`、容差 `0.01` 改 `0.1`、`State.Loading` 改 `State.Error`、`assertTrue` 改 `assertFalse`、參數裡有 lambda 箭頭或比較運算、連續好幾個斷言一起改)時,應列 `tq/expected-changed`;只改被測呼叫的參數(`total(listOf(40, 48))` 改成 `total(listOf(48, 40))`)、只改訊息字串、改被測呼叫名、中間插一條斷言時不列。 [test:t_tq_guard_expected_changed]
+ - [S5] 當新增或本體有變的測試函式沒有任何斷言字時,應列 `tq/no-assertion`;用 Truth、Turbine、MockK `verify`、Espresso `.check(`、Kotest `shouldBe`、`captureRoboImage`、Kotlin 的 `assert(`、`thrown.expect(`、`@Test(expected = …)` 的測試,運算式本體 `= runTest { … }`、`= runTest(d) { … }`、`=` 換行接 `runTest {` 裡有斷言的測試,反引號函式名的測試不列;本體沒變的舊測試不列。 [test:t_tq_guard_no_assertion]
+-- [S6] 當 try 區塊沒有 `fail(`/`assertThrows`/`assertFailsWith` 而 catch 區塊有斷言字或是空的、或 `runCatching { … }` 裡有斷言而後面沒接 `.getOrThrow()` 時,應列 `tq/catch-no-fail`;catch 裡有 `fail(`、try 結尾有 `fail(`、try 裡有 `fail(` 而 catch 接 `Throwable` 再斷言型別、catch 把例外重新丟出、`runCatching { … }.getOrThrow()` 時不列;try 結尾補 `fail()` 而 catch 接得住 AssertionError(或更寬)又只印出或是空的,照樣要列(fail 丟的也是 AssertionError);catch 用 Kotest 中綴斷言(`e.message shouldBe "x"`)、`check(…)`、`require(…)` 檢查不列,但恆成立的 `check(true)`、`require(true)`,名字以 should 開頭的變數或方法(`shouldRetry`、`logger.shouldLog(e)`)不算檢查;try 裡只有 Kotest 中綴斷言而 catch 接住 AssertionError 不檢查也要列。 [test:t_tq_guard_catch_no_fail]
++- [S6] 當 try 區塊沒有 `fail(`/`assertThrows`/`assertFailsWith` 而 catch 區塊有斷言字或是空的、或 `runCatching { … }` 裡有斷言而後面沒接 `.getOrThrow()` 時,應列 `tq/catch-no-fail`;catch 裡有 `fail(`、try 結尾有 `fail(`、try 裡有 `fail(` 而 catch 接 `Throwable` 再斷言型別、catch 把例外重新丟出、`runCatching { … }.getOrThrow()` 時不列;try 結尾補 `fail()` 而 catch 接得住 AssertionError(或更寬)又只印出或是空的,照樣要列(fail 丟的也是 AssertionError);catch 用 Kotest 匹配器(照名字認:shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldThrow… 等,中綴 `e.message shouldBe "x"` 與點號呼叫 `e.message.shouldBe("x")`、`e.shouldBeInstanceOf<X>()` 都算)、`check(…)`、`require(…)` 檢查不列,但恆成立的 `check(true)`、`require(true)`,名字以 should 開頭的一般變數或方法(`shouldRetry`、`logger.shouldLog(e)`)不算檢查;try 裡只有 Kotest 斷言(中綴或點號)而 catch 接住 AssertionError 不檢查也要列。 [test:t_tq_guard_catch_no_fail]
+ - [S9] 當逾時數字被調大(含寫在 `@Test(timeout = …)` 註記上)、截圖基準圖有變或比對門檻字樣新增時,應列 `tq/timeout-raised` 或 `tq/snapshot-changed`(同一目錄的基準圖合成一條);逾時被調小、路徑任一段是 docs、fastlane、metadata 的圖、測試目錄 `assets/` 底下的圖不列。 [test:t_tq_guard_timeout_and_snapshot]
+ - [S10] 當正式程式檔新增 `"robolectric"` 或 `Class.forName("org.junit…")` 時,應列 `tq/test-env-sniff`;同樣的字出現在測試檔、正式程式只用 `Build.FINGERPRINT` 時不列。 [test:t_tq_guard_test_env_sniff]
+-- [S11] 當執行 `lumos test-guard --diff` 時,沒有候選應回 0、有候選回 1、不是 git 專案回 0 並說明、參數錯或終點解不出來回 2;`--json` 每條候選有規則代號、檔案、行號、原因、該確認什麼、指紋;上下文位移與整檔重新縮排後指紋不變;檔案加 `-diff` 的 `.gitattributes` 照樣抓得到;檔名不是 UTF-8 列 `tq/unreadable`、內容含 NUL 列 `tq/unparsable`、超過單檔上限列 `tq/too-large`,測試檔有一行超過 2 萬字也列(其餘照比,同檔加的跳過照樣列;正式程式檔不套這道),其他檔照比;合過主線之後推送,主線上刪掉的測試不算進來,本機 main 上還沒推出去的提交照樣算進來(分岔點優先取遠端主線);接近 6 萬行、改約兩千處的測試檔,「`@A` 換行 `val x = 1`」重複 5 萬次的檔,3000 層巢狀的斷言,與一次改 300 支檔,以及同一支函式 8 萬個 assume、5000 層巢狀 try,都應在 30 秒內比完;30 行沒收尾的泛型 10 秒內、250 行 5 秒內;2 萬層巢狀類別 5 秒內、記憶體峰值 200 MB 內,每層都有一支測試時 10 秒內、300 MB 內、每把函式鍵不超過 400 字;1 萬 6 千個 `catch(` 的右括號擠在最後、1800 個類別宣告後接 240 萬字空白、40 行各 3990 個沒收尾的 `fun <` 各 3 秒內;兩個頂層類別底下最內層 100 字相同的深鏈,函式鍵靠摘要裡的雜湊分開;建置檔與 CI 檔改了不出候選(這一批不比);`test-guard` 的說明不宣稱比對建置檔或 CI,太大的訊息分得出整支沒比與只有超長行沒比。 [test:t_tq_guard_cli_contract]
++- [S11] 當執行 `lumos test-guard --diff` 時,沒有候選應回 0、有候選回 1、不是 git 專案回 0 並說明、參數錯或終點解不出來回 2;`--json` 每條候選有規則代號、檔案、行號、原因、該確認什麼、指紋;上下文位移與整檔重新縮排後指紋不變;檔案加 `-diff` 的 `.gitattributes` 照樣抓得到;檔名不是 UTF-8 列 `tq/unreadable`、內容含 NUL 列 `tq/unparsable`、超過單檔上限列 `tq/too-large`,測試檔有一行超過 2 萬字也列(其餘照比,同檔加的跳過照樣列;正式程式檔不套這道),其他檔照比;合過主線之後推送,主線上刪掉的測試不算進來,本機 main 上還沒推出去的提交照樣算進來(分岔點優先取遠端主線);接近 6 萬行、改約兩千處的測試檔,「`@A` 換行 `val x = 1`」重複 5 萬次的檔,3000 層巢狀的斷言,與一次改 300 支檔,以及同一支函式 8 萬個 assume、5000 層巢狀 try,都應在 30 秒內比完;30 行沒收尾的泛型 10 秒內、250 行 5 秒內;2 萬層巢狀類別 5 秒內、記憶體峰值 200 MB 內,每層都有一支測試時 10 秒內、300 MB 內、每把函式鍵不超過 400 字;1 萬 6 千個 `catch(` 的右括號擠在最後、1800 個類別宣告後接 240 萬字空白、40 行各 3990 個沒收尾的 `fun <` 各 3 秒內,1 萬 2 千層巢狀的 catch 型別括號 3 秒內;兩個頂層類別底下最內層 100 字相同的深鏈,函式鍵靠摘要裡的雜湊分開;建置檔與 CI 檔改了不出候選(這一批不比);`test-guard` 的說明與 skill 參考頁不宣稱比對建置檔或 CI,太大的訊息分得出整支沒比與只有超長行沒比(整支超過上限的那條另附「這支整支沒比對」)。 [test:t_tq_guard_cli_contract]
+ - [S12] 當推送的改動有作弊候選時,新增告警閘應把它們算進新增告警並擋下(設定是 block 時),即使專案沒宣告任何檢查工具;`lumos lint-waive <指紋> --note` 放行後同一條不再擋;改動沒碰到三類檔時不跑比對;`tq/` 候選最多印 50 條、超過時印列出全部的指令;放行檔讀不了而有候選時擋下並說先修放行檔,不印放行指令、不記自動放行。 [test:t_lint_new_includes_test_guard]
+ - [S13] 當比對工具丟出非預期例外或超過截止時間時,新增告警閘應記成沒跑完並擋下(不走 fail-open),擋下訊息寫「作弊比對沒跑完」而不是時間預算;起點是空樹而找不到主線分岔點時只印不擋並寫一筆 `no-baseline` 帳;git 讀不出改動的內容(逾時或失敗)也記成沒跑完,不列成可放行的 `tq/unreadable`;`LUMOS_SKIP_LINT_NEW` 只認 1,設成 0 或 false 照常判;這幾筆帳由 `_codeloop_lint_new_step` 寫,判定函式只回傳;自動放行的另外三個出口(依賴宣告壞掉、放行檔壞掉、git 算不出改動清單)各寫原因。 [test:t_lint_new_test_guard_failure_blocks]
+ - [S14] 當閘的設定是 warn、off、`LUMOS_SKIP_LINT_NEW`,或這次範圍把 `lint_new.gate` 放寬時,新增告警閘應這樣處理:warn 逐條印出新增告警、每行以「提醒:」開頭、小結寫「只報不擋」,有比對候選時寫一筆 `warned` 帳;off 或環境變數跳過時比對照樣在背後跑,有候選或比對出錯才各寫一筆 `skipped`/`skipped-env` 治理帳、都沒有不寫;範圍本身把它放寬(從 git 讀起點與終點兩版比)時這次照起點的值判、印提醒並寫一筆 `relax-deferred` 帳;只在工作目錄改、沒提交時照工作目錄的值(既有行為,`t_lint_gate_modes` 照綠)。 [test:t_lint_new_warn_off_and_relax]
+ - [S15] 當執行 `lint-waive` 時,理由少於 10 個字或沒有實字應被拒;終端有人答 y 才記 `origin: human`,答 n 不放行、回 1,沒有互動終端、逾時或讀不到回答記 `origin: ai`;`by` 欄照舊記使用者帳號;`lint-waive --list` 與健檢應列出還沒人看過的 AI 放行;`lint-waive --ack --all` 在沒有互動終端時應拒絕、在互動終端確認後標成看過;沒有 `origin` 欄的舊紀錄(不管 `by` 寫什麼)當人放的;`--list` 印出的理由、檔名、規則欄都不帶控制字元。 [test:t_lint_waive_ai_marking]
+-- [S16] 當找測試函式時,運算式本體 `= runTest { … }`、`= runTest(d) { … }`、`=` 換行接 `runTest {` 應配到對應的右大括號、反引號函式名(含空白與括號)應被找到並從原文取得完整名稱、「`@A` 換行 `val x = 1`」重複 5 萬次的檔應在 5 秒內切完;Room 守衛的 DAO 方法擷取除了 `= db.withTransaction { … }` 這類運算式本體改成整個區塊之外不變,`_rg_split_args` 預設照舊把 `<>` 當括號;`_strip_c_comments` 的既有呼叫輸出不變;比對工具的類別路徑在父型別換行時接得上(行尾逗號或冒號後接長註解、行尾空白、空行、註解行,CRLF 換行),`buildSrc/`、`build-logic/` 底下的測試仍算測試檔。 [test:t_rg_methods_expression_body_and_backtick]
++- [S16] 當找測試函式時,運算式本體 `= runTest { … }`、`= runTest(d) { … }`、`=` 換行接 `runTest {` 應配到對應的右大括號、反引號函式名(含空白與括號)應被找到並從原文取得完整名稱、「`@A` 換行 `val x = 1`」重複 5 萬次的檔應在 5 秒內切完;Room 守衛的 DAO 方法擷取除了 `= db.withTransaction { … }` 這類運算式本體改成整個區塊之外不變,`_rg_split_args` 預設照舊把 `<>` 當括號;`_strip_c_comments` 的既有呼叫輸出不變;比對工具的類別路徑在父型別換行時接得上(行尾逗號或冒號後接長註解、行尾空白、空行、註解行,CRLF 換行,行尾是 FF、VT、全形空白),測試宣告的泛型一層巢狀(`fun <T : List<Int>> t()`)找得到名字,`buildSrc/`、`build-logic/` 底下的測試仍算測試檔。 [test:t_rg_methods_expression_body_and_backtick]
+ - [S17] 當在考場用 Semgrep 1.183.0 對含做法三那幾種自比寫法的 Kotlin 與 Java 測試檔跑 `lumos test-quality scan --semgrep` 時,每一種都應列成候選、`assertThat(f()).isEqualTo(3)` 不列,結果記在驗證紀錄;收證工具掃描的測試照樣全綠。 [manual:看驗證紀錄的 Semgrep 實跑輸出與掃描測試結果]
+ - [S18] 當讀測試品質標準時,應寫到:答案表先行而且寫的人看不到實作、現有程式上紅了不准改預期值、矛盾時停下回報、推送前的防竄改檢查(它自己一個二級標題)與它抓不到的與升級說明、AI 放的放行要人看過、重試後才過不算(`failOnPassedAfterRetry`)、原順序反轉與打亂順序與次數、Orchestrator 與 `clearPackageData`、`ViewModelScenario.recreate()`、範本測試、變異測試只變異改到的類別與每模組要有新報告、arcmutate 的事實、屬性測試的審法與不採用 jqwik、不採用的壞味道,而且連到研讀報告與這份計劃;`03-寫回圖譜.md` 的〈實作測試品質〉有一句指到新節。 [test:t_test_quality_standard_ai_test_guard]
+ - [S19] 當收證工具裝置那路判定的縮排、第一行去空白、字界、`fail|assert` 限定或「從第一個堆疊行起算」任一條被放寬時,收證工具的測試應翻紅。 [test:t_test_quality_cli]
+ - [S20] 當安全證據閘的故障敏感度那條路核對沒有型別欄的裝置字串比較故障收據時,應算抓到錯。 [test:t_secev_tq_device_text_fault_counts_like_assertion]
+ - [S21] 當在考場對這一批每條規則的壞改動跑比對工具時(建置檔與 CI 的壞改動在代碼審 r4 縮範圍後不列,留作第二批的對照),每條都應被對應規則抓到;正常改動的對照組不應出候選;結果記在驗證紀錄。 [manual:看驗證紀錄的考場對照表與公開卷證]
+ - [S22] 當拿考場 develop 的真實歷史跑比對工具時,每條候選應有人工裁定(作弊樣、合理改動、規則判錯)與規則判錯率,判錯多的規則有收窄紀錄。 [manual:看驗證紀錄的誤報量測表]
+ - [S23] 當新頂層指令 `lumos test-guard` 上線時,說明表、指令總數(兩份文件)、子命令全覽與指令索引都應提到它。 [test:t_test_guard_registered]
+ 
+ 每條 `[test:]` 的測試照 `Systems/測試假綠形態` 的規矩:先寫前置斷言證明樣本真的走到被測的那條路(例如 S14 先證明 off 時比對真的跑了、S19 先證明樣本真的走到那條判定分支),再斷言結果;實作時每道判斷逐條改壞一次,確認對應的檢查各自會紅。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 0571d6331..fd917853a 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -23,21 +23,21 @@ summary: |-
+   PITFALL:建置檔 enabled = 換行接 false 時逐行比對看不到 [出處:2026-11-02 實作時測試先紅] [根因:建置檔規則逐行比對] [修法:行尾是 = 的把下一行接上來一起判] [repro:計劃第二批原 S7 的 test 區塊 enabled = 換行 false] [status:superseded] [被取代:代碼審 r4 使用者裁定縮範圍,建置檔與 CI 規則移到 [[Projects/Android測試防竄改檢查_計劃]] 第二批]
+   WHY:跳過註記的身分是「函式名 + 跳過」,不帶類別、本體與註記種類;類別層級的註記另以所在檔區分(改名或搬家時兩邊都用新路徑);assume 呼叫與比對門檻改帶整個敘述、字串外的空白整理過(字串常值原樣,代碼審 r5;代碼審 r2:條件改成永遠跳過、門檻調高原本不算新增;r3:只取一行時多行寫法漏抓、換行重排與改同一行斷言被誤列) [出處:[[Projects/Android測試防竄改檢查_計劃]] 代碼審 r1 正確性、通才、邊界、資源四席] [因:帶本體簽名時只改本體就把早就跳過的測試列成新增、@Ignore 換 @Disabled 也列;類別層級註記跨檔合算會一支拿掉一支加上互抵] [代價:不同類別裡同名的兩支測試一支拿掉跳過、另一支加上會互抵(寫進抓不到清單)] [test:t_tq_guard_skip_added]
+   WHY:比對花掉的時間不算進檢查命令的時間預算,最壞情況整道閘的時間是預算的兩倍 [出處:代碼審 r1 資源席] [因:共用預算時比對先跑會讓調小預算的專案被判「時間預算沒跑到」而誤擋] [不選:比對另設比例預算(多一個設定鍵)] [代價:慢機器上整道閘最多跑到預算的兩倍] [test:t_lint_new_includes_test_guard]
+   WHY:測試檔裡超過 2 萬字的行抹掉不比、那支檔另列一條可放行的 tq/too-large(正式程式檔的判讀是逐行一條正規式,不設這道;建置檔與 CI 這一批不比) [出處:代碼審 r2 資源、邊界、正確性三席] [因:規模那一族連兩輪被病態單行輸入打穿平方級,逐點補線性補不完;外層看門不靠逐條判斷,判錯的代價從推送卡到超時變成多一條要人放行的候選] [不選:繼續逐點補(第三輪仍會有漏網的那一處);整支不解析(r3 資安席:加一行長註解就把同檔作弊壓成一條)] [代價:壓縮檔、產生的程式一行很長時每次都要人放行] [test:t_tq_guard_cli_contract]
+   WHY:比對起點的分岔點先只看遠端主線,沒有遠端主線才退回本機 main [出處:代碼審 r2 資安席] [因:本機 main 上還沒推出去的提交沒有任何一次推送比對過,算進主線就把那段改動從比對範圍扣掉;回頭重讀的分岔點同一個理由不收本機主線] [不選:照 Room 守衛手動跑的寫法連本機主線一起算] [test:t_tq_guard_cli_contract]
+   WHY:建置檔的 ignoreFailures 不限在測試區塊,只排除外層或同一行開的區塊是靜態檢查外掛或報表(而且不是測試任務)的;點名測試任務看引號裡是不是整個含 test 的任務名形狀(報表外掛的任務名不算) [出處:代碼審 r2 正確性、通才、邊界、合約四席] [因:第一輪把 ignoreFailures 收窄到測試區塊,點號寫法與重試區塊全漏;「引號裡含 test 就算」又把 JaCoCo 的 exclude 誤擋] [不選:只看區塊開頭(漏同一行寫完的);要有 named、matching 這類呼叫字樣(r3:漏 findByName、tasks[…]、getByPath)] [status:superseded] [被取代:代碼審 r4 使用者裁定縮範圍,建置檔與 CI 規則移到 [[Projects/Android測試防竄改檢查_計劃]] 第二批]
+   WHY:LUMOS_SKIP_LINT_NEW 只認 1,設成 0 或 false 照常判 [出處:代碼審 r3 資安席] [因:同族的 LUMOS_SKIP_ROOM_GUARD、LUMOS_SKIP_NOTE_SHAPE 都只認 1;殘留或照字面設成 0 的環境變數會無聲關掉整道閘連同作弊比對] [不選:有設就關(原寫法)] [test:t_lint_new_test_guard_failure_blocks]
+   WHY:建置檔與 CI 檔這一批不比,移到計劃第二批另做 [出處:代碼審 r4 使用者裁定縮範圍] [因:四輪代碼審裡這兩類的 major 佔大宗,用正規式猜 Gradle DSL 與 shell 的寫法每輪都被新寫法打穿(字串模板任務名、一行開兩個區塊、鏈結換行、路徑形式的 gradle、病態長行回溯)] [不選:再補一輪字表] [代價:這一批推上去之後,建置檔與 CI 讓測試不跑或失敗不算的改動不會被列,寫在標準的抓不到清單] [test:t_tq_guard_cli_contract]
+   REVISIT:2026-12-15 建置檔與 CI 的作弊比對(計劃第二批)開計劃了沒;沒開就重新排程,並確認標準的抓不到清單還寫著這個缺口
+   PITFALL:單行上限之內仍有三種乘積形狀讓比對跑過 30 秒(catch 型別括號掃到很遠的右括號、類別名後接大段空白、測試宣告找不到名字時泛型角括號沒上限) [出處:代碼審 r5 邊界、資源席] [根因:每個命中各自往後掃同一段很遠的文字,外層的單行上限擋不到] [修法:catch 括號用共用的括號對應表、換行後第一個非空白字與一行最後一個非空白字每個位置只找一次、角括號最多看 _TG_MAX_GENERIC_CHARS 字] [test:t_tq_guard_cli_contract]
+-  WHY:catch 判讀另用窄的 Kotest 中綴認法(前後是空白的 a shouldBe b 形狀),恆成立的 check(true)、require(true) 不算檢查 [出處:代碼審 r5 正確性、邊界、資安三席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列] [不選:改寬判法本身(「沒斷言」規則會把 x.shouldBe(5) 這種呼叫寫法誤列)] [test:t_tq_guard_catch_no_fail]
++  WHY:catch 判讀另用一條照 Kotest 匹配器名字認的寫法(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldThrow… 等,中綴與點號呼叫都算),恆成立的 check(true)、require(true) 不算檢查 [出處:代碼審 r5 正確性、邊界、資安三席;r6 正確性、邊界兩席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列;r5 改成只認中綴形狀,又把點號呼叫的真檢查排除,該列的漏列、正常的被誤列] [不選:改寬判法本身(「沒斷言」規則會把 x.shouldBe(5) 這種呼叫寫法誤列)] [test:t_tq_guard_catch_no_fail]
+   REVISIT:2026-12-15 一次推送的測試檔總量接近 200 MB 時峰值記憶體約為內容的 16 到 23 倍(代碼審 r5 資源席量測,原有設計);第二批評估逐檔放掉原文與切段
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/scripts/lumos b/scripts/lumos
+index 5f129c0d2..a6f38b111 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48406,21 +48406,21 @@ def _tg_kinds(old, new):
+     """改動前後兩個路徑任一邊是測試檔就當測試檔(改名成 .disabled、搬進 src/main 都看得到)。"""
+     ko, kn = (_tg_kind(old) if old else None), (_tg_kind(new) if new else None)
+     return "test" if "test" in (ko, kn) else (kn or ko)
+ 
+ 
+ def _tg_strip(text, keep_strings=False):
+     """剝註解(keep_strings=False 時連字串內容一起換成空白),位置跟原文一一對應:在剝過的文字找位置、回原文取字。"""
+     return _strip_c_comments(text, blank_strings=not keep_strings, keep_length=True)
+ 
+ 
+-_TG_NAME_RE = re.compile(r"\bfun\s+(?:<[^>\n]{0,%d}>\s*)?" % _TG_MAX_GENERIC_CHARS + r"(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
++_TG_NAME_RE = re.compile(r"\bfun\s+(?:<(?:[^<>\n]|<[^<>\n]{0,%d}>){0,%d}>\s*)?" % (_TG_MAX_GENERIC_CHARS, _TG_MAX_GENERIC_CHARS) + r"(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
+ 
+ 
+ _TG_CLASS_STOP = re.compile(r"[{(\n]")
+ _TG_SUPERTYPE = re.compile(r"(?:extends|implements|where)\b")
+ 
+ 
+ def _tg_class_at(stripped):
+     """剝過的文字 → {行號: 外層類別路徑}。沿大括號深度追 class/object/interface 宣告;`Foo::class` 不算宣告,
+     沒有本體的類別(`data class Row(val a: Int)`)不會把下一個大括號當成自己的本體。路徑在開類別時接一次、存在堆疊上,
+     超過 _TG_MAX_PATH_CHARS 就換成前段加摘要(_tg_path_join):很深的巢狀每層都有測試時,路徑與函式鍵的總長也跟深度成正比。"""
+@@ -48500,38 +48500,35 @@ def _tg_skip_generic(stripped, j):
+         e = stripped.find(">", k, lim)
+         if e < 0:
+             return j
+         opened += stripped.count("<", k, e + 1)
+         closed += 1
+         k = e + 1
+         if opened == closed:
+             return k
+ 
+ 
+-_TG_NONWS = re.compile(r"[^ \t\r\n]")
+-
+-
+ def _tg_next_nonspace(stripped, k, memo):
+-    """位置 k 起第一個不是空白、tab、CR、換行的字的位置(沒有就是文字長度);同一個起點只找一次。"""
++    """位置 k 起第一個不是空白字(含 tab、CR、換行、FF、VT、全形空白)的位置(沒有就是文字長度);同一個起點只找一次。"""
+     key = ("ws", k)
+     if key not in memo:
+-        m = _TG_NONWS.search(stripped, k)
++        m = _TG_NONSPACE.search(stripped, k)
+         memo[key] = m.start() if m else len(stripped)
+     return memo[key]
+ 
+ 
+ def _tg_line_last(stripped, p, memo):
+-    """換行位置 p 那一行最後一個不是空白、tab、CR 的字的位置(整行空白回 -1);同一行只算一次。"""
++    """換行位置 p 那一行最後一個不是空白字的位置(整行空白回 -1);同一行只算一次。"""
+     key = ("last", p)
+     if key not in memo:
+         ls = stripped.rfind("\n", 0, p) + 1
+-        body = stripped[ls:p].rstrip(" \t\r")
++        body = stripped[ls:p].rstrip()
+         memo[key] = ls + len(body) - 1 if body else -1
+     return memo[key]
+ 
+ 
+ def _tg_supertype_next_line(stripped, k, memo):
+     """換行之後的位置 k → 下一個非空白字的位置,如果它是 `{` 或父型別的續寫(`:`、`,`、extends、implements、where);否則 None。"""
+     n = len(stripped)
+     k = _tg_next_nonspace(stripped, k, memo)
+     if k < n and (stripped[k] in "{:," or _TG_SUPERTYPE.match(stripped, k)):
+         return k
+@@ -48812,34 +48809,35 @@ def _tg_pairs(old, new, kotlin_test=False):
+ _TG_TRY = re.compile(r"\btry\s*\{")
+ _TG_CATCH = re.compile(r"\s*catch\s*\(")
+ _TG_OPEN_BRACE = re.compile(r"\s*\{")
+ # catch 接得住斷言失敗的型別:AssertionError 本身、或比它寬的 Error、Throwable(Kotlin 與 Java 寫法都認)
+ _TG_CATCH_ASSERT = re.compile(r"\b(?:AssertionError|AssertionFailedError|Error|Throwable)\b")
+ _TG_TRY_OK = re.compile(r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?:fail|assertThrows|assertFailsWith|assertFails)\s*[({<]")
+ _TG_RUNCATCH = re.compile(r"\brunCatching\s*\{")
+ _TG_FAIL_CALL = re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")
+ _TG_THROW = re.compile(r"\bthrow\b")
+ _TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\((?!\s*true\s*\))")   # Kotlin 標準庫的檢查,不成立就丟例外;恆成立的 check(true) 不算
+-# Kotest 中綴斷言只認 `a shouldBe b` 的形狀(前面空白、後面空白再接值):名字以 should 開頭的變數、`.shouldLog(` 這種方法不算。
+-# _TG_INFIX_RE 是「這支測試有沒有斷言」用的寬判法(寧可多認),catch 判讀要分辨有沒有真的檢查,所以另用這條窄的
+-_TG_INFIX_STRICT = re.compile(r"(?<=\s)should[A-Z]\w*(?=\s+[^\s=:])")
++# Kotest 匹配器照名字認(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldStart…、shouldEnd…、shouldMatch…、shouldThrow…、
++# shouldExist…),中綴(`a shouldBe b`)與點號呼叫(`a.shouldBe(b)`)都算;shouldRetry、shouldLog 這種一般名字、後面接 = 或 : 的宣告不算。
++# _TG_INFIX_RE 是「這支測試有沒有斷言」用的寬判法(寧可多認),catch 判讀要分辨有沒有真的檢查,所以另用這條照名字認的
++_TG_KOTEST_CHECK = re.compile(r"(?<!\w)should(?:Be|Not|Have|Contain|Start|End|Match|Throw|Exist)\w*(?!\w)(?!\s*[=:])")
+ _TG_NONSPACE = re.compile(r"\S")
+ 
+ 
+ def _tg_catch_no_fail(fn):
+     """try 沒有 fail、catch 裡斷言或是空的;try 裡有斷言、catch 接住斷言失敗卻不再丟出;runCatching 裡斷言沒接 getOrThrow。
+-    斷言、fail、throw 的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
++    斷言、fail、throw、catch 型別字的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
+     import bisect
+     b = fn["mbody"]
+     br = _rg_bracket_map(b)
+     pos = {k: [m.start() for m in rx.finditer(b)] for k, rx in
+-           (("assert", _TG_ASSERT_RE), ("infix", _TG_INFIX_STRICT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
++           (("assert", _TG_ASSERT_RE), ("infix", _TG_KOTEST_CHECK), ("ctype", _TG_CATCH_ASSERT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
+             ("throw", _TG_THROW))}
+ 
+     def has(kind, lo, hi):
+         p = pos[kind]
+         i = bisect.bisect_left(p, lo)
+         return i < len(p) and p[i] < hi
+     for t in _TG_TRY.finditer(b):
+         tb_end = br.get(t.end() - 1)
+         c = _TG_CATCH.match(b, tb_end + 1) if tb_end is not None else None
+         close = br.get(c.end() - 1) if c else None
+@@ -48848,21 +48846,21 @@ def _tg_catch_no_fail(fn):
+             continue
+         cs, cb_end = o.end(), br[o.end() - 1]
+         if has("fail", cs, cb_end):
+             continue
+         catch_checks = has("assert", cs, cb_end) or has("infix", cs, cb_end) or has("check", cs, cb_end)
+         # 「try 沒有 fail、catch 裡斷言或是空的」:try 有 fail/assertThrows 是預期例外的寫法,不算
+         if not has("ok", t.end(), tb_end) and (catch_checks or not _TG_NONSPACE.search(b, cs, cb_end)):
+             return True
+         # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError;含 Kotest 中綴斷言)被接得住它的 catch 接住、catch 不檢查也不再丟出:吞掉了
+         tried = has("assert", t.end(), tb_end) or has("infix", t.end(), tb_end)
+-        if _TG_CATCH_ASSERT.search(b, c.end(), close) and tried and not catch_checks and not has("throw", cs, cb_end):
++        if has("ctype", c.end(), close) and tried and not catch_checks and not has("throw", cs, cb_end):
+             return True
+     for r in _TG_RUNCATCH.finditer(b):
+         end = br.get(r.end() - 1)
+         if end is not None and has("assert", r.end(), end) and not re.match(r"\s*\.\s*getOrThrow\s*\(", b[end + 1:end + 60]):
+             return True
+     return False
+ 
+ 
+ # 跳過標記:短名或完整類別名(@org.junit.jupiter.api.Disabled)都認;JUnit 5 的條件式(@DisabledOnOs、@EnabledOnOs…)在 CI 平台上等於關掉
+ _TG_SKIP_ANN_RE = re.compile(r"@(?:[\w.]+\.)?(?:Ignore|Disabled\w*|Enabled(?:On|If|For)\w*|SdkSuppress|FlakyTest)\b|@(?:[\w.]+\.)?Config\s*\(\s*sdk\b")
+@@ -49111,21 +49109,23 @@ def _tg_analyze(root, base, head, deadline=None):
+     if text is None:
+         return None, "git 讀不出改動的內容(逾時或 git 跑不動)"
+     test_files, base_hits, head_hits = [], {}, {}
+     for kind, old, new, new_sha in rows:
+         if deadline is not None and _git_timeout(deadline) <= 0:
+             raise TimeoutError("比對工具超過截止時間")
+         path = new or old
+         b = text.get(("base", old), "") if old else ""
+         h = text.get(("head", new), "") if new else ""
+         if "TOOLARGE" in (b, h) or "UNREADABLE" in (b, h):
+-            cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}") if "TOOLARGE" in (b, h)
++            cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}",
++                                  extra=f"整支檔超過 {_TG_MAX_BYTES // 1_000_000} MB 或 {_TG_MAX_LINES} 行的上限,這支整支沒比對")
++                         if "TOOLARGE" in (b, h)
+                          else _tg_cand("tq/unreadable", path, 0, path))
+         elif kind == "test":
+             if _tg_has_long_line(b) or _tg_has_long_line(h):
+                 # 超長的行(壓縮資料、產生的程式、病態輸入)抹成空行再比:同檔其他改動照樣逐條列,那幾行要人另外看
+                 cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}:line",
+                                       extra=f"有一行超過 {_TG_MAX_LINE_CHARS} 字,那幾行沒比對,其餘照比"))
+                 b, h = _tg_blank_long_lines(b), _tg_blank_long_lines(h)
+             cands += _tg_test_file(test_files, base_hits, head_hits, old, new, new_sha, b, h)
+         else:
+             cands += _tg_main_cands(path, b, h)
+@@ -49289,25 +49289,26 @@ def _tg_fn_cands(path, k, f, prev, kt):
+ 
+ 
+ # 抓不到的,跟測試品質標準〈推送前的防竄改檢查〉的「抓不到」那條是同一份(去掉反引號後逐句對得上,t_tq_guard_cli_contract 釘住)
+ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認)",
+               "實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查",
+               "預期值先放進變數再斷言(val expected = 88)、參數化測試刪資料列、本體有改的改名(只列成刪除)、"
+               "逾時換單位(5.seconds 改 5.minutes)或整行新增的逾時、CI 的 timeout-minutes",
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助、"
+               "同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources",
+               "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一版不比(之後另做);"
+-              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立的斷言(assertTrue(true))算有檢查",
++              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立或空泛的檢查(assertTrue(true)、check(1 == 1)、assertNotNull(e))算有檢查",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+               "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large;assume 敘述超過 2000 字的尾段不進身分;"
+               "用單獨的 CR 或 Java 的 \\u000a 提前結束行註解",
+               "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
++              "測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算",
+               "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。
+     有候選 rc1、沒有 rc0;不是 git 專案講一句 rc0;範圍寫錯或終點找不到 rc2(退出碼照 Room 守衛)。只讀 git,不跑測試、不改檔。"""
+     import json as _json
+     root = _note_audit_root(repo)
+     if root is None or not _is_git_worktree(root):
+         print("test-guard:這裡不是 git 專案,沒比", file=sys.stderr)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f351816f3..6ddc1a482 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -121013,20 +121013,36 @@ def t_tq_guard_catch_no_fail():
+         "w4": "    @Test\n    fun w4() { try { foo(); fail(\"x\") } catch (e: Throwable) { logger.shouldLog(e) } }\n",
+         "w5": "    @Test\n    fun w5() { try { result shouldBe 5 } catch (e: AssertionError) { println(e) } }\n",
+     }
+     keep = "    @Test\n    fun w6() { try { cleanup() } catch (e: Exception) { logger.shouldReport(e) }\n        assertEquals(1, f()) }\n"
+     h6 = commit({T: _tqg_kt(old, *sw.values(), keep)})
+     got6 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h6) if c["rule"] == "tq/catch-no-fail"}
+     for k in sw:
+         check(f"S6 r5 {k} 吞掉斷言要列", k in got6, got6)
+     check("S6 r5 w6 catch 只是叫 should 開頭的方法、try 沒斷言不列", "w6" not in got6, got6)
+ 
++    # 代碼審 r6:Kotest 匹配器照名字認(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldThrow…),中綴與點號呼叫都算;
++    # shouldRetry、shouldLog 這種一般名字不算。catch 兩個子句與 try 側都要照這個認
++    dc = {
++        "d1": ("    @Test\n    fun d1() { try { foo() } catch (e: Exception) { e.message.shouldNotBeNull() } }\n", True),
++        "d2": ("    @Test\n    fun d2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.shouldBeInstanceOf<IllegalStateException>() } }\n", False),
++        "d3": ("    @Test\n    fun d3() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message.shouldBe(\"x\") } }\n", False),
++        "d4": ("    @Test\n    fun d4() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldBe(\"x\") } }\n", False),
++        "d5": ("    @Test\n    fun d5() { try { f().shouldBe(5) } catch (e: Throwable) { println(e) } }\n", True),
++        "d6": ("    @Test\n    fun d6() { try { foo() } catch (e: IllegalStateException) { if (n < 3 && shouldRetry && ok) { n++ } }\n"
++               "        assertEquals(1, f()) }\n", False),
++    }
++    h7 = commit({T: _tqg_kt(old, *(b for b, _w in dc.values()))})
++    got7 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h7) if c["rule"] == "tq/catch-no-fail"}
++    for k, (_b, want) in dc.items():
++        check(f"S6 r6 {k} {'要列' if want else '不列'}", (k in got7) == want, got7)
++
+ 
+ def t_tq_guard_timeout_and_snapshot():
+     """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+     翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+     T = _TQG_T
+     body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     h = commit({T: _tqg_kt(body.replace("30", "300"))})
+     check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+     h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+@@ -121132,20 +121148,22 @@ def t_tq_guard_cli_contract():
+     (root / T).write_bytes((_tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n") + "\0junk").encode())
+     big = "app/src/test/java/x/BigTest.kt"
+     (root / big).write_text("package x\n" + "// x\n" * (m._TG_MAX_LINES + 5), encoding="utf-8")
+     sp.run(["git", "-C", str(root), "add", O, T, big], capture_output=True)
+     sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "odd"], capture_output=True)
+     h5 = sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+     rules = _tqg_rules(root, b5, h5)
+     check("S11 檔名不是 UTF-8 列 tq/unreadable", any(r == "tq/unreadable" for r, _f in rules), rules)
+     check("S11 內容含 NUL 列 tq/unparsable", ("tq/unparsable", T) in rules, rules)
+     check("S11 超過單檔上限列 tq/too-large", ("tq/too-large", big) in rules, rules)
++    big_msg = [c["message"] for c in _tqg_cands(root, b5, h5) if c["rule"] == "tq/too-large" and c["file"] == big]
++    check("S11 r6 整支檔超過上限的訊息說這支整支沒比對", len(big_msg) == 1 and "整支沒比對" in big_msg[0], big_msg)
+     check("S11 其他檔照比", ("tq/skip-added", O) in rules, rules)
+     # 合過主線之後推送,主線上刪掉的測試不算進來
+     r2, _b, c2 = _tqg_repo({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n", "    @Test fun b() { assertEquals(2, g()) }\n")})
+     g = lambda *a: sp.run(["git", "-C", str(r2), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)  # noqa: E731
+     g("branch", "-M", "main")
+     g("checkout", "-q", "-b", "feat")
+     feat1 = c2({"app/src/main/java/x/A.kt": "package x\nfun a() = 1\n"})
+     g("checkout", "-q", "main")
+     c2({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
+     g("checkout", "-q", "feat")
+@@ -121351,20 +121369,33 @@ def t_tq_guard_cli_contract():
+     check("★前置★ 兩條鏈都超過路徑上限、結尾相同", len(keys_two) == 2 and all(k.startswith("#") for k in keys_two) and keys_two[0][-100:] == keys_two[1][-100:], keys_two)
+     check("S11 r5 結尾相同的兩條深鏈,函式鍵靠雜湊分開、不靠 #2", keys_two[0] != keys_two[1] and not any(k.endswith("#2") for k in keys_two), keys_two)
+     # 代碼審 r5:縮範圍後說明文字不再宣稱比對建置檔與 CI;整支檔太大的訊息說整支沒比對
+     hlp = run("--help").stdout
+     top = [ln for ln in sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True, stdin=sp.DEVNULL,
+                                env=_e2e_isolated_env()).stdout.splitlines() if "測試防竄改比對" in ln]
+     check("★前置★ 兩份說明都讀得到", "什麼時候用" in hlp and len(top) == 1, (hlp[:200], top))
+     check("S11 r5 test-guard 的說明不再說會比對建置檔或 CI", not any(w in hlp + top[0] for w in ("CI", "建置", "Gradle")), (hlp[:300], top))
+     check("S11 r5 太大的訊息分得出整支沒比與只有超長行沒比", "整支" in m._TG_WHY["tq/too-large"][0] and "超長行" in m._TG_WHY["tq/too-large"][0], m._TG_WHY["tq/too-large"])
+ 
++    # 代碼審 r6:catch 型別括號裡一層層再包 try/catch,判型別時只查自己那一段的位置表,不重掃內層
++    nest = "{\n" + "try{}catch(\n" * 12000 + "x\n" + "){p()}\n" * 12000 + " assertEquals(1,2)}\n"
++    check("★前置★ 巢狀 catch 括號配得起來", nest.count("(") == nest.count(")") == 2 * 12000 + 1, (nest.count("("), nest.count(")")))
++    t0 = _time.monotonic()
++    m._tg_catch_no_fail({"mbody": nest})
++    check("S11 r6 1 萬 2 千層巢狀 catch 型別括號:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
++    # 代碼審 r6:skill 參考頁的子命令全覽不再說會比對建置檔或 CI
++    import pathlib as _pl
++    ref = (_pl.Path(GRAPHCTL).parent.parent / "skills/lumos-project-notes/reference.md").read_text(encoding="utf-8")
++    tg = [seg.split("）")[0] for seg in ref.split(" / ") if "`test-guard`" in seg]
++    check("★前置★ 參考頁找得到 test-guard 那一段", len(tg) == 1, len(tg))
++    check("S11 r6 參考頁的 test-guard 說明不提建置檔或 CI", not any(w in tg[0] for w in ("CI", "建置")), tg[:1])
++
+ 
+ def t_rg_methods_expression_body_and_backtick():
+     """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+     Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+     翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+     import time as _time
+     m = _tqg_module()
+     kt = ("class T {\n"
+           "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
+           "    @Test fun b() =\n        runTest {\n            assertEquals(2, g())\n        }\n"
+@@ -121434,20 +121465,27 @@ def t_rg_methods_expression_body_and_backtick():
+         "CRLF 空行": "class FooTest\r\n\r\n{\r\n",
+         "CRLF 冒號": "class FooTest :\r\n    Base() {\r\n",
+     }
+     for nm, head in shapes.items():
+         k5 = list(m._tg_functions(head + "    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
+         check(f"S16 r5 {nm}:類別路徑還在", k5 == ["FooTest.t"], k5)
+     # 代碼審 r5:buildSrc、build-logic 底下的測試仍是測試檔(只有它們的正式程式與建置腳本不歸類)
+     for pth in ("buildSrc/src/test/kotlin/FooTest.kt", "build-logic/convention/src/test/kotlin/FooTest.kt"):
+         check(f"S16 r5 {pth} 是測試檔", m._tg_kind(pth) == "test", m._tg_kind(pth))
+ 
++    # 代碼審 r6:行尾逗號後是 FF、VT、全形空白也算空白;測試宣告的泛型巢狀(fun <T : List<Int>> t())也找得到名字
++    for nm, ws in (("FF", "\f"), ("VT", "\v"), ("全形空白", "　")):
++        k6 = list(m._tg_functions("class FooTest : Base()," + ws + "\n    Other {\n    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
++        check(f"S16 r6 行尾逗號後接 {nm}:類別路徑還在", k6 == ["FooTest.t"], k6)
++    k7 = list(m._tg_functions("class A {\n    @Test fun <T : List<Int>> t() { assertEquals(1, f()) }\n}\n", False)[0])
++    check("S16 r6 泛型巢狀的測試宣告找得到名字", k7 == ["A.t"], k7)
++
+ 
+ # ── 作弊比對接進新增告警閘(Projects/Android測試防竄改檢查_計劃 S12–S15)──────────────────────────
+ def _tqg_gate_repo(config=None):
+     """推送前判定用的暫存專案:main 上有一支測試、docs/t-knowledge(治理帳才寫得進去),切到 feat 還沒改 → (root, commit 函式)。"""
+     import json as _j
+     root = Path(tempfile.mkdtemp(prefix="gctl-tqgg-"))
+     _e2e_tgit(root, "init", "-q")
+     files = {_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n"),
+              "docs/t-knowledge/.keep": ""}
+     if config is not None:
+diff --git a/skills/lumos-project-notes/commands/test-quality-standard.md b/skills/lumos-project-notes/commands/test-quality-standard.md
+index 4a8349146..7c068c6df 100644
+--- a/skills/lumos-project-notes/commands/test-quality-standard.md
++++ b/skills/lumos-project-notes/commands/test-quality-standard.md
+@@ -29,21 +29,21 @@
+ 
+ 審查 AI 寫的測試另外問這幾題:預期值從哪來(需求、人工確認、獨立參考,不是程式目前的輸出);有沒有明知漏了需求還照交;有沒有多出沒人要的別名或退路(只為了讓某支測試過);截圖基準圖有變要看新舊比較圖,不只看「重錄了」;mock 與假資料的形狀要照真實上游輸出(抓一次真輸出當樣本),不用手寫的簡化形狀。
+ 
+ 合法性質測試、确定性與 snapshot 可提供補充證據，配獨立已知答案或其他足夠約束。例如只驗排序兩次等於一次，永遠回傳空陣列也能過；再驗元素保留、順序與已知例子。snapshot 要交代核對來源，批量接受目前輸出不能當需求正確。靜態命中先核對目的，不因形式相似自動刪除。
+ 
+ ## 推送前的防竄改檢查
+ 
+ 推送前的新增告警閘會跑 `lumos test-guard`(作弊比對,單源 [[Projects/Android測試防竄改檢查_計劃]]):從跟主線的分岔點起,比對這次改動前後兩版,列出讓測試變得不會紅的改動。規則代號都以 `tq/` 開頭,每條是**候選不是定罪**,擋下訊息每條附「該確認什麼」。
+ 
+ - **抓什麼**:測試檔新增跳過標記(`@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()`、既有 assume 的條件被改(多行寫法也算)、既有測試加 `expected =`);測試函式被刪或整支測試檔被刪;同一函式斷言變少、強斷言變少、常值斷言變多;斷言的預期值被改;新增或本體有變的測試沒有斷言;try 沒有 `fail(` 而 catch 裡斷言或是空的;try 裡有斷言(含結尾的 `fail(`)而 catch 接得住 AssertionError 卻不檢查也不重丟;測試的逾時調大;截圖基準圖有變或測試裡的比對門檻新增或調高;正式程式偵測測試環境(`"robolectric"`、`Class.forName("org.junit…")`)。單一怪檔(太大、含 NUL、檔名不是 UTF-8)各自列成可放行的候選、不解析;測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的候選、其餘照比。
+-- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一版不比(之後另做);把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立的斷言(`assertTrue(true)`)算有檢查;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
++- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一版不比(之後另做);把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立或空泛的檢查(`assertTrue(true)`、`check(1 == 1)`、`assertNotNull(e)`)算有檢查;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
+ - **怎麼放行**:改動是需求要的,就照擋下訊息印好的指令放行,理由寫「為什麼這個改動是需求要的」(去掉空白至少 10 個字):`lumos lint-waive <指紋> --rule <規則> --file <檔> --note "<理由>"`。放行檔 `.lumos/lint-waivers.json` 要一起提交。
+ - **AI 放的放行要人看過**:放行時終端有人答 y 才記成人放的;沒有互動終端記成 AI 放的,推送前小結與健檢會一直列出來,直到人在終端跑 `lumos lint-waive --ack --all`。
+ - **比對自己壞了**:擋下訊息寫「作弊比對沒跑完」;這一次要先過用 `LUMOS_SKIP_LINT_NEW=1`(只認 1;會留一筆 `skipped-env` 帳,寫比對出錯的原因)。
+ - **升級說明**:觸發只看路徑與副檔名,不判是不是 Android——任何 Kotlin/Java 專案(含 JVM 後端)改到測試檔或正式程式檔都會跑,截圖基準圖不分技術棧都會跑;建置檔與 CI 檔這一批不比(在計劃的第二批)。不想擋的專案把 `.lumos/config.json` 的 `lint_new.gate` 設成 warn(只報不擋)或 off(比對照樣在背後跑、有候選或比對出錯時留帳);提交後從下一次推送起生效,同一次推送照放寬前的值判。
+ 
+ ## 工具接入：統一證據，按棧接 runner
+ 
+ 使用各專案既有 runner，选配成熟 mutation 工具。Lumos 不自建通用多語言解析器或 mutation engine，也不靠記帳欄位宣稱語意正確。所有執行限隔離的本機、可信 fixture；外部服務、資料庫、副作用須另設隔離，暫存原始碼不能代替環境隔離。
+ 
+ | 棧 | 本機測試入口（由專案固定實際命令） | 抓錯工具方向 | 资格需分開驗的範圍 |
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 65bb6b8c4..9b6c83fa6 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -108,21 +108,21 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合
+ 
+ **安裝 / 生命週期**（操作工具鏈本身,不碰圖譜資料;唯一源 = 公開 repo `EnzoHsieh-Android/Lumos`，預設 clone 到 `~/harness/lumos-toolchain`）：
+ 
+ | 操作 | 指令 | 說明 |
+ |---|---|---|
+ | 全域安裝 lumos（symlink → `~/.local/bin`） | `python3 scripts/lumos install [--force]` | 裝完任何專案子目錄直接 `lumos <cmd>`,免打 `python3 scripts/lumos`;`--force` 覆寫既有 symlink |
+ | 移除全域 lumos | `lumos uninstall` | 移除 `~/.local/bin/lumos` symlink（不動 vendored copy） |
+ | 從唯一源更新本專案 vendored 工具組 | `lumos update [--source <path>] [--no-pull] [--dry-run]`(`--dry-run`:用目前的工具來源先印會改哪些規範檔與工具檔,不拉、不改動;照它結尾印的指令套用同一份) | `git pull` Lumos 來源 → 重新 vendor（lumos CLI / hooks / CLAUDE.md 與 AGENTS.md 的紀律區塊——Claude Code 與 Codex 兩家同刷）→ 結尾 diff 自癒;**圖譜資料 scaffold-skip 永不動**。`--source` 指定來源（預設 `$LUMOS_HOME` 或 `~/harness/lumos-toolchain`）、`--no-pull` 用現有來源不拉取。**跑完記得 `git commit` 那份 vendored copy**（CI/hook 靠專案內這份） |
+ | 一鍵裝好一切（新機器 / 新 clone 的專案） | `python3 scripts/lumos bootstrap [--pull] [--lumos-url <url>] [--lumos-home <path>]` | 自動：clone Lumos（若缺）→ 裝 user-scope skills（Claude `~/.claude/skills` 與 Codex `~/.agents/skills` 都接）→ 全域 lumos + 兩家 hook 註冊 → repo git hooks。Codex 的 hook 要開一次互動 codex 按 Trust all 才會跑。裝完**重啟 Claude Code session**（L1/L3 hooks 要 session start 載入）。**`--pull`：既有 Lumos clone 也 `git pull` 拉最新**（不加則沿用現有 clone、拿不到 skills 更新——「已設定過的人想拿更新」用這個或直接去 Lumos clone `git pull`）。`--lumos-url`／`--lumos-home` 預設讀 `$LUMOS_URL`／`$LUMOS_HOME` |
+ 
+-> **子命令全覽（98 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `rejections` `stale` `recent` `stats` `handoff` `events`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers` `test-quality` scan·capabilities·capture·check(測試品質候選掃描與收證核對)）+ 寫入（`set` `summary-add` `summary-line` `updated-sync` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend` `question-add` `question-set` `arch-template` 照開關組出 Android 目標架構節點與架構測試）+ 合約守衛（`guard` list/scaffold/bind/audit/residual-ask/residual/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `spec-freeze` 設計審派工前把計劃凍成不掛分支的提交與快照 / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `macrobench` `android-e2e` judge·select·history(Android 真機端到端驗收:判讀與查證紀錄、按功能挑要跑的、列本機檢測總表) `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 推送範圍（`push-range` 推送前掛鉤在新分支首推時取跟主線的分岔點；`push-summary` 推送前掛鉤在全套測試之前有擋下時印全部擋下原因的彙總並記帳；`room-guard` 推送前掛鉤的 Room 守衛,擋資料庫升版缺升級路徑、結構檔或升級測試,以及改到的 DAO 方法沒有真 Room 測試 / `test-guard` 測試防竄改比對,列出這次改動把測試刪掉、標成跳過、斷言改弱、預期值改掉、建置檔或 CI 讓測試失敗不算數的作弊候選,推送前由新增告警閘一起判）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
++> **子命令全覽（98 個頂層命令；`lumos --help` 為現行權威）**：讀取/導航（`context` `show` `contracts` `search` `query` `links` `backlinks` `map` `export` `decisions` `rejections` `stale` `recent` `stats` `handoff` `events`）+ 巡檢/治理（`doctor` `lint` `lint-watch` `self-audit` `sync-verified-by` `gov` `spec-trace` `signoff` `rel-cascade` `test-layers` `test-quality` scan·capabilities·capture·check(測試品質候選掃描與收證核對)）+ 寫入（`set` `summary-add` `summary-line` `updated-sync` `append` `remove` `new` `archive` `decision-add` `decision-supersede` `decision-reindex` `decision-amend` `question-add` `question-set` `arch-template` 照開關組出 Android 目標架構節點與架構測試）+ 合約守衛（`guard` list/scaffold/bind/audit/residual-ask/residual/trace/kill/kill-add/kill-rm）+ 對抗審計 loop（`pitfalls` --diff tier / `spec-freeze` 設計審派工前把計劃凍成不掛分支的提交與快照 / `code-loop` pass/skip/check 收斂留痕 / `canary` record·second / `loop` status / `fold-check` `report-normalize` 折入漂移 / `prose-lint` spec 模糊措辭 advisory / `refcheck` 指涉核對 / `seat-check` 席報告對 dispatch 有講沒做對帳 / `severity-check` 席報告嚴重度↔帳面對帳(第四道收貨) / `decision-refs` backlog·candidates·add-ai·list·prune·promote(T3 自動養成六原語) / `link-candidates` code→節點補鏈候選）+ 完整性/影響（`anchor` verify/approve / `impact` 影響幅度+事故觸發 / `cochange` rules/check 共改漏改守衛 / `delguard` code 側刪除傳播守衛(staged 被刪符號→grep vault 指名過期原句) / `home` check 每支檔有家(提交前/推送前擋新違規:檔要有家、節點只寫自己家的檔、寫回落對篇) / `note-shape` 筆記形狀擋(新寫的程式行號引用、沒寫來源的現況描述) / `note-audit` prepare·record·check·skip 筆記內容審(推送前派判定者逐行判新筆記是不是程式碼推得出來) / `drift` check·scan·fix·ack·exam 存量漂移守衛(已經寫進去的句子因為別處狀態變了而過期;fix 用工具改掉一筆並記修復帳) / `testmap` build·affected 檔↔測試依賴）+ 社群 linter 橋（`sqlfluff-sarif` `stylelint-sarif` `dart-sarif` `compose-metrics` `macrobench` `android-e2e` judge·select·history(Android 真機端到端驗收:判讀與查證紀錄、按功能挑要跑的、列本機檢測總表) `lint-check` `lint-waive` `rule-check` `rule-gap`）+ CI 回流觀測（`ci-wait` `ci-status`）+ 推送範圍（`push-range` 推送前掛鉤在新分支首推時取跟主線的分岔點；`push-summary` 推送前掛鉤在全套測試之前有擋下時印全部擋下原因的彙總並記帳；`room-guard` 推送前掛鉤的 Room 守衛,擋資料庫升版缺升級路徑、結構檔或升級測試,以及改到的 DAO 方法沒有真 Room 測試 / `test-guard` 測試防竄改比對,列出這次改動把測試刪掉、標成跳過、斷言改弱、預期值改掉、新測試沒斷言、截圖基準圖有變的作弊候選,推送前由新增告警閘一起判）+ 安裝/生命週期（`install` `uninstall` `update` `bootstrap` `init` `deinit` `teardown` `python-path` 掛鉤用來挑 3.14 直譯器）。
+ >
+ > ⚠ **這裡刻意不寫各分類的小計數字**——只有「總數」有機械守衛（`t_docs_enumeration_drift` 取 `--help` 的 choices 當真值），分類小計沒有，寫了就是新的漂移面。2026-07-29 實錘：舊寫法的小計「12+10+7+1+6+3+4+6=49」連同三份文件的「51」同時錯，因為當時的守衛用原始碼 regex 當尺、漏掉迴圈註冊的 `links`/`backlinks`——**尺自己在漂**。通則：不寫你沒守的數字。
+ 
+ ### Obsidian CLI：僅限 GUI 檢視場景（指令已刪,見文末〈Obsidian〉節）
+ 
+ ### ⛔ 禁用工具：notesmd-cli 的 `frontmatter` 指令
+ 
+ 第三方 `notesmd-cli`（原 Yakitrak/obsidian-cli，Go 單檔）**只准用 `move`**（rename 連結改寫含 frontmatter 字串,2026-06-13 驗收通過;即上方 `graph-rename.sh` 封的那層）。**`frontmatter --edit` 嚴禁對真實 vault 使用**：實測會把整篇 frontmatter 鍵序重排成字母序、縮排 2→4、**日期加引號（property 型別 date→text 靜默損傷）**——一碰整篇 diff 不可審,且 pre-commit 污染指紋會擋。frontmatter 寫入合法路徑只有：lumos T1（純量/list/decisions）、obsidian `processFrontMatter` eval（白名單外）。驗收證據：MyApp vault 的 `2026-06-13_Yakitrak三題驗收`。
+ 
+ 
