@@ -87642,6 +87642,13 @@ def t_drift_born_unknown():
     b = _born_of(got, "Systems/Bad.md", "壞版本")
     check("③partial clone:判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
     _nh_git(root, "config", "--unset", "extensions.partialClone")
+    _nh_git(root, "config", "remote.origin.promisor", "true")   # git 2.39 的 clone --filter 只寫這兩個(判綠紀錄限本分支 r3 代碼審)
+    _nh_git(root, "config", "remote.origin.partialclonefilter", "blob:none")
+    got, _txt = _born_scan(root)
+    b = _born_of(got, "Systems/Bad.md", "壞版本")
+    check("③新式 partial clone(只寫 promisor 與 filter):判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
+    _nh_git(root, "config", "--unset", "remote.origin.promisor")
+    _nh_git(root, "config", "--unset", "remote.origin.partialclonefilter")
     for i in range(7):
         _nh_node(root, f"N{i}", summary="FLOW:n", body=f"REVISIT:[when-file:src/a.py][by:2099-12-31] 第 {i} 條")
         _nh_commit(root, f"第 {i} 條")
@@ -108163,17 +108170,43 @@ def t_name_collision_uses_real_filter():
 
 
 def t_name_collision_scales():
-    """[S79] 撞名判定每個平台的標題預處理只做一次:1000 個綁定名對 22000 個標題(regex_tail)在 15 秒內(每個名字重算標題 tag 要 30 秒以上)。
-    應抓到的錯:每個名字對每個標題重做預處理 → ①紅。"""
+    """[S79] 撞名判定每個平台的標題預處理只做一次:1000 個綁定名走正式的快取路徑 _name_collision_reason(regex_tail、22000 個標題),
+    標題索引只建 1 次、每種串接只算一次(之後每次拿回同一份);牆上時間 60 秒只當安全網(判綠紀錄限本分支 S3,原本量 15 秒在 CI 上時好時壞)。
+    應抓到的錯:每個名字重建索引、或串接不快取每次重做 → 次數紅。抓不到:只慢不重做的退步(例如查詢退化成逐筆掃描),留給代碼審。"""
     import time as _t
     m = _load_lumos_inproc()
     titles = [("test", f"case {i} shows result @smoke", f"case {i} shows result @smoke", f"f{i % 50}") for i in range(20000)]
     titles += [("group", f"group {i}", f"group {i}", f"f{i % 50}") for i in range(2000)]
-    t0 = _t.monotonic()
-    for i in range(1000):
-        m._name_filter_collisions(f"case {i} shows result", titles, "regex_tail")
-    secs = _t.monotonic() - t0
-    check("①1000 × 22000 < 15 秒", secs < 15.0, f"{secs:.1f}s")
+    real_idx, real_titles = m._TitleIndex, m._raw_test_titles
+    built, joined = [], {}
+
+    class Counting(real_idx):
+        def __init__(self, ts):
+            built.append(1)
+            super().__init__(ts)
+
+        def _join(self, kind, fold):
+            got = super()._join(kind, fold)
+            first = joined.setdefault((kind, fold), [got, 0])   # 留住第一份(物件活著,位址不會被重用),之後每次比是不是同一個物件
+            if got is not first[0]:
+                first[1] += 1
+            return got
+    prof = "playwright"
+    pentry = {"profile": dict(m.TEST_PROFILES[prof], name_filter="regex_tail"), "root": "/nonexistent", "profile_name": prof}
+    cache = {}
+    try:
+        m._TitleIndex = Counting
+        m._raw_test_titles = lambda *_a, **_k: titles
+        t0 = _t.monotonic()
+        for i in range(1000):
+            m._name_collision_reason(f"case {i} shows result", pentry, "/nonexistent", cache)
+        secs = _t.monotonic() - t0
+    finally:
+        m._TitleIndex, m._raw_test_titles = real_idx, real_titles
+    check("★前置★ 有走到撞名判定(索引至少建了一次、串接過)", built and joined, (built, joined))
+    check("①標題索引只建 1 次", len(built) == 1, len(built))
+    check("②每種串接只算一次:每次拿回同一份", all(v[1] == 0 for v in joined.values()), {k: v[1] for k, v in joined.items()})
+    check("③安全網:60 秒內", secs < 60.0, f"{secs:.1f}s")
 
 
 def t_run_cmd_windows_quoting():
@@ -121341,7 +121374,8 @@ def t_tq_guard_expected_changed():
 
 def t_tq_guard_string_comma_args():
     """[紅燈版實跑三缺口 S1] 只改了字串預期值時要列出:字串裡的逗號、不成對括號、字元常值、串接寫法,分岔點列 tq/expected-changed、
-    紅燈版列 tq/redbase-weakened;一字不差不列。應抓到的錯:切參數只數原文括號(字串裡的逗號與括號當成結構)→ 這幾案切錯、配不起來、漏報。"""
+    紅燈版列 tq/redbase-weakened;一字不差不列。應抓到的錯:切參數只數原文括號(字串裡的逗號與括號當成結構)→ 這幾案切錯、配不起來、漏報。
+    [判綠紀錄限本分支 S4] 斷言兩邊換成三引號字串常值要列 tq/assert-weakened。應抓到的錯:判常值斷言的樣式不認三引號 → 漏報。"""
     T = _TQG_T
     m = _tqg_module()
     check("★前置★ 含逗號的字串預期值切成兩個參數",
@@ -121385,6 +121419,13 @@ def t_tq_guard_string_comma_args():
     root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
     got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertTrue("""\n assertEquals mention\n """, f() > 0)')}))
     check("S1 多行字串裡的 assertEquals 字樣不算強斷言:換成 assertTrue 照列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+    # [判綠紀錄限本分支 S4] 兩邊都是三引號字串常值的相等斷言是常值斷言:跟單行字串常值一樣列斷言變弱
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertEquals("""a""", """a""")')}))
+    check("判綠紀錄限本分支 S4 換成兩邊都是三引號常值:列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertEquals("a", "a")')}))
+    check("★對照★ 換成兩邊都是單行字串常值:列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
     red = _tqg_kt(_RB_OTHER, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'))
     root, mb, commit = _rb_repo()
     h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,234", label(fee))'), [_rb_snap("SPEC-c0a00001", red)])
@@ -123821,6 +123862,363 @@ def t_spec_gate_redbase_skips_after_green():
     rec2 = _sg_records(kg2)[-1] if _sg_records(kg2) else {}
     check("S6 主線上早就有的判綠不算:這條分支跑紅照存", r.returncode == 0 and "redbase" in rec2, (rec2.get("redbase_skipped"), (r.stdout + r.stderr)[-400:]))
 
+
+def _gb_repo(tag):
+    """治理帳被 git 忽略的規格閘 fixture(_ig_sg_repo)加一份計劃,主線記成 origin/main → (專案根, vault, 主線分支名, git)。"""
+    import subprocess as _sp
+    d, kg = _ig_sg_repo(tag, True)
+    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+
+    def git(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    main = git("symbolic-ref", "--short", "HEAD").stdout.strip()
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    return d, kg, main, git
+
+
+def _gb_red(kg):
+    """跑一次規格閘(假執行器判紅)→ (留痕, 輸出)。"""
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    recs = _sg_records(kg)
+    return (recs[-1] if recs else {}), r.stdout + r.stderr
+
+
+def t_spec_gate_redbase_green_other_branch():
+    """[判綠紀錄限本分支 S1 S2 S6 S9] 治理帳被 git 忽略時,規格閘只認這條分支(同一個分支名、head_sha 是目前 HEAD 的祖先)留下的判綠紀錄與上一份紅燈版。
+    應抓到的錯:讀工作目錄整本帳 → 別條分支的判綠漏過來,新分支一個紅燈版都不存(考場實測);寫判綠不記分支名 → 從同一個提交開新分支重來照樣漏;
+    只看祖先不看名字、只看名字不看祖先、提交不存在當成判不了照留,各自紅。"""
+    import json as _j
+    # S1:別條分支(同一個提交上)判綠過,新分支照存;S2:同一條分支照舊不存
+    d, kg, main, git = _gb_repo("gb1")
+    git("checkout", "-q", "-b", "featA")
+    (d / "green_checkout_discount").write_text("")
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    ev = _rb_gov(d, "spec-gate-green")
+    check("S1 判綠紀錄記下分支名", ev and ev[-1].get("ref") == "featA", ev)
+    (d / "green_checkout_discount").unlink()
+    git("checkout", "-q", "-b", "featB", main)
+    rec, out = _gb_red(kg)
+    check("S1 別條分支判綠過:新分支跑紅照存紅燈版", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    check("S1 新留痕也記下分支名", (_rb_gov(d, "spec-gate-record") or [{}])[-1].get("ref") == "featB", _rb_gov(d, "spec-gate-record"))
+    git("checkout", "-q", "featA")
+    git("tag", "featA")   # 有同名 tag 時 symbolic-ref --short 回 heads/featA,分支名要照樣對得上
+    rec, out = _gb_red(kg)
+    check("S2 同一條分支判綠過(另有同名 tag):照舊不存、原因寫曾判綠",
+          "redbase" not in rec and any("曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
+    # S2:沒有分支名也沒有 head_sha 的舊紀錄照舊算
+    d, kg, main, git = _gb_repo("gb2")
+    git("checkout", "-q", "-b", "featA")
+    old = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
+                    "items": [["kotlin-junit", "checkout_discount"]]}, ensure_ascii=False)
+    led = d / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + old + "\n", encoding="utf-8")
+    rec, out = _gb_red(kg)
+    check("S2 沒有分支名與 head_sha 的舊判綠紀錄:照舊不存", "redbase" not in rec, (rec.get("redbase"), out[-400:]))
+    # S6:同名分支刪掉重開,舊提交不再是祖先 → 照存;head_sha 指的提交根本不存在 → 照存
+    d, kg, main, git = _gb_repo("gb3")
+    git("checkout", "-q", "-b", "featA")
+    (d / "note.txt").write_text("x")
+    git("add", "note.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
+    (d / "green_checkout_discount").write_text("")
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    (d / "green_checkout_discount").unlink()
+    git("checkout", "-q", main)
+    ev3 = _rb_gov(d, "spec-gate-green")
+    green_sha = ev3[-1].get("head_sha") if ev3 else None
+    git("branch", "-q", "-D", "featA")
+    git("checkout", "-q", "-b", "featA")
+    anc = git("merge-base", "--is-ancestor", green_sha or "x", "HEAD").returncode
+    check("★前置★ 判綠紀錄寫進帳、記了分支名,同名重開後那個提交已不是祖先",
+          ev3 and ev3[-1].get("ref") == "featA" and anc == 1, (ev3[-1:] if ev3 else ev3, anc))
+    rec, out = _gb_red(kg)
+    check("S6 同名重開、判綠那時的提交不是祖先:照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    d, kg, main, git = _gb_repo("gb4")
+    git("checkout", "-q", "-b", "featA")
+    gone = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
+                     "items": [["kotlin-junit", "checkout_discount"]], "head_sha": "ab" * 20}, ensure_ascii=False)
+    led = d / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + gone + "\n", encoding="utf-8")
+    rec, out = _gb_red(kg)
+    check("S6 head_sha 指的提交不存在(完整 repo):照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    # S9:別條分支存的紅燈版不拿來去重
+    d, kg, main, git = _gb_repo("gb5")
+    git("checkout", "-q", "-b", "featA")
+    rec, out = _gb_red(kg)
+    check("★前置★ 第一條分支存了紅燈版", "redbase" in rec, out[-400:])
+    git("checkout", "-q", "-b", "featC", main)
+    rec, out = _gb_red(kg)
+    check("S9 別條分支的上一份紅燈版不拿來去重:照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    git("checkout", "-q", "featA")
+    rec, out = _gb_red(kg)
+    check("S9 同一條分支照舊去重:跟上一份相同不存",
+          "redbase" not in rec and any("上一份" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
+
+
+def t_spec_gate_redbase_green_tracked_unfiltered():
+    """[判綠紀錄限本分支 S7] 治理帳進版控時不做祖先與分支名過濾:這條分支自己的判綠紀錄,head_sha 因為改寫提交不再是祖先,照舊算判綠過、不存紅燈版。
+    應抓到的錯:不管帳有沒有被忽略一律過濾 → 壓提交或 rebase 後自己的判綠被丟掉、多存一份實作後的紅燈版。"""
+    import subprocess as _sp
+    d, kg = _rb_sg_repo("gbt")
+    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+
+    def git(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "feat")
+    (d / "note.txt").write_text("x")
+    git("add", "note.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
+    (d / "green_checkout_discount").write_text("")
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    ev = _rb_gov(d, "spec-gate-green")
+    old_head = ev[-1].get("head_sha") if ev else None
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "-m", "改寫過的提交", "--no-verify")
+    new_head = git("rev-parse", "HEAD").stdout.strip()
+    anc = git("merge-base", "--is-ancestor", old_head or "x", "HEAD").returncode
+    check("★前置★ 判綠時的提交已不是祖先", old_head and old_head != new_head and anc == 1, (old_head, new_head, anc))
+    (d / "green_checkout_discount").unlink()
+    rec, out = _gb_red(kg)
+    check("S7 帳進版控:自己的判綠照舊算、不存紅燈版",
+          "redbase" not in rec and any("曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
+
+
+def t_redbase_branch_rows_fallback_keeps():
+    """[判綠紀錄限本分支 S8] 治理帳被忽略、但判不了是不是這條分支的(淺複製裡回「不是祖先」或查不到、部分複製、過了截止時間、超過上限)時,
+    那幾筆照舊算進來並印一句說明;分支名不同、別份計劃的照丟(不用問 git)。超過上限時先問最新的。
+    應抓到的錯:判不了就丟 → 結果看機器快慢;淺複製把「不是祖先」或查不到當真 → 丟掉真的祖先;部分複製照問 → git 自動連遠端抓;
+    不印說明 → 使用者不知道沒過濾;上限先花在舊紀錄 → 最新的別分支判綠漏過來。"""
+    import contextlib
+    import io
+    import json as _j
+    import subprocess as _sp
+    import time as _t
+    m = _tqg_module()
+    d, kg, main, git = _gb_repo("gbf")
+    git("checkout", "-q", "-b", "featA")
+    h0 = git("rev-parse", "HEAD").stdout.strip()
+
+    def ev(sha, ref=None, loop="甲"):
+        e = {"gate": "spec-gate", "kind": "spec-gate-green", "loop": loop, "tests": ["checkout_discount"],
+             "items": [["kotlin-junit", "checkout_discount"]], "head_sha": sha}
+        if ref:
+            e["ref"] = ref
+        return _j.dumps(e, ensure_ascii=False)
+
+    def rows(root, budget, ignored="ignored"):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            got = m._redbase_branch_rows(root, "甲", ignored, budget)
+        return [x.get("head_sha") for x in got if x.get("kind") == "spec-gate-green"], buf.getvalue()
+    led = d / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + ev("cd" * 20) + "\n" + ev(h0) + "\n" + ev(h0, "other") + "\n" + ev("ef" * 20, loop="乙") + "\n",
+                   encoding="utf-8")
+    # 過了截止時間:兩筆要問 git 的都判不了 → 照留;分支名不同、別份計劃的照丟
+    shas, out = rows(d, -1)
+    check("S8 過了截止時間:判不了的照留、分支名不同的照丟、別份計劃的不算", shas == ["cd" * 20, h0], shas)
+    check("S8 過了截止時間:印一句幾筆判不了", "2 筆" in out and "照舊算進來" in out, out)
+    # 超過上限:上限設 1,先問最新的(h0,是祖先、留),較舊的 cd 沒問到照留
+    old = m._REDBASE_ANC_CAP
+    try:
+        m._REDBASE_ANC_CAP = 1
+        shas, out = rows(d, 30)
+    finally:
+        m._REDBASE_ANC_CAP = old
+    check("S8 超過上限:先問最新的,較舊的沒問到照留", shas == ["cd" * 20, h0], shas)
+    check("S8 超過上限:印一句一筆判不了", "1 筆" in out and "照舊算進來" in out, out)
+    forks = []
+    real_fork = m._lens_fork_point
+    try:
+        m._lens_fork_point = lambda *a, **k: forks.append(1) or real_fork(*a, **k)
+        shas, out = rows(d, 30)
+        check("★對照★ 完整 repo、時間夠:不存在的提交丟、祖先留、不印", shas == [h0] and "照舊算進來" not in out, (shas, out))
+        check("S8 帳被忽略、完整 repo:照舊算分岔點(帳曾進版控時要減掉主線上的舊判綠)", forks != [], len(forks))
+        shas, out = rows(d, 30, "unknown")
+        check("S8 判不了帳有沒有被忽略:不過濾,整本照算", shas == ["cd" * 20, h0, h0], shas)
+        # 判不了是不是部分複製(git config 叫不起來或逾時):帳不是被忽略時不讀分岔點那一版、講明
+        forks.clear()
+        real_pc = m._git_partial_clone
+        try:
+            m._git_partial_clone = lambda *a, **k: None
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                got = m._redbase_branch_rows(d, "甲", "not")
+        finally:
+            m._git_partial_clone = real_pc
+        check("S10 判不了是不是部分複製、帳進版控:不讀分岔點那一版、講明", got == [] and forks == [] and "判不了是不是" in buf.getvalue(),
+              (got, len(forks), buf.getvalue()))
+    finally:
+        m._lens_fork_point = real_fork
+    check("S10 git 叫不起來時部分複製判斷回判不了(None),不當成不是", m._git_partial_clone(d.parent / "gbf-沒有這個目錄") is None,
+          m._git_partial_clone(d.parent / "gbf-沒有這個目錄"))
+    real_fork = m._lens_fork_point
+    try:
+        m._lens_fork_point = lambda *a, **k: forks.append(1) or real_fork(*a, **k)
+    finally:
+        m._lens_fork_point = real_fork
+    # 分離 HEAD:取不到分支名,只剩祖先判斷,記了別的分支名的照樣只看祖先
+    git("checkout", "-q", "--detach", "featA")
+    shas, out = rows(d, 30)
+    check("S8 分離 HEAD:不比分支名、只看祖先", shas == [h0, h0], shas)
+    # 還沒有提交的 HEAD:不問 git、照留,分支名不同照丟
+    git("checkout", "-q", "--orphan", "orph")
+    shas, out = rows(d, 30)
+    check("S8 還沒有提交的 HEAD:不崩、不問祖先照留、分支名不同照丟", shas == ["cd" * 20, h0], shas)
+    git("checkout", "-q", "-f", "featA")
+    # 淺複製:查不到的提交、真祖先被截斷而回「不是祖先」,都照留
+    git("checkout", "-q", "-b", "featS")
+    (d / "note.txt").write_text("x")
+    git("add", "note.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
+    sh = d.parent / "gbf-shallow"
+    _sp.run(["git", "clone", "-q", "--depth", "1", "--no-local", "-b", "featS", str(d), str(sh)], capture_output=True)
+    _sp.run(["git", "-C", str(sh), "fetch", "-q", "--depth", "1", "origin", main], capture_output=True)
+    (sh / "docs").mkdir(exist_ok=True)
+    (sh / "docs" / ".governance-log.jsonl").write_text(ev("cd" * 20) + "\n" + ev(h0) + "\n", encoding="utf-8")
+    shallow = _sp.run(["git", "-C", str(sh), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True).stdout.strip()
+    rc1 = _sp.run(["git", "-C", str(sh), "merge-base", "--is-ancestor", h0, "HEAD"], capture_output=True).returncode
+    check("★前置★ 淺複製建起來了、真祖先被截斷而回不是祖先", shallow == "true" and rc1 == 1, (shallow, rc1))
+    shas, out = rows(sh, 30)
+    check("S8 淺複製:查不到的提交與回不是祖先的真祖先都照留", shas == ["cd" * 20, h0], shas)
+    check("S8 淺複製:印一句兩筆判不了", "2 筆" in out and "照舊算進來" in out, out)
+    # 部分複製:整批不問 git(問本機沒有的提交會自動連遠端抓),照留
+    pc = d.parent / "gbf-partial"
+    _sp.run(["git", "clone", "-q", "--no-local", "-b", "featA", str(d), str(pc)], capture_output=True)
+    _sp.run(["git", "-C", str(pc), "config", "core.repositoryformatversion", "1"])
+    _sp.run(["git", "-C", str(pc), "config", "extensions.partialClone", "origin"])
+    (pc / "docs").mkdir(exist_ok=True)
+    (pc / "docs" / ".governance-log.jsonl").write_text(ev("ab" * 20) + "\n", encoding="utf-8")
+    mark = d.parent / "gbf-fetched"
+    if sys.platform != "win32":   # 遠端抓取程式換成留記號就失敗的小腳本:有記號 = git 為了查不到的提交去連遠端了
+        upl = d.parent / "gbf-upload-pack.sh"
+        upl.write_text(f"#!/bin/sh\ntouch '{mark}'\nexit 1\n", encoding="utf-8")
+        upl.chmod(0o755)
+        _sp.run(["git", "-C", str(pc), "config", "remote.origin.uploadpack", str(upl)])
+        probe = _sp.run(["git", "-C", str(pc), "cat-file", "-e", ("ab" * 20) + "^{commit}"], capture_output=True)
+        check("★前置★ 部分複製查本機沒有的提交會去連遠端", probe.returncode != 0 and mark.exists(), (probe.returncode, mark.exists()))
+        mark.unlink(missing_ok=True)
+    shas, out = rows(pc, 30)
+    check("S8 部分複製:照留", shas == ["ab" * 20], shas)
+    check("S8 部分複製:印一句", "1 筆" in out and "照舊算進來" in out, out)
+    if sys.platform != "win32":
+        check("S8 部分複製:沒有為了判祖先去連遠端", not mark.exists(), mark.exists())
+    # 新式部分複製只寫 remote.<名>.promisor 與 partialCloneFilter,沒有 extensions.partialClone:照樣認得
+    pc2 = d.parent / "gbf-partial2"
+    _sp.run(["git", "clone", "-q", "--no-local", "-b", "featA", str(d), str(pc2)], capture_output=True)
+    _sp.run(["git", "-C", str(pc2), "config", "remote.origin.promisor", "true"])
+    _sp.run(["git", "-C", str(pc2), "config", "remote.origin.partialclonefilter", "blob:none"])
+    (pc2 / "docs").mkdir(exist_ok=True)
+    (pc2 / "docs" / ".governance-log.jsonl").write_text(ev("ab" * 20) + "\n", encoding="utf-8")
+    if sys.platform != "win32":
+        _sp.run(["git", "-C", str(pc2), "config", "remote.origin.uploadpack", str(upl)])
+        probe = _sp.run(["git", "-C", str(pc2), "cat-file", "-e", ("ab" * 20) + "^{commit}"], capture_output=True)
+        check("★前置★ 只寫 promisor 的複製查本機沒有的提交也會去連遠端", probe.returncode != 0 and mark.exists(), (probe.returncode, mark.exists()))
+        mark.unlink(missing_ok=True)
+    shas, out = rows(pc2, 30)
+    check("S8 只寫 promisor 的部分複製:照留", shas == ["ab" * 20], shas)
+    if sys.platform != "win32":
+        check("S8 只寫 promisor 的部分複製:沒去連遠端", not mark.exists(), mark.exists())
+    # 帳進版控(或判不了有沒有被忽略)的部分複製:讀分岔點那一版也會自動連遠端,整個不讀、講明這次沒有判綠觀測與去重
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        got = m._redbase_branch_rows(pc, "甲", "not")
+    check("S10 部分複製、帳進版控:不讀分岔點那一版、講明沒有判綠觀測", got == [] and "部分複製" in buf.getvalue() and not mark.exists(),
+          (got, buf.getvalue(), mark.exists()))
+    forks2 = []
+    real_fork2 = m._lens_fork_point
+    try:
+        m._lens_fork_point = lambda *a, **k: forks2.append(1) or real_fork2(*a, **k)
+        shas, out = rows(pc, 30)
+    finally:
+        m._lens_fork_point = real_fork2
+    check("S10 部分複製、帳被忽略:不算分岔點、直接讀工作目錄那份", forks2 == [] and shas == ["ab" * 20], (len(forks2), shas))
+    # SHA-256 的 repo:帳被忽略時直接讀工作目錄那份,不經過只對 SHA-1 有效的空樹
+    s2 = d.parent / "gbf-sha256"
+    r256 = _sp.run(["git", "init", "-q", "--object-format=sha256", "-b", "featA", str(s2)], capture_output=True)
+    check("★前置★ 這版 git 建得起 SHA-256 的 repo(建不起來就大聲失敗,不靜默略過)", r256.returncode == 0, r256.stderr)
+    if r256.returncode == 0:
+        (s2 / "f.txt").write_text("x")
+        _sp.run(["git", "-C", str(s2), "add", "f.txt"])
+        _sp.run(["git", "-C", str(s2), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+        h256 = _sp.run(["git", "-C", str(s2), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        (s2 / "docs").mkdir()
+        (s2 / "docs" / ".governance-log.jsonl").write_text(ev(h256, "featA") + "\n", encoding="utf-8")
+        check("★前置★ SHA-256 的 repo 建起來了", len(h256) == 64, h256)
+        shas, out = rows(s2, 30)
+        check("S8 SHA-256 的 repo、帳被忽略:同分支的判綠照算、不說讀不出", shas == [h256] and "讀不出" not in out, (shas, out))
+        shas, out = rows(s2, 30, "not")
+        check("S8 SHA-256 的 repo、帳進版控、沒有分岔點:空樹照 repo 格式算、判綠照算", shas == [h256] and "讀不出" not in out, (shas, out))
+    # 帳曾進版控、後來才改成忽略:主線上的舊判綠(head_sha 是祖先、沒記分支名)要照舊被分岔點那一版減掉
+    d3, kg3 = _rb_sg_repo("gbtr")
+    _sg_plan2(kg3, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+
+    def git3(*a):
+        return _sp.run(["git", "-C", str(d3), *a], capture_output=True, text=True)
+    hm = git3("rev-parse", "HEAD").stdout.strip()
+    led3 = d3 / "docs" / ".governance-log.jsonl"
+    led3.write_text(led3.read_text(encoding="utf-8") + ev(hm) + "\n", encoding="utf-8")
+    _sg_commit(d3, "主線上的舊判綠")
+    git3("update-ref", "refs/remotes/origin/main", "HEAD")
+    git3("checkout", "-q", "-b", "feat")
+    git3("rm", "-q", "--cached", "docs/.governance-log.jsonl")
+    (d3 / ".gitignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
+    _sg_commit(d3, "改成忽略治理帳")
+    st3 = m._gov_ledger_ignored(d3)[0]
+    check("★前置★ 帳已改成被忽略、主線那一版還有舊判綠", st3 == "ignored" and ev(hm) in git3("show", "origin/main:docs/.governance-log.jsonl").stdout, st3)
+    shas, out = rows(d3, 30)
+    check("S8 帳曾進版控後改成忽略:主線上的舊判綠照舊被減掉", hm not in shas, (shas, out))
+
+
+def t_git_partial_clone_keys():
+    """[判綠紀錄限本分支 S8 S10] 認部分複製照 git 的設計文件三個設定、照 git 自己的布林規則:extensions.partialClone、promisor 為真、
+    partialCloneFilter 各自單獨就算;promisor 為假(false、0、等號後空字串)不算;裸鍵與 promisor = 2 算;遠端名含空白也切得對。
+    應抓到的錯:只看一個設定、自己猜值的寫法(漏裸鍵、漏整數)、用空白切鍵與值(遠端名含空白時把 false 判成真)。"""
+    import subprocess as _sp
+    m = _tqg_module()
+    root = mkvault().parent.parent / "gpc"
+    _sp.run(["git", "init", "-q", str(root)])
+    cfg = root / ".git" / "config"
+    base = cfg.read_text(encoding="utf-8")
+    cases = (
+        ("沒有任何設定", "", False),
+        ("只有 extensions.partialClone", "[extensions]\n\tpartialClone = origin\n", True),
+        ("只有 promisor = true", '[remote "origin"]\n\tpromisor = true\n', True),
+        ("只有 partialCloneFilter", '[remote "origin"]\n\tpartialCloneFilter = blob:none\n', True),
+        ("沒有等號的裸鍵 promisor", '[remote "origin"]\n\tpromisor\n', True),
+        ("promisor = 2", '[remote "origin"]\n\tpromisor = 2\n', True),
+        ("promisor = false", '[remote "origin"]\n\tpromisor = false\n', False),
+        ("promisor = 0", '[remote "origin"]\n\tpromisor = 0\n', False),
+        ("promisor = 空字串", '[remote "origin"]\n\tpromisor =\n', False),
+        ("遠端名含空白、promisor = false", '[remote "my remote"]\n\tpromisor = false\n', False),
+        ("遠端名含空白、promisor = true", '[remote "my remote"]\n\tpromisor = true\n', True),
+        ("promisor = 0k(單位字尾)", '[remote "origin"]\n\tpromisor = 0k\n', False),
+        ("promisor = 0x0", '[remote "origin"]\n\tpromisor = 0x0\n', False),
+        ("promisor = 010(八進位 8)", '[remote "origin"]\n\tpromisor = 010\n', True),
+        ("promisor = TRUE", '[remote "origin"]\n\tpromisor = TRUE\n', True),
+        ("promisor = 0_0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0_0\n', True),
+        ("promisor = 0b0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0b0\n', True),
+    )
+    for label, extra, want in cases:
+        cfg.write_text(base + extra, encoding="utf-8")
+        if extra:
+            gb = _sp.run(["git", "-C", str(root), "config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"], capture_output=True, text=True)
+            if "promisor" in extra and "partialCloneFilter" not in extra and gb.returncode == 0:   # git 拒絕的寫法不對照
+                check(f"★對照★ {label}:git 自己的布林判讀", gb.stdout.strip().endswith("true") == want, gb.stdout)
+        got = m._git_partial_clone(root)
+        check(f"{label} → {want}", got is want, got)
+    cfg.write_text(base, encoding="utf-8")
+    _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "c", "--no-verify"])
+    real = m._git_partial_clone
+    try:   # 判不了是不是部分複製(git 叫不起來或逾時):回頭條件那支當判不了,不當成「不是」
+        m._git_partial_clone = lambda *a, **k: None
+        why = m._drift_born_env_err(root)
+    finally:
+        m._git_partial_clone = real
+    check("S8 判不了是不是部分複製:回頭條件那支判不了、講原因", why == "git 跑不起來", why)
+    check("★對照★ 不是部分複製、有提交:回頭條件那支照常判", m._drift_born_env_err(root) is None, m._drift_born_env_err(root))
 
 if __name__ == "__main__":
     sys.exit(main())
