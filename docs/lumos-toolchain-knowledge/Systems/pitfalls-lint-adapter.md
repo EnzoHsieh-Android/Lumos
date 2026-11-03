@@ -17,7 +17,7 @@ related:
   - "[[Projects/社群規則第二批_計劃]]"
 summary: |-
   FLOW:偵測 diff 涉及棧(去點副檔名對 .lumos/lint.json key)→ 跑該棧宣告的 lint 指令(各輸出 SARIF、per-command temp)→ 解析合併 SARIF → 對齊則過濾到 diff 觸及行/非對齊降級全收 → 併進 pitfalls --diff manifest 餵 reviewer/code-loop
-  KEY:核心定位——lumos 只解 SARIF 一種格式(stdlib json)、不內建任何棧規則、不裝/管 linter;規則庫讓給社群 linter(composition over invention);例外(2026-11-02):新增告警閘另有一個內建來源——測試防竄改比對的 tq/ 規則,規則與判法在 [[Systems/test-guard]];兩種指紋算法並存(社群工具的告警用規則、檔名、片段,作弊候選用規則、檔名、函式身分加那條規則的細節、第幾個,不帶行號,細節在 [[Systems/test-guard]]),而且 lint_new.gate 設 off 時比對照樣在背後跑、有候選或比對出錯時留帳(既有的檢查工具那一半 off 照舊不跑)
+  KEY:核心定位——lumos 只解 SARIF 一種格式(stdlib json)、不內建任何棧規則、不裝/管 linter;規則庫讓給社群 linter(composition over invention);例外(2026-11-02):新增告警閘另有一個內建來源——測試防竄改比對的 tq/ 規則,規則與判法在 [[Systems/test-guard]];兩種指紋算法並存(社群工具的告警用規則、檔名、片段,作弊候選用規則、檔名、函式身分加那條規則的細節、第幾個,不帶行號,細節在 [[Systems/test-guard]]),而且 lint_new.gate 設 off 時比對照樣在背後跑、有候選或比對出錯時留帳(既有的檢查工具那一半 off 照舊不跑)(2026-11-03 規格閘紅燈版的候選身分另帶紅燈版 token 與子規則名,見 [[Systems/test-guard]])
   KEY:向後相容(回歸釘)——無 .lumos/lint.json → regex-only 輸出 byte-for-byte 不變、不加 lint_ran/lint_skipped 鍵;config=None 走既有 return 早退,manifest shape 不動
   KEY:uri 正規化(KDS tracer 坐實 detekt 吐絕對 file:///)——剝 file:// + urllib.parse.unquote + 有 uriBaseId 拼 run.originalUriBaseIds[base] + 僅 isabs 才 os.path.relpath(repo_root)(相對 uri 直用,避免 ../.. 誤 drop) + 反斜線轉正斜線
   KEY:runner 承重——per-command tempfile.mkstemp + shlex.quote 注入 {LINT_SARIF_OUT} + Popen(shell=True,cwd=repo_root,start_new_session=True) communicate(timeout=LINT_CMD_TIMEOUT=180) 逾時 os.killpg 整組 + finally os.unlink;rc≠0 且無可解析 SARIF 才算失敗記 lint_skipped(detekt 333 issues exit 非零仍產 SARIF)

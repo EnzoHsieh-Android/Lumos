@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-11-02
+updated: 2026-11-03
 self_audit: gpt-5.6-sol/2026-10-03
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
@@ -79,6 +79,7 @@ summary: |-
   SEE:[[Systems/test-guard]] [[Projects/Android測試防竄改檢查_計劃]]
   WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]`code-loop pass` 寫入前讀凍結判定,有審查帳就必帶 `--loop`;閘放在 pass 不放 check,因為 check 不知道分支對應哪個迴圈,綁定只在 pass 當下才產生 [出處:本案設計審 r1 r2] [因:留痕原本寫了就算,有沒有審完只靠手冊提醒] [不選:pass 內重跑處置閘;code-loop check 讀判定;先只印四週]
   RULE:`pass` 放行不代表這個迴圈審的是這條分支;判定檔沒有提交或範圍資訊,拿別的綠編號頂替擋不到 [依據:人] [since:2026-11-02] [retire:人裁] [until:2026-12-15] [confirmed:2026-11-02]
+  REVISIT:2026-12-15 下次發版在 CHANGELOG 寫明 governance/redbase/ 是新的簿記資料夾:還沒 lumos update 的協作者沒有這項豁免,別人提交的紅燈版夾在他的留痕與推送之間會被判留痕過時([[Projects/規格閘紅燈測試快照_計劃]])
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1
