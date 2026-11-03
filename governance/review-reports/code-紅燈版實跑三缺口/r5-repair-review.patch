@@ -1,0 +1,279 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md b/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md
+index 36e9c5ebdcb99d3b43634278f1abf6392a3aa7fd..f0c9aa55e50b838e05ab2acdbbc64b9a30f40e29 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md
+@@ -51,26 +51,29 @@ related:
+ 
+ PRIOR-ART: 切函式參數的通用做法是一趟掃描同時記括號深度與「在不在字串裡」(Foundry 的 split_call_args 照頂層逗號切、略過括號與引號裡的逗號:https://foundry-rs.github.io/foundry/cast/call_spec/fn.split_call_args.html);本案借本檔既有的「字串內容換成等長空白」掃描(`_strip_c_comments` 的 keep_length,括號配對已經在用它),不另寫一支詞法掃描。測試身分帶執行環境:JUnit Platform 的 UniqueId 第一段就是 engine(https://docs.junit.org/5.0.0-M6/api/org/junit/platform/engine/UniqueId.html),同名測試在不同執行環境是不同的測試,留痕記平台是同一個道理。必要檔被忽略的檢查沒有現成工具,通用做法是 `git check-ignore -v` 列出蓋到的那一行規則(https://man.he.net/man1/git-check-ignore);本案照抄,不新增設定;git 呼叫借本檔既有的 `_lens_git_dl`(比對工具這一帶都帶截止時間),判法照 `_local_ledger_doctor_msgs`(先判已追蹤、再判忽略)。Kotlin 官方文法認字串模板靠模式堆疊(`${` 推進一層,https://kotlinlang.org/spec/syntax-and-grammar.html),本檔的剝字串掃描是單層正規式、認不得模板裡的巢狀引號;本案不另寫一支有堆疊的掃描,只在掃描會讀錯的兩種情形退回現況的切法。測試結果把「環境沒跑起來」跟「測試失敗」分開記是建置工具的通例(Bazel 的測試狀態把 REMOTE_FAILURE、FAILED_TO_BUILD、BLAZE_HALTED_BEFORE_TESTING 跟 FAILED 分開:https://bazel.googlesource.com/bazel/+/HEAD/src/main/protobuf/test_status.proto),本案照這個分法處理「沒接裝置」。git 的忽略規則以較深層目錄的設定檔優先、同一支檔裡後面的規則蓋前面的(https://git-scm.com/docs/gitignore 的 PATTERN FORMAT 與優先序說明),所以改法要指到蓋到的那支檔,不能一律叫人在根目錄加否定行。
+ RETIRE-IF: 紅燈版整套撤掉時(見 [[Projects/規格閘紅燈測試快照_計劃]] 的撤除條件),做法 4 的兩句提醒與規格閘多印的那一行跟著撤;做法 1(比對工具本身)、做法 2 與 3(推送前驗收本身)、doctor 那一行(治理帳被忽略不限紅燈版)不隨之撤 [retire:人裁] [until:2027-05-03]
+ 
+ ## 做法
+ 
+ 1. **切參數不切字串裡的逗號與括號**:`_tg_call_parts` 已經用剝字串後的文字(`_tg_strip`,字串內容換成等長空白、長度跟原文一一對應)配括號,切參數卻用原文。`_rg_split_args` 加一個選填參數 `stripped`(剝過字串的同段文字,長度同原文):給了就不自己數深度,改照 `_rg_bracket_map(stripped)` 配好的括號對跳過括號內部,頂層的逗號(剝過的文字那一格是逗號)才切,再回原文取字。配括號只有 `_rg_bracket_map` 一套,不另寫深度規則(它跟 `_rg_balanced` 的等價已由 t_rg_methods_expression_body_and_backtick 綁住)。`_tg_call_parts` 的兩處切參數(呼叫本身與串接的 `.isEqualTo(…)` 這類)都帶它;Room 守衛的呼叫不帶(它拿到的本來就是剝過字串的原始碼),行為不變。
+    **剝字串掃描會讀錯的兩種情形退回現況**:一段斷言裡有字串沒收尾(例 Kotlin 原始字串 `"""a""""`,掃描把最後一個引號當成新字串的開頭、吃到行尾),或字串裡有 `${` 卻在同一段字串裡沒有對應的 `}`(模板裡有巢狀引號,例 `"${foo("a,b")}"`,掃描把它切成兩段字串、`a,b` 露在外面)時,這一段斷言照現況用原文切。判法用同一支掃描(`_C_STRIP_PAT`)逐個字串看有沒有收尾、`${…}` 有沒有在段內配平。這樣字串裡的不成對括號(`")"`、`'('`、`"1) 項目"`)、逗號(`"$1,235"`)都修到;退回的兩種寫法跟現況切法相同:現況列得出的照樣列(例 `"${foo("a,b")}"`,逗號在括號裡),現況本來就漏的照樣漏(例 `"${a}, ${f("x")}"`,模板裡同時有頂層逗號與巢狀引號,代碼審 r1 單審席 F4 實測),由下面的 REVISIT 回頭處理。只給 `angle=False`(不把 `< >` 當括號)的呼叫走剝過文字那條路——配括號表本來就沒有 `< >`。
+    **本體簽名同族修**(實作時發現):比對先看一支測試的本體有沒有變,本體簽名原本把整段的空白全拿掉,字串裡的空白也一起拿掉,`"a, b"` 改 `"a,b"` 被當成沒改、整支略過。改成兩份簽名:判本體有沒有變用 `_tg_ident`(字串原樣保留、字串外空白整理成一格),只差空白版面(拿掉全部空白後相同)的只比預期值、其他規則不重判(整檔重新縮排時多行字串跟著變,不讓沒斷言的既有測試被列,代碼審 r2);找搬家與改名照舊用拿掉全部空白的那份(搬進巢狀類別時,多行字串跟著多縮排一層,用保留字串的那份會配不起來、誤列刪測試,代碼審 r1 單審席 F1)。同 clone 偵測的分法:只差空白版面的算同一支(Type-1),內容改了另判。
+    **斷言文字只壓字串外的空白**(代碼審 r3):抽出來的斷言原本整段壓空白,字串裡的空白也被壓掉,`"a b"` 改 `"a  b"` 漏報;改成字串外的連續空白壓成一格、字串原樣保留(語言的詞法本來就這樣分,`git diff -w` 正因為不分而會藏住字串裡的改動)。
++   **字串樣式認得三引號**(代碼審 r4):斷言文字保留字串原樣後會帶換行,比對工具判字串常值的樣式(數強斷言、判訊息參數、判容差、判恆真條件共 5 處)原本只認單行字串,多行原始字串裡寫的 `assertEquals` 字樣會被算成強斷言、蓋掉斷言變弱;樣式補上三引號那段(同剝字串掃描的寫法),5 處一起生效。
++   **已知多報**:帶 `.trimIndent()` 的多行原始字串整段重新縮排時,執行時的值不變(Kotlin 官方:trimIndent 去掉共同最小縮排,https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.text/trim-indent.html),但比對把字串原樣保留,會多列一條可放行的 tq/expected-changed;不模擬 trimIndent(要精確還得處理模板值帶縮排),只多報、不漏擋。
++   REVISIT:2027-05-03 看 test-guard 放行紀錄裡有沒有「trimIndent 字串重新縮排」被放行的 tq/expected-changed;一季超過三筆就照官方語意對「三引號緊接 .trimIndent()」的字串先去掉共同縮排再比
+    **相容**:原本切錯的斷言改切對以後,改到這類斷言的測試可能多列出原本漏掉的候選(改預期值、改成常值斷言),這正是要抓的。
+    REVISIT:2027-05-03 看 test-guard 的放行紀錄與漏報回報裡有沒有「字串模板裡有巢狀引號」或原始字串結尾連續引號的案例;有就把剝字串掃描換成認得 `${}` 的寫法,不再退回原文切法
+ 2. **留痕記平台**:現行 `_spec_gate_record` 的 tests 來自 `_spec_gate_prepare` 算的 `names`(每條條款引用的方法名,含懸空的;平台在那一行就丟了;同一份 `names` 也餵雙向判定,不改它的形狀)。改成 `_spec_gate_prepare` 另外產一份同樣集合、帶平台的清單(同一個 `resolve_test_refs` 結果,不只取方法名;懸空的引用照樣在,`manual_only` 判法不變),由呼叫端傳給 `_spec_gate_record`。**多平台專案(設定有 platforms)一律寫成 `平台:名字`,含預設平台**;單平台專案照舊寫名字。理由:推送前讀這欄是把每一項包成 `[test:…]` 交給全庫唯一的切法 `_split_test_ref`,跟計劃條款同一種寫法;預設平台也寫裸名的話,名字本身含冒號(Kotlin 反引號名字 `` `fee: rounds up` ``)會被當成平台前綴而崩潰或跑錯平台,`default_platform` 改了也會被重新解到別的平台。判綠事件用成對的 items 記,那是內部的集合;留痕的 tests 欄是給推送前照條款寫法重新解析的,兩種形狀用途不同,不合併。
+    **推送前讀舊留痕**:多平台專案的留痕裡出現沒有前綴的名字,一定是這次之前寫的舊留痕。`_spec_gate_push_stale` 本來就讀了計劃文字、算了條款綁定(`_clause_bindings_for`);改成把計劃文字與綁定列一起回傳,`_spec_gate_push_one` 用手上的 split 與 default 呼叫既有的 `_spec_gate_items` 得到現在條款的 (平台, 名字),不另掃正文、不重算綁定。留痕沒過期(條款指紋相符)時,舊名字整串先跟現在條款的名字逐字比:比到了、而且只綁在一個平台,就用那個平台;同名綁在兩個以上平台、或比不到,照舊包成 `[test:…]` 解析(沒前綴就是預設平台)。條款指紋不符而計劃已完成的那條路不補(條款可能改綁到別的平台),照舊解析,找不到就走既有的「留痕裡的測試找不到」提醒。整串先逐字比,是為了讓舊留痕裡本身含冒號的名字(`fee: rounds up`)不被當成前綴:那種留痕在實作完成後重跑規格閘也不會被重寫,只能在讀的時候認出來。
+    **平台不在設定裡**:解析留痕名字遇到沒定義的平台前綴(平台改名或刪掉)時,不丟例外:計劃還在做的照擋,訊息講「留痕記的平台 X 不在 .lumos/config.json 裡(改名或刪了?);照現在的設定改條款的平台前綴後重跑規格閘」(改了條款,指紋變了,重跑才會寫新留痕);已完成的計劃降成提醒,跟找不到測試同一條路。
+-   **改回單平台**(代碼審 r3 人裁換形狀):多平台時寫的 `平台:名字`,設定之後拿掉 platforms 改回單平台時,身分格式換了,不猜是哪一支——留痕名字帶冒號、在測試索引找不到就照擋,講明「多半是設定從多平台改回單平台之前寫的,照現在的設定改條款的測試寫法或改一個字讓留痕過期再重跑規格閘」,不跑測試、不記逃逸;已完成的計劃降成提醒。r1、r2 試過「去掉前綴」「比條款名字後綴」兩種猜法,連兩輪被打穿(被刪的含冒號測試被同名後綴的另一支頂替);測試報告工具遇到識別碼換算法也是讓歷史從頭開始、要接續就靠明確對照表(Allure、Orangebeard),不靠猜。
++   **改回單平台**(代碼審 r3 人裁換形狀):多平台時寫的 `平台:名字`,設定之後拿掉 platforms 改回單平台時,身分格式換了,不猜是哪一支——留痕名字帶冒號、在測試索引找不到就照擋,講明多半是設定從多平台改回單平台之前寫的,並講兩條實際可行的路:實作還沒綠就照現在的設定重跑規格閘;實作已經綠時重跑不會寫新留痕(條款沒變、測試綠就不寫),要照規格閘「實作後才跑」的補法(換回空殼讓測試紅再跑)或改走設計審(代碼審 r4 單審席:原本只叫人重跑,實作已綠時走不通);不跑測試、不記逃逸;已完成的計劃降成提醒。r1、r2 試過「去掉前綴」「比條款名字後綴」兩種猜法,連兩輪被打穿(被刪的含冒號測試被同名後綴的另一支頂替);測試報告工具遇到識別碼換算法也是讓歷史從頭開始、要接續就靠明確對照表(Allure、Orangebeard),不靠猜。
+    REVISIT:2027-05-03 看消費專案有沒有把多平台設定改回單平台、因此被這條擋下的推送;有的話考慮在留痕記寫入時的平台清單,讓推送前照當時的清單解析,不再要人重跑
+    條款指紋不含平台設定本身(`.lumos/config.json` 改了平台指令不算過期),這是既有行為。
+ 3. **沒接裝置判成環境沒跑起來、不記逃逸**:推送前驗收對任何非綠都擋並自動記逃逸(風險低計劃在推送閘被擋 = 沒人審的計劃在下游抓到洞)。修好第 2 項之後,綁裝置平台測試的計劃每次推送前都要在裝置上跑,沒接裝置時 Gradle 失敗;Kotlin/Java 這兩棧讀不出跑了幾支,只看退出碼就判紅、記一筆假逃逸,跟缺口 2 同一個症狀。在 `_RAN_EVIDENCE` 旁邊另一張同樣以測試格式為鍵的表 `_ENV_MISSING_EVIDENCE`,kotlin-junit 與 java-junit 各一條樣式(AGP 的 `com.android.builder.testing.api.DeviceException`;2026-11-03 考場實測,沒接到指定序號的裝置時 Gradle 印 `DeviceException: Connected device with serial '…' not found!`、退出碼 1)。照輸出判狀態的樣式放同一區(代碼審 r1 架構對齊席:原本放進 `TEST_PROFILES`,那張表的欄位都是目錄、副檔名、切法,同類東西散兩處);不塞進 `_RAN_EVIDENCE` 本身,那張表的讀者都取 `re`(證明跑過),塞一個沒有 `re` 的格式會讓它們崩。`_spec_gate_judge_items` 判紅時,用 `per_prof(平台)` 取得那個格式的樣式,比對它手上的測試輸出尾段(`_run_bound_tests` 填的 tails),命中就改判弱證據、原因寫「環境沒跑起來(沒接裝置?)」。
+    這支判法有四個呼叫端:規格閘條款、相依回歸、推送前驗收、代碼審修正關卡第 4 項。相依回歸與修正關卡對紅與弱證據本來都擋,只是訊息字面變成「環境沒跑起來」,照擋;規格閘實作前跑時,沒接裝置不再被當成「新行為的紅」、也不存紅燈版(弱證據不算紅,照既有規則擋下要人重跑);推送前驗收照擋(驗不了不等於過),但自動記逃逸只在沒過的那幾支裡至少有一支不是「環境沒跑起來」時才記。
+    不加它的最小解為什麼不夠:只修第 2 項,假逃逸換成「沒接裝置」照樣發生;只改「弱證據不記逃逸」也不夠,Kotlin/Java 讀不出支數,沒接裝置判的是紅不是弱證據。
+ 4. **治理帳被忽略的提醒**:一支共用的判法 `_gov_ledger_ignored`,放在帳檔那一區(跟 doctor 的本機帳檢查 `_local_ledger_doctor_msgs` 同區;比對工具、規格閘、doctor 三處呼叫它,不各抄一份;代碼審 r1 架構對齊席:原本掛在比對工具那區、doctor 跨層去叫),回三態(被忽略、沒被忽略、判不了):`git check-ignore -q` 判被忽略(它照 `!` 否定規則算,也不回報已追蹤的檔——已追蹤就不算被忽略,改動照樣能提交;實作時改壞驗證確認另外先問 `git ls-files` 是多餘的,拿掉),被忽略才用 `git check-ignore -v` 取出蓋到的規則(`-v` 對否定規則照樣印那一行、回 0,不能只看它);`-v` 輸出 tab 前那段(來源:行號:規則)原樣清洗後放進提醒、不拆欄位(來源路徑可能含冒號),呼叫帶 `quote=True`(非 ASCII 路徑不被跳脫)。比對工具這側用 `_lens_git_dl` 帶截止時間;任一次 git 回不來、逾時或回傳碼不是 0/1 就是「判不了」,照舊措辭、不提忽略。比對工具只在真有孤兒紅燈版或「工作目錄有還沒提交的紅燈版檔」時問、一次推送最多問一次:`_tg_redbase_cands` 把一個「第一次用到才問 git、之後沿用結果」的取值函式傳給 `_tg_rb_metas`(新參數,預設 None=不問、照舊措辭,既有呼叫不用改)與還沒提交那一段。
+    被忽略時兩句提醒改成(重要的指示放前面、規則放最後,候選訊息超過 300 字會被截掉時先掉的是規則文字):
+    - 孤兒:「不要刪這支紅燈版檔,改拿它的內容來比(內容有問題時另列一條原因);它沒有留痕指到,是因為治理帳 docs/.governance-log.jsonl 被 git 忽略、留痕進不了提交:到蓋到它的那支忽略設定檔拿掉或收窄那條規則(否定規則要寫在同一支檔、放在那一行後面;上層目錄整個被忽略時要改那條規則),改完 `git check-ignore -q docs/.governance-log.jsonl` 的退出碼是 1,再把治理帳提交。蓋到的規則:<規則>」。
+    - 還沒提交:「git add 這支紅燈版檔;另外治理帳被 git 忽略、留痕進不了提交:到蓋到它的那支忽略設定檔拿掉或收窄那條規則,改完 `git check-ignore -q docs/.governance-log.jsonl` 的退出碼是 1,再把治理帳一起提交。蓋到的規則:<規則>」(自帶改法:只有這一條時看不到孤兒那條,代碼審 r1 單審席 F3)。
+    沒被忽略或判不了時照舊措辭。兩句的身分字改用固定的 ASCII 字 `orphan`、`pending`(同既有 `deleted` 的寫法),措辭換了放行指紋不變。2026-11-03 立案時紅燈版那批停在 PR #153、未合併,沒有專案存過這兩句的放行,所以換身分字不會讓既有放行失效。`_TG_WHY` 裡 tq/redbase-unreadable 的「該確認」一句改成不分情形都說得通的寫法:「照原因處理:沒提交就 git add 那支檔,被刪或被改就從版本紀錄還原,沒有留痕就照訊息補回留痕(治理帳被忽略時先改忽略設定);確定不需要才附理由放行」。
+@@ -113,10 +116,11 @@ REVISIT:2027-05-03 看消費專案有沒有在風險低計劃的條款綁裝置
+ - 孤兒紅燈版的提醒,不論治理帳有沒有被忽略,都叫人不要刪那支檔、照內容比(既有 [[Systems/test-guard]] 的 WHY,本案延伸到新措辭)。
+ 
+ ## 審計修正紀錄
+ 
+ - 實作(2026-11-03,設計審之後):① 原始字串尾端連續引號那案在函式層就配不平括號、列 tq/unparsable,走不到切參數,S2 改寫成照實的結果;② 本體簽名同族修(做法 1);③ 忽略判法拿掉 `git ls-files` 那一步(改壞驗證證明多餘)。改壞驗證 21 點全紅,紀錄在代碼審卷證。
+ - r1(2026-11-03,4 席:正確性、邊界、整合、架構對齊):35 條/blocking 7/切參數改成遮罩判、掃描讀錯的兩種情形退回現況;多平台留痕一律帶平台前綴、平台不在設定裡不崩;沒接裝置判環境沒跑起來不記逃逸;忽略提醒改法改成指到規則所在的檔、保留不要刪與 git add,doctor 多一行;S 條款由 6 條改 8 條;鏡像核對後再補 20 處(配括號改用 `_rg_bracket_map`、自查指令改看 `-q` 退出碼、提醒重要句放前面防截斷、舊留痕整串先逐字比、`_spec_gate_push_stale` 回傳計劃文字與綁定列、doctor 另起一段、環境樣式放 `TEST_PROFILES`;條款拆成 11 條)
+ - 席報告與收貨紀錄:governance/review-reports/紅燈版實跑三缺口/(r1-*.md、r1-intake.md)
+ - 代碼審 r1(2026-11-03,2 席:單審、架構對齊):10 條/blocking 2/判法搬到帳檔區改名 _gov_ledger_ignored、環境樣式移到 _RAN_EVIDENCE 旁的表、本體簽名拆兩份(找搬家與判變了)、改回單平台照去掉前綴的名字跑、還沒提交那句自帶改法、切參數兩條路綁等價測試;卷證 governance/review-reports/code-紅燈版實跑三缺口/
+ - 代碼審 r2(2026-11-03,2 席全新、只審修補差異):7 條/blocking 2/改回單平台不再自切冒號、改成只拿條款名字比(含冒號的舊測試名不被頂替);補 Java 專案沒接裝置的行為案例;只差空白版面只比預期值;環境樣式表改具名欄位加存取函式;回退節同步。regression 5 條(C3、C4、A1、A2、A3)
+ - 代碼審 r3(2026-11-03,2 席全新、只審修補差異):5 條/blocking 1/到頂仍有 major(改回單平台的後綴比對讓被刪的含冒號測試被頂替),Enzo 裁換形狀:拿掉猜名字的相容、改回單平台讀不到照擋明講;斷言文字只壓字串外空白;環境原因改用集合判。Enzo 補規則「兩輪都碰到就上網找」,查證結果寫在 r3-intake
++- 代碼審 r4(2026-11-03,人裁加開的驗收小輪,2 席):7 條/blocking 2/改回單平台的擋下訊息改講實際可行的兩條路;壓空白共用 _tg_ident 一支掃描迴圈;字串樣式認得三引號(5 處一起);補中綴與已完成計劃的案例;trimIndent 重新縮排多報寫成已知限制。Enzo 裁修完派一小輪驗收
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 1797adec015fba85f43da05bd94ee2d87be6bf42..55ebda6d45c48f8f08f8d5ff7ccdf023e792aee6 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -33,21 +33,21 @@ summary: |-
+   WHY:catch 吞斷言照 Error Prone 的 AssertionFailureIgnored 只看結構(try 有斷言或 fail、catch 接得住 AssertionError、catch 不重丟就列),不看 catch 裡寫了什麼檢查;try 沒 fail 而 catch 有斷言那半,should 開頭的字寬判成斷言 [出處:代碼審 r5 正確性、邊界、資安三席;r6 正確性、邊界兩席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列;r5 改成只認中綴形狀,又把點號呼叫的真檢查排除,該列的漏列、正常的被誤列] [不選:繼續補名字字表(r5 寬、r6 窄、r7 前綴白名單,三輪各被一步改名打穿或誤列)] [代價:catch 裡真的檢查例外型別的寫法也列,要附理由放行或改用 assertThrows/shouldThrow] [test:t_tq_guard_catch_no_fail]
+   REVISIT:2026-12-15 一次推送的測試檔總量接近 200 MB 時峰值記憶體約為內容的 16 到 23 倍(代碼審 r5 資源席量測,原有設計);第二批評估逐檔放掉原文與切段
+   WHY:catch 接不接得住斷言失敗照型別名字的字尾認(…Error、…Failure、Throwable),不逐一列各框架的子類別 [出處:代碼審 r8 資安、正確性兩席] [因:四個字的字表漏掉 JUnit 4 字串比對失敗丟的 ComparisonFailure、opentest4j 的 MultipleFailuresError 這類 AssertionError 子類別,AI 照失敗訊息抄型別名寫 catch 就躲過;各框架的子類別都以 Error 或 Failure 結尾] [不選:把子類別逐一列進字表(照樣會漏新框架)] [代價:自訂的 Result.Error 這類型別也會列,多一條可放行的候選] [test:t_tq_guard_catch_no_fail]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]新測試在分岔點不存在而有紅燈版時,同一支測試的歷次紅燈版照終點那一版治理帳的行序依序兩兩比、最後一份跟推送版比,命中列 tq/redbase-weakened(no-assertion、catch-no-fail 兩條由分岔點比對列,不重複);治理帳與紅燈版資料夾都沒動就不讀治理帳(工作目錄沒提交的紅燈版、這條分支刪過的紅燈版照樣查) [出處:本計劃設計審 r1 正確性席實測] [因:TDD 先骨架紅、再補斷言重跑是常態,只取最早一份時後補的斷言被改成實作輸出零候選] [不選:只取最早一份;照 ts 排(帶時區、同秒無決勝)] [test:t_tq_guard_redbase_chain]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版讀不到、沒提交、被改過、孤兒檔都列 tq/redbase-unreadable(擋下、可放行),不記成比對沒跑完、也不當成沒有紅燈版 [出處:本計劃設計審 r1 邊界、整合、架構對齊三席] [因:最常見的原因是漏 git add,記成比對沒跑完只能整道閘關掉;既有慣例是單一怪檔變可放行候選] [不選:記成比對沒跑完] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版記的測試在推送版找不到、不只一處或有同名多載,一律列 tq/redbase-unmatched,不讀計劃判條款換綁 [出處:本計劃設計審 r1 架構對齊席] [因:比對工具只吃 git,讀計劃與條款綁定是跨層] [不選:另設條款換綁規則] [test:t_tq_guard_redbase_moved_or_missing]
+   SEE:[[Systems/規格閘]] [[Projects/規格閘紅燈測試快照_計劃]]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]_tg_functions、_tg_rb_entry、_tg_rb_doc、_tg_rb_path_ok 也給規格閘寫紅燈版那一端用(同一套函式鍵與格式驗證),不另開一支對外入口包一層 [出處:代碼審 code-規格閘紅燈測試快照 r1 架構對齊席] [因:寫入端另寫一套切函式或格式驗證,函式鍵與驗法會跟讀取端分岔] [不選:比對工具另開對外入口] [test:t_spec_gate_redbase_written_on_red]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版檔沒有留痕指到(孤兒檔)或在這條分支被刪,照它的內容(刪掉前那一版)比,另列 tq/redbase-unreadable 要人找回留痕或還原檔,訊息不叫人刪檔 [出處:代碼審 code-規格閘紅燈測試快照 r2 資安席] [因:合併主線時治理帳必衝突,照取主線那邊解掉會弄丟分支的留痕,照訊息刪檔後改弱零候選] [不選:帳本改 merge=union(全 repo 的決定,託管平台的網頁合併不認);孤兒檔當沒有紅燈版] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]沒有留痕的紅燈版(孤兒檔、沒留痕又被刪的)不接進依序比的鏈,各自直接跟推送版比一次 [出處:代碼審 code-規格閘紅燈測試快照 r3 單審席] [因:接在鏈尾會倒著比,骨架孤兒排在 900 後面時列成斷言變少、真正的 900 改 800 消失;token 是亂數,照字典序排一樣會反] [不選:紅燈版檔加建立時間欄位照它排(多一個欄位與新的審查面,而沒留痕的檔本來就該找回留痕);照加進版本紀錄的提交時間排(壓提交後不準)] [代價:沒留痕的那份跟其他份之間的中間步驟看不到] [test:t_tq_guard_redbase_loose]
+-  WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]切斷言參數照剝過字串的文字找頂層逗號、照 _rg_bracket_map 跳過括號內部,字串裡的逗號與不成對括號不當結構;剝字串掃描讀錯的兩種情形(字串沒收尾、模板 ${ 段內不配平)退回原文切法;斷言文字只壓字串外的空白(字串原樣保留);本體簽名拆兩份:判本體有沒有變用 _tg_ident(字串裡的空白算內容;只差空白版面的只比預期值、其他規則不重判),找搬家與改名照舊拿掉全部空白(搬進巢狀類別時多行字串跟著縮排也認得出) [出處:mOrangePos 考場實跑,"服務費 $1,235" 改 "$1,234" 漏報] [因:原本只數原文括號,金額、清單、JSON 這類字串預期值被切開後新舊配不起來;Kotlin 文法認模板靠模式堆疊,單層掃描認不得] [不選:另寫有堆疊的掃描(第二套詞法);只看剝過的文字(模板巢狀引號比現況差)] [test:t_tq_guard_string_comma_args] [test:t_tq_guard_string_split_fallback]
++  WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]切斷言參數照剝過字串的文字找頂層逗號、照 _rg_bracket_map 跳過括號內部,字串裡的逗號與不成對括號不當結構;剝字串掃描讀錯的兩種情形(字串沒收尾、模板 ${ 段內不配平)退回原文切法;斷言文字只壓字串外的空白(字串原樣保留,判字串常值的樣式認得三引號跨行字串);本體簽名拆兩份:判本體有沒有變用 _tg_ident(字串裡的空白算內容;只差空白版面的只比預期值、其他規則不重判),找搬家與改名照舊拿掉全部空白(搬進巢狀類別時多行字串跟著縮排也認得出) [出處:mOrangePos 考場實跑,"服務費 $1,235" 改 "$1,234" 漏報] [因:原本只數原文括號,金額、清單、JSON 這類字串預期值被切開後新舊配不起來;Kotlin 文法認模板靠模式堆疊,單層掃描認不得] [不選:另寫有堆疊的掃描(第二套詞法);只看剝過的文字(模板巢狀引號比現況差)] [test:t_tq_guard_string_comma_args] [test:t_tq_guard_string_split_fallback]
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]治理帳被 git 忽略時,孤兒紅燈版的提醒以「不要刪這支紅燈版檔」開頭、講明是忽略設定蓋到並附規則與自查指令(check-ignore -q 退出碼 1),還沒提交那句以 git add 開頭、自帶改法;身分字固定為 orphan、pending,措辭換了放行指紋不變;忽略判法 _gov_ledger_ignored 三態(放在帳檔區,比對工具、規格閘、doctor 共用;check-ignore -q 判、-v 取規則)、比對工具這側帶截止時間、一次推送最多問一次 [出處:mOrangePos 的 .gitignore 從 2026-06 起忽略治理帳,實跑時提醒說「合併時弄丟」] [因:規則以較深層的設定檔優先,一律叫人在根目錄加否定行無效;候選訊息 300 字截斷先掉後面的字] [不選:不問忽略照舊措辭(指錯方向);只看 -v(否定規則照印、回 0)] [test:t_tq_guard_redbase_ledger_ignored] [test:t_tq_guard_ledger_ignored_fix_resolves]
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/scripts/lumos b/scripts/lumos
+index 1269cddf94af761b39725c1deece15522db6a5c3..d6828bb89d7ba997088c936ff3417c50c8a21da7 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -15999,23 +15999,24 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx=None, done=False):
+         if sc:
+             return f"{prel}:全靠人驗的風險低計劃,這次改動不算小改動——" + ";".join(sc) + f"(補測試、縮小改動、或升成風險高走設計審;規則版本 {_SMALL_CHANGE_RULE_VERSION})", None
+         return None, f"{P} ✓ {Path(prel).stem}:全靠人驗,改動通過小改動閘(擴散/相對量/歷史/目的四維度)"
+     split, default, methods_for, plats, _rng, loose_for = idx
+     items, bad_plat = [], []
+     fill = _spec_gate_push_fill(cur, split, default) if (split and not stale and cur is not None) else {}
+     # 設定從多平台改回單平台:留痕的「平台:名字」身分格式換了,不猜是哪一支(Allure 的測試識別碼換算法時歷史就從頭開始,
+     # 要接續靠明確的對照表,不靠猜;代碼審 r2、r3 連兩輪被「猜」打穿後 Enzo 裁換形狀)——照擋、講明,不跑、不記逃逸
+     cfg_gone = [t for t in tests if not split and ":" in t and t not in methods_for(default)]
+     if cfg_gone and not done:
+-        return (f"{prel}:留痕記的測試 {'、'.join(_esc_clean(x, 60) for x in cfg_gone[:5])} 在測試索引找不到;名字帶冒號,"
+-                "多半是設定從多平台改回單平台之前寫的「平台:名字」(身分格式換了,不猜是哪一支)——照現在的設定改條款的測試寫法"
+-                f"(或改一個字讓留痕過期)再重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}"), None
++        return (f"{prel}:留痕記的測試 {'、'.join(_esc_clean(x, 60) for x in cfg_gone[:5])} 在測試索引找不到(設定從多平台改回單平台了?"
++                "名字帶冒號,多半是那時寫的「平台:名字」;身分格式換了,不猜是哪一支);實作還沒綠:照現在的設定重跑 "
++                f"lumos spec-gate {_sh_quote(Path(prel).stem)} 就會寫新留痕;實作已經綠:重跑不會寫新留痕,照規格閘「實作後才跑」的補法"
++                "(先提交實作、把實作暫時換回只留介面的空殼讓測試紅、跑規格閘、再換回),或把計劃開頭欄位改成 plan_risk: high 走設計審"), None
+     if cfg_gone:
+         notes.append(f"留痕記的測試在測試索引找不到({'、'.join(_esc_clean(x, 60) for x in cfg_gone[:5])}——設定改過?)")
+         tests = [t for t in tests if t not in cfg_gone]
+     for t in tests:
+         hit = fill.get(t)
+         if hit and len(hit) == 1:      # 舊留痕的裸名字整串比到現在條款裡只綁一個平台的那支(含冒號的名字也這樣認回)
+             refs = [(next(iter(hit)), t)]
+         else:
+             try:
+                 refs = resolve_test_refs(f"[test:{t}]", split, default)
+@@ -49059,21 +49060,23 @@ def _tg_statements(fn):
+ 
+ def _tg_has_assertion(fn):
+     return bool(_TG_ASSERT_RE.search(fn["mbody"]) or _TG_INFIX_RE.search(fn["mbody"]) or _TG_EXPECTED_ANN.search(fn["annot"]))
+ 
+ 
+ def _tg_strong(stmts):
+     """強斷言(相等比對)的條數;字串常值的內容先清空,訊息裡寫的 assertEquals 不算。"""
+     return sum(1 for s in stmts if _TG_STRONG.search(_lazy_re(_TG_LIT_PAT).sub('""', s)))
+ 
+ 
+-_TG_LIT_PAT = (r'"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\'')   # 佔有式:長字串常值不回溯;用時才編(同 _C_STRIP_PAT)
++# 三引號(Kotlin 原始字串,可跨行)放最前面:斷言文字保留字串原樣後會帶換行,單行樣式認不得,裡面寫的 assertEquals 字樣會被算成強斷言
++# (代碼審 code-紅燈版實跑三缺口 r4 單審席 F2;寫法同 _C_STRIP_PAT 的三引號那段)
++_TG_LIT_PAT = (r'"""[^"]*+(?:"(?!"")[^"]*+)*+"""|"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\'')   # 佔有式:長字串常值不回溯;用時才編(同 _C_STRIP_PAT)
+ _TG_FIRST_ARG = ("assertEquals", "assertNotEquals", "assertArrayEquals", "assertContentEquals", "assertSame")
+ _TG_FLIP = {"assertTrue": "assertFalse", "assertFalse": "assertTrue", "assertNull": "assertNotNull", "assertNotNull": "assertNull"}
+ # Truth / AssertJ 串接的方向互換:assertThat(x).isTrue() 改 isFalse() 跟 assertTrue 改 assertFalse 同一種
+ _TG_CHAIN_FLIP = {"isTrue": "isFalse", "isFalse": "isTrue", "isEmpty": "isNotEmpty", "isNotEmpty": "isEmpty",
+                   "isNull": "isNotNull", "isNotNull": "isNull"}
+ # 斷言的訊息在最後(kotlin.test、JUnit 5 的 Assertions):三個參數時第三個是字串就是訊息、不是字串就是容差
+ _TG_MSG_LAST_RE = re.compile(r"^[ \t]*import\s+(?:static\s+)?(?:kotlin\.test\.(?:\*|assert)|org\.junit\.jupiter\.api\.Assertions\b)", re.M)
+ 
+ 
+ def _tg_call_parts(stmt):
+@@ -49387,44 +49390,42 @@ def _tg_stmt_at(kept, blank, bmap, i):
+         if ch != "\n":
+             break
+         if blank[i:k].rstrip().endswith(_TG_STMT_GOES_ON) or blank[k + 1:k + 200].lstrip().startswith((".", "?.", "&&", "||")):
+             k += 1
+             continue
+         break
+     k = min(k, end)
+     return _tg_ident(kept[i:k]), k
+ 
+ 
+-def _tg_ident(text):
+-    """敘述原文 → 身分:字串常值原樣保留(頭尾與逗號後的空白都算內容),字串外字詞之間的空白壓成一格、標點兩側的空白拿掉。
+-    字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套。"""
++def _tg_ident(text, fold=None):
++    """敘述原文 → 身分:字串常值原樣保留(頭尾與逗號後的空白都算內容),字串外照 fold 整理(預設 _tg_ws_fold:字詞之間的空白壓成一格、
++    標點兩側的空白拿掉)。字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套;只換字串外壓法的呼叫端傳 fold(_tg_ws_keep_strings)。"""
++    fold = fold or _tg_ws_fold
+     out, last = [], 0
+     for mo in _lazy_re(_C_STRIP_PAT, re.S).finditer(text):
+         if mo.group(0)[:2] in ("//", "/*"):
+             continue
+-        out += [_tg_ws_fold(text[last:mo.start()]), mo.group(0)]
++        out += [fold(text[last:mo.start()]), mo.group(0)]
+         last = mo.end()
+-    out.append(_tg_ws_fold(text[last:]))
++    out.append(fold(text[last:]))
+     return "".join(out).strip()
+ 
+ 
+ def _tg_ws_keep_strings(text):
+-    """敘述原文 → 字串外的連續空白壓成一格、字串原樣保留(字串裡的空白是內容:"a b" 改 "a  b" 是改了預期值)。
+-    語言的詞法本來就是「詞與詞之間的空白可互換,字串裡的不行」;字串用 _C_STRIP_PAT 認,同 _tg_ident(代碼審 r3 單審席 D2)。"""
+-    out, last = [], 0
+-    for mo in _lazy_re(_C_STRIP_PAT, re.S).finditer(text):
+-        if mo.group(0)[:2] in ("//", "/*"):
+-            continue
+-        out += [re.sub(r"\s+", " ", text[last:mo.start()]), mo.group(0)]
+-        last = mo.end()
+-    out.append(re.sub(r"\s+", " ", text[last:]))
+-    return "".join(out).strip()
++    """敘述原文 → 字串外的連續空白壓成一格(標點兩側照留)、字串原樣保留(字串裡的空白是內容:"a b" 改 "a  b" 是改了預期值)。
++    語言的詞法本來就是「詞與詞之間的空白可互換,字串裡的不行」(代碼審 r3 單審席 D2);掃描迴圈用 _tg_ident 那一支(r4 架構對齊席)。"""
++    return _tg_ident(text, fold=_tg_ws_collapse)
++
++
++def _tg_ws_collapse(code):
++    return re.sub(r"\s+", " ", code)
+ 
+ 
+ def _tg_ws_fold(code):
+     return re.sub(r"\s*([^\w\s])\s*", r"\1", re.sub(r"\s+", " ", code))
+ 
+ 
+ def _tg_main_hits(text):
+     hits = {}
+     for i, line in enumerate(_tg_strip(text, keep_strings=True).split("\n"), 1):
+         if _TG_SNIFF.search(line):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index ee0b8e8f7a061e9d3bfd0e49423e7f0bc1d5c833..2475d114c191477f865bf23f7557655aa507e6cf 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -121354,38 +121354,44 @@ def t_tq_guard_string_comma_args():
+         h = commit({T: _tqg_kt(fn % after)})
+         return _tqg_rules(root, base, h)
+     cases = (
+         ("金額逗號", 'assertEquals("服務費 $1,235", label(fee))', 'assertEquals("服務費 $1,234", label(fee))'),
+         ("右括號", 'assertEquals(")", lexer.next().text)', 'assertEquals("]", lexer.next().text)'),
+         ("字元左括號", "assertEquals('(', sep(fee))", "assertEquals('[', sep(fee))"),
+         ("編號括號", 'assertEquals("1) 項目", label(x))', 'assertEquals("2) 項目", label(x))'),
+         ("串接逗號空白", 'assertThat(x).isEqualTo("a, b")', 'assertThat(x).isEqualTo("a,b")'),
+         ("模板段內配平", 'assertEquals("總計 ${t}, 稅 ${x}", s)', 'assertEquals("總計 ${t}, 費 ${x}", s)'),
+         ("字串裡多一格空白", 'assertEquals("a b", f())', 'assertEquals("a  b", f())'),   # 代碼審 r3 單審席 D2
++        ("中綴字串裡多一格空白", 'f() shouldBe "a b"', 'f() shouldBe "a  b"'),   # 代碼審 r4 單審席 F4:第二個呼叫點
+     )
+     for label, before, after in cases:
+         got = rules(before, after)
+         check(f"S1 {label}:只改字串預期值要列 tq/expected-changed", ("tq/expected-changed", T) in got, got)
+         same = rules(before, before)
+         check(f"S1 {label}:一字不差不列", ("tq/expected-changed", T) not in same, same)
+     # 代碼審 r1 單審席 F1:搬進巢狀類別、本體有多行字串(跟著多縮排一層)不算刪測試——找搬家用拿掉全部空白的那份簽名
+     body = '    @Test\n    fun json_case() {\n        val s = """\n    {"a": 1}\n"""\n        assertEquals(1, parse(s))\n    }\n'
+     root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+     moved = "    inner class Inner {\n" + "".join("    " + ln + "\n" if ln else "\n" for ln in body.split("\n")[:-1]) + "    }\n"
+     got = _tqg_rules(root, base, commit({T: _tqg_kt(moved)}))
+     check("S1 搬進巢狀類別、本體有多行字串:不列 tq/test-removed", ("tq/test-removed", T) not in got, got)
+     # 代碼審 r2 單審席 F2:整檔重新縮排,沒斷言而有多行字串的既有測試不重判(只差空白版面的算同一支,只比預期值)
+     smoke = '    @Test\n    fun smoke() {\n        render("""\n    {"a": 1}\n""")\n    }\n'
+     root, base, commit = _tqg_repo({T: _tqg_kt(smoke)})
+     reind = "".join("    " + ln + "\n" if ln else "\n" for ln in smoke.split("\n")[:-1])
+     got = _tqg_rules(root, base, commit({T: _tqg_kt(reind)}))
+     check("S1 整檔重新縮排、沒斷言的測試有多行字串:不列 tq/no-assertion", got == [], got)
++    # 代碼審 r4 單審席 F2:多行原始字串裡寫的 assertEquals 字樣不算一條強斷言(把相等比對換成 assertTrue 照列斷言變弱)
++    fn2 = "    @Test\n    fun weak() {\n        %s\n    }\n"
++    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
++    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertTrue("""\n assertEquals mention\n """, f() > 0)')}))
++    check("S1 多行字串裡的 assertEquals 字樣不算強斷言:換成 assertTrue 照列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+     red = _tqg_kt(_RB_OTHER, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'))
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,234", label(fee))'), [_rb_snap("SPEC-c0a00001", red)])
+     cs = _rb_only(_tqg_cands(root, mb, h))
+     check("S1 紅燈版比對:字串預期值被改列 tq/redbase-weakened", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'), [_rb_snap("SPEC-c0a00002", red)])
+     check("S1 紅燈版比對:一字不差不列", _rb_only(_tqg_cands(root, mb, h)) == [], _rb_only(_tqg_cands(root, mb, h)))
+ 
+ 
+@@ -123260,23 +123266,37 @@ def t_spec_gate_record_keeps_platform():
+     check("★前置★ 多平台設定下留痕寫成 jvm:fee_jvm", (_sg_records(kg2)[-1:] or [{}])[0].get("tests") == ["jvm:fee_jvm"], _sg_records(kg2)[-1:])
+     (d2 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                                encoding="utf-8")
+     _sg_commit(d2, "plan + single config")
+     _mp_green(d2, "fee_jvm")
+     _mp_ran(d2)
+     esc = d2 / "docs" / ".escape-log.jsonl"
+     r = _mp_push(d2, kg2)
+     ran = _mp_ran(d2)
+     # 代碼審 r3 人裁換形狀:身分格式換了(多平台改回單平台)不猜是哪一支——照擋、講明設定改了、不跑、不記逃逸
+-    check("S3 改回單平台:jvm:fee_jvm 照擋、講明是設定改了要重跑規格閘、一支都不跑、不記逃逸",
+-          r.returncode == 1 and ran == [] and not esc.exists() and "多平台" in r.stdout and "重跑" in r.stdout,
+-          (r.returncode, ran, esc.exists(), r.stdout[-500:]))
++    check("S3 改回單平台:jvm:fee_jvm 照擋、講明是設定改了、一支都不跑、不記逃逸",
++          r.returncode == 1 and ran == [] and not esc.exists() and "多平台" in r.stdout, (r.returncode, ran, esc.exists(), r.stdout[-500:]))
++    # 代碼審 r4 單審席 F1:實作已綠時單純重跑規格閘不會寫新留痕,訊息要講實際可行的兩條路
++    check("S3 改回單平台的擋下訊息講實作已綠時的補法(換回空殼補跑)與改走設計審",
++          "空殼" in r.stdout and "plan_risk: high" in r.stdout, r.stdout[-700:])
++    # 代碼審 r4 單審席 F5:已完成的計劃降成提醒、不擋、不跑
++    p2 = kg2 / "Projects" / "甲_計劃.md"
++    p2.write_text(p2.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
++    _sg_commit(d2, "done")
++    done_at = _mp_head(d2)
++    (d2 / "README.md").write_text("x\n", encoding="utf-8")
++    p2.write_text(p2.read_text(encoding="utf-8") + "\n補一句說明。\n", encoding="utf-8")
++    _sg_commit(d2, "touch plan after done")
++    _mp_ran(d2)
++    r = _mp_push(d2, kg2, base=done_at)
++    check("S3 改回單平台、計劃已完成:降成提醒不擋、不跑", r.returncode == 0 and _mp_ran(d2) == [] and "提醒" in r.stdout and "設定" in r.stdout,
++          (r.returncode, r.stdout[-500:]))
+     # 代碼審 r2 單審席 F3、架構對齊席:單平台裡本身含冒號的測試名不見了,不拿名字後綴撞到的另一支(fee_jvm)頂替
+     d3, kg3 = _mp_repo("mp1c")
+     (d3 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                                encoding="utf-8")
+     ft = d3 / "app" / "src" / "test" / "java" / "x" / "FeeTest.kt"
+     ft.write_text(ft.read_text(encoding="utf-8").replace("    @Test\n    fun shared_name()", "    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n    @Test\n    fun shared_name()"),
+                   encoding="utf-8")
+     _sg_commit(d3, "colon test")
+     _sg_plan2(kg3, "甲", ["- [S1] 結帳應收一成服務費 [test:gone:fee_jvm]"])
+     r = run(kg3, "spec-gate", "Projects/甲_計劃")
