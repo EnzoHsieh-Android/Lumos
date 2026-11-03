@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-08
-updated: 2026-11-02
+updated: 2026-11-03
 responsibility: 測試品質CLI的明示本機命令收證與JUnit一致性核對,另含 lumos-project-notes 的測試品質接入標準文件(各棧撰寫補充);不裁決業務答案或驗證報告真實性
 self_audit: GPT-6-Codex-clean-agent/2026-10-08
 aliases: []
@@ -18,6 +18,7 @@ summary: |-
   WHY: 接入來源掃描與明示執行收證，分開機械核對與業務判準 [出處:2026-10-08 使用者要求功能接線與建立測試專案] [因:單純文件與固定示範無法供消費專案直接使用，報告身份和快照須核對]
   WHY:實機演練的收證卷證,考場是不能公開的私有專案時,公開 repo 只放去識別化摘要(代稱、考場原有的子套件路徑攤平而演練新增的套件層照留、不放原始碼與收據快照),能重跑的完整卷證留在考場的本機分支 [出處:Enzo 2026-11-01 裁,[[Projects/Android單元測試標準實機演練_計劃]]] [因:工具鏈 repo 公開,入門說明要求推之前確認無公司識別資訊] [不選:完整卷證全放公開 repo(考場是自建合成專案時照舊這樣做)] [代價:別台機器重跑不了,公開那份不能單獨核對收據] [applies:考場是私有專案的演練與收證卷證]
   WHY:裝置那路的失敗訊息同時含像堆疊的一行與 Caused by: 時判成不是斷言,不改判定、照實記成已知取捨 [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法五第二條,設計審 r1 實測] [因:改看報告尾端連續堆疊區塊會把訊息自帶 Caused by: 緊貼真實堆疊的合法案例判錯,也認不得真機的 ... 27 trimmed 截斷行;訊息裡的堆疊樣字串與真正的 Caused by: 文字上分不出來,往拒收的方向錯比較安全] [不選:改看尾端連續堆疊區塊] [代價:這種訊息的字串比較失敗要改訊息或在本機那路收] [test:t_test_quality_cli]
+  SEE:[[Projects/規格閘紅燈測試快照_計劃]] [[Systems/test-guard]]
 verified_by:
   - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"

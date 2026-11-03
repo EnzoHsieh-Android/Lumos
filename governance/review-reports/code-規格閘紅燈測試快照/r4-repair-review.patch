@@ -1,0 +1,464 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md b/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
+index 7b818b226..1ca9c46a7 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
+@@ -59,24 +59,24 @@ RETIRE-IF: 各專案人工抽查自己的放行檔(`lumos lint-waive --list`,規
+   - 加進去會讓這份紅燈版 JSON 超過 5 MB(跟 `lumos test-guard` 的單檔上限同一個數)。
+ - 規格閘找得到的測試只認 `@Test`、`@ParameterizedTest`、`@RepeatedTest`(Kotlin 的 `KOTLIN_TEST_RE`、Java 的 `JAVA_TEST_RE`);`@TestFactory`、`@TestTemplate`、`@Theory` 的測試規格閘本來就綁不到,也就沒有紅燈版。
+ - 分岔點:寫入端要跟分岔點比的兩處(判綠觀測、不重複存),用 `_lens_fork_point`(遠端主線優先,跟比對工具的 `_tg_start` 共用)算分岔點,工作目錄的治理帳減掉分岔點那一版;分岔點等於頂端(分支剛開、還沒有自己的提交)照樣減,只有直接在 main/master 或分離頂端上工作、或算不出分岔點時才看整本工作目錄治理帳(代碼審 r1、r2 改定)。
+ - 判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的時候(含風險低「新行為沒紅」擋下那條路,`_spec_gate_low_not_red`),寫一筆治理帳事件 `spec-gate-green`(走 `_gate_event`,帶迴圈編號與那幾支測試名)。之後同一條分支再跑出紅,那支測試不存紅燈版,原因「曾判綠(實作後補跑)」。`_spec_gate_low_not_red` 印的補跑步驟加一句「這樣補跑的測試不會有紅燈版」。判綠觀測只讀工作目錄的治理帳、只看這條分支自己寫的那幾筆(跟分岔點那一版做行差)。
+ - 寫檔:時機跟留痕相同(風險低在 PASS 時、風險高在相依回歸全綠時;其餘出口本來就不寫留痕)。寫成 `governance/redbase/<迴圈編號>/<留痕 token>.json`(新增),內容 `{"version": 1, "tests": [...], "files": {...}}`:`tests` 每支測試一列(測試名、它綁的條款編號清單、檔案相對路徑、函式鍵),同一支測試被好幾條條款綁只算一列;`files` 每支檔一份文字內容。以 LF、UTF-8 位元組用既有原子寫入(暫存檔、自驗、換名)寫出,寫完讀回核對 sha256。寫檔失敗時照舊寫留痕、不帶 `redbase` 欄位並印一句,規格閘本身不因此擋。
+ - 留痕(審查帳與治理帳兩筆)多三個欄位:`redbase: {"path": <相對路徑>, "sha256": <整份 JSON 檔位元組的 sha256>}`(有寫檔才帶);`redbase_skipped`:沒存的綁定測試名與原因,最多 20 筆(「判綠」排最後,不擠掉其他原因);`redbase_skipped_n`:沒存的總數。測試的身分是(平台、測試名):兩個平台各有一支同名測試時各存各的,判綠事件 `spec-gate-green` 的 `items` 也帶平台。
+ - `governance/redbase/`(新增)加進簿記資料夾清單(`_BOOKKEEPING_DIRS`):它是紀錄不是碼,代碼審通過後補跑規格閘不該讓代碼審留痕失效。只有代碼審留痕失效的判斷會另外看資料夾裡有沒有程式檔;小改動閘、風險掃描、推送前測試範圍、回頭重讀這些消費者只看前綴,放進這個資料夾的檔對它們一律是簿記。紅燈版的格式以 [[Systems/規格閘]] 為單一來源,[[Systems/test-guard]] 用 `SEE:` 指過去。
+ 
+ ### 二、比對工具讀紅燈版
+ 
+-- 什麼時候讀:`<起點>..<終點>` 的改動清單裡有 `docs/.governance-log.jsonl` 或 `governance/redbase/`(新增)底下的檔才讀治理帳;另外兩種情況不讀治理帳也要看:推的就是工作目錄的頂端時,紅燈版資料夾裡還沒提交的檔(治理帳與紅燈版都忘了提交);這條分支的提交刪過的紅燈版檔(`git log --diff-filter=D`)。三樣都沒有就什麼都不讀,行為跟現在逐字相同。起點是空樹(找不到主線)時不用紅燈版(新增告警閘本來就對空樹起點印一句、只印不擋)。
++- 什麼時候讀:`<起點>..<終點>` 的改動清單裡有 `docs/.governance-log.jsonl` 或 `governance/redbase/`(新增)底下的檔才讀治理帳;另外兩種情況不讀治理帳也要看:推的就是工作目錄的頂端時,紅燈版資料夾裡還沒提交的檔(沒追蹤、加進暫存區,或用 `git add -N` 只登記要加的;治理帳與紅燈版都忘了提交);這條分支的提交刪過、起點那一版沒有的紅燈版檔(`git log --no-renames --diff-filter=D`;不帶 `--no-renames` 時,同一個提交刪舊的、加內容相近的新的會被配成改名而看不到那次刪除;起點就有的是主線上的舊紅燈版,回退節建議整個資料夾刪掉,不算);git 讀不出這段歷史時整段記成比對沒跑完,不當成沒刪過。三樣都沒有就什麼都不讀,行為跟現在逐字相同。起點是空樹(找不到主線)時不用紅燈版(新增告警閘本來就對空樹起點印一句、只印不擋)。
+ - 讀哪些紀錄:用 `_residual_blob_at` 讀起點與終點兩版的 `docs/.governance-log.jsonl`,照 `_residual_ask_rows_delta` 的多重集合行差取終點多出來的行(把閘名與種類篩選參數化,不另寫第三份讀法);起點那一版沒有帳檔當成空。只取 `spec-gate-record` 裡的 `redbase` 欄位,也就是這條分支自己寫的紅燈版;已經合進主線的舊計劃不會被誤套。紅燈版 JSON 檔用 `_nodehome_cat_blobs_capped` 從終點那一版批次讀(有單檔上限,`_residual_blob_at` 沒有),不讀工作目錄;治理帳本身大於 5 MB,照舊用 `_residual_blob_at`。紅燈版內嵌的檔文字餵 `_tg_functions` 之前,先過 `_tg_test_file` 對終點檔用的同一套病態輸入處理(超長行抹掉、括號配不平),不過的列 `tq/redbase-unreadable`。
+-- 驗,任一不過就列 `tq/redbase-unreadable`(擋下、可放行,原因分開寫):欄位形狀不對(`path` 不是字串、`sha256` 不是 64 位十六進位)、路徑不在 `governance/redbase/` 底下、終點那一版沒有這支檔(工作目錄有它時原因寫「還沒提交,請 git add 那支檔」,沒有時寫「被刪了,請從版本紀錄還原」)、讀不出、超過 5 MB、不是合法 JSON、`version` 不認得、位元組的 sha256 對不上欄位、加進去會讓這次推送超過比對工具 200 MB 的總量。另外,改動清單裡新增的紅燈版檔沒有任何一筆留痕指到它(孤兒檔,多半是合併主線時解治理帳衝突弄丟了那一行),列這條、講用 `git log -p` 找回那一行、不要刪檔,而且照它的內容比;這條分支刪過的紅燈版檔也列、講從刪掉前那一版還原,同樣照它刪掉前的內容比(代碼審 r2 資安席)。不當成「沒有紅燈版」放過去。
+-- 串起來比:同一個「檔案路徑+函式鍵」的歷次紅燈版,照它們在終點那一版治理帳的行序排(不比 `ts`),依序兩兩比,最後一份再跟終點比。每一步以前一份當前一版跑 `_tg_fn_cands` 的函式級判斷(放寬斷言、改 expected、新加 `expected =`、調大逾時),丟掉它裡面的 `tq/no-assertion` 與 `tq/catch-no-fail`(那兩條由分岔點比對列,不重複);終點那支測試完全沒有斷言時不做紅燈版比對(`tq/no-assertion` 已經列了,再比只會多一條 `assert-weakened` 說同一件事);命中一律列成 `tq/redbase-weakened`,原因寫出是哪一步、哪一種(例「相對規格閘紅燈版 <token>:expected 被改」)。跳過與 assume 的次數差不在這裡算(紅燈版的測試跑出紅就不是被跳過的,次數一定是 0,跟分岔點比對重複)。
++- 驗,任一不過就列 `tq/redbase-unreadable`(擋下、可放行,原因分開寫):欄位形狀不對(`path` 不是字串、`sha256` 不是 64 位十六進位)、路徑不在 `governance/redbase/` 底下、終點那一版沒有這支檔(工作目錄有它時原因寫「還沒提交,請 git add 那支檔」,沒有時寫「被刪了,請從版本紀錄還原」)、讀不出、超過 5 MB、不是合法 JSON、`version` 不認得、位元組的 sha256 對不上欄位、加進去會讓這次推送超過比對工具 200 MB 的總量。另外,改動清單裡新增(含被配成改名的新路徑)的紅燈版檔沒有任何一筆留痕指到它(孤兒檔,多半是合併主線時解治理帳衝突弄丟了那一行),列這條、講用 `git log -p` 找回那一行、不要刪檔,而且照它的內容比;這條分支刪過的紅燈版檔也列、講從刪掉前那一版還原,同樣照它刪掉前的內容比(代碼審 r2 資安席);留痕還在、檔被刪的只列這一條,照留痕的 sha256 核對刪掉前那一版再比;這條的放行指紋不帶刪掉它的提交編號,rebase 或 amend 之後沿用(代碼審 r3)。不當成「沒有紅燈版」放過去。
++- 串起來比:同一個「檔案路徑+函式鍵」的歷次紅燈版,照它們在終點那一版治理帳的行序排(不比 `ts`),依序兩兩比,最後一份再跟終點比。沒有留痕的那幾份(孤兒檔、沒留痕又被刪的)排不出先後,不接進這條鏈,各自直接跟終點比一次:接在鏈尾會倒著比,骨架孤兒接在 900 後面時 900→骨架列成斷言變少、真正的 900→800 消失;token 是亂數,照字典序排一樣會反(代碼審 r3 單審席)。每一步以前一份當前一版跑 `_tg_fn_cands` 的函式級判斷(放寬斷言、改 expected、新加 `expected =`、調大逾時),丟掉它裡面的 `tq/no-assertion` 與 `tq/catch-no-fail`(那兩條由分岔點比對列,不重複);終點那支測試完全沒有斷言時不做紅燈版比對(`tq/no-assertion` 已經列了,再比只會多一條 `assert-weakened` 說同一件事);命中一律列成 `tq/redbase-weakened`,原因寫出是哪一步、哪一種(例「相對規格閘紅燈版 <token>:expected 被改」)。跳過與 assume 的次數差不在這裡算(紅燈版的測試跑出紅就不是被跳過的,次數一定是 0,跟分岔點比對重複)。
+ - expected 與被測呼叫一起改:這一批不比(移到〈第二批〉);`_tg_pairs` 配不起來的斷言照舊不列,寫進抓不到。
+ - 排除與找不到:
+   - 終點那一版的測試函式在分岔點有同一個函式鍵(或改名配對得上)→ 照舊用分岔點那一版,不看紅燈版。
+   - 紅燈版記的測試,先看它的檔在分岔點那一版是否已有同一個函式鍵(有就跳過);再看終點那一版同一路徑有沒有,沒有就在這次改動清單裡的測試檔找同函式鍵(唯一就當搬家照比);終點那一版有同名多載(比紅燈版多出同名函式)時不猜,當找不到。找不到、不只一處、或整支檔已經不在,列 `tq/redbase-unmatched`(擋下、可放行),原因寫 token、測試名、它綁的條款編號。不讀計劃、不分條款是否還在。查找只讀紅燈版記到的路徑與這次改動清單裡的測試檔,用 `_nodehome_cat_blobs_capped` 批次讀,內容算進比對工具一次推送 200 MB 的總量。
+ - 指紋照 `_tg_cand` 的算法,身分字串固定為「紅燈版 token + 子規則名 + 子候選原本的身分字串 + 子候選的指紋」(子候選的指紋已帶同一身分第幾次出現);放行一條不會順帶放掉同一函式的另一條,也不會放掉分岔點比對的同名候選。
+ - 新規則代號與抓不到的變動,同步寫進規則一覽:`_TG_WHY` 補三條原因、`_TG_LIMITS` 與標準文件 `test-quality-standard.md` 的「抓不到」同一份(`t_tq_guard_cli_contract` 釘著)。抓不到新增:實作後第一次跑規格閘就手動把實作搬走造紅、之前沒判綠過的測試,紅燈版是實作後的內容;只存在某次跑紅時已經寫好的斷言(骨架之後才補、而補完後再也沒跑紅的不保護);判綠過的、逾時紅的不存;expected 寫在註記資料列(`@CsvSource`)或同檔常數時改值判不到;expected 與被測呼叫同時改(這一批不比,見第二批);同名多載插入時當找不到。
+ 
+ ### 三、文件同步
+ 
+ - [[Systems/規格閘]]:留痕欄位清單加 `redbase`、`redbase_skipped`,負責範圍加「寫紅燈版與判綠觀測」,紅燈版格式寫在這篇。
+@@ -133,24 +133,25 @@ REVISIT:[when-status:Projects/規格閘紅燈測試快照_計劃=done][by:2027-0
+ - 消費專案:跟著 `lumos update` 拿到還原後的版本;已寫進 `governance/redbase/` 的檔與治理帳的 `redbase`、`redbase_skipped`、`spec-gate-green` 留著無害(舊版不讀),要清就各專案自己 `git rm -r governance/redbase/`。已寫進放行檔的 `tq/redbase-*` 放行留著無害(指紋不再出現)。
+ 
+ ## 實務隱患
+ 
+ - 守衛面:新增告警閘對「規格閘時紅過的新測試」變嚴,原本只判有沒有斷言、吞斷言與跳過次數,現在也判放寬、改 expected、新加 `expected =`、調大逾時。需求在實作期間真的變了,要逐條附理由放行;一個計劃改很多條時會多一批放行。出口與既有閘相同(放行附理由、整道關掉是設定 off 或 `LUMOS_SKIP_LINT_NEW=1`)。
+ - 守衛面:紅燈版讀不到、沒提交、被改過時列成擋下但可放行的候選;漏 `git add` 是最常見的原因,訊息直接講。
+ - 守衛面:規格閘多寫一個檔與一種事件,寫入失敗時規格閘照舊寫留痕、不帶欄位並印一句,不讓規格閘本身因此擋;代價是那一次沒有紅燈版可比。
+ - 守衛面:`governance/redbase/`(新增)進簿記清單後,除了代碼審留痕失效的判斷,其他消費者只看前綴;有人把程式檔放進這個資料夾,小改動閘、風險掃描、推送前測試範圍會把它當簿記。這跟既有簿記資料夾同一個天花板。
+ - 效能:治理帳與紅燈版資料夾都沒動的推送完全不讀;多數推送會動到治理帳,這時讀兩版治理帳做行差(S7 釘 3 秒、400 MB)與這條分支的紅燈版檔(算進 200 MB 總量;比對工具既有的回頭條件(`REVISIT:2026-12-15`)量的是總量接近上限時峰值記憶體約為內容的 16 到 23 倍,紅燈版內容一起算進那次量測)。規格閘每次跑多建一次測試名索引(整個規格閘一次)、每支紅的測試多讀一次檔。
+ - 資安:紅燈版檔是 AI 可寫的 repo 內容,內容一樣走比對工具既有的病態輸入處理;路徑來自治理帳欄位,讀之前限制在 `governance/redbase/` 底下、用 git 讀終點那一版(不讀工作目錄、不跟符號連結),欄位亂寫不會讓工具讀 repo 外的檔。紅燈版會把規格閘當下工作目錄裡未提交的測試內容固定進提交(暫貼的測試用密鑰、本機網址會跟著推出去),這不是新的外洩管道,但會讓原本留在本機的內容被提交。
+-- 資安:刻意同時改紅燈版檔與治理帳那一行的 sha256,可以把紅燈版換掉;刪掉治理帳那一行、或刪掉 `spec-gate-green` 事件,等於沒有那筆紀錄。這跟手改帳本同一個天花板(系統不防刻意多步偽造)。天花板:實作後第一次跑規格閘就手動把實作搬走造紅(規格閘 WHY 記的那次事故正是這樣)、之前從沒判綠過,紅燈版會存下實作後的測試,工具分不出來;不採「記寫入當下的版本編號、跟測試檔第一次進版本紀錄的提交比」,因為推送前會壓提交,原本的提交不在被推的歷史裡,而且正式程式的空殼跟實作在檔案層分不出來。合併主線時治理帳衝突、照「取主線那邊」解掉會弄丟這條分支的留痕:孤兒檔照樣比、訊息引導找回(S4);壓過提交之後,分支中間刪掉的紅燈版在歷史裡看不到,這種刪除偵測不到。紅燈版的測試名、條款與內嵌路徑在擋下訊息裡只清控制字元、截長度,句子照原文出現,跟其他作弊候選回顯檔名、函式名同一個規則(代碼審 r2 資安席,威脅模型:單人、AI 依序操作)。一步就會走到的路徑各有處理:實作後照工具步驟補跑(判綠觀測,S6)、重跑規格閘仍紅時多存一份(依序比,S3)、改測試名或刪測試(`tq/redbase-unmatched`,S5)、漏提交紅燈版檔(`tq/redbase-unreadable`,S4)。逾時之外的環境性假紅(JDK、網路、與實作無關的編譯失敗)分不出來,照紅存;存下的是當時的測試內容,只會少保護、不會誤列。
++- 資安:刻意同時改紅燈版檔與治理帳那一行的 sha256,可以把紅燈版換掉;刪掉治理帳那一行、或刪掉 `spec-gate-green` 事件,等於沒有那筆紀錄。這跟手改帳本同一個天花板(系統不防刻意多步偽造)。天花板:實作後第一次跑規格閘就手動把實作搬走造紅(規格閘 WHY 記的那次事故正是這樣)、之前從沒判綠過,紅燈版會存下實作後的測試,工具分不出來;不採「記寫入當下的版本編號、跟測試檔第一次進版本紀錄的提交比」,因為推送前會壓提交,原本的提交不在被推的歷史裡,而且正式程式的空殼跟實作在檔案層分不出來。合併主線時治理帳衝突、照「取主線那邊」解掉會弄丟這條分支的留痕:孤兒檔照樣比、訊息引導找回(S4);壓過提交之後,分支中間刪掉的紅燈版在歷史裡看不到,這種刪除偵測不到。沒有留痕的紅燈版只跟終點比,它跟其他紅燈版之間的中間步驟(先在某一份改弱、下一份又跑紅)看不到;要完整的依序比得把留痕找回來。紅燈版的測試名、條款與內嵌路徑在擋下訊息裡只清控制字元、截長度,句子照原文出現,跟其他作弊候選回顯檔名、函式名同一個規則(代碼審 r2 資安席,威脅模型:單人、AI 依序操作)。一步就會走到的路徑各有處理:實作後照工具步驟補跑(判綠觀測,S6)、重跑規格閘仍紅時多存一份(依序比,S3)、改測試名或刪測試(`tq/redbase-unmatched`,S5)、漏提交紅燈版檔(`tq/redbase-unreadable`,S4)。逾時之外的環境性假紅(JDK、網路、與實作無關的編譯失敗)分不出來,照紅存;存下的是當時的測試內容,只會少保護、不會誤列。
+ - 併發:紅燈版檔名含留痕 token,不同次規格閘不會寫同一個檔;治理帳沿用既有追加寫法;判紅到寫檔之間檔案被別的會談改了,sha256 對不上就不存。
+ - 已排除:金流:不碰付款與交易資料,只讀寫測試檔內容與本 repo 的紀錄檔。
+ - 已排除:對外送出:不連網;紅燈版只放消費專案自己的測試內容,隨該專案自己的版本紀錄走(未提交內容被固定進提交那一點寫在上面資安行)。
+ - 不可逆:紅燈版一旦提交就留在 git 歷史,要清得改寫歷史;每份上限 5 MB、同內容不重複存,量小。工具的行為可 revert,已寫入的舊欄位舊版不讀、無害。
+ 
+ ## 審計修正紀錄
+ 
+ - 首輪前掃(2026-11-03,一席 sonnet):①3、②2、③3 條直接修;④ 語意不符 11 條修進本稿,改前→改後逐條見卷證 `governance/review-reports/規格閘紅燈測試快照/r1-intake.md`。
+ - r1(2026-11-03,3 席+架構對齊):38 條/blocking 9/核心改三處:只取最早改成歷次紅燈版依序比、加判綠觀測擋掉「實作後補跑」、讀不到紅燈版改成可放行候選;拿掉條款換綁規則。全數折入。
+ - 拆批(2026-11-03,處置閘過後):工具提示單輪折入 38 條超過 20、建議拆小,Enzo 裁拆兩批;expected 與被測呼叫同時改的對齊移到〈第二批〉,第一批寫進抓不到,S2 那個例子改成這一批不列。
+ - 代碼審 r1(2026-11-03,單審+架構對齊+資安):18 條/blocking 2/跨平台同名身分改成(平台、測試名)、5 MB 改量 JSON 跳脫後、讀上一份紅燈版擋符號連結並驗指紋、兩樣都沒提交也偵測、同檔只切一次;全數折入,卷證在 `governance/review-reports/code-規格閘紅燈測試快照/`。
+ - 代碼審 r2(2026-11-03,單審+架構對齊+資安):11 條/blocking 3/新檔改名後改 expected 被修壞成 unmatched(修補回歸)、工作目錄偵測只看頂端那個條件沒測試、合併時留痕弄丟加上孤兒檔訊息叫人刪檔可一步繞過;孤兒檔與分支內刪掉的紅燈版改成照內容比並引導找回;全數折入。
++- 代碼審 r3(2026-11-03,單審+架構對齊+資安,上限輪):8 條/blocking 1/孤兒檔與被刪的紅燈版接在依序比的鏈尾會倒著比、漏掉真正的預期值被改(r2 修補回歸);Enzo 裁換形狀:沒留痕的各自直接跟終點比,另折刪除偵測(改名配對、主線舊檔、刪了又加回、讀不出)、放行指紋、git add -N;回顯一條照威脅模型放行;加開第四輪。
+ - 指標:席報告與重現紀錄在 `governance/review-reports/規格閘紅燈測試快照/`。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 0509ac252..daf385b23 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -32,19 +32,20 @@ summary: |-
+   PITFALL:單行上限之內仍有三種乘積形狀讓比對跑過 30 秒(catch 型別括號掃到很遠的右括號、類別名後接大段空白、測試宣告找不到名字時泛型角括號沒上限) [出處:代碼審 r5 邊界、資源席] [根因:每個命中各自往後掃同一段很遠的文字,外層的單行上限擋不到] [修法:catch 括號用共用的括號對應表、換行後第一個非空白字與一行最後一個非空白字每個位置只找一次、角括號最多看 _TG_MAX_GENERIC_CHARS 字] [test:t_tq_guard_cli_contract]
+   WHY:catch 吞斷言照 Error Prone 的 AssertionFailureIgnored 只看結構(try 有斷言或 fail、catch 接得住 AssertionError、catch 不重丟就列),不看 catch 裡寫了什麼檢查;try 沒 fail 而 catch 有斷言那半,should 開頭的字寬判成斷言 [出處:代碼審 r5 正確性、邊界、資安三席;r6 正確性、邊界兩席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列;r5 改成只認中綴形狀,又把點號呼叫的真檢查排除,該列的漏列、正常的被誤列] [不選:繼續補名字字表(r5 寬、r6 窄、r7 前綴白名單,三輪各被一步改名打穿或誤列)] [代價:catch 裡真的檢查例外型別的寫法也列,要附理由放行或改用 assertThrows/shouldThrow] [test:t_tq_guard_catch_no_fail]
+   REVISIT:2026-12-15 一次推送的測試檔總量接近 200 MB 時峰值記憶體約為內容的 16 到 23 倍(代碼審 r5 資源席量測,原有設計);第二批評估逐檔放掉原文與切段
+   WHY:catch 接不接得住斷言失敗照型別名字的字尾認(…Error、…Failure、Throwable),不逐一列各框架的子類別 [出處:代碼審 r8 資安、正確性兩席] [因:四個字的字表漏掉 JUnit 4 字串比對失敗丟的 ComparisonFailure、opentest4j 的 MultipleFailuresError 這類 AssertionError 子類別,AI 照失敗訊息抄型別名寫 catch 就躲過;各框架的子類別都以 Error 或 Failure 結尾] [不選:把子類別逐一列進字表(照樣會漏新框架)] [代價:自訂的 Result.Error 這類型別也會列,多一條可放行的候選] [test:t_tq_guard_catch_no_fail]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]新測試在分岔點不存在而有紅燈版時,同一支測試的歷次紅燈版照終點那一版治理帳的行序依序兩兩比、最後一份跟推送版比,命中一律列 tq/redbase-weakened;治理帳與紅燈版資料夾都沒動就完全不讀 [出處:本計劃設計審 r1 正確性席實測] [因:TDD 先骨架紅、再補斷言重跑是常態,只取最早一份時後補的斷言被改成實作輸出零候選] [不選:只取最早一份;照 ts 排(帶時區、同秒無決勝)] [test:t_tq_guard_redbase_chain]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版讀不到、沒提交、被改過、孤兒檔都列 tq/redbase-unreadable(擋下、可放行),不記成比對沒跑完、也不當成沒有紅燈版 [出處:本計劃設計審 r1 邊界、整合、架構對齊三席] [因:最常見的原因是漏 git add,記成比對沒跑完只能整道閘關掉;既有慣例是單一怪檔變可放行候選] [不選:記成比對沒跑完] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版記的測試在推送版找不到、不只一處或有同名多載,一律列 tq/redbase-unmatched,不讀計劃判條款換綁 [出處:本計劃設計審 r1 架構對齊席] [因:比對工具只吃 git,讀計劃與條款綁定是跨層] [不選:另設條款換綁規則] [test:t_tq_guard_redbase_moved_or_missing]
+   SEE:[[Systems/規格閘]] [[Projects/規格閘紅燈測試快照_計劃]]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]_tg_functions、_tg_rb_entry、_tg_rb_doc、_tg_rb_path_ok 也給規格閘寫紅燈版那一端用(同一套函式鍵與格式驗證),不另開一支對外入口包一層 [出處:代碼審 code-規格閘紅燈測試快照 r1 架構對齊席] [因:寫入端另寫一套切函式或格式驗證,函式鍵與驗法會跟讀取端分岔] [不選:比對工具另開對外入口] [test:t_spec_gate_redbase_written_on_red]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版檔沒有留痕指到(孤兒檔)或在這條分支被刪,照它的內容(刪掉前那一版)比,另列 tq/redbase-unreadable 要人找回留痕或還原檔,訊息不叫人刪檔 [出處:代碼審 code-規格閘紅燈測試快照 r2 資安席] [因:合併主線時治理帳必衝突,照取主線那邊解掉會弄丟分支的留痕,照訊息刪檔後改弱零候選] [不選:帳本改 merge=union(全 repo 的決定,託管平台的網頁合併不認);孤兒檔當沒有紅燈版] [test:t_tq_guard_redbase_unreadable]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]沒有留痕的紅燈版(孤兒檔、沒留痕又被刪的)不接進依序比的鏈,各自直接跟推送版比一次 [出處:代碼審 code-規格閘紅燈測試快照 r3 單審席] [因:接在鏈尾會倒著比,骨架孤兒排在 900 後面時列成斷言變少、真正的 900 改 800 消失;token 是亂數,照字典序排一樣會反] [不選:紅燈版檔加建立時間欄位照它排(多一個欄位與新的審查面,而沒留痕的檔本來就該找回留痕);照加進版本紀錄的提交時間排(壓提交後不準)] [代價:沒留痕的那份跟其他份之間的中間步驟看不到] [test:t_tq_guard_redbase_loose]
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/scripts/lumos b/scripts/lumos
+index a4467b9b5..d8b714b42 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -49319,21 +49319,22 @@ _TG_WHY = {
+     "tq/catch-no-fail": ("例外被 catch 或 runCatching 接住,不丟例外或斷言失敗時測試照樣綠",
+                          "改用 assertThrows/assertFailsWith(Kotest 用 shouldThrow);catch 接得住 AssertionError 時,裡面不管寫什麼檢查,try 裡的斷言失敗與 fail() 都會先被它接住"),
+     "tq/timeout-raised": ("測試逾時被調大", "確認不是用放寬逾時掩蓋變慢或卡住"),
+     "tq/snapshot-changed": ("截圖基準圖或比對門檻有變", "看新舊比較圖,確認畫面變化是需求要的"),
+     "tq/test-env-sniff": ("正式程式碼在偵測自己是不是跑在測試裡", "確認不是在測試時走另一條路讓測試過"),
+     "tq/too-large": ("超過比對工具的上限:整支檔超過上限時整支沒有比對;只有超長行時那幾行沒有比對、其餘照比", "人工看這支檔的改動,或拆小"),
+     "tq/unparsable": ("剝完字串與註解後括號配不平或含 NUL,函式級規則判不了", "人工看這支檔的改動"),
+     "tq/unreadable": ("這支檔從 git 讀不出來(含檔名不是 UTF-8、含換行),沒有比對", "人工看這支檔的改動"),
+     "tq/redbase-weakened": ("這支新測試相對規格閘判紅時存下的那一版(紅燈版)被改弱了", "確認改動來自需求變更,不是照實作目前的輸出改測試;需求真的變了就附理由放行"),
+     "tq/redbase-unmatched": ("規格閘判紅時存下的測試在推送版找不到(被刪、改名或有同名多載)", "確認這支測試是需求拿掉的,不是為了讓紅燈消失而刪或改名"),
+-    "tq/redbase-unreadable": ("規格閘紅燈版讀不到、沒提交或被改過,沒辦法比", "照原因處理:沒提交就 git add 那支檔,被刪或被改就從版本紀錄還原;確定不需要才附理由放行"),
++    "tq/redbase-unreadable": ("規格閘紅燈版讀不到、沒提交、被刪、被改過或沒有留痕指到",
++                              "照原因處理:沒提交就 git add 那支檔,被刪或被改就從版本紀錄還原,沒有留痕就照訊息找回那一行;確定不需要才附理由放行"),
+ }
+ 
+ 
+ def _tg_cand(rule, file, line, ident, nth=1, side="head", extra=""):
+     """一條候選。檔名與原因裡的外來字串(檔名、測試名、正式程式的那一行)印出前清控制字元(換行、ESC、雙向覆寫),
+     擋下訊息是給 AI 讀的,不讓外來文字偽造出「接下來」這類段落;指紋用清過的檔名(只有怪檔名才會不同)。"""
+     import hashlib
+     why, verify = _TG_WHY[rule]
+     file = _out_clean(file, 500)
+     key = hashlib.sha256("\x00".join([rule, file, ident, str(nth)]).encode("utf-8", "replace")).hexdigest()[:16]
+@@ -49644,113 +49645,137 @@ def _tg_redbase_records(root, base, head, deadline=None):
+ 
+ 
+ def _tg_rb_path_ok(path):
+     """紅燈版路徑只收 governance/redbase/ 底下的 .json:不准 ..、反斜線、控制字元、空的一段(欄位亂寫不會讓工具讀 repo 外的檔)。"""
+     if not isinstance(path, str) or not path.startswith(_TG_RB_DIR) or not path.endswith(".json"):
+         return False
+     parts = path.split("/")
+     return all(x and x not in (".", "..") for x in parts) and "\\" not in path and not any(ord(ch) < 32 for ch in path)
+ 
+ 
+-def _tg_rb_bad(tok, file, reason):
+-    """一條 tq/redbase-unreadable(擋下、可放行;不當成沒有紅燈版)。"""
+-    return _tg_cand("tq/redbase-unreadable", file, 0, f"{tok}\x00{file}\x00{reason}", extra=f"規格閘紅燈版 {tok}:{reason}")
++def _tg_rb_bad(tok, file, reason, key=None):
++    """一條 tq/redbase-unreadable(擋下、可放行;不當成沒有紅燈版)。key:原因裡有會變的字(提交編號)時,指紋改用這個穩定的字,
++    rebase 或 amend 之後放行照樣沿用(代碼審 r3 單審席 F3)。"""
++    return _tg_cand("tq/redbase-unreadable", file, 0, f"{tok}\x00{file}\x00{key or reason}", extra=f"規格閘紅燈版 {tok}:{reason}")
+ 
+ 
+ def _tg_redbase_cands(root, base, head, ch, test_files, consumed, deadline=None):
+     """規格閘紅燈版那一段 → (候選, 錯誤訊息或 None)。治理帳與紅燈版資料夾都沒動、工作目錄沒有還沒提交的紅燈版、這條分支也沒刪過
+     紅燈版,就不讀治理帳(行為跟沒有這段時逐字相同);起點是空樹(找不到主線)不用紅燈版(新增告警閘本來就對空樹起點印一句、只印不擋)。
+-    留痕在合併時被弄丟(孤兒檔)或紅燈版檔在這條分支被刪,照樣拿那份內容來比、另列一條要人找回的候選(代碼審 r2 資安席 S2)。
++    留痕在合併時被弄丟(孤兒檔)或紅燈版檔在這條分支被刪,照樣拿那份內容來比、另列一條要人找回的候選(代碼審 r2 資安席 S2);
++    沒有留痕的那幾份排不出先後,各自直接跟推送版比(_tg_rb_chain)。
+     consumed:這次推送比對工具已讀的內容位元組數(紅燈版與補讀的測試檔都算進 _TG_MAX_TOTAL)。"""
+     if base == _EMPTY_TREE_SHA:
+         return [], None
+     pending = _tg_rb_pending(root, head)
+-    deleted = _tg_rb_deleted(root, base, head)
++    deleted = _tg_rb_deleted(root, base, head, deadline)
++    if deleted is None:
++        return None, "git 讀不出這條分支刪過哪些規格閘紅燈版(逾時或 git 跑不動)"
+     touched = any(p == GOV_LOG_REL or (p or "").startswith(_TG_RB_DIR) for _st, o, n, _s, _g in ch for p in (o, n))
+     recs, err = _tg_redbase_records(root, base, head, deadline) if touched else ([], None)
+     if recs is None:
+         return None, err
+     metas, out = _tg_rb_metas(recs, ch, head, deleted)
+     referenced = {p for _t, p, _s, _sp in metas}
+     out += [_tg_rb_bad("?", p, "工作目錄有還沒提交的紅燈版檔:請 git add 那支檔與 docs/.governance-log.jsonl 一起提交")
+             for p in sorted(pending - referenced)]
+     snaps, bad, err, nread = _tg_rb_load(root, metas, consumed, deadline)
+     if err:
+         return None, err
+     more, err = _tg_rb_compare(root, base, head, snaps, test_files, consumed + nread, deadline)
+     if err:
+         return None, err
+     return out + bad + more, None
+ 
+ 
+-def _tg_rb_deleted(root, base, head):
+-    """紅燈版檔在 <起點>..<終點> 的某個提交被刪、終點也沒有 → [(刪掉它的提交, 路徑)]。壓過提交後中間的刪除看不到(天花板)。"""
+-    r = _lens_git(root, "log", "--format=%x00%H", "--name-only", "--diff-filter=D", f"{base}..{head}", "--", _TG_RB_DIR, quote=True)
++def _tg_rb_deleted(root, base, head, deadline=None):
++    """這條分支自己的紅燈版檔在 <起點>..<終點> 的某個提交被刪、終點也沒有 → [(刪掉它的提交, 路徑)];git 讀不出回 None(不當成沒刪過)。
++    --no-renames:同一個提交刪舊的、加內容相近的新的,git 預設配成改名,--diff-filter=D 就看不到那次刪除(代碼審 r3 單審席 F2);
++    起點那一版就有的不算(主線上的舊紅燈版,計劃回退節建議整個資料夾刪掉,代碼審 r3 單審席 F4)。壓過提交後中間的刪除看不到(天花板)。"""
++    r = _lens_git_dl(root, "log", "--no-renames", "--format=%x00%H", "--name-only", "--diff-filter=D", f"{base}..{head}",
++                     "--", _TG_RB_DIR, quote=True, deadline=deadline)
+     if r is None or r.returncode != 0:
+-        return []
++        return None
+     out, sha, seen = [], None, set()
+     for ln in r.stdout.splitlines():
+         if ln.startswith("\x00"):
+             sha = ln[1:].strip()
+         elif ln.strip() and sha and ln.strip() not in seen and _tg_rb_path_ok(ln.strip()):
+             seen.add(ln.strip())
+             out.append((sha, ln.strip()))
+     if not out:
+         return []
+-    alive = _nodehome_cat_sizes(root, [f"{head}:{p}" for _c, p in out]) or [None] * len(out)
+-    return [x for x, n in zip(out, alive) if n is None]
++    sizes = _nodehome_cat_sizes(root, [f"{rev}:{p}" for rev in (head, base) for _c, p in out],
++                                max(1, int(_git_timeout(deadline, cap=60))))
++    if sizes is None:
++        return None
++    return [x for x, at_head, at_base in zip(out, sizes, sizes[len(out):]) if at_head is None and at_base is None]
+ 
+ 
+ def _tg_rb_pending(root, head):
+     """推的就是工作目錄的頂端時,紅燈版資料夾裡還沒提交的檔(沒追蹤或只加進暫存區)→ 路徑 set;其他情況(推別的提交、CI 的乾淨 clone)回空。
+     治理帳與紅燈版都忘了提交時,改動清單裡兩樣都沒有,不看這裡就整段靜默略過(代碼審 r1 資安席 S3)。"""
+     if head != _lens_full_sha(root, "HEAD"):
+         return set()
+     # 要帶狀態碼(?? 或 A)所以自己解 porcelain,不用只回路徑的 _porcelain_z_paths;先例是 _handoff_files(代碼審 r2 架構對齊席 A1)
+     r = _lens_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", _TG_RB_DIR, binary=True)
+     if r is None or r.returncode != 0:
+         return set()
+     out = set()
+     for ent in r.stdout.split(b"\0"):
+-        if len(ent) > 3 and (ent[:2] == b"??" or ent[:1] == b"A"):
++        # A 在第一欄是加進暫存區;在第二欄是 git add -N 只登記要加(代碼審 r3 資安席 S2)
++        if len(ent) > 3 and (ent[:2] == b"??" or b"A" in ent[:2]):
+             path = ent[3:].decode("utf-8", "replace")
+             if path.startswith(_TG_RB_DIR):
+                 out.add(path)
+     return out
+ 
+ 
+ def _tg_rb_metas(recs, ch, head, deleted=()):
+     """留痕、孤兒檔、這條分支刪掉的紅燈版 → ([(token, 紅燈版路徑, sha256 或 None, 讀哪一版的 spec)], 要人看的候選)。
+-    sha256 是 None 的(孤兒檔、被刪的)沒有留痕可核對,照內容比,另列一條候選要人把留痕或檔找回來。"""
++    sha256 是 None 的(孤兒檔、沒留痕又被刪的)沒有留痕可核對也排不出先後,照內容直接跟推送版比,另列一條候選要人把留痕或檔找回來;
++    留痕還在、檔被刪的,照留痕核對刪掉前那一版,只列一條(代碼審 r3 單審席 F4)。"""
+     out, metas, referenced = [], [], set()
++    gone = {p: c for c, p in deleted}
++
++    def gone_bad(tok, p):
++        return _tg_rb_bad(tok, p, f"這支紅燈版檔在這條分支的提交 {gone[p][:12]} 被刪了:請從那個提交的上一版還原並提交;"
++                                  "已照它刪掉前的內容比", key="deleted")
+     for rec in recs:
+         tok = _out_clean(str(rec.get("token") or "?"), 40)
+         rb = rec.get("redbase")
+         path = rb.get("path") if isinstance(rb, dict) else None
+         sha = rb.get("sha256") if isinstance(rb, dict) else None
+         if not isinstance(path, str) or not isinstance(sha, str) or not _TG_RB_SHA_RE.fullmatch(sha):
+             out.append(_tg_rb_bad(tok, GOV_LOG_REL, "留痕的 redbase 欄位形狀不對(要有 path 字串與 64 位十六進位的 sha256)"))
+         elif not _tg_rb_path_ok(path):
+             out.append(_tg_rb_bad(tok, GOV_LOG_REL, f"紅燈版路徑 {_out_clean(path, 200)} 不在 {_TG_RB_DIR} 底下或不是 .json"))
++        elif path in gone and path not in referenced:
++            referenced.add(path)
++            out.append(gone_bad(tok, path))
++            metas.append((tok, path, sha, f"{gone[path]}^:{path}"))
+         else:
+             referenced.add(path)
+             metas.append((tok, path, sha, f"{head}:{path}"))
++    # 改動清單用 -M:沒留痕的新檔跟同一次刪掉的舊檔內容相近時會被配成改名,改名的新路徑也算新增
+     for st, _o, n, _s, _g in ch:
+-        if st == "A" and n and n.startswith(_TG_RB_DIR) and n not in referenced and _tg_rb_path_ok(n):
++        if st in ("A", "R", "C") and n and n.startswith(_TG_RB_DIR) and n not in referenced and _tg_rb_path_ok(n):
++            referenced.add(n)
+             tok = _out_clean(Path(n).stem, 40)
+             out.append(_tg_rb_bad(tok, n, "這支紅燈版檔沒有任何規格閘留痕指到它(多半是合併時解治理帳衝突弄丟了那一行):"
+                                           f"用 git log -p -- {GOV_LOG_REL} 找回含 {tok} 的那一行補回並提交;不要刪這支檔,已照它的內容比"))
+             metas.append((tok, n, None, f"{head}:{n}"))
+-    for sha, p in deleted:
+-        tok = _out_clean(Path(p).stem, 40)
+-        out.append(_tg_rb_bad(tok, p, f"這支紅燈版檔在這條分支的提交 {sha[:12]} 被刪了:請從那個提交的上一版還原並提交;已照它刪掉前的內容比"))
+-        metas.append((tok, p, None, f"{sha}^:{p}"))
++    for p in gone:
++        if p not in referenced:
++            tok = _out_clean(Path(p).stem, 40)
++            out.append(gone_bad(tok, p))
++            metas.append((tok, p, None, f"{gone[p]}^:{p}"))
+     return metas, out
+ 
+ 
+ def _tg_rb_load(root, metas, consumed, deadline=None):
+     """[(token, 路徑, sha256 或 None, spec)] → ({(測試檔路徑, 函式鍵): [紅燈版,照順序]}, 讀不到的候選, 錯誤訊息或 None, 讀了幾個位元組)。
+     批次讀(_nodehome_cat_blobs_capped,單檔 5 MB、跟這次推送已讀的合計不超過 200 MB);spec 是終點那一版(或刪掉前那一版),不讀工作目錄。"""
+     if not metas:
+         return {}, [], None, 0
+     specs = [sp for _t, _p, _s, sp in metas]
+     sizes = _nodehome_cat_sizes(root, specs, max(1, int(_git_timeout(deadline, cap=60))))
+@@ -49768,21 +49793,22 @@ def _tg_rb_load(root, metas, consumed, deadline=None):
+         doc = _tg_rb_doc(root, path, sha, sizes[i], blobs[i])
+         if isinstance(doc, str):
+             bad.append(_tg_rb_bad(tok, path, doc))
+             continue
+         for t in doc["tests"]:
+             got = _tg_rb_entry(t, doc["files"], cache)
+             if isinstance(got, str):
+                 bad.append(_tg_rb_bad(tok, path, got))
+                 continue
+             tpath, key, fn, kt, name, clauses = got
+-            snaps.setdefault((tpath, key), []).append({"tok": tok, "fn": fn, "kt": kt, "name": name, "clauses": clauses})
++            snaps.setdefault((tpath, key), []).append({"tok": tok, "fn": fn, "kt": kt, "name": name, "clauses": clauses,
++                                                       "loose": sha is None})
+     return snaps, bad, None, nread
+ 
+ 
+ def _tg_rb_doc(root, path, sha, size, blob):
+     """一份紅燈版的大小與內容 → 讀出的 dict(version、tests 清單、files 物件都驗過);不能用回原因字串。"""
+     import hashlib
+     import json as _json
+     if size is None:
+         return ("推送版沒有這支紅燈版檔:還沒提交,請 git add 那支檔並提交(被 .gitignore 蓋到時用 git add -f)" if (Path(root) / path).is_file()
+                 else "推送版沒有這支紅燈版檔:被刪了,請從版本紀錄還原")
+@@ -49891,30 +49917,32 @@ def _tg_rb_locate(p, k, by_path):
+     found = [(p, fh, kt)] if k in fh else [(p2, e[1], e[2]) for p2, e in by_path.items()
+                                            if p2 != p and not isinstance(e, str) and k in e[1] and k not in e[0]]
+     if len(found) != 1:
+         return "推送版找不到這支測試(被刪或改名)" if not found else "推送版有不只一處同類別同名的測試"
+     if any(x.startswith(k + "#") for x in found[0][1]):
+         return "推送版有同名多載,不猜是哪一支"
+     return found[0]
+ 
+ 
+ def _tg_rb_chain(lst, k, tp, tfh, tkt):
+-    """歷次紅燈版依序兩兩比、最後一份跟推送版比 → tq/redbase-weakened 候選。推送版沒有斷言不比(分岔點那邊已列 tq/no-assertion)。"""
++    """有留痕的歷次紅燈版照治理帳行序依序兩兩比、最後一份跟推送版比;沒有留痕的(孤兒檔、被刪的)排不出先後,各自直接跟推送版比一次
++    (接在鏈尾會倒著比:骨架孤兒接在 900 後面,900→骨架列成斷言變少、真正的 900→800 消失,代碼審 r3 單審席 F1)
++    → tq/redbase-weakened 候選。推送版沒有斷言不比(分岔點那邊已列 tq/no-assertion)。"""
+     f = tfh[k]
+     if not _tg_has_assertion(f):
+         return []
++    chain = [(s["tok"], s["fn"], s["kt"]) for s in lst if not s.get("loose")] + [(None, f, tkt)]
++    steps = [(chain[i][0], chain[i][1], chain[i + 1][1], "推送版" if i == len(chain) - 2 else f"第 {i + 2} 份紅燈版", chain[i + 1][2])
++             for i in range(len(chain) - 1)]
++    steps += [(s["tok"], s["fn"], f, "推送版", tkt) for s in lst if s.get("loose")]
+     out = []
+-    chain = [(s["tok"], s["fn"], s["kt"]) for s in lst] + [(None, f, tkt)]
+-    for i in range(len(chain) - 1):
+-        tok, prev, _pk = chain[i]
+-        _nt, cur, ck = chain[i + 1]
+-        label = "推送版" if i == len(chain) - 2 else f"第 {i + 2} 份紅燈版"
++    for tok, prev, cur, label, ck in steps:
+         for c in _tg_fn_cands(tp, k, cur, prev, ck):
+             if c["rule"] in ("tq/no-assertion", "tq/catch-no-fail"):
+                 continue                               # 這兩條由分岔點比對列,不重複
+             out.append(_tg_cand("tq/redbase-weakened", tp, f["start"], f"{tok}\x00{c['rule']}\x00{c['ident']}\x00{c['key']}",
+                                 extra=f"相對規格閘紅燈版 {tok} → {label}:{c['message']}"))
+     return out
+ 
+ 
+ def _tg_rb_unmatched(last, path, key, reason):
+     """一條 tq/redbase-unmatched:原因寫最後一份紅燈版的 token、測試名與它綁的條款編號。"""
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index c7e3f7adb..78030bbfa 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -122726,20 +122726,128 @@ def t_tq_guard_redbase_unreadable():
+     tf = len(_tqg_kt(_RB_OTHER).encode("utf-8")) + len(_tqg_kt(_RB_OTHER, body).encode("utf-8"))
+     saved = m._TG_MAX_TOTAL
+     m._TG_MAX_TOTAL = tf + len(snap9[1]) // 2
+     try:
+         cs = case(snap9)
+     finally:
+         m._TG_MAX_TOTAL = saved
+     check("S4 加進去超過推送總量要列", [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "總量" in cs[0]["message"], cs)
+ 
+ 
++def t_tq_guard_redbase_loose():
++    """[S3][S4] 沒有留痕可排序的紅燈版(孤兒檔、這條分支刪掉的):不接進依序比的鏈,各自直接跟推送版比一次(代碼審 r3 單審席 F1:
++    接在鏈尾會倒著比、報錯理由、漏掉真正的預期值被改);刪掉偵測不被改名配對吃掉、刪了又加回不算、主線就有的不算、留痕還在的只列一條、
++    git 讀不出往上回錯、放行指紋不帶提交編號;git add -N 的也算還沒提交。翻紅釘:孤兒接鏈尾、拿掉 --no-renames、拿掉還活著或主線就有的
++    過濾、留痕還在仍另列、指紋帶提交編號、讀不出回空、只認第一欄的 A → 紅。"""
++    import subprocess as sp
++    m = _tqg_module()
++    sk = _tqg_kt(_RB_OTHER, _rb_fn("        TODO()"))
++    r900 = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
++    body = _rb_fn("        assertEquals(800, checkout(1000))")
++
++    def toks(cs):
++        return [c["message"].split("相對規格閘紅燈版 ", 1)[-1] for c in cs if c["rule"] == "tq/redbase-weakened"]
++
++    def real(cs, tok):
++        return any(t.startswith(f"{tok} → 推送版") and "預期值" in t for t in toks(cs))
++    # 孤兒骨架 + 有留痕的 900 → 推送版 800
++    root, mb, commit = _rb_repo()
++    sko = _rb_snap("SPEC-b0000001", sk)
++    h = _rb_push(commit, body, [_rb_snap("SPEC-b0000002", r900)], files={sko[0]: sko[1]})
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    check("★前置★ 骨架那份真的是孤兒檔", any(c["rule"] == "tq/redbase-unreadable" and "SPEC-b0000001" in c["message"] for c in cs), cs)
++    check("S3 r3 孤兒骨架 + 有留痕的 900:列 900 → 推送版的預期值被改", real(cs, "SPEC-b0000002"), cs)
++    check("S3 r3 孤兒不接進鏈:不出現倒著比的「第 N 份紅燈版」", not any("份紅燈版" in t for t in toks(cs)), cs)
++    # 兩個孤兒,token 字典序跟先後無關:兩種順序都要抓到 900 → 800
++    for early, late in (("SPEC-00000001", "SPEC-ffffffff"), ("SPEC-ffffffff", "SPEC-00000001")):
++        root, mb, commit = _rb_repo()
++        a, b = _rb_snap(early, sk), _rb_snap(late, r900)
++        cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, body, [], files={a[0]: a[1], b[0]: b[1]})))
++        check(f"S3 r3 兩個孤兒(骨架是 {early}):照樣列 900 那份 → 推送版的預期值被改", real(cs, late), cs)
++    # 被刪的骨架(沒有留痕)+ 有留痕的 900
++    root, mb, commit = _rb_repo()
++    commit({sko[0]: sko[1]})
++    h = _rb_push(commit, body, [_rb_snap("SPEC-b0000002", r900)], files={sko[0]: None})
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    check("★前置★ 骨架那份真的被列成被刪", any("被刪" in c["message"] and "SPEC-b0000001" in c["message"] for c in cs), cs)
++    check("S3 r3 被刪的骨架 + 有留痕的 900:列 900 → 推送版", real(cs, "SPEC-b0000002") and not any("份紅燈版" in t for t in toks(cs)), cs)
++    # 同一個提交刪舊的、加內容相近的新的:git 預設會配成改名,刪掉偵測不能漏
++    root, mb, commit = _rb_repo()
++    s1, s2 = _rb_snap("SPEC-f0000001", r900), _rb_snap("SPEC-f0000002", r900, clauses=("S2",))
++    commit({s1[0]: s1[1]})
++    h = _rb_push(commit, body, [s2], files={s1[0]: None})
++    out = m._tg_rb_deleted(root, mb, h)
++    check("S4 r3 刪舊加相近的新檔(會被配成改名):刪掉的照樣列", [p for _c, p in (out or [])] == [s1[0]], out)
++    # 主線就有的舊紅燈版被刪、同時加沒留痕的相近新檔:改動清單(起點對終點、-M)把新檔配成改名,照樣要當孤兒檔
++    root, mb, commit = _rb_repo({s1[0]: s1[1]})
++    h = commit({s1[0]: None, s2[0]: s2[1], _TQG_T: _tqg_kt(_RB_OTHER, body)})
++    ch = m._tg_changes(root, mb, h)
++    check("★前置★ 新檔在改動清單裡真的是改名", any(st == "R" and n == s2[0] for st, _o, n, _s, _g in ch), ch)
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    check("S4 r3 孤兒檔在改動清單裡被配成改名:照樣列成孤兒", any("SPEC-f0000002" in c["message"] and "留痕" in c["message"] for c in cs), cs)
++    # 刪了又加回同一路徑:不算被刪
++    root, mb, commit = _rb_repo()
++    commit({s1[0]: s1[1]})
++    commit({s1[0]: None})
++    h = commit({s1[0]: s1[1]})
++    check("S4 r3 刪了又加回:不算被刪", m._tg_rb_deleted(root, mb, h) == [], m._tg_rb_deleted(root, mb, h))
++    # 主線就有的舊紅燈版,在這條分支被刪(計劃回退節就是這樣建議):不是這條分支的紅燈版,不列
++    old = _rb_snap("SPEC-f0000003", r900)
++    root, mb, commit = _rb_repo({old[0]: old[1]})
++    h = commit({old[0]: None, _TQG_T: _tqg_kt(_RB_OTHER, body)})
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    check("S4 r3 主線就有的紅燈版在分支被刪:不列", cs == [], cs)
++    # 留痕還在、檔被刪:只列一條,而且照刪掉前的內容比
++    root, mb, commit = _rb_repo()
++    s4 = _rb_snap("SPEC-f0000004", r900)
++    commit({s4[0]: s4[1]})
++    h = _rb_push(commit, body, [s4], omit=(s4[0],), files={s4[0]: None})
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    unr = [c for c in cs if c["rule"] == "tq/redbase-unreadable"]
++    check("S4 r3 留痕還在、檔被刪:同一支只列一條 unreadable", len(unr) == 1 and "被刪" in unr[0]["message"], unr)
++    check("S4 r3 留痕還在、檔被刪:照刪掉前的內容比出改弱", real(cs, "SPEC-f0000004"), cs)
++    check("S4 r3 訊息不同時說沒辦法比又說已照內容比", not any("沒辦法比" in c["message"] and "已照" in c["message"] for c in unr), unr)
++    # 放行指紋不帶提交編號(rebase、amend 後沿用)
++    p = "governance/redbase/甲/SPEC-f0000005.json"
++    k1 = [c["key"] for c in m._tg_rb_metas([], [], "h", [("a" * 40, p)])[1]]
++    k2 = [c["key"] for c in m._tg_rb_metas([], [], "h", [("b" * 40, p)])[1]]
++    check("S4 r3 被刪那條的指紋不隨刪掉它的提交編號變", k1 and k1 == k2, (k1, k2))
++    # git 讀不出:往上回錯,不當成沒刪過
++    saved = m._lens_git_dl
++    m._lens_git_dl = lambda *a, **k: None
++    try:
++        got = m._tg_rb_deleted(root, mb, h)
++        cands, err = m._tg_redbase_cands(root, mb, h, [], [], 0)
++    finally:
++        m._lens_git_dl = saved
++    check("S4 r3 查刪掉紀錄時 git 讀不出:回 None 不回空清單", got is None, got)
++    check("S4 r3 查刪掉紀錄時 git 讀不出:整段回錯誤", cands is None and err, (cands, err))
++    check("★前置★ 這個 repo 真的有分支刪掉的紅燈版", bool(m._tg_rb_deleted(root, mb, h)), m._tg_rb_deleted(root, mb, h))
++    saved = m._nodehome_cat_sizes
++    m._nodehome_cat_sizes = lambda *a, **k: None
++    try:
++        got = m._tg_rb_deleted(root, mb, h)
++    finally:
++        m._nodehome_cat_sizes = saved
++    check("S4 r3 查刪掉的檔還在不在時 git 讀不出:回 None 不回空清單", got is None, got)
++    # git add -N(只登記要加)的紅燈版也算還沒提交
++    root, mb, commit = _rb_repo()
++    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, body)})
++    s6 = _rb_snap("SPEC-f0000006", r900)
++    (root / s6[0]).parent.mkdir(parents=True, exist_ok=True)
++    (root / s6[0]).write_bytes(s6[1])
++    sp.run(["git", "-C", str(root), "add", "-N", s6[0]], capture_output=True)
++    st = sp.run(["git", "-C", str(root), "status", "--porcelain"], capture_output=True, text=True).stdout
++    check("★前置★ 那支檔是 add -N 的狀態( A)", " A " in st, st)
++    check("S4 r3 git add -N 的紅燈版也算還沒提交", s6[0] in m._tg_rb_pending(root, h), m._tg_rb_pending(root, h))
++
++
+ def t_tq_guard_redbase_moved_or_missing():
+     """[S5] 搬家後函式鍵在改動清單的測試檔裡唯一 → 照比;刪掉、整支新測試檔先加後刪、終點有同名多載、搬到兩處 → tq/redbase-unmatched
+     (原因寫 token、測試名、條款編號);那支測試在分岔點就已存在時不看紅燈版。翻紅釘:找不到時當成沒有紅燈版、多載照猜、
+     分岔點已有仍套紅燈版 → 紅。"""
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+     snap = _rb_snap("SPEC-e0000001", red, clauses=("S3",))
+     moved = "package y\nimport org.junit.Test\nclass CalcTest {\n" + _rb_fn("        assertEquals(800, checkout(1000))") + "}\n"
+     root, mb, commit = _rb_repo()
+     cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [snap], files={"app/src/test/java/y/CalcTest.kt": moved})))
+     check("S5 搬到別的檔、函式鍵唯一:照比、改 expected 照列", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
