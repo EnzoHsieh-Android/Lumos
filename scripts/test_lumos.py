@@ -121339,6 +121339,104 @@ def t_tq_guard_expected_changed():
     check("S4 r2 Truth isNull 改 isNotNull 要列", changed(fn % "        assertThat(vm.error).isNull()", fn % "        assertThat(vm.error).isNotNull()"), "")
 
 
+def t_tq_guard_string_comma_args():
+    """[紅燈版實跑三缺口 S1] 只改了字串預期值時要列出:字串裡的逗號、不成對括號、字元常值、串接寫法,分岔點列 tq/expected-changed、
+    紅燈版列 tq/redbase-weakened;一字不差不列。應抓到的錯:切參數只數原文括號(字串裡的逗號與括號當成結構)→ 這幾案切錯、配不起來、漏報。"""
+    T = _TQG_T
+    m = _tqg_module()
+    check("★前置★ 含逗號的字串預期值切成兩個參數",
+          m._tg_call_parts('assertEquals("服務費 $1,235", label(fee))')[1] == ['"服務費 $1,235"', "label(fee)"],
+          m._tg_call_parts('assertEquals("服務費 $1,235", label(fee))'))
+
+    def rules(before, after):
+        fn = "    @Test\n    fun label_fee() {\n        %s\n    }\n"
+        root, base, commit = _tqg_repo({T: _tqg_kt(fn % before)})
+        h = commit({T: _tqg_kt(fn % after)})
+        return _tqg_rules(root, base, h)
+    cases = (
+        ("金額逗號", 'assertEquals("服務費 $1,235", label(fee))', 'assertEquals("服務費 $1,234", label(fee))'),
+        ("右括號", 'assertEquals(")", lexer.next().text)', 'assertEquals("]", lexer.next().text)'),
+        ("字元左括號", "assertEquals('(', sep(fee))", "assertEquals('[', sep(fee))"),
+        ("編號括號", 'assertEquals("1) 項目", label(x))', 'assertEquals("2) 項目", label(x))'),
+        ("串接逗號空白", 'assertThat(x).isEqualTo("a, b")', 'assertThat(x).isEqualTo("a,b")'),
+        ("模板段內配平", 'assertEquals("總計 ${t}, 稅 ${x}", s)', 'assertEquals("總計 ${t}, 費 ${x}", s)'),
+        ("字串裡多一格空白", 'assertEquals("a b", f())', 'assertEquals("a  b", f())'),   # 代碼審 r3 單審席 D2
+        ("中綴字串裡多一格空白", 'f() shouldBe "a b"', 'f() shouldBe "a  b"'),   # 代碼審 r4 單審席 F4:第二個呼叫點
+    )
+    for label, before, after in cases:
+        got = rules(before, after)
+        check(f"S1 {label}:只改字串預期值要列 tq/expected-changed", ("tq/expected-changed", T) in got, got)
+        same = rules(before, before)
+        check(f"S1 {label}:一字不差不列", ("tq/expected-changed", T) not in same, same)
+    # 代碼審 r1 單審席 F1:搬進巢狀類別、本體有多行字串(跟著多縮排一層)不算刪測試——找搬家用拿掉全部空白的那份簽名
+    body = '    @Test\n    fun json_case() {\n        val s = """\n    {"a": 1}\n"""\n        assertEquals(1, parse(s))\n    }\n'
+    root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+    moved = "    inner class Inner {\n" + "".join("    " + ln + "\n" if ln else "\n" for ln in body.split("\n")[:-1]) + "    }\n"
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(moved)}))
+    check("S1 搬進巢狀類別、本體有多行字串:不列 tq/test-removed", ("tq/test-removed", T) not in got, got)
+    # 代碼審 r2 單審席 F2:整檔重新縮排,沒斷言而有多行字串的既有測試不重判(只差空白版面的算同一支,只比預期值)
+    smoke = '    @Test\n    fun smoke() {\n        render("""\n    {"a": 1}\n""")\n    }\n'
+    root, base, commit = _tqg_repo({T: _tqg_kt(smoke)})
+    reind = "".join("    " + ln + "\n" if ln else "\n" for ln in smoke.split("\n")[:-1])
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(reind)}))
+    check("S1 整檔重新縮排、沒斷言的測試有多行字串:不列 tq/no-assertion", got == [], got)
+    # 代碼審 r4 單審席 F2:多行原始字串裡寫的 assertEquals 字樣不算一條強斷言(把相等比對換成 assertTrue 照列斷言變弱)
+    fn2 = "    @Test\n    fun weak() {\n        %s\n    }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertTrue("""\n assertEquals mention\n """, f() > 0)')}))
+    check("S1 多行字串裡的 assertEquals 字樣不算強斷言:換成 assertTrue 照列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+    red = _tqg_kt(_RB_OTHER, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'))
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,234", label(fee))'), [_rb_snap("SPEC-c0a00001", red)])
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S1 紅燈版比對:字串預期值被改列 tq/redbase-weakened", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'), [_rb_snap("SPEC-c0a00002", red)])
+    check("S1 紅燈版比對:一字不差不列", _rb_only(_tqg_cands(root, mb, h)) == [], _rb_only(_tqg_cands(root, mb, h)))
+
+
+def t_tq_guard_string_split_fallback():
+    """[紅燈版實跑三缺口 S2] 剝字串掃描會讀錯的兩種寫法(模板裡巢狀引號、原始字串尾端連續引號)照現況用原文切:參數跟原文切法逐字相同,
+    只改預期值照樣列、一字不差不列。應抓到的錯:不判掃描可不可靠、一律照剝過的文字切 → 模板那案被切成三段、跟現況不同。"""
+    T = _TQG_T
+    m = _tqg_module()
+    for stmt in ('assertEquals("${foo("a,b")}", x)', 'assertEquals("""a"""", x)'):
+        i = stmt.index("(")
+        close = m._rg_bracket_map(m._tg_strip(stmt)).get(i, len(stmt))
+        old = m._rg_split_args(stmt[i + 1:close], angle=False)
+        check(f"S2 {stmt}:參數跟原文切法逐字相同", m._tg_call_parts(stmt)[1] == old, (m._tg_call_parts(stmt)[1], old))
+    import random as _r
+    rnd = _r.Random(20261103)
+    for _ in range(300):   # 沒有字串的文字:剝過的那條路(配括號用 _rg_bracket_map)跟原本的深度計數切法逐字相同(代碼審 r1 架構對齊席)
+        s, depth = [], []
+        for _k in range(rnd.randint(0, 30)):
+            c = rnd.choice("ab ,,([{")
+            if c in "([{":
+                depth.append(")]}"["([{".index(c)])
+            s.append(c)
+            if depth and rnd.random() < 0.3:
+                s.append(depth.pop())
+        s = "".join(s + depth[::-1])
+        if m._rg_split_args(s, angle=False) != m._rg_split_args(s, angle=False, stripped=s):
+            check(f"S2 沒有字串時兩條切法相同:{s!r}", False, (m._rg_split_args(s, angle=False), m._rg_split_args(s, angle=False, stripped=s)))
+            break
+    else:
+        check("S2 沒有字串的 300 段隨機文字:兩條切法逐字相同", True)
+    check("S2 angle=True 時不走剝過文字那條路(配括號表沒有 < >)", m._rg_split_args("a<b,c>,d", stripped="a<b,c>,d") == ["a<b,c>", "d"],
+          m._rg_split_args("a<b,c>,d", stripped="a<b,c>,d"))
+    fn = "    @Test\n    fun tpl() {\n        %s\n    }\n"
+    before, after = 'assertEquals("${foo("a,b")}", x)', 'assertEquals("${foo("a,c")}", x)'
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn % before)})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn % after)}))
+    check("S2 模板巢狀引號:只改預期值照樣列", got == [("tq/expected-changed", T)], got)
+    same = _tqg_rules(root, base, commit({T: _tqg_kt(fn % before)}))
+    check("S2 模板巢狀引號:一字不差不列", same == [], same)
+    # 原始字串尾端連續引號:整支檔在函式層就配不平括號,照舊列 tq/unparsable(走不到切參數),修補前後一樣
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn % 'assertEquals("""a"""", x)')})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn % 'assertEquals("""b"""", x)')}))
+    check("S2 原始字串尾端連續引號:照舊列 tq/unparsable", got == [("tq/unparsable", T)], got)
+
+
 def t_tq_guard_no_assertion():
     """[S5] 新增或本體有變的測試沒有任何斷言字要列 tq/no-assertion;各家斷言寫法、運算式本體、反引號名、沒動的舊測試不列。
     翻紅釘:斷言字表拿掉樣本用到的那幾種(Truth、Turbine、MockK、Espresso、Kotest、Roborazzi、assert、thrown.expect、awaitComplete、
@@ -123050,6 +123148,413 @@ def t_tq_guard_redbase_reads_tip():
     cs = _rb_only(_tqg_cands(root, mb, h))
     check("S10 工作目錄多一行沒提交的留痕:不拿它來比(不列改弱),只提醒紅燈版還沒提交",
           [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "還沒提交" in cs[0]["message"], cs)
+
+
+def _mp_repo(tag):
+    """兩個平台(jvm 預設、device)的 Kotlin 規格閘 fixture:各一支假執行器,把「平台 名字」記進 ran.log;
+    green_<名字> 標記檔在=綠;nodevice 標記檔在時 device 執行器印 AGP 的 DeviceException、回 1。測試檔兩個平台的根都是 .(同考場)。"""
+    import json as _j
+    import subprocess as _sp
+    d = mkvault().parent.parent / tag
+    _sp.run(["git", "init", "-q", str(d)])
+    runner = ("import os, sys\nm = sys.argv[1]\nopen('ran.log', 'a').write('{plat} ' + m + '\\n')\n"
+              "{extra}print('ok' if os.path.exists('green_' + m) else 'FAILED')\nsys.exit(0 if os.path.exists('green_' + m) else 1)\n")
+    (d / "run_jvm.py").write_text(runner.replace("{plat}", "jvm").replace("{extra}", ""), encoding="utf-8")
+    nodev = ("if os.path.exists('nodevice'):\n    print('> com.android.builder.testing.api.DeviceException: No connected devices!')\n"
+             "    sys.exit(1)\n")
+    (d / "run_dev.py").write_text(runner.replace("{plat}", "device").replace("{extra}", nodev), encoding="utf-8")
+    (d / ".lumos").mkdir()
+    (d / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "jvm", "platforms": {
+        "jvm": {"profile": "kotlin-junit", "root": ".", "run_cmd": "python3 run_jvm.py {method}"},
+        "device": {"profile": "kotlin-junit", "root": ".", "run_cmd": "python3 run_dev.py {method}"},
+        "emu": {"profile": "kotlin-junit", "root": ".", "run_cmd": "python3 run_emu.py {method}"}}}), encoding="utf-8")
+    (d / "run_emu.py").write_text(runner.replace("{plat}", "emu").replace("{extra}", ""), encoding="utf-8")
+    (d / ".gitignore").write_text("ran.log\ngreen_*\nnodevice\n", encoding="utf-8")
+    jt = d / "app" / "src" / "test" / "java" / "x"
+    jt.mkdir(parents=True)
+    (jt / "FeeTest.kt").write_text("package x\nimport org.junit.Test\nclass FeeTest {\n"
+                                   "    @Test\n    fun fee_jvm() { assertEquals(100, fee(1000)) }\n"
+                                   "    @Test\n    fun `fee: rounds up`() { assertEquals(101, fee(1005)) }\n"
+                                   "    @Test\n    fun shared_name() { assertEquals(1, f()) }\n}\n", encoding="utf-8")
+    dt = d / "app" / "src" / "androidTest" / "java" / "x"
+    dt.mkdir(parents=True)
+    (dt / "FeeDeviceTest.kt").write_text("package x\nimport org.junit.Test\nclass FeeDeviceTest {\n"
+                                         "    @Test\n    fun fee_on_device() { assertEquals(\"$1,235\", label(1235)) }\n"
+                                         "    @Test\n    fun shared_name() { assertEquals(2, g()) }\n}\n", encoding="utf-8")
+    kg = d / "docs" / "x-knowledge"
+    (kg / "Projects").mkdir(parents=True)
+    (d / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+    _sg_commit(d, "base")
+    return d, kg
+
+
+def _mp_ran(d):
+    p = d / "ran.log"
+    out = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+    if p.exists():
+        p.unlink()
+    return out
+
+
+def _mp_green(d, *names):
+    for n in names:
+        (d / ("green_" + n)).write_text("")
+
+
+def _mp_push(d, kg, base=None):
+    """推送前驗收;base 不給就從第一個提交算(計劃是範圍內新增的、算還在做)。"""
+    import subprocess as _sp
+    base = base or _sp.run(["git", "-C", str(d), "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.strip()
+    return run(kg, "spec-gate", "--push-check", f"{base}..HEAD", "--repo", str(d))
+
+
+def _mp_head(d):
+    import subprocess as _sp
+    return _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+def _mp_set_tests(d, kg, tests):
+    """把最新一筆規格閘留痕的 tests 改成 tests(兩本帳都改;模擬舊版工具寫的留痕)。"""
+    import json as _j
+    for p in (kg.parent / ".canary-log.jsonl", d / "docs" / ".governance-log.jsonl"):
+        rows = [x for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+        for i in range(len(rows) - 1, -1, -1):
+            r = _j.loads(rows[i])
+            if r.get("kind") in ("spec-gate", "spec-gate-record"):
+                r["tests"] = tests
+                rows[i] = _j.dumps(r, ensure_ascii=False)
+                break
+        p.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+_MP_CLAUSES = ["- [S1] 結帳應收一成服務費 [test:fee_jvm]",
+               "- [S2] 平板上結帳摘要應顯示千分位 [test:device:fee_on_device]",
+               "- [S3] 服務費應四捨五入 [test:jvm:fee: rounds up]"]
+
+
+def t_spec_gate_record_keeps_platform():
+    """[紅燈版實跑三缺口 S3] 多平台專案的規格閘留痕 tests 一律寫「平台:名字」(含預設平台;名字含冒號照樣讀回);懸空引用照樣在、
+    manual_only 不變;推送前照前綴的平台指令跑。單平台照舊只寫名字(t_spec_gate_redbase_written_on_red 的 fixture 是單平台)。
+    應抓到的錯:tests 只記方法名 → 平板測試被丟給預設平台的指令跑、找不到而判紅。"""
+    d, kg = _mp_repo("mp1")
+    # 風險高的計劃也留痕、懸空的引用照樣記(風險低不准綁不存在的測試)
+    _sg_plan2(kg, "乙", [*_MP_CLAUSES, "- [S4] 沒寫的測試應先懸空 [test:not_written_yet]"], excl=[])
+    r = run(kg, "spec-gate", "Projects/乙_計劃")
+    rec = _sg_records(kg)[-1] if _sg_records(kg) else {}
+    want = ["device:fee_on_device", "jvm:fee: rounds up", "jvm:fee_jvm", "jvm:not_written_yet"]
+    check("S3 留痕 tests 帶平台前綴(含預設平台、名字含冒號、懸空的照樣在)", rec.get("tests") == want, (rec.get("tests"), (r.stdout + r.stderr)[-600:]))
+    check("S3 manual_only 不變(有綁測試就不是全靠人驗)", rec.get("manual_only") is False, rec.get("manual_only"))
+    gov = _rb_gov(d, "spec-gate-record")
+    check("S3 治理帳那筆的 tests 同樣帶前綴", gov and gov[-1].get("tests") == want, gov[-1:] if gov else gov)
+    (kg / "Projects" / "乙_計劃.md").unlink()
+    _mp_ran(d)
+    _sg_plan2(kg, "甲", _MP_CLAUSES)
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    _sg_commit(d, "plan")
+    _mp_ran(d)
+    _mp_green(d, "fee_jvm", "fee_on_device", "fee: rounds up")
+    r = _mp_push(d, kg)
+    ran = sorted(_mp_ran(d))
+    check("S3 推送前照前綴的平台指令跑:平板那支走 device、其餘走 jvm",
+          ran == ["device fee_on_device", "jvm fee: rounds up", "jvm fee_jvm"], (ran, r.stdout[-600:]))
+    check("S3 推送前全綠放行", r.returncode == 0, r.stdout[-600:])
+    # 代碼審 r1 單審席 F2:多平台時寫的「平台:名字」、設定之後改回單平台,照樣讀得回、不誤判紅、不記逃逸
+    import json as _j
+    d2, kg2 = _mp_repo("mp1b")
+    _sg_plan2(kg2, "甲", ["- [S1] 結帳應收一成服務費 [test:fee_jvm]"])
+    run(kg2, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 多平台設定下留痕寫成 jvm:fee_jvm", (_sg_records(kg2)[-1:] or [{}])[0].get("tests") == ["jvm:fee_jvm"], _sg_records(kg2)[-1:])
+    (d2 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                               encoding="utf-8")
+    _sg_commit(d2, "plan + single config")
+    _mp_green(d2, "fee_jvm")
+    _mp_ran(d2)
+    esc = d2 / "docs" / ".escape-log.jsonl"
+    r = _mp_push(d2, kg2)
+    ran = _mp_ran(d2)
+    # 代碼審 r3 人裁換形狀:身分格式換了(多平台改回單平台)不猜是哪一支——照擋、講明設定改了、不跑、不記逃逸
+    check("S3 改回單平台:jvm:fee_jvm 照擋、講明是設定改了、一支都不跑、不記逃逸",
+          r.returncode == 1 and ran == [] and not esc.exists() and "多平台" in r.stdout, (r.returncode, ran, esc.exists(), r.stdout[-500:]))
+    # 代碼審 r4 單審席 F1:實作已綠時單純重跑規格閘不會寫新留痕,訊息要講實際可行的兩條路
+    check("S3 改回單平台的擋下訊息講實作已綠時的補法(換回空殼補跑)與改走設計審",
+          "空殼" in r.stdout and "plan_risk: high" in r.stdout, r.stdout[-700:])
+    # 代碼審 r4 單審席 F5:已完成的計劃降成提醒、不擋、不跑
+    p2 = kg2 / "Projects" / "甲_計劃.md"
+    p2.write_text(p2.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _sg_commit(d2, "done")
+    done_at = _mp_head(d2)
+    (d2 / "README.md").write_text("x\n", encoding="utf-8")
+    p2.write_text(p2.read_text(encoding="utf-8") + "\n補一句說明。\n", encoding="utf-8")
+    _sg_commit(d2, "touch plan after done")
+    _mp_ran(d2)
+    r = _mp_push(d2, kg2, base=done_at)
+    check("S3 改回單平台、計劃已完成:降成提醒不擋、不跑", r.returncode == 0 and _mp_ran(d2) == [] and "提醒" in r.stdout and "設定" in r.stdout,
+          (r.returncode, r.stdout[-500:]))
+    # 代碼審 r2 單審席 F3、架構對齊席:單平台裡本身含冒號的測試名不見了,不拿名字後綴撞到的另一支(fee_jvm)頂替
+    d3, kg3 = _mp_repo("mp1c")
+    (d3 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                               encoding="utf-8")
+    ft = d3 / "app" / "src" / "test" / "java" / "x" / "FeeTest.kt"
+    ft.write_text(ft.read_text(encoding="utf-8").replace("    @Test\n    fun shared_name()", "    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n    @Test\n    fun shared_name()"),
+                  encoding="utf-8")
+    _sg_commit(d3, "colon test")
+    _sg_plan2(kg3, "甲", ["- [S1] 結帳應收一成服務費 [test:gone:fee_jvm]"])
+    r = run(kg3, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 單平台含冒號的測試名判紅、留痕", r.returncode == 0 and (_sg_records(kg3)[-1:] or [{}])[0].get("tests") == ["gone:fee_jvm"], r.stdout[-500:])
+    ft.write_text(ft.read_text(encoding="utf-8").replace("    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n", ""), encoding="utf-8")
+    _sg_commit(d3, "drop colon test")
+    _mp_green(d3, "fee_jvm")
+    _mp_ran(d3)
+    r = _mp_push(d3, kg3)
+    ran = _mp_ran(d3)
+    check("S3 單平台含冒號的測試不見了:不拿 fee_jvm 頂替、照擋", r.returncode == 1 and "jvm fee_jvm" not in ran, (r.returncode, ran, r.stdout[-400:]))
+    # 代碼審 r3 單審席 D1:另一條條款剛好綁 fee_jvm 時,被刪的 gone:fee_jvm 也不能被它頂替
+    d4, kg4 = _mp_repo("mp1d")
+    (d4 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                               encoding="utf-8")
+    ft4 = d4 / "app" / "src" / "test" / "java" / "x" / "FeeTest.kt"
+    ft4.write_text(ft4.read_text(encoding="utf-8").replace("    @Test\n    fun shared_name()", "    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n    @Test\n    fun shared_name()"),
+                   encoding="utf-8")
+    _sg_commit(d4, "colon test")
+    _sg_plan2(kg4, "甲", ["- [S1] 結帳應收一成服務費 [test:gone:fee_jvm]", "- [S2] 結帳應顯示一般費用 [test:fee_jvm]"])
+    r = run(kg4, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 兩條條款(含冒號那支與 fee_jvm)都判紅、留痕", r.returncode == 0 and sorted((_sg_records(kg4)[-1:] or [{}])[0].get("tests") or []) == ["fee_jvm", "gone:fee_jvm"],
+          r.stdout[-500:])
+    ft4.write_text(ft4.read_text(encoding="utf-8").replace("    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n", ""), encoding="utf-8")
+    _sg_commit(d4, "drop colon test")
+    _mp_green(d4, "fee_jvm")
+    _mp_ran(d4)
+    r = _mp_push(d4, kg4)
+    ran = _mp_ran(d4)
+    check("S3 另一條條款綁 fee_jvm:被刪的 gone:fee_jvm 不被它頂替、照擋", r.returncode == 1 and "全綠" not in r.stdout and ran.count("jvm fee_jvm") <= 1
+          and "gone:fee_jvm" in r.stdout, (r.returncode, ran, r.stdout[-400:]))
+
+
+def t_spec_gate_push_bare_name_platform():
+    """[紅燈版實跑三缺口 S4] 舊留痕只寫名字、留痕沒過期時,整串逐字比現在條款:只綁一個平台就照那個平台跑;含冒號的舊名字照整串比到的平台;
+    同名綁兩個以上平台照舊解析(沒前綴=預設平台);計劃已完成而條款指紋不符時不補。應抓到的錯:舊留痕照預設平台跑 → 平板那支被 jvm 跑。"""
+    d, kg = _mp_repo("mp2")
+    # 同名綁在兩個非預設平台:照舊解析(沒前綴=預設 jvm);任挑一個補的話一定挑到 device 或 emu,測得出來
+    _sg_plan2(kg, "甲", [*_MP_CLAUSES, "- [S4] 兩個裝置平台的同名測試應各自驗 [test:device:shared_name] [test:emu:shared_name]"])
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    _sg_commit(d, "plan")
+    _mp_set_tests(d, kg, ["fee_jvm", "fee_on_device", "fee: rounds up", "shared_name"])
+    _mp_ran(d)
+    _mp_green(d, "fee_jvm", "fee_on_device", "fee: rounds up", "shared_name")
+    r = _mp_push(d, kg)
+    ran = sorted(_mp_ran(d))
+    check("S4 舊留痕:平板那支照條款補成 device、含冒號的照整串比到 jvm、同名兩個平台照預設 jvm",
+          ran == ["device fee_on_device", "jvm fee: rounds up", "jvm fee_jvm", "jvm shared_name"], (ran, r.stdout[-800:]))
+    check("S4 舊留痕補平台後全綠放行、沒有例外", r.returncode == 0 and "Traceback" not in r.stderr, (r.stdout[-400:], r.stderr[-400:]))
+    # 已完成且條款指紋不符:不補平台(照舊解析成預設平台)
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _sg_commit(d, "done")
+    done_at = _mp_head(d)
+    p.write_text(p.read_text(encoding="utf-8").replace("平板上結帳摘要應顯示千分位", "平板上結帳摘要應顯示千分位與幣別"), encoding="utf-8")
+    _sg_commit(d, "edit after done")
+    _mp_ran(d)
+    r = _mp_push(d, kg, base=done_at)
+    ran = _mp_ran(d)
+    check("S4 已完成而指紋不符:不補平台,平板那支沒走 device", "device fee_on_device" not in ran, (ran, r.stdout[-600:]))
+
+
+def t_spec_gate_push_unknown_platform():
+    """[紅燈版實跑三缺口 S5] 留痕記的平台不在設定裡:還在做的計劃擋下並講明、已完成的降成提醒,都不丟例外。
+    應抓到的錯:resolve_test_refs 的前綴例外沒接 → 推送前崩出 traceback。"""
+    d, kg = _mp_repo("mp3")
+    _sg_plan2(kg, "甲", _MP_CLAUSES)
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    _sg_commit(d, "plan")
+    _mp_set_tests(d, kg, ["jvm:fee_jvm", "tablet:fee_on_device"])
+    _mp_green(d, "fee_jvm", "fee_on_device", "fee: rounds up")
+    r = _mp_push(d, kg)
+    check("S5 還在做:擋下、講明平台不在設定裡、沒有例外",
+          r.returncode == 1 and "tablet" in r.stdout and "不在" in r.stdout and "Traceback" not in r.stderr, (r.stdout[-600:], r.stderr[-600:]))
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _sg_commit(d, "done")
+    done_at = _mp_head(d)
+    p.write_text(p.read_text(encoding="utf-8").replace("結帳應收一成服務費", "結帳應收一成服務費(含稅)"), encoding="utf-8")
+    _sg_commit(d, "edit after done")
+    r = _mp_push(d, kg, base=done_at)
+    check("S5 已完成且指紋不符:降成提醒不擋、沒有例外", r.returncode == 0 and "Traceback" not in r.stderr and "tablet" in r.stdout,
+          (r.stdout[-600:], r.stderr[-600:]))
+
+
+def t_spec_gate_device_missing_not_red():
+    """[紅燈版實跑三缺口 S6] Kotlin 測試輸出含 AGP 的 DeviceException 而退出碼非零:判弱證據、寫「環境沒跑起來」;實作前跑規格閘不存那支的紅燈版;
+    推送照擋,沒過的全是這種時不記逃逸,有一支真的紅照記。應抓到的錯:只看退出碼判紅 → 沒接裝置被當成新行為的紅、推送記假逃逸。"""
+    import json as _j
+    d, kg = _mp_repo("mp4")
+    (d / "nodevice").write_text("")
+    _sg_plan2(kg, "甲", _MP_CLAUSES)
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("S6 實作前沒接裝置:平板那條判弱證據並寫環境沒跑起來", "S2 弱證據" in r.stdout and "環境沒跑起來" in r.stdout, r.stdout[-800:])
+    check("S6 實作前沒接裝置:風險低不放行(弱證據不算紅)、不寫留痕", r.returncode == 1 and _sg_records(kg) == [], (r.returncode, r.stdout[-400:]))
+    (d / "nodevice").unlink()
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 接上裝置後三條都紅、放行留痕", r.returncode == 0 and len(_sg_records(kg)) == 1, r.stdout[-600:])
+    _sg_commit(d, "plan")
+    esc = d / "docs" / ".escape-log.jsonl"
+    n0 = len(esc.read_text(encoding="utf-8").splitlines()) if esc.exists() else 0
+    (d / "nodevice").write_text("")
+    _mp_green(d, "fee_jvm", "fee: rounds up")
+    r = _mp_push(d, kg)
+    n1 = len(esc.read_text(encoding="utf-8").splitlines()) if esc.exists() else 0
+    check("S6 推送前沒接裝置:照擋、講環境沒跑起來", r.returncode == 1 and "環境沒跑起來" in r.stdout, r.stdout[-600:])
+    check("S6 沒過的全是環境沒跑起來:不記逃逸", n1 == n0, (n0, n1))
+    (d / "green_fee_jvm").unlink()
+    r = _mp_push(d, kg)
+    rows = [_j.loads(x) for x in esc.read_text(encoding="utf-8").splitlines() if x.strip()] if esc.exists() else []
+    check("S6 另有一支真的紅:照擋、照記逃逸", r.returncode == 1 and len(rows) == n1 + 1, (len(rows), n1, r.stdout[-400:]))
+    # 代碼審 r2 單審席 F1:Java 專案(java-junit)沒接裝置同樣判環境沒跑起來
+    import subprocess as _sp
+    dj = mkvault().parent.parent / "mp4java"
+    _sp.run(["git", "init", "-q", str(dj)])
+    (dj / "run.py").write_text("print('> com.android.builder.testing.api.DeviceException: No connected devices!')\nraise SystemExit(1)\n", encoding="utf-8")
+    (dj / ".lumos").mkdir()
+    (dj / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "java-junit", "test": {"run_cmd": "python3 run.py {method}"}}), encoding="utf-8")
+    jt = dj / "app" / "src" / "androidTest" / "java" / "x"
+    jt.mkdir(parents=True)
+    (jt / "FeeDeviceTest.java").write_text("package x;\nimport org.junit.Test;\npublic class FeeDeviceTest {\n"
+                                           "    @Test\n    public void feeOnDevice() { assertEquals(1, 2); }\n}\n", encoding="utf-8")
+    kgj = dj / "docs" / "x-knowledge"
+    (kgj / "Projects").mkdir(parents=True)
+    _sg_commit(dj, "java base")
+    _sg_plan2(kgj, "甲", ["- [S1] 平板上應顯示服務費 [test:feeOnDevice]"])
+    r = run(kgj, "spec-gate", "Projects/甲_計劃")
+    check("S6 Java 專案沒接裝置:判弱證據並寫環境沒跑起來", "S1 弱證據" in r.stdout and "環境沒跑起來" in r.stdout, r.stdout[-600:])
+
+
+def _ig_repo(ignore_files, tracked_ledger=False, config=None):
+    """治理帳忽略情境的比對 fixture:主線一支既有測試;ignore_files={路徑: 內容}(.gitignore、docs/.gitignore、.git/info/exclude);
+    推送那一版加一支紅燈版檔(沒有留痕指到它)。治理帳留在工作目錄不提交;tracked_ledger=True 時照樣提交(git add -f)。→ (root, 主線, 推送那一版, git)"""
+    import subprocess as _sp
+    root, mb, _commit = _tqg_repo({_TQG_T: _tqg_kt(_RB_OTHER)})
+
+    def git(*a):
+        return _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    for k, v in (config or {}).items():       # 推送那一版提交之前設(全域忽略檔要先生效,治理帳才不會被一起提交)
+        git("config", k, v)
+    for rel, body in ignore_files.items():
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+    (root / "docs").mkdir(exist_ok=True)
+    (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    rel, data, _line = _rb_snap("SPEC-1g000001", red)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_bytes(data)
+    (root / _TQG_T).write_text(_tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(800, checkout(1000))")), encoding="utf-8")
+    git("add", "-A")
+    git("reset", "-q", "--", "docs/.governance-log.jsonl")   # 治理帳留在工作目錄、不提交(否定規則那案才是「沒追蹤、沒被忽略」)
+    if tracked_ledger:
+        git("add", "-f", "docs/.governance-log.jsonl")
+    git("commit", "-qm", "push", "--no-verify")
+    return root, mb, git("rev-parse", "HEAD").stdout.strip(), git
+
+
+def _ig_unreadable(root, mb, h):
+    return [c for c in _tqg_cands(root, mb, h) if c["rule"] == "tq/redbase-unreadable"]
+
+
+def t_tq_guard_redbase_ledger_ignored():
+    """[紅燈版實跑三缺口 S7] 治理帳被 git 忽略時,孤兒紅燈版的提醒以「不要刪這支紅燈版檔」開頭、講治理帳被忽略並附蓋到的規則;還沒提交的
+    紅燈版提醒以「git add」開頭;規則長到 150 字時開頭照樣在;否定規則讓它實際沒被忽略、治理帳已被追蹤、git 判不了時照舊措辭;兩種措辭指紋相同。
+    應抓到的錯:不問忽略就照舊說「合併時弄丟」;新措辭把「不要刪」擠到後面被 300 字截掉。"""
+    m = _tqg_module()
+    root, mb, h, git = _ig_repo({".gitignore": "docs/.governance-log.jsonl\n"})
+    check("★前置★ 治理帳沒進提交、被忽略", git("ls-files", "docs/.governance-log.jsonl").stdout.strip() == ""
+          and git("check-ignore", "-q", "docs/.governance-log.jsonl").returncode == 0, "")
+    cs = _ig_unreadable(root, mb, h)
+    msg = cs[0]["message"] if cs else ""
+    check("S7 孤兒:一條 unreadable、講治理帳被忽略與蓋到的規則", len(cs) == 1 and "被 git 忽略" in msg and ".gitignore:1:docs/.governance-log.jsonl" in msg, cs)
+    check("S7 孤兒:「不要刪這支紅燈版檔」在講忽略之前", "不要刪這支紅燈版檔" in msg and msg.index("不要刪這支紅燈版檔") < msg.index("被 git 忽略"), msg)
+    check("S7 孤兒:不再說合併時弄丟", "合併時" not in msg, msg)
+    key_ignored = cs[0]["key"] if cs else None
+    # 否定規則:實際沒被忽略 → 照舊措辭;指紋相同
+    root2, mb2, h2, _g2 = _ig_repo({".gitignore": "docs/.governance-log.jsonl\n!docs/.governance-log.jsonl\n"})
+    cs2 = _ig_unreadable(root2, mb2, h2)
+    check("S7 否定規則讓它沒被忽略:照舊措辭", len(cs2) == 1 and "合併時" in cs2[0]["message"] and "被 git 忽略" not in cs2[0]["message"], cs2)
+    check("S7 兩種措辭的放行指紋相同", cs2 and key_ignored == cs2[0]["key"], (key_ignored, cs2[0]["key"] if cs2 else None))
+    # 治理帳已被追蹤(git add -f):不算被忽略
+    root3, mb3, h3, _g3 = _ig_repo({".gitignore": "docs/.governance-log.jsonl\n"}, tracked_ledger=True)
+    cs3 = _ig_unreadable(root3, mb3, h3)
+    check("S7 治理帳已被追蹤:照舊措辭", len(cs3) == 1 and "被 git 忽略" not in cs3[0]["message"], cs3)
+    # 規則長:全域忽略檔放在 150 字的路徑底下
+    longdir = Path(tempfile.mkdtemp(prefix="gctl-igl-")) / ("x" * 150)
+    longdir.mkdir(parents=True)
+    (longdir / "ignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
+    root4, mb4, h4, _git4 = _ig_repo({}, config={"core.excludesFile": str(longdir / "ignore")})
+    cs4 = _ig_unreadable(root4, mb4, h4)
+    msg4 = cs4[0]["message"] if cs4 else ""
+    check("S7 規則 150 字:開頭的不要刪照樣在、講被忽略", "不要刪這支紅燈版檔" in msg4 and "被 git 忽略" in msg4, msg4)
+    # 還沒提交的紅燈版檔
+    rel2 = "governance/redbase/甲/SPEC-1g000002.json"
+    (root / rel2).write_bytes((root / "governance/redbase/甲/SPEC-1g000001.json").read_bytes())
+    cs5 = [c for c in _ig_unreadable(root, mb, h) if c["file"] == rel2]
+    msg5 = cs5[0]["message"] if cs5 else ""
+    check("S7 還沒提交:以 git add 開頭、講治理帳被忽略", "git add 這支紅燈版檔" in msg5 and "被 git 忽略" in msg5
+          and msg5.index("git add 這支紅燈版檔") < msg5.index("被 git 忽略"), cs5)
+    check("S7 還沒提交:自帶改法與自查指令,不叫人去看另一條", "check-ignore -q" in msg5 and "孤兒那條" not in msg5, msg5)
+    # git 判不了:取值函式回判不了 → 照舊措辭
+    ch = [("A", None, "governance/redbase/甲/SPEC-1g000001.json", "0" * 40, True)]
+    _metas, out = m._tg_rb_metas([], ch, "HEAD", ledger=lambda: ("unknown", ""))
+    check("S7 git 判不了:照舊措辭", out and "合併時" in out[0]["message"], out)
+    st = m._gov_ledger_ignored(Path(tempfile.mkdtemp(prefix="gctl-nogit-")))
+    check("S7 不在 git repo 裡:判不了", st[0] == "unknown", st)
+
+
+def t_tq_guard_ledger_ignored_fix_resolves():
+    """[紅燈版實跑三缺口 S8] 照提醒指到的那支忽略設定檔拿掉蓋到的規則後,git check-ignore -q 回 1、提醒回到舊措辭;
+    規則在 docs/.gitignore、根目錄 .gitignore、.git/info/exclude 三種各一。應抓到的錯:提醒指的來源不是真正蓋到的那支(例如一律說根目錄)。"""
+    m = _tqg_module()
+    for src, rule in (("docs/.gitignore", ".governance-log.jsonl"), (".gitignore", "docs/.governance-log.jsonl"),
+                      (".git/info/exclude", "docs/.governance-log.jsonl")):
+        root, mb, h, git = _ig_repo({src: rule + "\n"})
+        st = m._gov_ledger_ignored(root)
+        check(f"S8 {src}:判被忽略、規則指到那支檔", st[0] == "ignored" and st[1].startswith(src + ":1:"), st)
+        f = root / st[1].split(":1:")[0]
+        f.write_text("", encoding="utf-8")
+        check(f"S8 {src}:拿掉那條規則後 check-ignore -q 回 1", git("check-ignore", "-q", "docs/.governance-log.jsonl").returncode == 1, "")
+        cs = _ig_unreadable(root, mb, h)
+        check(f"S8 {src}:提醒回到舊措辭", cs and "被 git 忽略" not in cs[0]["message"] and "合併時" in cs[0]["message"], cs)
+
+
+def _ig_sg_repo(tag, ignored):
+    """單平台規格閘 fixture(_rb_sg_repo);ignored=True 時把治理帳移出版控並在 .gitignore 忽略它。"""
+    d, kg = _rb_sg_repo(tag)
+    if ignored:
+        import subprocess as _sp
+        _sp.run(["git", "-C", str(d), "rm", "-q", "--cached", "docs/.governance-log.jsonl"])
+        (d / ".gitignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
+        _sg_commit(d, "ignore ledger")
+    return d, kg
+
+
+def t_spec_gate_redbase_ledger_ignored():
+    """[紅燈版實跑三缺口 S9] 規格閘寫出紅燈版而治理帳被 git 忽略:當場多印一行,講留痕進不了提交、推送時會列成沒有留痕;沒被忽略不印。
+    應抓到的錯:寫紅燈版時不問忽略 → 使用者要到推送時才知道。"""
+    for ignored in (True, False):
+        d, kg = _ig_sg_repo("igsg" + ("1" if ignored else "0"), ignored)
+        (d / "green_keeps_ok").write_text("")
+        _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+        r = run(kg, "spec-gate", "Projects/甲_計劃")
+        check(f"★前置★ 寫出紅燈版(忽略={ignored})", r.returncode == 0 and "紅燈版: 存在" in r.stdout, r.stdout[-500:])
+        said = "治理帳被 git 忽略" in r.stderr and "進不了提交" in r.stderr
+        check(f"S9 治理帳{'被忽略:多印一行(走錯誤輸出,同規格閘其他留痕寫不進帳的提醒)' if ignored else '沒被忽略:不印'}", said == ignored, r.stderr[-600:])
+
+
+def t_doctor_gov_ledger_ignored():
+    """[紅燈版實跑三缺口 S10] 治理帳被 git 忽略時 doctor 另起一段唸它與蓋到的規則;沒被忽略不唸。
+    應抓到的錯:只在紅燈版提醒裡講 → 不用紅燈版的專案,CI 讀不到代碼審留痕沒人知道。"""
+    for ignored in (True, False):
+        _d, kg = _ig_sg_repo("igdr" + ("1" if ignored else "0"), ignored)
+        r = run(kg, "doctor", "--verbose")
+        said = "治理帳被 git 忽略" in r.stdout and ".gitignore:1:docs/.governance-log.jsonl" in r.stdout
+        check(f"S10 治理帳{'被忽略:doctor 唸' if ignored else '沒被忽略:doctor 不唸'}", said == ignored, r.stdout[-800:])
 
 
 def t_spec_gate_redbase_bookkeeping():

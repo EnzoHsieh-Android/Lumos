@@ -1772,6 +1772,21 @@ def _local_ledger_doctor_msgs(docs_dir, mb_cap):
     return msgs
 
 
+def _gov_ledger_ignored(root, rel=GOV_LOG_REL, deadline=None):
+    """治理帳是不是被 git 忽略 → ("ignored", 蓋到的規則) | ("not", "") | ("unknown", "")。比對工具、規格閘、doctor 共用這一支,放在帳檔這一區(跟 _local_ledger_doctor_msgs 同區)
+    (Projects/紅燈版實跑三缺口_計劃 做法 4)。check-ignore -q 判被忽略:它照 ! 否定規則算,也不回報已追蹤的檔(已追蹤就不算被忽略,改動照樣能提交);
+    被忽略才 -v 取規則——-v 對否定規則照樣印那一行、回 0,所以不能只看 -v。-v 輸出 tab 前那段(來源:行號:規則)原樣清洗、不拆欄位
+    (來源路徑可能含冒號)。任一次 git 回不來、逾時、回傳碼不是 0/1 就是判不了,呼叫端照舊措辭。"""
+    q = _lens_git_dl(root, "check-ignore", "-q", "--", rel, quote=True, deadline=deadline)
+    if q is None or q.returncode not in (0, 1):
+        return "unknown", ""
+    if q.returncode == 1:
+        return "not", ""
+    v = _lens_git_dl(root, "check-ignore", "-v", "--", rel, quote=True, deadline=deadline)
+    rule = v.stdout.split("\t", 1)[0].strip() if v is not None and v.returncode == 0 else ""
+    return "ignored", _out_clean(rule, 300) or "(讀不出是哪一條)"
+
+
 def _gov_routes_local(ev):
     """這筆治理帳事件要不要寫進本機帳。兩支寫入器共用這一支判定,不各抄一份。
     欄位缺、型別不對一律回 False(進版控帳)。"""
@@ -2915,6 +2930,18 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                       "被追蹤的照提示 git rm --cached;太大的可以直接刪,只影響本機統計(度量式撤除條件會重新暖機)")
     except Exception as _e:
         ok(f"本機帳觀測跳過(fail-open:{_e})")
+    # 治理帳(進版控的那本)被忽略:CI 讀不到代碼審留痕與表態,乾淨 clone 推送前找不到規格閘留痕(Projects/紅燈版實跑三缺口_計劃 做法 4);
+    # 另起一段,不併進上面那段(那段的提示是叫人補忽略規則,方向相反)。判法跟比對工具同一支 _gov_ledger_ignored
+    try:
+        _rr = _vault_repo_root(env)
+        _gl = (env.vault.parent / GOV_LOG_NAME).resolve().relative_to(Path(_rr).resolve()).as_posix() if _rr else None
+        _st, _rule = _gov_ledger_ignored(_rr, rel=_gl) if _gl else ("unknown", "")
+        if _st == "ignored":
+            warn_soft([f"治理帳被 git 忽略({_rule}):CI 讀不到代碼審留痕與表態;乾淨 clone 推送前找不到規格閘留痕"],
+                      "治理帳(進版控的那本)要留意:",
+                      f"拿掉或收窄那條忽略規則(否定規則要寫在同一支檔、放在那一行後面),改完 git check-ignore -q {_gl} 退出碼是 1,再把治理帳提交")
+    except Exception as _e:
+        ok(f"治理帳忽略檢查跳過(fail-open:{_e})")
     print()
 
     # Check E1: 失效背書(軟,不擋,不計 issues)——關係層語意檢查(補 Check 3 只查邊存不存在、不查
@@ -14175,12 +14202,17 @@ def _spec_gate_twoway_run_verdict(clauses, keeps, verdicts):
     return fails
 
 
-def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts, redbase=None):
+def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts, redbase=None, refs=None):
     """規格閘留痕:走審查帳同一支寫入口(_jsonl_append_verified+vault 寫入鎖),kind=spec-gate(讀側的輪次判定要略過它——S16)。
-    帶門、四行已排除理由(風險低)或命中訊號(風險高)、全部測試名、條款區塊指紋、門判定規則版本、條款數/紅數/keeps 數。回寫成沒有。"""
+    帶門、四行已排除理由(風險低)或命中訊號(風險高)、全部測試名、條款區塊指紋、門判定規則版本、條款數/紅數/keeps 數。回寫成沒有。
+    refs(多平台專案才給,{條款: [(平台, 名字)]}):tests 一律寫「平台:名字」,含預設平台——推送前把每一項包成 [test:…] 交給 _split_test_ref,
+    名字含冒號或 default_platform 改了也讀得回原平台(Projects/紅燈版實跑三缺口_計劃 做法 2);單平台照舊只寫名字。"""
     import datetime as _dt
     import secrets as _sec
-    tests = sorted({m for b in clauses for m in names.get(b["id"], [])})
+    if refs is not None:
+        tests = sorted({f"{pl}:{m}" for b in clauses for pl, m in refs.get(b["id"], [])})
+    else:
+        tests = sorted({m for b in clauses for m in names.get(b["id"], [])})
     rec = {"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"), "kind": "spec-gate", "token": "SPEC-" + _sec.token_hex(4),
            "loop": _loop_id_for_plan(rel), "plan": rel, "plan_risk": judged["door"], "door_rule": _DOOR_RULE_VERSION,
            "clause_sha": _clause_block_sha(text, rows_b, judged["linked"], judged["exclusions"], judged["nogo_skipped"]), "tests": tests,
@@ -14482,6 +14514,10 @@ def _redbase_attach(rr, rec, redbase):
     if field:
         rec["redbase"] = field
         print(f"[spec-gate] 紅燈版: 存在 {field['path']}(推送時新測試拿它當改動前版本比;存的是整支測試檔,檔裡其他內容也會跟著提交)")
+        st, rule = _gov_ledger_ignored(rr)
+        if st == "ignored":   # 留痕進不了提交,推送時這份會成孤兒(Projects/紅燈版實跑三缺口_計劃 做法 4)
+            print(f"[spec-gate] 治理帳被 git 忽略,這筆留痕進不了提交,推送時紅燈版會列成沒有留痕;照推送時的提醒改那條規則。蓋到的規則:{rule}",
+                  file=sys.stderr)
     if skipped:
         skipped = sorted(skipped, key=lambda x: x[1] == "判綠")
         rec["redbase_skipped"] = [{"name": n, "reason": r_} for n, r_ in skipped[:20]]
@@ -14924,9 +14960,13 @@ def _spec_gate_judge_items(rr, items, per_prof, loose_for):
         return None, rerr
     rows = []
     for node_id, plat, method, verdict, detail, _secs in results:
-        n, skipped = _ran_count(per_prof(plat), tails.get((node_id, plat, method), ""))
+        tail = tails.get((node_id, plat, method), "")
+        n, skipped = _ran_count(per_prof(plat), tail)
         v, why = _spec_gate_verdict(n, skipped, verdict, detail,
                                     declared=_spec_gate_declared(method, loose_for(plat)))
+        env_why = _env_missing_why(per_prof(plat), tail) if v == "red" else None
+        if env_why:
+            v, why = "weak", env_why     # 沒接裝置:驗不了、不是新行為的紅,也不是下游抓到的洞(做法 3)
         rows.append((node_id, plat, method, v, why, detail))
     return rows, None
 
@@ -15101,9 +15141,10 @@ def _spec_gate_prepare(rr, text, clauses):
         print(f"[spec-gate] 跑: —(平台設定讀不動:{e};略過)")
         return None
     lines_all = _note_lines(text)
-    names = {b["id"]: [m for _pl, m in resolve_test_refs(_clause_visible(lines_all[b["line"] - 1])[0] if 0 < b["line"] <= len(lines_all) else "", split, default)]
-             for b in clauses}   # 反引號裡的範例不算,同 _spec_gate_items
-    return split, default, methods_for, plats, names, loose_for
+    refs = {b["id"]: resolve_test_refs(_clause_visible(lines_all[b["line"] - 1])[0] if 0 < b["line"] <= len(lines_all) else "", split, default)
+            for b in clauses}   # 反引號裡的範例不算,同 _spec_gate_items
+    names = {cid: [m for _pl, m in rs] for cid, rs in refs.items()}
+    return split, default, methods_for, plats, names, loose_for, refs
 
 
 def _spec_gate_twoway_gate(p, rr, text, clauses, names):
@@ -15206,7 +15247,7 @@ def cmd_spec_gate(env, node, no_run=False):
     front = _spec_gate_front(env, node, no_run)
     if isinstance(front, int):
         return front
-    _p, text, rel, rr, judged, rows_b, clauses, keeps, (split, default, methods_for, plats, names, loose_for) = front
+    _p, text, rel, rr, judged, rows_b, clauses, keeps, (split, default, methods_for, plats, names, loose_for, refs) = front
     door = judged["door"]
     def per_prof(plat):
         return (plats.get(plat) or {}).get("profile_name")
@@ -15232,7 +15273,7 @@ def cmd_spec_gate(env, node, no_run=False):
             print("[spec-gate] PASS(風險低):直接實作,不派審。條款的測試做綠了才推得上去(推送閘會跑留痕裡的每一支;改了條款要重跑這裡)")
     else:
         print("    紅=新行為還沒做、綠=既有行為或已做完,兩種都合法;風險高只印不擋。接著走:\n    lumos loop next")
-    _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts, redbase=redbase)
+    _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, counts, redbase=redbase, refs=refs if split else None)
     note = " ".join(f"{cid}={verdicts[cid][0]}" for cid in sorted(verdicts, key=lambda x: int(x[1:]))) or "no-run"
     _append_governance_log(env.vault, [{"gate": "spec-gate", "kind": "spec-gate-run", "hard": False, "nodes": [rel],
                                         "note": f"door={door} clauses={len(clauses)} bound={summ['bound']} red={counts['red']} green={counts['green']} weak={counts['weak']} regress={reg_ok} {note}"}])
@@ -15542,14 +15583,16 @@ def _small_change_check(env, rr, git_range, prel, note):
 
 
 def _spec_gate_push_stale(env, rr, prel, n, rec):
-    """推送前先驗留痕還算不算數:讀得到、綁得到、門重判仍是雙向、條款指紋沒變。回 (原因或 None, 重判結果或 None)。"""
+    """推送前先驗留痕還算不算數:讀得到、綁得到、門重判仍是雙向、條款指紋沒變。回 (原因或 None, 重判結果或 None, (計劃文字, 綁定列) 或 None);
+    第三項給推送前替舊留痕的裸名字補平台用(不重讀、不重算綁定,Projects/紅燈版實跑三缺口_計劃 做法 2)。"""
     try:
         text = (env.vault / prel).read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as e:
-        return f"{prel}:讀不成文字({e.__class__.__name__})", None
+        return f"{prel}:讀不成文字({e.__class__.__name__})", None, None
     rows_b, err = _clause_bindings_for(env, text, root=rr)
     if err:
-        return f"{prel}:測試索引建不起來({err})", None
+        return f"{prel}:測試索引建不起來({err})", None, None
+    cur = (text, rows_b)
     now = _door_judge(env, n, text)   # ★門整個重判★(代碼審 r1 F1 blocker):指紋只蓋條款與理由,正文塞進關鍵字、補 risk/ 標籤、改 door 欄位都要在這裡被抓到
     if now["door"] != "low":
         dr = rec.get("door_rule")
@@ -15557,10 +15600,23 @@ def _spec_gate_push_stale(env, rr, prel, n, rec):
                  if isinstance(dr, int) and not isinstance(dr, bool) and dr > _DOOR_RULE_VERSION else "")   # 新版留痕、舊版重判會把新規則判低的判高(規格閘不做節計劃〈做法〉4)
         older = (f";留痕用的是較舊的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION}:判高可能是新規則的結果(例:版本 4 起程式碼圍欄裡的危險詞也算;版本 5 起行內反引號、圍欄開頭那一行、落單反引號之後的字也算;版本 6 起全形英數與夾零寬字元的危險詞也算;版本 7 起夾軟連字號、詞連接符、雙向控制字元、變體選擇符這類隱形字元的也算;版本 8 起夾組合記號、控制字元、未指派碼位、盲文空白這類看不見字元的也算;版本 9 起多字詞中間兩個空格或 tab、兩個漢字中間夾空白、夾 \\x1f 或 U+2028 這類行段分隔的也算;版本 10 起中英緊貼(部署到prod環境)、底線識別名(send_email)、透過LINE推送、連字號變體(pre-push hook)、用 \\x0b 或 U+2028 隔開的多字詞也算;版本 12 起用零寬空格、詞連接符這類看不見的字隔開的多字詞,與亞美尼亞連字號、片假名雙連字號這類連字號變體也算;版本 13 起 ORDER_PAYMENT_TIMEOUT 這類 PAYMENT 緊接時間或重試參數的識別字不算金流——這一版只會少判高;版本 14、15 判法都跟 13 一樣)"
                  if isinstance(dr, int) and not isinstance(dr, bool) and dr < _DOOR_RULE_VERSION else "")
-        return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}{newer}{older}", now
+        return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}{newer}{older}", now, cur
     if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"], now["nogo_skipped"]) != rec.get("clause_sha"):
-        return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、不做清單裡被跳過的危險詞、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}", now
-    return None, now
+        return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、不做清單裡被跳過的危險詞、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}", now, cur
+    return None, now, cur
+
+
+def _spec_gate_push_fill(cur, split, default):
+    """推送前替舊留痕的裸名字補平台:現在計劃條款的綁定 → {名字: {平台…}}。走既有的 _spec_gate_items(條款解析與 resolve_test_refs),
+    不另掃正文;只在留痕沒過期時用(條款指紋相符,現在的條款就是當時記的那份)。解析出錯回空(照舊解析)。"""
+    text, rows_b = cur
+    out = {}
+    try:
+        for _cid, pl, m, _k in _spec_gate_items(text, [b for b in rows_b if b.get("state") != "undefined"], split, default):
+            out.setdefault(m, set()).add(pl)
+    except ValueError:
+        return {}
+    return out
 
 
 def _same_file_path(a, b):
@@ -15922,7 +15978,7 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx=None, done=False):
     兩種情形只提醒——留痕指紋對不上(完成後才改條款拿不到紅的證據)、留痕裡某支測試找不到(後來改名或刪了);
     不做清單那道照查(_spec_gate_push_nogo_only),其餘找得到的測試照跑、紅了照擋。這次推送才從 doing 改成 done 的不算(呼叫端判),照 doing 一樣嚴。"""
     P = "[spec-gate 推送前]"
-    stale, now = _spec_gate_push_stale(env, rr, prel, n, rec)
+    stale, now, cur = _spec_gate_push_stale(env, rr, prel, n, rec)
     notes = []
     # 寬待只給「條款指紋對不上」這一種過期(門重判仍是風險低、讀得到、索引建得起來時才會走到指紋那一步):
     # 讀不成文字、測試索引建不起來、門現在判成風險高一律照 doing 擋(fail-closed;代碼審 r3 G1、決策 d3)
@@ -15944,7 +16000,35 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx=None, done=False):
             return f"{prel}:全靠人驗的風險低計劃,這次改動不算小改動——" + ";".join(sc) + f"(補測試、縮小改動、或升成風險高走設計審;規則版本 {_SMALL_CHANGE_RULE_VERSION})", None
         return None, f"{P} ✓ {Path(prel).stem}:全靠人驗,改動通過小改動閘(擴散/相對量/歷史/目的四維度)"
     split, default, methods_for, plats, _rng, loose_for = idx
-    items = [(loop_id, pl, m, "real" if m in methods_for(pl) else "dangling") for t in tests for pl, m in resolve_test_refs(f"[test:{t}]", split, default)]
+    items, bad_plat = [], []
+    fill = _spec_gate_push_fill(cur, split, default) if (split and not stale and cur is not None) else {}
+    # 設定從多平台改回單平台:留痕的「平台:名字」身分格式換了,不猜是哪一支(Allure 的測試識別碼換算法時歷史就從頭開始,
+    # 要接續靠明確的對照表,不靠猜;代碼審 r2、r3 連兩輪被「猜」打穿後 Enzo 裁換形狀)——照擋、講明,不跑、不記逃逸
+    cfg_gone = [t for t in tests if not split and ":" in t and t not in methods_for(default)]
+    if cfg_gone and not done:
+        return (f"{prel}:留痕記的測試 {'、'.join(_esc_clean(x, 60) for x in cfg_gone[:5])} 在測試索引找不到(設定從多平台改回單平台了?"
+                "名字帶冒號,多半是那時寫的「平台:名字」;身分格式換了,不猜是哪一支);實作還沒綠:照現在的設定重跑 "
+                f"lumos spec-gate {_sh_quote(Path(prel).stem)} 就會寫新留痕;實作已經綠:重跑不會寫新留痕,照規格閘「實作後才跑」的補法"
+                "(先提交實作、把實作暫時換回只留介面的空殼讓測試紅、跑規格閘、再換回),或把計劃開頭欄位改成 plan_risk: high 走設計審"), None
+    if cfg_gone:
+        notes.append(f"留痕記的測試在測試索引找不到({'、'.join(_esc_clean(x, 60) for x in cfg_gone[:5])}——設定改過?)")
+        tests = [t for t in tests if t not in cfg_gone]
+    for t in tests:
+        hit = fill.get(t)
+        if hit and len(hit) == 1:      # 舊留痕的裸名字整串比到現在條款裡只綁一個平台的那支(含冒號的名字也這樣認回)
+            refs = [(next(iter(hit)), t)]
+        else:
+            try:
+                refs = resolve_test_refs(f"[test:{t}]", split, default)
+            except _TestRefPrefixError as e:    # 前綴是沒定義的平台(改名或刪了):不丟例外,照計劃狀態擋或提醒(做法 2)
+                bad_plat.append(_esc_clean(str(e.prefix or t), 60))
+                continue
+        items += [(loop_id, pl, m, "real" if m in methods_for(pl) else "dangling") for pl, m in refs]
+    if bad_plat and not done:
+        return (f"{prel}:留痕記的平台 {'、'.join(sorted(set(bad_plat))[:5])} 不在 .lumos/config.json 裡(改名或刪了?);"
+                f"照現在的設定改條款的平台前綴後重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}"), None
+    if bad_plat:
+        notes.append(f"留痕記的平台不在設定裡({'、'.join(sorted(set(bad_plat))[:5])}——改名或刪了?)")
     gone = [m for _l, _p, m, k in items if k == "dangling"]
     if done and gone:
         notes.append(f"留痕裡的測試找不到({'、'.join(gone[:5])}——改名或刪了?)")
@@ -15954,10 +16038,13 @@ def _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx=None, done=False):
     rows, rerr = _spec_gate_judge_items(rr, items, lambda pl: (plats.get(pl) or {}).get("profile_name"), loose_for)
     if rows is None:
         return f"{prel}:留痕裡的測試跑不起來({rerr})", None
-    reds = []
+    reds, real = [], False
     for _nid, _pl, m, v, why, _detail in rows:
         if v != "green":
             reds.append(f"{m}:{'紅' if v == 'red' else why}")
+            real = real or why not in _ENV_MISSING_WHYS
+    if reds and not real:   # 沒過的全是環境沒跑起來(沒接裝置):照擋,不記逃逸——那不是下游抓到的洞(做法 3)
+        return f"{prel}:留痕裡的測試沒全綠——" + "、".join(reds), None
     if reds:
         try:   # 逃逸自動記:風險低計劃沒人審,推送閘擋下就是下游抓到的洞(fail-open,記不成不影響擋)
             _auto_escape(env, "push-gate", "major", f"推送閘擋下:風險低計劃 {Path(prel).stem} 的條款測試沒全綠({reds[0][:60]})",
@@ -47976,9 +48063,13 @@ def _rg_bracket_map(s):
     return table
 
 
-def _rg_split_args(s, angle=True):
+def _rg_split_args(s, angle=True, stripped=None):
     """括號內的參數字串 → 頂層逗號切開的清單(去頭尾空白)。angle=False 時不把 < > 當括號(測試防竄改比對切斷言參數:
-    比較運算 `a > b`、lambda 箭頭 `x -> x` 會讓深度歪掉;Room 守衛照舊把泛型的 < > 當括號)。"""
+    比較運算 `a > b`、lambda 箭頭 `x -> x` 會讓深度歪掉;Room 守衛照舊把泛型的 < > 當括號)。
+    stripped:同一段剝過字串的文字(長度同 s,_tg_strip 產的)。給了就照它找頂層逗號、照 _rg_bracket_map 配好的括號對跳過內部,
+    回原文取字——字串裡的逗號與不成對括號不當結構(Projects/紅燈版實跑三缺口_計劃 做法 1;配括號只用 _rg_bracket_map 一套)。"""
+    if stripped is not None and not angle:    # 剝過文字的那條路只給不把 < > 當括號的比對工具用(配括號表 _RG_OPEN 本來就沒有 < >)
+        return _rg_split_args_stripped(s, stripped)
     opens, closes = ("([{<", ")]}>") if angle else ("([{", ")]}")
     out, depth, cur = [], 0, []
     for c in s:
@@ -47993,6 +48084,23 @@ def _rg_split_args(s, angle=True):
             cur.append(c)
     if "".join(cur).strip():
         out.append("".join(cur).strip())
+    return out
+
+
+def _rg_split_args_stripped(s, stripped):
+    """_rg_split_args 給了 stripped 的那條路:照剝過的文字找頂層逗號,配好的括號對整段跳過,回原文取字。"""
+    br, out, start, i = _rg_bracket_map(stripped), [], 0, 0
+    while i < len(stripped):
+        c = stripped[i]
+        if c in _RG_OPEN and i in br:
+            i = br[i] + 1
+            continue
+        if c == ",":
+            out.append(s[start:i].strip())
+            start = i + 1
+        i += 1
+    if s[start:].strip():
+        out.append(s[start:].strip())
     return out
 
 
@@ -48893,7 +49001,11 @@ def _tg_functions(text, java):
         annot = "\n".join(x for x in (_tg_norm(y) for y in [*klines[s - 1:decl], pre]) if x)
         out[key] = {"start": s, "end": e, "decl": decl + 1, "name": name, "annot": annot,
                     "raw": "\n".join(lines[decl:e]), "mbody": seg_s,
-                    "sig": re.sub(r"\s+", "", seg_k[close + 1:]) if close >= 0 else ""}
+                    # 兩份本體簽名(Projects/紅燈版實跑三缺口_計劃 做法 1):sig 整段拿掉空白,給找搬家與改名用(搬進巢狀類別、
+                    # 多行字串跟著縮排也認得出是同一支,代碼審 r1 單審席 F1);isig 字串原樣保留、字串外空白照 _tg_ident 整理,
+                    # 給判本體有沒有變用("a, b" 改 "a,b" 算有變)。同 clone 偵測的分法:只差空白版面的算同一支,內容改了另判
+                    "sig": re.sub(r"\s+", "", seg_k[close + 1:]) if close >= 0 else "",
+                    "isig": _tg_ident(seg_k[close + 1:]) if close >= 0 else ""}
     return out, ok
 
 
@@ -48928,7 +49040,7 @@ def _tg_statements(fn):
             if not mm or mm.end() - 1 not in br:
                 break
             k = br[mm.end() - 1] + 1
-        out.append(re.sub(r"\s+", " ", rb[m.start():k]).strip())
+        out.append(_tg_ws_keep_strings(rb[m.start():k]))
         pos = max(k, m.end())
     import bisect
     nls, text_of = None, {}
@@ -48941,7 +49053,7 @@ def _tg_statements(fn):
         if li not in text_of:
             ls = nls[li - 1] + 1 if li > 0 else 0
             le = nls[li] if li < len(nls) else len(rb)
-            text_of[li] = re.sub(r"\s+", " ", rb[ls:le]).strip()
+            text_of[li] = _tg_ws_keep_strings(rb[ls:le])
         out.append(text_of[li])
     return out[:_TG_MAX_STMTS]
 
@@ -48955,7 +49067,9 @@ def _tg_strong(stmts):
     return sum(1 for s in stmts if _TG_STRONG.search(_lazy_re(_TG_LIT_PAT).sub('""', s)))
 
 
-_TG_LIT_PAT = (r'"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\'')   # 佔有式:長字串常值不回溯;用時才編(同 _C_STRIP_PAT)
+# 三引號(Kotlin 原始字串,可跨行)放最前面:斷言文字保留字串原樣後會帶換行,單行樣式認不得,裡面寫的 assertEquals 字樣會被算成強斷言
+# (代碼審 code-紅燈版實跑三缺口 r4 單審席 F2;寫法同 _C_STRIP_PAT 的三引號那段)
+_TG_LIT_PAT = (r'"""[^"]*+(?:"(?!"")[^"]*+)*+"""|"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\'')   # 佔有式:長字串常值不回溯;用時才編(同 _C_STRIP_PAT)
 _TG_FIRST_ARG = ("assertEquals", "assertNotEquals", "assertArrayEquals", "assertContentEquals", "assertSame")
 _TG_FLIP = {"assertTrue": "assertFalse", "assertFalse": "assertTrue", "assertNull": "assertNotNull", "assertNotNull": "assertNull"}
 # Truth / AssertJ 串接的方向互換:assertThat(x).isTrue() 改 isFalse() 跟 assertTrue 改 assertFalse 同一種
@@ -48966,23 +49080,53 @@ _TG_MSG_LAST_RE = re.compile(r"^[ \t]*import\s+(?:static\s+)?(?:kotlin\.test\.(?
 
 
 def _tg_call_parts(stmt):
-    """敘述 → (呼叫名, [參數…], [(鏈上名稱, [參數…])…])。參數切法不把 < > 當括號(比較運算與 lambda 箭頭)。"""
+    """敘述 → (呼叫名, [參數…], [(鏈上名稱, [參數…])…])。參數切法不把 < > 當括號(比較運算與 lambda 箭頭)。
+    切參數照剝過字串的文字找逗號(字串裡的逗號、括號不算);剝字串掃描讀錯時(_tg_strip_unreliable)照舊用原文切。"""
     m = re.match(r"\.?([\w.]+?)\s*(?:<[^>()]*>)?\s*\(", stmt)
     if not m:
         return None, [], []
     name = m.group(1).rsplit(".", 1)[-1]
-    br = _rg_bracket_map(_tg_strip(stmt))
+    st = _tg_strip(stmt)
+    br = _rg_bracket_map(st)
+    mask = None if _tg_strip_unreliable(stmt) else st
+
+    def split(a, b):
+        return _rg_split_args(stmt[a:b], angle=False, stripped=None if mask is None else mask[a:b])
     close = br.get(m.end() - 1, len(stmt))
-    args = _rg_split_args(stmt[m.end():close], angle=False)
+    args = split(m.end(), close)
     chain, k = [], close + 1
     while True:
         mm = re.compile(r"\s*\.\s*(\w+)\s*\(").match(stmt, k)
         if not mm or mm.end() - 1 not in br:
             break
         en = br[mm.end() - 1]
-        chain.append((mm.group(1), _rg_split_args(stmt[mm.end():en], angle=False)))
+        chain.append((mm.group(1), split(mm.end(), en)))
         k = en + 1
     return name, args, chain
+
+
+def _tg_strip_unreliable(stmt):
+    """剝字串掃描(_C_STRIP_PAT)讀這段斷言會讀錯 → True:有字串沒收尾(原始字串尾端連續引號 `\"\"\"a\"\"\"\"` 會讓掃描把最後一個引號當新字串、吃到行尾),
+    或字串裡的 `${` 在同一段字串裡沒配平(模板裡有巢狀引號 `"${foo("a,b")}"`,掃描切成兩段字串)。Kotlin 文法認模板靠模式堆疊,
+    單層掃描認不得;這兩種退回原文切法,跟修補前一樣(Projects/紅燈版實跑三缺口_計劃 做法 1)。"""
+    for mo in _lazy_re(_C_STRIP_PAT, re.S).finditer(stmt):
+        tok = mo.group(0)
+        if tok[:2] in ("//", "/*"):
+            continue
+        _q, inner, rest, close = _strip_tok_parts(tok)
+        if rest != close:
+            return True
+        depth = 0
+        i = inner.find("${")
+        while i != -1:
+            depth, j = 1, i + 2
+            while j < len(inner) and depth:
+                depth += {"{": 1, "}": -1}.get(inner[j], 0)
+                j += 1
+            if depth:
+                return True
+            i = inner.find("${", j)
+    return False
 
 
 def _tg_split_expected(stmt, kotlin_test=False):
@@ -49253,17 +49397,28 @@ def _tg_stmt_at(kept, blank, bmap, i):
     return _tg_ident(kept[i:k]), k
 
 
-def _tg_ident(text):
-    """敘述原文 → 身分:字串常值原樣保留(頭尾與逗號後的空白都算內容),字串外字詞之間的空白壓成一格、標點兩側的空白拿掉。
-    字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套。"""
+def _tg_ident(text, fold=None):
+    """敘述原文 → 身分:字串常值原樣保留(頭尾與逗號後的空白都算內容),字串外照 fold 整理(預設 _tg_ws_fold:字詞之間的空白壓成一格、
+    標點兩側的空白拿掉)。字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套;只換字串外壓法的呼叫端傳 fold(_tg_ws_keep_strings)。"""
+    fold = fold or _tg_ws_fold
     out, last = [], 0
     for mo in _lazy_re(_C_STRIP_PAT, re.S).finditer(text):
         if mo.group(0)[:2] in ("//", "/*"):
             continue
-        out += [_tg_ws_fold(text[last:mo.start()]), mo.group(0)]
+        out += [fold(text[last:mo.start()]), mo.group(0)]
         last = mo.end()
-    out.append(_tg_ws_fold(text[last:]))
+    out.append(fold(text[last:]))
     return "".join(out).strip()
+
+
+def _tg_ws_keep_strings(text):
+    """敘述原文 → 字串外的連續空白壓成一格(標點兩側照留)、字串原樣保留(字串裡的空白是內容:"a b" 改 "a  b" 是改了預期值)。
+    語言的詞法本來就是「詞與詞之間的空白可互換,字串裡的不行」(代碼審 r3 單審席 D2);掃描迴圈用 _tg_ident 那一支(r4 架構對齊席)。"""
+    return _tg_ident(text, fold=_tg_ws_collapse)
+
+
+def _tg_ws_collapse(code):
+    return re.sub(r"\s+", " ", code)
 
 
 def _tg_ws_fold(code):
@@ -49327,7 +49482,7 @@ _TG_WHY = {
     "tq/redbase-weakened": ("這支新測試相對規格閘判紅時存下的那一版(紅燈版)被改弱了", "確認改動來自需求變更,不是照實作目前的輸出改測試;需求真的變了就附理由放行"),
     "tq/redbase-unmatched": ("規格閘判紅時存下的測試在推送版找不到(被刪、改名或有同名多載)", "確認這支測試是需求拿掉的,不是為了讓紅燈消失而刪或改名"),
     "tq/redbase-unreadable": ("規格閘紅燈版讀不到、沒提交、被刪、被改過或沒有留痕指到",
-                              "照原因處理:沒提交就 git add 那支檔,被刪或被改就從版本紀錄還原,沒有留痕就照訊息找回那一行;確定不需要才附理由放行"),
+                              "照原因處理:沒提交就 git add 那支檔,被刪或被改就從版本紀錄還原,沒有留痕就照訊息補回留痕(治理帳被忽略時先改忽略設定);確定不需要才附理由放行"),
 }
 
 
@@ -49584,9 +49739,11 @@ def _tg_hit_cands(test_files, base_hits, head_hits):
 
 def _tg_fn_cands(path, k, f, prev, kt):
     """一支新增或本體有變的測試函式 → 候選:沒斷言、catch 沒 fail、新加 expected=、斷言變弱、預期值被改、逾時調大。
-    prev 是改動前那一支(新寫的、或找不到的是 None);本體與註記都沒變的不判。"""
+    prev 是改動前那一支(新寫的、或找不到的是 None);本體與註記都沒變的不判。只差空白版面(sig 相同、isig 不同:字串裡的空白或縮排變了)
+    的只比預期值——字串內容是預期值的一部分,其他規則照「同一支、沒改」不重判(整檔重新縮排時,多行字串跟著變不算改了測試;
+    Projects/紅燈版實跑三缺口_計劃 做法 1,代碼審 r2 單審席 F2)。"""
     if prev is not None and prev["sig"] == f["sig"] and prev["annot"] == f["annot"]:
-        return []
+        return [] if prev["isig"] == f["isig"] else _tg_expected_cands(path, k, f, prev, kt)
     out = []
     if not _tg_has_assertion(f):
         out.append(_tg_cand("tq/no-assertion", path, f["start"], k))
@@ -49602,14 +49759,22 @@ def _tg_fn_cands(path, k, f, prev, kt):
         out.append(_tg_cand("tq/assert-weakened", path, f["start"],
                             f"{k}\x00{len(so)}/{_tg_strong(so)}/{co}->{len(sn)}/{_tg_strong(sn)}/{cn}",
                             extra=f"斷言 {len(so)}→{len(sn)},相等比對 {_tg_strong(so)}→{_tg_strong(sn)},實際值是常值的 {co}→{cn}"))
-    seen = {}
+    out += _tg_expected_cands(path, k, f, prev, kt, so, sn)
+    ol = [_tg_norm(x) for x in (prev["annot"] + "\n" + prev["raw"]).split("\n")]
+    nl = [_tg_norm(x) for x in (f["annot"] + "\n" + f["raw"]).split("\n")]
+    out += [_tg_cand("tq/timeout-raised", path, f["start"], f"{k}\x00{line}") for line in _tg_timeout_raised(ol, nl)]
+    return out
+
+
+def _tg_expected_cands(path, k, f, prev, kt, so=None, sn=None):
+    """改動前後兩支同名函式 → tq/expected-changed 候選(_tg_fn_cands 的一段;只差空白版面時只跑這段)。"""
+    so = _tg_statements(prev) if so is None else so
+    sn = _tg_statements(f) if sn is None else sn
+    out, seen = [], {}
     for a, c in _tg_pairs(so, sn, kt):
         if _tg_expected_changed(a, c, kt):
             seen[c] = seen.get(c, 0) + 1          # 同一條改動出現第二次,指紋不同(放行一條不會順帶放掉另一條)
             out.append(_tg_cand("tq/expected-changed", path, f["start"], f"{k}\x00{c}", seen[c]))
-    ol = [_tg_norm(x) for x in (prev["annot"] + "\n" + prev["raw"]).split("\n")]
-    nl = [_tg_norm(x) for x in (f["annot"] + "\n" + f["raw"]).split("\n")]
-    out += [_tg_cand("tq/timeout-raised", path, f["start"], f"{k}\x00{line}") for line in _tg_timeout_raised(ol, nl)]
     return out
 
 
@@ -49674,10 +49839,20 @@ def _tg_redbase_cands(root, base, head, ch, test_files, consumed, deadline=None)
     recs, err = _tg_redbase_records(root, base, head, deadline) if touched else ([], None)
     if recs is None:
         return None, err
-    metas, out = _tg_rb_metas(recs, ch, head, deleted)
+    memo = []
+
+    def ledger():      # 第一次用到(真有孤兒或還沒提交的紅燈版)才問 git,之後沿用(一次推送最多問一次)
+        if not memo:
+            memo.append(_gov_ledger_ignored(root, deadline=deadline))
+        return memo[0]
+    metas, out = _tg_rb_metas(recs, ch, head, deleted, ledger=ledger)
     referenced = {p for _t, p, _s, _sp in metas}
-    out += [_tg_rb_bad("?", p, "工作目錄有還沒提交的紅燈版檔:請 git add 那支檔與 docs/.governance-log.jsonl 一起提交")
-            for p in sorted(pending - referenced)]
+    for p in sorted(pending - referenced):
+        st, rule = ledger()
+        why = (f"git add 這支紅燈版檔;另外治理帳 {GOV_LOG_REL} 被 git 忽略、留痕進不了提交:到蓋到它的那支忽略設定檔拿掉或收窄那條規則,"
+               f"改完 git check-ignore -q {GOV_LOG_REL} 的退出碼是 1,再把治理帳一起提交。蓋到的規則:{rule}" if st == "ignored" else
+               "工作目錄有還沒提交的紅燈版檔:請 git add 那支檔與 docs/.governance-log.jsonl 一起提交")
+        out.append(_tg_rb_bad("?", p, why, ident="pending"))
     snaps, bad, err, nread = _tg_rb_load(root, metas, consumed, deadline)
     if err:
         return None, err
@@ -49730,10 +49905,12 @@ def _tg_rb_pending(root, head):
     return out
 
 
-def _tg_rb_metas(recs, ch, head, deleted=()):
+def _tg_rb_metas(recs, ch, head, deleted=(), ledger=None):
     """留痕、孤兒檔、這條分支刪掉的紅燈版 → ([(token, 紅燈版路徑, sha256 或 None, 讀哪一版的 spec)], 要人看的候選)。
     sha256 是 None 的(孤兒檔、沒留痕又被刪的)沒有留痕可核對也排不出先後,照內容直接跟推送版比,另列一條候選要人把留痕或檔找回來;
-    留痕還在、檔被刪的,照留痕核對刪掉前那一版,只列一條(代碼審 r3 單審席 F4)。"""
+    留痕還在、檔被刪的,照留痕核對刪掉前那一版,只列一條(代碼審 r3 單審席 F4)。
+    ledger:回 _gov_ledger_ignored 結果的取值函式(第一次用到才問 git);None=不問、照舊措辭。治理帳被忽略時孤兒的提醒講明是忽略設定蓋到,
+    「不要刪」放最前面、規則放最後(候選訊息 300 字截斷先掉規則;Projects/紅燈版實跑三缺口_計劃 做法 4)。"""
     out, metas, referenced = [], [], set()
     gone = {p: c for c, p in deleted}
 
@@ -49761,8 +49938,14 @@ def _tg_rb_metas(recs, ch, head, deleted=()):
         if st in ("A", "R", "C") and n and n.startswith(_TG_RB_DIR) and n not in referenced and _tg_rb_path_ok(n):
             referenced.add(n)
             tok = _out_clean(Path(n).stem, 40)
-            out.append(_tg_rb_bad(tok, n, "這支紅燈版檔沒有任何規格閘留痕指到它(多半是合併時解治理帳衝突弄丟了那一行):"
-                                          f"用 git log -p -- {GOV_LOG_REL} 找回含 {tok} 的那一行補回並提交;不要刪這支檔,改拿它的內容來比(內容有問題時另列一條原因)"))
+            st, rule = ledger() if ledger is not None else ("unknown", "")
+            why = ("不要刪這支紅燈版檔,改拿它的內容來比(內容有問題時另列一條原因);它沒有留痕指到,是因為治理帳 "
+                   f"{GOV_LOG_REL} 被 git 忽略、留痕進不了提交:到蓋到它的那支忽略設定檔拿掉或收窄那條規則(否定規則要寫在同一支檔、"
+                   f"放在那一行後面;上層目錄整個被忽略時要改那條規則),改完 git check-ignore -q {GOV_LOG_REL} 的退出碼是 1,再把治理帳提交。"
+                   f"蓋到的規則:{rule}" if st == "ignored" else
+                   "這支紅燈版檔沒有任何規格閘留痕指到它(多半是合併時解治理帳衝突弄丟了那一行):"
+                   f"用 git log -p -- {GOV_LOG_REL} 找回含 {tok} 的那一行補回並提交;不要刪這支檔,改拿它的內容來比(內容有問題時另列一條原因)")
+            out.append(_tg_rb_bad(tok, n, why, ident="orphan"))
             metas.append((tok, n, None, f"{head}:{n}"))
     for p in gone:
         if p not in referenced:
@@ -68366,6 +68549,27 @@ _RAN_EVIDENCE_PREFIX = (r"(?:[^\S\n]|\x1b\[[0-9;?]*[A-Za-z]|\[[^\]\n]{1,40}\]|\d
                         r"|(?:[^\s:\]\x1b]{1,60}[^\S\n]+)?[^\s:\]\x1b]{1,60}:){0,12}")
 _RAN_EVIDENCE_JS_RE = (r"(?:^|(?<=\n))" + _RAN_EVIDENCE_PREFIX
                        + r"Tests:?(?![A-Za-z])[^\n]{0,200}?(?<![0-9])[1-9]\d*[^\S\n]+passed")
+# 測試沒跑起來是環境的事、不是測試失敗(Projects/紅燈版實跑三缺口_計劃 做法 3;Bazel 也把基礎設施失敗跟 FAILED 分開):
+# 跟 _RAN_EVIDENCE 同一區、同樣以測試格式為鍵、同樣是「照輸出判狀態」,但另成一張——_RAN_EVIDENCE 的讀者都取 spec["re"](證明跑過),
+# 塞一個沒有 re 的格式進去會讓它們崩(代碼審 code-紅燈版實跑三缺口 r1 架構對齊席)。讀者只有 _spec_gate_judge_items。
+# AGP 的 connected 測試找不到裝置時丟 DeviceException(2026-11-03 mOrangePos 考場實測:沒接到指定序號的裝置印
+# 「DeviceException: Connected device with serial '…' not found!」、退出碼 1)。
+_AGP_DEVICE_MISSING = {   # 具名欄位,同 _RAN_EVIDENCE 的寫法
+    "re": r"com\.android\.builder\.testing\.api\.DeviceException",
+    "why": "環境沒跑起來(沒接裝置?)",
+    "measured": "AGP connected 測試 2026-11-03 mOrangePos 考場實測:ANDROID_SERIAL 指到不存在的序號,印 DeviceException: Connected device with serial '…' not found!、退出碼 1",
+}
+_ENV_MISSING_EVIDENCE = {"kotlin-junit": _AGP_DEVICE_MISSING, "java-junit": _AGP_DEVICE_MISSING}
+_ENV_MISSING_WHYS = frozenset(spec["why"] for spec in _ENV_MISSING_EVIDENCE.values())   # 推送前判「沒過的全是環境沒跑起來」用
+
+
+def _env_missing_why(profile, out):
+    """輸出裡有這個測試格式的「環境沒跑起來」樣式 → 原因;沒有或這格式沒登記回 None。去色碼後比,同 _ran_evidence_check。"""
+    spec = _ENV_MISSING_EVIDENCE.get(profile or "")
+    if not spec:
+        return None
+    return spec["why"] if re.search(spec["re"], _ANSI_RE.sub("", str(out or ""))) else None
+
 _RAN_EVIDENCE = {
     "swift-xctest": {
         "re": r"Executed\s+[1-9]\d*\s+tests?\b",
