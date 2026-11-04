@@ -1,0 +1,1436 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/SHA-256的repo其他閘仍用SHA-1空樹.md b/docs/lumos-toolchain-knowledge/Issues/SHA-256的repo其他閘仍用SHA-1空樹.md
+index 36abfd095..cb52d3a19 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/SHA-256的repo其他閘仍用SHA-1空樹.md
++++ b/docs/lumos-toolchain-knowledge/Issues/SHA-256的repo其他閘仍用SHA-1空樹.md
+@@ -14,17 +14,18 @@ summary: |-
+   WHY:[2026-09-29 乙代碼審 r5,Enzo 裁「修完直接推」]乙只修了存量漂移自己那兩條路(改用這個 repo 算出的空樹,見 [[Systems/存量漂移守衛]]);其他閘(每支檔有家、筆記形狀擋、筆記內容審、推送起點判法本身)同一個常數沒動——改的是全工具共用的推送起點,範圍比乙大,要另外審
+   REVISIT:2026-12-29 決定要不要把空樹改成每個 repo 算一次、所有閘共用;先查這段期間有沒有人用 SHA-256 的 repo(GitHub 目前不收這種 repo)
+ ---
+ # SHA-256的repo其他閘仍用SHA-1空樹
+ 
+ 白話:git 有兩種物件格式,舊的 SHA-1 和新的 SHA-256,兩種的「空樹」編號不一樣。工具裡寫死的是 SHA-1 那個,所以在 SHA-256 格式的 repo 第一次推送、又找不到主線時,好幾道推送前的檢查會算不出這次改了哪些檔。
+ 
+ ## 現況
+ 
+ - 存量漂移檢查已修:改用這個 repo 自己算出的空樹([[Systems/存量漂移守衛]],[[Projects/存量漂移防線_計劃]] 的乙代碼審 r5)。
++- 規格閘紅燈版讀判綠紀錄那段已改:沒有分岔點時減的空樹改用 `_drift_empty_tree`(2026-11-04,[[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]] 代碼審 r4)。
+ - 其他閘沒修:它們共用同一個寫死的常數與推送起點判法。
+ - 影響面:GitHub 目前不收 SHA-256 的 repo,實際碰到的機會低;碰到時的症狀是檢查判不了,不是靜默放行。
+ 
+ ## 要做什麼
+ 
+ - 把空樹改成每個 repo 算一次(`git hash-object -t tree --stdin`,標準輸入要明確給空的,不然在推送掛鉤裡會讀到掛鉤自己的 ref 清單),推送起點判法與各閘共用。
+ - 改的是全工具共用的推送起點,要走代碼審。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/判綠紀錄限本分支與撞名測試改計數_計劃.md b/docs/lumos-toolchain-knowledge/Projects/判綠紀錄限本分支與撞名測試改計數_計劃.md
+new file mode 100644
+index 000000000..fd2ace109
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/判綠紀錄限本分支與撞名測試改計數_計劃.md
+@@ -0,0 +1,123 @@
++---
++type: project
++status: doing
++created: 2026-11-03
++updated: 2026-11-03
++tags:
++  - type/project
++  - status/doing
++  - scope/stack-knowledge
++lands_in:
++  - Systems/規格閘
++  - Systems/test-guard
++  - Systems/test-profile-multiplatform
++  - Systems/存量漂移守衛
++related:
++  - "[[Projects/紅燈版實跑三缺口_計劃]]"
++  - "[[Projects/規格閘紅燈測試快照_計劃]]"
++---
++# 判綠紀錄限本分支與撞名測試改計數_計劃
++
++> 白話:紅燈版實跑三缺口(PR #154)合併後回 mOrangePos 考場做平板實機驗收,又抓到一個問題:治理帳被 git 忽略時,別條分支留下的「判綠」紀錄會漏到新分支,新分支一個紅燈版都存不到、不出聲。順手收掉兩件小事:主線 CI 時好時壞的那支效能測試、代碼審 r5 放行時寫進回頭條件的三引號常值斷言與兩處註解。
++
++## 名詞
++
++- 紅燈版:規格閘判出紅的那一刻,把那支 Kotlin/Java 測試檔整份存下;推送前比對拿它當新測試的改動前版本,抓「把預期值改成實作輸出」這類作弊。
++- 判綠紀錄:規格閘判出綠的測試記一筆(spec-gate-green 事件),之後同一支測試再判紅也不存紅燈版(判綠過的不算實作前的版本)。
++- 治理帳:docs/.governance-log.jsonl,規格閘留痕與判綠紀錄都寫在這裡;設計上要進版控,mOrangePos 從 2026-06 起把它設成 git 忽略。
++- 祖先:git 歷史上,從目前 HEAD 往回走得到的提交。
++- 分岔點:這條分支跟主線分開的那一版提交;治理帳被 git 忽略時,那一版的提交裡根本沒有治理帳。
++- head_sha:寫治理帳事件時 `_gate_event` 自己跑 `git rev-parse HEAD` 記下的當下 HEAD;git 叫不起來時不寫這欄,還沒有任何提交的 repo 會寫成字面的 HEAD(兩種都不像提交編號)。
++- 事件的分支名(ref 欄位):`_gate_event` 已有的選填欄位,端到端驗收的事件已經拿它記分支名;本計劃讓規格閘留痕與判綠紀錄也記。
++- 考場:mOrangePos 的演練工作樹與只留本機的分支,拿來實機驗 lumos,不推、不併。
++- 撞名:`-t`/`-g` 這類用名字篩測試的參數,會連帶選中別支名字相近的測試。標題索引(`_TitleIndex`)是把整個平台的測試標題建成可查的索引,每個平台建一次,之後每個綁定名(條款 `[test:]` 寫的測試名)只在它上面查;索引裡另把標題按種類串成一長串(`_join`),每種串一次。
++- 比對工具:`lumos test-guard`,拿改動前版本對照新測試抓作弊;它列的 tq/assert-weakened 是「斷言變少、相等比對變少,或實際值被換成常值」。
++
++## 問題與最小解
++
++立案(2026-11-03,Enzo 原話):看完實機驗收結果後「處理掉」。
++
++1. **判綠紀錄跨分支漏過來**:`_redbase_branch_rows` 拿工作目錄的治理帳減掉分岔點那一版,算出「這條分支自己寫的」紀錄。治理帳被忽略時分岔點那一版根本沒有,工作目錄裡所有分支、所有計劃留下的紀錄都被當成這條分支的。考場實測:上一條分支實作完成後補跑留下的判綠紀錄(head_sha 9101c0b,不是新分支的祖先)漏到從設計重來的新分支,五支測試全被判成「曾判綠,不算實作前的版本」,一個紅燈版都沒存(卷證在考場本機分支 drill/service-charge-e2e2 的 drill-evidence/redbase-realrun2/)。同一份計劃在任何分支判綠過一次,之後所有分支都失去比對作弊的起點。
++2. **效能測試在 CI 上時好時壞**:`t_name_collision_scales` 要證「撞名判定每個平台只建一次標題索引」,卻每次直接傳原始標題清單給 `_name_filter_collisions`,等於每個名字都重建一次 22000 筆的索引;本機 5.8 秒,CI 兩次 16.2、18.5 秒超過 15 秒門檻(PR #153 的 CI 與它合併後的主線 CI)。
++3. **代碼審 r5 放行時寫的回頭條件**(見 [[Projects/紅燈版實跑三缺口_計劃]] 做法 1):`_TG_CONST_PAT` 不認三引號字串;`_tg_ident` 的說明寫錯傳進去的函式;`_TG_LIT_PAT` 的註解沒寫明跟 `_C_STRIP_PAT` 的差別。
++
++最小解:①規格閘留痕與判綠紀錄多記分支名(治理帳多一個既有欄位);只在治理帳被 git 忽略時,讀紀錄改成「同一份計劃、同一個分支名、head_sha 是目前 HEAD 祖先」才算這條分支的;判不了的照舊算(跟現在一樣)。代價:治理帳被忽略的專案,壓過或 rebase 過的分支上舊的判綠紀錄不再算數(見天花板一);②效能測試改成走正式的快取路徑 `_name_collision_reason`,數標題索引與串接各建了幾次,牆上時間只留寬鬆的安全網;③`_TG_CONST_PAT` 補三引號、兩處註解改對,比對工具的測試補一個三引號常值的案例。
++
++不放進本計劃:考場更新 lumos。`lumos update` 除了換考場分支裡的工具檔,還會拉工具鏈來源 repo、設 repo 共用的 hooksPath、覆寫整台機器的全域掛鉤與設定(`_vendor_toolchain` 與 `_sync_global_from_project`),不是分支內可還原的改動。本批合併後當成一次部署另外做,做之前確認沒有別的會談正在用那些掛鉤。
++
++PRIOR-ART: 判斷一筆紀錄屬不屬於目前分支,git 的標準問法是 `git merge-base --is-ancestor <提交> HEAD`(rc 0 是祖先、1 不是、其他是錯誤;https://www.kernel.org/pub/scm/git/git-manpages.git/tree/man1/git-merge-base.1);用它過濾時,被壓掉或 rebase 掉的提交的紀錄也會被濾掉,而且別條分支合併進主線後它的提交也成了祖先,所以單靠祖先不夠,再加比分支名(本 repo 端到端驗收事件已經用 ref 欄位記分支名)。本 repo 既有的判祖先寫法在 `_note_reread_own_fps`:rc 0/1 直接用,其他回傳碼再用 `cat-file -e` 問提交在不在,本計劃照它寫。效能測試改數次數:要證的是「不重做」這個行為,數建構次數是確定性的檢查,不受機器快慢影響;牆上時鐘門檻只能證「這台機器夠快」(本 repo 測試品質標準的抓錯證據原則)。
++既有否決的對照:[[Systems/規格閘]] 判綠那條 WHY 的不選理由否決過「記寫入當下的版本編號」,因為壓提交後原提交不在。那條原文是「記寫入當下的版本編號跟測試首次提交比」;本計劃仍用 head_sha,是因為只在治理帳被忽略時才用(那種專案分岔點相減根本做不了,沒有別的訊號),而且拿分支名補上;治理帳進版控的專案照舊只靠分岔點相減,不受壓提交影響。
++RETIRE-IF: 治理帳在所有消費專案都進版控時,第 1 項的過濾不會再被走到,可以拿掉 [retire:人裁] [until:2027-05-03]
++
++## 做法
++
++1. **治理帳被忽略時,判綠紀錄只認本分支的**:
++   - 取分支名抽成一支小函式,借回頭重讀的 `_note_reread_branch`(`symbolic-ref -q HEAD`、同一道控制字元清洗)再去掉 refs/heads/(不用 `--short`,有同名 tag 時它回 heads/<名>。分離 HEAD 或 git 失敗回空字串),寫入端兩處與讀取端共用;`_redbase_branch_rows` 現在在 `if head:` 裡面才取,要搬到外面,HEAD 還沒有提交時也取得到分支名。
++   - 寫入:規格閘留痕(spec-gate-record)與判綠紀錄(spec-gate-green)兩處 `_gate_event` 呼叫多傳 `ref=<目前分支名>`(取不到就不傳)。留痕那筆的 extra 由留痕內容組成,組之前確認裡面沒有同名的 ref 鍵。
++   - 部分複製的認法(`_git_partial_clone`,回頭條件那支也用):`git config -z --get-regexp` 讀三個設定(以 NUL 分隔,遠端名含空白也切得對),`promisor` 的值照 git 自己的布林規則(`_git_bool`:裸鍵與非 0 整數算真,false/no/off/0/空字串算假);判不了回 None,回頭條件那支把 None 當判不了(代碼審 r3 三席與架構對齊席)。
++   - 讀取:`_redbase_branch_rows(rr, loop=None, ignored=None, budget=10)` 多收這份計劃的迴圈編號、治理帳被不被忽略與過濾那段的秒數(預設值讓既有只傳一個參數的呼叫,例如 `t_spec_gate_redbase_written_on_red`,行為不變)。先問 `_git_partial_clone`:是部分複製(或判不了是不是)時不讀分岔點那一版(讀舊版本會自動連遠端、逾時殺不到抓取的子程序,代碼審 r1 r3 資源席)——帳被忽略就直接讀整本工作目錄的帳,帳不是被忽略就印一句這次沒有判綠觀測與去重、回空清單;不是部分複製時照舊減分岔點那一版(帳被忽略也減:帳曾進版控、後來才改成忽略時,主線上的舊判綠要減掉,代碼審 r4 通才席),沒有分岔點時減空樹,空樹照這個 repo 的格式算(`_drift_empty_tree`,SHA-256 的 repo 跟 SHA-1 不同,代碼審 r3 r4 邊界席)。收齊紀錄後 loop 有給就只留 loop 是這份計劃的。`_redbase_attach` 先叫一次 `_gov_ledger_ignored`,結果傳給它,寫完紅燈版後的提醒也用同一個結果,不重複問 git;截止時間在過濾前一刻用 budget 起算。帳不是「被忽略」(進版控或判不了)時不做分支名與祖先過濾。
++   - 被忽略時逐筆判,判斷依序是:
++     a. 紀錄有字串的 ref、目前分支名也取得到、兩者不同 → 丟。
++     b. head_sha 不是字串或不像提交編號(既有的 `_LENS_SHA_RE`),或目前 HEAD 解不出來 → 留。
++     c. 同一個 head_sha 只問一次 `git merge-base --is-ancestor <head_sha> HEAD`:rc 0 留;rc 1 → 不是淺複製就丟、淺複製留(淺複製的歷史被截掉,rc 1 不可信);其他回傳碼 → 再問 `cat-file -e <head_sha>^{commit}`(回傳碼的處理借 `_note_reread_own_fps` 那一段;它存的是「不是祖先」、比的是分岔點、沒有淺複製判斷,只借回傳碼處理):提交不存在而且不是淺複製就丟,其他留。
++     d. repo 種類跟回頭條件那支 `_drift_born_env_err` 共用判法,第一次需要時問一次:部分複製用新的共用函式 `_git_partial_clone`(git 設計文件寫明三個設定各自認定承諾遠端:`extensions.partialClone`、`remote.<名>.promisor=true`、`remote.<名>.partialCloneFilter`;只看第一個會漏掉 git 2.39 `clone --filter` 只寫後兩個的複製,代碼審 r2 邊界席),是部分複製就整批不問 git、照留(部分複製問本機沒有的提交會自動連遠端抓,逾時殺不到抓取的子程序,代碼審 r1 資源席);淺複製用既有的 `_git_is_shallow`,逾時當判不了(留)。只有判成完整 repo 時,rc 1 與提交不存在才丟。
++     e. 所有 git 呼叫走 `_lens_git_dl`,共用一個截止時間(具名常數 `_REDBASE_ANC_BUDGET_SEC`,10 秒);a 丟掉之後還要問 git 的不同 head_sha 超過具名常數 `_REDBASE_ANC_CAP`(200 個)時,從最新的問起,較舊的不問(較舊的照留,比最新的別分支判綠漏過來代價小)。截止時間在問祖先前一刻才起算,讀帳與算分岔點不吃這份預算。b 以外因為判不了而留下的(淺複製、部分複製、git 叫不起來、過了截止時間、超過上限)合計 N 筆,N 大於 0 就印一句「N 筆紀錄判不了是不是這條分支的,照舊算進來」。
++   - 方向:判不了一律留,是因為留下就是現在的行為(不會比現在更鬆);鄰居 `_note_reread_own_fps` 判不了當「不是」,是因為那裡「不是」才是安全的一邊,兩邊各取自己安全的方向。
++   - `_redbase_branch_state` 拿同一批列判「判綠過沒」與找「上一份紅燈版」,過濾後兩者都只看本分支的紀錄;別條分支的上一份紅燈版不再拿來去重,這是預期效果。
++2. **效能測試改數次數**:`t_name_collision_scales` 改成走 `_name_collision_reason`:
++   - 暫時把 `_raw_test_titles` 換成回傳那 22000 筆標題;把 `_TitleIndex` 換成會計數的子類,數建構次數,並記下同一種串接每次拿回的結果是不是同一份(重算一次就多一份;只數「快取沒命中」看不到快取守衛被拿掉,代碼審 r1 邊界、整合席)。換成函式不行:`_name_filter_collisions` 用 isinstance 判是不是索引。兩者都在 finally 換回(載入的模組是全測試共用的單例);
++   - pentry 照既有測試的形狀給 `{"profile": {..., "name_filter": "regex_tail"}, "root": ..., "profile_name": ...}`(給 `ident` 會直接回 None、不建索引,測試空轉);
++   - 同一個 cache 底下 1000 個名字:`_TitleIndex` 恰好建 1 次、每種 (種類, 大小寫) 組合只算一次(之後每次拿回同一份);牆上時間 60 秒內只當安全網(本機實測 0.29 秒)。
++   - 「`containing` 退化成逐筆線性掃描」這類只慢不重做的退步,次數與 60 秒安全網都不會紅(原本 15 秒門檻在 CI 上時好時壞,也不能拿來守它)。
++   REVISIT:2027-05-03 本機量一次 1000 個名字的撞名判定耗時(本機 0.3 秒),超過 2 秒就查 `containing` 有沒有退化成逐筆掃描,並想一道不靠牆上時鐘的檢查
++   - 同步改 [[Projects/測試名收自由字串_計劃]] 綁這支測試的那條「15 秒內做完」條款,與 [[Systems/test-profile-multiplatform]] 講這支測試的那句,改成「索引只建一次、串接只算一次」。
++3. **三引號常值斷言與註解**:
++   - `_TG_CONST_PAT` 的字串那段照 `_TG_LIT_PAT` 開頭那段三引號樣式抄一份,註解寫「三引號寫法同 `_TG_LIT_PAT`」(本 repo 樣式常數都是獨立字面字串、互相抄並註明出處,不拼接,定義順序也不用動)。`_TG_CONST_PAT` 有三處 fullmatch:`assertThat` 單參數的那個參數、`assertTrue`/`assertFalse` 的條件、實際值參數全是常值;三處都會一起認得三引號,不只 S4。
++   - `t_tq_guard_string_comma_args` 補一個案例:`assertEquals(1, f())` 換成 `assertEquals("""a""", """a""")` 要列 tq/assert-weakened(現行程式不列,先紅);測試說明補上本計劃的條款。
++   - `_tg_ident` 說明改成「只換字串外壓法的呼叫端傳 fold(例如 `_tg_ws_keep_strings` 傳 `_tg_ws_collapse`)」。
++   - `_TG_LIT_PAT` 註解寫明跟 `_C_STRIP_PAT` 的主要差別:它要求字串收尾、只認 `"""`、單行雙引號與單字元 `'x'`;`_C_STRIP_PAT` 還收沒收尾的字串、三個單引號、C# 的 `@"…"`、反引號,而且連註解一起吞。
++4. **寫回既有筆記**(這幾句會因本計劃變假):
++   - [[Systems/規格閘]] 判綠那條 WHY:改成「同一條分支(治理帳被忽略時認分支名與祖先)之後再跑出紅,那支不存紅燈版」,並寫明不選理由那條為什麼這次仍用 head_sha(見上面〈既有否決的對照〉)。
++   - [[Projects/規格閘紅燈測試快照_計劃]] 講「判綠觀測只看這條分支自己寫的那幾筆(跟分岔點那一版做行差)」「只有在 main/master 才看整本帳」「判綠過的不存」那幾段:補治理帳被忽略時的認法。
++   - 比對工具的已知限制清單 `_TG_LIMITS` 與測試品質標準裡同一份「抓不到」清單,「判綠過的不存」補一句「治理帳被忽略的專案,壓過或 rebase 過的分支上舊的判綠紀錄不算」;這份清單由 `t_tq_guard_cli_contract` 逐字比對釘住,兩處一起改,補的句子不含句號。
++   - [[Systems/test-guard]] 講字串常值樣式那條 WHY:補「判常值斷言的樣式也認三引號」。
++   - [[Projects/紅燈版實跑三缺口_計劃]] 做法 1 的「已知漏判」那段改寫成歷史說法(「r5 放行時不認,已由本計劃補上」),它的 REVISIT 行加 `[closed:日期 本計劃補上]`;同計劃講三引號「幾處一起生效」那句一起核對。
++
++## 驗收條款
++
++- [S1] 當治理帳被 git 忽略、裡面有同一份計劃在別條分支(分支名不同)留下的判綠紀錄時,規格閘應照樣存那支測試的紅燈版 [test:t_spec_gate_redbase_green_other_branch]
++- [S2] 當治理帳被 git 忽略、判綠紀錄的分支名相同(或紀錄沒有分支名),而且 head_sha 是目前 HEAD 的祖先或紀錄沒有 head_sha 時,規格閘應照舊不存那支測試的紅燈版 [test:t_spec_gate_redbase_green_other_branch]
++- [S6] 當治理帳被 git 忽略、判綠紀錄的 head_sha 不是目前 HEAD 的祖先(含提交已不存在),而且 repo 不是淺複製也不是部分複製時,規格閘應照樣存那支測試的紅燈版 [test:t_spec_gate_redbase_green_other_branch]
++- [S7] 當治理帳進版控、這條分支自己的判綠紀錄的 head_sha 因為 rebase 不再是祖先時,規格閘應照舊不存那支測試的紅燈版 [test:t_spec_gate_redbase_green_tracked_unfiltered]
++- [S8] 當淺複製、部分複製、過了截止時間或超過上限而判不了時,過濾應把那幾筆紀錄照舊算進來並印一句幾筆判不了;HEAD 解不出時應只照分支名丟、不問祖先;判不了治理帳有沒有被忽略時應不過濾 [test:t_redbase_branch_rows_fallback_keeps]
++- [S10] 當部分複製(或判不了是不是)而治理帳不是被忽略時,規格閘應不讀分岔點那一版的治理帳,並印一句這次沒有判綠觀測與去重 [test:t_redbase_branch_rows_fallback_keeps]
++- [S3] 當 1000 個綁定名在同一個 cache 底下判撞名時,標題索引應只建一次、每種串接只算一次 [test:t_name_collision_scales]
++- [S9] 當治理帳被 git 忽略、別條分支留下同一份計劃的紅燈版留痕時,規格閘應不拿它當上一份紅燈版去重 [test:t_spec_gate_redbase_green_other_branch]
++- [S4] 當測試把 `assertEquals(1, f())` 換成兩邊都是三引號字串常值的 `assertEquals("""a""", """a""")` 時,比對工具應列 tq/assert-weakened [test:t_tq_guard_string_comma_args]
++
++## 回退
++
++原本的 S5(考場更新)已移出範圍。
++
++三項加寫回筆記,各自獨立:第 1 項拿掉 `_redbase_branch_rows` 的過濾、部分複製的判斷與兩處多傳的 ref(已寫進治理帳、帶 ref 的事件留著無害,沒有讀取端會誤讀它),讀帳改回原本的「減分岔點那一版、沒有分岔點減空樹」;共用的 `_git_partial_clone`、`_git_bool`、`_git_current_ref` 與回頭條件那支改用它們的部分(判不了回「git 跑不起來」)一起還原,回頭條件那支回到只看 `extensions.partialClone`;第 2 項把測試改回量時間;第 3 項把 `_TG_CONST_PAT` 改回單行字串樣式、拿掉補的案例、註解改回。做法 4 寫回的筆記跟著各自那項改回。
++
++## 實務隱患
++- 已排除:金流:只改規格閘紅燈版的判綠過濾、比對工具的常值判法與一支測試,不碰收費或扣款流程
++- 已排除:對外送出:不寄信不推播,只多叫本機 git
++- 已排除:不可逆:改判讀與測試,沒有資料遷移;治理帳新紀錄多帶分支名這個既有欄位,回退後留著無害;改壞了回退就回來
++- 守衛面:第 1 項改的是規格閘決定存不存紅燈版的判斷,第 3 項改比對工具的判讀,走設計審與代碼審
++- 效能:過濾只在治理帳被忽略、而且規格閘有紅燈素材要寫時跑一次;先按計劃縮小,每個不同的 head_sha 最多問兩次 git、淺複製只問一次;整批共用 10 秒截止時間,同一份計劃超過 200 個就不再問
++- 比對工具指紋:三引號常值斷言補進去之後,含三引號常值斷言、而且 tq/assert-weakened 已經用 lint-waive 放行過的函式,常值斷言數變了、指紋跟著變,舊放行失效,推送時會再列一次;照擋下訊息重新放行。三引號常值斷言少見
++- 天花板一:治理帳被忽略的專案,壓過、rebase 過或改過名(`git branch -m`)的分支(本 repo 推送前要壓成一個提交,所以壓提交是常態、不是邊角),壓掉的提交上的判綠紀錄不再算數,那支測試之後判紅會存紅燈版(多存一份,比對起點可能是實作後那一版,「判綠過不存」這條保護在壓提交後變鬆)。治理帳進版控的專案不受影響
++- 天花板二:分離 HEAD 或紀錄沒有分支名(本計劃之前寫的舊紀錄)時只剩祖先判斷;這時別條分支已經合併進主線的提交、或判綠時實作還沒提交、之後從同一個 HEAD 開新分支重來,那筆判綠紀錄仍會被認成本分支的
++- 天花板三:淺複製(例如 CI 只抓最近幾個提交)裡判不了的、部分複製(整批不問 git,所以完全沒有這道過濾;較新的 git 有 `GIT_NO_LAZY_FETCH` 可關掉自動抓取,本機 git 2.39 沒有)、git 逾時(大 repo 沒有 commit-graph 時每次判祖先可到 1 秒,10 秒內問不完;`git commit-graph write` 可解;每個本機不存在的 head_sha 要問兩次 git,本機約 20 毫秒一次,200 個約 8 秒,慢機器上預算會比上限先到,代碼審 r3 資源席)或同一份計劃超過 200 個 head_sha 時沒問到的,照舊留,別條分支的紀錄在淺複製裡仍可能漏過來;規格閘紅燈版在開發機上跑,CI 不存紅燈版
++- 天花板四:刪掉分支後用同一個名字重開、而且舊分支的提交是新分支的祖先(例如從舊分支頂端重開)時,舊紀錄會被認成本分支的
++REVISIT:2027-05-03 看治理帳被忽略的專案有沒有出現「判不了是不是這條分支的…照舊算進來」那句(10 秒預算不夠);有就改成用一次 git cat-file --batch-check 先判提交在不在,把每個 head_sha 兩次 git 減成一次(代碼審 r4 資源席)
++- 記憶體:治理帳被忽略的專案,讀帳時整本讀進記憶體,尖峰約檔案大小兩倍(真實帳 21MB 約 48MB;原本就有,代碼審 r4 資源席)
++- 天花板六:部分複製的專案,治理帳進版控時判綠觀測與去重整個不做(讀分岔點那一版會自動連遠端);治理帳被忽略時不過濾(見天花板三)
++- 天花板五:從另一條功能分支頂端切出新分支、延續同一份計劃時,舊分支的判綠紀錄名字不同、被丟,新分支之後判紅會多存一份實作後的紅燈版(代碼審 r2 整合席;跟天花板一同方向:多存、不少比)
++- 天花板一的代價補一句:多存的那份紅燈版是實作後的內容,推送前比對拿它當起點時,比對力道變弱(代碼審 r2 資安席)
++
++## 審計修正紀錄
++- r1(2026-11-03,4 席):31 條/blocking 8(正確性 3、整合 5)/全折;考場更新移出範圍、過濾只在治理帳被忽略時做並先按計劃縮小、加比分支名、三引號條款補案例、寫回既有筆記。席報告在 governance/review-reports/判綠紀錄限本分支與撞名測試改計數/
++- 不加分支名的最小解(只靠祖先)為什麼不夠:別條分支合併進主線後提交成了祖先,判綠時實作未提交、從同一提交開新分支重來也是祖先,兩種都會讓本計劃要修的漏洞重現;分支名欄位是既有欄位(端到端驗收已在用),不是新帳欄
+diff --git a/docs/lumos-toolchain-knowledge/Projects/回頭條件寫下時就成立_計劃.md b/docs/lumos-toolchain-knowledge/Projects/回頭條件寫下時就成立_計劃.md
+index d77e8e895..1a123d535 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/回頭條件寫下時就成立_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/回頭條件寫下時就成立_計劃.md
+@@ -41,21 +41,21 @@ REVISIT:2026-12-03 對工具鏈與消費專案各跑一次 `lumos drift scan --j
+ 2. **「寫下那一版」怎麼找**:沿那篇筆記在**主線(第一父鏈)**上的歷史由新到舊一版一版看。那一版這篇裡**恰好一行**是這組條件就往前;碰到沒有(含那一版沒有這篇)就停,停之前最後看到的那一版就是這一世的開頭。
+    - 版本清單:`git log --first-parent --follow --format=%H --name-only -z <起點> -- <路徑>`(2026-10-03 實測 git 2.39:兩個選項可以並用,側分支的提交不出現、合併提交代表那一版,改名跟得到)。起點是 `--at` 給的提交;工作目錄模式用 `HEAD`。
+    - 側分支上寫、合併進主線的行,以合併那一版算——訊息寫「進主線那一版」,不寫「寫下那一刻」。
+    - 從別篇搬過來的(拆篇、合篇),以搬進這篇那一版算——訊息寫「第一次出現在這篇」。
+    - **停在複製**(實作時實測):`--follow` 也會跟「複製」,而且關不掉(`-M`、`--no-find-copies`、`diff.renames=true` 都一樣)——新開一篇跟舊篇很像的筆記,會被認成從舊篇複製來、一路追進舊篇的歷史。版本清單改帶變動種類(`--name-status`),碰到複製(C)就留下那一版、再往前的丟掉;改名(R)照跟。
+    - **同一版裡這組條件不只一行 → 判不了**(分不出走的是哪一行的歷史);走過的每一版都檢查,**含終點那份文字**(工作目錄或 `--at` 那一版;代碼審 r1:工作目錄多寫一行同條件、還沒提交,原本兩行都追到舊提交)。
+    - 讀版本用既有批次讀 `_nodehome_cat_blobs`,**一次 32 版、碰到邊界就停**,不一次讀全部歷史。路徑用 git log 吐出的原樣路徑(不是 NFC 過的)。讀回 None(那一版沒有這支檔)算「沒有」;那一版不是 UTF-8 → 判不了;批次讀失敗 → 判不了。
+    - 共用:把 `_note_status_seq` 裡「`git log --follow` 取 (提交, 那時的路徑)」那段抽成 `_note_versions(repo_root, rng, path, first_parent=False)`,`_note_status_seq` 照原參數呼叫。停在複製寫在共用那支裡,所以狀態序列也一起修好:原本新開一篇跟舊計劃很像的計劃,狀態序列會混進舊計劃的 doing→done(同一類問題一次修,不只修被點名的這條路)。
+ 3. **在寫下那一版判同一組條件**:那一版的圖譜位置 `_drift_vault_rel(root, X) or vault_rel`,建那一版的 `_drift_tree_env` 與 `_drift_probe_tree`,預讀後用 `_drift_probe_line`——跟 `drift scan --at X` 同一套。True → 寫下時就已成立;False → 不標;None → 判不了(原因沿用 `_drift_row_unread` 點名)。
+ 4. **工作目錄模式**:現在這一行的條件組不在 `HEAD` 版的這篇裡(還沒提交;或這篇改了名還沒提交、`HEAD` 找不到這個路徑)→ 判不了「還沒提交,推送時會判」。
+-5. **整體前提,一次判、全部同一個原因**:不是 git 專案、淺層 clone(`git rev-parse --is-shallow-repository`,同筆記形狀擋的判法)、partial clone(`git config extensions.partialClone` 有值——讀舊版本會去網路抓)、起點沒有提交。
++5. **整體前提,一次判、全部同一個原因**:不是 git 專案、淺層 clone(`git rev-parse --is-shallow-repository`,同筆記形狀擋的判法)、partial clone(2026-11-04 起改用共用的 `_git_partial_clone`:`extensions.partialClone`、`remote.<名>.promisor` 為真、`remote.<名>.partialCloneFilter` 任一個成立就算;判不了也當判不了——讀舊版本會去網路抓,見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]])、起點沒有提交。
+ 6. **預算**:用 scan 剩下的總預算(同一個期限);另外每次 scan 最多在 **6 個**不同的提交建樹判條件(列樹快取 `_DRIFT_LS_CACHE` 上限 8,留兩格給終點;設計審 r3 實測每個提交約 2 秒),超過的判不了「超過上限」。同一篇的多條共用一次版本清單與版本讀取。
+ 7. **呈現**:
+    - 文字:每條寫下時就已成立的發現(不管有沒有表態)底下多一行:「寫下時就已成立:這組條件從 <短編號>(<日期>)起連續出現在這篇,那一版條件就已經成立——這段期間沒在等任何事;改成真的會發生的條件,或刪掉」。只講查到的(從那一版起連續出現),不講「第一次出現」(代碼審 r1:中間改壞再修好的會說得太強)。已表態的列原本只印一行,這行照印。
+    - 判不了的不逐條印:發現清單後面印一行彙總「另有 N 條查不出寫下時成不成立(原因:…)」,原因去重後列前三個。
+    - `--json`:回頭條件(probe)與撤除條件(retire)的發現多一欄 `born`:`{"state": "true"|"false"|"unknown", "commit": 完整編號或 null, "date": "YYYY-MM-DD" 或 null, "why": 判不了的原因或 null}`;其他種類不加。欄名不叫 `unknown`(頂層已經有)。
+    - 發現的字典不帶條件解析結果:這一步用(路徑, 行號)對回那篇筆記,用同一支抽取(`_probe_lines` / `_retire_lines`)重抽一次拿條件組,不改發現字典的形狀。
+    - 日期用寫下那一版的提交日期(`git show -s --format=%cs`),只對判成成立的那幾個提交問。
+ 
+ ## 說明與同步
+ 
+@@ -91,21 +91,21 @@ REVISIT:2026-12-03 對工具鏈與消費專案各跑一次 `lumos drift scan --j
+ 
+ ## 天花板
+ 
+ 1. 只看主線(第一父鏈):側分支上寫下時不成立、合併前才成立的,會被說成「進主線那一版就已成立」——訊息只講進主線那一版,不講寫下那一刻。
+ 2. 「同一條」只認條件組:兩篇各寫一條一樣的條件互不影響;同一篇兩行一樣的整條判不了。
+ 3. 拆篇、合篇只追到搬進這篇那一版,不追到別篇的源頭。
+ 4. 寫下那一版條件判不了(那一版的程式檔讀不出、讀不準)就判不了,不往更新的版本找替代。
+ 5. 「寫下時就已成立」不等於「從沒提醒過任何人」:條件中間不成立過又成立的,那次推送其實提醒過;訊息只講寫下那一版的事實。
+ 6. NFD 檔名的筆記:`git log` 用 NFC 路徑查不到歷史時判不了(不另做路徑對回)。
+ 7. 中間某一版那一行改壞(解析不到、條件被拿掉)再修好:這一世從修好那一版算——修好時條件已成立就會被標,即使最早寫下時不成立;訊息只講「從那一版起連續出現」(代碼審 r1 附理由接受:改壞的那幾版確實不是一條條件)。
+-8. partial clone 只看 `extensions.partialClone`,不看各 remote 的 `promisor` 設定(專案沒有既有判法可對;git 開 partial clone 時兩個都會寫)。
++8. (當時)partial clone 只看 `extensions.partialClone`,不看各 remote 的 `promisor` 設定;2026-11-04 判綠紀錄限本分支的代碼審實測 git 2.39 的 `clone --filter` 只寫 promisor 與 partialCloneFilter、不寫 extension,已改用共用判斷看三個設定(見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]])。
+ 
+ ## 三輪設計審留下的坑(原拆案清單,逐條對應)
+ 
+ - 「寫下時」怎麼認:用 `git log -S` 找第一次出現的文字會找錯提交 → 不用文字,用條件組認同一條、找「這一世」的開頭(做法 1、2)。
+ - 歷史順序:合併提交讓兩條分支交錯 → 只看第一父鏈(做法 2);改名、拆篇讓「寫下時」說得太強 → 訊息改講「進主線那一版、第一次出現在這篇」(做法 2、天花板 1、3)。
+ - 讀版本:「那一版沒有這篇」「超過上限」「讀不出」都回 None → 用不帶上限的批次讀,None 只剩「那一版沒有這支檔」一種意思;不是 UTF-8 另判(做法 2)。路徑用 git log 的原樣路徑,不用 NFC 過的列樹結果(做法 2、天花板 6)。
+ - 同一篇條件一樣的兩行、歷史裡複製出來的第二行 → 走過的每一版都要恰好一行,否則判不了(做法 2)。
+ - 淺層 clone、partial clone → 整體判不了(做法 5)。
+ - 資源:每個不同提交約 2 秒、列樹快取上限 8 → 上限 6 個、共用總預算(做法 6)。
+ - 呈現:已表態的不印補充行 → 已表態照印(做法 7);發現字典沒有條件解析結果 → 對回重抽(做法 7);`--json` 欄名不撞 `unknown` → 叫 `born`(做法 7)。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md b/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md
+index 0c6e15474..84dbd8998 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/測試名收自由字串_計劃.md
+@@ -242,21 +242,21 @@ RETIRE-IF: 上線 8 週內,自由字串綁定造成的假綠(綁定判成綁好
+ - [S69] 當字串標題頭尾有空白時,掃描不應收。[test: t_titled_names_with_edge_spaces_not_collected]
+ - [S70] 當 Kotlin、Swift、C#、Dart 的多行字串裡有單獨一個 `/*` 時,剝註解不應吃掉後面的測試。[test: t_comment_strip_multiline_strings]
+ - [S71] 當 guard kill 實跑、配方名稱會撞名時,那條配方應不跑、記錯誤並講撞名。[test: t_guard_kill_collision_cli]
+ - [S72] 當 guard settle 實跑收到不合法名稱時,應回 2、守衛紀錄不動;收到前後帶空白的名稱時應去空白後寫入。[test: t_guard_settle_name_checks_cli]
+ - [S73] 當多平台寫入名稱是 `web:下單 停用`、`API：逾時`(全形)時應放行,是 `API: 逾時` 時應擋,跟讀取端同一支判法。[test: t_bind_name_problem_pass_and_fullwidth]
+ - [S74] 當條款行有幾萬字沒收尾的測試綁定標記時,算看得見的字應在 1 秒內。[test: t_clause_visible_linear]
+ - [S75] 當同一個平台有好幾條懸空綁定時,檔名錨提示應只掃一次這個平台的測試檔。[test: t_anchor_hint_scans_once]
+ - [S76] 當讀擋下訊息的白話規則時,應講到 200 字與 Windows 那幾個字元。[test: t_test_name_rule_text_complete]
+ - [S77] 當 describe 與測試在不同檔、拼起來剛好等於綁的名字時,撞名判定不應算;同一支檔裡才算。[test: t_name_collision_across_same_file_only]
+ - [S78] 當名字以 @tag 結尾、或 describe 結尾不是整字時,撞名判定應跟實際篩選式的選取結果一致。[test: t_name_collision_uses_real_filter]
+-- [S79] 當 1000 個綁定名對 22000 個標題判撞名時,應在 15 秒內做完。[test: t_name_collision_scales]
++- [S79] 當 1000 個綁定名對 22000 個標題判撞名時,標題索引應只建一次、每種串接只算一次(2026-11-03 由 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]] 從量 15 秒改成數次數:CI 上時好時壞)。[test: t_name_collision_scales]
+ - [S80] 當在 Windows 上展開測試名時,應用 list2cmdline 的雙引號寫法、不用單引號。[test: t_run_cmd_windows_quoting]
+ - [S81] 當多行字串塞滿孤立引號(8MB)時,剝註解的額外記憶體應小於 100MB。[test: t_comment_strip_multiline_memory]
+ - [S82] 當推送前閘與修正關卡判壞名時,訊息應帶規則白話,白話應由常數組出。[test: t_name_messages_use_rule_text]
+ 
+ 
+ ## 實務隱患
+ 
+ - 已排除:金流:不碰付款、點數或任何金額。
+ - 已排除:對外送出:不寄信、不呼叫外部服務,跑的測試指令照舊只在本機。
+ - 已排除:不可逆:不刪不搬任何資料,還原提交程式就回到舊行為;但還原後新寫的句子名綁定會被舊版擋推送,收拾辦法寫在〈回退〉。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md b/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md
+index 4d0fe9d6d..2c21adce8 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/紅燈版實跑三缺口_計劃.md
+@@ -54,22 +54,22 @@ RETIRE-IF: 紅燈版整套撤掉時(見 [[Projects/規格閘紅燈測試快照_
+ 
+ ## 做法
+ 
+ 1. **切參數不切字串裡的逗號與括號**:`_tg_call_parts` 已經用剝字串後的文字(`_tg_strip`,字串內容換成等長空白、長度跟原文一一對應)配括號,切參數卻用原文。`_rg_split_args` 加一個選填參數 `stripped`(剝過字串的同段文字,長度同原文):給了就不自己數深度,改照 `_rg_bracket_map(stripped)` 配好的括號對跳過括號內部,頂層的逗號(剝過的文字那一格是逗號)才切,再回原文取字。配括號只有 `_rg_bracket_map` 一套,不另寫深度規則(它跟 `_rg_balanced` 的等價已由 t_rg_methods_expression_body_and_backtick 綁住)。`_tg_call_parts` 的兩處切參數(呼叫本身與串接的 `.isEqualTo(…)` 這類)都帶它;Room 守衛的呼叫不帶(它拿到的本來就是剝過字串的原始碼),行為不變。
+    **剝字串掃描會讀錯的兩種情形退回現況**:一段斷言裡有字串沒收尾(例 Kotlin 原始字串 `"""a""""`,掃描把最後一個引號當成新字串的開頭、吃到行尾),或字串裡有 `${` 卻在同一段字串裡沒有對應的 `}`(模板裡有巢狀引號,例 `"${foo("a,b")}"`,掃描把它切成兩段字串、`a,b` 露在外面)時,這一段斷言照現況用原文切。判法用同一支掃描(`_C_STRIP_PAT`)逐個字串看有沒有收尾、`${…}` 有沒有在段內配平。這樣字串裡的不成對括號(`")"`、`'('`、`"1) 項目"`)、逗號(`"$1,235"`)都修到;退回的兩種寫法跟現況切法相同:現況列得出的照樣列(例 `"${foo("a,b")}"`,逗號在括號裡),現況本來就漏的照樣漏(例 `"${a}, ${f("x")}"`,模板裡同時有頂層逗號與巢狀引號,代碼審 r1 單審席 F4 實測),由下面的 REVISIT 回頭處理。只給 `angle=False`(不把 `< >` 當括號)的呼叫走剝過文字那條路——配括號表本來就沒有 `< >`。
+    **本體簽名同族修**(實作時發現):比對先看一支測試的本體有沒有變,本體簽名原本把整段的空白全拿掉,字串裡的空白也一起拿掉,`"a, b"` 改 `"a,b"` 被當成沒改、整支略過。改成兩份簽名:判本體有沒有變用 `_tg_ident`(字串原樣保留、字串外空白整理成一格),只差空白版面(拿掉全部空白後相同)的只比預期值、其他規則不重判(整檔重新縮排時多行字串跟著變,不讓沒斷言的既有測試被列,代碼審 r2);找搬家與改名照舊用拿掉全部空白的那份(搬進巢狀類別時,多行字串跟著多縮排一層,用保留字串的那份會配不起來、誤列刪測試,代碼審 r1 單審席 F1)。同 clone 偵測的分法:只差空白版面的算同一支(Type-1),內容改了另判。
+    **斷言文字只壓字串外的空白**(代碼審 r3):抽出來的斷言原本整段壓空白,字串裡的空白也被壓掉,`"a b"` 改 `"a  b"` 漏報;改成字串外的連續空白壓成一格、字串原樣保留(語言的詞法本來就這樣分,`git diff -w` 正因為不分而會藏住字串裡的改動)。
+    **字串樣式認得三引號**(代碼審 r4):斷言文字保留字串原樣後會帶換行,比對工具判字串常值的樣式(數強斷言、判訊息參數、判容差、判恆真條件共 5 處)原本只認單行字串,多行原始字串裡寫的 `assertEquals` 字樣會被算成強斷言、蓋掉斷言變弱;樣式補上三引號那段(同剝字串掃描的寫法),5 處一起生效。
+    **已知多報**:帶 `.trimIndent()` 的多行原始字串整段重新縮排時,執行時的值不變(Kotlin 官方:trimIndent 去掉共同最小縮排,https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.text/trim-indent.html),但比對把字串原樣保留,會多列一條可放行的 tq/expected-changed;不模擬 trimIndent(要精確還得處理模板值帶縮排),只多報、不漏擋。
+    REVISIT:2027-05-03 看 test-guard 放行紀錄裡有沒有「trimIndent 字串重新縮排」被放行的 tq/expected-changed;一季超過三筆就照官方語意對「三引號緊接 .trimIndent()」的字串先去掉共同縮排再比
+-   **已知漏判**(代碼審 r5 放行):判常值斷言的 `_TG_CONST_PAT` 也只認單行字串,`assertEquals("""a""", """a""")` 不會被當成常值斷言(修補前就這樣;常值斷言判定本來就是近似判讀,三引號常值斷言少見)。
+-   REVISIT:2027-05-03 改到 `_tg_ident` 或 `_TG_LIT_PAT` 時一併做:`_TG_CONST_PAT` 補三引號、`_tg_ident` docstring 改成傳 `_tg_ws_collapse`、`_TG_LIT_PAT` 註解寫明跟 `_C_STRIP_PAT` 的差別(不收沒收尾的三引號與三個單引號);沒改到就在這天看一次要不要單獨開一批
++   **當時的已知漏判**(代碼審 r5 放行):那時判常值斷言的 `_TG_CONST_PAT` 只認單行字串,兩邊都是三引號常值的斷言不算常值斷言;2026-11-03 由 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]] 做法 3 補上。
++   REVISIT:2027-05-03 改到 `_tg_ident` 或 `_TG_LIT_PAT` 時一併做:`_TG_CONST_PAT` 補三引號、`_tg_ident` docstring 改成傳 `_tg_ws_collapse`、`_TG_LIT_PAT` 註解寫明跟 `_C_STRIP_PAT` 的差別(不收沒收尾的三引號與三個單引號);沒改到就在這天看一次要不要單獨開一批 [closed:2026-11-03 判綠紀錄限本分支與撞名測試改計數_計劃 做法 3 已補]
+    **相容**:原本切錯的斷言改切對以後,改到這類斷言的測試可能多列出原本漏掉的候選(改預期值、改成常值斷言),這正是要抓的。
+    REVISIT:2027-05-03 看 test-guard 的放行紀錄與漏報回報裡有沒有「字串模板裡有巢狀引號」或原始字串結尾連續引號的案例;有就把剝字串掃描換成認得 `${}` 的寫法,不再退回原文切法
+ 2. **留痕記平台**:現行 `_spec_gate_record` 的 tests 來自 `_spec_gate_prepare` 算的 `names`(每條條款引用的方法名,含懸空的;平台在那一行就丟了;同一份 `names` 也餵雙向判定,不改它的形狀)。改成 `_spec_gate_prepare` 另外產一份同樣集合、帶平台的清單(同一個 `resolve_test_refs` 結果,不只取方法名;懸空的引用照樣在,`manual_only` 判法不變),由呼叫端傳給 `_spec_gate_record`。**多平台專案(設定有 platforms)一律寫成 `平台:名字`,含預設平台**;單平台專案照舊寫名字。理由:推送前讀這欄是把每一項包成 `[test:…]` 交給全庫唯一的切法 `_split_test_ref`,跟計劃條款同一種寫法;預設平台也寫裸名的話,名字本身含冒號(Kotlin 反引號名字 `` `fee: rounds up` ``)會被當成平台前綴而崩潰或跑錯平台,`default_platform` 改了也會被重新解到別的平台。判綠事件用成對的 items 記,那是內部的集合;留痕的 tests 欄是給推送前照條款寫法重新解析的,兩種形狀用途不同,不合併。
+    **推送前讀舊留痕**:多平台專案的留痕裡出現沒有前綴的名字,一定是這次之前寫的舊留痕。`_spec_gate_push_stale` 本來就讀了計劃文字、算了條款綁定(`_clause_bindings_for`);改成把計劃文字與綁定列一起回傳,`_spec_gate_push_one` 用手上的 split 與 default 呼叫既有的 `_spec_gate_items` 得到現在條款的 (平台, 名字),不另掃正文、不重算綁定。留痕沒過期(條款指紋相符)時,舊名字整串先跟現在條款的名字逐字比:比到了、而且只綁在一個平台,就用那個平台;同名綁在兩個以上平台、或比不到,照舊包成 `[test:…]` 解析(沒前綴就是預設平台)。條款指紋不符而計劃已完成的那條路不補(條款可能改綁到別的平台),照舊解析,找不到就走既有的「留痕裡的測試找不到」提醒。整串先逐字比,是為了讓舊留痕裡本身含冒號的名字(`fee: rounds up`)不被當成前綴:那種留痕在實作完成後重跑規格閘也不會被重寫,只能在讀的時候認出來。
+    **平台不在設定裡**:解析留痕名字遇到沒定義的平台前綴(平台改名或刪掉)時,不丟例外:計劃還在做的照擋,訊息講「留痕記的平台 X 不在 .lumos/config.json 裡(改名或刪了?);照現在的設定改條款的平台前綴後重跑規格閘」(改了條款,指紋變了,重跑才會寫新留痕);已完成的計劃降成提醒,跟找不到測試同一條路。
+    **改回單平台**(代碼審 r3 人裁換形狀):多平台時寫的 `平台:名字`,設定之後拿掉 platforms 改回單平台時,身分格式換了,不猜是哪一支——留痕名字帶冒號、在測試索引找不到就照擋,講明多半是設定從多平台改回單平台之前寫的,並講兩條實際可行的路:實作還沒綠就照現在的設定重跑規格閘;實作已經綠時重跑不會寫新留痕(條款沒變、測試綠就不寫),要照規格閘「實作後才跑」的補法(換回空殼讓測試紅再跑)或改走設計審(代碼審 r4 單審席:原本只叫人重跑,實作已綠時走不通);不跑測試、不記逃逸;已完成的計劃降成提醒。r1、r2 試過「去掉前綴」「比條款名字後綴」兩種猜法,連兩輪被打穿(被刪的含冒號測試被同名後綴的另一支頂替);測試報告工具遇到識別碼換算法也是讓歷史從頭開始、要接續就靠明確對照表(Allure、Orangebeard),不靠猜。
+    REVISIT:2027-05-03 看消費專案有沒有把多平台設定改回單平台、因此被這條擋下的推送;有的話考慮在留痕記寫入時的平台清單,讓推送前照當時的清單解析,不再要人重跑
+    條款指紋不含平台設定本身(`.lumos/config.json` 改了平台指令不算過期),這是既有行為。
+ 3. **沒接裝置判成環境沒跑起來、不記逃逸**:推送前驗收對任何非綠都擋並自動記逃逸(風險低計劃在推送閘被擋 = 沒人審的計劃在下游抓到洞)。修好第 2 項之後,綁裝置平台測試的計劃每次推送前都要在裝置上跑,沒接裝置時 Gradle 失敗;Kotlin/Java 這兩棧讀不出跑了幾支,只看退出碼就判紅、記一筆假逃逸,跟缺口 2 同一個症狀。在 `_RAN_EVIDENCE` 旁邊另一張同樣以測試格式為鍵的表 `_ENV_MISSING_EVIDENCE`,kotlin-junit 與 java-junit 各一條樣式(AGP 的 `com.android.builder.testing.api.DeviceException`;2026-11-03 考場實測,沒接到指定序號的裝置時 Gradle 印 `DeviceException: Connected device with serial '…' not found!`、退出碼 1)。照輸出判狀態的樣式放同一區(代碼審 r1 架構對齊席:原本放進 `TEST_PROFILES`,那張表的欄位都是目錄、副檔名、切法,同類東西散兩處);不塞進 `_RAN_EVIDENCE` 本身,那張表的讀者都取 `re`(證明跑過),塞一個沒有 `re` 的格式會讓它們崩。`_spec_gate_judge_items` 判紅時,用 `per_prof(平台)` 取得那個格式的樣式,比對它手上的測試輸出尾段(`_run_bound_tests` 填的 tails),命中就改判弱證據、原因寫「環境沒跑起來(沒接裝置?)」。
+    這支判法有四個呼叫端:規格閘條款、相依回歸、推送前驗收、代碼審修正關卡第 4 項。相依回歸與修正關卡對紅與弱證據本來都擋,只是訊息字面變成「環境沒跑起來」,照擋;規格閘實作前跑時,沒接裝置不再被當成「新行為的紅」、也不存紅燈版(弱證據不算紅,照既有規則擋下要人重跑);推送前驗收照擋(驗不了不等於過),但自動記逃逸只在沒過的那幾支裡至少有一支不是「環境沒跑起來」時才記。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md b/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
+index cefdc8b2b..84eec865b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
+@@ -47,26 +47,26 @@ RETIRE-IF: 各專案人工抽查自己的放行檔(`lumos lint-waive --list`,規
+ 
+ ### 一、規格閘寫紅燈版
+ 
+ - 逐支結果:`_spec_gate_judge_items` 的回傳本來就逐支(條款、平台、方法、判定、原因、細節),它另有三個呼叫端(相依回歸、推送前重跑、修正關卡),不改它;只改 `_spec_gate_run_clauses`,在原本的回傳之外多回一份逐支結果(條款、平台、方法、判定、原因都已在 `_spec_gate_judge_items` 的列裡)。`_spec_gate_prepare` 不改(`cmd_spec_gate` 對它的回傳做 6 元解構,加欄會壞)。
+ - 判完紅當下就取內容:每支判成紅的 Kotlin/Java 綁定測試,測試跑完立刻用 `_platform_name_files`(整個規格閘只建一次索引)找它所在的檔,以位元組讀檔、記 sha256;寫紅燈版時再讀一次,sha256 不同就不存(原因「判紅後檔案又被改」)。
+ - 不存的情況(每一種都在規格閘輸出印一句,並記進留痕的 `redbase_skipped`,見下):
+   - 不是 `.kt`、`.java`;紅的原因是逾時(`_run_bound_tests` 的原因文字以「超時」開頭;規格閘這條路的測試項一律是找得到的,不會出現懸空);
+   - 測試所在檔不在 repo 根底下、或被 git 忽略(紅燈版只存會進版本紀錄的檔);
+   - 檔裡有超過 2 萬字的行、或剝完字串與註解後括號配不平(跟比對工具 `_tg_test_file` 的病態輸入處理同一套判法);
+   - 檔案不是合法 UTF-8;找到的檔不只一支;同一支檔裡同名函式不只一個;用 `_tg_functions` 找不到那支函式;
+-  - 這支測試在這條分支上曾被規格閘判綠過(見「判綠觀測」);
++  - 這支測試在這條分支上曾被規格閘判綠過(見「判綠觀測」;治理帳被 git 忽略時「這條分支」改認分支名與祖先,見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]]);
+   - 函式本體跟這條分支上一份紅燈版完全相同(不重複存);
+   - 加進去會讓這份紅燈版 JSON 超過 5 MB(跟 `lumos test-guard` 的單檔上限同一個數)。
+ - 規格閘找得到的測試只認 `@Test`、`@ParameterizedTest`、`@RepeatedTest`(Kotlin 的 `KOTLIN_TEST_RE`、Java 的 `JAVA_TEST_RE`);`@TestFactory`、`@TestTemplate`、`@Theory` 的測試規格閘本來就綁不到,也就沒有紅燈版。
+-- 分岔點:寫入端要跟分岔點比的兩處(判綠觀測、不重複存),用 `_lens_fork_point`(遠端主線優先,跟比對工具的 `_tg_start` 共用)算分岔點,工作目錄的治理帳減掉分岔點那一版;分岔點等於頂端(分支剛開、還沒有自己的提交)照樣減,只有直接在 main/master 或分離頂端上工作、或算不出分岔點時才看整本工作目錄治理帳(代碼審 r1、r2 改定)。
+-- 判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的時候(含風險低「新行為沒紅」擋下那條路,`_spec_gate_low_not_red`),寫一筆治理帳事件 `spec-gate-green`(走 `_gate_event`,帶迴圈編號與那幾支測試名)。之後同一條分支再跑出紅,那支測試不存紅燈版,原因「曾判綠(實作後補跑)」。`_spec_gate_low_not_red` 印的補跑步驟加一句「這樣補跑的測試不會有紅燈版」。判綠觀測只讀工作目錄的治理帳、只看這條分支自己寫的那幾筆(跟分岔點那一版做行差)。
++- 分岔點:寫入端要跟分岔點比的兩處(判綠觀測、不重複存),用 `_lens_fork_point`(遠端主線優先,跟比對工具的 `_tg_start` 共用)算分岔點,工作目錄的治理帳減掉分岔點那一版;分岔點等於頂端(分支剛開、還沒有自己的提交)照樣減,只有直接在 main/master 或分離頂端上工作、或算不出分岔點時才看整本工作目錄治理帳(代碼審 r1、r2 改定)。治理帳被 git 忽略時分岔點那一版沒有帳,另照分支名與祖先過濾,見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]]。
++- 判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的時候(含風險低「新行為沒紅」擋下那條路,`_spec_gate_low_not_red`),寫一筆治理帳事件 `spec-gate-green`(走 `_gate_event`,帶迴圈編號與那幾支測試名)。之後同一條分支再跑出紅,那支測試不存紅燈版,原因「曾判綠(實作後補跑)」。`_spec_gate_low_not_red` 印的補跑步驟加一句「這樣補跑的測試不會有紅燈版」。判綠觀測只讀工作目錄的治理帳、只看這條分支自己寫的那幾筆(跟分岔點那一版做行差);治理帳被 git 忽略時分岔點那一版沒有帳,改成同一份計劃、分支名相同、head_sha 是祖先才算;部分複製的專案不讀分岔點那一版(帳進版控時這次不做判綠觀測)(見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]])。
+ - 寫檔:時機跟留痕相同(風險低在 PASS 時、風險高在相依回歸全綠時;其餘出口本來就不寫留痕)。寫成 `governance/redbase/<迴圈編號>/<留痕 token>.json`(新增),內容 `{"version": 1, "tests": [...], "files": {...}}`:`tests` 每支測試一列(測試名、它綁的條款編號清單、檔案相對路徑、函式鍵),同一支測試被好幾條條款綁只算一列;`files` 每支檔一份文字內容。以 LF、UTF-8 位元組用既有原子寫入(暫存檔、自驗、換名)寫出,寫完讀回核對 sha256。寫檔失敗時照舊寫留痕、不帶 `redbase` 欄位並印一句,規格閘本身不因此擋。
+ - 留痕(審查帳與治理帳兩筆)多三個欄位:`redbase: {"path": <相對路徑>, "sha256": <整份 JSON 檔位元組的 sha256>}`(有寫檔才帶);`redbase_skipped`:沒存的綁定測試名與原因,最多 20 筆(「判綠」排最後,不擠掉其他原因);`redbase_skipped_n`:沒存的總數。測試的身分是(平台、測試名):兩個平台各有一支同名測試時各存各的,判綠事件 `spec-gate-green` 的 `items` 也帶平台。
+ - `governance/redbase/`(新增)加進簿記資料夾清單(`_BOOKKEEPING_DIRS`):它是紀錄不是碼,代碼審通過後補跑規格閘不該讓代碼審留痕失效。只有代碼審留痕失效的判斷會另外看資料夾裡有沒有程式檔;小改動閘、風險掃描、推送前測試範圍、回頭重讀這些消費者只看前綴,放進這個資料夾的檔對它們一律是簿記。紅燈版的格式以 [[Systems/規格閘]] 為單一來源,[[Systems/test-guard]] 用 `SEE:` 指過去。
+ 
+ ### 二、比對工具讀紅燈版
+ 
+ - 什麼時候讀:`<起點>..<終點>` 的改動清單裡有 `docs/.governance-log.jsonl` 或 `governance/redbase/`(新增)底下的檔才讀治理帳;另外兩種情況不讀治理帳也要看:推的就是工作目錄的頂端時,紅燈版資料夾裡還沒提交的檔(沒追蹤、加進暫存區,或用 `git add -N` 只登記要加的;治理帳與紅燈版都忘了提交);這條分支的提交刪過、起點那一版沒有的紅燈版檔(`git log --no-renames --diff-filter=D`;不帶 `--no-renames` 時,同一個提交刪舊的、加內容相近的新的會被配成改名而看不到那次刪除;起點就有的是主線上的舊紅燈版,回退節建議整個資料夾刪掉,不算);git 讀不出這段歷史時整段記成比對沒跑完,不當成沒刪過。三樣都沒有就什麼都不讀,行為跟現在逐字相同。起點是空樹(找不到主線)時不用紅燈版(新增告警閘本來就對空樹起點印一句、只印不擋)。
+ - 讀哪些紀錄:用 `_residual_blob_at` 讀起點與終點兩版的 `docs/.governance-log.jsonl`,照 `_residual_ask_rows_delta` 的多重集合行差取終點多出來的行(把閘名與種類篩選參數化,不另寫第三份讀法);起點那一版沒有帳檔當成空。只取 `spec-gate-record` 裡的 `redbase` 欄位,也就是這條分支自己寫的紅燈版;已經合進主線的舊計劃不會被誤套。紅燈版 JSON 檔用 `_nodehome_cat_blobs_capped` 從終點那一版批次讀(有單檔上限,`_residual_blob_at` 沒有),不讀工作目錄;治理帳本身大於 5 MB,照舊用 `_residual_blob_at`。紅燈版內嵌的檔文字餵 `_tg_functions` 之前,先過 `_tg_test_file` 對終點檔用的同一套病態輸入處理(超長行抹掉、括號配不平),不過的列 `tq/redbase-unreadable`。
+ - 驗,任一不過就列 `tq/redbase-unreadable`(擋下、可放行,原因分開寫):欄位形狀不對(`path` 不是字串、`sha256` 不是 64 位十六進位)、路徑不在 `governance/redbase/` 底下、終點那一版沒有這支檔(工作目錄有它時原因寫「還沒提交,請 git add 那支檔」,沒有時寫「被刪了,請從版本紀錄還原」)、讀不出、超過 5 MB、不是合法 JSON、`version` 不認得、位元組的 sha256 對不上欄位、加進去會讓這次推送超過比對工具 200 MB 的總量。另外,改動清單裡新增(含被配成改名的新路徑)的紅燈版檔沒有任何一筆留痕指到它(孤兒檔,多半是合併主線時解治理帳衝突弄丟了那一行),列這條、講用 `git log -p` 找回那一行、不要刪檔,而且照它的內容比;這條分支刪過的紅燈版檔也列、講從刪掉前那一版還原,同樣照它刪掉前的內容比(代碼審 r2 資安席);留痕還在、檔被刪的只列這一條,照留痕的 sha256 核對刪掉前那一版再比;這條的放行指紋不帶刪掉它的提交編號,rebase 或 amend 之後沿用(代碼審 r3)。不當成「沒有紅燈版」放過去。
+ - 串起來比:同一個「檔案路徑+函式鍵」的歷次紅燈版,照它們在終點那一版治理帳的行序排(不比 `ts`),依序兩兩比,最後一份再跟終點比。沒有留痕的那幾份(孤兒檔、沒留痕又被刪的)排不出先後,不接進這條鏈,各自直接跟終點比一次:接在鏈尾會倒著比,骨架孤兒接在 900 後面時 900→骨架列成斷言變少、真正的 900→800 消失;token 是亂數,照字典序排一樣會反(代碼審 r3 單審席)。每一步以前一份當前一版跑 `_tg_fn_cands` 的函式級判斷(放寬斷言、改 expected、新加 `expected =`、調大逾時),丟掉它裡面的 `tq/no-assertion` 與 `tq/catch-no-fail`(那兩條由分岔點比對列,不重複);終點那支測試完全沒有斷言時不做紅燈版比對(`tq/no-assertion` 已經列了,再比只會多一條 `assert-weakened` 說同一件事);命中一律列成 `tq/redbase-weakened`,原因寫出是哪一步、哪一種(例「相對規格閘紅燈版 <token>:expected 被改」)。跳過與 assume 的次數差不在這裡算(紅燈版的測試跑出紅就不是被跳過的,次數一定是 0,跟分岔點比對重複)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 55ebda6d4..5dd574697 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -33,21 +33,21 @@ summary: |-
+   WHY:catch 吞斷言照 Error Prone 的 AssertionFailureIgnored 只看結構(try 有斷言或 fail、catch 接得住 AssertionError、catch 不重丟就列),不看 catch 裡寫了什麼檢查;try 沒 fail 而 catch 有斷言那半,should 開頭的字寬判成斷言 [出處:代碼審 r5 正確性、邊界、資安三席;r6 正確性、邊界兩席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列;r5 改成只認中綴形狀,又把點號呼叫的真檢查排除,該列的漏列、正常的被誤列] [不選:繼續補名字字表(r5 寬、r6 窄、r7 前綴白名單,三輪各被一步改名打穿或誤列)] [代價:catch 裡真的檢查例外型別的寫法也列,要附理由放行或改用 assertThrows/shouldThrow] [test:t_tq_guard_catch_no_fail]
+   REVISIT:2026-12-15 一次推送的測試檔總量接近 200 MB 時峰值記憶體約為內容的 16 到 23 倍(代碼審 r5 資源席量測,原有設計);第二批評估逐檔放掉原文與切段
+   WHY:catch 接不接得住斷言失敗照型別名字的字尾認(…Error、…Failure、Throwable),不逐一列各框架的子類別 [出處:代碼審 r8 資安、正確性兩席] [因:四個字的字表漏掉 JUnit 4 字串比對失敗丟的 ComparisonFailure、opentest4j 的 MultipleFailuresError 這類 AssertionError 子類別,AI 照失敗訊息抄型別名寫 catch 就躲過;各框架的子類別都以 Error 或 Failure 結尾] [不選:把子類別逐一列進字表(照樣會漏新框架)] [代價:自訂的 Result.Error 這類型別也會列,多一條可放行的候選] [test:t_tq_guard_catch_no_fail]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]新測試在分岔點不存在而有紅燈版時,同一支測試的歷次紅燈版照終點那一版治理帳的行序依序兩兩比、最後一份跟推送版比,命中列 tq/redbase-weakened(no-assertion、catch-no-fail 兩條由分岔點比對列,不重複);治理帳與紅燈版資料夾都沒動就不讀治理帳(工作目錄沒提交的紅燈版、這條分支刪過的紅燈版照樣查) [出處:本計劃設計審 r1 正確性席實測] [因:TDD 先骨架紅、再補斷言重跑是常態,只取最早一份時後補的斷言被改成實作輸出零候選] [不選:只取最早一份;照 ts 排(帶時區、同秒無決勝)] [test:t_tq_guard_redbase_chain]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版讀不到、沒提交、被改過、孤兒檔都列 tq/redbase-unreadable(擋下、可放行),不記成比對沒跑完、也不當成沒有紅燈版 [出處:本計劃設計審 r1 邊界、整合、架構對齊三席] [因:最常見的原因是漏 git add,記成比對沒跑完只能整道閘關掉;既有慣例是單一怪檔變可放行候選] [不選:記成比對沒跑完] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版記的測試在推送版找不到、不只一處或有同名多載,一律列 tq/redbase-unmatched,不讀計劃判條款換綁 [出處:本計劃設計審 r1 架構對齊席] [因:比對工具只吃 git,讀計劃與條款綁定是跨層] [不選:另設條款換綁規則] [test:t_tq_guard_redbase_moved_or_missing]
+   SEE:[[Systems/規格閘]] [[Projects/規格閘紅燈測試快照_計劃]]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]_tg_functions、_tg_rb_entry、_tg_rb_doc、_tg_rb_path_ok 也給規格閘寫紅燈版那一端用(同一套函式鍵與格式驗證),不另開一支對外入口包一層 [出處:代碼審 code-規格閘紅燈測試快照 r1 架構對齊席] [因:寫入端另寫一套切函式或格式驗證,函式鍵與驗法會跟讀取端分岔] [不選:比對工具另開對外入口] [test:t_spec_gate_redbase_written_on_red]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版檔沒有留痕指到(孤兒檔)或在這條分支被刪,照它的內容(刪掉前那一版)比,另列 tq/redbase-unreadable 要人找回留痕或還原檔,訊息不叫人刪檔 [出處:代碼審 code-規格閘紅燈測試快照 r2 資安席] [因:合併主線時治理帳必衝突,照取主線那邊解掉會弄丟分支的留痕,照訊息刪檔後改弱零候選] [不選:帳本改 merge=union(全 repo 的決定,託管平台的網頁合併不認);孤兒檔當沒有紅燈版] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]沒有留痕的紅燈版(孤兒檔、沒留痕又被刪的)不接進依序比的鏈,各自直接跟推送版比一次 [出處:代碼審 code-規格閘紅燈測試快照 r3 單審席] [因:接在鏈尾會倒著比,骨架孤兒排在 900 後面時列成斷言變少、真正的 900 改 800 消失;token 是亂數,照字典序排一樣會反] [不選:紅燈版檔加建立時間欄位照它排(多一個欄位與新的審查面,而沒留痕的檔本來就該找回留痕);照加進版本紀錄的提交時間排(壓提交後不準)] [代價:沒留痕的那份跟其他份之間的中間步驟看不到] [test:t_tq_guard_redbase_loose]
+-  WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]切斷言參數照剝過字串的文字找頂層逗號、照 _rg_bracket_map 跳過括號內部,字串裡的逗號與不成對括號不當結構;剝字串掃描讀錯的兩種情形(字串沒收尾、模板 ${ 段內不配平)退回原文切法;斷言文字只壓字串外的空白(字串原樣保留,判字串常值的樣式認得三引號跨行字串);本體簽名拆兩份:判本體有沒有變用 _tg_ident(字串裡的空白算內容;只差空白版面的只比預期值、其他規則不重判),找搬家與改名照舊拿掉全部空白(搬進巢狀類別時多行字串跟著縮排也認得出) [出處:mOrangePos 考場實跑,"服務費 $1,235" 改 "$1,234" 漏報] [因:原本只數原文括號,金額、清單、JSON 這類字串預期值被切開後新舊配不起來;Kotlin 文法認模板靠模式堆疊,單層掃描認不得] [不選:另寫有堆疊的掃描(第二套詞法);只看剝過的文字(模板巢狀引號比現況差)] [test:t_tq_guard_string_comma_args] [test:t_tq_guard_string_split_fallback]
++  WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]切斷言參數照剝過字串的文字找頂層逗號、照 _rg_bracket_map 跳過括號內部,字串裡的逗號與不成對括號不當結構;剝字串掃描讀錯的兩種情形(字串沒收尾、模板 ${ 段內不配平)退回原文切法;斷言文字只壓字串外的空白(字串原樣保留,判字串常值的樣式認得三引號跨行字串;判常值斷言的樣式也認,見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]] 做法 3);本體簽名拆兩份:判本體有沒有變用 _tg_ident(字串裡的空白算內容;只差空白版面的只比預期值、其他規則不重判),找搬家與改名照舊拿掉全部空白(搬進巢狀類別時多行字串跟著縮排也認得出) [出處:mOrangePos 考場實跑,"服務費 $1,235" 改 "$1,234" 漏報] [因:原本只數原文括號,金額、清單、JSON 這類字串預期值被切開後新舊配不起來;Kotlin 文法認模板靠模式堆疊,單層掃描認不得] [不選:另寫有堆疊的掃描(第二套詞法);只看剝過的文字(模板巢狀引號比現況差)] [test:t_tq_guard_string_comma_args] [test:t_tq_guard_string_split_fallback]
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]治理帳被 git 忽略時,孤兒紅燈版的提醒以「不要刪這支紅燈版檔」開頭、講明是忽略設定蓋到並附規則與自查指令(check-ignore -q 退出碼 1),還沒提交那句以 git add 開頭、自帶改法;身分字固定為 orphan、pending,措辭換了放行指紋不變;忽略判法 _gov_ledger_ignored 三態(放在帳檔區,比對工具、規格閘、doctor 共用;check-ignore -q 判、-v 取規則)、比對工具這側帶截止時間、一次推送最多問一次 [出處:mOrangePos 的 .gitignore 從 2026-06 起忽略治理帳,實跑時提醒說「合併時弄丟」] [因:規則以較深層的設定檔優先,一律叫人在根目錄加否定行無效;候選訊息 300 字截斷先掉後面的字] [不選:不問忽略照舊措辭(指錯方向);只看 -v(否定規則照印、回 0)] [test:t_tq_guard_redbase_ledger_ignored] [test:t_tq_guard_ledger_ignored_fix_resolves]
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md b/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md
+index 1b74b1ac2..a1f8568a4 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-profile-multiplatform.md
+@@ -75,13 +75,13 @@ about_code:
+ - 字串標題型 profile(node-jest/node-vitest、playwright、dart;`name_filter` 是 regex、regex_tail 或 plain)收第一個引數的完整字面:後面要接逗號或右括號、前面不能是點號或識別字、只認 \' \" \\ \` \$ 跳脫、Dart 的 $ 插值不收、字面限 200 字;過不了名稱規則的(含逗號、方括號)不收進集合。Kotlin 反引號名照舊。 [test:t_js_free_string_test_names_discovered] [test:t_js_title_partial_or_member_not_collected] [test:t_kotlin_backtick_comma_name_still_collected]
+ - 剝註解的 `c-style`(所有用它的語言,不只這幾家;代碼審 code-測試名收自由字串 r1 編排者裁)改成一趟認字串(原樣留)與註解(刪掉),展開式正規式、沒結尾的 `/*` 刪到檔尾,時間與記憶體都線性;java 的 `c-style+strings` 走同一趟、另把字串內容清空(見上〈剝註解改成認字串〉)。已知限制:JS 的正規表示式字面(`/'/`)會被當成字串開頭。 [test:t_js_comment_strip_keeps_strings] [test:t_js_comment_strip_linear]
+ - playwright 補檔名錨 `*.spec.*`/`*.test.*`;自訂測試檔名的專案在設定寫 `file_name_match`(單平台 `test` 裡,多平台寫在那個平台),舊綁定在不合錨的檔裡時 doctor 會講。Playwright 的宣告字面後面要接逗號(測試本體裡的 `test.skip('原因')` 不算宣告)。 [test:t_playwright_file_anchor_hint] [test:t_playwright_free_string_names_discovered]
+ - 多平台每個平台設定(跟 run_cmd 同一層)也收 `exts`/`scaffold_ext`/`method_regex`/`file_name_match` 覆蓋(`_apply_test_overrides`)。 [test:t_multiplatform_method_regex_override]
+ - `guard bind` 收句子名,多平台名稱有冒號時必帶 `--platform`;`guard scaffold` 拿名字產程式碼,維持識別字,擋下時指去 guard bind;`guard trace` 找驗證紀錄改用 `_test_name_boundary_re`(英數頭尾才加邊界)。 [test:t_guard_bind_free_string_name] [test:t_guard_scaffold_rejects_free_string_name] [test:t_archive_and_trace_free_string_names]
+ - 撞名(`_name_collision_reason`,推送前閘、規格閘、guard kill 共用)數的是「篩選選得到的全部標題」(`_raw_test_titles`,含掃描不收的 skip、樣板、逗號名),不只可綁定的。Playwright 的 `-g` 比「專案名 檔名 describe 標題」整串,所以 name_filter 是 regex_tail:名字錨在結尾 `\s<名字>(?:\s@\S+)*$`(容許 Playwright 接在標題後面的 tag;不用 `|`、`^`,Windows cmd.exe 會當管線),撞名只數結尾是這個名字的測試標題(比法見下面代碼審 r3 那條(用實際篩選式比、不先剝 tag);describe 同名不搶自己那支;describe 加測試拼起來等於這個名字也算);綁 describe 標題在 Playwright 上會選到零支,印 No tests found 並回 1,判紅。標題頭尾有空白的不收。剝註解另認多行字串(三個雙引號、三個單引號、C# 的 @ 加雙引號)。 [test:t_playwright_tail_tags_and_own] [test:t_comment_strip_multiline_strings] [test:t_name_collision_sees_skipped_titles]
+ - 撞名的已知天花板:跨標題的比對(Jest 拿「describe 標題 + 空白 + 測試標題」整串比、Vitest 用「 > 」連,綁的名稱剛好橫跨兩段)數不到。
+ - FACT:名稱篩選都是拿正規式比對完整名稱的子字串;Jest 30.5.2 的 -t 不分大小寫、describe 與測試標題用空白連;Vitest 5.0.4 的 -t 分大小寫、用「 > 」連,對不到也回 0;Playwright 1.64.1 的 -g 不分大小寫、標題路徑用空白連,頭尾都是斜線的字串當正規式字面,對不到印 No tests found 並回 1;-g 比的字串含專案名、檔名、describe 與標題(-g login 連 login.spec.ts 整檔都選中、-g chromium 選中整個專案),錨在結尾只選中標題結尾是它的;比的字串在標題後面接上 tag(含 describe 繼承的),標題頭尾的空白不修剪,describe 與測試同名時錨定只選中那支測試 [來源:外部] [confirmed:2026-10-15] [查:order-web 的副本實跑 -t/-g,Jest 用 npx 快取裡的 30.5.2]
+ - REVISIT:2026-12-15 查消費專案的測試檔有沒有「單引號的正規表示式字面(`/'/`)後面接著被註解掉的測試」讓假名字被收進測試集合的案例;有就給 c-style 剝法加正規表示式字面的辨認(代碼審 code-測試名收自由字串 r1 資安席)。
+ - REVISIT:2027-01-15 查消費專案有沒有單一測試檔裡幾十 MB、滿是跳脫字元的字串(c-style 剝註解的展開式正規式對跳脫字元每個仍佔一格狀態,45MB 全是跳脫要 2GB 以上;代碼審 code-測試名收自由字串 r2 資源席);有就把跳脫也併進同一段字元類或改手寫掃描。
+-- (代碼審 r3)撞名一律拿執行器實際會用的篩選式比每個標題(regex_tail 用錨定式對「空白 + 標題」search,不先剝 tag);describe 加測試的拼名只在同一支檔裡配對(`_raw_test_titles` 帶來源檔);標題索引 `_TitleIndex` 每個平台建一次,每個綁定名只比含這個名字的標題。 [test:t_name_collision_across_same_file_only] [test:t_name_collision_uses_real_filter] [test:t_name_collision_scales]
++- (代碼審 r3)撞名一律拿執行器實際會用的篩選式比每個標題(regex_tail 用錨定式對「空白 + 標題」search,不先剝 tag);describe 加測試的拼名只在同一支檔裡配對(`_raw_test_titles` 帶來源檔);標題索引 `_TitleIndex` 每個平台建一次,每個綁定名只比含這個名字的標題(測試數索引建了幾次、看串接有沒有重算,不量時間,見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]] 做法 2)。 [test:t_name_collision_across_same_file_only] [test:t_name_collision_uses_real_filter] [test:t_name_collision_scales]
+ - (代碼審 r3)頭尾有空白的標題不收只用在 Playwright(regex_tail);Jest、Vitest、Flutter 照收修剪後的名字。Windows 上 {method} 改用 list2cmdline。剝註解與撞名掃描的正規式量詞改佔有式,8MB 塞滿孤立引號的多行字串額外記憶體從 350MB 以上降到個位數 MB。 [test:t_titled_names_with_edge_spaces_not_collected] [test:t_run_cmd_windows_quoting] [test:t_comment_strip_multiline_memory]
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+index b508e5154..782592542 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-28
+-updated: 2026-10-09
++updated: 2026-11-04
+ responsibility: 負責 lumos drift 家族(check、scan、fix、ack、exam)、七種狀態一致檢查(含 c6 連到已收尾筆記還寫待定、c7 自己已收尾摘要還寫待定)、推送時的舊句檢查(m1)與它的定義快取、修復帳與表態檔(含回頭重讀第二層的 kind=reread 照留)、計劃收尾的連帶待辦、結案作廢與加決策翻決策之後列出連到那篇還寫待定的句子、drift fix --close 的兩道擋與 doctor Z 段,以及推送前掛鉤與 CI 裡呼叫 drift check 的那一段、緊接在後呼叫 note-audit reread-check(回頭重讀檢查;掛鉤帶 --gate、CI 不帶)的那一段;不負責新寫句子的形狀(筆記內容閘)、判定者怎麼判(筆記內容審)、reread-check 本身判什麼(筆記內容審)、guard settle 本身與改句、轉正日期推導(guard-kill)、掛鉤與 CI 其他閘的順序(bound-tests-gate)
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/hooks/pre-push
+   - .github/workflows/ci.yml
+   - governance/eval/drift-exam/old-sentence/old_sentence_exp.py
+   - governance/eval/stale-ref/banner.py
+   - governance/eval/stale-ref/breakdown.py
+   - governance/eval/stale-ref/dossier.py
+@@ -84,20 +84,21 @@ summary: |-
+   RULE:m1 的開關 drift_check.old_sentence 沒寫(含寫 null、值看不懂)時照總開關 drift_check.gate(gate 沒寫是 block;gate=off 時沒寫的 m1 也不跑,升級前 gate=off 又沒寫 old_sentence 的專案不再多跑 m1);設定檔讀不成 JSON、drift_check 或整份設定不是物件照預設 block 並各講一句;明寫 warn/block/off 照原義、不受 gate 影響(gate=off 加 old_sentence=block 照跑照擋) [依據:人] [since:2026-10-09] [retire:人裁] [until:2026-12-04] [confirmed:2026-10-09] [test:t_old_sentence_default_follows_gate]
+   WHY:[2026-09-30 舊句檢查設計審 r2、r3]範圍裡有改到程式檔的每次 m1 都印一行結論、記一筆帳(含零筆、時間到、沒有起點),兩週後才量得到準度與「判不了」比例;帳寫不進去另在 ~/.cache/lumos/drift-m1/ledger-miss.jsonl 留痕,REVISIT 有一行就算樣本不足
+   WHY:[2026-09-30 舊句檢查設計審 r1 併發席]定義快取放 ~/.cache/lumos/drift-defs/(一個 blob 一支檔,鍵含內容編號、抽法版本 _DRIFT_M1_DEFS_SCHEMA、Python 主次版本;14 天沒動的開跑前刪):推送前掛鉤每次是新行程,行程內快取沒用;不放 git 目錄是專案沒有寫進 git 目錄的快取先例。寫法跟派工鏡頭共用 _home_cache_write;抽法改了要把 schema 加一(t_drift_m1_defs_cache 釘了抽法輸出的雜湊)
+   PITFALL:[2026-09-30 舊句檢查代碼審 r1 資安席、邊界席]名稱比對原本把全部候選名稱編成一條正則對每一行跑、每 200 行才看一次時間:3 萬個名稱加一行 20 萬字實測 5 分鐘沒跑完、同一行幾千次命中是行長平方。改成逐行只拿可能命中的名稱編正則、句內字眼一行只預算一次、每一行看時間、超過 2 萬字的行不掃;兩處改法都跟原本逐字比過相同 [test:t_drift_m1_review_r1_scan_budget]
+   PITFALL:[2026-09-30 舊句檢查代碼審 r1 外家席、邊界席、資安席]候選名稱與 drift ack --name 原本各判各的(候選端只擋控制字元、表態端先去空白又擋 U+2028),頭尾帶空白或帶行分隔字元的名稱照貼提示表態會成功卻永遠對不上、或根本貼不進去;改成同一支 _drift_m1_name_canon,過不了的不列 [test:t_drift_m1_review_r1_name_canon]
+   PITFALL:[2026-09-30 舊句檢查代碼審 r2 架構對齊席、資安席]r1 為了 umask 002 給 m1 的快取目錄開了「group 可寫也信」的例外,結果同一台機器上家目錄私有目錄有兩套判準,group 可寫的快取目錄裡同群組的人還能用改名讓 m1 讀到別的 blob 的定義;撤回例外,改成新建的層一律明給 0700(全家),判準只有一套 [test:t_drift_m1_review_r2_strict_home_dirs]
+   PITFALL:[2026-09-30 舊句檢查代碼審 r2 正確性席]gate 預設改 block 之後,doctor 只在 gate 寫了 warn/off 或寫壞時唸,old_sentence 原本接在那行後面,只寫 old_sentence=off 或寫錯值的專案健檢完全不出聲;改成 old_sentence 自己一行 [test:t_drift_m1_review_r2_doctor_old_sentence]
+   PITFALL:[2026-09-30 舊句檢查代碼審 r3 外家否決席、外家 finder 席、邊界席、正確性席]照貼的表態指令原本只在路徑帶方向控制、零寬或不是 UTF-8時不印;tab、換行、ESC 這種控制字元印出前被換成空白,照貼會找不到那篇、甚至寫到同名的另一篇。改成路徑或名稱帶 Unicode 類別 Cc、Cf、Zl、Zp 或不是 UTF-8 就不印、請手動表態 [test:t_drift_m1_review_r3_paste_special_chars]
+   PITFALL:[2026-09-30 舊句檢查代碼審 r1 外家否決席、外家 finder 席]沒副檔名的 Python 腳本拿掉 #! 或改成 shell,原本只看終點首行、起點的定義整批漏掉;起點版與終點版各自分類,任一邊是 Python 就抽起點版 [test:t_drift_m1_review_r1_shebang_either_side]
+   PITFALL:[2026-09-29 存量漂移改法代碼審 r1 邊界席、併發席]帳檔讀取原本用 splitlines,U+2028、U+0085 這類字元會把工具自己寫進去的一筆劈成兩段壞行、讀不回來,同一篇一項一項修的流程就斷掉;表態檔與修復帳現在共用一支只在換行字元切的解析,寫進去的自由文字也擋這類字元 [test:t_drift_fix_review_r1_edges]
++  WHY:[2026-11-04 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]]]回頭條件寫下時就成立那段判 partial clone 改用共用的 _git_partial_clone(三個設定任一個成立就算、照 git 布林規則、判不了也標判不了,原因寫 git 跑不起來) [出處:判綠紀錄限本分支代碼審 r2 r3 實測 git 2.39 的 clone --filter 只寫 promisor 與 partialCloneFilter] [因:只看 extensions.partialClone 會把新式部分複製當完整 repo 去讀舊版本、觸發自動連遠端] [test:t_drift_born_unknown] [test:t_git_partial_clone_keys]
+ related:
+   - "[[Projects/存量漂移防線_計劃]]"
+   - "[[Issues/存量筆記漂移三種機制_rtb根因回饋]]"
+   - "[[Systems/guard-kill]]"
+   - "[[Systems/筆記內容審]]"
+ ---
+ # 存量漂移守衛
+ 
+ 白話:句子寫進圖譜那天是對的,後來別處的狀態變了(合約轉正、計劃收尾、提交了),句子就過期了。這篇管的機制在「狀態改了」那一刻把連著的舊句子指出來。設計與取捨全在 [[Projects/存量漂移防線_計劃]],這裡只記程式碼看不出來的部分。
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/規格閘.md b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+index 4e385af58..543997bc0 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/規格閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+@@ -41,21 +41,22 @@ summary: |-
+   DEP:[[Systems/design-loop]](處置閘第五步的家)、[[Systems/bound-tests-gate]](_run_bound_tests 與 _RAN_EVIDENCE 的家;pre-push 那段的家)、[[Systems/loop-convergence-recording]](審查帳的家)、[[Projects/規格落成可驗收條件_計劃]](半套單源)、[[Projects/雙向門放行_計劃]](風險低單源)、[[Projects/逃逸自動記_計劃]](逃逸帳)
+   TEST:t_spec_gate_*、t_prepush_spec_gate_*、t_door_rule_version_pin、t_door_rule_fingerprint_covers_nogo、t_nogo_skip_logic_version_pin、t_round_valid_ignores_spec_gate、t_doctor_escape_by_door、t_lint_door_field、t_disposal_step5_*、t_doctor_spec_gate_stats(scripts/test_lumos.py)
+   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]] d2]風險低沒過「新行為各自紅」而沒過的全是已綠:已有條款指紋與門規則版本都相同的風險低留痕就印不用重跑、rc0、不寫新留痕;沒有就照擋並印手動補跑步驟(先提交、既有檔 git restore 換回、新檔換空殼),不做工具內建的暫時工作樹 [出處:web 示範後端代理實作後才跑規格閘、把新檔搬走跑紅再搬回] [因:紅的證據是風險低唯一的審查,不能放寬;暫時工作樹是新的複雜度與出錯點,編排者裁走輕量版] [test:t_spec_gate_low_rerun_after_impl]
+   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]] d3]推送閘對這次推送改到計劃檔本身的 done 風險低計劃也跑留痕裡的測試,紅了擋;留痕過期或測試找不到只提醒;沒被改到的 done 計劃照舊不查 [出處:web 示範照做完再改狀態把 done 跟實作同一次推送,唯一的閘被跳過] [因:只看 doing 是怕沒人管的計劃變地雷,只放寬到被改到的那份就不會] [test:t_prepush_spec_gate_done_in_range]
+   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]規格閘留痕同時寫進版控治理帳(gate=spec-gate、kind=spec-gate-record,欄位同審查帳那筆),推送閘有候選時兩本帳都讀、同計劃取 ts 最晚那筆;doing 計劃門判低卻兩本都沒留痕時印一行不擋 [出處:2026-10-15 暫存 repo 實測:消費專案審查帳被 gitignore,乾淨 clone 推送紅測試 rc0 一個字都不印] [因:推送閘要讀的留痕跟代碼審留痕一樣得進 CI 讀得到的帳] [test:t_prepush_spec_gate_clean_clone_blocks]
+   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r1]done 計劃的寬待收窄:只給推送範圍起點就已經是 done 的(這次推送才改成 done 的照 doing 一樣嚴),而且只寬待留痕指紋對不上與某支留痕測試找不到兩種,不做清單那道照查、其餘找得到的測試照跑、紅了照擋 [出處:代碼審 r1 正確性、資安三條同報:留痕過期時跳過了輕量審檢查,一支測試找不到就整份不跑] [因:寬待的本意只是完成後改條款拿不到紅的證據,不是讓改狀態變成繞過] [test:t_prepush_spec_gate_done_stale_still_checks_nogo]
+   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r2]推送閘判「推送範圍起點就已完成」的起點改用既有 _range_base(三點範圍取 merge-base);兩本帳的規格閘留痕同一秒取本機審查帳那筆(r3 起改成比(時間、是否本機、帳內序號)取最大,沒有依 token 去重這一步) [出處:代碼審 r2 架構對齊席、正確性席] [因:自寫起點求法帶著 _range_base 已修過的三點範圍錯;同秒取後列會讓治理帳裡較舊的那筆贏] [test:t_prepush_spec_gate_done_three_dot_base]
+   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r3]已完成計劃的寬待只剩條款指紋對不上與某支留痕測試找不到:讀不成文字、測試索引建不起來、門現在判成風險高照 doing 擋;兩本帳留痕的比較鍵改成(時間、是不是本機、帳內序號);起點狀態只對改到的 done 候選算、merge-base 一次推送算一次 [出處:代碼審 r3 整合席重現:已完成計劃正文加金流詞、舊測試綠就推得上去] [因:決策 d3 只寬待兩種,程式把四種過期原因都放成提醒;同秒取先列靠參數順序約定,治理帳內同秒後寫的反而輸] [test:t_prepush_spec_gate_done_door_high_blocks]
+   WHY:PITFALL_CLASSES 另有 Android 端到端驗收的單向門判定當第三個消費者(只取金流、對外送出、不可逆三類,經 _door_keyword_hits),改表會同時改變 Android 新情境要不要人點頭 [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 決策 d2] [因:單向門沿用規格閘既有判準,不另立詞表] [test:t_android_e2e_gate_one_way_needs_human]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘寫留痕時把判紅的 Kotlin/Java 綁定測試所在檔存成紅燈版 governance/redbase/<迴圈>/<留痕 token>.json(version 1:tests 每支一列測試名、條款清單、路徑、函式鍵;files 每支檔一份內容),兩筆留痕帶 redbase(path、整份檔的 sha256)、redbase_skipped(沒存的測試與原因,判綠排最後)與 redbase_skipped_n;測試身分是(平台、測試名) [出處:本計劃設計審 r1] [因:新功能的測試在主線分岔點不存在,比對工具沒有改動前版本可比] [不選:只記版本編號(推送前壓提交,原提交不在被推的歷史);紅燈版內容寫進治理帳本體(單筆數十 KB)] [test:t_spec_gate_redbase_written_on_red]
+-  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘判出 Kotlin/Java 綁定測試是綠的就寫一筆 spec-gate-green 事件,同一條分支之後再跑出紅,那支不存紅燈版 [出處:本計劃設計審 r1 正確性、邊界、整合三席] [因:風險低「新行為沒紅」擋下時印的補跑步驟會把實作後的測試存成紅燈版] [不選:記寫入當下的版本編號跟測試首次提交比(壓提交後原提交不在、空殼與實作在檔案層分不出)] [test:t_spec_gate_redbase_skips_after_green]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘判出 Kotlin/Java 綁定測試是綠的就寫一筆 spec-gate-green 事件,同一條分支之後再跑出紅,那支不存紅燈版(治理帳被 git 忽略時,同一條分支認分支名相同且 head_sha 是祖先,見下一行) [出處:本計劃設計審 r1 正確性、邊界、整合三席] [因:風險低「新行為沒紅」擋下時印的補跑步驟會把實作後的測試存成紅燈版] [不選:記寫入當下的版本編號跟測試首次提交比(壓提交後原提交不在、空殼與實作在檔案層分不出)] [test:t_spec_gate_redbase_skips_after_green]
++  WHY:[2026-11-03 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]]]治理帳被 git 忽略時,分岔點那一版沒有帳、相減等於整本帳,規格閘留痕與判綠紀錄改成另記分支名,讀的時候只留同一份計劃、分支名相同(或沒記)、head_sha 是目前 HEAD 祖先的;判不了的照舊算進來並印幾筆;治理帳進版控時不過濾;部分複製(git 設計文件的三個設定任一個,值照 git 布林規則,共用 _git_partial_clone 與 _git_bool)不讀分岔點那一版——帳被忽略直接讀工作目錄、帳進版控就這次不做判綠觀測與去重;沒有分岔點時減的空樹照 repo 格式算 [出處:mOrangePos 考場實機驗收,別條分支的判綠漏到新分支、五支一個紅燈版都沒存] [因:分岔點相減只在帳進版控時隔得開分支] [不選:只看祖先(別條分支合併進主線、或從同一個提交開新分支重來,都是祖先);上一行否決過的「記寫入當下的版本編號」這裡仍用,因為只在帳被忽略時用(分岔點相減在那種專案根本做不了,沒有別的訊號),而且拿分支名補上;一律過濾(帳進版控時壓提交後自己的判綠被丟)] [代價:帳被忽略的專案壓過或 rebase 過的分支,舊判綠不算] [test:t_spec_gate_redbase_green_other_branch]
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]多平台專案的留痕 tests 一律寫「平台:名字」(含預設平台),推送前讀到沒前綴的舊名字時,留痕沒過期才照現在條款整串逐字比、只綁一個平台就用那個平台;留痕記的平台不在設定裡時還在做的擋、已完成的提醒,不丟例外;設定改回單平台時,帶冒號、找不到的留痕名字:還在做的計劃照擋並講明設定改了、已完成的降成提醒(不猜是哪一支、不跑、不記逃逸;代碼審 r2、r3 兩種猜法都被打穿後換形狀) [出處:mOrangePos 考場實跑,平板測試被丟給 JVM 指令跑而判紅] [因:推送前把每一項包成 [test:…] 交給唯一切法 _split_test_ref,裸名含冒號會被當前綴、default_platform 改了會解到別處;舊留痕重跑規格閘不會重寫] [不選:預設平台照舊寫裸名(名字含冒號會崩);改用 items 成對欄位(推送前要照條款寫法重解析,兩種形狀用途不同)] [test:t_spec_gate_record_keeps_platform] [test:t_spec_gate_push_bare_name_platform] [test:t_spec_gate_push_unknown_platform]
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]Kotlin/Java 測試輸出含 AGP 的 DeviceException 而退出碼非零時判弱證據「環境沒跑起來」:推送照擋,沒過的全是這種時不自動記逃逸;實作前跑規格閘不當新行為的紅、不存紅燈版 [出處:mOrangePos 考場實測沒接裝置時 Gradle 印 DeviceException、退出碼 1] [因:這兩棧讀不出跑了幾支,只看退出碼會把沒接裝置判紅、記假逃逸;Bazel 也把基礎設施失敗跟 FAILED 分開] [不選:只改弱證據不記逃逸(沒接裝置判的是紅不是弱證據);放進 _RAN_EVIDENCE 本身(那張表的讀者都取 re);放 TEST_PROFILES(那張是目錄與切法,代碼審 r1 架構對齊席)——樣式放在 _RAN_EVIDENCE 旁的 _ENV_MISSING_EVIDENCE(具名欄位,存取函式 _env_missing_why 去色碼後比)] [test:t_spec_gate_device_missing_not_red]
+ related:
+   - "[[Projects/規格閘不把不做節的詞算進風險_計劃]]"
+ ---
+ # 規格閘
+ 
+ ## 為什麼獨立成一支
+ 
+ 設計審的散文收斂在本 repo 從沒收斂過(五輪 118 條、每輪都有 blocker;見 [[Projects/規格落成可驗收條件_計劃]])。這道閘把力氣搬到「條款能不能被機器認出來、有沒有接到真的測試、跑起來是紅是綠」。半套所有計劃照舊派審——它不減少審查,只讓「條款有沒有接到測試」變成可見的數字。
+diff --git a/scripts/lumos b/scripts/lumos
+index d6828bb89..63eca87e9 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -12022,20 +12022,76 @@ def _git_is_shallow(repo_root, timeout=None):
+     """timeout 給了就當 git 的上限,逾時照 subprocess 丟 TimeoutExpired 由呼叫端接(算破壞測試背書時傳剩餘預算)。"""
+     import subprocess
+     try:
+         r = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=str(repo_root),
+                            capture_output=True, text=True, errors="replace", timeout=timeout)
+         return r.returncode == 0 and r.stdout.strip() == "true"
+     except OSError:
+         return False
+ 
+ 
++def _git_current_ref(repo_root):
++    """目前簽出的 ref 全名(symbolic-ref -q HEAD,例 refs/heads/feat)、清洗過控制字元;分離 HEAD 或 git 失敗回空字串。
++    回頭重讀記事件的 branch 欄、規格閘紅燈版記與比分支名共用這一支(代碼審 code-判綠紀錄限本分支與撞名測試改計數 r3 r4 架構對齊席:
++    原本規格閘借回頭重讀區的函式)。"""
++    r = _lens_git(repo_root, "symbolic-ref", "-q", "HEAD")
++    return _note_reread_show(r.stdout.strip()) if r is not None and r.returncode == 0 else ""
++
++
++_GIT_PARTIAL_KEYS = r"^(extensions\.partialclone|remote\..*\.promisor|remote\..*\.partialclonefilter)$"
++
++
++_GIT_INT_RE = re.compile(r"([+-]?)(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)[kKmMgG]?")
++
++
++def _git_bool(val):
++    """git 設定值照 git 自己的布林規則判(git config 文件):沒有等號的裸鍵(val=None)是真;false/no/off 與等號後的空字串是假;
++    true/yes/on 是真;整數照 C 的寫法(0x 十六進位、0 開頭八進位、十進位,可帶 k/m/g 單位字尾)非 0 是真。
++    git 自己會拒絕的寫法(例如 0b0、0_0)算真——呼叫端拿它判「要不要小心」,寧可多小心(代碼審 r4 邊界席逐值對照 git --type=bool)。
++    不改叫 git config --type=bool:一次 --get-regexp 同時讀三個設定,其中 partialCloneFilter 不是布林,套不上 --type=bool。"""
++    if val is None:
++        return True
++    v = val.strip().lower()
++    if v in ("false", "no", "off", ""):
++        return False
++    if v in ("true", "yes", "on"):
++        return True
++    m = _GIT_INT_RE.fullmatch(v)
++    if not m:
++        return True
++    num = m.group(2)
++    base = 16 if num.startswith("0x") else (8 if num.startswith("0") and len(num) > 1 else 10)
++    return int(num[2:] if base == 16 else num, base) != 0
++
++
++def _git_partial_clone(repo_root, deadline=None):
++    """部分複製(partial clone)嗎 → True / False / None(git 叫不起來或逾時)。git 的設計文件寫明承諾遠端由三個設定各自認定:
++    extensions.partialClone、remote.<名>.promisor、remote.<名>.partialCloneFilter;只看第一個會漏掉只寫後兩個的複製
++    (代碼審 code-判綠紀錄限本分支與撞名測試改計數 r2 邊界席實測 git 2.39 的 clone --filter 就是這樣)。
++    讀法:git config -z 每筆以 NUL 結尾、鍵與值以換行分隔、裸鍵沒有換行(遠端名含空白也切得對);promisor 的值照 _git_bool,
++    另兩個設定有值就算(r3 三席抓到自己猜值的寫法會漏裸鍵、promisor = 2、切錯含空白的遠端名)。
++    部分複製裡查本機沒有的物件,git 會自動連遠端抓;回頭條件與規格閘紅燈版兩處讀舊版本前都先問這一支。"""
++    r = _lens_git_dl(repo_root, "config", "-z", "--get-regexp", _GIT_PARTIAL_KEYS, deadline=deadline)
++    if r is None or r.returncode not in (0, 1):
++        return None
++    for ent in r.stdout.split("\0"):
++        if not ent:
++            continue
++        key, nl, val = ent.partition("\n")
++        if key.endswith(".promisor"):
++            if _git_bool(val if nl else None):
++                return True
++        elif val.strip():
++            return True
++    return False
++
++
+ def check_regen_provenance(note, repo_root):
+     """Check J(regen 重生來源守衛)共用檢查器——cmd_lint 與 run_doctor 同呼叫同一函式(防兩入口
+     規則漂移)。只對 frontmatter 帶 regen 的節點生效;非 regen 節點回三空。只掃 summary 行。
+     回 (errs, warns, gov_events),兩入口映射(spec 映射表,照抄不猜):
+       errs → lint errs 計 rc1 / doctor warn(hard) 計 issues
+       warns → lint 顯示不計 rc / doctor warn_soft(J-d 提醒與 shallow 降級兩入口皆非阻擋)
+       gov_events → 僅 doctor --ci 落 _append_governance_log;lint 高頻一律不落帳(防治理帳灌水)
+     註:本函式為 regen 節點對 lint「node-local 不掃 repo」原則的 opt-in 例外(檔案+git 存取)。
+     設計:Projects/from-scratch重生守衛_計劃;golden: governance/golden/fromscratch-m1。"""
+     errs, warns, gov = [], [], []
+@@ -14230,22 +14286,23 @@ def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, cou
+         _redbase_attach(_vault_repo_root(env), rec, redbase)
+     try:
+         with _vault_write_lock(env.vault):
+             okw = _jsonl_append_verified(env.vault.parent / ".canary-log.jsonl", rec, "token", rec["token"]) == 0
+     except OSError as e:
+         print(f"[spec-gate] 留痕寫不進審查帳({e}),這次沒留痕", file=sys.stderr)
+         return False
+     # 推送閘要讀的留痕也進版控的治理帳(消費專案的審查帳被 gitignore,乾淨 clone 看不到;〈做法〉10 B3)
+     # 不走 _gate_event_fit 裁長度(代碼審 r1 架7):推送閘要照這筆的 tests 逐支跑,裁掉清單等於少跑測試;tests 以外的清單
+     # (exclusions、nogo_skipped 前 8 筆)本來就有上限,一筆通常幾百位元組到 1-2KB
+-    gw = _gate_event(_vault_repo_root(env), "spec-gate", "spec-gate-record", f"規格閘留痕 {rec['token']}", nodes=[rel],
+-                     extra={k: v for k, v in rec.items() if k != "kind"})
++    rr_ = _vault_repo_root(env)
++    gw = _gate_event(rr_, "spec-gate", "spec-gate-record", f"規格閘留痕 {rec['token']}", nodes=[rel], ref=_redbase_branch_name(rr_) or None,
++                     extra={k: v for k, v in rec.items() if k not in ("kind", "ref")})
+     if gw is False:
+         print("[spec-gate] 留痕寫不進治理帳,乾淨 clone 推送時會找不到這筆留痕", file=sys.stderr)
+     return okw
+ 
+ 
+ def _redbase_collect(rr, rows, plats):
+     """規格閘判完那一刻收紅燈版素材(Projects/規格閘紅燈測試快照_計劃 做法一)。rows=_spec_gate_judge_items 的逐支列 →
+     (收到的 [dict], 不存的 [(測試名, 原因)], 判綠的 {(平台, 測試名)})。只收判紅的 Kotlin/Java 測試;身分是(平台、測試名)——
+     兩個平台各有一支同名測試時各收各的(代碼審 r1 正確性席 F1);同一支綁好幾條條款只收一份、條款合併。
+     收到的每支帶平台、測試名、條款、檔案相對路徑、函式鍵、函式本體、檔內容與判紅當下檔案位元組的 sha256。"""
+@@ -14346,59 +14403,153 @@ def _redbase_parse_file(rr, path):
+     if not ok:
+         return "測試檔剝完字串與註解後括號配不平"
+     return rel, text, hashlib.sha256(data).hexdigest(), fs
+ 
+ 
+ def _redbase_note_green(rr, rel, greens):
+     """判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的,記一筆 spec-gate-green(之後同一條分支再跑出紅,那支不存紅燈版)。
+     tests 是測試名(給人看),items 是 (平台, 測試名)(判定用;兩個平台同名時只擋判綠的那個平台)。"""
+     if not greens:
+         return
+-    gw = _gate_event(rr, "spec-gate", "spec-gate-green", f"規格閘判綠 {len(greens)} 支", nodes=[rel],
++    gw = _gate_event(rr, "spec-gate", "spec-gate-green", f"規格閘判綠 {len(greens)} 支", nodes=[rel], ref=_redbase_branch_name(rr) or None,
+                      extra={"loop": _loop_id_for_plan(rel), "tests": sorted({m_ for _p, m_ in greens}),
+                             "items": [list(x) for x in sorted(greens)]})
+     if gw is False:
+         print("[spec-gate] 判綠觀測寫不進治理帳:這幾支之後跑出紅仍會存紅燈版", file=sys.stderr)
+ 
+ 
+ def _redbase_branch_keep(d):
+     return isinstance(d, dict) and d.get("kind") in ("spec-gate-record", "spec-gate-green")
+ 
+ 
+-def _redbase_branch_rows(rr):
++_REDBASE_ANC_BUDGET_SEC = 10   # 判綠紀錄是不是這條分支的:整批 git 詢問共用的截止時間(Projects/判綠紀錄限本分支與撞名測試改計數_計劃 做法 1)
++_REDBASE_ANC_CAP = 200         # 同一份計劃要問 git 的不同 head_sha 最多問幾個,超出的照舊算進來
++
++
++def _redbase_branch_name(rr):
++    """目前分支名(symbolic-ref -q HEAD 去掉 refs/heads/);分離 HEAD、git 失敗回空字串。規格閘留痕、判綠紀錄寫分支名與讀取端過濾共用。
++    不用 --short:有同名 tag 時它回 heads/<名>,同一條分支前後寫的名字會對不上(代碼審 code-判綠紀錄限本分支與撞名測試改計數 r1 邊界席);
++    不用 _codeloop_git_branch:它分離 HEAD 時回字面 HEAD,會寫成一個假分支名。"""
++    ref = _git_current_ref(rr)   # 共用的 symbolic-ref -q HEAD、同一道控制字元清洗,寫與讀一致
++    return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ""
++
++
++def _redbase_branch_rows(rr, loop=None, ignored=None, budget=_REDBASE_ANC_BUDGET_SEC):
+     """這條分支自己寫的規格閘留痕與判綠事件(工作目錄的治理帳減掉跟主線的分岔點那一版)→ [dict,照帳序]。
+     分岔點等於頂端(分支剛開、還沒有自己的提交)照樣減;只有直接在主線(main/master)或分離頂端上工作時才看整本帳——
+-    比對工具的 _tg_start 把「分岔點等於頂端」當成推的就是主線,這裡的情境不同(代碼審 r1 正確性席 F8)。讀不出帳印一句。"""
++    比對工具的 _tg_start 把「分岔點等於頂端」當成推的就是主線,這裡的情境不同(代碼審 r1 正確性席 F8)。讀不出帳印一句。
++    loop 有給只留這份計劃的;ignored 是 _gov_ledger_ignored 的判定,"ignored" 時分岔點那一版通常沒有帳、相減等於整本帳,
++    再照分支名與祖先過濾;部分複製(或判不了是不是)不讀分岔點那一版(讀舊版本會自動連遠端):帳被忽略就直接讀工作目錄那份,
++    帳不是被忽略就這次不做判綠觀測與去重(_redbase_on_branch;Projects/判綠紀錄限本分支與撞名測試改計數_計劃 做法 1)。
++    budget 是過濾那一段的秒數,在問祖先前一刻才起算(讀帳不吃這份預算)。"""
+     import json as _json
+     head = _lens_full_sha(rr, "HEAD")
+-    fork = None
+-    if head:
+-        fork = _lens_fork_point(rr, head)
+-        br = _lens_git(rr, "symbolic-ref", "--short", "-q", "HEAD")
+-        name = br.stdout.strip() if br is not None and br.returncode == 0 else ""
+-        if fork == head and name in ("", "main", "master"):
+-            fork = None
+-    _d, added, bad = _gov_rows_delta(rr, fork or _EMPTY_TREE_SHA, None, b'"spec-gate-', _redbase_branch_keep)
++    name = _redbase_branch_name(rr)
++    pc = _git_partial_clone(rr)
++    if pc is not False:   # 部分複製(或判不了是不是):讀分岔點那一版會自動連遠端、逾時殺不到抓取的子程序(代碼審 r3 資源席)
++        if ignored != "ignored":
++            print("[spec-gate] 部分複製(或判不了是不是)不讀分岔點那一版的治理帳:這次的判綠觀測與去重沒有作用", file=sys.stderr)
++            return []
++        st, added = _gov_rows_at(rr, None, b'"spec-gate-', _redbase_branch_keep)   # 帳被忽略:分岔點那一版通常沒有帳,直接讀工作目錄那份
++        bad = "工作目錄" if st == "unreadable" else None
++    else:
++        fork = None
++        if head:
++            fork = _lens_fork_point(rr, head)
++            if fork == head and name in ("", "main", "master"):
++                fork = None
++        # 帳被忽略也照舊減分岔點那一版:帳曾進版控、後來才改成忽略時,主線上的舊判綠要減掉(代碼審 r4 通才席);
++        # 沒有分岔點時減空樹,空樹照這個 repo 的格式算(SHA-256 的 repo 跟 SHA-1 不同,代碼審 r3 r4 邊界席)
++        _d, added, bad = _gov_rows_delta(rr, fork or _drift_empty_tree(rr), None, b'"spec-gate-', _redbase_branch_keep)
+     if bad:
+         print(f"[spec-gate] 讀不出{bad}那一版的治理帳:這次的判綠觀測與去重沒有作用", file=sys.stderr)
+         return []
+     out = []
+     for ln in added:
+         try:
+             d = _json.loads(ln.decode("utf-8"))
+         except (UnicodeDecodeError, ValueError, RecursionError):
+             continue
+-        if _redbase_branch_keep(d):
++        if _redbase_branch_keep(d) and (loop is None or d.get("loop") == loop):
+             out.append(d)
++    if ignored == "ignored":
++        import time as _t
++        out = _redbase_on_branch(rr, out, head, name, _t.monotonic() + budget)
+     return out
+ 
+ 
++def _redbase_on_branch(rr, rows, head, name, deadline):
++    """治理帳被 git 忽略時,只留這條分支的紀錄:有分支名而且跟目前的不同 → 丟;head_sha 不是祖先(含提交不存在)而且是完整 repo → 丟;
++    其他判不了的(不像提交編號、HEAD 解不出、淺複製、部分複製、git 叫不起來、過了截止時間、超過 _REDBASE_ANC_CAP)照舊留,跟過濾前一樣,
++    有因為判不了而留下的就印一句幾筆。判不了一律留:留下就是原本的行為;回頭重讀的 _note_reread_own_fps 判不了當「不是」,
++    是因為那裡「不是」才是安全的一邊,這裡借它的回傳碼處理(rc 0/1 直接用,其他再問 cat-file -e)。
++    repo 種類跟回頭條件那支 _drift_born_env_err 共用判法:淺層用既有的 _git_is_shallow(逾時當判不了),部分複製用 _git_partial_clone——
++    部分複製問本機沒有的提交時 git 會自動連遠端抓、逾時殺不到抓取的子程序,所以整批不問、照留(代碼審 r1 資源席;代價是部分複製的專案
++    沒有這道過濾,見計劃天花板三)。判祖先這段跟 _note_reread_own_fps、_codeloop_missing_commit 一樣內聯,三處判不了時的方向各不相同,不抽共用。
++    超過上限時先問最新的:舊紀錄沒問到照留,比新紀錄照留(別條分支剛寫的判綠漏過來)代價小(代碼審 r1 通才席)。"""
++    import subprocess as _sp
++    kind = None
++
++    def repo_kind():
++        nonlocal kind
++        if kind is None:
++            pc = _git_partial_clone(rr, deadline)
++            if pc is None:
++                kind = "unknown"
++            elif pc:
++                kind = "partial"
++            else:
++                t = _git_timeout(deadline)
++                try:
++                    kind = "unknown" if t <= 0 else ("shallow" if _git_is_shallow(rr, timeout=t) else "full")
++                except _sp.TimeoutExpired:
++                    kind = "unknown"
++        return kind
++    cand, order = [], []
++    for d in rows:
++        ref = d.get("ref")
++        if isinstance(ref, str) and ref and name and ref != name:
++            continue
++        sha = d.get("head_sha")
++        ok = bool(head) and isinstance(sha, str) and bool(_LENS_SHA_RE.fullmatch(sha))
++        cand.append((d, sha if ok else None))
++        if ok:
++            order.append(sha)
++    verdict, newest = {}, list(dict.fromkeys(reversed(order)))
++    for i, sha in enumerate(newest):
++        if i >= _REDBASE_ANC_CAP or repo_kind() == "partial":
++            verdict[sha] = None
++            continue
++        r = _lens_git_dl(rr, "merge-base", "--is-ancestor", sha, head, deadline=deadline)
++        if r is None:
++            verdict[sha] = None
++        elif r.returncode == 0:
++            verdict[sha] = True
++        elif r.returncode == 1:
++            verdict[sha] = False if repo_kind() == "full" else None
++        else:
++            e = _lens_git_dl(rr, "cat-file", "-e", f"{sha}^{{commit}}", deadline=deadline)
++            verdict[sha] = False if e is not None and e.returncode != 0 and repo_kind() == "full" else None
++    keep, unsure = [], 0
++    for d, sha in cand:
++        v = verdict.get(sha, True) if sha else True
++        if v is False:
++            continue
++        if v is None:
++            unsure += 1
++        keep.append(d)
++    if unsure:
++        print(f"[spec-gate] 治理帳被 git 忽略:{unsure} 筆紀錄判不了是不是這條分支的(淺複製、部分複製、git 沒回應或逾時、超過 {_REDBASE_ANC_CAP} 個),照舊算進來",
++              file=sys.stderr)
++    return keep
++
++
+ def _redbase_write(rr, loop, token, caps, skipped, branch_rows):
+     """收到的素材 → 寫 governance/redbase/<迴圈>/<token>.json → ({"path", "sha256"} 或 None, 不存的清單)。
+     這條分支上判綠過的不存;函式本體跟上一份紅燈版相同的不存;判紅後檔案又被改的不存;JSON 跳脫後會超過 5 MB 的不存。
+     紅燈版資料夾逐層擋符號連結(_note_audit_safe_dir)、路徑被 git 忽略就不寫;以 LF、UTF-8 位元組原子寫入,寫完讀回核對;
+     寫不進去丟 OSError(呼叫端照舊寫留痕、不帶欄位)。"""
+     import hashlib
+     import json as _json
+     skipped = list(skipped)
+     greened, prev_body = _redbase_branch_state(rr, loop, branch_rows)
+     tests, files, size = [], {}, 256
+@@ -14498,30 +14649,30 @@ def _redbase_cap_reason(c, greened, prev_body):
+         now = None
+     if now is None or hashlib.sha256(now).hexdigest() != c["sha"]:
+         return "判紅後檔案又被改"
+     return None
+ 
+ 
+ def _redbase_attach(rr, rec, redbase):
+     """把紅燈版寫出來、欄位掛到留痕上(redbase、redbase_skipped、redbase_skipped_n),逐支印一句。寫不進去照舊留痕、不帶 redbase。
+     不存的清單「判綠」排最後:上限 20 筆時真正要看的原因不被判綠擠掉(代碼審 r1 正確性席 F6)。"""
+     caps, skipped, _greens = redbase
+-    field = None
++    field, st, rule = None, None, ""
+     if caps:
+-        try:
+-            field, skipped = _redbase_write(rr, rec["loop"], rec["token"], caps, skipped, _redbase_branch_rows(rr))
++        st, rule = _gov_ledger_ignored(rr)
++        try:   # 截止時間由 _redbase_branch_rows 在問祖先前一刻才起算,前面讀帳與算分岔點不吃這份預算(代碼審 r1 資源席、通才席)
++            field, skipped = _redbase_write(rr, rec["loop"], rec["token"], caps, skipped, _redbase_branch_rows(rr, rec["loop"], ignored=st))
+         except OSError as e:
+             print(f"[spec-gate] 紅燈版寫不進去({e}),這次沒有紅燈版可比", file=sys.stderr)
+     if field:
+         rec["redbase"] = field
+         print(f"[spec-gate] 紅燈版: 存在 {field['path']}(推送時新測試拿它當改動前版本比;存的是整支測試檔,檔裡其他內容也會跟著提交)")
+-        st, rule = _gov_ledger_ignored(rr)
+         if st == "ignored":   # 留痕進不了提交,推送時這份會成孤兒(Projects/紅燈版實跑三缺口_計劃 做法 4)
+             print(f"[spec-gate] 治理帳被 git 忽略,這筆留痕進不了提交,推送時紅燈版會列成沒有留痕;照推送時的提醒改那條規則。蓋到的規則:{rule}",
+                   file=sys.stderr)
+     if skipped:
+         skipped = sorted(skipped, key=lambda x: x[1] == "判綠")
+         rec["redbase_skipped"] = [{"name": n, "reason": r_} for n, r_ in skipped[:20]]
+         rec["redbase_skipped_n"] = len(skipped)
+         for n, r_ in skipped[:20]:
+             print(f"[spec-gate] 紅燈版: 沒存 {_out_clean(n, 120)}({r_})")
+ 
+@@ -15227,21 +15378,21 @@ def _spec_gate_low_not_red(env, rel, text, rows_b, judged, clauses, keeps, verdi
+         elif dirty:
+             print("    ⚠ 工作目錄現在有還沒提交的改動:先做第 1 步,不然第 2、3 步會把實作覆寫掉、換不回來;"
+                   "同一個工作目錄有別的會談的改動時,只加自己的檔")
+         print("    1. 先把實作提交(或做一個暫時提交),之後才換得回來")
+         print("    2. 改的是既有檔:把它暫時換回實作前的版本(測試檔留現在的):")
+         print("         git restore --source=<實作前的提交> -- <那支檔>")
+         print("    3. 實作是新檔:不要移走(移走後測試匯入失敗是跑不起來=弱證據,不算紅),暫時換成只留介面的空殼(函式在、不做事),讓測試在斷言上紅")
+         print("    4. 在同一個工作目錄跑規格閘拿到紅與留痕,再把實作換回來:")
+         print(f"         lumos spec-gate {_sh_quote(Path(rel).stem)}")
+         print("         git restore --source=HEAD -- <實作的檔>")
+-        print("    這樣補跑的測試不會有紅燈版(規格閘判綠過的 Kotlin/Java 測試,之後再跑出紅也不存;Projects/規格閘紅燈測試快照_計劃)")
++        print("    這樣補跑的測試不會有紅燈版(規格閘判綠過的 Kotlin/Java 測試,之後再跑出紅也不存;例外見 lumos test-guard 的「抓不到」清單;Projects/規格閘紅燈測試快照_計劃)")
+         print("    換不出能讓測試在斷言上紅的版本,就把計劃開頭欄位改成 plan_risk: high,走設計審")
+     return 1
+ 
+ 
+ def cmd_spec_gate(env, node, no_run=False):
+     """規格閘:⓪門(單向/雙向,機械判)①句式 ②綁定+回退節 ③把綁的測試真跑一次 ④相依回歸(全綠才過)⑤匯總+留痕。
+     風險高(半套語意):紅綠只印不擋,接著走 lumos loop next。風險低(雙向門放行_計劃):至少一條新行為、每條沒標 keeps 的各自紅、
+     keeps 的既存且綠、弱證據不算 → PASS(風險低):直接實作、不派審(不做清單略過了危險詞時改講推送前要一筆輕量設計審);留痕 kind=spec-gate 進審查帳(推送閘讀它)。
+     判定走跟處置閘第五步同一支 _clause_check;句式與回退節只對首筆帳晚於 _SPEC_GATE_SINCE 的迴圈驗。rc:擋下 1;其餘 0。"""
+     front = _spec_gate_front(env, node, no_run)
+@@ -49010,21 +49161,22 @@ def _tg_functions(text, java):
+ 
+ 
+ _TG_ASSERT_RE = re.compile(
+     r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?<![\w])(?:assert[A-Z]\w*|assert|fail|expectThat|verify\w*|coVerify\w*|confirmVerified|awaitItem|awaitError|awaitComplete"
+     r"|awaitEvent|expectNoEvents|expectMostRecentItem|cancelAndConsumeRemainingEvents|captureRoboImage|compareRoboImage)\s*[({<]"
+     r"|\.(?:assert[A-Z]\w*|check|snapshot|captureRoboImage|expect)\s*[({<]|\bexpect\.that\s*\(|\bthrow\s+AssertionError\b")
+ _TG_INFIX_RE = re.compile(r"\bshould[A-Z]\w*\b(?!\s*=)")
+ _TG_STRONG = re.compile(r"\b(?:assertEquals|assertArrayEquals|assertContentEquals|assertSame|isEqualTo|isSameInstanceAs"
+                         r"|containsExactly\w*|shouldBe)\b")
+ _TG_EXPECTED_ANN = re.compile(r"\bexpected\s*=")
+-_TG_CONST_PAT = (r'\s*(?:-?\d[\d_]*(?:\.\d+)?[lLfFdD]?|true|false|null|"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\')\s*')   # 佔有式:長字串常值不回溯;3.11 起才有的寫法,用時才編(_lazy_re)
++# 三引號那段寫法同 _TG_LIT_PAT(樣式常數各自是字面字串、抄一份註明出處,不拼接;Projects/判綠紀錄限本分支與撞名測試改計數_計劃 做法 3)
++_TG_CONST_PAT = (r'\s*(?:-?\d[\d_]*(?:\.\d+)?[lLfFdD]?|true|false|null|"""[^"]*+(?:"(?!"")[^"]*+)*+"""|"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\')\s*')   # 佔有式:長字串常值不回溯;3.11 起才有的寫法,用時才編(_lazy_re)
+ _TG_CHAIN = re.compile(r"\s*\.\s*\w+\s*(?:<[^>]*>)?\s*[({]")
+ 
+ 
+ def _tg_statements(fn):
+     """一支函式 → 斷言敘述清單(原文、壓空白):從斷言字到它的右括號或右大括號,再接後面連著的 .名稱(…) 鏈;可跨行。"""
+     sb, rb = fn["mbody"], fn["raw"]
+     br = _rg_bracket_map(sb)
+     out, pos = [], 0
+     while len(out) < _TG_MAX_STMTS:
+         m = _TG_ASSERT_RE.search(sb, pos)
+@@ -49061,21 +49213,23 @@ def _tg_statements(fn):
+ def _tg_has_assertion(fn):
+     return bool(_TG_ASSERT_RE.search(fn["mbody"]) or _TG_INFIX_RE.search(fn["mbody"]) or _TG_EXPECTED_ANN.search(fn["annot"]))
+ 
+ 
+ def _tg_strong(stmts):
+     """強斷言(相等比對)的條數;字串常值的內容先清空,訊息裡寫的 assertEquals 不算。"""
+     return sum(1 for s in stmts if _TG_STRONG.search(_lazy_re(_TG_LIT_PAT).sub('""', s)))
+ 
+ 
+ # 三引號(Kotlin 原始字串,可跨行)放最前面:斷言文字保留字串原樣後會帶換行,單行樣式認不得,裡面寫的 assertEquals 字樣會被算成強斷言
+-# (代碼審 code-紅燈版實跑三缺口 r4 單審席 F2;寫法同 _C_STRIP_PAT 的三引號那段)
++# (代碼審 code-紅燈版實跑三缺口 r4 單審席 F2;從 _C_STRIP_PAT 的三引號那段改來,差在要求收尾)
++# 跟剝註解那支 _C_STRIP_PAT 的主要差別:這裡要求字串收尾,只認三個雙引號、單行雙引號與單字元 'x';_C_STRIP_PAT 還收沒收尾的字串、
++# 三個單引號、C# 的 @"…"、反引號,而且連註解一起吞。_TG_CONST_PAT 的三引號那段照抄這裡
+ _TG_LIT_PAT = (r'"""[^"]*+(?:"(?!"")[^"]*+)*+"""|"(?:[^"\\\n]|\\.)*+"|\'(?:[^\'\\\n]|\\.)\'')   # 佔有式:長字串常值不回溯;用時才編(同 _C_STRIP_PAT)
+ _TG_FIRST_ARG = ("assertEquals", "assertNotEquals", "assertArrayEquals", "assertContentEquals", "assertSame")
+ _TG_FLIP = {"assertTrue": "assertFalse", "assertFalse": "assertTrue", "assertNull": "assertNotNull", "assertNotNull": "assertNull"}
+ # Truth / AssertJ 串接的方向互換:assertThat(x).isTrue() 改 isFalse() 跟 assertTrue 改 assertFalse 同一種
+ _TG_CHAIN_FLIP = {"isTrue": "isFalse", "isFalse": "isTrue", "isEmpty": "isNotEmpty", "isNotEmpty": "isEmpty",
+                   "isNull": "isNotNull", "isNotNull": "isNull"}
+ # 斷言的訊息在最後(kotlin.test、JUnit 5 的 Assertions):三個參數時第三個是字串就是訊息、不是字串就是容差
+ _TG_MSG_LAST_RE = re.compile(r"^[ \t]*import\s+(?:static\s+)?(?:kotlin\.test\.(?:\*|assert)|org\.junit\.jupiter\.api\.Assertions\b)", re.M)
+ 
+ 
+@@ -49392,21 +49546,21 @@ def _tg_stmt_at(kept, blank, bmap, i):
+         if blank[i:k].rstrip().endswith(_TG_STMT_GOES_ON) or blank[k + 1:k + 200].lstrip().startswith((".", "?.", "&&", "||")):
+             k += 1
+             continue
+         break
+     k = min(k, end)
+     return _tg_ident(kept[i:k]), k
+ 
+ 
+ def _tg_ident(text, fold=None):
+     """敘述原文 → 身分:字串常值原樣保留(頭尾與逗號後的空白都算內容),字串外照 fold 整理(預設 _tg_ws_fold:字詞之間的空白壓成一格、
+-    標點兩側的空白拿掉)。字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套;只換字串外壓法的呼叫端傳 fold(_tg_ws_keep_strings)。"""
++    標點兩側的空白拿掉)。字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套;只換字串外壓法的呼叫端傳 fold(例如 _tg_ws_keep_strings 傳 _tg_ws_collapse)。"""
+     fold = fold or _tg_ws_fold
+     out, last = [], 0
+     for mo in _lazy_re(_C_STRIP_PAT, re.S).finditer(text):
+         if mo.group(0)[:2] in ("//", "/*"):
+             continue
+         out += [fold(text[last:mo.start()]), mo.group(0)]
+         last = mo.end()
+     out.append(fold(text[last:]))
+     return "".join(out).strip()
+ 
+@@ -50142,21 +50296,21 @@ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助、"
+               "同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources",
+               "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一版不比(之後另做);"
+               "把測試檔搬進 Gradle 不編譯的目錄;catch 裡出現 throw 字(含條件式、死分支、lambda 裡)或呼叫名字叫 fail 的方法(含 promise.fail(e))"
+               "就當成重丟或明確失敗、不列",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+               "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large;assume 敘述超過 2000 字的尾段不進身分;"
+               "用單獨的 CR 或 Java 的 \\u000a 提前結束行註解",
+               "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
+               "測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算",
+-              "規格閘紅燈版只保護某次跑紅時已經寫好的斷言(骨架之後才補、補完後沒再跑紅的不保護),判綠過的、逾時紅的不存,"
++              "規格閘紅燈版只保護某次跑紅時已經寫好的斷言(骨架之後才補、補完後沒再跑紅的不保護),判綠過的、逾時紅的不存(治理帳被 git 忽略的專案,壓過或 rebase 過的分支上舊的判綠紀錄不算;部分複製的專案治理帳進版控時不做判綠觀測),"
+               "實作後第一次跑規格閘就手動把實作搬走造紅、之前沒判綠過的,紅燈版是實作後的內容",
+               "紅燈版比對時 expected 寫在註記資料列(@CsvSource)或同檔常數裡改值、expected 與被測呼叫同時改判不到,推送版出現同名多載時當找不到",
+               "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。
+     有候選 rc1、沒有 rc0;不是 git 專案講一句 rc0;範圍寫錯或終點找不到 rc2(退出碼照 Room 守衛)。只讀 git,不跑測試、不改檔。"""
+     import json as _json
+     root = _note_audit_root(repo)
+@@ -53239,25 +53393,24 @@ def _note_reread_push_old(root, scan, diff_range, push, deadline=None):
+         return
+     old = _lens_full_sha(root, rg[0])
+     if old is None:
+         raise _NoteRereadStop(f"推主線 {_note_reread_show(pushed_ref)}:遠端現在的值 {_esc_clean(rg[0], 80)[:12]} 本機找不到,"
+                               f"算不出這次的分岔點;先 git fetch {_note_reread_show(remote)} 再推")
+     scan["push_old"] = old
+ 
+ 
+ def _note_reread_branch(root, pushed_ref):
+     """事件的 branch 欄(Projects/回頭重讀指紋不因主線前進失效_計劃〈做法〉7):推送前 check 記被推的 ref,手動記目前簽出的分支
+-    (refs/heads/… 全名),detached 或查不到寫空。"""
++    (refs/heads/… 全名),detached 或查不到寫空。取目前分支走共用的 _git_current_ref。"""
+     if pushed_ref is not None:
+         return _note_reread_show(pushed_ref)
+-    r = _lens_git(root, "symbolic-ref", "-q", "HEAD")
+-    return _note_reread_show(r.stdout.strip()) if r is not None and r.returncode == 0 else ""
++    return _git_current_ref(root)
+ 
+ 
+ def _note_reread_wip_left(root, tip, left_fps):
+     """check 第一層沒對照的那幾篇裡,工作目錄有只差提交的紀錄的 → {對照指紋: [檔名…]}(印「記得提交」用);沒有沒對照的不讀工作目錄。"""
+     if not left_fps:
+         return {}
+     return {fp: ns for fp, ns in _note_reread_uncommitted(root, tip).items() if fp in left_fps}
+ 
+ 
+ def _note_reread_args(root, diff_range, push_remote, pushed_ref, res):
+@@ -55565,22 +55718,24 @@ def _drift_born_env_err(root):
+     """整體判不了的原因(一次判、全部同一個原因)或 None:不是 git 專案、淺層 clone、partial clone、沒有提交。"""
+     g = _lens_git(root, "rev-parse", "--git-dir")
+     if g is None or g.returncode != 0:
+         return "不是 git 專案"
+     import subprocess as _sp
+     try:
+         if _git_is_shallow(root, timeout=20):       # 既有的淺層判法(代碼審 r1 架構對齊席 Z1)
+             return "淺層 clone 看不到完整歷史"
+     except _sp.TimeoutExpired:
+         return "git 跑不起來"
+-    pc = _lens_git(root, "config", "--get", "extensions.partialClone")
+-    if pc is not None and pc.returncode == 0 and pc.stdout.strip():
++    pc = _git_partial_clone(root)
++    if pc is None:   # 判不了就判不了:這支的呼叫端每一步有一點不確定就標 unknown(代碼審 r3 架構對齊席)
++        return "git 跑不起來"
++    if pc:
+         return "partial clone 讀舊版本會去網路抓,不讀"
+     if _lens_full_sha(root, "HEAD") is None:
+         return "還沒有任何提交"
+     return None
+ 
+ 
+ def _drift_born_annotate(root, where, vault_rel, tenv, findings, deadline=None):
+     """現在成立的回頭條件與撤除條件,標寫下時成不成立:每條發現加 born={state, commit, date, why}
+     (Projects/回頭條件寫下時就成立_計劃)。只看 kind 是 probe 與 retire 的;where 是完整提交編號或 'disk'(從 HEAD 往回)。
+     ★每一步有一點不確定就判不了★:標錯(把沒問題的條件說成生來就成立)比漏標糟。"""
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 2475d114c..037198a82 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -87635,20 +87635,27 @@ def t_drift_born_unknown():
+     sh = Path(tempfile.mkdtemp(prefix="gctl-born-shallow-")) / "c"
+     sp.run(["git", "clone", "-q", "--depth", "1", f"file://{root}", str(sh)], capture_output=True)
+     got, txt = _born_scan(sh)
+     b = _born_of(got, "Systems/Bad.md", "壞版本")
+     check("②淺層 clone:判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "淺層" in (b.get("why") or ""), (b, got))
+     _nh_git(root, "config", "extensions.partialClone", "origin")
+     got, _txt = _born_scan(root)
+     b = _born_of(got, "Systems/Bad.md", "壞版本")
+     check("③partial clone:判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
+     _nh_git(root, "config", "--unset", "extensions.partialClone")
++    _nh_git(root, "config", "remote.origin.promisor", "true")   # git 2.39 的 clone --filter 只寫這兩個(判綠紀錄限本分支 r3 代碼審)
++    _nh_git(root, "config", "remote.origin.partialclonefilter", "blob:none")
++    got, _txt = _born_scan(root)
++    b = _born_of(got, "Systems/Bad.md", "壞版本")
++    check("③新式 partial clone(只寫 promisor 與 filter):判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
++    _nh_git(root, "config", "--unset", "remote.origin.promisor")
++    _nh_git(root, "config", "--unset", "remote.origin.partialclonefilter")
+     for i in range(7):
+         _nh_node(root, f"N{i}", summary="FLOW:n", body=f"REVISIT:[when-file:src/a.py][by:2099-12-31] 第 {i} 條")
+         _nh_commit(root, f"第 {i} 條")
+     got, _txt = _born_scan(root)
+     bs = [_born_of(got, f"Systems/N{i}.md", f"第 {i} 條") for i in range(7)]
+     over = [b for b in bs if isinstance(b, dict) and b.get("state") == "unknown" and "上限" in (b.get("why") or "")]
+     check("④超過 6 個不同提交:多的判不了「超過上限」", len(over) >= 1 and all(isinstance(b, dict) for b in bs), bs)
+     ng = Path(tempfile.mkdtemp(prefix="gctl-born-nogit-"))
+     shutil.copytree(root / "docs", ng / "docs")
+     _nh_node(ng, "St", summary="FLOW:s", body="REVISIT:[when-status:Projects/退款_計劃=doing][by:2099-12-31] 不是 git 專案")
+@@ -108156,31 +108163,57 @@ def t_name_collision_uses_real_filter():
+           f("login @smoke", [("test", "login @smoke"), ("test", "x login @smoke")], "regex_tail") == ["x login @smoke"], "")
+     check("③describe XFoo 加 test Bar 對 Foo Bar → 不算(-g 比不中 … XFoo Bar)",
+           f("Foo Bar", [("group", "XFoo"), ("test", "Bar"), ("test", "Foo Bar")], "regex_tail") == [], "")
+     check("④describe Foo 加 test Bar 對 Foo Bar → 算", f("Foo Bar", [("group", "Foo"), ("test", "Bar"), ("test", "Foo Bar")], "regex_tail")
+           == ["Foo > Bar"], "")
+     check("⑤relogin 對 login → 不算;LOGIN 對 login → 算(不分大小寫)",
+           f("login", [("test", "login"), ("test", "relogin"), ("test", "a LOGIN")], "regex_tail") == ["a LOGIN"], "")
+ 
+ 
+ def t_name_collision_scales():
+-    """[S79] 撞名判定每個平台的標題預處理只做一次:1000 個綁定名對 22000 個標題(regex_tail)在 15 秒內(每個名字重算標題 tag 要 30 秒以上)。
+-    應抓到的錯:每個名字對每個標題重做預處理 → ①紅。"""
++    """[S79] 撞名判定每個平台的標題預處理只做一次:1000 個綁定名走正式的快取路徑 _name_collision_reason(regex_tail、22000 個標題),
++    標題索引只建 1 次、每種串接只算一次(之後每次拿回同一份);牆上時間 60 秒只當安全網(判綠紀錄限本分支 S3,原本量 15 秒在 CI 上時好時壞)。
++    應抓到的錯:每個名字重建索引、或串接不快取每次重做 → 次數紅。抓不到:只慢不重做的退步(例如查詢退化成逐筆掃描),留給代碼審。"""
+     import time as _t
+     m = _load_lumos_inproc()
+     titles = [("test", f"case {i} shows result @smoke", f"case {i} shows result @smoke", f"f{i % 50}") for i in range(20000)]
+     titles += [("group", f"group {i}", f"group {i}", f"f{i % 50}") for i in range(2000)]
+-    t0 = _t.monotonic()
+-    for i in range(1000):
+-        m._name_filter_collisions(f"case {i} shows result", titles, "regex_tail")
+-    secs = _t.monotonic() - t0
+-    check("①1000 × 22000 < 15 秒", secs < 15.0, f"{secs:.1f}s")
++    real_idx, real_titles = m._TitleIndex, m._raw_test_titles
++    built, joined = [], {}
++
++    class Counting(real_idx):
++        def __init__(self, ts):
++            built.append(1)
++            super().__init__(ts)
++
++        def _join(self, kind, fold):
++            got = super()._join(kind, fold)
++            first = joined.setdefault((kind, fold), [got, 0])   # 留住第一份(物件活著,位址不會被重用),之後每次比是不是同一個物件
++            if got is not first[0]:
++                first[1] += 1
++            return got
++    prof = "playwright"
++    pentry = {"profile": dict(m.TEST_PROFILES[prof], name_filter="regex_tail"), "root": "/nonexistent", "profile_name": prof}
++    cache = {}
++    try:
++        m._TitleIndex = Counting
++        m._raw_test_titles = lambda *_a, **_k: titles
++        t0 = _t.monotonic()
++        for i in range(1000):
++            m._name_collision_reason(f"case {i} shows result", pentry, "/nonexistent", cache)
++        secs = _t.monotonic() - t0
++    finally:
++        m._TitleIndex, m._raw_test_titles = real_idx, real_titles
++    check("★前置★ 有走到撞名判定(索引至少建了一次、串接過)", built and joined, (built, joined))
++    check("①標題索引只建 1 次", len(built) == 1, len(built))
++    check("②每種串接只算一次:每次拿回同一份", all(v[1] == 0 for v in joined.values()), {k: v[1] for k, v in joined.items()})
++    check("③安全網:60 秒內", secs < 60.0, f"{secs:.1f}s")
+ 
+ 
+ def t_run_cmd_windows_quoting():
+     """[S80] Windows 上 {method} 跟 {python} 用同一套雙引號寫法(list2cmdline),不用 shlex 的單引號(cmd.exe 不認單引號)。
+     應抓到的錯:Windows 照用 shlex.quote → ①紅。"""
+     m = _load_lumos_inproc()
+     old = m._IS_WIN
+     try:
+         m._IS_WIN = True
+         got = m._run_cmd_expand("npx playwright test -g {method}", "a b", name_filter="regex_tail")
+@@ -121334,21 +121367,22 @@ def t_tq_guard_expected_changed():
+     h7 = c7({T: _tqg_kt(fn % "        assertEquals(5, f(1))\n        assertEquals(5, f(1))")})
+     keys = [c["key"] for c in _tqg_cands(r7, b7, h7) if c["rule"] == "tq/expected-changed"]
+     check("S4 r1 同一支函式兩條相同的預期值改動:兩條、指紋不同", len(keys) == 2 and len(set(keys)) == 2, keys)
+ 
+     # 代碼審 r2:Truth isNull 改 isNotNull
+     check("S4 r2 Truth isNull 改 isNotNull 要列", changed(fn % "        assertThat(vm.error).isNull()", fn % "        assertThat(vm.error).isNotNull()"), "")
+ 
+ 
+ def t_tq_guard_string_comma_args():
+     """[紅燈版實跑三缺口 S1] 只改了字串預期值時要列出:字串裡的逗號、不成對括號、字元常值、串接寫法,分岔點列 tq/expected-changed、
+-    紅燈版列 tq/redbase-weakened;一字不差不列。應抓到的錯:切參數只數原文括號(字串裡的逗號與括號當成結構)→ 這幾案切錯、配不起來、漏報。"""
++    紅燈版列 tq/redbase-weakened;一字不差不列。應抓到的錯:切參數只數原文括號(字串裡的逗號與括號當成結構)→ 這幾案切錯、配不起來、漏報。
++    [判綠紀錄限本分支 S4] 斷言兩邊換成三引號字串常值要列 tq/assert-weakened。應抓到的錯:判常值斷言的樣式不認三引號 → 漏報。"""
+     T = _TQG_T
+     m = _tqg_module()
+     check("★前置★ 含逗號的字串預期值切成兩個參數",
+           m._tg_call_parts('assertEquals("服務費 $1,235", label(fee))')[1] == ['"服務費 $1,235"', "label(fee)"],
+           m._tg_call_parts('assertEquals("服務費 $1,235", label(fee))'))
+ 
+     def rules(before, after):
+         fn = "    @Test\n    fun label_fee() {\n        %s\n    }\n"
+         root, base, commit = _tqg_repo({T: _tqg_kt(fn % before)})
+         h = commit({T: _tqg_kt(fn % after)})
+@@ -121378,20 +121412,27 @@ def t_tq_guard_string_comma_args():
+     smoke = '    @Test\n    fun smoke() {\n        render("""\n    {"a": 1}\n""")\n    }\n'
+     root, base, commit = _tqg_repo({T: _tqg_kt(smoke)})
+     reind = "".join("    " + ln + "\n" if ln else "\n" for ln in smoke.split("\n")[:-1])
+     got = _tqg_rules(root, base, commit({T: _tqg_kt(reind)}))
+     check("S1 整檔重新縮排、沒斷言的測試有多行字串:不列 tq/no-assertion", got == [], got)
+     # 代碼審 r4 單審席 F2:多行原始字串裡寫的 assertEquals 字樣不算一條強斷言(把相等比對換成 assertTrue 照列斷言變弱)
+     fn2 = "    @Test\n    fun weak() {\n        %s\n    }\n"
+     root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+     got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertTrue("""\n assertEquals mention\n """, f() > 0)')}))
+     check("S1 多行字串裡的 assertEquals 字樣不算強斷言:換成 assertTrue 照列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
++    # [判綠紀錄限本分支 S4] 兩邊都是三引號字串常值的相等斷言是常值斷言:跟單行字串常值一樣列斷言變弱
++    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
++    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertEquals("""a""", """a""")')}))
++    check("判綠紀錄限本分支 S4 換成兩邊都是三引號常值:列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
++    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
++    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertEquals("a", "a")')}))
++    check("★對照★ 換成兩邊都是單行字串常值:列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+     red = _tqg_kt(_RB_OTHER, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'))
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,234", label(fee))'), [_rb_snap("SPEC-c0a00001", red)])
+     cs = _rb_only(_tqg_cands(root, mb, h))
+     check("S1 紅燈版比對:字串預期值被改列 tq/redbase-weakened", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'), [_rb_snap("SPEC-c0a00002", red)])
+     check("S1 紅燈版比對:一字不差不列", _rb_only(_tqg_cands(root, mb, h)) == [], _rb_only(_tqg_cands(root, mb, h)))
+ 
+ 
+@@ -123815,12 +123856,369 @@ def t_spec_gate_redbase_skips_after_green():
+     led.write_text(led.read_text(encoding="utf-8") + old + "\n", encoding="utf-8")
+     _sg_commit(d2, "main 上的舊判綠")
+     _sp.run(["git", "-C", str(d2), "update-ref", "refs/remotes/origin/main", "HEAD"])
+     _sp.run(["git", "-C", str(d2), "checkout", "-q", "-b", "feat"])
+     _sg_plan2(kg2, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+     r = run(kg2, "spec-gate", "Projects/甲_計劃")
+     rec2 = _sg_records(kg2)[-1] if _sg_records(kg2) else {}
+     check("S6 主線上早就有的判綠不算:這條分支跑紅照存", r.returncode == 0 and "redbase" in rec2, (rec2.get("redbase_skipped"), (r.stdout + r.stderr)[-400:]))
+ 
+ 
++def _gb_repo(tag):
++    """治理帳被 git 忽略的規格閘 fixture(_ig_sg_repo)加一份計劃,主線記成 origin/main → (專案根, vault, 主線分支名, git)。"""
++    import subprocess as _sp
++    d, kg = _ig_sg_repo(tag, True)
++    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
++
++    def git(*a):
++        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
++    main = git("symbolic-ref", "--short", "HEAD").stdout.strip()
++    git("update-ref", "refs/remotes/origin/main", "HEAD")
++    return d, kg, main, git
++
++
++def _gb_red(kg):
++    """跑一次規格閘(假執行器判紅)→ (留痕, 輸出)。"""
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    recs = _sg_records(kg)
++    return (recs[-1] if recs else {}), r.stdout + r.stderr
++
++
++def t_spec_gate_redbase_green_other_branch():
++    """[判綠紀錄限本分支 S1 S2 S6 S9] 治理帳被 git 忽略時,規格閘只認這條分支(同一個分支名、head_sha 是目前 HEAD 的祖先)留下的判綠紀錄與上一份紅燈版。
++    應抓到的錯:讀工作目錄整本帳 → 別條分支的判綠漏過來,新分支一個紅燈版都不存(考場實測);寫判綠不記分支名 → 從同一個提交開新分支重來照樣漏;
++    只看祖先不看名字、只看名字不看祖先、提交不存在當成判不了照留,各自紅。"""
++    import json as _j
++    # S1:別條分支(同一個提交上)判綠過,新分支照存;S2:同一條分支照舊不存
++    d, kg, main, git = _gb_repo("gb1")
++    git("checkout", "-q", "-b", "featA")
++    (d / "green_checkout_discount").write_text("")
++    run(kg, "spec-gate", "Projects/甲_計劃")
++    ev = _rb_gov(d, "spec-gate-green")
++    check("S1 判綠紀錄記下分支名", ev and ev[-1].get("ref") == "featA", ev)
++    (d / "green_checkout_discount").unlink()
++    git("checkout", "-q", "-b", "featB", main)
++    rec, out = _gb_red(kg)
++    check("S1 別條分支判綠過:新分支跑紅照存紅燈版", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
++    check("S1 新留痕也記下分支名", (_rb_gov(d, "spec-gate-record") or [{}])[-1].get("ref") == "featB", _rb_gov(d, "spec-gate-record"))
++    git("checkout", "-q", "featA")
++    git("tag", "featA")   # 有同名 tag 時 symbolic-ref --short 回 heads/featA,分支名要照樣對得上
++    rec, out = _gb_red(kg)
++    check("S2 同一條分支判綠過(另有同名 tag):照舊不存、原因寫曾判綠",
++          "redbase" not in rec and any("曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
++          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
++    # S2:沒有分支名也沒有 head_sha 的舊紀錄照舊算
++    d, kg, main, git = _gb_repo("gb2")
++    git("checkout", "-q", "-b", "featA")
++    old = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
++                    "items": [["kotlin-junit", "checkout_discount"]]}, ensure_ascii=False)
++    led = d / "docs" / ".governance-log.jsonl"
++    led.write_text(led.read_text(encoding="utf-8") + old + "\n", encoding="utf-8")
++    rec, out = _gb_red(kg)
++    check("S2 沒有分支名與 head_sha 的舊判綠紀錄:照舊不存", "redbase" not in rec, (rec.get("redbase"), out[-400:]))
++    # S6:同名分支刪掉重開,舊提交不再是祖先 → 照存;head_sha 指的提交根本不存在 → 照存
++    d, kg, main, git = _gb_repo("gb3")
++    git("checkout", "-q", "-b", "featA")
++    (d / "note.txt").write_text("x")
++    git("add", "note.txt")
++    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
++    (d / "green_checkout_discount").write_text("")
++    run(kg, "spec-gate", "Projects/甲_計劃")
++    (d / "green_checkout_discount").unlink()
++    git("checkout", "-q", main)
++    ev3 = _rb_gov(d, "spec-gate-green")
++    green_sha = ev3[-1].get("head_sha") if ev3 else None
++    git("branch", "-q", "-D", "featA")
++    git("checkout", "-q", "-b", "featA")
++    anc = git("merge-base", "--is-ancestor", green_sha or "x", "HEAD").returncode
++    check("★前置★ 判綠紀錄寫進帳、記了分支名,同名重開後那個提交已不是祖先",
++          ev3 and ev3[-1].get("ref") == "featA" and anc == 1, (ev3[-1:] if ev3 else ev3, anc))
++    rec, out = _gb_red(kg)
++    check("S6 同名重開、判綠那時的提交不是祖先:照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
++    d, kg, main, git = _gb_repo("gb4")
++    git("checkout", "-q", "-b", "featA")
++    gone = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
++                     "items": [["kotlin-junit", "checkout_discount"]], "head_sha": "ab" * 20}, ensure_ascii=False)
++    led = d / "docs" / ".governance-log.jsonl"
++    led.write_text(led.read_text(encoding="utf-8") + gone + "\n", encoding="utf-8")
++    rec, out = _gb_red(kg)
++    check("S6 head_sha 指的提交不存在(完整 repo):照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
++    # S9:別條分支存的紅燈版不拿來去重
++    d, kg, main, git = _gb_repo("gb5")
++    git("checkout", "-q", "-b", "featA")
++    rec, out = _gb_red(kg)
++    check("★前置★ 第一條分支存了紅燈版", "redbase" in rec, out[-400:])
++    git("checkout", "-q", "-b", "featC", main)
++    rec, out = _gb_red(kg)
++    check("S9 別條分支的上一份紅燈版不拿來去重:照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
++    git("checkout", "-q", "featA")
++    rec, out = _gb_red(kg)
++    check("S9 同一條分支照舊去重:跟上一份相同不存",
++          "redbase" not in rec and any("上一份" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
++          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
++
++
++def t_spec_gate_redbase_green_tracked_unfiltered():
++    """[判綠紀錄限本分支 S7] 治理帳進版控時不做祖先與分支名過濾:這條分支自己的判綠紀錄,head_sha 因為改寫提交不再是祖先,照舊算判綠過、不存紅燈版。
++    應抓到的錯:不管帳有沒有被忽略一律過濾 → 壓提交或 rebase 後自己的判綠被丟掉、多存一份實作後的紅燈版。"""
++    import subprocess as _sp
++    d, kg = _rb_sg_repo("gbt")
++    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
++
++    def git(*a):
++        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
++    git("update-ref", "refs/remotes/origin/main", "HEAD")
++    git("checkout", "-q", "-b", "feat")
++    (d / "note.txt").write_text("x")
++    git("add", "note.txt")
++    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
++    (d / "green_checkout_discount").write_text("")
++    run(kg, "spec-gate", "Projects/甲_計劃")
++    ev = _rb_gov(d, "spec-gate-green")
++    old_head = ev[-1].get("head_sha") if ev else None
++    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "-m", "改寫過的提交", "--no-verify")
++    new_head = git("rev-parse", "HEAD").stdout.strip()
++    anc = git("merge-base", "--is-ancestor", old_head or "x", "HEAD").returncode
++    check("★前置★ 判綠時的提交已不是祖先", old_head and old_head != new_head and anc == 1, (old_head, new_head, anc))
++    (d / "green_checkout_discount").unlink()
++    rec, out = _gb_red(kg)
++    check("S7 帳進版控:自己的判綠照舊算、不存紅燈版",
++          "redbase" not in rec and any("曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
++          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
++
++
++def t_redbase_branch_rows_fallback_keeps():
++    """[判綠紀錄限本分支 S8] 治理帳被忽略、但判不了是不是這條分支的(淺複製裡回「不是祖先」或查不到、部分複製、過了截止時間、超過上限)時,
++    那幾筆照舊算進來並印一句說明;分支名不同、別份計劃的照丟(不用問 git)。超過上限時先問最新的。
++    應抓到的錯:判不了就丟 → 結果看機器快慢;淺複製把「不是祖先」或查不到當真 → 丟掉真的祖先;部分複製照問 → git 自動連遠端抓;
++    不印說明 → 使用者不知道沒過濾;上限先花在舊紀錄 → 最新的別分支判綠漏過來。"""
++    import contextlib
++    import io
++    import json as _j
++    import subprocess as _sp
++    import time as _t
++    m = _tqg_module()
++    d, kg, main, git = _gb_repo("gbf")
++    git("checkout", "-q", "-b", "featA")
++    h0 = git("rev-parse", "HEAD").stdout.strip()
++
++    def ev(sha, ref=None, loop="甲"):
++        e = {"gate": "spec-gate", "kind": "spec-gate-green", "loop": loop, "tests": ["checkout_discount"],
++             "items": [["kotlin-junit", "checkout_discount"]], "head_sha": sha}
++        if ref:
++            e["ref"] = ref
++        return _j.dumps(e, ensure_ascii=False)
++
++    def rows(root, budget, ignored="ignored"):
++        buf = io.StringIO()
++        with contextlib.redirect_stderr(buf):
++            got = m._redbase_branch_rows(root, "甲", ignored, budget)
++        return [x.get("head_sha") for x in got if x.get("kind") == "spec-gate-green"], buf.getvalue()
++    led = d / "docs" / ".governance-log.jsonl"
++    led.write_text(led.read_text(encoding="utf-8") + ev("cd" * 20) + "\n" + ev(h0) + "\n" + ev(h0, "other") + "\n" + ev("ef" * 20, loop="乙") + "\n",
++                   encoding="utf-8")
++    # 過了截止時間:兩筆要問 git 的都判不了 → 照留;分支名不同、別份計劃的照丟
++    shas, out = rows(d, -1)
++    check("S8 過了截止時間:判不了的照留、分支名不同的照丟、別份計劃的不算", shas == ["cd" * 20, h0], shas)
++    check("S8 過了截止時間:印一句幾筆判不了", "2 筆" in out and "照舊算進來" in out, out)
++    # 超過上限:上限設 1,先問最新的(h0,是祖先、留),較舊的 cd 沒問到照留
++    old = m._REDBASE_ANC_CAP
++    try:
++        m._REDBASE_ANC_CAP = 1
++        shas, out = rows(d, 30)
++    finally:
++        m._REDBASE_ANC_CAP = old
++    check("S8 超過上限:先問最新的,較舊的沒問到照留", shas == ["cd" * 20, h0], shas)
++    check("S8 超過上限:印一句一筆判不了", "1 筆" in out and "照舊算進來" in out, out)
++    forks = []
++    real_fork = m._lens_fork_point
++    try:
++        m._lens_fork_point = lambda *a, **k: forks.append(1) or real_fork(*a, **k)
++        shas, out = rows(d, 30)
++        check("★對照★ 完整 repo、時間夠:不存在的提交丟、祖先留、不印", shas == [h0] and "照舊算進來" not in out, (shas, out))
++        check("S8 帳被忽略、完整 repo:照舊算分岔點(帳曾進版控時要減掉主線上的舊判綠)", forks != [], len(forks))
++        shas, out = rows(d, 30, "unknown")
++        check("S8 判不了帳有沒有被忽略:不過濾,整本照算", shas == ["cd" * 20, h0, h0], shas)
++        # 判不了是不是部分複製(git config 叫不起來或逾時):帳不是被忽略時不讀分岔點那一版、講明
++        forks.clear()
++        real_pc = m._git_partial_clone
++        try:
++            m._git_partial_clone = lambda *a, **k: None
++            buf = io.StringIO()
++            with contextlib.redirect_stderr(buf):
++                got = m._redbase_branch_rows(d, "甲", "not")
++        finally:
++            m._git_partial_clone = real_pc
++        check("S10 判不了是不是部分複製、帳進版控:不讀分岔點那一版、講明", got == [] and forks == [] and "判不了是不是" in buf.getvalue(),
++              (got, len(forks), buf.getvalue()))
++    finally:
++        m._lens_fork_point = real_fork
++    check("S10 git 叫不起來時部分複製判斷回判不了(None),不當成不是", m._git_partial_clone(d.parent / "gbf-沒有這個目錄") is None,
++          m._git_partial_clone(d.parent / "gbf-沒有這個目錄"))
++    real_fork = m._lens_fork_point
++    try:
++        m._lens_fork_point = lambda *a, **k: forks.append(1) or real_fork(*a, **k)
++    finally:
++        m._lens_fork_point = real_fork
++    # 分離 HEAD:取不到分支名,只剩祖先判斷,記了別的分支名的照樣只看祖先
++    git("checkout", "-q", "--detach", "featA")
++    shas, out = rows(d, 30)
++    check("S8 分離 HEAD:不比分支名、只看祖先", shas == [h0, h0], shas)
++    # 還沒有提交的 HEAD:不問 git、照留,分支名不同照丟
++    git("checkout", "-q", "--orphan", "orph")
++    shas, out = rows(d, 30)
++    check("S8 還沒有提交的 HEAD:不崩、不問祖先照留、分支名不同照丟", shas == ["cd" * 20, h0], shas)
++    git("checkout", "-q", "-f", "featA")
++    # 淺複製:查不到的提交、真祖先被截斷而回「不是祖先」,都照留
++    git("checkout", "-q", "-b", "featS")
++    (d / "note.txt").write_text("x")
++    git("add", "note.txt")
++    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
++    sh = d.parent / "gbf-shallow"
++    _sp.run(["git", "clone", "-q", "--depth", "1", "--no-local", "-b", "featS", str(d), str(sh)], capture_output=True)
++    _sp.run(["git", "-C", str(sh), "fetch", "-q", "--depth", "1", "origin", main], capture_output=True)
++    (sh / "docs").mkdir(exist_ok=True)
++    (sh / "docs" / ".governance-log.jsonl").write_text(ev("cd" * 20) + "\n" + ev(h0) + "\n", encoding="utf-8")
++    shallow = _sp.run(["git", "-C", str(sh), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True).stdout.strip()
++    rc1 = _sp.run(["git", "-C", str(sh), "merge-base", "--is-ancestor", h0, "HEAD"], capture_output=True).returncode
++    check("★前置★ 淺複製建起來了、真祖先被截斷而回不是祖先", shallow == "true" and rc1 == 1, (shallow, rc1))
++    shas, out = rows(sh, 30)
++    check("S8 淺複製:查不到的提交與回不是祖先的真祖先都照留", shas == ["cd" * 20, h0], shas)
++    check("S8 淺複製:印一句兩筆判不了", "2 筆" in out and "照舊算進來" in out, out)
++    # 部分複製:整批不問 git(問本機沒有的提交會自動連遠端抓),照留
++    pc = d.parent / "gbf-partial"
++    _sp.run(["git", "clone", "-q", "--no-local", "-b", "featA", str(d), str(pc)], capture_output=True)
++    _sp.run(["git", "-C", str(pc), "config", "core.repositoryformatversion", "1"])
++    _sp.run(["git", "-C", str(pc), "config", "extensions.partialClone", "origin"])
++    (pc / "docs").mkdir(exist_ok=True)
++    (pc / "docs" / ".governance-log.jsonl").write_text(ev("ab" * 20) + "\n", encoding="utf-8")
++    mark = d.parent / "gbf-fetched"
++    if sys.platform != "win32":   # 遠端抓取程式換成留記號就失敗的小腳本:有記號 = git 為了查不到的提交去連遠端了
++        upl = d.parent / "gbf-upload-pack.sh"
++        upl.write_text(f"#!/bin/sh\ntouch '{mark}'\nexit 1\n", encoding="utf-8")
++        upl.chmod(0o755)
++        _sp.run(["git", "-C", str(pc), "config", "remote.origin.uploadpack", str(upl)])
++        probe = _sp.run(["git", "-C", str(pc), "cat-file", "-e", ("ab" * 20) + "^{commit}"], capture_output=True)
++        check("★前置★ 部分複製查本機沒有的提交會去連遠端", probe.returncode != 0 and mark.exists(), (probe.returncode, mark.exists()))
++        mark.unlink(missing_ok=True)
++    shas, out = rows(pc, 30)
++    check("S8 部分複製:照留", shas == ["ab" * 20], shas)
++    check("S8 部分複製:印一句", "1 筆" in out and "照舊算進來" in out, out)
++    if sys.platform != "win32":
++        check("S8 部分複製:沒有為了判祖先去連遠端", not mark.exists(), mark.exists())
++    # 新式部分複製只寫 remote.<名>.promisor 與 partialCloneFilter,沒有 extensions.partialClone:照樣認得
++    pc2 = d.parent / "gbf-partial2"
++    _sp.run(["git", "clone", "-q", "--no-local", "-b", "featA", str(d), str(pc2)], capture_output=True)
++    _sp.run(["git", "-C", str(pc2), "config", "remote.origin.promisor", "true"])
++    _sp.run(["git", "-C", str(pc2), "config", "remote.origin.partialclonefilter", "blob:none"])
++    (pc2 / "docs").mkdir(exist_ok=True)
++    (pc2 / "docs" / ".governance-log.jsonl").write_text(ev("ab" * 20) + "\n", encoding="utf-8")
++    if sys.platform != "win32":
++        _sp.run(["git", "-C", str(pc2), "config", "remote.origin.uploadpack", str(upl)])
++        probe = _sp.run(["git", "-C", str(pc2), "cat-file", "-e", ("ab" * 20) + "^{commit}"], capture_output=True)
++        check("★前置★ 只寫 promisor 的複製查本機沒有的提交也會去連遠端", probe.returncode != 0 and mark.exists(), (probe.returncode, mark.exists()))
++        mark.unlink(missing_ok=True)
++    shas, out = rows(pc2, 30)
++    check("S8 只寫 promisor 的部分複製:照留", shas == ["ab" * 20], shas)
++    if sys.platform != "win32":
++        check("S8 只寫 promisor 的部分複製:沒去連遠端", not mark.exists(), mark.exists())
++    # 帳進版控(或判不了有沒有被忽略)的部分複製:讀分岔點那一版也會自動連遠端,整個不讀、講明這次沒有判綠觀測與去重
++    buf = io.StringIO()
++    with contextlib.redirect_stderr(buf):
++        got = m._redbase_branch_rows(pc, "甲", "not")
++    check("S10 部分複製、帳進版控:不讀分岔點那一版、講明沒有判綠觀測", got == [] and "部分複製" in buf.getvalue() and not mark.exists(),
++          (got, buf.getvalue(), mark.exists()))
++    forks2 = []
++    real_fork2 = m._lens_fork_point
++    try:
++        m._lens_fork_point = lambda *a, **k: forks2.append(1) or real_fork2(*a, **k)
++        shas, out = rows(pc, 30)
++    finally:
++        m._lens_fork_point = real_fork2
++    check("S10 部分複製、帳被忽略:不算分岔點、直接讀工作目錄那份", forks2 == [] and shas == ["ab" * 20], (len(forks2), shas))
++    # SHA-256 的 repo:帳被忽略時直接讀工作目錄那份,不經過只對 SHA-1 有效的空樹
++    s2 = d.parent / "gbf-sha256"
++    r256 = _sp.run(["git", "init", "-q", "--object-format=sha256", "-b", "featA", str(s2)], capture_output=True)
++    check("★前置★ 這版 git 建得起 SHA-256 的 repo(建不起來就大聲失敗,不靜默略過)", r256.returncode == 0, r256.stderr)
++    if r256.returncode == 0:
++        (s2 / "f.txt").write_text("x")
++        _sp.run(["git", "-C", str(s2), "add", "f.txt"])
++        _sp.run(["git", "-C", str(s2), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
++        h256 = _sp.run(["git", "-C", str(s2), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
++        (s2 / "docs").mkdir()
++        (s2 / "docs" / ".governance-log.jsonl").write_text(ev(h256, "featA") + "\n", encoding="utf-8")
++        check("★前置★ SHA-256 的 repo 建起來了", len(h256) == 64, h256)
++        shas, out = rows(s2, 30)
++        check("S8 SHA-256 的 repo、帳被忽略:同分支的判綠照算、不說讀不出", shas == [h256] and "讀不出" not in out, (shas, out))
++        shas, out = rows(s2, 30, "not")
++        check("S8 SHA-256 的 repo、帳進版控、沒有分岔點:空樹照 repo 格式算、判綠照算", shas == [h256] and "讀不出" not in out, (shas, out))
++    # 帳曾進版控、後來才改成忽略:主線上的舊判綠(head_sha 是祖先、沒記分支名)要照舊被分岔點那一版減掉
++    d3, kg3 = _rb_sg_repo("gbtr")
++    _sg_plan2(kg3, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
++
++    def git3(*a):
++        return _sp.run(["git", "-C", str(d3), *a], capture_output=True, text=True)
++    hm = git3("rev-parse", "HEAD").stdout.strip()
++    led3 = d3 / "docs" / ".governance-log.jsonl"
++    led3.write_text(led3.read_text(encoding="utf-8") + ev(hm) + "\n", encoding="utf-8")
++    _sg_commit(d3, "主線上的舊判綠")
++    git3("update-ref", "refs/remotes/origin/main", "HEAD")
++    git3("checkout", "-q", "-b", "feat")
++    git3("rm", "-q", "--cached", "docs/.governance-log.jsonl")
++    (d3 / ".gitignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
++    _sg_commit(d3, "改成忽略治理帳")
++    st3 = m._gov_ledger_ignored(d3)[0]
++    check("★前置★ 帳已改成被忽略、主線那一版還有舊判綠", st3 == "ignored" and ev(hm) in git3("show", "origin/main:docs/.governance-log.jsonl").stdout, st3)
++    shas, out = rows(d3, 30)
++    check("S8 帳曾進版控後改成忽略:主線上的舊判綠照舊被減掉", hm not in shas, (shas, out))
++
++
++def t_git_partial_clone_keys():
++    """[判綠紀錄限本分支 S8 S10] 認部分複製照 git 的設計文件三個設定、照 git 自己的布林規則:extensions.partialClone、promisor 為真、
++    partialCloneFilter 各自單獨就算;promisor 為假(false、0、等號後空字串)不算;裸鍵與 promisor = 2 算;遠端名含空白也切得對。
++    應抓到的錯:只看一個設定、自己猜值的寫法(漏裸鍵、漏整數)、用空白切鍵與值(遠端名含空白時把 false 判成真)。"""
++    import subprocess as _sp
++    m = _tqg_module()
++    root = mkvault().parent.parent / "gpc"
++    _sp.run(["git", "init", "-q", str(root)])
++    cfg = root / ".git" / "config"
++    base = cfg.read_text(encoding="utf-8")
++    cases = (
++        ("沒有任何設定", "", False),
++        ("只有 extensions.partialClone", "[extensions]\n\tpartialClone = origin\n", True),
++        ("只有 promisor = true", '[remote "origin"]\n\tpromisor = true\n', True),
++        ("只有 partialCloneFilter", '[remote "origin"]\n\tpartialCloneFilter = blob:none\n', True),
++        ("沒有等號的裸鍵 promisor", '[remote "origin"]\n\tpromisor\n', True),
++        ("promisor = 2", '[remote "origin"]\n\tpromisor = 2\n', True),
++        ("promisor = false", '[remote "origin"]\n\tpromisor = false\n', False),
++        ("promisor = 0", '[remote "origin"]\n\tpromisor = 0\n', False),
++        ("promisor = 空字串", '[remote "origin"]\n\tpromisor =\n', False),
++        ("遠端名含空白、promisor = false", '[remote "my remote"]\n\tpromisor = false\n', False),
++        ("遠端名含空白、promisor = true", '[remote "my remote"]\n\tpromisor = true\n', True),
++        ("promisor = 0k(單位字尾)", '[remote "origin"]\n\tpromisor = 0k\n', False),
++        ("promisor = 0x0", '[remote "origin"]\n\tpromisor = 0x0\n', False),
++        ("promisor = 010(八進位 8)", '[remote "origin"]\n\tpromisor = 010\n', True),
++        ("promisor = TRUE", '[remote "origin"]\n\tpromisor = TRUE\n', True),
++        ("promisor = 0_0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0_0\n', True),
++        ("promisor = 0b0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0b0\n', True),
++    )
++    for label, extra, want in cases:
++        cfg.write_text(base + extra, encoding="utf-8")
++        if extra:
++            gb = _sp.run(["git", "-C", str(root), "config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"], capture_output=True, text=True)
++            if "promisor" in extra and "partialCloneFilter" not in extra and gb.returncode == 0:   # git 拒絕的寫法不對照
++                check(f"★對照★ {label}:git 自己的布林判讀", gb.stdout.strip().endswith("true") == want, gb.stdout)
++        got = m._git_partial_clone(root)
++        check(f"{label} → {want}", got is want, got)
++    cfg.write_text(base, encoding="utf-8")
++    _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "c", "--no-verify"])
++    real = m._git_partial_clone
++    try:   # 判不了是不是部分複製(git 叫不起來或逾時):回頭條件那支當判不了,不當成「不是」
++        m._git_partial_clone = lambda *a, **k: None
++        why = m._drift_born_env_err(root)
++    finally:
++        m._git_partial_clone = real
++    check("S8 判不了是不是部分複製:回頭條件那支判不了、講原因", why == "git 跑不起來", why)
++    check("★對照★ 不是部分複製、有提交:回頭條件那支照常判", m._drift_born_env_err(root) is None, m._drift_born_env_err(root))
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/lumos-project-notes/commands/test-quality-standard.md b/skills/lumos-project-notes/commands/test-quality-standard.md
+index 3b9daf631..759ad6cfe 100644
+--- a/skills/lumos-project-notes/commands/test-quality-standard.md
++++ b/skills/lumos-project-notes/commands/test-quality-standard.md
+@@ -29,21 +29,21 @@
+ 
+ 審查 AI 寫的測試另外問這幾題:預期值從哪來(需求、人工確認、獨立參考,不是程式目前的輸出);有沒有明知漏了需求還照交;有沒有多出沒人要的別名或退路(只為了讓某支測試過);截圖基準圖有變要看新舊比較圖,不只看「重錄了」;mock 與假資料的形狀要照真實上游輸出(抓一次真輸出當樣本),不用手寫的簡化形狀。
+ 
+ 合法性質測試、确定性與 snapshot 可提供補充證據，配獨立已知答案或其他足夠約束。例如只驗排序兩次等於一次，永遠回傳空陣列也能過；再驗元素保留、順序與已知例子。snapshot 要交代核對來源，批量接受目前輸出不能當需求正確。靜態命中先核對目的，不因形式相似自動刪除。
+ 
+ ## 推送前的防竄改檢查
+ 
+ 推送前的新增告警閘會跑 `lumos test-guard`(作弊比對,單源 [[Projects/Android測試防竄改檢查_計劃]]):從跟主線的分岔點起,比對這次改動前後兩版,列出讓測試變得不會紅的改動;新功能的測試在分岔點不存在,這時改拿規格閘判紅時存下的那一版(紅燈版,單源 [[Projects/規格閘紅燈測試快照_計劃]])當改動前版本。規則代號都以 `tq/` 開頭,每條是**候選不是定罪**,擋下訊息每條附「該確認什麼」。
+ 
+ - **抓什麼**:測試檔新增跳過標記(`@Ignore`、`@Disabled`、`@SdkSuppress`、`@FlakyTest`、`@Config(sdk`、`Assume.assumeTrue(`、`TruthJUnit.assume()`、既有 assume 的條件被改(多行寫法也算)、既有測試加 `expected =`);測試函式被刪或整支測試檔被刪;同一函式斷言變少、強斷言變少、常值斷言變多;斷言的預期值被改;新增或本體有變的測試沒有斷言;try 沒有 `fail(` 而 catch 裡斷言或是空的;try 裡有斷言(含結尾的 `fail(`)而 catch 接得住 AssertionError(型別名字以 Error、Failure 結尾或是 Throwable,含 JUnit 的 ComparisonFailure)、又不重丟(不看 catch 裡寫了什麼檢查,照 Error Prone 的 AssertionFailureIgnored);測試的逾時調大;截圖基準圖有變或測試裡的比對門檻新增或調高;正式程式偵測測試環境(`"robolectric"`、`Class.forName("org.junit…")`);新測試相對規格閘紅燈版被放寬斷言、改 expected、新加 `expected =`、調大逾時(`tq/redbase-weakened`),紅燈版記的測試在推送版找不到(`tq/redbase-unmatched`),紅燈版讀不到、沒提交或被改過(`tq/redbase-unreadable`)。單一怪檔(太大、含 NUL、檔名不是 UTF-8)各自列成可放行的候選、不解析;測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的候選、其餘照比。
+-- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一版不比(之後另做);把測試檔搬進 Gradle 不編譯的目錄;catch 裡出現 `throw` 字(含條件式、死分支、lambda 裡)或呼叫名字叫 `fail` 的方法(含 `promise.fail(e)`)就當成重丟或明確失敗、不列;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算;規格閘紅燈版只保護某次跑紅時已經寫好的斷言(骨架之後才補、補完後沒再跑紅的不保護),判綠過的、逾時紅的不存,實作後第一次跑規格閘就手動把實作搬走造紅、之前沒判綠過的,紅燈版是實作後的內容;紅燈版比對時 expected 寫在註記資料列(`@CsvSource`)或同檔常數裡改值、expected 與被測呼叫同時改判不到,推送版出現同名多載時當找不到;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
++- **抓不到**:只認 Kotlin 與 Java 的 `@Test` 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認);實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查;預期值先放進變數再斷言(`val expected = 88`)、參數化測試刪資料列、本體有改的改名(只列成刪除)、逾時換單位(`5.seconds` 改 `5.minutes`)或整行新增的逾時、CI 的 `timeout-minutes`;catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 `return` 或包一個永假的 `if`、Truth 的 `assume()` 以外的自訂跳過輔助、同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources;建置檔與 CI 讓測試不跑或失敗不算(`ignoreFailures`、`enabled = false`、`-x test`、`|| true`、`continue-on-error`)這一版不比(之後另做);把測試檔搬進 Gradle 不編譯的目錄;catch 裡出現 `throw` 字(含條件式、死分支、lambda 裡)或呼叫名字叫 `fail` 的方法(含 `promise.fail(e)`)就當成重丟或明確失敗、不列;不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行);測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 `tq/too-large`;assume 敘述超過 2000 字的尾段不進身分;用單獨的 CR 或 Java 的 `\u000a` 提前結束行註解;JUnit 5 的測試改成 `private` 或 `static`(不再被執行)不列;修飾詞改動不算測試有變;測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算;規格閘紅燈版只保護某次跑紅時已經寫好的斷言(骨架之後才補、補完後沒再跑紅的不保護),判綠過的、逾時紅的不存(治理帳被 git 忽略的專案,壓過或 rebase 過的分支上舊的判綠紀錄不算;部分複製的專案治理帳進版控時不做判綠觀測),實作後第一次跑規格閘就手動把實作搬走造紅、之前沒判綠過的,紅燈版是實作後的內容;紅燈版比對時 expected 寫在註記資料列(`@CsvSource`)或同檔常數裡改值、expected 與被測呼叫同時改判不到,推送版出現同名多載時當找不到;剝字串、括號配對與逐行比對是近似判讀,不是解析器。同一份清單也印在 `lumos test-guard` 輸出的最後與 `--json` 的 `limitations`(兩邊由測試釘成同一份)。
+ - **怎麼放行**:改動是需求要的,就照擋下訊息印好的指令放行,理由寫「為什麼這個改動是需求要的」(去掉空白至少 10 個字):`lumos lint-waive <指紋> --rule <規則> --file <檔> --note "<理由>"`。放行檔 `.lumos/lint-waivers.json` 要一起提交。
+ - **AI 放的放行要人看過**:放行時終端有人答 y 才記成人放的;沒有互動終端記成 AI 放的,推送前小結與健檢會一直列出來,直到人在終端跑 `lumos lint-waive --ack --all`。
+ - **比對自己壞了**:擋下訊息寫「作弊比對沒跑完」;這一次要先過用 `LUMOS_SKIP_LINT_NEW=1`(只認 1;會留一筆 `skipped-env` 帳,寫比對出錯的原因)。
+ - **升級說明**:觸發只看路徑與副檔名,不判是不是 Android——任何 Kotlin/Java 專案(含 JVM 後端)改到測試檔或正式程式檔都會跑,截圖基準圖不分技術棧都會跑;建置檔與 CI 檔這一批不比(在計劃的第二批)。不想擋的專案把 `.lumos/config.json` 的 `lint_new.gate` 設成 warn(只報不擋)或 off(比對照樣在背後跑、有候選或比對出錯時留帳);提交後從下一次推送起生效,同一次推送照放寬前的值判。
+ 
+ ## 工具接入：統一證據，按棧接 runner
+ 
+ 使用各專案既有 runner，选配成熟 mutation 工具。Lumos 不自建通用多語言解析器或 mutation engine，也不靠記帳欄位宣稱語意正確。所有執行限隔離的本機、可信 fixture；外部服務、資料庫、副作用須另設隔離，暫存原始碼不能代替環境隔離。
+ 
+ | 棧 | 本機測試入口（由專案固定實際命令） | 抓錯工具方向 | 资格需分開驗的範圍 |
