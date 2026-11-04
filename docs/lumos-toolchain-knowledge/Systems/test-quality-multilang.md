@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-07
-updated: 2026-10-07
+updated: 2026-11-02
 responsibility: 選配本機 Semgrep 的來源自比辨識與失敗狀態；不執行來源、不保證完整測試框架或算法同源分析
 self_audit: GPT-6-Codex-clean-agent/2026-10-08
 about_code_stamp: claude/2026-10-08/5e59066aaa5e
@@ -17,6 +17,7 @@ tags:
   - scope/evals
 summary: |-
   WHY: 選配固定版本的本機語法工具，避免自建多語言 parser [出處:2026-10-07 跨語言測試品質計劃] [因:保持核心零依賴，缺工具或未掃快照時明確回報不完整]
+  PITFALL:Semgrep 的自比樣式不帶類別前綴時,Assert.assertEquals(x, x)、MatcherAssert.assertThat(x, equalTo(x)) 這類帶前綴的寫法一條都抓不到 [出處:2026-11-02 Semgrep 1.183.0 實跑,[[Projects/Android測試防竄改檢查_計劃]]] [根因:Semgrep 對 Kotlin 與 Java 不帶前綴的樣式只配沒有前綴的呼叫] [修法:每種樣式另加一條 $Q. 前綴版] [repro:governance/eval/results/android-test-guard-drill-20261102/ 的 Semgrep 實跑輸出]
 related:
   - "[[Systems/test-quality-scan]]"
 verified_by:
@@ -26,6 +27,7 @@ verified_by:
   - "[[Verification/測試品質分支推送前修復驗證]]"
   - "[[Verification/測試品質分支第二輪修復驗證]]"
   - "[[Verification/測試品質第四輪修補驗證]]"
+  - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
 ---
 # test-quality-multilang
 

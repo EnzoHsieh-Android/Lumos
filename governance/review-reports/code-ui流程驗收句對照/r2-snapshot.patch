@@ -1,0 +1,1674 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 44ebce91b..dbec4e9a9 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -7217,23 +7217,24 @@ def _secinv_blocks(rel, text, mark=_SECINV_MARK):
+ 
+ _SECINV_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+ 
+ 
+ def _secinv_is_text(v):
+     """登記裡的字串:要是 str、不是空白、不含孤立代理字元(JSON 的 \\ud800 這種跳脫讀進來不是合法文字;代碼審 r1 正確性、邊界席)。
+     ★統一規則(代碼審 r1 G1)★:每個 schema 檢查先用這支或 isinstance 驗型別,驗過的值才拿去查表、進集合或做 in 查詢。"""
+     return isinstance(v, str) and v.strip() != "" and _SECINV_SURROGATE_RE.search(v) is None
+ 
+ 
+-def _secinv_names(keys, limit=10):
+-    """錯誤訊息裡列鍵名:每個最多 40 字、最多 limit 個,多的只寫個數(鍵名來自登記內容,不能讓一則訊息無上限長)。"""
+-    ks = [str(k)[:40] for k in keys]
++def _secinv_names(keys, limit=10, width=40):
++    """錯誤訊息裡列鍵名:每個最多 width 字(預設 40)、最多 limit 個,多的只寫個數(鍵名來自登記內容,不能讓一則訊息無上限長)。
++    Android 端到端驗收的舊項目清單也用這一支(width 給到放得下 flow 路徑)。"""
++    ks = [str(k)[:width] for k in keys]
+     return "、".join(ks[:limit]) + (f" 等 {len(ks)} 個" if len(ks) > limit else "")
+ 
+ 
+ def _secinv_str_list(v, name, probs, allowed=None):
+     if not isinstance(v, list) or not all(_secinv_is_text(x) for x in v):
+         probs.append(f"{name} 要是非空字串陣列")
+         return
+     if len(set(v)) != len(v):
+         probs.append(f"{name} 有重複值")
+     if allowed is not None and any(x not in allowed for x in v):
+@@ -40423,21 +40424,24 @@ def _macrobench_mode(repo, as_json, update_baseline, stability_path=None, check_
+         print(json.dumps(dict(res, configured=True, files=n_files), ensure_ascii=False))
+     else:
+         _macrobench_print(res, cfg)
+         _macrobench_print_thresholds(res)
+         _macrobench_native_print(res["native_retained"])
+     return 0
+ 
+ 
+ # ── Android 端到端驗收(lumos android-e2e;單源 Projects/Android端到端驗收_計劃,家 Systems/android-e2e-acceptance)──
+ # 範本腳本 scripts/templates/android-e2e-run.sh 碰裝置、寫 steps.json;這裡只判定與寫紀錄(lumos 不碰裝置)。
+-E2E_SCHEMA = 1              # 查證紀錄與 steps.json 的格式版本:讀到比這新的就擋(請人更新 lumos)
++E2E_SCHEMA = 1              # steps.json(範本腳本寫)的格式版本:judge 要求完全相等;範本腳本寫死 1,所以這個數字不跟著查證紀錄升
++E2E_RECORD_SCHEMA = 2       # 查證紀錄的格式版本:收 1 到這個數字,讀到比這新的就擋(請人更新 lumos);寫紀錄一律寫這個數字。
++                            # 2=UI 那塊每支 flow 多 checks 欄(Projects/UI流程驗收句與檢查對照_計劃〈做法〉4:跟 steps.json 的版本拆開,
++                            # 只升 E2E_SCHEMA 會讓還沒更新範本腳本的專案驗收整條失效)
+ E2E_RECORDS_DIR = ".lumos/e2e-records"
+ E2E_MATERIAL_DIRS = (".maestro",)   # 驗收素材目錄:驗收 flow、共用 flow、config.yaml、toolkit 腳本與基準圖
+ E2E_THRESHOLDS = ".lumos/macrobench-thresholds.json"
+ E2E_STAB_CHECKS = ("native_unreachable", "java_growth", "instances", "peak_vitals", "exits", "strictmode")   # 預設要求的記憶體 check
+ E2E_RESULTS = ("pass", "fail", "unjudged")
+ 
+ 
+ def _e2e_relpath_err(p, what):
+     """相對專案根的路徑:非空字串、不是絕對路徑、不含 ..、不是 . 本身、寫法正規(沒有 //、/./)、不含萬用字元。回錯誤訊息或 None。
+     app_dirs、exclude、flows、apk 與功能對照表的 paths 共用這一支:比對一律是字串前綴(_e2e_under),
+@@ -40613,20 +40617,71 @@ def _e2e_case_err(where, cn, c, e2e, scen, flows, screens):
+     if miss:
+         return f"{where}.visual 的 {'、'.join(miss)} 不在 e2e.visual 裡"
+     err = _e2e_case_bench_err(where, c, e2e)
+     if err:
+         return err
+     if c.get("stability") and not e2e.get("stability"):
+         return f"{where} 列了記憶體情境,e2e 段要 stability 是 true"
+     miss = [x for x in c.get("stability", []) if x not in (scen or {})]
+     if miss:
+         return f"{where}.stability 的 {'、'.join(miss)} 不在 stability_scenarios 裡"
++    return _e2e_case_accept_err(where, c)
++
++
++# 情境的驗收句三鍵(Projects/UI流程驗收句與檢查對照_計劃〈做法〉1):都選填,寫了就要合格;判定讀的是推送檢查(_e2e_accept_gate)
++E2E_ONE_WAY = ("payment", "external-send", "prod-irreversible")   # one_way 收的值:規格閘單向門的三類(_DOOR_CLASS_ZH 的鍵;守衛面不收,那是工具鏈自己的)
++E2E_ACCEPT_ID_RE = re.compile(r"[A-Za-z0-9]+")
++E2E_ACCEPT_LABEL = "驗收:{case}#{id}"   # 流程裡檢查的 label:case 是「功能.情境」;一個檢查只對一句
++
++
++def _e2e_accept_list_err(where, acc):
++    """accept:至少一項的清單,每項 {id: 英數字、情境內唯一, text: 非空字串, state: 選填字串};條數與字數上限沿用 E2E_PATH_LIST_MAX。"""
++    if not isinstance(acc, list) or not acc:
++        return f"{where}.accept 要是至少一項的清單(每項 {{id, text, state}})"
++    if len(acc) > E2E_PATH_LIST_MAX:
++        return f"{where}.accept 最多 {E2E_PATH_LIST_MAX} 句(現在 {len(acc)} 句)"
++    seen = set()
++    for i, a in enumerate(acc, 1):
++        w = f"{where}.accept 的第 {i} 句"
++        if not isinstance(a, dict):
++            return f"{w} 要是物件({{id, text, state}})"
++        aid = a.get("id")
++        if not isinstance(aid, str) or not E2E_ACCEPT_ID_RE.fullmatch(aid) or len(aid) > E2E_PATH_LIST_MAX:
++            return f"{w} 的 id 要寫,只收英數字:{_out_clean(repr(aid), 80)}"
++        if aid in seen:
++            return f"{w} 的 id {aid} 重複(同一個情境內要唯一)"
++        seen.add(aid)
++        for k, req in (("text", True), ("state", False)):
++            v = a.get(k)
++            if (req or k in a) and (not isinstance(v, str) or (req and not v.strip()) or len(v) > E2E_PATH_LIST_MAX):
++                return f"{w}({aid})的 {k} 要是{'非空' if req else ''}字串,最多 {E2E_PATH_LIST_MAX} 字"
++    return None
++
++
++def _e2e_case_accept_err(where, c):
++    """情境的 accept、accept_review、one_way 三鍵 → 錯誤訊息或 None。accept_review 的 by 跟放行紀錄同一套(human、ai),
++    who 寫人名或審查代理的模型名(要看出是哪個代理審的);one_way 是單向門類別的清單,一類都不碰寫 []。"""
++    if "accept" in c:
++        err = _e2e_accept_list_err(where, c["accept"])
++        if err:
++            return err
++        if not c.get("flows"):   # 只列截圖、效能或記憶體的情境:推送檢查不逐句對照它,寫了等於沒寫(代碼審 r1)
++            return f"{where} 寫了 accept 卻沒有 flows:沒有 flow 就沒有地方帶 label,這些驗收句永遠不會被對照(拿掉 accept,或把驗收流程列進 flows)"
++    if "accept_review" in c:
++        r = c["accept_review"]
++        if not isinstance(r, dict) or r.get("by") not in ("human", "ai"):
++            return f"{where}.accept_review 要是 {{by: human 或 ai, who: 人名或審查代理的模型名}}"
++        if not isinstance(r.get("who"), str) or not r["who"].strip() or len(r["who"]) > E2E_PATH_LIST_MAX:
++            return f"{where}.accept_review.who 要是非空字串(人名,或審查代理的模型名),最多 {E2E_PATH_LIST_MAX} 字"
++    ow = c.get("one_way")
++    if "one_way" in c and (not isinstance(ow, list) or any(not isinstance(x, str) or x not in E2E_ONE_WAY for x in ow)):
++        return f"{where}.one_way 要是清單,每項是 {'、'.join(E2E_ONE_WAY)} 之一(一類都不碰寫 [])"
+     return None
+ 
+ 
+ def _e2e_feature_head_err(fn, f, name_ok):
+     """功能對照表裡一個功能本身:名字、paths(--changed 靠它挑功能,路徑規則同 _e2e_relpath_err)、cases 非空。"""
+     if not name_ok.fullmatch(fn):
+         return f"features 的功能名只收英數字、底線與連字號:{fn!r}"
+     if not isinstance(f, dict) or not isinstance(f.get("paths"), list) or not all(isinstance(x, str) and x.strip() for x in f["paths"]):
+         return f"features.{fn}.paths 要是字串清單(這個功能的程式路徑,--changed 靠它挑功能)"
+     err = next((e for e in (_e2e_relpath_err(x, f"features.{fn}.paths 的一項") for x in f["paths"]) if e), None)
+@@ -40844,43 +40899,72 @@ def _e2e_record_path(root, fp):
+ def _e2e_strs(x):
+     """x 是字串清單嗎(紀錄欄位型別檢查用)。"""
+     return isinstance(x, list) and all(isinstance(i, str) for i in x)
+ 
+ 
+ def _e2e_record_err(rec, fp):
+     """紀錄讀不讀得懂(判定與寫入共用一套):回錯誤訊息或 None。runs 是 null 有兩種:放行的紀錄,
+     或這一版只做過按功能跑(只有 feature_runs);不能只看 runs 是 null 就當放行。"""
+     if not isinstance(rec, dict):
+         return "最外層不是物件"
+-    if not _secev_int(rec.get("schema")) or rec["schema"] > E2E_SCHEMA or rec["schema"] < 1:
+-        return f"schema 是 {rec.get('schema')!r},這版 lumos 只認 1 到 {E2E_SCHEMA}(比較新就更新 lumos)"
++    if not _secev_int(rec.get("schema")) or rec["schema"] > E2E_RECORD_SCHEMA or rec["schema"] < 1:
++        return f"schema 是 {rec.get('schema')!r},這版 lumos 只認 1 到 {E2E_RECORD_SCHEMA}(比較新就更新 lumos)"
+     if rec.get("fingerprint") != fp:
+         return "紀錄裡的指紋跟檔名對不上"
+     runs = rec.get("runs")
+     if runs is not None and (not isinstance(runs, dict) or runs.get("result") not in E2E_RESULTS):
+         return "runs.result 不是 pass、fail、unjudged 之一"
+     if not isinstance(rec.get("waivers", []), list) or not isinstance(rec.get("history", []), list):
+         return "waivers 或 history 不是清單"
+-    fr = rec.get("feature_runs", {})
+-    if not isinstance(fr, dict) or any(not isinstance(v, dict) or v.get("result") not in E2E_RESULTS for v in fr.values()):
+-        return "feature_runs 要是「功能.情境 → {result: pass、fail、unjudged 之一, …}」"
+     # 判定會讀到的欄位型別也在這裡驗:型別不對時當成讀不懂(擋下叫人修紀錄),不走到判定內部出錯(代碼審 r3 邊界席)
+     ran = runs.get("ran") if isinstance(runs, dict) else None
+     if ran is not None and (not isinstance(ran, dict) or not all(_e2e_strs(ran.get(k, [])) for k in ("flows", "visual", "stability_checks"))):
+         return "runs.ran 要是 {flows, visual, stability_checks: 字串清單}"
++    return _e2e_record_checks_err(runs.get("blocks") if isinstance(runs, dict) else None) or _e2e_record_fr_err(rec.get("feature_runs", {}))
++
++
++def _e2e_record_fr_err(fr):
++    """紀錄的 feature_runs(按功能跑的結果):形狀與判定會讀到的欄位型別。回錯誤訊息或 None。"""
++    if not isinstance(fr, dict) or any(not isinstance(v, dict) or v.get("result") not in E2E_RESULTS for v in fr.values()):
++        return "feature_runs 要是「功能.情境 → {result: pass、fail、unjudged 之一, …}」"
+     for k, v in fr.items():
+         if not _e2e_strs(v.get("skipped", [])) or not isinstance(v.get("items", []), list) \
+                 or not all(isinstance(i, dict) and isinstance(i.get("name"), str) for i in v.get("items", [])):
+             return f"feature_runs 的 {k}:skipped 要是字串清單、items 要是 {{kind, name, result}} 清單"
+     return None
+ 
+ 
++def _e2e_record_checks_err(blocks):
++    """整套紀錄 runs.blocks.ui 每支 flow 的 checks 欄(紀錄版本 2 起;推送檢查的新規則讀它,所以型別在這裡驗,跟 ran 同一個慣例)
++    → 錯誤訊息或 None。沒有 checks 欄照收(舊版 lumos 寫的;推送檢查另外處理)。"""
++    if blocks is None:
++        return None
++    if not isinstance(blocks, dict):
++        return "runs.blocks 要是物件"
++    ui = blocks.get("ui")
++    if not isinstance(ui, list):   # 沒設定或沒跑時是一句說明
++        return None
++    for x in ui:
++        if not isinstance(x, dict) or not isinstance(x.get("flow"), str):
++            return "runs.blocks.ui 要是 {flow, result, …} 清單"
++        if "checks" not in x:
++            continue
++        ck = x["checks"]
++        if ck is None:
++            if not isinstance(x.get("checks_reason"), str) or x.get("checks_reason_code") not in E2E_CHECKS_JUDGE_CODES:
++                return (f"runs.blocks.ui 的 {x['flow']}:checks 是 null 時 checks_reason 要是字串、checks_reason_code 要是 "
++                        f"{'、'.join(E2E_CHECKS_JUDGE_CODES)} 之一")
++        elif not (isinstance(ck, dict) and _secev_int(ck.get("count")) and ck["count"] >= 0 and _e2e_strs(ck.get("labels"))):
++            return f"runs.blocks.ui 的 {x['flow']}:checks 要是 {{count: 非負整數, labels: 字串清單}} 或 null"
++    return None
++
++
+ def _e2e_junit_ok(path):
+     """Maestro 的 JUnit 報告 → (過不過, 原因)。讀法走 _secev_junit_facts(安全證據閘同一支:test_quality.junit()、
+     拒收 DTD、宣告的案例數要對得上、零案例與 suite 層錯誤都不算過、案例數有上限);每個案例都 passed 才算這一次過。"""
+     tq = _secev_tq()
+     if tq is None:
+         return False, "測試品質模組(scripts/test_quality.py)讀不到,判不了 JUnit 報告"
+     try:
+         raw = Path(path).read_bytes()
+     except OSError as e:
+         return False, f"報告讀不了:{e}"
+@@ -40910,37 +40994,112 @@ def _e2e_ui_evidence(tries):
+     got = {"dirs": [], "crashes": []}
+     for t in tries:
+         ev = t.get("evidence") if isinstance(t.get("evidence"), dict) else {}
+         for key, out in (("dir", got["dirs"]), ("crash", got["crashes"])):
+             v = ev.get(key)
+             if isinstance(v, str) and v and os.path.exists(v):
+                 out.append(v)
+     return got if got["dirs"] or got["crashes"] else None
+ 
+ 
++# ── UI 流程的檢查(Projects/UI流程驗收句與檢查對照_計劃〈做法〉4):judge 只記事實(每支 flow 跑過哪些算數的檢查、各帶什麼 label),
++# 擋不擋由推送檢查依主線判(_e2e_accept_gate)。讀的是 Maestro 的執行紀錄 commands.json(--debug-output),不讀 flow 的 YAML。
++E2E_CHECK_CMDS = ("assertConditionCommand", "assertScreenshotCommand")   # 算數的檢查指令:assertVisible、assertNotVisible、extendedWaitUntil、
++                                                                        # assertTrue 都記成 assertConditionCommand(2026-11-01 SM-X710、Maestro 2.10.0 實測);AI 類不算
++E2E_CHECKS_DEPTH_MAX = 64                # commands.json 的巢狀層數上限(實測 18 步的探針 13 層;只擋病態輸入)
++E2E_CHECKS_FILE_MAX = 16 * 1024 * 1024   # commands.json 的大小上限(實測 13KB;只擋病態輸入)
++# checks 是 null 的成因代碼 → 推送檢查印的處方(〈成因與處方〉表;全是工具類,補內容解不開,附放行指令)。
++# judge 寫前七個;no_checks_field 是推送檢查讀到紀錄裡沒有 checks 欄時自己用的。新增代碼時這張表與 t_android_e2e_gate_new_flow_checks 一起改。
++E2E_CHECKS_FIX = {
++    "no_evidence": "升級 Maestro 到 2.x、跑 lumos update 更新範本腳本,再重跑整套",
++    "subdir_count": "範本腳本與 lumos 版本可能不一致或現場被動過:跑 lumos update 後重跑整套",
++    "missing": "範本腳本與 lumos 版本可能不一致或現場被動過:跑 lumos update 後重跑整套",
++    "unreadable": "Maestro 的執行紀錄格式可能改了:回報工具鏈;確認是工具問題才放行",
++    "too_deep": "把流程拆小再重跑整套;確定合理才放行",
++    "too_big": "把流程拆小再重跑整套;確定合理才放行",
++    "too_many_labels": "把流程拆小再重跑整套;確定合理才放行",
++    "no_checks_field": "紀錄可能是舊版 lumos 寫或覆寫的:更新 lumos 後重跑整套",
++}
++E2E_CHECKS_JUDGE_CODES = tuple(k for k in E2E_CHECKS_FIX if k != "no_checks_field")   # judge 會寫進紀錄的代碼(_e2e_record_err 只收這幾個)
++
++
++def _e2e_checks_null(code, why):
++    return {"checks": None, "checks_reason": why, "checks_reason_code": code}
++
++
++def _e2e_checks_count(raw, p):
++    """commands.json 的內容 → checks 欄。最外層是攤平的清單(子流程、repeat 裡的每一次執行各自一筆,metadata.depth 標層次),
++    逐筆看最外層:指令是 E2E_CHECK_CMDS 之一、metadata.status 是 COMPLETED 才算(WARNED、SKIPPED 不算);父指令(runFlow、repeat)
++    內容裡的副本沒有執行狀態,不算、也不往裡找(往裡找會重複計數)。labels 去重、不截斷:超過上限整支記 null(截斷會讓截掉的句子被誤判成沒對到)。"""
++    if not isinstance(raw, list):
++        return _e2e_checks_null("unreadable", f"{p} 最外層不是清單(Maestro 的執行紀錄格式可能改了)")
++    count, labels = 0, {}
++    for e in raw:
++        cmd, meta = (e.get("command"), e.get("metadata")) if isinstance(e, dict) else (None, None)
++        if not (isinstance(cmd, dict) and len(cmd) == 1 and isinstance(meta, dict)):
++            return _e2e_checks_null("unreadable", f"{p} 有一筆指令的形狀認不得(Maestro 的執行紀錄格式可能改了)")
++        (name, body), = cmd.items()
++        if name not in E2E_CHECK_CMDS or meta.get("status") != "COMPLETED":
++            continue
++        if not isinstance(body, dict):
++            return _e2e_checks_null("unreadable", f"{p} 的 {name} 內容不是物件(Maestro 的執行紀錄格式可能改了)")
++        count += 1
++        lab = body.get("label")
++        if isinstance(lab, str) and lab.strip():
++            labels[lab] = None   # dict 去重、保留第一次出現的順序
++    if len(labels) > E2E_PATH_LIST_MAX:
++        return _e2e_checks_null("too_many_labels", f"{p} 去重後有 {len(labels)} 個 label,超過上限 {E2E_PATH_LIST_MAX}")
++    return {"checks": {"count": count, "labels": list(labels)}}
++
++
++def _e2e_flow_checks(t):
++    """通過的那一次嘗試(steps.json 的一筆)→ checks 欄:{"checks": {count, labels}},或 checks 是 null 加 checks_reason(給人看)
++    與 checks_reason_code(E2E_CHECKS_JUDGE_CODES 之一,判定只看代碼)。範本腳本把每次嘗試的現場目錄記在 evidence.dir,
++    debug 目錄固定是它底下的 debug;只讀那底下唯一的子目錄裡的 commands.json(不猜 flow 的 name:)。"""
++    ev = t.get("evidence") if isinstance(t.get("evidence"), dict) else {}
++    d = ev.get("dir")
++    if not isinstance(d, str) or not d:
++        return _e2e_checks_null("no_evidence", "這次嘗試沒有 Maestro 現場目錄(evidence.dir 是空:Maestro 太舊沒帶現場旗標、"
++                                               "範本腳本是舊版,或不是用範本腳本跑的)")
++    dbg = Path(d) / "debug"
++    try:
++        subs = [x for x in dbg.iterdir() if x.is_dir()] if dbg.is_dir() else []
++    except OSError:
++        subs = []
++    if len(subs) != 1:
++        return _e2e_checks_null("subdir_count", f"{dbg} 底下有 {len(subs)} 個子目錄(要剛好一個)")
++    p = subs[0] / "commands.json"
++    raw, err = _e2e_load_json(p, scrub=False, depth=E2E_CHECKS_DEPTH_MAX, limit=E2E_CHECKS_FILE_MAX)
++    if err:
++        return _e2e_checks_null(err.code, f"執行紀錄不在:{p}" if err.code == "missing" else str(err))
++    return _e2e_checks_count(raw, p)
++
++
+ def _e2e_judge_ui(e2e, steps):
+     """每支 flow:第一次過→過;第一次沒過、第二次過→過且標不穩定;兩次都沒過→沒過;沒跑到→沒判到。
+-    沒過或第二次才過的,另帶沒過那幾次的現場路徑(fail_evidence,只列存在的;Projects/E2E紅燈現場與不穩帳_計劃 S3)。"""
++    沒過或第二次才過的,另帶沒過那幾次的現場路徑(fail_evidence,只列存在的;Projects/E2E紅燈現場與不穩帳_計劃 S3)。
++    過的另帶通過那一次嘗試的檢查(checks 欄,_e2e_flow_checks;整套與按功能兩條路都算,只有整套那份寫進查證紀錄)。"""
+     out = []
+     for f in e2e["flows"]:
+         name = _e2e_flow_name(f)
+         tries = sorted(_e2e_steps(steps, "ui", name), key=lambda s: s.get("attempt", 0))
+         if not tries:
+             out.append({"flow": f, "result": "unjudged", "reason": "這支 flow 沒跑到"})
+             continue
+         why = []
+         for i, s in enumerate(tries[:2]):
+             ok, w = (s.get("rc") == 0, f"回傳碼 {s.get('rc')}")
+             if ok:
+                 ok, w = _e2e_junit_ok(s.get("report") or "")
+             if ok:
+-                out.append({"flow": f, "result": "pass", "flaky": i > 0, "reports": [t.get("report") for t in tries[:i + 1]]})
++                out.append({"flow": f, "result": "pass", "flaky": i > 0, "reports": [t.get("report") for t in tries[:i + 1]],
++                            **_e2e_flow_checks(s)})
+                 break
+             why.append(f"第 {i + 1} 次:{w}")
+         else:
+             out.append({"flow": f, "result": "fail", "reason": ";".join(why), "reports": [t.get("report") for t in tries[:2]]})
+         ev = _e2e_ui_evidence(tries[:len(why)])   # why 有幾條就是沒過了幾次,現場只看那幾次
+         if ev:
+             out[-1]["fail_evidence"] = ev   # 不叫 evidence:steps.json 每次嘗試的 evidence、總表的 evidence(run 目錄)是別的形狀
+     return out
+ 
+ 
+@@ -40962,31 +41121,46 @@ def _e2e_judge_visual(e2e, steps, run_dir):
+         rec = {"screen": v, "result": "fail", "reason": (text.strip().splitlines() or [f"回傳碼 {s.get('rc')}"])[-1][-300:]}
+         if m:
+             rec["match_pct"] = float(m.group(1))
+             diff = Path(run_dir) / "visual" / v / f"{v}_diff.png"
+             if diff.exists():
+                 rec["diff_image"] = str(diff)
+         out.append(rec)
+     return out
+ 
+ 
+-def _e2e_load_json(path, scrub=True):
++class _E2eLoadErr(str):
++    """_e2e_load_json 的錯誤訊息,另帶成因代碼 code(missing、too_big、too_deep、unreadable):要分成因的呼叫端照代碼分、不比對字串;
++    其他呼叫端照舊當字串用。"""
++
++    def __new__(cls, msg, code):
++        s = super().__new__(cls, msg)
++        s.code = code
++        return s
++
++
++def _e2e_load_json(path, scrub=True, depth=20, limit=None):
+     """讀範本腳本與 lumos 寫的 JSON:限深與清孤立代理字元照 _macrobench_stab_load(否則印出或寫回紀錄時整支崩)。
+     scrub=False 給要整份寫回的查證紀錄用:只限深、只把孤立代理字元換成替代字元(不然寫回時編碼失敗、整支崩),
+-    其他照原樣——人寫的放行理由裡的換行與 tab 要保留。"""
++    其他照原樣——人寫的放行理由裡的換行與 tab 要保留。depth:巢狀層數上限(預設 20);limit:檔案大小上限(位元組,
++    讀之前先看大小;預設不限)——讀 Maestro 執行紀錄的那一處傳自己的上限(Projects/UI流程驗收句與檢查對照_計劃〈做法〉4)。
++    錯誤訊息是 _E2eLoadErr(帶成因代碼)。"""
+     import json
+     try:
++        if limit is not None and Path(path).stat().st_size > limit:
++            return None, _E2eLoadErr(f"{path} 超過 {limit // 1024 // 1024}MB 的大小上限", "too_big")
+         raw = json.loads(Path(path).read_text(encoding="utf-8"))
+     except (OSError, TypeError, ValueError, RecursionError) as e:   # RecursionError:深到 json 自己遞迴爆掉(代碼審 code-e2e-gate r2 邊界席)
+-        return None, f"讀不了 {path}:{'巢狀太深(RecursionError)' if isinstance(e, RecursionError) else e}"   # 其他照原訊息,保留位置(r3 通才席)
+-    if not _events_depth_ok(raw, 20):
+-        return None, f"{path} 巢狀太深"
++        code = "too_deep" if isinstance(e, RecursionError) else ("missing" if isinstance(e, FileNotFoundError) else "unreadable")
++        return None, _E2eLoadErr(f"讀不了 {path}:{'巢狀太深(RecursionError)' if isinstance(e, RecursionError) else e}", code)   # 其他照原訊息,保留位置(r3 通才席)
++    if not _events_depth_ok(raw, depth):
++        return None, _E2eLoadErr(f"{path} 巢狀太深", "too_deep")
+     return (_macrobench_stab_scrub(raw) if scrub else _e2e_fix_surrogates(raw)), None
+ 
+ 
+ def _e2e_fix_surrogates(v):
+     """遞迴把字串裡的孤立代理字元換成 U+FFFD,其他字元不動(呼叫前已限深)。"""
+     if isinstance(v, str):
+         return re.sub("[\ud800-\udfff]", "\ufffd", v)
+     if isinstance(v, list):
+         return [_e2e_fix_surrogates(x) for x in v]
+     if isinstance(v, dict):
+@@ -41078,27 +41252,59 @@ def _e2e_evaluate(e2e, steps, run_dir, scen=None):
+     stab = (_e2e_stab_by_name(e2e, steps, [None, *scen], notices) if e2e.get("stability") and scen
+             else _e2e_judge_stability(e2e, steps, notices))
+     blocks = {"ui": _e2e_judge_ui(e2e, steps), "visual": _e2e_judge_visual(e2e, steps, run_dir),
+               "stability": stab, "macrobench": _e2e_judge_macrobench(e2e, steps, notices)}
+     probs = _e2e_tool_problems(steps)
+     rs = [x["result"] for k in ("ui", "visual", "stability") if isinstance(blocks[k], list) for x in blocks[k]]
+     result = "fail" if "fail" in rs else ("unjudged" if probs or "unjudged" in rs else "pass")
+     flaky = [x["flow"] for x in blocks["ui"] if isinstance(blocks["ui"], list) and x.get("flaky")]
+     if flaky:
+         notices.append(f"不穩定的 flow(第二次才過):{'、'.join(flaky)}")
++    _e2e_checks_preview(e2e, blocks["ui"], notices)
+     return {"result": result, "problems": probs, "blocks": blocks, "notices": notices,
+             "ran": {"flows": [x["flow"] for x in blocks["ui"] if x["result"] != "unjudged"],
+                     "visual": [x["screen"] for x in blocks["visual"]] if isinstance(blocks["visual"], list) else [],
+                     "stability_checks": [x["check"] for x in blocks["stability"] if x["result"] != "unjudged"]
+                     if isinstance(blocks["stability"], list) else []}}
+ 
+ 
++def _e2e_case_coverage(fc, c, ui):
++    """一個情境的逐句對照(judge 的預覽與推送檢查共用這一支,不寫兩份)→ (讀不到的 flow, 沒對到的句子 id)。
++    ui:正規化後的 flow 路徑 → UI 條目;情境的 flows 也先正規化再對接。每一句要在這個情境所有 flow 的 checks.labels 聯集裡
++    找得到「驗收:<功能>.<情境>#<id>」。情境裡任一支 flow 的 checks 不是物件(null、沒有這個欄或沒有這支 flow)時判不出:
++    回 (那幾支, []),不報句子沒對到(不然讀不到執行紀錄會被講成驗收句沒對到)。"""
++    flows = list(dict.fromkeys(_e2e_norm(f) for f in c.get("flows") or []))
++    blind = [f for f in flows if not isinstance((ui.get(f) or {}).get("checks"), dict)]
++    if blind:
++        return blind, []
++    got = {lab for f in flows for lab in ui[f]["checks"]["labels"]}
++    return [], [a["id"] for a in c.get("accept") or [] if E2E_ACCEPT_LABEL.format(case=fc, id=a["id"]) not in got]
++
++
++def _e2e_checks_preview(e2e, ui_list, notices, cases=None):
++    """judge 的預覽(寫進 notices):零檢查的流程、有 accept 的情境沒對到的句子。哪些會擋由推送檢查依主線判(新舊要比主線,judge 拿不到主線)。
++    cases 給了(按功能跑)只看那幾個情境。"""
++    if not isinstance(ui_list, list):
++        return
++    ui = {_e2e_norm(x["flow"]): x for x in ui_list}
++    zero = [x["flow"] for x in ui_list if isinstance(x.get("checks"), dict) and x["checks"]["count"] == 0]
++    if zero:
++        notices.append(f"這些流程沒有任何檢查:{'、'.join(zero)}(預覽;哪些會擋由推送檢查依主線判)")
++    for fn, f in (e2e.get("features") or {}).items():
++        for cn, c in f["cases"].items():
++            fc = f"{fn}.{cn}"
++            if c.get("accept") and c.get("flows") and (cases is None or fc in cases):
++                _blind, miss = _e2e_case_coverage(fc, c, ui)
++                if miss:
++                    notices.append(f"情境 {fc} 的驗收句 {'、'.join(miss)} 沒有檢查對到(預覽;哪些會擋由推送檢查依主線判)")
++
++
+ def _e2e_now():
+     import datetime as _dt
+     return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+ 
+ 
+ def _e2e_record_update(root, fp, mutate):
+     """讀出整份紀錄、交給 mutate 改、整份寫回;包在讀改寫鎖裡(_vault_write_lock,照 lint-waive;殘留鎖不自動接手,
+     擋下訊息印鎖檔位置與人工清鎖的前提),寫入用 _write_lf。
+     紀錄讀不懂就不寫(回錯誤訊息),不拿空白紀錄蓋掉它。"""
+     import json
+@@ -41110,21 +41316,23 @@ def _e2e_record_update(root, fp, mutate):
+         with _vault_write_lock(p):
+             if p.exists():
+                 if p.lstat().st_size > E2E_RECORD_FILE_MAX:   # 掃描與判定都不讀這麼大的紀錄,寫回也不整份讀進來(代碼審 r3 資源席)
+                     return None, f"{p} 超過單份紀錄的大小上限({E2E_RECORD_FILE_MAX // 1024 // 1024}MB);先看過再決定刪掉或修好,這次不寫"
+                 rec, err = _e2e_load_json(p, scrub=False)
+                 # 跟推送前判定同一套「讀不懂」(含結束時間):寫得進去卻照樣被擋的放行不寫(代碼審 r3 合約、正確性席)
+                 err = err or _e2e_record_err(rec, fp) or _e2e_gate_times_err(rec)
+                 if err:
+                     return None, f"{p} 讀不懂({err});先看過再決定刪掉或修好,這次不寫"
+             else:
+-                rec = {"schema": E2E_SCHEMA, "fingerprint": fp, "runs": None, "history": [], "waivers": []}
++                rec = {"schema": E2E_RECORD_SCHEMA, "fingerprint": fp, "runs": None, "history": [], "waivers": []}
++            # 新建或更新一律寫成這版的紀錄版本:舊版 lumos 讀到會走「更新 lumos、紀錄不要動」,不會把它覆寫成沒有 checks 的舊形狀
++            rec["schema"] = E2E_RECORD_SCHEMA
+             rec.setdefault("history", [])
+             rec.setdefault("waivers", [])
+             mutate(rec)
+             data = json.dumps(rec, ensure_ascii=False, indent=1) + "\n"
+             if len(data.encode("utf-8")) > E2E_RECORD_FILE_MAX:   # 寫完會超過上限:判定會擋它,寫進去的放行不生效(r5 通才席)
+                 return None, f"{p} 寫完會超過單份紀錄的大小上限({E2E_RECORD_FILE_MAX // 1024 // 1024}MB);先清掉用不到的歷史再寫,這次不寫"
+             p.parent.mkdir(parents=True, exist_ok=True)
+             _write_lf(p, data)
+     except WriteBlocked as e:
+         return None, f"查證紀錄不寫:{e}"
+@@ -41423,33 +41631,35 @@ def _e2e_evaluate_selected(e2e, steps, run_dir, sel):
+     blocks = {"ui": _e2e_judge_ui(sub, steps), "visual": _e2e_judge_visual(sub, steps, run_dir) if sel["visual"] else "這次沒跑",
+               "stability": [], "macrobench": _e2e_judge_macrobench(sub, steps, notices) if sel["macrobench"] else "這次沒跑"}
+     blocks["stability"] = _e2e_stab_by_name(e2e, steps, sel["stability"], notices)
+     if not sel["stability"]:
+         blocks["stability"] = "這次沒跑"
+     if not sel["flows"]:
+         blocks["ui"] = "這次沒跑"
+     probs = _e2e_tool_problems(steps)
+     rs = [x["result"] for k in ("ui", "visual", "stability") if isinstance(blocks[k], list) for x in blocks[k]]
+     result = "fail" if "fail" in rs else ("unjudged" if probs or "unjudged" in rs else "pass")
++    _e2e_checks_preview(e2e, blocks["ui"], notices, sel["cases"])
+     return {"result": result, "problems": probs, "blocks": blocks, "notices": notices}
+ 
+ 
+ def _e2e_history_append(root, steps, runs, mode, blocked=None, run_dir=None):
+     """本機總表 .lumos/artifacts/android/history.jsonl 加一行(單源計劃〈檢測紀錄〉):整套或按功能、過或沒過、
+     判定擋下(blocked 是原因;runs 是 None 時 result 也是 None)都記。追加走本機帳共用的 _local_ledger_append,
+     上一次寫一半(帳尾沒換行)先補一個換行。寫不進去只提醒、不改判定結果(總表是方便查歷史,不是推送前檢查的依據)。"""
+     import json
+     steps = steps if isinstance(steps, dict) else {}
+     items = []
+     blocks = (runs or {}).get("blocks") or {}
+     for x in blocks.get("ui") if isinstance(blocks.get("ui"), list) else []:
+-        items.append({"kind": "ui", "name": x["flow"], "result": x["result"], **({"flaky": True} if x.get("flaky") else {})})
++        items.append({"kind": "ui", "name": x["flow"], "result": x["result"], **({"flaky": True} if x.get("flaky") else {}),
++                      **({"checks": x["checks"]["count"]} if isinstance(x.get("checks"), dict) else {})})
+     for k, key in (("visual", "screen"), ("stability", "check")):
+         if isinstance(blocks.get(k), list):
+             items += [{"kind": k, "name": x[key], "result": x["result"]} for x in blocks[k]]
+     sel = steps.get("selection") if isinstance(steps.get("selection"), dict) else {}
+     rid = steps.get("run_id") or (Path(run_dir).name if run_dir else None)
+     line = {"ts": steps.get("ended") or _e2e_now(), "run_id": rid, "head": steps.get("start_head"),
+             "dirty": steps.get("dirty"), "mode": sel.get("mode", "partial") if mode == "partial" else "full",
+             "cases": sel.get("cases", []), "result": (runs or {}).get("result"), "items": items,
+             "perf": blocks.get("macrobench"), "notices": (runs or {}).get("notices", []),
+             "evidence": str(Path(".lumos") / "artifacts" / "android" / str(rid))}
+@@ -41995,48 +42205,206 @@ def _e2e_gate_load(root, sha, fp, need, deadline):
+         _e2e_gate_block(f"查證紀錄 {rerr}", bad_record=not transient, **info)
+     if rec is None:
+         if (Path(root) / rel).exists():
+             _e2e_gate_block(f"這一版的查證紀錄還沒提交:{rel}", uncommitted=True, **info)
+         want = ("要整套跑:" + "、".join(info["full_why"][:5])) if need[0] == "full" else ("按功能跑這幾個情境就夠:" + "、".join(info["cases"]))
+         _e2e_gate_block(f"這一版沒有查證紀錄(沒驗收過、或驗收時的版本不是這一版);{want}", **info)
+     rerr = _e2e_record_err(rec, fp) or _e2e_gate_times_err(rec)
+     if rerr:
+         # bad_record:放行與重跑都不覆蓋讀不懂的紀錄(_e2e_record_update 用同一套判斷),擋下訊息改叫人修好或刪掉(代碼審 r2 正確性席);
+         # schema 比較新是新版 lumos 寫的,叫人更新、不叫人刪(r3 通才席)
+-        newer = isinstance(rec, dict) and _secev_int(rec.get("schema")) and rec["schema"] > E2E_SCHEMA
++        newer = isinstance(rec, dict) and _secev_int(rec.get("schema")) and rec["schema"] > E2E_RECORD_SCHEMA
+         _e2e_gate_block(f"查證紀錄讀不懂:{rerr}", **({"newer_schema": True} if newer else {"bad_record": True}), **info)
+     info["pending_ai"] = _e2e_ai_pending(rec)
+     return rec, info
+ 
+ 
+-def _e2e_gate_full_note(root, sha, rec, info, ml, sel_full, deadline, base_full=None):
+-    """整套那條路(判定順序第 2 步):整套 pass 且涵蓋、沒有較新的 fail → 放行(丟 _E2eGateStop);
+-    其他回一句說明整套結果為什麼不能用(給擋下訊息)。ml 是 (主線版整份, 主線版 e2e 段)。"""
++# ── 新開發的情境與流程(Projects/UI流程驗收句與檢查對照_計劃〈做法〉5 到 8):整套通過、宣告放行之前才判;有放行時在放行那一步就回傳、不算 ──
++E2E_ACCEPT_CLASSES = (("e2e_accept_no_checks", "沒有檢查"), ("e2e_accept_uncovered", "驗收句沒對到"), ("e2e_accept_one_way", "單向門沒人點頭"))
++E2E_ACCEPT_SHOW = 10   # 擋下訊息與提醒行最多列幾條(超過只列前幾條加總數)
++
++
++def _e2e_old_sets(*sides):
++    """主線與分岔點的 e2e 段 → (舊流程集合(正規化後), 舊情境集合「功能.情境」;兩邊都還沒有 features 表時是 None)。
++    分岔點那份沒驗過格式(可能是舊的或壞的):形狀不對的部分當沒有。"""
++    flows, cases, has = set(), set(), False
++    for e in sides:
++        if not isinstance(e, dict):
++            continue
++        flows |= {_e2e_norm(f) for f in (e.get("flows") if isinstance(e.get("flows"), list) else []) if isinstance(f, str)}
++        feats = e.get("features")
++        if isinstance(feats, dict) and feats:
++            has = True
++            for fn, f in feats.items():
++                cs = f.get("cases") if isinstance(f, dict) else None
++                cases |= {f"{fn}.{cn}" for cn in cs} if isinstance(cs, dict) else set()
++    return flows, (cases if has else None)
++
++
++def _e2e_case_new(fc, c, old_flows, old_cases):
++    """新情境 = 主線與分岔點的 features 都沒有它(決策 d1)。兩邊都還沒有 features 表時(第一次導入),有 flows 而且全是舊流程才算舊情境。"""
++    if old_cases is not None:
++        return fc not in old_cases
++    fl = [_e2e_norm(f) for f in c.get("flows") or []]
++    return not fl or any(f not in old_flows for f in fl)
++
++
++def _e2e_one_way(fn, cn, c):
++    """情境碰哪幾類單向門 → {類: [依據…]}(決策 d2、〈做法〉6):one_way 宣告(依據記「宣告」)併上機械地板——功能名、情境名、每句驗收句的
++    text 各自當一行,用規格閘同一支掃描(_door_keyword_hits,含全形與零寬字元正規化)的命中字;只留金流、對外送出、不可逆三類
++    (守衛面是工具鏈自己的,跟 App 功能無關)。命中的類別一律併進宣告:作者只能往嚴標。不為這裡擴表(會改變規格閘與 pitfalls 的判法)。"""
++    zh2en = {v: k for k, v in _DOOR_CLASS_ZH.items()}
++    out = {k: ["宣告"] for k in c.get("one_way") or [] if k in E2E_ONE_WAY}
++    rows = [fn, cn, *[a.get("text") or "" for a in c.get("accept") or []]]
++    for _no, zh, word, _ln in _door_keyword_hits("\n".join(rows)):
++        if zh2en.get(zh) in E2E_ONE_WAY:
++            out.setdefault(zh2en[zh], []).append(word)
++    return out
++
++
++def _e2e_accept_case(fn, cn, c, ui, new, add):
++    """一個要判的情境(新情境,或補了 accept 的舊情境)逐條看,擋下條目交給 add。新情境:有 flows 的要 accept、accept_review、
++    每句對到;每個都要 one_way、單向門要人點頭。舊情境補了 accept 只做逐句對照(不溯及既往,不要求審查紀錄與 one_way)。"""
++    fc = f"{fn}.{cn}"
++    if new and c.get("flows") and not c.get("accept"):
++        add("e2e_accept_uncovered", f"{fc}:新情境要先寫驗收句(accept)", None)
++    if new and c.get("flows") and not c.get("accept_review"):
++        add("e2e_accept_uncovered", f"{fc}:新情境的驗收句要先另派代理審過(accept_review)", None)
++    if c.get("flows") and c.get("accept"):
++        blind, miss = _e2e_case_coverage(fc, c, ui)
++        for f in blind:
++            add("blind", f, None)
++        for i in miss:
++            add("e2e_accept_uncovered", f"{fc}:{i} 沒有檢查對到(流程裡要有 label「{E2E_ACCEPT_LABEL.format(case=fc, id=i)}」的檢查)", None)
++    if not new:
++        return
++    if "one_way" not in c:
++        add("e2e_accept_one_way", f"{fc}:新情境要宣告碰哪幾類單向門(one_way;一類都不碰寫 [])", None)
++    hits = _e2e_one_way(fn, cn, c)
++    if hits and (c.get("accept_review") or {}).get("by") != "human":
++        what = "、".join(f"{_DOOR_CLASS_ZH[k]}/{k}({'、'.join(dict.fromkeys(ws))})" for k, ws in hits.items())
++        add("e2e_accept_one_way", f"{fc}:碰單向門 {what},驗收句要人點頭(accept_review.by 要是 human)", None)
++
++
++def _e2e_accept_cases(sel, ui, old_flows, old_cases, add):
++    """逐個情境判(〈做法〉5、6、8)→ 沒有 accept 的有 flows 舊情境(只列出)。add(類別, 說明, 成因代碼或 None) 記擋下條目;
++    讀不到的 flow 由 add 的呼叫端歸到「沒有檢查」。每個情境怎麼判見 _e2e_accept_case。"""
++    legacy = []
++    for fn, feat in (sel.get("features") or {}).items():
++        for cn, c in feat["cases"].items():
++            new = _e2e_case_new(f"{fn}.{cn}", c, old_flows, old_cases)
++            if new or c.get("accept"):
++                _e2e_accept_case(fn, cn, c, ui, new, add)
++            elif c.get("flows"):
++                legacy.append(f"{fn}.{cn}")
++    return legacy
++
++
++def _e2e_accept_judge(rec, sel, ml_e2e, base_e2e):
++    """整套通過時,新開發的情境與流程逐條看 → (擋下條目 [類別代碼, 說明, 成因代碼(工具類)或 None(內容類)]…, 舊項目的提醒行)。
++    新舊照主線與分岔點的設定分(決策 d1),流程路徑先過 _e2e_norm 再比。讀不到執行紀錄的 flow 一支只列一次、歸「沒有檢查」。"""
++    runs = rec.get("runs") or {}
++    ui_list = (runs.get("blocks") or {}).get("ui")
++    ui = {_e2e_norm(x["flow"]): x for x in ui_list} if isinstance(ui_list, list) else {}
++    old_flows, old_cases = _e2e_old_sets(ml_e2e, base_e2e)
++    items, seen = [], set()
++
++    def add(k, text, code):
++        if k != "blind":
++            items.append([k, text, code])
++            return
++        if text in seen:
++            return
++        seen.add(text)
++        x = ui.get(text) or {}
++        if "checks" in x and x["checks"] is None:
++            items.append(["e2e_accept_no_checks", f"{text}:讀不到執行紀錄:{x.get('checks_reason')}", x.get("checks_reason_code")])
++        else:
++            items.append(["e2e_accept_no_checks", f"{text}:紀錄裡沒有檢查欄:這份紀錄可能是舊版 lumos 寫或覆寫的,更新 lumos 後重跑整套",
++                          "no_checks_field"])
++    zero_old = []
++    for f in dict.fromkeys(_e2e_norm(x) for x in sel["flows"]):
++        ck = (ui.get(f) or {}).get("checks")
++        if f in old_flows:
++            if isinstance(ck, dict) and ck["count"] == 0:
++                zero_old.append(f)
++        elif not isinstance(ck, dict):
++            add("blind", f, None)
++        elif ck["count"] == 0:
++            add("e2e_accept_no_checks", f"{f}:這支流程沒有任何檢查", None)
++    legacy = _e2e_accept_cases(sel, ui, old_flows, old_cases, add)
++    order = [k for k, _zh in E2E_ACCEPT_CLASSES]
++    items.sort(key=lambda i: order.index(i[0]))
++    notes = ([f"提醒:這些舊情境還沒有驗收句(不擋;補了 accept 就照新規則逐句對照):{_secinv_names(legacy, E2E_ACCEPT_SHOW, E2E_PATH_LIST_MAX)}"] if legacy else []) \
++        + ([f"提醒:這些舊流程沒有任何檢查(不擋):{_secinv_names(zero_old, E2E_ACCEPT_SHOW, E2E_PATH_LIST_MAX)}"] if zero_old else [])
++    return items, notes
++
++
++def _e2e_check_drop_notes(root, sha, base, ui, base_full, deadline):
++    """檢查數變少只提醒(〈做法〉7):用分岔點那棵樹的 e2e 段算指紋,在被推送提交的樹裡找那一版的紀錄,同一支 flow 兩邊都有 checks
++    而且分岔點的比較多就列一行。分岔點沒有 e2e 段、算不出、找不到、讀不懂、舊紀錄沒有 checks 欄 → 一律一行「不比」,不擋。"""
++    nolook = ["提醒:分岔點沒有可比的紀錄,這次不比(檢查數變少只提醒)"]
++    be = (base_full or {}).get("e2e")
++    if not isinstance(be, dict) or _e2e_cfg_err(be, base_full.get("stability"), bool(base_full.get("results_dirs")),
++                                                scen=base_full.get("stability_scenarios")):
++        return nolook
++    fp_b, ferr = _e2e_fingerprint(root, base, be, base_full, allow_missing=True, deadline=deadline)
++    old, rerr, _t = (None, ferr, False) if ferr else _e2e_tree_json(root, sha, f"{E2E_RECORDS_DIR}/{fp_b}.json", deadline, limit=E2E_RECORD_FILE_MAX)
++    if rerr or old is None or _e2e_record_err(old, fp_b):
++        return nolook
++    o_list = ((old.get("runs") or {}).get("blocks") or {}).get("ui")
++    o_ui = {_e2e_norm(x["flow"]): x.get("checks") for x in o_list} if isinstance(o_list, list) else {}
++    pairs = [(f, o_ui[f]["count"], x["checks"]["count"]) for f, x in ui.items()
++             if isinstance(x.get("checks"), dict) and isinstance(o_ui.get(f), dict)]
++    if not pairs:
++        return nolook
++    drops = [f"提醒:{f} 檢查從 {a} 個變 {b} 個(不擋;刪檢查有時是合理的,repeat 次數改了也會讓數字變)" for f, a, b in pairs if a > b]
++    return drops[:E2E_ACCEPT_SHOW] + ([f"提醒:另有 {len(drops) - E2E_ACCEPT_SHOW} 支流程的檢查數變少"] if len(drops) > E2E_ACCEPT_SHOW else [])
++
++
++def _e2e_accept_gate(root, sha, base, rec, info, ml, sel_full, base_full, deadline):
++    """整套通過、宣告放行之前的新規則(〈做法〉5):新開發的情境與流程有任一條不合格就擋(三類擋下代碼,gate_code 記最前面那類、
++    accept_classes 記全部);都合格回提醒行(舊項目清單、檢查數變少),放行時印。accept_content:有內容類擋下(不附放行指令)。"""
++    items, notes = _e2e_accept_judge(rec, sel_full["e2e"], ml[1], (base_full or {}).get("e2e"))
++    if items:
++        classes = [k for k, _zh in E2E_ACCEPT_CLASSES if any(i[0] == k for i in items)]
++        summary = "、".join(f"{zh} {sum(i[0] == k for i in items)} 條" for k, zh in E2E_ACCEPT_CLASSES if k in classes)
++        _e2e_gate_block(f"整套跑過且通過,但新開發的情境或流程還不合格:{summary}", gate_code=classes[0], accept_classes=classes,
++                        accept_items=items, accept_content=any(i[2] is None for i in items), **info)
++    ui_list = ((rec.get("runs") or {}).get("blocks") or {}).get("ui")
++    ui = {_e2e_norm(x["flow"]): x for x in ui_list} if isinstance(ui_list, list) else {}
++    return notes + _e2e_check_drop_notes(root, sha, base, ui, base_full, deadline)
++
++
++def _e2e_gate_full_note(root, sha, rec, info, ml, sel_full, deadline, base_full=None, base=None):
++    """整套那條路(判定順序第 2 步):整套 pass 且涵蓋、沒有較新的 fail、新開發的情境與流程合格(_e2e_accept_gate)→ 放行(丟 _E2eGateStop);
++    其他回一句說明整套結果為什麼不能用(給擋下訊息)。ml 是 (主線版整份, 主線版 e2e 段);base 是分岔點。"""
+     runs = rec.get("runs")
+     if not isinstance(runs, dict):
+         return ""
+     if runs.get("result") != "pass":
+         return f"整套結果是{ {'fail': '沒過', 'unjudged': '沒判完'}.get(runs.get('result'), '?') }"
+     miss = _e2e_runs_missing(root, sha, runs, ml[1], ml[0], sel_full, deadline)
+     if miss:
+         # 主線的驗收設定跟這一版不同(多半是分岔後主線才加的要求):這一版照自己的設定重跑補不到,要先合主線(代碼審 r3 正確性席)
+         # 主線分岔後改了(主線跟分岔點不同)→ 先合主線;主線跟分岔點一樣、是這一版自己改了 → 合主線補不回(三方合併保留這邊),叫人改回去(r4 通才席)
+         def _cfg(full):
+             return (_e2e_canon((full or {}).get("e2e")), _e2e_mem_canon(full))
+         if _cfg(ml[0]) != _cfg(sel_full):
+             info["mainline_newer" if _cfg(ml[0]) != _cfg(base_full) else "cfg_weakened"] = True
+         return f"整套結果沒涵蓋主線版要求的:{'、'.join(miss[:8])}"
+     rt = _e2e_ts(runs["ended"])
+     newer = sorted(k for k, v in (rec.get("feature_runs") or {}).items() if v.get("result") == "fail" and _e2e_ts(v["ended"]) >= rt)
+     if newer:
+         _e2e_gate_block(f"整套跑過了,但之後按功能跑 {'、'.join(newer)} 沒過(最新的結果說沒過)", bad_cases=[(k, "沒過") for k in newer], **info)
+-    _e2e_gate_done("pass", "整套跑過且通過", **info)
++    notes = _e2e_accept_gate(root, sha, base, rec, info, ml, sel_full, base_full, deadline)
++    _e2e_gate_done("pass", "整套跑過且通過", **({"accept_notes": notes} if notes else {}), **info)
+     return ""
+ 
+ 
+ def _e2e_gate_escape():
+     """這一道的兩個出口:在 CI 裡(第一版只在本機推送時判)、LUMOS_SKIP_ANDROID_E2E=1(這一次整道不跑、記帳)→ 結果或 None。"""
+     if _in_ci():
+         return _e2e_gate_out("ci", "第一版只在本機推送時判")
+     if os.environ.get("LUMOS_SKIP_ANDROID_E2E") == "1":
+         return _e2e_gate_out("skipped-env", "LUMOS_SKIP_ANDROID_E2E=1:這一次整道不跑")
+     return None
+@@ -42056,21 +42424,21 @@ def _e2e_gate_body(root, sha, pushed_branch, range_start, deadline):
+         _e2e_gate_block(f"分岔點的 macrobench.json {berr}")
+     sel, sel_full, fp = _e2e_gate_fps(root, base, sha, pushed, (ml_full, ml_e2e), base_full, deadline)
+     need = _e2e_gate_need(root, base, sha, sel, base_full, sel_full, deadline)
+     if need[0] == "cases" and not need[1]:
+         # 改到的功能情境都只列了效能(只提醒):沒有要驗的情境,不要求紀錄(計劃〈推送前怎麼按功能判〉第 4 步;代碼審 r1 邊界、正確性席)
+         return _e2e_gate_out("pass-by-feature", "這次改到的功能情境都只列了效能(只提醒),沒有要驗的情境", fp=fp, commit=sha,
+                              need="cases", cases=[], perf_only=need[2], full_why=[])
+     rec, info = _e2e_gate_load(root, sha, fp, need, deadline)
+     if any(_e2e_waiver_ok(w) for w in rec.get("waivers") or []):
+         return _e2e_gate_out("waived", "這一版有放行", **info)
+-    note = _e2e_gate_full_note(root, sha, rec, info, (ml_full, ml_e2e), sel_full, deadline, base_full)
++    note = _e2e_gate_full_note(root, sha, rec, info, (ml_full, ml_e2e), sel_full, deadline, base_full, base)
+     tail = f";{note}" if note else ""
+     if need[0] == "full":
+         _e2e_gate_block("這次改動要整套驗收:" + "、".join(need[1][:8]) + tail, runs_note=note, **info)
+     bad = _e2e_gate_by_feature(rec, sel, need[1])
+     if bad:
+         _e2e_gate_block("按功能驗收還不夠:" + "、".join(f"{k}({w})" for k, w in bad[:8]) + tail, bad_cases=bad, runs_note=note, **info)
+     return _e2e_gate_out("pass-by-feature", "按功能放行", **info)
+ 
+ 
+ def _e2e_gate_evaluate(root, sha, pushed_branch=None, range_start=None, budget=None):
+@@ -67846,21 +68214,23 @@ def _codeloop_e2e_step(repo_root, marker_sha, marker_branch, raw_range):
+     android-e2e check 同一支)。這個專案不用 E2E 回 None、不寫治理帳;擋了回帶 reason_kind=android_e2e 的擋下 dict。
+     結果放 _codeloop_guard_verdict.last_e2e(放行與擋下的提醒行由 _cl_say_e2e_notes 印)。"""
+     rng = _lens_range_ok(raw_range) if raw_range else None
+     rep = _e2e_gate_evaluate(repo_root, marker_sha or "HEAD", pushed_branch=marker_branch, range_start=rng[0] if rng else None)
+     _codeloop_guard_verdict.last_e2e = rep
+     # ci 也記:本機 shell 殘留 CI 變數時同一個出口會被意外走過,沒帳就沒人知道(代碼審 code-e2e-gate r2 資安席)
+     ev = {"ci": ("ci", False), "skipped-env": ("skipped-env", False), "pass-by-feature": ("passed-by-feature", False),
+           "blocked": ("blocked", True)}.get(rep["status"])
+     if ev:
+         extra = {"fingerprint": rep.get("fp"), "commit": rep.get("commit") or marker_sha, "cases": list(rep.get("cases") or []),
+-                 "gate_code": rep.get("gate_code")}
++                 "gate_code": rep.get("gate_code"),
++                 # 新規則多類同時擋下:gate_code 記最前面那類,這裡記全部類別(撤除條件照全部類別數;Projects/UI流程驗收句與檢查對照_計劃〈做法〉5)
++                 **({"accept_classes": list(rep["accept_classes"])} if rep.get("accept_classes") else {})}
+         note = rep["reason"][:200]
+         _gate_event_fit(repo_root, "android-e2e", ev[0], note, extra, "cases", hard=ev[1], head_sha=marker_sha,
+                         ref=marker_branch)   # 情境多時從尾端截、記 cases_truncated
+         _gate_event_or_warn(repo_root, "android-e2e", ev[0], note, hard=ev[1], head_sha=marker_sha, ref=marker_branch, extra=extra)
+     if rep["status"] != "blocked":
+         return None
+     return {"blocked": True, "reason_kind": "android_e2e", "reason": f"Android 端到端驗收:{rep['reason']}", "tier": "unknown",
+             "android_e2e": rep}
+ 
+ 
+@@ -68456,81 +68826,103 @@ def _cl_say_e2e_block(verdict):
+     """Android 端到端驗收那一道的擋下訊息(三段式:發生什麼 → 為何在意 → 指令獨立一行)。不印 pre-push 記逃逸帳認的那兩串字。"""
+     rep = verdict.get("android_e2e") or {}
+     _say_block(f"Android 端到端驗收——{rep.get('reason', '')}")
+     if rep.get("record"):
+         print(f"  紀錄:{rep['record']}(從被推送的提交讀,不讀工作目錄)", file=sys.stderr)
+     for k, w in (rep.get("bad_cases") or [])[:10]:
+         print(f"  - {k}:{w}", file=sys.stderr)
+     if rep.get("removed"):
+         print("在意的原因:主線還要求這個專案做 Android 端到端驗收,這一版卻拿掉了驗收設定;合進主線之後這道就不再跑,所以這一次要明著關掉、留帳。",
+               file=sys.stderr)
++    elif rep.get("accept_items"):
++        print("在意的原因:流程是代理自己寫的,只跑完、不檢查畫面的話 App 壞了照樣綠;新開發的情境要有驗收句、每一句都要有真的跑過的檢查對到,"
++              "碰單向門的要人點頭。", file=sys.stderr)
+     else:
+         print("在意的原因:這一版的 App 程式或驗收素材跟主線分岔點不一樣,推上去之前要有一份通過(或有人放行)的實機驗收紀錄。", file=sys.stderr)
+     print("接下來:", file=sys.stderr)
+     _cl_say_e2e_next(rep)
+-    if rep.get("fp") and not rep.get("bad_record") and not rep.get("newer_schema"):
++    # 新規則有內容類擋下(零檢查、沒驗收句、沒對到、單向門沒人點頭)時不附放行指令:先把內容改好(放行照樣有效,只是不推薦)
++    if rep.get("fp") and not rep.get("bad_record") and not rep.get("newer_schema") and not rep.get("accept_content"):
+         print("  確定是誤擋才放行(<理由> 換成為什麼是誤擋,至少 10 個字;會記成人或 AI 放的、被統計):", file=sys.stderr)
+         print(f"    {_e2e_waive_hint(rep['fp'], rep.get('commit') or '')}", file=sys.stderr)
+         # 沒有互動終端時放行記成 AI 放的、當下就算數:講明後果,讓 AI 照做之前先跟使用者講(代碼審 code-e2e-gate r2 資安席)
+         print("    (沒有互動終端時記成 AI 放行:推送、doctor 與開場提示會一直列到人看過;AI 放行前先跟使用者講一聲)", file=sys.stderr)
+     print("  這一次整道先關掉(會留帳):LUMOS_SKIP_ANDROID_E2E=1 git push", file=sys.stderr)
+ 
+ 
+ def _cl_say_e2e_next(rep):
+     """Android 端到端驗收擋下訊息的「接下來」:依擋下種類給一行指令(拿掉驗收設定那種只有最後那行的環境變數)。"""
+     if rep.get("removed"):
+         return
+     if rep.get("newer_schema"):
+         print("    lumos update   # 這份紀錄是比較新的 lumos 寫的:更新 lumos 再推,紀錄本身不要動", file=sys.stderr)
+     elif rep.get("bad_record"):
+         print(f"    修好或刪掉 {rep['record']}(讀不懂的紀錄,放行與重跑都不會覆蓋它);改完提交再推", file=sys.stderr)
+     elif rep.get("merge_main"):
+         print("    git merge <主線>   # 或 rebase 到主線;合進來之後才有主線的 e2e 段與驗收設定,驗收與放行才算得出指紋", file=sys.stderr)
+     elif rep.get("uncommitted"):
+         print(f"    git add {rep['record']} && git commit -m \"chore: 記錄 Android 端到端驗收\"", file=sys.stderr)
++    elif rep.get("accept_items"):
++        _cl_say_e2e_accept(rep)
+     elif rep.get("need") == "cases" and (rep.get("bad_cases") or rep.get("cases")):
+         _cl_say_e2e_cases(rep)
+     elif rep.get("fp"):
+         _cl_say_e2e_full(rep)
+ 
+ 
++def _cl_say_e2e_accept(rep):
++    """新開發的情境與流程擋下(Projects/UI流程驗收句與檢查對照_計劃〈成因與處方〉):逐條列、工具類照成因代碼印 E2E_CHECKS_FIX 的處方,
++    內容類叫人改設定或流程再跑整套;不印整套重跑那一行(重跑解不開)。說明裡的外來文字已在 _e2e_gate_out 清過。"""
++    items = rep["accept_items"]
++    zh = dict(E2E_ACCEPT_CLASSES)
++    for k, text, code in items[:E2E_ACCEPT_SHOW]:
++        print(f"    - [{zh.get(k, k)}] {text}  → {E2E_CHECKS_FIX.get(code, '改設定或流程再跑整套') if code else '改設定或流程再跑整套'}",
++              file=sys.stderr)
++    if len(items) > E2E_ACCEPT_SHOW:
++        print(f"    (共 {len(items)} 條,只列前 {E2E_ACCEPT_SHOW} 條;全部看 lumos android-e2e check)", file=sys.stderr)
++
++
+ def _cl_say_e2e_cases(rep):
+     """按功能那條路缺的情境 → 一行 --case 指令(最多列 10 個)。"""
+     todo = [k for k, _w in rep.get("bad_cases") or []] or rep["cases"]
+     more = f"(另有 {len(todo) - 10} 個,看 lumos android-e2e check)" if len(todo) > 10 else ""
+     print("    " + E2E_RUN_CMD + "".join(f" --case {k}" for k in todo[:10]) + f"   # 跑完提交紀錄再推{more}", file=sys.stderr)
+ 
+ 
+ def _cl_say_e2e_full(rep):
+     """要整套跑的那條路:主線較新先合主線、這一版自己改弱先改回,再整套跑。"""
+     if rep.get("mainline_newer"):
+         print("    git merge <主線>   # 主線的驗收要求比這一版新(照這一版的設定重跑補不到);合進來之後再整套跑", file=sys.stderr)
+     elif rep.get("cfg_weakened"):
+         print("    # 這一版自己改了 .lumos/macrobench.json 的驗收設定、少了主線還要求的:先改回跟主線一樣,再整套跑", file=sys.stderr)
+     print(f"    {E2E_RUN_CMD}   # 整套跑,跑完提交紀錄再推", file=sys.stderr)
+ 
+ 
+ def _cl_say_e2e_notes():
+-    """Android 端到端驗收的提醒行(放行與擋下都印;都以「提醒」開頭,pre-push 在放行路徑只轉印含「提醒」等字的行)。"""
++    """Android 端到端驗收的提醒行(放行與擋下都印;都以「提醒」開頭,pre-push 在放行路徑只轉印含「提醒」等字的行):
++    CI、略過、按功能放行、整套通過時的舊項目清單與檢查數變少、AI 放行待看。"""
+     rep = getattr(_codeloop_guard_verdict, "last_e2e", None)
+     if not rep:
+         return
+     st = rep.get("status")
+     if st == "ci":
+         print("  提醒:Android 端到端驗收第一版只在本機推送時判,這次偵測到 CI(CI 或 GITHUB_ACTIONS 有設)所以沒判、已記帳;"
+               "不是在 CI 裡就清掉這兩個變數再推")
+     elif st == "skipped-env":
+         print("  提醒:Android 端到端驗收這一次沒跑(LUMOS_SKIP_ANDROID_E2E=1,已記帳)")
+     elif st == "pass-by-feature":
+         print(f"  提醒:按功能放行:驗了 {'、'.join(rep.get('cases') or []) or '(沒有要驗的情境)'};這一版沒有整套驗過")
+         if rep.get("perf_only"):
+             print(f"  提醒:沒驗:{'、'.join(rep['perf_only'])}(只列效能)")
++    elif st == "pass":
++        for n in rep.get("accept_notes") or []:   # 整套通過:舊項目清單與檢查數變少(都以「提醒」開頭;放行時不算不印)
++            print(f"  {n}")
+     if rep.get("pending_ai"):
+         print(f"  提醒:有 {rep['pending_ai']} 筆 AI 放行還沒人看過;看:lumos android-e2e waive --list;看過標記:lumos android-e2e waive --ack {rep.get('fp')}")
+ 
+ 
+ def _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha):
+     """表態不完整那一道的擋下訊息。"""
+     # 三段式:發生什麼 → 為何在意 → 指令獨立一行;最多列 10 問,其餘一句(r2 邊界席 B12)
+     _pr = (dv or {}).get("problems") or []
+     print(f"擋下:這次改動有 {(dv or {}).get('applicable', 0)} 題效能檢核適用,但表態不完整({len(_pr)} 處)——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
+     for _x in _pr[:10]:
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 1eff244b0..9a69a348e 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -21061,21 +21061,24 @@ def t_android_e2e_gate_reads_mainline_config():
+         _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
+         fp = _e2eg_fp(root)
+         _e2eg_rec(root, fp, runs=_e2eg_runs(flows=(".maestro/login.yaml",)))
+         rc, d = _e2eg_check(root)
+         check("e2e gate S9:關掉主線要求的記憶體→擋並點名", rc == 1 and "記憶體 exits" in d["reason"], str(d))
+     with tempfile.TemporaryDirectory() as td:   # 分支新加一支 flow、整套跑過(涵蓋新舊)→放行
+         root = _e2eg_proj(td)
+         (root / ".maestro" / "extra.yaml").write_text("appId: com.lab\n---\n- launchApp\n", encoding="utf-8")
+         _e2e_set_cfg(root, lambda c: c["e2e"]["flows"].append(".maestro/extra.yaml"), commit="add flow")
+         fp = _e2eg_fp(root)
+-        _e2eg_rec(root, fp, runs=_e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other.yaml", ".maestro/extra.yaml")))
++        runs = _e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other.yaml", ".maestro/extra.yaml"))
++        # 分支新加的是新流程:照 Projects/UI流程驗收句與檢查對照_計劃〈做法〉5 要有檢查,紀錄帶上 checks
++        runs["blocks"] = {"ui": [{"flow": ".maestro/extra.yaml", "result": "pass", "checks": {"count": 1, "labels": []}}]}
++        _e2eg_rec(root, fp, runs=runs)
+         rc, d = _e2eg_check(root)
+         check("e2e gate S9:分支新加 flow 並跑過整套→放行", rc == 0 and d["status"] == "pass", str(d))
+     print("  ✓ t_android_e2e_gate_reads_mainline_config")
+ 
+ 
+ def t_android_e2e_gate_bad_record():
+     """S10:紀錄沒提交、指紋欄位對不上、JSON 壞、schema 比這版新、runs.result 不認得、結束時間讀不懂都擋;
+     有算數的放行即使 runs 是 null 也放行;runs 是 null、沒放行、只有 feature_runs 改走按功能判;[{}] 這種放行不算。
+     判準來源是計劃〈查證紀錄長怎樣〉與 S10。"""
+     import json, tempfile
+@@ -22108,21 +22111,24 @@ def t_android_e2e_gate_r3_paths():
+         check("e2e paths ①:跨時差較新的 fail 算數→擋", rc == 1 and "沒過" in d["reason"], str(d)[:300])
+     with tempfile.TemporaryDirectory() as td:   # ②
+         root = _e2eg_proj(td)
+         _e2eg_commit(root, {".maestro/other2.yaml": "appId: com.lab\n---\n- launchApp\n", ".maestro/other.yaml": None})
+ 
+         def ren(c):
+             c["e2e"]["flows"] = [".maestro/login.yaml", ".maestro/other2.yaml"]
+             c["e2e"]["features"]["other"]["cases"]["x"]["flows"] = [".maestro/other2.yaml"]
+         _e2e_set_cfg(root, ren, commit="rename flow")
+         fp = _e2eg_fp(root)
+-        _e2eg_rec(root, fp, runs=_e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other2.yaml")))
++        runs = _e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other2.yaml"))
++        # 改名後的檔是新流程(主線與分岔點的 e2e.flows 都沒有):照 Projects/UI流程驗收句與檢查對照_計劃〈做法〉5 要有檢查,紀錄帶上 checks
++        runs["blocks"] = {"ui": [{"flow": ".maestro/other2.yaml", "result": "pass", "checks": {"count": 1, "labels": []}}]}
++        _e2eg_rec(root, fp, runs=runs)
+         rc, d = _e2eg_check(root)
+         check("e2e paths ②:改名的 flow 舊名不算缺", rc == 0 and d["status"] == "pass", str(d)[:300])
+     with tempfile.TemporaryDirectory() as td:   # ③
+         root = _e2e_stab_env(td)[0]
+         _e2e_tgit(root, "branch", "-M", "main")
+         saved = {}
+ 
+         def off(c):
+             saved["e2e"] = json.loads(json.dumps(c["e2e"]))
+             c["e2e"]["stability"] = False
+@@ -23371,20 +23377,667 @@ def t_android_e2e_run_script():
+         cfg["e2e"]["flows"] = [".maestro/sub/a.yml", "./.maestro/login.yaml"]
+         cfgp.write_text(json.dumps(cfg))
+         _e2e_tgit(root, "add", "-A")
+         _e2e_tgit(root, "commit", "-qm", "flows")
+         r = _e2e_script(root, script, env, "run-names")
+         ui = (rec_of(root) or {}).get("runs", {}).get("blocks", {}).get("ui", [])
+         check("巢狀路徑與 ./ 開頭的 flow,judge 都認得範本寫的報告", r.returncode == 0 and [x["result"] for x in ui] == ["pass", "pass"],
+               str((r.returncode, ui, r.stderr[-300:])))
+ 
+ 
++# ── UI 流程驗收句與檢查對照(Projects/UI流程驗收句與檢查對照_計劃;家 Systems/android-e2e-acceptance)──
++# 判準一律照計劃〈驗收條款〉S1 到 S13 的輸入與預期;commands.json 的形狀照計劃〈做法〉第 4 條的實機量測(Maestro 2.10.0):
++# 最外層攤平的清單,每筆 {"command": {<指令名>: {…, label}}, "metadata": {status, depth}}。
++
++def _e2ea_cmd(name, status="COMPLETED", label=None, depth=0, optional=False, inner=None):
++    """commands.json 的一筆。"""
++    body = dict(inner or {"condition": {"visible": {"text": "x", "optional": False}}}, optional=optional)
++    if label is not None:
++        body["label"] = label
++    return {"command": {name: body}, "metadata": {"status": status, "timestamp": 1, "duration": 1, "sequenceNumber": 0, "depth": depth}}
++
++
++def _e2ea_flow_run(cmds, status="COMPLETED"):
++    """一支 runFlow 父指令:內容帶同一批指令的副本(副本沒有執行狀態,不算、也不往裡找)。"""
++    return _e2ea_cmd("runFlowCommand", status=status, inner={"commands": [c["command"] for c in cmds]})
++
++
++def _e2ea_judge(root, tries, run_id="r1"):
++    """整套 judge 一支 flow(login)。tries 每筆一次嘗試:rc(預設 0)、cmds(commands.json 的內容:清單或物件就 json.dumps,
++    字串原樣寫,None 不建檔)、subs(debug 底下的子目錄,預設 ["login"];只有第一個放 commands.json)、ev(steps.json 有沒有記
++    evidence.dir,預設有)。→ (judge 結果, 紀錄, 那支 flow 的 UI 條目)。"""
++    rd = _e2ea_steps(root, tries, run_id)
++    r, rec = _e2e_judge(root, rd)
++    ui = rec["runs"]["blocks"]["ui"][0] if rec else None
++    return r, rec, ui
++
++
++def _e2ea_steps(root, tries, run_id="r1"):
++    """_e2ea_judge 的前半:照 tries 寫 run 目錄(steps.json、JUnit 報告、每次嘗試的 debug/<子目錄>/commands.json)→ run 目錄。"""
++    import json
++    rd = root / ".lumos" / "artifacts" / "android" / run_id
++    steps, files = [], {}
++    for i, t in enumerate(tries, 1):
++        ev = rd / "ui" / f".maestro__login.try{i}"
++        rep = f"ui/l.try{i}.xml"
++        files[rep] = _E2E_JUNIT_OK if t.get("rc", 0) == 0 else _E2E_JUNIT_FAIL
++        for j, sub in enumerate(t.get("subs", ["login"])):
++            d = ev / "debug" / sub
++            d.mkdir(parents=True, exist_ok=True)
++            body = t.get("cmds") if j == 0 else []
++            if body is not None:
++                (d / "commands.json").write_text(body if isinstance(body, str) else json.dumps(body, ensure_ascii=False), encoding="utf-8")
++        steps.append({"block": "ui", "name": ".maestro__login", "attempt": i, "rc": t.get("rc", 0), "report": rep,
++                      "evidence": {"dir": str(ev) if t.get("ev", True) else None, "crash": None}})
++    return _e2e_steps(root, _E2E_BASE_STEPS + steps, run_id=run_id, files=files)
++
++
++_E2EA_LAB = "驗收:login.ok#A1"
++_E2EA_SUB = [_e2ea_cmd("assertConditionCommand", label=_E2EA_LAB, depth=1)]
++_E2EA_GOOD = [_e2ea_cmd("launchAppCommand", inner={"appId": "com.lab"}), _e2ea_flow_run(_E2EA_SUB), *_E2EA_SUB,
++              _e2ea_cmd("assertConditionCommand")]
++
++
++def t_android_e2e_checks_recorded():
++    """S1:通過的 flow,那次嘗試 <evidence.dir>/debug 底下唯一子目錄的 commands.json 有兩個 COMPLETED 的 assertConditionCommand
++    (一個帶 label、一個不帶,帶 label 的在 runFlow 子流程裡)→ 整套紀錄 checks.count 2、labels 只有那一個 label;
++    runFlow 內容裡的副本不算;第一次紅、第二次過取第二次那個目錄。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2e_proj(td)
++        r, _rec, ui = _e2ea_judge(root, [{"cmds": _E2EA_GOOD}])
++        check("S1:兩個 COMPLETED 的檢查(一個在子流程裡,runFlow 內容的副本不算)→ count 2、labels 只有那個 label",
++              r.returncode == 0 and ui["result"] == "pass" and ui.get("checks") == {"count": 2, "labels": [_E2EA_LAB]},
++              str((r.stdout[-300:], r.stderr[-300:], ui)))
++    with tempfile.TemporaryDirectory() as td:   # 第一次紅、第二次過:取第二次那個目錄
++        root = _e2e_proj(td)
++        first = [_e2ea_cmd("assertConditionCommand", label="驗收:login.ok#A9")] * 3
++        r, _rec, ui = _e2ea_judge(root, [{"rc": 1, "cmds": first}, {"cmds": _E2EA_GOOD}])
++        check("S1:第一次紅、第二次過→取第二次那個目錄", ui["result"] == "pass" and ui.get("flaky")
++              and ui.get("checks") == {"count": 2, "labels": [_E2EA_LAB]}, str(ui))
++    with tempfile.TemporaryDirectory() as td:   # 截圖比對也是檢查;同一個 label 跑兩次(repeat 展開成兩筆)count 照算、labels 去重
++        root = _e2e_proj(td)
++        cmds = [_e2ea_cmd("assertScreenshotCommand", inner={"path": "b.png"}), _e2ea_cmd("assertConditionCommand", label=_E2EA_LAB),
++                _e2ea_cmd("assertConditionCommand", label=_E2EA_LAB, depth=2)]
++        r, _rec, ui = _e2ea_judge(root, [{"cmds": cmds}])
++        check("S1:assertScreenshotCommand 也算、repeat 讓 count 變大、labels 去重", ui.get("checks") == {"count": 3, "labels": [_E2EA_LAB]}, str(ui))
++    print("  ✓ t_android_e2e_checks_recorded")
++
++
++def t_android_e2e_checks_warned_skipped_ai_not_counted():
++    """S2:optional 失敗(WARNED)、條件不成立的 runFlow 裡沒跑到(父指令 SKIPPED、裡面的檢查不出現)、AI 類檢查 → 都不算進 count。"""
++    import tempfile
++    warned = _e2ea_cmd("assertConditionCommand", status="WARNED", label="驗收:login.ok#A2", optional=True)
++    skipped = _e2ea_flow_run([_e2ea_cmd("assertConditionCommand", label="驗收:login.ok#A3")], status="SKIPPED")
++    ai_ok = _e2ea_cmd("assertWithAICommand", label="驗收:login.ok#A4", inner={"assertion": "看到首頁"})
++    ai_warn = _e2ea_cmd("assertWithAICommand", status="WARNED", label="驗收:login.ok#A5", inner={"assertion": "看到首頁"})
++    counted = _e2ea_cmd("assertConditionCommand", label=_E2EA_LAB)
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2e_proj(td)
++        r, _rec, ui = _e2ea_judge(root, [{"cmds": [warned, skipped, ai_ok, ai_warn, counted]}])
++        check("S2:WARNED、SKIPPED 的 runFlow、AI 類檢查都不算,只算那一個 COMPLETED", r.returncode == 0
++              and ui.get("checks") == {"count": 1, "labels": [_E2EA_LAB]}, str(ui))
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2e_proj(td)
++        r, _rec, ui = _e2ea_judge(root, [{"cmds": [warned, skipped, ai_ok, ai_warn]}])
++        check("S2:只有不算的那幾種→count 0(不是 null)、flow 照樣過", ui["result"] == "pass" and ui.get("checks") == {"count": 0, "labels": []}, str(ui))
++    print("  ✓ t_android_e2e_checks_warned_skipped_ai_not_counted")
++
++
++def t_android_e2e_checks_unreadable_null():
++    """S3:evidence.dir 是空、debug 底下沒有或兩個以上子目錄、commands.json 不在、讀不懂(含指令形狀認不得)、超過巢狀或大小上限、
++    去重後 label 超過上限 → checks 是 null、checks_reason 是字串、checks_reason_code 寫明哪一種(label 不截斷);UI 的過與不過照原本規則。"""
++    import tempfile
++    deep = [1]
++    for _ in range(70):
++        deep = [deep]
++    many = [_e2ea_cmd("assertConditionCommand", label=f"驗收:login.ok#A{i}") for i in range(201)]
++    cases = [("evidence.dir 是空", {"cmds": _E2EA_GOOD, "ev": False}, "no_evidence"),
++             ("debug 底下沒有子目錄", {"cmds": _E2EA_GOOD, "subs": []}, "subdir_count"),
++             ("debug 底下兩個子目錄", {"cmds": _E2EA_GOOD, "subs": ["a", "b"]}, "subdir_count"),
++             ("commands.json 不在", {"cmds": None}, "missing"),
++             ("讀不懂的 JSON", {"cmds": "{not json"}, "unreadable"),
++             ("最外層不是清單", {"cmds": {"commands": _E2EA_GOOD}}, "unreadable"),
++             ("指令形狀認不得", {"cmds": [{"command": "assertConditionCommand", "metadata": {"status": "COMPLETED"}}]}, "unreadable"),
++             ("巢狀超過上限", {"cmds": [_e2ea_cmd("assertConditionCommand", inner={"x": deep})]}, "too_deep"),
++             ("檔案超過大小上限", {"cmds": "[" + " " * (16 * 1024 * 1024) + "]"}, "too_big"),
++             ("去重後 label 超過上限", {"cmds": many}, "too_many_labels")]
++    for desc, t, code in cases:
++        with tempfile.TemporaryDirectory() as td:
++            root = _e2e_proj(td)
++            r, rec, ui = _e2ea_judge(root, [t])
++            check(f"S3:{desc}→checks null、代碼 {code}、UI 照樣過",
++                  r.returncode == 0 and rec["runs"]["result"] == "pass" and ui["result"] == "pass" and "checks" in ui and ui["checks"] is None
++                  and ui.get("checks_reason_code") == code and isinstance(ui.get("checks_reason"), str) and ui["checks_reason"].strip()
++                  and "labels" not in ui, str((desc, r.stderr[-300:], str(ui)[:400])))
++    with tempfile.TemporaryDirectory() as td:   # ★對照★ 剛好 200 個 label 不算超過
++        root = _e2e_proj(td)
++        r, rec, ui = _e2ea_judge(root, [{"cmds": many[:200]}])
++        check("★對照★ S3:去重後剛好 200 個 label→照記、不截斷", (ui.get("checks") or {}).get("count") == 200
++              and len((ui.get("checks") or {}).get("labels") or []) == 200, str(ui)[:300])
++    with tempfile.TemporaryDirectory() as td:   # 兩次都沒過:照原本規則判沒過(讀不到執行紀錄不改判)
++        root = _e2e_proj(td)
++        r, rec, ui = _e2ea_judge(root, [{"rc": 1, "cmds": _E2EA_GOOD}, {"rc": 1, "cmds": None}])
++        check("S3:兩次都沒過→照舊沒過", r.returncode == 1 and ui["result"] == "fail", str(ui)[:300])
++    print("  ✓ t_android_e2e_checks_unreadable_null")
++
++
++def t_android_e2e_record_checks_type():
++    """S4:查證紀錄 checks 的型別不對 → _e2e_record_err 判讀不懂,推送檢查走「修好或刪掉紀錄」那條路(不是判定內部出錯);
++    紀錄版本 2 而 lumos 只認 1 → 走「更新 lumos、紀錄不要動」;judge 更新既有的版本 1 紀錄時版本寫成 2;steps.json 版本 1 照舊收。"""
++    import json
++    import tempfile
++    m = _load_lumos()
++    fp = "a" * 64
++
++    def rec_of(ui, schema=2):
++        return {"schema": schema, "fingerprint": fp, "history": [], "waivers": [],
++                "runs": {"result": "pass", "ended": _E2EG_T1, "blocks": {"ui": [dict({"flow": ".maestro/login.yaml", "result": "pass"}, **ui)]}}}
++    bad = [("checks 是字串", {"checks": "x"}), ("checks 是清單", {"checks": []}), ("count 是字串", {"checks": {"count": "2", "labels": []}}),
++           ("count 是 true", {"checks": {"count": True, "labels": []}}), ("labels 是字串", {"checks": {"count": 1, "labels": "a"}}),
++           ("labels 有非字串", {"checks": {"count": 1, "labels": [1]}}),
++           ("checks_reason 不是字串", {"checks": None, "checks_reason": 3, "checks_reason_code": "missing"}),
++           ("checks_reason_code 不在表裡", {"checks": None, "checks_reason": "x", "checks_reason_code": "weird"})]
++    for desc, ui in bad:
++        check(f"S4:{desc}→紀錄讀不懂", m._e2e_record_err(rec_of(ui), fp) is not None, desc)
++    for desc, ui in (("沒有 checks 欄(舊紀錄)", {}), ("count 0", {"checks": {"count": 0, "labels": []}}),
++                     ("null 加原因", {"checks": None, "checks_reason": "commands.json 不在", "checks_reason_code": "missing"})):
++        check(f"★對照★ S4:{desc}→讀得懂", m._e2e_record_err(rec_of(ui), fp) is None, str(m._e2e_record_err(rec_of(ui), fp)))
++    check("S4:紀錄版本 2 照收、3 不收", m._e2e_record_err(rec_of({}), fp) is None and m._e2e_record_err(rec_of({}, 3), fp) is not None)
++    with tempfile.TemporaryDirectory() as td:   # 推送檢查讀到型別壞的紀錄:修好或刪掉那條路
++        root = _e2eg_proj(td)
++        _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
++        fp2 = _e2eg_fp(root)
++        runs = _e2eg_runs()
++        runs["blocks"] = {"ui": [{"flow": ".maestro/login.yaml", "result": "pass", "checks": {"count": "2", "labels": []}}]}
++        _e2eg_rec(root, fp2, runs=runs)
++        rc, d = _e2eg_check(root)
++        check("S4:推送檢查讀到型別壞的 checks→擋、讀不懂、不是內部出錯", rc == 1 and d.get("bad_record") and "讀不懂" in d["reason"]
++              and d.get("gate_code") != "evaluation_error", str(d)[:400])
++        r = _e2eg_cl(root)
++        check("S4:擋下訊息叫人修好或刪掉紀錄", "修好或刪掉" in r.stderr, r.stderr[-400:])
++        runs["blocks"]["ui"][0]["checks"] = {"count": 2, "labels": []}
++        _e2eg_rec(root, fp2, runs=runs)
++        _p = root / ".lumos" / "e2e-records" / f"{fp2}.json"
++        _p.write_text(json.dumps(dict(json.loads(_p.read_text(encoding="utf-8")), schema=2)), encoding="utf-8")
++        _e2e_tgit(root, "add", "-A")
++        _e2e_tgit(root, "commit", "-qm", "v2")
++        rc, d = _e2eg_check(root)
++        check("★對照★ S4:版本 2 的紀錄照收→放行", rc == 0 and d["status"] == "pass", str(d)[:300])
++        old = _load_lumos()
++        old.E2E_RECORD_SCHEMA = 1   # 只認 1 的 lumos
++        d = _e2eg_eval(root, m=old)
++        check("S4:版本 2 的紀錄給只認 1 的 lumos→走「更新 lumos、紀錄不要動」", d["status"] == "blocked" and d.get("newer_schema")
++              and not d.get("bad_record"), str(d)[:300])
++    with tempfile.TemporaryDirectory() as td:   # judge 更新既有的版本 1 紀錄:版本寫成 2、新的 checks 寫進去
++        root = _e2e_proj(td)
++        r, rec, ui = _e2ea_judge(root, [{"cmds": _E2EA_GOOD}])
++        check("S4:範本腳本寫的 steps.json 版本 1 照舊被 judge 接受、新建的紀錄版本 2", r.returncode == 0 and rec["schema"] == 2, str(rec)[:200])
++        p = next((root / ".lumos" / "e2e-records").glob("*.json"))
++        old_rec = json.loads(p.read_text(encoding="utf-8"))
++        old_rec["schema"] = 1
++        old_rec["runs"]["blocks"]["ui"][0].pop("checks")
++        p.write_text(json.dumps(old_rec, ensure_ascii=False), encoding="utf-8")
++        _e2e_tgit(root, "add", "-A")
++        _e2e_tgit(root, "commit", "-qm", "old record")
++        r, rec, ui = _e2ea_judge(root, [{"cmds": _E2EA_GOOD}], run_id="r2")
++        check("S4:judge 更新版本 1 的紀錄→版本寫成 2", r.returncode == 0 and rec["schema"] == 2 and len(rec["history"]) == 2
++              and ui.get("checks") == {"count": 2, "labels": [_E2EA_LAB]}, str((r.stderr[-300:], str(rec)[:300])))
++    print("  ✓ t_android_e2e_record_checks_type")
++
++
++_E2EA_NEW = ".maestro/new.yaml"
++_E2EA_HINT = "lumos android-e2e waive "
++
++
++def _e2ea_case(**kw):
++    """新情境(login.fresh):兩句驗收句、另派代理審過、不碰單向門;kw 蓋過(值 None=拿掉那個鍵)。"""
++    c = {"flows": [_E2EA_NEW], "accept": [{"id": "A1", "text": "登入後看到首頁標題"}, {"id": "A2", "text": "帳密錯時看到錯誤訊息", "state": "錯誤"}],
++         "accept_review": {"by": "ai", "who": "claude-sonnet"}, "one_way": []}
++    c.update(kw)
++    return {k: v for k, v in c.items() if v is not None}
++
++
++def _e2ea_proj(td, cases=None, flows=(_E2EA_NEW,), vault=False, mutate=None):
++    """推送前判定用:_e2eg_proj(主線與分岔點有 login.ok、other.x)之後,在 feat 加新流程與 login 功能底下的新情境並提交。"""
++    root = _e2eg_proj(td, vault=vault)
++    for f in flows:
++        (root / f).parent.mkdir(parents=True, exist_ok=True)
++        (root / f).write_text("appId: com.lab\n---\n- launchApp\n", encoding="utf-8")
++
++    def mut(c):
++        c["e2e"]["flows"] += list(flows)
++        c["e2e"]["features"]["login"]["cases"].update({"fresh": _e2ea_case()} if cases is None else cases)
++        if mutate:
++            mutate(c)
++    _e2e_set_cfg(root, mut, commit="new case")
++    return root
++
++
++def _e2ea_ui(flow, checks="absent", code=None):
++    """整套紀錄裡一支 flow 的 UI 條目:checks 給 dict 就記、None 記 null 加原因與代碼、"absent" 不帶 checks 欄(舊版 lumos 寫的)。"""
++    e = {"flow": flow, "result": "pass"}
++    if checks is None:
++        e.update(checks=None, checks_reason=f"讀不到執行紀錄({code})", checks_reason_code=code)
++    elif checks != "absent":
++        e["checks"] = checks
++    return e
++
++
++def _e2ea_ck(*labels, count=None):
++    return {"count": len(labels) if count is None else count, "labels": list(labels)}
++
++
++def _e2ea_rec(root, ui, waivers=None, result="pass"):
++    """這一版的整套紀錄(ui:UI 條目清單;ran.flows 照條目)並提交 → (rc, check 結果)。"""
++    fp = _e2eg_fp(root)
++    runs = _e2eg_runs(result, flows=[e["flow"] for e in ui])
++    runs["blocks"] = {"ui": ui}
++    _e2eg_rec(root, fp, runs=runs, waivers=waivers)
++    return _e2eg_check(root)
++
++
++def _e2ea_txt(d):
++    import json
++    return json.dumps(d, ensure_ascii=False)
++
++
++_E2EA_OLD = [_e2ea_ui(".maestro/login.yaml"), _e2ea_ui(".maestro/other.yaml")]
++_E2EA_FULL = _e2ea_ck("驗收:login.fresh#A1", "驗收:login.fresh#A2")
++
++
++def t_android_e2e_gate_new_flow_checks():
++    """S5:整套通過、新流程 checks.count 是 0、checks 是 null(〈成因與處方〉每個代碼各一例)或沒有 checks 欄 → 以「沒有檢查」擋下、照表印處方;
++    只有工具類擋下時附放行指令,同一次有任一條內容類擋下時不附。"""
++    import tempfile
++    fixes = {"no_evidence": "升級 Maestro 到 2.x", "subdir_count": "跑 lumos update 後重跑整套", "missing": "跑 lumos update 後重跑整套",
++             "unreadable": "回報工具鏈", "too_deep": "把流程拆小", "too_big": "把流程拆小", "too_many_labels": "把流程拆小"}
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td)
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _E2EA_FULL)])
++        check("★對照★ S5:新流程有檢查、每句都對到→放行", rc == 0 and d["status"] == "pass", str(d)[:400])
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))])
++        check("S5:新流程 count 0→以「沒有檢查」擋下", rc == 1 and d.get("gate_code") == "e2e_accept_no_checks"
++              and "這支流程沒有任何檢查" in _e2ea_txt(d) and _E2EA_NEW in _e2ea_txt(d), str(d)[:500])
++        r = _e2eg_cl(root)
++        check("S5:零檢查是內容類→不附放行指令", r.returncode != 0 and "這支流程沒有任何檢查" in r.stderr and _E2EA_HINT not in r.stderr, r.stderr[-800:])
++        for code, word in fixes.items():
++            rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, None, code)])
++            r = _e2eg_cl(root)
++            check(f"S5:新流程 checks null({code})→擋、印讀不到的原因與處方、只有工具類所以附放行指令",
++                  rc == 1 and d.get("gate_code") == "e2e_accept_no_checks" and d.get("accept_classes") == ["e2e_accept_no_checks"]
++                  and "讀不到執行紀錄" in r.stderr and word in r.stderr and _E2EA_HINT in r.stderr, str((code, d.get("gate_code"), r.stderr[-700:])))
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW)])
++        r = _e2eg_cl(root)
++        check("S5:紀錄裡新流程沒有 checks 欄→擋、處方叫人更新 lumos、附放行指令", rc == 1 and d.get("gate_code") == "e2e_accept_no_checks"
++              and "紀錄裡沒有檢查欄" in r.stderr and "更新 lumos 後重跑整套" in r.stderr and _E2EA_HINT in r.stderr, r.stderr[-700:])
++    with tempfile.TemporaryDirectory() as td:   # 工具類加內容類同時成立:不附
++        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept_review=None)})
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, None, "missing")])
++        r = _e2eg_cl(root)
++        check("S5:讀不到(工具類)加沒有審查紀錄(內容類)→兩類都列、不附放行指令", rc == 1
++              and d.get("accept_classes") == ["e2e_accept_no_checks", "e2e_accept_uncovered"]
++              and "跑 lumos update 後重跑整套" in r.stderr and "另派代理審" in r.stderr and _E2EA_HINT not in r.stderr, r.stderr[-800:])
++    print("  ✓ t_android_e2e_gate_new_flow_checks")
++
++
++def t_android_e2e_gate_new_case_requires_accept():
++    """S6:有 flows 的新情境沒有 accept 或沒有 accept_review、任何新情境沒寫 one_way → 擋下並印對應原因;
++    只列截圖(沒有 flows)的新情境沒有 accept 不因此擋。"""
++    import tempfile
++    for desc, kw, code, word in (("沒有 accept", {"accept": None}, "e2e_accept_uncovered", "新情境要先寫驗收句"),
++                                 ("沒有 accept_review", {"accept_review": None}, "e2e_accept_uncovered", "另派代理審"),
++                                 ("沒寫 one_way", {"one_way": None}, "e2e_accept_one_way", "要宣告碰哪幾類單向門")):
++        with tempfile.TemporaryDirectory() as td:
++            root = _e2ea_proj(td, cases={"fresh": _e2ea_case(**kw)})
++            rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _E2EA_FULL)])
++            check(f"S6:新情境{desc}→擋並印原因", rc == 1 and d.get("gate_code") == code and word in _e2ea_txt(d)
++                  and "login.fresh" in _e2ea_txt(d), str(d)[:500])
++    vis = {"look": {"visual": ["home_visual"], "one_way": []}}
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td, cases=vis, flows=(), mutate=lambda c: c["e2e"].update(visual=["home_visual"]))
++        rc, d = _e2ea_rec(root, _E2EA_OLD)
++        check("S6:只列截圖的新情境沒有 accept→不因此擋", rc == 0 and d["status"] == "pass", str(d)[:400])
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td, cases={"look": {"visual": ["home_visual"]}}, flows=(), mutate=lambda c: c["e2e"].update(visual=["home_visual"]))
++        rc, d = _e2ea_rec(root, _E2EA_OLD)
++        check("S6:只列截圖的新情境沒寫 one_way→照樣擋", rc == 1 and d.get("gate_code") == "e2e_accept_one_way" and "login.look" in _e2ea_txt(d), str(d)[:400])
++    print("  ✓ t_android_e2e_gate_new_case_requires_accept")
++
++
++def t_android_e2e_gate_accept_coverage():
++    """S7:新情境某一句在它所有 flow 的 label 聯集(flows 路徑正規化後對接)找不到→擋並列缺的句子編號;每句都對到不擋、
++    多出指到別的情境或不存在情境的 label 不擋;舊情境補了 accept 同樣逐句對照,但不要 accept_review、one_way;
++    情境裡有一支 flow 的 checks 是 null→不報句子沒對到,改照那支 flow 的代碼印讀不到的處方。"""
++    import tempfile
++    a1, a2 = "驗收:login.fresh#A1", "驗收:login.fresh#A2"
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td)
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1, "驗收:other.x#A1", "驗收:nope.zz#A7"))])
++        check("S7:A2 沒有檢查對到→擋並列 A2(不列 A1)", rc == 1 and d.get("gate_code") == "e2e_accept_uncovered"
++              and "A2 沒有檢查對到" in _e2ea_txt(d) and "A1 沒有檢查對到" not in _e2ea_txt(d), str(d)[:500])
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1, a2, "驗收:other.x#A1", "驗收:nope.zz#A7"))])
++        check("S7:每句都對到、多出別的情境與不存在情境的 label→不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
++    two = ".maestro/new2.yaml"
++    with tempfile.TemporaryDirectory() as td:   # 兩支 flow 的聯集;情境寫 ./ 開頭,紀錄是整套清單的寫法
++        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(flows=[_E2EA_NEW, "./" + two])}, flows=(_E2EA_NEW, two))
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1)), _e2ea_ui(two, _e2ea_ck(a2))])
++        check("S7:兩支 flow 的 label 聯集對到每一句(路徑正規化後對接)→不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1)), _e2ea_ui(two, _e2ea_ck("驗收:login.fresh#A3"))])
++        check("★對照★ S7:聯集裡沒有 A2→擋", rc == 1 and "A2 沒有檢查對到" in _e2ea_txt(d), str(d)[:400])
++    with tempfile.TemporaryDirectory() as td:   # 舊情境自己補了 accept:逐句對照,不要求審查紀錄與 one_way
++        root = _e2eg_proj(td)
++        _e2e_set_cfg(root, lambda c: c["e2e"]["features"]["login"]["cases"]["ok"].update(accept=[{"id": "A1", "text": "看到首頁"}]), commit="legacy accept")
++        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck()), _e2ea_ui(".maestro/other.yaml")])
++        check("S7:舊情境補了 accept、A1 沒對到→擋;不因沒有審查紀錄或 one_way 擋", rc == 1 and d.get("accept_classes") == ["e2e_accept_uncovered"]
++              and "A1 沒有檢查對到" in _e2ea_txt(d) and "另派代理審" not in _e2ea_txt(d) and "單向門" not in _e2ea_txt(d), str(d)[:500])
++        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(_E2EA_LAB)), _e2ea_ui(".maestro/other.yaml")])
++        check("S7:舊情境補了 accept、每句都對到→放行", rc == 0 and d["status"] == "pass", str(d)[:400])
++        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", None, "unreadable"), _e2ea_ui(".maestro/other.yaml")])
++        r = _e2eg_cl(root)
++        check("S7:情境裡有一支 flow 的 checks 是 null→不報句子沒對到,改歸沒有檢查、印那個代碼的處方",
++              rc == 1 and d.get("accept_classes") == ["e2e_accept_no_checks"] and "沒有檢查對到" not in _e2ea_txt(d)
++              and "回報工具鏈" in r.stderr and "沒有檢查對到" not in r.stderr, str((d, r.stderr[-500:]))[:900])
++    print("  ✓ t_android_e2e_gate_accept_coverage")
++
++
++def t_android_e2e_gate_one_way_needs_human():
++    """S8:新情境 one_way 非空,或功能名、情境名、驗收句經規格閘同一支掃描命中金流、對外送出、不可逆,而 accept_review.by 不是 human
++    → 擋並印命中的類別與字;只命中守衛面不算;全形或夾零寬字元的關鍵字照樣命中。"""
++    import tempfile
++
++    def acc(t1):
++        return [{"id": "A1", "text": t1}, {"id": "A2", "text": "看到完成畫面"}]
++    cases = [("宣告 payment、代理審", "fresh", {"one_way": ["payment"]}, "ai", ["金流"]),
++             ("宣告 payment、人點頭", "fresh", {"one_way": ["payment"]}, "human", None),
++             ("情境名命中 refund", "refund", {}, "ai", ["金流", "refund"]),
++             ("驗收句命中送出", "fresh", {"accept": acc("按下送出後看到完成")}, "ai", ["對外送出", "送出"]),
++             ("全形的 send", "fresh", {"accept": acc("按 \uff53\uff45\uff4e\uff44 後看到完成")}, "ai", ["對外送出"]),
++             ("夾零寬字元的退\u200b款", "fresh", {"accept": acc("看到退\u200b款按鈕")}, "ai", ["金流"]),
++             ("只命中守衛面的 canary", "fresh", {"accept": acc("canary 標籤出現")}, "ai", None),
++             ("命中了、人點頭", "fresh", {"accept": acc("按下送出後看到完成")}, "human", None)]
++    for desc, cn, kw, by, words in cases:
++        with tempfile.TemporaryDirectory() as td:
++            root = _e2ea_proj(td, cases={cn: _e2ea_case(accept_review={"by": by, "who": "enzo" if by == "human" else "claude-sonnet"}, **kw)})
++            rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(f"驗收:login.{cn}#A1", f"驗收:login.{cn}#A2"))])
++            if words is None:
++                check(f"S8:{desc}→不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
++            else:
++                check(f"S8:{desc}→擋並印命中的類別與字", rc == 1 and d.get("gate_code") == "e2e_accept_one_way"
++                      and all(w in _e2ea_txt(d) for w in words), str(d)[:500])
++    print("  ✓ t_android_e2e_gate_one_way_needs_human")
++
++
++def t_android_e2e_gate_new_rules_order_and_waiver():
++    """S9:這一版沒有整套紀錄、或整套沒過 → 照原本的路印原本的訊息,新規則不搶先;有放行(人或 AI)→ 在放行那一步放行、
++    不算新規則也不印第 7、8 條的提醒,AI 放行照舊被列為待人看。"""
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept=None)})
++        rc, d = _e2eg_check(root)
++        check("S9:沒有整套紀錄→原本的「沒有查證紀錄」,新規則不搶先", rc == 1 and "沒有查證紀錄" in d["reason"]
++              and not str(d.get("gate_code") or "").startswith("e2e_accept") and "驗收句" not in d["reason"], str(d)[:400])
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))], result="fail")
++        check("S9:整套沒過→原本的「整套結果是沒過」,新規則不搶先", rc == 1 and "整套結果是沒過" in d["reason"]
++              and not d.get("accept_classes") and "驗收句" not in _e2ea_txt(d), str(d)[:400])
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))],
++                          waivers=[{"by": "human", "who": "enzo", "at": _E2EG_T1, "note": "裝置借走先放行這一版", "acked": True}])
++        check("S9:人放行→放行、新規則不算、提醒不算", rc == 0 and d["status"] == "waived" and not d.get("accept_notes"), str(d)[:400])
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))],
++                          waivers=[{"by": "ai", "who": "ai", "at": _E2EG_T1, "note": "沒有終端的流程先放行", "acked": False}])
++        r = _e2eg_cl(root)
++        out = r.stdout + r.stderr
++        check("S9:AI 放行→放行、照舊列為待人看,不印新規則與舊項目、檢查數的提醒", rc == 0 and d["status"] == "waived"
++              and r.returncode == 0 and "AI 放行還沒人看過" in out and "驗收句" not in out and "舊情境" not in out
++              and "分岔點沒有可比的紀錄" not in out, out[-600:])
++    print("  ✓ t_android_e2e_gate_new_rules_order_and_waiver")
++
++
++def t_android_e2e_gate_legacy_listed_not_blocked():
++    """S10:情境或流程在主線與分岔點已經存在(流程路徑正規化後比),或主線與分岔點都沒有 features 表而情境有 flows 且全是舊流程 → 不因此擋,
++    整套通過時印出沒有 accept 的舊情境與零檢查的舊流程;第一次導入 features 表時沒有 flows 的情境算新情境、要寫 one_way。"""
++    import copy
++    import tempfile
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2eg_proj(td)
++        _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
++        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(count=0)), _e2ea_ui(".maestro/other.yaml")])
++        notes = d.get("accept_notes") or []
++        check("S10:舊情境沒有 accept、舊流程零檢查→不擋,列出名字", rc == 0 and d["status"] == "pass"
++              and any("login.ok" in n and "other.x" in n for n in notes) and any(".maestro/login.yaml" in n and "檢查" in n for n in notes)
++              and all(n.startswith("提醒") for n in notes), str(d)[:600])
++        r = _e2eg_cl(root)
++        check("S10:整套通過時推送檢查印出這幾行(以「提醒」開頭)", r.returncode == 0 and "提醒" in r.stdout and "login.ok" in r.stdout
++              and ".maestro/login.yaml" in r.stdout, (r.stdout + r.stderr)[-600:])
++    with tempfile.TemporaryDirectory() as td:   # 流程路徑正規化後比:./ 開頭的寫法還是舊流程
++        root = _e2eg_proj(td)
++
++        def dot(c):
++            c["e2e"]["flows"] = ["./.maestro/login.yaml", ".maestro/other.yaml"]
++            c["e2e"]["features"]["login"]["cases"]["ok"]["flows"] = ["./.maestro/login.yaml"]
++        _e2e_set_cfg(root, dot, commit="dot flows")
++        rc, d = _e2ea_rec(root, [_e2ea_ui("./.maestro/login.yaml", _e2ea_ck(count=0)), _e2ea_ui(".maestro/other.yaml")])
++        check("S10:同一支流程換成 ./ 開頭的寫法→還是舊流程、不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
++    feats = {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}},
++             "other": {"paths": ["app/src/main/B.kt"], "cases": {"x": {"flows": [".maestro/other.yaml"]}}}}
++    with tempfile.TemporaryDirectory() as td:   # 主線與分岔點都沒有 features 表:第一次導入
++        root = _e2eg_proj(td, e2e={"features": None})
++        check("現場成立:主線沒有 features 表", "features" not in _e2e_tgit(root, "show", "main:.lumos/macrobench.json"))
++
++        def first(c, solo):
++            c["e2e"]["features"] = copy.deepcopy(feats)
++            c["e2e"]["visual"] = ["home_visual"]
++            c["e2e"]["features"]["login"]["cases"]["solo"] = solo
++        _e2e_set_cfg(root, lambda c: first(c, {"visual": ["home_visual"]}), commit="add features")
++        rc, d = _e2ea_rec(root, _E2EA_OLD)
++        check("S10:第一次導入 features 表:flows 全是舊流程的情境算舊的、沒有 flows 的算新的要寫 one_way", rc == 1
++              and d.get("accept_classes") == ["e2e_accept_one_way"] and "login.solo" in _e2ea_txt(d) and "login.ok" not in str(d.get("accept_items")),
++              str(d)[:500])
++        _e2e_set_cfg(root, lambda c: first(c, {"visual": ["home_visual"], "one_way": []}), commit="solo one_way")
++        rc, d = _e2ea_rec(root, _E2EA_OLD)
++        check("S10:補了 one_way→放行,舊情境列出", rc == 0 and d["status"] == "pass" and any("login.ok" in n for n in d.get("accept_notes") or []), str(d)[:500])
++    with tempfile.TemporaryDirectory() as td:   # 第一次導入時,有任一新流程的情境算新情境
++        root = _e2eg_proj(td, e2e={"features": None})
++        (root / _E2EA_NEW).write_text("appId: com.lab\n---\n- launchApp\n", encoding="utf-8")
++
++        def first_new(c):
++            c["e2e"]["features"] = copy.deepcopy(feats)
++            c["e2e"]["flows"].append(_E2EA_NEW)
++            c["e2e"]["features"]["login"]["cases"]["ok"]["flows"].append(_E2EA_NEW)
++        _e2e_set_cfg(root, first_new, commit="add features with new flow")
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck("x"))])
++        check("S10:第一次導入時情境帶新流程→算新情境、要驗收句", rc == 1 and "新情境要先寫驗收句" in _e2ea_txt(d) and "login.ok" in _e2ea_txt(d), str(d)[:500])
++    print("  ✓ t_android_e2e_gate_legacy_listed_not_blocked")
++
++
++def t_android_e2e_gate_check_count_drop_notice():
++    """S11:分岔點的紀錄裡同一支 flow 的 checks.count 比這次多 → 印前後數量、不擋;分岔點沒有 e2e 段、找不到、讀不懂或舊紀錄沒有 checks 欄
++    → 印「分岔點沒有可比的紀錄,這次不比」、不擋、不出例外。"""
++    import tempfile
++    m = _load_lumos()
++    nolook = "分岔點沒有可比的紀錄,這次不比"
++
++    def base_fp(root):
++        head = _e2e_tgit(root, "rev-parse", "HEAD").strip()
++        full, _err = m._e2e_config_at(root, head)
++        return m._e2e_fingerprint(root, head, full["e2e"], full)[0]
++
++    def base_rec(root, ck="absent", raw=None):
++        runs = _e2eg_runs()
++        runs["blocks"] = {"ui": [_e2ea_ui(".maestro/login.yaml", ck), _e2ea_ui(".maestro/other.yaml")]}
++        _e2eg_rec(root, base_fp(root), runs=runs, raw=raw)
++    for desc, ck, raw, now, want in (("從 5 個變 2 個", _e2ea_ck(count=5), None, 2, "檢查從 5 個變 2 個"),
++                                     ("數量沒變", _e2ea_ck(count=2), None, 2, None),
++                                     ("數量變多", _e2ea_ck(count=1), None, 2, None),
++                                     ("分岔點的紀錄讀不懂", "absent", "{bad json", 2, nolook),
++                                     ("分岔點的舊紀錄沒有 checks 欄", "absent", None, 2, nolook),
++                                     ("找不到分岔點的紀錄", None, None, 2, nolook)):
++        with tempfile.TemporaryDirectory() as td:
++            root = _e2eg_proj(td)
++            if ck is not None:
++                base_rec(root, ck, raw)
++            _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
++            rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(count=now)), _e2ea_ui(".maestro/other.yaml")])
++            notes = d.get("accept_notes") or []
++            ok = rc == 0 and d["status"] == "pass"
++            if want is None:
++                ok = ok and not any("檢查從" in n for n in notes) and not any(nolook in n for n in notes)
++            else:
++                ok = ok and any(want in n for n in notes) and (want == nolook or any(".maestro/login.yaml" in n and want in n for n in notes))
++            check(f"S11:{desc}→不擋" + (f"、印「{want}」" if want else "、不印"), ok, str(d)[:500])
++    with tempfile.TemporaryDirectory() as td:   # 分岔點沒有 e2e 段(分支切出時還沒導入)
++        root = _e2eg_old_branch(td)
++        main_cfg = _e2e_tgit(root, "show", "main:.lumos/macrobench.json")
++        _e2eg_commit(root, {".lumos/macrobench.json": main_cfg, "app/src/main/A.kt": "a2\n"})
++        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(count=2)), _e2ea_ui(".maestro/other.yaml")])
++        check("S11:分岔點沒有 e2e 段→不擋、印不比、不出例外", rc == 0 and d["status"] == "pass" and any(nolook in n for n in d.get("accept_notes") or []),
++              str(d)[:500])
++    print("  ✓ t_android_e2e_gate_check_count_drop_notice")
++
++
++def t_android_e2e_gate_new_rules_next_step():
++    """S12:新規則擋下時下一步不印整套重跑那一行;只有讀不到執行紀錄的那類附放行指令(多類同時擋下而有一類不附就不附);
++    治理帳記對應類別的 gate_code,多類同時成立時訊息全列、extra.accept_classes 記全部類別。"""
++    import tempfile
++    rerun = "整套跑,跑完提交紀錄再推"
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept_review=None, one_way=None)}, vault=True)
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))])
++        allc = ["e2e_accept_no_checks", "e2e_accept_uncovered", "e2e_accept_one_way"]
++        check("S12:三類同時成立→gate_code 記最前面那類、accept_classes 記全部", rc == 1 and d.get("gate_code") == allc[0]
++              and d.get("accept_classes") == allc, str(d)[:500])
++        r = _e2eg_cl(root)
++        check("S12:三類訊息全列、不印整套重跑那一行、有內容類所以不附放行指令", "這支流程沒有任何檢查" in r.stderr and "另派代理審" in r.stderr
++              and "要宣告碰哪幾類單向門" in r.stderr and rerun not in r.stderr and _E2EA_HINT not in r.stderr, r.stderr[-900:])
++        ev = _e2eg_events(root, "blocked")
++        check("S12:治理帳記最前面那類的 gate_code 與全部類別", bool(ev) and ev[-1].get("gate_code") == allc[0]
++              and ev[-1].get("accept_classes") == allc, str(ev[-1:])[:400])
++    with tempfile.TemporaryDirectory() as td:
++        root = _e2ea_proj(td, vault=True)
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, None, "no_evidence")])
++        r = _e2eg_cl(root)
++        ev = _e2eg_events(root, "blocked")
++        check("S12:只有讀不到執行紀錄→附放行指令、不印整套重跑那一行", _E2EA_HINT in r.stderr and rerun not in r.stderr, r.stderr[-700:])
++        check("S12:治理帳記沒有檢查那類", bool(ev) and ev[-1].get("gate_code") == "e2e_accept_no_checks"
++              and ev[-1].get("accept_classes") == ["e2e_accept_no_checks"], str(ev[-1:])[:400])
++    with tempfile.TemporaryDirectory() as td:   # 只有單向門沒人點頭(內容類)
++        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(one_way=["payment"])}, vault=True)
++        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _E2EA_FULL)])
++        r = _e2eg_cl(root)
++        ev = _e2eg_events(root, "blocked")
++        check("S12:只有單向門沒人點頭→治理帳記那類、不附放行指令", bool(ev) and ev[-1].get("gate_code") == "e2e_accept_one_way"
++              and _E2EA_HINT not in r.stderr and rerun not in r.stderr, (str(ev[-1:]) + r.stderr[-500:])[:900])
++    print("  ✓ t_android_e2e_gate_new_rules_next_step")
++
++
++def t_android_e2e_accept_config_strict():
++    """S13:accept、accept_review、one_way 格式不對 → macrobench --check-config 回 2 並印哪一項壞,推送檢查讀到同樣的設定也擋、不出例外;
++    三個鍵都不寫的舊設定照舊回 0。"""
++    import tempfile
++    ok_case = {"flows": [".maestro/login.yaml"], "accept": [{"id": "A1", "text": "看到首頁", "state": "正常"}],
++               "accept_review": {"by": "ai", "who": "claude-sonnet"}, "one_way": ["payment", "external-send", "prod-irreversible"]}
++    bad = [("accept 是空清單", {"accept": []}, "accept"),
++           ("accept 不是清單", {"accept": "看到首頁"}, "accept"),
++           ("accept 的項目不是物件", {"accept": ["看到首頁"]}, "accept"),
++           ("缺 id", {"accept": [{"text": "看到首頁"}]}, "id"),
++           ("id 重複", {"accept": [{"id": "A1", "text": "看到首頁"}, {"id": "A1", "text": "看到標題"}]}, "重複"),
++           ("id 含英數字以外的字", {"accept": [{"id": "A-1", "text": "看到首頁"}]}, "id"),
++           ("text 空", {"accept": [{"id": "A1", "text": "  "}]}, "text"),
++           ("state 不是字串", {"accept": [{"id": "A1", "text": "看到首頁", "state": 1}]}, "state"),
++           ("accept_review 不是物件", {"accept_review": "ai"}, "accept_review"),
++           ("by 不是 human 或 ai", {"accept_review": {"by": "bot", "who": "x"}}, "by"),
++           ("who 空", {"accept_review": {"by": "ai", "who": " "}}, "who"),
++           ("one_way 有三個值以外的字", {"one_way": ["payment", "money"]}, "one_way"),
++           ("one_way 不是清單", {"one_way": "payment"}, "one_way")]
++
++    def proj(td, case, commit=False):
++        return _e2e_proj(td, e2e={"features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": case}}}}, commit=commit)
++    for desc, kw, word in bad:
++        with tempfile.TemporaryDirectory() as td:
++            root = proj(td, dict(ok_case, **kw))
++            r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
++            check(f"S13:{desc}→--check-config 回 2 並點名", r.returncode == 2 and word in r.stderr and "features.login.cases.ok" in r.stderr,
++                  str((desc, r.returncode, r.stderr[-300:])))
++    with tempfile.TemporaryDirectory() as td:   # 寫了 accept 卻沒有 flows:沒有地方帶 label,這些句子永遠不會被對照
++        root = _e2e_proj(td, e2e={"visual": ["home_visual"], "features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {
++            "ok": {"visual": ["home_visual"], "accept": ok_case["accept"], "one_way": []}}}}})
++        r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
++        check("S13:寫了 accept 卻沒有 flows(只列截圖)→--check-config 回 2 並說沒有地方帶 label", r.returncode == 2 and "flows" in r.stderr
++              and "label" in r.stderr and "features.login.cases.ok" in r.stderr, str((r.returncode, r.stderr[-300:])))
++    for desc, case in (("三個鍵都不寫", {"flows": [".maestro/login.yaml"]}), ("三個鍵都合格", ok_case),
++                       ("one_way 空清單", dict(ok_case, one_way=[]))):
++        with tempfile.TemporaryDirectory() as td:
++            root = proj(td, case)
++            r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
++            check(f"★對照★ S13:{desc}→回 0", r.returncode == 0, str((desc, r.stdout[-200:], r.stderr[-300:])))
++    with tempfile.TemporaryDirectory() as td:   # 推送檢查讀到同樣壞的設定:擋、不是判定內部出錯
++        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept=[])})
++        rc, d = _e2eg_check(root)
++        check("S13:推送檢查讀到 accept 是空清單→擋(設定不合格)、不是內部出錯", rc == 1 and "不合格" in d["reason"] and "accept" in d["reason"]
++              and d.get("gate_code") != "evaluation_error", str(d)[:400])
++    print("  ✓ t_android_e2e_accept_config_strict")
++
++
++def t_android_e2e_checks_preview_and_history():
++    """補洞(代碼審 r1):judge 的預覽(整套與按功能兩條路)列出零檢查的流程與沒對到的句子、註明哪些會擋由推送檢查判;
++    本機檢測總表那筆 UI 項目帶 checks 數;擋下條目與舊項目清單超過 E2E_ACCEPT_SHOW(10)條時只列前 10 條加總數。"""
++    import json
++    import tempfile
++    feats = {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"],
++                                                                         "accept": [{"id": "A1", "text": "看到首頁"}, {"id": "A2", "text": "看到標題"}]}}}}
++    with tempfile.TemporaryDirectory() as td:   # 整套:A2 沒對到
++        root = _e2e_proj(td, e2e={"features": feats})
++        rd = _e2ea_steps(root, [{"cmds": [_e2ea_cmd("assertConditionCommand", label=_E2EA_LAB)]}])
++        r = _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--history")
++        rec = json.loads(next((root / ".lumos" / "e2e-records").glob("*.json")).read_text(encoding="utf-8"))
++        cov = [n for n in rec["runs"]["notices"] if "沒有檢查對到" in n]
++        check("預覽(整套):列出 login.ok 沒對到的 A2、不列 A1、註明由推送檢查判", r.returncode == 0 and len(cov) == 1 and "login.ok" in cov[0]
++              and "A2" in cov[0] and "A1" not in cov[0] and "推送檢查" in cov[0] and cov[0] in r.stdout, str((rec["runs"]["notices"], r.stdout[-400:])))
++        rows = [json.loads(x) for x in (root / ".lumos/artifacts/android/history.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
++        check("總表:那筆 UI 項目帶 checks 數", rows and rows[-1]["items"][0].get("checks") == 1, str(rows[-1:])[:400])
++    with tempfile.TemporaryDirectory() as td:   # 按功能:零檢查
++        root = _e2e_proj(td, e2e={"features": feats})
++        rd = _e2ea_steps(root, [{"cmds": []}])
++        st = json.loads((rd / "steps.json").read_text(encoding="utf-8"))
++        st["selection"] = {"mode": "case", "cases": ["login.ok"], "flows": [".maestro/login.yaml"], "visual": [], "macrobench": [], "stability": []}
++        (rd / "steps.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
++        r = _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--no-record", "--history")
++        zero = [ln for ln in r.stdout.splitlines() if "沒有任何檢查" in ln]
++        check("預覽(按功能):列出零檢查的流程、兩句都沒對到", r.returncode == 0 and len(zero) == 1 and ".maestro/login.yaml" in zero[0]
++              and "推送檢查" in zero[0] and any("A1、A2 沒有檢查對到" in ln for ln in r.stdout.splitlines()), r.stdout[-600:])
++        rows = [json.loads(x) for x in (root / ".lumos/artifacts/android/history.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
++        check("總表(按功能):零檢查也記 checks 數 0", rows and rows[-1]["items"][0].get("checks") == 0, str(rows[-1:])[:400])
++    many = tuple(f".maestro/n{i:02d}.yaml" for i in range(12))
++    with tempfile.TemporaryDirectory() as td:   # 12 條擋下:只列 10 條、寫總數
++        root = _e2ea_proj(td, cases={}, flows=many)
++        rc, d = _e2ea_rec(root, _E2EA_OLD + [_e2ea_ui(f, _e2ea_ck(count=0)) for f in many])
++        r = _e2eg_cl(root)
++        shown = [ln for ln in r.stderr.splitlines() if ln.startswith("    - [")]
++        check("12 條擋下→推送檢查只列 10 條、寫總數 12", rc == 1 and len(d.get("accept_items") or []) == 12 and len(shown) == 10
++              and "共 12 條" in r.stderr, str((len(shown), r.stderr[-500:])))
++    with tempfile.TemporaryDirectory() as td:   # 12 個沒有 accept 的舊情境:提醒只列 10 個、寫總數
++        fs = {f"f{i:02d}": {"paths": [f"app/src/main/F{i}.kt"], "cases": {"c": {"flows": [".maestro/login.yaml"]}}} for i in range(12)}
++        fs["login"] = {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}}
++        longf = ".maestro/" + "a" * 60 + ".yaml"   # 超過 _secinv_names 預設的 40 字:舊流程清單要整段印出來
++        fs["other"] = {"paths": ["app/src/main/B.kt"], "cases": {"x": {"flows": [longf]}}}
++        root = _e2eg_proj(td, e2e={"features": fs, "flows": [".maestro/login.yaml", longf]})
++        _e2eg_commit(root, {longf: "appId: com.lab\n---\n- launchApp\n", "app/src/main/A.kt": "a2\n"})
++        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml"), _e2ea_ui(longf, _e2ea_ck(count=0))])
++        line = next((n for n in d.get("accept_notes") or [] if "舊情境" in n), "")
++        check("14 個舊情境→提醒只列 10 個、寫「等 14 個」", rc == 0 and "等 14 個" in line and line.count("、") == 9, line[:400])
++        zl = next((n for n in d.get("accept_notes") or [] if "舊流程" in n), "")
++        check("舊流程清單:超過 40 字的 flow 路徑整段印出(不截在 40 字)", longf in zl, zl[:300])
++    m = _load_lumos()
++    check("_secinv_names 預設每項照舊截 40 字", m._secinv_names(["x" * 50]) == "x" * 40)
++    print("  ✓ t_android_e2e_checks_preview_and_history")
++
++
+ _MS_FAKE_ADB = r"""#!/usr/bin/env python3
+ import os, sys, time
+ d = os.environ["FAKE_DIR"]
+ def nxt(name):
+     # 依序回 name.0、name.1…;沒有下一份就一直回最後一份
+     c = os.path.join(d, name + ".count")
+     i = int(open(c).read()) if os.path.exists(c) else 0
+     open(c, "w").write(str(i + 1))
+     for k in (i, i - 1, 0):
+         f = os.path.join(d, f"{name}.{k}")
+diff --git a/skills/lumos-android-evidence/SKILL.md b/skills/lumos-android-evidence/SKILL.md
+index 09440c726..831cdc93e 100644
+--- a/skills/lumos-android-evidence/SKILL.md
++++ b/skills/lumos-android-evidence/SKILL.md
+@@ -39,28 +39,29 @@ description: Android 在實機上驗收與查效能。①改了畫面或功能:
+ | 改到共用的東西(共用元件、主題、網路層) | 整套跑;那些路徑要列在 `e2e.shared_paths`,推送前檢查才知道改到它要整套 | 同上 |
+ | 回頭看驗過什麼 | `lumos android-e2e history [--feature <功能>] [--case <情境>]`;哪些 flow 常靠重跑才過加 `--flaky` | — |
+ 
+ - 先 `--preflight` 只驗裝置與工具;缺 Perfetto 工具會在動 App 之前擋。開發中工作目錄有改動時要帶挑法一起驗(`--preflight --changed` 或 `--preflight --feature <功能>`),單獨的 `--preflight` 是整套跑的前置、會要求工作目錄乾淨。
+ - `--changed` 比的是「HEAD 跟主線分岔點的差異」加工作目錄的改動與沒追蹤的新檔;改到某個情境列的 flow 檔也算那個功能。回 2 說「對不到任何功能」時先看它印的改到的檔:列的是「(沒有改動)」,多半是你直接在主線上提交了(HEAD 就是分岔點),開分支或用 `--feature`;列了檔卻都不在任何功能的 `paths` 裡,才是補對照表或整套跑。不要當成沒事。
+ - `e2e` 段還沒有 `features` 時,三種挑法一律回 2;先照下面補對照表。
+ - 跑完把它印的紀錄檔 `git add` 提交(`.lumos/e2e-records/`,簿記檔,不會讓代碼審留痕失效)。
+ 
+ **新增功能或使用情境時一起補**(同一個提交):
+ 1. 每個使用情境一支 Maestro flow,斷言照需求寫(寫法見 lumos-project-notes reference〈產 maestro UI flow 的派工要求〉),加進 `e2e.flows`。
++   **新情境先寫驗收句再寫 flow**(單源 Projects/UI流程驗收句與檢查對照_計劃):①讀需求,再讀這個情境畫面的程式,列出畫面所有狀態(正常、空、載入中、錯誤、輸入不合法、權限被拒…),每種一句,寫進 `cases.<情境>.accept`(`[{"id": "A1", "text": "<使用者應該看到什麼>", "state": "<狀態>"}]`);**預期結果照需求寫,不照程式抄**,兩者對不上就停下問人 ②照需求判碰不碰單向門,寫 `one_way`(`payment`、`external-send`、`prod-irreversible` 的清單,不碰寫 `[]`;新情境必填)③另派一個代理,只給需求、驗收句與 `one_way`、不給程式,審有沒有漏狀態、有沒有偏向程式;審過寫 `accept_review: {"by": "ai", "who": "<模型>"}`。單向門情境要人點頭(`by` 是 `human`),**先簽再跑整套**(簽名會改 e2e 段、讓先跑的紀錄失效)④flow 裡每個檢查加 `label: "驗收:<功能>.<情境>#<id>"`。新畫面一律開新情境,不塞進既有情境。e2e.flows 列的是驗收流程,一定要有檢查;只做前置的步驟寫成子流程用 runFlow 引進來。
+ 2. `e2e.features.<功能>`:`paths` 列這個功能的程式路徑;`cases.<情境>` 列它的 `flows`、`visual`(有基準圖的畫面,畫面也要在 `e2e.visual` 裡)、`macrobench`(測試方法名,只收英數字、點、底線與 `#`、開頭不能是 `#`;不收 `$`,名字原樣換進 shell 會被展開成別支;`macrobench_cmd` 要帶 `{{TEST}}`,帶了之後整套跑也只跑對照表列到的方法)、`stability`(最外層 `stability_scenarios` 裡的情境名)。
+    大家共用的程式列進 `e2e.shared_paths`(路徑寫法同 `paths`,要在 `app_dirs` 底下):推送前改到它就要整套跑。
+    新的記憶體情境:在 `stability_scenarios.<名>` 寫 `scenario`(結果檔記的情境名)與 `driver`(反覆開關畫面的指令),`warmup`、`cycles` 選填(1 到 10000);門檻檔 `.lumos/macrobench-thresholds.json` 要有 `scenario` 等於那個值的條目,每個 `stability_checks` 都要。整套跑會把每個情境都跑一次,各留一份錄製檔在 `.lumos/artifacts/android/<run-id>.<情境>/`,不會自動清。
+ 3. `lumos macrobench --check-config` 回 0 才算接好;再跑 `lumos android-e2e coverage --changed`,看這次改到的檔是不是都歸屬到功能(沒歸屬的,推送時會被要求整套跑)。基準圖只准人錄(toolkit 的 `visual-record.sh`),你不錄。
+ 
+ **紅了看哪裡**:UI 流程沒過或第二次才過,先看終端在那支 flow 後面印的「現場」(Maestro 的逐步記錄、失敗截圖與畫面結構,`debug/` 底下是 maestro.log)與「閃退紀錄」(那次嘗試期間的 App 崩潰堆疊,只收 crash 緩衝;沒有這一項就是沒閃退),再看報告路徑;沒印現場是 Maestro 太舊(開跑時會提醒)。判定結束印「不穩帳」點名的 flow,是最近常靠重跑才過:看它第一次的現場,修 flow 的等待或 App 的時序,不要加重跑;截圖沒過看相符率與差異圖;記憶體沒過或印了變慢提醒,接下面 L0 起逐層查;建置失敗、缺工具、被中斷是環境問題,修好再跑。
+ 
+-**推送前被擋下**:照訊息跑它印的那一行(`--case <功能.情境>` 或整套),跑完提交紀錄再推。確定是誤擋(例如裝置狀態造成的)才用它印的 `lumos android-e2e waive <完整指紋> --commit <提交> --note "<理由>"` 放行:你沒有互動終端,會記成 AI 放行,推送、`lumos doctor` 與開場提示會一直列給人看,直到人用 `--ack` 看過;不要為了讓推送過而放行,放行前先跟使用者講。只這一次整道先不跑:`LUMOS_SKIP_ANDROID_E2E=1 git push`(會記帳,也要跟使用者講)。
++**推送前被擋下**:照訊息跑它印的那一行(`--case <功能.情境>` 或整套),跑完提交紀錄再推。擋下原因是「這支流程沒有任何檢查」「新情境要先寫驗收句」「A<n> 沒有檢查對到」「要宣告單向門」「單向門沒人點頭」這幾種時,重跑解不開:照訊息改 flow 或 `e2e` 段,再跑整套;「讀不到執行紀錄」才是工具問題,照它印的處方升級工具或拆小流程。確定是誤擋(例如裝置狀態造成的)才用它印的 `lumos android-e2e waive <完整指紋> --commit <提交> --note "<理由>"` 放行:你沒有互動終端,會記成 AI 放行,推送、`lumos doctor` 與開場提示會一直列給人看,直到人用 `--ack` 看過;不要為了讓推送過而放行,放行前先跟使用者講。只這一次整道先不跑:`LUMOS_SKIP_ANDROID_E2E=1 git push`(會記帳,也要跟使用者講)。
+ 
+ ## L0:有沒有變慢、有沒有達門檻
+ 
+ 1. 跑專案的 Macrobenchmark(實體裝置、USB、先 `adb shell svc power stayon usb`;跑前刪掉裝置上 `/sdcard/Android/media/<benchmark 套件>/` 舊檔)。
+ 2. 記下這次的輸入:啟動參數(`am instrument -e …`、intent extras)、測試資料、Feature Flag。基準與候選兩邊都記;同一個 APK 只換參數時,這是兩邊唯一的差異,沒記就證明不了差在哪。
+ 3. 跑前跑後各記一次裝置狀態(L0 是推送前的綁定測試閘代跑、你拿到時已經跑完的話,當下補量一次,收據 gaps 寫明是事後量的):型號、`ro.build.fingerprint`、電量、`dumpsys thermalservice` 的 Thermal Status;從裝置 `pm path` 拉實際安裝的 APK 算 sha256(同一份原始碼重建的 APK 雜湊會不同,只記建置產物不夠)。
+ 4. 拉回結果 JSON 與每輪 `.perfetto-trace` 到 artifacts 目錄,算 sha256 與大小。
+ 5. `lumos macrobench --json` 比對基準,輸出存成 artifact,並把比對用的設定與指令寫進 report.md(L0 的重跑方式)。
+    - 基準是專案自己存的 `.lumos/macrobench-baseline.json`:在專案根直接跑。
+    - 基準是另一次執行(例如同一天先跑的正常版):不要覆蓋專案的基準檔。另建一個暫存目錄,放 `.lumos/macrobench.json`(`results_dirs` 寫基準那次的絕對路徑),並把專案的 `.lumos/macrobench-thresholds.json` 複製進暫存目錄的 `.lumos/`(門檻是從 `--repo` 指的目錄讀的,沒複製就一條門檻都不判),`lumos macrobench --repo <暫存目錄> --update-baseline`,再把 `results_dirs` 改成候選那次的路徑跑 `--json`;收據 `scenario.baseline_run_id` 旁寫明基準是這樣產生的。
+diff --git a/skills/lumos-project-notes/reference.md b/skills/lumos-project-notes/reference.md
+index 7e6f4f30b..5ebeb196f 100644
+--- a/skills/lumos-project-notes/reference.md
++++ b/skills/lumos-project-notes/reference.md
+@@ -1185,43 +1185,46 @@ python3 scripts/lumos doctor
+ 
+ 派 agent 產 flow 時，prompt 必須含下列全部：
+ 
+ **1 · 斷言要驗「使用者看到什麼」**
+ ```yaml
+ - assertVisible: "折扣超過上限。.*"
+ - assertNotVisible: "請輸入員工編號.*"   # 回歸釘：不可再退回誤用的字串
+ ```
+ 只斷言「流程有沒有被擋」等於白做——回傳值對、UI 拿它去換錯的字串，單元測試結構上測不到。
+ 
++**1b · 斷言要對到驗收句**（專案 `e2e.features` 的情境寫了 `accept` 時；單源在 **lumos-toolchain 的** `Projects/UI流程驗收句與檢查對照_計劃`）：每個斷言加 `label: "驗收:<功能>.<情境>#<id>"`，一個斷言只對一句；派工詞要附那個情境的驗收句清單。新情境的每一句都要有一個真的跑過、狀態完成的斷言帶它的 label，推送前會逐句對照；`optional: true`、條件沒成立的 runFlow、AI 類檢查都不算數。
++
+ **2 · 命名與位置（錯了會「Check T 綠但 flow 壞」）**
+ - `name:` ＝檔名去副檔名轉底線（`smoke-05-x.yaml` → `smoke_05_x`），**識別字**、**該行無其他內容**（不得有行尾 `#` 註解）、**放在 `---` 之前的 config 區塊**。
+ - 要綁的 Kotlin 反引號測試名(含中文、空白)寫進 `[test:]` 時照原樣寫、反引號可留可去(整串被一對反引號包住會拆殼);不收半形逗號與方括號(2026-10-15 起,見 [[Projects/測試名收自由字串_計劃]])。`guard scaffold --method` 仍要識別字(它拿名字產程式碼)。
+ 
+ **3 · 七個會「沉默地做錯事」的坑（回報成功但做的是別的事，比紅燈危險）**
+ | 坑 | 症狀 |
+ |---|---|
+ | 同畫面兩個鍵盤共用同一組 `resource-id` | 用 `text:`／`id:` 選會打到另一個，不報錯 |
+ | Maestro 的 `text:` 是**全字串正則** | `tapOn: "."` 匹配任意單一字元（實測把 3.25 打成 3125） |
+ | 選付款方式會自動帶入金額 | 再自己輸入反而算錯 |
+ | SeekBar 要 `swipe` 不能 `tap` | 起點落在元件外會靜默無效 |
+ | `name:` 行帶行尾註解 | discover 抓不到 → Check T 判懸空（紅在 doctor，人會找錯方向） |
+ | 人與 agent 同時操作同一台裝置 | 每個 `tapOn` 都點到「某個東西」→ 綠燈但畫面狀態已亂 |
+ | `name:` 放在步驟區 | Check T 不看 `---` 分界 → 照樣判「存在」（綠），但 maestro 讀不到、flow 壞 |
+ 
+ **4 · 完成判準**
+ - 專案的 `.lumos/macrobench.json` 有 `e2e` 段時:新 flow 加進 `e2e.flows`,並在 `e2e.features.<功能>.cases.<情境>.flows` 登記(沒有那個功能就新開,`paths` 寫這個功能的程式路徑),然後用 `sh scripts/templates/android-e2e-run.sh --case <功能.情境>` 實跑;沒登記進 `features` 的 flow,整套驗收照樣會跑(看的是 `e2e.flows`),但按功能跑挑不到它。細節見 lumos-android-evidence〈端到端驗收〉。
++- 新流程至少要有一個斷言（推送前零檢查的新流程會被擋）；只做前置的步驟寫成子流程用 `runFlow` 引進來，不列進 `e2e.flows`。
+ - ★以**檔案形式**實跑通過一次★才算完成（inline 跑得通 ≠ 寫成檔案跑得通：`runFlow` 相對路徑、`optional`、共用子流程都可能出錯）。
+ - 跑之前先確認裝置 ready（各專案自填清單，如 `.maestro/README.md`）。
+ - ★金流前置★：flow 只准跑**測試門店／測試帳**；測試門店未確認前，該 flow 標「僅手動、不進回歸集」，終審不得自動 `run`。
+ 
+ **5 · 天花板（要講給人聽）**
+-版面一改就要重錄；`name:` 唯一性與 name↔檔名一致性都沒有機械守衛；`[kill:]` 第三階在 UI 層走不通（斷言被刪掉不會有任何機械檢查翻紅）。
++版面一改就要重錄；`name:` 唯一性與 name↔檔名一致性都沒有機械守衛；`[kill:]` 第三階在 UI 層走不通（斷言被刪掉不會有任何機械檢查翻紅）。例外：新流程整支零檢查會被擋、新情境的每一句驗收句要有斷言對到（有斷言的流程刪掉一條斷言仍然不會紅，只會在推送時提醒檢查數變少）。
+ 
+ **6 · 有基準圖的畫面：跑腳本，不要開頁看一眼**
+ 流程本體在 **lumos-toolchain 的** `Projects/截圖基準驗收流程_計劃`（消費端圖譜查不到是正常的）。專案的 `.maestro/` 裡若有 `visual-check.sh`，代表那個畫面已有人核可過的基準圖：
+ - 驗收：`.maestro/visual-check.sh <畫面> <證據目錄>`。退出 0 就是畫面沒變；退出 1 會印一行「畫面 X 相符率 Y%，門檻 99.5%，diff 在 …」並把 diff／實際／基準三張圖搬進證據目錄，照抄回報。
+ - ★agent 永遠不跑 `visual-record.sh`、不動 `.maestro/baseline/`★——回歸還是預期改版由人裁，改版才由人重錄並開 PR 看圖。
+ - 不准為了讓動態內容過關而降門檻（`THRESHOLD`）；要釘資料、釘狀態列或 `cropOn`。
+ - 截圖比對抓「版面位移／破圖」很準（跑版一定紅），但抓不到「小字改動」（加兩字只動 0.17% 像素會放行）——文字關鍵的斷言仍要用 `assertVisible "字串"`，兩者並用。
+ - 前置沒過（模擬器沒開、機型不對）腳本會退出 1 並說原因：回報「環境未就緒＋原因」，不得靜默跳過。
+ - 沒有基準圖的畫面照舊：開頁看一眼、截圖進證據。
+ 

@@ -1,0 +1,945 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 3c0d8c557..8eb3cf4a6 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4141,21 +4141,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
+         # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
+         _lnr = _vault_repo_root(env)
+         if _lnr is not None:
+             _kc = _lint_new_kind_counts(_lnr)
+             _auto = _kc.get("fail-open", 0)
+             _wv, _wverr = _lint_waivers_load(_lnr)
+             _bits = []
+             if _auto:
+                 _bits.append(f"最近 30 天自動放行 {_auto} 次(工具沒裝/逾時/拉不到規則都算)")
+-            for _k, _say in (("skipped", "設定關掉時作弊比對有候選沒判"), ("skipped-env", "環境變數跳過時作弊比對有候選沒判"),
++            for _k, _say in (("skipped", "設定關掉時作弊比對沒判(有候選或比對出錯)"), ("skipped-env", "環境變數跳過時作弊比對沒判(有候選或比對出錯)"),
+                              ("warned", "只報不擋時作弊比對有候選"), ("relax-deferred", "推送本身放寬閘、照放寬前判"),
+                              ("no-baseline", "找不到主線、作弊候選只印不擋")):
+                 if _kc.get(_k):
+                     _bits.append(f"最近 30 天{_say} {_kc[_k]} 次")
+             if _wverr:
+                 _bits.append(_wverr)
+             elif _wv:
+                 _bits.append(f"放行清單有 {len(_wv)} 條")
+                 _n_ai = sum(1 for _it in _wv.values() if _lint_waiver_ai_unacked(_it))
+                 if _n_ai:   # 排最前面:健檢的軟提醒每段只印前三條
+@@ -37855,21 +37855,22 @@ def _lint_waive_show(repo_root, as_json):
+         return 2
+     if as_json:
+         print(json.dumps({"waivers": list(cur.values())}, ensure_ascii=False))
+         return 0
+     if not cur:
+         print("這個專案還沒有放行過任何告警")
+         return 0
+     print(f"這個專案放行了 {len(cur)} 條告警(放行是合法的,但會被統計):")
+     for k, it in cur.items():
+         _ai = "(AI 放的,還沒人看過)" if _lint_waiver_ai_unacked(it) else ""
+-        print(f"  {k}  {it.get('file', '')} [{it.get('rule', '')}] — {it.get('reason', '')}{_ai}")
++        c = _out_clean           # 理由、規則、檔名是放行指令帶進來的外來文字:清掉換行與控制字元,不能偽造一行放行或藏掉「AI 放的」
++        print(f"  {c(k, 80)}  {c(it.get('file', ''), 200)} [{c(it.get('rule', ''), 80)}] — {c(it.get('reason', ''), 300)}{_ai}")
+     n_ai = sum(1 for it in cur.values() if _lint_waiver_ai_unacked(it))
+     if n_ai:
+         print(f"其中 {n_ai} 條是 AI 放的、還沒人看過;看過標記:lumos lint-waive --ack --all")
+     return 0
+ 
+ 
+ def _lint_waive_origin(key, rule="", file_rel="", note=""):
+     """放行前在終端問一句(印出指紋、規則、檔案、理由,外來字串用擋下訊息那支清過)→ "human"/"ai"/None,判法見 _waive_origin_tty。
+     規則與檔案是放行指令自己帶進來的,工具沒拿指紋去對當下的候選,提示照實標「未核對」,人要看的是指紋。"""
+     c = _out_clean
+@@ -38940,55 +38941,52 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
+     import time as _time
+ 
+     out = {"status": "clean", "blocked": False, "mode": "block", "new": [], "waived": 0,
+            "weak": 0, "oversize": [], "oversize_waived": [], "undone": [], "autopass": False, "autopass_reason": "", "ran": [],
+            "report_only": [], "reason": "", "warnings": [], "guard": None, "events": [], "tools_ran": False,
+            "waiver_err": None, "range": diff_range}
+ 
+     cfg = _lint_new_config(repo_root)
+     out["mode"] = cfg["mode"]
+     out["warnings"] = list(cfg["warnings"])
+-    skip_env = bool(os.environ.get("LUMOS_SKIP_LINT_NEW"))
++    skip_env = os.environ.get("LUMOS_SKIP_LINT_NEW") == "1"     # 只認 1(同 LUMOS_SKIP_ROOM_GUARD 這類鄰居):殘留的 0、false 不會整道關閘
+     # 版本代號:兩端都要解析得出來,任一端解析不出(例如只給單一參考點、終點其實是工作樹)就是環境不可用
+     base_ref, head_ref = _diff_range_ends(repo_root, diff_range)
+     tip = _lens_full_sha(repo_root, head_ref) if head_ref else None
+     start = None
+     if base_ref:
+         start = _EMPTY_TREE_SHA if base_ref == _EMPTY_TREE_SHA else _lens_full_sha(repo_root, base_ref)
+     if not skip_env and tip and start:
+         # 起點是空樹(新分支首推、CI 拿到全零的起點)時,「放寬前」改用跟主線的分岔點那一版
+         _lint_new_relax(repo_root, start if start != _EMPTY_TREE_SHA else _tg_start(repo_root, start, tip, deadline), tip, cfg, out)
+     if skip_env or cfg["mode"] == "off":
+         return _lint_new_off(repo_root, start, tip, skip_env, out, deadline)
+     if not tip or not start:
+         if not _lint_new_declared(repo_root):
+             out["status"], out["reason"] = "no-config", "這個專案沒有宣告任何檢查工具,範圍兩端又算不出來(作弊比對沒跑)"
+             return out
+-        out.update(status="env-unavailable", autopass=True,
+-                   reason="這段範圍算不出「改動前」與「現在」兩個版本代號(終點可能是工作目錄),不硬猜")
++        _lint_new_autopass(out, "這段範圍算不出「改動前」與「現在」兩個版本代號(終點可能是工作目錄),不硬猜")
+         return out
+ 
+     t_guard = _time.monotonic()
+     out["guard"] = _lint_new_guard(repo_root, start, tip, deadline)
+     # 比對花的時間不算進檢查命令的預算:調小預算的專案,檢查命令不會因為比對先跑而被判「時間預算沒跑到」
+     tools_deadline = deadline + (_time.monotonic() - t_guard) if deadline else None
+     waivers, werr = _lint_waivers_load(repo_root)
+     guard_new = _lint_new_guard_new(out, waivers, werr)
+     out["tools_ran"] = _lint_new_tools(repo_root, diff_range, base_ref, head_ref, cfg, out, waivers, werr, tools_deadline)
+     out["new"] = guard_new + out["new"]
+     guard_hard = bool(guard_new) or bool(out["waiver_err"]) or any(u["kind"] == "guard" for u in out["undone"])
+     if not out["tools_ran"] and not guard_hard:
+         return out                  # 檢查工具那邊的早退狀態(no-config / no-files / env-unavailable)照原樣
+     if out["waiver_err"]:
+         out["autopass"] = False     # 有候選卻放不掉:擋下,不記自動放行
+-    if out["autopass"] and not out["autopass_reason"]:
+-        out["autopass_reason"] = out["reason"]
+     _lint_new_classify(out, cfg)
+     if out["status"] == "warn" and guard_new:
+         out["events"].append(("warned", f"作弊比對 {len(guard_new)} 條候選只報不擋"))
+     return out
+ 
+ 
+ def _lint_new_off(repo_root, start, tip, skip_env, out, deadline):
+     """閘關掉(設定 off 或 LUMOS_SKIP_LINT_NEW)時的判定:比對照樣在背後跑(只讀、不擋),有候選、或比對自己出錯,
+     都記一筆帳(關閘留帳;比對壞了被擋、改用環境變數繞過的那一次也留得下痕跡)→ out(status=off)。"""
+     if tip and start:
+@@ -39055,62 +39053,67 @@ def _lint_new_guard(repo_root, start, tip, deadline=None):
+             g["error"] = err
+         else:
+             g["cands"] = cands
+     except TimeoutError:
+         g["error"] = "超過截止時間"
+     except Exception as e:      # 比對工具的任何程式錯都要記成沒跑完,不能讓它變成放行
+         g["error"] = f"比對工具出錯({e.__class__.__name__}:{str(e)[:80]})"
+     return g
+ 
+ 
++def _lint_new_autopass(out, reason):
++    """環境不可用、自動放行:狀態、原因、自動放行的原因一起寫(擋下時 reason 會換成擋下理由,帳寫 autopass_reason)。"""
++    out.update(status="env-unavailable", autopass=True, reason=reason, autopass_reason=reason)
++
++
+ def _lint_new_declared(repo_root):
+     """這個專案有沒有宣告任何檢查工具(.lumos/lint.json 或 .lumos/lint-deps.json 有內容)。"""
+     return bool(_lint_load_config(repo_root) or _lint_deps_load(repo_root)[0])
+ 
+ 
+ def _lint_new_tools(repo_root, diff_range, base_ref, head_ref, cfg, out, waivers, werr, deadline=None):
+     """新增告警閘的檢查工具那一半(宣告在 .lumos/lint.json 與 lint-deps.json 的命令,改動前後各跑一次比差),就地填 out。
+     回 True=跑到比完(呼叫端接著判擋不擋);False=早退,out 的 status 與 reason 已經填好(no-config / no-files / env-unavailable)。"""
+     import shutil
+     import tempfile
+     import time as _time
+ 
+     lint_cfg = _lint_load_config(repo_root) or {}
+     if not _lint_new_declared(repo_root):
+         out["status"], out["reason"] = "no-config", "這個專案沒有宣告任何檢查工具(.lumos/lint.json 與 .lumos/lint-deps.json 都不在)"
+         return False
+ 
+     pairs_all, err = _lint_new_changed_files(repo_root, diff_range)
+     if err:
+-        out.update(status="env-unavailable", autopass=True, reason=err)
++        _lint_new_autopass(out, err)
+         return False
+     # 兩路分開:程式碼檔走既有的「要不要掃」過濾;依賴宣告檔走自己的判斷
+     # (那個過濾把 .json/.txt/.lock 整批當成非程式碼擋掉,依賴宣告檔大多是那幾種副檔名)
+     code_pairs = [(a, b) for (a, b) in pairs_all if _stack_changed_ok(a)]
+     dep_pairs = [(a, b) for (a, b) in pairs_all if _is_dep_manifest(a)]
+     pairs = code_pairs + [x for x in dep_pairs if x not in code_pairs]
+     if not pairs:
+         out["status"], out["reason"] = "no-files", "這次改動沒有要掃的程式碼檔或依賴宣告檔"
+         return False
+ 
+     dep_cmds, dep_err = _lint_deps_load(repo_root)
+     if dep_err:
+-        out.update(status="env-unavailable", autopass=True, reason=dep_err)
++        _lint_new_autopass(out, dep_err)
+         return False
+     cmd_targets = _lint_new_cmd_targets(code_pairs, dep_pairs, lint_cfg, dep_cmds,
+                                         repo_root=repo_root, ref=head_ref)
+     if not cmd_targets:
+         out["status"], out["reason"] = "no-files", "這次改動的副檔名沒有對應的檢查工具宣告"
+         return False
+ 
+     if werr:
+-        out.update(status="env-unavailable", autopass=True, reason=werr)
++        _lint_new_autopass(out, werr)
+         return False
+ 
+     _lint_new_clean_stale(repo_root)
+     root = Path(repo_root) / ".lumos"
+     root.mkdir(parents=True, exist_ok=True)
+     work = tempfile.mkdtemp(prefix="lintbase-", dir=str(root))
+     try:
+         base_dir, head_dir = Path(work) / "base", Path(work) / "head"
+         base_dir.mkdir(parents=True, exist_ok=True)
+         head_dir.mkdir(parents=True, exist_ok=True)
+@@ -48363,21 +48366,21 @@ def cmd_room_guard(repo=None, diff_range=None, push_remote=None, pushed_ref=None
+     return _rg_report(root, tip, cfg, out, (n_db, n_m))
+ 
+ 
+ # ── 測試防竄改比對(Projects/Android測試防竄改檢查_計劃;家 Systems/test-guard)──────────────────────
+ 
+ _TG_TEST_ANNS = frozenset(("Test", "ParameterizedTest", "RepeatedTest", "TestFactory", "TestTemplate", "Theory"))
+ _TG_MAX_BYTES = 5_000_000            # 比對工具自己的單檔上限(不借新增告警閘給慢工具調小的那兩個設定)
+ _TG_MAX_LINES = 100_000
+ _TG_MAX_TOTAL = 200_000_000          # 一次推送讀進來的內容總量上限;超過的那幾支列 tq/too-large
+ _TG_MAX_STMTS = 2000                 # 一支函式最多比這麼多個斷言敘述(超過的只比前面這些)
+-_TG_MAX_LINE_CHARS = 20_000          # 單行超過這麼長的檔不解析、整支列 tq/too-large:病態單行(壓縮檔、產生的程式)擋在外層,不逐條追平方級
++_TG_MAX_LINE_CHARS = 20_000          # 測試檔單行超過這麼長:列一條 tq/too-large,那幾行抹掉後照比(病態單行擋在外層,不逐條追平方級)
+ _TG_CI_NAMES = frozenset((".gitlab-ci.yml", "bitrise.yml", "Jenkinsfile", "azure-pipelines.yml", "codemagic.yaml"))
+ _TG_IMG_EXT = (".png", ".webp", ".jpg", ".jpeg")
+ _TG_IMG_DIR = re.compile(r"(?:^|/)(?:screenshots|snapshots|roborazzi|paparazzi)(?:/|$)", re.I)
+ _TG_IMG_NOT = re.compile(r"(?:^|/)(?:docs|fastlane|metadata)/|phoneScreenshots|tabletScreenshots", re.I)
+ 
+ 
+ def _tg_kind(path):
+     """一個路徑 → 'test'|'main'|'build'|'ci'|'image'|None(計劃〈做法一〉五類檔)。"""
+     p = str(path).replace("\\", "/")
+     name = p.rsplit("/", 1)[-1]
+@@ -48408,96 +48411,153 @@ def _tg_kinds(old, new):
+ 
+ def _tg_strip(text, keep_strings=False):
+     """剝註解(keep_strings=False 時連字串內容一起換成空白),位置跟原文一一對應:在剝過的文字找位置、回原文取字。"""
+     return _strip_c_comments(text, blank_strings=not keep_strings, keep_length=True)
+ 
+ 
+ _TG_NAME_RE = re.compile(r"\bfun\s+(?:<[^>\n]*>\s*)?(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
+ 
+ 
+ def _tg_class_at(stripped):
+-    """剝過的文字 → {行號: 外層類別路徑}。沿大括號深度追 class/object/interface 宣告;`Foo::class` 不算宣告,
+-    沒有本體的類別(`data class Row(val a: Int)`)不會把下一個大括號當成自己的本體。"""
++    """剝過的文字 → {行號: 外層類別節點或 None}(節點是 (名稱, 外層節點),用 _tg_class_path 換成「A.B.C」)。
++    沿大括號深度追 class/object/interface 宣告;`Foo::class` 不算宣告,沒有本體的類別(`data class Row(val a: Int)`)
++    不會把下一個大括號當成自己的本體。只存節點、要用才接字串:很深的巢狀不會每層、每行各存一份整串路徑(深度平方的記憶體)。"""
+     bmap = _rg_bracket_map(stripped)
+-    stack, depth, path_at, line, pending = [], 0, {}, 1, None
++    stack, depth, path_at, line, pending, nxt = [], 0, {}, 1, None, [0, -1]
+     for m in re.finditer(r"\n|\{|\}|(?<!::)\b(?:class|object|interface)[ \t]+(?:`[^`\n]*`|[A-Za-z_]\w*)", stripped):
+         tok = m.group(0)
+         if tok == "\n":
+-            path_at[line] = ".".join(nm for _d, nm in stack)
++            path_at[line] = stack[-1][2] if stack else None
+             line += 1
+         elif tok == "{":
+             depth += 1
+             if pending is not None:
+-                stack.append((depth, pending))
++                stack.append((depth, pending, (pending, stack[-1][2] if stack else None)))
+                 pending = None
+         elif tok == "}":
+             if stack and stack[-1][0] == depth:
+                 stack.pop()
+             depth -= 1
+-        elif _tg_class_has_body(stripped, m.end(), bmap):
++        elif _tg_class_has_body(stripped, m.end(), bmap, nxt):
+             pending = tok.split(None, 1)[1].strip("`") or "_"
+-    path_at[line] = ".".join(nm for _d, nm in stack)
++    path_at[line] = stack[-1][2] if stack else None
+     return path_at
+ 
+ 
+-def _tg_class_has_body(stripped, j, bmap):
+-    """類別名之後的位置 j → 這個宣告有沒有大括號本體:跳過泛型(照角括號深度)、建構子參數列(可跨行),
+-    之後那一行裡有 `{`,或下一個非空白字是 `{`。只看到那一行結尾,不往檔尾找。"""
++def _tg_class_path(node, memo):
++    """類別節點 → 「外層.內層」路徑字串(None → "")。往外走一次收名稱、一次接好;memo 只存被查過的那個節點
++    (不存沿路每一層:那又會變回深度平方的記憶體)。"""
++    if node is None:
++        return ""
++    if id(node) not in memo:
++        names, cur = [], node
++        while cur is not None:
++            names.append(cur[0])
++            cur = cur[1]
++        memo[id(node)] = ".".join(reversed(names))
++    return memo[id(node)]
++
++
++def _tg_class_has_body(stripped, j, bmap, nxt=None):
++    """類別名之後的位置 j → 這個宣告有沒有大括號本體。跳過泛型(_tg_skip_generic)、建構子與父型別的參數列(可跨行),
++    父型別寫在下一行(`:`、`,`、extends、implements、where 開頭)也接著看,最多 8 段。
++    下一個 `{`、`(`、換行的位置用 nxt 快取(同一段區間的查詢答案相同),一行塞很多類別宣告也跟長度成正比。"""
+     n = len(stripped)
++    nxt = nxt if nxt is not None else [0, -1]
+     while j < n and stripped[j] in " \t":
+         j += 1
+-    if j < n and stripped[j] == "<":
+-        depth, k = 0, j
+-        while k < n and stripped[k] != "\n":
+-            depth += 1 if stripped[k] == "<" else -1 if stripped[k] == ">" else 0
+-            k += 1
+-            if depth == 0:
+-                break
++    j = _tg_skip_generic(stripped, j)
++    for _step in range(8):
++        p = _tg_next_stop(stripped, j, nxt)
++        if p >= n:
++            return False
++        if stripped[p] == "{":
++            return True
++        if stripped[p] == "(":
++            j = bmap.get(p, n - 1) + 1
++            continue
++        k = _tg_supertype_next_line(stripped, p + 1)
++        if k is None:
++            return False
++        if k < n and stripped[k] == "{":
++            return True
+         j = k
+-    while j < n and stripped[j] in " \t":
+-        j += 1
+-    if j < n and stripped[j] == "(":
+-        j = bmap.get(j, n - 1) + 1
++    return False
++
++
++def _tg_skip_generic(stripped, j):
++    """j 是 `<` 就跳過配平的角括號(同一行、最多 _TG_GENERIC_MAX 字,用 C 層的 find/count);配不平或不是 `<` 回原位。"""
++    if j >= len(stripped) or stripped[j] != "<":
++        return j
+     nl = stripped.find("\n", j)
+-    end = n if nl < 0 else nl
+-    if stripped.find("{", j, end) >= 0:
+-        return True
+-    k = end
++    lim = min(len(stripped) if nl < 0 else nl, j + _TG_GENERIC_MAX)
++    k, opened, closed = j, 0, 0
++    while True:
++        e = stripped.find(">", k, lim)
++        if e < 0:
++            return j
++        opened += stripped.count("<", k, e + 1)
++        closed += 1
++        k = e + 1
++        if opened == closed:
++            return k
++
++
++def _tg_supertype_next_line(stripped, k):
++    """換行之後的位置 k → 下一個非空白字的位置,如果它是 `{` 或父型別的續寫(`:`、`,`、extends、implements、where);否則 None。"""
++    n = len(stripped)
+     while k < n and stripped[k] in " \t\n":
+         k += 1
+-    return k < n and stripped[k] == "{"
++    if k < n and (stripped[k] in "{:," or _TG_SUPERTYPE.match(stripped, k)):
++        return k
++    return None
++
++
++_TG_GENERIC_MAX = 400
++_TG_CLASS_STOP = re.compile(r"[{(\n]")
++_TG_SUPERTYPE = re.compile(r"(?:extends|implements|where)\b")
++
++
++def _tg_next_stop(stripped, j, nxt):
++    """j 之後第一個 `{`、`(`、換行的位置(沒有就是文字長度)。nxt=[查過的起點, 答案]:j 落在這段區間裡答案不變,不重查。"""
++    if nxt[0] <= j <= nxt[1]:
++        return nxt[1]
++    m = _TG_CLASS_STOP.search(stripped, j)
++    nxt[0], nxt[1] = j, (m.start() if m else len(stripped))
++    return nxt[1]
+ 
+ 
+ _TG_MODIFIERS = re.compile(r"\b(?:public|private|protected|internal|open|override|final|suspend|static|abstract|inline|operator|infix"
+                            r"|tailrec|external|actual|expect|synchronized|native|strictfp|default)\b")
+ 
+ 
+ def _tg_functions(text, java):
+     """原文 → ({函式鍵: 資訊}, 判得了嗎)。函式鍵 = 類別路徑.名稱(同類別同名的多載,第二個起加 #2)。判不了:括號配不平或含 NUL。
+     資訊:start、end、decl(宣告那一行)、name、annot(註記原文)、raw(本體原文)、mbody(剝過字串的本體,位置同原文)、
+     sig(參數列右括號之後到函式結尾的原文,剝註解、留字串、去空白;改名或搬家的判斷用,一行寫完的測試也有)。"""
+     stripped = _tg_strip(text)
+     ok = all(stripped.count(o) == stripped.count(c) for o, c in ("()", "{}")) and "\0" not in text
+     keep = _tg_strip(text, keep_strings=True)
+     lines, slines, klines = text.split("\n"), stripped.split("\n"), keep.split("\n")
+-    cls = _tg_class_at(stripped)
++    cls, memo = _tg_class_at(stripped), {}
+     out, seen = {}, {}
+     for _nm, s, e, _tx in _rg_methods(stripped, java, kinds=_TG_TEST_ANNS):
+         name, decl = None, None
+         for k in range(s - 1, min(e, len(lines))):
+             mm = _TG_NAME_RE.search(lines[k])
+             if mm:
+                 name, decl = (mm.group(1) or mm.group(2) or "").strip("`"), k
+                 break
+         if not name:
+             continue
+-        key = (cls.get(s, "") + "." if cls.get(s) else "") + name
++        path = _tg_class_path(cls.get(s), memo)
++        key = (path + "." if path else "") + name
+         seen[key] = seen.get(key, 0) + 1
+         if seen[key] > 1:                       # 同名多載依出現順序加 #2、#3(計數器,不逐個試名字)
+             key = f"{key}#{seen[key]}"
+         seg_s = "\n".join(slines[decl:e])
+         seg_k = "\n".join(klines[decl:e])
+         p = seg_s.find("(", _TG_NAME_RE.search(lines[decl]).start())
+         close = _rg_bracket_map(seg_s).get(p, -1) if p >= 0 else -1
+         # 註記:宣告行以上的註記行加上宣告行裡名字之前那段(`@Test(expected = …) fun x()` 寫在同一行);剝註解、壓空白,
+         # 整檔重新縮排、換行尾改變、註記之間的註解改了都不算註記有變
+         pre = klines[decl][:_TG_NAME_RE.search(klines[decl]).start()] if _TG_NAME_RE.search(klines[decl]) else ""
+@@ -48727,170 +48787,236 @@ def _tg_pairs(old, new, kotlin_test=False):
+         out.extend(zip(rest, left))
+     return out
+ 
+ 
+ _TG_TRY = re.compile(r"\btry\s*\{")
+ _TG_CATCH = re.compile(r"\s*catch\s*\(([^)]*)\)\s*\{")
+ # catch 接得住斷言失敗的型別:AssertionError 本身、或比它寬的 Error、Throwable(Kotlin 與 Java 寫法都認)
+ _TG_CATCH_ASSERT = re.compile(r"\b(?:AssertionError|AssertionFailedError|Error|Throwable)\b")
+ _TG_TRY_OK = re.compile(r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?:fail|assertThrows|assertFailsWith|assertFails)\s*[({<]")
+ _TG_RUNCATCH = re.compile(r"\brunCatching\s*\{")
++_TG_FAIL_CALL = re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")
++_TG_THROW = re.compile(r"\bthrow\b")
+ 
+ 
+ def _tg_catch_no_fail(fn):
+     """try 沒有 fail、catch 裡斷言或是空的;try 裡有斷言、catch 接住斷言失敗卻不再丟出;runCatching 裡斷言沒接 getOrThrow。
+     斷言、fail、throw 的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
+     import bisect
+     b = fn["mbody"]
+     br = _rg_bracket_map(b)
+     pos = {k: [m.start() for m in rx.finditer(b)] for k, rx in
+-           (("assert", _TG_ASSERT_RE), ("ok", _TG_TRY_OK), ("fail", re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")),
+-            ("throw", re.compile(r"\bthrow\b")))}
++           (("assert", _TG_ASSERT_RE), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL), ("throw", _TG_THROW))}
+ 
+     def has(kind, lo, hi):
+         p = pos[kind]
+         i = bisect.bisect_left(p, lo)
+         return i < len(p) and p[i] < hi
+     for t in _TG_TRY.finditer(b):
+         tb_end = br.get(t.end() - 1)
+         c = _TG_CATCH.match(b, tb_end + 1) if tb_end is not None else None
+         if not c or (c.end() - 1) not in br:
+             continue
+         cb_end = br[c.end() - 1]
+-        if has("fail", c.end(), cb_end) or has("ok", t.end(), tb_end):
++        if has("fail", c.end(), cb_end):
+             continue
+-        if has("assert", c.end(), cb_end) or not b[c.end():cb_end].strip():
++        catch_checks = has("assert", c.end(), cb_end)
++        # 「try 沒有 fail、catch 裡斷言或是空的」:try 有 fail/assertThrows 是預期例外的寫法,不算
++        if not has("ok", t.end(), tb_end) and (catch_checks or not b[c.end():cb_end].strip()):
++            return True
++        # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError)被接得住它的 catch 接住、catch 不檢查也不再丟出:吞掉了
++        if _TG_CATCH_ASSERT.search(c.group(1)) and has("assert", t.end(), tb_end) and not catch_checks and not has("throw", c.end(), cb_end):
+             return True
+-        if _TG_CATCH_ASSERT.search(c.group(1)) and has("assert", t.end(), tb_end) and not has("throw", c.end(), cb_end):
+-            return True                      # try 裡的斷言失敗被 catch 接住、只印記錄不再丟出(吞掉了)
+     for r in _TG_RUNCATCH.finditer(b):
+         end = br.get(r.end() - 1)
+         if end is not None and has("assert", r.end(), end) and not re.match(r"\s*\.\s*getOrThrow\s*\(", b[end + 1:end + 60]):
+             return True
+     return False
+ 
+ 
+ # 跳過標記:短名或完整類別名(@org.junit.jupiter.api.Disabled)都認;JUnit 5 的條件式(@DisabledOnOs、@EnabledOnOs…)在 CI 平台上等於關掉
+ _TG_SKIP_ANN_RE = re.compile(r"@(?:[\w.]+\.)?(?:Ignore|Disabled\w*|Enabled(?:On|If|For)\w*|SdkSuppress|FlakyTest)\b|@(?:[\w.]+\.)?Config\s*\(\s*sdk\b")
+ # 執行時才決定跳不跳的 assume:身分要帶那一行(條件改成永遠跳過也算新增)
+ _TG_ASSUME_RE = re.compile(r"\bAssume\.assume\w*\s*\(|(?<![\w.])assume(?:True|False|NotNull|That)\s*\(|\bAssumptions\.assum\w*\s*\("
+                            r"|\bTruthJUnit\.assume\s*\(")
+-_TG_SKIP_RE = re.compile(_TG_SKIP_ANN_RE.pattern + "|" + _TG_ASSUME_RE.pattern)
+ _TG_SET = r"(?:\s*=\s*|\s+|\.set\(\s*|\(\s*)"
+ _TG_IGNORE_FAIL = re.compile(r"\bignoreFailures" + _TG_SET + r"true\b")
+ # 跟測試無關、但也有 ignoreFailures、enabled、exclude 這類同名設定的外掛與報表區塊
+-_TG_NOT_TEST_PLUGIN = re.compile(r"(?i)\b(?:detekt|ktlint|spotless|checkstyle|pmd|spotbugs|lint(?:Options)?|jacoco\w*|kover\w*|coverage\w*)\b")
++# 只比對區塊開頭(左大括號之前那段),不比對同一行後面的字(`tasks.test { …; finalizedBy("jacocoTestReport") }` 仍是測試區塊)
++_TG_NOT_TEST_PLUGIN = re.compile(r"(?i)\b(?:detekt\w*|ktlint\w*|kotlinter|spotless|checkstyle|pmd|spotbugs|findbugs|animalsniffer|lint(?:Options)?"
++                                 r"|jacoco\w*|kover\w*)\b")
+ _TG_BUILD_RES = (
+     re.compile(r"\bexcludeTestsMatching\b"),
+     re.compile(r"\b(?:is)?[Ff]ailOn(?:NoMatchingTests|NoDiscoveredTests)" + _TG_SET + r"false\b"),
+     re.compile(r"\b(?:is)?[Rr]eturnDefaultValues" + _TG_SET + r"true\b"),
+     re.compile(r"\bfailOnPassedAfterRetry" + _TG_SET + r"false\b"),
+     re.compile(r"\bnot(?:Annotation|Class|Package)\b"),
+ )
+-# 測試任務的區塊:test {}、tasks.test、withType<Test>、任務名含 test 的 named(Android 的 testDebugUnitTest)、unitTests.all
+-_TG_TEST_BLOCK = re.compile(r"(?i)(?<![\w])test\s*\{|\btasks\.test\b|withType\s*[<(]\s*Test\b|^\s*test\b|\bunitTests\.all\b")
+-# 點名測試任務的呼叫:tasks.named("testDebugUnitTest")、tasks.matching { it.name.contains("UnitTest") }、getByName('test…')
+-_TG_TASK_REF = re.compile(r"\btasks\.(?:matching|named|getByName|register|whenTaskAdded|configureEach|all)\b|\b(?:getByName|named)\s*[<(]"
+-                          r"|\bname\.(?:startsWith|contains|endsWith)\s*\(")
+-_TG_QUOTED = re.compile(r'"[^"\n]*+"|\'[^\'\n]*+\'')        # 建置檔的字串(Groovy 單引號也是字串),佔有式不回溯
+-# 只在測試區塊裡才算:ignoreFailures 在 detekt、ktlint 這類外掛也有同名設定,不在測試區塊裡就不是測試設定
++# 測試任務的區塊:test {}、tasks.test、withType<Test>、named<Test>/register<Test>、unitTests.all
++_TG_TEST_BLOCK = re.compile(r"(?i)(?<![\w])test\s*\{|\btasks\.test\b|(?:withType|named|register|create|getByName)\s*[<(]\s*Test\b|^\s*test\b"
++                            r"|\bunitTests\.all\b")
++# 點名測試任務:引號裡整個是任務名的形狀而且含 test(`"testDebugUnitTest"`、`":app:testDebugUnitTest"`、`"UnitTest"`);
++# 檔名樣式(`"**/*Test*.*"`)、類別名(`"org.junit.Test"`)有 * / . 不算——所以 findByName、tasks[…]、getByPath、it.name == 都認得
++_TG_TASK_NAME_Q = re.compile(r'["\']:?(?:[\w-]+:)*[\w-]*[Tt][Ee][Ss][Tt][\w-]*["\']')
++# 只在測試任務區塊(含外層)裡才算的設定
+ _TG_IN_TEST_BLOCK = (re.compile(r"\benabled" + _TG_SET + r"false\b|\bonlyIf\s*\{\s*false\s*\}"),
+-                     re.compile(r"\bexclude\s*\(?\s*[\"'][^\"']*Test"))
++                     re.compile(r"\bexclude\s*\(?\s*[\"'][^\"']*Test"),
++                     re.compile(r"\bexclude(?:Tags|Categories|Engines)\s*\("))
+ _TG_RETRY_RE = re.compile(r"\bmaxRetries\b|org\.gradle\.test-retry")
+ _TG_DEP_TEST = re.compile(r"\bdependsOn\s*\(?\s*[\"']?:?test\b|\bcheck\.dependsOn\b")
+ _TG_SNAP_WORDS = re.compile(r"\bchangeThreshold\b|\bmaxDistance\b|\bImageComparator\b|roborazzi\.test\.record")
+ _TG_SNIFF = re.compile(r"\"robolectric\"|\bisRunningTest\b|\bisRobolectric\b|Class\.forName\(\s*\"(?:org\.junit|androidx\.test|org\.robolectric)", re.I)
+ _TG_TIMEOUT = re.compile(r"timeout|withTimeout\s*\(", re.I)
+ _TG_NUM = re.compile(r"\d[\d_]*(?:\.\d+)?[lLfF]?")
+ 
+ 
+ def _tg_norm(s):
+     return re.sub(r"\s+", " ", s).strip()
+ 
+ 
+ def _tg_block_heads(lines):
+-    """剝過的各行 → 每一行所在的最內層還沒關閉的區塊開頭(那個左大括號所在的行,壓空白)。每行只正規化一次。"""
+-    heads, stack = [], []
++    """剝過的各行 → 每一行的區塊情境 (最內層區塊開頭的身分, 外層有沒有測試任務區塊, 外層有沒有靜態檢查外掛區塊)。
++    區塊開頭的判斷在開區塊那一刻算一次、存在堆疊上,內層每一行不再重掃開頭(很長的開頭配很多內層行也跟長度成正比)。
++    `tasks.matching { it.name.contains("UnitTest") }.configureEach {`(一行或換行寫):剛關掉的區塊裡有點名測試任務、
++    同一行接著開的區塊算測試任務區塊;`tasks.register("ci") {` 換行 `dependsOn("testX")` 不會讓 ci 這個區塊變成測試區塊。"""
++    out, stack, closed_named = [], [], False      # stack 元素:[開頭身分, 測試區塊, 外掛區塊, 內層有一行點名測試任務]
+     for line in lines:
+-        heads.append(stack[-1] if stack else "")
+-        if "{" in line or "}" in line:
+-            norm = _tg_norm(line)
+-            for ch in line:
+-                if ch == "{":
+-                    stack.append(norm)
+-                elif ch == "}" and stack:
+-                    stack.pop()
+-    return heads
++        top = stack[-1] if stack else None
++        out.append((top[0], top[1], top[2]) if top else ("", False, False))
++        named = _tg_names_test_task(line)
++        if top is not None and named:
++            top[3] = True
++        if "{" not in line and "}" not in line:
++            continue
++        norm = _tg_norm(line)
++        pre = norm.split("{", 1)[0]
++        head_test = bool(_TG_TEST_BLOCK.search(pre) or _tg_names_test_task(pre))
++        head_plugin = bool(_TG_NOT_TEST_PLUGIN.search(pre)) and not head_test
++        hid = _tg_head_id(norm)
++        after_close = False                       # 同一行裡剛關掉一個區塊(`}.configureEach {`、`… }.configureEach {`)
++        for ch in line:
++            if ch == "{":
++                par = stack[-1] if stack else None
++                in_test = head_test or bool(par and par[1]) or (after_close and closed_named)
++                stack.append([hid, in_test, (head_plugin or bool(par and par[2])) and not head_test, named and not head_test])
++                after_close = False
++            elif ch == "}" and stack:
++                closed_named, after_close = stack.pop()[3], True
++    return out
++
++
++def _tg_head_id(norm):
++    """區塊開頭當身分用的字串:短的照原文,超過 200 字的換成前 120 字加摘要(候選身分不複製整條很長的開頭)。"""
++    if len(norm) <= 200:
++        return norm
++    import hashlib
++    return norm[:120] + "…#" + hashlib.sha1(norm.encode("utf-8", "replace")).hexdigest()[:12]
+ 
+ 
+ def _tg_test_hits(text, fns, path):
+     """測試檔 → {身分: [(檔, 行號), …]}。身分是(規則, 擁有者, 種類):
+     - 擁有者:在測試函式裡就是函式名(不帶類別與本體:測試原樣搬到另一支檔、或只改本體,帶過去的跳過標記不算新增);
+       不在任何函式裡(類別層級的 @Ignore)就是「檔:<路徑>」,不跟別支檔的類別層級註記互抵。
+-    - 種類:跳過註記一律算「跳過」(@Ignore 換成 @Disabled、改跳過理由都不算新增);assume 呼叫與比對門檻帶正規化後的那一行
+-      (assume 的條件改成永遠跳過、門檻數值調高都算新增)。
++    - 種類:跳過註記一律算「跳過」(@Ignore 換成 @Disabled、改跳過理由都不算新增);assume 呼叫與比對門檻帶「整個敘述去掉空白」
++      (_tg_stmt_at:括號配平、跨行照接、到分號或敘述結尾為止):條件改成永遠跳過、門檻調高都算新增;只換行重排、改同一行別的斷言不算。
+     代價:不同類別裡同名的兩支測試,一支拿掉跳過、另一支加上,會互抵(寫進標準的「抓不到」)。"""
++    import bisect
+     hits, owner = {}, {}
+     for _key, f in fns.items():
+         for ln in range(f["start"], f["end"] + 1):
+             owner[ln] = f["name"]
+-    for i, line in enumerate(_tg_strip(text, keep_strings=True).split("\n"), 1):
+-        who = owner.get(i) or "檔:" + path
++    kept = _tg_strip(text, keep_strings=True)
++    for i, line in enumerate(kept.split("\n"), 1):
+         if _TG_SKIP_ANN_RE.search(line):
+-            hits.setdefault(("tq/skip-added", who, "跳過"), []).append((path, i))
+-        if _TG_ASSUME_RE.search(line):
+-            hits.setdefault(("tq/skip-added", who, "跳過:" + _tg_norm(line)), []).append((path, i))
+-        if _TG_SNAP_WORDS.search(line):
+-            hits.setdefault(("tq/snapshot-changed", who, _tg_norm(line)), []).append((path, i))
++            hits.setdefault(("tq/skip-added", owner.get(i) or "檔:" + path, "跳過"), []).append((path, i))
++    nls = None
++    for rx, rule, tag in ((_TG_ASSUME_RE, "tq/skip-added", "跳過:"), (_TG_SNAP_WORDS, "tq/snapshot-changed", "")):
++        span_end, ident = -1, None
++        for m in rx.finditer(kept):
++            if nls is None:
++                nls = [k for k, ch in enumerate(kept) if ch == "\n"]
++            i = bisect.bisect_left(nls, m.start()) + 1
++            if m.start() >= span_end:             # 落在前一個敘述裡的命中併進那個敘述(巢狀、同一行連寫),總工作量跟長度成正比
++                stmt, span_end = _tg_stmt_at(kept, m.start())
++                ident = (rule, owner.get(i) or "檔:" + path, tag + stmt)
++            hits.setdefault(ident, []).append((path, i))
+     return hits
+ 
+ 
++_TG_STMT_MAX = 2000
++_TG_STMT_GOES_ON = ("=", ",", "(", "+", "&&", "||")
++
++
++def _tg_stmt_at(t, i):
++    """位置 i 起的那個敘述 → (去掉全部空白的敘述, 結束位置):括號配平、跨行照接;深度 0 時遇到分號、多出來的右括號,或換行而上一段不像沒寫完
++    (結尾不是 = , ( + && ||、下一行也不是 . ?. && || 開頭)就停;最多看 _TG_STMT_MAX 字。"""
++    depth, k, end = 0, i, min(len(t), i + _TG_STMT_MAX)
++    while k < end:
++        ch = t[k]
++        if ch in "([{":
++            depth += 1
++        elif ch in ")]}":
++            depth -= 1
++            if depth < 0:
++                break
++        elif depth == 0 and ch == ";":
++            break
++        elif depth == 0 and ch == "\n":
++            if not (t[i:k].rstrip().endswith(_TG_STMT_GOES_ON) or t[k + 1:k + 200].lstrip().startswith((".", "?.", "&&", "||"))):
++                break
++        k += 1
++    return re.sub(r"\s+", "", t[i:k]), k
++
++
+ def _tg_names_test_task(s):
+-    """一行(或區塊開頭)點名了測試任務:有點名任務的呼叫、引號裡含 test(或 unitTests.all),而且不是報表或靜態檢查外掛。"""
+-    if _TG_NOT_TEST_PLUGIN.search(s):
+-        return False
+-    if "unitTests.all" in s:
+-        return True
+-    return bool(_TG_TASK_REF.search(s)) and any("test" in q.group(0).lower() for q in _TG_QUOTED.finditer(s))
++    """一行(或區塊開頭)點名了測試任務:引號裡整個是含 test 的任務名(`"jacocoTestReport"` 這類報表或靜態檢查外掛的任務名不算),
++    或 unitTests.all。"""
++    return "unitTests.all" in s or any(not _TG_NOT_TEST_PLUGIN.search(q.group(0)) for q in _TG_TASK_NAME_Q.finditer(s))
+ 
+ 
+ def _tg_build_hits(text):
+-    """建置檔 → {身分: [行號, …]}。留字串(exclude 的字串、dependsOn("test") 要看內容)、剝註解。"""
++    """建置檔 → {身分: [行號, …]}。留字串(exclude 的字串、dependsOn("test") 要看內容)、剝註解。
++    區塊情境(測試任務區塊、外掛區塊、開頭身分)由 _tg_block_heads 一趟算好;這裡每行只看自己那一行。"""
+     hits = {}
+     kept = _tg_strip(text, keep_strings=True).split("\n")
+-    heads = _tg_block_heads(kept)
++    ctx = _tg_block_heads(kept)
+     for i, line in enumerate(kept):
+-        head = heads[i] if i < len(heads) else ""
++        head, ctx_test, ctx_plugin = ctx[i]
+         n = _tg_norm(line)
+-        in_test = bool(_TG_TEST_BLOCK.search(head) or ("{" in line and _TG_TEST_BLOCK.search(line.split("{")[0]))
+-                       or _tg_names_test_task(head) or _tg_names_test_task(line))
++        pre = line.split("{", 1)[0] if "{" in line else None
++        line_test = bool(pre is not None and (_TG_TEST_BLOCK.search(pre) or _tg_names_test_task(pre)))
++        in_test = ctx_test or line_test or _tg_names_test_task(line)
+         # 行尾是 = 的把下一行接上來一起判(`enabled =` 換行 `false`);次數照記在這一行
+         joined = line + " " + kept[i + 1].strip() if line.rstrip().endswith("=") and i + 1 < len(kept) else line
+-        ignore_fail = _TG_IGNORE_FAIL.search(joined) and not _TG_NOT_TEST_PLUGIN.search(head + " " + line)
++        # ignoreFailures 不限在測試區塊;只排除外層或同一行開的區塊是靜態檢查外掛(而且不是測試任務)的
++        line_plugin = pre is not None and not line_test and bool(_TG_NOT_TEST_PLUGIN.search(pre))
++        ignore_fail = _TG_IGNORE_FAIL.search(joined) and not ((ctx_plugin and not line_test) or line_plugin)
+         if ignore_fail or any(r.search(joined) for r in _TG_BUILD_RES) or (in_test and any(r.search(joined) for r in _TG_IN_TEST_BLOCK)):
+             hits.setdefault(("tq/build-config", head, n), []).append(i + 1)
+         if _TG_RETRY_RE.search(line):
+             hits.setdefault(("tq/build-config:retry", head, n), []).append(i + 1)
+         if _TG_DEP_TEST.search(line):
+             hits.setdefault(("tq/build-config:dep", head, n), []).append(i + 1)
+         if _TG_SNAP_WORDS.search(line):
+             hits.setdefault(("tq/snapshot-changed", head, n), []).append(i + 1)
+     return hits
+ 
+ 
+-_TG_GRADLE_CALL = re.compile(r"(?:^|[\s;&|(:])(?:\./)?gradlew?(?:\.bat)?\b|\bgradle\s|\bgradle-build-action\b|\bgradle/actions\b"
++# `gradle ` 前面不能緊接 . / 或字:`app/build.gradle || echo` 是檔名,不是在叫 Gradle
++_TG_GRADLE_CALL = re.compile(r"(?:^|[\s;&|(:])(?:\./)?gradlew?(?:\.bat)?\b|(?<![\w./-])gradle\s|\bgradle-build-action\b|\bgradle/actions\b"
+                              r"|\bgradle-runner\b|^\s*-?\s*(?:arguments|gradle_task)\s*:")
+-_TG_CI_X = re.compile(r"(?:^|\s)(?:-x|--exclude-task)\s+:?[\w:.-]*(?:test|check)[\w:.-]*", re.I)
+-_TG_CI_TRUE = re.compile(r"\|\|\s*true\s*$")
++# -x test、-xtest、--exclude-task test、--exclude-task=test(Gradle 都收)
++_TG_CI_X = re.compile(r"(?:^|\s)(?:-x\s*|--exclude-task(?:\s+|=))[\"']?:?[\w:.-]*(?:test|check)[\w:.-]*", re.I)
++# 失敗不擋:|| true、|| :、|| exit 0、|| echo …
++_TG_CI_TRUE = re.compile(r"\|\|\s*(?:true|:|exit\s+0|echo\b[^|&;]*)\s*$")
+ _TG_CI_KEYS = re.compile(r"^\s*-?\s*(?:continue-on-error\s*:\s*true|allow_failure\s*:\s*true|if\s*:\s*false|continueOnError\s*:\s*true"
+                          r"|is_skippable\s*:\s*true|ignore_failure\s*:\s*true)\s*$")
+-_TG_CI_TEST_TASK = re.compile(r"\b(?:\w*[Tt]est\w*|check)\b")
+ 
+ 
+ def _tg_ci_lines(text):
+     """CI 檔 → [(行號, 合併續行後的指令文字)]:剝 `#` 註解(不走 C 式剝法:`https://` 不是註解),行尾 `\\` 的續行併進同一行。"""
+     out, buf, start = [], "", None
+     for i, line in enumerate(text.split("\n"), 1):
+         code = "" if re.match(r"^\s*#", line) else _ci_strip_comment(line)
+         if start is None:
+             start = i
+         if code.rstrip().endswith("\\"):
+@@ -48904,48 +49030,57 @@ def _tg_ci_lines(text):
+ 
+ 
+ def _tg_ci_hits(text):
+     """CI 檔 → {身分: [行號, …]}。呼叫 Gradle 的指令看 -x、|| true;呼叫的測試任務以任務名記(_tg_ci_test_tasks,加旗標、接管線、
+     -x 寫在前面都不影響);放寬鍵看所屬區塊(縮排比它淺的最近一行開頭、到下一個同層)裡有沒有 Gradle 呼叫。"""
+     hits = {}
+     rows = _tg_ci_lines(text)
+     indent = [(len(c) - len(c.lstrip())) if c.strip() else None for _n, c in rows]
+     gradle = [bool(_TG_GRADLE_CALL.search(c)) for _n, c in rows]
+     block, parent = _tg_ci_blocks(indent, gradle)
+-    head = lambda idx: _tg_norm(rows[parent[idx]][1]) if parent[idx] >= 0 else ""  # noqa: E731
++    heads = {}
++
++    def head(idx):
++        """所屬區塊開頭的身分,每個開頭只正規化一次(續行可以把開頭併成很長的一條)。"""
++        p = parent[idx]
++        if p < 0:
++            return ""
++        if p not in heads:
++            heads[p] = _tg_head_id(_tg_norm(rows[p][1]))
++        return heads[p]
+     for idx, (ln, code) in enumerate(rows):
+         if not code.strip():
+             continue
+         if gradle[idx] and (_TG_CI_X.search(code) or _TG_CI_TRUE.search(code)):
+-            hits.setdefault(("tq/ci-config", head(idx), _tg_norm(code)), []).append(ln)
++            hits.setdefault(("tq/ci-config", head(idx), _tg_head_id(_tg_norm(code))), []).append(ln)
+         if gradle[idx]:
+             for task in _tg_ci_test_tasks(code):
+                 hits.setdefault(("tq/ci-config:test-call", "", task), []).append(ln)
+         if _TG_CI_KEYS.match(code) and block[idx]:
+-            hits.setdefault(("tq/ci-config", head(idx), _tg_norm(code)), []).append(ln)
++            hits.setdefault(("tq/ci-config", head(idx), _tg_head_id(_tg_norm(code))), []).append(ln)
+     return hits
+ 
+ 
+ _TG_CI_ARG_FLAGS = frozenset(("-x", "--exclude-task", "--tests", "-p", "--project-dir", "-b", "--build-file", "-c", "--settings-file",
+                               "-I", "--init-script", "-g", "--gradle-user-home"))
+ 
+ 
+ def _tg_ci_test_tasks(code):
+     """一行 CI 指令 → 它叫 Gradle 跑的測試任務名(含 check)。照 && || ; | & 切段,只看有 Gradle 呼叫的那幾段;
+     旗標(- 開頭)與 -x、--tests 這類旗標帶的參數不算任務;:app:testDebugUnitTest 取最後一段。"""
+     out = []
+     for seg in re.split(r"&&|\|\||[;|&]", code):
+         m = _TG_GRADLE_CALL.search(seg)
+         if not m:
+             continue
+         skip = False
+-        for tok in seg[m.end():].split():
++        for tok in re.findall(r"[^\s()<>{}`]+", seg[m.end():]):     # 子殼層、$()、轉向黏著的標點不算進任務名
+             if skip:
+                 skip = False
+                 continue
+             if tok in _TG_CI_ARG_FLAGS:
+                 skip = True
+                 continue
+             if tok.startswith(("-", "$")) or "=" in tok:
+                 continue
+             name = tok.strip("'\"").rsplit(":", 1)[-1]
+             if re.fullmatch(r"\w*(?:[Tt]est\w*|check)", name):
+@@ -49071,54 +49206,61 @@ def _tg_changes(root, base, head, deadline=None):
+             old, new = paths
+         else:
+             old, new = (None if st == "A" else paths[0]), (None if st == "D" else paths[0])
+         out.append((st, old, new, None if st == "D" else new_sha, good))
+         i += 1 + n_paths
+     return out
+ 
+ 
+ def _tg_read(root, base, head, items, deadline=None):
+     """[(改動前路徑, 改動後路徑)] → {(side, path): 文字 | 'TOOLARGE' | 'UNREADABLE'}(那一端沒有就不在表裡)。
+-    批次讀(_nodehome_cat_blobs_capped:先問大小再讀內容),單檔上限、總量上限都在這一層;不是 UTF-8 的內容照換字元讀。"""
++    批次讀(_nodehome_cat_blobs_capped:先問大小再讀內容),單檔上限、總量上限都在這一層;不是 UTF-8 的內容照換字元讀。
++    批次讀取本身失敗回 None。測試檔的單行上限在 _tg_analyze(要知道檔類,只套測試檔)。"""
+     specs, slots = [], []
+     for old, new in items:
+         for side, rev, path in (("base", base, old), ("head", head, new)):
+             if path and rev != _EMPTY_TREE_SHA:
+                 specs.append(f"{rev}:{path}")
+                 slots.append((side, path))
+     res = {}
+     if not specs:
+         return res
+     sizes = _nodehome_cat_sizes(root, specs, max(1, int(_git_timeout(deadline, cap=60))))
+     blobs = None
+     if sizes is not None:
+         blobs = _nodehome_cat_blobs_capped(root, specs, _TG_MAX_BYTES, deadline=deadline, sizes=sizes, max_total_bytes=_TG_MAX_TOTAL)
++    if sizes is None or blobs is None:
++        return None                 # 批次讀取本身失敗(逾時或 git 跑不動):整次比對沒跑完,由呼叫端記成錯誤
+     for i, slot in enumerate(slots):
+-        if sizes is None or blobs is None or sizes[i] is None:
++        if sizes[i] is None:
+             res[slot] = "UNREADABLE"
+         elif sizes[i] > _TG_MAX_BYTES or blobs[i] is None:
+             res[slot] = "TOOLARGE"
+         else:
+             t = blobs[i].decode("utf-8", "replace")
+             res[slot] = "TOOLARGE" if t.count("\n") >= _TG_MAX_LINES else t
+     return res
+ 
+ 
+ def _tg_retry_ok(root, head, deadline=None):
+-    """終點那一版有沒有任何建置檔把 failOnPassedAfterRetry 設成 true(重試後才過要算失敗)。git grep 只用固定字串粗篩,
+-    設成 true 的判法用 Python 的 _TG_SET 句式(同 _TG_BUILD_RES 那條),行註解不算。"""
+-    r = _lens_git_dl(root, "grep", "-h", "-I", "-F", "failOnPassedAfterRetry", head, "--", "*.gradle", "*.gradle.kts", "buildSrc/*",
++    """終點那一版有沒有任何建置檔把 failOnPassedAfterRetry 設成 true(重試後才過要算失敗)。git grep 只用固定字串找出有提到的檔
++    (最多 50 支),逐支讀內容用 _tg_strip 剝註解(行註解與區塊註解都不算)、留字串,再用 _TG_SET 句式判。"""
++    r = _lens_git_dl(root, "grep", "-l", "-I", "-F", "failOnPassedAfterRetry", head, "--", "*.gradle", "*.gradle.kts", "buildSrc/*",
+                      "build-logic/*", deadline=deadline)
+     if r is None or r.returncode != 0:
+         return False
+     pat = re.compile(r"\bfailOnPassedAfterRetry" + _TG_SET + r"true\b")
+-    return any(pat.search(ln.split("//", 1)[0]) for ln in r.stdout.splitlines())
++    for ref in r.stdout.splitlines()[:50]:            # git grep -l 對提交印「提交:路徑」
++        got = _lens_git_dl(root, "show", ref, deadline=deadline)
++        if got is not None and got.returncode == 0 and pat.search(_tg_strip(got.stdout, keep_strings=True)):
++            return True
++    return False
+ 
+ 
+ def _tg_start(root, base, head, deadline=None):
+     """比對的起點:跟主線的分岔點(_lens_default_base,Room 守衛手動跑用的同一支)找得到、而且不是終點本身就用它——
+     合過主線之後推送,主線的改動不會算到推送者頭上;同一條分支先前推送已經處理過的候選,不是改掉就是已在放行檔,不會重複擋。
+     找不到(沒有主線、推的就是主線)照給的起點。"""
+     # 遠端主線優先:本機 main 上還沒推出去的提交不能當成已在主線(回頭重讀的分岔點也是同一個理由不收本機主線);沒有遠端主線才用本機的
+     fork = _lens_default_base(root, tip=head, include_local=False, deadline=deadline) \
+         or _lens_default_base(root, tip=head, include_local=True, deadline=deadline)
+     if fork and fork != _lens_full_sha(root, head):
+@@ -49126,53 +49268,56 @@ def _tg_start(root, base, head, deadline=None):
+     return base
+ 
+ 
+ def _tg_analyze(root, base, head, deadline=None):
+     """一段範圍的作弊候選 → (候選清單, 錯誤訊息或 None)。git 算不出改動清單回 (None, 訊息);超過截止時間丟 TimeoutError(呼叫端記成沒跑完)。"""
+     ch = _tg_changes(root, base, head, deadline)
+     if ch is None:
+         return None, "git 算不出這次改了哪些檔"
+     cands, rows, images = _tg_sort_changes(ch)
+     text = _tg_read(root, base, head, [(o, n) for _k, o, n, _s in rows], deadline)
++    if text is None:
++        return None, "git 讀不出改動的內容(逾時或 git 跑不動)"
+     test_files, base_hits, head_hits = [], {}, {}
+     retry = {}
+     per_kind = {"build": lambda p, b, h: _tg_build_cands(root, head, p, b, h, retry, deadline), "ci": _tg_ci_cands, "main": _tg_main_cands}
+     for kind, old, new, new_sha in rows:
+         if deadline is not None and _git_timeout(deadline) <= 0:
+             raise TimeoutError("比對工具超過截止時間")
+         path = new or old
+         b = text.get(("base", old), "") if old else ""
+         h = text.get(("head", new), "") if new else ""
+         if "TOOLARGE" in (b, h) or "UNREADABLE" in (b, h):
+             cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}") if "TOOLARGE" in (b, h)
+                          else _tg_cand("tq/unreadable", path, 0, path))
+-        elif _tg_has_long_line(b) or _tg_has_long_line(h):
+-            cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}:line",
+-                                  extra=f"有一行超過 {_TG_MAX_LINE_CHARS} 字,不解析"))
+         elif kind == "test":
++            if _tg_has_long_line(b) or _tg_has_long_line(h):
++                # 超長的行(壓縮資料、產生的程式、病態輸入)抹成空行再比:同檔其他改動照樣逐條列,那幾行要人另外看
++                cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}:line",
++                                      extra=f"有一行超過 {_TG_MAX_LINE_CHARS} 字,那幾行沒比對,其餘照比"))
++                b, h = _tg_blank_long_lines(b), _tg_blank_long_lines(h)
+             cands += _tg_test_file(test_files, base_hits, head_hits, old, new, new_sha, b, h)
+         else:
+             cands += per_kind[kind](path, b, h)
+     cands += _tg_test_rules(test_files, base_hits, head_hits, deadline)
+     return cands + _tg_image_cands(images), None
+ 
+ 
+ def _tg_has_long_line(text):
+-    """有沒有一行超過 _TG_MAX_LINE_CHARS 字(壓縮檔、產生的程式、病態輸入;這種檔不解析,整支列成可放行的 tq/too-large)。"""
+-    start = 0
+-    while True:
+-        nl = text.find("\n", start)
+-        if (len(text) if nl < 0 else nl) - start > _TG_MAX_LINE_CHARS:
+-            return True
+-        if nl < 0:
+-            return False
+-        start = nl + 1
++    """測試檔有沒有一行超過 _TG_MAX_LINE_CHARS 字(行尾的 \r 不算)。只測試檔要:函式切法與斷言判讀在單行上有平方級的風險,
++    正式程式、建置檔、CI 是逐行線性的判讀,不設這道上限。"""
++    return any(len(x) - x.endswith("\r") > _TG_MAX_LINE_CHARS for x in text.split("\n"))
++
++
++def _tg_blank_long_lines(text):
++    """超過 _TG_MAX_LINE_CHARS 字的行換成空行(換行照留、行號不變)。"""
++    return "\n".join("" if len(x) - x.endswith("\r") > _TG_MAX_LINE_CHARS else x for x in text.split("\n"))
+ 
+ 
+ def _tg_sort_changes(ch):
+     """改動清單 → (直接成候選的怪檔名, 要讀內容比的 [(種類, 改動前路徑, 改動後路徑, 物件編號)], 按目錄分的基準圖)。"""
+     cands, rows, images = [], [], {}
+     for st, old, new, new_sha, good in ch:
+         kind = _tg_kinds(old, new)
+         if kind is None:
+             continue
+         path = new or old
+@@ -49355,22 +49500,23 @@ def _tg_fn_cands(path, k, f, prev, kt):
+ 
+ 
+ # 抓不到的,跟測試品質標準〈推送前的防竄改檢查〉的「抓不到」那條是同一份(去掉反引號後逐句對得上,t_tq_guard_cli_contract 釘住)
+ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認)",
+               "實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查",
+               "預期值先放進變數再斷言(val expected = 88)、參數化測試刪資料列、本體有改的改名(只列成刪除)、"
+               "逾時換單位(5.seconds 改 5.minutes)或整行新增的逾時、CI 的 timeout-minutes",
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助",
+               "把測試檔搬進 Gradle 不編譯的目錄、Jenkinsfile 的 catchError 這類包裝",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+-              "任一行超過 2 萬字的檔不解析,整支列成可放行的 tq/too-large",
+-              "剝字串、括號配對與逐行比對是近似判讀,不是解析器;候選要人裁")
++              "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large",
++              "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
++              "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。
+     有候選 rc1、沒有 rc0;不是 git 專案講一句 rc0;範圍寫錯或終點找不到 rc2(退出碼照 Room 守衛)。只讀 git,不跑測試、不改檔。"""
+     import json as _json
+     root = _note_audit_root(repo)
+     if root is None or not _is_git_worktree(root):
+         print("test-guard:這裡不是 git 專案,沒比", file=sys.stderr)
+         return 0
+@@ -69317,21 +69463,21 @@ def _codeloop_lint_new_step(repo_root, diff_range, tier):
+         _gate_failopen(repo_root, "lint-new", f"新增告警閘出例外,這次放行:{str(e)[:120]}")
+         lv = None
+     _codeloop_guard_verdict.last_lint_new = lv
+     if lv:
+         for _w in lv.get("warnings") or []:
+             print(f"提醒:{_w}", file=sys.stderr)
+         for _kind, _note in lv.get("events") or []:     # 判定函式只回傳,帳由這一層寫(Projects/Android測試防竄改檢查_計劃〈二〉)
+             _gate_event_or_warn(repo_root, _LINT_NEW_GATE_NAME, _kind, str(_note)[:120], hard=False)
+         lv["ai_pending"] = _lint_waivers_ai_pending(repo_root)
+         if lv.get("autopass"):
+-            _gate_failopen(repo_root, "lint-new", lv.get("autopass_reason") or lv.get("reason") or "有檢查命令跑不動")
++            _gate_failopen(repo_root, "lint-new", lv.get("autopass_reason") or "有檢查命令跑不動")
+         if lv.get("blocked"):
+             return {"blocked": True, "reason_kind": "lint_new",
+                     "reason": lv.get("reason") or "有新增的告警",
+                     "tier": tier, "lint_new": lv}
+     return None
+ 
+ 
+ def _codeloop_pitfalls_tier(repo_root, diff_range):
+     """code-loop check 判定的第 3 步:跑 pitfalls --diff <range> --no-lint --json 取分級 → (pitfalls 的資料, tier, pf_fail)。
+     pf_fail 不是 None 表示 pitfalls 失敗(回非零、沒有 JSON、例外),內容是 fail-open 的那個放行 dict,並已記一筆 fail-open 帳。"""
+@@ -70384,21 +70530,21 @@ def _cl_say_lint_ok(_lv):
+             _bits.append(f"作弊比對看過改動(從 {str(_g.get('start') or '?')[:12]} 起算)")
+         if _lv.get("waived"):
+             _bits.append(f"{_lv['waived']} 條先前放行過")
+         if _lv.get("report_only"):
+             _bits.append(f"{len(_lv['report_only'])} 條命令沒有檔案清單佔位、只報不擋")
+         if _lv.get("oversize_waived"):
+             _bits.append(f"{len(_lv['oversize_waived'])} 支檔太大沒檢查(已登記)")
+         if _lv.get("autopass"):
+             # ★講真正的原因,不要一律寫成「有命令跑不動」★:放行檔讀不了、版本代號解析不出
+             # 都會走自動放行,含糊帶過會讓人以為是工具的問題、不去修真正壞掉的東西
+-            _bits.append(f"自動放行並記帳({_lv.get('autopass_reason') or _lv.get('reason') or '原因不明'})")
++            _bits.append(f"自動放行並記帳({_lv.get('autopass_reason') or '原因不明'})")
+         _st = _lv.get("status")
+         if _st == "warn":
+             print(f"  提醒:新增告警閘只報不擋,有 {len(_lv.get('new') or [])} 條({'、'.join(_bits)})")
+             return
+         _head = {"env-unavailable": "沒能完整檢查",
+                  "not-checked": "★這次改動沒有被檢查★"}.get(_st, "沒有新增的告警")
+         print(f"  新增告警閘:{_head}({'、'.join(_bits)})")
+ 
+ 
+ def _cl_say_lint_guard_notes(lv):

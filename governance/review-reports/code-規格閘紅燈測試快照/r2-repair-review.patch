@@ -1,0 +1,1338 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md b/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
+index 93aa9768e698a7e4e83fd774fb309494910713c2..04e70f401e975c1d83479380a9ac2fc1a7b54075 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/規格閘紅燈測試快照_計劃.md
+@@ -54,44 +54,44 @@ RETIRE-IF: 各專案人工抽查自己的放行檔(`lumos lint-waive --list`,規
+   - 測試所在檔不在 repo 根底下、或被 git 忽略(紅燈版只存會進版本紀錄的檔);
+   - 檔裡有超過 2 萬字的行、或剝完字串與註解後括號配不平(跟比對工具 `_tg_test_file` 的病態輸入處理同一套判法);
+   - 檔案不是合法 UTF-8;找到的檔不只一支;同一支檔裡同名函式不只一個;用 `_tg_functions` 找不到那支函式;
+   - 這支測試在這條分支上曾被規格閘判綠過(見「判綠觀測」);
+   - 函式本體跟這條分支上一份紅燈版完全相同(不重複存);
+   - 加進去會讓這份紅燈版 JSON 超過 5 MB(跟 `lumos test-guard` 的單檔上限同一個數)。
+ - 規格閘找得到的測試只認 `@Test`、`@ParameterizedTest`、`@RepeatedTest`(Kotlin 的 `KOTLIN_TEST_RE`、Java 的 `JAVA_TEST_RE`);`@TestFactory`、`@TestTemplate`、`@Theory` 的測試規格閘本來就綁不到,也就沒有紅燈版。
+ - 分岔點:寫入端要跟分岔點比的兩處(判綠觀測、不重複存),用比對工具的 `_tg_start` 算分岔點;算不出來時兩處都看整本工作目錄治理帳。
+ - 判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的時候(含風險低「新行為沒紅」擋下那條路,`_spec_gate_low_not_red`),寫一筆治理帳事件 `spec-gate-green`(走 `_gate_event`,帶迴圈編號與那幾支測試名)。之後同一條分支再跑出紅,那支測試不存紅燈版,原因「曾判綠(實作後補跑)」。`_spec_gate_low_not_red` 印的補跑步驟加一句「這樣補跑的測試不會有紅燈版」。判綠觀測只讀工作目錄的治理帳、只看這條分支自己寫的那幾筆(跟分岔點那一版做行差)。
+ - 寫檔:時機跟留痕相同(風險低在 PASS 時、風險高在相依回歸全綠時;其餘出口本來就不寫留痕)。寫成 `governance/redbase/<迴圈編號>/<留痕 token>.json`(新增),內容 `{"version": 1, "tests": [...], "files": {...}}`:`tests` 每支測試一列(測試名、它綁的條款編號清單、檔案相對路徑、函式鍵),同一支測試被好幾條條款綁只算一列;`files` 每支檔一份文字內容。以 LF、UTF-8 位元組用既有原子寫入(暫存檔、自驗、換名)寫出,寫完讀回核對 sha256。寫檔失敗時照舊寫留痕、不帶 `redbase` 欄位並印一句,規格閘本身不因此擋。
+-- 留痕(審查帳與治理帳兩筆)多兩個欄位:`redbase: {"path": <相對路徑>, "sha256": <整份 JSON 檔位元組的 sha256>}`(有寫檔才帶);`redbase_skipped`:沒存的綁定測試名與原因,最多 20 筆,多的只記數量。
++- 留痕(審查帳與治理帳兩筆)多三個欄位:`redbase: {"path": <相對路徑>, "sha256": <整份 JSON 檔位元組的 sha256>}`(有寫檔才帶);`redbase_skipped`:沒存的綁定測試名與原因,最多 20 筆(「判綠」排最後,不擠掉其他原因);`redbase_skipped_n`:沒存的總數。測試的身分是(平台、測試名):兩個平台各有一支同名測試時各存各的,判綠事件 `spec-gate-green` 的 `items` 也帶平台。
+ - `governance/redbase/`(新增)加進簿記資料夾清單(`_BOOKKEEPING_DIRS`):它是紀錄不是碼,代碼審通過後補跑規格閘不該讓代碼審留痕失效。只有代碼審留痕失效的判斷會另外看資料夾裡有沒有程式檔;小改動閘、風險掃描、推送前測試範圍、回頭重讀這些消費者只看前綴,放進這個資料夾的檔對它們一律是簿記。紅燈版的格式以 [[Systems/規格閘]] 為單一來源,[[Systems/test-guard]] 用 `SEE:` 指過去。
+ 
+ ### 二、比對工具讀紅燈版
+ 
+ - 什麼時候讀:`<起點>..<終點>` 的改動清單裡有 `docs/.governance-log.jsonl` 或 `governance/redbase/`(新增)底下的檔才讀;兩者都沒動就完全不讀,行為跟現在逐字相同(只看紅燈版資料夾的話,漏 `git add` 紅燈版檔那種情況走不到偵測)。起點是空樹(`_tg_start` 找不到主線、`no_baseline`)時不用紅燈版,只印一句。
+ - 讀哪些紀錄:用 `_residual_blob_at` 讀起點與終點兩版的 `docs/.governance-log.jsonl`,照 `_residual_ask_rows_delta` 的多重集合行差取終點多出來的行(把閘名與種類篩選參數化,不另寫第三份讀法);起點那一版沒有帳檔當成空。只取 `spec-gate-record` 裡的 `redbase` 欄位,也就是這條分支自己寫的紅燈版;已經合進主線的舊計劃不會被誤套。紅燈版 JSON 檔用 `_nodehome_cat_blobs_capped` 從終點那一版批次讀(有單檔上限,`_residual_blob_at` 沒有),不讀工作目錄;治理帳本身大於 5 MB,照舊用 `_residual_blob_at`。紅燈版內嵌的檔文字餵 `_tg_functions` 之前,先過 `_tg_test_file` 對終點檔用的同一套病態輸入處理(超長行抹掉、括號配不平),不過的列 `tq/redbase-unreadable`。
+ - 驗,任一不過就列 `tq/redbase-unreadable`(擋下、可放行,原因分開寫):欄位形狀不對(`path` 不是字串、`sha256` 不是 64 位十六進位)、路徑不在 `governance/redbase/` 底下、終點那一版沒有這支檔(工作目錄有它時原因寫「還沒提交,請 git add 那支檔」,沒有時寫「被刪了,請從版本紀錄還原」)、讀不出、超過 5 MB、不是合法 JSON、`version` 不認得、位元組的 sha256 對不上欄位、加進去會讓這次推送超過比對工具 200 MB 的總量。另外,改動清單裡新增的紅燈版檔沒有任何一筆留痕指到它(孤兒檔),也列這條。不當成「沒有紅燈版」放過去。
+ - 串起來比:同一個「檔案路徑+函式鍵」的歷次紅燈版,照它們在終點那一版治理帳的行序排(不比 `ts`),依序兩兩比,最後一份再跟終點比。每一步以前一份當前一版跑 `_tg_fn_cands` 的函式級判斷(放寬斷言、改 expected、新加 `expected =`、調大逾時),丟掉它裡面的 `tq/no-assertion` 與 `tq/catch-no-fail`(那兩條由分岔點比對列,不重複);終點那支測試完全沒有斷言時不做紅燈版比對(`tq/no-assertion` 已經列了,再比只會多一條 `assert-weakened` 說同一件事);命中一律列成 `tq/redbase-weakened`,原因寫出是哪一步、哪一種(例「相對規格閘紅燈版 <token>:expected 被改」)。跳過與 assume 的次數差不在這裡算(紅燈版的測試跑出紅就不是被跳過的,次數一定是 0,跟分岔點比對重複)。
+ - expected 與被測呼叫一起改:這一批不比(移到〈第二批〉);`_tg_pairs` 配不起來的斷言照舊不列,寫進抓不到。
+ - 排除與找不到:
+   - 終點那一版的測試函式在分岔點有同一個函式鍵(或改名配對得上)→ 照舊用分岔點那一版,不看紅燈版。
+   - 紅燈版記的測試,先看它的檔在分岔點那一版是否已有同一個函式鍵(有就跳過);再看終點那一版同一路徑有沒有,沒有就在這次改動清單裡的測試檔找同函式鍵(唯一就當搬家照比);終點那一版有同名多載(比紅燈版多出同名函式)時不猜,當找不到。找不到、不只一處、或整支檔已經不在,列 `tq/redbase-unmatched`(擋下、可放行),原因寫 token、測試名、它綁的條款編號。不讀計劃、不分條款是否還在。查找只讀紅燈版記到的路徑與這次改動清單裡的測試檔,用 `_nodehome_cat_blobs_capped` 批次讀,內容算進比對工具一次推送 200 MB 的總量。
+-- 指紋照 `_tg_cand` 的算法,身分字串固定為「紅燈版 token + 子規則名 + 那條子規則原本的身分字串」,同一身分第二次出現照舊帶序號;放行一條不會順帶放掉同一函式的另一條,也不會放掉分岔點比對的同名候選。
++- 指紋照 `_tg_cand` 的算法,身分字串固定為「紅燈版 token + 子規則名 + 子候選原本的身分字串 + 子候選的指紋」(子候選的指紋已帶同一身分第幾次出現);放行一條不會順帶放掉同一函式的另一條,也不會放掉分岔點比對的同名候選。
+ - 新規則代號與抓不到的變動,同步寫進規則一覽:`_TG_WHY` 補三條原因、`_TG_LIMITS` 與標準文件 `test-quality-standard.md` 的「抓不到」同一份(`t_tq_guard_cli_contract` 釘著)。抓不到新增:實作後第一次跑規格閘就手動把實作搬走造紅、之前沒判綠過的測試,紅燈版是實作後的內容;只存在某次跑紅時已經寫好的斷言(骨架之後才補、而補完後再也沒跑紅的不保護);判綠過的、逾時紅的不存;expected 寫在註記資料列(`@CsvSource`)或同檔常數時改值判不到;expected 與被測呼叫同時改(這一批不比,見第二批);同名多載插入時當找不到。
+ 
+ ### 三、文件同步
+ 
+ - [[Systems/規格閘]]:留痕欄位清單加 `redbase`、`redbase_skipped`,負責範圍加「寫紅燈版與判綠觀測」,紅燈版格式寫在這篇。
+ - [[Systems/test-guard]]:負責範圍加「讀紅燈版」,`SEE:` 指到規格閘那篇的格式。
+ - [[Systems/test-quality-cli]]:標準文件「比對這次改動前後兩版」那句補上紅燈版、抓不到清單加上面幾條。
+ - `skills/lumos-project-notes/commands/06-代碼審與推送.md` 列作弊候選種類那處加三條。
+ - [[Systems/pitfalls-lint-adapter]]:「兩種指紋算法並存」那行補紅燈版的身分寫法。
+-- [[Systems/pitfalls-code-loop]]:簿記資料夾那行 KEY 加 `governance/redbase/`(新增),消費者數照程式寫。
++- [[Systems/pitfalls-code-loop]]:簿記資料夾那行 KEY 原本就寫「現在有哪些以程式為準」,不另加;加一行回頭條件記版本窗口(見下)。
+ - 新簿記資料夾的版本窗口(還沒 `lumos update` 的協作者沒有這項豁免,別人提交的紅燈版夾在他的留痕與推送之間會被判留痕過時):`CHANGELOG.md` 只記對外發版、這次沒改掛鉤與注入範本不升版,先在 [[Systems/pitfalls-code-loop]] 記一行回頭條件,下次發版時寫進 CHANGELOG(實作時改定,2026-11-03)。
+ 
+ ### 四、不做
+ 
+ - 不提供更新紅燈版的指令:需求在實作期間真的變了,一律走 `lint-waive` 附理由放行(放行紀錄的規則欄會是 `tq/redbase-weakened`,RETIRE-IF 靠它量)。
+ - 不改風險高計劃「不強制先紅」的規則;風險高的計劃只有在規格閘時剛好跑出紅,才有紅燈版可比。
+ - 不支援 Python 等其他語言的測試(比對工具只認 Kotlin、Java);本 repo 自己的 `t_` 測試不受保護。
+ - 不硬性鎖住測試檔,不做語意判斷,不派模型判斷「綠燈有沒有改變紅燈測試的意思」。
+ - 不讀計劃、不做「條款換綁」的判斷(要讀圖譜與平台設定,比對工具只吃 git);換綁之後舊測試不在,一律落到 `tq/redbase-unmatched`。
+ - 不建暫時工作樹([[Systems/規格閘]] WHY:編排者裁走輕量版)。
+@@ -108,31 +108,31 @@ RETIRE-IF: 各專案人工抽查自己的放行檔(`lumos lint-waive --list`,規
+ - 紅燈版比對出來的候選,AI 可不可以自己放行:照既有新增告警閘的放行規則(AI 放的標出來、事後要人看),不另設「只准人放」。來源:使用者 2026-11-02 給這一系列工作最高裁量權與簽核權(「給你最高裁量權＆簽核權」);要不要升成只准人放,看 RETIRE-IF 那次抽查。
+ 
+ ## 第二批(另開計劃,第一批推上去、量到放行量之後再做)
+ 
+ 立案:設計審 r1 後工具提醒單輪折入 38 條、建議拆小,Enzo 2026-11-03 裁「拆兩批，先做核心」。
+ - expected 與被測呼叫同時改的對齊:只在紅燈版這條路上,`_tg_pairs` 配不起來的斷言照斷言函式名的出現順序再對齊一次,expected 那段文字與實際值那段都不同的列 `tq/redbase-weakened`(實務工具 tamperguard 把 diff 層判不準的 expected 改動標成要人看,https://pypi.org/project/tamperguard/0.1.0/)。這是最容易誤報的一塊(被測呼叫只是改名也會列),等第一批的 `tq/redbase-weakened` 放行理由有了數字再定。
+ REVISIT:[when-status:Projects/規格閘紅燈測試快照_計劃=done][by:2027-02-01] 第一批上線後,抽各專案 `lumos lint-waive --list` 的 `tq/redbase-*` 放行理由,決定第二批要不要做、對齊條件放多寬
+ 
+ ## 驗收條款
+ 
+-- [S1] 當規格閘寫留痕而有判成紅的 Kotlin 或 Java 綁定測試時,應寫一份 `version` 為 1 的紅燈版(每支測試一列:測試名、條款編號清單、檔案路徑、函式鍵;每支檔一份內容),兩筆留痕都帶 `redbase` 欄位;判成綠、弱證據、逾時的、Python 的、檔或同名函式不只一處的、`_tg_functions` 找不到的、不是合法 UTF-8 的、有超過 2 萬字的行或括號配不平的、不在 repo 根底下或被 git 忽略的、判紅後檔案又被改的、函式本體跟上一份相同的、加進去會超過 5 MB 的測試不存,原因記進 `redbase_skipped` 並印一句;同一支測試綁在兩條條款只寫一列;同一條款一紅一綠只存紅的;沒有可存的測試時不寫檔、留痕不帶 `redbase`。 [test:t_spec_redbase_written_on_red]
+-- [S2] 當終點那一版的測試函式在分岔點不存在、而紅燈版裡有同一個檔案路徑與函式鍵時,比對工具應拿紅燈版當前一版:紅燈版是 `assertEquals(900, checkout(1000))`、終點是 `assertEquals(800, checkout(1000))` 應列 `tq/redbase-weakened`(原因寫 expected 被改);改成 `assertTrue(checkout(1000) > 0)`、新加 `@Test(expected = …)`、`@Test(timeout = 30)` 改成 `45` 也應列;終點是 `assertEquals(800, checkout(Cart(1000)))`(expected 與被測呼叫同時改)這一批不列;測試一字未改、只改被測呼叫的參數、只改正式程式時不列;新測試帶 `@Ignore` 照舊只列 `tq/skip-added` 一條;終點沒有斷言時只列 `tq/no-assertion` 一條、不做紅燈版比對、不列 `tq/redbase-weakened`。 [test:t_tg_redbase_weakened]
+-- [S3] 當同一個檔案路徑與函式鍵有好幾份紅燈版時,比對工具應照治理帳行序依序兩兩比、最後一份再跟終點比:第一份是 `TODO()` 骨架、第二份是 `assertEquals(900, …)`、終點是 `assertEquals(800, …)` 應列;第一份是 900、第二份(仍紅)是 800、終點是 800 也應列;兩份的 `ts` 寫反時照行序判。 [test:t_tg_redbase_chain]
+-- [S4] 當紅燈版欄位形狀不對、路徑不在 `governance/redbase/` 底下、終點那一版沒有那支檔、讀不出、超過 5 MB、不是合法 JSON、`version` 不認得、sha256 對不上欄位、內嵌檔文字過不了病態輸入處理、會讓這次推送超過 200 MB 總量,或改動清單裡新增的紅燈版檔沒有任何留痕指到時,比對工具應列 `tq/redbase-unreadable`(擋下、可放行),原因分開寫;終點沒有而工作目錄有那支檔時,原因寫「還沒提交,請 git add」;不得當成沒有紅燈版放行。 [test:t_tg_redbase_unreadable]
+-- [S5] 當紅燈版記的測試在終點那一版換了檔案、但函式鍵在這次改動清單裡的測試檔中唯一時,比對工具應照比(搬家後改 expected 照樣列);找不到、不只一處、整支新測試檔在分支內先加後刪、或終點那一版出現同名多載時應列 `tq/redbase-unmatched`,原因寫 token、測試名與條款編號;那支測試的檔在分岔點就已有同一個函式鍵時不列。 [test:t_tg_redbase_moved_or_missing]
+-- [S6] 當這條分支上規格閘曾把一支 Kotlin/Java 綁定測試判綠(含風險低「新行為沒紅」擋下那次)、之後又判紅時,規格閘應寫一筆 `spec-gate-green` 事件並在之後不存那支測試的紅燈版,`redbase_skipped` 原因寫「曾判綠」;擋下訊息的補跑步驟應多一句「這樣補跑的測試不會有紅燈版」。 [test:t_spec_redbase_skips_after_green]
+-- [S7] 當這次改動沒有動到 `docs/.governance-log.jsonl` 也沒有動到 `governance/redbase/` 底下的檔時,比對工具應不讀治理帳,候選清單與指紋應跟改動前逐字相同(`--json` 的 `limitations` 隨規則一覽更新,不在逐字相同之內);紅燈版留痕只在分岔點那一版的治理帳裡時應當成沒有紅燈版;起點是空樹時應不用紅燈版並印一句;測試函式在分岔點已經存在時應照舊拿分岔點當前一版;治理帳兩版各約 20 MB、行差約 1.5 萬行時,讀取與行差應在 3 秒內、峰值記憶體 400 MB 內(實測基準 0.16 秒、153 MB)。 [test:t_tg_redbase_absent_unchanged]
+-- [S8] 當紅燈版本體跟終點一字不差、但那支測試沒有任何斷言時,比對工具應照舊列 `tq/no-assertion`。 [test:t_tg_redbase_still_checks_new_rules]
+-- [S9] 當 `tq/redbase-*` 候選用 `lumos lint-waive <指紋> --note` 放行之後,新增告警閘應不再擋同一條,放行紀錄的規則欄是那條 `tq/redbase-*`;同一函式同時有「expected 被改」與「逾時調大」兩條時放行一條不放掉另一條;放行分岔點比對的同名候選不會順帶放掉紅燈版這條;AI 放行照現制標出。 [test:t_tg_redbase_waive]
+-- [S10] 當在只有提交內容的乾淨 clone 裡推送檢查、工作目錄的治理帳跟終點那一版不同時,比對工具應照終點那一版判紅燈版,結果跟本機相同。 [test:t_tg_redbase_reads_tip]
+-- [S11] 當 `governance/redbase/` 裡新增檔案、而其他檔都沒變時,代碼審留痕應照樣有效(簿記豁免);那個資料夾裡出現程式檔時,代碼審留痕的判斷照舊不算簿記。 [test:t_spec_redbase_bookkeeping]
++- [S1] 當規格閘寫留痕而有判成紅的 Kotlin 或 Java 綁定測試時,應寫一份 `version` 為 1 的紅燈版(每支測試一列:測試名、條款編號清單、檔案路徑、函式鍵;每支檔一份內容),兩筆留痕都帶 `redbase` 欄位;判成綠、弱證據、逾時的、Python 的、檔或同名函式不只一處的、`_tg_functions` 找不到的、不是合法 UTF-8 的、有超過 2 萬字的行或括號配不平的、不在 repo 根底下或被 git 忽略的、判紅後檔案又被改的、函式本體跟上一份相同的、加進去會超過 5 MB 的測試不存,原因記進 `redbase_skipped` 並印一句;同一支測試綁在兩條條款只寫一列;同一條款一紅一綠只存紅的;沒有可存的測試時不寫檔、留痕不帶 `redbase`。 [test:t_spec_gate_redbase_written_on_red]
++- [S2] 當終點那一版的測試函式在分岔點不存在、而紅燈版裡有同一個檔案路徑與函式鍵時,比對工具應拿紅燈版當前一版:紅燈版是 `assertEquals(900, checkout(1000))`、終點是 `assertEquals(800, checkout(1000))` 應列 `tq/redbase-weakened`(原因寫 expected 被改);改成 `assertTrue(checkout(1000) > 0)`、新加 `@Test(expected = …)`、`@Test(timeout = 30)` 改成 `45` 也應列;終點是 `assertEquals(800, checkout(Cart(1000)))`(expected 與被測呼叫同時改)這一批不列;測試一字未改、只改被測呼叫的參數、只改正式程式時不列;新測試帶 `@Ignore` 照舊只列 `tq/skip-added` 一條;終點沒有斷言時只列 `tq/no-assertion` 一條、不做紅燈版比對、不列 `tq/redbase-weakened`。 [test:t_tq_guard_redbase_weakened]
++- [S3] 當同一個檔案路徑與函式鍵有好幾份紅燈版時,比對工具應照治理帳行序依序兩兩比、最後一份再跟終點比:第一份是 `TODO()` 骨架、第二份是 `assertEquals(900, …)`、終點是 `assertEquals(800, …)` 應列;第一份是 900、第二份(仍紅)是 800、終點是 800 也應列;兩份的 `ts` 寫反時照行序判。 [test:t_tq_guard_redbase_chain]
++- [S4] 當紅燈版欄位形狀不對、路徑不在 `governance/redbase/` 底下、終點那一版沒有那支檔、讀不出、超過 5 MB、不是合法 JSON、`version` 不認得、sha256 對不上欄位、內嵌檔文字過不了病態輸入處理、會讓這次推送超過 200 MB 總量,或改動清單裡新增的紅燈版檔沒有任何留痕指到時,比對工具應列 `tq/redbase-unreadable`(擋下、可放行),原因分開寫;終點沒有而工作目錄有那支檔時,原因寫「還沒提交,請 git add 並提交」;推的就是工作目錄的頂端、而紅燈版資料夾裡有還沒提交的檔時(治理帳與紅燈版都忘了提交)也列,原因寫「還沒提交」;紅燈版內嵌的測試檔路徑不是 repo 相對的 .kt/.java 也列;不得當成沒有紅燈版放行。 [test:t_tq_guard_redbase_unreadable]
++- [S5] 當紅燈版記的測試在終點那一版換了檔案、但函式鍵在這次改動清單裡的測試檔中唯一時,比對工具應照比(搬家後改 expected 照樣列);找不到、不只一處、整支新測試檔在分支內先加後刪、或終點那一版出現同名多載時應列 `tq/redbase-unmatched`,原因寫 token、測試名與條款編號;那支測試的檔在分岔點就已有同一個函式鍵時不列。 [test:t_tq_guard_redbase_moved_or_missing]
++- [S6] 當這條分支上規格閘曾把一支 Kotlin/Java 綁定測試判綠(含風險低「新行為沒紅」擋下那次)、之後又判紅時,規格閘應寫一筆 `spec-gate-green` 事件並在之後不存那支測試的紅燈版,`redbase_skipped` 原因寫「曾判綠」;擋下訊息的補跑步驟應多一句「這樣補跑的測試不會有紅燈版」。 [test:t_spec_gate_redbase_skips_after_green]
++- [S7] 當這次改動沒有動到 `docs/.governance-log.jsonl` 也沒有動到 `governance/redbase/` 底下的檔時,比對工具應不讀治理帳,候選清單與指紋應跟改動前逐字相同(`--json` 的 `limitations` 隨規則一覽更新,不在逐字相同之內);紅燈版留痕只在分岔點那一版的治理帳裡時應當成沒有紅燈版;起點是空樹時應不用紅燈版(新增告警閘本來就對空樹起點印一句、只印不擋);測試函式在分岔點已經存在時應照舊拿分岔點當前一版;治理帳兩版各約 20 MB、行差約 1.5 萬行時,讀取與行差應在 3 秒內、峰值記憶體 400 MB 內(實測基準 0.16 秒、153 MB)。 [test:t_tq_guard_redbase_absent_unchanged]
++- [S8] 當紅燈版本體跟終點一字不差、但那支測試沒有任何斷言時,比對工具應照舊列 `tq/no-assertion`。 [test:t_tq_guard_redbase_still_checks_new_rules]
++- [S9] 當 `tq/redbase-*` 候選用 `lumos lint-waive <指紋> --note` 放行之後,新增告警閘應不再擋同一條,放行紀錄的規則欄是那條 `tq/redbase-*`;同一函式同時有「expected 被改」與「逾時調大」兩條時放行一條不放掉另一條;放行分岔點比對的同名候選不會順帶放掉紅燈版這條;AI 放行照現制標出。 [test:t_tq_guard_redbase_waive]
++- [S10] 當在只有提交內容的乾淨 clone 裡推送檢查、工作目錄的治理帳跟終點那一版不同時,比對工具應照終點那一版判紅燈版,結果跟本機相同;工作目錄多出的留痕與紅燈版不拿來比,只提醒還沒提交。 [test:t_tq_guard_redbase_reads_tip]
++- [S11] 當 `governance/redbase/` 裡新增檔案、而其他檔都沒變時,代碼審留痕應照樣有效(簿記豁免);那個資料夾裡出現程式檔時,代碼審留痕的判斷照舊不算簿記。 [test:t_spec_gate_redbase_bookkeeping]
+ 
+ ## 回退
+ 
+ - 工具鏈 repo:單一 revert 提交還原規格閘兩支函式的回傳形狀、寫紅燈版與判綠觀測那段、比對工具讀紅燈版那段、三條新規則代號與規則一覽、簿記資料夾清單那一項、測試、本計劃與文件同步那幾篇。本 repo 自己是 Python 專案,不會有 `governance/redbase/`,不用刪資料夾。
+ - 消費專案:跟著 `lumos update` 拿到還原後的版本;已寫進 `governance/redbase/` 的檔與治理帳的 `redbase`、`redbase_skipped`、`spec-gate-green` 留著無害(舊版不讀),要清就各專案自己 `git rm -r governance/redbase/`。已寫進放行檔的 `tq/redbase-*` 放行留著無害(指紋不再出現)。
+ 
+ ## 實務隱患
+ 
+ - 守衛面:新增告警閘對「規格閘時紅過的新測試」變嚴,原本只判有沒有斷言、吞斷言與跳過次數,現在也判放寬、改 expected、新加 `expected =`、調大逾時。需求在實作期間真的變了,要逐條附理由放行;一個計劃改很多條時會多一批放行。出口與既有閘相同(放行附理由、整道關掉是設定 off 或 `LUMOS_SKIP_LINT_NEW=1`)。
+ - 守衛面:紅燈版讀不到、沒提交、被改過時列成擋下但可放行的候選;漏 `git add` 是最常見的原因,訊息直接講。
+@@ -144,11 +144,12 @@ REVISIT:[when-status:Projects/規格閘紅燈測試快照_計劃=done][by:2027-0
+ - 併發:紅燈版檔名含留痕 token,不同次規格閘不會寫同一個檔;治理帳沿用既有追加寫法;判紅到寫檔之間檔案被別的會談改了,sha256 對不上就不存。
+ - 已排除:金流:不碰付款與交易資料,只讀寫測試檔內容與本 repo 的紀錄檔。
+ - 已排除:對外送出:不連網;紅燈版只放消費專案自己的測試內容,隨該專案自己的版本紀錄走(未提交內容被固定進提交那一點寫在上面資安行)。
+ - 不可逆:紅燈版一旦提交就留在 git 歷史,要清得改寫歷史;每份上限 5 MB、同內容不重複存,量小。工具的行為可 revert,已寫入的舊欄位舊版不讀、無害。
+ 
+ ## 審計修正紀錄
+ 
+ - 首輪前掃(2026-11-03,一席 sonnet):①3、②2、③3 條直接修;④ 語意不符 11 條修進本稿,改前→改後逐條見卷證 `governance/review-reports/規格閘紅燈測試快照/r1-intake.md`。
+ - r1(2026-11-03,3 席+架構對齊):38 條/blocking 9/核心改三處:只取最早改成歷次紅燈版依序比、加判綠觀測擋掉「實作後補跑」、讀不到紅燈版改成可放行候選;拿掉條款換綁規則。全數折入。
+ - 拆批(2026-11-03,處置閘過後):工具提示單輪折入 38 條超過 20、建議拆小,Enzo 裁拆兩批;expected 與被測呼叫同時改的對齊移到〈第二批〉,第一批寫進抓不到,S2 那個例子改成這一批不列。
++- 代碼審 r1(2026-11-03,單審+架構對齊+資安):18 條/blocking 2/跨平台同名身分改成(平台、測試名)、5 MB 改量 JSON 跳脫後、讀上一份紅燈版擋符號連結並驗指紋、兩樣都沒提交也偵測、同檔只切一次;全數折入,卷證在 `governance/review-reports/code-規格閘紅燈測試快照/`。
+ - 指標:席報告與重現紀錄在 `governance/review-reports/規格閘紅燈測試快照/`。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 1006c58f9ebf4f972e91339935ef5609d86be1d8..01868c01bb54b5ecb4cd8c5dc4c98f4655e83740 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -26,23 +26,24 @@ summary: |-
+   WHY:測試檔裡超過 2 萬字的行抹掉不比、那支檔另列一條可放行的 tq/too-large(正式程式檔的判讀是逐行一條正規式,不設這道;建置檔與 CI 這一批不比) [出處:代碼審 r2 資源、邊界、正確性三席] [因:規模那一族連兩輪被病態單行輸入打穿平方級,逐點補線性補不完;外層看門不靠逐條判斷,判錯的代價從推送卡到超時變成多一條要人放行的候選] [不選:繼續逐點補(第三輪仍會有漏網的那一處);整支不解析(r3 資安席:加一行長註解就把同檔作弊壓成一條)] [代價:壓縮檔、產生的程式一行很長時每次都要人放行] [test:t_tq_guard_cli_contract]
+   WHY:比對起點的分岔點先只看遠端主線,沒有遠端主線才退回本機 main [出處:代碼審 r2 資安席] [因:本機 main 上還沒推出去的提交沒有任何一次推送比對過,算進主線就把那段改動從比對範圍扣掉;回頭重讀的分岔點同一個理由不收本機主線] [不選:照 Room 守衛手動跑的寫法連本機主線一起算] [test:t_tq_guard_cli_contract]
+   WHY:建置檔的 ignoreFailures 不限在測試區塊,只排除外層或同一行開的區塊是靜態檢查外掛或報表(而且不是測試任務)的;點名測試任務看引號裡是不是整個含 test 的任務名形狀(報表外掛的任務名不算) [出處:代碼審 r2 正確性、通才、邊界、合約四席] [因:第一輪把 ignoreFailures 收窄到測試區塊,點號寫法與重試區塊全漏;「引號裡含 test 就算」又把 JaCoCo 的 exclude 誤擋] [不選:只看區塊開頭(漏同一行寫完的);要有 named、matching 這類呼叫字樣(r3:漏 findByName、tasks[…]、getByPath)] [status:superseded] [被取代:代碼審 r4 使用者裁定縮範圍,建置檔與 CI 規則移到 [[Projects/Android測試防竄改檢查_計劃]] 第二批]
+   WHY:LUMOS_SKIP_LINT_NEW 只認 1,設成 0 或 false 照常判 [出處:代碼審 r3 資安席] [因:同族的 LUMOS_SKIP_ROOM_GUARD、LUMOS_SKIP_NOTE_SHAPE 都只認 1;殘留或照字面設成 0 的環境變數會無聲關掉整道閘連同作弊比對] [不選:有設就關(原寫法)] [test:t_lint_new_test_guard_failure_blocks]
+   WHY:建置檔與 CI 檔這一批不比,移到計劃第二批另做 [出處:代碼審 r4 使用者裁定縮範圍] [因:四輪代碼審裡這兩類的 major 佔大宗,用正規式猜 Gradle DSL 與 shell 的寫法每輪都被新寫法打穿(字串模板任務名、一行開兩個區塊、鏈結換行、路徑形式的 gradle、病態長行回溯)] [不選:再補一輪字表] [代價:這一批推上去之後,建置檔與 CI 讓測試不跑或失敗不算的改動不會被列,寫在標準的抓不到清單] [test:t_tq_guard_cli_contract]
+   REVISIT:2026-12-15 建置檔與 CI 的作弊比對(計劃第二批)開計劃了沒;沒開就重新排程,並確認標準的抓不到清單還寫著這個缺口
+   PITFALL:單行上限之內仍有三種乘積形狀讓比對跑過 30 秒(catch 型別括號掃到很遠的右括號、類別名後接大段空白、測試宣告找不到名字時泛型角括號沒上限) [出處:代碼審 r5 邊界、資源席] [根因:每個命中各自往後掃同一段很遠的文字,外層的單行上限擋不到] [修法:catch 括號用共用的括號對應表、換行後第一個非空白字與一行最後一個非空白字每個位置只找一次、角括號最多看 _TG_MAX_GENERIC_CHARS 字] [test:t_tq_guard_cli_contract]
+   WHY:catch 吞斷言照 Error Prone 的 AssertionFailureIgnored 只看結構(try 有斷言或 fail、catch 接得住 AssertionError、catch 不重丟就列),不看 catch 裡寫了什麼檢查;try 沒 fail 而 catch 有斷言那半,should 開頭的字寬判成斷言 [出處:代碼審 r5 正確性、邊界、資安三席;r6 正確性、邊界兩席] [因:寬判法讓名字以 should 開頭的變數或方法算成檢查,吞掉斷言的 catch 不列;r5 改成只認中綴形狀,又把點號呼叫的真檢查排除,該列的漏列、正常的被誤列] [不選:繼續補名字字表(r5 寬、r6 窄、r7 前綴白名單,三輪各被一步改名打穿或誤列)] [代價:catch 裡真的檢查例外型別的寫法也列,要附理由放行或改用 assertThrows/shouldThrow] [test:t_tq_guard_catch_no_fail]
+   REVISIT:2026-12-15 一次推送的測試檔總量接近 200 MB 時峰值記憶體約為內容的 16 到 23 倍(代碼審 r5 資源席量測,原有設計);第二批評估逐檔放掉原文與切段
+   WHY:catch 接不接得住斷言失敗照型別名字的字尾認(…Error、…Failure、Throwable),不逐一列各框架的子類別 [出處:代碼審 r8 資安、正確性兩席] [因:四個字的字表漏掉 JUnit 4 字串比對失敗丟的 ComparisonFailure、opentest4j 的 MultipleFailuresError 這類 AssertionError 子類別,AI 照失敗訊息抄型別名寫 catch 就躲過;各框架的子類別都以 Error 或 Failure 結尾] [不選:把子類別逐一列進字表(照樣會漏新框架)] [代價:自訂的 Result.Error 這類型別也會列,多一條可放行的候選] [test:t_tq_guard_catch_no_fail]
+-  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]新測試在分岔點不存在而有紅燈版時,同一支測試的歷次紅燈版照終點那一版治理帳的行序依序兩兩比、最後一份跟推送版比,命中一律列 tq/redbase-weakened;治理帳與紅燈版資料夾都沒動就完全不讀 [出處:本計劃設計審 r1 正確性席實測] [因:TDD 先骨架紅、再補斷言重跑是常態,只取最早一份時後補的斷言被改成實作輸出零候選] [不選:只取最早一份;照 ts 排(帶時區、同秒無決勝)] [test:t_tg_redbase_chain]
+-  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版讀不到、沒提交、被改過、孤兒檔都列 tq/redbase-unreadable(擋下、可放行),不記成比對沒跑完、也不當成沒有紅燈版 [出處:本計劃設計審 r1 邊界、整合、架構對齊三席] [因:最常見的原因是漏 git add,記成比對沒跑完只能整道閘關掉;既有慣例是單一怪檔變可放行候選] [不選:記成比對沒跑完] [test:t_tg_redbase_unreadable]
+-  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版記的測試在推送版找不到、不只一處或有同名多載,一律列 tq/redbase-unmatched,不讀計劃判條款換綁 [出處:本計劃設計審 r1 架構對齊席] [因:比對工具只吃 git,讀計劃與條款綁定是跨層] [不選:另設條款換綁規則] [test:t_tg_redbase_moved_or_missing]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]新測試在分岔點不存在而有紅燈版時,同一支測試的歷次紅燈版照終點那一版治理帳的行序依序兩兩比、最後一份跟推送版比,命中一律列 tq/redbase-weakened;治理帳與紅燈版資料夾都沒動就完全不讀 [出處:本計劃設計審 r1 正確性席實測] [因:TDD 先骨架紅、再補斷言重跑是常態,只取最早一份時後補的斷言被改成實作輸出零候選] [不選:只取最早一份;照 ts 排(帶時區、同秒無決勝)] [test:t_tq_guard_redbase_chain]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版讀不到、沒提交、被改過、孤兒檔都列 tq/redbase-unreadable(擋下、可放行),不記成比對沒跑完、也不當成沒有紅燈版 [出處:本計劃設計審 r1 邊界、整合、架構對齊三席] [因:最常見的原因是漏 git add,記成比對沒跑完只能整道閘關掉;既有慣例是單一怪檔變可放行候選] [不選:記成比對沒跑完] [test:t_tq_guard_redbase_unreadable]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版記的測試在推送版找不到、不只一處或有同名多載,一律列 tq/redbase-unmatched,不讀計劃判條款換綁 [出處:本計劃設計審 r1 架構對齊席] [因:比對工具只吃 git,讀計劃與條款綁定是跨層] [不選:另設條款換綁規則] [test:t_tq_guard_redbase_moved_or_missing]
+   SEE:[[Systems/規格閘]] [[Projects/規格閘紅燈測試快照_計劃]]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]_tg_functions、_tg_rb_entry、_tg_rb_doc、_tg_rb_path_ok 也給規格閘寫紅燈版那一端用(同一套函式鍵與格式驗證),不另開一支對外入口包一層 [出處:代碼審 code-規格閘紅燈測試快照 r1 架構對齊席] [因:寫入端另寫一套切函式或格式驗證,函式鍵與驗法會跟讀取端分岔] [不選:比對工具另開對外入口] [test:t_spec_gate_redbase_written_on_red]
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/規格閘.md b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+index 0b3adebc74eaf8b06d1bd5de5e91c66c9164a4fb..f106a036f14cd259553aa1427f914c8be7748c65 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/規格閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/規格閘.md
+@@ -40,22 +40,22 @@ summary: |-
+   KEY:[2026-09-17 風險低]誠實界線:四行已排除是 AI 自我認證(Enzo 裁不補人簽,靠逃逸帳事後量);四類關鍵字表粗——「送出」「上架」「遷移」這種常用詞會把計劃判成風險高(ORDER_PAYMENT_TIMEOUT 這類參數名 2026-10-15 起不算,門規則版本 13;「送出」的前端語境例外同日加過又撤回,照舊算;見 [[Projects/前端知識與風險詞_計劃]] d1),這是「預設單向」的代價;規則②實測 doing 計劃 74 份有 42 份會因連到帶標籤/合約的節點變風險高(2026-09-17 全 vault 算);擋不住「綁一支永遠失敗的樁測試」與「先另開提交預埋樁再標 keeps」;keeps 既存性用整個樹的整字搜尋,不限同一支測試檔(比草稿寬);pre-push 那段 rc≠1 一律放行,所以 hook 版本跑在主程式前面(旗標不認得、rc2)時會印一行 usage 錯誤然後靜默放行——同工作樹另一會談 2026-09-17 推送時實際看到;要擋住這型得讓 hook 先驗 `lumos spec-gate --help` 認不認得旗標,目前不做(hook/CLI 版本偏差是全 repo 所有 hook 段落共有的天花板)
+   DEP:[[Systems/design-loop]](處置閘第五步的家)、[[Systems/bound-tests-gate]](_run_bound_tests 與 _RAN_EVIDENCE 的家;pre-push 那段的家)、[[Systems/loop-convergence-recording]](審查帳的家)、[[Projects/規格落成可驗收條件_計劃]](半套單源)、[[Projects/雙向門放行_計劃]](風險低單源)、[[Projects/逃逸自動記_計劃]](逃逸帳)
+   TEST:t_spec_gate_*、t_prepush_spec_gate_*、t_door_rule_version_pin、t_door_rule_fingerprint_covers_nogo、t_nogo_skip_logic_version_pin、t_round_valid_ignores_spec_gate、t_doctor_escape_by_door、t_lint_door_field、t_disposal_step5_*、t_doctor_spec_gate_stats(scripts/test_lumos.py)
+   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]] d2]風險低沒過「新行為各自紅」而沒過的全是已綠:已有條款指紋與門規則版本都相同的風險低留痕就印不用重跑、rc0、不寫新留痕;沒有就照擋並印手動補跑步驟(先提交、既有檔 git restore 換回、新檔換空殼),不做工具內建的暫時工作樹 [出處:web 示範後端代理實作後才跑規格閘、把新檔搬走跑紅再搬回] [因:紅的證據是風險低唯一的審查,不能放寬;暫時工作樹是新的複雜度與出錯點,編排者裁走輕量版] [test:t_spec_gate_low_rerun_after_impl]
+   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]] d3]推送閘對這次推送改到計劃檔本身的 done 風險低計劃也跑留痕裡的測試,紅了擋;留痕過期或測試找不到只提醒;沒被改到的 done 計劃照舊不查 [出處:web 示範照做完再改狀態把 done 跟實作同一次推送,唯一的閘被跳過] [因:只看 doing 是怕沒人管的計劃變地雷,只放寬到被改到的那份就不會] [test:t_prepush_spec_gate_done_in_range]
+   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]規格閘留痕同時寫進版控治理帳(gate=spec-gate、kind=spec-gate-record,欄位同審查帳那筆),推送閘有候選時兩本帳都讀、同計劃取 ts 最晚那筆;doing 計劃門判低卻兩本都沒留痕時印一行不擋 [出處:2026-10-15 暫存 repo 實測:消費專案審查帳被 gitignore,乾淨 clone 推送紅測試 rc0 一個字都不印] [因:推送閘要讀的留痕跟代碼審留痕一樣得進 CI 讀得到的帳] [test:t_prepush_spec_gate_clean_clone_blocks]
+   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r1]done 計劃的寬待收窄:只給推送範圍起點就已經是 done 的(這次推送才改成 done 的照 doing 一樣嚴),而且只寬待留痕指紋對不上與某支留痕測試找不到兩種,不做清單那道照查、其餘找得到的測試照跑、紅了照擋 [出處:代碼審 r1 正確性、資安三條同報:留痕過期時跳過了輕量審檢查,一支測試找不到就整份不跑] [因:寬待的本意只是完成後改條款拿不到紅的證據,不是讓改狀態變成繞過] [test:t_prepush_spec_gate_done_stale_still_checks_nogo]
+   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r2]推送閘判「推送範圍起點就已完成」的起點改用既有 _range_base(三點範圍取 merge-base);兩本帳的規格閘留痕同一秒取本機審查帳那筆(r3 起改成比(時間、是否本機、帳內序號)取最大,沒有依 token 去重這一步) [出處:代碼審 r2 架構對齊席、正確性席] [因:自寫起點求法帶著 _range_base 已修過的三點範圍錯;同秒取後列會讓治理帳裡較舊的那筆贏] [test:t_prepush_spec_gate_done_three_dot_base]
+   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r3]已完成計劃的寬待只剩條款指紋對不上與某支留痕測試找不到:讀不成文字、測試索引建不起來、門現在判成風險高照 doing 擋;兩本帳留痕的比較鍵改成(時間、是不是本機、帳內序號);起點狀態只對改到的 done 候選算、merge-base 一次推送算一次 [出處:代碼審 r3 整合席重現:已完成計劃正文加金流詞、舊測試綠就推得上去] [因:決策 d3 只寬待兩種,程式把四種過期原因都放成提醒;同秒取先列靠參數順序約定,治理帳內同秒後寫的反而輸] [test:t_prepush_spec_gate_done_door_high_blocks]
+   WHY:PITFALL_CLASSES 另有 Android 端到端驗收的單向門判定當第三個消費者(只取金流、對外送出、不可逆三類,經 _door_keyword_hits),改表會同時改變 Android 新情境要不要人點頭 [出處:[[Projects/UI流程驗收句與檢查對照_計劃]] 決策 d2] [因:單向門沿用規格閘既有判準,不另立詞表] [test:t_android_e2e_gate_one_way_needs_human]
+-  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘寫留痕時把判紅的 Kotlin/Java 綁定測試所在檔存成紅燈版 governance/redbase/<迴圈>/<留痕 token>.json(version 1:tests 每支一列測試名、條款清單、路徑、函式鍵;files 每支檔一份內容),兩筆留痕帶 redbase(path、整份檔的 sha256)與 redbase_skipped(沒存的測試與原因) [出處:本計劃設計審 r1] [因:新功能的測試在主線分岔點不存在,比對工具沒有改動前版本可比] [不選:只記版本編號(推送前壓提交,原提交不在被推的歷史);紅燈版內容寫進治理帳本體(單筆數十 KB)] [test:t_spec_redbase_written_on_red]
+-  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘判出 Kotlin/Java 綁定測試是綠的就寫一筆 spec-gate-green 事件,同一條分支之後再跑出紅,那支不存紅燈版 [出處:本計劃設計審 r1 正確性、邊界、整合三席] [因:風險低「新行為沒紅」擋下時印的補跑步驟會把實作後的測試存成紅燈版] [不選:記寫入當下的版本編號跟測試首次提交比(壓提交後原提交不在、空殼與實作在檔案層分不出)] [test:t_spec_redbase_skips_after_green]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘寫留痕時把判紅的 Kotlin/Java 綁定測試所在檔存成紅燈版 governance/redbase/<迴圈>/<留痕 token>.json(version 1:tests 每支一列測試名、條款清單、路徑、函式鍵;files 每支檔一份內容),兩筆留痕帶 redbase(path、整份檔的 sha256)、redbase_skipped(沒存的測試與原因,判綠排最後)與 redbase_skipped_n;測試身分是(平台、測試名) [出處:本計劃設計審 r1] [因:新功能的測試在主線分岔點不存在,比對工具沒有改動前版本可比] [不選:只記版本編號(推送前壓提交,原提交不在被推的歷史);紅燈版內容寫進治理帳本體(單筆數十 KB)] [test:t_spec_gate_redbase_written_on_red]
++  WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]規格閘判出 Kotlin/Java 綁定測試是綠的就寫一筆 spec-gate-green 事件,同一條分支之後再跑出紅,那支不存紅燈版 [出處:本計劃設計審 r1 正確性、邊界、整合三席] [因:風險低「新行為沒紅」擋下時印的補跑步驟會把實作後的測試存成紅燈版] [不選:記寫入當下的版本編號跟測試首次提交比(壓提交後原提交不在、空殼與實作在檔案層分不出)] [test:t_spec_gate_redbase_skips_after_green]
+ related:
+   - "[[Projects/規格閘不把不做節的詞算進風險_計劃]]"
+ ---
+ # 規格閘
+ 
+ ## 為什麼獨立成一支
+ 
+ 設計審的散文收斂在本 repo 從沒收斂過(五輪 118 條、每輪都有 blocker;見 [[Projects/規格落成可驗收條件_計劃]])。這道閘把力氣搬到「條款能不能被機器認出來、有沒有接到真的測試、跑起來是紅是綠」。半套所有計劃照舊派審——它不減少審查,只讓「條款有沒有接到測試」變成可見的數字。
+ 
+ ## 邊界
+diff --git a/scripts/lumos b/scripts/lumos
+index e2efd526a9022283299a655e85d1cbe4ac2b8e42..c2aceedafdd7543e6bddc7eb08ad1d495f6f5fbd 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -14207,73 +14207,94 @@ def _spec_gate_record(env, rel, judged, text, rows_b, clauses, names, keeps, cou
+     # (exclusions、nogo_skipped 前 8 筆)本來就有上限,一筆通常幾百位元組到 1-2KB
+     gw = _gate_event(_vault_repo_root(env), "spec-gate", "spec-gate-record", f"規格閘留痕 {rec['token']}", nodes=[rel],
+                      extra={k: v for k, v in rec.items() if k != "kind"})
+     if gw is False:
+         print("[spec-gate] 留痕寫不進治理帳,乾淨 clone 推送時會找不到這筆留痕", file=sys.stderr)
+     return okw
+ 
+ 
+ def _redbase_collect(rr, rows, plats):
+     """規格閘判完那一刻收紅燈版素材(Projects/規格閘紅燈測試快照_計劃 做法一)。rows=_spec_gate_judge_items 的逐支列 →
+-    (收到的 [dict], 不存的 [(測試名, 原因)], 判綠的 Kotlin/Java 測試名 set)。只收判紅的 Kotlin/Java 測試;同一支綁好幾條條款只收一份、
+-    條款合併。收到的每支帶測試名、條款、檔案相對路徑、函式鍵、函式本體、檔內容與判紅當下檔案位元組的 sha256。"""
+-    idx, caps, order, seen, skipped, greens = {}, {}, [], set(), [], set()
++    (收到的 [dict], 不存的 [(測試名, 原因)], 判綠的 {(平台, 測試名)})。只收判紅的 Kotlin/Java 測試;身分是(平台、測試名)——
++    兩個平台各有一支同名測試時各收各的(代碼審 r1 正確性席 F1);同一支綁好幾條條款只收一份、條款合併。
++    收到的每支帶平台、測試名、條款、檔案相對路徑、函式鍵、函式本體、檔內容與判紅當下檔案位元組的 sha256。"""
++    idx, caps, order, seen, skipped, greens, parsed = {}, {}, [], set(), [], set(), {}
+     for cid, plat, method, v, _why, detail in rows or []:
+-        if method in caps:
+-            caps[method]["clauses"].add(cid)
++        ident = (plat, method)
++        if ident in caps:
++            caps[ident]["clauses"].add(cid)
+             continue
+-        if method in seen:
++        if ident in seen:
+             continue
+-        seen.add(method)
++        seen.add(ident)
+         p = plats.get(plat) or {}
+         why = _redbase_row_reason(p, v, detail)
+         if why is None:
+-            got = _redbase_find_one(rr, idx, plat, p, method)
++            got = _redbase_find_one(rr, idx, plat, p, method, parsed)
+             why = got if isinstance(got, str) else None
+         if why is not None:
+             if why == "判綠":
+-                greens.add(method)
++                greens.add(ident)
+             if why != "":
+                 skipped.append((method, why))
+             continue
+         got["clauses"] = {cid}
+-        caps[method] = got
+-        order.append(method)
+-    return [caps[m_] for m_ in order], skipped, greens
++        got["plat"] = plat
++        caps[ident] = got
++        order.append(ident)
++    return [caps[x] for x in order], skipped, greens
+ 
+ 
+ def _redbase_row_reason(p, v, detail):
+     """一支測試的判定 → 不存的原因;要存回 None;不是 Kotlin/Java 而且不是紅回空字串(不記)。"""
+     if not ({".kt", ".java"} & set((p.get("profile") or {}).get("exts") or ())):
+         return "不是 Kotlin 或 Java 的測試" if v == "red" else ""
+     if v != "red":
+         return "判綠" if v == "green" else "弱證據"
+     if str(detail or "").startswith("超時"):
+         return "逾時的紅不算"
+     return None
+ 
+ 
+-def _redbase_find_one(rr, idx, plat, p, method):
+-    """測試名 → 紅燈版素材 dict 或不存的原因(測試名索引每個平台只建一次,存在 idx)。"""
++def _redbase_find_one(rr, idx, plat, p, method, parsed):
++    """測試名 → 紅燈版素材 dict 或不存的原因(測試名索引每個平台只建一次,存在 idx;同一支檔只讀、只切一次,存在 parsed)。"""
+     if plat not in idx:
+         try:
+             idx[plat] = _platform_name_files(p)
+         except (OSError, ValueError, KeyError, TypeError):
+             idx[plat] = {}
+     files = sorted(idx[plat].get(method) or ())
+     if len(files) != 1:
+         return "找不到測試檔" if not files else "測試名在不只一支檔裡"
+-    return _redbase_read_one(rr, Path(files[0]), method)
++    return _redbase_read_one(rr, Path(files[0]), method, parsed)
++
++
++def _redbase_read_one(rr, path, method, parsed=None):
++    """一支判紅的測試 → 紅燈版素材 dict;不存的原因字串。病態輸入的判法跟比對工具對終點測試檔同一套(超長行、括號配不平)。
++    parsed:{檔案路徑: 讀檔與切函式的結果},同一支檔有很多支紅的測試時只讀、只切一次(代碼審 r1 正確性席 F4)。"""
++    parsed = {} if parsed is None else parsed
++    key = str(path)
++    if key not in parsed:
++        parsed[key] = _redbase_parse_file(rr, path)
++    got = parsed[key]
++    if isinstance(got, str):
++        return got
++    rel, text, sha, fs = got
++    keys = [k for k, f in fs.items() if f["name"] == method]
++    if len(keys) != 1:
++        return "切不出這支函式" if not keys else "同一支檔裡同名函式不只一個"
++    f = fs[keys[0]]
++    return {"name": method, "path": rel, "key": keys[0], "text": text, "body": f["annot"] + "\n" + f["raw"], "sha": sha, "abs": path}
+ 
+ 
+-def _redbase_read_one(rr, path, method):
+-    """一支判紅的測試 → 紅燈版素材 dict;不存的原因字串。病態輸入的判法跟比對工具對終點測試檔同一套(超長行、括號配不平)。"""
++def _redbase_parse_file(rr, path):
++    """一支測試檔 → (相對路徑, 文字, 位元組 sha256, 函式表) 或不存的原因字串。"""
+     import hashlib
+     import subprocess as _sp
+     try:
+         rel = path.resolve().relative_to(Path(rr).resolve()).as_posix()
+     except (OSError, ValueError):
+         return "測試檔不在 repo 根底下"
+     if not rel.endswith((".kt", ".java")):
+         return "不是 .kt 或 .java 檔"
+     try:
+         ign = _sp.run(["git", "-C", str(rr), "check-ignore", "-q", "--", rel], capture_output=True, timeout=30)
+@@ -14287,150 +14308,193 @@ def _redbase_read_one(rr, path, method):
+         return "讀不到測試檔"
+     try:
+         text = data.decode("utf-8")
+     except UnicodeDecodeError:
+         return "測試檔不是合法 UTF-8"
+     if _tg_has_long_line(text):
+         return f"測試檔有超過 {_TG_MAX_LINE_CHARS // 10000} 萬字的行"
+     fs, ok = _tg_functions(text, rel.endswith(".java"))
+     if not ok:
+         return "測試檔剝完字串與註解後括號配不平"
+-    keys = [k for k, f in fs.items() if f["name"] == method]
+-    if len(keys) != 1:
+-        return "切不出這支函式" if not keys else "同一支檔裡同名函式不只一個"
+-    f = fs[keys[0]]
+-    return {"name": method, "path": rel, "key": keys[0], "text": text, "body": f["annot"] + "\n" + f["raw"],
+-            "sha": hashlib.sha256(data).hexdigest(), "abs": path}
++    return rel, text, hashlib.sha256(data).hexdigest(), fs
+ 
+ 
+ def _redbase_note_green(rr, rel, greens):
+-    """判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的,記一筆 spec-gate-green(之後同一條分支再跑出紅,那支不存紅燈版)。"""
++    """判綠觀測:規格閘判出 Kotlin/Java 綁定測試是綠的,記一筆 spec-gate-green(之後同一條分支再跑出紅,那支不存紅燈版)。
++    tests 是測試名(給人看),items 是 (平台, 測試名)(判定用;兩個平台同名時只擋判綠的那個平台)。"""
+     if not greens:
+         return
+     gw = _gate_event(rr, "spec-gate", "spec-gate-green", f"規格閘判綠 {len(greens)} 支", nodes=[rel],
+-                     extra={"loop": _loop_id_for_plan(rel), "tests": sorted(greens)})
++                     extra={"loop": _loop_id_for_plan(rel), "tests": sorted({m_ for _p, m_ in greens}),
++                            "items": [list(x) for x in sorted(greens)]})
+     if gw is False:
+         print("[spec-gate] 判綠觀測寫不進治理帳:這幾支之後跑出紅仍會存紅燈版", file=sys.stderr)
+ 
+ 
+ def _redbase_branch_keep(d):
+     return isinstance(d, dict) and d.get("kind") in ("spec-gate-record", "spec-gate-green")
+ 
+ 
+ def _redbase_branch_rows(rr):
+-    """這條分支自己寫的規格閘留痕與判綠事件(工作目錄的治理帳減掉分岔點那一版;算不出分岔點就看整本)→ [dict,照帳序]。"""
++    """這條分支自己寫的規格閘留痕與判綠事件(工作目錄的治理帳減掉跟主線的分岔點那一版)→ [dict,照帳序]。
++    分岔點等於頂端(分支剛開、還沒有自己的提交)照樣減;只有直接在主線(main/master)或分離頂端上工作時才看整本帳——
++    比對工具的 _tg_start 把「分岔點等於頂端」當成推的就是主線,這裡的情境不同(代碼審 r1 正確性席 F8)。讀不出帳印一句。"""
+     import json as _json
+     head = _lens_full_sha(rr, "HEAD")
+-    fork = _tg_start(rr, None, head) if head else None
++    fork = None
++    if head:
++        fork = _lens_default_base(rr, tip=head, include_local=False) or _lens_default_base(rr, tip=head, include_local=True)
++        br = _lens_git(rr, "symbolic-ref", "--short", "-q", "HEAD")
++        name = br.stdout.strip() if br is not None and br.returncode == 0 else ""
++        if fork == head and name in ("", "main", "master"):
++            fork = None
+     _d, added, bad = _gov_rows_delta(rr, fork or _EMPTY_TREE_SHA, None, b'"spec-gate-', _redbase_branch_keep)
+     if bad:
++        print(f"[spec-gate] 讀不出{bad}那一版的治理帳:這次的判綠觀測與去重沒有作用", file=sys.stderr)
+         return []
+     out = []
+     for ln in added:
+         try:
+             d = _json.loads(ln.decode("utf-8"))
+         except (UnicodeDecodeError, ValueError, RecursionError):
+             continue
+         if _redbase_branch_keep(d):
+             out.append(d)
+     return out
+ 
+ 
+ def _redbase_write(rr, loop, token, caps, skipped, branch_rows):
+     """收到的素材 → 寫 governance/redbase/<迴圈>/<token>.json → ({"path", "sha256"} 或 None, 不存的清單)。
+-    這條分支上判綠過的不存;函式本體跟上一份紅燈版相同的不存;判紅後檔案又被改的不存;加進去會超過 5 MB 的不存。
+-    以 LF、UTF-8 位元組原子寫入,寫完讀回核對;寫不進去丟 OSError(呼叫端照舊寫留痕、不帶欄位)。"""
++    這條分支上判綠過的不存;函式本體跟上一份紅燈版相同的不存;判紅後檔案又被改的不存;JSON 跳脫後會超過 5 MB 的不存。
++    紅燈版資料夾逐層擋符號連結(_note_audit_safe_dir)、路徑被 git 忽略就不寫;以 LF、UTF-8 位元組原子寫入,寫完讀回核對;
++    寫不進去丟 OSError(呼叫端照舊寫留痕、不帶欄位)。"""
+     import hashlib
+     import json as _json
+     skipped = list(skipped)
+     greened, prev_body = _redbase_branch_state(rr, loop, branch_rows)
+-    tests, files, size = [], {}, 0
++    tests, files, size = [], {}, 256
+     for c in caps:
+         why = _redbase_cap_reason(c, greened, prev_body)
+-        add = 0 if c["path"] in files else len(c["text"].encode("utf-8")) + 64
+-        if why is None and size + add + 256 > _TG_MAX_BYTES:
+-            why = f"加進去會超過 {_TG_MAX_BYTES // 1_000_000} MB"
++        add = 0 if c["path"] in files else len(_json.dumps(c["text"], ensure_ascii=False).encode("utf-8")) + len(c["path"]) + 16
++        add += len(_json.dumps([c["name"], c["key"], c["path"], sorted(c["clauses"])], ensure_ascii=False).encode("utf-8")) + 64
++        if why is None and size + add > _TG_MAX_BYTES:
++            why = f"加進去會讓紅燈版超過 {_TG_MAX_BYTES // 1_000_000} MB(JSON 跳脫後)"
+         if why is not None:
+             skipped.append((c["name"], why))
+             continue
+         size += add
+         files[c["path"]] = c["text"]
+         tests.append({"name": c["name"], "clauses": sorted(c["clauses"], key=lambda x: (len(x), x)), "path": c["path"], "key": c["key"]})
+     if not tests:
+         return None, skipped
+-    data = (_json.dumps({"version": _RB_VERSION, "tests": tests, "files": files}, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
++    data = (_json.dumps({"version": _TG_RB_VERSION, "tests": tests, "files": files}, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
++    if len(data) > _TG_MAX_BYTES:
++        return None, skipped + [(t["name"], f"紅燈版超過 {_TG_MAX_BYTES // 1_000_000} MB") for t in tests]
+     safe = "".join(ch if (ch.isalnum() or ch in "-_.") and ord(ch) >= 32 else "_" for ch in str(loop)).strip(".") or "_"
+-    rel = f"{_RB_DIR}{safe}/{token}.json"
++    rel = f"{_TG_RB_DIR}{safe}/{token}.json"
++    why = _redbase_target_why(rr, f"{_TG_RB_DIR}{safe}", rel)
++    if why:
++        return None, skipped + [(t["name"], why) for t in tests]
+     target = Path(rr) / rel
+-    target.parent.mkdir(parents=True, exist_ok=True)
+     _write_bytes_atomic(target, data)
+     if target.read_bytes() != data:
+         raise OSError("寫完讀回對不上")
+     return {"path": rel, "sha256": hashlib.sha256(data).hexdigest()}, skipped
+ 
+ 
++def _redbase_target_why(rr, dir_rel, rel):
++    """紅燈版要寫的位置不能用的原因;能用回 None。資料夾逐層擋符號連結並建出來(共用 _note_audit_safe_dir),
++    路徑被 git 忽略(專案的 .gitignore 蓋到)時寫了也提交不進去。"""
++    import subprocess as _sp
++    _d, why = _note_audit_safe_dir(rr, dir_rel)
++    if why:
++        return f"紅燈版資料夾不能用:{why}"
++    try:
++        ign = _sp.run(["git", "-C", str(rr), "check-ignore", "-q", "--", rel], capture_output=True, timeout=30)
++    except (OSError, _sp.TimeoutExpired):
++        return "git 判不了紅燈版路徑有沒有被忽略"
++    if ign.returncode == 0:
++        return f"紅燈版路徑 {rel} 被 git 忽略,寫了也提交不進去(專案的 .gitignore 蓋到 {_TG_RB_DIR})"
++    return None
++
++
+ def _redbase_branch_state(rr, loop, branch_rows):
+-    """這條分支同一個迴圈的紀錄 → (判綠過的測試名 set, {(檔案路徑, 函式鍵): 上一份紅燈版的函式本體})。紅燈版讀工作目錄那份(可能還沒提交)。"""
+-    import json as _json
++    """這條分支同一個迴圈的紀錄 → (判綠過的 {(平台, 測試名)},舊事件沒有平台時記 (None, 測試名), {(檔案路徑, 函式鍵): 上一份紅燈版的函式本體})。
++    上一份紅燈版讀工作目錄那份(可能還沒提交):逐層擋符號連結、照留痕的 sha256 與格式驗過(共用比對工具的 _tg_rb_doc)才拿來去重。"""
+     greened, prev_body = set(), {}
+     for d in branch_rows:
+         if d.get("loop") != loop:
+             continue
+         if d.get("kind") == "spec-gate-green":
+-            greened.update(t for t in d.get("tests") or [] if isinstance(t, str))
+-            continue
+-        rb = d.get("redbase")
+-        path = rb.get("path") if isinstance(rb, dict) else None
+-        if not _tg_rb_path_ok(path):
++            items = d.get("items")
++            if isinstance(items, list):
++                greened.update(tuple(x) for x in items if isinstance(x, list) and len(x) == 2 and all(isinstance(y, str) for y in x))
++            else:
++                greened.update((None, t) for t in d.get("tests") or [] if isinstance(t, str))
+             continue
+-        try:
+-            doc = _json.loads((Path(rr) / path).read_bytes().decode("utf-8"))
+-        except (OSError, UnicodeDecodeError, ValueError, RecursionError):
++        doc = _redbase_prev_doc(rr, d.get("redbase"))
++        if doc is None:
+             continue
+-        tl = doc.get("tests") if isinstance(doc, dict) else None
+-        fl = doc.get("files") if isinstance(doc, dict) else None
+-        for t in tl if isinstance(tl, list) else []:
+-            got = _tg_rb_entry(t, fl if isinstance(fl, dict) else {})
++        for t in doc["tests"]:
++            got = _tg_rb_entry(t, doc["files"])
+             if not isinstance(got, str):
+                 prev_body[(got[0], got[1])] = got[2]["annot"] + "\n" + got[2]["raw"]
+     return greened, prev_body
+ 
+ 
++def _redbase_prev_doc(rr, rb):
++    """一筆留痕的 redbase 欄位 → 讀出、驗過的上一份紅燈版;路徑不合法、有符號連結、讀不到、驗不過回 None。"""
++    path = rb.get("path") if isinstance(rb, dict) else None
++    sha = rb.get("sha256") if isinstance(rb, dict) else None
++    if not _tg_rb_path_ok(path) or not isinstance(sha, str):
++        return None
++    try:
++        if _repo_path_unsafe(rr, path):
++            return None
++        data = (Path(rr) / path).read_bytes()
++    except OSError:
++        return None
++    doc = _tg_rb_doc(rr, path, sha, len(data), data)
++    return None if isinstance(doc, str) else doc
++
++
+ def _redbase_cap_reason(c, greened, prev_body):
+     """一份素材寫入前的三道:判綠過、本體跟上一份相同、判紅後檔案又被改 → 原因;都沒有回 None。"""
+     import hashlib
+-    if c["name"] in greened:
++    if (c.get("plat"), c["name"]) in greened or (None, c["name"]) in greened:
+         return "曾判綠(實作後補跑),不算實作前的版本"
+     if prev_body.get((c["path"], c["key"])) == c["body"]:
+         return "函式本體跟上一份紅燈版相同"
+     try:
+         now = c["abs"].read_bytes()
+     except OSError:
+         now = None
+     if now is None or hashlib.sha256(now).hexdigest() != c["sha"]:
+         return "判紅後檔案又被改"
+     return None
+ 
+ 
+ def _redbase_attach(rr, rec, redbase):
+-    """把紅燈版寫出來、欄位掛到留痕上(redbase、redbase_skipped、redbase_skipped_n),逐支印一句。寫不進去照舊留痕、不帶 redbase。"""
++    """把紅燈版寫出來、欄位掛到留痕上(redbase、redbase_skipped、redbase_skipped_n),逐支印一句。寫不進去照舊留痕、不帶 redbase。
++    不存的清單「判綠」排最後:上限 20 筆時真正要看的原因不被判綠擠掉(代碼審 r1 正確性席 F6)。"""
+     caps, skipped, _greens = redbase
+     field = None
+     if caps:
+         try:
+             field, skipped = _redbase_write(rr, rec["loop"], rec["token"], caps, skipped, _redbase_branch_rows(rr))
+         except OSError as e:
+             print(f"[spec-gate] 紅燈版寫不進去({e}),這次沒有紅燈版可比", file=sys.stderr)
+     if field:
+         rec["redbase"] = field
+-        print(f"[spec-gate] 紅燈版: 存在 {field['path']}(推送時新測試拿它當改動前版本比)")
++        print(f"[spec-gate] 紅燈版: 存在 {field['path']}(推送時新測試拿它當改動前版本比;存的是整支測試檔,檔裡其他內容也會跟著提交)")
+     if skipped:
++        skipped = sorted(skipped, key=lambda x: x[1] == "判綠")
+         rec["redbase_skipped"] = [{"name": n, "reason": r_} for n, r_ in skipped[:20]]
+         rec["redbase_skipped_n"] = len(skipped)
+         for n, r_ in skipped[:20]:
+             print(f"[spec-gate] 紅燈版: 沒存 {_out_clean(n, 120)}({r_})")
+ 
+ 
+ def _spec_gate_print_rejections(env):
+     """舊否決提醒(Projects/否決提案收齊查重_計劃 S4):只印不擋。收集碼出任何錯都只印略過原因——提醒壞掉不准改判定或回傳碼。"""
+     try:
+         n = len(_rejections_collect(env))
+@@ -49303,37 +49367,38 @@ def _tg_changes(root, base, head, deadline=None):
+                 good = False
+         if n_paths == 2:
+             old, new = paths
+         else:
+             old, new = (None if st == "A" else paths[0]), (None if st == "D" else paths[0])
+         out.append((st, old, new, None if st == "D" else new_sha, good))
+         i += 1 + n_paths
+     return out
+ 
+ 
+-def _tg_read(root, base, head, items, deadline=None):
++def _tg_read(root, base, head, items, deadline=None, max_total=None):
+     """[(改動前路徑, 改動後路徑)] → {(side, path): 文字 | 'TOOLARGE' | 'UNREADABLE'}(那一端沒有就不在表裡)。
+     批次讀(_nodehome_cat_blobs_capped:先問大小再讀內容),單檔上限、總量上限都在這一層;不是 UTF-8 的內容照換字元讀。
+     批次讀取本身失敗回 None。測試檔的單行上限在 _tg_analyze(要知道檔類,只套測試檔)。"""
+     specs, slots = [], []
+     for old, new in items:
+         for side, rev, path in (("base", base, old), ("head", head, new)):
+             if path and rev != _EMPTY_TREE_SHA:
+                 specs.append(f"{rev}:{path}")
+                 slots.append((side, path))
+     res = {}
+     if not specs:
+         return res
+     sizes = _nodehome_cat_sizes(root, specs, max(1, int(_git_timeout(deadline, cap=60))))
+     blobs = None
+     if sizes is not None:
+-        blobs = _nodehome_cat_blobs_capped(root, specs, _TG_MAX_BYTES, deadline=deadline, sizes=sizes, max_total_bytes=_TG_MAX_TOTAL)
++        blobs = _nodehome_cat_blobs_capped(root, specs, _TG_MAX_BYTES, deadline=deadline, sizes=sizes,
++                                           max_total_bytes=_TG_MAX_TOTAL if max_total is None else max_total)
+     if sizes is None or blobs is None:
+         return None                 # 批次讀取本身失敗(逾時或 git 跑不動):整次比對沒跑完,由呼叫端記成錯誤
+     for i, slot in enumerate(slots):
+         if sizes[i] is None:
+             res[slot] = "UNREADABLE"
+         elif sizes[i] > _TG_MAX_BYTES or blobs[i] is None:
+             res[slot] = "TOOLARGE"
+         else:
+             t = blobs[i].decode("utf-8", "replace")
+             res[slot] = "TOOLARGE" if t.count("\n") >= _TG_MAX_LINES else t
+@@ -49540,23 +49605,23 @@ def _tg_fn_cands(path, k, f, prev, kt):
+             seen[c] = seen.get(c, 0) + 1          # 同一條改動出現第二次,指紋不同(放行一條不會順帶放掉另一條)
+             out.append(_tg_cand("tq/expected-changed", path, f["start"], f"{k}\x00{c}", seen[c]))
+     ol = [_tg_norm(x) for x in (prev["annot"] + "\n" + prev["raw"]).split("\n")]
+     nl = [_tg_norm(x) for x in (f["annot"] + "\n" + f["raw"]).split("\n")]
+     out += [_tg_cand("tq/timeout-raised", path, f["start"], f"{k}\x00{line}") for line in _tg_timeout_raised(ol, nl)]
+     return out
+ 
+ 
+ # ── 規格閘紅燈版(Projects/規格閘紅燈測試快照_計劃):規格閘判紅那一刻存下的測試內容,推送時當新測試的改動前版本 ──
+ # 寫入端在規格閘(_redbase_collect、_redbase_write),讀取端在這裡;格式的單一來源是 Systems/規格閘。
+-_RB_DIR = "governance/redbase/"
+-_RB_VERSION = 1
+-_RB_SHA_RE = re.compile(r"[0-9a-f]{64}")
++_TG_RB_DIR = "governance/redbase/"
++_TG_RB_VERSION = 1
++_TG_RB_SHA_RE = re.compile(r"[0-9a-f]{64}")
+ 
+ 
+ def _tg_redbase_keep(d):
+     """規格閘留痕裡帶紅燈版欄位的那種列(讀不出的不算:沒有欄位可讀)。"""
+     return isinstance(d, dict) and d.get("kind") == "spec-gate-record" and "redbase" in d
+ 
+ 
+ def _tg_redbase_records(root, base, head, deadline=None):
+     """這條分支自己寫的紅燈版留痕(起點那一版的治理帳沒有、終點那一版有的列)→ ([留痕 dict,照終點治理帳行序], None);
+     git 讀不出 → (None, 原因)。兩版的讀法與行差走 _gov_rows_delta(跟殘留問答同一份);起點那一版沒有帳檔當成空。
+@@ -49571,190 +49636,232 @@ def _tg_redbase_records(root, base, head, deadline=None):
+             d = _json.loads(ln.decode("utf-8"))
+         except (UnicodeDecodeError, ValueError, RecursionError):
+             continue
+         if _tg_redbase_keep(d):
+             out.append(d)
+     return out, None
+ 
+ 
+ def _tg_rb_path_ok(path):
+     """紅燈版路徑只收 governance/redbase/ 底下的 .json:不准 ..、反斜線、控制字元、空的一段(欄位亂寫不會讓工具讀 repo 外的檔)。"""
+-    if not isinstance(path, str) or not path.startswith(_RB_DIR) or not path.endswith(".json"):
++    if not isinstance(path, str) or not path.startswith(_TG_RB_DIR) or not path.endswith(".json"):
+         return False
+     parts = path.split("/")
+     return all(x and x not in (".", "..") for x in parts) and "\\" not in path and not any(ord(ch) < 32 for ch in path)
+ 
+ 
+ def _tg_rb_bad(tok, file, reason):
+     """一條 tq/redbase-unreadable(擋下、可放行;不當成沒有紅燈版)。"""
+     return _tg_cand("tq/redbase-unreadable", file, 0, f"{tok}\x00{file}\x00{reason}", extra=f"規格閘紅燈版 {tok}:{reason}")
+ 
+ 
+ def _tg_redbase_cands(root, base, head, ch, test_files, consumed, deadline=None):
+-    """規格閘紅燈版那一段 → (候選, 錯誤訊息或 None)。治理帳與紅燈版資料夾都沒動就什麼都不讀(行為跟沒有這段時逐字相同);
+-    起點是空樹(找不到主線)不用紅燈版、印一句。consumed:這次推送比對工具已讀的內容位元組數(算進 _TG_MAX_TOTAL)。"""
+-    touched = any(p == GOV_LOG_REL or (p or "").startswith(_RB_DIR) for _st, o, n, _s, _g in ch for p in (o, n))
+-    if not touched:
+-        return [], None
++    """規格閘紅燈版那一段 → (候選, 錯誤訊息或 None)。治理帳與紅燈版資料夾都沒動、工作目錄也沒有還沒提交的紅燈版,就什麼都不讀
++    (行為跟沒有這段時逐字相同);起點是空樹(找不到主線)不用紅燈版(新增告警閘本來就對空樹起點印一句、只印不擋)。
++    consumed:這次推送比對工具已讀的內容位元組數(紅燈版與補讀的測試檔都算進 _TG_MAX_TOTAL)。"""
++    pending = _tg_rb_pending(root, head)
++    touched = any(p == GOV_LOG_REL or (p or "").startswith(_TG_RB_DIR) for _st, o, n, _s, _g in ch for p in (o, n))
+     if base == _EMPTY_TREE_SHA:
+-        print("test-guard:起點是空樹(找不到主線),這次不用規格閘紅燈版", file=sys.stderr)
+         return [], None
+-    recs, err = _tg_redbase_records(root, base, head, deadline)
++    recs, err = _tg_redbase_records(root, base, head, deadline) if touched else ([], None)
+     if recs is None:
+         return None, err
+     metas, out = _tg_rb_metas(recs, ch)
++    referenced = {p for _t, p, _s in metas}
++    out += [_tg_rb_bad("?", p, "工作目錄有還沒提交的紅燈版檔:請 git add 那支檔與 docs/.governance-log.jsonl 一起提交")
++            for p in sorted(pending - referenced)]
+     snaps, bad, err = _tg_rb_load(root, head, metas, consumed, deadline)
+     if err:
+         return None, err
+-    more, err = _tg_rb_compare(root, base, head, snaps, test_files, deadline)
++    more, err = _tg_rb_compare(root, base, head, snaps, test_files, consumed, deadline)
+     if err:
+         return None, err
+     return out + bad + more, None
+ 
+ 
++def _tg_rb_pending(root, head):
++    """推的就是工作目錄的頂端時,紅燈版資料夾裡還沒提交的檔(沒追蹤或只加進暫存區)→ 路徑 set;其他情況(推別的提交、CI 的乾淨 clone)回空。
++    治理帳與紅燈版都忘了提交時,改動清單裡兩樣都沒有,不看這裡就整段靜默略過(代碼審 r1 資安席 S3)。"""
++    if head != _lens_full_sha(root, "HEAD"):
++        return set()
++    r = _lens_git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", _TG_RB_DIR, binary=True)
++    if r is None or r.returncode != 0:
++        return set()
++    out = set()
++    for ent in r.stdout.split(b"\0"):
++        if len(ent) > 3 and (ent[:2] == b"??" or ent[:1] == b"A"):
++            path = ent[3:].decode("utf-8", "replace")
++            if path.startswith(_TG_RB_DIR):
++                out.add(path)
++    return out
++
++
+ def _tg_rb_metas(recs, ch):
+     """留痕 → ([(token, 紅燈版路徑, sha256)], 欄位壞掉與孤兒檔的候選)。孤兒檔:這次新增在紅燈版資料夾、卻沒有任何留痕指到的檔。"""
+     out, metas, referenced = [], [], set()
+     for rec in recs:
+         tok = _out_clean(str(rec.get("token") or "?"), 40)
+         rb = rec.get("redbase")
+         path = rb.get("path") if isinstance(rb, dict) else None
+         sha = rb.get("sha256") if isinstance(rb, dict) else None
+-        if not isinstance(path, str) or not isinstance(sha, str) or not _RB_SHA_RE.fullmatch(sha):
++        if not isinstance(path, str) or not isinstance(sha, str) or not _TG_RB_SHA_RE.fullmatch(sha):
+             out.append(_tg_rb_bad(tok, GOV_LOG_REL, "留痕的 redbase 欄位形狀不對(要有 path 字串與 64 位十六進位的 sha256)"))
+         elif not _tg_rb_path_ok(path):
+-            out.append(_tg_rb_bad(tok, GOV_LOG_REL, f"紅燈版路徑 {_out_clean(path, 200)} 不在 {_RB_DIR} 底下或不是 .json"))
++            out.append(_tg_rb_bad(tok, GOV_LOG_REL, f"紅燈版路徑 {_out_clean(path, 200)} 不在 {_TG_RB_DIR} 底下或不是 .json"))
+         else:
+             referenced.add(path)
+             metas.append((tok, path, sha))
+     for st, _o, n, _s, _g in ch:
+-        if st == "A" and n and n.startswith(_RB_DIR) and n not in referenced:
+-            out.append(_tg_rb_bad("?", n, "這支紅燈版檔沒有任何規格閘留痕指到它(孤兒檔)"))
++        if st == "A" and n and n.startswith(_TG_RB_DIR) and n not in referenced:
++            out.append(_tg_rb_bad("?", n, "這支紅燈版檔沒有任何規格閘留痕指到它(孤兒檔):刪掉它,或把指到它的那筆留痕一起提交"))
+     return metas, out
+ 
+ 
+ def _tg_rb_load(root, head, metas, consumed, deadline=None):
+     """[(token, 路徑, sha256)] → ({(測試檔路徑, 函式鍵): [紅燈版,照留痕順序]}, 讀不到的候選, 錯誤訊息或 None)。
+     從終點那一版批次讀(_nodehome_cat_blobs_capped,單檔 5 MB、跟這次推送已讀的合計不超過 200 MB),不讀工作目錄。"""
+     if not metas:
+         return {}, [], None
+     specs = [f"{head}:{p}" for _t, p, _s in metas]
+     sizes = _nodehome_cat_sizes(root, specs, max(1, int(_git_timeout(deadline, cap=60))))
+     blobs = None
+     if sizes is not None:
+         blobs = _nodehome_cat_blobs_capped(root, specs, _TG_MAX_BYTES, deadline=deadline, sizes=sizes,
+                                            max_total_bytes=max(0, _TG_MAX_TOTAL - consumed))
+     if sizes is None or blobs is None:
+         return None, None, "git 讀不出規格閘紅燈版(逾時或 git 跑不動)"
+-    snaps, bad = {}, []
++    snaps, bad, cache = {}, [], {}
+     for i, (tok, path, sha) in enumerate(metas):
++        if deadline is not None and _git_timeout(deadline) <= 0:
++            raise TimeoutError("比對工具超過截止時間")
+         doc = _tg_rb_doc(root, path, sha, sizes[i], blobs[i])
+         if isinstance(doc, str):
+             bad.append(_tg_rb_bad(tok, path, doc))
+             continue
+         for t in doc["tests"]:
+-            got = _tg_rb_entry(t, doc["files"])
++            got = _tg_rb_entry(t, doc["files"], cache)
+             if isinstance(got, str):
+                 bad.append(_tg_rb_bad(tok, path, got))
+                 continue
+             tpath, key, fn, kt, name, clauses = got
+             snaps.setdefault((tpath, key), []).append({"tok": tok, "fn": fn, "kt": kt, "name": name, "clauses": clauses})
+     return snaps, bad, None
+ 
+ 
+ def _tg_rb_doc(root, path, sha, size, blob):
+     """一份紅燈版的大小與內容 → 讀出的 dict(version、tests 清單、files 物件都驗過);不能用回原因字串。"""
+     import hashlib
+     import json as _json
+     if size is None:
+-        return ("推送版沒有這支紅燈版檔:還沒提交,請 git add 那支檔" if (Path(root) / path).is_file()
++        return ("推送版沒有這支紅燈版檔:還沒提交,請 git add 那支檔並提交(被 .gitignore 蓋到時用 git add -f)" if (Path(root) / path).is_file()
+                 else "推送版沒有這支紅燈版檔:被刪了,請從版本紀錄還原")
+     if size > _TG_MAX_BYTES:
+         return f"紅燈版檔超過 {_TG_MAX_BYTES // 1_000_000} MB"
+     if blob is None:
+         return f"加進去會超過這次推送 {_TG_MAX_TOTAL // 1_000_000} MB 的總量"
+     if hashlib.sha256(blob).hexdigest() != sha:
+         return "內容的 sha256 對不上留痕(被改過)"
+     try:
+         doc = _json.loads(blob.decode("utf-8"))
+     except (UnicodeDecodeError, ValueError, RecursionError):
+         return "不是合法的 JSON"
+-    if not isinstance(doc, dict) or doc.get("version") != _RB_VERSION:
+-        return f"格式版本不認得(只認 {_RB_VERSION})"
++    if not isinstance(doc, dict) or doc.get("version") != _TG_RB_VERSION:
++        return f"格式版本不認得(只認 {_TG_RB_VERSION})"
+     if not isinstance(doc.get("tests"), list) or not isinstance(doc.get("files"), dict):
+         return "tests 或 files 的形狀不對"
+     return doc
+ 
+ 
+-def _tg_rb_entry(t, files):
++def _tg_rb_entry(t, files, cache=None):
+     """紅燈版裡的一列 → (測試檔路徑, 函式鍵, 函式, 斷言訊息在後, 測試名, 條款清單);形狀不對或內嵌文字過不了病態輸入處理回原因字串。
+-    內嵌文字跟 _tg_analyze 對終點測試檔一樣:有超長行、括號配不平就不比。"""
++    內嵌文字跟 _tg_analyze 對終點測試檔一樣:有超長行、括號配不平就不比。測試檔路徑只收 repo 相對的 .kt/.java(不准 ..、反斜線、
++    控制字元、開頭的 /)。cache:{(路徑, 文字): 切函式的結果},同一份檔很多支測試時只切一次(代碼審 r1 正確性席 F4)。"""
+     if not isinstance(t, dict):
+         return "tests 裡有一列不是物件"
+     tpath, key, name, clauses = t.get("path"), t.get("key"), t.get("name"), t.get("clauses")
+     if not all(isinstance(x, str) and x for x in (tpath, key, name)) or not isinstance(clauses, list):
+         return "tests 裡有一列缺測試名、路徑、函式鍵或條款清單"
++    parts = tpath.split("/")
++    if (not tpath.endswith((".kt", ".java")) or tpath.startswith("/") or "\\" in tpath
++            or any(x in ("", ".", "..") for x in parts) or any(ord(ch) < 32 for ch in tpath)):
++        return f"內嵌的測試檔路徑 {_out_clean(tpath, 200)} 不合法(要 repo 相對的 .kt 或 .java)"
+     text = files.get(tpath)
+     if not isinstance(text, str):
+         return f"files 裡沒有 {_out_clean(tpath, 200)} 的內容"
+-    if _tg_has_long_line(text):
+-        return f"內嵌的 {_out_clean(tpath, 200)} 有一行超過 {_TG_MAX_LINE_CHARS} 字"
+-    fs, ok = _tg_functions(text, tpath.endswith(".java"))
+-    if not ok:
+-        return f"內嵌的 {_out_clean(tpath, 200)} 括號配不平"
++    cache = {} if cache is None else cache
++    ck = (tpath, text)
++    if ck not in cache:
++        if _tg_has_long_line(text):
++            cache[ck] = f"內嵌的 {_out_clean(tpath, 200)} 有一行超過 {_TG_MAX_LINE_CHARS} 字"
++        else:
++            fs, ok = _tg_functions(text, tpath.endswith(".java"))
++            cache[ck] = (fs, bool(_TG_MSG_LAST_RE.search(text))) if ok else f"內嵌的 {_out_clean(tpath, 200)} 括號配不平"
++    got = cache[ck]
++    if isinstance(got, str):
++        return got
++    fs, kt = got
+     fn = fs.get(key)
+     if fn is None:
+         return f"內嵌的 {_out_clean(tpath, 200)} 裡找不到 {_out_clean(key, 200)}"
+-    return tpath, key, fn, bool(_TG_MSG_LAST_RE.search(text)), name, [str(c) for c in clauses]
++    return tpath, key, fn, kt, name, [str(c) for c in clauses]
+ 
+ 
+-def _tg_rb_compare(root, base, head, snaps, test_files, deadline=None):
++def _tg_rb_compare(root, base, head, snaps, test_files, consumed=0, deadline=None):
+     """每支有紅燈版的測試:分岔點已有就不看;推送版找得到(同路徑,或改動清單裡唯一一處同函式鍵)就把歷次紅燈版依序兩兩比、
+-    最後一份跟推送版比,命中列 tq/redbase-weakened;找不到、不只一處、有同名多載列 tq/redbase-unmatched。→ (候選, 錯誤或 None)。"""
++    最後一份跟推送版比,命中列 tq/redbase-weakened;找不到、不只一處、有同名多載、那支檔讀不出或配不平列 tq/redbase-unmatched。
++    → (候選, 錯誤或 None)。"""
+     by_path = {p: (fb, fh, kt) for p, _b, _h, fb, fh, kt in test_files}
+-    err = _tg_rb_fill(root, base, head, by_path, sorted({p for p, _k in snaps if p not in by_path}), deadline)
++    err = _tg_rb_fill(root, base, head, by_path, sorted({p for p, _k in snaps if p not in by_path}), consumed, deadline)
+     if err:
+         return None, err
+     out = []
+     for (p, k), lst in snaps.items():
+         if deadline is not None and _git_timeout(deadline) <= 0:
+             raise TimeoutError("比對工具超過截止時間")
++        if isinstance(by_path[p], str):
++            out.append(_tg_rb_unmatched(lst[-1], p, k, by_path[p]))
++            continue
+         if k in by_path[p][0]:
+             continue                                   # 分岔點就有:照舊拿分岔點當前一版
+         where = _tg_rb_locate(p, k, by_path)
+         if isinstance(where, str):
+             out.append(_tg_rb_unmatched(lst[-1], p, k, where))
+             continue
+         out += _tg_rb_chain(lst, k, *where)
+     return out, None
+ 
+ 
+-def _tg_rb_fill(root, base, head, by_path, need, deadline=None):
+-    """紅燈版記到、但不在這次改動清單裡的測試檔:讀兩端、切函式補進 by_path;讀不出回原因,讀得出回 None。"""
++def _tg_rb_fill(root, base, head, by_path, need, consumed=0, deadline=None):
++    """紅燈版記到、但不在這次改動清單裡的測試檔:讀兩端(算進這次推送的總量)、照 _tg_analyze 對測試檔的同一套前置處理
++    (超長行抹掉、括號配不平不切)補進 by_path;那支檔讀不出、太大或配不平時 by_path 放原因字串。git 讀不出回原因,讀得出回 None。"""
+     if not need:
+         return None
+-    text = _tg_read(root, base, head, [(p, p) for p in need], deadline)
++    text = _tg_read(root, base, head, [(p, p) for p in need], deadline, max_total=max(0, _TG_MAX_TOTAL - consumed))
+     if text is None:
+         return "git 讀不出紅燈版記的測試檔(逾時或 git 跑不動)"
+     for p in need:
+-        sides = []
+-        for side in ("base", "head"):
+-            t = text.get((side, p), "")
+-            sides.append(_tg_functions(t, p.endswith(".java"))[0] if t and t not in ("TOOLARGE", "UNREADABLE") else {})
+-        by_path[p] = (sides[0], sides[1], bool(_TG_MSG_LAST_RE.search(text.get(("head", p), "") or "")))
++        b, h = text.get(("base", p), ""), text.get(("head", p), "")
++        if "TOOLARGE" in (b, h) or "UNREADABLE" in (b, h):
++            by_path[p] = "推送版這支測試檔太大或讀不出,沒比"
++            continue
++        b, h = _tg_blank_long_lines(b), _tg_blank_long_lines(h)
++        fb, okb = _tg_functions(b, p.endswith(".java")) if b else ({}, True)
++        fh, okh = _tg_functions(h, p.endswith(".java")) if h else ({}, True)
++        by_path[p] = (fb, fh, bool(_TG_MSG_LAST_RE.search(h + "\n" + b))) if okb and okh else "推送版這支測試檔括號配不平,沒比"
+     return None
+ 
+ 
+ def _tg_rb_locate(p, k, by_path):
+     """推送版裡紅燈版那支測試在哪 → (檔案路徑, 函式表, 斷言訊息在後);找不到、不只一處、有同名多載回原因字串。"""
+     fh, kt = by_path[p][1], by_path[p][2]
+-    found = [(p, fh, kt)] if k in fh else [(p2, e[1], e[2]) for p2, e in by_path.items() if p2 != p and k in e[1] and k not in e[0]]
++    found = [(p, fh, kt)] if k in fh else [(p2, e[1], e[2]) for p2, e in by_path.items()
++                                           if p2 != p and not isinstance(e, str) and k in e[1] and k not in e[0]]
+     if len(found) != 1:
+         return "推送版找不到這支測試(被刪或改名)" if not found else "推送版有不只一處同類別同名的測試"
+     if any(x.startswith(k + "#") for x in found[0][1]):
+         return "推送版有同名多載,不猜是哪一支"
+     return found[0]
+ 
+ 
+ def _tg_rb_chain(lst, k, tp, tfh, tkt):
+     """歷次紅燈版依序兩兩比、最後一份跟推送版比 → tq/redbase-weakened 候選。推送版沒有斷言不比(分岔點那邊已列 tq/no-assertion)。"""
+     f = tfh[k]
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9acacaf91a1369b6a9d05c1f6baf5b2a41888aef..eb247debc04da11c370e569eb7a927e6e81e47f8 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -122566,21 +122566,21 @@ def _rb_push(commit, test_body, snaps, files=None, ledger_extra=(), omit=()):
+         lines.append(line)
+     tree["docs/.governance-log.jsonl"] = "\n".join(lines + list(ledger_extra)) + "\n"
+     tree.update(files or {})
+     return commit(tree)
+ 
+ 
+ def _rb_only(cands, prefix="tq/redbase"):
+     return [c for c in cands if c["rule"].startswith(prefix)]
+ 
+ 
+-def t_tg_redbase_weakened():
++def t_tq_guard_redbase_weakened():
+     """[S2] 分岔點沒有、紅燈版有的新測試,拿紅燈版當前一版:改 expected、放寬斷言、新加 expected=、調大逾時要列 tq/redbase-weakened;
+     一字未改、只改被測參數、只改正式程式、expected 與被測呼叫同時改(這一批不比)不列;新測試帶 @Ignore 只列 tq/skip-added 一條;
+     終點沒斷言只列 tq/no-assertion 一條。翻紅釘:紅燈版沒當前一版、丟 no-assertion 的過濾拿掉、終點無斷言不跳過 → 紅。"""
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+ 
+     def case(body, files=None, red_text=red):
+         root, mb, commit = _rb_repo()
+         h = _rb_push(commit, body, [_rb_snap("SPEC-aaaa0001", red_text)], files=files)
+         return _tqg_cands(root, mb, h)
+     c0 = case(_rb_fn("        assertEquals(900, checkout(1000))"))
+@@ -122605,43 +122605,49 @@ def t_tg_redbase_weakened():
+     cs = case(_rb_fn("        assertEquals(900, checkout(1000))", ann="@Ignore\n    @Test"))
+     check("S2 新測試帶 @Ignore:只列 tq/skip-added 一條", [c["rule"] for c in cs] == ["tq/skip-added"], cs)
+     cs = case(_rb_fn("        checkout(1000)"))
+     check("S2 終點沒有斷言:只列 tq/no-assertion 一條", [c["rule"] for c in cs] == ["tq/no-assertion"], cs)
+     cs = case(_rb_fn("        try { assertEquals(900, checkout(1000)) } catch (e: AssertionError) { }"))
+     check("S2 推送版 catch 吞斷言:只列分岔點那條 tq/catch-no-fail,紅燈版不重複列",
+           [c["rule"] for c in cs].count("tq/catch-no-fail") == 1 and not any("吞" in c["message"] or "catch" in c["message"]
+                                                                           for c in cs if c["rule"] == "tq/redbase-weakened"), cs)
+ 
+ 
+-def t_tg_redbase_chain():
++def t_tq_guard_redbase_chain():
+     """[S3] 同一支測試有好幾份紅燈版時照治理帳行序依序兩兩比、最後一份跟終點比:骨架→900→終點 800 要列;900→800(仍紅)→終點 800 要列;
+     兩份的 ts 寫反照行序判。只有骨架一份、終點補上斷言時不列(天花板)。翻紅釘:只取最早一份、改照 ts 排、只比最後一份 → 紅。"""
+     sk = _tqg_kt(_RB_OTHER, _rb_fn("        TODO()"))
+     r900 = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+     r800 = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(800, checkout(1000))"))
+     tip = _rb_fn("        assertEquals(800, checkout(1000))")
+ 
+     def case(snaps):
+         root, mb, commit = _rb_repo()
+         return _rb_only(_tqg_cands(root, mb, _rb_push(commit, tip, snaps)))
+     cs = case([_rb_snap("SPEC-c0000001", sk), _rb_snap("SPEC-c0000002", r900)])
+     check("S3 骨架→900→終點 800 要列", any(c["rule"] == "tq/redbase-weakened" and "SPEC-c0000002" in c["message"] for c in cs), cs)
+     cs = case([_rb_snap("SPEC-c0000003", r900), _rb_snap("SPEC-c0000004", r800)])
+     check("S3 900→800(仍紅)→終點 800 要列", any(c["rule"] == "tq/redbase-weakened" and "SPEC-c0000003" in c["message"] for c in cs), cs)
+     cs = case([_rb_snap("SPEC-c0000005", r900, ts="2026-11-03T12:00:00+08:00"),
+                _rb_snap("SPEC-c0000006", r800, ts="2026-11-03T09:00:00+08:00")])
+-    check("S3 兩份 ts 寫反照行序判,照樣列", any(c["rule"] == "tq/redbase-weakened" for c in cs), cs)
++    check("S3 兩份 ts 寫反照行序判:只有第一份→第二份那一步命中(照 ts 排會多出第二份→第一份)",
++          sorted({c["message"].split("相對規格閘紅燈版 ", 1)[-1].split(" ", 1)[0] for c in cs}) == ["SPEC-c0000005"], cs)
+     cs = case([_rb_snap("SPEC-c0000007", sk)])
+     check("S3 天花板:只有骨架一份、終點補斷言不列", cs == [], cs)
++    m = _tqg_module()
++    cs = case([_rb_snap("SPEC-c0000008", r900), _rb_snap("SPEC-c0000009", sk)])
++    nowhy = m._TG_WHY["tq/no-assertion"][0]
++    check("S3 中間一份紅燈版沒有斷言:那一步不把「沒有斷言」列成紅燈版候選(分岔點那條負責)",
++          cs and not any(nowhy in c["message"] for c in cs), cs)
+ 
+ 
+-def t_tg_redbase_unreadable():
++def t_tq_guard_redbase_unreadable():
+     """[S4] 欄位形狀錯、路徑出界、終點沒有那支檔(工作目錄有→講 git add)、不是 JSON、version 不認得、sha256 不符、
+     內嵌檔過不了病態輸入處理、超過總量、孤兒檔 → 各列一條 tq/redbase-unreadable(不當成沒有紅燈版)。
+     翻紅釘:任一條驗證拿掉、孤兒檔不查、沒提交當成沒有紅燈版 → 紅。"""
+     m = _tqg_module()
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+     body = _rb_fn("        assertEquals(800, checkout(1000))")
+ 
+     def case(snap, omit=(), files=None, worktree=None):
+         root, mb, commit = _rb_repo()
+         h = _rb_push(commit, body, [snap], files=files, omit=omit)
+@@ -122660,38 +122666,57 @@ def t_tg_redbase_unreadable():
+     for label, snap, why in variants:
+         cs = case(snap)
+         check(f"S4 {label}要列 tq/redbase-unreadable 並講原因", cs and {c["rule"] for c in cs} == {"tq/redbase-unreadable"}
+               and any(why in c["message"] for c in cs), cs)
+     rel, data, line = _rb_snap("SPEC-d0000006", red)
+     cs = case((rel, data.replace(b"900", b"901"), line))
+     check("S4 sha256 對不上要列", [c["rule"] for c in cs] == ["tq/redbase-unreadable"], cs)
+     rel, data, line = _rb_snap("SPEC-d0000007", red)
+     cs = case((rel, data, line), omit=(rel,), worktree={rel: data})
+     check("S4 終點沒有、工作目錄有:列且講 git add", cs and cs[0]["rule"] == "tq/redbase-unreadable" and "git add" in cs[0]["message"], cs)
++    check("S4 還沒提交的救法講到要提交、被忽略時用 -f", bool(cs) and "提交" in cs[0]["message"] and "-f" in cs[0]["message"], cs)
+     cs = case((rel, data, line), omit=(rel,))
+     check("S4 終點與工作目錄都沒有:列且講還原", cs and cs[0]["rule"] == "tq/redbase-unreadable" and "還原" in cs[0]["message"], cs)
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, body, [], files={"governance/redbase/甲/SPEC-d0000008.json": data})
+     cs = _rb_only(_tqg_cands(root, mb, h))
+-    check("S4 孤兒檔(沒有留痕指到)要列", [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "留痕" in cs[0]["message"], cs)
++    check("S4 孤兒檔(沒有留痕指到)要列、救法講刪掉", [c["rule"] for c in cs] == ["tq/redbase-unreadable"]
++          and "留痕" in cs[0]["message"] and "刪掉" in cs[0]["message"], cs)
++    for bad in ("governance/redbase/../x.json", "governance/redbase/a\\b.json", "governance/redbase/a\x01.json",
++                "governance/redbase//x.json", "governance/redbase/x.txt"):
++        check(f"S4 紅燈版路徑 {bad!r} 不收", not m._tg_rb_path_ok(bad), bad)
++    check("★前置★ 合法路徑收", m._tg_rb_path_ok("governance/redbase/甲/SPEC-x.json"), "")
++    cs = case(_rb_snap("SPEC-d0000011", red, path="../escape.kt"))
++    check("S4 紅燈版內嵌的測試檔路徑出界:列 unreadable", cs and {c["rule"] for c in cs} == {"tq/redbase-unreadable"}
++          and any("路徑" in c["message"] for c in cs), cs)
++    # 治理帳與紅燈版都沒提交(工作目錄有):照樣列,不靜默
++    root, mb, commit = _rb_repo()
++    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, body)})
++    rel12, data12, line12 = _rb_snap("SPEC-d0000012", red)
++    (root / rel12).parent.mkdir(parents=True, exist_ok=True)
++    (root / rel12).write_bytes(data12)
++    (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n" + line12 + "\n", encoding="utf-8")
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    check("S4 治理帳與紅燈版都還沒提交(推的就是工作目錄的頂端):列 unreadable 講還沒提交",
++          [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "還沒提交" in cs[0]["message"], cs)
+     snap9 = _rb_snap("SPEC-d0000009", red)
+     tf = len(_tqg_kt(_RB_OTHER).encode("utf-8")) + len(_tqg_kt(_RB_OTHER, body).encode("utf-8"))
+     saved = m._TG_MAX_TOTAL
+     m._TG_MAX_TOTAL = tf + len(snap9[1]) // 2
+     try:
+         cs = case(snap9)
+     finally:
+         m._TG_MAX_TOTAL = saved
+     check("S4 加進去超過推送總量要列", [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "總量" in cs[0]["message"], cs)
+ 
+ 
+-def t_tg_redbase_moved_or_missing():
++def t_tq_guard_redbase_moved_or_missing():
+     """[S5] 搬家後函式鍵在改動清單的測試檔裡唯一 → 照比;刪掉、整支新測試檔先加後刪、終點有同名多載、搬到兩處 → tq/redbase-unmatched
+     (原因寫 token、測試名、條款編號);那支測試在分岔點就已存在時不看紅燈版。翻紅釘:找不到時當成沒有紅燈版、多載照猜、
+     分岔點已有仍套紅燈版 → 紅。"""
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+     snap = _rb_snap("SPEC-e0000001", red, clauses=("S3",))
+     moved = "package y\nimport org.junit.Test\nclass CalcTest {\n" + _rb_fn("        assertEquals(800, checkout(1000))") + "}\n"
+     root, mb, commit = _rb_repo()
+     cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [snap], files={"app/src/test/java/y/CalcTest.kt": moved})))
+     check("S5 搬到別的檔、函式鍵唯一:照比、改 expected 照列", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+     root, mb, commit = _rb_repo()
+@@ -122705,29 +122730,36 @@ def t_tg_redbase_moved_or_missing():
+     cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [nsnap])))
+     check("S5 整支新測試檔先加後刪:列 unmatched", [c["rule"] for c in cs] == ["tq/redbase-unmatched"], cs)
+     over = _rb_fn("        assertEquals(1, f())") + "    @Test\n    fun checkout_discount(x: Int) {\n        assertEquals(800, checkout(x))\n    }\n"
+     root, mb, commit = _rb_repo()
+     cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, over, [snap])))
+     check("S5 終點有同名多載:不猜、列 unmatched", [c["rule"] for c in cs] == ["tq/redbase-unmatched"] and "多載" in cs[0]["message"], cs)
+     root, mb, commit = _rb_repo()
+     two = {f"app/src/test/java/{p}/CalcTest.kt": moved.replace("package y", f"package {p}") for p in ("y", "z")}
+     cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [snap], files=two)))
+     check("S5 搬到兩處:列 unmatched", [c["rule"] for c in cs] == ["tq/redbase-unmatched"], cs)
++    bad = "package x\nimport org.junit.Test\nclass CalcTest {\n    fun broken() {\n}\n"
++    root, mb, commit = _rb_repo({_TQG_T: bad})
++    h = _rb_push(commit, None, [snap], files={_TQG_T: bad})
++    cs = _rb_only(_tqg_cands(root, mb, h))
++    check("S5 紅燈版記的測試檔在推送版括號配不平:列 unmatched、講沒比", [c["rule"] for c in cs] == ["tq/redbase-unmatched"]
++          and "配不平" in cs[0]["message"], cs)
+     root, mb, commit = _rb_repo({_TQG_T: _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))})
+     cs = _tqg_cands(root, mb, _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [snap]))
+     check("S5 分岔點已有那支測試:不看紅燈版,走分岔點比對", _rb_only(cs) == [] and any(c["rule"] == "tq/expected-changed" for c in cs), cs)
+ 
+ 
+-def t_tg_redbase_absent_unchanged():
++def t_tq_guard_redbase_absent_unchanged():
+     """[S7] 治理帳與紅燈版資料夾都沒動:不讀治理帳、候選跟關掉紅燈版那段時逐字相同;紅燈版留痕只在分岔點那一版 → 當沒有;
+     起點是空樹 → 不用紅燈版;治理帳兩版各約 20 MB、行差約 1.5 萬行時讀取與行差 3 秒內、峰值 400 MB 內。
+     翻紅釘:沒動也讀帳、分岔點那一版的留痕也採計、空樹起點照用 → 紅。"""
++    import json as _j
+     import time as _t
+     import tracemalloc
+     m = _tqg_module()
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+     root, mb, commit = _rb_repo()
+     h = commit({_TQG_T: _tqg_kt(_RB_OTHER, "    @Ignore\n" + _rb_fn("        assertEquals(1, f())"))})
+     seen = []
+     real = m._residual_blob_at
+     m._residual_blob_at = lambda *a, **k: seen.append(a[2]) or real(*a, **k)
+     try:
+@@ -122759,31 +122791,46 @@ def t_tg_redbase_absent_unchanged():
+     h = commit({"docs/.governance-log.jsonl": "\n".join(head_lines) + "\n"})
+     tracemalloc.start()
+     t0 = _t.monotonic()
+     recs, err = m._tg_redbase_records(root, mb, h)
+     dt = _t.monotonic() - t0
+     peak = tracemalloc.get_traced_memory()[1]
+     tracemalloc.stop()
+     check("★前置★ 讀得出、沒有紅燈版紀錄", err is None and recs == [], (err, len(recs or [])))
+     check("S7 兩版約 20 MB、行差 1.5 萬行:3 秒內", dt < 3.0, f"{dt:.2f}s")
+     check("S7 峰值記憶體 400 MB 內", peak < 400 * 1024 * 1024, f"{peak / 1024 / 1024:.0f} MB")
++    # 效能:單檔 800 支都有紅燈版(同一支檔只切一次)
++    many = _tqg_kt(*[_rb_fn(f"        assertEquals({i}, f{i}())", name=f"t{i}") for i in range(800)])
++    import hashlib
++    data = _j.dumps({"version": 1, "tests": [{"name": f"t{i}", "clauses": ["S1"], "path": _TQG_T, "key": f"CalcTest.t{i}"} for i in range(800)],
++                     "files": {_TQG_T: many}}, ensure_ascii=False).encode("utf-8")
++    relm = "governance/redbase/甲/SPEC-f0000009.json"
++    linem = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-record", "token": "SPEC-f0000009", "loop": "甲",
++                      "redbase": {"path": relm, "sha256": hashlib.sha256(data).hexdigest()}}, ensure_ascii=False)
++    root, mb, commit = _rb_repo()
++    h = commit({_TQG_T: many, relm: data, "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n" + linem + "\n"})
++    t0 = _t.monotonic()
++    cs = _tqg_cands(root, mb, h)
++    dt = _t.monotonic() - t0
++    check("★前置★ 800 支都比了、沒有候選", _rb_only(cs) == [], cs[:3])
++    check("S7 單檔 800 支紅燈測試:比對 5 秒內", dt < 5.0, f"{dt:.2f}s")
+ 
+ 
+-def t_tg_redbase_still_checks_new_rules():
++def t_tq_guard_redbase_still_checks_new_rules():
+     """[S8] 紅燈版本體跟終點一字不差、但那支測試沒有斷言:照舊列 tq/no-assertion。翻紅釘:有紅燈版就讓分岔點那條不判 → 紅。"""
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        checkout(1000)"))
+     root, mb, commit = _rb_repo()
+     cs = _tqg_cands(root, mb, _rb_push(commit, _rb_fn("        checkout(1000)"), [_rb_snap("SPEC-g0000001", red)]))
+     check("S8 紅燈版與終點都沒斷言:照舊列 tq/no-assertion", [c["rule"] for c in cs] == ["tq/no-assertion"], cs)
+ 
+ 
+-def t_tg_redbase_waive():
++def t_tq_guard_redbase_waive():
+     """[S9] tq/redbase-* 放行後不再擋、放行紀錄的規則欄是那條;同一函式兩條(expected 被改、逾時調大)放一條不放掉另一條;
+     放行分岔點比對的候選不會順帶放掉紅燈版這條;AI 放行照現制標出。翻紅釘:指紋身分不帶子規則、不帶 token → 紅。"""
+     import json as _j
+     root, commit = _tqg_gate_repo()
+     mb = _e2e_tgit(root, "rev-parse", "main").strip()
+     red = _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n",
+                   _rb_fn("        assertEquals(900, checkout(1000))", ann="@Test(timeout = 30)"))
+     rel, data, line = _rb_snap("SPEC-h0000001", red)
+     led = root / "docs" / ".governance-log.jsonl"
+     old = led.read_text(encoding="utf-8") if led.is_file() else ""
+@@ -122801,54 +122848,58 @@ def t_tg_redbase_waive():
+     r = _tqg_waive(root, rb[0]["key"], "需求在實作期間改了折扣率,PM 已確認", "tq/redbase-weakened", _TQG_T)
+     lv3 = _tqg_verdict(root, f"{mb}..{h}")
+     left = [c for c in lv3["new"] if c["rule"] == "tq/redbase-weakened"]
+     check("S9 放行一條紅燈版候選、另一條照擋", r.returncode == 0 and len(left) == 1 and left[0]["key"] == rb[1]["key"] and lv3["blocked"], lv3["new"])
+     w = _j.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))
+     rows = w if isinstance(w, list) else (w.get("waivers") or w.get("items") or list(w.values()))
+     hit = [x for x in rows if isinstance(x, dict) and x.get("key") == rb[0]["key"]]
+     check("S9 放行紀錄的規則欄是 tq/redbase-weakened、AI 放的標 ai", hit and hit[0].get("rule") == "tq/redbase-weakened" and hit[0].get("origin") == "ai", hit or w)
+ 
+ 
+-def t_tg_redbase_reads_tip():
++def t_tq_guard_redbase_reads_tip():
+     """[S10] 工作目錄的治理帳跟終點那一版不同時照終點判:工作目錄刪掉留痕那行照樣列;工作目錄多一行沒提交的留痕不採計。
+     翻紅釘:讀工作目錄的治理帳或紅燈版檔 → 紅。"""
+     red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [_rb_snap("SPEC-i0000001", red)])
+     (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+     cs = _rb_only(_tqg_cands(root, mb, h))
+     check("S10 工作目錄刪掉留痕那行:照終點,照樣列", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+     rb_rel = "governance/redbase/甲/SPEC-i0000001.json"
+     (root / rb_rel).write_bytes(b"{garbage")
+     _e2e_tgit(root, "add", "--", rb_rel)
+     cs = _rb_only(_tqg_cands(root, mb, h))
+     check("S10 暫存區與工作目錄的紅燈版被換成壞檔(沒提交):照終點那一版判", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+     root, mb, commit = _rb_repo()
+     h = _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [], files={"README.md": "x\n"})
+     rel, data, line = _rb_snap("SPEC-i0000002", red)
+     (root / rel).parent.mkdir(parents=True, exist_ok=True)
+     (root / rel).write_bytes(data)
+     (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n" + line + "\n", encoding="utf-8")
+     cs = _rb_only(_tqg_cands(root, mb, h))
+-    check("S10 工作目錄多一行沒提交的留痕:不採計", cs == [], cs)
++    check("S10 工作目錄多一行沒提交的留痕:不拿它來比(不列改弱),只提醒紅燈版還沒提交",
++          [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "還沒提交" in cs[0]["message"], cs)
+ 
+ 
+-def t_spec_redbase_bookkeeping():
++def t_spec_gate_redbase_bookkeeping():
+     """[S11] governance/redbase/ 只新增紀錄檔時代碼審留痕照樣有效;那裡出現程式檔照舊不算簿記。翻紅釘:清單沒加這個資料夾 → 紅。"""
+     m = _tqg_module()
+     root, mb, commit = _rb_repo()
+     h1 = commit({"governance/redbase/甲/SPEC-j0000001.json": '{"version": 1}\n'})
+     ok, why, _u = m._codeloop_record_valid_ex(root, mb, h1)
+     check("S11 只新增紅燈版紀錄:留痕照樣有效", ok, why)
+     h2 = commit({"governance/redbase/甲/evil.py": "print(1)\n"})
+     ok2, why2, _u2 = m._codeloop_record_valid_ex(root, h1, h2)
+     check("S11 紅燈版資料夾裡出現程式檔:不算簿記", not ok2, why2)
++    h3 = commit({"governance/redbase/甲/Evil.kt": "fun x() = 1\n"})
++    ok3, why3, _u3 = m._codeloop_record_valid_ex(root, h2, h3)
++    check("S11 紅燈版資料夾裡出現 .kt:不算簿記", not ok3, why3)
+ 
+ 
+ def _rb_sg_repo(tag):
+     """kotlin-junit 的半套規格閘 fixture:假執行器看 green_<方法> 標記檔(有=綠、沒有=紅);vault docs/x-knowledge。"""
+     import json as _j
+     import subprocess as _sp
+     d = mkvault().parent.parent / tag
+     _sp.run(["git", "init", "-q", str(d)])
+     (d / "run.py").write_text("import os, sys\nm = sys.argv[1]\nsys.exit(0 if os.path.exists('green_' + m) else 1)\n", encoding="utf-8")
+     (d / ".lumos").mkdir()
+@@ -122866,21 +122917,21 @@ def _rb_sg_repo(tag):
+     _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+     return d, kg
+ 
+ 
+ def _rb_gov(d, kind):
+     import json as _j
+     p = d / "docs" / ".governance-log.jsonl"
+     return [_j.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip() and _j.loads(x).get("kind") == kind]
+ 
+ 
+-def t_spec_redbase_written_on_red():
++def t_spec_gate_redbase_written_on_red():
+     """[S1] 規格閘寫留痕而有判紅的 Kotlin 測試:寫 version 1 的紅燈版(測試名、條款清單、路徑、函式鍵、檔內容),兩筆留痕都帶 redbase;
+     同一支測試綁兩條條款只一列;同條款一紅一綠只存紅的;再跑一次內容沒變不重複存;逾時、Python、找到不只一處、非 UTF-8、超長行、
+     不在 repo 根底下、被 git 忽略、判紅後檔案又被改的不存並記原因。翻紅釘:不分紅綠全存、不去重、逾時照存、讀檔後不比 sha → 紅。"""
+     import hashlib
+     import json as _j
+     m = _tqg_module()
+     d, kg = _rb_sg_repo("rb1")
+     (d / "green_keeps_ok").write_text("")
+     _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]",
+                          "- [S2] 結帳應同時給第二個紅 [test:second_red] [test:keeps_ok]"])
+@@ -122894,20 +122945,22 @@ def t_spec_redbase_written_on_red():
+     j = _j.loads(data)
+     check("S1 檔案指紋對得上、version 1、在 governance/redbase/ 底下",
+           hashlib.sha256(data).hexdigest() == rec["redbase"]["sha256"] and j["version"] == 1
+           and rec["redbase"]["path"].startswith("governance/redbase/"), rec["redbase"])
+     names = sorted(t["name"] for t in j["tests"])
+     check("S1 只存紅的兩支(同條款一紅一綠只存紅的)", names == ["checkout_discount", "second_red"], j["tests"])
+     cd = next(t for t in j["tests"] if t["name"] == "checkout_discount")
+     check("S1 那一列帶條款清單、路徑、函式鍵", cd["clauses"] == ["S1"] and cd["path"] == _TQG_T and cd["key"] == "CalcTest.checkout_discount", cd)
+     check("S1 檔內容就是當時的測試檔", j["files"][_TQG_T] == (d / _TQG_T).read_text(encoding="utf-8"), "")
+     check("S1 綠的那支記進 redbase_skipped", any(x.get("name") == "keeps_ok" for x in rec.get("redbase_skipped") or []), rec.get("redbase_skipped"))
++    check("S1 redbase_skipped_n 記總數", rec.get("redbase_skipped_n") == len(rec.get("redbase_skipped") or []) >= 1, rec.get("redbase_skipped_n"))
++    check("S1 寫紅燈版時講明整支測試檔會跟著提交", "整支" in r.stdout, r.stdout[-600:])
+     _sg_commit(d, "after gate")
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     rec2 = _sg_records(kg)[-1]
+     check("S1 再跑一次內容沒變:不重複存(不帶 redbase、原因記內容相同)",
+           r.returncode == 0 and "redbase" not in rec2 and any("相同" in x.get("reason", "") for x in rec2.get("redbase_skipped") or []),
+           (rec2.get("redbase"), rec2.get("redbase_skipped")))
+     # 判法單元:逾時、Python、多處、非 UTF-8、超長行、不在 repo 根底下、被忽略
+     rr = d
+     plats = m.load_platforms(rr)["platforms"]
+     plat = next(iter(plats))
+@@ -122936,36 +122989,147 @@ def t_spec_redbase_written_on_red():
+     (d / ".gitignore").unlink()
+     ig.unlink()
+     caps, skipped, _g = m._redbase_collect(rr, [row("checkout_discount")], plats)
+     check("★前置★ 恢復後收得到", len(caps) == 1, skipped)
+     (d / _TQG_T).write_text(_tqg_kt(_rb_fn("        assertEquals(800, checkout(1000))")), encoding="utf-8")
+     field, sk2 = m._redbase_write(rr, "甲", "SPEC-k0000001", caps, [], [])
+     check("S1 判紅後檔案又被改:不存、原因記下", field is None and any("又被改" in r_ for _n, r_ in sk2), sk2)
+     py = {"py": {"profile_name": "python", "profile": m.TEST_PROFILES["python"], "root": d}}
+     caps, skipped, _g = m._redbase_collect(rr, [row("t_x", pl="py")], py)
+     check("S1 Python 的測試不存、原因寫不是 Kotlin 或 Java", not caps and any("不是 Kotlin 或 Java" in r_ for _n, r_ in skipped), skipped)
++    _rb_writer_edges(m, d)
+ 
+ 
+-def t_spec_redbase_skips_after_green():
++def _rb_writer_edges(m, d):
++    """[S1 代碼審 r1] 寫入端的邊界:跨平台同名、JSON 跳脫後超過 5 MB、紅燈版路徑被忽略或是符號連結、上一份紅燈版是符號連結或版本不認得、
++    不存原因被判綠擠掉、讀不出治理帳要出聲。"""
++    import hashlib
++    import json as _j
++    kt = m.TEST_PROFILES["kotlin-junit"]
++    for sub, cls in (("android", "ATest"), ("backend", "BTest")):
++        f = d / sub / "app" / "src" / "test" / "java" / "x" / f"{cls}.kt"
++        f.parent.mkdir(parents=True, exist_ok=True)
++        f.write_text(_tqg_kt(_rb_fn("        assertEquals(1, calc())", name="shouldCalc")).replace("CalcTest", cls), encoding="utf-8")
++    two = {"android": {"profile_name": "kotlin-junit", "profile": kt, "root": d / "android"},
++           "backend": {"profile_name": "kotlin-junit", "profile": kt, "root": d / "backend"}}
++    caps, sk, _g = m._redbase_collect(d, [("S1", "android", "shouldCalc", "red", "", ""), ("S2", "backend", "shouldCalc", "red", "", "")], two)
++    check("S1 r1 跨平台同名兩支都紅:各收一份", sorted(c["path"] for c in caps) == ["android/app/src/test/java/x/ATest.kt",
++                                                                                 "backend/app/src/test/java/x/BTest.kt"], (caps, sk))
++    caps, sk, greens = m._redbase_collect(d, [("S1", "android", "shouldCalc", "green", "", ""), ("S2", "backend", "shouldCalc", "red", "", "")], two)
++    check("S1 r1 跨平台同名一綠一紅:紅的那個平台照收", [c["path"] for c in caps] == ["backend/app/src/test/java/x/BTest.kt"], (caps, sk))
++    check("S1 r1 判綠記到平台", ("android", "shouldCalc") in greens and ("backend", "shouldCalc") not in greens, greens)
++    plats = m.load_platforms(d)["platforms"]
++    plat = next(iter(plats))
++    caps, _sk, _g = m._redbase_collect(d, [("S1", plat, "checkout_discount", "red", "", "")], plats)
++    check("★前置★ 收得到 checkout_discount", len(caps) == 1, _sk)
++    # JSON 跳脫後超過 5 MB(原文沒超過)
++    big = d / "app" / "src" / "test" / "java" / "x" / "Quote.kt"
++    text = "// " + ('"' * 60 + "\n// ") * 70000 + "\n"
++    big.write_text(text, encoding="utf-8")
++    c = {"name": "q", "path": "app/src/test/java/x/Quote.kt", "key": "Quote.q", "text": text, "body": "x",
++         "sha": hashlib.sha256(text.encode("utf-8")).hexdigest(), "abs": big, "clauses": {"S9"}, "plat": plat}
++    check("★前置★ 原文在 5 MB 內、跳脫後超過", len(text.encode()) < 5_000_000 < len(_j.dumps(text).encode()), len(text.encode()))
++    field, sk = m._redbase_write(d, "甲", "SPEC-w0000001", [c] + caps, [], [])
++    check("S1 r1 JSON 跳脫後超過 5 MB:那一支不存、其他照存", field is not None and [n for n, r_ in sk if "5 MB" in r_] == ["q"], (field, sk))
++    big.unlink()
++    # 同一支檔 800 支紅的測試:只讀、只切一次
++    import time as _t
++    many = d / "app" / "src" / "test" / "java" / "x" / "ManyTest.kt"
++    many.write_text(_tqg_kt(*[_rb_fn(f"        assertEquals({i}, f{i}())", name=f"m{i}") for i in range(800)]).replace("CalcTest", "ManyTest"),
++                    encoding="utf-8")
++    t0 = _t.monotonic()
++    mc, _msk, _mg = m._redbase_collect(d, [("S1", plat, f"m{i}", "red", "", "") for i in range(800)], m.load_platforms(d)["platforms"])
++    dt = _t.monotonic() - t0
++    check("S1 r1 同一支檔 800 支紅的測試:3 秒內收完", len(mc) == 800 and dt < 3.0, (len(mc), f"{dt:.2f}s"))
++    many.unlink()
++    # 不存原因不被判綠擠掉
++    rec = {"loop": "甲", "token": "SPEC-w0000002"}
++    (d / _TQG_T).write_text((d / _TQG_T).read_text(encoding="utf-8") + "\n", encoding="utf-8")   # 判紅後又被改
++    m._redbase_attach(d, rec, (caps, [(f"g{i}", "判綠") for i in range(25)], set()))
++    check("S1 r1 判綠很多時,判紅後又被改的那支原因照記", any(x["name"] == "checkout_discount" and "又被改" in x["reason"]
++                                                           for x in rec.get("redbase_skipped") or []), rec.get("redbase_skipped"))
++    caps, _sk, _g = m._redbase_collect(d, [("S1", plat, "checkout_discount", "red", "", "")], plats)
++    # 紅燈版路徑被 git 忽略
++    (d / ".gitignore").write_text("governance/redbase/\n", encoding="utf-8")
++    field, sk = m._redbase_write(d, "甲", "SPEC-w0000003", caps, [], [])
++    check("S1 r1 紅燈版路徑被 git 忽略:不寫、講原因", field is None and any("忽略" in r_ for _n, r_ in sk), sk)
++    (d / ".gitignore").unlink()
++    # 紅燈版資料夾是符號連結(指到 repo 外)
++    outside = Path(tempfile.mkdtemp(prefix="gctl-rb-out-"))
++    rbd = d / "governance" / "redbase"
++    moved = d / "governance" / "redbase.bak"
++    if rbd.exists():
++        rbd.rename(moved)
++    rbd.parent.mkdir(exist_ok=True)
++    rbd.symlink_to(outside, target_is_directory=True)
++    field, sk = m._redbase_write(d, "甲", "SPEC-w0000004", caps, [], [])
++    check("S1 r1 紅燈版資料夾是符號連結:不寫到外面", field is None and not any(outside.rglob("*.json")) and any("符號連結" in r_ for _n, r_ in sk),
++          (field, sk, list(outside.rglob("*"))))
++    rbd.unlink()
++    if moved.exists():
++        moved.rename(rbd)
++    # 上一份紅燈版是符號連結、或版本不認得:不拿來去重
++    body_doc = _j.dumps({"version": 1, "tests": [{"name": "checkout_discount", "clauses": ["S1"], "path": _TQG_T, "key": "CalcTest.checkout_discount"}],
++                         "files": {_TQG_T: caps[0]["text"]}}, ensure_ascii=False).encode("utf-8")
++    ext = outside / "prev.json"
++    ext.write_bytes(body_doc)
++    link = d / "governance" / "redbase" / "甲" / "link.json"
++    link.parent.mkdir(parents=True, exist_ok=True)
++    link.symlink_to(ext)
++    rows = [{"loop": "甲", "kind": "spec-gate-record", "redbase": {"path": "governance/redbase/甲/link.json", "sha256": hashlib.sha256(body_doc).hexdigest()}}]
++    field, sk = m._redbase_write(d, "甲", "SPEC-w0000005", caps, [], rows)
++    check("S1 r1 上一份紅燈版是符號連結:不跟過去、照存", field is not None, sk)
++    link.unlink()
++    v2 = body_doc.replace(b'"version": 1', b'"version": 2')
++    (d / "governance" / "redbase" / "甲" / "v2.json").write_bytes(v2)
++    rows = [{"loop": "甲", "kind": "spec-gate-record", "redbase": {"path": "governance/redbase/甲/v2.json", "sha256": hashlib.sha256(v2).hexdigest()}}]
++    field, sk = m._redbase_write(d, "甲", "SPEC-w0000006", caps, [], rows)
++    check("S1 r1 上一份紅燈版版本不認得:不拿來去重、照存", field is not None, sk)
++    # 讀不出治理帳要出聲
++    real = m._gov_rows_delta
++    m._gov_rows_delta = lambda *a, **k: (None, None, "頂端")
++    try:
++        say = _tqg_say(m._redbase_branch_rows, d)
++    finally:
++        m._gov_rows_delta = real
++    check("S1 r1 寫入端讀不出治理帳:印一句", "讀不出" in say, say)
++
++
++def t_spec_gate_redbase_skips_after_green():
+     """[S6] 這條分支上規格閘曾把一支 Kotlin 綁定測試判綠(風險低「新行為沒紅」擋下那次也算),之後又判紅:寫 spec-gate-green 事件、
+     之後不存那支的紅燈版,redbase_skipped 原因寫「曾判綠」;擋下訊息的補跑步驟多一句「這樣補跑的測試不會有紅燈版」。
+     翻紅釘:綠時不寫事件、寫入前不看分支上的判綠事件、補跑步驟沒那句 → 紅。"""
+     d, kg = _rb_sg_repo("rb6")
+     _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+     (d / "green_checkout_discount").write_text("")
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     out = r.stdout + r.stderr
+     check("★前置★ 實作後才跑:擋下並印補跑步驟", r.returncode == 1 and "實作後才跑" in out, out[-600:])
+     check("S6 補跑步驟多一句不會有紅燈版", "這樣補跑的測試不會有紅燈版" in out, out[-800:])
+     ev = _rb_gov(d, "spec-gate-green")
+     check("S6 判綠時寫一筆 spec-gate-green 事件", ev and "checkout_discount" in (ev[-1].get("tests") or []) and ev[-1].get("loop") == "甲", ev)
+     (d / "green_checkout_discount").unlink()
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     rec = _sg_records(kg)[-1] if _sg_records(kg) else {}
+     check("★前置★ 換成空殼後跑紅、PASS 並留痕", r.returncode == 0 and rec, (r.stdout + r.stderr)[-600:])
+     check("S6 曾判綠的那支不存紅燈版、原因寫曾判綠",
+           "redbase" not in rec and any(x.get("name") == "checkout_discount" and "曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+           (rec.get("redbase"), rec.get("redbase_skipped")))
++    # 判綠只看這條分支:主線上早就有的判綠事件不算
++    import json as _j
++    import subprocess as _sp
++    d2, kg2 = _rb_sg_repo("rb6b")
++    old = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
++                    "items": [["kotlin-junit", "checkout_discount"]]}, ensure_ascii=False)
++    led = d2 / "docs" / ".governance-log.jsonl"
++    led.write_text(led.read_text(encoding="utf-8") + old + "\n", encoding="utf-8")
++    _sg_commit(d2, "main 上的舊判綠")
++    _sp.run(["git", "-C", str(d2), "update-ref", "refs/remotes/origin/main", "HEAD"])
++    _sp.run(["git", "-C", str(d2), "checkout", "-q", "-b", "feat"])
++    _sg_plan2(kg2, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
++    r = run(kg2, "spec-gate", "Projects/甲_計劃")
++    rec2 = _sg_records(kg2)[-1] if _sg_records(kg2) else {}
++    check("S6 主線上早就有的判綠不算:這條分支跑紅照存", r.returncode == 0 and "redbase" in rec2, (rec2.get("redbase_skipped"), (r.stdout + r.stderr)[-400:]))
+ 
+ 
+ if __name__ == "__main__":
+     sys.exit(main())

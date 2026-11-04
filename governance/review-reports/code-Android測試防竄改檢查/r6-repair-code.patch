@@ -1,0 +1,469 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 258186f03..5f129c0d2 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48406,85 +48406,88 @@ def _tg_kinds(old, new):
+     """改動前後兩個路徑任一邊是測試檔就當測試檔(改名成 .disabled、搬進 src/main 都看得到)。"""
+     ko, kn = (_tg_kind(old) if old else None), (_tg_kind(new) if new else None)
+     return "test" if "test" in (ko, kn) else (kn or ko)
+ 
+ 
+ def _tg_strip(text, keep_strings=False):
+     """剝註解(keep_strings=False 時連字串內容一起換成空白),位置跟原文一一對應:在剝過的文字找位置、回原文取字。"""
+     return _strip_c_comments(text, blank_strings=not keep_strings, keep_length=True)
+ 
+ 
+-_TG_NAME_RE = re.compile(r"\bfun\s+(?:<[^>\n]*>\s*)?(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
++_TG_NAME_RE = re.compile(r"\bfun\s+(?:<[^>\n]{0,%d}>\s*)?" % _TG_MAX_GENERIC_CHARS + r"(?:[\w.]+\.)?(`[^`\n]+`|[A-Za-z_]\w*)\s*\(|\bvoid\s+([^\W\d]\w*)\s*\(")
+ 
+ 
+ _TG_CLASS_STOP = re.compile(r"[{(\n]")
+ _TG_SUPERTYPE = re.compile(r"(?:extends|implements|where)\b")
+ 
+ 
+ def _tg_class_at(stripped):
+     """剝過的文字 → {行號: 外層類別路徑}。沿大括號深度追 class/object/interface 宣告;`Foo::class` 不算宣告,
+     沒有本體的類別(`data class Row(val a: Int)`)不會把下一個大括號當成自己的本體。路徑在開類別時接一次、存在堆疊上,
+     超過 _TG_MAX_PATH_CHARS 就換成前段加摘要(_tg_path_join):很深的巢狀每層都有測試時,路徑與函式鍵的總長也跟深度成正比。"""
+     bmap = _rg_bracket_map(stripped)
+-    stack, depth, path_at, line, pending, nxt = [], 0, {}, 1, None, [0, -1]
++    stack, depth, path_at, line, pending, nxt, memo = [], 0, {}, 1, None, [0, -1], {}
+     for m in re.finditer(r"\n|\{|\}|(?<!::)\b(?:class|object|interface)[ \t]+(?:`[^`\n]*`|[A-Za-z_]\w*)", stripped):
+         tok = m.group(0)
+         if tok == "\n":
+             path_at[line] = stack[-1][1] if stack else ""
+             line += 1
+         elif tok == "{":
+             depth += 1
+             if pending is not None:
+                 stack.append((depth, _tg_path_join(stack[-1][1] if stack else "", pending)))
+                 pending = None
+         elif tok == "}":
+             if stack and stack[-1][0] == depth:
+                 stack.pop()
+             depth -= 1
+-        elif _tg_class_has_body(stripped, m.end(), bmap, nxt):
++        elif _tg_class_has_body(stripped, m.end(), bmap, nxt, memo):
+             pending = tok.split(None, 1)[1].strip("`") or "_"
+     path_at[line] = stack[-1][1] if stack else ""
+     return path_at
+ 
+ 
+ def _tg_path_join(parent, name):
+     """外層路徑接一層名稱;結果超過 _TG_MAX_PATH_CHARS 就換成「#」加 sha256 前 16 碼(同模組指紋的寫法)加「…」加最內層那段
+     (後 _TG_MAX_PATH_CHARS/2 字):長度有上限,結尾仍是最靠近測試的類別名。"""
+     full = (parent + "." if parent else "") + name
+     if len(full) <= _TG_MAX_PATH_CHARS:
+         return full
+     import hashlib
+     return "#" + hashlib.sha256(full.encode("utf-8", "replace")).hexdigest()[:16] + "…" + full[-(_TG_MAX_PATH_CHARS // 2):]
+ 
+ 
+-def _tg_class_has_body(stripped, j, bmap, nxt=None):
++def _tg_class_has_body(stripped, j, bmap, nxt=None, memo=None):
+     """類別名之後的位置 j → 這個宣告有沒有大括號本體。跳過泛型(_tg_skip_generic)、建構子與父型別的參數列(可跨行),
+-    父型別寫在下一行(`:`、`,`、extends、implements、where 開頭)也接著看,最多 8 段。
+-    下一個 `{`、`(`、換行的位置用 nxt 快取(同一段區間的查詢答案相同),一行塞很多類別宣告也跟長度成正比。"""
++    父型別寫在下一行(行尾 `,`、`:`,或下一行 `:`、`,`、extends、implements、where 開頭;中間夾空行或註解行也算)也接著看,最多 8 段。
++    下一個 `{`、`(`、換行的位置用 nxt 快取(同一段區間的查詢答案相同);一行最後一個非空白字、換行後第一個非空白字用 memo 快取
++    (同一行的類別宣告共用),一行塞很多類別宣告、後面接大段空白也跟長度成正比。"""
+     n = len(stripped)
+     nxt = nxt if nxt is not None else [0, -1]
++    memo = memo if memo is not None else {}
+     while j < n and stripped[j] in " \t":
+         j += 1
+     j = _tg_skip_generic(stripped, j)
+     for _step in range(8):
+         p = _tg_next_stop(stripped, j, nxt)
+         if p >= n:
+             return False
+         if stripped[p] == "{":
+             return True
+         if stripped[p] == "(":
+             j = bmap.get(p, n - 1) + 1
+             continue
+-        if stripped[max(j, p - 50):p].rstrip().endswith((",", ":")):    # 行尾逗號或冒號:父型別接在下一行(只看換行前一小段,不複製整行)
+-            j = p + 1
++        last = _tg_line_last(stripped, p, memo)
++        if last >= j and stripped[last] in ",:":       # 行尾逗號或冒號:父型別接在下一個非空白字(跳過空行與剝掉的註解行)
++            j = _tg_next_nonspace(stripped, p + 1, memo)
+             continue
+-        k = _tg_supertype_next_line(stripped, p + 1)
++        k = _tg_supertype_next_line(stripped, p + 1, memo)
+         if k is None:
+             return False
+         if k < n and stripped[k] == "{":
+             return True
+         j = k
+     return False
+ 
+ 
+ def _tg_skip_generic(stripped, j):
+     """j 是 `<` 就跳過配平的角括號(同一行、最多 _TG_MAX_GENERIC_CHARS 字,用 C 層的 find/count);配不平或不是 `<` 回原位。"""
+@@ -48497,25 +48500,46 @@ def _tg_skip_generic(stripped, j):
+         e = stripped.find(">", k, lim)
+         if e < 0:
+             return j
+         opened += stripped.count("<", k, e + 1)
+         closed += 1
+         k = e + 1
+         if opened == closed:
+             return k
+ 
+ 
+-def _tg_supertype_next_line(stripped, k):
++_TG_NONWS = re.compile(r"[^ \t\r\n]")
++
++
++def _tg_next_nonspace(stripped, k, memo):
++    """位置 k 起第一個不是空白、tab、CR、換行的字的位置(沒有就是文字長度);同一個起點只找一次。"""
++    key = ("ws", k)
++    if key not in memo:
++        m = _TG_NONWS.search(stripped, k)
++        memo[key] = m.start() if m else len(stripped)
++    return memo[key]
++
++
++def _tg_line_last(stripped, p, memo):
++    """換行位置 p 那一行最後一個不是空白、tab、CR 的字的位置(整行空白回 -1);同一行只算一次。"""
++    key = ("last", p)
++    if key not in memo:
++        ls = stripped.rfind("\n", 0, p) + 1
++        body = stripped[ls:p].rstrip(" \t\r")
++        memo[key] = ls + len(body) - 1 if body else -1
++    return memo[key]
++
++
++def _tg_supertype_next_line(stripped, k, memo):
+     """換行之後的位置 k → 下一個非空白字的位置,如果它是 `{` 或父型別的續寫(`:`、`,`、extends、implements、where);否則 None。"""
+     n = len(stripped)
+-    while k < n and stripped[k] in " \t\n":
+-        k += 1
++    k = _tg_next_nonspace(stripped, k, memo)
+     if k < n and (stripped[k] in "{:," or _TG_SUPERTYPE.match(stripped, k)):
+         return k
+     return None
+ 
+ 
+ def _tg_next_stop(stripped, j, nxt):
+     """j 之後第一個 `{`、`(`、換行的位置(沒有就是文字長度)。nxt=[查過的起點, 答案]:j 落在這段區間裡答案不變,不重查。"""
+     if nxt[0] <= j <= nxt[1]:
+         return nxt[1]
+     m = _TG_CLASS_STOP.search(stripped, j)
+@@ -48779,59 +48803,66 @@ def _tg_pairs(old, new, kotlin_test=False):
+         for st in o:
+             if st in left:
+                 left.remove(st)
+             else:
+                 rest.append(st)
+         out.extend(zip(rest, left))
+     return out
+ 
+ 
+ _TG_TRY = re.compile(r"\btry\s*\{")
+-_TG_CATCH = re.compile(r"\s*catch\s*\(([^)]*)\)\s*\{")
++_TG_CATCH = re.compile(r"\s*catch\s*\(")
++_TG_OPEN_BRACE = re.compile(r"\s*\{")
+ # catch 接得住斷言失敗的型別:AssertionError 本身、或比它寬的 Error、Throwable(Kotlin 與 Java 寫法都認)
+ _TG_CATCH_ASSERT = re.compile(r"\b(?:AssertionError|AssertionFailedError|Error|Throwable)\b")
+ _TG_TRY_OK = re.compile(r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?:fail|assertThrows|assertFailsWith|assertFails)\s*[({<]")
+ _TG_RUNCATCH = re.compile(r"\brunCatching\s*\{")
+ _TG_FAIL_CALL = re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")
+ _TG_THROW = re.compile(r"\bthrow\b")
+-_TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\(")       # Kotlin 標準庫的檢查,不成立就丟例外
++_TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\((?!\s*true\s*\))")   # Kotlin 標準庫的檢查,不成立就丟例外;恆成立的 check(true) 不算
++# Kotest 中綴斷言只認 `a shouldBe b` 的形狀(前面空白、後面空白再接值):名字以 should 開頭的變數、`.shouldLog(` 這種方法不算。
++# _TG_INFIX_RE 是「這支測試有沒有斷言」用的寬判法(寧可多認),catch 判讀要分辨有沒有真的檢查,所以另用這條窄的
++_TG_INFIX_STRICT = re.compile(r"(?<=\s)should[A-Z]\w*(?=\s+[^\s=:])")
+ _TG_NONSPACE = re.compile(r"\S")
+ 
+ 
+ def _tg_catch_no_fail(fn):
+     """try 沒有 fail、catch 裡斷言或是空的;try 裡有斷言、catch 接住斷言失敗卻不再丟出;runCatching 裡斷言沒接 getOrThrow。
+     斷言、fail、throw 的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
+     import bisect
+     b = fn["mbody"]
+     br = _rg_bracket_map(b)
+     pos = {k: [m.start() for m in rx.finditer(b)] for k, rx in
+-           (("assert", _TG_ASSERT_RE), ("infix", _TG_INFIX_RE), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
++           (("assert", _TG_ASSERT_RE), ("infix", _TG_INFIX_STRICT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
+             ("throw", _TG_THROW))}
+ 
+     def has(kind, lo, hi):
+         p = pos[kind]
+         i = bisect.bisect_left(p, lo)
+         return i < len(p) and p[i] < hi
+     for t in _TG_TRY.finditer(b):
+         tb_end = br.get(t.end() - 1)
+         c = _TG_CATCH.match(b, tb_end + 1) if tb_end is not None else None
+-        if not c or (c.end() - 1) not in br:
++        close = br.get(c.end() - 1) if c else None
++        o = _TG_OPEN_BRACE.match(b, close + 1) if close is not None else None
++        if not o or (o.end() - 1) not in br:
+             continue
+-        cb_end = br[c.end() - 1]
+-        if has("fail", c.end(), cb_end):
++        cs, cb_end = o.end(), br[o.end() - 1]
++        if has("fail", cs, cb_end):
+             continue
+-        catch_checks = has("assert", c.end(), cb_end) or has("infix", c.end(), cb_end) or has("check", c.end(), cb_end)
++        catch_checks = has("assert", cs, cb_end) or has("infix", cs, cb_end) or has("check", cs, cb_end)
+         # 「try 沒有 fail、catch 裡斷言或是空的」:try 有 fail/assertThrows 是預期例外的寫法,不算
+-        if not has("ok", t.end(), tb_end) and (catch_checks or not _TG_NONSPACE.search(b, c.end(), cb_end)):
++        if not has("ok", t.end(), tb_end) and (catch_checks or not _TG_NONSPACE.search(b, cs, cb_end)):
+             return True
+-        # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError)被接得住它的 catch 接住、catch 不檢查也不再丟出:吞掉了
+-        if _TG_CATCH_ASSERT.search(c.group(1)) and has("assert", t.end(), tb_end) and not catch_checks and not has("throw", c.end(), cb_end):
++        # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError;含 Kotest 中綴斷言)被接得住它的 catch 接住、catch 不檢查也不再丟出:吞掉了
++        tried = has("assert", t.end(), tb_end) or has("infix", t.end(), tb_end)
++        if _TG_CATCH_ASSERT.search(b, c.end(), close) and tried and not catch_checks and not has("throw", cs, cb_end):
+             return True
+     for r in _TG_RUNCATCH.finditer(b):
+         end = br.get(r.end() - 1)
+         if end is not None and has("assert", r.end(), end) and not re.match(r"\s*\.\s*getOrThrow\s*\(", b[end + 1:end + 60]):
+             return True
+     return False
+ 
+ 
+ # 跳過標記:短名或完整類別名(@org.junit.jupiter.api.Disabled)都認;JUnit 5 的條件式(@DisabledOnOs、@EnabledOnOs…)在 CI 平台上等於關掉
+ _TG_SKIP_ANN_RE = re.compile(r"@(?:[\w.]+\.)?(?:Ignore|Disabled\w*|Enabled(?:On|If|For)\w*|SdkSuppress|FlakyTest)\b|@(?:[\w.]+\.)?Config\s*\(\s*sdk\b")
+@@ -48845,23 +48876,23 @@ _TG_NUM = re.compile(r"\d[\d_]*(?:\.\d+)?[lLfF]?")
+ 
+ 
+ def _tg_norm(s):
+     return re.sub(r"\s+", " ", s).strip()
+ 
+ 
+ def _tg_test_hits(text, fns, path):
+     """測試檔 → {身分: [(檔, 行號), …]}。身分是(規則, 擁有者, 種類):
+     - 擁有者:在測試函式裡就是函式名(不帶類別與本體:測試原樣搬到另一支檔、或只改本體,帶過去的跳過標記不算新增);
+       不在任何函式裡(類別層級的 @Ignore)就是「檔:<路徑>」,不跟別支檔的類別層級註記互抵。
+-    - 種類:跳過註記一律算「跳過」(@Ignore 換成 @Disabled、改跳過理由都不算新增);assume 呼叫與比對門檻帶「整個敘述去掉空白」
++    - 種類:跳過註記一律算「跳過」(@Ignore 換成 @Disabled、改跳過理由都不算新增);assume 呼叫與比對門檻帶「整個敘述、字串外的空白整理過」
+       (_tg_stmt_at:括號用共用的對應表跳過、跨行照接、到分號或敘述結尾為止):條件改成永遠跳過、門檻調高都算新增;
+-      只換行重排、改同一行別的斷言不算;字串常值裡的空白差異照樣算(只在標點兩側去空白)。
++      只換行重排、改同一行別的斷言不算;字串常值裡的空白差異照樣算(含頭尾,_tg_ident)。
+     代價:不同類別裡同名的兩支測試,一支拿掉跳過、另一支加上,會互抵(寫進標準的「抓不到」)。"""
+     import bisect
+     hits, owner = {}, {}
+     for _key, f in fns.items():
+         for ln in range(f["start"], f["end"] + 1):
+             owner[ln] = f["name"]
+     kept = _tg_strip(text, keep_strings=True)
+     blank = bmap = None
+     for i, line in enumerate(kept.split("\n"), 1):
+         if _TG_SKIP_ANN_RE.search(line):
+@@ -48882,44 +48913,60 @@ def _tg_test_hits(text, fns, path):
+     return hits
+ 
+ 
+ _TG_STMT_GOES_ON = ("=", ",", "(", "+", "&&", "||")
+ _TG_STMT_STOP = re.compile(r"[(\[{)\]};\n]")
+ 
+ 
+ def _tg_stmt_at(kept, blank, bmap, i):
+     """位置 i 起的那個敘述 → (身分用的敘述字串, 結束位置)。邊界在剝掉字串的文字(blank)上找:左括號照共用的括號對應表
+     (bmap,_rg_bracket_map)整段跳過;深度 0 遇到分號、多出來的右括號,或換行而上一段不像沒寫完(結尾不是 = , ( + && ||、
+-    下一行也不是 . ?. && || 開頭)就停;最多看 _TG_MAX_STMT_CHARS 字。身分取留字串的原文,字詞之間的空白壓成一格、標點兩側的空白拿掉
+-    (換行重排不算改動,字串常值 "c i" 跟 "ci" 仍不同)。"""
++    下一行也不是 . ?. && || 開頭)就停;最多看 _TG_MAX_STMT_CHARS 字。身分取留字串的原文(_tg_ident:字串外的空白整理、字串常值原樣;
++    換行重排不算改動,字串常值 "c i" 跟 "ci"、" ci" 跟 "ci" 仍不同)。"""
+     end = min(len(blank), i + _TG_MAX_STMT_CHARS)
+     k = i
+     while k < end:
+         m = _TG_STMT_STOP.search(blank, k, end)
+         if not m:
+             k = end
+             break
+         k = m.start()
+         ch = blank[k]
+         if ch in "([{":
+             close = bmap.get(k)
+             k = end if close is None else close + 1
+             continue
+         if ch != "\n":
+             break
+         if blank[i:k].rstrip().endswith(_TG_STMT_GOES_ON) or blank[k + 1:k + 200].lstrip().startswith((".", "?.", "&&", "||")):
+             k += 1
+             continue
+         break
+     k = min(k, end)
+-    text = re.sub(r"\s+", " ", kept[i:k]).strip()
+-    return re.sub(r"\s*([^\w\s])\s*", r"\1", text), k
++    return _tg_ident(kept[i:k]), k
++
++
++def _tg_ident(text):
++    """敘述原文 → 身分:字串常值原樣保留(頭尾與逗號後的空白都算內容),字串外字詞之間的空白壓成一格、標點兩側的空白拿掉。
++    字串用剝註解那支的掃描式(_C_STRIP_PAT)認,不另寫一套。"""
++    out, last = [], 0
++    for mo in _lazy_re(_C_STRIP_PAT, re.S).finditer(text):
++        if mo.group(0)[:2] in ("//", "/*"):
++            continue
++        out += [_tg_ws_fold(text[last:mo.start()]), mo.group(0)]
++        last = mo.end()
++    out.append(_tg_ws_fold(text[last:]))
++    return "".join(out).strip()
++
++
++def _tg_ws_fold(code):
++    return re.sub(r"\s*([^\w\s])\s*", r"\1", re.sub(r"\s+", " ", code))
+ 
+ 
+ def _tg_main_hits(text):
+     hits = {}
+     for i, line in enumerate(_tg_strip(text, keep_strings=True).split("\n"), 1):
+         if _TG_SNIFF.search(line):
+             hits.setdefault(("tq/test-env-sniff", "", _tg_norm(line)), []).append(i)
+     return hits
+ 
+ 
+@@ -48954,25 +49001,26 @@ def _tg_timeout_raised(old_lines, new_lines):
+             out.append(a)
+     return out
+ 
+ 
+ _TG_WHY = {
+     "tq/skip-added": ("測試被加了跳過或假設條件,紅的測試會變成「略過」而不是失敗", "確認這支測試真的不適用,不是為了讓紅燈消失而跳過"),
+     "tq/test-removed": ("改動前有的測試函式不見了", "確認是需求拿掉了這個行為,不是為了讓紅燈消失而刪測試"),
+     "tq/assert-weakened": ("同一支測試的斷言變少、相等比對變少,或實際值被換成常值", "確認新斷言仍檢查需求要的結果"),
+     "tq/expected-changed": ("同一支測試的預期值被改了", "確認新預期值來自需求或人工確認,不是照程式目前的輸出改"),
+     "tq/no-assertion": ("新增或本體有變的測試沒有任何斷言", "補上檢查結果的斷言;只呼叫不檢查的測試永遠綠"),
+-    "tq/catch-no-fail": ("例外被 catch 或 runCatching 接住,不丟例外或斷言失敗時測試照樣綠", "改用 assertThrows/assertFailsWith,或在 try 結尾加 fail()"),
++    "tq/catch-no-fail": ("例外被 catch 或 runCatching 接住,不丟例外或斷言失敗時測試照樣綠",
++                         "改用 assertThrows/assertFailsWith;try 結尾已經有 fail() 時,catch 要檢查例外或重丟,不能接住 AssertionError 就放過"),
+     "tq/timeout-raised": ("測試逾時被調大", "確認不是用放寬逾時掩蓋變慢或卡住"),
+     "tq/snapshot-changed": ("截圖基準圖或比對門檻有變", "看新舊比較圖,確認畫面變化是需求要的"),
+     "tq/test-env-sniff": ("正式程式碼在偵測自己是不是跑在測試裡", "確認不是在測試時走另一條路讓測試過"),
+-    "tq/too-large": ("檔案超過比對工具的上限,超過的部分沒有比對", "人工看這支檔的改動,或拆小"),
++    "tq/too-large": ("超過比對工具的上限:整支檔超過上限時整支沒有比對;只有超長行時那幾行沒有比對、其餘照比", "人工看這支檔的改動,或拆小"),
+     "tq/unparsable": ("剝完字串與註解後括號配不平或含 NUL,函式級規則判不了", "人工看這支檔的改動"),
+     "tq/unreadable": ("這支檔從 git 讀不出來(含檔名不是 UTF-8、含換行),沒有比對", "人工看這支檔的改動"),
+ }
+ 
+ 
+ def _tg_cand(rule, file, line, ident, nth=1, side="head", extra=""):
+     """一條候選。檔名與原因裡的外來字串(檔名、測試名、正式程式的那一行)印出前清控制字元(換行、ESC、雙向覆寫),
+     擋下訊息是給 AI 讀的,不讓外來文字偽造出「接下來」這類段落;指紋用清過的檔名(只有怪檔名才會不同)。"""
+     import hashlib
+     why, verify = _TG_WHY[rule]
+@@ -49056,46 +49104,45 @@ def _tg_start(root, base, head, deadline=None):
+ def _tg_analyze(root, base, head, deadline=None):
+     """一段範圍的作弊候選 → (候選清單, 錯誤訊息或 None)。git 算不出改動清單回 (None, 訊息);超過截止時間丟 TimeoutError(呼叫端記成沒跑完)。"""
+     ch = _tg_changes(root, base, head, deadline)
+     if ch is None:
+         return None, "git 算不出這次改了哪些檔"
+     cands, rows, images = _tg_sort_changes(ch)
+     text = _tg_read(root, base, head, [(o, n) for _k, o, n, _s in rows], deadline)
+     if text is None:
+         return None, "git 讀不出改動的內容(逾時或 git 跑不動)"
+     test_files, base_hits, head_hits = [], {}, {}
+-    per_kind = {"main": _tg_main_cands}
+     for kind, old, new, new_sha in rows:
+         if deadline is not None and _git_timeout(deadline) <= 0:
+             raise TimeoutError("比對工具超過截止時間")
+         path = new or old
+         b = text.get(("base", old), "") if old else ""
+         h = text.get(("head", new), "") if new else ""
+         if "TOOLARGE" in (b, h) or "UNREADABLE" in (b, h):
+             cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}") if "TOOLARGE" in (b, h)
+                          else _tg_cand("tq/unreadable", path, 0, path))
+         elif kind == "test":
+             if _tg_has_long_line(b) or _tg_has_long_line(h):
+                 # 超長的行(壓縮資料、產生的程式、病態輸入)抹成空行再比:同檔其他改動照樣逐條列,那幾行要人另外看
+                 cands.append(_tg_cand("tq/too-large", path, 0, f"{path}:{new_sha or 'deleted'}:line",
+                                       extra=f"有一行超過 {_TG_MAX_LINE_CHARS} 字,那幾行沒比對,其餘照比"))
+                 b, h = _tg_blank_long_lines(b), _tg_blank_long_lines(h)
+             cands += _tg_test_file(test_files, base_hits, head_hits, old, new, new_sha, b, h)
+         else:
+-            cands += per_kind[kind](path, b, h)
++            cands += _tg_main_cands(path, b, h)
+     cands += _tg_test_rules(test_files, base_hits, head_hits, deadline)
+     return cands + _tg_image_cands(images), None
+ 
+ 
+ def _tg_has_long_line(text):
+     """測試檔有沒有一行超過 _TG_MAX_LINE_CHARS 字(行尾的 \r 不算)。只測試檔要:函式切法與斷言判讀在單行上有平方級的風險,
+-    正式程式、建置檔、CI 是逐行線性的判讀,不設這道上限。"""
++    正式程式檔的判讀是逐行一條正規式,不設這道上限。"""
+     return any(len(x) - x.endswith("\r") > _TG_MAX_LINE_CHARS for x in text.split("\n"))
+ 
+ 
+ def _tg_blank_long_lines(text):
+     """超過 _TG_MAX_LINE_CHARS 字的行換成空行(換行照留、行號不變)。"""
+     return "\n".join("" if len(x) - x.endswith("\r") > _TG_MAX_LINE_CHARS else x for x in text.split("\n"))
+ 
+ 
+ def _tg_sort_changes(ch):
+     """改動清單 → (直接成候選的怪檔名, 要讀內容比的 [(種類, 改動前路徑, 改動後路徑, 物件編號)], 按目錄分的基準圖)。"""
+@@ -49241,22 +49288,22 @@ def _tg_fn_cands(path, k, f, prev, kt):
+     return out
+ 
+ 
+ # 抓不到的,跟測試品質標準〈推送前的防竄改檢查〉的「抓不到」那條是同一份(去掉反引號後逐句對得上,t_tq_guard_cli_contract 釘住)
+ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認)",
+               "實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查",
+               "預期值先放進變數再斷言(val expected = 88)、參數化測試刪資料列、本體有改的改名(只列成刪除)、"
+               "逾時換單位(5.seconds 改 5.minutes)或整行新增的逾時、CI 的 timeout-minutes",
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助、"
+               "同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources",
+-              "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一批不比,移到第二批;"
+-              "把測試檔搬進 Gradle 不編譯的目錄",
++              "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一版不比(之後另做);"
++              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立的斷言(assertTrue(true))算有檢查",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+               "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large;assume 敘述超過 2000 字的尾段不進身分;"
+               "用單獨的 CR 或 Java 的 \\u000a 提前結束行註解",
+               "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
+               "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。
+     有候選 rc1、沒有 rc0;不是 git 專案講一句 rc0;範圍寫錯或終點找不到 rc2(退出碼照 Room 守衛)。只讀 git,不跑測試、不改檔。"""
+@@ -70955,21 +71002,21 @@ HELP_WHEN = {
+     "note-shape": "筆記新寫的程式行號引用、沒寫來源的現況描述,提交前與推送前擋下(筆記只留程式碼推不出來的東西);推送時碰到的筆記整篇的 [test:] 要指得到真測試(note_shape.test_refs,預設只提醒)。",
+     "note-audit": "推送前派判定者逐行判新寫的筆記是不是程式碼推得出來:prepare 出清單、record 記判定、check 擋沒涵蓋的、skip 留理由略過;reread-* 三個是回頭重讀守檔筆記(本機推送前擋)。",
+     "note-audit prepare": "推送前要審新寫的筆記時:算出這段範圍還沒被判定涵蓋的行,切成清單檔(每份最多 150 行)給判定者。",
+     "note-audit record": "判定者交回報告後:照信任方向逐行收進判定檔(重的照收、輕的要來源對、上下文沒變才收)。",
+     "note-audit check": "推之前自己先查一次:這段推送新寫的筆記行是不是都被已提交的判定涵蓋了(沒有就 rc1)。",
+     "note-audit skip": "真的來不及審時:把從沒被判過的行記成略過(要理由、會留帳;判過推得出的不能略過)。",
+     "test-durations refresh": "CI 各份測試又不平均時、或每月一次:把 .lumos/test-durations-run*.json 的實測秒數合進 governance/test-durations.json,讀完刪掉。",
+     "note-audit reread-prepare": "推送前回頭重讀守檔筆記:這次改到的程式檔的家、而且這次也改過的筆記,每篇出一份項目檔給判定者問「哪幾行被這次改動弄得不成立了」。",
+     "note-audit reread-record": "判定者交回報告後:把點出的行記成對照紀錄(governance/reread-verdicts/,提交才算)。",
+     "note-audit reread-check": "推送前掛鉤與 CI 呼叫:還沒對照過這一版程式的守檔筆記、判定點出又沒處理的規則類條目;帶 --gate(掛鉤)時照 note_reread.gate 擋,不帶(CI、手動)只印、回 0。",
+-    "test-guard": "AI 改了測試或建置設定之後,想知道有沒有加跳過標記、刪測試、把斷言改弱、改預期值、寫出沒斷言的測試、放寬 Gradle 或 CI 的測試設定(推送前新增告警閘也會跑)。",
++    "test-guard": "AI 改了測試之後,想知道有沒有加跳過標記、刪測試、把斷言改弱、改預期值、寫出沒斷言的測試、換掉截圖基準圖(推送前新增告警閘也會跑;抓不到的印在輸出最後)。",
+     "room-guard": "Android 專案的 Room:資料庫升版時升級路徑、結構檔、升級測試有沒有跟上,主線上已有的結構檔有沒有被改或刪,這次改到的 DAO 方法有沒有沒被 mock 的測試呼叫到(推送前擋)。",
+     "drift": "已經寫進去的句子因為別處狀態變了而過期:check 推送時擋、scan 健檢全圖譜、fix 用工具改掉一筆、ack 表態照留、exam 拿考卷考。",
+     "drift check": "推之前查這段推送讓哪些筆記跟狀態對不上(轉正了還留著預告句就擋,其他只列出);同一次也跑舊句檢查 m1:"
+                    "這次刪掉或改名的程式名稱,筆記還在講的句子——開關另一個 drift_check.old_sentence(沒寫就照總開關 drift_check.gate:預設擋,gate 寫 warn 只提醒、寫 off 不跑;明寫的值不受 gate 影響)。",
+     "drift scan": "健檢整份圖譜(或某個提交)跟狀態對不上的地方,產待修清單;不擋、不寫帳。",
+     "drift ack": "某一行確定照留時表態(要理由、要提交才算);那一行一改表態就失效;c2、c3 會記下當時連著的已收尾計劃,之後多了新的就重新列出;回頭條件與撤除條件的照留要嘛 --tracked-in 綁一篇開著的 Issue 或計劃(那篇收尾就失效),要嘛 30 天後失效,這次新寫就已成立的推送只認綁了去處的。",
+     "drift fix": "照 drift scan 的清單改掉一筆(c1 補改預告句、c2 結案或照留、c3 改狀態加一行(可帶 --reason)、c4 只列證據、範本與一條預填好的 lumos set 指令,不寫檔、c5 補完轉正);先 --dry-run 看改法,改完跟修復帳一起提交。",
+     "drift exam": "拿考卷在被考 repo 的歷史上重放,算擋到、點到、漏、誤報與噪音;--history 對最近 N 個提交重放。",
+     "home check": "這次提交(--staged)或這段推送(--diff)有沒有「每支檔有家」的新違規;有就擋。",
+     "cochange": "改了 A 檔,歷史上常一起改的 B 檔要不要跟著改。rules 看規則,check 對變更集比對。",
+@@ -72177,21 +72224,21 @@ def main():
+     narc.add_argument("--push-remote", dest="na_push_remote", default=None, metavar="遠端名", help=_push_help[0])
+     narc.add_argument("--pushed-ref", dest="na_pushed_ref", default=None, metavar="ref", help=_push_help[1])
+     narc.add_argument("--repo", dest="na_repo", default=None)
+ 
+     rgp = sub.add_parser("room-guard", help="Room 守衛:資料庫升版缺升級路徑/結構檔/升級測試、主線上的結構檔被改或刪、改到的 DAO 方法沒有真 Room 測試(有 rc1、沒有 rc0;判不了 rc0);spec=Projects/Room資料庫測試守衛_計劃")
+     rgp.add_argument("--diff", dest="rg_diff", required=True, metavar="A..B", help="推送範圍:遠端舊值..終點(推送前掛鉤原樣帶)")
+     rgp.add_argument("--push-remote", dest="rg_remote", default=None, metavar="遠端名", help="掛鉤用:跟 --pushed-ref 一起給,起點改由推送閘的共用算法算")
+     rgp.add_argument("--pushed-ref", dest="rg_ref", default=None, metavar="遠端 ref", help="掛鉤用:遠端那一側的 ref(refs/heads/X、refs/tags/Y)")
+     rgp.add_argument("--repo", dest="rg_repo", default=None, help="repo root(預設 cwd 所在的 git 專案)")
+ 
+-    tgp = sub.add_parser("test-guard", help="測試防竄改比對:一段範圍裡加了跳過標記、刪了測試、斷言變弱、預期值被改、新測試沒斷言、建置或 CI 的測試設定被放寬、截圖基準圖有變(有候選 rc1、沒有 rc0、範圍錯 rc2);推送前由新增告警閘呼叫;抓不到的會印在輸出最後、--json 的 limitations;spec=Projects/Android測試防竄改檢查_計劃")
++    tgp = sub.add_parser("test-guard", help="測試防竄改比對:一段範圍裡加了跳過標記、刪了測試、斷言變弱、預期值被改、新測試沒斷言、截圖基準圖有變(有候選 rc1、沒有 rc0、範圍錯 rc2);推送前由新增告警閘呼叫;抓不到的會印在輸出最後、--json 的 limitations;spec=Projects/Android測試防竄改檢查_計劃")
+     tgp.add_argument("--diff", dest="tg_diff", required=True, metavar="A..B", help="範圍:起點..終點(跟主線的分岔點找得到就從那裡起算)")
+     tgp.add_argument("--repo", dest="tg_repo", default=None, help="repo root(預設 cwd 所在的 git 專案)")
+     tgp.add_argument("--json", dest="tg_json", action="store_true", help="輸出 JSON(每條候選有規則代號、檔案、行號、原因、該確認什麼、指紋)")
+ 
+     dr_p = sub.add_parser("drift", help="存量漂移守衛:已經寫進去的句子因為別處狀態變了而過期;spec=Projects/存量漂移防線_計劃")
+     drsub = dr_p.add_subparsers(dest="drcmd", required=True)
+     drc = drsub.add_parser("check", help="這段推送讓哪些筆記跟狀態對不上(要處理的 rc1;沒寫設定就是 block,.lumos/config.json 寫 drift_check.gate=warn 只印;舊句檢查 drift_check.old_sentence 沒寫就照這個總開關,明寫 block/warn/off 不受影響)")
+     drc.add_argument("--diff", dest="dr_diff", required=True, metavar="A..B")
+     drc.add_argument("--repo", dest="dr_repo", default=None)
+     drc.add_argument("--push-remote", dest="dr_push_remote", default=None, metavar="遠端名",

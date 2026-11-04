@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-10-19
+updated: 2026-11-04
 self_audit: sonnet/2026-08-26
 about_code_stamp: claude/2026-08-30/be0e9557e400
 tags:
@@ -59,6 +59,9 @@ summary: |-
   VERIFY:[[Verification/2026-06-19_loop-convergence-recording]]
   WHY:逃逸帳可以歸因到殘留:loop escape 加選填 --residual-ref <資料夾>/<節點>#dN(驗法跟 guard residual 寫標記同一支:全名、存在、沒翻案),記進 residual_ref 欄;跟 --list、撤回、--auto 一起用回 2(自動記帳沒有歸因來源);escape-stats 印歸因到殘留的列數(撤回的不算,JSON 是 totals.residual_ref) [出處:[[Projects/審查收斂規則_計劃]]〈做法〉6] [因:審查收斂規則的撤除條件靠它量——殘留裡的缺陷其實是測得到的局部退化,就撤回殘留這條出口] [test:t_loop_escape_residual_ref]
   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]kind=spec-gate 留痕另外寫一份進版控治理帳(kind=spec-gate-record),審查帳那份照舊;推送閘兩本合讀取最晚一筆 [出處:消費專案的審查帳被 gitignore,乾淨 clone 推送時規格閘留痕不見] [因:推送閘讀的留痕要進 CI 讀得到的帳] [test:t_spec_gate_record_in_governance_log]
+  WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]`_canary_ledger_rows` 加 raw_out 交回解碼原文,閉包指紋對原文算;篩法抽成 `_loop_review_row` 給凍結與 pass 共用,light 棘輪抽成 `_light_ratcheted` 給 loop next 與 pass 共用 [出處:本案設計審 r2 架構席] [因:不另起一套讀帳] [不選:pass 自己整本 read_text 切行]
+  WHY:跑滿提示在還沒人裁、提示不是可以停時,記人裁那句前面先接 _CAP_WORLD_HINT(先上網查這條路的方向、至少兩個來源,結論附給人裁);要求情況的人裁之後,_cap_retro_fix_cmd 句尾接 _CAP_WORLD_FILL(擋下訊息、處置閘第八步、已有人裁提示、記完人裁的下一步、doctor、retro-stats 都經過它;記完人裁讀回帳上那筆判,不另讀時鐘,讀不動時照剛記的種類偏嚴判(不當成沒有人裁)——代碼審 r1 抓到另讀時鐘時今天的測試走不到要求那一支),accept-risk 與生效前的不印 [出處:[[Projects/跑滿後查世界方向_計劃]] 做法 1] [因:原本跑滿那一刻只叫人先記人裁,查方向排在人裁之後就沒有意義] [test:t_cap_hint_world_check_first] [test:t_cap_decision_world_fill_reads_ledger]
+  REVISIT:2026-12-15 cmd_loop_cap_decision 記完人裁後讀帳失敗那一支,改成印 gov-bad 的原因與修帳出口(現在只照剛記的種類偏嚴判、不印原因;代碼審 code-跑滿後查世界方向 r3 架構 a1 放行)
 decisions:
   - content: 收斂用 tail-K 滑動窗(append 序最後 K 筆全 caught+clean/minor),非「每輪都得乾淨」;排序用檔案 append 序而非 ts
     id: d1

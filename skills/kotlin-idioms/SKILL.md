@@ -1,6 +1,6 @@
 ---
 name: kotlin-idioms
-description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——通用不變量層的慣例規則：並行等待、Flow 合成、協程紀律、Compose 重組。每條附壞例→好例與機檢對照。框架選擇（Hilt/Koin、Retrofit/Ktor 等）不在此裁——那是各專案自己的事，查該專案圖譜。
+description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——通用不變量層的慣例規則：並行等待、Flow 合成、協程紀律、Compose 重組，以及 Android 官方建議的 ViewModel 事件化成狀態、不碰 Context、程序被殺後的狀態還原、假實作測試。每條附壞例→好例與機檢對照。框架選擇（Hilt/Koin、Retrofit/Ktor 等）不在此裁——那是各專案自己的事，查該專案圖譜。
 ---
 
 # Kotlin 慣例（通用不變量層）
@@ -11,8 +11,11 @@ description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——�
 
 **機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。標「要型別資訊」的 detekt 規則，照一般接法跑時多半**沒在跑**，見下方〈型別資訊〉；而且所有 detekt 規則推送前的新增告警檢查目前都**只記錄、不擋**（見〈機檢接線〉）。
 
-> **核對邊界**：**已核對**（2026-11-04，本機 detekt 1.23.8）：協程與效能兩組規則的名稱、預設開關、要不要型別資訊。**未核對**：其餘（含 R16 的 compose-rules 條數、Slack compose-lints）——接入時以該工具當前的規則清單為準。
-> REVISIT:2027-03-01 detekt 2.0 出正式版沒；出了就重核協程組，並把 R12 標「2.0 才有」的兩條改成可開。
+> **核對邊界**：detekt 那部分已核對（2026-11-01，detekt 1.23.8：規則名與預設開關對照 `detekt --generate-config` 產出的預設設定；要不要型別資訊用最小樣本各跑一次、帶與不帶 `--classpath`／`--jdk-home` 對照；2026-11-04 逐版重驗協程與效能兩組）。R16 引用的 compose-rules 與 Slack compose-lints，規則名與條數仍是網搜整理、**未用本機工具核對**；接入時以該工具當前的規則清單為準。
+> REVISIT:2027-05-01 用本機工具核對 R16 引用的 compose-rules 與 Slack compose-lints 規則名與條數，補上核對日期或標明仍未核對。
+> REVISIT:2027-03-01 detekt 2.0 出正式版沒；出了就重核協程組，並把 R12 標「2.0 才有」的那條改成可開。
+
+**「要型別資訊」是什麼**：detekt 有一批規則要知道「這個呼叫到底是哪個函式、這個型別是什麼」才判得出來，只有拿到專案的編譯路徑（classpath）時才會報——Gradle 外掛的型別解析任務（例：`detektMain`），或命令列帶 `--classpath` 與 `--jdk-home`。只給 `--input` 的命令列跑法下，這些規則一條都不報，也不會出錯；下面機檢欄標了「要型別資訊」的都屬這種，細節見文末〈型別資訊〉。
 
 ---
 
@@ -92,20 +95,20 @@ catch (e: CancellationException) { throw e }
 catch (e: IOException) { log(e) }
 ```
 這 bug 只在取消時發作、最難排查。
-- 機檢：`detekt:SuspendFunSwallowedCancellation`（預設關，要開；要型別資訊）——★只抓「runCatching 裡呼叫 suspend」★，上面壞例那種 `try { } catch (e: Exception)` 它不抓（detekt 1.23.8 官方規則頁）；而且 Kotlin 標準庫 2.2 以上時補了型別資訊也不響（detekt 1.23.8 限制，2026-11-04 逐版實測）。try/catch 那型要靠審查，或第三方 structured-coroutines 的 `CancellationExceptionSwallowed`
+- 機檢：`detekt:SuspendFunSwallowedCancellation`（預設關，要開；要型別資訊）——★只抓「runCatching 裡呼叫 suspend」★，上面壞例那種 `try { } catch (e: Exception)` 帶齊型別資訊也不抓（detekt 1.23.8 官方規則頁；2026-11-01 實測）；而且 Kotlin 標準庫 2.2 以上時補了型別資訊也不響（detekt 1.23.8 限制，2026-11-04 逐版實測）。try/catch 那型要靠審查，或第三方 structured-coroutines 的 `CancellationExceptionSwallowed`
 
 ### R11. 禁 `GlobalScope`；活過畫面的工作用注入的應用級 scope
-- 機檢：`detekt:GlobalCoroutineUsage`（預設關，要開；**不要型別資訊**，一般接法就會響）
+- 機檢：`detekt:GlobalCoroutineUsage`（預設關，要開；**不要型別資訊**，一般接法就會響）。寫完整套件名 `kotlinx.coroutines.GlobalScope.launch` 不會報，只認 import 之後的 `GlobalScope.launch`。
 
 ### R12. 其餘機檢組（開了不等於有在跑，見〈型別資訊〉）
-`SleepInsteadOfDelay`（協程內用 delay 不用 Thread.sleep，預設開，要型別資訊加 JDK 位置）、`RedundantSuspendModifier`（沒暫停點就拿掉 suspend，預設開，要型別資訊）。`CoroutineLaunchedInTestWithoutRunTest`（測試協程要包 runTest）**只有 detekt 2.0 才有，1.23.8 寫進設定會讓 detekt 整個拒跑**，1.23 先靠審查或 structured-coroutines 的 `RunBlockingInsteadOfRunTest`。runBlocking **不全面禁**：`ForbiddenMethodCall` 分不出在不在 suspend 裡，而 OkHttp Authenticator 這類同步介面裡橋接 suspend 是正當用法；suspend 內的 runBlocking 靠審查，或 structured-coroutines 的 `RunBlockingInSuspend`。
+`SleepInsteadOfDelay`（協程內用 delay 不用 Thread.sleep，預設開，要型別資訊加 JDK 位置）、`RedundantSuspendModifier`（沒暫停點就拿掉 suspend，預設開，要型別資訊）。`CoroutineLaunchedInTestWithoutRunTest`（測試協程要包 runTest）**只有 detekt 2.0 才有，1.23.8 寫進設定會讓 detekt 整個以「規則不存在」拒跑、一條都不檢查**（2026-11-01 實測），1.23 先靠審查或 structured-coroutines 的 `RunBlockingInsteadOfRunTest`。runBlocking **不全面禁**：`ForbiddenMethodCall` 分不出在不在 suspend 裡，而 OkHttp Authenticator 這類同步介面裡橋接 suspend 是正當用法；suspend 內的 runBlocking 靠審查，或 structured-coroutines 的 `RunBlockingInSuspend`。不帶型別資訊時退而用 `ForbiddenImport` 擋 `kotlinx.coroutines.runBlocking` 的 import，會連正當用法一起擋、寫完整套件名的呼叫繞得過。
 另兩條靠審查：CPU 密集迴圈內定期 `ensureActive()`（取消是合作式的）；`Job()/SupervisorJob()` 不當參數傳進 launch（要 supervisor 語意用 `supervisorScope {}`）。
 
 ## 三、Compose
 
 ### R13. 收流一律 `collectAsStateWithLifecycle()`
 `collectAsState()` 在 App 退到背景時照樣收集，浪費電和網路——且要跟 R3 的 `WhileSubscribed` 成對才生效。
-- 機檢：`detekt:ForbiddenMethodCall` 配置完整名稱 `androidx.compose.runtime.collectAsState`（只寫 `collectAsState` 不報錯也不響；規則放 `style:` 底下；要型別資訊，classpath 要有 Compose runtime）
+- 機檢：`detekt:ForbiddenMethodCall` 配置完整名稱 `androidx.compose.runtime.collectAsState`（只寫 `collectAsState` 不報錯也不響；規則放 `style:` 底下；要型別資訊，classpath 要有 Compose runtime）；不帶型別資訊時改用 `ForbiddenImport` 擋 `androidx.compose.runtime.collectAsState` 的 import
 
 ### R14. Lazy 清單必給穩定 key
 `items(list, key = { it.id })`；少了 key，症狀是捲動閃跳與整列白白重組，使用者看得到。
@@ -129,6 +132,73 @@ data/domain 層：一次性操作＝`suspend fun(): Result`、串流＝非 suspe
 分層一旦只靠紀律守就會被打穿（UI 直接 import DAO）。自訂 detekt `ForbiddenImport`／層白名單規則，讓越層直接紅。
 - 機檢：`自訂`（[完整範例](https://dev.to/wakita181009/an-llm-broke-my-architecture-in-one-generation-i-made-that-a-build-error-1ae0)）
 
+## 五、Android 特有（只有 Android 專案適用）
+
+這一節是 2026-11-01 照 Android 官方建議補的，每條的依據頁與當天看到的更新日期寫在條款最後。Kotlin 寫伺服端（例如 Spring）的專案不適用這一節。分層、用例、聚合怎麼切屬於架構選型，不在這裡裁，見 lumos-project-notes 的 Android 目標架構範本。
+
+### R19. ViewModel 不往畫面送一次性事件：處理完化成狀態 ⚠ 不可機檢
+提示訊息、導覽、錯誤這類「發生一次」的結果，ViewModel 處理完就寫進畫面狀態；畫面顯示完回報，ViewModel 再清掉。官方把「不要從 ViewModel 送事件給 UI」列為強烈建議：用 Channel 或其他串流送，ViewModel 活得比畫面久，畫面不在時不保證送得到、也不保證被處理；SharedFlow 預設在沒人收的那一刻直接丟掉。
+
+```kotlin
+// ✗ 事件走串流：畫面旋轉或退到背景那一刻沒人收，「已儲存」就不見
+private val _events = MutableSharedFlow<String>()
+fun save() = viewModelScope.launch { repo.save(); _events.emit("已儲存") }
+
+// ✓ 化成狀態，畫面顯示完回報
+data class EditUiState(val userMessage: String? = null)
+fun save() = viewModelScope.launch { repo.save(); _uiState.update { it.copy(userMessage = "已儲存") } }
+fun userMessageShown() = _uiState.update { it.copy(userMessage = null) }
+
+// 畫面
+uiState.userMessage?.let { msg ->
+    LaunchedEffect(msg) {
+        snackbarHostState.showSnackbar(msg)
+        viewModel.userMessageShown()
+    }
+}
+```
+- 使用者點了就導覽的，畫面自己處理（把 `onHelp: () -> Unit` 這種回呼傳進畫面），不繞 ViewModel。
+- ViewModel 判斷完才導覽的（例：驗證通過），把結果放進狀態（例：`isUserLoggedIn`），畫面看到狀態變了再導覽；來源畫面還留在返回堆疊時，要防使用者按返回回來又自動前進一次（官方範例用 `rememberSaveable` 記一個旗標）。
+- 舊碼一次改不完、還在用 Channel 的，旁邊寫一行理由。
+- 機檢：`不可機檢`（Flow 審查題會問）
+- 依據：[Android 官方 UI 事件](https://developer.android.com/topic/architecture/ui-layer/events)（2026-05-18 更新）、[架構建議](https://developer.android.com/topic/architecture/recommendations)（2026-10-05 更新）
+
+### R20. ViewModel 不碰 Context、不繼承 AndroidViewModel
+ViewModel 活得比畫面久（畫面旋轉時畫面重建、ViewModel 留著），抓著 Activity、Context 或 Resources 就會洩漏，單元測試也得帶上 Android 框架。官方把「ViewModel 不持 Context」列為強烈建議、「不用 AndroidViewModel」列為建議：要用到的東西移到畫面層或資料層。
+
+```kotlin
+// ✗
+class ProfileViewModel(app: Application) : AndroidViewModel(app) {
+    fun title() = getApplication<Application>().getString(R.string.title)
+}
+
+// ✓ 狀態只帶資源 ID，畫面層解析成字串；檔案、系統服務包進資料層，由建構子注入
+data class ProfileUiState(@StringRes val titleRes: Int)
+```
+- 機檢：`自訂`（檢查 ViewModel 的父類別與建構子參數型別）
+- 依據：[Android 官方架構建議](https://developer.android.com/topic/architecture/recommendations)（2026-10-05 更新）
+
+### R21. 程序被系統殺掉：要還原的最小資料放保存狀態，大資料放本機儲存 ⚠ 不可機檢
+三種東西撐得住的情況不一樣：
+
+| | 畫面旋轉等設定變更 | 系統在背景殺掉程序 | 使用者自己關掉 App |
+|---|---|---|---|
+| ViewModel | 撐得住 | 撐不住 | 撐不住 |
+| 保存狀態（`SavedStateHandle`、`rememberSaveable`） | 撐得住 | 撐得住 | 撐不住 |
+| 本機儲存（資料庫、DataStore） | 撐得住 | 撐得住 | 撐得住 |
+
+- 保存狀態只放基本型別與小字串：ID、查詢字串這類「拿來重建畫面」的最小資料。不放圖片、大清單或要長時間序列化的物件——設定變更時序列化在主執行緒跑，太大會掉幀。
+- 程序被殺後還原時，用保存狀態裡的那個小值從本機儲存重新載入；ViewModel 記憶體裡的資料只撐設定變更。ViewModel 和保存狀態都不能取代本機儲存。
+- 機檢：`不可機檢`
+- 依據：[Android 官方狀態還原](https://developer.android.com/topic/libraries/architecture/saving-states)（2026-10-07 更新）
+
+### R22. ViewModel 與資料層測試用假實作，直接斷言狀態值 ⚠ 不可機檢
+- Repository 這類依賴用手寫的假實作（例：`FakeOrderRepository`，實作同一個介面、資料放記憶體），不用 mock 套件模擬——官方列為強烈建議。假實作照真的規則跑；mock 驗的是「有沒有被這樣呼叫」，被測的程式內部一重寫，測試就得跟著改。
+- StateFlow 能讀 `value` 就直接斷言 `value`，不去收集每個中間值（值變得快時，收集的一方只保證拿到最新那個）。上游用 `WhileSubscribed` 或 `Lazily` 的，就算只斷言 `value`，也要先在測試裡起一個收集的協程，不然上游不會跑、`value` 永遠是初始值；官方範例用 `backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.score.collect {} }`：`UnconfinedTestDispatcher` 讓收集的協程馬上開跑，接著斷言才讀得到更新後的值；測試結束時自動取消。
+- 測試裡把 dispatcher 換成測試用的（見 R9）。
+- 機檢：`不可機檢`
+- 依據：[Android 官方架構建議](https://developer.android.com/topic/architecture/recommendations)（2026-10-05 更新）、[官方 Flow 測試](https://developer.android.com/kotlin/flow/test)（2026-09-24 更新）
+
 ---
 
 ## 機檢接線（一次設好，CI 自動把關）
@@ -137,14 +207,21 @@ detekt 設定要點（`--build-upon-default-config` 之上；lumos-toolchain 分
 ```yaml
 coroutines:
   GlobalCoroutineUsage: { active: true }
-  SuspendFunSwallowedCancellation: { active: true }
-  SuspendFunWithCoroutineScopeReceiver: { active: true }
+  SuspendFunSwallowedCancellation: { active: true }   # 要型別資訊
+  SuspendFunWithCoroutineScopeReceiver: { active: true }   # 要型別資訊
 style:
-  ForbiddenMethodCall:
+  ForbiddenMethodCall:   # 要型別資訊;只給 --input 的命令列跑法下不會報
     active: true
     methods:
       - "androidx.compose.runtime.collectAsState"
+  # 命令列不帶型別資訊時,改用只看 import 的寫法(會連正當用法一起擋,寫完整套件名的呼叫繞得過):
+  # ForbiddenImport:
+  #   active: true
+  #   imports:
+  #     - "kotlinx.coroutines.runBlocking"
+  #     - "androidx.compose.runtime.collectAsState"
 ```
+detekt 1.23 系列不要加 `CoroutineLaunchedInTestWithoutRunTest`：那個版本沒有這條，設定裡寫了整次執行失敗（見 R12）。
 - 自有設定要跟共用設定疊加：用逗號合成一個 `--config a.yml,b.yml`（分開寫兩次 `--config` 會拒跑）；清單類欄位（例上面的 methods）後面那份整份蓋掉前面那份，不合併、不警告。
 - 加掛 compose-rules（detekt plugin jar）補 R16 整組。
 - 專案把 detekt 指令宣告進 `.lumos/lint.json`，`lumos pitfalls --diff` 會吃 SARIF、命中行進審查 manifest。★但推送前的新增告警檢查對 detekt 目前只記錄不擋★（沒有 `{LINT_FILES}` 就只記錄；有的話多檔時 detekt 拒跑、檢查放行）——`lumos lint-check` 與健檢會照指令字面把這些印出來。
@@ -160,11 +237,11 @@ REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by
 
 ## 審查鏡頭（code-loop 用）
 
-給審查員的一句 framing：「對照 kotlin-idioms 的 R1–R18 逐條掃這份 diff；**finding 必須引用條號**（如『違反 R1：`loadA()`/`loadB()` 無資料依賴卻串聯』），引用不出條號的風格意見不要標。」——執法不立法，品味之爭擋在門外。
+給審查員的一句 framing：「對照 kotlin-idioms 的 R1–R22 逐條掃這份 diff；**finding 必須引用條號**（如『違反 R1：`loadA()`/`loadB()` 無資料依賴卻串聯』），引用不出條號的風格意見不要標。」——執法不立法，品味之爭擋在門外。
 
 ## 誠實邊界
 
-1. 最重要的三條（R1 並行、R2 combine、R8 main-safe）恰好都不可機檢——「無依賴」「該不該合成」是語意判斷，這份文件＋審查鏡頭是唯一防線，這正是它存在的理由。
+1. 最重要的三條（R1 並行、R2 combine、R8 main-safe）恰好都不可機檢；R19 事件化成狀態、R21 狀態還原也是——「無依賴」「該不該合成」是語意判斷，這份文件＋審查鏡頭是唯一防線，這正是它存在的理由。
 2. 機檢規則抓形狀不抓意圖：過了 detekt 不代表寫得好。
 3. 本文件不裁框架。發現某條規則與專案當地慣例衝突時：當地慣例贏，但把衝突記進該專案圖譜（可能是當地的技術債，也可能是本文件該修）。
 4. 回填：被人工糾正的寫法先記進該專案圖譜；確認它在多數專案都會再犯（不是單次個案），才走 [[Projects/idioms自維護迴路_計劃]] 的候選流程加進本文件。

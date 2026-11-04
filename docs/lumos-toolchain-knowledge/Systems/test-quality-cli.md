@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-11-03
 responsibility: 測試品質CLI的明示本機命令收證與JUnit一致性核對,另含 lumos-project-notes 的測試品質接入標準文件(各棧撰寫補充);不裁決業務答案或驗證報告真實性
 self_audit: GPT-6-Codex-clean-agent/2026-10-08
 aliases: []
@@ -16,6 +16,9 @@ tags:
   - scope/evals
 summary: |-
   WHY: 接入來源掃描與明示執行收證，分開機械核對與業務判準 [出處:2026-10-08 使用者要求功能接線與建立測試專案] [因:單純文件與固定示範無法供消費專案直接使用，報告身份和快照須核對]
+  WHY:實機演練的收證卷證,考場是不能公開的私有專案時,公開 repo 只放去識別化摘要(代稱、考場原有的子套件路徑攤平而演練新增的套件層照留、不放原始碼與收據快照),能重跑的完整卷證留在考場的本機分支 [出處:Enzo 2026-11-01 裁,[[Projects/Android單元測試標準實機演練_計劃]]] [因:工具鏈 repo 公開,入門說明要求推之前確認無公司識別資訊] [不選:完整卷證全放公開 repo(考場是自建合成專案時照舊這樣做)] [代價:別台機器重跑不了,公開那份不能單獨核對收據] [applies:考場是私有專案的演練與收證卷證]
+  WHY:裝置那路的失敗訊息同時含像堆疊的一行與 Caused by: 時判成不是斷言,不改判定、照實記成已知取捨 [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法五第二條,設計審 r1 實測] [因:改看報告尾端連續堆疊區塊會把訊息自帶 Caused by: 緊貼真實堆疊的合法案例判錯,也認不得真機的 ... 27 trimmed 截斷行;訊息裡的堆疊樣字串與真正的 Caused by: 文字上分不出來,往拒收的方向錯比較安全] [不選:改看尾端連續堆疊區塊] [代價:這種訊息的字串比較失敗要改訊息或在本機那路收] [test:t_test_quality_cli]
+  SEE:[[Projects/規格閘紅燈測試快照_計劃]] [[Systems/test-guard]]
 verified_by:
   - "[[Verification/測試品質工具接線_Node與Laravel原生消費驗證]]"
   - "[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]"
@@ -23,6 +26,7 @@ verified_by:
   - "[[Verification/測試品質分支第二輪修復驗證]]"
   - "[[Verification/測試品質分支第三輪審查停點]]"
   - "[[Verification/測試品質第四輪修補驗證]]"
+  - "[[Verification/2026-11-01_Android單元測試標準實機演練]]"
 ---
 # test-quality-cli
 
@@ -35,6 +39,8 @@ PITFALL: Node原生無匹配測試仍可退出0，甚至把檔案包裝算作pas
 REVISIT:[when-file:scripts/test_quality.py][by:2026-11-08] 擴充reporter或框架前先驗其真實身份與assertion歸因，format支援不等同原生framework資格。
 
 PITFALL: 原生reporter可能抹掉assertion例外型別，單看通用failure無法歸因 [出處:[[Verification/測試品質工具接線_CSharpAndroidiOS原生消費驗證]]] [根因:xUnit JUnit logger把型別写成failure，XCTest與AGP instrumentation reporter不填型別] [防回歸:test_xunit_generic_logger_assertion_is_attributed與test_xctest_native_assertion_message_is_attributed、test_android_native_assertion_without_type_is_attributed及原生卷證]。有限辨識必須沿實際訊息結構；一般執行例外只在訊息內提到斷言名稱不構成歸因，用反例守住。
+
+PITFALL: 用 Truth 或 JUnit 陣列比較寫的 Android 本機測試、或裝置上用字串 `assertEquals`、不帶訊息的 `assertTrue`、Hamcrest `assertThat` 寫的儀器測試,故障版明明是斷言紅,收證核對卻整份拒收(判成不是斷言失敗) [出處:[[Verification/2026-11-01_Android單元測試標準實機演練]]] [根因:本機那路的型別名單要求結尾剛好是 ComparisonFailure,Truth 的多了 WithFacts、陣列比較的多了 Array 前綴;裝置那路只認第一行以 `java.lang.AssertionError:` 開頭、全文有 JUnit `Assert` 堆疊] [防回歸:test_truth_local_assertion_types_are_attributed、test_truth_expect_rule_type_is_not_attributed、test_truth_lookalike_types_are_not_attributed、test_truth_device_text_without_type_is_not_attributed、test_runtime_exception_mentioning_truth_type_is_not_attributed、test_device_comparison_failure_and_bare_assertion_are_attributed、test_device_hamcrest_and_caused_by_in_message_are_attributed、test_local_array_comparison_failure_is_attributed_device_text_is_not、test_device_attribution_is_linear_on_many_newlines、test_device_runtime_around_comparison_failure_is_not_attributed;裝置那路五道條件各一支放寬就紅的(2026-11-02,[[Projects/Android測試防竄改檢查_計劃]]):test_device_indented_frames_are_attributed、test_device_first_line_trailing_space_is_stripped、test_device_assert_phrase_needs_word_boundary、test_device_assert_frame_must_be_fail_or_assert、test_device_message_mentioning_assert_frame_counts_from_first_frame;安全證據閘裝置文字那半 t_secev_tq_device_text_fault_counts_like_assertion]。這是上一條「原生 reporter 抹掉型別」的同族(AGP 裝置那路)。本機精確加 Truth 兩個型別與 `org.junit.internal.ArrayComparisonFailure`;`Expect` 規則的 `Truth$SimpleAssertionError` 也包非斷言例外,不加。裝置那路改成「第一行剛好是 `java.lang.AssertionError` 或 `org.junit.ComparisonFailure`、從第一個堆疊行起(含這一行)第一個 `Caused by:` 之前有 JUnit `Assert` 或 Hamcrest `MatcherAssert.assertThat` 堆疊」;Truth 與陣列比較在裝置上沒有型別名,維持不認。第一版切 `Caused by` 用了 `\n\s*Caused by:`,大量連續換行會變成二次方(10 萬個換行 16 秒,推送前的閘打斷不了),改成只吃空白與 Tab、從第一個堆疊行起(含這一行)才找,大輸入測試釘住。正反例都取自同一天平板與本機的實跑報告。收據存著當時的歸因結果,換了這版判定,同一份報告重算不同的舊收據核對會回 `recorded test outcomes differ from raw report`,要重收;安全證據閘兩條路共用這個判定:故障敏感度那條開始接受這類故障收據(t_secev_tq_truth_fault_counts_like_assertion),JUnit 宣告那條從無效變斷言失敗、兩者都不放行(t_secev_tq_truth_junit_declared_is_assertion_failed)。
 
 `scripts/test_test_quality_cli.py` 的獨立控制覆蓋收證、原生錯誤歸因與無效結果；不把業務算式抄成預期答案。
 
@@ -74,6 +80,11 @@ PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器
 ## 測試品質接入標準的 Room 節(2026-10-28,[[Projects/Room資料庫測試守衛_計劃]] 做法 7)
 
 - `commands/test-quality-standard.md` 加〈Android 資料層(Room)的撰寫補充〉:mock DAO 只證 Repository 邏輯、真的 Room 用記憶體資料庫;查詢、資料限制、交易、升級、Flow/LiveData 重送、型別轉換、預載資料庫七種情況各一條;官方不建議 Robolectric 跑 Room、Room KMP 用 `BundledSQLiteDriver`;升級用 `MigrationTestHelper` 加跑完全部升級的那支;Robolectric 跑升級測試要把結構檔放進 debug assets 標明是社群做法。`03-寫回圖譜.md` 那一句一併指過去。推送前的機械檢查在 [[Systems/room-guard]]。綁的測試 `t_test_quality_standard_android_room_section`。
+
+## 測試品質接入標準的 Android 本機單元測試節(2026-11-01,[[Projects/Android本機單元測試驗收標準_計劃]])
+
+- `commands/test-quality-standard.md` 在原生收證那一節之後加〈Android 本機單元測試的驗收標準〉,分「要有哪些」「怎麼寫才算數」「什麼證據才算過」三段:必有單元與邊界情況、Robolectric 是最後手段、不開 `isReturnDefaultValues`;協程(一支一個 `runTest`、共用排程器、`MainDispatcherRule`、`backgroundScope`)與 Flow(斷言 `value`、`stateIn` 先起收集者)的寫法;零選中、靠預設回傳值才綠、本機綠當裝置綠、重試到過都不算過。放在原生收證之後是 Enzo 選的:驗收條件跟收證規則放在一起讀。`03-寫回圖譜.md` 那一句一併指過去。綁的測試 `t_test_quality_standard_android_unit_section`。
+- 實機演練(2026-11-01,[[Projects/Android單元測試標準實機演練_計劃]])之後,同一節補了:加測試函式庫前看實際解析版本、儀器測試等真執行緒用真時間、收證前刪舊報告加 `--rerun`(Gradle 7.6 以前用 `--rerun-tasks`)、同類別混著當掉紅時縮小篩選、裝置那路哪些斷言收得到、Kotlin 靜態掃描要裝 Semgrep 並帶 `--semgrep`、機器抓不到要靠審查的四件事。綁的測試 `t_test_quality_standard_android_drill_lessons`。
 
 ## 給安全證據閘用的讀法(2026-10-20,[[Projects/安全主張驗收閘_計劃]])
 

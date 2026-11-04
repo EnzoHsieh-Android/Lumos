@@ -10737,6 +10737,13 @@ def t_loop_verify_progress():
         log.write_text("{broken\n", encoding="utf-8")
         r = run(vault, "loop", "verify-progress", "V")
         check("壞行 rc2 fail-closed", r.returncode == 2, r.stderr)
+        # fail-closed:合法 JSON 但不是物件,跟壞行同一種結果(代碼審 r2 邊界席:換共用篩法後曾靜默略過、回 rc0)
+        good = _j.dumps({"ts": "t", "kind": "caught", "loop": "V", "auditor": "s1", "severity": "minor"})
+        for junk in ("[]", "null", "42", '"x"'):
+            log.write_text(f"{good}\n{junk}\n", encoding="utf-8")
+            r = run(vault, "loop", "verify-progress", "V")
+            check(f"不是物件的行 rc2 fail-closed:{junk}", r.returncode == 2 and "Traceback" not in r.stderr and "clean_streak" not in r.stdout,
+                  f"rc={r.returncode} {r.stderr[-200:]}")
     finally:
         shutil.rmtree(root)
     print("  ✓ t_loop_verify_progress")
@@ -21068,7 +21075,10 @@ def t_android_e2e_gate_reads_mainline_config():
         (root / ".maestro" / "extra.yaml").write_text("appId: com.lab\n---\n- launchApp\n", encoding="utf-8")
         _e2e_set_cfg(root, lambda c: c["e2e"]["flows"].append(".maestro/extra.yaml"), commit="add flow")
         fp = _e2eg_fp(root)
-        _e2eg_rec(root, fp, runs=_e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other.yaml", ".maestro/extra.yaml")))
+        runs = _e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other.yaml", ".maestro/extra.yaml"))
+        # 分支新加的是新流程:照 Projects/UI流程驗收句與檢查對照_計劃〈做法〉5 要有檢查,紀錄帶上 checks
+        runs["blocks"] = {"ui": [{"flow": ".maestro/extra.yaml", "result": "pass", "checks": {"count": 1, "labels": []}}]}
+        _e2eg_rec(root, fp, runs=runs)
         rc, d = _e2eg_check(root)
         check("e2e gate S9:分支新加 flow 並跑過整套→放行", rc == 0 and d["status"] == "pass", str(d))
     print("  ✓ t_android_e2e_gate_reads_mainline_config")
@@ -22115,7 +22125,10 @@ def t_android_e2e_gate_r3_paths():
             c["e2e"]["features"]["other"]["cases"]["x"]["flows"] = [".maestro/other2.yaml"]
         _e2e_set_cfg(root, ren, commit="rename flow")
         fp = _e2eg_fp(root)
-        _e2eg_rec(root, fp, runs=_e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other2.yaml")))
+        runs = _e2eg_runs(flows=(".maestro/login.yaml", ".maestro/other2.yaml"))
+        # 改名後的檔是新流程(主線與分岔點的 e2e.flows 都沒有):照 Projects/UI流程驗收句與檢查對照_計劃〈做法〉5 要有檢查,紀錄帶上 checks
+        runs["blocks"] = {"ui": [{"flow": ".maestro/other2.yaml", "result": "pass", "checks": {"count": 1, "labels": []}}]}
+        _e2eg_rec(root, fp, runs=runs)
         rc, d = _e2eg_check(root)
         check("e2e paths ②:改名的 flow 舊名不算缺", rc == 0 and d["status"] == "pass", str(d)[:300])
     with tempfile.TemporaryDirectory() as td:   # ③
@@ -23376,6 +23389,653 @@ def t_android_e2e_run_script():
         ui = (rec_of(root) or {}).get("runs", {}).get("blocks", {}).get("ui", [])
         check("巢狀路徑與 ./ 開頭的 flow,judge 都認得範本寫的報告", r.returncode == 0 and [x["result"] for x in ui] == ["pass", "pass"],
               str((r.returncode, ui, r.stderr[-300:])))
+
+
+# ── UI 流程驗收句與檢查對照(Projects/UI流程驗收句與檢查對照_計劃;家 Systems/android-e2e-acceptance)──
+# 判準一律照計劃〈驗收條款〉S1 到 S13 的輸入與預期;commands.json 的形狀照計劃〈做法〉第 4 條的實機量測(Maestro 2.10.0):
+# 最外層攤平的清單,每筆 {"command": {<指令名>: {…, label}}, "metadata": {status, depth}}。
+
+def _e2ea_cmd(name, status="COMPLETED", label=None, depth=0, optional=False, inner=None):
+    """commands.json 的一筆。"""
+    body = dict(inner or {"condition": {"visible": {"text": "x", "optional": False}}}, optional=optional)
+    if label is not None:
+        body["label"] = label
+    return {"command": {name: body}, "metadata": {"status": status, "timestamp": 1, "duration": 1, "sequenceNumber": 0, "depth": depth}}
+
+
+def _e2ea_flow_run(cmds, status="COMPLETED"):
+    """一支 runFlow 父指令:內容帶同一批指令的副本(副本沒有執行狀態,不算、也不往裡找)。"""
+    return _e2ea_cmd("runFlowCommand", status=status, inner={"commands": [c["command"] for c in cmds]})
+
+
+def _e2ea_judge(root, tries, run_id="r1"):
+    """整套 judge 一支 flow(login)。tries 每筆一次嘗試:rc(預設 0)、cmds(commands.json 的內容:清單或物件就 json.dumps,
+    字串原樣寫,None 不建檔)、subs(debug 底下的子目錄,預設 ["login"];只有第一個放 commands.json)、ev(steps.json 有沒有記
+    evidence.dir,預設有)。→ (judge 結果, 紀錄, 那支 flow 的 UI 條目)。"""
+    rd = _e2ea_steps(root, tries, run_id)
+    r, rec = _e2e_judge(root, rd)
+    ui = rec["runs"]["blocks"]["ui"][0] if rec else None
+    return r, rec, ui
+
+
+def _e2ea_steps(root, tries, run_id="r1"):
+    """_e2ea_judge 的前半:照 tries 寫 run 目錄(steps.json、JUnit 報告、每次嘗試的 debug/<子目錄>/commands.json)→ run 目錄。"""
+    import json
+    rd = root / ".lumos" / "artifacts" / "android" / run_id
+    steps, files = [], {}
+    for i, t in enumerate(tries, 1):
+        ev = rd / "ui" / f".maestro__login.try{i}"
+        rep = f"ui/l.try{i}.xml"
+        files[rep] = _E2E_JUNIT_OK if t.get("rc", 0) == 0 else _E2E_JUNIT_FAIL
+        for j, sub in enumerate(t.get("subs", ["login"])):
+            d = ev / "debug" / sub
+            d.mkdir(parents=True, exist_ok=True)
+            body = t.get("cmds") if j == 0 else []
+            if body is not None:
+                (d / "commands.json").write_text(body if isinstance(body, str) else json.dumps(body, ensure_ascii=False), encoding="utf-8")
+        steps.append({"block": "ui", "name": ".maestro__login", "attempt": i, "rc": t.get("rc", 0), "report": rep,
+                      "evidence": {"dir": str(ev) if t.get("ev", True) else None, "crash": None}})
+    return _e2e_steps(root, _E2E_BASE_STEPS + steps, run_id=run_id, files=files)
+
+
+_E2EA_LAB = "驗收:login.ok#A1"
+_E2EA_SUB = [_e2ea_cmd("assertConditionCommand", label=_E2EA_LAB, depth=1)]
+_E2EA_GOOD = [_e2ea_cmd("launchAppCommand", inner={"appId": "com.lab"}), _e2ea_flow_run(_E2EA_SUB), *_E2EA_SUB,
+              _e2ea_cmd("assertConditionCommand")]
+
+
+def t_android_e2e_checks_recorded():
+    """S1:通過的 flow,那次嘗試 <evidence.dir>/debug 底下唯一子目錄的 commands.json 有兩個 COMPLETED 的 assertConditionCommand
+    (一個帶 label、一個不帶,帶 label 的在 runFlow 子流程裡)→ 整套紀錄 checks.count 2、labels 只有那一個 label;
+    runFlow 內容裡的副本不算;第一次紅、第二次過取第二次那個目錄。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2e_proj(td)
+        r, _rec, ui = _e2ea_judge(root, [{"cmds": _E2EA_GOOD}])
+        check("S1:兩個 COMPLETED 的檢查(一個在子流程裡,runFlow 內容的副本不算)→ count 2、labels 只有那個 label",
+              r.returncode == 0 and ui["result"] == "pass" and ui.get("checks") == {"count": 2, "labels": [_E2EA_LAB]},
+              str((r.stdout[-300:], r.stderr[-300:], ui)))
+    with tempfile.TemporaryDirectory() as td:   # 第一次紅、第二次過:取第二次那個目錄
+        root = _e2e_proj(td)
+        first = [_e2ea_cmd("assertConditionCommand", label="驗收:login.ok#A9")] * 3
+        r, _rec, ui = _e2ea_judge(root, [{"rc": 1, "cmds": first}, {"cmds": _E2EA_GOOD}])
+        check("S1:第一次紅、第二次過→取第二次那個目錄", ui["result"] == "pass" and ui.get("flaky")
+              and ui.get("checks") == {"count": 2, "labels": [_E2EA_LAB]}, str(ui))
+    with tempfile.TemporaryDirectory() as td:   # 截圖比對也是檢查;同一個 label 跑兩次(repeat 展開成兩筆)count 照算、labels 去重
+        root = _e2e_proj(td)
+        cmds = [_e2ea_cmd("assertScreenshotCommand", inner={"path": "b.png"}), _e2ea_cmd("assertConditionCommand", label=_E2EA_LAB),
+                _e2ea_cmd("assertConditionCommand", label=_E2EA_LAB, depth=2)]
+        r, _rec, ui = _e2ea_judge(root, [{"cmds": cmds}])
+        check("S1:assertScreenshotCommand 也算、repeat 讓 count 變大、labels 去重", ui.get("checks") == {"count": 3, "labels": [_E2EA_LAB]}, str(ui))
+    print("  ✓ t_android_e2e_checks_recorded")
+
+
+def t_android_e2e_checks_warned_skipped_ai_not_counted():
+    """S2:optional 失敗(WARNED)、條件不成立的 runFlow 裡沒跑到(父指令 SKIPPED、裡面的檢查不出現)、AI 類檢查 → 都不算進 count。"""
+    import tempfile
+    warned = _e2ea_cmd("assertConditionCommand", status="WARNED", label="驗收:login.ok#A2", optional=True)
+    skipped = _e2ea_flow_run([_e2ea_cmd("assertConditionCommand", label="驗收:login.ok#A3")], status="SKIPPED")
+    ai_ok = _e2ea_cmd("assertWithAICommand", label="驗收:login.ok#A4", inner={"assertion": "看到首頁"})
+    ai_warn = _e2ea_cmd("assertWithAICommand", status="WARNED", label="驗收:login.ok#A5", inner={"assertion": "看到首頁"})
+    counted = _e2ea_cmd("assertConditionCommand", label=_E2EA_LAB)
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2e_proj(td)
+        r, _rec, ui = _e2ea_judge(root, [{"cmds": [warned, skipped, ai_ok, ai_warn, counted]}])
+        check("S2:WARNED、SKIPPED 的 runFlow、AI 類檢查都不算,只算那一個 COMPLETED", r.returncode == 0
+              and ui.get("checks") == {"count": 1, "labels": [_E2EA_LAB]}, str(ui))
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2e_proj(td)
+        r, _rec, ui = _e2ea_judge(root, [{"cmds": [warned, skipped, ai_ok, ai_warn]}])
+        check("S2:只有不算的那幾種→count 0(不是 null)、flow 照樣過", ui["result"] == "pass" and ui.get("checks") == {"count": 0, "labels": []}, str(ui))
+    print("  ✓ t_android_e2e_checks_warned_skipped_ai_not_counted")
+
+
+def t_android_e2e_checks_unreadable_null():
+    """S3:evidence.dir 是空、debug 底下沒有或兩個以上子目錄、commands.json 不在、讀不懂(含指令形狀認不得)、超過巢狀或大小上限、
+    去重後 label 超過上限 → checks 是 null、checks_reason 是字串、checks_reason_code 寫明哪一種(label 不截斷);UI 的過與不過照原本規則。"""
+    import tempfile
+    deep = [1]
+    for _ in range(70):
+        deep = [deep]
+    many = [_e2ea_cmd("assertConditionCommand", label=f"驗收:login.ok#A{i}") for i in range(201)]
+    cases = [("evidence.dir 是空", {"cmds": _E2EA_GOOD, "ev": False}, "no_evidence"),
+             ("debug 底下沒有子目錄", {"cmds": _E2EA_GOOD, "subs": []}, "subdir_count"),
+             ("debug 底下兩個子目錄", {"cmds": _E2EA_GOOD, "subs": ["a", "b"]}, "subdir_count"),
+             ("commands.json 不在", {"cmds": None}, "missing"),
+             ("讀不懂的 JSON", {"cmds": "{not json"}, "unreadable"),
+             ("最外層不是清單", {"cmds": {"commands": _E2EA_GOOD}}, "unreadable"),
+             ("指令形狀認不得", {"cmds": [{"command": "assertConditionCommand", "metadata": {"status": "COMPLETED"}}]}, "unreadable"),
+             ("巢狀超過上限", {"cmds": [_e2ea_cmd("assertConditionCommand", inner={"x": deep})]}, "too_deep"),
+             ("檔案超過大小上限", {"cmds": "[" + " " * (16 * 1024 * 1024) + "]"}, "too_big"),
+             ("去重後 label 超過上限", {"cmds": many}, "too_many_labels")]
+    for desc, t, code in cases:
+        with tempfile.TemporaryDirectory() as td:
+            root = _e2e_proj(td)
+            r, rec, ui = _e2ea_judge(root, [t])
+            check(f"S3:{desc}→checks null、代碼 {code}、UI 照樣過",
+                  r.returncode == 0 and rec["runs"]["result"] == "pass" and ui["result"] == "pass" and "checks" in ui and ui["checks"] is None
+                  and ui.get("checks_reason_code") == code and isinstance(ui.get("checks_reason"), str) and ui["checks_reason"].strip()
+                  and "labels" not in ui, str((desc, r.stderr[-300:], str(ui)[:400])))
+    with tempfile.TemporaryDirectory() as td:   # ★對照★ 剛好 200 個 label 不算超過
+        root = _e2e_proj(td)
+        r, rec, ui = _e2ea_judge(root, [{"cmds": many[:200]}])
+        check("★對照★ S3:去重後剛好 200 個 label→照記、不截斷", (ui.get("checks") or {}).get("count") == 200
+              and len((ui.get("checks") or {}).get("labels") or []) == 200, str(ui)[:300])
+    with tempfile.TemporaryDirectory() as td:   # 兩次都沒過:照原本規則判沒過(讀不到執行紀錄不改判)
+        root = _e2e_proj(td)
+        r, rec, ui = _e2ea_judge(root, [{"rc": 1, "cmds": _E2EA_GOOD}, {"rc": 1, "cmds": None}])
+        check("S3:兩次都沒過→照舊沒過", r.returncode == 1 and ui["result"] == "fail", str(ui)[:300])
+    print("  ✓ t_android_e2e_checks_unreadable_null")
+
+
+def t_android_e2e_record_checks_type():
+    """S4:查證紀錄 checks 的型別不對 → _e2e_record_err 判讀不懂,推送檢查走「修好或刪掉紀錄」那條路(不是判定內部出錯);
+    紀錄版本 2 而 lumos 只認 1 → 走「更新 lumos、紀錄不要動」;judge 更新既有的版本 1 紀錄時版本寫成 2;steps.json 版本 1 照舊收。"""
+    import json
+    import tempfile
+    m = _load_lumos()
+    fp = "a" * 64
+
+    def rec_of(ui, schema=2):
+        return {"schema": schema, "fingerprint": fp, "history": [], "waivers": [],
+                "runs": {"result": "pass", "ended": _E2EG_T1, "blocks": {"ui": [dict({"flow": ".maestro/login.yaml", "result": "pass"}, **ui)]}}}
+    bad = [("checks 是字串", {"checks": "x"}), ("checks 是清單", {"checks": []}), ("count 是字串", {"checks": {"count": "2", "labels": []}}),
+           ("count 是 true", {"checks": {"count": True, "labels": []}}), ("labels 是字串", {"checks": {"count": 1, "labels": "a"}}),
+           ("labels 有非字串", {"checks": {"count": 1, "labels": [1]}}),
+           ("checks_reason 不是字串", {"checks": None, "checks_reason": 3, "checks_reason_code": "missing"}),
+           ("checks_reason_code 不在表裡", {"checks": None, "checks_reason": "x", "checks_reason_code": "weird"})]
+    for desc, ui in bad:
+        check(f"S4:{desc}→紀錄讀不懂", m._e2e_record_err(rec_of(ui), fp) is not None, desc)
+    for desc, ui in (("沒有 checks 欄(舊紀錄)", {}), ("count 0", {"checks": {"count": 0, "labels": []}}),
+                     ("null 加原因", {"checks": None, "checks_reason": "commands.json 不在", "checks_reason_code": "missing"})):
+        check(f"★對照★ S4:{desc}→讀得懂", m._e2e_record_err(rec_of(ui), fp) is None, str(m._e2e_record_err(rec_of(ui), fp)))
+    check("S4:紀錄版本 2 照收、3 不收", m._e2e_record_err(rec_of({}), fp) is None and m._e2e_record_err(rec_of({}, 3), fp) is not None)
+    with tempfile.TemporaryDirectory() as td:   # 推送檢查讀到型別壞的紀錄:修好或刪掉那條路
+        root = _e2eg_proj(td)
+        _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
+        fp2 = _e2eg_fp(root)
+        runs = _e2eg_runs()
+        runs["blocks"] = {"ui": [{"flow": ".maestro/login.yaml", "result": "pass", "checks": {"count": "2", "labels": []}}]}
+        _e2eg_rec(root, fp2, runs=runs)
+        rc, d = _e2eg_check(root)
+        check("S4:推送檢查讀到型別壞的 checks→擋、讀不懂、不是內部出錯", rc == 1 and d.get("bad_record") and "讀不懂" in d["reason"]
+              and d.get("gate_code") != "evaluation_error", str(d)[:400])
+        r = _e2eg_cl(root)
+        check("S4:擋下訊息叫人修好或刪掉紀錄", "修好或刪掉" in r.stderr, r.stderr[-400:])
+        runs["blocks"]["ui"][0]["checks"] = {"count": 2, "labels": []}
+        _e2eg_rec(root, fp2, runs=runs)
+        _p = root / ".lumos" / "e2e-records" / f"{fp2}.json"
+        _p.write_text(json.dumps(dict(json.loads(_p.read_text(encoding="utf-8")), schema=2)), encoding="utf-8")
+        _e2e_tgit(root, "add", "-A")
+        _e2e_tgit(root, "commit", "-qm", "v2")
+        rc, d = _e2eg_check(root)
+        check("★對照★ S4:版本 2 的紀錄照收→放行", rc == 0 and d["status"] == "pass", str(d)[:300])
+        old = _load_lumos()
+        old.E2E_RECORD_SCHEMA = 1   # 只認 1 的 lumos
+        d = _e2eg_eval(root, m=old)
+        check("S4:版本 2 的紀錄給只認 1 的 lumos→走「更新 lumos、紀錄不要動」", d["status"] == "blocked" and d.get("newer_schema")
+              and not d.get("bad_record"), str(d)[:300])
+    with tempfile.TemporaryDirectory() as td:   # judge 更新既有的版本 1 紀錄:版本寫成 2、新的 checks 寫進去
+        root = _e2e_proj(td)
+        r, rec, ui = _e2ea_judge(root, [{"cmds": _E2EA_GOOD}])
+        check("S4:範本腳本寫的 steps.json 版本 1 照舊被 judge 接受、新建的紀錄版本 2", r.returncode == 0 and rec["schema"] == 2, str(rec)[:200])
+        p = next((root / ".lumos" / "e2e-records").glob("*.json"))
+        old_rec = json.loads(p.read_text(encoding="utf-8"))
+        old_rec["schema"] = 1
+        old_rec["runs"]["blocks"]["ui"][0].pop("checks")
+        p.write_text(json.dumps(old_rec, ensure_ascii=False), encoding="utf-8")
+        _e2e_tgit(root, "add", "-A")
+        _e2e_tgit(root, "commit", "-qm", "old record")
+        r, rec, ui = _e2ea_judge(root, [{"cmds": _E2EA_GOOD}], run_id="r2")
+        check("S4:judge 更新版本 1 的紀錄→版本寫成 2", r.returncode == 0 and rec["schema"] == 2 and len(rec["history"]) == 2
+              and ui.get("checks") == {"count": 2, "labels": [_E2EA_LAB]}, str((r.stderr[-300:], str(rec)[:300])))
+    print("  ✓ t_android_e2e_record_checks_type")
+
+
+_E2EA_NEW = ".maestro/new.yaml"
+_E2EA_HINT = "lumos android-e2e waive "
+
+
+def _e2ea_case(**kw):
+    """新情境(login.fresh):兩句驗收句、另派代理審過、不碰單向門;kw 蓋過(值 None=拿掉那個鍵)。"""
+    c = {"flows": [_E2EA_NEW], "accept": [{"id": "A1", "text": "登入後看到首頁標題"}, {"id": "A2", "text": "帳密錯時看到錯誤訊息", "state": "錯誤"}],
+         "accept_review": {"by": "ai", "who": "claude-sonnet"}, "one_way": []}
+    c.update(kw)
+    return {k: v for k, v in c.items() if v is not None}
+
+
+def _e2ea_proj(td, cases=None, flows=(_E2EA_NEW,), vault=False, mutate=None):
+    """推送前判定用:_e2eg_proj(主線與分岔點有 login.ok、other.x)之後,在 feat 加新流程與 login 功能底下的新情境並提交。"""
+    root = _e2eg_proj(td, vault=vault)
+    for f in flows:
+        (root / f).parent.mkdir(parents=True, exist_ok=True)
+        (root / f).write_text("appId: com.lab\n---\n- launchApp\n", encoding="utf-8")
+
+    def mut(c):
+        c["e2e"]["flows"] += list(flows)
+        c["e2e"]["features"]["login"]["cases"].update({"fresh": _e2ea_case()} if cases is None else cases)
+        if mutate:
+            mutate(c)
+    _e2e_set_cfg(root, mut, commit="new case")
+    return root
+
+
+def _e2ea_ui(flow, checks="absent", code=None):
+    """整套紀錄裡一支 flow 的 UI 條目:checks 給 dict 就記、None 記 null 加原因與代碼、"absent" 不帶 checks 欄(舊版 lumos 寫的)。"""
+    e = {"flow": flow, "result": "pass"}
+    if checks is None:
+        e.update(checks=None, checks_reason=f"讀不到執行紀錄({code})", checks_reason_code=code)
+    elif checks != "absent":
+        e["checks"] = checks
+    return e
+
+
+def _e2ea_ck(*labels, count=None):
+    return {"count": len(labels) if count is None else count, "labels": list(labels)}
+
+
+def _e2ea_rec(root, ui, waivers=None, result="pass"):
+    """這一版的整套紀錄(ui:UI 條目清單;ran.flows 照條目)並提交 → (rc, check 結果)。"""
+    fp = _e2eg_fp(root)
+    runs = _e2eg_runs(result, flows=[e["flow"] for e in ui])
+    runs["blocks"] = {"ui": ui}
+    _e2eg_rec(root, fp, runs=runs, waivers=waivers)
+    return _e2eg_check(root)
+
+
+def _e2ea_txt(d):
+    import json
+    return json.dumps(d, ensure_ascii=False)
+
+
+_E2EA_OLD = [_e2ea_ui(".maestro/login.yaml"), _e2ea_ui(".maestro/other.yaml")]
+_E2EA_FULL = _e2ea_ck("驗收:login.fresh#A1", "驗收:login.fresh#A2")
+
+
+def t_android_e2e_gate_new_flow_checks():
+    """S5:整套通過、新流程 checks.count 是 0、checks 是 null(〈成因與處方〉每個代碼各一例)或沒有 checks 欄 → 以「沒有檢查」擋下、照表印處方;
+    只有工具類擋下時附放行指令,同一次有任一條內容類擋下時不附。"""
+    import tempfile
+    fixes = {"no_evidence": "升級 Maestro 到 2.x", "subdir_count": "跑 lumos update 後重跑整套", "missing": "跑 lumos update 後重跑整套",
+             "unreadable": "回報工具鏈", "too_deep": "把流程拆小", "too_big": "把流程拆小", "too_many_labels": "把流程拆小"}
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td)
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _E2EA_FULL)])
+        check("★對照★ S5:新流程有檢查、每句都對到→放行", rc == 0 and d["status"] == "pass", str(d)[:400])
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))])
+        check("S5:新流程 count 0→以「沒有檢查」擋下", rc == 1 and d.get("gate_code") == "e2e_accept_no_checks"
+              and "這支流程沒有任何檢查" in _e2ea_txt(d) and _E2EA_NEW in _e2ea_txt(d), str(d)[:500])
+        r = _e2eg_cl(root)
+        check("S5:零檢查是內容類→不附放行指令", r.returncode != 0 and "這支流程沒有任何檢查" in r.stderr and _E2EA_HINT not in r.stderr, r.stderr[-800:])
+        for code, word in fixes.items():
+            rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, None, code)])
+            r = _e2eg_cl(root)
+            check(f"S5:新流程 checks null({code})→擋、印讀不到的原因與處方、只有工具類所以附放行指令",
+                  rc == 1 and d.get("gate_code") == "e2e_accept_no_checks" and d.get("accept_classes") == ["e2e_accept_no_checks"]
+                  and "讀不到執行紀錄" in r.stderr and word in r.stderr and _E2EA_HINT in r.stderr, str((code, d.get("gate_code"), r.stderr[-700:])))
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW)])
+        r = _e2eg_cl(root)
+        check("S5:紀錄裡新流程沒有 checks 欄→擋、處方叫人更新 lumos、附放行指令", rc == 1 and d.get("gate_code") == "e2e_accept_no_checks"
+              and "紀錄裡沒有檢查欄" in r.stderr and "更新 lumos 後重跑整套" in r.stderr and _E2EA_HINT in r.stderr, r.stderr[-700:])
+    with tempfile.TemporaryDirectory() as td:   # 工具類加內容類同時成立:不附
+        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept_review=None)})
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, None, "missing")])
+        r = _e2eg_cl(root)
+        check("S5:讀不到(工具類)加沒有審查紀錄(內容類)→兩類都列、不附放行指令", rc == 1
+              and d.get("accept_classes") == ["e2e_accept_no_checks", "e2e_accept_uncovered"]
+              and "跑 lumos update 後重跑整套" in r.stderr and "另派代理審" in r.stderr and _E2EA_HINT not in r.stderr, r.stderr[-800:])
+    print("  ✓ t_android_e2e_gate_new_flow_checks")
+
+
+def t_android_e2e_gate_new_case_requires_accept():
+    """S6:有 flows 的新情境沒有 accept 或沒有 accept_review、任何新情境沒寫 one_way → 擋下並印對應原因;
+    只列截圖(沒有 flows)的新情境沒有 accept 不因此擋。"""
+    import tempfile
+    for desc, kw, code, word in (("沒有 accept", {"accept": None}, "e2e_accept_uncovered", "新情境要先寫驗收句"),
+                                 ("沒有 accept_review", {"accept_review": None}, "e2e_accept_uncovered", "另派代理審"),
+                                 ("沒寫 one_way", {"one_way": None}, "e2e_accept_one_way", "要宣告碰哪幾類單向門")):
+        with tempfile.TemporaryDirectory() as td:
+            root = _e2ea_proj(td, cases={"fresh": _e2ea_case(**kw)})
+            rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _E2EA_FULL)])
+            check(f"S6:新情境{desc}→擋並印原因", rc == 1 and d.get("gate_code") == code and word in _e2ea_txt(d)
+                  and "login.fresh" in _e2ea_txt(d), str(d)[:500])
+    vis = {"look": {"visual": ["home_visual"], "one_way": []}}
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td, cases=vis, flows=(), mutate=lambda c: c["e2e"].update(visual=["home_visual"]))
+        rc, d = _e2ea_rec(root, _E2EA_OLD)
+        check("S6:只列截圖的新情境沒有 accept→不因此擋", rc == 0 and d["status"] == "pass", str(d)[:400])
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td, cases={"look": {"visual": ["home_visual"]}}, flows=(), mutate=lambda c: c["e2e"].update(visual=["home_visual"]))
+        rc, d = _e2ea_rec(root, _E2EA_OLD)
+        check("S6:只列截圖的新情境沒寫 one_way→照樣擋", rc == 1 and d.get("gate_code") == "e2e_accept_one_way" and "login.look" in _e2ea_txt(d), str(d)[:400])
+    print("  ✓ t_android_e2e_gate_new_case_requires_accept")
+
+
+def t_android_e2e_gate_accept_coverage():
+    """S7:新情境某一句在它所有 flow 的 label 聯集(flows 路徑正規化後對接)找不到→擋並列缺的句子編號;每句都對到不擋、
+    多出指到別的情境或不存在情境的 label 不擋;舊情境補了 accept 同樣逐句對照,但不要 accept_review、one_way;
+    情境裡有一支 flow 的 checks 是 null→不報句子沒對到,改照那支 flow 的代碼印讀不到的處方。"""
+    import tempfile
+    a1, a2 = "驗收:login.fresh#A1", "驗收:login.fresh#A2"
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td)
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1, "驗收:other.x#A1", "驗收:nope.zz#A7"))])
+        check("S7:A2 沒有檢查對到→擋並列 A2(不列 A1)", rc == 1 and d.get("gate_code") == "e2e_accept_uncovered"
+              and "A2 沒有檢查對到" in _e2ea_txt(d) and "A1 沒有檢查對到" not in _e2ea_txt(d), str(d)[:500])
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1, a2, "驗收:other.x#A1", "驗收:nope.zz#A7"))])
+        check("S7:每句都對到、多出別的情境與不存在情境的 label→不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
+    two = ".maestro/new2.yaml"
+    with tempfile.TemporaryDirectory() as td:   # 兩支 flow 的聯集;情境寫 ./ 開頭,紀錄是整套清單的寫法
+        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(flows=[_E2EA_NEW, "./" + two])}, flows=(_E2EA_NEW, two))
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1)), _e2ea_ui(two, _e2ea_ck(a2))])
+        check("S7:兩支 flow 的 label 聯集對到每一句(路徑正規化後對接)→不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(a1)), _e2ea_ui(two, _e2ea_ck("驗收:login.fresh#A3"))])
+        check("★對照★ S7:聯集裡沒有 A2→擋", rc == 1 and "A2 沒有檢查對到" in _e2ea_txt(d), str(d)[:400])
+    with tempfile.TemporaryDirectory() as td:   # 舊情境自己補了 accept:逐句對照,不要求審查紀錄與 one_way
+        root = _e2eg_proj(td)
+        _e2e_set_cfg(root, lambda c: c["e2e"]["features"]["login"]["cases"]["ok"].update(accept=[{"id": "A1", "text": "看到首頁"}]), commit="legacy accept")
+        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck()), _e2ea_ui(".maestro/other.yaml")])
+        check("S7:舊情境補了 accept、A1 沒對到→擋;不因沒有審查紀錄或 one_way 擋", rc == 1 and d.get("accept_classes") == ["e2e_accept_uncovered"]
+              and "A1 沒有檢查對到" in _e2ea_txt(d) and "另派代理審" not in _e2ea_txt(d) and "單向門" not in _e2ea_txt(d), str(d)[:500])
+        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(_E2EA_LAB)), _e2ea_ui(".maestro/other.yaml")])
+        check("S7:舊情境補了 accept、每句都對到→放行", rc == 0 and d["status"] == "pass", str(d)[:400])
+        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", None, "unreadable"), _e2ea_ui(".maestro/other.yaml")])
+        r = _e2eg_cl(root)
+        check("S7:情境裡有一支 flow 的 checks 是 null→不報句子沒對到,改歸沒有檢查、印那個代碼的處方",
+              rc == 1 and d.get("accept_classes") == ["e2e_accept_no_checks"] and "沒有檢查對到" not in _e2ea_txt(d)
+              and "回報工具鏈" in r.stderr and "沒有檢查對到" not in r.stderr, str((d, r.stderr[-500:]))[:900])
+    print("  ✓ t_android_e2e_gate_accept_coverage")
+
+
+def t_android_e2e_gate_one_way_needs_human():
+    """S8:新情境 one_way 非空,或功能名、情境名、驗收句經規格閘同一支掃描命中金流、對外送出、不可逆,而 accept_review.by 不是 human
+    → 擋並印命中的類別與字;只命中守衛面不算;全形或夾零寬字元的關鍵字照樣命中。"""
+    import tempfile
+
+    def acc(t1):
+        return [{"id": "A1", "text": t1}, {"id": "A2", "text": "看到完成畫面"}]
+    cases = [("宣告 payment、代理審", "fresh", {"one_way": ["payment"]}, "ai", ["金流"]),
+             ("宣告 payment、人點頭", "fresh", {"one_way": ["payment"]}, "human", None),
+             ("情境名命中 refund", "refund", {}, "ai", ["金流", "refund"]),
+             ("驗收句命中送出", "fresh", {"accept": acc("按下送出後看到完成")}, "ai", ["對外送出", "送出"]),
+             ("全形的 send", "fresh", {"accept": acc("按 \uff53\uff45\uff4e\uff44 後看到完成")}, "ai", ["對外送出"]),
+             ("夾零寬字元的退\u200b款", "fresh", {"accept": acc("看到退\u200b款按鈕")}, "ai", ["金流"]),
+             ("只命中守衛面的 canary", "fresh", {"accept": acc("canary 標籤出現")}, "ai", None),
+             ("命中了、人點頭", "fresh", {"accept": acc("按下送出後看到完成")}, "human", None)]
+    for desc, cn, kw, by, words in cases:
+        with tempfile.TemporaryDirectory() as td:
+            root = _e2ea_proj(td, cases={cn: _e2ea_case(accept_review={"by": by, "who": "enzo" if by == "human" else "claude-sonnet"}, **kw)})
+            rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(f"驗收:login.{cn}#A1", f"驗收:login.{cn}#A2"))])
+            if words is None:
+                check(f"S8:{desc}→不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
+            else:
+                check(f"S8:{desc}→擋並印命中的類別與字", rc == 1 and d.get("gate_code") == "e2e_accept_one_way"
+                      and all(w in _e2ea_txt(d) for w in words), str(d)[:500])
+    print("  ✓ t_android_e2e_gate_one_way_needs_human")
+
+
+def t_android_e2e_gate_new_rules_order_and_waiver():
+    """S9:這一版沒有整套紀錄、或整套沒過 → 照原本的路印原本的訊息,新規則不搶先;有放行(人或 AI)→ 在放行那一步放行、
+    不算新規則也不印第 7、8 條的提醒,AI 放行照舊被列為待人看。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept=None)})
+        rc, d = _e2eg_check(root)
+        check("S9:沒有整套紀錄→原本的「沒有查證紀錄」,新規則不搶先", rc == 1 and "沒有查證紀錄" in d["reason"]
+              and not str(d.get("gate_code") or "").startswith("e2e_accept") and "驗收句" not in d["reason"], str(d)[:400])
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))], result="fail")
+        check("S9:整套沒過→原本的「整套結果是沒過」,新規則不搶先", rc == 1 and "整套結果是沒過" in d["reason"]
+              and not d.get("accept_classes") and "驗收句" not in _e2ea_txt(d), str(d)[:400])
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))],
+                          waivers=[{"by": "human", "who": "enzo", "at": _E2EG_T1, "note": "裝置借走先放行這一版", "acked": True}])
+        check("S9:人放行→放行、新規則不算、提醒不算", rc == 0 and d["status"] == "waived" and not d.get("accept_notes"), str(d)[:400])
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))],
+                          waivers=[{"by": "ai", "who": "ai", "at": _E2EG_T1, "note": "沒有終端的流程先放行", "acked": False}])
+        r = _e2eg_cl(root)
+        out = r.stdout + r.stderr
+        check("S9:AI 放行→放行、照舊列為待人看,不印新規則與舊項目、檢查數的提醒", rc == 0 and d["status"] == "waived"
+              and r.returncode == 0 and "AI 放行還沒人看過" in out and "驗收句" not in out and "舊情境" not in out
+              and "分岔點沒有可比的紀錄" not in out, out[-600:])
+    print("  ✓ t_android_e2e_gate_new_rules_order_and_waiver")
+
+
+def t_android_e2e_gate_legacy_listed_not_blocked():
+    """S10:情境或流程在主線與分岔點已經存在(流程路徑正規化後比),或主線與分岔點都沒有 features 表而情境有 flows 且全是舊流程 → 不因此擋,
+    整套通過時印出沒有 accept 的舊情境與零檢查的舊流程;第一次導入 features 表時沒有 flows 的情境算新情境、要寫 one_way。"""
+    import copy
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2eg_proj(td)
+        _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
+        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(count=0)), _e2ea_ui(".maestro/other.yaml")])
+        notes = d.get("accept_notes") or []
+        check("S10:舊情境沒有 accept、舊流程零檢查→不擋,列出名字", rc == 0 and d["status"] == "pass"
+              and any("login.ok" in n and "other.x" in n for n in notes) and any(".maestro/login.yaml" in n and "檢查" in n for n in notes)
+              and all(n.startswith("提醒") for n in notes), str(d)[:600])
+        r = _e2eg_cl(root)
+        check("S10:整套通過時推送檢查印出這幾行(以「提醒」開頭)", r.returncode == 0 and "提醒" in r.stdout and "login.ok" in r.stdout
+              and ".maestro/login.yaml" in r.stdout, (r.stdout + r.stderr)[-600:])
+    with tempfile.TemporaryDirectory() as td:   # 流程路徑正規化後比:./ 開頭的寫法還是舊流程
+        root = _e2eg_proj(td)
+
+        def dot(c):
+            c["e2e"]["flows"] = ["./.maestro/login.yaml", ".maestro/other.yaml"]
+            c["e2e"]["features"]["login"]["cases"]["ok"]["flows"] = ["./.maestro/login.yaml"]
+        _e2e_set_cfg(root, dot, commit="dot flows")
+        rc, d = _e2ea_rec(root, [_e2ea_ui("./.maestro/login.yaml", _e2ea_ck(count=0)), _e2ea_ui(".maestro/other.yaml")])
+        check("S10:同一支流程換成 ./ 開頭的寫法→還是舊流程、不擋", rc == 0 and d["status"] == "pass", str(d)[:400])
+    feats = {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}},
+             "other": {"paths": ["app/src/main/B.kt"], "cases": {"x": {"flows": [".maestro/other.yaml"]}}}}
+    with tempfile.TemporaryDirectory() as td:   # 主線與分岔點都沒有 features 表:第一次導入
+        root = _e2eg_proj(td, e2e={"features": None})
+        check("現場成立:主線沒有 features 表", "features" not in _e2e_tgit(root, "show", "main:.lumos/macrobench.json"))
+
+        def first(c, solo):
+            c["e2e"]["features"] = copy.deepcopy(feats)
+            c["e2e"]["visual"] = ["home_visual"]
+            c["e2e"]["features"]["login"]["cases"]["solo"] = solo
+        _e2e_set_cfg(root, lambda c: first(c, {"visual": ["home_visual"]}), commit="add features")
+        rc, d = _e2ea_rec(root, _E2EA_OLD)
+        check("S10:第一次導入 features 表:flows 全是舊流程的情境算舊的、沒有 flows 的算新的要寫 one_way", rc == 1
+              and d.get("accept_classes") == ["e2e_accept_one_way"] and "login.solo" in _e2ea_txt(d) and "login.ok" not in str(d.get("accept_items")),
+              str(d)[:500])
+        _e2e_set_cfg(root, lambda c: first(c, {"visual": ["home_visual"], "one_way": []}), commit="solo one_way")
+        rc, d = _e2ea_rec(root, _E2EA_OLD)
+        check("S10:補了 one_way→放行,舊情境列出", rc == 0 and d["status"] == "pass" and any("login.ok" in n for n in d.get("accept_notes") or []), str(d)[:500])
+    with tempfile.TemporaryDirectory() as td:   # 第一次導入時,有任一新流程的情境算新情境
+        root = _e2eg_proj(td, e2e={"features": None})
+        (root / _E2EA_NEW).write_text("appId: com.lab\n---\n- launchApp\n", encoding="utf-8")
+
+        def first_new(c):
+            c["e2e"]["features"] = copy.deepcopy(feats)
+            c["e2e"]["flows"].append(_E2EA_NEW)
+            c["e2e"]["features"]["login"]["cases"]["ok"]["flows"].append(_E2EA_NEW)
+        _e2e_set_cfg(root, first_new, commit="add features with new flow")
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck("x"))])
+        check("S10:第一次導入時情境帶新流程→算新情境、要驗收句", rc == 1 and "新情境要先寫驗收句" in _e2ea_txt(d) and "login.ok" in _e2ea_txt(d), str(d)[:500])
+    print("  ✓ t_android_e2e_gate_legacy_listed_not_blocked")
+
+
+def t_android_e2e_gate_check_count_drop_notice():
+    """S11:分岔點的紀錄裡同一支 flow 的 checks.count 比這次多 → 印前後數量、不擋;分岔點沒有 e2e 段、找不到、讀不懂或舊紀錄沒有 checks 欄
+    → 印「分岔點沒有可比的紀錄,這次不比」、不擋、不出例外。"""
+    import tempfile
+    m = _load_lumos()
+    nolook = "分岔點沒有可比的紀錄,這次不比"
+
+    def base_fp(root):
+        head = _e2e_tgit(root, "rev-parse", "HEAD").strip()
+        full, _err = m._e2e_config_at(root, head)
+        return m._e2e_fingerprint(root, head, full["e2e"], full)[0]
+
+    def base_rec(root, ck="absent", raw=None):
+        runs = _e2eg_runs()
+        runs["blocks"] = {"ui": [_e2ea_ui(".maestro/login.yaml", ck), _e2ea_ui(".maestro/other.yaml")]}
+        _e2eg_rec(root, base_fp(root), runs=runs, raw=raw)
+    for desc, ck, raw, now, want in (("從 5 個變 2 個", _e2ea_ck(count=5), None, 2, "檢查從 5 個變 2 個"),
+                                     ("數量沒變", _e2ea_ck(count=2), None, 2, None),
+                                     ("數量變多", _e2ea_ck(count=1), None, 2, None),
+                                     ("分岔點的紀錄讀不懂", "absent", "{bad json", 2, nolook),
+                                     ("分岔點的舊紀錄沒有 checks 欄", "absent", None, 2, nolook),
+                                     ("找不到分岔點的紀錄", None, None, 2, nolook)):
+        with tempfile.TemporaryDirectory() as td:
+            root = _e2eg_proj(td)
+            if ck is not None:
+                base_rec(root, ck, raw)
+            _e2eg_commit(root, {"app/src/main/A.kt": "a2\n"})
+            rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(count=now)), _e2ea_ui(".maestro/other.yaml")])
+            notes = d.get("accept_notes") or []
+            ok = rc == 0 and d["status"] == "pass"
+            if want is None:
+                ok = ok and not any("檢查從" in n for n in notes) and not any(nolook in n for n in notes)
+            else:
+                ok = ok and any(want in n for n in notes) and (want == nolook or any(".maestro/login.yaml" in n and want in n for n in notes))
+            check(f"S11:{desc}→不擋" + (f"、印「{want}」" if want else "、不印"), ok, str(d)[:500])
+    with tempfile.TemporaryDirectory() as td:   # 分岔點沒有 e2e 段(分支切出時還沒導入)
+        root = _e2eg_old_branch(td)
+        main_cfg = _e2e_tgit(root, "show", "main:.lumos/macrobench.json")
+        _e2eg_commit(root, {".lumos/macrobench.json": main_cfg, "app/src/main/A.kt": "a2\n"})
+        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml", _e2ea_ck(count=2)), _e2ea_ui(".maestro/other.yaml")])
+        check("S11:分岔點沒有 e2e 段→不擋、印不比、不出例外", rc == 0 and d["status"] == "pass" and any(nolook in n for n in d.get("accept_notes") or []),
+              str(d)[:500])
+    print("  ✓ t_android_e2e_gate_check_count_drop_notice")
+
+
+def t_android_e2e_gate_new_rules_next_step():
+    """S12:新規則擋下時下一步不印整套重跑那一行;只有讀不到執行紀錄的那類附放行指令(多類同時擋下而有一類不附就不附);
+    治理帳記對應類別的 gate_code,多類同時成立時訊息全列、extra.accept_classes 記全部類別。"""
+    import tempfile
+    rerun = "整套跑,跑完提交紀錄再推"
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept_review=None, one_way=None)}, vault=True)
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _e2ea_ck(count=0))])
+        allc = ["e2e_accept_no_checks", "e2e_accept_uncovered", "e2e_accept_one_way"]
+        check("S12:三類同時成立→gate_code 記最前面那類、accept_classes 記全部", rc == 1 and d.get("gate_code") == allc[0]
+              and d.get("accept_classes") == allc, str(d)[:500])
+        r = _e2eg_cl(root)
+        check("S12:三類訊息全列、不印整套重跑那一行、有內容類所以不附放行指令", "這支流程沒有任何檢查" in r.stderr and "另派代理審" in r.stderr
+              and "要宣告碰哪幾類單向門" in r.stderr and rerun not in r.stderr and _E2EA_HINT not in r.stderr, r.stderr[-900:])
+        ev = _e2eg_events(root, "blocked")
+        check("S12:治理帳記最前面那類的 gate_code 與全部類別", bool(ev) and ev[-1].get("gate_code") == allc[0]
+              and ev[-1].get("accept_classes") == allc, str(ev[-1:])[:400])
+    with tempfile.TemporaryDirectory() as td:
+        root = _e2ea_proj(td, vault=True)
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, None, "no_evidence")])
+        r = _e2eg_cl(root)
+        ev = _e2eg_events(root, "blocked")
+        check("S12:只有讀不到執行紀錄→附放行指令、不印整套重跑那一行", _E2EA_HINT in r.stderr and rerun not in r.stderr, r.stderr[-700:])
+        check("S12:治理帳記沒有檢查那類", bool(ev) and ev[-1].get("gate_code") == "e2e_accept_no_checks"
+              and ev[-1].get("accept_classes") == ["e2e_accept_no_checks"], str(ev[-1:])[:400])
+    with tempfile.TemporaryDirectory() as td:   # 只有單向門沒人點頭(內容類)
+        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(one_way=["payment"])}, vault=True)
+        rc, d = _e2ea_rec(root, [*_E2EA_OLD, _e2ea_ui(_E2EA_NEW, _E2EA_FULL)])
+        r = _e2eg_cl(root)
+        ev = _e2eg_events(root, "blocked")
+        check("S12:只有單向門沒人點頭→治理帳記那類、不附放行指令", bool(ev) and ev[-1].get("gate_code") == "e2e_accept_one_way"
+              and _E2EA_HINT not in r.stderr and rerun not in r.stderr, (str(ev[-1:]) + r.stderr[-500:])[:900])
+    print("  ✓ t_android_e2e_gate_new_rules_next_step")
+
+
+def t_android_e2e_accept_config_strict():
+    """S13:accept、accept_review、one_way 格式不對 → macrobench --check-config 回 2 並印哪一項壞,推送檢查讀到同樣的設定也擋、不出例外;
+    三個鍵都不寫的舊設定照舊回 0。"""
+    import tempfile
+    ok_case = {"flows": [".maestro/login.yaml"], "accept": [{"id": "A1", "text": "看到首頁", "state": "正常"}],
+               "accept_review": {"by": "ai", "who": "claude-sonnet"}, "one_way": ["payment", "external-send", "prod-irreversible"]}
+    bad = [("accept 是空清單", {"accept": []}, "accept"),
+           ("accept 不是清單", {"accept": "看到首頁"}, "accept"),
+           ("accept 的項目不是物件", {"accept": ["看到首頁"]}, "accept"),
+           ("缺 id", {"accept": [{"text": "看到首頁"}]}, "id"),
+           ("id 重複", {"accept": [{"id": "A1", "text": "看到首頁"}, {"id": "A1", "text": "看到標題"}]}, "重複"),
+           ("id 含英數字以外的字", {"accept": [{"id": "A-1", "text": "看到首頁"}]}, "id"),
+           ("text 空", {"accept": [{"id": "A1", "text": "  "}]}, "text"),
+           ("state 不是字串", {"accept": [{"id": "A1", "text": "看到首頁", "state": 1}]}, "state"),
+           ("accept_review 不是物件", {"accept_review": "ai"}, "accept_review"),
+           ("by 不是 human 或 ai", {"accept_review": {"by": "bot", "who": "x"}}, "by"),
+           ("who 空", {"accept_review": {"by": "ai", "who": " "}}, "who"),
+           ("one_way 有三個值以外的字", {"one_way": ["payment", "money"]}, "one_way"),
+           ("one_way 不是清單", {"one_way": "payment"}, "one_way")]
+
+    def proj(td, case, commit=False):
+        return _e2e_proj(td, e2e={"features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": case}}}}, commit=commit)
+    for desc, kw, word in bad:
+        with tempfile.TemporaryDirectory() as td:
+            root = proj(td, dict(ok_case, **kw))
+            r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
+            check(f"S13:{desc}→--check-config 回 2 並點名", r.returncode == 2 and word in r.stderr and "features.login.cases.ok" in r.stderr,
+                  str((desc, r.returncode, r.stderr[-300:])))
+    with tempfile.TemporaryDirectory() as td:   # 寫了 accept 卻沒有 flows:沒有地方帶 label,這些句子永遠不會被對照
+        root = _e2e_proj(td, e2e={"visual": ["home_visual"], "features": {"login": {"paths": ["app/src/main/A.kt"], "cases": {
+            "ok": {"visual": ["home_visual"], "accept": ok_case["accept"], "one_way": []}}}}})
+        r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
+        check("S13:寫了 accept 卻沒有 flows(只列截圖)→--check-config 回 2 並說沒有地方帶 label", r.returncode == 2 and "flows" in r.stderr
+              and "label" in r.stderr and "features.login.cases.ok" in r.stderr, str((r.returncode, r.stderr[-300:])))
+    for desc, case in (("三個鍵都不寫", {"flows": [".maestro/login.yaml"]}), ("三個鍵都合格", ok_case),
+                       ("one_way 空清單", dict(ok_case, one_way=[]))):
+        with tempfile.TemporaryDirectory() as td:
+            root = proj(td, case)
+            r = _e2e_run(root, "macrobench", "--repo", str(root), "--check-config")
+            check(f"★對照★ S13:{desc}→回 0", r.returncode == 0, str((desc, r.stdout[-200:], r.stderr[-300:])))
+    with tempfile.TemporaryDirectory() as td:   # 推送檢查讀到同樣壞的設定:擋、不是判定內部出錯
+        root = _e2ea_proj(td, cases={"fresh": _e2ea_case(accept=[])})
+        rc, d = _e2eg_check(root)
+        check("S13:推送檢查讀到 accept 是空清單→擋(設定不合格)、不是內部出錯", rc == 1 and "不合格" in d["reason"] and "accept" in d["reason"]
+              and d.get("gate_code") != "evaluation_error", str(d)[:400])
+    print("  ✓ t_android_e2e_accept_config_strict")
+
+
+def t_android_e2e_checks_preview_and_history():
+    """補洞(代碼審 r1):judge 的預覽(整套與按功能兩條路)列出零檢查的流程與沒對到的句子、註明哪些會擋由推送檢查判;
+    本機檢測總表那筆 UI 項目帶 checks 數;擋下條目與舊項目清單超過 E2E_ACCEPT_SHOW(10)條時只列前 10 條加總數。"""
+    import json
+    import tempfile
+    feats = {"login": {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"],
+                                                                         "accept": [{"id": "A1", "text": "看到首頁"}, {"id": "A2", "text": "看到標題"}]}}}}
+    with tempfile.TemporaryDirectory() as td:   # 整套:A2 沒對到
+        root = _e2e_proj(td, e2e={"features": feats})
+        rd = _e2ea_steps(root, [{"cmds": [_e2ea_cmd("assertConditionCommand", label=_E2EA_LAB)]}])
+        r = _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--history")
+        rec = json.loads(next((root / ".lumos" / "e2e-records").glob("*.json")).read_text(encoding="utf-8"))
+        cov = [n for n in rec["runs"]["notices"] if "沒有檢查對到" in n]
+        check("預覽(整套):列出 login.ok 沒對到的 A2、不列 A1、註明由推送檢查判", r.returncode == 0 and len(cov) == 1 and "login.ok" in cov[0]
+              and "A2" in cov[0] and "A1" not in cov[0] and "推送檢查" in cov[0] and cov[0] in r.stdout, str((rec["runs"]["notices"], r.stdout[-400:])))
+        rows = [json.loads(x) for x in (root / ".lumos/artifacts/android/history.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        check("總表:那筆 UI 項目帶 checks 數", rows and rows[-1]["items"][0].get("checks") == 1, str(rows[-1:])[:400])
+    with tempfile.TemporaryDirectory() as td:   # 按功能:零檢查
+        root = _e2e_proj(td, e2e={"features": feats})
+        rd = _e2ea_steps(root, [{"cmds": []}])
+        st = json.loads((rd / "steps.json").read_text(encoding="utf-8"))
+        st["selection"] = {"mode": "case", "cases": ["login.ok"], "flows": [".maestro/login.yaml"], "visual": [], "macrobench": [], "stability": []}
+        (rd / "steps.json").write_text(json.dumps(st, ensure_ascii=False), encoding="utf-8")
+        r = _e2e_run(root, "android-e2e", "judge", str(rd), "--repo", str(root), "--no-record", "--history")
+        zero = [ln for ln in r.stdout.splitlines() if "沒有任何檢查" in ln]
+        check("預覽(按功能):列出零檢查的流程、兩句都沒對到", r.returncode == 0 and len(zero) == 1 and ".maestro/login.yaml" in zero[0]
+              and "推送檢查" in zero[0] and any("A1、A2 沒有檢查對到" in ln for ln in r.stdout.splitlines()), r.stdout[-600:])
+        rows = [json.loads(x) for x in (root / ".lumos/artifacts/android/history.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        check("總表(按功能):零檢查也記 checks 數 0", rows and rows[-1]["items"][0].get("checks") == 0, str(rows[-1:])[:400])
+    many = tuple(f".maestro/n{i:02d}.yaml" for i in range(12))
+    with tempfile.TemporaryDirectory() as td:   # 12 條擋下:只列 10 條、寫總數
+        root = _e2ea_proj(td, cases={}, flows=many)
+        rc, d = _e2ea_rec(root, _E2EA_OLD + [_e2ea_ui(f, _e2ea_ck(count=0)) for f in many])
+        r = _e2eg_cl(root)
+        shown = [ln for ln in r.stderr.splitlines() if ln.startswith("    - [")]
+        check("12 條擋下→推送檢查只列 10 條、寫總數 12", rc == 1 and len(d.get("accept_items") or []) == 12 and len(shown) == 10
+              and "共 12 條" in r.stderr, str((len(shown), r.stderr[-500:])))
+    with tempfile.TemporaryDirectory() as td:   # 12 個沒有 accept 的舊情境:提醒只列 10 個、寫總數
+        fs = {f"f{i:02d}": {"paths": [f"app/src/main/F{i}.kt"], "cases": {"c": {"flows": [".maestro/login.yaml"]}}} for i in range(12)}
+        fs["login"] = {"paths": ["app/src/main/A.kt"], "cases": {"ok": {"flows": [".maestro/login.yaml"]}}}
+        longf = ".maestro/" + "a" * 60 + ".yaml"   # 超過 _secinv_names 預設的 40 字:舊流程清單要整段印出來
+        fs["other"] = {"paths": ["app/src/main/B.kt"], "cases": {"x": {"flows": [longf]}}}
+        root = _e2eg_proj(td, e2e={"features": fs, "flows": [".maestro/login.yaml", longf]})
+        _e2eg_commit(root, {longf: "appId: com.lab\n---\n- launchApp\n", "app/src/main/A.kt": "a2\n"})
+        rc, d = _e2ea_rec(root, [_e2ea_ui(".maestro/login.yaml"), _e2ea_ui(longf, _e2ea_ck(count=0))])
+        line = next((n for n in d.get("accept_notes") or [] if "舊情境" in n), "")
+        check("14 個舊情境→提醒只列 10 個、寫「等 14 個」", rc == 0 and "等 14 個" in line and line.count("、") == 9, line[:400])
+        zl = next((n for n in d.get("accept_notes") or [] if "舊流程" in n), "")
+        check("舊流程清單:超過 40 字的 flow 路徑整段印出(不截在 40 字)", longf in zl, zl[:300])
+    m = _load_lumos()
+    check("_secinv_names 預設每項照舊截 40 字", m._secinv_names(["x" * 50]) == "x" * 40)
+    print("  ✓ t_android_e2e_checks_preview_and_history")
 
 
 _MS_FAKE_ADB = r"""#!/usr/bin/env python3
@@ -26860,7 +27520,7 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         # 簿記 commit:pass 剛 append 的治理帳行(+留痕 json,同屬白名單)
         # ★canary-log/bypass-log 也算簿記(2026-08-27 死結根治):審計記帳在 loop 中發生,
         #   pass 後提交它們原本會失效擋推——補進白名單後不失效(Issues/簿記白名單漏canary與bypass帳)
-        (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"x"}\n', encoding="utf-8")
+        (Path(d) / "docs" / ".canary-log.jsonl").write_text('{"kind":"none","loop":"code-x","tier":"light"}\n', encoding="utf-8")
         (Path(d) / "docs" / ".bypass-log.jsonl").write_text('{"ts":"t"}\n', encoding="utf-8")
         # 測試耗時表也是簿記(推送與CI提速 代碼審 r1 合約圖譜席:原本只驗它在清單裡,沒驗留痕真的不失效)
         (Path(d) / "governance").mkdir(exist_ok=True)
@@ -26888,12 +27548,421 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         check("★簿記豁免不外溢:code commit 後照樣 blocked rc1★", r2.returncode == 1,
               f"rc={r2.returncode}\n{r2.stdout[:200]}")
         # 收緊釘②:改寫史(amend)→ 留痕 sha 非祖先,拒認
-        run_lumos(["code-loop", "pass", "--note", "re-pass", "--repo", d])
+        check("★前置★ 第二次 pass 真的寫進去,不然下面的拒認是舊留痕代打",
+              run_lumos(["code-loop", "pass", "--note", "re-pass", "--repo", d, "--loop", "code-x"]) == 0, "")
         g("commit", "-q", "--amend", "-m", "more code (amended)")
         r3 = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d],
                      capture_output=True, text=True)
         check("★改寫史後留痕 sha 非祖先 → 拒認 blocked rc1★", r3.returncode == 1,
               f"rc={r3.returncode}\n{r3.stdout[:200]}")
+
+
+# ── code-loop pass 驗凍結判定(Projects/留痕驗過審查_計劃)───────────────────────
+# 假帳與判定檔都手寫,指紋用 hashlib 直接算原始行:判準來自「凍結判定代表現帳」這條規格,不呼叫被測程式。
+
+def _clp_row(loop, rnd="r1", tier="high", sev="minor", **kw):
+    r = {"ts": "2026-10-20T10:00:00+08:00", "kind": "none", "loop": loop, "auditor": "s1", "severity": sev, "tier": tier}
+    if rnd is not None:
+        r["round"] = rnd
+    r.update(kw)
+    return r
+
+
+def _clp_lines(rows):
+    import json as _j
+    return [_j.dumps(r, ensure_ascii=False) for r in rows]
+
+
+def _clp_ledger(d, lines):
+    (Path(d) / "docs").mkdir(exist_ok=True)
+    (Path(d) / "docs" / ".canary-log.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _clp_verdict(d, loop, lines, rc=0, rnd="r1", fails=()):
+    import hashlib as _h
+    import json as _j
+    p = Path(d) / "governance" / "replay" / loop
+    p.mkdir(parents=True, exist_ok=True)
+    (p / "verdict.json").write_text(_j.dumps({
+        "loop": loop, "round": rnd, "engine_rev": "x", "frozen_at": "t", "spec_path": "s", "spec_sha": "s", "rows": lines,
+        "all_row_shas": sorted(_h.sha256(ln.encode("utf-8")).hexdigest() for ln in lines), "files": {},
+        "verdict": {"rc": rc, "fails": list(fails)}}, ensure_ascii=False), encoding="utf-8")
+
+
+def _clp_repo(d, loop="code-x", rows=None, frozen=True, rc=0, fails=()):
+    _git_init_commit(d)
+    lines = _clp_lines(rows if rows is not None else [_clp_row(loop)])
+    _clp_ledger(d, lines)
+    if frozen:
+        _clp_verdict(d, loop, lines, rc=rc, fails=fails)
+    return lines
+
+
+def _clp_pass(d, *args):
+    return subprocess.run([sys.executable, GRAPHCTL, "code-loop", "pass", "--note", "n", "--repo", str(d), *args],
+                          capture_output=True, text=True)
+
+
+def _clp_events(d):
+    import json as _j
+    p = Path(d) / "docs" / ".governance-log.jsonl"
+    if not p.is_file():
+        return []
+    return [e for e in (_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()) if e.get("gate") == "code-loop"]
+
+
+def _clp_blocked(name, d, r, *words):
+    """擋下要同時成立:rc2、不寫 marker、不寫放行事件、不丟 traceback,訊息含這一條該有的字。"""
+    ev = _clp_events(d)
+    check(f"{name}:rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stdout[-200:]}\n{r.stderr[-300:]}")
+    check(f"{name}:不丟 traceback", "Traceback" not in r.stderr, r.stderr[-300:])
+    check(f"{name}:沒寫放行事件", not [e for e in ev if e.get("kind") in ("passed", "skipped")], str(ev)[:200])
+    check(f"{name}:沒寫 marker", _codeloop_read(d, _git_branch(d)) is None, "")
+    check(f"{name}:落了 pass-refused 帳", any(e.get("kind") == "blocked" and e.get("hard") is True
+                                              and str(e.get("note", "")).startswith("pass-refused:") for e in ev), str(ev)[:300])
+    for w in words:
+        check(f"{name}:訊息含 {w}", w in r.stderr, r.stderr[-400:])
+
+
+def t_codeloop_pass_requires_loop():
+    """[S1] 有審查帳時 pass 沒帶編號要擋。應抓到:拿掉這道判定,pass 就回到寫了就算。"""
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        _clp_blocked("沒帶編號", d, _clp_pass(d), "--loop", "skip")
+        ev = [e for e in _clp_events(d) if e.get("kind") == "blocked"]
+        check("擋下帳帶提交與分支", ev and ev[0].get("head_sha") == _git_head(d) and ev[0].get("ref") == _git_branch(d), str(ev)[:300])
+
+
+def t_codeloop_pass_no_ledger_unchanged():
+    """[S2] 沒有審查帳的專案行為不變。帶編號時不寫 nodes,所以 nodes 非空才代表驗過。"""
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "docs").mkdir()
+        r = _clp_pass(d)
+        check("無帳不帶編號:rc0", r.returncode == 0, r.stderr[-200:])
+        check("無帳不帶編號:也講明沒有驗(--repo 指錯時才看得出來)", "沒有驗" in r.stdout, r.stdout[-200:])
+        check("無帳:照舊寫 marker", (_codeloop_read(d, _git_branch(d)) or {}).get("status") == "passed", "")
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "docs").mkdir()
+        r = _clp_pass(d, "--loop", "code-x")
+        check("無帳帶編號:rc0", r.returncode == 0, r.stderr[-200:])
+        check("無帳帶編號:講明沒有驗", "沒有驗" in r.stdout, r.stdout[-200:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "passed"]
+        check("無帳帶編號:nodes 空", len(ev) == 1 and ev[0].get("nodes") == [], str(ev)[:200])
+
+
+def t_codeloop_pass_rejects_bad_loop():
+    """[S3] 編號壞、帳上沒有、帳壞都要擋,而且講得出出口。"""
+    for loop, word in (("code-a/b", "路徑"), ("code-..x", "路徑")):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d)
+            _clp_blocked(f"壞編號 {loop}", d, _clp_pass(d, "--loop", loop), word)
+    # 帳上有列、判定也綠,只有前綴這道能擋:不然擋下的是「帳上沒有」那條
+    for loop in ("design-x", "codestage"):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, loop=loop)
+            _clp_blocked(f"前綴不對 {loop}", d, _clp_pass(d, "--loop", loop), "要以 code- 開頭")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        _clp_blocked("帳上沒有這個編號", d, _clp_pass(d, "--loop", "code-nope"), "loop next", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        _clp_blocked("編號含空白要加引號", d, _clp_pass(d, "--loop", "code-a b"), "'code-a b'")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rows=[_clp_row("code-x", kind="spec-gate")], frozen=False)
+        _clp_blocked("只有規格閘留痕算沒有列", d, _clp_pass(d, "--loop", "code-x"), "loop next")
+    for name, bad in (("語法壞", "{bad"), ("不是物件", "[]"), ("巢狀過深", "[" * 200000)):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d)
+            _clp_ledger(d, [*lines, bad])
+            _clp_blocked(f"壞行:{name}", d, _clp_pass(d, "--loop", "code-x"), "第 2 行", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d)
+        p = Path(d) / "docs" / ".canary-log.jsonl"
+        p.write_bytes(p.read_bytes().replace(b'"s1"', b'"s\xff1"'))
+        _clp_verdict(d, "code-x", [lines[0].replace('"s1"', '"s�1"')])
+        r = _clp_pass(d, "--loop", "code-x")
+        check("非 UTF-8 用替代字元讀、跟凍結同一種解碼:放行", r.returncode == 0, r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        p = Path(d) / "docs" / ".canary-log.jsonl"
+        p.unlink()
+        p.mkdir()
+        _clp_blocked("帳檔讀不到", d, _clp_pass(d, "--loop", "code-x"), "skip")
+
+
+def t_codeloop_pass_checks_verdict():
+    """[S4] 判定檔是放行依據:不在、壞掉都擋;檔案在、結果 0、帳沒變才寫,而且 nodes 帶編號。"""
+    import json as _j
+    with tempfile.TemporaryDirectory() as d:
+        spec = Path(d) / "r1-snapshot.patch"
+        _git_init_commit(d)
+        spec.write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="r1-snapshot.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("判定檔不存在", d, r, "還沒有凍結判定", "--freeze", "--repo", str(spec.resolve()), "skip")
+        check("判定檔不存在:首凍不用 --note", "--note \"<" not in r.stderr.split("舊帳形狀")[0], r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "r0-舊.patch").write_text("x\n", encoding="utf-8")   # 檔案在,只有「只認最後一輪」能擋下借用
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="r0-舊.patch"), _clp_row("code-x", rnd="r2")]))
+        _clp_blocked("最後一輪沒記材料不借更早輪次", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="gone.patch")]))
+        _clp_blocked("材料檔不存在留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+        _git_init_commit(d)
+        (Path(outside) / "外面.patch").write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path=str(Path(outside) / "外面.patch"))]))
+        _clp_blocked("材料在 repo 外留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "a\x1b[31mb.patch").write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="a\x1b[31mb.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("材料檔名含控制字元", d, r, "--freeze", "<凍結 patch>")
+        check("印出的指令不帶控制字元", "\x1b" not in r.stderr, repr(r.stderr[-200:]))
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "s\nq.patch").write_text("x\n", encoding="utf-8")
+        (Path(d) / "s q.patch").write_text("別的檔\n", encoding="utf-8")   # 控制字元換成空格後剛好是另一個真的檔
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="s\nq.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("檔名帶換行不印成另一個檔", d, r, "<凍結 patch>")
+        check("檔名帶換行:沒有指到另一個檔", "s q.patch" not in r.stderr, repr(r.stderr[-300:]))
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        (Path(d) / "真的").mkdir()
+        (Path(d) / "真的" / "s.patch").write_text("x\n", encoding="utf-8")
+        (Path(d) / "捷徑").symlink_to(Path(d) / "真的")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="捷徑/s.patch")]))
+        _clp_blocked("材料走 repo 內的捷徑留佔位", d, _clp_pass(d, "--loop", "code-x"), "<凍結 patch>")
+    import shlex as _shlex
+    with tempfile.TemporaryDirectory() as d:
+        _git_init_commit(d)
+        name = "空 白$x.patch"
+        (Path(d) / name).write_text("x\n", encoding="utf-8")
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path=name)]))
+        r = _clp_pass(d, "--loop", "code-x")
+        want = _shlex.quote(str((Path(d) / name).resolve()))
+        _clp_blocked("含空白與錢字號的材料路徑照抄得回來", d, r, f"--spec {want}", f"--repo {_shlex.quote(str(Path(d).resolve()))}")
+    with tempfile.TemporaryDirectory() as parent:
+        d = str(Path(parent) / "r\nq")
+        Path(d).mkdir()
+        _git_init_commit(d)
+        _clp_ledger(d, _clp_lines([_clp_row("code-x", spec_path="gone.patch")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        _clp_blocked("repo 路徑帶換行留佔位", d, r, "--repo <repo 根>")
+        check("repo 路徑帶換行:沒有印成另一個路徑", "r q" not in r.stderr, repr(r.stderr[-300:]))
+    with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
+        lines = _clp_repo(d, frozen=False)
+        _clp_verdict(outside, "code-x", lines)
+        (Path(d) / "governance").mkdir()
+        (Path(d) / "governance" / "replay").symlink_to(Path(outside) / "governance" / "replay")
+        _clp_blocked("判定檔上層是捷徑", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+    for fails in (5, {"a": 1}, True, "x"):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d, rc=1)
+            p = Path(d) / "governance" / "replay" / "code-x" / "verdict.json"
+            v = _j.loads(p.read_text(encoding="utf-8"))
+            v["verdict"]["fails"] = fails
+            p.write_text(_j.dumps(v), encoding="utf-8")
+            _clp_blocked(f"判定檔壞:fails={fails!r}", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+    for name, body in (("不是 JSON", "{x"), ("不是物件", "[]"), ("巢狀過深", "[" * 200000),
+                       ("缺 verdict", '{"all_row_shas": [], "round": "r1"}'),
+                       ("缺 all_row_shas", '{"verdict": {"rc": 0}, "round": "r1"}'),
+                       ("缺 round", '{"verdict": {"rc": 0}, "all_row_shas": []}'),
+                       ("rc 型別錯", '{"verdict": {"rc": "0"}, "all_row_shas": [], "round": "r1"}')):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d)
+            (Path(d) / "governance" / "replay" / "code-x" / "verdict.json").write_text(body, encoding="utf-8")
+            _clp_blocked(f"判定檔壞:{name}", d, _clp_pass(d, "--loop", "code-x"), "判定檔")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d)
+        r = _clp_pass(d, "--loop", "code-x")
+        check("判定 rc0 帳沒變:放行", r.returncode == 0, r.stderr[-300:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "passed"]
+        check("放行事件 nodes 帶編號", len(ev) == 1 and ev[0].get("nodes") == ["code-x"], str(ev)[:200])
+        check("marker 綁 HEAD", (_codeloop_read(d, _git_branch(d)) or {}).get("head_sha") == _git_head(d), "")
+
+
+def t_codeloop_pass_accept_risk():
+    """[S5] 判定失敗要有涵蓋判定輪的接受風險人裁才放行。應抓到:只看有沒有人裁、或比到舊的那筆。"""
+    import json as _j
+
+    def retro(d, *decisions):
+        with open(Path(d) / "docs" / ".governance-log.jsonl", "a", encoding="utf-8") as f:
+            for dec, rounds in decisions:
+                f.write(_j.dumps({"gate": "loop-retro", "kind": "cap-decision", "loop": "code-x",
+                                  "decision": dec, "rounds": rounds}, ensure_ascii=False) + "\n")
+
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rc=1, fails=["處置集合"])
+        retro(d, ("extra-round", ["r1"]), ("accept-risk", ["r1"]))
+        r = _clp_pass(d, "--loop", "code-x")
+        check("最新人裁接受風險且含判定輪:放行", r.returncode == 0, r.stderr[-300:])
+        check("放行時講明是人裁", "人裁" in r.stdout, r.stdout[-200:])
+    for name, decs in (("沒有人裁", ()), ("最新是再開一輪", (("accept-risk", ["r1"]), ("extra-round", ["r1"]))),
+                       ("人裁不含判定輪", (("accept-risk", ["r0"]),))):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, rc=1, fails=["處置集合"])
+            retro(d, *decs)
+            _clp_blocked(name, d, _clp_pass(d, "--loop", "code-x"), "處置集合", "--disposal", "--spec", "--repo", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rc=1)
+        p = Path(d) / "docs" / ".governance-log.jsonl"
+        p.mkdir()
+        r = _clp_pass(d, "--loop", "code-x")
+        check("治理帳讀不到:rc2", r.returncode == 2, r.stderr[-300:])
+        check("治理帳讀不到:講明人裁讀不到,不說成沒有人裁", "讀不到人裁紀錄" in r.stderr, r.stderr[-300:])
+        check("治理帳讀不到:不丟 traceback", "Traceback" not in r.stderr, r.stderr[-300:])
+        check("治理帳讀不到:不寫 marker", _codeloop_read(d, _git_branch(d)) is None, "")
+
+
+def t_codeloop_pass_stale_verdict():
+    """[S6] 判定要代表現帳。應抓到:用清單比(重複列誤擋)、單向比(少列漏擋)、看結果在比對之前(舊失敗判定走不出來)。"""
+    import shutil
+    for name, change in (("多一列", lambda ls: ls + _clp_lines([_clp_row("code-x", rnd="r2")])), ("少一列", lambda ls: ls[:1])):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d, rows=[_clp_row("code-x", auditor="a"), _clp_row("code-x", auditor="b")])
+            _clp_ledger(d, change(lines))
+            _clp_blocked(f"凍結後{name}", d, _clp_pass(d, "--loop", "code-x"), "--freeze", "--note")
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d, rc=1, fails=["處置集合"])
+        _clp_ledger(d, lines + _clp_lines([_clp_row("code-x", rnd="r2")]))
+        r = _clp_pass(d, "--loop", "code-x")
+        check("舊判定失敗又補輪:給重凍,不叫人看結果", "--note" in r.stderr and "--disposal" not in r.stderr, r.stderr[-300:])
+    for name, extra in (("規格閘留痕", _clp_row("code-x", kind="spec-gate")), ("結局帳列", _clp_row("code-x", rnd=None, outcome="ok")),
+                        ("別的迴圈", _clp_row("code-y"))):
+        with tempfile.TemporaryDirectory() as d:
+            lines = _clp_repo(d)
+            _clp_ledger(d, lines + _clp_lines([extra]))
+            r = _clp_pass(d, "--loop", "code-x")
+            check(f"只多{name}:放行", r.returncode == 0, r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d)
+        _clp_ledger(d, lines + lines)
+        r = _clp_pass(d, "--loop", "code-x")
+        check("逐字重複列不算變:放行", r.returncode == 0, r.stderr[-300:])
+    with tempfile.TemporaryDirectory() as d:
+        padded = [ln + "  " for ln in _clp_lines([_clp_row("code-x")])]
+        _clp_repo(d, frozen=False)
+        _clp_ledger(d, padded)
+        _clp_verdict(d, "code-x", padded)    # replay 對不 strip 的原文算指紋
+        r = _clp_pass(d, "--loop", "code-x")
+        check("帳行尾端有空白:指紋照原文算,放行", r.returncode == 0, r.stderr[-300:])
+    # 真的跑一次凍結:手寫假判定只證明比對邏輯,這裡證明跟 replay 算出的指紋真的相等
+    v, repo, spec, ledger, *_ = _replay_fx(loop="code-rp")
+    try:
+        subprocess.run(["git", "-C", str(repo), "add", "-A"], capture_output=True)
+        subprocess.run(["git", "-C", str(repo), "commit", "-qm", "evidence"], capture_output=True)
+        run(v, "loop", "replay", "code-rp", "--freeze", "--spec", str(spec), "--repo", str(repo), expect_rc=0)
+        (repo / "docs").mkdir()
+        shutil.copy(ledger, repo / "docs" / ".canary-log.jsonl")
+        r = _clp_pass(repo, "--loop", "code-rp")
+        check("真凍結出來的判定檔:放行", r.returncode == 0, r.stderr[-300:])
+    finally:
+        shutil.rmtree(repo, ignore_errors=True)
+
+
+def t_codeloop_pass_light_loop():
+    """[S7] 輕量無輪次不要判定檔,但曾抓到 major 的 light 已失效(同 loop next 的 escalate)。"""
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rows=[_clp_row("code-x", rnd=None, tier="light")], frozen=False)
+        r = _clp_pass(d, "--loop", "code-x")
+        check("light 無輪次乾淨:放行", r.returncode == 0, r.stderr[-300:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "passed"]
+        check("light 放行也帶編號", ev and ev[0].get("nodes") == ["code-x"], str(ev)[:200])
+    for sev in ("major", "blocker"):
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, rows=[_clp_row("code-x", rnd=None, tier="light", sev=sev), _clp_row("code-x", rnd=None, tier="light")], frozen=False)
+            _clp_blocked(f"light 曾抓到 {sev}", d, _clp_pass(d, "--loop", "code-x"), "code-x-std", "skip")
+    with tempfile.TemporaryDirectory() as d:
+        _clp_repo(d, rows=[_clp_row("code-x", tier="light")], frozen=False)
+        _clp_blocked("light 有輪次照驗判定檔", d, _clp_pass(d, "--loop", "code-x"), "--freeze")
+
+
+def t_codeloop_pass_roundless_dead_end():
+    """[S8] 凍不了的迴圈不給凍結指令。應抓到:照做也走不通的死路訊息。"""
+    cases = (("標準級無輪次", [_clp_row("code-x", rnd=None, tier="standard")]),
+             ("高風險無輪次", [_clp_row("code-x", rnd=None, tier="high")]),
+             ("分級空白無輪次", [_clp_row("code-x", rnd=None, tier=None)]),
+             ("標準級混用", [_clp_row("code-x", tier="standard"), _clp_row("code-x", rnd=None, tier="standard")]),
+             ("light 混用", [_clp_row("code-x", tier="light"), _clp_row("code-x", rnd=None, tier="light")]))
+    for name, rows in cases:
+        with tempfile.TemporaryDirectory() as d:
+            _clp_repo(d, rows=rows, frozen=False)
+            r = _clp_pass(d, "--loop", "code-x")
+            _clp_blocked(name, d, r, "skip", "換新編號")
+            check(f"{name}:不給凍結指令", "--freeze" not in r.stderr, r.stderr[-300:])
+
+
+def t_loop_close_reads_nodes_first():
+    """[S9] 放行事件帶編號就認,不靠備註全文,也不靠審查帳知道有這個編號;舊事件照舊比備註。"""
+    import json as _j
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    spec = importlib.util.spec_from_file_location("lm_nodes", GRAPHCTL, loader=SourceFileLoader("lm_nodes", GRAPHCTL))
+    lm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(lm)
+
+    class E:
+        pass
+    with tempfile.TemporaryDirectory() as d:
+        env = E()
+        env.vault = Path(d) / "docs" / "kg"
+        env.vault.mkdir(parents=True)
+        gov = Path(d) / "docs" / ".governance-log.jsonl"
+        ev = [{"ts": "2026-10-01T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": ["code-new"], "detail": "沒寫編號"},
+              {"ts": "2026-10-02T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": [], "detail": "code-old r1 收斂"},
+              {"ts": "2026-10-03T00:00:00+08:00", "gate": "code-loop", "kind": "blocked", "nodes": ["code-blocked"], "detail": ""},
+              {"ts": "2026-10-04T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": ["code-new"], "detail": "順帶提到 code-other"},
+              {"ts": "2026-10-05T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": 5, "detail": "x"},
+              {"ts": "2026-10-05T00:00:00+08:00", "gate": "code-loop", "kind": "passed", "nodes": "code-str", "detail": "x"},
+              {"ts": "2026-10-05T00:00:00+08:00", "gate": "design-loop", "kind": "converged", "nodes": 5}]
+        gov.write_text("".join(_j.dumps(e, ensure_ascii=False) + "\n" for e in ev), encoding="utf-8")
+        stamps, _ = lm._loop_close_stamps(env, ())
+        check("nodes 有編號:不靠 known_loops 也認", stamps.get("code-new") == ev[3]["ts"], str(stamps))
+        check("nodes 不是清單:不崩、不把字串拆成單字元", not [k for k in stamps if len(k) == 1], str(stamps))
+        check("沒有 known_loops:舊事件認不到", "code-old" not in stamps, str(stamps))
+        stamps, _ = lm._loop_close_stamps(env, ("code-old", "code-new", "code-other"))
+        check("舊事件照舊比備註全文", stamps.get("code-old") == ev[1]["ts"], str(stamps))
+        check("有 nodes 就不讀備註:順帶提到的迴圈不算關門", "code-other" not in stamps, str(stamps))
+        check("擋下事件不算關門", "code-blocked" not in stamps, str(stamps))
+
+
+def t_codeloop_skip_unchanged():
+    """[S10] skip 是出口,不驗也不收編號:判定檔缺、帳有壞行都照常留痕。"""
+    with tempfile.TemporaryDirectory() as d:
+        lines = _clp_repo(d, frozen=False)
+        _clp_ledger(d, [*lines, "{bad"])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "skip", "--note", "不審", "--repo", d], capture_output=True, text=True)
+        check("skip 不驗:rc0", r.returncode == 0, r.stderr[-200:])
+        ev = [e for e in _clp_events(d) if e.get("kind") == "skipped"]
+        check("skip 事件 nodes 維持空", len(ev) == 1 and ev[0].get("nodes") == [], str(ev)[:200])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "skip", "--note", "x", "--loop", "code-x", "--repo", d], capture_output=True, text=True)
+        check("skip 不收 --loop", r.returncode == 2 and "--loop" in r.stderr, r.stderr[-200:])
+
+
+def t_codeloop_pass_then_check_passes():
+    """放行後 code-loop check 照舊認留痕:這條串起 pass 與推送閘,應抓到 pass 寫了 check 認不得的形狀。"""
+    with tempfile.TemporaryDirectory() as d:
+        _make_high_tier_repo(d)
+        lines = _clp_lines([_clp_row("code-x")])
+        _clp_ledger(d, lines)
+        _clp_verdict(d, "code-x", lines)
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d], capture_output=True, text=True)
+        check("★前置★ pass 之前 check 擋下", r.returncode == 1, r.stdout[:200])
+        r = _clp_pass(d)
+        check("★前置★ 沒帶編號被擋", r.returncode == 2, r.stderr[-200:])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d], capture_output=True, text=True)
+        check("被擋的 pass 不讓 check 放行", r.returncode == 1, r.stdout[:200])
+        r = _clp_pass(d, "--loop", "code-x")
+        check("帶編號放行", r.returncode == 0, r.stderr[-200:])
+        r = subprocess.run([sys.executable, GRAPHCTL, "code-loop", "check", "--json", "--repo", d], capture_output=True, text=True)
+        check("放行後 check 認得留痕", r.returncode == 0, r.stdout[:300])
 
 
 # ── code-loop check ──────────────────────────────────────────────────────────
@@ -50295,8 +51364,8 @@ def t_loop_replay_ignores_spec_gate_rows():
     check("回放:帳上有規格閘留痕照樣對得上凍結判定", r.returncode == 0, r.stdout[-200:] + r.stderr[-300:])
 
 
-def _replay_fx():
-    """loop replay 測試的共用準備:一個 vault(在 git 裡)、一個卷證 repo(rp 迴圈一輪、報告與快照還沒提交)、帳本一列。
+def _replay_fx(loop="rp"):
+    """loop replay 測試的共用準備:一個 vault(在 git 裡)、一個卷證 repo(一個迴圈一輪、報告與快照還沒提交)、帳本一列。
     → (v, repo, spec, ledger, d, rpt, row, hsp)。"""
     import json as _j
     import hashlib as _h
@@ -50326,7 +51395,7 @@ def _replay_fx():
     snap.write_text(spec.read_text(encoding="utf-8"), encoding="utf-8")
     hr = _h.sha256(rpt.read_bytes()).hexdigest()
     hs = _h.sha256(snap.read_bytes()).hexdigest()
-    row = {"ts": "2026-08-20T10:00:00+08:00", "kind": "none", "loop": "rp", "round": "r1",
+    row = {"ts": "2026-08-20T10:00:00+08:00", "kind": "none", "loop": loop, "round": "r1",
            "auditor": "s1", "token": "RP1", "severity": "minor", "findings": 1,
            "findings_set": ["f1"], "folded_set": ["f1"], "accepted_set": [],
            "result_sha256": hsp, "reviewed_sha256": hsp,
@@ -63582,11 +64651,11 @@ def t_loop_list_open_loops():
                               "hard": False, "nodes": [loop], "note": "t"}) + "\n")
 
     def close_codeloop(loop, ts, kind="passed"):
-        """★code-loop 那組:nodes 永遠是空的,編號只在自由文字 detail 裡★
-        (2026-09-07 代碼審 r1,三席獨立抓到)。
+        """★code-loop 舊事件:nodes 是空的,編號只在自由文字 detail 裡★
+        (2026-09-07 代碼審 r1,三席獨立抓到;2026-11 起 pass 帶編號,舊事件與 skip 留在這條路上)。
 
         第一版的 fixture 對 code-loop 也塞 `nodes: [loop]`——**那個形狀現實中不存在**,
-        真寫入端 `_codeloop_gov_log` 把 nodes 寫死成 []。於是測試綠、功能死:
+        當時真寫入端 `_codeloop_gov_log` 把 nodes 寫死成 []。於是測試綠、功能死:
         實測 23 個早就過閘的 code 迴圈被報成「空轉候選」。
         這裡照真寫入端的形狀寫,才驗得到那條路。"""
         with open(gov, "a", encoding="utf-8") as f:
@@ -65077,6 +66146,109 @@ def t_tension_lens_and_gov():
         check("③10 na + 0 其他 → 仍標死題候選", cd and "死題候選" in cd[0], str(cd))
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+# Projects/Kotlin慣例對齊Android官方與本機detekt_計劃:判準來源是 Android 官方三頁(架構建議頁 2026-10-05、
+# UI 事件頁 2026-05-18、狀態還原頁 2026-10-07)與本機 detekt 1.23.8 的實跑結果,不是 lumos 自己的實作。
+_KT_LEAKS_WHEN_BEFORE = ['\\bContext\\b', 'companion object', 'WeakReference', '\\bActivity\\b', '\\bView\\b', 'WeakReference',
+                         'static\\s+(?:final\\s+)?(?:Context|Activity|View)\\b', 'TimerTask', 'registerReceiver']
+
+
+def _kt_question(m, qid):
+    return next(s for s in m._STACK_QUESTION_SPECS["kt"] if s["id"] == qid)
+
+
+def _kotlin_idioms_text():
+    _need_src("skills/kotlin-idioms/SKILL.md")
+    return (Path(GRAPHCTL).parent.parent / "skills" / "kotlin-idioms" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def t_kt_flow_question_events_as_state():
+    """[S1]Flow 審查題與效能檢核目錄那一列不再教「事件=SharedFlow」,改要求一次性結果化成畫面狀態。
+    守的錯:官方 UI 事件頁明講不要用 Channel 或其他串流送一次性事件(沒人收時會漏),審查題卻教反方向。
+    翻紅釘:把任一處改回「事件=SharedFlow」或拿掉「化成畫面狀態」→ 紅。"""
+    _need_src("docs/lumos-toolchain-knowledge/Systems/效能檢核目錄.md")
+    m = _load_lumos_inproc()
+    q = _kt_question(m, "kt-flow")["q"]
+    check("S1:Flow 題要求一次性結果化成畫面狀態", "化成畫面狀態" in q, q)
+    check("S1:Flow 題不再寫事件=SharedFlow", "事件=SharedFlow" not in q, q)
+    cat = Path(GRAPHCTL).parent.parent / "docs" / "lumos-toolchain-knowledge" / "Systems" / "效能檢核目錄.md"
+    row = next((ln for ln in cat.read_text(encoding="utf-8").splitlines() if ln.startswith("| **Channel/Flow 適用性**")), "")
+    check("前置:效能檢核目錄找得到 Channel/Flow 適用性那一列", bool(row), "")
+    check("S1:目錄那一列同步要求化成畫面狀態、不再寫事件廣播=SharedFlow",
+          "化成畫面狀態" in row and "事件廣播=SharedFlow" not in row, row)
+    print("  ✓ t_kt_flow_question_events_as_state")
+
+
+def t_kt_leaks_question_viewmodel_context():
+    """[S2]洩漏審查題問到 ViewModel 收 Context／繼承 AndroidViewModel(官方架構建議頁:ViewModel 不持 Context、不用 AndroidViewModel),
+    觸發字跟改之前一字不差(這份計劃刻意不改擋下條件,加觸發字另開計劃走設計審)。
+    翻紅釘:題目拿掉 AndroidViewModel → 紅;順手在 when 加字 → 紅。"""
+    m = _load_lumos_inproc()
+    spec = _kt_question(m, "kt-leaks")
+    check("S2:洩漏題問到 ViewModel 收 Context 或繼承 AndroidViewModel",
+          "AndroidViewModel" in spec["q"] and "ViewModel 有沒有收 Context" in spec["q"], spec["q"])
+    check("S2:觸發字清單跟改之前一字不差(不改擋下條件)", list(spec["when"]) == _KT_LEAKS_WHEN_BEFORE, str(spec["when"]))
+    print("  ✓ t_kt_leaks_question_viewmodel_context")
+
+
+def t_kotlin_idioms_android_official_rules():
+    """[S3]Kotlin 慣例手冊有四條對齊官方的條款,而且審查鏡頭寫的條號範圍涵蓋到手冊實際的最後一條。
+    守的錯:①官方強烈建議的事件化成狀態、ViewModel 不碰 Context、程序被殺後的狀態還原、假實作測試沒進手冊;
+    ②加了新條款卻沒改「對照 R1 到 Rn 逐條掃」,審查員不會看新條款。
+    翻紅釘:刪掉任一條的標題 → 紅;審查鏡頭留在 R1 到 R18 → 紅。"""
+    import re as _re
+    t = _kotlin_idioms_text()
+    heads = _re.findall(r"^### R(\d+)\. (.+)$", t, flags=_re.M)
+    nums = [int(n) for n, _ in heads]
+    check("前置:讀到條款標題且條號連續從 1 起", nums == list(range(1, len(nums) + 1)), str(nums))
+    titles = " ".join(h for _, h in heads)
+    for need in ("化成狀態", "AndroidViewModel", "程序被系統殺掉", "假實作"):
+        check(f"S3:手冊有「{need}」那條", need in titles, titles[-400:])
+    # 這四條只適用 Android、每條要有自己的依據行(代碼審 r2 正確性席 G2:原本只驗標題,標題改掉、依據行刪光照綠)
+    check("S3:新條款放在「只有 Android 專案適用」那一節", "## 五、Android 特有（只有 Android 專案適用）" in t, "")
+    for n in (19, 20, 21, 22):
+        body = t.split(f"### R{n}. ", 1)[-1].split("\n### ", 1)[0].split("\n## ", 1)[0]
+        check(f"S3:R{n} 有自己的依據行", f"### R{n}. " in t and "\n- 依據：" in body, body[-300:])
+    lens = _re.search("對照 kotlin-idioms 的 R1\u2013R(\\d+) 逐條掃", t)   # 手冊用的是長破折號 U+2013
+    check("S3:審查鏡頭的條號範圍涵蓋到最後一條", bool(lens) and int(lens.group(1)) == max(nums), (lens.group(0) if lens else "找不到審查鏡頭那句"))
+    print("  ✓ t_kotlin_idioms_android_official_rules")
+
+
+def t_kotlin_idioms_detekt_snippet_runs():
+    """[S4]把慣例手冊〈機檢接線〉的 detekt 設定範例照抄跑一次,detekt 要真的分析完、而且範例開的規則真的生效。
+    判準來源:detekt 自己的行為——1.23.8 對不存在的規則以 3 結束、設定的 YAML 壞掉(少括號、型別不對)以 1 結束,
+    兩種都一條不檢查;分析完有發現時以 2 結束。所以斷言「退出碼 2,且範例開的 GlobalCoroutineUsage 抓到樣本那一行」:
+    設定沒載入、整次沒跑、或範例把那條規則關掉,都會紅(代碼審 r1 正確性席 F1:原本只排除退出碼 3,YAML 壞掉照綠)。
+    翻紅釘:範例加回 CoroutineLaunchedInTestWithoutRunTest(1.23 系列沒有)→ 紅;範例刪掉一個右大括號 → 紅。
+    本機沒有 detekt 時照實印沒驗到(同 dart 真機段的寫法;_SrcOnly 專指缺來源 repo 的產物,不拿來表示缺外部工具)。"""
+    import re as _re, shutil as _sh, subprocess as _sp, tempfile as _tf
+    t = _kotlin_idioms_text()
+    sec = t.split("## 機檢接線", 1)
+    check("前置:手冊有〈機檢接線〉段", len(sec) == 2, "")
+    blk = _re.search(r"```yaml\n(.*?)```", sec[1], flags=_re.S)
+    check("前置:〈機檢接線〉段有 yaml 設定範例", bool(blk), sec[1][:300])
+    detekt = _sh.which("detekt")
+    if not detekt:
+        print("  ⚠ 這台沒有 detekt,照抄設定範例實跑那段沒驗到(只驗到範例存在)")
+        return
+    root = Path(_tf.mkdtemp(prefix="lumos-kt-idioms-detekt-"))
+    try:
+        (root / "src" / "p").mkdir(parents=True)
+        # 樣本:import 之後寫 GlobalScope.launch——GlobalCoroutineUsage 不需型別資訊,只給 --input 也會報(2026-11-01 實測)
+        (root / "src" / "p" / "A.kt").write_text(
+            "package p\n\nimport kotlinx.coroutines.GlobalScope\nimport kotlinx.coroutines.launch\n\n"
+            "fun g() {\n    GlobalScope.launch { println(1) }\n}\n", encoding="utf-8")
+        (root / "idioms.yml").write_text(blk.group(1), encoding="utf-8")
+        r = _sp.run([detekt, "--input", str(root / "src"), "--build-upon-default-config", "--config", str(root / "idioms.yml")],
+                    capture_output=True, text=True, timeout=300)
+        out = r.stdout + r.stderr
+        check("S4:照抄範例跑 detekt 有分析完(退出碼 2=分析完有發現;1=設定壞掉、3=規則不存在都算沒跑)",
+              r.returncode == 2, f"rc={r.returncode} {out[-400:]}")
+        check("S4:範例開的 GlobalCoroutineUsage 真的抓到樣本那一行", "A.kt:7" in out and "[GlobalCoroutineUsage]" in out, out[-400:])
+    finally:
+        _sh.rmtree(root, ignore_errors=True)
+    print("  ✓ t_kotlin_idioms_detekt_snippet_runs")
 
 
 def t_tension_doc_sync():
@@ -71771,21 +72943,24 @@ def t_lint_waive_cli_records_rule_and_file():
     2026-10-11 世界解重新註解核對:命令列一律寫空字串,本 repo 283 筆全空,按規則統計放行無從算起;
     原本的測試只呼叫內部函式,所以沒抓到。"""
     import json as _json
+    import os as _os
     import shlex as _shlex
     m = _lng_module()
     root, _git = _lng_repo()
 
     def _waive(*a):
+        # 放行會在終端問一句是不是本人確認:標準輸入接 /dev/null、終端指到不存在的裝置,測試程序自己的終端不能被讀到
         return subprocess.run([sys.executable, GRAPHCTL, "lint-waive", *a, "--repo", str(root)],
-                              capture_output=True, text=True, cwd=str(root))
+                              capture_output=True, text=True, cwd=str(root), stdin=subprocess.DEVNULL,
+                              env=dict(_os.environ, LUMOS_TTY="/nonexistent-tty"))
 
-    r = _waive("k1", "--note", "誤報", "--rule", "B101", "--file", "src/a.py")
+    r = _waive("k1", "--note", "這條規則誤判了測試夾具的寫法", "--rule", "B101", "--file", "src/a.py")
     cur = _json.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"]
     got = {w["key"]: w for w in cur}
     check("S7 命令列帶規則與檔名就照實記下",
           r.returncode == 0 and got.get("k1", {}).get("rule") == "B101" and got.get("k1", {}).get("file") == "src/a.py",
           r.stdout + r.stderr + str(cur))
-    r2 = _waive("k2", "--note", "誤報")
+    r2 = _waive("k2", "--note", "這條規則誤判了測試夾具的寫法")
     cur2 = {w["key"]: w for w in _json.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))["waivers"]}
     check("S7 沒帶規則照樣放行,但要提醒統計不到", r2.returncode == 0 and "k2" in cur2 and "規則" in r2.stderr,
           r2.stdout + r2.stderr)
@@ -85952,7 +87127,7 @@ _DR_CI_GATE_STEP_FP = {
     "自主迴圈測試": "70b4cb1b0437f13e",
     "Graph doctor (strict)": "2dedc7be727156cd",
     # 2026-10-20 紅燈訊息補「安全證據不合格」(Projects/安全主張驗收閘_計劃〈四〉要跟著改的地方),指令本身沒改
-    "code-loop gate (push 後盾;體檢 #5)": "3d4d823541f94702",
+    "code-loop gate (push 後盾;體檢 #5)": "38ccb9f3fa803a6c",   # 2026-11-02 錯誤提示改成 pass --loop <編號>(Projects/留痕驗過審查_計劃)
     "note-shape gate (筆記形狀擋;--no-verify 後盾)": "6e82ad401c1f6fa6",
     "drift check (存量漂移檢查;--no-verify 後盾)": "f6f6bc3db304d1e7",
     "note reread reminder (回頭重讀守檔筆記;只提醒、不擋)": "e72639490ed32108",
@@ -86725,6 +87900,13 @@ def t_drift_born_unknown():
     b = _born_of(got, "Systems/Bad.md", "壞版本")
     check("③partial clone:判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
     _nh_git(root, "config", "--unset", "extensions.partialClone")
+    _nh_git(root, "config", "remote.origin.promisor", "true")   # git 2.39 的 clone --filter 只寫這兩個(判綠紀錄限本分支 r3 代碼審)
+    _nh_git(root, "config", "remote.origin.partialclonefilter", "blob:none")
+    got, _txt = _born_scan(root)
+    b = _born_of(got, "Systems/Bad.md", "壞版本")
+    check("③新式 partial clone(只寫 promisor 與 filter):判不了、講原因", isinstance(b, dict) and b.get("state") == "unknown" and "partial" in (b.get("why") or ""), (b, got))
+    _nh_git(root, "config", "--unset", "remote.origin.promisor")
+    _nh_git(root, "config", "--unset", "remote.origin.partialclonefilter")
     for i in range(7):
         _nh_node(root, f"N{i}", summary="FLOW:n", body=f"REVISIT:[when-file:src/a.py][by:2099-12-31] 第 {i} 條")
         _nh_commit(root, f"第 {i} 條")
@@ -102519,14 +103701,18 @@ def _cr_decide(c, loop="crx", decision="extra-round", note="人裁決定破例�
 
 
 def _cr_retro_doc(c, loop="crx", rounds=None):
-    return {"version": 1, "loop": loop, "rounds": rounds or ["r1", "r2", "r3"],
+    return {"version": 2, "loop": loop, "rounds": rounds or ["r1", "r2", "r3"],
             "drafted_by": "起草-乾淨代理", "completed_by": "編排者-claude",
             "families": [{"family": "same-family-unswept", "rounds": ["r2", "r3"],
                           "evidence": [f"governance/review-reports/{loop}/r2-s1.md"], "note": ""}],
             "why_cap": "同一族的出口沒有一次掃完,每輪都從另一個出口冒出來",
             "avoid": "第一輪折入時就該把同族的所有出口一次列出來掃完",
             "changes": [{"target": "dispatch", "ref": "skills/lumos-design-loop/templates.md",
-                         "change": "派工詞要求列出同族所有出口"}]}
+                         "change": "派工詞要求列出同族所有出口"}],
+            "world_check": {"queries": ["同族 一次掃完 出口"], "verdict": "direction-ok",
+                            "sources": [{"url": "https://example.com/sweep", "point": "同一族的出口要一次列完再修"},
+                                        {"url": "https://example.org/family", "point": "修補前先數這形狀還有幾處"}],
+                            "note": "世界做法是修之前先把同族出口一次列完,這條路方向對"}}
 
 
 def _cr_write_retro(c, doc=None, loop="crx", raw=None):
@@ -102560,6 +103746,437 @@ def _cr_step8(out):
 
 def _cr_blocked(c, code):
     return [e for e in _cr_gov(c, "canary") if e.get("kind") == "blocked" and str(e.get("note", "")).startswith(code)]
+
+
+# ── 跑滿後查世界方向(Projects/跑滿後查世界方向_計劃):回顧檔的世界查證欄 ──
+_CR_TS_REQ = "2026-12-01T10:00:00+08:00"   # 晚於生效常數:extra-round 要求 world_check
+_CR_TS_OLD = "2026-10-05T10:00:00+08:00"   # 早於生效常數:不管
+
+
+def _cr_decide_at(c, ts, loop="crx", decision="extra-round"):
+    """直接往治理帳寫一筆帶明確 ts 的人裁(不靠真實時鐘;同 t_cap_retro_printed_cmd_escaped 的寫法)。ts 可以不是字串。"""
+    import json as _j
+    with open(c["docs"] / ".governance-log.jsonl", "a", encoding="utf-8") as f:
+        f.write(_j.dumps({"ts": ts, "commit": "x", "gate": "loop-retro", "kind": "cap-decision", "hard": False, "nodes": [],
+                          "note": "人裁決定破例再開一輪看最後修正", "loop": loop, "decision": decision,
+                          "rounds": ["r1", "r2", "r3"], "tier": "standard", "cap": 3}, ensure_ascii=False) + "\n")
+
+
+def _cr_world(verdict="direction-ok"):
+    """一份合格的 world_check(undetermined 時沒有來源)。"""
+    src = [] if verdict == "undetermined" else [
+        {"url": "https://example.com/fail-to-pass", "point": "以測試函式為單位挑要重播的測試"},
+        {"url": "https://example.org/robot-sf", "point": "改過的測試在舊程式上就綠只提醒不擋"}]
+    return {"queries": ["fail-to-pass 選測試 粒度"], "sources": src, "verdict": verdict,
+            "note": "世界做法都以測試函式為單位挑,這條路方向對但粒度要換"}
+
+
+def _cr_wc_doc(c, wc=..., version=2, loop="crx"):
+    import copy as _cp
+    d = _cp.deepcopy(_cr_retro_doc(c, loop))
+    d["version"] = version
+    if wc is ...:
+        d.pop("world_check", None)
+    else:
+        d["world_check"] = wc
+    return d
+
+
+def _cr_wc_check(c, doc, loop="crx"):
+    _cr_write_retro(c, doc, loop=loop)
+    return _cr_retro(c, "--check", loop=loop)
+
+
+@_cap_real_cutoff
+def t_retro_template_world_check():
+    """[S1] --template 骨架 version 是 2,帶 world_check 空殼(queries、sources、verdict、note);stderr 提示要填 world_check。"""
+    import json as _j
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    r = _cr_retro(c, "--template")
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {}
+    check("S1 骨架 version 是 2", r.returncode == 0 and d.get("version") == 2, r.stdout[-300:] + r.stderr[-200:])
+    wc = d.get("world_check")
+    check("S1 骨架帶 world_check 空殼", wc == {"queries": [""], "sources": [{"url": "", "point": ""}], "verdict": "", "note": ""}, repr(wc))
+    check("S1 stderr 提示編排者填 world_check", "world_check" in r.stderr, r.stderr[-400:])
+    _cr_write_retro(c, raw=r.stdout.encode("utf-8"))
+    r = _cr_retro(c, "--check")
+    check("S1 原封不動的骨架在要求時判不過、點名 world_check", r.returncode == 1 and "world_check" in r.stdout, r.stdout[-400:])
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check():
+    """[S2] 要求(extra-round、ts 不早於生效時間)時 world_check 每種缺陷都判不過、逐欄列出、不丟例外;
+    合格的(含產生器那份)判過;網址不解析,怪埠號也不丟例外。"""
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    r = _cr_wc_check(c, _cr_retro_doc(c))
+    check("S2 前置:產生器那份(version 2、合格 world_check)在要求時判過", r.returncode == 0, r.stdout[-400:] + r.stderr[-200:])
+    w = _cr_world()
+    ok_port = dict(w, sources=[{"url": "https://a.com:abc/x", "point": "埠號寫怪的網址也只看開頭與空白"}, w["sources"][1]])
+    r = _cr_wc_check(c, _cr_wc_doc(c, ok_port))
+    check("S2 網址不解析:怪埠號照收、不丟例外", r.returncode == 0 and "Traceback" not in r.stderr, r.stdout[-300:] + r.stderr[-300:])
+
+    def src(url, point="這個來源說的是這條路的做法"):
+        return {"url": url, "point": point}
+    cases = [
+        ("world_check 缺少", ..., "必填"),
+        ("world_check 不是物件", "已查,方向對", "world_check"),
+        ("queries 是空清單", dict(w, queries=[]), "queries"),
+        ("queries 某條不到 4 字", dict(w, queries=["fail-to-pass 選測試", "短"]), "queries[2]"),
+        ("queries 不是字串清單", dict(w, queries=[1]), "queries"),
+        ("verdict 不在三個值裡", dict(w, verdict="ok"), "verdict"),
+        ("verdict 前後有空白也不收", dict(w, verdict=" direction-ok"), "verdict"),
+        ("note 不到 20 字", dict(w, note="方向對"), "note"),
+        ("direction-ok 只有一個來源", dict(w, sources=w["sources"][:1]), "sources"),
+        ("change-direction 只有一個來源", dict(w, verdict="change-direction", sources=w["sources"][:1]), "sources"),
+        ("網址不是 http 或 https", dict(w, sources=[src("ftp://a.com/x"), w["sources"][1]]), "sources[1].url"),
+        ("網址開頭後沒有字", dict(w, sources=[src("https://"), w["sources"][1]]), "sources[1].url"),
+        ("網址含空白", dict(w, sources=[src("https://a.com/x y"), w["sources"][1]]), "sources[1].url"),
+        ("網址含 tab", dict(w, sources=[src("https://a.com/\tx"), w["sources"][1]]), "sources[1].url"),
+        ("網址含全形空白", dict(w, sources=[src("https://a.com/　x"), w["sources"][1]]), "sources[1].url"),
+        ("point 不到 10 字", dict(w, sources=[src("https://a.com/x", "短"), w["sources"][1]]), "sources[1].point"),
+        ("兩項網址去頭尾空白後相同", dict(w, sources=[src(" https://a.com/x "), src("https://a.com/x")]), "sources[2].url"),
+        ("sources 不是物件清單", dict(w, sources=["https://a.com/x", "https://b.com/y"]), "sources"),
+    ]
+    for label, wc, kw in cases:
+        r = _cr_wc_check(c, _cr_wc_doc(c, wc))
+        check(f"S2 {label} → 回 1 並點名 {kw}", r.returncode == 1 and kw in r.stdout and "Traceback" not in r.stderr,
+              f"rc={r.returncode} {r.stdout[-400:]} {r.stderr[-200:]}")
+    r = _cr_wc_check(c, _cr_wc_doc(c, dict(w, verdict="ok", note="短", queries=[])))
+    _bad = [ln for ln in r.stdout.splitlines() if ln.strip().startswith("✗") and "world_check" in ln]
+    check("S2 多個缺陷逐欄列出", r.returncode == 1 and len(_bad) >= 3, r.stdout[-500:])
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check_undetermined():
+    """[S3] verdict 是 undetermined、sources 是空的、note 夠 20 字 → 判過;骨架那項空殼來源沒刪 → 判不過並講改成 []。"""
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    u = _cr_world("undetermined")
+    r = _cr_wc_check(c, _cr_wc_doc(c, u))
+    check("S3 undetermined 沒有來源 → 判過", r.returncode == 0, r.stdout[-400:])
+    r = _cr_wc_check(c, _cr_wc_doc(c, dict(u, sources=[{"url": "", "point": ""}])))
+    check("S3 骨架空殼來源沒刪 → 判不過、講改成 []", r.returncode == 1 and "sources 改成 []" in r.stdout, r.stdout[-400:])
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check_accept_risk():
+    """[S4] accept-risk:world_check 省略、null、{}、空骨架照過;填一半、空清單、空字串、false、0、多鍵都判不過。"""
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ, decision="accept-risk")
+    skel = {"queries": [""], "sources": [{"url": "", "point": ""}], "verdict": "", "note": ""}
+    for label, wc in (("省略", ...), ("null", None), ("空物件", {}), ("空骨架", skel),
+                      ("空骨架(清單是空的)", {"queries": [], "sources": [], "verdict": "", "note": ""}),
+                      ("填完整", _cr_world())):
+        r = _cr_wc_check(c, _cr_wc_doc(c, wc))
+        check(f"S4 accept-risk、world_check {label} → 判過", r.returncode == 0, r.stdout[-300:])
+    for label, wc in (("填一半", {"queries": ["查了某某方向"], "sources": [], "verdict": "", "note": ""}),
+                      ("空清單", []), ("空字串", ""), ("false", False), ("0", 0),
+                      ("骨架多一個鍵", dict(skel, extra="")), ("骨架缺一個鍵", {"queries": [""], "sources": [], "verdict": ""}),
+                      ("骨架的格子是 null", dict(skel, note=None))):
+        r = _cr_wc_check(c, _cr_wc_doc(c, wc))
+        check(f"S4 accept-risk、world_check {label} → 判不過", r.returncode == 1 and "world_check" in r.stdout and "Traceback" not in r.stderr,
+              f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-200:]}")
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check_legacy():
+    """[S5] 生效前的 extra-round:version 1 或 2、world_check 填什麼都照過;ts 等於生效時間、跨時區同一刻、不是字串、解不開都算要求;
+    要求時 version 1 判不過並給修法;version 是 "2"、2.0、true 不論情況都判不過。"""
+    m = _load_lumos()
+    since = m._CAP_WORLD_CHECK_SINCE
+    import datetime as _dt
+    utc_same = _dt.datetime.fromisoformat(since).astimezone(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_OLD)
+    for label, doc in (("version 1、沒有 world_check", _cr_wc_doc(c, ..., version=1)),
+                       ("version 2、world_check 是字串", _cr_wc_doc(c, "x", version=2)),
+                       ("version 1、world_check 是數字", _cr_wc_doc(c, 5, version=1))):
+        r = _cr_wc_check(c, doc)
+        check(f"S5 生效前 {label} → 照過", r.returncode == 0, r.stdout[-300:])
+    for label, v in (('"2"', "2"), ("2.0", 2.0), ("true", True), ("3", 3)):
+        r = _cr_wc_check(c, _cr_wc_doc(c, _cr_world(), version=v))
+        check(f"S5 version {label} → 判不過", r.returncode == 1 and "version" in r.stdout, r.stdout[-300:])
+    for label, ts in (("等於生效時間", since), ("跨時區同一刻", utc_same), ("不是字串", 12345), ("解不開", "昨天下午"),
+                      ("沒帶時區", since[:19])):
+        c2 = _cr_repo()
+        _cr_loop(c2)
+        _cr_decide_at(c2, ts)
+        r = _cr_wc_check(c2, _cr_wc_doc(c2, ..., version=1))
+        check(f"S5 ts {label} → 算要求:version 1 判不過並給修法",
+              r.returncode == 1 and "version" in r.stdout and "world_check" in r.stdout and "--template" in r.stdout
+              and "Traceback" not in r.stderr, f"{ts!r} rc={r.returncode} {r.stdout[-400:]} {r.stderr[-200:]}")
+    check("S5 _cap_world_case 直接判:沒有人裁紀錄 → ignored", m._cap_world_case(None) == "ignored" and m._cap_world_case({"rounds": []}) == "ignored")
+
+
+@_cap_real_cutoff
+def t_retro_record_world_verdict():
+    """[S6] --record 依人裁與結論印提醒、不擋;retro-stats 只數要求而且已記回顧的迴圈,不管的舊迴圈不進統計、不丟例外,重記只算一次。"""
+    import json as _j
+    c = _cr_repo()
+    plan = [("la", "extra-round", "direction-ok", None),
+            ("lb", "extra-round", "change-direction", "下一輪派工前先跟人確認新方向"),
+            ("lc", "accept-risk", "change-direction", "收尾說明要講這一點"),
+            ("ld", "extra-round", "undetermined", "判不準方向"),
+            ("le", "extra-round", "direction-ok", None)]
+    for lp, dec, verdict, want in plan:
+        _cr_loop(c, loop=lp)
+        _cr_decide_at(c, _CR_TS_REQ, loop=lp, decision=dec)
+        _cr_write_retro(c, _cr_wc_doc(c, _cr_world(verdict), loop=lp), loop=lp)
+        r = _cr_retro(c, "--record", loop=lp)
+        if want:
+            check(f"S6 {lp} {dec}+{verdict} → 記下並印提醒", r.returncode == 0 and want in r.stderr, r.stdout[-200:] + r.stderr[-400:])
+        else:
+            check(f"S6 {lp} {dec}+{verdict} → 記下、不印提醒", r.returncode == 0 and "[retro]" not in r.stderr, r.stderr[-400:])
+    _cr_retro(c, "--record", loop="le")      # 同一迴圈重記
+    _cr_loop(c, loop="lold")                 # 不管的舊迴圈:world_check 填非物件
+    _cr_decide_at(c, _CR_TS_OLD, loop="lold")
+    _cr_write_retro(c, _cr_wc_doc(c, "已查,方向對", loop="lold"), loop="lold")
+    r = _cr_retro(c, "--record", loop="lold")
+    check("S6 前置:舊迴圈 world_check 是字串也記得下", r.returncode == 0, r.stdout[-300:] + r.stderr[-300:])
+    r = run(c["vault"], "loop", "retro-stats", "--json", "--repo", str(c["root"]))
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {}
+    check("S6 retro-stats 不丟例外、舊迴圈照算已記回顧", r.returncode == 0 and (d.get("totals") or {}).get("recorded") == 6
+          and (d.get("totals") or {}).get("error") == 0, r.stdout[-500:] + r.stderr[-300:])
+    check("S6 world_verdicts 只數要求的迴圈、重記只算一次",
+          d.get("world_verdicts") == {"direction-ok": 2, "change-direction": 1, "undetermined": 1}, repr(d.get("world_verdicts")))
+    r = run(c["vault"], "loop", "retro-stats", "--repo", str(c["root"]))
+    check("S6 文字輸出印三種次數", "方向對 2" in r.stdout and "要換方向 1" in r.stdout and "判不準 1" in r.stdout, r.stdout[-600:])
+
+
+@_cap_real_cutoff
+def t_cap_hint_world_check_first():
+    """[S7] 還沒人裁、提示不是可以停 → 記人裁之前先講上網查方向;可以停(ask=False)不印;
+    要求情況的已有人裁、canary record 擋下、處置閘第八步都提醒寫 world_check;accept-risk 與不管的不印;
+    cap-decision 記成 extra-round 後依記下那一刻是不是要求決定印不印。"""
+    import datetime as _dt
+    m = _load_lumos()
+    c = _cr_repo()
+    _cr_loop(c)
+    env = m.Env(c["vault"])
+    asked = "\n".join(m._cap_retro_next_lines(env, "crx", repo=str(c["root"]), ask=True))
+    i_hint, i_ask = asked.find("上網查這條路的方向"), asked.find("先記人裁")
+    check("S7 還沒人裁:先講上網查方向,再叫人記人裁", 0 <= i_hint < i_ask, asked)
+    quiet = "\n".join(m._cap_retro_next_lines(env, "crx", repo=str(c["root"]), ask=False))
+    check("S7 可以停(ask=False)時不印查方向那句", "上網查" not in quiet, quiet)
+    fill = "寫進回顧的 world_check"
+    _cr_decide_at(c, _CR_TS_REQ)
+    env = m.Env(c["vault"])
+    got = "\n".join(m._cap_retro_next_lines(env, "crx", repo=str(c["root"]), ask=True))
+    check("S7 要求情況的已有人裁 → 提醒寫 world_check", fill in got, got)
+    r = _cr_record(c, "r4")
+    check("S7 canary record 被跑滿回顧擋下 → 提醒寫 world_check", r.returncode == 2 and fill in r.stderr, r.stderr[-500:])
+    g = _cr_gate(c)
+    check("S7 處置閘第八步 → 提醒寫 world_check", fill in g.stdout, g.stdout[-600:])
+    for label, ts, dec in (("accept-risk", _CR_TS_REQ, "accept-risk"), ("生效前的 extra-round", _CR_TS_OLD, "extra-round")):
+        c2 = _cr_repo()
+        _cr_loop(c2)
+        _cr_decide_at(c2, ts, decision=dec)
+        got = "\n".join(m._cap_retro_next_lines(m.Env(c2["vault"]), "crx", repo=str(c2["root"]), ask=True))
+        g = _cr_gate(c2)
+        check(f"S7 {label} → 不提醒寫 world_check", fill not in got and fill not in g.stdout, got + g.stdout[-400:])
+    c3 = _cr_repo()
+    _cr_loop(c3)
+    r = _cr_decide(c3)
+    now_req = _dt.datetime.now().astimezone() >= _dt.datetime.fromisoformat(m._CAP_WORLD_CHECK_SINCE)
+    check(f"S7 cap-decision extra-round 記下後{'提醒' if now_req else '不提醒'}寫 world_check(現在{'晚於' if now_req else '早於'}生效時間)",
+          r.returncode == 0 and ((fill in r.stdout) == now_req), r.stdout[-400:])
+    r = _cr_decide(c3, decision="accept-risk", note="人裁接受剩下的風險不再開一輪")
+    check("S7 cap-decision accept-risk 記下後不提醒寫 world_check", r.returncode == 0 and fill not in r.stdout, r.stdout[-400:])
+
+
+@_cap_real_cutoff
+def t_cap_decision_world_fill_reads_ledger():
+    """[代碼審 r1 正確性 F1、架構 A4] cap-decision 記完 extra-round 後,提醒補 world_check 與否照帳上那筆人裁判(不另讀時鐘);
+    生效常數在過去 → 提醒、在未來 → 不提醒、accept-risk 不提醒。同一個程序裡改常數,不靠今天是幾號。"""
+    import io, contextlib
+    m = _load_lumos()
+    fill = "寫進回顧的 world_check"
+    saved = m._CAP_WORLD_CHECK_SINCE
+    seen = []
+    orig_case = m._cap_world_case
+
+    def spy(dec):
+        seen.append(dec)
+        return orig_case(dec)
+    try:
+        for label, since, dec, want in (("生效後的 extra-round", "2000-01-01T00:00:00+08:00", "extra-round", True),
+                                        ("生效前的 extra-round", "2999-01-01T00:00:00+08:00", "extra-round", False),
+                                        ("accept-risk", "2000-01-01T00:00:00+08:00", "accept-risk", False)):
+            c = _cr_repo()
+            _cr_loop(c)
+            m._CAP_WORLD_CHECK_SINCE = since
+            m._cap_world_case = spy
+            seen.clear()
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = m.cmd_loop_cap_decision(m.Env(c["vault"]), "crx", dec, "人裁決定破例再開一輪看最後修正", repo=str(c["root"]))
+            m._cap_world_case = orig_case
+            out = buf.getvalue()
+            check(f"F1 {label} → {'提醒' if want else '不提醒'}補 world_check", rc == 0 and ((fill in out) == want), out[-400:])
+            ev = [e for e in _cr_gov(c, "loop-retro") if e.get("kind") == "cap-decision"]
+            check(f"F1 {label} → 判情況用的是帳上那筆人裁(同一個 ts)",
+                  bool(ev) and any(isinstance(d, dict) and d.get("gate") == "loop-retro" and d.get("kind") == "cap-decision"
+                      and d.get("ts") == ev[-1].get("ts") and d.get("decision") == dec for d in seen),
+                  repr(seen)[:300])
+    finally:
+        m._CAP_WORLD_CHECK_SINCE = saved
+        m._cap_world_case = orig_case
+
+
+@_cap_real_cutoff
+def t_cap_retro_template_write_world_fill():
+    """[代碼審 r2 正確性 F1] --template --write 被擋(回顧檔已存在)時,要求情況的迴圈修法行也提醒補 world_check;生效前的不提醒。"""
+    fill = "寫進回顧的 world_check"
+    for label, ts, want in (("生效後的 extra-round", _CR_TS_REQ, True), ("生效前的 extra-round", _CR_TS_OLD, False)):
+        c = _cr_repo()
+        _cr_loop(c)
+        _cr_decide_at(c, ts)
+        _cr_write_retro(c)
+        r = _cr_retro(c, "--template", "--write")
+        check(f"F1 {label}:回顧檔已存在 → 回 2、{'提醒' if want else '不提醒'}補 world_check",
+              r.returncode == 2 and "已經存在" in r.stderr and ((fill in r.stderr) == want), r.stderr[-400:])
+
+
+@_cap_real_cutoff
+def t_cap_decision_world_fill_ledger_unreadable():
+    """[代碼審 r2 架構 A1] 記完人裁後讀回帳失敗:不當成沒有人裁(_retro_gov_events 說明要求),照偏嚴的那邊提醒補 world_check。"""
+    import io, contextlib
+    m = _load_lumos()
+    c = _cr_repo()
+    _cr_loop(c)
+    orig = m._retro_gov_events
+    calls = []
+
+    def flaky(root, loop_id=None):
+        calls.append(loop_id)
+        return [], "治理帳讀不動(測試模擬)"
+    m._retro_gov_events = flaky
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = m.cmd_loop_cap_decision(m.Env(c["vault"]), "crx", "extra-round", "人裁決定破例再開一輪看最後修正", repo=str(c["root"]))
+    finally:
+        m._retro_gov_events = orig
+    out = buf.getvalue()
+    check("A1 前置:讀帳那一步真的模擬成讀不動", len(calls) >= 1, repr(calls))
+    check("A1 記完人裁後讀帳失敗 → 照樣提醒補 world_check", rc == 0 and "寫進回顧的 world_check" in out, out[-400:])
+
+
+def _cap_since_last_change_day(rr):
+    """最後一次改到 _CAP_WORLD_CHECK_SINCE 那一行(含只改值)的提交日;-G 看得到改值(-S 只看字串出現次數,改值看不到;代碼審 r1 F2)。讀不到回 None。"""
+    import subprocess as _sp
+    r = _sp.run(["git", "-C", str(rr), "log", "-1", "-G", r"^_CAP_WORLD_CHECK_SINCE = ", "--format=%cs", "--", "scripts/lumos"],
+                capture_output=True, text=True)
+    day = r.stdout.strip()
+    return day if r.returncode == 0 and day else None
+
+
+def t_cap_since_last_change_sees_value_edit():
+    """[代碼審 r1 F2] 新鮮度守衛看得到「只改常數的值」那次提交;常數日當天的提交不算新鮮(要早於常數日)。"""
+    import subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="gctl-capsince-")).resolve()
+    (d / "scripts").mkdir()
+
+    def commit(val, date):
+        (d / "scripts" / "lumos").write_text(f'x = 1\n_CAP_WORLD_CHECK_SINCE = "{val}"\ny = 2\n', encoding="utf-8")
+        env = dict(_os_mod.environ, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c", "--no-verify"], capture_output=True, env=env)
+    _sp.run(["git", "init", "-q", str(d)], capture_output=True)
+    commit("2026-11-05T00:00:00+08:00", "2026-11-04T10:00:00+08:00")
+    commit("2026-11-06T00:00:00+08:00", "2026-11-10T10:00:00+08:00")
+    check("F2 只改值的提交也看得到", _cap_since_last_change_day(d) == "2026-11-10", _cap_since_last_change_day(d))
+    check("F2 守衛的比法:提交日要早於常數日(同日不算)", not _cap_since_fresh("2026-11-05", "2026-11-05T00:00:00+08:00")
+          and _cap_since_fresh("2026-11-04", "2026-11-05T00:00:00+08:00"))
+
+
+def _cap_since_fresh(day, since):
+    return day < since[:10]
+
+
+@_cap_real_cutoff
+def t_cap_retro_fix_cmd_world_fill_everywhere():
+    """[代碼審 r1 架構 A3] 要求情況而回顧沒有時,doctor、retro-stats 的修法行也提醒補 world_check(跟擋下訊息、處置閘同一句)。"""
+    import json as _j
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    fill = "寫進回顧的 world_check"
+    r = run(c["vault"], "loop", "retro-stats", "--json", "--repo", str(c["root"]))
+    d = _j.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    cmds = [x.get("cmd", "") for x in (d.get("names") or {}).get("none") or []]
+    check("A3 retro-stats 的修法行提醒補 world_check", any(fill in x for x in cmds), repr(cmds)[:300])
+    r = run(c["vault"], "doctor", "--verbose")
+    check("A3 doctor I2 的修法行提醒補 world_check", fill in r.stdout, r.stdout[-800:])
+
+
+def t_cap_world_since_parseable_and_fresh():
+    """[做法 7] 生效常數帶時區、解得開;最後一次改到常數那一行的提交日期早於常數日期(同日不算)
+    (實作拖到常數之後才合併、或 rebase 改了提交日,這支會紅,逼人把常數改成新的合併日隔天;淺複製或讀不到歷史時跳過)。"""
+    import subprocess as _sp
+    m = _load_lumos()
+    since = m._CAP_WORLD_CHECK_SINCE
+    check("常數用 _loop_ts_key 解得開(帶時區)", m._loop_ts_key(since) is not None, since)
+    rr = Path(__file__).resolve().parent.parent
+    sh = _sp.run(["git", "-C", str(rr), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True)
+    if sh.returncode != 0 or sh.stdout.strip() != "false":
+        return
+    day = _cap_since_last_change_day(rr)
+    if not day:
+        return      # 還沒提交(工作目錄裡剛加)時沒有那筆提交
+    check("最後一次改到生效常數的提交日早於常數日期", _cap_since_fresh(day, since), f"提交日 {day}、常數 {since}")
+
+
+def t_manuals_world_direction_sync():
+    """[S8] 到頂流程的每一個同步點(逐處比對,同一個檔兩處就兩處都要)都含先查方向;〈修前先查世界〉含同類連兩輪查方向;
+    §9 派工詞的不要填清單含 world_check。"""
+    rr = Path(__file__).resolve().parent.parent
+    sk = rr / "skills"
+    points = [
+        (sk / "lumos-design-loop" / "SKILL.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-design-loop" / "reference.md", "到頂仍未收斂", "先查方向"),
+        (sk / "lumos-design-loop" / "reference.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-code-loop" / "SKILL.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-code-loop" / "reference.md", "到頂還沒收斂", "先查方向"),
+        (sk / "lumos-code-loop" / "reference.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-project-notes" / "commands" / "05-設計審查迴圈.md", "跑滿上限沒過,人裁決定", "先查方向"),
+        (sk / "lumos-project-notes" / "commands" / "05-設計審查迴圈.md", "記了人裁,要寫跑滿回顧", "world_check"),
+        (sk / "lumos-project-notes" / "commands" / "05-設計審查迴圈.md", "跑滿上限還沒過", "先查方向"),
+        (sk / "lumos-project-notes" / "commands" / "06-代碼審與推送.md", "lumos loop retro-stats --json", "world_verdicts"),
+        (rr / "README.md", "lumos loop cap-decision", "先查方向"),
+        (rr / "README.en.md", "lumos loop cap-decision", "check the direction"),
+        (rr / "docs" / "指令參考.md", "lumos loop cap-decision", "先查方向"),
+        (rr / "docs" / "command-reference.md", "lumos loop cap-decision", "check the direction"),
+        (rr / "docs" / "心智模型.md", "沒過:再開一輪", "先查方向"),
+    ]
+    for p, anchor, needle in points:
+        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if anchor in ln]
+        check(f"S8 {p.name}「{anchor}」至少一處", bool(lines), str(p))
+        for ln in lines:
+            check(f"S8 {p.name}「{anchor}」那一處含「{needle}」", needle in ln, ln[:300])
+    for name in ("lumos-design-loop", "lumos-code-loop"):
+        t = (sk / name / "SKILL.md").read_text(encoding="utf-8")
+        ln = next((x for x in t.splitlines() if "**修前先查世界**" in x), "")
+        check(f"S8 {name}〈修前先查世界〉含同類連兩輪查方向", "連續兩輪" in ln and "方向:對|要換|判不準" in ln, ln[:400])
+    t = (sk / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8")
+    ln = next((x for x in t.splitlines() if x.startswith("不要填:")), "")
+    check("S8 §9 派工詞的不要填清單含 world_check", "world_check" in ln, ln)
+    code_step4 = next((x for x in (sk / "lumos-code-loop" / "SKILL.md").read_text(encoding="utf-8").splitlines()
+                       if "同類第二次被打穿就換形狀" in x), "")
+    check("S8 代碼審第 4 步換形狀前先查方向", "先查方向" in code_step4 or "查方向" in code_step4, code_step4[:300])
 
 
 @_cap_real_cutoff
@@ -102954,7 +104571,7 @@ def t_cap_retro_template_prefills_rounds():
         d = None
     check("S11 標準輸出只有骨架 JSON", r.returncode == 0 and isinstance(d, dict), r.stdout[-300:] + r.stderr[-200:])
     d = d or {}
-    check("S11 version/loop/rounds 已填好", d.get("version") == 1 and d.get("loop") == "crx" and d.get("rounds") == ["r1", "r2", "r3"], str(d)[:300])
+    check("S11 version/loop/rounds 已填好", d.get("version") == 2 and d.get("loop") == "crx" and d.get("rounds") == ["r1", "r2", "r3"], str(d)[:300])
     ctx = d.get("context") or {}
     check("S11 context 帶每輪折入與帳上報告", isinstance(ctx, dict) and len(ctx.get("rounds") or []) == 3
           and any("r2-s1.md" in str(x.get("report_path")) for x in ctx.get("reports") or []), str(ctx)[:300])
@@ -103463,7 +105080,7 @@ def t_cap_retro_r2_one_way():
     check("1 _esc_clean 不動 ZWJ 組合表情、零寬非連字、軟連字號、BOM(逐字不變)", m._esc_clean(keep, 400) == keep, repr(m._esc_clean(keep, 400)))
     tmp = Path(_tf.mkdtemp(prefix="gctl-capretro-q-"))
     with contextlib.redirect_stdout(io.StringIO()):
-        probs, _ = m._cap_retro_check(tmp, "x;touch PWNED", {"rounds": []}, [], None)
+        probs, _, _ = m._cap_retro_check(tmp, "x;touch PWNED", {"rounds": []}, [], None)
     check("1 讀檔失敗訊息裡的指令編號加了引號", any("'x;touch PWNED'" in x for x in probs) and not any("retro x;touch" in x for x in probs), str(probs))
     c = _cr_repo()
     _cr_loop(c)
@@ -107246,17 +108863,43 @@ def t_name_collision_uses_real_filter():
 
 
 def t_name_collision_scales():
-    """[S79] 撞名判定每個平台的標題預處理只做一次:1000 個綁定名對 22000 個標題(regex_tail)在 15 秒內(每個名字重算標題 tag 要 30 秒以上)。
-    應抓到的錯:每個名字對每個標題重做預處理 → ①紅。"""
+    """[S79] 撞名判定每個平台的標題預處理只做一次:1000 個綁定名走正式的快取路徑 _name_collision_reason(regex_tail、22000 個標題),
+    標題索引只建 1 次、每種串接只算一次(之後每次拿回同一份);牆上時間 60 秒只當安全網(判綠紀錄限本分支 S3,原本量 15 秒在 CI 上時好時壞)。
+    應抓到的錯:每個名字重建索引、或串接不快取每次重做 → 次數紅。抓不到:只慢不重做的退步(例如查詢退化成逐筆掃描),留給代碼審。"""
     import time as _t
     m = _load_lumos_inproc()
     titles = [("test", f"case {i} shows result @smoke", f"case {i} shows result @smoke", f"f{i % 50}") for i in range(20000)]
     titles += [("group", f"group {i}", f"group {i}", f"f{i % 50}") for i in range(2000)]
-    t0 = _t.monotonic()
-    for i in range(1000):
-        m._name_filter_collisions(f"case {i} shows result", titles, "regex_tail")
-    secs = _t.monotonic() - t0
-    check("①1000 × 22000 < 15 秒", secs < 15.0, f"{secs:.1f}s")
+    real_idx, real_titles = m._TitleIndex, m._raw_test_titles
+    built, joined = [], {}
+
+    class Counting(real_idx):
+        def __init__(self, ts):
+            built.append(1)
+            super().__init__(ts)
+
+        def _join(self, kind, fold):
+            got = super()._join(kind, fold)
+            first = joined.setdefault((kind, fold), [got, 0])   # 留住第一份(物件活著,位址不會被重用),之後每次比是不是同一個物件
+            if got is not first[0]:
+                first[1] += 1
+            return got
+    prof = "playwright"
+    pentry = {"profile": dict(m.TEST_PROFILES[prof], name_filter="regex_tail"), "root": "/nonexistent", "profile_name": prof}
+    cache = {}
+    try:
+        m._TitleIndex = Counting
+        m._raw_test_titles = lambda *_a, **_k: titles
+        t0 = _t.monotonic()
+        for i in range(1000):
+            m._name_collision_reason(f"case {i} shows result", pentry, "/nonexistent", cache)
+        secs = _t.monotonic() - t0
+    finally:
+        m._TitleIndex, m._raw_test_titles = real_idx, real_titles
+    check("★前置★ 有走到撞名判定(索引至少建了一次、串接過)", built and joined, (built, joined))
+    check("①標題索引只建 1 次", len(built) == 1, len(built))
+    check("②每種串接只算一次:每次拿回同一份", all(v[1] == 0 for v in joined.values()), {k: v[1] for k, v in joined.items()})
+    check("③安全網:60 秒內", secs < 60.0, f"{secs:.1f}s")
 
 
 def t_run_cmd_windows_quoting():
@@ -113348,13 +114991,20 @@ def _sg_canon(o):
     return _j.dumps(o, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+# 裝置報告(AGP 儀器測試)的字串比較失敗:沒有型別欄、沒有訊息屬性,只有本文(2026-11-01 平板實跑的形狀,套件名換成 com.example)
+_SG_DEVICE_TEXT = ("org.junit.ComparisonFailure: expected:<[1]0> but was:<[]0>\nat org.junit.Assert.assertEquals(Assert.java:115)\n"
+                   "at com.example.SampleTest.stringEquals(SampleTest.kt:12)")
+
+
 def _sg_junit(cases):
-    """cases=[(classname::name, 狀態)];狀態 passed/failure/error/skipped。"""
+    """cases=[(classname::name, 狀態)];狀態 passed/failure/failure_rt/failure_truth/failure_device(裝置文字、沒有型別欄)/error/skipped。"""
     rows = []
     for cid, st in cases:
         cls, name = cid.split("::", 1)
         inner = {"passed": "", "failure": '<failure type="AssertionError" message="boom"/>',
                  "failure_rt": '<failure type="java.lang.IllegalStateException" message="boom"/>',
+                 "failure_truth": '<failure type="com.google.common.truth.ComparisonFailureWithFacts" message="boom"/>',
+                 "failure_device": "<failure>" + _SG_DEVICE_TEXT.replace("<", "&lt;").replace(">", "&gt;") + "</failure>",
                  "error": '<error type="RuntimeError" message="x"/>', "skipped": "<skipped/>"}[st]
         rows.append(f'<testcase classname="{cls}" name="{name}">{inner}</testcase>')
     return ("<testsuite>" + "".join(rows) + "</testsuite>").encode("utf-8")
@@ -113472,8 +115122,11 @@ class _SgRepo:
             rep = _sg_junit(cases)
             tq_cases = []
             for cid, st in cases:
-                tq_cases.append({"id": cid, "status": "failure" if st == "failure_rt" else st, "assertion_failure": st == "failure",
+                tq_cases.append({"id": cid, "status": "failure" if st in ("failure_rt", "failure_truth", "failure_device") else st,
+                                 "assertion_failure": st in ("failure", "failure_truth", "failure_device"),
                                  "reason": ("AssertionError boom " if st == "failure" else
+                                            "com.google.common.truth.ComparisonFailureWithFacts boom " if st == "failure_truth" else
+                                            "  " + _SG_DEVICE_TEXT if st == "failure_device" else
                                             "java.lang.IllegalStateException boom " if st == "failure_rt" else
                                             "RuntimeError x " if st == "error" else "")})
             snaps = [{"role": "implementation", "path": ap.get(impl_path, f"{cwd}/{impl_path}"), "artifact": "snapshot-0.txt",
@@ -113893,6 +115546,62 @@ def t_secev_s07_fault_not_real_detection():
     rep = _sg_eval(r)
     check("S7 拿掉防護照綠 → failed:survived(有缺陷,不是 invalid)", _sg_kind(rep, "fault_sensitivity").get("verdict") == "failed"
           and "failed:survived" in _sg_codes(rep, "fault_sensitivity"), str(_sg_codes(rep, "fault_sensitivity")))
+
+
+def t_secev_tq_truth_fault_counts_like_assertion():
+    """[Projects/Android單元測試標準實機演練_計劃 S5] 安全證據閘的 fault_sensitivity 路徑跟收證共用斷言歸因:故障版目標用 Truth
+    (com.google.common.truth.ComparisonFailureWithFacts)失敗時,判定要跟一般 AssertionError 失敗一樣,不再是 invalid:nonassertion_failure。
+    守的錯:文件說「這條路放行 Truth 故障收據」,歸因改回去或安全閘另走一套時,這條放行面會悄悄消失或跟收證不一致。
+    翻紅釘:把 Truth 兩型別從 assertion_failure 拿掉 → 收據記的結果跟重算不同、判定變 invalid → 紅。"""
+    def codes(fault):
+        r = _SgRepo()
+        r.capture(fault_cases=fault)
+        r.commit()
+        rep = _sg_eval(r)
+        return _sg_kind(rep, "fault_sensitivity").get("verdict"), _sg_codes(rep, "fault_sensitivity")
+    plain = codes([("t::illegal", "failure"), ("t::other", "passed")])
+    truth = codes([("t::illegal", "failure_truth"), ("t::other", "passed")])
+    check("前置:一般斷言失敗不是 invalid", plain[0] != "invalid", str(plain))
+    check("演練 S5:Truth 斷言失敗的判定跟一般斷言失敗一樣", truth == plain, f"truth={truth} plain={plain}")
+    check("演練 S5:Truth 斷言失敗不是 nonassertion_failure", "invalid:nonassertion_failure" not in truth[1], str(truth))
+
+
+def t_secev_tq_device_text_fault_counts_like_assertion():
+    """[Projects/Android測試防竄改檢查_計劃 S20] 安全證據閘 fault_sensitivity 那條路:故障版用裝置報告的字串比較失敗(沒有型別欄、
+    只有本文 org.junit.ComparisonFailure 加 org.junit.Assert 堆疊)時,判定要跟一般 AssertionError 失敗一樣。
+    守的錯:驗證紀錄說「Truth 或裝置字串比較的故障收據」由安全證據閘這條路釘住,原本只釘到 Truth(型別欄)那半。
+    翻紅釘:收證歸因的裝置那路(沒有型別欄)整段拿掉 → 收據記的結果跟重算不同、判定變 invalid → 紅。"""
+    def codes(fault):
+        r = _SgRepo()
+        r.capture(fault_cases=fault)
+        r.commit()
+        rep = _sg_eval(r)
+        return _sg_kind(rep, "fault_sensitivity").get("verdict"), _sg_codes(rep, "fault_sensitivity")
+    plain = codes([("t::illegal", "failure"), ("t::other", "passed")])
+    rt = codes([("t::illegal", "failure_rt"), ("t::other", "passed")])
+    dev = codes([("t::illegal", "failure_device"), ("t::other", "passed")])
+    check("前置:一般斷言失敗不是 invalid", plain[0] != "invalid", str(plain))
+    check("前置:一般例外失敗跟一般斷言失敗判得不一樣(這條路真的看歸因)", rt != plain, f"rt={rt} plain={plain}")
+    check("前置:樣本 XML 沒有型別欄", 'type=' not in _sg_junit([("t::illegal", "failure_device")]).decode().split("<failure", 1)[1].split(">", 1)[0], "")
+    check("S20:裝置字串比較失敗的判定跟一般斷言失敗一樣", dev == plain, f"device={dev} plain={plain}")
+
+
+def t_secev_tq_truth_junit_declared_is_assertion_failed():
+    """[Projects/Android單元測試標準實機演練_計劃 S5] 安全證據閘 JUnit 宣告那條路:非法案例用 Truth 斷言失敗時記成
+    failed:assertion_failed(跟一般斷言失敗一樣),不再是 invalid:nonassertion_failure;兩者都不放行。
+    守的錯:歸因改回去或這條路另走一套時,文件寫的「從無效變成斷言失敗」悄悄不成立。
+    翻紅釘:把 Truth 兩型別從 assertion_failure 拿掉 → 這條路回到 nonassertion_failure → 紅。"""
+    def codes(state):
+        r = _SgRepo()
+        r.files["reports/behavior.xml"] = _sg_junit([("t::illegal", state), ("t::legit", "passed"), ("t::pre", "passed")])
+        r.commit()
+        rep = _sg_eval(r)
+        return _sg_kind(rep, "behavior").get("verdict"), _sg_codes(rep, "behavior")
+    plain, truth, rt = codes("failure"), codes("failure_truth"), codes("failure_rt")
+    check("前置:一般斷言失敗記成 failed:assertion_failed", "failed:assertion_failed" in plain[1], str(plain))
+    check("前置:一般例外記成 invalid:nonassertion_failure", "invalid:nonassertion_failure" in rt[1], str(rt))
+    check("演練 S5:Truth 斷言失敗跟一般斷言失敗同判定", truth == plain, f"truth={truth} plain={plain}")
+    check("演練 S5:兩者都不是 qualified", plain[0] != "qualified" and truth[0] != "qualified", f"{plain} {truth}")
 
 
 def t_secev_s08_s20_oracle_needs_review():
@@ -119189,6 +120898,39 @@ def t_room_dao_test_via_base_class_passes():
     check("基底類別建資料庫放行", rc == 0, out[-600:])
 
 
+def t_room_dao_backtick_method_not_required():
+    """反引號命名的 DAO 方法剝過字串後名稱是空的,找不到「以它的名字呼叫」的測試;DAO 那半照改動前不要求它
+    (反引號名支援是給測試防竄改的),同一次新增的一般方法照樣要求。"""
+    print("t_room_dao_backtick_method_not_required")
+    m = _load_lumos_inproc()
+    ms = m._rg_methods(m._rg_strip('@Dao\ninterface D {\n    @Query("x")\n    suspend fun `object`(): Int\n}\n'), False)
+    check("★前置★ 現場成立:反引號方法真的被切成一支、名稱是空的", [x[0] for x in ms] == [""], str(ms))
+    root = _rg_repo()
+    _rg_daotest(root, calls=("getAll", "`object`"))
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE id = 0")\n    suspend fun `object`(): List<Order>\n'])
+    _nh_commit(root, "backtick dao method")
+    rc, out = _rg(root)
+    check("反引號 DAO 方法不擋(不要求找不到的空名字測試)", rc == 0, out[-600:])
+    root = _rg_repo()
+    _rg_dao(root, ['    @Query("SELECT * FROM orders")\n    suspend fun getAll(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE id = 0")\n    suspend fun `object`(): List<Order>\n',
+                   '    @Query("SELECT * FROM orders WHERE paid = 0")\n    suspend fun getUnpaid(): List<Order>\n'])
+    _nh_commit(root, "backtick plus plain")
+    rc, out = _rg(root)
+    check("同一次新增的一般方法沒測試照樣擋", rc == 1 and "getUnpaid" in out and "OrderDao.(" not in out
+          and "OrderDao. " not in out, out[-600:])
+    root = _rg_repo()
+    _nh_git(root, "rm", "-q", _RG_DAOTEST)          # 沒有任何測試檔:空名字搜不到東西,沒濾掉就會出一條名字空白的提醒
+    _nh_file(root, "app/src/main/java/p/Converters.kt",
+             "package p\nclass Converters {\n    @TypeConverter\n    fun `to instant`(v: Long?): Instant? = v?.let(Instant::ofEpochMilli)\n\n"
+             "    @TypeConverter\n    fun fromInstant(v: Instant?): Long? = v?.toEpochMilli()\n}\n")
+    _nh_commit(root, "backtick converter")
+    rc, out = _rg(root)
+    check("反引號型別轉換不出空名字的提醒、一般的照提醒", rc == 0 and "fromInstant" in out
+          and "型別轉換  沒有" not in out and "型別轉換 沒有" not in out, out[-600:])
+
+
 def t_room_dao_mock_only_test_blocks():
     """[S24] 唯一呼叫 .getUnpaid( 的測試檔 mock 了 OrderDao → 擋,說 mock 不算。"""
     print("t_room_dao_mock_only_test_blocks")
@@ -119528,6 +121270,61 @@ def t_room_guard_registered():
         check(f"{f} 有 room-guard", "room-guard" in (base / f).read_text(encoding="utf-8"), f)
 
 
+def t_test_guard_registered():
+    """[Projects/Android測試防竄改檢查_計劃 S23] 新頂層指令 test-guard:--help、子指令說明、兩份文件的指令總數、子命令全覽、指令索引與 06 都有它。
+    守的錯:加了指令卻漏登記一處,讀文件的人找不到它、總數對不上。翻紅釘:拿掉 argparse 註冊、HELP_WHEN、任一份文件的那一處 → 紅。"""
+    import re
+    import subprocess as sp
+    h = sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True).stdout
+    check("--help 列出 test-guard", "test-guard" in h, h[-300:])
+    sub = sp.run([sys.executable, GRAPHCTL, "test-guard", "--help"], capture_output=True, text=True).stdout
+    check("test-guard --help 有說明表那句(什麼時候用)", "--diff" in sub and len(sub.splitlines()) > 3, sub[:300])
+    mod = _tqg_module()
+    check("說明表 HELP_WHEN 有 test-guard", bool(mod.HELP_WHEN.get("test-guard")), "")
+    root = Path(GRAPHCTL).resolve().parent.parent
+    arch = (root / "ARCHITECTURE.md").read_text(encoding="utf-8")
+    ref = (root / "skills" / "lumos-project-notes" / "reference.md").read_text(encoding="utf-8")
+    n = len(set(re.search(r"\{([a-z0-9,\-]+)\}", h).group(1).split(",")))
+    check("ARCHITECTURE.md 的指令總數跟 --help 一樣", f"({n} 個頂層命令)" in arch, str(n))
+    check("reference.md 的指令總數跟 --help 一樣", f"子命令全覽（{n} 個頂層命令" in ref, str(n))
+    full = ref[ref.find("子命令全覽"):]
+    check("reference.md 子命令全覽歸類裡有 test-guard", "`test-guard`" in full.split("\n", 1)[0], "")
+    base = root / "skills" / "lumos-project-notes" / "commands"
+    for f in ("INDEX.md", "06-代碼審與推送.md"):
+        check(f"{f} 有 test-guard", "test-guard" in (base / f).read_text(encoding="utf-8"), f)
+
+
+def t_test_quality_standard_ai_test_guard():
+    """[Projects/Android測試防竄改檢查_計劃 S18] 測試品質標準寫到讓 AI 寫測試的規矩、推送前的防竄改檢查(獨立二級標題、在〈審查時〉與〈工具接入〉之間)、
+    Android 節的穩定與隔離、重建、範本測試、變異測試與屬性測試的事實,連到研讀報告與計劃;03 指到新節。
+    守的錯:標準被改寫時這幾條被刪或被搬走,讀標準的 AI 不知道答案表要先行、推送前會被比對。翻紅釘:刪掉新節、刪掉任一關鍵詞 → 紅。"""
+    _need_src("skills/lumos-project-notes/commands/test-quality-standard.md", "skills/lumos-project-notes/commands/03-寫回圖譜.md")
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands"
+    t = (base / "test-quality-standard.md").read_text(encoding="utf-8")
+    heads = [ln for ln in t.splitlines() if ln.startswith("## ")]
+    check("前置:找得到審查時與工具接入兩節", any(h.startswith("## 審查時") for h in heads) and any(h.startswith("## 工具接入") for h in heads), str(heads))
+    k = next((i for i, h in enumerate(heads) if h == "## 推送前的防竄改檢查"), -1)
+    check("S18:推送前的防竄改檢查是獨立二級標題、夾在審查時與工具接入之間",
+          0 < k < len(heads) - 1 and heads[k - 1].startswith("## 審查時") and heads[k + 1].startswith("## 工具接入"), str(heads))
+    dev = t[t.find("## 開發時"):t.find("## 審查時")]
+    for w in ("答案表", "看不到實作", "不准把預期值改成程式目前的輸出", "停下回報"):
+        check(f"S18:開發時寫到 {w}", w in dev, w)
+    i = t.find("## 推送前的防竄改檢查")
+    push = t[i:t.find("\n## ", i + 5)] if i >= 0 else ""
+    for w in ("lumos test-guard", "抓不到", "lumos lint-waive", "AI 放的放行要人看過", "--ack --all", "升級說明", "lint_new.gate"):
+        check(f"S18:推送前那節寫到 {w}", w in push, w)
+    j = t.find("### Android 本機單元測試的驗收標準")
+    sec = t[j:t.find("\n### ", j + 5)] if j >= 0 else ""
+    for w in ("failOnPassedAfterRetry", "反轉", "打亂順序", "shuffledBy", "Orchestrator", "clearPackageData", "ViewModelScenario.recreate()",
+              "ExampleUnitTest", "只變異這次改到的類別", "變異數大於 0", "arcmutate", "pl.droidsonroids.pitest", "kotest-property",
+              "assume", "jqwik", "不採用的壞味道", "Eager Test"):
+        check(f"S18:Android 那節寫到 {w}", w in sec, w)
+    check("S18:連到研讀報告", "ai-test-verification-research-20261102" in t, "")
+    check("S18:連到這份計劃", "[[Projects/Android測試防竄改檢查_計劃]]" in t, "")
+    t3 = (base / "03-寫回圖譜.md").read_text(encoding="utf-8")
+    check("S18:03 指到推送前那節與讓 AI 寫測試那段", "〈推送前的防竄改檢查〉" in t3 and "讓 AI 寫測試" in t3, "")
+
+
 def t_test_quality_standard_android_room_section():
     """[S41] 測試品質規範有 Android 資料層(Room)一節,七種情況依序出現與幾個關鍵詞;03 有一句指過去。"""
     print("t_test_quality_standard_android_room_section")
@@ -119542,6 +121339,75 @@ def t_test_quality_standard_android_room_section():
         check(f"提到 {w}", w in sec, "")
     t3 = (base / "03-寫回圖譜.md").read_text(encoding="utf-8")
     check("03 指到那一節", "Android 資料層(Room)" in t3, "")
+
+
+def t_test_quality_standard_android_unit_section():
+    """[Projects/Android本機單元測試驗收標準_計劃 S1] 測試品質標準有〈Android 本機單元測試的驗收標準〉一節,
+    緊接在原生收證那一節之後、三段依序、幾個關鍵詞在;03〈實作測試品質〉有一句指過去。
+    守的錯:這一節被搬走或刪掉、三段被掏空只留標題、03 的指路斷掉,讀標準的人找不到 Android 單元測試的驗收條件。
+    翻紅釘:刪掉這一節、把它移到別節後面、拿掉「什麼證據才算過」那段 → 紅。"""
+    _need_src("skills/lumos-project-notes/commands/test-quality-standard.md", "skills/lumos-project-notes/commands/03-寫回圖譜.md")
+    base = Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands"
+    t = (base / "test-quality-standard.md").read_text(encoding="utf-8")
+    heads = [ln for ln in t.splitlines() if ln.startswith("### ")]
+    native = next((k for k, h in enumerate(heads) if h.startswith("### C#、Android、iOS 的原生收證接入")), -1)
+    check("前置:找得到原生收證那一節", native >= 0, str(heads))
+    check("S1:新的一節緊接在原生收證之後",
+          native >= 0 and native + 1 < len(heads) and heads[native + 1] == "### Android 本機單元測試的驗收標準", str(heads))
+    i = t.find("### Android 本機單元測試的驗收標準")
+    sec = t[i:t.find("\n### ", i + 5)] if i >= 0 else ""
+    pos = [sec.find(w) for w in ("**要有哪些**", "**怎麼寫才算數**", "**什麼證據才算過**")]
+    check("S1:三段依序出現", all(p >= 0 for p in pos) and pos == sorted(pos), str(pos))
+    for w in ("MainDispatcherRule", "isReturnDefaultValues", "Robolectric", "零選中", "故障"):
+        check(f"S1:提到 {w}", w in sec, "")
+    check("S1:這一節開頭指回單源計劃(兄弟節都有)", "單源=[[Projects/Android本機單元測試驗收標準_計劃]]" in sec, "")
+    t3 = (base / "03-寫回圖譜.md").read_text(encoding="utf-8")
+    check("S1:03 指到這一節", "〈Android 本機單元測試的驗收標準〉" in t3, "")
+    print("  ✓ t_test_quality_standard_android_unit_section")
+
+
+def t_test_quality_drill_cli_cases_present():
+    """[Projects/Android單元測試標準實機演練_計劃 S5] 收證工具的家(Systems/test-quality-cli)那條 PITFALL 防回歸列的收證歸因正反例方法都還在收證工具的測試檔裡。
+    守的錯:S5 綁的 t_test_quality_cli 只看整份退出碼,刪掉或改名其中一支仍綠。
+    翻紅釘:刪掉任一支或改名 → 紅。"""
+    _need_src("scripts/test_test_quality_cli.py")
+    t = (Path(GRAPHCTL).resolve().parent / "test_test_quality_cli.py").read_text(encoding="utf-8")
+    for name in ("test_truth_local_assertion_types_are_attributed", "test_truth_expect_rule_type_is_not_attributed",
+                 "test_truth_lookalike_types_are_not_attributed", "test_truth_device_text_without_type_is_not_attributed",
+                 "test_runtime_exception_mentioning_truth_type_is_not_attributed",
+                 "test_device_comparison_failure_and_bare_assertion_are_attributed",
+                 "test_device_hamcrest_and_caused_by_in_message_are_attributed",
+                 "test_local_array_comparison_failure_is_attributed_device_text_is_not",
+                 "test_device_attribution_is_linear_on_many_newlines",
+                 "test_device_runtime_around_comparison_failure_is_not_attributed",
+                 # Projects/Android測試防竄改檢查_計劃 S19:裝置那路五道條件各一支放寬就紅的
+                 "test_device_indented_frames_are_attributed", "test_device_first_line_trailing_space_is_stripped",
+                 "test_device_assert_phrase_needs_word_boundary", "test_device_assert_frame_must_be_fail_or_assert",
+                 "test_device_message_mentioning_assert_frame_counts_from_first_frame"):
+        check(f"演練 S5:{name} 在", f"def {name}(self)" in t, "")
+    print("  ✓ t_test_quality_drill_cli_cases_present")
+
+
+def t_test_quality_standard_android_drill_lessons():
+    """[Projects/Android單元測試標準實機演練_計劃 S6] 實機演練補進〈Android 本機單元測試的驗收標準〉的幾條還在:
+    看實際解析版本、Gradle 跳過測試要 --rerun、混著當掉紅要縮小篩選、裝置那路收得到哪些斷言、裝置收證用類別篩選、
+    Kotlin 靜態掃描要帶 --semgrep,而且「機器抓不到」那條指回演練的驗證紀錄。
+    守的錯:這幾條被刪或改回演練前的說法(例如「裝置那路用 JUnit Assert 就收得到」不提 ComparisonFailure),下一個照標準收證的人又撞同一道牆。
+    翻紅釘:刪掉任一條、把指回驗證紀錄的連結拿掉 → 紅。"""
+    _need_src("skills/lumos-project-notes/commands/test-quality-standard.md")
+    t = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands" / "test-quality-standard.md").read_text(encoding="utf-8")
+    i = t.find("### Android 本機單元測試的驗收標準")
+    check("前置:找得到這一節", i >= 0, "")
+    sec = t[i:t.find("\n### ", i + 5)] if i >= 0 else ""
+    for label, w in (("看實際解析版本", "RuntimeClasspath"), ("Gradle 跳過測試要強制重跑", "`--rerun`(Gradle 7.6"),
+                     ("舊 Gradle 的替代", "--rerun-tasks"), ("混著當掉紅要縮小篩選", "縮到用斷言抓到的那幾支"),
+                     ("裝置那路認得字串比較", "org.junit.ComparisonFailure"), ("裝置收證用類別篩選", "testInstrumentationRunnerArguments.class"),
+                     ("Truth 的 Expect 規則收不到", "Truth$SimpleAssertionError"), ("靜態掃描要帶旗標", "--semgrep"),
+                     ("儀器測試等真執行緒用真時間", "withContext(Dispatchers.Default)"), ("當掉紅不算抓到錯", "錯是被「當掉」抓到的"),
+                     ("收據存著歸因結果、重算不同會被拒", "recorded test outcomes differ from raw report")):
+        check(f"S6:{label}", w in sec, w)
+    check("S6:機器抓不到那條指回演練驗證紀錄", "[[Verification/2026-11-01_Android單元測試標準實機演練]]" in sec, "")
+    print("  ✓ t_test_quality_standard_android_drill_lessons")
 
 
 def t_prepush_room_guard_wired():
@@ -119858,6 +121724,3196 @@ def t_room_dao_last_line_change_required():
     check("r3:只改最後一行 → 要求 getPaid", rc == 1 and "OrderDao.getPaid" in out, out[-600:])
     check("r3:不點名沒改的 getAll", "OrderDao.getAll" not in out, out[-600:])
 
+
+# ── 測試防竄改比對(Projects/Android測試防竄改檢查_計劃 S1–S11、S16)────────────────────────────
+# 每支先建臨時 git repo、提交改動前後兩版,再直接呼叫比對工具;判的是「候選有沒有列、列在哪支檔」。
+_TQG_MOD = []
+_TQG_T = "app/src/test/java/x/CalcTest.kt"
+
+
+def _tqg_module():
+    """比對工具的測試共用一份載入好的 lumos 模組(載一次約一秒,S1–S11 十幾支各載一次太慢)。"""
+    if not _TQG_MOD:
+        _TQG_MOD.append(_load_lumos_module())
+    return _TQG_MOD[0]
+
+
+def _tqg_repo(files):
+    """建臨時 git repo、提交 files(路徑→內容;None=刪掉)→ (root, 第一個提交, commit 函式);commit(新檔案表) 回新提交的 sha。"""
+    import subprocess as sp
+    root = Path(tempfile.mkdtemp(prefix="gctl-tqg-"))
+
+    def git(*a):
+        return sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    git("init", "-q")
+
+    def commit(tree):
+        for p, body in tree.items():
+            f = root / p
+            if body is None:
+                if f.exists():
+                    f.unlink()
+                continue
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(body if isinstance(body, bytes) else body.encode("utf-8"))
+        git("add", "-A")
+        git("commit", "-q", "-m", "c", "--allow-empty")
+        return git("rev-parse", "HEAD").stdout.strip()
+    return root, commit(files), commit
+
+
+def _tqg_cands(root, a, b):
+    cands, err = _tqg_module()._tg_analyze(root, a, b)
+    return cands if cands is not None else [{"rule": "ERROR", "file": err}]
+
+
+def _tqg_rules(root, a, b):
+    return [(c["rule"], c["file"]) for c in _tqg_cands(root, a, b)]
+
+
+def _tqg_kt(*bodies):
+    return "package x\nimport org.junit.Test\nclass CalcTest {\n" + "\n".join(bodies) + "\n}\n"
+
+
+def t_tq_guard_skip_added():
+    """[S1] 測試檔新增跳過標記要列 tq/skip-added;註解行、新寫的測試帶 expected=、整檔重新縮排、原樣搬家不列;兩個相同的 @Ignore 兩個指紋。
+    守的錯:AI 為了讓紅燈消失把測試標成跳過。翻紅釘:拿掉 _TG_SKIP_ANN_RE 或 _TG_ASSUME_RE 任一種寫法、assume 身分改回只取一行、expected= 判斷改成不看改動前 → 紅。"""
+    T = _TQG_T
+    plain = "    @Test\n    fun a() {\n        assertEquals(1, f())\n    }\n"
+    other = "    @Test\n    fun b() { assertEquals(2, g()) }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(plain, other)})
+    check("★前置★ 沒改動時沒有候選", _tqg_rules(root, base, base) == [], _tqg_rules(root, base, base))
+    for label, ann in (("Ignore", "@Ignore"), ("Disabled", "@Disabled"), ("SdkSuppress", "@SdkSuppress(minSdkVersion = 30)"),
+                       ("FlakyTest", "@FlakyTest"), ("Config sdk", "@Config(sdk = [28])")):
+        h = commit({T: _tqg_kt("    " + ann + "\n" + plain, other)})
+        check(f"S1 新增 {label} 要列", ("tq/skip-added", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h = commit({T: _tqg_kt("    @Test\n    fun a() {\n        Assume.assumeTrue(isCi())\n        assertEquals(1, f())\n    }\n", other)})
+    check("S1 新增 Assume.assumeTrue 要列", ("tq/skip-added", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h = commit({T: _tqg_kt(plain, "    @Test(expected = IllegalStateException::class)\n    fun b() { assertEquals(2, g()) }\n")})
+    check("S1 既有測試新加 expected= 要列", ("tq/skip-added", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h = commit({T: _tqg_kt("    // @Ignore 之後再說\n" + plain, other)})
+    check("S1 整行是註解的不列", ("tq/skip-added", T) not in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h = commit({T: _tqg_kt(plain, other, "    @Test(expected = IllegalStateException::class)\n    fun c() { boom() }\n")})
+    check("S1 新寫的測試帶 expected= 不算加跳過", ("tq/skip-added", T) not in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    ign = _tqg_kt("    @Ignore\n" + plain, other)
+    b2 = commit({T: ign})
+    h2 = commit({T: "\n".join(("  " + ln.lstrip() if ln.startswith("    ") else ln) for ln in ign.split("\n"))})
+    check("★前置★ 重新縮排真的改了檔", h2 != b2, "")
+    check("S1 整檔重新縮排後舊的 @Ignore 不列", ("tq/skip-added", T) not in _tqg_rules(root, b2, h2), _tqg_rules(root, b2, h2))
+    a1 = "    @Test fun a() { assertEquals(1, f()) }\n"
+    b1 = "    @Test fun b() { assertEquals(2, g()) }\n"
+    b3 = commit({T: _tqg_kt(a1, b1)})
+    h3 = commit({T: _tqg_kt("    @Ignore\n" + a1, "    @Ignore\n" + b1)})
+    keys = [c["key"] for c in _tqg_cands(root, b3, h3) if c["rule"] == "tq/skip-added"]
+    check("S1 兩支各加 @Ignore 得到兩個不同指紋", len(keys) == 2 and len(set(keys)) == 2, keys)
+    c2 = "    @Ignore\n    @Test fun c() { assertEquals(3, h()) }\n"
+    b4 = commit({T: _tqg_kt(a1, b1, c2)})
+    O = "app/src/test/java/x/OtherTest.kt"
+    h4 = commit({T: _tqg_kt(a1, b1), O: "package x\nclass OtherTest {\n" + c2 + "}\n"})
+    check("S1 測試原樣搬到另一支檔帶過去的 @Ignore 不列", ("tq/skip-added", O) not in _tqg_rules(root, b4, h4), _tqg_rules(root, b4, h4))
+
+    # 代碼審 r1:完整類別名與 JUnit 5 條件式跳過、註記與 fun 同一行、類別層級跨檔互抵與歸檔、改本體與換跳過種類不算新增
+    p0 = "    @Test\n    fun a() { assertEquals(1, f()) }\n"
+    for ann in ("@org.junit.jupiter.api.Disabled", "@androidx.test.filters.FlakyTest", "@androidx.test.filters.SdkSuppress(minSdkVersion = 30)",
+                "@org.robolectric.annotation.Config(sdk = [28])", "@DisabledOnOs(OS.LINUX)", "@EnabledOnOs(OS.WINDOWS)",
+                "@DisabledIfEnvironmentVariable(named = \"CI\", matches = \"true\")"):
+        b9 = commit({T: _tqg_kt(p0)})
+        h9 = commit({T: _tqg_kt("    " + ann + "\n" + p0)})
+        check(f"S1 r1 新增 {ann[:40]} 要列", ("tq/skip-added", T) in _tqg_rules(root, b9, h9), _tqg_rules(root, b9, h9))
+    b9 = commit({T: _tqg_kt(p0)})
+    h9 = commit({T: _tqg_kt("    @Test\n    fun a() { Assumptions.assumingThat(isCi()) { }; assertEquals(1, f()) }\n")})
+    check("S1 r1 新增 Assumptions.assumingThat 要列", ("tq/skip-added", T) in _tqg_rules(root, b9, h9), _tqg_rules(root, b9, h9))
+    b10 = commit({T: _tqg_kt("    @Test fun b() { boom() }\n")})
+    h10 = commit({T: _tqg_kt("    @Test(expected = IllegalStateException::class) fun b() { boom() }\n")})
+    check("S1 r1 註記與 fun 同一行時既有測試加 expected= 要列", ("tq/skip-added", T) in _tqg_rules(root, b10, h10), _tqg_rules(root, b10, h10))
+    A, Bf = "app/src/test/java/x/ATest.kt", "app/src/test/java/x/BTest.kt"
+    cls = lambda name, ign: "package x\n" + ("@Ignore\n" if ign else "") + f"class {name} {{\n    @Test fun t() {{ assertEquals(1, f()) }}\n}}\n"  # noqa: E731
+    b11 = commit({T: None, A: cls("ATest", True), Bf: cls("BTest", False)})
+    h11 = commit({A: cls("ATest", False), Bf: cls("BTest", True)})
+    check("S1 r1 A 拿掉類別層級 @Ignore、B 加上:B 要列、記在 B", ("tq/skip-added", Bf) in _tqg_rules(root, b11, h11), _tqg_rules(root, b11, h11))
+    ig = "    @Ignore(\"flaky\")\n    @Test\n    fun a() { assertEquals(1, f()) }\n"
+    b12 = commit({A: None, Bf: None, T: _tqg_kt(ig)})
+    h12 = commit({T: _tqg_kt(ig.replace("f())", "f(2))"))})
+    check("S1 r1 早就跳過的測試只改本體不列", ("tq/skip-added", T) not in _tqg_rules(root, b12, h12), _tqg_rules(root, b12, h12))
+    h13 = commit({T: _tqg_kt(ig.replace("@Ignore(\"flaky\")", "@Disabled(\"flaky\")"))})
+    check("S1 r1 @Ignore 換成 @Disabled(跳過數不變)不列", ("tq/skip-added", T) not in _tqg_rules(root, h12, h13), _tqg_rules(root, h12, h13))
+    two = "package x\nclass CalcTest {\n    class A {\n        @Test fun t() { assertEquals(1, f()) }\n    }\n    class B {\n        @Test fun t() { assertEquals(2, f()) }\n    }\n}\n"
+    b14 = commit({T: two})
+    h14 = commit({T: two.replace("    class A {", "    @Ignore\n    class A {").replace("    class B {", "    @Ignore\n    class B {")})
+    keys = [c["key"] for c in _tqg_cands(root, b14, h14) if c["rule"] == "tq/skip-added"]
+    check("S1 r1 同一支檔兩處相同的類別層級 @Ignore:兩條、指紋不同", len(keys) == 2 and len(set(keys)) == 2, keys)
+
+    # 代碼審 r2:assume 的條件改成永遠跳過、Truth 的 assume、類別層級跳過的檔改名不算新增
+    am = "    @Test\n    fun a() {\n        assumeTrue(BuildConfig.HAS_EMU)\n        assertEquals(1, f())\n    }\n"
+    b20 = commit({T: _tqg_kt(am)})
+    for label, cond in (("assumeTrue(false)", "assumeTrue(false)"), ("加 && CI 條件", "assumeTrue(BuildConfig.HAS_EMU && System.getenv(\"CI\") == null)")):
+        h = commit({T: _tqg_kt(am.replace("assumeTrue(BuildConfig.HAS_EMU)", cond))})
+        check(f"S1 r2 既有 assume 改成 {label} 要列", ("tq/skip-added", T) in _tqg_rules(root, b20, h), _tqg_rules(root, b20, h))
+    b21 = commit({T: _tqg_kt(p0)})
+    h21 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        TruthJUnit.assume().that(isCi()).isFalse()\n        assertEquals(1, f())\n    }\n")})
+    check("S1 r2 新增 TruthJUnit.assume() 要列", ("tq/skip-added", T) in _tqg_rules(root, b21, h21), _tqg_rules(root, b21, h21))
+    import subprocess as _sp
+    Old, New = "app/src/test/java/x/OldTest.kt", "app/src/test/java/y/OldTest.kt"
+    b22 = commit({T: None, Old: "package x\n@Ignore(\"flaky\")\nclass OldTest {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"})
+    (root / New).parent.mkdir(parents=True, exist_ok=True)
+    _sp.run(["git", "-C", str(root), "mv", Old, New], capture_output=True)
+    h22 = commit({New: "package y\n@Ignore(\"flaky\")\nclass OldTest {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"})
+    check("★前置★ git 把它認成改名", any(x[0] == "R" for x in _tqg_module()._tg_changes(root, b22, h22)), "")
+    check("S1 r2 類別層級 @Ignore 的檔搬目錄不列", ("tq/skip-added", New) not in _tqg_rules(root, b22, h22), _tqg_rules(root, b22, h22))
+
+    # 代碼審 r3:assume 的身分是整個呼叫(括號配平、去掉空白)——多行條件改成 false 要列;只換行重排、改同一行的斷言不列
+    ml = "    @Test\n    fun a() {\n        assumeTrue(\n            BuildConfig.HAS_EMU\n        )\n        assertEquals(1, f())\n    }\n"
+    one = "    @Test\n    fun a() {\n        assumeTrue(BuildConfig.HAS_EMU)\n        assertEquals(1, f())\n    }\n"
+    b30 = commit({T: _tqg_kt(ml)})
+    h30 = commit({T: _tqg_kt(ml.replace("BuildConfig.HAS_EMU", "false"))})
+    check("S1 r3 多行 assume 的條件改成 false 要列", ("tq/skip-added", T) in _tqg_rules(root, b30, h30), _tqg_rules(root, b30, h30))
+    b31 = commit({T: _tqg_kt(one)})
+    h31 = commit({T: _tqg_kt(ml)})
+    check("S1 r3 同一個 assume 只換行重排不列", ("tq/skip-added", T) not in _tqg_rules(root, b31, h31), _tqg_rules(root, b31, h31))
+    same = "    @Test fun a() { assumeTrue(ok); assertEquals(1, f()) }\n"
+    b32 = commit({T: _tqg_kt(same)})
+    h32 = commit({T: _tqg_kt(same.replace("f())", "f(2))"))})
+    check("S1 r3 只改 assume 同一行的斷言不列跳過", ("tq/skip-added", T) not in _tqg_rules(root, b32, h32), _tqg_rules(root, b32, h32))
+
+    # 代碼審 r4:敘述擷取在剝掉字串的文字上找邊界、用共用的括號對應表——字串裡的括號不算;字串常值的空白差異照樣算;
+    # 一行寫完的測試在 assume 後面直接收尾,不會吞進下一支測試;條件接在下一行用 .that( 鏈下去也算同一個敘述
+    sp = "    @Test\n    fun a() {\n        assumeTrue(s == \"(\")\n        assertEquals(1, f(1))\n    }\n"
+    b40 = commit({T: _tqg_kt(sp)})
+    h40 = commit({T: _tqg_kt(sp.replace("f(1))", "f(2))"))})
+    check("S1 r4 assume 的字串裡有左括號、只改下一行的斷言不列跳過", ("tq/skip-added", T) not in _tqg_rules(root, b40, h40), _tqg_rules(root, b40, h40))
+    ws = "    @Test\n    fun a() {\n        assumeTrue(env == \"ci\")\n        assertEquals(1, f())\n    }\n"
+    b41 = commit({T: _tqg_kt(ws)})
+    h41 = commit({T: _tqg_kt(ws.replace("\"ci\"", "\"c i\""))})
+    check("S1 r4 assume 字串常值裡多一個空白(條件變成永遠不成立)要列", ("tq/skip-added", T) in _tqg_rules(root, b41, h41), _tqg_rules(root, b41, h41))
+    two = "    @Test fun a() { assumeTrue(ok) }\n    @Test fun b() { assertEquals(1, f()) }\n"
+    b42 = commit({T: _tqg_kt(two)})
+    h42 = commit({T: _tqg_kt(two.replace("assertEquals(1,", "assertEquals(2,"))})
+    check("S1 r4 一行寫完的 assume 不吞進下一支測試:只改下一支的斷言不列跳過", ("tq/skip-added", T) not in _tqg_rules(root, b42, h42), _tqg_rules(root, b42, h42))
+    ch = "    @Test\n    fun a() {\n        TruthJUnit.assume()\n            .that(isEmu())\n            .isTrue()\n        assertEquals(1, f())\n    }\n"
+    b43 = commit({T: _tqg_kt(ch)})
+    h43 = commit({T: _tqg_kt(ch.replace(".that(isEmu())", ".that(false)"))})
+    check("S1 r4 Truth 的 assume 鏈寫在下一行、條件改掉要列", ("tq/skip-added", T) in _tqg_rules(root, b43, h43), _tqg_rules(root, b43, h43))
+
+    # 代碼審 r5:身分只在字串外面整理空白——字串常值頭尾多一個空白、逗號後的空白拿掉,條件都變了,要列;字串外的空白重排照樣不列
+    for nm, new in (("頭", '" ci"'), ("尾", '"ci "'), ("逗號", '"a,b"')):
+        src = "    @Test\n    fun a() {\n        assumeTrue(env == " + ('"a, b"' if nm == "逗號" else '"ci"') + ")\n        assertEquals(1, f())\n    }\n"
+        b50 = commit({T: _tqg_kt(src)})
+        h50 = commit({T: _tqg_kt(src.replace('"a, b"' if nm == "逗號" else '"ci"', new))})
+        check(f"S1 r5 assume 字串常值{nm}的空白改了要列", ("tq/skip-added", T) in _tqg_rules(root, b50, h50), _tqg_rules(root, b50, h50))
+    sp5 = "    @Test\n    fun a() {\n        assumeTrue(env == \"c i\")\n        assertEquals(1, f())\n    }\n"
+    b51 = commit({T: _tqg_kt(sp5)})
+    h51 = commit({T: _tqg_kt(sp5.replace("assumeTrue(env == \"c i\")", "assumeTrue( env==\"c i\" )"))})
+    check("S1 r5 字串外的空白重排、字串內容不變不列", ("tq/skip-added", T) not in _tqg_rules(root, b51, h51), _tqg_rules(root, b51, h51))
+
+
+def t_tq_guard_test_removed():
+    """[S2] 測試函式不見、整支測試檔被刪或改名成非測試檔要列 tq/test-removed(同檔合一條);改名不改本體、原樣搬家不列。
+    守的錯:AI 刪掉紅的測試。翻紅釘:本體簽名配對改成多對一、同名多載不給號、刪檔不算 → 紅。"""
+    T = _TQG_T
+    a = "    @Test\n    fun a() { assertEquals(1, f()) }\n"
+    b = "    @Test\n    fun b() { assertEquals(2, g()) }\n"
+    c = "    @Test\n    fun `回傳 3`() { assertEquals(3, h()) }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(a, b, c)})
+    h = commit({T: _tqg_kt(a)})
+    got = [x for x in _tqg_cands(root, base, h) if x["rule"] == "tq/test-removed"]
+    check("S2 刪兩支同檔合成一條、列出函式名", len(got) == 1 and "b" in got[0]["ident"] and "回傳 3" in got[0]["ident"], got)
+    base2 = commit({T: _tqg_kt(a, b, c)})
+    O = "app/src/test/java/x/OtherTest.kt"
+    h = commit({T: _tqg_kt(a, c), O: "package x\nclass OtherTest {\n" + b + "}\n"})
+    check("S2 原樣搬到另一支測試檔不列", ("tq/test-removed", T) not in _tqg_rules(root, base2, h), _tqg_rules(root, base2, h))
+    h2 = commit({T: None, O: None})
+    check("S2 整支測試檔被刪要列", ("tq/test-removed", T) in _tqg_rules(root, h, h2), _tqg_rules(root, h, h2))
+    base3 = commit({T: _tqg_kt(a, b)})
+    import subprocess as sp
+    sp.run(["git", "-C", str(root), "mv", T, "app/src/test/java/x/CalcHelper.txt"], capture_output=True)
+    h3 = commit({})
+    check("S2 測試檔改名成非測試檔要列", ("tq/test-removed", T) in _tqg_rules(root, base3, h3), _tqg_rules(root, base3, h3))
+    one_a = "    @Test fun a() { assertEquals(1, f()) }\n"
+    one_b = "    @Test fun b() { assertEquals(2, g()) }\n"
+    base4 = commit({T: _tqg_kt(one_a, one_b), "app/src/test/java/x/CalcHelper.txt": None})
+    h4 = commit({T: _tqg_kt(one_a)})
+    got = [x["ident"] for x in _tqg_cands(root, base4, h4) if x["rule"] == "tq/test-removed"]
+    check("S2 一行寫完的測試被刪要列", got and "b" in got[0], got)
+    g1 = '    @Test fun greetsAlice() { assertEquals("Hi Alice", greet("Alice")) }\n'
+    g2 = '    @Test fun greetsBob() { assertEquals("Hi Bob", greet("Bob")) }\n'
+    base5 = commit({T: _tqg_kt(g1, g2)})
+    h5 = commit({T: _tqg_kt(g1)})
+    got = [x["ident"] for x in _tqg_cands(root, base5, h5) if x["rule"] == "tq/test-removed"]
+    check("S2 只差字串常值的兄弟測試被刪要列", got and "greetsBob" in got[0], got)
+    d1 = "    @Test fun d1() { assertEquals(1, f()) }\n"
+    d2 = "    @Test fun d2() { assertEquals(1, f()) }\n"
+    base6 = commit({T: _tqg_kt(d1, d2)})
+    h6 = commit({T: _tqg_kt("    @Test fun d3() { assertEquals(1, f()) }\n")})
+    got = [x["ident"] for x in _tqg_cands(root, base6, h6) if x["rule"] == "tq/test-removed"]
+    check("S2 兩支一樣的刪兩支加回一支,另一支照樣算刪除", got and len(got[0].split(",")) == 1, got)
+    base7 = commit({T: _tqg_kt(one_a, one_b)})
+    h7 = commit({T: _tqg_kt(one_a, one_b.replace("fun b()", "fun bRenamed()"))})
+    check("S2 本體一字不改只改名不列", ("tq/test-removed", T) not in _tqg_rules(root, base7, h7), _tqg_rules(root, base7, h7))
+    nested = ("package x\nclass CalcTest {\n    class A {\n        @Test fun same() { assertEquals(1, f()) }\n    }\n"
+              "    class B {\n        @Test fun same() { assertEquals(2, f()) }\n    }\n}\n")
+    base8 = commit({T: nested})
+    h8 = commit({T: nested.replace("    class B {\n        @Test fun same() { assertEquals(2, f()) }\n    }\n", "")})
+    check("S2 巢狀類別同名的兩支只刪一支要列", ("tq/test-removed", T) in _tqg_rules(root, base8, h8), _tqg_rules(root, base8, h8))
+
+
+def t_tq_guard_assert_weakened():
+    """[S3] 斷言變少、強斷言變少、常值斷言變多要列 tq/assert-weakened;斷言數不變只改被測參數不列。
+    翻紅釘:三個計數任一條拿掉 → 紅。"""
+    T = _TQG_T
+    root, base, commit = _tqg_repo({T: _tqg_kt("    @Test\n    fun a() {\n        val n = f()\n        assertEquals(3, n)\n        assertEquals(\"x\", g())\n    }\n")})
+    h = commit({T: _tqg_kt("    @Test\n    fun a() {\n        val n = f()\n        assertTrue(n > 0)\n        assertEquals(\"x\", g())\n    }\n")})
+    check("S3 assertEquals(3, n) 改成 assertTrue(n > 0) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h2 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        val n = f()\n        assertEquals(\"x\", g())\n    }\n")})
+    check("S3 斷言變少要列", ("tq/assert-weakened", T) in _tqg_rules(root, base, h2), _tqg_rules(root, base, h2))
+    h3 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        val n = f(2)\n        assertEquals(3, n)\n        assertEquals(\"x\", g(1))\n    }\n")})
+    check("S3 斷言數不變、只改被測呼叫參數不列", ("tq/assert-weakened", T) not in _tqg_rules(root, base, h3), _tqg_rules(root, base, h3))
+    body = "    @Test\n    fun a() {\n        assertTrue(r.isValid())\n        assertEquals(88, calc.total())\n    }\n"
+    base4 = commit({T: _tqg_kt(body)})
+    h4 = commit({T: _tqg_kt(body.replace("assertTrue(r.isValid())", "assertTrue(true)"))})
+    check("S3 assertTrue(r.isValid()) 改成 assertTrue(true) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, base4, h4), _tqg_rules(root, base4, h4))
+    h5 = commit({T: _tqg_kt(body.replace("calc.total()", "88"))})
+    check("S3 assertEquals(88, calc.total()) 改成 assertEquals(88, 88) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, base4, h5),
+          _tqg_rules(root, base4, h5))
+
+    # 代碼審 r1:同族的恆真寫法、Truth 常值主體、字串裡的斷言字不算強斷言
+    base_b = "    @Test\n    fun a() {\n        assertTrue(r.isValid())\n        assertEquals(3, n)\n    }\n"
+    b5 = commit({T: _tqg_kt(base_b)})
+    for after in ("assertTrue(r.isValid() || true)", "assertTrue(1 == 1)", "assertTrue(!false)"):
+        h = commit({T: _tqg_kt(base_b.replace("assertTrue(r.isValid())", after))})
+        check(f"S3 r1 {after} 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+    h = commit({T: _tqg_kt(base_b.replace("assertTrue(r.isValid())", "assertThat(true).isTrue()"))})
+    check("S3 r1 assertThat(true).isTrue() 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+    h = commit({T: _tqg_kt(base_b.replace("assertEquals(3, n)", "assertTrue(n > 0, \"assertEquals 3\")"))})
+    check("S3 r1 字串裡的 assertEquals 不算強斷言", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+
+    # 代碼審 r2:數字後綴的恆真、assertFalse(x && false)、同一行多個中綴斷言照個數算
+    h = commit({T: _tqg_kt(base_b.replace("assertTrue(r.isValid())", "assertTrue(1L == 1L)"))})
+    check("S3 r2 assertTrue(1L == 1L) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b5, h), _tqg_rules(root, b5, h))
+    bf = "    @Test\n    fun a() {\n        assertFalse(r.isEmpty())\n        assertEquals(3, n)\n    }\n"
+    b6 = commit({T: _tqg_kt(bf)})
+    h6 = commit({T: _tqg_kt(bf.replace("assertFalse(r.isEmpty())", "assertFalse(r.isEmpty() && false)"))})
+    check("S3 r2 assertFalse(x && false) 要列", ("tq/assert-weakened", T) in _tqg_rules(root, b6, h6), _tqg_rules(root, b6, h6))
+    two = "    @Test\n    fun a() {\n        x shouldBe 1\n        y shouldBe 2\n    }\n"
+    b7 = commit({T: _tqg_kt(two)})
+    h7 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        x shouldBe 1; y shouldBe 2\n    }\n")})
+    check("S3 r2 兩行中綴斷言合成一行不列", ("tq/assert-weakened", T) not in _tqg_rules(root, b7, h7), _tqg_rules(root, b7, h7))
+    b8 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        x shouldBe 1; y shouldBe 2; z shouldBe 3\n    }\n")})
+    h8 = commit({T: _tqg_kt("    @Test\n    fun a() {\n        x shouldBe 1\n    }\n")})
+    check("S3 r2 同一行三個中綴斷言刪成一個要列", ("tq/assert-weakened", T) in _tqg_rules(root, b8, h8), _tqg_rules(root, b8, h8))
+
+
+def t_tq_guard_expected_changed():
+    """[S4] 同一函式裡斷言的預期值被改要列 tq/expected-changed;只改被測參數、訊息、被測呼叫名、中間插一條斷言不列。
+    翻紅釘:預期值位置判錯(JUnit 與 kotlin.test 不分)、參數切法把 < > 當括號、清單不對齊 → 紅。"""
+    T = _TQG_T
+
+    def changed(before, after, kt=False):
+        head = "package x\nimport kotlin.test.assertEquals\nimport org.junit.Test\nclass CalcTest {\n" if kt else None
+        wrap = (lambda b: head + b + "\n}\n") if kt else _tqg_kt
+        root, base, commit = _tqg_repo({T: wrap(before)})
+        h = commit({T: wrap(after)})
+        return ("tq/expected-changed", T) in _tqg_rules(root, base, h)
+    fn = "    @Test\n    fun total_sums() {\n%s\n    }\n"
+    yes = (
+        ("單行", "        assertEquals(88, total(listOf(40, 48)))", "        assertEquals(90, total(listOf(40, 48)))", False),
+        ("跨行", "        assertEquals(\n            88,\n            total(xs)\n        )", "        assertEquals(\n            90,\n            total(xs)\n        )", False),
+        ("字串", '        assertThat(fmt(1)).isEqualTo("a")', '        assertThat(fmt(1)).isEqualTo("b")', False),
+        ("帶訊息的 88", '        assertEquals("訊息", 88, total)', '        assertEquals("訊息", 90, total)', False),
+        ("kotlin.test 的 Alice", '        assertEquals("Alice", user.name, "訊息")', '        assertEquals("Bob", user.name, "訊息")', True),
+        ("容差", "        assertEquals(1.0, x, 0.01)", "        assertEquals(1.0, x, 0.1)", True),
+        ("列舉", "        assertEquals(State.Loading, vm.state)", "        assertEquals(State.Error, vm.state)", False),
+        ("真假翻面", "        assertTrue(vm.ready)", "        assertFalse(vm.ready)", False),
+        ("lambda 箭頭", "        assertEquals(listOf(2, 4), items.map { x -> x * 2 })", "        assertEquals(listOf(2, 5), items.map { x -> x * 2 })", False),
+        ("比較運算", "        assertEquals(1, if (a > b) 1 else 2)", "        assertEquals(3, if (a > b) 1 else 2)", False),
+        ("連續好幾個", "        assertEquals(1, f())\n        assertEquals(2, g())", "        assertEquals(5, f())\n        assertEquals(6, g())", False),
+    )
+    for label, a, b, kt in yes:
+        check(f"S4 {label}預期值被改要列", changed(fn % a, fn % b, kt), label)
+    no = (
+        ("只改被測參數", "        assertEquals(88, total(listOf(40, 48)))", "        assertEquals(88, total(listOf(48, 40)))", False),
+        ("只改訊息", '        assertEquals("Alice", user.name, "訊息")', '        assertEquals("Alice", user.name, "別的訊息")', True),
+        ("改被測呼叫名", "        assertEquals(88, total(xs))", "        assertEquals(88, sumAll(xs))", False),
+        ("中間插一條斷言", "        assertEquals(1, f())\n        assertEquals(2, g())",
+         "        assertEquals(1, f())\n        assertNotNull(h())\n        assertEquals(2, g())", False),
+    )
+    for label, a, b, kt in no:
+        check(f"S4 {label}不列", not changed(fn % a, fn % b, kt), label)
+
+    # 代碼審 r1:重複斷言、前面插一條又改值、JUnit 5 訊息在後、Truth 方向互換、兩條相同改動指紋不同
+    rep = "        cart.refresh()\n        assertEquals(%s, cart.total())"
+    for olds, news in (([88, 88, 88], [88, 90, 88]), ([88, 88, 88], [90, 88, 88]), ([88, 88, 88, 88], [88, 90, 90, 88])):
+        a = fn % "\n".join(rep % v for v in olds)
+        b = fn % "\n".join(rep % v for v in news)
+        check(f"S4 r1 重複斷言 {olds}→{news} 要列", changed(a, b), (olds, news))
+    check("S4 r1 前面插一條斷言、同時改預期值要列",
+          changed(fn % "        assertEquals(5, total(list))", fn % "        assertNotNull(r)\n        assertEquals(6, total(list))"), "")
+    j5 = "package x\nimport org.junit.jupiter.api.Assertions.assertEquals\nimport org.junit.jupiter.api.Test\nclass CalcTest {\n%s\n}\n"
+    r5, b5, c5 = _tqg_repo({T: j5 % (fn % '        assertEquals("Alice", name, "msg")')})
+    h5 = c5({T: j5 % (fn % '        assertEquals("Bob", name, "msg")')})
+    check("S4 r1 JUnit 5 訊息在後:字串預期值被改要列", ("tq/expected-changed", T) in _tqg_rules(r5, b5, h5), _tqg_rules(r5, b5, h5))
+    b6 = c5({T: j5 % (fn % '        assertEquals(5, total, "m1")')})
+    h6 = c5({T: j5 % (fn % '        assertEquals(5, total, "m2")')})
+    check("S4 r1 JUnit 5 只改訊息不列", ("tq/expected-changed", T) not in _tqg_rules(r5, b6, h6), _tqg_rules(r5, b6, h6))
+    check("S4 r1 Truth isTrue 改 isFalse 要列", changed(fn % "        assertThat(vm.ready).isTrue()", fn % "        assertThat(vm.ready).isFalse()"), "")
+    check("S4 r1 Truth isEmpty 改 isNotEmpty 要列", changed(fn % "        assertThat(xs).isEmpty()", fn % "        assertThat(xs).isNotEmpty()"), "")
+    r7, b7, c7 = _tqg_repo({T: _tqg_kt(fn % "        assertEquals(1, f(1))\n        assertEquals(1, f(1))")})
+    h7 = c7({T: _tqg_kt(fn % "        assertEquals(5, f(1))\n        assertEquals(5, f(1))")})
+    keys = [c["key"] for c in _tqg_cands(r7, b7, h7) if c["rule"] == "tq/expected-changed"]
+    check("S4 r1 同一支函式兩條相同的預期值改動:兩條、指紋不同", len(keys) == 2 and len(set(keys)) == 2, keys)
+
+    # 代碼審 r2:Truth isNull 改 isNotNull
+    check("S4 r2 Truth isNull 改 isNotNull 要列", changed(fn % "        assertThat(vm.error).isNull()", fn % "        assertThat(vm.error).isNotNull()"), "")
+
+
+def t_tq_guard_string_comma_args():
+    """[紅燈版實跑三缺口 S1] 只改了字串預期值時要列出:字串裡的逗號、不成對括號、字元常值、串接寫法,分岔點列 tq/expected-changed、
+    紅燈版列 tq/redbase-weakened;一字不差不列。應抓到的錯:切參數只數原文括號(字串裡的逗號與括號當成結構)→ 這幾案切錯、配不起來、漏報。
+    [判綠紀錄限本分支 S4] 斷言兩邊換成三引號字串常值要列 tq/assert-weakened。應抓到的錯:判常值斷言的樣式不認三引號 → 漏報。"""
+    T = _TQG_T
+    m = _tqg_module()
+    check("★前置★ 含逗號的字串預期值切成兩個參數",
+          m._tg_call_parts('assertEquals("服務費 $1,235", label(fee))')[1] == ['"服務費 $1,235"', "label(fee)"],
+          m._tg_call_parts('assertEquals("服務費 $1,235", label(fee))'))
+
+    def rules(before, after):
+        fn = "    @Test\n    fun label_fee() {\n        %s\n    }\n"
+        root, base, commit = _tqg_repo({T: _tqg_kt(fn % before)})
+        h = commit({T: _tqg_kt(fn % after)})
+        return _tqg_rules(root, base, h)
+    cases = (
+        ("金額逗號", 'assertEquals("服務費 $1,235", label(fee))', 'assertEquals("服務費 $1,234", label(fee))'),
+        ("右括號", 'assertEquals(")", lexer.next().text)', 'assertEquals("]", lexer.next().text)'),
+        ("字元左括號", "assertEquals('(', sep(fee))", "assertEquals('[', sep(fee))"),
+        ("編號括號", 'assertEquals("1) 項目", label(x))', 'assertEquals("2) 項目", label(x))'),
+        ("串接逗號空白", 'assertThat(x).isEqualTo("a, b")', 'assertThat(x).isEqualTo("a,b")'),
+        ("模板段內配平", 'assertEquals("總計 ${t}, 稅 ${x}", s)', 'assertEquals("總計 ${t}, 費 ${x}", s)'),
+        ("字串裡多一格空白", 'assertEquals("a b", f())', 'assertEquals("a  b", f())'),   # 代碼審 r3 單審席 D2
+        ("中綴字串裡多一格空白", 'f() shouldBe "a b"', 'f() shouldBe "a  b"'),   # 代碼審 r4 單審席 F4:第二個呼叫點
+    )
+    for label, before, after in cases:
+        got = rules(before, after)
+        check(f"S1 {label}:只改字串預期值要列 tq/expected-changed", ("tq/expected-changed", T) in got, got)
+        same = rules(before, before)
+        check(f"S1 {label}:一字不差不列", ("tq/expected-changed", T) not in same, same)
+    # 代碼審 r1 單審席 F1:搬進巢狀類別、本體有多行字串(跟著多縮排一層)不算刪測試——找搬家用拿掉全部空白的那份簽名
+    body = '    @Test\n    fun json_case() {\n        val s = """\n    {"a": 1}\n"""\n        assertEquals(1, parse(s))\n    }\n'
+    root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+    moved = "    inner class Inner {\n" + "".join("    " + ln + "\n" if ln else "\n" for ln in body.split("\n")[:-1]) + "    }\n"
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(moved)}))
+    check("S1 搬進巢狀類別、本體有多行字串:不列 tq/test-removed", ("tq/test-removed", T) not in got, got)
+    # 代碼審 r2 單審席 F2:整檔重新縮排,沒斷言而有多行字串的既有測試不重判(只差空白版面的算同一支,只比預期值)
+    smoke = '    @Test\n    fun smoke() {\n        render("""\n    {"a": 1}\n""")\n    }\n'
+    root, base, commit = _tqg_repo({T: _tqg_kt(smoke)})
+    reind = "".join("    " + ln + "\n" if ln else "\n" for ln in smoke.split("\n")[:-1])
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(reind)}))
+    check("S1 整檔重新縮排、沒斷言的測試有多行字串:不列 tq/no-assertion", got == [], got)
+    # 代碼審 r4 單審席 F2:多行原始字串裡寫的 assertEquals 字樣不算一條強斷言(把相等比對換成 assertTrue 照列斷言變弱)
+    fn2 = "    @Test\n    fun weak() {\n        %s\n    }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertTrue("""\n assertEquals mention\n """, f() > 0)')}))
+    check("S1 多行字串裡的 assertEquals 字樣不算強斷言:換成 assertTrue 照列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+    # [判綠紀錄限本分支 S4] 兩邊都是三引號字串常值的相等斷言是常值斷言:跟單行字串常值一樣列斷言變弱
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertEquals("""a""", """a""")')}))
+    check("判綠紀錄限本分支 S4 換成兩邊都是三引號常值:列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn2 % "assertEquals(1, f())")})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn2 % 'assertEquals("a", "a")')}))
+    check("★對照★ 換成兩邊都是單行字串常值:列 tq/assert-weakened", ("tq/assert-weakened", T) in got, got)
+    red = _tqg_kt(_RB_OTHER, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'))
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,234", label(fee))'), [_rb_snap("SPEC-c0a00001", red)])
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S1 紅燈版比對:字串預期值被改列 tq/redbase-weakened", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn('        assertEquals("服務費 $1,235", label(fee))'), [_rb_snap("SPEC-c0a00002", red)])
+    check("S1 紅燈版比對:一字不差不列", _rb_only(_tqg_cands(root, mb, h)) == [], _rb_only(_tqg_cands(root, mb, h)))
+
+
+def t_tq_guard_string_split_fallback():
+    """[紅燈版實跑三缺口 S2] 剝字串掃描會讀錯的兩種寫法(模板裡巢狀引號、原始字串尾端連續引號)照現況用原文切:參數跟原文切法逐字相同,
+    只改預期值照樣列、一字不差不列。應抓到的錯:不判掃描可不可靠、一律照剝過的文字切 → 模板那案被切成三段、跟現況不同。"""
+    T = _TQG_T
+    m = _tqg_module()
+    for stmt in ('assertEquals("${foo("a,b")}", x)', 'assertEquals("""a"""", x)'):
+        i = stmt.index("(")
+        close = m._rg_bracket_map(m._tg_strip(stmt)).get(i, len(stmt))
+        old = m._rg_split_args(stmt[i + 1:close], angle=False)
+        check(f"S2 {stmt}:參數跟原文切法逐字相同", m._tg_call_parts(stmt)[1] == old, (m._tg_call_parts(stmt)[1], old))
+    import random as _r
+    rnd = _r.Random(20261103)
+    for _ in range(300):   # 沒有字串的文字:剝過的那條路(配括號用 _rg_bracket_map)跟原本的深度計數切法逐字相同(代碼審 r1 架構對齊席)
+        s, depth = [], []
+        for _k in range(rnd.randint(0, 30)):
+            c = rnd.choice("ab ,,([{")
+            if c in "([{":
+                depth.append(")]}"["([{".index(c)])
+            s.append(c)
+            if depth and rnd.random() < 0.3:
+                s.append(depth.pop())
+        s = "".join(s + depth[::-1])
+        if m._rg_split_args(s, angle=False) != m._rg_split_args(s, angle=False, stripped=s):
+            check(f"S2 沒有字串時兩條切法相同:{s!r}", False, (m._rg_split_args(s, angle=False), m._rg_split_args(s, angle=False, stripped=s)))
+            break
+    else:
+        check("S2 沒有字串的 300 段隨機文字:兩條切法逐字相同", True)
+    check("S2 angle=True 時不走剝過文字那條路(配括號表沒有 < >)", m._rg_split_args("a<b,c>,d", stripped="a<b,c>,d") == ["a<b,c>", "d"],
+          m._rg_split_args("a<b,c>,d", stripped="a<b,c>,d"))
+    fn = "    @Test\n    fun tpl() {\n        %s\n    }\n"
+    before, after = 'assertEquals("${foo("a,b")}", x)', 'assertEquals("${foo("a,c")}", x)'
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn % before)})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn % after)}))
+    check("S2 模板巢狀引號:只改預期值照樣列", got == [("tq/expected-changed", T)], got)
+    same = _tqg_rules(root, base, commit({T: _tqg_kt(fn % before)}))
+    check("S2 模板巢狀引號:一字不差不列", same == [], same)
+    # 原始字串尾端連續引號:整支檔在函式層就配不平括號,照舊列 tq/unparsable(走不到切參數),修補前後一樣
+    root, base, commit = _tqg_repo({T: _tqg_kt(fn % 'assertEquals("""a"""", x)')})
+    got = _tqg_rules(root, base, commit({T: _tqg_kt(fn % 'assertEquals("""b"""", x)')}))
+    check("S2 原始字串尾端連續引號:照舊列 tq/unparsable", got == [("tq/unparsable", T)], got)
+
+
+def t_tq_guard_no_assertion():
+    """[S5] 新增或本體有變的測試沒有任何斷言字要列 tq/no-assertion;各家斷言寫法、運算式本體、反引號名、沒動的舊測試不列。
+    翻紅釘:斷言字表拿掉樣本用到的那幾種(Truth、Turbine、MockK、Espresso、Kotest、Roborazzi、assert、thrown.expect、awaitComplete、
+    expectNoEvents、confirmVerified)、運算式本體只切到第一行、反引號名整支跳過、註記正規化拿掉 → 紅;字表裡沒有樣本的寫法不在這支的保護範圍。"""
+    T = _TQG_T
+    old = "    @Test\n    fun old() { vm.load() }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(old)})
+    ok = {
+        "t1": "    @Test\n    fun t1() { assertThat(f()).isEqualTo(1) }\n",
+        "t2": "    @Test\n    fun t2() = runTest { flow.test { awaitItem() } }\n",
+        "t3": "    @Test\n    fun t3() { vm.save(); verify { repo.save(any()) } }\n",
+        "t4": "    @Test\n    fun t4() { onView(withId(1)).check(matches(isDisplayed())) }\n",
+        "t5": "    @Test\n    fun t5() { f() shouldBe 3 }\n",
+        "t6": "    @Test(expected = IllegalStateException::class)\n    fun t6() { boom() }\n",
+        "t7": "    @Test\n    fun t7() { composeRule.onRoot().captureRoboImage() }\n",
+        "t8": "    @Test\n    fun t8() { assert(f() == 1) }\n",
+        "t9": "    @Test\n    fun t9() { thrown.expect(IllegalStateException::class.java); boom() }\n",
+        "t10": "    @Test\n    fun t10() = runTest {\n        assertEquals(1, f())\n    }\n",
+        "t11": "    @Test\n    fun t11() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n",
+        "t12": "    @Test\n    fun t12() =\n        runTest {\n            assertEquals(2, g())\n        }\n",
+        "回傳 (3) 個": "    @Test\n    fun `回傳 (3) 個`() { assertEquals(3, h()) }\n",
+    }
+    bad = "    @Test\n    fun bad() { vm.load() }\n"
+    bad_bt = "    @Test\n    fun `沒有 (斷言)`() { vm.load() }\n"
+    h = commit({T: _tqg_kt(old, *ok.values(), bad, bad_bt)})
+    got = _tqg_cands(root, base, h)
+    noas = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in got if c["rule"] == "tq/no-assertion"}
+    check("★前置★ 樣本裡的測試都被認成測試函式", len(_tqg_module()._tg_functions(_tqg_kt(old, *ok.values(), bad, bad_bt), False)[0]) == len(ok) + 3,
+          _tqg_module()._tg_functions(_tqg_kt(old, *ok.values(), bad, bad_bt), False)[0].keys())
+    check("S5 沒斷言的新測試要列", "bad" in noas, noas)
+    check("S5 反引號名沒斷言的新測試要列", any("沒有 (斷言)" in x for x in noas), noas)
+    check("S5 各家斷言寫法、運算式本體、反引號名有斷言的都不列", not (noas & set(ok)), noas & set(ok))
+    check("S5 本體沒變的舊測試不列", "old" not in noas, noas)
+
+    # 代碼審 r1:整檔重新縮排、換行尾不讓沒動的測試冒出來;註記與 fun 同一行的 expected= 算有斷言
+    helper = "    @Test\n    fun a() { checkIt(1) }\n"
+    r2, b2, c2 = _tqg_repo({T: _tqg_kt(helper)})
+    h2 = c2({T: _tqg_kt(helper).replace("    ", "  ")})
+    check("S5 r1 整檔重新縮排不列", ("tq/no-assertion", T) not in _tqg_rules(r2, b2, h2), _tqg_rules(r2, b2, h2))
+    h3 = c2({T: _tqg_kt(helper).replace("\n", "\r\n")})
+    check("S5 r1 LF 改 CRLF 不列", ("tq/no-assertion", T) not in _tqg_rules(r2, h2, h3), _tqg_rules(r2, h2, h3))
+    h4 = c2({T: _tqg_kt(helper, "    @Test(expected = IllegalStateException::class) fun c() { boom() }\n")})
+    check("S5 r1 同一行帶 expected= 的新測試不列", ("tq/no-assertion", T) not in _tqg_rules(r2, h3, h4), _tqg_rules(r2, h3, h4))
+
+    # 代碼審 r1 通才席:斷言字表裡這幾種也算有斷言
+    more = {"u1": "    @Test\n    fun u1() = runTest { flow.test { awaitComplete() } }\n",
+            "u2": "    @Test\n    fun u2() = runTest { flow.test { expectNoEvents() } }\n",
+            "u3": "    @Test\n    fun u3() { vm.save(); confirmVerified(repo) }\n"}
+    h5 = c2({T: _tqg_kt(helper, "    @Test(expected = IllegalStateException::class) fun c() { boom() }\n", *more.values())})
+    got = {c["ident"].rsplit(".", 1)[-1] for c in _tqg_cands(r2, h4, h5) if c["rule"] == "tq/no-assertion"}
+    check("S5 r1 awaitComplete、expectNoEvents、confirmVerified 算有斷言", not (got & set(more)), got)
+
+    # 代碼審 r2:只改修飾詞(internal、private、Java 去掉 public)不算測試有變
+    h6 = c2({T: _tqg_kt(helper.replace("fun a()", "internal fun a()"))})
+    check("S5 r2 只改修飾詞不列", ("tq/no-assertion", T) not in _tqg_rules(r2, h3, h6), _tqg_rules(r2, h3, h6))
+
+    # 代碼審 r3:修飾詞字表的每一類各換一次(public、open、override、suspend),都不算註記有變
+    for mod in ("public", "open", "override", "suspend"):
+        h7 = c2({T: _tqg_kt(helper.replace("fun a()", mod + " fun a()"))})
+        check(f"S5 r3 只加 {mod} 修飾詞不列", ("tq/no-assertion", T) not in _tqg_rules(r2, h3, h7), _tqg_rules(r2, h3, h7))
+
+
+def t_tq_guard_catch_no_fail():
+    """[S6] try 沒有 fail 而 catch 有斷言或是空的、runCatching 裡斷言沒接 getOrThrow 要列 tq/catch-no-fail;有 fail、getOrThrow 不列。
+    翻紅釘:try 結尾的 fail 判斷拿掉、空 catch 不算、runCatching 不看 → 紅。"""
+    T = _TQG_T
+    old = "    @Test\n    fun old() { assertEquals(1, f()) }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(old)})
+    cases = {
+        "c1": ("    @Test\n    fun c1() {\n        try { boom() } catch (e: IllegalStateException) { assertEquals(\"x\", e.message) }\n    }\n", True),
+        "c2": ("    @Test\n    fun c2() {\n        try { boom() } catch (e: Exception) { }\n    }\n", True),
+        "c3": ("    @Test\n    fun c3() { runCatching { assertEquals(1, f()) } }\n", True),
+        "c4": ("    @Test\n    fun c4() {\n        try { boom(); fail(\"no\") } catch (e: IllegalStateException) { assertEquals(\"x\", e.message) }\n    }\n", False),
+        "c5": ("    @Test\n    fun c5() {\n        try { boom() } catch (e: Exception) { fail(\"boom\") }\n    }\n", False),
+        "c6": ("    @Test\n    fun c6() { runCatching { assertEquals(1, f()) }.getOrThrow() }\n", False),
+        "c7": ("    @Test\n    fun c7() { try { boom(); Assert.fail(\"x\") } catch (e: IllegalStateException) { assertEquals(\"m\", e.message) } }\n", False),
+    }
+    h = commit({T: _tqg_kt(old, *(b for b, _w in cases.values()))})
+    got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h) if c["rule"] == "tq/catch-no-fail"}
+    for k, (_b, want) in cases.items():
+        check(f"S6 {k} {'要列' if want else '不列'}", (k in got) == want, got)
+
+    # 代碼審 r1:try 有斷言、catch 只印記錄把斷言失敗吞掉
+    swallow = "    @Test\n    fun s1() {\n        try {\n            assertEquals(5, f(1))\n        } catch (e: AssertionError) {\n            println(e)\n        }\n    }\n"
+    h2 = commit({T: _tqg_kt(old, swallow)})
+    check("S6 r1 catch 只印記錄吞掉斷言失敗要列", ("tq/catch-no-fail", T) in _tqg_rules(root, base, h2), _tqg_rules(root, base, h2))
+
+    # 代碼審 r2:catch 重丟不算吞。try 有 fail、catch 接 Throwable 再斷言型別:代碼審 r7 起照 Error Prone 的 AssertionFailureIgnored 列
+    # (接得住 AssertionError 的 catch 不看內容;這種寫法要附理由放行或改 assertThrows)
+    ok1 = "    @Test\n    fun s2() {\n        try { h(); fail(\"should throw\") } catch (e: Throwable) { assertTrue(e is IllegalStateException) }\n    }\n"
+    ok2 = "    @Test\n    fun s3() {\n        try {\n            assertEquals(5, f(1))\n        } catch (e: AssertionError) {\n            println(e)\n            throw e\n        }\n    }\n"
+    h3 = commit({T: _tqg_kt(old, ok1, ok2)})
+    got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h3) if c["rule"] == "tq/catch-no-fail"}
+    check("S6 r7 try 有 fail、catch 接 Throwable 再斷言型別也列(只看結構)", "s2" in got, got)
+    check("S6 r2 catch 重丟不列", "s3" not in got, got)
+
+    # 代碼審 r3:try 結尾補 fail() 不能讓「catch 接得住斷言失敗、只印出或空的」躲過(fail 丟的也是 AssertionError)
+    bad1 = "    @Test\n    fun s4() { try { assertEquals(5, f(1)); fail(\"x\") } catch (e: Throwable) { println(e) } }\n"
+    bad2 = "    @Test\n    fun s5() {\n        try {\n            assertEquals(5, f(1))\n            fail()\n        } catch (e: AssertionError) {\n        }\n    }\n"
+    keep = "    @Test\n    fun s6() { try { h(); fail(\"x\") } catch (e: IllegalStateException) { } }\n"
+    h4 = commit({T: _tqg_kt(old, bad1, bad2, keep)})
+    got = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h4) if c["rule"] == "tq/catch-no-fail"}
+    check("S6 r3 try 補 fail、catch 接 Throwable 只印出要列", "s4" in got, got)
+    check("S6 r3 try 補 fail、catch 接 AssertionError 是空的要列", "s5" in got, got)
+    check("S6 r3 預期例外的寫法(try 結尾 fail、catch 接特定例外)不列", "s6" not in got, got)
+
+
+    # 代碼審 r4 原本讓 catch 裡的 shouldBe、check(、require( 算有檢查而不列;代碼審 r7 起接得住 AssertionError 的 catch 不看內容,一律列
+    kc1 = "    @Test\n    fun s7() { try { foo(); fail(\"x\") } catch (e: AssertionError) { e.message shouldBe \"x\" } }\n"
+    kc2 = "    @Test\n    fun s8() { try { foo(); fail(\"x\") } catch (e: Throwable) { check(e is IllegalStateException) } }\n"
+    kc3 = "    @Test\n    fun s9() { try { foo(); fail(\"x\") } catch (e: Throwable) { require(e is IllegalStateException) } }\n"
+    h5 = commit({T: _tqg_kt(old, kc1, kc2, kc3)})
+    got5 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h5) if c["rule"] == "tq/catch-no-fail"}
+    check("S6 r7 catch 接得住 AssertionError,裡面用 shouldBe、check(、require( 也列", {"s7", "s8", "s9"} <= got5, got5)
+
+    # 代碼審 r5:catch 裡恆成立的 check(true)/require(true)、只是名字以 should 開頭的變數或方法,都不算檢查;
+    # Kotest 中綴斷言只認 `a shouldBe b` 的寫法,try 那側也算斷言
+    sw = {
+        "w1": "    @Test\n    fun w1() { try { foo(); fail(\"x\") } catch (e: Throwable) { check(true) } }\n",
+        "w2": "    @Test\n    fun w2() { try { foo(); fail(\"x\") } catch (e: Throwable) { require(true) } }\n",
+        "w3": "    @Test\n    fun w3() { try { foo(); fail(\"x\") } catch (e: Throwable) { val shouldRetry: Boolean = false } }\n",
+        "w4": "    @Test\n    fun w4() { try { foo(); fail(\"x\") } catch (e: Throwable) { logger.shouldLog(e) } }\n",
+        "w5": "    @Test\n    fun w5() { try { result shouldBe 5 } catch (e: AssertionError) { println(e) } }\n",
+    }
+    keep = "    @Test\n    fun w6() { try { cleanup() } catch (e: Exception) { logger.shouldReport(e) }\n        assertEquals(1, f()) }\n"
+    h6 = commit({T: _tqg_kt(old, *sw.values(), keep)})
+    got6 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h6) if c["rule"] == "tq/catch-no-fail"}
+    for k in sw:
+        check(f"S6 r5 {k} 吞掉斷言要列", k in got6, got6)
+    check("S6 r7 w6 try 沒 fail、catch 叫 should 開頭的方法:寬判成有斷言而列(判錯的代價是多一條可放行的候選)", "w6" in got6, got6)
+
+    # 代碼審 r6 加的 Kotest 點號呼叫案例;代碼審 r7 起接得住 AssertionError 的 catch 不看內容(d2–d4 列),try 沒 fail 時 catch 裡 should 開頭的字寬判成斷言(d6 列)
+    dc = {
+        "d1": ("    @Test\n    fun d1() { try { foo() } catch (e: Exception) { e.message.shouldNotBeNull() } }\n", True),
+        "d2": ("    @Test\n    fun d2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.shouldBeInstanceOf<IllegalStateException>() } }\n", True),
+        "d3": ("    @Test\n    fun d3() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message.shouldBe(\"x\") } }\n", True),
+        "d4": ("    @Test\n    fun d4() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldBe(\"x\") } }\n", True),
+        "d5": ("    @Test\n    fun d5() { try { f().shouldBe(5) } catch (e: Throwable) { println(e) } }\n", True),
+        "d6": ("    @Test\n    fun d6() { try { foo() } catch (e: IllegalStateException) { if (n < 3 && shouldRetry && ok) { n++ } }\n"
+               "        assertEquals(1, f()) }\n", True),
+    }
+    h7 = commit({T: _tqg_kt(old, *(b for b, _w in dc.values()))})
+    got7 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h7) if c["rule"] == "tq/catch-no-fail"}
+    for k, (_b, want) in dc.items():
+        check(f"S6 r6 {k} {'要列' if want else '不列'}", (k in got7) == want, got7)
+
+    # 代碼審 r7:只看結構——名字剛好是 should 開頭的一般方法擋不住;catch 本體裡出現 Error 字不算型別;catch 裡 fail( 或重丟不算吞
+    st = {
+        "e1": ("    @Test\n    fun e1() { try { foo(); fail(\"x\") } catch (e: AssertionError) { shouldNotify(e) } }\n", True),
+        "e2": ("    @Test\n    fun e2() { try { foo(); fail(\"x\") } catch (e: Throwable) { e.message shouldInclude \"boom\" } }\n", True),
+        "e3": ("    @Test\n    fun e3() { try { assertEquals(1, f()) } catch (e: IllegalStateException) { foo(Error()) } }\n", False),
+        "e4": ("    @Test\n    fun e4() { try { assertEquals(1, f()) } catch (e: AssertionError) { fail(\"wrapped\") } }\n", False),
+        "e5": ("    @Test\n    fun e5() { try { assertEquals(1, f()) } catch (e: Error) { log(e); throw e } }\n", False),
+    }
+    h8 = commit({T: _tqg_kt(old, *(b for b, _w in st.values()))})
+    got8 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h8) if c["rule"] == "tq/catch-no-fail"}
+    for k, (_b, want) in st.items():
+        check(f"S6 r7 {k} {'要列' if want else '不列'}", (k in got8) == want, got8)
+
+    # 代碼審 r8:catch 型別照名字字尾認(AssertionError 的子類別也算);一般例外不列;存成 throwable 不算重丟;failure(、xfail( 不算 fail
+    sub = {
+        "f1": ("    @Test\n    fun f1() { try { assertEquals(\"hello\", greet()) } catch (e: ComparisonFailure) { println(e) } }\n", True),
+        "f2": ("    @Test\n    fun f2() { try { assertEquals(1, f()) } catch (e: MultipleFailuresError) { println(e) } }\n", True),
+        "f3": ("    @Test\n    fun f3() { try { assertEquals(1, f()) } catch (e: org.mockito.exceptions.base.MockitoAssertionError) { println(e) } }\n", True),
+        "f4": ("    @Test\n    fun f4() { try { assertEquals(1, f()) } catch (e: AssertionError) { val throwable = e } }\n", True),
+        "f5": ("    @Test\n    fun f5() { try { assertEquals(1, f()) } catch (e: AssertionError) { failure(e) } }\n", True),
+        "f6": ("    @Test\n    fun f6() { try { assertEquals(1, f()) } catch (e: AssertionError) { xfail(\"a\") } }\n", True),
+        "f7": ("    @Test\n    fun f7() { try { load(); fail(\"x\") } catch (e: IOException) { println(e) } }\n", False),
+    }
+    h9 = commit({T: _tqg_kt(old, *(b for b, _w in sub.values()))})
+    got9 = {c["ident"].rsplit(".", 1)[-1].split("#")[0] for c in _tqg_cands(root, base, h9) if c["rule"] == "tq/catch-no-fail"}
+    for k, (_b, want) in sub.items():
+        check(f"S6 r8 {k} {'要列' if want else '不列'}", (k in got9) == want, got9)
+
+
+def t_tq_guard_timeout_and_snapshot():
+    """[S9] 逾時調大(含註記上)、基準圖有變、比對門檻字樣新增要列;調小、docs/fastlane/metadata 與測試 assets 的圖不列。
+    翻紅釘:逾時只看本體不看註記、基準圖不合併、排除路徑拿掉 → 紅。"""
+    T = _TQG_T
+    body = "    @Test(timeout = 30)\n    fun slow() { assertEquals(1, f()) }\n"
+    root, base, commit = _tqg_repo({T: _tqg_kt(body)})
+    h = commit({T: _tqg_kt(body.replace("30", "300"))})
+    check("S9 註記上的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h2 = commit({T: _tqg_kt(body.replace("30", "5"))})
+    check("S9 逾時調小不列", ("tq/timeout-raised", T) not in _tqg_rules(root, h, h2), _tqg_rules(root, h, h2))
+    rt = "    @Test\n    fun r() = runTest(timeout = 1.seconds) { assertEquals(1, f()) }\n"
+    b3 = commit({T: _tqg_kt(rt)})
+    h3 = commit({T: _tqg_kt(rt.replace("1.seconds", "60.seconds"))})
+    check("S9 本體裡的逾時調大要列", ("tq/timeout-raised", T) in _tqg_rules(root, b3, h3), _tqg_rules(root, b3, h3))
+    snaps = {f"app/src/test/snapshots/s{i}.png": bytes([137, 80, i]) for i in range(3)}
+    h4 = commit(snaps)
+    got = [c for c in _tqg_cands(root, h3, h4) if c["rule"] == "tq/snapshot-changed"]
+    check("S9 同目錄三張基準圖合成一條", len(got) == 1, got)
+    h5 = commit({T: _tqg_kt(rt.replace("1.seconds", "60.seconds").replace("assertEquals(1, f())",
+                                                                         "assertEquals(1, f()); compare(changeThreshold = 0.5F)"))})
+    check("S9 比對門檻字樣新增要列", ("tq/snapshot-changed", T) in _tqg_rules(root, h4, h5), _tqg_rules(root, h4, h5))
+    others = {"docs/screenshots/a.png": b"\x89P1", "fastlane/metadata/android/en-US/images/phoneScreenshots/a.png": b"\x89P2",
+              "app/src/test/assets/snapshots/x.png": b"\x89P3"}
+    h6 = commit(others)
+    got = [c for c in _tqg_cands(root, h5, h6) if c["rule"] == "tq/snapshot-changed"]
+    check("S9 docs、fastlane、metadata、測試 assets 的圖不列", got == [], got)
+
+    # 代碼審 r2:測試檔裡的比對門檻調高要列
+    th = "    @Test\n    fun s() { compare(changeThreshold = 0.01F) }\n"
+    b8 = commit({T: _tqg_kt(th)})
+    h8 = commit({T: _tqg_kt(th.replace("0.01F", "0.5F"))})
+    check("S9 r2 changeThreshold 調高要列", ("tq/snapshot-changed", T) in _tqg_rules(root, b8, h8), _tqg_rules(root, b8, h8))
+
+    # 代碼審 r3:門檻的值換到下一行時調高也要列
+    th2 = "    @Test\n    fun s() {\n        compare(changeThreshold =\n            0.01F)\n    }\n"
+    b9 = commit({T: _tqg_kt(th2)})
+    h9 = commit({T: _tqg_kt(th2.replace("0.01F", "0.9F"))})
+    check("S9 r3 changeThreshold 的值換行寫、調高要列", ("tq/snapshot-changed", T) in _tqg_rules(root, b9, h9), _tqg_rules(root, b9, h9))
+
+
+def t_tq_guard_test_env_sniff():
+    """[S10] 正式程式碼新增偵測測試環境的字樣要列 tq/test-env-sniff;測試檔裡、只用 Build.FINGERPRINT 不列。
+    翻紅釘:_TG_SNIFF 拿掉 robolectric 或 Class.forName、測試檔也判 → 紅。"""
+    T = _TQG_T
+    M = "app/src/main/java/x/Calc.kt"
+    root, base, commit = _tqg_repo({M: "package x\nfun a() = 1\n", T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, a()) }\n")})
+    h = commit({M: "package x\nfun a() = if (Build.FINGERPRINT == \"robolectric\") 1 else 2\n"})
+    check("S10 正式程式新增 \"robolectric\" 要列", ("tq/test-env-sniff", M) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+    h2 = commit({M: "package x\nfun a() = runCatching { Class.forName(\"org.junit.Test\"); 1 }.getOrDefault(2)\n"})
+    check("S10 正式程式新增 Class.forName(\"org.junit…\") 要列", ("tq/test-env-sniff", M) in _tqg_rules(root, base, h2), _tqg_rules(root, base, h2))
+    h3 = commit({M: "package x\nfun a() = if (Build.FINGERPRINT.startsWith(\"generic\")) 1 else 2\n"})
+    check("S10 只用 Build.FINGERPRINT 不列", ("tq/test-env-sniff", M) not in _tqg_rules(root, base, h3), _tqg_rules(root, base, h3))
+    h4 = commit({M: "package x\nfun a() = 1\n",
+                 T: _tqg_kt("    @Test\n    fun a() { check(Build.FINGERPRINT != \"robolectric\"); assertEquals(1, a()) }\n")})
+    check("S10 測試檔裡同樣的字不列", ("tq/test-env-sniff", T) not in _tqg_rules(root, base, h4), _tqg_rules(root, base, h4))
+
+    # 代碼審 r1:其他偵測字樣
+    for word in ("isRunningTest", "isRobolectric"):
+        h = commit({M: f"package x\nfun a() = if ({word}()) 1 else 2\n", T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, a()) }\n")})
+        check(f"S10 r1 正式程式新增 {word} 要列", ("tq/test-env-sniff", M) in _tqg_rules(root, base, h), _tqg_rules(root, base, h))
+
+
+def t_tq_guard_cli_contract():
+    """[S11] lumos test-guard 的退出碼、--json 欄位、指紋穩定、怪檔各自成候選(含單行超過 2 萬字)、從主線分岔點起算(遠端主線優先,
+    本機 main 上還沒推的提交照樣比)、截止時間、外來字串清控制字元、抓不到清單跟標準同一份,以及大輸入 30 秒內(代碼審 r1、r2 加的
+    十幾種:大檔、病態註記、深巢狀、300 支檔、大量跳過標記與中綴斷言、巢狀 try、沒收尾的泛型、每層都有測試的深巢狀類別;r2 起的輸入
+    放大到修正前一定超時);建置檔與 CI 這一批不比(代碼審 r4 縮範圍,移到計劃〈第二批〉)。
+    翻紅釘:退出碼對調、指紋帶行號、.gitattributes 的 -diff 讓 diff 讀不到內容、分岔點不用或收本機主線、單檔與單行上限拿掉、
+    任一處逐命中重掃改回平方級 → 紅。"""
+    import json as _j
+    import subprocess as sp
+    import time as _time
+    T = _TQG_T
+    m = _tqg_module()
+    root, base, commit = _tqg_repo({T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+    h = commit({T: _tqg_kt("    @Ignore\n    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+
+    def run(*a, cwd=None):
+        return sp.run([sys.executable, GRAPHCTL, "test-guard", *a], capture_output=True, text=True, cwd=cwd or str(root),
+                      stdin=sp.DEVNULL, env=_e2e_isolated_env())
+    check("S11 有候選回 1", run("--repo", str(root), "--diff", f"{base}..{h}").returncode == 1, "")
+    check("S11 沒候選回 0", run("--repo", str(root), "--diff", f"{base}..{base}").returncode == 0, "")
+    nogit = Path(tempfile.mkdtemp(prefix="gctl-tqg-nogit-"))
+    r = run("--repo", str(nogit), "--diff", "a..b", cwd=str(nogit))
+    check("S11 不是 git 專案回 0 並說明", r.returncode == 0 and "不是 git" in r.stderr, r.stderr[-200:])
+    check("S11 三個點回 2", run("--repo", str(root), "--diff", f"{base}...{h}").returncode == 2, "")
+    check("S11 終點找不到回 2", run("--repo", str(root), "--diff", f"{base}..nope").returncode == 2, "")
+    out = _j.loads(run("--repo", str(root), "--diff", f"{base}..{h}", "--json").stdout)
+    c = out["candidates"][0]
+    check("S11 --json 每條有規則代號、檔案、行號、原因、該確認什麼、指紋",
+          all(c.get(k) not in (None, "") for k in ("rule", "file", "line", "message", "verify", "key")), c)
+    h2 = commit({T: "// 上面多一行\n\n" + _tqg_kt("    @Ignore\n    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+    check("S11 上下文位移指紋不變", c["key"] in {x["key"] for x in _tqg_cands(root, base, h2) if x["rule"] == "tq/skip-added"}, "")
+    h3 = commit({T: _tqg_kt("  @Ignore\n  @Test\n  fun a() { assertEquals(1, f()) }\n").replace("\n", "\n  ")})
+    check("S11 整檔重新縮排後指紋不變", c["key"] in {x["key"] for x in _tqg_cands(root, base, h3) if x["rule"] == "tq/skip-added"},
+          _tqg_cands(root, base, h3))
+    b4 = commit({".gitattributes": "*.kt -diff\n", T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+    h4 = commit({T: _tqg_kt("    @Ignore\n    @Test\n    fun a() { assertEquals(1, f()) }\n")})
+    check("S11 .gitattributes 標 -diff 照樣抓得到", ("tq/skip-added", T) in _tqg_rules(root, b4, h4), _tqg_rules(root, b4, h4))
+    # 怪檔各自成候選、其他檔照比
+    O = "app/src/test/java/x/OkTest.kt"
+    b5 = commit({".gitattributes": None, O: "package x\nclass OkTest {\n    @Test fun a() { assertEquals(1, f()) }\n}\n"})
+    bad = "app/src/test/java/x/".encode() + "測".encode("big5") + b"Test.kt"
+    blob = sp.run(["git", "-C", str(root), "hash-object", "-w", "--stdin"], input=_tqg_kt("    @Test fun z() { }\n").encode(),
+                  capture_output=True).stdout.decode().strip()
+    sp.run([b"git", b"-C", str(root).encode(), b"update-index", b"--add", b"--cacheinfo", b"100644," + blob.encode() + b"," + bad],
+           capture_output=True)
+    (root / O).write_text("package x\nclass OkTest {\n    @Ignore\n    @Test fun a() { assertEquals(1, f()) }\n}\n", encoding="utf-8")
+    (root / T).write_bytes((_tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n") + "\0junk").encode())
+    big = "app/src/test/java/x/BigTest.kt"
+    (root / big).write_text("package x\n" + "// x\n" * (m._TG_MAX_LINES + 5), encoding="utf-8")
+    sp.run(["git", "-C", str(root), "add", O, T, big], capture_output=True)
+    sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "odd"], capture_output=True)
+    h5 = sp.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    rules = _tqg_rules(root, b5, h5)
+    check("S11 檔名不是 UTF-8 列 tq/unreadable", any(r == "tq/unreadable" for r, _f in rules), rules)
+    check("S11 內容含 NUL 列 tq/unparsable", ("tq/unparsable", T) in rules, rules)
+    check("S11 超過單檔上限列 tq/too-large", ("tq/too-large", big) in rules, rules)
+    big_msg = [c["message"] for c in _tqg_cands(root, b5, h5) if c["rule"] == "tq/too-large" and c["file"] == big]
+    check("S11 r6 整支檔超過上限的訊息說這支整支沒比對", len(big_msg) == 1 and "整支沒比對" in big_msg[0], big_msg)
+    check("S11 其他檔照比", ("tq/skip-added", O) in rules, rules)
+    # 合過主線之後推送,主線上刪掉的測試不算進來
+    r2, _b, c2 = _tqg_repo({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n", "    @Test fun b() { assertEquals(2, g()) }\n")})
+    g = lambda *a: sp.run(["git", "-C", str(r2), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)  # noqa: E731
+    g("branch", "-M", "main")
+    g("checkout", "-q", "-b", "feat")
+    feat1 = c2({"app/src/main/java/x/A.kt": "package x\nfun a() = 1\n"})
+    g("checkout", "-q", "main")
+    c2({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
+    g("checkout", "-q", "feat")
+    g("merge", "-q", "--no-edit", "main")
+    tip = g("rev-parse", "HEAD").stdout.strip()
+    check("★前置★ 不從分岔點算時主線的刪除會算進來", "tq/test-removed" in [x["rule"] for x in _tqg_cands(r2, feat1, tip)], "")
+    r = sp.run([sys.executable, GRAPHCTL, "test-guard", "--repo", str(r2), "--diff", f"{feat1}..{tip}", "--json"],
+               capture_output=True, text=True, env=_e2e_isolated_env())
+    check("S11 合過主線之後推送,主線上刪掉的測試不算進來", r.returncode == 0 and "tq/test-removed" not in r.stdout, r.stdout[-300:])
+    # 四種大輸入各 30 秒內
+    lines = ["package x", "class CalcTest {"]
+    for i in range(5900):
+        lines += ["    @Test", f"    fun t{i}() {{", '        val s = "x { y"', f"        assertEquals({i}, f({i}))", "    }", "", "", "", "", ""]
+    lines.append("}")
+    b6 = commit({T: "\n".join(lines) + "\n", O: None, big: None})
+    h6 = commit({T: "\n".join(ln.replace("assertEquals(", "assertEquals(1 + ") if k % 30 == 5 else ln for k, ln in enumerate(lines)) + "\n"})
+    t0 = _time.monotonic()
+    got = _tqg_cands(root, b6, h6)
+    check("S11 接近 6 萬行、改約兩千處的測試檔 30 秒內", _time.monotonic() - t0 < 30 and len(got) > 1000, (_time.monotonic() - t0, len(got)))
+    b7 = commit({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
+    h7 = commit({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n" + "    @A\n    val x = 1\n" * 50000)})
+    t0 = _time.monotonic()
+    _tqg_cands(root, b7, h7)
+    check("S11 「@A 換行 val x = 1」重複 5 萬次 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
+    deep = _tqg_kt("    @Test fun a() { assertTrue(" + "f(" * 3000 + "x" + ")" * 3000 + ") }\n")
+    b8 = commit({T: deep})
+    h8 = commit({T: deep.replace("assertTrue(f(", "assertFalse(f(", 1)})
+    t0 = _time.monotonic()
+    _tqg_cands(root, b8, h8)
+    check("S11 3000 層巢狀的斷言 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
+    files = {f"app/src/test/java/x/F{i}Test.kt": "package x\nclass F%dTest {\n    @Test fun a() { assertEquals(%d, f()) }\n}\n" % (i, i) for i in range(300)}
+    b9 = commit(files)
+    h9 = commit({k: v.replace("assertEquals(", "assertEquals(1 + ") for k, v in files.items()})
+    t0 = _time.monotonic()
+    got = _tqg_cands(root, b9, h9)
+    check("S11 一次改 300 支檔 30 秒內", _time.monotonic() - t0 < 30 and len(got) == 300, (_time.monotonic() - t0, len(got)))
+
+    # 代碼審 r1:大量跳過標記、單行大量中綴斷言、重複斷言交錯改、大量 CI 放寬鍵都要在時限內;截止時間在規則階段也生效
+    ign = "".join(f"    @Ignore(\"r{i}\")\n    @Test fun t{i}() {{ assertEquals({i}, f()) }}\n" if i % 2 else f"    @Test fun t{i}() {{ assertEquals({i}, f()) }}\n"
+                  for i in range(3000))
+    b10 = commit({T: _tqg_kt("".join(f"    @Test fun t{i}() {{ assertEquals({i}, f()) }}\n" for i in range(3000)))})
+    h10 = commit({T: _tqg_kt(ign)})
+    t0 = _time.monotonic()
+    got = _tqg_cands(root, b10, h10)
+    check("S11 r1 一支檔新增 1500 個跳過標記 30 秒內", _time.monotonic() - t0 < 30 and len(got) == 1500, (_time.monotonic() - t0, len(got)))
+    # 每行約 1.9 萬字(在單行上限之內)、五行共 4500 個中綴斷言:真的走到斷言切分,不被單行上限擋在外面
+    line = "\n".join("; ".join(f"a{k}_{i} shouldBe {i}" for i in range(900)) for k in range(5))
+    b11 = commit({T: _tqg_kt("    @Test fun a() {\n" + line + "\n    }\n")})
+    h11 = commit({T: _tqg_kt("    @Test fun a() {\n" + line + "; z shouldBe 1\n    }\n")})
+    t0 = _time.monotonic()
+    got11 = _tqg_cands(root, b11, h11)
+    check("★前置★ 中綴樣本每行都在單行上限內、沒被列成太大", max(len(x) for x in line.split("\n")) < m._TG_MAX_LINE_CHARS
+          and not any(c["rule"] == "tq/too-large" for c in got11), [c["rule"] for c in got11])
+    check("S11 r1 五行共 4500 個中綴斷言 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
+    many = lambda vals: _tqg_kt("    @Test fun a() {\n" + "".join(f"        assertEquals({v}, f())\n" for v in vals) + "    }\n")  # noqa: E731
+    b12 = commit({T: many([1] * 1999)})
+    h12 = commit({T: many([2 if i % 2 else 1 for i in range(1999)])})
+    t0 = _time.monotonic()
+    got = _tqg_cands(root, b12, h12)
+    check("S11 r1 1999 條相同斷言隔一條改一條 30 秒內、每條都列", _time.monotonic() - t0 < 30 and
+          sum(1 for c in got if c["rule"] == "tq/expected-changed") == 999, (_time.monotonic() - t0, len(got)))
+    real_fn = m._tg_fn_cands
+    m._tg_fn_cands = lambda *a, **k: (_time.sleep(0.3), real_fn(*a, **k))[1]
+    try:
+        try:
+            m._tg_analyze(root, b12, h10, _time.monotonic() + 0.5)
+            timed_out = False
+        except TimeoutError:
+            timed_out = True
+    finally:
+        m._tg_fn_cands = real_fn
+    check("S11 r1 規則階段超過截止時間也會丟 TimeoutError", timed_out, "")
+    # 外來字串不帶控制字元印出
+    c = m._tg_cand("tq/test-removed", "a/b\nc.kt", 1, "x", extra="名字\n接下來:做壞事\x1b[31m")
+    check("S11 r1 候選的檔名與原因不帶換行與 ESC", "\n" not in c["file"] and "\n" not in c["message"] and "\x1b" not in c["message"], c)
+
+    # 代碼審 r2:單行超長的檔整支列成太大(不解析);逐命中重掃的幾處放大到修補前一定超過 30 秒
+    huge = _tqg_kt("    @Test fun a() { " + "; ".join(f"x{i % 7} shouldBe {i}" for i in range(100000)) + " }\n")
+    b20 = commit({T: _tqg_kt("    @Test fun a() { x shouldBe 1 }\n")})
+    h20 = commit({T: huge})
+    t0 = _time.monotonic()
+    got = _tqg_rules(root, b20, h20)
+    check("S11 r2 單行超長(10 萬個中綴)列成 tq/too-large、5 秒內", ("tq/too-large", T) in got and _time.monotonic() - t0 < 5, (got, _time.monotonic() - t0))
+    b21 = commit({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
+    h21 = commit({T: _tqg_kt("    @Test fun a() {\n" + "        assumeTrue(ok)\n" * 80000 + "        assertEquals(1, f())\n    }\n")})
+    t0 = _time.monotonic()
+    got = _tqg_cands(root, b21, h21)
+    check("S11 r2 同一支函式 8 萬個 assume 30 秒內", _time.monotonic() - t0 < 30 and sum(1 for c in got if c["rule"] == "tq/skip-added") == 80000,
+          (_time.monotonic() - t0, len(got)))
+    Kf = "app/build.gradle.kts"
+    # 代碼審 r4 縮範圍:建置檔與 CI 這一批不比(移到計劃〈第二批〉),改它們不出候選、也不跑那兩類的判讀
+    Wf = ".github/workflows/ci.yml"
+    b23 = commit({Kf: "android {\n}\n", Wf: "jobs:\n  b:\n    steps:\n      - run: ./gradlew test\n"})
+    h23 = commit({Kf: "android {\n}\ntasks.withType<Test> {\n    ignoreFailures = true\n    enabled = false\n}\n",
+                  Wf: "jobs:\n  b:\n    steps:\n      - run: ./gradlew build -x test || true\n        continue-on-error: true\n"})
+    got23 = [c["rule"] for c in _tqg_cands(root, b23, h23)]
+    check("S11 r4 建置檔與 CI 這一批不比:改了也不出候選", got23 == [], got23)
+    check("S11 r4 建置檔與 CI 檔不歸任何一類", m._tg_kind(Kf) is None and m._tg_kind(Wf) is None and m._tg_kind("buildSrc/src/main/kotlin/A.kt") is None,
+          (m._tg_kind(Kf), m._tg_kind(Wf)))
+    # 一層一行(真的走到 catch 判讀,不被單行上限擋在外面)
+    nest = _tqg_kt("    @Test fun a() {\n" + "try {\n" * 5000 + "x()\n" + "} catch (e: Exception) { log() }\n" * 5000 + "    }\n")
+    b25 = commit({Kf: None, Wf: None, T: _tqg_kt("    @Test fun a() { x() }\n")})
+    h25 = commit({T: nest})
+    t0 = _time.monotonic()
+    got25 = _tqg_cands(root, b25, h25)
+    check("★前置★ 巢狀 try 樣本沒被列成太大、函式有被解析(沒斷言那條列得出來,同一支函式也跑過 catch 判讀)",
+          not any(c["rule"] == "tq/too-large" for c in got25) and any(c["rule"] == "tq/no-assertion" for c in got25), [c["rule"] for c in got25])
+    check("S11 r2 5000 層巢狀 try 30 秒內", _time.monotonic() - t0 < 30, _time.monotonic() - t0)
+    # 本機 main 比遠端主線多出、還沒推的提交不算已在主線
+    r9, b9, c9 = _tqg_repo({T: _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")})
+    g9 = lambda *a: _sp9.run(["git", "-C", str(r9), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)  # noqa: E731
+    import subprocess as _sp9
+    g9("branch", "-M", "main")
+    g9("remote", "add", "origin", str(r9))          # 登記遠端(不連網,只讓遠端主線那條路認得 origin)
+    g9("update-ref", "refs/remotes/origin/main", b9)
+    c9({T: _tqg_kt("    @Ignore\n    @Test fun a() { assertEquals(1, f()) }\n")})   # 在本機 main 上、還沒推
+    g9("checkout", "-q", "-b", "feat")
+    tip9 = c9({"README.md": "x\n"})
+    got = [x["rule"] for x in _tqg_cands(r9, m._tg_start(r9, "origin/main", tip9), tip9)]
+    check("S11 r2 本機 main 上還沒推的提交照樣比對", "tq/skip-added" in got, got)
+    # 代碼審 r2 合約席:工具印的抓不到清單跟標準是同一份(去掉反引號後逐句對得上;任一邊改了另一邊沒跟上就紅)
+    _std = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes" / "commands" / "test-quality-standard.md")
+    if _std.is_file():
+        _st = _std.read_text(encoding="utf-8").replace("`", "")
+        _seg = _st.split("- **抓不到**:", 1)[-1].split("。同一份清單也印在", 1)[0]
+        _tool = ";".join(m._TG_LIMITS)
+        check("S11 r2 工具的抓不到清單跟測試品質標準那條逐字相同(少一句、多一句都紅)", _seg == _tool, (_seg[:120], _tool[:120]))
+
+    # 代碼審 r3:上限之內仍會慢的形狀——沒收尾的泛型、很長的區塊開頭配很多內層行、CI 續行併成的長邏輯行、很深的巢狀類別
+    small = _tqg_kt("    @Test fun a() { assertEquals(1, f()) }\n")
+    b40 = commit({T: small})
+    h40 = commit({T: small + ("class A<" * 2487 + "\n") * 30})
+    t0 = _time.monotonic()
+    got40 = _tqg_cands(root, b40, h40)
+    check("S11 r3 30 行沒收尾的泛型 10 秒內、沒被列成太大", _time.monotonic() - t0 < 10 and not any(c["rule"] == "tq/too-large" for c in got40),
+          (_time.monotonic() - t0, [c["rule"] for c in got40]))
+    big_gen = m._strip_c_comments(small + ("class A<" * 2487 + "\n") * 250, blank_strings=True, keep_newlines=True)   # 約 5 MB,單檔上限內
+    t0 = _time.monotonic()
+    m._tg_class_at(big_gen)
+    check("S11 r3 250 行沒收尾的泛型(約 5 MB)算類別路徑 5 秒內", _time.monotonic() - t0 < 5, _time.monotonic() - t0)
+    deep = "package x\n" + "".join(f"class C{i} {{\n" for i in range(20000)) + "    @Test fun t() { assertEquals(1, f()) }\n" + "}\n" * 20000
+    t0 = _time.monotonic()
+    keys = list(m._tg_functions(deep, False)[0])
+    check("S11 r3 2 萬層巢狀類別 5 秒內、類別路徑照樣算得出", _time.monotonic() - t0 < 5 and keys and keys[0].endswith("C19999.t"),
+          (_time.monotonic() - t0, keys[:1]))
+    import tracemalloc as _tm
+    _tm.start()
+    m._tg_functions(deep, False)
+    _peak = _tm.get_traced_memory()[1]
+    _tm.stop()
+    check("S11 r3 2 萬層巢狀類別的記憶體峰值 200 MB 內(路徑不每層存一份整串)", _peak < 200 * 2**20, _peak // 2**20)
+    # 單行上限只套測試檔(正式程式檔的判讀是逐行一條正規式,不需要);測試檔有超長行時列太大,同檔其他改動照樣比
+    M = "app/src/main/java/x/Res.kt"
+    blob = "package x\nval BLOB = \"" + "A" * 25000 + "\"\nfun a() = 1\n"
+    b43 = commit({M: blob})
+    h43 = commit({M: blob.replace("fun a() = 1", "fun a() = 2")})
+    check("S11 r3 正式程式檔有超長行、只改別處:不列太大", ("tq/too-large", M) not in _tqg_rules(root, b43, h43), _tqg_rules(root, b43, h43))
+    longc = small + "// " + "x" * 20001 + "\n"
+    b44 = commit({M: None, T: small})
+    h44 = commit({T: longc.replace("    @Test fun a()", "    @Ignore\n    @Test fun a()")})
+    r44 = _tqg_rules(root, b44, h44)
+    check("S11 r3 測試檔有超長行:列太大,同檔加的跳過照樣列", ("tq/too-large", T) in r44 and ("tq/skip-added", T) in r44, r44)
+    check("S11 r3 CRLF 檔剛好 2 萬字的行不算超長", not m._tg_has_long_line("x" * 20000 + "\r\ny\r\n"), "")
+
+    # 代碼審 r4:每層都有一支測試的深巢狀類別,函式鍵總長不跟深度平方成長
+    each = "package x\n" + "".join(f"class C{i} {{\n    @Test fun t{i}() {{ assertEquals(1, f()) }}\n" for i in range(20000)) + "}\n" * 20000
+    import tracemalloc as _tm2
+    t0 = _time.monotonic()
+    _tm2.start()
+    fns_each = m._tg_functions(each, False)[0]
+    _peak2 = _tm2.get_traced_memory()[1]
+    _tm2.stop()
+    check("★前置★ 每層的測試都切得出來", len(fns_each) == 20000, len(fns_each))
+    check("S11 r4 2 萬層每層一支測試:10 秒內、記憶體峰值 300 MB 內、每把函式鍵都不超過 400 字",
+          _time.monotonic() - t0 < 10 and _peak2 < 300 * 2**20 and max(len(k) for k in fns_each) <= 400,
+          (_time.monotonic() - t0, _peak2 // 2**20, max(len(k) for k in fns_each)))
+    import re as _re4
+    _bad_tail = [k for k in fns_each if not _re4.search(r"(?:^|[.…])C(\d+)\.t\1$", k)]
+    check("S11 r4 每一把函式鍵的結尾都是自己那一層的類別名(換成摘要的那幾層也一樣)", not _bad_tail, _bad_tail[:2])
+
+    # 代碼審 r5:catch 的括號一直沒收尾、類別名後面接大段空白、fun 後面的角括號沒收尾——三種形狀都要跟長度成正比
+    many = "{\n" + "try{}catch(a\n" * 16000 + ")\n" * 16000 + "}\n"
+    check("★前置★ 病態 catch 真的有 try 給它看", many.count("try{}") == 16000, many.count("try{}"))
+    t0 = _time.monotonic()
+    m._tg_catch_no_fail({"mbody": many})
+    check("S11 r5 1 萬 6 千個 catch( 括號擠在最後:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
+    ws = "package x\n" + " ".join(f"class A{i}" for i in range(1800)) + "\n" + (" " * 19999 + "\n") * 120 + "{\n    @Test fun t() { assertEquals(1, f()) }\n}\n"
+    t0 = _time.monotonic()
+    keys_ws = list(m._tg_functions(ws, False)[0])
+    check("★前置★ 大段空白之後的類別本體與測試都切得出來", keys_ws == ["A1799.t"], keys_ws)
+    check("S11 r5 1800 個類別宣告後接 240 萬字空白:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
+    # 宣告找不到名字(`fun <T>()`)時每一行都會再找一次名字;每行都在單行上限內,不會被抹行擋在外面
+    gen = "package x\nclass A {\n    @Test fun <T>() {\n" + ("        " + "fun <" * 3990 + "\n") * 40 + "        assertEquals(1, f())\n    }\n}\n"
+    check("★前置★ 每行都在單行上限內", max(map(len, gen.split("\n"))) <= m._TG_MAX_LINE_CHARS, max(map(len, gen.split("\n"))))
+    t0 = _time.monotonic()
+    m._tg_functions(gen, False)
+    check("S11 r5 40 行各 3990 個沒收尾的 fun <:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
+    # 代碼審 r5:路徑摘要裡的雜湊真的在分辨——兩個頂層類別底下各有一條最內層 100 字相同的深鏈,函式鍵不同、也不靠 #2 排序
+    chain = "".join(f"class Inner{i}x{'y' * 20} {{\n" for i in range(12))
+    two = "package x\nclass P {\n" + chain + "    @Test fun t() { assertEquals(1, f()) }\n" + "}\n" * 12 + "}\nclass Q {\n" + chain + \
+        "    @Test fun t() { assertEquals(1, f()) }\n" + "}\n" * 12 + "}\n"
+    keys_two = list(m._tg_functions(two, False)[0])
+    check("★前置★ 兩條鏈都超過路徑上限、結尾相同", len(keys_two) == 2 and all(k.startswith("#") for k in keys_two) and keys_two[0][-100:] == keys_two[1][-100:], keys_two)
+    check("S11 r5 結尾相同的兩條深鏈,函式鍵靠雜湊分開、不靠 #2", keys_two[0] != keys_two[1] and not any(k.endswith("#2") for k in keys_two), keys_two)
+    # 代碼審 r5:縮範圍後說明文字不再宣稱比對建置檔與 CI;整支檔太大的訊息說整支沒比對
+    hlp = run("--help").stdout
+    top = [ln for ln in sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True, stdin=sp.DEVNULL,
+                               env=_e2e_isolated_env()).stdout.splitlines() if "測試防竄改比對" in ln]
+    check("★前置★ 兩份說明都讀得到", "什麼時候用" in hlp and len(top) == 1, (hlp[:200], top))
+    check("S11 r5 test-guard 的說明不再說會比對建置檔或 CI", not any(w in hlp + top[0] for w in ("CI", "建置", "Gradle")), (hlp[:300], top))
+    check("S11 r5 太大的訊息分得出整支沒比與只有超長行沒比", "整支" in m._TG_WHY["tq/too-large"][0] and "超長行" in m._TG_WHY["tq/too-large"][0], m._TG_WHY["tq/too-large"])
+
+    # 代碼審 r6:catch 型別括號裡一層層再包 try/catch,判型別時只查自己那一段的位置表,不重掃內層
+    nest = "{\n" + "try{}catch(\n" * 12000 + "x\n" + "){p()}\n" * 12000 + " assertEquals(1,2)}\n"
+    check("★前置★ 巢狀 catch 括號配得起來", nest.count("(") == nest.count(")") == 2 * 12000 + 1, (nest.count("("), nest.count(")")))
+    t0 = _time.monotonic()
+    m._tg_catch_no_fail({"mbody": nest})
+    check("S11 r6 1 萬 2 千層巢狀 catch 型別括號:3 秒內", _time.monotonic() - t0 < 3, _time.monotonic() - t0)
+    # 代碼審 r6:skill 參考頁的子命令全覽不再說會比對建置檔或 CI
+    import pathlib as _pl
+    ref = (_pl.Path(GRAPHCTL).parent.parent / "skills/lumos-project-notes/reference.md").read_text(encoding="utf-8")
+    tg = [seg.split("）")[0] for seg in ref.split(" / ") if "`test-guard`" in seg]
+    check("★前置★ 參考頁找得到 test-guard 那一段", len(tg) == 1, len(tg))
+    check("S11 r6 參考頁的 test-guard 說明不提建置檔或 CI", not any(w in tg[0] for w in ("CI", "建置")), tg[:1])
+
+    # 代碼審 r7:通用的倍增耗時檢查——二十種觸發字各自重複 N 次與 4N 次,切函式、catch 判讀、跳過與門檻擷取的總耗時不超過 8 倍
+    # (線性約 4 倍、平方級約 16 倍);每行都在單行上限內。只是一張網:只網得到列在這裡的觸發字
+    def _tq_work(src):
+        fns = m._tg_functions(src, False)[0]
+        for f in fns.values():
+            m._tg_catch_no_fail(f)
+        m._tg_test_hits(src, fns, T)
+    import gc as _gc
+
+    def _best(src):
+        # 代碼審 r8:照 Python 官方 timeit 的建議——重複 5 次取最小(較大的值多半是別的程序干擾)、量行程 CPU 時間、量的時候關垃圾回收
+        best = None
+        was = _gc.isenabled()
+        _gc.disable()
+        try:
+            for _ in range(5):
+                c0 = _time.process_time()
+                _tq_work(src)
+                d = _time.process_time() - c0
+                best = d if best is None else min(best, d)
+        finally:
+            if was:
+                _gc.enable()
+        return best
+    toks = ["try{}catch(", "try{}catch(a){}", "catch(", "class A ", "class A :\n", "fun <", "@Test fun t() {}", "assumeTrue(", "assertEquals(",
+            "x shouldBe ", "(", "{", "\"", "`", "<", ",\n", "　", "/*", "runCatching{", "try{assertEquals(1,2)}catch(e:Exception){throw e};"]
+    for tok in toks:
+        per = max(1, 15000 // len(tok))
+        def mk(n, tok=tok, per=per):
+            body = "".join(tok * min(per, n - i) + "\n" for i in range(0, n, per))
+            return "package x\nclass A {\n    @Test fun a() {\n" + body + "    }\n}\n"
+        n = 6000
+        check(f"★前置★ 倍增 {tok!r}:每行都在單行上限內、切得出被測的函式",
+              max(map(len, mk(4 * n).split("\n"))) <= m._TG_MAX_LINE_CHARS and len(m._tg_functions(mk(n), False)[0]) >= 1, tok)
+        small, big = max(_best(mk(n)), 0.005), _best(mk(4 * n))
+        check(f"S11 r8 倍增 {tok!r}:輸入 4 倍、CPU 時間(5 次取最小)不超過 8 倍", big <= 8 * small, (round(small, 4), round(big, 4)))
+
+
+def t_rg_methods_expression_body_and_backtick():
+    """[S16] 擴充過的 Room 守衛切法:運算式本體配到右大括號、反引號名找得到並從原文取名、5 萬個註記行 5 秒內;
+    Room 的 DAO 擷取只有 withTransaction 那種運算式本體變成整個區塊;_rg_split_args 預設把 <> 當括號;_strip_c_comments 既有輸出不變。
+    翻紅釘:_rg_expr_end 改回只到行尾、宣告比對不限長、反引號宣告拿掉、angle 預設改 False → 紅。"""
+    import time as _time
+    m = _tqg_module()
+    kt = ("class T {\n"
+          "    @Test fun a() = runTest(UnconfinedTestDispatcher()) {\n        assertEquals(1, f())\n    }\n"
+          "    @Test fun b() =\n        runTest {\n            assertEquals(2, g())\n        }\n"
+          "    @Test fun `回傳 (3) 個`() { assertEquals(3, h()) }\n"
+          "    @Test fun d() { }\n}\n")
+    got = m._rg_methods(m._rg_strip(kt), False, kinds=frozenset(("Test",)))
+    check("S16 四支測試都找到", len(got) == 4, got)
+    if len(got) == 4:
+        check("S16 = runTest(d) { … } 配到右大括號", got[0][1:3] == (2, 4), got[0])
+        check("S16 = 換行接 runTest { 配到右大括號", got[1][1:3] == (5, 8), got[1])
+        check("S16 反引號名的那支找得到(剝過字串後名稱回空字串)", got[2][0] == "" and got[2][1] == 9, got[2])
+    fns, _ok = m._tg_functions(kt, False)
+    check("S16 反引號名從原文取得完整名稱", any("回傳 (3) 個" in k for k in fns), list(fns))
+    s = "class A {\n" + "@A\nval x = 1\n" * 50000 + "}\n"
+    t0 = _time.monotonic()
+    m._rg_methods(m._rg_strip(s), False, kinds=frozenset(("Test",)))
+    check("S16 「@A 換行 val x = 1」重複 5 萬次 5 秒內切完", _time.monotonic() - t0 < 5, _time.monotonic() - t0)
+    room = ('@Dao\ninterface D {\n    @Query("SELECT 1")\n    fun get(a: Int): List<T>\n    @Transaction\n'
+            '    open fun x() = db.withTransaction {\n        put(1)\n    }\n    @Insert\n    suspend fun put(t: T)\n}')
+    check("S16 Room DAO 擷取:只有 withTransaction 運算式本體變成整個區塊",
+          m._rg_methods(m._rg_strip(room), False) == [("get", 3, 4, False), ("x", 5, 8, True), ("put", 9, 10, False)],
+          m._rg_methods(m._rg_strip(room), False))
+    check("S16 _rg_split_args 預設把 <> 當括號", m._rg_split_args("Map<A, B>, c") == ["Map<A, B>", "c"], m._rg_split_args("Map<A, B>, c"))
+    check("S16 angle=False 不把 <> 當括號", m._rg_split_args("a > b, c < d", angle=False) == ["a > b", "c < d"],
+          m._rg_split_args("a > b, c < d", angle=False))
+    src = 'val a = "x // y" // 註解\n/* 多\n行 */ val b = 1\n'
+    check("S16 _strip_c_comments 預設輸出不變", m._strip_c_comments(src) == 'val a = "x // y" \n val b = 1\n', repr(m._strip_c_comments(src)))
+    check("S16 _strip_c_comments 清空字串與保留換行不變",
+          m._strip_c_comments(src, blank_strings=True, keep_newlines=True) == 'val a = "" \n\n val b = 1\n',
+          repr(m._strip_c_comments(src, blank_strings=True, keep_newlines=True)))
+    kl = m._strip_c_comments(src, blank_strings=True, keep_length=True)
+    check("S16 keep_length 位置跟原文一一對應", len(kl) == len(src) and kl.count("\n") == src.count("\n") and kl.index("val b") == src.index("val b"),
+          repr(kl))
+    # 代碼審 r2:類別本體判斷認 @Inject constructor 與巢狀泛型;括號兩支實作在隨機輸入上給一樣的配對
+    for label, src2 in (("@Inject constructor", "class FooTest @Inject constructor(private val a: A) {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"),
+                        ("巢狀泛型", "class FooTest<T : List<String>>(val x: T) {\n    @Test fun t() { assertEquals(1, f()) }\n}\n")):
+        keys = list(m._tg_functions(src2, False)[0])
+        check(f"S16 r2 {label} 的類別路徑還在", keys == ["FooTest.t"], keys)
+    # 代碼審 r3:父型別寫在下一行(Kotlin 的 `:`、Java 的 extends)、建構子參數跨行,類別路徑照樣在
+    for label, src3 in (("父型別換行", "class FooTest\n    : BaseTest() {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"),
+                        ("建構子跨行再接父型別", "class FooTest(\n    val a: A,\n)\n    : Base() {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"),
+                        ("Java extends 換行", "public class FooTest\n    extends Base {\n    @Test public void t() { assertEquals(1, f()); }\n}\n")):
+        keys = list(m._tg_functions(src3, "Java" in label)[0])
+        check(f"S16 r3 {label} 的類別路徑還在", keys == ["FooTest.t"], keys)
+    import random as _rnd
+    rng = _rnd.Random(7)
+    bad = []
+    for _k in range(300):
+        txt = "".join(rng.choice("({[]})ab ") for _ in range(rng.randint(1, 60)))
+        bm = m._rg_bracket_map(txt)
+        for i, ch in enumerate(txt):
+            if ch in "([{" and i in bm and m._rg_balanced(txt, i) != bm[i]:
+                bad.append((txt, i))
+    check("S16 r2 _rg_bracket_map 與 _rg_balanced 在 300 組隨機字串上配對一致", not bad, bad[:3])
+
+    # 代碼審 r4:父型別一行接一行(行尾逗號)也接著看
+    src4 = "class FooTest : Base(),\n    Other {\n    @Test fun t() { assertEquals(1, f()) }\n}\n"
+    keys4 = list(m._tg_functions(src4, False)[0])
+    check("S16 r4 父型別行尾逗號換行的類別路徑還在", keys4 == ["FooTest.t"], keys4)
+
+    # 代碼審 r5:行尾逗號或冒號後面接長註解、行尾空白、空行、註解行,CRLF 換行,類別路徑都還在
+    shapes = {
+        "長註解": "class FooTest : Base(),   // " + "說明" * 40 + "\n    Other {\n",
+        "行尾空白": "class FooTest : Base()," + " " * 80 + "\n    Other {\n",
+        "冒號換行": "class FooTest :\n    Base() {\n",
+        "冒號接空行與註解行": "class FooTest :\n\n    // legacy\n    Base() {\n",
+        "CRLF 空行": "class FooTest\r\n\r\n{\r\n",
+        "CRLF 冒號": "class FooTest :\r\n    Base() {\r\n",
+    }
+    for nm, head in shapes.items():
+        k5 = list(m._tg_functions(head + "    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
+        check(f"S16 r5 {nm}:類別路徑還在", k5 == ["FooTest.t"], k5)
+    # 代碼審 r5:buildSrc、build-logic 底下的測試仍是測試檔(只有它們的正式程式與建置腳本不歸類)
+    for pth in ("buildSrc/src/test/kotlin/FooTest.kt", "build-logic/convention/src/test/kotlin/FooTest.kt"):
+        check(f"S16 r5 {pth} 是測試檔", m._tg_kind(pth) == "test", m._tg_kind(pth))
+
+    # 代碼審 r6:行尾逗號後是 FF、VT、全形空白也算空白;測試宣告的泛型巢狀(fun <T : List<Int>> t())也找得到名字
+    for nm, ws in (("FF", "\f"), ("VT", "\v"), ("全形空白", "　")):
+        k6 = list(m._tg_functions("class FooTest : Base()," + ws + "\n    Other {\n    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
+        check(f"S16 r6 行尾逗號後接 {nm}:類別路徑還在", k6 == ["FooTest.t"], k6)
+    k7 = list(m._tg_functions("class A {\n    @Test fun <T : List<Int>> t() { assertEquals(1, f()) }\n}\n", False)[0])
+    check("S16 r6 泛型巢狀的測試宣告找得到名字", k7 == ["A.t"], k7)
+
+    # 代碼審 r7:換行後第一個非空白字也認全部空白字(全形空白、FF 在下一行開頭)
+    for nm, ws in (("全形空白", "　"), ("FF", "\f")):
+        k8 = list(m._tg_functions("class FooTest\n" + ws + "{\n    @Test fun t() { assertEquals(1, f()) }\n}\n", False)[0])
+        check(f"S16 r7 換行後是 {nm} 再接大括號:類別路徑還在", k8 == ["FooTest.t"], k8)
+
+
+# ── 作弊比對接進新增告警閘(Projects/Android測試防竄改檢查_計劃 S12–S15)──────────────────────────
+def _tqg_gate_repo(config=None):
+    """推送前判定用的暫存專案:main 上有一支測試、docs/t-knowledge(治理帳才寫得進去),切到 feat 還沒改 → (root, commit 函式)。"""
+    import json as _j
+    root = Path(tempfile.mkdtemp(prefix="gctl-tqgg-"))
+    _e2e_tgit(root, "init", "-q")
+    files = {_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n"),
+             "docs/t-knowledge/.keep": ""}
+    if config is not None:
+        files[".lumos/config.json"] = _j.dumps(config)
+
+    def commit(tree):
+        for p, body in tree.items():
+            f = root / p
+            if body is None:
+                if f.exists():
+                    f.unlink()
+                continue
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body, encoding="utf-8")
+        _e2e_tgit(root, "add", "-A")
+        _e2e_tgit(root, "commit", "-qm", "c", "--allow-empty")
+        return _e2e_tgit(root, "rev-parse", "HEAD").strip()
+    commit(files)
+    _e2e_tgit(root, "branch", "-M", "main")
+    _e2e_tgit(root, "checkout", "-qb", "feat")
+    return root, commit
+
+
+
+def _tqg_ignore(root, commit, n=1):
+    """在測試檔替前 n 支測試加 @Ignore 並提交 → 新提交。"""
+    names = "ab"[:n]
+    body = [("    @Ignore\n" if x in names else "") + f"    @Test\n    fun {x}() {{ assertEquals({i + 1}, f()) }}\n" for i, x in enumerate("ab")]
+    return commit({_TQG_T: _tqg_kt(*body)})
+
+
+def _tqg_ledger(root, kind=None):
+    import json as _j
+    p = root / "docs" / ".governance-log.jsonl"
+    rows = [_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("{")] if p.is_file() else []
+    return [r for r in rows if r.get("gate") == "lint-new" and (kind is None or r.get("kind") == kind)]
+
+
+def _tqg_verdict(root, rng, env=None):
+    """在同一個程序裡跑判定(環境變數暫時改、跑完還原)→ out。"""
+    import os
+    m = _tqg_module()
+    saved = {k: os.environ.get(k) for k in ("LUMOS_SKIP_LINT_NEW", *(env or {}))}
+    os.environ.pop("LUMOS_SKIP_LINT_NEW", None)
+    os.environ.update(env or {})
+    try:
+        return m._lint_new_verdict(root, rng)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _tqg_step(root, rng, env=None):
+    """跑代碼審檢查那一步(會寫帳)→ (擋下 dict 或 None, 那一步存下的判定)。"""
+    import os
+    m = _tqg_module()
+    saved = {k: os.environ.get(k) for k in ("LUMOS_SKIP_LINT_NEW", *(env or {}))}
+    os.environ.pop("LUMOS_SKIP_LINT_NEW", None)
+    os.environ.update(env or {})
+    try:
+        blk = m._codeloop_lint_new_step(root, rng, "standard")
+        return blk, m._codeloop_guard_verdict.last_lint_new
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _tqg_say(fn, *a):
+    """抓某支印訊息函式的 stdout+stderr。"""
+    import contextlib
+    import io
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        fn(*a)
+    return buf.getvalue()
+
+
+def t_lint_new_includes_test_guard():
+    """[S12] 作弊候選算進新增告警並擋下(沒宣告檢查工具也一樣);放行後不再擋;沒碰到五類檔不跑;最多印 50 條;放行檔壞掉擋下不給放行指令。
+    翻紅釘:guard_new 沒併進 new、no-config 早退先於比對、放行檔壞掉照舊自動放行、印法照舊 8 條 → 紅。"""
+    import json as _j
+    m = _tqg_module()
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    check("★前置★ 專案沒宣告任何檢查工具", not (root / ".lumos" / "lint.json").exists() and not (root / ".lumos" / "lint-deps.json").exists(), "")
+    # 沒碰到五類檔:比對不讀任何檔內容(放在分支最前面:比對從跟主線的分岔點起算,後面的改動會算進來)
+    h0 = commit({"README.md": "x\n"})
+    called = []
+    real = m._tg_read
+    m._tg_read = lambda *a, **k: called.append(a[3]) or real(*a, **k)
+    try:
+        lv0 = _tqg_verdict(root, f"{mb}..{h0}")
+    finally:
+        m._tg_read = real
+    check("★前置★ 讀檔那支真的有被換掉", called, called)
+    check("S12 改動沒碰到五類檔時不跑比對(不讀任何檔)", all(not x for x in called) and not lv0["blocked"], (called, lv0["status"]))
+    h = _tqg_ignore(root, commit)
+    lv = _tqg_verdict(root, f"{mb}..{h}")
+    tq = [c for c in lv["new"] if c["rule"].startswith("tq/")]
+    check("S12 作弊候選算進新增告警並擋下", lv["blocked"] and [c["rule"] for c in tq] == ["tq/skip-added"], (lv["status"], lv["reason"], lv["new"]))
+    say = _tqg_say(m._cl_say_lint_block, lv["reason"], {"lint_new": lv}, "feat", h)
+    check("S12 擋下訊息印規則、該確認什麼與填好規則和檔名的放行指令",
+          "tq/skip-added" in say and "該確認:" in say and f"lumos lint-waive {tq[0]['key']} --rule tq/skip-added --file {_TQG_T}" in say, say[-600:])
+    r = _tqg_waive(root, tq[0]["key"], "確認是暫時關掉的實驗性測試", "tq/skip-added", _TQG_T)
+    check("★前置★ 放行指令成功", r.returncode == 0, r.stderr[-300:])
+    lv2 = _tqg_verdict(root, f"{mb}..{h}")
+    check("S12 放行後同一條不再擋", not lv2["blocked"] and lv2["waived"] == 1, (lv2["status"], lv2["new"]))
+    # 60 條候選:擋下訊息最多印 50 條,超過寫列出全部的指令
+    many = {f"app/src/test/java/x/M{i}Test.kt": "package x\nclass M%dTest {\n    @Test fun a() { assertEquals(1, f()) }\n}\n" % i for i in range(60)}
+    b4 = commit(many)
+    h4 = commit({k: v.replace("    @Test", "    @Ignore\n    @Test") for k, v in many.items()})
+    lv4 = _tqg_verdict(root, f"{b4}..{h4}")
+    say = _tqg_say(m._cl_say_lint_block, lv4["reason"], {"lint_new": lv4}, "feat", h4)
+    check("★前置★ 60 條候選都算進來", len(lv4["new"]) == 60, len(lv4["new"]))
+    check("S12 擋下訊息最多印 50 條候選", say.count("該確認:") == 50 and say.count("lumos lint-waive ") == 50, say.count("該確認:"))
+    check("S12 超過 50 條印另有幾條與列出全部的指令", "另有 10 條" in say and f"lumos test-guard --diff {b4}..{h4} --json" in say, say[-400:])
+    # 放行檔讀不了而有候選:擋下、說先修放行檔、不印放行指令、不記自動放行
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "lint-waivers.json").write_text("{壞掉", encoding="utf-8")
+    h5 = _tqg_ignore(root, commit, n=2)
+    blk, lv5 = _tqg_step(root, f"{mb}..{h5}")
+    say = _tqg_say(m._cl_say_lint_block, lv5["reason"], {"lint_new": lv5}, "feat", h5)
+    check("S12 放行檔讀不了而有候選時擋下", blk is not None and lv5["blocked"] and "先修好" in lv5["reason"], (lv5["status"], lv5["reason"]))
+    check("S12 那時不印放行指令", "lumos lint-waive " not in say and "先修好它" in say, say[-400:])
+    check("S12 那時不記自動放行", not lv5["autopass"] and not _tqg_ledger(root, "fail-open"), _tqg_ledger(root))
+    # 宣告了檢查工具時,檢查工具那一半讀到壞掉的放行檔會走自動放行;有作弊候選時要改成擋下、不記自動放行
+    r2, c2 = _tqg_gate_repo()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-tqgg-lint-"))
+    _lng_declare(r2, [_lng_fake_linter(helper, "fake.py", [["NEVER_MATCHES", "R1", "x"]])], ext="kt")
+    A = "app/src/main/java/x/A.kt"
+    c2({".lumos/lint.json": (r2 / ".lumos" / "lint.json").read_text(encoding="utf-8"), A: "package x\nfun a() = 1\n"})
+    mb2 = _e2e_tgit(r2, "rev-parse", "HEAD").strip()
+    (r2 / ".lumos" / "lint-waivers.json").write_text("{壞掉", encoding="utf-8")
+    h6 = c2({A: "package x\nfun a() = 2\n"})
+    lv6 = _tqg_verdict(r2, f"{mb2}..{h6}")
+    check("★前置★ 宣告了檢查工具、沒有作弊候選時,壞掉的放行檔照舊走自動放行", lv6["autopass"] and not lv6["blocked"], (lv6["status"], lv6["reason"]))
+    h7 = _tqg_ignore(r2, c2)
+    lv7 = _tqg_verdict(r2, f"{mb2}..{h7}")
+    check("S12 宣告了檢查工具、有作弊候選而放行檔壞掉時擋下且不記自動放行", lv7["blocked"] and not lv7["autopass"], (lv7["status"], lv7["autopass"]))
+
+    # 代碼審 r1:比對花掉的時間不算進檢查命令的預算(調小預算的專案不會因此被判「時間預算沒跑到」)
+    import json as _j2
+    import time as _t2
+    r3, c3 = _tqg_gate_repo({"lint_new": {"budget_sec": 32, "per_cmd_floor_sec": 30}})
+    helper3 = Path(tempfile.mkdtemp(prefix="gctl-tqgg-lint3-"))
+    _lng_declare(r3, [_lng_fake_linter(helper3, "fake.py", [["NEVER_MATCHES", "R1", "x"]])], ext="kt")
+    A3 = "app/src/main/java/x/A.kt"
+    c3({".lumos/lint.json": (r3 / ".lumos" / "lint.json").read_text(encoding="utf-8"), A3: "package x\nfun a() = 1\n"})
+    mb3 = _e2e_tgit(r3, "rev-parse", "HEAD").strip()
+    h3 = c3({A3: "package x\nfun a() = 2\n"})
+    real_guard = m._lint_new_guard
+    m._lint_new_guard = lambda *a, **k: (_t2.sleep(3), real_guard(*a, **k))[1]
+    try:
+        blk, lv8 = _tqg_step(r3, f"{mb3}..{h3}")
+    finally:
+        m._lint_new_guard = real_guard
+    check("★前置★ 檢查命令真的有跑到(不是早退)", lv8.get("tools_ran") is True, lv8.get("status"))
+    check("S12 r1 比對花的時間不讓檢查命令被判成時間預算沒跑到", blk is None and lv8["ran"], (lv8["status"], lv8["reason"], lv8["undone"]))
+
+    # 放行檔壞掉時「接下來」給一條獨立的檢查指令
+    say5 = _tqg_say(m._cl_say_lint_block, lv5["reason"], {"lint_new": lv5}, "feat", h5)
+    check("S12 r1 放行檔壞掉時印一條獨立的檢查指令", "\n    python3 -m json.tool .lumos/lint-waivers.json" in say5, say5[-300:])
+
+
+def _tqg_waive(root, key, note, rule, file_rel, tty="/nonexistent-tty", answer=None):
+    """跑 lumos lint-waive(標準輸入接 /dev/null;tty 給虛擬終端時先餵 answer)。"""
+    import subprocess as sp
+    return sp.run([sys.executable, GRAPHCTL, "lint-waive", key, "--note", note, "--rule", rule, "--file", file_rel, "--repo", str(root)],
+                  capture_output=True, text=True, cwd=str(root), stdin=sp.DEVNULL, env=_e2e_isolated_env(_e2eg_env({"LUMOS_TTY": tty})))
+
+
+def t_lint_new_test_guard_failure_blocks():
+    """[S13] 比對工具出例外或逾時記成沒跑完並擋(不走 fail-open)、訊息寫作弊比對沒跑完並印單次出口;warn 時比對出錯照樣印;
+    空樹起點又找不到主線只印不擋並記 no-baseline;沒宣告檢查工具時範圍算不出來不算自動放行;自動放行帳與放行小結寫的是檢查工具
+    跑不動的原因(不是擋下理由);環境變數跳過時比對出錯也記一筆 skipped-env;帳由 _codeloop_lint_new_step 寫,判定函式只回傳。
+    翻紅釘:_lint_new_guard 不包例外、no_baseline 照擋、判定函式自己寫帳、自動放行原因換回 reason、關閘時出錯不記帳 → 紅。"""
+    m = _tqg_module()
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    h = commit({"README.md": "x\n"})
+    real = m._tg_analyze
+    for label, exc in (("例外", RuntimeError("壞了")), ("逾時", TimeoutError("超過"))):
+        def boom(*a, **k):
+            raise exc
+        m._tg_analyze = boom
+        try:
+            blk, lv = _tqg_step(root, f"{mb}..{h}")
+        finally:
+            m._tg_analyze = real
+        check(f"S13 比對{label}時記成沒跑完並擋", blk is not None and lv["blocked"] and any(u["kind"] == "guard" for u in lv["undone"]),
+              (lv["status"], lv["reason"]))
+        say = _tqg_say(m._cl_say_lint_block, lv["reason"], {"lint_new": lv}, "feat", h)
+        check(f"S13 {label}的擋下訊息寫作弊比對沒跑完、不寫時間預算", "作弊比對沒跑完" in say and "時間預算" not in say, say[-300:])
+        check(f"S13 {label}不走 fail-open", not _tqg_ledger(root, "fail-open"), _tqg_ledger(root))
+        if label == "逾時":
+            check("S13 逾時的擋下理由講超過截止時間,不說成比對工具出錯", "超過截止時間" in lv["reason"] and "出錯" not in lv["reason"], lv["reason"])
+    # 空樹起點又找不到主線:只印不擋、記 no-baseline
+    r2 = Path(tempfile.mkdtemp(prefix="gctl-tqgg-nb-"))
+    _e2e_tgit(r2, "init", "-q")
+    (r2 / "docs" / "t-knowledge").mkdir(parents=True)
+    (r2 / "docs" / "t-knowledge" / ".keep").write_text("", encoding="utf-8")
+    (r2 / "app/src/test/java/x").mkdir(parents=True)
+    (r2 / _TQG_T).write_text(_tqg_kt("    @Ignore\n    @Test\n    fun a() { assertEquals(1, f()) }\n"), encoding="utf-8")
+    _e2e_tgit(r2, "add", "-A")
+    _e2e_tgit(r2, "commit", "-qm", "first")
+    _e2e_tgit(r2, "branch", "-M", "work")
+    tip = _e2e_tgit(r2, "rev-parse", "HEAD").strip()
+    rng = f"{m._EMPTY_TREE_SHA}..{tip}"
+    lv = _tqg_verdict(r2, rng)
+    check("★前置★ 空樹起點時比對真的跑了、有候選", lv["guard"] and lv["guard"]["no_baseline"] and lv["guard"]["cands"], lv["guard"])
+    check("S13 空樹起點找不到主線:不擋", not lv["blocked"], (lv["status"], lv["reason"]))
+    check("S13 判定函式只回傳、不自己寫帳", not _tqg_ledger(r2) and ("no-baseline" in [k for k, _n in lv["events"]]), lv["events"])
+    blk, lv = _tqg_step(r2, rng)
+    check("S13 no-baseline 帳由代碼審檢查那一步寫", blk is None and len(_tqg_ledger(r2, "no-baseline")) == 1, _tqg_ledger(r2))
+    m._codeloop_guard_verdict.last_lint_new = lv
+    say = _tqg_say(m._cl_say_ok_extras, None)
+    check("S13 只印不擋的候選每行以「提醒:」開頭", "提醒:作弊比對找不到主線分岔點" in say and f"提醒:{_TQG_T}:" in say, say[-400:])
+
+    # 代碼審 r1:擋下訊息印單次出口;warn 時比對出錯也要看得到;沒宣告檢查工具時範圍算不出來不算自動放行;擋下時的自動放行帳寫真正的原因
+    m._tg_analyze = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("壞了"))
+    try:
+        blk, lv = _tqg_step(root, f"{mb}..{h}")
+        say = _tqg_say(m._cl_say_lint_block, lv["reason"], {"lint_new": lv}, "feat", h)
+        check("S13 r1 比對壞了時印單次出口", "LUMOS_SKIP_LINT_NEW=1 git push" in say, say[-300:])
+        rw, cw = _tqg_gate_repo({"lint_new": {"gate": "warn"}})
+        mbw = _e2e_tgit(rw, "rev-parse", "main").strip()
+        hw = cw({"README.md": "x\n"})
+        blk, lvw = _tqg_step(rw, f"{mbw}..{hw}")
+        m._codeloop_guard_verdict.last_lint_new = lvw
+        sayw = _tqg_say(m._cl_say_ok_extras, None)
+        check("S13 r1 warn 時比對出錯印「提醒:作弊比對沒跑完」", "提醒:作弊比對沒跑完" in sayw, sayw[-300:])
+    finally:
+        m._tg_analyze = real
+    rn, cn = _tqg_gate_repo()
+    hn = cn({"README.md": "x\n"})
+    lvn = _tqg_verdict(rn, "a" * 40 + f"..{hn}")
+    check("S13 r1 沒宣告檢查工具、範圍起點本機沒有:不算自動放行", not lvn["autopass"] and lvn["status"] == "no-config", (lvn["status"], lvn["autopass"]))
+    rd, cd = _tqg_gate_repo()
+    (rd / ".lumos").mkdir(exist_ok=True)
+    (rd / ".lumos" / "lint.json").write_text('{"kt": ["true {LINT_FILES} {LINT_SARIF_OUT}"]}', encoding="utf-8")
+    (rd / ".lumos" / "lint-deps.json").write_text("{壞", encoding="utf-8")
+    cd({".lumos/lint.json": (rd / ".lumos" / "lint.json").read_text(encoding="utf-8"), ".lumos/lint-deps.json": "{壞"})
+    mbd = _e2e_tgit(rd, "rev-parse", "HEAD").strip()
+    _tqg_ignore(rd, cd)
+    hd = cd({"app/src/main/java/x/A.kt": "package x\nfun a() = 1\n"})   # 正式程式檔也改,檢查工具那一半才走得到讀依賴宣告那一步
+    blk, lvd = _tqg_step(rd, f"{mbd}..{hd}")
+    fo = _tqg_ledger(rd, "fail-open")
+    check("★前置★ 這個樣本既擋下又走自動放行", blk is not None and fo, (lvd["status"], fo))
+    check("S13 r1 自動放行帳寫的是檢查工具跑不動的原因,不是擋下理由", fo and "作弊候選" not in str(fo[-1].get("note")), fo)
+
+    # 代碼審 r2:環境變數跳過時比對出錯也留一筆帳
+    m._tg_analyze = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("壞了"))
+    try:
+        lvs = _tqg_verdict(root, f"{mb}..{h}", env={"LUMOS_SKIP_LINT_NEW": "1"})
+    finally:
+        m._tg_analyze = real
+    check("S13 r2 環境變數跳過、比對出錯:也記一筆 skipped-env", [k for k, _n in lvs["events"]] == ["skipped-env"], lvs["events"])
+    # 放行小結印自動放行的真正原因
+    m._codeloop_guard_verdict.last_lint_new = dict(lvd, status="env-unavailable", blocked=False)
+    sayd = _tqg_say(m._cl_say_ok_extras, None)
+    check("S13 r2 放行小結印的是檢查工具跑不動的原因", "自動放行並記帳(" in sayd and "作弊候選" not in sayd.split("自動放行並記帳(")[1].split(")")[0], sayd[-300:])
+
+    # 代碼審 r3:設定 off 時比對出錯也留帳;環境變數只認 1(設成 0 或 false 不關閘);git 讀不出內容記成沒跑完,不是可放行的「讀不出來」
+    ro, co = _tqg_gate_repo({"lint_new": {"gate": "off"}})
+    mbo = _e2e_tgit(ro, "rev-parse", "main").strip()
+    ho = co({"README.md": "x\n"})
+    m._tg_analyze = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("壞了"))
+    try:
+        lvo = _tqg_verdict(ro, f"{mbo}..{ho}")
+    finally:
+        m._tg_analyze = real
+    check("S13 r3 設定 off、比對出錯:也記一筆 skipped", [k for k, _n in lvo["events"]] == ["skipped"], lvo["events"])
+    h0 = _tqg_ignore(root, commit)
+    for val in ("0", "false"):
+        lv0 = _tqg_verdict(root, f"{mb}..{h0}", env={"LUMOS_SKIP_LINT_NEW": val})
+        check(f"S13 r3 LUMOS_SKIP_LINT_NEW={val} 不關閘", lv0["status"] != "off" and lv0["blocked"], (lv0["status"], lv0["blocked"]))
+    real_blobs = m._nodehome_cat_blobs_capped
+    m._nodehome_cat_blobs_capped = lambda *a, **k: None       # 批次讀內容那一步逾時或 git 失敗
+    try:
+        c5, e5 = m._tg_analyze(root, mb, h0)
+    finally:
+        m._nodehome_cat_blobs_capped = real_blobs
+    check("S13 r3 git 讀不出內容:回錯誤(記成沒跑完),不列成可放行的 tq/unreadable", c5 is None and e5, (c5, e5))
+    # 自動放行的原因跟說明是同一句(範圍算不出來、專案有宣告檢查工具)
+    ra, ca = _tqg_gate_repo()
+    (ra / ".lumos").mkdir(exist_ok=True)
+    (ra / ".lumos" / "lint.json").write_text('{"kt": ["true {LINT_FILES} {LINT_SARIF_OUT}"]}', encoding="utf-8")
+    ha = ca({".lumos/lint.json": (ra / ".lumos" / "lint.json").read_text(encoding="utf-8")})
+    lva = _tqg_verdict(ra, "a" * 40 + f"..{ha}")
+    check("★前置★ 這個樣本走自動放行", lva["status"] == "env-unavailable" and lva["autopass"], (lva["status"], lva["autopass"]))
+    check("S13 r3 自動放行的原因有寫、跟說明是同一句", lva["autopass_reason"] and lva["autopass_reason"] == lva["reason"], (lva["autopass_reason"], lva["reason"]))
+    # 代碼審 r4:另外三個自動放行出口也各寫原因(依賴宣告壞掉、放行檔壞掉、git 算不出改動清單)
+    check("S13 r4 依賴宣告壞掉:自動放行的原因寫依賴宣告", "lint-deps" in (lvd.get("autopass_reason") or ""), lvd.get("autopass_reason"))
+    rw2, cw2 = _tqg_gate_repo()
+    (rw2 / ".lumos").mkdir(exist_ok=True)
+    (rw2 / ".lumos" / "lint.json").write_text('{"kt": ["true {LINT_FILES} {LINT_SARIF_OUT}"]}', encoding="utf-8")
+    mbw2 = cw2({".lumos/lint.json": (rw2 / ".lumos" / "lint.json").read_text(encoding="utf-8")})
+    (rw2 / ".lumos" / "lint-waivers.json").write_text("{壞", encoding="utf-8")
+    hw2 = cw2({".lumos/lint-waivers.json": "{壞", "app/src/main/java/x/A.kt": "package x\nfun a() = 1\n"})
+    lvw2 = _tqg_verdict(rw2, f"{mbw2}..{hw2}")
+    check("S13 r4 放行檔壞掉、沒有作弊候選:自動放行的原因寫放行檔", lvw2["autopass"] and "放行檔" in (lvw2.get("autopass_reason") or ""),
+          (lvw2["status"], lvw2.get("autopass_reason")))
+    real_cf = m._lint_new_changed_files
+    m._lint_new_changed_files = lambda *a, **k: ([], "git 算不出改動清單(測試注入)")
+    try:
+        lvc = _tqg_verdict(rw2, f"{mbw2}..{hw2}")
+    finally:
+        m._lint_new_changed_files = real_cf
+    check("S13 r4 git 算不出改動清單:自動放行的原因寫那一句", lvc.get("autopass_reason") == "git 算不出改動清單(測試注入)", (lvc["status"], lvc.get("autopass_reason")))
+
+
+def t_lint_new_warn_off_and_relax():
+    """[S14] warn 逐條「提醒:」印、有候選記 warned;off 與環境變數跳過時比對照跑、有候選(或比對出錯,見 S13)才記帳;推送範圍本身放寬
+    照起點判、記 relax-deferred(新分支首推的空樹起點改用主線分岔點那一版);沒有主線的新 repo 第一次推送照工作目錄判;
+    只在工作目錄改照工作目錄。翻紅釘:off 早退不跑比對、放寬偵測拿掉、空樹起點不換分岔點、warn 小結不印逐條 → 紅。"""
+    import json as _j
+    m = _tqg_module()
+    # warn
+    root, commit = _tqg_gate_repo({"lint_new": {"gate": "warn"}})
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    h = _tqg_ignore(root, commit)
+    blk, lv = _tqg_step(root, f"{mb}..{h}")
+    check("S14 warn 不擋", blk is None and lv["status"] == "warn" and lv["new"], (lv["status"], lv["reason"]))
+    say = _tqg_say(m._cl_say_ok_extras, None)
+    check("S14 warn 逐條以「提醒:」開頭印出", f"  提醒:{_TQG_T}:" in say and "[tq/skip-added]" in say, say[-400:])
+    check("S14 warn 小結寫只報不擋、不說跑了 0 條檢查命令", "提醒:新增告警閘只報不擋,有 1 條" in say and "跑了 0 條" not in say, say[-400:])
+    check("S14 warn 有比對候選記一筆 warned", len(_tqg_ledger(root, "warned")) == 1, _tqg_ledger(root))
+    # off:比對照跑,有候選才記
+    root, commit = _tqg_gate_repo({"lint_new": {"gate": "off"}})
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    h0 = commit({"README.md": "x\n"})
+    blk, lv = _tqg_step(root, f"{mb}..{h0}")
+    check("S14 off 沒候選不寫帳", blk is None and lv["status"] == "off" and not _tqg_ledger(root), _tqg_ledger(root))
+    h = _tqg_ignore(root, commit)
+    blk, lv = _tqg_step(root, f"{mb}..{h}")
+    check("S14 off 時比對照樣在背後跑、有候選記一筆 skipped", blk is None and len(_tqg_ledger(root, "skipped")) == 1,
+          (lv["events"], _tqg_ledger(root)))
+    # 環境變數跳過
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    h = _tqg_ignore(root, commit)
+    blk, lv = _tqg_step(root, f"{mb}..{h}", env={"LUMOS_SKIP_LINT_NEW": "1"})
+    check("S14 LUMOS_SKIP_LINT_NEW 時比對照跑、有候選記一筆 skipped-env",
+          blk is None and lv["status"] == "off" and len(_tqg_ledger(root, "skipped-env")) == 1, _tqg_ledger(root))
+    # 推送範圍本身放寬:照起點判
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    commit({".lumos/config.json": _j.dumps({"lint_new": {"gate": "warn"}})})
+    h = _tqg_ignore(root, commit)
+    check("★前置★ 工作目錄的設定已經是 warn", m._lint_new_config(root)["mode"] == "warn", "")
+    blk, lv = _tqg_step(root, f"{mb}..{h}")
+    check("S14 範圍把閘放寬時照起點的值判(擋)", blk is not None and lv["mode"] == "block", (lv["mode"], lv["status"]))
+    check("S14 放寬時印提醒、記一筆 relax-deferred",
+          any("放寬" in w for w in lv["warnings"]) and len(_tqg_ledger(root, "relax-deferred")) == 1, (lv["warnings"], _tqg_ledger(root)))
+    # 只在工作目錄改:照工作目錄
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    h = _tqg_ignore(root, commit)
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": {"gate": "warn"}}), encoding="utf-8")
+    blk, lv = _tqg_step(root, f"{mb}..{h}")
+    check("S14 只在工作目錄改、沒提交時照工作目錄的值", blk is None and lv["status"] == "warn" and not _tqg_ledger(root, "relax-deferred"),
+          (lv["status"], _tqg_ledger(root)))
+    # 範圍把閘放寬、但工作目錄已經改回 block:照工作目錄判,不記放寬帳
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    commit({".lumos/config.json": _j.dumps({"lint_new": {"gate": "off"}})})
+    h = _tqg_ignore(root, commit)
+    (root / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": {"gate": "block"}}), encoding="utf-8")
+    blk, lv = _tqg_step(root, f"{mb}..{h}")
+    check("S14 範圍放寬但工作目錄已經是 block:照 block 擋、不記放寬帳", blk is not None and not _tqg_ledger(root, "relax-deferred"),
+          (lv["mode"], _tqg_ledger(root)))
+    # 健檢的計數:這幾種新帳各自數得出來
+    led = root / "docs" / ".governance-log.jsonl"
+    import time as _time
+    now = _time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
+    led.write_text("".join(_j.dumps({"ts": now, "gate": "lint-new", "kind": k, "hard": False}) + "\n"
+                           for k in ("skipped", "skipped-env", "skipped-env", "warned", "relax-deferred", "no-baseline", "waived")),
+                   encoding="utf-8")
+    check("S14 健檢把 skipped、skipped-env、warned、relax-deferred、no-baseline 各自數出來(waived 不算)",
+          m._lint_new_kind_counts(root) == {"skipped": 1, "skipped-env": 2, "warned": 1, "relax-deferred": 1, "no-baseline": 1},
+          m._lint_new_kind_counts(root))
+
+    # 代碼審 r1:新分支首推(起點是空樹)時也看得出這次推送放寬了閘;沒有主線的新 repo 照工作目錄判、不記放寬帳
+    root, commit = _tqg_gate_repo()
+    commit({".lumos/config.json": _j.dumps({"lint_new": {"gate": "off"}})})
+    h = _tqg_ignore(root, commit)
+    blk, lv = _tqg_step(root, f"{m._EMPTY_TREE_SHA}..{h}")
+    check("S14 r1 新分支首推把閘關掉:照主線分岔點那版判(擋)、記 relax-deferred",
+          blk is not None and len(_tqg_ledger(root, "relax-deferred")) == 1, (lv["mode"], lv["status"], _tqg_ledger(root)))
+    r2 = Path(tempfile.mkdtemp(prefix="gctl-tqgg-new-"))
+    _e2e_tgit(r2, "init", "-q")
+    (r2 / "docs" / "t-knowledge").mkdir(parents=True)
+    (r2 / "docs" / "t-knowledge" / ".keep").write_text("", encoding="utf-8")
+    (r2 / ".lumos").mkdir()
+    (r2 / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": {"gate": "warn"}}), encoding="utf-8")
+    _e2e_tgit(r2, "add", "-A")
+    _e2e_tgit(r2, "commit", "-qm", "first")
+    _e2e_tgit(r2, "branch", "-M", "work")
+    tip2 = _e2e_tgit(r2, "rev-parse", "HEAD").strip()
+    blk, lv = _tqg_step(r2, f"{m._EMPTY_TREE_SHA}..{tip2}")
+    check("S14 r1 沒有主線的新 repo 第一次推送照工作目錄的 warn 判、不記放寬帳",
+          lv["mode"] == "warn" and not _tqg_ledger(r2, "relax-deferred"), (lv["mode"], _tqg_ledger(r2)))
+
+
+def t_lint_waive_ai_marking():
+    """[S15] lint-waive 理由門檻、終端答 y 記 human、答 n 不放、沒終端記 ai;--list 與健檢列出 AI 放的;--ack --all 只在終端確認後標;舊紀錄當人放的。
+    翻紅釘:理由門檻改回非空、origin 一律 human、--ack 沒終端也標、舊紀錄沒 origin 當 ai → 紅。"""
+    import json as _j
+    import os
+    import subprocess as sp
+    if not hasattr(os, "openpty"):
+        raise _SrcOnly("非 POSIX(要 os.openpty 模擬終端機),這段沒驗到")
+    root, commit = _tqg_gate_repo()
+    wf = root / ".lumos" / "lint-waivers.json"
+
+    def recs():
+        return {w["key"]: w for w in _j.loads(wf.read_text(encoding="utf-8"))["waivers"]} if wf.is_file() else {}
+
+    def lw(*a, tty="/nonexistent-tty"):
+        return sp.run([sys.executable, GRAPHCTL, "lint-waive", *a, "--repo", str(root)], capture_output=True, text=True, cwd=str(root),
+                      stdin=sp.DEVNULL, env=_e2e_isolated_env(_e2eg_env({"LUMOS_TTY": tty})))
+
+    def with_pty(answer, *a):
+        master, slave = os.openpty()
+        try:
+            os.write(master, answer)
+            return lw(*a, tty=os.ttyname(slave))
+        finally:
+            os.close(master)
+            os.close(slave)
+    check("S15 理由少於 10 個字被拒", lw("k0", "--note", "誤報 誤報").returncode == 2 and not recs(), "")
+    check("S15 理由沒有實字被拒", lw("k0", "--note", "。。。。。。。。。。。。").returncode == 2 and not recs(), "")
+    r = with_pty(b"n\n", "k1", "--note", "規則誤判了測試夾具的寫法")
+    check("S15 終端答 n 不放行、回 1", r.returncode == 1 and "k1" not in recs(), (r.stdout + r.stderr)[-300:])
+    r = with_pty(b"y\n", "k1", "--note", "規則誤判了測試夾具的寫法")
+    check("S15 終端答 y 記 origin: human", r.returncode == 0 and recs().get("k1", {}).get("origin") == "human", (r.stderr[-300:], recs()))
+    r = lw("k2", "--note", "規則誤判了測試夾具的寫法")
+    who = os.environ.get("USER") or os.environ.get("USERNAME") or "unknown"
+    check("S15 沒有互動終端記 origin: ai、by 照舊記帳號", r.returncode == 0 and recs()["k2"]["origin"] == "ai" and recs()["k2"]["by"] == who,
+          recs().get("k2"))
+    cur = _j.loads(wf.read_text(encoding="utf-8"))
+    cur["waivers"].append({"key": "k3", "rule": "r", "file": "f", "reason": "舊紀錄", "by": "ai", "ts": "2026-01-01T00:00:00"})
+    wf.write_text(_j.dumps(cur), encoding="utf-8")
+    out = lw("--list").stdout
+    check("S15 --list 標出 AI 放的、還沒人看過", "k2" in out and out.count("AI 放的,還沒人看過") == 1, out)
+    check("S15 沒有 origin 欄的舊紀錄(by 寫 ai)當人放的", "k3" in out and "k3  f [r] — 舊紀錄\n" in out, out)
+    commit({".lumos/lint-waivers.json": wf.read_text(encoding="utf-8")})
+    d = _e2e_run(root, "doctor", env=_e2eg_env()).stdout
+    check("S15 健檢列出還沒人看過的 AI 放行", "1 條是 AI 放的、還沒人看過" in d, d[-600:])
+    m = _tqg_module()
+    m._codeloop_guard_verdict.last_lint_new = {"ai_pending": m._lint_waivers_ai_pending(root)}
+    say = _tqg_say(m._cl_say_lint_waive_notes)
+    check("S15 推送前小結列出還沒人看過的 AI 放行", "提醒:新增告警閘有 1 筆 AI 放行還沒人看過" in say, say)
+    r = lw("--ack", "--all")
+    check("S15 --ack --all 沒有互動終端拒絕", r.returncode == 1 and recs()["k2"].get("acked") is not True, (r.stderr[-200:], recs()["k2"]))
+    r = with_pty(b"y\n", "--ack", "--all")
+    check("S15 --ack --all 終端確認後標成看過", r.returncode == 0 and recs()["k2"].get("acked") is True and recs()["k2"].get("acked_by"),
+          (r.stdout + r.stderr, recs()["k2"]))
+    check("S15 標過之後 --list 不再列", "AI 放的,還沒人看過" not in lw("--list").stdout, "")
+
+    # 代碼審 r1:9 字拒、10 字收;終端在但沒人答(逾時)記 ai;--ack <指紋> 只標那一條;問人時印規則與檔案;健檢列出關閘跳過的次數
+    check("S15 r1 去掉空白 9 個字被拒", lw("k5", "--note", "一二三四五六七八九").returncode == 2 and "k5" not in recs(), "")
+    check("S15 r1 去掉空白 10 個字收", lw("k5", "--note", "一二三四五六七八九十").returncode == 0 and "k5" in recs(), recs().get("k5"))
+    master, slave = os.openpty()
+    try:
+        r = sp.run([sys.executable, GRAPHCTL, "lint-waive", "k6", "--note", "規則誤判了測試夾具的寫法", "--rule", "tq/skip-added",
+                    "--file", "app/src/test/X.kt", "--repo", str(root)], capture_output=True, text=True, cwd=str(root), stdin=sp.DEVNULL,
+                   env=_e2e_isolated_env(_e2eg_env({"LUMOS_TTY": os.ttyname(slave), "LUMOS_TTY_TIMEOUT": "1"})))
+        import select as _sel
+        shown = b""
+        while _sel.select([master], [], [], 0.2)[0]:
+            shown += os.read(master, 4096)
+    finally:
+        os.close(master)
+        os.close(slave)
+    check("S15 r1 終端在但沒人答(逾時)記 origin: ai", r.returncode == 0 and recs().get("k6", {}).get("origin") == "ai", (r.stderr[-200:], recs().get("k6")))
+    check("S15 r1 問人時印出規則與檔案", "tq/skip-added" in shown.decode("utf-8", "replace") and "app/src/test/X.kt" in shown.decode("utf-8", "replace"),
+          shown[-300:])
+    lw("k7", "--note", "規則誤判了測試夾具的寫法")
+    r = with_pty(b"y\n", "k7", "--ack")
+    check("S15 r1 --ack <指紋> 只標那一條", r.returncode == 0 and recs()["k7"].get("acked") is True and recs()["k6"].get("acked") is not True,
+          (r.stderr[-200:], recs()["k6"], recs()["k7"]))
+    import time as _tt
+    led = root / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") if led.is_file() else "", encoding="utf-8")
+    with open(led, "a", encoding="utf-8") as fh:
+        fh.write(_j.dumps({"ts": _tt.strftime("%Y-%m-%dT%H:%M:%S+08:00"), "gate": "lint-new", "kind": "skipped", "hard": False}) + "\n")
+    d = _e2e_run(root, "doctor", "--verbose", env=_e2eg_env()).stdout
+    check("S15 r1 健檢列出關閘時作弊比對沒判的次數(有候選或比對出錯)", "設定關掉時作弊比對沒判(有候選或比對出錯) 1 次" in d, d[-600:])
+
+    # 代碼審 r2:問人提示標明規則與檔案是放行指令帶入、未核對;放行時間帶時區
+    check("S15 r2 問人提示標明規則與檔案未核對", "未核對" in shown.decode("utf-8", "replace"), shown[-300:])
+    import re as _re2
+    check("S15 r2 放行紀錄的時間帶時區", _re2.search(r"[+-]\d\d:\d\d$", recs()["k6"].get("ts", "")) is not None, recs()["k6"].get("ts"))
+
+    # 代碼審 r3:--list 印外來文字前清控制字元(理由裡的換行與 ESC 不能偽造一行放行或藏掉「AI 放的」標記)
+    lw("k8", "--note", "真的是大型測試資料不是作弊\x1b[8m", "--rule", "tq/skip-added", "--file", "X.kt")
+    lw("k9", "--note", "真的是大型測試資料不是作弊\n  cccc3333dddd4444  Other.kt [tq/x] — 假的一筆", "--rule", "tq/skip-added", "--file", "X.kt")
+    out = lw("--list").stdout
+    check("S15 r3 --list 不帶 ESC、理由裡的換行不切出新的一行", "\x1b" not in out and not any(x.startswith("  cccc3333dddd4444") for x in out.split("\n")), out[-400:])
+
+    # 代碼審 r4:--list 的檔名、規則欄也清控制字元(不只理由)
+    lw("k10", "--note", "規則誤判了測試夾具的寫法", "--rule", "tq/skip-added\x1b[8m", "--file", "X.kt\x1b[8m")
+    out10 = lw("--list").stdout
+    check("S15 r4 --list 的檔名與規則欄不帶 ESC", "\x1b" not in out10, out10[-300:])
+
+
+# ── 規格閘紅燈版(Projects/規格閘紅燈測試快照_計劃 S1 到 S11)────────────────────────────────────────
+# 比對那半:臨時 repo 的主線只有一支既有測試與一行治理帳;推送那一版放新測試、紅燈版 JSON 與指到它的留痕那一行,
+# 直接呼叫比對工具。寫入那半:半套規格閘 fixture 換成 kotlin-junit,假執行器看標記檔決定紅綠。
+_RB_OTHER = "    @Test\n    fun other() { assertEquals(1, f()) }\n"
+_RB_LEDGER0 = '{"gate": "doctor-run", "kind": "ran"}'
+
+
+def _rb_fn(body, ann="@Test", name="checkout_discount"):
+    return f"    {ann}\n    fun {name}() {{\n{body}\n    }}\n"
+
+
+def _rb_snap(token, file_text, name="checkout_discount", clauses=("S1",), path=None, key=None, version=1, ts="2026-11-03T10:00:00+08:00",
+             data=None, rec_patch=None):
+    """一份紅燈版 → (紅燈版路徑, JSON 位元組, 治理帳那一行)。data 給了就用它當檔案內容(改壞用);rec_patch(紀錄) 可改壞那一行。"""
+    import hashlib
+    import json as _j
+    path = path or _TQG_T
+    if data is None:
+        data = _j.dumps({"version": version, "tests": [{"name": name, "clauses": list(clauses), "path": path,
+                                                         "key": key or f"CalcTest.{name}"}],
+                         "files": {path: file_text}}, ensure_ascii=False).encode("utf-8")
+    rel = f"governance/redbase/甲/{token}.json"
+    rec = {"ts": ts, "gate": "spec-gate", "kind": "spec-gate-record", "hard": False, "nodes": ["Projects/甲_計劃.md"],
+           "token": token, "loop": "甲", "plan": "Projects/甲_計劃.md",
+           "redbase": {"path": rel, "sha256": hashlib.sha256(data).hexdigest()}}
+    if rec_patch:
+        rec_patch(rec)
+    return rel, data, _j.dumps(rec, ensure_ascii=False)
+
+
+def _rb_repo(main_extra=None):
+    """主線:一支既有測試 + 一行治理帳 → (root, 主線提交, commit)。"""
+    tree = {_TQG_T: _tqg_kt(_RB_OTHER), "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n"}
+    tree.update(main_extra or {})
+    return _tqg_repo(tree)
+
+
+def _rb_push(commit, test_body, snaps, files=None, ledger_extra=(), omit=()):
+    """推送那一版:測試檔有 other 與 test_body(None=不放);治理帳接上每份紅燈版的那一行;紅燈版檔照放(omit 裡的不放)。"""
+    tree = {_TQG_T: _tqg_kt(_RB_OTHER, *([test_body] if test_body else []))}
+    lines = [_RB_LEDGER0]
+    for rel, data, line in snaps:
+        if rel not in omit:
+            tree[rel] = data
+        lines.append(line)
+    tree["docs/.governance-log.jsonl"] = "\n".join(lines + list(ledger_extra)) + "\n"
+    tree.update(files or {})
+    return commit(tree)
+
+
+def _rb_only(cands, prefix="tq/redbase"):
+    return [c for c in cands if c["rule"].startswith(prefix)]
+
+
+def t_tq_guard_redbase_weakened():
+    """[S2] 分岔點沒有、紅燈版有的新測試,拿紅燈版當前一版:改 expected、放寬斷言、新加 expected=、調大逾時要列 tq/redbase-weakened;
+    一字未改、只改被測參數、只改正式程式、expected 與被測呼叫同時改(這一批不比)不列;新測試帶 @Ignore 只列 tq/skip-added 一條;
+    終點沒斷言只列 tq/no-assertion 一條。翻紅釘:紅燈版沒當前一版、丟 no-assertion 的過濾拿掉、終點無斷言不跳過 → 紅。"""
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+
+    def case(body, files=None, red_text=red):
+        root, mb, commit = _rb_repo()
+        h = _rb_push(commit, body, [_rb_snap("SPEC-aaaa0001", red_text)], files=files)
+        return _tqg_cands(root, mb, h)
+    c0 = case(_rb_fn("        assertEquals(900, checkout(1000))"))
+    check("★前置★ 測試一字未改:沒有任何作弊候選", [c["rule"] for c in c0] == [], c0)
+    for label, body, want in (("expected 被改", _rb_fn("        assertEquals(800, checkout(1000))"), "預期值"),
+                              ("放寬斷言", _rb_fn("        assertTrue(checkout(1000) > 0)"), "斷言"),
+                              ("新加 expected=", _rb_fn("        assertEquals(900, checkout(1000))",
+                                                       ann="@Test(expected = IllegalStateException::class)"), "跳過")):
+        cs = case(body)
+        rb = [c for c in cs if c["rule"] == "tq/redbase-weakened"]
+        check(f"S2 {label}要列 tq/redbase-weakened", len(rb) >= 1 and rb[0]["file"] == _TQG_T, cs)
+        check(f"S2 {label}的原因帶紅燈版 token 與子規則", rb and "SPEC-aaaa0001" in rb[0]["message"] and want in rb[0]["message"], rb)
+    red_to = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))", ann="@Test(timeout = 30)"))
+    cs = case(_rb_fn("        assertEquals(900, checkout(1000))", ann="@Test(timeout = 45)"), red_text=red_to)
+    check("S2 逾時 30 調成 45 要列", any(c["rule"] == "tq/redbase-weakened" and "逾時" in c["message"] for c in cs), cs)
+    for label, body, files in (("只改被測參數", _rb_fn("        assertEquals(900, checkout(1000L))"), None),
+                               ("只改正式程式", _rb_fn("        assertEquals(900, checkout(1000))"),
+                                {"app/src/main/java/x/Calc.kt": "package x\nfun checkout(n: Int) = n * 9 / 10\n"}),
+                               ("expected 與被測呼叫同時改(這一批不比)", _rb_fn("        assertEquals(800, checkout(Cart(1000)))"), None)):
+        cs = case(body, files)
+        check(f"S2 {label}不列紅燈版候選", _rb_only(cs) == [], cs)
+    cs = case(_rb_fn("        assertEquals(900, checkout(1000))", ann="@Ignore\n    @Test"))
+    check("S2 新測試帶 @Ignore:只列 tq/skip-added 一條", [c["rule"] for c in cs] == ["tq/skip-added"], cs)
+    cs = case(_rb_fn("        checkout(1000)"))
+    check("S2 終點沒有斷言:只列 tq/no-assertion 一條", [c["rule"] for c in cs] == ["tq/no-assertion"], cs)
+    cs = case(_rb_fn("        try { assertEquals(900, checkout(1000)) } catch (e: AssertionError) { }"))
+    check("S2 推送版 catch 吞斷言:只列分岔點那條 tq/catch-no-fail,紅燈版不重複列",
+          [c["rule"] for c in cs].count("tq/catch-no-fail") == 1 and not any("吞" in c["message"] or "catch" in c["message"]
+                                                                          for c in cs if c["rule"] == "tq/redbase-weakened"), cs)
+
+
+def t_tq_guard_redbase_chain():
+    """[S3] 同一支測試有好幾份紅燈版時照治理帳行序依序兩兩比、最後一份跟終點比:骨架→900→終點 800 要列;900→800(仍紅)→終點 800 要列;
+    兩份的 ts 寫反照行序判。只有骨架一份、終點補上斷言時不列(天花板)。翻紅釘:只取最早一份、改照 ts 排、只比最後一份 → 紅。"""
+    sk = _tqg_kt(_RB_OTHER, _rb_fn("        TODO()"))
+    r900 = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    r800 = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(800, checkout(1000))"))
+    tip = _rb_fn("        assertEquals(800, checkout(1000))")
+
+    def case(snaps):
+        root, mb, commit = _rb_repo()
+        return _rb_only(_tqg_cands(root, mb, _rb_push(commit, tip, snaps)))
+    cs = case([_rb_snap("SPEC-c0000001", sk), _rb_snap("SPEC-c0000002", r900)])
+    check("S3 骨架→900→終點 800 要列", any(c["rule"] == "tq/redbase-weakened" and "SPEC-c0000002" in c["message"] for c in cs), cs)
+    cs = case([_rb_snap("SPEC-c0000003", r900), _rb_snap("SPEC-c0000004", r800)])
+    check("S3 900→800(仍紅)→終點 800 要列", any(c["rule"] == "tq/redbase-weakened" and "SPEC-c0000003" in c["message"] for c in cs), cs)
+    cs = case([_rb_snap("SPEC-c0000005", r900, ts="2026-11-03T12:00:00+08:00"),
+               _rb_snap("SPEC-c0000006", r800, ts="2026-11-03T09:00:00+08:00")])
+    check("S3 兩份 ts 寫反照行序判:只有第一份→第二份那一步命中(照 ts 排會多出第二份→第一份)",
+          sorted({c["message"].split("相對規格閘紅燈版 ", 1)[-1].split(" ", 1)[0] for c in cs}) == ["SPEC-c0000005"], cs)
+    cs = case([_rb_snap("SPEC-c0000007", sk)])
+    check("S3 天花板:只有骨架一份、終點補斷言不列", cs == [], cs)
+    m = _tqg_module()
+    cs = case([_rb_snap("SPEC-c0000008", r900), _rb_snap("SPEC-c0000009", sk)])
+    nowhy = m._TG_WHY["tq/no-assertion"][0]
+    check("S3 中間一份紅燈版沒有斷言:那一步不把「沒有斷言」列成紅燈版候選(分岔點那條負責)",
+          cs and not any(nowhy in c["message"] for c in cs), cs)
+
+
+def t_tq_guard_redbase_unreadable():
+    """[S4] 欄位形狀錯、路徑出界、終點沒有那支檔(工作目錄有→講 git add)、不是 JSON、version 不認得、sha256 不符、
+    內嵌檔過不了病態輸入處理、超過總量、孤兒檔 → 各列一條 tq/redbase-unreadable(不當成沒有紅燈版)。
+    翻紅釘:任一條驗證拿掉、孤兒檔不查、沒提交當成沒有紅燈版 → 紅。"""
+    m = _tqg_module()
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    body = _rb_fn("        assertEquals(800, checkout(1000))")
+
+    def case(snap, omit=(), files=None, worktree=None):
+        root, mb, commit = _rb_repo()
+        h = _rb_push(commit, body, [snap], files=files, omit=omit)
+        for p, data in (worktree or {}).items():
+            (root / p).parent.mkdir(parents=True, exist_ok=True)
+            (root / p).write_bytes(data)
+        return _rb_only(_tqg_cands(root, mb, h))
+    variants = (
+        ("欄位形狀錯", _rb_snap("SPEC-d0000001", red, rec_patch=lambda r: r.update(redbase={"path": 5})), "欄位形狀"),
+        ("指紋欄位不是 64 位十六進位", _rb_snap("SPEC-d0000010", red, rec_patch=lambda r: r["redbase"].update(sha256="abc")), "欄位形狀"),
+        ("路徑出界", _rb_snap("SPEC-d0000002", red, rec_patch=lambda r: r["redbase"].update(path="docs/x.json")), "不在 governance/redbase/"),
+        ("不是 JSON", _rb_snap("SPEC-d0000003", red, data=b"{not json"), "JSON"),
+        ("version 不認得", _rb_snap("SPEC-d0000004", red, version=2), "版本"),
+        ("內嵌檔有超長行", _rb_snap("SPEC-d0000005", red.replace("class CalcTest {", "class CalcTest {\n// " + "x" * 25000)), "超過"),
+    )
+    for label, snap, why in variants:
+        cs = case(snap)
+        check(f"S4 {label}要列 tq/redbase-unreadable 並講原因", any(c["rule"] == "tq/redbase-unreadable" and why in c["message"] for c in cs), cs)
+    rel, data, line = _rb_snap("SPEC-d0000006", red)
+    cs = case((rel, data.replace(b"900", b"901"), line))
+    check("S4 sha256 對不上要列", [c["rule"] for c in cs] == ["tq/redbase-unreadable"], cs)
+    rel, data, line = _rb_snap("SPEC-d0000007", red)
+    cs = case((rel, data, line), omit=(rel,), worktree={rel: data})
+    check("S4 終點沒有、工作目錄有:列且講 git add", cs and cs[0]["rule"] == "tq/redbase-unreadable" and "git add" in cs[0]["message"], cs)
+    check("S4 還沒提交的救法講到要提交、被忽略時用 -f", bool(cs) and "提交" in cs[0]["message"] and "-f" in cs[0]["message"], cs)
+    cs = case((rel, data, line), omit=(rel,))
+    check("S4 終點與工作目錄都沒有:列且講還原", cs and cs[0]["rule"] == "tq/redbase-unreadable" and "還原" in cs[0]["message"], cs)
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, body, [], files={"governance/redbase/甲/SPEC-d0000008.json": data})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S4 孤兒檔(沒有留痕指到)要列、救法講找回留痕", any(c["rule"] == "tq/redbase-unreadable" and "留痕" in c["message"]
+                                                          and "找回" in c["message"] for c in cs), cs)
+    for bad in ("governance/redbase/../x.json", "governance/redbase/a\\b.json", "governance/redbase/a\x01.json",
+                "governance/redbase//x.json", "governance/redbase/x.txt"):
+        check(f"S4 紅燈版路徑 {bad!r} 不收", not m._tg_rb_path_ok(bad), bad)
+    check("★前置★ 合法路徑收", m._tg_rb_path_ok("governance/redbase/甲/SPEC-x.json"), "")
+    cs = case(_rb_snap("SPEC-d0000011", red, path="../escape.kt"))
+    check("S4 紅燈版內嵌的測試檔路徑出界:列 unreadable", cs and {c["rule"] for c in cs} == {"tq/redbase-unreadable"}
+          and any("路徑" in c["message"] for c in cs), cs)
+    # 治理帳與紅燈版都沒提交(工作目錄有):照樣列,不靜默
+    root, mb, commit = _rb_repo()
+    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, body)})
+    rel12, data12, line12 = _rb_snap("SPEC-d0000012", red)
+    (root / rel12).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel12).write_bytes(data12)
+    (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n" + line12 + "\n", encoding="utf-8")
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S4 治理帳與紅燈版都還沒提交(推的就是工作目錄的頂端):列 unreadable 講還沒提交",
+          [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "還沒提交" in cs[0]["message"], cs)
+    h2 = commit({"README.md": "x\n"})
+    check("★前置★ 頂端往前走了", h2 != h, "")
+    rel15, data15, _l15 = _rb_snap("SPEC-d0000015", red)
+    (root / rel15).write_bytes(data15)            # 頂端提交之後,工作目錄又多一份沒提交的紅燈版
+    check("★前置★ 工作目錄真的有一份沒提交的紅燈版", rel15 in m._tg_rb_pending(root, h2), m._tg_rb_pending(root, h2))
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S4 r2 推的不是工作目錄的頂端(舊提交):工作目錄裡別的沒提交紅燈版不算", cs == [], cs)
+    # r2:合併時治理帳的留痕被弄丟 → 孤兒檔照樣拿來比,訊息講找回、不要刪
+    root, mb, commit = _rb_repo()
+    rel13, data13, _line13 = _rb_snap("SPEC-d0000013", red)
+    h = _rb_push(commit, body, [], files={rel13: data13})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    orphan = [c for c in cs if c["rule"] == "tq/redbase-unreadable"]
+    check("S4 r2 孤兒檔照樣拿來比:改弱照列", any(c["rule"] == "tq/redbase-weakened" for c in cs), cs)
+    check("S4 r2 孤兒檔訊息講從版本紀錄找回、不要刪", orphan and "git log" in orphan[0]["message"] and "不要刪" in orphan[0]["message"]
+          and "刪掉它" not in orphan[0]["message"], orphan)
+    # r2:紅燈版檔在這條分支被刪了 → 列出來,並照它最後的內容比
+    root, mb, commit = _rb_repo()
+    rel14, data14, line14 = _rb_snap("SPEC-d0000014", red)
+    commit({_TQG_T: _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))")), rel14: data14,
+            "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n" + line14 + "\n"})
+    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, body), rel14: None, "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n"})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S4 r2 紅燈版檔在這條分支被刪了:列出來講還原", any(c["rule"] == "tq/redbase-unreadable" and "被刪" in c["message"] for c in cs), cs)
+    check("S4 r2 被刪的紅燈版照它最後的內容比:改弱照列", any(c["rule"] == "tq/redbase-weakened" for c in cs), cs)
+    snap9 = _rb_snap("SPEC-d0000009", red)
+    tf = len(_tqg_kt(_RB_OTHER).encode("utf-8")) + len(_tqg_kt(_RB_OTHER, body).encode("utf-8"))
+    saved = m._TG_MAX_TOTAL
+    m._TG_MAX_TOTAL = tf + len(snap9[1]) // 2
+    try:
+        cs = case(snap9)
+    finally:
+        m._TG_MAX_TOTAL = saved
+    check("S4 加進去超過推送總量要列", [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "總量" in cs[0]["message"], cs)
+
+
+def t_tq_guard_redbase_loose():
+    """[S3][S4] 沒有留痕可排序的紅燈版(孤兒檔、這條分支刪掉的):不接進依序比的鏈,各自直接跟推送版比一次(代碼審 r3 單審席 F1:
+    接在鏈尾會倒著比、報錯理由、漏掉真正的預期值被改);刪掉偵測不被改名配對吃掉、刪了又加回不算、主線就有的不算、留痕還在的只列一條、
+    git 讀不出往上回錯、放行指紋不帶提交編號;git add -N 的也算還沒提交。翻紅釘:孤兒接鏈尾、拿掉 --no-renames、拿掉還活著或主線就有的
+    過濾、留痕還在仍另列、指紋帶提交編號、讀不出回空、只認第一欄的 A → 紅。"""
+    import subprocess as sp
+    m = _tqg_module()
+    sk = _tqg_kt(_RB_OTHER, _rb_fn("        TODO()"))
+    r900 = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    body = _rb_fn("        assertEquals(800, checkout(1000))")
+
+    def toks(cs):
+        return [c["message"].split("相對規格閘紅燈版 ", 1)[-1] for c in cs if c["rule"] == "tq/redbase-weakened"]
+
+    def real(cs, tok):
+        return any(t.startswith(f"{tok} → 推送版") and "預期值" in t for t in toks(cs))
+    # 孤兒骨架 + 有留痕的 900 → 推送版 800
+    root, mb, commit = _rb_repo()
+    sko = _rb_snap("SPEC-b0000001", sk)
+    h = _rb_push(commit, body, [_rb_snap("SPEC-b0000002", r900)], files={sko[0]: sko[1]})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("★前置★ 骨架那份真的是孤兒檔", any(c["rule"] == "tq/redbase-unreadable" and "SPEC-b0000001" in c["message"] for c in cs), cs)
+    check("S3 r3 孤兒骨架 + 有留痕的 900:列 900 → 推送版的預期值被改", real(cs, "SPEC-b0000002"), cs)
+    check("S3 r3 孤兒不接進鏈:不出現倒著比的「第 N 份紅燈版」", not any("份紅燈版" in t for t in toks(cs)), cs)
+    # 兩個孤兒,token 字典序跟先後無關:兩種順序都要抓到 900 → 800
+    for early, late in (("SPEC-00000001", "SPEC-ffffffff"), ("SPEC-ffffffff", "SPEC-00000001")):
+        root, mb, commit = _rb_repo()
+        a, b = _rb_snap(early, sk), _rb_snap(late, r900)
+        cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, body, [], files={a[0]: a[1], b[0]: b[1]})))
+        check(f"S3 r3 兩個孤兒(骨架是 {early}):照樣列 900 那份 → 推送版的預期值被改", real(cs, late), cs)
+    # 被刪的骨架(沒有留痕)+ 有留痕的 900
+    root, mb, commit = _rb_repo()
+    commit({sko[0]: sko[1]})
+    h = _rb_push(commit, body, [_rb_snap("SPEC-b0000002", r900)], files={sko[0]: None})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("★前置★ 骨架那份真的被列成被刪", any("被刪" in c["message"] and "SPEC-b0000001" in c["message"] for c in cs), cs)
+    check("S3 r3 被刪的骨架 + 有留痕的 900:列 900 → 推送版", real(cs, "SPEC-b0000002") and not any("份紅燈版" in t for t in toks(cs)), cs)
+    # 同一個提交刪舊的、加內容相近的新的:git 預設會配成改名,刪掉偵測不能漏
+    root, mb, commit = _rb_repo()
+    s1, s2 = _rb_snap("SPEC-f0000001", r900), _rb_snap("SPEC-f0000002", r900, clauses=("S2",))
+    commit({s1[0]: s1[1]})
+    h = _rb_push(commit, body, [s2], files={s1[0]: None})
+    out = m._tg_rb_deleted(root, mb, h)
+    check("S4 r3 刪舊加相近的新檔(會被配成改名):刪掉的照樣列", [p for _c, p in (out or [])] == [s1[0]], out)
+    # 主線就有的舊紅燈版被刪、同時加沒留痕的相近新檔:改動清單(起點對終點、-M)把新檔配成改名,照樣要當孤兒檔
+    root, mb, commit = _rb_repo({s1[0]: s1[1]})
+    h = commit({s1[0]: None, s2[0]: s2[1], _TQG_T: _tqg_kt(_RB_OTHER, body)})
+    ch = m._tg_changes(root, mb, h)
+    check("★前置★ 新檔在改動清單裡真的是改名", any(st == "R" and n == s2[0] for st, _o, n, _s, _g in ch), ch)
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S4 r3 孤兒檔在改動清單裡被配成改名:照樣列成孤兒", any("SPEC-f0000002" in c["message"] and "留痕" in c["message"] for c in cs), cs)
+    # 刪了又加回同一路徑:不算被刪
+    root, mb, commit = _rb_repo()
+    commit({s1[0]: s1[1]})
+    commit({s1[0]: None})
+    h = commit({s1[0]: s1[1]})
+    check("S4 r3 刪了又加回:不算被刪", m._tg_rb_deleted(root, mb, h) == [], m._tg_rb_deleted(root, mb, h))
+    # 主線就有的舊紅燈版,在這條分支被刪(計劃回退節就是這樣建議):不是這條分支的紅燈版,不列
+    old = _rb_snap("SPEC-f0000003", r900)
+    root, mb, commit = _rb_repo({old[0]: old[1]})
+    h = commit({old[0]: None, _TQG_T: _tqg_kt(_RB_OTHER, body)})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S4 r3 主線就有的紅燈版在分支被刪:不列", cs == [], cs)
+    # 留痕還在、檔被刪:只列一條,而且照刪掉前的內容比
+    root, mb, commit = _rb_repo()
+    s4 = _rb_snap("SPEC-f0000004", r900)
+    commit({s4[0]: s4[1]})
+    h = _rb_push(commit, body, [s4], omit=(s4[0],), files={s4[0]: None})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    unr = [c for c in cs if c["rule"] == "tq/redbase-unreadable"]
+    check("S4 r3 留痕還在、檔被刪:同一支只列一條 unreadable", len(unr) == 1 and "被刪" in unr[0]["message"], unr)
+    check("S4 r3 留痕還在、檔被刪:照刪掉前的內容比出改弱", real(cs, "SPEC-f0000004"), cs)
+    check("S4 r3 訊息不同時說沒辦法比又說拿內容來比", unr and not any("沒辦法比" in c["message"] and ("已照" in c["message"] or "來比" in c["message"])
+                                                       for c in unr), unr)
+    # r4:留痕還在、檔被刪的那一份仍在依序比的鏈裡(有留痕就排得出先後),而且照留痕的 sha256 核對刪掉前那一版
+    root, mb, commit = _rb_repo()
+    g1, g2 = _rb_snap("SPEC-f0000007", r900), _rb_snap("SPEC-f0000008", _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(700, checkout(1000))")))
+    commit({g1[0]: g1[1]})
+    h = _rb_push(commit, _rb_fn("        assertEquals(900, checkout(1000))"), [g1, g2], omit=(g1[0],), files={g1[0]: None})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("★前置★ 第一份真的被列成被刪", any("被刪" in c["message"] and "SPEC-f0000007" in c["message"] for c in cs), cs)
+    check("S3 r4 留痕還在、檔被刪的那一份照行序接在鏈裡:列第一份 → 第 2 份紅燈版", any(t.startswith("SPEC-f0000007 → 第 2 份紅燈版") for t in toks(cs)), cs)
+    root, mb, commit = _rb_repo()
+    g3 = _rb_snap("SPEC-f0000009", r900)
+    commit({g3[0]: g3[1].replace(b"900", b"800")})              # 刪掉前那一版跟留痕的 sha256 對不上
+    h = _rb_push(commit, _rb_fn("        assertEquals(700, checkout(1000))"), [g3], omit=(g3[0],), files={g3[0]: None})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    unr = [c for c in cs if c["rule"] == "tq/redbase-unreadable"]
+    check("S4 r4 留痕還在、檔被刪,刪掉前那一版被改過:照留痕核對、列 sha256 對不上", any("sha256" in c["message"] for c in unr), cs)
+    check("S4 r4 那一版沒拿來比時,訊息不說已經照內容比過", not any("已照" in c["message"] for c in unr), unr)
+    check("S4 r4 被改過的那一版不拿來比:不列改弱", not any(c["rule"] == "tq/redbase-weakened" for c in cs), cs)
+    # 放行指紋不帶提交編號(rebase、amend 後沿用)
+    p = "governance/redbase/甲/SPEC-f0000005.json"
+    k1 = [c["key"] for c in m._tg_rb_metas([], [], "h", [("a" * 40, p)])[1]]
+    k2 = [c["key"] for c in m._tg_rb_metas([], [], "h", [("b" * 40, p)])[1]]
+    check("S4 r3 被刪那條的指紋不隨刪掉它的提交編號變", k1 and k1 == k2, (k1, k2))
+    # git 讀不出:往上回錯,不當成沒刪過
+    saved = m._lens_git_dl
+    m._lens_git_dl = lambda *a, **k: None
+    try:
+        got = m._tg_rb_deleted(root, mb, h)
+        cands, err = m._tg_redbase_cands(root, mb, h, [], [], 0)
+    finally:
+        m._lens_git_dl = saved
+    check("S4 r3 查刪掉紀錄時 git 讀不出:回 None 不回空清單", got is None, got)
+    check("S4 r3 查刪掉紀錄時 git 讀不出:整段回錯誤", cands is None and err, (cands, err))
+    check("★前置★ 這個 repo 真的有分支刪掉的紅燈版", bool(m._tg_rb_deleted(root, mb, h)), m._tg_rb_deleted(root, mb, h))
+    saved = m._nodehome_cat_sizes
+    m._nodehome_cat_sizes = lambda *a, **k: None
+    try:
+        got = m._tg_rb_deleted(root, mb, h)
+    finally:
+        m._nodehome_cat_sizes = saved
+    check("S4 r3 查刪掉的檔還在不在時 git 讀不出:回 None 不回空清單", got is None, got)
+    # git add -N(只登記要加)的紅燈版也算還沒提交
+    root, mb, commit = _rb_repo()
+    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, body)})
+    s6 = _rb_snap("SPEC-f0000006", r900)
+    (root / s6[0]).parent.mkdir(parents=True, exist_ok=True)
+    (root / s6[0]).write_bytes(s6[1])
+    sp.run(["git", "-C", str(root), "add", "-N", s6[0]], capture_output=True)
+    st = sp.run(["git", "-C", str(root), "status", "--porcelain"], capture_output=True, text=True).stdout
+    check("★前置★ 那支檔是 add -N 的狀態( A)", " A " in st, st)
+    check("S4 r3 git add -N 的紅燈版也算還沒提交", s6[0] in m._tg_rb_pending(root, h), m._tg_rb_pending(root, h))
+
+
+def t_tq_guard_redbase_moved_or_missing():
+    """[S5] 搬家後函式鍵在改動清單的測試檔裡唯一 → 照比;刪掉、整支新測試檔先加後刪、終點有同名多載、搬到兩處 → tq/redbase-unmatched
+    (原因寫 token、測試名、條款編號);那支測試在分岔點就已存在時不看紅燈版。翻紅釘:找不到時當成沒有紅燈版、多載照猜、
+    分岔點已有仍套紅燈版 → 紅。"""
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    snap = _rb_snap("SPEC-e0000001", red, clauses=("S3",))
+    moved = "package y\nimport org.junit.Test\nclass CalcTest {\n" + _rb_fn("        assertEquals(800, checkout(1000))") + "}\n"
+    root, mb, commit = _rb_repo()
+    cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [snap], files={"app/src/test/java/y/CalcTest.kt": moved})))
+    check("S5 搬到別的檔、函式鍵唯一:照比、改 expected 照列", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+    root, mb, commit = _rb_repo()
+    cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [snap])))
+    check("S5 刪掉:列 unmatched 並寫 token、測試名、條款", [c["rule"] for c in cs] == ["tq/redbase-unmatched"]
+          and all(w in cs[0]["message"] for w in ("SPEC-e0000001", "checkout_discount", "S3")), cs)
+    newp = "app/src/test/java/x/NewTest.kt"
+    nsnap = _rb_snap("SPEC-e0000002", "package x\nimport org.junit.Test\nclass NewTest {\n" + _rb_fn("        assertEquals(1, g())") + "}\n",
+                     path=newp, key="NewTest.checkout_discount")
+    root, mb, commit = _rb_repo()
+    cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [nsnap])))
+    check("S5 整支新測試檔先加後刪:列 unmatched、原因講找不到", [c["rule"] for c in cs] == ["tq/redbase-unmatched"] and "找不到" in cs[0]["message"], cs)
+    # r2:分支內才新增的測試檔改名(類別沒改)後再改 expected:照搬家比,列改弱
+    oldp = "app/src/test/java/x/OldTest.kt"
+    osnap = _rb_snap("SPEC-e0000009", "package x\nimport org.junit.Test\nclass NewCalc {\n" + _rb_fn("        assertEquals(900, checkout(1000))") + "}\n",
+                     path=oldp, key="NewCalc.checkout_discount")
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, None, [osnap], files={"app/src/test/java/x/NewTest.kt": "package x\nimport org.junit.Test\nclass NewCalc {\n"
+                                                + _rb_fn("        assertEquals(800, checkout(1000))") + "}\n"})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S5 r2 分支內新增的測試檔改名後改 expected:照搬家比、列改弱", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+    # r2:補讀測試檔的總量要扣掉紅燈版已讀的
+    m = _tqg_module()
+    seen = []
+    real = m._nodehome_cat_blobs_capped
+    m._nodehome_cat_blobs_capped = lambda *a, **k: (seen.append(k.get("max_total_bytes")), real(*a, **k))[1]
+    try:
+        root, mb, commit = _rb_repo()
+        h = _rb_push(commit, None, [snap], files={"app/src/test/java/y/CalcTest.kt": moved})
+        _tqg_cands(root, mb, h)
+    finally:
+        m._nodehome_cat_blobs_capped = real
+    check("★前置★ 讀了三趟(推送內容、紅燈版、補讀)", len(seen) == 3, seen)
+    check("S5 r2 補讀的額度扣掉紅燈版已讀的", len(seen) == 3 and seen[2] == seen[1] - len(snap[1]), (seen, len(snap[1])))
+    over = _rb_fn("        assertEquals(1, f())") + "    @Test\n    fun checkout_discount(x: Int) {\n        assertEquals(800, checkout(x))\n    }\n"
+    root, mb, commit = _rb_repo()
+    cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, over, [snap])))
+    check("S5 終點有同名多載:不猜、列 unmatched", [c["rule"] for c in cs] == ["tq/redbase-unmatched"] and "多載" in cs[0]["message"], cs)
+    root, mb, commit = _rb_repo()
+    two = {f"app/src/test/java/{p}/CalcTest.kt": moved.replace("package y", f"package {p}") for p in ("y", "z")}
+    cs = _rb_only(_tqg_cands(root, mb, _rb_push(commit, None, [snap], files=two)))
+    check("S5 搬到兩處:列 unmatched", [c["rule"] for c in cs] == ["tq/redbase-unmatched"], cs)
+    bad = "package x\nimport org.junit.Test\nclass CalcTest {\n    fun broken() {\n}\n"
+    root, mb, commit = _rb_repo({_TQG_T: bad})
+    h = _rb_push(commit, None, [snap], files={_TQG_T: bad})
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S5 紅燈版記的測試檔在推送版括號配不平:列 unmatched、講沒比", [c["rule"] for c in cs] == ["tq/redbase-unmatched"]
+          and "配不平" in cs[0]["message"], cs)
+    root, mb, commit = _rb_repo({_TQG_T: _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))})
+    cs = _tqg_cands(root, mb, _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [snap]))
+    check("S5 分岔點已有那支測試:不看紅燈版,走分岔點比對", _rb_only(cs) == [] and any(c["rule"] == "tq/expected-changed" for c in cs), cs)
+
+
+def t_tq_guard_redbase_absent_unchanged():
+    """[S7] 治理帳與紅燈版資料夾都沒動:不讀治理帳、候選跟關掉紅燈版那段時逐字相同;紅燈版留痕只在分岔點那一版 → 當沒有;
+    起點是空樹 → 不用紅燈版;治理帳兩版各約 20 MB、行差約 1.5 萬行時讀取與行差 3 秒內、峰值 400 MB 內。
+    翻紅釘:沒動也讀帳、分岔點那一版的留痕也採計、空樹起點照用 → 紅。"""
+    import json as _j
+    import time as _t
+    import tracemalloc
+    m = _tqg_module()
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    root, mb, commit = _rb_repo()
+    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, "    @Ignore\n" + _rb_fn("        assertEquals(1, f())"))})
+    seen = []
+    real = m._residual_blob_at
+    m._residual_blob_at = lambda *a, **k: seen.append(a[2]) or real(*a, **k)
+    try:
+        c_on = _tqg_cands(root, mb, h)
+    finally:
+        m._residual_blob_at = real
+    real_rb = m._tg_redbase_cands
+    m._tg_redbase_cands = lambda *a, **k: ([], None)
+    try:
+        c_off = _tqg_cands(root, mb, h)
+    finally:
+        m._tg_redbase_cands = real_rb
+    check("S7 治理帳與紅燈版資料夾都沒動:不讀治理帳", seen == [], seen)
+    check("S7 候選與指紋跟關掉紅燈版那段時逐字相同", c_on == c_off and c_on, (c_on, c_off))
+    rel, data, line = _rb_snap("SPEC-f0000001", red)
+    root, mb, commit = _rb_repo({rel: data, "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n" + line + "\n"})
+    h = commit({_TQG_T: _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(800, checkout(1000))")),
+                "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n" + line + "\n" + '{"gate": "x", "kind": "y"}\n'})
+    check("S7 留痕只在分岔點那一版:當沒有紅燈版", _rb_only(_tqg_cands(root, mb, h)) == [], _tqg_cands(root, mb, h))
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [_rb_snap("SPEC-f0000002", red)])
+    check("★前置★ 同一份資料從主線起算會列", _rb_only(_tqg_cands(root, mb, h)) != [], "")
+    check("S7 起點是空樹:不用紅燈版", _rb_only(_tqg_cands(root, m._EMPTY_TREE_SHA, h)) == [], _tqg_cands(root, m._EMPTY_TREE_SHA, h))
+    # 效能:兩版各約 20 MB、行差約 1.5 萬行
+    filler = '{"gate": "doctor-run", "kind": "ran", "note": "%s", "i": %d}'
+    base_lines = [filler % ("x" * 140, i) for i in range(124000)]
+    head_lines = base_lines + [filler % ("y" * 140, i) for i in range(15000)]
+    root, mb, commit = _rb_repo({"docs/.governance-log.jsonl": "\n".join(base_lines) + "\n"})
+    h = commit({"docs/.governance-log.jsonl": "\n".join(head_lines) + "\n"})
+    tracemalloc.start()
+    t0 = _t.monotonic()
+    recs, err = m._tg_redbase_records(root, mb, h)
+    dt = _t.monotonic() - t0
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    check("★前置★ 讀得出、沒有紅燈版紀錄", err is None and recs == [], (err, len(recs or [])))
+    check("S7 兩版約 20 MB、行差 1.5 萬行:3 秒內", dt < 3.0, f"{dt:.2f}s")
+    check("S7 峰值記憶體 400 MB 內", peak < 400 * 1024 * 1024, f"{peak / 1024 / 1024:.0f} MB")
+    # 效能:單檔 800 支都有紅燈版(同一支檔只切一次)
+    many = _tqg_kt(*[_rb_fn(f"        assertEquals({i}, f{i}())", name=f"t{i}") for i in range(800)])
+    import hashlib
+    data = _j.dumps({"version": 1, "tests": [{"name": f"t{i}", "clauses": ["S1"], "path": _TQG_T, "key": f"CalcTest.t{i}"} for i in range(800)],
+                     "files": {_TQG_T: many}}, ensure_ascii=False).encode("utf-8")
+    relm = "governance/redbase/甲/SPEC-f0000009.json"
+    linem = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-record", "token": "SPEC-f0000009", "loop": "甲",
+                      "redbase": {"path": relm, "sha256": hashlib.sha256(data).hexdigest()}}, ensure_ascii=False)
+    root, mb, commit = _rb_repo()
+    h = commit({_TQG_T: many, relm: data, "docs/.governance-log.jsonl": _RB_LEDGER0 + "\n" + linem + "\n"})
+    t0 = _t.monotonic()
+    cs = _tqg_cands(root, mb, h)
+    dt = _t.monotonic() - t0
+    check("★前置★ 800 支都比了、沒有候選", _rb_only(cs) == [], cs[:3])
+    check("S7 單檔 800 支紅燈測試:比對 5 秒內", dt < 5.0, f"{dt:.2f}s")
+
+
+def t_tq_guard_redbase_still_checks_new_rules():
+    """[S8] 紅燈版本體跟終點一字不差、但那支測試沒有斷言:照舊列 tq/no-assertion。翻紅釘:有紅燈版就讓分岔點那條不判 → 紅。"""
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        checkout(1000)"))
+    root, mb, commit = _rb_repo()
+    cs = _tqg_cands(root, mb, _rb_push(commit, _rb_fn("        checkout(1000)"), [_rb_snap("SPEC-g0000001", red)]))
+    check("S8 紅燈版與終點都沒斷言:照舊列 tq/no-assertion", [c["rule"] for c in cs] == ["tq/no-assertion"], cs)
+
+
+def t_tq_guard_redbase_waive():
+    """[S9] tq/redbase-* 放行後不再擋、放行紀錄的規則欄是那條;同一函式兩條(expected 被改、逾時調大)放一條不放掉另一條;
+    放行分岔點比對的候選不會順帶放掉紅燈版這條;AI 放行照現制標出。翻紅釘:指紋身分不帶子規則、不帶 token → 紅。"""
+    import json as _j
+    root, commit = _tqg_gate_repo()
+    mb = _e2e_tgit(root, "rev-parse", "main").strip()
+    red = _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Test\n    fun b() { assertEquals(2, g()) }\n",
+                  _rb_fn("        assertEquals(900, checkout(1000))", ann="@Test(timeout = 30)"))
+    rel, data, line = _rb_snap("SPEC-h0000001", red)
+    led = root / "docs" / ".governance-log.jsonl"
+    old = led.read_text(encoding="utf-8") if led.is_file() else ""
+    h = commit({_TQG_T: _tqg_kt("    @Test\n    fun a() { assertEquals(1, f()) }\n", "    @Ignore\n    @Test\n    fun b() { assertEquals(2, g()) }\n",
+                                _rb_fn("        assertEquals(800, checkout(1000))", ann="@Test(timeout = 45)")),
+                rel: data.decode("utf-8"), "docs/.governance-log.jsonl": old + line + "\n"})
+    lv = _tqg_verdict(root, f"{mb}..{h}")
+    rb = [c for c in lv["new"] if c["rule"] == "tq/redbase-weakened"]
+    sk = [c for c in lv["new"] if c["rule"] == "tq/skip-added"]
+    check("★前置★ 紅燈版兩條(expected、逾時)與分岔點一條跳過都算進新增告警並擋下", lv["blocked"] and len(rb) == 2 and len(sk) == 1, lv["new"])
+    check("S9 兩條紅燈版候選指紋不同", rb[0]["key"] != rb[1]["key"], rb)
+    r = _tqg_waive(root, sk[0]["key"], "確認是暫時關掉的實驗性測試", "tq/skip-added", _TQG_T)
+    lv2 = _tqg_verdict(root, f"{mb}..{h}")
+    check("S9 放行分岔點那條不放掉紅燈版", r.returncode == 0 and len([c for c in lv2["new"] if c["rule"] == "tq/redbase-weakened"]) == 2, lv2["new"])
+    r = _tqg_waive(root, rb[0]["key"], "需求在實作期間改了折扣率,PM 已確認", "tq/redbase-weakened", _TQG_T)
+    lv3 = _tqg_verdict(root, f"{mb}..{h}")
+    left = [c for c in lv3["new"] if c["rule"] == "tq/redbase-weakened"]
+    check("S9 放行一條紅燈版候選、另一條照擋", r.returncode == 0 and len(left) == 1 and left[0]["key"] == rb[1]["key"] and lv3["blocked"], lv3["new"])
+    w = _j.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8"))
+    rows = w if isinstance(w, list) else (w.get("waivers") or w.get("items") or list(w.values()))
+    hit = [x for x in rows if isinstance(x, dict) and x.get("key") == rb[0]["key"]]
+    check("S9 放行紀錄的規則欄是 tq/redbase-weakened、AI 放的標 ai", hit and hit[0].get("rule") == "tq/redbase-weakened" and hit[0].get("origin") == "ai", hit or w)
+
+
+def t_tq_guard_redbase_reads_tip():
+    """[S10] 工作目錄的治理帳跟終點那一版不同時照終點判:工作目錄刪掉留痕那行照樣列;工作目錄多一行沒提交的留痕不採計。
+    翻紅釘:讀工作目錄的治理帳或紅燈版檔 → 紅。"""
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [_rb_snap("SPEC-i0000001", red)])
+    (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S10 工作目錄刪掉留痕那行:照終點,照樣列", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+    rb_rel = "governance/redbase/甲/SPEC-i0000001.json"
+    (root / rb_rel).write_bytes(b"{garbage")
+    _e2e_tgit(root, "add", "--", rb_rel)
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S10 暫存區與工作目錄的紅燈版被換成壞檔(沒提交):照終點那一版判", [c["rule"] for c in cs] == ["tq/redbase-weakened"], cs)
+    root, mb, commit = _rb_repo()
+    h = _rb_push(commit, _rb_fn("        assertEquals(800, checkout(1000))"), [], files={"README.md": "x\n"})
+    rel, data, line = _rb_snap("SPEC-i0000002", red)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_bytes(data)
+    (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n" + line + "\n", encoding="utf-8")
+    cs = _rb_only(_tqg_cands(root, mb, h))
+    check("S10 工作目錄多一行沒提交的留痕:不拿它來比(不列改弱),只提醒紅燈版還沒提交",
+          [c["rule"] for c in cs] == ["tq/redbase-unreadable"] and "還沒提交" in cs[0]["message"], cs)
+
+
+def _mp_repo(tag):
+    """兩個平台(jvm 預設、device)的 Kotlin 規格閘 fixture:各一支假執行器,把「平台 名字」記進 ran.log;
+    green_<名字> 標記檔在=綠;nodevice 標記檔在時 device 執行器印 AGP 的 DeviceException、回 1。測試檔兩個平台的根都是 .(同考場)。"""
+    import json as _j
+    import subprocess as _sp
+    d = mkvault().parent.parent / tag
+    _sp.run(["git", "init", "-q", str(d)])
+    runner = ("import os, sys\nm = sys.argv[1]\nopen('ran.log', 'a').write('{plat} ' + m + '\\n')\n"
+              "{extra}print('ok' if os.path.exists('green_' + m) else 'FAILED')\nsys.exit(0 if os.path.exists('green_' + m) else 1)\n")
+    (d / "run_jvm.py").write_text(runner.replace("{plat}", "jvm").replace("{extra}", ""), encoding="utf-8")
+    nodev = ("if os.path.exists('nodevice'):\n    print('> com.android.builder.testing.api.DeviceException: No connected devices!')\n"
+             "    sys.exit(1)\n")
+    (d / "run_dev.py").write_text(runner.replace("{plat}", "device").replace("{extra}", nodev), encoding="utf-8")
+    (d / ".lumos").mkdir()
+    (d / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "jvm", "platforms": {
+        "jvm": {"profile": "kotlin-junit", "root": ".", "run_cmd": "python3 run_jvm.py {method}"},
+        "device": {"profile": "kotlin-junit", "root": ".", "run_cmd": "python3 run_dev.py {method}"},
+        "emu": {"profile": "kotlin-junit", "root": ".", "run_cmd": "python3 run_emu.py {method}"}}}), encoding="utf-8")
+    (d / "run_emu.py").write_text(runner.replace("{plat}", "emu").replace("{extra}", ""), encoding="utf-8")
+    (d / ".gitignore").write_text("ran.log\ngreen_*\nnodevice\n", encoding="utf-8")
+    jt = d / "app" / "src" / "test" / "java" / "x"
+    jt.mkdir(parents=True)
+    (jt / "FeeTest.kt").write_text("package x\nimport org.junit.Test\nclass FeeTest {\n"
+                                   "    @Test\n    fun fee_jvm() { assertEquals(100, fee(1000)) }\n"
+                                   "    @Test\n    fun `fee: rounds up`() { assertEquals(101, fee(1005)) }\n"
+                                   "    @Test\n    fun shared_name() { assertEquals(1, f()) }\n}\n", encoding="utf-8")
+    dt = d / "app" / "src" / "androidTest" / "java" / "x"
+    dt.mkdir(parents=True)
+    (dt / "FeeDeviceTest.kt").write_text("package x\nimport org.junit.Test\nclass FeeDeviceTest {\n"
+                                         "    @Test\n    fun fee_on_device() { assertEquals(\"$1,235\", label(1235)) }\n"
+                                         "    @Test\n    fun shared_name() { assertEquals(2, g()) }\n}\n", encoding="utf-8")
+    kg = d / "docs" / "x-knowledge"
+    (kg / "Projects").mkdir(parents=True)
+    (d / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+    _sg_commit(d, "base")
+    return d, kg
+
+
+def _mp_ran(d):
+    p = d / "ran.log"
+    out = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
+    if p.exists():
+        p.unlink()
+    return out
+
+
+def _mp_green(d, *names):
+    for n in names:
+        (d / ("green_" + n)).write_text("")
+
+
+def _mp_push(d, kg, base=None):
+    """推送前驗收;base 不給就從第一個提交算(計劃是範圍內新增的、算還在做)。"""
+    import subprocess as _sp
+    base = base or _sp.run(["git", "-C", str(d), "rev-list", "--max-parents=0", "HEAD"], capture_output=True, text=True).stdout.strip()
+    return run(kg, "spec-gate", "--push-check", f"{base}..HEAD", "--repo", str(d))
+
+
+def _mp_head(d):
+    import subprocess as _sp
+    return _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+
+def _mp_set_tests(d, kg, tests):
+    """把最新一筆規格閘留痕的 tests 改成 tests(兩本帳都改;模擬舊版工具寫的留痕)。"""
+    import json as _j
+    for p in (kg.parent / ".canary-log.jsonl", d / "docs" / ".governance-log.jsonl"):
+        rows = [x for x in p.read_text(encoding="utf-8").splitlines() if x.strip()]
+        for i in range(len(rows) - 1, -1, -1):
+            r = _j.loads(rows[i])
+            if r.get("kind") in ("spec-gate", "spec-gate-record"):
+                r["tests"] = tests
+                rows[i] = _j.dumps(r, ensure_ascii=False)
+                break
+        p.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+_MP_CLAUSES = ["- [S1] 結帳應收一成服務費 [test:fee_jvm]",
+               "- [S2] 平板上結帳摘要應顯示千分位 [test:device:fee_on_device]",
+               "- [S3] 服務費應四捨五入 [test:jvm:fee: rounds up]"]
+
+
+def t_spec_gate_record_keeps_platform():
+    """[紅燈版實跑三缺口 S3] 多平台專案的規格閘留痕 tests 一律寫「平台:名字」(含預設平台;名字含冒號照樣讀回);懸空引用照樣在、
+    manual_only 不變;推送前照前綴的平台指令跑。單平台照舊只寫名字(t_spec_gate_redbase_written_on_red 的 fixture 是單平台)。
+    應抓到的錯:tests 只記方法名 → 平板測試被丟給預設平台的指令跑、找不到而判紅。"""
+    d, kg = _mp_repo("mp1")
+    # 風險高的計劃也留痕、懸空的引用照樣記(風險低不准綁不存在的測試)
+    _sg_plan2(kg, "乙", [*_MP_CLAUSES, "- [S4] 沒寫的測試應先懸空 [test:not_written_yet]"], excl=[])
+    r = run(kg, "spec-gate", "Projects/乙_計劃")
+    rec = _sg_records(kg)[-1] if _sg_records(kg) else {}
+    want = ["device:fee_on_device", "jvm:fee: rounds up", "jvm:fee_jvm", "jvm:not_written_yet"]
+    check("S3 留痕 tests 帶平台前綴(含預設平台、名字含冒號、懸空的照樣在)", rec.get("tests") == want, (rec.get("tests"), (r.stdout + r.stderr)[-600:]))
+    check("S3 manual_only 不變(有綁測試就不是全靠人驗)", rec.get("manual_only") is False, rec.get("manual_only"))
+    gov = _rb_gov(d, "spec-gate-record")
+    check("S3 治理帳那筆的 tests 同樣帶前綴", gov and gov[-1].get("tests") == want, gov[-1:] if gov else gov)
+    (kg / "Projects" / "乙_計劃.md").unlink()
+    _mp_ran(d)
+    _sg_plan2(kg, "甲", _MP_CLAUSES)
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    _sg_commit(d, "plan")
+    _mp_ran(d)
+    _mp_green(d, "fee_jvm", "fee_on_device", "fee: rounds up")
+    r = _mp_push(d, kg)
+    ran = sorted(_mp_ran(d))
+    check("S3 推送前照前綴的平台指令跑:平板那支走 device、其餘走 jvm",
+          ran == ["device fee_on_device", "jvm fee: rounds up", "jvm fee_jvm"], (ran, r.stdout[-600:]))
+    check("S3 推送前全綠放行", r.returncode == 0, r.stdout[-600:])
+    # 代碼審 r1 單審席 F2:多平台時寫的「平台:名字」、設定之後改回單平台,照樣讀得回、不誤判紅、不記逃逸
+    import json as _j
+    d2, kg2 = _mp_repo("mp1b")
+    _sg_plan2(kg2, "甲", ["- [S1] 結帳應收一成服務費 [test:fee_jvm]"])
+    run(kg2, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 多平台設定下留痕寫成 jvm:fee_jvm", (_sg_records(kg2)[-1:] or [{}])[0].get("tests") == ["jvm:fee_jvm"], _sg_records(kg2)[-1:])
+    (d2 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                               encoding="utf-8")
+    _sg_commit(d2, "plan + single config")
+    _mp_green(d2, "fee_jvm")
+    _mp_ran(d2)
+    esc = d2 / "docs" / ".escape-log.jsonl"
+    r = _mp_push(d2, kg2)
+    ran = _mp_ran(d2)
+    # 代碼審 r3 人裁換形狀:身分格式換了(多平台改回單平台)不猜是哪一支——照擋、講明設定改了、不跑、不記逃逸
+    check("S3 改回單平台:jvm:fee_jvm 照擋、講明是設定改了、一支都不跑、不記逃逸",
+          r.returncode == 1 and ran == [] and not esc.exists() and "多平台" in r.stdout, (r.returncode, ran, esc.exists(), r.stdout[-500:]))
+    # 代碼審 r4 單審席 F1:實作已綠時單純重跑規格閘不會寫新留痕,訊息要講實際可行的兩條路
+    check("S3 改回單平台的擋下訊息講實作已綠時的補法(換回空殼補跑)與改走設計審",
+          "空殼" in r.stdout and "plan_risk: high" in r.stdout, r.stdout[-700:])
+    # 代碼審 r4 單審席 F5:已完成的計劃降成提醒、不擋、不跑
+    p2 = kg2 / "Projects" / "甲_計劃.md"
+    p2.write_text(p2.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _sg_commit(d2, "done")
+    done_at = _mp_head(d2)
+    (d2 / "README.md").write_text("x\n", encoding="utf-8")
+    p2.write_text(p2.read_text(encoding="utf-8") + "\n補一句說明。\n", encoding="utf-8")
+    _sg_commit(d2, "touch plan after done")
+    _mp_ran(d2)
+    r = _mp_push(d2, kg2, base=done_at)
+    check("S3 改回單平台、計劃已完成:降成提醒不擋、不跑", r.returncode == 0 and _mp_ran(d2) == [] and "提醒" in r.stdout and "設定" in r.stdout,
+          (r.returncode, r.stdout[-500:]))
+    # 代碼審 r2 單審席 F3、架構對齊席:單平台裡本身含冒號的測試名不見了,不拿名字後綴撞到的另一支(fee_jvm)頂替
+    d3, kg3 = _mp_repo("mp1c")
+    (d3 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                               encoding="utf-8")
+    ft = d3 / "app" / "src" / "test" / "java" / "x" / "FeeTest.kt"
+    ft.write_text(ft.read_text(encoding="utf-8").replace("    @Test\n    fun shared_name()", "    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n    @Test\n    fun shared_name()"),
+                  encoding="utf-8")
+    _sg_commit(d3, "colon test")
+    _sg_plan2(kg3, "甲", ["- [S1] 結帳應收一成服務費 [test:gone:fee_jvm]"])
+    r = run(kg3, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 單平台含冒號的測試名判紅、留痕", r.returncode == 0 and (_sg_records(kg3)[-1:] or [{}])[0].get("tests") == ["gone:fee_jvm"], r.stdout[-500:])
+    ft.write_text(ft.read_text(encoding="utf-8").replace("    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n", ""), encoding="utf-8")
+    _sg_commit(d3, "drop colon test")
+    _mp_green(d3, "fee_jvm")
+    _mp_ran(d3)
+    r = _mp_push(d3, kg3)
+    ran = _mp_ran(d3)
+    check("S3 單平台含冒號的測試不見了:不拿 fee_jvm 頂替、照擋", r.returncode == 1 and "jvm fee_jvm" not in ran, (r.returncode, ran, r.stdout[-400:]))
+    # 代碼審 r3 單審席 D1:另一條條款剛好綁 fee_jvm 時,被刪的 gone:fee_jvm 也不能被它頂替
+    d4, kg4 = _mp_repo("mp1d")
+    (d4 / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run_jvm.py {method}"}}),
+                                               encoding="utf-8")
+    ft4 = d4 / "app" / "src" / "test" / "java" / "x" / "FeeTest.kt"
+    ft4.write_text(ft4.read_text(encoding="utf-8").replace("    @Test\n    fun shared_name()", "    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n    @Test\n    fun shared_name()"),
+                   encoding="utf-8")
+    _sg_commit(d4, "colon test")
+    _sg_plan2(kg4, "甲", ["- [S1] 結帳應收一成服務費 [test:gone:fee_jvm]", "- [S2] 結帳應顯示一般費用 [test:fee_jvm]"])
+    r = run(kg4, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 兩條條款(含冒號那支與 fee_jvm)都判紅、留痕", r.returncode == 0 and sorted((_sg_records(kg4)[-1:] or [{}])[0].get("tests") or []) == ["fee_jvm", "gone:fee_jvm"],
+          r.stdout[-500:])
+    ft4.write_text(ft4.read_text(encoding="utf-8").replace("    @Test\n    fun `gone:fee_jvm`() { assertEquals(3, h()) }\n", ""), encoding="utf-8")
+    _sg_commit(d4, "drop colon test")
+    _mp_green(d4, "fee_jvm")
+    _mp_ran(d4)
+    r = _mp_push(d4, kg4)
+    ran = _mp_ran(d4)
+    check("S3 另一條條款綁 fee_jvm:被刪的 gone:fee_jvm 不被它頂替、照擋", r.returncode == 1 and "全綠" not in r.stdout and ran.count("jvm fee_jvm") <= 1
+          and "gone:fee_jvm" in r.stdout, (r.returncode, ran, r.stdout[-400:]))
+
+
+def t_spec_gate_push_bare_name_platform():
+    """[紅燈版實跑三缺口 S4] 舊留痕只寫名字、留痕沒過期時,整串逐字比現在條款:只綁一個平台就照那個平台跑;含冒號的舊名字照整串比到的平台;
+    同名綁兩個以上平台照舊解析(沒前綴=預設平台);計劃已完成而條款指紋不符時不補。應抓到的錯:舊留痕照預設平台跑 → 平板那支被 jvm 跑。"""
+    d, kg = _mp_repo("mp2")
+    # 同名綁在兩個非預設平台:照舊解析(沒前綴=預設 jvm);任挑一個補的話一定挑到 device 或 emu,測得出來
+    _sg_plan2(kg, "甲", [*_MP_CLAUSES, "- [S4] 兩個裝置平台的同名測試應各自驗 [test:device:shared_name] [test:emu:shared_name]"])
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    _sg_commit(d, "plan")
+    _mp_set_tests(d, kg, ["fee_jvm", "fee_on_device", "fee: rounds up", "shared_name"])
+    _mp_ran(d)
+    _mp_green(d, "fee_jvm", "fee_on_device", "fee: rounds up", "shared_name")
+    r = _mp_push(d, kg)
+    ran = sorted(_mp_ran(d))
+    check("S4 舊留痕:平板那支照條款補成 device、含冒號的照整串比到 jvm、同名兩個平台照預設 jvm",
+          ran == ["device fee_on_device", "jvm fee: rounds up", "jvm fee_jvm", "jvm shared_name"], (ran, r.stdout[-800:]))
+    check("S4 舊留痕補平台後全綠放行、沒有例外", r.returncode == 0 and "Traceback" not in r.stderr, (r.stdout[-400:], r.stderr[-400:]))
+    # 已完成且條款指紋不符:不補平台(照舊解析成預設平台)
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _sg_commit(d, "done")
+    done_at = _mp_head(d)
+    p.write_text(p.read_text(encoding="utf-8").replace("平板上結帳摘要應顯示千分位", "平板上結帳摘要應顯示千分位與幣別"), encoding="utf-8")
+    _sg_commit(d, "edit after done")
+    _mp_ran(d)
+    r = _mp_push(d, kg, base=done_at)
+    ran = _mp_ran(d)
+    check("S4 已完成而指紋不符:不補平台,平板那支沒走 device", "device fee_on_device" not in ran, (ran, r.stdout[-600:]))
+
+
+def t_spec_gate_push_unknown_platform():
+    """[紅燈版實跑三缺口 S5] 留痕記的平台不在設定裡:還在做的計劃擋下並講明、已完成的降成提醒,都不丟例外。
+    應抓到的錯:resolve_test_refs 的前綴例外沒接 → 推送前崩出 traceback。"""
+    d, kg = _mp_repo("mp3")
+    _sg_plan2(kg, "甲", _MP_CLAUSES)
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    _sg_commit(d, "plan")
+    _mp_set_tests(d, kg, ["jvm:fee_jvm", "tablet:fee_on_device"])
+    _mp_green(d, "fee_jvm", "fee_on_device", "fee: rounds up")
+    r = _mp_push(d, kg)
+    check("S5 還在做:擋下、講明平台不在設定裡、沒有例外",
+          r.returncode == 1 and "tablet" in r.stdout and "不在" in r.stdout and "Traceback" not in r.stderr, (r.stdout[-600:], r.stderr[-600:]))
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
+    _sg_commit(d, "done")
+    done_at = _mp_head(d)
+    p.write_text(p.read_text(encoding="utf-8").replace("結帳應收一成服務費", "結帳應收一成服務費(含稅)"), encoding="utf-8")
+    _sg_commit(d, "edit after done")
+    r = _mp_push(d, kg, base=done_at)
+    check("S5 已完成且指紋不符:降成提醒不擋、沒有例外", r.returncode == 0 and "Traceback" not in r.stderr and "tablet" in r.stdout,
+          (r.stdout[-600:], r.stderr[-600:]))
+
+
+def t_spec_gate_device_missing_not_red():
+    """[紅燈版實跑三缺口 S6] Kotlin 測試輸出含 AGP 的 DeviceException 而退出碼非零:判弱證據、寫「環境沒跑起來」;實作前跑規格閘不存那支的紅燈版;
+    推送照擋,沒過的全是這種時不記逃逸,有一支真的紅照記。應抓到的錯:只看退出碼判紅 → 沒接裝置被當成新行為的紅、推送記假逃逸。"""
+    import json as _j
+    d, kg = _mp_repo("mp4")
+    (d / "nodevice").write_text("")
+    _sg_plan2(kg, "甲", _MP_CLAUSES)
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("S6 實作前沒接裝置:平板那條判弱證據並寫環境沒跑起來", "S2 弱證據" in r.stdout and "環境沒跑起來" in r.stdout, r.stdout[-800:])
+    check("S6 實作前沒接裝置:風險低不放行(弱證據不算紅)、不寫留痕", r.returncode == 1 and _sg_records(kg) == [], (r.returncode, r.stdout[-400:]))
+    (d / "nodevice").unlink()
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 接上裝置後三條都紅、放行留痕", r.returncode == 0 and len(_sg_records(kg)) == 1, r.stdout[-600:])
+    _sg_commit(d, "plan")
+    esc = d / "docs" / ".escape-log.jsonl"
+    n0 = len(esc.read_text(encoding="utf-8").splitlines()) if esc.exists() else 0
+    (d / "nodevice").write_text("")
+    _mp_green(d, "fee_jvm", "fee: rounds up")
+    r = _mp_push(d, kg)
+    n1 = len(esc.read_text(encoding="utf-8").splitlines()) if esc.exists() else 0
+    check("S6 推送前沒接裝置:照擋、講環境沒跑起來", r.returncode == 1 and "環境沒跑起來" in r.stdout, r.stdout[-600:])
+    check("S6 沒過的全是環境沒跑起來:不記逃逸", n1 == n0, (n0, n1))
+    (d / "green_fee_jvm").unlink()
+    r = _mp_push(d, kg)
+    rows = [_j.loads(x) for x in esc.read_text(encoding="utf-8").splitlines() if x.strip()] if esc.exists() else []
+    check("S6 另有一支真的紅:照擋、照記逃逸", r.returncode == 1 and len(rows) == n1 + 1, (len(rows), n1, r.stdout[-400:]))
+    # 代碼審 r2 單審席 F1:Java 專案(java-junit)沒接裝置同樣判環境沒跑起來
+    import subprocess as _sp
+    dj = mkvault().parent.parent / "mp4java"
+    _sp.run(["git", "init", "-q", str(dj)])
+    (dj / "run.py").write_text("print('> com.android.builder.testing.api.DeviceException: No connected devices!')\nraise SystemExit(1)\n", encoding="utf-8")
+    (dj / ".lumos").mkdir()
+    (dj / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "java-junit", "test": {"run_cmd": "python3 run.py {method}"}}), encoding="utf-8")
+    jt = dj / "app" / "src" / "androidTest" / "java" / "x"
+    jt.mkdir(parents=True)
+    (jt / "FeeDeviceTest.java").write_text("package x;\nimport org.junit.Test;\npublic class FeeDeviceTest {\n"
+                                           "    @Test\n    public void feeOnDevice() { assertEquals(1, 2); }\n}\n", encoding="utf-8")
+    kgj = dj / "docs" / "x-knowledge"
+    (kgj / "Projects").mkdir(parents=True)
+    _sg_commit(dj, "java base")
+    _sg_plan2(kgj, "甲", ["- [S1] 平板上應顯示服務費 [test:feeOnDevice]"])
+    r = run(kgj, "spec-gate", "Projects/甲_計劃")
+    check("S6 Java 專案沒接裝置:判弱證據並寫環境沒跑起來", "S1 弱證據" in r.stdout and "環境沒跑起來" in r.stdout, r.stdout[-600:])
+
+
+def _ig_repo(ignore_files, tracked_ledger=False, config=None):
+    """治理帳忽略情境的比對 fixture:主線一支既有測試;ignore_files={路徑: 內容}(.gitignore、docs/.gitignore、.git/info/exclude);
+    推送那一版加一支紅燈版檔(沒有留痕指到它)。治理帳留在工作目錄不提交;tracked_ledger=True 時照樣提交(git add -f)。→ (root, 主線, 推送那一版, git)"""
+    import subprocess as _sp
+    root, mb, _commit = _tqg_repo({_TQG_T: _tqg_kt(_RB_OTHER)})
+
+    def git(*a):
+        return _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True)
+    for k, v in (config or {}).items():       # 推送那一版提交之前設(全域忽略檔要先生效,治理帳才不會被一起提交)
+        git("config", k, v)
+    for rel, body in ignore_files.items():
+        f = root / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(body, encoding="utf-8")
+    (root / "docs").mkdir(exist_ok=True)
+    (root / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+    red = _tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(900, checkout(1000))"))
+    rel, data, _line = _rb_snap("SPEC-1g000001", red)
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_bytes(data)
+    (root / _TQG_T).write_text(_tqg_kt(_RB_OTHER, _rb_fn("        assertEquals(800, checkout(1000))")), encoding="utf-8")
+    git("add", "-A")
+    git("reset", "-q", "--", "docs/.governance-log.jsonl")   # 治理帳留在工作目錄、不提交(否定規則那案才是「沒追蹤、沒被忽略」)
+    if tracked_ledger:
+        git("add", "-f", "docs/.governance-log.jsonl")
+    git("commit", "-qm", "push", "--no-verify")
+    return root, mb, git("rev-parse", "HEAD").stdout.strip(), git
+
+
+def _ig_unreadable(root, mb, h):
+    return [c for c in _tqg_cands(root, mb, h) if c["rule"] == "tq/redbase-unreadable"]
+
+
+def t_tq_guard_redbase_ledger_ignored():
+    """[紅燈版實跑三缺口 S7] 治理帳被 git 忽略時,孤兒紅燈版的提醒以「不要刪這支紅燈版檔」開頭、講治理帳被忽略並附蓋到的規則;還沒提交的
+    紅燈版提醒以「git add」開頭;規則長到 150 字時開頭照樣在;否定規則讓它實際沒被忽略、治理帳已被追蹤、git 判不了時照舊措辭;兩種措辭指紋相同。
+    應抓到的錯:不問忽略就照舊說「合併時弄丟」;新措辭把「不要刪」擠到後面被 300 字截掉。"""
+    m = _tqg_module()
+    root, mb, h, git = _ig_repo({".gitignore": "docs/.governance-log.jsonl\n"})
+    check("★前置★ 治理帳沒進提交、被忽略", git("ls-files", "docs/.governance-log.jsonl").stdout.strip() == ""
+          and git("check-ignore", "-q", "docs/.governance-log.jsonl").returncode == 0, "")
+    cs = _ig_unreadable(root, mb, h)
+    msg = cs[0]["message"] if cs else ""
+    check("S7 孤兒:一條 unreadable、講治理帳被忽略與蓋到的規則", len(cs) == 1 and "被 git 忽略" in msg and ".gitignore:1:docs/.governance-log.jsonl" in msg, cs)
+    check("S7 孤兒:「不要刪這支紅燈版檔」在講忽略之前", "不要刪這支紅燈版檔" in msg and msg.index("不要刪這支紅燈版檔") < msg.index("被 git 忽略"), msg)
+    check("S7 孤兒:不再說合併時弄丟", "合併時" not in msg, msg)
+    key_ignored = cs[0]["key"] if cs else None
+    # 否定規則:實際沒被忽略 → 照舊措辭;指紋相同
+    root2, mb2, h2, _g2 = _ig_repo({".gitignore": "docs/.governance-log.jsonl\n!docs/.governance-log.jsonl\n"})
+    cs2 = _ig_unreadable(root2, mb2, h2)
+    check("S7 否定規則讓它沒被忽略:照舊措辭", len(cs2) == 1 and "合併時" in cs2[0]["message"] and "被 git 忽略" not in cs2[0]["message"], cs2)
+    check("S7 兩種措辭的放行指紋相同", cs2 and key_ignored == cs2[0]["key"], (key_ignored, cs2[0]["key"] if cs2 else None))
+    # 治理帳已被追蹤(git add -f):不算被忽略
+    root3, mb3, h3, _g3 = _ig_repo({".gitignore": "docs/.governance-log.jsonl\n"}, tracked_ledger=True)
+    cs3 = _ig_unreadable(root3, mb3, h3)
+    check("S7 治理帳已被追蹤:照舊措辭", len(cs3) == 1 and "被 git 忽略" not in cs3[0]["message"], cs3)
+    # 規則長:全域忽略檔放在 150 字的路徑底下
+    longdir = Path(tempfile.mkdtemp(prefix="gctl-igl-")) / ("x" * 150)
+    longdir.mkdir(parents=True)
+    (longdir / "ignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
+    root4, mb4, h4, _git4 = _ig_repo({}, config={"core.excludesFile": str(longdir / "ignore")})
+    cs4 = _ig_unreadable(root4, mb4, h4)
+    msg4 = cs4[0]["message"] if cs4 else ""
+    check("S7 規則 150 字:開頭的不要刪照樣在、講被忽略", "不要刪這支紅燈版檔" in msg4 and "被 git 忽略" in msg4, msg4)
+    # 還沒提交的紅燈版檔
+    rel2 = "governance/redbase/甲/SPEC-1g000002.json"
+    (root / rel2).write_bytes((root / "governance/redbase/甲/SPEC-1g000001.json").read_bytes())
+    cs5 = [c for c in _ig_unreadable(root, mb, h) if c["file"] == rel2]
+    msg5 = cs5[0]["message"] if cs5 else ""
+    check("S7 還沒提交:以 git add 開頭、講治理帳被忽略", "git add 這支紅燈版檔" in msg5 and "被 git 忽略" in msg5
+          and msg5.index("git add 這支紅燈版檔") < msg5.index("被 git 忽略"), cs5)
+    check("S7 還沒提交:自帶改法與自查指令,不叫人去看另一條", "check-ignore -q" in msg5 and "孤兒那條" not in msg5, msg5)
+    # git 判不了:取值函式回判不了 → 照舊措辭
+    ch = [("A", None, "governance/redbase/甲/SPEC-1g000001.json", "0" * 40, True)]
+    _metas, out = m._tg_rb_metas([], ch, "HEAD", ledger=lambda: ("unknown", ""))
+    check("S7 git 判不了:照舊措辭", out and "合併時" in out[0]["message"], out)
+    st = m._gov_ledger_ignored(Path(tempfile.mkdtemp(prefix="gctl-nogit-")))
+    check("S7 不在 git repo 裡:判不了", st[0] == "unknown", st)
+
+
+def t_tq_guard_ledger_ignored_fix_resolves():
+    """[紅燈版實跑三缺口 S8] 照提醒指到的那支忽略設定檔拿掉蓋到的規則後,git check-ignore -q 回 1、提醒回到舊措辭;
+    規則在 docs/.gitignore、根目錄 .gitignore、.git/info/exclude 三種各一。應抓到的錯:提醒指的來源不是真正蓋到的那支(例如一律說根目錄)。"""
+    m = _tqg_module()
+    for src, rule in (("docs/.gitignore", ".governance-log.jsonl"), (".gitignore", "docs/.governance-log.jsonl"),
+                      (".git/info/exclude", "docs/.governance-log.jsonl")):
+        root, mb, h, git = _ig_repo({src: rule + "\n"})
+        st = m._gov_ledger_ignored(root)
+        check(f"S8 {src}:判被忽略、規則指到那支檔", st[0] == "ignored" and st[1].startswith(src + ":1:"), st)
+        f = root / st[1].split(":1:")[0]
+        f.write_text("", encoding="utf-8")
+        check(f"S8 {src}:拿掉那條規則後 check-ignore -q 回 1", git("check-ignore", "-q", "docs/.governance-log.jsonl").returncode == 1, "")
+        cs = _ig_unreadable(root, mb, h)
+        check(f"S8 {src}:提醒回到舊措辭", cs and "被 git 忽略" not in cs[0]["message"] and "合併時" in cs[0]["message"], cs)
+
+
+def _ig_sg_repo(tag, ignored):
+    """單平台規格閘 fixture(_rb_sg_repo);ignored=True 時把治理帳移出版控並在 .gitignore 忽略它。"""
+    d, kg = _rb_sg_repo(tag)
+    if ignored:
+        import subprocess as _sp
+        _sp.run(["git", "-C", str(d), "rm", "-q", "--cached", "docs/.governance-log.jsonl"])
+        (d / ".gitignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
+        _sg_commit(d, "ignore ledger")
+    return d, kg
+
+
+def t_spec_gate_redbase_ledger_ignored():
+    """[紅燈版實跑三缺口 S9] 規格閘寫出紅燈版而治理帳被 git 忽略:當場多印一行,講留痕進不了提交、推送時會列成沒有留痕;沒被忽略不印。
+    應抓到的錯:寫紅燈版時不問忽略 → 使用者要到推送時才知道。"""
+    for ignored in (True, False):
+        d, kg = _ig_sg_repo("igsg" + ("1" if ignored else "0"), ignored)
+        (d / "green_keeps_ok").write_text("")
+        _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+        r = run(kg, "spec-gate", "Projects/甲_計劃")
+        check(f"★前置★ 寫出紅燈版(忽略={ignored})", r.returncode == 0 and "紅燈版: 存在" in r.stdout, r.stdout[-500:])
+        said = "治理帳被 git 忽略" in r.stderr and "進不了提交" in r.stderr
+        check(f"S9 治理帳{'被忽略:多印一行(走錯誤輸出,同規格閘其他留痕寫不進帳的提醒)' if ignored else '沒被忽略:不印'}", said == ignored, r.stderr[-600:])
+
+
+def t_doctor_gov_ledger_ignored():
+    """[紅燈版實跑三缺口 S10] 治理帳被 git 忽略時 doctor 另起一段唸它與蓋到的規則;沒被忽略不唸。
+    應抓到的錯:只在紅燈版提醒裡講 → 不用紅燈版的專案,CI 讀不到代碼審留痕沒人知道。"""
+    for ignored in (True, False):
+        _d, kg = _ig_sg_repo("igdr" + ("1" if ignored else "0"), ignored)
+        r = run(kg, "doctor", "--verbose")
+        said = "治理帳被 git 忽略" in r.stdout and ".gitignore:1:docs/.governance-log.jsonl" in r.stdout
+        check(f"S10 治理帳{'被忽略:doctor 唸' if ignored else '沒被忽略:doctor 不唸'}", said == ignored, r.stdout[-800:])
+
+
+def t_spec_gate_redbase_bookkeeping():
+    """[S11] governance/redbase/ 只新增紀錄檔時代碼審留痕照樣有效;那裡出現程式檔照舊不算簿記。翻紅釘:清單沒加這個資料夾 → 紅。"""
+    m = _tqg_module()
+    root, mb, commit = _rb_repo()
+    h1 = commit({"governance/redbase/甲/SPEC-j0000001.json": '{"version": 1}\n'})
+    ok, why, _u = m._codeloop_record_valid_ex(root, mb, h1)
+    check("S11 只新增紅燈版紀錄:留痕照樣有效", ok, why)
+    h2 = commit({"governance/redbase/甲/evil.py": "print(1)\n"})
+    ok2, why2, _u2 = m._codeloop_record_valid_ex(root, h1, h2)
+    check("S11 紅燈版資料夾裡出現程式檔:不算簿記", not ok2, why2)
+    h3 = commit({"governance/redbase/甲/Evil.kt": "fun x() = 1\n"})
+    ok3, why3, _u3 = m._codeloop_record_valid_ex(root, h2, h3)
+    check("S11 紅燈版資料夾裡出現 .kt:不算簿記", not ok3, why3)
+
+
+def _rb_sg_repo(tag):
+    """kotlin-junit 的半套規格閘 fixture:假執行器看 green_<方法> 標記檔(有=綠、沒有=紅);vault docs/x-knowledge。"""
+    import json as _j
+    import subprocess as _sp
+    d = mkvault().parent.parent / tag
+    _sp.run(["git", "init", "-q", str(d)])
+    (d / "run.py").write_text("import os, sys\nm = sys.argv[1]\nsys.exit(0 if os.path.exists('green_' + m) else 1)\n", encoding="utf-8")
+    (d / ".lumos").mkdir()
+    (d / ".lumos" / "config.json").write_text(_j.dumps({"test_profile": "kotlin-junit", "test": {"run_cmd": "python3 run.py {method}"}}),
+                                              encoding="utf-8")
+    t = d / "app" / "src" / "test" / "java" / "x"
+    t.mkdir(parents=True)
+    (t / "CalcTest.kt").write_text(_tqg_kt(_rb_fn("        assertEquals(900, checkout(1000))"),
+                                           _rb_fn("        assertEquals(1, f())", name="keeps_ok"),
+                                           _rb_fn("        assertEquals(2, g())", name="second_red")), encoding="utf-8")
+    kg = d / "docs" / "x-knowledge"
+    (kg / "Projects").mkdir(parents=True)
+    (d / "docs" / ".governance-log.jsonl").write_text(_RB_LEDGER0 + "\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(d), "add", "-A"])
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+    return d, kg
+
+
+def _rb_gov(d, kind):
+    import json as _j
+    p = d / "docs" / ".governance-log.jsonl"
+    return [_j.loads(x) for x in p.read_text(encoding="utf-8").splitlines() if x.strip() and _j.loads(x).get("kind") == kind]
+
+
+def t_spec_gate_redbase_written_on_red():
+    """[S1] 規格閘寫留痕而有判紅的 Kotlin 測試:寫 version 1 的紅燈版(測試名、條款清單、路徑、函式鍵、檔內容),兩筆留痕都帶 redbase;
+    同一支測試綁兩條條款只一列;同條款一紅一綠只存紅的;再跑一次內容沒變不重複存;逾時、Python、找到不只一處、非 UTF-8、超長行、
+    不在 repo 根底下、被 git 忽略、判紅後檔案又被改的不存並記原因。翻紅釘:不分紅綠全存、不去重、逾時照存、讀檔後不比 sha → 紅。"""
+    import hashlib
+    import json as _j
+    m = _tqg_module()
+    d, kg = _rb_sg_repo("rb1")
+    (d / "green_keeps_ok").write_text("")
+    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]",
+                         "- [S2] 結帳應同時給第二個紅 [test:second_red] [test:keeps_ok]"])
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    check("★前置★ 風險低 PASS 並留痕", r.returncode == 0 and len(_sg_records(kg)) == 1, (r.stdout + r.stderr)[-800:])
+    rec = _sg_records(kg)[0]
+    gov = _rb_gov(d, "spec-gate-record")
+    check("S1 兩筆留痕都帶 redbase", "redbase" in rec and gov and gov[-1].get("redbase") == rec["redbase"], (rec.get("redbase"), gov[-1:] if gov else gov))
+    p = d / rec["redbase"]["path"]
+    data = p.read_bytes()
+    j = _j.loads(data)
+    check("S1 檔案指紋對得上、version 1、在 governance/redbase/ 底下",
+          hashlib.sha256(data).hexdigest() == rec["redbase"]["sha256"] and j["version"] == 1
+          and rec["redbase"]["path"].startswith("governance/redbase/"), rec["redbase"])
+    names = sorted(t["name"] for t in j["tests"])
+    check("S1 只存紅的兩支(同條款一紅一綠只存紅的)", names == ["checkout_discount", "second_red"], j["tests"])
+    cd = next(t for t in j["tests"] if t["name"] == "checkout_discount")
+    check("S1 那一列帶條款清單、路徑、函式鍵", cd["clauses"] == ["S1"] and cd["path"] == _TQG_T and cd["key"] == "CalcTest.checkout_discount", cd)
+    check("S1 檔內容就是當時的測試檔", j["files"][_TQG_T] == (d / _TQG_T).read_text(encoding="utf-8"), "")
+    check("S1 綠的那支記進 redbase_skipped", any(x.get("name") == "keeps_ok" for x in rec.get("redbase_skipped") or []), rec.get("redbase_skipped"))
+    check("S1 redbase_skipped_n 記總數", rec.get("redbase_skipped_n") == len(rec.get("redbase_skipped") or []) >= 1, rec.get("redbase_skipped_n"))
+    check("S1 寫紅燈版時講明整支測試檔會跟著提交", "整支" in r.stdout, r.stdout[-600:])
+    _sg_commit(d, "after gate")
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    rec2 = _sg_records(kg)[-1]
+    check("S1 再跑一次內容沒變:不重複存(不帶 redbase、原因記內容相同)",
+          r.returncode == 0 and "redbase" not in rec2 and any("相同" in x.get("reason", "") for x in rec2.get("redbase_skipped") or []),
+          (rec2.get("redbase"), rec2.get("redbase_skipped")))
+    # 判法單元:逾時、Python、多處、非 UTF-8、超長行、不在 repo 根底下、被忽略
+    rr = d
+    plats = m.load_platforms(rr)["platforms"]
+    plat = next(iter(plats))
+    def row(meth, v="red", detail="", pl=plat):
+        return ("S1", pl, meth, v, "", detail)
+    caps, _sk, _g = m._redbase_collect(rr, [("S1", plat, "checkout_discount", "red", "", ""), ("S4", plat, "checkout_discount", "red", "", "")], plats)
+    check("S1 同一支測試綁兩條條款:只一份、條款合併", len(caps) == 1 and caps[0]["clauses"] == {"S1", "S4"}, caps)
+    caps, skipped, _greens = m._redbase_collect(rr, [row("checkout_discount", detail="超時(>180s)")], plats)
+    check("S1 逾時的紅不存", not caps and any("逾時" in r_ for _n, r_ in skipped), skipped)
+    (d / "app" / "src" / "test" / "java" / "x" / "Dup.kt").write_text(_tqg_kt(_rb_fn("        assertEquals(1, h())")).replace("CalcTest", "Dup"), encoding="utf-8")
+    caps, skipped, _g = m._redbase_collect(rr, [row("checkout_discount")], plats)
+    check("S1 測試名在兩支檔都有:不存", not caps and any("不只一" in r_ for _n, r_ in skipped), skipped)
+    (d / "app" / "src" / "test" / "java" / "x" / "Dup.kt").unlink()
+    (d / _TQG_T).write_bytes((d / _TQG_T).read_bytes().replace(b"assertEquals(900", b"assertEquals(\xff900"))
+    caps, skipped, _g = m._redbase_collect(rr, [row("checkout_discount")], plats)
+    check("S1 檔不是合法 UTF-8:不存", not caps and any("UTF-8" in r_ for _n, r_ in skipped), skipped)
+    (d / _TQG_T).write_text(_tqg_kt(_rb_fn("        assertEquals(900, checkout(1000))"), "// " + "x" * 25000 + "\n"), encoding="utf-8")
+    caps, skipped, _g = m._redbase_collect(rr, [row("checkout_discount")], plats)
+    check("S1 有超過 2 萬字的行:不存", not caps and any("2 萬" in r_ for _n, r_ in skipped), skipped)
+    (d / _TQG_T).write_text(_tqg_kt(_rb_fn("        assertEquals(900, checkout(1000))")), encoding="utf-8")
+    ig = d / "app" / "src" / "test" / "java" / "x" / "IgnoredTest.kt"
+    ig.write_text(_tqg_kt(_rb_fn("        assertEquals(3, k())", name="ignored_case")).replace("CalcTest", "IgnoredTest"), encoding="utf-8")
+    (d / ".gitignore").write_text("app/src/test/java/x/IgnoredTest.kt\n", encoding="utf-8")
+    caps, skipped, _g = m._redbase_collect(rr, [row("ignored_case")], m.load_platforms(rr)["platforms"])
+    check("S1 被 git 忽略(沒追蹤)的檔:不存", not caps and any("忽略" in r_ for _n, r_ in skipped), skipped)
+    (d / ".gitignore").unlink()
+    ig.unlink()
+    caps, skipped, _g = m._redbase_collect(rr, [row("checkout_discount")], plats)
+    check("★前置★ 恢復後收得到", len(caps) == 1, skipped)
+    (d / _TQG_T).write_text(_tqg_kt(_rb_fn("        assertEquals(800, checkout(1000))")), encoding="utf-8")
+    field, sk2 = m._redbase_write(rr, "甲", "SPEC-k0000001", caps, [], [])
+    check("S1 判紅後檔案又被改:不存、原因記下", field is None and any("又被改" in r_ for _n, r_ in sk2), sk2)
+    py = {"py": {"profile_name": "python", "profile": m.TEST_PROFILES["python"], "root": d}}
+    caps, skipped, _g = m._redbase_collect(rr, [row("t_x", pl="py")], py)
+    check("S1 Python 的測試不存、原因寫不是 Kotlin 或 Java", not caps and any("不是 Kotlin 或 Java" in r_ for _n, r_ in skipped), skipped)
+    _rb_writer_edges(m, d)
+
+
+def _rb_writer_edges(m, d):
+    """[S1 代碼審 r1] 寫入端的邊界:跨平台同名、JSON 跳脫後超過 5 MB、紅燈版路徑被忽略或是符號連結、上一份紅燈版是符號連結或版本不認得、
+    不存原因被判綠擠掉、讀不出治理帳要出聲。"""
+    import hashlib
+    import json as _j
+    kt = m.TEST_PROFILES["kotlin-junit"]
+    for sub, cls in (("android", "ATest"), ("backend", "BTest")):
+        f = d / sub / "app" / "src" / "test" / "java" / "x" / f"{cls}.kt"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(_tqg_kt(_rb_fn("        assertEquals(1, calc())", name="shouldCalc")).replace("CalcTest", cls), encoding="utf-8")
+    two = {"android": {"profile_name": "kotlin-junit", "profile": kt, "root": d / "android"},
+           "backend": {"profile_name": "kotlin-junit", "profile": kt, "root": d / "backend"}}
+    caps, sk, _g = m._redbase_collect(d, [("S1", "android", "shouldCalc", "red", "", ""), ("S2", "backend", "shouldCalc", "red", "", "")], two)
+    check("S1 r1 跨平台同名兩支都紅:各收一份", sorted(c["path"] for c in caps) == ["android/app/src/test/java/x/ATest.kt",
+                                                                                 "backend/app/src/test/java/x/BTest.kt"], (caps, sk))
+    caps, sk, greens = m._redbase_collect(d, [("S1", "android", "shouldCalc", "green", "", ""), ("S2", "backend", "shouldCalc", "red", "", "")], two)
+    check("S1 r1 跨平台同名一綠一紅:紅的那個平台照收", [c["path"] for c in caps] == ["backend/app/src/test/java/x/BTest.kt"], (caps, sk))
+    check("S1 r1 判綠記到平台", ("android", "shouldCalc") in greens and ("backend", "shouldCalc") not in greens, greens)
+    bc = dict(caps[0]) if caps else {}
+    check("S1 r2 別的平台判綠過的同名測試:這個平台照存", bc and m._redbase_cap_reason(bc, {("android", "shouldCalc")}, {}) is None, bc.get("plat"))
+    check("★前置★ 同平台判綠過就不存", bc and "曾判綠" in (m._redbase_cap_reason(bc, {("backend", "shouldCalc")}, {}) or ""), "")
+    plats = m.load_platforms(d)["platforms"]
+    plat = next(iter(plats))
+    caps, _sk, _g = m._redbase_collect(d, [("S1", plat, "checkout_discount", "red", "", "")], plats)
+    check("★前置★ 收得到 checkout_discount", len(caps) == 1, _sk)
+    # JSON 跳脫後超過 5 MB(原文沒超過)
+    big = d / "app" / "src" / "test" / "java" / "x" / "Quote.kt"
+    text = "// " + ('"' * 60 + "\n// ") * 70000 + "\n"
+    big.write_text(text, encoding="utf-8")
+    c = {"name": "q", "path": "app/src/test/java/x/Quote.kt", "key": "Quote.q", "text": text, "body": "x",
+         "sha": hashlib.sha256(text.encode("utf-8")).hexdigest(), "abs": big, "clauses": {"S9"}, "plat": plat}
+    check("★前置★ 原文在 5 MB 內、跳脫後超過", len(text.encode()) < 5_000_000 < len(_j.dumps(text).encode()), len(text.encode()))
+    field, sk = m._redbase_write(d, "甲", "SPEC-w0000001", [c, *caps], [], [])
+    check("S1 r1 JSON 跳脫後超過 5 MB:那一支不存、其他照存", field is not None and [n for n, r_ in sk if "5 MB" in r_] == ["q"], (field, sk))
+    big.unlink()
+    # 同一支檔 800 支紅的測試:只讀、只切一次
+    import time as _t
+    many = d / "app" / "src" / "test" / "java" / "x" / "ManyTest.kt"
+    many.write_text(_tqg_kt(*[_rb_fn(f"        assertEquals({i}, f{i}())", name=f"m{i}") for i in range(800)]).replace("CalcTest", "ManyTest"),
+                    encoding="utf-8")
+    t0 = _t.monotonic()
+    mc, _msk, _mg = m._redbase_collect(d, [("S1", plat, f"m{i}", "red", "", "") for i in range(800)], m.load_platforms(d)["platforms"])
+    dt = _t.monotonic() - t0
+    check("S1 r1 同一支檔 800 支紅的測試:3 秒內收完", len(mc) == 800 and dt < 3.0, (len(mc), f"{dt:.2f}s"))
+    # r2:上一份紅燈版有 800 支時,寫入端讀它也只切一次
+    pdoc = _j.dumps({"version": 1, "tests": [{"name": c_["name"], "clauses": ["S1"], "path": c_["path"], "key": c_["key"]} for c_ in mc],
+                     "files": {mc[0]["path"]: mc[0]["text"]}}, ensure_ascii=False).encode("utf-8")
+    prel = "governance/redbase/甲/SPEC-w0000099.json"
+    (d / prel).parent.mkdir(parents=True, exist_ok=True)
+    (d / prel).write_bytes(pdoc)
+    t0 = _t.monotonic()
+    _g2, prev = m._redbase_branch_state(d, "甲", [{"loop": "甲", "kind": "spec-gate-record", "redbase": {"path": prel, "sha256": hashlib.sha256(pdoc).hexdigest()}}])
+    dt = _t.monotonic() - t0
+    check("S1 r2 寫入端讀 800 支的上一份紅燈版:3 秒內", len(prev) == 800 and dt < 3.0, (len(prev), f"{dt:.2f}s"))
+    (d / prel).unlink()
+    many.unlink()
+    # 不存原因不被判綠擠掉
+    rec = {"loop": "甲", "token": "SPEC-w0000002"}
+    (d / _TQG_T).write_text((d / _TQG_T).read_text(encoding="utf-8") + "\n", encoding="utf-8")   # 判紅後又被改
+    m._redbase_attach(d, rec, (caps, [(f"g{i}", "判綠") for i in range(25)], set()))
+    check("S1 r1 判綠很多時,判紅後又被改的那支原因照記", any(x["name"] == "checkout_discount" and "又被改" in x["reason"]
+                                                           for x in rec.get("redbase_skipped") or []), rec.get("redbase_skipped"))
+    caps, _sk, _g = m._redbase_collect(d, [("S1", plat, "checkout_discount", "red", "", "")], plats)
+    # 紅燈版路徑被 git 忽略
+    (d / ".gitignore").write_text("governance/redbase/\n", encoding="utf-8")
+    field, sk = m._redbase_write(d, "甲", "SPEC-w0000003", caps, [], [])
+    check("S1 r1 紅燈版路徑被 git 忽略:不寫、講原因", field is None and any("忽略" in r_ for _n, r_ in sk), sk)
+    (d / ".gitignore").unlink()
+    # 紅燈版資料夾是符號連結(指到 repo 外)
+    outside = Path(tempfile.mkdtemp(prefix="gctl-rb-out-"))
+    rbd = d / "governance" / "redbase"
+    moved = d / "governance" / "redbase.bak"
+    if rbd.exists():
+        rbd.rename(moved)
+    rbd.parent.mkdir(exist_ok=True)
+    rbd.symlink_to(outside, target_is_directory=True)
+    field, sk = m._redbase_write(d, "甲", "SPEC-w0000004", caps, [], [])
+    check("S1 r1 紅燈版資料夾是符號連結:不寫到外面", field is None and not any(outside.rglob("*.json")) and any("符號連結" in r_ for _n, r_ in sk),
+          (field, sk, list(outside.rglob("*"))))
+    rbd.unlink()
+    if moved.exists():
+        moved.rename(rbd)
+    # 上一份紅燈版是符號連結、或版本不認得:不拿來去重
+    body_doc = _j.dumps({"version": 1, "tests": [{"name": "checkout_discount", "clauses": ["S1"], "path": _TQG_T, "key": "CalcTest.checkout_discount"}],
+                         "files": {_TQG_T: caps[0]["text"]}}, ensure_ascii=False).encode("utf-8")
+    ext = outside / "prev.json"
+    ext.write_bytes(body_doc)
+    link = d / "governance" / "redbase" / "甲" / "link.json"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(ext)
+    rows = [{"loop": "甲", "kind": "spec-gate-record", "redbase": {"path": "governance/redbase/甲/link.json", "sha256": hashlib.sha256(body_doc).hexdigest()}}]
+    field, sk = m._redbase_write(d, "甲", "SPEC-w0000005", caps, [], rows)
+    check("S1 r1 上一份紅燈版是符號連結:不跟過去、照存", field is not None, sk)
+    link.unlink()
+    v2 = body_doc.replace(b'"version": 1', b'"version": 2')
+    (d / "governance" / "redbase" / "甲" / "v2.json").write_bytes(v2)
+    rows = [{"loop": "甲", "kind": "spec-gate-record", "redbase": {"path": "governance/redbase/甲/v2.json", "sha256": hashlib.sha256(v2).hexdigest()}}]
+    field, sk = m._redbase_write(d, "甲", "SPEC-w0000006", caps, [], rows)
+    check("S1 r1 上一份紅燈版版本不認得:不拿來去重、照存", field is not None, sk)
+    # 讀不出治理帳要出聲
+    real = m._gov_rows_delta
+    m._gov_rows_delta = lambda *a, **k: (None, None, "頂端")
+    try:
+        say = _tqg_say(m._redbase_branch_rows, d)
+    finally:
+        m._gov_rows_delta = real
+    check("S1 r1 寫入端讀不出治理帳:印一句", "讀不出" in say, say)
+
+
+def t_spec_gate_redbase_skips_after_green():
+    """[S6] 這條分支上規格閘曾把一支 Kotlin 綁定測試判綠(風險低「新行為沒紅」擋下那次也算),之後又判紅:寫 spec-gate-green 事件、
+    之後不存那支的紅燈版,redbase_skipped 原因寫「曾判綠」;擋下訊息的補跑步驟多一句「這樣補跑的測試不會有紅燈版」。
+    翻紅釘:綠時不寫事件、寫入前不看分支上的判綠事件、補跑步驟沒那句 → 紅。"""
+    d, kg = _rb_sg_repo("rb6")
+    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+    (d / "green_checkout_discount").write_text("")
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    out = r.stdout + r.stderr
+    check("★前置★ 實作後才跑:擋下並印補跑步驟", r.returncode == 1 and "實作後才跑" in out, out[-600:])
+    check("S6 補跑步驟多一句不會有紅燈版", "這樣補跑的測試不會有紅燈版" in out, out[-800:])
+    ev = _rb_gov(d, "spec-gate-green")
+    check("S6 判綠時寫一筆 spec-gate-green 事件", ev and "checkout_discount" in (ev[-1].get("tests") or []) and ev[-1].get("loop") == "甲", ev)
+    (d / "green_checkout_discount").unlink()
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    rec = _sg_records(kg)[-1] if _sg_records(kg) else {}
+    check("★前置★ 換成空殼後跑紅、PASS 並留痕", r.returncode == 0 and rec, (r.stdout + r.stderr)[-600:])
+    check("S6 曾判綠的那支不存紅燈版、原因寫曾判綠",
+          "redbase" not in rec and any(x.get("name") == "checkout_discount" and "曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped")))
+    # 判綠只看這條分支:主線上早就有的判綠事件不算
+    import json as _j
+    import subprocess as _sp
+    d2, kg2 = _rb_sg_repo("rb6b")
+    old = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
+                    "items": [["kotlin-junit", "checkout_discount"]]}, ensure_ascii=False)
+    led = d2 / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + old + "\n", encoding="utf-8")
+    _sg_commit(d2, "main 上的舊判綠")
+    _sp.run(["git", "-C", str(d2), "update-ref", "refs/remotes/origin/main", "HEAD"])
+    _sp.run(["git", "-C", str(d2), "checkout", "-q", "-b", "feat"])
+    _sg_plan2(kg2, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+    r = run(kg2, "spec-gate", "Projects/甲_計劃")
+    rec2 = _sg_records(kg2)[-1] if _sg_records(kg2) else {}
+    check("S6 主線上早就有的判綠不算:這條分支跑紅照存", r.returncode == 0 and "redbase" in rec2, (rec2.get("redbase_skipped"), (r.stdout + r.stderr)[-400:]))
+
+
+def _gb_repo(tag):
+    """治理帳被 git 忽略的規格閘 fixture(_ig_sg_repo)加一份計劃,主線記成 origin/main → (專案根, vault, 主線分支名, git)。"""
+    import subprocess as _sp
+    d, kg = _ig_sg_repo(tag, True)
+    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+
+    def git(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    main = git("symbolic-ref", "--short", "HEAD").stdout.strip()
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    return d, kg, main, git
+
+
+def _gb_red(kg):
+    """跑一次規格閘(假執行器判紅)→ (留痕, 輸出)。"""
+    r = run(kg, "spec-gate", "Projects/甲_計劃")
+    recs = _sg_records(kg)
+    return (recs[-1] if recs else {}), r.stdout + r.stderr
+
+
+def t_spec_gate_redbase_green_other_branch():
+    """[判綠紀錄限本分支 S1 S2 S6 S9] 治理帳被 git 忽略時,規格閘只認這條分支(同一個分支名、head_sha 是目前 HEAD 的祖先)留下的判綠紀錄與上一份紅燈版。
+    應抓到的錯:讀工作目錄整本帳 → 別條分支的判綠漏過來,新分支一個紅燈版都不存(考場實測);寫判綠不記分支名 → 從同一個提交開新分支重來照樣漏;
+    只看祖先不看名字、只看名字不看祖先、提交不存在當成判不了照留,各自紅。"""
+    import json as _j
+    # S1:別條分支(同一個提交上)判綠過,新分支照存;S2:同一條分支照舊不存
+    d, kg, main, git = _gb_repo("gb1")
+    git("checkout", "-q", "-b", "featA")
+    (d / "green_checkout_discount").write_text("")
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    ev = _rb_gov(d, "spec-gate-green")
+    check("S1 判綠紀錄記下分支名", ev and ev[-1].get("ref") == "featA", ev)
+    (d / "green_checkout_discount").unlink()
+    git("checkout", "-q", "-b", "featB", main)
+    rec, out = _gb_red(kg)
+    check("S1 別條分支判綠過:新分支跑紅照存紅燈版", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    check("S1 新留痕也記下分支名", (_rb_gov(d, "spec-gate-record") or [{}])[-1].get("ref") == "featB", _rb_gov(d, "spec-gate-record"))
+    git("checkout", "-q", "featA")
+    git("tag", "featA")   # 有同名 tag 時 symbolic-ref --short 回 heads/featA,分支名要照樣對得上
+    rec, out = _gb_red(kg)
+    check("S2 同一條分支判綠過(另有同名 tag):照舊不存、原因寫曾判綠",
+          "redbase" not in rec and any("曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
+    # S2:沒有分支名也沒有 head_sha 的舊紀錄照舊算
+    d, kg, main, git = _gb_repo("gb2")
+    git("checkout", "-q", "-b", "featA")
+    old = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
+                    "items": [["kotlin-junit", "checkout_discount"]]}, ensure_ascii=False)
+    led = d / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + old + "\n", encoding="utf-8")
+    rec, out = _gb_red(kg)
+    check("S2 沒有分支名與 head_sha 的舊判綠紀錄:照舊不存", "redbase" not in rec, (rec.get("redbase"), out[-400:]))
+    # S6:同名分支刪掉重開,舊提交不再是祖先 → 照存;head_sha 指的提交根本不存在 → 照存
+    d, kg, main, git = _gb_repo("gb3")
+    git("checkout", "-q", "-b", "featA")
+    (d / "note.txt").write_text("x")
+    git("add", "note.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
+    (d / "green_checkout_discount").write_text("")
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    (d / "green_checkout_discount").unlink()
+    git("checkout", "-q", main)
+    ev3 = _rb_gov(d, "spec-gate-green")
+    green_sha = ev3[-1].get("head_sha") if ev3 else None
+    git("branch", "-q", "-D", "featA")
+    git("checkout", "-q", "-b", "featA")
+    anc = git("merge-base", "--is-ancestor", green_sha or "x", "HEAD").returncode
+    check("★前置★ 判綠紀錄寫進帳、記了分支名,同名重開後那個提交已不是祖先",
+          ev3 and ev3[-1].get("ref") == "featA" and anc == 1, (ev3[-1:] if ev3 else ev3, anc))
+    rec, out = _gb_red(kg)
+    check("S6 同名重開、判綠那時的提交不是祖先:照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    d, kg, main, git = _gb_repo("gb4")
+    git("checkout", "-q", "-b", "featA")
+    gone = _j.dumps({"gate": "spec-gate", "kind": "spec-gate-green", "loop": "甲", "tests": ["checkout_discount"],
+                     "items": [["kotlin-junit", "checkout_discount"]], "head_sha": "ab" * 20}, ensure_ascii=False)
+    led = d / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + gone + "\n", encoding="utf-8")
+    rec, out = _gb_red(kg)
+    check("S6 head_sha 指的提交不存在(完整 repo):照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    # S9:別條分支存的紅燈版不拿來去重
+    d, kg, main, git = _gb_repo("gb5")
+    git("checkout", "-q", "-b", "featA")
+    rec, out = _gb_red(kg)
+    check("★前置★ 第一條分支存了紅燈版", "redbase" in rec, out[-400:])
+    git("checkout", "-q", "-b", "featC", main)
+    rec, out = _gb_red(kg)
+    check("S9 別條分支的上一份紅燈版不拿來去重:照存", "redbase" in rec, (rec.get("redbase_skipped"), out[-500:]))
+    git("checkout", "-q", "featA")
+    rec, out = _gb_red(kg)
+    check("S9 同一條分支照舊去重:跟上一份相同不存",
+          "redbase" not in rec and any("上一份" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
+
+
+def t_spec_gate_redbase_green_tracked_unfiltered():
+    """[判綠紀錄限本分支 S7] 治理帳進版控時不做祖先與分支名過濾:這條分支自己的判綠紀錄,head_sha 因為改寫提交不再是祖先,照舊算判綠過、不存紅燈版。
+    應抓到的錯:不管帳有沒有被忽略一律過濾 → 壓提交或 rebase 後自己的判綠被丟掉、多存一份實作後的紅燈版。"""
+    import subprocess as _sp
+    d, kg = _rb_sg_repo("gbt")
+    _sg_plan2(kg, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+
+    def git(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("checkout", "-q", "-b", "feat")
+    (d / "note.txt").write_text("x")
+    git("add", "note.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
+    (d / "green_checkout_discount").write_text("")
+    run(kg, "spec-gate", "Projects/甲_計劃")
+    ev = _rb_gov(d, "spec-gate-green")
+    old_head = ev[-1].get("head_sha") if ev else None
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--amend", "-m", "改寫過的提交", "--no-verify")
+    new_head = git("rev-parse", "HEAD").stdout.strip()
+    anc = git("merge-base", "--is-ancestor", old_head or "x", "HEAD").returncode
+    check("★前置★ 判綠時的提交已不是祖先", old_head and old_head != new_head and anc == 1, (old_head, new_head, anc))
+    (d / "green_checkout_discount").unlink()
+    rec, out = _gb_red(kg)
+    check("S7 帳進版控:自己的判綠照舊算、不存紅燈版",
+          "redbase" not in rec and any("曾判綠" in x.get("reason", "") for x in rec.get("redbase_skipped") or []),
+          (rec.get("redbase"), rec.get("redbase_skipped"), out[-400:]))
+
+
+def t_redbase_branch_rows_fallback_keeps():
+    """[判綠紀錄限本分支 S8] 治理帳被忽略、但判不了是不是這條分支的(淺複製裡回「不是祖先」或查不到、部分複製、過了截止時間、超過上限)時,
+    那幾筆照舊算進來並印一句說明;分支名不同、別份計劃的照丟(不用問 git)。超過上限時先問最新的。
+    應抓到的錯:判不了就丟 → 結果看機器快慢;淺複製把「不是祖先」或查不到當真 → 丟掉真的祖先;部分複製照問 → git 自動連遠端抓;
+    不印說明 → 使用者不知道沒過濾;上限先花在舊紀錄 → 最新的別分支判綠漏過來。"""
+    import contextlib
+    import io
+    import json as _j
+    import subprocess as _sp
+    import time as _t
+    m = _tqg_module()
+    d, kg, main, git = _gb_repo("gbf")
+    git("checkout", "-q", "-b", "featA")
+    h0 = git("rev-parse", "HEAD").stdout.strip()
+
+    def ev(sha, ref=None, loop="甲"):
+        e = {"gate": "spec-gate", "kind": "spec-gate-green", "loop": loop, "tests": ["checkout_discount"],
+             "items": [["kotlin-junit", "checkout_discount"]], "head_sha": sha}
+        if ref:
+            e["ref"] = ref
+        return _j.dumps(e, ensure_ascii=False)
+
+    def rows(root, budget, ignored="ignored"):
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            got = m._redbase_branch_rows(root, "甲", ignored, budget)
+        return [x.get("head_sha") for x in got if x.get("kind") == "spec-gate-green"], buf.getvalue()
+    led = d / "docs" / ".governance-log.jsonl"
+    led.write_text(led.read_text(encoding="utf-8") + ev("cd" * 20) + "\n" + ev(h0) + "\n" + ev(h0, "other") + "\n" + ev("ef" * 20, loop="乙") + "\n",
+                   encoding="utf-8")
+    # 過了截止時間:兩筆要問 git 的都判不了 → 照留;分支名不同、別份計劃的照丟
+    shas, out = rows(d, -1)
+    check("S8 過了截止時間:判不了的照留、分支名不同的照丟、別份計劃的不算", shas == ["cd" * 20, h0], shas)
+    check("S8 過了截止時間:印一句幾筆判不了", "2 筆" in out and "照舊算進來" in out, out)
+    # 超過上限:上限設 1,先問最新的(h0,是祖先、留),較舊的 cd 沒問到照留
+    old = m._REDBASE_ANC_CAP
+    try:
+        m._REDBASE_ANC_CAP = 1
+        shas, out = rows(d, 30)
+    finally:
+        m._REDBASE_ANC_CAP = old
+    check("S8 超過上限:先問最新的,較舊的沒問到照留", shas == ["cd" * 20, h0], shas)
+    check("S8 超過上限:印一句一筆判不了", "1 筆" in out and "照舊算進來" in out, out)
+    forks = []
+    real_fork = m._lens_fork_point
+    try:
+        m._lens_fork_point = lambda *a, **k: forks.append(1) or real_fork(*a, **k)
+        shas, out = rows(d, 30)
+        check("★對照★ 完整 repo、時間夠:不存在的提交丟、祖先留、不印", shas == [h0] and "照舊算進來" not in out, (shas, out))
+        check("S8 帳被忽略、完整 repo:照舊算分岔點(帳曾進版控時要減掉主線上的舊判綠)", forks != [], len(forks))
+        shas, out = rows(d, 30, "unknown")
+        check("S8 判不了帳有沒有被忽略:不過濾,整本照算", shas == ["cd" * 20, h0, h0], shas)
+        # 判不了是不是部分複製(git config 叫不起來或逾時):帳不是被忽略時不讀分岔點那一版、講明
+        forks.clear()
+        real_pc = m._git_partial_clone
+        try:
+            m._git_partial_clone = lambda *a, **k: None
+            buf = io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                got = m._redbase_branch_rows(d, "甲", "not")
+        finally:
+            m._git_partial_clone = real_pc
+        check("S10 判不了是不是部分複製、帳進版控:不讀分岔點那一版、講明", got == [] and forks == [] and "判不了是不是" in buf.getvalue(),
+              (got, len(forks), buf.getvalue()))
+    finally:
+        m._lens_fork_point = real_fork
+    check("S10 git 叫不起來時部分複製判斷回判不了(None),不當成不是", m._git_partial_clone(d.parent / "gbf-沒有這個目錄") is None,
+          m._git_partial_clone(d.parent / "gbf-沒有這個目錄"))
+    real_fork = m._lens_fork_point
+    try:
+        m._lens_fork_point = lambda *a, **k: forks.append(1) or real_fork(*a, **k)
+    finally:
+        m._lens_fork_point = real_fork
+    # 分離 HEAD:取不到分支名,只剩祖先判斷,記了別的分支名的照樣只看祖先
+    git("checkout", "-q", "--detach", "featA")
+    shas, out = rows(d, 30)
+    check("S8 分離 HEAD:不比分支名、只看祖先", shas == [h0, h0], shas)
+    # 還沒有提交的 HEAD:不問 git、照留,分支名不同照丟
+    git("checkout", "-q", "--orphan", "orph")
+    shas, out = rows(d, 30)
+    check("S8 還沒有提交的 HEAD:不崩、不問祖先照留、分支名不同照丟", shas == ["cd" * 20, h0], shas)
+    git("checkout", "-q", "-f", "featA")
+    # 淺複製:查不到的提交、真祖先被截斷而回「不是祖先」,都照留
+    git("checkout", "-q", "-b", "featS")
+    (d / "note.txt").write_text("x")
+    git("add", "note.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "分支上的提交", "--no-verify")
+    sh = d.parent / "gbf-shallow"
+    _sp.run(["git", "clone", "-q", "--depth", "1", "--no-local", "-b", "featS", str(d), str(sh)], capture_output=True)
+    _sp.run(["git", "-C", str(sh), "fetch", "-q", "--depth", "1", "origin", main], capture_output=True)
+    (sh / "docs").mkdir(exist_ok=True)
+    (sh / "docs" / ".governance-log.jsonl").write_text(ev("cd" * 20) + "\n" + ev(h0) + "\n", encoding="utf-8")
+    shallow = _sp.run(["git", "-C", str(sh), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True).stdout.strip()
+    rc1 = _sp.run(["git", "-C", str(sh), "merge-base", "--is-ancestor", h0, "HEAD"], capture_output=True).returncode
+    check("★前置★ 淺複製建起來了、真祖先被截斷而回不是祖先", shallow == "true" and rc1 == 1, (shallow, rc1))
+    shas, out = rows(sh, 30)
+    check("S8 淺複製:查不到的提交與回不是祖先的真祖先都照留", shas == ["cd" * 20, h0], shas)
+    check("S8 淺複製:印一句兩筆判不了", "2 筆" in out and "照舊算進來" in out, out)
+    # 部分複製:整批不問 git(問本機沒有的提交會自動連遠端抓),照留
+    pc = d.parent / "gbf-partial"
+    _sp.run(["git", "clone", "-q", "--no-local", "-b", "featA", str(d), str(pc)], capture_output=True)
+    _sp.run(["git", "-C", str(pc), "config", "core.repositoryformatversion", "1"])
+    _sp.run(["git", "-C", str(pc), "config", "extensions.partialClone", "origin"])
+    (pc / "docs").mkdir(exist_ok=True)
+    (pc / "docs" / ".governance-log.jsonl").write_text(ev("ab" * 20) + "\n", encoding="utf-8")
+    mark = d.parent / "gbf-fetched"
+    if sys.platform != "win32":   # 遠端抓取程式換成留記號就失敗的小腳本:有記號 = git 為了查不到的提交去連遠端了
+        upl = d.parent / "gbf-upload-pack.sh"
+        upl.write_text(f"#!/bin/sh\ntouch '{mark}'\nexit 1\n", encoding="utf-8")
+        upl.chmod(0o755)
+        _sp.run(["git", "-C", str(pc), "config", "remote.origin.uploadpack", str(upl)])
+        probe = _sp.run(["git", "-C", str(pc), "cat-file", "-e", ("ab" * 20) + "^{commit}"], capture_output=True)
+        check("★前置★ 部分複製查本機沒有的提交會去連遠端", probe.returncode != 0 and mark.exists(), (probe.returncode, mark.exists()))
+        mark.unlink(missing_ok=True)
+    shas, out = rows(pc, 30)
+    check("S8 部分複製:照留", shas == ["ab" * 20], shas)
+    check("S8 部分複製:印一句", "1 筆" in out and "照舊算進來" in out, out)
+    if sys.platform != "win32":
+        check("S8 部分複製:沒有為了判祖先去連遠端", not mark.exists(), mark.exists())
+    # 新式部分複製只寫 remote.<名>.promisor 與 partialCloneFilter,沒有 extensions.partialClone:照樣認得
+    pc2 = d.parent / "gbf-partial2"
+    _sp.run(["git", "clone", "-q", "--no-local", "-b", "featA", str(d), str(pc2)], capture_output=True)
+    _sp.run(["git", "-C", str(pc2), "config", "remote.origin.promisor", "true"])
+    _sp.run(["git", "-C", str(pc2), "config", "remote.origin.partialclonefilter", "blob:none"])
+    (pc2 / "docs").mkdir(exist_ok=True)
+    (pc2 / "docs" / ".governance-log.jsonl").write_text(ev("ab" * 20) + "\n", encoding="utf-8")
+    if sys.platform != "win32":
+        _sp.run(["git", "-C", str(pc2), "config", "remote.origin.uploadpack", str(upl)])
+        probe = _sp.run(["git", "-C", str(pc2), "cat-file", "-e", ("ab" * 20) + "^{commit}"], capture_output=True)
+        check("★前置★ 只寫 promisor 的複製查本機沒有的提交也會去連遠端", probe.returncode != 0 and mark.exists(), (probe.returncode, mark.exists()))
+        mark.unlink(missing_ok=True)
+    shas, out = rows(pc2, 30)
+    check("S8 只寫 promisor 的部分複製:照留", shas == ["ab" * 20], shas)
+    if sys.platform != "win32":
+        check("S8 只寫 promisor 的部分複製:沒去連遠端", not mark.exists(), mark.exists())
+    # 帳進版控(或判不了有沒有被忽略)的部分複製:讀分岔點那一版也會自動連遠端,整個不讀、講明這次沒有判綠觀測與去重
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        got = m._redbase_branch_rows(pc, "甲", "not")
+    check("S10 部分複製、帳進版控:不讀分岔點那一版、講明沒有判綠觀測", got == [] and "部分複製" in buf.getvalue() and not mark.exists(),
+          (got, buf.getvalue(), mark.exists()))
+    forks2 = []
+    real_fork2 = m._lens_fork_point
+    try:
+        m._lens_fork_point = lambda *a, **k: forks2.append(1) or real_fork2(*a, **k)
+        shas, out = rows(pc, 30)
+    finally:
+        m._lens_fork_point = real_fork2
+    check("S10 部分複製、帳被忽略:不算分岔點、直接讀工作目錄那份", forks2 == [] and shas == ["ab" * 20], (len(forks2), shas))
+    # SHA-256 的 repo:帳被忽略時直接讀工作目錄那份,不經過只對 SHA-1 有效的空樹
+    s2 = d.parent / "gbf-sha256"
+    r256 = _sp.run(["git", "init", "-q", "--object-format=sha256", "-b", "featA", str(s2)], capture_output=True)
+    check("★前置★ 這版 git 建得起 SHA-256 的 repo(建不起來就大聲失敗,不靜默略過)", r256.returncode == 0, r256.stderr)
+    if r256.returncode == 0:
+        (s2 / "f.txt").write_text("x")
+        _sp.run(["git", "-C", str(s2), "add", "f.txt"])
+        _sp.run(["git", "-C", str(s2), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+        h256 = _sp.run(["git", "-C", str(s2), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+        (s2 / "docs").mkdir()
+        (s2 / "docs" / ".governance-log.jsonl").write_text(ev(h256, "featA") + "\n", encoding="utf-8")
+        check("★前置★ SHA-256 的 repo 建起來了", len(h256) == 64, h256)
+        shas, out = rows(s2, 30)
+        check("S8 SHA-256 的 repo、帳被忽略:同分支的判綠照算、不說讀不出", shas == [h256] and "讀不出" not in out, (shas, out))
+        shas, out = rows(s2, 30, "not")
+        check("S8 SHA-256 的 repo、帳進版控、沒有分岔點:空樹照 repo 格式算、判綠照算", shas == [h256] and "讀不出" not in out, (shas, out))
+    # 帳曾進版控、後來才改成忽略:主線上的舊判綠(head_sha 是祖先、沒記分支名)要照舊被分岔點那一版減掉
+    d3, kg3 = _rb_sg_repo("gbtr")
+    _sg_plan2(kg3, "甲", ["- [S1] 結帳滿千應打九折 [test:checkout_discount]"])
+
+    def git3(*a):
+        return _sp.run(["git", "-C", str(d3), *a], capture_output=True, text=True)
+    hm = git3("rev-parse", "HEAD").stdout.strip()
+    led3 = d3 / "docs" / ".governance-log.jsonl"
+    led3.write_text(led3.read_text(encoding="utf-8") + ev(hm) + "\n", encoding="utf-8")
+    _sg_commit(d3, "主線上的舊判綠")
+    git3("update-ref", "refs/remotes/origin/main", "HEAD")
+    git3("checkout", "-q", "-b", "feat")
+    git3("rm", "-q", "--cached", "docs/.governance-log.jsonl")
+    (d3 / ".gitignore").write_text("docs/.governance-log.jsonl\n", encoding="utf-8")
+    _sg_commit(d3, "改成忽略治理帳")
+    st3 = m._gov_ledger_ignored(d3)[0]
+    check("★前置★ 帳已改成被忽略、主線那一版還有舊判綠", st3 == "ignored" and ev(hm) in git3("show", "origin/main:docs/.governance-log.jsonl").stdout, st3)
+    shas, out = rows(d3, 30)
+    check("S8 帳曾進版控後改成忽略:主線上的舊判綠照舊被減掉", hm not in shas, (shas, out))
+
+
+def t_git_partial_clone_keys():
+    """[判綠紀錄限本分支 S8 S10] 認部分複製照 git 的設計文件三個設定、照 git 自己的布林規則:extensions.partialClone、promisor 為真、
+    partialCloneFilter 各自單獨就算;promisor 為假(false、0、等號後空字串)不算;裸鍵與 promisor = 2 算;遠端名含空白也切得對。
+    應抓到的錯:只看一個設定、自己猜值的寫法(漏裸鍵、漏整數)、用空白切鍵與值(遠端名含空白時把 false 判成真)。"""
+    import subprocess as _sp
+    m = _tqg_module()
+    root = mkvault().parent.parent / "gpc"
+    _sp.run(["git", "init", "-q", str(root)])
+    cfg = root / ".git" / "config"
+    base = cfg.read_text(encoding="utf-8")
+    cases = (
+        ("沒有任何設定", "", False),
+        ("只有 extensions.partialClone", "[extensions]\n\tpartialClone = origin\n", True),
+        ("只有 promisor = true", '[remote "origin"]\n\tpromisor = true\n', True),
+        ("只有 partialCloneFilter", '[remote "origin"]\n\tpartialCloneFilter = blob:none\n', True),
+        ("沒有等號的裸鍵 promisor", '[remote "origin"]\n\tpromisor\n', True),
+        ("promisor = 2", '[remote "origin"]\n\tpromisor = 2\n', True),
+        ("promisor = false", '[remote "origin"]\n\tpromisor = false\n', False),
+        ("promisor = 0", '[remote "origin"]\n\tpromisor = 0\n', False),
+        ("promisor = 空字串", '[remote "origin"]\n\tpromisor =\n', False),
+        ("遠端名含空白、promisor = false", '[remote "my remote"]\n\tpromisor = false\n', False),
+        ("遠端名含空白、promisor = true", '[remote "my remote"]\n\tpromisor = true\n', True),
+        ("promisor = 0k(單位字尾)", '[remote "origin"]\n\tpromisor = 0k\n', False),
+        ("promisor = 0x0", '[remote "origin"]\n\tpromisor = 0x0\n', False),
+        ("promisor = 010(八進位 8)", '[remote "origin"]\n\tpromisor = 010\n', True),
+        ("promisor = TRUE", '[remote "origin"]\n\tpromisor = TRUE\n', True),
+        ("promisor = 0_0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0_0\n', True),
+        ("promisor = 0b0(git 判法照平台而定,寧可多小心)", '[remote "origin"]\n\tpromisor = 0b0\n', True),
+    )
+    # 0b0:glibc 2.38 起 C23 的字串轉整數認 0b,Linux 上新編的 git 讀成假、macOS 的 git 拒絕——git 自己兩平台不一,不對照
+    no_compare = {"promisor = 0b0(git 判法照平台而定,寧可多小心)"}
+    for label, extra, want in cases:
+        cfg.write_text(base + extra, encoding="utf-8")
+        if extra:
+            gb = _sp.run(["git", "-C", str(root), "config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"], capture_output=True, text=True)
+            if "promisor" in extra and "partialCloneFilter" not in extra and gb.returncode == 0 and label not in no_compare:   # git 拒絕的寫法不對照
+                check(f"★對照★ {label}:git 自己的布林判讀", gb.stdout.strip().endswith("true") == want, gb.stdout)
+        got = m._git_partial_clone(root)
+        check(f"{label} → {want}", got is want, got)
+    cfg.write_text(base, encoding="utf-8")
+    _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "c", "--no-verify"])
+    real = m._git_partial_clone
+    try:   # 判不了是不是部分複製(git 叫不起來或逾時):回頭條件那支當判不了,不當成「不是」
+        m._git_partial_clone = lambda *a, **k: None
+        why = m._drift_born_env_err(root)
+    finally:
+        m._git_partial_clone = real
+    check("S8 判不了是不是部分複製:回頭條件那支判不了、講原因", why == "git 跑不起來", why)
+    check("★對照★ 不是部分複製、有提交:回頭條件那支照常判", m._drift_born_env_err(root) is None, m._drift_born_env_err(root))
 
 if __name__ == "__main__":
     sys.exit(main())

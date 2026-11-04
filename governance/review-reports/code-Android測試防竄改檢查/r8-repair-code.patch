@@ -1,0 +1,116 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index a6f38b111..d78a59426 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -48808,59 +48808,57 @@ def _tg_pairs(old, new, kotlin_test=False):
+ 
+ _TG_TRY = re.compile(r"\btry\s*\{")
+ _TG_CATCH = re.compile(r"\s*catch\s*\(")
+ _TG_OPEN_BRACE = re.compile(r"\s*\{")
+ # catch 接得住斷言失敗的型別:AssertionError 本身、或比它寬的 Error、Throwable(Kotlin 與 Java 寫法都認)
+ _TG_CATCH_ASSERT = re.compile(r"\b(?:AssertionError|AssertionFailedError|Error|Throwable)\b")
+ _TG_TRY_OK = re.compile(r"(?<![\w])(?:(?:Assert|Assertions|org\.junit\.Assert)\.)?(?:fail|assertThrows|assertFailsWith|assertFails)\s*[({<]")
+ _TG_RUNCATCH = re.compile(r"\brunCatching\s*\{")
+ _TG_FAIL_CALL = re.compile(r"(?<![\w])(?:Assert\.)?fail\s*\(")
+ _TG_THROW = re.compile(r"\bthrow\b")
+-_TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\((?!\s*true\s*\))")   # Kotlin 標準庫的檢查,不成立就丟例外;恆成立的 check(true) 不算
+-# Kotest 匹配器照名字認(shouldBe、shouldNot…、shouldHave…、shouldContain…、shouldStart…、shouldEnd…、shouldMatch…、shouldThrow…、
+-# shouldExist…),中綴(`a shouldBe b`)與點號呼叫(`a.shouldBe(b)`)都算;shouldRetry、shouldLog 這種一般名字、後面接 = 或 : 的宣告不算。
+-# _TG_INFIX_RE 是「這支測試有沒有斷言」用的寬判法(寧可多認),catch 判讀要分辨有沒有真的檢查,所以另用這條照名字認的
+-_TG_KOTEST_CHECK = re.compile(r"(?<!\w)should(?:Be|Not|Have|Contain|Start|End|Match|Throw|Exist)\w*(?!\w)(?!\s*[=:])")
++_TG_CHECK_CALL = re.compile(r"(?<![\w.])(?:check|require)\s*\(")       # Kotlin 標準庫的檢查,不成立就丟例外
+ _TG_NONSPACE = re.compile(r"\S")
+ 
+ 
+ def _tg_catch_no_fail(fn):
+     """try 沒有 fail、catch 裡斷言或是空的;try 裡有斷言、catch 接住斷言失敗卻不再丟出;runCatching 裡斷言沒接 getOrThrow。
+     斷言、fail、throw、catch 型別字的位置整支函式各算一次,每個 try 用二分查範圍裡有沒有,巢狀很深也跟長度成正比。"""
+     import bisect
+     b = fn["mbody"]
+     br = _rg_bracket_map(b)
+     pos = {k: [m.start() for m in rx.finditer(b)] for k, rx in
+-           (("assert", _TG_ASSERT_RE), ("infix", _TG_KOTEST_CHECK), ("ctype", _TG_CATCH_ASSERT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
++           (("assert", _TG_ASSERT_RE), ("infix", _TG_INFIX_RE), ("ctype", _TG_CATCH_ASSERT), ("check", _TG_CHECK_CALL), ("ok", _TG_TRY_OK), ("fail", _TG_FAIL_CALL),
+             ("throw", _TG_THROW))}
+ 
+     def has(kind, lo, hi):
+         p = pos[kind]
+         i = bisect.bisect_left(p, lo)
+         return i < len(p) and p[i] < hi
+     for t in _TG_TRY.finditer(b):
+         tb_end = br.get(t.end() - 1)
+         c = _TG_CATCH.match(b, tb_end + 1) if tb_end is not None else None
+         close = br.get(c.end() - 1) if c else None
+         o = _TG_OPEN_BRACE.match(b, close + 1) if close is not None else None
+         if not o or (o.end() - 1) not in br:
+             continue
+         cs, cb_end = o.end(), br[o.end() - 1]
+         if has("fail", cs, cb_end):
+             continue
+         catch_checks = has("assert", cs, cb_end) or has("infix", cs, cb_end) or has("check", cs, cb_end)
+         # 「try 沒有 fail、catch 裡斷言或是空的」:try 有 fail/assertThrows 是預期例外的寫法,不算
+         if not has("ok", t.end(), tb_end) and (catch_checks or not _TG_NONSPACE.search(b, cs, cb_end)):
+             return True
+-        # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError;含 Kotest 中綴斷言)被接得住它的 catch 接住、catch 不檢查也不再丟出:吞掉了
++        # try 裡的斷言(含 fail 本身,它丟的也是 AssertionError;含 Kotest 斷言)被接得住它的 catch 接住、catch 不再丟出:吞掉了。
++        # 照 Error Prone 的 AssertionFailureIgnored 只看結構,不看 catch 裡寫了什麼檢查(靠名字猜「算不算檢查」連三輪被打穿);
++        # catch 裡真的檢查了例外型別的寫法也會列,判錯的代價是多一條可放行的候選,建議改用 assertThrows/assertFailsWith/shouldThrow
+         tried = has("assert", t.end(), tb_end) or has("infix", t.end(), tb_end)
+-        if has("ctype", c.end(), close) and tried and not catch_checks and not has("throw", cs, cb_end):
++        if has("ctype", c.end(), close) and tried and not has("throw", cs, cb_end):
+             return True
+     for r in _TG_RUNCATCH.finditer(b):
+         end = br.get(r.end() - 1)
+         if end is not None and has("assert", r.end(), end) and not re.match(r"\s*\.\s*getOrThrow\s*\(", b[end + 1:end + 60]):
+             return True
+     return False
+ 
+ 
+ # 跳過標記:短名或完整類別名(@org.junit.jupiter.api.Disabled)都認;JUnit 5 的條件式(@DisabledOnOs、@EnabledOnOs…)在 CI 平台上等於關掉
+ _TG_SKIP_ANN_RE = re.compile(r"@(?:[\w.]+\.)?(?:Ignore|Disabled\w*|Enabled(?:On|If|For)\w*|SdkSuppress|FlakyTest)\b|@(?:[\w.]+\.)?Config\s*\(\s*sdk\b")
+@@ -49000,21 +48998,21 @@ def _tg_timeout_raised(old_lines, new_lines):
+     return out
+ 
+ 
+ _TG_WHY = {
+     "tq/skip-added": ("測試被加了跳過或假設條件,紅的測試會變成「略過」而不是失敗", "確認這支測試真的不適用,不是為了讓紅燈消失而跳過"),
+     "tq/test-removed": ("改動前有的測試函式不見了", "確認是需求拿掉了這個行為,不是為了讓紅燈消失而刪測試"),
+     "tq/assert-weakened": ("同一支測試的斷言變少、相等比對變少,或實際值被換成常值", "確認新斷言仍檢查需求要的結果"),
+     "tq/expected-changed": ("同一支測試的預期值被改了", "確認新預期值來自需求或人工確認,不是照程式目前的輸出改"),
+     "tq/no-assertion": ("新增或本體有變的測試沒有任何斷言", "補上檢查結果的斷言;只呼叫不檢查的測試永遠綠"),
+     "tq/catch-no-fail": ("例外被 catch 或 runCatching 接住,不丟例外或斷言失敗時測試照樣綠",
+-                         "改用 assertThrows/assertFailsWith;try 結尾已經有 fail() 時,catch 要檢查例外或重丟,不能接住 AssertionError 就放過"),
++                         "改用 assertThrows/assertFailsWith(Kotest 用 shouldThrow);catch 接得住 AssertionError 時,裡面不管寫什麼檢查,try 裡的斷言失敗與 fail() 都會先被它接住"),
+     "tq/timeout-raised": ("測試逾時被調大", "確認不是用放寬逾時掩蓋變慢或卡住"),
+     "tq/snapshot-changed": ("截圖基準圖或比對門檻有變", "看新舊比較圖,確認畫面變化是需求要的"),
+     "tq/test-env-sniff": ("正式程式碼在偵測自己是不是跑在測試裡", "確認不是在測試時走另一條路讓測試過"),
+     "tq/too-large": ("超過比對工具的上限:整支檔超過上限時整支沒有比對;只有超長行時那幾行沒有比對、其餘照比", "人工看這支檔的改動,或拆小"),
+     "tq/unparsable": ("剝完字串與註解後括號配不平或含 NUL,函式級規則判不了", "人工看這支檔的改動"),
+     "tq/unreadable": ("這支檔從 git 讀不出來(含檔名不是 UTF-8、含換行),沒有比對", "人工看這支檔的改動"),
+ }
+ 
+ 
+ def _tg_cand(rule, file, line, ident, nth=1, side="head", extra=""):
+@@ -49289,21 +49287,21 @@ def _tg_fn_cands(path, k, f, prev, kt):
+ 
+ 
+ # 抓不到的,跟測試品質標準〈推送前的防竄改檢查〉的「抓不到」那條是同一份(去掉反引號後逐句對得上,t_tq_guard_cli_contract 釘住)
+ _TG_LIMITS = ("只認 Kotlin 與 Java 的 @Test 這類註記標的測試(Kotest 字串式、Spek、JUnit 3 不認)",
+               "實作裡寫死測試輸入、查表、只做測試碰得到的路徑、多做沒人要的別名——這些靠 AI 看不到的組合或往返測試與審查",
+               "預期值先放進變數再斷言(val expected = 88)、參數化測試刪資料列、本體有改的改名(只列成刪除)、"
+               "逾時換單位(5.seconds 改 5.minutes)或整行新增的逾時、CI 的 timeout-minutes",
+               "catch 裡只印出例外而 try 沒有斷言、在測試本體裡提早 return 或包一個永假的 if、Truth 的 assume() 以外的自訂跳過輔助、"
+               "同一個 try 有好幾個 catch 時只看第一個、Java 的 try-with-resources",
+               "建置檔與 CI 讓測試不跑或失敗不算(ignoreFailures、enabled = false、-x test、|| true、continue-on-error)這一版不比(之後另做);"
+-              "把測試檔搬進 Gradle 不編譯的目錄;catch 裡恆成立或空泛的檢查(assertTrue(true)、check(1 == 1)、assertNotNull(e))算有檢查",
++              "把測試檔搬進 Gradle 不編譯的目錄",
+               "不同類別裡同名的兩支測試一支拿掉跳過另一支加上(會互抵)、同一處先被放行之後又被同樣改回(指紋相同沿用舊放行)",
+               "測試檔裡超過 2 萬字的行不比對,那支檔另列一條可放行的 tq/too-large;assume 敘述超過 2000 字的尾段不進身分;"
+               "用單獨的 CR 或 Java 的 \\u000a 提前結束行註解",
+               "JUnit 5 的測試改成 private 或 static(不再被執行)不列;修飾詞改動不算測試有變",
+               "測試函式宣告的泛型兩層以上巢狀或超過 400 字時那支不比;Kotlin 字串樣板裡再包字串時,內層字串的空白差異不算",
+               "剝字串、括號配對與逐行比對是近似判讀,不是解析器")
+ 
+ 
+ def cmd_test_guard(repo=None, diff_range=None, as_json=False):
+     """lumos test-guard --diff A..B [--json](Projects/Android測試防竄改檢查_計劃):比對一段範圍的改動前後,列作弊候選。
