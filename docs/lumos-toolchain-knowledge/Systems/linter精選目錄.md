@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-11-04
+updated: 2026-11-05
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -28,7 +28,7 @@ summary: |-
   KEY:2026 現況三鐵則——①前端:oxlint/Biome 崛起但 eslint-plugin-vue 自帶compiler產改造AST,oxlint 官方明說不完整相容→Vue專案 ESLint 仍主力,oxlint 當前置加速器(eslint-plugin-oxlint 讓ESLint跳過已覆蓋規則) ②.NET:.NET10 起 Roslyn analyzer 是 SDK 核心,NetAnalyzers 內建,第三方疊加 ③Kotlin:detekt(bug/實踐)+ktlint或ktfmt(格式)分工,別重複
   DEP:[[Systems/lint-version-watch]]
   DEP:[[Systems/pitfalls-lint-adapter]]
-  FACT:照 detekt 標準接法的命令列樣板(只給 --input)跑,要型別資訊的規則一條都不報也不出錯,kotlin-idioms 點名的協程規則與共用設定開的三條都只剩 GlobalCoroutineUsage 會報;帶 --classpath 與 --jdk-home 才報 [來源:外部] [confirmed:2026-11-01] [查:detekt 1.23.8 最小樣本帶與不帶型別資訊各跑一次]
+  FACT:照 detekt 標準接法的命令列樣板(只給 --input)跑,要型別資訊的規則一條都不報也不出錯,kotlin-idioms 點名的協程規則與共用設定開的五條都只剩 GlobalCoroutineUsage 會報;帶 --classpath 與 --jdk-home 才報 [來源:外部] [confirmed:2026-11-01] [查:detekt 1.23.8 最小樣本帶與不帶型別資訊各跑一次]
   REVISIT:2026-12-15 在一個裝了 detekt Gradle 外掛的 Android 消費專案實跑型別解析任務的 SARIF 輸出,過了就把 detekt 標準接法的 lint.json 樣板改成它
 about_code:
   - configs/detekt/android.yml
@@ -128,7 +128,7 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
   detekt --input <src 目錄> --report sarif:{LINT_SARIF_OUT} --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/android.yml
   ```
   (`$HOME` 可用:lint 命令走 shell 執行;`--input` 要指整個 source set,別只指單檔)
-- **這個樣板拿不到型別資訊**(2026-11-01 用 detekt 1.23.8 實測,[[Projects/Kotlin慣例對齊Android官方與本機detekt_計劃]]):只給 `--input` 時,detekt 那批「要型別資訊」的規則一條都不報、也不出錯——kotlin-idioms 點名的協程規則裡只剩 `GlobalCoroutineUsage` 會報;共用設定開的三條裡,`SuspendFunSwallowedCancellation` 與 `CouldBeSequence` 也在這批裡,照樣板跑只有 `GlobalCoroutineUsage` 有效。同一份樣本帶上 `--classpath`(協程與標準庫 jar)和 `--jdk-home` 之後,`ForbiddenMethodCall`、`InjectDispatcher`、`RedundantSuspendModifier`、`SuspendFunWithFlowReturnType`、`SleepInsteadOfDelay`、`CouldBeSequence` 都會報;`SuspendFunSwallowedCancellation` 只抓 `runCatching` 包 suspend 呼叫,`try/catch(Exception)` 吞取消帶齊型別資訊也不報。Android 專案的 classpath 要靠 Gradle 才組得出來,所以要這些規則就得改用 Gradle 外掛的型別解析任務;改樣板之前要先在一個裝了 detekt Gradle 外掛的消費專案實跑過 SARIF 輸出。
+- **這個樣板拿不到型別資訊**(2026-11-01 用 detekt 1.23.8 實測,[[Projects/Kotlin慣例對齊Android官方與本機detekt_計劃]]):只給 `--input` 時,detekt 那批「要型別資訊」的規則一條都不報、也不出錯——kotlin-idioms 點名的協程規則裡只剩 `GlobalCoroutineUsage` 會報;共用設定開的五條裡,除 `GlobalCoroutineUsage` 外四條(`SuspendFunSwallowedCancellation`、`SuspendFunWithCoroutineScopeReceiver`、`CouldBeSequence`、`ForbiddenMethodCall`)都在這批裡,照樣板跑只有 `GlobalCoroutineUsage` 有效。同一份樣本帶上 `--classpath`(協程與標準庫 jar)和 `--jdk-home` 之後,`ForbiddenMethodCall`、`InjectDispatcher`、`RedundantSuspendModifier`、`SuspendFunWithFlowReturnType`、`SleepInsteadOfDelay`、`CouldBeSequence` 都會報;`SuspendFunSwallowedCancellation` 只抓 `runCatching` 包 suspend 呼叫,`try/catch(Exception)` 吞取消帶齊型別資訊也不報。Android 專案的 classpath 要靠 Gradle 才組得出來,所以要這些規則就得改用 Gradle 外掛的型別解析任務;改樣板之前要先在一個裝了 detekt Gradle 外掛的消費專案實跑過 SARIF 輸出。
   ⚠ 這個樣板沒有 `{LINT_FILES}`,推送前的新增告警檢查對它只記錄、不擋;加了也擋不住(多檔時 detekt 拒跑)。`lumos lint-check` 與健檢會照指令字面印出這些提醒(判定表見 [[Projects/Android的detekt規則說實話_計劃]])。
 - 自有設定要跟共用設定疊加:用逗號合成一個 `--config a.yml,b.yml`(分開寫兩次 `--config` 會拒跑);清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
 - 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛);冒煙只驗有沒有產出結果,不驗規則有沒有響。
