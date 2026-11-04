@@ -124199,13 +124199,15 @@ def t_git_partial_clone_keys():
         ("promisor = 010(八進位 8)", '[remote "origin"]\n\tpromisor = 010\n', True),
         ("promisor = TRUE", '[remote "origin"]\n\tpromisor = TRUE\n', True),
         ("promisor = 0_0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0_0\n', True),
-        ("promisor = 0b0(git 拒絕的寫法,寧可多小心)", '[remote "origin"]\n\tpromisor = 0b0\n', True),
+        ("promisor = 0b0(git 判法照平台而定,寧可多小心)", '[remote "origin"]\n\tpromisor = 0b0\n', True),
     )
+    # 0b0:glibc 2.38 起 C23 的字串轉整數認 0b,Linux 上新編的 git 讀成假、macOS 的 git 拒絕——git 自己兩平台不一,不對照
+    no_compare = {"promisor = 0b0(git 判法照平台而定,寧可多小心)"}
     for label, extra, want in cases:
         cfg.write_text(base + extra, encoding="utf-8")
         if extra:
             gb = _sp.run(["git", "-C", str(root), "config", "--type=bool", "--get-regexp", r"^remote\..*\.promisor$"], capture_output=True, text=True)
-            if "promisor" in extra and "partialCloneFilter" not in extra and gb.returncode == 0:   # git 拒絕的寫法不對照
+            if "promisor" in extra and "partialCloneFilter" not in extra and gb.returncode == 0 and label not in no_compare:   # git 拒絕的寫法不對照
                 check(f"★對照★ {label}:git 自己的布林判讀", gb.stdout.strip().endswith("true") == want, gb.stdout)
         got = m._git_partial_clone(root)
         check(f"{label} → {want}", got is want, got)
