@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-07-27
+updated: 2026-11-04
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/4921126118e5
 tags:
@@ -28,6 +28,7 @@ summary: |-
   KEY:設計哲學=宣告即契約需對帳——lint.json/lint-watch.json/test-layers.json 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道」風險;lint-check 是 lint.json 這條的對帳器,同族收口
   DEP:scripts/lumos cmd_lint_check + _lintcheck_validate｜復用 _lint_run_and_parse(smoke)
   TEST:t_lintcheck_validate(格式校驗含 value 非 list 誤植案例)+t_lintcheck_cli(無檔rc0/空殼rc1/格式對rc0/smoke抓跑不動rc1/smoke真產SARIF rc0/非JSON rc2);全套 1236 passed
+  WHY:lint-check 與健檢 F 段對 detekt 宣告照指令字面印「實際會怎樣」的提醒(型別資訊缺、等號寫法、Gradle 純 detekt 任務、推送只記錄不擋、多檔拒跑),只提醒不改退出碼;「推送閘接不接得住」改由新增告警閘、風險分級、本判定共用同一支小函式 [出處:[[Projects/Android的detekt規則說實話_計劃]] 設計審 r1] [因:這些落差 detekt 本身不報錯,沒人說就以為有在檢查;Android 專案目前沒有修法,擋了只會訓練人繞過] [不選:記成宣告問題讓 CI 變紅(沒出口的紅);冒煙探針實跑驗規則(改到推送前真的擋那案)] [test:t_lint_detekt_advice_table] [test:t_lintcheck_detekt_advice_output] [test:t_doctor_lint_detekt_advice]
 aliases:
   - lint 宣告健康檢查
 about_code:

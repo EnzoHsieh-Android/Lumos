@@ -9,10 +9,10 @@ description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——�
 
 **分層原則（重要）**：本文件只寫「不隨框架選擇改變的原則」。用 Hilt 還是 Koin、Retrofit 還是 Ktor、MVI 還是 MVVM——那是各專案的當地選擇，**去讀該專案的知識圖譜和 CLAUDE.md**（`lumos search <關鍵字>` 起手）。本文件的規則以「可注入」「可替換」等能力措辭，不點名框架。
 
-**機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。
+**機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。標「要型別資訊」的 detekt 規則，照一般接法跑時多半**沒在跑**，見下方〈型別資訊〉；而且所有 detekt 規則推送前的新增告警檢查目前都**只記錄、不擋**（見〈機檢接線〉）。
 
-> **核對邊界（未核對）**：本文件的規則名、「預設開／關」、版本門檻與規則條數是網搜與官方文件整理，**尚未用本機工具逐條核對**；接入時以該工具當前的規則清單為準，核對後把日期與工具版本補在這裡。
-> REVISIT:2026-10-25 補上核對日期或標明仍未核對。
+> **核對邊界**：**已核對**（2026-11-04，本機 detekt 1.23.8）：協程與效能兩組規則的名稱、預設開關、要不要型別資訊。**未核對**：其餘（含 R16 的 compose-rules 條數、Slack compose-lints）——接入時以該工具當前的規則清單為準。
+> REVISIT:2027-03-01 detekt 2.0 出正式版沒；出了就重核協程組，並把 R12 標「2.0 才有」的兩條改成可開。
 
 ---
 
@@ -65,7 +65,7 @@ combine(flowA, flowB) { a, b -> UiState(a, b) }
 
 ### R6. 回傳 `Flow` 的函式不標 `suspend`；`flow {}` 內不 `withContext`
 冷流本身就是延遲執行；builder 內換 context 違反 context preservation，runtime 直接炸——換上游執行緒用 `.flowOn(dispatcher)`。
-- 機檢：`detekt:SuspendFunWithFlowReturnType`（預設開）；withContext 需`自訂`
+- 機檢：`detekt:SuspendFunWithFlowReturnType`（預設開，要型別資訊）；withContext 需`自訂`
 
 ### R7. 高頻流接慢消費者，backpressure 策略要明示
 只要最新值 → `conflate()` 或 `collectLatest`；不能丟 → `buffer()`。什麼都不寫＝默默堆積。另外：可被新值作廢的查詢用 `collectLatest`，必須逐筆完成的命令用 `collect`——選錯方向是語意 bug。
@@ -79,7 +79,7 @@ combine(flowA, flowB) { a, b -> UiState(a, b) }
 
 ### R9. Dispatcher 不准硬編碼，必須可注入可替換
 建構子參數、DI 模組、預設參數皆可——重點是測試時換得成 TestDispatcher。`Dispatchers.IO` 直接寫死在方法裡＝不可測。
-- 機檢：`detekt:InjectDispatcher`（預設開）
+- 機檢：`detekt:InjectDispatcher`（預設開，要型別資訊）
 
 ### R10. 永不吞 `CancellationException`
 ```kotlin
@@ -92,20 +92,20 @@ catch (e: CancellationException) { throw e }
 catch (e: IOException) { log(e) }
 ```
 這 bug 只在取消時發作、最難排查。
-- 機檢：`detekt:SuspendFunSwallowedCancellation`（預設關，要開）
+- 機檢：`detekt:SuspendFunSwallowedCancellation`（預設關，要開；要型別資訊）——★只抓「runCatching 裡呼叫 suspend」★，上面壞例那種 `try { } catch (e: Exception)` 它不抓（detekt 1.23.8 官方規則頁）；而且 Kotlin 標準庫 2.2 以上時補了型別資訊也不響（detekt 1.23.8 限制，2026-11-04 逐版實測）。try/catch 那型要靠審查，或第三方 structured-coroutines 的 `CancellationExceptionSwallowed`
 
 ### R11. 禁 `GlobalScope`；活過畫面的工作用注入的應用級 scope
-- 機檢：`detekt:GlobalCoroutineUsage`（預設關，要開）
+- 機檢：`detekt:GlobalCoroutineUsage`（預設關，要開；**不要型別資訊**，一般接法就會響）
 
-### R12. 其餘一鍵機檢組（寫進 detekt 設定就好，不佔篇幅）
-`SleepInsteadOfDelay`（協程內用 delay 不用 Thread.sleep，預設開）、`RedundantSuspendModifier`（沒暫停點就拿掉 suspend，預設開）、`ForbiddenMethodCall` 配置 `runBlocking`（suspend 內禁用）、`CoroutineLaunchedInTestWithoutRunTest`（測試協程要包 runTest，預設關）。
+### R12. 其餘機檢組（開了不等於有在跑，見〈型別資訊〉）
+`SleepInsteadOfDelay`（協程內用 delay 不用 Thread.sleep，預設開，要型別資訊加 JDK 位置）、`RedundantSuspendModifier`（沒暫停點就拿掉 suspend，預設開，要型別資訊）。`CoroutineLaunchedInTestWithoutRunTest`（測試協程要包 runTest）**只有 detekt 2.0 才有，1.23.8 寫進設定會讓 detekt 整個拒跑**，1.23 先靠審查或 structured-coroutines 的 `RunBlockingInsteadOfRunTest`。runBlocking **不全面禁**：`ForbiddenMethodCall` 分不出在不在 suspend 裡，而 OkHttp Authenticator 這類同步介面裡橋接 suspend 是正當用法；suspend 內的 runBlocking 靠審查，或 structured-coroutines 的 `RunBlockingInSuspend`。
 另兩條靠審查：CPU 密集迴圈內定期 `ensureActive()`（取消是合作式的）；`Job()/SupervisorJob()` 不當參數傳進 launch（要 supervisor 語意用 `supervisorScope {}`）。
 
 ## 三、Compose
 
 ### R13. 收流一律 `collectAsStateWithLifecycle()`
 `collectAsState()` 在 App 退到背景時照樣收集，浪費電和網路——且要跟 R3 的 `WhileSubscribed` 成對才生效。
-- 機檢：`detekt:ForbiddenMethodCall` 配置 `collectAsState`
+- 機檢：`detekt:ForbiddenMethodCall` 配置完整名稱 `androidx.compose.runtime.collectAsState`（只寫 `collectAsState` 不報錯也不響；規則放 `style:` 底下；要型別資訊，classpath 要有 Compose runtime）
 
 ### R14. Lazy 清單必給穩定 key
 `items(list, key = { it.id })`；少了 key，症狀是捲動閃跳與整列白白重組，使用者看得到。
@@ -133,20 +133,30 @@ data/domain 層：一次性操作＝`suspend fun(): Result`、串流＝非 suspe
 
 ## 機檢接線（一次設好，CI 自動把關）
 
-detekt 設定要點（`--build-upon-default-config` 之上）：
+detekt 設定要點（`--build-upon-default-config` 之上；lumos-toolchain 分發的共用設定已含這些，自己寫的話照抄）：
 ```yaml
 coroutines:
   GlobalCoroutineUsage: { active: true }
   SuspendFunSwallowedCancellation: { active: true }
-  CoroutineLaunchedInTestWithoutRunTest: { active: true }
+  SuspendFunWithCoroutineScopeReceiver: { active: true }
 style:
   ForbiddenMethodCall:
     active: true
     methods:
-      - "kotlinx.coroutines.runBlocking"
       - "androidx.compose.runtime.collectAsState"
 ```
-加掛 compose-rules（detekt plugin jar）補 R16 整組。專案把 detekt 指令宣告進 `.lumos/lint.json`，`lumos pitfalls --diff` 就會自動吃 SARIF、命中行進審查 manifest——lumos 這頭不用再做任何事。
+- 自有設定要跟共用設定疊加：用逗號合成一個 `--config a.yml,b.yml`（分開寫兩次 `--config` 會拒跑）；清單類欄位（例上面的 methods）後面那份整份蓋掉前面那份，不合併、不警告。
+- 加掛 compose-rules（detekt plugin jar）補 R16 整組。
+- 專案把 detekt 指令宣告進 `.lumos/lint.json`，`lumos pitfalls --diff` 會吃 SARIF、命中行進審查 manifest。★但推送前的新增告警檢查對 detekt 目前只記錄不擋★（沒有 `{LINT_FILES}` 就只記錄；有的話多檔時 detekt 拒跑、檢查放行）——`lumos lint-check` 與健檢會照指令字面把這些印出來。
+
+### 型別資訊（detekt 有開≠有在跑）
+
+- **是什麼**：detekt 很多規則要知道每個呼叫的型別才判得了。指令列要帶 `--classpath <依賴 jar，冒號分隔>`（簡寫 `-cp`）與 `--jdk-home <JDK 路徑>`；沒帶時這些規則**安靜跳過，不報錯也不警告**（detekt 官方型別解析文件：沒有型別解析時要型別的規則不會跑）。`--jvm-target` 實測不影響。
+- **哪些要**：上面標「要型別資訊」的都要；`GlobalCoroutineUsage`、`ForEachOnRange` 不要。
+- **怎麼取得**：一般 JVM 專案可用 Gradle 印出依賴清單（絕對路徑，相對路徑放在第一個以外的位置會被靜默忽略）；Gradle 外掛的 `detekt<變體>` 任務（例 `detektMain`、`detektDebug`）自帶型別，純 `detekt` 任務沒有。**Android 專案的依賴散在建置快取，目前沒有能接進推送前檢查的現成取法。**
+- **版本限制**：Kotlin 標準庫 2.2 以上時，`SuspendFunSwallowedCancellation` 與標準庫函式的 `ForbiddenMethodCall` 補了型別資訊也不響（detekt 1.23.8 內建編譯器太舊）。
+
+REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-03-01] 推送前真的擋落地了，把本節與機檢接線段「推送時只記錄不擋」「Android 沒有現成取法」改掉
 
 ## 審查鏡頭（code-loop 用）
 

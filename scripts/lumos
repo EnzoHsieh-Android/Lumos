@@ -4137,7 +4137,16 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
             # 「宣告的形狀」天天有人驗,「宣告的東西跑不跑得動」從來沒有自動驗過一次。
             ok("linter 宣告檔格式健康——★這只證明宣告寫得對,不證明 linter 真的跑得動★:"
                "宣告的東西跑不跑得動要手動 lumos lint-check --smoke 驗;"
-               "推送前的新增告警閘會真的執行它們(2026-09-13 起,見 [[Projects/新增告警閘_計劃]])")
+               "含檔案佔位符 {LINT_FILES} 的命令,推送前的新增告警閘會真的執行;不含的只記錄、不擋"
+               "(2026-09-13 起,見 [[Projects/新增告警閘_計劃]])")
+        # detekt 宣告實際會怎樣([[Projects/Android的detekt規則說實話_計劃]]):宣告讀得出來就判,不管格式有沒有問題;
+        # 合成一段、空清單提醒(不計問題、不改 --ci/--strict 退出碼),最多列 20 條
+        if _lf["declared"] and not _lf["parse_error"]:
+            _dadv = _lint_detekt_advisories(_lf.get("config"))
+            if _dadv:
+                _dshow = [*_dadv[:20], *([f"… 另 {len(_dadv) - 20} 條(lumos lint-check 看全部)"] if len(_dadv) > 20 else [])]
+                warn([], "detekt 宣告實際會怎樣(只看指令字面判的):以為有在檢查的規則,其實沒在跑、或推送時沒在擋",
+                     "\n        ".join(["逐條:", *_dshow, "細節與能做什麼:看 kotlin-idioms 慣例文件的「型別資訊」一節"]))
         # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
         # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
         _lnr = _vault_repo_root(env)
@@ -37711,6 +37720,208 @@ def _lintcheck_validate(config):
     return problems
 
 
+# ── detekt 宣告實際會怎樣(只看指令字面)──────────────────────────────────────
+# 判定表的單一來源是 [[Projects/Android的detekt規則說實話_計劃]]〈判定表〉;依據是 detekt 1.23.8 的 `--help`
+# 參數表、Gradle 命令列說明與 2026-11-04 實測。lint-check 與健檢 F 段都只從這裡取文字,不各寫一份。
+_DETEKT_ADVICE_ORDER = ("T1", "T2", "T3", "G1", "G2", "P1", "P2")
+_DETEKT_ADVICE_TEXT = {
+    "T1": "沒帶 --classpath,需要型別資訊的規則(InjectDispatcher、SuspendFunSwallowedCancellation、"
+          "SuspendFunWithFlowReturnType、SuspendFunWithCoroutineScopeReceiver、CouldBeSequence、ArrayPrimitive、"
+          "ForbiddenMethodCall 等)不會跑,也不會報錯;補法是帶 --classpath <依賴 jar,冒號分隔> 與 --jdk-home <JDK 路徑>。"
+          "一般 JVM 專案可用 Gradle 印出依賴清單;Android 專案的依賴散在建置快取,目前沒有現成取法。"
+          "Kotlin 標準庫 2.2 以上時,吞取消訊號那條補了也不響(detekt 1.23.8 限制)",
+    "T2": "有 classpath 但沒帶 --jdk-home,SleepInsteadOfDelay 這類要 JDK 型別的規則不會跑",
+    "T3": "有參數用了等號寫法(例 --input=、-cp=),detekt 1.23.8 不收,整條會拒跑、不產結果;改成空白分隔",
+    "G1": "Gradle 的純 detekt 任務沒有型別解析,需要型別資訊的規則不會跑;要型別改用 detekt<變體> 任務(例 detektMain、detektDebug)",
+    "G2": "這個 detekt 開頭的 Gradle 任務認不得,判不出它有沒有設 classpath;自訂任務沒設的話,需要型別資訊的規則不會跑",
+    "P1": "命令沒有 {LINT_FILES},推送前的新增告警檢查對這條只記錄、不擋",
+    "P2": "這次改動有兩支以上檔時,新增告警檢查把檔名用空白串起來,detekt 只收逗號分隔,會拒跑,檢查照環境問題放行",
+}
+# detekt 1.23.8 `detekt --help` 的全部參數名(長與短),判「等號寫法」用
+_DETEKT_CLI_OPTS = frozenset((
+    "--all-rules", "--auto-correct", "-ac", "--base-path", "-bp", "--baseline", "-b", "--build-upon-default-config",
+    "--classpath", "-cp", "--config", "-c", "--config-resource", "-cr", "--create-baseline", "-cb", "--debug",
+    "--disable-default-rulesets", "-dd", "--excludes", "-ex", "--generate-config", "-gc", "--help", "-h",
+    "--includes", "-in", "--input", "-i", "--jdk-home", "--jvm-target", "--language-version", "--max-issues",
+    "--parallel", "--plugins", "-p", "--report", "-r", "--version"))
+# Gradle 帶值選項(不含 = 時連下一個詞一起跳過;依 Gradle 命令列說明)
+_GRADLE_VALUE_OPTS = frozenset((
+    "-x", "--exclude-task", "-p", "--project-dir", "-b", "--build-file", "-c", "--settings-file", "-g",
+    "--gradle-user-home", "-I", "--init-script", "-D", "--system-prop", "-P", "--project-prop", "--include-build",
+    "-M", "--write-verification-metadata", "-F", "--dependency-verification", "--priority", "--console",
+    "--warning-mode"))
+_DETEKT_MAIN_CLASS = "io.gitlab.arturbosch.detekt.cli.Main"
+_SHELL_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _detekt_split_segments(line):
+    """一行命令拆成段(每段一串詞);拆詞失敗回 None。設定照判定表:只拆 ;&| 標點、不當註解、只按空白切詞。"""
+    import shlex as _shlex
+    lx = _shlex.shlex(line, posix=True, punctuation_chars=";&|")
+    lx.whitespace_split = True
+    lx.commenters = ""
+    try:
+        toks = list(lx)
+    except ValueError:
+        return None
+    segs, cur = [], []
+    for t in toks:
+        if t and set(t) <= set(";&|"):
+            segs.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    segs.append(cur)
+    return [s for s in segs if s]
+
+
+_SHELL_WRAPPERS = ("env", "nice", "time", "command", "nohup", "exec")
+
+
+def _detekt_skip_wrapper_opts(seg, i, word):
+    """包裝詞 word 後面接的選項跳過去,回傳下一個要看的位置。"""
+    n = len(seg)
+    if word == "env":
+        while i < n and (seg[i] in ("-i", "--", "-u") or _SHELL_ASSIGN_RE.match(seg[i])):
+            i += 2 if seg[i] == "-u" else 1
+    elif word == "nice" and i < n and seg[i] == "-n":
+        i += 2
+    elif word == "nice" and i < n and re.match(r"^-\d+$", seg[i]):
+        i += 1
+    elif word in ("time", "command") and i < n and seg[i] == "-p":
+        i += 1
+    return i
+
+
+def _detekt_strip_prefix(seg):
+    """剝掉段首的環境變數設定與包裝詞(連同它們的選項);回傳剩下的詞。"""
+    i, n = 0, len(seg)
+    while i < n:
+        if _SHELL_ASSIGN_RE.match(seg[i]):
+            i += 1
+        elif seg[i] in _SHELL_WRAPPERS:
+            i = _detekt_skip_wrapper_opts(seg, i + 1, seg[i])
+        else:
+            break
+    return seg[i:]
+
+
+def _detekt_gradle_codes(args):
+    """Gradle 段:取出任務名逐一分類,回傳 (是不是在跑 detekt, 代號集合)。"""
+    codes, is_detekt, i = set(), False, 0
+    while i < len(args):
+        t = args[i]
+        if t.startswith("-"):
+            i += 2 if ("=" not in t and t in _GRADLE_VALUE_OPTS) else 1
+            continue
+        i += 1
+        name = t.rsplit(":", 1)[-1]
+        if name.startswith(("detektBaseline", "detektProjectBaseline", "detektGenerateConfig")):
+            continue
+        if name == "detekt":
+            codes.add("G1")
+            is_detekt = True
+        elif name in ("detektMain", "detektTest") or (
+                name.startswith("detekt") and name.endswith(("Debug", "Release", "UnitTest", "AndroidTest"))):
+            is_detekt = True
+        elif name.startswith("detekt"):
+            codes.add("G2")
+            is_detekt = True
+    return is_detekt, codes
+
+
+def _detekt_segment_codes(seg, depth):
+    """一段的判定:回傳 (是不是 detekt 宣告, 代號集合)。表外寫法與退化寫法回 (False, 空集合)。"""
+    import posixpath as _pp
+    seg = _detekt_strip_prefix(seg)
+    if not seg:
+        return False, set()
+    head = _pp.basename(seg[0])
+    if head in ("sh", "bash", "zsh"):
+        if depth == 0 and len(seg) >= 3 and seg[1] == "-c":
+            return _detekt_command_codes(seg[2], depth + 1)
+        return False, set()
+    if head in ("gradlew", "gradlew.bat", "gradle"):
+        return _detekt_gradle_codes(seg[1:])
+    args = _detekt_cli_args(seg, head)
+    if args is None:
+        return False, set()
+    return True, _detekt_cli_codes(seg, args)
+
+
+def _detekt_cli_args(seg, head):
+    """認出 detekt 指令列,回傳 detekt 自己的參數(java -jar 之前給 JVM 的不算);不是 detekt 回 None。"""
+    import posixpath as _pp
+    if head in ("detekt", "detekt-cli"):
+        return seg[1:]
+    if head != "java":
+        return None
+    if "-jar" in seg:
+        j = seg.index("-jar")
+        jar = _pp.basename(seg[j + 1]) if j + 1 < len(seg) else ""
+        return seg[j + 2:] if jar.startswith("detekt-cli") and jar.endswith(".jar") else None
+    if _DETEKT_MAIN_CLASS in seg:
+        return seg[seg.index(_DETEKT_MAIN_CLASS) + 1:]
+    return None
+
+
+def _detekt_cli_codes(seg, args):
+    """detekt 指令列那一段的代號:T3 等號寫法、T1/T2 缺型別參數(看不到完整參數不判)、P2 段內有佔位符。"""
+    codes = set()
+    if any("=" in a and a.split("=", 1)[0] in _DETEKT_CLI_OPTS for a in args):
+        codes.add("T3")
+    # 看不到完整參數(參數檔、變數、命令替換)就不判缺參數
+    opaque = any(a.startswith("@") or "$" in a or "`" in a for a in seg)
+    if not opaque:
+        if not any(a in ("--classpath", "-cp") for a in args):
+            codes.add("T1")
+        elif "--jdk-home" not in args:
+            codes.add("T2")
+    if _lint_gate_covers(" ".join(seg)):
+        codes.add("P2")
+    return codes
+
+
+def _detekt_command_codes(cmd, depth=0):
+    """整條命令的判定:回傳 (有沒有 detekt 宣告, 代號集合);P1 由呼叫端看整條命令決定。"""
+    found, codes = False, set()
+    for line in cmd.replace("\\\n", " ").split("\n"):
+        segs = _detekt_split_segments(line)
+        if segs is None:
+            continue
+        for seg in segs:
+            f, c = _detekt_segment_codes(seg, depth)
+            found = found or f
+            codes |= c
+    return found, codes
+
+
+def _lint_detekt_codes(cmd):
+    """一條 `.lumos/lint.json` 命令照判定表該配的提醒代號集合(只看字面,不執行;非字串或表外寫法回空集合)。"""
+    if not isinstance(cmd, str):
+        return set()
+    found, codes = _detekt_command_codes(cmd)
+    if found and not _lint_gate_covers(cmd):
+        codes.add("P1")
+    return codes
+
+
+def _lint_detekt_advisories(config):
+    """整份 lint 宣告的 detekt 提醒(字串清單,每條「[副檔名 第 N 條] 代號:一句」)。
+    頂層不是物件就不判;壞項跳過、合法項照判;不回顯命令內容,副檔名鍵不是安全字元就印成「?」。"""
+    if not isinstance(config, dict):
+        return []
+    out = []
+    for stack, cmds in config.items():
+        if not isinstance(cmds, list):
+            continue
+        label = stack if isinstance(stack, str) and re.fullmatch(r"[A-Za-z0-9_.+-]{1,16}", stack) else "?"
+        for idx, cmd in enumerate(cmds, 1):
+            codes = _lint_detekt_codes(cmd)
+            out.extend(f"[{label} 第 {idx} 條] {c}:{_DETEKT_ADVICE_TEXT[c]}" for c in _DETEKT_ADVICE_ORDER if c in codes)
+    return out
+
+
 def _lint_load_and_validate(repo_root):
     """讀 <repo_root>/.lumos/lint.json 並跑靜態格式驗證——cmd_lint_check 與 doctor [F] 檢
     共用的單一實作(lint接線收口 [S1]②:I/O+parse+驗證不留兩份會漂移的複本)。
@@ -37789,8 +38000,9 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
                 _claims, ok = _lint_run_and_parse(ready, repo_root)
                 if not ok:
                     problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{ready[:60]}"})
+    advisories = _lint_detekt_advisories(config)   # 只是提醒:不進 problems、不改退出碼
     if as_json:
-        print(json.dumps({"problems": problems, "declared": True}, ensure_ascii=False))
+        print(json.dumps({"problems": problems, "declared": True, "advisories": advisories}, ensure_ascii=False))
         return 1 if problems else 0
     if not problems:
         print(f"✓ lint-check: .lumos/lint.json 宣告健康({'冒煙通過' if smoke else '格式通過,--smoke 可再驗命令'})")
@@ -37798,11 +38010,24 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
             print(f"  提醒:這幾個棧的命令沒有真的跑過,因為專案裡還沒有它們的檔:{', '.join(sorted(set(skipped_stacks)))}")
             print("  為什麼在意:宣告寫對了不等於命令跑得動,寫了第一支檔之後再驗一次才算數:")
             print("    lumos lint-check --smoke")
+        _lint_detekt_print(advisories)
         return 0
     print(f"✗ lint-check: .lumos/lint.json 有 {len(problems)} 個問題:")
     for pr in problems:
         print(f"  [{pr['stack']}] {pr['issue']}")
+    _lint_detekt_print(advisories)
     return 1
+
+
+def _lint_detekt_print(advisories):
+    """lint-check 人讀輸出的 detekt 提醒(三段式:發生什麼 → 為什麼在意 → 細節去哪看)。"""
+    if not advisories:
+        return
+    print("  提醒:detekt 宣告實際會怎樣(只看指令字面判的,不影響這次結果):")
+    for a in advisories:
+        print(f"    • {a}")
+    print("  為什麼在意:以為有在檢查的規則,其實沒在跑、或推送時沒在擋。")
+    print("  細節與能做什麼:看 kotlin-idioms 慣例文件的「型別資訊」一節")
 
 
 def _lint_waive_cmd(c):
@@ -38285,6 +38510,12 @@ _LINT_NEW_GATE_NAME = "lint-new"             # 閘名,要登記進 _KNOWN_GATES 
 _LINT_NEW_STALE_SEC = 86400                  # 開跑前清掉超過一天的殘骸(強殺時收尾不會執行)
 _ISOLATED_WT_STALE_SEC = _LINT_NEW_STALE_SEC   # 共用隔離工作樹的殘骸時限沿用同一個值(Projects/代碼審修正關卡第0步_計劃,不另訂)
 _LINT_NEW_FILES_TOKEN = "{LINT_FILES}"       # 命令沒有這個佔位=核心無法為它做基準比對
+
+
+def _lint_gate_covers(cmd):
+    """這條宣告命令推送前的新增告警閘接不接得住:有檔案佔位符才會真的跑,沒有的只記錄不擋。
+    新增告警閘、風險分級、detekt 宣告判定三處共用這一支([[Projects/Android的detekt規則說實話_計劃]])。"""
+    return isinstance(cmd, str) and _LINT_NEW_FILES_TOKEN in cmd
 
 
 def _lint_cmd_with_files(cmd, files):
@@ -38886,7 +39117,7 @@ def _lint_new_verdict(repo_root, diff_range, deadline=None):
         base_claims, head_claims = [], []
         budget_end = deadline if deadline else (_time.monotonic() + cfg["budget_sec"])
         for cmd, want_files in cmd_targets:
-            if _LINT_NEW_FILES_TOKEN not in cmd:
+            if not _lint_gate_covers(cmd):
                 # 逐命令降級:只影響這一條命令,不讓整道閘降級(舊宣告不擋人,但不能拖累合格的新宣告)
                 out["report_only"].append(cmd)
                 continue
@@ -58859,7 +59090,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
             # 每條發現標記它是哪種宣告報的:推送前那道閘只跑「帶檔清單佔位」的宣告,
             # 沒帶的它降級成只報不擋。下面決定分級時要分開看。
             for c in lc:
-                c["_push_gate_covers"] = _LINT_NEW_FILES_TOKEN in cmd
+                c["_push_gate_covers"] = _lint_gate_covers(cmd)
             lint_claims.extend(lc)
         else:
             lint_skipped.append(cmd)
