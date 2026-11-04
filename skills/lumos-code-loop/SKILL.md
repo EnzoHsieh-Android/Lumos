@@ -57,7 +57,7 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
    - 先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳)。
    - 凍結判定在留痕之前:程式、筆記、卷證、帳本放進同一個功能提交之後,`lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定,產出的 verdict 併進同一個功能提交(還沒推可以改寫那個提交)——凍結記的是檔案內容指紋不是提交編號,併進去不影響回放。
    - 再 `lumos code-loop pass --loop <編號> --note "<審了什麼、幾席、幾條折入>"`(專案有審查帳就必帶編號;工具驗凍結判定存在、過了、帳沒再變,人裁接受風險的迴圈也放行;沒過回 rc2,照訊息處理);決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。
-   - 留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。
+   - 留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。風險高計劃的預期值表簽核(`lumos signoff <計劃> --expected`)事件也寫在治理帳,留痕之後才簽的就跟這個帳本提交一起帶上;推送前規格閘沒看到對得上整張表指紋的簽核會擋。
    - 然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
 
 推完之後若下游(實作/CI/prod/使用者)發現可歸因到某次已放行審查的缺陷:`lumos loop escape <編號> --stage <站> --severity <s> --desc <一句> --sha <提交>`(佐證必附:`--sha <提交>` 或 `--defect-ref <Issue/報告>`,真的沒有就 `--missing-defect-ref "<為什麼沒有>"`;記錯了用 `lumos loop escape --withdraw <token> --reason "<理由>" --withdrawn-by <誰>` 撤回(追加一筆、統計不算、清單標已撤回);各類別放行後漏了多少看 `lumos loop escape-stats`。)(逃逸帳=審查系統的漏網紀錄,append-only 不進閘;`lumos gov --stats`「審查有沒有用」段印累計筆數與最重等級)。

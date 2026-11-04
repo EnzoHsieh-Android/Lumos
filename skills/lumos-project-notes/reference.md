@@ -68,6 +68,7 @@ lumos 提供圖譜感知能力（backlinks、links、orphans、contracts、合�
 | status=stale 清單 | `python3 scripts/lumos stale` |
 | 最近 N 天修改 | `python3 scripts/lumos recent --days 7` |
 | **條款級追溯（計劃 [SN] 條款誰認領了）** | `python3 scripts/lumos spec-trace <計劃節點> [--json]` — 計劃 body 標 `[S1]`/`[S2]`…,★2026-09-08 起裁決=條款那一行綁的 `[test:測試名]`/`[manual:怎麼驗]`(七態:綁了/靠人/未標/懸空×3/壞名),有未標 rc1★;舊制「回指(plan_refs)的 Verification 提及」欄照印只當對照。opt-in,無標記=不追溯 |
+| **預期值表簽核（風險高計劃）** | `lumos signoff <計劃> --expected --note "確認了什麼"` — 簽「## 預期值表」整張表的指紋,寫治理帳 signoff 閘 expected-signed(帶 origin=human/ai);不寫 signed_off 與 .signoff-log.jsonl;推送前規格閘查表與簽 |
 | **業務簽核留痕（validation 那半:人點頭）** | `python3 scripts/lumos signoff <節點> --note "確認了什麼" [--by 人]` — append docs/.signoff-log.jsonl + frontmatter `signed_off`;gov 撈得到。工具只記留痕不證明確認真的發生 |
 | 資料夾統計 | `python3 scripts/lumos stats` |
 | 反查連入/連出 | `python3 scripts/lumos backlinks <筆記名>`／`links` |
