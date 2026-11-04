@@ -17147,8 +17147,8 @@ def t_lint_files_substitution_has_one_implementation():
         "_lint_run_and_parse",    # 只做「還沒換掉就別跑」的檢查
         "_lintcheck_smoke_cmd",   # 只做「這條命令要不要換檔」的檢查
         "cmd_rule_check",         # 只做同樣的檢查
-        "_lint_new_run_cmds",     # 只做同樣的檢查(原本在 _lint_new_verdict,跑命令那段拆出來時跟著搬)
-        "_pitfall_diff_collect",  # 只做「這條命令推送閘接不接得住」的檢查
+        "_lint_gate_covers",      # 只做「這條命令推送閘接不接得住」的檢查;新增告警閘、風險分級、detekt 宣告判定共用
+                                  # (2026-11-04 [[Projects/Android的detekt規則說實話_計劃]]:原本前兩處各自寫,第三處要用就抽出來)
     }
     touchers = {}
     for fn in _ast.walk(tree):
@@ -37188,6 +37188,264 @@ def t_lintcheck_cli():
         r = run(["lint-check", "--repo", td], td)
         check("非 JSON rc2", r.returncode == 2, f"rc={r.returncode}\n{r.stderr}")
     print("  ✓ t_lintcheck_cli")
+
+
+def t_lint_detekt_advice_table():
+    """[[Projects/Android的detekt規則說實話_計劃]] S1:detekt 宣告判定表逐格對。
+    判準來源是計劃的判定表(依 detekt 1.23.8 `--help` 參數表、Gradle 命令列說明與 2026-11-04 實測),
+    不是照實作抄:每一格寫的是「這種寫法實際會怎樣」該配的提醒代號。"""
+    m = _load_lumos_module()
+    E = set()
+    cases = [
+        # 指令列:型別參數與等號寫法
+        ("detekt --input src --report sarif:{LINT_SARIF_OUT}", {"T1", "P1"}),
+        ("detekt --input src -cp a.jar --report sarif:{LINT_SARIF_OUT}", {"T2", "P1"}),
+        ("detekt --input src --classpath a.jar --jdk-home /jdk --report sarif:{LINT_SARIF_OUT}", {"P1"}),
+        ("detekt --input {LINT_FILES} -cp a --jdk-home j --report sarif:{LINT_SARIF_OUT}", {"P2"}),
+        ("/opt/homebrew/bin/detekt-cli --input=src --report sarif:{LINT_SARIF_OUT}", {"T1", "T3", "P1"}),
+        ("detekt -i=src -cp x --jdk-home j", {"T3", "P1"}),
+        # java 兩種形狀:-jar 之前的 -cp 是給 JVM 的,不算
+        ("java -cp foo.jar -jar /tmp/detekt-cli-1.23.7-all.jar --input src", {"T1", "P1"}),
+        ("java -cp d.jar io.gitlab.arturbosch.detekt.cli.Main --input src -cp a --jdk-home j", {"P1"}),
+        ("java -jar other.jar --input src", E),
+        # Gradle:任務名分類與帶值選項
+        ("./gradlew detekt", {"G1", "P1"}),
+        ("./gradlew :app:detekt", {"G1", "P1"}),
+        ("gradlew.bat detekt", {"G1", "P1"}),
+        ("./gradlew detektMain", {"P1"}),
+        ("./gradlew detektDebug", {"P1"}),
+        ("./gradlew detektBaselineDebug", E),
+        ("./gradlew detektAll", {"G2", "P1"}),
+        ("./gradlew ktlintCheck -x detekt", E),
+        ("./gradlew -p detekt build", E),
+        ("./gradlew --project-dir=detekt build", E),
+        ("cd android && ./gradlew detekt -Pout={LINT_SARIF_OUT}", {"G1", "P1"}),
+        # 包裝詞、環境變數、sh -c(只遞迴一層)
+        ("FOO=1 env -i BAR=2 nice -n 10 time -p detekt --input src", {"T1", "P1"}),
+        ("sh -c 'detekt --input src'", {"T1", "P1"}),
+        ("bash -c \"sh -c 'detekt --input src'\"", E),
+        # 多段:P1 看整條、P2 看 detekt 那段
+        ("detekt --input src && detekt --input {LINT_FILES} -cp a --jdk-home j", {"T1", "P2"}),
+        ("detekt --input src && echo {LINT_FILES}", {"T1"}),
+        ("detekt --input a \\\n  -cp x --jdk-home j", {"P1"}),
+        ("detekt --input a\n./gradlew detekt", {"T1", "G1", "P1"}),
+        # 看不到完整參數:不判缺參數(T1、T2),其他照判
+        ("detekt @args.txt --input a", {"P1"}),
+        ("detekt --input a $DETEKT_OPTS", {"P1"}),
+        ("detekt --classpath $(cat cp.txt) --input a", {"P1"}),
+        ("detekt --input a `cat extra`", {"P1"}),
+        ("detekt @args.txt --input=a", {"T3", "P1"}),
+        # 拆詞設定:中文路徑、詞中 #
+        ("/Users/x/測試/detekt --input src -cp a.jar --jdk-home j", {"P1"}),
+        ("detekt --report html:r#1.html -cp x --jdk-home y --input a", {"P1"}),
+        # 段首檔名叫 detekt 的自寫腳本照判(天花板 3)
+        ("./scripts/detekt --input a", {"T1", "P1"}),
+        # 表外與退化寫法:不判、不丟例外
+        ("npx detekt --input a", E),
+        ("ruff check --output-format sarif . > {LINT_SARIF_OUT}", E),
+        ("detekt --input 'a", E),
+        ("detekt --input a \\", E),
+        ("java -jar", E),
+        ("sh -c", E),
+        ("FOO=1", E),
+        ("env", E),
+        ("&&", E),
+        ("; ;", E),
+        ("", E),
+        ("detekt &&", {"T1", "P1"}),
+        ("; detekt -cp a --jdk-home j", {"P1"}),
+    ]
+    for cmd, want in cases:
+        try:
+            got = m._lint_detekt_codes(cmd)
+        except Exception as e:   # 判定表不准丟例外:把例外當成失敗印出來
+            got = f"例外 {type(e).__name__}: {e}"
+        check(f"判定表:{cmd!r}", got == want, f"要 {sorted(want)},得 {got}")
+    for bad in (None, 5, ["detekt"], {"a": 1}):
+        check(f"非字串命令不判也不丟例外:{bad!r}", m._lint_detekt_codes(bad) == set())
+
+    # 整份宣告:逐項判,壞項跳過、合法項照判;不回顯命令內容,只標副檔名與第幾條
+    adv = m._lint_detekt_advisories({"kt": ["detekt --input s --report sarif:{LINT_SARIF_OUT}"],
+                                     "x": 5, "y": [3, "./gradlew detekt"],
+                                     "\x1b[31mz": ["detekt --input s"]})
+    check("合法項照判:[kt 第 1 條] 有 T1 與 P1",
+          any(a.startswith("[kt 第 1 條] T1") for a in adv) and any(a.startswith("[kt 第 1 條] P1") for a in adv), str(adv))
+    check("清單裡的壞項跳過但編號照算:[y 第 2 條] G1", any(a.startswith("[y 第 2 條] G1") for a in adv), str(adv))
+    check("怪異的副檔名鍵不原樣回顯(沒有控制字元)", not any("\x1b" in a for a in adv), str(adv))
+    check("提醒不回顯命令內容", not any("--input s" in a for a in adv), str(adv))
+    for bad in ([1, 2], None, "detekt", 7):
+        check(f"頂層不是物件就整份不判:{bad!r}", m._lint_detekt_advisories(bad) == [])
+    check("沒有 detekt 的宣告沒有提醒",
+          m._lint_detekt_advisories({"py": ["ruff check {LINT_FILES} --output-format sarif > {LINT_SARIF_OUT}"]}) == [])
+    print("  ✓ t_lint_detekt_advice_table")
+
+
+def t_lintcheck_detekt_advice_output():
+    """[[Projects/Android的detekt規則說實話_計劃]] S2:lint-check 在健康與有問題兩條分支都印 detekt 提醒、
+    退出碼跟沒有提醒時一樣;--json 只輸出一個物件、提醒放在 advisories 欄,沒宣告時不加這個欄。"""
+    import json as _json
+    import subprocess as _sp
+    import tempfile
+    from pathlib import Path as _P
+    lumos_bin = str(_P(__file__).parent / "lumos")
+
+    def lc(td, *extra):
+        return _sp.run([sys.executable, lumos_bin, "lint-check", "--repo", td, *extra],
+                       cwd=td, capture_output=True, text=True, timeout=60)
+
+    with tempfile.TemporaryDirectory() as td:
+        _sp.run(["git", "init", "-q"], cwd=td, check=True)
+        r = lc(td, "--json")
+        check("沒宣告:--json 不加 advisories 欄", "advisories" not in _json.loads(r.stdout), r.stdout)
+        lp = _P(td) / ".lumos"
+        lp.mkdir()
+        det = "detekt --input src --report sarif:{LINT_SARIF_OUT}"
+        plain = "ruff check {LINT_FILES} --output-format sarif > {LINT_SARIF_OUT}"
+        for label, decl_det, decl_plain in (
+                ("健康", {"kt": [det]}, {"py": [plain]}),
+                ("有問題", {"kt": [det, ""]}, {"py": [plain, ""]})):
+            (lp / "lint.json").write_text(_json.dumps(decl_plain), encoding="utf-8")
+            r0 = lc(td)
+            (lp / "lint.json").write_text(_json.dumps(decl_det), encoding="utf-8")
+            r1 = lc(td)
+            check(f"★前置★ {label}分支現場成立(沒有 detekt 時沒有提醒)", "T1" not in r0.stdout, r0.stdout)
+            check(f"{label}分支:印出 T1 與 P1 提醒", "T1" in r1.stdout and "P1" in r1.stdout, r1.stdout)
+            check(f"{label}分支:退出碼跟沒有提醒時一樣", r1.returncode == r0.returncode,
+                  f"有提醒 rc={r1.returncode} 沒提醒 rc={r0.returncode}")
+            rj = lc(td, "--json")
+            try:
+                out = _json.loads(rj.stdout)
+            except ValueError:
+                out = None
+            check(f"{label}分支:--json 只輸出一個 JSON 物件", isinstance(out, dict), rj.stdout)
+            adv = (out or {}).get("advisories")
+            check(f"{label}分支:--json 的 advisories 是字串清單且含 T1",
+                  isinstance(adv, list) and all(isinstance(a, str) for a in adv) and any(" T1" in a for a in adv), str(adv))
+            check(f"{label}分支:--json 退出碼跟人讀輸出一樣", rj.returncode == r1.returncode, f"{rj.returncode} vs {r1.returncode}")
+        (lp / "lint.json").write_text(_json.dumps({"py": [plain]}), encoding="utf-8")
+        out = _json.loads(lc(td, "--json").stdout)
+        check("有宣告但沒 detekt:advisories 是空清單", out.get("advisories") == [], str(out))
+    print("  ✓ t_lintcheck_detekt_advice_output")
+
+
+def t_doctor_lint_detekt_advice():
+    """[[Projects/Android的detekt規則說實話_計劃]] S3:健檢 F 段印 detekt 提醒合成的一段、不再說
+    「推送前的新增告警閘會真的執行它們」這句不分佔位符的話;--ci 與 --strict 的退出碼跟拿掉提醒時一樣;
+    畸形宣告不出錯。"""
+    import json as _j
+    import shutil as _sh
+    src = mkvault()
+    repo_root = Path(tempfile.mkdtemp(prefix="gctl-lintdetekt-")) / "repo"
+    vault = repo_root / "docs" / "proj-knowledge"
+    vault.parent.mkdir(parents=True)
+    _sh.copytree(src, vault)
+    (repo_root / ".git").mkdir()
+    (repo_root / ".lumos").mkdir()
+    decl = repo_root / ".lumos" / "lint.json"
+    plain = "ruff check {LINT_FILES} --output-format sarif > {LINT_SARIF_OUT}"
+    det = "detekt --input src --report sarif:{LINT_SARIF_OUT}"
+    for flag in ("--ci", "--strict"):
+        decl.write_text(_j.dumps({"py": [plain]}))
+        r0 = run(vault, "doctor", flag)
+        decl.write_text(_j.dumps({"kt": [det]}))
+        r1 = run(vault, "doctor", flag)
+        check(f"{flag}:★前置★ 沒 detekt 時 F 段沒有 detekt 提醒", "T1" not in r0.stdout, r0.stdout[-400:])
+        check(f"{flag}:有 detekt 時 F 段印 T1 與 P1", "T1" in r1.stdout and "P1" in r1.stdout, r1.stdout[-600:])
+        check(f"{flag}:退出碼跟拿掉提醒時一樣", r1.returncode == r0.returncode, f"{r1.returncode} vs {r0.returncode}")
+    check("不再印不分佔位符的「會真的執行它們」", "會真的執行它們" not in r1.stdout, r1.stdout[-600:])
+    check("改成分開講含不含檔案佔位符", "含檔案佔位符" in r1.stdout, r1.stdout[-600:])
+    decl.write_text(_j.dumps({"kt": [det, det.replace("src", "src2"), "./gradlew detekt"]}))
+    r = run(vault, "doctor", "--ci")
+    check("多條提醒合成一段(只有一個 detekt 提醒標題)", r.stdout.count("detekt 宣告實際會怎樣") == 1, r.stdout[-800:])
+    for bad in ([1, 2], {"kt": "not-a-list"}, {"kt": [5, det]}):
+        decl.write_text(_j.dumps(bad))
+        r = run(vault, "doctor", "--ci")
+        check(f"畸形宣告 {bad!r} 不出錯", "Traceback" not in r.stderr, r.stderr[-300:])
+    check("清單裡有數字時合法那條照判", "T1" in r.stdout, r.stdout[-600:])
+    print("  ✓ t_doctor_lint_detekt_advice")
+
+
+# 釘住的 detekt 1.23.8 規則名 → 規則集對照(判準來源:detekt 自己產的預設設定,不是本 repo 寫的)。
+# 產生方式:detekt --generate-config --config gen.yml(detekt 1.23.8,2026-11-04),取每個規則集底下兩格縮排的規則名。
+# detekt 升版時照同一個指令重產;[[Projects/Android的detekt規則說實話_計劃]] 的 REVISIT 會提醒。
+_DETEKT_1238_RULES = {
+    "comments": "AbsentOrWrongFileLicense CommentOverPrivateFunction CommentOverPrivateProperty DeprecatedBlockTag EndOfSentenceFormat KDocReferencesNonPublicProperty OutdatedDocumentation UndocumentedPublicClass UndocumentedPublicFunction UndocumentedPublicProperty",
+    "complexity": "CognitiveComplexMethod ComplexCondition ComplexInterface CyclomaticComplexMethod LabeledExpression LargeClass LongMethod LongParameterList MethodOverloading NamedArguments NestedBlockDepth NestedScopeFunctions ReplaceSafeCallChainWithRun StringLiteralDuplication TooManyFunctions",
+    "coroutines": "GlobalCoroutineUsage InjectDispatcher RedundantSuspendModifier SleepInsteadOfDelay SuspendFunSwallowedCancellation SuspendFunWithCoroutineScopeReceiver SuspendFunWithFlowReturnType",
+    "empty-blocks": "EmptyCatchBlock EmptyClassBlock EmptyDefaultConstructor EmptyDoWhileBlock EmptyElseBlock EmptyFinallyBlock EmptyForBlock EmptyFunctionBlock EmptyIfBlock EmptyInitBlock EmptyKtFile EmptySecondaryConstructor EmptyTryBlock EmptyWhenBlock EmptyWhileBlock",
+    "exceptions": "ExceptionRaisedInUnexpectedLocation InstanceOfCheckForException NotImplementedDeclaration ObjectExtendsThrowable PrintStackTrace RethrowCaughtException ReturnFromFinally SwallowedException ThrowingExceptionFromFinally ThrowingExceptionInMain ThrowingExceptionsWithoutMessageOrCause ThrowingNewInstanceOfSameException TooGenericExceptionCaught TooGenericExceptionThrown",
+    "naming": "BooleanPropertyNaming ClassNaming ConstructorParameterNaming EnumNaming ForbiddenClassName FunctionMaxLength FunctionMinLength FunctionNaming FunctionParameterNaming InvalidPackageDeclaration LambdaParameterNaming MatchingDeclarationName MemberNameEqualsClassName NoNameShadowing NonBooleanPropertyPrefixedWithIs ObjectPropertyNaming PackageNaming TopLevelPropertyNaming VariableMaxLength VariableMinLength VariableNaming",
+    "performance": "ArrayPrimitive CouldBeSequence ForEachOnRange SpreadOperator UnnecessaryPartOfBinaryExpression UnnecessaryTemporaryInstantiation",
+    "potential-bugs": "AvoidReferentialEquality CastNullableToNonNullableType CastToNullableType Deprecation DontDowncastCollectionTypes DoubleMutabilityForCollection ElseCaseInsteadOfExhaustiveWhen EqualsAlwaysReturnsTrueOrFalse EqualsWithHashCodeExist ExitOutsideMain ExplicitGarbageCollectionCall HasPlatformType IgnoredReturnValue ImplicitDefaultLocale ImplicitUnitReturnType InvalidRange IteratorHasNextCallsNextMethod IteratorNotThrowingNoSuchElementException LateinitUsage MapGetWithNotNullAssertionOperator MissingPackageDeclaration NullCheckOnMutableProperty NullableToStringCall PropertyUsedBeforeDeclaration UnconditionalJumpStatementInLoop UnnecessaryNotNullCheck UnnecessaryNotNullOperator UnnecessarySafeCall UnreachableCatchBlock UnreachableCode UnsafeCallOnNullableType UnsafeCast UnusedUnaryOperator UselessPostfixExpression WrongEqualsTypeParameter",
+    "style": "AlsoCouldBeApply BracesOnIfStatements BracesOnWhenStatements CanBeNonNullable CascadingCallWrapping ClassOrdering CollapsibleIfStatements DataClassContainsFunctions DataClassShouldBeImmutable DestructuringDeclarationWithTooManyEntries DoubleNegativeLambda EqualsNullCall EqualsOnSignatureLine ExplicitCollectionElementAccessMethod ExplicitItLambdaParameter ExpressionBodySyntax ForbiddenAnnotation ForbiddenComment ForbiddenImport ForbiddenMethodCall ForbiddenSuppress ForbiddenVoid FunctionOnlyReturningConstant LoopWithTooManyJumpStatements MagicNumber MandatoryBracesLoops MaxChainedCallsOnSameLine MaxLineLength MayBeConst ModifierOrder MultilineLambdaItParameter MultilineRawStringIndentation NestedClassesVisibility NewLineAtEndOfFile NoTabs NullableBooleanCheck ObjectLiteralToLambda OptionalAbstractKeyword OptionalUnit PreferToOverPairSyntax ProtectedMemberInFinalClass RedundantExplicitType RedundantHigherOrderMapUsage RedundantVisibilityModifierRule ReturnCount SafeCast SerialVersionUIDInSerializableClass SpacingBetweenPackageAndImports StringShouldBeRawString ThrowsCount TrailingWhitespace TrimMultilineRawString UnderscoresInNumericLiterals UnnecessaryAbstractClass UnnecessaryAnnotationUseSiteTarget UnnecessaryApply UnnecessaryBackticks UnnecessaryBracesAroundTrailingLambda UnnecessaryFilter UnnecessaryInheritance UnnecessaryInnerClass UnnecessaryLet UnnecessaryParentheses UntilInsteadOfRangeTo UnusedImports UnusedParameter UnusedPrivateClass UnusedPrivateMember UnusedPrivateProperty UseAnyOrNoneInsteadOfFind UseArrayLiteralsInAnnotations UseCheckNotNull UseCheckOrError UseDataClass UseEmptyCounterpart UseIfEmptyOrIfBlank UseIfInsteadOfWhen UseIsNullOrEmpty UseLet UseOrEmpty UseRequire UseRequireNotNull UseSumOfInsteadOfFlatMapSize UselessCallOnNotNull UtilityClassWithPublicConstructor VarCouldBeVal WildcardImport",
+}
+
+
+def _detekt_config_problems(text, rules=None):
+    """讀共用 detekt 設定的文字,回傳問題清單:規則不在對照裡、放錯規則集、ForbiddenMethodCall 方法名不含點。
+    只認本 repo 共用設定用到的 YAML 形狀(頂格規則集、兩格規則名、methods 底下的字串或 value: 項)。"""
+    import re as _re
+    rules = rules or _DETEKT_1238_RULES
+    sets = {k: set(v.split()) for k, v in rules.items()}
+    probs, cur_set, cur_rule, in_methods = [], None, None, False
+    for ln in text.splitlines():
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        m = _re.match(r"^([A-Za-z][\w-]*):\s*$", ln)
+        if m:
+            cur_set, cur_rule, in_methods = m.group(1), None, False
+            if cur_set not in sets:
+                probs.append(f"不認得的規則集 {cur_set}")
+            continue
+        m = _re.match(r"^  ([A-Za-z]\w*):", ln)
+        if m:
+            cur_rule, in_methods = m.group(1), False
+            if cur_set in sets and cur_rule not in sets[cur_set]:
+                home = [k for k, v in sets.items() if cur_rule in v]
+                probs.append(f"{cur_set} 底下的 {cur_rule} " + (f"應該放在 {home[0]}" if home else "不是 detekt 1.23.8 的規則"))
+            continue
+        if _re.match(r"^    methods:\s*$", ln):
+            in_methods = True
+            continue
+        if in_methods:
+            m = _re.match(r"^\s+(?:-\s*(?:value:\s*)?|value:\s*)['\"]?([^'\"#]+?)['\"]?\s*$", ln)
+            if m and not _re.match(r"^\s+-?\s*reason:", ln):
+                name = m.group(1).strip()
+                if "." not in name:
+                    probs.append(f"ForbiddenMethodCall 的方法 {name} 要寫完整名稱(含套件)")
+    return probs
+
+
+def t_detekt_shared_config_valid():
+    """[[Projects/Android的detekt規則說實話_計劃]] S4:共用 detekt 設定只准出現 1.23.8 存在、放對規則集的規則,
+    ForbiddenMethodCall 方法要全名——違反時所有引用它的消費專案 detekt 會一起拒跑或規則靜默失效。"""
+    import shutil as _sh
+    import subprocess as _sp
+    import tempfile as _tf
+    cfg = Path(__file__).resolve().parent.parent / "configs" / "detekt" / "android.yml"
+    text = cfg.read_text(encoding="utf-8")
+    # ★前置★ 檢查器自己抓得到三種錯(不然下面的「零問題」可能只是它什麼都沒在看)
+    check("★前置★ 放錯規則集會被抓", _detekt_config_problems("coroutines:\n  ForbiddenMethodCall:\n    active: true\n") != [])
+    check("★前置★ 不存在的規則會被抓",
+          _detekt_config_problems("coroutines:\n  CoroutineLaunchedInTestWithoutRunTest:\n    active: true\n") != [])
+    check("★前置★ 方法裸名會被抓",
+          _detekt_config_problems("style:\n  ForbiddenMethodCall:\n    active: true\n    methods:\n      - 'collectAsState'\n") != [])
+    probs = _detekt_config_problems(text)
+    check("共用設定零問題", probs == [], str(probs))
+    check("共用設定補開了 SuspendFunWithCoroutineScopeReceiver",
+          "SuspendFunWithCoroutineScopeReceiver" in text, "")
+    check("共用設定用全名禁 collectAsState", "androidx.compose.runtime.collectAsState" in text, "")
+    det = _sh.which("detekt")
+    if not det:
+        print("    (本機沒有 detekt,只跑了靜態那半;真的設定驗證沒跑)")
+    else:
+        with _tf.TemporaryDirectory() as td:
+            (Path(td) / "A.kt").write_text("package a\n\nfun f(): Int = 1\n", encoding="utf-8")
+            r = _sp.run([det, "--input", str(Path(td) / "A.kt"), "--build-upon-default-config", "--config", str(cfg)],
+                        capture_output=True, text=True, timeout=180)
+            bad = "invalid config" in (r.stdout + r.stderr) or "does not exist" in (r.stdout + r.stderr)
+            check("本機 detekt 真的設定驗證通過", not bad, (r.stdout + r.stderr)[-400:])
+    print("  ✓ t_detekt_shared_config_valid")
 
 
 def t_pitfalls_stack_questions():

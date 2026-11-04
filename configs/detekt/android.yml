@@ -3,23 +3,40 @@
 # 用法（lint.json 樣板，見 docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md）:
 #   detekt --input <src> --report sarif:{LINT_SARIF_OUT} --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/android.yml
 #
+# ★講實話(2026-11-04,detekt 1.23.8 實測;lumos lint-check 與健檢會照指令字面印出同樣的提醒)★:
+#   ①下面標「要型別資訊」的規則,指令沒帶 --classpath <依賴 jar> 與 --jdk-home <JDK> 時不會跑,也不會報錯。
+#     Android 專案的依賴散在建置快取,目前沒有現成取法;Gradle 的 detekt<變體> 任務自帶型別,但接不進推送前檢查。
+#   ②推送前的新增告警檢查只跑含 {LINT_FILES} 的命令;上面的樣板沒有,所以只記錄、不擋。
+#     帶了 {LINT_FILES} 也擋不住:多檔時檔名用空白串起來,detekt 只收逗號分隔,會拒跑(見推送前真的擋那案)。
+#   ③自有設定要跟這份疊加時,用逗號合成一個 --config a.yml,b.yml(分開寫兩次 --config 會拒跑);
+#     清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
+#
 # 定位:只收「detekt 預設關、但效能檢核目錄/kotlin-idioms 點名要開」的差分。
 # 格式規則歸 ktlint/ktfmt（linter精選目錄分工），不在此開。
+# 規則名與規則集要是 detekt 1.23.8 真的有的(寫錯整次拒跑);t_detekt_shared_config_valid 會擋。
 
 coroutines:
-  # 效能三問②:GlobalScope 裸用（scope 不跟生命週期=洩漏）
+  # 效能三問②:GlobalScope 裸用（scope 不跟生命週期=洩漏）。不要型別資訊
   GlobalCoroutineUsage:
     active: true
-  # 效能三問③:catch 泛型例外吞掉 CancellationException=取消傳播斷
-  # ⚠ 要型別資訊:只給 --input 的命令列跑法(上面用法那行)下零命中、也不出錯;Gradle 型別解析任務
-  #   或命令列帶 --classpath/--jdk-home 才會報。1.23.8 只抓 runCatching 包 suspend 呼叫,
-  #   try/catch(Exception) 那種寫法帶齊型別資訊也不報(2026-11-01 實測,見 kotlin-idioms R10)。
+  # 效能三問③:runCatching 裡呼叫 suspend 函式=取消訊號被吞。要型別資訊:只給 --input 的命令列跑法下零命中、也不出錯。
+  #   1.23.8 只抓 runCatching 包 suspend 呼叫,try/catch(Exception) 那種寫法帶齊型別資訊也不報(2026-11-01 實測,見 kotlin-idioms R10);
+  #   Kotlin 標準庫 2.2 以上時補了型別資訊也不響(2026-11-04 逐版實測)。
   SuspendFunSwallowedCancellation:
+    active: true
+  # suspend 函式又掛在 CoroutineScope 上(兩種語意混用)。要型別資訊
+  SuspendFunWithCoroutineScopeReceiver:
     active: true
 
 performance:
-  # 效能三問⑤前半:長鏈 map/filter 該 asSequence（threshold 3 步起報）
-  # ⚠ 也要型別資訊:只給 --input 的命令列跑法下不報(2026-11-01 實測 1.23.8);
-  #   三條裡照用法那行跑會報的只有 GlobalCoroutineUsage。
+  # 效能三問⑤前半:長鏈 map/filter 該 asSequence（threshold 3 步起報）。要型別資訊:只給 --input 的命令列跑法下不報(2026-11-01 實測 1.23.8)
   CouldBeSequence:
     active: true
+
+style:
+  # 畫面收集要用 collectAsStateWithLifecycle(collectAsState 在 App 退到背景時照樣收)。要型別資訊;方法要寫全名
+  ForbiddenMethodCall:
+    active: true
+    methods:
+      - reason: 'collectAsState 在 App 退到背景時照樣收集,改用 collectAsStateWithLifecycle'
+        value: 'androidx.compose.runtime.collectAsState'
