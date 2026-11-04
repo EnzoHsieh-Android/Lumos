@@ -89,7 +89,7 @@ Each round's review reports and outcomes stay in the repo for spot-checking at a
 <details>
 <summary>Details: recording the human decision and retrospective</summary>
 
-- Record the human decision with `lumos loop cap-decision`.
+- Before asking for one more round, check the direction on the web (is this path right; at least two sources) and attach the finding; record the human decision with `lumos loop cap-decision`.
 - Before continuing, record a valid retrospective with `lumos loop retro`, or a reasoned skip; once the human decision is recorded, without one of these no further review records can be added and the check that every finding was handled cannot pass.
 
 </details>

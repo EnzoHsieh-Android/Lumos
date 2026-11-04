@@ -133,7 +133,7 @@ lumos code-loop dispositions <file> [--branch <name>]  # answer the triggered st
 lumos code-loop recall-miss <id> --note "..."  # a reviewer found an issue matching a question the triggers missed
 lumos loop status <id>           # convergence verdict for a design or code review loop
 lumos loop fix-check <id> --round rN   # after code review fixes, before the next round: check the fix record and post-fix tests (advisory; about 5 minutes, run it in the background)
-lumos loop cap-decision <id> --decision extra-round|accept-risk --note "…"   # cap reached without passing: record the human decision (one more round, or accept the risk)
+lumos loop cap-decision <id> --decision extra-round|accept-risk --note "…"   # cap reached without passing: check the direction on the web first (at least two sources), then record the human decision (one more round, or accept the risk)
 lumos loop retro <id> --template --write | --check | --record | --skip --note "…"   # after recording a human decision, write the capped-loop retrospective before continuing
 lumos loop escape <id> --stage … --severity … --desc "…"   # a defect attributable to a passed loop was found downstream: log an escape (--list shows the ledger)
 lumos lint-waive <fingerprint> --note "…"   # the new-warning gate blocked a false positive: allow it with a reason (at least 10 characters besides whitespace), on record; answering y at a terminal records a human waiver, no interactive terminal records an AI waiver (origin); --list shows what was allowed and marks AI waivers, --ack --all marks them reviewed
