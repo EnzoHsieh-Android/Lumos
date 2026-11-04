@@ -2739,7 +2739,7 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 elif _st_i2.get("applies") and _st_i2.get("state") in ("none", "stale"):
                     _why_i2 = f"({_esc_clean(_st_i2['problems'][0], 80)})" if _st_i2.get("problems") else ""
                     _rows_i2.append(f"{_nm_i2}:回顧{_RETRO_STATE_LABEL[_st_i2['state']]}{_why_i2} → "
-                                    f"{_cap_retro_fix_cmd(_rr_i2, _lp_i2, _st_i2['state'])}")
+                                    f"{_cap_retro_fix_cmd(_rr_i2, _lp_i2, _st_i2['state'], _cap_world_case(_st_i2.get('decision')))}")
             except Exception as _e_i2:
                 _rows_i2.append(f"{_esc_clean(_lp_i2, 60)}:判不了({_e_i2.__class__.__name__}),略過這一個")
         if _gerr_i2 and len(_rows_i2) == 1:
@@ -22124,6 +22124,13 @@ _RETRO_MAX_BYTES = 256 * 1024
 _RETRO_FILE = "cap-retro.json"
 _RETRO_STATE_LABEL = {"recorded": "已記回顧", "skipped": "已跳過", "stale": "過期", "none": "沒有", "gov-bad": "判不了(治理帳壞)"}
 _RETRO_NO_BAD = object()   # 「沒有壞輪次」的哨兵(輪次值本身可能是 None)
+# 跑滿後查世界方向_計劃:這個時間(含)之後記的 extra-round 人裁,回顧要填 world_check;值取實作合併日隔天零點,不給環境變數覆寫
+# (同 _SPEC_GATE_SINCE 那一族;t_cap_world_since_parseable_and_fresh 釘它解得開、而且最後一次改它的提交日早於它的日期,同日不算)
+_CAP_WORLD_CHECK_SINCE = "2026-11-05T00:00:00+08:00"
+_RETRO_WORLD_VERDICTS = ("direction-ok", "change-direction", "undetermined")
+_RETRO_WORLD_KEYS = ("queries", "sources", "verdict", "note")
+_CAP_WORLD_HINT = "要再開一輪之前,先上網查這條路的方向(至少兩個來源;查不到就寫查了哪些詞),結論附在請人裁的訊息裡"
+_CAP_WORLD_FILL = "把查方向的結論寫進回顧的 world_check(還沒查就先查)"
 
 
 def _retro_id_bad(loop_id):
@@ -22396,28 +22403,124 @@ def _retro_text_ok(v, n):
     return isinstance(v, str) and len(v.strip()) >= n
 
 
+def _cap_world_case(decision):
+    """★世界查證欄的三種情況只由這一支判★(--check、--record、retro-stats、提示都讀它;同 loop-retro WHY d7):
+    required=最新人裁是 extra-round 而且 ts 不早於 _CAP_WORLD_CHECK_SINCE(ts 不是字串或解不開也算,偏嚴);
+    optional=最新人裁是 accept-risk;ignored=生效前的 extra-round、或沒有人裁紀錄(world_check 整段不讀)。"""
+    if not isinstance(decision, dict):
+        return "ignored"
+    kind = decision.get("decision")
+    if kind == "accept-risk":
+        return "optional"
+    if kind != "extra-round":
+        return "ignored"
+    ts = decision.get("ts")
+    k = _loop_ts_key(ts) if isinstance(ts, str) else None   # 非字串先擋:_loop_ts_key 對非字串的真值會丟例外
+    if k is None:
+        return "required"
+    return "required" if k >= _loop_ts_key(_CAP_WORLD_CHECK_SINCE) else "ignored"
+
+
+def _retro_world_empty(wc):
+    """選填時「沒填」的判定:省略、null、{},或剛好是骨架那份空殼(四個鍵不多不少、每格都是空白字串、清單可以是空的)。
+    其他任何值([]、""、false、0、多鍵、缺鍵、格子是 null)都算有填——不用真值判斷(設計審 r3 邊界 6)。"""
+    if wc is None or (isinstance(wc, dict) and not wc):
+        return True
+
+    def blank(x):
+        return isinstance(x, str) and not x.strip()
+    if not (isinstance(wc, dict) and set(wc) == set(_RETRO_WORLD_KEYS)):
+        return False
+    q, s = wc["queries"], wc["sources"]
+    return (isinstance(q, list) and all(blank(x) for x in q)
+            and isinstance(s, list) and all(isinstance(x, dict) and set(x) == {"url", "point"} and blank(x["url"]) and blank(x["point"]) for x in s)
+            and blank(wc["verdict"]) and blank(wc["note"]))
+
+
+def _retro_world_check(wc, bad):
+    """驗世界查證欄的型別與內容,逐欄呼叫 bad(欄位, 原因);不丟例外。網址不解析、不正規化(設計審 r3 查世界方向:
+    同頁不同寫法離線判不準,解析還會在怪埠號丟例外),只驗 http(s):// 開頭、後面有字、整串沒有空白,去頭尾空白後整串相同算重複。"""
+    if not isinstance(wc, dict):
+        bad("world_check", "要是物件 {queries, sources, verdict, note}")
+        return
+    q = wc.get("queries")
+    if not (isinstance(q, list) and all(isinstance(x, str) for x in q)):
+        bad("world_check.queries", "要是字串清單(查了哪些詞)")
+    elif not q:
+        bad("world_check.queries", "至少一條查詢詞")
+    else:
+        for i, x in enumerate(q, 1):
+            if not _retro_text_ok(x, 4):
+                bad(f"world_check.queries[{i}]", "每條查詢詞至少 4 字")
+    v = wc.get("verdict")
+    if not isinstance(v, str):
+        bad("world_check.verdict", "要是字串")
+    elif v not in _RETRO_WORLD_VERDICTS:
+        bad("world_check.verdict", f"{_esc_clean(repr(v), 40)} 不在固定清單({'、'.join(_RETRO_WORLD_VERDICTS)})")
+    n = wc.get("note")
+    if not isinstance(n, str):
+        bad("world_check.note", "要是字串")
+    elif not _retro_text_ok(n, 20):
+        bad("world_check.note", "至少 20 字(查到什麼、方向怎麼判)")
+    srcs = wc.get("sources")
+    if not (isinstance(srcs, list) and all(isinstance(x, dict) for x in srcs)):
+        bad("world_check.sources", "要是物件清單 [{url, point}]")
+        return
+    if v in ("direction-ok", "change-direction") and len(srcs) < 2:
+        bad("world_check.sources", f"結論是 {v} 時至少兩個來源")
+    seen = {}
+    for i, s in enumerate(srcs, 1):
+        tag = f"world_check.sources[{i}]"
+        u, pt = s.get("url"), s.get("point")
+        if not isinstance(u, str):
+            bad(f"{tag}.url", "要是字串")
+        else:
+            uu = u.strip()
+            if not re.fullmatch(r"(?i)https?://\S+", uu):
+                bad(f"{tag}.url", "要以 http:// 或 https:// 開頭、後面有字、整串沒有空白"
+                    + (";沒有來源就把 sources 改成 []" if not uu else ""))
+            elif uu in seen:
+                bad(f"{tag}.url", f"跟第 {seen[uu]} 項是同一個網址(兩個來源要是不同網址)")
+            else:
+                seen[uu] = i
+        if not isinstance(pt, str):
+            bad(f"{tag}.point", "要是字串")
+        elif not _retro_text_ok(pt, 10):
+            bad(f"{tag}.point", "至少 10 字(這個來源說了什麼)")
+
+
 def _cap_retro_check(root, loop_id, decision, rows, rows_err, raw=None):
-    """驗回顧檔(--check 與合格回顧判定共用)。回 (問題清單, 解析後的物件或 None)。壞檔一律判不合格並講原因,不丟堆疊。
-    raw=呼叫端已讀好的位元組(--record 與合格判定拿同一份算指紋);沒給就自己讀(_retro_read_bytes)。"""
+    """驗回顧檔(--check 與合格回顧判定共用)。回 (問題清單, 解析後的物件或 None, 世界查證情況)。壞檔一律判不合格並講原因,不丟堆疊。
+    raw=呼叫端已讀好的位元組(--record 與合格判定拿同一份算指紋);沒給就自己讀(_retro_read_bytes)。
+    世界查證情況(_cap_world_case)由這裡帶出,--record 與 retro-stats 只讀它、不各自重算(跑滿後查世界方向_計劃 做法 3)。"""
+    case = _cap_world_case(decision)
     p = _retro_path(root, loop_id)
     rel = _retro_qpath(root, p)
     if raw is None:
         raw, rerr = _retro_read_file(root, loop_id)
         if rerr:
-            return [f"回顧檔{rerr}:{rel} → {_cap_retro_fix_cmd(root, loop_id, 'none')}"], None
+            return [f"回顧檔{rerr}:{rel} → {_cap_retro_fix_cmd(root, loop_id, 'none', case)}"], None, case
     data, perr = _retro_parse(raw)
     if perr:
-        return [f"回顧檔{perr} → {_cap_retro_fix_cmd(root, loop_id, 'none')}"], None
+        return [f"回顧檔{perr} → {_cap_retro_fix_cmd(root, loop_id, 'none', case)}"], None, case
     if _fix_bad_strings(data, nul=False):
-        return ["回顧檔有字串含孤立代理字元(\\ud800 這類,不是合法文字),型別不合格"], None
+        return ["回顧檔有字串含孤立代理字元(\\ud800 這類,不是合法文字),型別不合格"], None, case
     probs = []
 
     def bad(field, why):
         probs.append(f"{field}: {why}")
 
     v = data.get("version")
-    if not (isinstance(v, int) and not isinstance(v, bool) and v == 1):
-        bad("version", f"要是 1,現在是 {_esc_clean(repr(v), 40)}")
+    if not (isinstance(v, int) and not isinstance(v, bool) and v in (1, 2)):
+        bad("version", f"要是 {'2' if case == 'required' else '1 或 2'},現在是 {_esc_clean(repr(v), 40)}")
+    elif case == "required" and v != 2:
+        bad("version", "要是 2——把回顧檔的 version 改成 2 並補 world_check(檔已存在,--template --write 不會覆寫;"
+            "要看新骨架用 --template 印到畫面)")
+    wc = data.get("world_check")
+    if case == "required" and wc is None:
+        bad("world_check", "人裁加開(extra-round)時必填:查了哪些詞、看了哪些來源、方向怎麼判——" + _CAP_WORLD_FILL)
+    elif case == "required" or (case == "optional" and not _retro_world_empty(wc)):
+        _retro_world_check(wc, bad)
     if data.get("loop") != loop_id:
         bad("loop", f"要等於指令給的編號 {loop_id!r},現在是 {_esc_clean(repr(data.get('loop')), 60)}")
     want = [x for x in (decision.get("rounds") or []) if isinstance(x, str)]
@@ -22503,7 +22606,7 @@ def _cap_retro_check(root, loop_id, decision, rows, rows_err, raw=None):
                     bad(f"{tag}.ref", "要寫改哪裡(非空字串)")
                 if not _retro_text_ok(ch.get("change"), 10):
                     bad(f"{tag}.change", "要寫改什麼,至少 10 字")
-    return probs, (None if probs else data)
+    return probs, (None if probs else data), case
 
 
 def _cap_retro_status(env, loop_id, root, events=None, rows=None, rows_err=None, dir_exists=None, gov_err=None):
@@ -22511,12 +22614,13 @@ def _cap_retro_status(env, loop_id, root, events=None, rows=None, rows_err=None,
     取這個編號最新一筆人裁紀錄 D(治理帳檔內順序),再取 D 之後最新一筆 recorded 或 skipped 事件 E:
     skipped → 已跳過;recorded → 回顧檔現在的 sha256 等於 E.retro_sha256 而且通過檢查(rounds 等於 D.rounds)→ 已記回顧,否則過期;沒有 E → 沒有。
     回 dict:applies(有人裁紀錄而且卷證資料夾存在)、reason(不適用時 no-decision/no-dir)、decision(D)、
-    state(recorded/skipped/stale/none/gov-bad)、problems(過期或帳壞的原因)、data(已記回顧時的回顧內容)。
+    state(recorded/skipped/stale/none/gov-bad)、problems(過期或帳壞的原因)、data(已記回顧時的回顧內容)、
+    world_case(_cap_world_case 給的世界查證情況;讀過回顧檔才填,沒讀是 None;retro-stats 只數 required)。
     ★治理帳壞(gov_err)fail-closed★:讀不到人裁紀錄不等於沒有;只要這個迴圈「可能有」人裁紀錄(審查帳讀得動時:在 cap-decision 的範圍、
     帳上輪數已到上限——不到上限記不了人裁;審查帳也讀不動時一律算可能有)而且有卷證,就判 state=gov-bad(decision 是 None)、要回顧(代碼審 r3)。"""
     if events is None:
         events, gov_err = _retro_gov_events(root, loop_id)
-    res = {"applies": False, "reason": "no-decision", "decision": None, "state": None, "problems": [], "data": None}
+    res = {"applies": False, "reason": "no-decision", "decision": None, "state": None, "problems": [], "data": None, "world_case": None}
     if gov_err:
         if rows is None:
             rows, rows_err = _loop_records_checked(env, loop_id)
@@ -22566,7 +22670,8 @@ def _cap_retro_status(env, loop_id, root, events=None, rows=None, rows_err=None,
         return res
     if rows is None:
         rows, rows_err = _loop_records_checked(env, loop_id)
-    probs, data = _cap_retro_check(root, loop_id, dec, rows, rows_err, raw=raw)
+    probs, data, case = _cap_retro_check(root, loop_id, dec, rows, rows_err, raw=raw)
+    res["world_case"] = case
     if probs:
         res["state"], res["problems"] = "stale", ["回顧檔指紋相符但不再通過檢查:" + ";".join(probs[:3])]
     else:
@@ -22574,7 +22679,7 @@ def _cap_retro_status(env, loop_id, root, events=None, rows=None, rows_err=None,
     return res
 
 
-def _cap_retro_fix_cmd(root, loop_id, state):
+def _cap_retro_fix_cmd(root, loop_id, state, case=None):
     """★回顧不合格時該叫人做什麼,只由這一支決定★(處置閘、canary 擋下、loop next、doctor、retro-stats、--check、--template --write 都呼叫它)。
     ★每種狀態都給走得通的指令,照做之後不會回到同一句★(代碼審 code-審查跑滿回顧 r2 通才、正確性、邊界席;r3 合約、通才、正確性、邊界、併發席):
     | 狀態 | 提示 |
@@ -22585,7 +22690,18 @@ def _cap_retro_fix_cmd(root, loop_id, state):
     | 一般檔但讀不動、超過 256KB、空檔、建一半、不是 JSON 物件 | 刪除或改名該檔後 --template --write(不叫人跑 --check:它只會再說一次讀不動) |
     | 讀得動的 JSON 物件、過期 | 改好現有回顧檔,--check 過了再 --record |
     | 讀得動的 JSON 物件、還沒記 | --check(不合格照它逐條列的改),過了再 --record |
-    ★不印 `--template > 檔`★:照貼會先把已寫好的回顧截斷清空(代碼審 r1 四席)。"""
+    ★不印 `--template > 檔`★:照貼會先把已寫好的回顧截斷清空(代碼審 r1 四席)。
+    case=_cap_world_case 給的世界查證情況:required 而且回顧沒有或過期時,句尾多接 _CAP_WORLD_FILL(跑滿後查世界方向_計劃 做法 1);
+    知道最新人裁的呼叫端都要給(擋下訊息、處置閘第八步、已有人裁的提示、記完人裁的下一步、doctor、retro-stats、--template --write;代碼審 r1 架構 A3),
+    沒給(治理帳壞、還沒有人裁)照舊。"""
+    out = _cap_retro_fix_cmd_body(root, loop_id, state)
+    if case == "required" and state in ("none", "stale"):
+        out += f";{_CAP_WORLD_FILL}"
+    return out
+
+
+def _cap_retro_fix_cmd_body(root, loop_id, state):
+    """_cap_retro_fix_cmd 的本體(依狀態給指令;規則見上一支的說明)。"""
     import stat as _stat
     if state == "gov-bad":
         gp = Path(root) / GOV_LOG_REL
@@ -22691,7 +22807,7 @@ def _cap_retro_record_block(env, loop_id, round_id, rows=None, rows_err=None):
               f"{_RETRO_STATE_LABEL.get(st['state'], '?')}——繼續之前要先留一份回顧。")]
     lines.append("  為什麼:回顧把這幾輪的問題歸族、寫下下次怎麼少跑一輪;再開一輪之後就沒人回頭寫了。"
                  + (f"過期原因:{_esc_clean(';'.join(st['problems'][:3]), 400)}" if st["problems"] else ""))
-    lines.append(f"  怎麼做:{_cap_retro_fix_cmd(root, loop_id, st['state'])}(起草派沒參與這個迴圈的乾淨代理);"
+    lines.append(f"  怎麼做:{_cap_retro_fix_cmd(root, loop_id, st['state'], _cap_world_case(st['decision']))}(起草派沒參與這個迴圈的乾淨代理);"
                  f"人裁決定不寫:{skip_cmd}")
     return ("cap-retro-missing", lines)
 
@@ -22733,7 +22849,7 @@ def _disposal_retro_step(rounds, loop_id, root, env, spec_sha_override=None, ret
         print(f"[disposal] 跑滿回顧: ✗ — 人裁記了 {dec},這筆人裁之後沒有已記的回顧或跳過(人裁之後要繼續,先留跑滿回顧或記跳過)")
     else:
         print(f"[disposal] 跑滿回顧: ✗ — 回顧過期:{_esc_clean(';'.join(st['problems'][:3]), 400)}")
-    print(f"    {_cap_retro_fix_cmd(root, loop_id, st['state'])}")
+    print(f"    {_cap_retro_fix_cmd(root, loop_id, st['state'], _cap_world_case(st['decision']))}")
     print(f"    (人裁決定不寫:{_retro_cmd(loop_id, '--skip --note')} \"<理由>\")")
     return "fail"
 
@@ -22777,8 +22893,8 @@ def _cap_retro_next_lines(env, loop_id, repo=None, ask=True):
             lines.append(f"判不了有沒有人裁紀錄:{st['problems'][0]} → {_cap_retro_fix_cmd(root, loop_id, 'gov-bad')}")
             return lines
         if st["decision"] is None:
-            if ask:
-                lines.append(_esc_clean(f"要破例再開一輪或接受剩下的風險,先記人裁:lumos loop cap-decision {q} "
+            if ask:   # 只在提示不是可以停的時候:先查方向那句接在記人裁前面(跑滿後查世界方向_計劃 做法 1)
+                lines.append(_esc_clean(f"{_CAP_WORLD_HINT};要破例再開一輪或接受剩下的風險,先記人裁:lumos loop cap-decision {q} "
                                         "--decision extra-round|accept-risk --note \"<理由>\"", 400))
             return lines
         dec = st["decision"].get("decision")
@@ -22788,7 +22904,7 @@ def _cap_retro_next_lines(env, loop_id, repo=None, ask=True):
             lines.append(f"回顧已記({_RETRO_STATE_LABEL[st['state']]},綁最新一筆人裁紀錄 {dec})")
         else:
             lines.append(f"已有人裁紀錄({dec}),回顧{_RETRO_STATE_LABEL.get(st['state'], '?')}——繼續之前先寫跑滿回顧:"
-                         f"{_cap_retro_fix_cmd(root, loop_id, st['state'])}")
+                         f"{_cap_retro_fix_cmd(root, loop_id, st['state'], _cap_world_case(st['decision']))}")
     except Exception:
         pass
     return lines
@@ -22844,7 +22960,10 @@ def cmd_loop_cap_decision(env, loop_id, decision, note, repo=None):
         print("  這個迴圈沒有卷證資料夾(或資料夾裡沒有帳上的席報告),不需要回顧")
     else:
         print("  繼續之前先寫跑滿回顧(派沒參與這個迴圈的乾淨代理起草):")
-        print(f"    {_cap_retro_fix_cmd(root, loop_id, 'none')}")
+        evs, gerr = _retro_gov_events(root, loop_id)   # 讀回帳上剛寫的那筆人裁判情況,不另讀時鐘(代碼審 r1 正確性 F1、架構 A4)
+        # 讀不動不等於沒有人裁(_retro_gov_events 的約定):照剛記的種類、不帶 ts 判,extra-round 就落在要求那邊(偏嚴,代碼審 r2 架構 A1)
+        dec = ({"decision": decision} if gerr else next((e for e in reversed(evs) if _retro_is_decision(e)), None))
+        print(f"    {_cap_retro_fix_cmd(root, loop_id, 'none', _cap_world_case(dec))}")
     return 0
 
 
@@ -22902,9 +23021,10 @@ def cmd_loop_retro(env, loop_id, template=False, check=False, record=False, skip
                 ctx = None
         if _fix_bad_strings(ctx, nul=False):
             ctx = None      # 帳上欄位有不能編碼的字串(孤立代理字元)→ context 印 null(規格 S11;代碼審 r2 邊界席)
-        skel = {"version": 1, "loop": loop_id, "rounds": rounds, "drafted_by": "", "completed_by": "",
+        skel = {"version": 2, "loop": loop_id, "rounds": rounds, "drafted_by": "", "completed_by": "",
                 "families": [{"family": "", "rounds": [], "evidence": [], "note": ""}],
                 "why_cap": "", "avoid": "", "changes": [{"target": "", "ref": "", "change": ""}],
+                "world_check": {"queries": [""], "sources": [{"url": "", "point": ""}], "verdict": "", "note": ""},
                 "context": ctx}
         text = _json_text_escaped(skel) + "\n"     # 帳上帶來的字串(C1、雙向字元)以 \uXXXX 跳脫,值不變(代碼審 r3 資安席)
         data = text.encode("utf-8")      # 先編碼成功才碰檔(編號與輪次前面已驗過能編碼;context 不能編碼已換成 null)
@@ -22912,13 +23032,13 @@ def cmd_loop_retro(env, loop_id, template=False, check=False, record=False, skip
             # ① 落點逐層不是捷徑、解析後在 repo 根底下:走共用的 _retro_path_unsafe → _repo_path_unsafe,讀端同一個答案
             # (代碼審 r2 資安席:資料夾是捷徑時 O_NOFOLLOW 只管最後一段,會在 repo 外建檔;r3 架構對齊席:上層是捷徑也要擋、不另寫一套)
             if _retro_path_unsafe(root, loop_id) == "dossier":
-                print(f"擋下:回顧檔 {qrel} {_RETRO_DOSSIER_UNSAFE}。{_cap_retro_fix_cmd(root, loop_id, 'none')}", file=sys.stderr)
+                print(f"擋下:回顧檔 {qrel} {_RETRO_DOSSIER_UNSAFE}。{_cap_retro_fix_cmd(root, loop_id, 'none', _cap_world_case(dec))}", file=sys.stderr)
                 return 2
             # ② 只在回顧檔不存在時建:O_EXCL 一次開檔,已存在(含捷徑、管線)就不碰——已寫好的回顧不能被骨架蓋掉(代碼審 r1)
             try:
                 fd = os.open(str(p), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
             except FileExistsError:
-                print(f"擋下:回顧檔已經存在({qrel}),不覆寫。{_cap_retro_fix_cmd(root, loop_id, 'none')}", file=sys.stderr)
+                print(f"擋下:回顧檔已經存在({qrel}),不覆寫。{_cap_retro_fix_cmd(root, loop_id, 'none', _cap_world_case(dec))}", file=sys.stderr)
                 return 2
             except (OSError, ValueError) as e:
                 print(f"擋下:回顧檔建不起來({e.__class__.__name__}):{qrel}", file=sys.stderr)
@@ -22942,7 +23062,8 @@ def cmd_loop_retro(env, loop_id, template=False, check=False, record=False, skip
         print(f"[retro] 寫到 {qrel}(context 唯讀、驗證不看);family 從 {', '.join(_RETRO_FAMILIES)} 挑,"
               f"changes.target 從 {', '.join(_RETRO_TARGETS)} 挑", file=sys.stderr)
         print("[retro] 起草派給沒參與這個迴圈的乾淨代理(派工詞見 skills/lumos-design-loop/templates.md),"
-              "編排者補 avoid 與 changes、填 completed_by", file=sys.stderr)
+              "編排者補 avoid 與 changes、填 completed_by,並把查方向的結論寫進 world_check"
+              f"(verdict 從 {', '.join(_RETRO_WORLD_VERDICTS)} 挑;起草代理交回之後才填)", file=sys.stderr)
         print(f"[retro] 下一步:{_retro_cmd(loop_id, '--check')},過了再 {_retro_cmd(loop_id, '--record')}", file=sys.stderr)
         return 0
     if skip:
@@ -22955,10 +23076,11 @@ def cmd_loop_retro(env, loop_id, template=False, check=False, record=False, skip
         return 0
     rows, err = _loop_records_checked(env, loop_id)
     raw, rerr = _retro_read_file(root, loop_id)
+    case = _cap_world_case(dec)
     if rerr:
-        probs = [f"回顧檔{rerr}:{qrel} → {_cap_retro_fix_cmd(root, loop_id, 'none')}"]
+        probs, data = [f"回顧檔{rerr}:{qrel} → {_cap_retro_fix_cmd(root, loop_id, 'none', case)}"], None
     else:
-        probs, _data = _cap_retro_check(root, loop_id, dec, rows, err, raw=raw)
+        probs, data, case = _cap_retro_check(root, loop_id, dec, rows, err, raw=raw)
     if probs:
         print(f"✗ 回顧不合格({qrel}):")
         for x in probs:
@@ -22975,6 +23097,15 @@ def cmd_loop_retro(env, loop_id, template=False, check=False, record=False, skip
         print("沒記到:回顧寫不進治理帳(帳檔唯讀、不存在或沒有 docs/)——回顧檔在,但閘看不到這次 --record,修好再記一次", file=sys.stderr)
         return 1
     print(f"✓ 已記回顧:{_esc_clean(loop_id, 60)}(指紋 {sha[:12]};之後改了檔要重新 --record)")
+    wc = data.get("world_check") if isinstance(data, dict) else None
+    if case in ("required", "optional") and not _retro_world_empty(wc):   # 已驗過:verdict 一定在固定清單裡
+        v, kind = wc.get("verdict"), dec.get("decision")
+        if v == "change-direction" and kind == "extra-round":
+            print("[retro] 已記加開,但世界查證認為要換方向:下一輪派工前先跟人確認新方向", file=sys.stderr)
+        elif v == "change-direction":
+            print("[retro] 世界查證認為方向要換,這次選了接受風險:收尾說明要講這一點", file=sys.stderr)
+        elif v == "undetermined":
+            print("[retro] 世界查證判不準方向,把這點跟人講清楚", file=sys.stderr)
     return 0
 
 
@@ -22986,6 +23117,7 @@ def cmd_loop_retro_stats(env, as_json=False, repo=None):
               "not_applicable": 0, "error": 0}
     names = {k: [] for k in ("recorded", "skipped", "stale", "none", "not_applicable", "error")}
     loops, fams, actions = [], {}, []
+    world = {v: 0 for v in _RETRO_WORLD_VERDICTS}   # 只數生效後要求世界查證、而且已記回顧的迴圈(跑滿後查世界方向_計劃 做法 4)
     scan, gov_err = _cap_retro_scan(env, root)
     gov_err = _esc_clean(gov_err, 400) if gov_err else None
     for lp, st in scan:
@@ -22997,9 +23129,11 @@ def cmd_loop_retro_stats(env, as_json=False, repo=None):
             ent = {"loop": _esc_clean(lp, 200), "decision": dec, "tier": tier, "state": key,
                    "problems": [_esc_clean(x, 400) for x in (st.get("problems") or ([st["error"]] if st.get("error") else []))]}
             if key in ("none", "stale"):
-                ent["cmd"] = _cap_retro_fix_cmd(root, lp, key)
-            fam_add, act_add = [], []
+                ent["cmd"] = _cap_retro_fix_cmd(root, lp, key, _cap_world_case(st.get("decision")))
+            fam_add, act_add, wv = [], [], None
             data = st.get("data") if key == "recorded" else None
+            if data and st.get("world_case") == "required":
+                wv = data["world_check"]["verdict"]     # 已驗過:required 的已記回顧一定有合格的 world_check
             if data:
                 for f in data.get("families") or []:
                     fam_add.append(_esc_clean(f["family"], 60))
@@ -23009,7 +23143,9 @@ def cmd_loop_retro_stats(env, as_json=False, repo=None):
         except Exception as e:
             dec, tier, key = "?", "?", "error"
             ent = {"loop": _esc_clean(lp, 200), "decision": dec, "tier": tier, "state": key, "problems": [f"判不了({e.__class__.__name__})"]}
-            fam_add, act_add = [], []
+            fam_add, act_add, wv = [], [], None
+        if wv in world:
+            world[wv] += 1
         totals["loops"] += 1
         totals["by_decision"][dec] = totals["by_decision"].get(dec, 0) + 1
         totals["by_tier"][tier] = totals["by_tier"].get(tier, 0) + 1
@@ -23024,7 +23160,7 @@ def cmd_loop_retro_stats(env, as_json=False, repo=None):
                 fe["by_tier"].setdefault(tier, []).append(ent["loop"])
         actions.extend(act_add)
     # 治理帳讀不了另外報(gov_error),迴圈數不灌假列(代碼審 r4)
-    out = {"totals": totals, "names": names, "loops": loops, "families": fams, "actions": actions, "gov_error": gov_err}
+    out = {"totals": totals, "names": names, "loops": loops, "families": fams, "actions": actions, "world_verdicts": world, "gov_error": gov_err}
     if as_json:
         print(_j.dumps(out, ensure_ascii=False))
         return 0
@@ -23048,6 +23184,7 @@ def cmd_loop_retro_stats(env, as_json=False, repo=None):
     for name, fe in sorted(fams.items(), key=lambda kv: (-kv[1]["count"], kv[0])):
         bt = ";".join(f"{c(t)}: {', '.join(c(x) for x in ls)}" for t, ls in sorted(fe["by_tier"].items()))
         print(f"  {c(name)} {fe['count']} 個迴圈:{', '.join(c(x) for x in fe['loops'])}({bt})")
+    print(f"世界查證結論(生效後加開的迴圈):方向對 {world['direction-ok']}、要換方向 {world['change-direction']}、判不準 {world['undetermined']}")
     print(f"行動項({len(actions)} 條;回頭對照有沒有對應提交):" if actions else "行動項:0 條")
     for a in actions:
         print(f"  [{c(a['loop'])}] {c(a['target'])} {c(a['ref'])} — {c(a['change'])}")

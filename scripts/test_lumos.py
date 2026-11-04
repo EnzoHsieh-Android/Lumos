@@ -103443,14 +103443,18 @@ def _cr_decide(c, loop="crx", decision="extra-round", note="人裁決定破例�
 
 
 def _cr_retro_doc(c, loop="crx", rounds=None):
-    return {"version": 1, "loop": loop, "rounds": rounds or ["r1", "r2", "r3"],
+    return {"version": 2, "loop": loop, "rounds": rounds or ["r1", "r2", "r3"],
             "drafted_by": "起草-乾淨代理", "completed_by": "編排者-claude",
             "families": [{"family": "same-family-unswept", "rounds": ["r2", "r3"],
                           "evidence": [f"governance/review-reports/{loop}/r2-s1.md"], "note": ""}],
             "why_cap": "同一族的出口沒有一次掃完,每輪都從另一個出口冒出來",
             "avoid": "第一輪折入時就該把同族的所有出口一次列出來掃完",
             "changes": [{"target": "dispatch", "ref": "skills/lumos-design-loop/templates.md",
-                         "change": "派工詞要求列出同族所有出口"}]}
+                         "change": "派工詞要求列出同族所有出口"}],
+            "world_check": {"queries": ["同族 一次掃完 出口"], "verdict": "direction-ok",
+                            "sources": [{"url": "https://example.com/sweep", "point": "同一族的出口要一次列完再修"},
+                                        {"url": "https://example.org/family", "point": "修補前先數這形狀還有幾處"}],
+                            "note": "世界做法是修之前先把同族出口一次列完,這條路方向對"}}
 
 
 def _cr_write_retro(c, doc=None, loop="crx", raw=None):
@@ -103484,6 +103488,437 @@ def _cr_step8(out):
 
 def _cr_blocked(c, code):
     return [e for e in _cr_gov(c, "canary") if e.get("kind") == "blocked" and str(e.get("note", "")).startswith(code)]
+
+
+# ── 跑滿後查世界方向(Projects/跑滿後查世界方向_計劃):回顧檔的世界查證欄 ──
+_CR_TS_REQ = "2026-12-01T10:00:00+08:00"   # 晚於生效常數:extra-round 要求 world_check
+_CR_TS_OLD = "2026-10-05T10:00:00+08:00"   # 早於生效常數:不管
+
+
+def _cr_decide_at(c, ts, loop="crx", decision="extra-round"):
+    """直接往治理帳寫一筆帶明確 ts 的人裁(不靠真實時鐘;同 t_cap_retro_printed_cmd_escaped 的寫法)。ts 可以不是字串。"""
+    import json as _j
+    with open(c["docs"] / ".governance-log.jsonl", "a", encoding="utf-8") as f:
+        f.write(_j.dumps({"ts": ts, "commit": "x", "gate": "loop-retro", "kind": "cap-decision", "hard": False, "nodes": [],
+                          "note": "人裁決定破例再開一輪看最後修正", "loop": loop, "decision": decision,
+                          "rounds": ["r1", "r2", "r3"], "tier": "standard", "cap": 3}, ensure_ascii=False) + "\n")
+
+
+def _cr_world(verdict="direction-ok"):
+    """一份合格的 world_check(undetermined 時沒有來源)。"""
+    src = [] if verdict == "undetermined" else [
+        {"url": "https://example.com/fail-to-pass", "point": "以測試函式為單位挑要重播的測試"},
+        {"url": "https://example.org/robot-sf", "point": "改過的測試在舊程式上就綠只提醒不擋"}]
+    return {"queries": ["fail-to-pass 選測試 粒度"], "sources": src, "verdict": verdict,
+            "note": "世界做法都以測試函式為單位挑,這條路方向對但粒度要換"}
+
+
+def _cr_wc_doc(c, wc=..., version=2, loop="crx"):
+    import copy as _cp
+    d = _cp.deepcopy(_cr_retro_doc(c, loop))
+    d["version"] = version
+    if wc is ...:
+        d.pop("world_check", None)
+    else:
+        d["world_check"] = wc
+    return d
+
+
+def _cr_wc_check(c, doc, loop="crx"):
+    _cr_write_retro(c, doc, loop=loop)
+    return _cr_retro(c, "--check", loop=loop)
+
+
+@_cap_real_cutoff
+def t_retro_template_world_check():
+    """[S1] --template 骨架 version 是 2,帶 world_check 空殼(queries、sources、verdict、note);stderr 提示要填 world_check。"""
+    import json as _j
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    r = _cr_retro(c, "--template")
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {}
+    check("S1 骨架 version 是 2", r.returncode == 0 and d.get("version") == 2, r.stdout[-300:] + r.stderr[-200:])
+    wc = d.get("world_check")
+    check("S1 骨架帶 world_check 空殼", wc == {"queries": [""], "sources": [{"url": "", "point": ""}], "verdict": "", "note": ""}, repr(wc))
+    check("S1 stderr 提示編排者填 world_check", "world_check" in r.stderr, r.stderr[-400:])
+    _cr_write_retro(c, raw=r.stdout.encode("utf-8"))
+    r = _cr_retro(c, "--check")
+    check("S1 原封不動的骨架在要求時判不過、點名 world_check", r.returncode == 1 and "world_check" in r.stdout, r.stdout[-400:])
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check():
+    """[S2] 要求(extra-round、ts 不早於生效時間)時 world_check 每種缺陷都判不過、逐欄列出、不丟例外;
+    合格的(含產生器那份)判過;網址不解析,怪埠號也不丟例外。"""
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    r = _cr_wc_check(c, _cr_retro_doc(c))
+    check("S2 前置:產生器那份(version 2、合格 world_check)在要求時判過", r.returncode == 0, r.stdout[-400:] + r.stderr[-200:])
+    w = _cr_world()
+    ok_port = dict(w, sources=[{"url": "https://a.com:abc/x", "point": "埠號寫怪的網址也只看開頭與空白"}, w["sources"][1]])
+    r = _cr_wc_check(c, _cr_wc_doc(c, ok_port))
+    check("S2 網址不解析:怪埠號照收、不丟例外", r.returncode == 0 and "Traceback" not in r.stderr, r.stdout[-300:] + r.stderr[-300:])
+
+    def src(url, point="這個來源說的是這條路的做法"):
+        return {"url": url, "point": point}
+    cases = [
+        ("world_check 缺少", ..., "必填"),
+        ("world_check 不是物件", "已查,方向對", "world_check"),
+        ("queries 是空清單", dict(w, queries=[]), "queries"),
+        ("queries 某條不到 4 字", dict(w, queries=["fail-to-pass 選測試", "短"]), "queries[2]"),
+        ("queries 不是字串清單", dict(w, queries=[1]), "queries"),
+        ("verdict 不在三個值裡", dict(w, verdict="ok"), "verdict"),
+        ("verdict 前後有空白也不收", dict(w, verdict=" direction-ok"), "verdict"),
+        ("note 不到 20 字", dict(w, note="方向對"), "note"),
+        ("direction-ok 只有一個來源", dict(w, sources=w["sources"][:1]), "sources"),
+        ("change-direction 只有一個來源", dict(w, verdict="change-direction", sources=w["sources"][:1]), "sources"),
+        ("網址不是 http 或 https", dict(w, sources=[src("ftp://a.com/x"), w["sources"][1]]), "sources[1].url"),
+        ("網址開頭後沒有字", dict(w, sources=[src("https://"), w["sources"][1]]), "sources[1].url"),
+        ("網址含空白", dict(w, sources=[src("https://a.com/x y"), w["sources"][1]]), "sources[1].url"),
+        ("網址含 tab", dict(w, sources=[src("https://a.com/\tx"), w["sources"][1]]), "sources[1].url"),
+        ("網址含全形空白", dict(w, sources=[src("https://a.com/　x"), w["sources"][1]]), "sources[1].url"),
+        ("point 不到 10 字", dict(w, sources=[src("https://a.com/x", "短"), w["sources"][1]]), "sources[1].point"),
+        ("兩項網址去頭尾空白後相同", dict(w, sources=[src(" https://a.com/x "), src("https://a.com/x")]), "sources[2].url"),
+        ("sources 不是物件清單", dict(w, sources=["https://a.com/x", "https://b.com/y"]), "sources"),
+    ]
+    for label, wc, kw in cases:
+        r = _cr_wc_check(c, _cr_wc_doc(c, wc))
+        check(f"S2 {label} → 回 1 並點名 {kw}", r.returncode == 1 and kw in r.stdout and "Traceback" not in r.stderr,
+              f"rc={r.returncode} {r.stdout[-400:]} {r.stderr[-200:]}")
+    r = _cr_wc_check(c, _cr_wc_doc(c, dict(w, verdict="ok", note="短", queries=[])))
+    _bad = [ln for ln in r.stdout.splitlines() if ln.strip().startswith("✗") and "world_check" in ln]
+    check("S2 多個缺陷逐欄列出", r.returncode == 1 and len(_bad) >= 3, r.stdout[-500:])
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check_undetermined():
+    """[S3] verdict 是 undetermined、sources 是空的、note 夠 20 字 → 判過;骨架那項空殼來源沒刪 → 判不過並講改成 []。"""
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    u = _cr_world("undetermined")
+    r = _cr_wc_check(c, _cr_wc_doc(c, u))
+    check("S3 undetermined 沒有來源 → 判過", r.returncode == 0, r.stdout[-400:])
+    r = _cr_wc_check(c, _cr_wc_doc(c, dict(u, sources=[{"url": "", "point": ""}])))
+    check("S3 骨架空殼來源沒刪 → 判不過、講改成 []", r.returncode == 1 and "sources 改成 []" in r.stdout, r.stdout[-400:])
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check_accept_risk():
+    """[S4] accept-risk:world_check 省略、null、{}、空骨架照過;填一半、空清單、空字串、false、0、多鍵都判不過。"""
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ, decision="accept-risk")
+    skel = {"queries": [""], "sources": [{"url": "", "point": ""}], "verdict": "", "note": ""}
+    for label, wc in (("省略", ...), ("null", None), ("空物件", {}), ("空骨架", skel),
+                      ("空骨架(清單是空的)", {"queries": [], "sources": [], "verdict": "", "note": ""}),
+                      ("填完整", _cr_world())):
+        r = _cr_wc_check(c, _cr_wc_doc(c, wc))
+        check(f"S4 accept-risk、world_check {label} → 判過", r.returncode == 0, r.stdout[-300:])
+    for label, wc in (("填一半", {"queries": ["查了某某方向"], "sources": [], "verdict": "", "note": ""}),
+                      ("空清單", []), ("空字串", ""), ("false", False), ("0", 0),
+                      ("骨架多一個鍵", dict(skel, extra="")), ("骨架缺一個鍵", {"queries": [""], "sources": [], "verdict": ""}),
+                      ("骨架的格子是 null", dict(skel, note=None))):
+        r = _cr_wc_check(c, _cr_wc_doc(c, wc))
+        check(f"S4 accept-risk、world_check {label} → 判不過", r.returncode == 1 and "world_check" in r.stdout and "Traceback" not in r.stderr,
+              f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-200:]}")
+
+
+@_cap_real_cutoff
+def t_retro_check_world_check_legacy():
+    """[S5] 生效前的 extra-round:version 1 或 2、world_check 填什麼都照過;ts 等於生效時間、跨時區同一刻、不是字串、解不開都算要求;
+    要求時 version 1 判不過並給修法;version 是 "2"、2.0、true 不論情況都判不過。"""
+    m = _load_lumos()
+    since = m._CAP_WORLD_CHECK_SINCE
+    import datetime as _dt
+    utc_same = _dt.datetime.fromisoformat(since).astimezone(_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_OLD)
+    for label, doc in (("version 1、沒有 world_check", _cr_wc_doc(c, ..., version=1)),
+                       ("version 2、world_check 是字串", _cr_wc_doc(c, "x", version=2)),
+                       ("version 1、world_check 是數字", _cr_wc_doc(c, 5, version=1))):
+        r = _cr_wc_check(c, doc)
+        check(f"S5 生效前 {label} → 照過", r.returncode == 0, r.stdout[-300:])
+    for label, v in (('"2"', "2"), ("2.0", 2.0), ("true", True), ("3", 3)):
+        r = _cr_wc_check(c, _cr_wc_doc(c, _cr_world(), version=v))
+        check(f"S5 version {label} → 判不過", r.returncode == 1 and "version" in r.stdout, r.stdout[-300:])
+    for label, ts in (("等於生效時間", since), ("跨時區同一刻", utc_same), ("不是字串", 12345), ("解不開", "昨天下午"),
+                      ("沒帶時區", since[:19])):
+        c2 = _cr_repo()
+        _cr_loop(c2)
+        _cr_decide_at(c2, ts)
+        r = _cr_wc_check(c2, _cr_wc_doc(c2, ..., version=1))
+        check(f"S5 ts {label} → 算要求:version 1 判不過並給修法",
+              r.returncode == 1 and "version" in r.stdout and "world_check" in r.stdout and "--template" in r.stdout
+              and "Traceback" not in r.stderr, f"{ts!r} rc={r.returncode} {r.stdout[-400:]} {r.stderr[-200:]}")
+    check("S5 _cap_world_case 直接判:沒有人裁紀錄 → ignored", m._cap_world_case(None) == "ignored" and m._cap_world_case({"rounds": []}) == "ignored")
+
+
+@_cap_real_cutoff
+def t_retro_record_world_verdict():
+    """[S6] --record 依人裁與結論印提醒、不擋;retro-stats 只數要求而且已記回顧的迴圈,不管的舊迴圈不進統計、不丟例外,重記只算一次。"""
+    import json as _j
+    c = _cr_repo()
+    plan = [("la", "extra-round", "direction-ok", None),
+            ("lb", "extra-round", "change-direction", "下一輪派工前先跟人確認新方向"),
+            ("lc", "accept-risk", "change-direction", "收尾說明要講這一點"),
+            ("ld", "extra-round", "undetermined", "判不準方向"),
+            ("le", "extra-round", "direction-ok", None)]
+    for lp, dec, verdict, want in plan:
+        _cr_loop(c, loop=lp)
+        _cr_decide_at(c, _CR_TS_REQ, loop=lp, decision=dec)
+        _cr_write_retro(c, _cr_wc_doc(c, _cr_world(verdict), loop=lp), loop=lp)
+        r = _cr_retro(c, "--record", loop=lp)
+        if want:
+            check(f"S6 {lp} {dec}+{verdict} → 記下並印提醒", r.returncode == 0 and want in r.stderr, r.stdout[-200:] + r.stderr[-400:])
+        else:
+            check(f"S6 {lp} {dec}+{verdict} → 記下、不印提醒", r.returncode == 0 and "[retro]" not in r.stderr, r.stderr[-400:])
+    _cr_retro(c, "--record", loop="le")      # 同一迴圈重記
+    _cr_loop(c, loop="lold")                 # 不管的舊迴圈:world_check 填非物件
+    _cr_decide_at(c, _CR_TS_OLD, loop="lold")
+    _cr_write_retro(c, _cr_wc_doc(c, "已查,方向對", loop="lold"), loop="lold")
+    r = _cr_retro(c, "--record", loop="lold")
+    check("S6 前置:舊迴圈 world_check 是字串也記得下", r.returncode == 0, r.stdout[-300:] + r.stderr[-300:])
+    r = run(c["vault"], "loop", "retro-stats", "--json", "--repo", str(c["root"]))
+    try:
+        d = _j.loads(r.stdout)
+    except ValueError:
+        d = {}
+    check("S6 retro-stats 不丟例外、舊迴圈照算已記回顧", r.returncode == 0 and (d.get("totals") or {}).get("recorded") == 6
+          and (d.get("totals") or {}).get("error") == 0, r.stdout[-500:] + r.stderr[-300:])
+    check("S6 world_verdicts 只數要求的迴圈、重記只算一次",
+          d.get("world_verdicts") == {"direction-ok": 2, "change-direction": 1, "undetermined": 1}, repr(d.get("world_verdicts")))
+    r = run(c["vault"], "loop", "retro-stats", "--repo", str(c["root"]))
+    check("S6 文字輸出印三種次數", "方向對 2" in r.stdout and "要換方向 1" in r.stdout and "判不準 1" in r.stdout, r.stdout[-600:])
+
+
+@_cap_real_cutoff
+def t_cap_hint_world_check_first():
+    """[S7] 還沒人裁、提示不是可以停 → 記人裁之前先講上網查方向;可以停(ask=False)不印;
+    要求情況的已有人裁、canary record 擋下、處置閘第八步都提醒寫 world_check;accept-risk 與不管的不印;
+    cap-decision 記成 extra-round 後依記下那一刻是不是要求決定印不印。"""
+    import datetime as _dt
+    m = _load_lumos()
+    c = _cr_repo()
+    _cr_loop(c)
+    env = m.Env(c["vault"])
+    asked = "\n".join(m._cap_retro_next_lines(env, "crx", repo=str(c["root"]), ask=True))
+    i_hint, i_ask = asked.find("上網查這條路的方向"), asked.find("先記人裁")
+    check("S7 還沒人裁:先講上網查方向,再叫人記人裁", 0 <= i_hint < i_ask, asked)
+    quiet = "\n".join(m._cap_retro_next_lines(env, "crx", repo=str(c["root"]), ask=False))
+    check("S7 可以停(ask=False)時不印查方向那句", "上網查" not in quiet, quiet)
+    fill = "寫進回顧的 world_check"
+    _cr_decide_at(c, _CR_TS_REQ)
+    env = m.Env(c["vault"])
+    got = "\n".join(m._cap_retro_next_lines(env, "crx", repo=str(c["root"]), ask=True))
+    check("S7 要求情況的已有人裁 → 提醒寫 world_check", fill in got, got)
+    r = _cr_record(c, "r4")
+    check("S7 canary record 被跑滿回顧擋下 → 提醒寫 world_check", r.returncode == 2 and fill in r.stderr, r.stderr[-500:])
+    g = _cr_gate(c)
+    check("S7 處置閘第八步 → 提醒寫 world_check", fill in g.stdout, g.stdout[-600:])
+    for label, ts, dec in (("accept-risk", _CR_TS_REQ, "accept-risk"), ("生效前的 extra-round", _CR_TS_OLD, "extra-round")):
+        c2 = _cr_repo()
+        _cr_loop(c2)
+        _cr_decide_at(c2, ts, decision=dec)
+        got = "\n".join(m._cap_retro_next_lines(m.Env(c2["vault"]), "crx", repo=str(c2["root"]), ask=True))
+        g = _cr_gate(c2)
+        check(f"S7 {label} → 不提醒寫 world_check", fill not in got and fill not in g.stdout, got + g.stdout[-400:])
+    c3 = _cr_repo()
+    _cr_loop(c3)
+    r = _cr_decide(c3)
+    now_req = _dt.datetime.now().astimezone() >= _dt.datetime.fromisoformat(m._CAP_WORLD_CHECK_SINCE)
+    check(f"S7 cap-decision extra-round 記下後{'提醒' if now_req else '不提醒'}寫 world_check(現在{'晚於' if now_req else '早於'}生效時間)",
+          r.returncode == 0 and ((fill in r.stdout) == now_req), r.stdout[-400:])
+    r = _cr_decide(c3, decision="accept-risk", note="人裁接受剩下的風險不再開一輪")
+    check("S7 cap-decision accept-risk 記下後不提醒寫 world_check", r.returncode == 0 and fill not in r.stdout, r.stdout[-400:])
+
+
+@_cap_real_cutoff
+def t_cap_decision_world_fill_reads_ledger():
+    """[代碼審 r1 正確性 F1、架構 A4] cap-decision 記完 extra-round 後,提醒補 world_check 與否照帳上那筆人裁判(不另讀時鐘);
+    生效常數在過去 → 提醒、在未來 → 不提醒、accept-risk 不提醒。同一個程序裡改常數,不靠今天是幾號。"""
+    import io, contextlib
+    m = _load_lumos()
+    fill = "寫進回顧的 world_check"
+    saved = m._CAP_WORLD_CHECK_SINCE
+    seen = []
+    orig_case = m._cap_world_case
+
+    def spy(dec):
+        seen.append(dec)
+        return orig_case(dec)
+    try:
+        for label, since, dec, want in (("生效後的 extra-round", "2000-01-01T00:00:00+08:00", "extra-round", True),
+                                        ("生效前的 extra-round", "2999-01-01T00:00:00+08:00", "extra-round", False),
+                                        ("accept-risk", "2000-01-01T00:00:00+08:00", "accept-risk", False)):
+            c = _cr_repo()
+            _cr_loop(c)
+            m._CAP_WORLD_CHECK_SINCE = since
+            m._cap_world_case = spy
+            seen.clear()
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = m.cmd_loop_cap_decision(m.Env(c["vault"]), "crx", dec, "人裁決定破例再開一輪看最後修正", repo=str(c["root"]))
+            m._cap_world_case = orig_case
+            out = buf.getvalue()
+            check(f"F1 {label} → {'提醒' if want else '不提醒'}補 world_check", rc == 0 and ((fill in out) == want), out[-400:])
+            ev = [e for e in _cr_gov(c, "loop-retro") if e.get("kind") == "cap-decision"]
+            check(f"F1 {label} → 判情況用的是帳上那筆人裁(同一個 ts)",
+                  bool(ev) and any(isinstance(d, dict) and d.get("gate") == "loop-retro" and d.get("kind") == "cap-decision"
+                      and d.get("ts") == ev[-1].get("ts") and d.get("decision") == dec for d in seen),
+                  repr(seen)[:300])
+    finally:
+        m._CAP_WORLD_CHECK_SINCE = saved
+        m._cap_world_case = orig_case
+
+
+@_cap_real_cutoff
+def t_cap_retro_template_write_world_fill():
+    """[代碼審 r2 正確性 F1] --template --write 被擋(回顧檔已存在)時,要求情況的迴圈修法行也提醒補 world_check;生效前的不提醒。"""
+    fill = "寫進回顧的 world_check"
+    for label, ts, want in (("生效後的 extra-round", _CR_TS_REQ, True), ("生效前的 extra-round", _CR_TS_OLD, False)):
+        c = _cr_repo()
+        _cr_loop(c)
+        _cr_decide_at(c, ts)
+        _cr_write_retro(c)
+        r = _cr_retro(c, "--template", "--write")
+        check(f"F1 {label}:回顧檔已存在 → 回 2、{'提醒' if want else '不提醒'}補 world_check",
+              r.returncode == 2 and "已經存在" in r.stderr and ((fill in r.stderr) == want), r.stderr[-400:])
+
+
+@_cap_real_cutoff
+def t_cap_decision_world_fill_ledger_unreadable():
+    """[代碼審 r2 架構 A1] 記完人裁後讀回帳失敗:不當成沒有人裁(_retro_gov_events 說明要求),照偏嚴的那邊提醒補 world_check。"""
+    import io, contextlib
+    m = _load_lumos()
+    c = _cr_repo()
+    _cr_loop(c)
+    orig = m._retro_gov_events
+    calls = []
+
+    def flaky(root, loop_id=None):
+        calls.append(loop_id)
+        return [], "治理帳讀不動(測試模擬)"
+    m._retro_gov_events = flaky
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = m.cmd_loop_cap_decision(m.Env(c["vault"]), "crx", "extra-round", "人裁決定破例再開一輪看最後修正", repo=str(c["root"]))
+    finally:
+        m._retro_gov_events = orig
+    out = buf.getvalue()
+    check("A1 前置:讀帳那一步真的模擬成讀不動", len(calls) >= 1, repr(calls))
+    check("A1 記完人裁後讀帳失敗 → 照樣提醒補 world_check", rc == 0 and "寫進回顧的 world_check" in out, out[-400:])
+
+
+def _cap_since_last_change_day(rr):
+    """最後一次改到 _CAP_WORLD_CHECK_SINCE 那一行(含只改值)的提交日;-G 看得到改值(-S 只看字串出現次數,改值看不到;代碼審 r1 F2)。讀不到回 None。"""
+    import subprocess as _sp
+    r = _sp.run(["git", "-C", str(rr), "log", "-1", "-G", r"^_CAP_WORLD_CHECK_SINCE = ", "--format=%cs", "--", "scripts/lumos"],
+                capture_output=True, text=True)
+    day = r.stdout.strip()
+    return day if r.returncode == 0 and day else None
+
+
+def t_cap_since_last_change_sees_value_edit():
+    """[代碼審 r1 F2] 新鮮度守衛看得到「只改常數的值」那次提交;常數日當天的提交不算新鮮(要早於常數日)。"""
+    import subprocess as _sp
+    d = Path(tempfile.mkdtemp(prefix="gctl-capsince-")).resolve()
+    (d / "scripts").mkdir()
+
+    def commit(val, date):
+        (d / "scripts" / "lumos").write_text(f'x = 1\n_CAP_WORLD_CHECK_SINCE = "{val}"\ny = 2\n', encoding="utf-8")
+        env = dict(_os_mod.environ, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+        _sp.run(["git", "-C", str(d), "add", "-A"], capture_output=True)
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "c", "--no-verify"], capture_output=True, env=env)
+    _sp.run(["git", "init", "-q", str(d)], capture_output=True)
+    commit("2026-11-05T00:00:00+08:00", "2026-11-04T10:00:00+08:00")
+    commit("2026-11-06T00:00:00+08:00", "2026-11-10T10:00:00+08:00")
+    check("F2 只改值的提交也看得到", _cap_since_last_change_day(d) == "2026-11-10", _cap_since_last_change_day(d))
+    check("F2 守衛的比法:提交日要早於常數日(同日不算)", not _cap_since_fresh("2026-11-05", "2026-11-05T00:00:00+08:00")
+          and _cap_since_fresh("2026-11-04", "2026-11-05T00:00:00+08:00"))
+
+
+def _cap_since_fresh(day, since):
+    return day < since[:10]
+
+
+@_cap_real_cutoff
+def t_cap_retro_fix_cmd_world_fill_everywhere():
+    """[代碼審 r1 架構 A3] 要求情況而回顧沒有時,doctor、retro-stats 的修法行也提醒補 world_check(跟擋下訊息、處置閘同一句)。"""
+    import json as _j
+    c = _cr_repo()
+    _cr_loop(c)
+    _cr_decide_at(c, _CR_TS_REQ)
+    fill = "寫進回顧的 world_check"
+    r = run(c["vault"], "loop", "retro-stats", "--json", "--repo", str(c["root"]))
+    d = _j.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+    cmds = [x.get("cmd", "") for x in (d.get("names") or {}).get("none") or []]
+    check("A3 retro-stats 的修法行提醒補 world_check", any(fill in x for x in cmds), repr(cmds)[:300])
+    r = run(c["vault"], "doctor", "--verbose")
+    check("A3 doctor I2 的修法行提醒補 world_check", fill in r.stdout, r.stdout[-800:])
+
+
+def t_cap_world_since_parseable_and_fresh():
+    """[做法 7] 生效常數帶時區、解得開;最後一次改到常數那一行的提交日期早於常數日期(同日不算)
+    (實作拖到常數之後才合併、或 rebase 改了提交日,這支會紅,逼人把常數改成新的合併日隔天;淺複製或讀不到歷史時跳過)。"""
+    import subprocess as _sp
+    m = _load_lumos()
+    since = m._CAP_WORLD_CHECK_SINCE
+    check("常數用 _loop_ts_key 解得開(帶時區)", m._loop_ts_key(since) is not None, since)
+    rr = Path(__file__).resolve().parent.parent
+    sh = _sp.run(["git", "-C", str(rr), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True)
+    if sh.returncode != 0 or sh.stdout.strip() != "false":
+        return
+    day = _cap_since_last_change_day(rr)
+    if not day:
+        return      # 還沒提交(工作目錄裡剛加)時沒有那筆提交
+    check("最後一次改到生效常數的提交日早於常數日期", _cap_since_fresh(day, since), f"提交日 {day}、常數 {since}")
+
+
+def t_manuals_world_direction_sync():
+    """[S8] 到頂流程的每一個同步點(逐處比對,同一個檔兩處就兩處都要)都含先查方向;〈修前先查世界〉含同類連兩輪查方向;
+    §9 派工詞的不要填清單含 world_check。"""
+    rr = Path(__file__).resolve().parent.parent
+    sk = rr / "skills"
+    points = [
+        (sk / "lumos-design-loop" / "SKILL.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-design-loop" / "reference.md", "到頂仍未收斂", "先查方向"),
+        (sk / "lumos-design-loop" / "reference.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-code-loop" / "SKILL.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-code-loop" / "reference.md", "到頂還沒收斂", "先查方向"),
+        (sk / "lumos-code-loop" / "reference.md", "到頂沒過 → 停", "先查方向"),
+        (sk / "lumos-project-notes" / "commands" / "05-設計審查迴圈.md", "跑滿上限沒過,人裁決定", "先查方向"),
+        (sk / "lumos-project-notes" / "commands" / "05-設計審查迴圈.md", "記了人裁,要寫跑滿回顧", "world_check"),
+        (sk / "lumos-project-notes" / "commands" / "05-設計審查迴圈.md", "跑滿上限還沒過", "先查方向"),
+        (sk / "lumos-project-notes" / "commands" / "06-代碼審與推送.md", "lumos loop retro-stats --json", "world_verdicts"),
+        (rr / "README.md", "lumos loop cap-decision", "先查方向"),
+        (rr / "README.en.md", "lumos loop cap-decision", "check the direction"),
+        (rr / "docs" / "指令參考.md", "lumos loop cap-decision", "先查方向"),
+        (rr / "docs" / "command-reference.md", "lumos loop cap-decision", "check the direction"),
+        (rr / "docs" / "心智模型.md", "沒過:再開一輪", "先查方向"),
+    ]
+    for p, anchor, needle in points:
+        lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if anchor in ln]
+        check(f"S8 {p.name}「{anchor}」至少一處", bool(lines), str(p))
+        for ln in lines:
+            check(f"S8 {p.name}「{anchor}」那一處含「{needle}」", needle in ln, ln[:300])
+    for name in ("lumos-design-loop", "lumos-code-loop"):
+        t = (sk / name / "SKILL.md").read_text(encoding="utf-8")
+        ln = next((x for x in t.splitlines() if "**修前先查世界**" in x), "")
+        check(f"S8 {name}〈修前先查世界〉含同類連兩輪查方向", "連續兩輪" in ln and "方向:對|要換|判不準" in ln, ln[:400])
+    t = (sk / "lumos-design-loop" / "templates.md").read_text(encoding="utf-8")
+    ln = next((x for x in t.splitlines() if x.startswith("不要填:")), "")
+    check("S8 §9 派工詞的不要填清單含 world_check", "world_check" in ln, ln)
+    code_step4 = next((x for x in (sk / "lumos-code-loop" / "SKILL.md").read_text(encoding="utf-8").splitlines()
+                       if "同類第二次被打穿就換形狀" in x), "")
+    check("S8 代碼審第 4 步換形狀前先查方向", "先查方向" in code_step4 or "查方向" in code_step4, code_step4[:300])
 
 
 @_cap_real_cutoff
@@ -103878,7 +104313,7 @@ def t_cap_retro_template_prefills_rounds():
         d = None
     check("S11 標準輸出只有骨架 JSON", r.returncode == 0 and isinstance(d, dict), r.stdout[-300:] + r.stderr[-200:])
     d = d or {}
-    check("S11 version/loop/rounds 已填好", d.get("version") == 1 and d.get("loop") == "crx" and d.get("rounds") == ["r1", "r2", "r3"], str(d)[:300])
+    check("S11 version/loop/rounds 已填好", d.get("version") == 2 and d.get("loop") == "crx" and d.get("rounds") == ["r1", "r2", "r3"], str(d)[:300])
     ctx = d.get("context") or {}
     check("S11 context 帶每輪折入與帳上報告", isinstance(ctx, dict) and len(ctx.get("rounds") or []) == 3
           and any("r2-s1.md" in str(x.get("report_path")) for x in ctx.get("reports") or []), str(ctx)[:300])
@@ -104387,7 +104822,7 @@ def t_cap_retro_r2_one_way():
     check("1 _esc_clean 不動 ZWJ 組合表情、零寬非連字、軟連字號、BOM(逐字不變)", m._esc_clean(keep, 400) == keep, repr(m._esc_clean(keep, 400)))
     tmp = Path(_tf.mkdtemp(prefix="gctl-capretro-q-"))
     with contextlib.redirect_stdout(io.StringIO()):
-        probs, _ = m._cap_retro_check(tmp, "x;touch PWNED", {"rounds": []}, [], None)
+        probs, _, _ = m._cap_retro_check(tmp, "x;touch PWNED", {"rounds": []}, [], None)
     check("1 讀檔失敗訊息裡的指令編號加了引號", any("'x;touch PWNED'" in x for x in probs) and not any("retro x;touch" in x for x in probs), str(probs))
     c = _cr_repo()
     _cr_loop(c)

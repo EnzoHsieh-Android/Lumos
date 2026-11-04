@@ -89,7 +89,7 @@ Lumos 預設不要求人逐行看 diff，交給 AI 和自動檢查；人負責�
 <details>
 <summary>細節：如何記錄人工裁定與回顧</summary>
 
-- 人的裁定用 `lumos loop cap-decision` 記下。
+- 跑滿上限要再開一輪之前,先查方向(上網查這條路對不對,至少兩個來源),結論附給人裁;人的裁定用 `lumos loop cap-decision` 記下。
 - 繼續之前，用 `lumos loop retro` 記一份合格的回顧，或留下有理由的略過紀錄；人的裁定記下後兩樣都沒有，就不能再記後續的審查紀錄，也過不了「每條審查意見都已處理」那道關卡。
 
 </details>
