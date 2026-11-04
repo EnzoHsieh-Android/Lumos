@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-10-12
+updated: 2026-11-04
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -17,7 +17,7 @@ summary: |-
   KEY:各語言精選 linter 參考目錄(2026-07 社群現況搜證)——供各專案 setup 時挑要裝的 linter;裝了才進該專案 .lumos/lint.json(跑 SARIF)+ .lumos/lint-watch.json(盯新版)。此節點是「該裝什麼」的權威菜單,不是「已裝什麼」的清單
   KEY:linter=風格+最佳實踐檢查(抓代碼問題),≠一般依賴——lint-watch.json 只放真 linter(2026-07-17 收窄事故[[Issues/lint-watch空轉假綠]]:LandmarkMember 誤塞 ClosedXML/Dapper/SqlClient 等執行期依賴,已清成只留 StyleCop;[2026-07-27]二次收口:留下的 StyleCop 查證亦從未裝過(csproj 0 引用,「已裝」係循環引用 watch 條目),watch 清空——「裝了才進 watch」須以 csproj 為準,不可信 watch 自身)
   KEY:C#(nuget)——StyleCop.Analyzers(風格/命名/排版)｜Roslynator.Analyzers(500+品質簡化)｜SonarAnalyzer.CSharp(code smell+安全)｜Meziantou.Analyzer(最佳實踐)｜Microsoft.CodeAnalysis.NetAnalyzers(第一方基線,nullable/async/平台;.NET10 SDK 內建)｜Microsoft.VisualStudio.Threading.Analyzers(async死鎖,後端重點)
-  KEY:Kotlin/Android(github/google-maven)——detekt(github:detekt/detekt,複雜度/實踐;★coroutines 規則集=併發軸主力:GlobalScope 濫用/結構化併發破壞/Dispatchers 誤用/blocking 混入 suspend,2026-07-26 補點名★)｜ktlint(github:pinterest/ktlint,格式)｜ktfmt(github:facebook/ktfmt,格式,與ktlint二選一)｜Android Lint(隨AGP,google-maven盯AGP,平台特定);[2026-07-27]標準接法立=brew 安裝+本repo configs/detekt/android.yml 共用差分(開預設關的 GlobalCoroutineUsage/SuspendFunSwallowedCancellation/CouldBeSequence——coroutines 規則集「有裝≠有開」),lint.json 樣板見本文,KDS 首消費端
+  KEY:Kotlin/Android(github/google-maven)——detekt(github:detekt/detekt,複雜度/實踐;★coroutines 規則集=併發軸主力:GlobalScope 濫用/結構化併發破壞/Dispatchers 誤用/blocking 混入 suspend,2026-07-26 補點名★)｜ktlint(github:pinterest/ktlint,格式)｜ktfmt(github:facebook/ktfmt,格式,與ktlint二選一)｜Android Lint(隨AGP,google-maven盯AGP,平台特定);[2026-07-27]標準接法立=brew 安裝+本repo configs/detekt/android.yml 共用差分(開預設關的五條:GlobalCoroutineUsage/SuspendFunSwallowedCancellation/SuspendFunWithCoroutineScopeReceiver/CouldBeSequence/ForbiddenMethodCall 禁 collectAsState——「有裝≠有開」,而且[2026-11-04]「有開≠有跑」:除 GlobalCoroutineUsage 外都要型別資訊才跑,推送時只記錄不擋,判定表見 Android的detekt規則說實話_計劃),lint.json 樣板見本文,KDS 首消費端
   KEY:Vue/TS/JS(npm)——eslint(基石)｜eslint-plugin-vue(<template>AST,需vue-eslint-parser)｜@vue/eslint-config-typescript(Vue+TS flat config)｜typescript-eslint(TS規則)｜oxlint(Rust 50-100x快,大repo前置加速)｜@biomejs/biome(25-35x+含formatter,ESLint替代)
   KEY:SQL(pypi)——sqlfluff(支援 T-SQL 等多方言,免連DB靜態解析+auto-fix;LandmarkMember/KDS 的 .sql 適用)
   KEY:[2026-09-08 iOS/Node 補棧,★消費專案仍零實跑;SwiftLint 本身 2026-09-13 實跑過(孤立目錄能跑、吐 SARIF),★找不到 Xcode 工具鏈時整支崩潰退出碼 133、零輸出,閘判環境不可用自動放行★;eslint 這台機器根本沒裝,Node/Vue 那條路只有合成測試撐著★,[[Projects/iOS與Node後端補棧_計劃]]]Swift/iOS(github)——SwiftLint(github:realm/SwiftLint,風格+實踐;★內建 `--reporter sarif` 可直接進 lint.json★)｜SwiftFormat(github:nicklockwood/SwiftFormat,格式)或 swift-format(Apple 官方,Swift 6 起隨 toolchain)二選一｜Periphery(github:peripheryapp/periphery,死碼)｜Harmonize(架構 lint,已列);SwiftPM 依賴無中央 registry→lint-watch 用 github 座標盯 release
@@ -49,7 +49,7 @@ PRIOR-ART: 借社群 curated list(awesome-analyzers / awesome-android-lint)+ 202
 
 | 類別 | 這次驗到的 | 結論 |
 |---|---|---|
-| 自帶規則的獨立執行檔 | ruff（Python）、detekt（Kotlin）、SwiftLint（Swift）、PMD／Checkstyle（Java）、依賴漏洞掃描器 | **跑得動**，直接吐標準格式 |
+| 自帶規則的獨立執行檔 | ruff（Python）、detekt（Kotlin）、SwiftLint（Swift）、PMD／Checkstyle（Java）、依賴漏洞掃描器 | **跑得動**，直接吐標準格式(detekt 例外:跑得動不等於規則有在跑,要型別資訊的規則沒給 classpath 就安靜跳過;推送時也不擋,見 [[Issues/推送閘對Android的detekt只記錄不擋]]) |
 | 要專案先裝依賴才啟動 | eslint（Vue／Node） | **跑得動**，但要把設定檔與依賴目錄一起帶進快照——2026-09-13 拿真的 eslint 端到端驗過，不再只有合成測試 |
 | 要先建置才能檢查 | .NET 的 analyzer、Gradle | **完全沒驗過，交付時不要宣稱它可以** |
 
@@ -119,13 +119,15 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
 ### detekt 標準接法（2026-07-27 立;消費端:Citrus_KDS、mOrangePos——mOrangePos 首掃唯一 GlobalScope 命中=crash 補送 App 層正當用法,同 KDS 閃退家族 pattern）
 
 - **安裝=`brew install detekt`**(套件管理器管生命週期)。⚠ 前科:KDS 曾把 detekt jar 放 `/tmp` 被系統清掉兩次(2026-07-17 首發、2026-07-27 重演,見 [[Systems/lint-declaration-health]])——外部工具一律裝進套件管理器,嚴禁易失位置。
-- **共用差分設定=`configs/detekt/android.yml`**(本 repo,隨 clone 分發):開 detekt 預設關但效能檢核目錄點名的三條——`GlobalCoroutineUsage`(GlobalScope 裸用)/`SuspendFunSwallowedCancellation`(吞取消)/`CouldBeSequence`(長鏈該 asSequence)。⚠ coroutines 規則集「有裝≠有開」:`--build-upon-default-config` 裸跑時這三條全不生效。
+- **共用差分設定=`configs/detekt/android.yml`**(本 repo,隨 clone 分發):開 detekt 預設關但效能檢核目錄或 kotlin-idioms 點名的五條——`GlobalCoroutineUsage`(GlobalScope 裸用)/`SuspendFunSwallowedCancellation`(runCatching 裡呼叫 suspend=吞取消;try/catch 那型不抓)/`SuspendFunWithCoroutineScopeReceiver`(suspend 又掛在 scope 上)/`CouldBeSequence`(長鏈該 asSequence)/`ForbiddenMethodCall`(禁 `androidx.compose.runtime.collectAsState`,方法要寫全名、放 `style:`)。⚠ 兩層落差:①「有裝≠有開」——`--build-upon-default-config` 裸跑時這五條不開;②「有開≠有跑」(2026-11-04 實測)——除 GlobalCoroutineUsage 外都要型別資訊(`--classpath <依賴 jar>` 加 `--jdk-home <JDK>`),下面的樣板沒帶,所以它們安靜不跑、不報錯;Android 專案的依賴散在建置快取,目前沒有現成取法。Kotlin 標準庫 2.2 以上時吞取消那條補了也不響(detekt 1.23.8 限制)。設定檔的規則名與規則集有一支共用設定檢查測試擋錯(寫錯 detekt 整次拒跑;測試與判定表的家是 [[Systems/lint-declaration-health]])。
 - **lint.json 樣板**(新 Android 專案 setup 直接抄):
   ```
   detekt --input <src 目錄> --report sarif:{LINT_SARIF_OUT} --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/android.yml
   ```
   (`$HOME` 可用:lint 命令走 shell 執行;`--input` 要指整個 source set,別只指單檔)
-- 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛)。
+  ⚠ 這個樣板沒有 `{LINT_FILES}`,推送前的新增告警檢查對它只記錄、不擋;加了也擋不住(多檔時 detekt 拒跑)。`lumos lint-check` 與健檢會照指令字面印出這些提醒(判定表見 [[Projects/Android的detekt規則說實話_計劃]])。
+- 自有設定要跟共用設定疊加:用逗號合成一個 `--config a.yml,b.yml`(分開寫兩次 `--config` 會拒跑);清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
+- 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛);冒煙只驗有沒有產出結果,不驗規則有沒有響。
 
 ## Vue/TS/JS（registry: `npm:<pkg>`）
 | linter | 用途 | 備註 |
@@ -264,3 +266,5 @@ AST 級結構比對（比 regex 誤報少、表達力強），多語言單一引
 - **首次真跑，唯一一條命中是誤報**：對一個刻意設 0700 的快取目錄建議改成 0644（更不安全）——規則是為檔案寫的卻套到目錄。誤報用 `lumos lint-waive` 放行。
 
 **自己寫規則**：把事故或網搜補漏抓到的坑固化成規則的做法（規則放哪、樣本怎麼擺、怎麼驗它真的翻紅）見 [[Systems/pitfalls-lint-adapter]]。
+
+REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-03-01] 推送前真的擋落地了,把 detekt 標準接法那段「推送時不擋」的說法與樣板改掉
