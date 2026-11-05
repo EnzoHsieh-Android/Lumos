@@ -33,10 +33,24 @@ _SCRATCH_RE = re.compile(r"(/private/tmp/|/tmp/claude-|lumos-scratch|scratchpad/
 TEST_ONLY_ANCESTOR = HERE / "samples" / "ancestor-named-test"
 
 
+def _strip_yaml_comment(ln):
+    """去掉一行 YAML 的註解:`#` 在行首或前面是空白、而且不在引號裡才算註解(YAML 1.2 規格);整行註解變空行。"""
+    q = None
+    for i, ch in enumerate(ln):
+        if q:
+            if ch == q:
+                q = None
+        elif ch in "'\"":
+            q = ch
+        elif ch == "#" and (i == 0 or ln[i - 1] in " \t"):
+            return ln[:i].rstrip()
+    return ln
+
+
 def _files_block_is_test_only(doc):
     """這條規則的 files: 區塊(只看那一段,不看 ignores 或訊息)是不是只列測試目錄。"""
-    # 先去掉整行註解:頂格註解(例「# 不掃 src/main」)不算 files 區塊的內容,也不該把區塊截斷
-    doc = "\n".join(ln for ln in doc.splitlines() if not ln.lstrip().startswith("#"))
+    # 先去掉註解(整行與行尾):註解裡提到 src/main 不算 files 區塊的內容,頂格註解也不該把區塊截斷
+    doc = "\n".join(_strip_yaml_comment(ln) for ln in doc.splitlines())
     m = re.search(r"^files:(.*?)(?=^[A-Za-z_\"'][^\n]*:)", doc + "\nzz:", re.M | re.S)
     if not m:
         return False
@@ -102,7 +116,7 @@ def dt_triggers(cell):
     """決策表觸發字格子 → (觸發字清單, 問題或 None)。「(無)」(全形半形括號都認)= 刻意不設,回空清單:
     這個情境沒有不常見的字面特徵,不出情境段,只靠規則包與代碼審。"""
     norm = cell.replace("\uff08", "(").replace("\uff09", ")")
-    trig = [t.strip().strip("`") for t in re.split(r"[、,,]", norm) if t.strip()]
+    trig = [t.strip().strip("`") for t in re.split(r"[、,，]", norm) if t.strip()]
     if _NONE_TRIGGER in trig:
         if len(trig) > 1:
             return [], "「(無)」是刻意不設觸發字,不能跟其他觸發字並列"
@@ -240,8 +254,12 @@ def scan(sg, cfg, target):
     out = []
     for ln in r.stdout.splitlines():
         if ln.strip():
-            d = json.loads(ln)
-            out.append((d["ruleId"], d["file"]))
+            try:
+                d = json.loads(ln)
+                out.append((d["ruleId"], d["file"]))
+            except (ValueError, KeyError, TypeError):
+                return None   # 輸出讀不懂就當這次掃描跑不起來,由呼叫端報「跑不起來」,不噴 traceback
+
     return out
 
 
@@ -336,7 +354,7 @@ def check(sg):
         if not TEST_ONLY_ANCESTOR.is_dir():
             problems.append(("<pack>", "缺 samples/ancestor-named-test(祖先目錄叫 test 的正式碼樣本)"))
         else:
-            for d, cfg in CONFIGS:
+            for _d, cfg in CONFIGS:
                 got = scan(sg, cfg, TEST_ONLY_ANCESTOR)
                 if got is None:
                     problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))

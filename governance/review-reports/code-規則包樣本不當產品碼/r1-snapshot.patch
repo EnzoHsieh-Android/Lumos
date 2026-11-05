@@ -1,0 +1,705 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index d9e22e280..c416d68db 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -26,24 +26,38 @@ _DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": (
+ MSG_MAX = 120          # 新增告警閘解析 SARIF 時把訊息截在 120 字
+ REVIEW_FP_PREFIX = "review-fp-"   # 好例樣本裡記「語意覆核級規則已知會誤報、要靠盲判排除」的檔名開頭
+ SCAN_TIMEOUT = 120     # 一次掃描的上限(秒);正常不到一秒,卡住時不要拖到外層測試逾時
+ # 好例「一段」= 頂格開頭的宣告(函式、類別、物件、介面、帶註記的宣告)
+ _DECL_RE = re.compile(r"^(?:@|fun |suspend fun |private |internal |public |class |data class |object |interface |abstract |open |sealed |enum |val |var |inline )")
+ # 檢查會談暫存區路徑(型錄落地時要拿掉)
+ _SCRATCH_RE = re.compile(r"(/private/tmp/|/tmp/claude-|lumos-scratch|scratchpad/)")
+ TEST_ONLY_ANCESTOR = HERE / "samples" / "ancestor-named-test"
+ 
+ 
++def _strip_yaml_comment(ln):
++    """去掉一行 YAML 的註解:`#` 在行首或前面是空白、而且不在引號裡才算註解(YAML 1.2 規格);整行註解變空行。"""
++    q = None
++    for i, ch in enumerate(ln):
++        if q:
++            if ch == q:
++                q = None
++        elif ch in "'\"":
++            q = ch
++        elif ch == "#" and (i == 0 or ln[i - 1] in " \t"):
++            return ln[:i].rstrip()
++    return ln
++
++
+ def _files_block_is_test_only(doc):
+     """這條規則的 files: 區塊(只看那一段,不看 ignores 或訊息)是不是只列測試目錄。"""
+-    # 先去掉整行註解:頂格註解(例「# 不掃 src/main」)不算 files 區塊的內容,也不該把區塊截斷
+-    doc = "\n".join(ln for ln in doc.splitlines() if not ln.lstrip().startswith("#"))
++    # 先去掉註解(整行與行尾):註解裡提到 src/main 不算 files 區塊的內容,頂格註解也不該把區塊截斷
++    doc = "\n".join(_strip_yaml_comment(ln) for ln in doc.splitlines())
+     m = re.search(r"^files:(.*?)(?=^[A-Za-z_\"'][^\n]*:)", doc + "\nzz:", re.M | re.S)
+     if not m:
+         return False
+     block = m.group(1)
+     return bool(re.search(r"src/(test|androidTest|testFixtures)", block)) and "src/main" not in block
+ 
+ 
+ def load_rules():
+     """讀三個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
+     rules = []
+@@ -95,21 +109,21 @@ def _cells(line):
+     return [c.strip() for c in _CELL_RE.split(line)[1:-1]]
+ 
+ 
+ _NONE_TRIGGER = "(無)"
+ 
+ 
+ def dt_triggers(cell):
+     """決策表觸發字格子 → (觸發字清單, 問題或 None)。「(無)」(全形半形括號都認)= 刻意不設,回空清單:
+     這個情境沒有不常見的字面特徵,不出情境段,只靠規則包與代碼審。"""
+     norm = cell.replace("\uff08", "(").replace("\uff09", ")")
+-    trig = [t.strip().strip("`") for t in re.split(r"[、,,]", norm) if t.strip()]
++    trig = [t.strip().strip("`") for t in re.split(r"[、,，]", norm) if t.strip()]
+     if _NONE_TRIGGER in trig:
+         if len(trig) > 1:
+             return [], "「(無)」是刻意不設觸發字,不能跟其他觸發字並列"
+         return [], None
+     if not trig:
+         return [], "觸發字不准空(刻意不設寫「(無)」)"
+     return trig, None
+ 
+ 
+ def catalog_problems(rules=None):
+@@ -233,22 +247,26 @@ def scan(sg, cfg, target):
+     except subprocess.TimeoutExpired:
+         _TIMED_OUT[0] = True
+         return None
+     except OSError:
+         return None
+     if r.returncode not in (0, 1):
+         return None
+     out = []
+     for ln in r.stdout.splitlines():
+         if ln.strip():
+-            d = json.loads(ln)
+-            out.append((d["ruleId"], d["file"]))
++            try:
++                d = json.loads(ln)
++                out.append((d["ruleId"], d["file"]))
++            except (ValueError, KeyError, TypeError):
++                return None   # 輸出讀不懂就當這次掃描跑不起來,由呼叫端報「跑不起來」,不噴 traceback
++
+     return out
+ 
+ 
+ def loaded_count(sg, cfg):
+     if _TIMED_OUT[0]:
+         return (None, None)
+     try:
+         r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--inspect", "summary", str(HERE / "samples" / "good")],
+                            capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
+     except subprocess.TimeoutExpired:
+@@ -329,21 +347,21 @@ def check(sg):
+             n = hits.get(("good", rid, rid), 0)
+             if n:
+                 problems.append((rid, f"好例誤報 {n} 處"))
+             if good_cases(good) < 2:
+                 problems.append((rid, "好例至少要兩段(頂格宣告算一段)"))
+     test_only = [r for r in rules if r["test_only"]]
+     if test_only:
+         if not TEST_ONLY_ANCESTOR.is_dir():
+             problems.append(("<pack>", "缺 samples/ancestor-named-test(祖先目錄叫 test 的正式碼樣本)"))
+         else:
+-            for d, cfg in CONFIGS:
++            for _d, cfg in CONFIGS:
+                 got = scan(sg, cfg, TEST_ONLY_ANCESTOR)
+                 if got is None:
+                     problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))
+                     continue
+                 for (i, f) in got:
+                     if any(r["id"] == i for r in test_only):
+                         problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
+     return rules, problems
+ 
+ 
+diff --git a/configs/ast-grep/kotlin-android/rules/coroutines.yml b/configs/ast-grep/kotlin-android/rules/coroutines.yml
+index ad91c042a..be974ed32 100644
+--- a/configs/ast-grep/kotlin-android/rules/coroutines.yml
++++ b/configs/ast-grep/kotlin-android/rules/coroutines.yml
+@@ -135,20 +135,36 @@ rule:
+                   stopBy: end
+                   kind: additive_expression
+                   all:
+                     - has:
+                         kind: simple_identifier
+                         pattern: $J
+                     - has:
+                         stopBy: end
+                         kind: call_expression
+                         pattern: CoroutineScope($$$)
++              # 括號裡再包一層加法:CoroutineScope(…) + (x + job);$J 是內層加法的直接運算元(代碼審 r4 通才席 Finding 2)
++              - has:
++                  stopBy: end
++                  kind: additive_expression
++                  all:
++                    - has:
++                        stopBy: end
++                        kind: call_expression
++                        pattern: CoroutineScope($$$)
++                    - has:
++                        kind: parenthesized_expression
++                        has:
++                          kind: additive_expression
++                          has:
++                            kind: simple_identifier
++                            pattern: $J
+ ---
+ id: kt-noncancellable-in-builder
+ language: kotlin
+ severity: error
+ message: '[CO-3]NonCancellable 傳給 launch/async 會切斷父子關係,工作脫離 scope 管理;改成只用在 withContext(NonCancellable) { 清理 },要跑完的交給注入的長壽 scope'
+ rule:
+   any:
+     - pattern: launch($$$) { $$$ }
+     - pattern: $S.launch($$$) { $$$ }
+     - pattern: async($$$) { $$$ }
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+index d7125351f..c469c69b7 100644
+--- a/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+@@ -11,10 +11,17 @@ class Uploader(private val io: CoroutineDispatcher) {
+ class S {
+     private val job = SupervisorJob()
+     val scope = CoroutineScope(Dispatchers.IO) // BAD
+ }
+ // 代碼審 r3(規則席 Finding 3 的反向對照):加法接的是普通 Job 屬性,不是 SupervisorJob 那個
+ class S2 {
+     private val job = SupervisorJob()
+     private val other = Job()
+     private val scope = CoroutineScope(Dispatchers.Main) + other // BAD
+ }
++
++// 括號裡的加法接的是普通 Job,照樣報
++class S3 {
++    private val other = Job()
++    private val job = SupervisorJob()
++    private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("s3") + other)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt b/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+index db1bb2db2..27c57a67d 100644
+--- a/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+@@ -16,10 +16,16 @@ class Ui {
+ // 容易誤報:SupervisorJob 先存進變數再組 scope
+ class Holder {
+     private val job = SupervisorJob()
+     private val scope = CoroutineScope(Dispatchers.Main + job) // GOOD
+ }
+ // 容易誤報(代碼審 r3 規則席 Finding 3):SupervisorJob 屬性用加法接在 CoroutineScope(…) 後面
+ class Holder2 {
+     private val job = SupervisorJob()
+     private val scope = CoroutineScope(Dispatchers.Main) + job // GOOD
+ }
++
++// 括號裡再包一層加法:SupervisorJob 屬性是內層加法的直接運算元(代碼審 r4 通才席 Finding 2)
++class Holder3 {
++    private val job = SupervisorJob()
++    private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("h3") + job)
++}
+diff --git a/docs/.governance-log.jsonl b/docs/.governance-log.jsonl
+index 326c62222..526eddfc7 100644
+--- a/docs/.governance-log.jsonl
++++ b/docs/.governance-log.jsonl
+@@ -124459,10 +124459,14 @@
+ {"ts": "2026-11-06T02:31:59+08:00", "commit": "b190e1c", "gate": "signoff", "kind": "expected-signed", "hard": false, "nodes": ["Projects/推送只跑受影響測試_計劃.md"], "note": "AI 依使用者授權簽(「你有裁量權、簽核權」);對照使用者需求「不要每次開發新功能就把既有的斷言全部跑過一遍」與計劃做法節逐列核過:功能分支降子集、主線/標籤/算不出/舊版照全套、判主線看推去的目的地,每列都有綁定測試且三輪代碼審實跑過", "detail": "AI 依使用者授權簽(「你有裁量權、簽核權」);對照使用者需求「不要每次開發新功能就把既有的斷言全部跑過一遍」與計劃做法節逐列核過:功能分支降子集、主線/標籤/算不出/舊版照全套、判主線看推去的目的地,每列都有綁定測試且三輪代碼審實跑過", "head_sha": "b190e1ca2453e8f0c17468803425324e9a1f1e99", "plan": "Projects/推送只跑受影響測試_計劃.md", "table_sha": "32549d0d0e1971022776466807c743c9ebd6e3ceeaab1797dc7e805bd57f3b8a", "row_count": 8, "origin": "ai", "who": "ai", "token": "EXP-198ba0d4"}
+ {"ts": "2026-11-06T02:20:10+08:00", "commit": "b190e1c", "gate": "code-loop", "kind": "dispositions", "hard": false, "nodes": [], "detail": "表態 6 題", "branch": "EnzoHsieh-Android/push-subset", "head_sha": "b190e1ca2453e8f0c17468803425324e9a1f1e99", "dispositions": {"py-eventloop": {"status": "na", "question": "事件迴圈:async def 裡有沒有同步阻塞(time.sleep/requests/同步 open 讀寫/subprocess.run/大 JSON 解析/CPU 重活)?該換 asyncio.sleep、非同步 client,或用 asyncio.to_thread 丟出去?有沒有「while True + sleep」輪詢該改成等事件或佇列?", "evidence": "", "reason": "這次改動沒有任何 async 函式或事件迴圈,只在同步的推送前流程多一次 git 查詢", "issue": ""}, "py-parallel": {"status": "na", "question": "並行與上限:互不依賴的 await 有沒有 asyncio.gather/TaskGroup 並行?gather 的集合有沒有上限(無界並行會打爆下游連線池或對方的速率限制,該用 Semaphore 有界)?create_task 的回傳值有沒有存起來並接住例外(沒存=可能被回收、例外無聲蒸發)?", "evidence": "", "reason": "這次改動沒有並行或背景工作,每個推送行依序判一次主線,不建立 task", "issue": ""}, "py-external": {"status": "satisfied", "question": "外呼與重試:每個 HTTP/WebSocket/DB 外呼有沒有逾時(requests 預設不逾時=對方掛了你永遠卡住)?重試有沒有退避與上限,而且不會對不可逆操作(下單/付款/寄信)盲目重送?session/client/連線有沒有重用而不是每次新建?斷線重連後本地狀態有沒有重新對齊?", "evidence": "scripts/lumos:62355", "reason": "", "issue": ""}, "py-memory": {"status": "na", "question": "記憶體與資料量:大檔/大回應/大查詢有沒有一次讀進記憶體(read()/readlines()/json.load 大檔/fetchall()/read_csv 不分塊)而不是逐行、分塊或 generator?長活的 dict/list/cache 有沒有上限(lru_cache(maxsize=None)、以請求或時間為鍵的快取只增不減)?迴圈裡有沒有逐筆查 DB 或逐筆打 API(N+1)?", "evidence": "", "reason": "新程式只讀一份 pitfalls 輸出的小 JSON 與幾個 git ref 名,沒有大檔或整本帳一次讀進記憶體", "issue": ""}, "py-hotpath": {"status": "na", "question": "熱路徑:這段會跑大量資料或高頻迴圈嗎?pandas 有沒有 iterrows/itertuples/apply(axis=1)/迴圈裡 concat(該向量化,或先收成 list 最後一次建 DataFrame)?索引式迴圈 range(len(x)) 該不該改成直接迭代或向量運算?list 當佇列 pop(0)、在 list 裡做成員查找,該不該換 deque/set?迴圈裡有沒有重複做不變的工作(每圈重新解析設定、重建物件)?", "evidence": "", "reason": "判主線每次推送每個 ref 只跑一次,不在高頻迴圈或大量資料路徑上,沒有 pandas 與佇列操作", "issue": ""}, "py-extcode": {"status": "na", "question": "外部回應碼:這次改動拿外部系統(金流、第三方 API)回來的代碼做判斷。每個碼在官方文件裡的原文意思寫在哪篇筆記?FACT 行要帶 [來源:外部],官方網址寫在 [查:] 欄(不要寫進來源標記)。沒有就先寫一篇,最好寫進改到那支檔的家;特別確認『流程結束』這類碼是不是真的等於業務成功。", "auto": true, "reason": "未觸發:^(?=.{0,2000}$).*?(?:(?<![A-Za-z0-9_])[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error)_?code|(?<![A-Za-z0-9_.])(?:resp|res|result|response)\\.code)(?![A-Za-z0-9_])\\s*(?:===?|!==?)\\s*\\d{3,6}(?![\\d.]), ^(?=.{0,2000}$)(?=.*?(?<![A-Za-z0-9_])(?:code|status|result|[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error|status|response)_?code|[A-Za-z0-9_]{0,30}status)(?![A-Za-z0-9_])).*?(?:(?:===?|!==?)\\s*[\\\"']\\d{3,6}[\\\"']|[\\\"']\\d{3,6}[\\\"']\\s*(?:===?|!==?)|\\.equals\\(\\s*[\\\"']\\d{3,6}[\\\"']|[\\\"']\\d{3,6}[\\\"']\\s*\\.equals\\(), ^(?=.{0,2000}$)(?:.*?\\bcase\\s+[\\\"']\\d{3,6}[\\\"']|\\s*[\\\"']\\d{3,6}[\\\"']\\s*(?:,\\s*[\\\"']\\d{3,6}[\\\"']\\s*){0,10}->), ^(?=.{0,2000}$)(?=.*?(?<![A-Za-z0-9_])(?:code|status|result|[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error|status|response)_?code|[A-Za-z0-9_]{0,30}status)(?![A-Za-z0-9_])).*?\\bin\\s*[\\(\\[\\{]\\s*[\\\"']\\d{3,6}[\\\"']"}}, "candidates": 0, "written_at": "2026-11-06T02:32:21.091917+08:00"}
+ {"ts": "2026-11-06T02:33:03+08:00", "commit": "b190e1c", "gate": "note-reread", "kind": "recorded", "hard": false, "nodes": ["docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md"], "note": "docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:點出 0 行;對照指紋 bbdad46fec17a3ec;材料指紋 ee4da3cf9fb0279f;provenance_ok=True", "detail": "docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md:點出 0 行;對照指紋 bbdad46fec17a3ec;材料指紋 ee4da3cf9fb0279f;provenance_ok=True", "head_sha": "b190e1ca2453e8f0c17468803425324e9a1f1e99"}
+ {"ts": "2026-11-06T02:33:10+08:00", "commit": "b190e1c", "gate": "note-reread", "kind": "recorded", "hard": false, "nodes": ["docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md"], "note": "docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md:點出 1 行;對照指紋 95df404f3e5cee7c;材料指紋 bb11b8c5db29952e;provenance_ok=True", "detail": "docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md:點出 1 行;對照指紋 95df404f3e5cee7c;材料指紋 bb11b8c5db29952e;provenance_ok=True", "head_sha": "b190e1ca2453e8f0c17468803425324e9a1f1e99"}
+ {"ts": "2026-11-06T02:35:32+08:00", "commit": "057c519e7", "gate": "bound-tests", "kind": "green", "hard": false, "nodes": ["Systems/bound-tests-gate.md", "Systems/canary-audit.md", "Systems/design-loop.md", "Systems/guard-kill.md", "Systems/lumos-cli-lifecycle.md", "Systems/lumos-cli-read.md", "Systems/slim-get-一行安裝.md", "Systems/slim-install-安裝器.md", "Systems/slim-uninstall-一行卸載.md", "Systems/授權與歸屬.md", "Systems/測試假綠形態.md", "Systems/節點範圍與索引守衛.md"], "note": "59 綠", "secs": 64.5, "secs_kind": "wall", "calc_secs": 50.46}
+ {"ts": "2026-11-06T02:35:39+08:00", "commit": "057c519", "gate": "code-loop", "kind": "blocked", "hard": true, "nodes": [], "note": "tier=standard:有 5 題適用,表態不完整(1 處)", "detail": "tier=standard:有 5 題適用,表態不完整(1 處)", "ref": "EnzoHsieh-Android/push-subset", "head_sha": "057c519e751c9da7a7b30ee9650e00cc6dafaed3", "tier": "standard", "blocks": ["dispositions"]}
+ {"ts": "2026-11-06T02:37:39+08:00", "commit": "057c519e7", "gate": "bound-tests", "kind": "green", "hard": false, "nodes": ["Systems/bound-tests-gate.md", "Systems/canary-audit.md", "Systems/design-loop.md", "Systems/guard-kill.md", "Systems/lumos-cli-lifecycle.md", "Systems/lumos-cli-read.md", "Systems/slim-get-一行安裝.md", "Systems/slim-install-安裝器.md", "Systems/slim-uninstall-一行卸載.md", "Systems/授權與歸屬.md", "Systems/測試假綠形態.md", "Systems/節點範圍與索引守衛.md"], "note": "59 綠", "secs": 64.2, "secs_kind": "wall", "calc_secs": 50.53}
+ {"ts": "2026-11-06T02:37:46+08:00", "commit": "057c519", "gate": "code-loop", "kind": "blocked", "hard": true, "nodes": [], "note": "tier=standard:有 5 題適用,表態不完整(1 處)", "detail": "tier=standard:有 5 題適用,表態不完整(1 處)", "ref": "EnzoHsieh-Android/push-subset", "head_sha": "057c519e751c9da7a7b30ee9650e00cc6dafaed3", "tier": "standard", "blocks": ["dispositions"]}
+ {"ts": "2026-11-06T02:33:27+08:00", "commit": "057c519", "gate": "code-loop", "kind": "dispositions", "hard": false, "nodes": [], "detail": "表態 6 題", "branch": "EnzoHsieh-Android/push-subset", "head_sha": "057c519e751c9da7a7b30ee9650e00cc6dafaed3", "dispositions": {"py-eventloop": {"status": "na", "question": "事件迴圈:async def 裡有沒有同步阻塞(time.sleep/requests/同步 open 讀寫/subprocess.run/大 JSON 解析/CPU 重活)?該換 asyncio.sleep、非同步 client,或用 asyncio.to_thread 丟出去?有沒有「while True + sleep」輪詢該改成等事件或佇列?", "evidence": "", "reason": "這次改動沒有任何 async 函式或事件迴圈,只在同步的推送前流程多一次 git 查詢", "issue": "", "carried": true}, "py-parallel": {"status": "na", "question": "並行與上限:互不依賴的 await 有沒有 asyncio.gather/TaskGroup 並行?gather 的集合有沒有上限(無界並行會打爆下游連線池或對方的速率限制,該用 Semaphore 有界)?create_task 的回傳值有沒有存起來並接住例外(沒存=可能被回收、例外無聲蒸發)?", "evidence": "", "reason": "這次改動沒有並行或背景工作,每個推送行依序判一次主線,不建立 task", "issue": "", "carried": true}, "py-external": {"status": "satisfied", "question": "外呼與重試:每個 HTTP/WebSocket/DB 外呼有沒有逾時(requests 預設不逾時=對方掛了你永遠卡住)?重試有沒有退避與上限,而且不會對不可逆操作(下單/付款/寄信)盲目重送?session/client/連線有沒有重用而不是每次新建?斷線重連後本地狀態有沒有重新對齊?", "evidence": "scripts/lumos:62355", "reason": "", "issue": "", "carried": true}, "py-memory": {"status": "na", "question": "記憶體與資料量:大檔/大回應/大查詢有沒有一次讀進記憶體(read()/readlines()/json.load 大檔/fetchall()/read_csv 不分塊)而不是逐行、分塊或 generator?長活的 dict/list/cache 有沒有上限(lru_cache(maxsize=None)、以請求或時間為鍵的快取只增不減)?迴圈裡有沒有逐筆查 DB 或逐筆打 API(N+1)?", "evidence": "", "reason": "新程式只讀一份 pitfalls 輸出的小 JSON 與幾個 git ref 名,沒有大檔或整本帳一次讀進記憶體", "issue": "", "carried": true}, "py-hotpath": {"status": "na", "question": "熱路徑:這段會跑大量資料或高頻迴圈嗎?pandas 有沒有 iterrows/itertuples/apply(axis=1)/迴圈裡 concat(該向量化,或先收成 list 最後一次建 DataFrame)?索引式迴圈 range(len(x)) 該不該改成直接迭代或向量運算?list 當佇列 pop(0)、在 list 裡做成員查找,該不該換 deque/set?迴圈裡有沒有重複做不變的工作(每圈重新解析設定、重建物件)?", "evidence": "", "reason": "判主線每次推送每個 ref 只跑一次,不在高頻迴圈或大量資料路徑上,沒有 pandas 與佇列操作", "issue": "", "carried": true}, "py-extcode": {"status": "na", "question": "外部回應碼:這次改動拿外部系統(金流、第三方 API)回來的代碼做判斷。每個碼在官方文件裡的原文意思寫在哪篇筆記?FACT 行要帶 [來源:外部],官方網址寫在 [查:] 欄(不要寫進來源標記)。沒有就先寫一篇,最好寫進改到那支檔的家;特別確認『流程結束』這類碼是不是真的等於業務成功。", "auto": true, "reason": "未觸發:^(?=.{0,2000}$).*?(?:(?<![A-Za-z0-9_])[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error)_?code|(?<![A-Za-z0-9_.])(?:resp|res|result|response)\\.code)(?![A-Za-z0-9_])\\s*(?:===?|!==?)\\s*\\d{3,6}(?![\\d.]), ^(?=.{0,2000}$)(?=.*?(?<![A-Za-z0-9_])(?:code|status|result|[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error|status|response)_?code|[A-Za-z0-9_]{0,30}status)(?![A-Za-z0-9_])).*?(?:(?:===?|!==?)\\s*[\\\"']\\d{3,6}[\\\"']|[\\\"']\\d{3,6}[\\\"']\\s*(?:===?|!==?)|\\.equals\\(\\s*[\\\"']\\d{3,6}[\\\"']|[\\\"']\\d{3,6}[\\\"']\\s*\\.equals\\(), ^(?=.{0,2000}$)(?:.*?\\bcase\\s+[\\\"']\\d{3,6}[\\\"']|\\s*[\\\"']\\d{3,6}[\\\"']\\s*(?:,\\s*[\\\"']\\d{3,6}[\\\"']\\s*){0,10}->), ^(?=.{0,2000}$)(?=.*?(?<![A-Za-z0-9_])(?:code|status|result|[A-Za-z0-9_]{0,30}(?:resp|result|ret|return|err|error|status|response)_?code|[A-Za-z0-9_]{0,30}status)(?![A-Za-z0-9_])).*?\\bin\\s*[\\(\\[\\{]\\s*[\\\"']\\d{3,6}[\\\"']"}}, "candidates": 0, "written_at": "2026-11-06T02:37:57.535064+08:00"}
+ {"ts": "2026-11-06T02:39:55+08:00", "commit": "057c519e7", "gate": "bound-tests", "kind": "green", "hard": false, "nodes": ["Systems/bound-tests-gate.md", "Systems/canary-audit.md", "Systems/design-loop.md", "Systems/guard-kill.md", "Systems/lumos-cli-lifecycle.md", "Systems/lumos-cli-read.md", "Systems/slim-get-一行安裝.md", "Systems/slim-install-安裝器.md", "Systems/slim-uninstall-一行卸載.md", "Systems/授權與歸屬.md", "Systems/測試假綠形態.md", "Systems/節點範圍與索引守衛.md"], "note": "59 綠", "secs": 64.5, "secs_kind": "wall", "calc_secs": 50.56}
++{"ts": "2026-11-06T02:20:57+08:00", "commit": "420c5fe6d", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "Kotlin 規則包遺留問題修正:測試作弊比對與 Room 守衛略過規則包樣本、自我檢查行尾註解/全形逗號/非 JSON;使用者授權原話「沒錯，你一樣有我的授權，目標是完成這些」"}
++{"ts": "2026-11-06T02:21:26+08:00", "commit": "a09fac7e1", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "換基底到主線 4cc9c425 後重算;使用者授權原話「沒錯，你一樣有我的授權，目標是完成這些」"}
++{"ts": "2026-11-06T02:27:37+08:00", "commit": "c666dae21", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "拆掉測試裡沒用到的 noqa;使用者授權原話「沒錯，你一樣有我的授權，目標是完成這些」"}
++{"ts": "2026-11-06T04:23:50+08:00", "commit": "3f133e7ad", "gate": "anchor-approve", "kind": "approved", "hard": false, "nodes": ["scripts/test_lumos.py"], "note": "換基底到主線 95e8dca(PR #161 合併)後重簽;測試檔衝突兩邊都留。使用者授權原話:「沒錯，你一樣有我的授權，目標是完成這些」"}
+diff --git a/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md b/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md
+index 3665fdaff..e2c154efd 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md
++++ b/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md
+@@ -7,20 +7,21 @@ aliases: []
+ about_code: []
+ tags:
+   - type/issue
+   - status/open
+   - priority/P3
+   - scope/stack-knowledge
+ summary: |-
+   FLAG:TECHNICAL
+   PITFALL:規則檔 files 清單項目後面接行內註解提到 src/main 時,只掃測試碼的規則被誤判成不是,祖先目錄守衛靜默略過 [出處:2026-11-05 code-kotlin規則包 r4 正確性、邊界席] [根因:_files_block_is_test_only 只去整行註解] [repro:check.py 對 files 區塊 `- '**/src/test*/**'  # 不含 src/main` 回 False]
+   PITFALL:推送閘把規則包教材樣本當產品碼:測試作弊比對報沒斷言、Room 守衛報範例 DAO 沒測試 [出處:2026-11-05 Kotlin 規則包第一次推送被擋] [根因:樣本目錄排除只接到風險分級、棧別題與 linter 那半,作弊比對與 Room 守衛各自挑檔] [防回歸:修好時各補一條樣本目錄不報、同形一般檔照報的測試]
++  REVISIT:2026-11-20 逐處判好例目錄被別條會擋規則命中的 15 處(樣本寫得不夠標準就改樣本,規則誤報就改規則或搬語意覆核級),判完再決定要不要加「好例被別條規則命中也報」的檢查
+ related:
+   - "[[Systems/kotlin規則包]]"
+ ---
+ # Kotlin規則包代碼審放行的小問題
+ 
+ ## 症狀
+ 
+ 代碼審 code-kotlin規則包 第 4 輪(加開的驗收輪)報了 8 條小問題,為了不讓改動跑出審查範圍而附理由放行,記在這裡下一批一起修(卷證 `governance/review-reports/code-kotlin規則包/r4-intake.md`):
+ 
+ 1. 規則檔 files 清單項目後面接行內註解、註解裡提到 src/main 時,只掃測試碼的規則被誤判成不是,自我檢查的祖先目錄守衛靜默略過那條規則(正確性、邊界兩席都報)。
+@@ -44,10 +45,20 @@ related:
+ 7. 樣本目錄排除(`_RULEPACK_SAMPLE_RE`、`node_home.ignore`)只接到風險分級、棧別題與新增告警閘的 linter 那半;同一道閘裡的測試作弊比對,以及 Room 守衛,各自挑檔、沒走這個排除。Systems/pitfalls-code-loop 那條 WHY 說「新增告警閘都不當產品碼掃」,對作弊比對那半不成立。
+ 
+ ## 現在怎麼繞
+ 
+ 目前規則包沒有規則用行尾註解、型錄沒有全形逗號(兩席 grep 過),1、2 不會發生;3 會讓自我檢查以非零結束,不會放行;4 是措辭;5 寫法罕見;6 沒有行為差異。7 改到樣本時,作弊比對的命中用 `lumos lint-waive` 逐條放行(留帳、會被統計),Room 守衛用 `LUMOS_SKIP_ROOM_GUARD=1` 單次略過(留帳);修好之前每次改樣本都要再這樣處理一次。
+ 
+ ## 什麼條件算修好
+ 
+ 1、2、3 各有一條先紅後綠的測試(行尾註解、全形逗號、非 JSON 輸出);4 改完型錄字句;5 的片段補進好例樣本、規則不報;6 決定要不要加「好例目錄命中別條會擋規則也報」的檢查並補測試。
+ 7. 測試作弊比對與 Room 守衛也走樣本目錄排除,各補一條先紅後綠的測試(樣本目錄裡沒斷言的測試、範例 DAO 不報;同形路徑的一般檔照報);自我檢查的迴圈變數改成底線。
++
++## 修好紀錄(2026-11-05,分支 kt-rulepack-followups)
++
++- 1:`_strip_yaml_comment` 照 YAML 規格去掉行尾註解(`#` 前面是空白、不在引號裡);測試 `t_kotlin_rulepack_samples` 的行尾註解與引號裡 `#` 兩條。
++- 2:觸發字拆字補全形逗號;測試 `t_kotlin_catalog_rows_wired` 的全形逗號兩條。
++- 3:`scan` 讀不懂 ast-grep 輸出時回「跑不起來」;測試 `t_kotlin_rulepack_samples` 的非 JSON 假工具。
++- 4:型錄 API-17、DATA-10 的搬級理由分開寫。
++- 5:`kt-long-lived-scope-plain-job` 認括號裡再包一層加法;好例 `Holder3`、反向壞例 `S3`。
++- 7:測試防竄改比對(`_tg_kind`)與 Room 守衛(觸發判斷、git grep、DAO 差異)都走 `_RULEPACK_SAMPLE_RE`;測試 `t_tq_guard_skips_rulepack_samples`、`t_room_guard_skips_rulepack_samples`(四個排除點各自改壞都翻紅)。自我檢查的迴圈變數也改成底線。
++- 6 未修,改成分流:好例目錄被別條會擋規則命中的有 13 組、15 處(2026-11-05 量),每一處要判是樣本寫得不夠標準、還是那條規則誤報(例:`kt-public-mutable-holder` 的好例用事件 Channel 被 `kt-vm-channel-event` 報 3 處)。逐處判完前不加「好例被別條規則命中也報」的檢查,免得把規則誤報當樣本問題修掉。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index 7eb25194d..7b055ec2e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -75,21 +75,21 @@ summary: |-
+   WHY:派工鏡頭在固定席之後多附一段自帶框的「這次新增的殘留」:範圍內新增的殘留(索引頂端有、起點沒有)或新增的判 untestable 問答,每條合約列殘留指標、決策內容(單行、拆框線、300 字上限)與那條合約在頂端帳的問答列(編號、判定、checker、ts,標這次新增),框外一題逐條必答「這筆殘留的問答有沒有換編號或改字重問?第二個代理是不是另一個代理?」(殘留段被整段截斷截掉時,這題換成叫席位自己跑 lumos dispatch-lens 看完整殘留再逐條必答);內容從頂端版本讀(新增的殘留只在這次的提交裡),讀法跟分級同一套(git replace、grafts 與差異選項環境變數由主程式入口統一關掉,代碼審 r5);lumos-code-loop 派審查員那步與範本 §3 各補一句 [出處:代碼審 code-審查收斂規則 r4 合約席] [因:文件說把關是審查席看殘留決策與問答,手冊與派工卻沒有任何一席被要求去看,升 high 只保證跑一輪審] [不選:只在文件改口說「把關是要跑一輪審」(那等於承認換編號重問沒人看)] [test:t_dispatch_lens_residual_new_section]
+   WHY:風險分級再多一條升 high:改到起點殘留索引 notes 欄記的、存著殘留決策的那篇筆記(整篇算,改哪一段都升);那筆沒記在哪篇(舊索引)而這次改到圖譜的檔 → 也升;頂端索引記的那篇跟起點不同 → 也升。派工鏡頭把這幾筆也列進「這次新增的殘留」;兩版索引或帳任一邊讀不出、時間不夠時印「算不出來」並照附必答題;合約清單真的殘留變化排最前、不在殘留索引的問答標出來排後面,問答列這次新增的先列;這段接鏡頭的時間預算。治理帳讀不出跟刪改問答分成兩句理由 [出處:代碼審 code-審查收斂規則 r5 資安席 F1、正確性席、通才席、邊界席、併發席] [因:反例清單寫在決策內容裡,逐種比對內容被不同手法連續打穿,改成看「動了那篇沒有」的外層看門] [不選:比對決策內容有沒有變(下一種手法又繞過)] [代價:碰到那篇筆記就要過一輪高風險代碼審] [test:t_pitfalls_residual_decision_note_touched] [test:t_dispatch_lens_residual_unreadable_says_so]
+   WHY:「不知道殘留決策在哪篇」分成講得出原因的幾種:索引 notes 欄解不出時記 {"unresolved": 原因}(--add/--reindex 寫,指標指的筆記找不到、格式不合或撞名、筆記在 repo 外),理由句照講原因、不叫人跑 --reindex;舊格式(沒有 notes 欄)叫人 --reindex;起點記的路徑不在起點的樹裡(照 git 存的字串比,大小寫不同也算不在)當成不知道在哪;doctor 把舊格式另報一行、不算成內容不一致。「改到圖譜的檔」只認 _vault_slug_of(bare=True,docs/<名>-knowledge/ 與 docs/knowledge/)底下的 .md [出處:代碼審 code-審查收斂規則 r6 正確性席、邊界席、通才席、架構對齊席] [因:解不出的那筆原本每次改圖譜都升 high、理由叫人跑一次修不好的指令;notes 寫錯路徑或大小寫時靜默判 light;圖譜檔判定另寫一套,非 .md 與任何層級叫 Projects 的資料夾都算、圖譜根目錄的指標算不進來] [不選:解不出就不記(跟舊格式分不開);notes 用不分大小寫比(macOS 上對、git 與 CI 上錯)] [代價:圖譜放在 docs/ 以外(獨立 vault)的專案,舊格式或解不出的那筆改了決策筆記判不到,要靠 --reindex 記下路徑] [test:t_pitfalls_residual_note_unresolved_reason] [test:t_pitfalls_residual_note_path_checked] [test:t_pitfalls_residual_note_nfd_path] [test:t_doctor_residual_index_legacy_format] [test:t_pitfalls_residual_graph_file_any_vault]
+   WHY:派工鏡頭新增殘留段排序拆級——這次新增(含合約改字)排 0,改到存著殘留決策的筆記與索引記的筆記換了排 1,問答指到不在殘留索引的排 2;起點索引不知道決策在哪篇的那幾筆不逐條展開,彙總成一行(幾筆、原因、這次改了哪幾篇圖譜);時間預算用完時先判兩版有沒有殘留索引、這次有沒有改治理帳,都沒有就不出段;段裡「算不出來」的那次不寫鏡頭快取 [出處:代碼審 code-審查收斂規則 r6 併發席(5000 筆舊格式殘留加 1 筆新增,新增那條出現 0 次)、正確性席] [因:鏡頭一次只列 5 條合約,同排級照節點名排,位置未知的大批舊殘留把真正新增的擠掉;沒殘留的 repo 多一題沒對象的必答題;暫時讀不出被快取到範圍改變] [不選:提高 5 條上限(大索引照樣擠掉)] [test:t_dispatch_lens_residual_new_not_crowded] [test:t_dispatch_lens_residual_no_index_no_section] [test:t_dispatch_lens_residual_unknown_not_cached]
+   SEE:[[Systems/test-guard]] [[Projects/Android測試防竄改檢查_計劃]]
+   WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]`code-loop pass` 寫入前讀凍結判定,有審查帳就必帶 `--loop`;閘放在 pass 不放 check,因為 check 不知道分支對應哪個迴圈,綁定只在 pass 當下才產生 [出處:本案設計審 r1 r2] [因:留痕原本寫了就算,有沒有審完只靠手冊提醒] [不選:pass 內重跑處置閘;code-loop check 讀判定;先只印四週]
+   RULE:`pass` 放行不代表這個迴圈審的是這條分支;判定檔沒有提交或範圍資訊,拿別的綠編號頂替擋不到 [依據:人] [since:2026-11-02] [retire:人裁] [until:2026-12-15] [confirmed:2026-11-02]
+   REVISIT:2026-12-15 下次發版在 CHANGELOG 寫明 governance/redbase/ 是新的簿記資料夾:還沒 lumos update 的協作者沒有這項豁免,別人提交的紅燈版夾在他的留痕與推送之間會被判留痕過時([[Projects/規格閘紅燈測試快照_計劃]])
+   WHY:新增告警閘多認 `.lumos/config.json` 的 `lint_new.include_test_paths`(副檔名清單,預設空=照舊排除測試路徑),只接在閘的呼叫處、不改測試路徑樣式本身 [出處:2026-11-05 [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5] [因:Kotlin 的 src/test/ 被排除,型錄 TEST 主題規則永遠不響] [test:t_lint_new_include_test_paths]
+   WHY:新增告警閘的擋下訊息每條告警印到 120 字(跟解析 SARIF 截斷同數) [出處:2026-11-05 同計劃 S5 實跑] [因:規則包訊息的修法在後半段,原本截 70 字把修法切掉] [test:t_lint_block_message_shows_fix]
+-  WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
++  WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘(含測試防竄改比對)與 Room 守衛都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
+   WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
+ decisions:
+   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+     id: d1
+     context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
+     why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
+     decided: 2026-07-04
+     valid: true
+   - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+     id: d2
+diff --git a/docs/lumos-toolchain-knowledge/Systems/room-guard.md b/docs/lumos-toolchain-knowledge/Systems/room-guard.md
+index b626aaf33..8537d7036 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/room-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/room-guard.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-28
+-updated: 2026-11-03
++updated: 2026-11-05
+ responsibility: 負責 lumos room-guard 推送前 Room 守衛:升級那半(結構檔、升級路徑、升級測試、主線上結構檔被改或刪)、DAO 與型別轉換那半、它的設定與治理帳事件,以及推送前掛鉤裡呼叫它的那一段;不負責範圍起點與主線候選的算法(推送範圍那幾支共用函式)、測試品質規範裡 Room 一節的內容(test-quality-cli)、其他閘的順序(bound-tests-gate)
+ aliases: []
+ about_code:
+   - scripts/lumos
+   - scripts/hooks/pre-push
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+@@ -17,20 +17,21 @@ summary: |-
+   WHY:升級那半跟「與主線的分岔點」比,不跟這次推送的起點比 [出處:同計劃設計審 r1] [因:主線上的版本才可能已經發給使用者;只在分支上的版本反覆編譯改寫、退回、刪掉都是正常開發] [不選:跟範圍起點比(第二次推送就把自己分支上的版本當成已發布)] [test:t_room_mig_schema_rewrite_branch_only_passes]
+   WHY:DAO 測試認「沒 mock 這個 DAO 的測試以 .方法名( 呼叫它」加「全庫至少一支真 Room 測試」,不要求同一支檔有 Room 建法 [出處:同計劃設計審 r1] [因:資料庫常建在基底類別、JUnit Rule 或 Hilt 測試模組] [代價:名字撞名的方法會被別的 DAO 的測試放行] [test:t_room_dao_test_via_base_class_passes]
+   WHY:判不清一律講一句放行並記帳,跟 Android 端到端驗收的判不清就擋刻意不同 [出處:同計劃〈實務隱患〉] [因:這道是靜態看程式碼形狀,git 算不出來時擋下等於工具壞了就擋所有人] [test:t_room_guard_range_start_tag_and_empty]
+   SEE:[[Systems/test-quality-cli]] [[Systems/bound-tests-gate]] [[Projects/Room資料庫測試守衛_計劃]]
+   WHY:原始碼那邊的「這一版結構檔沒提交」只判這次碰到的資料庫,整個專案一個結構檔都沒有時只提醒怎麼開匯出 [出處:代碼審 code-room資料庫測試守衛 r1 正確性席] [因:沒設匯出位置時訊息教的補法做不到;主線上本來就有的缺口不該擋碰到別處的推送] [不選:每次碰到 Room 就判全部資料庫] [test:t_room_mig_never_exported_warns_not_blocks]
+   REVISIT:2027-01-31 看 room-guard 的擋下、跳過帳與誤擋回報,決定要不要在 CI 補一步(推送時加 --no-verify 就繞得過推送前掛鉤)
+   PITFALL:Room 3 專案的型別轉換器整段沒有提醒、只改轉換器檔時整道不觸發 [出處:2026-10-29 Room 3.0.3 實驗專案實跑 [[Verification/2026-10-29_Room守衛Room3實跑]]] [根因:Room 3 把 @TypeConverter 改名成 @ColumnTypeConverter,觸發與找轉換函式只認舊名字] [修法:兩個名字都認] [同族:Room 再出主版本時先對一次註記名、Gradle 外掛與設定區塊名] [test:t_room_column_typeconverter_warns]
+   WHY:方法切法同時給測試防竄改比對用(傳測試註記當 kinds),2026-11-02 擴充:運算式本體 = x { 配到右大括號、反引號函式名照樣認(名稱回空字串;Room 這半的 DAO 方法與型別轉換不收空名字,跟擴充前一樣不檢查,收了只會要求一支不可能有的測試)、註記後的宣告只在 600 字內找 [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法一] [因:作弊比對要整個測試本體;不擴充就得另寫一套切法] [代價:DAO 裡 = db.withTransaction { … } 這類運算式本體的範圍從一行變成整個區塊(只會多要求、不會少要求測試)] [test:t_rg_methods_expression_body_and_backtick] [test:t_room_dao_backtick_method_not_required]
+   REVISIT:2026-12-15 反引號命名的 DAO 方法與型別轉換目前不檢查:評估從原文取回反引號名,並用不剝字串的測試文字找呼叫,補上這個缺口
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]_rg_split_args 多一個選填參數 stripped,只給測試防竄改比對用(照剝過字串的文字切、配括號用 _rg_bracket_map;那條路抽在 _rg_split_args_stripped);Room 守衛的呼叫不帶,它拿到的本來就是剝過字串的原始碼,行為不變 [出處:本計劃做法 1] [因:比對工具原本拿原文切,字串裡的逗號被當分隔] [不選:另寫一支切參數函式(同功能第二套)] [test:t_tq_guard_string_comma_args]
++  WHY:規則包教材樣本不當產品碼:觸發判斷、git grep 找資料庫與測試、DAO 差異三處都排除 [出處:2026-11-05 Kotlin 規則包推送閘把範例 UserDao 報成 7 處缺口] [因:範例 DAO 不是真資料庫;樣本裡的測試也不能充當真 DAO 的測試] [不選:每次改樣本 LUMOS_SKIP_ROOM_GUARD 單次略過] [test:t_room_guard_skips_rulepack_samples]
+ verified_by:
+   - "[[Verification/2026-10-28_Room守衛實驗專案實跑]]"
+   - "[[Verification/2026-10-29_Room守衛推送觸發實跑]]"
+   - "[[Verification/2026-10-29_Room守衛Room3實跑]]"
+ ---
+ # room-guard
+ 
+ 推送前看 Android 專案的 Room 資料庫與 DAO 有沒有該有的升級路徑、結構檔與測試。子指令與它的判斷都在 `scripts/lumos`(函式名都以 `_rg_` 開頭,入口 `cmd_room_guard`),推送前掛鉤 `scripts/hooks/pre-push` 裡排在存量漂移之後、回頭重讀之前的那一段呼叫它。
+ 
+ - 範圍起點與主線候選沿用推送閘的共用算法(掛鉤帶遠端與 ref 時同存量漂移檢查),這裡不另算一份;那套的家見 [[Systems/bound-tests-gate]] 列的推送閘順序。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-guard.md b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+index 5dd574697..0652b3f1d 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-guard.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-guard.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-11-02
+-updated: 2026-11-03
++updated: 2026-11-05
+ responsibility: 負責 lumos test-guard 測試防竄改比對:改動清單與三類檔(測試檔、正式程式檔、截圖基準圖)的分類、讀兩端內容、測試函式切法與斷言判讀、各條 tq/ 規則與指紋、比對起點(跟主線的分岔點)、新測試拿規格閘紅燈版當改動前版本的那一段(tq/redbase-*,讀兩版治理帳的行差),以及它接進新增告警閘的那一層(作弊候選併進新增告警、比對出錯擋下、放寬照起點判、關閘留帳、lint-waive 的 AI 放行標記);不負責建置檔與 CI 的比對(移到計劃第二批)、紅燈版的寫入與格式(規格閘)、新增告警閘既有的檢查工具那一半與 SARIF 解析(pitfalls-lint-adapter)、Room 守衛的方法切法本身(room-guard)、測試品質標準的內容(test-quality-cli)
+ aliases: []
+ about_code:
+   - scripts/lumos
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   WHY:比對從跟主線的分岔點起算,不從推送範圍的起點 [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法一] [因:合過主線之後推送,主線上別人刪的測試不該算到推送者頭上;同一條分支先前推送的候選不是改掉了就是已在放行檔] [不選:照推送範圍的起點比(合主線後誤擋)] [test:t_tq_guard_cli_contract]
+@@ -35,19 +35,20 @@ summary: |-
+   WHY:catch 接不接得住斷言失敗照型別名字的字尾認(…Error、…Failure、Throwable),不逐一列各框架的子類別 [出處:代碼審 r8 資安、正確性兩席] [因:四個字的字表漏掉 JUnit 4 字串比對失敗丟的 ComparisonFailure、opentest4j 的 MultipleFailuresError 這類 AssertionError 子類別,AI 照失敗訊息抄型別名寫 catch 就躲過;各框架的子類別都以 Error 或 Failure 結尾] [不選:把子類別逐一列進字表(照樣會漏新框架)] [代價:自訂的 Result.Error 這類型別也會列,多一條可放行的候選] [test:t_tq_guard_catch_no_fail]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]新測試在分岔點不存在而有紅燈版時,同一支測試的歷次紅燈版照終點那一版治理帳的行序依序兩兩比、最後一份跟推送版比,命中列 tq/redbase-weakened(no-assertion、catch-no-fail 兩條由分岔點比對列,不重複);治理帳與紅燈版資料夾都沒動就不讀治理帳(工作目錄沒提交的紅燈版、這條分支刪過的紅燈版照樣查) [出處:本計劃設計審 r1 正確性席實測] [因:TDD 先骨架紅、再補斷言重跑是常態,只取最早一份時後補的斷言被改成實作輸出零候選] [不選:只取最早一份;照 ts 排(帶時區、同秒無決勝)] [test:t_tq_guard_redbase_chain]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版讀不到、沒提交、被改過、孤兒檔都列 tq/redbase-unreadable(擋下、可放行),不記成比對沒跑完、也不當成沒有紅燈版 [出處:本計劃設計審 r1 邊界、整合、架構對齊三席] [因:最常見的原因是漏 git add,記成比對沒跑完只能整道閘關掉;既有慣例是單一怪檔變可放行候選] [不選:記成比對沒跑完] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版記的測試在推送版找不到、不只一處或有同名多載,一律列 tq/redbase-unmatched,不讀計劃判條款換綁 [出處:本計劃設計審 r1 架構對齊席] [因:比對工具只吃 git,讀計劃與條款綁定是跨層] [不選:另設條款換綁規則] [test:t_tq_guard_redbase_moved_or_missing]
+   SEE:[[Systems/規格閘]] [[Projects/規格閘紅燈測試快照_計劃]]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]_tg_functions、_tg_rb_entry、_tg_rb_doc、_tg_rb_path_ok 也給規格閘寫紅燈版那一端用(同一套函式鍵與格式驗證),不另開一支對外入口包一層 [出處:代碼審 code-規格閘紅燈測試快照 r1 架構對齊席] [因:寫入端另寫一套切函式或格式驗證,函式鍵與驗法會跟讀取端分岔] [不選:比對工具另開對外入口] [test:t_spec_gate_redbase_written_on_red]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]紅燈版檔沒有留痕指到(孤兒檔)或在這條分支被刪,照它的內容(刪掉前那一版)比,另列 tq/redbase-unreadable 要人找回留痕或還原檔,訊息不叫人刪檔 [出處:代碼審 code-規格閘紅燈測試快照 r2 資安席] [因:合併主線時治理帳必衝突,照取主線那邊解掉會弄丟分支的留痕,照訊息刪檔後改弱零候選] [不選:帳本改 merge=union(全 repo 的決定,託管平台的網頁合併不認);孤兒檔當沒有紅燈版] [test:t_tq_guard_redbase_unreadable]
+   WHY:[2026-11-03 [[Projects/規格閘紅燈測試快照_計劃]]]沒有留痕的紅燈版(孤兒檔、沒留痕又被刪的)不接進依序比的鏈,各自直接跟推送版比一次 [出處:代碼審 code-規格閘紅燈測試快照 r3 單審席] [因:接在鏈尾會倒著比,骨架孤兒排在 900 後面時列成斷言變少、真正的 900 改 800 消失;token 是亂數,照字典序排一樣會反] [不選:紅燈版檔加建立時間欄位照它排(多一個欄位與新的審查面,而沒留痕的檔本來就該找回留痕);照加進版本紀錄的提交時間排(壓提交後不準)] [代價:沒留痕的那份跟其他份之間的中間步驟看不到] [test:t_tq_guard_redbase_loose]
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]切斷言參數照剝過字串的文字找頂層逗號、照 _rg_bracket_map 跳過括號內部,字串裡的逗號與不成對括號不當結構;剝字串掃描讀錯的兩種情形(字串沒收尾、模板 ${ 段內不配平)退回原文切法;斷言文字只壓字串外的空白(字串原樣保留,判字串常值的樣式認得三引號跨行字串;判常值斷言的樣式也認,見 [[Projects/判綠紀錄限本分支與撞名測試改計數_計劃]] 做法 3);本體簽名拆兩份:判本體有沒有變用 _tg_ident(字串裡的空白算內容;只差空白版面的只比預期值、其他規則不重判),找搬家與改名照舊拿掉全部空白(搬進巢狀類別時多行字串跟著縮排也認得出) [出處:mOrangePos 考場實跑,"服務費 $1,235" 改 "$1,234" 漏報] [因:原本只數原文括號,金額、清單、JSON 這類字串預期值被切開後新舊配不起來;Kotlin 文法認模板靠模式堆疊,單層掃描認不得] [不選:另寫有堆疊的掃描(第二套詞法);只看剝過的文字(模板巢狀引號比現況差)] [test:t_tq_guard_string_comma_args] [test:t_tq_guard_string_split_fallback]
+   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]治理帳被 git 忽略時,孤兒紅燈版的提醒以「不要刪這支紅燈版檔」開頭、講明是忽略設定蓋到並附規則與自查指令(check-ignore -q 退出碼 1),還沒提交那句以 git add 開頭、自帶改法;身分字固定為 orphan、pending,措辭換了放行指紋不變;忽略判法 _gov_ledger_ignored 三態(放在帳檔區,比對工具、規格閘、doctor 共用;check-ignore -q 判、-v 取規則)、比對工具這側帶截止時間、一次推送最多問一次 [出處:mOrangePos 的 .gitignore 從 2026-06 起忽略治理帳,實跑時提醒說「合併時弄丟」] [因:規則以較深層的設定檔優先,一律叫人在根目錄加否定行無效;候選訊息 300 字截斷先掉後面的字] [不選:不問忽略照舊措辭(指錯方向);只看 -v(否定規則照印、回 0)] [test:t_tq_guard_redbase_ledger_ignored] [test:t_tq_guard_ledger_ignored_fix_resolves]
++  WHY:規則包教材樣本(configs/ast-grep/<包>/samples/ 底下的 .kt)不當產品測試,_tg_kind 回 None [出處:2026-11-05 Kotlin 規則包推送閘把樣本報成 19 條沒斷言] [因:壞例就是故意示範沒斷言的測試] [不選:每次改樣本逐條 lint-waive] [test:t_tq_guard_skips_rulepack_samples]
+ verified_by:
+   - "[[Verification/2026-11-02_Android測試防竄改檢查實跑]]"
+ ---
+ # test-guard
+ 
+ 比對一段範圍改動前後兩版,列出讓測試變得不會紅的改動(作弊候選)。程式在 `scripts/lumos`(比對本體的函式以 `_tg_` 開頭,入口 `cmd_test_guard`;接進新增告警閘的那一層在 `_lint_new_verdict` 一帶,檢查工具那一半的家是 [[Systems/pitfalls-lint-adapter]])。
+ 
+ - 測試函式的切法借 Room 守衛的 `_rg_methods`,那套切法的家在 [[Systems/room-guard]]。
+ - 規則一覽、抓不到什麼、怎麼放行寫在測試品質標準的〈推送前的防竄改檢查〉節(家在 [[Systems/test-quality-cli]]);逐條判法與取捨在 [[Projects/Android測試防竄改檢查_計劃]] 做法一、二;代碼審 r1 修掉的判讀缺口與取捨在卷證 `governance/review-reports/code-Android測試防竄改檢查/`。
+diff --git a/governance/anchor-baseline.json b/governance/anchor-baseline.json
+index 155daaa2f..87dff596c 100644
+--- a/governance/anchor-baseline.json
++++ b/governance/anchor-baseline.json
+@@ -1,20 +1,20 @@
+ {
+   "version": 1,
+   "anchors": {
+-    "scripts/test_lumos.py": "7d7a910c47ceb594ce708836162a2a04a79973959f41871a945ba72ee7642b68",
++    "scripts/test_lumos.py": "72074621bd77fd9a4efeb454e4b449c10e60fcfdcd08d33ed9482102f5937aa0",
+     "scripts/test_autonomous_loop.py": "75acae20cfd1c4972fe29803a096428a5c50fb9be9f9287b055ebc4d2b4211e4",
+     "scripts/hooks/pre-commit": "7b1658084526bb1db5dab661b01e82d6cfc8a120e03b229457ebb2c7de9c21a7",
+     "scripts/hooks/pre-push": "b6d46a772ac36a47748e043d7e4a7bd594fadf1a9b4bd27863ad4863a897afc9",
+     "scripts/hooks/post-commit": "b4b574e2ec1701f749066e93d075fffe51ae35f2c22ef65add3047e458716741",
+     "scripts/hooks/claude/dispatch-lens-hook.py": "c00b0348adcd608878ae08c854466e58f5ca25c6f18ceb3dab7fe848886d3163",
+     "scripts/hooks/claude/lumos-entry-hook.py": "151c291daddf4ab1a389c98c70c8f3fc7e796da1b1f8c22bc2b156cad8de9c65",
+     "scripts/hooks/claude/impact-hook.py": "f5bfc432a457188a04151f855c209fa2727f25ad2e102e424c118bfb2515cac3",
+     "scripts/hooks/claude/check-graph-sync.py": "f6f32f64fb24377b9b9a8c249dc16ee68a2ee32f6b91871d030c0b5e195520d6",
+     "scripts/hooks/claude/ci-status-hook.py": "9ec8b67e6d458248c7a40e675795e3b05d0085caa574e196e615de966ae4147c",
+     "scripts/hooks/claude/memory-sweep.py": "a3c41509100e5043fcb02b4e378be9ab8ce2701447b6783d79ef2aaaee6c9f4c",
+     "scripts/hooks/claude/bypass-ask-hook.py": "7a1e1bb9fd5b7b262ecba3823d4e21836e91899df8cdc7a4b634d4a3fd775f4d",
+     "scripts/hooks/claude/_hookevent.py": "034bfe001290469a71c9a8d7b702b8e98afc9ec76fe826509b158a97675e187f"
+   },
+-  "approved_at": "2026-11-06T01:59:55+08:00",
+-  "note": "代碼審 r2 折入:補本機遠端不同名推送案例、降級原因變數改名、測試場景回傳圖譜根;使用者授權原話「沒錯，你一樣有我的授權，目標是完成這些」"
++  "approved_at": "2026-11-06T04:23:50+08:00",
++  "note": "換基底到主線 95e8dca(PR #161 合併)後重簽;測試檔衝突兩邊都留。使用者授權原話:「沒錯，你一樣有我的授權，目標是完成這些」"
+ }
+diff --git a/scripts/lumos b/scripts/lumos
+index e5e3426c8..cf4047884 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -49091,21 +49091,21 @@ def _rg_config(text):
+ 
+ def _rg_grep(root, where, *fixed):
+     """某個提交裡含任一固定字串的 .kt/.java → 路徑清單(粗篩,精確比對在 Python 做:git grep 的正規式方言各平台不同);
+     where 是空樹或 None 回 []。git 失敗回 None。"""
+     if where is None or where == _EMPTY_TREE_SHA:
+         return []
+     pats = [x for f in fixed for x in ("-e", f)]
+     r = _lens_git(root, "grep", "-l", "-I", "-F", *pats, where, "--", "*.kt", "*.java", quote=True)
+     if r is None or r.returncode not in (0, 1):
+         return None
+-    return [ln.split(":", 1)[1] for ln in r.stdout.splitlines() if ":" in ln]
++    return [q for q in (ln.split(":", 1)[1] for ln in r.stdout.splitlines() if ":" in ln) if not _RULEPACK_SAMPLE_RE.match(q)]
+ 
+ 
+ def _rg_text(read, p):
+     b = read(p)
+     return None if b is None else b.decode("utf-8", errors="replace")
+ 
+ 
+ def _rg_schemas(root, where, problems):
+     """某個提交的 Room 結構檔 → {目錄名: {版本: identityHash 或 None(讀不懂)}}。只看形狀對的路徑,內容是帶 formatVersion 與
+     database.identityHash 的 JSON 才算;讀不懂而看得出是 Room 結構檔的(含 formatVersion 或 identityHash 字樣)記成 None,
+@@ -49413,21 +49413,21 @@ def _rg_methods(text, java, kinds=_RG_METHOD_ANNS):
+ def _rg_hunks(root, start, tip):
+     """起點..終點的 .kt/.java 差異(帶改名偵測)→ ({終點路徑: 新增的行集合}, {終點路徑: 起點路徑或 None(新檔)},
+     {終點路徑: [(舊檔被刪的起行, 迄行)]}) 或 None。解析走共用的 _notelines_parse_hunks(照 @@ 計數走);刪掉的行記在
+     舊檔那一側,由 _rg_dao_changes 對回舊檔的方法([S26];代碼審 r1、r2 正確性席)。"""
+     r = _lens_git(root, "diff", "-M", "-U0", "--no-color", "--no-ext-diff", start, tip, "--", "*.kt", "*.java",
+                   quote=True, binary=True)
+     if r is None or r.returncode != 0:
+         return None
+     touched, origin, dels = {}, {}, {}
+     for f in _notelines_parse_hunks(r.stdout):
+-        if not f["b"]:                                # 刪掉的檔不在終點
++        if not f["b"] or _RULEPACK_SAMPLE_RE.match(f["b"]):   # 刪掉的檔不在終點;規則包教材樣本不當產品碼
+             continue
+         origin[f["b"]] = f["a"]
+         for o, rm, n, add in f["segs"]:
+             touched.setdefault(f["b"], set()).update(range(n, n + len(add)))
+             if rm:
+                 dels.setdefault(f["b"], []).append((o, o + len(rm) - 1))
+     return touched, origin, dels
+ 
+ 
+ def _rg_spans(t, java):
+@@ -49530,21 +49530,21 @@ def _rg_dao_half(root, start, tip, out):
+     if need:
+         _rg_dao_need_tests(root, tip, read, need, out)
+     return len(need)
+ 
+ 
+ def _rg_triggered(root, start, tip):
+     """[S31] 這次推送碰到 Room 了嗎 → (True/False, 改到的路徑集合) 或 None(git 失敗)。"""
+     r = _lens_git(root, "diff", "--name-only", "-M", "-z", start, tip, quote=True)
+     if r is None or r.returncode != 0:
+         return None
+-    paths = [p for p in r.stdout.split("\0") if p]
++    paths = [p for p in r.stdout.split("\0") if p and not _RULEPACK_SAMPLE_RE.match(p)]   # 規則包教材樣本不當產品碼
+     hit = False
+     rs, rt = _nodehome_reader(root, start), _nodehome_reader(root, tip)
+     for p in paths:
+         if _RG_SCHEMA_PATH_RE.search(p):
+             hit = True
+             break
+         if p.endswith(_RG_SRC_EXTS) and not _rg_is_test_path(p) and any(
+                 _RG_TRIGGER_RE.search(_rg_text(rd, p) or "") for rd in (rs, rt)):
+             hit = True
+             break
+@@ -49685,20 +49685,22 @@ _TG_MAX_PATH_CHARS = 200             # 類別路徑超過這麼長就換成前
+ _TG_MAX_LINE_CHARS = 20_000          # 測試檔單行超過這麼長:列一條 tq/too-large,那幾行抹掉後照比(病態單行擋在外層,不逐條追平方級)
+ _TG_IMG_EXT = (".png", ".webp", ".jpg", ".jpeg")
+ _TG_IMG_DIR = re.compile(r"(?:^|/)(?:screenshots|snapshots|roborazzi|paparazzi)(?:/|$)", re.I)
+ _TG_IMG_NOT = re.compile(r"(?:^|/)(?:docs|fastlane|metadata)/|phoneScreenshots|tabletScreenshots", re.I)
+ 
+ 
+ def _tg_kind(path):
+     """一個路徑 → 'test'|'main'|'image'|None。建置檔與 CI 檔回 None(代碼審 r4 後移到計劃〈第二批〉另做:字面判讀 Gradle DSL 與 shell
+     連四輪被新寫法打穿,不在這一批);buildSrc、build-logic 底下的程式也不當正式程式檔。"""
+     p = str(path).replace("\\", "/")
++    if _RULEPACK_SAMPLE_RE.match(p):
++        return None                    # 規則包教材樣本故意埋壞寫法,不當產品測試或產品碼(Issues/Kotlin規則包代碼審放行的小問題 第 7 項)
+     name = p.rsplit("/", 1)[-1]
+     low = p.lower()
+     if low.endswith(_TG_IMG_EXT):
+         if _TG_IMG_NOT.search(p) or (_rg_is_test_path(p) and re.search(r"/(?:assets|resources)/", p)):
+             return None
+         return "image" if (_rg_is_test_path(p) or _TG_IMG_DIR.search(p)) else None
+     in_build_dir = (p.startswith(("buildSrc/", "build-logic/")) or "/buildSrc/" in p or "/build-logic/" in p) and not _rg_is_test_path(p)
+     if name.endswith((".gradle", ".gradle.kts", ".kts")) or in_build_dir:
+         return None
+     if name.endswith((".kt", ".java")):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8cfa52b65..10346410a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -125486,20 +125486,24 @@ def t_kotlin_rulepack_samples():
+     """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
+     只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""
+     import shlex as _shlex
+     sg = _ktpack_sg()
+     m = _ktpack()
+     # files: 區塊判讀(不需要 ast-grep;代碼審 r3 正確性席):頂格清單要認得、頂格註解不算區塊內容
+     top_list = "id: x\nfiles:\n- '**/src/test*/**'\nrule:\n  pattern: a\n"
+     top_cmt = "id: x\nfiles:\n  - '**/src/test*/**'\n# 不掃 src/main\nrule:\n  pattern: a\n"
+     check("★改壞★ files 頂格清單也算只掃測試碼", m._files_block_is_test_only(top_list) is True, "")
+     check("★改壞★ files 區塊後面的頂格註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(top_cmt) is True, "")
++    inline = "id: x\nfiles:\n  - '**/src/test*/**'   # 不含 src/main\nrule:\n  pattern: a\n"
++    check("★改壞★ files 清單項目的行尾註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(inline) is True, "")
++    check("★對照★ 引號裡的 # 不是註解,後面的 src/main 照算",
++          m._files_block_is_test_only("files:\n  - '**/src/test*/**'\n  - '**/src/test*/**' # x\n  - '**/a #/src/main/**'\nrule:\n  pattern: a\n") is False, "")
+     check("★對照★ files 真的列了 src/main 不算只掃測試碼",
+           m._files_block_is_test_only("files:\n  - '**/src/test*/**'\n  - '**/src/main/**'\nrule:\n  pattern: a\n") is False, "")
+     if not sg:
+         cat_ids, _t = m.catalog_ids()
+         check("S1 靜態那半:規則訊息與型錄格式全過", not m.message_problems(m.load_rules(), cat_ids) and not m.catalog_problems(m.load_rules()), "")
+         print("  (本機沒有 ast-grep,只跑了靜態那半;CI 裝了 0.51.1 會跑樣本)")
+         return
+     rules, probs = m.check(sg)
+     sample_probs = [p for p in probs if any(k in p[1] for k in ("壞例", "好例", "樣本", "載入", "祖先"))]
+     check("S1 真規則包的樣本與載入條數全過", not sample_probs, str(sample_probs[:5]))
+@@ -125571,20 +125575,31 @@ def t_kotlin_rulepack_samples():
+     t0 = _time.monotonic()
+     _r, cp = mt2.check(str(slow2))
+     took = _time.monotonic() - t0
+     check("★改壞★ 掃描那步逾時一次之後不再逐次等滿(整次在 2.5 秒內)", took < 2.5, f"{took:.1f}s")
+     check("讀不到載入條數要講原因,不印「載入 None 條」",
+           any("讀不到載入條數" in b for _a, b in cp) and not any("None" in b for _a, b in cp), str(cp[:3]))
+     # 下一次自我檢查要重設逾時旗標,不能沿用上一次的
+     mt2.SCAN_TIMEOUT = 120
+     _r, cp = mt2.check(sg)
+     check("★改壞★ 上一次逾時不影響下一次自我檢查", not any("跑不起來" in b or "讀不到" in b for _a, b in cp), str(cp[:3]))
++    # ast-grep 吐出讀不懂的輸出:報跑不起來,不噴 traceback
++    mj = _ktpack(copy=True)
++    junk = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
++    junk.write_text("#!/bin/sh\ncase \"$*\" in *--inspect*) exec " + _shlex.quote(sg) + " \"$@\";; esac\necho 'not json'\nexit 1\n", encoding="utf-8")
++    junk.chmod(0o755)
++    try:
++        _r, cp = mj.check(str(junk))
++        ok = any("跑不起來" in b for _a, b in cp)
++    except Exception as e:      # 要驗的就是不噴例外,所以接住任何例外
++        ok, cp = False, [("exc", repr(e))]
++    check("★改壞★ ast-grep 輸出不是 JSON 時報跑不起來、不噴例外", ok, str(cp[:3]))
+     # 規則目錄全空不准判通過
+     me = _ktpack(copy=True)
+     for d in ("rules", "rules-review", "rules-hints"):
+         for y in (me.HERE / d).glob("*.yml"):
+             y.unlink()
+     _r, cp = me.check(sg)
+     check("★改壞★ 一條規則都沒讀到要報", any("一條規則都沒讀到" in b for _a, b in cp), str(cp[:3]))
+     # 規則包放在祖先目錄叫 good 的地方:命中照樣歸對規則(代碼審 r1 通才、正確性席)
+     mg = _ktpack(copy=True, under="good/bad")
+     _r, cp = mg.check(sg)
+@@ -125659,20 +125674,22 @@ def t_kotlin_catalog_rows_wired():
+     check("★改壞★ 來源寫無網址要抓到", f"{shp_id}: 來源還寫著" in txt, txt[:400])
+     check("★改壞★ 來源只寫大寫佔位字(沒登記的縮寫)要抓到", f"{tbd_id}: 來源沒有網址或來源縮寫" in txt, txt[:400])
+     check("★改壞★ 觸發字含常用字要抓到", "觸發字含常用字:map" in txt, txt[:400])
+     check("★改壞★ 列編號不連號要抓到", "列編號要從 D-1 連號" in txt, txt[:400])
+     check("觸發字寫「(無)」是刻意不設,不報", not any(a == none_id and "觸發字" in b for a, b in got), txt[:400])
+     check("★改壞★ 觸發字空白(沒寫無)要報", any(a == empty_id and "觸發字不准空" in b for a, b in got), txt[:400])
+     check("★改壞★ 「(無)」跟其他觸發字並列要報(括號全形半形混寫也認)", any(a == mix_id and "不能跟其他觸發字並列" in b for a, b in got), txt[:400])
+     # 「(無)」解析成空清單(第二、三批讀觸發字時才不會把「(無)」當成一個字去比對)
+     for cell in ("(無)", "\uff08無\uff09", "(無\uff09", "\uff08無)"):
+         check(f"「{cell}」解析成刻意不設", m.dt_triggers(cell) == ([], None), str(m.dt_triggers(cell)))
++    check("★改壞★ 全形逗號也拆觸發字", m.dt_triggers("collectAsState\uff0cstateIn") == (["collectAsState", "stateIn"], None), str(m.dt_triggers("collectAsState\uff0cstateIn")))
++    check("★改壞★ 「(無)」用全形逗號跟其他觸發字並列也要報", m.dt_triggers("(無)\uff0cfoo")[1] is not None, str(m.dt_triggers("(無)\uff0cfoo")))
+     check("一般觸發字照常拆開", m.dt_triggers("collectAsState、`stateIn`") == (["collectAsState", "stateIn"], None), str(m.dt_triggers("collectAsState、`stateIn`")))
+     check("★改壞★ 編號重複要抓到", "編號重複" in txt, txt[:400])
+     check("★對照★ 待查證節的列不受檢查", "多一格" not in txt and not any("待查證" in b for _a, b in got), txt[:400])
+     # 缺〈來源縮寫〉節:記一筆、其他檢查照跑(代碼審 r3 正確性、邊界席)
+     ms = _ktpack(copy=True)
+     t2 = ms.CATALOG.read_text(encoding="utf-8").replace("\n## 來源縮寫", "\n## 出處簡稱", 1)
+     t2l = t2.split("\n")
+     r0 = next(i for i, ln in enumerate(t2l) if ms._MAIN_ROW_RE.match(ln))
+     t2l.insert(r0 + 1, t2l[r0])
+     ms.CATALOG.write_text("\n".join(t2l), encoding="utf-8")
+@@ -125954,12 +125971,64 @@ def t_prepush_feature_branch_old_lumos():
+     check("(現場成立)舊版 lumos 沒有 dest=\"pf_pushed_ref\" 字樣", 'dest="pf_pushed_ref"' not in (d / "scripts" / "lumos").read_text(encoding="utf-8"), "")
+     check("舊版 lumos:功能分支照全套、不印降級那行", r.returncode == 0 and calls and all("--suite" not in c for c in calls) and _PPFB_MSG not in r.stderr, f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+     # 掛鉤沒帶它不認得的旗標,pitfalls 照常回 JSON:只改文件的功能分支推送照舊判 docs、只跑文件子集
+     base2 = g("rev-parse", "HEAD")
+     (d / "README.md").write_text("# hi\n")
+     _sg_commit(d, "docs only")
+     r2, calls2 = push([("refs/heads/feat", g("rev-parse", "HEAD"), "refs/heads/feat", base2)])
+     check("舊版 lumos:沒被新旗標弄壞,純文件推送照舊只跑文件子集", r2.returncode == 0 and calls2 and all("--suite docs" in c for c in calls2), f"rc={r2.returncode}\n{calls2}\n{r2.stderr[-400:]}")
+ 
+ 
++def t_tq_guard_skips_rulepack_samples():
++    """規則包教材樣本(configs/ast-grep/<包>/samples/ 底下的 .kt)故意寫沒斷言的測試當壞例,測試防竄改比對不當產品測試;
++    同樣內容放在一般測試路徑照列 tq/no-assertion(2026-11-05 推送閘把樣本報成 19 條,Issues/Kotlin規則包代碼審放行的小問題 第 7 項)。"""
++    smp = "configs/ast-grep/kotlin-android/samples/bad/kt-x/src/test/kotlin/XTest.kt"
++    bad = "    @Test\n    fun bad() { vm.load() }\n"
++    root, base, commit = _tqg_repo({smp: _tqg_kt(), _TQG_T: _tqg_kt()})
++    h = commit({smp: _tqg_kt(bad), _TQG_T: _tqg_kt(bad)})
++    rules = _tqg_rules(root, base, h)
++    check("規則包樣本裡沒斷言的測試不列", not any(f == smp for _r, f in rules), str(rules))
++    check("★對照★ 一般測試路徑照列 tq/no-assertion", ("tq/no-assertion", _TQG_T) in rules, str(rules))
++
++
++def t_room_guard_skips_rulepack_samples():
++    """規則包教材樣本裡的範例 DAO 與資料庫不當產品碼:改到它們不觸發 Room 守衛;同樣的 DAO 放在一般路徑照擋
++    (2026-11-05 推送閘把樣本 UserDao 報成 7 處缺口,Issues/Kotlin規則包代碼審放行的小問題 第 7 項)。"""
++    print("t_room_guard_skips_rulepack_samples")
++    dao = ("package p\n\nimport androidx.room.Dao\n\n@Dao\ninterface UserDao {\n"
++           '    @Query("SELECT * FROM users")\n    suspend fun all(): List<User>\n}\n')
++    db = ("package p\n\nimport androidx.room.Database\n\n@Database(entities = [User::class], version = 3)\n"
++          "abstract class SampleDb : RoomDatabase()\n")
++    smp = "configs/ast-grep/kotlin-android/samples/bad/kt-x/src/main/kotlin/"
++    root = _rg_repo()
++    _nh_file(root, smp + "UserDao.kt", dao)
++    _nh_file(root, smp + "SampleDb.kt", db)
++    _nh_commit(root, "samples")
++    rc, out = _rg(root)
++    check("改到樣本裡的 DAO 與資料庫不擋", rc == 0, out[-600:])
++    check("改到樣本不觸發(不記帳)", _rg_gov(root) == [], str(_rg_gov(root)))
++    root2 = _rg_repo()
++    _nh_file(root2, "app/src/main/java/p/UserDao.kt", dao)
++    _nh_commit(root2, "app dao")
++    rc2, out2 = _rg(root2)
++    check("★對照★ 同樣的 DAO 放在一般路徑照擋", rc2 == 1 and "UserDao.all" in out2, out2[-600:])
++    # 同一次推送也有合規的真升級(會觸發守衛、往下判資料庫與 DAO):樣本裡的資料庫與 DAO 照樣不算
++    root3 = _rg_repo()
++    _rg_v2(root3)
++    _nh_file(root3, smp + "UserDao.kt", dao)
++    _nh_file(root3, smp + "SampleDb.kt", db)
++    _nh_commit(root3, "v2 + samples")
++    rc3, out3 = _rg(root3)
++    check("有真升級觸發時,樣本裡的資料庫與 DAO 也不算", rc3 == 0 and "UserDao" not in out3 and "SampleDb" not in out3, out3[-600:])
++    # 樣本裡的測試剛好呼叫同名方法,不能拿來充當真 DAO 的測試
++    root4 = _rg_repo()
++    _nh_file(root4, "app/src/main/java/p/UserDao.kt", dao)
++    _nh_file(root4, "configs/ast-grep/kotlin-android/samples/good/kt-x/src/test/kotlin/UserDaoTest.kt",
++             "package p\n\nclass UserDaoTest {\n    fun setUp() {\n        db = Room.inMemoryDatabaseBuilder(ctx, SampleDb::class.java).build()\n"
++             "    }\n    fun t() {\n        db.userDao().all()\n    }\n}\n")
++    _nh_commit(root4, "app dao + sample test")
++    rc4, out4 = _rg(root4)
++    check("樣本裡的測試不充當真 DAO 的測試", rc4 == 1 and "UserDao.all" in out4, out4[-600:])
++
++
+ if __name__ == "__main__":
+     sys.exit(main())
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index b1930ead3..28831fb4e 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -155,21 +155,21 @@
+ | API-7 | 重試要有上限與退避 | Flow 的 `retry()` 不帶次數;`while (true)` 裡重送;重試迴圈用固定 `delay(常數)` | `retryWhen { cause, attempt -> if (cause is IOException && attempt < 3) { delay(1000L shl attempt.toInt()); true } else false }` | 無限重試耗電耗流量,打爆伺服器 | 自寫 ast-grep | B | 形狀:retry 無參數、while(true) 重送、固定 delay | 告警帶寫法、當下推相關列 | 告警帶寫法=未接(還沒有規則);當下推相關列=批二 | 未寫 | PLAN〔併:API-7〕〔查證 2026-11-05:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/retry.html https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/retry-when.html https://kotlinlang.org/docs/coroutines-flow.html https://developer.android.com/topic/architecture/data-layer/offline-first https://ktor.io/docs/client-request-retry.html〕 |
+ | API-8 | 舊回應不能蓋新資料(只要最新一次) | ViewModel 裡帶參數、非 private 函式每次呼叫都 `viewModelScope.launch { }` 寫 state,沒取消前一個 Job;搜尋框用 `flatMapConcat { search(it) }` 或 `flatMapMerge` | 輸入進 `MutableStateFlow`,`query.flatMapLatest { repo.search(it) }.stateIn(…)`;或 `job?.cancel(); job = viewModelScope.launch { }` | 慢的舊查詢晚到,把新查詢的結果蓋掉;或排隊延遲 | 自寫 ast-grep;SC FLOW_009(主題有,三層無實作) | B+C+D | 形狀:每呼叫一次就 launch 寫 state 而無取消;flatMapConcat/Merge 接搜尋輸入 | 告警帶寫法、當下推相關列、行為測試或正向約束 | 告警帶寫法=批一(只有提示級規則,預設不接);當下推相關列=批二;行為測試或正向約束=批五 | 規則 kt-stale-response-launch:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、先取消的好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-stale-response-launch 命中 1、真 0、誤報 1,降 hint:分不出查詢與指令 | PLAN;ESLINT-RAU;SC〔併:API-8、研C五10〕 |
+ | API-9 | 離開畫面要取消在途請求 | `GlobalScope.`、當場 `CoroutineScope(…).launch`、Fragment 裡用 `lifecycleScope` 而不是 `viewLifecycleOwner.lifecycleScope`;資料層 `GlobalScope.launch { api.sync() }`;`GlobalScope.launch { anim.animateTo() }` 跑 UI 動畫 | 畫面工作用 `viewModelScope`/`viewLifecycleOwner.lifecycleScope` + `repeatOnLifecycle`;Compose 動畫用 `rememberCoroutineScope()`;要活過畫面的用注入的 applicationScope 或 WorkManager | 請求與協程洩漏、例外沒人接;Fragment View 銷毀後還更新 binding 而崩潰 | detekt:GlobalCoroutineUsage;structured-coroutines:InlineCoroutineScope;androidx:UnsafeRepeatOnLifecycleDetector;Sonar:S6306;SC SCOPE_001:detekt/lint GlobalScopeUsage/編譯器 GLOBAL_SCOPE_USAGE;SC SCOPE_003:detekt InlineCoroutineScope、ExternalScopeLaunch/lint UnstructuredLaunch、InlineCoroutineScope;SC ARCH_002:lint ViewModelScopeLeak、LifecycleAwareScope、LifecycleAwareFlowCollection;編譯器 @DelicateCoroutinesApi 警告;待查(資料層研究的 detekt 候選 GlobalCoroutineUsage) | A+B+C | 形狀:GlobalScope、當場建 scope、Fragment 用 lifecycleScope | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=批五 | 規則 kt-compose-globalscope-in-composable、kt-unmanaged-scope-launch:樣本實測中壞例、好例不報;原記:GlobalScope 已實測(detekt 不需型別就響);Android Lint 實跑命中 UnsafeRepeatOnLifecycleDetector(2026-11-05,AGP 8.13.2 實驗專案複本) | PLAN;DETEKT;SC;SONAR;LINT;AND-BP#create-coroutines-data-layer;PAD-LIFE;CMP-SE〔併:API-9、研C補、研C二13、研D一30、研M二9〕〔查證 2026-11-05:https://developer.android.com/kotlin/coroutines/coroutines-best-practices https://developer.android.com/topic/libraries/architecture/views/coroutines-views https://developer.android.com/develop/ui/compose/side-effects https://developer.android.com/topic/architecture/data-layer〕 |
+ | API-10 | 防重複送出(出處不全) | `onClick` 觸發的函式裡直接 `launch`,沒有「進行中」判斷 | `fun submit() { if (job?.isActive == true) return; job = viewModelScope.launch { … } }`,或 uiState 帶 `isSubmitting` 讓按鈕 `enabled = !isSubmitting` | 連點送出兩筆訂單或兩次扣款 | 無 | C+D | 語意:要知道這個動作重複執行有沒有害 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | — | PLAN〔併:API-10〕 |
+ | API-11 | callback 轉 suspend 要能取消 | `suspendCoroutine { }`;`suspendCancellableCoroutine { }` 裡沒有 `invokeOnCancellation`;`suspendCoroutine { api.call().enqueue(…) }` | `suspendCancellableCoroutine { cont -> val call = api.call(); cont.invokeOnCancellation { call.cancel() }; call.enqueue(…) }`;Retrofit 直接宣告 `suspend fun` | 請求無法取消,資源洩漏、畫面關了還在跑 | 自寫 ast-grep;IDE:SuspendCoroutineLacksCancellationGuarantees;IJ:「Use suspendCancellableCoroutine instead of suspendCoroutine」(ID 待查);SC INTEROP_001:detekt SuspendCoroutineWithoutCancellation/編譯器 SUSPEND_COROUTINE_WITHOUT_CANCELLATION | A+B | 形狀:suspendCoroutine 或缺 invokeOnCancellation | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-suspendcoroutine:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本兩壞例中、好例不報;規則 kt-suspendcancellable-no-oncancel(語意覆核級):缺 invokeOnCancellation 那支另拆出來,包一次性 Task 的寫法形狀分不出對錯 | PLAN;IJ;SC;RETROFIT〔併:API-11、研C補、研D一11〕〔查證 2026-11-05:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/suspend-cancellable-coroutine.html https://lysine.dev/retrofit/declarations/〕 |
+ | API-12 | callbackFlow 要 awaitClose | `callbackFlow { }` 裡沒有 `awaitClose` | `callbackFlow { val l = Listener { trySend(it) }; api.register(l); awaitClose { api.unregister(l) } }` | 監聽器沒移除而洩漏;執行期丟 IllegalStateException | 自寫 ast-grep;SC INTEROP_002:detekt CallbackFlowWithoutAwaitClose/編譯器 CALLBACK_FLOW_WITHOUT_AWAIT_CLOSE | A+B | 形狀:callbackFlow 區塊缺 awaitClose | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-callbackflow-no-awaitclose:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、好例不報 | PLAN;SC〔併:API-12、研C補〕 |
+ | API-13 | 阻塞呼叫不在協程裡直接跑 | `Thread.sleep`、`Call.execute()`、`Future.get()` 出現在 suspend 函式或 `launch` 裡、沒包 `withContext` | `delay()`;`withContext(ioDispatcher) { call.execute() }`;Retrofit 用 `suspend fun` | 卡住所在執行緒,在 Main 上 ANR、在 Default 上拖垮其他協程 | detekt:SleepInsteadOfDelay;structured-coroutines:BlockingCallInCoroutine、RunBlockingInSuspend;SC DISPATCH_001:detekt BlockingCallInCoroutine/lint MainDispatcherMisuse;SC INTEROP_004:detekt/lint BlockingFutureGet;SC FLOW_001:detekt/lint FlowBlockingCall;SC BACKEND_001:detekt BlockingCallInCoroutineBackend;IJ:「Possibly blocking call in non-blocking context」(待查);執行期 StrictMode | A | 形狀:已知阻塞 API 出現在協程內 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | SleepInsteadOfDelay 已實測 | PLAN;DETEKT;SC;SM〔併:API-13、研C補、TP補〕 |
+ | API-14 | async 立刻 await 等於沒並行 | `async { … }.await()`、`scope.async(ctx) { … }.await()` | 直接呼叫 `f()`;要換執行緒用 `withContext(io) { f() }` | 多建一個協程卻沒並行,讀者以為有並行 | 自寫 ast-grep:kt-async-await-immediately;SC CONCUR_003:detekt SequentialAsyncAwait | A+B | 形狀:async 呼叫後緊接 .await() | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-async-await-immediately:樣本實測中壞例、好例不報 | EXTRAS;SC〔併:X:kt-async-await-immediately、研C補〕 |
+ | API-15 | Retrofit `body()!!` 沒先看成功 | `response.body()!!` | `if (response.isSuccessful) response.body() ?: error("empty") else throw HttpException(response)`;或介面直接回傳 `T` 讓 Retrofit 丟 HttpException | 伺服器回 4xx/5xx 時 NPE 崩潰 | 自寫 ast-grep:kt-retrofit-body-bang | B | 形狀:`.body()!!` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-retrofit-body-bang:樣本實測中壞例、好例不報 | EXTRAS〔併:X:kt-retrofit-body-bang〕 |
+ | API-16 | OkHttpClient 每次呼叫都新建 | 函式裡寫 `OkHttpClient()` 或 `OkHttpClient.Builder().build()`,不是單例或 DI 提供 | 全程式共用一個實例;不同設定用 `client.newBuilder()` 衍生 | 連線池與執行緒池重複建立,記憶體與 socket 洩漏 | 無 | B | 形狀:函式本體內建 OkHttpClient | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-okhttp-client-per-call:樣本實測中壞例、好例不報 | OKHTTP-CLIENT〔併:研D一1〕 |
+-| API-17 | OkHttp Response 沒有關閉 | `val r = client.newCall(req).execute()` 後面沒有 `.use{}`;只讀 `code` 就 return | `client.newCall(req).execute().use { r -> … }` | 連線洩漏、"A connection to … was leaked"、連線池耗盡 | 無 | B | 形狀:execute() 結果沒接 use | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-okhttp-response-not-closed:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(OkHttp 5 寫法、try 裡的終端操作)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | OKHTTP-BODY〔併:研D一2〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/index.html〕 |
++| API-17 | OkHttp Response 沒有關閉 | `val r = client.newCall(req).execute()` 後面沒有 `.use{}`;只讀 `code` 就 return | `client.newCall(req).execute().use { r -> … }` | 連線洩漏、"A connection to … was leaked"、連線池耗盡 | 無 | B | 形狀:execute() 結果沒接 use | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-okhttp-response-not-closed:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(OkHttp 5 的 body 非空寫法)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | OKHTTP-BODY〔併:研D一2〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/index.html〕 |
+ | API-18 | `body.string()` 讀超大回應或讀兩次 | 大檔下載 `response.body!!.string()`;同一 body 呼叫兩次 `string()` | 大檔用 `body.byteStream()`/`body.source()` 串流;body 只讀一次並存成變數 | OOM;第二次讀丟 IllegalStateException | 無 | B | 形狀:同一 body 兩次 string(),或下載路徑用 string() | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-okhttp-body-string-twice(hint):樣本實測中壞例、好例不報 | OKHTTP-BODY〔併:研D一3〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/string.html https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/index.html〕 |
+ | API-19 | 正式版打開 BODY 等級日誌 | `HttpLoggingInterceptor().setLevel(Level.BODY)` 沒用 `BuildConfig.DEBUG` 包 | `HttpLoggingInterceptor().apply { level = if (BuildConfig.DEBUG) Level.BODY else Level.NONE; redactHeader("Authorization") }` | 權杖與個資寫進 logcat,大回應被整個讀進記憶體 | 無 | B | 形狀:Level.BODY 不在 DEBUG 判斷內 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-http-logging-body-unguarded:樣本實測中壞例、好例不報 | OKHTTP-INT〔併:研D一4〕〔查證 2026-11-05:https://raw.githubusercontent.com/lysine-dev/okhttp/master/okhttp-logging-interceptor/README.md〕 |
+ | API-20 | 攔截器吞例外或自造假回應 | `intercept()` 裡 `try { chain.proceed() } catch (e) { Response.Builder()… }` | 連線失敗讓 IOException 往上拋(也可以自己丟 IOException);攔截器要提早回報失敗時,回非 2xx 的合成回應,例(取自官方 KDoc):`if (myConfig.isInvalid()) { return Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(400).message("client config invalid").body("client config invalid".toResponseBody(null)).build() }; return chain.proceed(chain.request())`;不要丟 IOException 以外的例外。 | 錯誤被偽裝成成功,重試與逾時機制失效 | 無 | D | 語意:要看攔截器是否改變失敗語意 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | OKHTTP-INT〔併:研D一5〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-interceptor/index.html〕 |
+ | API-21 | 權杖刷新沒上限也沒加鎖(出處不全) | `authenticate()` 每次都打 refresh,不看 `responseCount`,多執行緒同時刷新 | 用 `response.priorResponse` 數次數,超過回 `null`;`mutex.withLock { if (token 已被別人刷新) 用新的 else refresh() }` | 401 無限迴圈、刷新風暴、權杖互相覆蓋 | 無 | C | 語意:要跑多執行緒 401 情境才看得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | OKHTTP-AUTH〔併:研D一6〕〔查證 2026-11-05:https://lysine.dev/okhttp/recipes/〕 |
+ | API-22 | 信任所有憑證或略過主機名驗證 | 空的 `X509TrustManager`;`hostnameVerifier { _, _ -> true }` | 用系統預設;釘選用 `CertificatePinner` 或 `network_security_config` | 中間人攻擊 | 內建:TrustAllX509TrustManager、CustomX509TrustManager、AllowAllHostnameVerifier、BadHostnameVerifier | A | 形狀:空 TrustManager、永遠 true 的 verifier | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一7〕 |
+ | API-23 | 明文 HTTP | baseUrl `"http://…"`;manifest `usesCleartextTraffic="true"` | 一律 `https://`;例外用 `network_security_config` 只開指定網域 | 資料被竊聽或竄改 | 內建:UsingHttp、DefaultCleartextTraffic、InsecureBaseConfiguration | A | 形狀:http:// 字面或 cleartext 設定 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一8〕 |
+ | API-24 | Retrofit suspend 只抓 HttpException | `try { api.get() } catch (e: HttpException) {}`,沒處理 IOException 與解析例外 | `catch (e: HttpException) { 對應 HTTP 錯 } catch (e: IOException) { 網路錯 } catch (e: SerializationException) { 解析錯 }`,轉成網域錯誤 | 斷網時崩潰 | 無 | B | 形狀:try 只有 HttpException 一個 catch | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-catch-only-httpexception:樣本實測中壞例、好例不報 | RETROFIT〔併:研D一9〕〔查證 2026-11-05:https://lysine.dev/retrofit/declarations/ https://lysine.dev/retrofit/2.x/retrofit/retrofit2/Call.html〕 |
+ | API-25 | 錯誤回應的 body 沒解析也沒關(出處不全) | 只看 `response.code()`,`errorBody()` 沒讀也沒 close(`string()` 讀完會自己關閉;洩漏的是沒讀也沒 close 的 errorBody) | `response.errorBody()?.use { parseError(it.string()) }` | 拿不到伺服器錯誤碼;連線洩漏 | 無 | B | 形狀:errorBody() 沒接 use | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | RETROFIT-RESP〔併:研D一12〕〔查證 2026-11-05:https://lysine.dev/retrofit/2.x/retrofit/retrofit2/Response.html https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/retrofit/src/main/java/retrofit2/OkHttpCall.java〕 |
+ | API-26 | 204 空 body 解析失敗(出處不全) | 介面回傳 `Foo`,伺服器回 204 | 空回應宣告成 `suspend fun delete(): Response<Unit>` 或 `Unit` | 成功被當失敗,或 KotlinNullPointerException/EOFException | 無 | C | 語意:要知道該端點會回 204 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | RETROFIT-2867〔併:研D一13〕〔查證 2026-11-05:https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/retrofit/src/main/java/retrofit2/KotlinExtensions.kt https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/CHANGELOG.md https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/retrofit/src/main/java/retrofit2/OkHttpCall.java〕 |
+ | API-27 | 多個 converter 順序錯 | `addConverterFactory(Gson…)` 排在 `ScalarsConverterFactory` 前 | 先 `ScalarsConverterFactory.create()`/protobuf,通用 JSON converter 放最後 | String 回應被當 JSON 解析而失敗 | 無 | B | 形狀:Builder 鏈裡 JSON converter 在專用 converter 前 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-retrofit-converter-order:樣本實測中壞例、好例不報 | RETROFIT〔併:研D一14〕〔查證 2026-11-05:https://lysine.dev/retrofit/2.x/converter-gson/retrofit2/converter/gson/GsonConverterFactory.html〕 |
+@@ -496,21 +496,21 @@
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | DATA-1 | Room 開 allowMainThreadQueries | `Room.databaseBuilder(...).allowMainThreadQueries()` | 拿掉;DAO 改 `suspend fun` 或回傳 `Flow`,呼叫端在 `withContext(io)` 或 viewModelScope 裡呼叫 | 資料庫查詢跑在主執行緒,卡頓、ANR | ast-grep:kt-room-main-thread-queries;Room 執行期檢查(沒開這個設定時主執行緒查詢丟 IllegalStateException,非 lint) | B | 形狀:builder 鏈上出現 `.allowMainThreadQueries()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-main-thread-queries:樣本實測中壞例、好例不報 | EXTRAS;LINT〔併:X:kt-room-main-thread-queries、研D補〕 |
+ | DATA-2 | Room DAO 函式是阻塞的 | `@Dao` 介面裡 `@Query("…") fun all(): List<User>`(非 suspend、不回傳 Flow/LiveData/PagingSource) | `@Query("…") suspend fun all(): List<User>` 或 `fun all(): Flow<List<User>>` | 呼叫端在主執行緒會擋住或丟例外 | ast-grep:kt-room-dao-blocking | B | 形狀:`@Dao` 類別內帶 `@Query/@Insert/@Update/@Delete/@Upsert/@RawQuery/@Transaction` 的函式沒有 suspend 也不回傳串流型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-dao-blocking:樣本實測中壞例、好例不報 | EXTRAS〔併:X:kt-room-dao-blocking〕 |
+ | DATA-3 | DataStore 不是單例 | 類別或函式裡 `PreferenceDataStoreFactory.create { … }`、`preferencesDataStore("x")` | 檔案頂層 `val Context.settings by preferencesDataStore("settings")`,或 DI 提供 `@Singleton` 的 DataStore | 同一個檔兩個實例,執行期丟 IllegalStateException | ast-grep:kt-datastore-not-singleton;DataStore 執行期檢查(非 lint) | B | 形狀:DataStore 工廠呼叫出現在 class body 或 function body,且不在 object 內 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-not-singleton:樣本實測中壞例、好例不報 | EXTRAS;DS〔併:X:kt-datastore-not-singleton、研D補〕 |
+ | DATA-4 | SharedPreferences Editor 沒提交 | `prefs.edit().putString(k, v)` 寫完就結束 | 結尾 `.apply()`,或 KTX `prefs.edit { putString(k, v) }` | 資料沒寫進去 | Android Lint:CommitPrefEdits;ApplySharedPref;MutatingSharedPrefs | A | 形狀:`edit()` 鏈沒接 `apply()`/`commit()` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT;AR-REC〔併:研A80、研D二2〕 |
+ | DATA-5 | 主執行緒 commit() 且沒用回傳值 | `prefs.edit().putX(…).commit()` 回傳值丟掉 | 改 `apply()`;真要同步結果才在背景執行緒 `commit()` 並檢查回傳 | 主執行緒寫磁碟,卡頓 | Android Lint:ApplySharedPref | A | 形狀:`.commit()` 當單獨敘述 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT〔併:研D二1〕 |
+ | DATA-6 | 直接改 getStringSet 拿回的集合 | `prefs.getStringSet(k, …)!!.add(x)` | `val s = prefs.getStringSet(k, emptySet())!!.toMutableSet(); s.add(x); prefs.edit { putStringSet(k, s) }` | 改動不會保存,行為不一致 | Android Lint:MutatingSharedPrefs | A | 形狀:`getStringSet(…)` 的結果直接呼叫 add/remove | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D二3〕 |
+ | DATA-7 | 用 SharedPreferences 存大量或結構化資料 | `prefs.edit { putString("list", json) }` 存整份清單 | 結構化資料進 Room;設定類用 `DataStore<Preferences>` 或 Proto DataStore | 初次讀取在主執行緒載入整檔、apply 造成 ANR、資料損毀 | 無 | D | 語意:要看存的東西大小與結構才判得出 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二4〕 |
+ | DATA-8 | DataStore 的資料型別是可變的 | `DataStore<MyData>`,`data class MyData(var x: Int, val list: MutableList<…>)` | `data class MyData(val x: Int, val list: List<…>)` 或 proto;更新用 `updateData { it.copy(…) }` | 一致性被破壞,難抓的 bug | 無 | B | 形狀:DataStore 泛型參數的 data class 有 `var` 或 `Mutable*` 欄位 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DS〔併:研D二5〕 |
+ | DATA-9 | 同一檔混用單程序與多程序 DataStore | 同檔名同時 `dataStore(...)` 與 `MultiProcessDataStoreFactory.create(...)` | 只要跨程序就一律 `MultiProcessDataStoreFactory.create(...)` | 資料損毀或互相覆蓋 | 無 | B | 形狀:同一檔名字串出現在兩種工廠 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DS〔併:研D二6〕 |
+-| DATA-10 | DataStore 讀取沒處理 IOException | `dataStore.data.map { … }` 沒有 catch | `dataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }.map { … }` | 讀取失敗整條 Flow 終止,畫面不再更新 | 無 | B | 形狀:`.data` 鏈上沒有 `.catch` | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-datastore-read-no-catch:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(OkHttp 5 寫法、try 裡的終端操作)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | DS-CL〔併:研D二7〕〔查證 2026-11-05:https://developer.android.com/codelabs/android-preferences-datastore〕 |
++| DATA-10 | DataStore 讀取沒處理 IOException | `dataStore.data.map { … }` 沒有 catch | `dataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }.map { … }` | 讀取失敗整條 Flow 終止,畫面不再更新 | 無 | B | 形狀:`.data` 鏈上沒有 `.catch` | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-datastore-read-no-catch:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(try/runCatching 裡的終端操作列舉不完)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | DS-CL〔併:研D二7〕〔查證 2026-11-05:https://developer.android.com/codelabs/android-preferences-datastore〕 |
+ | DATA-11 | Serializer 不轉 CorruptionException、沒設 corruptionHandler | `readFrom` 裡直接 `Json.decodeFromString(...)` 沒 try | `readFrom` 內 `try { … } catch (e: SerializationException) { throw CorruptionException("…", e) }`;建立時 `corruptionHandler = ReplaceFileCorruptionHandler { default }` | 檔案損毀後每次讀取都崩潰 | 無 | B | 形狀:實作 `Serializer` 的 `readFrom` 沒有 try,或建立 DataStore 沒帶 corruptionHandler | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-serializer-no-corruption:樣本實測中壞例、好例不報 | DS〔併:研D二8〕 |
+ | DATA-12 | updateData 裡做副作用或耗時 I/O(出處不全) | `dataStore.updateData { api.call(); it.copy(...) }` | transform 只放純計算:`val r = api.call(); dataStore.updateData { it.copy(x = r) }` | 交易被拖長、重試時副作用重複 | 無 | D | 語意:要看 transform 內呼叫的是不是副作用 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二9〕 |
+ | DATA-13 | 敏感資料放在會被備份的 DataStore 或 prefs | 權杖存一般 prefs,沒設 `data_extraction_rules` | 敏感資料分檔並在 `data_extraction_rules.xml`/`fullBackupContent` 排除;用 EncryptedFile 或 Keystore 加密 | 權杖隨備份外流,換機還原成無效狀態 | 無 | D | 語意:要知道哪些欄位算敏感 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二11〕 |
+ | DATA-14 | Room 多步寫入沒包交易 | `dao.deleteAll(); dao.insertAll(x)` 連續呼叫 | `@Transaction open suspend fun replaceAll(x: List<T>) { deleteAll(); insertAll(x) }` 或 `db.withTransaction { … }` | 中途失敗留下空表,觀察者看到中間狀態閃爍 | 無 | B | 形狀:同一函式連續兩個以上 DAO 寫入呼叫,外面沒有 `withTransaction` 或 `@Transaction` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-writes-no-transaction:樣本實測中壞例、好例不報 | ROOM-TX〔併:研D二12〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/room/Transaction https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-15 | @Relation 查詢沒加 @Transaction | 回傳帶 `@Relation` 的 POJO 的 DAO 方法沒標 `@Transaction` | `@Transaction @Query("SELECT …") fun userWithPosts(): Flow<List<UserWithPosts>>` | 主表與關聯表讀到不一致的快照 | 待查(Room 編譯期會發警告,文字與代號待查) | A+B | 形狀:DAO 方法回傳型別含 `@Relation` 欄位、方法沒有 `@Transaction` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | ROOM-TX〔併:研D二13〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/relationships/one-to-many https://developer.android.com/reference/kotlin/androidx/room/Transaction〕 |
+ | DATA-16 | fallbackToDestructiveMigration 進正式版 | `Room.databaseBuilder(...).fallbackToDestructiveMigration()` | 寫 `Migration(x, y)` 或 `@Database(autoMigrations = [AutoMigration(from = x, to = y)])`,並用 MigrationTestHelper 測 | 使用者升級後資料全部消失 | 無 | B | 形狀:builder 鏈出現 `fallbackToDestructiveMigration` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-destructive-migration:樣本實測中壞例、好例不報 | ROOM-MIG〔併:研D二14〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-17 | 改了 schema 沒升版本或沒寫 Migration | Entity 改欄位,`@Database(version = …)` 不變 | 升 `version` 並加 `Migration`;開 `exportSchema` 讓 schema 進版控 | 啟動崩潰(Room cannot verify the data integrity) | Room 執行期檢查(不是 lint) | C | 語意:要比對 schema 前後版本才知道 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | ROOM-MIG〔併:研D二15〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-18 | exportSchema 關掉或 schema 沒進版控 | `@Database(exportSchema = false)` | 設 `room.schemaLocation` 並提交 schema json | 無法做 AutoMigration 與遷移測試 | Room 編譯期警告(文字待查) | B | 形狀:`@Database` 參數 `exportSchema = false` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-export-schema-false:樣本實測中壞例、好例不報 | ROOM-MIG#export-schemas〔併:研D二16〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-19 | Migration 沒有測試 | 有 `Migration(x, y)`,沒有 `MigrationTestHelper` 測試 | @get:Rule val helper = MigrationTestHelper(instrumentation = instrumentation, databaseClass = AppDb::class, driver = AndroidSQLiteDriver(), file = …);測試內 helper.createDatabase(1) 塞資料後 helper.runMigrationsAndValidate(2, listOf(MIGRATION_1_2)) 並查資料;另寫一條 migrateAll 測試,Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS).build() 開到最新版讓 Room 驗 schema | 遷移 SQL 寫錯,上線崩潰 | 無 | C | 語意:要找對應測試是否存在且覆蓋每個版本對 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | ROOM-MIG#test〔併:研D二17〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-20 | RoomDatabase 建多個實例 | 函式或 Activity 裡 `Room.databaseBuilder(...).build()` | DI `@Provides @Singleton fun db(...)` 或 companion 單例 | 多連線池、InvalidationTracker 失效、寫入互鎖 | 無 | B | 形狀:`Room.databaseBuilder(...).build()` 出現在 function body 且不在 `@Provides`/object 單例裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-builder-not-singleton:樣本實測中壞例、好例不報 | ROOM-DB〔併:研D二18〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room〕 |

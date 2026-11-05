@@ -18,3 +18,10 @@ class S2 {
     private val other = Job()
     private val scope = CoroutineScope(Dispatchers.Main) + other // BAD
 }
+
+// 括號裡的加法接的是普通 Job,照樣報
+class S3 {
+    private val other = Job()
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("s3") + other)
+}

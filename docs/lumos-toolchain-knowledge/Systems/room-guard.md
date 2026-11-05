@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-28
-updated: 2026-11-03
+updated: 2026-11-05
 responsibility: 負責 lumos room-guard 推送前 Room 守衛:升級那半(結構檔、升級路徑、升級測試、主線上結構檔被改或刪)、DAO 與型別轉換那半、它的設定與治理帳事件,以及推送前掛鉤裡呼叫它的那一段;不負責範圍起點與主線候選的算法(推送範圍那幾支共用函式)、測試品質規範裡 Room 一節的內容(test-quality-cli)、其他閘的順序(bound-tests-gate)
 aliases: []
 about_code:
@@ -24,6 +24,7 @@ summary: |-
   WHY:方法切法同時給測試防竄改比對用(傳測試註記當 kinds),2026-11-02 擴充:運算式本體 = x { 配到右大括號、反引號函式名照樣認(名稱回空字串;Room 這半的 DAO 方法與型別轉換不收空名字,跟擴充前一樣不檢查,收了只會要求一支不可能有的測試)、註記後的宣告只在 600 字內找 [出處:[[Projects/Android測試防竄改檢查_計劃]] 做法一] [因:作弊比對要整個測試本體;不擴充就得另寫一套切法] [代價:DAO 裡 = db.withTransaction { … } 這類運算式本體的範圍從一行變成整個區塊(只會多要求、不會少要求測試)] [test:t_rg_methods_expression_body_and_backtick] [test:t_room_dao_backtick_method_not_required]
   REVISIT:2026-12-15 反引號命名的 DAO 方法與型別轉換目前不檢查:評估從原文取回反引號名,並用不剝字串的測試文字找呼叫,補上這個缺口
   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]_rg_split_args 多一個選填參數 stripped,只給測試防竄改比對用(照剝過字串的文字切、配括號用 _rg_bracket_map;那條路抽在 _rg_split_args_stripped);Room 守衛的呼叫不帶,它拿到的本來就是剝過字串的原始碼,行為不變 [出處:本計劃做法 1] [因:比對工具原本拿原文切,字串裡的逗號被當分隔] [不選:另寫一支切參數函式(同功能第二套)] [test:t_tq_guard_string_comma_args]
+  WHY:規則包教材樣本不當產品碼:觸發判斷、git grep 找資料庫與測試、DAO 差異三處都排除 [出處:2026-11-05 Kotlin 規則包推送閘把範例 UserDao 報成 7 處缺口] [因:範例 DAO 不是真資料庫;樣本裡的測試也不能充當真 DAO 的測試] [不選:每次改樣本 LUMOS_SKIP_ROOM_GUARD 單次略過] [test:t_room_guard_skips_rulepack_samples]
 verified_by:
   - "[[Verification/2026-10-28_Room守衛實驗專案實跑]]"
   - "[[Verification/2026-10-29_Room守衛推送觸發實跑]]"
