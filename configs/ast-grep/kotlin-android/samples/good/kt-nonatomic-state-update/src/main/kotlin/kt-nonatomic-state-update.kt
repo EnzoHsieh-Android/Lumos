@@ -1,0 +1,12 @@
+class CounterViewModel : ViewModel() {
+    private val _state = MutableStateFlow(UiState())
+    fun refresh() {
+        viewModelScope.launch { _state.update { it.copy(loading = true) } } // GOOD
+    }
+}
+
+// 容易誤報:Composable 的 onClick 只在主執行緒跑,讀改寫不會跟別人搶
+@Composable
+fun Counter(count: MutableState<Int>) {
+    Button(onClick = { count.value = count.value + 1 }) { Text("+") } // GOOD
+}

@@ -1,0 +1,601 @@
+id: kt-vm-navcontroller
+language: kotlin
+severity: error
+message: '[ARCH-1]ViewModel 持有 NavController 會洩漏 Activity,導航也不該由 ViewModel 決定;改成只暴露狀態,導航由 UI 以 onXxx: () -> Unit 交給上層'
+rule:
+  any:
+    - kind: class_parameter
+    - kind: parameter
+    - kind: property_declaration
+  has:
+    kind: user_type
+    regex: ^Nav(Host)?Controller$
+    stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+    stopBy: end
+---
+id: kt-android-viewmodel
+language: kotlin
+severity: warning
+message: '[ARCH-5]AndroidViewModel 或收 Application/Resources,綁死 Android 型別、換語系拿到舊字串;改用一般 ViewModel,字串以 @StringRes id 交 UI 解析'
+rule:
+  any:
+    - kind: delegation_specifier
+      regex: ^AndroidViewModel\(
+    - pattern: getApplication<$T>()
+    - pattern: getApplication()
+    - all:
+        - kind: class_parameter
+        - has:
+            kind: user_type
+            regex: ^(Resources|Application)$
+            stopBy: end
+        - inside:
+            kind: class_declaration
+            has:
+              kind: delegation_specifier
+              regex: (^|[^A-Za-z])ViewModel\(
+            stopBy: end
+---
+id: kt-vm-stores-ui-callback
+language: kotlin
+severity: warning
+message: '[ARCH-6]ViewModel 欄位存回呼/Listener,會留住已銷毀的 Fragment 或 View;改用狀態輸出,讓 UI 自己反應,不保存 UI 端的參照'
+rule:
+  kind: property_declaration
+  has:
+    any:
+      - kind: function_type
+      - kind: user_type
+        regex: (Listener|Callback)$
+    stopBy: end
+  inside:
+    kind: class_body
+    inside:
+      kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: ViewModel\(
+---
+id: kt-vm-observeforever-leak
+language: kotlin
+severity: error
+message: '[ARCH-7]ViewModel 裡 observeForever 沒在 onCleared 移除,ViewModel 回收不了;改用 map/switchMap 或 Flow + stateIn,非用不可就在 onCleared 移除'
+rule:
+  any:
+    - pattern: $L.observeForever($$$)
+    - pattern: $L.observeForever { $$$ }
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+    not:
+      has:
+        kind: simple_identifier
+        regex: ^removeObserver$
+        stopBy: end
+    stopBy: end
+---
+id: kt-vm-public-suspend
+language: kotlin
+severity: warning
+message: '[ARCH-8]ViewModel 暴露 suspend 函式讓 UI 自己開協程,畫面一旋轉就被取消;改成一般函式,內部 viewModelScope.launch,結果寫回 uiState'
+rule:
+  kind: function_declaration
+  has:
+    kind: modifiers
+    has:
+      regex: ^suspend$
+      stopBy: end
+  not:
+    has:
+      kind: modifiers
+      has:
+        regex: ^(private|protected)$
+        stopBy: end
+  inside:
+    kind: class_body
+    inside:
+      kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: ViewModel\(
+---
+id: kt-vm-own-scope-not-cancelled
+language: kotlin
+severity: warning
+message: '[ARCH-9]ViewModel 自建 CoroutineScope 沒取消,畫面關了協程照跑;改用 viewModelScope,或 onCleared() { scope.cancel() }'
+rule:
+  any:
+    - pattern: CoroutineScope($$$)
+    - pattern: MainScope()
+  not:
+    has:
+      kind: simple_identifier
+      regex: ^viewModelScope$
+      stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+    not:
+      any:
+        - has:
+            kind: simple_identifier
+            regex: ^(cancel|addCloseable)$
+            stopBy: end
+        - has:
+            kind: delegation_specifier
+            regex: ^ViewModel\(\s*[^)\s]
+    stopBy: end
+---
+id: kt-ui-owns-state-holder
+language: kotlin
+severity: warning
+message: '[ARCH-10]Activity/Fragment 自己持有 LiveData/StateFlow 當資料來源,轉螢幕或程序被殺就沒了;改成狀態容器放進 ViewModel,畫面只收集'
+rule:
+  kind: property_declaration
+  has:
+    any:
+      - pattern: MutableLiveData($$$)
+      - pattern: MutableLiveData<$T>($$$)
+      - pattern: MutableStateFlow($$$)
+      - pattern: MutableStateFlow<$T>($$$)
+      - pattern: MutableSharedFlow($$$)
+      - pattern: MutableSharedFlow<$T>($$$)
+    stopBy: end
+  inside:
+    kind: class_body
+    inside:
+      kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: (Activity|Fragment)\(
+---
+id: kt-repository-returns-livedata
+language: kotlin
+severity: warning
+message: '[ARCH-12]Repository 回傳 LiveData,轉換被迫在主執行緒做;改成資料層回傳 Flow,ViewModel 再 stateIn 或 asLiveData()'
+rule:
+  any:
+    - kind: function_declaration
+      has:
+        kind: user_type
+        regex: ^(Mutable)?LiveData\b
+    - kind: property_declaration
+      has:
+        kind: variable_declaration
+        has:
+          kind: user_type
+          regex: ^(Mutable)?LiveData\b
+  inside:
+    kind: class_declaration
+    has:
+      kind: type_identifier
+      regex: (Repository|DataSource|Repo)$
+    stopBy: end
+---
+id: kt-observe-in-onresume
+language: kotlin
+severity: warning
+message: '[ARCH-13]在 onResume/onStart 才 observe,每回前景就多掛一個觀察者;改成 Activity 在 onCreate、Fragment 在 onViewCreated observe'
+rule:
+  any:
+    - pattern: $L.observe($$$)
+    - pattern: $L.observe($O) { $$$ }
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^(onResume|onStart)$
+    stopBy: end
+---
+id: kt-register-result-late
+language: kotlin
+severity: warning
+message: '[ARCH-14]registerForActivityResult 有條件或太晚註冊,重建後收不到結果或拋 IllegalStateException;改成宣告為類別成員,無條件照固定順序註冊'
+rule:
+  any:
+    - pattern: registerForActivityResult($$$)
+    - pattern: registerForActivityResult($$$) { $$$ }
+  inside:
+    stopBy: end
+    any:
+      - kind: if_expression
+      - kind: when_expression
+      - kind: lambda_literal
+      - all:
+          - kind: function_declaration
+          - not:
+              has:
+                kind: simple_identifier
+                regex: ^(onCreate|onAttach)$
+---
+id: kt-reuse-fragment-instance
+language: kotlin
+severity: warning
+message: '[ARCH-32]Fragment 實例存成欄位重複 replace,舊狀態會被帶進新的使用;改成每次 new 新實例,或 findFragmentByTag 找回原本的'
+rule:
+  kind: property_declaration
+  has:
+    kind: call_expression
+    regex: ^[A-Z]\w*Fragment(\.newInstance)?\(
+    stopBy: end
+  inside:
+    kind: class_body
+---
+id: kt-fragment-view-field
+language: kotlin
+severity: warning
+message: '[ARCH-33]Fragment 欄位留著 View/Adapter,onDestroyView 後舊畫面樹被留住而洩漏;改成在 onDestroyView 設成 null,或改成 onViewCreated 裡的區域變數'
+rule:
+  kind: property_declaration
+  any:
+    - all:
+        - has:
+            kind: modifiers
+            has:
+              regex: ^lateinit$
+              stopBy: end
+        - has:
+            kind: user_type
+            regex: ^(\w*(View|Layout|Button|Bar|Adapter|Binding)|Toolbar|Chip|Spinner)$
+            stopBy: end
+    - has:
+        kind: call_expression
+        regex: ^(mutableListOf|arrayListOf)<\w*View>
+        stopBy: end
+    - has:
+        kind: call_expression
+        regex: ^[A-Z]\w*Adapter\(
+        stopBy: end
+  inside:
+    kind: class_body
+    inside:
+      kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: Fragment\(
+---
+id: kt-register-without-unregister
+language: kotlin
+severity: warning
+message: '[ARCH-35]註冊了監聽或定位更新卻沒有對稱解除,洩漏 Activity 又耗電;改用 LifecycleStartEffect { …; onStopOrDispose { 解除 } } 對稱解除'
+rule:
+  any:
+    - all:
+        - any:
+            - pattern: $M.requestLocationUpdates($$$)
+            - pattern: requestLocationUpdates($$$)
+        - not:
+            inside:
+              any: [ { kind: class_declaration }, { kind: function_declaration } ]
+              has:
+                kind: simple_identifier
+                regex: ^(removeUpdates|removeLocationUpdates)$
+                stopBy: end
+              stopBy: end
+    - all:
+        - any:
+            - pattern: $M.registerReceiver($$$)
+            - pattern: registerReceiver($$$)
+        - not:
+            inside:
+              any: [ { kind: class_declaration }, { kind: function_declaration } ]
+              has:
+                kind: simple_identifier
+                regex: ^unregisterReceiver$
+                stopBy: end
+              stopBy: end
+    - all:
+        - any:
+            - pattern: $M.registerListener($$$)
+            - pattern: registerListener($$$)
+        - not:
+            inside:
+              any: [ { kind: class_declaration }, { kind: function_declaration } ]
+              has:
+                kind: simple_identifier
+                regex: ^unregisterListener$
+                stopBy: end
+              stopBy: end
+    - all:
+        - any:
+            - pattern: $M.registerNetworkCallback($$$)
+            - pattern: $M.registerDefaultNetworkCallback($$$)
+        - not:
+            inside:
+              any: [ { kind: class_declaration }, { kind: function_declaration } ]
+              has:
+                kind: simple_identifier
+                regex: ^unregisterNetworkCallback$
+                stopBy: end
+              stopBy: end
+    - all:
+        - pattern: $M.registerOnSharedPreferenceChangeListener($$$)
+        - not:
+            inside:
+              any: [ { kind: class_declaration }, { kind: function_declaration } ]
+              has:
+                kind: simple_identifier
+                regex: ^unregisterOnSharedPreferenceChangeListener$
+                stopBy: end
+              stopBy: end
+---
+id: kt-vm-direct-datasource
+language: kotlin
+severity: warning
+message: '[ARCH-49]ViewModel 直接收 Dao/Api/SharedPreferences/DataStore,跳過資料層;改成一律經 XRepository(只有一個來源也建),共用邏輯抽 UseCase'
+rule:
+  kind: class_parameter
+  has:
+    kind: user_type
+    regex: ^(\w*(Dao|Api|Service|Database)|SharedPreferences|DataStore|FirebaseFirestore|LocationManager|Retrofit|OkHttpClient)\b
+    stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+    stopBy: end
+---
+id: kt-uistate-android-type
+language: kotlin
+severity: warning
+message: '[ARCH-52]UiState 夾帶 Context/View/Drawable 等 Android UI 型別,會洩漏畫面也無法測試;改成帶 @DrawableRes/@StringRes id 或純資料,由 UI 解析'
+rule:
+  any:
+    - kind: class_parameter
+    - kind: property_declaration
+  has:
+    kind: user_type
+    regex: ^(Context|Activity|Fragment|View|\w*View|Drawable|Bitmap|Resources|Typeface|Dialog)$
+    stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      kind: type_identifier
+      regex: (State|UiModel)$
+    stopBy: end
+---
+id: kt-hilt-retain-instance
+language: kotlin
+severity: error
+message: '[ARCH-57]Hilt 的 Fragment 設 retainInstance,Hilt 會在執行期拋例外;改成不設 retainInstance,要跨設定變更留住的資料放 ViewModel'
+rule:
+  any:
+    - pattern: retainInstance = true
+    - pattern: this.retainInstance = true
+    - pattern: setRetainInstance(true)
+  inside:
+    kind: class_declaration
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@AndroidEntryPoint
+    stopBy: end
+---
+id: kt-hiltworker-missing-assisted
+language: kotlin
+severity: error
+message: '[ARCH-61]@HiltWorker 的 Context 與 WorkerParameters 沒加 @Assisted,建不出 Worker;改用 @AssistedInject,這兩個參數加 @Assisted'
+rule:
+  kind: class_parameter
+  has:
+    kind: user_type
+    regex: ^(Context|WorkerParameters)$
+  not:
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@Assisted$
+  inside:
+    kind: class_declaration
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@HiltWorker$
+    stopBy: end
+---
+id: kt-compose-lifecycle-observer-leak
+language: kotlin
+severity: error
+message: '[ARCH-35]@Composable 裡 addObserver 沒在 onDispose 移除,離開畫面會洩漏、事件重複;改用 DisposableEffect(owner) { add; onDispose { remove } }'
+rule:
+  pattern: $L.addObserver($$$)
+  inside:
+    kind: function_declaration
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@Composable
+    stopBy: end
+  not:
+    inside:
+      any:
+        - pattern: DisposableEffect($$$) { $$$ }
+        - pattern: DisposableEffect { $$$ }
+      has:
+        pattern: $R.removeObserver($$$)
+        stopBy: end
+      stopBy: end
+---
+id: kt-viewmodel-depends-on-api-dao
+language: kotlin
+severity: warning
+message: '[ARCH-49]ViewModel 直接依賴 Retrofit 介面或 DAO,資料來源細節漏到 UI 層、也不好測;改成依賴 Repository'
+rule:
+  kind: class_parameter
+  regex: ':\s*\w*(Api|ApiService|Dao|Retrofit)\b'
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+      stopBy: end
+    stopBy: end
+---
+id: kt-viewmodel-knows-retrofit
+language: kotlin
+severity: warning
+message: '[ARCH-67]ViewModel 認得 retrofit2/okhttp3 的例外或型別,網路細節漏到 UI 層;改成資料層 catch 後改拋自訂例外,ViewModel 只處理自訂例外'
+rule:
+  any:
+    - kind: import_header
+      regex: \b(retrofit2|okhttp3)\.
+      inside:
+        kind: source_file
+        has:
+          kind: class_declaration
+          has:
+            kind: delegation_specifier
+            regex: ViewModel\(
+            stopBy: end
+          stopBy: end
+        stopBy: end
+    - kind: catch_block
+      has:
+        kind: user_type
+        regex: ^(retrofit2\.)?HttpException$
+      inside:
+        kind: class_declaration
+        has:
+          kind: delegation_specifier
+          regex: ViewModel\(
+          stopBy: end
+        stopBy: end
+---
+id: kt-fragment-binding-not-cleared
+language: kotlin
+severity: warning
+message: '[ARCH-15]Fragment 的 _binding 沒在 onDestroyView 清掉,整個畫面樹洩漏;改成 onDestroyView() 裡 _binding = null'
+rule:
+  kind: class_declaration
+  has:
+    kind: class_body
+    has:
+      kind: property_declaration
+      regex: \b_binding\b
+  not:
+    has:
+      pattern: _binding = null
+      stopBy: end
+---
+id: kt-fragment-observe-this
+language: kotlin
+severity: error
+message: '[ARCH-16]Fragment 裡 observe(this) 會在畫面重建後重複收到通知;改用 viewLifecycleOwner'
+rule:
+  any:
+    - pattern: $L.observe(this, $$$)
+    - pattern: $L.observe(this) { $$$ }
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: Fragment\b
+      stopBy: end
+    stopBy: end
+---
+id: kt-launch-when-deprecated
+language: kotlin
+severity: warning
+message: '[ARCH-17]launchWhenX 已淘汰(暫停而不取消,上游照跑);改用 repeatOnLifecycle'
+rule:
+  any:
+    - pattern: $S.launchWhenCreated { $$$ }
+    - pattern: $S.launchWhenStarted { $$$ }
+    - pattern: $S.launchWhenResumed { $$$ }
+    - pattern: launchWhenCreated { $$$ }
+    - pattern: launchWhenStarted { $$$ }
+    - pattern: launchWhenResumed { $$$ }
+---
+id: kt-viewmodel-holds-ui-context
+language: kotlin
+severity: error
+message: '[ARCH-4]ViewModel 拿 Activity/Context/View/Fragment 會洩漏整個畫面;改成在 UI 層解析資源,或注入 Application 層依賴(@ApplicationContext)'
+rule:
+  kind: class_parameter
+  regex: ':\s*(Context|Activity|AppCompatActivity|ComponentActivity|FragmentActivity|View|Fragment)\b'
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: \bViewModel\(
+      stopBy: end
+    stopBy: end
+---
+# P13(畫面物件)
+id: kt-static-holds-ui
+language: kotlin
+severity: error
+message: '[ARCH-44]object/companion 的屬性存 Activity/Fragment/View,單例活多久它就洩漏多久;改成只存 context.applicationContext,不保存 UI 物件'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: property_declaration
+  has:
+    kind: variable_declaration
+    regex: ':\s*(\w*Activity|\w*Fragment|\w*View)\??$'
+  inside:
+    kind: class_body
+    inside:
+      any:
+        - kind: companion_object
+        - kind: object_declaration
+---
+# P15
+id: kt-register-pair-missing
+language: kotlin
+severity: warning
+message: '[ARCH-35]類別註冊了接收器/監聽器卻沒有對應的解除,洩漏又耗電;改用 DefaultLifecycleObserver 在對稱的生命週期回呼解除'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - all:
+        - any:
+            - pattern: registerReceiver($$$)
+            - pattern: $C.registerReceiver($$$)
+        - inside:
+            kind: class_declaration
+            not:
+              has:
+                regex: 'unregisterReceiver\('
+                stopBy: end
+            stopBy: end
+    - all:
+        - pattern: $C.registerListener($$$)
+        - inside:
+            kind: class_declaration
+            not:
+              has:
+                regex: 'unregisterListener\('
+                stopBy: end
+            stopBy: end
+    - all:
+        - pattern: $C.registerNetworkCallback($$$)
+        - inside:
+            kind: class_declaration
+            not:
+              has:
+                regex: 'unregisterNetworkCallback\('
+                stopBy: end
+            stopBy: end
+    - all:
+        - pattern: $C.registerOnSharedPreferenceChangeListener($$$)
+        - inside:
+            kind: class_declaration
+            not:
+              has:
+                regex: 'unregisterOnSharedPreferenceChangeListener\('
+                stopBy: end
+            stopBy: end

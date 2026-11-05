@@ -1,0 +1,114 @@
+id: kt-dto-bang
+language: kotlin
+severity: hint
+message: '[PERF-28]對 API 回來的欄位用 !!,伺服器少給一個欄位就崩潰;改成在 DTO 對應層給預設值或回報錯誤'
+rule:
+  kind: postfix_expression
+  regex: (?i)^\w*(dto|response|resp)\.[\w.]*!!$
+  not:
+    regex: \.body(\(\))?!!$
+---
+# P5
+id: kt-ui-blocking-wait
+language: kotlin
+severity: hint
+message: '[PERF-5]UI 類別裡同步等待(future.get、latch.await、thread.join、Tasks.await)會卡主執行緒造成 ANR;改用回呼或協程的 suspend 版本'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - pattern: $X.get($T, $U)
+    - pattern: $X.await($T, $U)
+    - pattern: Tasks.await($$$)
+    - pattern: $FUT.get()
+    - pattern: $X.await()
+    - pattern: $X.join()
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: '\b(\w*Activity|\w*Fragment|BroadcastReceiver|\w*View)\b'
+    stopBy: end
+  not:
+    inside:
+      any:
+        - pattern: launch { $$$ }
+        - pattern: launch($$$) { $$$ }
+        - pattern: $S.launch { $$$ }
+        - pattern: $S.launch($$$) { $$$ }
+        - pattern: $S.async { $$$ }
+        - pattern: withContext($$$) { $$$ }
+        - pattern: thread { $$$ }
+        - pattern: thread($$$) { $$$ }
+        - pattern: $E.execute { $$$ }
+        - pattern: $E.submit { $$$ }
+        - kind: function_declaration
+          has:
+            kind: modifiers
+            regex: '\bsuspend\b'
+      stopBy: end
+constraints:
+  FUT:
+    regex: '(?i)future$'
+---
+# P42
+id: kt-string-concat-in-loop
+language: kotlin
+severity: hint
+message: '[PERF-23]迴圈裡用 + 拼字串每圈都配置新字串(O(n²));改用 buildString { } / StringBuilder / joinToString'
+rule:
+  any:
+    - kind: assignment
+      regex: '^[\w.]+\s*\+='
+      any:
+        - has:
+            kind: string_literal
+        - has:
+            kind: additive_expression
+            has:
+              kind: string_literal
+              stopBy:
+                not:
+                  kind: additive_expression
+    - kind: assignment
+      any:
+        - pattern: $S = $S + $X
+        - pattern: $S = $S + $X + $Y
+        - pattern: $S = $S + $X + $Y + $Z
+      has:
+        kind: additive_expression
+        has:
+          kind: string_literal
+          stopBy:
+            not:
+              kind: additive_expression
+  inside:
+    any:
+      - kind: for_statement
+      - kind: while_statement
+      - kind: do_while_statement
+      - pattern: $C.forEach { $$$ }
+      - pattern: $C.forEachIndexed { $$$ }
+      - pattern: repeat($$$) { $$$ }
+    stopBy: end
+---
+# P52
+id: kt-lazy-thread-mode-none
+language: kotlin
+severity: hint
+message: '[PERF-33]lazy(NONE) 沒有鎖,多執行緒同時讀會初始化兩次或拿到半成品;多執行緒改用預設的 by lazy { }'
+rule:
+  kind: call_expression
+  regex: '^lazy\(\s*(mode\s*=\s*)?(LazyThreadSafetyMode\.)?NONE\s*\)'
+---
+# P35
+id: kt-bitmap-decode-without-options
+language: kotlin
+severity: hint
+message: '[PERF-16]BitmapFactory 不帶 Options 會用原尺寸解碼,大圖直接 OOM;改用 Options 設 inSampleSize,或 Coil/Glide/ImageDecoder 指定尺寸'
+rule:
+  any:
+    - pattern: BitmapFactory.decodeFile($P)
+    - pattern: BitmapFactory.decodeResource($R, $I)
+    - pattern: BitmapFactory.decodeStream($S)
+    - pattern: BitmapFactory.decodeByteArray($B, $O, $L)
+    - pattern: BitmapFactory.decodeFileDescriptor($F)

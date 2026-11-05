@@ -1,0 +1,592 @@
+id: kt-json-default-instance
+language: kotlin
+severity: warning
+message: '[DATA-70]預設的 Json 沒開 ignoreUnknownKeys,伺服器多加一個欄位就解析失敗;改用共用的 Json { ignoreUnknownKeys = true } 實例'
+rule:
+  any:
+    - pattern: Json.decodeFromString($$$)
+    - pattern: Json.decodeFromString<$T>($$$)
+    - pattern: Json.decodeFromJsonElement($$$)
+    - pattern: Json.decodeFromJsonElement<$T>($$$)
+    - pattern: Json.decodeFromStream($$$)
+    - pattern: Json.decodeFromStream<$T>($$$)
+    - pattern: Json.Default.decodeFromString($$$)
+    - pattern: Json.Default.decodeFromString<$T>($$$)
+---
+id: kt-json-config-per-call
+language: kotlin
+severity: warning
+message: '[DATA-71]函式裡每次都新建 Json { … },每次重建序列化器快取;改成頂層 val json = Json { … } 重用'
+rule:
+  any:
+    - pattern: Json { $$$ }
+    - pattern: Json($$$) { $$$ }
+  inside:
+    kind: function_body
+    stopBy: end
+  not:
+    inside:
+      kind: function_declaration
+      any:
+        - has:
+            kind: modifiers
+            has:
+              kind: annotation
+              regex: ^@(Provides|Singleton|Bean)\b
+              stopBy: end
+        - has:
+            kind: user_type
+            regex: ^Json$
+      stopBy: end
+ignores:
+  - '**/src/test*/**'
+  - '**/src/androidTest*/**'
+  - '**/src/testFixtures/**'
+---
+id: kt-gson-nonnull-field
+language: kotlin
+severity: warning
+message: '[DATA-75]Gson 不認 Kotlin 的非空與預設值,JSON 缺欄位時非空欄位會拿到 null、之後 NPE;改用 Moshi codegen 或 kotlinx.serialization,或把欄位宣告成可空'
+rule:
+  kind: class_parameter
+  has:
+    kind: modifiers
+    has:
+      kind: annotation
+      regex: ^@SerializedName\b
+    stopBy: end
+  not:
+    any:
+      - has:
+          kind: nullable_type
+      - has:
+          kind: user_type
+          regex: ^(Int|Long|Short|Byte|Boolean|Double|Float|Char)$
+---
+id: kt-datastore-read-no-catch
+language: kotlin
+severity: warning
+message: '[DATA-10]讀 DataStore 沒處理 IOException,檔案讀壞時整條 Flow 直接炸;改用 .catch 遇 IOException 就 emit(emptyPreferences())'
+rule:
+  any:
+    - pattern: $D.data.map { $$$ }
+    - pattern: $D.data.map($$$)
+    - pattern: $D.data.first()
+    - pattern: $D.data.firstOrNull()
+    - pattern: $D.data.collect { $$$ }
+    - pattern: $D.data.onEach { $$$ }
+  regex: (?i)^[\w.]*?(datastore|prefs|preferences)\.data\.
+  not:
+    any:
+      - inside:
+          any:
+            - pattern: $Y.catch { $$$ }
+            - pattern: $Y.catch($$$)
+          stopBy: end
+      - inside:
+          kind: try_expression
+          stopBy: end
+---
+id: kt-datastore-serializer-no-corruption
+language: kotlin
+severity: error
+message: '[DATA-11]readFrom 沒把解析錯誤包成 CorruptionException,檔案壞了每次讀都炸;改成丟 CorruptionException,並設 ReplaceFileCorruptionHandler'
+rule:
+  kind: function_declaration
+  has:
+    kind: simple_identifier
+    regex: ^readFrom$
+  inside:
+    any:
+      - kind: class_declaration
+      - kind: object_declaration
+    has:
+      kind: delegation_specifier
+      regex: \bSerializer<
+    stopBy: end
+  not:
+    any:
+      - has:
+          kind: try_expression
+          stopBy: end
+      - has:
+          regex: CorruptionException
+          stopBy: end
+---
+id: kt-room-writes-no-transaction
+language: kotlin
+severity: warning
+message: '[DATA-14]先刪再寫的多個 DAO 呼叫沒包交易,中途失敗或被讀到時資料會是一半;改用 @Transaction 方法或 db.withTransaction { }'
+rule:
+  kind: call_expression
+  regex: (?i)^[\w.]*?dao\w*(\(\))?\.(insert|upsert|update)\w*\(
+  inside:
+    kind: statements
+  follows:
+    regex: (?i)dao\w*(\(\))?\.(delete|clear|remove)\w*\(
+    stopBy: end
+  not:
+    any:
+      - inside:
+          any:
+            - pattern: $D.withTransaction { $$$ }
+            - pattern: withTransaction { $$$ }
+            - pattern: $D.runInTransaction { $$$ }
+            - pattern: $D.runInTransaction($$$)
+          stopBy: end
+      - inside:
+          kind: function_declaration
+          has:
+            kind: modifiers
+            has:
+              kind: annotation
+              regex: ^@Transaction\b
+              stopBy: end
+          stopBy: end
+---
+id: kt-room-destructive-migration
+language: kotlin
+severity: warning
+message: '[DATA-16]fallbackToDestructiveMigration 進了正式版,schema 一改就清空使用者資料;改用 Migration 或 AutoMigration,並用 MigrationTestHelper 測'
+rule:
+  pattern: $B.fallbackToDestructiveMigration($$$)
+  not:
+    inside:
+      kind: if_expression
+      has:
+        pattern: BuildConfig.DEBUG
+        stopBy: end
+      stopBy: end
+---
+id: kt-room-export-schema-false
+language: kotlin
+severity: warning
+message: '[DATA-18]exportSchema = false 讓 schema json 不進版控,之後寫不了也測不了 Migration;改成設 room.schemaLocation 並提交 schema json'
+rule:
+  kind: annotation
+  regex: (?s)^@Database\b.*exportSchema\s*=\s*false
+---
+id: kt-room-builder-not-singleton
+language: kotlin
+severity: warning
+message: '[DATA-20]在一般函式裡呼叫 Room.databaseBuilder,每次都開一個新的資料庫實例,失效通知與連線各自為政;改成單例(companion 的 getInstance)或 DI 提供'
+rule:
+  any:
+    - pattern: Room.databaseBuilder($$$)
+    - pattern: Room.databaseBuilder<$T>($$$)
+  inside:
+    kind: function_body
+    stopBy: end
+  not:
+    any:
+      - inside:
+          kind: companion_object
+          stopBy: end
+      - inside:
+          kind: object_declaration
+          stopBy: end
+      - inside:
+          kind: function_declaration
+          any:
+            - has:
+                kind: modifiers
+                has:
+                  kind: annotation
+                  regex: ^@(Provides|Singleton|Bean)\b
+                  stopBy: end
+            - has:
+                kind: user_type
+                regex: (Database|Db)$
+          stopBy: end
+---
+id: kt-sql-string-concat
+language: kotlin
+severity: error
+message: '[DATA-24]SQL 字串直接串接或內插變數,有注入風險;改用 ? 綁定參數(rawQuery(sql, arrayOf(x)) / SimpleSQLiteQuery(sql, arrayOf(x)))'
+utils:
+  tainted-sql:
+    any:
+      - has:
+          kind: interpolated_identifier
+          not:
+            regex: ^[A-Z][A-Z0-9_]*$
+          stopBy: end
+      - has:
+          kind: interpolated_expression
+          not:
+            regex: ^([A-Z]\w*\.)*[A-Z][A-Z0-9_]*$
+          stopBy: end
+      - has:
+          kind: additive_expression
+          regex: '''\s*"\s*\+|\+\s*"\s*'''
+          stopBy: end
+      - kind: additive_expression
+        regex: '''\s*"\s*\+|\+\s*"\s*'''
+rule:
+  any:
+    - pattern: $D.rawQuery($$$)
+    - pattern: $D.execSQL($$$)
+    - pattern: $D.query($$$)
+    - pattern: SimpleSQLiteQuery($$$)
+  has:
+    kind: call_suffix
+    has:
+      kind: value_arguments
+      has:
+        kind: value_argument
+        nthChild: 1
+        matches: tainted-sql
+---
+id: kt-external-storage-hardcoded
+language: kotlin
+severity: warning
+message: '[DATA-27]外部儲存路徑寫死或用了已淘汰的 Environment API,Android 10 以後分區儲存下會拿不到權限;改用 context.getExternalFilesDir(...) 或 MediaStore'
+rule:
+  any:
+    - pattern: Environment.getExternalStorageDirectory()
+    - pattern: Environment.getExternalStoragePublicDirectory($$$)
+    - kind: string_literal
+      regex: ^"/(sdcard|mnt/sdcard|storage/emulated)\b
+---
+id: kt-setforeground-no-try
+language: kotlin
+severity: warning
+message: '[DATA-35]App 在背景時 setForeground 可能丟 ForegroundServiceStartNotAllowedException;改用 try/catch IllegalStateException 包住'
+rule:
+  any:
+    - pattern: setForeground($$$)
+    - pattern: setForegroundAsync($$$)
+    - pattern: $W.setForeground($$$)
+    - pattern: $W.setForegroundAsync($$$)
+  not:
+    inside:
+      any:
+        - kind: try_expression
+        - pattern: runCatching { $$$ }
+      stopBy: end
+---
+id: kt-worker-retry-unbounded
+language: kotlin
+severity: warning
+message: '[DATA-36]Result.retry() 沒看 runAttemptCount,永久錯誤也一直重試;改成 runAttemptCount >= MAX 就回 Result.failure(),IOException 才 retry'
+rule:
+  any:
+    - pattern: Result.retry()
+    - pattern: ListenableWorker.Result.retry()
+  not:
+    inside:
+      any:
+        - kind: if_expression
+        - kind: when_expression
+      has:
+        regex: runAttemptCount
+        stopBy: end
+      stopBy: end
+---
+id: kt-worker-swallow-success
+language: kotlin
+severity: warning
+message: '[DATA-37]doWork 的 catch 吞掉錯誤,最後照樣回 success;改成依錯誤型別回 Result.failure() 或 Result.retry()'
+rule:
+  kind: catch_block
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^doWork$
+    stopBy: end
+  any:
+    - has:
+        kind: user_type
+        regex: ^(kotlin\.)?(Exception|Throwable)$
+    - regex: \{\s*\}$
+  not:
+    has:
+      any:
+        - regex: Result\.(failure|retry)
+        - kind: jump_expression
+          regex: ^throw\b
+      stopBy: end
+---
+id: kt-worker-fire-and-forget
+language: kotlin
+severity: error
+message: '[DATA-41]doWork 裡另開協程或執行緒就 return,WorkManager 以為做完了、行程隨時被收掉;改用 CoroutineWorker,在 suspend doWork 裡做完再回 success'
+rule:
+  any:
+    - pattern: $S.launch { $$$ }
+    - pattern: $S.launch($$$) { $$$ }
+    - pattern: $S.async { $$$ }
+    - pattern: $S.async($$$) { $$$ }
+    - pattern: thread { $$$ }
+    - pattern: thread($$$) { $$$ }
+    - pattern: Thread($$$).start()
+    - pattern: $E.execute { $$$ }
+    - pattern: $E.submit { $$$ }
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^doWork$
+    stopBy: end
+---
+id: kt-worker-runblocking
+language: kotlin
+severity: warning
+message: '[DATA-42]doWork 裡用 runBlocking 跑 suspend,佔住執行緒且停止訊號傳不進去;改成繼承 CoroutineWorker,override suspend fun doWork()'
+rule:
+  any:
+    - pattern: runBlocking { $$$ }
+    - pattern: runBlocking($$$) { $$$ }
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^doWork$
+    stopBy: end
+---
+id: kt-receiver-long-work
+language: kotlin
+severity: warning
+message: '[DATA-52]onReceive 開協程/執行緒或做網路就返回,接收器結束後行程隨時被殺;改成短工作 goAsync() 並在 finally finish(),長工作交 WorkManager'
+rule:
+  any:
+    - pattern: $S.launch { $$$ }
+    - pattern: $S.launch($$$) { $$$ }
+    - pattern: thread { $$$ }
+    - pattern: thread($$$) { $$$ }
+    - pattern: runBlocking { $$$ }
+    - pattern: runBlocking($$$) { $$$ }
+    - pattern: $C.newCall($$$).execute()
+    - pattern: $C.newCall($$$).enqueue($$$)
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^onReceive$
+    stopBy: end
+  not:
+    inside:
+      kind: function_declaration
+      has:
+        pattern: goAsync()
+        stopBy: end
+      stopBy: end
+---
+id: kt-paging-refreshkey-null
+language: kotlin
+severity: warning
+message: '[DATA-53]getRefreshKey 直接回 null,重新整理時跳回第一頁、位置跑掉;改用 state.anchorPosition 搭配 closestPageToPosition 算出 key'
+rule:
+  kind: function_declaration
+  all:
+    - has:
+        kind: simple_identifier
+        regex: ^getRefreshKey$
+    - has:
+        kind: function_body
+        regex: ^(=\s*null|\{\s*(//[^\n]*\s*)?return\s+null\s*\})$
+---
+id: kt-paging-load-no-error
+language: kotlin
+severity: warning
+message: '[DATA-54]PagingSource.load 沒回 LoadResult.Error,例外直接拋出讓 App 崩潰;改成 catch IOException 與 HttpException 回 LoadResult.Error(e)'
+rule:
+  kind: function_declaration
+  has:
+    kind: simple_identifier
+    regex: ^load$
+  inside:
+    any:
+      - kind: class_declaration
+      - kind: object_declaration
+    has:
+      kind: delegation_specifier
+      regex: \bPagingSource<
+    stopBy: end
+  not:
+    has:
+      regex: LoadResult\.Error
+      stopBy: end
+---
+id: kt-paging-source-reused
+language: kotlin
+severity: error
+message: '[DATA-55]pagingSourceFactory 回傳同一個 PagingSource,失效後重用會丟 IllegalStateException;改成 Pager(config) { MySource(api) },每次回新實例'
+rule:
+  any:
+    - pattern: Pager($$$A, pagingSourceFactory = { $S })
+    - pattern: Pager($$$A) { $S }
+constraints:
+  S:
+    regex: ^\w+$
+---
+id: kt-paging-flow-not-cached
+language: kotlin
+severity: warning
+message: '[DATA-56]Pager.flow 在 Composable/getter 裡建或沒 cachedIn,每次重組或轉螢幕都重載;改成在 ViewModel 屬性建一次並 .cachedIn(viewModelScope)'
+utils:
+  pager-flow:
+    any:
+      - pattern: Pager($$$).flow
+      - pattern: Pager($$$) { $$$ }.flow
+rule:
+  matches: pager-flow
+  any:
+    - inside:
+        kind: function_declaration
+        has:
+          kind: modifiers
+          has:
+            kind: annotation
+            regex: ^@Composable\b
+            stopBy: end
+        stopBy: end
+    - inside:
+        kind: getter
+        stopBy: end
+    - all:
+        - inside:
+            kind: class_declaration
+            has:
+              kind: delegation_specifier
+              regex: ViewModel\(
+              stopBy: end
+            stopBy: end
+        - not:
+            inside:
+              pattern: $X.cachedIn($$$)
+              stopBy: end
+---
+id: kt-paging-transform-after-cachedin
+language: kotlin
+severity: warning
+message: '[DATA-57]cachedIn 之後才 map/filter,轉換結果沒被快取、每次收集都重算;改成先 map 再 cachedIn(viewModelScope)'
+rule:
+  any:
+    - pattern: $F.cachedIn($S).map { $$$ }
+    - pattern: $F.cachedIn($S).map($$$)
+    - pattern: $F.cachedIn($S).mapLatest { $$$ }
+    - pattern: $F.cachedIn($S).filter { $$$ }
+---
+id: kt-remote-mediator-no-transaction
+language: kotlin
+severity: warning
+message: '[DATA-59]RemoteMediator 清表、寫資料、寫 remote key 分開呼叫,中途失敗會對不上;改用 db.withTransaction { } 包起來'
+rule:
+  kind: call_expression
+  regex: (?i)^[\w.]*?dao\w*(\(\))?\.(insert|upsert|delete|clear|remove)\w*\(
+  inside:
+    any:
+      - kind: class_declaration
+      - kind: object_declaration
+    has:
+      kind: delegation_specifier
+      regex: \bRemoteMediator<
+    stopBy: end
+  not:
+    inside:
+      any:
+        - pattern: $D.withTransaction { $$$ }
+        - pattern: withTransaction { $$$ }
+        - pattern: $D.runInTransaction { $$$ }
+        - pattern: $D.runInTransaction($$$)
+      stopBy: end
+---
+id: kt-room-main-thread-queries
+language: kotlin
+severity: error
+message: '[DATA-1]allowMainThreadQueries 讓資料庫查詢跑在主執行緒,卡頓甚至 ANR;改成拿掉,DAO 改 suspend fun 或回傳 Flow'
+rule:
+  pattern: $B.allowMainThreadQueries()
+---
+id: kt-room-dao-blocking
+language: kotlin
+severity: warning
+message: '[DATA-2]Room 的 DAO 函式是阻塞的,呼叫端在主執行緒會擋住或丟例外;改成 suspend fun 或回傳 Flow'
+rule:
+  kind: function_declaration
+  has:
+    kind: modifiers
+    has:
+      kind: annotation
+      regex: ^@(Query|Insert|Update|Delete|Upsert|RawQuery|Transaction)\b
+    stopBy: end
+  not:
+    any:
+      - has:
+          kind: modifiers
+          has:
+            regex: ^suspend$
+            stopBy: end
+      - has:
+          kind: user_type
+          regex: ^(Flow|LiveData|PagingSource|Observable|Flowable|Single|Maybe|Completable|ListenableFuture)\b
+      - has:
+          kind: modifiers
+          has:
+            regex: ^(abstract|open)$
+            stopBy: end
+          not:
+            has:
+              kind: annotation
+              stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@Dao\b
+      stopBy: end
+    stopBy: end
+---
+id: kt-datastore-not-singleton
+language: kotlin
+severity: error
+message: '[DATA-3]DataStore 只能在頂層建一次(同一個檔兩個實例會在執行期丟例外);改成檔案頂層的 by preferencesDataStore 或注入單例'
+rule:
+  any:
+    - pattern: PreferenceDataStoreFactory.create($$$)
+    - pattern: PreferenceDataStoreFactory.create { $$$ }
+    - pattern: PreferenceDataStoreFactory.create($$$) { $$$ }
+    - pattern: DataStoreFactory.create { $$$ }
+    - pattern: DataStoreFactory.create($$$) { $$$ }
+    - pattern: DataStoreFactory.create($$$)
+    - pattern: preferencesDataStore($$$)
+    - pattern: dataStore($$$)
+  inside:
+    any:
+      - kind: class_body
+      - kind: function_body
+    stopBy: end
+  not:
+    inside:
+      kind: object_declaration
+      stopBy: end
+---
+# P6
+id: kt-onreceive-async-without-goasync
+language: kotlin
+severity: warning
+message: '[DATA-52]onReceive 起協程或執行緒卻沒 goAsync,一回傳程序就可能被殺、工作做一半;改用 goAsync() 並在 finally finish(),長工作交 WorkManager'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: function_declaration
+  has:
+    kind: simple_identifier
+    regex: '^onReceive$'
+  all:
+    - has:
+        any:
+          - pattern: launch { $$$ }
+          - pattern: $S.launch { $$$ }
+          - pattern: $S.launch($$$) { $$$ }
+          - pattern: $S.async { $$$ }
+          - pattern: thread { $$$ }
+          - pattern: thread($$$) { $$$ }
+        stopBy: end
+    - not:
+        has:
+          pattern: goAsync()
+          stopBy: end

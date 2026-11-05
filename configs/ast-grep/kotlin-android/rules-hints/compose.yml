@@ -1,0 +1,171 @@
+id: kt-viewmodel-in-reusable-composable
+language: kotlin
+severity: hint
+message: '[UI-10]可重用元件(列表項、卡片)裡取 ViewModel,元件跟 ViewModel 綁死、預覽與重用都壞;改成只有畫面層取 VM,元件用提升的狀態與回呼'
+rule:
+  any:
+    - pattern: viewModel()
+    - pattern: viewModel<$T>()
+    - pattern: viewModel($$$)
+    - pattern: hiltViewModel()
+    - pattern: hiltViewModel<$T>()
+    - pattern: hiltViewModel($$$)
+  inside:
+    kind: function_body
+    stopBy: end
+    inside:
+      kind: function_declaration
+      has:
+        kind: modifiers
+        has:
+          kind: annotation
+          regex: ^@Composable$
+      not:
+        has:
+          kind: simple_identifier
+          regex: (Screen|Route|Destination|Page|NavHost|NavGraph|Graph|App)$
+  not:
+    inside:
+      any:
+        - pattern: composable($$$) { $$$ }
+        - pattern: composable<$R> { $$$ }
+        - pattern: composable<$R>($$$) { $$$ }
+      stopBy: end
+---
+id: kt-compose-state-copies-param
+language: kotlin
+severity: hint
+message: '[UI-29]remember { mutableStateOf(參數) } 只在第一次組建拷貝,父層傳新值會被忽略;改成直接用參數,或 remember(param) { mutableStateOf(param) }'
+rule:
+  any:
+    - pattern: remember { mutableStateOf($X) }
+    - pattern: rememberSaveable { mutableStateOf($X) }
+    - pattern: remember { mutableIntStateOf($X) }
+    - pattern: remember { mutableFloatStateOf($X) }
+    - pattern: remember { mutableLongStateOf($X) }
+  inside:
+    kind: function_declaration
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@Composable
+    stopBy: end
+constraints:
+  X:
+    kind: value_argument
+    has:
+      any:
+        - kind: simple_identifier
+        - kind: navigation_expression
+    regex: ^[a-z]
+---
+id: kt-compose-lazy-hetero-no-contenttype
+language: kotlin
+severity: hint
+message: '[UI-48]items 內容用 when 分型別卻沒給 contentType,不同型別的項目互相回收、複用差;改用 items(mixed, key = { it.id }, contentType = { it::class })'
+rule:
+  any:
+    - pattern: items($$$) { $$$ }
+    - pattern: itemsIndexed($$$) { $$$ }
+  has:
+    kind: when_entry
+    has:
+      kind: when_condition
+      has:
+        kind: type_test
+    stopBy: end
+  not:
+    has:
+      kind: value_arguments
+      has:
+        kind: value_argument
+        has:
+          kind: simple_identifier
+          regex: ^contentType$
+      stopBy: end
+---
+id: kt-compose-lazy-item-multiple-elements
+language: kotlin
+severity: hint
+message: '[UI-53]一個 item { } 裡並排好幾個元件,捲動索引與回收都以整包計;改成拆開 item { A() }; item { B() }'
+rule:
+  any:
+    - pattern: item { $$$ }
+    - pattern: item($$$) { $$$ }
+  has:
+    kind: call_suffix
+    has:
+      kind: annotated_lambda
+      has:
+        kind: lambda_literal
+        has:
+          kind: statements
+          all:
+            - has:
+                kind: call_expression
+                nthChild: 1
+                regex: ^[A-Z]
+                not:
+                  regex: '^(Spacer|Divider|HorizontalDivider|VerticalDivider)\b'
+            - has:
+                kind: call_expression
+                nthChild: 2
+                regex: ^[A-Z]
+                not:
+                  regex: '^(Spacer|Divider|HorizontalDivider|VerticalDivider)\b'
+---
+id: kt-compose-local-fake-default
+language: kotlin
+severity: hint
+message: '[UI-76]compositionLocalOf 的預設值直接 new 物件,忘了 provide 會靜默用到假物件;改成 compositionLocalOf<Foo> { error("No Foo provided") }'
+rule:
+  any:
+    - pattern: compositionLocalOf { $C($$$) }
+    - pattern: compositionLocalOf<$T> { $C($$$) }
+    - pattern: staticCompositionLocalOf { $C($$$) }
+    - pattern: staticCompositionLocalOf<$T> { $C($$$) }
+constraints:
+  C:
+    regex: ^[A-Z]\w*$
+    not:
+      regex: ^(Color|Dp|TextUnit|TextStyle|Offset|Size|DpSize|PaddingValues|IntOffset|IntSize|Shapes|Typography|ColorScheme|RoundedCornerShape|Locale)$
+---
+id: kt-compose-clickable-no-role
+language: kotlin
+severity: hint
+message: '[UI-107]非按鈕元件用 clickable 沒給 role/onClickLabel,讀屏不知道能操作、按了會怎樣;改用 clickable(role = Role.Button, onClickLabel = …) { }'
+rule:
+  any:
+    - pattern: $M.clickable { $$$ }
+    - pattern: $M.clickable($$$) { $$$ }
+    - pattern: $M.clickable($$$)
+  not:
+    has:
+      kind: call_suffix
+      has:
+        kind: value_arguments
+        has:
+          kind: value_argument
+          has:
+            kind: simple_identifier
+            regex: ^(role|onClickLabel)$
+---
+id: kt-compose-preview-no-theme
+language: kotlin
+severity: hint
+message: '[UI-103]預覽沒包 App 的主題,看到的顏色字型跟實機不同;改成 AppTheme { Screen() }'
+rule:
+  kind: function_declaration
+  has:
+    kind: modifiers
+    has:
+      kind: annotation
+      regex: ^@Preview
+  not:
+    has:
+      kind: function_body
+      has:
+        kind: simple_identifier
+        regex: Theme$
+        stopBy: end

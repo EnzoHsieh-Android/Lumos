@@ -1,0 +1,367 @@
+id: kt-single-live-event
+language: kotlin
+severity: warning
+message: '[STATE-11]SingleLiveEvent/Event 包裝類在觀察者不活躍時吞事件、多個觀察者只有一個收到;改成 uiState 的欄位,UI 處理完回報 ViewModel 清掉'
+rule:
+  any:
+    - kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: ^MutableLiveData<
+    - kind: class_declaration
+      has:
+        kind: type_identifier
+        regex: ^(Single)?LiveEvent$
+    - pattern: $E.getContentIfNotHandled()
+    - pattern: $E?.getContentIfNotHandled()
+---
+id: kt-vm-fun-returns-stream
+language: kotlin
+severity: warning
+message: '[STATE-3]ViewModel 公開函式每呼叫一次就回傳新的 LiveData/Flow,重建後又重打資料層;改成輸入放 MutableStateFlow,輸出用 flatMapLatest/switchMap 推導成屬性'
+rule:
+  kind: function_declaration
+  has:
+    kind: user_type
+    regex: ^(Mutable)?(LiveData|Flow|StateFlow|SharedFlow)\b
+  not:
+    has:
+      kind: modifiers
+      has:
+        regex: ^(private|protected|override)$
+        stopBy: end
+  inside:
+    kind: class_body
+    inside:
+      kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: ViewModel\(
+---
+id: kt-statein-in-getter
+language: kotlin
+severity: warning
+message: '[STATE-3]stateIn/shareIn 寫在 get() 裡,每讀一次就建一條新熱流;改成 val uiState = ….stateIn(...) 屬性,只建一次'
+rule:
+  any:
+    - pattern: $E.stateIn($$$)
+    - pattern: $E.shareIn($$$)
+  inside:
+    kind: getter
+    stopBy: end
+---
+id: kt-mutate-state-nested-collection
+language: kotlin
+severity: error
+message: '[STATE-7]直接改狀態裡某個欄位集合的內容,參照沒變不會發新值;改用 update { it.copy(items = it.items + x) }'
+rule:
+  any:
+    - pattern: $X.value.$F.add($$$)
+    - pattern: $X.value.$F.addAll($$$)
+    - pattern: $X.value.$F.remove($$$)
+    - pattern: $X.value.$F.removeAt($$$)
+    - pattern: $X.value.$F.removeAll($$$)
+    - pattern: $X.value.$F.clear()
+    - pattern: $X.value.$F.put($$$)
+    - pattern: $X.value.$F[$K] = $V
+---
+id: kt-livedata-setvalue-background
+language: kotlin
+severity: error
+message: '[STATE-16]背景執行緒呼叫 LiveData.setValue 會拋 IllegalStateException;背景改用 postValue,或切回主執行緒再 setValue'
+rule:
+  pattern: $L.setValue($$$)
+  inside:
+    any:
+      - pattern: withContext(Dispatchers.IO) { $$$ }
+      - pattern: withContext(Dispatchers.Default) { $$$ }
+      - pattern: $S.launch(Dispatchers.IO) { $$$ }
+      - pattern: $S.launch(Dispatchers.Default) { $$$ }
+      - pattern: launch(Dispatchers.IO) { $$$ }
+      - pattern: launch(Dispatchers.Default) { $$$ }
+      - pattern: thread { $$$ }
+      - pattern: thread($$$) { $$$ }
+    stopBy: end
+  not:
+    inside:
+      any:
+        - pattern: withContext(Dispatchers.Main) { $$$ }
+        - pattern: withContext(Dispatchers.Main.immediate) { $$$ }
+      stopBy: end
+---
+id: kt-savedstate-bang
+language: kotlin
+severity: warning
+message: '[STATE-21]從 SavedStateHandle 取參數硬寫 !!,key 打錯或參數改名就崩潰;改用 savedStateHandle.toRoute<Route>() 或集中常數加預設值'
+rule:
+  any:
+    - pattern: $H.get<$T>($K)!!
+    - pattern: $H.get($K)!!
+    - pattern: $H[$K]!!
+constraints:
+  H:
+    regex: (?i)(savedState|handle)
+---
+id: kt-persistable-bundle
+language: kotlin
+severity: warning
+message: '[STATE-24]用 PersistableBundle 版 onSaveInstanceState 存 UI 狀態,只在 persistableMode 呼叫;改用 Bundle 版或 SavedStateHandle'
+rule:
+  kind: parameter
+  has:
+    kind: user_type
+    regex: ^PersistableBundle$
+    stopBy: end
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^(onSaveInstanceState|onRestoreInstanceState|onCreate|onPostCreate)$
+    stopBy: end
+---
+id: kt-state-value-property-assign
+language: kotlin
+severity: error
+message: '[STATE-7]改 state.value 裡物件的欄位,參照沒變不會發新值,畫面不更新;改成不可變 data class 並用 update { it.copy(…) }'
+rule:
+  kind: assignment
+  regex: '^\s*[\w?!]+(\.[\w?!]+)*\.value(\?|!!)?\.[\w.?!\[\]]+\s*(\+|-|\*)?='
+---
+id: kt-statein-lazily-in-viewmodel
+language: kotlin
+severity: warning
+message: '[STATE-4]ViewModel 裡 stateIn/shareIn 用 Lazily,首次訂閱後上游永遠不停,背景照樣耗電耗流量;改用 SharingStarted.WhileSubscribed(5_000)'
+rule:
+  kind: value_argument
+  regex: '^(started\s*=\s*)?(SharingStarted\.)?Lazily$'
+  inside:
+    kind: value_arguments
+    inside:
+      kind: call_suffix
+      inside:
+        kind: call_expression
+        regex: '\.(stateIn|shareIn)\s*\('
+        inside:
+          stopBy: end
+          kind: class_declaration
+          has:
+            stopBy: end
+            kind: delegation_specifier
+            regex: \bViewModel\b
+---
+id: kt-mutate-state-collection
+language: kotlin
+severity: error
+message: '[STATE-7]直接改狀態裡集合的內容,參照沒變不會發新值;改用 update { it + x } 或換新集合'
+rule:
+  any:
+    - pattern: $X.value.add($$$)
+    - pattern: $X.value.addAll($$$)
+    - pattern: $X.value.remove($$$)
+    - pattern: $X.value.removeAt($$$)
+    - pattern: $X.value.removeAll($$$)
+    - pattern: $X.value.clear()
+    - pattern: $X.value.put($$$)
+    - pattern: $X.value.putAll($$$)
+    - pattern: $X.value[$K] = $V
+---
+id: kt-init-collect-into-state
+language: kotlin
+severity: warning
+message: '[STATE-8]init 裡 collect 再倒進另一個狀態,上游永不停止、不跟訂閱者生命週期;改用 stateIn(viewModelScope, WhileSubscribed(5_000), 初值)'
+rule:
+  any:
+    - pattern: $F.collect { $$$ }
+    - pattern: $F.collectLatest { $$$ }
+  has:
+    any:
+      - pattern: $S.value = $V
+      - pattern: $S.update { $$$ }
+      - pattern: $S.emit($$$)
+    stopBy: end
+  inside:
+    kind: anonymous_initializer
+    stopBy: end
+---
+id: kt-public-mutable-holder
+language: kotlin
+severity: warning
+message: '[STATE-2]公開可變狀態容器(MutableLiveData/MutableSharedFlow/mutableStateOf/Channel 等),外部可竄改狀態;改成 private 的 _state,對外唯讀暴露'
+rule:
+  kind: property_declaration
+  has:
+    any:
+      - pattern: MutableLiveData($$$)
+      - pattern: MutableLiveData<$T>($$$)
+      - pattern: MutableSharedFlow($$$)
+      - pattern: MutableSharedFlow<$T>($$$)
+      - pattern: mutableStateListOf($$$)
+      - pattern: mutableStateListOf<$T>($$$)
+      - pattern: mutableStateMapOf($$$)
+      - pattern: mutableStateMapOf<$K, $V>($$$)
+      - pattern: Channel($$$)
+      - pattern: Channel<$T>($$$)
+    stopBy: end
+  inside:
+    kind: class_body
+  not:
+    any:
+      - has:
+          kind: modifiers
+          has:
+            regex: ^(private|protected)$
+            stopBy: end
+      - has:
+          kind: property_delegate
+---
+# P18
+id: kt-lifecycle-collect-without-repeat
+language: kotlin
+severity: warning
+message: '[STATE-5]lifecycleScope.launch 直接 collect,到背景仍在收;改用 repeatOnLifecycle(STARTED),Compose 用 collectAsStateWithLifecycle()'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - all:
+        - any:
+            - pattern: $F.collect { $$$ }
+            - pattern: $F.collect($$$)
+            - pattern: $F.collectLatest { $$$ }
+            - pattern: $F.collectLatest($$$)
+        - inside:
+            any:
+              - pattern: lifecycleScope.launch { $$$ }
+              - pattern: lifecycleScope.launch($$$) { $$$ }
+              - pattern: $O.lifecycleScope.launch { $$$ }
+              - pattern: $O.lifecycleScope.launch($$$) { $$$ }
+            stopBy: end
+        - not:
+            inside:
+              any:
+                - pattern: repeatOnLifecycle($$$) { $$$ }
+                - pattern: $L.repeatOnLifecycle($$$) { $$$ }
+              stopBy: end
+        - not:
+            regex: 'flowWithLifecycle'
+    - all:
+        - any:
+            - pattern: $F.launchIn(lifecycleScope)
+            - pattern: $F.launchIn($O.lifecycleScope)
+        - not:
+            regex: 'flowWithLifecycle'
+---
+id: kt-nonatomic-state-update
+language: kotlin
+severity: warning
+message: '[STATE-1]讀改寫 state 不是原子操作,並行時後寫的蓋掉先寫的;改用 _uiState.update { it.copy(…) }'
+rule:
+  any:
+    - pattern: $X.value = $X.value.copy($$$A)
+    - pattern: $X.value = $X.value + $Y
+  not:
+    inside:
+      stopBy: end
+      kind: lambda_literal
+      inside:
+        kind: value_argument
+        has:
+          kind: simple_identifier
+          regex: ^on[A-Z]\w*$
+        inside:
+          stopBy: end
+          kind: function_declaration
+          has:
+            kind: modifiers
+            has:
+              kind: annotation
+              regex: ^@Composable
+---
+id: kt-statein-in-function
+language: kotlin
+severity: warning
+message: '[STATE-3]stateIn/shareIn 寫在函式裡,每呼叫一次建一條新熱流;改成宣告成屬性 val uiState = ….stateIn(…)'
+rule:
+  any:
+    - pattern: $E.stateIn($$$)
+    - pattern: $E.shareIn($$$)
+  inside:
+    kind: function_declaration
+    stopBy: end
+---
+id: kt-statein-eagerly
+language: kotlin
+severity: warning
+message: '[STATE-4]stateIn 用 Eagerly 沒寫理由,上游一開始就永遠收集、背景照樣耗電;改用 SharingStarted.WhileSubscribed(5_000),真要 Eagerly 附一行理由'
+rule:
+  pattern: SharingStarted.Eagerly
+---
+id: kt-public-mutable-stateflow
+language: kotlin
+severity: warning
+message: '[STATE-2]公開 MutableStateFlow,外部可竄改狀態;改成 private val _state,對外 _state.asStateFlow()'
+rule:
+  kind: property_declaration
+  has:
+    pattern: MutableStateFlow($$$)
+    stopBy: end
+    not:
+      inside:
+        kind: navigation_expression
+        regex: \.asStateFlow$
+  not:
+    has:
+      kind: modifiers
+      has:
+        regex: ^private$
+        stopBy: end
+ignores:
+  - '**/src/test*/**'
+  - '**/src/androidTest*/**'
+  - '**/src/testFixtures/**'
+  - '**/*-test/src/**'
+  - '**/*testing/src/**'
+---
+id: kt-statein-lazily-or-no-timeout
+language: kotlin
+severity: warning
+message: '[STATE-4]ViewModel 的 uiState 用 Lazily 或沒給延遲的 WhileSubscribed(),上游永不停或轉螢幕就重啟;改用 SharingStarted.WhileSubscribed(5_000)'
+rule:
+  any:
+    - pattern: SharingStarted.Lazily
+    - pattern: SharingStarted.WhileSubscribed()
+    - pattern: WhileSubscribed()
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+    stopBy: end
+---
+id: kt-repository-exposes-mutable-or-dto
+language: kotlin
+severity: warning
+message: '[STATE-2]Repository 對外公開可變容器或網路 DTO,外部可竄改狀態(DTO 另見 ARCH-53);改成 private 的 _state,對外 asStateFlow() 唯讀暴露'
+rule:
+  any:
+    - kind: function_declaration
+      has:
+        kind: user_type
+        regex: (^Mutable(StateFlow|SharedFlow|LiveData|List|Map|Set)\b|\w*Dto\b)
+    - kind: property_declaration
+      has:
+        kind: variable_declaration
+        has:
+          kind: user_type
+          regex: (^Mutable(StateFlow|SharedFlow|LiveData|List|Map|Set)\b|\w*Dto\b)
+  inside:
+    kind: class_declaration
+    has:
+      kind: type_identifier
+      regex: Repository(Impl)?$
+    stopBy: end
+  not:
+    has:
+      kind: modifiers
+      has:
+        regex: ^private$
+        stopBy: end

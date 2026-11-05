@@ -1,0 +1,241 @@
+id: kt-compose-globalscope-in-composable
+language: kotlin
+severity: error
+message: "[API-9]@Composable 裡用 GlobalScope 或自建 CoroutineScope 跑協程,離開畫面不會取消;改用 rememberCoroutineScope() 或 LaunchedEffect"
+rule:
+  any:
+    - kind: simple_identifier
+      regex: ^GlobalScope$
+    - pattern: CoroutineScope($$$)
+    - pattern: MainScope()
+  inside:
+    kind: function_declaration
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ^@Composable
+    stopBy: end
+---
+id: kt-okhttp-client-per-call
+language: kotlin
+severity: warning
+message: '[API-16]函式裡每次都新建 OkHttpClient,連線池與執行緒池跟著重複建立;改成全程式共用一個實例,要不同設定用 client.newBuilder() 衍生'
+rule:
+  any:
+    - pattern: OkHttpClient()
+    - pattern: OkHttpClient.Builder()
+  inside:
+    kind: function_body
+    stopBy: end
+  not:
+    inside:
+      kind: function_declaration
+      any:
+        - has:
+            kind: modifiers
+            has:
+              kind: annotation
+              regex: ^@(Provides|Singleton|Bean)\b
+              stopBy: end
+        - has:
+            kind: user_type
+            regex: ^OkHttpClient$
+      stopBy: end
+---
+id: kt-okhttp-response-not-closed
+language: kotlin
+severity: warning
+message: '[API-17]execute() 拿到的 Response 沒關閉會洩漏連線、耗盡連線池;改用 client.newCall(req).execute().use { … }'
+rule:
+  pattern: $C.newCall($$$).execute()
+  not:
+    any:
+      - inside:
+          any:
+            - pattern: $X.use { $$$ }
+            - pattern: $X?.use { $$$ }
+          stopBy: end
+      - inside:
+          kind: function_body
+          has:
+            any:
+              - pattern: $Y.use { $$$ }
+              - pattern: $Y?.use { $$$ }
+              - pattern: $Y.close()
+              - pattern: $Y?.close()
+            stopBy: end
+          stopBy: end
+---
+id: kt-http-logging-body-unguarded
+language: kotlin
+severity: warning
+message: '[API-19]BODY 日誌沒用 DEBUG 包住,正式版把權杖與個資寫進 logcat;改成 if (BuildConfig.DEBUG) Level.BODY else Level.NONE,並 redactHeader'
+rule:
+  any:
+    - pattern: HttpLoggingInterceptor.Level.BODY
+    - pattern: Level.BODY
+  not:
+    inside:
+      kind: if_expression
+      has:
+        pattern: BuildConfig.DEBUG
+        stopBy: end
+      stopBy: end
+---
+id: kt-catch-only-httpexception
+language: kotlin
+severity: warning
+message: '[API-24]只接 HttpException,斷網(IOException)與解析錯誤會直接往上炸;改成 HttpException、IOException、SerializationException 分開 catch 並轉成網域錯誤'
+rule:
+  kind: try_expression
+  has:
+    kind: catch_block
+    has:
+      kind: user_type
+      regex: ^(retrofit2\.)?HttpException$
+  not:
+    has:
+      kind: catch_block
+      has:
+        kind: user_type
+        regex: ^(java\.io\.)?(IOException|Exception|Throwable)$
+---
+id: kt-retrofit-converter-order
+language: kotlin
+severity: error
+message: '[API-27]通用 JSON converter 排在 Scalars/Protobuf 前面,會先吃掉 String 等型別;改成先加 ScalarsConverterFactory/protobuf,通用 JSON 放最後'
+rule:
+  pattern: $B.addConverterFactory($$$)
+  all:
+    - has:
+        kind: call_suffix
+        has:
+          regex: (Scalars|Proto|Protobuf|Wire)ConverterFactory
+          stopBy: end
+    - has:
+        kind: navigation_expression
+        has:
+          kind: call_suffix
+          regex: (Gson|Moshi|Jackson)ConverterFactory|asConverterFactory
+          stopBy: end
+---
+id: kt-ktor-client-per-call
+language: kotlin
+severity: warning
+message: '[API-29]函式裡新建 Ktor HttpClient 而且沒關,引擎的執行緒與連線跟著洩漏;改用單例,生命週期結束時 close(),臨時用就 HttpClient().use { }'
+rule:
+  any:
+    - pattern: HttpClient($$$)
+    - pattern: HttpClient($$$) { $$$ }
+    - pattern: HttpClient { $$$ }
+  inside:
+    kind: function_body
+    stopBy: end
+  not:
+    any:
+      - inside:
+          pattern: $X.use { $$$ }
+          stopBy: end
+      - inside:
+          kind: function_declaration
+          any:
+            - has:
+                kind: modifiers
+                has:
+                  kind: annotation
+                  regex: ^@(Provides|Singleton|Bean)\b
+                  stopBy: end
+            - has:
+                kind: user_type
+                regex: ^HttpClient$
+          stopBy: end
+---
+id: kt-unmanaged-scope-launch
+language: kotlin
+severity: warning
+message: '[API-9]GlobalScope 或臨時 CoroutineScope(...) 開的協程沒人管,取消不了也接不到錯誤;改用 viewModelScope,要活過畫面用注入的 applicationScope'
+rule:
+  any:
+    - pattern: GlobalScope.launch { $$$ }
+    - pattern: GlobalScope.launch($$$) { $$$ }
+    - pattern: GlobalScope.async { $$$ }
+    - pattern: GlobalScope.async($$$) { $$$ }
+    - pattern: CoroutineScope($$$).launch { $$$ }
+    - pattern: CoroutineScope($$$).launch($$$) { $$$ }
+    - pattern: CoroutineScope($$$).async { $$$ }
+    - pattern: CoroutineScope($$$).async($$$) { $$$ }
+  not:
+    inside:
+      kind: function_declaration
+      has:
+        pattern: goAsync()
+        stopBy: end
+      stopBy: end
+---
+id: kt-async-await-immediately
+language: kotlin
+severity: warning
+message: '[API-14]async 立刻 await 等於沒並行;改成直接呼叫 f(),要換執行緒就改用 withContext(io) { f() }'
+rule:
+  any:
+    - pattern: async { $$$ }.await()
+    - pattern: async($$$) { $$$ }.await()
+    - pattern: $S.async { $$$ }.await()
+    - pattern: $S.async($$$) { $$$ }.await()
+---
+id: kt-retrofit-body-bang
+language: kotlin
+severity: error
+message: '[API-15]response.body()!! 沒先看 isSuccessful,伺服器回 4xx/5xx 時會崩潰;改成先判 isSuccessful,失敗就 throw HttpException(response)'
+rule:
+  pattern: $R.body()!!
+  not:
+    inside:
+      kind: if_expression
+      regex: '^if\s*\(\s*[\w.?]*\.isSuccessful\s*\)'
+      stopBy: end
+---
+id: kt-callbackflow-no-awaitclose
+language: kotlin
+severity: error
+message: '[API-12]callbackFlow 沒以 awaitClose 結尾,監聽器沒移除而洩漏、執行期丟 IllegalStateException;改成以 awaitClose { api.unregister(l) } 結尾'
+rule:
+  pattern: callbackFlow { $$$ }
+  not:
+    has:
+      kind: call_expression
+      regex: ^awaitClose
+      stopBy: end
+---
+id: kt-suspendcoroutine
+language: kotlin
+severity: warning
+message: '[API-11]suspendCoroutine 取消不了,畫面關了請求還在跑、資源洩漏;改用 suspendCancellableCoroutine 並在 invokeOnCancellation 裡取消請求'
+rule:
+  any:
+    - pattern: suspendCoroutine { $$$ }
+    - pattern: suspendCoroutine<$T> { $$$ }
+    - all:
+        - any:
+            - pattern: suspendCancellableCoroutine { $$$ }
+            - pattern: suspendCancellableCoroutine<$T> { $$$ }
+        - not:
+            has:
+              kind: call_expression
+              regex: invokeOnCancellation
+              stopBy: end
+---
+id: kt-okhttp-no-calltimeout
+language: kotlin
+severity: warning
+message: '[API-5]OkHttpClient 沒設 callTimeout(預設 0=沒上限),請求可能永遠等、畫面卡在載入;改用 callTimeout(30, TimeUnit.SECONDS)'
+rule:
+  pattern: $B.build()
+  has:
+    pattern: OkHttpClient.Builder()
+    stopBy: end
+  not:
+    has:
+      pattern: $X.callTimeout($$$)
+      stopBy: end

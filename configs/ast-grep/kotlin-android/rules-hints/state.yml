@@ -1,0 +1,90 @@
+id: kt-value-assign-background
+language: kotlin
+severity: hint
+message: '[STATE-16]背景執行緒對 .value 賦值;若它是 LiveData 會拋 IllegalStateException,改用 postValue 或切回主執行緒(StateFlow 可忽略)'
+rule:
+  pattern: $L.value = $V
+  inside:
+    any:
+      - pattern: withContext(Dispatchers.IO) { $$$ }
+      - pattern: withContext(Dispatchers.Default) { $$$ }
+      - pattern: $S.launch(Dispatchers.IO) { $$$ }
+      - pattern: $S.launch(Dispatchers.Default) { $$$ }
+      - pattern: launch(Dispatchers.IO) { $$$ }
+      - pattern: launch(Dispatchers.Default) { $$$ }
+      - pattern: thread { $$$ }
+      - pattern: thread($$$) { $$$ }
+    stopBy: end
+  not:
+    inside:
+      any:
+        - pattern: withContext(Dispatchers.Main) { $$$ }
+        - pattern: withContext(Dispatchers.Main.immediate) { $$$ }
+      stopBy: end
+# 名字以 Flow 結尾的(_stateFlow、uiStateFlow)照命名慣例是 StateFlow,從任何執行緒賦值都安全,不提示
+constraints:
+  L:
+    not:
+      regex: '(?i)flow$'
+---
+id: kt-saved-state-large
+language: kotlin
+severity: hint
+message: '[STATE-18]往 saved state 塞清單、Serializable 或 Bitmap,超過 Binder 上限會 TransactionTooLargeException;改成只存 id 或查詢字串,用 id 重載'
+rule:
+  any:
+    - pattern: $B.putParcelableArrayList($$$)
+    - pattern: $B.putSerializable($$$)
+    - pattern: $B.putParcelable($K, $BMP)
+    - pattern: $H[$K] = ArrayList($$$)
+    - pattern: $H[$K] = $L.toList()
+    - pattern: $H[$K] = $L.toTypedArray()
+constraints:
+  BMP:
+    regex: (?i)bitmap|image|photo
+  H:
+    regex: (?i)(savedState|handle)
+---
+id: kt-nav-route-object-arg
+language: kotlin
+severity: hint
+message: '[STATE-19]導航路由直接帶整個物件,大小不受控、還原時可能已過期;改成只傳 id,目的地從 repository 載入'
+rule:
+  kind: class_parameter
+  not:
+    has:
+      kind: user_type
+      regex: ^(String|Int|Long|Boolean|Float|Double|Short|Byte|Char|UInt|ULong)$
+      stopBy: end
+  inside:
+    kind: class_declaration
+    all:
+      - has:
+          kind: modifiers
+          has:
+            kind: annotation
+            regex: ^@Serializable
+      - has:
+          kind: type_identifier
+          regex: (Route|Destination|Screen|Args)$
+    stopBy: end
+---
+id: kt-remember-text-not-saveable
+language: kotlin
+severity: hint
+message: '[STATE-27]文字輸入的狀態用 remember 會在轉螢幕或程序被殺後消失;使用者輸入改用 rememberSaveable'
+rule:
+  any:
+    - pattern: remember { mutableStateOf("") }
+    - pattern: remember { mutableStateOf(TextFieldValue($$$)) }
+---
+id: kt-whilesubscribed-no-timeout
+language: kotlin
+severity: hint
+message: '[STATE-9]WhileSubscribed() 沒給停止延遲,轉螢幕時收集者短暫歸零就停掉上游又重啟;改用 SharingStarted.WhileSubscribed(5_000)'
+rule:
+  any:
+    - pattern: SharingStarted.WhileSubscribed()
+    - pattern: WhileSubscribed()
+    - pattern: SharingStarted.WhileSubscribed(replayExpirationMillis = $R)
+    - pattern: WhileSubscribed(replayExpirationMillis = $R)
