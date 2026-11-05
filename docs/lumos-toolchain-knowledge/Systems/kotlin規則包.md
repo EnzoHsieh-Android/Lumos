@@ -43,7 +43,7 @@ verified_by:
 
 ## 怎麼改
 
-1. 改規則或加規則:同時補樣本,跑 `python3 configs/ast-grep/kotlin-android/check.py --sg <ast-grep>` 到 0 個問題。
+1. 改規則或加規則:同時補樣本,跑 `python3 configs/ast-grep/kotlin-android/check.py --sg <ast-grep>` 到 0 個問題。新規則一律先放語意覆核級(`rules-review/`),對真專案量過誤報低於一成才升到會擋的 `rules/`;審查中被點出形狀分不出對錯的,不再放寬形狀,直接留在覆核級(代碼審跑滿回顧,卷證 `governance/review-reports/code-kotlin規則包/cap-retro.json`:三輪的最大宗都是放寬形狀又帶出新誤報)。
 2. 改型錄:跑 `--catalog-only`;新寫的標準寫法一定附真的打開讀過的官方網址,查不到就在名稱標「(出處不全)」。
 3. 決策表觸發字不准收常用字(停用字表在 check.py 的 `STOP_TRIGGERS`);第二批改檔前推列與第三批情境題靠它不吵。情境沒有不常見的字面特徵時觸發字寫「(無)」(全形半形括號都認),`dt_triggers` 解析成空清單、不出情境段;「(無)」跟別的觸發字並列、或格子空白,自我檢查都會報。第二、三批讀觸發字要走 `dt_triggers`,不要自己拆格子,不然「(無)」會被當成一個字去比對。
 4. 有消費專案或範例專案時,拿會擋的規則對整份原始碼跑一次,逐條判真假;誤報超過一成照上面那條規則處理,結果寫回型錄的「實測狀態」欄。

@@ -125244,7 +125244,7 @@ def t_lint_block_message_shows_fix():
     check("擋下訊息印出修法(訊息全文)", msg in buf.getvalue(), buf.getvalue()[:300])
 
 
-def t_kotlin_rulepack_samples_not_scanned_as_code():
+def t_rulepack_sample_dir_skips_risk_scan():
     """規則包樣本故意埋壞寫法:風險分級、棧別題、新增告警閘(共用 _stack_changed_ok)都不把它們當產品碼,
     每支檔有家也用本 repo 設定的 node_home.ignore 略過;一般 kt 檔與消費專案裡長得像的路徑照掃。"""
     import json as _j

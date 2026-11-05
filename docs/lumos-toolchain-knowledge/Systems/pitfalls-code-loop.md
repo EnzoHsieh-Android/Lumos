@@ -82,7 +82,7 @@ summary: |-
   REVISIT:2026-12-15 下次發版在 CHANGELOG 寫明 governance/redbase/ 是新的簿記資料夾:還沒 lumos update 的協作者沒有這項豁免,別人提交的紅燈版夾在他的留痕與推送之間會被判留痕過時([[Projects/規格閘紅燈測試快照_計劃]])
   WHY:新增告警閘多認 `.lumos/config.json` 的 `lint_new.include_test_paths`(副檔名清單,預設空=照舊排除測試路徑),只接在閘的呼叫處、不改測試路徑樣式本身 [出處:2026-11-05 [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5] [因:Kotlin 的 src/test/ 被排除,型錄 TEST 主題規則永遠不響] [test:t_lint_new_include_test_paths]
   WHY:新增告警閘的擋下訊息每條告警印到 120 字(跟解析 SARIF 截斷同數) [出處:2026-11-05 同計劃 S5 實跑] [因:規則包訊息的修法在後半段,原本截 70 字把修法切掉] [test:t_lint_block_message_shows_fix]
-  WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_kotlin_rulepack_samples_not_scanned_as_code]
+  WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1
