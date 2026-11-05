@@ -1,6 +1,6 @@
 # AGENTS.md（Codex 等外部 agent 的入口指路檔）
 
-<!-- LUMOS:GRAPH-DISCIPLINE:START v1.4 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
+<!-- LUMOS:GRAPH-DISCIPLINE:START v1.5 — 自動注入/更新,勿手改本區塊;改範本 scripts/templates/graph-discipline.md -->
 ## 程式碼為主，知識圖譜補脈絡（必讀）
 
 **程式碼是「實作現在長怎樣」的最終依據（不是所有現況：部署設定、feature flag、資料庫值、生產行為都不在裡面）；`docs/lumos-toolchain-knowledge/` 補的是程式碼產生不出的脈絡**：當初為什麼這樣決定、程式看不到的限制、踩過的坑、哪些方案被否決、未來什麼條件才能改。讀者主要是下一個 session 的 AI（偶爾是人），寫的時候以「沒有脈絡的人讀得懂」為準。
@@ -88,7 +88,7 @@
 |---|---|
 | 理解既有系統、排查、對外支援、查 DB、寫筆記、巡檢、綁合約測試（含 ★INVARIANT★ / ★IRREVERSIBLE★ / ★CHECKPOINT★ 與 [test:] [audit:] [kill:] [rollback:] [guard:] 的寫法、`lumos spec-trace`、`lumos signoff`） | **`lumos-project-notes`** |
 | 跨專案共用的業務規則（升格核心、`core_refs`、偏離） | **`lumos-core-knowledge`** |
-| 設計 spec 寫完:先 `lumos spec-gate <計劃>`(判門+條款句式、綁定、回退節、跑紅綠):風險低過了直接實作不派審(不做清單略過了危險詞時,推送前要一筆輕量設計審;輕量審抓到 major 就改開 -std 完整設計審、過處置閘);風險高再進實作前的審查迴圈 | **`lumos-design-loop`** |
+| 設計 spec 寫完:先 `lumos spec-gate <計劃>`(判門+條款句式、綁定、回退節、跑紅綠):風險低過了直接實作不派審(不做清單略過了危險詞時,推送前要一筆輕量設計審;輕量審抓到 major 就改開 -std 完整設計審、過處置閘);風險高再進實作前的審查迴圈(風險高計劃要寫預期值表並簽核 `lumos signoff <計劃> --expected`,推送前會查) | **`lumos-design-loop`** |
 | 分支要推之前，`pitfalls` 出 `tier: high` 的代碼審 | **`lumos-code-loop`** |
 
 > lumos 在 `scripts/lumos`（python3 零依賴）；`lumos-*` skill 唯一來源是 `lumos-toolchain` repo，每台機器裝一次：`git clone <lumos-toolchain> ~/harness/lumos-toolchain && ~/harness/lumos-toolchain/install.sh`。專案自己的技術棧 skill 慣例列在本檔末尾〈架構參考 Skills〉一節；沒有那一節就是還沒有。

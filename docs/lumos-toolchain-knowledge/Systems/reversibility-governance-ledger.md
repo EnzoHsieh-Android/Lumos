@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-11-03
+updated: 2026-11-04
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/c7db662e286f
 tags:
@@ -51,6 +51,7 @@ summary: |-
   WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]code-loop 放行事件的 nodes 只在 pass 驗過判定或輕量放行時帶編號;舊事件、skip、沒有審查帳的專案都是空的,統計要限 kind=passed [出處:本案設計審 r2] [因:nodes 非空要能代表驗過] [不選:skip 也收 --loop]
   WHY:[2026-11-02 [[Projects/留痕驗過審查_計劃]]]pass 被擋落 `kind=blocked`、note 開頭 `pass-refused:`,會併進「硬擋 code-loop」計數且 gov 去重會折同提交連續擋下,要數就讀原檔 [出處:本案設計審 r1] [因:撤除條件要資料] [不選:新開事件種類]
   WHY:[2026-11-03 [[Projects/紅燈版實跑三缺口_計劃]]]doctor 另起一段唸「治理帳被 git 忽略」(附蓋到的規則與自查指令),不併進本機帳那段,判法 _gov_ledger_ignored 放在帳檔這一區、比對工具與規格閘也呼叫它 [出處:mOrangePos 考場實跑] [因:治理帳被忽略讓 CI 讀不到代碼審留痕與表態、乾淨 clone 推送前找不到規格閘留痕,今天都靜默失效;本機帳那段的提示是叫人補忽略規則,方向相反] [不選:只在紅燈版提醒裡講(不用紅燈版的專案看不到)] [test:t_doctor_gov_ledger_ignored]
+  WHY:預期值表簽核寫 signoff 閘 kind expected-signed(plan、table_sha、row_count、origin=human|ai、who、token),推送前沒簽寫 spec-gate 閘 kind expected-unsigned(hard);gov --stats 的「預期值表簽核:人 N 次、AI M 次」讀前者、「因為沒簽被擋」讀後者;plan、table_sha、origin 進欄位型別表 [出處:[[Projects/高風險測試證據加嚴_計劃]] 做法 4、5、d10] [因:不設金鑰、不防代簽,人抽離多少只能從統計看] [test:t_push_check_expected_ai_signed]
 decisions:
   - content: 可逆性走自己的平行函式 extract_reversibility,完全不碰 extract_contracts 管線
     id: d1

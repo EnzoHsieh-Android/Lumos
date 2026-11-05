@@ -1,0 +1,1672 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 77234d701..5178465a4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -13764,29 +13764,32 @@ def _clause_grammar(body):
+             if any(rest.startswith(w) for w in hard) or (rest.startswith("在") and _CLAUSE_SEP_RE.search(head)):
+                 return False, "trigger", "複合觸發(一條只准一個觸發子句,拆成兩條)"
+         if _shall_index(rest) < 0:   # 缺應也要跳複合詞(代碼審 v2 r2:「系統反應」不算有應)
+             return False, "trigger", "回應段缺「應」(主體 應 回應)"
+         return True, "trigger", ""
+     if _shall_index(b) < 0:
+         return False, "unconditional", "缺「應」(主體 應 回應)"
+     return True, "unconditional", ""
+ 
+ 
+-def _h2_section_lines(text, h2_re):
++def _h2_section_lines(text, h2_re, heads=None):
+     """某個二級節(標題行符合 h2_re)裡的可見行 [(行號, 原始行)]:到下一個 `## `/`# ` 為止(三級標題不切節、標題行本身不算);
+     fence 內不算;沒有那一節回 None。回退節與實務隱患節共用(雙向門放行_計劃 S9;r4 架構對齊席:找節邏輯不准長出第三套)。
+-    只認 ATX 標題(代碼審 r2:自建 Setext 判定是第二套標題邏輯,還有 fence 錯配與 H1/H2 不分兩個洞)。"""
++    只認 ATX 標題(代碼審 r2:自建 Setext 判定是第二套標題邏輯,還有 fence 錯配與 H1/H2 不分兩個洞)。
++    heads:給一個清單就把每個符合的標題行號附進去(預期值表要判「節出現兩次」;高風險測試證據加嚴_計劃 做法 3)。"""
+     out, found, inside = [], False, False
+     for no, ln in _visible_lines(_note_lines(text)):
+         if ln.startswith("#"):
+             if h2_re.match(ln.strip()):
+                 found, inside = True, True
++                if heads is not None:
++                    heads.append(no)
+             elif ln.startswith("## ") or ln.startswith("# "):
+                 inside = False
+             continue
+         if inside:
+             out.append((no, ln))
+     return out if found else None
+ 
+ 
+ def _rollback_section_chars(text):
+     """「## 回退」節(二級標題精確,允許尾端括號;到下一個 ## 為止;fence 內不算;引用塊行不算)裡的實字數;沒有節回 None。"""
+@@ -13849,39 +13852,40 @@ def _rec_plan_risk(d):
+ def _note_plan_risk_flag(note):
+     """作者自己標的計劃風險:開頭欄位 plan_risk: high(舊寫法 door: one-way 相容);只能往嚴標,low 沒意義。"""
+     if note is None:
+         return None
+     v = note.fields.get("plan_risk")
+     if v is None:
+         v = note.fields.get("door")
+     return _plan_risk_norm(v) if v is not None else None
+ 
+ 
+-_DOOR_RULE_VERSION = 15   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 實務隱患節標題 / 合約行掃描 / 不做節(_NOGO_H2_RE、_NOGO_ITEM_RE、_NOGO_NEG_PREFIX_RE、_NOGO_NEG_HEADER_RE、_NOGO_CLAUSE_SPLIT_RE、_NOGO_REF_TOKEN_RE、_NOGO_SKIP_LOGIC_VERSION)/ 關鍵字掃描判法(_DOOR_SCAN_LOGIC_VERSION;原始碼由 t_door_scan_logic_version_pin 釘)任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅);2=2026-10-14 起跳過「## 不做」標題下緊接的清單;3=同日不做清單逐句判放寬(剝粗體、括號不切、也不做/亦不算否定);4=同日關鍵字掃描連程式碼圍欄一起看;5=同日關鍵字掃描看每一行原文(圍欄標記行、行內程式碼也算);6=同日關鍵字比對前先 NFKC、去零寬字元(全形英數、夾零寬的危險詞也算);7=同日去掉的隱形字元擴成 Unicode 類別 Cf 全部、變體選擇符、U+034F 與韓文填充字(代碼審 r8 G2;_strip_zero_width);8=同日看不見改按類別判(Cc 空白除外、Cf、Cn、Co、Cs、Mn、Me、預設可忽略全表、空白圖形;代碼審 r9 G1;_is_invisible);9=同日逐行只在 \n、\r\n、\r 切(_note_lines)、isspace 為真卻看不見的控制字元與行段分隔也拿掉、比對前壓連續空白並拿掉漢字之間的空白(代碼審 r10 G1;既有 879 篇筆記沒有一篇含那幾個切行字元,行號與條款指紋不變);10=同日畫面上是空白或換行的控制字元與行段分隔換成空格再比(另比一份刪掉的寫法)、連字號變體換成 -、英文詞界改成前後不是英文字母或數字、LINE 與推送之間空格可有可無(代碼審 r11 G1);11=同日跟派工鏡頭分支合併:看不見的判定建在共用底座 _invisible_base 上,像空白的字取兩邊聯集(多 U+303F、U+13441、U+13442 三個在比對時拿掉);12=2026-10-15 含看不見字的行另比一份看不見的全換空格、連字號變體改成 Pd 全部加 U+2043、U+2212(_DOOR_SCAN_LOGIC_VERSION 8;補審 規格閘第十一輪修補 資安 F5、正確性 F2);13=2026-10-15 詞表的 PAYMENT 緊接時間或重試參數尾碼不算(只會少命中;[[Projects/前端知識與風險詞_計劃]] d1;同日一度加的「送出」前端語境例外已撤回);14=2026-10-20 只因不做清單判法版本升 6(原始碼改了、判法不變,判高判低都跟 13 一樣);15=2026-10-20 跟 security list 分支合併:不做清單判法版本再升 7(兩邊各改一處原始碼,判法不變);2-10 沒上過主線
++_DOOR_RULE_VERSION = 16   # 門判定規則版本:PITFALL_CLASSES / 已排除行規則 / 實務隱患節標題 / 合約行掃描 / 不做節(_NOGO_H2_RE、_NOGO_ITEM_RE、_NOGO_NEG_PREFIX_RE、_NOGO_NEG_HEADER_RE、_NOGO_CLAUSE_SPLIT_RE、_NOGO_REF_TOKEN_RE、_NOGO_SKIP_LOGIC_VERSION)/ 關鍵字掃描判法(_DOOR_SCAN_LOGIC_VERSION;原始碼由 t_door_scan_logic_version_pin 釘)任一支改了就 +1(t_door_rule_version_pin 釘住輸入指紋,改了沒 bump 會紅);2=2026-10-14 起跳過「## 不做」標題下緊接的清單;3=同日不做清單逐句判放寬(剝粗體、括號不切、也不做/亦不算否定);4=同日關鍵字掃描連程式碼圍欄一起看;5=同日關鍵字掃描看每一行原文(圍欄標記行、行內程式碼也算);6=同日關鍵字比對前先 NFKC、去零寬字元(全形英數、夾零寬的危險詞也算);7=同日去掉的隱形字元擴成 Unicode 類別 Cf 全部、變體選擇符、U+034F 與韓文填充字(代碼審 r8 G2;_strip_zero_width);8=同日看不見改按類別判(Cc 空白除外、Cf、Cn、Co、Cs、Mn、Me、預設可忽略全表、空白圖形;代碼審 r9 G1;_is_invisible);9=同日逐行只在 \n、\r\n、\r 切(_note_lines)、isspace 為真卻看不見的控制字元與行段分隔也拿掉、比對前壓連續空白並拿掉漢字之間的空白(代碼審 r10 G1;既有 879 篇筆記沒有一篇含那幾個切行字元,行號與條款指紋不變);10=同日畫面上是空白或換行的控制字元與行段分隔換成空格再比(另比一份刪掉的寫法)、連字號變體換成 -、英文詞界改成前後不是英文字母或數字、LINE 與推送之間空格可有可無(代碼審 r11 G1);11=同日跟派工鏡頭分支合併:看不見的判定建在共用底座 _invisible_base 上,像空白的字取兩邊聯集(多 U+303F、U+13441、U+13442 三個在比對時拿掉);12=2026-10-15 含看不見字的行另比一份看不見的全換空格、連字號變體改成 Pd 全部加 U+2043、U+2212(_DOOR_SCAN_LOGIC_VERSION 8;補審 規格閘第十一輪修補 資安 F5、正確性 F2);13=2026-10-15 詞表的 PAYMENT 緊接時間或重試參數尾碼不算(只會少命中;[[Projects/前端知識與風險詞_計劃]] d1;同日一度加的「送出」前端語境例外已撤回);14=2026-10-20 只因不做清單判法版本升 6(原始碼改了、判法不變,判高判低都跟 13 一樣);15=2026-10-20 跟 security list 分支合併:不做清單判法版本再升 7(兩邊各改一處原始碼,判法不變);16=2026-11-04 不做清單判法版本升 8(_h2_section_lines 多一個選用參數,判法不變);2-10 沒上過主線
+ # (Projects/規格閘不把不做節的詞算進風險_計劃)
+ _DOOR_CLASS_ZH = {"payment": "金流", "external-send": "對外送出", "prod-irreversible": "不可逆", "self-governance": "守衛面"}   # 四類正式中文名(=lint 的 _RISK_ENUM)
+ _EXCL_LEAD_RE = re.compile(r"^[\s>*+•—·\-\d.、)]*")   # 已排除行的前綴:跟條款定義行同一組清單/引用符號
+ _EXCLUDED_RE = re.compile(r"^已排除\s*[:：]\s*([^:：]+?)\s*[:：]\s*(.*)$")
+ _HAZARD_H2_RE = re.compile(r"^##\s+(?:[(（]?[一二三四五六七八九十\d]+[)）.、]?\s*)?實務隱患\s*(?:[(（][^)）]*[)）])?\s*$")
+ # 不做節標題:寫法照 _HAZARD_H2_RE,核心字只認「不做」(使用者 2026-10-14 裁:精準不放寬;「## 不做的事」「## 範圍外」「## 本版不做」都不認)
+ _NOGO_H2_RE = re.compile(r"^##\s+(?:[(（]?[一二三四五六七八九十\d]+[)）.、]?\s*)?不做\s*(?:[(（][^)）]*[)）])?\s*$")
+ # 不做清單的項目:標記後一定要有空白(`**粗體**`、`-退款`、`3.14 版`、`2026.10` 都不是項目)
+ _NOGO_ITEM_RE = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])[ \t]+\S")
+ # 不做清單判斷邏輯(_nogo_skip_lines 與它依賴的函式、下面幾支正則)的版本:改了判斷就 +1(t_nogo_skip_logic_version_pin 釘原始碼雜湊)
+ # 1=整行出現否定字樣就跳(代碼審 r1);2=逐句判、每句都要以否定片語開頭、子項目與續行各自判(代碼審 r2:整行子字串太寬,「不可逆」替自己作保);
+ # 3=剝粗體、括號不切子句(只有編號的括號整段拿掉)、「也不做/亦不」開頭算否定(代碼審 r3:外層改由推送前的輕量設計審看門之後,逐句判只剩降噪,典型合法寫法放寬)
+ # 兩層怎麼連動(代碼審 r2 架3、合2):改判斷邏輯→t_nogo_skip_logic_version_pin 紅→升這個版本→它進門判定規則指紋→t_door_rule_version_pin 紅→升 _DOOR_RULE_VERSION→舊留痕全部重數。防線在測試時段(兩支都在推送前全套裡),執行時不讀原始碼;漏升版號的推送會被全套擋下,不會帶著舊留痕上線
+ # 4=逐行只在 \n、\r\n、\r 切(_note_lines;之前 splitlines 還在 \x0b、\x0c、\x1c–\x1e、\x85、U+2028、U+2029 切,跟條款定義的 split("\n") 行號對不上;代碼審 r10 G1)
+ # 5=_note_lines 改成內部叫 _ledger_lines(切行規則不變,只是原始碼改了;代碼審 r11 架1)
+ # 6=_strip_inline_markup 多一個預設關閉的 keep_test_fields 參數(條款行用;不做清單照舊不帶,判法不變,只是原始碼改了;[[Projects/測試名收自由字串_計劃]])
+ # 7=跟 security list 分支合併:_visible_lines 的圍欄區段判定抽成共用的 _fence_regions(判定不變,只是原始碼改了;10 萬組隨機輸入新舊零差異)
+-_NOGO_SKIP_LOGIC_VERSION = 7
++# 8=_h2_section_lines 多一個預設不給的 heads 參數(預期值表要數「節出現幾次」;不做清單照舊不帶,判法不變,只是原始碼改了;[[Projects/高風險測試證據加嚴_計劃]])
++_NOGO_SKIP_LOGIC_VERSION = 8
+ # 不做清單逐句判(代碼審 r2):一行剝掉行內標記與清單標記後,照標點與轉折詞切成子句,每一句都要以否定片語開頭,這一行才跳過。
+ # ★它只是降噪,不是防線★(代碼審 r3:字面判斷連三輪被沒列到的連接詞與藉口前綴打穿):略過了任何危險詞的風險低計劃,推送前要一筆輕量設計審(_spec_gate_push_light),
+ # 所以這裡寫錯的代價是「多審一席」不是「漏審」;別再為了擋夾帶往字表裡補詞。
+ # 不共用既有的否定字表:NEG_LEXICONS 認的是「節點正確記錄某符號已不存在」(已移除、改名…)、筆記形狀的 _NS_NEG_* 認的是「還沒做」的待定詞、
+ # _REJ_NOGO_RE 只要子句裡出現「不做/停案」就算否決(子字串、不看開頭)——這裡要的是「整句以否定開頭」,而且放過的是風險判定,字表要更窄;
+ # 切點也不共用 _NS_NEG_SEG_CUT_RE:那支切「、」與破折號、不切轉折詞,這裡要切「但、而是、and、but」這些能把要做的事接在不做後面的詞。
+ # 否定片語只定義這一次(代碼審 r3 架1:兩支正則各抄一份會漂),句首比對與「片語+冒號」標頭都由它組出
+ _NOGO_NEG_PHRASES = (r"不做|不支援|不提供|不處理|不含|不包含|不實作|不開發|暫不|本期不|本版不|這一版不|不在本期|排除|也不做|亦不"
+                      r"|out of scope|not doing|won't|will not")
+ _NOGO_NEG_PREFIX_RE = re.compile(r"^(?:" + _NOGO_NEG_PHRASES + r")", re.I)
+@@ -14196,20 +14200,223 @@ def _plan_first_commit(rr, plan_repo_rel, timeout=None):
+     timeout 給了就是秒數,逾時當查不到(drift fix --kind c4 列證據用;存量漂移改法 第 5 節)。"""
+     try:
+         r = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "log", "--diff-filter=A", "--format=%H", "--", plan_repo_rel],
+                            capture_output=True, text=True, errors="replace", timeout=timeout)
+     except (OSError, subprocess.TimeoutExpired):
+         return None
+     shas = r.stdout.split() if r.returncode == 0 else []
+     return shas[-1] if shas else None
+ 
+ 
++# ── 預期值表與簽核(Projects/高風險測試證據加嚴_計劃 做法 1 到 5)──
++# 生效日:計劃的日期(created 與第一次進 git 歷史取較晚者)不早於它才要表與簽;純日期,同 _NOTE_LINT_PLAN_SINCE 寫法,值取實作合併日隔天
++_HIGH_RISK_EVIDENCE_SINCE = "2026-11-06"
++_EXPECTED_H2_RE = re.compile(r"^##\s+預期值表\s*$")
++_EXPECTED_HEAD = ("條款", "輸入", "預期", "來源")
++_EXPECTED_SEP_RE = re.compile(r":?-{3,}:?")
++_EXPECTED_CLAUSE_RE = re.compile(r"S[1-9][0-9]*")
++_EXPECTED_MAX_ROWS = 500
++_EXPECTED_MAX_CELL = 2000
++_DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
++
++
++def _plan_first_day(rr, plan_repo_rel, hops=20):
++    """計劃第一次進 git 歷史的日期(YYYY-MM-DD),改名、搬目錄跟得過去;讀不到回 None。
++    ★不用 `git log --follow`★:它連「複製」一起追,拿舊計劃複製一份來寫新計劃時,新計劃會被追到舊計劃的日期而漏查(實作時測試現場實測 C097)。
++    改成只追改名:找這條路徑第一次新增的提交(同 _plan_first_commit 的 --diff-filter=A),再用 diff-tree -M(只開改名偵測)看那個提交是不是把別的檔改名過來,
++    是就換成舊路徑再找;最多 hops 跳。每次 git 逾時 20 秒,逾時當讀不到。"""
++    cur, day = plan_repo_rel, None
++    for _ in range(hops):
++        try:
++            r = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "log", "--diff-filter=A", "--format=%H %cs", "--", cur],
++                               capture_output=True, text=True, errors="replace", timeout=20)
++        except (OSError, subprocess.TimeoutExpired):
++            return day
++        got = [x.split() for x in r.stdout.splitlines() if x.strip()] if r.returncode == 0 else []
++        if not got or len(got[-1]) != 2 or not _DAY_RE.fullmatch(got[-1][1]):
++            return day
++        sha, day = got[-1]
++        try:
++            t = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "diff-tree", "--no-commit-id", "--root", "-r", "-M", "--name-status", "-z", sha],
++                               capture_output=True, timeout=20)
++        except (OSError, subprocess.TimeoutExpired):
++            return day
++        codes = {}
++        _paths, src, _gone = _nodehome_name_status(t.stdout if t.returncode == 0 else b"", norm=False, codes=codes)
++        prev = src.get(cur)
++        if prev is None or codes.get(cur) != "R":
++            return day
++        cur = prev
++    return day
++
++
++def _plan_effective_day(rr, plan_repo_rel, created):
++    """計劃的日期:開頭欄位 created 與第一次進 git 歷史的日期(_plan_first_day,改名跟得過去)取較晚者;兩個都讀不到回 None(呼叫端當生效日之後)。
++    淺複製只看 created(設計審 r5 邊界席、決策 d11)。"""
++    days = []
++    c = str(created or "").strip()[:10]
++    if _DAY_RE.fullmatch(c):
++        days.append(c)
++    try:
++        sh = subprocess.run(["git", "-C", str(rr), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True,
++                            errors="replace", timeout=20)
++        shallow = not (sh.returncode == 0 and sh.stdout.strip() == "false")
++    except (OSError, subprocess.TimeoutExpired):
++        shallow = True
++    if not shallow:
++        g = _plan_first_day(rr, plan_repo_rel)
++        if g:
++            days.append(g)
++    return max(days) if days else None
++
++
++def _expected_since():
++    """生效日:常數 _HIGH_RISK_EVIDENCE_SINCE;環境變數 LUMOS_HIGH_RISK_EVIDENCE_SINCE 供測試/緊急覆寫(同 LUMOS_PANEL_RETIRE_CUTOFF 的寫法,
++    測試總開關預設成 9999,既有測試停在生效前語意);不是 YYYY-MM-DD 就用常數。"""
++    v = os.environ.get("LUMOS_HIGH_RISK_EVIDENCE_SINCE", "").strip()
++    return v if _DAY_RE.fullmatch(v) else _HIGH_RISK_EVIDENCE_SINCE
++
++
++def _expected_clause_sets(text):
++    """(新行為條款 id 集合, 標 [keeps] 的 id 集合, 定義過的全部 id 集合);不建測試索引(只要編號與 keeps,綁的測試在不在不影響)。"""
++    rows = [r for r in clause_bindings(text, {}, None, lambda _p: set(), lambda _p: "") if r.get("defined")]
++    keeps, _variant = _spec_gate_keeps_rows(text, rows)   # 疑似變體當沒標,同規格閘
++    ids = {r["id"] for r in rows}
++    return ids - keeps, keeps, ids
++
++
++def _expected_requirement(env, rel, text, door=None):
++    """這份計劃要不要預期值表與簽核(做法 1):門判風險高、生效日之後、至少一條新行為條款;要的話回 (新行為, keeps, 全部) 三個集合,不要回 None。
++    door 是呼叫端已判好的門(規格閘);沒給就用 _door_judge 重判(簽核與推送前檢查)。"""
++    new, keeps, ids = _expected_clause_sets(text)
++    if not new:
++        return None
++    if door is None:
++        door = _door_judge(env, env.notes.get(rel), text)["door"]
++    if door != "high":
++        return None
++    rr = _vault_repo_root(env)
++    try:
++        prel = str((env.vault / rel).resolve().relative_to(Path(rr).resolve())).replace(os.sep, "/")
++    except ValueError:
++        prel = rel
++    n = env.notes.get(rel)
++    day = _plan_effective_day(rr, prel, n.fields.get("created") if n is not None else None)
++    if day is not None and day < _expected_since():
++        return None
++    return new, keeps, ids
++
++
++def _expected_split_cells(line):
++    """表格列拆格(GFM:格內 `\\|` 是字面管線、`\\\\` 是字面反斜線,其他反斜線照留);切完第一格與最後一格去空白後是空的就丟掉(外側管線),只丟這兩格。
++    ★這支是嚴格版★:為了表指紋穩定;專案另外兩處 `strip("|").split("|")` 的寬鬆拆法用途不同(讀報告、讀別人的表),不改。"""
++    cells, buf, i = [], [], 0
++    while i < len(line):
++        ch = line[i]
++        if ch == "\\" and i + 1 < len(line) and line[i + 1] in "\\|":
++            buf.append(line[i + 1])
++            i += 2
++            continue
++        if ch == "|":
++            cells.append("".join(buf))
++            buf = []
++        else:
++            buf.append(ch)
++        i += 1
++    cells.append("".join(buf))
++    if cells and not cells[0].strip():
++        cells = cells[1:]
++    if cells and not cells[-1].strip():
++        cells = cells[:-1]
++    return cells
++
++
++def _expected_table_lines(sec, probs):
++    """預期值表那一節裡的表格列 [(行號, 去掉行首空白的列), …]:取第一段行號相連、行首最多 3 個空白的表格列;表外其他表格列記進 probs。"""
++    tbl, last = [], None
++    for no, ln in sec:
++        body = ln.lstrip(" ")
++        is_pipe = ln.lstrip().startswith("|")
++        lead_ok = is_pipe and len(ln) - len(body) <= 3 and body.startswith("|")
++        if lead_ok and (not tbl or (last is not None and no == last + 1)):
++            tbl.append((no, body))
++            last = no
++        elif is_pipe:
++            probs.append(f"第 {no} 行:表外還有表格列(一節只放一張表,表格列要行號相連、行首最多 3 個空白)")
++            last = None
++    return tbl
++
++
++def _expected_row_probs(no, r, ids, keeps, seen, probs):
++    """一列資料的檢查:格數、格長、條款欄、三格不空;條款合法又不是 keeps 的記進 seen。"""
++    if len(r) != 4:
++        probs.append(f"第 {no} 行:要剛好 4 格,現在 {len(r)} 格(格內的 | 要寫成 \\|)")
++        return
++    cid, inp, exp, src = r
++    for name, v in zip(_EXPECTED_HEAD, r):
++        if len(v) > _EXPECTED_MAX_CELL:
++            probs.append(f"第 {no} 行:{name}格 {len(v)} 字,最多 {_EXPECTED_MAX_CELL} 字")
++    if not _EXPECTED_CLAUSE_RE.fullmatch(cid):
++        probs.append(f"第 {no} 行:條款欄要寫成 S 加不以 0 開頭的數字(例 S3,不加方括號),現在是 {_esc_clean(repr(cid), 40)}")
++    elif cid not in ids:
++        probs.append(f"第 {no} 行:條款 {cid} 不存在(驗收條款裡沒有 [{cid}])")
++    elif cid in keeps:
++        probs.append(f"第 {no} 行:條款 {cid} 標了 [keeps](維持既有行為),不用寫進預期值表")
++    else:
++        seen.add(cid)
++    if _real_chars(inp) < 1:
++        probs.append(f"第 {no} 行:輸入格是空的(只有標點或看不見的字元也算空)")
++    if _real_chars(exp) < 1:
++        probs.append(f"第 {no} 行:預期格是空的(只有標點或看不見的字元也算空)")
++    if _real_chars(src) < 4:
++        probs.append(f"第 {no} 行:來源格至少 4 個字(這個預期從哪條需求來)")
++
++
++def _expected_table(text, new, keeps, ids):
++    """預期值表檢查(做法 3):回 (資料列 [[條款, 輸入, 預期, 來源], …] 或 None, 問題清單)。有問題時資料列回 None;不丟例外。"""
++    probs, heads = [], []
++    sec = _h2_section_lines(text, _EXPECTED_H2_RE, heads=heads)
++    if len(heads) > 1:
++        probs.append(f"「## 預期值表」這一節出現 {len(heads)} 次(第 {'、'.join(str(x) for x in heads)} 行),只能有一節")
++    if sec is None:
++        return None, [*probs, "沒有「## 預期值表」這一節(標題要剛好是 `## 預期值表`)"]
++    tbl = _expected_table_lines(sec, probs)
++    if not tbl:
++        return None, [*probs, "「## 預期值表」節裡沒有表(寫在圍欄裡的不算)"]
++    rows = [(no, [unicodedata.normalize("NFC", c.strip()) for c in _expected_split_cells(s)]) for no, s in tbl]
++    if tuple(rows[0][1]) != _EXPECTED_HEAD:
++        probs.append(f"第 {rows[0][0]} 行:表頭要是「條款 | 輸入 | 預期 | 來源」")
++    if len(rows) < 2 or not (len(rows[1][1]) == 4 and all(_EXPECTED_SEP_RE.fullmatch(c) for c in rows[1][1])):
++        probs.append(f"第 {rows[1][0] if len(rows) > 1 else rows[0][0]} 行:第二列要是分隔列(四格,每格像 --- 或 :---:)")
++    data = rows[2:]
++    if not data:
++        probs.append("表裡至少要有一列資料")
++    if len(data) > _EXPECTED_MAX_ROWS:
++        probs.append(f"資料列 {len(data)} 列,最多 {_EXPECTED_MAX_ROWS} 列(不含表頭與分隔列)")
++    seen = set()
++    for no, r in data:
++        _expected_row_probs(no, r, ids, keeps, seen, probs)
++    miss = sorted(new - seen, key=lambda x: int(x[1:]))
++    if miss:
++        probs.append(f"新行為條款 {'、'.join(miss)} 在預期值表裡沒有任何一列")
++    return (None if probs else [r for _no, r in data]), probs
++
++def _expected_table_sha(data):
++    """表指紋:資料列依序、每列四格組成清單,json.dumps(ensure_ascii=False) 後算 sha256(JSON 編碼不會撞)。"""
++    import hashlib as _hl
++    import json as _j
++    return _hl.sha256(_j.dumps(data, ensure_ascii=False).encode("utf-8")).hexdigest()
++
++
++_EXPECTED_EXAMPLE = "| S2 | 單筆消費 1000 元 | 折扣 100 元 | 需求文件〈滿額折扣〉第 2 點:滿 1000 打九折 |"
++
++
+ def _test_exists_before(rr, commit, name):
+     """計劃建立前的樹(那個提交的上一個)裡整字找得到這個測試名;沒有上一個提交=樹是空的=不存在。"""
+     try:
+         r = subprocess.run(["git", "-C", str(rr), "rev-parse", "-q", "--verify", commit + "^"], capture_output=True, text=True, errors="replace")
+         if r.returncode != 0:
+             return False
+         g = subprocess.run(["git", "-C", str(rr), "grep", "-q", "-w", "-e", name, r.stdout.strip(), "--"], capture_output=True, text=True, errors="replace")
+         return g.returncode == 0
+     except OSError:
+         return False
+@@ -15264,34 +15471,54 @@ def _spec_gate_front(env, node, no_run):
+     judged = _door_judge(env, env.notes.get(rel), text)
+     _spec_gate_print_door(judged, env, rel)
+     _spec_gate_print_rejections(env)   # 緊接風險判定印,後面任何出口(含 --no-run 提早收)都看得到
+     pq_rc = _spec_gate_pending(env, rel, text)   # 待決問題:判門之後、條款與 --no-run 之前(待決問題改存開頭欄位_計劃 S1)
+     if pq_rc is not None:
+         return pq_rc
+     door = judged["door"]
+     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
+     if rc is not None:
+         return rc
++    if _spec_gate_expected_part(env, rel, text, door) is False:
++        return 1
+     clauses = [b for b in rows_b if b["state"] != "undefined"]
+     prep = _spec_gate_prepare(rr, text, clauses)
+     if prep is None:
+         return 1 if door == "low" else 0
+     keeps = _spec_gate_twoway_gate(p, rr, text, clauses, prep[4]) if door == "low" else set()
+     if keeps is None:
+         return 1
+     if no_run:
+         if door == "low":
+             print("[spec-gate] 跑: —(--no-run;風險低要跑過測試才放行、才留痕)")
+         return 0
+     return p, text, rel, rr, judged, rows_b, clauses, keeps, prep
+ 
+ 
++def _spec_gate_expected_part(env, rel, text, door):
++    """規格閘的預期值表檢查(高風險測試證據加嚴_計劃 做法 3,插在條款綁定之後):要簽的計劃表格不過回 False(擋),其他回 True;
++    不要簽的計劃不印。表過了印指紋與推送前要簽的指令。"""
++    req = _expected_requirement(env, rel, text, door=door)
++    if req is None:
++        return True
++    data, probs = _expected_table(text, *req)
++    if probs:
++        print(f"[spec-gate] 預期值表: ✗ — 風險高、有新行為條款的計劃要寫「## 預期值表」(四欄:條款 | 輸入 | 預期 | 來源),{len(probs)} 處不合:")
++        for x in probs:
++            print(f"    • {x}")
++        print(f"    範例:{_EXPECTED_EXAMPLE}")
++        return False
++    sha = _expected_table_sha(data)
++    print(f"[spec-gate] 預期值表: ✓ — {len(data)} 列(指紋 {sha[:12]});推送前要簽:lumos signoff {_sh_quote(Path(rel).stem)} --expected --note \"<確認了什麼>\"")
++    return True
++
++
+ def _spec_gate_prepare(rr, text, clauses):
+     """平台測試索引 + 每條條款綁的測試名 + 刻意放寬的那份宣告集;設定讀不動印一句回 None。"""
+     try:
+         _, split, default, methods_for, _hay, loose_for = _platform_test_index(rr)
+         plats = load_platforms(rr)["platforms"]
+     except (ValueError, OSError) as e:
+         print(f"[spec-gate] 跑: —(平台設定讀不動:{e};略過)")
+         return None
+     lines_all = _note_lines(text)
+     refs = {b["id"]: resolve_test_refs(_clause_visible(lines_all[b["line"] - 1])[0] if 0 < b["line"] <= len(lines_all) else "", split, default)
+@@ -15744,21 +15971,21 @@ def _spec_gate_push_stale(env, rr, prel, n, rec):
+         return f"{prel}:讀不成文字({e.__class__.__name__})", None, None
+     rows_b, err = _clause_bindings_for(env, text, root=rr)
+     if err:
+         return f"{prel}:測試索引建不起來({err})", None, None
+     cur = (text, rows_b)
+     now = _door_judge(env, n, text)   # ★門整個重判★(代碼審 r1 F1 blocker):指紋只蓋條款與理由,正文塞進關鍵字、補 risk/ 標籤、改 door 欄位都要在這裡被抓到
+     if now["door"] != "low":
+         dr = rec.get("door_rule")
+         newer = (f";留痕用的是較新的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION},先更新 lumos 再推"
+                  if isinstance(dr, int) and not isinstance(dr, bool) and dr > _DOOR_RULE_VERSION else "")   # 新版留痕、舊版重判會把新規則判低的判高(規格閘不做節計劃〈做法〉4)
+-        older = (f";留痕用的是較舊的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION}:判高可能是新規則的結果(例:版本 4 起程式碼圍欄裡的危險詞也算;版本 5 起行內反引號、圍欄開頭那一行、落單反引號之後的字也算;版本 6 起全形英數與夾零寬字元的危險詞也算;版本 7 起夾軟連字號、詞連接符、雙向控制字元、變體選擇符這類隱形字元的也算;版本 8 起夾組合記號、控制字元、未指派碼位、盲文空白這類看不見字元的也算;版本 9 起多字詞中間兩個空格或 tab、兩個漢字中間夾空白、夾 \\x1f 或 U+2028 這類行段分隔的也算;版本 10 起中英緊貼(部署到prod環境)、底線識別名(send_email)、透過LINE推送、連字號變體(pre-push hook)、用 \\x0b 或 U+2028 隔開的多字詞也算;版本 12 起用零寬空格、詞連接符這類看不見的字隔開的多字詞,與亞美尼亞連字號、片假名雙連字號這類連字號變體也算;版本 13 起 ORDER_PAYMENT_TIMEOUT 這類 PAYMENT 緊接時間或重試參數的識別字不算金流——這一版只會少判高;版本 14、15 判法都跟 13 一樣)"
++        older = (f";留痕用的是較舊的門判定規則(版本 {dr}),這台的 lumos 是版本 {_DOOR_RULE_VERSION}:判高可能是新規則的結果(例:版本 4 起程式碼圍欄裡的危險詞也算;版本 5 起行內反引號、圍欄開頭那一行、落單反引號之後的字也算;版本 6 起全形英數與夾零寬字元的危險詞也算;版本 7 起夾軟連字號、詞連接符、雙向控制字元、變體選擇符這類隱形字元的也算;版本 8 起夾組合記號、控制字元、未指派碼位、盲文空白這類看不見字元的也算;版本 9 起多字詞中間兩個空格或 tab、兩個漢字中間夾空白、夾 \\x1f 或 U+2028 這類行段分隔的也算;版本 10 起中英緊貼(部署到prod環境)、底線識別名(send_email)、透過LINE推送、連字號變體(pre-push hook)、用 \\x0b 或 U+2028 隔開的多字詞也算;版本 12 起用零寬空格、詞連接符這類看不見的字隔開的多字詞,與亞美尼亞連字號、片假名雙連字號這類連字號變體也算;版本 13 起 ORDER_PAYMENT_TIMEOUT 這類 PAYMENT 緊接時間或重試參數的識別字不算金流——這一版只會少判高;版本 14 到 16 判法都跟 13 一樣)"
+                  if isinstance(dr, int) and not isinstance(dr, bool) and dr < _DOOR_RULE_VERSION else "")
+         return f"{prel}:留痕時風險低,現在判成風險高({';'.join(now['signals'][:3]) or '實務隱患節缺已排除行:' + '、'.join(now['missing'])})——風險低的放行不再成立,改走設計審或把訊號拿掉後重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}{newer}{older}", now, cur
+     if _clause_block_sha(text, rows_b, now["linked"], now["exclusions"], now["nogo_skipped"]) != rec.get("clause_sha"):
+         return f"{prel}:風險低留痕過期(條款、測試名、已排除理由、不做清單裡被跳過的危險詞、或它連到的節點的合約/標籤變了),重跑 lumos spec-gate {_sh_quote(Path(prel).stem)}", now, cur
+     return None, now, cur
+ 
+ 
+ def _spec_gate_push_fill(cur, split, default):
+     """推送前替舊留痕的裸名字補平台:現在計劃條款的綁定 → {名字: {平台…}}。走既有的 _spec_gate_items(條款解析與 resolve_test_refs),
+     不另掃正文;只在留痕沒過期時用(條款指紋相符,現在的條款就是當時記的那份)。解析出錯回空(照舊解析)。"""
+@@ -16125,20 +16352,22 @@ def _spec_gate_push_nogo_only(env, prel, n, rec, ctx=None):
+     return _spec_gate_push_light(env, prel, now["nogo_skipped"], ctx)
+ 
+ 
+ def _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx=None, done=False):
+     """推送前查一份風險低計劃:回 (沒過的原因或 None, 全綠時的一行)。idx=(split, default, methods_for, plats, git_range, loose_for);ctx=_nogo_ctx。
+     done=True(推送範圍起點就已經是 done、這次又改到計劃檔本身的計劃,決策 d3;代碼審 r1 正1、正2、安1):只有「這份計劃自己改動造成的」
+     兩種情形只提醒——留痕指紋對不上(完成後才改條款拿不到紅的證據)、留痕裡某支測試找不到(後來改名或刪了);
+     不做清單那道照查(_spec_gate_push_nogo_only),其餘找得到的測試照跑、紅了照擋。這次推送才從 doing 改成 done 的不算(呼叫端判),照 doing 一樣嚴。"""
+     P = "[spec-gate 推送前]"
+     stale, now, cur = _spec_gate_push_stale(env, rr, prel, n, rec)
++    if now is not None and ctx is not None:   # 門剛重判過:預期值表那一支沿用,不再判一次(不做清單的被略過行算一次就好,t_spec_gate_push_scan_reads_ledger_once)
++        ctx.setdefault("door_now", {})[prel] = now["door"]
+     notes = []
+     # 寬待只給「條款指紋對不上」這一種過期(門重判仍是風險低、讀得到、索引建得起來時才會走到指紋那一步):
+     # 讀不成文字、測試索引建不起來、門現在判成風險高一律照 doing 擋(fail-closed;代碼審 r3 G1、決策 d3)
+     if stale and not (done and now is not None and now.get("door") == "low"):
+         return stale, None
+     if stale:
+         light = _spec_gate_push_nogo_only(env, prel, n, rec, ctx)     # 不靠留痕指紋,現在的計劃重判不做清單
+         notes.append(f"留痕對不上現在的計劃({_esc_clean(stale, 160)})")
+     else:
+         light = _spec_gate_push_light(env, prel, now["nogo_skipped"], ctx)
+@@ -16245,34 +16474,34 @@ def _spec_gate_push_no_record(env, prel, n):
+         print(f"    lumos spec-gate {_sh_quote(Path(prel).stem)}")
+ 
+ 
+ def _spec_gate_push_scan(env, rr, plans, git_range, touched_plans=()):
+     """逐份查有風險低留痕的 doing 計劃;回 (沒過的原因清單, 過了的 [(計劃, 全靠人驗)]),全綠的當場印一行;平台設定讀不動印一句、測試不跑,輕量審沒擋就回 (None, [])(放行)。
+     推送範圍改到的計劃(touched_plans)不論狀態、不論有沒有留痕,不走全套的也要重判一次不做清單(_spec_gate_push_nogo_only;代碼審 r4 G2)。
+     審查帳在開頭讀一次(_nogo_ctx),留痕與輕量審都查同一張表(代碼審 r5 併1、架3)。
+     ★審查帳讀不到就擋★(代碼審 r6 G2:讀不到被吞成空表,所有風險低計劃的留痕檢查與測試真跑被靜默跳過):跟讀一次帳之前一樣失敗就擋,講原因。"""
+     ctx = _nogo_ctx(env)
+     if ctx["err"] is not None:
+-        return [f"審查帳讀不到({ctx['err']}),規格閘推送前檢查判不了(風險低留痕與不做清單的輕量審都在帳上);修好帳檔權限或路徑再推"], []
++        return [f"{_SPEC_GATE_PUSH_LEDGER_TAG}審查帳讀不到({ctx['err']}),規格閘推送前檢查判不了(風險低留痕與不做清單的輕量審都在帳上);修好帳檔權限或路徑再推"], []
+     latest = _spec_gate_latest_records(env, ctx["by_loop"])
+     cands = sorted(set(plans) | set(touched_plans))
+ 
+     def _live(prel, n):   # 要跑留痕測試的狀態:doing,或這次推送改到計劃檔本身的 done(〈做法〉10 B2,決策 d3)
+         st = str(n.fields.get("status")) if n is not None else ""
+         return st == "doing" or (st == "done" and prel in touched_plans)
+     if any(_live(p, env.notes.get(p)) for p in cands):
+         # 兩本帳都讀,同計劃取 ts 最晚那筆(B3:消費專案的審查帳被 gitignore,乾淨 clone 只有治理帳;多台機器時本機帳可能是舊的)
+         if "sg_gov" not in ctx:
+             ctx["sg_gov"] = _spec_gate_gov_index(env)
+         gidx, gerr = ctx["sg_gov"]
+         if gerr:
+-            return [f"治理帳讀不到({gerr}),規格閘推送前檢查判不了(風險低留痕也寫在治理帳);修好帳檔權限或路徑再推"], []
++            return [f"{_SPEC_GATE_PUSH_LEDGER_TAG}治理帳讀不到({gerr}),規格閘推送前檢查判不了(風險低留痕與風險高計劃的預期值表簽核都寫在治理帳);修好帳檔權限或路徑再推"], []
+         latest = _spec_gate_latest_merged(env, ctx["by_loop"], gidx)
+     bad, oks, idx = [], [], None
+     for prel in cands:
+         n = env.notes.get(prel)
+         rec = latest.get(nfc(_loop_id_for_plan(prel)))
+         # 寬待只給「推送範圍起點就已經是 done」的;這次推送才改成 done 的照 doing 一樣嚴(代碼審 r1 安1)。
+         # 起點狀態只對要跑的(live)done 候選算,範圍起點(三點範圍的 merge-base)整次只算一次(代碼審 r3 G8)
+         done = (n is not None and str(n.fields.get("status")) == "done" and _live(prel, n)
+                 and _spec_gate_status_at(env, rr, git_range, prel, base_cache=ctx) == "done")
+         full = _live(prel, n) and rec and _rec_plan_risk(rec) == "low"
+@@ -16292,25 +16521,82 @@ def _spec_gate_push_scan(env, rr, plans, git_range, touched_plans=()):
+                     _nogo_light_block_event(env, prel, why)
+                     bad.append(why)
+             continue
+         why, ok_line = _spec_gate_push_one(env, rr, prel, n, rec, idx, ctx, done=done)
+         if why:
+             bad.append(why)
+         else:
+             oks.append((prel, not (rec.get("tests") or [])))
+             if ok_line:
+                 print(ok_line)
++    for prel in cands:   # 預期值表有沒有簽(高風險測試證據加嚴_計劃 做法 5):挑到的 doing、或這次改到計劃檔本身的 done
++        n = env.notes.get(prel)
++        if n is not None and _live(prel, n):
++            why = _expected_push_one(env, rr, prel, ctx)
++            if why:
++                bad.append(why)
+     if idx is False and not bad:
+         return None, []   # 測試跑不了、輕量審也沒擋:照舊放行(擋不了≠沒事,但工具壞不擋所有人)
+     return bad, oks
+ 
+ 
++_EXPECTED_PUSH_TAG = "[預期值表] "
++_SPEC_GATE_PUSH_LEDGER_TAG = "[帳] "     # 推送前規格閘讀不動審查帳或治理帳:整份判不了,標題不講風險高低
++
++
++def _expected_push_one(env, rr, prel, ctx):
++    """推送前查一份計劃的預期值表與簽核:不用簽或簽對了回 None(AI 簽的印一行);沒過回原因(開頭 _EXPECTED_PUSH_TAG)並寫 expected-unsigned。
++    計劃文字讀工作目錄(推送前規格閘既有天花板,同簽核指令);簽核讀版控治理帳,只認物件、kind=expected-signed、plan 與 table_sha 是字串的事件;
++    帳讀不到就擋(同這支閘對審查帳、治理帳讀不到的既有做法)。"""
++    P = "[spec-gate 推送前]"
++    try:
++        text = (env.vault / prel).read_text(encoding="utf-8-sig")
++    except (OSError, UnicodeDecodeError) as e:
++        return f"{_EXPECTED_PUSH_TAG}{prel}:計劃讀不成文字({e.__class__.__name__}),判不了要不要預期值表簽核"
++    req = _expected_requirement(env, prel, text, door=(ctx.get("door_now") or {}).get(prel))
++    if req is None:
++        return None
++    q = _sh_quote(Path(prel).stem)
++    data, probs = _expected_table(text, *req)
++    sha = _expected_table_sha(data) if data is not None else None
++    if probs:
++        why = f"{prel}:預期值表檢查不過——" + ";".join(probs[:5]) + (f"(另有 {len(probs) - 5} 處)" if len(probs) > 5 else "") + f";改好後跑 lumos spec-gate {q} 看表,再 lumos signoff {q} --expected --note \"<確認了什麼>\""
++    else:
++        if "exp_gov" not in ctx:
++            ctx["exp_gov"] = _gov_vc_gate_events(rr, "signoff")
++        evs, gerr = ctx["exp_gov"]
++        if gerr:
++            return f"{_EXPECTED_PUSH_TAG}治理帳讀不到({gerr}),判不了 {prel} 的預期值表簽核;修好帳檔權限或路徑再推"
++        hits = [e for e in evs if e.get("kind") == "expected-signed" and isinstance(e.get("plan"), str)
++                and isinstance(e.get("table_sha"), str) and nfc(e["plan"]) == nfc(prel) and e["table_sha"] == sha]
++        if hits:
++            if hits[-1].get("origin") == "ai":
++                print(f"{P} 預期值表由 AI 簽:{Path(prel).stem}(指紋 {sha[:12]})")
++            else:
++                print(f"{P} ✓ {Path(prel).stem}:預期值表已簽(指紋 {sha[:12]})")
++            return None
++        why = (f"{prel}:預期值表(指紋 {sha[:12]})還沒簽,或簽完又改過表——lumos signoff {q} --expected --note \"<確認了什麼>\""
++               "(簽核事件寫進治理帳,跟功能一起提交)")
++    _gate_event(rr, "spec-gate", "expected-unsigned", why[:400], hard=True, nodes=[prel],
++                extra={"plan": prel, **({"table_sha": sha} if sha else {})})
++    return _EXPECTED_PUSH_TAG + why
++
++
++def _spec_gate_push_bad_head(bad):
++    """推送前規格閘擋下的標題:帳讀不到(整份檢查判不了,不分風險高低)講判不了;有預期值表簽核的原因就連風險高一起講;否則照舊只講風險低。"""
++    if any(x.startswith(_SPEC_GATE_PUSH_LEDGER_TAG) for x in bad):
++        return "帳讀不到,這次推送碰到的計劃判不了:"
++    if any(x.startswith(_EXPECTED_PUSH_TAG) for x in bad):
++        return f"{len(bad)} 份計劃沒過(風險低計劃的留痕與測試、風險高計劃的預期值表簽核):"
++    return f"{len(bad)} 份風險低計劃沒過(風險低不派審,推送閘是它唯一的閘):"
++
++
+ def _spec_gate_push_check(env, git_range, repo=None):
+     """推送前(雙向門放行_計劃 S11-S14/S21/S23/S25):範圍碰到的計劃檔、加上連到「被碰到的 Systems 節點或被改程式檔的家」的 doing 計劃,
+     有風險低留痕的 → 先把門整個重判(不再雙向擋)、條款指紋對得上才算留痕有效、留痕裡的測試全綠才准推;不做清單略過了危險詞的要一筆綁好的輕量設計審,範圍改到的計劃不論狀態都重判一次(_spec_gate_push_scan)。風險低不派審,這裡是它唯一的閘。
+     rc1 擋、0 過;算不出範圍/索引 fail-open 印一句回 0(擋不了≠沒事,但推送閘不能因為工具壞而擋所有人)。"""
+     P = "[spec-gate 推送前]"
+     rr = Path(repo).resolve() if repo else _vault_repo_root(env)
+     if git_range.startswith("-"):   # 範圍原樣進 git:以 - 開頭會被當成選項(例:--output= 寫任意檔;代碼審 待決問題改存開頭欄位 r3 資安、邊界席)
+         print(f"{P} 範圍 {git_range!r} 以 - 開頭,不是版本範圍,放行")
+         return 0
+     try:
+@@ -16331,21 +16617,21 @@ def _spec_gate_push_check(env, git_range, repo=None):
+     _pq_push_remind(env, rr, vrel, touched, git_range)   # 只提醒、不改回傳碼(待決問題改存開頭欄位_計劃 S1)
+     plans = _spec_gate_push_candidates(env, rr, vrel, touched)
+     if not plans:
+         return 0
+     bad, oks = _spec_gate_push_scan(env, rr, plans, git_range, _spec_gate_touched_plans(vrel, touched))
+     if bad is None:
+         return 0
+     if not bad and oks and all(mo for _p, mo in oks):   # 計劃風險低+全靠人驗+小改動閘過 → 改動風險分級 light(2026-09-18 Enzo 裁;pitfalls/code-loop 都是 vault-free,只有這裡有圖譜)
+         print(f"{P} 改動風險分級:light(計劃風險低且全靠人驗,小改動閘通過:{'、'.join(Path(p).stem for p, _m in oks)})——代碼審只派架構對齊席;lumos loop next <編號> --tier light")
+     if bad:
+-        print(f"{P} ✗ — {len(bad)} 份風險低計劃沒過(風險低不派審,推送閘是它唯一的閘):")
++        print(f"{P} ✗ — {_spec_gate_push_bad_head(bad)}")
+         for x in bad:
+             print(f"    • {x}")
+         print("    規格閘要紅、推送閘要綠,兩頭夾住:把條款的測試做綠再推;留痕過期就重跑 lumos spec-gate <計劃>")
+         return 1
+     return 0
+ 
+ 
+ def cmd_spec_trace(env, node, as_json=False):
+     """條款級追溯(RTM 輕量版):計劃 body 的 [SN] 條款 × 條款那一行綁的 [test:]/[manual:](裁決欄,2026-09-08 起)
+     × 回指 Verification 的認領(舊制對照欄)。rc:有未標條款=1;全標(綁了/靠人,懸空只提醒)=0;計劃無 [SN]=0(opt-in 未啟用)。唯讀。"""
+@@ -16523,32 +16809,38 @@ def _signoff_write_locked(env, rel, path, original, log, row, today):
+         # Ctrl-C 這類程序內中斷落在筆記已寫、帳還沒寫完之間:先還原筆記再往外丟(代碼審 r8 後 Codex 反方);
+         # 被強制殺掉或斷電仍不是跨檔交易,見圖譜的回頭條件
+         _signoff_restore_note(path, original)
+         raise
+     if not ok:
+         note_state = _signoff_restore_note(path, original)
+         raise WriteBlocked(f"簽核記錄寫不進去:{log_state};{note_state}")
+     return 0, set_out.getvalue()
+ 
+ 
+-def cmd_signoff(env, node, note, by=None, ref=None):
++def cmd_signoff(env, node, note, by=None, ref=None, expected=False):
+     """業務簽核留痕(validation 那半):人對業務正確性點頭 → ledger+frontmatter 戳記。
+-    工具只記留痕,不證明確認真的發生(同 audit/self-audit 的誠實前提)。"""
++    工具只記留痕,不證明確認真的發生(同 audit/self-audit 的誠實前提)。
++    expected=True:預期值表簽核(高風險測試證據加嚴_計劃 做法 4),另走 _cmd_signoff_expected,不寫 signed_off 與 .signoff-log.jsonl。"""
+     import json
+     import datetime
+     if not (note or "").strip():
+         print("擋下:簽核一定要帶 --note 寫你確認了什麼,給以後的人看", file=sys.stderr)
+         return 2
++    if expected and ((by or "").strip() or (ref or "").strip()):
++        print("擋下:--expected 不跟 --by、--ref 一起用(誰簽的由終端判:答 y 記人簽、沒有互動終端記 AI 簽)", file=sys.stderr)
++        return 2
+     rel = env.find(node)
+     if rel is None:
+         print(f"擋下:圖譜裡找不到叫 {node} 的筆記,先確認名稱或路徑(lumos search <關鍵字> 可以找)", file=sys.stderr)
+         return 2
++    if expected:
++        return _cmd_signoff_expected(env, rel, note)
+     path = env.vault / rel
+     today = datetime.date.today().isoformat()
+     commit = _signoff_short_commit(env.vault.parent)
+     log = env.vault.parent / ".signoff-log.jsonl"
+     _rec = {"ts": datetime.datetime.now().isoformat(timespec="seconds"),
+             "node": rel, "by": by or "", "note": note, "commit": commit}
+     # ★可選的 ref★(必要合約清單_計劃):讓閘能機械比對「這次簽的是哪一個東西」,
+     # 不必去自由文字裡撈 id(撈文字最容易寫錯也最容易漏)。沒帶就不寫,既有紀錄與用法不受影響。
+     if (ref or "").strip():
+         _rec["ref"] = ref.strip()
+@@ -16560,20 +16852,63 @@ def cmd_signoff(env, node, note, by=None, ref=None):
+         # 已成功改動(代碼審 r7 併發席 N1/G3)。
+         original = _signoff_read_original(path)
+         rc, set_output = _signoff_write_locked(env, rel, path, original, log, row, today)
+         if rc != 0:
+             return rc
+     print(set_output, end="")
+     print(f"✓ signoff {rel} — {today}{('(' + by + ')') if by else ''}: {note[:60]}")
+     return 0
+ 
+ 
++def _cmd_signoff_expected(env, rel, note):
++    """lumos signoff <計劃> --expected:計劃文字只讀一次(工作目錄那份,推送前規格閘讀的也是它),同一份做表格檢查、算指紋、印給人看;
++    整張表先用一般輸出印,確認只問一句(不把整張表塞進終端寫入);答 y 記 human、沒有互動終端或逾時記 ai、答 n 回 1 不寫。
++    寫一筆 signoff 閘 expected-signed 事件;寫不進去回 2。不設金鑰、不防代簽(決策 d10)。"""
++    import secrets as _sec
++    rr = _vault_repo_root(env)
++    try:
++        text = (env.vault / rel).read_text(encoding="utf-8-sig")
++    except (OSError, UnicodeDecodeError) as e:
++        print(f"擋下:計劃讀不成文字({e.__class__.__name__}),沒有簽", file=sys.stderr)
++        return 2
++    req = _expected_requirement(env, rel, text)
++    if req is None:
++        print("擋下:這份計劃不需要預期值表簽核(要門判風險高、計劃日期在生效日之後、至少一條沒標 [keeps] 的條款),沒有簽", file=sys.stderr)
++        return 2
++    data, probs = _expected_table(text, *req)
++    if probs:
++        print(f"擋下:預期值表檢查不過,沒有簽({len(probs)} 處):", file=sys.stderr)
++        for x in probs:
++            print(f"    • {x}", file=sys.stderr)
++        return 2
++    sha = _expected_table_sha(data)
++    print(f"預期值表({_esc_clean(rel, 200)},{len(data)} 列,指紋 {sha[:12]}):")
++    print("  | " + " | ".join(_EXPECTED_HEAD) + " |")
++    for row in data:
++        print("  | " + " | ".join(_out_clean(c, 2000) for c in row) + " |")
++    sys.stdout.flush()
++    origin = _waive_origin_tty(f"確認上面這張預期值表({len(data)} 列,指紋 {sha[:12]})對得上需求?[y/N] ", refused="沒簽", timeout=300)
++    if origin is None:
++        return 1
++    if origin == "ai":
++        print("沒有互動終端或逾時:記成 AI 簽")
++    who = _e2e_who(rr) if origin == "human" else "ai"
++    ok = _gate_event(rr, "signoff", "expected-signed", note.strip()[:200], hard=False, nodes=[rel],
++                     extra={"plan": rel, "table_sha": sha, "row_count": len(data), "origin": origin, "who": who,
++                            "token": "EXP-" + _sec.token_hex(4)})
++    if ok is not True:
++        print("擋下:簽核寫不進治理帳(帳檔唯讀、不存在或沒有 docs/),這次沒有簽", file=sys.stderr)
++        return 2
++    print(f"✓ 預期值表已簽({'人簽' if origin == 'human' else 'AI 簽'},指紋 {sha[:12]});簽核事件在治理帳,跟功能一起提交")
++    return 0
++
++
+ # ★gov --stats 的 gate 全集★(2026-08-20,計劃:Projects/閘觸發帳統計_計劃)
+ # 為什麼要有這張表:統計若只「掃帳裡出現過的 gate」,零筆的 gate 永遠不會出現——而「哪幾道
+ # 閘從沒響過」正是這個功能的重點。漂移由 t_gov_stats_gate_drift 機械擋(掃全檔 gate 字面值)。
+ # L3(驗證腐化佇列)2026-08-22 拆出:寫帳的 hook 8/21 已撤,留在清單只是假名額(Issues/只退場不痛的機制)
+ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisit", "check-e1", "delguard", "check-e2", "check-e3", "check-lint-decl", "doctor-run",
+                 "check-j", "check-k", "check-r", "check-s", "check-s2", "check-s3", "check-s4",
+                 # 2026-09-10 節點範圍與索引守衛:條款測試名懸空 / 索引漏列 / 合約多到讀不完
+                 "check-s5", "check-s6", "check-s7",
+                 # 2026-10-01 有效 RULE 的到期與確認:doctor S16,Projects/筆記標籤_過時判定與按需載入_計劃 [S6]
+                 "check-s16",
+@@ -16824,20 +17159,28 @@ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, es
+             print("    被跳過 %d 次:%s" % (len(skipped), "、".join(f"{k} {v}" for k, v in sorted(_by.items())))
+                   + "  ← ★這一行是「哪一道最常被跳」的答案★")
+         if fo:
+             _by = {}
+             for r in fo:
+                 _by[r.get("gate", "?")] = _by.get(r.get("gate", "?"), 0) + 1
+             print("    檢查自己壞掉而放行(fail-open)%d 次:%s" % (len(fo), "、".join(f"{k} {v}" for k, v in sorted(_by.items()))))
+             print("    (fail-open 是刻意設計——不為缺環境擋死推送;但每一次放行都要看得見,不然分不出哪一層沒生效)")
+         print()
+ 
++    # ── 預期值表簽核(高風險測試證據加嚴_計劃 做法 5):人抽離了多少,只能從這兩個數看(決策 d10)────
++    exp = [r for r in ded if r.get("gate") == "signoff" and r.get("kind") == "expected-signed"]
++    unsigned = [r for r in ded if r.get("gate") == "spec-gate" and r.get("kind") == "expected-unsigned"]
++    if exp or unsigned:
++        print(f"  預期值表簽核:人 {sum(1 for r in exp if r.get('origin') == 'human')} 次、AI {sum(1 for r in exp if r.get('origin') == 'ai')} 次;"
++              f"推送前因為沒簽被擋 {len(unsigned)} 次")
++        print()
++
+     # ── hook 最近有沒有真的跑過(#19 S4)────────────────────────────────────
+     # ★次數放這裡,不放 enforcement 那張表★(r1 架構對齊席):那張是「當下狀態」,
+     # 次數與時間序列是另一種性質的資料,這個 repo 已經有這一段在做聚合。
+     # ★不印「注入 N 次」★——那是成效,派工鏡頭 d1 明令不量;這裡只講「活著沒」。
+     _hp = Path(repo_root) / "governance" / "runtime" / "hook-events.jsonl"
+     if _hp.exists():
+         import json as _hj
+         import datetime as _hd
+         _cut = _hd.datetime.now().astimezone() - _hd.timedelta(days=since_days)
+         _agg = {}
+@@ -16920,20 +17263,23 @@ _GOV_FIELD_TYPES = {
+                     (str,)),
+     **dict.fromkeys(("auditor", "check", "loop", "recall_miss", "report_sha256", "record_sha256", "head_sha"), (str, type(None))),
+     "secs": (int, float, type(None)),
+     "failed_items": (list, type(None)),
+     "not_run_items": (list, type(None)),
+     "round": (str, int, type(None)),
+     "nodes": (list,),
+     **dict.fromkeys(("findings", "reported"), (int, type(None))),
+     **dict.fromkeys(("pairs", "findings_set", "refuted_set", "folded_set", "accepted_set"), (list, type(None))),
+     **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions", "finding_sources"), (dict, type(None))),
++    # 預期值表簽核(高風險測試證據加嚴_計劃 做法 4)
++    **dict.fromkeys(("plan", "table_sha", "origin"), (str,)),
++    "row_count": (int,),
+ }
+ 
+ 
+ def _gov_event_types_ok(d):
+     """治理事件物件的欄位型別合不合 _GOV_FIELD_TYPES(外加 pairs 每項成對、finding_kinds/refute_verdicts 的值是字串、finding_sources 的值是字串清單)。"""
+     for k, types in _GOV_FIELD_TYPES.items():
+         if k in d and not isinstance(d[k], types):
+             return False
+     if any(not (isinstance(x, list) and len(x) == 2) for x in d.get("pairs") or []):
+         return False
+@@ -16990,20 +17336,22 @@ def cmd_gov(env, node=None, since_days=90, full=False, stats=False, nags=0):
+          "gate": d.get("gate", "?"), "kind": d.get("kind", "?"), "hard": bool(d.get("hard")),
+          "nodes": [stem(x) for x in d.get("nodes", [])], "detail": d.get("note", ""),
+          # 審查有沒有用記帳(2026-09-09):記帳被寫側擋下(canary/blocked)每次各算一筆——同一個 commit 連撞三次
+          # 本來會被 (commit,nodes,gate,kind) 折成一次,「擋下 N 次」就永遠是 1;拿 ts+note(note 含事件隨機碼)當第 5 鑑別子(同秒也分得開,r1 f5)
+          # 表態閘(2026-09-09,r3 接手席 H1):同 sha 兩筆 dispositions / recall-miss 各算各的——鑑別子拿 written_at(事件時間,微秒),
+          # 不拿 ts:ts 是 HEAD commit 時間,同一顆 sha 重表態兩筆一模一樣(r1 併發席 f3/合約測試席 f1 實測折成一筆)
+          "token": ((d.get("ts", "") + d.get("note", "")) if (d.get("gate") == "canary" and d.get("kind") == "blocked")
+                    else (d.get("written_at") or d.get("ts", "")) if (d.get("gate") == "code-loop" and d.get("kind") in ("dispositions", "recall-miss"))
+                    # 修正關卡(2026-10-02):同一個提交連跑兩次同結果各算一筆——事件自帶隨機碼
+                    else str(d.get("token") or "") if d.get("gate") == "fix-check" else ""),
++         # 預期值表簽核(2026-11-04):同一個提交簽兩次各算一筆(事件自帶隨機碼),統計分人簽與 AI 簽
++         **({"token": str(d.get("token") or ""), "origin": d.get("origin")} if (d.get("gate"), d.get("kind")) == ("signoff", "expected-signed") else {}),
+          "loop": d.get("loop") if d.get("gate") == "fix-check" else None,
+          "round": d.get("round") if d.get("gate") == "fix-check" else None,
+          "record_sha256": d.get("record_sha256") if d.get("gate") == "fix-check" else None,
+          "secs": d.get("secs") if d.get("gate") == "fix-check" else None,
+          "failed_items": d.get("failed_items") if d.get("gate") == "fix-check" else None,
+          "not_run_items": d.get("not_run_items") if d.get("gate") == "fix-check" else None,
+          "dispositions": d.get("dispositions") if d.get("kind") == "dispositions" else None,
+          "candidates": d.get("candidates") if d.get("kind") == "dispositions" else None,   # 候選張力題數(2026-09-09)
+          "recall_miss": d.get("recall_miss") if d.get("kind") == "recall-miss" else None,
+          # 每支檔有家(2026-09-11 [S27]):擋下事件的(檔,節點)配對——回頭條件要拿它列出「被逼出來的 about_code」
+@@ -34320,54 +34668,56 @@ def _sync_global_from_project(root: Path):
+         print(_sync_msg(_h, _sync_global_hooks(root, _h)))
+ 
+ 
+ def _install_hooks_py(root: Path):
+     """相容外殼:兩件一起做。★新程式碼請分開呼叫★,尤其是「先更新 vendored 再同步全域」
+     那條路(_vendor_toolchain);這支留給「來源就是最新」的呼叫點(cmd_init 的新建路徑)。"""
+     _set_hooks_path(root)
+     _sync_global_from_project(root)
+ 
+ 
+-def _confirm_tty(prompt, stdin_timeout=False):
++def _confirm_tty(prompt, stdin_timeout=False, timeout=None):
+     """三階互動確認(curl|bash 安全;設計:Projects/bootstrap一鍵對稱_計劃 std F1/F2/F3):
+     回 True(答 y/yes)/False(其他答案=拒絕)/None(非互動或無人回答→呼叫端跳過)。
+     ①stdin.isatty→input();EOFError 落入②非當 False(isatty 撒謊時別誤判拒絕)
+     ②os.open(tty,O_RDWR) 低階 fd(★r+ 開法對 tty 會炸 not seekable★)+os.write prompt
+       +select timeout(有控制終端≠有人回答,防 readline 永久掛)+os.read
+     ③皆不可→None。嚴禁在非 isatty 時讀 sys.stdin(curl|bash 下那是腳本殘文管線)。
+     測試接縫:LUMOS_TTY(預設 /dev/tty;單元測指 pty slave)/LUMOS_TTY_TIMEOUT(預設 30s)。
+     stdin_timeout=True(android-e2e waive 與 --ack 用):①那條路也等 LUMOS_TTY_TIMEOUT 秒,沒人答回 None——
+     掛著虛擬終端、沒有人在的流程才不會永遠等(設計審 android端到端驗收 r3 資源席);其他呼叫端照舊。"""
+     def _norm(ans):
+         return ans.strip().lower() in ("y", "yes")   # 嚴格答案+預設 N(F2-B 殘文緩解)
+-    timeout = _confirm_tty_timeout()
++    timeout = _confirm_tty_timeout(timeout)
+     if sys.stdin.isatty():
+         try:
+             if not stdin_timeout:
+                 return _norm(input(prompt))
+             line = _confirm_tty_stdin(prompt, timeout)
+             if line is None:
+                 return None
+             if line:                                 # 空字串=讀到 EOF(isatty 撒謊)→ 試 ②
+                 return _norm(line)
+         except EOFError:
+             pass                                     # isatty 撒謊 → 試 ②(F2-A)
+     return _confirm_tty_dev(prompt, timeout, _norm)
+ 
+ 
+-def _confirm_tty_timeout():
+-    """LUMOS_TTY_TIMEOUT(秒,預設 30);讀不懂、負數、NaN、無限大都用預設——select 收到負數或 NaN 會丟 ValueError(代碼審 code-e2e-gate r1 邊界席)。"""
++def _confirm_tty_timeout(default=None):
++    """LUMOS_TTY_TIMEOUT(秒,預設 30;呼叫端給了 default 就用它當預設,環境變數照樣優先——預期值表簽核給 300 秒,讀表的人才不會被記成 AI 簽);
++    讀不懂、負數、NaN、無限大都用預設——select 收到負數或 NaN 會丟 ValueError(代碼審 code-e2e-gate r1 邊界席)。"""
++    dflt = float(default) if default is not None else 30.0
+     try:
+-        t = float(os.environ.get("LUMOS_TTY_TIMEOUT", "30"))
++        t = float(os.environ.get("LUMOS_TTY_TIMEOUT", str(dflt)))
+     except ValueError:
+-        return 30.0
+-    return t if 0 <= t <= 86400 else 30.0   # 上界:大到 select 收不下(time_t 溢位)會丟 OverflowError(代碼審 r2 資源席)
++        return dflt
++    return t if 0 <= t <= 86400 else dflt   # 上界:大到 select 收不下(time_t 溢位)會丟 OverflowError(代碼審 r2 資源席)
+ 
+ 
+ def _confirm_tty_stdin(prompt, timeout):
+     """_confirm_tty 第 ① 階帶逾時(stdin_timeout):等 timeout 秒沒人答回 None;讀到 EOF 回空字串(呼叫端改試第 ② 階)。"""
+     import select
+     sys.stdout.write(prompt)
+     sys.stdout.flush()
+     readable, _, _ = select.select([sys.stdin], [], [], timeout)
+     if not readable:
+         print("\n(無回應,視為略過)")
+@@ -38556,30 +38906,30 @@ def _lint_waive_show(repo_root, as_json):
+ 
+ 
+ def _lint_waive_origin(key, rule="", file_rel="", note=""):
+     """放行前在終端問一句(印出指紋、規則、檔案、理由,外來字串用擋下訊息那支清過)→ "human"/"ai"/None,判法見 _waive_origin_tty。
+     規則與檔案是放行指令自己帶進來的,工具沒拿指紋去對當下的候選,提示照實標「未核對」,人要看的是指紋。"""
+     c = _out_clean
+     return _waive_origin_tty(f"放行這條新增告警:指紋 {c(key, 80)};規則 {c(rule or '(沒帶)', 80)}、檔案 {c(file_rel or '(沒帶)', 200)}"
+                              f"(放行指令帶入,未核對);理由 {c(note, 200)}——是你本人確認的嗎?[y/N] ")
+ 
+ 
+-def _waive_origin_tty(prompt):
++def _waive_origin_tty(prompt, refused="沒放行", timeout=None):
+     """放行前在終端問一句 → "human"(答 y)/ "ai"(沒有互動終端、逾時、讀不到回答)/ None(答 n 或 Ctrl-C:不放行)。
+-    Android 端到端驗收與新增告警閘的放行共用這一支。"""
++    Android 端到端驗收、新增告警閘的放行與預期值表簽核共用這一支;refused=沒同意時印的字(簽核傳「沒簽」),timeout=預設逾時秒數(環境變數優先)。"""
+     try:
+-        ans = _confirm_tty(prompt, stdin_timeout=True)
++        ans = _confirm_tty(prompt, stdin_timeout=True, timeout=timeout)
+     except KeyboardInterrupt:
+-        print("\n沒放行(按了 Ctrl-C)。", file=sys.stderr)
++        print(f"\n{refused}(按了 Ctrl-C)。", file=sys.stderr)
+         return None
+     if ans is False:
+-        print("沒放行(終端答的不是 y)。", file=sys.stderr)
++        print(f"{refused}(終端答的不是 y)。", file=sys.stderr)
+         return None
+     return "human" if ans is True else "ai"
+ 
+ 
+ def _lint_waiver_ai_unacked(it):
+     """這筆放行是不是 AI 放的、還沒人看過。沒有 origin 欄的舊紀錄當人放的(by 寫什麼都不影響)。"""
+     return isinstance(it, dict) and it.get("origin") == "ai" and it.get("acked") is not True
+ 
+ 
+ def _lint_waivers_ai_pending(repo_root):
+@@ -72290,23 +72640,23 @@ HELP_WHEN = {
+     "settle": "預告的那條做完了:預告行換成正式合約行並綁上測試,守衛節點就地轉成已通過(要 --test);已經 pass 但還留著預告句時補改成歷史說法(不用 --test,可給 --date)。",
+     "abandon": "預告的那條決定不做了:立墓碑而不是刪掉(下一個人看得到曾經打算做什麼)。要先 lumos signoff <守衛節點> --ref <守衛節點>。",
+     "required": "看現在有幾條預告還沒做完、有沒有逾期或七天內到期。有逾期回非零。",
+     "audit": "某條合約被不知道脈絡的人審過了,留 [audit:] 戳記。",
+     "residual-ask": "合約審計第 3 問的反例要記殘留前,第二個獨立代理判它測不測得到——當場記下;同一個反例只准問一次是方便,把關在推送時的高風險代碼審。",
+     "residual": "反例確認測不到、殘留決策記好之後,在合約行尾加 [residual:<節點>#dN](--remove 拿掉、--reindex 重建索引);碰到它守的程式時 pitfalls 升 high。",
+     "trace": "某條合約 → 守衛測試 → 驗證紀錄的證據鏈,反向可查爆炸半徑。",
+     "kill-add": "宣告一個「故意弄壞」的配方,給 kill 驗測試守不守得住;加 --try 寫完當場只跑這一條。",
+     "kill-rm": "配方失配了(doctor P2 或 kill-add 提醒說原文找不到/不只一處)要改寫時,先用它移掉舊的那條,再照印出的範本 kill-add;不帶 --id 跑一次列出這篇每條的短身分。",
+     "kill": "在隔離副本套壞法,綁的測試必須翻紅;沒翻紅=那條測試是裝飾。--id <短身分> 只跑那一條。",
+-    "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次:風險低時紅綠是放行條件(不符就擋)、風險高只印不擋,相依功能的合約測試紅一律擋。",
++    "spec-gate": "設計寫完先過這道:條款句式合不合一條文法、每條綁了 [test:]/[manual:] 沒、回退節夠不夠;綁的測試真跑一次:風險低時紅綠是放行條件(不符就擋)、風險高只印不擋,相依功能的合約測試紅一律擋;風險高、有新行為條款的計劃要寫「## 預期值表」(格式不合就擋)。",
+     "spec-trace": "計劃的驗收條款每條綁了測試沒(綁了/靠人/未標/懸空);舊制「驗證紀錄認領」欄照印當對照。",
+-    "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認)。",
++    "signoff": "業務方點頭了,留簽核痕跡(規則還符不符合業務,測試買不到,要人確認);--expected 簽計劃的預期值表(風險高計劃推送前要簽,綁整張表的指紋)。",
+     "sync-verified-by": "驗證紀錄建了但功能筆記沒反向登記,幫你補 verified_by(紀錄寫了 system_refs 就只看它列的)。預設 dry-run,--apply 才寫。",
+     "search": "進場第一步:這件事圖譜有沒有記、在哪篇。0 命中先換同義詞;--code 連程式碼一起搜。",
+     "decisions": "當初為什麼這樣決定、翻案了嗎。--superseded 全庫掃被推翻的。",
+     "rejections": "設計前先看以前否決過什麼:收齊圖譜裡的不選欄位、被翻案與寫著不做的決策、作廢的整篇,按概念比對你的提案。",
+     "stale": "我改了某個流程/環境,哪些驗證該重驗(--candidate --match <關鍵字>);或列已過期的驗證。",
+     "query": "按欄位條件篩筆記:金流且未收案、連到 X 且還開著。至少給一個條件。",
+     "recent": "最近 N 天動了哪些筆記。開工掌握現況用。",
+     "stats": "圖譜多大、各資料夾幾篇。",
+     "export": "把圖譜畫成 mermaid / dot / 互動 html。",
+     "set": "改一篇的單一值欄位(status / updated / type…)。改 status 會連帶同步標籤。別手改開頭欄位。",
+@@ -73031,20 +73381,21 @@ def main():
+ 
+     p = sub.add_parser("spec-trace", help="條款級追溯:計劃 [SN] 條款那一行綁的 [test:]/[manual:](裁決,有未標 rc1)× 回指 Verification 認領(舊制對照欄)")
+     p.add_argument("node", help="計劃節點")
+     p.add_argument("--json", dest="st_json", action="store_true")
+ 
+     p = sub.add_parser("signoff", help="業務簽核留痕(validation):人點頭 → .signoff-log.jsonl + frontmatter signed_off")
+     p.add_argument("node")
+     p.add_argument("--note", required=True, help="確認了什麼(必填,給未來的人看)")
+     p.add_argument("--by", help="誰確認的")
+     p.add_argument("--ref", dest="so_ref", help="這次簽核針對哪個東西(任意字串,給機械比對用;必要合約清單_計劃)")
++    p.add_argument("--expected", action="store_true", help="簽計劃的預期值表(風險高計劃推送前要簽;綁整張表的指紋,改一格就要重簽;不寫 signed_off)")
+ 
+     p = sub.add_parser("sync-verified-by", help="補 Check 3 漏寫的 verified_by(dry-run 預設)")
+     p.add_argument("--apply", action="store_true", help="真寫入(否則 dry-run 只列)")
+ 
+     p = sub.add_parser("search", help="全文搜尋(frontmatter+body);取代 obsidian search")
+     p.add_argument("term")
+     p.add_argument("--path", dest="path_prefix", help="限資料夾前綴(如 Systems)")
+     p.add_argument("--regex", action="store_true", help="term 當正則(預設 substring 大小寫不敏感)")
+     p.add_argument("--files-only", action="store_true", help="只列檔名+命中數")
+     p.add_argument("--code", action="store_true", help="含 code block(預設排除,對齊 doctor)")
+@@ -74086,21 +74437,21 @@ def main():
+             return 0
+         if args.sg_push:
+             return _spec_gate_push_check(env, args.sg_push, repo=args.sg_repo)
+         if not args.node:
+             print("擋下:要給計劃節點(lumos spec-gate Projects/<名>_計劃),或用 --push-check <範圍> / --door-rule", file=sys.stderr)
+             return 2
+         return cmd_spec_gate(env, args.node, no_run=args.sg_no_run)
+     if args.cmd == "spec-trace":
+         return cmd_spec_trace(env, args.node, as_json=args.st_json)
+     if args.cmd == "signoff":
+-        return cmd_signoff(env, args.node, note=args.note, by=args.by, ref=args.so_ref)
++        return cmd_signoff(env, args.node, note=args.note, by=args.by, ref=args.so_ref, expected=args.expected)
+     if args.cmd == "gov":
+         return cmd_gov(env, args.node, since_days=args.since, full=args.full, stats=args.stats, nags=args.gov_nags)
+ 
+     if args.cmd == "ci-wait":
+         return cmd_ci_wait(env, timeout=args.cw_timeout, repo_dir=args.cw_repo,
+                            sha=args.cw_sha, branch=args.cw_branch,
+                            grace=args.cw_grace, as_json=args.cw_json)
+     if args.cmd == "ci-status":
+         return cmd_ci_status(env, repo_dir=args.cs_repo, as_json=args.cs_json)
+     if args.cmd == "about-code":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a570ffe2b..ffc69a27a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -149,20 +149,21 @@ def _need_src(*rels):
+     ★只認檔案系統實況★——不看測試名字、不維護清單(分支簿記天生會漏,本專案
+     2026-08-01 才因同型的簿記漏一條被代碼審抓到)。"""
+     repo = Path(GRAPHCTL).resolve().parent.parent
+     for rel in rels:
+         if not (repo / rel).exists():
+             raise _SrcOnly(f"需要來源 repo 的 {rel}(消費端專案沒有,非失敗)")
+ 
+ 
+ import os as _os_mod
+ _os_mod.environ.setdefault("LUMOS_PANEL_RETIRE_CUTOFF", "9999-12-31")   # probe輪退場 d1:既有 panel 行為測試凍結在退役前語意;退役行為由 t_panel_probe_retired 自帶 cutoff 覆寫驗
++_os_mod.environ.setdefault("LUMOS_HIGH_RISK_EVIDENCE_SINCE", "9999-12-31")   # 高風險測試證據加嚴:既有規格閘測試停在生效前(不要求預期值表與簽);新測試用 _hre_since 改
+ 
+ 
+ def run(vault, *args, expect_rc=None):
+     r = subprocess.run([sys.executable, GRAPHCTL, "--vault", str(vault), *args],
+                        capture_output=True, text=True)
+     if expect_rc is not None and r.returncode != expect_rc:
+         raise AssertionError(f"rc={r.returncode} 預期 {expect_rc}\n{r.stdout}\n{r.stderr}")
+     return r
+ 
+ 
+@@ -73791,29 +73792,481 @@ def _mk_spec_gate_repo(d, run_cmd="python3 tests/run.py {method}"):
+     (d / ".lumos").mkdir()
+     cfg = {"test_profile": "python", "test": {"method_regex": "(?m)^def (t_[A-Za-z0-9_]+)\\s*\\("}}
+     if run_cmd:
+         cfg["test"]["run_cmd"] = run_cmd
+     (d / ".lumos" / "config.json").write_text(_j.dumps(cfg), encoding="utf-8")
+     kg = d / "docs" / "x-knowledge"; (kg / "Projects").mkdir(parents=True)
+     _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base", "--no-verify"])
+     return d, kg
+ 
+ 
++# 測試計劃一律帶 created(早於預期值表生效日;高風險測試證據加嚴_計劃 做法 7):沒寫 created 又沒提交的計劃讀不到日期,會被當成生效日之後而要求預期值表與簽
++_SG_CREATED = "created: 2026-10-01\n"
+ _SG_ROLLBACK = "\n## 回退\n把處置閘第五步改回上一版,指令保留只印不擋,紀律那句改回舊寫法。\n"
+ 
+ 
+ def _sg_plan(kg, name, clauses, rollback=_SG_ROLLBACK):
+     p = kg / "Projects" / f"{name}_計劃.md"
+-    p.write_text("---\ntype: project\nstatus: doing\n---\n# " + name + "\n\n" + "\n".join(clauses) + "\n" + rollback, encoding="utf-8")
++    p.write_text("---\ntype: project\nstatus: doing\n" + _SG_CREATED + "---\n# " + name + "\n\n" + "\n".join(clauses) + "\n" + rollback, encoding="utf-8")
+     return p
+ 
+ 
++# ── 高風險測試證據加嚴(Projects/高風險測試證據加嚴_計劃):預期值表與簽核 ──
++def _hre_since(day):
++    """測試期間把預期值表的生效日改成 day(總開關預設 9999,既有測試停在生效前),跑完還原。"""
++    import functools
++
++    def deco(fn):
++        @functools.wraps(fn)
++        def _w(*a, **k):
++            old = _os_mod.environ.get("LUMOS_HIGH_RISK_EVIDENCE_SINCE")
++            _os_mod.environ["LUMOS_HIGH_RISK_EVIDENCE_SINCE"] = day
++            try:
++                return fn(*a, **k)
++            finally:
++                if old is None:
++                    _os_mod.environ.pop("LUMOS_HIGH_RISK_EVIDENCE_SINCE", None)
++                else:
++                    _os_mod.environ["LUMOS_HIGH_RISK_EVIDENCE_SINCE"] = old
++        return _w
++    return deco
++
++
++_HRE_CLAUSES = ["## 驗收條款", "", "- [S1] 當單筆消費滿 1000 元,系統應折扣一成 [test:t_red]",
++                "- [S2] 當顧客查詢訂單,系統應照舊顯示 [keeps] [test:t_green]",
++                "- [S3] 當收銀員打開結帳畫面,系統應顯示折扣列 [manual:人工打開畫面看折扣列]"]
++_HRE_TABLE = ["", "## 預期值表", "", "| 條款 | 輸入 | 預期 | 來源 |", "|---|---|---|---|",
++              "| S1 | 單筆消費 1000 元 | 折扣 100 元 | 需求文件〈滿額折扣〉第 2 點 |",
++              "| S3 | 打開結帳畫面 | 看到折扣列 | 需求文件〈畫面〉第 1 點 |"]
++
++
++def _hre_text(table=None, clauses=None):
++    return "\n".join(["# 甲", ""] + (clauses if clauses is not None else _HRE_CLAUSES)
++                     + (table if table is not None else _HRE_TABLE)) + "\n"
++
++
++def _hre_check(text):
++    m = _load_lumos()
++    return m._expected_table(text, *m._expected_clause_sets(text))
++
++
++def _hre_repo(name):
++    """規格閘測試倉庫(t_red 紅、t_green 綠)+ 一份風險高(沒有已排除行)的計劃;回 (d, kg, 計劃路徑)。"""
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / name)
++    p = kg / "Projects" / "甲_計劃.md"
++    p.write_text("---\ntype: project\nstatus: doing\n---\n" + _hre_text() + _SG_ROLLBACK, encoding="utf-8")
++    return d, kg, p
++
++
++def _hre_signoff(kg, answer=None, extra=()):
++    """跑 lumos signoff --expected:answer=None → 沒有終端(記 AI);answer=b"y\\n"/b"n\\n" → 虛擬終端預先餵答案。"""
++    import os
++    env = dict(_os_mod.environ, LUMOS_TTY="/nonexistent-tty", LUMOS_TTY_TIMEOUT="2")
++    master = slave = None
++    if answer is not None:
++        master, slave = os.openpty()
++        env["LUMOS_TTY"] = os.ttyname(slave)
++        os.write(master, answer)
++    try:
++        return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(kg), "signoff", "Projects/甲_計劃", "--expected",
++                               "--note", "對過需求文件,折扣與畫面都對", *extra], capture_output=True, text=True,
++                              stdin=subprocess.DEVNULL, env=env, timeout=120)
++    finally:
++        for fd in (master, slave):
++            if fd is not None:
++                os.close(fd)
++
++
++def _hre_gov(d, gate=None, kind=None):
++    import json as _j
++    out = []
++    p = Path(d) / "docs" / ".governance-log.jsonl"
++    if not p.is_file():
++        return out
++    for ln in p.read_text(encoding="utf-8").splitlines():
++        try:
++            e = _j.loads(ln)
++        except ValueError:
++            continue
++        if isinstance(e, dict) and (gate is None or e.get("gate") == gate) and (kind is None or e.get("kind") == kind):
++            out.append(e)
++    return out
++
++
++def t_expected_table_check():
++    """[S1] 預期值表每種格式錯都擋下、逐項列出;全標 keeps 的計劃不要求表。判準來源:計劃做法 3 的逐條規則。"""
++    data, probs = _hre_check(_hre_text())
++    check("S1 前置:合格的表 → 沒有問題、兩列資料", probs == [] and data is not None and len(data) == 2, repr(probs))
++    T = _HRE_TABLE
++    hd, sep, r1, r3 = T[3], T[4], T[5], T[6]
++    cases = [
++        ("節出現兩次", T + ["", "## 預期值表", "", hd, sep, r1], "出現 2 次"),
++        ("節不存在", [], "沒有「## 預期值表」"),
++        ("表寫在圍欄裡", ["", "## 預期值表", "", "```", hd, sep, r1, r3, "```"], "節裡沒有表"),
++        ("表後面還有表格列", T + ["", r1], "表外還有表格列"),
++        ("表後面有縮排四格的表格列", T + ["", "    " + r1], "表外還有表格列"),
++        ("表頭不是四欄", ["", "## 預期值表", "", "| 條款 | 輸入 | 預期 |", "|---|---|---|", r1, r3], "表頭"),
++        ("分隔列不對", ["", "## 預期值表", "", hd, "|--|---|---|---|", r1, r3], "分隔列"),
++        ("沒有資料列", ["", "## 預期值表", "", hd, sep], "至少要有一列資料"),
++        ("某列只有三格", T[:5] + ["| S1 | 單筆消費 1000 元 | 需求文件第二點 |", r3], "剛好 4 格"),
++        ("某格超過 2000 字", T[:5] + ["| S1 | " + "甲" * 2001 + " | 折扣 100 元 | 需求文件第二點 |", r3], "2000"),
++        ("條款欄寫 s3", T[:5] + [r1, r3.replace("| S3 |", "| s3 |")], "條款欄"),
++        ("條款欄寫 S03", T[:5] + [r1, r3.replace("| S3 |", "| S03 |")], "條款欄"),
++        ("條款欄寫全形", T[:5] + [r1, r3.replace("| S3 |", "| Ｓ３ |")], "條款欄"),
++        ("條款欄加方括號", T[:5] + [r1, r3.replace("| S3 |", "| [S3] |")], "條款欄"),
++        ("條款不存在", T[:5] + [r1, r3, "| S9 | 甲乙 | 丙丁 | 需求文件第九點 |"], "S9 不存在"),
++        ("條款標了 keeps", T[:5] + [r1, r3, "| S2 | 查訂單 | 照舊顯示 | 需求文件第一點 |"], "keeps"),
++        ("新行為條款沒有列", T[:5] + [r1], "S3"),
++        ("輸入格只有標點", T[:5] + [r1, "| S3 | 。 | 看到折扣列 | 需求文件〈畫面〉第 1 點 |"], "輸入格是空的"),
++        ("預期格只有零寬字元", T[:5] + [r1, "| S3 | 打開結帳畫面 | ​ | 需求文件〈畫面〉第 1 點 |"], "預期格是空的"),
++        ("來源不到 4 個字", T[:5] + [r1, "| S3 | 打開結帳畫面 | 看到折扣列 | 需求 |"], "來源格"),
++        ("來源剛好 3 個字", T[:5] + [r1, "| S3 | 打開結帳畫面 | 看到折扣列 | 需求文 |"], "來源格"),
++    ]
++    for label, table, kw in cases:
++        data, probs = _hre_check(_hre_text(table))
++        check(f"S1 {label} → 擋下、點名「{kw}」", data is None and any(kw in x for x in probs), repr(probs)[:400])
++    many = T[:5] + [r1, r3] + [f"| S1 | 輸入{i} | 預期{i} | 需求文件第二點 |" for i in range(499)]
++    data, probs = _hre_check(_hre_text(many))
++    check("S1 資料列 501 列 → 擋下", data is None and any("最多 500" in x for x in probs), repr(probs)[:300])
++    ok500 = T[:5] + [r1, r3] + [f"| S1 | 輸入{i} | 預期{i} | 需求文件第二點 |" for i in range(498)]
++    data, probs = _hre_check(_hre_text(ok500))
++    check("S1 資料列剛好 500 列(不含表頭與分隔列)→ 過", probs == [], repr(probs)[:300])
++    data, probs = _hre_check(_hre_text(T[:5] + ["| S1 | " + "甲" * 2000 + " | 折扣 | 需求文件第二點 |", r3]))
++    check("S1 某格剛好 2000 字 → 過", probs == [], repr(probs)[:300])
++    data, probs = _hre_check(_hre_text(T[:5] + [r1, "| S3 | 打開結帳畫面 | 看到折扣列 | 需求文件 |"]))
++    check("S1 來源剛好 4 個字 → 過", probs == [], repr(probs)[:300])
++    nfd = unicodedata.normalize("NFD", "é") * 2000
++    data, probs = _hre_check(_hre_text(T[:5] + ["| S1 | " + nfd + " | 折扣 | 需求文件第二點 |", r3]))
++    check("S1 某格 NFC 後剛好 2000 字(寫成分解形是 4000 個碼位)→ 過", len(nfd) == 4000 and probs == [], repr(probs)[:300])
++    data, probs = _hre_check(_hre_text(T[:5] + ["| S1 | 甲 | 折扣 | 需求文件第二點 |", r3, r1.replace("| S1 |", "| S99 |"), "| S1 | 乙 | 丙 | 丁 |"]))
++    check("S1 多個錯逐項列出", data is None and len(probs) >= 2, repr(probs)[:400])
++    m = _load_lumos()
++    keeps_only = ["## 驗收條款", "", "- [S1] 當顧客查詢訂單,系統應照舊顯示 [keeps] [test:t_green]"]
++    new, keeps, ids = m._expected_clause_sets(_hre_text([], keeps_only))
++    check("S1 全標 keeps 的計劃 → 沒有新行為條款(不要求表)", new == set() and keeps == {"S1"}, repr((new, keeps)))
++
++
++def t_expected_table_parse():
++    """[S2] 拆格照 GFM:\\| 是字面管線、\\\\ 是字面反斜線;只丟外側空格;行首縮排 1 到 3 個空白算進表、4 個不算;
++    表格裡的 S3 不被當成條款定義。"""
++    m = _load_lumos()
++    sp = m._expected_split_cells
++    check("S2 格裡的 \\| 是字面管線", sp("| a \\| b | c |") == [" a | b ", " c "], repr(sp("| a \\| b | c |")))
++    check("S2 \\\\ 是字面反斜線、其他反斜線照留", sp("| a\\\\ | b\\n |") == [" a\\ ", " b\\n "], repr(sp("| a\\\\ | b\\n |")))
++    check("S2 格尾是 \\| 照留成字面", sp("| x \\|| y |") == [" x |", " y "], repr(sp("| x \\|| y |")))
++    check("S2 行尾有空白的外側管線丟掉", sp("| a | b |   ") == [" a ", " b "], repr(sp("| a | b |   ")))
++    check("S2 沒有外側管線也拆得對", sp("a | b") == ["a ", " b"], repr(sp("a | b")))
++    for n in (1, 2, 3):
++        t = _hre_text(_HRE_TABLE[:6] + [" " * n + _HRE_TABLE[6]])
++        data, probs = _hre_check(t)
++        check(f"S2 縮排 {n} 個空白的表格列算進表", probs == [] and len(data) == 2, repr(probs))
++    data, probs = _hre_check(_hre_text(_HRE_TABLE[:6] + ["    " + _HRE_TABLE[6]]))
++    check("S2 縮排 4 個空白的不算進表(擋下)", data is None and any("表外" in x for x in probs), repr(probs))
++    data, probs = _hre_check(_hre_text(_HRE_TABLE[:5] + ["| S1 | 單價 \\| 數量 | 折扣 100 元 | 需求文件第二點 |", _HRE_TABLE[6]]))
++    check("S2 格內跳脫的管線不多切一格", probs == [] and data[0][1] == "單價 | 數量", repr((probs, data)))
++    rows = m.clause_bindings(_hre_text(), {}, None, lambda _p: set(), lambda _p: "")
++    check("S2 表格列的 S1、S3 不被當成條款定義(只有驗收條款那三條)",
++          sorted(r["line"] for r in rows if r.get("defined")) == [5, 6, 7], repr([(r["id"], r["line"]) for r in rows]))
++
++
++def t_expected_table_fingerprint():
++    """[S3] 表指紋:任一格改一個字就變(含 m² 改 m2、兩個空白改一個);夾分隔字元位置不同的兩張表指紋不同;只改換行符號或格子頭尾空白不變。"""
++    m = _load_lumos()
++
++    def sha(text):
++        data, probs = _hre_check(text)
++        return m._expected_table_sha(data) if data else None
++    base = sha(_hre_text())
++    check("S3 前置:合格的表算得出指紋", isinstance(base, str) and len(base) == 64, repr(base))
++    T = _HRE_TABLE
++    for label, row in (("改一個字", T[5].replace("100", "101")), ("m² 改 m2", T[5].replace("1000 元", "1000 m²")),
++                       ("兩個空白改一個", T[5].replace("1000 元", "1000  元"))):
++        a = sha(_hre_text(T[:5] + [row, T[6]]))
++        check(f"S3 {label} → 指紋改變", a is not None and a != base, label)
++    m2a = sha(_hre_text(T[:5] + [T[5].replace("1000 元", "1000 m²"), T[6]]))
++    m2b = sha(_hre_text(T[:5] + [T[5].replace("1000 元", "1000 m2"), T[6]]))
++    check("S3 m² 與 m2 指紋不同", m2a != m2b and None not in (m2a, m2b))
++    x = sha(_hre_text(T[:5] + ["| S1 | 甲\\| | 乙 | 需求文件第二點 |", T[6]]))
++    y = sha(_hre_text(T[:5] + ["| S1 | 甲 | \\|乙 | 需求文件第二點 |", T[6]]))
++    check("S3 只差在格裡夾的分隔字元位置 → 指紋不同", x != y and None not in (x, y))
++    crlf = _hre_text().replace("\n", "\r\n")
++    check("S3 只改換行符號 → 指紋不變", sha(crlf) == base)
++    pad = sha(_hre_text(T[:5] + [T[5].replace("| S1 | 單筆", "|   S1   |   單筆"), T[6]]))
++    check("S3 只改格子頭尾空白 → 指紋不變", pad == base)
++    cafe_c = sha(_hre_text(T[:5] + [T[5].replace("單筆", unicodedata.normalize("NFC", "café")), T[6]]))
++    cafe_d = sha(_hre_text(T[:5] + [T[5].replace("單筆", unicodedata.normalize("NFD", "café")), T[6]]))
++    check("S3 同一個字的組合形與分解形 → 指紋相同(格子先轉 NFC)", cafe_c == cafe_d and cafe_c is not None and cafe_c != base)
++
++
++@_hre_since("2000-01-01")
++def t_spec_gate_expected_table_high():
++    """[S4] 要簽的計劃(風險高、生效日之後、有新行為)跑規格閘,預期值表不過 → rc1 逐項列出;表過了印指紋與簽核指令;
++    風險低、全標 keeps 的計劃不查表。"""
++    d, kg, p = _hre_repo("hre4")
++    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
++    check("S4 前置:合格的表 → 印預期值表 ✓ 與簽核指令、rc0", r.returncode == 0 and "預期值表: ✓" in r.stdout and "--expected" in r.stdout,
++          r.stdout[-600:])
++    p.write_text("---\ntype: project\nstatus: doing\n---\n" + _hre_text(_HRE_TABLE[:6]) + _SG_ROLLBACK, encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
++    check("S4 新行為條款 S3 沒有列 → rc1、逐項列出", r.returncode == 1 and "預期值表: ✗" in r.stdout and "S3" in r.stdout, r.stdout[-600:])
++    _sg_plan2(kg, "乙", _HRE_CLAUSES)
++    r = run(kg, "spec-gate", "Projects/乙_計劃", "--no-run")
++    check("S4 風險低的計劃沒有表也不查", "預期值表" not in r.stdout, r.stdout[-600:])
++    p.write_text("---\ntype: project\nstatus: doing\n---\n" + _hre_text([], ["## 驗收條款", "", "- [S1] 當顧客查詢訂單,系統應照舊顯示 [keeps] [test:t_green]"])
++                 + _SG_ROLLBACK, encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
++    check("S4 全標 keeps 的計劃不查表", "預期值表" not in r.stdout, r.stdout[-600:])
++
++
++@_hre_since("2000-01-01")
++def t_signoff_expected_table():
++    """[S5] signoff --expected:先印整張表再只問一句;答 y 記 human、沒有終端記 ai、答 n 回 1 不寫;
++    事件帶 plan、table_sha、row_count、origin、who、token、nodes,不寫 signed_off 與 .signoff-log.jsonl;done 的計劃也能簽。"""
++    if not hasattr(_os_mod, "openpty"):
++        raise _SrcOnly("非 POSIX(要 os.openpty 模擬終端機),這段沒驗到")
++    m = _load_lumos()
++    d, kg, p = _hre_repo("hre5")
++    r = _hre_signoff(kg)
++    ev = _hre_gov(d, "signoff", "expected-signed")
++    data, _probs = _hre_check(p.read_text(encoding="utf-8"))
++    want_sha = m._expected_table_sha(data)
++    check("S5 沒有終端 → rc0、印記成 AI 簽、寫一筆 origin=ai", r.returncode == 0 and "記成 AI 簽" in r.stdout and len(ev) == 1
++          and ev[0].get("origin") == "ai" and ev[0].get("who") == "ai", r.stdout[-400:] + r.stderr[-300:])
++    e = ev[0] if ev else {}
++    check("S5 事件欄位:plan、table_sha、row_count、token、nodes", e.get("plan") == "Projects/甲_計劃.md" and e.get("table_sha") == want_sha
++          and e.get("row_count") == 2 and str(e.get("token", "")).startswith("EXP-") and e.get("nodes") == ["Projects/甲_計劃.md"], repr(e))
++    i_tbl, i_ask = r.stdout.find("| S1 |"), r.stdout.find("確認上面這張預期值表")
++    check("S5 先印整張表(一般輸出)", 0 <= i_tbl and "| S3 |" in r.stdout, r.stdout[-400:])
++    check("S5 不寫 signed_off 與 .signoff-log.jsonl", "signed_off" not in p.read_text(encoding="utf-8")
++          and not (Path(d) / "docs" / ".signoff-log.jsonl").exists())
++    r = _hre_signoff(kg, b"y\n")
++    ev = _hre_gov(d, "signoff", "expected-signed")
++    check("S5 終端答 y → 記 human", r.returncode == 0 and len(ev) == 2 and ev[-1].get("origin") == "human" and ev[-1].get("who") not in ("", "ai"),
++          r.stdout[-300:] + r.stderr[-300:])
++    r = _hre_signoff(kg, b"n\n")
++    check("S5 終端答 n → 回 1、印沒簽、不寫", r.returncode == 1 and "沒簽" in r.stderr and len(_hre_gov(d, "signoff", "expected-signed")) == 2,
++          r.stdout[-300:] + r.stderr[-300:])
++    p.write_text(p.read_text(encoding="utf-8").replace("status: doing", "status: done"), encoding="utf-8")
++    r = _hre_signoff(kg)
++    check("S5 status 是 done 的計劃也能簽", r.returncode == 0 and len(_hre_gov(d, "signoff", "expected-signed")) == 3, r.stdout[-300:] + r.stderr[-300:])
++    check("S5 確認提示只有一句(不含表格內容)", "確認上面這張預期值表" in (r.stdout + r.stderr) or i_ask < 0)
++    # 讀表的人要有時間:沒設 LUMOS_TTY_TIMEOUT 時等 300 秒(預設 30 秒來不及讀完整張表,會被記成 AI 簽)
++    import io, contextlib
++    seen = []
++    orig = m._waive_origin_tty
++    m._waive_origin_tty = lambda prompt, refused="沒放行", timeout=None: (seen.append(timeout), None)[1]
++    old_t = _os_mod.environ.pop("LUMOS_TTY_TIMEOUT", None)
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            rc = m._cmd_signoff_expected(m.Env(kg), "Projects/甲_計劃.md", "對過需求文件")
++    finally:
++        m._waive_origin_tty = orig
++        if old_t is not None:
++            _os_mod.environ["LUMOS_TTY_TIMEOUT"] = old_t
++    check("S5 簽核問人時給 300 秒(答 n 那條路回 1)", seen == [300] and rc == 1 and m._confirm_tty_timeout(300) == 300.0, repr((seen, rc)))
++
++
++@_hre_since("2000-01-01")
++def t_signoff_expected_refuse():
++    """[S6] 表格檢查不過、計劃不需要簽、同時帶 --by 或 --ref、治理帳寫不進去 → 回 2、不寫事件。"""
++    d, kg, p = _hre_repo("hre6")
++    good = p.read_text(encoding="utf-8")
++    p.write_text("---\ntype: project\nstatus: doing\n---\n" + _hre_text(_HRE_TABLE[:6]) + _SG_ROLLBACK, encoding="utf-8")
++    r = _hre_signoff(kg)
++    check("S6 表格檢查不過 → 回 2、不寫", r.returncode == 2 and "預期值表檢查不過" in r.stderr and not _hre_gov(d, "signoff"), r.stderr[-300:])
++    p.unlink()
++    _sg_plan2(kg, "甲", _HRE_CLAUSES)
++    r = _hre_signoff(kg)
++    check("S6 風險低的計劃不需要簽 → 回 2、不寫", r.returncode == 2 and "不需要預期值表簽核" in r.stderr and not _hre_gov(d, "signoff"), r.stderr[-300:])
++    p.write_text(good, encoding="utf-8")
++    for flag in (("--by", "某人"), ("--ref", "x")):
++        r = _hre_signoff(kg, extra=flag)
++        check(f"S6 同時帶 {flag[0]} → 回 2、不寫", r.returncode == 2 and not _hre_gov(d, "signoff"), r.stderr[-300:])
++    gp = Path(d) / "docs" / ".governance-log.jsonl"
++    gp.write_text("", encoding="utf-8")
++    gp.chmod(0o444)
++    try:
++        r = _hre_signoff(kg)
++    finally:
++        gp.chmod(0o644)
++    check("S6 治理帳寫不進去 → 回 2", r.returncode == 2 and "寫不進治理帳" in r.stderr and not _hre_gov(d, "signoff"), r.stdout[-200:] + r.stderr[-300:])
++
++
++def _hre_push(d, kg, rng):
++    return run(kg, "spec-gate", "--push-check", rng, "--repo", str(d))
++
++
++@_hre_since("2000-01-01")
++def t_push_check_expected_unsigned():
++    """[S7] 推送前規格閘挑到要簽的計劃:沒簽或簽完又改表 → rc1、印簽核指令、寫 expected-unsigned;表檢查不過也擋;
++    實作提交只改到計劃家的程式檔也查得到。"""
++    d, kg, p = _hre_repo("hre7")
++    import subprocess as _sp
++    _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "plan", "--no-verify"])
++    b0 = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD~1"], capture_output=True, text=True).stdout.strip()
++    r = _hre_push(d, kg, f"{b0}..HEAD")
++    ev = _hre_gov(d, "spec-gate", "expected-unsigned")
++    check("S7 沒簽 → rc1、印簽核指令、寫一筆 expected-unsigned(hard)", r.returncode == 1 and "--expected" in r.stdout and "還沒簽" in r.stdout
++          and len(ev) == 1 and ev[0].get("hard") is True and ev[0].get("plan") == "Projects/甲_計劃.md", r.stdout[-600:])
++    import json as _j
++    m = _load_lumos()
++    want = m._expected_table_sha(_hre_check(p.read_text(encoding="utf-8"))[0])
++    gp = Path(d) / "docs" / ".governance-log.jsonl"
++    for label, e in (("別份計劃的簽核帶同一個指紋", {"gate": "signoff", "kind": "expected-signed", "plan": "Projects/乙_計劃.md", "table_sha": want}),
++                     ("別種事件帶同一份計劃與指紋", {"gate": "signoff", "kind": "expected-unsigned", "plan": "Projects/甲_計劃.md", "table_sha": want}),
++                     ("別的閘帶同一份計劃與指紋", {"gate": "spec-gate", "kind": "expected-signed", "plan": "Projects/甲_計劃.md", "table_sha": want})):
++        with open(gp, "a", encoding="utf-8") as f:
++            f.write(_j.dumps(e, ensure_ascii=False) + "\n")
++        r = _hre_push(d, kg, f"{b0}..HEAD")
++        check(f"S7 {label} → 不算簽了、照擋", r.returncode == 1 and "還沒簽" in r.stdout, r.stdout[-400:])
++    _hre_signoff(kg)
++    r = _hre_push(d, kg, f"{b0}..HEAD")
++    check("S7 簽了 → 放行", r.returncode == 0, r.stdout[-600:])
++    p.write_text(p.read_text(encoding="utf-8").replace("折扣 100 元", "折扣 80 元"), encoding="utf-8")
++    r = _hre_push(d, kg, f"{b0}..HEAD")
++    check("S7 簽完又改表 → 擋", r.returncode == 1 and "還沒簽" in r.stdout, r.stdout[-600:])
++    p.write_text(p.read_text(encoding="utf-8").replace("| S3 | 打開結帳畫面 | 看到折扣列 | 需求文件〈畫面〉第 1 點 |\n", ""), encoding="utf-8")
++    r = _hre_push(d, kg, f"{b0}..HEAD")
++    check("S7 表檢查不過 → 擋、講原因", r.returncode == 1 and "預期值表檢查不過" in r.stdout, r.stdout[-600:])
++    # 實作提交只改程式檔:計劃的家(lands_in 指到的 Systems 節點)管那支檔
++    p.write_text(p.read_text(encoding="utf-8").replace("status: doing\n", "status: doing\nlands_in:\n  - Systems/結帳\n"), encoding="utf-8")
++    (kg / "Systems").mkdir(exist_ok=True)
++    (kg / "Systems" / "結帳.md").write_text("---\ntype: system\nstatus: doing\nabout_code:\n  - src/checkout.py\n---\n# 結帳\n", encoding="utf-8")
++    (Path(d) / "src").mkdir(exist_ok=True)
++    (Path(d) / "src" / "checkout.py").write_text("x = 1\n", encoding="utf-8")
++    _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "home", "--no-verify"])
++    (Path(d) / "src" / "checkout.py").write_text("x = 2\n", encoding="utf-8")
++    _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "impl", "--no-verify"])
++    r = _hre_push(d, kg, "HEAD~1..HEAD")
++    check("S7 實作提交只改程式檔也挑到這份計劃(表不過照擋)", r.returncode == 1 and "甲_計劃" in r.stdout and "預期值表" in r.stdout, r.stdout[-600:])
++
++
++@_hre_since("2000-01-01")
++def t_push_check_expected_ai_signed():
++    """[S8] 放行時最後一筆簽核是 AI 簽 → 印一行預期值表由 AI 簽、不擋;gov --stats 印人簽與 AI 簽次數,同一個提交簽兩次算兩次。"""
++    import subprocess as _sp
++    d, kg, p = _hre_repo("hre8")
++    _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "plan", "--no-verify"])
++    _hre_signoff(kg, b"y\n")
++    _hre_signoff(kg)
++    _hre_signoff(kg)
++    r = _hre_push(d, kg, "HEAD~1..HEAD")
++    check("S8 最後一筆是 AI 簽 → 放行並印一行", r.returncode == 0 and "預期值表由 AI 簽" in r.stdout, r.stdout[-600:])
++    s = run(kg, "gov", "--stats")
++    check("S8 gov --stats 印人簽 1 次、AI 簽 2 次(同提交兩次各算)", "預期值表簽核:人 1 次、AI 2 次" in s.stdout, s.stdout[-1500:])
++
++
++@_hre_since("2000-01-01")
++def t_push_check_expected_scope():
++    """[S9] 風險低、生效日早於常數、全標 keeps、狀態不是 doing 而且這次沒改到計劃檔 → 推送前不要求表與簽。"""
++    import subprocess as _sp
++
++    def commit(msg):
++        _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg, "--no-verify"])
++    d, kg, p = _hre_repo("hre9")
++    p.write_text(p.read_text(encoding="utf-8").replace("## 預期值表", "## 別的節"), encoding="utf-8")   # 沒有表:要是被要求就會擋
++    good = p.read_text(encoding="utf-8")
++    commit("plan")
++    check("S9 前置:沒有表的風險高計劃會被擋", _hre_push(d, kg, "HEAD~1..HEAD").returncode == 1)
++    p.unlink(); _sg_plan2(kg, "甲", _HRE_CLAUSES); commit("low")
++    check("S9 風險低 → 不擋", _hre_push(d, kg, "HEAD~1..HEAD").returncode == 0)
++    p.write_text(good.replace("- [S1] 當單筆消費滿 1000 元,系統應折扣一成 [test:t_red]\n", "").replace(
++        "- [S3] 當收銀員打開結帳畫面,系統應顯示折扣列 [manual:人工打開畫面看折扣列]\n", ""), encoding="utf-8"); commit("keeps")
++    check("S9 全標 keeps → 不擋", _hre_push(d, kg, "HEAD~1..HEAD").returncode == 0)
++    p.write_text(good.replace("status: doing", "status: done"), encoding="utf-8"); commit("done")
++    other = kg / "Projects" / "丙_計劃.md"
++    other.write_text("---\ntype: project\nstatus: doing\n---\n# 丙\n", encoding="utf-8"); commit("other")
++    check("S9 done 而且這次沒改到計劃檔 → 不擋", _hre_push(d, kg, "HEAD~1..HEAD").returncode == 0)
++    _os_mod.environ["LUMOS_HIGH_RISK_EVIDENCE_SINCE"] = "9999-12-31"
++    p.write_text(good, encoding="utf-8"); commit("old")
++    check("S9 生效日早於常數 → 不擋", _hre_push(d, kg, "HEAD~1..HEAD").returncode == 0)
++
++
++@_hre_since("2026-06-01")
++def t_high_risk_evidence_since():
++    """[S10] created 早於生效日、但第一次進 git 歷史在生效日之後 → 生效;生效日之前建的計劃之後 git mv 改名 → 照舊不生效;淺複製只看 created。"""
++    import subprocess as _sp
++    m = _load_lumos()
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "hre10")
++
++    def git(*a, date=None):
++        env = dict(_os_mod.environ)
++        if date:
++            env.update(GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
++        return _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", *a], capture_output=True, text=True, env=env)
++    p = kg / "Projects" / "新_計劃.md"
++    p.write_text("---\ntype: project\nstatus: doing\ncreated: 2026-01-01\n---\n" + _hre_text() + _SG_ROLLBACK, encoding="utf-8")
++    git("add", "-A"); git("commit", "-qm", "new", "--no-verify", date="2026-07-01T10:00:00+08:00")
++    env = m.Env(kg)
++    check("S10 created 早、第一次進 git 歷史晚 → 生效(要簽)", m._expected_requirement(env, "Projects/新_計劃.md", p.read_text(encoding="utf-8")) is not None)
++    same = kg / "Projects" / "同日_計劃.md"
++    same.write_text("---\ntype: project\nstatus: doing\ncreated: 2026-06-01\n---\n" + _hre_text() + _SG_ROLLBACK, encoding="utf-8")
++    git("add", "-A"); git("commit", "-qm", "same", "--no-verify", date="2026-06-01T10:00:00+08:00")
++    env = m.Env(kg)
++    check("S10 計劃日期剛好是生效日 → 生效(不早於生效日就要簽)",
++          m._plan_effective_day(d, "docs/x-knowledge/Projects/同日_計劃.md", "2026-06-01") == "2026-06-01"
++          and m._expected_requirement(env, "Projects/同日_計劃.md", same.read_text(encoding="utf-8")) is not None)
++    q = kg / "Projects" / "舊_計劃.md"
++    q.write_text("---\ntype: project\nstatus: doing\n---\n" + _hre_text() + _SG_ROLLBACK, encoding="utf-8")
++    git("add", "-A"); git("commit", "-qm", "old", "--no-verify", date="2026-01-01T10:00:00+08:00")
++    (kg / "Projects" / "搬").mkdir()
++    git("mv", str(q), str(kg / "Projects" / "搬" / "舊改名_計劃.md")); git("commit", "-qm", "mv", "--no-verify", date="2026-08-01T10:00:00+08:00")
++    moved = kg / "Projects" / "搬" / "舊改名_計劃.md"
++    env = m.Env(kg)
++    check("S10 前置:_plan_first_commit 沒帶 --follow,改名後回改名那次", git("log", "-1", "--format=%cs", m._plan_first_commit(d, "docs/x-knowledge/Projects/搬/舊改名_計劃.md") or "HEAD").stdout.strip() == "2026-08-01")
++    check("S10 生效日前建的計劃改名後 → 照舊不生效", m._expected_requirement(env, "Projects/搬/舊改名_計劃.md", moved.read_text(encoding="utf-8")) is None)
++    cp = kg / "Projects" / "抄_計劃.md"
++    cp.write_text(moved.read_text(encoding="utf-8"), encoding="utf-8")
++    git("add", "-A"); git("commit", "-qm", "copy", "--no-verify", date="2026-07-15T10:00:00+08:00")
++    env = m.Env(kg)
++    check("S10 複製舊計劃寫的新計劃照新日期算 → 生效(不被追到舊計劃)",
++          m._plan_effective_day(d, "docs/x-knowledge/Projects/抄_計劃.md", None) == "2026-07-15"
++          and m._expected_requirement(env, "Projects/抄_計劃.md", cp.read_text(encoding="utf-8")) is not None)
++    shallow = Path(tempfile.mkdtemp(prefix="gctl-hre-shallow-")) / "s"
++    _sp.run(["git", "clone", "-q", "--depth", "1", "file://" + str(d), str(shallow)], capture_output=True)
++    check("S10 前置:淺複製成立", _sp.run(["git", "-C", str(shallow), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True).stdout.strip() == "true")
++    check("S10 淺複製只看 created(早於生效日 → 不生效)", m._plan_effective_day(shallow, "docs/x-knowledge/Projects/新_計劃.md", "2026-01-01") == "2026-01-01")
++
++
++@_hre_since("2000-01-01")
++def t_push_check_expected_bad_ledger():
++    """[S11] 版控治理帳有非物件行、plan 或 table_sha 不是字串的 expected-signed 事件 → 跳過那幾行、不丟例外;帳讀不到 → 擋下並講原因。"""
++    import subprocess as _sp
++    d, kg, p = _hre_repo("hre11")
++    _sp.run(["git", "-C", str(d), "add", "-A"]); _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "plan", "--no-verify"])
++    gp = Path(d) / "docs" / ".governance-log.jsonl"
++    with open(gp, "a", encoding="utf-8") as f:
++        f.write('"signoff expected-signed"\n')
++        f.write('["signoff", "expected-signed"]\n')
++        f.write('{"gate": "signoff", "kind": "expected-signed", "plan": 5, "table_sha": "x"}\n')
++        f.write('{"gate": "signoff", "kind": "expected-signed", "plan": "Projects/甲_計劃.md", "table_sha": null}\n')
++    r = _hre_push(d, kg, "HEAD~1..HEAD")
++    check("S11 壞行跳過、不丟例外、照判沒簽", r.returncode == 1 and "Traceback" not in r.stderr and "還沒簽" in r.stdout, r.stdout[-500:] + r.stderr[-300:])
++    _hre_signoff(kg)
++    r = _hre_push(d, kg, "HEAD~1..HEAD")
++    check("S11 壞行之後的合格簽核照認", r.returncode == 0, r.stdout[-500:] + r.stderr[-300:])
++    gp.chmod(0o000)
++    try:
++        r = _hre_push(d, kg, "HEAD~1..HEAD")
++    finally:
++        gp.chmod(0o644)
++    check("S11 治理帳讀不到 → 擋下並講原因", r.returncode == 1 and "治理帳讀不到" in r.stdout and "Traceback" not in r.stderr, r.stdout[-500:] + r.stderr[-300:])
++    check("S11 帳讀不到時標題不把風險高計劃講成風險低、原因提到預期值表簽核",
++          "風險低計劃沒過" not in r.stdout and "判不了" in r.stdout and "預期值表簽核" in r.stdout, r.stdout[-500:])
++    # 預期值表這段自己讀帳失敗的備援(上游那道先擋,整條流程走不到這裡;直接呼叫才測得到)
++    m = _load_lumos()
++    env = m.Env(kg)
++    why = m._expected_push_one(env, Path(d), "Projects/甲_計劃.md", {"exp_gov": ([], "測試注入的讀帳錯誤")})
++    check("S11 預期值表這段讀帳失敗 → 回擋下原因、講治理帳讀不到", isinstance(why, str) and why.startswith(m._EXPECTED_PUSH_TAG)
++          and "治理帳讀不到(測試注入的讀帳錯誤)" in why, repr(why))
++
++
+ def t_spec_gate_ears_shapes():
+     """[規格落成可驗收條件 S1] 定義行不合那條文法或帶複合觸發 → 「格式看不懂」不是條款。翻紅釘:拿掉文法檢查 → ① 翻紅。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg1")
+     _sg_plan(kg, "甲", ["- [S1] 當送出表單,系統應回 200 [test:t_green]", "- [S2] 系統應拒絕空白輸入 [test:t_green]",
+                        "- [S3] 在後台裡,若管理員登入,則系統應顯示按鈕 [test:t_green]", "- [S4] 當送出表單,系統回 200 [test:t_green]"])
+     r = run(kg, "spec-gate", "Projects/甲_計劃")
+     check("① 複合觸發與缺「應」的兩條被判格式看不懂、rc1", r.returncode == 1 and "格式看不懂" in r.stdout and "S3" in r.stdout and "S4" in r.stdout, r.stdout[-500:])
+     check("② 合法的觸發型與無條件型不被點名", "S1(" not in r.stdout and "S2(" not in r.stdout, r.stdout[-500:])
+ 
+ 
+@@ -73857,41 +74310,41 @@ def t_backend_qo_stage_facets_only():
+     badenc = root / "bad.md"
+     badenc.write_bytes(b"\xff\xfe## \x00x\n")
+     be = run(root, "pitfalls", str(badenc), "--repo", str(root), "--stage", "需求")
+     check("⑦ 讀不動的計劃(非 UTF-8)回 2、訊息帶「擋下:」、不吐 Python 追蹤", be.returncode == 2 and "擋下:" in be.stderr and "Traceback" not in be.stderr, be.stderr[-400:])
+ 
+ 
+ def _qo_plan(kg, name, questions, clauses=None):
+     """帶正文〈待決問題〉一節的計劃(驗「正文不讀」用)。"""
+     p = kg / "Projects" / f"{name}_計劃.md"
+     body = "\n".join(clauses or [])
+-    p.write_text("---\ntype: project\nstatus: doing\n---\n# " + name + "\n\n" + body
++    p.write_text("---\ntype: project\nstatus: doing\n" + _SG_CREATED + "---\n# " + name + "\n\n" + body
+                  + "\n\n## 待決問題\n\n" + "\n".join(questions) + "\n" + _SG_ROLLBACK, encoding="utf-8")
+     return p
+ 
+ 
+ _QO_DEC = "decisions:\n  - content: 採用甲方案\n    id: d1\n    decided: 2026-10-12\n    valid: true\n  - content: 舊方案\n    id: d2\n    decided: 2026-10-01\n    valid: false\n"
+ 
+ 
+ # ─── 待決問題改存開頭欄位_計劃:pending_questions 欄位、嚴格讀法、兩支寫入指令、三個消費端 ───
+ 
+ def _qfm_q(qid="Q1", text="訂單成功的定義是什麼", cls="需求", stage="需求", status="待人", **kw):
+     """一題的開頭欄位原文(2 格起頭、4 格鍵);kw 依序附在後面,值照原樣寫(要引號自己帶)。"""
+     lines = [f"  - id: {qid}", f"    text: {text}", f"    class: {cls}", f"    stage: {stage}", f"    status: {status}"]
+     lines += [f"    {k}: {v}" for k, v in kw.items()]
+     return "\n".join(lines) + "\n"
+ 
+ 
+ def _qfm_plan(kg, name, pq, clauses=None, decisions=_QO_DEC, body=""):
+     """開頭欄位帶 pq(原文;None=不寫這個欄位)的計劃;預設有一條有效決策 d1、一條作廢決策 d2。"""
+     p = kg / "Projects" / f"{name}_計劃.md"
+-    fm = "---\ntype: project\nstatus: doing\n" + decisions + ("" if pq is None else pq) + "---\n"
++    fm = "---\ntype: project\nstatus: doing\n" + decisions + ("" if pq is None else pq) + _SG_CREATED + "---\n"
+     p.write_text(fm + "# " + name + "\n\n" + "\n".join(clauses or ["- [S1] 系統應回 200 [test:t_green]"]) + "\n" + _SG_ROLLBACK + body,
+                  encoding="utf-8")
+     return p
+ 
+ 
+ def t_qfm_gate_holds_blocking():
+     """[待決問題改存開頭欄位 S1] 阻塞、需求或架構、沒結的題讓規格閘回 1(風險高低、--no-run、沒條款都一樣);
+     延後、自答、指到不存在或作廢的決策都算沒結;推送前只提醒不改回傳碼。翻紅釘:規格閘不讀這個欄位 → ① 翻紅;
+     「結了」只看狀態不查決策 → ⑤⑥ 翻紅。"""
+     import subprocess as _sp
+@@ -75653,21 +76106,21 @@ def _sg_loop_with_ts(kg, name, clauses, ts):
+         "--spec", str(p), "--reviewed", _sha256_of(p), expect_rc=0)
+     _ledger_patch_last(kg.parent / ".canary-log.jsonl", name, ts=ts)
+     return p
+ 
+ 
+ def _sg_plan_linked(kg, name, clauses, links, rollback=_SG_ROLLBACK):
+     """帶 lands_in / DEP 連結的計劃(相依回歸的來源)。"""
+     p = kg / "Projects" / f"{name}_計劃.md"
+     li = "\n".join(f"  - {x}" for x in links)
+     dep = "、".join(f"[[{x}]]" for x in links)
+-    p.write_text(f"---\ntype: project\nstatus: doing\nlands_in:\n{li}\nsummary: |-\n  DEP:{dep}\n---\n# {name}\n\n" + "\n".join(clauses) + "\n" + rollback, encoding="utf-8")
++    p.write_text(f"---\ntype: project\nstatus: doing\n{_SG_CREATED}lands_in:\n{li}\nsummary: |-\n  DEP:{dep}\n---\n# {name}\n\n" + "\n".join(clauses) + "\n" + rollback, encoding="utf-8")
+     return p
+ 
+ 
+ def _sg_system(kg, name, key_lines):
+     d = kg / "Systems"; d.mkdir(exist_ok=True)
+     body = "---\ntype: system\nstatus: doing\nsummary: |-\n  FLOW:x\n" + "".join(f"  {k}\n" for k in key_lines) + "---\n# " + name + "\n"
+     (d / f"{name}.md").write_text(body, encoding="utf-8")
+ 
+ 
+ def t_spec_gate_regress_lists_linked_contract_tests():
+@@ -75709,54 +76162,54 @@ def t_spec_gate_code_review_r1_folds():
+     _sg_plan(kg, "短名", ["- [S1] 系統應回 200 [test:t_green]"])
+     r = run(kg, "spec-gate", "短名_計劃")
+     check("① 用短名叫節點 → 找得到、rc0", r.returncode == 0 and "找不到" not in r.stdout + r.stderr, (r.stdout + r.stderr)[-300:])
+     r0 = run(kg, "spec-gate", "不存在的計劃")
+     check("①b 真的不存在 → rc2 且給近名提示(同其他指令)", r0.returncode == 2 and ("search" in r0.stderr or "近" in r0.stderr or "找不到" in r0.stderr), (r0.stdout + r0.stderr)[-300:])
+     _sg_plan(kg, "介詞", ["- [S1] 當收到請求,在三秒內系統應回 200 [test:t_green]", "- [S2] 若啟用開關,在收到請求時系統應回 200 [test:t_green]", "- [S3] 在後台裡,若管理員登入,則系統應顯示按鈕 [test:t_green]"])
+     r2 = run(kg, "spec-gate", "Projects/介詞_計劃")
+     check("② 回應段「在…」當介詞不算複合;真的第二個條件句仍擋", r2.returncode == 1 and "S3(" in r2.stdout and "S1(" not in r2.stdout and "S2(" not in r2.stdout, r2.stdout[-500:])
+     _sg_system(kg, "Alpha", ["KEY:★INVARIANT★ 甲的合約 [test:t_green]"])
+     p = kg / "Projects" / "字串_計劃.md"
+-    p.write_text("---\ntype: project\nstatus: doing\nlands_in: Systems/Alpha\n---\n# 字串\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
++    p.write_text("---\ntype: project\nstatus: doing\n" + _SG_CREATED + "lands_in: Systems/Alpha\n---\n# 字串\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+     r3 = run(kg, "spec-gate", "Projects/字串_計劃")
+     check("③ lands_in 是字串 → 相依回歸照樣抓到 Alpha", r3.returncode == 0 and "Alpha" in r3.stdout and "R1" in r3.stdout, r3.stdout[-500:])
+     _sg_plan(kg, "底線", ["- [S1] 系統應回 200 [test:t_green]"], rollback="\n回退\n----\n把處置閘第五步改回上一版,指令保留只印不擋,紀律那句改回舊寫法。\n")
+     r4 = run(kg, "spec-gate", "Projects/底線_計劃")
+     check("④ Setext 寫法不認(設計寫死只認 ## 回退),擋下並提示標題寫法(代碼審 r2:自建 Setext 判定是第二套且有 fence 錯配洞)",
+           r4.returncode == 1 and "## 回退" in r4.stdout and "底線" in r4.stdout, r4.stdout[-400:])
+     # 代碼審 r2:複合觸發判準不能因為第二個觸發詞後面沒逗號就放過;「在」當介詞仍不算
+     _sg_plan(kg, "複合", ["- [S1] 當甲成立,若乙為真系統應回應 [test:t_green]", "- [S2] 當甲成立,在三秒內系統應回應 [test:t_green]", "- [S3] 當甲成立,當乙成立系統應回應 [test:t_green]"])
+     r5 = run(kg, "spec-gate", "Projects/複合_計劃")
+     check("⑤ 第二個觸發詞是當/若就是複合(有沒有逗號都擋);「在」介詞不算", r5.returncode == 1 and "S1(" in r5.stdout and "S3(" in r5.stdout and "S2(" not in r5.stdout, r5.stdout[-500:])
+     # 代碼審 r3:「在」的分隔只看「在…應」之間,回應段後面列兩件事的逗號不算複合;「在乙,則應丙」仍是複合
+     _sg_plan(kg, "列舉", ["- [S1] 當甲成立,在三秒內系統應回應,並記錄 [test:t_green]", "- [S2] 當甲成立,在乙成立時,則系統應回丙 [test:t_green]"])
+     r7 = run(kg, "spec-gate", "Projects/列舉_計劃")
+     check("⑦ 回應段列兩件事的逗號不算複合;「在乙,則應」仍擋", r7.returncode == 1 and "S2(" in r7.stdout and "S1(" not in r7.stdout, r7.stdout[-500:])
+     p3 = kg / "Projects" / "別名_計劃.md"
+-    p3.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha|甲]]\"\n---\n# 別名\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
++    p3.write_text("---\ntype: project\nstatus: doing\n" + _SG_CREATED + "lands_in: \"[[Systems/Alpha|甲]]\"\n---\n# 別名\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+     r8 = run(kg, "spec-gate", "Projects/別名_計劃")
+     check("⑧ lands_in 帶別名的連結字串 → 走 link_target 照抓", r8.returncode == 0 and "Alpha" in r8.stdout and "R1" in r8.stdout, r8.stdout[-400:])
+     # 代碼審 v2 r1:條件段裡的「反應/效應」不能被當成回應的「應」,否則後面真正的第二條件句漏判
+     _sg_plan(kg, "反應", ["- [S1] 當甲成立,在收到用戶反應後,則系統應回覆 [test:t_green]", "- [S2] 當甲成立,在效應評估後系統應回覆 [test:t_green]"])
+     r9 = run(kg, "spec-gate", "Projects/反應_計劃")
+     check("⑨ 「反應」不是回應的應:S1 仍判複合、S2(無第二逗號)不判", r9.returncode == 1 and "S1(" in r9.stdout and "S2(" not in r9.stdout, r9.stdout[-500:])
+     # 代碼審 v2 r2:缺應判斷也要跳複合詞;表要含順應/理應/照應/接應;「問答應於…」的應是真的應
+     _sg_plan(kg, "缺應", ["- [S1] 當甲成立,系統反應 [test:t_green]", "- [S2] 當甲成立,在為順應法規後,則系統應調整 [test:t_green]", "- [S3] 客服問答應於一日內回覆 [test:t_green]"])
+     r10 = run(kg, "spec-gate", "Projects/缺應_計劃")
+     check("⑩ 「系統反應」=缺應擋;「順應」後的第二條件句判複合;「問答應於」算有應", r10.returncode == 1 and "S1(" in r10.stdout and "S2(" in r10.stdout and "S3(" not in r10.stdout, r10.stdout[-600:])
+     # 代碼審 v2 r3:「理應/自應」是情態(=應該),不是複合名詞,不能排除;「照應/接應」排除,但主體字尾撞到時仍以第一個真的應為準
+     _sg_plan(kg, "情態", ["- [S1] 系統自應保留舊資料 [test:t_green]", "- [S2] 處理應在三秒內完成 [test:t_green]", "- [S3] 當甲成立,在照應舊客戶後,則系統應寄信 [test:t_green]", "- [S4] 當甲成立,在接應完成後,則系統應寄信 [test:t_green]"])
+     r11 = run(kg, "spec-gate", "Projects/情態_計劃")
+     check("⑪ 自應/處理應算有應(不擋);照應/接應後的第二條件句仍判複合", r11.returncode == 1 and "S1(" not in r11.stdout and "S2(" not in r11.stdout and "S3(" in r11.stdout and "S4(" in r11.stdout, r11.stdout[-600:])
+     # 代碼審 r2:lands_in 寫成 [[…]] 字串也要抓到
+     p2 = kg / "Projects" / "括號_計劃.md"
+-    p2.write_text("---\ntype: project\nstatus: doing\nlands_in: \"[[Systems/Alpha]]\"\n---\n# 括號\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
++    p2.write_text("---\ntype: project\nstatus: doing\n" + _SG_CREATED + "lands_in: \"[[Systems/Alpha]]\"\n---\n# 括號\n\n- [S1] 系統應回 200 [test:t_green]\n" + _SG_ROLLBACK, encoding="utf-8")
+     r6 = run(kg, "spec-gate", "Projects/括號_計劃")
+     check("⑥ lands_in 是 [[Systems/Alpha]] 字串 → 照抓", r6.returncode == 0 and "Alpha" in r6.stdout and "R1" in r6.stdout, r6.stdout[-400:])
+ 
+ 
+ def t_disposal_step5_shares_checker():
+     """[規格落成可驗收條件 S9] 處置閘第五步與規格閘共用同一支檢查器:同一份計劃(閘後迴圈、有格式看不懂的條款)兩邊判定相同。
+     翻紅釘:處置閘不走 _clause_check → ① 翻紅。"""
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "sg9")
+     p = _sg_loop_with_ts(kg, "子", ["- [S1] 當送出表單系統應回 200 [test:t_green]"], "2026-09-19T10:00:00+08:00")
+     a = run(kg, "loop", "status", "子", "--disposal", "--spec", str(p), "--repo", str(d))
+@@ -75794,21 +76247,21 @@ def t_doctor_spec_gate_stats():
+ 
+ 
+ # ── 雙向門放行(Projects/雙向門放行_計劃;Enzo 2026-09-17 裁「做出來在模擬測試就好」)──
+ _SG_EXCL_ALL = ["已排除:金流:這份計劃不碰任何收費或扣款的流程", "已排除:對外送出:不寄信不推播不呼叫外部服務",
+                 "已排除:不可逆:只改本機檔案,改壞了重跑一次就回來", "已排除:守衛面:不碰任何閘或掛鉤的判定"]
+ 
+ 
+ def _sg_plan2(kg, name, clauses, excl=_SG_EXCL_ALL, body="", fm="", rollback=_SG_ROLLBACK, hazard_h2="## 實務隱患", after_excl=""):
+     """帶「實務隱患」節(四行已排除)的計劃——不命中任何硬風險高訊號就是風險低。"""
+     p = kg / "Projects" / f"{name}_計劃.md"
+-    p.write_text("---\ntype: project\nstatus: doing\n" + fm + "---\n# " + name + "\n\n" + body + "\n" + "\n".join(clauses)
++    p.write_text("---\ntype: project\nstatus: doing\n" + ("" if "created:" in fm else _SG_CREATED) + fm + "---\n# " + name + "\n\n" + body + "\n" + "\n".join(clauses)
+                  + "\n\n" + hazard_h2 + "\n" + "\n".join("- " + x for x in excl) + "\n" + after_excl + rollback, encoding="utf-8")
+     return p
+ 
+ 
+ def _sg_commit(d, msg="p"):
+     import subprocess as _sp
+     _sp.run(["git", "-C", str(d), "add", "-A"])
+     _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg, "--no-verify"])
+ 
+ 
+@@ -76048,21 +76501,21 @@ def t_spec_gate_records_exclusions():
+     check("① 四類理由都在", sorted(ex) == ["不可逆", "守衛面", "對外送出", "金流"] and "收費" in ex["金流"], str(rec)[:500])
+     check("② 測試清單、指紋、規則版本、計劃路徑", rec.get("tests") == ["t_red"] and len(str(rec.get("clause_sha", ""))) == 64 and isinstance(rec.get("door_rule"), int) and rec.get("plan", "").endswith("甲_計劃.md"), str(rec)[:500])
+     r = run(kg, "spec-gate", "--door-rule")
+     check("③ 留痕的 door_rule 等於程式常數", f"door_rule={rec.get('door_rule')}" in r.stdout, r.stdout)
+ 
+ 
+ def t_door_rule_version_pin():
+     """[雙向門放行 S17] 門判定規則的輸入(四類關鍵字表、已排除行規則、合約行掃描)指紋釘死:改了任一支卻沒 bump 常數 → 這裡翻紅。
+     ★改到規則要做的事★:把 _DOOR_RULE_VERSION +1,再把下面的指紋換成新的(lumos spec-gate --door-rule 印)。"""
+     r = run(mkvault(), "spec-gate", "--door-rule")
+-    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=15 " in r.stdout and "inputs_sha=58de5f3d3ab8fd84d479de8e99689b7c8376298a8b7605fdc768db1bc9628b62" in r.stdout, r.stdout)
++    check("① 版本與輸入指紋跟釘住的一致", r.returncode == 0 and "door_rule=16 " in r.stdout and "inputs_sha=1cef5d5b9e2a6f4b54f021c036b5290ad1ae0de00f4afaf0bb66f4cad667cf70" in r.stdout, r.stdout)
+ 
+ 
+ # ── 前端知識與風險詞 做法 9(d1):「送出」的前端語境與 PAYMENT 調整參數識別字例外 ──
+ # 判準來源:計劃 Projects/前端知識與風險詞_計劃 做法 9 列的「照算/不算」例句(設計審 r1 正確性、邊界、整合三席的失敗情境)。
+ 
+ def _fe_door_classes(line):
+     """一行計劃文字經門的關鍵字掃描,回命中的類中文名集合。"""
+     m = _load_lumos_inproc()
+     return {cls for _no, cls, _w, _v in m._door_keyword_hits(line)}
+ 
+@@ -77176,21 +77629,21 @@ def t_spec_gate_nogo_tab_fullwidth_continuation():
+     d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "ngr5")
+     for i, (k, body) in enumerate((("tab", "## 不做\n- 不做退款\n\t不做扣款的續行\n"), ("全形", "## 不做\n- 不做退款\n　　不做扣款的續行\n"))):
+         out = _ng_door(kg, f"夠{i}", body + _NG_TAIL)
+         check(f"② {k} 續行裡的扣款照舊跳過 → 風險低", "[spec-gate] 計劃風險: 低" in out, (k, out[-400:]))
+     for i, (k, body) in enumerate((("一個全形空白不到第 4 欄", "## 不做\n10. 不做退款\n　不做扣款的續行\n"),
+                                    ("一格空白不到第 2 欄", "## 不做\n- 不做退款\n 不做扣款的續行\n"))):
+         out = _ng_door(kg, f"淺{i}", body + _NG_TAIL)
+         check(f"③ {k} → 停下照掃、風險高", "[spec-gate] 計劃風險: 高" in out and "扣款" in out, (k, out[-400:]))
+ 
+ 
+-_NOGO_SKIP_LOGIC_PIN = (7, "63baf35ed5914e9cc63723b0575c5fae310c01856d8b1cd309d584322e2b703c")
++_NOGO_SKIP_LOGIC_PIN = (8, "fd0dbb2b618a652b7a927bb2eb6f0d3466d448676f030204ab0e534232152ed5")
+ _NOGO_SKIP_LOGIC_FUNCS = ("_nogo_skip_lines", "_nogo_line_says_nogo", "_ns_indent", "_h2_section_lines", "_visible_lines", "_fence_regions", "_strip_inline_markup", "_inline_hidden", "_note_lines")
+ _NOGO_SKIP_LOGIC_PATS = ("_NOGO_H2_RE", "_NOGO_ITEM_RE", "_NOGO_NEG_PREFIX_RE", "_NOGO_NEG_HEADER_RE", "_NOGO_CLAUSE_SPLIT_RE", "_NOGO_REF_TOKEN_RE")
+ 
+ 
+ def t_nogo_skip_logic_version_pin():
+     """[規格閘不做節 代碼審 r1 架2;r2 正3 擴大範圍] 不做清單判斷邏輯依賴的全部函式原始碼與正則 pattern 的雜湊,跟 _NOGO_SKIP_LOGIC_VERSION 一起釘死。
+     ★改了判斷邏輯要做的事★:把 scripts/lumos 的 _NOGO_SKIP_LOGIC_VERSION +1,再把這裡的版本與雜湊換成新的(門規則指紋跟著變,t_door_rule_version_pin 一起更新)。"""
+     import hashlib as _h, inspect as _i
+     m = _load_lumos_module()
+     src = "".join(_i.getsource(getattr(m, f)) for f in _NOGO_SKIP_LOGIC_FUNCS) + "\n".join(getattr(m, x).pattern for x in _NOGO_SKIP_LOGIC_PATS)
+@@ -103810,24 +104263,25 @@ def t_cap_decision_world_fill_ledger_unreadable():
+     try:
+         with contextlib.redirect_stdout(buf):
+             rc = m.cmd_loop_cap_decision(m.Env(c["vault"]), "crx", "extra-round", "人裁決定破例再開一輪看最後修正", repo=str(c["root"]))
+     finally:
+         m._retro_gov_events = orig
+     out = buf.getvalue()
+     check("A1 前置:讀帳那一步真的模擬成讀不動", len(calls) >= 1, repr(calls))
+     check("A1 記完人裁後讀帳失敗 → 照樣提醒補 world_check", rc == 0 and "寫進回顧的 world_check" in out, out[-400:])
+ 
+ 
+-def _cap_since_last_change_day(rr):
+-    """最後一次改到 _CAP_WORLD_CHECK_SINCE 那一行(含只改值)的提交日;-G 看得到改值(-S 只看字串出現次數,改值看不到;代碼審 r1 F2)。讀不到回 None。"""
++def _cap_since_last_change_day(rr, const="_CAP_WORLD_CHECK_SINCE"):
++    """最後一次改到生效常數 const 那一行(含只改值)的提交日;-G 看得到改值(-S 只看字串出現次數,改值看不到;代碼審 r1 F2)。讀不到回 None。
++    高風險測試證據加嚴的 _HIGH_RISK_EVIDENCE_SINCE 也用這支(同一種守衛,不另寫一套)。"""
+     import subprocess as _sp
+-    r = _sp.run(["git", "-C", str(rr), "log", "-1", "-G", r"^_CAP_WORLD_CHECK_SINCE = ", "--format=%cs", "--", "scripts/lumos"],
++    r = _sp.run(["git", "-C", str(rr), "log", "-1", "-G", rf"^{const} = ", "--format=%cs", "--", "scripts/lumos"],
+                 capture_output=True, text=True)
+     day = r.stdout.strip()
+     return day if r.returncode == 0 and day else None
+ 
+ 
+ def t_cap_since_last_change_sees_value_edit():
+     """[代碼審 r1 F2] 新鮮度守衛看得到「只改常數的值」那次提交;常數日當天的提交不算新鮮(要早於常數日)。"""
+     import subprocess as _sp
+     d = Path(tempfile.mkdtemp(prefix="gctl-capsince-")).resolve()
+     (d / "scripts").mkdir()
+@@ -103875,20 +104329,37 @@ def t_cap_world_since_parseable_and_fresh():
+     rr = Path(__file__).resolve().parent.parent
+     sh = _sp.run(["git", "-C", str(rr), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True)
+     if sh.returncode != 0 or sh.stdout.strip() != "false":
+         return
+     day = _cap_since_last_change_day(rr)
+     if not day:
+         return      # 還沒提交(工作目錄裡剛加)時沒有那筆提交
+     check("最後一次改到生效常數的提交日早於常數日期", _cap_since_fresh(day, since), f"提交日 {day}、常數 {since}")
+ 
+ 
++def t_high_risk_since_fresh():
++    """[高風險測試證據加嚴 生效日] 生效常數是純日期;最後一次改到常數那一行的提交日早於常數日(同日不算)
++    (實作拖到常數之後才合併、或 rebase 改了提交日,這支會紅,逼人把常數改成新的合併日隔天;淺複製或讀不到歷史時跳過;同 t_cap_world_since_parseable_and_fresh)。"""
++    import subprocess as _sp
++    m = _load_lumos()
++    since = m._HIGH_RISK_EVIDENCE_SINCE
++    check("常數是 YYYY-MM-DD 純日期", m._DAY_RE.fullmatch(since) is not None, since)
++    rr = Path(__file__).resolve().parent.parent
++    sh = _sp.run(["git", "-C", str(rr), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True)
++    if sh.returncode != 0 or sh.stdout.strip() != "false":
++        return
++    day = _cap_since_last_change_day(rr, "_HIGH_RISK_EVIDENCE_SINCE")
++    if not day:
++        return      # 還沒提交(工作目錄裡剛加)時沒有那筆提交
++    check("最後一次改到生效常數的提交日早於常數日期", _cap_since_fresh(day, since), f"提交日 {day}、常數 {since}")
++
++
+ def t_manuals_world_direction_sync():
+     """[S8] 到頂流程的每一個同步點(逐處比對,同一個檔兩處就兩處都要)都含先查方向;〈修前先查世界〉含同類連兩輪查方向;
+     §9 派工詞的不要填清單含 world_check。"""
+     rr = Path(__file__).resolve().parent.parent
+     sk = rr / "skills"
+     points = [
+         (sk / "lumos-design-loop" / "SKILL.md", "到頂沒過 → 停", "先查方向"),
+         (sk / "lumos-design-loop" / "reference.md", "到頂仍未收斂", "先查方向"),
+         (sk / "lumos-design-loop" / "reference.md", "到頂沒過 → 停", "先查方向"),
+         (sk / "lumos-code-loop" / "SKILL.md", "到頂沒過 → 停", "先查方向"),

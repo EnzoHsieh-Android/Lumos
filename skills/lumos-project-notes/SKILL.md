@@ -66,7 +66,7 @@ KEY:★IRREVERSIBLE★ <做了回不去> [rollback:decisions]     KEY:★CHECKPO
 ```
 - 綁測試 / 留審計走指令:`lumos guard bind <節點> "<KEY 片段>" <測試名>`、`lumos guard audit …`;裸合約 doctor 擋,未審計 pre-push 擋。綁之前對照 [[Systems/測試假綠形態]](最隱蔽的一型:現場根本走不到被測分支;修 bug 的翻紅測試要配一條「現場成立」的前置斷言)。
 - `[residual:]` 是審計第 3 問的殘留(測試守不住、交給代碼審),只用 `lumos guard residual` 寫、先過 `guard residual-ask` 第二個代理;三種去向與規則見 reference.md〈[audit:] 獨立合法性審計〉。
-- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。
+- 外部不可逆(信已寄、下游已吃)用 `[guard:decisions]` 寫怎麼防重複。`[test:]` 只證程式對,「規則還符不符合業務」要人確認:`lumos signoff`。風險高計劃的預期值表另用 `lumos signoff <計劃> --expected` 簽(綁整張表的指紋,推送前規格閘會查;跟業務確認不同:它不寫 signed_off,AI 也能簽但照實記成 AI 簽)。
 - 從 code 重建的筆記先 `lumos set <節點> regen from-scratch/<日期>`,每條主張標 `[src:]`/`[git:]`/`推測:`/`佚失:`;佚失就寫佚失,嚴禁編。
 
 **摘要區塊**(Systems/Issues 必有):
