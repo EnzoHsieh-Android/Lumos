@@ -1,11 +1,11 @@
 ---
 type: project
-status: todo
+status: doing
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-05
 tags:
   - type/project
-  - status/todo
+  - status/doing
   - scope/stack-knowledge
 related:
   - "[[Projects/Android協程與API協同機械審_調研]]"
@@ -14,123 +14,132 @@ related:
   - "[[Systems/linter精選目錄]]"
   - "[[Systems/效能檢核目錄]]"
   - "[[Systems/棧別提問表態閘]]"
+  - "[[Projects/Android寫法寫完當下自動檢查_計劃]]"
 lands_in:
   - Systems/linter精選目錄
-  - Systems/棧別提問表態閘
+  - Systems/pitfalls-code-loop
+  - Systems/kotlin規則包
 ---
+
 # Android協程與API寫法機械檢查標準_計劃
 
-> 白話:Android(Kotlin 協程)的「標準寫法」原本大多只寫在 kotlin-idioms 慣例文件裡、靠審查員記得看。這份計劃把三類議題——①同一個功能裡多支 API 的同步非同步、②資料流合併、③狀態保存——加上底層的協程紀律與 Compose 收集,逐條窮舉成「機器怎麼查」:能開現成規則的就開、能列出壞寫法形狀的就自己寫結構比對規則、語意上只能靠跑的就給測試範本,真的只能人看的才留給人,而且寫明為什麼。目標是先把機械能查的鋪滿,減少人工審查。出身:[[Projects/Android協程與API協同機械審_調研]];使用者 2026-11-04 要求「就算窮舉也要把標準寫法的檢查制定下來」「先把機械能檢查的鋪完」。
+> 白話:Android(Kotlin 協程、Flow、Compose、架構、資料層)的「標準寫法」原本大多只寫在 kotlin-idioms 慣例文件裡、靠審查員記得看。這份計劃把它們窮舉成一份型錄(473 條,每條寫壞寫法、標準寫法、機器怎麼查、怎麼逼 AI 照做),並分批接進 lumos 的自動流程:①結構規則包接新增告警閘(本計劃);②AI 寫完當下、審查迴圈頭尾自動檢查,不靠人記指令([[Projects/Android寫法寫完當下自動檢查_計劃]],2026-11-05 第二輪設計審後拆出);③語意類情境要表態並由盲判席覆核(另開計劃)。目標是「審查迴圈裡就檢查乾淨,推送只是最後確認」,人工審查只剩機器判不了的業務語意。出身:[[Projects/Android協程與API協同機械審_調研]];使用者 2026-11-04「就算窮舉也要把標準寫法的檢查制定下來」「先把機械能檢查的鋪完」、2026-11-05「要全面覆蓋」「審查迴圈中就檢查乾淨」「自動化,不需要我記得敲指令」「怕寫了但完全沒參考」。
 
-PRIOR-ART: ①現成規則先查過四個規則庫逐條對照(detekt 1.23.8 官方規則頁、structured-coroutines、Sonar Kotlin、androidx 隨函式庫附帶的 lint、compose-rules、Slack compose-lints),能開的不自寫。②自寫規則的判準照抄其他生態已上線的做法:「互不依賴卻串著等」照 react-doctor 的 server-sequential-independent-await(相鄰兩句都在等、第二句沒讀到第一句宣告的名字才報)與 Vercel NO_SERIAL_ASYNC_CALLS(保守,寧漏不誤報);「舊回應蓋新資料」借 ESLint require-atomic-updates 的「先讀、等、再寫回」形狀。③承載工具用 ast-grep(結構比對、輸出 SARIF,[[Systems/linter精選目錄]] 已收為「事故固化引擎」)為主,需要跨條件綁定變數的那條用 semgrep;兩者都收空白分隔的多個檔,接 `.lumos/lint.json` 的 `{LINT_FILES}` 就能進推送前的新增告警檢查,不踩 detekt 只收逗號分隔的坑([[Issues/推送閘對Android的detekt只記錄不擋]])。④語意題用 kotlinx-coroutines-test 的虛擬時間與 Turbine 寫測試範本,這是官方測試文件的做法。來源見〈來源〉。
-RETIRE-IF: 某條自寫規則上線三個月,在消費專案的放行帳裡誤報(被放行並寫理由)多過真報,就把那條降成提問或拿掉;detekt 2.0 或 structured-coroutines 的現成規則涵蓋到某條自寫規則時,換成現成的、刪掉自寫那條。
+PRIOR-ART: ①型錄來源:Android 官方(協程最佳實務、Flow、UI events、State、Side-effects、Data layer、Room、DataStore、WorkManager、Testing)、kotlinx.coroutines 官方文件、現成規則庫逐條對照(detekt 1.23.8、santimattius structured-coroutines、Sonar Kotlin、androidx 隨函式庫附帶的 lint、Android Lint 內建檢查、mrmans0n compose-rules、Slack compose-lints),2026-11-05 五路調研後合併去重;能開現成規則的不自寫。②自寫規則的承載工具用 ast-grep(結構比對、原生 SARIF、`--config` 指定規則包、收空白分隔多檔,2026-11-05 實測),要綁變數名的那幾條用 semgrep;判準借其他生態已上線的做法(react-doctor server-sequential-independent-await、Vercel NO_SERIAL_ASYNC_CALLS、ESLint require-atomic-updates)。③(第二批)「寫完當下就擋」借 lumos 既有的回合結束擋停機制(收工點名那支鉤子:擋一次讓模型續做、兩道護欄防無限擋);「改檔前推相關脈絡」借既有的改檔前影響鉤子。④「標準寫法要真的被參考」的做法:錯誤訊息直接帶修法是 ESLint/Clippy 的慣例(rule docs + suggestion/fix);ast-grep 規則可附 fix。來源見〈來源〉。
+RETIRE-IF: 某條自寫規則上線三個月,在消費專案的放行紀錄(`lumos lint-waive` 寫進 `.lumos/lint-waivers.json` 的那份,每筆帶理由)裡誤報多過真報,就把那條降成提示或拿掉;detekt 2.0、structured-coroutines 或 androidx lint 的現成規則涵蓋到某條自寫規則且能接進推送前檢查時,換成現成的、刪自寫那條。
 
-## 手段分四級
+## 用詞
 
-| 級 | 意思 | 會不會擋 |
+- **型錄**:`skills/kotlin-idioms/checks-catalog.md`(新增)。473 列,依主題分九張表(API、FLOW、STATE、CO、UI、ARCH、DATA、TEST、PERF),每列欄位:編號、名稱、壞寫法形狀、標準寫法、後果、現成規則、級、情境怎麼認、接電方式、實測狀態、來源。另有〈情境決策表〉一節。型錄是「標準寫法」的單一來源;kotlin-idioms 本文的每條規則改成指向型錄編號,不重抄。
+- **級**:A 現成規則可開 / B 能用語法結構比對 / C 只能寫測試驗行為 / D 只能人判。可複選。
+- **情境怎麼認**:形狀(從程式長相認得出)/ 語意(要看語意才判得出,例:兩支呼叫是否互不依賴、是事件還是狀態)。2026-11-05 合併後形狀 367 列、語意 106 列。
+- **接電方式**(使用者 2026-11-05 要求:每列都要接,沒接電的列不收):
+  1. 告警帶寫法——規則訊息寫標準寫法與型錄編號;能一對一替換的附 ast-grep `fix`。
+  2. 當下推相關列(第二批)——改檔前鉤子命中觸發字時,只推型錄〈情境決策表〉相關的一到三列。
+  3. 表態對程式——推送前表態要引型錄編號,機器核對改動裡真的出現那個寫法(第三批)。
+  4. 行為測試或正向約束——不靠讀:虛擬時間等測試範本、架構測試(第三批之後)。
+  5. 盲判席——語意類情境由沒看過作者答案的代理再判一次,機器比一致(第三批)。
+  形狀類至少有 1 或 4;語意類必有 3,而且除了標「(人裁)」的業務判斷列,也要有 5。每種接電方式在哪一批真的生效寫在型錄的「通電批次」欄;批一只有 1 與部分 4 生效,2 要等第二批,其餘列要等後面批次(見〈天花板〉)。
+- **表態**:既有的棧別提問表態閘([[Systems/棧別提問表態閘]]):改動碰到某類寫法時,推送前要對那幾題逐題作答;本案的「表態對程式」是在作答時引型錄編號,再由機器核對(批三)。
+- **正向約束**:不靠讀文件、用會失敗的測試把寫法釘住,例如架構測試斷言「ViewModel 不得依賴 Context」、虛擬時間測試斷言「兩支互不依賴的呼叫總時間等於較慢那支」。
+- **告警身分(指紋)**:新增告警閘替每條告警算的身分字串(規則、檔、去掉行號後的內容),用來判斷「同一條告警」;放行紀錄也是用它。
+- **light 等級、盲判席**:light 是代碼審查迴圈的輕量檔(見 lumos-code-loop 手冊:不帶輪次、席數比完整審少);盲判席是批三新增的一席,只拿程式段、上下文與型錄候選列,不看作者的表態,自己判這段屬於哪一列。
+- **規則包**:`configs/ast-grep/kotlin-android/`(新增):`sgconfig.yml`、`rules/<主題>.yml`、每條規則的壞例好例樣本 `samples/bad/`、`samples/good/`;提示級規則另放 `sgconfig-hints.yml`(同資料夾,範本預設不接);要綁變數名的放 `configs/semgrep/kotlin-android.yml`(新增)。規則包與型錄是工具鏈自己的程式與資料,另開一篇 Systems 節點當家(暫名 `Systems/kotlin規則包`,用 `lumos new system` 登記這些檔);[[Systems/linter精選目錄]] 只放宣告範本與指向它的連結。
+
+## 分批
+
+| 批 | 內容 | 本計劃 |
 |---|---|---|
-| A 現成規則 | 開別人維護的 lint 規則 | detekt 那批要等 [[Projects/Android的detekt推送前真的擋_計劃]] 才擋;androidx lint 走 Android Lint |
-| B 自寫結構規則 | 列出壞寫法的語法形狀,用 ast-grep/semgrep 比對 | 接 `{LINT_FILES}` 後推送前就擋新增的 |
-| C 測試範本 | 給一段可抄的測試,斷言行為(虛擬時間、呼叫次數、最終狀態) | 綁進測試後由測試擋 |
-| D 人審 | 機器判不了語意,用棧別提問逼審查員作答 | 推送前要表態 |
+| 一 | 型錄;規則包(B 級全部能寫的,每條壞例全中、好例零誤報);`.lumos/lint.json` 宣告範本;kotlin-idioms 指向型錄 | 是 |
+| 二 | 回合結束自動檢查(工作樹檢查);改檔前推相關列;代碼審「通過」前先跑機械檢查 | 另開:[[Projects/Android寫法寫完當下自動檢查_計劃]](2026-11-05 從本計劃拆出,見審計修正紀錄 r2) |
+| 三 | 表態對程式、盲判席、命中語意觸發字自動拉進審查迴圈 | 另開(計劃名暫定「Android寫法語意情境表態與盲判_計劃」,本案設計審過後建立) |
+| 四 | A 級現成規則:detekt 帶型別([[Projects/Android的detekt推送前真的擋_計劃]])、Android Lint 與 Compose lint 接 CI 範本 | 另開 |
+| 五 | C 級行為測試範本、架構測試(正向約束)擴充 `lumos arch-template android` | 另開 |
 
-## 一、同一個功能裡多支 API 的同步非同步(一次性呼叫)
+## 範圍(批一)
 
-| 編號 | 要守的寫法 | 壞寫法形狀(要抓的) | 不報的 | 手段 | 本機實測 |
-|---|---|---|---|---|---|
-| API-1 | 互不依賴的呼叫要並行 | suspend 函式裡相鄰兩句 `val a = x.f(…)`、`val b = y.g(…)`,第二句的參數、具名參數、接收者都沒用到 a | 第二句任何位置用到 a;不在 suspend 函式裡 | B(semgrep,提示級)+ C(虛擬時間:假 API 各延遲 100,斷言總時間 100 不是 200) | 2026-11-04 樣本 2 壞例全中,3 個有依賴的好例(位置參數、具名參數、接收者)不報 |
-| API-2 | 多筆同型要用 `awaitAll()` | `.map { it.await() }`、`forEach { it.await() }` | `awaitAll()` | B | 未寫 |
-| API-3 | async 的結果要有人接 | 單獨一句 `async { }` 結果沒人用 | 有接 | A:structured-coroutines `UnusedDeferred`;IDE `DeferredResultUnused` | 未在本機跑 |
-| API-4 | 一支失敗時連坐或不連坐要選對 | `supervisorScope { … async … await }` 沒有 try 包住 await | — | D(業務語意)+ C(讓一支假 API 丟例外,斷言另一支被取消或沒被取消,照需求) | — |
-| API-5 | HTTP 整個呼叫要有上限 | `OkHttpClient.Builder()…build()` 鏈上沒有 `callTimeout(`(OkHttp 預設 0=沒上限) | 有 callTimeout | B(ast-grep) | 樣本壞例中、好例不報 |
-| API-6 | Ktor 要裝逾時 | `HttpClient(…) { }` 裡沒有 `install(HttpTimeout)` | 有裝 | B | 未寫 |
-| API-7 | 重試要有上限與退避 | Flow 的 `retry()` 不帶次數;`while (true)` 裡重送;重試迴圈用固定 `delay(常數)` | 帶次數與遞增延遲 | B | 未寫 |
-| API-8 | 舊回應不能蓋新資料 | ViewModel 裡帶參數、非 private 的函式每次呼叫都 `viewModelScope.launch { }` 寫 state,而且函式裡沒有取消前一個 Job | 先 `job?.cancel()`;改用 `collectLatest`/`flatMapLatest`/`mapLatest` | B(ast-grep)+ C(q1 延遲 300、q2 延遲 100,先 q1 後 q2,斷言最後是 q2 且從沒出現 q1) | 樣本壞例中、先取消的好例不報 |
-| API-9 | 離開畫面要取消在途請求 | `GlobalScope.`、當場 `CoroutineScope(…).launch`、Fragment 裡用 `lifecycleScope` 而不是 `viewLifecycleOwner.lifecycleScope` | viewModelScope、注入的應用級 scope(要能標豁免) | A:detekt `GlobalCoroutineUsage`、structured-coroutines `InlineCoroutineScope`、androidx `UnsafeRepeatOnLifecycleDetector`;B 補 Fragment 那型 + C(onCleared 後斷言假 API 收到取消) | GlobalScope 已實測(detekt 不需型別就響) |
-| API-10 | 防重複送出 | `onClick` 觸發的函式裡直接 `launch`,沒有「進行中」判斷(`if (inFlight) return`、`job?.isActive`) | 有判斷 | D + C(同一虛擬時間連叫兩次 submit,斷言假 API 只被叫一次);B 太容易誤報,不做 | — |
-| API-11 | callback 轉 suspend 要能取消 | `suspendCoroutine { }`;`suspendCancellableCoroutine { }` 裡沒有 `invokeOnCancellation` | 有註冊取消 | B(ast-grep);IDE 有 `SuspendCoroutineLacksCancellationGuarantees` | 樣本兩壞例中、好例不報 |
-| API-12 | callbackFlow 要 awaitClose | `callbackFlow { }` 裡沒有 `awaitClose` | 有 | B(ast-grep);執行期本來就會丟例外,靜態提早抓 | 樣本壞例中、好例不報 |
-| API-13 | 阻塞呼叫不在協程裡直接跑 | `Thread.sleep`、`Call.execute()`、`Future.get()` 出現在 suspend 函式或 `launch` 裡、沒包 `withContext` | — | A:detekt `SleepInsteadOfDelay`(要 JDK 型別)、structured-coroutines `BlockingCallInCoroutine`、`RunBlockingInSuspend`;執行期 StrictMode | SleepInsteadOfDelay 已實測 |
+1. **型錄**:新增上面那份檔;kotlin-idioms 的 SKILL.md 每條規則的機檢欄改成型錄編號;SKILL.md 開頭加一行「寫或審 Kotlin 前先看型錄〈情境決策表〉」。型錄加一欄「通電批次」:這一列的接電方式哪一種在哪一批真的生效(例:A 級現成規則要批四、表態與盲判要批三);〈情境決策表〉加「列編號」欄(D-1 起)。型錄裡指向會談暫存區的路徑(規則草稿、研究稿)在落地時改成 repo 內路徑或拿掉;統計節用程式重算(規則條數照規則包實數)。〈待查證〉節是還沒定案的候選(編號會跟主表重複),不算型錄條目、不受 S3 檢查;定案時搬進主表並給新編號。每列的「標準寫法」要有真的打開讀過的權威出處(官方文件、官方範例 repo、現成檢查工具的官方規則頁),寫在「來源」欄;查不到的列名稱標「(出處不全)」,只當參考、不當標準,引用它的規則只准提示級(使用者 2026-11-05:「你的標準、最佳寫法來源要有依據,不要你自己寫」)。〈情境決策表〉的觸發字不准收一般常用字(停用字表在規則包自我檢查程式裡,第二、三批的推列與情境題靠它);決策表列編號只准往後加。
+2. **規則包**:B 級能寫成純語法規則的全部寫成 ast-grep 規則;每條規則:`id` 用 `kt-` 前綴;`message` 一句、**不超過 120 字**(新增告警閘解析 SARIF 時截在 120 字,超過的修法會被切掉),格式 `[<型錄編號>] 錯在哪;改用 <最短的標準寫法>`,完整寫法留在型錄、用編號找;severity 只用 error(必出事)、warning(多半出事)、hint(提示級)。每條至少兩個壞例、兩個好例(含最容易誤報的相似寫法)。做不到零誤報的降 hint;要型別、跨檔、綁名字的不寫 ast-grep 版,在型錄該列實測狀態寫「純語法做不到:<原因>」——API-1(互不依賴的串行等待)要綁「第二句沒用到第一句的名字」,只放 semgrep 版。只該掃測試碼或只該掃正式碼的規則,`files`/`ignores` 不用 `**/test/**` 這種寫法:ast-grep 官方文件寫明這兩欄的路徑相對於 `sgconfig.yml` 所在目錄,而規則包在工具鏈、被掃的檔在消費專案,比對的是完整路徑,祖先目錄叫 test 就整個反轉(2026-11-05 第二輪設計審實測);一律寫成錨在 `src/` 底下的 `**/src/test*/**`、`**/src/androidTest*/**`、`**/src/testFixtures/**`(帶 `*` 才涵蓋 Gradle 測試變體目錄如 `src/testDemo`,2026-11-05 nowinandroid 實測)。TEST 類規則的壞例好例放在樣本目錄裡帶 `src/test/` 的子目錄。`message` 不准含 `$` 變數(SARIF 會把變數換成原始碼,可能超過 120 字)。
+3. **落地前的真實專案量測**:規則包進 repo 之前,對兩個真的 Android 專案(實驗專案複本與一個公開的大型 Android 範例專案)整份原始碼跑一次,每條 warning/error 規則的命中逐條人工判真假;某條規則誤報超過命中的一成(照 Google Tricorder「沒用的告警要壓在一成以下,壓不下就停用」的做法)就降 hint,結果寫進型錄實測狀態欄。
+4. **宣告範本**:[[Systems/linter精選目錄]] 加 Kotlin 規則包的 `.lumos/lint.json` 範本:`ast-grep scan --config $HOME/harness/lumos-toolchain/configs/ast-grep/kotlin-android/sgconfig.yml --format sarif {LINT_FILES} > {LINT_SARIF_OUT}`(路徑跟既有 detekt 範本同一種寫法);semgrep 那條同形。範本附「CI 要先裝 ast-grep-cli(釘版本)並 clone 工具鏈,沒裝時新增告警閘判環境不可用、照既有規則放行」。hint 級規則放 `sgconfig-hints.yml`,範本預設不接(新增告警閘不分等級,接了就擋)。範本與本 repo CI 釘 ast-grep 0.51.1(2026-11-05 實測的版本),規則包用到的語法以這版為準。規則包壞掉或版本不認得某個鍵時,ast-grep 整份失敗(實測 rc 8、沒有輸出),新增告警閘判環境不可用並記帳:規則包本身壞掉由本 repo CI 的 S1 用釘住的版本攔下;消費專案機器上的版本落差走環境不可用那筆帳,看得到但不擋。
+5. **測試檔也要掃(設定開關)**:新增告警閘現在排除路徑裡有 `test`/`tests` 資料夾段、或檔名帶 `_test.`、`.test.`、`.spec.`、`test_` 的檔(新增告警閘的測試路徑樣式);所以 Kotlin 的 `src/test/` 被排除,型錄 TEST 主題的規則在那裡永遠不響;`src/androidTest/`、`src/commonTest/`、`src/testFixtures/` 本來就會掃,不受這個開關影響。反過來,正式碼的套件或模組資料夾叫 `test` 時會被當測試檔排除,這是既有樣式的行為,本案不改。`.lumos/config.json` 的 `lint_new` 區塊加 `include_test_paths`(副檔名清單,預設空 = 照舊排除);Kotlin 範本設 `["kt"]`。值不是字串清單時,照既有設定讀法用預設(空)並加一條警告;推送前閘從快照讀設定那條路也要認這個鍵。開關只接在新增告警閘那一個呼叫處,不改測試路徑樣式本身(它還有其他消費者)。不加這個開關的最小解是「TEST 主題只靠行為測試接電」,但那 18 列是形狀類,型錄要求的就是告警,所以加開關。
 
-## 二、資料流合併(持續更新的狀態)
+**不做**:不改新增告警閘的判定(只多認 `include_test_paths` 一個設定鍵);不改消費專案的檔;不寫 detekt 自訂規則 jar;`lint-new`、工作樹終點與鉤子在第二批;批二到批五不在本計劃。
 
-| 編號 | 要守的寫法 | 壞寫法形狀 | 不報的 | 手段 | 本機實測 |
-|---|---|---|---|---|---|
-| FLOW-1 | 合成用 combine,不巢狀收集 | `.collect { }` 或 `.collectLatest { }` 裡面又 `.collect { }`/`.collectLatest { }` | `combine(a, b) { }` | B(ast-grep) | 樣本壞例中、combine 好例不報 |
-| FLOW-2 | zip 只用在一對一配對 | 對狀態流(`StateFlow`、`stateIn` 出來的)用 `.zip(` | 冷流的配對 | B 只能看名字猜型別,誤報高 → 降成 D 提問 | — |
-| FLOW-3 | combine 的每個來源都要有初始值 | — | — | C(讓其中一個來源永遠不發,斷言畫面狀態仍有初始值、不卡在載入) | — |
-| FLOW-4 | `flow { }` 裡不換執行緒 | `flow { }` 裡出現 `withContext(` | `.flowOn(…)` | B(ast-grep);執行期本來就會炸 | 樣本壞例中、flowOn 好例不報 |
-| FLOW-5 | 回傳 Flow 的函式不標 suspend | `suspend fun x(): Flow<…>` | — | A:detekt `SuspendFunWithFlowReturnType`(要型別) | 已實測(帶型別響) |
-| FLOW-6 | 背壓策略要寫明 | — | — | D(語意) | — |
-| FLOW-7 | 狀態用 StateFlow、事件用 SharedFlow 或 Channel | — | — | D | — |
+## 裁決紀錄
 
-## 三、狀態保存
+- **一次性事件的標準寫法(2026-11-05,使用者授權由 AI 裁)**:原計劃寫「事件用 SharedFlow 或 Channel」,Android 官方 UI events 指南把它列為反模式(畫面在背景時事件會遺失),改成「事件化成狀態、畫面處理完回報已處理」;Channel 只留給真的不屬於畫面狀態的內部訊號,且要 BUFFERED、在 repeatOnLifecycle 裡收。依據:developer.android.com 的 UI events 頁。
+- **型錄不進計劃筆記本文**:473 列約 24 萬字元,超過設計審單份材料上限;計劃只寫設計與條款,型錄另存一檔,設計審抽樣審(每主題抽 5 列)並全量跑機械檢查(欄位齊、接電方式符合規則、編號唯一)。
+- **hint 級規則預設不接推送閘**:新增告警閘不分等級,接了就會擋;提示級的誤報可能高,擋人會讓人學會無腦放行。
+- **規則訊息不超過 120 字(2026-11-05 設計審 r1)**:新增告警閘解析 SARIF 時把訊息截在 120 字;不改截斷(那會動到所有棧的告警輸出),改成訊息只放最短修法加型錄編號,完整寫法用編號查。ESLint、Clippy 的慣例也是短訊息加規則文件。
+- **規則誤報的上限(2026-11-05 設計審 r1)**:照 Google Tricorder 的做法,沒用的告警要壓在一成以下,壓不下就停用;本案落地前在兩個真專案量,超過一成降 hint。
 
-| 編號 | 要守的寫法 | 壞寫法形狀 | 不報的 | 手段 | 本機實測 |
-|---|---|---|---|---|---|
-| STATE-1 | 讀改寫用原子 `update { }` | `X.value = X.value.copy(…)`、`X.value = X.value + …` | `X.update { it.copy(…) }` | B(ast-grep) | 樣本壞例中、update 好例不報 |
-| STATE-2 | 不公開可變狀態 | 非 private 的屬性 `= MutableStateFlow(…)` | private | B(ast-grep);structured-coroutines `MutableFlowExposed`;Sonar S6305 | 樣本壞例中、private 不報 |
-| STATE-3 | `stateIn`/`shareIn` 只建一次 | 寫在函式本體或 `get() =` 裡 | 類別屬性 | B(ast-grep) | 樣本函式那型中、屬性那型不報;`get() =` 那型未寫 |
-| STATE-4 | 共享策略預設 WhileSubscribed(5_000) | `SharingStarted.Eagerly`(要一行理由才放行) | WhileSubscribed | B(ast-grep);structured-coroutines `StateInWithEagerlyStrategy` | 樣本中 |
-| STATE-5 | 畫面收集跟生命週期 | `collectAsState()`;`lifecycleScope.launch { flow.collect }` 沒包 `repeatOnLifecycle` | `collectAsStateWithLifecycle()` | A:detekt `ForbiddenMethodCall`(要型別,[[Projects/Android的detekt規則說實話_計劃]] 補開)、structured-coroutines lint `CollectAsStateWithoutLifecycle`、androidx `RepeatOnLifecycleWrongUsage` | collectAsState 已實測(帶 Compose runtime 型別響) |
-| STATE-6 | 被系統殺掉後能還原 | — | — | C(用同一個 `SavedStateHandle` 重建 ViewModel,斷言使用者輸入與選中 id 還在)+ D(哪些欄位要存是業務決定) | — |
+## 批三的進迴圈條件(2026-11-05 使用者確認照建議)
 
-## 四、協程紀律(三類共用的底層)
+- 改動含〈情境決策表〉觸發字時,推送前要有情境表態與盲判記錄,沒有就擋;盲判由代碼審手冊在表態之後派(只給程式段、上下文與候選列,不給作者答案)。2026-11-05 第三批設計審 r1 改寫:原寫「以 light 等級拉進代碼審查迴圈」,但有 kt 改動的分級本來就至少 standard,改成推送前核記錄,見 [[Projects/Android寫法語意情境表態與盲判_計劃]]。
+- 沒命中的改動照舊只在推送前閘確認。
+- 理由:使用者要求「審查迴圈中就檢查乾淨,不用等到推送」「不需要我記得敲指令」;只對命中的改動開迴圈,避免每次改動都多一輪審查的成本。細節在批三計劃。
 
-| 編號 | 要守的寫法 | 手段 |
-|---|---|---|
-| CO-1 | Dispatcher 可注入 | A:detekt `InjectDispatcher`(要型別) |
-| CO-2 | 不吞取消 | A:detekt `SuspendFunSwallowedCancellation`(只抓 runCatching 那型,要型別)+ structured-coroutines `CancellationExceptionSwallowed`(抓 try/catch 那型) |
-| CO-3 | Job()/SupervisorJob() 不傳進 launch | A:structured-coroutines `JobInBuilderContext`;Sonar S6306 |
-| CO-4 | CPU 長迴圈要讓出取消點 | A:structured-coroutines `LoopWithoutYield` |
-| CO-5 | suspend 函式 main-safe | D(誰阻塞誰負責);A 只抓得到已知阻塞 API(見 API-13) |
-| CO-6 | 測試協程用 runTest | A:structured-coroutines `RunBlockingInsteadOfRunTest`;detekt 2.0 的 `CoroutineLaunchedInTestWithoutRunTest` 等正式版 |
+## 舊版初稿的去向
 
-## 五、Compose 收集與清單(跟狀態保存相鄰)
-
-| 編號 | 要守的寫法 | 手段 |
-|---|---|---|
-| UI-1 | Lazy 清單給穩定 key | B(ast-grep:`items(` 沒有 `key =`)| 樣本壞例中、有 key 不報 |
-| UI-2 | 組建畫面時不直接 launch、不在組建裡呼叫 Flow 運算子 | A:androidx `CoroutineCreationDuringComposition`、`FlowOperatorInvokedInComposition`(依賴函式庫就生效) |
-| UI-3 | LaunchedEffect 的 key 選對 | B 提示級:`LaunchedEffect(Unit)` 本體讀到外層參數或 state;compose-rules `LambdaParameterInRestartableEffect` |
-
-## 範圍
-
-- 自寫規則包:放在本 repo 分發的 configs 底下(ast-grep 規則與 semgrep 那一條各一個資料夾),每條規則附壞例與好例樣本;規則包自己的測試用 ast-grep 內建的規則測試(valid/invalid 樣本)。
-- 宣告範本:[[Systems/linter精選目錄]] 加 ast-grep 與 semgrep 的 `.lumos/lint.json` 範本(帶 `{LINT_FILES}`、輸出 SARIF),寫明哪些是提示級。
-- 測試範本:kotlin-idioms 加一節〈機械驗證範本〉,把 C 級每條給一段可抄的測試。
-- kotlin-idioms 每條規則的機檢欄改成指向本表編號。
-- 棧別提問:Kotlin 補外呼逾時與重試題(照 Java 棧那題)、舊回應與重複送出題,觸發詞含 Retrofit、OkHttp、Ktor;D 級每條都要有一題對應。
-- 現成規則 A 級裡的 structured-coroutines:先在一個消費專案試跑看誤報,不直接進共用設定。
-
-**不做**:不改 detekt 的推送閘接法(那是推送前真的擋那案);不寫 detekt 自訂規則 jar(要 Kotlin 建置,ast-grep 能做到的形狀先用它);不碰消費專案。
+2026-11-04 初稿的 35 條表(API-1~13、FLOW-1~7、STATE-1~6、CO-1~6、UI-1~3)已併入型錄,編號沿用;API-1 的 semgrep 規則與各條本機實測紀錄搬進型錄的「實測狀態」欄;型錄裡寫「40 條」的地方一併改成 35。
 
 ## 實務隱患
 
-- 提示級規則(API-1、UI-3)上線先當提示、不擋,放行帳累積後再決定升級。
-- ast-grep 的子規則之間不共用變數,所以「第二句沒用到第一句」這種要綁名字的判準做不到,只能用 semgrep;兩種工具並存是刻意的,寫進範本說明。
-- 只看語法分不出呼叫是不是 suspend,API-1 會把 suspend 函式裡兩句普通的取值也報出來;這是它降成提示級的原因。
-- 消費專案要多裝兩個工具(ast-grep、semgrep),安裝方式寫進範本。
-- 已排除:金流:不碰付款或點數
-- 已排除:對外送出:只在本機跑檢查
-- 已排除:不可逆:新增規則與文件,退提交即回原狀
+- **規則包誤報擋人**:每條至少兩個「最容易誤報的好例」;落地前在兩個真專案量誤報(範圍 3),超過一成降 hint;上線後誤報走既有放行指令,放行會被統計(撤除條件吃這個數)。放行紀錄是新增告警閘既有的那一份。
+- **工具沒裝**:消費專案或 CI 沒裝 ast-grep 時,新增告警閘照既有規則判環境不可用、自動放行並記帳。
+- **測試檔開關打開後多出的告警**:`include_test_paths` 是專案自己開的;開了以後其他宣告命令(例如 detekt)也會掃到測試檔,可能多出既有規則對測試碼的告警。範本寫明這一點,新增告警閘只擋新增的,舊的不擋。
+- **跟 detekt 那案改同一道閘**:[[Projects/Android的detekt推送前真的擋_計劃]] 也改新增告警閘(逗號佔位符、分隔字元路徑)。本案只多一個設定鍵,不碰那案改的佔位符替換;兩案誰先合進主線都不衝突。
+- **檔很多時命令列過長**:範本用 `{LINT_FILES}`,一次推上千支 kt 檔時 Linux 上整條命令可能超過單一參數上限;detekt 那案在執行入口接住「參數太長」並記成這條命令沒跑到,本案沿用,不另做分批。
+- **資安**:不新增自動執行命令的地方;範本的命令只在推送前閘與手動冒煙跑,跟既有宣告同一套信任。
+- **舊否決對照**:2026-11-05 跑 `lumos rejections`(396 行)按概念比對,沒有撞到本案的否決;相關的一條同向——新增告警閘出錯就放行(本案沿用);另兩條(改檔前推播零命中不講、回合結束鉤子只印一行)跟著第二批搬走。
+- 已排除:金流:只讀程式碼,不碰付款或點數
+- 已排除:對外送出:檢查只在本機跑,不送任何東西出去
+- 已排除:不可逆:新增檔與擴充既有函式,退提交即回原狀;放行檔與治理帳是追加,不改舊紀錄
+- 守衛面:本案改新增告警閘的設定讀法並新增會擋人的規則包,屬守衛面,走完整設計審
 
-## 驗收條款(初稿,設計審前再定)
+## 驗收條款
 
-- [S1] 當對附帶的壞例樣本跑自寫規則包時,表上每條 B 級規則 應 各自至少命中一個壞例,對好例樣本 應 零命中 [manual:設計審前定測試名與做法,這版是草稿]
-- [S2] 當 `.lumos/lint.json` 用範本宣告規則包、一次改兩支以上 kt 檔推送時,新增的壞寫法 應 被新增告警檢查擋下 [manual:設計審前定測試名與做法,這版是草稿]
+- [S1] 當對規則包每條規則的壞例樣本跑 ast-grep 時,應 每條規則至少命中兩個壞例;對好例樣本 應 該條規則零命中、每條至少兩個好例;ast-grep 回報載入的規則數 應 等於規則檔裡的 id 數;TEST 類規則對放在祖先目錄名為 `test` 底下的正式碼樣本 應 不命中;本 repo 的 CI 裝釘版本(0.51.1)的 ast-grep-cli,所以 CI 上不略過;本機沒裝時印略過 [test:t_kotlin_rulepack_samples]
+- [S2] 當讀規則包所有規則檔時,每條規則的 message 應 以存在於型錄的 `[編號]` 開頭、不超過 120 字、含分號與「改用」或「改成」、不含 `$`,引用(出處不全)列的規則 應 是提示級;id 應 唯一;severity 應 屬於 error/warning/hint;型錄裡 應 沒有指向會談暫存區的路徑 [test:t_kotlin_rulepack_messages_cite_catalog]
+- [S3] 當讀型錄時,每列 應 欄位數正確(反引號裡的直線不算欄位分隔)、編號唯一、標準寫法與接電方式與通電批次非空;形狀類 應 含「告警帶寫法」或「正向約束」;語意類 應 含「表態對程式」,名稱沒標「(人裁)」的 應 另含「盲判席」;〈情境決策表〉每列 應 有連號的列編號、觸發字與來源,觸發字 應 不含停用字表裡的常用字,對應檢查 應 都在主表;來源欄 應 有網址或來源縮寫且不寫未核對,否則名稱 應 標(出處不全);語意類沒被決策表收的 應 只能是出處不全或人裁;〈待查證〉節 應 不在檢查範圍 [test:t_kotlin_catalog_rows_wired]
+- [S4] 當 `.lumos/lint.json` 照範本宣告規則包、一次提交改兩支 kt 檔、其中一支新增一處 `body()!!` 而基準版已有另一處時,新增告警閘 應 只擋新增那一處 [test:t_lint_new_astgrep_kotlin_two_files]
+- [S5] 當在真的 Android 專案(實驗專案的乾淨複本,補上協程、Room、Retrofit、DataStore、Fragment、Compose 依賴)照範本宣告規則包並推一個含壞寫法的提交時,新增告警閘 應 擋下、訊息含型錄編號與修法 [manual:在暫存區實驗專案複本實跑一次推送前判定,記下擋下訊息與耗時]
+- [S6] 當規則包對兩個真的 Android 專案整份原始碼跑過時,每條 warning 與 error 規則的命中 應 逐條判過真假,誤報超過一成的 應 已降成 hint,結果 應 寫進型錄實測狀態欄 [manual:在實驗專案複本與一個公開 Android 範例專案各跑一次,逐條判真假,把每條規則的命中數與誤報數記進型錄]
+- [S7] 當 `.lumos/config.json` 的 `lint_new.include_test_paths` 含 `kt` 時,新增告警閘 應 掃 `src/test/` 底下的 kt 檔並擋新增告警;沒設時 應 照舊不掃;值不是字串清單時 應 照沒設處理並印警告;`src/androidTest/` 的檔不論開關 應 照舊會掃 [test:t_lint_new_include_test_paths]
 
-## 來源
+## 回退
 
-- detekt 1.23.8 規則:https://detekt.dev/docs/1.23.8/rules/coroutines
-- structured-coroutines:https://github.com/santimattius/structured-coroutines
-- Sonar Kotlin:https://github.com/SonarSource/sonar-kotlin
-- androidx lint 索引:https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html
-- compose-rules:https://mrmans0n.github.io/compose-rules/rules/
-- react-doctor:https://react.doctor/docs/rules/react-doctor/server-sequential-independent-await
-- Vercel:https://vercel.com/docs/conformance/rules/NO_SERIAL_ASYNC_CALLS
-- ESLint require-atomic-updates:https://eslint.org/docs/latest/rules/require-atomic-updates
-- OkHttp 預設逾時:https://square.github.io/okhttp/5.x/okhttp/okhttp3/-ok-http-client/
-- kotlinx-coroutines-test:https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md
+退回本案的提交:型錄與規則包是新檔,刪掉即可;`include_test_paths` 退回後設定鍵被忽略(未知鍵照既有讀法不報錯)、回到排除測試路徑。消費專案照範本加的 `.lumos/lint.json` 那條宣告,在規則包不存在時 ast-grep 會報設定檔找不到 → 新增告警閘判環境不可用、自動放行,不擋人。
 
-REVISIT:[when-status:Projects/Android協程與API寫法機械檢查標準_計劃=done][by:2027-03-01] 在一個消費專案量 API-1、UI-3 的誤報率(目前只在十幾段樣本上驗過),決定要不要升級成擋
+## 天花板
+
+1. 純語法規則分不出型別:同名但不同型別的呼叫會誤報或漏報(例:`.value.add` 在不是狀態容器的物件上)。
+2. 語意類情境(106 列)批一只靠告警訊息(當下推列在第二批),判斷對不對要等批三的表態與盲判。
+3. A 級現成規則(202 列,其中約 166 列只靠現成規則接電)在批四之前不擋,也帶不了型錄編號;只靠 hint 規則的列(約 30 列)在預設範本下不響。這些列在型錄的「通電批次」欄寫明要等哪一批。
+4. 路徑過濾錨在 `src/test/` 這類片段:專案本身放在名為 `src/test` 的目錄底下時,測試類與正式類規則仍會反轉(ast-grep 的路徑過濾相對於規則設定檔所在目錄,規則包在工具鏈裡,這點本案改不了)。
+
+## 合約候選(設計審過後列;候選不等於已蓋章)
+
+- 新增告警閘只擋這次新增的規則包告警,基準版已有的同一處不擋(S4)。
+- `include_test_paths` 沒設時照舊排除測試路徑;設了只放寬那幾個副檔名(S7)。
+- 規則包裡引用(出處不全)型錄列的規則只准提示級,不擋人(S2)。
+- 規則包樣本目錄不當產品碼掃(否則改樣本會把教材當成新 bug)。
+
+## 實作紀錄(2026-11-05)
+
+- 型錄每列的標準寫法逐列查官方出處:四個代理分組查 123 列出處不夠格的列(37+11+41 符合、12 照官方修正、18 只找到一半、4 查無),另補 24 列程式範例與 35 列決策表;只找到一半或查無的列名稱標「(出處不全)」,查證時 28 列,代碼審 r1 補標 TEST-33 後 29 列(以型錄統計節為準),引用它們的 5 條規則降提示級(使用者 2026-11-05 要求)。
+- 範圍 1「kotlin-idioms 每條規則的機檢欄改成型錄編號」改成在 SKILL.md 開頭加一段「先看型錄、衝突以型錄為準」:R 規則是早期整理、跟型錄不是一對一,逐條改機檢欄要重排整份文件;型錄已是單一來源。
+- 型錄加「通電批次」欄(程式依接電方式與規則等級算);決策表加列編號與來源欄、清掉常用字觸發字、停用字表放在規則包自我檢查(第二、三批設計審要的)。
+- 規則包自我檢查 `configs/ast-grep/kotlin-android/check.py`;測試 `t_kotlin_rulepack_samples`、`t_kotlin_rulepack_messages_cite_catalog`、`t_kotlin_catalog_rows_wired` 都另把複本逐項改壞、驗檢查各自抓到。
+- S5、S6 實測見 [[Verification/2026-11-05_Kotlin規則包真專案實測]]:nowinandroid 修前誤報率 55%,改形狀 6 條、降提示級 3 條後兩專案量到的誤報歸零;S5 實跑發現擋下訊息把規則訊息截在 70 字、修法被切掉,改成 120 字。
+- 規則包樣本目錄不當產品碼掃、也不要求每支樣本有家(`_RULEPACK_SAMPLE_RE`、`node_home.ignore`)。
+- 範圍 2 原寫「要綁變數名的放 semgrep」:沒做 semgrep 檔,API-1 那條改用 ast-grep 的 `all` 排順序寫成(放提示級);不多引一個工具(零依賴家規下每多一個工具就多一個安裝步驟與 CI 下載)。
+- 新增第三級「語意覆核級」(`rules-review/`,ast-grep 的 info 等級):形狀分不出對錯、要知道型別或語意的規則放這裡,不降成容易被忽略的提示級;每個命中之後要由盲判代理逐筆判真假(接法在 [[Projects/規則包語意覆核級命中走盲判_計劃]],從第三批拆出、另審),接上前不擋。依據:Semgrep、Datadog 在固定規則上疊模型判誤報(只在有把握時判、判成誤報不自動關、準確率底線九成),學術上 ZeroFalse、Wagner 等(2025)量到模型能濾掉三到四成誤報而不漏真問題;使用者 2026-11-05 問「形狀改不好是不是可以參語意判斷,會不會比 hint 靠譜」。
+- CI 跑全套的工作先 `pip install ast-grep-cli==0.51.1`。
+
+## 審計修正紀錄
+
+- r1(2026-11-05,四席 sonnet:通才、正確性、接手、架構對齊):50 條/blocking 27/預設預算比單條保底小、回合結束檢查一條都跑不起來(三席獨立抓到),其餘集中在鉤子插入位置、訊息截斷、共用工作目錄、測試檔被排除、改檔前推列的比對歸屬;全部折入。
+- r2(2026-11-05,四席 sonnet:正確性、邊界、資源、架構對齊):43 條/blocking 19/新機制(暫時索引、回合結束鉤子的預算與範圍、改檔前推列)集中 36 條,照熔斷提示把第二批拆成 [[Projects/Android寫法寫完當下自動檢查_計劃]] 帶走那 36 條;本計劃只留第一批,折 7 條(規則路徑過濾錨在 src/ 底下、釘 ast-grep 版本、待查證節不受檢、測試路徑寫實、設定鍵型別、訊息不含 $、命令列過長沿用 detekt 那案)。
+- 卷證:governance/review-reports/android協程與api寫法機械檢查標準/(r1-intake.md、r2-intake.md 有先查世界與逐條去向)

@@ -1,0 +1,108 @@
+id: kt-catch-then-collect-lambda
+language: kotlin
+severity: hint
+message: '[FLOW-10].catch 只管上游,接不到 collect { } 裡丟的例外;改成會丟的邏輯放 .onEach { }.catch { }.collect()'
+rule:
+  any:
+    - pattern: $F.catch { $$$ }.collect { $$$ }
+    - pattern: $F.catch { $$$ }.collectLatest { $$$ }
+  has:
+    kind: call_suffix
+    has:
+      kind: annotated_lambda
+      has:
+        kind: lambda_literal
+        has:
+          kind: statements
+---
+id: kt-oncompletion-ignores-cause
+language: kotlin
+severity: hint
+message: '[FLOW-13]onCompletion 在失敗與取消時也會跑,沒看 cause 就當成功會顯示錯的狀態;改成 onCompletion { cause -> if (cause == null) showDone() }'
+rule:
+  pattern: $F.onCompletion { $$$ }
+  has:
+    kind: call_suffix
+    has:
+      kind: annotated_lambda
+      has:
+        kind: lambda_literal
+        all:
+          - not:
+              has:
+                kind: lambda_parameters
+          - not:
+              has:
+                stopBy: end
+                kind: simple_identifier
+                regex: ^it$
+---
+id: kt-asflow-not-cancellable
+language: kotlin
+severity: hint
+message: '[FLOW-14]集合/範圍轉的 asFlow() 不檢查取消,取消後還把整串跑完;改用 .asFlow().cancellable(),或 collect 裡 ensureActive()'
+rule:
+  pattern: $X.asFlow()
+  not:
+    inside:
+      stopBy: end
+      pattern: $Y.cancellable()
+constraints:
+  X:
+    not:
+      regex: '(?i)livedata|^::|^\(?suspend\b'
+---
+id: kt-unbounded-channel
+language: kotlin
+severity: hint
+message: '[FLOW-30]UNLIMITED 緩衝在消費者慢時會無限長大到 OOM;改成有上限加溢位策略,例 Channel(64, BufferOverflow.DROP_OLDEST)'
+rule:
+  kind: value_argument
+  regex: '^(capacity\s*=\s*)?(Channel\.)?UNLIMITED$'
+  inside:
+    kind: value_arguments
+    inside:
+      kind: call_suffix
+      inside:
+        kind: call_expression
+        any:
+          - has:
+              kind: simple_identifier
+              regex: ^(Channel|produce|actor)$
+          - has:
+              kind: navigation_expression
+              has:
+                kind: navigation_suffix
+                regex: '^\??\.\s*(buffer|produce|actor)$'
+---
+id: kt-callbackflow-trysend-ignored
+language: kotlin
+severity: hint
+message: '[FLOW-31]callbackFlow 緩衝滿時 trySend 回傳失敗,沒看結果資料就靜默遺失;改成 trySend(v).onFailure { log(it) },或 buffer 明講溢位要丟'
+rule:
+  all:
+    - any:
+        - pattern: trySend($$$)
+        - pattern: $C.trySend($$$)
+    - inside:
+        kind: statements
+    - inside:
+        stopBy: end
+        any:
+          - pattern: callbackFlow { $$$ }
+          - pattern: callbackFlow<$T> { $$$ }
+---
+id: kt-collectlatest-writes
+language: kotlin
+severity: hint
+message: '[FLOW-22]collectLatest 收到新值就取消上一次處理,寫入可能只做一半;必須做完的寫入改用 collect,或包進 withContext(NonCancellable) { }'
+rule:
+  pattern: $F.collectLatest { $$$ }
+  has:
+    stopBy: end
+    kind: navigation_suffix
+    regex: '^\??\.\s*(insert|save|upsert|delete|remove|write|persist|upload|submit)\w*$'
+  not:
+    has:
+      stopBy: end
+      pattern: withContext(NonCancellable) { $$$ }

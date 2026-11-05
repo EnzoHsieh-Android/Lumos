@@ -1,0 +1,135 @@
+# T4(區塊本體)
+id: kt-test-runtest-block-body
+language: kotlin
+severity: hint
+message: '[TEST-13]runTest 寫在區塊本體裡,回傳值被丟掉(JS 等平台會靜默不跑);改成運算式本體 fun t() = runTest { }'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - pattern: runTest { $$$ }
+    - pattern: runTest($$$) { $$$ }
+    - pattern: $S.runTest { $$$ }
+    - pattern: $S.runTest($$$) { $$$ }
+  inside:
+    kind: statements
+    inside:
+      kind: function_body
+      inside:
+        kind: function_declaration
+        has:
+          kind: modifiers
+          has:
+            kind: annotation
+            regex: '^@Test\b'
+---
+# T14
+id: kt-prod-reads-system-clock
+language: kotlin
+severity: hint
+message: '[TEST-16]商業邏輯直接讀系統時鐘,時間邊界測不到;改成從建構子注入 Clock/TimeSource,測試用 testScheduler.timeSource'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - pattern: System.currentTimeMillis()
+    - pattern: System.nanoTime()
+    - pattern: Instant.now()
+    - pattern: LocalDateTime.now()
+    - pattern: LocalDate.now()
+    - pattern: ZonedDateTime.now()
+    - pattern: SystemClock.elapsedRealtime()
+    - pattern: SystemClock.uptimeMillis()
+    - pattern: Date()
+  not:
+    inside:
+      any:
+        - kind: class_declaration
+        - kind: object_declaration
+      has:
+        kind: delegation_specifier
+        regex: '\b(Clock|TimeSource|TimeProvider|\w*Clock)\b'
+      stopBy: end
+---
+# T15
+id: kt-test-hot-flow-terminal
+language: kotlin
+severity: hint
+message: '[TEST-17]對熱流直接 toList()/collect 永遠不會結束,測試卡到逾時;改用 Turbine 的 flow.test { awaitItem() },或 backgroundScope.launch 收'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - pattern: $F.toList()
+    - pattern: $F.collect { $$$ }
+  regex: '^[\w.]*(?i:state|stateflow|sharedflow|events?)\.(toList\(\)|collect\b)'
+  not:
+    inside:
+      any:
+        - pattern: launch { $$$ }
+        - pattern: launch($$$) { $$$ }
+        - pattern: $S.launch { $$$ }
+        - pattern: $S.launch($$$) { $$$ }
+      stopBy: end
+---
+# T25
+id: kt-test-verify-only
+language: kotlin
+severity: hint
+message: '[TEST-23]測試只驗呼叫(verify)不驗結果,重構就紅、行為錯也綠;改用假實作並斷言可觀察的狀態'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: function_declaration
+  all:
+    - has:
+        kind: modifiers
+        has:
+          kind: annotation
+          regex: '^@Test\b'
+    - has:
+        kind: function_body
+        regex: '\b(co)?[vV]erify\w*\s*[({]'
+    - not:
+        has:
+          kind: function_body
+          regex: '\b(assert\w*|expect\w*|should\w*|awaitItem|awaitError|awaitComplete|check|checkNotNull|fail)\s*[({<]|\.should\w*'
+---
+# T29
+id: kt-test-no-assertion
+language: kotlin
+severity: hint
+message: '[TEST-27]@Test 函式裡沒有任何斷言,永遠綠;改成至少一個 assertEquals/verify/awaitItem()'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: function_declaration
+  has:
+    kind: modifiers
+    has:
+      kind: annotation
+      regex: '^@Test$'
+  not:
+    has:
+      kind: function_body
+      regex: '(?i)\b(assert\w*|(co)?verify\w*|expect\w*|should\w*|check|checkNotNull|require|requireNotNull|fail|await\w*)\s*[({<]|\.should\w*|\s(should|shouldBe|shouldNotBe|shouldThrow)\w*\s|\.test\s*[({]'
+---
+# T33(文字)
+id: kt-compose-test-node-by-literal-text
+language: kotlin
+severity: hint
+message: '[TEST-31]用寫死的顯示文字找節點,改文案或切語系就壞;改用 testTag,或從資源取字串'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: call_expression
+  regex: '\.onNodeWithText\(\s*"'
+  not:
+    has:
+      kind: call_expression
+      regex: '\.onNodeWithText\(\s*"'
+      stopBy: end
+---
+# T35
+id: kt-robolectric-legacy-looper
+language: kotlin
+severity: hint
+message: '[TEST-33]Robolectric 的 LEGACY looper 會立即執行主執行緒工作,跟真機不同、升級就壞;改用預設 PAUSED 並明確 shadowOf(getMainLooper()).idle()'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: annotation
+  regex: '^@LooperMode\(.*\bLEGACY\b'

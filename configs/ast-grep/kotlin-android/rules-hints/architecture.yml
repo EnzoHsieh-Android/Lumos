@@ -1,0 +1,148 @@
+id: kt-compose-activity-lifecycle-override
+language: kotlin
+severity: hint
+message: '[ARCH-34]Compose 畫面的 Activity 覆寫 onResume/onStart 做 UI 工作,跟元件生命週期脫鉤;改用 LifecycleStartEffect 或 LifecycleResumeEffect'
+rule:
+  kind: function_declaration
+  all:
+    - has:
+        kind: simple_identifier
+        regex: ^(onResume|onStart|onPause|onStop)$
+    - has:
+        kind: modifiers
+        has:
+          regex: ^override$
+          stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      any:
+        - pattern: setContent { $$$ }
+        - pattern: setContent($$$) { $$$ }
+      stopBy: end
+    stopBy: end
+---
+id: kt-repo-suspend-snapshot
+language: kotlin
+severity: hint
+message: '[ARCH-51]Repository 用 suspend 回傳一次性快照顯示會變的資料,更新後畫面不跟著變;改成讀取回傳 Flow(getModelStream()),寫入才用 suspend'
+rule:
+  kind: function_declaration
+  all:
+    - has:
+        kind: modifiers
+        has:
+          regex: ^suspend$
+          stopBy: end
+    - has:
+        kind: simple_identifier
+        regex: ^(get|load|fetch|observe)
+    - has:
+        kind: user_type
+    - not:
+        has:
+          kind: user_type
+          regex: ^(Flow|Unit|Boolean|Result)\b
+  inside:
+    kind: class_declaration
+    has:
+      kind: type_identifier
+      regex: (Repository|Repo)$
+    stopBy: end
+---
+id: kt-view-launches-business-logic
+language: kotlin
+severity: hint
+message: '[ARCH-50]Activity/Fragment 用 lifecycleScope 直接呼叫 repository/DAO/API,畫面一關寫入就做一半;改成 UI 只呼叫 vm.onSave(x),交給 viewModelScope'
+rule:
+  any:
+    - pattern: lifecycleScope.launch { $$$ }
+    - pattern: lifecycleScope.launch($$$) { $$$ }
+    - pattern: viewLifecycleOwner.lifecycleScope.launch { $$$ }
+    - pattern: viewLifecycleOwner.lifecycleScope.launch($$$) { $$$ }
+  has:
+    stopBy: end
+    kind: navigation_expression
+    has:
+      nthChild: 1
+      kind: simple_identifier
+      regex: '(?i)(repo|repository|dao|api|database)$'
+---
+# P13(Context)
+id: kt-static-holds-context
+language: kotlin
+severity: hint
+message: '[ARCH-44]object/companion 存 Context,傳進來的若是 Activity 就整個洩漏;改成只存 context.applicationContext'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: property_declaration
+  has:
+    kind: variable_declaration
+    regex: ':\s*Context\??$'
+  not:
+    any:
+      - has:
+          kind: variable_declaration
+          regex: '^(?i:app\w*context)\b'
+      - regex: 'applicationContext'
+  inside:
+    kind: class_body
+    inside:
+      any:
+        - kind: companion_object
+        - kind: object_declaration
+---
+id: kt-click-navigate-unguarded
+language: kotlin
+severity: hint
+message: '[ARCH-3]點擊直接 navigate,連點兩下會崩潰;Compose 改用 onClick = dropUnlessResumed { },View 先比對 currentDestination?.id'
+rule:
+  any:
+    - pattern: $V.setOnClickListener { $$$ }
+    - pattern: setOnClickListener { $$$ }
+    - pattern: $M.clickable { $$$ }
+    - kind: value_argument
+      regex: ^onClick\s*=\s*\{
+  has:
+    pattern: $N.navigate($$$)
+    stopBy: end
+  not:
+    has:
+      kind: simple_identifier
+      regex: ^currentDestination$
+      stopBy: end
+---
+id: kt-ui-uses-repository
+language: kotlin
+severity: hint
+message: '[ARCH-50]畫面層直接拿 Repository/UseCase,繞過 ViewModel、轉螢幕就中斷;改成 UI 只呼叫 vm.onSave(x),ViewModel 內 viewModelScope.launch'
+rule:
+  any:
+    - all:
+        - any:
+            - kind: property_declaration
+            - kind: class_parameter
+        - has:
+            kind: user_type
+            regex: ^\w*(Repository|UseCase)$
+            stopBy: end
+        - inside:
+            kind: class_declaration
+            has:
+              kind: delegation_specifier
+              regex: (Activity|Fragment)\(
+            stopBy: end
+    - all:
+        - kind: parameter
+        - has:
+            kind: user_type
+            regex: ^\w*(Repository|UseCase)$
+            stopBy: end
+        - inside:
+            kind: function_declaration
+            has:
+              kind: modifiers
+              has:
+                kind: annotation
+                regex: ^@Composable$
+            stopBy: end

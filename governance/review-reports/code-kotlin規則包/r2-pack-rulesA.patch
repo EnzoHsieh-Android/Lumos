@@ -1,0 +1,1257 @@
+diff --git a/configs/ast-grep/kotlin-android/rules-review/api.yml b/configs/ast-grep/kotlin-android/rules-review/api.yml
+new file mode 100644
+index 000000000..23fc7bda5
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/rules-review/api.yml
+@@ -0,0 +1,15 @@
++# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
++# 自 rules/api.yml 的 kt-suspendcoroutine 拆出(代碼審 r1 M11):包一次性 Task 這類沒有可取消資源的 wrapper 不加 invokeOnCancellation 本來就對,形狀分不出
++id: kt-suspendcancellable-no-oncancel
++language: kotlin
++severity: info
++message: '[API-11]suspendCancellableCoroutine 沒註冊 invokeOnCancellation,取消後請求還在跑;改成 cont.invokeOnCancellation { call.cancel() }'
++rule:
++  any:
++    - pattern: suspendCancellableCoroutine { $$$ }
++    - pattern: suspendCancellableCoroutine<$T> { $$$ }
++  not:
++    has:
++      kind: call_expression
++      regex: invokeOnCancellation
++      stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules/api.yml b/configs/ast-grep/kotlin-android/rules/api.yml
+index e87572f2c..a59b45807 100644
+--- a/configs/ast-grep/kotlin-android/rules/api.yml
++++ b/configs/ast-grep/kotlin-android/rules/api.yml
+@@ -57,34 +57,39 @@ rule:
+             - pattern: $X?.use { $$$ }
+           stopBy: end
+       - inside:
+           kind: function_body
+           has:
+             any:
+               - pattern: $Y.use { $$$ }
+               - pattern: $Y?.use { $$$ }
+               - pattern: $Y.close()
+               - pattern: $Y?.close()
++              # 讀完 body 的 string()/bytes() 會關 body,連線跟著還回去(代碼審 r1 M10)
++              - kind: call_expression
++                regex: '\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
+             stopBy: end
+           stopBy: end
+ ---
+ id: kt-http-logging-body-unguarded
+ language: kotlin
+ severity: warning
+ message: '[API-19]BODY 日誌沒用 DEBUG 包住,正式版把權杖與個資寫進 logcat;改成 if (BuildConfig.DEBUG) Level.BODY else Level.NONE,並 redactHeader'
+ rule:
+   any:
+     - pattern: HttpLoggingInterceptor.Level.BODY
+     - pattern: Level.BODY
+   not:
+     inside:
+-      kind: if_expression
++      any:
++        - kind: if_expression
++        - kind: when_expression
+       has:
+         pattern: BuildConfig.DEBUG
+         stopBy: end
+       stopBy: end
+ ---
+ id: kt-catch-only-httpexception
+ language: kotlin
+ severity: warning
+ message: '[API-24]只接 HttpException,斷網(IOException)與解析錯誤會直接往上炸;改成 HttpException、IOException、SerializationException 分開 catch 並轉成網域錯誤'
+ rule:
+@@ -143,20 +148,29 @@ rule:
+             - has:
+                 kind: modifiers
+                 has:
+                   kind: annotation
+                   regex: ^@(Provides|Singleton|Bean)\b
+                   stopBy: end
+             - has:
+                 kind: user_type
+                 regex: ^HttpClient$
+           stopBy: end
++      # 同函式裡有 close()(try/finally 關掉)就不算「沒關」(代碼審 r1 M14)
++      - inside:
++          kind: function_body
++          has:
++            any:
++              - pattern: $Y.close()
++              - pattern: $Y?.close()
++            stopBy: end
++          stopBy: end
+ ---
+ id: kt-unmanaged-scope-launch
+ language: kotlin
+ severity: warning
+ message: '[API-9]GlobalScope 或臨時 CoroutineScope(...) 開的協程沒人管,取消不了也接不到錯誤;改用 viewModelScope,要活過畫面用注入的 applicationScope'
+ rule:
+   any:
+     - pattern: GlobalScope.launch { $$$ }
+     - pattern: GlobalScope.launch($$$) { $$$ }
+     - pattern: GlobalScope.async { $$$ }
+@@ -184,58 +198,72 @@ rule:
+     - pattern: $S.async { $$$ }.await()
+     - pattern: $S.async($$$) { $$$ }.await()
+ ---
+ id: kt-retrofit-body-bang
+ language: kotlin
+ severity: error
+ message: '[API-15]response.body()!! 沒先看 isSuccessful,伺服器回 4xx/5xx 時會崩潰;改成先判 isSuccessful,失敗就 throw HttpException(response)'
+ rule:
+   pattern: $R.body()!!
+   not:
+-    inside:
+-      kind: if_expression
+-      regex: '^if\s*\(\s*[\w.?]*\.isSuccessful\s*\)'
+-      stopBy: end
++    any:
++      - inside:
++          kind: if_expression
++          regex: '^if\s*\(\s*[\w.?]*\.isSuccessful\s*\)'
++          stopBy: end
++      # 同一個函式裡判過 isSuccessful(提早 throw、check(...)、&& 併判)就算看過(代碼審 r1 M1)
++      - inside:
++          kind: function_declaration
++          has:
++            kind: simple_identifier
++            regex: ^isSuccessful$
++            stopBy: end
++          stopBy: end
+ ---
+ id: kt-callbackflow-no-awaitclose
+ language: kotlin
+ severity: error
+ message: '[API-12]callbackFlow 沒以 awaitClose 結尾,監聽器沒移除而洩漏、執行期丟 IllegalStateException;改成以 awaitClose { api.unregister(l) } 結尾'
+ rule:
+-  pattern: callbackFlow { $$$ }
++  any:
++    - pattern: callbackFlow { $$$ }
++    - pattern: callbackFlow<$T> { $$$ }
+   not:
+     has:
+       kind: call_expression
+       regex: ^awaitClose
+       stopBy: end
+ ---
+ id: kt-suspendcoroutine
+ language: kotlin
+ severity: warning
+ message: '[API-11]suspendCoroutine 取消不了,畫面關了請求還在跑、資源洩漏;改用 suspendCancellableCoroutine 並在 invokeOnCancellation 裡取消請求'
+ rule:
++  # suspendCancellableCoroutine 缺 invokeOnCancellation 拆到 rules-review/api.yml 的 kt-suspendcancellable-no-oncancel(代碼審 r1 M11)
+   any:
+     - pattern: suspendCoroutine { $$$ }
+     - pattern: suspendCoroutine<$T> { $$$ }
+-    - all:
+-        - any:
+-            - pattern: suspendCancellableCoroutine { $$$ }
+-            - pattern: suspendCancellableCoroutine<$T> { $$$ }
+-        - not:
+-            has:
+-              kind: call_expression
+-              regex: invokeOnCancellation
+-              stopBy: end
+ ---
+ id: kt-okhttp-no-calltimeout
+ language: kotlin
+ severity: warning
+ message: '[API-5]OkHttpClient 沒設 callTimeout(預設 0=沒上限),請求可能永遠等、畫面卡在載入;改用 callTimeout(30, TimeUnit.SECONDS)'
+ rule:
+   pattern: $B.build()
+   has:
+     pattern: OkHttpClient.Builder()
+     stopBy: end
+   not:
+-    has:
+-      pattern: $X.callTimeout($$$)
+-      stopBy: end
++    any:
++      - has:
++          any:
++            - pattern: $X.callTimeout($$$)
++            # apply { callTimeout(...) } 省略接收者(代碼審 r1 M13)
++            - pattern: callTimeout($$$)
++          stopBy: end
++      # 外層(例:Retrofit.Builder().client(OkHttpClient.Builder().build()).build())不重報,只報內層那個 build()(代碼審 r1 m2)
++      - has:
++          pattern: $Z.build()
++          has:
++            pattern: OkHttpClient.Builder()
++            stopBy: end
++          stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules/architecture.yml b/configs/ast-grep/kotlin-android/rules/architecture.yml
+index e9d71bd61..8bb1861d7 100644
+--- a/configs/ast-grep/kotlin-android/rules/architecture.yml
++++ b/configs/ast-grep/kotlin-android/rules/architecture.yml
+@@ -46,20 +46,26 @@ language: kotlin
+ severity: warning
+ message: '[ARCH-6]ViewModel 欄位存回呼/Listener,會留住已銷毀的 Fragment 或 View;改用狀態輸出,讓 UI 自己反應,不保存 UI 端的參照'
+ rule:
+   kind: property_declaration
+   has:
+     any:
+       - kind: function_type
+       - kind: user_type
+         regex: (Listener|Callback)$
+     stopBy: end
++  # 初始值就是 ViewModel 自己寫的 lambda 或函式參照,沒有留 UI 端的參照(代碼審 r1 m4)
++  not:
++    has:
++      any:
++        - kind: lambda_literal
++        - kind: callable_reference
+   inside:
+     kind: class_body
+     inside:
+       kind: class_declaration
+       has:
+         kind: delegation_specifier
+         regex: ViewModel\(
+ ---
+ id: kt-vm-observeforever-leak
+ language: kotlin
+@@ -209,20 +215,24 @@ rule:
+     any:
+       - kind: if_expression
+       - kind: when_expression
+       - kind: lambda_literal
+       - all:
+           - kind: function_declaration
+           - not:
+               has:
+                 kind: simple_identifier
+                 regex: ^(onCreate|onAttach)$
++          # 擴充函式 helper(fun ComponentActivity.registerPick(...) = registerForActivityResult(...))由屬性初始化或 onCreate 呼叫(代碼審 r1 m3)
++          - not:
++              has:
++                kind: receiver_type
+ ---
+ id: kt-reuse-fragment-instance
+ language: kotlin
+ severity: warning
+ message: '[ARCH-32]Fragment 實例存成欄位重複 replace,舊狀態會被帶進新的使用;改成每次 new 新實例,或 findFragmentByTag 找回原本的'
+ rule:
+   kind: property_declaration
+   has:
+     kind: call_expression
+     regex: ^[A-Z]\w*Fragment(\.newInstance)?\(
+@@ -260,21 +270,30 @@ rule:
+     inside:
+       kind: class_declaration
+       has:
+         kind: delegation_specifier
+         regex: Fragment\(
+ ---
+ id: kt-register-without-unregister
+ language: kotlin
+ severity: warning
+ message: '[ARCH-35]註冊了監聽或定位更新卻沒有對稱解除,洩漏 Activity 又耗電;改用 LifecycleStartEffect { …; onStopOrDispose { 解除 } } 對稱解除'
++# 原本另有 kt-register-pair-missing 對同一個呼叫重複報,已併進這條(代碼審 r1 m2)
+ rule:
++  # Application 跟整個程序同壽命,永久註冊不會洩漏(代碼審 r1 m4)
++  not:
++    inside:
++      kind: class_declaration
++      has:
++        kind: delegation_specifier
++        regex: '^(\w+\.)*\w*Application\('
++      stopBy: end
+   any:
+     - all:
+         - any:
+             - pattern: $M.requestLocationUpdates($$$)
+             - pattern: requestLocationUpdates($$$)
+         - not:
+             inside:
+               any: [ { kind: class_declaration }, { kind: function_declaration } ]
+               has:
+                 kind: simple_identifier
+@@ -330,45 +349,59 @@ rule:
+ ---
+ id: kt-vm-direct-datasource
+ language: kotlin
+ severity: warning
+ message: '[ARCH-49]ViewModel 直接收 Dao/Api/SharedPreferences/DataStore,跳過資料層;改成一律經 XRepository(只有一個來源也建),共用邏輯抽 UseCase'
+ rule:
+   kind: class_parameter
+   has:
+     kind: user_type
+     regex: ^(\w*(Dao|Api|Service|Database)|SharedPreferences|DataStore|FirebaseFirestore|LocationManager|Retrofit|OkHttpClient)\b
++    # 分析、記錄、當機回報這類 *Service 不是資料來源(代碼審 r1 m4)
++    not:
++      regex: ^\w*(Analytics|Tracking|Tracker|Logging|Logger|Crash\w*)Service$
+     stopBy: end
+   inside:
+     kind: class_declaration
+     has:
+       kind: delegation_specifier
+       regex: ViewModel\(
+     stopBy: end
+ ---
+ id: kt-uistate-android-type
+ language: kotlin
+ severity: warning
+ message: '[ARCH-52]UiState 夾帶 Context/View/Drawable 等 Android UI 型別,會洩漏畫面也無法測試;改成帶 @DrawableRes/@StringRes id 或純資料,由 UI 解析'
+ rule:
+   any:
+     - kind: class_parameter
+     - kind: property_declaration
+   has:
+     kind: user_type
+     regex: ^(Context|Activity|Fragment|View|\w*View|Drawable|Bitmap|Resources|Typeface|Dialog)$
+     stopBy: end
++  # 只看 ViewModel 輸出的 UiState/UiModel,或 data class 的 *State;Compose 官方 state holder(class MyAppState(navController, resources))不算(代碼審 r1 M9)
+   inside:
+     kind: class_declaration
+-    has:
+-      kind: type_identifier
+-      regex: (State|UiModel)$
++    any:
++      - has:
++          kind: type_identifier
++          regex: (UiState|UiModel)$
++      - all:
++          - has:
++              kind: type_identifier
++              regex: State$
++          - has:
++              kind: modifiers
++              has:
++                kind: class_modifier
++                regex: ^data$
+     stopBy: end
+ ---
+ id: kt-hilt-retain-instance
+ language: kotlin
+ severity: error
+ message: '[ARCH-57]Hilt 的 Fragment 設 retainInstance,Hilt 會在執行期拋例外;改成不設 retainInstance,要跨設定變更留住的資料放 ViewModel'
+ rule:
+   any:
+     - pattern: retainInstance = true
+     - pattern: this.retainInstance = true
+@@ -423,35 +456,20 @@ rule:
+   not:
+     inside:
+       any:
+         - pattern: DisposableEffect($$$) { $$$ }
+         - pattern: DisposableEffect { $$$ }
+       has:
+         pattern: $R.removeObserver($$$)
+         stopBy: end
+       stopBy: end
+ ---
+-id: kt-viewmodel-depends-on-api-dao
+-language: kotlin
+-severity: warning
+-message: '[ARCH-49]ViewModel 直接依賴 Retrofit 介面或 DAO,資料來源細節漏到 UI 層、也不好測;改成依賴 Repository'
+-rule:
+-  kind: class_parameter
+-  regex: ':\s*\w*(Api|ApiService|Dao|Retrofit)\b'
+-  inside:
+-    kind: class_declaration
+-    has:
+-      kind: delegation_specifier
+-      regex: ViewModel\(
+-      stopBy: end
+-    stopBy: end
+----
+ id: kt-viewmodel-knows-retrofit
+ language: kotlin
+ severity: warning
+ message: '[ARCH-67]ViewModel 認得 retrofit2/okhttp3 的例外或型別,網路細節漏到 UI 層;改成資料層 catch 後改拋自訂例外,ViewModel 只處理自訂例外'
+ rule:
+   any:
+     - kind: import_header
+       regex: \b(retrofit2|okhttp3)\.
+       inside:
+         kind: source_file
+@@ -481,38 +499,48 @@ severity: warning
+ message: '[ARCH-15]Fragment 的 _binding 沒在 onDestroyView 清掉,整個畫面樹洩漏;改成 onDestroyView() 裡 _binding = null'
+ rule:
+   kind: class_declaration
+   has:
+     kind: class_body
+     has:
+       kind: property_declaration
+       regex: \b_binding\b
+   not:
+     has:
+-      pattern: _binding = null
++      any:
++        - pattern: _binding = null
++        - pattern: this._binding = null
+       stopBy: end
+ ---
+ id: kt-fragment-observe-this
+ language: kotlin
+ severity: error
+ message: '[ARCH-16]Fragment 裡 observe(this) 會在畫面重建後重複收到通知;改用 viewLifecycleOwner'
+ rule:
+   any:
+     - pattern: $L.observe(this, $$$)
+     - pattern: $L.observe(this) { $$$ }
+-  inside:
+-    kind: class_declaration
+-    has:
+-      kind: delegation_specifier
+-      regex: Fragment\b
+-      stopBy: end
+-    stopBy: end
++  # onCreate 裡觀察跟 View 無關的資料用 this 合法;只管 View 相關回呼(Lint FragmentLiveDataObserve 的範圍,代碼審 r1 m1)
++  all:
++    - inside:
++        kind: function_declaration
++        has:
++          kind: simple_identifier
++          regex: ^(onCreateView|onViewCreated|onActivityCreated|onViewStateRestored)$
++        stopBy: end
++    - inside:
++        kind: class_declaration
++        has:
++          kind: delegation_specifier
++          regex: Fragment\b
++          stopBy: end
++        stopBy: end
+ ---
+ id: kt-launch-when-deprecated
+ language: kotlin
+ severity: warning
+ message: '[ARCH-17]launchWhenX 已淘汰(暫停而不取消,上游照跑);改用 repeatOnLifecycle'
+ rule:
+   any:
+     - pattern: $S.launchWhenCreated { $$$ }
+     - pattern: $S.launchWhenStarted { $$$ }
+     - pattern: $S.launchWhenResumed { $$$ }
+@@ -520,20 +548,27 @@ rule:
+     - pattern: launchWhenStarted { $$$ }
+     - pattern: launchWhenResumed { $$$ }
+ ---
+ id: kt-viewmodel-holds-ui-context
+ language: kotlin
+ severity: error
+ message: '[ARCH-4]ViewModel 拿 Activity/Context/View/Fragment 會洩漏整個畫面;改成在 UI 層解析資源,或注入 Application 層依賴(@ApplicationContext)'
+ rule:
+   kind: class_parameter
+   regex: ':\s*(Context|Activity|AppCompatActivity|ComponentActivity|FragmentActivity|View|Fragment)\b'
++  # message 自己教的 @ApplicationContext 不算(代碼審 r1 M2)
++  not:
++    has:
++      kind: modifiers
++      has:
++        kind: annotation
++        regex: ApplicationContext$
+   inside:
+     kind: class_declaration
+     has:
+       kind: delegation_specifier
+       regex: \bViewModel\(
+       stopBy: end
+     stopBy: end
+ ---
+ # P13(畫面物件)
+ id: kt-static-holds-ui
+@@ -545,57 +580,10 @@ rule:
+   kind: property_declaration
+   has:
+     kind: variable_declaration
+     regex: ':\s*(\w*Activity|\w*Fragment|\w*View)\??$'
+   inside:
+     kind: class_body
+     inside:
+       any:
+         - kind: companion_object
+         - kind: object_declaration
+----
+-# P15
+-id: kt-register-pair-missing
+-language: kotlin
+-severity: warning
+-message: '[ARCH-35]類別註冊了接收器/監聽器卻沒有對應的解除,洩漏又耗電;改用 DefaultLifecycleObserver 在對稱的生命週期回呼解除'
+-ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+-rule:
+-  any:
+-    - all:
+-        - any:
+-            - pattern: registerReceiver($$$)
+-            - pattern: $C.registerReceiver($$$)
+-        - inside:
+-            kind: class_declaration
+-            not:
+-              has:
+-                regex: 'unregisterReceiver\('
+-                stopBy: end
+-            stopBy: end
+-    - all:
+-        - pattern: $C.registerListener($$$)
+-        - inside:
+-            kind: class_declaration
+-            not:
+-              has:
+-                regex: 'unregisterListener\('
+-                stopBy: end
+-            stopBy: end
+-    - all:
+-        - pattern: $C.registerNetworkCallback($$$)
+-        - inside:
+-            kind: class_declaration
+-            not:
+-              has:
+-                regex: 'unregisterNetworkCallback\('
+-                stopBy: end
+-            stopBy: end
+-    - all:
+-        - pattern: $C.registerOnSharedPreferenceChangeListener($$$)
+-        - inside:
+-            kind: class_declaration
+-            not:
+-              has:
+-                regex: 'unregisterOnSharedPreferenceChangeListener\('
+-                stopBy: end
+-            stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules/compose.yml b/configs/ast-grep/kotlin-android/rules/compose.yml
+index 4ef641be5..3ff6f2e9e 100644
+--- a/configs/ast-grep/kotlin-android/rules/compose.yml
++++ b/configs/ast-grep/kotlin-android/rules/compose.yml
+@@ -12,54 +12,66 @@ utils:
+           kind: annotation
+           regex: ^@Composable
+       # 預覽函式(@Preview 與自訂多預覽註解 @DevicePreviews、@ThemePreviews…)只在 IDE 跑,不算重組熱路徑(2026-11-05 nowinandroid 實測誤報)
+       not:
+         has:
+           kind: modifiers
+           has:
+             kind: annotation
+             regex: '^@\w*Preview'
+       stopBy: end
++  # 延後執行的 lambda(代碼審 r1 M3/M4:rememberXxx 回呼、繪製區塊、AndroidView update 等);六條規則共用同一份,改一份要全改
+   deferred-lambda:
+     kind: lambda_literal
+     any:
+       - inside:
+           kind: value_argument
+           has:
+             kind: simple_identifier
+-            regex: ^on[A-Z]\w*$
++            regex: ^(on[A-Z]\w*|update|factory|onRelease|onReset|confirmValueChange|confirmStateChange)$
+       - inside:
+           kind: property_declaration
+       - inside:
+           kind: annotated_lambda
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has:
+                     kind: simple_identifier
+-                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+                 - has:
+                     kind: navigation_expression
+                     has:
+                       kind: navigation_suffix
+                       has:
+                         kind: simple_identifier
+-                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+   in-composition:
+     all:
+       - matches: in-composable
+       - not:
+           inside:
+             matches: deferred-lambda
+             stopBy: end
++      # 組建裡宣告的區域函式(fun reset() { … })是被呼叫才跑,不是組建本體(代碼審 r1 M3)
++      - not:
++          inside:
++            kind: function_declaration
++            not:
++              has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Composable
++            stopBy: end
+ rule:
+   any:
+     - pattern: $L.sortedBy { $$$ }
+     - pattern: $L.sortedByDescending { $$$ }
+     - pattern: $L.sortedWith($$$)
+     - pattern: $L.sorted()
+     - pattern: $L.sortedDescending()
+     - pattern: $L.filter { $$$ }
+     - pattern: $L.filterNot { $$$ }
+     - pattern: $L.groupBy { $$$ }
+@@ -89,54 +101,66 @@ message: '[UI-30]在組建本體直接寫 State,寫完又觸發重組,會無限
+ utils:
+   in-composable:
+     inside:
+       kind: function_declaration
+       has:
+         kind: modifiers
+         has:
+           kind: annotation
+           regex: ^@Composable
+       stopBy: end
++  # 延後執行的 lambda(代碼審 r1 M3/M4:rememberXxx 回呼、繪製區塊、AndroidView update 等);六條規則共用同一份,改一份要全改
+   deferred-lambda:
+     kind: lambda_literal
+     any:
+       - inside:
+           kind: value_argument
+           has:
+             kind: simple_identifier
+-            regex: ^on[A-Z]\w*$
++            regex: ^(on[A-Z]\w*|update|factory|onRelease|onReset|confirmValueChange|confirmStateChange)$
+       - inside:
+           kind: property_declaration
+       - inside:
+           kind: annotated_lambda
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has:
+                     kind: simple_identifier
+-                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+                 - has:
+                     kind: navigation_expression
+                     has:
+                       kind: navigation_suffix
+                       has:
+                         kind: simple_identifier
+-                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+   in-composition:
+     all:
+       - matches: in-composable
+       - not:
+           inside:
+             matches: deferred-lambda
+             stopBy: end
++      # 組建裡宣告的區域函式(fun reset() { … })是被呼叫才跑,不是組建本體(代碼審 r1 M3)
++      - not:
++          inside:
++            kind: function_declaration
++            not:
++              has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Composable
++            stopBy: end
+ rule:
+   any:
+     - pattern: $S.value = $V
+     - pattern: $S.value += $V
+     - pattern: $S.value -= $V
+     - pattern: $S.value++
+     - pattern: $S.value--
+     - pattern: $S.intValue = $V
+     - pattern: $S.intValue++
+     - pattern: $S.floatValue = $V
+@@ -178,54 +202,66 @@ message: '[UI-7]組建本體直接跳 Toast、送分析事件或寫 SharedPrefer
+ utils:
+   in-composable:
+     inside:
+       kind: function_declaration
+       has:
+         kind: modifiers
+         has:
+           kind: annotation
+           regex: ^@Composable
+       stopBy: end
++  # 延後執行的 lambda(代碼審 r1 M3/M4:rememberXxx 回呼、繪製區塊、AndroidView update 等);六條規則共用同一份,改一份要全改
+   deferred-lambda:
+     kind: lambda_literal
+     any:
+       - inside:
+           kind: value_argument
+           has:
+             kind: simple_identifier
+-            regex: ^on[A-Z]\w*$
++            regex: ^(on[A-Z]\w*|update|factory|onRelease|onReset|confirmValueChange|confirmStateChange)$
+       - inside:
+           kind: property_declaration
+       - inside:
+           kind: annotated_lambda
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has:
+                     kind: simple_identifier
+-                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+                 - has:
+                     kind: navigation_expression
+                     has:
+                       kind: navigation_suffix
+                       has:
+                         kind: simple_identifier
+-                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+   in-composition:
+     all:
+       - matches: in-composable
+       - not:
+           inside:
+             matches: deferred-lambda
+             stopBy: end
++      # 組建裡宣告的區域函式(fun reset() { … })是被呼叫才跑,不是組建本體(代碼審 r1 M3)
++      - not:
++          inside:
++            kind: function_declaration
++            not:
++              has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Composable
++            stopBy: end
+ rule:
+   any:
+     - pattern: Toast.makeText($$$).show()
+     - kind: call_expression
+       has:
+         kind: navigation_expression
+         regex: (?i)^(\w+\.)*(analytics|tracker|firebaseAnalytics)\.\w+$
+     - pattern: $P.edit()
+     - pattern: $P.edit { $$$ }
+     - pattern: $P.edit($$$) { $$$ }
+@@ -250,31 +286,42 @@ rule:
+           has:
+             kind: binding_pattern_kind
+             regex: ^var$
+     - has:
+         kind: user_type
+         regex: '^(Mutable(List|Set|Map|Collection|StateFlow|SharedFlow|LiveData)|ArrayList|HashMap|HashSet|LinkedHashMap|LinkedHashSet|SparseArray|Array|IntArray|LongArray|FloatArray|ByteArray)\b'
+         inside:
+           any:
+             - kind: class_parameter
+             - kind: variable_declaration
++        # 方法本體裡的區域變數不是欄位(代碼審 r1 m4)
++        not:
++          inside:
++            kind: function_body
++            stopBy: end
+         stopBy: end
+     - has:
+         kind: class_body
+         has:
+           kind: property_declaration
+           has:
+             kind: binding_pattern_kind
+             regex: ^var$
+           not:
+-            has:
+-              kind: property_delegate
++            any:
++              - has:
++                  kind: property_delegate
++              # @Stable 的 var 用自訂 getter/setter 接到 State(語法樹裡 getter/setter 是屬性的下一個兄弟,代碼審 r1 m4)
++              - precedes:
++                  any:
++                    - kind: getter
++                    - kind: setter
+     - all:
+         - has:
+             kind: modifiers
+             has:
+               kind: annotation
+               regex: Immutable$
+         - has:
+             kind: class_body
+             has:
+               kind: property_declaration
+@@ -289,54 +336,66 @@ message: '[UI-16]組建本體每次重組都新建格式器/正規式/畫筆,製
+ utils:
+   in-composable:
+     inside:
+       kind: function_declaration
+       has:
+         kind: modifiers
+         has:
+           kind: annotation
+           regex: ^@Composable
+       stopBy: end
++  # 延後執行的 lambda(代碼審 r1 M3/M4:rememberXxx 回呼、繪製區塊、AndroidView update 等);六條規則共用同一份,改一份要全改
+   deferred-lambda:
+     kind: lambda_literal
+     any:
+       - inside:
+           kind: value_argument
+           has:
+             kind: simple_identifier
+-            regex: ^on[A-Z]\w*$
++            regex: ^(on[A-Z]\w*|update|factory|onRelease|onReset|confirmValueChange|confirmStateChange)$
+       - inside:
+           kind: property_declaration
+       - inside:
+           kind: annotated_lambda
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has:
+                     kind: simple_identifier
+-                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+                 - has:
+                     kind: navigation_expression
+                     has:
+                       kind: navigation_suffix
+                       has:
+                         kind: simple_identifier
+-                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+   in-composition:
+     all:
+       - matches: in-composable
+       - not:
+           inside:
+             matches: deferred-lambda
+             stopBy: end
++      # 組建裡宣告的區域函式(fun reset() { … })是被呼叫才跑,不是組建本體(代碼審 r1 M3)
++      - not:
++          inside:
++            kind: function_declaration
++            not:
++              has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Composable
++            stopBy: end
+ rule:
+   any:
+     - pattern: SimpleDateFormat($$$)
+     - pattern: DecimalFormat($$$)
+     - pattern: Regex($$$)
+     - pattern: $S.toRegex()
+     - pattern: Pattern.compile($$$)
+     - pattern: Paint()
+     - pattern: Paint($$$)
+     - pattern: Path()
+@@ -352,37 +411,50 @@ language: kotlin
+ severity: error
+ message: "[UI-50]LazyColumn/LazyRow 放進同方向可捲動的容器,量測時拿到無限長度會直接崩潰;只留一個 Lazy 清單,頭尾改用 item { }"
+ rule:
+   any:
+     - all:
+         - any:
+             - pattern: LazyColumn { $$$ }
+             - pattern: LazyColumn($$$) { $$$ }
+             - pattern: LazyVerticalGrid($$$) { $$$ }
+             - pattern: LazyVerticalStaggeredGrid($$$) { $$$ }
++        # Lazy 自己給了固定高度(或有上限),量測不會拿到無限長度(代碼審 r1 M7)
++        - not:
++            has:
++              kind: call_suffix
++              has:
++                kind: value_arguments
++                regex: '\.(height|size|requiredHeight|requiredSize)\(|\.(heightIn|requiredHeightIn)\([^)]*max|\.sizeIn\([^)]*maxHeight'
+         - inside:
+             kind: call_expression
+             has:
+               kind: call_suffix
+               has:
+                 kind: value_arguments
+                 has:
+                   kind: simple_identifier
+                   regex: ^verticalScroll$
+                   stopBy: end
+             stopBy: end
+     - all:
+         - any:
+             - pattern: LazyRow { $$$ }
+             - pattern: LazyRow($$$) { $$$ }
+             - pattern: LazyHorizontalGrid($$$) { $$$ }
+             - pattern: LazyHorizontalStaggeredGrid($$$) { $$$ }
++        - not:
++            has:
++              kind: call_suffix
++              has:
++                kind: value_arguments
++                regex: '\.(width|size|requiredWidth|requiredSize)\(|\.(widthIn|requiredWidthIn)\([^)]*max|\.sizeIn\([^)]*maxWidth'
+         - inside:
+             kind: call_expression
+             has:
+               kind: call_suffix
+               has:
+                 kind: value_arguments
+                 has:
+                   kind: simple_identifier
+                   regex: ^horizontalScroll$
+                   stopBy: end
+@@ -395,54 +467,66 @@ message: '[UI-19]items(…) 的資料直接寫 filter/sorted,每次重組都重
+ utils:
+   in-composable:
+     inside:
+       kind: function_declaration
+       has:
+         kind: modifiers
+         has:
+           kind: annotation
+           regex: ^@Composable
+       stopBy: end
++  # 延後執行的 lambda(代碼審 r1 M3/M4:rememberXxx 回呼、繪製區塊、AndroidView update 等);六條規則共用同一份,改一份要全改
+   deferred-lambda:
+     kind: lambda_literal
+     any:
+       - inside:
+           kind: value_argument
+           has:
+             kind: simple_identifier
+-            regex: ^on[A-Z]\w*$
++            regex: ^(on[A-Z]\w*|update|factory|onRelease|onReset|confirmValueChange|confirmStateChange)$
+       - inside:
+           kind: property_declaration
+       - inside:
+           kind: annotated_lambda
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has:
+                     kind: simple_identifier
+-                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+                 - has:
+                     kind: navigation_expression
+                     has:
+                       kind: navigation_suffix
+                       has:
+                         kind: simple_identifier
+-                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|on[A-Z]\w*)$'
++                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|on[A-Z]\w*)$'
+   in-composition:
+     all:
+       - matches: in-composable
+       - not:
+           inside:
+             matches: deferred-lambda
+             stopBy: end
++      # 組建裡宣告的區域函式(fun reset() { … })是被呼叫才跑,不是組建本體(代碼審 r1 M3)
++      - not:
++          inside:
++            kind: function_declaration
++            not:
++              has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Composable
++            stopBy: end
+ rule:
+   kind: call_expression
+   all:
+     - has:
+         kind: simple_identifier
+         regex: ^(items|itemsIndexed)$
+     - has:
+         kind: call_suffix
+         has:
+           kind: value_arguments
+@@ -450,27 +534,35 @@ rule:
+             kind: value_argument
+             nthChild: 1
+             has:
+               kind: call_expression
+               regex: \.(filter|filterNot|filterIsInstance|sorted|sortedBy|sortedByDescending|sortedWith|sortedDescending|distinct|distinctBy|groupBy|reversed|shuffled)\b
+   matches: in-composition
+ ---
+ id: kt-compose-scroll-state-not-remembered
+ language: kotlin
+ severity: warning
+-message: '[UI-16]在 @Composable 裡直接建 LazyListState()/ScrollState(),每次重組歸零;改用 rememberLazyListState() 這類 remember 版本'
++message: '[UI-16]@Composable 裡直接建或只用 remember 包 LazyListState()/ScrollState(),重組或轉螢幕就歸零;改用 rememberLazyListState() 這類 remember 版本'
+ rule:
+   any:
+     - pattern: LazyListState($$$)
+     - pattern: LazyGridState($$$)
+     - pattern: LazyStaggeredGridState($$$)
+     - pattern: ScrollState($$$)
++  # rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) } 就是 rememberScrollState 的做法(代碼審 r1 M5);只包 remember { } 轉螢幕仍歸零,照報
++  not:
++    inside:
++      kind: call_expression
++      has:
++        kind: simple_identifier
++        regex: ^rememberSaveable$
++      stopBy: end
+   inside:
+     kind: function_declaration
+     has:
+       kind: modifiers
+       has:
+         kind: annotation
+         regex: ^@Composable
+     stopBy: end
+ ---
+ id: kt-compose-pointerinput-stale-callback
+@@ -497,54 +589,66 @@ message: '[UI-70]在組建本體直接 navigate,每次重組都再導航一次
+ utils:
+   in-composable:
+     inside:
+       kind: function_declaration
+       has:
+         kind: modifiers
+         has:
+           kind: annotation
+           regex: ^@Composable
+       stopBy: end
++  # 延後執行的 lambda(代碼審 r1 M3/M4:rememberXxx 回呼、繪製區塊、AndroidView update 等);六條規則共用同一份,改一份要全改
+   deferred-lambda:
+     kind: lambda_literal
+     any:
+       - inside:
+           kind: value_argument
+           has:
+             kind: simple_identifier
+-            regex: ^on[A-Z]\w*$
++            regex: ^(on[A-Z]\w*|update|factory|onRelease|onReset|confirmValueChange|confirmStateChange)$
+       - inside:
+           kind: property_declaration
+       - inside:
+           kind: annotated_lambda
+           inside:
+             kind: call_suffix
+             inside:
+               kind: call_expression
+               any:
+                 - has:
+                     kind: simple_identifier
+-                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|dropUnlessResumed|dropUnlessStarted|on[A-Z]\w*)$'
++                    regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|dropUnlessResumed|dropUnlessStarted|on[A-Z]\w*)$'
+                 - has:
+                     kind: navigation_expression
+                     has:
+                       kind: navigation_suffix
+                       has:
+                         kind: simple_identifier
+-                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember|rememberSaveable|derivedStateOf|produceState|snapshotFlow|rememberUpdatedState|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|dropUnlessResumed|dropUnlessStarted|on[A-Z]\w*)$'
++                        regex: '^(LaunchedEffect|SideEffect|DisposableEffect|onDispose|remember\w*|derivedStateOf|produceState|snapshotFlow|clickable|combinedClickable|selectable|toggleable|pointerInput|detectTapGestures|detectDragGestures|launch|async|withContext|LifecycleEventEffect|LifecycleResumeEffect|LifecycleStartEffect|BackHandler|Canvas|drawBehind|drawWithContent|drawWithCache|layout|graphicsLayer|dropUnlessResumed|dropUnlessStarted|on[A-Z]\w*)$'
+   in-composition:
+     all:
+       - matches: in-composable
+       - not:
+           inside:
+             matches: deferred-lambda
+             stopBy: end
++      # 組建裡宣告的區域函式(fun reset() { … })是被呼叫才跑,不是組建本體(代碼審 r1 M3)
++      - not:
++          inside:
++            kind: function_declaration
++            not:
++              has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Composable
++            stopBy: end
+ rule:
+   any:
+     - pattern: $N.navigate($$$)
+     - pattern: $N.popBackStack($$$)
+   matches: in-composition
+ ---
+ id: kt-compose-navcontroller-param
+ language: kotlin
+ severity: warning
+ message: '[UI-71]@Composable 參數收 NavController,畫面跟導航綁死、難預覽難測;改成傳事件 onNavigate: () -> Unit'
+@@ -570,21 +674,22 @@ rule:
+     stopBy: end
+ ---
+ id: kt-compose-preview-real-viewmodel
+ language: kotlin
+ severity: error
+ message: '[UI-102]預覽函式裡取真 ViewModel,預覽沒有 DI 與資料來源會崩潰;改成預覽無狀態版 ScreenContent(uiState = fakeState, onEvent = {})'
+ rule:
+   kind: call_expression
+   has:
+     kind: simple_identifier
+-    regex: ^(viewModel|hiltViewModel|koinViewModel|hiltNavGraphViewModel|[A-Z]\w*ViewModel)$
++    # 只認經 DI 取 ViewModel 的函式;手建假的或帶假資料的 ViewModel 不經 DI 不會崩(代碼審 r1 M8)
++    regex: ^(viewModel|hiltViewModel|koinViewModel|hiltNavGraphViewModel)$
+   inside:
+     kind: function_declaration
+     has:
+       kind: modifiers
+       has:
+         kind: annotation
+         regex: ^@Preview
+     stopBy: end
+ ---
+ id: kt-compose-clickable-icon-null-description
+@@ -598,20 +703,28 @@ rule:
+         kind: simple_identifier
+         regex: ^contentDescription$
+     - has:
+         kind: null_literal
+   any:
+     - inside:
+         kind: call_expression
+         has:
+           kind: simple_identifier
+           regex: ^(IconButton|FilledIconButton|FilledTonalIconButton|OutlinedIconButton|IconToggleButton|FilledIconToggleButton|FilledTonalIconToggleButton|OutlinedIconToggleButton|FloatingActionButton|SmallFloatingActionButton|LargeFloatingActionButton)$
++        # 按鈕裡有 Text 標籤,讀屏念文字(代碼審 r1 m4)
++        not:
++          has:
++            kind: call_expression
++            has:
++              kind: simple_identifier
++              regex: ^Text$
++            stopBy: end
+         stopBy: end
+     - inside:
+         kind: call_expression
+         all:
+           - has:
+               kind: simple_identifier
+               regex: ^(Icon|Image)$
+           - has:
+               kind: simple_identifier
+               regex: ^(clickable|combinedClickable|toggleable|selectable)$
+@@ -654,68 +767,118 @@ id: kt-launchedeffect-constant-key
+ language: kotlin
+ severity: warning
+ message: '[UI-3]LaunchedEffect 的 key 是 Unit/true 卻用到參數,參數變了不重跑、讀到舊值;改成 key 放實際依賴 LaunchedEffect(id),只需最新回呼用 rememberUpdatedState'
+ rule:
+   all:
+     - kind: simple_identifier
+       pattern: $P
+     - not:
+         inside:
+           kind: navigation_suffix
++    # vm.load(id = 5) 的 id 是具名引數標籤,不是參數(代碼審 r1 M6)
++    - not:
++        all:
++          - nthChild: 1
++          - inside:
++              kind: value_argument
++              regex: '^\w+\s*=[^=]'
+     - inside:
+         stopBy: end
+         any:
+           - pattern: LaunchedEffect(Unit) { $$$ }
+           - pattern: LaunchedEffect(true) { $$$ }
+           - pattern: LaunchedEffect(key1 = Unit) { $$$ }
+     - inside:
+         stopBy: end
+         kind: function_declaration
+         has:
+           kind: function_value_parameters
+           has:
+             kind: parameter
+-            has:
+-              kind: simple_identifier
+-              pattern: $P
++            all:
++              - has:
++                  kind: simple_identifier
++                  pattern: $P
++              # 宣告型別是不會換的狀態容器或 ViewModel(SnackbarHostState、LazyListState、XxxViewModel…),用 Unit 當 key 是對的(代碼審 r1 M6)
++              - not:
++                  any:
++                    - has:
++                        kind: user_type
++                        regex: '^(\w*ViewModel|\w*HostState|\w*ListState|\w*GridState|ScrollState|PagerState|DrawerState|\w*SheetState|BottomSheetScaffoldState|\w*Controller|FocusRequester|CoroutineScope|\w*Navigator)$'
++                    - has:
++                        kind: nullable_type
++                        has:
++                          kind: user_type
++                          regex: '^(\w*ViewModel|\w*HostState|\w*ListState|\w*GridState|ScrollState|PagerState|DrawerState|\w*SheetState|BottomSheetScaffoldState|\w*Controller|FocusRequester|CoroutineScope|\w*Navigator)$'
+ ---
+ # P31(補 LazyColumn 以外與 itemsIndexed)
+ id: kt-lazy-items-no-key-ext
+ language: kotlin
+ severity: warning
+ message: '[UI-1]Lazy 清單/格狀的 items 沒給 key,重排時整片重組、捲動位置跳;改用 items(list, key = { it.id })'
+ rule:
+   any:
+     - pattern: items($$$ARGS)
+     - pattern: itemsIndexed($$$ARGS)
+   inside:
+     any:
+       - pattern: LazyRow { $$$ }
+       - pattern: LazyRow($$$) { $$$ }
+       - pattern: LazyColumn($$$) { $$$ }
+       - pattern: LazyVerticalGrid($$$) { $$$ }
+       - pattern: LazyHorizontalGrid($$$) { $$$ }
+       - pattern: LazyVerticalStaggeredGrid($$$) { $$$ }
+       - pattern: LazyHorizontalStaggeredGrid($$$) { $$$ }
+     stopBy: end
++  # 只認 items(...) 自己引數裡的 key;lambda 內別的元件的 key = 不算(代碼審 r1 M15)
+   not:
+     any:
+-      - regex: '\bkey\s*='
++      - has:
++          kind: call_suffix
++          has:
++            kind: value_arguments
++            has:
++              kind: value_argument
++              any:
++                - regex: '^key\s*='
++                # items(list, { it.id }):key 是第二個位置引數(代碼審 r1 M15)
++                - all:
++                    - nthChild: 2
++                    - has:
++                        kind: lambda_literal
++                    - not:
++                        regex: '^\w+\s*='
+       # 只給筆數、而且是整數字面值或全大寫常數:清單不會重排,預設用索引當 key 剛好是對的(2026-11-05 實驗專案實測誤報)
+       - regex: '^items\(\s*(\d+|([\w.]*\.)?[A-Z][A-Z0-9_]*)\s*\)'
+       - all:
+           - pattern: items($$$ARGS)
+           - inside:
+               pattern: LazyColumn { $$$ }
+               stopBy: end
+ ---
+ id: kt-lazy-items-no-key
+ language: kotlin
+ severity: warning
+ message: '[UI-1]Lazy 清單 items 沒給穩定 key,重排時整片重組、捲動位置跳;改用 items(list, key = { it.id })'
+ rule:
+   pattern: items($$$ARGS)
+   inside:
+     pattern: LazyColumn { $$$ }
+     stopBy: end
++  # 只認 items(...) 自己引數裡的 key;lambda 內別的元件的 key = 不算(代碼審 r1 M15)
+   not:
+-    regex: '\bkey\s*='
++    any:
++      - has:
++          kind: call_suffix
++          has:
++            kind: value_arguments
++            has:
++              kind: value_argument
++              any:
++                - regex: '^key\s*='
++                # items(list, { it.id }):key 是第二個位置引數(代碼審 r1 M15)
++                - all:
++                    - nthChild: 2
++                    - has:
++                        kind: lambda_literal
++                    - not:
++                        regex: '^\w+\s*='
+diff --git a/configs/ast-grep/kotlin-android/sgconfig-review.yml b/configs/ast-grep/kotlin-android/sgconfig-review.yml
+new file mode 100644
+index 000000000..a455ced57
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/sgconfig-review.yml
+@@ -0,0 +1,2 @@
++ruleDirs:
++  - rules-review

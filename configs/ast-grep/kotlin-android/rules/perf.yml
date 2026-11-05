@@ -1,0 +1,320 @@
+id: kt-runblocking-in-main-code
+language: kotlin
+severity: warning
+message: '[PERF-4]正式程式碼裡 runBlocking 會卡住呼叫它的執行緒(在主執行緒就是 ANR);改用 lifecycleScope.launch / viewModelScope.launch,或把呼叫端改成 suspend'
+ignores:
+  - '**/src/test*/**'
+  - '**/src/androidTest*/**'
+  - '**/src/testFixtures/**'
+  - '**/*Test.kt'
+  - '**/src/*Test/**'
+rule:
+  any:
+    - pattern: runBlocking { $$$ }
+    - pattern: runBlocking($$$) { $$$ }
+  not:
+    any:
+      - inside:
+          stopBy: end
+          kind: function_declaration
+          has:
+            kind: simple_identifier
+            regex: ^main$
+      - inside:
+          stopBy: end
+          kind: class_declaration
+          has:
+            kind: delegation_specifier
+            regex: ^(okhttp3\.)?(Interceptor|Authenticator)$
+---
+id: kt-network-on-main-thread
+language: kotlin
+severity: warning
+message: '[PERF-2]Activity/Fragment 裡同步做網路請求,會丟 NetworkOnMainThreadException 或卡畫面;改成 suspend fun,或 withContext(ioDispatcher) { … }'
+rule:
+  any:
+    - pattern: $C.execute()
+    - pattern: $U.openStream()
+    - pattern: $U.openConnection()
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: (Activity|Fragment)\b
+      stopBy: end
+    stopBy: end
+  not:
+    any:
+      - regex: Task\(.*\)\.execute\(\)$
+      - inside:
+          any:
+            - pattern: withContext($$$) { $$$ }
+            - pattern: thread { $$$ }
+            - pattern: thread($$$) { $$$ }
+            - pattern: Thread { $$$ }
+            - pattern: $S.launch(Dispatchers.IO) { $$$ }
+            - pattern: launch(Dispatchers.IO) { $$$ }
+            - pattern: $E.execute { $$$ }
+            - pattern: $E.submit { $$$ }
+          stopBy: end
+---
+id: kt-datastore-runblocking-first
+language: kotlin
+severity: warning
+message: '[PERF-4]runBlocking 裡讀 DataStore,在主執行緒會卡住讀檔造成 ANR;改用 suspend 讀取,啟動時的預載改成非同步'
+rule:
+  any:
+    - pattern: runBlocking { $$$ }
+    - pattern: runBlocking($$$) { $$$ }
+  has:
+    kind: call_expression
+    regex: (?i)(datastore|prefs|preferences)\.data\.first
+    stopBy: end
+---
+id: kt-stream-not-closed
+language: kotlin
+severity: warning
+message: '[PERF-11]開了檔案或 ContentResolver 的串流卻沒關,檔案描述元會洩漏;改成 .use { }'
+rule:
+  any:
+    - pattern: FileInputStream($$$)
+    - pattern: FileOutputStream($$$)
+    - pattern: $R.openInputStream($$$)
+    - pattern: $R.openOutputStream($$$)
+  not:
+    any:
+      - inside:
+          any:
+            - pattern: $X.use { $$$ }
+            - pattern: $X?.use { $$$ }
+          stopBy: end
+      - inside:
+          kind: function_body
+          has:
+            any:
+              - pattern: $Y.close()
+              - pattern: $Y?.close()
+            stopBy: end
+          stopBy: end
+---
+id: kt-catch-log-return-empty
+language: kotlin
+severity: warning
+message: '[PERF-34]例外只記 log 就回空清單或 null,上層分不出沒資料還是出錯;改成往上回報錯誤狀態,只 catch 具體型別'
+rule:
+  kind: catch_block
+  has:
+    any:
+      - pattern: Log.$M($$$)
+      - pattern: Timber.$M($$$)
+      - pattern: $E.printStackTrace()
+    stopBy: end
+  regex: ((emptyList|emptyMap|emptySet|listOf|mapOf|setOf|emptyFlow)\(\)|\bnull)\s*\}$|return\s+(null|emptyList\(\)|emptyMap\(\)|listOf\(\))
+---
+id: kt-throw-without-cause
+language: kotlin
+severity: warning
+message: '[PERF-35]catch 裡丟新例外只給訊息字串,原本的 cause 丟了、追不到根因;改成 throw MyError("x", e)'
+rule:
+  pattern: throw $E($S)
+  inside:
+    kind: catch_block
+    stopBy: end
+constraints:
+  S:
+    regex: '^"'
+---
+# P4
+id: kt-runblocking-in-ui-code
+language: kotlin
+severity: warning
+message: '[PERF-4]畫面、ViewModel、Receiver 裡 runBlocking 會卡住主執行緒(ANR);改用 lifecycleScope.launch/viewModelScope.launch'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - pattern: runBlocking { $$$ }
+    - pattern: runBlocking($$$) { $$$ }
+  inside:
+    any:
+      - kind: class_declaration
+        has:
+          kind: delegation_specifier
+          regex: '\b(\w*Activity|\w*Fragment|\w*ViewModel|BroadcastReceiver|Application|Service|\w*View)\b'
+      - kind: function_declaration
+        has:
+          kind: modifiers
+          has:
+            kind: annotation
+            regex: '^@Composable\b'
+    stopBy: end
+---
+# P11
+id: kt-trampoline-activity
+language: kotlin
+severity: warning
+message: '[PERF-9]onCreate 只做 startActivity 再 finish 的跳板 Activity 多建一次畫面、拖慢啟動;改用 SplashScreen API(installSplashScreen)直接進主畫面'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  kind: function_declaration
+  has:
+    kind: simple_identifier
+    regex: '^onCreate$'
+  all:
+    - has:
+        pattern: startActivity($$$)
+        stopBy: end
+    - has:
+        pattern: finish()
+        stopBy: end
+    - not:
+        has:
+          regex: '^setContent(View)?\b'
+          stopBy: end
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: 'Activity\b'
+    stopBy: end
+---
+# P36
+id: kt-unbounded-bitmap-cache
+language: kotlin
+severity: warning
+message: '[PERF-17]用 HashMap 之類的無上限集合快取 Bitmap,遲早 OOM;改用 LruCache 並以 byteCount 設大小上限'
+rule:
+  any:
+    - pattern: HashMap<$K, Bitmap>($$$)
+    - pattern: LinkedHashMap<$K, Bitmap>($$$)
+    - pattern: ConcurrentHashMap<$K, Bitmap>($$$)
+    - pattern: mutableMapOf<$K, Bitmap>($$$)
+    - pattern: hashMapOf<$K, Bitmap>($$$)
+    - pattern: HashMap<$K, Bitmap?>($$$)
+    - pattern: LinkedHashMap<$K, Bitmap?>($$$)
+    - pattern: ConcurrentHashMap<$K, Bitmap?>($$$)
+    - pattern: mutableMapOf<$K, Bitmap?>($$$)
+    - pattern: hashMapOf<$K, Bitmap?>($$$)
+    - kind: property_declaration
+      all:
+        - has:
+            kind: variable_declaration
+            regex: ':\s*(Mutable|Hash|LinkedHash|ConcurrentHash)Map<[^>]*,\s*Bitmap\??>'
+        - regex: '=\s*(mutableMapOf|hashMapOf|HashMap|LinkedHashMap|ConcurrentHashMap)\(\)'
+---
+# P44
+id: kt-reflection-in-hot-path
+language: kotlin
+severity: warning
+message: '[PERF-25]每次綁定/繪製都跑反射(Class.forName、::class.memberProperties、getDeclaredField),又慢又會被 R8 混淆弄壞;改用程式碼生成或在初始化時快取一次'
+rule:
+  any:
+    - pattern: Class.forName($$$)
+    - pattern: $X::class.memberProperties
+    - pattern: $X::class.declaredMemberProperties
+    - pattern: $X::class.memberFunctions
+    - kind: call_expression
+      regex: '\.(getDeclaredField|getDeclaredMethod|getMethod|getField|getDeclaredFields|getDeclaredMethods)\('
+  inside:
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: '^(onBindViewHolder|onBind|onDraw|dispatchDraw|onMeasure|onLayout|getView|onScrolled|onDrawFrame|doFrame)$'
+    stopBy: end
+---
+# P49
+id: kt-data-class-mutable-field
+language: kotlin
+severity: warning
+message: '[PERF-30]data class 帶 var 或可變集合,放進 HashSet/HashMap 後雜湊會變、StateFlow 判相等時不發新值;改成 val 加不可變集合,用 copy 產生新值'
+rule:
+  kind: class_parameter
+  any:
+    # Room @Entity 的 var 是框架要的寫法(主鍵回填),不算;豁免只涵蓋 var,可變集合欄位照報(代碼審 r2 規則B Finding 12)
+    - all:
+        - has:
+            kind: binding_pattern_kind
+            regex: '^var$'
+        - not:
+            inside:
+              kind: class_declaration
+              has:
+                kind: modifiers
+                has:
+                  kind: annotation
+                  regex: '^@(androidx\.room\.)?Entity\b'
+              stopBy: end
+    - has:
+        any:
+          - kind: user_type
+          - kind: nullable_type
+        regex: '^(MutableList|MutableSet|MutableMap|MutableCollection|ArrayList|HashMap|HashSet|LinkedHashMap|LinkedHashSet|MutableStateFlow)\b'
+  inside:
+    kind: primary_constructor
+    inside:
+      kind: class_declaration
+      has:
+        kind: modifiers
+        has:
+          kind: class_modifier
+          regex: '^data$'
+---
+# P51
+id: kt-data-class-array-field
+language: kotlin
+severity: warning
+message: '[PERF-32]data class 的陣列欄位用預設 equals 只比參照,內容一樣也不相等;改用 List,或覆寫 equals/hashCode 用 contentEquals/contentHashCode'
+rule:
+  kind: class_parameter
+  has:
+    any:
+      - kind: user_type
+      - kind: nullable_type
+    regex: '^(ByteArray|IntArray|LongArray|ShortArray|CharArray|FloatArray|DoubleArray|BooleanArray|UByteArray|Array<.*>)\??$'
+  inside:
+    kind: primary_constructor
+    inside:
+      kind: class_declaration
+      all:
+        - has:
+            kind: modifiers
+            has:
+              kind: class_modifier
+              regex: '^data$'
+        - not:
+            has:
+              kind: class_body
+              regex: '\bfun\s+equals\b'
+---
+id: kt-uistate-mutable-field
+language: kotlin
+severity: warning
+message: '[PERF-30]UiState 帶 var 或可變集合,改了內容參照不變、畫面不更新也不執行緒安全;改成 val 欄位與唯讀 List,變更用 copy(items = items + x)'
+rule:
+  all:
+    - any:
+        - kind: class_parameter
+        - kind: property_declaration
+    - any:
+        - has:
+            kind: binding_pattern_kind
+            regex: ^var$
+        - has:
+            kind: user_type
+            regex: ^(MutableList|MutableMap|MutableSet|ArrayList|HashMap|HashSet|LinkedList|MutableStateFlow|MutableLiveData)\b
+            stopBy: end
+  inside:
+    kind: class_declaration
+    all:
+      - has:
+          kind: modifiers
+          has:
+            regex: ^data$
+            stopBy: end
+      - any:
+          - has:
+              kind: type_identifier
+              regex: (State|UiModel)$
+          - has:
+              kind: delegation_specifier
+              regex: (State|UiModel)\b
+    stopBy: end

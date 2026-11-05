@@ -133,6 +133,20 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
 - 自有設定要跟共用設定疊加:用逗號合成一個 `--config a.yml,b.yml`(分開寫兩次 `--config` 會拒跑);清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
 - 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛);冒煙只驗有沒有產出結果,不驗規則有沒有響。
 
+### Kotlin 寫法規則包標準接法(2026-11-05 立,[[Projects/Android協程與API寫法機械檢查標準_計劃]])
+
+規則包本體、每條規則對應型錄哪一列、自我檢查怎麼跑,家在 [[Systems/kotlin規則包]];這裡只放宣告範本。
+
+- **安裝**:`pipx install ast-grep-cli==0.51.1` 或 `brew install ast-grep`(要 0.51.1 以上;規則包用到的語法以 0.51.1 為準)。CI 要先裝同一版並 clone 工具鏈。沒裝時新增告警閘判環境不可用、照既有規則放行並記帳(看得到但不擋)。
+- **`.lumos/lint.json` 樣板**(Kotlin 專案直接抄,跟 detekt 那條並列):
+  ```
+  {"kt": ["ast-grep scan --config $HOME/harness/lumos-toolchain/configs/ast-grep/kotlin-android/sgconfig.yml --format sarif {LINT_FILES} > {LINT_SARIF_OUT}"]}
+  ```
+  這條帶 `{LINT_FILES}`,ast-grep 收空白分隔的多支檔,推送前的新增告警閘會真的跑、只擋這次新增的告警;每條告警訊息開頭是型錄編號(例 `[API-14]`),後面是一句修法,完整寫法用編號查 `skills/kotlin-idioms/checks-catalog.md`。
+- **提示級規則預設不接**:`sgconfig-hints.yml` 是誤報可能較高的提示級規則,新增告警閘不分等級、接了就擋;要用就另加一條宣告指向它,並自己承擔誤報。
+- **測試檔也要掃**:型錄 TEST 主題的規則只在 `src/test/`、`src/androidTest/` 底下響,而新增告警閘預設排除 `src/test/`;要掃就在 `.lumos/config.json` 寫 `{"lint_new": {"include_test_paths": ["kt"]}}`。開了以後其他宣告命令(例如 detekt)也會掃到測試檔,可能多出對測試碼的告警(只擋新增的)。
+- **路徑過濾的天花板**:規則包裡「只掃測試碼」的規則錨在 `**/src/test*/**` 這類片段;專案本身放在名為 `src/test` 的目錄底下時會反轉(ast-grep 的路徑過濾相對於規則設定檔所在目錄)。
+
 ## Vue/TS/JS（registry: `npm:<pkg>`）
 | linter | 用途 | 備註 |
 |---|---|---|

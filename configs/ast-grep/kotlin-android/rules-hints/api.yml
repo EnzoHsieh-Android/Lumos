@@ -1,0 +1,125 @@
+id: kt-okhttp-body-string-twice
+language: kotlin
+severity: hint
+message: '[API-18]同一段程式讀了兩次 body.string(),同一個 body 第二次讀會丟 IllegalStateException;讀一次存進變數,大檔改用 byteStream()/source() 串流'
+utils:
+  body-string:
+    any:
+      - pattern: $R.body!!.string()
+      - pattern: $R.body?.string()
+      - pattern: $R.body.string()
+rule:
+  inside:
+    kind: statements
+  all:
+    - any:
+        - kind: call_expression
+        - kind: property_declaration
+        - kind: assignment
+        - kind: jump_expression
+    - any:
+        - matches: body-string
+        - has:
+            matches: body-string
+            stopBy: end
+  follows:
+    any:
+      - matches: body-string
+      - has:
+          matches: body-string
+          stopBy: end
+    stopBy: end
+---
+id: kt-ktor-body-without-status
+language: kotlin
+severity: hint
+message: '[API-28]Ktor 預設 expectSuccess = false,非 2xx 不丟例外,直接 body() 會把錯誤頁當資料;改成 expectSuccess = true,或先查 status.isSuccess()'
+rule:
+  any:
+    - pattern: $R.body<$T>()
+    - pattern: $R.body()
+  has:
+    kind: navigation_expression
+    regex: \.(get|post|put|patch|delete|request|submitForm)\s*[({]
+  not:
+    inside:
+      kind: source_file
+      has:
+        pattern: expectSuccess = true
+        stopBy: end
+      stopBy: end
+---
+id: kt-sequential-independent-await
+language: kotlin
+severity: hint
+message: '[API-1]兩個相鄰的呼叫沒有資料依賴卻串著等;改用 coroutineScope { async } 並行'
+# ★要用 all 排順序★:同一層平行寫 follows 與 not.has $A 時,ast-grep 不保證先綁 $A,規則對任何程式都不命中(2026-11-05 樣本實測 0 命中)
+rule:
+  all:
+    - pattern: val $B = $R2.$M2($$$ARGS)
+    - follows:
+        pattern: val $A = $R1.$M1($$$)
+    - not:
+        has:
+          pattern: $A
+          stopBy: end
+    - inside:
+        kind: function_declaration
+        has:
+          kind: modifiers
+          regex: suspend
+        stopBy: end
+---
+id: kt-error-by-message-string
+language: kotlin
+severity: hint
+message: '[API-36]靠例外訊息字串判斷錯誤種類,訊息一改或換語系就失效;改用型別判斷:is SocketTimeoutException、is UnknownHostException'
+utils:
+  message-check:
+    any:
+      - pattern: $E.message?.contains($$$)
+      - pattern: $E.message!!.contains($$$)
+      - pattern: $E.message.contains($$$)
+      - pattern: $E.message?.startsWith($$$)
+      - pattern: $E.localizedMessage?.contains($$$)
+      - pattern: $E.message == $S
+rule:
+  matches: message-check
+  any:
+    - regex: ^(e|ex|exc|exception|t|th|throwable|err|error|cause)\.
+    - inside:
+        any:
+          - kind: catch_block
+          - pattern: $X.catch { $$$ }
+          - pattern: $X.onFailure { $$$ }
+        stopBy: end
+---
+id: kt-stale-response-launch
+language: kotlin
+severity: hint
+message: '[API-8]帶參數的公開函式每次都 launch 新協程寫 state,舊的沒取消會蓋掉新的;改成輸入進 MutableStateFlow 再 flatMapLatest,或先 job?.cancel()'
+rule:
+  kind: function_declaration
+  has:
+    kind: function_value_parameters
+    has:
+      kind: parameter
+      stopBy: end
+  all:
+    - has:
+        pattern: viewModelScope.launch { $$$ }
+        stopBy: end
+        has:
+          stopBy: end
+          any:
+            - kind: assignment
+            - kind: call_expression
+              regex: '(?s)^[\w.?]*\.(update|emit|tryEmit|setValue|postValue)\b'
+    - not:
+        has:
+          regex: '\.cancel\(|cancelAndJoin'
+          stopBy: end
+  not:
+    has:
+      kind: modifiers
+      regex: private

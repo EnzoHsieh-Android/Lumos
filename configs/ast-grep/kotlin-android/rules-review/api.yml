@@ -1,0 +1,66 @@
+# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
+# 自 rules/api.yml 的 kt-suspendcoroutine 拆出(代碼審 r1 M11):包一次性 Task 這類沒有可取消資源的 wrapper 不加 invokeOnCancellation 本來就對,形狀分不出
+id: kt-suspendcancellable-no-oncancel
+language: kotlin
+severity: info
+message: '[API-11]suspendCancellableCoroutine 沒註冊 invokeOnCancellation,取消後請求還在跑;改成 cont.invokeOnCancellation { call.cancel() }'
+rule:
+  any:
+    - pattern: suspendCancellableCoroutine { $$$ }
+    - pattern: suspendCancellableCoroutine<$T> { $$$ }
+  not:
+    has:
+      kind: call_expression
+      regex: invokeOnCancellation
+      stopBy: end
+---
+# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
+# 自 rules/api.yml 搬來(代碼審 r3 規則席 Finding 1):OkHttp 5 的 body 是屬性(r.body.string()、r.body.use { }),
+# 讀完或 use 掉 body 的寫法列舉不完,同一個 Response 有沒有關要看資料流
+id: kt-okhttp-response-not-closed
+language: kotlin
+severity: info
+message: '[API-17]execute() 拿到的 Response 沒關閉會洩漏連線、耗盡連線池;改用 client.newCall(req).execute().use { … }'
+rule:
+  pattern: $C.newCall($$$).execute()
+  not:
+    any:
+      - inside:
+          any:
+            - pattern: $X.use { $$$ }
+            - pattern: $X?.use { $$$ }
+          stopBy: end
+      # 直接接著讀完 body:execute().body?.string() 會關 body,連線跟著還回去(代碼審 r1 M10)
+      - inside:
+          kind: call_expression
+          regex: '\.execute\(\)\s*\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
+          stopBy: end
+      # 先存進變數:同函式裡對「同一個變數」use/close,或讀完它的 body;
+      # 讀別的 Response 的 body 不算(代碼審 r1 M10、r2 規則A F5)
+      - all:
+          - inside:
+              kind: property_declaration
+              has:
+                kind: variable_declaration
+                has:
+                  kind: simple_identifier
+                  pattern: $V
+          - inside:
+              kind: function_body
+              has:
+                any:
+                  - pattern: $V.use { $$$ }
+                  - pattern: $V?.use { $$$ }
+                  - pattern: $V.close()
+                  - pattern: $V?.close()
+                  - pattern: $V.body!!.string()
+                  - pattern: $V.body?.string()
+                  - pattern: $V.body!!.bytes()
+                  - pattern: $V.body?.bytes()
+                  - pattern: $V.body!!.close()
+                  - pattern: $V.body?.close()
+                  - pattern: $V.body().string()
+                  - pattern: $V.body().bytes()
+                  - pattern: $V.body().close()
+                stopBy: end
+              stopBy: end

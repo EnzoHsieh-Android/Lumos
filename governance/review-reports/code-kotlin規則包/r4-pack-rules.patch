@@ -1,0 +1,576 @@
+diff --git a/configs/ast-grep/kotlin-android/rules-review/api.yml b/configs/ast-grep/kotlin-android/rules-review/api.yml
+index 23fc7bda5..fb1f850e6 100644
+--- a/configs/ast-grep/kotlin-android/rules-review/api.yml
++++ b/configs/ast-grep/kotlin-android/rules-review/api.yml
+@@ -6,10 +6,61 @@ severity: info
+ message: '[API-11]suspendCancellableCoroutine 沒註冊 invokeOnCancellation,取消後請求還在跑;改成 cont.invokeOnCancellation { call.cancel() }'
+ rule:
+   any:
+     - pattern: suspendCancellableCoroutine { $$$ }
+     - pattern: suspendCancellableCoroutine<$T> { $$$ }
+   not:
+     has:
+       kind: call_expression
+       regex: invokeOnCancellation
+       stopBy: end
++---
++# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
++# 自 rules/api.yml 搬來(代碼審 r3 規則席 Finding 1):OkHttp 5 的 body 是屬性(r.body.string()、r.body.use { }),
++# 讀完或 use 掉 body 的寫法列舉不完,同一個 Response 有沒有關要看資料流
++id: kt-okhttp-response-not-closed
++language: kotlin
++severity: info
++message: '[API-17]execute() 拿到的 Response 沒關閉會洩漏連線、耗盡連線池;改用 client.newCall(req).execute().use { … }'
++rule:
++  pattern: $C.newCall($$$).execute()
++  not:
++    any:
++      - inside:
++          any:
++            - pattern: $X.use { $$$ }
++            - pattern: $X?.use { $$$ }
++          stopBy: end
++      # 直接接著讀完 body:execute().body?.string() 會關 body,連線跟著還回去(代碼審 r1 M10)
++      - inside:
++          kind: call_expression
++          regex: '\.execute\(\)\s*\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
++          stopBy: end
++      # 先存進變數:同函式裡對「同一個變數」use/close,或讀完它的 body;
++      # 讀別的 Response 的 body 不算(代碼審 r1 M10、r2 規則A F5)
++      - all:
++          - inside:
++              kind: property_declaration
++              has:
++                kind: variable_declaration
++                has:
++                  kind: simple_identifier
++                  pattern: $V
++          - inside:
++              kind: function_body
++              has:
++                any:
++                  - pattern: $V.use { $$$ }
++                  - pattern: $V?.use { $$$ }
++                  - pattern: $V.close()
++                  - pattern: $V?.close()
++                  - pattern: $V.body!!.string()
++                  - pattern: $V.body?.string()
++                  - pattern: $V.body!!.bytes()
++                  - pattern: $V.body?.bytes()
++                  - pattern: $V.body!!.close()
++                  - pattern: $V.body?.close()
++                  - pattern: $V.body().string()
++                  - pattern: $V.body().bytes()
++                  - pattern: $V.body().close()
++                stopBy: end
++              stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules-review/data.yml b/configs/ast-grep/kotlin-android/rules-review/data.yml
+index e8284650a..cb1baad51 100644
+--- a/configs/ast-grep/kotlin-android/rules-review/data.yml
++++ b/configs/ast-grep/kotlin-android/rules-review/data.yml
+@@ -21,10 +21,68 @@ rule:
+           any:
+             - kind: if_expression
+             - kind: when_expression
+           stopBy: end
+         not:
+           inside:
+             kind: string_literal
+             stopBy: end
+         stopBy: end
+       stopBy: end
++---
++# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
++# 自 rules/data.yml 搬來(代碼審 r3 規則席 Finding 2):try/runCatching 區塊裡接的終端操作
++# (collect、toList、single、collectLatest…)列舉不完,收集是否在區塊內完成要看語意
++id: kt-datastore-read-no-catch
++language: kotlin
++severity: info
++message: '[DATA-10]讀 DataStore 沒處理 IOException,檔案讀壞時整條 Flow 直接炸;改用 .catch 遇 IOException 就 emit(emptyPreferences())'
++rule:
++  any:
++    - pattern: $D.data.map { $$$ }
++    - pattern: $D.data.map($$$)
++    - pattern: $D.data.first()
++    - pattern: $D.data.firstOrNull()
++    - pattern: $D.data.collect { $$$ }
++    - pattern: $D.data.onEach { $$$ }
++  regex: (?i)^[\w.]*?(datastore|prefs|preferences)\.data\.
++  not:
++    any:
++      - inside:
++          any:
++            - pattern: $Y.catch { $$$ }
++            - pattern: $Y.catch($$$)
++          stopBy: end
++      # try/runCatching 只對「在區塊裡就收集完」的終端操作有用:first()/firstOrNull()/collect,或直接接 .first();
++      # 區塊裡只建立流(map)或排程到 launch/async 裡收集,IOException 發生在區塊外,不放行(代碼審 r2 規則B Finding 10)
++      - all:
++          - inside:
++              any:
++                - kind: try_expression
++                - pattern: runCatching { $$$ }
++                - pattern: $Y.runCatching { $$$ }
++              stopBy: end
++          - any:
++              - pattern: $D.data.first()
++              - pattern: $D.data.firstOrNull()
++              - pattern: $D.data.collect { $$$ }
++              - inside:
++                  kind: navigation_expression
++                  regex: '\.(first|firstOrNull)$'
++          - not:
++              inside:
++                any:
++                  - pattern: launch { $$$ }
++                  - pattern: launch($$$) { $$$ }
++                  - pattern: $S.launch { $$$ }
++                  - pattern: $S.launch($$$) { $$$ }
++                  - pattern: async { $$$ }
++                  - pattern: async($$$) { $$$ }
++                  - pattern: $S.async { $$$ }
++                  - pattern: $S.async($$$) { $$$ }
++                inside:
++                  any:
++                    - kind: try_expression
++                    - pattern: runCatching { $$$ }
++                    - pattern: $Y.runCatching { $$$ }
++                  stopBy: end
++                stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules/api.yml b/configs/ast-grep/kotlin-android/rules/api.yml
+index b9d890127..70f8cafe7 100644
+--- a/configs/ast-grep/kotlin-android/rules/api.yml
++++ b/configs/ast-grep/kotlin-android/rules/api.yml
+@@ -36,68 +36,20 @@ rule:
+             kind: modifiers
+             has:
+               kind: annotation
+               regex: ^@(Provides|Singleton|Bean)\b
+               stopBy: end
+         - has:
+             kind: user_type
+             regex: ^OkHttpClient$
+       stopBy: end
+ ---
+-id: kt-okhttp-response-not-closed
+-language: kotlin
+-severity: warning
+-message: '[API-17]execute() 拿到的 Response 沒關閉會洩漏連線、耗盡連線池;改用 client.newCall(req).execute().use { … }'
+-rule:
+-  pattern: $C.newCall($$$).execute()
+-  not:
+-    any:
+-      - inside:
+-          any:
+-            - pattern: $X.use { $$$ }
+-            - pattern: $X?.use { $$$ }
+-          stopBy: end
+-      # 直接接著讀完 body:execute().body?.string() 會關 body,連線跟著還回去(代碼審 r1 M10)
+-      - inside:
+-          kind: call_expression
+-          regex: '\.execute\(\)\s*\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
+-          stopBy: end
+-      # 先存進變數:同函式裡對「同一個變數」use/close,或讀完它的 body;
+-      # 讀別的 Response 的 body 不算(代碼審 r1 M10、r2 規則A F5)
+-      - all:
+-          - inside:
+-              kind: property_declaration
+-              has:
+-                kind: variable_declaration
+-                has:
+-                  kind: simple_identifier
+-                  pattern: $V
+-          - inside:
+-              kind: function_body
+-              has:
+-                any:
+-                  - pattern: $V.use { $$$ }
+-                  - pattern: $V?.use { $$$ }
+-                  - pattern: $V.close()
+-                  - pattern: $V?.close()
+-                  - pattern: $V.body!!.string()
+-                  - pattern: $V.body?.string()
+-                  - pattern: $V.body!!.bytes()
+-                  - pattern: $V.body?.bytes()
+-                  - pattern: $V.body!!.close()
+-                  - pattern: $V.body?.close()
+-                  - pattern: $V.body().string()
+-                  - pattern: $V.body().bytes()
+-                  - pattern: $V.body().close()
+-                stopBy: end
+-              stopBy: end
+----
+ id: kt-http-logging-body-unguarded
+ language: kotlin
+ severity: warning
+ message: '[API-19]BODY 日誌沒用 DEBUG 包住,正式版把權杖與個資寫進 logcat;改成 if (BuildConfig.DEBUG) Level.BODY else Level.NONE,並 redactHeader'
+ rule:
+   any:
+     - pattern: HttpLoggingInterceptor.Level.BODY
+     - pattern: Level.BODY
+   not:
+     inside:
+@@ -169,36 +121,38 @@ rule:
+             - has:
+                 kind: modifiers
+                 has:
+                   kind: annotation
+                   regex: ^@(Provides|Singleton|Bean)\b
+                   stopBy: end
+             - has:
+                 kind: user_type
+                 regex: ^HttpClient$
+           stopBy: end
+-      # 同函式裡對「這個 client 存進的變數」呼叫 close()(try/finally 關掉)就不算「沒關」;
+-      # close() 的接收者要是同一個變數,關別的 stream/writer 不算(代碼審 r1 M14、r2 規則A F4)
++      # 同函式裡對「這個 client 存進的變數」呼叫 close()(try/finally 關掉)或 use { } 就不算「沒關」;
++      # 接收者要是同一個變數,關別的 stream/writer 不算(代碼審 r1 M14、r2 規則A F4、r3 規則席 Finding 5)
+       - all:
+           - inside:
+               kind: property_declaration
+               has:
+                 kind: variable_declaration
+                 has:
+                   kind: simple_identifier
+                   pattern: $V
+           - inside:
+               kind: function_body
+               has:
+                 any:
+                   - pattern: $V.close()
+                   - pattern: $V?.close()
++                  - pattern: $V.use { $$$ }
++                  - pattern: $V?.use { $$$ }
+                 stopBy: end
+               stopBy: end
+ ---
+ id: kt-unmanaged-scope-launch
+ language: kotlin
+ severity: warning
+ message: '[API-9]GlobalScope 或臨時 CoroutineScope(...) 開的協程沒人管,取消不了也接不到錯誤;改用 viewModelScope,要活過畫面用注入的 applicationScope'
+ rule:
+   any:
+     - pattern: GlobalScope.launch { $$$ }
+diff --git a/configs/ast-grep/kotlin-android/rules/coroutines.yml b/configs/ast-grep/kotlin-android/rules/coroutines.yml
+index 1d6c89126..ad91c042a 100644
+--- a/configs/ast-grep/kotlin-android/rules/coroutines.yml
++++ b/configs/ast-grep/kotlin-android/rules/coroutines.yml
+@@ -114,28 +114,41 @@ rule:
+           - inside:
+               kind: class_body
+               has:
+                 kind: property_declaration
+                 regex: '=\s*SupervisorJob\('
+                 has:
+                   kind: variable_declaration
+                   has:
+                     kind: simple_identifier
+                     pattern: $J
+-          - has:
+-              stopBy: end
+-              kind: call_expression
+-              pattern: CoroutineScope($$$)
+-              has:
+-                stopBy: end
+-                kind: simple_identifier
+-                pattern: $J
++          - any:
++              - has:
++                  stopBy: end
++                  kind: call_expression
++                  pattern: CoroutineScope($$$)
++                  has:
++                    stopBy: end
++                    kind: simple_identifier
++                    pattern: $J
++              # 用加法接在後面:CoroutineScope(…) + job(CoroutineScope.plus);$J 要是加法的直接運算元(代碼審 r3 規則席 Finding 3)
++              - has:
++                  stopBy: end
++                  kind: additive_expression
++                  all:
++                    - has:
++                        kind: simple_identifier
++                        pattern: $J
++                    - has:
++                        stopBy: end
++                        kind: call_expression
++                        pattern: CoroutineScope($$$)
+ ---
+ id: kt-noncancellable-in-builder
+ language: kotlin
+ severity: error
+ message: '[CO-3]NonCancellable 傳給 launch/async 會切斷父子關係,工作脫離 scope 管理;改成只用在 withContext(NonCancellable) { 清理 },要跑完的交給注入的長壽 scope'
+ rule:
+   any:
+     - pattern: launch($$$) { $$$ }
+     - pattern: $S.launch($$$) { $$$ }
+     - pattern: async($$$) { $$$ }
+diff --git a/configs/ast-grep/kotlin-android/rules/data.yml b/configs/ast-grep/kotlin-android/rules/data.yml
+index 5d011c389..ed8fb4d61 100644
+--- a/configs/ast-grep/kotlin-android/rules/data.yml
++++ b/configs/ast-grep/kotlin-android/rules/data.yml
+@@ -64,75 +64,20 @@ rule:
+           regex: ^(Int|Long|Short|Byte|Boolean|Double|Float|Char)$
+       # 每個建構子參數都有預設值:Kotlin 生無參建構子,Gson 用它,預設值有效
+       - inside:
+           kind: primary_constructor
+           not:
+             has:
+               kind: class_parameter
+               not:
+                 regex: '\bva[lr]\s+\w+\s*:[^=]*='
+ ---
+-id: kt-datastore-read-no-catch
+-language: kotlin
+-severity: warning
+-message: '[DATA-10]讀 DataStore 沒處理 IOException,檔案讀壞時整條 Flow 直接炸;改用 .catch 遇 IOException 就 emit(emptyPreferences())'
+-rule:
+-  any:
+-    - pattern: $D.data.map { $$$ }
+-    - pattern: $D.data.map($$$)
+-    - pattern: $D.data.first()
+-    - pattern: $D.data.firstOrNull()
+-    - pattern: $D.data.collect { $$$ }
+-    - pattern: $D.data.onEach { $$$ }
+-  regex: (?i)^[\w.]*?(datastore|prefs|preferences)\.data\.
+-  not:
+-    any:
+-      - inside:
+-          any:
+-            - pattern: $Y.catch { $$$ }
+-            - pattern: $Y.catch($$$)
+-          stopBy: end
+-      # try/runCatching 只對「在區塊裡就收集完」的終端操作有用:first()/firstOrNull()/collect,或直接接 .first();
+-      # 區塊裡只建立流(map)或排程到 launch/async 裡收集,IOException 發生在區塊外,不放行(代碼審 r2 規則B Finding 10)
+-      - all:
+-          - inside:
+-              any:
+-                - kind: try_expression
+-                - pattern: runCatching { $$$ }
+-                - pattern: $Y.runCatching { $$$ }
+-              stopBy: end
+-          - any:
+-              - pattern: $D.data.first()
+-              - pattern: $D.data.firstOrNull()
+-              - pattern: $D.data.collect { $$$ }
+-              - inside:
+-                  kind: navigation_expression
+-                  regex: '\.(first|firstOrNull)$'
+-          - not:
+-              inside:
+-                any:
+-                  - pattern: launch { $$$ }
+-                  - pattern: launch($$$) { $$$ }
+-                  - pattern: $S.launch { $$$ }
+-                  - pattern: $S.launch($$$) { $$$ }
+-                  - pattern: async { $$$ }
+-                  - pattern: async($$$) { $$$ }
+-                  - pattern: $S.async { $$$ }
+-                  - pattern: $S.async($$$) { $$$ }
+-                inside:
+-                  any:
+-                    - kind: try_expression
+-                    - pattern: runCatching { $$$ }
+-                    - pattern: $Y.runCatching { $$$ }
+-                  stopBy: end
+-                stopBy: end
+----
+ id: kt-datastore-serializer-no-corruption
+ language: kotlin
+ severity: error
+ message: '[DATA-11]readFrom 沒把解析錯誤包成 CorruptionException,檔案壞了每次讀都炸;改成丟 CorruptionException,並設 ReplaceFileCorruptionHandler'
+ rule:
+   kind: function_declaration
+   has:
+     kind: simple_identifier
+     regex: ^readFrom$
+   inside:
+diff --git a/configs/ast-grep/kotlin-android/rules/state.yml b/configs/ast-grep/kotlin-android/rules/state.yml
+index 2c3770391..053df004c 100644
+--- a/configs/ast-grep/kotlin-android/rules/state.yml
++++ b/configs/ast-grep/kotlin-android/rules/state.yml
+@@ -66,22 +66,22 @@ language: kotlin
+ severity: warning
+ message: '[STATE-21]從 SavedStateHandle 取參數硬寫 !!,key 打錯或參數改名就崩潰;改用 savedStateHandle.toRoute<Route>() 或集中常數加預設值'
+ rule:
+   any:
+     - pattern: $H.get<$T>($K)!!
+     - pattern: $H.get($K)!!
+     - pattern: $H[$K]!!
+ constraints:
+   H:
+     # 只認 SavedStateHandle 慣用名(完整比對);handlers、errorHandler、savedStates、savedStateRegistry 都不是;
+-    # 官方範例與社群慣用的 savedState、state 也算(代碼審 r2 規則B Finding 6)
+-    regex: '^(\w+\.)*_?(savedStateHandle|stateHandle|handle|savedState|state)$'
++    # 官方範例與社群慣用的 savedState 也算(代碼審 r2 規則B Finding 6);泛用名 state 常是一般 Map 或 UI 狀態,不收(代碼審 r3 規則席 Finding 4)
++    regex: '^(\w+\.)*_?(savedStateHandle|stateHandle|handle|savedState)$'
+ ---
+ id: kt-persistable-bundle
+ language: kotlin
+ severity: warning
+ message: '[STATE-24]用 PersistableBundle 版 onSaveInstanceState 存 UI 狀態,只在 persistableMode 呼叫;改用 Bundle 版或 SavedStateHandle'
+ rule:
+   kind: parameter
+   has:
+     kind: user_type
+     regex: ^PersistableBundle$
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt
+index c7e6e938e..f01af8896 100644
+--- a/configs/ast-grep/kotlin-android/samples/bad/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt
+@@ -1,8 +1,10 @@
+ suspend fun a(): String {
+     val client = HttpClient(OkHttp) { install(ContentNegotiation) } // BAD
+     return client.get("x").bodyAsText()
+ }
+ suspend fun b(): String = HttpClient().get("x").bodyAsText() // BAD
+ 
+ // 代碼審 r2(規則A F4):關的是別的東西,不是這個 client
+ fun ext(writer: Writer) { val c = HttpClient(CIO); c.get("x"); writer.close() } // BAD
++// 代碼審 r3(規則席 Finding 5 的反向對照):use 的是別的資源,不是這個 client
++suspend fun useOther(w: Closeable): String { val c = HttpClient(CIO); w.use { }; return c.get("x").bodyAsText() } // BAD
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+index fcf0d30db..d7125351f 100644
+--- a/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+@@ -5,10 +5,16 @@ class Sync {
+     val scope = CoroutineScope(Dispatchers.IO) // BAD
+ }
+ class Uploader(private val io: CoroutineDispatcher) {
+     private val scope: CoroutineScope = CoroutineScope(io + Job()) // BAD
+ }
+ // 代碼審 r2(規則B Finding 8):類別裡有 SupervisorJob,但這個 scope 沒用它
+ class S {
+     private val job = SupervisorJob()
+     val scope = CoroutineScope(Dispatchers.IO) // BAD
+ }
++// 代碼審 r3(規則席 Finding 3 的反向對照):加法接的是普通 Job 屬性,不是 SupervisorJob 那個
++class S2 {
++    private val job = SupervisorJob()
++    private val other = Job()
++    private val scope = CoroutineScope(Dispatchers.Main) + other // BAD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt
+index 2b20f9f2f..bb77e4d0a 100644
+--- a/configs/ast-grep/kotlin-android/samples/bad/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt
+@@ -5,16 +5,15 @@ class U1ViewModel(savedStateHandle: SavedStateHandle) : ViewModel() {
+     private val id = savedStateHandle.get<String>("id")!!
+ }
+ // case: index-bang
+ class U2ViewModel(private val handle: SavedStateHandle) : ViewModel() {
+     private val id: String = handle["userId"]!!
+ }
+ // case: private-underscore-handle
+ class U5ViewModel(private val _savedStateHandle: SavedStateHandle) : ViewModel() {
+     private val tab: Int = _savedStateHandle["tab"]!!
+ }
+-// case: savedState-and-state-names(代碼審 r2 規則B Finding 6:官方範例與社群慣用名)
+-class S1ViewModel(private val savedState: SavedStateHandle, val state: SavedStateHandle) : ViewModel() {
++// case: savedState-name(代碼審 r2 規則B Finding 6:官方範例慣用名;泛用名 state 代碼審 r3 拿掉)
++class S1ViewModel(private val savedState: SavedStateHandle) : ViewModel() {
+     val a = savedState.get<String>("id")!!
+     val b = savedState["id"]!!
+-    val c = state.get<String>("id")!!
+ }
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-datastore-read-no-catch/src/main/kotlin/review-fp-terminal-in-try.kt b/configs/ast-grep/kotlin-android/samples/good/kt-datastore-read-no-catch/src/main/kotlin/review-fp-terminal-in-try.kt
+new file mode 100644
+index 000000000..ee85b2957
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-datastore-read-no-catch/src/main/kotlin/review-fp-terminal-in-try.kt
+@@ -0,0 +1,9 @@
++// 語意覆核級已知誤報(代碼審 r3 規則席 Finding 2):try/runCatching 區塊裡接的是 first/firstOrNull 以外的終端操作,
++// 收集在區塊內完成,IOException 會在區塊裡丟出;形狀上列舉不完所有終端操作
++suspend fun fp1() { try { dataStore.data.map { it[K] }.collect { use(it) } } catch (e: IOException) { } }
++suspend fun fp2() = runCatching { dataStore.data.map { it[K] }.toList() }.getOrNull()
++suspend fun fp3() = try { dataStore.data.map { it[K] }.single() } catch (e: IOException) { null }
++suspend fun fp4() { try { dataStore.data.onEach { log(it) }.collect() } catch (e: IOException) { } }
++suspend fun fp5() { try { dataStore.data.map { it[K] }.collectLatest { show(it) } } catch (e: IOException) { } }
++// 席位原片段:中間多一層運算子再接 first()
++suspend fun a9() { try { dataStore.data.map { it[K] }.distinctUntilChanged().first() } catch (e: IOException) { } }
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt b/configs/ast-grep/kotlin-android/samples/good/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt
+index fbe1340b1..333fec070 100644
+--- a/configs/ast-grep/kotlin-android/samples/good/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-ktor-client-per-call/src/main/kotlin/kt-ktor-client-per-call.kt
+@@ -1,10 +1,15 @@
+ val client = HttpClient(OkHttp) { install(ContentNegotiation) } // GOOD 頂層單例
+ suspend fun a(): String = HttpClient().use { it.get("x").bodyAsText() } // GOOD use 會關
+ @Provides @Singleton
+ fun provide(): HttpClient = HttpClient(OkHttp) // GOOD DI
+ 
+ // 容易誤報(代碼審 r1 M14):同函式裡 finally close()
+ suspend fun ktorClose(): String {
+     val client = HttpClient(CIO)
+     try { return client.get("x").bodyAsText() } finally { client.close() } // GOOD
+ }
++// 容易誤報(代碼審 r3 規則席 Finding 5):先存進變數,再對同一個變數 use { } 關掉
++suspend fun ktorUseVar(): String {
++    val client = HttpClient(CIO)
++    return client.use { it.get("x").bodyAsText() } // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt b/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+index 4bbfbbd93..db1bb2db2 100644
+--- a/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-long-lived-scope-plain-job/src/main/kotlin/kt-long-lived-scope-plain-job.kt
+@@ -11,10 +11,15 @@ class Once {
+     }
+ }
+ class Ui {
+     private val scope = MainScope() // GOOD
+ }
+ // 容易誤報:SupervisorJob 先存進變數再組 scope
+ class Holder {
+     private val job = SupervisorJob()
+     private val scope = CoroutineScope(Dispatchers.Main + job) // GOOD
+ }
++// 容易誤報(代碼審 r3 規則席 Finding 3):SupervisorJob 屬性用加法接在 CoroutineScope(…) 後面
++class Holder2 {
++    private val job = SupervisorJob()
++    private val scope = CoroutineScope(Dispatchers.Main) + job // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-okhttp-response-not-closed/src/main/kotlin/review-fp-okhttp5-body.kt b/configs/ast-grep/kotlin-android/samples/good/kt-okhttp-response-not-closed/src/main/kotlin/review-fp-okhttp5-body.kt
+new file mode 100644
+index 000000000..caaf2170f
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-okhttp-response-not-closed/src/main/kotlin/review-fp-okhttp5-body.kt
+@@ -0,0 +1,20 @@
++// 語意覆核級已知誤報(代碼審 r3 規則席 Finding 1):OkHttp 5 的 body 是不可為 null 的屬性,
++// 不寫 ?. / !!;讀完或 use 掉 body 會把連線還回去,形狀上分不清是不是同一個 Response
++fun ok5a(client: OkHttpClient, req: Request): String {
++    val r = client.newCall(req).execute()
++    return r.body.string()
++}
++fun ok5b(client: OkHttpClient, req: Request): String {
++    val r = client.newCall(req).execute()
++    return r.body.use { it.string() }
++}
++fun ok5c(client: OkHttpClient, req: Request): String? {
++    val r = client.newCall(req).execute()
++    return r.body?.use { it.string() }
++}
++fun ok5d(client: OkHttpClient, req: Request): String {
++    val r = client.newCall(req).execute()
++    return r.body!!.use { it.string() }
++}
++// 席位原片段:在 use 區塊裡直接 return
++fun o7(c: OkHttpClient, req: Request): String { val r = c.newCall(req).execute(); r.body.use { return it.string() } }
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt b/configs/ast-grep/kotlin-android/samples/good/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt
+index 06927db20..cb5f19ccd 100644
+--- a/configs/ast-grep/kotlin-android/samples/good/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-savedstate-bang/src/main/kotlin/kt-savedstate-bang.kt
+@@ -8,10 +8,15 @@ class U3ViewModel(savedStateHandle: SavedStateHandle) : ViewModel() {
+ class U4ViewModel(savedStateHandle: SavedStateHandle) : ViewModel() {
+     private val id = savedStateHandle.get<String>(ARG_ID) ?: ""
+ }
+ // case: plain-map-bang
+ fun lookup(map: Map<String, Int>) = map["x"]!!
+ // 容易誤報:名字含 handle/savedState 但不是 SavedStateHandle
+ fun pick(handlers: Map<Type, Handler>, type: Type) = handlers[type]!!
+ fun err(errorHandler: Registry, k: String) = errorHandler.get(k)!!
+ fun st(savedStates: Map<Int, Bundle>, id: Int) = savedStates[id]!!
+ fun reg(owner: SavedStateRegistryOwner) = owner.savedStateRegistry.get("x")!!
++// 容易誤報(代碼審 r3 規則席 Finding 4):泛用名 state 常是一般 Map 或 UI 狀態,不是 SavedStateHandle
++fun fromMap(state: Map<String, Int>) = state["count"]!!
++fun fromMapGet(state: Map<String, String>) = state.get("id")!!
++class MapHolder { val state = mapOf("a" to 1); val g = state["a"]!!; val h = state.get("a")!! }
++fun underscoreState(_state: Map<String, String>) = _state.get<String>("x")!!

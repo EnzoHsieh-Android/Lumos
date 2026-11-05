@@ -1,0 +1,204 @@
+id: kt-vm-channel-event
+language: kotlin
+severity: warning
+message: '[FLOW-7]ViewModel 用 Channel/SharedFlow 送一次性事件,UI 停止收集時事件會遺失;改成 uiState 的欄位,UI 處理完呼叫 vm.xxxShown() 清掉'
+rule:
+  any:
+    - pattern: $C.receiveAsFlow()
+    - pattern: $C.consumeAsFlow()
+    - pattern: Channel<$CT>($$$)
+    - pattern: Channel($$$)
+    - pattern: MutableSharedFlow<$T>($$$)
+  inside:
+    kind: class_declaration
+    has:
+      kind: delegation_specifier
+      regex: ViewModel\(
+    stopBy: end
+  # 只認看得出是一次性事件的屬性:型別參數或屬性名帶 Event/Effect/Nav/Toast 等字;工作佇列 Channel<Int>、ChatMessage 資料流不算
+  all:
+    - inside:
+        kind: property_declaration
+        stopBy: end
+        regex: '<\w*(Event|Effect|Command|Navigation|Nav|Toast|Snackbar|UiMessage|UserMessage)\w*>|\b(val|var)\s+_?(\w*(Event|Effect|Command|Navigation|Toast|Snackbar)s?|events?|effects?|commands?|navigation\w*|navigate\w*|nav|toasts?|snackbars?)\b'
+---
+id: kt-flow-catch-empty
+language: kotlin
+severity: warning
+message: '[FLOW-8]Flow 的 .catch { } 空本體把錯誤全吞掉,畫面停在舊資料也沒紀錄;改成至少記錄並轉成錯誤狀態,例 catch { e -> _state.update { … } }'
+rule:
+  pattern: $F.catch { $$$ }
+  has:
+    kind: call_suffix
+    has:
+      kind: annotated_lambda
+      has:
+        kind: lambda_literal
+        not:
+          has:
+            kind: statements
+---
+id: kt-catch-before-operator
+language: kotlin
+severity: warning
+message: '[FLOW-11]catch 放在 map/onEach 等運算子之前,管不到下游運算子丟的例外;改成 .catch 放在所有可能丟例外的中間運算子之後'
+rule:
+  any:
+    - pattern: $F.catch { $$$ }.$OP { $$$ }
+    - pattern: $F.catch { $$$ }.$OP($$$)
+  not:
+    any:
+      - has:
+          kind: call_expression
+          regex: '^[\s\S]*\.\s*catch\s*\{[\s\S]*\bthrow\b'
+          stopBy: end
+      - inside:
+          kind: navigation_expression
+          regex: '\.\s*catch$'
+constraints:
+  OP:
+    # onEach 歸 kt-flow-catch-before-oneach 報,這裡不重複
+    regex: ^(map|mapNotNull|mapLatest|filter|filterNot|filterNotNull|transform|transformLatest|flatMapLatest|flatMapConcat|flatMapMerge|scan|runningFold|runningReduce|onStart|zip|combine)$
+---
+id: kt-try-emit-in-flow
+language: kotlin
+severity: error
+message: '[FLOW-12]flow { } 裡用 try 包 emit 會吞掉下游例外,違反例外透明而在執行期丟例外;改成 flow { emit(x) }.catch { emit(fallback) }'
+rule:
+  kind: try_expression
+  all:
+    - has:
+        kind: catch_block
+    - has:
+        kind: statements
+        has:
+          stopBy: end
+          any:
+            - pattern: emit($$$)
+            - pattern: emitAll($$$)
+    - inside:
+        stopBy: end
+        any:
+          - pattern: flow { $$$ }
+          - pattern: flow<$T> { $$$ }
+    - not:
+        has:
+          kind: catch_block
+          has:
+            stopBy: end
+            kind: jump_expression
+            regex: ^throw\b
+---
+id: kt-launch-emit-in-flow
+language: kotlin
+severity: error
+message: '[FLOW-15]flow { } 不能從別的協程 emit(違反情境保存,執行期丟 IllegalStateException);要並行生產改用 channelFlow { launch { send(x) } }'
+rule:
+  any:
+    - pattern: emit($$$)
+    - pattern: emitAll($$$)
+  inside:
+    stopBy: end
+    any:
+      - pattern: launch { $$$ }
+      - pattern: launch($$$) { $$$ }
+      - pattern: async { $$$ }
+      - pattern: async($$$) { $$$ }
+      - pattern: $S.launch { $$$ }
+      - pattern: $S.async { $$$ }
+    inside:
+      stopBy: end
+      any:
+        - pattern: flow { $$$ }
+        - pattern: flow<$T> { $$$ }
+---
+id: kt-sequential-hot-collects
+language: kotlin
+severity: warning
+message: '[FLOW-19]狀態流/事件流不會結束,前一個 collect 之後的 collect 永遠不會執行;改成每條各自 launch,或用 combine/merge'
+rule:
+  all:
+    - kind: call_expression
+    - any:
+        - pattern: $A.collect { $$$ }
+        - pattern: $A.collect($$$)
+        - pattern: $A.collectLatest { $$$ }
+    - inside:
+        kind: statements
+    - follows:
+        stopBy: end
+        kind: call_expression
+        regex: '(?i)^[\w.?]*(state|event|effect)s?(flow)?\s*\.\s*(collect|collectLatest)\b'
+---
+id: kt-stateflow-noop-operator
+language: kotlin
+severity: warning
+message: '[FLOW-21]對 StateFlow 套 distinctUntilChanged/flowOn/conflate/cancellable 沒有效果;改成拿掉,要換上游執行緒就在 stateIn 之前 .flowOn(io)'
+rule:
+  any:
+    - pattern: $S.distinctUntilChanged()
+    - pattern: $S.flowOn($$$)
+    - pattern: $S.conflate()
+    - pattern: $S.cancellable()
+constraints:
+  S:
+    regex: '(?is)(^[\w.]*state(flow)?$)|(\.asStateFlow\(\)$)|(\.stateIn\(.*\)$)'
+---
+id: kt-consumeasflow-as-property
+language: kotlin
+severity: warning
+message: '[FLOW-28]consumeAsFlow() 只能收集一次,放在屬性上被重新訂閱就丟 IllegalStateException;多處收集改用 receiveAsFlow() 或 SharedFlow'
+rule:
+  pattern: $C.consumeAsFlow()
+  inside:
+    stopBy: end
+    kind: property_declaration
+    inside:
+      kind: class_body
+---
+id: kt-flow-catch-before-oneach
+language: kotlin
+severity: warning
+message: '[FLOW-11].catch 只接上游,放在 onEach 之前接不到 onEach 丟的例外;改成 .catch 放在所有會丟例外的中間運算子之後'
+rule:
+  any:
+    - pattern: $F.catch { $$$ }.onEach { $$$ }
+    - pattern: $F.catch { $$$ }.onEach($$$)
+  not:
+    inside:
+      pattern: $Y.catch { $$$ }
+      stopBy: end
+---
+id: kt-nested-collect
+language: kotlin
+severity: warning
+message: '[FLOW-1]collect 裡又 collect,內層永不結束、外層新值卡住,畫面只反映部分來源;改用 combine(a, b) { x, y -> … }'
+rule:
+  any:
+    - pattern: $B.collect { $$$ }
+    - pattern: $B.collectLatest { $$$ }
+  inside:
+    any:
+      - pattern: $A.collect { $$$ }
+      - pattern: $A.collectLatest { $$$ }
+    # 內外層之間隔了 launch/async 就是另開協程,不卡外層;往上找到它就停
+    stopBy:
+      kind: call_expression
+      regex: '^(\w+\.)?(launch|async)\s*[({]'
+---
+id: kt-withcontext-in-flow
+language: kotlin
+severity: error
+message: '[FLOW-4]flow { } 裡用 withContext 換執行緒,執行期丟 Flow invariant is violated;改用 flow { emit(load()) }.flowOn(io)'
+rule:
+  pattern: withContext($$$)
+  has:
+    stopBy: end
+    any:
+      - pattern: emit($$$)
+      - pattern: emitAll($$$)
+  inside:
+    any:
+      - pattern: flow { $$$ }
+      - pattern: flow<$T> { $$$ }
+    stopBy: end

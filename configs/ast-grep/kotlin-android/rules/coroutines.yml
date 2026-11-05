@@ -1,0 +1,468 @@
+id: kt-try-wraps-launch
+language: kotlin
+severity: error
+message: '[CO-7]try/catch 包在 launch 外面接不到協程裡的例外(launch 立刻回傳);改成 launch { try { … } catch (e: IOException) { … } }'
+rule:
+  any:
+    - pattern: $S.launch { $$$ }
+    - pattern: $S.launch($$$) { $$$ }
+    - pattern: launch { $$$ }
+    - pattern: launch($$$) { $$$ }
+  inside:
+    any:
+      - kind: statements
+        inside:
+          kind: try_expression
+      - kind: property_declaration
+        inside:
+          kind: statements
+          inside:
+            kind: try_expression
+---
+id: kt-handler-on-child-or-async
+language: kotlin
+severity: warning
+message: '[CO-9]CoroutineExceptionHandler 裝在子協程或 async 上不會生效;改成只裝在根協程 scope.launch(handler) 或 scope 本身,async 在 await() 外 try'
+rule:
+  all:
+    - any:
+        - all:
+            - any:
+                - pattern: launch($$$) { $$$ }
+                - pattern: $S.launch($$$) { $$$ }
+            - inside:
+                stopBy: end
+                any:
+                  - pattern: launch { $$$ }
+                  - pattern: launch($$$) { $$$ }
+                  - pattern: $P.launch { $$$ }
+                  - pattern: $P.launch($$$) { $$$ }
+                  - pattern: async { $$$ }
+                  - pattern: async($$$) { $$$ }
+                  - pattern: $P.async { $$$ }
+                  - pattern: $P.async($$$) { $$$ }
+                  - pattern: coroutineScope { $$$ }
+                  - pattern: withContext($$$) { $$$ }
+        - pattern: async($$$) { $$$ }
+        - pattern: $S.async($$$) { $$$ }
+    - has:
+        kind: call_suffix
+        has:
+          kind: value_arguments
+          has:
+            kind: value_argument
+            regex: '(?i)handler|CoroutineExceptionHandler'
+    - not:
+        inside:
+          stopBy: end
+          pattern: supervisorScope { $$$ }
+---
+id: kt-supervisor-child-no-try
+language: kotlin
+severity: warning
+message: '[CO-11]supervisorScope 子協程失敗不往上傳,自己沒 try 也沒 handler 就崩潰;改成每個子協程 launch { try { … } catch … },或 scope 帶 handler'
+rule:
+  all:
+    - any:
+        - pattern: launch { $$$ }
+        - pattern: launch($$$) { $$$ }
+    - inside:
+        kind: statements
+        inside:
+          kind: lambda_literal
+          inside:
+            kind: annotated_lambda
+            inside:
+              kind: call_suffix
+              inside:
+                pattern: supervisorScope { $$$ }
+    - not:
+        any:
+          - has:
+              stopBy: end
+              kind: try_expression
+          - has:
+              stopBy: end
+              pattern: runCatching { $$$ }
+          - has:
+              kind: call_suffix
+              has:
+                kind: value_arguments
+                has:
+                  kind: value_argument
+                  regex: '(?i)handler'
+---
+id: kt-long-lived-scope-plain-job
+language: kotlin
+severity: warning
+message: '[CO-12]長壽 scope 沒用 SupervisorJob,任一子協程失敗會取消整個 scope、之後 launch 全靜默不跑;改用 CoroutineScope(SupervisorJob() + io)'
+rule:
+  kind: property_declaration
+  inside:
+    kind: class_body
+  has:
+    stopBy: end
+    pattern: CoroutineScope($$$)
+  not:
+    any:
+      - has:
+          stopBy: end
+          kind: simple_identifier
+          regex: ^(SupervisorJob|coroutineContext)$
+      # SupervisorJob 先存進同類別的屬性再組 scope;這個 scope 要引用到那個屬性名才算(代碼審 r2 規則B Finding 8)
+      - all:
+          - inside:
+              kind: class_body
+              has:
+                kind: property_declaration
+                regex: '=\s*SupervisorJob\('
+                has:
+                  kind: variable_declaration
+                  has:
+                    kind: simple_identifier
+                    pattern: $J
+          - any:
+              - has:
+                  stopBy: end
+                  kind: call_expression
+                  pattern: CoroutineScope($$$)
+                  has:
+                    stopBy: end
+                    kind: simple_identifier
+                    pattern: $J
+              # 用加法接在後面:CoroutineScope(…) + job(CoroutineScope.plus);$J 要是加法的直接運算元(代碼審 r3 規則席 Finding 3)
+              - has:
+                  stopBy: end
+                  kind: additive_expression
+                  all:
+                    - has:
+                        kind: simple_identifier
+                        pattern: $J
+                    - has:
+                        stopBy: end
+                        kind: call_expression
+                        pattern: CoroutineScope($$$)
+---
+id: kt-noncancellable-in-builder
+language: kotlin
+severity: error
+message: '[CO-3]NonCancellable 傳給 launch/async 會切斷父子關係,工作脫離 scope 管理;改成只用在 withContext(NonCancellable) { 清理 },要跑完的交給注入的長壽 scope'
+rule:
+  any:
+    - pattern: launch($$$) { $$$ }
+    - pattern: $S.launch($$$) { $$$ }
+    - pattern: async($$$) { $$$ }
+    - pattern: $S.async($$$) { $$$ }
+    - pattern: launch($$$)
+    - pattern: $S.launch($$$)
+  has:
+    kind: call_suffix
+    has:
+      kind: value_arguments
+      has:
+        kind: value_argument
+        regex: \bNonCancellable\b
+---
+id: kt-oncleared-viewmodelscope
+language: kotlin
+severity: error
+message: '[CO-23]onCleared 時 viewModelScope 已取消,在這裡 launch 的工作不會跑;改用注入的 applicationScope:appScope.launch { save() },或 WorkManager'
+rule:
+  any:
+    - pattern: viewModelScope.launch { $$$ }
+    - pattern: viewModelScope.launch($$$) { $$$ }
+    - pattern: viewModelScope.async { $$$ }
+    - pattern: viewModelScope.async($$$) { $$$ }
+  inside:
+    stopBy: end
+    kind: function_declaration
+    has:
+      kind: simple_identifier
+      regex: ^onCleared$
+---
+id: kt-default-blocking-io
+language: kotlin
+severity: warning
+message: '[CO-28]Dispatchers.Default 只有 CPU 核心數那麼多執行緒,拿來跑阻塞 I/O 會卡住所有計算;阻塞 I/O 改用 Dispatchers.IO(或 IO.limitedParallelism(n))'
+rule:
+  all:
+    - any:
+        - pattern: $F.readText($$$)
+        - pattern: $F.readBytes()
+        - pattern: $F.readLines($$$)
+        - pattern: $F.writeText($$$)
+        - pattern: $F.writeBytes($$$)
+        - pattern: $F.appendText($$$)
+        - pattern: $C.execute()
+        - pattern: $U.openStream()
+        - pattern: FileInputStream($$$)
+        - pattern: FileOutputStream($$$)
+    - inside:
+        stopBy: end
+        kind: call_expression
+        regex: '^(\w+\.)?(launch|async|withContext)\s*\(\s*Dispatchers\.Default\b'
+    - not:
+        inside:
+          stopBy: end
+          kind: call_expression
+          regex: '^(\w+\.)?withContext\s*\(\s*Dispatchers\.IO\b'
+---
+id: kt-dispatcher-not-closed
+language: kotlin
+severity: warning
+message: '[CO-29]newSingleThreadContext/asCoroutineDispatcher 建的執行緒不會自己結束,沒 close() 就洩漏;改用 Dispatchers.IO.limitedParallelism(n)'
+rule:
+  all:
+    - any:
+        - pattern: newSingleThreadContext($$$)
+        - pattern: newFixedThreadPoolContext($$$)
+        # 只管自己當場建的執行緒池;db.queryExecutor 這類借來的 executor 不歸這裡關
+        - all:
+            - pattern: $E.asCoroutineDispatcher()
+            - regex: '^(java\.util\.concurrent\.)?(Executors\.new\w*|\w*ThreadPoolExecutor|ForkJoinPool)\s*\('
+        # 先存進變數再轉:同一個類別或函式裡 val x = Executors.new…(…),再 x.asCoroutineDispatcher()(代碼審 r2 規則B Finding 5);
+        # 名稱要對到那個自己建的變數,db.queryExecutor/transactionExecutor 這類借來的照樣不歸這裡關
+        - all:
+            - pattern: $E.asCoroutineDispatcher()
+            - not:
+                regex: '(queryExecutor|transactionExecutor)'
+            - inside:
+                stopBy: end
+                any:
+                  - kind: class_body
+                  - kind: function_body
+                  - kind: source_file
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has:
+                        kind: variable_declaration
+                        has:
+                          kind: simple_identifier
+                          pattern: $E
+                    - regex: '=\s*(java\.util\.concurrent\.)?(Executors\.new\w*|\w*ThreadPoolExecutor|ForkJoinPool)\s*\('
+    - any:
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_body
+            - not:
+                inside:
+                  stopBy: end
+                  pattern: $X.use { $$$ }
+            - not:
+                inside:
+                  stopBy: end
+                  kind: function_body
+                  has:
+                    stopBy: end
+                    pattern: $Y.close()
+        - all:
+            - inside:
+                kind: property_declaration
+                inside:
+                  kind: class_body
+                  inside:
+                    kind: class_declaration
+                    not:
+                      has:
+                        stopBy: end
+                        pattern: $Y.close()
+            - not:
+                inside:
+                  stopBy: end
+                  kind: function_body
+---
+id: kt-volatile-compound-update
+language: kotlin
+severity: error
+message: '[CO-35]@Volatile 只保證看得到最新值,++ / += 是「讀-改-寫」三步,多協程同時做會掉更新;改用 AtomicInteger.incrementAndGet() 或 Mutex'
+rule:
+  all:
+    - any:
+        - pattern: $N++
+        - pattern: $N--
+        - pattern: ++$N
+        - pattern: --$N
+        - pattern: $N += $V
+        - pattern: $N -= $V
+        - pattern: $N = $N + $V
+    - inside:
+        stopBy: end
+        kind: class_body
+        has:
+          kind: property_declaration
+          all:
+            - has:
+                kind: modifiers
+                has:
+                  kind: annotation
+                  regex: ^@Volatile$
+            - has:
+                kind: variable_declaration
+                has:
+                  kind: simple_identifier
+                  pattern: $N
+    # 放在鎖裡的讀改寫已經互斥
+    - not:
+        inside:
+          stopBy: end
+          any:
+            - pattern: synchronized($$$) { $$$ }
+            - pattern: $MX.withLock { $$$ }
+            - pattern: $MX.withLock($$$) { $$$ }
+---
+id: kt-mutex-lock-no-finally
+language: kotlin
+severity: warning
+message: '[CO-38]lock() 之後沒用 try/finally 保證 unlock,中間丟例外或被取消就永遠鎖住;改用 mutex.withLock { }'
+rule:
+  all:
+    - any:
+        - pattern: $M.lock()
+        - pattern: $M.lock($$$)
+    - inside:
+        kind: statements
+    - not:
+        precedes:
+          stopBy:
+            not:
+              any:
+                - kind: line_comment
+                - kind: multiline_comment
+          kind: try_expression
+    - not:
+        inside:
+          kind: statements
+          inside:
+            kind: try_expression
+            has:
+              kind: finally_block
+              has:
+                stopBy: end
+                pattern: $M.unlock()
+---
+id: kt-suspend-catch-swallows-cancellation
+language: kotlin
+severity: warning
+message: '[CO-2]catch Exception 會連 CancellationException 吞掉,協程取消不了;改成先 catch (e: CancellationException) { throw e }'
+rule:
+  kind: catch_block
+  has:
+    kind: user_type
+    regex: ^(kotlin\.)?(Exception|Throwable)$
+  inside:
+    kind: function_declaration
+    has:
+      kind: modifiers
+      has:
+        regex: ^suspend$
+        stopBy: end
+    stopBy: end
+  not:
+    any:
+      - has:
+          kind: jump_expression
+          regex: ^throw\b
+          stopBy: end
+      - has:
+          pattern: ensureActive()
+          stopBy: end
+      - has:
+          pattern: $C.ensureActive()
+          stopBy: end
+      - follows:
+          kind: catch_block
+          has:
+            kind: user_type
+            regex: CancellationException$
+          stopBy: end
+---
+id: kt-hardcoded-dispatchers-io
+language: kotlin
+severity: warning
+message: '[CO-1]Repository/DataSource 寫死 Dispatchers.IO,測試換不掉執行緒;改成建構子注入 io: CoroutineDispatcher,用 withContext(io)'
+rule:
+  pattern: Dispatchers.IO
+  inside:
+    kind: class_declaration
+    has:
+      kind: type_identifier
+      regex: (Repository|DataSource)(Impl)?$
+    stopBy: end
+  not:
+    inside:
+      kind: class_parameter
+      stopBy: end
+---
+# T13
+id: kt-test-real-time-wait
+language: kotlin
+severity: warning
+message: '[CO-6]測試用真實時間(runBlocking 裡 delay、讀系統時鐘)又慢又不穩;改用 runTest 的虛擬時間 advanceTimeBy/currentTime,或注入 Clock'
+files: ['**/src/test*/**', '**/src/androidTest*/**']
+rule:
+  any:
+    - all:
+        - pattern: delay($$$)
+        - inside:
+            any:
+              - pattern: runBlocking { $$$ }
+              - pattern: runBlocking($$$) { $$$ }
+            stopBy: end
+    - pattern: System.currentTimeMillis()
+    - pattern: System.nanoTime()
+---
+id: kt-unsafe-collection-in-parallel
+language: kotlin
+severity: warning
+message: '[CO-39]多個 Default/IO 協程同時改一般集合或變數,會掉資料或丟 ConcurrentModificationException;改成讓 async 回傳值再 awaitAll() 收集'
+rule:
+  all:
+    - any:
+        - pattern: $L.add($$$)
+        - pattern: $L.addAll($$$)
+        - pattern: $L.put($$$)
+        - pattern: $L.remove($$$)
+        - pattern: $L[$K] = $V
+        - pattern: $L += $V
+    - inside:
+        stopBy: end
+        kind: call_expression
+        regex: '^(\w+\.)?(async|launch)\s*\(\s*Dispatchers\.(Default|IO)\b'
+    - not:
+        inside:
+          stopBy: end
+          any:
+            - pattern: $MX.withLock { $$$ }
+            - pattern: synchronized($$$) { $$$ }
+    - not:
+        inside:
+          stopBy: end
+          kind: call_expression
+          regex: '^(\w+\.)?(async|launch)\s*\(\s*Dispatchers'
+          has:
+            stopBy: end
+            kind: property_declaration
+            has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $L
+    # 執行緒安全的集合(ConcurrentHashMap、CopyOnWrite…、Collections.synchronized…)
+    - not:
+        inside:
+          stopBy: end
+          any:
+            - kind: function_body
+            - kind: class_body
+          has:
+            stopBy: end
+            kind: property_declaration
+            regex: '=\s*(java\.util\.concurrent\.)?(Concurrent\w+|CopyOnWrite\w+|Collections\.synchronized\w+|ConcurrentHashMap\.new\w*)\b'
+            has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $L

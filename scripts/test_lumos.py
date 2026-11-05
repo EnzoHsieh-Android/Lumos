@@ -124915,5 +124915,348 @@ def t_git_partial_clone_keys():
     check("S8 判不了是不是部分複製:回頭條件那支判不了、講原因", why == "git 跑不起來", why)
     check("★對照★ 不是部分複製、有提交:回頭條件那支照常判", m._drift_born_env_err(root) is None, m._drift_born_env_err(root))
 
+
+def t_lint_new_include_test_paths():
+    """[S7] lint_new.include_test_paths 含 kt 時,新增告警閘要掃 src/test/ 底下的 kt 檔
+    (預設照舊排除;值不是字串清單照沒設處理並警告;src/androidTest/ 本來就會掃、不受開關影響)。
+    計劃:Projects/Android協程與API寫法機械檢查標準_計劃 範圍 5。"""
+    import json as _j
+    m = _lng_module()
+
+    def run(cfg_section):
+        root, git = _lng_repo("gctl-lnitp-")
+        helper = Path(tempfile.mkdtemp(prefix="gctl-lnitp-h-"))
+        cmd = _lng_fake_linter(helper, "k.py", [["Thread.sleep", "kt-test-thread-sleep", "[TEST-28] 睡;改用虛擬時間"]])
+        _lng_declare(root, [cmd], ext="kt")
+        if cfg_section is not None:
+            (root / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": cfg_section}), encoding="utf-8")
+        for rel in ("app/src/test/kotlin/A.kt", "app/src/androidTest/kotlin/B.kt"):
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("fun a() {}\n", encoding="utf-8")
+        git("add", "-A"); git("commit", "-m", "base")
+        base = git("rev-parse", "HEAD").stdout.strip()
+        for rel in ("app/src/test/kotlin/A.kt", "app/src/androidTest/kotlin/B.kt"):
+            (root / rel).write_text("fun a() { Thread.sleep(10) }\n", encoding="utf-8")
+        git("add", "-A"); git("commit", "-m", "壞")
+        v = m._lint_new_verdict(root, f"{base}..HEAD")
+        return v, sorted(c["file"] for c in v["new"])
+
+    v, files = run({"include_test_paths": ["kt"]})
+    check("S7 開了 kt:src/test/ 底下的新增告警被擋", v["blocked"] is True and "app/src/test/kotlin/A.kt" in files, str(files))
+    check("S7 開了 kt:src/androidTest/ 照樣會掃", "app/src/androidTest/kotlin/B.kt" in files, str(files))
+    v, files = run(None)
+    check("S7 沒設:src/test/ 照舊不掃", "app/src/test/kotlin/A.kt" not in files, str(files))
+    check("★對照★ 沒設:src/androidTest/ 本來就會掃", "app/src/androidTest/kotlin/B.kt" in files, str(files))
+    v, files = run({"include_test_paths": "kt"})
+    check("S7 值不是字串清單:照沒設處理", "app/src/test/kotlin/A.kt" not in files, str(files))
+    check("S7 值不是字串清單:印警告", any("include_test_paths" in w for w in v["warnings"]), str(v["warnings"]))
+    v, files = run({"include_test_paths": ["py"]})
+    check("S7 只開別的副檔名:kt 測試檔照舊不掃", "app/src/test/kotlin/A.kt" not in files, str(files))
+    cfg = m._lint_new_config(Path(tempfile.mkdtemp()), text=_j.dumps({"lint_new": {"include_test_paths": ["KT", ".kt"]}}).encode(), from_snapshot=True)
+    check("S7 從快照讀設定也認得這個鍵(大小寫與前導點正規化)", cfg.get("include_test_paths") == frozenset({"kt"}), str(cfg.get("include_test_paths")))
+
+
+# ── Kotlin 規則包與型錄(Projects/Android協程與API寫法機械檢查標準_計劃 S1–S3)──────────────
+_KTPACK_REL = Path("configs") / "ast-grep" / "kotlin-android"
+_KTCAT_REL = Path("skills") / "kotlin-idioms" / "checks-catalog.md"
+
+
+def _ktpack(copy=False, under=""):
+    """載入規則包自檢程式當模組。copy=True:把規則包與型錄複製到暫存目錄(同樣的相對位置),
+    模組改指向複本,給「改壞一份看檢查抓不抓得到」用,不碰真檔。"""
+    import importlib.util as U
+    import shutil as _sh
+    repo = Path(GRAPHCTL).resolve().parents[1]
+    src = repo / _KTPACK_REL / "check.py"
+    spec = U.spec_from_file_location("ktpack_check", src)
+    m = U.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    if copy:
+        root = Path(tempfile.mkdtemp(prefix="gctl-ktpack-")) / under if under else Path(tempfile.mkdtemp(prefix="gctl-ktpack-"))
+        _sh.copytree(repo / _KTPACK_REL, root / _KTPACK_REL)
+        (root / _KTCAT_REL).parent.mkdir(parents=True, exist_ok=True)
+        _sh.copy(repo / _KTCAT_REL, root / _KTCAT_REL)
+        m.HERE = root / _KTPACK_REL
+        m.CATALOG = root / _KTCAT_REL
+        m.TEST_ONLY_ANCESTOR = m.HERE / "samples" / "ancestor-named-test"
+    return m
+
+
+def _ktpack_sg():
+    """找 ast-grep;CI 一定要有(計劃 S1:CI 裝釘版本 0.51.1,不略過),本機沒有回 None。"""
+    import os as _os
+    import shutil as _sh
+    sg = _os.environ.get("LUMOS_AST_GREP") or _sh.which("ast-grep")
+    if not sg and _os.environ.get("CI"):
+        check("CI 上一定要有 ast-grep(釘 0.51.1)", False, "PATH 找不到 ast-grep")
+    return sg   # 本機沒有回 None;呼叫端照 detekt 鄰居的做法先跑靜態那半再印沒驗到(_SrcOnly 專指缺來源 repo 的產物)
+
+
+def _ktpack_edit(path, old, new):
+    t = Path(path).read_text(encoding="utf-8")
+    assert old in t, f"{path} 找不到要改的字:{old[:40]}"
+    Path(path).write_text(t.replace(old, new, 1), encoding="utf-8")
+
+
+def t_kotlin_rulepack_samples():
+    """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
+    只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""
+    import shlex as _shlex
+    sg = _ktpack_sg()
+    m = _ktpack()
+    # files: 區塊判讀(不需要 ast-grep;代碼審 r3 正確性席):頂格清單要認得、頂格註解不算區塊內容
+    top_list = "id: x\nfiles:\n- '**/src/test*/**'\nrule:\n  pattern: a\n"
+    top_cmt = "id: x\nfiles:\n  - '**/src/test*/**'\n# 不掃 src/main\nrule:\n  pattern: a\n"
+    check("★改壞★ files 頂格清單也算只掃測試碼", m._files_block_is_test_only(top_list) is True, "")
+    check("★改壞★ files 區塊後面的頂格註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(top_cmt) is True, "")
+    check("★對照★ files 真的列了 src/main 不算只掃測試碼",
+          m._files_block_is_test_only("files:\n  - '**/src/test*/**'\n  - '**/src/main/**'\nrule:\n  pattern: a\n") is False, "")
+    if not sg:
+        cat_ids, _t = m.catalog_ids()
+        check("S1 靜態那半:規則訊息與型錄格式全過", not m.message_problems(m.load_rules(), cat_ids) and not m.catalog_problems(m.load_rules()), "")
+        print("  (本機沒有 ast-grep,只跑了靜態那半;CI 裝了 0.51.1 會跑樣本)")
+        return
+    rules, probs = m.check(sg)
+    sample_probs = [p for p in probs if any(k in p[1] for k in ("壞例", "好例", "樣本", "載入", "祖先"))]
+    check("S1 真規則包的樣本與載入條數全過", not sample_probs, str(sample_probs[:5]))
+    check("S1 規則包至少一百條(防整包被清空還說全過)", len(rules) >= 100, str(len(rules)))
+    # ── 改壞複本:每一道檢查各自要紅(代碼審 r1:原本的改壞字串在規則改寫後對不上,整支例外;另補沒改壞過的幾道)──
+    mc = _ktpack(copy=True)
+    rid = "kt-sequential-independent-await"
+    next((mc.HERE / "samples" / "bad" / rid).rglob("*.kt")).write_text("package bad\n", encoding="utf-8")
+    fp_rid = "kt-okhttp-no-calltimeout"      # 把它自己的壞例原樣抄一份進好例目錄:一定誤報,不受規則日後收窄影響
+    bad_src = next((mc.HERE / "samples" / "bad" / fp_rid).rglob("*.kt"))
+    gdir = mc.HERE / "samples" / "good" / fp_rid / "src" / "main" / "kotlin"
+    gdir.mkdir(parents=True, exist_ok=True)
+    (gdir / "CopiedBad.kt").write_text(bad_src.read_text(encoding="utf-8"), encoding="utf-8")
+    # review-fp- 豁免只給語意覆核級規則:會擋的規則的好例就算檔名叫 review-fp- 也要報誤報(代碼審 r2 正確性席)
+    fp2 = "kt-retrofit-body-bang"
+    b2 = next((mc.HERE / "samples" / "bad" / fp2).rglob("*.kt"))
+    g2 = mc.HERE / "samples" / "good" / fp2 / "src" / "main" / "kotlin"
+    g2.mkdir(parents=True, exist_ok=True)
+    (g2 / "review-fp-sneaky.kt").write_text(b2.read_text(encoding="utf-8"), encoding="utf-8")
+    one = next((mc.HERE / "samples" / "good" / "kt-retrofit-body-bang").rglob("*.kt"))
+    one.write_text("fun onlyOne() = 1\n", encoding="utf-8")
+    t_rules = [r for r in mc.load_rules() if r["test_only"]]
+    check("★前提★ 規則包裡有只掃測試碼的規則", bool(t_rules), "")
+    f = mc.HERE / t_rules[0]["dir"] / t_rules[0]["file"]
+    f.write_text(f.read_text(encoding="utf-8").replace("**/src/test*/**", "**/test/**"), encoding="utf-8")
+    _r, cp = mc.check(sg)
+    txt = "\n".join(f"{a}: {b}" for a, b in cp)
+    check("★改壞★ 壞例清空要報命中不足", f"{rid}: 壞例只命中 0 處" in txt, txt[:300])
+    check("★改壞★ 好例混入壞寫法要報誤報", f"{fp_rid}: 好例誤報" in txt, txt[:300])
+    check("★改壞★ 會擋的規則的 review-fp- 好例照樣要報誤報", f"{fp2}: 好例誤報" in txt, txt[:300])
+    check("★改壞★ 好例只剩一段要報", "kt-retrofit-body-bang: 好例至少要兩段" in txt, txt[:300])
+    check("★改壞★ 路徑過濾沒錨在 src/ 要報祖先目錄命中", "祖先目錄叫 test" in txt, txt[:300])
+    # id 重複另開一份複本:重複 id 會讓 ast-grep 整份拒載,蓋掉同一份複本上的其他改壞
+    md = _ktpack(copy=True)
+    (md.HERE / "rules" / "zz-dup.yml").write_text(
+        "id: kt-retrofit-body-bang\nlanguage: kotlin\nseverity: error\nmessage: '[API-15] 探針;改用 isSuccessful'\nrule:\n  pattern: probeOnly()\n",
+        encoding="utf-8")
+    _r, cp = md.check(sg)
+    check("★改壞★ id 重複要報", any(b == "id 重複:kt-retrofit-body-bang" for _a, b in cp), str(cp[:3]))
+    # 掃祖先目錄樣本那一次失敗,不准吞成零命中(代碼審 r1 邊界席重現)
+    mf = _ktpack(copy=True)
+    wrap = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+    wrap.write_text("#!/bin/sh\ncase \"$*\" in *ancestor-named-test*) exit 2;; esac\nexec " + _shlex.quote(sg) + " \"$@\"\n", encoding="utf-8")
+    wrap.chmod(0o755)
+    _r, cp = mf.check(str(wrap))
+    check("★改壞★ 掃祖先目錄樣本失敗要報跑不起來", any("ancestor-named-test 跑不起來" in b for _a, b in cp), str(cp[:3]))
+    # 掃描逾時:第一次逾時之後剩下的不再各等滿上限(代碼審 r2 邊界席)
+    import time as _time
+    mt = _ktpack(copy=True)
+    mt.SCAN_TIMEOUT = 1
+    slow = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+    slow.write_text("#!/bin/sh\nsleep 5\n", encoding="utf-8")
+    slow.chmod(0o755)
+    t0 = _time.monotonic()
+    _r, cp = mt.check(str(slow))
+    took = _time.monotonic() - t0
+    check("★改壞★ 掃描逾時要報跑不起來", any("跑不起來" in b for _a, b in cp), str(cp[:3]))
+    check("★改壞★ 載入條數那步逾時一次之後不再逐次等滿(整次在 2.5 秒內)", took < 2.5, f"{took:.1f}s")
+    # 第二條路:讀載入條數立刻回、掃描才卡住 → 由掃描自己設旗標(代碼審 r3 正確性席)
+    mt2 = _ktpack(copy=True)
+    mt2.SCAN_TIMEOUT = 1
+    slow2 = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+    slow2.write_text("#!/bin/sh\ncase \"$*\" in *--inspect*) exit 0;; esac\nsleep 5\n", encoding="utf-8")
+    slow2.chmod(0o755)
+    t0 = _time.monotonic()
+    _r, cp = mt2.check(str(slow2))
+    took = _time.monotonic() - t0
+    check("★改壞★ 掃描那步逾時一次之後不再逐次等滿(整次在 2.5 秒內)", took < 2.5, f"{took:.1f}s")
+    check("讀不到載入條數要講原因,不印「載入 None 條」",
+          any("讀不到載入條數" in b for _a, b in cp) and not any("None" in b for _a, b in cp), str(cp[:3]))
+    # 下一次自我檢查要重設逾時旗標,不能沿用上一次的
+    mt2.SCAN_TIMEOUT = 120
+    _r, cp = mt2.check(sg)
+    check("★改壞★ 上一次逾時不影響下一次自我檢查", not any("跑不起來" in b or "讀不到" in b for _a, b in cp), str(cp[:3]))
+    # 規則目錄全空不准判通過
+    me = _ktpack(copy=True)
+    for d in ("rules", "rules-review", "rules-hints"):
+        for y in (me.HERE / d).glob("*.yml"):
+            y.unlink()
+    _r, cp = me.check(sg)
+    check("★改壞★ 一條規則都沒讀到要報", any("一條規則都沒讀到" in b for _a, b in cp), str(cp[:3]))
+    # 規則包放在祖先目錄叫 good 的地方:命中照樣歸對規則(代碼審 r1 通才、正確性席)
+    mg = _ktpack(copy=True, under="good/bad")
+    _r, cp = mg.check(sg)
+    check("祖先目錄叫 good/bad 時樣本歸屬照樣對", not [p for p in cp if "壞例" in p[1] or "好例誤報" in p[1]], str(cp[:3]))
+
+def t_kotlin_rulepack_messages_cite_catalog():
+    """[S2] 每條規則訊息以型錄裡存在的 [編號] 開頭、≤120 字、有分號與改用/改成、不含 $;id 唯一;
+    severity 只三種;引用出處不全的列只准 hint 級。改壞的訊息要被逐條抓到。"""
+    m = _ktpack()
+    rules = m.load_rules()
+    cat_ids, _t = m.catalog_ids()
+    probs = m.message_problems(rules, cat_ids)
+    check("S2 真規則包的訊息格式全過", not probs, str(probs[:5]))
+    ids = [r["id"] for r in rules]
+    check("S2 id 唯一", len(ids) == len(set(ids)), str(len(ids)))
+    fake = [
+        {"id": "kt-a", "severity": "error", "dir": "rules", "message": "[API-3] 太長;改用 launch" + "字" * 120},
+        {"id": "kt-b", "severity": "error", "dir": "rules", "message": "[API-3] 有錢號 $X;改用 launch"},
+        {"id": "kt-c", "severity": "error", "dir": "rules", "message": "[API-3] 沒有分號改用 launch"},
+        {"id": "kt-d", "severity": "error", "dir": "rules", "message": "[NOPE-9] 編號不存在;改用 launch"},
+        {"id": "kt-h", "severity": "error", "dir": "rules", "message": "[D-1] 決策表列編號不是規則該引的;改用 launch"},
+        {"id": "kt-e", "severity": "critical", "dir": "rules", "message": "[API-3] 等級不對;改用 launch"},
+        {"id": "kt-f", "severity": "hint", "dir": "rules", "message": "[API-3] hint 放錯目錄;改用 launch"},
+        {"id": "kt-i", "severity": "info", "dir": "rules", "message": "[API-3] 語意覆核級放進會擋的目錄;改用 launch"},
+        {"id": "kt-j", "severity": "info", "dir": "rules-hints", "message": "[API-3] 語意覆核級放進提示級目錄;改用 launch"},
+        {"id": "x-g", "severity": "error", "dir": "rules", "message": "[API-3] 前綴不對;改用 launch"},
+    ]
+    got = m.message_problems(fake, cat_ids)
+    want = {"kt-a": "超過", "kt-b": "$", "kt-c": "分號", "kt-d": "不在型錄", "kt-h": "不在型錄", "kt-e": "severity", "kt-f": "只收", "kt-i": "只收", "kt-j": "只收", "x-g": "前綴"}
+    for rid, key in want.items():
+        check(f"★改壞★ {rid} 要被抓到({key})", any(a == rid and key in b for a, b in got), str([p for p in got if p[0] == rid]))
+    weak = next((r for r in m.catalog_ids()[1].splitlines() if "(出處不全)" in r and r.startswith("| ")), None)
+    if weak:
+        wid = weak.split("|")[1].strip()
+        p2 = m.catalog_problems([{"id": "kt-w", "severity": "error", "message": f"[{wid}] 測;改用 x"}])
+        check("★改壞★ 非 hint 規則引用出處不全的列要被抓到", any(a == "kt-w" for a, _b in p2), str(p2[-3:]))
+
+
+def t_kotlin_catalog_rows_wired():
+    """[S3] 型錄每列欄位數對、編號唯一、標準寫法/接電方式/通電批次非空;形狀類有告警或正向約束;
+    語意類有表態對程式、沒標人裁的有盲判席;來源有網址或縮寫且不是未核對;決策表列編號連號、
+    觸發字不含常用字、對應檢查存在、每條語意列都被收;〈待查證〉節不在檢查範圍。改壞複本要逐項抓到。"""
+    m = _ktpack()
+    probs = m.catalog_problems()
+    check("S3 真型錄格式全過", not probs, f"{len(probs)} 個:{probs[:5]}")
+    mc = _ktpack(copy=True)
+    t = mc.CATALOG.read_text(encoding="utf-8")
+    lines = t.split("\n")
+    i_dt = next(i for i, ln in enumerate(lines) if ln.startswith("## 情境決策表"))
+    i_pend = next(i for i, ln in enumerate(lines) if ln.startswith("## 待查證"))
+    main_rows = [i for i, ln in enumerate(lines[:i_dt]) if mc._MAIN_ROW_RE.match(ln)]
+    sem_i = next(i for i in main_rows if mc._cells(lines[i])[7].startswith("語意") and "(人裁)" not in lines[i])
+    shp_i = next(i for i in main_rows if mc._cells(lines[i])[7].startswith("形狀"))
+    dt_rows = [i for i in range(i_dt, i_pend) if lines[i].startswith("| D-")]
+    sem_id = mc._cells(lines[sem_i])[0]
+    c = mc._cells(lines[sem_i]); c[8] = "表態對程式"; lines[sem_i] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[shp_i]); shp_id = c[0]; c[11] = "無網址(一般知識)"; lines[shp_i] = "| " + " | ".join(c) + " |"
+    shp2_i = next(i for i in main_rows if i != shp_i and mc._cells(lines[i])[7].startswith("形狀") and "(出處不全)" not in lines[i])
+    c = mc._cells(lines[shp2_i]); tbd_id = c[0]; c[11] = "待補 TBD"; lines[shp2_i] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[dt_rows[0]]); c[4] = c[4] + "、map"; lines[dt_rows[0]] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[dt_rows[1]]); c[0] = "D-99"; lines[dt_rows[1]] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[dt_rows[2]]); none_id = c[0]; c[4] = "\uff08無\uff09"; lines[dt_rows[2]] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[dt_rows[3]]); empty_id = c[0]; c[4] = ""; lines[dt_rows[3]] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[dt_rows[4]]); mix_id = c[0]; c[4] = "(無\uff09、foo"; lines[dt_rows[4]] = "| " + " | ".join(c) + " |"
+    lines.insert(main_rows[0] + 1, lines[main_rows[0]])           # 編號重複
+    pend_row = next(i for i in range(i_pend + 1, len(lines)) if lines[i].startswith("| ") and not lines[i].startswith("| 編號"))
+    lines[pend_row] = lines[pend_row] + " 多一格 |"                  # 待查證節壞掉不算
+    mc.CATALOG.write_text("\n".join(lines), encoding="utf-8")
+    got = mc.catalog_problems()
+    txt = "\n".join(f"{a}: {b}" for a, b in got)
+    check("★改壞★ 語意列沒盲判席要抓到", f"{sem_id}: 語意類(沒標人裁)要有「盲判席」" in txt, txt[:400])
+    check("★改壞★ 來源寫無網址要抓到", f"{shp_id}: 來源還寫著" in txt, txt[:400])
+    check("★改壞★ 來源只寫大寫佔位字(沒登記的縮寫)要抓到", f"{tbd_id}: 來源沒有網址或來源縮寫" in txt, txt[:400])
+    check("★改壞★ 觸發字含常用字要抓到", "觸發字含常用字:map" in txt, txt[:400])
+    check("★改壞★ 列編號不連號要抓到", "列編號要從 D-1 連號" in txt, txt[:400])
+    check("觸發字寫「(無)」是刻意不設,不報", not any(a == none_id and "觸發字" in b for a, b in got), txt[:400])
+    check("★改壞★ 觸發字空白(沒寫無)要報", any(a == empty_id and "觸發字不准空" in b for a, b in got), txt[:400])
+    check("★改壞★ 「(無)」跟其他觸發字並列要報(括號全形半形混寫也認)", any(a == mix_id and "不能跟其他觸發字並列" in b for a, b in got), txt[:400])
+    # 「(無)」解析成空清單(第二、三批讀觸發字時才不會把「(無)」當成一個字去比對)
+    for cell in ("(無)", "\uff08無\uff09", "(無\uff09", "\uff08無)"):
+        check(f"「{cell}」解析成刻意不設", m.dt_triggers(cell) == ([], None), str(m.dt_triggers(cell)))
+    check("一般觸發字照常拆開", m.dt_triggers("collectAsState、`stateIn`") == (["collectAsState", "stateIn"], None), str(m.dt_triggers("collectAsState、`stateIn`")))
+    check("★改壞★ 編號重複要抓到", "編號重複" in txt, txt[:400])
+    check("★對照★ 待查證節的列不受檢查", "多一格" not in txt and not any("待查證" in b for _a, b in got), txt[:400])
+    # 缺〈來源縮寫〉節:記一筆、其他檢查照跑(代碼審 r3 正確性、邊界席)
+    ms = _ktpack(copy=True)
+    t2 = ms.CATALOG.read_text(encoding="utf-8").replace("\n## 來源縮寫", "\n## 出處簡稱", 1)
+    t2l = t2.split("\n")
+    r0 = next(i for i, ln in enumerate(t2l) if ms._MAIN_ROW_RE.match(ln))
+    t2l.insert(r0 + 1, t2l[r0])
+    ms.CATALOG.write_text("\n".join(t2l), encoding="utf-8")
+    got2 = ms.catalog_problems()
+    check("★改壞★ 缺〈來源縮寫〉節要報", any("找不到〈來源縮寫〉節" in b for _a, b in got2), str(got2[:3]))
+    check("★改壞★ 缺〈來源縮寫〉節時其他問題照樣報齊", any("編號重複" in b for _a, b in got2), str(got2[:3]))
+
+
+def t_lint_new_astgrep_kotlin_two_files():
+    """[S4] 照範本宣告真的規則包、一次提交改兩支 kt 檔,其中一支新增一處 `response.body()!!`、
+    基準版另一支已有一處時,新增告警閘只擋新增那一處,訊息帶型錄編號。用真的 ast-grep(CI 一定有)。"""
+    import re
+    import shlex as _shlex
+    sg = _ktpack_sg()
+    m = _lng_module()
+    pack = Path(GRAPHCTL).resolve().parents[1] / _KTPACK_REL / "sgconfig.yml"
+    if not sg:
+        check("S4 靜態那半:範本指向的規則包設定存在", pack.is_file(), str(pack))
+        print("  (本機沒有 ast-grep,只跑了靜態那半;CI 裝了 0.51.1 會跑)")
+        return
+    root, git = _lng_repo("gctl-lnkt-")
+    cmd = f"{_shlex.quote(sg)} scan --config {_shlex.quote(str(pack))} --format sarif {{LINT_FILES}} > {{LINT_SARIF_OUT}}"
+    _lng_declare(root, [cmd], ext="kt")
+    src = root / "app" / "src" / "main" / "kotlin"
+    src.mkdir(parents=True, exist_ok=True)
+    old = ("suspend fun loadUser(api: Api): User {\n    val response = api.user()\n"
+           "    return response.body()!!\n}\n")
+    (src / "A.kt").write_text(old, encoding="utf-8")
+    (src / "B.kt").write_text("fun ok() = 1\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (src / "A.kt").write_text(old + "\nfun touched() = 2\n", encoding="utf-8")
+    (src / "B.kt").write_text("fun ok() = 1\n\nsuspend fun loadFeed(api: Api): Feed {\n"
+                              "    val response = api.feed()\n    return response.body()!!\n}\n", encoding="utf-8")
+    git("add", "-A"); git("commit", "-m", "新增一處")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    files = sorted(c["file"] for c in v["new"])
+    check("S4 擋下", v["blocked"] is True, str(v.get("reason")))
+    check("S4 只擋新增那一處(B.kt),基準版已有的 A.kt 不擋", files == ["app/src/main/kotlin/B.kt"], str(files))
+    check("S4 訊息帶型錄編號", all(re.match(r"\[[A-Z]+-\d+\]", c.get("message") or "") for c in v["new"]), str(v["new"][:1]))
+    check("★對照★ 命令真的跑了(不是環境不可用放行)", v["ran"] and not v["autopass"], str(v.get("autopass_reason")))
+
+
+def t_lint_block_message_shows_fix():
+    """擋下訊息要把規則訊息印到 120 字:規則包訊息「[編號] 錯在哪;改用 <修法>」的修法在後半段,
+    截在 70 字會把修法切掉(2026-11-05 實驗專案實跑看到)。"""
+    import contextlib
+    import io
+    m = _lng_module()
+    msg = "[API-15]response.body()!! 沒先看 isSuccessful,伺服器回 4xx/5xx 時會崩潰;改成先判 isSuccessful 再取 body,失敗走 errorBody"
+    check("★前提★ 這條訊息超過 70 字、不超過 120 字", 70 < len(msg) <= 120, str(len(msg)))
+    v = {"lint_new": {"new": [{"file": "A.kt", "line": 3, "rule": "kt-retrofit-body-bang", "message": msg}]}}
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        m._cl_say_lint_block("1 條新增告警", v, "main", "0" * 40)
+    check("擋下訊息印出修法(訊息全文)", msg in buf.getvalue(), buf.getvalue()[:300])
+
+
+def t_rulepack_sample_dir_skips_risk_scan():
+    """規則包樣本故意埋壞寫法:風險分級、棧別題、新增告警閘(共用 _stack_changed_ok)都不把它們當產品碼,
+    每支檔有家也用本 repo 設定的 node_home.ignore 略過;一般 kt 檔與消費專案裡長得像的路徑照掃。"""
+    import json as _j
+    m = _lng_module()
+    smp = "configs/ast-grep/kotlin-android/samples/bad/kt-x/src/main/kotlin/X.kt"
+    check("樣本不當產品碼掃", m._stack_changed_ok(smp) is False, smp)
+    check("★對照★ 一般 kt 檔照掃", m._stack_changed_ok("app/src/main/kotlin/X.kt") is True, "")
+    check("★對照★ 別的 samples 目錄照掃(只認規則包那一層)", m._stack_changed_ok("app/samples/bad/X.kt") is True, "")
+    cfg = _j.loads((Path(GRAPHCTL).resolve().parents[1] / ".lumos" / "config.json").read_text(encoding="utf-8"))
+    ig = (cfg.get("node_home") or {}).get("ignore") or []
+    check("每支檔有家略過規則包樣本", m._cochange_excluded(smp, ig), str(ig))
+    check("★對照★ 規則包自檢程式本身不略過(它要有家)", not m._cochange_excluded("configs/ast-grep/kotlin-android/check.py", ig), str(ig))
+
 if __name__ == "__main__":
     sys.exit(main())

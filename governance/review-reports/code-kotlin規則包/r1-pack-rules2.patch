@@ -1,0 +1,1541 @@
+diff --git a/configs/ast-grep/kotlin-android/rules/coroutines.yml b/configs/ast-grep/kotlin-android/rules/coroutines.yml
+new file mode 100644
+index 000000000..4f4a6e2c4
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/rules/coroutines.yml
+@@ -0,0 +1,410 @@
++id: kt-try-wraps-launch
++language: kotlin
++severity: error
++message: '[CO-7]try/catch 包在 launch 外面接不到協程裡的例外(launch 立刻回傳);改成 launch { try { … } catch (e: IOException) { … } }'
++rule:
++  any:
++    - pattern: $S.launch { $$$ }
++    - pattern: $S.launch($$$) { $$$ }
++    - pattern: launch { $$$ }
++    - pattern: launch($$$) { $$$ }
++  inside:
++    any:
++      - kind: statements
++        inside:
++          kind: try_expression
++      - kind: property_declaration
++        inside:
++          kind: statements
++          inside:
++            kind: try_expression
++---
++id: kt-handler-on-child-or-async
++language: kotlin
++severity: warning
++message: '[CO-9]CoroutineExceptionHandler 裝在子協程或 async 上不會生效;改成只裝在根協程 scope.launch(handler) 或 scope 本身,async 在 await() 外 try'
++rule:
++  all:
++    - any:
++        - all:
++            - any:
++                - pattern: launch($$$) { $$$ }
++                - pattern: $S.launch($$$) { $$$ }
++            - inside:
++                stopBy: end
++                any:
++                  - pattern: launch { $$$ }
++                  - pattern: launch($$$) { $$$ }
++                  - pattern: $P.launch { $$$ }
++                  - pattern: $P.launch($$$) { $$$ }
++                  - pattern: async { $$$ }
++                  - pattern: async($$$) { $$$ }
++                  - pattern: $P.async { $$$ }
++                  - pattern: $P.async($$$) { $$$ }
++                  - pattern: coroutineScope { $$$ }
++                  - pattern: withContext($$$) { $$$ }
++        - pattern: async($$$) { $$$ }
++        - pattern: $S.async($$$) { $$$ }
++    - has:
++        kind: call_suffix
++        has:
++          kind: value_arguments
++          has:
++            kind: value_argument
++            regex: '(?i)handler|CoroutineExceptionHandler'
++    - not:
++        inside:
++          stopBy: end
++          pattern: supervisorScope { $$$ }
++---
++id: kt-supervisor-child-no-try
++language: kotlin
++severity: warning
++message: '[CO-11]supervisorScope 子協程失敗不往上傳,自己沒 try 也沒 handler 就崩潰;改成每個子協程 launch { try { … } catch … },或 scope 帶 handler'
++rule:
++  all:
++    - any:
++        - pattern: launch { $$$ }
++        - pattern: launch($$$) { $$$ }
++    - inside:
++        kind: statements
++        inside:
++          kind: lambda_literal
++          inside:
++            kind: annotated_lambda
++            inside:
++              kind: call_suffix
++              inside:
++                pattern: supervisorScope { $$$ }
++    - not:
++        any:
++          - has:
++              stopBy: end
++              kind: try_expression
++          - has:
++              stopBy: end
++              pattern: runCatching { $$$ }
++          - has:
++              kind: call_suffix
++              has:
++                kind: value_arguments
++                has:
++                  kind: value_argument
++                  regex: '(?i)handler'
++---
++id: kt-long-lived-scope-plain-job
++language: kotlin
++severity: warning
++message: '[CO-12]長壽 scope 沒用 SupervisorJob,任一子協程失敗會取消整個 scope、之後 launch 全靜默不跑;改用 CoroutineScope(SupervisorJob() + io)'
++rule:
++  kind: property_declaration
++  inside:
++    kind: class_body
++  has:
++    stopBy: end
++    pattern: CoroutineScope($$$)
++  not:
++    has:
++      stopBy: end
++      kind: simple_identifier
++      regex: ^(SupervisorJob|coroutineContext)$
++---
++id: kt-noncancellable-in-builder
++language: kotlin
++severity: error
++message: '[CO-3]NonCancellable 傳給 launch/async 會切斷父子關係,工作脫離 scope 管理;改成只用在 withContext(NonCancellable) { 清理 },要跑完的交給注入的長壽 scope'
++rule:
++  any:
++    - pattern: launch($$$) { $$$ }
++    - pattern: $S.launch($$$) { $$$ }
++    - pattern: async($$$) { $$$ }
++    - pattern: $S.async($$$) { $$$ }
++    - pattern: launch($$$)
++    - pattern: $S.launch($$$)
++  has:
++    kind: call_suffix
++    has:
++      kind: value_arguments
++      has:
++        kind: value_argument
++        regex: \bNonCancellable\b
++---
++id: kt-oncleared-viewmodelscope
++language: kotlin
++severity: error
++message: '[CO-23]onCleared 時 viewModelScope 已取消,在這裡 launch 的工作不會跑;改用注入的 applicationScope:appScope.launch { save() },或 WorkManager'
++rule:
++  any:
++    - pattern: viewModelScope.launch { $$$ }
++    - pattern: viewModelScope.launch($$$) { $$$ }
++    - pattern: viewModelScope.async { $$$ }
++    - pattern: viewModelScope.async($$$) { $$$ }
++  inside:
++    stopBy: end
++    kind: function_declaration
++    has:
++      kind: simple_identifier
++      regex: ^onCleared$
++---
++id: kt-bg-dispatcher-touches-view
++language: kotlin
++severity: warning
++message: '[CO-44]在 Dispatchers.IO/Default 上直接改 View 會丟 CalledFromWrongThreadException;改成 withContext(io) 取資料後再改 View,或寫入 StateFlow'
++rule:
++  all:
++    - any:
++        - kind: assignment
++          regex: '^\s*(_?binding\b[\w.?!]*|[\w.?!]+\.(text|isVisible|isGone|isInvisible|visibility|isEnabled|adapter|error|hint|alpha))\s*='
++        - pattern: $V.setText($$$)
++        - pattern: $V.setImageBitmap($$$)
++        - pattern: $V.setVisibility($$$)
++    - inside:
++        stopBy: end
++        kind: call_expression
++        regex: '^(\w+\.)?(launch|async|withContext)\s*\(\s*Dispatchers\.(IO|Default)\b'
++    - not:
++        inside:
++          stopBy: end
++          any:
++            - kind: call_expression
++              regex: '^(\w+\.)?withContext\s*\(\s*Dispatchers\.Main'
++            - pattern: runOnUiThread { $$$ }
++            - pattern: $W.post { $$$ }
++---
++id: kt-default-blocking-io
++language: kotlin
++severity: warning
++message: '[CO-28]Dispatchers.Default 只有 CPU 核心數那麼多執行緒,拿來跑阻塞 I/O 會卡住所有計算;阻塞 I/O 改用 Dispatchers.IO(或 IO.limitedParallelism(n))'
++rule:
++  all:
++    - any:
++        - pattern: $F.readText($$$)
++        - pattern: $F.readBytes()
++        - pattern: $F.readLines($$$)
++        - pattern: $F.writeText($$$)
++        - pattern: $F.writeBytes($$$)
++        - pattern: $F.appendText($$$)
++        - pattern: $C.execute()
++        - pattern: $U.openStream()
++        - pattern: FileInputStream($$$)
++        - pattern: FileOutputStream($$$)
++    - inside:
++        stopBy: end
++        kind: call_expression
++        regex: '^(\w+\.)?(launch|async|withContext)\s*\(\s*Dispatchers\.Default\b'
++    - not:
++        inside:
++          stopBy: end
++          kind: call_expression
++          regex: '^(\w+\.)?withContext\s*\(\s*Dispatchers\.IO\b'
++---
++id: kt-dispatcher-not-closed
++language: kotlin
++severity: warning
++message: '[CO-29]newSingleThreadContext/asCoroutineDispatcher 建的執行緒不會自己結束,沒 close() 就洩漏;改用 Dispatchers.IO.limitedParallelism(n)'
++rule:
++  all:
++    - any:
++        - pattern: newSingleThreadContext($$$)
++        - pattern: newFixedThreadPoolContext($$$)
++        - pattern: $E.asCoroutineDispatcher()
++    - any:
++        - all:
++            - inside:
++                stopBy: end
++                kind: function_body
++            - not:
++                inside:
++                  stopBy: end
++                  pattern: $X.use { $$$ }
++            - not:
++                inside:
++                  stopBy: end
++                  kind: function_body
++                  has:
++                    stopBy: end
++                    pattern: $Y.close()
++        - all:
++            - inside:
++                kind: property_declaration
++                inside:
++                  kind: class_body
++                  inside:
++                    kind: class_declaration
++                    not:
++                      has:
++                        stopBy: end
++                        pattern: $Y.close()
++            - not:
++                inside:
++                  stopBy: end
++                  kind: function_body
++---
++id: kt-volatile-compound-update
++language: kotlin
++severity: error
++message: '[CO-35]@Volatile 只保證看得到最新值,++ / += 是「讀-改-寫」三步,多協程同時做會掉更新;改用 AtomicInteger.incrementAndGet() 或 Mutex'
++rule:
++  all:
++    - any:
++        - pattern: $N++
++        - pattern: $N--
++        - pattern: ++$N
++        - pattern: --$N
++        - pattern: $N += $V
++        - pattern: $N -= $V
++        - pattern: $N = $N + $V
++    - inside:
++        stopBy: end
++        kind: class_body
++        has:
++          kind: property_declaration
++          all:
++            - has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@Volatile$
++            - has:
++                kind: variable_declaration
++                has:
++                  kind: simple_identifier
++                  pattern: $N
++---
++id: kt-mutex-lock-no-finally
++language: kotlin
++severity: warning
++message: '[CO-38]lock() 之後沒用 try/finally 保證 unlock,中間丟例外或被取消就永遠鎖住;改用 mutex.withLock { }'
++rule:
++  all:
++    - any:
++        - pattern: $M.lock()
++        - pattern: $M.lock($$$)
++    - inside:
++        kind: statements
++    - not:
++        precedes:
++          stopBy:
++            not:
++              any:
++                - kind: line_comment
++                - kind: multiline_comment
++          kind: try_expression
++    - not:
++        inside:
++          kind: statements
++          inside:
++            kind: try_expression
++            has:
++              kind: finally_block
++              has:
++                stopBy: end
++                pattern: $M.unlock()
++---
++id: kt-suspend-catch-swallows-cancellation
++language: kotlin
++severity: warning
++message: '[CO-2]catch Exception 會連 CancellationException 吞掉,協程取消不了;改成先 catch (e: CancellationException) { throw e }'
++rule:
++  kind: catch_block
++  has:
++    kind: user_type
++    regex: ^(kotlin\.)?(Exception|Throwable)$
++  inside:
++    kind: function_declaration
++    has:
++      kind: modifiers
++      has:
++        regex: ^suspend$
++        stopBy: end
++    stopBy: end
++  not:
++    any:
++      - has:
++          kind: jump_expression
++          regex: ^throw\b
++          stopBy: end
++      - has:
++          pattern: ensureActive()
++          stopBy: end
++      - has:
++          pattern: $C.ensureActive()
++          stopBy: end
++      - follows:
++          kind: catch_block
++          has:
++            kind: user_type
++            regex: CancellationException$
++          stopBy: end
++---
++id: kt-hardcoded-dispatchers-io
++language: kotlin
++severity: warning
++message: '[CO-1]Repository/DataSource 寫死 Dispatchers.IO,測試換不掉執行緒;改成建構子注入 io: CoroutineDispatcher,用 withContext(io)'
++rule:
++  pattern: Dispatchers.IO
++  inside:
++    kind: class_declaration
++    has:
++      kind: type_identifier
++      regex: (Repository|DataSource)(Impl)?$
++    stopBy: end
++  not:
++    inside:
++      kind: class_parameter
++      stopBy: end
++---
++# T13
++id: kt-test-real-time-wait
++language: kotlin
++severity: warning
++message: '[CO-6]測試用真實時間(runBlocking 裡 delay、讀系統時鐘)又慢又不穩;改用 runTest 的虛擬時間 advanceTimeBy/currentTime,或注入 Clock'
++files: ['**/src/test*/**', '**/src/androidTest*/**']
++rule:
++  any:
++    - all:
++        - pattern: delay($$$)
++        - inside:
++            any:
++              - pattern: runBlocking { $$$ }
++              - pattern: runBlocking($$$) { $$$ }
++            stopBy: end
++    - pattern: System.currentTimeMillis()
++    - pattern: System.nanoTime()
++---
++id: kt-unsafe-collection-in-parallel
++language: kotlin
++severity: warning
++message: '[CO-39]多個 Default/IO 協程同時改一般集合或變數,會掉資料或丟 ConcurrentModificationException;改成讓 async 回傳值再 awaitAll() 收集'
++rule:
++  all:
++    - any:
++        - pattern: $L.add($$$)
++        - pattern: $L.addAll($$$)
++        - pattern: $L.put($$$)
++        - pattern: $L.remove($$$)
++        - pattern: $L[$K] = $V
++        - pattern: $L += $V
++    - inside:
++        stopBy: end
++        kind: call_expression
++        regex: '^(\w+\.)?(async|launch)\s*\(\s*Dispatchers\.(Default|IO)\b'
++    - not:
++        inside:
++          stopBy: end
++          any:
++            - pattern: $MX.withLock { $$$ }
++            - pattern: synchronized($$$) { $$$ }
++    - not:
++        inside:
++          stopBy: end
++          kind: call_expression
++          regex: '^(\w+\.)?(async|launch)\s*\(\s*Dispatchers'
++          has:
++            stopBy: end
++            kind: property_declaration
++            has:
++              kind: variable_declaration
++              has:
++                kind: simple_identifier
++                pattern: $L
+diff --git a/configs/ast-grep/kotlin-android/rules/data.yml b/configs/ast-grep/kotlin-android/rules/data.yml
+new file mode 100644
+index 000000000..63d9559af
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/rules/data.yml
+@@ -0,0 +1,592 @@
++id: kt-json-default-instance
++language: kotlin
++severity: warning
++message: '[DATA-70]預設的 Json 沒開 ignoreUnknownKeys,伺服器多加一個欄位就解析失敗;改用共用的 Json { ignoreUnknownKeys = true } 實例'
++rule:
++  any:
++    - pattern: Json.decodeFromString($$$)
++    - pattern: Json.decodeFromString<$T>($$$)
++    - pattern: Json.decodeFromJsonElement($$$)
++    - pattern: Json.decodeFromJsonElement<$T>($$$)
++    - pattern: Json.decodeFromStream($$$)
++    - pattern: Json.decodeFromStream<$T>($$$)
++    - pattern: Json.Default.decodeFromString($$$)
++    - pattern: Json.Default.decodeFromString<$T>($$$)
++---
++id: kt-json-config-per-call
++language: kotlin
++severity: warning
++message: '[DATA-71]函式裡每次都新建 Json { … },每次重建序列化器快取;改成頂層 val json = Json { … } 重用'
++rule:
++  any:
++    - pattern: Json { $$$ }
++    - pattern: Json($$$) { $$$ }
++  inside:
++    kind: function_body
++    stopBy: end
++  not:
++    inside:
++      kind: function_declaration
++      any:
++        - has:
++            kind: modifiers
++            has:
++              kind: annotation
++              regex: ^@(Provides|Singleton|Bean)\b
++              stopBy: end
++        - has:
++            kind: user_type
++            regex: ^Json$
++      stopBy: end
++ignores:
++  - '**/src/test*/**'
++  - '**/src/androidTest*/**'
++  - '**/src/testFixtures/**'
++---
++id: kt-gson-nonnull-field
++language: kotlin
++severity: warning
++message: '[DATA-75]Gson 不認 Kotlin 的非空與預設值,JSON 缺欄位時非空欄位會拿到 null、之後 NPE;改用 Moshi codegen 或 kotlinx.serialization,或把欄位宣告成可空'
++rule:
++  kind: class_parameter
++  has:
++    kind: modifiers
++    has:
++      kind: annotation
++      regex: ^@SerializedName\b
++    stopBy: end
++  not:
++    any:
++      - has:
++          kind: nullable_type
++      - has:
++          kind: user_type
++          regex: ^(Int|Long|Short|Byte|Boolean|Double|Float|Char)$
++---
++id: kt-datastore-read-no-catch
++language: kotlin
++severity: warning
++message: '[DATA-10]讀 DataStore 沒處理 IOException,檔案讀壞時整條 Flow 直接炸;改用 .catch 遇 IOException 就 emit(emptyPreferences())'
++rule:
++  any:
++    - pattern: $D.data.map { $$$ }
++    - pattern: $D.data.map($$$)
++    - pattern: $D.data.first()
++    - pattern: $D.data.firstOrNull()
++    - pattern: $D.data.collect { $$$ }
++    - pattern: $D.data.onEach { $$$ }
++  regex: (?i)^[\w.]*?(datastore|prefs|preferences)\.data\.
++  not:
++    any:
++      - inside:
++          any:
++            - pattern: $Y.catch { $$$ }
++            - pattern: $Y.catch($$$)
++          stopBy: end
++      - inside:
++          kind: try_expression
++          stopBy: end
++---
++id: kt-datastore-serializer-no-corruption
++language: kotlin
++severity: error
++message: '[DATA-11]readFrom 沒把解析錯誤包成 CorruptionException,檔案壞了每次讀都炸;改成丟 CorruptionException,並設 ReplaceFileCorruptionHandler'
++rule:
++  kind: function_declaration
++  has:
++    kind: simple_identifier
++    regex: ^readFrom$
++  inside:
++    any:
++      - kind: class_declaration
++      - kind: object_declaration
++    has:
++      kind: delegation_specifier
++      regex: \bSerializer<
++    stopBy: end
++  not:
++    any:
++      - has:
++          kind: try_expression
++          stopBy: end
++      - has:
++          regex: CorruptionException
++          stopBy: end
++---
++id: kt-room-writes-no-transaction
++language: kotlin
++severity: warning
++message: '[DATA-14]先刪再寫的多個 DAO 呼叫沒包交易,中途失敗或被讀到時資料會是一半;改用 @Transaction 方法或 db.withTransaction { }'
++rule:
++  kind: call_expression
++  regex: (?i)^[\w.]*?dao\w*(\(\))?\.(insert|upsert|update)\w*\(
++  inside:
++    kind: statements
++  follows:
++    regex: (?i)dao\w*(\(\))?\.(delete|clear|remove)\w*\(
++    stopBy: end
++  not:
++    any:
++      - inside:
++          any:
++            - pattern: $D.withTransaction { $$$ }
++            - pattern: withTransaction { $$$ }
++            - pattern: $D.runInTransaction { $$$ }
++            - pattern: $D.runInTransaction($$$)
++          stopBy: end
++      - inside:
++          kind: function_declaration
++          has:
++            kind: modifiers
++            has:
++              kind: annotation
++              regex: ^@Transaction\b
++              stopBy: end
++          stopBy: end
++---
++id: kt-room-destructive-migration
++language: kotlin
++severity: warning
++message: '[DATA-16]fallbackToDestructiveMigration 進了正式版,schema 一改就清空使用者資料;改用 Migration 或 AutoMigration,並用 MigrationTestHelper 測'
++rule:
++  pattern: $B.fallbackToDestructiveMigration($$$)
++  not:
++    inside:
++      kind: if_expression
++      has:
++        pattern: BuildConfig.DEBUG
++        stopBy: end
++      stopBy: end
++---
++id: kt-room-export-schema-false
++language: kotlin
++severity: warning
++message: '[DATA-18]exportSchema = false 讓 schema json 不進版控,之後寫不了也測不了 Migration;改成設 room.schemaLocation 並提交 schema json'
++rule:
++  kind: annotation
++  regex: (?s)^@Database\b.*exportSchema\s*=\s*false
++---
++id: kt-room-builder-not-singleton
++language: kotlin
++severity: warning
++message: '[DATA-20]在一般函式裡呼叫 Room.databaseBuilder,每次都開一個新的資料庫實例,失效通知與連線各自為政;改成單例(companion 的 getInstance)或 DI 提供'
++rule:
++  any:
++    - pattern: Room.databaseBuilder($$$)
++    - pattern: Room.databaseBuilder<$T>($$$)
++  inside:
++    kind: function_body
++    stopBy: end
++  not:
++    any:
++      - inside:
++          kind: companion_object
++          stopBy: end
++      - inside:
++          kind: object_declaration
++          stopBy: end
++      - inside:
++          kind: function_declaration
++          any:
++            - has:
++                kind: modifiers
++                has:
++                  kind: annotation
++                  regex: ^@(Provides|Singleton|Bean)\b
++                  stopBy: end
++            - has:
++                kind: user_type
++                regex: (Database|Db)$
++          stopBy: end
++---
++id: kt-sql-string-concat
++language: kotlin
++severity: error
++message: '[DATA-24]SQL 字串直接串接或內插變數,有注入風險;改用 ? 綁定參數(rawQuery(sql, arrayOf(x)) / SimpleSQLiteQuery(sql, arrayOf(x)))'
++utils:
++  tainted-sql:
++    any:
++      - has:
++          kind: interpolated_identifier
++          not:
++            regex: ^[A-Z][A-Z0-9_]*$
++          stopBy: end
++      - has:
++          kind: interpolated_expression
++          not:
++            regex: ^([A-Z]\w*\.)*[A-Z][A-Z0-9_]*$
++          stopBy: end
++      - has:
++          kind: additive_expression
++          regex: '''\s*"\s*\+|\+\s*"\s*'''
++          stopBy: end
++      - kind: additive_expression
++        regex: '''\s*"\s*\+|\+\s*"\s*'''
++rule:
++  any:
++    - pattern: $D.rawQuery($$$)
++    - pattern: $D.execSQL($$$)
++    - pattern: $D.query($$$)
++    - pattern: SimpleSQLiteQuery($$$)
++  has:
++    kind: call_suffix
++    has:
++      kind: value_arguments
++      has:
++        kind: value_argument
++        nthChild: 1
++        matches: tainted-sql
++---
++id: kt-external-storage-hardcoded
++language: kotlin
++severity: warning
++message: '[DATA-27]外部儲存路徑寫死或用了已淘汰的 Environment API,Android 10 以後分區儲存下會拿不到權限;改用 context.getExternalFilesDir(...) 或 MediaStore'
++rule:
++  any:
++    - pattern: Environment.getExternalStorageDirectory()
++    - pattern: Environment.getExternalStoragePublicDirectory($$$)
++    - kind: string_literal
++      regex: ^"/(sdcard|mnt/sdcard|storage/emulated)\b
++---
++id: kt-setforeground-no-try
++language: kotlin
++severity: warning
++message: '[DATA-35]App 在背景時 setForeground 可能丟 ForegroundServiceStartNotAllowedException;改用 try/catch IllegalStateException 包住'
++rule:
++  any:
++    - pattern: setForeground($$$)
++    - pattern: setForegroundAsync($$$)
++    - pattern: $W.setForeground($$$)
++    - pattern: $W.setForegroundAsync($$$)
++  not:
++    inside:
++      any:
++        - kind: try_expression
++        - pattern: runCatching { $$$ }
++      stopBy: end
++---
++id: kt-worker-retry-unbounded
++language: kotlin
++severity: warning
++message: '[DATA-36]Result.retry() 沒看 runAttemptCount,永久錯誤也一直重試;改成 runAttemptCount >= MAX 就回 Result.failure(),IOException 才 retry'
++rule:
++  any:
++    - pattern: Result.retry()
++    - pattern: ListenableWorker.Result.retry()
++  not:
++    inside:
++      any:
++        - kind: if_expression
++        - kind: when_expression
++      has:
++        regex: runAttemptCount
++        stopBy: end
++      stopBy: end
++---
++id: kt-worker-swallow-success
++language: kotlin
++severity: warning
++message: '[DATA-37]doWork 的 catch 吞掉錯誤,最後照樣回 success;改成依錯誤型別回 Result.failure() 或 Result.retry()'
++rule:
++  kind: catch_block
++  inside:
++    kind: function_declaration
++    has:
++      kind: simple_identifier
++      regex: ^doWork$
++    stopBy: end
++  any:
++    - has:
++        kind: user_type
++        regex: ^(kotlin\.)?(Exception|Throwable)$
++    - regex: \{\s*\}$
++  not:
++    has:
++      any:
++        - regex: Result\.(failure|retry)
++        - kind: jump_expression
++          regex: ^throw\b
++      stopBy: end
++---
++id: kt-worker-fire-and-forget
++language: kotlin
++severity: error
++message: '[DATA-41]doWork 裡另開協程或執行緒就 return,WorkManager 以為做完了、行程隨時被收掉;改用 CoroutineWorker,在 suspend doWork 裡做完再回 success'
++rule:
++  any:
++    - pattern: $S.launch { $$$ }
++    - pattern: $S.launch($$$) { $$$ }
++    - pattern: $S.async { $$$ }
++    - pattern: $S.async($$$) { $$$ }
++    - pattern: thread { $$$ }
++    - pattern: thread($$$) { $$$ }
++    - pattern: Thread($$$).start()
++    - pattern: $E.execute { $$$ }
++    - pattern: $E.submit { $$$ }
++  inside:
++    kind: function_declaration
++    has:
++      kind: simple_identifier
++      regex: ^doWork$
++    stopBy: end
++---
++id: kt-worker-runblocking
++language: kotlin
++severity: warning
++message: '[DATA-42]doWork 裡用 runBlocking 跑 suspend,佔住執行緒且停止訊號傳不進去;改成繼承 CoroutineWorker,override suspend fun doWork()'
++rule:
++  any:
++    - pattern: runBlocking { $$$ }
++    - pattern: runBlocking($$$) { $$$ }
++  inside:
++    kind: function_declaration
++    has:
++      kind: simple_identifier
++      regex: ^doWork$
++    stopBy: end
++---
++id: kt-receiver-long-work
++language: kotlin
++severity: warning
++message: '[DATA-52]onReceive 開協程/執行緒或做網路就返回,接收器結束後行程隨時被殺;改成短工作 goAsync() 並在 finally finish(),長工作交 WorkManager'
++rule:
++  any:
++    - pattern: $S.launch { $$$ }
++    - pattern: $S.launch($$$) { $$$ }
++    - pattern: thread { $$$ }
++    - pattern: thread($$$) { $$$ }
++    - pattern: runBlocking { $$$ }
++    - pattern: runBlocking($$$) { $$$ }
++    - pattern: $C.newCall($$$).execute()
++    - pattern: $C.newCall($$$).enqueue($$$)
++  inside:
++    kind: function_declaration
++    has:
++      kind: simple_identifier
++      regex: ^onReceive$
++    stopBy: end
++  not:
++    inside:
++      kind: function_declaration
++      has:
++        pattern: goAsync()
++        stopBy: end
++      stopBy: end
++---
++id: kt-paging-refreshkey-null
++language: kotlin
++severity: warning
++message: '[DATA-53]getRefreshKey 直接回 null,重新整理時跳回第一頁、位置跑掉;改用 state.anchorPosition 搭配 closestPageToPosition 算出 key'
++rule:
++  kind: function_declaration
++  all:
++    - has:
++        kind: simple_identifier
++        regex: ^getRefreshKey$
++    - has:
++        kind: function_body
++        regex: ^(=\s*null|\{\s*(//[^\n]*\s*)?return\s+null\s*\})$
++---
++id: kt-paging-load-no-error
++language: kotlin
++severity: warning
++message: '[DATA-54]PagingSource.load 沒回 LoadResult.Error,例外直接拋出讓 App 崩潰;改成 catch IOException 與 HttpException 回 LoadResult.Error(e)'
++rule:
++  kind: function_declaration
++  has:
++    kind: simple_identifier
++    regex: ^load$
++  inside:
++    any:
++      - kind: class_declaration
++      - kind: object_declaration
++    has:
++      kind: delegation_specifier
++      regex: \bPagingSource<
++    stopBy: end
++  not:
++    has:
++      regex: LoadResult\.Error
++      stopBy: end
++---
++id: kt-paging-source-reused
++language: kotlin
++severity: error
++message: '[DATA-55]pagingSourceFactory 回傳同一個 PagingSource,失效後重用會丟 IllegalStateException;改成 Pager(config) { MySource(api) },每次回新實例'
++rule:
++  any:
++    - pattern: Pager($$$A, pagingSourceFactory = { $S })
++    - pattern: Pager($$$A) { $S }
++constraints:
++  S:
++    regex: ^\w+$
++---
++id: kt-paging-flow-not-cached
++language: kotlin
++severity: warning
++message: '[DATA-56]Pager.flow 在 Composable/getter 裡建或沒 cachedIn,每次重組或轉螢幕都重載;改成在 ViewModel 屬性建一次並 .cachedIn(viewModelScope)'
++utils:
++  pager-flow:
++    any:
++      - pattern: Pager($$$).flow
++      - pattern: Pager($$$) { $$$ }.flow
++rule:
++  matches: pager-flow
++  any:
++    - inside:
++        kind: function_declaration
++        has:
++          kind: modifiers
++          has:
++            kind: annotation
++            regex: ^@Composable\b
++            stopBy: end
++        stopBy: end
++    - inside:
++        kind: getter
++        stopBy: end
++    - all:
++        - inside:
++            kind: class_declaration
++            has:
++              kind: delegation_specifier
++              regex: ViewModel\(
++              stopBy: end
++            stopBy: end
++        - not:
++            inside:
++              pattern: $X.cachedIn($$$)
++              stopBy: end
++---
++id: kt-paging-transform-after-cachedin
++language: kotlin
++severity: warning
++message: '[DATA-57]cachedIn 之後才 map/filter,轉換結果沒被快取、每次收集都重算;改成先 map 再 cachedIn(viewModelScope)'
++rule:
++  any:
++    - pattern: $F.cachedIn($S).map { $$$ }
++    - pattern: $F.cachedIn($S).map($$$)
++    - pattern: $F.cachedIn($S).mapLatest { $$$ }
++    - pattern: $F.cachedIn($S).filter { $$$ }
++---
++id: kt-remote-mediator-no-transaction
++language: kotlin
++severity: warning
++message: '[DATA-59]RemoteMediator 清表、寫資料、寫 remote key 分開呼叫,中途失敗會對不上;改用 db.withTransaction { } 包起來'
++rule:
++  kind: call_expression
++  regex: (?i)^[\w.]*?dao\w*(\(\))?\.(insert|upsert|delete|clear|remove)\w*\(
++  inside:
++    any:
++      - kind: class_declaration
++      - kind: object_declaration
++    has:
++      kind: delegation_specifier
++      regex: \bRemoteMediator<
++    stopBy: end
++  not:
++    inside:
++      any:
++        - pattern: $D.withTransaction { $$$ }
++        - pattern: withTransaction { $$$ }
++        - pattern: $D.runInTransaction { $$$ }
++        - pattern: $D.runInTransaction($$$)
++      stopBy: end
++---
++id: kt-room-main-thread-queries
++language: kotlin
++severity: error
++message: '[DATA-1]allowMainThreadQueries 讓資料庫查詢跑在主執行緒,卡頓甚至 ANR;改成拿掉,DAO 改 suspend fun 或回傳 Flow'
++rule:
++  pattern: $B.allowMainThreadQueries()
++---
++id: kt-room-dao-blocking
++language: kotlin
++severity: warning
++message: '[DATA-2]Room 的 DAO 函式是阻塞的,呼叫端在主執行緒會擋住或丟例外;改成 suspend fun 或回傳 Flow'
++rule:
++  kind: function_declaration
++  has:
++    kind: modifiers
++    has:
++      kind: annotation
++      regex: ^@(Query|Insert|Update|Delete|Upsert|RawQuery|Transaction)\b
++    stopBy: end
++  not:
++    any:
++      - has:
++          kind: modifiers
++          has:
++            regex: ^suspend$
++            stopBy: end
++      - has:
++          kind: user_type
++          regex: ^(Flow|LiveData|PagingSource|Observable|Flowable|Single|Maybe|Completable|ListenableFuture)\b
++      - has:
++          kind: modifiers
++          has:
++            regex: ^(abstract|open)$
++            stopBy: end
++          not:
++            has:
++              kind: annotation
++              stopBy: end
++  inside:
++    kind: class_declaration
++    has:
++      kind: modifiers
++      has:
++        kind: annotation
++        regex: ^@Dao\b
++      stopBy: end
++    stopBy: end
++---
++id: kt-datastore-not-singleton
++language: kotlin
++severity: error
++message: '[DATA-3]DataStore 只能在頂層建一次(同一個檔兩個實例會在執行期丟例外);改成檔案頂層的 by preferencesDataStore 或注入單例'
++rule:
++  any:
++    - pattern: PreferenceDataStoreFactory.create($$$)
++    - pattern: PreferenceDataStoreFactory.create { $$$ }
++    - pattern: PreferenceDataStoreFactory.create($$$) { $$$ }
++    - pattern: DataStoreFactory.create { $$$ }
++    - pattern: DataStoreFactory.create($$$) { $$$ }
++    - pattern: DataStoreFactory.create($$$)
++    - pattern: preferencesDataStore($$$)
++    - pattern: dataStore($$$)
++  inside:
++    any:
++      - kind: class_body
++      - kind: function_body
++    stopBy: end
++  not:
++    inside:
++      kind: object_declaration
++      stopBy: end
++---
++# P6
++id: kt-onreceive-async-without-goasync
++language: kotlin
++severity: warning
++message: '[DATA-52]onReceive 起協程或執行緒卻沒 goAsync,一回傳程序就可能被殺、工作做一半;改用 goAsync() 並在 finally finish(),長工作交 WorkManager'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**']
++rule:
++  kind: function_declaration
++  has:
++    kind: simple_identifier
++    regex: '^onReceive$'
++  all:
++    - has:
++        any:
++          - pattern: launch { $$$ }
++          - pattern: $S.launch { $$$ }
++          - pattern: $S.launch($$$) { $$$ }
++          - pattern: $S.async { $$$ }
++          - pattern: thread { $$$ }
++          - pattern: thread($$$) { $$$ }
++        stopBy: end
++    - not:
++        has:
++          pattern: goAsync()
++          stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules/flow.yml b/configs/ast-grep/kotlin-android/rules/flow.yml
+new file mode 100644
+index 000000000..5175dd1b5
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/rules/flow.yml
+@@ -0,0 +1,190 @@
++id: kt-vm-channel-event
++language: kotlin
++severity: warning
++message: '[FLOW-7]ViewModel 用 Channel/SharedFlow 送一次性事件,UI 停止收集時事件會遺失;改成 uiState 的欄位,UI 處理完呼叫 vm.xxxShown() 清掉'
++rule:
++  any:
++    - pattern: $C.receiveAsFlow()
++    - pattern: $C.consumeAsFlow()
++    - pattern: Channel<$CT>($$$)
++    - pattern: Channel($$$)
++    - pattern: MutableSharedFlow<$T>($$$)
++  inside:
++    kind: class_declaration
++    has:
++      kind: delegation_specifier
++      regex: ViewModel\(
++    stopBy: end
++constraints:
++  T:
++    regex: (Event|Effect|Command|Navigation|Nav|Message|Toast|Snackbar)
++---
++id: kt-flow-catch-empty
++language: kotlin
++severity: warning
++message: '[FLOW-8]Flow 的 .catch { } 空本體把錯誤全吞掉,畫面停在舊資料也沒紀錄;改成至少記錄並轉成錯誤狀態,例 catch { e -> _state.update { … } }'
++rule:
++  pattern: $F.catch { $$$ }
++  has:
++    kind: call_suffix
++    has:
++      kind: annotated_lambda
++      has:
++        kind: lambda_literal
++        not:
++          has:
++            kind: statements
++---
++id: kt-catch-before-operator
++language: kotlin
++severity: warning
++message: '[FLOW-11]catch 放在 map/onEach 等運算子之前,管不到下游運算子丟的例外;改成 .catch 放在所有可能丟例外的中間運算子之後'
++rule:
++  any:
++    - pattern: $F.catch { $$$ }.$OP { $$$ }
++    - pattern: $F.catch { $$$ }.$OP($$$)
++  not:
++    any:
++      - has:
++          kind: call_expression
++          regex: '^[\s\S]*\.\s*catch\s*\{[\s\S]*\bthrow\b'
++          stopBy: end
++      - inside:
++          kind: navigation_expression
++          regex: '\.\s*catch$'
++constraints:
++  OP:
++    regex: ^(map|mapNotNull|mapLatest|onEach|filter|filterNot|filterNotNull|transform|transformLatest|flatMapLatest|flatMapConcat|flatMapMerge|scan|runningFold|runningReduce|onStart|zip|combine)$
++---
++id: kt-try-emit-in-flow
++language: kotlin
++severity: error
++message: '[FLOW-12]flow { } 裡用 try 包 emit 會吞掉下游例外,違反例外透明而在執行期丟例外;改成 flow { emit(x) }.catch { emit(fallback) }'
++rule:
++  kind: try_expression
++  all:
++    - has:
++        kind: catch_block
++    - has:
++        kind: statements
++        has:
++          stopBy: end
++          any:
++            - pattern: emit($$$)
++            - pattern: emitAll($$$)
++    - inside:
++        stopBy: end
++        any:
++          - pattern: flow { $$$ }
++          - pattern: flow<$T> { $$$ }
++    - not:
++        has:
++          kind: catch_block
++          has:
++            stopBy: end
++            kind: jump_expression
++            regex: ^throw\b
++---
++id: kt-launch-emit-in-flow
++language: kotlin
++severity: error
++message: '[FLOW-15]flow { } 不能從別的協程 emit(違反情境保存,執行期丟 IllegalStateException);要並行生產改用 channelFlow { launch { send(x) } }'
++rule:
++  any:
++    - pattern: emit($$$)
++    - pattern: emitAll($$$)
++  inside:
++    stopBy: end
++    any:
++      - pattern: launch { $$$ }
++      - pattern: launch($$$) { $$$ }
++      - pattern: async { $$$ }
++      - pattern: async($$$) { $$$ }
++      - pattern: $S.launch { $$$ }
++      - pattern: $S.async { $$$ }
++    inside:
++      stopBy: end
++      any:
++        - pattern: flow { $$$ }
++        - pattern: flow<$T> { $$$ }
++---
++id: kt-sequential-hot-collects
++language: kotlin
++severity: warning
++message: '[FLOW-19]狀態流/事件流不會結束,前一個 collect 之後的 collect 永遠不會執行;改成每條各自 launch,或用 combine/merge'
++rule:
++  all:
++    - kind: call_expression
++    - any:
++        - pattern: $A.collect { $$$ }
++        - pattern: $A.collect($$$)
++        - pattern: $A.collectLatest { $$$ }
++    - inside:
++        kind: statements
++    - follows:
++        stopBy: end
++        kind: call_expression
++        regex: '(?i)^[\w.?]*(state|event|effect)s?(flow)?\s*\.\s*(collect|collectLatest)\b'
++---
++id: kt-stateflow-noop-operator
++language: kotlin
++severity: warning
++message: '[FLOW-21]對 StateFlow 套 distinctUntilChanged/flowOn/conflate/cancellable 沒有效果;改成拿掉,要換上游執行緒就在 stateIn 之前 .flowOn(io)'
++rule:
++  any:
++    - pattern: $S.distinctUntilChanged()
++    - pattern: $S.flowOn($$$)
++    - pattern: $S.conflate()
++    - pattern: $S.cancellable()
++constraints:
++  S:
++    regex: '(?is)(^[\w.]*state(flow)?$)|(\.asStateFlow\(\)$)|(\.stateIn\(.*\)$)'
++---
++id: kt-consumeasflow-as-property
++language: kotlin
++severity: warning
++message: '[FLOW-28]consumeAsFlow() 只能收集一次,放在屬性上被重新訂閱就丟 IllegalStateException;多處收集改用 receiveAsFlow() 或 SharedFlow'
++rule:
++  pattern: $C.consumeAsFlow()
++  inside:
++    stopBy: end
++    kind: property_declaration
++    inside:
++      kind: class_body
++---
++id: kt-flow-catch-before-oneach
++language: kotlin
++severity: warning
++message: '[FLOW-11].catch 只接上游,放在 onEach 之前接不到 onEach 丟的例外;改成 .catch 放在所有會丟例外的中間運算子之後'
++rule:
++  any:
++    - pattern: $F.catch { $$$ }.onEach { $$$ }
++    - pattern: $F.catch { $$$ }.onEach($$$)
++  not:
++    inside:
++      pattern: $Y.catch { $$$ }
++      stopBy: end
++---
++id: kt-nested-collect
++language: kotlin
++severity: warning
++message: '[FLOW-1]collect 裡又 collect,內層永不結束、外層新值卡住,畫面只反映部分來源;改用 combine(a, b) { x, y -> … }'
++rule:
++  any:
++    - pattern: $B.collect { $$$ }
++    - pattern: $B.collectLatest { $$$ }
++  inside:
++    any:
++      - pattern: $A.collect { $$$ }
++      - pattern: $A.collectLatest { $$$ }
++    stopBy: end
++---
++id: kt-withcontext-in-flow
++language: kotlin
++severity: error
++message: '[FLOW-4]flow { } 裡用 withContext 換執行緒,執行期丟 Flow invariant is violated;改用 flow { emit(load()) }.flowOn(io)'
++rule:
++  pattern: withContext($$$)
++  inside:
++    pattern: flow { $$$ }
++    stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/rules/perf.yml b/configs/ast-grep/kotlin-android/rules/perf.yml
+new file mode 100644
+index 000000000..406373208
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/rules/perf.yml
+@@ -0,0 +1,309 @@
++id: kt-runblocking-in-main-code
++language: kotlin
++severity: warning
++message: '[PERF-4]正式程式碼裡 runBlocking 會卡住呼叫它的執行緒(在主執行緒就是 ANR);改用 lifecycleScope.launch / viewModelScope.launch,或把呼叫端改成 suspend'
++ignores:
++  - '**/src/test*/**'
++  - '**/src/androidTest*/**'
++  - '**/src/testFixtures/**'
++  - '**/*Test.kt'
++  - '**/src/*Test/**'
++rule:
++  any:
++    - pattern: runBlocking { $$$ }
++    - pattern: runBlocking($$$) { $$$ }
++  not:
++    any:
++      - inside:
++          stopBy: end
++          kind: function_declaration
++          has:
++            kind: simple_identifier
++            regex: ^main$
++      - inside:
++          stopBy: end
++          kind: class_declaration
++          has:
++            kind: delegation_specifier
++            regex: ^(okhttp3\.)?(Interceptor|Authenticator)$
++---
++id: kt-network-on-main-thread
++language: kotlin
++severity: warning
++message: '[PERF-2]Activity/Fragment 裡同步做網路請求,會丟 NetworkOnMainThreadException 或卡畫面;改成 suspend fun,或 withContext(ioDispatcher) { … }'
++rule:
++  any:
++    - pattern: $C.execute()
++    - pattern: $U.openStream()
++    - pattern: $U.openConnection()
++  inside:
++    kind: class_declaration
++    has:
++      kind: delegation_specifier
++      regex: (Activity|Fragment)\b
++      stopBy: end
++    stopBy: end
++  not:
++    any:
++      - regex: Task\(.*\)\.execute\(\)$
++      - inside:
++          any:
++            - pattern: withContext($$$) { $$$ }
++            - pattern: thread { $$$ }
++            - pattern: thread($$$) { $$$ }
++            - pattern: Thread { $$$ }
++            - pattern: $S.launch(Dispatchers.IO) { $$$ }
++            - pattern: launch(Dispatchers.IO) { $$$ }
++            - pattern: $E.execute { $$$ }
++            - pattern: $E.submit { $$$ }
++          stopBy: end
++---
++id: kt-datastore-runblocking-first
++language: kotlin
++severity: warning
++message: '[PERF-4]runBlocking 裡讀 DataStore,在主執行緒會卡住讀檔造成 ANR;改用 suspend 讀取,啟動時的預載改成非同步'
++rule:
++  any:
++    - pattern: runBlocking { $$$ }
++    - pattern: runBlocking($$$) { $$$ }
++  has:
++    kind: call_expression
++    regex: (?i)(datastore|prefs|preferences)\.data\.first
++    stopBy: end
++---
++id: kt-stream-not-closed
++language: kotlin
++severity: warning
++message: '[PERF-11]開了檔案或 ContentResolver 的串流卻沒關,檔案描述元會洩漏;改成 .use { }'
++rule:
++  any:
++    - pattern: FileInputStream($$$)
++    - pattern: FileOutputStream($$$)
++    - pattern: $R.openInputStream($$$)
++    - pattern: $R.openOutputStream($$$)
++  not:
++    any:
++      - inside:
++          any:
++            - pattern: $X.use { $$$ }
++            - pattern: $X?.use { $$$ }
++          stopBy: end
++      - inside:
++          kind: function_body
++          has:
++            any:
++              - pattern: $Y.close()
++              - pattern: $Y?.close()
++            stopBy: end
++          stopBy: end
++---
++id: kt-catch-log-return-empty
++language: kotlin
++severity: warning
++message: '[PERF-34]例外只記 log 就回空清單或 null,上層分不出沒資料還是出錯;改成往上回報錯誤狀態,只 catch 具體型別'
++rule:
++  kind: catch_block
++  has:
++    any:
++      - pattern: Log.$M($$$)
++      - pattern: Timber.$M($$$)
++      - pattern: $E.printStackTrace()
++    stopBy: end
++  regex: ((emptyList|emptyMap|emptySet|listOf|mapOf|setOf|emptyFlow)\(\)|\bnull)\s*\}$|return\s+(null|emptyList\(\)|emptyMap\(\)|listOf\(\))
++---
++id: kt-throw-without-cause
++language: kotlin
++severity: warning
++message: '[PERF-35]catch 裡丟新例外只給訊息字串,原本的 cause 丟了、追不到根因;改成 throw MyError("x", e)'
++rule:
++  pattern: throw $E($S)
++  inside:
++    kind: catch_block
++    stopBy: end
++constraints:
++  S:
++    regex: '^"'
++---
++# P4
++id: kt-runblocking-in-ui-code
++language: kotlin
++severity: warning
++message: '[PERF-4]畫面、ViewModel、Receiver 裡 runBlocking 會卡住主執行緒(ANR);改用 lifecycleScope.launch/viewModelScope.launch'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**']
++rule:
++  any:
++    - pattern: runBlocking { $$$ }
++    - pattern: runBlocking($$$) { $$$ }
++  inside:
++    any:
++      - kind: class_declaration
++        has:
++          kind: delegation_specifier
++          regex: '\b(\w*Activity|\w*Fragment|\w*ViewModel|BroadcastReceiver|Application|Service|\w*View)\b'
++      - kind: function_declaration
++        has:
++          kind: modifiers
++          has:
++            kind: annotation
++            regex: '^@Composable\b'
++    stopBy: end
++---
++# P11
++id: kt-trampoline-activity
++language: kotlin
++severity: warning
++message: '[PERF-9]onCreate 只做 startActivity 再 finish 的跳板 Activity 多建一次畫面、拖慢啟動;改用 SplashScreen API(installSplashScreen)直接進主畫面'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**']
++rule:
++  kind: function_declaration
++  has:
++    kind: simple_identifier
++    regex: '^onCreate$'
++  all:
++    - has:
++        pattern: startActivity($$$)
++        stopBy: end
++    - has:
++        pattern: finish()
++        stopBy: end
++    - not:
++        has:
++          regex: '^setContent(View)?\b'
++          stopBy: end
++  inside:
++    kind: class_declaration
++    has:
++      kind: delegation_specifier
++      regex: 'Activity\b'
++    stopBy: end
++---
++# P36
++id: kt-unbounded-bitmap-cache
++language: kotlin
++severity: warning
++message: '[PERF-17]用 HashMap 之類的無上限集合快取 Bitmap,遲早 OOM;改用 LruCache 並以 byteCount 設大小上限'
++rule:
++  any:
++    - pattern: HashMap<$K, Bitmap>($$$)
++    - pattern: LinkedHashMap<$K, Bitmap>($$$)
++    - pattern: ConcurrentHashMap<$K, Bitmap>($$$)
++    - pattern: mutableMapOf<$K, Bitmap>($$$)
++    - pattern: hashMapOf<$K, Bitmap>($$$)
++    - pattern: HashMap<$K, Bitmap?>($$$)
++    - pattern: LinkedHashMap<$K, Bitmap?>($$$)
++    - pattern: ConcurrentHashMap<$K, Bitmap?>($$$)
++    - pattern: mutableMapOf<$K, Bitmap?>($$$)
++    - pattern: hashMapOf<$K, Bitmap?>($$$)
++    - kind: property_declaration
++      all:
++        - has:
++            kind: variable_declaration
++            regex: ':\s*(Mutable|Hash|LinkedHash|ConcurrentHash)Map<[^>]*,\s*Bitmap\??>'
++        - regex: '=\s*(mutableMapOf|hashMapOf|HashMap|LinkedHashMap|ConcurrentHashMap)\(\)'
++---
++# P44
++id: kt-reflection-in-hot-path
++language: kotlin
++severity: warning
++message: '[PERF-25]每次綁定/繪製都跑反射(Class.forName、::class.memberProperties、getDeclaredField),又慢又會被 R8 混淆弄壞;改用程式碼生成或在初始化時快取一次'
++rule:
++  any:
++    - pattern: Class.forName($$$)
++    - pattern: $X::class.memberProperties
++    - pattern: $X::class.declaredMemberProperties
++    - pattern: $X::class.memberFunctions
++    - kind: call_expression
++      regex: '\.(getDeclaredField|getDeclaredMethod|getMethod|getField|getDeclaredFields|getDeclaredMethods)\('
++  inside:
++    kind: function_declaration
++    has:
++      kind: simple_identifier
++      regex: '^(onBindViewHolder|onBind|onDraw|dispatchDraw|onMeasure|onLayout|getView|onScrolled|onDrawFrame|doFrame)$'
++    stopBy: end
++---
++# P49
++id: kt-data-class-mutable-field
++language: kotlin
++severity: warning
++message: '[PERF-30]data class 帶 var 或可變集合,放進 HashSet/HashMap 後雜湊會變、StateFlow 判相等時不發新值;改成 val 加不可變集合,用 copy 產生新值'
++rule:
++  kind: class_parameter
++  any:
++    - has:
++        kind: binding_pattern_kind
++        regex: '^var$'
++    - has:
++        any:
++          - kind: user_type
++          - kind: nullable_type
++        regex: '^(MutableList|MutableSet|MutableMap|MutableCollection|ArrayList|HashMap|HashSet|LinkedHashMap|LinkedHashSet|MutableStateFlow)\b'
++  inside:
++    kind: primary_constructor
++    inside:
++      kind: class_declaration
++      has:
++        kind: modifiers
++        has:
++          kind: class_modifier
++          regex: '^data$'
++---
++# P51
++id: kt-data-class-array-field
++language: kotlin
++severity: warning
++message: '[PERF-32]data class 的陣列欄位用預設 equals 只比參照,內容一樣也不相等;改用 List,或覆寫 equals/hashCode 用 contentEquals/contentHashCode'
++rule:
++  kind: class_parameter
++  has:
++    any:
++      - kind: user_type
++      - kind: nullable_type
++    regex: '^(ByteArray|IntArray|LongArray|ShortArray|CharArray|FloatArray|DoubleArray|BooleanArray|UByteArray|Array<.*>)\??$'
++  inside:
++    kind: primary_constructor
++    inside:
++      kind: class_declaration
++      all:
++        - has:
++            kind: modifiers
++            has:
++              kind: class_modifier
++              regex: '^data$'
++        - not:
++            has:
++              kind: class_body
++              regex: '\bfun\s+equals\b'
++---
++id: kt-uistate-mutable-field
++language: kotlin
++severity: warning
++message: '[PERF-30]UiState 帶 var 或可變集合,改了內容參照不變、畫面不更新也不執行緒安全;改成 val 欄位與唯讀 List,變更用 copy(items = items + x)'
++rule:
++  all:
++    - any:
++        - kind: class_parameter
++        - kind: property_declaration
++    - any:
++        - has:
++            kind: binding_pattern_kind
++            regex: ^var$
++        - has:
++            kind: user_type
++            regex: ^(MutableList|MutableMap|MutableSet|ArrayList|HashMap|HashSet|LinkedList|MutableStateFlow|MutableLiveData)\b
++            stopBy: end
++  inside:
++    kind: class_declaration
++    all:
++      - has:
++          kind: modifiers
++          has:
++            regex: ^data$
++            stopBy: end
++      - any:
++          - has:
++              kind: type_identifier
++              regex: (State|UiModel)$
++          - has:
++              kind: delegation_specifier
++              regex: (State|UiModel)\b
++    stopBy: end
+diff --git a/configs/ast-grep/kotlin-android/sgconfig-hints.yml b/configs/ast-grep/kotlin-android/sgconfig-hints.yml
+new file mode 100644
+index 000000000..bf4f91d58
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/sgconfig-hints.yml
+@@ -0,0 +1,2 @@
++ruleDirs:
++  - rules-hints
+diff --git a/configs/ast-grep/kotlin-android/sgconfig.yml b/configs/ast-grep/kotlin-android/sgconfig.yml
+new file mode 100644
+index 000000000..2dd8e538b
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/sgconfig.yml
+@@ -0,0 +1,2 @@
++ruleDirs:
++  - rules

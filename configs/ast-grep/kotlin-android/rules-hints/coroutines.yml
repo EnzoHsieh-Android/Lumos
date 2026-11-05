@@ -1,0 +1,161 @@
+id: kt-cancel-then-proceed
+language: kotlin
+severity: hint
+message: '[CO-17]cancel() 只是發出取消請求,下一行時舊工作可能還在跑;改用 job.cancelAndJoin() 等它停下'
+rule:
+  all:
+    - any:
+        - pattern: $J.cancel()
+        - pattern: $J?.cancel()
+    - regex: '(?i)job\??\.cancel\(\)$'
+    - inside:
+        kind: statements
+    - precedes:
+        stopBy:
+          not:
+            any:
+              - kind: line_comment
+              - kind: multiline_comment
+        not:
+          any:
+            - kind: line_comment
+            - kind: multiline_comment
+            - pattern: $J.join()
+            - pattern: $J?.join()
+            - pattern: $J = $$$
+---
+id: kt-lazy-async-never-cancelled
+language: kotlin
+severity: hint
+message: '[CO-18]async(start = LAZY) 只在部分路徑 await,沒走到的那顆不會啟動也不會結束,父 scope 永遠等它;不用時明確 cancel(),或改成條件成立才建立'
+rule:
+  kind: property_declaration
+  all:
+    - has:
+        kind: variable_declaration
+        has:
+          kind: simple_identifier
+          pattern: $D
+    - has:
+        kind: call_expression
+        regex: '^(\w+\.)?async\s*\('
+        has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              regex: \bLAZY\b
+    - not:
+        inside:
+          kind: statements
+          has:
+            stopBy: end
+            any:
+              - pattern: $D.cancel()
+              - pattern: $D.start()
+              - pattern: awaitAll($$$)
+    - not:
+        precedes:
+          stopBy: end
+          any:
+            - pattern: $D.await()
+            - pattern: val $V = $D.await()
+            - pattern: return $D.await()
+---
+id: kt-fire-and-forget-api
+language: kotlin
+severity: hint
+message: '[CO-43]公開函式本體只有 scope.launch,呼叫端無法等待完成也接不到錯誤;資料層改成 suspend fun,或回傳 Job'
+rule:
+  kind: function_declaration
+  all:
+    - has:
+        kind: function_body
+        has:
+          kind: statements
+          all:
+            - has:
+                any:
+                  - pattern: $S.launch { $$$ }
+                  - pattern: $S.launch($$$) { $$$ }
+            - not:
+                has:
+                  nthChild: 2
+    - not:
+        has:
+          kind: user_type
+    - not:
+        has:
+          kind: receiver_type
+          regex: (ViewModel|Activity|Fragment|Service|Receiver)$
+    - not:
+        has:
+          kind: modifiers
+          has:
+            regex: ^(suspend|private|override|protected|internal)$
+            stopBy: end
+    - not:
+        inside:
+          stopBy: end
+          kind: class_declaration
+          has:
+            stopBy: end
+            kind: delegation_specifier
+            regex: \b(ViewModel|AndroidViewModel|Activity|AppCompatActivity|ComponentActivity|Fragment|Service|LifecycleService|BroadcastReceiver)\b
+---
+id: kt-parallel-io-unbounded
+language: kotlin
+severity: hint
+message: '[CO-30]迴圈裡對每個元素開 async/launch(Dispatchers.IO),量大時佔滿 IO 執行緒、打爆後端;改用 io.limitedParallelism(8) 或 Semaphore.withPermit 限流'
+rule:
+  all:
+    - kind: call_expression
+      regex: '^(async|launch)\s*\(\s*Dispatchers\.IO\s*\)'
+    - inside:
+        stopBy: end
+        any:
+          - pattern: $C.map { $$$ }
+          - pattern: $C.forEach { $$$ }
+          - pattern: $C.mapIndexed { $$$ }
+          - pattern: $C.forEachIndexed { $$$ }
+          - kind: for_statement
+    - not:
+        has:
+          stopBy: end
+          pattern: $S.withPermit { $$$ }
+---
+id: kt-runcatching-in-suspend
+language: kotlin
+severity: hint
+message: '[CO-2]suspend 函式裡用 runCatching 會把 CancellationException 包成失敗吞掉;改用會重拋 CancellationException 的 suspendRunCatching'
+rule:
+  any:
+    - pattern: runCatching { $$$ }
+    - pattern: $R.runCatching { $$$ }
+  not:
+    inside:
+      kind: navigation_expression
+      inside:
+        kind: call_expression
+        regex: '(?s)CancellationException.*\bthrow\b|\bthrow\b.*CancellationException'
+  inside:
+    kind: function_declaration
+    has:
+      kind: modifiers
+      has:
+        regex: ^suspend$
+        stopBy: end
+    stopBy: end
+---
+id: kt-mutex-reentrant
+language: kotlin
+severity: hint
+message: '[CO-37]Mutex 不可重入,withLock 裡再鎖同一把會永遠卡住;改成拆出不加鎖的內部函式 helperLocked() 給外層呼叫'
+rule:
+  pattern: $M.withLock { $$$ }
+  has:
+    stopBy: end
+    any:
+      - pattern: $M.withLock { $$$ }
+      - pattern: $M.lock()

@@ -39303,6 +39303,10 @@ _LINT_NEW_DEFAULTS = {
     # 慢工具的專案自己把這兩個值調小;預設放寬到「正常的原始碼都掃得到」。
     "max_file_lines": 60000,
     "max_file_bytes": 5000000,  # ★只看行數會被「整支檔只有一行」的壓縮檔騙過去★,所以兩個都看
+    # 測試檔也掃的副檔名(預設空=照舊排除測試路徑)。Kotlin 的 src/test/ 被測試路徑樣式排除,
+    # 型錄 TEST 主題的規則在那裡永遠不響;只接在新增告警閘這一處,不改測試路徑樣式本身(它還有別的消費者)。
+    # [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5
+    "include_test_paths": frozenset(),
 }
 _LINT_NEW_BASE_PREFIX = ".lumos/lintbase-"   # 快照解在專案底下(解到系統暫存區,檢查工具往上找不到專案的規則設定)
 _LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本控制★:只活在本機=換台機器整批復活擋人
@@ -39493,6 +39497,16 @@ def _lint_new_config(repo_root, text=None, from_snapshot=False):
                 cfg["warnings"].append(f"設定檔的 lint_new.{key}={v!r} 不合法(要正整數),已用 {cfg[key]}")
         else:
             cfg[key] = v
+    if "include_test_paths" in sec:
+        v = sec["include_test_paths"]
+        if isinstance(v, list) and all(isinstance(x, str) for x in v):
+            exts = [x.strip().lstrip(".").lower() for x in v]
+            cfg["include_test_paths"] = frozenset(e for e in exts if e and "." not in e)
+            bad = [x for x, e in zip(v, exts) if not e or "." in e]
+            if bad:   # 空字串、多段副檔名(tar.gz)永遠比不到 Path.suffix,設了等於沒設,講出來(代碼審 r1 邊界席)
+                cfg["warnings"].append(f"設定檔的 lint_new.include_test_paths 有 {len(bad)} 項不是單段副檔名({bad[:3]!r}),那幾項略過")
+        else:
+            cfg["warnings"].append(f"設定檔的 lint_new.include_test_paths={v!r} 不合法(要副檔名字串清單,例 [\"kt\"]),照沒設處理")
     return cfg
 
 
@@ -40004,7 +40018,7 @@ def _lint_new_tools(repo_root, diff_range, base_ref, head_ref, cfg, out, waivers
         return False
     # 兩路分開:程式碼檔走既有的「要不要掃」過濾;依賴宣告檔走自己的判斷
     # (那個過濾把 .json/.txt/.lock 整批當成非程式碼擋掉,依賴宣告檔大多是那幾種副檔名)
-    code_pairs = [(a, b) for (a, b) in pairs_all if _stack_changed_ok(a)]
+    code_pairs = [(a, b) for (a, b) in pairs_all if _stack_changed_ok(a, keep_test_ext=cfg["include_test_paths"])]
     dep_pairs = [(a, b) for (a, b) in pairs_all if _is_dep_manifest(a)]
     pairs = code_pairs + [x for x in dep_pairs if x not in code_pairs]
     if not pairs:
@@ -61177,7 +61191,12 @@ def _tension_candidates_into(arch, added_lines, repo_root, applicable_ids=None):
         arch["candidates_truncated"] = True
 
 
-def _stack_changed_ok(cur_file, skip=frozenset()):
+# 規則包的壞例好例樣本(configs/ast-grep/<包>/samples/)★故意埋著壞寫法★,跟審計證物同理不當產品碼掃——
+# 不排除的話,改一條規則的樣本就會讓風險分級與棧別題把自己的教材當成新寫的 bug(2026-11-05,[[Systems/kotlin規則包]])
+_RULEPACK_SAMPLE_RE = re.compile(r"configs/ast-grep/[^/]+/samples/.*\.kts?$")   # 只認 Kotlin 樣本;同目錄放別的檔照掃(代碼審 r1 資安席)
+
+
+def _stack_changed_ok(cur_file, skip=frozenset(), keep_test_ext=frozenset()):
     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
     資源/併發 bug,當成代碼掃會讓 push 被自己的留痕擋下);簿記檔/簿記目錄不看(2026-08-11:治理帳記的 skip 理由在描述
@@ -61187,13 +61206,17 @@ def _stack_changed_ok(cur_file, skip=frozenset()):
     init 會把 CLI 與五支 hook 複製進 scripts/,消費專案第一次提交自然把它們一起帶進去,
     於是整份風險報告裡★沒有一條在專案自己的程式碼裡★,分級卻被撐成 high、推送被擋,
     要求對一份不是自己寫的程式做代碼審。呼叫端給「要跳過的路徑」集合:只含內容跟安裝時指紋對得上的
-    工具檔(見 _vendored_state);工具鏈本體給空集合(那裡 scripts/lumos 就是產品,跳過等於把閘整個關掉)。"""
+    工具檔(見 _vendored_state);工具鏈本體給空集合(那裡 scripts/lumos 就是產品,跳過等於把閘整個關掉)。
+
+    ★keep_test_ext★(2026-11-05):副檔名(不含點、小寫)在這個集合裡的測試檔照樣要掃;只有新增告警閘傳
+    (lint_new.include_test_paths),其他呼叫端不給=照舊排除測試檔。"""
     ext = Path(cur_file).suffix
     return (ext not in _PITFALL_DIFF_SKIP_EXT
             and not cur_file.startswith("governance/review-reports/")
+            and not _RULEPACK_SAMPLE_RE.match(cur_file)
             and cur_file not in _BOOKKEEPING_FILES
             and not cur_file.startswith(_BOOKKEEPING_DIRS)
-            and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
+            and (not _PITFALL_DIFF_TEST_PAT.search(cur_file) or ext.lstrip(".").lower() in keep_test_ext)
             and not (skip and _posix_norm(cur_file) in skip))
 
 
@@ -71850,6 +71873,9 @@ def _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha):
     print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
 
 
+_LINT_MSG_SHOW = 120     # 擋下訊息每條告警印幾個字;跟 _lint_run_and_parse 截 SARIF 訊息的 120 同數
+
+
 def _cl_say_lint_block(reason, verdict, branch, head_sha):
     """新增告警那一道的擋下訊息。"""
     # 三段式:發生什麼 → 為何在意 → 指令獨立一行
@@ -71860,7 +71886,9 @@ def _cl_say_lint_block(reason, verdict, branch, head_sha):
     print(f"擋下:這次改動帶進了新的問題({reason})——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
     for _c in _other[:8]:
         _wk = "(弱比對:工具沒給程式碼片段,只能用訊息比)" if _c.get("weak") else ""
-        print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:70]}{_wk}", file=sys.stderr)
+        # 訊息印到 120 字(跟解析 SARIF 時的截斷同一個數):規則包的訊息格式是「[編號] 錯在哪;改用 <修法>」,
+        # 修法在後半段,原本截在 70 字會把修法切掉(2026-11-05 實驗專案實跑擋下訊息看到,[[Systems/kotlin規則包]])
+        print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:_LINT_MSG_SHOW]}{_wk}", file=sys.stderr)
     if len(_other) > 8:
         print(f"  …另有 {len(_other) - 8} 條", file=sys.stderr)
     _cl_say_lint_tq(_lv, _tq)
