@@ -15,3 +15,8 @@ interface UserService {
     @GET("user")
     suspend fun user(): User // GOOD:Retrofit 直接宣告 suspend fun
 }
+
+// 容易誤報(代碼審 r1 M11):已經用 suspendCancellableCoroutine,不該再叫人「改用 suspendCancellableCoroutine」
+suspend fun sus(task: Task<Int>): Int = suspendCancellableCoroutine<Int> { cont ->
+    task.addOnSuccessListener { cont.resume(it) }
+}

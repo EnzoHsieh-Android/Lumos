@@ -14,3 +14,10 @@ class G5ViewModel : ViewModel() {
 class Presenter {
     private var listener: OnDoneListener? = null
 }
+
+// case: vm-own-lambda(代碼審 r1 m4:ViewModel 自己定義的 lambda,不是 UI 傳進來的)
+class G6ViewModel : ViewModel() {
+    private val retry: () -> Unit = { load() }
+    private val reload: () -> Unit = ::load
+    fun load() { }
+}

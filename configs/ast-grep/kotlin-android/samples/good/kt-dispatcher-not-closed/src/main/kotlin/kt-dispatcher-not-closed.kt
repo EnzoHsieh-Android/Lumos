@@ -13,3 +13,8 @@ class Worker : Closeable {
     override fun close() { single.close() }
 }
 val appIo = Dispatchers.IO.limitedParallelism(4) // GOOD
+// 容易誤報:包的是 Room 借來的 executor,不是自己建的執行緒,不該由這裡 close
+fun c(db: RoomDatabase) {
+    val d = db.queryExecutor.asCoroutineDispatcher() // GOOD
+    scope.launch(d) { work() }
+}

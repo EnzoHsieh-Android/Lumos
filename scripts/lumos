@@ -39500,7 +39500,11 @@ def _lint_new_config(repo_root, text=None, from_snapshot=False):
     if "include_test_paths" in sec:
         v = sec["include_test_paths"]
         if isinstance(v, list) and all(isinstance(x, str) for x in v):
-            cfg["include_test_paths"] = frozenset(x.strip().lstrip(".").lower() for x in v if x.strip().lstrip("."))
+            exts = [x.strip().lstrip(".").lower() for x in v]
+            cfg["include_test_paths"] = frozenset(e for e in exts if e and "." not in e)
+            bad = [x for x, e in zip(v, exts) if not e or "." in e]
+            if bad:   # 空字串、多段副檔名(tar.gz)永遠比不到 Path.suffix,設了等於沒設,講出來(代碼審 r1 邊界席)
+                cfg["warnings"].append(f"設定檔的 lint_new.include_test_paths 有 {len(bad)} 項不是單段副檔名({bad[:3]!r}),那幾項略過")
         else:
             cfg["warnings"].append(f"設定檔的 lint_new.include_test_paths={v!r} 不合法(要副檔名字串清單,例 [\"kt\"]),照沒設處理")
     return cfg
@@ -61189,7 +61193,7 @@ def _tension_candidates_into(arch, added_lines, repo_root, applicable_ids=None):
 
 # 規則包的壞例好例樣本(configs/ast-grep/<包>/samples/)★故意埋著壞寫法★,跟審計證物同理不當產品碼掃——
 # 不排除的話,改一條規則的樣本就會讓風險分級與棧別題把自己的教材當成新寫的 bug(2026-11-05,[[Systems/kotlin規則包]])
-_RULEPACK_SAMPLE_RE = re.compile(r"configs/ast-grep/[^/]+/samples/")
+_RULEPACK_SAMPLE_RE = re.compile(r"configs/ast-grep/[^/]+/samples/.*\.kts?$")   # 只認 Kotlin 樣本;同目錄放別的檔照掃(代碼審 r1 資安席)
 
 
 def _stack_changed_ok(cur_file, skip=frozenset(), keep_test_ext=frozenset()):

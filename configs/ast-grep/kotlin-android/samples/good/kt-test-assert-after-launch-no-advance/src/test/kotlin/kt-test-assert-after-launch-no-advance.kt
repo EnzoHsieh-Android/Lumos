@@ -54,3 +54,22 @@ class LoaderAsyncTest {
         assertEquals(3, items.await().size)
     }
 }
+
+// 容易誤報:斷言前用 delay、yield 或 cancelAndJoin 讓出/等完
+class YieldTest {
+    @Test fun d() = runTest {
+        launch { vm.load() }
+        delay(100)
+        assertEquals(1, vm.count)
+    }
+    @Test fun y() = runTest {
+        launch { vm.load() }
+        yield()
+        assertEquals(1, vm.count)
+    }
+    @Test fun c() = runTest {
+        val job = launch { vm.load() }
+        job.cancelAndJoin()
+        assertEquals(1, vm.count)
+    }
+}

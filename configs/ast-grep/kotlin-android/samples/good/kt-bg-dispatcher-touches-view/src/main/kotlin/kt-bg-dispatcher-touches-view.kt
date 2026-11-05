@@ -29,3 +29,14 @@ class Avatar(private val image: ImageView) {
         }
     }
 }
+
+// 容易誤報:切回注入的 Main(CO-1 鼓勵的寫法),或另開 launch(Dispatchers.Main)
+class Injected(private val mainDispatcher: CoroutineDispatcher, private val tv: TextView) {
+    fun a(scope: CoroutineScope) {
+        scope.launch(Dispatchers.IO) {
+            val d = load()
+            withContext(mainDispatcher) { tv.text = d } // GOOD
+            scope.launch(Dispatchers.Main) { tv.text = d } // GOOD
+        }
+    }
+}

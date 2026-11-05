@@ -11,3 +11,6 @@ class W5Activity : AppCompatActivity() {
 // case: compose-remember-launcher
 @Composable
 fun Picker() { val l = rememberLauncherForActivityResult(GetContent()) { } }
+
+// case: extension-helper(代碼審 r1 m3:擴充函式 helper,供屬性初始化或 onCreate 呼叫)
+fun ComponentActivity.registerPick(cb: ActivityResultCallback<Uri?>) = registerForActivityResult(GetContent(), cb)

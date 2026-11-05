@@ -1,0 +1,775 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 122ed1fb7..2344d6ab0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -131,20 +131,24 @@ jobs:
+           fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5);全套與範圍判定也要歷史
+       # PR 事件取出的是不在任何分支上的合併提交,本機只有 origin/main、沒有 main;找主線的測試(main@{upstream})
+       # 會整支紅。補一個追蹤 origin/main 的本機 main,讓 PR 跟推到 main 時是同一種環境(2026-10-03 第一個 PR 實際踩到)。
+       # 工作之間不共用機器,每個工作都要自己補(Projects/CI加速_計劃)
+       - name: PR 事件補上本機 main
+         if: github.event_name == 'pull_request'
+         run: git branch --track main origin/main
+       - uses: actions/setup-python@v5
+         with:
+           python-version: "3.14"   # 2026-09-29 工具最低版本改 3.14(Projects/最低Python版本改3.14_計劃)
++      # Kotlin 規則包的測試要真的 ast-grep;CI 上沒裝那幾支會判紅(本機沒裝才略過)。釘 0.51.1:規則包用到的語法以這版為準
++      # (Projects/Android協程與API寫法機械檢查標準_計劃 範圍 4、S1)
++      - name: 裝釘版本的 ast-grep
++        run: python -m pip install --quiet ast-grep-cli==0.51.1
+       - name: 全套的這幾份(${{ matrix.shards }} / 共 ${{ env.SHARD_TOTAL }} 份)
+         env:
+           MY_SHARDS: ${{ matrix.shards }}
+         run: |
+           set -u
+           rc=0
+           for i in $MY_SHARDS; do
+             # 每份印開始時間與「第 i 份耗時 N 秒」:看分片平不平均用;撤除條件量的是每台(兩份)的耗時,看這個工作的總時間(推送與CI提速 RETIRE-IF)
+             # 子殼層裡先 set +e:預設 bash -e 會在測試紅時直接結束子殼層,紅的那份就印不出耗時(代碼審 r1 通才、合約圖譜席)
+             ( set +e; s=$(date +%s); echo "第 $i 份開始 $(date -u +%H:%M:%S)"; python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"; rc=$?; echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"; exit $rc ) > "/tmp/shard-$i.log" 2>&1 &
+diff --git a/.lumos/config.json b/.lumos/config.json
+index 7edacf512..620b00c5e 100644
+--- a/.lumos/config.json
++++ b/.lumos/config.json
+@@ -25,12 +25,17 @@
+     "gate": "on"
+   },
+   "note_shape": {
+     "test_refs": "block"
+   },
+   "bound_tests": {
+     "parallel": 4
+   },
+   "lint_new": {
+     "max_file_lines": 120000
++  },
++  "node_home": {
++    "ignore": [
++      "configs/ast-grep/*/samples/*"
++    ]
+   }
+ }
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+new file mode 100644
+index 000000000..9ca2b4507
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -0,0 +1,289 @@
++#!/usr/bin/env python3
++"""Kotlin 規則包自我檢查(Projects/Android協程與API寫法機械檢查標準_計劃 S1、S2)。
++
++白話:每條規則拿自己的壞例樣本跑,要至少命中兩處;拿好例樣本跑,要零命中而且好例至少兩段;
++規則訊息要以型錄裡真的有的編號開頭、不超過 120 字、寫明修法、不含 $ 變數;
++另外有一棵「祖先目錄叫 test 的正式碼」樣本,只該掃測試碼的規則對它不准命中。
++
++用法:python3 check.py [--sg <ast-grep 執行檔>] [--json]
++退出碼:0 全過、1 有問題、2 找不到 ast-grep。零依賴(只用標準庫)。
++"""
++import json
++import os
++import re
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++HERE = Path(__file__).resolve().parent
++CATALOG = HERE.parents[2] / "skills" / "kotlin-idioms" / "checks-catalog.md"
++CONFIGS = (("rules", "sgconfig.yml"), ("rules-hints", "sgconfig-hints.yml"))
++SEVERITIES = ("error", "warning", "hint")
++MSG_MAX = 120          # 新增告警閘解析 SARIF 時把訊息截在 120 字
++# 好例「一段」= 頂格開頭的宣告(函式、類別、物件、介面、帶註記的宣告)
++_DECL_RE = re.compile(r"^(?:@|fun |suspend fun |private |internal |public |class |data class |object |interface |abstract |open |sealed |enum |val |var |inline )")
++# 檢查會談暫存區路徑(型錄落地時要拿掉)
++_SCRATCH_RE = re.compile(r"(/private/tmp/|/tmp/claude-|lumos-scratch|scratchpad/)")
++TEST_ONLY_ANCESTOR = HERE / "samples" / "ancestor-named-test"
++
++
++def load_rules():
++    """讀兩個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
++    rules = []
++    for d, cfg in CONFIGS:
++        for f in sorted((HERE / d).glob("*.yml")):
++            for doc in re.split(r"^---\s*$", f.read_text(encoding="utf-8"), flags=re.M):
++                m = re.search(r"^id:\s*(\S+)", doc, re.M)
++                if not m:
++                    continue
++                sev = re.search(r"^severity:\s*(\S+)", doc, re.M)
++                msg = re.search(r"^message:\s*(.+)$", doc, re.M)
++                text = msg.group(1).strip() if msg else ""
++                if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
++                    text = text[1:-1].replace("''", "'") if text[0] == "'" else text[1:-1]
++                rules.append({"id": m.group(1), "severity": sev.group(1) if sev else "",
++                              "message": text, "dir": d, "config": cfg, "file": f.name,
++                              "test_only": bool(re.search(r"^files:.*src/(test|androidTest|testFixtures)", doc, re.M | re.S)
++                                                and "src/main" not in (re.search(r"^files:.*?(?=^\w)", doc + "\nz", re.M | re.S) or [""])[0])})
++    return rules
++
++
++def catalog_ids():
++    """型錄主表裡的編號(〈待查證〉節以後不算)。"""
++    text = CATALOG.read_text(encoding="utf-8")
++    cut = text.find("\n## 待查證")
++    main = text if cut < 0 else text[:cut]
++    return set(re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", main, re.M)), text
++
++
++_CELL_RE = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')   # 反引號裡的直線不算欄位分隔
++_MAIN_ROW_RE = re.compile(r"^\|\s*((?:API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+)\s*\|")
++_MAIN_COLS = 12      # 編號|名稱|壞寫法形狀|標準寫法|後果|現成規則|級|情境怎麼認|接電方式|通電批次|實測狀態|來源
++_DT_COLS = 7         # 列編號|情境|標準寫法|不適用時|觸發字|對應檢查|來源
++_WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
++# 觸發字停用字表:這些字幾乎每支 Kotlin 檔都有,當觸發字會讓改檔前推列與情境題每次都亮(第二、三批計劃的依賴)
++STOP_TRIGGERS = frozenset((
++    "map", "filter", "forEach", "let", "run", "apply", "also", "with", "if", "else", "when", "try", "catch",
++    "val", "var", "fun", "class", "object", "return", "suspend", "launch", "async", "await", "flow", "Flow",
++    "collect", "first", "take", "list", "List", "remember", "enabled", "Job", "cancel", "data", "String",
++    "Int", "Unit", "null", "true", "false", "this", "it", "get", "set", "value", "state", "State",
++    # r1 接手席點名的(第二、三批設計審):型別名或方法名太泛,出現在大量無關程式裡
++    "Exception", "Result", "Response", "insert", "offset", "sealed", "onClick", "isActive", "key", "test",
++    "version", "size", "token", "edit", "Application", "Intent", "Context", "delay", "Dao", "Repository",
++))
++
++
++def _cells(line):
++    return [c.strip() for c in _CELL_RE.split(line)[1:-1]]
++
++
++def catalog_problems(rules=None):
++    """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
++    problems = []
++    text = CATALOG.read_text(encoding="utf-8")
++    i_dt, i_pend = text.find("\n## 情境決策表"), text.find("\n## 待查證")
++    if i_dt < 0 or i_pend < 0:
++        return [("<catalog>", "找不到〈情境決策表〉或〈待查證〉節")]
++    main, dt = text[:i_dt], text[i_dt:i_pend]
++    rows, seen = {}, set()
++    for ln in main.splitlines():
++        m = _MAIN_ROW_RE.match(ln)
++        if not m:
++            continue
++        rid, c = m.group(1), _cells(ln)
++        if rid in seen:
++            problems.append((rid, "編號重複"))
++        seen.add(rid)
++        if len(c) != _MAIN_COLS:
++            problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
++            continue
++        rows[rid] = c
++        name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
++        if not std or not wire or not batch:
++            problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
++        if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
++            problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
++        if kind.startswith("語意"):
++            if "表態對程式" not in wire:
++                problems.append((rid, "語意類要有「表態對程式」"))
++            if "(人裁)" not in name and "盲判席" not in wire:
++                problems.append((rid, "語意類(沒標人裁)要有「盲判席」"))
++        if "(出處不全)" not in name:
++            if any(w in src for w in _WEAK_SRC):
++                problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
++            if not re.search(r"https?://|\b[A-Z][A-Z0-9-]{1,}\b", src):
++                problems.append((rid, "來源沒有網址或來源縮寫"))
++    referenced, d_seen = set(), []
++    for ln in dt.splitlines():
++        if not re.match(r"^\|\s*D-\d+\s*\|", ln):
++            continue
++        c = _cells(ln)
++        did = c[0]
++        if len(c) != _DT_COLS:
++            problems.append((did, f"決策表欄位數 {len(c)},應為 {_DT_COLS}"))
++            continue
++        d_seen.append(did)
++        trig = [t.strip().strip("`") for t in re.split(r"[、,,]", c[4]) if t.strip()]
++        if not trig:
++            problems.append((did, "觸發字不准空"))
++        bad = [t for t in trig if t in STOP_TRIGGERS]
++        if bad:
++            problems.append((did, "觸發字含常用字:" + "、".join(bad)))
++        if not c[6]:
++            problems.append((did, "來源不准空"))
++        refs = set(re.findall(r"[A-Z]+-\d+", c[5]))
++        for r in sorted(refs - set(rows)):
++            problems.append((did, f"對應檢查 {r} 不在型錄主表"))
++        referenced |= refs
++    want = [f"D-{i}" for i in range(1, len(d_seen) + 1)]
++    if d_seen != want:
++        problems.append(("<決策表>", "列編號要從 D-1 連號"))
++    for rid, c in rows.items():
++        if c[7].startswith("語意") and rid not in referenced and "(出處不全)" not in c[1] and "(人裁)" not in c[1]:
++            problems.append((rid, "語意類沒有被任何決策表列收進去"))
++    if _SCRATCH_RE.search(text):
++        problems.append(("<catalog>", "型錄裡有指向會談暫存區的路徑"))
++    weak_ids = {rid for rid, c in rows.items() if "(出處不全)" in c[1]}
++    for r in rules or []:
++        m = re.match(r"\[([A-Z]+-\d+)\]", r["message"])
++        if m and m.group(1) in weak_ids and r["severity"] != "hint":
++            problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准 hint 級"))
++    return problems
++
++
++def message_problems(rules, cat_ids):
++    """每條規則的 id、severity、放哪個目錄、message 格式(計劃 S2)。不需要 ast-grep。"""
++    problems = []
++    for r in rules:
++        rid, msg = r["id"], r["message"]
++        if not rid.startswith("kt-"):
++            problems.append((rid, "id 要用 kt- 前綴"))
++        if r["severity"] not in SEVERITIES:
++            problems.append((rid, f"severity 只能是 {'/'.join(SEVERITIES)}"))
++        if (r["severity"] == "hint") != (r["dir"] == "rules-hints"):
++            problems.append((rid, "hint 級要放 rules-hints/,其他級不准放那裡"))
++        m = re.match(r"\[([A-Z]+-\d+)\]", msg)
++        if not m:
++            problems.append((rid, "message 要以 [型錄編號] 開頭"))
++        elif m.group(1) not in cat_ids:
++            problems.append((rid, f"message 的編號 {m.group(1)} 不在型錄主表"))
++        if len(msg) > MSG_MAX:
++            problems.append((rid, f"message {len(msg)} 字,超過 {MSG_MAX}"))
++        if ";" not in msg or not ("改用" in msg or "改成" in msg):
++            problems.append((rid, "message 要有分號,並寫「改用」或「改成」"))
++        if "$" in msg:
++            problems.append((rid, "message 不准含 $"))
++    return problems
++
++
++def scan(sg, cfg, target):
++    """跑一次 ast-grep,回 [(ruleId, file)];失敗回 None。"""
++    r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--json=stream", str(target)],
++                       capture_output=True, text=True, cwd=str(HERE))
++    if r.returncode not in (0, 1):
++        return None
++    out = []
++    for ln in r.stdout.splitlines():
++        if ln.strip():
++            d = json.loads(ln)
++            out.append((d["ruleId"], d["file"]))
++    return out
++
++
++def loaded_count(sg, cfg):
++    r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--inspect", "summary", str(HERE / "samples" / "good")],
++                       capture_output=True, text=True, cwd=str(HERE))
++    m = re.search(r"effectiveRuleCount=(\d+),skippedRuleCount=(\d+)", r.stderr)
++    return (int(m.group(1)), int(m.group(2))) if m else (None, None)
++
++
++def good_cases(path):
++    n = 0
++    for f in Path(path).rglob("*.kt"):
++        n += sum(1 for ln in f.read_text(encoding="utf-8").splitlines() if _DECL_RE.match(ln))
++    return n
++
++
++def check(sg):
++    problems = []
++    rules = load_rules()
++    ids = [r["id"] for r in rules]
++    dup = sorted({i for i in ids if ids.count(i) > 1})
++    if dup:
++        problems.append(("<pack>", "id 重複:" + ", ".join(dup)))
++    cat_ids, _cat_text = catalog_ids()
++    problems += message_problems(rules, cat_ids)
++    problems += catalog_problems(rules)
++    for d, cfg in CONFIGS:
++        want = sum(1 for r in rules if r["dir"] == d)
++        got, skipped = loaded_count(sg, cfg)
++        if got != want or skipped:
++            problems.append(("<pack>", f"{cfg} 載入 {got} 條(略過 {skipped}),規則檔裡有 {want} 個 id"))
++    # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
++    hits = {}
++    for kind in ("bad", "good"):
++        for _d, cfg in CONFIGS:
++            got = scan(sg, cfg, HERE / "samples" / kind)
++            if got is None:
++                problems.append(("<pack>", f"{cfg} 掃 samples/{kind} 跑不起來"))
++                continue
++            for rule_id, f in got:
++                parts = Path(f).parts
++                owner = parts[parts.index(kind) + 1] if kind in parts and parts.index(kind) + 1 < len(parts) else ""
++                hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
++    for r in rules:
++        rid = r["id"]
++        bad, good = HERE / "samples" / "bad" / rid, HERE / "samples" / "good" / rid
++        if not bad.is_dir():
++            problems.append((rid, "缺壞例樣本 samples/bad/" + rid))
++        else:
++            n = hits.get(("bad", rid, rid), 0)
++            if n < 2:
++                problems.append((rid, f"壞例只命中 {n} 處,至少要 2"))
++        if not good.is_dir():
++            problems.append((rid, "缺好例樣本 samples/good/" + rid))
++        else:
++            n = hits.get(("good", rid, rid), 0)
++            if n:
++                problems.append((rid, f"好例誤報 {n} 處"))
++            if good_cases(good) < 2:
++                problems.append((rid, "好例至少要兩段(頂格宣告算一段)"))
++    test_only = [r for r in rules if r["test_only"]]
++    if test_only:
++        if not TEST_ONLY_ANCESTOR.is_dir():
++            problems.append(("<pack>", "缺 samples/ancestor-named-test(祖先目錄叫 test 的正式碼樣本)"))
++        else:
++            for d, cfg in CONFIGS:
++                for (i, f) in scan(sg, cfg, TEST_ONLY_ANCESTOR) or []:
++                    if any(r["id"] == i for r in test_only):
++                        problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
++    return rules, problems
++
++
++def main(argv):
++    if "--catalog-only" in argv:
++        probs = catalog_problems(load_rules())
++        for rid, why in probs:
++            print(f"{rid}: {why}")
++        print(f"型錄問題 {len(probs)} 個")
++        return 1 if probs else 0
++    sg = None
++    if "--sg" in argv:
++        sg = argv[argv.index("--sg") + 1]
++    sg = sg or shutil.which("ast-grep") or shutil.which("sg")
++    if not sg or not os.access(sg, os.X_OK):
++        print("找不到 ast-grep(帶 --sg <路徑>)", file=sys.stderr)
++        return 2
++    rules, problems = check(sg)
++    if "--json" in argv:
++        print(json.dumps({"rules": len(rules), "problems": problems}, ensure_ascii=False))
++    else:
++        for rid, why in problems:
++            print(f"{rid}: {why}")
++        print(f"規則 {len(rules)} 條,問題 {len(problems)} 個")
++    return 1 if problems else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main(sys.argv[1:]))
+diff --git a/scripts/lumos b/scripts/lumos
+index bdb6f2a67..4f225e88c 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39296,20 +39296,24 @@ _LINT_NEW_DEFAULTS = {
+     "mode": "block",
+     "budget_sec": 300,          # 整條閘的總預算(秒)
+     "per_cmd_floor_sec": 30,    # 單條命令的保底時間:剩餘預算不足這個數就不跑,不用必然逾時的值去跑它
+     # ★單檔上限不是時間防線★(2026-09-13 實測翻掉原本的訂法):時間防線是上面那兩個預算,
+     # 它們能中斷正在跑的命令;單檔上限擋的是「病態大檔」——壓縮成一行的 bundle、產生出來的巨檔,
+     # 那種東西會讓工具吃記憶體或跑到天荒地老。原本照最慢的工具(社群規則庫:26718 行 105 秒)訂成
+     # 四千行,結果是同一支檔 ruff 只要 0.05 秒卻被判「太大不掃」——把快工具也一起罰了。
+     # 慢工具的專案自己把這兩個值調小;預設放寬到「正常的原始碼都掃得到」。
+     "max_file_lines": 60000,
+     "max_file_bytes": 5000000,  # ★只看行數會被「整支檔只有一行」的壓縮檔騙過去★,所以兩個都看
++    # 測試檔也掃的副檔名(預設空=照舊排除測試路徑)。Kotlin 的 src/test/ 被測試路徑樣式排除,
++    # 型錄 TEST 主題的規則在那裡永遠不響;只接在新增告警閘這一處,不改測試路徑樣式本身(它還有別的消費者)。
++    # [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5
++    "include_test_paths": frozenset(),
+ }
+ _LINT_NEW_BASE_PREFIX = ".lumos/lintbase-"   # 快照解在專案底下(解到系統暫存區,檢查工具往上找不到專案的規則設定)
+ _LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本控制★:只活在本機=換台機器整批復活擋人
+ _LINT_NEW_GATE_NAME = "lint-new"             # 閘名,要登記進 _KNOWN_GATES 否則記帳靜默失敗
+ _LINT_NEW_STALE_SEC = 86400                  # 開跑前清掉超過一天的殘骸(強殺時收尾不會執行)
+ _ISOLATED_WT_STALE_SEC = _LINT_NEW_STALE_SEC   # 共用隔離工作樹的殘骸時限沿用同一個值(Projects/代碼審修正關卡第0步_計劃,不另訂)
+ _LINT_NEW_FILES_TOKEN = "{LINT_FILES}"       # 命令沒有這個佔位=核心無法為它做基準比對
+ 
+ 
+ def _lint_gate_covers(cmd):
+@@ -39486,20 +39490,26 @@ def _lint_new_config(repo_root, text=None, from_snapshot=False):
+         cfg["warnings"].append(f"設定檔的 lint_new.gate={g!r} 不合法(只認 {'/'.join(_LINT_NEW_GATE_MODES)}),已用 {cfg['mode']}")
+     else:
+         cfg["mode"] = g
+     for key in ("budget_sec", "per_cmd_floor_sec", "max_file_lines", "max_file_bytes"):
+         v = sec.get(key, cfg[key])
+         if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+             if key in sec:
+                 cfg["warnings"].append(f"設定檔的 lint_new.{key}={v!r} 不合法(要正整數),已用 {cfg[key]}")
+         else:
+             cfg[key] = v
++    if "include_test_paths" in sec:
++        v = sec["include_test_paths"]
++        if isinstance(v, list) and all(isinstance(x, str) for x in v):
++            cfg["include_test_paths"] = frozenset(x.strip().lstrip(".").lower() for x in v if x.strip().lstrip("."))
++        else:
++            cfg["warnings"].append(f"設定檔的 lint_new.include_test_paths={v!r} 不合法(要副檔名字串清單,例 [\"kt\"]),照沒設處理")
+     return cfg
+ 
+ 
+ def _lint_new_changed_files(repo_root, diff_range):
+     """算這次要掃哪些檔,並把改名對回舊路徑。
+     ★另開一支只給這道閘用的查詢★:既有那支 git diff -U3 同時餵給風險掃描、棧別提問、架構對照,
+     在上面加改名偵測會悄悄改掉它們的既有輸出。
+     回 ([(現在路徑, 基準路徑 or None), …], 錯誤訊息 or None);刪除的檔不收(沒有「現在」可掃)。"""
+     import subprocess
+     try:
+@@ -39997,21 +40007,21 @@ def _lint_new_tools(repo_root, diff_range, base_ref, head_ref, cfg, out, waivers
+     if not _lint_new_declared(repo_root):
+         out["status"], out["reason"] = "no-config", "這個專案沒有宣告任何檢查工具(.lumos/lint.json 與 .lumos/lint-deps.json 都不在)"
+         return False
+ 
+     pairs_all, err = _lint_new_changed_files(repo_root, diff_range)
+     if err:
+         _lint_new_autopass(out, err)
+         return False
+     # 兩路分開:程式碼檔走既有的「要不要掃」過濾;依賴宣告檔走自己的判斷
+     # (那個過濾把 .json/.txt/.lock 整批當成非程式碼擋掉,依賴宣告檔大多是那幾種副檔名)
+-    code_pairs = [(a, b) for (a, b) in pairs_all if _stack_changed_ok(a)]
++    code_pairs = [(a, b) for (a, b) in pairs_all if _stack_changed_ok(a, keep_test_ext=cfg["include_test_paths"])]
+     dep_pairs = [(a, b) for (a, b) in pairs_all if _is_dep_manifest(a)]
+     pairs = code_pairs + [x for x in dep_pairs if x not in code_pairs]
+     if not pairs:
+         out["status"], out["reason"] = "no-files", "這次改動沒有要掃的程式碼檔或依賴宣告檔"
+         return False
+ 
+     dep_cmds, dep_err = _lint_deps_load(repo_root)
+     if dep_err:
+         _lint_new_autopass(out, dep_err)
+         return False
+@@ -61170,37 +61180,46 @@ def _tension_candidates_into(arch, added_lines, repo_root, applicable_ids=None):
+                 if pat.pattern not in novel:
+                     novel.append(pat.pattern)
+             if novel:
+                 out.append({"file": f, "question": qid, "patterns": novel, "siblings": readable, "unreadable": unreadable})
+     if out:
+         arch["tension_candidates"] = out
+     if truncated:
+         arch["candidates_truncated"] = True
+ 
+ 
+-def _stack_changed_ok(cur_file, skip=frozenset()):
++# 規則包的壞例好例樣本(configs/ast-grep/<包>/samples/)★故意埋著壞寫法★,跟審計證物同理不當產品碼掃——
++# 不排除的話,改一條規則的樣本就會讓風險分級與棧別題把自己的教材當成新寫的 bug(2026-11-05,[[Systems/kotlin規則包]])
++_RULEPACK_SAMPLE_RE = re.compile(r"configs/ast-grep/[^/]+/samples/")
++
++
++def _stack_changed_ok(cur_file, skip=frozenset(), keep_test_ext=frozenset()):
+     """這支檔的改動行要不要掃(claims 的代碼形態 regex 與棧別觸發共用,r1 架構對齊席 f2):
+     非代碼副檔名不看;審計證物 governance/review-reports/ 不看(2026-08-05:歸檔的席報告/canary 快照 .patch 裡★故意★埋著
+     資源/併發 bug,當成代碼掃會讓 push 被自己的留痕擋下);簿記檔/簿記目錄不看(2026-08-11:治理帳記的 skip 理由在描述
+     「命中 open(...)」,掃自己的紀錄→再命中→再 skip→再寫一行,自我餵食實測誤觸發 9 次);測試檔不看。
+ 
+     ★skip★(2026-09-10):在消費專案裡,工具鏈自己安裝進去、而且內容沒被改過的檔不看——
+     init 會把 CLI 與五支 hook 複製進 scripts/,消費專案第一次提交自然把它們一起帶進去,
+     於是整份風險報告裡★沒有一條在專案自己的程式碼裡★,分級卻被撐成 high、推送被擋,
+     要求對一份不是自己寫的程式做代碼審。呼叫端給「要跳過的路徑」集合:只含內容跟安裝時指紋對得上的
+-    工具檔(見 _vendored_state);工具鏈本體給空集合(那裡 scripts/lumos 就是產品,跳過等於把閘整個關掉)。"""
++    工具檔(見 _vendored_state);工具鏈本體給空集合(那裡 scripts/lumos 就是產品,跳過等於把閘整個關掉)。
++
++    ★keep_test_ext★(2026-11-05):副檔名(不含點、小寫)在這個集合裡的測試檔照樣要掃;只有新增告警閘傳
++    (lint_new.include_test_paths),其他呼叫端不給=照舊排除測試檔。"""
+     ext = Path(cur_file).suffix
+     return (ext not in _PITFALL_DIFF_SKIP_EXT
+             and not cur_file.startswith("governance/review-reports/")
++            and not _RULEPACK_SAMPLE_RE.match(cur_file)
+             and cur_file not in _BOOKKEEPING_FILES
+             and not cur_file.startswith(_BOOKKEEPING_DIRS)
+-            and not _PITFALL_DIFF_TEST_PAT.search(cur_file)
++            and (not _PITFALL_DIFF_TEST_PAT.search(cur_file) or ext.lstrip(".").lower() in keep_test_ext)
+             and not (skip and _posix_norm(cur_file) in skip))
+ 
+ 
+ def _residual_tier_reasons(res):
+     """_residual_tier_hits 的結果 → 印在 tier 那行的理由句清單(空 = 不升)。從 _pitfall_tier 抽出(r4 加了兩種理由,分級函式不再變複雜)。"""
+     why = []
+     if res.get("added"):
+         ad = res["added"]
+         why.append("這次推送新增了殘留(" + "、".join(ad[:3]) + (f" 等 {len(ad)} 筆" if len(ad) > 3 else "")
+                    + "),要過高風險代碼審(派工鏡頭把殘留決策與問答附給審查席逐條答)")
+@@ -71843,31 +71862,36 @@ def _cl_say_disp_block(dv, branch, head_sha, diff_range, marker_branch, at_sha):
+         print(f"    lumos code-loop check --diff {diff_range or '<範圍>'} --json", file=sys.stderr)
+     print("在意的原因:題目推到眼前不等於有人回答;推送前每一題要有機器讀得懂的交代(做到了附證據/不適用附理由/待辦連 Issue),這不是審查,跟 tier 無關。", file=sys.stderr)
+     print(f"接下來(適用題算在 {_rng},樣板用同一個範圍):", file=sys.stderr)
+     print(f"    lumos pitfalls --diff {_rng} --dispositions-template --carry > /tmp/disp.json   # 填完:", file=sys.stderr)
+     _bflag = f" --branch {marker_branch}" if marker_branch and marker_branch != branch else ""
+     if at_sha and at_sha != head_sha:
+         _bflag += f" --at-sha {at_sha}"   # 推的不是 checkout 的版本:表態要綁被推的 sha(r1 外家 finder f5)
+     print(f"    lumos code-loop dispositions /tmp/disp.json{_bflag}", file=sys.stderr)
+ 
+ 
++_LINT_MSG_SHOW = 120     # 擋下訊息每條告警印幾個字;跟 _lint_run_and_parse 截 SARIF 訊息的 120 同數
++
++
+ def _cl_say_lint_block(reason, verdict, branch, head_sha):
+     """新增告警那一道的擋下訊息。"""
+     # 三段式:發生什麼 → 為何在意 → 指令獨立一行
+     _lv = verdict.get("lint_new") or {}
+     _new = _lv.get("new") or []
+     _tq = [c for c in _new if str(c.get("rule") or "").startswith("tq/")]
+     _other = [c for c in _new if not str(c.get("rule") or "").startswith("tq/")]
+     print(f"擋下:這次改動帶進了新的問題({reason})——分支 {branch},版本 {head_sha[:8]}。", file=sys.stderr)
+     for _c in _other[:8]:
+         _wk = "(弱比對:工具沒給程式碼片段,只能用訊息比)" if _c.get("weak") else ""
+-        print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:70]}{_wk}", file=sys.stderr)
++        # 訊息印到 120 字(跟解析 SARIF 時的截斷同一個數):規則包的訊息格式是「[編號] 錯在哪;改用 <修法>」,
++        # 修法在後半段,原本截在 70 字會把修法切掉(2026-11-05 實驗專案實跑擋下訊息看到,[[Systems/kotlin規則包]])
++        print(f"  - {_c.get('file')}:{_c.get('line')} [{_c.get('rule')}] {_c.get('message', '')[:_LINT_MSG_SHOW]}{_wk}", file=sys.stderr)
+     if len(_other) > 8:
+         print(f"  …另有 {len(_other) - 8} 條", file=sys.stderr)
+     _cl_say_lint_tq(_lv, _tq)
+     for _o in (_lv.get("oversize") or [])[:5]:
+         print(f"  - {_o['file']}:這支檔 {_o['lines']} 行、{_o['bytes']} 位元組,超過{_o['over']}上限,沒被檢查"
+               f"(要讓它一直算過就登記:{_o.get('key')})", file=sys.stderr)
+     for _u in _lv.get("undone") or []:
+         if _u.get("kind") == "guard":
+             print(f"  - 作弊比對沒跑完:{_u.get('detail')}", file=sys.stderr)
+         elif _u.get("kind") != "env":
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 17303124b..7e874e39e 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -124908,12 +124908,257 @@ def t_git_partial_clone_keys():
+     _sp.run(["git", "-C", str(root), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "c", "--no-verify"])
+     real = m._git_partial_clone
+     try:   # 判不了是不是部分複製(git 叫不起來或逾時):回頭條件那支當判不了,不當成「不是」
+         m._git_partial_clone = lambda *a, **k: None
+         why = m._drift_born_env_err(root)
+     finally:
+         m._git_partial_clone = real
+     check("S8 判不了是不是部分複製:回頭條件那支判不了、講原因", why == "git 跑不起來", why)
+     check("★對照★ 不是部分複製、有提交:回頭條件那支照常判", m._drift_born_env_err(root) is None, m._drift_born_env_err(root))
+ 
++
++def t_lint_new_include_test_paths():
++    """[S7] lint_new.include_test_paths 含 kt 時,新增告警閘要掃 src/test/ 底下的 kt 檔
++    (預設照舊排除;值不是字串清單照沒設處理並警告;src/androidTest/ 本來就會掃、不受開關影響)。
++    計劃:Projects/Android協程與API寫法機械檢查標準_計劃 範圍 5。"""
++    import json as _j
++    m = _lng_module()
++
++    def run(cfg_section):
++        root, git = _lng_repo("gctl-lnitp-")
++        helper = Path(tempfile.mkdtemp(prefix="gctl-lnitp-h-"))
++        cmd = _lng_fake_linter(helper, "k.py", [["Thread.sleep", "kt-test-thread-sleep", "[TEST-28] 睡;改用虛擬時間"]])
++        _lng_declare(root, [cmd], ext="kt")
++        if cfg_section is not None:
++            (root / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": cfg_section}), encoding="utf-8")
++        for rel in ("app/src/test/kotlin/A.kt", "app/src/androidTest/kotlin/B.kt"):
++            p = root / rel
++            p.parent.mkdir(parents=True, exist_ok=True)
++            p.write_text("fun a() {}\n", encoding="utf-8")
++        git("add", "-A"); git("commit", "-m", "base")
++        base = git("rev-parse", "HEAD").stdout.strip()
++        for rel in ("app/src/test/kotlin/A.kt", "app/src/androidTest/kotlin/B.kt"):
++            (root / rel).write_text("fun a() { Thread.sleep(10) }\n", encoding="utf-8")
++        git("add", "-A"); git("commit", "-m", "壞")
++        v = m._lint_new_verdict(root, f"{base}..HEAD")
++        return v, sorted(c["file"] for c in v["new"])
++
++    v, files = run({"include_test_paths": ["kt"]})
++    check("S7 開了 kt:src/test/ 底下的新增告警被擋", v["blocked"] is True and "app/src/test/kotlin/A.kt" in files, str(files))
++    check("S7 開了 kt:src/androidTest/ 照樣會掃", "app/src/androidTest/kotlin/B.kt" in files, str(files))
++    v, files = run(None)
++    check("S7 沒設:src/test/ 照舊不掃", "app/src/test/kotlin/A.kt" not in files, str(files))
++    check("★對照★ 沒設:src/androidTest/ 本來就會掃", "app/src/androidTest/kotlin/B.kt" in files, str(files))
++    v, files = run({"include_test_paths": "kt"})
++    check("S7 值不是字串清單:照沒設處理", "app/src/test/kotlin/A.kt" not in files, str(files))
++    check("S7 值不是字串清單:印警告", any("include_test_paths" in w for w in v["warnings"]), str(v["warnings"]))
++    v, files = run({"include_test_paths": ["py"]})
++    check("S7 只開別的副檔名:kt 測試檔照舊不掃", "app/src/test/kotlin/A.kt" not in files, str(files))
++    cfg = m._lint_new_config(Path(tempfile.mkdtemp()), text=_j.dumps({"lint_new": {"include_test_paths": ["KT", ".kt"]}}).encode(), from_snapshot=True)
++    check("S7 從快照讀設定也認得這個鍵(大小寫與前導點正規化)", cfg.get("include_test_paths") == frozenset({"kt"}), str(cfg.get("include_test_paths")))
++
++
++# ── Kotlin 規則包與型錄(Projects/Android協程與API寫法機械檢查標準_計劃 S1–S3)──────────────
++_KTPACK_REL = Path("configs") / "ast-grep" / "kotlin-android"
++_KTCAT_REL = Path("skills") / "kotlin-idioms" / "checks-catalog.md"
++
++
++def _ktpack(copy=False):
++    """載入規則包自檢程式當模組。copy=True:把規則包與型錄複製到暫存目錄(同樣的相對位置),
++    模組改指向複本,給「改壞一份看檢查抓不抓得到」用,不碰真檔。"""
++    import importlib.util as U
++    import shutil as _sh
++    repo = Path(GRAPHCTL).resolve().parents[1]
++    src = repo / _KTPACK_REL / "check.py"
++    spec = U.spec_from_file_location("ktpack_check", src)
++    m = U.module_from_spec(spec)
++    spec.loader.exec_module(m)
++    if copy:
++        root = Path(tempfile.mkdtemp(prefix="gctl-ktpack-"))
++        _sh.copytree(repo / _KTPACK_REL, root / _KTPACK_REL)
++        (root / _KTCAT_REL).parent.mkdir(parents=True, exist_ok=True)
++        _sh.copy(repo / _KTCAT_REL, root / _KTCAT_REL)
++        m.HERE = root / _KTPACK_REL
++        m.CATALOG = root / _KTCAT_REL
++        m.TEST_ONLY_ANCESTOR = m.HERE / "samples" / "ancestor-named-test"
++    return m
++
++
++def _ktpack_sg():
++    """找 ast-grep;CI 一定要有(計劃 S1:CI 裝釘版本 0.51.1,不略過),本機沒有回 None。"""
++    import os as _os
++    import shutil as _sh
++    sg = _os.environ.get("LUMOS_AST_GREP") or _sh.which("ast-grep")
++    if not sg and _os.environ.get("CI"):
++        check("CI 上一定要有 ast-grep(釘 0.51.1)", False, "PATH 找不到 ast-grep")
++    return sg
++
++
++def _ktpack_edit(path, old, new):
++    t = Path(path).read_text(encoding="utf-8")
++    assert old in t, f"{path} 找不到要改的字:{old[:40]}"
++    Path(path).write_text(t.replace(old, new, 1), encoding="utf-8")
++
++
++def t_kotlin_rulepack_samples():
++    """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
++    只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""
++    sg = _ktpack_sg()
++    if not sg:
++        print("  ⊘ 本機沒裝 ast-grep,略過(CI 會跑)")
++        return
++    m = _ktpack()
++    rules, probs = m.check(sg)
++    sample_probs = [p for p in probs if any(k in p[1] for k in ("壞例", "好例", "樣本", "載入", "祖先"))]
++    check("S1 真規則包的樣本與載入條數全過", not sample_probs, str(sample_probs[:5]))
++    check("S1 規則包至少一百條(防整包被清空還說全過)", len(rules) >= 100, str(len(rules)))
++    # ── 改壞複本:每一道檢查各自要紅 ──
++    mc = _ktpack(copy=True)
++    rid = "kt-sequential-independent-await"
++    bad = next((mc.HERE / "samples" / "bad" / rid).rglob("*.kt"))
++    bad.write_text("package bad\n", encoding="utf-8")
++    good = next((mc.HERE / "samples" / "good" / "kt-test-thread-sleep").rglob("*.kt"))
++    good.write_text(good.read_text(encoding="utf-8") + "\nfun extraSleepy() { Thread.sleep(5) }\n", encoding="utf-8")
++    dup = mc.HERE / "rules" / "zz-dup.yml"
++    dup.write_text("id: kt-dup-probe\nlanguage: kotlin\nseverity: error\nmessage: '[API-3] 探針;改用 launch'\nrule:\n  pattern: probeOnly()\n", encoding="utf-8")
++    t_rules = [r for r in mc.load_rules() if r["test_only"]]
++    if t_rules:
++        f = mc.HERE / t_rules[0]["dir"] / t_rules[0]["file"]
++        _ktpack_edit(f, "'**/src/test/**'", "'**/test/**'")
++    _r, cp = mc.check(sg)
++    txt = "\n".join(f"{a}: {b}" for a, b in cp)
++    check("★改壞★ 壞例清空要報命中不足", f"{rid}: 壞例只命中 0 處" in txt, txt[:300])
++    check("★改壞★ 好例混入壞寫法要報誤報", "kt-test-thread-sleep: 好例誤報" in txt, txt[:300])
++    check("★改壞★ 多一條沒樣本的規則要報缺樣本", "kt-dup-probe: 缺壞例樣本" in txt, txt[:300])
++    if t_rules:
++        check("★改壞★ 路徑過濾沒錨在 src/ 要報祖先目錄命中", "祖先目錄叫 test" in txt, txt[:300])
++
++
++def t_kotlin_rulepack_messages_cite_catalog():
++    """[S2] 每條規則訊息以型錄裡存在的 [編號] 開頭、≤120 字、有分號與改用/改成、不含 $;id 唯一;
++    severity 只三種;引用出處不全的列只准 hint 級。改壞的訊息要被逐條抓到。"""
++    m = _ktpack()
++    rules = m.load_rules()
++    cat_ids, _t = m.catalog_ids()
++    probs = m.message_problems(rules, cat_ids)
++    check("S2 真規則包的訊息格式全過", not probs, str(probs[:5]))
++    ids = [r["id"] for r in rules]
++    check("S2 id 唯一", len(ids) == len(set(ids)), str(len(ids)))
++    fake = [
++        {"id": "kt-a", "severity": "error", "dir": "rules", "message": "[API-3] 太長;改用 launch" + "字" * 120},
++        {"id": "kt-b", "severity": "error", "dir": "rules", "message": "[API-3] 有錢號 $X;改用 launch"},
++        {"id": "kt-c", "severity": "error", "dir": "rules", "message": "[API-3] 沒有分號改用 launch"},
++        {"id": "kt-d", "severity": "error", "dir": "rules", "message": "[NOPE-9] 編號不存在;改用 launch"},
++        {"id": "kt-e", "severity": "info", "dir": "rules", "message": "[API-3] 等級不對;改用 launch"},
++        {"id": "kt-f", "severity": "hint", "dir": "rules", "message": "[API-3] hint 放錯目錄;改用 launch"},
++        {"id": "x-g", "severity": "error", "dir": "rules", "message": "[API-3] 前綴不對;改用 launch"},
++    ]
++    got = m.message_problems(fake, cat_ids)
++    want = {"kt-a": "超過", "kt-b": "$", "kt-c": "分號", "kt-d": "不在型錄", "kt-e": "severity", "kt-f": "rules-hints", "x-g": "前綴"}
++    for rid, key in want.items():
++        check(f"★改壞★ {rid} 要被抓到({key})", any(a == rid and key in b for a, b in got), str([p for p in got if p[0] == rid]))
++    weak = next((r for r in m.catalog_ids()[1].splitlines() if "(出處不全)" in r and r.startswith("| ")), None)
++    if weak:
++        wid = weak.split("|")[1].strip()
++        p2 = m.catalog_problems([{"id": "kt-w", "severity": "error", "message": f"[{wid}] 測;改用 x"}])
++        check("★改壞★ 非 hint 規則引用出處不全的列要被抓到", any(a == "kt-w" for a, _b in p2), str(p2[-3:]))
++
++
++def t_kotlin_catalog_rows_wired():
++    """[S3] 型錄每列欄位數對、編號唯一、標準寫法/接電方式/通電批次非空;形狀類有告警或正向約束;
++    語意類有表態對程式、沒標人裁的有盲判席;來源有網址或縮寫且不是未核對;決策表列編號連號、
++    觸發字不含常用字、對應檢查存在、每條語意列都被收;〈待查證〉節不在檢查範圍。改壞複本要逐項抓到。"""
++    m = _ktpack()
++    probs = m.catalog_problems()
++    check("S3 真型錄格式全過", not probs, f"{len(probs)} 個:{probs[:5]}")
++    mc = _ktpack(copy=True)
++    t = mc.CATALOG.read_text(encoding="utf-8")
++    lines = t.split("\n")
++    i_dt = next(i for i, ln in enumerate(lines) if ln.startswith("## 情境決策表"))
++    i_pend = next(i for i, ln in enumerate(lines) if ln.startswith("## 待查證"))
++    main_rows = [i for i, ln in enumerate(lines[:i_dt]) if mc._MAIN_ROW_RE.match(ln)]
++    sem_i = next(i for i in main_rows if mc._cells(lines[i])[7].startswith("語意") and "(人裁)" not in lines[i])
++    shp_i = next(i for i in main_rows if mc._cells(lines[i])[7].startswith("形狀"))
++    dt_rows = [i for i in range(i_dt, i_pend) if lines[i].startswith("| D-")]
++    sem_id = mc._cells(lines[sem_i])[0]
++    c = mc._cells(lines[sem_i]); c[8] = "表態對程式"; lines[sem_i] = "| " + " | ".join(c) + " |"
++    c = mc._cells(lines[shp_i]); shp_id = c[0]; c[11] = "無網址(一般知識)"; lines[shp_i] = "| " + " | ".join(c) + " |"
++    c = mc._cells(lines[dt_rows[0]]); c[4] = c[4] + "、map"; lines[dt_rows[0]] = "| " + " | ".join(c) + " |"
++    c = mc._cells(lines[dt_rows[1]]); c[0] = "D-99"; lines[dt_rows[1]] = "| " + " | ".join(c) + " |"
++    lines.insert(main_rows[0] + 1, lines[main_rows[0]])           # 編號重複
++    pend_row = next(i for i in range(i_pend + 1, len(lines)) if lines[i].startswith("| ") and not lines[i].startswith("| 編號"))
++    lines[pend_row] = lines[pend_row] + " 多一格 |"                  # 待查證節壞掉不算
++    mc.CATALOG.write_text("\n".join(lines), encoding="utf-8")
++    got = mc.catalog_problems()
++    txt = "\n".join(f"{a}: {b}" for a, b in got)
++    check("★改壞★ 語意列沒盲判席要抓到", f"{sem_id}: 語意類(沒標人裁)要有「盲判席」" in txt, txt[:400])
++    check("★改壞★ 來源寫無網址要抓到", f"{shp_id}: 來源還寫著" in txt, txt[:400])
++    check("★改壞★ 觸發字含常用字要抓到", "觸發字含常用字:map" in txt, txt[:400])
++    check("★改壞★ 列編號不連號要抓到", "列編號要從 D-1 連號" in txt, txt[:400])
++    check("★改壞★ 編號重複要抓到", "編號重複" in txt, txt[:400])
++    check("★對照★ 待查證節的列不受檢查", "多一格" not in txt and not any("待查證" in b for _a, b in got), txt[:400])
++
++
++def t_lint_new_astgrep_kotlin_two_files():
++    """[S4] 照範本宣告真的規則包、一次提交改兩支 kt 檔,其中一支新增一處 `response.body()!!`、
++    基準版另一支已有一處時,新增告警閘只擋新增那一處,訊息帶型錄編號。用真的 ast-grep(CI 一定有)。"""
++    import re
++    sg = _ktpack_sg()
++    if not sg:
++        print("  ⊘ 本機沒裝 ast-grep,略過(CI 會跑)")
++        return
++    m = _lng_module()
++    pack = Path(GRAPHCTL).resolve().parents[1] / _KTPACK_REL / "sgconfig.yml"
++    root, git = _lng_repo("gctl-lnkt-")
++    cmd = f"{sg} scan --config {pack} --format sarif {{LINT_FILES}} > {{LINT_SARIF_OUT}}"
++    _lng_declare(root, [cmd], ext="kt")
++    src = root / "app" / "src" / "main" / "kotlin"
++    src.mkdir(parents=True, exist_ok=True)
++    old = ("suspend fun loadUser(api: Api): User {\n    val response = api.user()\n"
++           "    return response.body()!!\n}\n")
++    (src / "A.kt").write_text(old, encoding="utf-8")
++    (src / "B.kt").write_text("fun ok() = 1\n", encoding="utf-8")
++    git("add", "-A"); git("commit", "-m", "base")
++    base = git("rev-parse", "HEAD").stdout.strip()
++    (src / "A.kt").write_text(old + "\nfun touched() = 2\n", encoding="utf-8")
++    (src / "B.kt").write_text("fun ok() = 1\n\nsuspend fun loadFeed(api: Api): Feed {\n"
++                              "    val response = api.feed()\n    return response.body()!!\n}\n", encoding="utf-8")
++    git("add", "-A"); git("commit", "-m", "新增一處")
++    v = m._lint_new_verdict(root, f"{base}..HEAD")
++    files = sorted(c["file"] for c in v["new"])
++    check("S4 擋下", v["blocked"] is True, str(v.get("reason")))
++    check("S4 只擋新增那一處(B.kt),基準版已有的 A.kt 不擋", files == ["app/src/main/kotlin/B.kt"], str(files))
++    check("S4 訊息帶型錄編號", all(re.match(r"\[[A-Z]+-\d+\]", c.get("message") or "") for c in v["new"]), str(v["new"][:1]))
++    check("★對照★ 命令真的跑了(不是環境不可用放行)", v["ran"] and not v["autopass"], str(v.get("autopass_reason")))
++
++
++def t_lint_block_message_shows_fix():
++    """擋下訊息要把規則訊息印到 120 字:規則包訊息「[編號] 錯在哪;改用 <修法>」的修法在後半段,
++    截在 70 字會把修法切掉(2026-11-05 實驗專案實跑看到)。"""
++    import contextlib
++    import io
++    m = _lng_module()
++    msg = "[API-15]response.body()!! 沒先看 isSuccessful,伺服器回 4xx/5xx 時會崩潰;改成先判 isSuccessful 再取 body,失敗走 errorBody"
++    check("★前提★ 這條訊息超過 70 字、不超過 120 字", 70 < len(msg) <= 120, str(len(msg)))
++    v = {"lint_new": {"new": [{"file": "A.kt", "line": 3, "rule": "kt-retrofit-body-bang", "message": msg}]}}
++    buf = io.StringIO()
++    with contextlib.redirect_stderr(buf):
++        m._cl_say_lint_block("1 條新增告警", v, "main", "0" * 40)
++    check("擋下訊息印出修法(訊息全文)", msg in buf.getvalue(), buf.getvalue()[:300])
++
++
++def t_kotlin_rulepack_samples_not_scanned_as_code():
++    """規則包樣本故意埋壞寫法:風險分級、棧別題、新增告警閘(共用 _stack_changed_ok)都不把它們當產品碼,
++    每支檔有家也用本 repo 設定的 node_home.ignore 略過;一般 kt 檔與消費專案裡長得像的路徑照掃。"""
++    import json as _j
++    m = _lng_module()
++    smp = "configs/ast-grep/kotlin-android/samples/bad/kt-x/src/main/kotlin/X.kt"
++    check("樣本不當產品碼掃", m._stack_changed_ok(smp) is False, smp)
++    check("★對照★ 一般 kt 檔照掃", m._stack_changed_ok("app/src/main/kotlin/X.kt") is True, "")
++    check("★對照★ 別的 samples 目錄照掃(只認規則包那一層)", m._stack_changed_ok("app/samples/bad/X.kt") is True, "")
++    cfg = _j.loads((Path(GRAPHCTL).resolve().parents[1] / ".lumos" / "config.json").read_text(encoding="utf-8"))
++    ig = (cfg.get("node_home") or {}).get("ignore") or []
++    check("每支檔有家略過規則包樣本", m._cochange_excluded(smp, ig), str(ig))
++    check("★對照★ 規則包自檢程式本身不略過(它要有家)", not m._cochange_excluded("configs/ast-grep/kotlin-android/check.py", ig), str(ig))
++
+ if __name__ == "__main__":
+     sys.exit(main())

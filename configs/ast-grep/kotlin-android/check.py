@@ -18,14 +18,28 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CATALOG = HERE.parents[2] / "skills" / "kotlin-idioms" / "checks-catalog.md"
-CONFIGS = (("rules", "sgconfig.yml"), ("rules-hints", "sgconfig-hints.yml"))
-SEVERITIES = ("error", "warning", "hint")
-MSG_MAX = 120          # 新增告警閘解析 SARIF 時把訊息截在 120 字
+# 三級:rules=會擋(error/warning);rules-review=語意覆核級(info,形狀分不出對錯、要盲判代理逐筆判,
+# 第三批 [[Projects/Android寫法語意情境表態與盲判_計劃]] 接上前不擋);rules-hints=提示級(hint,預設不接)
+CONFIGS = (("rules", "sgconfig.yml"), ("rules-review", "sgconfig-review.yml"), ("rules-hints", "sgconfig-hints.yml"))
+SEVERITIES = ("error", "warning", "info", "hint")
+_DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": ("error", "warning")}
+MSG_MAX = 120
+REVIEW_FP_PREFIX = "review-fp-"   # 好例樣本裡記「語意覆核級規則已知會誤報、要靠盲判排除」的檔名開頭
+SCAN_TIMEOUT = 120     # 一次掃描的上限(秒);正常不到一秒,卡住時不要拖到外層測試逾時          # 新增告警閘解析 SARIF 時把訊息截在 120 字
 # 好例「一段」= 頂格開頭的宣告(函式、類別、物件、介面、帶註記的宣告)
 _DECL_RE = re.compile(r"^(?:@|fun |suspend fun |private |internal |public |class |data class |object |interface |abstract |open |sealed |enum |val |var |inline )")
 # 檢查會談暫存區路徑(型錄落地時要拿掉)
 _SCRATCH_RE = re.compile(r"(/private/tmp/|/tmp/claude-|lumos-scratch|scratchpad/)")
 TEST_ONLY_ANCESTOR = HERE / "samples" / "ancestor-named-test"
+
+
+def _files_block_is_test_only(doc):
+    """這條規則的 files: 區塊(只看那一段,不看 ignores 或訊息)是不是只列測試目錄。"""
+    m = re.search(r"^files:(.*?)(?=^\S)", doc + "\nz", re.M | re.S)
+    if not m:
+        return False
+    block = m.group(1)
+    return bool(re.search(r"src/(test|androidTest|testFixtures)", block)) and "src/main" not in block
 
 
 def load_rules():
@@ -44,17 +58,16 @@ def load_rules():
                     text = text[1:-1].replace("''", "'") if text[0] == "'" else text[1:-1]
                 rules.append({"id": m.group(1), "severity": sev.group(1) if sev else "",
                               "message": text, "dir": d, "config": cfg, "file": f.name,
-                              "test_only": bool(re.search(r"^files:.*src/(test|androidTest|testFixtures)", doc, re.M | re.S)
-                                                and "src/main" not in (re.search(r"^files:.*?(?=^\w)", doc + "\nz", re.M | re.S) or [""])[0])})
+                              "test_only": _files_block_is_test_only(doc)})
     return rules
 
 
 def catalog_ids():
     """型錄主表裡的編號(〈待查證〉節以後不算)。"""
     text = CATALOG.read_text(encoding="utf-8")
-    cut = text.find("\n## 待查證")
+    cut = text.find("\n## 情境決策表")   # 主表在決策表之前;決策表的 D-n 與來源索引的編號都不是規則該引的編號
     main = text if cut < 0 else text[:cut]
-    return set(re.findall(r"^\|\s*([A-Z]+-\d+)\s*\|", main, re.M)), text
+    return {m.group(1) for m in map(_MAIN_ROW_RE.match, main.splitlines()) if m}, text
 
 
 _CELL_RE = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')   # 反引號裡的直線不算欄位分隔
@@ -71,6 +84,8 @@ STOP_TRIGGERS = frozenset((
     # r1 接手席點名的(第二、三批設計審):型別名或方法名太泛,出現在大量無關程式裡
     "Exception", "Result", "Response", "insert", "offset", "sealed", "onClick", "isActive", "key", "test",
     "version", "size", "token", "edit", "Application", "Intent", "Context", "delay", "Dao", "Repository",
+    # 第三批設計審 r2 通才席:幾乎每支 ViewModel 或資料層都有,當觸發字會讓每次推送都出一堆情境段
+    "suspend fun", "StateFlow", "withContext", "viewModelScope", "Deferred", "Dispatchers.IO", "Dispatchers.Default",
 ))
 
 
@@ -87,6 +102,10 @@ def catalog_problems(rules=None):
         return [("<catalog>", "找不到〈情境決策表〉或〈待查證〉節")]
     main, dt = text[:i_dt], text[i_dt:i_pend]
     rows, seen = {}, set()
+    # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
+    i_src = text.find("\n## 來源縮寫")
+    i_src_end = text.find("\n## ", i_src + 5) if i_src >= 0 else -1
+    abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end], re.M)) if i_src >= 0 else set()
     for ln in main.splitlines():
         m = _MAIN_ROW_RE.match(ln)
         if not m:
@@ -112,7 +131,7 @@ def catalog_problems(rules=None):
         if "(出處不全)" not in name:
             if any(w in src for w in _WEAK_SRC):
                 problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
-            if not re.search(r"https?://|\b[A-Z][A-Z0-9-]{1,}\b", src):
+            if not (re.search(r"https?://", src) or any(re.search(r"(?<![A-Z0-9-])" + re.escape(a) + r"(?![A-Z0-9-])", src) for a in abbrs)):
                 problems.append((rid, "來源沒有網址或來源縮寫"))
     referenced, d_seen = set(), []
     for ln in dt.splitlines():
@@ -125,8 +144,10 @@ def catalog_problems(rules=None):
             continue
         d_seen.append(did)
         trig = [t.strip().strip("`") for t in re.split(r"[、,,]", c[4]) if t.strip()]
-        if not trig:
-            problems.append((did, "觸發字不准空"))
+        if c[4].strip() in ("(無)", "(無)"):
+            trig = []      # 刻意不設觸發字:這個情境沒有不常見的字面特徵,不出情境段,只靠規則包與代碼審
+        elif not trig:
+            problems.append((did, "觸發字不准空(刻意不設寫「(無)」)"))
         bad = [t for t in trig if t in STOP_TRIGGERS]
         if bad:
             problems.append((did, "觸發字含常用字:" + "、".join(bad)))
@@ -161,8 +182,8 @@ def message_problems(rules, cat_ids):
             problems.append((rid, "id 要用 kt- 前綴"))
         if r["severity"] not in SEVERITIES:
             problems.append((rid, f"severity 只能是 {'/'.join(SEVERITIES)}"))
-        if (r["severity"] == "hint") != (r["dir"] == "rules-hints"):
-            problems.append((rid, "hint 級要放 rules-hints/,其他級不准放那裡"))
+        if r["severity"] not in _DIR_SEVERITY.get(r["dir"], ()):
+            problems.append((rid, f"{r['dir']}/ 只收 {'/'.join(_DIR_SEVERITY.get(r['dir'], ()))} 級(hint 放 rules-hints/、info 放 rules-review/)"))
         m = re.match(r"\[([A-Z]+-\d+)\]", msg)
         if not m:
             problems.append((rid, "message 要以 [型錄編號] 開頭"))
@@ -179,8 +200,11 @@ def message_problems(rules, cat_ids):
 
 def scan(sg, cfg, target):
     """跑一次 ast-grep,回 [(ruleId, file)];失敗回 None。"""
-    r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--json=stream", str(target)],
-                       capture_output=True, text=True, cwd=str(HERE))
+    try:
+        r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--json=stream", str(target)],
+                           capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
     if r.returncode not in (0, 1):
         return None
     out = []
@@ -192,10 +216,24 @@ def scan(sg, cfg, target):
 
 
 def loaded_count(sg, cfg):
-    r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--inspect", "summary", str(HERE / "samples" / "good")],
-                       capture_output=True, text=True, cwd=str(HERE))
+    try:
+        r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--inspect", "summary", str(HERE / "samples" / "good")],
+                           capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired):
+        return (None, None)
     m = re.search(r"effectiveRuleCount=(\d+),skippedRuleCount=(\d+)", r.stderr)
     return (int(m.group(1)), int(m.group(2))) if m else (None, None)
+
+
+def _sample_owner(f, kind):
+    """命中檔屬於哪條規則的樣本:samples/<kind>/<規則 id>/…;只看規則包底下那一段,祖先目錄叫什麼都不影響。"""
+    p = Path(f)
+    try:
+        p = p.resolve().relative_to(HERE.resolve()) if p.is_absolute() else p
+    except ValueError:
+        return ""
+    parts = p.parts
+    return parts[2] if len(parts) > 2 and parts[0] == "samples" and parts[1] == kind else ""
 
 
 def good_cases(path):
@@ -208,6 +246,8 @@ def good_cases(path):
 def check(sg):
     problems = []
     rules = load_rules()
+    if not rules:
+        problems.append(("<pack>", "一條規則都沒讀到(rules/ 與 rules-hints/ 是空的?)"))
     ids = [r["id"] for r in rules]
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
@@ -220,6 +260,7 @@ def check(sg):
         got, skipped = loaded_count(sg, cfg)
         if got != want or skipped:
             problems.append(("<pack>", f"{cfg} 載入 {got} 條(略過 {skipped}),規則檔裡有 {want} 個 id"))
+    review_ids = {r["id"] for r in rules if r["dir"] == "rules-review"}
     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
     hits = {}
     for kind in ("bad", "good"):
@@ -229,8 +270,9 @@ def check(sg):
                 problems.append(("<pack>", f"{cfg} 掃 samples/{kind} 跑不起來"))
                 continue
             for rule_id, f in got:
-                parts = Path(f).parts
-                owner = parts[parts.index(kind) + 1] if kind in parts and parts.index(kind) + 1 < len(parts) else ""
+                owner = _sample_owner(f, kind)
+                if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and review_ids and rule_id in review_ids:
+                    continue      # 語意覆核級規則已知的形狀誤報:記在樣本裡給盲判對照,不算好例誤報
                 hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
     for r in rules:
         rid = r["id"]
@@ -255,7 +297,11 @@ def check(sg):
             problems.append(("<pack>", "缺 samples/ancestor-named-test(祖先目錄叫 test 的正式碼樣本)"))
         else:
             for d, cfg in CONFIGS:
-                for (i, f) in scan(sg, cfg, TEST_ONLY_ANCESTOR) or []:
+                got = scan(sg, cfg, TEST_ONLY_ANCESTOR)
+                if got is None:
+                    problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))
+                    continue
+                for (i, f) in got:
                     if any(r["id"] == i for r in test_only):
                         problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
     return rules, problems
@@ -270,8 +316,12 @@ def main(argv):
         return 1 if probs else 0
     sg = None
     if "--sg" in argv:
-        sg = argv[argv.index("--sg") + 1]
-    sg = sg or shutil.which("ast-grep") or shutil.which("sg")
+        i = argv.index("--sg")
+        if i + 1 >= len(argv):
+            print("--sg 後面要給 ast-grep 執行檔路徑", file=sys.stderr)
+            return 2
+        sg = argv[i + 1]
+    sg = sg or shutil.which("ast-grep")   # 不退去找 sg:Linux 上 sg 是切換群組的系統工具
     if not sg or not os.access(sg, os.X_OK):
         print("找不到 ast-grep(帶 --sg <路徑>)", file=sys.stderr)
         return 2

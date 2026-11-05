@@ -16,3 +16,10 @@ class F : Fragment() {
         title.setText(read()) // BAD
     }
 }
+
+// 名字裡藏著 main 字樣但不是 Main 派發器
+class Domain(private val domainDispatcher: CoroutineDispatcher, private val tv: TextView) {
+    fun a(scope: CoroutineScope) = scope.launch(Dispatchers.IO) {
+        withContext(domainDispatcher) { tv.text = load() } // BAD
+    }
+}

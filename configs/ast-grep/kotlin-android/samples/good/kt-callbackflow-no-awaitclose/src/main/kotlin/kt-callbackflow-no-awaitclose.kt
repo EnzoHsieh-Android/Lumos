@@ -9,3 +9,9 @@ fun clicks(view: View): Flow<Unit> = callbackFlow {
     view.setOnClickListener { trySend(Unit) }
     awaitClose(block = { view.setOnClickListener(null) }) // GOOD
 }
+
+fun typed(api: Api): Flow<Int> = callbackFlow<Int> {
+    val l = Listener { trySend(it) }
+    api.register(l)
+    awaitClose { api.unregister(l) } // GOOD
+}

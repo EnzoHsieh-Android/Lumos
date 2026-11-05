@@ -62,6 +62,14 @@ rule:
       - has:
           kind: user_type
           regex: ^(Int|Long|Short|Byte|Boolean|Double|Float|Char)$
+      # 每個建構子參數都有預設值:Kotlin 生無參建構子,Gson 用它,預設值有效
+      - inside:
+          kind: primary_constructor
+          not:
+            has:
+              kind: class_parameter
+              not:
+                regex: '\bva[lr]\s+\w+\s*:[^=]*='
 ---
 id: kt-datastore-read-no-catch
 language: kotlin
@@ -85,6 +93,11 @@ rule:
           stopBy: end
       - inside:
           kind: try_expression
+          stopBy: end
+      - inside:
+          any:
+            - pattern: runCatching { $$$ }
+            - pattern: $Y.runCatching { $$$ }
           stopBy: end
 ---
 id: kt-datastore-serializer-no-corruption
@@ -226,7 +239,10 @@ rule:
   any:
     - pattern: $D.rawQuery($$$)
     - pattern: $D.execSQL($$$)
-    - pattern: $D.query($$$)
+    # query 只認資料庫物件(db/database/readableDatabase…),GraphQL、搜尋客戶端的 query 不是 SQL
+    - all:
+        - pattern: $D.query($$$)
+        - regex: '(?i)^(\w+\.)*\w*(db|database)\s*\.\s*query\s*\('
     - pattern: SimpleSQLiteQuery($$$)
   has:
     kind: call_suffix
@@ -236,6 +252,10 @@ rule:
         kind: value_argument
         nthChild: 1
         matches: tainted-sql
+        # PRAGMA 與 DDL(CREATE/DROP/ALTER)的名稱與值 SQLite 不能用 ? 綁定,綁定參數的修法用不上
+        not:
+          regex: '(?i)^"\s*(PRAGMA|CREATE|DROP|ALTER)\b'
+
 ---
 id: kt-external-storage-hardcoded
 language: kotlin
@@ -273,11 +293,10 @@ rule:
   any:
     - pattern: Result.retry()
     - pattern: ListenableWorker.Result.retry()
+  # 同一個函式裡有 runAttemptCount 判斷(含先擋後回的早退寫法)就放行
   not:
     inside:
-      any:
-        - kind: if_expression
-        - kind: when_expression
+      kind: function_declaration
       has:
         regex: runAttemptCount
         stopBy: end
@@ -350,11 +369,8 @@ language: kotlin
 severity: warning
 message: '[DATA-52]onReceive 開協程/執行緒或做網路就返回,接收器結束後行程隨時被殺;改成短工作 goAsync() 並在 finally finish(),長工作交 WorkManager'
 rule:
+  # 開協程/執行緒的長相歸 kt-onreceive-async-without-goasync 報(同列 DATA-52),這裡只管阻塞與網路
   any:
-    - pattern: $S.launch { $$$ }
-    - pattern: $S.launch($$$) { $$$ }
-    - pattern: thread { $$$ }
-    - pattern: thread($$$) { $$$ }
     - pattern: runBlocking { $$$ }
     - pattern: runBlocking($$$) { $$$ }
     - pattern: $C.newCall($$$).execute()
@@ -497,6 +513,7 @@ id: kt-room-main-thread-queries
 language: kotlin
 severity: error
 message: '[DATA-1]allowMainThreadQueries 讓資料庫查詢跑在主執行緒,卡頓甚至 ANR;改成拿掉,DAO 改 suspend fun 或回傳 Flow'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   pattern: $B.allowMainThreadQueries()
 ---
@@ -545,6 +562,7 @@ id: kt-datastore-not-singleton
 language: kotlin
 severity: error
 message: '[DATA-3]DataStore 只能在頂層建一次(同一個檔兩個實例會在執行期丟例外);改成檔案頂層的 by preferencesDataStore 或注入單例'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - pattern: PreferenceDataStoreFactory.create($$$)
@@ -561,9 +579,22 @@ rule:
       - kind: function_body
     stopBy: end
   not:
-    inside:
-      kind: object_declaration
-      stopBy: end
+    any:
+      - inside:
+          kind: object_declaration
+          stopBy: end
+      - inside:
+          kind: companion_object
+          stopBy: end
+      # DI 提供者:@Provides(Hilt/Dagger)函式只會照作用域建一次
+      - inside:
+          kind: function_declaration
+          stopBy: end
+          has:
+            kind: modifiers
+            has:
+              kind: annotation
+              regex: ^@Provides\b
 ---
 # P6
 id: kt-onreceive-async-without-goasync
@@ -580,9 +611,12 @@ rule:
     - has:
         any:
           - pattern: launch { $$$ }
+          - pattern: launch($$$) { $$$ }
           - pattern: $S.launch { $$$ }
           - pattern: $S.launch($$$) { $$$ }
+          - pattern: async { $$$ }
           - pattern: $S.async { $$$ }
+          - pattern: $S.async($$$) { $$$ }
           - pattern: thread { $$$ }
           - pattern: thread($$$) { $$$ }
         stopBy: end

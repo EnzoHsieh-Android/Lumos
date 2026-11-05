@@ -11,9 +11,3 @@ private fun ScreenPreview() {
 private fun DetailPreview() {
     AppTheme { Detail(vm = hiltViewModel()) } // BAD
 }
-
-@Preview(showBackground = true)
-@Composable
-private fun CartPreview() {
-    AppTheme { Cart(CartViewModel(FakeRepo())) } // BAD
-}

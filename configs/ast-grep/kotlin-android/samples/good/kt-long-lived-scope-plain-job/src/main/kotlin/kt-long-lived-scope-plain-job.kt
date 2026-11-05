@@ -13,3 +13,8 @@ class Once {
 class Ui {
     private val scope = MainScope() // GOOD
 }
+// 容易誤報:SupervisorJob 先存進變數再組 scope
+class Holder {
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main + job) // GOOD
+}

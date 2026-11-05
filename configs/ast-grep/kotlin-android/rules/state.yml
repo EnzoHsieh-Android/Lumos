@@ -4,10 +4,15 @@ severity: warning
 message: '[STATE-11]SingleLiveEvent/Event 包裝類在觀察者不活躍時吞事件、多個觀察者只有一個收到;改成 uiState 的欄位,UI 處理完回報 ViewModel 清掉'
 rule:
   any:
+    # MutableLiveData 子類只認名字看得出是事件包裝的(SingleLiveEvent、XxxEvent、Once…);NonNullLiveData 這類不算
     - kind: class_declaration
-      has:
-        kind: delegation_specifier
-        regex: ^MutableLiveData<
+      all:
+        - has:
+            kind: delegation_specifier
+            regex: ^MutableLiveData<
+        - has:
+            kind: type_identifier
+            regex: (Single|Event|Once|Consumable)
     - kind: class_declaration
       has:
         kind: type_identifier
@@ -25,11 +30,16 @@ rule:
     kind: user_type
     regex: ^(Mutable)?(LiveData|Flow|StateFlow|SharedFlow)\b
   not:
-    has:
-      kind: modifiers
-      has:
-        regex: ^(private|protected|override)$
-        stopBy: end
+    any:
+      - has:
+          kind: modifiers
+          has:
+            regex: ^(private|protected|override)$
+            stopBy: end
+      # 本體只回傳既有流的唯讀視圖(_state.asStateFlow()、_events.receiveAsFlow()、_x)不重打資料層
+      - has:
+          kind: function_body
+          regex: '^=\s*_?\w+(\s*\.\s*(asStateFlow|asSharedFlow|receiveAsFlow)\(\))?$'
   inside:
     kind: class_body
     inside:
@@ -50,45 +60,6 @@ rule:
     kind: getter
     stopBy: end
 ---
-id: kt-mutate-state-nested-collection
-language: kotlin
-severity: error
-message: '[STATE-7]直接改狀態裡某個欄位集合的內容,參照沒變不會發新值;改用 update { it.copy(items = it.items + x) }'
-rule:
-  any:
-    - pattern: $X.value.$F.add($$$)
-    - pattern: $X.value.$F.addAll($$$)
-    - pattern: $X.value.$F.remove($$$)
-    - pattern: $X.value.$F.removeAt($$$)
-    - pattern: $X.value.$F.removeAll($$$)
-    - pattern: $X.value.$F.clear()
-    - pattern: $X.value.$F.put($$$)
-    - pattern: $X.value.$F[$K] = $V
----
-id: kt-livedata-setvalue-background
-language: kotlin
-severity: error
-message: '[STATE-16]背景執行緒呼叫 LiveData.setValue 會拋 IllegalStateException;背景改用 postValue,或切回主執行緒再 setValue'
-rule:
-  pattern: $L.setValue($$$)
-  inside:
-    any:
-      - pattern: withContext(Dispatchers.IO) { $$$ }
-      - pattern: withContext(Dispatchers.Default) { $$$ }
-      - pattern: $S.launch(Dispatchers.IO) { $$$ }
-      - pattern: $S.launch(Dispatchers.Default) { $$$ }
-      - pattern: launch(Dispatchers.IO) { $$$ }
-      - pattern: launch(Dispatchers.Default) { $$$ }
-      - pattern: thread { $$$ }
-      - pattern: thread($$$) { $$$ }
-    stopBy: end
-  not:
-    inside:
-      any:
-        - pattern: withContext(Dispatchers.Main) { $$$ }
-        - pattern: withContext(Dispatchers.Main.immediate) { $$$ }
-      stopBy: end
----
 id: kt-savedstate-bang
 language: kotlin
 severity: warning
@@ -100,7 +71,8 @@ rule:
     - pattern: $H[$K]!!
 constraints:
   H:
-    regex: (?i)(savedState|handle)
+    # 只認 SavedStateHandle 慣用名;handlers、errorHandler、savedStates、savedStateRegistry 都不是
+    regex: '^(\w+\.)*_?(savedStateHandle|stateHandle|handle)$'
 ---
 id: kt-persistable-bundle
 language: kotlin
@@ -119,21 +91,14 @@ rule:
       regex: ^(onSaveInstanceState|onRestoreInstanceState|onCreate|onPostCreate)$
     stopBy: end
 ---
-id: kt-state-value-property-assign
-language: kotlin
-severity: error
-message: '[STATE-7]改 state.value 裡物件的欄位,參照沒變不會發新值,畫面不更新;改成不可變 data class 並用 update { it.copy(…) }'
-rule:
-  kind: assignment
-  regex: '^\s*[\w?!]+(\.[\w?!]+)*\.value(\?|!!)?\.[\w.?!\[\]]+\s*(\+|-|\*)?='
----
 id: kt-statein-lazily-in-viewmodel
 language: kotlin
 severity: warning
 message: '[STATE-4]ViewModel 裡 stateIn/shareIn 用 Lazily,首次訂閱後上游永遠不停,背景照樣耗電耗流量;改用 SharingStarted.WhileSubscribed(5_000)'
 rule:
   kind: value_argument
-  regex: '^(started\s*=\s*)?(SharingStarted\.)?Lazily$'
+  # SharingStarted.Lazily 歸 kt-statein-lazily-or-no-timeout 報(同列 STATE-4),這裡只管 import 後直接寫 Lazily
+  regex: '^(started\s*=\s*)?Lazily$'
   inside:
     kind: value_arguments
     inside:
@@ -148,22 +113,6 @@ rule:
             stopBy: end
             kind: delegation_specifier
             regex: \bViewModel\b
----
-id: kt-mutate-state-collection
-language: kotlin
-severity: error
-message: '[STATE-7]直接改狀態裡集合的內容,參照沒變不會發新值;改用 update { it + x } 或換新集合'
-rule:
-  any:
-    - pattern: $X.value.add($$$)
-    - pattern: $X.value.addAll($$$)
-    - pattern: $X.value.remove($$$)
-    - pattern: $X.value.removeAt($$$)
-    - pattern: $X.value.removeAll($$$)
-    - pattern: $X.value.clear()
-    - pattern: $X.value.put($$$)
-    - pattern: $X.value.putAll($$$)
-    - pattern: $X.value[$K] = $V
 ---
 id: kt-init-collect-into-state
 language: kotlin
@@ -187,6 +136,7 @@ id: kt-public-mutable-holder
 language: kotlin
 severity: warning
 message: '[STATE-2]公開可變狀態容器(MutableLiveData/MutableSharedFlow/mutableStateOf/Channel 等),外部可竄改狀態;改成 private 的 _state,對外唯讀暴露'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**']
 rule:
   kind: property_declaration
   has:
@@ -202,6 +152,12 @@ rule:
       - pattern: Channel($$$)
       - pattern: Channel<$T>($$$)
     stopBy: end
+    # 建好立刻轉唯讀(.asSharedFlow() 等)不算公開可變
+    not:
+      inside:
+        kind: navigation_expression
+        regex: '\.(asSharedFlow|asStateFlow|receiveAsFlow|consumeAsFlow)$'
+
   inside:
     kind: class_body
   not:
@@ -250,36 +206,11 @@ rule:
         - not:
             regex: 'flowWithLifecycle'
 ---
-id: kt-nonatomic-state-update
-language: kotlin
-severity: warning
-message: '[STATE-1]讀改寫 state 不是原子操作,並行時後寫的蓋掉先寫的;改用 _uiState.update { it.copy(…) }'
-rule:
-  any:
-    - pattern: $X.value = $X.value.copy($$$A)
-    - pattern: $X.value = $X.value + $Y
-  not:
-    inside:
-      stopBy: end
-      kind: lambda_literal
-      inside:
-        kind: value_argument
-        has:
-          kind: simple_identifier
-          regex: ^on[A-Z]\w*$
-        inside:
-          stopBy: end
-          kind: function_declaration
-          has:
-            kind: modifiers
-            has:
-              kind: annotation
-              regex: ^@Composable
----
 id: kt-statein-in-function
 language: kotlin
 severity: warning
 message: '[STATE-3]stateIn/shareIn 寫在函式裡,每呼叫一次建一條新熱流;改成宣告成屬性 val uiState = ….stateIn(…)'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**']
 rule:
   any:
     - pattern: $E.stateIn($$$)
@@ -287,13 +218,40 @@ rule:
   inside:
     kind: function_declaration
     stopBy: end
+    # DI 提供者(@Provides)只會照作用域呼叫一次
+    not:
+      has:
+        kind: modifiers
+        has:
+          kind: annotation
+          regex: ^@Provides\b
 ---
 id: kt-statein-eagerly
 language: kotlin
 severity: warning
-message: '[STATE-4]stateIn 用 Eagerly 沒寫理由,上游一開始就永遠收集、背景照樣耗電;改用 SharingStarted.WhileSubscribed(5_000),真要 Eagerly 附一行理由'
+message: '[STATE-4]stateIn 用 Eagerly 沒寫理由,上游一開始就永遠收集、背景照樣耗電;改用 SharingStarted.WhileSubscribed(5_000),真要 Eagerly 附一行 // 理由: 註解'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**']
 rule:
   pattern: SharingStarted.Eagerly
+  # 型錄 STATE-4:真要 Eagerly 附一行理由。認「理由/reason」註解:寫在 stateIn 引數裡,或緊貼屬性的上一行/同一行尾
+  not:
+    any:
+      - inside:
+          kind: value_arguments
+          stopBy: end
+          has:
+            kind: line_comment
+            regex: '(理由|[Rr]eason)'
+      - inside:
+          kind: property_declaration
+          stopBy: end
+          any:
+            - follows:
+                kind: line_comment
+                regex: '(理由|[Rr]eason)'
+            - precedes:
+                kind: line_comment
+                regex: '^//\s*(理由|[Rr]eason)'
 ---
 id: kt-public-mutable-stateflow
 language: kotlin
@@ -340,7 +298,8 @@ rule:
 id: kt-repository-exposes-mutable-or-dto
 language: kotlin
 severity: warning
-message: '[STATE-2]Repository 對外公開可變容器或網路 DTO,外部可竄改狀態(DTO 另見 ARCH-53);改成 private 的 _state,對外 asStateFlow() 唯讀暴露'
+message: '[STATE-2]Repository 對外公開可變容器或網路 DTO,外部可竄改狀態(DTO 另見 ARCH-53);改成 private 持有,對外用唯讀型別暴露(asStateFlow()、List、LiveData)'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**']
 rule:
   any:
     - kind: function_declaration
@@ -353,6 +312,12 @@ rule:
         has:
           kind: user_type
           regex: (^Mutable(StateFlow|SharedFlow|LiveData|List|Map|Set)\b|\w*Dto\b)
+      # 初值就是可變容器的屬性歸 kt-public-mutable-stateflow / kt-public-mutable-holder 報,這裡不重複
+      not:
+        has:
+          stopBy: end
+          kind: call_expression
+          regex: '^(MutableStateFlow|MutableSharedFlow|MutableLiveData|mutableStateListOf|mutableStateMapOf|Channel)\b'
   inside:
     kind: class_declaration
     has:

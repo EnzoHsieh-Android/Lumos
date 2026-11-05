@@ -12,3 +12,10 @@ fun Carousel(list: List<Item>) {
         items(list) { Row(it) } // BAD
     }
 }
+
+@Composable
+fun InnerKey(list: List<Item>) {
+    LazyRow {
+        items(list) { ReusableContent(key = it.id) { Card(it) } } // BAD:key = 在 lambda 裡(代碼審 r1 M15)
+    }
+}

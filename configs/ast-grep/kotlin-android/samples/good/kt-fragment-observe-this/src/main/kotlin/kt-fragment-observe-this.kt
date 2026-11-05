@@ -12,3 +12,11 @@ class MainActivity : AppCompatActivity() {
         vm.user.observe(this) { render(it) } // GOOD
     }
 }
+
+// 容易誤報(代碼審 r1 m1):onCreate 裡觀察跟 View 無關的資料,用 this 是合法的(Lint FragmentLiveDataObserve 只管 View 相關回呼)
+class SettingsFragment : Fragment() {
+    override fun onCreate(state: Bundle?) {
+        super.onCreate(state)
+        vm.config.observe(this) { apply(it) } // GOOD
+    }
+}

@@ -64,6 +64,9 @@ rule:
               - pattern: $Y?.use { $$$ }
               - pattern: $Y.close()
               - pattern: $Y?.close()
+              # 讀完 body 的 string()/bytes() 會關 body,連線跟著還回去(代碼審 r1 M10)
+              - kind: call_expression
+                regex: '\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
             stopBy: end
           stopBy: end
 ---
@@ -77,7 +80,9 @@ rule:
     - pattern: Level.BODY
   not:
     inside:
-      kind: if_expression
+      any:
+        - kind: if_expression
+        - kind: when_expression
       has:
         pattern: BuildConfig.DEBUG
         stopBy: end
@@ -150,6 +155,15 @@ rule:
                 kind: user_type
                 regex: ^HttpClient$
           stopBy: end
+      # 同函式裡有 close()(try/finally 關掉)就不算「沒關」(代碼審 r1 M14)
+      - inside:
+          kind: function_body
+          has:
+            any:
+              - pattern: $Y.close()
+              - pattern: $Y?.close()
+            stopBy: end
+          stopBy: end
 ---
 id: kt-unmanaged-scope-launch
 language: kotlin
@@ -191,17 +205,28 @@ message: '[API-15]response.body()!! 沒先看 isSuccessful,伺服器回 4xx/5xx 
 rule:
   pattern: $R.body()!!
   not:
-    inside:
-      kind: if_expression
-      regex: '^if\s*\(\s*[\w.?]*\.isSuccessful\s*\)'
-      stopBy: end
+    any:
+      - inside:
+          kind: if_expression
+          regex: '^if\s*\(\s*[\w.?]*\.isSuccessful\s*\)'
+          stopBy: end
+      # 同一個函式裡判過 isSuccessful(提早 throw、check(...)、&& 併判)就算看過(代碼審 r1 M1)
+      - inside:
+          kind: function_declaration
+          has:
+            kind: simple_identifier
+            regex: ^isSuccessful$
+            stopBy: end
+          stopBy: end
 ---
 id: kt-callbackflow-no-awaitclose
 language: kotlin
 severity: error
 message: '[API-12]callbackFlow 沒以 awaitClose 結尾,監聽器沒移除而洩漏、執行期丟 IllegalStateException;改成以 awaitClose { api.unregister(l) } 結尾'
 rule:
-  pattern: callbackFlow { $$$ }
+  any:
+    - pattern: callbackFlow { $$$ }
+    - pattern: callbackFlow<$T> { $$$ }
   not:
     has:
       kind: call_expression
@@ -213,18 +238,10 @@ language: kotlin
 severity: warning
 message: '[API-11]suspendCoroutine 取消不了,畫面關了請求還在跑、資源洩漏;改用 suspendCancellableCoroutine 並在 invokeOnCancellation 裡取消請求'
 rule:
+  # suspendCancellableCoroutine 缺 invokeOnCancellation 拆到 rules-review/api.yml 的 kt-suspendcancellable-no-oncancel(代碼審 r1 M11)
   any:
     - pattern: suspendCoroutine { $$$ }
     - pattern: suspendCoroutine<$T> { $$$ }
-    - all:
-        - any:
-            - pattern: suspendCancellableCoroutine { $$$ }
-            - pattern: suspendCancellableCoroutine<$T> { $$$ }
-        - not:
-            has:
-              kind: call_expression
-              regex: invokeOnCancellation
-              stopBy: end
 ---
 id: kt-okhttp-no-calltimeout
 language: kotlin
@@ -236,6 +253,17 @@ rule:
     pattern: OkHttpClient.Builder()
     stopBy: end
   not:
-    has:
-      pattern: $X.callTimeout($$$)
-      stopBy: end
+    any:
+      - has:
+          any:
+            - pattern: $X.callTimeout($$$)
+            # apply { callTimeout(...) } 省略接收者(代碼審 r1 M13)
+            - pattern: callTimeout($$$)
+          stopBy: end
+      # 外層(例:Retrofit.Builder().client(OkHttpClient.Builder().build()).build())不重報,只報內層那個 build()(代碼審 r1 m2)
+      - has:
+          pattern: $Z.build()
+          has:
+            pattern: OkHttpClient.Builder()
+            stopBy: end
+          stopBy: end

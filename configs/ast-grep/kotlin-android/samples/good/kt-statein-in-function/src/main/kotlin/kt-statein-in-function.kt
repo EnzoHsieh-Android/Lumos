@@ -11,3 +11,13 @@ class DetailViewModel(private val repo: Repo) : ViewModel() {
         selected.value = id
     }
 }
+
+// 容易誤報:Hilt @Provides @Singleton 提供者只會被呼叫一次
+@Module
+@InstallIn(SingletonComponent::class)
+object SettingsModule {
+    @Provides
+    @Singleton
+    fun provideSettings(store: DataStore<P>, @AppScope scope: CoroutineScope): StateFlow<P> =
+        store.data.stateIn(scope, SharingStarted.WhileSubscribed(5_000), P())
+}

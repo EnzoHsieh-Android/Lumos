@@ -8,3 +8,8 @@ fun CoroutineScope.watch(user: Flow<User>, prefs: Flow<Prefs>) {
     launch { user.collect { showUser(it) } }
     launch { prefs.collect { applyPrefs(it) } }
 }
+
+// 容易誤報:內層在新協程裡收,不卡外層
+fun CoroutineScope.fanOut(outer: Flow<Int>) = launch {
+    outer.collect { id -> launch { inner(id).collect { show(it) } } }
+}

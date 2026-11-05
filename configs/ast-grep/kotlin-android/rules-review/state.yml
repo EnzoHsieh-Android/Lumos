@@ -1,0 +1,113 @@
+id: kt-livedata-setvalue-background
+language: kotlin
+severity: info
+message: '[STATE-16]背景執行緒呼叫 LiveData.setValue 會拋 IllegalStateException;背景改用 postValue,或切回主執行緒再 setValue'
+rule:
+  pattern: $L.setValue($$$)
+  inside:
+    any:
+      - pattern: withContext(Dispatchers.IO) { $$$ }
+      - pattern: withContext(Dispatchers.Default) { $$$ }
+      - pattern: $S.launch(Dispatchers.IO) { $$$ }
+      - pattern: $S.launch(Dispatchers.Default) { $$$ }
+      - pattern: launch(Dispatchers.IO) { $$$ }
+      - pattern: launch(Dispatchers.Default) { $$$ }
+      - pattern: thread { $$$ }
+      - pattern: thread($$$) { $$$ }
+    # 往外找背景區塊時先碰到切回 Main 的區塊就停(放行);外層 Main、內層切 IO 時照樣報
+    stopBy:
+      any:
+        - pattern: withContext(Dispatchers.Main) { $$$ }
+        - pattern: withContext(Dispatchers.Main.immediate) { $$$ }
+---
+id: kt-mutate-state-nested-collection
+language: kotlin
+severity: info
+message: '[STATE-7]直接改狀態裡某個欄位集合的內容,參照沒變不會發新值;改用 update { it.copy(items = it.items + x) }'
+rule:
+  any:
+    - pattern: $X.value.$F.add($$$)
+    - pattern: $X.value.$F.addAll($$$)
+    - pattern: $X.value.$F.remove($$$)
+    - pattern: $X.value.$F.removeAt($$$)
+    - pattern: $X.value.$F.removeAll($$$)
+    - pattern: $X.value.$F.clear()
+    - pattern: $X.value.$F.put($$$)
+    - pattern: $X.value.$F.putAll($$$)
+    - pattern: $X.value.$F.set($$$)
+    - pattern: $X.value.$F.retainAll($$$)
+    - pattern: $X.value.$F.removeIf { $$$ }
+    - pattern: $X.value.$F.sortBy { $$$ }
+    - pattern: $X.value.$F.sortWith($$$)
+    - pattern: $X.value.$F.sort()
+    - pattern: $X.value.$F[$K] = $V
+---
+id: kt-state-value-property-assign
+language: kotlin
+severity: info
+message: '[STATE-7]改 state.value 裡物件的欄位,參照沒變不會發新值,畫面不更新;改成不可變 data class 並用 update { it.copy(…) }'
+rule:
+  any:
+    - kind: assignment
+      regex: '^\s*[\w?!]+(\.[\w?!]+)*\.value(\?|!!)?\.[\w.?!\[\]]+\s*(\+|-|\*|/|%)?='
+    - kind: postfix_expression
+      regex: '^[\w?!]+(\.[\w?!]+)*\.value(\?|!!)?\.[\w.?!]+\s*(\+\+|--)$'
+    - kind: prefix_expression
+      regex: '^(\+\+|--)\s*[\w?!]+(\.[\w?!]+)*\.value(\?|!!)?\.[\w.?!]+$'
+
+---
+id: kt-mutate-state-collection
+language: kotlin
+severity: info
+message: '[STATE-7]直接改狀態裡集合的內容,參照沒變不會發新值;改用 update { it + x } 或換新集合'
+rule:
+  any:
+    - pattern: $X.value.add($$$)
+    - pattern: $X.value.addAll($$$)
+    - pattern: $X.value.remove($$$)
+    - pattern: $X.value.removeAt($$$)
+    - pattern: $X.value.removeAll($$$)
+    - pattern: $X.value.clear()
+    - pattern: $X.value.put($$$)
+    - pattern: $X.value.putAll($$$)
+    - pattern: $X.value.removeIf { $$$ }
+    - pattern: $X.value.sortBy { $$$ }
+    - pattern: $X.value?.add($$$)
+    - pattern: $X.value?.remove($$$)
+    - pattern: $X.value?.clear()
+    - pattern: $X.value?.put($$$)
+    - pattern: $X.value!!.add($$$)
+    - pattern: $X.value[$K] = $V
+---
+id: kt-nonatomic-state-update
+language: kotlin
+severity: info
+message: '[STATE-1]讀改寫 state 不是原子操作,並行時後寫的蓋掉先寫的;改用 _uiState.update { it.copy(…) }'
+rule:
+  any:
+    - pattern: $X.value = $X.value.copy($$$A)
+    - pattern: $X.value = $X.value + $Y
+  not:
+    any:
+      # 放在鎖裡的讀改寫已經互斥
+      - inside:
+          stopBy: end
+          any:
+            - pattern: $MX.withLock { $$$ }
+            - pattern: synchronized($$$) { $$$ }
+      - inside:
+          stopBy: end
+          kind: lambda_literal
+          inside:
+            kind: value_argument
+            has:
+              kind: simple_identifier
+              regex: ^on[A-Z]\w*$
+            inside:
+              stopBy: end
+              kind: function_declaration
+              has:
+                kind: modifiers
+                has:
+                  kind: annotation
+                  regex: ^@Composable

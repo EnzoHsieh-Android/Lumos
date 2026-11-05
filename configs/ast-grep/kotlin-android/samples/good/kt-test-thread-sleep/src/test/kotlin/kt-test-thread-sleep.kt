@@ -50,3 +50,11 @@ class DebounceVirtualTimeTest {
         assertEquals("a", vm.query)
     }
 }
+
+// 容易誤報:純 JVM 測試(不是 Compose UI 測試)與假實作模擬延遲,waitUntil 用不上
+class SleepTest {
+    @Test fun t() { Thread.sleep(50) }
+}
+class SlowFakeApi : Api {
+    override fun get(): String { Thread.sleep(10); return "x" }
+}

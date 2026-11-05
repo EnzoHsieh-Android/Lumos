@@ -22,3 +22,15 @@ class Stats {
         return n
     }
 }
+
+// 容易誤報:++ 放在鎖裡,讀改寫已經互斥
+class Guarded(private val lock: Any, private val mutex: Mutex) {
+    @Volatile var n = 0
+    @Volatile var m = 0
+    fun hit() {
+        synchronized(lock) { n++ } // GOOD
+    }
+    suspend fun hit2() {
+        mutex.withLock { m += 1 } // GOOD
+    }
+}

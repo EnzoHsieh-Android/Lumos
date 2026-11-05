@@ -9,3 +9,6 @@ fun tunedClient(): OkHttpClient = OkHttpClient.Builder()
 
 // 容易誤報:別的 Builder(Request)的 build() 不是 OkHttpClient
 fun request(url: String): Request = Request.Builder().url(url).build()
+
+// 容易誤報(代碼審 r1 M13):apply 裡省略接收者
+fun applyClient(): OkHttpClient = OkHttpClient.Builder().apply { callTimeout(30, TimeUnit.SECONDS) }.build() // GOOD

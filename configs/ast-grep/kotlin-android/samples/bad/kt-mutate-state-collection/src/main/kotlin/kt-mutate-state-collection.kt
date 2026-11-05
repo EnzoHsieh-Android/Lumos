@@ -11,3 +11,10 @@ class TagViewModel : ViewModel() {
         _tags.value[tag.id] = tag // BAD
     }
 }
+
+// 漏報補上:可空與 removeIf
+class NullableViewModel : ViewModel() {
+    private val _ids = MutableLiveData<MutableList<Int>>()
+    fun add() { _ids.value?.add(1) } // BAD
+    fun drop() { _items.value.removeIf { it.done } } // BAD
+}

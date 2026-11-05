@@ -23,3 +23,11 @@ class UploadWorker(c: Context, p: WorkerParameters) : CoroutineWorker(c, p) {
         }
     }
 }
+
+// 容易誤報:先用 runAttemptCount 早退,後面的 retry 已經有上限
+class EarlyExitWorker(c: Context, p: WorkerParameters) : CoroutineWorker(c, p) {
+    override suspend fun doWork(): Result {
+        if (runAttemptCount >= 3) return Result.failure()
+        return try { sync(); Result.success() } catch (e: IOException) { Result.retry() } // GOOD
+    }
+}

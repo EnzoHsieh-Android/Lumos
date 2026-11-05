@@ -15,3 +15,7 @@ class A3ViewModel : ViewModel() {
     private val ch = Channel<String>()
     val toasts = ch.consumeAsFlow()
 }
+// case: untyped-channel-named-event
+class A4ViewModel : ViewModel() {
+    private val _effects: Channel<UiEffect> = Channel()
+}

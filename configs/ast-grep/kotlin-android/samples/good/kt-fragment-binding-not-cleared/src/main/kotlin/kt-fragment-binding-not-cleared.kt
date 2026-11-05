@@ -20,3 +20,12 @@ class FeedFragment : Fragment(R.layout.fragment_feed) {
         binding.title.text = "feed"
     }
 }
+
+// 容易誤報(代碼審 r1 m4):this._binding = null 一樣是清掉
+class SearchFragment : Fragment() {
+    private var _binding: FragmentSearchBinding? = null
+    override fun onDestroyView() {
+        super.onDestroyView()
+        this._binding = null // GOOD
+    }
+}

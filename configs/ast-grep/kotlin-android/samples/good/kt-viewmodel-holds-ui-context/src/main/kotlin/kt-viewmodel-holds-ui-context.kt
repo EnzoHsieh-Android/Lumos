@@ -7,3 +7,7 @@ class CheckoutViewModel(private val strings: ContextStringProvider) : ViewModel(
 class ImageCache(private val context: Context) {
     fun dir() = context.cacheDir
 }
+
+// 容易誤報(代碼審 r1 M2):message 自己教的 @ApplicationContext
+@HiltViewModel
+class SettingsViewModel @Inject constructor(@ApplicationContext private val context: Context) : ViewModel() // GOOD

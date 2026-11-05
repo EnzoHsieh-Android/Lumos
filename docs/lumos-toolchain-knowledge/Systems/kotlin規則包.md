@@ -10,6 +10,7 @@ about_code:
   - configs/ast-grep/kotlin-android/sgconfig.yml
   - configs/ast-grep/kotlin-android/sgconfig-hints.yml
   - skills/kotlin-idioms/checks-catalog.md
+  - configs/ast-grep/kotlin-android/sgconfig-review.yml
 tags:
   - type/system
   - status/doing
@@ -32,10 +33,13 @@ verified_by:
 ## 檔案
 
 - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+- `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;每個新增命中之後要由盲判代理逐筆判,接法在 [[Projects/規則包語意覆核級命中走盲判_計劃]],接上前範本不接。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報、要靠盲判排除的寫法,自我檢查不算好例誤報。
 - `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高或依據的型錄列出處不全,範本預設不接。
 - `rules/`、`rules-hints/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
 - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 只驗型錄。
 - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。
+
+自我檢查程式是零依賴的獨立檔,不 import 單檔主程式,所以 YAML 規則檔與型錄表格用自己的行級讀法:規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`;消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
 
 ## 怎麼改
 

@@ -53,6 +53,12 @@ rule:
       - kind: user_type
         regex: (Listener|Callback)$
     stopBy: end
+  # 初始值就是 ViewModel 自己寫的 lambda 或函式參照,沒有留 UI 端的參照(代碼審 r1 m4)
+  not:
+    has:
+      any:
+        - kind: lambda_literal
+        - kind: callable_reference
   inside:
     kind: class_body
     inside:
@@ -216,6 +222,10 @@ rule:
               has:
                 kind: simple_identifier
                 regex: ^(onCreate|onAttach)$
+          # 擴充函式 helper(fun ComponentActivity.registerPick(...) = registerForActivityResult(...))由屬性初始化或 onCreate 呼叫(代碼審 r1 m3)
+          - not:
+              has:
+                kind: receiver_type
 ---
 id: kt-reuse-fragment-instance
 language: kotlin
@@ -267,7 +277,16 @@ id: kt-register-without-unregister
 language: kotlin
 severity: warning
 message: '[ARCH-35]註冊了監聽或定位更新卻沒有對稱解除,洩漏 Activity 又耗電;改用 LifecycleStartEffect { …; onStopOrDispose { 解除 } } 對稱解除'
+# 原本另有 kt-register-pair-missing 對同一個呼叫重複報,已併進這條(代碼審 r1 m2)
 rule:
+  # Application 跟整個程序同壽命,永久註冊不會洩漏(代碼審 r1 m4)
+  not:
+    inside:
+      kind: class_declaration
+      has:
+        kind: delegation_specifier
+        regex: '^(\w+\.)*\w*Application\('
+      stopBy: end
   any:
     - all:
         - any:
@@ -337,6 +356,9 @@ rule:
   has:
     kind: user_type
     regex: ^(\w*(Dao|Api|Service|Database)|SharedPreferences|DataStore|FirebaseFirestore|LocationManager|Retrofit|OkHttpClient)\b
+    # 分析、記錄、當機回報這類 *Service 不是資料來源(代碼審 r1 m4)
+    not:
+      regex: ^\w*(Analytics|Tracking|Tracker|Logging|Logger|Crash\w*)Service$
     stopBy: end
   inside:
     kind: class_declaration
@@ -357,11 +379,22 @@ rule:
     kind: user_type
     regex: ^(Context|Activity|Fragment|View|\w*View|Drawable|Bitmap|Resources|Typeface|Dialog)$
     stopBy: end
+  # 只看 ViewModel 輸出的 UiState/UiModel,或 data class 的 *State;Compose 官方 state holder(class MyAppState(navController, resources))不算(代碼審 r1 M9)
   inside:
     kind: class_declaration
-    has:
-      kind: type_identifier
-      regex: (State|UiModel)$
+    any:
+      - has:
+          kind: type_identifier
+          regex: (UiState|UiModel)$
+      - all:
+          - has:
+              kind: type_identifier
+              regex: State$
+          - has:
+              kind: modifiers
+              has:
+                kind: class_modifier
+                regex: ^data$
     stopBy: end
 ---
 id: kt-hilt-retain-instance
@@ -430,21 +463,6 @@ rule:
         stopBy: end
       stopBy: end
 ---
-id: kt-viewmodel-depends-on-api-dao
-language: kotlin
-severity: warning
-message: '[ARCH-49]ViewModel 直接依賴 Retrofit 介面或 DAO,資料來源細節漏到 UI 層、也不好測;改成依賴 Repository'
-rule:
-  kind: class_parameter
-  regex: ':\s*\w*(Api|ApiService|Dao|Retrofit)\b'
-  inside:
-    kind: class_declaration
-    has:
-      kind: delegation_specifier
-      regex: ViewModel\(
-      stopBy: end
-    stopBy: end
----
 id: kt-viewmodel-knows-retrofit
 language: kotlin
 severity: warning
@@ -488,7 +506,9 @@ rule:
       regex: \b_binding\b
   not:
     has:
-      pattern: _binding = null
+      any:
+        - pattern: _binding = null
+        - pattern: this._binding = null
       stopBy: end
 ---
 id: kt-fragment-observe-this
@@ -499,13 +519,21 @@ rule:
   any:
     - pattern: $L.observe(this, $$$)
     - pattern: $L.observe(this) { $$$ }
-  inside:
-    kind: class_declaration
-    has:
-      kind: delegation_specifier
-      regex: Fragment\b
-      stopBy: end
-    stopBy: end
+  # onCreate 裡觀察跟 View 無關的資料用 this 合法;只管 View 相關回呼(Lint FragmentLiveDataObserve 的範圍,代碼審 r1 m1)
+  all:
+    - inside:
+        kind: function_declaration
+        has:
+          kind: simple_identifier
+          regex: ^(onCreateView|onViewCreated|onActivityCreated|onViewStateRestored)$
+        stopBy: end
+    - inside:
+        kind: class_declaration
+        has:
+          kind: delegation_specifier
+          regex: Fragment\b
+          stopBy: end
+        stopBy: end
 ---
 id: kt-launch-when-deprecated
 language: kotlin
@@ -527,6 +555,13 @@ message: '[ARCH-4]ViewModel 拿 Activity/Context/View/Fragment 會洩漏整個�
 rule:
   kind: class_parameter
   regex: ':\s*(Context|Activity|AppCompatActivity|ComponentActivity|FragmentActivity|View|Fragment)\b'
+  # message 自己教的 @ApplicationContext 不算(代碼審 r1 M2)
+  not:
+    has:
+      kind: modifiers
+      has:
+        kind: annotation
+        regex: ApplicationContext$
   inside:
     kind: class_declaration
     has:
@@ -552,50 +587,3 @@ rule:
       any:
         - kind: companion_object
         - kind: object_declaration
----
-# P15
-id: kt-register-pair-missing
-language: kotlin
-severity: warning
-message: '[ARCH-35]類別註冊了接收器/監聽器卻沒有對應的解除,洩漏又耗電;改用 DefaultLifecycleObserver 在對稱的生命週期回呼解除'
-ignores: ['**/src/test*/**', '**/src/androidTest*/**']
-rule:
-  any:
-    - all:
-        - any:
-            - pattern: registerReceiver($$$)
-            - pattern: $C.registerReceiver($$$)
-        - inside:
-            kind: class_declaration
-            not:
-              has:
-                regex: 'unregisterReceiver\('
-                stopBy: end
-            stopBy: end
-    - all:
-        - pattern: $C.registerListener($$$)
-        - inside:
-            kind: class_declaration
-            not:
-              has:
-                regex: 'unregisterListener\('
-                stopBy: end
-            stopBy: end
-    - all:
-        - pattern: $C.registerNetworkCallback($$$)
-        - inside:
-            kind: class_declaration
-            not:
-              has:
-                regex: 'unregisterNetworkCallback\('
-                stopBy: end
-            stopBy: end
-    - all:
-        - pattern: $C.registerOnSharedPreferenceChangeListener($$$)
-        - inside:
-            kind: class_declaration
-            not:
-              has:
-                regex: 'unregisterOnSharedPreferenceChangeListener\('
-                stopBy: end
-            stopBy: end

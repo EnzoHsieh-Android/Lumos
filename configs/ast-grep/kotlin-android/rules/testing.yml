@@ -2,6 +2,7 @@ id: kt-test-multiple-schedulers
 language: kotlin
 severity: warning
 message: '[TEST-2]各自 new 不帶參數的 TestDispatcher 會各有排程器,advanceUntilIdle 推不動另一個;改用 StandardTestDispatcher(testScheduler) 共用一個排程器'
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   all:
     - kind: property_declaration
@@ -21,7 +22,8 @@ rule:
           kind: class_body
           has:
             kind: property_declaration
-            regex: '(?i)Main(Dispatcher|Coroutine)Rule'
+            # 專案自己命名的換 Main Rule(CoroutineTestRule、TestDispatcherRule…)也算
+            regex: '(?i)\w*(Main|Dispatcher|Coroutine)\w*Rule'
     - any:
         - any:
             - precedes:
@@ -66,6 +68,7 @@ id: kt-testdispatcher-before-mainrule
 language: kotlin
 severity: warning
 message: '[TEST-3]屬性建構時就 new TestDispatcher,早於 MainDispatcherRule 換 Main,另起排程器;改成 Rule 放最前,其他屬性用 mainDispatcherRule.testDispatcher'
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   all:
     - kind: call_expression
@@ -79,12 +82,12 @@ rule:
             kind: simple_identifier
             pattern: $PROP
         not:
-          regex: '(?i)Main(Dispatcher|Coroutine)Rule'
+          regex: '(?i)\w*(Main|Dispatcher|Coroutine)\w*Rule'
         inside:
           kind: class_body
           has:
             kind: property_declaration
-            regex: '(?is)@get:Rule.*Main(Dispatcher|Coroutine)Rule'
+            regex: '(?is)@get:Rule.*\w*(Main|Dispatcher|Coroutine)\w*Rule'
     - not:
         inside:
           stopBy: end
@@ -94,58 +97,17 @@ rule:
             has:
               stopBy: end
               kind: call_expression
-              regex: '^Main(Dispatcher|Coroutine)Rule\s*\('
+              regex: '^\w*(Main|Dispatcher|Coroutine)\w*Rule\s*\('
               has:
                 stopBy: end
                 kind: simple_identifier
                 pattern: $PROP
 ---
-id: kt-runtest-launch-collect-forever
-language: kotlin
-severity: warning
-message: '[TEST-5]runTest 會等所有子協程,用一般 launch 收集永不結束的狀態流會卡到逾時;改用 backgroundScope.launch(UnconfinedTestDispatcher(…)) { }'
-rule:
-  all:
-    - any:
-        - pattern: launch { $$$ }
-        - pattern: launch($$$) { $$$ }
-    - has:
-        stopBy: end
-        any:
-          - pattern: $F.collect { $$$ }
-          - pattern: $F.collect($$$)
-          - pattern: $F.toList($$$)
-    - inside:
-        stopBy: end
-        any:
-          - pattern: runTest { $$$ }
-          - pattern: runTest($$$) { $$$ }
-          - pattern: $T.runTest { $$$ }
-    - not:
-        has:
-          stopBy: end
-          any:
-            - pattern: $G.take($$$)
-            - pattern: $G.first()
-            - pattern: $G.first { $$$ }
-            - pattern: $G.takeWhile { $$$ }
-    - not:
-        inside:
-          stopBy: end
-          any:
-            - pattern: runTest { $$$ }
-            - pattern: runTest($$$) { $$$ }
-            - pattern: $T.runTest { $$$ }
-          has:
-            stopBy: end
-            any:
-              - pattern: $J.cancel()
-              - pattern: $J.cancelAndJoin()
----
 id: kt-testscope-unused-runtest
 language: kotlin
 severity: warning
 message: '[TEST-8]自建 TestScope 卻用裸的 runTest { },那是另一個 scope 與排程器;改成 fun t() = ts.runTest { },一個測試只有一個 TestScope'
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   all:
     - any:
@@ -175,8 +137,7 @@ id: kt-setmain-in-androidtest
 language: kotlin
 severity: warning
 message: '[TEST-11]儀器測試有真的 UI 執行緒,不該在 androidTest 換 Main dispatcher;改成只在 src/test 用 setMain,儀器測試改注入 dispatcher'
-files:
-  - '**/src/androidTest*/**'
+files: ['**/src/androidTest*/**', '**/src/androidInstrumentedTest/**']
 rule:
   any:
     - pattern: Dispatchers.setMain($$$)
@@ -186,6 +147,7 @@ id: kt-setmain-without-reset
 language: kotlin
 severity: warning
 message: '[TEST-1]Dispatchers.setMain 沒配 resetMain,會汙染後面的測試;改用 MainDispatcherRule,或 @After 裡 Dispatchers.resetMain()'
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   kind: class_declaration
   has:
@@ -201,7 +163,7 @@ id: kt-test-dispatcher-no-scheduler
 language: kotlin
 severity: warning
 message: '[TEST-2]runTest 裡另建 TestDispatcher 沒傳排程器(類別也沒換 Main),虛擬時間會分裂;改用 StandardTestDispatcher(testScheduler)'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - pattern: StandardTestDispatcher()
@@ -220,7 +182,7 @@ rule:
     inside:
       kind: class_declaration
       has:
-        regex: 'Dispatchers\.setMain|Main\w*Rule|MainCoroutine'
+        regex: 'Dispatchers\.setMain|\w*(Main|Dispatcher|Coroutine)\w*Rule|MainCoroutine'
         stopBy: end
       stopBy: end
 ---
@@ -229,7 +191,7 @@ id: kt-test-multiple-runtest
 language: kotlin
 severity: warning
 message: '[TEST-13]同一個測試呼叫 runTest 超過一次,虛擬時間與未完成工作檢查各自為政;改成 @Test fun t() = runTest { }'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - pattern: runTest { $$$ }
@@ -249,7 +211,7 @@ id: kt-test-assert-after-launch-no-advance
 language: kotlin
 severity: warning
 message: '[TEST-4]StandardTestDispatcher 下 launch 只是排進佇列,沒推進就斷言看到舊狀態;改成斷言前 advanceUntilIdle()/runCurrent() 或 job.join()'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   kind: call_expression
   regex: '^(assert\w*|expectThat)\s*\('
@@ -262,7 +224,7 @@ rule:
         has:
           pattern: launch { $$$ }
     stopBy:
-      regex: '\b(advanceUntilIdle|runCurrent|advanceTimeBy|join|joinAll|awaitAll)\s*\('
+      regex: '\b(advanceUntilIdle|runCurrent|advanceTimeBy|join|cancelAndJoin|joinAll|awaitAll|delay|yield)\s*\('
   all:
     - inside:
         any:
@@ -279,7 +241,7 @@ id: kt-test-tolist-not-background
 language: kotlin
 severity: warning
 message: '[TEST-5]用一般 launch 收集 toList 不會自動取消,測試結束不了或漏收第一個值;改用 backgroundScope.launch(UnconfinedTestDispatcher(…)) { }'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   pattern: $F.toList($D)
   inside:
@@ -304,7 +266,7 @@ id: kt-turbine-inside-withtimeout
 language: kotlin
 severity: warning
 message: '[TEST-21]runTest 的虛擬時間會把 withTimeout 瞬間跳過,包住 Turbine 的 test 會得到假逾時;改用 test(timeout = 5.seconds) { }'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - pattern: withTimeout($$$) { $$$ }
@@ -320,7 +282,7 @@ id: kt-viewmodel-test-no-main-rule
 language: kotlin
 severity: warning
 message: '[TEST-22]測試建 ViewModel 卻沒換 Main dispatcher,viewModelScope 在本機 JVM 會丟例外;改用 @get:Rule val rule = MainDispatcherRule()'
-files: ['**/src/test*/**']
+files: ['**/src/test*/**', '**/src/sharedTest/**', '**/src/commonTest/**', '**/src/jvmTest/**', '**/src/androidUnitTest/**']
 rule:
   kind: class_declaration
   has:
@@ -330,7 +292,8 @@ rule:
   not:
     any:
       - has:
-          regex: 'Dispatchers\.setMain|Main\w*Rule|MainDispatcher\w*|MainCoroutine\w*'
+          # 專案自己命名的 Rule、JUnit5 Extension、Robolectric(有真的 Main looper)都算已處理 Main
+          regex: 'Dispatchers\.setMain|\w*(Main|Dispatcher|Coroutine)\w*Rule|MainDispatcher\w*|MainCoroutine\w*|@ExtendWith\(\w*(Main|Dispatcher|Coroutine)\w*Extension|@RunWith\((AndroidJUnit4|RobolectricTestRunner)'
           stopBy: end
       - has:
           kind: delegation_specifier
@@ -340,18 +303,23 @@ id: kt-test-thread-sleep
 language: kotlin
 severity: warning
 message: '[TEST-28]測試用 Thread.sleep/SystemClock.sleep 等畫面,又慢又不穩;改用 composeTestRule.waitUntil { }、waitForIdle() 或 mainClock'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - pattern: Thread.sleep($$$)
     - pattern: SystemClock.sleep($$$)
+  # 型錄 TEST-28 管的是 Compose UI 測試;純 JVM 測試與假實作的延遲用不上 waitUntil
+  inside:
+    stopBy: end
+    kind: class_declaration
+    regex: '(createComposeRule|createAndroidComposeRule|ComposeTestRule|composeTestRule|ComposeContentTestRule)\b'
 ---
 # T33(索引)
 id: kt-compose-test-node-by-index
 language: kotlin
 severity: warning
 message: '[TEST-31]用索引挑節點([n]/get(n)),清單順序一變就挑錯;改用 Modifier.testTag 或語意屬性找唯一節點'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - pattern: $N[$I]
@@ -360,22 +328,12 @@ constraints:
   N:
     regex: '\bonAllNodes\w*\('
 ---
-# T35
-id: kt-robolectric-legacy-looper
-language: kotlin
-severity: warning
-message: '[TEST-33]Robolectric 的 LEGACY looper 會立即執行主執行緒工作,跟真機不同、升級就壞;改用預設 PAUSED 並明確 shadowOf(getMainLooper()).idle()'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
-rule:
-  kind: annotation
-  regex: '^@LooperMode\(.*\bLEGACY\b'
----
 # T36
 id: kt-test-shared-mutable-state
 language: kotlin
 severity: warning
 message: '[TEST-34]測試之間共用可變狀態(companion/object/頂層 var、@FixMethodOrder),單獨跑綠一起跑紅;改成實例屬性並在 @Before 重建'
-files: ['**/src/test*/**', '**/src/androidTest*/**']
+files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
 rule:
   any:
     - kind: annotation
@@ -395,5 +353,15 @@ rule:
               any:
                 - kind: companion_object
                 - kind: object_declaration
+            # JUnit 慣用:companion 的靜態欄位由 @BeforeClass/@AfterClass(JUnit5 的 @BeforeAll/@AfterAll)建立與重置
+            not:
+              has:
+                kind: function_declaration
+                has:
+                  kind: modifiers
+                  has:
+                    kind: annotation
+                    regex: '^@(BeforeClass|AfterClass|BeforeAll|AfterAll)\b'
+
         - inside:
             kind: source_file

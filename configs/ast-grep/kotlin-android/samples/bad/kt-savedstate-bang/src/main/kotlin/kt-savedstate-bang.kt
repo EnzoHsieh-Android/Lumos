@@ -8,3 +8,7 @@ class U1ViewModel(savedStateHandle: SavedStateHandle) : ViewModel() {
 class U2ViewModel(private val handle: SavedStateHandle) : ViewModel() {
     private val id: String = handle["userId"]!!
 }
+// case: private-underscore-handle
+class U5ViewModel(private val _savedStateHandle: SavedStateHandle) : ViewModel() {
+    private val tab: Int = _savedStateHandle["tab"]!!
+}

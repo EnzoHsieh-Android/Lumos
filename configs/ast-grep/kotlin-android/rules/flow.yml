@@ -15,9 +15,12 @@ rule:
       kind: delegation_specifier
       regex: ViewModel\(
     stopBy: end
-constraints:
-  T:
-    regex: (Event|Effect|Command|Navigation|Nav|Message|Toast|Snackbar)
+  # 只認看得出是一次性事件的屬性:型別參數或屬性名帶 Event/Effect/Nav/Toast 等字;工作佇列 Channel<Int>、ChatMessage 資料流不算
+  all:
+    - inside:
+        kind: property_declaration
+        stopBy: end
+        regex: '<\w*(Event|Effect|Command|Navigation|Nav|Toast|Snackbar|UiMessage|UserMessage)\w*>|\b(val|var)\s+_?(\w*(Event|Effect|Command|Navigation|Toast|Snackbar)s?|events?|effects?|commands?|navigation\w*|navigate\w*|nav|toasts?|snackbars?)\b'
 ---
 id: kt-flow-catch-empty
 language: kotlin
@@ -54,7 +57,8 @@ rule:
           regex: '\.\s*catch$'
 constraints:
   OP:
-    regex: ^(map|mapNotNull|mapLatest|onEach|filter|filterNot|filterNotNull|transform|transformLatest|flatMapLatest|flatMapConcat|flatMapMerge|scan|runningFold|runningReduce|onStart|zip|combine)$
+    # onEach 歸 kt-flow-catch-before-oneach 報,這裡不重複
+    regex: ^(map|mapNotNull|mapLatest|filter|filterNot|filterNotNull|transform|transformLatest|flatMapLatest|flatMapConcat|flatMapMerge|scan|runningFold|runningReduce|onStart|zip|combine)$
 ---
 id: kt-try-emit-in-flow
 language: kotlin
@@ -177,7 +181,10 @@ rule:
     any:
       - pattern: $A.collect { $$$ }
       - pattern: $A.collectLatest { $$$ }
-    stopBy: end
+    # 內外層之間隔了 launch/async 就是另開協程,不卡外層;往上找到它就停
+    stopBy:
+      kind: call_expression
+      regex: '^(\w+\.)?(launch|async)\s*[({]'
 ---
 id: kt-withcontext-in-flow
 language: kotlin
@@ -185,6 +192,13 @@ severity: error
 message: '[FLOW-4]flow { } 裡用 withContext 換執行緒,執行期丟 Flow invariant is violated;改用 flow { emit(load()) }.flowOn(io)'
 rule:
   pattern: withContext($$$)
+  has:
+    stopBy: end
+    any:
+      - pattern: emit($$$)
+      - pattern: emitAll($$$)
   inside:
-    pattern: flow { $$$ }
+    any:
+      - pattern: flow { $$$ }
+      - pattern: flow<$T> { $$$ }
     stopBy: end

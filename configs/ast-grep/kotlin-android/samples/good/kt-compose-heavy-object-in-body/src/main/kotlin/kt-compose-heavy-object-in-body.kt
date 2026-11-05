@@ -11,3 +11,11 @@ fun Row1(t: Long, s: String) {
 }
 
 object Fmt { val df = DecimalFormat("#,##0") }
+
+// 容易誤報(代碼審 r1 M4):繪製 lambda 在 draw 階段跑,不是重組
+@Composable
+fun Chart() {
+    Canvas(Modifier) { val p = Path(); drawPath(p, Color.Red) }
+    Box(Modifier.drawBehind { val q = Paint() })
+    Box(Modifier.drawWithCache { val path = Path(); onDrawBehind { drawPath(path, Color.Red) } })
+}

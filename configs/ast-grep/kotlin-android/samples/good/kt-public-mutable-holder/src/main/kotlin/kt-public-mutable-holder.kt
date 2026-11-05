@@ -10,3 +10,7 @@ class LegacyViewModel : ViewModel() {
     private val _toasts = Channel<String>(Channel.BUFFERED)
     val toasts = _toasts.receiveAsFlow() // GOOD
 }
+// 容易誤報:建好立刻轉成唯讀流
+class Legit {
+    val flowLegit = MutableSharedFlow<Int>().asSharedFlow()
+}

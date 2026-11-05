@@ -37,3 +37,12 @@ class SessionIsolatedTest {
         assertEquals(Constants.retryCount, session.maxRetries)
     }
 }
+
+// 容易誤報:JUnit 慣用的 companion 靜態欄位,@BeforeClass/@AfterClass 負責建立與重置
+class ServerTest {
+    companion object {
+        private var server: MockWebServer? = null
+        @BeforeClass @JvmStatic fun setUp() { server = MockWebServer() }
+        @AfterClass @JvmStatic fun tearDown() { server?.shutdown(); server = null }
+    }
+}

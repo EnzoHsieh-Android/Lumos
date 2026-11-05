@@ -10,3 +10,9 @@ class CounterViewModel : ViewModel() {
 fun Counter(count: MutableState<Int>) {
     Button(onClick = { count.value = count.value + 1 }) { Text("+") } // GOOD
 }
+
+// 容易誤報:受 Mutex 保護的讀改寫
+class LockedViewModel(private val mutex: Mutex) : ViewModel() {
+    private val _state = MutableStateFlow(UiState())
+    suspend fun set() { mutex.withLock { _state.value = _state.value.copy(x = 1) } }
+}

@@ -62,3 +62,25 @@ class PriceModelTest {
         assertEquals("$1.00", model.display())
     }
 }
+
+// 容易誤報:專案自己命名的換 Main Rule(CoroutineTestRule、TestDispatcherRule…)
+class FeedViewModelTest {
+    @get:Rule val coroutineRule = CoroutineTestRule()
+    @Test fun t() = runTest { FeedViewModel(FakeRepo()).load() }
+}
+class CartViewModelTest {
+    @get:Rule val rule = TestDispatcherRule()
+    @Test fun t() = runTest { CartViewModel().add() }
+}
+
+// 容易誤報:JUnit5 用 Extension 換 Main
+@ExtendWith(MainDispatcherExtension::class)
+class SearchViewModelTest {
+    @Test fun t() = runTest { SearchViewModel().query("a") }
+}
+
+// 容易誤報:Robolectric 測試有真的 Main looper
+@RunWith(AndroidJUnit4::class)
+class A5ViewModelTest {
+    @Test fun t() { A5ViewModel().load() }
+}

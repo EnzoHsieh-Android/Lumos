@@ -6,3 +6,11 @@ fun users(api: Api, io: CoroutineDispatcher): Flow<List<User>> = flow {
 suspend fun loadFeed(api: Api, io: CoroutineDispatcher): Feed = withContext(io) { api.feed() }
 
 fun feed(api: Api, io: CoroutineDispatcher): Flow<Feed> = flow { emit(loadFeed(api, io)) }
+
+// 容易誤報:emit 在 flow 自己的協程裡,withContext 只包取值
+fun g(): Flow<Int> = flow { emit(withContext(Dispatchers.IO) { load() }) }
+
+fun h(io: CoroutineDispatcher): Flow<Feed> = flow<Feed> {
+    val x = withContext(io) { loadFeed() }
+    emit(x)
+}

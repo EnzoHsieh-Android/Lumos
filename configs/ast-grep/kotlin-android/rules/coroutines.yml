@@ -104,10 +104,17 @@ rule:
     stopBy: end
     pattern: CoroutineScope($$$)
   not:
-    has:
-      stopBy: end
-      kind: simple_identifier
-      regex: ^(SupervisorJob|coroutineContext)$
+    any:
+      - has:
+          stopBy: end
+          kind: simple_identifier
+          regex: ^(SupervisorJob|coroutineContext)$
+      # SupervisorJob 先存進同類別的屬性再組 scope
+      - inside:
+          kind: class_body
+          has:
+            kind: property_declaration
+            regex: '=\s*SupervisorJob\('
 ---
 id: kt-noncancellable-in-builder
 language: kotlin
@@ -166,8 +173,9 @@ rule:
         inside:
           stopBy: end
           any:
+            # 切回 Main:Dispatchers.Main 或注入的 main 派發器(CO-1),withContext 或另開 launch/async 都算
             - kind: call_expression
-              regex: '^(\w+\.)?withContext\s*\(\s*Dispatchers\.Main'
+              regex: '^(\w+\.)?(withContext|launch|async)\s*\(\s*(\w+\.)*(main\w*|\w*Main\w*)\s*[,)]'
             - pattern: runOnUiThread { $$$ }
             - pattern: $W.post { $$$ }
 ---
@@ -207,7 +215,10 @@ rule:
     - any:
         - pattern: newSingleThreadContext($$$)
         - pattern: newFixedThreadPoolContext($$$)
-        - pattern: $E.asCoroutineDispatcher()
+        # 只管自己當場建的執行緒池;db.queryExecutor 這類借來的 executor 不歸這裡關
+        - all:
+            - pattern: $E.asCoroutineDispatcher()
+            - regex: '^(java\.util\.concurrent\.)?(Executors\.new\w*|\w*ThreadPoolExecutor|ForkJoinPool)\s*\('
     - any:
         - all:
             - inside:
@@ -270,6 +281,14 @@ rule:
                 has:
                   kind: simple_identifier
                   pattern: $N
+    # 放在鎖裡的讀改寫已經互斥
+    - not:
+        inside:
+          stopBy: end
+          any:
+            - pattern: synchronized($$$) { $$$ }
+            - pattern: $MX.withLock { $$$ }
+            - pattern: $MX.withLock($$$) { $$$ }
 ---
 id: kt-mutex-lock-no-finally
 language: kotlin
@@ -403,6 +422,22 @@ rule:
           has:
             stopBy: end
             kind: property_declaration
+            has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $L
+    # 執行緒安全的集合(ConcurrentHashMap、CopyOnWrite…、Collections.synchronized…)
+    - not:
+        inside:
+          stopBy: end
+          any:
+            - kind: function_body
+            - kind: class_body
+          has:
+            stopBy: end
+            kind: property_declaration
+            regex: '=\s*(java\.util\.concurrent\.)?(Concurrent\w+|CopyOnWrite\w+|Collections\.synchronized\w+|ConcurrentHashMap\.new\w*)\b'
             has:
               kind: variable_declaration
               has:

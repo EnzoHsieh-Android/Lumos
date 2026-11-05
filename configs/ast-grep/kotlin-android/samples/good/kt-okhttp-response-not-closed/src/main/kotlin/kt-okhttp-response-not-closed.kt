@@ -11,3 +11,10 @@ fun c(client: OkHttpClient, req: Request): Int {
 fun d(client: OkHttpClient, req: Request) {
     client.newCall(req).enqueue(callback) // GOOD 非同步不在此規則
 }
+
+// 容易誤報(代碼審 r1 M10):讀完 string() 會關 body,連線就還回去了
+fun e(c: OkHttpClient, r: Request): String? = c.newCall(r).execute().body?.string() // GOOD
+fun f(client: OkHttpClient, req: Request): String {
+    val response = client.newCall(req).execute() // GOOD
+    return response.body!!.string()
+}

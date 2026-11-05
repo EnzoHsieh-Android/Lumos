@@ -12,3 +12,10 @@ fun Orders(orders: List<Order>) {
         items(items = orders, contentType = { "order" }) { OrderRow(it) } // BAD
     }
 }
+
+@Composable
+fun InnerKey(list: List<User>) {
+    LazyColumn {
+        items(list) { ReusableContent(key = it.id) { UserRow(it) } } // BAD:key = 在 lambda 裡,不是 items 的引數(代碼審 r1 M15)
+    }
+}

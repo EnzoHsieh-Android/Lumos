@@ -10,3 +10,15 @@ fun Home(ctx: Context, prefs: SharedPreferences) {
 }
 
 fun track() { analytics.logEvent("x", null) }
+
+// 容易誤報(代碼審 r1 M3):rememberLauncherForActivityResult 的回呼、組建內的區域函式
+@Composable
+fun AskPermission(ctx: Context) {
+    val perm = rememberLauncherForActivityResult(RequestPermission()) { ok -> if (!ok) Toast.makeText(ctx, "x", 0).show() }
+}
+
+@Composable
+fun Tracked(analytics: Analytics) {
+    fun track() { analytics.logEvent("x") }
+    Button(onClick = { track() }) { }
+}
