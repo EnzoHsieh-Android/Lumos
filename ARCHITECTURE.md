@@ -180,7 +180,7 @@ flowchart TB
     PUSH -->|"⑤ drift check"| PB5["⛔ 筆記還在提已刪改的名稱或路徑、連結斷了、回頭條件已成立"]
     PUSH -->|"⑥ 回頭重讀"| PB6["⛔ 程式和管它的筆記這次都改了,卻沒對照改動重讀整篇筆記<br/>(只有本機擋,CI 只提醒)"]
     PUSH -->|全過| PASS["push"]
-    PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify"]
+    PASS --> CI["CI (GitHub Actions): 全套測試<br/>+ doctor --ci + anchor verify<br/>(推 main 或開了 PR 才跑;Lumos 本 repo 推功能分支時本機也不跑全套,要等 PR 的 CI)"]
     CI --> WAIT{"lumos ci-wait<br/>(push 後同輪等結論)"}
     WAIT -->|綠| DONE["收工"]
     WAIT -->|"紅 rc1 + 失敗步驟/log"| FIX["當輪修 → 再推 → 再等<br/>(上限 2 次,之後寫 Issue 攤人)"]

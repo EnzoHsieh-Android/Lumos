@@ -80689,7 +80689,8 @@ def t_prepush_docs_and_light_run_subset():
     r, calls = push(base, g("rev-parse", "HEAD"))
     ks = [c for c in calls if "--suite keys --keys" in c]; ds = [c for c in calls if "--suite docs" in c]
     check("light:放行、docs 兩片 + keys 兩片(關鍵字含檔名 main)", r.returncode == 0 and len(ds) == 2 and len(ks) == 2 and all("main" in c and "--shard" in c for c in ks), f"rc={r.returncode}\n{calls}\n{r.stderr[-600:]}")
-    check("light:keys 沒對到(rc3)不擋,講明 CI 會跑全套", "CI 會跑全套當後盾" in r.stderr, r.stderr[-400:])
+    check("light:keys 沒對到(rc3)不擋,講明全套由 CI 跑", "全套由 CI 跑" in r.stderr, r.stderr[-400:])
+    check("light:推 main 不印「推功能分支:」降級那行(計劃 S6)", "推功能分支:" not in r.stderr, r.stderr[-400:])
     check("light:改到的東西自主迴圈測試沒提到 → 它只跑讀真 CLAUDE.md 那條(2026-09-18 實測 light 108 秒裡 67 秒是它)", alog.read_text().strip() == "-k real_claude_md", alog.read_text())
     af = d / "scripts" / "test_autonomous_loop.py"; _af0 = af.read_text()
     af.write_text(_af0.replace("other_mod", "other_mod 與 main"))
@@ -125743,6 +125744,222 @@ def t_rulepack_sample_dir_skips_risk_scan():
     ig = (cfg.get("node_home") or {}).get("ignore") or []
     check("每支檔有家略過規則包樣本", m._cochange_excluded(smp, ig), str(ig))
     check("★對照★ 規則包自檢程式本身不略過(它要有家)", not m._cochange_excluded("configs/ast-grep/kotlin-android/check.py", ig), str(ig))
+
+def t_pitfalls_pushed_mainline():
+    """[S4] pitfalls --json 給了 --pushed-ref 才輸出 pushed_mainline:main、master、遠端 HEAD 指的分支、標籤、空字串 → true(照全套);
+    其他分支 → false;沒給旗標不輸出這個欄位。沒有任何遠端追蹤 ref 時推 main 也是 true(固定名;Projects/推送只跑受影響測試_計劃)。"""
+    import json as _j, subprocess as _sp
+    d, kg, _p = _sc_setup("pushed-mainline")
+    (d / "a.txt").write_text("x\n")
+    _sg_commit(d, "a")
+    def pf(*extra):
+        r = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--json", "--repo", str(d), *extra)
+        try:
+            return _j.loads(r.stdout), r.stdout[:200] + r.stderr[:200]
+        except ValueError:
+            return {}, r.stdout[:200] + r.stderr[:200]
+    dd, o = pf()
+    check("沒給 --pushed-ref 不輸出 pushed_mainline", "pushed_mainline" not in dd and dd != {}, o)
+    for ref, want in (("refs/heads/main", True), ("refs/heads/master", True), ("refs/heads/feat/x", False),
+                      ("refs/heads/feature/main", False), ("refs/tags/v1", True), ("", True)):
+        dd, o = pf("--pushed-ref", ref)
+        check(f"--pushed-ref {ref!r} → pushed_mainline {want}", dd.get("pushed_mainline") is want, o)
+    # 遠端 HEAD 指向 trunk:推 trunk 也算主線
+    _sp.run(["git", "-C", str(d), "remote", "add", "origin", str(d)], capture_output=True)
+    head = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    _sp.run(["git", "-C", str(d), "update-ref", "refs/remotes/origin/trunk", head], capture_output=True)
+    _sp.run(["git", "-C", str(d), "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"], capture_output=True)
+    dd, o = pf("--pushed-ref", "refs/heads/trunk")
+    check("遠端 HEAD 指的 trunk → pushed_mainline true", dd.get("pushed_mainline") is True, o)
+    dd, o = pf("--pushed-ref", "refs/heads/feat/x")
+    check("★對照★ 有遠端 HEAD 時其他分支仍是 false", dd.get("pushed_mainline") is False, o)
+
+
+def t_pitfalls_suite_computed():
+    """[S5] _test_suite_for_range 回 computed:改動清單算得出(含守衛檔提早回 full)為 true,git 失敗為 false;
+    pitfalls --json 照抄成 suite_computed。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    d, kg, _p = _sc_setup("suite-computed")
+    (d / "governance").mkdir(exist_ok=True)
+    (d / "governance" / "anchor-baseline.json").write_text("{}\n")
+    _sg_commit(d, "guard")
+    r = m._test_suite_for_range(d, "HEAD~1..HEAD")
+    check("守衛檔提早回 full 時 computed 為 true", r.get("computed") is True and r["suite"] == "full", str(r))
+    r = m._test_suite_for_range(d, "deadbeef..cafebabe")
+    check("範圍算不出來時 computed 為 false", r.get("computed") is False, str(r))
+    out = run(kg, "pitfalls", "--diff", "HEAD~1..HEAD", "--no-lint", "--json", "--repo", str(d))
+    try:
+        dd = _j.loads(out.stdout)
+    except ValueError:
+        dd = {}
+    check("pitfalls --json 輸出 suite_computed true", dd.get("suite_computed") is True, out.stdout[:200])
+    # 讀端直接索引(代碼審 r1 架構對齊席):範圍判定漏帶 computed 時 pitfalls 要失敗(掛鉤拿不到 JSON 就照全套),不能默認成「算得出來」
+    _orig = m._test_suite_for_range
+    m._test_suite_for_range = lambda *a, **k: {"suite": "full", "code": ["app/a.py"], "light_ok": True, "graph": False, "reason": "x"}
+    try:
+        try:
+            got = m._pitfall_diff_collect("HEAD~1..HEAD", d, no_lint=True)
+            got_s = repr(got)[:200]
+            raised = False
+        except KeyError:
+            raised, got_s = True, "KeyError"
+    finally:
+        m._test_suite_for_range = _orig
+    check("範圍判定漏帶 computed → pitfalls 失敗(KeyError),不默認算得出來", raised, got_s)
+
+
+def _ppfb_harness(name, lumos_src=None):
+    """推功能分支本機不跑全套(Projects/推送只跑受影響測試_計劃)的掛鉤測試共用場景:同 t_prepush_docs_and_light_run_subset 的假執行器
+    (把參數記到 repo 外的檔)、假自主迴圈測試;lumos_src 給了就用它當 scripts/lumos(模擬舊版)。回 (d, push, g, alog, kg)。
+    push(lines) 的 lines 是掛鉤 stdin 的每一行 (本機ref, 本機sha, 遠端ref, 遠端sha)。"""
+    import subprocess as _sp, os as _os
+    hook = str(Path(__file__).resolve().parent / "hooks" / "pre-push")
+    lumos_real = str(Path(__file__).resolve().parent / "lumos")
+    d, kg, _p = _sc_setup(name)
+    (d / "skills" / "lumos-project-notes").mkdir(parents=True)
+    (d / "scripts").mkdir(exist_ok=True)
+    if lumos_src is None:
+        (d / "scripts" / "lumos").symlink_to(lumos_real)
+    else:
+        (d / "scripts" / "lumos").write_text(lumos_src, encoding="utf-8")
+        (d / "scripts" / "lumos").chmod(0o755)
+    argl = d.parent / "runner-args.log"
+    (d / "scripts" / "test_lumos.py").write_text(
+        '# 假執行器:認得 "--shard"、"--suite" 與 "--graph";把每次的參數記一行;keys 那趟回 0\n'
+        "import sys\n"
+        f"open({str(argl)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+    alog = d.parent / "autoloop-args.log"
+    (d / "scripts" / "test_autonomous_loop.py").write_text(
+        "import sys\n# 這支假測試測的是 other_mod\n"
+        f"open({str(alog)!r}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n")
+    (d / "app").mkdir()
+    (d / "app" / "main.py").write_text("def foo():\n    return 1\n")
+    _sg_commit(d, "harness")
+    def g(*a):
+        return _sp.run(["git", "-C", str(d), *a], capture_output=True, text=True).stdout.strip()
+    def push(lines):
+        env = dict(_os.environ)
+        env["GIT_DIR"] = str(d / ".git")
+        env["LUMOS_TEST_SHARDS"] = "2"
+        argl.write_text("")
+        alog.write_text("")
+        stdin = "".join(f"{a} {b} {c} {e}\n" for a, b, c, e in lines)
+        r = _sp.run(["bash", hook], cwd=str(d), input=stdin, capture_output=True, text=True, env=env)
+        return r, argl.read_text().splitlines()
+    return d, push, g, alog, kg
+
+
+def _ppfb_change(d, g):
+    """在 app/main.py 改一個頂層函式(一般程式改動,原本判全套)→ (base, head)。"""
+    base = g("rev-parse", "HEAD")
+    (d / "app" / "main.py").write_text("def foo():\n    return 2\n")
+    _sg_commit(d, "change foo")
+    return base, g("rev-parse", "HEAD")
+
+
+_PPFB_MSG = "全套由 PR 的 CI 跑"
+
+
+def t_prepush_feature_branch_skips_full():
+    """[S1] 推功能分支、原本判全套 → 只跑文件子集加關鍵字子集,迴圈後只印一次「全套由 PR 的 CI 跑」,不印「CI 會跑全套當後盾」。"""
+    d, push, g, _alog, _kg = _ppfb_harness("ppfb-skip")
+    base, head = _ppfb_change(d, g)
+    r, calls = push([("refs/heads/feat", head, "refs/heads/feat", base)])
+    check("功能分支:每一趟都帶 --suite(沒有全套那一趟)", r.returncode == 0 and calls and all("--suite" in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-600:]}")
+    check("功能分支:有關鍵字子集那一趟(關鍵字含 foo)", any("--suite keys" in c and "foo" in c for c in calls), str(calls))
+    check("功能分支:說明只印一次、講明全套由 PR 的 CI 跑", r.stderr.count("推功能分支:") == 1 and _PPFB_MSG in r.stderr, r.stderr[-600:])
+    check("功能分支:不再印「CI 會跑全套當後盾」", "CI 會跑全套當後盾" not in r.stderr and "CI 會兜底" not in r.stderr, r.stderr[-600:])
+
+
+def t_prepush_feature_branch_failclosed():
+    """[S2] 推 main 照舊全套、不印降級那行;功能分支但 suite_computed 為 false(算不出範圍)也照全套。"""
+    d, push, g, _alog, _kg = _ppfb_harness("ppfb-main")
+    base, head = _ppfb_change(d, g)
+    r, calls = push([("refs/heads/main", head, "refs/heads/main", base)])
+    check("推 main:執行器不帶 --suite(全套)", r.returncode == 0 and calls and all("--suite" not in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+    check("推 main:不印降級那行", _PPFB_MSG not in r.stderr, r.stderr[-400:])
+    check("推 main 全套:開跑提示不再勸 --no-verify(代碼審 r1 正確性、合約圖譜席)", "推送前先跑全部測試" in r.stderr and "嫌久可" not in r.stderr and "CI 會兜底" not in r.stderr, r.stderr[-400:])
+    # 算不出範圍(suite_computed false):功能分支也照全套。用一份把 computed 都改成 false 的 lumos 模擬
+    src = (Path(__file__).resolve().parent / "lumos").read_text(encoding="utf-8").replace('"computed": True', '"computed": False')
+    d2, push2, g2, _a2, _kg = _ppfb_harness("ppfb-uncomputed", lumos_src=src)
+    b2, h2 = _ppfb_change(d2, g2)
+    r2, calls2 = push2([("refs/heads/feat", h2, "refs/heads/feat", b2)])
+    check("算不出範圍:功能分支照全套、不印降級那行", r2.returncode == 0 and calls2 and all("--suite" not in c for c in calls2) and _PPFB_MSG not in r2.stderr, f"rc={r2.returncode}\n{calls2}\n{r2.stderr[-400:]}")
+
+
+def t_prepush_feature_branch_mixed_with_main():
+    """[S3] 同一次推送有 main 也有功能分支 → 全套、不印降級那行。"""
+    d, push, g, _alog, _kg = _ppfb_harness("ppfb-mixed")
+    base, head = _ppfb_change(d, g)
+    r, calls = push([("refs/heads/feat", head, "refs/heads/feat", base), ("refs/heads/main", head, "refs/heads/main", base)])
+    check("混推:執行器不帶 --suite(全套)", r.returncode == 0 and calls and all("--suite" not in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+    check("混推:不印降級那行", _PPFB_MSG not in r.stderr, r.stderr[-400:])
+    # 判主線看的是推去的目的地(遠端 ref),不是本機分支名(代碼審 r2 通才席:各案例本機與遠端同名,改看本機 ref 照綠)
+    r2, calls2 = push([("refs/heads/feat", head, "refs/heads/main", base)])
+    check("本機 feat 推到遠端 main(feat:main):照全套、不印降級那行", r2.returncode == 0 and calls2 and all("--suite" not in c for c in calls2) and _PPFB_MSG not in r2.stderr, f"rc={r2.returncode}\n{calls2}\n{r2.stderr[-400:]}")
+    r3, calls3 = push([("refs/heads/main", head, "refs/heads/feat", base)])
+    check("★對照★ 本機 main 推到遠端 feat(main:feat):降成子集", r3.returncode == 0 and calls3 and all("--suite" in c for c in calls3) and _PPFB_MSG in r3.stderr, f"rc={r3.returncode}\n{calls3}\n{r3.stderr[-400:]}")
+
+
+def t_prepush_feature_branch_light_ok_false():
+    """[S6] 功能分支夾了既非文件也非程式的檔(skills/ 底下,light_ok 為 false)也降成子集;★對照★ 同樣改動推 main 是全套。"""
+    d, push, g, _alog, _kg = _ppfb_harness("ppfb-lightok")
+    base = g("rev-parse", "HEAD")
+    (d / "app" / "main.py").write_text("def foo():\n    return 3\n")
+    (d / "skills" / "lumos-project-notes" / "x.md").write_text("# skill\n")
+    _sg_commit(d, "code + skill file")
+    head = g("rev-parse", "HEAD")
+    r, calls = push([("refs/heads/feat", head, "refs/heads/feat", base)])
+    check("功能分支夾 skills 檔(light_ok 假):照樣只跑子集", r.returncode == 0 and calls and all("--suite" in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+    r2, calls2 = push([("refs/heads/main", head, "refs/heads/main", base)])
+    check("★對照★ 同樣改動推 main:全套", r2.returncode == 0 and calls2 and all("--suite" not in c for c in calls2), f"{calls2}")
+
+
+def t_prepush_feature_branch_already_light():
+    """[S6] 後半(代碼審 code-推送只跑受影響測試 r1 合約圖譜席):原本就判 light(風險低計劃落點內的小改動、push-check 印 light)的功能分支推送,
+    照 light 跑 docs + keys,不印「推功能分支:」降級那行。從 t_prepush_docs_and_light_run_subset 拆出(那支加這段會超過每支 180 秒上限)。"""
+    d, push, g, _alog, kg = _ppfb_harness("ppfb-light")
+    hm = kg / "Systems" / "Home.md"   # _sc_setup 建的那篇(管 tests/test_x.py)
+    hm.write_text(hm.read_text(encoding="utf-8").replace("  - tests/test_x.py\n", "  - tests/test_x.py\n  - app/main.py\n"), encoding="utf-8")
+    _sg_commit(d, "home owns app/main.py")
+    base, head = _ppfb_change(d, g)
+    r, calls = push([("refs/heads/feat", head, "refs/heads/feat", base)])
+    ks = [c for c in calls if "--suite keys --keys" in c]
+    check("(現場成立)push-check 判 light", "改動風險分級:light" in r.stderr, r.stderr[-600:])
+    check("(現場成立)原本就判 light 的功能分支:跑 docs + keys", r.returncode == 0 and len(ks) == 2 and all("--suite" in c for c in calls), f"rc={r.returncode}\n{calls}\n{r.stderr[-400:]}")
+    check("原本就判 light:不印「推功能分支:」降級那行", "推功能分支:" not in r.stderr, r.stderr[-600:])
+
+
+def t_prepush_feature_branch_autoloop():
+    """[S7] 功能分支降成子集、改到的名字出現在自主迴圈測試裡(autoloop_full)→ 自主迴圈整支跑;沒出現 → 只跑讀真 CLAUDE.md 那條。"""
+    d, push, g, alog, _kg = _ppfb_harness("ppfb-autoloop")
+    base, head = _ppfb_change(d, g)
+    r, _c = push([("refs/heads/feat", head, "refs/heads/feat", base)])
+    check("沒提到 foo:自主迴圈只跑 -k real_claude_md", r.returncode == 0 and alog.read_text().strip() == "-k real_claude_md", repr(alog.read_text()) + r.stderr[-300:])
+    af = d / "scripts" / "test_autonomous_loop.py"
+    af.write_text(af.read_text().replace("other_mod", "other_mod 與 foo"))
+    r2, _c2 = push([("refs/heads/feat", head, "refs/heads/feat", base)])
+    check("提到 foo:自主迴圈整支跑(不帶 -k)", r2.returncode == 0 and alog.read_text().strip() == "", repr(alog.read_text()) + r2.stderr[-300:])
+
+
+def t_prepush_feature_branch_old_lumos():
+    """[S8] lumos 原始碼裡沒有 pf_pushed_ref 字樣(舊版)→ 掛鉤不帶 --pushed-ref、照全套;高風險提醒等其他讀 pitfalls 的照舊讀得到。"""
+    import re as _re
+    src = (Path(__file__).resolve().parent / "lumos").read_text(encoding="utf-8")
+    src = _re.sub(r'\n    p\.add_argument\("--pushed-ref", dest="pf_pushed_ref".*?\n(?=    p\.add_argument)', "\n", src, count=1, flags=_re.S)
+    d, push, g, _alog, _kg = _ppfb_harness("ppfb-old", lumos_src=src)
+    base, head = _ppfb_change(d, g)
+    r, calls = push([("refs/heads/feat", head, "refs/heads/feat", base)])
+    check("(現場成立)舊版 lumos 沒有 dest=\"pf_pushed_ref\" 字樣", 'dest="pf_pushed_ref"' not in (d / "scripts" / "lumos").read_text(encoding="utf-8"), "")
+    check("舊版 lumos:功能分支照全套、不印降級那行", r.returncode == 0 and calls and all("--suite" not in c for c in calls) and _PPFB_MSG not in r.stderr, f"rc={r.returncode}\n{calls}\n{r.stderr[-500:]}")
+    # 掛鉤沒帶它不認得的旗標,pitfalls 照常回 JSON:只改文件的功能分支推送照舊判 docs、只跑文件子集
+    base2 = g("rev-parse", "HEAD")
+    (d / "README.md").write_text("# hi\n")
+    _sg_commit(d, "docs only")
+    r2, calls2 = push([("refs/heads/feat", g("rev-parse", "HEAD"), "refs/heads/feat", base2)])
+    check("舊版 lumos:沒被新旗標弄壞,純文件推送照舊只跑文件子集", r2.returncode == 0 and calls2 and all("--suite docs" in c for c in calls2), f"rc={r2.returncode}\n{calls2}\n{r2.stderr[-400:]}")
+
 
 if __name__ == "__main__":
     sys.exit(main())

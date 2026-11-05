@@ -62060,16 +62060,19 @@ def _test_suite_for_range(repo_root, diff_range):
     light_ok(非文件檔★全部★是「需要有家的程式檔」——小改動閘的擴散只查程式檔,測試檔/skills/workflow 這種既不是文件也不是程式的
     會從它眼皮下溜過,所以 light 不准帶著這種檔一起少跑全套;代碼審 r1 資安席)。
     自己用 git 算檔清單(不用 pitfalls 的 files:那份已經把 .json/.jsonl 按副檔名擋掉);--no-renames:從 scripts/ 搬進 docs/ 的檔會拆成
-    「刪程式檔+加文件」,刪的那支讓它跑全套。簿記帳與卷證不算;算不出範圍 → full(fail-safe 是多跑,不是少跑)。"""
+    「刪程式檔+加文件」,刪的那支讓它跑全套。簿記帳與卷證不算;算不出範圍 → full(fail-safe 是多跑,不是少跑)。
+    computed:改動清單算不算得出來(git 失敗才是 False)。★守衛檔提早回 full 時也是 True★——推功能分支時掛鉤看
+    pitfalls 的 pushed_mainline 與 suite_computed 會把這個 full 降成子集,全套交給 PR 的 CI(Projects/推送只跑受影響測試_計劃);
+    推 main 時照全套。每條回傳都要帶這個鍵:讀端直接索引,漏帶就丟例外、pitfalls 不出 JSON、掛鉤照全套。"""
     base = _range_base(repo_root, diff_range)
-    full = {"suite": "full", "code": [], "light_ok": False, "graph": False}
+    full = {"suite": "full", "code": [], "light_ok": False, "graph": False, "computed": True}
     try:
         r = subprocess.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false", "diff", "--name-only", "-z",
                             "--no-renames", diff_range, "--"], capture_output=True, text=True, errors="replace")
     except OSError:
-        return dict(full, reason="算不出改動清單")
+        return dict(full, reason="算不出改動清單", computed=False)
     if r.returncode != 0:
-        return dict(full, reason=f"範圍 {diff_range} 算不出來")
+        return dict(full, reason=f"範圍 {diff_range} 算不出來", computed=False)
     raw = [f for f in r.stdout.split("\0") if f.strip()]
     guard = [f for f in raw if f in _DOCS_ONLY_NEVER or f.startswith(tuple(w for w in _DOCS_ONLY_NEVER if w.endswith("/")))]
     if guard:
@@ -62081,10 +62084,10 @@ def _test_suite_for_range(repo_root, diff_range):
         # 驗不到「搜尋還找不找得到」(2026-09-18 代碼審 code-文件子集收緊 r1 通才席)
         graph = any(_vault_slug_of(f) for f in files)
         return {"suite": "docs", "reason": "改到的只有 README、docs、assets 這類文件(沒碰程式與 skills)" + (";含圖譜筆記,加跑讀真圖譜的測試" if graph else ""),
-                "code": [], "light_ok": False, "graph": graph}
+                "code": [], "light_ok": False, "graph": graph, "computed": True}
     code = [f for f in non_docs if _is_code_file(repo_root, f, base)]
     return {"suite": "full", "reason": "改到 " + "、".join(non_docs[:3]) + ("…" if len(non_docs) > 3 else "") + " 這種不是純文件的檔",
-            "code": code, "light_ok": len(code) == len(non_docs), "graph": False}
+            "code": code, "light_ok": len(code) == len(non_docs), "graph": False, "computed": True}
 
 
 def _keys_mentioned(text, keys):
@@ -62266,7 +62269,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
         _sr = _test_suite_for_range(repo_root, diff_range)
         _ak = _affected_test_keys(repo_root, diff_range, _sr["code"])
         return {"claims": claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
-                "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
+                "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"], "suite_computed": _sr["computed"],
                 "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
                 "stack_questions_meta": stack_meta, "arch_alignment": arch}
 
@@ -62333,7 +62336,7 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     _sr = _test_suite_for_range(repo_root, diff_range)
     _ak = _affected_test_keys(repo_root, diff_range, _sr["code"])
     out = {"claims": all_claims, "tier": _t, "tier_reason": _why, "suite": _sr["suite"], "suite_reason": _sr["reason"],
-           "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"],
+           "affected_keys": _ak, "autoloop_full": _autoloop_full_for(repo_root, _ak), "light_ok": _sr["light_ok"], "suite_graph": _sr["graph"], "suite_computed": _sr["computed"],
            "lint_ran": lint_ran, "lint_skipped": lint_skipped,
            "stack_questions": stack_qs, "stack_questions_applicable": stack_app,
            "stack_questions_meta": stack_meta, "arch_alignment": arch}
@@ -62342,13 +62345,26 @@ def _pitfall_diff_collect(diff_range, repo_root, no_lint=False):
     return out
 
 
-def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False):
+def _pitfalls_pushed_mainline(repo_root, diff_range, pushed_ref):
+    """推送前掛鉤判「這次推的是不是主線」(Projects/推送只跑受影響測試_計劃 做法 1):true=照全套。
+    不是 refs/heads/ 底下(標籤、空字串)→ true(跟 _note_reread_push_old 對標籤回「不算推主線」方向相反,這裡刻意保守);
+    分支短名在 _note_reread_mainline_names 的集合裡(永遠含 main、master,再加主線候選指到的分支名,不看遠端名)→ true;其他 → false。"""
+    if not (pushed_ref or "").startswith("refs/heads/") or pushed_ref == "refs/heads/":
+        return True
+    _a, tip = _diff_range_ends(repo_root, diff_range)
+    names = _note_reread_mainline_names(repo_root, tip or "HEAD", deadline=time.monotonic() + 10)
+    return pushed_ref[len("refs/heads/"):] in names
+
+
+def _pitfall_diff_mode(diff_range, repo_root, as_json, no_lint=False, pushed_ref=None):
     """掃 git diff <range> 新增行找代碼形態風險位置。過濾繼承 Check H 全套;line 由 @@ 標頭推導。
     rc 恆 0(提示器非閘)。class 用形態類軸(併發/效能/資源)。
     no_lint=True:只跑快的 regex 層、不跑專案宣告的 lint 指令(給 pre-push advisory 用,免每次 push 跑慢 linter)。"""
     data = _pitfall_diff_collect(diff_range, repo_root, no_lint)
     if data is None:
         return 2
+    if pushed_ref is not None:
+        data["pushed_mainline"] = _pitfalls_pushed_mainline(repo_root, diff_range, pushed_ref)
     if as_json:
         # ★行與段分隔字元(U+2028/2029 等)無損跳脫★(代碼審 code-架構對齊可宣告目標架構 r2):檔名是被審分支可控的,
         # 原樣輸出時 code-loop check 與 pre-push 用 splitlines 找 JSON 那一行會被切壞、走 fail-open 放行
@@ -62654,7 +62670,7 @@ def _pitfalls_stage(md, stage, as_json, diff=None):
     return 0
 
 
-def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None, stage=None):
+def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, section_title="實務隱患", no_lint=False, disp_tpl=False, carry=False, branch=None, stage=None, pushed_ref=None):
     """實務隱患提問(vault-free):spec 模式逼答設計決策級隱患;--diff 模式攤代碼級風險位置(Task 2)。
     spec 模式印通用 4 問(含風險類反問)+ 命中類追問;--check:命中類且無「## <section_title>」節 → rc 1(只驗節存在)。
     --no-lint:--diff 只跑 regex 層(快,給 pre-push advisory)。"""
@@ -62691,7 +62707,7 @@ def cmd_pitfalls(md=None, diff=None, repo=None, check=False, as_json=False, sect
             n_app = sum(len(v) for v in data["stack_questions_applicable"].values())
             print(f"要答的題 {n_app} 題(status 留空的那些);其餘已自動記未觸發。填完:lumos code-loop dispositions <這個檔>", file=sys.stderr)
             return 0
-        return _pitfall_diff_mode(diff, repo_root, as_json, no_lint)
+        return _pitfall_diff_mode(diff, repo_root, as_json, no_lint, pushed_ref=pushed_ref)
     if md is None:
         print("擋下:pitfalls 要給一個 .md 檔,或用 --diff <起點..終點> 指定改動範圍", file=sys.stderr)
         return 2
@@ -73955,6 +73971,8 @@ def main():
     p.add_argument("--check", action="store_true", help="命中風險類且無「## 實務隱患」節 → rc 1")
     p.add_argument("--json", dest="pf_json", action="store_true", help="JSON 輸出")
     p.add_argument("--no-lint", dest="pf_no_lint", action="store_true", help="--diff 只跑 regex 層、不跑專案 lint 指令(快,給 pre-push advisory)")
+    p.add_argument("--pushed-ref", dest="pf_pushed_ref", default=None, metavar="遠端ref",
+                   help="推送前掛鉤用:被推的遠端 ref;給了 --json 多輸出 pushed_mainline(true=推主線或標籤,照全套)。只判主線,不改 --diff 的範圍")
     p.add_argument("--dispositions-template", dest="pf_disp_tpl", action="store_true",
                    help="--diff 模式:印這次改動的表態樣板 JSON(適用題留空、未觸發題自動 na);填完給 lumos code-loop dispositions <檔>")
     p.add_argument("--carry", dest="pf_carry", action="store_true",
@@ -74400,7 +74418,8 @@ def main():
         return cmd_pitfalls(md=args.md, diff=args.pf_diff, repo=args.pf_repo,
                             check=args.check, as_json=args.pf_json, no_lint=args.pf_no_lint,
                             disp_tpl=getattr(args, "pf_disp_tpl", False), carry=getattr(args, "pf_carry", False),
-                            branch=getattr(args, "pf_branch", None), stage=getattr(args, "pf_stage", None))
+                            branch=getattr(args, "pf_branch", None), stage=getattr(args, "pf_stage", None),
+                            pushed_ref=getattr(args, "pf_pushed_ref", None))
     if args.cmd == "testmap":
         if args.tmcmd == "build":
             return cmd_testmap_build(repo=args.tm_repo, as_json=args.tm_json)

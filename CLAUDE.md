@@ -95,7 +95,7 @@
 
 ## 本 repo 的測試子集怎麼跑(紀律區塊鐵則三說的「看專案自己的說明」就是這裡)
 
-改完程式先跑跟改動相關的子集,全套(約 8 分鐘、3700+ 案例)留給推送前的閘:
+改完程式先跑跟改動相關的子集,全套(約 8 分鐘、3700+ 案例)留給推送前的閘(推 main 時)與 PR 的 CI(推功能分支時):
 
 ```
 python3.14 scripts/test_lumos.py -k <關鍵字>
@@ -103,4 +103,4 @@ python3.14 scripts/test_lumos.py -k <關鍵字>
 
 測試要用 Python 3.14 跑(系統內建的 `python3` 若是 3.9,測試總檔跑不起來;[[Projects/最低Python版本改3.14_計劃]])。關鍵字比對測試函式名(例:`-k stop_block`、`-k codex`);對照組 Codex 曾因在對話裡跑全套而超時([[Projects/Codex行為精修_計劃]] 基線)。
 
-推送前的閘會自己看這次改了什麼:只改 README / docs / assets 這類文件就只跑文件子集(`--suite docs`),改到程式但判成 light 的再加跑「原始碼提到改到的函式或檔名」的測試(`--suite keys`),其餘才跑全套;CI 對純文件推送也只跑文件子集。細節在 [[Systems/bound-tests-gate]]。
+推送前的閘會自己看這次改了什麼:只改 README / docs / assets 這類文件就只跑文件子集(`--suite docs`),改到程式但判成 light 的、或推的是功能分支(不是 main、master、遠端預設分支)的,跑文件子集加「原始碼提到改到的函式或檔名」的測試(`--suite keys`),推 main 才在本機跑全套;功能分支的全套由 PR 的 CI 跑(PR 事件一律全套),合併一律走 PR、等 PR 最新頭提交的 `lumos ci-wait --sha <PR 頭提交>` 判定是 green 才合併(一般合併,不要 squash、rebase),合併後再對 main 的合併提交 `ci-wait` 一次([[Projects/推送只跑受影響測試_計劃]])。CI 對純文件推送也只跑文件子集。細節在 [[Systems/bound-tests-gate]]。

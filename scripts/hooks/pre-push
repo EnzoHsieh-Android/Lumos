@@ -12,7 +12,7 @@
 #   pre-push 在 push 前**同步**跑 lumos doctor:Claude Code / 終端當場看到輸出,
 #   有問題擋下 push,壞圖譜出不了本機。self-contained(lumos 零 Obsidian 依賴)。
 #
-# Bypass: git push --no-verify(業界標準;GitHub Actions CI(.github/workflows/ci.yml)在 push 後仍會跑全套+doctor --ci+anchor verify)
+# Bypass: git push --no-verify(業界標準;GitHub Actions CI(.github/workflows/ci.yml)在推 main 後、或 PR 上仍會跑全套+doctor --ci+anchor verify;功能分支沒開 PR 前沒有 CI)
 #
 # 安裝: scripts/install-hooks.sh 已設 core.hooksPath=scripts/hooks,此檔放進去即生效
 
@@ -448,7 +448,7 @@ if [[ "$dc_rc" -ne 0 ]]; then
     echo "三條路選一條:"
     echo "  1. 照上面的提示把筆記修好再推。"
     echo "  2. 覺得是檢查工具本身判錯 → 本機重跑一次確認,真的是工具錯就開一張 Issue 記下來。"
-    echo "  3. 真的要先推 → git push --no-verify(CI 還是會跑全套,紅了會看到)"
+    echo "  3. 真的要先推 → git push --no-verify(推 main 或開了 PR 才有 CI 跑全套,紅了會看到)"
     echo ""
   } >&2
   pp_record_block doctor "" "知識庫健康檢查發現問題" "lumos doctor --ci"
@@ -466,6 +466,8 @@ fi
 # 每個 ref 各判一次,任何一個 ref 要全套就全套。docs=只改到 README/docs/assets 這類文件(pitfalls --json 的 suite);
 # light=改到程式檔但 spec-gate --push-check 判成 light(風險低計劃、全靠人驗、小改動閘過)。
 _SUITE_SEEN=0; _SUITE_FULL=0; _SUITE_LIGHT=0; _SUITE_KEYS=""; _SUITE_GRAPH=0; _AUTOLOOP_FULL=0
+# 推功能分支本機不跑全套(Projects/推送只跑受影響測試_計劃):有任一個 ref 因「功能分支」從全套降成 light 就記 1,迴圈後印一次說明
+_SUITE_BRANCH_DOWN=0
 # 非刪除的推送行數(彙總的 ref 欄在大於 1 時印)
 _PP_NREFS=0
 for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
@@ -477,6 +479,10 @@ done
 # 同一種:讀檔找旗標字樣,不執行對方(代碼審 r1 架構對齊席)。
 _CL_KG=0
 grep -q -- '"--keep-going"' "$GRAPHCTL" 2>/dev/null && _CL_KG=1
+# pitfalls 認不認得 --pushed-ref(同一種探法;找 pitfalls 專屬的 dest 字樣,別的命令也有 --pushed-ref):舊版不帶,
+# 免得 argparse 拒絕、整份 pf_json 變空,連高風險提醒等一起不見
+_PF_PR=0
+grep -q -- 'dest="pf_pushed_ref"' "$GRAPHCTL" 2>/dev/null && _PF_PR=1
 for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   read -r _lref _lsha _rref _rsha <<< "$_ppl"
   # 刪除遠端 ref(local_sha 全零)→ 無代碼推送,跳過
@@ -537,7 +543,9 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   fi
 
   impact_once "$_brange"
-  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_brange" --no-lint --json --repo "$REPO_ROOT" 2>/dev/null || true)"
+  _pf_extra=()
+  [[ "$_PF_PR" -eq 1 ]] && _pf_extra=(--pushed-ref "$_rref")
+  pf_json="$("$PY" "$GRAPHCTL" pitfalls --diff "$_brange" --no-lint --json --repo "$REPO_ROOT" ${_pf_extra+"${_pf_extra[@]}"} 2>/dev/null || true)"
   _tier_high=0
   printf '%s' "$pf_json" | grep -q '"tier": *"high"' && _tier_high=1
   _SUITE_SEEN=1
@@ -566,10 +574,25 @@ for _ppl in ${_PP_LINES+"${_PP_LINES[@]}"}; do
   sg_rc="${PIPESTATUS[0]}"
   pp_stop_if_signaled "$sg_rc" "雙向門放行檢查(spec-gate)"
   # push-check 判成 light(它才有圖譜、才知道計劃風險低與小改動閘過):改到程式檔也不跑全套,
-  # 只跑文件子集 + 原始碼提到「改到的函式/子命令/檔名」的測試;CI 那邊照樣跑全套當後盾。
+  # 只跑文件子集 + 原始碼提到「改到的函式/子命令/檔名」的測試;全套由 PR 的 CI 跑(推 main 時由主線的 CI 跑)。
   # ★還要 pitfalls 說 light_ok★(r1 資安席):小改動閘的擴散只查程式檔,測試檔/skills/workflow 這種既不是文件也不是程式的
   # 會從它眼皮下溜過——範圍裡只要有一支這種檔,就不准少跑全套。
-  if [[ "$_suite_this" == "full" ]] && grep -q '改動風險分級:light' "$_sg_out" 2>/dev/null && printf '%s' "$pf_json" | grep -q '"light_ok": *true'; then
+  # _down 記的是「從全套改成 light 的原因」:spec_light=push-check 判 light(原本就算 light,不印降級那行);
+  # feature_branch=推功能分支(這條才設 _SUITE_BRANCH_DOWN、印降級那行)。
+  # 推功能分支本機不跑全套(Projects/推送只跑受影響測試_計劃 做法 2):lumos 明確說「不是推主線」而且「範圍算得出來」才降;
+  # pf_json 空、舊版沒欄位、推主線或標籤、算不出範圍一律照全套。刻意不受 light_ok 約束(改到測試檔、守衛檔也降):
+  # 全套由 PR 的 CI 跑(PR 事件一律全套),合併前等 PR 頭提交綠。原本就判 light 的不算降級(不印降級那行,計劃 S6)。
+  _down=""
+  if [[ "$_suite_this" == "full" ]]; then
+    if grep -q '改動風險分級:light' "$_sg_out" 2>/dev/null && printf '%s' "$pf_json" | grep -q '"light_ok": *true'; then
+      _down="spec_light"
+    elif printf '%s' "$pf_json" | grep -q '"pushed_mainline": *false' \
+         && printf '%s' "$pf_json" | grep -q '"suite_computed": *true'; then
+      _down="feature_branch"; _SUITE_BRANCH_DOWN=1
+    fi
+  fi
+  # 兩條降級路徑共用同一段取關鍵字與自主迴圈旗標(代碼審 r1 架構對齊、通才席:兩份複製會分岔)
+  if [[ -n "$_down" ]]; then
     _suite_this="light"
     _k="$(printf '%s' "$pf_json" | "$PY" -c 'import json,sys; print(",".join(json.load(sys.stdin).get("affected_keys", [])))' 2>/dev/null || true)"
     [[ -n "$_k" ]] && _SUITE_KEYS="${_SUITE_KEYS:+$_SUITE_KEYS,}$_k"
@@ -833,7 +856,7 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
       echo ""
       echo "兩條路選一條:"
       echo "  1. 修到全綠再推(正常做法)。"
-      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;推 main 或開了 PR 才有 CI 再跑一次)"
       echo ""
       echo "下一步:$(pp_q "$PY") scripts/test_autonomous_loop.py${_AUTOLOOP_ARGS+ ${_AUTOLOOP_ARGS[*]}}"
       echo ""
@@ -874,7 +897,7 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
   _suite_args=(); _suite_word="全部測試"
   if [[ "$_suite_mode" != "full" ]]; then
     _suite_args=(--suite docs)
-    _suite_word="文件子集(這次沒改到程式、或改動判成 light,不跑全套)"
+    _suite_word="文件子集(這次沒改到程式、改動判成 light、或推的是功能分支,不跑全套)"
     # 碰到圖譜筆記:加跑讀真圖譜的測試(檢索品質、評測)。執行器不認得 --graph(舊版)就退全套——跟上面探 --suite/--shard
     # 同一個理由:硬塞不認得的旗標,執行器會整個報錯,被判成「測試有紅」(r2 通才席實測重現)
     if [[ "$_SUITE_GRAPH" -eq 1 ]]; then
@@ -885,13 +908,21 @@ if [[ -d "$REPO_ROOT/skills/lumos-project-notes" && -f "$REPO_ROOT/scripts/test_
       fi
     fi
   fi
+  # 推功能分支降下來的(Projects/推送只跑受影響測試_計劃 做法 3):範圍定案之後只印一次,講清楚全套在哪裡跑、合併前要等什麼
+  if [[ "$_suite_mode" == "light" && "$_SUITE_BRANCH_DOWN" -eq 1 ]]; then
+    {
+      echo "推功能分支:本機只跑文件子集與關鍵字子集(關鍵字空的就只有文件子集);全套由 PR 的 CI 跑——"
+      echo "  合併一律走 PR,等 PR 最新頭提交的 lumos ci-wait --sha <PR 頭提交> 判定是 green(rc 0 不等於綠)才合併,用一般合併(不要 squash、rebase);"
+      echo "  合併後再對 main 的合併提交 lumos ci-wait 一次。"
+    } >&2
+  fi
   # light 的關鍵字子集跟文件子集一起分片、平行跑(r1 併發席:原本等分片收完才串行跑一趟);
-  # 一支都沒對到(每片都 rc3)不擋,只把話講清楚:CI 會跑全套當後盾。有紅照擋。
+  # 一支都沒對到(每片都 rc3)不擋,只把話講清楚:全套由 PR 的 CI 跑。有紅照擋。
   _keys_args=()
   if [[ "$_suite_mode" == "light" && -n "$_SUITE_KEYS" ]]; then
     _keys_args=(--suite keys --keys "$_SUITE_KEYS")
   elif [[ "$_suite_mode" == "light" ]]; then
-    echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;CI 會跑全套當後盾。" >&2
+    echo "  這次改動抽不出函式或檔名當關鍵字,推送前只跑文件子集;全套由 CI 跑(推 main 有主線 CI;功能分支要開 PR 才有 CI)。" >&2
   fi
   _sdir="$_PP_TMP/shards"; mkdir -p "$_sdir"
   _rc=0; _krc_all3=1
@@ -943,11 +974,11 @@ runpy.run_path(p[1], run_name="__main__")'
     return 0
   }
   if [[ "$_suite_mode" != "full" ]]; then
-    echo "推送前先跑$_suite_word(切成 $_shards 片同時跑;嫌久可 --no-verify,CI 會兜底)…" >&2
+    echo "推送前先跑$_suite_word(切成 $_shards 片同時跑)…" >&2
   elif [[ "$_shards" -le 1 ]]; then
-    echo "推送前先跑全部測試(約 8 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+    echo "推送前先跑全部測試(約 8 分鐘)…" >&2
   else
-    echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘;嫌久可 --no-verify,CI 會兜底)…" >&2
+    echo "推送前先跑全部測試(切成 $_shards 片同時跑,約 4-5 分鐘)…" >&2
   fi
   # 兩組真的同時跑(2026-09-18 實測:原本 keys 那組等文件子集跑完才開始,註解卻寫「平行」)
   _grc=0; _krc=0
@@ -960,7 +991,7 @@ runpy.run_path(p[1], run_name="__main__")'
   [[ "$_grc" -ne 0 ]] && _rc=1      # 文件子集/全套選中 0 支也算紅(執行器那邊本來就這樣判)
   if [[ ${#_keys_args[@]} -gt 0 ]]; then
     if [[ "$_krc" -eq 3 ]]; then
-      echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;CI 會跑全套當後盾。" >&2
+      echo "  沒有測試提到這次改到的函式或檔名($_SUITE_KEYS),推送前只跑了文件子集;全套由 CI 跑(推 main 有主線 CI;功能分支要開 PR 才有 CI)。" >&2
     elif [[ "$_krc" -ne 0 ]]; then
       _rc=1
     fi
@@ -979,7 +1010,7 @@ runpy.run_path(p[1], run_name="__main__")'
       echo "兩條路選一條:"
       echo "  1. 修到全綠再推。只重跑紅的那幾支:"
       echo "       $PY scripts/test_lumos.py --ff -x"
-      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;CI 還是會再跑一次)"
+      echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;推 main 或開了 PR 才有 CI 再跑一次)"
       echo ""
       echo "下一步:$(pp_q "$PY") scripts/test_lumos.py --ff -x"
       echo ""

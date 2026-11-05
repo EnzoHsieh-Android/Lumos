@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-04
-updated: 2026-11-05
+updated: 2026-11-06
 self_audit: gpt-5.6-sol/2026-10-03
 about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
 tags:
@@ -63,7 +63,7 @@ summary: |-
   KEY:[2026-09-18 Enzo 裁]改動風險分級單一算法 _pitfall_tier(★維持 vault-free★,代碼審 r1 兩席):殘留索引升 high 最先判(2026-10-14 [[Projects/審查收斂規則_計劃]]:改到索引列的 about_code 或綁定測試所在的檔(都整檔)、推送範圍裡新增殘留(頂端有起點沒有)、拿掉殘留(起點有頂端沒有)或縮小同一筆殘留守的檔(殘留身分=節點、合約指紋、殘留指標)、頂端索引讀不出而起點有殘留或這次動過索引、起點索引 git 讀不出、檔名清單失敗而索引有殘留、起點版本治理帳的 residual-ask 列頂端少了,理由各寫一句;這裡只列主要幾種,完整觸發另含合約改字、改到存著殘留決策的筆記、新增判 untestable 的問答、治理帳讀不出,見下面講分級理由與 notes 欄的兩行);命中風險型樣/新告警 → high;改動裡沒有「需要有家的程式檔」(_is_code_file:副檔名清單或首行 #!)→ light;其餘 standard,審查帳有全靠人驗留痕時多印一句「跑 spec-gate --push-check 看是不是 light」;「計劃風險低且全靠人驗且小改動閘過 → light」由 spec-gate --push-check 印(只有它有圖譜、本來就在 pre-push 跑,不重跑測試)。JSON 多 tier_reason [test:t_pitfalls_tier_light_sources]
   KEY:[2026-09-17 小改動閘 r2]簿記目錄單一源 _BOOKKEEPING_DIR 擴成 _BOOKKEEPING_DIRS(當時是 governance/code-loop、review-reports、replay 三個,之後陸續加了別的;現在有哪些以程式為準):三個消費者(pitfalls --diff 掃描排除、code-loop 留痕失效豁免、小改動閘的擴散量)共用;效果=卷證/凍結判定的提交不再讓 pass 留痕失效 [test:t_prepush_small_change_gate]
   WHY:簿記目錄加上 .lumos/e2e-records/(Android 端到端驗收的查證紀錄,細節在 [[Systems/android-e2e-acceptance]]) [出處:[[Projects/Android端到端驗收_計劃]] 第 3 步] [因:紀錄是推送檢查的輸入、不是程式;驗收跑完才提交,不該讓代碼審留痕失效,也不該讓下一次驗收的開跑前檢查當成工作目錄有改動] [test:t_android_e2e_judge_dirty_tree]
-  KEY:[2026-09-18 純文件推送不跑全套]`pitfalls --diff --json` 多五欄:`suite`(docs|full)、`suite_reason`、`affected_keys`、`light_ok`、`suite_graph`(docs 且範圍碰到 docs/<名>-knowledge/ → 執行器加 --graph 跑讀真圖譜的測試)。docs=改到的每一支都過兩層白名單:路徑(README/根目錄 .md/LICENSE/docs/assets/diagrams/governance)★且★副檔名在文件清單 _DOCS_ONLY_EXTS(不分大小寫);沒副檔名、.rb/.PY 這種一律不算文件(代碼審 r1 邊界席 blocker+正確性席:第一版「路徑對且不在程式清單」被繞兩次,改成反過來列文件)。scripts/skills/.github 任一支、從 scripts/ 搬進 docs/(--no-renames 看成刪程式檔)都 full;★守衛本身★(governance/anchor-baseline.json、governance/code-loop/)碰到就 full(r3 資安席:只推基準線會跳過 t_anchor);其餘簿記帳不算;範圍算不出 → full。affected_keys=改到的程式檔裡動到的★頂層★函式名(cmd_x 也給子命令 x;縮排的 def 不算,check 會選中全部)與檔名,只留 [A-Za-z0-9_.-]{3,}。light_ok=非文件檔全是程式檔(資安席:測試檔/skills 這種既非文件也非程式的不准跟著 light 少跑全套)。三點範圍起點用 merge-base(_range_base)。執行器 `--suite docs` 直接讀 _DOCS_ONLY_PATHS,不抄第二份
+  KEY:[2026-09-18 純文件推送不跑全套]`pitfalls --diff --json` 多六欄:`suite`(docs|full)、`suite_reason`、`affected_keys`、`light_ok`、`suite_graph`(docs 且範圍碰到 docs/<名>-knowledge/ → 執行器加 --graph 跑讀真圖譜的測試)、`suite_computed`(改動清單算不算得出來,2026-11-05 起);給了 `--pushed-ref` 再多 `pushed_mainline`(見 [[Projects/推送只跑受影響測試_計劃]])。docs=改到的每一支都過兩層白名單:路徑(README/根目錄 .md/LICENSE/docs/assets/diagrams/governance)★且★副檔名在文件清單 _DOCS_ONLY_EXTS(不分大小寫);沒副檔名、.rb/.PY 這種一律不算文件(代碼審 r1 邊界席 blocker+正確性席:第一版「路徑對且不在程式清單」被繞兩次,改成反過來列文件)。scripts/skills/.github 任一支、從 scripts/ 搬進 docs/(--no-renames 看成刪程式檔)都 full;★守衛本身★(governance/anchor-baseline.json、governance/code-loop/)碰到就 full(r3 資安席:只推基準線會跳過 t_anchor);其餘簿記帳不算;範圍算不出 → full。affected_keys=改到的程式檔裡動到的★頂層★函式名(cmd_x 也給子命令 x;縮排的 def 不算,check 會選中全部)與檔名,只留 [A-Za-z0-9_.-]{3,}。light_ok=非文件檔全是程式檔(資安席:測試檔/skills 這種既非文件也非程式的不准跟著 light 少跑全套)。三點範圍起點用 merge-base(_range_base)。執行器 `--suite docs` 直接讀 _DOCS_ONLY_PATHS,不抄第二份
   DEP:[[risk-tiered-review]](分級哲學延伸到 diff 層)｜[[convergence-evidence-gate]](gate --spec 改可選)｜[[lumos-refcheck]]｜doctor Check H(diff 掃描骨架)
   TEST:t_pitfalls_spec(9)+t_pitfalls_diff(截至 2026-08-21 為 12;★原記 11(2026-08-21 程式碼實證)★,含行號值+併發寫入)+TestPitfallsDrift(2,類名+黑名單)+t_loop_gate 案14翻契約+t_loop_gate_no_spec;當時 374 passed(★全量數字已漂,以 CI 為準★)
   VERIFY:[[2026-07-04_pitfalls-code-loop]]
@@ -83,6 +83,7 @@ summary: |-
   WHY:新增告警閘多認 `.lumos/config.json` 的 `lint_new.include_test_paths`(副檔名清單,預設空=照舊排除測試路徑),只接在閘的呼叫處、不改測試路徑樣式本身 [出處:2026-11-05 [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5] [因:Kotlin 的 src/test/ 被排除,型錄 TEST 主題規則永遠不響] [test:t_lint_new_include_test_paths]
   WHY:新增告警閘的擋下訊息每條告警印到 120 字(跟解析 SARIF 截斷同數) [出處:2026-11-05 同計劃 S5 實跑] [因:規則包訊息的修法在後半段,原本截 70 字把修法切掉] [test:t_lint_block_message_shows_fix]
   WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
+  WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1
