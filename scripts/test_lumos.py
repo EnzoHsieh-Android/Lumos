@@ -125024,19 +125024,23 @@ def t_kotlin_rulepack_samples():
     # ── 改壞複本:每一道檢查各自要紅(代碼審 r1:原本的改壞字串在規則改寫後對不上,整支例外;另補沒改壞過的幾道)──
     mc = _ktpack(copy=True)
     rid = "kt-sequential-independent-await"
-    next((mc.HERE / "samples" / "bad" / rid).rglob("*.kt")).write_text("package bad\n", encoding="utf-8")
+    for f in (mc.HERE / "samples" / "bad" / rid).rglob("*.kt"):      # 整個壞例目錄清空(不靠目錄順序挑一支)
+        f.write_text("package bad\n", encoding="utf-8")
     fp_rid = "kt-okhttp-no-calltimeout"      # 把它自己的壞例原樣抄一份進好例目錄:一定誤報,不受規則日後收窄影響
-    bad_src = next((mc.HERE / "samples" / "bad" / fp_rid).rglob("*.kt"))
+    bad_src = sorted((mc.HERE / "samples" / "bad" / fp_rid).rglob("*.kt"))[0]
     gdir = mc.HERE / "samples" / "good" / fp_rid / "src" / "main" / "kotlin"
     gdir.mkdir(parents=True, exist_ok=True)
     (gdir / "CopiedBad.kt").write_text(bad_src.read_text(encoding="utf-8"), encoding="utf-8")
     # review-fp- 豁免只給語意覆核級規則:會擋的規則的好例就算檔名叫 review-fp- 也要報誤報(代碼審 r2 正確性席)
     fp2 = "kt-retrofit-body-bang"
-    b2 = next((mc.HERE / "samples" / "bad" / fp2).rglob("*.kt"))
+    b2 = sorted((mc.HERE / "samples" / "bad" / fp2).rglob("*.kt"))[0]
     g2 = mc.HERE / "samples" / "good" / fp2 / "src" / "main" / "kotlin"
     g2.mkdir(parents=True, exist_ok=True)
     (g2 / "review-fp-sneaky.kt").write_text(b2.read_text(encoding="utf-8"), encoding="utf-8")
-    one = next((mc.HERE / "samples" / "good" / "kt-retrofit-body-bang").rglob("*.kt"))
+    # 照檔名挑原本那支好例,不用 rglob 的第一個:Linux 的目錄順序可能先給剛放進去的 review-fp-sneaky.kt,
+    # 把它蓋掉會讓上面那條改壞失效(2026-11-05 CI 只在 Linux 紅)
+    one = sorted(f for f in (mc.HERE / "samples" / "good" / "kt-retrofit-body-bang").rglob("*.kt")
+                 if not f.name.startswith(mc.REVIEW_FP_PREFIX))[0]
     one.write_text("fun onlyOne() = 1\n", encoding="utf-8")
     t_rules = [r for r in mc.load_rules() if r["test_only"]]
     check("★前提★ 規則包裡有只掃測試碼的規則", bool(t_rules), "")
