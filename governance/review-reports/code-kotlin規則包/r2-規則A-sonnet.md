@@ -157,4 +157,4 @@ blocking: 是
 - **compose 共用的延後 lambda 清單**:本地函式與 `layout` 的豁免、`remember\w*` 沒有新增放行的壞寫法。`s.value = 3` 與 `navController.navigate(…)` 直接寫在組建本體仍然報。
 - **其他放寬**:`@ApplicationContext` 豁免、`callbackFlow<T>` 補上、`this._binding = null`、`when`+`BuildConfig.DEBUG` 的放行都沒有放過明顯壞例。其中 `@Named("x") Context` 與 `Activity` 參數仍然報。
 
-總結:沒有 major,共 12 條 minor,其中 9 條是修補放寬過頭造成的漏報(F1 到 F9),3 條是修補後仍擋推送的窄角落誤報(F10 到 F12)。
+總結:沒有比 minor 更高的等級,共 12 條 minor,其中 9 條是修補放寬過頭造成的漏報(F1 到 F9),3 條是修補後仍擋推送的窄角落誤報(F10 到 F12)。
