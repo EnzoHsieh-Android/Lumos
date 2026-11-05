@@ -23,3 +23,9 @@ class Holder2 {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main) + job // GOOD
 }
+
+// 括號裡再包一層加法:SupervisorJob 屬性是內層加法的直接運算元(代碼審 r4 通才席 Finding 2)
+class Holder3 {
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("h3") + job)
+}

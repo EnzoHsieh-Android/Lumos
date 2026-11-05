@@ -125493,6 +125493,10 @@ def t_kotlin_rulepack_samples():
     top_cmt = "id: x\nfiles:\n  - '**/src/test*/**'\n# 不掃 src/main\nrule:\n  pattern: a\n"
     check("★改壞★ files 頂格清單也算只掃測試碼", m._files_block_is_test_only(top_list) is True, "")
     check("★改壞★ files 區塊後面的頂格註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(top_cmt) is True, "")
+    inline = "id: x\nfiles:\n  - '**/src/test*/**'   # 不含 src/main\nrule:\n  pattern: a\n"
+    check("★改壞★ files 清單項目的行尾註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(inline) is True, "")
+    check("★對照★ 引號裡的 # 不是註解,後面的 src/main 照算",
+          m._files_block_is_test_only("files:\n  - '**/src/test*/**'\n  - '**/src/test*/**' # x\n  - '**/a #/src/main/**'\nrule:\n  pattern: a\n") is False, "")
     check("★對照★ files 真的列了 src/main 不算只掃測試碼",
           m._files_block_is_test_only("files:\n  - '**/src/test*/**'\n  - '**/src/main/**'\nrule:\n  pattern: a\n") is False, "")
     if not sg:
@@ -125578,6 +125582,17 @@ def t_kotlin_rulepack_samples():
     mt2.SCAN_TIMEOUT = 120
     _r, cp = mt2.check(sg)
     check("★改壞★ 上一次逾時不影響下一次自我檢查", not any("跑不起來" in b or "讀不到" in b for _a, b in cp), str(cp[:3]))
+    # ast-grep 吐出讀不懂的輸出:報跑不起來,不噴 traceback
+    mj = _ktpack(copy=True)
+    junk = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+    junk.write_text("#!/bin/sh\ncase \"$*\" in *--inspect*) exec " + _shlex.quote(sg) + " \"$@\";; esac\necho 'not json'\nexit 1\n", encoding="utf-8")
+    junk.chmod(0o755)
+    try:
+        _r, cp = mj.check(str(junk))
+        ok = any("跑不起來" in b for _a, b in cp)
+    except Exception as e:      # 要驗的就是不噴例外,所以接住任何例外
+        ok, cp = False, [("exc", repr(e))]
+    check("★改壞★ ast-grep 輸出不是 JSON 時報跑不起來、不噴例外", ok, str(cp[:3]))
     # 規則目錄全空不准判通過
     me = _ktpack(copy=True)
     for d in ("rules", "rules-review", "rules-hints"):
@@ -125666,6 +125681,8 @@ def t_kotlin_catalog_rows_wired():
     # 「(無)」解析成空清單(第二、三批讀觸發字時才不會把「(無)」當成一個字去比對)
     for cell in ("(無)", "\uff08無\uff09", "(無\uff09", "\uff08無)"):
         check(f"「{cell}」解析成刻意不設", m.dt_triggers(cell) == ([], None), str(m.dt_triggers(cell)))
+    check("★改壞★ 全形逗號也拆觸發字", m.dt_triggers("collectAsState\uff0cstateIn") == (["collectAsState", "stateIn"], None), str(m.dt_triggers("collectAsState\uff0cstateIn")))
+    check("★改壞★ 「(無)」用全形逗號跟其他觸發字並列也要報", m.dt_triggers("(無)\uff0cfoo")[1] is not None, str(m.dt_triggers("(無)\uff0cfoo")))
     check("一般觸發字照常拆開", m.dt_triggers("collectAsState、`stateIn`") == (["collectAsState", "stateIn"], None), str(m.dt_triggers("collectAsState、`stateIn`")))
     check("★改壞★ 編號重複要抓到", "編號重複" in txt, txt[:400])
     check("★對照★ 待查證節的列不受檢查", "多一格" not in txt and not any("待查證" in b for _a, b in got), txt[:400])
@@ -125959,6 +125976,58 @@ def t_prepush_feature_branch_old_lumos():
     _sg_commit(d, "docs only")
     r2, calls2 = push([("refs/heads/feat", g("rev-parse", "HEAD"), "refs/heads/feat", base2)])
     check("舊版 lumos:沒被新旗標弄壞,純文件推送照舊只跑文件子集", r2.returncode == 0 and calls2 and all("--suite docs" in c for c in calls2), f"rc={r2.returncode}\n{calls2}\n{r2.stderr[-400:]}")
+
+
+def t_tq_guard_skips_rulepack_samples():
+    """規則包教材樣本(configs/ast-grep/<包>/samples/ 底下的 .kt)故意寫沒斷言的測試當壞例,測試防竄改比對不當產品測試;
+    同樣內容放在一般測試路徑照列 tq/no-assertion(2026-11-05 推送閘把樣本報成 19 條,Issues/Kotlin規則包代碼審放行的小問題 第 7 項)。"""
+    smp = "configs/ast-grep/kotlin-android/samples/bad/kt-x/src/test/kotlin/XTest.kt"
+    bad = "    @Test\n    fun bad() { vm.load() }\n"
+    root, base, commit = _tqg_repo({smp: _tqg_kt(), _TQG_T: _tqg_kt()})
+    h = commit({smp: _tqg_kt(bad), _TQG_T: _tqg_kt(bad)})
+    rules = _tqg_rules(root, base, h)
+    check("規則包樣本裡沒斷言的測試不列", not any(f == smp for _r, f in rules), str(rules))
+    check("★對照★ 一般測試路徑照列 tq/no-assertion", ("tq/no-assertion", _TQG_T) in rules, str(rules))
+
+
+def t_room_guard_skips_rulepack_samples():
+    """規則包教材樣本裡的範例 DAO 與資料庫不當產品碼:改到它們不觸發 Room 守衛;同樣的 DAO 放在一般路徑照擋
+    (2026-11-05 推送閘把樣本 UserDao 報成 7 處缺口,Issues/Kotlin規則包代碼審放行的小問題 第 7 項)。"""
+    print("t_room_guard_skips_rulepack_samples")
+    dao = ("package p\n\nimport androidx.room.Dao\n\n@Dao\ninterface UserDao {\n"
+           '    @Query("SELECT * FROM users")\n    suspend fun all(): List<User>\n}\n')
+    db = ("package p\n\nimport androidx.room.Database\n\n@Database(entities = [User::class], version = 3)\n"
+          "abstract class SampleDb : RoomDatabase()\n")
+    smp = "configs/ast-grep/kotlin-android/samples/bad/kt-x/src/main/kotlin/"
+    root = _rg_repo()
+    _nh_file(root, smp + "UserDao.kt", dao)
+    _nh_file(root, smp + "SampleDb.kt", db)
+    _nh_commit(root, "samples")
+    rc, out = _rg(root)
+    check("改到樣本裡的 DAO 與資料庫不擋", rc == 0, out[-600:])
+    check("改到樣本不觸發(不記帳)", _rg_gov(root) == [], str(_rg_gov(root)))
+    root2 = _rg_repo()
+    _nh_file(root2, "app/src/main/java/p/UserDao.kt", dao)
+    _nh_commit(root2, "app dao")
+    rc2, out2 = _rg(root2)
+    check("★對照★ 同樣的 DAO 放在一般路徑照擋", rc2 == 1 and "UserDao.all" in out2, out2[-600:])
+    # 同一次推送也有合規的真升級(會觸發守衛、往下判資料庫與 DAO):樣本裡的資料庫與 DAO 照樣不算
+    root3 = _rg_repo()
+    _rg_v2(root3)
+    _nh_file(root3, smp + "UserDao.kt", dao)
+    _nh_file(root3, smp + "SampleDb.kt", db)
+    _nh_commit(root3, "v2 + samples")
+    rc3, out3 = _rg(root3)
+    check("有真升級觸發時,樣本裡的資料庫與 DAO 也不算", rc3 == 0 and "UserDao" not in out3 and "SampleDb" not in out3, out3[-600:])
+    # 樣本裡的測試剛好呼叫同名方法,不能拿來充當真 DAO 的測試
+    root4 = _rg_repo()
+    _nh_file(root4, "app/src/main/java/p/UserDao.kt", dao)
+    _nh_file(root4, "configs/ast-grep/kotlin-android/samples/good/kt-x/src/test/kotlin/UserDaoTest.kt",
+             "package p\n\nclass UserDaoTest {\n    fun setUp() {\n        db = Room.inMemoryDatabaseBuilder(ctx, SampleDb::class.java).build()\n"
+             "    }\n    fun t() {\n        db.userDao().all()\n    }\n}\n")
+    _nh_commit(root4, "app dao + sample test")
+    rc4, out4 = _rg(root4)
+    check("樣本裡的測試不充當真 DAO 的測試", rc4 == 1 and "UserDao.all" in out4, out4[-600:])
 
 
 if __name__ == "__main__":

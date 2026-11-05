@@ -2,7 +2,7 @@
 type: issue
 status: open
 created: 2026-11-05
-updated: 2026-11-05
+updated: 2026-11-06
 aliases: []
 about_code: []
 tags:
@@ -14,6 +14,8 @@ summary: |-
   FLAG:TECHNICAL
   PITFALL:規則檔 files 清單項目後面接行內註解提到 src/main 時,只掃測試碼的規則被誤判成不是,祖先目錄守衛靜默略過 [出處:2026-11-05 code-kotlin規則包 r4 正確性、邊界席] [根因:_files_block_is_test_only 只去整行註解] [repro:check.py 對 files 區塊 `- '**/src/test*/**'  # 不含 src/main` 回 False]
   PITFALL:推送閘把規則包教材樣本當產品碼:測試作弊比對報沒斷言、Room 守衛報範例 DAO 沒測試 [出處:2026-11-05 Kotlin 規則包第一次推送被擋] [根因:樣本目錄排除只接到風險分級、棧別題與 linter 那半,作弊比對與 Room 守衛各自挑檔] [防回歸:修好時各補一條樣本目錄不報、同形一般檔照報的測試]
+  REVISIT:2026-11-20 逐處判好例目錄被別條會擋規則命中的 15 處(樣本寫得不夠標準就改樣本,規則誤報就改規則或搬語意覆核級),判完再決定要不要加「好例被別條規則命中也報」的檢查
+  REVISIT:2026-12-04 kt-long-lived-scope-plain-job 還會誤報 `+ (job)` 與兩層巢狀加法(代碼審規則包樣本不當產品碼 r1 正確性席實測);改成遞迴認括號與加法、補好例,或判定少見就寫進規則註解
 related:
   - "[[Systems/kotlin規則包]]"
 ---
@@ -51,3 +53,13 @@ related:
 
 1、2、3 各有一條先紅後綠的測試(行尾註解、全形逗號、非 JSON 輸出);4 改完型錄字句;5 的片段補進好例樣本、規則不報;6 決定要不要加「好例目錄命中別條會擋規則也報」的檢查並補測試。
 7. 測試作弊比對與 Room 守衛也走樣本目錄排除,各補一條先紅後綠的測試(樣本目錄裡沒斷言的測試、範例 DAO 不報;同形路徑的一般檔照報);自我檢查的迴圈變數改成底線。
+
+## 修好紀錄(2026-11-05,分支 kt-rulepack-followups)
+
+- 1:`_strip_yaml_comment` 照 YAML 規格去掉行尾註解(`#` 前面是空白、不在引號裡);測試 `t_kotlin_rulepack_samples` 的行尾註解與引號裡 `#` 兩條。
+- 2:觸發字拆字補全形逗號;測試 `t_kotlin_catalog_rows_wired` 的全形逗號兩條。
+- 3:`scan` 讀不懂 ast-grep 輸出時回「跑不起來」;測試 `t_kotlin_rulepack_samples` 的非 JSON 假工具。
+- 4:型錄 API-17、DATA-10 的搬級理由分開寫。
+- 5:`kt-long-lived-scope-plain-job` 認括號裡再包一層加法;好例 `Holder3`、反向壞例 `S3`。
+- 7:測試防竄改比對(`_tg_kind`)與 Room 守衛(觸發判斷、git grep、DAO 差異)都走 `_RULEPACK_SAMPLE_RE`;測試 `t_tq_guard_skips_rulepack_samples`、`t_room_guard_skips_rulepack_samples`(四個排除點各自改壞都翻紅)。自我檢查的迴圈變數也改成底線。
+- 6 未修,改成分流:好例目錄被別條會擋規則命中的有 13 組、15 處(2026-11-05 量),每一處要判是樣本寫得不夠標準、還是那條規則誤報(例:`kt-public-mutable-holder` 的好例用事件 Channel 被 `kt-vm-channel-event` 報 3 處)。逐處判完前不加「好例被別條規則命中也報」的檢查,免得把規則誤報當樣本問題修掉。
