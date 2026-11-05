@@ -43,54 +43,6 @@ rule:
             regex: ^OkHttpClient$
       stopBy: end
 ---
-id: kt-okhttp-response-not-closed
-language: kotlin
-severity: warning
-message: '[API-17]execute() 拿到的 Response 沒關閉會洩漏連線、耗盡連線池;改用 client.newCall(req).execute().use { … }'
-rule:
-  pattern: $C.newCall($$$).execute()
-  not:
-    any:
-      - inside:
-          any:
-            - pattern: $X.use { $$$ }
-            - pattern: $X?.use { $$$ }
-          stopBy: end
-      # 直接接著讀完 body:execute().body?.string() 會關 body,連線跟著還回去(代碼審 r1 M10)
-      - inside:
-          kind: call_expression
-          regex: '\.execute\(\)\s*\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
-          stopBy: end
-      # 先存進變數:同函式裡對「同一個變數」use/close,或讀完它的 body;
-      # 讀別的 Response 的 body 不算(代碼審 r1 M10、r2 規則A F5)
-      - all:
-          - inside:
-              kind: property_declaration
-              has:
-                kind: variable_declaration
-                has:
-                  kind: simple_identifier
-                  pattern: $V
-          - inside:
-              kind: function_body
-              has:
-                any:
-                  - pattern: $V.use { $$$ }
-                  - pattern: $V?.use { $$$ }
-                  - pattern: $V.close()
-                  - pattern: $V?.close()
-                  - pattern: $V.body!!.string()
-                  - pattern: $V.body?.string()
-                  - pattern: $V.body!!.bytes()
-                  - pattern: $V.body?.bytes()
-                  - pattern: $V.body!!.close()
-                  - pattern: $V.body?.close()
-                  - pattern: $V.body().string()
-                  - pattern: $V.body().bytes()
-                  - pattern: $V.body().close()
-                stopBy: end
-              stopBy: end
----
 id: kt-http-logging-body-unguarded
 language: kotlin
 severity: warning
@@ -176,8 +128,8 @@ rule:
                 kind: user_type
                 regex: ^HttpClient$
           stopBy: end
-      # 同函式裡對「這個 client 存進的變數」呼叫 close()(try/finally 關掉)就不算「沒關」;
-      # close() 的接收者要是同一個變數,關別的 stream/writer 不算(代碼審 r1 M14、r2 規則A F4)
+      # 同函式裡對「這個 client 存進的變數」呼叫 close()(try/finally 關掉)或 use { } 就不算「沒關」;
+      # 接收者要是同一個變數,關別的 stream/writer 不算(代碼審 r1 M14、r2 規則A F4、r3 規則席 Finding 5)
       - all:
           - inside:
               kind: property_declaration
@@ -192,6 +144,8 @@ rule:
                 any:
                   - pattern: $V.close()
                   - pattern: $V?.close()
+                  - pattern: $V.use { $$$ }
+                  - pattern: $V?.use { $$$ }
                 stopBy: end
               stopBy: end
 ---

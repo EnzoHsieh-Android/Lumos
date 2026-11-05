@@ -23,9 +23,9 @@ CATALOG = HERE.parents[2] / "skills" / "kotlin-idioms" / "checks-catalog.md"
 CONFIGS = (("rules", "sgconfig.yml"), ("rules-review", "sgconfig-review.yml"), ("rules-hints", "sgconfig-hints.yml"))
 SEVERITIES = ("error", "warning", "info", "hint")
 _DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": ("error", "warning")}
-MSG_MAX = 120
+MSG_MAX = 120          # 新增告警閘解析 SARIF 時把訊息截在 120 字
 REVIEW_FP_PREFIX = "review-fp-"   # 好例樣本裡記「語意覆核級規則已知會誤報、要靠盲判排除」的檔名開頭
-SCAN_TIMEOUT = 120     # 一次掃描的上限(秒);正常不到一秒,卡住時不要拖到外層測試逾時          # 新增告警閘解析 SARIF 時把訊息截在 120 字
+SCAN_TIMEOUT = 120     # 一次掃描的上限(秒);正常不到一秒,卡住時不要拖到外層測試逾時
 # 好例「一段」= 頂格開頭的宣告(函式、類別、物件、介面、帶註記的宣告)
 _DECL_RE = re.compile(r"^(?:@|fun |suspend fun |private |internal |public |class |data class |object |interface |abstract |open |sealed |enum |val |var |inline )")
 # 檢查會談暫存區路徑(型錄落地時要拿掉)
@@ -35,6 +35,8 @@ TEST_ONLY_ANCESTOR = HERE / "samples" / "ancestor-named-test"
 
 def _files_block_is_test_only(doc):
     """這條規則的 files: 區塊(只看那一段,不看 ignores 或訊息)是不是只列測試目錄。"""
+    # 先去掉整行註解:頂格註解(例「# 不掃 src/main」)不算 files 區塊的內容,也不該把區塊截斷
+    doc = "\n".join(ln for ln in doc.splitlines() if not ln.lstrip().startswith("#"))
     m = re.search(r"^files:(.*?)(?=^[A-Za-z_\"'][^\n]*:)", doc + "\nzz:", re.M | re.S)
     if not m:
         return False
@@ -93,6 +95,23 @@ def _cells(line):
     return [c.strip() for c in _CELL_RE.split(line)[1:-1]]
 
 
+_NONE_TRIGGER = "(無)"
+
+
+def dt_triggers(cell):
+    """決策表觸發字格子 → (觸發字清單, 問題或 None)。「(無)」(全形半形括號都認)= 刻意不設,回空清單:
+    這個情境沒有不常見的字面特徵,不出情境段,只靠規則包與代碼審。"""
+    norm = cell.replace("\uff08", "(").replace("\uff09", ")")
+    trig = [t.strip().strip("`") for t in re.split(r"[、,,]", norm) if t.strip()]
+    if _NONE_TRIGGER in trig:
+        if len(trig) > 1:
+            return [], "「(無)」是刻意不設觸發字,不能跟其他觸發字並列"
+        return [], None
+    if not trig:
+        return [], "觸發字不准空(刻意不設寫「(無)」)"
+    return trig, None
+
+
 def catalog_problems(rules=None):
     """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
     problems = []
@@ -105,9 +124,12 @@ def catalog_problems(rules=None):
     # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
     i_src = text.find("\n## 來源縮寫")
     if i_src < 0:
-        return [("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)")]
-    i_src_end = text.find("\n## ", i_src + 5)
-    abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end if i_src_end >= 0 else len(text)], re.M))
+        # 記一筆、照樣往下檢查(縮寫當空集合),一次報齊其他問題
+        problems.append(("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)"))
+        abbrs = set()
+    else:
+        i_src_end = text.find("\n## ", i_src + 5)
+        abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end if i_src_end >= 0 else len(text)], re.M))
     for ln in main.splitlines():
         m = _MAIN_ROW_RE.match(ln)
         if not m:
@@ -145,11 +167,9 @@ def catalog_problems(rules=None):
             problems.append((did, f"決策表欄位數 {len(c)},應為 {_DT_COLS}"))
             continue
         d_seen.append(did)
-        trig = [t.strip().strip("`") for t in re.split(r"[、,,]", c[4]) if t.strip()]
-        if c[4].strip() in ("(無)", "\uff08無\uff09"):
-            trig = []      # 刻意不設觸發字:這個情境沒有不常見的字面特徵,不出情境段,只靠規則包與代碼審
-        elif not trig:
-            problems.append((did, "觸發字不准空(刻意不設寫「(無)」)"))
+        trig, err = dt_triggers(c[4])
+        if err:
+            problems.append((did, err))
         bad = [t for t in trig if t in STOP_TRIGGERS]
         if bad:
             problems.append((did, "觸發字含常用字:" + "、".join(bad)))
@@ -276,7 +296,9 @@ def check(sg):
     for d, cfg in CONFIGS:
         want = sum(1 for r in rules if r["dir"] == d)
         got, skipped = loaded_count(sg, cfg)
-        if got != want or skipped:
+        if got is None:
+            problems.append(("<pack>", f"{cfg} 讀不到載入條數(掃描逾時或 ast-grep 跑不起來)"))
+        elif got != want or skipped:
             problems.append(("<pack>", f"{cfg} 載入 {got} 條(略過 {skipped}),規則檔裡有 {want} 個 id"))
     review_ids = {r["id"] for r in rules if r["dir"] == "rules-review"}
     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
@@ -289,7 +311,7 @@ def check(sg):
                 continue
             for rule_id, f in got:
                 owner = _sample_owner(f, kind)
-                if kind == "good" and owner == rule_id and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
+                if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
                     continue      # 語意覆核級規則已知的形狀誤報:記在樣本裡給盲判對照,不算好例誤報
                 hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
     for r in rules:

@@ -125005,6 +125005,13 @@ def t_kotlin_rulepack_samples():
     import shlex as _shlex
     sg = _ktpack_sg()
     m = _ktpack()
+    # files: 區塊判讀(不需要 ast-grep;代碼審 r3 正確性席):頂格清單要認得、頂格註解不算區塊內容
+    top_list = "id: x\nfiles:\n- '**/src/test*/**'\nrule:\n  pattern: a\n"
+    top_cmt = "id: x\nfiles:\n  - '**/src/test*/**'\n# 不掃 src/main\nrule:\n  pattern: a\n"
+    check("★改壞★ files 頂格清單也算只掃測試碼", m._files_block_is_test_only(top_list) is True, "")
+    check("★改壞★ files 區塊後面的頂格註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(top_cmt) is True, "")
+    check("★對照★ files 真的列了 src/main 不算只掃測試碼",
+          m._files_block_is_test_only("files:\n  - '**/src/test*/**'\n  - '**/src/main/**'\nrule:\n  pattern: a\n") is False, "")
     if not sg:
         cat_ids, _t = m.catalog_ids()
         check("S1 靜態那半:規則訊息與型錄格式全過", not m.message_problems(m.load_rules(), cat_ids) and not m.catalog_problems(m.load_rules()), "")
@@ -125067,7 +125074,23 @@ def t_kotlin_rulepack_samples():
     _r, cp = mt.check(str(slow))
     took = _time.monotonic() - t0
     check("★改壞★ 掃描逾時要報跑不起來", any("跑不起來" in b for _a, b in cp), str(cp[:3]))
-    check("逾時一次之後不再逐次等滿(整次在 4 秒內)", took < 4, f"{took:.1f}s")
+    check("★改壞★ 載入條數那步逾時一次之後不再逐次等滿(整次在 2.5 秒內)", took < 2.5, f"{took:.1f}s")
+    # 第二條路:讀載入條數立刻回、掃描才卡住 → 由掃描自己設旗標(代碼審 r3 正確性席)
+    mt2 = _ktpack(copy=True)
+    mt2.SCAN_TIMEOUT = 1
+    slow2 = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+    slow2.write_text("#!/bin/sh\ncase \"$*\" in *--inspect*) exit 0;; esac\nsleep 5\n", encoding="utf-8")
+    slow2.chmod(0o755)
+    t0 = _time.monotonic()
+    _r, cp = mt2.check(str(slow2))
+    took = _time.monotonic() - t0
+    check("★改壞★ 掃描那步逾時一次之後不再逐次等滿(整次在 2.5 秒內)", took < 2.5, f"{took:.1f}s")
+    check("讀不到載入條數要講原因,不印「載入 None 條」",
+          any("讀不到載入條數" in b for _a, b in cp) and not any("None" in b for _a, b in cp), str(cp[:3]))
+    # 下一次自我檢查要重設逾時旗標,不能沿用上一次的
+    mt2.SCAN_TIMEOUT = 120
+    _r, cp = mt2.check(sg)
+    check("★改壞★ 上一次逾時不影響下一次自我檢查", not any("跑不起來" in b or "讀不到" in b for _a, b in cp), str(cp[:3]))
     # 規則目錄全空不准判通過
     me = _ktpack(copy=True)
     for d in ("rules", "rules-review", "rules-hints"):
@@ -125138,6 +125161,7 @@ def t_kotlin_catalog_rows_wired():
     c = mc._cells(lines[dt_rows[1]]); c[0] = "D-99"; lines[dt_rows[1]] = "| " + " | ".join(c) + " |"
     c = mc._cells(lines[dt_rows[2]]); none_id = c[0]; c[4] = "\uff08無\uff09"; lines[dt_rows[2]] = "| " + " | ".join(c) + " |"
     c = mc._cells(lines[dt_rows[3]]); empty_id = c[0]; c[4] = ""; lines[dt_rows[3]] = "| " + " | ".join(c) + " |"
+    c = mc._cells(lines[dt_rows[4]]); mix_id = c[0]; c[4] = "(無\uff09、foo"; lines[dt_rows[4]] = "| " + " | ".join(c) + " |"
     lines.insert(main_rows[0] + 1, lines[main_rows[0]])           # 編號重複
     pend_row = next(i for i in range(i_pend + 1, len(lines)) if lines[i].startswith("| ") and not lines[i].startswith("| 編號"))
     lines[pend_row] = lines[pend_row] + " 多一格 |"                  # 待查證節壞掉不算
@@ -125151,8 +125175,23 @@ def t_kotlin_catalog_rows_wired():
     check("★改壞★ 列編號不連號要抓到", "列編號要從 D-1 連號" in txt, txt[:400])
     check("觸發字寫「(無)」是刻意不設,不報", not any(a == none_id and "觸發字" in b for a, b in got), txt[:400])
     check("★改壞★ 觸發字空白(沒寫無)要報", any(a == empty_id and "觸發字不准空" in b for a, b in got), txt[:400])
+    check("★改壞★ 「(無)」跟其他觸發字並列要報(括號全形半形混寫也認)", any(a == mix_id and "不能跟其他觸發字並列" in b for a, b in got), txt[:400])
+    # 「(無)」解析成空清單(第二、三批讀觸發字時才不會把「(無)」當成一個字去比對)
+    for cell in ("(無)", "\uff08無\uff09", "(無\uff09", "\uff08無)"):
+        check(f"「{cell}」解析成刻意不設", m.dt_triggers(cell) == ([], None), str(m.dt_triggers(cell)))
+    check("一般觸發字照常拆開", m.dt_triggers("collectAsState、`stateIn`") == (["collectAsState", "stateIn"], None), str(m.dt_triggers("collectAsState、`stateIn`")))
     check("★改壞★ 編號重複要抓到", "編號重複" in txt, txt[:400])
     check("★對照★ 待查證節的列不受檢查", "多一格" not in txt and not any("待查證" in b for _a, b in got), txt[:400])
+    # 缺〈來源縮寫〉節:記一筆、其他檢查照跑(代碼審 r3 正確性、邊界席)
+    ms = _ktpack(copy=True)
+    t2 = ms.CATALOG.read_text(encoding="utf-8").replace("\n## 來源縮寫", "\n## 出處簡稱", 1)
+    t2l = t2.split("\n")
+    r0 = next(i for i, ln in enumerate(t2l) if ms._MAIN_ROW_RE.match(ln))
+    t2l.insert(r0 + 1, t2l[r0])
+    ms.CATALOG.write_text("\n".join(t2l), encoding="utf-8")
+    got2 = ms.catalog_problems()
+    check("★改壞★ 缺〈來源縮寫〉節要報", any("找不到〈來源縮寫〉節" in b for _a, b in got2), str(got2[:3]))
+    check("★改壞★ 缺〈來源縮寫〉節時其他問題照樣報齊", any("編號重複" in b for _a, b in got2), str(got2[:3]))
 
 
 def t_lint_new_astgrep_kotlin_two_files():

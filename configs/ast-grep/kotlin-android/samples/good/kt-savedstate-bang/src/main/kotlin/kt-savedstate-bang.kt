@@ -15,3 +15,8 @@ fun pick(handlers: Map<Type, Handler>, type: Type) = handlers[type]!!
 fun err(errorHandler: Registry, k: String) = errorHandler.get(k)!!
 fun st(savedStates: Map<Int, Bundle>, id: Int) = savedStates[id]!!
 fun reg(owner: SavedStateRegistryOwner) = owner.savedStateRegistry.get("x")!!
+// 容易誤報(代碼審 r3 規則席 Finding 4):泛用名 state 常是一般 Map 或 UI 狀態,不是 SavedStateHandle
+fun fromMap(state: Map<String, Int>) = state["count"]!!
+fun fromMapGet(state: Map<String, String>) = state.get("id")!!
+class MapHolder { val state = mapOf("a" to 1); val g = state["a"]!!; val h = state.get("a")!! }
+fun underscoreState(_state: Map<String, String>) = _state.get<String>("x")!!

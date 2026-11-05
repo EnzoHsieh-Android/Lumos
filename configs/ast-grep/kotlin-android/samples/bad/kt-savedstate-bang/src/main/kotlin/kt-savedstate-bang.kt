@@ -12,9 +12,8 @@ class U2ViewModel(private val handle: SavedStateHandle) : ViewModel() {
 class U5ViewModel(private val _savedStateHandle: SavedStateHandle) : ViewModel() {
     private val tab: Int = _savedStateHandle["tab"]!!
 }
-// case: savedState-and-state-names(代碼審 r2 規則B Finding 6:官方範例與社群慣用名)
-class S1ViewModel(private val savedState: SavedStateHandle, val state: SavedStateHandle) : ViewModel() {
+// case: savedState-name(代碼審 r2 規則B Finding 6:官方範例慣用名;泛用名 state 代碼審 r3 拿掉)
+class S1ViewModel(private val savedState: SavedStateHandle) : ViewModel() {
     val a = savedState.get<String>("id")!!
     val b = savedState["id"]!!
-    val c = state.get<String>("id")!!
 }

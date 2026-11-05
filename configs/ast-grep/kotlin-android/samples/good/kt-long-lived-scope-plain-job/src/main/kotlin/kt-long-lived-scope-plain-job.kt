@@ -18,3 +18,8 @@ class Holder {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main + job) // GOOD
 }
+// 容易誤報(代碼審 r3 規則席 Finding 3):SupervisorJob 屬性用加法接在 CoroutineScope(…) 後面
+class Holder2 {
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main) + job // GOOD
+}
