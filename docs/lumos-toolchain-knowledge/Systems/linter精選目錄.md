@@ -145,7 +145,7 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
   這條帶 `{LINT_FILES}`,ast-grep 收空白分隔的多支檔,推送前的新增告警閘會真的跑、只擋這次新增的告警;每條告警訊息開頭是型錄編號(例 `[API-14]`),後面是一句修法,完整寫法用編號查 `skills/kotlin-idioms/checks-catalog.md`。
 - **提示級規則預設不接**:`sgconfig-hints.yml` 是誤報可能較高的提示級規則,新增告警閘不分等級、接了就擋;要用就另加一條宣告指向它,並自己承擔誤報。
 - **測試檔也要掃**:型錄 TEST 主題的規則只在 `src/test/`、`src/androidTest/` 底下響,而新增告警閘預設排除 `src/test/`;要掃就在 `.lumos/config.json` 寫 `{"lint_new": {"include_test_paths": ["kt"]}}`。開了以後其他宣告命令(例如 detekt)也會掃到測試檔,可能多出對測試碼的告警(只擋新增的)。
-- **路徑過濾的天花板**:規則包裡「只掃測試碼」的規則錨在 `**/src/test/**` 這類片段;專案本身放在名為 `src/test` 的目錄底下時會反轉(ast-grep 的路徑過濾相對於規則設定檔所在目錄)。
+- **路徑過濾的天花板**:規則包裡「只掃測試碼」的規則錨在 `**/src/test*/**` 這類片段;專案本身放在名為 `src/test` 的目錄底下時會反轉(ast-grep 的路徑過濾相對於規則設定檔所在目錄)。
 
 ## Vue/TS/JS（registry: `npm:<pkg>`）
 | linter | 用途 | 備註 |
