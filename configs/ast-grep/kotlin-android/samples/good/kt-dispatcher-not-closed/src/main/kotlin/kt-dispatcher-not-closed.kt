@@ -18,3 +18,10 @@ fun c(db: RoomDatabase) {
     val d = db.queryExecutor.asCoroutineDispatcher() // GOOD
     scope.launch(d) { work() }
 }
+// 容易誤報(代碼審 r2 規則B Finding 5):Room 借來的 executor 先存變數也一樣不歸這裡關
+class RoomBacked(db: RoomDatabase) {
+    private val q = db.queryExecutor
+    private val t = db.transactionExecutor
+    val qd = q.asCoroutineDispatcher() // GOOD
+    val td = t.asCoroutineDispatcher() // GOOD
+}

@@ -1,0 +1,30 @@
+# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
+# 自 rules/data.yml 搬來(代碼審 r2 規則B Finding 3):retry 有沒有上限要看 runAttemptCount 的資料流
+# (先存變數、交給 helper 判),形狀只看得到它有沒有出現在條件裡
+id: kt-worker-retry-unbounded
+language: kotlin
+severity: info
+message: '[DATA-36]Result.retry() 沒看 runAttemptCount,永久錯誤也一直重試;改成 runAttemptCount >= MAX 就回 Result.failure(),IOException 才 retry'
+rule:
+  any:
+    - pattern: Result.retry()
+    - pattern: ListenableWorker.Result.retry()
+  # 同一個函式裡有 runAttemptCount 判斷(含先擋後回的早退寫法)就放行;只算出現在 if/when 裡的,
+  # 只賦值或寫進 log 字串的不算(代碼審 r2 規則B Finding 3)。先存變數再判的形狀看不出,留給盲判
+  not:
+    inside:
+      kind: function_declaration
+      has:
+        kind: simple_identifier
+        regex: ^runAttemptCount$
+        inside:
+          any:
+            - kind: if_expression
+            - kind: when_expression
+          stopBy: end
+        not:
+          inside:
+            kind: string_literal
+            stopBy: end
+        stopBy: end
+      stopBy: end

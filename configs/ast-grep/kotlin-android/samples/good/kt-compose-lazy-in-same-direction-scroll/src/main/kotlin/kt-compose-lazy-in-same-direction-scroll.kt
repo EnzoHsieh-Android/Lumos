@@ -24,3 +24,10 @@ fun Fixed(list: List<Item>) {
         LazyRow(modifier = Modifier.width(200.dp)) { items(list, key = { it.id }) { Text("") } }
     }
 }
+
+// 容易誤報(代碼審 r2 規則A F10):heightIn/widthIn 位置引數 (min, max) 也有上限
+@Composable
+fun Bounded() {
+    Column(Modifier.verticalScroll(rememberScrollState())) { LazyColumn(Modifier.heightIn(100.dp, 300.dp)) { } }
+    Row(Modifier.horizontalScroll(rememberScrollState())) { LazyRow(Modifier.widthIn(100.dp, 300.dp)) { } }
+}

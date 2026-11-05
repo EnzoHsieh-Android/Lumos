@@ -1,0 +1,33 @@
+# 語意覆核級(info):形狀分不出對錯,要盲判代理逐筆判
+# 自 rules/coroutines.yml 搬來(代碼審 r2 規則B Finding 1、2):是不是切回 Main 要知道派發器的型別與實際執行緒,
+# 名稱比對擋不住 Main.immediate、注入的 ui 派發器這類誤報,也會被外層 Main 吞掉內層 IO 的壞寫法
+id: kt-bg-dispatcher-touches-view
+language: kotlin
+severity: info
+message: '[CO-44]在 Dispatchers.IO/Default 上直接改 View 會丟 CalledFromWrongThreadException;改成 withContext(io) 取資料後再改 View,或寫入 StateFlow'
+rule:
+  all:
+    - any:
+        - kind: assignment
+          regex: '^\s*(_?binding\b[\w.?!]*|[\w.?!]+\.(text|isVisible|isGone|isInvisible|visibility|isEnabled|adapter|error|hint|alpha))\s*='
+        - pattern: $V.setText($$$)
+        - pattern: $V.setImageBitmap($$$)
+        - pattern: $V.setVisibility($$$)
+    - inside:
+        stopBy: end
+        kind: call_expression
+        regex: '^(\w+\.)?(launch|async|withContext)\s*\(\s*Dispatchers\.(IO|Default)\b'
+    - not:
+        inside:
+          stopBy: end
+          any:
+            # 切回 Main:Dispatchers.Main(.immediate)、Main + 其他 context、注入的 main/mainImmediate/mainDispatcher(含 main()),
+            # 名稱完整比對;而且這個切換要在背景區塊「裡面」,外層的 Main 不吞內層 IO(代碼審 r2 規則B Finding 1、2)
+            - kind: call_expression
+              regex: '^(\w+\.)?(withContext|launch|async)\s*\(\s*(\w+\.)*(Main|main|mainImmediate|mainDispatcher)(\.immediate)?(\(\))?\s*[,)+]'
+              inside:
+                stopBy: end
+                kind: call_expression
+                regex: '^(\w+\.)?(launch|async|withContext)\s*\(\s*Dispatchers\.(IO|Default)\b'
+            - pattern: runOnUiThread { $$$ }
+            - pattern: $W.post { $$$ }

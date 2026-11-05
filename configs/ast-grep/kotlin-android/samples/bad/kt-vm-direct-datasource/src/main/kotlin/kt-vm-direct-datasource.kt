@@ -14,3 +14,6 @@ class AB9ViewModel(
     private val dao: UserDao,
     private val repo: UserRepository,
 ) : AndroidViewModel(app)
+
+// case: order-tracking-service(代碼審 r2 規則A F6:物流追蹤的 Retrofit 介面,名字帶 Tracking 也是資料來源)
+class AB10ViewModel(val api: OrderTrackingService) : ViewModel()

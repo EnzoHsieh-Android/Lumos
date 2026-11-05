@@ -109,12 +109,26 @@ rule:
           stopBy: end
           kind: simple_identifier
           regex: ^(SupervisorJob|coroutineContext)$
-      # SupervisorJob 先存進同類別的屬性再組 scope
-      - inside:
-          kind: class_body
-          has:
-            kind: property_declaration
-            regex: '=\s*SupervisorJob\('
+      # SupervisorJob 先存進同類別的屬性再組 scope;這個 scope 要引用到那個屬性名才算(代碼審 r2 規則B Finding 8)
+      - all:
+          - inside:
+              kind: class_body
+              has:
+                kind: property_declaration
+                regex: '=\s*SupervisorJob\('
+                has:
+                  kind: variable_declaration
+                  has:
+                    kind: simple_identifier
+                    pattern: $J
+          - has:
+              stopBy: end
+              kind: call_expression
+              pattern: CoroutineScope($$$)
+              has:
+                stopBy: end
+                kind: simple_identifier
+                pattern: $J
 ---
 id: kt-noncancellable-in-builder
 language: kotlin
@@ -152,32 +166,6 @@ rule:
     has:
       kind: simple_identifier
       regex: ^onCleared$
----
-id: kt-bg-dispatcher-touches-view
-language: kotlin
-severity: warning
-message: '[CO-44]在 Dispatchers.IO/Default 上直接改 View 會丟 CalledFromWrongThreadException;改成 withContext(io) 取資料後再改 View,或寫入 StateFlow'
-rule:
-  all:
-    - any:
-        - kind: assignment
-          regex: '^\s*(_?binding\b[\w.?!]*|[\w.?!]+\.(text|isVisible|isGone|isInvisible|visibility|isEnabled|adapter|error|hint|alpha))\s*='
-        - pattern: $V.setText($$$)
-        - pattern: $V.setImageBitmap($$$)
-        - pattern: $V.setVisibility($$$)
-    - inside:
-        stopBy: end
-        kind: call_expression
-        regex: '^(\w+\.)?(launch|async|withContext)\s*\(\s*Dispatchers\.(IO|Default)\b'
-    - not:
-        inside:
-          stopBy: end
-          any:
-            # 切回 Main:Dispatchers.Main 或注入的 main 派發器(CO-1),withContext 或另開 launch/async 都算
-            - kind: call_expression
-              regex: '^(\w+\.)?(withContext|launch|async)\s*\(\s*(\w+\.)*(main\w*|\w*Main\w*)\s*[,)]'
-            - pattern: runOnUiThread { $$$ }
-            - pattern: $W.post { $$$ }
 ---
 id: kt-default-blocking-io
 language: kotlin
@@ -219,6 +207,28 @@ rule:
         - all:
             - pattern: $E.asCoroutineDispatcher()
             - regex: '^(java\.util\.concurrent\.)?(Executors\.new\w*|\w*ThreadPoolExecutor|ForkJoinPool)\s*\('
+        # 先存進變數再轉:同一個類別或函式裡 val x = Executors.new…(…),再 x.asCoroutineDispatcher()(代碼審 r2 規則B Finding 5);
+        # 名稱要對到那個自己建的變數,db.queryExecutor/transactionExecutor 這類借來的照樣不歸這裡關
+        - all:
+            - pattern: $E.asCoroutineDispatcher()
+            - not:
+                regex: '(queryExecutor|transactionExecutor)'
+            - inside:
+                stopBy: end
+                any:
+                  - kind: class_body
+                  - kind: function_body
+                  - kind: source_file
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has:
+                        kind: variable_declaration
+                        has:
+                          kind: simple_identifier
+                          pattern: $E
+                    - regex: '=\s*(java\.util\.concurrent\.)?(Executors\.new\w*|\w*ThreadPoolExecutor|ForkJoinPool)\s*\('
     - any:
         - all:
             - inside:

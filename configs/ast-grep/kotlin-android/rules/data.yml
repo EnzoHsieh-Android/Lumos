@@ -91,14 +91,40 @@ rule:
             - pattern: $Y.catch { $$$ }
             - pattern: $Y.catch($$$)
           stopBy: end
-      - inside:
-          kind: try_expression
-          stopBy: end
-      - inside:
-          any:
-            - pattern: runCatching { $$$ }
-            - pattern: $Y.runCatching { $$$ }
-          stopBy: end
+      # try/runCatching 只對「在區塊裡就收集完」的終端操作有用:first()/firstOrNull()/collect,或直接接 .first();
+      # 區塊裡只建立流(map)或排程到 launch/async 裡收集,IOException 發生在區塊外,不放行(代碼審 r2 規則B Finding 10)
+      - all:
+          - inside:
+              any:
+                - kind: try_expression
+                - pattern: runCatching { $$$ }
+                - pattern: $Y.runCatching { $$$ }
+              stopBy: end
+          - any:
+              - pattern: $D.data.first()
+              - pattern: $D.data.firstOrNull()
+              - pattern: $D.data.collect { $$$ }
+              - inside:
+                  kind: navigation_expression
+                  regex: '\.(first|firstOrNull)$'
+          - not:
+              inside:
+                any:
+                  - pattern: launch { $$$ }
+                  - pattern: launch($$$) { $$$ }
+                  - pattern: $S.launch { $$$ }
+                  - pattern: $S.launch($$$) { $$$ }
+                  - pattern: async { $$$ }
+                  - pattern: async($$$) { $$$ }
+                  - pattern: $S.async { $$$ }
+                  - pattern: $S.async($$$) { $$$ }
+                inside:
+                  any:
+                    - kind: try_expression
+                    - pattern: runCatching { $$$ }
+                    - pattern: $Y.runCatching { $$$ }
+                  stopBy: end
+                stopBy: end
 ---
 id: kt-datastore-serializer-no-corruption
 language: kotlin
@@ -252,9 +278,13 @@ rule:
         kind: value_argument
         nthChild: 1
         matches: tainted-sql
-        # PRAGMA 與 DDL(CREATE/DROP/ALTER)的名稱與值 SQLite 不能用 ? 綁定,綁定參數的修法用不上
+        # PRAGMA 與 DDL(CREATE/DROP/ALTER)的名稱與值 SQLite 不能用 ? 綁定,綁定參數的修法用不上;
+        # 單引號與三引號一樣處理;帶 SELECT/WHERE 的(CREATE TABLE … AS SELECT … WHERE 值)值可以綁定,不放行(代碼審 r2 規則B Finding 9)
         not:
-          regex: '(?i)^"\s*(PRAGMA|CREATE|DROP|ALTER)\b'
+          all:
+            - regex: '(?i)^"{1,3}\s*(PRAGMA|CREATE|DROP|ALTER)\b'
+            - not:
+                regex: '(?i)\b(SELECT|WHERE)\b'
 
 ---
 id: kt-external-storage-hardcoded
@@ -283,23 +313,6 @@ rule:
       any:
         - kind: try_expression
         - pattern: runCatching { $$$ }
-      stopBy: end
----
-id: kt-worker-retry-unbounded
-language: kotlin
-severity: warning
-message: '[DATA-36]Result.retry() 沒看 runAttemptCount,永久錯誤也一直重試;改成 runAttemptCount >= MAX 就回 Result.failure(),IOException 才 retry'
-rule:
-  any:
-    - pattern: Result.retry()
-    - pattern: ListenableWorker.Result.retry()
-  # 同一個函式裡有 runAttemptCount 判斷(含先擋後回的早退寫法)就放行
-  not:
-    inside:
-      kind: function_declaration
-      has:
-        regex: runAttemptCount
-        stopBy: end
       stopBy: end
 ---
 id: kt-worker-swallow-success

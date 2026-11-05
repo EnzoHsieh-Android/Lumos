@@ -418,13 +418,13 @@ rule:
             - pattern: LazyColumn($$$) { $$$ }
             - pattern: LazyVerticalGrid($$$) { $$$ }
             - pattern: LazyVerticalStaggeredGrid($$$) { $$$ }
-        # Lazy 自己給了固定高度(或有上限),量測不會拿到無限長度(代碼審 r1 M7)
+        # Lazy 自己給了固定高度(或有上限),量測不會拿到無限長度(代碼審 r1 M7);heightIn(min, max) 兩個位置引數也算有上限(代碼審 r2 規則A F10)
         - not:
             has:
               kind: call_suffix
               has:
                 kind: value_arguments
-                regex: '\.(height|size|requiredHeight|requiredSize)\(|\.(heightIn|requiredHeightIn)\([^)]*max|\.sizeIn\([^)]*maxHeight'
+                regex: '\.(height|size|requiredHeight|requiredSize)\(|\.(heightIn|requiredHeightIn)\(([^)]*max|[^,)]+,[^)]+)|\.sizeIn\([^)]*maxHeight'
         - inside:
             kind: call_expression
             has:
@@ -447,7 +447,7 @@ rule:
               kind: call_suffix
               has:
                 kind: value_arguments
-                regex: '\.(width|size|requiredWidth|requiredSize)\(|\.(widthIn|requiredWidthIn)\([^)]*max|\.sizeIn\([^)]*maxWidth'
+                regex: '\.(width|size|requiredWidth|requiredSize)\(|\.(widthIn|requiredWidthIn)\(([^)]*max|[^,)]+,[^)]+)|\.sizeIn\([^)]*maxWidth'
         - inside:
             kind: call_expression
             has:
@@ -548,13 +548,22 @@ rule:
     - pattern: LazyGridState($$$)
     - pattern: LazyStaggeredGridState($$$)
     - pattern: ScrollState($$$)
-  # rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) } 就是 rememberScrollState 的做法(代碼審 r1 M5);只包 remember { } 轉螢幕仍歸零,照報
+  # rememberSaveable(saver = ScrollState.Saver) { ScrollState(0) } 就是 rememberScrollState 的做法(代碼審 r1 M5);只包 remember { } 轉螢幕仍歸零,照報;
+  # 沒給 saver 的 rememberSaveable 存不進 Bundle,照報(代碼審 r2 規則A F9)
   not:
     inside:
       kind: call_expression
-      has:
-        kind: simple_identifier
-        regex: ^rememberSaveable$
+      all:
+        - has:
+            kind: simple_identifier
+            regex: ^rememberSaveable$
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                regex: '^(state)?[sS]aver\s*='
       stopBy: end
   inside:
     kind: function_declaration
@@ -710,13 +719,18 @@ rule:
         has:
           kind: simple_identifier
           regex: ^(IconButton|FilledIconButton|FilledTonalIconButton|OutlinedIconButton|IconToggleButton|FilledIconToggleButton|FilledTonalIconToggleButton|OutlinedIconToggleButton|FloatingActionButton|SmallFloatingActionButton|LargeFloatingActionButton)$
-        # 按鈕裡有 Text 標籤,讀屏念文字(代碼審 r1 m4)
+        # 按鈕裡有 Text 標籤,讀屏念文字(代碼審 r1 m4);徽章 badge = { Text("3") } 裡的數字不是按鈕名稱,不算(代碼審 r2 規則A F8)
         not:
           has:
             kind: call_expression
             has:
               kind: simple_identifier
               regex: ^Text$
+            not:
+              inside:
+                kind: value_argument
+                regex: '^badge\s*='
+                stopBy: end
             stopBy: end
         stopBy: end
     - inside:
@@ -840,11 +854,15 @@ rule:
               kind: value_argument
               any:
                 - regex: '^key\s*='
-                # items(list, { it.id }):key 是第二個位置引數(代碼審 r1 M15)
+                # items(list, { it.id }):key 是第二個位置引數(代碼審 r1 M15);函式參照 ::key、Item::id 或變數 keyFn 也算(代碼審 r2 規則A F11)
                 - all:
                     - nthChild: 2
                     - has:
-                        kind: lambda_literal
+                        any:
+                          - kind: lambda_literal
+                          - kind: callable_reference
+                          - kind: simple_identifier
+                          - kind: navigation_expression
                     - not:
                         regex: '^\w+\s*='
       # 只給筆數、而且是整數字面值或全大寫常數:清單不會重排,預設用索引當 key 剛好是對的(2026-11-05 實驗專案實測誤報)
@@ -875,10 +893,16 @@ rule:
               kind: value_argument
               any:
                 - regex: '^key\s*='
-                # items(list, { it.id }):key 是第二個位置引數(代碼審 r1 M15)
+                # items(list, { it.id }):key 是第二個位置引數(代碼審 r1 M15);函式參照 ::key、Item::id 或變數 keyFn 也算(代碼審 r2 規則A F11)
                 - all:
                     - nthChild: 2
                     - has:
-                        kind: lambda_literal
+                        any:
+                          - kind: lambda_literal
+                          - kind: callable_reference
+                          - kind: simple_identifier
+                          - kind: navigation_expression
                     - not:
                         regex: '^\w+\s*='
+      # 只給筆數、而且是整數字面值或全大寫常數:與 kt-lazy-items-no-key-ext 同一份豁免(代碼審 r2 規則A F12)
+      - regex: '^items\(\s*(\d+|([\w.]*\.)?[A-Z][A-Z0-9_]*)\s*\)'

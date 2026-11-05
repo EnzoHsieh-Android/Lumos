@@ -19,7 +19,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CATALOG = HERE.parents[2] / "skills" / "kotlin-idioms" / "checks-catalog.md"
 # 三級:rules=會擋(error/warning);rules-review=語意覆核級(info,形狀分不出對錯、要盲判代理逐筆判,
-# 第三批 [[Projects/Android寫法語意情境表態與盲判_計劃]] 接上前不擋);rules-hints=提示級(hint,預設不接)
+# [[Projects/規則包語意覆核級命中走盲判_計劃]] 接上前不擋);rules-hints=提示級(hint,預設不接)
 CONFIGS = (("rules", "sgconfig.yml"), ("rules-review", "sgconfig-review.yml"), ("rules-hints", "sgconfig-hints.yml"))
 SEVERITIES = ("error", "warning", "info", "hint")
 _DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": ("error", "warning")}
@@ -35,7 +35,7 @@ TEST_ONLY_ANCESTOR = HERE / "samples" / "ancestor-named-test"
 
 def _files_block_is_test_only(doc):
     """這條規則的 files: 區塊(只看那一段,不看 ignores 或訊息)是不是只列測試目錄。"""
-    m = re.search(r"^files:(.*?)(?=^\S)", doc + "\nz", re.M | re.S)
+    m = re.search(r"^files:(.*?)(?=^[A-Za-z_\"'][^\n]*:)", doc + "\nzz:", re.M | re.S)
     if not m:
         return False
     block = m.group(1)
@@ -43,7 +43,7 @@ def _files_block_is_test_only(doc):
 
 
 def load_rules():
-    """讀兩個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
+    """讀三個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
     rules = []
     for d, cfg in CONFIGS:
         for f in sorted((HERE / d).glob("*.yml")):
@@ -104,8 +104,10 @@ def catalog_problems(rules=None):
     rows, seen = {}, set()
     # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
     i_src = text.find("\n## 來源縮寫")
-    i_src_end = text.find("\n## ", i_src + 5) if i_src >= 0 else -1
-    abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end], re.M)) if i_src >= 0 else set()
+    if i_src < 0:
+        return [("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)")]
+    i_src_end = text.find("\n## ", i_src + 5)
+    abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end if i_src_end >= 0 else len(text)], re.M))
     for ln in main.splitlines():
         m = _MAIN_ROW_RE.match(ln)
         if not m:
@@ -144,7 +146,7 @@ def catalog_problems(rules=None):
             continue
         d_seen.append(did)
         trig = [t.strip().strip("`") for t in re.split(r"[、,,]", c[4]) if t.strip()]
-        if c[4].strip() in ("(無)", "(無)"):
+        if c[4].strip() in ("(無)", "\uff08無\uff09"):
             trig = []      # 刻意不設觸發字:這個情境沒有不常見的字面特徵,不出情境段,只靠規則包與代碼審
         elif not trig:
             problems.append((did, "觸發字不准空(刻意不設寫「(無)」)"))
@@ -198,12 +200,20 @@ def message_problems(rules, cat_ids):
     return problems
 
 
+_TIMED_OUT = [False]   # 一次掃描逾時後,這次自我檢查剩下的掃描都不跑(避免卡住時每次各等滿上限)
+
+
 def scan(sg, cfg, target):
-    """跑一次 ast-grep,回 [(ruleId, file)];失敗回 None。"""
+    """跑一次 ast-grep,回 [(ruleId, file)];失敗或之前已逾時回 None。"""
+    if _TIMED_OUT[0]:
+        return None
     try:
         r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--json=stream", str(target)],
                            capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        _TIMED_OUT[0] = True
+        return None
+    except OSError:
         return None
     if r.returncode not in (0, 1):
         return None
@@ -216,10 +226,15 @@ def scan(sg, cfg, target):
 
 
 def loaded_count(sg, cfg):
+    if _TIMED_OUT[0]:
+        return (None, None)
     try:
         r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--inspect", "summary", str(HERE / "samples" / "good")],
                            capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        _TIMED_OUT[0] = True
+        return (None, None)
+    except OSError:
         return (None, None)
     m = re.search(r"effectiveRuleCount=(\d+),skippedRuleCount=(\d+)", r.stderr)
     return (int(m.group(1)), int(m.group(2))) if m else (None, None)
@@ -239,15 +254,18 @@ def _sample_owner(f, kind):
 def good_cases(path):
     n = 0
     for f in Path(path).rglob("*.kt"):
+        if f.name.startswith(REVIEW_FP_PREFIX):
+            continue      # 已知誤報樣本不算「好例」段數
         n += sum(1 for ln in f.read_text(encoding="utf-8").splitlines() if _DECL_RE.match(ln))
     return n
 
 
 def check(sg):
+    _TIMED_OUT[0] = False
     problems = []
     rules = load_rules()
     if not rules:
-        problems.append(("<pack>", "一條規則都沒讀到(rules/ 與 rules-hints/ 是空的?)"))
+        problems.append(("<pack>", "一條規則都沒讀到(rules/、rules-review/、rules-hints/ 都是空的?)"))
     ids = [r["id"] for r in rules]
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
@@ -271,7 +289,7 @@ def check(sg):
                 continue
             for rule_id, f in got:
                 owner = _sample_owner(f, kind)
-                if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and review_ids and rule_id in review_ids:
+                if kind == "good" and owner == rule_id and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
                     continue      # 語意覆核級規則已知的形狀誤報:記在樣本裡給盲判對照,不算好例誤報
                 hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
     for r in rules:

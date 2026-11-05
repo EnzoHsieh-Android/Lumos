@@ -14,3 +14,9 @@ class G2ViewModel : ViewModel() {
 class G3ViewModel : ViewModel() {
     private val callbacks = mutableListOf<UiCallback>()
 }
+
+// case: var-default-lambda(代碼審 r2 規則A F2:預設空 lambda 的 var,之後由 UI 指派,照樣留住 Fragment)
+class G7ViewModel : ViewModel() {
+    var onEvent: (String) -> Unit = {}
+    var cb: () -> Unit = {}
+}

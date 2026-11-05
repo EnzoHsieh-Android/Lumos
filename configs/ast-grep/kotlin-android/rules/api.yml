@@ -56,19 +56,40 @@ rule:
             - pattern: $X.use { $$$ }
             - pattern: $X?.use { $$$ }
           stopBy: end
+      # 直接接著讀完 body:execute().body?.string() 會關 body,連線跟著還回去(代碼審 r1 M10)
       - inside:
-          kind: function_body
-          has:
-            any:
-              - pattern: $Y.use { $$$ }
-              - pattern: $Y?.use { $$$ }
-              - pattern: $Y.close()
-              - pattern: $Y?.close()
-              # 讀完 body 的 string()/bytes() 會關 body,連線跟著還回去(代碼審 r1 M10)
-              - kind: call_expression
-                regex: '\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
-            stopBy: end
+          kind: call_expression
+          regex: '\.execute\(\)\s*\.body(\(\))?(\?|!!)?\.(string|bytes|close)\(\)$'
           stopBy: end
+      # 先存進變數:同函式裡對「同一個變數」use/close,或讀完它的 body;
+      # 讀別的 Response 的 body 不算(代碼審 r1 M10、r2 規則A F5)
+      - all:
+          - inside:
+              kind: property_declaration
+              has:
+                kind: variable_declaration
+                has:
+                  kind: simple_identifier
+                  pattern: $V
+          - inside:
+              kind: function_body
+              has:
+                any:
+                  - pattern: $V.use { $$$ }
+                  - pattern: $V?.use { $$$ }
+                  - pattern: $V.close()
+                  - pattern: $V?.close()
+                  - pattern: $V.body!!.string()
+                  - pattern: $V.body?.string()
+                  - pattern: $V.body!!.bytes()
+                  - pattern: $V.body?.bytes()
+                  - pattern: $V.body!!.close()
+                  - pattern: $V.body?.close()
+                  - pattern: $V.body().string()
+                  - pattern: $V.body().bytes()
+                  - pattern: $V.body().close()
+                stopBy: end
+              stopBy: end
 ---
 id: kt-http-logging-body-unguarded
 language: kotlin
@@ -155,15 +176,24 @@ rule:
                 kind: user_type
                 regex: ^HttpClient$
           stopBy: end
-      # 同函式裡有 close()(try/finally 關掉)就不算「沒關」(代碼審 r1 M14)
-      - inside:
-          kind: function_body
-          has:
-            any:
-              - pattern: $Y.close()
-              - pattern: $Y?.close()
-            stopBy: end
-          stopBy: end
+      # 同函式裡對「這個 client 存進的變數」呼叫 close()(try/finally 關掉)就不算「沒關」;
+      # close() 的接收者要是同一個變數,關別的 stream/writer 不算(代碼審 r1 M14、r2 規則A F4)
+      - all:
+          - inside:
+              kind: property_declaration
+              has:
+                kind: variable_declaration
+                has:
+                  kind: simple_identifier
+                  pattern: $V
+          - inside:
+              kind: function_body
+              has:
+                any:
+                  - pattern: $V.close()
+                  - pattern: $V?.close()
+                stopBy: end
+              stopBy: end
 ---
 id: kt-unmanaged-scope-launch
 language: kotlin
@@ -205,19 +235,28 @@ message: '[API-15]response.body()!! 沒先看 isSuccessful,伺服器回 4xx/5xx 
 rule:
   pattern: $R.body()!!
   not:
-    any:
-      - inside:
-          kind: if_expression
-          regex: '^if\s*\(\s*[\w.?]*\.isSuccessful\s*\)'
+    # 放行只認「同一個接收者」的 isSuccessful,而且要出現在 if/when/check/require 的判斷裡;
+    # 判別的回應、或只拿來印 log(字串樣板裡)都不算看過(代碼審 r1 M1、r2 規則A F1)
+    inside:
+      any:
+        - kind: function_declaration
+        - kind: lambda_literal
+        - kind: property_declaration
+      has:
+        pattern: $R.isSuccessful
+        inside:
+          any:
+            - kind: if_expression
+            - kind: when_expression
+            - pattern: check($$$)
+            - pattern: require($$$)
           stopBy: end
-      # 同一個函式裡判過 isSuccessful(提早 throw、check(...)、&& 併判)就算看過(代碼審 r1 M1)
-      - inside:
-          kind: function_declaration
-          has:
-            kind: simple_identifier
-            regex: ^isSuccessful$
+        not:
+          inside:
+            kind: string_literal
             stopBy: end
-          stopBy: end
+        stopBy: end
+      stopBy: end
 ---
 id: kt-callbackflow-no-awaitclose
 language: kotlin

@@ -6,3 +6,6 @@ fun d(resolver: ContentResolver, uri: Uri) = resolver.query(uri, null, "n = ?", 
 fun e(db: SupportSQLiteDatabase, version: Int) = db.execSQL("PRAGMA user_version = $version") // GOOD
 fun f(db: SupportSQLiteDatabase, tableName: String) = db.execSQL("DROP TABLE IF EXISTS $tableName") // GOOD
 fun g(apollo: SearchClient, term: String) = apollo.query("search $term") // GOOD
+// 容易誤報(代碼審 r2 規則B Finding 9):三引號的純 DDL 也不能用 ? 綁定,與單引號一致
+fun h(db: SupportSQLiteDatabase, table: String) = db.execSQL("""
+    ALTER TABLE $table ADD COLUMN note TEXT""") // GOOD

@@ -14,3 +14,6 @@ fun Fragment.bind(vm: VM) {
 fun handle(e: Event<String>?) { e?.getContentIfNotHandled() }
 // case: named-live-event
 class LiveEvent<T> : MediatorLiveData<T>()
+// case: oneshot-unpeek(代碼審 r2 規則B Finding 11:事件包裝的其他常見名)
+class OneShotLiveData<T> : MutableLiveData<T>()
+class UnPeekLiveData<T> : MutableLiveData<T>()

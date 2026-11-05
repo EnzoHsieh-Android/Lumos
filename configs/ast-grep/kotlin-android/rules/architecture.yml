@@ -53,12 +53,17 @@ rule:
       - kind: user_type
         regex: (Listener|Callback)$
     stopBy: end
-  # 初始值就是 ViewModel 自己寫的 lambda 或函式參照,沒有留 UI 端的參照(代碼審 r1 m4)
+  # 初始值就是 ViewModel 自己寫的 lambda 或函式參照,而且是 val(之後換不掉),沒有留 UI 端的參照(代碼審 r1 m4);
+  # var 加預設空 lambda 再讓 UI 指派,照樣留住 Fragment,照報(代碼審 r2 規則A F2)
   not:
-    has:
-      any:
-        - kind: lambda_literal
-        - kind: callable_reference
+    all:
+      - has:
+          kind: binding_pattern_kind
+          regex: ^val$
+      - has:
+          any:
+            - kind: lambda_literal
+            - kind: callable_reference
   inside:
     kind: class_body
     inside:
@@ -222,10 +227,16 @@ rule:
               has:
                 kind: simple_identifier
                 regex: ^(onCreate|onAttach)$
-          # 擴充函式 helper(fun ComponentActivity.registerPick(...) = registerForActivityResult(...))由屬性初始化或 onCreate 呼叫(代碼審 r1 m3)
-          - not:
-              has:
-                kind: receiver_type
+  # 擴充函式 helper(fun ComponentActivity.registerPick(...) = registerForActivityResult(...))由屬性初始化或 onCreate 呼叫(代碼審 r1 m3);
+  # 只放行「函式本體就是這個呼叫」的單式 helper,寫在擴充函式區塊本體裡的照報(代碼審 r2 規則A F7)
+  not:
+    inside:
+      kind: function_body
+      regex: ^=
+      inside:
+        kind: function_declaration
+        has:
+          kind: receiver_type
 ---
 id: kt-reuse-fragment-instance
 language: kotlin
@@ -356,9 +367,10 @@ rule:
   has:
     kind: user_type
     regex: ^(\w*(Dao|Api|Service|Database)|SharedPreferences|DataStore|FirebaseFirestore|LocationManager|Retrofit|OkHttpClient)\b
-    # 分析、記錄、當機回報這類 *Service 不是資料來源(代碼審 r1 m4)
+    # 分析、記錄、當機回報這類 *Service 不是資料來源(代碼審 r1 m4);
+    # Tracking/Tracker/Logger 不放行:OrderTrackingService 這類物流追蹤常是真的 Retrofit 介面(代碼審 r2 規則A F6)
     not:
-      regex: ^\w*(Analytics|Tracking|Tracker|Logging|Logger|Crash\w*)Service$
+      regex: ^\w*(Analytics|Logging|Crash\w*)Service$
     stopBy: end
   inside:
     kind: class_declaration
@@ -386,6 +398,7 @@ rule:
       - has:
           kind: type_identifier
           regex: (UiState|UiModel)$
+      # data class 或 sealed 的 *State(巢狀在 sealed *State 裡的 data class 也算,代碼審 r2 規則A F3)
       - all:
           - has:
               kind: type_identifier
@@ -394,7 +407,7 @@ rule:
               kind: modifiers
               has:
                 kind: class_modifier
-                regex: ^data$
+                regex: ^(data|sealed)$
     stopBy: end
 ---
 id: kt-hilt-retain-instance
