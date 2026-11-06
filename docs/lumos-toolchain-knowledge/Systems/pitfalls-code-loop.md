@@ -85,6 +85,8 @@ summary: |-
   WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘(含測試防竄改比對)與 Room 守衛都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
   WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
   WHY:新增告警閘對逗號佔位符({LINT_FILES_CSV})的命令:路徑含逗號或分號的檔從那條命令拿掉、列進「檔太大沒檢查」同一組(擋,可逐檔放行,指紋跟大檔同形),一條命令的檔全被拿掉時判沒被檢查;換完超過 100,000 位元組對半切分批跑、合併結果;開程序丟參數太長記成那條沒跑到並擋 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 2、3] [因:detekt 拿逗號與分號分 --input,那種路徑整條拒跑;Linux 單一參數上限 128 KB,改動檔多時命令會撐爆;參數太長原本是例外、整道閘例外放行] [不選:分隔字元路徑自動放行(改檔名就能繞過的可重現繞道);舊 {LINT_FILES} 也分批(不改既有行為)] [test:t_lint_new_csv_separator_path] [test:t_lint_new_csv_batches] [test:t_lint_new_detekt_csv_blocks_new] [test:t_lint_new_detekt_real_two_files]
+  WHY:`lumos code-loop pass` 記通過之前先跑新增告警與表態兩道:用推送檢查那支判定函式的收集模式加「只跑兩道」(mech_only,安全證據、端到端驗收、合約測試與代碼審留痕不跑),範圍是分岔點..HEAD;排在留痕驗證那兩條提早返回(沒有審查帳、light)之前;擋下不留痕、rc2、治理帳記一筆 code-loop-pass blocked [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 2] [因:使用者要審查迴圈裡就檢查乾淨,不等到推送] [不選:另寫一支共用判定(兩套判法會漂開)] [test:t_codeloop_pass_requires_clean_mechanical]
+  WHY:`lumos lint-new --diff <範圍>` 呼叫推送前同一支新增告警判定、不寫治理帳;八種狀態分三類:擋 rc1、乾淨或刻意不查 rc0、沒檢查到 rc3(這支指令的 rc3 不是其他指令的找不到知識圖譜) [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 1] [因:派審查席前自己先查,又不讓放行帳多出推送以外的筆數] [test:t_lint_new_cli_status_codes]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1
@@ -310,3 +312,12 @@ WHY:`pitfalls` 的人可讀輸出在 `tier:` 那行下面多印「這級仍要�
 - 新增告警那一步多接測試防竄改比對,判法與取捨在 [[Systems/test-guard]]。這一層只管兩件事:判定函式把要寫的治理帳放進回傳值、由這一步寫(照「判定函式不直接寫帳」的既有慣例);擋下與放行小結怎麼印。
 - 擋下訊息:作弊候選(`tq/` 開頭)最多印 50 條,每條附「該確認什麼」與填好規則和檔名的放行指令,超過時印列出全部的指令;其他告警照舊印 8 條。比對沒跑完、放行檔讀不了各講各的,後者不印放行指令。
 - 放行小結:設成 warn 時新增告警逐條以「提醒:」開頭印(推送前掛鉤在放行路徑只轉印含「提醒」的行);只有比對在跑、沒有檢查命令時不印「跑了 0 條檢查命令」;還沒人看過的 AI 放行,擋下與放行都印一行提醒(跟 Android 端到端驗收同一個位置)。
+
+## 代碼審記通過前先跑新增告警與表態兩道(2026-11-06,[[Projects/Android寫法寫完當下自動檢查_計劃]])
+
+白話:以前機械檢查要等推送才跑,審查迴圈可以先記「通過」、推送時才發現有新增告警;現在 `code-loop pass` 寫留痕之前先跑推送前那兩道,不乾淨就不准記。另給 `lumos lint-new --diff` 讓派審查席之前自己先查。
+
+- 判定沿用推送檢查同一支判定函式:收集模式(每道都判完)加「只跑兩道」選項,所以兩道的判法、分岔點等於 HEAD 直接放行、算不出分岔點記放行帳、工具沒裝自動放行記帳、pitfalls 失敗時新增告警照跑,都跟推送前同一條路。不帶這個選項時判定一字不變。
+- 擋下時每道印推送前同一段擋下訊息(含放行指令與補表態指令),再多印一段「代碼審還不能記通過」與重跑 pass 的指令;治理帳的閘名是 `code-loop-pass`、種類 `blocked`(`extra.blocks` 帶這次擋下的種類),撤除條件數的是這一種。`code-loop skip` 不跑這兩道。
+- 用法上要知道:pass 之後又提交程式、再 pass 一次時,舊表態綁的是舊提交,會被表態那道擋下;照擋下訊息重答表態再 pass(推送前閘本來就會在這裡擋)。
+- `lint-new` 的輸出:擋下逐條印「檔:行、規則訊息」與填好指紋的放行指令,最多 20 條,其餘提示加 `--all` 全部列出(不指去會寫治理帳、真跑合約測試的 `code-loop check`,代碼審 r1 正確性席);沒檢查到時印哪條命令沒跑,命令第一個詞找不到執行檔就寫「沒裝 <工具>」,結尾一句「這次沒有被檢查,不算乾淨」;只給一個版本時提醒要給兩端。這支指令不記帳,所以環境不可用時不沿用判定函式「已自動放行並記帳」那句話。

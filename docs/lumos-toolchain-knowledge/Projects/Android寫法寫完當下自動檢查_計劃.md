@@ -1,11 +1,11 @@
 ---
 type: project
-status: todo
+status: done
 created: 2026-11-05
 updated: 2026-11-05
 tags:
   - type/project
-  - status/todo
+  - status/done
   - scope/stack-knowledge
 related:
   - "[[Projects/Android協程與API寫法機械檢查標準_計劃]]"

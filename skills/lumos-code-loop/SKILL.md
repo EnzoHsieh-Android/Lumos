@@ -24,6 +24,7 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
    **修訂輪先準備修補鏡頭**：上一輪有修補時，按共用派工範本 §3.1 固定兩端版本、產生 `rN-repair.patch` 與 `rN-repair-binding.json`；完整改動與上下文仍在審材內。先核對上一輪派工單與 fix-check 的起點，缺漏或不同就記材料不可得、釐清後再比較。材料不可得不等於沒有回歸；不改現有閘結果與輪數。
+   **派審查員前先機械查**:`lumos lint-new --diff <merge-base>..HEAD`(跟推送前的新增告警那道同判),rc0 才派;rc1 先修或放行;rc3 是「沒檢查到」不是乾淨——先裝好工具,或在派工詞寫明哪些類別沒被機械檢查。派工材料附這次的結果,寫明「機械已查(rc0 且狀態 clean)的類別席位不報」。這步是建議,機器擋的是 `code-loop pass`(記通過前先跑新增告警與表態兩道,不乾淨回 rc2)與推送前閘([[Projects/Android寫法寫完當下自動檢查_計劃]])。
 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
    - standard 只派一位審查員(另加架構對齊);多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。(工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;跨 repo 派工時看被審 repo 的根自己判;消費專案照舊)
    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill(專案在 `.lumos/config.json` 的 `arch_targets` 宣告了目標架構的目錄改標目標節點,規則由範本裡的 `LUMOS-ARCH-TARGET: on` 讓 hook 附上),派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
@@ -56,7 +57,7 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
 8. **過了留痕**:
    - 先 `lumos impact --diff <範圍> --sync-check` 確認波及的圖譜筆記都同步了(強制,不可跳)。
    - 凍結判定在留痕之前:程式、筆記、卷證、帳本放進同一個功能提交之後,`lumos loop replay <編號> --freeze --spec <凍結 patch> --repo <根>` 凍結判定,產出的 verdict 併進同一個功能提交(還沒推可以改寫那個提交)——凍結記的是檔案內容指紋不是提交編號,併進去不影響回放。
-   - 再 `lumos code-loop pass --loop <編號> --note "<審了什麼、幾席、幾條折入>"`(專案有審查帳就必帶編號;工具驗凍結判定存在、過了、帳沒再變,人裁接受風險的迴圈也放行;沒過回 rc2,照訊息處理);決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。
+   - 再 `lumos code-loop pass --loop <編號> --note "<審了什麼、幾席、幾條折入>"`(專案有審查帳就必帶編號;工具先跑新增告警與表態兩道、不乾淨就不留痕,再驗凍結判定存在、過了、帳沒再變,人裁接受風險的迴圈也放行;沒過回 rc2,照訊息處理);決定不審:`lumos code-loop skip --note "<為什麼>"`(合法,但會被統計)。
    - 留痕之後只准提交帳本,訊息固定 `chore(lumos): 記錄代碼審通過`,然後推。風險高計劃的預期值表簽核(`lumos signoff <計劃> --expected`)事件也寫在治理帳,留痕之後才簽的就跟這個帳本提交一起帶上;推送前規格閘沒看到對得上整張表指紋的簽核會擋。
    - 然後 `lumos ci-wait`:**rc0 不等於綠**(timeout / no-run / unavailable / undetermined 都不算過),紅燈當輪修,修兩次仍紅開 Issue 攤人,收尾報告不得對紅燈悶不吭聲。
 
