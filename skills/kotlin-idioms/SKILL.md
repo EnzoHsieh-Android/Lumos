@@ -13,8 +13,8 @@ description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——�
 
 **機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。detekt 規則分兩種擋法：**不要型別資訊的推送前擋**（宣告用 `--input {LINT_FILES_CSV}`，推送前的新增告警檢查只擋這次新增的）；**標「要型別資訊」的 CI 擋**（推送前那條命令不帶型別參數、這些規則不跑，要在專案 CI 用 Gradle 型別解析任務加基準線擋），見〈機檢接線〉與〈型別資訊〉。
 
-> **核對邊界**：detekt 那部分已核對（2026-11-01，detekt 1.23.8：規則名與預設開關對照 `detekt --generate-config` 產出的預設設定；要不要型別資訊用最小樣本各跑一次、帶與不帶 `--classpath`／`--jdk-home` 對照；2026-11-04 逐版重驗協程與效能兩組）。R16 引用的 compose-rules 與 Slack compose-lints，規則名與條數仍是網搜整理、**未用本機工具核對**；接入時以該工具當前的規則清單為準。
-> REVISIT:2027-05-01 用本機工具核對 R16 引用的 compose-rules 與 Slack compose-lints 規則名與條數，補上核對日期或標明仍未核對。
+> **核對邊界**：detekt 那部分已核對（2026-11-01，detekt 1.23.8：規則名與預設開關對照 `detekt --generate-config` 產出的預設設定；要不要型別資訊用最小樣本各跑一次、帶與不帶 `--classpath`／`--jdk-home` 對照；2026-11-04 逐版重驗協程與效能兩組）。R16 引用的 compose-rules：2026-11-06 用本機 detekt 1.23.8 加外掛 0.4.28 實跑過 `RememberMissing`、`MutableParams`、`MutableStateAutoboxing`、`ComposableNaming` 四條，外掛預設關的三條（`UnstableCollections`、`PreviewNaming`、`Material2`）讀過外掛自帶設定；Slack compose-lints 的規則名照官方規則頁（預設關三條同頁）、還沒在真的 Android 專案跑過；其餘規則名以該工具當前的規則清單為準。
+> REVISIT:2026-12-15 照 Projects/Android現成檢查接上CI與推送前_計劃 的 S5 在真的 Android 專案跑過 Slack compose-lints 後，補上核對日期。
 > REVISIT:2027-03-01 detekt 2.0 出正式版沒；出了就重核協程組，並把 R12 標「2.0 才有」的那條改成可開。
 
 **「要型別資訊」是什麼**：detekt 有一批規則要知道「這個呼叫到底是哪個函式、這個型別是什麼」才判得出來，只有拿到專案的編譯路徑（classpath）時才會報——Gradle 外掛的型別解析任務（例：`detektMain`），或命令列帶 `--classpath` 與 `--jdk-home`。只給 `--input` 的命令列跑法下，這些規則一條都不報，也不會出錯；下面機檢欄標了「要型別資訊」的都屬這種，細節見文末〈型別資訊〉。
@@ -122,7 +122,7 @@ catch (e: IOException) { log(e) }
 
 ### R16. Composable 參數紀律（現成規則整組開）
 不傳 ViewModel／MutableState／可變集合往下——傳 immutable data ＋ `onXxx` 事件 lambda 往上；ViewModel 只在 screen 頂層取一次。public composable 必有 `modifier: Modifier = Modifier` 且只施加在 root 一次。
-- 機檢：[mrmans0n/compose-rules](https://mrmans0n.github.io/compose-rules/rules/)（detekt/ktlint 雙棲，32 條）＋ [Slack compose-lints](https://slackhq.github.io/compose-lints/rules/)（Android Lint 層，互補）
+- 機檢：[mrmans0n/compose-rules](https://mrmans0n.github.io/compose-rules/rules/)（detekt/ktlint 雙棲；型錄點名的列與接電狀態見 `checks-catalog.md` 的通電批次欄）＋ [Slack compose-lints](https://slackhq.github.io/compose-lints/rules/)（Android Lint 層，互補）
 
 ## 四、結構
 
@@ -225,7 +225,7 @@ style:
 ```
 detekt 1.23 系列不要加 `CoroutineLaunchedInTestWithoutRunTest`：那個版本沒有這條，設定裡寫了整次執行失敗（見 R12）。
 - 自有設定要跟共用設定疊加：用逗號合成一個 `--config a.yml,b.yml`（分開寫兩次 `--config` 會拒跑）；清單類欄位（例上面的 methods）後面那份整份蓋掉前面那份，不合併、不警告。
-- 加掛 compose-rules（detekt plugin jar）補 R16 整組。
+- Compose 專案加第二條 detekt 宣告跑 compose-rules 外掛（只跑外掛規則、外掛下載釘雜湊、少了 `--build-upon-default-config` 外掛規則全部不跑），寫法照 linter 目錄的 detekt 標準接法；Android Lint 與 Slack compose-lints 只能在 CI 用 Gradle 跑，照同一份目錄的〈Android Lint 與 Compose lint 標準接法〉。
 - **推送前擋不用型別的**：`.lumos/lint.json` 宣告 `detekt --input {LINT_FILES_CSV} --build-upon-default-config --config <共用設定> --report sarif:{LINT_SARIF_OUT}`。`{LINT_FILES_CSV}` 把這次改到的 kt 檔用逗號串成一個值（detekt 的 `--input` 只收逗號分隔；用空白串的 `{LINT_FILES}` 多檔時 detekt 拒跑、檢查放行），推送前的新增告警檢查會真的跑、只擋新增的——擋得到的是 `GlobalCoroutineUsage`、複雜度、命名這類不用型別資訊的規則。`lumos pitfalls --diff` 也會吃同一份 SARIF、命中行進審查 manifest。
 - **CI 擋要型別的**（detekt 官方建議：只跑改到的檔時要型別的檢查不準，CI 另跑全量）：專案的 Gradle 套 detekt 外掛、設定指共用設定；第一次跑 `./gradlew detektBaseline<變體>`（例 `detektBaselineDebug`）產基準線檔並提交；CI 跑 `./gradlew detekt<變體>`（例 `detektDebug`，純 Kotlin 模組 `detektMain`），基準線以外的新告警讓 CI 失敗。完整範本在 lumos-toolchain 的 linter 精選目錄（detekt 標準接法第②段）。
 - `lumos lint-check` 與健檢會照指令字面印出實際會怎樣：沒有檔案佔位符只記錄不擋、帶舊 `{LINT_FILES}` 多檔拒跑、專案 `.github/workflows/` 沒有 `detekt<變體>` 任務時「型別規則哪裡都沒擋」。

@@ -1,0 +1,341 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 152c26811..eddcfc1ab 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126164,20 +126164,336 @@ def t_lint_detekt_advice_csv_and_ci():
+     for q in ('"', "'"):
+         _lng_declare(root, [f"detekt --input {q}{{LINT_FILES_CSV}}{q} --report sarif:{{LINT_SARIF_OUT}}"], ext="kt")
+         r = lc(root)
+         check(f"S7 {q}{{LINT_FILES_CSV}}{q} → 格式問題、退出碼 1", r.returncode == 1 and "引號" in r.stdout, r.stdout[-400:])
+     _lng_declare(root, ["sh -c 'detekt --input {LINT_FILES_CSV} --report sarif:{LINT_SARIF_OUT}'"], ext="kt")
+     r = lc(root)
+     check("S7 sh -c '…' 整段包裝不算格式問題", r.returncode == 0, r.stdout[-400:])
+     print("  ✓ t_lint_detekt_advice_csv_and_ci")
+ 
+ 
++
++def _android_adv(td, *extra):
++    """跑 lint-check(--json),回 advisories 清單裡 A1/A2/A3 那幾則。"""
++    import json as _j
++    import subprocess as sp
++    import sys as _s
++    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(td), "--json", *extra],
++               cwd=str(td), capture_output=True, text=True, timeout=60)
++    try:
++        adv = _j.loads(r.stdout).get("advisories", [])
++    except ValueError:
++        adv = ["<非 JSON>" + r.stdout[-300:]]
++    return r.returncode, [a for a in adv if " A1:" in a or " A2:" in a or " A3:" in a]
++
++
++def t_lint_android_ci_advice():
++    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S1、S2:宣告有 kt 棧的 Android 專案,CI 設定檔沒有 Android Lint 任務印 A1、
++    沒接任何 Compose 規則印 A2、宣告的 --plugins 檔不在印 A3;只看字面、不改退出碼;T4 改用共用讀檔函式後判定不變。"""
++    import subprocess as sp
++    import sys as _s
++    m = _lng_module()
++    det = "detekt --input {LINT_FILES_CSV} --build-upon-default-config --config a.yml --report sarif:{LINT_SARIF_OUT}"
++
++    def fresh(build='plugins { id("com.android.application") }\n', cmds=None, ext="kt"):
++        root, _git = _lng_repo("gctl-andci-")
++        _lng_declare(root, cmds or [det], ext=ext)
++        if build is not None:
++            (root / "build.gradle.kts").write_text(build, encoding="utf-8")
++        return root
++
++    def codes(root):
++        rc, adv = _android_adv(root)
++        return rc, {c for c in ("A1", "A2", "A3") if any(f" {c}:" in a for a in adv)}, adv
++
++    def wf(root, name, text):
++        p = root / name
++        p.parent.mkdir(parents=True, exist_ok=True)
++        p.write_text(text, encoding="utf-8")
++
++    root = fresh()
++    rc, cs, adv = codes(root)
++    check("S1 Android 專案、沒有 CI 設定檔 → 印 A1", "A1" in cs, str(adv))
++    check("S1 A1 的條目格式是 [CI] A1:", any(a.startswith("[CI] A1:") for a in adv), str(adv))
++    check("S1 退出碼不因提醒改變(宣告本身健康 → 0)", rc == 0, str(rc))
++    for line in ("./gradlew lintDebug", "./gradlew --no-daemon assembleDebug lintDebug", "./gradlew :app:lint",
++                 "./gradlew check", "with:\n          arguments: lintDebug"):
++        root = fresh()
++        wf(root, ".github/workflows/ci.yml", f"jobs:\n  a:\n    steps:\n      - run: {line}\n")
++        _rc, cs, adv = codes(root)
++        check(f"S1 workflow 有 {line.splitlines()[-1].strip()!r} → 不印 A1", "A1" not in cs, str(adv))
++    for line in ("./gradlew lintKotlin", "./gradlew lintFix", "./gradlew lintVitalRelease", "./gradlew lintAnalyzeDebug",
++                 "./gradlew updateLintBaseline", "echo lint", "./gradlew ktlintCheck"):
++        root = fresh()
++        wf(root, ".github/workflows/ci.yml", f"jobs:\n  a:\n    steps:\n      - run: {line}\n")
++        _rc, cs, adv = codes(root)
++        check(f"S1 workflow 只有 {line!r} → 照印 A1", "A1" in cs, str(adv))
++    root = fresh()
++    wf(root, ".gitlab-ci.yml", "lint:\n  script:\n    - ./gradlew lintDebug\n")
++    check("S1 只在 .gitlab-ci.yml 寫 lintDebug → 不印 A1", "A1" not in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build="plugins {\n    alias(libs.plugins.androidApplication)\n}\n")
++    check("S1 camelCase 版本目錄別名 → 認成 Android", "A1" in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=None)
++    wf(root, "apps/android/app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
++    check("S1 Android 模組在第三層 → 認得", "A1" in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=None)
++    wf(root, "a/b/c/d/build.gradle.kts", 'plugins { id("com.android.application") }\n')
++    check("S1 Android 模組在第四層 → 不掃(最多三層)", codes(root)[1] == set(), str(codes(root)[2]))
++    root = fresh(build='plugins { kotlin("jvm") version "2.2.0"; id("org.jetbrains.kotlin.jvm") }\ncompose = true\n')
++    check("S1 不是 Android 專案 → 不印 A1、A2、A3", codes(root)[1] == set(), str(codes(root)[2]))
++    root = fresh(cmds=["ruff check {LINT_FILES} --output-format sarif > {LINT_SARIF_OUT}"], ext="py")
++    check("S1 宣告沒有 kt 棧 → 不印", codes(root)[1] == set(), str(codes(root)[2]))
++    root = fresh(build=None)
++    (root / "build.gradle").write_bytes(b"// \xb5\xf9\xb8\xd1 big5\napply plugin: 'com.android.application'\n")
++    rc, cs, adv = codes(root)
++    check("S1 建置檔有非 UTF-8 位元組 → 照判、不出錯", "A1" in cs and rc == 0, f"{rc} {adv}")
++    # T4 改用共用讀檔函式後判定不變
++    root = fresh()
++    check("S1 T4:沒有 workflow → 沒有 detekt<變體>", m._detekt_ci_has_typed_task(root) is False)
++    wf(root, ".github/workflows/a.yaml", "steps:\n  - run: ./gradlew detektBaselineDebug\n")
++    check("S1 T4:只有 detektBaseline<變體> → 還是沒有", m._detekt_ci_has_typed_task(root) is False)
++    wf(root, ".github/workflows/b.yml", "steps:\n  - run: ./gradlew :app:detektProdDebug\n")
++    check("S1 T4:有 detekt<變體> → 有", m._detekt_ci_has_typed_task(root) is True)
++    wf(root, ".gitlab-ci.yml", "x:\n  script: ./gradlew detektDebug\n")
++    root2 = fresh()
++    wf(root2, ".gitlab-ci.yml", "x:\n  script: ./gradlew detektDebug\n")
++    check("S1 T4:檔案範圍照舊只看 .github/workflows/", m._detekt_ci_has_typed_task(root2) is False)
++
++    # ── S2:A2 與 A3 ──
++    comp = 'plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n'
++    root = fresh(build=comp)
++    check("S2 用 Compose、沒有任何 Compose 規則 → 印 A2", "A2" in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=comp + 'dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:1.6.1") }\n')
++    check("S2 建置檔有 compose-lint-checks → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=comp + 'dependencies { detektPlugins("io.nlopez.compose.rules:detekt:0.4.28") }\n')
++    check("S2 建置檔有 io.nlopez.compose.rules → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
++    for ver in ("0.4.28", "0.5.0"):
++        jar = Path(tempfile.mkdtemp(prefix="gctl-andci-jar-")) / f"detekt-compose-{ver}-all.jar"
++        jar.write_bytes(b"x")
++        root = fresh(build=comp, cmds=[det, f"detekt --input {{LINT_FILES_CSV}} --disable-default-rulesets --plugins {jar} "
++                                            "--build-upon-default-config --config c.yml --report sarif:{LINT_SARIF_OUT}"])
++        _rc, cs, adv = codes(root)
++        check(f"S2 宣告帶 detekt-compose-{ver}-all.jar(檔在)→ 不印 A2、A3", not ({"A2", "A3"} & cs), str(adv))
++        jar.unlink()
++        _rc, cs, adv = codes(root)
++        check(f"S2 同一條({ver})、外掛檔不在 → 印 A3", "A3" in cs, str(adv))
++    root = fresh(build='plugins { id("com.android.application") }\n')
++    check("S2 不用 Compose → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
++    root = fresh()
++    wf(root, "app/build/intermediates/build.gradle.kts", comp)
++    check("S2 build/ 底下的建置檔不算 → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=None)
++    for i in range(200):
++        wf(root, f"m{i:03d}/build.gradle.kts", 'plugins { id("com.android.library") }\n')
++    wf(root, "z999/build.gradle.kts", comp)
++    check("S2 第 201 支(依路徑排序)以後才有 Compose 字樣 → 不算", "A2" not in codes(root)[1], str(codes(root)[2]))
++    # 健檢 F 段:同一份 Android 宣告印 A1(另起一則提醒)
++    import json as _j
++    import shutil as _sh
++    src = mkvault()
++    repo_root = Path(tempfile.mkdtemp(prefix="gctl-andci-doc-")) / "repo"
++    vault = repo_root / "docs" / "proj-knowledge"
++    vault.parent.mkdir(parents=True)
++    _sh.copytree(src, vault)
++    (repo_root / ".git").mkdir()
++    (repo_root / ".lumos").mkdir()
++    (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": [det]}), encoding="utf-8")
++    (repo_root / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
++    rd = run(vault, "doctor", "--ci")
++    fsec = rd.stdout[rd.stdout.find("[F]"):]
++    check("S1 健檢 F 段另起一則「Android 現成檢查有沒有接上」並印 A1",
++          "Android 現成檢查有沒有接上" in fsec and "A1:" in fsec, fsec[:1200])
++    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(repo_root)], cwd=str(repo_root),
++               capture_output=True, text=True, timeout=60)
++    check("S1 lint-check 文字輸出另起標題", "Android 現成檢查有沒有接上" in r.stdout and "A1:" in r.stdout, r.stdout[-800:])
++    print("  ✓ t_lint_android_ci_advice")
++
++
++def _detekt_compose_jar():
++    """compose-rules 0.4.28 外掛:先看 LUMOS_DETEKT_COMPOSE_JAR(CI 下載後設),再看本機固定目錄;CI 上找不到判紅。"""
++    import os as _os
++    p = _os.environ.get("LUMOS_DETEKT_COMPOSE_JAR") or str(
++        Path.home() / ".local" / "share" / "lumos" / "detekt-plugins" / "detekt-compose-0.4.28-all.jar")
++    if Path(p).is_file():
++        return p
++    if _os.environ.get("CI"):
++        check("CI 上一定要有 compose-rules 外掛(ci.yml 下載釘版本,路徑放 LUMOS_DETEKT_COMPOSE_JAR)", False, p)
++    return None
++
++
++def _sarif_rule_lines(path):
++    import json as _j
++    try:
++        d = _j.loads(Path(path).read_text(encoding="utf-8"))
++    except (OSError, ValueError):
++        return None
++    out = []
++    for run_ in d.get("runs", []):
++        for r in run_.get("results", []):
++            loc = (r.get("locations") or [{}])[0].get("physicalLocation", {}).get("region", {})
++            out.append((r.get("ruleId", ""), loc.get("startLine")))
++    return out
++
++
++def t_detekt_compose_rules_shared_config():
++    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S3:共用設定照 detekt 官方 Compose 頁的六項,標準 Compose 寫法不再被內建規則誤報、
++    一般函式照報;compose-rules 那條(linter 目錄範本的寫法)只報外掛規則;外掛不在時不產 SARIF。本機沒 detekt 或外掛跳過,CI 必跑。"""
++    import subprocess as sp
++    det = _detekt_real_bin()
++    if not det:
++        print("    (本機沒有 detekt 1.23.8,略過)")
++        print("  ✓ t_detekt_compose_rules_shared_config")
++        return
++    base = Path(__file__).resolve().parent.parent
++    cfg = base / "configs" / "detekt" / "android.yml"
++    ccfg = base / "configs" / "detekt" / "compose.yml"
++    td = Path(tempfile.mkdtemp(prefix="gctl-dtcompose-"))
++    src = td / "Ui.kt"
++    src.write_text(
++        "package demo\n\n"
++        "import androidx.compose.runtime.Composable\n"
++        "import androidx.compose.runtime.mutableStateOf\n"
++        "import androidx.compose.ui.graphics.Color\n"
++        "import androidx.compose.ui.tooling.preview.Preview\n\n"
++        "private const val BrandAlpha = 1\n"
++        "val Brand = Color(0xFFEA6D7E)\n\n"
++        "@Composable\n"
++        "fun Header(a: Int = 1, b: Int = 2, c: Int = 3, d: Int = 4, e: Int = 5, f: Int = 6, g: Int = 7) {\n"
++        "    println(a + b + c + d + e + f + g + BrandAlpha)\n"
++        "}\n\n"
++        "@Preview\n"
++        "@Composable\n"
++        "private fun HeaderPreview() {\n"
++        "    Header()\n"
++        "}\n\n"
++        "@Composable\n"
++        "fun Counter() {\n"
++        "    val s = mutableStateOf(0)\n"
++        "    println(s.value)\n"
++        "}\n\n"
++        "fun Other() = Unit\n",
++        encoding="utf-8")
++    out = td / "a.sarif"
++    sp.run([det, "--input", str(src), "--build-upon-default-config", "--config", str(cfg),
++            "--report", f"sarif:{out}"], capture_output=True, text=True, timeout=300)
++    res = _sarif_rule_lines(out)
++    check("★前置★ 共用設定那條真的產出 SARIF", res is not None, str(res))
++    res = res or []
++    rules = {r.split(".")[-1] for r, _ln in res}
++    for bad in ("LongParameterList", "UnusedPrivateMember", "TopLevelPropertyNaming", "MagicNumber"):
++        check(f"S3 標準 Compose 寫法不報 {bad}", bad not in rules, str(res))
++    fn_lines = sorted(ln for r, ln in res if r.endswith("FunctionNaming"))
++    lines = src.read_text(encoding="utf-8").splitlines()
++    other_ln = lines.index("fun Other() = Unit") + 1
++    state_ln = lines.index("    val s = mutableStateOf(0)") + 1
++    check("S3 FunctionNaming 只報一般函式 fun Other(),不報 @Composable", fn_lines == [other_ln], f"{other_ln} {res}")
++    # 範本那行必須帶 --build-upon-default-config 與 --disable-default-rulesets(少了前者外掛規則全部不跑、也不報錯,2026-11-06 實測)
++    doc = (base / "docs" / "lumos-toolchain-knowledge" / "Systems" / "linter精選目錄.md").read_text(encoding="utf-8")
++    tline = [ln for ln in doc.splitlines() if "detekt-compose-0.4.28-all.jar" in ln and "--plugins" in ln]
++    check("S3 linter 目錄有 compose-rules 那條範本", bool(tline), "")
++    check("S3 範本那條帶 --disable-default-rulesets 與 --build-upon-default-config",
++          all("--disable-default-rulesets" in ln and "--build-upon-default-config" in ln and "configs/detekt/compose.yml" in ln
++              for ln in tline), str(tline))
++    jar = _detekt_compose_jar()
++    if not jar:
++        print("    (本機沒有 compose-rules 0.4.28 外掛,外掛那半略過)")
++        print("  ✓ t_detekt_compose_rules_shared_config")
++        return
++    out2 = td / "b.sarif"
++    sp.run([det, "--input", str(src), "--disable-default-rulesets", "--plugins", jar, "--build-upon-default-config",
++            "--config", str(ccfg), "--report", f"sarif:{out2}"], capture_output=True, text=True, timeout=300)
++    res2 = _sarif_rule_lines(out2)
++    check("★前置★ 外掛那條真的產出 SARIF", res2 is not None, str(res2))
++    res2 = res2 or []
++    check("S3 外掛那條報 RememberMissing(在 mutableStateOf 那一行)", ("detekt.Compose.RememberMissing", state_ln) in res2, str(res2))
++    check("S3 外掛那條不報任何 detekt 內建規則", all(r.startswith("detekt.Compose.") for r, _ln in res2), str(res2))
++    out3 = td / "c.sarif"
++    sp.run([det, "--input", str(src), "--disable-default-rulesets", "--plugins", str(td / "nope-all.jar"),
++            "--build-upon-default-config", "--config", str(ccfg), "--report", f"sarif:{out3}"],
++           capture_output=True, text=True, timeout=300)
++    check("S3 外掛路徑不存在時不產 SARIF(新增告警閘會判環境不可用)", not out3.exists(), "")
++    print("  ✓ t_detekt_compose_rules_shared_config")
++
++
++
++# 型錄第四批通電批次的判定口徑([[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 4;口徑原文寫在型錄〈輸入與口徑〉)。
++# 預設關的規則照官方規則頁列舉:Slack compose-lints 的兩條穩定性檢查與 M2 API(https://slackhq.github.io/compose-lints/rules/ ;
++# ComposeRememberMissing 已移除),compose-rules 外掛自帶設定 active: false 的三條。
++_KT_B4_DEFAULT_OFF = frozenset((
++    "ComposeUnstableReceiver", "ComposeUnstableCollections", "ComposeM2Api", "ComposeRememberMissing",
++    "unstable-collections", "UnstableCollections", "preview-naming", "PreviewNaming", "material-two", "Material2"))
++_KT_B4_LINT = r"(?:androidx(?:\.[\w.]+)?|內建|slack):\s*([A-Z][A-Za-z0-9]+)"
++_KT_B4_CR = r"cr:compose:([\w-]+)"
++_KT_B4_SKIP = ("待查", "預設關", "相近", "opt-in")
++_KT_B4_TAG_LINT = "CI 範本:Android Lint"
++_KT_B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
++
++
++def _kt_b4_expected_tags(rule_col):
++    """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。"""
++    import re as _re
++    lint = cr = False
++    for seg in _re.split(r"[;；、]", rule_col):
++        if any(w in seg for w in _KT_B4_SKIP):
++            continue
++        for code in _re.findall(_KT_B4_LINT, seg):
++            if code not in _KT_B4_DEFAULT_OFF:
++                lint = True
++        for code in _re.findall(_KT_B4_CR, seg):
++            if code not in _KT_B4_DEFAULT_OFF:
++                cr = True
++    return [t for t, on in ((_KT_B4_TAG_LINT, lint), (_KT_B4_TAG_CR, cr)) if on]
++
++
++def t_kt_catalog_batch4_wiring():
++    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:照範圍 4 的口徑重算型錄每一列,通電批次寫的第四批標籤要一字不差;
++    預設關、opt-in、待查的規則不准被標成已接電。"""
++    import re as _re
++    check("★前置★ slack 規則碼 → Android Lint 標籤", _kt_b4_expected_tags("slack:ComposeItemKeyHashCode") == [_KT_B4_TAG_LINT])
++    check("★前置★ 內建規則碼 → Android Lint 標籤", _kt_b4_expected_tags("內建:TrustAllX509TrustManager") == [_KT_B4_TAG_LINT])
++    check("★前置★ androidx.套件:規則碼 → Android Lint 標籤",
++          _kt_b4_expected_tags("androidx.lifecycle:NullSafeMutableLiveData") == [_KT_B4_TAG_LINT])
++    check("★前置★ opt-in 的 compose-rules → 不標",
++          _kt_b4_expected_tags("cr:compose:unstable-collections / UnstableCollections(opt-in)") == [])
++    check("★前置★ Slack 預設關的穩定性檢查 → 不標", _kt_b4_expected_tags("slack:ComposeUnstableCollections") == [])
++    check("★前置★ 預設關 → 不標", _kt_b4_expected_tags("內建:WrongThreadInterprocedural(預設關)") == [])
++    check("★前置★ 待查 → 不標", _kt_b4_expected_tags("androidx UnnecessaryLambdaCreation 待查") == [])
++    check("★前置★ 兩家都有 → 兩個標籤",
++          _kt_b4_expected_tags("cr:compose:mutable-params-check / MutableParams;slack:ComposeMutableParameters")
++          == [_KT_B4_TAG_LINT, _KT_B4_TAG_CR])
++    cat = Path(__file__).resolve().parent.parent / "skills" / "kotlin-idioms" / "checks-catalog.md"
++    text = cat.read_text(encoding="utf-8")
++    main_part = text.split("## 情境決策表")[0]
++    rows = [ln.split("|") for ln in main_part.splitlines()
++            if _re.match(r"\| (API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+ ", ln)]
++    check("★前置★ 讀到型錄主表的列", len(rows) > 400, str(len(rows)))
++    bad, n_tag = [], 0
++    for r in rows:
++        rid, rule_col, batch = r[1].strip(), r[6], r[10]
++        want = _kt_b4_expected_tags(rule_col)
++        have = [t for t in (_KT_B4_TAG_LINT, _KT_B4_TAG_CR) if t in batch]
++        if "批四" not in batch and not have:
++            continue          # 不是第四批的列(批一等)不在這次口徑裡
++        if want:
++            n_tag += 1
++            exp = "批四(" + ";".join(want) + ")"
++            if exp not in batch or "批四(現成規則)" in batch:
++                bad.append(f"{rid}:要 {exp},寫的是 {batch.strip()[:60]}")
++        elif have:
++            bad.append(f"{rid}:口徑判成不該標,卻寫了 {have}")
++    check("S4 每一列的第四批標籤跟口徑重算一致", bad == [], "\n".join(bad[:15]))
++    check("S4 有列被標成接電(口徑不是空轉)", n_tag > 50, str(n_tag))
++    check("S4 型錄〈輸入與口徑〉寫了這兩個標籤", _KT_B4_TAG_LINT in text.split("## 來源縮寫")[0]
++          and _KT_B4_TAG_CR in text.split("## 來源縮寫")[0], "")
++    print("  ✓ t_kt_catalog_batch4_wiring")
++
++
+ def _detekt_real_bin():
+     """找真的 detekt 1.23.8;CI 一定要有(計劃範圍 6:CI 下載釘版本),本機沒有或版本不對回 None。"""
+     import os as _os
+     import shutil as _sh
+     import subprocess as sp
+     det = _os.environ.get("LUMOS_DETEKT") or _sh.which("detekt")
+     ver = ""
+     if det:
+         try:
+             ver = sp.run([det, "--version"], capture_output=True, text=True, timeout=120).stdout.strip()

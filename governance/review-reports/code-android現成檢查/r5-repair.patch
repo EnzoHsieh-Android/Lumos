@@ -1,0 +1,811 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md
+index 389b89b87..b423b656b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md
+@@ -34,120 +34,125 @@ RETIRE-IF: 連續三個月沒有任何消費專案照範本接 Android Lint 或
+ - **compose-rules**:mrmans0n 出的 Compose 檢查,有 detekt 外掛版(單一 jar),不用型別資訊。
+ - **基準線**:Android Lint 的 `lint-baseline.xml`,記下現有告警,之後只報新增的。
+ - **Android 專案**:沿用 lumos 既有的 Kotlin 建置檔判法——`_KT_BUILD_FILES` 那幾種建置檔裡 `_KT_BUILD_ANDROID` 比得到(`com.android.`、`libs.plugins.android`、行首 `android {`);本案多看 `settings.gradle(.kts)` 與 `gradle/libs.versions.toml`,同一支正規式。
+ - **用 Compose 的專案**:同一批檔裡出現 `compose = true`、`org.jetbrains.kotlin.plugin.compose`、`kotlin-compose` 或 `androidx.compose` 字樣。
+ - **CI 設定檔**:`.github/workflows/` 底下的 `.yml`/`.yaml`,加上 `.gitlab-ci.yml`、`bitrise.yml`、`.circleci/config.yml`、`Jenkinsfile`、`azure-pipelines.yml`。
+ 
+ ## 範圍
+ 
+ 1. **CI 範本**([[Systems/linter精選目錄]] 加〈Android Lint 與 Compose lint 標準接法〉一節,跟 detekt 的 CI 型別檢查範本並列):
+    - 模組層 `android { lint { baseline = file("lint-baseline.xml"); warningsAsErrors = true; checkDependencies = true; sarifReport = true } }`。`warningsAsErrors` 的理由寫明:不開時只有 error 級會讓建置失敗,型錄 Android Lint 列多半是 warning 級。
+-   - `dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>") }`,版本挑法:Slack 外掛建置用的 lint 版本不高於專案的 lint 版本,而 lint 版本 = AGP 版本加 23(1.5.5 的發行說明同時寫「lint 32.3.2」與「AGP lint plugin 9.3.2」)。依各版發行說明的常見對照:AGP 9.4 以上用 1.6.1(lint 32.4.1);AGP 9.3 用 1.5.5(lint 32.3.2);AGP 9.0 到 9.2 用 1.4.2(lint 31.7.1;AGP 9.2.1 以上也可用 1.5.0,lint 32.2.1);AGP 8.7 到 8.x 用 1.4.2;更舊的照發行說明挑;表寫在範本裡、附發行說明網址。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑(例:AGP 9.3.0、9.3.1 的 lint 低於 1.5.5 的 32.3.2,照規則改用 1.5.0)。
++   - `dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>") }`,版本挑法:Slack 外掛建置用的 lint 版本不高於專案的 lint 版本,而 lint 版本 = AGP 版本加 23(1.5.5 的發行說明同時寫「lint 32.3.2」與「AGP lint plugin 9.3.2」)。依各版發行說明的常見對照:AGP 9.4.1 以上用 1.6.1(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 1.5.5(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 1.5.0(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 1.4.2(lint 31.7.1);AGP 8.7.0 用 1.4.0(Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑;表寫在範本裡、附發行說明網址。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本(只有一則 PR 標題寫 lint 31.13.2),不列。
+    - 第一次本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true` 產基準線並提交;之後 CI 加一步 `./gradlew lint<變體>`。步驟順序寫死「先產基準線、提交,再加 CI 步驟」。
+    - detekt 的 CI 範本(`detekt<變體>`)那段加 `detektPlugins("io.nlopez.compose.rules:detekt:0.4.28")`,讓 CI 那步也帶 compose-rules。
+ 2. **推送前 compose-rules 與共用設定**:
+    - linter 目錄的 detekt 標準接法加第二條宣告,只跑外掛規則:`detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins $HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/compose.yml --report sarif:{LINT_SARIF_OUT}`(`--build-upon-default-config` 不能少,見審計修正紀錄的實作更正);原本那條不動。外掛下載指令釘版本與 sha256(`b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6`,2026-11-06 自算;官方沒公布雜湊),放本機固定目錄(理由見 PRIOR-ART ⑥,linter 目錄「一律裝進套件管理器」那一條補上這個例外)。外掛缺檔時只有這條被新增告警閘判環境不可用(閘的既有行為),原本那條照擋。
+    - 新增 `configs/detekt/compose.yml`(新增):只寫 compose-rules 三條預設關規則要不要開——`UnstableCollections`、`PreviewNaming`、`Material2` 照外掛預設不開,檔內註解寫原因(外掛作者標成選用);其餘外掛規則用外掛預設。
+    - 共用設定 `configs/detekt/android.yml` 加 PRIOR-ART ④ 的六項(1.23 版規則名),檔頭用法註解與 linter 目錄「共用設定開的五條」那句一起改寫。
+    - 本 repo 的 CI(`.github/workflows/ci.yml` 裝 detekt 那一步)照 detekt 的做法多下載 compose-rules 0.4.28 外掛、比對同一個 sha256,路徑放進環境變數 `LUMOS_DETEKT_COMPOSE_JAR`;S3 的測試用這個變數找外掛,沒設時找本機固定目錄;環境變數 `CI` 為真而找不到外掛時測試判紅,本機找不到才跳過並印原因。
+-3. **健檢提醒**(lint-check 與健檢 F 段;只看字面、不執行、不改退出碼):新函式 `_lint_android_ci_advisories(config, repo_root)`(新增)自帶代號與文字表;A1、A2 看整個專案、條目寫成 `[CI] A1:<一句>`,A3 看單條命令、寫成 `[kt 第 N 條] A3:<一句>`(同 detekt 逐條提醒,不回顯命令內容);lint-check 用新的印出函式另起標題「Android 現成檢查有沒有接上」,`--json` 的 `advisories` 清單接在 detekt 提醒之後;健檢 F 段另起一則同標題的提醒(套 20 條上限)。列 CI 設定檔用 `_ci_config_paths`(新增,T4 只看 GitHub 那幾支、讀原文;A1 看全部、經既有 `_ci_workflow_texts` 去 `#` 註解,Jenkinsfile 另照 Groovy 剝 `/* */` 與 `//`;檔案本身是符號連結的略過)。條件是宣告裡有 `kt` 棧而且是 Android 專案:
+-   - **A1**:**證據模型**——CI 設定檔裡找不到 Android Lint 的跡象才印「Android Lint 與 Slack compose-lints 可能沒有在 CI 跑」並指向範本;找到任何一個跡象就不印(照 OpenSSF Scorecard 官方檢查文件的做法:只找已知名字、承認自動偵測會漏,見〈依據來源〉)。CI 設定檔去 `#` 註解(Jenkinsfile 另剝 Groovy 的 `/* */` 與 `//`,字串裡的 `//` 不算),反斜線續行接成同一邏輯行,再以空白、引號、標點切詞(`/`、`.` 不切,路徑與 `-D` 屬性是一個詞)。跡象只有兩種:①任何一個詞是 lint 任務名(`lint`、`lint` 接大寫變體名、可帶 `:模組:` 前綴、Bitrise 的 `android-lint`;`lintKotlin`、`lintFix`、`lintVital` 開頭接結尾或大寫的不算;任何位置都算);②同一邏輯行裡有 gradle 呼叫詞(`gradlew`、`gradlew.bat`、`gradle`,可帶 `./` 這類路徑前綴;跟 detekt 判定共用一份詞表)而且有一個詞是 `check` 或 `build`(AGP 讓 `check` 依賴 `lint`;Gradle 的 `build` 依賴 `check`)。整檔有 gradle 字樣不算(`needs: build`、`stage: build` 跟 `cache: gradle` 湊在一起不是在跑 lint);建置檔的 `lint { }`、`lintOptions { }` 區塊與 `lint-baseline.xml` 不算(那是範本第 1、2 步的痕跡,做完這兩步還沒做第 3 步正是該提醒的狀態)。寫了字樣卻沒真的跑(`-x lint`、`echo gradlew build`)判成有跡象,寧可少印、不誤報。
++3. **健檢提醒**(lint-check 與健檢 F 段;只看字面、不執行、不改退出碼):新函式 `_lint_android_ci_advisories(config, repo_root)`(新增)自帶代號與文字表;A1、A2 看整個專案、條目寫成 `[CI] A1:<一句>`,A3 看單條命令、寫成 `[kt 第 N 條] A3:<一句>`(同 detekt 逐條提醒,不回顯命令內容);lint-check 用新的印出函式另起標題「Android 現成檢查有沒有接上」,`--json` 的 `advisories` 清單接在 detekt 提醒之後;健檢 F 段另起一則同標題的提醒(套 20 條上限)。列 CI 設定檔用 `_ci_config_paths`(新增,T4 只看 GitHub 那幾支、讀原文;A1 看全部、經既有 `_ci_workflow_texts` 去註解,Jenkinsfile 在同一支裡照 Groovy 剝 `/* */` 與 `//`;解析真實路徑後不在 repo 根底下的略過,檔案或資料夾那層是連結都算,repo 內的連結照讀)。條件是宣告裡有 `kt` 棧而且是 Android 專案:
++   - **A1**:**證據模型**——CI 設定檔裡找不到 Android Lint 的跡象才印「Android Lint 與 Slack compose-lints 可能沒有在 CI 跑」並指向範本;找到任何一個跡象就不印(照 OpenSSF Scorecard 官方檢查文件的做法:只找已知名字、承認自動偵測會漏,見〈依據來源〉)。CI 設定檔去 `#` 註解(Jenkinsfile 改剝 Groovy 的 `/* */` 與 `//`,字串裡的 `//` 不算),反斜線續行接成同一邏輯行,再以空白、引號、標點切詞(`/`、`.` 不切,路徑與 `-D` 屬性是一個詞)。跡象只有兩種:①任何一個詞是 lint 任務名(`lint`、`lint` 接大寫變體名、可帶 `:模組:` 前綴、Bitrise 的 `android-lint`;`lintKotlin`、`lintFix`、`lintVital` 開頭接結尾或大寫的不算;任何位置都算);②「gradle 任務列」裡有一個詞是 `check` 或 `build`;gradle 任務列是同一邏輯行裡有 gradle 呼叫詞(`gradlew`、`gradlew.bat`、`gradle`,可帶 `./` 這類路徑前綴;跟 detekt 判定共用一份詞表)的行,或四個已知會叫 gradle 跑任務的欄位的值——Azure Gradle 任務的 `tasks:`、gradle action 的 `arguments:`、CircleCI gradle orb 的 `command:`、Bitrise gradle-runner 的 `gradle_task:`(值寫同一行、引號、流式清單、區塊純量或縮排更深的清單都算;其他欄位不算)(AGP 讓 `check` 依賴 `lint`;Gradle 的 `build` 依賴 `check`)。整檔有 gradle 字樣不算(`needs: build`、`stage: build` 跟 `cache: gradle` 湊在一起不是在跑 lint);建置檔的 `lint { }`、`lintOptions { }` 區塊與 `lint-baseline.xml` 不算(那是範本第 1、2 步的痕跡,做完這兩步還沒做第 3 步正是該提醒的狀態)。寫了字樣卻沒真的跑(`-x lint`、`echo gradlew build`)判成有跡象,寧可少印、不誤報。
+    - **A2**:用 Compose 的專案,建置檔沒有 `compose-lint-checks` 也沒有 `io.nlopez.compose.rules`,而且宣告的 kt 命令都沒帶 `detekt-compose` 字樣(不看版本) → 印「Compose 規則哪裡都沒接」並指向範本。
+    - **A3**:宣告的 kt 命令帶 `--plugins <路徑>`(走跟 detekt 判定共用的 `_detekt_walk_segments`,`sh -c` 包住也看得到;照 shell 規則展開環境變數與 `~`;相對路徑對 repo 根;含反引號、萬用字元或展開後還有 `$` 的判不了、不算)而那支檔不存在 → 這條命令印一則「外掛檔不在,推送前會被判環境不可用、自動放行」並指向下載指令。
+    掃建置檔:專案根目錄往下最多三層,資料夾照既有 `_stack_scan_skip`(`build`、`.gradle`、`node_modules`、`Pods`、`vendor`、`target` 等)跳過、另不進隱藏資料夾、不跟符號連結進資料夾、不開一般檔以外的東西;Gradle 建置檔走既有 `_kt_strip_comments` 剝註解,`gradle/libs.versions.toml` 照 TOML 的 `#` 剝;依(層數、路徑)排序、根目錄先讀,最多 200 支、每支前 1 MB;讀不了的當沒有。
+ 4. **型錄通電批次**(`skills/kotlin-idioms/checks-catalog.md`):現成規則欄以「;」「、」切段,某一段含 `androidx:`、`androidx.<套件>:`、`內建:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,而且那一段不含「待查」「預設關」「相近」「opt-in」的列,通電批次從「批四(現成規則)」改成「批四(CI 範本:Android Lint)」;某一段含 `cr:compose:<規則>`、不含上述四個字樣的列改成「批四(推送前:detekt 外掛 compose-rules)」;兩者都有寫成「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」。其他列不動。口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,`catalog_problems` 逐列比對(改壞一列或把不該標的列標上都會報);型錄〈輸入與口徑〉通電批次那一條寫同一份口徑原文,值清單同步加這三個字樣;S4 的測試呼叫型錄自檢、並用複本改壞驗它抓得到。
+ 5. **跟著變假的句子**:`skills/kotlin-idioms/SKILL.md` 第 R16 條的 compose-rules 條數(寫 32 條,型錄口徑 29 列,改成指向型錄)、「加掛 compose-rules(detekt plugin jar)補 R16 整組」那句改成指向 linter 目錄的接法、開頭那條 `REVISIT:2027-05-01` 核對 compose-rules 與 Slack 規則名的回頭條件改寫成本案實跑的日期與還沒核對的部分。
+ 
+ **不做**:不在推送前跑 Android Lint 或 Slack compose-lints;不替消費專案改 Gradle 檔;不接 Sonar、IntelliJ 檢查;structured-coroutines 留在待查證;不改新增告警閘本身的判定;不開 compose-rules 預設關的三條。
+ 
+ ## 實務隱患
+ 
+ - **warningsAsErrors 讓舊專案一接就紅**:基準線先產再開;範本步驟順序寫死。
+ - **基準線過期**:改掉舊告警後基準線留著已修的項目,官方會印資訊級提醒;範本寫要清舊帳時刪檔重產。
+ - **AGP 版本與 Slack 外掛不合**:範本給版本表;表外的 AGP(7.x 以下)寫「照發行說明挑 lint 版本不高於 AGP 加 23 的」,不合時 lint 任務會載不進外掛(官方行為,lumos 判不到)。
+ - **compose-rules 外掛版本綁 detekt**:0.4.x 對 detekt 1.23.x、0.5 起對 2.x;本機 detekt 升 2.0 時外掛要一起換,範本寫在同一段;不合時那一條宣告跑不起來、被自動放行並記帳,原本那條 detekt 不受影響,健檢的自動放行計數看得到。
+ - **共用設定放寬六項**:六項都只對 Compose 的慣用寫法放寬(`Composable`、`Preview` 註解、有預設值的參數、屬性宣告的數字、PascalCase 常數);非 Compose 專案受影響的只有後三項的一般寫法(有預設值的長參數清單、屬性宣告的魔術數字、PascalCase 頂層常數不再報)。改由 compose-rules 的 `ComposableNaming` 等規則接手 Composable 的檢查。
+ - **健檢字面判斷誤判**:任務包在 shell 腳本、用 composite action 或 GitLab `include:`、寫在 CI 設定檔以外的地方時找不到跡象而多印提醒;寫了 lint 字樣卻沒真的跑時找到跡象而少印。只是提醒、不擋,這是只找跡象的代價(T4 讀原文、A1 去註解,兩者口徑不同)。
+ - **掃建置檔的成本**:最多三層、200 支、每支 1 MB;健檢與 lint-check 都在手動或推送前閘外的路徑上。
+-- **打開陌生 repo 時的健檢**(代碼審 r2 資安席):A3 對對方 `lint.json` 的 `--plugins` 值照 shell 規則展開環境變數後只做「檔在不在」判斷,輸出只有固定文字與條號、不回顯路徑或展開值;建置檔與 CI 設定檔本身是符號連結的一律略過(代碼審 r3 資安席:原本會跟著檔案層的連結讀到 repo 外;內容只拿來比對字樣、不回顯,仍照縱深防禦收緊)。
++- **打開陌生 repo 時的健檢**(代碼審 r2 資安席):A3 對對方 `lint.json` 的 `--plugins` 值照 shell 規則展開環境變數後只做「檔在不在」判斷,輸出只有固定文字與條號、不回顯路徑或展開值;建置檔與 CI 設定檔解析真實路徑後不在 repo 根底下的一律略過,檔案或資料夾那層是連結都算(代碼審 r3、r4 資安席:原本會跟著連結讀到 repo 外;內容只拿來比對字樣、不回顯,仍照縱深防禦收緊);repo 內的連結照讀(r4 通才席:一律略過會讓 T4 誤印)。
+ - **舊否決對照**(2026-11-06 跑 `lumos rejections`,453 行,按概念比對):[[Projects/Macrobenchmark退步提醒_計劃]] 決定「Lumos 只讀結果檔,不負責建置或執行」(要 Gradle、跨專案設定各異、以分鐘計);本案同向——Android Lint 不在推送前由 lumos 跑,交消費專案 CI,lumos 只給範本與看 CI 設定檔字面。沒有撞到否決。
+ - 已排除:金流:不碰付款或點數
+ - 已排除:對外送出:健檢只讀本機檔,不連網;範本的下載指令由人照抄執行
+ - 已排除:不可逆:新增提醒、設定與文件,退提交即回原狀
+ - 守衛面:共用 detekt 設定放寬六項(推送前閘對這些寫法少擋),新增一條推送前 detekt 宣告;走完整設計審
+ - 資安:外掛 jar 是每次推送前都會載入執行的程式;範本的下載指令釘 sha256,比對不符就不要用;lumos 不自動下載或執行任何東西(單人自用的威脅模型,比對是人工步驟)
+ 
+ ## 驗收條款
+ 
+-- [S1] 當宣告有 kt 棧、專案根目錄的 `build.gradle.kts` 有 `id("com.android.application")`、沒有任何 CI 設定檔時,`lumos lint-check` 與健檢 F 段 應 印 A1;CI 設定檔有 `./gradlew lintDebug`、`./gradlew --no-daemon assembleDebug lintDebug`、`./gradlew :app:lint`、`./gradlew check`、`./gradlew --no-daemon build`、續行 `./gradlew \` 下一行 `check`、`with: arguments: lintDebug` 任一行 應 不印;只有 `lintKotlin`、`lintFix`、`lintVitalRelease`、`updateLintBaseline` 應 照印;workflow 只有 `needs: build`、`cache: gradle` 與 `./gradlew assembleDebug` 應 照印;`.gitlab-ci.yml` 只有 `stage: build` 與 `./gradlew assemble` 應 照印;沒有 CI 設定檔、只有 `app/lint-baseline.xml` 或建置檔的 `lint { }` 區塊 應 照印;Jenkinsfile 只在 `/* */` 裡寫 `./gradlew lint` 應 照印;CI 設定檔或建置檔本身是符號連結 應 略過;只在 `.gitlab-ci.yml` 寫 `./gradlew lintDebug` 應 不印;Android 外掛只寫成 `alias(libs.plugins.androidApplication)` 應 認成 Android 專案;Android 模組在第三層(`apps/android/app/build.gradle.kts`)應 認得;不是 Android 專案(只有 `org.jetbrains.kotlin.jvm`)應 不印 A1、A2、A3;宣告沒有 kt 棧 應 不印;建置檔有非 UTF-8 位元組時 應 照判不出錯;lint-check 的退出碼 應 不因 A1、A2、A3 改變;T4 應 照舊只看 `.github/workflows/` 裡的 `detekt<變體>`(`detektBaseline<變體>` 不算) [test:t_lint_android_ci_advice]
++- [S1] 當宣告有 kt 棧、專案根目錄的 `build.gradle.kts` 有 `id("com.android.application")`、沒有任何 CI 設定檔時,`lumos lint-check` 與健檢 F 段 應 印 A1;CI 設定檔有 `./gradlew lintDebug`、`./gradlew --no-daemon assembleDebug lintDebug`、`./gradlew :app:lint`、`./gradlew check`、`./gradlew --no-daemon build`、續行 `./gradlew \` 下一行 `check`、`with: arguments: lintDebug` 任一行 應 不印;只有 `lintKotlin`、`lintFix`、`lintVitalRelease`、`updateLintBaseline` 應 照印;workflow 只有 `needs: build`、`cache: gradle` 與 `./gradlew assembleDebug` 應 照印;`.gitlab-ci.yml` 只有 `stage: build` 與 `./gradlew assemble` 應 照印;沒有 CI 設定檔、只有 `app/lint-baseline.xml` 或建置檔的 `lint { }` 區塊 應 照印;Jenkinsfile 只在 `/* */` 裡寫 `./gradlew lint` 應 照印;`tasks: 'clean build test'`(Azure)、`with: arguments: build`(gradle action)、`command: build`(CircleCI gradle orb)、`gradle_task: build`(Bitrise)任一種 應 不印;`needs: build`、`stage: build`、`name: build`,以及已知欄位的值結束後別的欄位底下的 `build` 應 照印;CI 設定檔或建置檔解析後落在 repo 外(檔案或資料夾連結)應 略過,指到 repo 內的連結 應 照讀;只在 `.gitlab-ci.yml` 寫 `./gradlew lintDebug` 應 不印;Android 外掛只寫成 `alias(libs.plugins.androidApplication)` 應 認成 Android 專案;Android 模組在第三層(`apps/android/app/build.gradle.kts`)應 認得;不是 Android 專案(只有 `org.jetbrains.kotlin.jvm`)應 不印 A1、A2、A3;宣告沒有 kt 棧 應 不印;建置檔有非 UTF-8 位元組時 應 照判不出錯;lint-check 的退出碼 應 不因 A1、A2、A3 改變;T4 應 照舊只看 `.github/workflows/` 裡的 `detekt<變體>`(`detektBaseline<變體>` 不算) [test:t_lint_android_ci_advice]
+ - [S2] 當 Android 專案的建置檔有 `compose = true` 而沒有 `compose-lint-checks`、`io.nlopez.compose.rules`,宣告的 kt 命令也沒帶 `detekt-compose` 時,健檢 應 印 A2;建置檔有其中一個字樣 應 不印;宣告的 detekt 命令帶 `--plugins …detekt-compose-0.4.28-all.jar` 或 `detekt-compose-0.5.0-all.jar` 應 不印;不用 Compose 的專案 應 不印;`build/` 底下的建置檔 應 不算;依路徑排序第 201 支以後才有 Compose 字樣 應 不算;宣告的 `--plugins` 指到不存在的檔時 應 印 A3,檔存在時 應 不印;外掛路徑寫成 `tools/{p,q}.jar` 這類大括號展開時 應 不印 A3 [test:t_lint_android_ci_advice]
+ - [S3] 當共用設定 `configs/detekt/android.yml` 給 detekt 1.23.8 跑一支標準 Compose 檔(大寫命名的 `@Composable`、七個有預設值參數的 `@Composable`、`@Preview` 私有函式、PascalCase 頂層常數、`val Brand = Color(0xFFEA6D7E)`)時,detekt 應 不報 `FunctionNaming`、`LongParameterList`、`UnusedPrivateMember`、`TopLevelPropertyNaming`、`MagicNumber`;一般函式 `fun Other()` 應 照報 `FunctionNaming`;compose-rules 那條宣告加 0.4.28 外掛跑 `@Composable` 裡沒包 remember 的 `mutableStateOf` 時 應 報 `RememberMissing`,而且 應 不報任何 detekt 內建規則;外掛路徑不存在時那條 應 不產 SARIF(本機沒有 detekt 或外掛時跳過並印原因;CI 找不到時判紅) [test:t_detekt_compose_rules_shared_config]
+ - [S4] 當照範圍 4 的口徑重算型錄時,每列的通電批次 應 跟型錄寫的一致;寫 `slack:ComposeItemKeyHashCode` 的列 應 含「CI 範本:Android Lint」;寫 `內建:TrustAllX509TrustManager` 的列 應 含「CI 範本:Android Lint」;寫 `cr:compose:unstable-collections`(opt-in)的列 應 不含「推送前:detekt 外掛 compose-rules」;寫「WrongThreadInterprocedural(預設關)」的列 應 不含「CI 範本:Android Lint」;只寫待查的列 應 不含這兩個字樣 [test:t_kt_catalog_batch4_wiring]
++- [S6] 當代碼審 r4 邊界席的固定語料(15 個公開專案真實 CI 檔的最小節錄加 8 個負例與正例)逐列跑 A1 時,每列 應 符合人工判定;Signal 自訂聚合任務、AuroraStore `stage: lint`、`npm run lint` 三列 應 照天花板維持現行判法並標成已知判錯 [test:t_lint_android_ci_corpus]
+ - [S5] 當在一個真的 Android 專案(公開範例專案,記下它的 AGP 版本)照範本加 Android Lint、Slack compose-lints 與 compose-rules,產基準線後故意加一處 Compose 錯誤寫法時,`./gradlew lint<變體>` 與 `detekt<變體>` 應 失敗並點名那一處;耗時記進驗證紀錄 [manual:在暫存區複本實跑一次範本的每一步,記下 AGP 版本、任務名、耗時與報出的規則碼]
+ 
+ ## 預期值表
+ 
+ | 條款 | 輸入 | 預期 | 來源 |
+ |---|---|---|---|
+ | S1 | kt 宣告、根 `build.gradle.kts` 有 `com.android.application`、沒有 CI 設定檔 | 印 A1 | 官方 lint 頁:Gradle 專案用 `./gradlew lint`、建議放進 CI(https://developer.android.com/studio/write/lint ) |
+ | S1 | 同上,workflow 有 `./gradlew --no-daemon assembleDebug lintDebug` | 不印 A1 | 同上:變體任務是 `lint<變體>`;Gradle 一行可接多個任務與選項 |
+ | S1 | 同上,workflow 只有 `./gradlew lintKotlin` | 印 A1 | kotlinter 外掛的 ktlint 任務叫 `lintKotlin`,不是 Android Lint |
++| S1 | 同上,`azure-pipelines.yml` 的 Gradle 任務寫 `tasks: 'clean build test assembleRelease'` | 不印 A1 | Azure Gradle 任務的 `tasks` 輸入就是要跑的 gradle 任務(https://learn.microsoft.com/azure/devops/pipelines/tasks/reference/gradle-v2 );`build` 帶 `check` 帶 lint |
++| S6 | r4 語料:microsoft/appcenter-sampleapp-android、nowinandroid 等 15 個公開專案的 CI 檔節錄 | 各列照人工判定;三列天花板照現行 | 代碼審 r4 邊界席語料表,`governance/review-reports/code-android現成檢查/r4-邊界-sonnet.md` |
+ | S1 | 同上,workflow 只有 `needs: build`、`cache: gradle` 與 `./gradlew assembleDebug` | 印 A1 | `needs:` 是 job 依賴、`cache: gradle` 是快取設定,`assembleDebug` 不帶 lint;代碼審 r3 三席重現 |
+ | S1 | 沒有 CI 設定檔、只有 `app/lint-baseline.xml` | 印 A1 | 範本第 2 步產基準線、第 3 步才加 CI;基準線檔不代表 CI 有跑 |
+ | S1 | 同上,workflow 只有 `./gradlew lintVitalRelease` | 印 A1 | AGP DSL 參考頁:release 建置只檢查 fatal 級(`checkReleaseBuilds`) |
+ | S1 | 只有 `org.jetbrains.kotlin.jvm` 外掛 | 不印 A1、A2、A3 | 本計劃〈用詞〉Android 專案沿用 `_KT_BUILD_ANDROID` |
+ | S2 | Android 專案有 `compose = true`、沒有任一 Compose 規則字樣 | 印 A2 | 本計劃〈用詞〉用 Compose 的專案的定義 |
+ | S2 | 宣告 detekt 命令帶 `--plugins …detekt-compose-0.4.28-all.jar` | 不印 A2 | compose-rules 官方 detekt 頁的 CLI 用法 |
+ | S3 | 標準 Compose 檔經現行共用設定 | 報 6 條(FunctionNaming 2、LongParameterList、MagicNumber、TopLevelPropertyNaming、UnusedPrivateMember) | 2026-11-06 本機 detekt 1.23.8 實跑 |
+ | S3 | 同一支檔經加六項後的共用設定 | 只剩 `fun Other()` 的 FunctionNaming | detekt 官方 Compose 頁六項建議;2026-11-06 實跑 |
+ | S3 | `@Composable` 裡 `val s = mutableStateOf(0)` 經外掛那條 | 報 `RememberMissing` | 2026-11-06 本機 detekt 1.23.8 加外掛 0.4.28 實跑 |
+ | S4 | 現成規則欄寫 `cr:compose:unstable-collections / UnstableCollections(opt-in)` | 不標「推送前:detekt 外掛 compose-rules」 | compose-rules 外掛自帶設定 `UnstableCollections` 預設關 |
+ | S4 | 現成規則欄寫 `slack:ComposeItemKeyHashCode` 的列 | 通電批次含「CI 範本:Android Lint」 | 本計劃範圍 4 |
+ | S5 | 範例專案照範本接好、產基準線後加一處沒包 remember 的 `mutableStateOf` | `lint<變體>` 與 `detekt<變體>` 失敗並點名那一處 | 官方 lint 頁:基準線之後只報新增;compose-rules 規則頁 RememberMissing |
+ 
+ ## 回退
+ 
+ 退回本案的提交:A1、A2、A3 提醒不再印;共用設定的六項放寬拿掉後,標準 Compose 寫法又會被報 6 條(推送前新增告警閘只擋新增的);`configs/detekt/compose.yml` 消失,消費專案照範本加的 compose-rules 那條宣告會因設定檔找不到而被判環境不可用、自動放行;型錄通電批次字樣回到「批四(現成規則)」。消費專案已照範本加的 Gradle 設定不受影響。
+ 
+ ## 天花板
+ 
+ 1. Android Lint 與 Slack compose-lints 只在 CI 擋,推送前不擋;AI 寫完到 CI 跑完之間的空窗,只有規則包與 detekt(含 compose-rules)守。
+-2. 健檢只看 CI 設定檔字面(GitHub、GitLab、Bitrise、CircleCI、Jenkins、Azure 的固定檔名;Taskcluster 這類別的 CI 會多印 A1),不驗 CI 真的跑、跑的是哪個模組;多模組專案只對 `:app:lint` 有字樣也算接上;寫了 lint 字樣卻用 `-x lint` 排除、或只出現在 `echo` 裡,也算有跡象(A1 少印,不誤報);job 或 stage 名叫 `lint`(例 `name: lint` 底下只跑 `ktlintCheck`)、別的工具的 lint(`npm run lint`)也算有跡象(少印)。composite action(`uses: ./.github/actions/…`)與 GitLab `include:` 引進的檔讀不到,任務寫在那裡會多印 A1;`check`、`build` 寫在跟 gradle 不同行的欄位(Azure Gradle 任務的 `tasks: 'check'`、Bitrise 的 `gradle_task: check`)不算跡象,也會多印 A1。Android 模組放在 `_stack_scan_skip` 會跳過的資料夾名(`target/`、`vendor/`、`build/` 等)時判成不是 Android 專案,三則提醒都不印(少印,不誤報)。
++2. 健檢只看 CI 設定檔字面(GitHub、GitLab、Bitrise、CircleCI、Jenkins、Azure 的固定檔名;Taskcluster 這類別的 CI 會多印 A1),不驗 CI 真的跑、跑的是哪個模組;多模組專案只對 `:app:lint` 有字樣也算接上;寫了 lint 字樣卻用 `-x lint` 排除、或只出現在 `echo` 裡,也算有跡象(A1 少印,不誤報);job 或 stage 名叫 `lint`(例 `name: lint` 底下只跑 `ktlintCheck`)、別的工具的 lint(`npm run lint`)也算有跡象(少印)。composite action(`uses: ./.github/actions/…`)與 GitLab `include:` 引進的檔讀不到,任務寫在那裡會多印 A1。gradle 任務列裡任何位置的 `check`、`build` 字樣都算(`./gradlew assembleDebug -x check`、`-PbuildType=check`、`./gradlew test && cd build`、CircleCI `command: make build`),少印。任務藏在自訂聚合任務裡(Signal-Android 的 `./gradlew ciRemote` 在根建置檔 `dependsOn` lint 任務)看不到,多印。別的工具或名稱裡的 `lint` 字樣也算跡象(GitLab `stage: lint` 底下只跑 `ktlintCheck`、`npm run lint`、YAML 行尾 `./gradlew assembleDebug // lint`),少印。YAML 摺疊純量(`run: >` 把 `./gradlew` 與下一行 `build` 接成一行)與反斜線續行跨過整行 `#` 註解時,本來是兩條命令也被接成一條,少印。四個已知欄位沒寫、靠預設值(Azure `tasks` 與 CircleCI orb `command` 預設都是 `build`),或任務放在矩陣變數(`task: [check, test]` 加 `./gradlew ${{ matrix.task }}`)裡,看不到,多印。Android 模組放在 `_stack_scan_skip` 會跳過的資料夾名(`target/`、`vendor/`、`build/` 等)時判成不是 Android 專案,三則提醒都不印(少印,不誤報)。
+ 3. 健檢的三則提醒只在專案有 `.lumos/lint.json` 而且宣告了 kt 棧時才判(跟 T4 同一個前提);完全沒宣告的 Android 專案不會被提醒。
+ 4. A2 只讀 Gradle 建置檔與版本目錄;把 `lintChecks`、`detektPlugins` 寫在 `build-logic/`、`buildSrc/` 這類建置邏輯模組的 `.kt` 檔裡的專案(Now in Android 的寫法),健檢看不到、會多印 A2。任務藏在 shell 腳本或 composite action 裡時,A1 找不到跡象而多印提醒。A3 的相對外掛路徑一律對 repo 根解析,命令先 `cd tools && detekt-cli --plugins x.jar` 再用相對路徑時會誤印 A3。
+ 5. structured-coroutines 26 列、Sonar 7 列、IntelliJ 4 列與 compose-rules 預設關的三條,仍沒有機械守衛,只靠告警訊息與代碼審。
+ 
+ REVISIT:2026-12-15 照 S5 在一個 AGP 8.x 與一個 AGP 9.3 以上的公開 Android 專案各實跑一次範本,記下 Slack compose-lints 版本表是否成立,並用 ./gradlew check --dry-run 核對 lint 任務真的掛在 check 底下
+ REVISIT:2027-02-15 數消費專案健檢印 A2 的次數裡有幾次其實接在 build-logic 的 .kt 檔,超過一半就把建置邏輯模組納入掃描
+ REVISIT:2027-02-15 判 structured-coroutines 有沒有正式版、compose-rules 預設關的三條要不要開
+ 
+ ## 依據來源
+ 
+ 每個機制一行:依據是什麼、在哪裡看得到。(使用者 2026-11-06:「我們開發的過程中，所有機制的依據來源，最後也要補回plan，方便後續迭代」「而且我要變成規則，機制來源必填」)
+ 
+ | 機制 | 依據 | 出處 |
+ |---|---|---|
+ | Android Lint 只在 CI 跑、不在推送前跑 | 官方:Gradle 專案一律用 `./gradlew lint`,單機版對 Gradle 專案會報錯;官方建議把 lint 放進 CI | https://developer.android.com/studio/write/lint |
+ | CI 範本的 `baseline`、`warningsAsErrors`、`checkDependencies`、`sarifReport` | AGP Lint DSL 官方參考頁各屬性的說明 | https://developer.android.com/reference/tools/gradle-api/8.7/com/android/build/api/dsl/Lint |
+ | 先產基準線再加 CI 步驟、`-Dlint.baselines.continue=true` | 官方 lint 頁〈Create a warnings baseline〉 | https://developer.android.com/studio/write/lint |
+-| Slack compose-lints 的接法與版本挑法(lint 版本 = AGP 加 23) | 官方安裝頁;GitHub 發行說明:1.5.5 同時寫「Build against lint 32.3.2」與「AGP lint plugin 9.3.2」(+23 的直接證據)、1.6.1「Build against lint 32.4.1」、1.5.0「Build against lint `32.2.1`」(對 AGP 9.2.1)、1.4.2「Build against lint 31.7.1」;1.6.0 的「requires AGP/lint 9.3+」寫在 ComposeModifierComposed 那項變更旁邊,不拿來當整版的下限 | https://slackhq.github.io/compose-lints/ 、https://github.com/slackhq/compose-lints/releases |
++| Slack compose-lints 的接法與版本挑法(lint 版本 = AGP 加 23) | 官方安裝頁;GitHub 發行說明:1.5.5 同時寫「Build against lint 32.3.2」與「AGP lint plugin 9.3.2」(+23 的直接證據)、1.6.1「Build against lint 32.4.1」、1.5.0「Build against lint `32.2.1`」(對 AGP 9.2.1)、1.4.2「Build against lint 31.7.1」、1.4.0「Build against Lint `8.7.0`」(對 AGP 8.7.0);1.6.0 的「requires AGP/lint 9.3+」寫在 ComposeModifierComposed 那項變更旁邊,不拿來當整版的下限 | https://slackhq.github.io/compose-lints/ 、https://github.com/slackhq/compose-lints/releases |
+ | Slack 預設關的三條不標接電 | Slack 規則頁:ComposeUnstableReceiver、ComposeUnstableCollections「disabled by default」、ComposeM2Api「opt-in」 | https://slackhq.github.io/compose-lints/rules/ |
+ | compose-rules 用 detekt 外掛、不用型別資訊 | 官方 detekt 頁 CLI 用法與版本表(官方頁沒寫型別資訊這件事,是實跑結論);2026-11-06 本機 detekt 1.23.8 加外掛 0.4.28、只給 `--input` 實跑壞例,RememberMissing、MutableParams、MutableStateAutoboxing、ComposableNaming 四條都報 | https://mrmans0n.github.io/compose-rules/detekt/ ;實跑紀錄見設計審卷證 `governance/review-reports/android現成檢查接上ci與推送前/r1-正確性-sonnet.md` 開頭的查證段 |
+ | compose-rules 另開一條宣告(`--disable-default-rulesets`) | 2026-11-06 實測:`--plugins` 指不存在的 jar 時 detekt rc 1、不產 SARIF,整條會被判環境不可用 | 設計審卷證 governance/review-reports/android現成檢查接上ci與推送前/r1-intake.md |
+ | 那條宣告一定要帶 `--build-upon-default-config` | 2026-11-06 實測:少了它外掛規則一條都不跑、也不報錯 | 本計劃審計修正紀錄「實作更正」;測試 t_detekt_compose_rules_shared_config |
+ | compose-rules 預設關的三條不開 | 外掛自帶設定 `active: false`(UnstableCollections、PreviewNaming、Material2) | 外掛 jar 內 config/config.yml;設計審 r1 邊界席實讀 |
+ | 共用 detekt 設定的六項 Compose 放寬 | detekt 官方 Compose 頁的六項建議;compose-rules 規則頁要求 `ignoreAnnotated: ['Preview']`;2026-11-06 實跑現行設定對標準 Compose 檔報 6 條、加上後只剩一般函式那條 | https://detekt.dev/docs/introduction/compose/ 、https://mrmans0n.github.io/compose-rules/rules/ |
+ | `TopLevelPropertyNaming` 樣式收底線 | detekt 預設樣式 `[A-Z][_A-Z0-9]*`(Kotlin 慣例全大寫加底線)要保留;代碼審 r1 接手席實跑抓到只寫 PascalCase 會讓 `MAX_ITEMS` 被報 | 代碼審卷證 r1-接手-sonnet.md;測試 t_detekt_compose_rules_shared_config |
+ | 外掛 jar 放本機固定目錄、下載釘雜湊、驗過才改名 | linter 目錄既有規則「外部工具一律裝進套件管理器,嚴禁易失位置」的例外:brew、sdkman 沒有配方;下載加比對雜湊沿用本 repo CI 下載 detekt 的做法;暫存檔驗過才改名是代碼審 r1 資安席指出壞檔會留在正式位置 | Systems/linter精選目錄;.github/workflows/ci.yml 裝 detekt 那一步 |
+ | A1 用證據模型(找不到任何跡象才提醒) | OpenSSF Scorecard 官方檢查文件:SAST 檢查「looks for known GitHub apps … or the use of github/codeql-action in a GitHub workflow」,並寫「it is challenging for an automated tool like Scorecard to detect them all」「A low score is therefore not a definitive indication」;CI-Tests 檢查同樣只認一組已知名字並寫「may still receive a low score」。代碼審 r1、r2 連續打穿「判斷有沒有接」的字面寫法(逐條解析命令、找字但限 gradle 那行)後,改成只找跡象、找不到才提醒、提醒措辭不下定論 | https://github.com/ossf/scorecard/blob/main/docs/checks.md |
+-| A1 證據模型的實測 | 2026-11-06 下載 6 個公開 Android 專案的 GitHub workflow 實跑:nowinandroid、thunderbird、element-x、NewPipe 找到跡象,architecture-samples(只有 connectedCheck)與 firefox-android(CI 在 Taskcluster)找不到;每個專案找到的跡象詞記在卷證 | 實測 2026-11-06:`governance/review-reports/code-android現成檢查/r2-ciexp.md` |
++| A1 證據模型的實測 | 現行判法以代碼審 r4 邊界席的固定語料為準(15 個公開專案真實 CI 檔加 8 個負例與正例,寫成測試 `t_lint_android_ci_corpus`,修補前後都跑)。下面這段是 r2 舊模型(整檔有 gradle 字樣、建置檔設定也算)的實測,只留作歷史:2026-11-06 下載 6 個公開 Android 專案的 GitHub workflow 實跑:nowinandroid、thunderbird、element-x、NewPipe 找到跡象,architecture-samples(只有 connectedCheck)與 firefox-android(CI 在 Taskcluster)找不到;每個專案找到的跡象詞記在卷證 | `governance/review-reports/code-android現成檢查/r4-邊界-sonnet.md` 語料表;舊模型實測 `governance/review-reports/code-android現成檢查/r2-ciexp.md` |
+ | A1 認 `check`、`build` | AGP 讓 `check` 依賴 `lint`;Gradle `build` 依賴 `check`;社群慣用 `./gradlew check -x lint`、`build -x lint` 排除 lint,旁證 lint 掛在兩者底下(官方任務圖頁未找到,S5 實跑時用 `--dry-run` 核對) | https://android.googlesource.com/platform/tools/base/+/cc9093a%5E%21 、https://docs.gradle.org/current/userguide/base_plugin.html 、https://stackoverflow.com/questions/21143556/avoid-lint-when-gradle-execute-check |
+ | A1 的 `check`、`build` 只在同一邏輯行有 gradle 呼叫詞時才算,建置設定不算 | 代碼審 r3 三席各自實跑重現:整檔有 gradle 字樣就認 `check`/`build` 時,`needs: build` 加 `cache: gradle`、GitLab `stage: build` 讓沒接 lint 的專案靜默;建置檔 `lint { }` 與 `lint-baseline.xml` 是範本第 1、2 步的痕跡,把第 3 步缺漏的提醒關掉。排除:整檔找詞(r3 打穿)、拿建置設定當 CI 證據(r3 打穿);採 r2 的「限 gradle 那行」與 r3 的「lint 名任何位置都算」各取對的那半 | 代碼審卷證 `governance/review-reports/code-android現成檢查/r3-intake.md` 與同目錄 r3 席報告 |
++| A1 把 `tasks:`、`arguments:`、`command:`、`gradle_task:` 四個欄位的值當 gradle 任務列 | 各工具官方定義:Azure Pipelines Gradle@2 的 `tasks` 輸入(「Tasks. Default: build」);gradle-build-action 的 `arguments` 輸入「Gradle command line arguments (supports multi-line input)」(已標為棄用、改建議先 setup 再自己跑 gradle,舊專案仍常見);Bitrise steps-gradle-runner 的 `gradle_task`「Gradle task to run」;CircleCI gradle orb 的 `run` job 以 `command` 參數組成 `./gradlew << parameters.command >>`(預設 build)。代碼審 r4 四席實跑重現 r3 版把這四種寫法判成沒跑;只收這四個名字,其他欄位照舊不算(不回到整檔找詞) | https://learn.microsoft.com/azure/devops/pipelines/tasks/reference/gradle-v2 、https://github.com/gradle/gradle-build-action/blob/main/action.yml 、https://github.com/bitrise-steplib/steps-gradle-runner/blob/master/step.yml 、https://github.com/CircleCI-Public/gradle-orb/blob/main/src/jobs/run.yml |
++| CI 設定檔與建置檔解析真實路徑、在 repo 外才略過 | 代碼審 r4 通才與資安席:只擋檔案本身是連結時,資料夾連結照樣讀到 repo 外,repo 內的合法連結反被略過讓 T4 誤印;沿用 lumos 既有「解析後要在 repo 內」的判法(`_repo_path_unsafe` 的 outside 判定抽成 `_path_resolves_in_root` 共用) | scripts/lumos;Python `pathlib.Path.resolve` 與 `is_relative_to` |
+ | A1 不算 `lintKotlin`、`lintFix`、`lintVital` 開頭的任務 | kotlinter README:`lintKotlin`「report Kotlin lint errors」(ktlint,不是 Android Lint);googlesamples custom-lint-rules 使用手冊:`lintFix` 是「running the lint command with --apply-suggestions」(套用修正、改原始碼);AOSP 提交 cc9093a 的 `lintVitalRelease` 只檢查 fatal 級(DSL 參考頁 `checkReleaseBuilds` 寫 release 建置只看 severity=fatal,是旁證)。`lintAnalyze`、`lintReport` 找不到官方出處,不收 | https://github.com/jeremymailen/kotlinter-gradle 、https://googlesamples.github.io/android-custom-lint-rules/user-guide.html 、https://android.googlesource.com/platform/tools/base/+/cc9093a%5E%21 、https://developer.android.com/reference/tools/gradle-api/8.7/com/android/build/api/dsl/Lint |
+ | CI 設定檔納入 GitLab、Bitrise、CircleCI、Jenkins、Azure | 設計審 r1 邊界與接手兩席指出只看 GitHub 會讓其他 CI 的專案永遠誤印 | 設計審卷證 r1-intake.md |
+ | A3 外掛路徑照 shell 展開、相對 repo 根、判不了不判 | 新增告警閘以 repo 根當工作目錄、經 shell 執行命令;Python `os.path.expandvars` 對沒設的變數原樣保留;反引號與萬用字元要 shell 才算得出(代碼審 r2 邊界席實測誤報) | scripts/lumos 的 `_lint_spawn`;https://docs.python.org/3/library/os.path.html#os.path.expandvars |
+ | Android 專案判法、建置檔剝註解、資料夾跳過名單 | 沿用 lumos 既有的 `_KT_BUILD_ANDROID`、`_kt_strip_comments`、`_stack_scan_skip`(代碼審 r1 架構對齊席:不另立一套) | scripts/lumos |
+ | 型錄第四批口徑住在型錄自檢 | 型錄的欄位、出處檢查原本就集中在 check.py 的 `catalog_problems`(代碼審 r1 架構對齊席) | configs/ast-grep/kotlin-android/check.py |
+ 
+ ## 審計修正紀錄
+ - r1(2026-11-06,四席 sonnet:正確性、邊界、接手、架構對齊):30 條/blocking 12/接上 compose-rules 後 detekt 內建規則對 Compose 寫法還有五種誤報(兩席獨立實跑抓到,其實現行設定就有)、預設關的三條規則會被型錄標成已接電(兩席)、A1 的字面判法對常見 CI 寫法誤報又把 `lintKotlin` 當 Android Lint(四席)、外掛缺檔會拖垮整條 detekt(三席);共用設定照 detekt 官方 Compose 頁加六項、compose-rules 另開一條只跑外掛的宣告、A1 改整行掃任務詞、型錄口徑改切段判並排除預設關與 opt-in、Android 判法沿用既有正規式;全部折入,逐條去向在 r1-intake.md。卷證:governance/review-reports/android現成檢查接上ci與推送前/。
+ - 實作更正(2026-11-06):範圍 2 原本寫的 compose-rules 命令少了 `--build-upon-default-config`,實作時本機實跑發現少了它外掛規則一條都不跑、也不報錯(rc 0、SARIF 空),照實改正文並在 S3 釘住範本那行要帶它;測試執行器會隔離家目錄,S3 在本機靠 `LUMOS_DETEKT_COMPOSE_JAR` 找外掛,本機固定目錄那個後備路徑只在真實使用時用得到。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md b/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md
+index a09a4bd5d..da408cb68 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md
+@@ -24,21 +24,21 @@ summary: |-
+   FLOW:讀 .lumos/lint.json → _lintcheck_validate 靜態校驗(非dict/value非list/命令空/缺{LINT_SARIF_OUT}佔位符)→ [--smoke:格式過才對每條命令 _lint_run_and_parse、無可解析SARIF產出=跑不動]→ rc 0健康(含無宣告)/1有問題/2非JSON
+   KEY:兩層各抓一類——靜態層抓「格式錯」(便宜、純靜態);smoke層抓「格式對但跑不動」(工具/task/檔案缺;唯一能抓 gradle task 或外部 jar 存不存在的方法,靜態永遠抓不到)
+   KEY:真實案例(2026-07-17 KDS)——Citrus_KDS 的 lint.json 格式完全正確(`{"kt":["java -jar /tmp/detekt-dist/...detekt-cli.jar --report sarif:{LINT_SARIF_OUT}..."]}`),但 detekt jar 放在 /tmp 被系統清掉→靜態層正確放行、--smoke 正確抓「跑不出 SARIF」rc1。靜態抓不到、smoke 抓得到,正是兩層必要性的鐵證;[2026-07-27]同案重演(jar 又被清)→根治=改 brew 安裝+共用 config(標準接法立於[[Systems/linter精選目錄]]),KDS lint.json 換宣告後 smoke 綠
+   KEY:誠實天花板——靜態層驗格式不驗命令跑不跑得動;smoke真跑=慢(每linter一次完整run)、且對「輸出SARIF到stdout而非佔位符檔」的宣告會報錯(那也是宣告錯,smoke正確抓出,非誤報);外部工具放 /tmp 這類易失位置=宣告脆弱,smoke 是唯一守衛
+   KEY:設計哲學=宣告即契約需對帳——lint.json/lint-watch.json/test-layers.json 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道」風險;lint-check 是 lint.json 這條的對帳器,同族收口
+   DEP:scripts/lumos cmd_lint_check + _lintcheck_validate｜復用 _lint_run_and_parse(smoke)
+   TEST:t_lintcheck_validate(格式校驗含 value 非 list 誤植案例)+t_lintcheck_cli(無檔rc0/空殼rc1/格式對rc0/smoke抓跑不動rc1/smoke真產SARIF rc0/非JSON rc2);全套 1236 passed
+   WHY:lint-check 與健檢 F 段對 detekt 宣告照指令字面印「實際會怎樣」的提醒(型別資訊缺、等號寫法、Gradle 純 detekt 任務、推送只記錄不擋、多檔拒跑),只提醒不改退出碼;「推送閘接不接得住」改由新增告警閘、風險分級、本判定共用同一支小函式 [出處:[[Projects/Android的detekt規則說實話_計劃]] 設計審 r1] [因:這些落差 detekt 本身不報錯,沒人說就以為有在檢查;Android 專案目前沒有修法,擋了只會訓練人繞過] [不選:記成宣告問題讓 CI 變紅(沒出口的紅);冒煙探針實跑驗規則(改到推送前真的擋那案)] [test:t_lint_detekt_advice_table] [test:t_lintcheck_detekt_advice_output] [test:t_doctor_lint_detekt_advice]
+   WHY:detekt 宣告提醒跟著逗號佔位符改:帶 {LINT_FILES_CSV} 的不印 P1、P2,P2 只看舊 {LINT_FILES} 並指向 {LINT_FILES_CSV},T1 指向 CI 型別檢查範本,新增 T4(宣告有 detekt 而 .github/workflows/ 沒有 detekt<變體> 任務字樣就印型別規則哪裡都沒擋);冒煙取樣跳過分隔字元路徑;{LINT_FILES_CSV} 單獨被引號包住記成格式問題 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 4、5] [因:推送前只擋不用型別的規則,型別規則改由消費專案 CI 擋,沒接的要講出來不讓人以為有在擋;引號疊兩層讓含空白的路徑多出字面引號] [不選:T4 改退出碼(先提醒,REVISIT 2027-02-01 看有沒有人接);叫 T3(代號已被等號寫法用掉)] [test:t_lint_detekt_advice_csv_and_ci] [test:t_lintcheck_smoke_csv]
+   WHY:Android 現成檢查的三則提醒(A1 CI 設定檔裡找不到 Android Lint 的跡象、A2 用 Compose 卻一套 Compose 規則都沒接、A3 宣告的外掛檔不在)另起一則(lint-check 的 --json 仍與 detekt 提醒共用同一個 advisories 字串清單,A 系列條目以 [CI] A1:、[kt 第 N 條] A3: 開頭可分)、不放進 detekt 那支函式與標題 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:T4 要求宣告裡有 detekt 命令,這三則只要 kt 棧加 Android 專案;混在 detekt 標題底下會誤導] [不選:沿用 T4 只看 .github/workflows/(GitLab、Bitrise 等專案會永遠誤印)] [test:t_lint_android_ci_advice]
+-  WHY:A1 用證據模型——CI 設定檔都找不到 Android Lint 跡象(lint 任務名、跟 gradlew 或 gradle 寫在同一邏輯行的 check/build)才提醒,不判斷「有沒有接」;建置檔的 lint 區塊與 lint-baseline.xml 不算跡象 [出處:2026-11-06 code-android現成檢查 r2、r3] [因:設計審 r1、代碼審 r1、r2 三次被字面判斷打穿;OpenSSF Scorecard 官方檢查文件同樣只找已知名字、承認會漏] [不選:逐條解析 Gradle 命令(各寫特例、連輪被打穿);整檔有 gradle 字樣就認 check/build(needs: build、stage: build 讓沒接的專案靜默,r3 三席);建置檔設定當證據(範本第 1、2 步的痕跡,正是沒做第 3 步該提醒的狀態)] [代價:寫了字樣卻沒真的跑也算有跡象,少印提醒] [test:t_lint_android_ci_advice]
++  WHY:A1 用證據模型——CI 設定檔都找不到 Android Lint 跡象(lint 任務名、跟 gradlew 或 gradle 寫在同一邏輯行的 check/build、Azure tasks/gradle action arguments/CircleCI orb command/Bitrise gradle_task 四個欄位值裡的 check/build)才提醒,不判斷「有沒有接」;建置檔的 lint 區塊與 lint-baseline.xml 不算跡象 [出處:2026-11-06 code-android現成檢查 r2、r3、r4] [因:設計審 r1、代碼審 r1、r2 三次被字面判斷打穿;OpenSSF Scorecard 官方檢查文件同樣只找已知名字、承認會漏] [不選:逐條解析 Gradle 命令(各寫特例、連輪被打穿);整檔有 gradle 字樣就認 check/build(needs: build、stage: build 讓沒接的專案靜默,r3 三席);建置檔設定當證據(範本第 1、2 步的痕跡,正是沒做第 3 步該提醒的狀態)] [代價:寫了字樣卻沒真的跑也算有跡象,少印提醒] [test:t_lint_android_ci_advice]
+ aliases:
+   - lint 宣告健康檢查
+ about_code:
+   - scripts/lumos
+ verified_by:
+   - "[[Verification/2026-08-26_lint接線收口落地]]"
+ ---
+ # lint-declaration-health——lint 宣告健康檢查(收「宣告了跑不動的東西」破口)
+ 
+ > **緣起**:2026-07-17 收窄 lint-watch 後盤點消費專案,使用者指出「宣告了跑不動的東西,也要是被檢測出來的一環」——這正是 lint-watch 空轉([[Issues/lint-watch空轉假綠]])的同病根:**宣告與現實脫鉤,沒有機制逼對帳**。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+index 052ce8898..515ac2d13 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
++++ b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+@@ -173,24 +173,24 @@ Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模
+            baseline = file("lint-baseline.xml")
+            warningsAsErrors = true      // 不開時只有 error 級會讓建置失敗;型錄的 Android Lint 列多半是 warning 級
+            checkDependencies = true     // app 連同函式庫模組一起查(官方建議)
+            sarifReport = true
+        }
+    }
+    dependencies {
+        lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>")
+    }
+    ```
+-   Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4 以上用 `1.6.1`(lint 32.4.1);AGP 9.3 用 `1.5.5`(lint 32.3.2);AGP 9.0 到 9.2 用 `1.4.2`(lint 31.7.1;AGP 9.2.1 以上也可用 `1.5.0`,lint 32.2.1);AGP 8.7 到 8.x 用 `1.4.2`;更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑:例如 AGP 9.3.0、9.3.1 的 lint 是 32.3.0、32.3.1,低於 1.5.5 的 32.3.2,照規則改用 `1.5.0`。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
++   Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4.1 以上用 `1.6.1`(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 `1.5.5`(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 `1.5.0`(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 `1.4.2`(lint 31.7.1);AGP 8.7.0 用 `1.4.0`(發行說明寫 Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本(只有一則 PR 標題寫升到 lint 31.13.2),不列。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
+ 2. 第一次在本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true`(例 `lintDebug`)產 `lint-baseline.xml`、提交。**先產基準線、提交,再做第 3 步**——反過來 `warningsAsErrors` 會讓舊專案一接就紅。要清舊帳時刪掉基準線檔重產。
+ 3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 lint):有基準線以外的新告警就讓 CI 失敗。
+-- 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡都找不到 Android Lint 的跡象:lint 任務名,或跟 `gradlew`、`gradle` 寫在同一邏輯行(反斜線續行接起來算一行)的 `check`、`build`;建置檔的 `lint { }` 區塊與 `lint-baseline.xml` 是第 1、2 步的痕跡,不算 CI 有跑;只看字面,找到一個就不印,找不到不代表一定沒跑)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看建置檔與 CI 設定檔字面,不驗 CI 真的跑。
++- 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡都找不到 Android Lint 的跡象:lint 任務名,或跟 `gradlew`、`gradle` 寫在同一邏輯行(反斜線續行接起來算一行)的 `check`、`build`,或 Azure `tasks:`、gradle action 的 `arguments:`、CircleCI gradle orb 的 `command:`、Bitrise 的 `gradle_task:` 這四個欄位值裡的 `check`、`build`;建置檔的 `lint { }` 區塊與 `lint-baseline.xml` 是第 1、2 步的痕跡,不算 CI 有跑;只看字面,找到一個就不印,找不到不代表一定沒跑)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看字面(A1 看 CI 設定檔、A2 看建置檔、A3 看宣告),不驗 CI 真的跑。
+ 
+ ### Kotlin 寫法規則包標準接法(2026-11-05 立,[[Projects/Android協程與API寫法機械檢查標準_計劃]])
+ 
+ 規則包本體、每條規則對應型錄哪一列、自我檢查怎麼跑,家在 [[Systems/kotlin規則包]];這裡只放宣告範本。
+ 
+ - **安裝**:`pipx install ast-grep-cli==0.51.1` 或 `brew install ast-grep`(要 0.51.1 以上;規則包用到的語法以 0.51.1 為準)。CI 要先裝同一版並 clone 工具鏈。沒裝時新增告警閘判環境不可用、照既有規則放行並記帳(看得到但不擋)。
+ - **`.lumos/lint.json` 樣板**(Kotlin 專案直接抄,跟 detekt 那條並列):
+   ```
+   {"kt": ["ast-grep scan --config $HOME/harness/lumos-toolchain/configs/ast-grep/kotlin-android/sgconfig.yml --format sarif {LINT_FILES} > {LINT_SARIF_OUT}"]}
+   ```
+diff --git a/scripts/lumos b/scripts/lumos
+index 421c530b0..719308c28 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4171,21 +4171,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         if _lf["declared"] and not _lf["parse_error"]:
+             _dadv = _lint_detekt_advisories(_lf.get("config"), _vault_repo_root(env))
+             if _dadv:
+                 _dshow = [*_dadv[:20], *([f"… 另 {len(_dadv) - 20} 條(lumos lint-check 看全部)"] if len(_dadv) > 20 else [])]
+                 warn([], "detekt 宣告實際會怎樣(只看指令字面判的):以為有在檢查的規則,其實沒在跑、或推送時沒在擋",
+                      "\n        ".join(["逐條:", *_dshow, "細節與能做什麼:看 kotlin-idioms 慣例文件的「型別資訊」一節"]))
+             # Android 現成檢查有沒有接上([[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3):另起一則,不混進 detekt 那則
+             _aadv = _lint_android_ci_advisories(_lf.get("config"), _vault_repo_root(env))
+             if _aadv:
+                 _ashow = [*_aadv[:20], *([f"… 另 {len(_aadv) - 20} 條(lumos lint-check 看全部)"] if len(_aadv) > 20 else [])]
+-                warn([], "Android 現成檢查有沒有接上(只看建置檔與 CI 設定檔字面判的):型錄裡只靠 Android Lint 與 Compose 規則擋的列,沒接上就沒有機器在擋",
++                warn([], "Android 現成檢查有沒有接上(只看字面判的:A1 看 CI 設定檔、A2 看建置檔、A3 看宣告):型錄裡只靠 Android Lint 與 Compose 規則擋的列,沒接上就沒有機器在擋",
+                      "\n        ".join(["逐條:", *_ashow, "細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉"]))
+         # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
+         # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
+         _lnr = _vault_repo_root(env)
+         if _lnr is not None:
+             _kc = _lint_new_kind_counts(_lnr)
+             _auto = _kc.get("fail-open", 0)
+             _wv, _wverr = _lint_waivers_load(_lnr)
+             _bits = []
+             if _auto:
+@@ -38917,30 +38917,32 @@ def _detekt_gradle_codes(args):
+             codes |= {"plain": {"G1"}, "unknown": {"G2"}}.get(kind, set())
+     return is_detekt, codes
+ 
+ 
+ # 健檢只看字面的「CI 設定檔」:GitHub 的 workflow 加上其他常見 CI 的固定檔名([[Projects/Android現成檢查接上CI與推送前_計劃]] 〈用詞〉)
+ _CI_OTHER_CONFIG_FILES = (".gitlab-ci.yml", "bitrise.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml")
+ 
+ 
+ def _ci_config_paths(repo_root, github_only=False):
+     """專案 CI 設定檔的路徑清單:`.github/workflows/` 底下的 .yml/.yaml(依檔名排序),github_only=False 時再加
+-    `_CI_OTHER_CONFIG_FILES` 裡存在的一般檔;檔案本身是符號連結的略過(不跟著讀到 repo 外,代碼審 r3 資安席)。
+-    T4(只看 GitHub、讀原文)與 A1(全部、經 `_ci_workflow_texts` 去註解)共用。"""
++    `_CI_OTHER_CONFIG_FILES` 裡存在的一般檔;解析後(檔案或資料夾那層是符號連結都算)不在 repo 根底下的略過、在的照讀
++    (`_path_resolves_in_root`;代碼審 r3 資安席、r4 通才席)。T4(只看 GitHub、讀原文)與 A1(全部、經 `_ci_workflow_texts`
++    去註解)共用。"""
+     root = Path(repo_root)
+     out = []
+     wf = root / ".github" / "workflows"
+     if wf.is_dir():
+         out.extend(p for p in sorted(wf.iterdir())
+-                   if p.suffix.lower() in (".yml", ".yaml") and p.is_file() and not p.is_symlink())
++                   if p.suffix.lower() in (".yml", ".yaml") and p.is_file() and _path_resolves_in_root(root, p))
+     if not github_only:
+-        out.extend(root / rel for rel in _CI_OTHER_CONFIG_FILES if (root / rel).is_file() and not (root / rel).is_symlink())
++        out.extend(root / rel for rel in _CI_OTHER_CONFIG_FILES
++                   if (root / rel).is_file() and _path_resolves_in_root(root, root / rel))
+     return out
+ 
+ 
+ def _detekt_ci_has_typed_task(repo_root):
+     """專案 .github/workflows/ 底下有沒有任何一支(.yml/.yaml)提到 detekt<變體> 的 Gradle 任務字樣(例 detektDebug、detektMain)。
+     只看字面、不執行;讀不了的檔當沒有。T4 用([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5)。"""
+     for p in _ci_config_paths(repo_root, github_only=True):
+         try:
+             text = p.read_text(encoding="utf-8", errors="replace")
+         except OSError:
+@@ -38968,100 +38970,110 @@ _ANDROID_SCAN_NAMES = frozenset((*_KT_BUILD_FILES, "settings.gradle", "settings.
+ _ANDROID_COMPOSE = re.compile(r"compose[ \t]*=[ \t]*true|org\.jetbrains\.kotlin\.plugin\.compose|kotlin-compose|androidx\.compose")
+ # lint 開頭但不是「跑 Android Lint 檢查」的 Gradle 任務(各有出處,見計劃〈依據來源〉):kotlinter 的 ktlint 任務 lintKotlin、
+ # lintFix 套用快速修正會改原始碼、lintVital 只看 fatal 級。前綴後面要接結尾或大寫(lintFixtureDebug 是 flavor 叫 Fixture 的 lint,照算)。
+ # 找不到官方出處的名字不收(寧可多算跡象、少印提醒)
+ _ANDROID_LINT_NONCHECK = re.compile(r"lint(?:Kotlin|Fix|Vital)(?:[A-Z]\w*)?")
+ 
+ 
+ def _android_build_texts(repo_root, max_depth=3, max_files=200, max_bytes=1 << 20):
+     """專案根目錄往下最多 max_depth 層的建置檔(`_KT_BUILD_FILES`、settings.gradle(.kts))與 gradle/libs.versions.toml,
+     剝掉註解後的文字(同 `_kt_build_verdict`:註解裡提到的不算宣告)。資料夾照 `_stack_scan_skip` 跳過、另不進隱藏資料夾,
+-    不跟符號連結進資料夾、檔案本身是符號連結的也略過(不跟著讀到 repo 外,代碼審 r3 資安席)、不開一般檔以外的東西
++    不跟符號連結進資料夾(避免迴圈與重複)、檔案解析後不在 repo 根底下的略過(`_path_resolves_in_root`,
++    repo 內的連結照讀;代碼審 r3 資安席、r4 通才席)、不開一般檔以外的東西
+     (具名管道會讓 open 卡住);依(層數、路徑)排序,根目錄的檔先讀,
+     取前 max_files 支、每支讀前 max_bytes。版本目錄 gradle/libs.versions.toml 照 TOML 的 # 註解剝。"""
+     import os as _os
+     root = Path(repo_root)
+     cands = []
+     for dirpath, dirnames, filenames in _os.walk(root, followlinks=False):
+         rel = Path(dirpath).relative_to(root)
+         depth = 0 if str(rel) == "." else len(rel.parts)
+         dirnames[:] = [] if depth >= max_depth else [
+             d for d in dirnames if not _stack_scan_skip(d) and not d.startswith(".")]
+         for fn in filenames:
+             rp = (rel / fn).as_posix() if depth else fn
+             fp = _os.path.join(dirpath, fn)
+             if (fn in _ANDROID_SCAN_NAMES or rp == "gradle/libs.versions.toml") and _os.path.isfile(fp) \
+-                    and not _os.path.islink(fp):
++                    and _path_resolves_in_root(root, fp):
+                 cands.append((depth, rp))
+     out = []
+     for _d, rp in sorted(cands)[:max_files]:
+         try:
+             with open(root / rp, "rb") as fh:
+                 txt = fh.read(max_bytes).decode("utf-8", errors="replace")
+         except OSError:
+             continue
+         if rp.endswith(".toml"):   # TOML 的註解是 #,不是 C 式;沿用 CI 設定檔那支去行尾註解,整行註解拿掉
+             txt = "\n".join(_ci_strip_comment(ln) for ln in txt.split("\n") if not ln.lstrip().startswith("#"))
+         else:
+             txt = _kt_strip_comments(txt, xml=rp.endswith("pom.xml"))
+         out.append(txt)
+     return out
+ 
+ 
+ _ANDROID_LINT_WORD = re.compile(r":?(?:[\w-]+:)*(?:android-)?lint(?:[A-Z]\w*)?")
+ _ANDROID_UMBRELLA_WORD = re.compile(r":?(?:[\w-]+:)*(?:check|build)")
+ _CI_WORD_SPLIT = re.compile(r"[\s'\"`,;&|()\[\]{}=@]+")
+-# gradle 的呼叫詞(命令開頭的那個字,去掉 `./`、`.\` 這類路徑前綴後比對):detekt 判定、外掛路徑提醒、A1 的 check/build 共用這一份
+-_GRADLE_HEADS = ("gradlew", "gradlew.bat", "gradle")
+-
+-
+-def _is_gradle_head(word):
+-    """這個詞(可帶 `./`、Windows 的 `.\\`、`tools/` 這類路徑前綴)是不是 gradle 的呼叫詞(`_GRADLE_HEADS`)。"""
+-    return re.split(r"[/\\]", word)[-1] in _GRADLE_HEADS
++# 已知會叫 gradle 跑任務的 CI 欄位(值視同 gradle 任務列):Azure Gradle 任務的 tasks、gradle/actions 的 arguments、
++# CircleCI gradle orb 的 command、Bitrise gradle-runner 的 gradle_task(出處見計劃〈依據來源〉;代碼審 r4 四席)。
++# 值可以寫在同一行(含引號、YAML 流式清單),或是區塊純量(| >)與縮排更深的清單
++_CI_GRADLE_TASK_FIELD = re.compile(r"^([ \t]*(?:-[ \t]+)?)(?:tasks|arguments|command|gradle_task)[ \t]*:(?:[ \t]+(.*))?$")
+ 
+ 
+ def _android_ci_lint_evidence(texts):
+     """CI 設定檔裡有沒有「可能在跑 Android Lint」的跡象(證據模型:找到任何一個就算,找不到才提醒;
+     照 OpenSSF Scorecard 的做法——只找已知的名字、承認自動偵測會漏,見計劃〈依據來源〉)。收的是 `_ci_workflow_texts`
+-    的 [(路徑, 去掉 `#` 註解後的行)];Jenkinsfile 另照 Groovy 剝 `/* */` 與 `//`(沿用 `_strip_c_comments`,字串裡的 `//` 不算)。
+-    反斜線續行先接成同一邏輯行,再以空白、引號、標點切詞(`/`、`.` 不切,路徑 `app/build/outputs` 與 `-Dkotlin.build.x`
+-    是一個詞、不算)。跡象只有兩種:①任何一個詞是 lint 任務名(`lint`、`lint<變體>`、`:模組:lint`、Bitrise 的 `android-lint`;
+-    `_ANDROID_LINT_NONCHECK` 那幾種不算;任何位置都算,Bitrise step 名與 YAML 多行區塊才涵蓋得到);
+-    ②同一邏輯行裡有 gradle 呼叫詞(`_is_gradle_head`)而且有一個詞是 `check` 或 `build`(AGP 讓 check 帶 lint、
+-    Gradle 的 build 帶 check)。整檔有 gradle 字樣不算——`needs: build`、`stage: build` 跟 `cache: gradle` 湊在一起
+-    會讓沒接 lint 的專案被當成有跡象(代碼審 r3 三席)。寫了卻沒真的跑(`-x lint`、`echo gradlew build`)判成有跡象——
+-    寧可少印提醒、不誤報。"""
+-    for path, lines in texts:
+-        text = "\n".join(lines)
+-        if Path(path).name == "Jenkinsfile":
+-            text = _strip_c_comments(text)
+-        for ln in text.replace("\\\n", " ").split("\n"):   # CRLF 已由 read_text 的通用換行轉成 \n
++    的 [(路徑, 去掉註解後的行)](Jenkinsfile 的 Groovy 註解也在那裡剝)。反斜線續行先接成同一邏輯行,再以空白、引號、
++    標點切詞(`/`、`.` 不切,路徑 `app/build/outputs` 與 `-Dkotlin.build.x` 是一個詞、不算)。跡象只有兩種:
++    ①任何一個詞是 lint 任務名(`lint`、`lint<變體>`、`:模組:lint`、Bitrise 的 `android-lint`;`_ANDROID_LINT_NONCHECK`
++    那幾種不算;任何位置都算,Bitrise step 名與 YAML 多行區塊才涵蓋得到);②「gradle 任務列」裡有一個詞是 `check` 或 `build`
++    (AGP 讓 check 帶 lint、Gradle 的 build 帶 check)。gradle 任務列是:同一邏輯行裡有 gradle 呼叫詞(`_is_gradle_head`)的行,
++    或 `_CI_GRADLE_TASK_FIELD` 那四個已知欄位的值(同一行、區塊純量、縮排更深的清單都算)。其他欄位與整檔有 gradle 字樣
++    不算——`needs: build`、`stage: build`、`name: build` 跟 `cache: gradle` 湊在一起會讓沒接 lint 的專案被當成有跡象
++    (代碼審 r3 三席)。寫了卻沒真的跑(`-x lint`、`echo gradlew build`)判成有跡象——寧可少印提醒、不誤報。"""
++    for _path, lines in texts:
++        field_col = None   # 區塊或清單寫法的已知欄位:欄位名那一欄;後面縮排更深的行(或同欄的清單項)是它的值
++        for ln in "\n".join(lines).replace("\\\n", " ").split("\n"):   # CRLF 已由 read_text 的通用換行轉成 \n
+             words = _CI_WORD_SPLIT.split(ln)
+             for w in words:
+                 if _ANDROID_LINT_WORD.fullmatch(w) and not _ANDROID_LINT_NONCHECK.fullmatch(w.rsplit(":", 1)[-1]):
+                     return True
+-            if any(_ANDROID_UMBRELLA_WORD.fullmatch(w) for w in words) and any(_is_gradle_head(w) for w in words):
++            task_line = False
++            if field_col is not None:
++                ind = len(ln) - len(ln.lstrip())
++                if not ln.strip() or ind > field_col or (ind == field_col and ln.lstrip().startswith("-")):
++                    task_line = True
++                else:
++                    field_col = None
++            mo = _CI_GRADLE_TASK_FIELD.match(ln)
++            if mo:
++                val = (mo.group(2) or "").strip()
++                if not val or re.fullmatch(r"[|>][-+0-9]*", val):
++                    field_col = len(mo.group(1))
++                else:
++                    task_line = True
++            if any(_ANDROID_UMBRELLA_WORD.fullmatch(w) for w in words) and (
++                    task_line or any(_is_gradle_head(w) for w in words)):
+                 return True
+     return False
+ 
+ 
+ def _detekt_plugin_values(cmd):
+     """一條宣告命令裡 detekt 的 --plugins/-p 值(逗號分隔的多支拆開,字面原樣);走 `_detekt_walk_segments`,
+     跟 detekt 判定(T1–T3、P2)看到同樣的段。"""
+-    import posixpath as _pp
+     out = []
+     if not isinstance(cmd, str):
+         return out
+     for seg in _detekt_walk_segments(cmd):
+         if _is_gradle_head(seg[0]):
+             continue
+-        args = _detekt_cli_args(seg, _pp.basename(seg[0]))
++        args = _detekt_cli_args(seg, _cmd_basename(seg[0]))
+         for i, a in enumerate(args or []):
+             val = args[i + 1] if a in ("--plugins", "-p") and i + 1 < len(args) else (
+                 a.split("=", 1)[1] if a.startswith("--plugins=") else None)
+             if val:
+                 out.extend(v.strip() for v in val.split(",") if v.strip())
+     return out
+ 
+ 
+ def _android_plugin_missing(cmd, repo_root):
+     """這條命令宣告的外掛檔有沒有不在的:照 shell 的規則展開環境變數與 `~`(`os.path.expandvars`、`expanduser`),
+@@ -39105,68 +39117,80 @@ def _lint_android_ci_advisories(config, repo_root):
+     for idx, c in enumerate(kt, 1):
+         if isinstance(c, str) and _android_plugin_missing(c, repo_root):
+             found.append(("A3", f"[kt 第 {idx} 條] A3:{_ANDROID_ADVICE_TEXT['A3']}"))
+     return [s for _c, s in sorted(found, key=lambda x: _ANDROID_ADVICE_ORDER.index(x[0]))]
+ 
+ 
+ def _lint_android_print(advisories):
+     """lint-check 人讀輸出的 Android 現成檢查提醒(三段式:發生什麼 → 為什麼在意 → 細節去哪看)。"""
+     if not advisories:
+         return
+-    print("  提醒:Android 現成檢查有沒有接上(只看建置檔與 CI 設定檔字面判的,不影響這次結果):")
++    print("  提醒:Android 現成檢查有沒有接上(只看字面判的:A1 看 CI 設定檔、A2 看建置檔、A3 看宣告;不影響這次結果):")
+     for a in advisories:
+         print(f"    • {a}")
+     print("  為什麼在意:型錄裡約一百列錯誤寫法只靠 Android Lint 與 Compose 規則擋,沒接上就沒有任何機器在擋。")
+     print("  細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉")
+ 
+ 
++# gradle 的呼叫詞(命令開頭的那個字,用 `_cmd_basename` 去掉路徑前綴後比對):detekt 判定、外掛路徑提醒、A1 的 check/build 共用這一份
++_GRADLE_HEADS = ("gradlew", "gradlew.bat", "gradle")
++
++
++def _cmd_basename(word):
++    """命令詞的檔名部分(`./gradlew`、Windows 的 `.\\gradlew.bat`、`tools/detekt-cli` → 最後一段)。detekt 判定、外掛路徑提醒、
++    gradle 呼叫詞判定取檔名都用這一支(代碼審 r4 架構對齊席:原本 posixpath.basename 與自寫切法並存,`\\` 只有一邊認)。"""
++    return re.split(r"[/\\]", word)[-1]
++
++
++def _is_gradle_head(word):
++    """這個詞(可帶 `./`、`.\\`、`tools/` 這類路徑前綴)是不是 gradle 的呼叫詞(`_GRADLE_HEADS`)。"""
++    return _cmd_basename(word) in _GRADLE_HEADS
++
++
+ def _detekt_walk_segments(cmd, depth=0):
+     """一條命令照判定表拆成段:續行接起來、逐行切段(`_detekt_split_segments`)、剝環境變數與包裝詞(`_detekt_strip_prefix`)、
+     `sh -c '…'` 展開一層;產出剝好的非空段。detekt 判定與外掛路徑提醒共用這一支,兩邊對同一條命令看到同樣的段。"""
+-    import posixpath as _pp
+     for line in cmd.replace("\\\n", " ").split("\n"):
+         segs = _detekt_split_segments(line)
+         if segs is None:
+             continue
+         for seg in segs:
+             seg = _detekt_strip_prefix(seg)
+             if not seg:
+                 continue
+-            if _pp.basename(seg[0]) in ("sh", "bash", "zsh"):
++            if _cmd_basename(seg[0]) in ("sh", "bash", "zsh"):
+                 if depth == 0 and len(seg) >= 3 and seg[1] == "-c":
+                     yield from _detekt_walk_segments(seg[2], depth + 1)
+                 continue
+             yield seg
+ 
+ 
+ def _detekt_segment_codes(seg):
+     """一段(已剝前綴、不是 shell 包裝)的判定:回傳 (是不是 detekt 宣告, 代號集合)。表外寫法回 (False, 空集合)。"""
+-    import posixpath as _pp
+-    head = _pp.basename(seg[0])
+-    if _is_gradle_head(seg[0]):
++    head = _cmd_basename(seg[0])
++    if head in _GRADLE_HEADS:
+         return _detekt_gradle_codes(seg[1:])
+     args = _detekt_cli_args(seg, head)
+     if args is None:
+         return False, set()
+     return True, _detekt_cli_codes(seg, args)
+ 
+ 
+ def _detekt_cli_args(seg, head):
+     """認出 detekt 指令列,回傳 detekt 自己的參數(java -jar 之前給 JVM 的不算);不是 detekt 回 None。"""
+-    import posixpath as _pp
+     if head in ("detekt", "detekt-cli"):
+         return seg[1:]
+     if head != "java":
+         return None
+     if "-jar" in seg:
+         j = seg.index("-jar")
+-        jar = _pp.basename(seg[j + 1]) if j + 1 < len(seg) else ""
++        jar = _cmd_basename(seg[j + 1]) if j + 1 < len(seg) else ""
+         return seg[j + 2:] if jar.startswith("detekt-cli") and jar.endswith(".jar") else None
+     if _DETEKT_MAIN_CLASS in seg:
+         return seg[seg.index(_DETEKT_MAIN_CLASS) + 1:]
+     return None
+ 
+ 
+ def _detekt_cli_codes(seg, args):
+     """detekt 指令列那一段的代號:T3 等號寫法、T1/T2 缺型別參數(看不到完整參數不判)、P2 段內有佔位符。"""
+     codes = set()
+     if any("=" in a and a.split("=", 1)[0] in _DETEKT_CLI_OPTS for a in args):
+@@ -52497,25 +52521,36 @@ def _repo_path_unsafe(root, rel, dirs=False):
+     硬連結數)與訊息——原本兩份各寫一套,一邊補洞(例如 Windows junction)另一邊不會跟。"""
+     rootp = Path(root)
+     cur = rootp
+     for seg in Path(rel).parts:
+         cur = cur / seg
+         if cur.is_symlink():
+             return "symlink", cur
+         if dirs and cur.exists() and not cur.is_dir():
+             return "notdir", cur
+     fp = rootp / rel
+-    if not fp.resolve().is_relative_to(rootp.resolve()):
++    if not _path_resolves_in_root(rootp, fp):
+         return "outside", fp
+     return None
+ 
+ 
++def _path_resolves_in_root(root, p):
++    """p 解析(跟完所有符號連結,含資料夾那幾層)後還在 root 解析後的底下嗎。★「解析後要在 repo 內」只有這一份★:
++    _repo_path_unsafe 的 outside 判定、CI 設定檔清單 _ci_config_paths、建置檔掃描 _android_build_texts 都呼叫它
++    (代碼審 code-android現成檢查 r4 通才、資安席:原本只擋檔案本身是連結,資料夾連結照樣讀到 repo 外、repo 內的連結反被略過)。
++    解析不了(OSError、連結迴圈)當不在。"""
++    try:
++        return Path(p).resolve().is_relative_to(Path(root).resolve())
++    except (OSError, RuntimeError):
++        return False
++
++
+ def _repo_path_unsafe_why(root, rel, bad):
+     """_repo_path_unsafe 的結果 → 給人看的擋下原因(★符號連結這一類擋下訊息只有這一份文字★,代碼審 r3 架構對齊席 A3:
+     原本筆記內容審、核可鏈、背書各寫一句)。"""
+     kind, at = bad
+     shown = Path(at).relative_to(Path(root)).as_posix()
+     if kind == "symlink":
+         return f"{shown} 是符號連結(可能指到 repo 外),不寫也不清——刪掉那個連結再跑"
+     if kind == "notdir":
+         return f"{shown} 不是資料夾,沒法用"
+     return f"{rel} 解析後不在 repo 根底下,不寫也不清"
+@@ -60287,27 +60322,32 @@ def _ci_strip_comment(line):
+                 q = None
+         elif ch in ("'", '"'):
+             q = ch
+         elif ch == "#" and i > 0 and line[i - 1] in " \t":
+             return line[:i].rstrip()
+     return line
+ 
+ 
+ def _ci_workflow_texts(ymls):
+     """CI 設定檔 → [(路徑, 去掉註解後的行)]:整行註解拿掉、行尾註解(後面沒有引號的 ` #…`)切掉;讀不了的檔跳過。
+-    兩層 doctor 都經這裡讀,容錯跟「哪些算註解」只有一份(筆記內容審代碼審 r3 架構對齊席、通才席)。"""
++    檔名是 Jenkinsfile 的照 Groovy 剝 `/* */` 與 `//`(沿用 `_strip_c_comments`,字串裡的 `//` 不算;換行照留,行數不變),
++    不套 `#` 規則。兩層 doctor 與 Android 的 A1 都經這裡讀,容錯跟「哪些算註解」只有一份(筆記內容審代碼審 r3 架構對齊席、
++    通才席;code-android現成檢查 r4 架構對齊席:Jenkinsfile 原本由 A1 自己補剝)。"""
+     out = []
+     for p in ymls:
+         try:
+             raw = p.read_text(encoding="utf-8", errors="replace")
+         except OSError:
+             continue
++        if Path(p).name == "Jenkinsfile":
++            out.append((p, _strip_c_comments(raw, keep_newlines=True).split("\n")))
++            continue
+         out.append((p, [_ci_strip_comment(ln) for ln in raw.split("\n") if not ln.lstrip().startswith("#")]))
+     return out
+ 
+ 
+ def _ci_jobs_calling_without_full_history(ymls, needle):
+     """GitHub Actions 設定裡,呼叫 needle 的工作項目中,沒設 fetch-depth: 0 的那些 → [(檔名, 工作項目名)]。
+     照工作項目切,不看整份:別的工作項目設了完整歷史,不代表呼叫這道檢查的那個有(筆記內容審代碼審 r2 外家席)。
+     工作項目=jobs: 底下第一層縮排的每一個鍵(名字可加引號、行尾可帶註解;代碼審 r3 兩席:原本只認不帶引號、
+     冒號後什麼都沒有的鍵,合法寫法就會漏)。"""
+     out = []
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 9c46f2655..61e5d755a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126295,24 +126295,44 @@ def t_lint_android_ci_advice():
+                 "- run: ./gradlew assembleDebug --init-script ci/check.gradle\n"):
+         check(f"r2 折入 A1 找不到跡象:{txt.strip()[:40]!r}", has([txt]) is False, txt)
+     # 已知天花板(證據模型刻意接受的少印):寫了 lint 字樣、或 gradle 同一行寫了 check/build 卻沒真的跑,判成有跡象
+     for txt in ("./gradlew build -x lint\n", "echo gradlew build later\n", "echo lint\n"):
+         check(f"天花板 A1 寫了字樣就算有跡象:{txt.strip()[:40]!r}", has([txt]) is True, txt)
+     # ── 代碼審 r3 折入:check/build 只在同一邏輯行(續行合併後)有 gradle 呼叫詞時才算;整檔有 gradle 字樣不算 ──
+     for txt in ("jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n          cache: gradle\n"
+                 "      - run: ./gradlew assembleDebug\n  release:\n    needs: build\n    steps:\n      - run: echo done\n",
+                 "stages: [build]\nassemble:\n  stage: build\n  image: gradle:8\n  script:\n    - ./gradlew assemble\n",
+                 "jobs:\n  a:\n    name: build\n    steps:\n      - run: ./gradlew assembleDebug\n",
+-                "steps:\n- task: Gradle@3\n  inputs:\n    tasks: 'check'\n",
+-                "- uses: gradle/actions/setup-gradle@v4\n- run: test -f check && ./build.sh\n"):
++                "- uses: gradle/actions/setup-gradle@v4\n- run: test -f check && ./build.sh\n",
++                "- uses: gradle/actions/setup-gradle@v4\n  with:\n    build-scan-publish: true\n    gradle-version: build\n",
++                "- run:\n    command: ./gradlew assembleDebug\n"):
+         check(f"r3 折入 A1 check/build 不在 gradle 那一行 → 找不到跡象:{txt.strip().splitlines()[-1][:40]!r}",
+               has([txt]) is False, txt)
++    # ── 代碼審 r4 折入:tasks:、arguments:、command:、gradle_task: 這四個已知欄位的值視同 gradle 任務列 ──
++    # (Azure Gradle 任務、gradle/actions 的 arguments、CircleCI gradle orb、Bitrise gradle-runner;值可以是單行、引號、YAML 清單或多行)
++    for txt in ("steps:\n- task: Gradle@2\n  inputs:\n    tasks: 'clean build test'\n",
++                "steps:\n- task: Gradle@3\n  inputs:\n    tasks: check\n",
++                "- uses: gradle/gradle-build-action@v3\n  with:\n    arguments: build\n",
++                "- uses: gradle/actions/setup-gradle@v4\n  with:\n    arguments: \"--no-daemon check\"\n",
++                "- uses: gradle/gradle-build-action@v3\n  with:\n    arguments: |\n      assembleDebug\n      build\n",
++                "orbs:\n  gradle: circleci/gradle@3\nworkflows:\n  w:\n    jobs:\n      - gradle/run:\n          command: build\n",
++                "workflows:\n  primary:\n    steps:\n    - gradle-runner@2:\n        inputs:\n        - gradle_task: build\n",
++                "inputs:\n  tasks:\n  - assemble\n  - check\n",
++                "inputs:\n  tasks: [assemble, check]\n"):
++        check(f"r4 折入 A1 已知欄位的值當 gradle 任務:{txt.strip().splitlines()[-1][:40]!r}", has([txt]) is True, txt)
++    for txt in ("jobs:\n  a:\n    needs: build\n    steps:\n      - run: ./gradlew assembleDebug\n",
++                "a:\n  stage: build\n  script:\n    - ./gradlew assemble\n",
++                "jobs:\n  a:\n    name: build\n    steps:\n      - uses: gradle/actions/setup-gradle@v4\n",
++                "inputs:\n  tasks: |\n    assemble\nnext:\n  name: build\n",
++                "inputs:\n  tasks: |\n    assemble\nnext:\n  needs:\n    - build\n",
++                "- gradle/run:\n    command: assembleDebug\n    name: check\n"):
++        check(f"r4 折入 A1 其他欄位的 build/check 照舊不算:{txt.strip().splitlines()[-1][:40]!r}", has([txt]) is False, txt)
+     # Jenkinsfile 照 Groovy 剝 /* */ 區塊與行尾 //,字串裡的 // 不算註解
+     for txt, want in (("/*\n sh './gradlew lint'\n*/\nsh './gradlew assemble'\n", False),
+                       ("sh './gradlew assembleDebug' // lint later\n", False),
+                       ("// sh './gradlew lintDebug'\nsh './gradlew assembleDebug'\n", False),
+                       ("sh 'curl -o x https://h/a && ./gradlew lintDebug'\n", True),
+                       ("sh \"echo http://x\" /* c */ ; sh './gradlew check'\n", True)):
+         check(f"r3 折入 A1 Jenkinsfile 剝 Groovy 註解:{txt.strip()[:40]!r} → {want}", has([txt], name="Jenkinsfile") is want, txt)
+     def quick(root):
+         """直接呼叫 _lint_android_ci_advisories(不起 lint-check 子程序,壓測試耗時;端到端另有一條)。"""
+         adv = m._lint_android_ci_advisories({"kt": [det]}, root)
+@@ -126329,36 +126349,58 @@ def t_lint_android_ci_advice():
+     wf(root, ".github/workflows/ci.yml", "jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n"
+                                          "          cache: gradle\n      - run: ./gradlew assembleDebug\n  release:\n"
+                                          "    needs: build\n    steps:\n      - run: echo done\n")
+     check("r3 折入 needs: build 加 cache: gradle 加 ./gradlew assembleDebug → 照印 A1(端到端)", "A1" in codes(root)[1], str(codes(root)[2]))
+     root = fresh()
+     wf(root, ".gitlab-ci.yml", "stages: [build]\nassemble:\n  stage: build\n  script:\n    - ./gradlew assemble\n")
+     check("r3 折入 GitLab stage: build 加 ./gradlew assemble → 照印 A1", "A1" in quick(root), str(quick(root)))
+     root = fresh()
+     wf(root, ".github/workflows/ci.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew check\n")
+     check("r3 折入 ./gradlew check → 不印 A1", "A1" not in quick(root), str(quick(root)))
+-    # 檔案本身是符號連結就略過(建置檔與 CI 設定檔都是;資安席縱深防禦)
++    # 解析後落在 repo 外的符號連結略過、repo 內的照讀(建置檔與 CI 設定檔都是;資安席縱深防禦,r4 改成看真實路徑)
+     import os as _os
+     outside = Path(tempfile.mkdtemp(prefix="gctl-andci-out-"))
+     (outside / "b.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+     (outside / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug\n", encoding="utf-8")
+     root = fresh(build=None)
+     _os.symlink(outside / "b.kts", root / "build.gradle.kts")
+-    check("r3 折入 建置檔是符號連結 → 略過(不認成 Android)", quick(root) == set(), str(quick(root)))
++    check("r3 折入 建置檔是指到 repo 外的符號連結 → 略過(不認成 Android)", quick(root) == set(), str(quick(root)))
+     root = fresh()
+     (root / ".github" / "workflows").mkdir(parents=True)
+     _os.symlink(outside / "ci.yml", root / ".github" / "workflows" / "ci.yml")
+-    check("r3 折入 CI 設定檔是符號連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
+-    check("r3 折入 _ci_config_paths 不列符號連結", m._ci_config_paths(root) == [], str(m._ci_config_paths(root)))
++    check("r3 折入 CI 設定檔是指到 repo 外的符號連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
++    check("r3 折入 _ci_config_paths 不列指到 repo 外的符號連結", m._ci_config_paths(root) == [], str(m._ci_config_paths(root)))
+     root = fresh()
+     _os.symlink(outside / "ci.yml", root / ".gitlab-ci.yml")
+-    check("r3 折入 .gitlab-ci.yml 是符號連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
++    check("r3 折入 .gitlab-ci.yml 是指到 repo 外的符號連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
++    # r4 折入:資料夾是連結也看真實路徑;repo 內的連結照讀(T4 不誤印、建置檔照認)
++    odir = Path(tempfile.mkdtemp(prefix="gctl-andci-odir-"))
++    (odir / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug detektDebug\n", encoding="utf-8")
++    (odir / "config.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug\n", encoding="utf-8")
++    root = fresh()
++    (root / ".github").mkdir()
++    _os.symlink(odir, root / ".github" / "workflows")
++    check("r4 折入 .github/workflows 是指到 repo 外的資料夾連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
++    check("r4 折入 T4 也不讀 repo 外的資料夾連結", m._detekt_ci_has_typed_task(root) is False)
++    root = fresh()
++    _os.symlink(odir, root / ".circleci")
++    check("r4 折入 .circleci 是指到 repo 外的資料夾連結 → 略過", m._ci_config_paths(root) == [], str(m._ci_config_paths(root)))
++    root = fresh()
++    wf(root, "ci/real.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug detektDebug\n")
++    (root / ".github" / "workflows").mkdir(parents=True)
++    _os.symlink("../../ci/real.yml", root / ".github" / "workflows" / "ci.yml")
++    check("r4 折入 workflow 是指到 repo 內的檔案連結 → 照讀(T4 認得 detektDebug)", m._detekt_ci_has_typed_task(root) is True)
++    check("r4 折入 workflow 是指到 repo 內的檔案連結 → 照讀(不印 A1)", "A1" not in quick(root), str(quick(root)))
++    root = fresh(build=None)
++    wf(root, "gradle/real.kts", 'plugins { id("com.android.application") }\n')
++    _os.symlink("gradle/real.kts", root / "build.gradle.kts")
++    check("r4 折入 建置檔是指到 repo 內的連結 → 照讀(認成 Android、印 A1)", "A1" in quick(root), str(quick(root)))
+     root = fresh(build=None)
+     wf(root, "build.gradle.kts", 'plugins { kotlin("jvm") }\n')
+     wf(root, "gradle/libs.versions.toml", '# android-application = { id = "com.android.application" }\n[versions]\n')
+     check("r2 折入 版本目錄 # 註解裡的 Android 外掛不算 Android", codes(root)[1] == set(), str(codes(root)[2]))
+     # ── 代碼審 r1 折入:建置檔掃描沿用既有跳過名單與剝註解、不開非一般檔、根目錄優先 ──
+     import os as _os
+     root = fresh(build=None)
+     wf(root, "Pods/x/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+     wf(root, "vendor/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+     check("r1 折入 沿用 _stack_scan_skip:Pods/、vendor/ 底下不算", codes(root)[1] == set(), str(codes(root)[2]))
+@@ -126484,20 +126526,138 @@ def t_lint_android_ci_advice():
+     rd = run(vault, "doctor", "--ci")
+     fsec = rd.stdout[rd.stdout.find("[F]"):]
+     check("S1 健檢 F 段另起一則「Android 現成檢查有沒有接上」並印 A1",
+           "Android 現成檢查有沒有接上" in fsec and "A1:" in fsec, fsec[:1200])
+     r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(repo_root)], cwd=str(repo_root),
+                capture_output=True, text=True, timeout=60)
+     check("S1 lint-check 文字輸出另起標題", "Android 現成檢查有沒有接上" in r.stdout and "A1:" in r.stdout, r.stdout[-800:])
+     print("  ✓ t_lint_android_ci_advice")
+ 
+ 
++# ── 代碼審 r4 邊界席的固定語料(23 列):真實 CI 檔最小節錄加負例,修補前後都跑,斷言人工判定 ──
++# 每列:(來源, CI 檔名, 節錄, 人工判定, 預期印 A1, 註解)。人工判定 True=CI 真的會叫起 Android Lint、False=不會、None=判不了。
++# 預期跟人工判定不一致的列是天花板,斷言的是現行行為並標「已知判錯」,不假裝判對。節錄抓自 2026-11-06 各專案預設分支。
++_ANDROID_CI_CORPUS = (
++    ("android/nowinandroid", ".github/workflows/Build.yaml",
++     "jobs:\n  test_and_apk:\n    steps:\n      - name: Setup Gradle\n        uses: gradle/actions/setup-gradle@v4\n"
++     "      - name: Check lint\n        run: ./gradlew :app:lintProdRelease :app-nia-catalog:lintRelease :lint:lint\n",
++     True, False, "lint 任務名"),
++    ("android/architecture-samples", ".github/workflows/build_test.yaml",
++     "jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n          cache: 'gradle'\n"
++     "      - uses: gradle/actions/setup-gradle@v4\n      - uses: reactivecircus/android-emulator-runner@v2\n        with:\n"
++     "          script: ./gradlew :app:connectedCheck --stacktrace\n",
++     False, True, "只有 connectedCheck(儀器測試,不帶 lint)"),
++    ("thunderbird/thunderbird-android", ".github/workflows/quality-checks.yml",
++     "jobs:\n  quality-lint:\n    steps:\n      - name: Running Android lint\n        run: ./gradlew lint\n",
++     True, False, "./gradlew lint"),
++    ("TeamNewPipe/NewPipe", ".github/workflows/ci.yml",
++     "jobs:\n  build-and-test-jvm:\n    steps:\n      - name: Build debug APK and run jvm tests\n"
++     "        run: ./gradlew assembleContinuous lintContinuous testDebugUnitTest --stacktrace -DskipFormatKtlint\n",
++     True, False, "lint<變體> lintContinuous"),
++    ("element-hq/element-android", ".github/workflows/quality.yml",
++     "jobs:\n  lint:\n    steps:\n      - name: Run ktlint\n        run: |\n"
++     "          ./gradlew ktlintCheck $CI_GRADLE_ARG_PROPERTIES --continue\n      - name: Run lint\n        run: |\n"
++     "          ./gradlew vector-app:lintGplayRelease $CI_GRADLE_ARG_PROPERTIES\n",
++     True, False, "模組前綴的 lint<變體>"),
++    ("signalapp/Signal-Android", ".github/workflows/android.yml",
++     "jobs:\n  build:\n    steps:\n      - uses: gradle/actions/setup-gradle@v6\n"
++     "      - run: ./gradlew ${{ github.event_name == 'pull_request' && 'ciRemote' || 'qaRemote' }}\n",
++     True, True, "已知判錯(天花板):ciRemote 在根 build.gradle.kts 依賴 :Signal-Android:lintPlayProdDebug,聚合任務看不到"),
++    ("owncloud/android", ".github/workflows/detekt.yml",
++     "jobs:\n  detekt:\n    steps:\n      - run: ./gradlew detekt\n  unit:\n    steps:\n"
++     "      - run: ./gradlew testDebugUnitTest testMdmDebugUnitTest --continue\n",
++     False, True, "只有 detekt 與單元測試"),
++    ("android/compose-samples", ".github/workflows/build-sample.yml",
++     "jobs:\n  build:\n    steps:\n      - name: Check lint\n        run: ./gradlew lintDebug --stacktrace\n",
++     True, False, "lintDebug"),
++    ("android/sunflower", ".github/workflows/android.yml",
++     "jobs:\n  build:\n    steps:\n      - run: .github/scripts/gradlew_recursive.sh assembleDebug\n"
++     "#        run: ./gradlew pixel2api27DebugAndroidTest --info\n",
++     False, True, "只有 assembleDebug(註解掉的那行不算)"),
++    ("fdroid/fdroidclient(GitLab)", ".gitlab-ci.yml",
++     "stages:\n  - lint\n  - test\napp lint:\n  stage: lint\n  script:\n    - ./gradlew :app:lint :app:ktfmtCheck\n",
++     True, False, ":app:lint"),
++    ("AuroraOSS/AuroraStore(GitLab)", ".gitlab-ci.yml",
++     "stages:\n- build\n- lint\nbuild:\n  stage: build\n  script:\n    - './gradlew assembleVanillaDebug'\n"
++     "lintChecks:\n  stage: lint\n  script:\n    - './gradlew ktlintCheck'\n",
++     False, False, "已知判錯(天花板):stage 名叫 lint,底下只跑 ktlintCheck"),
++    ("bitrise-io/sample-apps-android-sdk22", "bitrise.yml",
++     "workflows:\n  primary:\n    steps:\n    - script:\n        title: gradlew\n        inputs:\n        - content: |\n"
++     "            bash ./gradlew assemble\n    - script:\n        title: gradle assemble & move to DEPLOY dir\n",
++     False, True, "只有 assemble"),
++    ("nickbutcher/plaid(CircleCI)", ".circleci/config.yml",
++     "jobs:\n  build:\n    steps:\n      - run:\n          name: Check and assemble\n"
++     "          command: ./gradlew check assemble assembleAndroidTest --stacktrace\n",
++     True, False, "./gradlew check"),
++    ("microsoft/appcenter-sampleapp-android(Azure)", "azure-pipelines.yml",
++     "steps:\n- task: Gradle@2\n  inputs:\n    gradleWrapperFile: '$(Build.Repository.LocalPath)/gradlew'\n"
++     "    tasks: 'clean build test assembleRelease assembleDebug assembleAndroidTest'\n",
++     True, False, "Azure Gradle 任務的 tasks: 欄位帶 build(r4 修)"),
++    ("wireapp/wire-android(Jenkinsfile)", "Jenkinsfile",
++     "pipeline {\n  stages {\n    stage('Trigger') {\n      steps {\n        script {\n"
++     "          build job: 'android_reloaded_critical_flows', parameters: [string(name: 'TAGS', value: '@CriticalFlows')]\n"
++     "        }\n      }\n    }\n  }\n}\n",
++     None, True, "判不了:gradle 命令在共用函式庫,現行照印"),
++    ("負例:needs: build 加 cache: gradle", ".github/workflows/ci.yml",
++     "jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n          cache: gradle\n"
++     "      - run: ./gradlew assembleDebug\n  release:\n    needs: build\n    steps:\n      - run: echo done\n",
++     False, True, "needs: 是 job 依賴"),
++    ("負例:GitLab stage: build 加 cache gradle", ".gitlab-ci.yml",
++     "stages: [build]\nassemble:\n  stage: build\n  cache:\n    key: gradle\n  script:\n    - ./gradlew assemble\n",
++     False, True, "stage 名不是任務"),
++    ("負例:只有基準線檔與 lint {} 區塊", None, None, False, True, "範本第 1、2 步的痕跡,沒有 CI"),
++    ("負例:npm run lint 加 assembleRelease", ".github/workflows/web.yml",
++     "jobs:\n  a:\n    steps:\n      - run: npm run lint\n      - run: ./gradlew assembleRelease\n",
++     False, False, "已知判錯(天花板):別的工具的 lint 字樣也算跡象"),
++    ("負例:ktlintCheck detekt assembleDebug", ".github/workflows/ci.yml",
++     "jobs:\n  a:\n    steps:\n      - run: ./gradlew ktlintCheck detekt assembleDebug\n",
++     False, True, "都不是 Android Lint"),
++    ("負例:Bitrise android-build", "bitrise.yml",
++     "workflows:\n  primary:\n    steps:\n    - android-build@1:\n        inputs:\n        - variant: debug\n",
++     False, True, "android-build 不是 android-lint"),
++    ("負例:沒有任何 CI", None, "", False, True, "沒有 CI 設定檔"),
++    ("正例:lintDebug", ".github/workflows/ci.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug\n",
++     True, False, "lint<變體>"),
++    ("正例:./gradlew check", ".github/workflows/ci.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew check\n",
++     True, False, "check 帶 lint"),
++    ("正例:Jenkinsfile lintRelease", "Jenkinsfile", "pipeline {\n  stages {\n    stage('L') { steps { sh './gradlew lintRelease' } }\n  }\n}\n",
++     True, False, "Jenkinsfile 的 sh"),
++    ("正例:Jenkinsfile clean build", "Jenkinsfile", "node {\n  sh './gradlew clean build'\n}\n",
++     True, False, "build 帶 check 帶 lint"),
++)
++
++
++def t_lint_android_ci_corpus():
++    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S1:代碼審 r4 邊界席的固定語料(真實 CI 檔節錄加負例)一列一列跑 A1,
++    斷言人工判定;天花板那幾列斷言現行行為並標成已知判錯。"""
++    m = _lng_module()
++    det = "detekt --input {LINT_FILES_CSV} --build-upon-default-config --config a.yml --report sarif:{LINT_SARIF_OUT}"
++    for src, name, text, human, want_a1, note in _ANDROID_CI_CORPUS:
++        root = Path(tempfile.mkdtemp(prefix="gctl-andcorp-"))
++        build = 'plugins { id("com.android.application") }\n'
++        if text is None:   # 只有基準線檔與 lint {} 區塊
++            build += 'android {\n    lint {\n        baseline = file("lint-baseline.xml")\n    }\n}\n'
++            (root / "app").mkdir()
++            (root / "app" / "lint-baseline.xml").write_text("<issues/>\n", encoding="utf-8")
++        (root / "build.gradle.kts").write_text(build, encoding="utf-8")
++        if name:
++            p = root / name
++            p.parent.mkdir(parents=True, exist_ok=True)
++            p.write_text(text, encoding="utf-8")
++        adv = m._lint_android_ci_advisories({"kt": [det]}, root)
++        got = any(" A1:" in a for a in adv)
++        right = human is not None and want_a1 == (not human)
++        tag = "判對" if right else ("判不了" if human is None else "已知判錯(天花板)")
++        check(f"r4 語料 {src}:預期{'印' if want_a1 else '不印'} A1({tag};{note})", got is want_a1, str(adv))
++    print("  ✓ t_lint_android_ci_corpus")
++
++
+ def _detekt_compose_jar():
+     """compose-rules 0.4.28 外掛:先看 LUMOS_DETEKT_COMPOSE_JAR(CI 下載後設),再看本機固定目錄;CI 上找不到判紅。"""
+     import os as _os
+     p = _os.environ.get("LUMOS_DETEKT_COMPOSE_JAR") or str(
+         Path.home() / ".local" / "share" / "lumos" / "detekt-plugins" / "detekt-compose-0.4.28-all.jar")
+     if Path(p).is_file():
+         return p
+     if _os.environ.get("CI"):
+         check("CI 上一定要有 compose-rules 外掛(ci.yml 下載釘版本,路徑放 LUMOS_DETEKT_COMPOSE_JAR)", False, p)
+     return None
