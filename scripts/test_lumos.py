@@ -607,8 +607,10 @@ def t_runner_isolation_r1_fixes():
     check("★前置★ 現場成立:找得到基準線那段", bool(m), "")
     seg = m.group(1) if m else ""
     check("r1-②: 超過基準線會加進 FAIL(不是只 print)", "FAIL += 1" in seg, seg[:200])
-    check("r1-②: 只在基準線有意義的環境判紅(來源 repo 且非 Windows)",
-          "_baseline_applies" in seg and "win32" in seg, seg[:200])
+    _hm = re.search(r"def _skip_baseline_applies\(\):(.{0,400})", src, re.S)
+    check("r1-②: 只在基準線有意義的環境判紅(來源 repo 且非 Windows;判法在單一程序與預設切片共用的 _skip_baseline_applies)",
+          "_baseline_applies = _skip_baseline_applies()" in seg and bool(_hm) and "win32" in _hm.group(1)
+          and "lumos-project-notes" in _hm.group(1), seg[:200])
     check("r1-②: 留了環境變數可以暫時放行", "LUMOSEXPECTED_SKIP_MAX" in src, "")
 
     # ③ 早退也要收尾:真的跑一次打錯字的 -k,看有沒有留下現場
@@ -30651,6 +30653,519 @@ def t_runner_shard_partitions_completely():
     check("分片: 機讀摘要列得出紅的是哪幾支", "failed_names" in d, str(d))
 
 
+# ── 測試總檔預設切片(Projects/測試總檔預設切片_計劃)──
+# 判準來源:計劃〈做法〉1 到 6 與條款 S1 到 S10。沙盒裡放一份執行器,把真測試從清單拿掉、只留幾支假測試;
+# 假測試把自己的程序編號與收到的參數寫進檔案,開了幾個子程序、各收到什麼,從這些檔案判,不從畫面上的字判。
+_FAN_EXTRA = (
+    '\n\nfor _zk in [k for k in list(globals()) if k.startswith("t_") and not k.startswith("t_zzfan_")]:\n'
+    '    del globals()[_zk]\n'
+    '\n\ndef _zzfan_mark(name):\n'
+    '    import json as _zj, os as _zo, subprocess as _zs\n'
+    '    d = _zo.environ.get("ZZFAN_DIR")\n'
+    '    mode = _zo.environ.get("ZZFAN_MODE", "")\n'
+    '    gpid = None\n'
+    '    if mode == "sleep":\n'
+    '        gpid = _zs.Popen([sys.executable, "-c", "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"]).pid\n'
+    '    if d:\n'
+    '        Path(d, name + ".json").write_text(_zj.dumps({"pid": _zo.getpid(), "gpid": gpid, "argv": sys.argv[1:], "child": _zo.environ.get("LUMOS_FANOUT_CHILD")}), encoding="utf-8")\n'
+    '    if mode == "red" and name == "t_zzfan_b":\n'
+    '        check("假的紅", False, "")\n'
+    '    elif mode == "crash" and name == "t_zzfan_c":\n'
+    '        _zo._exit(9)\n'
+    '    elif mode == "skip":\n'
+    '        raise _SrcOnly("假的跳過")\n'
+    '    elif mode == "sleep":\n'
+    '        import time as _zt\n'
+    '        _zt.sleep(60)\n'
+    '    check("假的過 " + name, True, "")\n'
+    + "".join(f'\n\ndef t_zzfan_{c}():\n    _zzfan_mark("t_zzfan_{c}")\n' for c in "abcd")
+)
+
+
+def _fan_box():
+    """沙盒:repo 根放 scripts/lumos 與只剩四支假測試的執行器,另開一個收標記的資料夾;回 (box, 執行器路徑, 標記資料夾)。"""
+    import shutil as _sh
+    box = Path(tempfile.mkdtemp(prefix="gctl-fanout-"))
+    (box / "scripts").mkdir()
+    _sh.copy(GRAPHCTL, box / "scripts" / "lumos")
+    src = Path(__file__).resolve().read_text(encoding="utf-8")
+    tail = '\n\nif __name__ == "__main__":'
+    check("★前置★ 沙盒:執行器檔尾的進入點只有一處", src.count(tail) == 1, src.count(tail))
+    (box / "scripts" / "test_lumos.py").write_text(src.replace(tail, _FAN_EXTRA + tail), encoding="utf-8")
+    marks = box / "marks"
+    marks.mkdir()
+    return box, box / "scripts" / "test_lumos.py", marks
+
+
+def _fan_run(runner, marks, *args, mode="", env_extra=None, timeout=300):
+    import os as _os, subprocess as _sp
+    env = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_TEST_SHARDS", "LUMOS_FANOUT_CHILD")}   # 真跑全套時這支自己就在子程序裡
+    env.update(ZZFAN_DIR=str(marks), ZZFAN_MODE=mode, **(env_extra or {}))
+    for f in marks.glob("*.json"):
+        f.unlink()
+    return _sp.run([sys.executable, str(runner), *args], capture_output=True, text=True, timeout=timeout, env=env)
+
+
+def _fan_marks(marks):
+    import json as _j
+    return {f.stem: _j.loads(f.read_text(encoding="utf-8")) for f in marks.glob("*.json")}
+
+
+def _fan_workdir(out):
+    """預設切片第一行印的「各片輸出寫在 <路徑>」那個資料夾;沒印回 None。"""
+    import re as _re
+    m = _re.search(r"各片輸出寫在 (\S+)", out)
+    return Path(m.group(1)) if m else None
+
+
+def _fan_shard_of(mark):
+    """假測試收到的參數裡 --shard 後面那個值;沒帶回 None。"""
+    a = mark["argv"]
+    return a[a.index("--shard") + 1] if "--shard" in a and a.index("--shard") + 1 < len(a) else None
+
+
+def t_runner_default_fanout_green():
+    """[S1] 不帶條件跑全套、沒設片數 → 開 4 個子程序各跑 --shard i/4;全綠印各片與總數、回 0。"""
+    import shutil as _sh
+    box, runner, marks = _fan_box()
+    try:
+        r = _fan_run(runner, marks)
+        mk = _fan_marks(marks)
+        check("★前置★ 四支假測試都跑到了", sorted(mk) == ["t_zzfan_a", "t_zzfan_b", "t_zzfan_c", "t_zzfan_d"], (sorted(mk), r.stdout[-400:], r.stderr[-300:]))
+        shards = sorted(str(_fan_shard_of(m)) for m in mk.values())
+        check("S1 每支測試在帶 --shard i/4 的子程序裡跑,四片各一支", shards == ["1/4", "2/4", "3/4", "4/4"], shards)
+        check("S1 四個不同的子程序", len({m["pid"] for m in mk.values()}) == 4, [m["pid"] for m in mk.values()])
+        check("S10 每個子程序都帶子程序標記", all(m.get("child") == "1" for m in mk.values()), [m.get("child") for m in mk.values()])
+        check("S1 全綠 → rc0、印四片各一行與總數", r.returncode == 0 and all(f"第 {i} 片" in r.stdout for i in range(1, 5))
+              and "4 passed, 0 failed" in r.stdout, r.stdout[-600:])
+        work = _fan_workdir(r.stdout)
+        check("S1 全綠又沒帶 --keep-tmp → 各片輸出的暫存資料夾刪掉", work is not None and not work.exists(), (work, r.stdout[:300]))
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_red():
+    """[S2] 預設切片時有一片紅 → rc1、印紅的測試名與留著的記錄檔路徑(路徑真的存在)。"""
+    import re as _re, shutil as _sh
+    box, runner, marks = _fan_box()
+    try:
+        r = _fan_run(runner, marks, mode="red", env_extra={"LUMOS_TEST_SHARDS": "2"})   # 2 片就驗得到,記憶體減半
+        check("★前置★ 是預設切片跑的(兩個子程序)", len({m["pid"] for m in _fan_marks(marks).values()}) == 2, r.stdout[-300:])
+        check("S2 有紅 → rc1、點名 t_zzfan_b", r.returncode == 1 and "t_zzfan_b" in r.stdout, r.stdout[-600:])
+        logs = [Path(x) for x in _re.findall(r"(/\S+\.log)", r.stdout)]
+        check("S2 印出留著的記錄檔路徑,檔案真的在", logs and all(x.is_file() for x in logs), (logs, r.stdout[-400:]))
+        check("S2 留下的資料夾是 gctl-run- 開頭(超過一天由執行器的修剪收掉,不會一直累積)",
+              logs and all(x.parent.name.startswith("gctl-run-") for x in logs), [str(x.parent) for x in logs])
+        for x in logs:
+            _sh.rmtree(x.parent, ignore_errors=True)
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_shard_crash():
+    """[S3] 有一片沒寫出機讀摘要就結束(假測試 os._exit)→ 那片算紅、講明第幾片當掉、rc1。"""
+    import re as _re, shutil as _sh
+    box, runner, marks = _fan_box()
+    try:
+        summ = box / "sum.json"
+        r = _fan_run(runner, marks, "--json-summary", str(summ), mode="crash", env_extra={"LUMOS_TEST_SHARDS": "2"})
+        mk = _fan_marks(marks)
+        crashed = _fan_shard_of(mk["t_zzfan_c"]) if "t_zzfan_c" in mk else None
+        check("★前置★ t_zzfan_c 在某一片的子程序裡跑到了", crashed is not None, (mk, r.stdout[-300:]))
+        n = crashed.split("/")[0] if crashed else "?"
+        check("S3 當掉的那片算紅、講明第幾片、rc1", r.returncode == 1 and f"第 {n} 片" in r.stdout and "沒寫出" in r.stdout, r.stdout[-600:])
+        import json as _j
+        d = _j.loads(summ.read_text(encoding="utf-8")) if summ.is_file() else {}
+        check("S3 合併摘要記下沒過的是哪一片(只讀摘要的人不會讀成零紅)", d.get("bad_shards") == [int(n)] if n != "?" else False, d)
+        for x in _re.findall(r"(/\S+\.log)", r.stdout):
+            _sh.rmtree(Path(x).parent, ignore_errors=True)
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_serial():
+    """[S4] --serial、-x、片數 1、片數不是正整數、或帶 -k/--shard/--suite → 在本程序跑、不開子程序(所有假測試同一個程序編號、參數沒有被加 --shard)。"""
+    import shutil as _sh
+    box, runner, marks = _fan_box()
+    try:
+        cases = [("--serial", ("--serial",), {}), ("片數 1", (), {"LUMOS_TEST_SHARDS": "1"}),
+                 ("片數 abc", (), {"LUMOS_TEST_SHARDS": "abc"}), ("片數 0", (), {"LUMOS_TEST_SHARDS": "0"}),
+                 ("-k", ("-k", "t_zzfan_"), {}), ("--shard 1/1", ("--shard", "1/1"), {}),
+                 ("帶子程序標記", (), {"LUMOS_FANOUT_CHILD": "1"}), ("-x(一紅就停要單一程序)", ("-x",), {})]
+        for label, args, env in cases:
+            r = _fan_run(runner, marks, *args, env_extra=env)
+            mk = _fan_marks(marks)
+            pids = {m["pid"] for m in mk.values()}
+            argv_ok = all(m["argv"] == list(args) for m in mk.values())
+            check(f"S4 {label}:四支都在同一個程序跑、參數原樣、rc0", len(mk) == 4 and len(pids) == 1 and argv_ok and r.returncode == 0,
+                  (label, pids, [m["argv"] for m in mk.values()], r.returncode, r.stderr[-300:]))
+        r = _fan_run(runner, marks, "--suite", "docs")
+        check("S4 --suite:不開子程序(沒印切片那一行、假測試沒有在帶 --shard 的程序跑)",
+              "全套切成" not in r.stdout and not any(_fan_shard_of(m) for m in _fan_marks(marks).values()), r.stdout[-300:])
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_passthrough():
+    """[S6] 預設切片帶 --seed、--keep-tmp、--ff → 每個子程序收到同樣的旗標;帶 --json-summary → 寫一份合併摘要。"""
+    import json as _j, shutil as _sh
+    box, runner, marks = _fan_box()
+    try:
+        summ = box / "sum.json"
+        r = _fan_run(runner, marks, "--seed", "7", "--keep-tmp", "--ff", "--json-summary", str(summ), env_extra={"LUMOS_TEST_SHARDS": "2"})
+        mk = _fan_marks(marks)
+        check("★前置★ 是預設切片跑的(兩個子程序)", len({m["pid"] for m in mk.values()}) == 2, r.stdout[-300:])
+        want = ["--seed", "7", "--keep-tmp", "--ff"]
+        check("S6 每個子程序都收到 --seed 7、--keep-tmp、--ff",
+              all(all(w in m["argv"] for w in want) and m["argv"][m["argv"].index("--seed") + 1] == "7" for m in mk.values()),
+              [m["argv"] for m in mk.values()])
+        d = _j.loads(summ.read_text(encoding="utf-8")) if summ.is_file() else {}
+        check("S6 合併摘要:過 4、紅 0、shard 是 null", d.get("passed") == 4 and d.get("failed") == 0 and "shard" in d and d["shard"] is None, d)
+        work = _fan_workdir(r.stdout)
+        check("S6 帶 --keep-tmp → 各片輸出的暫存資料夾留著", work is not None and work.is_dir(), (work, r.stdout[:300]))
+        if work is not None:
+            _sh.rmtree(work, ignore_errors=True)
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_skip_total():
+    """[S7] 來源 repo、非 Windows:各片跳過都不超過上限(上限 1、每片 1 支),加總 4 支超過 → 判紅並印加總。"""
+    import shutil as _sh
+    if sys.platform == "win32":
+        raise _SrcOnly("Windows 不判跳過基準線,這段沒驗到")
+    box, runner, marks = _fan_box()
+    try:
+        (box / "skills" / "lumos-project-notes").mkdir(parents=True)
+        r = _fan_run(runner, marks, mode="skip", env_extra={"LUMOSEXPECTED_SKIP_MAX": "1"})
+        # 失敗說明只附相關那幾行:沙盒輸出裡有「N skipped」字樣,整段貼出來會讓讀結果的工具(規格閘)誤判這支被跳過
+        rel = [ln for ln in r.stdout.splitlines() if "加總" in ln or "比預期上限" in ln]
+        check("★前置★ 是預設切片跑的(四個子程序)", len({m["pid"] for m in _fan_marks(marks).values()}) == 4, len(_fan_marks(marks)))
+        check("★前置★ 各片各跳 1 支,沒有一片自己超過上限", not [ln for ln in rel if "加總" not in ln], rel)
+        check("S7 加總 4 支超過上限 1 → rc 非 0、印加總", r.returncode != 0 and any("加總" in ln and "4" in ln for ln in rel), (r.returncode, rel))
+        check("S7 只有跳過超量時不印空的「沒過的片」清單", "沒過的片" not in r.stdout, r.stdout[-400:])
+        check("S7 加總那行點名被跳過的是哪幾支", any("加總" in ln and "t_zzfan_a" in ln and "t_zzfan_d" in ln for ln in rel), rel)
+    finally:
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_interrupt():
+    """[S8] 預設切片跑到一半母程序收到中斷(Ctrl-C 的 SIGINT、kill 預設的 SIGTERM、關終端機的 SIGHUP)→ 各片與它們開的
+    子程序整組收掉、不留孤兒(孫程序忽略 TERM、領頭先死也要收到),母程序回 128+訊號編號(130、143、129,同推送前閘)。"""
+    import os as _os, signal as _sig
+    if not hasattr(_os, "setpgid"):
+        raise _SrcOnly("沒有行程群組的平台,這段沒驗到")
+    for sig, rc in ((_sig.SIGINT, 130), (_sig.SIGTERM, 143), (_sig.SIGHUP, 129)):
+        _fan_interrupt_case(sig, rc)
+
+
+def _fan_alive(pid):
+    import os as _os
+    try:
+        _os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _fan_wait_gone(pids, secs=10):
+    """等這些程序都結束,回還活著的;結束了但還沒被收屍的(殭屍)也算結束——孫程序的母親被 KILL 後由 init 收。"""
+    import time as _tm
+    end = _tm.time() + secs
+    left = [x for x in pids if x]
+    while left and _tm.time() < end:
+        left = [x for x in left if _fan_alive(x) and not _fan_zombie(x)]
+        if left:
+            _tm.sleep(0.1)
+    return left
+
+
+def _fan_zombie(pid):
+    import subprocess as _sp
+    r = _sp.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return r.stdout.strip().startswith("Z")
+
+
+def _fan_reap(pids):
+    """測試自己收尾:不管斷言過沒過,把還活著的片與孫程序整組 KILL 掉,紅了也不留孤兒。"""
+    import os as _os, signal as _sig
+    for x in [y for y in pids if y]:
+        for f in (lambda q: _os.killpg(q, _sig.SIGKILL), lambda q: _os.kill(q, _sig.SIGKILL)):
+            try:
+                f(x)
+            except OSError:
+                pass
+
+
+def _fan_interrupt_case(sig, want_rc):
+    import shutil as _sh, subprocess as _sp, time as _tm
+    box, runner, marks = _fan_box()
+    mk = {}
+    try:
+        env = {k: v for k, v in _os_mod.environ.items() if k not in ("LUMOS_TEST_SHARDS", "LUMOS_FANOUT_CHILD")}
+        env.update(ZZFAN_DIR=str(marks), ZZFAN_MODE="sleep", LUMOS_TEST_SHARDS="2")   # 2 片就驗得到,記憶體減半
+        # 推送前閘與 CI 在背景(&)起測試,背景程序的 SIGINT 是忽略的、會一路繼承;這裡把它裝回預設,
+        # 不然母程序收不到 Ctrl-C([[Systems/bound-tests-gate]] 同一個坑,代碼審 r1)
+        p = _sp.Popen([sys.executable, str(runner)], stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, env=env,
+                      preexec_fn=_ppc_sigint_default)
+        end = _tm.time() + 120
+        while _tm.time() < end and len(list(marks.glob("*.json"))) < 2:
+            _tm.sleep(0.2)
+        _tm.sleep(0.5)
+        mk = _fan_marks(marks)
+        check(f"★前置★ {sig.name}:兩片都開跑了、各開了一個忽略 TERM 的孫程序", len({m["pid"] for m in mk.values()}) == 2
+              and all(m.get("gpid") for m in mk.values()), sorted(mk))
+        p.send_signal(sig)
+        try:
+            p.communicate(timeout=60)
+        except _sp.TimeoutExpired:
+            p.kill()
+            p.communicate()
+        left = _fan_wait_gone([m["pid"] for m in mk.values()] + [m.get("gpid") for m in mk.values()])
+        check(f"S8 母程序收到 {sig.name} 後各片與孫程序都收掉了、回 {want_rc}", not left and p.returncode == want_rc, (left, p.returncode))
+    finally:
+        _fan_reap([m["pid"] for m in mk.values()] + [m.get("gpid") for m in mk.values()])
+        _sh.rmtree(box, ignore_errors=True)
+
+
+def t_runner_default_fanout_spawn_error():
+    """[S11] 開片開到一半出錯(第 3 片開不出來:檔案描述子用完)→ 母程序把已開的片整組收掉再讓錯誤浮出,不留孤兒。
+    同一個程序裡呼叫預設切片的主函式,只把「開子程序」換成假的:前兩次開只會睡覺的無害程序(不開真的測試片),
+    第三次丟 EMFILE;被測程式本身不加測試專用開關。"""
+    import argparse as _ap, contextlib as _cl, errno as _er, io as _io, os as _os, signal as _sig, subprocess as _sp, shutil as _sh
+    from unittest import mock as _mock
+    if not hasattr(_os, "setpgid"):
+        raise _SrcOnly("沒有行程群組的平台,這段沒驗到")
+    real, made, seen, real_kill = _sp.Popen, [], [], _fanout_kill
+
+    def fake(cmd, **kw):
+        if len(made) >= 2:
+            raise OSError(_er.EMFILE, "Too many open files")
+        q = real([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True,
+                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, stdin=_sp.DEVNULL)
+        made.append(q)
+        return q
+
+    def spy(ps):
+        seen.append(_sig.getsignal(_sig.SIGTERM))
+        real_kill(ps)
+    err, work, buf = "", None, _io.StringIO()
+    try:
+        with _mock.patch.object(_sp, "Popen", fake), _mock.patch.object(sys.modules[__name__], "_fanout_kill", spy), \
+                _mock.patch.dict(_os.environ, {"LUMOS_TEST_SHARDS": "4"}), _cl.redirect_stdout(buf):
+            try:
+                _fanout_main(_ap.Namespace(seed=None, keep_tmp=False, ff=False, json_summary=None))
+            except OSError as e:
+                err = str(e)
+        work = _fan_workdir(buf.getvalue())
+        check("★前置★ 真的開了兩片、第三片開不出來", len(made) == 2 and "Too many open files" in err, (len(made), err))
+        left = _fan_wait_gone([q.pid for q in made])
+        check("S11 開片途中出錯 → 錯誤浮出、已開的兩片都收掉了", not left and all(q.poll() is not None for q in made), (left, err))
+        check("S11 出錯收尾時 TERM 已先忽略(收片途中再來的訊號打不斷)", seen == [_sig.SIG_IGN], seen)
+    finally:
+        _fan_reap([q.pid for q in made])
+        for q in made:
+            try:
+                q.wait(timeout=5)
+            except _sp.TimeoutExpired:
+                pass
+        if work is not None:
+            _sh.rmtree(work, ignore_errors=True)
+
+
+def t_runner_fanout_signal_handling():
+    """[S8] 預設切片的訊號處理,同一個程序裡直接呼叫(不開測試片):
+    ① 原本就忽略的訊號(nohup 忽略 HUP)照舊忽略、不接;沒忽略的才接 ② 開始收片後 INT、TERM、HUP 都先忽略,收尾後還原
+    ③ 開片與記下程序之間收到 TERM,剛開的那片照樣在清單裡(訊號等記好了才處理)
+    ④ 主函式開片時收到 TERM → 收片當下三個訊號已先忽略、回 143、還原。"""
+    import argparse as _ap, contextlib as _cl, io as _io, signal as _sig, subprocess as _sp, shutil as _sh
+    from unittest import mock as _mock
+    if not hasattr(_sig, "SIGHUP"):
+        raise _SrcOnly("沒有 SIGHUP 的平台,這段沒驗到")
+    keep = {x: _sig.getsignal(x) for x in (_sig.SIGINT, _sig.SIGTERM, _sig.SIGHUP)}
+    real, made, seen, real_kill = _sp.Popen, [], [], _fanout_kill
+    work = Path(tempfile.mkdtemp(prefix="gctl-fansig-"))
+
+    def fake(cmd, **kw):   # 開一個只會睡覺的無害程序,開好之後馬上對自己送 TERM(落在「開好」與「記下」之間)
+        q = real([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True,
+                 stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, stdin=_sp.DEVNULL)
+        made.append(q)
+        _os_mod.kill(_os_mod.getpid(), _sig.SIGTERM)
+        return q
+
+    def spy(ps):
+        seen.append((_sig.getsignal(_sig.SIGTERM), _sig.getsignal(_sig.SIGINT)))
+        real_kill(ps)
+    try:
+        _sig.signal(_sig.SIGHUP, _sig.SIG_IGN)
+        _sig.signal(_sig.SIGTERM, _sig.SIG_DFL)
+        st = _fanout_trap()
+        check("S8 原本忽略的 HUP(nohup)照舊忽略", _sig.getsignal(_sig.SIGHUP) == _sig.SIG_IGN, _sig.getsignal(_sig.SIGHUP))
+        check("★對照★ 原本沒忽略的 TERM 有接", callable(_sig.getsignal(_sig.SIGTERM)), _sig.getsignal(_sig.SIGTERM))
+        _fanout_hush(st)
+        check("S8 開始收片後 INT、TERM 都先忽略(第二個訊號不打斷收尾)",
+              _sig.getsignal(_sig.SIGINT) == _sig.SIG_IGN and _sig.getsignal(_sig.SIGTERM) == _sig.SIG_IGN,
+              (_sig.getsignal(_sig.SIGINT), _sig.getsignal(_sig.SIGTERM)))
+        _fanout_untrap(st)
+        check("S8 收尾後還原成原本的處理", _sig.getsignal(_sig.SIGINT) == keep[_sig.SIGINT] and _sig.getsignal(_sig.SIGTERM) == _sig.SIG_DFL
+              and _sig.getsignal(_sig.SIGHUP) == _sig.SIG_IGN, (_sig.getsignal(_sig.SIGINT), _sig.getsignal(_sig.SIGTERM)))
+        # ③
+        st, procs, hit = _fanout_trap(), [], False
+        with _mock.patch.object(_sp, "Popen", fake):
+            try:
+                _fanout_spawn(procs, 1, work, [])
+            except KeyboardInterrupt:
+                hit = True
+            finally:
+                _fanout_untrap(st)
+        check("★前置★ TERM 真的收到、走了中斷", hit and len(made) == 1, (hit, len(made)))
+        check("S8 開片與記下之間收到 TERM → 剛開的那片已在清單裡,收得到", len(procs) == 1 and procs[0][1] is made[0], len(procs))
+        for _i, _p, log, _t0 in procs:
+            log.close()
+        # ④
+        with _mock.patch.object(_sp, "Popen", fake), _mock.patch.object(sys.modules[__name__], "_fanout_kill", spy), \
+                _mock.patch.dict(_os_mod.environ, {"LUMOS_TEST_SHARDS": "2"}), \
+                _cl.redirect_stdout(_io.StringIO()), _cl.redirect_stderr(_io.StringIO()):
+            rc = _fanout_main(_ap.Namespace(seed=None, keep_tmp=False, ff=False, json_summary=None))
+        check("S8 中斷收尾時 INT、TERM 已先忽略(收片途中再來的訊號打不斷)、回 143",
+              rc == 143 and seen == [(_sig.SIG_IGN, _sig.SIG_IGN)], (rc, seen))
+        check("S8 收尾後 TERM 還原成原本的處理", _sig.getsignal(_sig.SIGTERM) == _sig.SIG_DFL, _sig.getsignal(_sig.SIGTERM))
+        check("S8 收尾後那一片已經收掉", not _fan_wait_gone([made[-1].pid]), made[-1].pid)
+    finally:
+        for x, h in keep.items():
+            _sig.signal(x, h)
+        _fan_reap([q.pid for q in made])
+        for q in made:
+            try:
+                q.wait(timeout=5)
+            except _sp.TimeoutExpired:
+                pass
+        _sh.rmtree(work, ignore_errors=True)
+
+
+def t_runner_fanout_spawn_mask():
+    """[S8] 開片時擋住的訊號不會跟著傳給子程序:照 _fanout_spawn 給的參數真的開一個子程序(只把指令換成「印出自己被擋住的訊號」,
+    不開測試片),子程序起來時沒有任何訊號被擋;開完母程序的遮罩回到原樣(代碼審 std r2:拿掉子程序開頭還原遮罩那行,各片收不到中斷)。"""
+    import signal as _sig, subprocess as _sp, shutil as _sh
+    from unittest import mock as _mock
+    if not hasattr(_sig, "pthread_sigmask"):
+        raise _SrcOnly("沒有 pthread_sigmask 的平台,開片不擋訊號,這段沒驗到")
+    real, made = _sp.Popen, []
+    work = Path(tempfile.mkdtemp(prefix="gctl-fanmask-"))
+    before = _sig.pthread_sigmask(_sig.SIG_BLOCK, [])
+
+    def show_mask(cmd, **kw):
+        q = real([sys.executable, "-c", "import signal; print(sorted(int(s) for s in signal.pthread_sigmask(signal.SIG_BLOCK, [])))"], **kw)
+        made.append(q)
+        return q
+    procs = []
+    try:
+        with _mock.patch.object(_sp, "Popen", show_mask):
+            _fanout_spawn(procs, 1, work, [])
+        procs[0][1].wait(timeout=30)
+        procs[0][2].close()
+        got = (work / "shard1.log").read_text(encoding="utf-8").strip()
+        check("★前置★ 子程序真的開起來、印出了遮罩", procs and got.startswith("["), got)
+        check("S8 開片時擋住的訊號不會傳給子程序(子程序起來時沒有任何訊號被擋)", got == "[]", got)
+        check("S8 開完片母程序的遮罩回到原樣", _sig.pthread_sigmask(_sig.SIG_BLOCK, []) == before, _sig.pthread_sigmask(_sig.SIG_BLOCK, []))
+    finally:
+        _fan_reap([q.pid for q in made])
+        for q in made:
+            try:
+                q.wait(timeout=5)
+            except _sp.TimeoutExpired:
+                pass
+        _sh.rmtree(work, ignore_errors=True)
+
+
+def t_runner_fanout_shards_parse():
+    """[S4] 片數判法跟推送前閘一樣(沒設或空字串 4;只認半形數字組成的正整數,前後空白、全形、上標、0 都當 1),上限 16;
+    同一個程序裡直接呼叫判斷函式驗,不開子程序。"""
+    import os as _os
+    old = _os.environ.get("LUMOS_TEST_SHARDS")
+    try:
+        for v, want in ((None, 4), ("", 4), ("4", 4), ("2", 2), ("1", 1), (" 4 ", 1), ("４", 1), ("²", 1), ("①", 1),
+                        ("abc", 1), ("0", 1), ("-3", 1), ("16", 16), ("64", 16)):
+            if v is None:
+                _os.environ.pop("LUMOS_TEST_SHARDS", None)
+            else:
+                _os.environ["LUMOS_TEST_SHARDS"] = v
+            try:
+                got = _fanout_shards()
+            except Exception as e:   # 崩潰本身就是要抓的錯
+                got = f"{e.__class__.__name__}"
+            check(f"S4 片數 {v!r} → {want}", got == want, got)
+    finally:
+        if old is None:
+            _os.environ.pop("LUMOS_TEST_SHARDS", None)
+        else:
+            _os.environ["LUMOS_TEST_SHARDS"] = old
+
+
+def t_runner_fanout_bad_summary_counts_red():
+    """[S3] 各片的機讀摘要形狀不對也當紅:同一個程序裡直接餵假的片結果給等待與加總函式(不開子程序)。
+    判準來源:計劃〈做法〉3「沒寫出摘要的片算紅」;摘要不是物件、數字欄是布林,都等於沒有可信的摘要。"""
+    import io as _io, shutil as _sh
+
+    class _Done:
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+    work = Path(tempfile.mkdtemp(prefix="gctl-fansum-"))
+    try:
+        (work / "shard1.json").write_text("[]", encoding="utf-8")
+        (work / "shard2.json").write_text('{"passed": 3, "failed": 0, "skipped": 0}', encoding="utf-8")
+        import contextlib as _cl
+        with _cl.redirect_stdout(_io.StringIO()):
+            res = _fanout_wait([(1, _Done(), _io.BytesIO(), 0.0), (2, _Done(), _io.BytesIO(), 0.0)], work, 2)
+        check("S3 摘要是陣列不是物件 → 當成沒有摘要", res[1][1] is None, res[1])
+        _tot, bad = _fanout_total(res, 2)
+        check("S3 摘要形狀不對的那片算沒過,另一片照算", bad == [1] and _tot["passed"] == 3, (bad, _tot))
+        tot, bad = _fanout_total({1: (0, {"passed": True, "failed": True, "skipped": True}), 2: (0, {"passed": 2, "failed": 0, "skipped": 0})}, 2)
+        check("數字欄是布林不算數(True 不能當 1 加進總數)", (tot["passed"], tot["failed"], tot["skipped"]) == (2, 0, 0), tot)
+    finally:
+        _sh.rmtree(work, ignore_errors=True)
+
+
+def t_runner_fanout_child_never_fans_out():
+    """[S10] 帶子程序標記時,就算參數判斷說要切(沒帶任何條件、片數 4),也不切——同一個程序裡直接呼叫判斷函式驗,
+    不用真程序驗(真程序驗這道,改壞它就是程序炸彈)。對照:拿掉標記同樣的參數會切。"""
+    import argparse as _ap, os as _os
+    a = _ap.Namespace(keyword=None, shard=None, suite=None, list=False, serial=False, exitfirst=False)
+    old = {k: _os.environ.get(k) for k in ("LUMOS_FANOUT_CHILD", "LUMOS_TEST_SHARDS")}
+    try:
+        _os.environ.pop("LUMOS_TEST_SHARDS", None)
+        _os.environ.pop("LUMOS_FANOUT_CHILD", None)
+        check("★對照★ 沒帶標記、沒帶條件 → 要切", _fanout_wanted(a) is True)
+        _os.environ["LUMOS_FANOUT_CHILD"] = "1"
+        check("S10 帶子程序標記 → 不切", _fanout_wanted(a) is False)
+        import inspect as _i
+        src = _i.getsource(_fanout_wanted)
+        check("S10 判斷函式先看標記再看參數(標記那道在參數判斷之前)",
+              "os.environ.get(_FANOUT_CHILD_ENV)" in src and src.index("os.environ.get(_FANOUT_CHILD_ENV)") < src.index("args.keyword"), src[-300:])
+    finally:
+        for k, v in old.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+
+def t_runner_default_fanout_docs():
+    """[S9] --help 與本 repo CLAUDE.md 的測試子集那節寫明:不帶參數是切片跑全套、--serial 單一程序。"""
+    import subprocess as _sp
+    r = _sp.run([sys.executable, str(Path(__file__).resolve()), "--help"], capture_output=True, text=True, timeout=60)
+    check("S9 --help 講預設切片與 --serial", r.returncode == 0 and "--serial" in r.stdout and "切成" in r.stdout, r.stdout[:600])
+    md = (Path(__file__).resolve().parent.parent / "CLAUDE.md").read_text(encoding="utf-8")
+    sec = md[md.find("## 本 repo 的測試子集怎麼跑"):]
+    sec = sec[:sec.find("\n## ", 3)] if "\n## " in sec[3:] else sec
+    check("S9 CLAUDE.md 測試那節講預設切片與 --serial", "--serial" in sec and "切成" in sec, sec[:400])
+
+
 def t_runner_shard_by_duration():
     """[推送與CI提速 S1、S2]有耗時表就照耗時分(由大到小丟給總權重最小的一份);沒表照名字輪流分;表壞了每一份都擋。"""
     import subprocess as _sp, json as _j, shutil as _sh, statistics as _st
@@ -48767,6 +49282,226 @@ def _isolate_environment():
     return root
 
 
+_FANOUT_MAX = 16   # 片數上限:各片各載入整支測試檔(約 600MB),片數照環境變數無上限地開會把記憶體吃光(代碼審 r1)
+
+
+def _fanout_shards():
+    """預設切片的片數:LUMOS_TEST_SHARDS,判法跟推送前閘一樣(沒設或空字串是 4;不是半形數字組成的正整數當 1,前後空白、全形、上標都不算),
+    再壓在 _FANOUT_MAX 以內。"""
+    import os, re as _re
+    v = os.environ.get("LUMOS_TEST_SHARDS") or "4"
+    n = int(v) if _re.fullmatch(r"[0-9]+", v) else 0
+    return min(n, _FANOUT_MAX) if n >= 1 else 1
+
+
+_FANOUT_CHILD_ENV = "LUMOS_FANOUT_CHILD"   # 預設切片開的子程序帶這個標記;帶著就絕不再切
+
+
+def _fanout_wanted(args):
+    """全套(沒帶 -k、--shard、--suite、--list、--serial、-x)而且片數大於 1 才切;其他照舊在本程序跑。
+    -x 要的是「一紅就停」,切片後只停得了紅的那一片、其他片照跑完,所以帶 -x 照舊單一程序跑(代碼審 r1)。
+    ★帶 LUMOS_FANOUT_CHILD 的一律不切★:子程序本來就帶 --shard,這是第二道——參數判斷哪天寫錯,子程序也不會一層層再開
+    (2026-11-05 自我變異把「帶 --shard 就不切」改壞,沙盒裡分裂出 245 支、吃光記憶體,整台當機)。"""
+    import os
+    if os.environ.get(_FANOUT_CHILD_ENV):
+        return False
+    return not (args.keyword or args.shard or args.suite or args.list or args.serial or args.exitfirst) and _fanout_shards() > 1
+
+
+def _fanout_kill(procs):
+    """收掉各片與它們開的子程序:有行程群組的平台每一片的整組都送 TERM、等領頭的最多 5 秒,再每一組都送 KILL——
+    不看領頭死了沒:領頭先死、同組孫程序忽略 TERM 時也要收得到(代碼審 r1);沒有行程群組的平台只收得到領頭那一個。"""
+    import os, signal as _sig, time
+    ps = [p for _i, p, _log, _t0 in procs]
+    grp = hasattr(os, "killpg")
+    for sig in (_sig.SIGTERM, getattr(_sig, "SIGKILL", _sig.SIGTERM)):
+        for p in ps:
+            try:
+                if grp:
+                    os.killpg(p.pid, sig)
+                elif p.poll() is None:
+                    p.terminate() if sig == _sig.SIGTERM else p.kill()
+            except OSError:
+                pass
+        end = time.time() + 5
+        while time.time() < end and any(p.poll() is None for p in ps):
+            time.sleep(0.1)
+
+
+def _fanout_wait(procs, work, n):
+    """等各片結束,每片結束印一行;回 {片號: (離開碼, 機讀摘要 dict 或 None)}。摘要讀不到或形狀不對當 None(算紅)。"""
+    import json as _j, time
+    done, res = set(), {}
+    while len(done) < n:
+        for i, p, log, t0 in procs:
+            if i in done or p.poll() is None:
+                continue
+            done.add(i)
+            log.close()
+            try:
+                d = _j.loads((work / f"shard{i}.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                d = None
+            d = d if isinstance(d, dict) else None
+            res[i] = (p.returncode, d)
+            if d is None:
+                print(f"  第 {i} 片:沒寫出結果摘要就結束了(離開碼 {p.returncode}),當成紅", flush=True)
+            else:
+                print(f"  第 {i} 片:{d.get('passed', 0)} 過、{d.get('failed', 0)} 紅、跳過 {d.get('skipped', 0)}"
+                      f"(離開碼 {p.returncode},{time.time() - t0:.0f} 秒)", flush=True)
+        time.sleep(0.2)
+    return res
+
+
+def _fanout_total(res, n):
+    """各片摘要加總;回 (加總 dict, 沒過的片號清單)。離開碼不是 0 或沒有摘要的片算沒過;數字欄只收整數(布林不算)。"""
+    tot = {"passed": 0, "failed": 0, "skipped": 0, "failed_names": [], "skipped_names": []}
+    bad = []
+    for i in range(1, n + 1):
+        rc, d = res[i]
+        if d is None or rc != 0:
+            bad.append(i)
+        d = d or {}
+        for k in ("passed", "failed", "skipped"):
+            v = d.get(k, 0)
+            tot[k] += v if isinstance(v, int) and not isinstance(v, bool) else 0
+        for k in ("failed_names", "skipped_names"):
+            v = d.get(k)
+            tot[k] += [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+    return tot, bad
+
+
+def _fanout_main(args):
+    """全套切成 N 片、各開子程序跑 --shard i/N(加上使用者給的 --seed、--keep-tmp、--ff),各寫一份機讀摘要;
+    每片結束印一行,全部結束印總數與紅的測試名;沒寫出摘要的片算紅;各片跳過加總照單一程序的上限判。
+    子程序各自一個行程群組;中斷(Ctrl-C、TERM、HUP)或開片、等片途中出任何例外,都先把已開的整組收掉。
+    回 0 全綠、1 有紅、被訊號中斷回 128+訊號編號(Ctrl-C 130、TERM 143、HUP 129,同推送前閘)。"""
+    n = _fanout_shards()
+    work = Path(tempfile.mkdtemp(prefix="gctl-run-fanout-"))   # gctl-run- 前綴:紅了留下的超過一天由 _isolate_environment 的修剪收掉(代碼審 std r1)
+    extra = ([] if args.seed is None else ["--seed", str(args.seed)]) + (["--keep-tmp"] if args.keep_tmp else []) \
+        + (["--ff"] if args.ff else [])
+    print(f"全套切成 {n} 片同時跑(要單一程序跑加 --serial;片數用 LUMOS_TEST_SHARDS 調,最多 {_FANOUT_MAX});各片輸出寫在 {work}", flush=True)
+    procs, prev = [], _fanout_trap()
+    try:
+        _fanout_spawn(procs, n, work, extra)
+        res = _fanout_wait(procs, work, n)
+    except KeyboardInterrupt:
+        _fanout_hush(prev)   # 收片途中再來的訊號不准打斷收尾(代碼審 std r1)
+        _fanout_kill(procs)
+        print(f"\n中斷:各片已收掉;輸出留在 {work}", file=sys.stderr)
+        return 128 + (prev["got"][-1] if prev["got"] else 2)
+    except BaseException:
+        _fanout_hush(prev)
+        _fanout_kill(procs)   # 開片開到一半出錯(檔案描述子用完、記憶體不足):已開的片不能留成孤兒
+        raise
+    finally:
+        for _i, _p, log, _t0 in procs:
+            log.close()
+        _fanout_untrap(prev)
+    return _fanout_report(args, res, n, work)
+
+
+def _fanout_trap():
+    """TERM、HUP 跟 Ctrl-C 走同一條收尾(丟 KeyboardInterrupt),記下是哪個訊號;回原本的處理器與收到的訊號清單。
+    原本就被設成忽略的(nohup 忽略 HUP、背景程序忽略 INT)照舊忽略,不接(代碼審 std r1)。"""
+    import signal as _sig
+    st = {"got": [], "old": {}}
+
+    def _h(signum, _frame):
+        st["got"].append(signum)
+        raise KeyboardInterrupt
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(_sig, name, None)
+        if sig is None or _sig.getsignal(sig) == _sig.SIG_IGN:
+            continue
+        try:
+            st["old"][sig] = _sig.signal(sig, _h)
+        except (ValueError, OSError):
+            pass
+    return st
+
+
+def _fanout_hush(st):
+    """開始收片之後 INT、TERM、HUP 一律先忽略,第二個訊號不會打斷收尾;原本的處理器記進 st,收尾後由 _fanout_untrap 還原。"""
+    import signal as _sig
+    for name in ("SIGINT", "SIGTERM", "SIGHUP"):
+        sig = getattr(_sig, name, None)
+        if sig is None:
+            continue
+        try:
+            old = _sig.signal(sig, _sig.SIG_IGN)
+        except (ValueError, OSError):
+            continue
+        st["old"].setdefault(sig, old)
+
+
+def _fanout_untrap(st):
+    import signal as _sig
+    for sig, old in st["old"].items():
+        try:
+            _sig.signal(sig, old)
+        except (ValueError, OSError):
+            pass
+
+
+def _fanout_spawn(procs, n, work, extra):
+    """開 n 個子程序(各帶子程序標記、各自一個行程群組),邊開邊放進 procs——開到一半被中斷時,已開的也收得到。
+    開一片到記進 procs 之間先擋住 INT、TERM、HUP,訊號等記好了才處理,不會漏收剛開的那片;子程序開頭把遮罩還原(代碼審 std r1)。"""
+    import os, signal as _sig, subprocess as _sp, time
+    sigs = {getattr(_sig, x) for x in ("SIGINT", "SIGTERM", "SIGHUP") if hasattr(_sig, x)}
+    mask = hasattr(_sig, "pthread_sigmask")
+    for i in range(1, n + 1):
+        log = open(work / f"shard{i}.log", "wb")
+        cmd = [sys.executable, str(Path(__file__).resolve()), "--shard", f"{i}/{n}", "--json-summary", str(work / f"shard{i}.json"), *extra]
+        kw = {"start_new_session": True} if hasattr(os, "setpgid") else {}
+        env = dict(os.environ, **{_FANOUT_CHILD_ENV: "1"})
+        old = _sig.pthread_sigmask(_sig.SIG_BLOCK, sigs) if mask else None
+        try:
+            if mask:
+                kw["preexec_fn"] = lambda: _sig.pthread_sigmask(_sig.SIG_SETMASK, old)
+            procs.append((i, _sp.Popen(cmd, stdout=log, stderr=_sp.STDOUT, stdin=_sp.DEVNULL, env=env, **kw), log, time.time()))
+        except BaseException:
+            log.close()
+            raise
+        finally:
+            if mask:
+                _sig.pthread_sigmask(_sig.SIG_SETMASK, old)
+
+
+def _fanout_report(args, res, n, work):
+    """各片都結束後:加總、判跳過上限、印總數、寫合併摘要;有紅印紅的測試名與沒過的片的輸出路徑回 1,全綠刪工作目錄(沒帶 --keep-tmp)回 0。"""
+    import json as _j, shutil as _sh
+    tot, bad = _fanout_total(res, n)
+    if _skip_baseline_applies() and tot["skipped"] > EXPECTED_SKIP_MAX:
+        print(f"  ✗ 各片跳過加總 {tot['skipped']} 支,比預期上限 {EXPECTED_SKIP_MAX} 支多(單一程序跑時同一個判法):"
+              f"{', '.join(tot['skipped_names'][:20])}")
+        bad.append(0)
+    tail = f", {tot['skipped']} skipped(來源 repo 專用)" if tot["skipped"] else ""
+    print(f"\n{'─' * 40}\n{tot['passed']} passed, {tot['failed']} failed{tail}")
+    if args.json_summary:
+        try:
+            Path(args.json_summary).write_text(_j.dumps({**tot, "shard": None, "bad_shards": [x for x in bad if x], "skip_over": 0 in bad},
+                                                        ensure_ascii=False), encoding="utf-8")
+        except OSError as e:
+            print(f"  (寫不出機讀摘要:{e})", file=sys.stderr)
+    if bad:
+        if tot["failed_names"]:
+            print("紅的是這幾支:" + "、".join(tot["failed_names"][:30]))
+        if [x for x in bad if x]:
+            print("沒過的片,完整輸出在:")
+            for i in [x for x in bad if x]:
+                print(f"    {work / f'shard{i}.log'}")
+        return 1
+    if not args.keep_tmp:
+        _sh.rmtree(work, ignore_errors=True)
+    return 0
+
+
+def _skip_baseline_applies():
+    """跳過基準線有意義的環境:來源 repo(有 skills/lumos-project-notes)而且不是 Windows(單一程序與預設切片同一個判法)。"""
+    return (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes").is_dir() and sys.platform != "win32"
+
+
 def main():
     # ★把 git 的環境變數從進程 env 清掉(2026-08-01,pre-push 假紅實錘)★
     #
@@ -48807,8 +49542,8 @@ def main():
     import argparse as _ap
     _p = _ap.ArgumentParser(
         prog="test_lumos.py",
-        description="lumos 的測試執行器。不帶參數=跑全套(約 8 分鐘);"
-                    "要跑子集就給關鍵字,它會比對測試函式名。")
+        description="lumos 的測試執行器。不帶參數=跑全套:切成 LUMOS_TEST_SHARDS 片(預設 4)各開子程序同時跑,約 4-5 分鐘;"
+                    "--serial 在單一程序跑(約 8 分鐘)。要跑子集就給關鍵字,它會比對測試函式名。")
     _p.add_argument("keyword_pos", nargs="?", default=None, metavar="關鍵字",
                     help="跟 -k 一樣(直接打名字比較順手)")
     _p.add_argument("-k", dest="keyword", default=None, help="只跑名稱含此字串的測試")
@@ -48823,6 +49558,8 @@ def main():
                     help="用這個亂數種子打亂測試順序,探順序相依;紅了會把種子印出來讓你重現")
     _p.add_argument("--shard", default=None, metavar="第幾片/共幾片",
                     help="只跑其中一片(例:2/4)。推送前的閘用它把八分鐘拆成幾片同時跑")
+    _p.add_argument("--serial", action="store_true",
+                    help="全套在單一程序跑,不切片(預設切成 LUMOS_TEST_SHARDS 片同時跑;設 1 也是單一程序)")
     _p.add_argument("--json-summary", default=None, metavar="檔案",
                     help="把這一片的結果(過/紅/跳過/紅的是哪幾支)寫成 JSON,給彙總的人讀")
     _p.add_argument("--suite", default=None, choices=("docs", "keys"),
@@ -48847,6 +49584,8 @@ def main():
         return 2
     if _args.keyword_pos:
         _args.keyword = _args.keyword_pos
+    if _fanout_wanted(_args):   # 不帶條件跑全套:預設切片同時跑(Projects/測試總檔預設切片_計劃)
+        return _fanout_main(_args)
     _run_root = _isolate_environment()
     try:
         tests = [v for k, v in sorted(globals().items()) if k.startswith("t_")]
@@ -49074,8 +49813,7 @@ def main():
         # 只在「基準線有意義」的環境判:來源 repo(消費端本來就會跳過一批來源專用的)
         # 且非 Windows(Windows 分支的跳過是合法的)。其餘環境只印一行觀測,不判紅。
         if not _args.keyword and SKIP > EXPECTED_SKIP_MAX:
-            _baseline_applies = (Path(GRAPHCTL).resolve().parent.parent / "skills" / "lumos-project-notes").is_dir() \
-                and sys.platform != "win32"
+            _baseline_applies = _skip_baseline_applies()
             print(f"  這次跳過 {SKIP} 支,比預期上限 {EXPECTED_SKIP_MAX} 支多。"
                   f"跳過不會出現在紅字裡,但它代表那些測試這輪沒驗到。")
             # r1 折入:只印總數的話,「本來跳 A、現在改跳 B」這種換人的漂移量不到
