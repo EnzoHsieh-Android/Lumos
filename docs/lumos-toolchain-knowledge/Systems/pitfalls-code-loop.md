@@ -84,6 +84,7 @@ summary: |-
   WHY:新增告警閘的擋下訊息每條告警印到 120 字(跟解析 SARIF 截斷同數) [出處:2026-11-05 同計劃 S5 實跑] [因:規則包訊息的修法在後半段,原本截 70 字把修法切掉] [test:t_lint_block_message_shows_fix]
   WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘(含測試防竄改比對)與 Room 守衛都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
   WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
+  WHY:新增告警閘對逗號佔位符({LINT_FILES_CSV})的命令:路徑含逗號或分號的檔從那條命令拿掉、列進「檔太大沒檢查」同一組(擋,可逐檔放行,指紋跟大檔同形),一條命令的檔全被拿掉時判沒被檢查;換完超過 100,000 位元組對半切分批跑、合併結果;開程序丟參數太長記成那條沒跑到並擋 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 2、3] [因:detekt 拿逗號與分號分 --input,那種路徑整條拒跑;Linux 單一參數上限 128 KB,改動檔多時命令會撐爆;參數太長原本是例外、整道閘例外放行] [不選:分隔字元路徑自動放行(改檔名就能繞過的可重現繞道);舊 {LINT_FILES} 也分批(不改既有行為)] [test:t_lint_new_csv_separator_path] [test:t_lint_new_csv_batches] [test:t_lint_new_detekt_csv_blocks_new] [test:t_lint_new_detekt_real_two_files]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1
@@ -214,6 +215,10 @@ REVISIT:2026-12-31 決定要不要擋「主線內容被整個還原成某個審�
 - **關得掉**：環境變數 `LUMOS_SKIP_LINT_NEW` 整道關(2026-11-02 起作弊比對例外:關閘時照樣在背後跑、有候選或比對出錯時留帳,環境變數只認 1,見 [[Systems/test-guard]])；設定檔 `.lumos/config.json` 的 `lint_new` 區塊有三態（擋／只報告／關閉）與各項門檻。**設定不可以放 `.lumos/lint.json`**——那個檔的每個頂層鍵都被當成「副檔名→命令清單」嚴格驗證。
 - **自動放行要被數**：健檢會唸「最近 30 天自動放行幾次、放行清單幾條」。自動放行是已知的繞道向量（把工具移掉或弄慢就能過），沒有人去數就等於沒有守衛。
 - **誠實邊界**：它防疏忽不防惡意；整批重新縮排的提交會產生一批假新增（刻意選誤報不選漏擋）；零真專案實證。
+- **逗號佔位符的命令多兩件事**(2026-11-06,[[Projects/Android的detekt推送前真的擋_計劃]] 範圍 2、3;佔位符本身在 [[Systems/pitfalls-lint-adapter]]):
+  - **路徑含逗號或分號的檔**(detekt 拿這兩個字分 `--input`,整條會拒跑):從那條命令拿掉、其餘照跑,那支放進「檔太大沒檢查」同一組清單——擋,可逐檔放行,指紋跟大檔同形(`separator-path` 加分隔字元加路徑取雜湊);擋下訊息點名那支、印填好指紋的放行指令、說明改檔名也行。放行後列成「放行過、沒檢查」。**一條命令要檢查的檔全被拿掉時不准說乾淨**(判成沒被檢查,跟「一條都沒跑不准說乾淨」同一條規則)。舊 `{LINT_FILES}` 的命令不動。
+  - **分批**:逗號佔位符換完後整條命令超過 100,000 位元組(UTF-8,含引號)就把檔清單對半切到每批都在上限內、各跑一次、合併結果——推送前只跑不用型別的規則,每支檔各自判,分批不影響結果。長度用真的替換結果量,不估算。舊 `{LINT_FILES}` 不分批。
+  - **參數太長**:萬一還是超過(只剩一支檔、或命令本身就太長),開程序時系統回「參數太長」,執行入口接住、閘記成那條命令沒跑到並擋——跟預算沒跑到同類,不歸自動放行(工具好好的,是命令太長)。
 
 WHY:[2026-10-06 附件種子第二輪]模式與首行必須同出凍結版本；共用 raw 解析器提供模式及物件，舊留痕消費者仍只取原模式對，避免影響分析另建解析器漂移。既有簿記程式例外測試子集已驗 5 案例25條全綠，不代表整個分支放行。[出處:[[Verification/2026-10-06_附件種子修復獨立驗收]]] [因:只共享目錄或副檔名仍有跨層分類不一致] [test:t_code_loop_bookkeeping_exec_mode_and_bom] [test:t_code_loop_bookkeeping_shebang_script_not_exempt]
 

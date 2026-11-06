@@ -11,7 +11,7 @@ description: 寫或審 Kotlin（Coroutines/Flow/Compose）代碼前必讀——�
 
 **分層原則（重要）**：本文件只寫「不隨框架選擇改變的原則」。用 Hilt 還是 Koin、Retrofit 還是 Ktor、MVI 還是 MVVM——那是各專案的當地選擇，**去讀該專案的知識圖譜和 CLAUDE.md**（`lumos search <關鍵字>` 起手）。本文件的規則以「可注入」「可替換」等能力措辭，不點名框架。
 
-**機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。標「要型別資訊」的 detekt 規則，照一般接法跑時多半**沒在跑**，見下方〈型別資訊〉；而且所有 detekt 規則推送前的新增告警檢查目前都**只記錄、不擋**（見〈機檢接線〉）。
+**機檢欄說明**：`detekt:規則名`＝有現成規則；`自訂`＝可寫 detekt/Semgrep 自訂規則；`不可機檢`＝只有本文件與審查鏡頭能守——這類規則排最前面，因為文件是唯一防線。detekt 規則分兩種擋法：**不要型別資訊的推送前擋**（宣告用 `--input {LINT_FILES_CSV}`，推送前的新增告警檢查只擋這次新增的）；**標「要型別資訊」的 CI 擋**（推送前那條命令不帶型別參數、這些規則不跑，要在專案 CI 用 Gradle 型別解析任務加基準線擋），見〈機檢接線〉與〈型別資訊〉。
 
 > **核對邊界**：detekt 那部分已核對（2026-11-01，detekt 1.23.8：規則名與預設開關對照 `detekt --generate-config` 產出的預設設定；要不要型別資訊用最小樣本各跑一次、帶與不帶 `--classpath`／`--jdk-home` 對照；2026-11-04 逐版重驗協程與效能兩組）。R16 引用的 compose-rules 與 Slack compose-lints，規則名與條數仍是網搜整理、**未用本機工具核對**；接入時以該工具當前的規則清單為準。
 > REVISIT:2027-05-01 用本機工具核對 R16 引用的 compose-rules 與 Slack compose-lints 規則名與條數，補上核對日期或標明仍未核對。
@@ -226,16 +226,17 @@ style:
 detekt 1.23 系列不要加 `CoroutineLaunchedInTestWithoutRunTest`：那個版本沒有這條，設定裡寫了整次執行失敗（見 R12）。
 - 自有設定要跟共用設定疊加：用逗號合成一個 `--config a.yml,b.yml`（分開寫兩次 `--config` 會拒跑）；清單類欄位（例上面的 methods）後面那份整份蓋掉前面那份，不合併、不警告。
 - 加掛 compose-rules（detekt plugin jar）補 R16 整組。
-- 專案把 detekt 指令宣告進 `.lumos/lint.json`，`lumos pitfalls --diff` 會吃 SARIF、命中行進審查 manifest。★但推送前的新增告警檢查對 detekt 目前只記錄不擋★（沒有 `{LINT_FILES}` 就只記錄；有的話多檔時 detekt 拒跑、檢查放行）——`lumos lint-check` 與健檢會照指令字面把這些印出來。
+- **推送前擋不用型別的**：`.lumos/lint.json` 宣告 `detekt --input {LINT_FILES_CSV} --build-upon-default-config --config <共用設定> --report sarif:{LINT_SARIF_OUT}`。`{LINT_FILES_CSV}` 把這次改到的 kt 檔用逗號串成一個值（detekt 的 `--input` 只收逗號分隔；用空白串的 `{LINT_FILES}` 多檔時 detekt 拒跑、檢查放行），推送前的新增告警檢查會真的跑、只擋新增的——擋得到的是 `GlobalCoroutineUsage`、複雜度、命名這類不用型別資訊的規則。`lumos pitfalls --diff` 也會吃同一份 SARIF、命中行進審查 manifest。
+- **CI 擋要型別的**（detekt 官方建議：只跑改到的檔時要型別的檢查不準，CI 另跑全量）：專案的 Gradle 套 detekt 外掛、設定指共用設定；第一次跑 `./gradlew detektBaseline<變體>`（例 `detektBaselineDebug`）產基準線檔並提交；CI 跑 `./gradlew detekt<變體>`（例 `detektDebug`，純 Kotlin 模組 `detektMain`），基準線以外的新告警讓 CI 失敗。完整範本在 lumos-toolchain 的 linter 精選目錄（detekt 標準接法第②段）。
+- `lumos lint-check` 與健檢會照指令字面印出實際會怎樣：沒有檔案佔位符只記錄不擋、帶舊 `{LINT_FILES}` 多檔拒跑、專案 `.github/workflows/` 沒有 `detekt<變體>` 任務時「型別規則哪裡都沒擋」。
 
 ### 型別資訊（detekt 有開≠有在跑）
 
 - **是什麼**：detekt 很多規則要知道每個呼叫的型別才判得了。指令列要帶 `--classpath <依賴 jar，冒號分隔>`（簡寫 `-cp`）與 `--jdk-home <JDK 路徑>`；沒帶時這些規則**安靜跳過，不報錯也不警告**（detekt 官方型別解析文件：沒有型別解析時要型別的規則不會跑）。`--jvm-target` 實測不影響。
 - **哪些要**：上面標「要型別資訊」的都要；`GlobalCoroutineUsage`、`ForEachOnRange` 不要。
-- **怎麼取得**：一般 JVM 專案可用 Gradle 印出依賴清單（絕對路徑，相對路徑放在第一個以外的位置會被靜默忽略）；Gradle 外掛的 `detekt<變體>` 任務（例 `detektMain`、`detektDebug`）自帶型別，純 `detekt` 任務沒有。**Android 專案的依賴散在建置快取，目前沒有能接進推送前檢查的現成取法。**
+- **怎麼取得**：Gradle 外掛的 `detekt<變體>` 任務（例 `detektMain`、`detektDebug`）自帶型別，純 `detekt` 任務沒有——**要型別的規則放在 CI 用這個任務加基準線擋**（見〈機檢接線〉）；推送前只跑改到的檔，不帶型別參數（照 detekt 官方提交前掛鉤那頁的建議，推送前硬組 classpath 不準）。一般 JVM 專案在命令列也可以帶 Gradle 印出的依賴清單（絕對路徑，相對路徑放在第一個以外的位置會被靜默忽略）。
 - **版本限制**：Kotlin 標準庫 2.2 以上時，`SuspendFunSwallowedCancellation` 與標準庫函式的 `ForbiddenMethodCall` 補了型別資訊也不響（detekt 1.23.8 內建編譯器太舊）。
 
-REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-03-01] 推送前真的擋落地了，把本節與機檢接線段「推送時只記錄不擋」「Android 沒有現成取法」改掉
 
 ## 審查鏡頭（code-loop 用）
 

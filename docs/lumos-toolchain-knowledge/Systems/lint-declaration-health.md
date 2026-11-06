@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-11-04
+updated: 2026-11-06
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/4921126118e5
 tags:
@@ -29,6 +29,7 @@ summary: |-
   DEP:scripts/lumos cmd_lint_check + _lintcheck_validate｜復用 _lint_run_and_parse(smoke)
   TEST:t_lintcheck_validate(格式校驗含 value 非 list 誤植案例)+t_lintcheck_cli(無檔rc0/空殼rc1/格式對rc0/smoke抓跑不動rc1/smoke真產SARIF rc0/非JSON rc2);全套 1236 passed
   WHY:lint-check 與健檢 F 段對 detekt 宣告照指令字面印「實際會怎樣」的提醒(型別資訊缺、等號寫法、Gradle 純 detekt 任務、推送只記錄不擋、多檔拒跑),只提醒不改退出碼;「推送閘接不接得住」改由新增告警閘、風險分級、本判定共用同一支小函式 [出處:[[Projects/Android的detekt規則說實話_計劃]] 設計審 r1] [因:這些落差 detekt 本身不報錯,沒人說就以為有在檢查;Android 專案目前沒有修法,擋了只會訓練人繞過] [不選:記成宣告問題讓 CI 變紅(沒出口的紅);冒煙探針實跑驗規則(改到推送前真的擋那案)] [test:t_lint_detekt_advice_table] [test:t_lintcheck_detekt_advice_output] [test:t_doctor_lint_detekt_advice]
+  WHY:detekt 宣告提醒跟著逗號佔位符改:帶 {LINT_FILES_CSV} 的不印 P1、P2,P2 只看舊 {LINT_FILES} 並指向 {LINT_FILES_CSV},T1 指向 CI 型別檢查範本,新增 T4(宣告有 detekt 而 .github/workflows/ 沒有 detekt<變體> 任務字樣就印型別規則哪裡都沒擋);冒煙取樣跳過分隔字元路徑;{LINT_FILES_CSV} 單獨被引號包住記成格式問題 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 4、5] [因:推送前只擋不用型別的規則,型別規則改由消費專案 CI 擋,沒接的要講出來不讓人以為有在擋;引號疊兩層讓含空白的路徑多出字面引號] [不選:T4 改退出碼(先提醒,REVISIT 2027-02-01 看有沒有人接);叫 T3(代號已被等號寫法用掉)] [test:t_lint_detekt_advice_csv_and_ci] [test:t_lintcheck_smoke_csv]
 aliases:
   - lint 宣告健康檢查
 about_code:
@@ -45,7 +46,7 @@ PRIOR-ART: ① 最小解層級——復用既有 `_lint_run_and_parse`(smoke)+ �
 ## 兩層設計(各抓一類壞)
 | 層 | 抓什麼 | 成本 |
 |---|---|---|
-| **靜態格式校驗**(恆跑) | 格式明顯錯:非 dict / value 非 list / 命令空 / 缺 `{LINT_SARIF_OUT}` 佔位符 | 便宜(純靜態) |
+| **靜態格式校驗**(恆跑) | 格式明顯錯:非 dict / value 非 list / 命令空 / 缺 `{LINT_SARIF_OUT}` 佔位符 / `{LINT_FILES_CSV}` 單獨被一對引號包住(2026-11-06) | 便宜(純靜態) |
 | **`--smoke` 冒煙**(可選) | 格式對但**跑不動**:task 不存在、plugin/jar/工具缺、SARIF 無產出 | 貴(每 linter 真跑一次) |
 
 **為什麼要兩層**:靜態永遠抓不到「gradle task 存不存在」「外部 jar 還在不在」(那要真跑才知道);smoke 是唯一能抓的方法。但 smoke 慢,故分開——日常/巡檢跑靜態,定期/setup 後跑 smoke。
@@ -79,6 +80,12 @@ lumos 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道�
 - [ ] 接巡檢:`lint-check` 靜態層併入 `doctor --ci`(消費專案 push 前掃自己 lint.json 格式);smoke 太慢不進 doctor,留 CI/setup 手動或 daily-governance
 - [ ] test-layers.json 也給對帳器(同族第三個宣告檔,目前無檢查)
 - [x] KDS:detekt jar 從 /tmp 移到持久位置——2026-07-27 完成:改 `brew install detekt`+共用 config(標準接法見 [[Systems/linter精選目錄]]),lint.json 換宣告、`--input` 擴到整個 source set,`lint-check --smoke` 綠
+
+## 逗號佔位符與 detekt 提醒跟著改(2026-11-06,[[Projects/Android的detekt推送前真的擋_計劃]] 範圍 4、5)
+
+- **冒煙**:帶 `{LINT_FILES_CSV}` 的命令取樣時跳過路徑含逗號或分號的檔(detekt 會把那支拆成兩個不存在的路徑、整條拒跑,冒煙就報一個假的「跑不動」),用其餘檔換成逗號串;換檔走共用替換函式。舊 `{LINT_FILES}` 照舊取前三支 [test:t_lintcheck_smoke_csv]。
+- **格式問題**:`"{LINT_FILES_CSV}"` 或 `'{LINT_FILES_CSV}'`(那對引號只包住佔位符)記成格式問題、退出碼 1——換進去的值已經交給 `shlex.quote`,再包一層會讓含空白的路徑多出字面引號。`sh -c '…{LINT_FILES_CSV}…'` 整段包裝不算;舊佔位符不追溯。健檢 F 段共用同一支校驗,所以那邊也會列成宣告問題。
+- **detekt 判定表改的列**(單一來源仍是 [[Projects/Android的detekt規則說實話_計劃]] 的判定表,這次改的列寫回那篇):帶逗號佔位符的算推送時接得住,不印 P1、P2;P2 只看舊 `{LINT_FILES}`、文字改成「改用 `{LINT_FILES_CSV}`」;T1 文字指向 CI 型別檢查範本;新增 T4(計劃字面叫 T3,但 T3 已是等號寫法):宣告裡有 detekt、而 `.github/workflows/` 底下沒有任何 `detekt<變體>` 任務字樣(跟判定表〈Gradle 任務名怎麼分〉的「有型別任務」同一支分類)→ 印「型別規則目前哪裡都沒擋」,一個專案一則、標 `[CI]`;只看字面、不執行、不改退出碼 [test:t_lint_detekt_advice_csv_and_ci]。
 
 ## 沒宣告但專案有 eslint 設定時(2026-10-15,[[Projects/前端框架從vue分出_計劃]] W7)
 

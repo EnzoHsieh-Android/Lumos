@@ -17130,11 +17130,13 @@ def t_lint_files_substitution_has_one_implementation():
     src = (Path(__file__).resolve().parent / "lumos").read_text(encoding="utf-8")
     tree = _ast.parse(src)
 
+    # 兩種檔案佔位符都認(2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 新增逗號佔位符 {LINT_FILES_CSV}):
+    # 准許的替換處仍只有共用那支,新佔位符不准另開第二支替換函式
     def _mentions_token(node):
         for sub in _ast.walk(node):
-            if isinstance(sub, _ast.Name) and sub.id == "_LINT_NEW_FILES_TOKEN":
+            if isinstance(sub, _ast.Name) and sub.id in ("_LINT_NEW_FILES_TOKEN", "_LINT_NEW_FILES_CSV_TOKEN"):
                 return True
-            if isinstance(sub, _ast.Constant) and sub.value == "{LINT_FILES}":
+            if isinstance(sub, _ast.Constant) and sub.value in ("{LINT_FILES}", "{LINT_FILES_CSV}"):
                 return True
         return False
 
@@ -17145,11 +17147,12 @@ def t_lint_files_substitution_has_one_implementation():
     # 逼人當場說明為什麼要碰。
     ALLOWED = {
         "_lint_cmd_with_files",   # 唯一准做替換的那支
-        "_lint_run_and_parse",    # 只做「還沒換掉就別跑」的檢查
-        "_lintcheck_smoke_cmd",   # 只做「這條命令要不要換檔」的檢查
-        "cmd_rule_check",         # 只做同樣的檢查
-        "_lint_gate_covers",      # 只做「這條命令推送閘接不接得住」的檢查;新增告警閘、風險分級、detekt 宣告判定共用
-                                  # (2026-11-04 [[Projects/Android的detekt規則說實話_計劃]]:原本前兩處各自寫,第三處要用就抽出來)
+        "_lint_gate_covers",      # 只做「這條命令有沒有檔案佔位符(哪一種)」的判斷;新增告警閘、執行入口「沒換掉就別跑」、
+                                  # 冒煙、規則索引、風險分級、detekt 宣告判定全部共用這一支
+                                  # (2026-11-04 [[Projects/Android的detekt規則說實話_計劃]] 抽出;2026-11-06 多認逗號佔位符時,
+                                  # 原本各自比字面的執行入口、冒煙、規則索引三處改呼叫它,所以從名單拿掉——兩種佔位符要認的地方只剩一份)
+        "_lint_csv_quoted_alone",  # 只判「逗號佔位符被一對引號單獨包住」這個宣告格式問題(lint-check 記成格式問題);不做替換
+                                  # (2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5 最後一點)
     }
     touchers = {}
     for fn in _ast.walk(tree):
@@ -125731,6 +125734,496 @@ def t_lint_new_astgrep_kotlin_two_files():
     check("S4 只擋新增那一處(B.kt),基準版已有的 A.kt 不擋", files == ["app/src/main/kotlin/B.kt"], str(files))
     check("S4 訊息帶型錄編號", all(re.match(r"\[[A-Z]+-\d+\]", c.get("message") or "") for c in v["new"]), str(v["new"][:1]))
     check("★對照★ 命令真的跑了(不是環境不可用放行)", v["ran"] and not v["autopass"], str(v.get("autopass_reason")))
+
+
+# ── Android 的 detekt 推送前真的擋(Projects/Android的detekt推送前真的擋_計劃,2026-11-06)──────────
+# 白話:detekt 的 --input 只收逗號分隔的一個值,多檔用空白串會拒跑;新增 {LINT_FILES_CSV} 讓它真的跑、真的擋。
+# 判準來源是計劃的驗收條款 S1 到 S8 與 detekt 1.23.8 實測(--input a.kt b.kt 拒跑、--input a.kt,b.kt 有結果),
+# 不是照實作抄。
+
+
+def _lng_fake_detekt(helper_dir):
+    """假 detekt:照 detekt 1.23.8 指令列的形狀收參數——`--input` 只收一個值、用逗號或分號分隔多檔,
+    多出來的位置參數或檔不存在就拒跑、不產結果(跟真的一樣,2026-11-04 實測);`--files` 之後的全部當檔
+    (給「舊佔位符不分批」的對照用)。每支檔每遇到 `GlobalScope.` 報一條 GlobalCoroutineUsage,SARIF 照真
+    detekt 的形狀(絕對 file:// 路徑、ruleId 帶規則集,2026-11-06 本機 detekt 1.23.8 輸出抄來)。
+    每跑一次在記錄檔加一行(參數與執行目錄),測試拿來數跑了幾次、看收到什麼。回 (執行檔路徑, 記錄檔路徑)。"""
+    import json as _j
+    import os as _os
+    import sys as _s
+    d = Path(helper_dir) / "bin"
+    d.mkdir(parents=True, exist_ok=True)
+    log = Path(helper_dir) / "calls.jsonl"
+    script = d / "detekt"
+    script.write_text(
+        f"#!{_s.executable}\n"
+        "import sys, os, json, re\n"
+        f"LOG = {_j.dumps(str(log))}\n"
+        "argv = sys.argv[1:]\n"
+        "with open(LOG, 'a', encoding='utf-8') as fh:\n"
+        "    fh.write(json.dumps({'argv': argv, 'cwd': os.getcwd()}) + '\\n')\n"
+        "out, inputs, extra, i = None, None, [], 0\n"
+        "while i < len(argv):\n"
+        "    a = argv[i]\n"
+        "    if a == '--report' and i + 1 < len(argv):\n"
+        "        out = argv[i + 1].split(':', 1)[1]; i += 2\n"
+        "    elif a in ('--input', '-i') and i + 1 < len(argv):\n"
+        "        inputs = [p for p in re.split('[,;]', argv[i + 1]) if p]; i += 2\n"
+        "    elif a in ('--config', '-c') and i + 1 < len(argv):\n"
+        "        i += 2\n"
+        "    elif a == '--build-upon-default-config':\n"
+        "        i += 1\n"
+        "    elif a == '--files':\n"
+        "        inputs = argv[i + 1:]; break\n"
+        "    else:\n"
+        "        extra.append(a); i += 1\n"
+        "if extra or not inputs or out is None:\n"
+        "    sys.exit(1)\n"
+        "res = []\n"
+        "for p in inputs:\n"
+        "    fp = os.path.abspath(p)\n"
+        "    if not os.path.isfile(fp):\n"
+        "        sys.exit(1)\n"
+        "    for n, ln in enumerate(open(fp, encoding='utf-8').read().splitlines(), 1):\n"
+        "        if 'GlobalScope.' in ln:\n"
+        "            res.append({'ruleId': 'detekt.coroutines.GlobalCoroutineUsage', 'level': 'warning',\n"
+        "                        'message': {'text': 'This use of GlobalScope should be replaced by `CoroutineScope` or `coroutineScope`.'},\n"
+        "                        'locations': [{'physicalLocation': {'artifactLocation': {'uri': 'file://' + fp},\n"
+        "                                       'region': {'startLine': n, 'endLine': n, 'startColumn': 5, 'endColumn': 30}}}]})\n"
+        "json.dump({'version': '2.1.0', 'runs': [{'tool': {'driver': {'name': 'detekt', 'version': '1.23.8'}},\n"
+        "           'results': res}]}, open(out, 'w'))\n"
+        "sys.exit(2 if res else 0)\n", encoding="utf-8")
+    _os.chmod(script, 0o755)
+    return str(script), log
+
+
+def _lng_fake_detekt_calls(log):
+    """假 detekt 的呼叫紀錄 → [{argv, cwd}…];沒跑過回空清單。"""
+    import json as _j
+    if not Path(log).is_file():
+        return []
+    return [_j.loads(ln) for ln in Path(log).read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
+def _lng_inputs(call):
+    """一次呼叫的 --input 值切成檔清單(逗號、分號都切,跟 detekt 一樣)。"""
+    import re as _re
+    a = call["argv"]
+    return [p for p in _re.split("[,;]", a[a.index("--input") + 1]) if p] if "--input" in a else []
+
+
+def t_lint_files_csv_substitution():
+    """[S1] 唯一替換函式多認 {LINT_FILES_CSV}:多檔用逗號串成一個字串、整串交給 shlex.quote;給了命令執行目錄時
+    絕對路徑改成相對;兩個佔位符同時在時各照各的串法、一次掃完(換進去的路徑含佔位符字樣也不再被換);
+    檔清單空時原樣;只給兩個參數的既有呼叫行為不變。"""
+    import shlex as _shlex
+    m = _lng_module()
+    f = m._lint_cmd_with_files
+    check("S1 兩支檔用逗號串成一個參數",
+          f("detekt --input {LINT_FILES_CSV}", ["a/X.kt", "b/Y.kt"]) == "detekt --input a/X.kt,b/Y.kt",
+          f("detekt --input {LINT_FILES_CSV}", ["a/X.kt", "b/Y.kt"]))
+    got = f("detekt --input {LINT_FILES_CSV}", ["a b/X.kt", "c.kt"])
+    check("S1 整串交給 shlex.quote(含空白時整串一個引號,不是各自引號)",
+          got == "detekt --input " + _shlex.quote("a b/X.kt,c.kt") and _shlex.split(got)[-1] == "a b/X.kt,c.kt", got)
+    got = f("detekt --input {LINT_FILES_CSV}", ["/r/p/a/X.kt", "/r/p/b/Y.kt"], "/r/p")
+    check("S1 給了命令執行目錄:那個目錄底下的絕對路徑換成相對路徑", got == "detekt --input a/X.kt,b/Y.kt", got)
+    got = f("detekt --input {LINT_FILES_CSV}", ["a/X.kt", "/r/p/b/Y.kt"], "/r/p")
+    check("S1 本來就是相對路徑的照原樣", got == "detekt --input a/X.kt,b/Y.kt", got)
+    got = f("detekt --input {LINT_FILES_CSV}", ["/r/p/a/X.kt"])
+    check("S1 沒給命令執行目錄:絕對路徑照原樣", got == "detekt --input /r/p/a/X.kt", got)
+    got = f("x {LINT_FILES} y {LINT_FILES_CSV}", ["a.kt", "b c.kt"])
+    check("S1 兩個佔位符同時在:各照各的串法",
+          got == "x a.kt 'b c.kt' y " + _shlex.quote("a.kt,b c.kt"), got)
+    # 換進去的路徑含另一個佔位符的字樣:不管先換哪個,連續兩次字串替換都會重掃到第一次換進去的文字
+    nasty = "p{LINT_FILES}{LINT_FILES_CSV}q.kt"
+    got = f("A {LINT_FILES} B {LINT_FILES_CSV}", [nasty])
+    check("S1 換進去的路徑含佔位符字樣也不再被換(一次掃完)",
+          got == "A " + _shlex.quote(nasty) + " B " + _shlex.quote(nasty), got)
+    got = f("B {LINT_FILES_CSV} A {LINT_FILES}", [nasty])
+    check("S1 佔位符順序反過來也一樣不重掃",
+          got == "B " + _shlex.quote(nasty) + " A " + _shlex.quote(nasty), got)
+    check("S1 檔清單空時原樣回傳", f("detekt --input {LINT_FILES_CSV}", []) == "detekt --input {LINT_FILES_CSV}")
+    check("S1 只給兩個參數的既有呼叫:{LINT_FILES} 照舊各自跳脫、空白相接",
+          f("lint {LINT_FILES}", ["a b.py", "c.py"]) == "lint 'a b.py' c.py", f("lint {LINT_FILES}", ["a b.py", "c.py"]))
+    check("S1 既有呼叫:給了命令執行目錄也不影響 {LINT_FILES}(舊佔位符行為不變)",
+          f("lint {LINT_FILES}", ["/r/p/a.py"], "/r/p") == "lint /r/p/a.py", f("lint {LINT_FILES}", ["/r/p/a.py"], "/r/p"))
+    check("S1 沒有佔位符的命令原樣回傳", f("lint --all", ["a.kt"]) == "lint --all")
+    print("  ✓ t_lint_files_csv_substitution")
+
+
+def t_lint_files_csv_recognized_everywhere():
+    """[S2] 命令只含 {LINT_FILES_CSV} 時,新增告警閘、執行入口、冒煙、風險分級、規則索引、說實話判定都把它當成有檔案佔位符;
+    執行入口收到沒換掉的 {LINT_FILES_CSV} 時不執行、回沒跑。"""
+    import contextlib
+    import io
+    import json as _j
+    m = _lng_module()
+    csv_only = "detekt --input {LINT_FILES_CSV} --report sarif:{LINT_SARIF_OUT}"
+    check("S2 共用判斷:只有逗號佔位符也算接得住", m._lint_gate_covers(csv_only) is True)
+    check("★對照★ 沒有任何佔位符的不算", m._lint_gate_covers("detekt --input src --report sarif:{LINT_SARIF_OUT}") is False)
+    # 執行入口:佔位符沒換掉就不跑(跑了會在專案裡留下記號檔)
+    root, git = _lng_repo("gctl-lncsvrec-")
+    marker = root / "ran-marker"
+    claims, ok = m._lint_run_and_parse(f"touch {marker} && echo {{LINT_FILES_CSV}} > {{LINT_SARIF_OUT}}", root)
+    check("S2 執行入口:沒換掉的 {LINT_FILES_CSV} 回沒跑", ok is False and claims == [], str(claims))
+    check("S2 執行入口:而且真的沒執行", not marker.exists(), "記號檔被建出來了")
+    # 新增告警閘:真的跑,不是降級成只報不擋
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lncsvrec-h-"))
+    det, _log = _lng_fake_detekt(helper)
+    cmd = f"{det} --input {{LINT_FILES_CSV}} --report sarif:{{LINT_SARIF_OUT}}"
+    _lng_declare(root, [cmd], ext="kt")
+    (root / "src").mkdir()
+    (root / "src" / "A.kt").write_text("fun a() = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (root / "src" / "A.kt").write_text("fun a() = 1\nfun b() { GlobalScope.launch { } }\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "head")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S2 新增告警閘:逗號佔位符的命令有跑、不是只報不擋", v["ran"] == [cmd] and v["report_only"] == [],
+          f"ran={v['ran']} report_only={v['report_only']}")
+    check("S2 新增告警閘:擋下新增的那一條", v["blocked"] is True and len(v["new"]) == 1, str(v.get("reason")))
+    # 冒煙:換成專案裡真的檔
+    ready = m._lintcheck_smoke_cmd(cmd, "kt", root)
+    check("S2 冒煙:換成真檔、佔位符不留", isinstance(ready, str) and "{LINT_FILES_CSV}" not in ready and "src/A.kt" in ready, str(ready))
+    # 風險分級:跑了,而且標成推送閘接得住
+    d = m._pitfall_diff_collect(f"{base}..HEAD", root)
+    check("S2 風險分級:逗號佔位符的命令有跑", cmd in (d or {}).get("lint_ran", []), str((d or {}).get("lint_ran")))
+    # 規則索引:形狀檢查認得、實跑換成真的樣本
+    rr = _lng_rule_repo(fire=True)
+    idx = rr / ".lumos" / "rules" / "index.json"
+    data = _j.loads(idx.read_text(encoding="utf-8"))
+    data["cmd"] = data["cmd"].replace("{LINT_FILES}", "{LINT_FILES_CSV}")
+    idx.write_text(_j.dumps(data), encoding="utf-8")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = m.cmd_rule_check(repo=str(rr))
+    check("S2 規則索引:逗號佔位符的 cmd 不報形狀問題、樣本真的被抓到", rc == 0 and "每條都有樣本" in buf.getvalue(),
+          f"rc={rc} {buf.getvalue()[:200]}")
+    # 說實話判定:推送時接得住,不印 P1
+    check("S2 說實話判定:帶逗號佔位符不印 P1",
+          "P1" not in m._lint_detekt_codes("detekt --input {LINT_FILES_CSV} -cp a --jdk-home j --report sarif:{LINT_SARIF_OUT}"),
+          str(m._lint_detekt_codes("detekt --input {LINT_FILES_CSV} -cp a --jdk-home j --report sarif:{LINT_SARIF_OUT}")))
+    print("  ✓ t_lint_files_csv_recognized_everywhere")
+
+
+def t_lint_new_csv_separator_path():
+    """[S3] 要檢查的檔路徑含逗號或分號(detekt 拿這兩個字分 --input):新增告警閘把那幾支從逗號佔位符的命令拿掉、
+    其餘照跑;那幾支列進「沒檢查」並擋下,訊息點名檔與放行指令;放行後不擋、列成放行過沒檢查;
+    一條命令的檔全被拿掉時不判成乾淨。舊 {LINT_FILES} 的命令不受影響。"""
+    import contextlib
+    import hashlib as _hl
+    import io
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lncsvsep-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lncsvsep-h-"))
+    det, log = _lng_fake_detekt(helper)
+    cmd = f"{det} --input {{LINT_FILES_CSV}} --report sarif:{{LINT_SARIF_OUT}}"
+    _lng_declare(root, [cmd], ext="kt")
+    names = ["src/ok/A.kt", "src/x,y/B.kt", "src/p;q/C.kt"]
+    for n in names:
+        (root / n).parent.mkdir(parents=True, exist_ok=True)
+        (root / n).write_text("fun a() = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    for n in names:
+        (root / n).write_text("fun a() = 1\nfun b() = 2\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "head")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    sep = sorted((o for o in v["oversize"] if o.get("kind") == "separator"), key=lambda o: o["file"])
+    check("S3 兩支分隔字元路徑列進沒檢查", [o["file"] for o in sep] == ["src/p;q/C.kt", "src/x,y/B.kt"], str(v["oversize"]))
+    check("S3 放行指紋跟大檔同形:sha256(separator-path + 分隔字元 + 路徑) 取前 16 碼",
+          all(o["key"] == _hl.sha256(("separator-path" + "\x00" + o["file"]).encode("utf-8")).hexdigest()[:16] for o in sep),
+          str(sep))
+    check("S3 閘設成擋時擋下", v["blocked"] is True and v["autopass"] is False, str(v.get("reason")))
+    calls = _lng_fake_detekt_calls(log)
+    got_inputs = [p for c in calls for p in _lng_inputs(c)]
+    check("S3 其餘照跑:命令有跑(不是環境不可用),只收到沒有分隔字元的那支",
+          v["ran"] == [cmd] and calls and all(p.endswith("src/ok/A.kt") for p in got_inputs), str(got_inputs))
+    check("S3 逗號佔位符換成相對路徑(專案所在目錄名含逗號也不會拒跑)",
+          got_inputs and not any(p.startswith("/") for p in got_inputs), str(got_inputs))
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        m._cl_say_lint_block(v["reason"], {"lint_new": v}, "b", "0" * 40)
+    msg = buf.getvalue()
+    check("S3 擋下訊息點名那支檔、印放行指令(指紋填好)、說明改檔名也行",
+          "src/x,y/B.kt" in msg and "src/p;q/C.kt" in msg and all(f"lint-waive {o['key']}" in msg for o in sep)
+          and "改檔名" in msg, msg[-900:])
+    check("S3 擋下理由講的是分隔字元,不是檔太大", "逗號或分號" in v["reason"] and "太大" not in v["reason"], v["reason"])
+    for o in sep:
+        ok, err = m._lint_waivers_add(root, o["key"], "", o["file"], "目錄名本來就帶逗號", "tester")
+        check(f"S3 放行登記得進去:{o['file']}", ok is True, str(err))
+    v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S3 放行後不再擋", v2["blocked"] is False and not [o for o in v2["oversize"] if o.get("kind") == "separator"],
+          str(v2.get("reason")))
+    check("S3 放行後列成放行過、沒檢查",
+          sorted(o["file"] for o in v2["oversize_waived"] if o.get("kind") == "separator") == ["src/p;q/C.kt", "src/x,y/B.kt"],
+          str(v2["oversize_waived"]))
+    # 一條命令的檔全被拿掉(放行過):不准說乾淨
+    base2 = git("rev-parse", "HEAD").stdout.strip()
+    (root / "src/x,y/B.kt").write_text("fun a() = 1\nfun b() = 3\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "only-sep")
+    v3 = m._lint_new_verdict(root, f"{base2}..HEAD")
+    check("S3 一條命令所有檔都被拿掉時不判成乾淨", v3["status"] == "not-checked" and v3["blocked"] is False,
+          f"{v3['status']} {v3.get('reason')}")
+    # ★對照★ 舊 {LINT_FILES} 的命令:不拿檔、不列分隔字元(舊佔位符行為不變)
+    _lng_declare(root, [f"{det} --report sarif:{{LINT_SARIF_OUT}} --files {{LINT_FILES}}"], ext="kt")
+    v4 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("★對照★ 舊 {LINT_FILES} 不拿掉分隔字元路徑", not [o for o in v4["oversize"] + v4["oversize_waived"]
+                                                     if o.get("kind") == "separator"] and v4["ran"], str(v4))
+    print("  ✓ t_lint_new_csv_separator_path")
+
+
+def t_lint_new_detekt_csv_blocks_new():
+    """[S4] detekt 指令列帶逗號佔位符、一次提交改兩支 kt 檔:基準版沒有 GlobalScope 裸用、現在版新增一處的那支擋下;
+    基準版已有的同一處不擋(用假 detekt)。對照:同一條換成舊 {LINT_FILES} 時假 detekt 像真的一樣拒跑。"""
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lncsvdet-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lncsvdet-h-"))
+    det, _log = _lng_fake_detekt(helper)
+    cfg = Path(GRAPHCTL).resolve().parents[1] / "configs" / "detekt" / "android.yml"
+    cmd = f"{det} --input {{LINT_FILES_CSV}} --build-upon-default-config --config {cfg} --report sarif:{{LINT_SARIF_OUT}}"
+    _lng_declare(root, [cmd], ext="kt")
+    src = root / "app" / "src" / "main" / "kotlin"
+    src.mkdir(parents=True)
+    old_a = "fun startA() {\n    GlobalScope.launch { }\n}\n"
+    (src / "A.kt").write_text(old_a, encoding="utf-8")
+    (src / "B.kt").write_text("fun ok() = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (src / "A.kt").write_text(old_a + "\nfun touched() = 2\n", encoding="utf-8")
+    (src / "B.kt").write_text("fun ok() = 1\n\nfun startB() {\n    GlobalScope.launch { }\n}\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "新增一處")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    files = sorted(c["file"] for c in v["new"])
+    check("S4 擋下那一條", v["blocked"] is True and v["ran"] == [cmd] and not v["autopass"], str(v.get("reason")))
+    check("S4 只擋新增那一處(B.kt);基準版已有的 A.kt 不擋", files == ["app/src/main/kotlin/B.kt"], str(files))
+    check("S4 擋的是 GlobalCoroutineUsage", all(c["rule"].endswith("GlobalCoroutineUsage") for c in v["new"]), str(v["new"][:1]))
+    _lng_declare(root, [cmd.replace("{LINT_FILES_CSV}", "{LINT_FILES}")], ext="kt")
+    v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("★對照★ 舊 {LINT_FILES} 兩支檔用空白串:假 detekt 拒跑、閘照環境問題放行(這就是本案要修的)",
+          v2["status"] == "env-unavailable" and v2["blocked"] is False, f"{v2['status']} {v2.get('reason')}")
+    print("  ✓ t_lint_new_detekt_csv_blocks_new")
+
+
+def t_lint_new_csv_batches():
+    """[S5] 逗號佔位符換完後命令超過上限(100,000 位元組)時分批跑、合併結果,結果跟不分批時相同;
+    舊 {LINT_FILES} 不分批;開程序丟「參數太長」時記成那條命令沒跑到並擋,不變成整道閘例外放行。"""
+    m = _lng_module()
+    check("S5 上限是 100,000 位元組", m._LINT_CSV_MAX_BYTES == 100000, str(getattr(m, "_LINT_CSV_MAX_BYTES", None)))
+    root, git = _lng_repo("gctl-lncsvbat-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lncsvbat-h-"))
+    det, log = _lng_fake_detekt(helper)
+    cmd = f"{det} --input {{LINT_FILES_CSV}} --report sarif:{{LINT_SARIF_OUT}}"
+    _lng_declare(root, [cmd], ext="kt")
+    names = [f"src/m{i:02d}/F{i:02d}.kt" for i in range(12)]
+    for n in names:
+        (root / n).parent.mkdir(parents=True, exist_ok=True)
+        (root / n).write_text("fun a() = 1\n", encoding="utf-8")
+    (root / names[3]).write_text("fun a() = 1\nfun old() { GlobalScope.launch { } }\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    for i, n in enumerate(names):
+        body = (root / n).read_text(encoding="utf-8") + "fun b() = 2\n"
+        if i in (0, 5, 11):
+            body += "fun c() { GlobalScope.launch { } }\n"
+        (root / n).write_text(body, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "head")
+
+    def key(v):
+        return sorted((c["file"], c["line"], c["rule"]) for c in v["new"])
+    v1 = m._lint_new_verdict(root, f"{base}..HEAD")
+    n1 = len(_lng_fake_detekt_calls(log))
+    check("★前置★ 不分批時兩邊各跑一次", n1 == 2, str(n1))
+    saved = m._LINT_CSV_MAX_BYTES
+    try:
+        m._LINT_CSV_MAX_BYTES = len(cmd.encode("utf-8")) + 200       # 一批大約只裝得下三四支
+        v2 = m._lint_new_verdict(root, f"{base}..HEAD")
+        calls = _lng_fake_detekt_calls(log)[n1:]
+        check("S5 超過上限就分批:兩邊合起來跑了不止兩次", len(calls) > 2, str(len(calls)))
+        per_side = {}
+        for c in calls:
+            for p in _lng_inputs(c):
+                side = "base" if "/base/" in p else "head"
+                per_side.setdefault(side, []).append(p.split(f"/{side}/", 1)[1])
+        check("S5 每一邊每支檔都剛好跑到一次", all(sorted(per_side.get(s, [])) == sorted(names) for s in ("base", "head")),
+              str(per_side))
+        check("S5 每一批換完的命令都在上限內",
+              all(len(m._lint_cmd_with_files(cmd, [str(Path(c['cwd']) / p) for p in _lng_inputs(c)], c["cwd"]).encode("utf-8"))
+                  <= m._LINT_CSV_MAX_BYTES for c in calls), "")
+        check("S5 合併後的結果跟不分批時相同", key(v2) == key(v1) and v2["blocked"] == v1["blocked"] is True,
+              f"{key(v2)} vs {key(v1)}")
+        # 舊 {LINT_FILES}:不分批
+        old_cmd = f"{det} --report sarif:{{LINT_SARIF_OUT}} --files {{LINT_FILES}}"
+        _lng_declare(root, [old_cmd], ext="kt")
+        n2 = len(_lng_fake_detekt_calls(log))
+        v3 = m._lint_new_verdict(root, f"{base}..HEAD")
+        check("S5 舊 {LINT_FILES} 不分批:兩邊各一次", len(_lng_fake_detekt_calls(log)) - n2 == 2 and v3["ran"],
+              str(len(_lng_fake_detekt_calls(log)) - n2))
+    finally:
+        m._LINT_CSV_MAX_BYTES = saved
+    # 開程序丟「參數太長」:真的造一條超過系統上限的命令(macOS 整體 1 MB、Linux 單一參數 128 KB)
+    fi = {}
+    try:
+        _claims, ok = m._lint_run_and_parse("true " + "x" * 3000000 + " > {LINT_SARIF_OUT}", root, fail_info=fi)
+        raised = None
+    except OSError as e:
+        _claims, ok, raised = [], True, e
+    check("S5 執行入口接住「參數太長」、回沒跑而不是丟例外", raised is None and ok is False and fi.get("too_long") is True,
+          f"raised={raised!r} fi={fi}")
+    _lng_declare(root, [cmd + " # " + "x" * 3000000], ext="kt")
+    v4 = m._lint_new_verdict(root, f"{base}..HEAD")
+    check("S5 閘:參數太長記成那條命令沒跑到並擋,不是自動放行",
+          v4["blocked"] is True and v4["autopass"] is False and any(u["kind"] == "too-long" for u in v4["undone"]),
+          f"{v4['status']} {v4.get('reason')} {v4['undone']}")
+    print("  ✓ t_lint_new_csv_batches")
+
+
+def t_lintcheck_smoke_csv():
+    """[S6] lint-check --smoke 遇到帶逗號佔位符的命令:取樣時跳過分隔字元路徑,用其餘 kt 檔換成逗號串跑。"""
+    import subprocess as sp
+    import sys as _s
+    root, git = _lng_repo("gctl-smokecsv-")
+    helper = Path(tempfile.mkdtemp(prefix="gctl-smokecsv-h-"))
+    det, log = _lng_fake_detekt(helper)
+    _lng_declare(root, [f"{det} --input {{LINT_FILES_CSV}} --report sarif:{{LINT_SARIF_OUT}}"], ext="kt")
+    (root / "src").mkdir()
+    for n in ("a,b.kt", "c;d.kt", "ok.kt", "ok2.kt"):      # 照檔名排序,分隔字元路徑排在前面:不跳過就會被取樣
+        (root / "src" / n).write_text("fun a() = 1\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "x")
+    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root), "--smoke"], capture_output=True, text=True, timeout=60)
+    calls = _lng_fake_detekt_calls(log)
+    check("S6 冒煙通過", r.returncode == 0, r.stdout[-300:] + r.stderr[-200:])
+    check("S6 用其餘 kt 檔換成逗號串(跳過分隔字元路徑)",
+          len(calls) == 1 and calls[0]["argv"][calls[0]["argv"].index("--input") + 1] == "src/ok.kt,src/ok2.kt", str(calls))
+    print("  ✓ t_lintcheck_smoke_csv")
+
+
+def t_lint_detekt_advice_csv_and_ci():
+    """[S7] 帶逗號佔位符的 detekt 指令列:lint-check 與健檢不印 P1、P2;只帶舊 {LINT_FILES} 時 P2 指向 {LINT_FILES_CSV};
+    T1 指向 CI 型別檢查範本;共用設定開了型別規則而 .github/workflows/ 沒有 detekt<變體> 任務字樣時印「型別規則哪裡都沒擋」,
+    有就不印(計劃寫 T3,但 T3 這個代號已經是「等號寫法」,新的這則用 T4);逗號佔位符單獨被引號包住時
+    lint-check 記成格式問題退出碼 1,sh -c '…' 整段包裝不算。"""
+    import json as _j
+    import shutil as _sh
+    import subprocess as sp
+    import sys as _s
+    m = _lng_module()
+    csv_cmd = "detekt --input {LINT_FILES_CSV} --build-upon-default-config --config a.yml --report sarif:{LINT_SARIF_OUT}"
+    check("S7 帶逗號佔位符:只剩 T1(沒有 P1、P2)", m._lint_detekt_codes(csv_cmd) == {"T1"}, str(m._lint_detekt_codes(csv_cmd)))
+    check("S7 sh -c 包住也一樣不印 P1、P2", m._lint_detekt_codes(f"sh -c '{csv_cmd}'") == {"T1"},
+          str(m._lint_detekt_codes(f"sh -c '{csv_cmd}'")))
+    old = csv_cmd.replace("{LINT_FILES_CSV}", "{LINT_FILES}")
+    check("★對照★ 只帶舊 {LINT_FILES}:照舊印 P2", "P2" in m._lint_detekt_codes(old), str(m._lint_detekt_codes(old)))
+    check("S7 P2 的文字指向 {LINT_FILES_CSV}", "{LINT_FILES_CSV}" in m._DETEKT_ADVICE_TEXT["P2"], m._DETEKT_ADVICE_TEXT["P2"])
+    t1 = m._DETEKT_ADVICE_TEXT["T1"]
+    check("S7 T1 的文字指向 CI 型別檢查範本(不再說沒有現成取法)",
+          "CI" in t1 and "基準線" in t1 and "linter 目錄" in t1 and "沒有現成取法" not in t1, t1)
+
+    def lc(td, *extra):
+        return sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(td), *extra],
+                      cwd=str(td), capture_output=True, text=True, timeout=60)
+    root, _git = _lng_repo("gctl-lncsvadv-")
+    _lng_declare(root, [csv_cmd], ext="kt")
+    r = lc(root)
+    check("S7 lint-check:不印 P1、P2,印 T1", "P1:" not in r.stdout and "P2:" not in r.stdout and "T1:" in r.stdout, r.stdout)
+    check("S7 lint-check:沒有任何 workflow → 印「型別規則哪裡都沒擋」", "T4:" in r.stdout and "哪裡都沒擋" in r.stdout, r.stdout)
+    wf = root / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew detektBaselineDebug assembleDebug\n", encoding="utf-8")
+    r = lc(root)
+    check("S7 只有 detektBaseline<變體>(產基準線、不是檢查)還是印", "T4:" in r.stdout, r.stdout)
+    (wf / "android.yaml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew :app:detektProdDebug\n", encoding="utf-8")
+    r = lc(root)
+    check("S7 workflow 有 detekt<變體> 任務字樣 → 不印", "T4:" not in r.stdout and r.returncode == 0, r.stdout)
+    rj = _j.loads(lc(root, "--json").stdout)
+    check("S7 --json 的 advisories 也不帶 P1、P2", not any(" P1:" in a or " P2:" in a for a in rj["advisories"]), str(rj))
+    # 健檢 F 段:同一份宣告,不印 P1、P2;沒有 workflow 時印 T4
+    src = mkvault()
+    repo_root = Path(tempfile.mkdtemp(prefix="gctl-lncsvadv-doc-")) / "repo"
+    vault = repo_root / "docs" / "proj-knowledge"
+    vault.parent.mkdir(parents=True)
+    _sh.copytree(src, vault)
+    (repo_root / ".git").mkdir()
+    (repo_root / ".lumos").mkdir()
+    (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": [csv_cmd]}), encoding="utf-8")
+    rd = run(vault, "doctor", "--ci")
+    fsec = rd.stdout[rd.stdout.find("[F]"):]
+    check("S7 健檢:不印 P1、P2,印 T1 與 T4", "P1:" not in fsec and "P2:" not in fsec and "T1:" in fsec and "T4:" in fsec,
+          fsec[:900])
+    # 引號單獨包住逗號佔位符 → 格式問題
+    for q in ('"', "'"):
+        _lng_declare(root, [f"detekt --input {q}{{LINT_FILES_CSV}}{q} --report sarif:{{LINT_SARIF_OUT}}"], ext="kt")
+        r = lc(root)
+        check(f"S7 {q}{{LINT_FILES_CSV}}{q} → 格式問題、退出碼 1", r.returncode == 1 and "引號" in r.stdout, r.stdout[-400:])
+    _lng_declare(root, ["sh -c 'detekt --input {LINT_FILES_CSV} --report sarif:{LINT_SARIF_OUT}'"], ext="kt")
+    r = lc(root)
+    check("S7 sh -c '…' 整段包裝不算格式問題", r.returncode == 0, r.stdout[-400:])
+    print("  ✓ t_lint_detekt_advice_csv_and_ci")
+
+
+def _detekt_real_bin():
+    """找真的 detekt 1.23.8;CI 一定要有(計劃範圍 6:CI 下載釘版本),本機沒有或版本不對回 None。"""
+    import os as _os
+    import shutil as _sh
+    import subprocess as sp
+    det = _os.environ.get("LUMOS_DETEKT") or _sh.which("detekt")
+    ver = ""
+    if det:
+        try:
+            ver = sp.run([det, "--version"], capture_output=True, text=True, timeout=120).stdout.strip()
+        except (OSError, sp.TimeoutExpired):
+            ver = ""
+    if ver != "1.23.8":
+        if _os.environ.get("CI"):
+            check("CI 上一定要有 detekt 1.23.8(ci.yml 下載釘版本)", False, f"找到 {det!r} 版本 {ver!r}")
+        return None
+    return det
+
+
+def t_lint_new_detekt_real_two_files():
+    """[S8] 真的 detekt 1.23.8 與共用 Android 設定、不給型別參數:一次改兩支 kt 檔(其中一支新增一處 GlobalScope 裸用),
+    新增告警閘擋下那一條。本機沒裝印略過;CI 照 ci.yml 一定有裝。"""
+    import shlex as _shlex
+    det = _detekt_real_bin()
+    cfg = Path(GRAPHCTL).resolve().parents[1] / "configs" / "detekt" / "android.yml"
+    if not det:
+        check("S8 靜態那半:共用 Android 設定存在", cfg.is_file(), str(cfg))
+        print("    (本機沒有 detekt 1.23.8,略過真跑;CI 下載釘版本會跑)")
+        return
+    m = _lng_module()
+    root, git = _lng_repo("gctl-lndetreal-")
+    cmd = (f"{_shlex.quote(det)} --input {{LINT_FILES_CSV}} --build-upon-default-config "
+           f"--config {_shlex.quote(str(cfg))} --report sarif:{{LINT_SARIF_OUT}}")
+    _lng_declare(root, [cmd], ext="kt")
+    src = root / "app" / "src" / "main" / "kotlin" / "app"
+    src.mkdir(parents=True)
+    hdr = "package app\n\nimport kotlinx.coroutines.GlobalScope\nimport kotlinx.coroutines.launch\n\n"
+    (src / "A.kt").write_text(hdr + "fun startA(work: () -> Unit) {\n    work()\n}\n", encoding="utf-8")
+    (src / "B.kt").write_text(hdr + "fun startB(work: () -> Unit) {\n    work()\n}\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "base")
+    base = git("rev-parse", "HEAD").stdout.strip()
+    (src / "A.kt").write_text(hdr + "fun startA(work: () -> Unit) {\n    work()\n    work()\n}\n", encoding="utf-8")
+    (src / "B.kt").write_text(hdr + "fun startB(work: () -> Unit) {\n    GlobalScope.launch { work() }\n}\n", encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-m", "新增一處 GlobalScope")
+    v = m._lint_new_verdict(root, f"{base}..HEAD")
+    hit = [c for c in v["new"] if str(c.get("rule")).endswith("GlobalCoroutineUsage")]
+    check("S8 真 detekt 有跑(兩支檔一起送、沒有拒跑)", v["ran"] == [cmd] and not v["autopass"],
+          f"{v['status']} {v.get('autopass_reason')}")
+    check("S8 擋下新增的 GlobalScope 裸用(在 B.kt)", v["blocked"] is True and [c["file"] for c in hit] == ["app/src/main/kotlin/app/B.kt"],
+          str(v["new"]))
+    print("  ✓ t_lint_new_detekt_real_two_files")
 
 
 def t_lint_block_message_shows_fix():
