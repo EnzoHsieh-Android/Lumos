@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-07-04
-updated: 2026-11-02
+updated: 2026-11-06
 self_audit: sonnet/2026-07-24
 responsibility: 負責新增告警閘的檢查工具那一半:讀 .lumos/lint.json 與 lint-deps.json 的宣告、改動前後兩份快照各跑一次、SARIF 解析合併、指紋與差集、放行檔與 lint-waive、自寫規則的出口閘(rule-check、rule-gap)與三支 SARIF 橋接;不負責作弊比對的規則與它接進閘的那一層(test-guard)、閘在代碼審檢查裡的順序與擋下訊息的組法(pitfalls-code-loop)
 tags:
@@ -31,6 +31,7 @@ summary: |-
   TEST:12+ 案 test_lumos.py(t_lint_aligned/t_lint_config/t_lint_sarif/t_lint_sarif_malformed_run/t_lint_sarif_relative_uri/t_pitfalls_lint_integration);全套件 412 passed
   VERIFY:[[Verification/2026-07-04_pitfalls-lint-adapter]]
   DECISION:[2026-07-04]吃社群 linter(SARIF 整合)不自建規則庫(valid);[2026-07-04]無宣告 regex-only byte-for-byte 不變(valid)
+  WHY:宣告多一種逗號佔位符 {LINT_FILES_CSV}(檔名逗號串成一個值、整串 shlex.quote,給了命令執行目錄就換成相對路徑),跟舊 {LINT_FILES} 由同一支替換函式一次掃完;辨認兩種佔位符全走 _lint_gate_covers;執行入口接住開程序時的參數太長、回沒跑 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 1、3] [因:detekt 的 --input 只收逗號分隔,空白串兩支以上檔就拒跑,閘當環境問題放行,detekt 推送前從沒擋過;參數太長原本是例外,漏到閘外層變整道例外放行] [不選:替換函式依工具名自動改串法(一條命令可能串兩個工具,猜錯壞另一個)] [test:t_lint_files_csv_substitution] [test:t_lint_files_csv_recognized_everywhere] [test:t_lint_files_substitution_has_one_implementation]
 verified_by:
   - "[[Verification/2026-07-04_pitfalls-lint-adapter]]"
   - "[[Verification/2026-07-05_csharp-landmark-verify]]"
@@ -85,7 +86,7 @@ about_code:
 - **指紋算次數不算有無**：規則代號＋專案相對檔名＋正規化後的片段；基準版一次、現在版三次就是新增兩條。正規化去行尾空白、內部連續空白壓一個、丟空行，**但保留前導縮排**——抹掉縮排的話，「同一段程式碼被搬進另一個會執行的區塊」會比不出來，那是行為改變卻無聲放行。
 - **片段取不到就弱比對**：工具沒附片段的（實測：主流 Python 檢查器完全不附）由核心自己讀那幾行補上；行號缺失、小於一、超出檔案長度就是取不到，退到「規則＋檔名＋訊息」比對並標明是弱比對。
 - **快照裡要補「工具跑得起來需要的東西」**（2026-09-13 六個真專案實跑撞到）：祖先目錄的設定檔（一律取**現在版**，因為兩次掃描要用同一份規則）＋依賴目錄的連結（不進版控，連回真的專案）。沒有這一步，需要專案脈絡的工具會整個跑不起來——實測 eslint 對落在它設定檔那棵樹之外的檔案直接拒跑。
-  - **工具分兩類，線是實測畫的**：自帶規則的獨立執行檔（ruff／社群規則庫／SwiftLint／detekt／依賴掃描器）本來就跑得起來（detekt 例外兩件:要型別資訊的規則沒給 classpath 就安靜不跑;它的 `--input` 只收逗號分隔,佔位符展開成空白分隔的多檔時整條拒跑、推送時放行,見 [[Issues/推送閘對Android的detekt只記錄不擋]]）；要專案依賴才能啟動的（eslint）補上之後才行。**第三類「要先建置才能檢查」的（.NET analyzer、Gradle）還沒驗過，不要宣稱它可以。**
+  - **工具分兩類，線是實測畫的**：自帶規則的獨立執行檔（ruff／社群規則庫／SwiftLint／detekt／依賴掃描器）本來就跑得起來（detekt 例外兩件:要型別資訊的規則沒給 classpath 就安靜不跑;它的 `--input` 只收逗號分隔,所以宣告要用逗號佔位符 `{LINT_FILES_CSV}`,見下面〈逗號佔位符〉一節）；要專案依賴才能啟動的（eslint）補上之後才行。**第三類「要先建置才能檢查」的（.NET analyzer、Gradle）還沒驗過，不要宣稱它可以。**
 - **沒有副檔名的檔看第一行認語言**：宣告按副檔名對，但這個專案的主程式沒有副檔名（python3 卻叫 `lumos`）——不看 shebang 的話它對整道閘是隱形的。2026-09-13 真的裝了檢查工具實跑才撞到，不是想出來的。
 - **改名另開一支查詢**：既有那支差異查詢同時餵給風險掃描、棧別提問、架構對照，在上面加改名偵測會悄悄改掉它們的輸出。
 
@@ -146,4 +147,13 @@ REVISIT:2026-12-14 還沒有真 Flutter 專案接進來的話,重看 Dart 這道
 - PITFALL:放行帳的規則與檔名欄一律空白,按規則統計放行比例無從算起(本 repo 2026-10-11 前的 283 筆全空、補不回來) [出處:Projects/世界解重新註解2026-10_技術棧知識_調研 核對] [根因:命令列只收指紋,寫入時寫死空字串;原本的測試直接呼叫內部寫入函式、沒走命令列,所以沒抓到] [修法:放行指令加選填的規則與檔名參數,閘門擋下時逐條印出已填好指紋、規則、檔名的放行指令;沒帶規則照樣放行但提醒] [test:t_lint_waive_cli_records_rule_and_file]
 - PITFALL:改了函式定義那一行、或把既有程式碼搬進新函式,原本就有的舊告警(複雜度 12、沒有變數的 f 字串)會被新增告警閘當成這次新帶進來的,推送被擋 [出處:Projects/外部回應碼語意要有出處_計劃 推送時連擋兩次] [根因:指紋含命中那行的程式碼片段——複雜度的命中行是函式定義行,加一個參數就換指紋;搬進新函式縮排變了,片段也跟著變] [repro:把一行 `lines.append(f"固定字")` 從 A 函式搬到新函式 B 再推,閘會列 F541 為新增告警] [修法:搬家時順手把那條舊告警修掉;真的修不了才 lint-waive 並寫明是搬家造成]
 
-REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-03-01] 推送前真的擋落地了,把這篇講 detekt 多檔拒跑、推送放行的說法改掉
+
+## 逗號佔位符 {LINT_FILES_CSV}(2026-11-06,[[Projects/Android的detekt推送前真的擋_計劃]])
+
+> 白話:detekt 的 `--input` 只收一個值、多檔用逗號分隔;舊的 `{LINT_FILES}` 把每支檔各自加引號、用空白串,兩支以上檔時 detekt 拒跑,閘當成環境問題放行——Android 專案的 detekt 推送前從來沒擋過。新增第二種佔位符,讓宣告自己說要哪種串法。
+
+- **替換仍只有一處**:`_lint_cmd_with_files` 同時認兩種佔位符,在一次掃描裡換完(連續兩次字串替換時,第二次會重掃第一次換進去的路徑)。逗號那種把檔名用逗號串成一個值、整串交給 `shlex.quote`;多收一個選填的「命令執行目錄」,給了就把逗號串裡的絕對路徑改成相對它的路徑——專案所在目錄名含逗號時才不會被 detekt 拆錯。新增告警閘與規則索引傳的是絕對路徑,所以給這個參數;冒煙與風險分級本來就是相對路徑。
+- **辨認也只有一處**:「這條命令有沒有檔案佔位符(哪一種)」全走 `_lint_gate_covers`(新增告警閘、執行入口「沒換掉就不跑」、冒煙、規則索引、風險分級、detekt 宣告判定)。原本執行入口、冒煙、規則索引各自比字面,多一種佔位符就要改三處,這次一起收進那支。
+- **不依工具名猜串法**:一條命令裡可能串兩個工具(例 `detekt … && ast-grep …`),在替換函式裡看到 detekt 就改用逗號,猜錯會壞另一個;所以做成宣告裡明寫的佔位符。
+- **執行入口接住「參數太長」**:開程序時系統回 E2BIG(命令換完太長)原本是例外,一路漏到新增告警閘外層、整道閘例外放行;現在執行入口接住、回沒跑,並透過選填的 `fail_info` 告訴新增告警閘「是參數太長」,閘記成那條命令沒跑到並擋(判法在 [[Systems/pitfalls-code-loop]])。其他呼叫端不給 `fail_info` 也一樣回沒跑。
+- 測試:替換 [test:t_lint_files_csv_substitution];六處都認 [test:t_lint_files_csv_recognized_everywhere];只准一處替換的守衛(白名單改成兩種佔位符都認) [test:t_lint_files_substitution_has_one_implementation]。
