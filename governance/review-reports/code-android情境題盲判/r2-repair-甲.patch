@@ -1,0 +1,1413 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index d541e12a8..fc936bb92 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -170,43 +170,46 @@ def _dt_header(dt):
+         if ln.startswith("| ") and not re.match(r"^\|\s*D-\d+\s*\|", ln):
+             cols = {name: i for i, name in enumerate(_cells(ln))}
+             missing = [n for n in _DT_HEADER if n not in cols]
+             return (None, "決策表表頭缺欄:" + "、".join(missing)) if missing else (cols, None)
+     return None, "找不到決策表表頭"
+ 
+ 
+ def dt_row(get):
+     """決策表一列(get(欄名) 取格子)→ (列 dict 或 None, 讀不懂的問題清單)。只管讀得懂讀不懂(scripts/lumos 讀到問題就整張表不用);
+     常用字、來源、停用列寫法這類格式要求在 catalog_problems。
+-    列:{id, situation, standard, alt(不適用時), triggers, evidence{main, alt}, retired(停用列), switch(換列的列), checks(對應檢查)}。
++    列:{id, situation, standard, alt(不適用時), triggers, evidence{main, alt}, retired(停用列), switch(換列的列), checks(對應檢查), source(來源格)}。
+     停用列不讀觸發字與證據樣式(當成沒有);換列的列認「不適用時」格子裡的明確標記「(換列)」,不從中文用語推,而且例外一定要是(無)。"""
+     retired = _RETIRED in _norm(get("情境"))
+     row = {"id": get("列編號"), "situation": get("情境"), "standard": get("標準寫法"), "alt": get("不適用時"),
+            "triggers": [], "evidence": {"main": None, "alt": None}, "retired": retired,
+-           "switch": _SWITCH in _norm(get("不適用時")), "checks": get("對應檢查")}
++           "switch": _SWITCH in _norm(get("不適用時")), "checks": get("對應檢查"), "source": get("來源")}
+     if retired:
+         return row, []
+     trig, err = dt_triggers(get("觸發字"))
+     ev, probs = dt_evidence_parse(get("證據樣式"))
+     probs = ([err] if err else []) + probs
+     if ev and row["switch"] and ev["alt"] is not None:
+         probs.append(f"「不適用時」標了{_SWITCH}(換到別列)的列,證據樣式的例外要寫(無)")
+     if probs:
+         return None, probs
+     row.update(triggers=trig, evidence=ev)
+     return row, []
+ 
+ 
+ def dt_table(text):
+     """型錄全文 → (列清單, 讀不懂的問題清單 [(列編號或 <決策表>, 原因)])。依表頭名稱取欄(欄位順序可以換);
+     列編號要從 D-1 連號。scripts/lumos 用 importlib 借這一支讀表(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1;
+-    代碼審 r1 架構對齊席:原本兩邊各寫一套、必有欄數已經分歧)。"""
++    代碼審 r1 架構對齊席:原本兩邊各寫一套、必有欄數已經分歧)。
++    同一輪順手帶出處(給盲判材料,範圍 4):每列多 refs(來源格展開成網址)與 check_refs(對應檢查在型錄主表的 id、名稱、來源、網址),
++    縮寫照〈來源縮寫〉表;主表或縮寫表找不到時那幾格留空、不報錯(讀得懂讀不懂歸這支的問題清單與 catalog_problems;
++    代碼審 code-android情境題盲判 r1 架構對齊 F6:原本另有 dt_sources 再走一輪決策表)。"""
+     i = text.find("\n## 情境決策表")
+     if i < 0:
+         return [], [("<決策表>", "找不到〈情境決策表〉節")]
+     j = text.find("\n## ", i + 5)
+     dt = text[i:j if j >= 0 else len(text)]
+     hdr, herr = _dt_header(dt)
+     if herr:
+         return [], [("<決策表>", herr)]
+     rows, probs, seen = [], [], []
+     for ln in dt.splitlines():
+@@ -215,81 +218,75 @@ def dt_table(text):
+         c = _cells(ln)
+         did = c[0]
+         if len(c) != len(hdr):
+             probs.append((did, f"決策表欄位數 {len(c)},應為 {len(hdr)}"))
+             continue
+         seen.append(did)
+         row, rp = dt_row(lambda name, c=c: c[hdr[name]])
+         probs += [(did, p) for p in rp]
+         if row:
+             rows.append(row)
++    abbrs, main = abbr_table(text) or {}, _main_names(text)
++    for row in rows:
++        row["refs"] = _src_expand(row["source"], abbrs)
++        row["check_refs"] = [{"id": cid, "name": main.get(cid, ("", ""))[0], "source": main.get(cid, ("", ""))[1],
++                              "refs": _src_expand(main.get(cid, ("", ""))[1], abbrs)}
++                             for cid in dict.fromkeys(re.findall(r"[A-Z]+-\d+", row["checks"]))]
+     if not seen or seen != [f"D-{k}" for k in range(1, len(seen) + 1)]:
+         # 列編號只准往後加、不准重排或重用;刪列時那一列在情境欄標(停用)留著(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1)
+         probs.append(("<決策表>", "列編號要從 D-1 連號(刪列時標(停用)留著,不要拿掉或重排)"))
+     return rows, probs
+ 
+ 
+-def _src_expand(cell, abbrs):
+-    """來源格 → 出處清單:格子裡的網址照收,登記在〈來源縮寫〉表的縮寫換成那一列寫的網址或說明(網址在前,縮寫依縮寫表順序,不重複)。"""
+-    out = []
+-    for u in re.findall(r"https?://[^\s)〕、;,，]+", cell):
+-        if u not in out:
+-            out.append(u)
+-    for a, url in abbrs.items():
+-        if re.search(r"(?<![A-Z0-9-])" + re.escape(a) + r"(?![A-Z0-9-])", cell):
+-            for u in re.findall(r"https?://[^\s)〕、;,，]+", url) or [url]:
+-                if u not in out:
+-                    out.append(u)
++def abbr_table(text):
++    """〈來源縮寫〉表 → {縮寫: 那一列的網址或說明};找不到那一節回 None。catalog_problems 與 dt_table 共用(縮寫表只讀一套)。"""
++    i = text.find("\n## 來源縮寫")
++    if i < 0:
++        return None
++    j = text.find("\n## ", i + 5)
++    out = {}
++    for ln in text[i:j if j >= 0 else len(text)].splitlines():
++        m = re.match(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", ln)
++        if m:
++            c = _cells(ln)
++            out[m.group(1)] = c[1] if len(c) >= 2 else ""
+     return out
+ 
+ 
+-def dt_sources(text):
+-    """型錄全文 → {決策表列編號: {"source": 那列「來源」格, "refs": [...], "checks": [{"id", "name", "source", "refs"}…]}}。
+-    給盲判材料附出處用(Projects/Android寫法語意情境表態與盲判_計劃 範圍 4;使用者第 3 要點:來源與依據在語意盲判時輔助判別):
+-    「對應檢查」每一條到型錄主表找名稱與來源欄,縮寫照〈來源縮寫〉表展開成網址。主表或縮寫表找不到時那幾格留空,不報錯
+-    (讀得懂讀不懂由 dt_table 與 catalog_problems 管)。"""
+-    abbrs = {}
+-    i_src = text.find("\n## 來源縮寫")
+-    if i_src >= 0:
+-        j = text.find("\n## ", i_src + 5)
+-        for ln in text[i_src:j if j >= 0 else len(text)].splitlines():
+-            c = _cells(ln) if ln.startswith("|") else []
+-            if len(c) >= 2 and re.fullmatch(r"[A-Z][A-Z0-9-]+", c[0]):
+-                abbrs[c[0]] = c[1]
++def abbr_hit(abbr, cell):
++    """格子裡有沒有這個縮寫(前後不接大寫英數或連字號)。"""
++    return re.search(r"(?<![A-Z0-9-])" + re.escape(abbr) + r"(?![A-Z0-9-])", cell) is not None
++
++
++def _main_names(text):
++    """型錄主表 → {編號: (名稱, 來源)};同一個編號只認第一列。"""
+     main = {}
+     for ln in text.splitlines():
+         m = _MAIN_ROW_RE.match(ln)
+         if m:
+             c = _cells(ln)
+             if len(c) >= 2:
+                 main.setdefault(m.group(1), (c[1], c[-1]))
+-    i = text.find("\n## 情境決策表")
+-    if i < 0:
+-        return {}
+-    j = text.find("\n## ", i + 5)
+-    dt = text[i:j if j >= 0 else len(text)]
+-    hdr, herr = _dt_header(dt)
+-    if herr:
+-        return {}
+-    out = {}
+-    for ln in dt.splitlines():
+-        if not re.match(r"^\|\s*D-\d+\s*\|", ln):
+-            continue
+-        c = _cells(ln)
+-        if len(c) != len(hdr):
+-            continue
+-        src = c[hdr["來源"]]
+-        checks = []
+-        for cid in dict.fromkeys(re.findall(r"[A-Z]+-\d+", c[hdr["對應檢查"]])):
+-            name, csrc = main.get(cid, ("", ""))
+-            checks.append({"id": cid, "name": name, "source": csrc, "refs": _src_expand(csrc, abbrs)})
+-        out[c[0]] = {"source": src, "refs": _src_expand(src, abbrs), "checks": checks}
++    return main
++
++
++def _src_expand(cell, abbrs):
++    """來源格 → 出處清單:格子裡的網址照收,登記在〈來源縮寫〉表的縮寫換成那一列寫的網址或說明(網址在前,縮寫依縮寫表順序,不重複)。"""
++    out = []
++    for u in re.findall(r"https?://[^\s)〕、;,，]+", cell):
++        if u not in out:
++            out.append(u)
++    for a, url in abbrs.items():
++        if abbr_hit(a, cell):
++            for u in re.findall(r"https?://[^\s)〕、;,，]+", url) or [url]:
++                if u not in out:
++                    out.append(u)
+     return out
+ 
+ 
+ def _dt_row_lint(get):
+     """決策表一列的格式要求(讀得懂之外):停用列的觸發字與證據樣式都要是(無)、觸發字不含常用字、來源不准空。"""
+     if _RETIRED in _norm(get("情境")):
+         trig, _e = dt_triggers(get("觸發字"))
+         ok_ev = re.fullmatch(r"主:\(無\);\s*例外:\(無\)", _norm(get("證據樣式")))
+         return [] if not trig and ok_ev else ["停用列的觸發字要寫(無)、證據樣式要寫「主:(無);例外:(無)」(不再出段)"]
+     trig, _e = dt_triggers(get("觸發字"))
+@@ -305,28 +302,25 @@ def _dt_row_lint(get):
+ def catalog_problems(rules=None):
+     """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
+     problems = []
+     text = CATALOG.read_text(encoding="utf-8")
+     i_dt, i_pend = text.find("\n## 情境決策表"), text.find("\n## 待查證")
+     if i_dt < 0 or i_pend < 0:
+         return [("<catalog>", "找不到〈情境決策表〉或〈待查證〉節")]
+     main, dt = text[:i_dt], text[i_dt:i_pend]
+     rows, seen = {}, set()
+     # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
+-    i_src = text.find("\n## 來源縮寫")
+-    if i_src < 0:
++    abbrs = abbr_table(text)
++    if abbrs is None:
+         # 記一筆、照樣往下檢查(縮寫當空集合),一次報齊其他問題
+         problems.append(("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)"))
+-        abbrs = set()
+-    else:
+-        i_src_end = text.find("\n## ", i_src + 5)
+-        abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end if i_src_end >= 0 else len(text)], re.M))
++        abbrs = {}
+     for ln in main.splitlines():
+         m = _MAIN_ROW_RE.match(ln)
+         if not m:
+             continue
+         rid, c = m.group(1), _cells(ln)
+         if rid in seen:
+             problems.append((rid, "編號重複"))
+         seen.add(rid)
+         if len(c) != _MAIN_COLS:
+             problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
+@@ -338,21 +332,21 @@ def catalog_problems(rules=None):
+         if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
+             problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
+         if kind.startswith("語意"):
+             if "表態對程式" not in wire:
+                 problems.append((rid, "語意類要有「表態對程式」"))
+             if "(人裁)" not in name and "盲判席" not in wire:
+                 problems.append((rid, "語意類(沒標人裁)要有「盲判席」"))
+         if "(出處不全)" not in name:
+             if any(w in src for w in _WEAK_SRC):
+                 problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
+-            if not (re.search(r"https?://", src) or any(re.search(r"(?<![A-Z0-9-])" + re.escape(a) + r"(?![A-Z0-9-])", src) for a in abbrs)):
++            if not (re.search(r"https?://", src) or any(abbr_hit(a, src) for a in abbrs)):
+                 problems.append((rid, "來源沒有網址或來源縮寫"))
+     referenced = set()
+     _dt_rows, dt_probs = dt_table(dt)          # 讀得懂讀不懂:跟 scripts/lumos 同一支
+     problems += dt_probs
+     hdr, _herr = _dt_header(dt)
+     for ln in dt.splitlines() if hdr else []:
+         if not re.match(r"^\|\s*D-\d+\s*\|", ln):
+             continue
+         c = _cells(ln)
+         did = c[0]
+diff --git a/scripts/lumos b/scripts/lumos
+index f34187176..05c47a9d7 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -17099,59 +17099,76 @@ _STATS_ABSENT_DISCLAIMER = (
+ 
+ # 哪些 gate 的 nodes 欄語意不是「圖譜節點」。★為什麼要標★:anchor-approve 記的是錨點
+ # 檔案(ANCHOR_FILES:scripts/hooks/pre-push、scripts/test_lumos.py …),與其他 gate 的圖譜
+ # 節點名不同質,同欄並列會被誤讀成可互相比較。★不能用「值裡有沒有 /」偵測★——cmd_gov 的
+ # mapper 讀進來時已把路徑 stem 成 pre-push,偵測不到(2026-08-20 實作時測試翻紅抓到)。
+ _STATS_NODE_SEMANTICS = {"anchor-approve": "此來源記的是檔案路徑", "design-loop": "此來源記的是審查編號", "code-loop": "此來源記的是審查編號(2026-11 起的 pass;舊事件與 skip 是空的)", "bound-tests": "no-config/no-pins 也記一筆,採用率看得見", "nodehome-check": "此來源記的是程式檔路徑(另有 pairs 欄記被擋的檔與節點配對)"}
+ 
+ 
+ def _gov_situation_collect(rows):
+     """治理帳列 → 情境題三方票:作者 {(段,列): 適用?}、第一盲判與仲裁 {(段,列): 票}、段的(檔, 候選列)、提醒 [(段,列,種類)]、放行 origin 計數。
+-    同一段身分只算一次:每格取最早的一筆(帳的行序)。"""
+-    author, first, arb, segkey, warns, waives = {}, {}, {}, {}, [], {}
++    同一段身分只算一次:每格取最早的一筆(帳的行序)。盲判票跟推送前核對同一套驗票與折法(_kt_bj_fold,代碼審 r1 正確性 F1 連帶、
++    架構對齊 F5:原本這裡另寫一份「每格取第一筆」、不驗票形狀,形狀壞的那筆核對不算、統計卻算)。"""
++    author, segkey, warns, waives, bj = {}, {}, [], {}, []
+     for r in rows:
+         if r.get("gate") != "code-loop" and not r.get("sit_waive"):
+             continue
+         if r.get("kind") == "dispositions" and isinstance(r.get("dispositions"), dict):
+             ent = r["dispositions"].get("kt-situation")
+             for sg in (ent.get("segments") if isinstance(ent, dict) else None) or []:
+                 if isinstance(sg, dict) and isinstance(sg.get("rows"), dict):
+                     for rid, ans in sg["rows"].items():
+                         if isinstance(ans, dict) and isinstance(ans.get("applies"), bool):
+                             author.setdefault((sg.get("seg"), rid), ans["applies"])
+-        elif r.get("kind") == "blind-judge" and isinstance(r.get("blind_judge"), dict):
+-            tgt = first if r.get("role") == "first" else arb if r.get("role") == "arbiter" else None
+-            for seg, e in r["blind_judge"].items():
+-                if tgt is None or not isinstance(e, dict) or not isinstance(e.get("rows"), dict):
+-                    continue
+-                if tgt is first:
+-                    segkey.setdefault(seg, (str(e.get("file")), tuple(sorted(e["rows"]))))
+-                for rid, v in e["rows"].items():
+-                    if isinstance(v, dict) and isinstance(v.get("applies"), bool):
+-                        tgt.setdefault((seg, rid), _kt_bj_blind_vote(v))
++        elif r.get("kind") == "blind-judge":
++            if _kt_bj_event_ok(r):
++                bj.append(r)
++                if r["role"] == "first":
++                    for seg, e in r["blind_judge"].items():
++                        segkey.setdefault(seg, (str(e.get("file")), tuple(sorted(e["rows"]))))
+         elif r.get("sit_warn"):
+             w = r["sit_warn"]
+             if w.get("seg") == "*":
+-                for k in w.get("keys") or []:
+-                    p3 = str(k).split("|")
+-                    if len(p3) in (2, 3):
+-                        warns.append((p3[0], p3[1], p3[2] if len(p3) == 3 else "evidence"))
++                keys = w.get("keys")
++                warns += [kd for kd in map(_kt_sit_key_dec, keys if isinstance(keys, list) else []) if kd]
+             else:
+                 warns.append((w.get("seg"), w.get("row"), w.get("verdict") or "evidence"))
+         elif r.get("sit_waive"):
+             waives[r["sit_waive"]] = waives.get(r["sit_waive"], 0) + 1
++    cells = _kt_bj_fold(bj)
++    first, arb = ({(seg, rid): _kt_bj_blind_vote(c[role]) for seg, rs in cells.items() for rid, c in rs.items() if role in c}
++                  for role in _KT_BJ_ROLES)
+     return author, first, arb, segkey, list(dict.fromkeys(warns)), waives
+ 
+ 
++def _gov_situation_confirm(warns, author, first, arb):
++    """提醒 [(段,列,種類)] → (證據樣式提醒逐列 {tp, fp, pend}, 多數決提醒逐列 {種類: 則數})。證據提醒依盲判終局(第一盲判同作者就是
++    第一盲判,否則看仲裁)判照做=誤報、沒照做或不適用=真陽性、還沒有=待確認;多數決提醒是盲判自己產生的,同一批盲判證不了它的真假
++    (Tricorder 用事後回饋量誤報、不靠產生提醒的分析器自評),只數則數(代碼審 r1 丙)。"""
++    conf, mj = {}, {}
++    for seg, rid, kind in warns:
++        if kind != "evidence":
++            mj.setdefault(rid, {}).setdefault(kind, 0)
++            mj[rid][kind] += 1
++            continue
++        b = conf.setdefault(rid, {"tp": 0, "fp": 0, "pend": 0})
++        k = (seg, rid)
++        av = (("applies", True) if author[k] else ("na",)) if k in author else None
++        fin = first.get(k) if (k in first and first[k] == av) else arb.get(k)
++        b["pend" if fin is None else "fp" if fin == ("applies", True) else "tp"] += 1
++    return conf, mj
++
++
+ def _render_gov_situation(rows):
+     """gov --stats 的情境題段(計劃範圍 7):每列作者判適用數、正一致率、相符率、二元 Cohen's kappa(樣本 ≥20 且兩方各有兩種答案才印);
+-    仲裁採作者/採盲判、段放行(分 ai 與 human)、重判次數、證據提醒與多數決提醒經盲判終局確認的真陽性/誤報/待確認。"""
++    仲裁採作者/採盲判、段放行(分 ai 與 human)、重判次數、證據樣式提醒經盲判終局確認的真陽性/誤報/待確認;
++    多數決提醒(多數判作者沒照做、沒有多數)只印則數(盲判自己產生的提醒,同一批盲判證不了真假,升擋前要人抽樣;代碼審 r1 丙)。"""
+     author, first, arb, segkey, warns, waives = _gov_situation_collect(rows)
+     if not (author or first or warns):
+         return
+     print("  Android 情境題(作者表態對第一盲判;同一段身分只算最早一筆;kappa 是逐列二元:適用且照做/其他):")
+     pairs_all = [(k, ("applies", True) if author[k] else ("na",), first[k]) for k in author if k in first]
+     for rid in sorted({k[1] for k in author} | {k[1] for k in first}, key=lambda x: int(x.split("-")[1]) if x[2:].isdigit() else 0):
+         n_app = sum(1 for k, a in author.items() if k[1] == rid and a)
+         ps = [(av, fv) for k, av, fv in pairs_all if k[1] == rid]
+         pos = [fv == ("applies", True) for av, fv in ps if av != ("na",)]
+         match = sum(1 for av, fv in ps if av == fv) / len(ps) if ps else None
+@@ -17165,35 +17182,27 @@ def _render_gov_situation(rows):
+     dis = [(k, av) for k, av, fv in pairs_all if av != fv and k in arb]
+     if dis or waives:
+         print(f"    仲裁採作者 {sum(1 for k, av in dis if arb[k] == av)}、採盲判 {sum(1 for k, av in dis if arb[k] != av)};"
+               f"段放行 ai {waives.get('ai', 0)}、human {waives.get('human', 0)}")
+     groups = {}
+     for seg, key in segkey.items():
+         groups.setdefault(key, set()).add(seg)
+     rej = sum(len(v) - 1 for v in groups.values())
+     if rej:
+         print(f"    同一份程式被重判 {rej} 次(同檔同候選列的段身分換過;改無關空白換身分重抽也算在這)")
+-    conf = {}
+-    for seg, rid, kind in warns:
+-        b = conf.setdefault((rid, kind), {"tp": 0, "fp": 0, "pend": 0})
+-        k = (seg, rid)
+-        av = (("applies", True) if author[k] else ("na",)) if k in author else None
+-        fin = first.get(k) if (k in first and first[k] == av) else arb.get(k)
+-        if fin is None:
+-            b["pend"] += 1
+-        elif fin == ("applies", True):
+-            b["fp"] += 1
+-        else:
+-            b["tp"] += 1
+-    for (rid, kind), b in sorted(conf.items()):
+-        print(f"    提醒確認 {rid}({'證據樣式' if kind == 'evidence' else '多數決'}):真陽性 {b['tp']}、誤報 {b['fp']}、待確認 {b['pend']}"
++    conf, mj = _gov_situation_confirm(warns, author, first, arb)
++    for rid, b in sorted(conf.items()):
++        print(f"    提醒確認 {rid}(證據樣式):真陽性 {b['tp']}、誤報 {b['fp']}、待確認 {b['pend']}"
+               "(盲判終局判照做=誤報;升擋條件見計劃 REVISIT:2027-01-08)")
++    for rid, c in sorted(mj.items()):
++        print(f"    多數決提醒 {rid}:{sum(c.values())} 則(多數判作者沒照做 {c.get(_KT_BJ_MAJORITY, 0)}、沒有多數 {c.get(_KT_BJ_NO_MAJORITY, 0)});"
++              "不算真陽性或誤報——同一批盲判證不了自己的提醒,升擋前要人抽樣判真假")
+     print()
+ 
+ 
+ def _render_gov_stats(rows, ded, loaded, since_days, cutoff, node, repo_root, escapes=None):
+     """gov --stats:純數字報表 + 未出現清單。恆不影響 rc、不改既有輸出。
+     repo_root=hook 事件檔所在的 repo 根,由呼叫端從 vault 反推(_vault_repo_root),必填、漏傳直接炸(r1 架構席:鄰居慣例不給預設);★不准用 cwd 的 git 根★——
+     2026-09-08 實踩:測試用假 vault 時讀到真 repo 的事件檔,平行推送閘期間 hook 一直在追加,同一支測試兩次呼叫統計段就不同。
+     ★三層數字不可互相冒充★:原始行(帳檔寫入)/去重列(本函式計數依據)/呈現行(預設畫面另折一層)。"""
+     print()
+     print("─" * 33)
+@@ -17482,20 +17491,23 @@ _GOV_FIELD_TYPES = {
+                     (str,)),
+     **dict.fromkeys(("auditor", "check", "loop", "recall_miss", "report_sha256", "record_sha256", "head_sha"), (str, type(None))),
+     "secs": (int, float, type(None)),
+     "failed_items": (list, type(None)),
+     "not_run_items": (list, type(None)),
+     "round": (str, int, type(None)),
+     "nodes": (list,),
+     **dict.fromkeys(("findings", "reported"), (int, type(None))),
+     **dict.fromkeys(("pairs", "findings_set", "refuted_set", "folded_set", "accepted_set"), (list, type(None))),
+     **dict.fromkeys(("finding_kinds", "refute_verdicts", "dispositions", "finding_sources", "blind_judge"), (dict, type(None))),
++    # 情境題盲判與提醒(代碼審 r1 架構對齊 F4):seg/row 下游當集合元素與字典鍵、keys 逐項拆,型別錯會讓整個 gov 當掉
++    **dict.fromkeys(("role", "seg", "row"), (str, type(None))),
++    "keys": (list, type(None)),
+     # 預期值表簽核(高風險測試證據加嚴_計劃 做法 4)
+     **dict.fromkeys(("plan", "table_sha", "origin"), (str,)),
+     "row_count": (int,),
+ }
+ 
+ 
+ def _gov_event_types_ok(d):
+     """治理事件物件的欄位型別合不合 _GOV_FIELD_TYPES(外加 pairs 每項成對、finding_kinds/refute_verdicts 的值是字串、finding_sources 的值是字串清單)。"""
+     for k, types in _GOV_FIELD_TYPES.items():
+         if k in d and not isinstance(d[k], types):
+@@ -71585,21 +71597,21 @@ def _codeloop_gov_append(repo_root, ev):
+     return True, ""
+ 
+ 
+ def _codeloop_write_dispositions(repo_root, branch, head_sha, ts, dispositions):
+     """再原子寫 marker governance/code-loop/<branch>.dispositions.json(暫存+os.replace,同 _write_lf 慣例;r1 外家 F6)。"""
+     return _codeloop_write_marker(repo_root, branch, "dispositions",
+                                   {"head_sha": head_sha, "branch": branch, "ts": ts, "dispositions": dispositions})
+ 
+ 
+ def _codeloop_write_marker(repo_root, branch, suffix, payload):
+-    """表態與盲判共用的本機標記檔寫入:governance/code-loop/<branch>.<suffix>.json,暫存檔帶 pid+隨機再 os.replace。"""
++    """本機標記檔寫入:governance/code-loop/<branch>.<suffix>.json,暫存檔帶 pid+隨機再 os.replace(表態用;盲判只寫治理帳,代碼審 r1 甲)。"""
+     import json
+     d = Path(repo_root) / "governance" / "code-loop"
+     d.mkdir(parents=True, exist_ok=True)
+     p = d / f"{_codeloop_branch_filename(branch)}.{suffix}.json"
+     # 暫存名帶 pid+隨機(r1 併發席 f1):_write_lf 的固定 .tmp-wlf 名兩個行程同時寫會互搶,一方 os.replace 找不到檔
+     import tempfile as _tf
+     fd, tmp = _tf.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=str(d))
+     try:
+         with os.fdopen(fd, "wb") as f:
+             f.write((json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+@@ -72039,48 +72051,50 @@ def _disp_record_for(repo_root, marker_sha, marker_branch, merge_side, deadline=
+     花掉的時間加回逐題核對的期限,不吃它的預算(代碼審 r1 併發席)。"""
+     import time as _t
+     rec = _codeloop_read_dispositions(repo_root, marker_branch)
+     ok, why = (False, "") if rec is None else _codeloop_record_valid(repo_root, str(rec.get("head_sha") or ""), marker_sha)
+     if ok or merge_side is None:
+         return rec, ok, why, deadline
+     t0 = _t.monotonic()
+     ev, mwhy = merge_side()
+     deadline = None if deadline is None else deadline + (_t.monotonic() - t0)
+     if ev is not None:
+-        return _codeloop_disp_from_event(ev), True, "", deadline
++        # 標明這份是合進來那一側的:盲判紀錄跟著讀那一側的帳與分支名(代碼審 r1 架構對齊 F2)
++        return {**_codeloop_disp_from_event(ev), "_merge_side": True}, True, "", deadline
+     return rec, False, ";".join(x for x in (why, mwhy) if x), deadline
+ 
+ 
+ _KT_SIT_WAIVE_PREFIX = "kt-situation:"   # 段放行記在新增告警閘的放行檔(.lumos/lint-waivers.json),指紋 = 這個前綴 + 段身分
+ 
+ 
+ def _kt_sit_catalog_problem(meta):
+     """Android 的 kt 改動(題表裡有 android_only 的 kt 題=平台沒被排除)而型錄的情境決策表讀不到或格式壞 → (種類, 一句);否則 None。
+     種類 "env":型錄或自檢程式的檔不在=環境不可用,照新增告警閘「工具沒裝」的先例只提醒、記一筆 fail-open 帳、不擋;
+     種類 "block":檔在但讀表失敗=無法驗證、擋下(代碼審 r1 D3)。pitfalls 那邊在 _kt_situation_apply 印提醒。"""
+     android = {s["id"] for s in _STACK_QUESTION_SPECS["kt"] if s.get("android_only")}
+     if not _KT_DT_ERR or not any(r.get("id") in android for r in meta.get("kt", [])):
+         return None
+     if _KT_DT_MISSING:
+         return ("env", f"{_KT_SIT_QID} 環境不可用:Kotlin 型錄的情境決策表{_KT_DT_ERR};這次不核情境題、不擋。型錄隨工具鏈安裝"
+                        f"(LUMOS_HOME 或 ~/harness/lumos-toolchain 的 {_KT_CATALOG_REL}),裝好後就會核")
+     return ("block", f"{_KT_SIT_QID} 無法驗證:Kotlin 型錄的情境決策表{_KT_DT_ERR}——擋下不放行。型錄在 {_kt_catalog_path()[0]},"
+                      "讀不懂是型錄本身壞了,重填表態救不了;更新或重裝工具鏈(或修那份型錄)後再跑")
+ 
+ 
+-def _kt_sit_verdict_one(repo_root, diff_range, at_sha, ent, cache, deadline=None, branch=None):
++def _kt_sit_verdict_one(repo_root, diff_range, at_sha, ent, cache, deadline=None, branch=None, bj_raw=None):
+     """表態核對裡的情境題(範圍 3):在被推版本上重算情境段(同一次核對只算一次,記在 cache),逐段逐列核對 → None(過)或一句問題。
+     一段都切不出來 → 這題視同不適用、不核。擋的只有缺段、缺列、答案形狀不對,以及算不出來(git 失敗、範圍或版本不存在、型錄讀不懂)
+     的無法驗證;證據樣式對不上記進 cache["reminders"](呼叫端印提醒、記帳、算待盲判),不擋(代碼審 r2 換形狀)。
+     超過 deadline 記 cache["over_budget"]、回 None(照表態閘既有的 over_budget 規則,代碼審 r2 架構 F5)。
+     有段放行的段只略過證據提醒與多數決提醒,段數記進 cache["waived"]。
+-    盲判核對(範圍 4,branch=表態寫在哪個分支名下):缺第一盲判、不一致缺仲裁照擋;多數判作者沒照做進 cache["reminders"](不擋)。"""
++    盲判核對(範圍 4,branch=表態寫在哪個分支名下、bj_raw=合併提交認合進來那一側時那一側的帳):缺第一盲判、不一致缺仲裁照擋;
++    多數判作者沒照做與三方各異進 cache["reminders"](不擋)。"""
+     if "segs" not in cache:
+         _kt_sit_say_catalog()
+         try:
+             cache["segs"] = _kt_situation_segments(repo_root, diff_range, at_sha, skip=_vendored_skip(repo_root, diff_range), deadline=deadline)
+         except _KtSitOverBudget:
+             cache["segs"] = None
+             cache["over_budget"] = True
+         except (_KtSitUnverifiable, OSError, subprocess.TimeoutExpired) as e:
+             cache["segs"] = _KtSitUnverifiable(str(e) if isinstance(e, _KtSitUnverifiable) else e.__class__.__name__)
+     segs = cache["segs"]
+@@ -72096,157 +72110,209 @@ def _kt_sit_verdict_one(repo_root, diff_range, at_sha, ent, cache, deadline=None
+     waived = {k[len(_KT_SIT_WAIVE_PREFIX):] for k in waivers if k.startswith(_KT_SIT_WAIVE_PREFIX)}
+     cache["waived"] = sum(1 for sg in segs if sg["seg"] in waived)
+     reminders = cache.setdefault("reminders", [])
+     try:
+         probs = _kt_sit_check(ent, segs, waived=waived, deadline=deadline, reminders=reminders)
+     except _KtSitOverBudget as e:
+         cache["over_budget"] = True
+         probs = e.probs                     # 逾時前已查出的缺段缺列照擋(代碼審 r3 通才 F1)
+     bj = []
+     if branch and not cache.get("over_budget") and not (probs and "只收 satisfied" in probs[0]):
+-        bj, notes = _kt_bj_check(segs, ent, _kt_bj_read(repo_root, branch), waived=waived, branch=branch)
++        bj, notes = _kt_bj_check(segs, ent, _kt_bj_read(repo_root, branch, bj_raw), waived=waived, branch=branch)
+         for r in reminders:   # 證據提醒的那一格盲判終局已判照做:提醒照印,講明多半是樣式誤報(S8 實跑:原本照寫「待盲判」)
+             if not r.get("verdict") and (r["seg"], r["row"]) in notes["followed"]:
+                 r["confirmed"] = "followed"
+         reminders.extend(notes["majority"])
+         cache["arbiter_author"] = cache.get("arbiter_author", 0) + notes["arbiter_author"]
++        cache["blind_agree"] = cache.get("blind_agree", 0) + notes["blind_agree"]
+     out = []
+     if probs:
+         more = f";…另有 {len(probs) - 6} 處" if len(probs) > 6 else ""
+         out.append("表態對不上程式:" + ";".join(probs[:6]) + more)
+     if bj:
+         out.append("盲判紀錄沒齊:" + ";".join(bj))
+     return f"{_KT_SIT_QID} " + ";".join(out) if out else None
+ 
+ 
+ _KT_SIT_LEDGER_CAP = 20   # 一次推送逐筆記帳的證據提醒上限,其餘併成一筆總數(代碼審 r3 資源 F1)
+ 
+ 
+ def _kt_sit_reminder_lines(reminders):
+     """證據樣式對不上的提醒 → 印給人的幾行(最多 6 條,每條帶照抄就能用的段放行指令)。只回傳、不記帳:
+     帳由呼叫那一層 _kt_sit_reminder_log 寫(照 _codeloop_lint_new_step「判定函式只回傳、帳由呼叫那一層寫」,代碼審 r3)。"""
+     lines = []
+     for i, r in enumerate(reminders):
+         if i < 6 and r.get("verdict") == _KT_BJ_MAJORITY:
+-            lines.append(f"{_KT_SIT_QID} 多數決提醒(不擋,記帳待升擋統計):{r['text']}")   # 句子自帶段放行指令
++            lines.append(f"{_KT_SIT_QID} 多數決提醒(不擋,記帳;升擋前要人抽樣):{r['text']}")   # 句子自帶段放行指令
++        elif i < 6 and r.get("verdict") == _KT_BJ_NO_MAJORITY:
++            lines.append(f"{_KT_SIT_QID} 沒有多數的提醒(不擋,記帳;要人裁):{r['text']}")
+         elif i < 6:
+             cmd = _lint_waive_cmd({"key": _KT_SIT_WAIVE_PREFIX + r["seg"], "rule": _KT_SIT_QID, "file": _kill_esc(r["file"])})
+             tag = "不擋,盲判已判照做:多半是樣式誤報,記在帳上供升擋統計" if r.get("confirmed") == "followed" else "不擋,待盲判"
+             lines.append(f"{_KT_SIT_QID} 證據樣式提醒({tag}):{r['text']}。確定照型錄寫對、這段不想再提醒:`{cmd}`")
+     if len(reminders) > 6:
+         lines.append(f"{_KT_SIT_QID} 另有 {len(reminders) - 6} 條證據樣式或多數決提醒(記在治理帳)")
+     return lines
+ 
+ 
++def _kt_sit_key_enc(seg, row, kind):
++    """提醒總數事件 keys 的一項:證據提醒「段|列」、多數決提醒「段|列|種類」。寫入、去重與 gov --stats 只用這一對(代碼審 r1 架構對齊 F5)。"""
++    return f"{seg}|{row}" if kind == "evidence" else f"{seg}|{row}|{kind}"
++
++
++def _kt_sit_key_dec(k):
++    """keys 的一項 → (段, 列, 種類) 或 None(不是字串、或不是兩段或三段)。"""
++    p = k.split("|") if isinstance(k, str) else []
++    return (p[0], p[1], p[2] if len(p) == 3 else "evidence") if len(p) in (2, 3) else None
++
++
+ def _kt_sit_reminder_log(repo_root, head_sha, reminders):
+     """證據提醒記帳(閘 code-loop、kind warned、scope kt-situation、pending blind-judge):以 (head_sha, seg, row) 去重——
+     同一版本重跑 check、pre-push 與 CI 不重記(升擋要數的是被提醒過的(段,列),不是核對次數,代碼審 r3 資源 F1);
+     每次最多逐筆 _KT_SIT_LEDGER_CAP 筆,其餘併成一筆總數事件;head_sha 只取一次、傳進每筆,不逐筆開 git。回寫了幾筆。"""
+     import json as _j
+     if not reminders or not head_sha:
+         return 0
+     seen = set()
+     p = Path(repo_root) / "docs" / ".governance-log.jsonl"
+     try:
+         raw = p.read_bytes() if p.is_file() else b""
+     except OSError:
+         raw = b""
+     tag = head_sha.encode("ascii", "replace")
+     for ln in raw.split(b"\n"):
+         if b'"kt-situation"' in ln and tag in ln and b'"warned"' in ln:
+             try:
+                 d = _j.loads(ln)
+-            except ValueError:
++            except (ValueError, RecursionError):   # 深層巢狀的壞行丟 RecursionError(照 _drift_jsonl_parse 的接法)
+                 continue
+             if isinstance(d, dict) and d.get("scope") == _KT_SIT_QID and d.get("head_sha") == head_sha:
+                 seen.add((d.get("seg"), d.get("row"), d.get("verdict") or "evidence"))
+-                for k in d.get("keys") or []:   # 總數事件收的那幾組:段|列 或 段|列|種類(多數決提醒)
+-                    p3 = str(k).split("|")
+-                    if len(p3) in (2, 3):
+-                        seen.add((p3[0], p3[1], p3[2] if len(p3) == 3 else "evidence"))
++                keys = d.get("keys")
++                for k in keys if isinstance(keys, list) else []:   # 總數事件收的那幾組(編碼見 _kt_sit_key_enc)
++                    kd = _kt_sit_key_dec(k)
++                    if kd:
++                        seen.add(kd)
+     new, keys = [], set()
+     for r in reminders:
+         k = (r["seg"], r["row"], r.get("verdict") or "evidence")   # 證據提醒與多數決提醒分開去重
+         if k in seen or k in keys:
+             continue
+         keys.add(k)
+         new.append(r)
+     for r in new[:_KT_SIT_LEDGER_CAP]:
+         _gate_event_or_warn(repo_root, "code-loop", "warned", r["text"][:120], hard=False, head_sha=head_sha,
+                             extra={"scope": _KT_SIT_QID, "seg": r["seg"], "row": r["row"], "variant": r["variant"],
+                                    **({"verdict": r["verdict"]} if r.get("verdict") else {"pending": "blind-judge"})})
+     rest = new[_KT_SIT_LEDGER_CAP:]
+     if rest:
+         _gate_event_or_warn(repo_root, "code-loop", "warned", f"另有 {len(rest)} 條證據樣式提醒沒逐筆記", hard=False, head_sha=head_sha,
+                             extra={"scope": _KT_SIT_QID, "seg": "*", "row": "*", "count": len(rest), "pending": "blind-judge",
+-                                   "keys": [f"{r['seg']}|{r['row']}" + (f"|{r['verdict']}" if r.get("verdict") else "") for r in rest]})
++                                   "keys": [_kt_sit_key_enc(r["seg"], r["row"], r.get("verdict") or "evidence") for r in rest]})
+     return min(len(new), _KT_SIT_LEDGER_CAP) + (1 if rest else 0)
+ 
+ 
+ # ── 盲判(Projects/Android寫法語意情境表態與盲判_計劃 範圍 4、6,2026-11-06)──
+ # 一個沒看過作者表態的代理逐段逐列判 {applies, followed};作者與第一盲判不一致再派仲裁。推送前「紀錄要齊才放行」(缺第一盲判、
+ # 不一致缺仲裁 → 擋:那是紀錄在不在的機械核對,同缺段缺列),「判決先只提醒」(三方多數判作者沒照做 → 印三方票與理由、記提醒帳,
+ # 跟證據樣式提醒同一套去重封頂;升擋照計劃 REVISIT:2027-01-08 逐列決定——代碼審 r2 換形狀:靠語意的先 Comment 不 Block)。
+-# 紀錄的讀寫沿用表態那組:先寫治理帳(_codeloop_gov_append)、再原子寫本機標記檔(_codeloop_write_marker);讀側標記檔優先,
+-# 沒有就從治理帳這個分支所有 blind-judge 事件依行序重建,每格取第一筆。
++# 紀錄只有治理帳一份(代碼審 r1 甲,事件溯源:只追加的帳是唯一真相):寫入只追加一筆 blind-judge 事件;讀側一律從治理帳
++# 這個分支(名字完全相同)的 blind-judge 事件依行序折出,驗票形狀、形狀不對的那筆整筆跳過,每格取第一筆。不寫也不讀本機標記檔
++# ——原本「標記檔優先、壞了才退帳」讓舊標記檔蓋掉帳、內層壞掉炸成放行、a/b 與 a__b 撞同一個檔(r1 正確性 F1 到 F3)。
+ _KT_BJ_KIND = "blind-judge"
+ _KT_BJ_PART_MAX = 30           # 一份盲判材料最多幾段(每份派一個代理)
+ _KT_BJ_ROW_KEYS = frozenset(("applies", "followed", "reason"))
+ _KT_BJ_REASON_MAX = 2000
+-_KT_BJ_MAJORITY = "majority-against-author"
++_KT_BJ_ROLES = ("first", "arbiter")
++_KT_BJ_MAJORITY = "majority-against-author"   # 兩位盲判一致判「適用但沒照做」、作者不同
++_KT_BJ_NO_MAJORITY = "no-majority"            # 作者、第一盲判、仲裁三方各異:沒有多數、要人裁(代碼審 r1 丙)
++_KT_BJ_VERDICTS = (_KT_BJ_MAJORITY, _KT_BJ_NO_MAJORITY)
+ 
+ 
+-def _kt_bj_marker_path(repo_root, branch):
+-    return Path(repo_root) / "governance" / "code-loop" / f"{_codeloop_branch_filename(branch)}.blind-judge.json"
++def _kt_bj_vote_ok(v):
++    """一票的形狀對不對(讀帳與寫入驗證同一個標準):{applies 布林, 適用時 followed 布林、不適用時沒有 followed, reason 字串},沒有別的欄位。"""
++    if not isinstance(v, dict) or set(v) - _KT_BJ_ROW_KEYS or not isinstance(v.get("applies"), bool) or not isinstance(v.get("reason"), str):
++        return False
++    return isinstance(v.get("followed"), bool) if v["applies"] else "followed" not in v
++
++
++def _kt_bj_event_ok(ev):
++    """一筆 blind-judge 事件能不能折進紀錄:role 認得、blind_judge 每段 {rows: {列: 票}} 每票形狀都對。有一處不對整筆不算(不放行)。"""
++    bj = ev.get("blind_judge")
++    if ev.get("role") not in _KT_BJ_ROLES or not isinstance(bj, dict) or not bj:
++        return False
++    for seg, ent in bj.items():
++        if not isinstance(seg, str) or not isinstance(ent, dict) or not isinstance(ent.get("rows"), dict) or not ent["rows"]:
++            return False
++        if not all(isinstance(rid, str) and _kt_bj_vote_ok(v) for rid, v in ent["rows"].items()):
++            return False
++    return True
+ 
+ 
+ def _kt_bj_cells_add(cells, judgments, role):
+-    """把一筆盲判事件的判決({段: {file, rows: {列: 票}}})併進 cells({段: {列: {first, arbiter}}});每格只認第一筆。
++    """把一筆(已驗過形狀的)盲判判決({段: {file, rows: {列: 票}}})併進 cells({段: {列: {first, arbiter}}});每格只認第一筆。
+     回已有值、這次沒寫進去的 [(段, 列)…]。"""
+     skipped = []
+-    for seg, ent in (judgments or {}).items():
+-        if not isinstance(ent, dict) or not isinstance(ent.get("rows"), dict):
+-            continue
++    for seg, ent in judgments.items():
+         for rid, v in ent["rows"].items():
+-            if not isinstance(v, dict) or not isinstance(v.get("applies"), bool):
+-                continue
+-            c = cells.setdefault(str(seg), {}).setdefault(str(rid), {})
++            c = cells.setdefault(seg, {}).setdefault(rid, {})
+             if role in c:
+                 skipped.append((seg, rid))
+                 continue
+             c[role] = {k: v[k] for k in ("applies", "followed", "reason") if k in v}
+     return skipped
+ 
+ 
+-def _kt_bj_read(repo_root, branch):
+-    """這個分支的盲判紀錄 → {段身分: {列: {"first": 票, "arbiter": 票}}}。標記檔優先(壞掉就當沒有),否則從治理帳重建。"""
+-    import json
+-    p = _kt_bj_marker_path(repo_root, branch)
+-    if p.is_file():
+-        try:
+-            d = json.loads(p.read_text(encoding="utf-8"))
+-            if isinstance(d, dict) and isinstance(d.get("cells"), dict):
+-                return d["cells"]
+-        except (OSError, ValueError):
+-            pass   # 壞掉的標記檔跟沒有一樣:退治理帳重建
++def _kt_bj_fold(events):
++    """依行序的 blind-judge 事件 → cells;形狀不對的那筆整筆跳過。核對、寫入前的重複檢查與 gov --stats 共用這一支。"""
+     cells = {}
+-    lp = Path(repo_root) / "docs" / ".governance-log.jsonl"
+-    try:
+-        text = lp.read_text(encoding="utf-8", errors="replace") if lp.is_file() else ""
+-    except OSError:
+-        text = ""
+-    for ev in _codeloop_ledger_events(text, (_KT_BJ_KIND,)):
+-        if ev.get("branch") == branch and ev.get("role") in ("first", "arbiter") and isinstance(ev.get("blind_judge"), dict):
++    for ev in events:
++        if isinstance(ev, dict) and _kt_bj_event_ok(ev):
+             _kt_bj_cells_add(cells, ev["blind_judge"], ev["role"])
+     return cells
+ 
+ 
++def _kt_bj_ledger_events(raw, branch):
++    """治理帳全文(位元組或字串)→ 這個分支(名字完全相同)的 blind-judge 事件,依行序。讀前用位元組找 "blind-judge" 只解碼那幾行
++    (同 _kt_sit_reminder_log 的預篩;帳約 20 MB、盲判事件只佔少數)。"""
++    import json
++    if isinstance(raw, str):
++        raw = raw.encode("utf-8", "replace")
++    tok, pos, out = b'"' + _KT_BJ_KIND.encode() + b'"', 0, []
++    while True:
++        i = raw.find(tok, pos)
++        if i < 0:
++            return out
++        a, b = raw.rfind(b"\n", 0, i) + 1, raw.find(b"\n", i)
++        b = len(raw) if b < 0 else b
++        pos = b + 1
++        try:
++            ev = json.loads(raw[a:b].decode("utf-8", "replace"))
++        except (ValueError, RecursionError):   # 深層巢狀的壞行丟 RecursionError(照 _drift_jsonl_parse 的接法)
++            continue
++        if (isinstance(ev, dict) and ev.get("gate") == "code-loop" and ev.get("kind") == _KT_BJ_KIND
++                and isinstance(ev.get("head_sha"), str) and ev["head_sha"] and ev.get("branch") == branch):
++            out.append(ev)
++
++
++def _kt_bj_read(repo_root, branch, raw=None):
++    """這個分支的盲判紀錄 → {段身分: {列: {"first": 票, "arbiter": 票}}},只從治理帳折出。raw=要讀的帳全文
++    (合併提交認合進來那一側時傳那一側的帳,跟表態同一份);沒給就讀工作目錄的 docs/.governance-log.jsonl。"""
++    if raw is None:
++        lp = Path(repo_root) / "docs" / ".governance-log.jsonl"
++        try:
++            raw = lp.read_bytes() if lp.is_file() else b""
++        except OSError:
++            raw = b""
++    return _kt_bj_fold(_kt_bj_ledger_events(raw, branch))
++
++
+ def _kt_bj_author_vote(ans):
+     """作者一段一列的答案 → 票:適用就是宣稱照做。"""
+     return ("applies", True) if ans.get("applies") else ("na",)
+ 
+ 
+ def _kt_bj_blind_vote(v):
+     return ("applies", bool(v.get("followed"))) if v.get("applies") else ("na",)
+ 
+ 
+ def _kt_bj_vote_text(vote):
+@@ -72256,27 +72322,52 @@ def _kt_bj_vote_text(vote):
+ def _kt_bj_howto(branch=None):
+     """要跑盲判的四步指令(pitfalls 與推送前擋下訊息共用)。"""
+     br = f" --branch {branch}" if branch else ""
+     return ("要跑盲判:①`lumos code-loop blind-judge --template" + br + " > /tmp/bj.json`(段多時分份,stderr 會講,用 --part 2… 印其餘)"
+             "②每份派一個全新的代理,派工詞只放那份材料與作答格式,寫明不得讀表態檔與 governance/code-loop/"
+             "③`lumos code-loop blind-judge <結果.json>" + br + "`"
+             "④`code-loop check` 說作者與第一盲判對不上時,`lumos code-loop blind-judge --template --disagreements" + br
+             + "` 再派一個全新代理,結果用 `--arbiter` 寫入(推 HEAD:別名 時每步加 --branch 別名)")
+ 
+ 
++def _kt_bj_arbitrate(av, fv, rv):
++    """作者、第一盲判不一致又有仲裁時的判法 → "arbiter_author"(仲裁同作者)、"blind_agree"(兩位盲判一致判照做或不適用:不是沒照做,
++    不叫作者改碼)、_KT_BJ_MAJORITY(兩位盲判一致判適用但沒照做)、_KT_BJ_NO_MAJORITY(三方各異:不硬判,交人裁)。
++    代碼審 r1 正確性 F4、測試 F1:原本仲裁不同作者一律算多數判作者沒照做。"""
++    if rv == av:
++        return "arbiter_author"
++    if rv != fv:
++        return _KT_BJ_NO_MAJORITY
++    return _KT_BJ_MAJORITY if fv == ("applies", False) else "blind_agree"
++
++
++def _kt_bj_majority_text(verdict, sg, where, rid, votes3, first, arb):
++    """多數決提醒的句子:三方的票與兩位盲判的理由,加段放行指令。三方各異時講沒有多數、要人裁,不叫作者改碼。"""
++    av, fv, rv = votes3
++    votes = (f"作者 {_kt_bj_vote_text(av)};第一盲判 {_kt_bj_vote_text(fv)}({_kill_esc(str(first.get('reason') or ''))[:200]});"
++             f"仲裁 {_kt_bj_vote_text(rv)}({_kill_esc(str(arb.get('reason') or ''))[:200]})")
++    cmd = _lint_waive_cmd({"key": _KT_SIT_WAIVE_PREFIX + sg["seg"], "rule": _KT_SIT_QID, "file": _kill_esc(sg["file"])})
++    if verdict == _KT_BJ_MAJORITY:
++        return (f"段 {sg['seg']}({where})的 {rid} 三方多數判作者沒照做:{votes}。"
++                f"照型錄那列改碼後重表態、重判;確定這段寫對了、不想再提醒:`{cmd}`")
++    return (f"段 {sg['seg']}({where})的 {rid} 三方各異、沒有多數,要人裁:{votes}。"
++            f"人看過段材料判定後,寫對了就關掉這段提醒:`{cmd}`")
++
++
+ def _kt_bj_check(segs, ent, cells, waived=frozenset(), branch=None):
+-    """推送前的盲判核對 → ([擋下句…], 註記 {majority: [提醒…], arbiter_author: n, waived_majority: n})。
+-    擋:候選列缺第一盲判、作者與第一盲判不一致又缺仲裁。不擋:仲裁同作者(記一次仲裁採作者);仲裁同第一盲判=多數判作者沒照做,
+-    進 majority(呼叫端印、記提醒帳;有段放行的段只計數不提醒)。作者沒答或答案形狀不對的格不在這裡講(表態對程式那一步已擋)。"""
++    """推送前的盲判核對 → ([擋下句…], 註記 {majority: [提醒…], arbiter_author: n, blind_agree: n, waived_majority: n, followed: {(段,列)}})。
++    擋:候選列缺第一盲判、作者與第一盲判不一致又缺仲裁。不擋:仲裁同作者(記一次仲裁採作者);兩位盲判一致判照做或不適用(記 blind_agree,
++    不叫改碼);兩位盲判一致判「適用但沒照做」=多數判作者沒照做、三方各異=沒有多數要人裁,兩種都進 majority(呼叫端印、記提醒帳;
++    有段放行的段只計數不提醒)。作者沒答或答案形狀不對的格不在這裡講(表態對程式那一步已擋)。"""
+     answers = {a.get("seg"): a for a in (ent or {}).get("segments") or [] if isinstance(a, dict)}
+     missing, disagree = {}, []     # missing:段 → (位置, [列…]),訊息一段一句(S8 實跑:同一段四列重複印四次位置太長)
+-    notes = {"majority": [], "arbiter_author": 0, "waived_majority": 0, "followed": set()}   # followed:盲判終局判照做的(段,列)
++    notes = {"majority": [], "arbiter_author": 0, "blind_agree": 0, "waived_majority": 0, "followed": set()}   # followed:盲判終局判照做的(段,列)
+     for sg in segs:
+         a = answers.get(sg["seg"]) or {}
+         rows = a.get("rows") if isinstance(a.get("rows"), dict) else {}
+         where = f"{_kill_esc(sg['file'])}:{sg['start']}-{sg['end']}"
+         for rid in sg["rows"]:
+             cell = (cells.get(sg["seg"]) or {}).get(rid) or {}
+             first = cell.get("first")
+             if not isinstance(first, dict):
+                 missing.setdefault(sg["seg"], (where, []))[1].append(rid)
+                 continue
+@@ -72285,35 +72376,32 @@ def _kt_bj_check(segs, ent, cells, waived=frozenset(), branch=None):
+                 continue
+             av, fv = _kt_bj_author_vote(ans), _kt_bj_blind_vote(first)
+             if av == fv:
+                 if fv == ("applies", True):
+                     notes["followed"].add((sg["seg"], rid))
+                 continue
+             arb = cell.get("arbiter")
+             if not isinstance(arb, dict):
+                 disagree.append(f"段 {sg['seg']}({where})的 {rid}:作者 {_kt_bj_vote_text(av)}、第一盲判 {_kt_bj_vote_text(fv)}")
+                 continue
+-            if _kt_bj_blind_vote(arb) == av:
+-                notes["arbiter_author"] += 1
+-                if av == ("applies", True):
++            rv = _kt_bj_blind_vote(arb)
++            verdict = _kt_bj_arbitrate(av, fv, rv)
++            if verdict in ("arbiter_author", "blind_agree"):
++                notes[verdict] += 1
++                if rv == ("applies", True):   # 終局就是仲裁票(同作者或同第一盲判)
+                     notes["followed"].add((sg["seg"], rid))
+                 continue
+             if sg["seg"] in waived:
+                 notes["waived_majority"] += 1
+                 continue
+-            cmd = _lint_waive_cmd({"key": _KT_SIT_WAIVE_PREFIX + sg["seg"], "rule": _KT_SIT_QID, "file": _kill_esc(sg["file"])})
+-            notes["majority"].append({
+-                "seg": sg["seg"], "file": sg["file"], "row": rid, "variant": ans.get("variant"), "verdict": _KT_BJ_MAJORITY,
+-                "text": (f"段 {sg['seg']}({where})的 {rid} 三方多數判作者沒照做:作者 {_kt_bj_vote_text(av)};"
+-                         f"第一盲判 {_kt_bj_vote_text(fv)}({_kill_esc(str(first.get('reason') or ''))[:200]});"
+-                         f"仲裁 {_kt_bj_vote_text(_kt_bj_blind_vote(arb))}({_kill_esc(str(arb.get('reason') or ''))[:200]})。"
+-                         f"照型錄那列改碼後重表態、重判;確定這段寫對了、不想再提醒:`{cmd}`")})
++            notes["majority"].append({"seg": sg["seg"], "file": sg["file"], "row": rid, "variant": ans.get("variant"), "verdict": verdict,
++                                      "text": _kt_bj_majority_text(verdict, sg, where, rid, (av, fv, rv), first, arb)})
+     probs = []
+     if missing:
+         n = sum(len(r) for _w, r in missing.values())
+         items = [f"段 {seg}({w})的 {'、'.join(r)}" for seg, (w, r) in missing.items()]
+         more = f";…另有 {len(items) - 6} 段" if len(items) > 6 else ""
+         probs.append(f"缺第一盲判 {n} 格({';'.join(items[:6])}{more})——{_kt_bj_howto(branch)}")
+     if disagree:
+         more = f";…另有 {len(disagree) - 6} 格" if len(disagree) > 6 else ""
+         br = f" --branch {branch}" if branch else ""
+         probs.append(f"作者與第一盲判對不上、缺仲裁 {len(disagree)} 格({';'.join(disagree[:6])}{more})——再派一個全新代理仲裁:"
+@@ -72329,55 +72417,35 @@ def _kappa2(pairs):
+     n = len(pairs)
+     if not n or len({a for a, _b in pairs}) < 2 or len({b for _a, b in pairs}) < 2:
+         return None
+     po = sum(1 for a, b in pairs if a == b) / n
+     pa = sum(1 for a, _b in pairs if a) / n
+     pb = sum(1 for _a, b in pairs if b) / n
+     pe = pa * pb + (1 - pa) * (1 - pb)
+     return None if pe >= 1 else (po - pe) / (1 - pe)
+ 
+ 
+-_KT_DT_SOURCES = []
+-
+-
+-def _kt_dt_sources():
+-    """型錄每列的出處({列編號: {source, refs, checks}}):讀法在規則包自檢程式的 dt_sources(跟 dt_table 同一支);讀不到回 {}
+-    (出處只是給盲判參考,讀不到照樣出材料,材料裡講一句)。一個行程只讀一次。"""
+-    if _KT_DT_SOURCES:
+-        return _KT_DT_SOURCES[0]
+-    out = {}
+-    mod, _why = _kt_pack_check()
+-    fn = getattr(mod, "dt_sources", None) if mod is not None else None
+-    if fn is not None:
+-        try:
+-            got = fn(_kt_catalog_path()[0].read_text(encoding="utf-8"))
+-            out = got if isinstance(got, dict) else {}
+-        except Exception:   # 別支檔的程式,炸了就當沒有出處(同 _kt_decision_table 的處理)
+-            out = {}
+-    _KT_DT_SOURCES.append(out)
+-    return out
+-
+-
+-def _kt_bj_range(repo_root, diff_range, at_sha, branch):
+-    """盲判要用的改動範圍:給了就用;沒給照 code-loop check 算表態適用題的那個範圍——merge-base(主線, 版本)..版本,
+-    推的就是主線或算不出來時退 _codeloop_default_base。段身分跟範圍切出的 hunk 有關,兩邊要算同一個範圍才對得上。"""
+-    if diff_range:
+-        return diff_range
++def _codeloop_disp_range(repo_root, marker_branch, marker_sha, diff_range):
++    """表態適用題(含情境段)的範圍 → (分支頂端已在主線上?, 範圍)。code-loop check 與盲判共用這一支(代碼審 r1 架構對齊 F1:
++    原本 check 內嵌一份、盲判抄一份,退路不同,段身分綁範圍切出的 hunk,兩邊範圍一對不上盲判就核不到)。
++    推的不是主線、找得到 merge-base(主線, 版本) → 那個 merge-base..版本(把主線合進分支再推時,推送範圍會把主線帶進來的碼算成本次要表態,
++    r3 邊界席 B1);merge-base 就是版本本身 → (True, None):沒有本分支自己的改動、沒有題要答;推主線本身或算不出來 → 原樣用 diff_range。"""
+     import subprocess as _sp
+     ml = _mainline_ref(repo_root)
+-    if ml and branch != ml[0].split("@")[0]:
+-        r = _sp.run(["git", "merge-base", ml[1], at_sha], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
++    if ml and marker_branch and marker_branch != ml[0].split("@")[0]:
++        r = _sp.run(["git", "merge-base", ml[1], marker_sha], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+         mb = r.stdout.strip() if r.returncode == 0 else ""
+-        if mb and mb != at_sha:
+-            return f"{mb}..{at_sha}"
+-    mb = _codeloop_default_base(repo_root)
+-    return f"{mb}..{at_sha}" if mb and mb != at_sha else None
++        if mb and mb == marker_sha:
++            return True, None
++        if mb:
++            return False, f"{mb}..{marker_sha}"
++    return False, diff_range
+ 
+ 
+ def _kt_bj_pick_rows(sg, mode, cells, author_rows):
+     """這一段在這個模式下要判哪幾列:None=全部候選列、"missing"=還沒有第一盲判的、"disagreements"=作者與第一盲判不一致又沒仲裁的。"""
+     rids = []
+     for rid in sg["rows"]:
+         cell = (cells.get(sg["seg"]) or {}).get(rid) or {}
+         first = cell.get("first")
+         if mode == "missing" and isinstance(first, dict):
+             continue
+@@ -72385,33 +72453,32 @@ def _kt_bj_pick_rows(sg, mode, cells, author_rows):
+             ans = (author_rows.get(sg["seg"]) or {}).get(rid)
+             if (not isinstance(first, dict) or isinstance(cell.get("arbiter"), dict) or not isinstance(ans, dict)
+                     or not isinstance(ans.get("applies"), bool) or _kt_bj_author_vote(ans) == _kt_bj_blind_vote(first)):
+                 continue
+         rids.append(rid)
+     return rids
+ 
+ 
+ def _kt_bj_material(picked, texts):
+     """[(段, 要判的列)…] → 盲判材料的 segments(只含程式與型錄內容,不含任何表態或盲判內容)。"""
+-    table = {r["id"]: r for r in _KT_DT_ROWS}
+-    srcs = _kt_dt_sources()
++    table = {r["id"]: r for r in _KT_DT_ROWS}   # 出處跟著列一起讀(規則包自檢程式 dt_table 同一輪帶出 refs、check_refs)
+     out = []
+     for sg, rids in picked:
+         lines = texts[sg["file"]].split("\n")
+         a, b = sg["material"]
+         mat = "\n".join(f"{n:>5}| {lines[n - 1] if n <= len(lines) else ''}" for n in range(a, b + 1))
+         rows = []
+         for rid in rids:
+-            r, src = table.get(rid) or {}, srcs.get(rid) or {}
++            r = table.get(rid) or {}
+             rows.append({"id": rid, "situation": r.get("situation", ""), "standard": r.get("standard", ""), "when_not": r.get("alt", ""),
+-                         "source": src.get("source", ""), "source_refs": src.get("refs") or [],
+-                         "checks": [{"id": c.get("id"), "name": c.get("name"), "refs": c.get("refs") or []} for c in src.get("checks") or []]})
++                         "source": r.get("source", ""), "source_refs": r.get("refs") or [],
++                         "checks": [{"id": c.get("id"), "name": c.get("name"), "refs": c.get("refs") or []} for c in r.get("check_refs") or []]})
+         out.append({"seg": sg["seg"], "file": sg["file"], "range": [sg["start"], sg["end"]], "hit_lines": sg["lines"],
+                     "material_range": [a, b], "material": mat, "rows": rows})
+     return out
+ 
+ 
+ _KT_BJ_INSTRUCTIONS = (
+     "你是盲判:只看下面每一段程式(material,行首是行號;range 是要判的那一處、hit_lines 是碰到觸發字的行)與候選列,"
+     "逐段逐列自己判。每一列判兩件事:applies=這一列講的情境在這一處成不成立;成立的話 followed=這一處有沒有照那一列的"
+     "「standard」(標準寫法)寫,或照「when_not」寫的例外寫法寫對(例外寫法也算照做;when_not 寫「(換列)」的是換到別列,那不算這列照做)。"
+     "情境不成立時 applies=false、不填 followed。reason 寫一兩句你看到什麼。source、source_refs、checks 是那一列在型錄的出處"
+@@ -72495,49 +72562,64 @@ def _cmd_codeloop_bj_template(repo_root, branch, at_sha, segs, cells, mode, part
+         print(f"擋下:--part {part} 超出份數(這次共 {parts} 份)", file=sys.stderr)
+         return 2
+     chunk = picked[(part - 1) * _KT_BJ_PART_MAX:part * _KT_BJ_PART_MAX]
+     try:
+         texts = _kt_sit_read_many(repo_root, at_sha, sorted({sg["file"] for sg, _r in chunk}))
+     except (_KtSitUnverifiable, OSError, subprocess.TimeoutExpired) as e:
+         print(f"擋下:段材料讀不到({e if isinstance(e, _KtSitUnverifiable) else e.__class__.__name__})", file=sys.stderr)
+         return 2
+     doc = {"kind": "lumos-blind-judge-material", "role": "arbiter" if mode == "disagreements" else "first", "part": part, "parts": parts,
+            "instructions": _KT_BJ_INSTRUCTIONS, "answer_format": _kt_bj_answer_format(), "segments": _kt_bj_material(chunk, texts)}
+-    if not _kt_dt_sources():
++    if not any(r.get("refs") or r.get("check_refs") for r in _KT_DT_ROWS):
+         doc["note"] = "這次讀不到型錄的出處欄,材料沒附出處;照情境、標準寫法與不適用時判"
+     print(_json_text_escaped(doc, indent=2))
+     if parts > 1:
+         rest = " ".join(f"--part {k}" for k in range(1, parts + 1) if k != part)
+         print(f"盲判材料共 {parts} 份(每份最多 {_KT_BJ_PART_MAX} 段),這是第 {part} 份;其餘用 {rest} 各印一份、各派一個代理", file=sys.stderr)
+     if not picked:
+         print("這次沒有要盲判的段" + {"missing": "(每格都有第一盲判了)", "disagreements": "(沒有作者與第一盲判對不上又缺仲裁的格)"}.get(mode, ""),
+               file=sys.stderr)
+     return 0
+ 
+ 
+-def _cmd_codeloop_blind_judge(repo_root, branch, at_sha, diff_range, res_file=None, template=False, mode=None, arbiter=False, part=1):
+-    """`lumos code-loop blind-judge`:--template 印盲判材料(一次一份,每份最多 _KT_BJ_PART_MAX 段);給結果檔就整份驗證後
+-    先寫治理帳一筆 blind-judge、再併進本機標記檔(同一格已有值不覆蓋)。rc:0 好、2 參數錯或整份拒收。"""
+-    import json
++def _kt_bj_segments(repo_root, branch, at_sha, diff_range):
++    """盲判要判的情境段 → 段清單,或 None(已印擋下原因)。範圍照 code-loop check 算表態適用題的同一支 _codeloop_disp_range
++    (--diff 是推送範圍,沒給用手動 check 的預設起點);分支頂端已在主線上 → 沒有段(check 也不出題)。"""
+     import time as _time
+-    if _KT_DT_ERR:
+-        print(f"擋下:Kotlin 型錄的情境決策表{_KT_DT_ERR},沒有情境題可以盲判", file=sys.stderr)
+-        return 2
+-    rng = _kt_bj_range(repo_root, diff_range, at_sha, branch)
++    if not diff_range:
++        mb = _codeloop_default_base(repo_root)
++        diff_range = f"{mb}..{at_sha}" if mb and mb != at_sha else None
++    tip_on_ml, rng = _codeloop_disp_range(repo_root, branch, at_sha, diff_range)
++    if tip_on_ml:
++        print(f"分支 {branch} 的版本 {at_sha[:8]} 已在主線上、沒有自己的改動,code-loop check 也不出題", file=sys.stderr)
++        return []
+     if not rng:
+         print("擋下:算不出改動範圍(找不到主線分岔點);用 --diff <A..B> 指定,跟 code-loop check 用同一個範圍", file=sys.stderr)
+-        return 2
++        return None
+     _kt_sit_say_catalog()
+     try:
+-        segs = _kt_situation_segments(repo_root, rng, at_sha, skip=_vendored_skip(repo_root, rng), deadline=_time.monotonic() + _KT_SIT_BUDGET)
++        return _kt_situation_segments(repo_root, rng, at_sha, skip=_vendored_skip(repo_root, rng), deadline=_time.monotonic() + _KT_SIT_BUDGET)
+     except (_KtSitUnverifiable, OSError, subprocess.TimeoutExpired) as e:
+         print(f"擋下:情境段算不出來({e if isinstance(e, _KtSitUnverifiable) else e.__class__.__name__})", file=sys.stderr)
++        return None
++
++
++def _cmd_codeloop_blind_judge(repo_root, branch, at_sha, diff_range, res_file=None, template=False, mode=None, arbiter=False, part=1):
++    """`lumos code-loop blind-judge`:--template 印盲判材料(一次一份,每份最多 _KT_BJ_PART_MAX 段);給結果檔就整份驗證後
++    追加治理帳一筆 blind-judge(同一格已有值不算數;整份都是已有的格就不寫、回 2)。rc:0 好、2 參數錯或整份拒收。
++    範圍照 code-loop check 算表態適用題的同一支 _codeloop_disp_range(--diff 是推送範圍,沒給用手動 check 的預設起點)。"""
++    import json
++    if _KT_DT_ERR:
++        print(f"擋下:Kotlin 型錄的情境決策表{_KT_DT_ERR},沒有情境題可以盲判", file=sys.stderr)
++        return 2
++    segs = _kt_bj_segments(repo_root, branch, at_sha, diff_range)
++    if segs is None:
+         return 2
+     cells = _kt_bj_read(repo_root, branch)
+     if template:
+         return _cmd_codeloop_bj_template(repo_root, branch, at_sha, segs, cells, mode, part)
+     if not res_file:
+         print("擋下:要給盲判結果檔,或用 --template 印材料", file=sys.stderr)
+         return 2
+     try:
+         data = json.loads(Path(res_file).read_text(encoding="utf-8-sig"))
+     except (OSError, ValueError) as e:
+@@ -72547,42 +72629,68 @@ def _cmd_codeloop_blind_judge(repo_root, branch, at_sha, diff_range, res_file=No
+     entries, errs = _kt_bj_validate(data, segs, role, cells)
+     if errs:
+         print(f"擋下:盲判結果有 {len(errs)} 處不合,整份沒寫:", file=sys.stderr)
+         for e in errs[:10]:
+             print(f"  - {e}", file=sys.stderr)
+         if len(errs) > 10:
+             print(f"  …另有 {len(errs) - 10} 處", file=sys.stderr)
+         return 2
+     import datetime as _dt
+     n = sum(len(e["rows"]) for e in entries.values())
++    skipped = [(seg, rid) for seg, e in entries.items() for rid in e["rows"] if role in ((cells.get(seg) or {}).get(rid) or {})]
++    if len(skipped) == n:
++        # 整份都是已有紀錄的格:追加了也不算數(每格只認第一筆),不寫帳、回非零講明(代碼審 r1 正確性 F5)
++        print(f"擋下:這份{'仲裁' if arbiter else '第一盲判'} {n} 格全都已有紀錄(同一格只認第一筆),整份沒生效、治理帳沒寫"
++              f"(例:段 {skipped[0][0]} 的 {skipped[0][1]})。帳只追加、撤不掉;要重判只能等段材料變了"
++              "(改到那段程式,段身分換掉)再用新材料判", file=sys.stderr)
++        return 2
+     ev = {"ts": _codeloop_git_ts(repo_root, at_sha) or "", "commit": at_sha[:7], "gate": "code-loop", "kind": _KT_BJ_KIND, "hard": False,
+           "nodes": [], "detail": f"盲判({role}){len(entries)} 段 {n} 格", "branch": branch, "head_sha": at_sha, "role": role,
+           "blind_judge": entries, "written_at": _dt.datetime.now().astimezone().isoformat(timespec="microseconds")}
+     ok, why = _codeloop_gov_append(repo_root, ev)
+     if not ok:
+         print(f"擋下:{why}——盲判沒寫(CI 只讀得到治理帳)", file=sys.stderr)
+         return 2
+-    skipped = _kt_bj_cells_add(cells, entries, role)
+-    print(f"✅ code-loop blind-judge:{'仲裁' if arbiter else '第一盲判'} {len(entries)} 段 {n} 格記下來了(分支 {branch},版本 {at_sha[:8]})")
++    print(f"✅ code-loop blind-judge:{'仲裁' if arbiter else '第一盲判'} {len(entries)} 段 {n - len(skipped)} 格記下來了"
++          f"(分支 {branch},版本 {at_sha[:8]});治理帳要跟著提交,CI 只讀它")
+     if skipped:
+-        print(f"  已有記錄,以第一筆為準:{len(skipped)} 格沒覆蓋(例:段 {skipped[0][0]} 的 {skipped[0][1]});同一段只認第一筆盲判")
+-    try:
+-        _codeloop_write_marker(repo_root, branch, _KT_BJ_KIND, {"branch": branch, "cells": cells})
+-    except OSError as e:
+-        print(f"  提醒:本機標記檔沒寫成({e.__class__.__name__}),治理帳那一筆已經在了,check 會退治理帳讀", file=sys.stderr)
++        print(f"  已有記錄,以第一筆為準:{len(skipped)} 格沒覆蓋(例:段 {skipped[0][0]} 的 {skipped[0][1]});同一格只認第一筆盲判")
+     return 0
+ 
+ 
+-def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha, tier, deadline=None, merge_side=None, diff_range=None):
++def _disp_bj_source(rec, marker_branch, merge_ledger):
++    """盲判紀錄跟表態同一套分支解析 → (分支名, 帳全文或 None=讀工作目錄的帳)。表態是合併提交合進來那一側的 → 那筆表態的分支名、
++    那一側的帳(讀不到就給空帳:照擋缺盲判,不退回讀工作目錄的帳);否則目標分支(代碼審 r1 架構對齊 F2)。"""
++    if not rec.get("_merge_side"):
++        return marker_branch, None
++    raw = merge_ledger() if merge_ledger else None
++    return rec.get("branch"), ("" if raw is None else raw)
++
++
++def _kt_sit_summary_warnings(sit):
++    """情境題核對完的摘要警告(只提醒):段放行檔讀不了、段放行段數、仲裁採作者、兩位盲判一致判照做或不適用的格數。"""
++    out = []
++    for key, fmt in (("waiver_err", "{q} 段放行{v},這次當沒有放行(段放行只管證據提醒,不擋)"),
++                     ("waived", "⚠ {q} 有 {v} 段段放行、證據樣式與多數決不提醒(看放行了什麼:lumos lint-waive --list)"),
++                     ("arbiter_author", "{q} 仲裁採作者 {v} 格(作者與第一盲判對不上,仲裁判作者對)"),
++                     ("blind_agree", "{q} 兩位盲判一致判照做或不適用、跟作者表態不同 {v} 格(不用改碼;作者表態可照盲判重答)")):
++        if sit.get(key):
++            out.append(fmt.format(q=_KT_SIT_QID, v=sit[key]))
++    return out
++
++
++def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha, tier, deadline=None, merge_side=None, diff_range=None,
++                          merge_ledger=None):
+     """表態閘判定(S5):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。回 dict{blocked, gate, applicable, checked, problems[]}。
+     超過 deadline 時停下來、回 blocked=False 並標 over_budget(呼叫端走 fail-open 進治理帳)。
+-    diff_range:算適用題的那個範圍;情境題(kt-situation)用它在 at_sha 上重算情境段,核對表態對程式。"""
++    diff_range:算適用題的那個範圍;情境題(kt-situation)用它在 at_sha 上重算情境段,核對表態對程式。
++    merge_ledger:表態是從合併提交合進來那一側認到時,回那一側治理帳全文的函式;盲判紀錄跟表態讀同一側(分支名用那筆表態的)。"""
+     import time as _time
+     cfg = _stack_questions_config(repo_root)
+     app = pf_data.get("stack_questions_applicable") or {}
+     meta = pf_data.get("stack_questions_meta") or {}
+     out = {"blocked": False, "gate_mode": cfg["mode"], "applicable": sum(len(v) for v in app.values()),
+            "checked": 0, "problems": [], "warnings": list(cfg["warnings"]), "tensions": []}
+     if cfg["mode"] == "off" or (cfg["mode"] == "high-only" and tier != "high"):
+         return out
+     _cat = _kt_sit_catalog_problem(meta)
+     if _cat and _cat[0] == "env":
+@@ -72690,23 +72798,25 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+                                     "files": len(set(paths)), "hazard": str(ent.get("hazard") or ""), "suggestion": str(ent.get("suggestion") or "")})
+             return None
+         if st == "todo":
+             ok2, why2 = _dispositions_check_issue(repo_root, at_sha, str(ent.get("issue") or ""))
+             return None if ok2 else f"{qid} 待辦對不上:{why2}"
+         if st == "na":
+             return None if _dispositions_reason_ok(ent.get("reason")) else f"{qid} na 的理由太短"
+         return f"{qid} status {st!r} 不合法"
+ 
+     sit = {}
++    bj_branch, bj_raw = _disp_bj_source(rec, marker_branch, merge_ledger)
+     # 情境題另走一支(形狀跟其他題不同):缺表態與自動 na 照 _one 的講法,其餘交給 _kt_sit_verdict_one
+     _pick = {_KT_SIT_QID: lambda q, e: _one(q, e) if (e is None or e.get("auto")) else _kt_sit_verdict_one(repo_root, diff_range, at_sha, e, sit,
+-                                                                                                         deadline=deadline, branch=marker_branch)}
++                                                                                                         deadline=deadline, branch=bj_branch,
++                                                                                                         bj_raw=bj_raw)}
+ 
+     def _over(out):
+         # 半途超時(r3 邊界席 B4):已經查出的違規不能丟——有問題就照擋、註明沒查完;一題都還沒查出問題才 fail-open
+         out["over_budget"] = True
+         if out["problems"]:
+             out["problems"].append("(表態核對超過時間預算,後面的題沒查完;上面已查出的照擋)")
+             out["blocked"] = True
+         else:
+             out["blocked"] = False
+         return out
+@@ -72722,26 +72832,21 @@ def _dispositions_verdict(repo_root, pf_data, marker_sha, marker_branch, at_sha,
+                 pr = _pick.get(qid, _one)(qid, disp.get(qid))
+             except Exception as e:
+                 pr = f"{qid} 無法驗證(內部錯誤 {e.__class__.__name__}:{str(e)[:80]})——擋下不放行,修好再跑"
+             if pr:
+                 out["problems"].append(pr)
+             else:
+                 out["checked"] += 1
+     if sit.get("reminders"):
+         out["warnings"] += _kt_sit_reminder_lines(sit["reminders"])
+         out["sit_reminders"] = sit["reminders"]       # 帳由呼叫端 _kt_sit_reminder_log 寫
+-    if sit.get("waiver_err"):
+-        out["warnings"].append(f"{_KT_SIT_QID} 段放行{sit['waiver_err']},這次當沒有放行(段放行只管證據提醒,不擋)")
+-    if sit.get("waived"):
+-        out["warnings"].append(f"⚠ {_KT_SIT_QID} 有 {sit['waived']} 段段放行、證據樣式與多數決不提醒(看放行了什麼:lumos lint-waive --list)")
+-    if sit.get("arbiter_author"):
+-        out["warnings"].append(f"{_KT_SIT_QID} 仲裁採作者 {sit['arbiter_author']} 格(作者與第一盲判對不上,仲裁判作者對)")
++    out["warnings"] += _kt_sit_summary_warnings(sit)
+     if sit.get("over_budget"):
+         return _over(out)   # 情境題切段或核對超過預算:照表態閘既有的 over_budget 規則(代碼審 r2 架構 F5)
+     # 題組換過(例:前端值從 vue 改判 react,或退回舊版工具)時,帳上的舊答案是別棧的題號,--carry 只帶題號相同的、一題都帶不過來;
+     # 只印一排「缺表態」會讓人以為帳壞了,多講一行(2026-10-15 [[Projects/前端框架從vue分出_計劃]] S39,r1 設計審回滾席)
+     if any(p.endswith(" 缺表態") for p in out["problems"]):
+         _stale = sorted(q for q, e in disp.items() if isinstance(e, dict) and not e.get("auto")
+                         and (_stack_spec_by_id(q)[0] or None) not in meta)
+         if _stale:
+             out["problems"].append(f"(帳上有 {len(_stale)} 題舊表態屬於這次沒有出題的棧,例如 {_stale[0]}——題組換過了,舊題號不會帶過來;"
+                                    "用 lumos pitfalls --diff <範圍> --dispositions-template 產新樣板重答)")
+@@ -73028,49 +73133,45 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
+                 return _stop
+ 
+     # 3.5 表態閘(Projects/棧別提問表態閘_計劃,2026-09-09):有適用題就核對,不看 tier(gate 設定 all/high-only/off)。
+     # 判定順序=合約測試(2.5)→表態(3.5)→新增告警(3.6)→審查留痕(4/5)。兩種模式:不帶 keep_going 是序列早退,先中的先報、修完再跑
+     # (r3 架構對齊席 A1 要求講明);帶 keep_going(推送前掛鉤用)六道(安全證據排最前、Android 端到端驗收其次)都判完、擋下全記進 blocks,所有回傳經 _fin 一處判。
+     dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": []}
+     # 適用範圍(r3 邊界席 B1):算「哪些題適用」用 merge-base(主線, at_sha)..at_sha——把主線合進分支再推分支,
+     # 推送範圍(remote..local)會把主線帶進來的碼算成本次要表態;推主線本身、或算不出主線/merge-base 才用推送範圍。tier 照舊用推送範圍。
+     disp_data, disp_range = data, diff_range
+     try:
+-        _ml = _mainline_ref(repo_root)
+-        _mlname = _ml[0].split("@")[0] if _ml else None
+-        if _ml and marker_branch and marker_branch != _mlname:
+-            _mbr = _sp.run(["git", "merge-base", _ml[1], marker_sha], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+-            _mb = _mbr.stdout.strip() if _mbr.returncode == 0 else ""
+-            if _mb and _mb == marker_sha:
+-                # 分支 tip 已在主線上:沒有本分支自己的改動,沒有題要答
+-                disp_data, disp_range = {"stack_questions_applicable": {}, "stack_questions_meta": {}}, None
+-            elif _mb and f"{_mb}..{marker_sha}" != diff_range:
+-                _nr = f"{_mb}..{marker_sha}"
+-                _r2 = _sp.run([_sys.executable, str(graphctl), "pitfalls", "--diff", _nr, "--no-lint", "--json", "--repo", str(repo_root)],
+-                              capture_output=True, text=True, cwd=str(repo_root))
+-                _l2 = [l for l in _r2.stdout.splitlines() if l.strip().startswith("{")]
+-                if _r2.returncode == 0 and _l2:
+-                    disp_data, disp_range = _json.loads(_l2[0]), _nr
++        _tip_on_ml, _nr = _codeloop_disp_range(repo_root, marker_branch, marker_sha, diff_range)   # 盲判也用這一支(代碼審 r1 架構對齊 F1)
++        if _tip_on_ml:
++            # 分支 tip 已在主線上:沒有本分支自己的改動,沒有題要答
++            disp_data, disp_range = {"stack_questions_applicable": {}, "stack_questions_meta": {}}, None
++        elif _nr != diff_range:
++            _r2 = _sp.run([_sys.executable, str(graphctl), "pitfalls", "--diff", _nr, "--no-lint", "--json", "--repo", str(repo_root)],
++                          capture_output=True, text=True, cwd=str(repo_root))
++            _l2 = [l for l in _r2.stdout.splitlines() if l.strip().startswith("{")]
++            if _r2.returncode == 0 and _l2:
++                disp_data, disp_range = _json.loads(_l2[0]), _nr
+     except Exception:
+         disp_data, disp_range = data, diff_range
+     # 目標架構基準(Projects/架構對齊可宣告目標架構_計劃):只印、不改判定;範圍跟表態同一個(主線合進分支不算別人的檔)
+     try:
+         _codeloop_guard_verdict.last_arch = _arch_target_check_lines(repo_root, disp_data, disp_range)
+     except Exception as e:
+         _codeloop_guard_verdict.last_arch = [f"目標架構基準算不出來({e.__class__.__name__}),這次不印"]
+     try:
+         import time as _time
+         # at_sha 沒給(本機直接叫 check)→ 用 HEAD 當 at_sha,錨點一樣對樹驗(未提交的改動不算證據;r3 邊界席 B5)
+         dv = _dispositions_verdict(repo_root, disp_data, marker_sha, marker_branch, marker_sha, tier,
+                                    deadline=_time.monotonic() + _DISP_BUDGET, diff_range=disp_range,
+                                    merge_side=lambda: _codeloop_merge_side_lookup(repo_root, marker_sha, raw_range,
+-                                                                                  ("dispositions",), merge_cache))
++                                                                                  ("dispositions",), merge_cache),
++                                   merge_ledger=lambda: merge_cache.get("ledger"))
+         dv["range"] = disp_range
+         _kt_sit_reminder_log(repo_root, marker_sha, dv.get("sit_reminders") or [])   # 情境題證據提醒記帳(去重、封頂)
+         if dv.get("over_budget") and not dv.get("blocked"):
+             _gate_failopen(repo_root, "code-loop", f"表態核對超過 {_DISP_BUDGET:.0f} 秒預算且尚未查出問題,這次放行")
+     except Exception as e:
+         _gate_failopen(repo_root, "code-loop", f"表態核對例外:{str(e)[:120]}")
+         dv = {"blocked": False, "gate_mode": "?", "applicable": 0, "checked": 0, "problems": [], "error": str(e)[:120]}
+     _codeloop_guard_verdict.last_dispositions = dv
+     if dv["blocked"]:
+         _stop = kg.hit({"blocked": True, "reason_kind": "dispositions",
+@@ -73568,43 +73669,31 @@ def _cmd_codeloop_dispositions(repo_root, branch, head_sha, ts, disp_file):
+     print(f"✅ code-loop dispositions:{len(data)} 題表態記下來了(人答 {len(data) - n_auto}、未觸發自動 na {n_auto};分支 {branch},版本 {head_sha[:8]})")
+     try:
+         mp = _codeloop_write_dispositions(repo_root, branch, head_sha, ts, data)
+     except OSError as e:   # r1 併發席 f5:治理帳已寫成(那才是 CI 讀的真相),本機 marker 只是快取——寫不成講一句,不當失敗
+         print(f"  提醒:本機記錄 governance/code-loop/ 沒寫成({e.__class__.__name__}:{str(e)[:80]}),治理帳那一筆已經在了,check 會退治理帳讀;修好權限重跑一次就會補上。", file=sys.stderr)
+         return 0
+     print(f"  本機記錄 {mp.relative_to(Path(repo_root))}(這份不進版控,只有你這台機器看得到);治理帳也追加了一筆——★CI 讀的是治理帳那一筆★,所以那個檔要跟著提交。之後改了程式碼要重表態:樣板加 --carry 會把還適用的舊答案帶過來。")
+     return 0
+ 
+ 
+-def cmd_codeloop_blind_judge(repo, branch, at_sha, diff_range, res_file, template=False, mode=None, arbiter=False, part=1):
+-    """`lumos code-loop blind-judge` 入口:找 repo 根、分支與版本(--branch/--at-sha 同 dispositions),交給 _cmd_codeloop_blind_judge。"""
+-    import subprocess as _sp
+-    repo_root = Path(repo) if repo else next((c for c in (Path.cwd(), *Path.cwd().parents) if (c / ".git").exists()), None)
+-    if repo_root is None or not repo_root.is_dir():
+-        print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
+-        return 2
+-    if branch is not None and not branch.strip():
+-        print("擋下:--branch 給了空字串", file=sys.stderr)
+-        return 2
+-    branch = branch or _codeloop_git_branch(repo_root)
+-    rp = _sp.run(["git", "rev-parse", "--verify", f"{at_sha or 'HEAD'}^{{commit}}"], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+-    if rp.returncode != 0:
+-        print(f"擋下:{at_sha or 'HEAD'} 不是這個 repo 裡的 commit", file=sys.stderr)
+-        return 2
++def _codeloop_blind_judge_args(repo_root, branch, at_sha, diff_range, bj):
++    """blind-judge 的旗標組合檢查(repo 根、分支、版本已由 cmd_code_loop 跟 dispositions 同一套解析好),交給 _cmd_codeloop_blind_judge。"""
++    template, mode, arbiter, res_file = bool(bj.get("template")), bj.get("mode"), bool(bj.get("arbiter")), bj.get("file")
+     if template and (res_file or arbiter):
+         print("擋下:--template 是印材料,不跟結果檔或 --arbiter 一起用", file=sys.stderr)
+         return 2
+     if mode and not template:
+         print("擋下:--missing / --disagreements 要配 --template", file=sys.stderr)
+         return 2
+-    return _cmd_codeloop_blind_judge(repo_root, branch, rp.stdout.strip(), diff_range, res_file, template=template, mode=mode,
+-                                     arbiter=arbiter, part=part)
++    return _cmd_codeloop_blind_judge(repo_root, branch, at_sha, diff_range, res_file, template=template, mode=mode,
++                                     arbiter=arbiter, part=bj.get("part") or 1)
+ 
+ 
+ def _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note):
+     """`code-loop recall-miss <題目id> --note`(表態閘 S9):審查席抓到「對得上某未觸發題」的問題時登記一筆;同題累積 3 次 gov --stats 印「觸發太窄候選」。"""
+     if not qid:
+         print("擋下:要給題目 id(例:kt-coroutines;lumos pitfalls --diff <範圍> --json 的 stack_questions_meta 有全表)", file=sys.stderr)
+         return 2
+     stk, spec = _stack_spec_by_id(qid)
+     if spec is None:
+         print(f"擋下:{qid!r} 不是題目表裡的 id;全表看 lumos pitfalls --diff <範圍> --json 的 stack_questions_meta", file=sys.stderr)
+@@ -73614,26 +73703,27 @@ def _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note):
+         return 2
+     import datetime as _dt
+     _gate_event_or_warn(repo_root, "code-loop", "recall-miss", f"{qid}:{note}", hard=False,
+                         head_sha=head_sha, ref=branch,
+                         extra={"recall_miss": qid, "written_at": _dt.datetime.now().astimezone().isoformat(timespec="microseconds")})
+     print(f"✅ 記下 recall-miss:{qid}(棧 {stk})——同題累積 3 次,gov --stats 會列成「觸發太窄候選」,到時修它的 when。")
+     return 0
+ 
+ 
+ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None, at_sha=None, marker_branch=None, skip_bound=False, from_json=None, disp_file=None, qid=None, bound_advisory=False,
+-                  keep_going=False, loop=None):
++                  keep_going=False, loop=None, bj=None):
+     """code-loop 留痕讀寫。
+     pass  → status=passed(綁 HEAD sha);有審查帳時要帶 --loop,寫入前驗凍結判定(_codeloop_pass_verify),沒過回 rc2;
+     skip  → status=skipped(綁 HEAD sha,留逃生痕);
+     dispositions <檔> → 棧別提問表態(表態閘 2026-09-09;派審查員之前寫,skip 也要先表態);
+     recall-miss <id> → 審查席抓到未觸發題的問題時登記一筆;
++    blind-judge [<結果檔>] → Android 情境題盲判(bj={file, template, mode, arbiter, part});--branch、--at-sha 跟 dispositions 同一套解析;
+     check → 跑判定式回報 verdict(blocked=合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕);--json 輸出 verdict dict。
+     check --keep-going(推送前掛鉤用)→ 六道判定(安全證據、Android 端到端驗收、合約測試、表態、新增告警、代碼審留痕)都跑完、每道擋下各印各的訊息,最後多印一行 LUMOS-BLOCKS:<種類,…>(掛鉤唯一的機讀通道)。
+     rc: 0=OK / 1=check:blocked / 2=參數錯或 pass 被擋。
+     """
+     # resolve repo root
+     if repo is not None:
+         repo_root = Path(repo)
+         if not repo_root.is_dir():
+             print(f"擋下:--repo 指的不是目錄: {repo}", file=sys.stderr)
+             return 2
+@@ -73647,35 +73737,36 @@ def cmd_code_loop(subcmd, note=None, repo=None, as_json=False, diff_range=None,
+             print("擋下:找不到 git 專案根目錄,用 --repo 指定", file=sys.stderr)
+             return 2
+ 
+     branch = _codeloop_git_branch(repo_root)
+     head_sha = _codeloop_git_head(repo_root)
+     if not head_sha:
+         print("擋下:問不到目前的 git 版本號(git 指令失敗?)", file=sys.stderr)
+         return 2
+     ts = _codeloop_git_ts(repo_root)
+ 
+-    if subcmd == "dispositions":
+-        # --branch(r3 外家 F11):推 HEAD:別名 時 pre-push 按遠端目的分支查記錄,表態要寫在那個名字下
++    if subcmd in ("dispositions", "blind-judge"):
++        # --branch(r3 外家 F11):推 HEAD:別名 時 pre-push 按遠端目的分支查記錄,表態與盲判都要寫在那個名字下
+         if marker_branch is not None and not marker_branch.strip():
+             print("擋下:--branch 給了空字串——要寫在哪個分支名下講清楚,不然會悄悄退回 checkout 分支(r1 邊界席 f3)", file=sys.stderr)
+             return 2
+-        # --at-sha(r1 外家 finder f5/否決 f2):checkout 在 main、推的是別的分支時,check 按被推的 sha 查,表態得綁那個 sha 不是 HEAD
++        # --at-sha(r1 外家 finder f5/否決 f2):checkout 在 main、推的是別的分支時,check 按被推的 sha 查,表態與盲判得綁那個 sha 不是 HEAD
+         if at_sha:
+             import subprocess as _sp
+             _rp = _sp.run(["git", "rev-parse", "--verify", f"{at_sha}^{{commit}}"], capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+             if _rp.returncode != 0:
+                 print(f"擋下:--at-sha {at_sha} 不是這個 repo 裡的 commit", file=sys.stderr)
+                 return 2
+             head_sha = _rp.stdout.strip()
+             ts = _codeloop_git_ts(repo_root, head_sha) or ts
+-        return _cmd_codeloop_dispositions(repo_root, marker_branch or branch, head_sha, ts, disp_file)
++        return (_codeloop_blind_judge_args(repo_root, marker_branch or branch, head_sha, diff_range, bj or {}) if subcmd == "blind-judge"
++                else _cmd_codeloop_dispositions(repo_root, marker_branch or branch, head_sha, ts, disp_file))
+     if subcmd == "recall-miss":
+         return _cmd_codeloop_recall_miss(repo_root, branch, head_sha, ts, qid, note or "")
+ 
+     if subcmd in ("pass", "skip"):
+         status = "passed" if subcmd == "pass" else "skipped"
+         node = None
+         if subcmd == "pass":
+             ok, node = _codeloop_pass_gate(repo_root, loop, head_sha, branch)
+             if not ok:
+                 return 2
+@@ -75938,21 +76029,21 @@ def main():
+     dg.add_argument("--json", action="store_true")
+     dg.add_argument("--repo")
+ 
+     cl = sub.add_parser("code-loop", help="code-loop 留痕(vault-free):pass/skip 收斂紀錄 + check 查詢")
+     clsub = cl.add_subparsers(dest="clcmd", required=True)
+     for _clname, _clhelp in (
+         ("pass", "記錄本分支 HEAD 已過 code-loop 收斂(status=passed)"),
+         ("skip", "顯式跳過 code-loop 並留痕(status=skipped;同 bypass 哲學)"),
+         ("dispositions", "棧別提問表態:把填好的表態 JSON 檔記進留痕與治理帳(派審查員之前做;skip 也要先表態)"),
+         ("recall-miss", "審查席抓到「對得上某未觸發題」的問題時登記一筆(同題累積 3 次 gov --stats 列觸發太窄候選)"),
+-        ("blind-judge", "Android 情境題盲判:--template 印給盲判代理的材料;給結果檔就記進治理帳與本機標記檔(--arbiter 記仲裁)"),
++        ("blind-judge", "Android 情境題盲判:--template 印給盲判代理的材料;給結果檔就追加一筆治理帳(--arbiter 記仲裁;整份都是已有的格不寫、回 2)"),
+         ("check", "跑判定式:合約測試紅 ∨ 有適用題表態不完整 ∨ tier=high∧無有效留痕 → rc1 blocked;--json 輸出 verdict dict"),
+         ("security-backing", "把一條資安護欄的 guard kill 結果寫進受版控的 docs/.security-backing.jsonl(閘門只從要推的提交樹讀它)"),
+         ("security-approval-add", "把簽好的一筆核可接在 .lumos/security-approvals.jsonl 後面(驗過整條鏈加這一筆才寫入)"),
+     ):
+         _clp = clsub.add_parser(_clname, help=_clhelp)
+         if _clname == "dispositions":
+             _clp.add_argument("cl_disp_file", metavar="file", help="表態 JSON 檔(lumos pitfalls --diff <範圍> --dispositions-template 印的樣板填完)")
+             _clp.add_argument("--branch", dest="cl_branch", default=None,
+                               help="表態寫在哪個分支名下(預設 checkout 分支;推 HEAD:別名 時帶遠端目的分支名,pre-push 按它查)")
+             _clp.add_argument("--at-sha", dest="cl_at_sha", default=None,
+@@ -76245,44 +76336,43 @@ def main():
+     if args.cmd == "bound-tests":
+         if args.bt_skip and not (args.bt_note or "").strip():
+             print("擋下:--skip 要附一句理由(--note),不然帳上看不出為什麼跳過", file=sys.stderr)
+             return 2
+         if not args.bt_diff and not args.bt_from_json:
+             print("擋下:要嘛給 --diff <範圍>,要嘛給 --from-json <已算好的結果>", file=sys.stderr)
+             return 2
+         return cmd_bound_tests(args.bt_diff, repo=args.bt_repo, as_json=args.bt_json,
+                                advisory=args.bt_advisory, from_json=args.bt_from_json,
+                                skip=args.bt_skip, skip_note=args.bt_note)
+-    if args.cmd == "code-loop" and args.clcmd == "blind-judge":
+-        return cmd_codeloop_blind_judge(args.cl_repo, args.cl_branch, args.cl_at_sha, args.cl_diff, args.cl_bj_file,
+-                                        template=args.cl_bj_template, mode=args.cl_bj_mode, arbiter=args.cl_bj_arbiter, part=args.cl_bj_part)
+     if args.cmd == "code-loop" and args.clcmd == "security-backing":
+         return cmd_codeloop_security_backing(args.cl_repo, args.cl_sec_control, supersede=args.cl_sec_supersede)
+     if args.cmd == "code-loop" and args.clcmd == "security-approval-add":
+         return cmd_codeloop_security_approval_add(args.cl_repo, args.cl_sec_payload, args.cl_sec_sig)
+     if args.cmd == "code-loop" and args.clcmd == "check" and getattr(args, "cl_security_only", False):
+         return cmd_codeloop_security_only(args.cl_repo, getattr(args, "cl_at_sha", None), getattr(args, "cl_branch", None),
+                                           getattr(args, "cl_diff", None), as_json=getattr(args, "cl_json", False))
+     if args.cmd == "code-loop":
+         note = getattr(args, "note", None) or ""
+         cl_json = getattr(args, "cl_json", False)
+         return cmd_code_loop(args.clcmd, note=note, repo=args.cl_repo, as_json=cl_json,
+                              diff_range=getattr(args, "cl_diff", None),
+                              at_sha=getattr(args, "cl_at_sha", None),
+                              skip_bound=getattr(args, "cl_skip_bound", False),
+                              marker_branch=getattr(args, "cl_branch", None),
+                              disp_file=getattr(args, "cl_disp_file", None),
+                              qid=getattr(args, "cl_qid", None),
+                              from_json=getattr(args, "cl_from_json", None),
+                              bound_advisory=getattr(args, "cl_bound_advisory", False),
+                              keep_going=getattr(args, "cl_keep_going", False),
+-                             loop=getattr(args, "cl_loop", None))
++                             loop=getattr(args, "cl_loop", None),
++                             bj=({"file": args.cl_bj_file, "template": args.cl_bj_template, "mode": args.cl_bj_mode,
++                                  "arbiter": args.cl_bj_arbiter, "part": args.cl_bj_part} if args.clcmd == "blind-judge" else None))
+     if args.cmd == "loop" and args.lcmd == "capture-counts":
+         # 純機械原語(不碰圖譜):跨異質 finder 算 capture-recapture 重疊,vault-free
+         return cmd_loop_capture_counts(None, args.finders,
+                                        from_pitfalls=args.cc_pitfalls, repo=args.cc_repo)
+ 
+     if args.cmd == "security":
+         # ★不走下面的 Env(vault)★:一般載入會 read_text 跟隨捷徑、沒有容量上限;盤點自己安全讀取後才交 Env.from_texts
+         # (Projects/資安護欄唯讀盤點_計劃)。沒唯一選定圖譜就報錯,不像 find_vault 取第一個。
+         if args.seccmd == "evidence":
+             return cmd_security_evidence(args.sev_repo, args.sev_commit, as_json=args.sev_json)
+diff --git a/skills/lumos-code-loop/SKILL.md b/skills/lumos-code-loop/SKILL.md
+index 4f9c04b9e..994f00b88 100644
+--- a/skills/lumos-code-loop/SKILL.md
++++ b/skills/lumos-code-loop/SKILL.md
+@@ -16,21 +16,21 @@ description: '分支要推之前的代碼審查迴圈——先 lumos pitfalls --
+ 
+ ## 一輪怎麼跑
+ 1. **凍結材料**:`git -c core.quotePath=false diff <merge-base>..HEAD -U10 > governance/review-reports/<編號>/rN-snapshot.patch`(旗標讓中文檔名不被 git 跳脫成引號,同本 repo 各處 git 呼叫的慣例;處置閘資安席一步會讀這份檔的檔名與改動);超過 1800 行拆開審或分給多席。`sha256sum` 留指紋。凍結前先把手上的改動提交(之後修正關卡拿這個提交當「修正前」)。
+    **首輪派審前先自己變異**:新功能第一次凍結材料之前,編排者對這次新寫的判斷函式逐條分支在複本上改壞一處(條件反過來、邊界差一、回傳值換掉)跑相關測試,沒翻紅的那條補斷言;介面測試的假輸入照真實輸出的形狀造(抓一次真輸出當樣本),不要用手寫的簡化形狀——這兩類漏洞留到審查席才抓,每條都多花一輪(週評通知代碼審跑滿回顧,卷證 `governance/review-reports/code-週評通知/cap-retro.json`)。
+    **先表態**(派審查員之前做;`skip` 也要先表態):`lumos pitfalls --diff <merge-base>..HEAD --dispositions-template --carry > /tmp/disp.json`,把 status 留空的題填成:
+    - `satisfied`(附 `evidence`:`path:line` 或 `test:<名>`)
+    - `na`(附 `reason`,≥10 個中文字)
+    - `todo`(附 `issue: Issues/<名>` 與 `reason`)
+    - `tension`:這題的做法跟鄰居不同(刻意沿用既有寫法、或刻意改用建議做法),不要塞進 `na`;附 `chosen`(existing|suggested)、`existing`(既有寫法的 `path:line` 清單,1–20 項)、`hazard`(隱患)、`suggestion`(建議改法),選 suggested 再附 `evidence`。pitfalls 印了「可能撞」、或樣板那題帶 `hint`,就是在提醒你考慮這個值。合法的 tension 不擋,`check` 印成 ⚠ 讓人裁([[Projects/兩席相反時端出張力_計劃]])。
+    再 `lumos code-loop dispositions /tmp/disp.json`(推 `HEAD:別名` 時加 `--branch 別名`)。未觸發的題工具已自動記「未觸發」,不用碰。派工鏡頭會把這份表態附進派工單——審查席反駁的就是這些答案;席位若抓到「對得上某未觸發題」的問題,`lumos code-loop recall-miss <題目id> --note "<一句>"` 記一筆(累積 3 次列「觸發太窄候選」)。工具只驗證據存在(檔案/行號在被推送的樹裡、測試名在樹裡整字找得到、Issue 存在且 open/doing),不驗答案對不對。(例外:`java-concurrency`、`swift-concurrency`、`sql-transaction`、`sql-nplus1`、`cs-data`、`node-data`、`java-data` 這七題的 satisfied,寫表態時工具另在本機算「破壞測試背書」存進記錄,沒有背書就在推送前印一行提醒、不擋;補法見 lumos-project-notes 寫合約那節,[[Projects/併發與效能表態要合約背書_計劃]])
+-   **Android 情境題要盲判**(表態裡有 `kt-situation` 時;跟 tier 無關,推送前那一道會核):①`lumos code-loop blind-judge --template > /tmp/<分支>-bj.json`(超過 30 段會分份,stderr 會講,用 `--part 2…` 各印一份)②每份派一個全新的 sonnet 代理,派工詞只放那份材料與它自帶的作答格式,寫明不得讀表態檔與 `governance/code-loop/`、不准附你自己的答案(材料已附型錄那列的出處給它當依據)③`lumos code-loop blind-judge <結果.json>`④`code-loop check` 說作者與第一盲判對不上時,`--template --disagreements` 再派一個全新代理,結果用 `--arbiter` 寫入。缺盲判、缺仲裁會擋;三方多數判作者沒照做只提醒並記帳(升擋條件見 [[Projects/Android寫法語意情境表態與盲判_計劃]] 的 REVISIT),確定寫對就用提醒後面附的 `lint-waive kt-situation:<段身分>` 關掉那段提醒。推 `HEAD:別名` 時每步加 `--branch 別名`。
++   **Android 情境題要盲判**(表態裡有 `kt-situation` 時;跟 tier 無關,推送前那一道會核):①`lumos code-loop blind-judge --template > /tmp/<分支>-bj.json`(超過 30 段會分份,stderr 會講,用 `--part 2…` 各印一份)②每份派一個全新的 sonnet 代理,派工詞只放那份材料與它自帶的作答格式,寫明不得讀表態檔與 `governance/code-loop/`、不准附你自己的答案(材料已附型錄那列的出處給它當依據)③`lumos code-loop blind-judge <結果.json>`④`code-loop check` 說作者與第一盲判對不上時,`--template --disagreements` 再派一個全新代理,結果用 `--arbiter` 寫入。缺盲判、缺仲裁會擋;兩位盲判一致判沒照做(多數判作者沒照做)與三方各異(沒有多數,要人裁)只提醒並記帳(升擋前要人抽樣,見 [[Projects/Android寫法語意情境表態與盲判_計劃]] 的 REVISIT);盲判紀錄只在治理帳,寫錯撤不掉,同一格重跑不算數(整份都是已有的格會回 2),要重判只能等段材料變,確定寫對就用提醒後面附的 `lint-waive kt-situation:<段身分>` 關掉那段提醒。推 `HEAD:別名` 時每步加 `--branch 別名`。
+    **修訂輪先準備修補鏡頭**：上一輪有修補時，按共用派工範本 §3.1 固定兩端版本、產生 `rN-repair.patch` 與 `rN-repair-binding.json`；完整改動與上下文仍在審材內。先核對上一輪派工單與 fix-check 的起點，缺漏或不同就記材料不可得、釐清後再比較。材料不可得不等於沒有回歸；不改現有閘結果與輪數。
+ 2. **派審查員**:Agent、sonnet(Codex 編排時的完整做法——點誰、唯讀怎麼開、版本差異——**單源見 lumos-design-loop `templates.md` §3 ④,不在此複述**;外家席換 `claude -p`;首輪 `lumos loop next <編號> --tier … --orchestrator codex`)。派工詞照 `templates.md` §3,正確性鏡頭含資料狀態五問(新舊互讀、寫一半、衍生資料、時間、不可逆)。
+    - standard 只派一位審查員(另加架構對齊);多席不同鏡頭(正確性 / 併發與資源 / 邊界與輸入 / 合約與圖譜一致)只在 high 的多席編制,記帳與問閘見步驟 6–7。(工具鏈本 repo:資安席只看三類、併發與資源改資源鏡頭、§3 第 1 點併發兩問不問,見 templates.md §7.8〈工具鏈三類〉與 §7.7;跨 repo 派工時看被審 repo 的根自己判;消費專案照舊)
+    - **每個分級都多派一席「架構對齊」**(不佔人數):只判「這寫法跟專案既有的一不一樣」——`pitfalls --diff` 會吐同層最像的對照檔與慣例 skill(專案在 `.lumos/config.json` 的 `arch_targets` 宣告了目標架構的目錄改標目標節點,規則由範本裡的 `LUMOS-ARCH-TARGET: on` 讓 hook 附上),派工用 `templates.md` §7.6;引入第二種做法或跨層直呼才算 major,風格偏好不列。
+    - **high 的鏡頭5 通才照 Claude Code `/code-review` 的八角度審法**(使用者裁):派工詞用 §3 整份,只把「審查鏡頭」第 4 點換成 `templates.md` §7.9 那段(圖譜鏡頭照留,五問與角色卡留給正確性席);引句、嚴重度、翻紅重現、唯讀隔離全照 §3。單源 [[Projects/原生代碼審當通才席_計劃]]。
+    - **high 另必派一席「資安」**(不佔人數):站攻擊者那邊只看能被利用的洞,派工用 `templates.md` §7.8,席名寫 `資安-<模型>`。★問閘會擋★——定錨 high 的代碼審,整個迴圈沒有資安席出席、它的報告 sha 對不上、或它看過的檔沒涵蓋最後一版的凍結 patch,`loop status --disposal` 判不過(生效日 2026-09-12;單源 [[Projects/代碼審資安席_計劃]])。`code-loop pass` 寫入前讀這個迴圈的凍結判定,判定沒過也擋([[Projects/留痕驗過審查_計劃]]);`loop next --tier` 要照 `pitfalls --diff` 算出的分級給——第一筆定成 standard,這個迴圈就不會要求資安席。
+    - **資安包與記帳順序**(high,[[Projects/記帳與迴圈工具小修_計劃]]):資安包要含這輪凍結 patch 改到的全部檔(含筆記與文件),不拆;最後一次修補之後要對最新凍結 patch 再派一次資安。記帳時資安與其他席先記、載體最後記——載體帶了 `--finding-source` 的話,記完同輪不能再補,補資安只能記到下一輪(已到上限先 `cap-decision`)。`loop next` 派工時會印這兩條提醒。
+    - **圖譜鏡頭**:每席派工詞原樣留一行 `LUMOS-IMPACT: <base>..<head 完整提交編號>`(★不要寫 HEAD★:掛鉤在會談的專案目錄解讀它,你在另一個工作目錄做事時會算到別的提交);派子代理那一刻 `dispatch-lens-hook` 把 `lumos impact --diff` 的固定席接在尾端——前 8 篇貼內容(節點路徑+相依種類+合約類別+主線已追蹤的牽連檔+主線版合約行;每條 ★INVARIANT★ 行帶綁定測試狀態 有/懸空/偽證據/裸合約——裸合約=閘守不到、只剩你讀,優先看;合約行後面另印帶 `[來源:外部]` 的外部事實行,只從主線版讀)、逐條必答;改動碰到外部回應碼比對(例:`respCode == "0000"`)時,固定席之後再附一段自帶框的「外部碼表」補選段(最多 3 篇,只印外部事實行);超出只列名、不必答;一句話層已砍(自由文字=注入管道)。派工前一刻先敲 `lumos dispatch-lens <base>..HEAD` 暖快取(大範圍算一次 25 秒起,hook 45 秒超時就附不到節點,超時會在派工詞尾端附一行說明)。標記不在/格式差→靜默放行;★範圍在會談專案算不出來(提交不存在、不是 git 專案、base 不在主線)→附一行 `LUMOS-LENS:` 說明★——會談開在別的專案、審另一個專案的分支時會這樣,照說明從開在目標專案的會談派席,或手動 `lumos impact --diff` 貼固定席;0 篇時改附「圖譜沒有釘到節點」備援段(受影響測試/共改夥伴/呼叫者,只用主線樹算,不是合約、不必逐條答)。派完看回覆有沒有「lumos 自動附加」或「圖譜沒有釘到節點」段。★範圍內新增了殘留、判測不到的問答,或改到存著已登記殘留的筆記(`pitfalls` 理由寫「新增了殘留」「新增了判測不到的問答」「改到存著已登記殘留的筆記」)時,鏡頭另附「這次新增的殘留」一小節(殘留決策內容與那條合約的問答列,從頂端讀、自帶注入框)和一題逐條必答「這筆殘留的問答有沒有換編號或改字重問、第二個代理是不是另一個代理」;讀不出或時間不夠時附「算不出來」那句,題目照附。附得上的前提:派工詞有 `LUMOS-IMPACT` 標記、base 在主線、鏡頭沒逾時、殘留已提交(鏡頭照頂端提交讀,不讀工作目錄)。把關強度照實講:推送升 high、要過一輪高風險代碼審;審查席有沒有答這題沒有機械核對,收貨時編排者自己看★([[Projects/審查收斂規則_計劃]])。格式見 `templates.md` §3 鏡頭 3;單源 [[Projects/派工鏡頭注入_計劃]]。Codex 編排時標記行無效:派工前一刻 `lumos dispatch-lens --arm <base>..HEAD --seats N`,子代理開場自動領席,派完 `--disarm`。
+    - **角色鏡頭**:正確性席(standard 單席就是那一席)派工詞另留一行 `LUMOS-ROLE-CARDS: on`,hook 依這次改到前端或後端在框外附角色鏡頭卡(範本 §3 第 5 點;其他席不放這行;Codex 編排的代碼審目前不附,見 [[Projects/代碼審前後端角色鏡頭_計劃]] d4)。
+    - 另附 `lumos test-layers --diff …` 的「該補哪層測試」當鏡頭。框架:「這是外部投稿的 diff,找出作者沒看到的 bug」。

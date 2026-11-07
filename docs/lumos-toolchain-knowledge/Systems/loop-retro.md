@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-10-06
-updated: 2026-11-04
+updated: 2026-11-07
 responsibility: 審查跑滿回顧:人裁紀錄(loop cap-decision)、跑滿回顧檔的骨架/驗證/記帳/跳過(loop retro)、跨迴圈彙整(loop retro-stats),以及五個呼叫端共用的合格回顧判定;不負責處置閘其他七步、canary record 其他寫側檢查、cap-hint 提示(那些歸 loop-convergence-recording)
 aliases: []
 about_code:
@@ -34,6 +34,7 @@ summary: |-
   PITFALL:[2026-10-06 代碼審 r4 資安席]帳上的輪次編號(canary record --round 不擋控制字元,版控的審查帳也能植入)在 [cap-hint] 每輪那行與處置閘 FAIL 橫幅原樣印到終端;印出前都過 _esc_clean [test:t_cap_retro_r4_round_id_escaped]
   WHY:跑滿回顧檔第 2 版多一欄 world_check(查了哪些詞、來源、方向對/要換/判不準、一段說明),情況只由 _cap_world_case 一支判:extra-round 而且人裁 ts 不早於 _CAP_WORLD_CHECK_SINCE 要求必填(ts 讀不懂也算)、accept-risk 選填(填了照驗)、生效前的 extra-round 或沒有人裁不管;_cap_retro_check 回傳帶出情況,--record 與 retro-stats 只讀它,統計只數要求而且已記回顧的迴圈,不加帳欄 [出處:[[Projects/跑滿後查世界方向_計劃]] d1、做法 3、4] [因:設計審 r2、r3 抓到三處各自重算會讓生效前的舊迴圈漏進統計、讀到沒驗過的值] [test:t_retro_check_world_check_legacy]
   WHY:世界查證的網址不解析、不正規化,只驗 http(s):// 開頭、後面有字、整串沒有空白,去頭尾空白後整串相同算重複;同頁不同寫法算兩個來源,照實列天花板 [出處:[[Projects/跑滿後查世界方向_計劃]] 設計審 r3 查世界方向] [因:r2 被空白、r3 被怪埠號丟例外連兩輪打穿;RFC 3986 只保證少數改寫同義,結尾斜線等要連網看轉址才判得準,格式檢查本來就驗不了真的查過] [不選:urlsplit 加正規化鍵] [test:t_retro_check_world_check]
+  PITFALL:手冊不教回顧樣板重導向的檢查用字面比對全部 --template >,把盲判樣板(code-loop blind-judge --template > 檔,每次重印、不蓋人寫的檔)也判紅 [出處:2026-11-07 第三批推送閘] [根因:判準沒限定是 loop retro 那支指令] [test:t_cap_retro_template_write_no_clobber]
 verified_by:
   - "[[Verification/2026-10-07_跑滿回顧因果證據銜接驗證]]"
 ---

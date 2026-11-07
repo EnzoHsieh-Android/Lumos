@@ -1,0 +1,78 @@
+{
+  "base": "ffb47f857b9a9a9eb9b7296a9151442a68037c22",
+  "groups": [
+    {
+      "id": "G1",
+      "category": "other",
+      "note": "讀治理帳 code-loop 事件有兩支:盲判另寫一支,切行只認換行、壞行接法不同;整本解碼遇到非 UTF-8 就整本讀不了",
+      "findings": ["二架5"],
+      "prior": {
+        "why_failed": "r1 甲把盲判改成只讀治理帳時,為了位元組預篩另寫了 _kt_bj_ledger_events,沒有改既有的 _codeloop_ledger_events 讓它收位元組,於是同一種事件篩選有兩份、切行與壞行接法分家;r1 的效能檢查只量了盲判那支,沒對照共用那支",
+        "new_approach": "盲判那支拿掉,共用的 _codeloop_ledger_events 收字串或位元組,位元組用 _ledger_lines_having 跳著找行、只解碼中選行並換掉非 UTF-8 位元組,壞行接 ValueError 與 RecursionError;pass/skip 退帳、表態、合併那一側都改讀位元組;用 300 份亂數帳驗跳找行跟整本切行結果一樣"
+      },
+      "paths": [
+        {"at": "scripts/lumos:def _codeloop_ledger_events", "status": "fixed", "tests": ["t_blind_judge_one_ledger_reader", "t_blind_judge_ledger_deep_nesting"]},
+        {"at": "scripts/lumos:def _ledger_lines_having", "status": "fixed", "tests": ["t_blind_judge_one_ledger_reader"]},
+        {"at": "scripts/lumos:def _kt_bj_read", "status": "fixed", "tests": ["t_blind_judge_one_ledger_reader", "t_blind_judge_ledger_is_truth"]},
+        {"at": "scripts/lumos:def _codeloop_read_from_ledger", "status": "fixed", "tests": ["t_blind_judge_one_ledger_reader"]},
+        {"at": "scripts/lumos:def _merge_side_ledger", "status": "fixed", "tests": ["t_codeloop_merge_side_ledger_handle", "t_codeloop_merge_side_edges"]}
+      ]
+    },
+    {
+      "id": "G2",
+      "category": "other",
+      "note": "表態讀取仍是本機標記檔優先、壞了退帳,跟盲判只讀治理帳分家;本機舊標記檔蓋掉帳時本機放行、CI 照帳擋",
+      "findings": ["二架6"],
+      "prior": {
+        "why_failed": "r1 甲只把盲判改成事件溯源(治理帳唯一真相),同一族的表態讀取 _codeloop_read_dispositions 沒一起掃,四個讀者(check、--carry、盲判 --disagreements、派工鏡頭)仍讀標記檔優先;寫側還在寫標記檔",
+        "new_approach": "表態也只從治理帳折出,四個讀者都走 _codeloop_read_dispositions,拿掉 marker_only;標記檔沒有讀者就停寫(刪掉兩支寫入函式);舊測試改標記檔造壞紀錄的地方一律改成改治理帳那一筆;合併提交認合進來那一側照原樣"
+      },
+      "paths": [
+        {"at": "scripts/lumos:def _codeloop_read_dispositions", "status": "fixed", "tests": ["t_dispositions_ledger_only_truth", "t_codeloop_dispositions_ledger_fallback"]},
+        {"at": "scripts/lumos:def _cmd_codeloop_dispositions", "status": "fixed", "tests": ["t_dispositions_ledger_only_truth", "t_codeloop_dispositions_write"]},
+        {"at": "scripts/lumos:def _dispatch_lens_graph", "status": "fixed", "tests": ["t_dispositions_lens_reads_ledger", "t_dispatch_lens_includes_dispositions"]},
+        {"at": "scripts/lumos:def _disp_record_for", "status": "fixed", "tests": ["t_dispositions_ledger_only_truth", "t_codeloop_merge_side_edges"]},
+        {"at": "scripts/lumos:def _cmd_codeloop_bj_template", "status": "fixed", "tests": ["t_dispositions_ledger_only_truth"]},
+        {"at": "scripts/lumos:def _dispositions_template", "status": "fixed", "tests": ["t_dispositions_ledger_only_truth"]},
+        {"at": "docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md:WHY:表態紀錄跟盲判同一條規則", "status": "fixed", "tests": ["t_dispositions_ledger_only_truth"]}
+      ]
+    },
+    {
+      "id": "G3",
+      "category": "other",
+      "note": "gov --stats 的採盲判把三方各異也算進去;--part 0 被 or 1 換成第 1 份",
+      "findings": ["二正1", "二測5", "二正2"],
+      "paths": [
+        {"at": "scripts/lumos:def _render_gov_situation", "status": "fixed", "tests": ["t_gov_stats_situation_arbiter_tally"]},
+        {"at": "scripts/lumos:def cmd_code_loop", "status": "fixed", "tests": ["t_blind_judge_part_zero_rejected"]}
+      ]
+    },
+    {
+      "id": "G4",
+      "category": "other",
+      "note": "推的是不是主線、合併那側帳讀不到給空帳、--disagreements 遇到沒有第一盲判的格、兩位盲判一致的摘要行,改壞後測試照綠",
+      "findings": ["二測1", "二測2", "二測3", "二測4"],
+      "paths": [
+        {"at": "scripts/test_lumos.py:def t_blind_judge_range_mainline_push", "status": "fixed", "tests": ["t_blind_judge_range_mainline_push"]},
+        {"at": "scripts/test_lumos.py:def t_blind_judge_merge_side_ledger_missing", "status": "fixed", "tests": ["t_blind_judge_merge_side_ledger_missing"]},
+        {"at": "scripts/test_lumos.py:def t_blind_judge_disagreements_without_first", "status": "fixed", "tests": ["t_blind_judge_disagreements_without_first"]},
+        {"at": "scripts/test_lumos.py:def t_blind_judge_agree_summary_line", "status": "fixed", "tests": ["t_blind_judge_agree_summary_line"]}
+      ]
+    },
+    {
+      "id": "G5",
+      "category": "other",
+      "note": "預設範圍兩邊各寫一份、判定函式伸手進合併快取的鍵、盲判旗標打包成 dict 另包一層檢查、規則包自檢程式縮寫表輔助用公開名",
+      "findings": ["二架1", "二架2", "二架3", "二架4"],
+      "paths": [
+        {"at": "scripts/lumos:def _codeloop_default_range", "status": "fixed", "tests": ["t_blind_judge_default_range_one_helper"]},
+        {"at": "scripts/lumos:def _kt_bj_segments", "status": "fixed", "tests": ["t_blind_judge_default_range_one_helper", "t_blind_judge_range_shared_with_check"]},
+        {"at": "scripts/lumos:def _codeloop_guard_verdict", "status": "fixed", "tests": ["t_blind_judge_default_range_one_helper", "t_codeloop_merge_side_ledger_handle"]},
+        {"at": "scripts/lumos:def _merge_side_ledger_cached", "status": "fixed", "tests": ["t_codeloop_merge_side_ledger_handle"]},
+        {"at": "scripts/lumos:def _cmd_codeloop_blind_judge", "status": "fixed", "tests": ["t_blind_judge_flat_args", "t_blind_judge_entry_shared"]},
+        {"at": "configs/ast-grep/kotlin-android/check.py:def _abbr_table", "status": "fixed", "tests": ["t_kt_catalog_private_helpers", "t_kt_catalog_sources_in_rows"]},
+        {"at": "configs/ast-grep/kotlin-android/check.py:def _abbr_hit", "status": "fixed", "tests": ["t_kt_catalog_private_helpers", "t_kt_catalog_evidence_patterns"]}
+      ]
+    }
+  ]
+}

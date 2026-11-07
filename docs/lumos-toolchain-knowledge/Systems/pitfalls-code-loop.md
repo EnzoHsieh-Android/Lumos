@@ -88,6 +88,7 @@ summary: |-
   WHY:`lumos code-loop pass` 記通過之前先跑新增告警與表態兩道:用推送檢查那支判定函式的收集模式加「只跑兩道」(mech_only,安全證據、端到端驗收、合約測試與代碼審留痕不跑),範圍是分岔點..HEAD;排在留痕驗證那兩條提早返回(沒有審查帳、light)之前;擋下不留痕、rc2、治理帳記一筆 code-loop-pass blocked [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 2] [因:使用者要審查迴圈裡就檢查乾淨,不等到推送] [不選:另寫一支共用判定(兩套判法會漂開)] [test:t_codeloop_pass_requires_clean_mechanical]
   WHY:`lumos lint-new --diff <範圍>` 呼叫推送前同一支新增告警判定、不寫治理帳;八種狀態分三類:擋 rc1、乾淨或刻意不查 rc0、沒檢查到 rc3(這支指令的 rc3 不是其他指令的找不到知識圖譜) [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 1] [因:派審查席前自己先查,又不讓放行帳多出推送以外的筆數] [test:t_lint_new_cli_status_codes]
   PITFALL:新增頂層指令自己寫了 description 時不會被灌入「什麼時候用」,又漏列 commands 索引,本機推功能分支只跑文件子集看不到、PR 的 CI 全套才紅 [出處:2026-11-06 PR #165 CI(lint-new)] [根因:_fill_help_when 只灌沒有 description 的子指令;兩支守衛測試不在功能分支推送的文件子集] [修法:自訂 description 開頭自己接 "什麼時候用:" + HELP_WHEN[名]] [test:t_command_index_complete]
+  WHY:code-loop check 的表態那一道多核情境題(kt-situation):用算適用題的同一個範圍,在被推版本上重算情境段、逐段逐列核對表態與證據樣式(缺段缺列與段算不出來擋,超過時間預算照 over_budget 規則:已查出的照擋、沒有就放行並記帳;證據樣式對不上只提醒並記帳、附段放行指令,見 [[Systems/棧別提問表態閘]]);pitfalls --diff 的 JSON 多 situation_segments、人讀輸出每段一行;沒超時而且表態形狀對時,同一道也核盲判紀錄(_kt_bj_check) [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 3] [因:表態對程式要在推送前那一道就擋,不靠審查席] [test:t_dispositions_situation_evidence_pattern]
 decisions:
   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
     id: d1

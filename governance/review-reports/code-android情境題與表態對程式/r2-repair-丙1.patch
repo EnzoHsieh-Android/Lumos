@@ -1,0 +1,1609 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 047dfc69e..b431fd3b2 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -85,20 +85,21 @@ def catalog_ids():
+     main = text if cut < 0 else text[:cut]
+     return {m.group(1) for m in map(_MAIN_ROW_RE.match, main.splitlines()) if m}, text
+ 
+ 
+ _CELL_RE = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')   # 反引號裡的直線不算欄位分隔
+ _MAIN_ROW_RE = re.compile(r"^\|\s*((?:API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+)\s*\|")
+ _MAIN_COLS = 12      # 編號|名稱|壞寫法形狀|標準寫法|後果|現成規則|級|情境怎麼認|接電方式|通電批次|實測狀態|來源
+ # 決策表依表頭名稱取欄(scripts/lumos 的 _kt_decision_table 同一套);這幾欄一定要有
+ _DT_HEADER = ("列編號", "情境", "標準寫法", "不適用時", "觸發字", "證據樣式", "對應檢查", "來源")
+ _RETIRED = "(停用)"
++_SWITCH = "(換列)"     # 「不適用時」格子的明確標記:這一列的例外是換到別列,不准選例外寫法
+ _WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
+ # 觸發字停用字表:這些字幾乎每支 Kotlin 檔都有,當觸發字會讓改檔前推列與情境題每次都亮(第二、三批計劃的依賴)
+ STOP_TRIGGERS = frozenset((
+     "map", "filter", "forEach", "let", "run", "apply", "also", "with", "if", "else", "when", "try", "catch",
+     "val", "var", "fun", "class", "object", "return", "suspend", "launch", "async", "await", "flow", "Flow",
+     "collect", "first", "take", "list", "List", "remember", "enabled", "Job", "cancel", "data", "String",
+     "Int", "Unit", "null", "true", "false", "this", "it", "get", "set", "value", "state", "State",
+     # r1 接手席點名的(第二、三批設計審):型別名或方法名太泛,出現在大量無關程式裡
+     "Exception", "Result", "Response", "insert", "offset", "sealed", "onClick", "isActive", "key", "test",
+     "version", "size", "token", "edit", "Application", "Intent", "Context", "delay", "Dao", "Repository",
+@@ -121,67 +122,130 @@ def dt_triggers(cell):
+     trig = [t.strip().strip("`") for t in re.split(r"[、,，]", norm) if t.strip()]
+     if _NONE_TRIGGER in trig:
+         if len(trig) > 1:
+             return [], "「(無)」是刻意不設觸發字,不能跟其他觸發字並列"
+         return [], None
+     if not trig:
+         return [], "觸發字不准空(刻意不設寫「(無)」)"
+     return trig, None
+ 
+ 
+-def dt_evidence(cell):
+-    """證據樣式格子「主:… ;例外:…」→ 問題清單(空=合法)。每段是「(無)」或一到三條反引號包住的 Python 正規式,
+-    每條要編譯得過;表格裡跳脫過的直線還原成 | 再編(scripts/lumos 的 _kt_dt_evidence 讀法相同)。"""
+-    norm = cell.replace("\uff08", "(").replace("\uff09", ")").replace("\uff1a", ":").strip()
++def _norm(cell):
++    """全形括號與冒號換成半形(型錄格子兩種都有人寫)。"""
++    return cell.replace("（", "(").replace("）", ")").replace("：", ":")
++
++
++def dt_evidence_parse(cell):
++    """證據樣式格子「主:… ;例外:…」→ ({"main": [正規式…] 或 None, "alt": …} 或 None, 問題清單)。每段是「(無)」或一到三條
++    反引號包住的 Python 正規式,每條要編譯得過;表格裡跳脫過的直線還原成 | 再編。scripts/lumos 借用這一支讀表(只有這一套)。"""
++    norm = _norm(cell).strip()
+     if not norm.startswith("主:") or norm.count("例外:") != 1:
+-        return ["證據樣式要寫成「主:… ;例外:…」"]
++        return None, ["證據樣式要寫成「主:… ;例外:…」"]
+     main, alt = norm[len("主:"):].split("例外:", 1)
+-    probs = []
+-    for name, part in (("主", re.sub("[;\uff1b]+$", "", main.strip()).strip()), ("例外", alt.strip())):
++    probs, out = [], {}
++    for key, name, part in (("main", "主", re.sub("[;；]+$", "", main.strip()).strip()), ("alt", "例外", alt.strip())):
+         if part == _NONE_TRIGGER:
++            out[key] = None
+             continue
+         pats = [x.replace("\\|", "|") for x in re.findall(r"`([^`]+)`", part)]
+         if not 1 <= len(pats) <= 3 or re.sub(r"`[^`]+`", "", part).strip():
+             probs.append(f"證據樣式的{name}:要寫「(無)」或一到三條反引號包住的正規式")
+             continue
+         for x in pats:
+             try:
+                 re.compile(x)
+             except re.error as e:
+                 probs.append(f"證據樣式的{name} `{x}` 編譯不過({e})")
+-    return probs
++        out[key] = pats
++    return (None if probs else out), probs
++
++
++def dt_evidence(cell):
++    """證據樣式格子 → 問題清單(空=合法);解析見 dt_evidence_parse。"""
++    return dt_evidence_parse(cell)[1]
+ 
+ 
+ def _dt_header(dt):
+     """決策表表頭 → {欄名: 位置};缺欄回 (None, 問題)。"""
+     for ln in dt.splitlines():
+         if ln.startswith("| ") and not re.match(r"^\|\s*D-\d+\s*\|", ln):
+             cols = {name: i for i, name in enumerate(_cells(ln))}
+             missing = [n for n in _DT_HEADER if n not in cols]
+             return (None, "決策表表頭缺欄:" + "、".join(missing)) if missing else (cols, None)
+     return None, "找不到決策表表頭"
+ 
+ 
+-def _dt_row_problems(get):
+-    """決策表一列(get(欄名) 取格子)→ 問題清單。停用列:觸發字與證據樣式都要是(無),其餘不檢查。"""
+-    if _RETIRED in get("情境").replace("\uff08", "(").replace("\uff09", ")"):
++def dt_row(get):
++    """決策表一列(get(欄名) 取格子)→ (列 dict 或 None, 讀不懂的問題清單)。只管讀得懂讀不懂(scripts/lumos 讀到問題就整張表不用);
++    常用字、來源、停用列寫法這類格式要求在 catalog_problems。
++    列:{id, situation, standard, alt(不適用時), triggers, evidence{main, alt}, retired(停用列), switch(換列的列), checks(對應檢查)}。
++    停用列不讀觸發字與證據樣式(當成沒有);換列的列認「不適用時」格子裡的明確標記「(換列)」,不從中文用語推,而且例外一定要是(無)。"""
++    retired = _RETIRED in _norm(get("情境"))
++    row = {"id": get("列編號"), "situation": get("情境"), "standard": get("標準寫法"), "alt": get("不適用時"),
++           "triggers": [], "evidence": {"main": None, "alt": None}, "retired": retired,
++           "switch": _SWITCH in _norm(get("不適用時")), "checks": get("對應檢查")}
++    if retired:
++        return row, []
++    trig, err = dt_triggers(get("觸發字"))
++    ev, probs = dt_evidence_parse(get("證據樣式"))
++    probs = ([err] if err else []) + probs
++    if ev and row["switch"] and ev["alt"] is not None:
++        probs.append(f"「不適用時」標了{_SWITCH}(換到別列)的列,證據樣式的例外要寫(無)")
++    if probs:
++        return None, probs
++    row.update(triggers=trig, evidence=ev)
++    return row, []
++
++
++def dt_table(text):
++    """型錄全文 → (列清單, 讀不懂的問題清單 [(列編號或 <決策表>, 原因)])。依表頭名稱取欄(欄位順序可以換);
++    列編號要從 D-1 連號。scripts/lumos 用 importlib 借這一支讀表(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1;
++    代碼審 r1 架構對齊席:原本兩邊各寫一套、必有欄數已經分歧)。"""
++    i = text.find("\n## 情境決策表")
++    if i < 0:
++        return [], [("<決策表>", "找不到〈情境決策表〉節")]
++    j = text.find("\n## ", i + 5)
++    dt = text[i:j if j >= 0 else len(text)]
++    hdr, herr = _dt_header(dt)
++    if herr:
++        return [], [("<決策表>", herr)]
++    rows, probs, seen = [], [], []
++    for ln in dt.splitlines():
++        if not re.match(r"^\|\s*D-\d+\s*\|", ln):
++            continue
++        c = _cells(ln)
++        did = c[0]
++        if len(c) != len(hdr):
++            probs.append((did, f"決策表欄位數 {len(c)},應為 {len(hdr)}"))
++            continue
++        seen.append(did)
++        row, rp = dt_row(lambda name, c=c: c[hdr[name]])
++        probs += [(did, p) for p in rp]
++        if row:
++            rows.append(row)
++    if not seen or seen != [f"D-{k}" for k in range(1, len(seen) + 1)]:
++        # 列編號只准往後加、不准重排或重用;刪列時那一列在情境欄標(停用)留著(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1)
++        probs.append(("<決策表>", "列編號要從 D-1 連號(刪列時標(停用)留著,不要拿掉或重排)"))
++    return rows, probs
++
++
++def _dt_row_lint(get):
++    """決策表一列的格式要求(讀得懂之外):停用列的觸發字與證據樣式都要是(無)、觸發字不含常用字、來源不准空。"""
++    if _RETIRED in _norm(get("情境")):
+         trig, _e = dt_triggers(get("觸發字"))
+-        ok_ev = re.fullmatch(r"主:\(無\);\s*例外:\(無\)", get("證據樣式").replace("\uff08", "(").replace("\uff09", ")").replace("\uff1a", ":"))
++        ok_ev = re.fullmatch(r"主:\(無\);\s*例外:\(無\)", _norm(get("證據樣式")))
+         return [] if not trig and ok_ev else ["停用列的觸發字要寫(無)、證據樣式要寫「主:(無);例外:(無)」(不再出段)"]
++    trig, _e = dt_triggers(get("觸發字"))
+     probs = []
+-    trig, err = dt_triggers(get("觸發字"))
+-    if err:
+-        probs.append(err)
+     bad = [t for t in trig if t in STOP_TRIGGERS]
+     if bad:
+         probs.append("觸發字含常用字:" + "、".join(bad))
+-    probs += dt_evidence(get("證據樣式"))
+     if not get("來源"):
+         probs.append("來源不准空")
+     return probs
+ 
+ 
+ def catalog_problems(rules=None):
+     """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
+     problems = []
+     text = CATALOG.read_text(encoding="utf-8")
+     i_dt, i_pend = text.find("\n## 情境決策表"), text.find("\n## 待查證")
+@@ -218,55 +282,171 @@ def catalog_problems(rules=None):
+         if kind.startswith("語意"):
+             if "表態對程式" not in wire:
+                 problems.append((rid, "語意類要有「表態對程式」"))
+             if "(人裁)" not in name and "盲判席" not in wire:
+                 problems.append((rid, "語意類(沒標人裁)要有「盲判席」"))
+         if "(出處不全)" not in name:
+             if any(w in src for w in _WEAK_SRC):
+                 problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
+             if not (re.search(r"https?://", src) or any(re.search(r"(?<![A-Z0-9-])" + re.escape(a) + r"(?![A-Z0-9-])", src) for a in abbrs)):
+                 problems.append((rid, "來源沒有網址或來源縮寫"))
+-    referenced, d_seen = set(), []
+-    hdr, herr = _dt_header(dt)
+-    if herr:
+-        problems.append(("<決策表>", herr))
++    referenced = set()
++    _dt_rows, dt_probs = dt_table(dt)          # 讀得懂讀不懂:跟 scripts/lumos 同一支
++    problems += dt_probs
++    hdr, _herr = _dt_header(dt)
+     for ln in dt.splitlines() if hdr else []:
+         if not re.match(r"^\|\s*D-\d+\s*\|", ln):
+             continue
+         c = _cells(ln)
+         did = c[0]
+         if len(c) != len(hdr):
+-            problems.append((did, f"決策表欄位數 {len(c)},應為 {len(hdr)}"))
+-            continue
+-        d_seen.append(did)
+-        problems += [(did, p) for p in _dt_row_problems(lambda name, c=c: c[hdr[name]])]
++            continue                              # 欄位數不對已經在 dt_table 報過
++        problems += [(did, p) for p in _dt_row_lint(lambda name, c=c: c[hdr[name]])]
+         refs = set(re.findall(r"[A-Z]+-\d+", c[hdr["對應檢查"]]))
+         for r in sorted(refs - set(rows)):
+             problems.append((did, f"對應檢查 {r} 不在型錄主表"))
+         referenced |= refs
+-    want = [f"D-{i}" for i in range(1, len(d_seen) + 1)]
+-    if d_seen != want:
+-        # 列編號只准往後加、不准重排或重用;刪列時那一列在情境欄標(停用)留著(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1)
+-        problems.append(("<決策表>", "列編號要從 D-1 連號(刪列時標(停用)留著,不要拿掉或重排)"))
+     for rid, c in rows.items():
+         if c[7].startswith("語意") and rid not in referenced and "(出處不全)" not in c[1] and "(人裁)" not in c[1]:
+             problems.append((rid, "語意類沒有被任何決策表列收進去"))
+     if _SCRATCH_RE.search(text):
+         problems.append(("<catalog>", "型錄裡有指向會談暫存區的路徑"))
+     weak_ids = {rid for rid, c in rows.items() if "(出處不全)" in c[1]}
+     for r in rules or []:
+         m = re.match(r"\[([A-Z]+-\d+)\]", r["message"])
+         if m and m.group(1) in weak_ids and r["severity"] != "hint":
+             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准 hint 級"))
+     return problems
+ 
+ 
++# ── 證據樣式自測(代碼審 code-android情境題與表態對程式 r1 D1)──────────────────────────────
++# 每列證據樣式附正例與反例,經 scripts/lumos 真的切段與核對程式跑過:正例(那列標準寫法、例外寫法的範例程式)要放行,
++# 反例(對應檢查列的壞寫法)要擋;做不到的那一段改寫(無)交盲判。依據:ast-grep test 的 valid/invalid
++# (https://ast-grep.github.io/guide/test-rule.html )、Semgrep 的 ok/ruleid(https://docs.semgrep.dev/writing-rules/testing-rules )。
++# 樣本放 samples/situation/<列編號>.kt.txt(副檔名不是 .kt:不讓推送閘的棧別題把教材當產品碼),一支檔多段,
++# 每段一行標題 `// === <種類> <說明>` 開頭;種類:main-ok、alt-ok(那個寫法的正例)、bad(每個有樣式的寫法都要擋)、
++# bad main、bad alt(只對那個寫法擋:壞寫法剛好是另一個寫法的合法長相時用)。
++_SIT_SAMPLE_HEAD = re.compile(r"^// === (main-ok|alt-ok|bad main|bad alt|bad)(?=\s|$)(.*)$")
++
++
++def situation_dir():
++    return HERE / "samples" / "situation"
++
++
++def situation_samples(rid):
++    """samples/situation/<列編號>.kt.txt → [(種類, 標題, 程式)];沒有這支檔回 [];第一個標題前的字不收(檔頭說明)。"""
++    p = situation_dir() / f"{rid}.kt.txt"
++    if not p.is_file():
++        return []
++    out, cur = [], None
++    for ln in p.read_text(encoding="utf-8").split("\n"):
++        m = _SIT_SAMPLE_HEAD.match(ln)
++        if m:
++            cur = [m.group(1), (m.group(1) + m.group(2)).strip(), []]
++            out.append(cur)
++        elif cur is not None:
++            cur[2].append(ln)
++    return [(k, title, "\n".join(body).rstrip("\n") + "\n") for k, title, body in out]
++
++
++def load_lumos():
++    """把旁邊的 scripts/lumos 當模組載入(不寫 __pycache__)→ (模組或 None, 原因或 None)。"""
++    import importlib.machinery
++    import importlib.util
++    path = HERE.parents[2] / "scripts" / "lumos"
++    if not path.is_file():
++        return None, f"找不到 {path}"
++    prev = sys.dont_write_bytecode
++    sys.dont_write_bytecode = True
++    try:
++        loader = importlib.machinery.SourceFileLoader("lumos_for_kt_pack_check", str(path))
++        spec = importlib.util.spec_from_loader(loader.name, loader)
++        mod = importlib.util.module_from_spec(spec)
++        loader.exec_module(mod)
++    except Exception as e:   # 別支檔,什麼都可能炸:變成一句原因
++        return None, f"載入 {path} 失敗({e.__class__.__name__}:{e})"
++    finally:
++        sys.dont_write_bytecode = prev
++    return mod, None
++
++
++def _sit_first_pass(lm, segs, row, variant):
++    """這些段裡有沒有哪一行當 evidence 能過這個寫法的核對 → (段, 行號) 或 None;同時回第一句擋下的原因。"""
++    why = None
++    for sg in segs:
++        for ln in range(sg["start"], sg["end"] + 1):
++            ans = {"applies": True, "variant": variant, "evidence": f"{sg['file']}:{ln}"}
++            pr = lm._kt_sit_row_check(sg, row["id"], ans, row)
++            if pr is None:
++                return (sg, ln), None
++            why = why or pr
++    return None, why
++
++
++def situation_sample_problems(lumos=None):
++    """證據樣式自測 → [(列編號, 原因)]。lumos=已載入的 scripts/lumos 模組(預設載入旁邊那支)。
++    每列每個不是(無)的寫法要有至少一段正例、整列(有任何樣式時)要有至少一段反例;每段樣本整支當新增,經
++    lumos 的 _kt_sit_text_segments 切段(觸發字要中、要切得出含這一列的段),再拿段範圍每一行當 evidence 經 _kt_sit_row_check 核:
++    正例要有一行過,反例要每一行都擋。(無)的寫法有正例或反例、沒有任何樣式的列有樣本、樣本檔對不到列,都算問題(樣本沒有作用)。"""
++    rows, probs = dt_table(CATALOG.read_text(encoding="utf-8"))
++    if probs:
++        return [(a, "決策表讀不懂,證據樣式自測沒跑:" + b) for a, b in probs]
++    if lumos is None:
++        lumos, why = load_lumos()
++        if lumos is None:
++            return [("<situation>", "證據樣式自測要載入 scripts/lumos:" + why)]
++    out = []
++    ids = {r["id"] for r in rows}
++    for f in sorted(situation_dir().glob("*.kt.txt")) if situation_dir().is_dir() else []:
++        if f.name[:-len(".kt.txt")] not in ids:
++            out.append((f.name, "樣本檔對不到決策表的列"))
++    for r in rows:
++        if r["retired"]:
++            continue
++        rid, ev = r["id"], r["evidence"]
++        variants = [v for v in ("main", "alt") if ev[v]]
++        samples = situation_samples(rid)
++        if not variants:
++            if samples:
++                out.append((rid, "證據樣式兩段都是(無),樣本沒有作用(拿掉樣本檔)"))
++            continue
++        kinds = {k for k, _t, _c in samples}
++        for v in variants:
++            if f"{v}-ok" not in kinds:
++                out.append((rid, f"證據樣式的{'主' if v == 'main' else '例外'}沒有正例({v}-ok:{'標準寫法' if v == 'main' else '不適用時的例外寫法'}的範例程式)"))
++        if not any(k.startswith("bad") for k in kinds):
++            out.append((rid, "證據樣式沒有反例(bad:對應檢查列的壞寫法範例)"))
++        for kind, title, code in samples:
++            segs = [sg for sg in lumos._kt_sit_text_segments(f"{rid}.kt", code, rows) if rid in sg["rows"]]
++            if not segs:
++                out.append((rid, f"樣本「{title}」切不出含這一列的段(觸發字沒中,這段樣本測不到樣式)"))
++                continue
++            if kind.endswith("-ok"):
++                v = kind[:-3]
++                if not ev[v]:
++                    out.append((rid, f"樣本「{title}」:這個寫法的證據樣式是(無),正例沒有作用"))
++                    continue
++                got, why = _sit_first_pass(lumos, segs, r, v)
++                if got is None:
++                    out.append((rid, f"正例「{title}」被擋(誤擋標準寫法):{why}"))
++                continue
++            targets = [kind.split()[1]] if " " in kind else variants
++            for v in targets:
++                if not ev[v]:
++                    out.append((rid, f"樣本「{title}」:{v} 的證據樣式是(無),反例沒有作用"))
++                    continue
++                got, _why = _sit_first_pass(lumos, segs, r, v)
++                if got is not None:
++                    out.append((rid, f"反例「{title}」沒擋({v}:evidence 指第 {got[1]} 行就放行;壞寫法被當成照做)"))
++    return out
++
++
+ def message_problems(rules, cat_ids):
+     """每條規則的 id、severity、放哪個目錄、message 格式(計劃 S2)。不需要 ast-grep。"""
+     problems = []
+     for r in rules:
+         rid, msg = r["id"], r["message"]
+         if not rid.startswith("kt-"):
+             problems.append((rid, "id 要用 kt- 前綴"))
+         if r["severity"] not in SEVERITIES:
+             problems.append((rid, f"severity 只能是 {'/'.join(SEVERITIES)}"))
+         if r["severity"] not in _DIR_SEVERITY.get(r["dir"], ()):
+@@ -355,20 +535,21 @@ def check(sg):
+     rules = load_rules()
+     if not rules:
+         problems.append(("<pack>", "一條規則都沒讀到(rules/、rules-review/、rules-hints/ 都是空的?)"))
+     ids = [r["id"] for r in rules]
+     dup = sorted({i for i in ids if ids.count(i) > 1})
+     if dup:
+         problems.append(("<pack>", "id 重複:" + ", ".join(dup)))
+     cat_ids, _cat_text = catalog_ids()
+     problems += message_problems(rules, cat_ids)
+     problems += catalog_problems(rules)
++    problems += situation_sample_problems()
+     for d, cfg in CONFIGS:
+         want = sum(1 for r in rules if r["dir"] == d)
+         got, skipped = loaded_count(sg, cfg)
+         if got is None:
+             problems.append(("<pack>", f"{cfg} 讀不到載入條數(掃描逾時或 ast-grep 跑不起來)"))
+         elif got != want or skipped:
+             problems.append(("<pack>", f"{cfg} 載入 {got} 條(略過 {skipped}),規則檔裡有 {want} 個 id"))
+     review_ids = {r["id"] for r in rules if r["dir"] == "rules-review"}
+     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
+     hits = {}
+@@ -411,21 +592,21 @@ def check(sg):
+                     problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))
+                     continue
+                 for (i, f) in got:
+                     if any(r["id"] == i for r in test_only):
+                         problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
+     return rules, problems
+ 
+ 
+ def main(argv):
+     if "--catalog-only" in argv:
+-        probs = catalog_problems(load_rules())
++        probs = catalog_problems(load_rules()) + situation_sample_problems()
+         for rid, why in probs:
+             print(f"{rid}: {why}")
+         print(f"型錄問題 {len(probs)} 個")
+         return 1 if probs else 0
+     sg = None
+     if "--sg" in argv:
+         i = argv.index("--sg")
+         if i + 1 >= len(argv):
+             print("--sg 後面要給 ast-grep 執行檔路徑", file=sys.stderr)
+             return 2
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-1.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-1.kt.txt
+new file mode 100644
+index 000000000..c73c3fe6f
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-1.kt.txt
+@@ -0,0 +1,24 @@
++// D-1 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法:兩支互不依賴的呼叫各自 async,最後一起 await
++suspend fun load(api: Api): Ui = coroutineScope {
++    val a = async { api.a() }
++    val b = async { api.b() }
++    Ui(a.await(), b.await())
++}
++// === main-ok 帶 dispatcher 的 async(代碼審 r1 邊界 F3)
++suspend fun load(api: Api): Ui = coroutineScope {
++    val a = async(Dispatchers.IO) { api.a() }
++    val b = async(Dispatchers.IO) { api.b() }
++    Ui(a.await(), b.await())
++}
++// === bad API-14 async 立刻 await,等於沒並行
++suspend fun load(api: Api): Ui = coroutineScope {
++    val a = async { api.a() }.await()
++    val b = async { api.b() }.await()
++    Ui(a, b)
++}
++// === bad API-3 async 的結果沒人接
++suspend fun load(api: Api) = coroutineScope {
++    async { api.log() }
++    api.b()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-10.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-10.kt.txt
+new file mode 100644
+index 000000000..c19f460a4
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-10.kt.txt
+@@ -0,0 +1,26 @@
++// D-10 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok OkHttp 整個呼叫設上限
++object Net {
++    val client = OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()
++}
++// === main-ok Ktor 裝 HttpTimeout
++object Net {
++    val client = HttpClient(CIO) { install(HttpTimeout) { requestTimeoutMillis = 30_000 } }
++}
++// === main-ok 協程 withTimeoutOrNull 接逾時
++suspend fun load(api: Api): Ui = withTimeoutOrNull(5_000) { api.load() } ?: Ui.Timeout
++// === alt-ok 長連線:不設整體 callTimeout,改 readTimeout
++object Net {
++    val streaming = OkHttpClient.Builder().readTimeout(60, TimeUnit.SECONDS).build()
++}
++// === alt-ok 資源在 withTimeout 外取得、用 use
++suspend fun read(open: () -> Res): Data = open().use { r -> withTimeout(1_000) { r.read() } }
++// === bad CO-14 withTimeout 區塊內取得資源再回傳(代碼審 r1 接手 F5)
++suspend fun open(): Res {
++    val r = withTimeout(1000) { openResource() }
++    return r
++}
++// === bad API-32 launch 裡 withTimeout 沒處理
++fun start(scope: CoroutineScope) {
++    scope.launch { withTimeout(5_000) { fetch() } }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-11.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-11.kt.txt
+new file mode 100644
+index 000000000..b27b785f4
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-11.kt.txt
+@@ -0,0 +1,24 @@
++// D-11 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok Flow:retryWhen 有上限並退避
++fun Flow<Data>.withRetry() = retryWhen { cause, attempt -> (cause is IOException && attempt < 3).also { if (it) delay(500L shl attempt.toInt()) } }
++// === main-ok 命令式:repeat 有上限並退避
++suspend fun fetch(api: Api): Data {
++    repeat(3) { attempt ->
++        runCatching { return api.x() }
++        delay(500L shl attempt)
++    }
++    return api.x()
++}
++// === main-ok WorkManager:Result.retry 搭 runAttemptCount 上限
++class SyncWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
++    override suspend fun doWork(): Result {
++        if (runAttemptCount >= 3) return Result.failure()
++        return Result.retry()
++    }
++}
++// === bad API-7 Flow 的 retry 不帶次數
++fun Flow<Data>.withRetry() = retry()
++// === bad DATA-36 Worker 遇到永久錯誤也回 retry
++class SyncWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
++    override suspend fun doWork(): Result = try { api.sync(); Result.success() } catch (e: Exception) { Result.retry() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-12.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-12.kt.txt
+new file mode 100644
+index 000000000..596cb85c1
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-12.kt.txt
+@@ -0,0 +1,25 @@
++// D-12 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 導航點擊用 dropUnlessResumed
++@Composable
++fun NextButton(onNext: () -> Unit) {
++    Button(onClick = dropUnlessResumed { onNext() }) { Text("下一步") }
++}
++// === main-ok 背景工作用 enqueueUniqueWork(KEEP)
++fun schedule(context: Context, req: OneTimeWorkRequest) {
++    WorkManager.getInstance(context).enqueueUniqueWork("sync", ExistingWorkPolicy.KEEP, req)
++}
++// === main-ok 多處同時刷新同一資源:共用 Mutex
++class Repo(private val api: Api) {
++    private val mutex = Mutex()
++    suspend fun refresh() = mutex.withLock { api.refresh() }
++}
++// === alt-ok 每次都要送:Channel 排隊
++class Sender(private val api: Api) {
++    private val mutex = Mutex()
++    private val outbox = Channel<Msg>(capacity = 64)
++    suspend fun send(m: Msg) = outbox.send(m)
++}
++// === bad DATA-30 一次性工作 policy 選 REPLACE
++fun schedule(context: Context, req: OneTimeWorkRequest) {
++    WorkManager.getInstance(context).enqueueUniqueWork("sync", ExistingWorkPolicy.REPLACE, req)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-14.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-14.kt.txt
+new file mode 100644
+index 000000000..cc930e8ec
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-14.kt.txt
+@@ -0,0 +1,30 @@
++// D-14 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 同一 Activity 的 Fragment 共享:activityViewModels
++class DetailFragment : Fragment() {
++    private val shared: SharedVm by activityViewModels()
++}
++// === main-ok 同一導航子圖:navGraphViewModels
++class StepFragment : Fragment() {
++    private val flow: CheckoutVm by navGraphViewModels(R.id.checkout)
++}
++// === main-ok Compose 父導航圖:getBackStackEntry 包在 remember
++@Composable
++fun Step(navController: NavController, entry: NavBackStackEntry) {
++    val parent = remember(entry) { navController.getBackStackEntry("checkout") }
++    val vm: CheckoutVm = hiltViewModel(parent)
++}
++// === alt-ok 不需要共享:畫面自己的 viewModels()
++class DetailFragment : Fragment() {
++    private val vm: DetailVm by viewModels()
++}
++// === alt-ok 不需要共享:Compose 自己的 hiltViewModel()
++@Composable
++fun Detail() {
++    val vm: DetailVm = hiltViewModel()
++}
++// === bad ARCH-37 組建中直接呼叫 getBackStackEntry,沒 remember
++@Composable
++fun Step(navController: NavController) {
++    val parent = navController.getBackStackEntry("checkout")
++    val vm: CheckoutVm = hiltViewModel(parent)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-16.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-16.kt.txt
+new file mode 100644
+index 000000000..805ee5607
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-16.kt.txt
+@@ -0,0 +1,31 @@
++// D-16 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 只要最新值:conflate
++fun Flow<Int>.latestOnly() = conflate()
++// === main-ok 只要最新值:collectLatest
++suspend fun render(src: Flow<Frame>) {
++    src.collectLatest { draw(it) }
++}
++// === main-ok 要保留但有上限:buffer(64, DROP_OLDEST)
++fun Flow<Int>.bounded() = buffer(64, onBufferOverflow = BufferOverflow.DROP_OLDEST)
++// === main-ok 回呼轉 Flow:trySend 有接結果
++fun events(src: Source) = callbackFlow {
++    val l = Listener { v -> trySend(v).onFailure { log(it) } }
++    src.add(l)
++    awaitClose { src.remove(l) }
++}
++// === main-ok Channel 用有上限的容量
++class Pipe {
++    val ch = Channel<Int>(64)
++}
++// === bad FLOW-30 無上限的緩衝(代碼審 r1 接手 F5)
++fun Flow<Int>.unbounded() = buffer(Channel.UNLIMITED)
++// === bad FLOW-30 無上限的 Channel
++class Pipe {
++    val ch = Channel<Int>(Channel.UNLIMITED)
++}
++// === bad FLOW-31 callbackFlow 裡忽略 trySend 結果(代碼審 r1 接手 F5)
++fun events(src: Source) = callbackFlow {
++    val l = Listener { v -> trySend(v) }
++    src.add(l)
++    awaitClose { src.remove(l) }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-17.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-17.kt.txt
+new file mode 100644
+index 000000000..68dcd89fc
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-17.kt.txt
+@@ -0,0 +1,26 @@
++// D-17 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 注入的長壽 scope 並 join
++class Repo(private val applicationScope: CoroutineScope, private val ds: Ds) {
++    suspend fun save(x: Item) {
++        applicationScope.launch { ds.save(x) }.join()
++    }
++}
++// === main-ok WorkManager enqueueUniqueWork
++fun scheduleSave(context: Context, req: OneTimeWorkRequest) {
++    WorkManager.getInstance(context).enqueueUniqueWork("save", ExistingWorkPolicy.KEEP, req)
++}
++// === alt-ok 跟著畫面取消也沒關係的讀取用 viewModelScope
++class ListVm(private val repo: Repo, private val applicationScope: CoroutineScope) : ViewModel() {
++    fun load() = viewModelScope.launch { _items.value = repo.items() }
++    fun save(x: Item) = applicationScope.launch { repo.save(x) }
++}
++// === bad CO-23 onCleared 裡用 viewModelScope 啟動工作(一行)
++class EditVm(private val repo: Repo) : ViewModel() {
++    override fun onCleared() { viewModelScope.launch { repo.save() } }
++}
++// === bad CO-23 onCleared 裡用 viewModelScope 啟動工作(多行)
++class EditVm(private val repo: Repo) : ViewModel() {
++    override fun onCleared() {
++        viewModelScope.launch { repo.save() }
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-19.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-19.kt.txt
+new file mode 100644
+index 000000000..6dedab09c
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-19.kt.txt
+@@ -0,0 +1,7 @@
++// D-19 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 回傳 Job,呼叫端可以等
++fun start(): Job = GlobalScope.launch { sync() }
++// === bad CO-43 發後不管的公開 API 無法得知完成
++fun initialize() {
++    GlobalScope.launch { sync() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-21.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-21.kt.txt
+new file mode 100644
+index 000000000..e31422f74
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-21.kt.txt
+@@ -0,0 +1,30 @@
++// D-21 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 測試函式裡 StandardTestDispatcher 一步步推
++@Test
++fun loads() = runTest {
++    val dispatcher = StandardTestDispatcher(testScheduler)
++    val vm = Vm(dispatcher)
++    vm.load()
++    runCurrent()
++    assertEquals(Ui.Done, vm.state.value)
++}
++// === main-ok dispatcher 放類別屬性、測試函式裡 runCurrent(代碼審 r1 接手 F6)
++class VmTest {
++    private val dispatcher = StandardTestDispatcher()
++    @Test
++    fun loads() = runTest(dispatcher) { vm.load(); runCurrent(); advanceTimeBy(500) }
++}
++// === alt-ok 只驗最終結果:UnconfinedTestDispatcher
++@Test
++fun endsDone() = runTest(UnconfinedTestDispatcher()) {
++    val vm = Vm()
++    vm.load()
++    assertEquals(Ui.Done, vm.state.value)
++}
++// === bad main TEST-15 測併發順序卻用 UnconfinedTestDispatcher
++@Test
++fun raceOrder() = runTest(UnconfinedTestDispatcher()) {
++    launch { a() }
++    launch { b() }
++    assertEquals(listOf("a", "b"), log)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-22.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-22.kt.txt
+new file mode 100644
+index 000000000..b57f6547c
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-22.kt.txt
+@@ -0,0 +1,14 @@
++// D-22 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 複製原請求再改、交給 chain.proceed
++class AuthInterceptor(private val token: String) : Interceptor {
++    override fun intercept(chain: Interceptor.Chain): Response {
++        val request = chain.request().newBuilder().header("Authorization", token).build()
++        return chain.proceed(request)
++    }
++}
++// === bad API-20 攔截器吞例外、自造假回應
++class SafeInterceptor : Interceptor {
++    override fun intercept(chain: Interceptor.Chain): Response {
++        return try { chain.proceed(chain.request()) } catch (e: IOException) { Response.Builder().code(599).build() }
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-23.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-23.kt.txt
+new file mode 100644
+index 000000000..a179519d0
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-23.kt.txt
+@@ -0,0 +1,16 @@
++// D-23 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 只改介面宣告:Response<Unit>(代碼審 r1 接手 F2)
++interface Api {
++    @DELETE("users/{id}") suspend fun delete(@Path("id") id: Long): Response<Unit>
++}
++// === main-ok 呼叫端用 isSuccessful 判成敗
++class Repo(private val api: Api) {
++    suspend fun remove(id: Long): Boolean {
++        val response = api.delete(id)
++        return response.isSuccessful
++    }
++}
++// === bad API-26 回 204 的端點宣告成實體型別
++interface Api {
++    @DELETE("users/{id}") suspend fun delete(@Path("id") id: Long): User
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-24.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-24.kt.txt
+new file mode 100644
+index 000000000..3a4b64b45
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-24.kt.txt
+@@ -0,0 +1,16 @@
++// D-24 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 在 execute 區塊內讀完串流
++suspend fun download(client: HttpClient, url: String, stream: OutputStream) {
++    client.prepareGet(url).execute { httpResponse ->
++        val channel: ByteReadChannel = httpResponse.body()
++        while (!channel.exhausted()) {
++            val chunk = channel.readRemaining(8192)
++            chunk.transferTo(stream)
++        }
++    }
++}
++// === bad API-30 把 response 帶出 execute 才讀
++suspend fun download(client: HttpClient, url: String): ByteReadChannel {
++    val response = client.prepareGet(url).execute()
++    return response.body()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-25.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-25.kt.txt
+new file mode 100644
+index 000000000..1b7fc3169
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-25.kt.txt
+@@ -0,0 +1,16 @@
++// D-25 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 回呼轉 suspend:resume、resumeWithException,取消時解除註冊
++suspend fun awaitValue(api: Api): T = suspendCancellableCoroutine { continuation ->
++    val callback = object : Callback {
++        override fun onCompleted(value: T) { continuation.resume(value) }
++        override fun onApiError(cause: Throwable) { continuation.resumeWithException(cause) }
++    }
++    api.register(callback)
++    continuation.invokeOnCancellation { api.unregister(callback) }
++}
++// === bad API-34 沒有取消時的善後,回呼觸發幾次就 resume 幾次
++suspend fun awaitValue(api: Api): T = suspendCancellableCoroutine { cont ->
++    api.register(object : Callback {
++        override fun onCompleted(value: T) { cont.resume(value) }
++    })
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-26.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-26.kt.txt
+new file mode 100644
+index 000000000..cc2613cdb
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-26.kt.txt
+@@ -0,0 +1,18 @@
++// D-26 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok Flow 可能一筆都不發:firstOrNull
++suspend fun find(repo: Repo): Item? = repo.find().firstOrNull()
++// === main-ok Channel 只要第一個:consume 結束時取消 channel
++suspend fun <E> ReceiveChannel<E>.consumeFirst(): E = consume { return receive() }
++// === alt-ok 多個消費者分食同一個 channel:for (msg in channel)
++suspend fun worker(channel: ReceiveChannel<Msg>) {
++    for (msg in channel) handle(msg)
++}
++// === bad FLOW-29 produce 建的 Channel 只 receive 一個就丟
++suspend fun firstTick(scope: CoroutineScope): Int {
++    val ch = scope.produce { while (true) send(tick()) }
++    return ch.receive()
++}
++// === bad fan-out 用 consumeEach(結束時取消整個 channel)
++suspend fun worker(channel: ReceiveChannel<Msg>) {
++    channel.consumeEach { handle(it) }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-27.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-27.kt.txt
+new file mode 100644
+index 000000000..1b0e62bf7
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-27.kt.txt
+@@ -0,0 +1,20 @@
++// D-27 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 互斥狀態用單一狀態流
++class NewsVm(private val repo: Repo) : ViewModel() {
++    private val _uiState = MutableStateFlow<LatestNewsUiState>(LatestNewsUiState.Loading)
++    val uiState: StateFlow<LatestNewsUiState> = _uiState
++}
++// === main-ok 相關欄位放同一個 UiState,用 copy 更新
++data class NewsUiState(val isSignedIn: Boolean = false, val isLoading: Boolean = false)
++class NewsVm : ViewModel() {
++    fun loading() { _uiState.update { it.copy(isLoading = true) } }
++}
++// === bad STATE-13 一堆布林與可空欄位各自成流
++class NewsVm : ViewModel() {
++    private val _isLoading = MutableStateFlow(false)
++    private val _error = MutableStateFlow<String?>(null)
++}
++// === bad CO-10 在 CoroutineExceptionHandler 裡寫恢復
++class NewsVm : ViewModel() {
++    private val handler = CoroutineExceptionHandler { _, e -> retry() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-28.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-28.kt.txt
+new file mode 100644
+index 000000000..38bf48d98
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-28.kt.txt
+@@ -0,0 +1,14 @@
++// D-28 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok @Parcelize 讓型別可進 Bundle
++@Parcelize
++data class MyClass(val id: String) : Parcelable
++// === main-ok rememberSaveable 給 saver
++@Composable
++fun Feed() {
++    val state = rememberSaveable(saver = LazyListState.Saver) { LazyListState(0, 0) }
++}
++// === bad STATE-23 rememberSaveable 存不能放 Bundle 的型別
++@Composable
++fun Editor() {
++    val doc = rememberSaveable { mutableStateOf(MyClass()) }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-29.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-29.kt.txt
+new file mode 100644
+index 000000000..333b3a949
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-29.kt.txt
+@@ -0,0 +1,33 @@
++// D-29 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 要比畫面活得久的工作用注入的外部 scope
++class ArticlesRepo(private val externalScope: CoroutineScope, private val ds: ArticlesDs) {
++    suspend fun bookmark(article: Article) {
++        externalScope.launch { ds.bookmarkArticle(article) }.join()
++    }
++}
++// === main-ok 畫面在生命週期內收集:repeatOnLifecycle
++class ListFragment : Fragment() {
++    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
++        viewLifecycleOwner.lifecycleScope.launch {
++            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) { vm.state.collect { render(it) } }
++        }
++    }
++}
++// === alt-ok UI 狀態意外變動也沒關係:commitAllowingStateLoss
++class HostActivity : AppCompatActivity() {
++    fun showBanner(f: Fragment) {
++        supportFragmentManager.beginTransaction().replace(R.id.banner, f).commitAllowingStateLoss()
++    }
++}
++// === bad CO-24 長壽 scope 捕捉 Activity
++class Repo(private val applicationScope: CoroutineScope) {
++    fun notify(activity: Activity) {
++        applicationScope.launch { activity.showToast() }
++    }
++}
++// === bad ARCH-31 網路回呼裡直接 commit
++class ListFragment : Fragment() {
++    fun onLoaded() {
++        api.load { childFragmentManager.beginTransaction().replace(R.id.c, DetailFragment()).commit() }
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-3.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-3.kt.txt
+new file mode 100644
+index 000000000..da6eea744
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-3.kt.txt
+@@ -0,0 +1,20 @@
++// D-3 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法:map 成 async 再 awaitAll
++suspend fun loadAll(api: Api, ids: List<Int>) = coroutineScope {
++    ids.map { id -> async { api.load(id) } }.awaitAll()
++}
++// === main-ok 筆數大時用 Semaphore 限流
++suspend fun loadAll(api: Api, ids: List<Int>) = coroutineScope {
++    val sem = Semaphore(8)
++    ids.map { id -> async { sem.withPermit { api.load(id) } } }.awaitAll()
++}
++// === main-ok 筆數大時用 limitedParallelism 限流
++suspend fun loadAll(api: Api, ids: List<Int>) = coroutineScope {
++    val io = Dispatchers.IO.limitedParallelism(8)
++    ids.map { id -> async(io) { api.load(id) } }.awaitAll()
++}
++// === bad API-2 有限流卻逐一 await
++suspend fun loadAll(api: Api, ids: List<Int>) = coroutineScope {
++    val sem = Semaphore(8)
++    ids.map { id -> async { sem.withPermit { api.load(id) } } }.map { it.await() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-30.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-30.kt.txt
+new file mode 100644
+index 000000000..1a6be8d15
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-30.kt.txt
+@@ -0,0 +1,16 @@
++// D-30 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === alt-ok 輕量判斷用 computedStateOf
++@Composable
++fun TopBar(listState: LazyListState) {
++    val show by remember { computedStateOf { listState.firstVisibleItemIndex > 0 } }
++}
++// === bad alt UI-21 輸入輸出同頻也包 derivedStateOf
++@Composable
++fun Name(first: String, last: String) {
++    val full by remember { derivedStateOf { first + " " + last } }
++}
++// === bad alt UI-36 snapshotFlow 裡讀非 State 的值
++@Composable
++fun Tracker() {
++    LaunchedEffect(Unit) { snapshotFlow { normalVar }.collect { log(it) } }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-32.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-32.kt.txt
+new file mode 100644
+index 000000000..f075b2615
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-32.kt.txt
+@@ -0,0 +1,19 @@
++// D-32 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === alt-ok 要跟呼叫點同壽:LaunchedEffect(true)
++@Composable
++fun Ticker(onTick: () -> Unit) {
++    LaunchedEffect(true) { while (isActive) { delay(1000); onTick() } }
++}
++// === alt-ok 換了就必須重來的值當 key:DisposableEffect(lifecycleOwner)
++@Composable
++fun Observe(lifecycleOwner: LifecycleOwner, observer: LifecycleObserver) {
++    DisposableEffect(lifecycleOwner) {
++        lifecycleOwner.lifecycle.addObserver(observer)
++        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
++    }
++}
++// === bad alt UI-35 效應 key 放太多每次都變的物件(代碼審 r1 接手 F5)
++@Composable
++fun Screen(viewModel: Vm, onClick: () -> Unit, list: List<Item>) {
++    LaunchedEffect(viewModel, onClick, list) { viewModel.load() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-33.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-33.kt.txt
+new file mode 100644
+index 000000000..f21433700
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-33.kt.txt
+@@ -0,0 +1,12 @@
++// D-33 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 狀態提升成「值 + 改值回呼」
++@Composable
++fun HelloContent(name: String, onNameChange: (String) -> Unit) {
++    OutlinedTextField(value = name, onValueChange = onNameChange)
++}
++// === bad UI-28 可重用元件內藏狀態
++@Composable
++fun Expandable(title: String) {
++    var expanded by remember { mutableStateOf(false) }
++    Text(title)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-34.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-34.kt.txt
+new file mode 100644
+index 000000000..02e19f6b0
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-34.kt.txt
+@@ -0,0 +1,31 @@
++// D-34 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法:clickable 在 padding 前(圓括號)
++@Composable
++fun Row1(onClick: () -> Unit, padding: Dp) {
++    Box(Modifier.clickable(onClick = onClick).padding(padding))
++}
++// === main-ok 尾隨 lambda(D-52 自己的寫法,代碼審 r1 接手 F1)
++@Composable
++fun Row1(onClick: () -> Unit) {
++    Box(Modifier.clickable { onClick() }.padding(8.dp))
++}
++// === main-ok 參數裡有兩層括號(代碼審 r1 接手 F1)
++@Composable
++fun Row1(vm: Vm) {
++    Box(Modifier.clickable(onClick = { vm.go(item(1)) }).padding(8.dp))
++}
++// === alt-ok 想讓 padding 區不在效果範圍內:padding 在前(圓括號)
++@Composable
++fun Row1(onClick: () -> Unit, padding: Dp) {
++    Box(Modifier.padding(padding).clickable(onClick = onClick))
++}
++// === alt-ok padding 在前、clickable 尾隨 lambda(代碼審 r1 接手 F1)
++@Composable
++fun Row1(onClick: () -> Unit) {
++    Box(Modifier.padding(8.dp).clickable { onClick() })
++}
++// === bad UI-66 padding 與 background 順序誤解
++@Composable
++fun Card1(c: Color) {
++    Box(Modifier.padding(8.dp).background(c))
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-35.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-35.kt.txt
+new file mode 100644
+index 000000000..efad07bf2
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-35.kt.txt
+@@ -0,0 +1,25 @@
++// D-35 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok ViewModel:Pager 的 flow cachedIn
++class FeedVm(private val backend: Backend) : ViewModel() {
++    val items = Pager(PagingConfig(pageSize = 20)) { FeedSource(backend) }.flow.cachedIn(viewModelScope)
++}
++// === main-ok 畫面:collectAsLazyPagingItems 並連載入狀態一起看
++@Composable
++fun Feed(vm: FeedVm) {
++    val lazyPagingItems = vm.items.collectAsLazyPagingItems()
++    val isLocalEmpty = lazyPagingItems.loadState.refresh is LoadState.NotLoading && lazyPagingItems.itemCount == 0
++}
++// === alt-ok 有 RemoteMediator:另看 loadState.mediator
++@Composable
++fun Feed(items: LazyPagingItems<Item>) {
++    val syncing = items.loadState.mediator?.refresh is LoadState.Loading
++}
++// === bad DATA-63 用 itemCount 判空狀態
++@Composable
++fun Feed(items: LazyPagingItems<Item>) {
++    if (items.itemCount == 0) EmptyView()
++}
++// === bad DATA-58 PagingData 沒 cachedIn 就進 combine
++class FeedVm(private val repo: Repo) : ViewModel() {
++    val ui = combine(repo.pagingFlow, repo.filters) { p, f -> p to f }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-36.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-36.kt.txt
+new file mode 100644
+index 000000000..57b8fdfd5
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-36.kt.txt
+@@ -0,0 +1,29 @@
++// D-36 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 資料庫當唯一來源:Pager 帶 remoteMediator
++class Repo(private val db: Db, private val net: Net) {
++    fun users(query: String) = Pager(config = PagingConfig(pageSize = 50), remoteMediator = UserMediator(query, db, net)) { db.userDao().pagingSource(query) }.flow
++}
++// === main-ok 成功後才在交易內換資料
++class UserMediator(private val query: String, private val database: Db, private val net: Net) : RemoteMediator<Int, User>() {
++    override suspend fun load(loadType: LoadType, state: PagingState<Int, User>): MediatorResult {
++        val response = net.searchUsers(query)
++        database.withTransaction { if (loadType == LoadType.REFRESH) database.userDao().clearAll(); database.userDao().insertAll(response.users) }
++        return MediatorResult.Success(endOfPaginationReached = response.nextKey == null)
++    }
++}
++// === alt-ok item key 型 API:endOfPaginationReached 看回應是不是空的
++class UserMediator(private val net: Net) : RemoteMediator<Int, User>() {
++    override suspend fun load(loadType: LoadType, state: PagingState<Int, User>): MediatorResult {
++        val response = net.after(state.lastItemOrNull()?.id)
++        return MediatorResult.Success(endOfPaginationReached = response.users.isEmpty())
++    }
++}
++// === bad main DATA-69 先清本機快取再呼叫 api,不在交易內
++class UserMediator(private val dao: UserDao, private val net: Net) : RemoteMediator<Int, User>() {
++    override suspend fun load(loadType: LoadType, state: PagingState<Int, User>): MediatorResult {
++        if (loadType == LoadType.REFRESH) dao.clearAll()
++        val response = net.searchUsers()
++        dao.insertAll(response.users)
++        return MediatorResult.Success(endOfPaginationReached = response.nextKey == null)
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-38.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-38.kt.txt
+new file mode 100644
+index 000000000..7e8599fa0
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-38.kt.txt
+@@ -0,0 +1,17 @@
++// D-38 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok Mutex 保護的快取
++class NewsRepo(private val api: Api) {
++    private val latestNewsMutex = Mutex()
++    suspend fun getLatestNews(refresh: Boolean = false): List<Headline> {
++        if (refresh || latestNews.isEmpty()) latestNewsMutex.withLock { this.latestNews = api.fetch() }
++        return latestNews
++    }
++}
++// === main-ok 要限制容量:LruCache
++class Thumbs {
++    private val cache = LruCache<String, Bitmap>(4 * 1024 * 1024)
++}
++// === bad DATA-68 記憶體 mutableMapOf 快取不限大小也沒失效
++class UserRepo(private val api: Api) {
++    private val cache = mutableMapOf<String, User>()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt
+new file mode 100644
+index 000000000..fc9065219
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt
+@@ -0,0 +1,42 @@
++// D-4 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法:debounce 之後 flatMapLatest
++class SearchVm(private val repo: Repo) : ViewModel() {
++    val results = query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
++}
++// === main-ok 命令式:先取消前一個 Job 再 launch
++class SearchVm(private val repo: Repo) : ViewModel() {
++    private var searchJob: Job? = null
++    fun search(q: String) {
++        searchJob?.cancel()
++        searchJob = viewModelScope.launch { _state.value = repo.search(q) }
++    }
++}
++// === alt-ok 每一次都要做完:collect 依序處理
++class UploadVm(private val repo: Repo) : ViewModel() {
++    fun start() {
++        viewModelScope.launch { uploads.collect { repo.upload(it) } }
++    }
++}
++// === alt-ok 每一次都要做完:Channel 排隊、單一消費者
++class UploadVm(private val repo: Repo) : ViewModel() {
++    private val queue = Channel<Upload>(capacity = 64)
++    fun start() {
++        viewModelScope.launch { for (u in queue) repo.upload(u) }
++    }
++}
++// === bad API-8 每次呼叫都 launch,沒取消前一個
++class SearchVm(private val repo: Repo) : ViewModel() {
++    fun search(q: String) {
++        viewModelScope.launch { _state.value = repo.search(q) }
++    }
++}
++// === bad 搜尋框用 flatMapConcat
++class SearchVm(private val repo: Repo) : ViewModel() {
++    val results = query.debounce(300).flatMapConcat { repo.search(it) }
++}
++// === bad FLOW-22 collectLatest 用在不能被中斷的寫入
++class SyncVm(private val db: Db) : ViewModel() {
++    fun start() {
++        viewModelScope.launch { events.collectLatest { db.insert(it) } }
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-40.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-40.kt.txt
+new file mode 100644
+index 000000000..4f4187d8a
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-40.kt.txt
+@@ -0,0 +1,13 @@
++// D-40 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 單一 Activity + Navigation 3
++@Composable
++fun App() {
++    val backStack = remember { mutableStateListOf<Any>(Home) }
++    NavDisplay(backStack = backStack, onBack = { backStack.removeLastOrNull() }, entryProvider = { key -> NavEntry(key) { Screen(key) } })
++}
++// === bad ARCH-54 多 Activity 用 Intent 串畫面
++class HomeActivity : AppCompatActivity() {
++    fun next() {
++        startActivity(Intent(this, DetailActivity::class.java))
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-41.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-41.kt.txt
+new file mode 100644
+index 000000000..8d0847fc7
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-41.kt.txt
+@@ -0,0 +1,22 @@
++// D-41 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok UI 端進行中旗標,先重設再導航
++@Composable
++fun Form(viewModel: FormVm, onNext: () -> Unit) {
++    var validationInProgress by rememberSaveable { mutableStateOf(false) }
++    if (validationInProgress) {
++        val lifecycle = LocalLifecycleOwner.current.lifecycle
++        LaunchedEffect(viewModel, lifecycle) {
++            snapshotFlow { viewModel.uiState }.filter { it.isValid }.flowWithLifecycle(lifecycle).collect { validationInProgress = false; onNext() }
++        }
++    }
++}
++// === alt-ok 導航由 UI 點擊直接觸發:dropUnlessResumed
++@Composable
++fun HelpLink(onHelp: () -> Unit) {
++    TextButton(onClick = dropUnlessResumed { onHelp() }) { Text("說明") }
++}
++// === bad ARCH-2 靠狀態觸發導航,沒有 UI 端進行中旗標
++@Composable
++fun Form(uiState: FormState, navigate: () -> Unit) {
++    LaunchedEffect(uiState) { if (uiState.isDone) navigate() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-42.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-42.kt.txt
+new file mode 100644
+index 000000000..1778d21dd
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-42.kt.txt
+@@ -0,0 +1,11 @@
++// D-42 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 少量設定用 DataStore,更新寫成一個交易
++suspend fun bump(context: Context) {
++    context.dataStore.updateData { s -> s.copy(exampleCounter = s.exampleCounter + 1) }
++}
++// === main-ok 大型或複雜資料用 Room
++fun db(context: Context) = Room.databaseBuilder(context, AppDb::class.java, "app.db").build()
++// === bad DATA-7 用 SharedPreferences 存整份清單
++fun saveAll(prefs: SharedPreferences, json: String) {
++    prefs.edit { putString("list", json) }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-43.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-43.kt.txt
+new file mode 100644
+index 000000000..fbc97dfff
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-43.kt.txt
+@@ -0,0 +1,12 @@
++// D-43 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 金鑰放 Android KeyStore
++fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
++// === alt-ok 憑證要跨裝置帶走:改用 Block Store
++suspend fun migrate(context: Context) {
++    val old = EncryptedSharedPreferences.create(context, "secure", masterKey, scheme, valueScheme)
++    Blockstore.getClient(context).storeBytes(StoreBytesData.Builder().setBytes(old.getString("token", "")!!.toByteArray()).build())
++}
++// === bad DATA-13 權杖照舊放已棄用的加密 prefs
++fun prefs(context: Context): SharedPreferences {
++    return EncryptedSharedPreferences.create(context, "secure", masterKey, scheme, valueScheme)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-44.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-44.kt.txt
+new file mode 100644
+index 000000000..a2dae8472
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-44.kt.txt
+@@ -0,0 +1,13 @@
++// D-44 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 升版本並給自動遷移
++@Database(version = 2, entities = [User::class], autoMigrations = [AutoMigration(from = 1, to = 2)])
++abstract class AppDb : RoomDatabase()
++// === main-ok 手寫遷移再 addMigrations
++fun build(context: Context) = Room.databaseBuilder(context, AppDb::class.java, "app.db").addMigrations(MIGRATION_1_2).build()
++// === alt-ok 可以接受清掉資料:fallbackToDestructiveMigration
++@Database(version = 3, entities = [User::class], exportSchema = false)
++abstract class AppDb : RoomDatabase()
++fun build(context: Context) = Room.databaseBuilder(context, AppDb::class.java, "app.db").fallbackToDestructiveMigration(dropAllTables = true).build()
++// === bad DATA-17 改了 schema 版本沒動、也沒遷移
++@Database(version = 1, entities = [User::class])
++abstract class AppDb : RoomDatabase()
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-46.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-46.kt.txt
+new file mode 100644
+index 000000000..1df0603a4
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-46.kt.txt
+@@ -0,0 +1,21 @@
++// D-46 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 可延後的定期同步用 WorkManager
++fun schedule(context: Context) {
++    val req = PeriodicWorkRequestBuilder<SendLogsWorker>(24, TimeUnit.HOURS).build()
++    WorkManager.getInstance(context).enqueueUniquePeriodicWork("sendLogs", ExistingPeriodicWorkPolicy.KEEP, req)
++}
++// === main-ok 真的要前景服務:onStartCommand 先 startForeground
++class Player : Service() {
++    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
++        ServiceCompat.startForeground(this, 1, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
++        return START_STICKY
++    }
++}
++// === bad DATA-48 用 AlarmManager 做重複同步
++fun schedule(alarmManager: AlarmManager, pi: PendingIntent) {
++    alarmManager.setRepeating(AlarmManager.RTC_WAKEUP, 0L, AlarmManager.INTERVAL_HOUR, pi)
++}
++// === bad DATA-43 用 Service 做可延後的工作
++fun sync(context: Context) {
++    context.startService(Intent(context, SyncService::class.java))
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-47.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-47.kt.txt
+new file mode 100644
+index 000000000..cc297bfe3
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-47.kt.txt
+@@ -0,0 +1,15 @@
++// D-47 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 可缺的欄位給預設值
++@Serializable data class Project(val name: String, val language: String = "Kotlin")
++// === main-ok 伺服器可能送 null:Json { coerceInputValues = true }(代碼審 r1 接手 F3)
++val format = Json { coerceInputValues = true }
++// === main-ok 伺服器必收的欄位:Json { encodeDefaults = true }
++val format = Json { encodeDefaults = true }
++// === alt-ok 要忽略多出來的鍵
++val format = Json { ignoreUnknownKeys = true }
++// === alt-ok 欄位就算有預設值也必須出現:@Required
++@Serializable data class Project(@Required val name: String = "x")
++// === bad DATA-72 非可空欄位沒預設值也沒開 coerceInputValues
++@Serializable data class U(val name: String)
++// === bad DATA-73 列舉遇到未知值就崩潰
++@Serializable enum class Status { A, B }
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-49.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-49.kt.txt
+new file mode 100644
+index 000000000..a2094b26b
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-49.kt.txt
+@@ -0,0 +1,31 @@
++// D-49 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok stateIn 的狀態先有收集者再斷言 value
++@Test
++fun score() = runTest {
++    val vm = Vm(fake)
++    backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.score.collect {} }
++    fake.emit(1)
++    assertEquals(1, vm.score.value)
++}
++// === main-ok 有掛起點先 advanceUntilIdle 再斷言
++@Test
++fun loads() = runTest {
++    val vm = Vm(fake)
++    vm.load()
++    advanceUntilIdle()
++    assertEquals(Ui.Done, vm.state.value)
++}
++// === alt-ok 能改 API:直接 await
++@Test
++fun loads() = runTest {
++    val vm = Vm(fake)
++    vm.loadAsync().await()
++    assertEquals(Ui.Done, vm.state.value)
++}
++// === bad TEST-6 stateIn(WhileSubscribed) 沒有收集者
++@Test
++fun score() = runTest {
++    val vm = Vm(fake)
++    fake.emit(1)
++    assertEquals(1, vm.score.value)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-5.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-5.kt.txt
+new file mode 100644
+index 000000000..a4430e67e
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-5.kt.txt
+@@ -0,0 +1,19 @@
++// D-5 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法:combine 再 stateIn(WhileSubscribed)
++class ProfileVm(private val repo: Repo) : ViewModel() {
++    val uiState: StateFlow<UiState> =
++        combine(repo.user, repo.settings, query) { u, s, q -> UiState(u, s, q) }
++            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)
++}
++// === alt-ok 某來源只在第一次需要:first() 取一次再進 combine
++class ProfileVm(private val repo: Repo) : ViewModel() {
++    suspend fun build(): Flow<Ui> {
++        val config = repo.config.first()
++        return combine(repo.user, repo.settings) { u, s -> Ui(u, s, config) }
++    }
++}
++// === bad STATE-4 共享策略用 Eagerly
++class ProfileVm(private val repo: Repo) : ViewModel() {
++    val uiState = combine(repo.user, repo.settings) { u, s -> UiState(u, s) }
++        .stateIn(viewModelScope, SharingStarted.Eagerly, UiState.Loading)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-50.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-50.kt.txt
+new file mode 100644
+index 000000000..4b787c8c6
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-50.kt.txt
+@@ -0,0 +1,16 @@
++// D-50 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 區塊結束前把事件消費完,確定後面不在意才明確忽略
++@Test
++fun emits() = runTest {
++    flow.test { assertEquals(expected, awaitItem()); cancelAndIgnoreRemainingEvents() }
++}
++// === main-ok 預期以錯誤結束:awaitError
++@Test
++fun fails() = runTest {
++    failing.test { val error = awaitError(); assertTrue(error is IOException) }
++}
++// === bad TEST-18 還有事件沒處理就結束
++@Test
++fun emits() = runTest {
++    flow.test { assertEquals(expected, awaitItem()) }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-51.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-51.kt.txt
+new file mode 100644
+index 000000000..f6565b8b0
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-51.kt.txt
+@@ -0,0 +1,18 @@
++// D-51 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 自己控時鐘
++@Test
++fun animates() {
++    composeTestRule.mainClock.autoAdvance = false
++    composeTestRule.mainClock.advanceTimeBy(500)
++}
++// === main-ok 框架看不到的非同步工作:registerIdlingResource
++@Test
++fun loads() {
++    composeTestRule.registerIdlingResource(idlingResource)
++    composeTestRule.onNodeWithText("完成").assertExists()
++}
++// === bad TEST-32 父節點合併語意,用合併樹找子文字
++@Test
++fun showsChild() {
++    composeTestRule.onNodeWithText("子文字").assertExists()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-52.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-52.kt.txt
+new file mode 100644
+index 000000000..e1864df50
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-52.kt.txt
+@@ -0,0 +1,21 @@
++// D-52 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 可點元素至少 48dp:sizeIn
++@Composable
++fun Tap(onClick: () -> Unit) {
++    Box(Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).clickable { onClick() })
++}
++// === main-ok 外觀必須小:minimumInteractiveComponentSize 放在 size 之前
++@Composable
++fun Tap(onClick: () -> Unit) {
++    Box(Modifier.clickable { onClick() }.minimumInteractiveComponentSize().size(24.dp))
++}
++// === main-ok 同一資訊單位合併讀出
++@Composable
++fun Card1() {
++    Row(modifier = Modifier.semantics(mergeDescendants = true) {}) { Text("a"); Text("b") }
++}
++// === bad UI-106 minimumInteractiveComponentSize 放在 size 之後
++@Composable
++fun Tap(onClick: () -> Unit) {
++    Box(Modifier.size(24.dp).clickable { onClick() }.minimumInteractiveComponentSize())
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-53.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-53.kt.txt
+new file mode 100644
+index 000000000..514826c7b
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-53.kt.txt
+@@ -0,0 +1,11 @@
++// D-53 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 用 Hilt 抽換成假實作
++@TestInstallIn(components = [SingletonComponent::class], replaces = [NetworkModule::class])
++@Module
++object FakeNetworkModule {
++    @Provides fun api(): Api = FakeApi()
++}
++// === bad TEST-37 測試直接用正式 baseUrl 的 Retrofit
++class UserApiTest {
++    private val api = Retrofit.Builder().baseUrl("https://api.example.com/").build().create(Api::class.java)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-54.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-54.kt.txt
+new file mode 100644
+index 000000000..a4ed0330c
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-54.kt.txt
+@@ -0,0 +1,18 @@
++// D-54 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 測試類別加 DetectLeaksAfterTestSuccess 規則
++class MainTest {
++    @get:Rule val rule = DetectLeaksAfterTestSuccess()
++}
++// === main-ok 測試中呼叫 LeakAssertions.assertNoLeaks()
++@Test
++fun noLeaks() {
++    LeakAssertions.assertNoLeaks()
++}
++// === alt-ok 已用 RuleChain:detectLeaksAfterTestSuccessWrapping
++class MainTest {
++    @get:Rule val rules = RuleChain.outerRule(LoginRule()).detectLeaksAfterTestSuccessWrapping(tag = "main")
++}
++// === bad TEST-35 RuleChain 串了規則卻沒有洩漏檢查
++class MainTest {
++    @get:Rule val rules = RuleChain.outerRule(LoginRule()).around(ActivityScenarioRule(MainActivity::class.java))
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-55.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-55.kt.txt
+new file mode 100644
+index 000000000..f17af3778
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-55.kt.txt
+@@ -0,0 +1,23 @@
++// D-55 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 做重活的類別切到注入的 dispatcher
++class NewsRepository(private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default) {
++    suspend fun loadNews() = withContext(defaultDispatcher) { parse() }
++}
++// === main-ok dispatcher 變數名不含 Dispatcher(代碼審 r1 接手 F10 同族)
++class Repo(private val io: CoroutineDispatcher = Dispatchers.IO) {
++    suspend fun load() = withContext(io) { read() }
++}
++// === main-ok Composable 裡的計算用 remember 快取
++@Composable
++fun Contacts(contacts: List<Contact>, comparator: Comparator<Contact>) {
++    val sorted = remember(contacts, comparator) { contacts.sortedWith(comparator) }
++}
++// === bad PERF-6 Composable 裡每次組建都排序
++@Composable
++fun Contacts(contacts: List<Contact>, comparator: Comparator<Contact>) {
++    val sorted = contacts.sortedWith(comparator)
++}
++// === bad CO-1 類別裡寫死 Dispatchers.Default
++class NewsRepository(private val unused: CoroutineDispatcher) {
++    suspend fun loadNews() = withContext(Dispatchers.Default) { parse() }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-56.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-56.kt.txt
+new file mode 100644
+index 000000000..b8eff2ee6
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-56.kt.txt
+@@ -0,0 +1,18 @@
++// D-56 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 用 App Startup 的 Initializer
++class ExampleLoggerInitializer : Initializer<ExampleLogger> {
++    override fun create(context: Context): ExampleLogger = ExampleLogger(WorkManager.getInstance(context))
++    override fun dependencies(): List<Class<out Initializer<*>>> = emptyList()
++}
++// === alt-ok 啟動時不需要:要用時才 AppInitializer 初始化
++fun onFirstUse(context: Context) {
++    AppInitializer.getInstance(context).initializeComponent(ExampleLoggerInitializer::class.java)
++}
++// === bad PERF-7 Application.onCreate 同步初始化一堆 SDK
++class App : Application() {
++    override fun onCreate() {
++        super.onCreate()
++        Sdk1.init(this)
++        Sdk2.init(this)
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-6.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-6.kt.txt
+new file mode 100644
+index 000000000..2c1e97950
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-6.kt.txt
+@@ -0,0 +1,9 @@
++// D-6 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === alt-ok 有一邊是狀態流:改用 combine
++class Vm(private val repo: Repo) : ViewModel() {
++    val pair = combine(repo.state, repo.other) { a, b -> a to b }
++}
++// === bad alt FLOW-2 對 stateIn 出來的流寫 zip
++class Vm(private val repo: Repo) : ViewModel() {
++    val pair = repo.data.stateIn(viewModelScope, SharingStarted.Eagerly, 0).zip(repo.other) { a, b -> a to b }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-7.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-7.kt.txt
+new file mode 100644
+index 000000000..65f16ba8e
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-7.kt.txt
+@@ -0,0 +1,11 @@
++// D-7 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === alt-ok 真的不屬於畫面狀態的內部訊號:Channel(BUFFERED) + receiveAsFlow
++class Vm : ViewModel() {
++    private val _signals = Channel<Signal>(Channel.BUFFERED)
++    val signals = _signals.receiveAsFlow()
++}
++// === bad alt FLOW-25 一次性事件用有 replay 的 SharedFlow
++class Vm : ViewModel() {
++    private val _events = MutableSharedFlow<Event>(replay = 1)
++    val events = _events.asSharedFlow()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-8.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-8.kt.txt
+new file mode 100644
+index 000000000..a9ad38c34
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-8.kt.txt
+@@ -0,0 +1,26 @@
++// D-8 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法(一行):try 包在 coroutineScope 外面
++suspend fun load(api: Api): Ui = try { coroutineScope { val a = async { api.a() }; val b = async { api.b() }; Ui(a.await(), b.await()) } } catch (e: IOException) { Ui.Error }
++// === main-ok 標準寫法(多行)
++suspend fun load(api: Api): Ui {
++    return try {
++        coroutineScope {
++            val a = async { api.a() }
++            val b = async { api.b() }
++            Ui(a.await(), b.await())
++        }
++    } catch (e: IOException) {
++        Ui.Error
++    }
++}
++// === bad CO-8 coroutineScope 裡 try 只包 await(代碼審 r1 接手 F4)
++suspend fun load(api: Api): Ui = coroutineScope { val d = async { api.fail() }; try { Ui(d.await()) } catch (e: Exception) { Ui.Error } }
++// === bad CO-8 多行
++suspend fun load(api: Api): Ui = coroutineScope {
++    val d = async { api.fail() }
++    try {
++        Ui(d.await())
++    } catch (e: Exception) {
++        Ui.Error
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-9.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-9.kt.txt
+new file mode 100644
+index 000000000..5ddfe6fbc
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-9.kt.txt
+@@ -0,0 +1,22 @@
++// D-9 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
++// === main-ok 標準寫法:supervisorScope 裡每支 runCatching
++suspend fun load(api: Api): Ui = supervisorScope {
++    val a = async { api.a() }
++    val b = async { api.b() }
++    Ui(runCatching { a.await() }, runCatching { b.await() })
++}
++// === main-ok 每個子協程自己 try/catch
++suspend fun syncAll(api: Api) = supervisorScope {
++    launch { try { api.a() } catch (e: IOException) { log(e) } }
++    launch { try { api.b() } catch (e: IOException) { log(e) } }
++}
++// === bad CO-11 supervisorScope 子協程沒自己處理例外
++suspend fun syncAll(api: Api) = supervisorScope {
++    launch { api.a() }
++    launch { api.b() }
++}
++// === bad API-4 supervisorScope 裡 await 沒包
++suspend fun load(api: Api): Ui = supervisorScope {
++    val a = async { api.a() }
++    Ui(a.await())
++}

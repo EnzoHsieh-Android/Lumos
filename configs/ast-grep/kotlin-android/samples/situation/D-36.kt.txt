@@ -1,0 +1,29 @@
+// D-36 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
+// === main-ok 資料庫當唯一來源:Pager 帶 remoteMediator
+class Repo(private val db: Db, private val net: Net) {
+    fun users(query: String) = Pager(config = PagingConfig(pageSize = 50), remoteMediator = UserMediator(query, db, net)) { db.userDao().pagingSource(query) }.flow
+}
+// === main-ok 成功後才在交易內換資料
+class UserMediator(private val query: String, private val database: Db, private val net: Net) : RemoteMediator<Int, User>() {
+    override suspend fun load(loadType: LoadType, state: PagingState<Int, User>): MediatorResult {
+        val response = net.searchUsers(query)
+        database.withTransaction { if (loadType == LoadType.REFRESH) database.userDao().clearAll(); database.userDao().insertAll(response.users) }
+        return MediatorResult.Success(endOfPaginationReached = response.nextKey == null)
+    }
+}
+// === alt-ok item key 型 API:endOfPaginationReached 看回應是不是空的
+class UserMediator(private val net: Net) : RemoteMediator<Int, User>() {
+    override suspend fun load(loadType: LoadType, state: PagingState<Int, User>): MediatorResult {
+        val response = net.after(state.lastItemOrNull()?.id)
+        return MediatorResult.Success(endOfPaginationReached = response.users.isEmpty())
+    }
+}
+// === bad main DATA-69 先清本機快取再呼叫 api,不在交易內
+class UserMediator(private val dao: UserDao, private val net: Net) : RemoteMediator<Int, User>() {
+    override suspend fun load(loadType: LoadType, state: PagingState<Int, User>): MediatorResult {
+        if (loadType == LoadType.REFRESH) dao.clearAll()
+        val response = net.searchUsers()
+        dao.insertAll(response.users)
+        return MediatorResult.Success(endOfPaginationReached = response.nextKey == null)
+    }
+}
