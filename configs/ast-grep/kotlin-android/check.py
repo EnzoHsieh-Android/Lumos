@@ -177,12 +177,12 @@ def _dt_header(dt):
 def dt_row(get):
     """決策表一列(get(欄名) 取格子)→ (列 dict 或 None, 讀不懂的問題清單)。只管讀得懂讀不懂(scripts/lumos 讀到問題就整張表不用);
     常用字、來源、停用列寫法這類格式要求在 catalog_problems。
-    列:{id, situation, standard, alt(不適用時), triggers, evidence{main, alt}, retired(停用列), switch(換列的列), checks(對應檢查)}。
+    列:{id, situation, standard, alt(不適用時), triggers, evidence{main, alt}, retired(停用列), switch(換列的列), checks(對應檢查), source(來源格)}。
     停用列不讀觸發字與證據樣式(當成沒有);換列的列認「不適用時」格子裡的明確標記「(換列)」,不從中文用語推,而且例外一定要是(無)。"""
     retired = _RETIRED in _norm(get("情境"))
     row = {"id": get("列編號"), "situation": get("情境"), "standard": get("標準寫法"), "alt": get("不適用時"),
            "triggers": [], "evidence": {"main": None, "alt": None}, "retired": retired,
-           "switch": _SWITCH in _norm(get("不適用時")), "checks": get("對應檢查")}
+           "switch": _SWITCH in _norm(get("不適用時")), "checks": get("對應檢查"), "source": get("來源")}
     if retired:
         return row, []
     trig, err = dt_triggers(get("觸發字"))
@@ -199,7 +199,10 @@ def dt_row(get):
 def dt_table(text):
     """型錄全文 → (列清單, 讀不懂的問題清單 [(列編號或 <決策表>, 原因)])。依表頭名稱取欄(欄位順序可以換);
     列編號要從 D-1 連號。scripts/lumos 用 importlib 借這一支讀表(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1;
-    代碼審 r1 架構對齊席:原本兩邊各寫一套、必有欄數已經分歧)。"""
+    代碼審 r1 架構對齊席:原本兩邊各寫一套、必有欄數已經分歧)。
+    同一輪順手帶出處(給盲判材料,範圍 4):每列多 refs(來源格展開成網址)與 check_refs(對應檢查在型錄主表的 id、名稱、來源、網址),
+    縮寫照〈來源縮寫〉表;主表或縮寫表找不到時那幾格留空、不報錯(讀得懂讀不懂歸這支的問題清單與 catalog_problems;
+    代碼審 code-android情境題盲判 r1 架構對齊 F6:原本另有 dt_sources 再走一輪決策表)。"""
     i = text.find("\n## 情境決策表")
     if i < 0:
         return [], [("<決策表>", "找不到〈情境決策表〉節")]
@@ -222,10 +225,62 @@ def dt_table(text):
         probs += [(did, p) for p in rp]
         if row:
             rows.append(row)
+    abbrs, main = _abbr_table(text) or {}, _main_names(text)
+    for row in rows:
+        row["refs"] = _src_expand(row["source"], abbrs)
+        row["check_refs"] = [{"id": cid, "name": main.get(cid, ("", ""))[0], "source": main.get(cid, ("", ""))[1],
+                              "refs": _src_expand(main.get(cid, ("", ""))[1], abbrs)}
+                             for cid in dict.fromkeys(re.findall(r"[A-Z]+-\d+", row["checks"]))]
     if not seen or seen != [f"D-{k}" for k in range(1, len(seen) + 1)]:
         # 列編號只准往後加、不准重排或重用;刪列時那一列在情境欄標(停用)留著(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1)
         probs.append(("<決策表>", "列編號要從 D-1 連號(刪列時標(停用)留著,不要拿掉或重排)"))
     return rows, probs
+
+
+def _abbr_table(text):
+    """〈來源縮寫〉表 → {縮寫: 那一列的網址或說明};找不到那一節回 None。catalog_problems 與 dt_table 共用(縮寫表只讀一套)。"""
+    i = text.find("\n## 來源縮寫")
+    if i < 0:
+        return None
+    j = text.find("\n## ", i + 5)
+    out = {}
+    for ln in text[i:j if j >= 0 else len(text)].splitlines():
+        m = re.match(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", ln)
+        if m:
+            c = _cells(ln)
+            out[m.group(1)] = c[1] if len(c) >= 2 else ""
+    return out
+
+
+def _abbr_hit(abbr, cell):
+    """格子裡有沒有這個縮寫(前後不接大寫英數或連字號)。"""
+    return re.search(r"(?<![A-Z0-9-])" + re.escape(abbr) + r"(?![A-Z0-9-])", cell) is not None
+
+
+def _main_names(text):
+    """型錄主表 → {編號: (名稱, 來源)};同一個編號只認第一列。"""
+    main = {}
+    for ln in text.splitlines():
+        m = _MAIN_ROW_RE.match(ln)
+        if m:
+            c = _cells(ln)
+            if len(c) >= 2:
+                main.setdefault(m.group(1), (c[1], c[-1]))
+    return main
+
+
+def _src_expand(cell, abbrs):
+    """來源格 → 出處清單:格子裡的網址照收,登記在〈來源縮寫〉表的縮寫換成那一列寫的網址或說明(網址在前,縮寫依縮寫表順序,不重複)。"""
+    out = []
+    for u in re.findall(r"https?://[^\s)〕、;,，]+", cell):
+        if u not in out:
+            out.append(u)
+    for a, url in abbrs.items():
+        if _abbr_hit(a, cell):
+            for u in re.findall(r"https?://[^\s)〕、;,，]+", url) or [url]:
+                if u not in out:
+                    out.append(u)
+    return out
 
 
 def _dt_row_lint(get):
@@ -254,14 +309,11 @@ def catalog_problems(rules=None):
     main, dt = text[:i_dt], text[i_dt:i_pend]
     rows, seen = {}, set()
     # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
-    i_src = text.find("\n## 來源縮寫")
-    if i_src < 0:
+    abbrs = _abbr_table(text)
+    if abbrs is None:
         # 記一筆、照樣往下檢查(縮寫當空集合),一次報齊其他問題
         problems.append(("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)"))
-        abbrs = set()
-    else:
-        i_src_end = text.find("\n## ", i_src + 5)
-        abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end if i_src_end >= 0 else len(text)], re.M))
+        abbrs = {}
     for ln in main.splitlines():
         m = _MAIN_ROW_RE.match(ln)
         if not m:
@@ -287,7 +339,7 @@ def catalog_problems(rules=None):
         if "(出處不全)" not in name:
             if any(w in src for w in _WEAK_SRC):
                 problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
-            if not (re.search(r"https?://", src) or any(re.search(r"(?<![A-Z0-9-])" + re.escape(a) + r"(?![A-Z0-9-])", src) for a in abbrs)):
+            if not (re.search(r"https?://", src) or any(_abbr_hit(a, src) for a in abbrs)):
                 problems.append((rid, "來源沒有網址或來源縮寫"))
     referenced = set()
     _dt_rows, dt_probs = dt_table(dt)          # 讀得懂讀不懂:跟 scripts/lumos 同一支
