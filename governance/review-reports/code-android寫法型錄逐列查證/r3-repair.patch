@@ -1,0 +1,134 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 446c5372a..035467128 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -555,21 +555,26 @@ def main_rows(text=None, problems=None):
+ 
+ 
+ _VERIFIED_RE = re.compile(r"\u3014查證 \d{4}-\d{2}-\d{2}:[^\u3015]*https?://[^\u3015]*\u3015")  # 查證紀錄的龜甲括號寫成跳脫,免 ruff 誤認成英文括號
+ _UNVERIFIED_SHOW = 20
+ 
+ 
+ def catalog_unverified(text=None):
+     """主表裡還沒逐列查證的列編號([[Projects/計劃依據來源必填_計劃]] S5):來源欄沒有〔查證 YYYY-MM-DD:網址〕、名稱也沒標
+     (出處不全)。只有縮寫或只有網址的都算(網址可能只是縮寫展開的首頁)。讀表走 main_rows(主表唯一讀法);
+     只回清單、不進 catalog_problems,呼叫端另印一行,不改退出碼。"""
+-    return [rid for rid, c in main_rows(text).items() if "(出處不全)" not in c[1] and not _VERIFIED_RE.search(c[11])]
++    out = []
++    for rid, c in main_rows(text).items():
++        name, src = c[1], c[11]
++        if "(出處不全)" not in name and not _VERIFIED_RE.search(src):
++            out.append(rid)
++    return out
+ 
+ 
+ def _print_unverified():
+     ids = catalog_unverified()
+     more = f" 等 {len(ids)} 列" if len(ids) > _UNVERIFIED_SHOW else ""
+     print(f"還沒逐列查證 {len(ids)} 列" + (f":{'、'.join(ids[:_UNVERIFIED_SHOW])}{more}" if ids else "") + "(只提醒,不影響退出碼)")
+ 
+ 
+ def _fence_regions(lines, strict):
+     """圍欄區段 → (區段清單, 收尾時還有沒有圍欄開著);區段是 (開頭行索引, 收尾行索引或 None)。
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md
+index 2567b0a7b..09f0813e4 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md
+@@ -27,21 +27,21 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且
+ 已實作,等推送。DATA-12 待使用者裁定(見〈待人裁〉)。
+ 
+ ## 範圍
+ 
+ ### 做
+ 
+ 1. **逐列查 331 列**:主表裡來源欄沒有〔查證〕的列,照類別切 12 批,各派一個代理用 WebFetch 打開官方頁面(developer.android.com、kotlinlang.org、androidx 原始碼 KDoc、官方 lint 規則說明、detekt.dev、compose-rules、Square 與 Google 官方 GitHub),每列判 verified(附網址與逐字原文)、weak(找不到權威原文)、contradicted(官方說法相反)。部落格、問答網站只當線索、不當出處。
+ 2. **抽查**:編排者隨機抽 20 列 verified,用 curl 直接抓原頁比對引句(WebFetch 的回傳可能是摘要,不一定逐字):20 列都找得到(17 列逐字、3 列字詞全中)。contradicted 3 列、二次深查新 verified 3 列也逐一抓原頁核對,全中。
+ 3. **套回型錄**:verified 的列在來源欄尾加〔查證 2026-11-07:網址〕;weak 的列名稱標(出處不全);contradicted 的列照官方原文改(CO-27 後果、UI-100 標準寫法與情境怎麼認)。
+ 4. **掛著會擋規則的 weak 列再深查一次**:API-14、DATA-37、FLOW-8、STATE-21、TEST-31 第一次查不到、但掛著 `rules/` 底下會擋的規則,另派一個代理深查;DATA-37、FLOW-8、STATE-21 找到官方原文(都是官方建議的寫法,壞寫法是從建議推出來的),補上查證紀錄,規則照擋;API-14、TEST-31 仍找不到,這一批不標出處不全(一標就違反「出處不全只准提示級」、等於同時降級會擋的規則),留在「還沒逐列查證」的數字裡,降不降級交使用者裁(見〈待人裁〉)。
+-5. **接上數字**:`check.py` 新增 `catalog_unverified`,`--catalog-only` 與完整檢查都另印一行「還沒逐列查證 N 列」與前 20 個編號,不進問題清單、不改退出碼([[Projects/計劃依據來源必填_計劃]] S5 的實作,那條條款原本懸空等兩條分支合併)。
++5. **接上數字**:`check.py` 新增 `catalog_unverified`,`--catalog-only` 與完整檢查的文字輸出都另印一行「還沒逐列查證 N 列」與前 20 個編號(`--json` 例外:維持純 JSON,這個數字不在 JSON 裡),不進問題清單、不改退出碼([[Projects/計劃依據來源必填_計劃]] S5 的實作,那條條款原本懸空等兩條分支合併)。
+ 6. **統計節**:規則包等級條數、會擋規則守到的列數、出處不全列數照程式重算,另加一行逐列查證列數。
+ 
+ ### 不做
+ 
+ - 不補已經有〔查證〕紀錄的 142 列(那批 2026-11-05 已查)。
+ - 不改〈待查證〉節的「待查」「未開頁核對」字樣:那一節由程式從原始欄位撈,改它要動撈法,另案。
+ - 不替 weak 的列自己找替代出處或改寫成「推論」。
+ 
+ ## 待人裁
+ 
+@@ -80,10 +80,11 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且
+ 1. 查證是單家族模型做的,抽查只有 20 列加 6 列。
+ 2. verified 的口徑是「核心主張有官方原文、不相反」,不是「每個細節都有原文」。
+ 
+ REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增列而變多;API-14、TEST-31 與 DATA-12 的人裁有沒有結
+ 
+ ## 審計修正紀錄
+ 
+ - 2026-11-07 實作:331 列查完(verified 312、weak 16、contradicted 3);二次深查 5 列救回 3 列;套回後型錄 459 列有查證紀錄,出處不全 34 列;API-14、TEST-31 的降級與 DATA-12 待人裁。卷證:governance/review-reports/android寫法型錄逐列查證/(12 批結果、二次深查、彙總)。
+ - 2026-11-07 推送前:提醒函式的正規式原本直接寫龜甲括號,ruff 判成可疑字元、新增告警讓代碼審分級升到高;改成 `\u3014`/`\u3015` 跳脫,行為不變(`t_kt_catalog_unverified_rows` 照綠)。
+ - 2026-11-07 代碼審 r1(2 席):4 條 minor/blocking 0/折 3 條半(節點數字、標記比對、完整路徑測試、函式位置),正規式跳脫附理由放行;卷證 governance/review-reports/code-android寫法型錄逐列查證/。
++- 2026-11-07 代碼審 r2(2 席):2 條 minor/blocking 0/全折(計劃補 `--json` 例外並加測試守純 JSON、欄位取成具名變數);卷證同上。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a8e15a174..1088af93a 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -128511,23 +128511,23 @@ def t_detekt_compose_rules_shared_config():
+     _c3, ok3 = m._lint_run_and_parse(ready(comp_t[0], str(td / "nope-all.jar")), td) if comp_t else ([], True)
+     check("S3 外掛路徑不存在時閘判成沒跑出結果(走環境不可用)", ok3 is False, "")
+     print("  ✓ t_detekt_compose_rules_shared_config")
+ 
+ 
+ 
+ def t_kt_catalog_unverified_rows():
+     """[[Projects/計劃依據來源必填_計劃]] S5:型錄自檢數「還沒逐列查證」的列——來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)。
+     只有縮寫、只有網址的都算;有查證紀錄或標了出處不全的不算;數字另印一行,不進 catalog_problems、不改退出碼。
+     判準來源是條款原文;預期值來自造的四列型錄,不拿被測函式算。翻紅釘:有網址就當查過 → ②紅;出處不全也算 → ④紅;
+-    數字併進問題清單 → ⑥紅;只認四個字不認標記 → ④b紅;完整檢查不印 → ⑦紅。"""
++    數字併進問題清單 → ⑥紅;只認四個字不認標記 → ④b紅;完整檢查不印 → ⑦紅;提醒挪到 --json 判斷外面 → ⑧紅。"""
+     print("t_kt_catalog_unverified_rows")
+-    import io, contextlib
++    import io, contextlib, json
+     m = _ktpack()
+     row = "| {rid} | {name} | 壞 | 好 | 後果 | 無 | B | 形狀:x | 告警帶寫法 | 告警帶寫法=批一 | 未測 | {src} |"
+     text = "\n".join([
+         "| 編號 | 名稱 | 壞寫法形狀 | 標準寫法 | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|",
+         row.format(rid="API-901", name="只有縮寫", src="AOSG"),
+         row.format(rid="API-902", name="只有網址", src="https://developer.android.com/x"),
+         row.format(rid="API-903", name="查過了", src="AOSG〔查證 2026-11-06:https://developer.android.com/y〕"),
+         row.format(rid="API-904", name="查不到(出處不全)", src="AOSG"),
+         row.format(rid="API-905", name="討論出處不全時怎麼寫", src="AOSG"),
+@@ -128545,23 +128545,32 @@ def t_kt_catalog_unverified_rows():
+         rc = m.main(["--catalog-only"])
+     out = buf.getvalue()
+     want = f"還沒逐列查證 {len(m.catalog_unverified())} 列"
+     check("⑤ --catalog-only 另印一行,數字跟真型錄算出的一致", any(ln.startswith(want) for ln in out.splitlines()), out[-300:])
+     real_check = m.check
+     try:
+         m.check = lambda sg: ([], [])   # 完整檢查要 ast-grep;這裡只驗輸出段,假的 check 回零條規則零個問題
+         buf2 = io.StringIO()
+         with contextlib.redirect_stdout(buf2):
+             rc_full = m.main(["--sg", sys.executable])
++        buf3 = io.StringIO()
++        with contextlib.redirect_stdout(buf3):
++            m.main(["--sg", sys.executable, "--json"])
+     finally:
+         m.check = real_check
+     out2 = buf2.getvalue()
++    try:
++        js = json.loads(buf3.getvalue())
++    except ValueError:
++        js = None
++    check("⑧ --json 的輸出維持純 JSON、不混進提醒那一行", isinstance(js, dict) and "還沒逐列查證" not in buf3.getvalue(),
++          buf3.getvalue()[-300:])
+     check("⑦ 完整檢查路徑也另印同一行,退出碼不受影響", any(ln.startswith(want) for ln in out2.splitlines()) and rc_full == 0,
+           f"rc={rc_full} {out2[-300:]}")
+     probs = m.catalog_problems(m.load_rules())
+     check("⑥ 數字不進 catalog_problems、退出碼照問題清單算", rc == (1 if (probs + m.situation_sample_problems()) else 0)
+           and not any("逐列查證" in why for _rid, why in probs), f"rc={rc}")
+     print("  ✓ t_kt_catalog_unverified_rows")
+ 
+ 
+ def t_kt_catalog_batch4_wiring():
+     """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;

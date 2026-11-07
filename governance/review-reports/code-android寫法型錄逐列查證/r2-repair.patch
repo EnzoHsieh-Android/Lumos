@@ -1,0 +1,191 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index d9387938b..446c5372a 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -547,20 +547,37 @@ def main_rows(text=None, problems=None):
+             problems.append((rid, "編號重複"))
+         seen.add(rid)
+         if len(c) != _MAIN_COLS:
+             if problems is not None:
+                 problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
+             continue
+         rows[rid] = c
+     return rows
+ 
+ 
++_VERIFIED_RE = re.compile(r"\u3014查證 \d{4}-\d{2}-\d{2}:[^\u3015]*https?://[^\u3015]*\u3015")  # 查證紀錄的龜甲括號寫成跳脫,免 ruff 誤認成英文括號
++_UNVERIFIED_SHOW = 20
++
++
++def catalog_unverified(text=None):
++    """主表裡還沒逐列查證的列編號([[Projects/計劃依據來源必填_計劃]] S5):來源欄沒有〔查證 YYYY-MM-DD:網址〕、名稱也沒標
++    (出處不全)。只有縮寫或只有網址的都算(網址可能只是縮寫展開的首頁)。讀表走 main_rows(主表唯一讀法);
++    只回清單、不進 catalog_problems,呼叫端另印一行,不改退出碼。"""
++    return [rid for rid, c in main_rows(text).items() if "(出處不全)" not in c[1] and not _VERIFIED_RE.search(c[11])]
++
++
++def _print_unverified():
++    ids = catalog_unverified()
++    more = f" 等 {len(ids)} 列" if len(ids) > _UNVERIFIED_SHOW else ""
++    print(f"還沒逐列查證 {len(ids)} 列" + (f":{'、'.join(ids[:_UNVERIFIED_SHOW])}{more}" if ids else "") + "(只提醒,不影響退出碼)")
++
++
+ def _fence_regions(lines, strict):
+     """圍欄區段 → (區段清單, 收尾時還有沒有圍欄開著);區段是 (開頭行索引, 收尾行索引或 None)。
+     ★刻意的另一份★:規則照 CommonMark(https://spec.commonmark.org/0.31.2/#fenced-code-blocks),口徑跟
+     scripts/lumos 的 `_fence_regions` / `_visible_lines`(全檔唯一的圍欄判定)逐條對齊——縮排最多 3 格、
+     tab 開頭不算、收尾要同字元且長度不短於開頭、strict 時收尾行除圍欄字元只准空白;本檔零依賴(只用標準庫)、
+     scripts/lumos 沒有 .py 副檔名,不能 import 借用。兩份是否一致由 t_kotlin_template_fence_parity 機械比對。"""
+     fence, start, regions = None, None, []
+     for i, ln in enumerate(lines):
+         indent = len(ln) - len(ln.lstrip(" "))
+         s = ln.lstrip(" ")
+@@ -780,37 +797,20 @@ def check(sg):
+                 got = scan(sg, cfg, TEST_ONLY_ANCESTOR)
+                 if got is None:
+                     problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))
+                     continue
+                 for (i, f) in got:
+                     if any(r["id"] == i for r in test_only):
+                         problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
+     return rules, problems
+ 
+ 
+-_VERIFIED_RE = re.compile(r"\u3014查證 \d{4}-\d{2}-\d{2}:[^\u3015]*https?://[^\u3015]*\u3015")  # 查證紀錄的龜甲括號寫成跳脫,免 ruff 誤認成英文括號
+-_UNVERIFIED_SHOW = 20
+-
+-
+-def catalog_unverified(text=None):
+-    """主表裡還沒逐列查證的列編號([[Projects/計劃依據來源必填_計劃]] S5):來源欄沒有〔查證 YYYY-MM-DD:網址〕、名稱也沒標
+-    (出處不全)。只有縮寫或只有網址的都算(網址可能只是縮寫展開的首頁)。讀表走 main_rows(主表唯一讀法);
+-    只回清單、不進 catalog_problems,呼叫端另印一行,不改退出碼。"""
+-    return [rid for rid, c in main_rows(text).items() if "出處不全" not in c[1] and not _VERIFIED_RE.search(c[11])]
+-
+-
+-def _print_unverified():
+-    ids = catalog_unverified()
+-    more = f" 等 {len(ids)} 列" if len(ids) > _UNVERIFIED_SHOW else ""
+-    print(f"還沒逐列查證 {len(ids)} 列" + (f":{'、'.join(ids[:_UNVERIFIED_SHOW])}{more}" if ids else "") + "(只提醒,不影響退出碼)")
+-
+-
+ def main(argv):
+     if "--catalog-only" in argv:
+         probs = catalog_problems(load_rules()) + situation_sample_problems()
+         for rid, why in probs:
+             print(f"{rid}: {why}")
+         print(f"型錄問題 {len(probs)} 個")
+         _print_unverified()
+         return 1 if probs else 0
+     sg = None
+     if "--sg" in argv:
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md
+index 521dfd77b..2567b0a7b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android寫法型錄逐列查證_計劃.md
+@@ -79,10 +79,11 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且
+ 
+ 1. 查證是單家族模型做的,抽查只有 20 列加 6 列。
+ 2. verified 的口徑是「核心主張有官方原文、不相反」,不是「每個細節都有原文」。
+ 
+ REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增列而變多;API-14、TEST-31 與 DATA-12 的人裁有沒有結
+ 
+ ## 審計修正紀錄
+ 
+ - 2026-11-07 實作:331 列查完(verified 312、weak 16、contradicted 3);二次深查 5 列救回 3 列;套回後型錄 459 列有查證紀錄,出處不全 34 列;API-14、TEST-31 的降級與 DATA-12 待人裁。卷證:governance/review-reports/android寫法型錄逐列查證/(12 批結果、二次深查、彙總)。
+ - 2026-11-07 推送前:提醒函式的正規式原本直接寫龜甲括號,ruff 判成可疑字元、新增告警讓代碼審分級升到高;改成 `\u3014`/`\u3015` 跳脫,行為不變(`t_kt_catalog_unverified_rows` 照綠)。
++- 2026-11-07 代碼審 r1(2 席):4 條 minor/blocking 0/折 3 條半(節點數字、標記比對、完整路徑測試、函式位置),正規式跳脫附理由放行;卷證 governance/review-reports/code-android寫法型錄逐列查證/。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 26cbf647b..f2a354274 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -39,21 +39,21 @@ summary: |-
+   PITFALL:範本矩陣在 Android 實驗專案實跑時,儀器報告的失敗文字截在 64KB,斷言訊息帶整串例外(例 SQLiteException 的 4 萬個 ?)會把 JUnit 斷言框截掉,assertion_failure 判成不是斷言紅 [出處:2026-11-06 T6 DATA-21 模擬器實跑] [根因:AGP 儀器報告截斷失敗文字,收證要在第一個 Caused by 前找到 org.junit.Assert 框] [修法:儀器範本的斷言訊息只帶例外類別名或前幾行] [repro:skills/kotlin-idioms/test-templates.md T6〈測試:Room 2〉query_40000_ids 的訊息改回 exceptionOrNull() 在模擬器跑〈壞寫法:DATA-21 不分批〉]
+   PITFALL:ArchUnit 凍結清單只設 allowStoreCreation=false 時,加一支用 FreezingArchRule 包的新規則或改既有規則的描述,會把當下違規靜默存成新的一份、測試綠(改描述時連同時新加的違規一起凍結) [出處:代碼審 code-android儀器測試範本 r1 範本丙 F1;驗證紀錄 E13 實跑] [根因:清單以規則描述當鍵,allowStoreCreation 只管索引檔 stored.rules 整份不見,不在索引裡的規則 FreezingArchRule.evaluate 直接存檔回成功,allowStoreUpdate 預設 true] [修法:範本 T12 的 archunit.properties 加 allowStoreUpdate=false,-ParchunitFreezeInit 同時打開建立與更新;代價是修掉舊違規也要帶屬性跑一次] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本內容守衛只比對「整節有沒有這串字」時,散文也寫了同一串設定,把 properties 圍欄裡的設定行改成 true 或刪掉,守衛照綠 [出處:代碼審 code-android儀器測試範本 r1 測試 F1 翻紅實驗] [根因:_kt_instr_template_problems 對 T12 只做整節子字串比對] [修法:只在 T12 的 properties 與 kotlin 圍欄裡比對整行 key=value 與 systemProperty 行;改壞只改程式行] [同族:t_kotlin_catalog_instrumented_batch_notes 的改壞只比對舊字串本身(測試 F3),已改成拿改壞資料跑同一組判準 _kt_ui39_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+   REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,或把理由改成「零依賴路徑(--sg 自檢)不載主程式」
+   WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
+   WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
+   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
+-  WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後是 0 [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
++  WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列(兩條會擋規則找不到官方原文,降不降級待人裁) [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index bec397d21..a8e15a174 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -128511,45 +128511,59 @@ def t_detekt_compose_rules_shared_config():
+     _c3, ok3 = m._lint_run_and_parse(ready(comp_t[0], str(td / "nope-all.jar")), td) if comp_t else ([], True)
+     check("S3 外掛路徑不存在時閘判成沒跑出結果(走環境不可用)", ok3 is False, "")
+     print("  ✓ t_detekt_compose_rules_shared_config")
+ 
+ 
+ 
+ def t_kt_catalog_unverified_rows():
+     """[[Projects/計劃依據來源必填_計劃]] S5:型錄自檢數「還沒逐列查證」的列——來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)。
+     只有縮寫、只有網址的都算;有查證紀錄或標了出處不全的不算;數字另印一行,不進 catalog_problems、不改退出碼。
+     判準來源是條款原文;預期值來自造的四列型錄,不拿被測函式算。翻紅釘:有網址就當查過 → ②紅;出處不全也算 → ④紅;
+-    數字併進問題清單 → ⑥紅。"""
++    數字併進問題清單 → ⑥紅;只認四個字不認標記 → ④b紅;完整檢查不印 → ⑦紅。"""
+     print("t_kt_catalog_unverified_rows")
+     import io, contextlib
+     m = _ktpack()
+     row = "| {rid} | {name} | 壞 | 好 | 後果 | 無 | B | 形狀:x | 告警帶寫法 | 告警帶寫法=批一 | 未測 | {src} |"
+     text = "\n".join([
+         "| 編號 | 名稱 | 壞寫法形狀 | 標準寫法 | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|",
+         row.format(rid="API-901", name="只有縮寫", src="AOSG"),
+         row.format(rid="API-902", name="只有網址", src="https://developer.android.com/x"),
+         row.format(rid="API-903", name="查過了", src="AOSG〔查證 2026-11-06:https://developer.android.com/y〕"),
+         row.format(rid="API-904", name="查不到(出處不全)", src="AOSG"),
++        row.format(rid="API-905", name="討論出處不全時怎麼寫", src="AOSG"),
+         "", "## 情境決策表", ""])
+-    check("★前置★ 四列都被主表讀到(不是讀表失敗才變少)", sorted(m.main_rows(text)) == ["API-901", "API-902", "API-903", "API-904"],
+-          str(sorted(m.main_rows(text))))
++    check("★前置★ 五列都被主表讀到(不是讀表失敗才變少)",
++          sorted(m.main_rows(text)) == ["API-901", "API-902", "API-903", "API-904", "API-905"], str(sorted(m.main_rows(text))))
+     got = m.catalog_unverified(text)
+     check("① 只有縮寫的列算還沒逐列查證", "API-901" in got, str(got))
+     check("② 只有網址、沒有查證紀錄的列也算", "API-902" in got, str(got))
+     check("③ 有〔查證 日期:網址〕的列不算", "API-903" not in got, str(got))
+     check("④ 名稱標了(出處不全)的列不算", "API-904" not in got, str(got))
++    check("④b 名稱只是提到出處不全四個字、沒有(出處不全)標記的列照算(跟 catalog_problems 認同一個標記)", "API-905" in got, str(got))
+     buf = io.StringIO()
+     with contextlib.redirect_stdout(buf):
+         rc = m.main(["--catalog-only"])
+     out = buf.getvalue()
+-    check("⑤ --catalog-only 另印一行還沒逐列查證的數字", "還沒逐列查證" in out, out[-300:])
++    want = f"還沒逐列查證 {len(m.catalog_unverified())} 列"
++    check("⑤ --catalog-only 另印一行,數字跟真型錄算出的一致", any(ln.startswith(want) for ln in out.splitlines()), out[-300:])
++    real_check = m.check
++    try:
++        m.check = lambda sg: ([], [])   # 完整檢查要 ast-grep;這裡只驗輸出段,假的 check 回零條規則零個問題
++        buf2 = io.StringIO()
++        with contextlib.redirect_stdout(buf2):
++            rc_full = m.main(["--sg", sys.executable])
++    finally:
++        m.check = real_check
++    out2 = buf2.getvalue()
++    check("⑦ 完整檢查路徑也另印同一行,退出碼不受影響", any(ln.startswith(want) for ln in out2.splitlines()) and rc_full == 0,
++          f"rc={rc_full} {out2[-300:]}")
+     probs = m.catalog_problems(m.load_rules())
+     check("⑥ 數字不進 catalog_problems、退出碼照問題清單算", rc == (1 if (probs + m.situation_sample_problems()) else 0)
+           and not any("逐列查證" in why for _rid, why in probs), f"rc={rc}")
+     print("  ✓ t_kt_catalog_unverified_rows")
+ 
+ 
+ def t_kt_catalog_batch4_wiring():
+     """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;
+     預設關、opt-in、待查的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
+     ck = _ktpack()

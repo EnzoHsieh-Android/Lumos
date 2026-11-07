@@ -554,6 +554,28 @@ def main_rows(text=None, problems=None):
     return rows
 
 
+_VERIFIED_RE = re.compile(r"\u3014查證 \d{4}-\d{2}-\d{2}:[^\u3015]*https?://[^\u3015]*\u3015")  # 查證紀錄的龜甲括號寫成跳脫,免 ruff 誤認成英文括號
+_UNVERIFIED_SHOW = 20
+
+
+def catalog_unverified(text=None):
+    """主表裡還沒逐列查證的列編號([[Projects/計劃依據來源必填_計劃]] S5):來源欄沒有查證紀錄(龜甲括號包的「查證 YYYY-MM-DD:網址」)、名稱也沒標
+    (出處不全)。只有縮寫或只有網址的都算(網址可能只是縮寫展開的首頁)。讀表走 main_rows(主表唯一讀法);
+    只回清單、不進 catalog_problems,呼叫端另印一行,不改退出碼。"""
+    out = []
+    for rid, c in main_rows(text).items():
+        name, src = c[1], c[11]
+        if "(出處不全)" not in name and not _VERIFIED_RE.search(src):
+            out.append(rid)
+    return out
+
+
+def _print_unverified():
+    ids = catalog_unverified()
+    more = f" 等 {len(ids)} 列" if len(ids) > _UNVERIFIED_SHOW else ""
+    print(f"還沒逐列查證 {len(ids)} 列" + (f":{'、'.join(ids[:_UNVERIFIED_SHOW])}{more}" if ids else "") + "(只提醒,不影響退出碼)")
+
+
 def _fence_regions(lines, strict):
     """圍欄區段 → (區段清單, 收尾時還有沒有圍欄開著);區段是 (開頭行索引, 收尾行索引或 None)。
     ★刻意的另一份★:規則照 CommonMark(https://spec.commonmark.org/0.31.2/#fenced-code-blocks),口徑跟
@@ -793,6 +815,7 @@ def main(argv):
         for rid, why in probs:
             print(f"{rid}: {why}")
         print(f"型錄問題 {len(probs)} 個")
+        _print_unverified()
         return 1 if probs else 0
     sg = None
     if "--sg" in argv:
@@ -812,6 +835,7 @@ def main(argv):
         for rid, why in problems:
             print(f"{rid}: {why}")
         print(f"規則 {len(rules)} 條,問題 {len(problems)} 個")
+        _print_unverified()
     return 1 if problems else 0
 
 

@@ -128514,6 +128514,64 @@ def t_detekt_compose_rules_shared_config():
 
 
 
+def t_kt_catalog_unverified_rows():
+    """[[Projects/計劃依據來源必填_計劃]] S5:型錄自檢數「還沒逐列查證」的列——來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)。
+    只有縮寫、只有網址的都算;有查證紀錄或標了出處不全的不算;數字另印一行,不進 catalog_problems、不改退出碼。
+    判準來源是條款原文;預期值來自造的四列型錄,不拿被測函式算。翻紅釘:有網址就當查過 → ②紅;出處不全也算 → ④紅;
+    數字併進問題清單 → ⑥紅;只認四個字不認標記 → ④b紅;完整檢查不印 → ⑦紅;提醒挪到 --json 判斷外面 → ⑧紅。"""
+    print("t_kt_catalog_unverified_rows")
+    import io, contextlib, json
+    m = _ktpack()
+    row = "| {rid} | {name} | 壞 | 好 | 後果 | 無 | B | 形狀:x | 告警帶寫法 | 告警帶寫法=批一 | 未測 | {src} |"
+    text = "\n".join([
+        "| 編號 | 名稱 | 壞寫法形狀 | 標準寫法 | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
+        row.format(rid="API-901", name="只有縮寫", src="AOSG"),
+        row.format(rid="API-902", name="只有網址", src="https://developer.android.com/x"),
+        row.format(rid="API-903", name="查過了", src="AOSG〔查證 2026-11-06:https://developer.android.com/y〕"),
+        row.format(rid="API-904", name="查不到(出處不全)", src="AOSG"),
+        row.format(rid="API-905", name="討論出處不全時怎麼寫", src="AOSG"),
+        "", "## 情境決策表", ""])
+    check("★前置★ 五列都被主表讀到(不是讀表失敗才變少)",
+          sorted(m.main_rows(text)) == ["API-901", "API-902", "API-903", "API-904", "API-905"], str(sorted(m.main_rows(text))))
+    got = m.catalog_unverified(text)
+    check("① 只有縮寫的列算還沒逐列查證", "API-901" in got, str(got))
+    check("② 只有網址、沒有查證紀錄的列也算", "API-902" in got, str(got))
+    check("③ 有〔查證 日期:網址〕的列不算", "API-903" not in got, str(got))
+    check("④ 名稱標了(出處不全)的列不算", "API-904" not in got, str(got))
+    check("④b 名稱只是提到出處不全四個字、沒有(出處不全)標記的列照算(跟 catalog_problems 認同一個標記)", "API-905" in got, str(got))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = m.main(["--catalog-only"])
+    out = buf.getvalue()
+    want = f"還沒逐列查證 {len(m.catalog_unverified())} 列"
+    check("⑤ --catalog-only 另印一行,數字跟真型錄算出的一致", any(ln.startswith(want) for ln in out.splitlines()), out[-300:])
+    real_check = m.check
+    try:
+        m.check = lambda sg: ([], [])   # 完整檢查要 ast-grep;這裡只驗輸出段,假的 check 回零條規則零個問題
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            rc_full = m.main(["--sg", sys.executable])
+        buf3 = io.StringIO()
+        with contextlib.redirect_stdout(buf3):
+            m.main(["--sg", sys.executable, "--json"])
+    finally:
+        m.check = real_check
+    out2 = buf2.getvalue()
+    try:
+        js = json.loads(buf3.getvalue())
+    except ValueError:
+        js = None
+    check("⑧ --json 的輸出維持純 JSON、不混進提醒那一行", isinstance(js, dict) and "還沒逐列查證" not in buf3.getvalue(),
+          buf3.getvalue()[-300:])
+    check("⑦ 完整檢查路徑也另印同一行,退出碼不受影響", any(ln.startswith(want) for ln in out2.splitlines()) and rc_full == 0,
+          f"rc={rc_full} {out2[-300:]}")
+    probs = m.catalog_problems(m.load_rules())
+    check("⑥ 數字不進 catalog_problems、退出碼照問題清單算", rc == (1 if (probs + m.situation_sample_problems()) else 0)
+          and not any("逐列查證" in why for _rid, why in probs), f"rc={rc}")
+    print("  ✓ t_kt_catalog_unverified_rows")
+
+
 def t_kt_catalog_batch4_wiring():
     """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;
     預設關、opt-in、待查的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
