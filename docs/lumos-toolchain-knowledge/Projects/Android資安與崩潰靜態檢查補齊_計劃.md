@@ -129,7 +129,7 @@ REVISIT:2027-02-08 看資安包有沒有新版(Google Maven metadata),範本版�
 - [S2] 當型錄某列現成規則欄有一段寫 `資安包:<大寫開頭的檢查 id>`、不含待查等四個字樣,而且通電批次寫了批四時,型錄自檢 應 要求標的是「批四(CI 範本:Android Lint)」,標成別的批四值 應 報問題;`batch4_expected_tags` 對同一欄拿掉 `資安包:` 前綴後 應 回空清單 [test:t_kt_catalog_batch4_wiring]
 - [S3] 當新寫的逐例測試對預期值表每一列 S3 的寫法各跑一次規則包時,該報的 應 恰好被那條規則報一次、不該報的 應 不被它報 [test:t_kotlin_rulepack_security_rules]
 - [S4] 當列舉規則包時,`kt-webview-file-url-access` 應 在 `rules/api.yml`,`kt-webview-debugging-enabled`、`kt-insecure-tls-version` 應 在 `rules-unwired/api.yml`,`kt-secretkeyspec-literal-key` 應 在 `rules-unwired/data.yml`,每條訊息 應 以這次新增的型錄列編號開頭、不超過 120 字 [test:t_kotlin_rulepack_security_rules]
-- [S5] 當跑型錄自檢時,真實型錄 應 是 0 個問題、還沒逐列查證 應 維持 2 列(新增的列都帶查證紀錄),型錄裡 應 找得到資安包 README 列的 24 個檢查 id [test:t_kt_catalog_security_lint_ids]
+- [S5] 當跑型錄自檢時,真實型錄 應 是 0 個問題、還沒逐列查證 應 是 0 列(新增的列都帶查證紀錄;原本的 2 列 API-14、TEST-31 在 2026-11-08 使用者裁定後標出處不全),型錄裡 應 找得到資安包 README 列的 24 個檢查 id [test:t_kt_catalog_security_lint_ids]
 
 ## 預期值表
 
@@ -161,7 +161,7 @@ REVISIT:2027-02-08 看資安包有沒有新版(Google Maven metadata),範本版�
 | S3 | `if (BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }` | 不報 | 只在除錯版開;判法同除錯模式那條(代碼審 r1 審查席) |
 | S3 | `if (!BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }` | 報 | 否定是正式版才開 |
 | S4 | 列舉規則包 | 一條在 `rules/api.yml`、兩條在 `rules-unwired/api.yml`、一條在 `rules-unwired/data.yml`,訊息以新列編號開頭且不超過 120 字 | 規則包 WHY:訊息格式與 120 字上限;本計劃〈實驗〉第二輪的放置 |
-| S5 | 真實型錄跑型錄自檢、對資安包 README 的 24 個 id 逐一找 | 0 個問題、還沒逐列查證 2 列、24 個 id 都找得到 | 型錄逐列查證計劃:新增列要同提交帶查證紀錄;官方 README 檢查清單 |
+| S5 | 真實型錄跑型錄自檢、對資安包 README 的 24 個 id 逐一找 | 0 個問題、還沒逐列查證 0 列、24 個 id 都找得到 | 型錄逐列查證計劃:新增列要同提交帶查證紀錄;官方 README 檢查清單 |
 
 ## 回退
 

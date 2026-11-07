@@ -126733,7 +126733,8 @@ def t_kotlin_rulepack_unwired_dir():
     """[[Projects/規則包覆核兩級接新增告警閘_計劃]] S1:引用型錄「出處不全」列的規則只准放在不接閘的 rules-unwired/
     (任何等級);放在 rules/、rules-review/、rules-hints/ 都報;假規則沒有 dir 鍵照「不在 unwired」算;真規則包 0 個問題、
     引用出處不全列的規則全在 rules-unwired/。判準來源是計劃預期值表;預期值來自造的假規則,不拿被測函式算。
-    翻紅釘:檢查改回只看等級 → ①紅;rules-unwired 不給全集等級 → ④紅;缺 dir 當成在 unwired → ⑤紅;8 條沒搬 → ⑥紅。"""
+    翻紅釘:檢查改回只看等級 → ①紅;rules-unwired 不給全集等級 → ④紅;缺 dir 當成在 unwired → ⑤紅;8 條沒搬 → ⑥紅;
+    API-14 或 TEST-31 的(出處不全)被拿掉 → ⑧紅;三條任一搬回 rules/ 或 rules-hints/ → ⑨紅;只檢查提示級以下 → ⑩紅。"""
     import re
     m = _ktpack()
     cat_text = m.catalog_ids()[1]
@@ -126761,6 +126762,15 @@ def t_kotlin_rulepack_unwired_dir():
           str([(r["id"], r["dir"]) for r in refs]))
     real = [p for p in m.catalog_problems(rules) if "出處不全" in p[1]]
     check("⑦ 真規則包沒有出處不全的放錯目錄", not real, str(real[:3]))
+    # ⑧⑨ [[Projects/Android寫法型錄逐列查證_計劃]] S3(2026-11-08 使用者裁):API-14、TEST-31 標出處不全,引用它們的三條規則寫死在這裡驗
+    #    (⑥ 只驗「目前標出處不全的列」,這兩列的標記被拿掉時 ⑥ 照綠,要靠這兩道)
+    check("⑧ API-14、TEST-31 名稱標了(出處不全)", {"API-14", "TEST-31"} <= weak_set, str(sorted(weak_set & {"API-14", "TEST-31"})))
+    by_id = {r["id"]: r for r in rules}
+    three = ("kt-async-await-immediately", "kt-compose-test-node-by-index", "kt-compose-test-node-by-literal-text")
+    check("⑨ 引用 API-14、TEST-31 的三條規則都在 rules-unwired/", all(by_id.get(i, {}).get("dir") == "rules-unwired" for i in three),
+          str([(i, by_id.get(i, {}).get("dir")) for i in three]))
+    p10 = probs({"id": "kt-u10", "severity": "error", "dir": "rules", "message": f"[{wid}] 測;改用 x"})
+    check("⑩ 出處不全的規則放在會擋的 rules/ 要報", any("rules-unwired" in b for b in p10), str(p10))
 
 
 # 資安四條自寫規則的逐例判準([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 預期值表 S3):(檔案相對路徑, 片段, 規則 id, 該報幾次)。
@@ -129036,7 +129046,7 @@ _ASL_README_IDS = (
 
 
 def t_kt_catalog_security_lint_ids():
-    """[S5] 真型錄跑型錄自檢 0 個問題、還沒逐列查證維持 2 列(新增的列都帶〔查證 日期:網址〕),資安包 README 的 24 個檢查 id
+    """[S5] 真型錄跑型錄自檢 0 個問題、還沒逐列查證 0 列(新增的列都帶〔查證 日期:網址〕;2026-11-08 人裁後原本的兩列標出處不全),資安包 README 的 24 個檢查 id
     每個恰好出現在主表一列的現成規則欄、寫成 `資安包:<id>`([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 2)。
     判準來源:24 個 id 寫死在 _ASL_README_IDS(出處官方 README),不從型錄讀;「還沒逐列查證 2 列」是型錄逐列查證計劃收尾時的數字。
     翻紅釘:漏登記一條或寫成 `內建:` → ①紅;同一條登記在兩列(違反同一個錯誤只留一列)→ ②紅;新列漏查證紀錄 → ③紅。"""
@@ -129056,7 +129066,7 @@ def t_kt_catalog_security_lint_ids():
     probs = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
     check("S5 真型錄自檢 0 個問題", not probs, str(probs[:5]))
     unv = m.catalog_unverified()
-    check("③ 還沒逐列查證維持 2 列(API-14、TEST-31)", unv == ["API-14", "TEST-31"], str(unv))
+    check("③ 還沒逐列查證是 0 列(2026-11-08 使用者裁 API-14、TEST-31 標出處不全)", unv == [], str(unv))
     print("  ✓ t_kt_catalog_security_lint_ids")
 
 

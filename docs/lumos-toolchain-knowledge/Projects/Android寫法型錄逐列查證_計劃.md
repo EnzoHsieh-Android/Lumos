@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-11-07
-updated: 2026-11-07
+updated: 2026-11-08
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/stack-knowledge
 related:
   - "[[Projects/計劃依據來源必填_計劃]]"
@@ -13,6 +13,11 @@ related:
   - "[[Systems/kotlin規則包]]"
 lands_in:
   - Systems/kotlin規則包
+decisions:
+  - content: API-14、TEST-31 標出處不全、引用它們的三條規則搬 rules-unwired/;DATA-12 照官方 updateData 原文改成取捨提醒
+    id: d1
+    decided: 2026-11-08
+    valid: true
 ---
 
 # Android寫法型錄逐列查證_計劃
@@ -24,7 +29,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 
 ## 狀態
 
-已實作,等推送。DATA-12 待使用者裁定(見〈待人裁〉)。
+已上線;〈待人裁〉的三項(API-14、TEST-31、DATA-12)2026-11-08 使用者裁定、照建議做完(DATA-12 原本說的「取捨提醒」,設計審 r1 後改成型錄既有的人裁列)。DATA-12 的官方原文:All operations are serialized, and the transform itself is a coroutine so it can perform heavy work such as RPCs(https://developer.android.com/reference/kotlin/androidx/datastore/core/DataStore)。
 
 ## 範圍
 
@@ -33,7 +38,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 1. **逐列查 331 列**:主表裡來源欄沒有〔查證〕的列,照類別切 12 批,各派一個代理用 WebFetch 打開官方頁面(developer.android.com、kotlinlang.org、androidx 原始碼 KDoc、官方 lint 規則說明、detekt.dev、compose-rules、Square 與 Google 官方 GitHub),每列判 verified(附網址與逐字原文)、weak(找不到權威原文)、contradicted(官方說法相反)。部落格、問答網站只當線索、不當出處。
 2. **抽查**:編排者隨機抽 20 列 verified,用 curl 直接抓原頁比對引句(WebFetch 的回傳可能是摘要,不一定逐字):20 列都找得到(17 列逐字、3 列字詞全中)。contradicted 3 列、二次深查新 verified 3 列也逐一抓原頁核對,全中。
 3. **套回型錄**:verified 的列在來源欄尾加〔查證 2026-11-07:網址〕;weak 的列名稱標(出處不全);contradicted 的列照官方原文改(CO-27 後果、UI-100 標準寫法與情境怎麼認)。
-4. **掛著會擋規則的 weak 列再深查一次**:API-14、DATA-37、FLOW-8、STATE-21、TEST-31 第一次查不到、但掛著 `rules/` 底下會擋的規則,另派一個代理深查;DATA-37、FLOW-8、STATE-21 找到官方原文(都是官方建議的寫法,壞寫法是從建議推出來的),補上查證紀錄,規則照擋;API-14、TEST-31 仍找不到,這一批不標出處不全(一標就違反「出處不全只准放不接閘的 rules-unwired/」、等於同時降級會擋的規則),留在「還沒逐列查證」的數字裡,降不降級交使用者裁(見〈待人裁〉)。
+4. **掛著會擋規則的 weak 列再深查一次**:API-14、DATA-37、FLOW-8、STATE-21、TEST-31 第一次查不到、但掛著 `rules/` 底下會擋的規則,另派一個代理深查;DATA-37、FLOW-8、STATE-21 找到官方原文(都是官方建議的寫法,壞寫法是從建議推出來的),補上查證紀錄,規則照擋;API-14、TEST-31 仍找不到,這一批不標出處不全(一標就違反「出處不全只准放不接閘的 rules-unwired/」、等於同時降級會擋的規則),留在「還沒逐列查證」的數字裡,降不降級交使用者裁;2026-11-08 人裁後改標出處不全、三條規則搬 rules-unwired/(見〈待人裁〉)。
 5. **接上數字**:`check.py` 新增 `catalog_unverified`,`--catalog-only` 與完整檢查的文字輸出都另印一行「還沒逐列查證 N 列」與前 20 個編號(`--json` 例外:維持純 JSON,這個數字不在 JSON 裡),不進問題清單、不改退出碼([[Projects/計劃依據來源必填_計劃]] S5 的實作,那條條款原本懸空等兩條分支合併)。
 6. **統計節**:規則包等級條數、會擋規則守到的列數、出處不全列數照程式重算,另加一行逐列查證列數。
 
@@ -43,10 +48,12 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 - 不改〈待查證〉節的「待查」「未開頁核對」字樣:那一節由程式從原始欄位撈,改它要動撈法,另案。
 - 不替 weak 的列自己找替代出處或改寫成「推論」。
 
-## 待人裁
+## 待人裁(2026-11-08 已裁)
 
-- **兩條會擋規則要不要降級**:API-14(`kt-async-await-immediately`)、TEST-31 用索引找節點那半(`kt-compose-test-node-by-index`)兩次查證都找不到官方原文。照「出處不全只准放不接閘的 rules-unwired/」應搬到 `rules-unwired/`;降了之後消費專案這兩種寫法不再被擋,動到守衛面,所以拆出來等使用者裁定,裁定前規則照擋、型錄自檢的數字顯示這 2 列。
-- **DATA-12**(updateData 裡做副作用或耗時 I/O):型錄寫「transform 只放純計算」,官方 `DataStore.updateData` 文件寫「the transform itself is a coroutine so it can perform heavy work such as RPCs」,兩者相反;情境決策表 D-42 早已標「無官方依據,見 notes 人裁」。這列沒有掛規則。建議改成取捨提醒(寫入排隊執行,transform 跑太久會讓後面的寫入一起等),等使用者裁定;裁定前不動這一列。
+使用者 2026-11-08 對編排者的建議回「照你建議」,三件照建議定案:
+
+- **API-14、TEST-31 標出處不全**:兩列名稱加(出處不全),引用它們的規則 `kt-async-await-immediately`(原在 `rules/api.yml`)、`kt-compose-test-node-by-index`(原在 `rules/testing.yml`)、`kt-compose-test-node-by-literal-text`(原在 `rules-hints/testing.yml`,同一列的另一半)搬到 `rules-unwired/`,照規則包 WHY「引用出處不全列的規則只准放 rules-unwired/」。代價:消費專案推送前不再擋這兩種寫法。
+- **DATA-12 改成人裁列**(型錄既有口徑:只剩業務判斷的列名稱標(人裁)、接電方式只寫表態對程式,不派盲判席;不掛規則、不擋):照官方 `DataStore.updateData` 原文(All operations are serialized, and the transform itself is a coroutine so it can perform heavy work such as RPCs)改寫:官方允許 transform 做耗時工作,但同一個 DataStore 的寫入依序執行,transform 跑多久後面的寫入就等多久;拿掉(出處不全)、補查證紀錄。這列沒有掛規則。
 
 ## 實務隱患
 
@@ -55,7 +62,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 - 已排除:金流:不碰付款
 - 已排除:對外送出:查證時只讀公開網頁,型錄與規則包沒有對外呼叫
 - 已排除:不可逆:改的是型錄文件與一支提醒函式,退提交即回原狀
-- 已排除:守衛面:這一批不改任何擋停——規則包等級沒動,新的數字只另印一行、不進問題清單、不改退出碼;要降級的兩條拆到〈待人裁〉
+- 守衛面:2026-11-08 使用者裁定後,API-14、TEST-31 兩列的三條規則(`kt-async-await-immediately`、`kt-compose-test-node-by-index`、`kt-compose-test-node-by-literal-text`)改放 rules-unwired/,推送前不再擋這兩種寫法(見〈待人裁〉);其餘規則包等級沒動
 
 ## 依據來源
 
@@ -65,11 +72,22 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 | 還沒逐列查證的數字只提醒、不改退出碼 | 計劃依據來源必填做法 6 與條款 S5 | `docs/lumos-toolchain-knowledge/Projects/計劃依據來源必填_計劃.md` |
 | WebFetch 引句要抓原頁抽查 | 查證代理自己回報 WebFetch 回傳是摘要、不一定逐字;實測 20 列抽查 | 實測 2026-11-07:20 列抽查 17 列逐字、3 列字詞全中(卷證 all-results.json) |
 | 三列相反照官方改 | 官方原文 | https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-context.html 、https://raw.githubusercontent.com/mrmans0n/compose-rules/main/docs/rules.md |
+| API-14、TEST-31 標出處不全、DATA-12 改成人裁列 | 使用者人裁 | 使用者 2026-11-08「照你建議」;DATA-12 官方原文 https://developer.android.com/reference/kotlin/androidx/datastore/core/DataStore |
 
 ## 驗收條款
 
 - [S1] 當型錄主表有一列來源欄只有縮寫或只有網址、沒有查證紀錄、名稱沒標出處不全時,型錄自檢 應 把它算進「還沒逐列查證」並另印一行;有查證紀錄或標了出處不全的列 應 不算;問題清單與退出碼 應 不因這個數字改變 [test:t_kt_catalog_unverified_rows]
-- [S2] 當跑型錄自檢時,真實型錄 應 是 0 個問題、還沒逐列查證 2 列(API-14、TEST-31,待人裁) [manual:跑 python3.14 configs/ast-grep/kotlin-android/check.py --catalog-only 看最後兩行]
+- [S2] 當跑型錄自檢時,真實型錄 應 是 0 個問題、還沒逐列查證 0 列(2026-11-08 人裁後;原本是 API-14、TEST-31 兩列) [test:t_kt_catalog_security_lint_ids]
+- [S3] 當型錄某列名稱標了(出處不全)時,訊息引用那一列編號的規則 應 全在 `rules-unwired/`;API-14、TEST-31 兩列標出處不全之後,`kt-async-await-immediately`、`kt-compose-test-node-by-index`、`kt-compose-test-node-by-literal-text` 應 在 `rules-unwired/`、不在 `rules/` 或 `rules-hints/` [test:t_kotlin_rulepack_unwired_dir]
+
+## 預期值表
+
+| 條款 | 輸入 | 預期 | 來源 |
+|---|---|---|---|
+| S1 | 型錄複本一列來源欄只有縮寫、沒查證紀錄、沒標出處不全 | 還沒逐列查證多算這一列,問題清單不變 | 計劃依據來源必填做法 6 與條款 S5 |
+| S2 | 真實型錄跑 `check.py --catalog-only` | 0 個問題、還沒逐列查證 0 列 | 使用者 2026-11-08「照你建議」:API-14、TEST-31 標出處不全 |
+| S3 | 真實規則包:引用 API-14、TEST-31 的三條規則 | 都在 `rules-unwired/` | 規則包 WHY:引用出處不全列的規則只准放 rules-unwired/ |
+| S3 | 假規則引用出處不全列、放在 `rules/` | 型錄自檢報這條要搬 rules-unwired/ | 規則包 WHY:引用出處不全列的規則只准放 rules-unwired/ |
 
 ## 回退
 
@@ -80,7 +98,9 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 1. 查證是單家族模型做的,抽查只有 20 列加 6 列。
 2. verified 的口徑是「核心主張有官方原文、不相反」,不是「每個細節都有原文」。
 
-REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增列而變多;API-14、TEST-31 與 DATA-12 的人裁有沒有結
+REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增列而變多
+REVISIT:2027-02-08 重查 API-14 與 TEST-31 的官方出處(線索:JetBrains IDE 有「Redundant 'async' call」檢查,建議把 async(...).await() 改成 withContext;Compose 測試官方頁對用索引與顯示文字找節點的說法),找到就把那一列的(出處不全)拿掉、規則搬回 `rules/`(拆出 literal-text 那條回 `rules-hints/`)
+REVISIT:2027-02-08 型錄自檢「出處不全只准 unwired」只看規則訊息開頭的編號,不看型錄列的現成規則欄(STATE-9 標出處不全,它列的 kt-statein-lazily-or-no-timeout 訊息開頭是 [STATE-4]、在 rules/);看要不要改成也比現成規則欄
 
 ## 審計修正紀錄
 
@@ -90,3 +110,6 @@ REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增�
 - 2026-11-07 代碼審 r2(2 席):2 條 minor/blocking 0/全折(計劃補 `--json` 例外並加測試守純 JSON、欄位取成具名變數);卷證同上。
 - 2026-11-07 r3 之後:catalog_unverified 的說明文字也有龜甲括號、被新增告警閘抓到(RUF002),改成文字描述;只動說明文字,行為與測試不變。
 - 2026-11-08 文字同步([[Projects/規則包覆核兩級接新增告警閘_計劃]]):「出處不全的規則只准提示級」改成「只准放不接閘的 rules-unwired/」、指向前案的連結改指新計劃;只改字面,條款綁的測試與意圖不變。
+- 2026-11-08 人裁落地:API-14、TEST-31 標出處不全,三條規則搬 rules-unwired/;DATA-12 照官方改成取捨提醒;型錄自檢「還沒逐列查證」0 列。
+- 2026-11-08 輕量代碼審(架構對齊 1 席):3 條 minor 全折(DATA-12 查證紀錄只留網址、原文搬到〈狀態〉;情境怎麼認改成看 transform 會不會很久;實務隱患守衛面那行照實改)。
+- 2026-11-08 設計審 r1(4 席):16 條 minor/blocking 0/DATA-12 改成既有的人裁列(只表態、不盲判)並補「新值靠目前值算的不要搬出去」;補兩行回頭條件(重查出處、出處不全檢查只看訊息編號);補(出處不全)定義;D-1、D-2 註記 API-14 出處不全;改 linter 目錄範例、規則包節點與覆核級計劃的舊數字;卷證 governance/review-reports/android寫法型錄逐列查證/。
