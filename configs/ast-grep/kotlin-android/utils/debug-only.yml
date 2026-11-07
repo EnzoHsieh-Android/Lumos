@@ -1,0 +1,55 @@
+# 「只在除錯版才會走到」的共用判斷(代碼審 code-android資安與崩潰靜態檢查補齊 r2 抽出、r3 改成看語法結構):
+# 命中=節點寫在下列分支裡——條件本身是 BuildConfig.DEBUG(可帶套件名)、或是用「且」連起來而其中一項是它的 if 成立那一支;
+# 條件是 !BuildConfig.DEBUG 的 if 的 else 那一支;條件是 BuildConfig.DEBUG 的 when 分支;when (BuildConfig.DEBUG) 的 true 分支。
+# 「或」、否定、else、括號裡的別的組合都不算(看節點種類,不看字面)。規則用 `not: matches: in-debug-only-branch` 引用,四份 sgconfig 都掛 utilDirs。
+id: in-debug-only-branch
+language: kotlin
+utils:
+  is-debug-flag:
+    kind: navigation_expression
+    regex: ^([\w.]+\.)?BuildConfig\.DEBUG$
+rule:
+  inside:
+    stopBy: end
+    kind: control_structure_body
+    any:
+      - all:
+          - not:
+              follows:
+                regex: ^else$
+          - inside:
+              kind: if_expression
+              has:
+                field: condition
+                any:
+                  - matches: is-debug-flag
+                  - all:
+                      - kind: conjunction_expression
+                      - has:
+                          matches: is-debug-flag
+      - all:
+          - follows:
+              regex: ^else$
+          - inside:
+              kind: if_expression
+              has:
+                field: condition
+                kind: prefix_expression
+                regex: ^!\s*([\w.]+\.)?BuildConfig\.DEBUG$
+      - inside:
+          kind: when_entry
+          has:
+            kind: when_condition
+            any:
+              - has:
+                  matches: is-debug-flag
+              - all:
+                  - regex: ^true$
+                  - inside:
+                      kind: when_expression
+                      stopBy: end
+                      has:
+                        kind: when_subject
+                        has:
+                          matches: is-debug-flag
+                          stopBy: end

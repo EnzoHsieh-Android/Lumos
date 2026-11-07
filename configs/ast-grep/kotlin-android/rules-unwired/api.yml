@@ -21,3 +21,79 @@ rule:
           - pattern: $X.catch { $$$ }
           - pattern: $X.onFailure { $$$ }
         stopBy: end
+---
+# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:不接閘(樣本外 42 處誤報 16,用 FLAG_DEBUGGABLE 或別名旗標判除錯版)。
+# 只有條件恰好是 BuildConfig.DEBUG 的 if 成立那一支、或條件恰好是它的 when 分支不報;否定、else、|| 連別的條件、只包 SDK 判斷都報
+id: kt-webview-debugging-enabled
+language: kotlin
+severity: error
+message: '[API-41]WebView 遠端除錯沒限定除錯版,接上電腦就能看與改 WebView 內容;改用 setWebContentsDebuggingEnabled(BuildConfig.DEBUG)'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  any:
+    - pattern: WebView.setWebContentsDebuggingEnabled(true)
+    - pattern: android.webkit.WebView.setWebContentsDebuggingEnabled(true)
+    - pattern: setWebContentsDebuggingEnabled(true)
+  not:
+    matches: in-debug-only-branch
+---
+# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:不接閘(樣本內誤報已達 10.5%)。SSLContext.getInstance 第一個參數恰好是舊版本字串、
+# ConnectionSpec.COMPATIBLE_TLS(讀 cipherSuites、tlsVersions、isTls 不報)、tlsVersions(...) 參數裡的舊 TlsVersion、setEnabledProtocols(arrayOf(...)) 裡的舊版本字串
+id: kt-insecure-tls-version
+language: kotlin
+severity: error
+message: '[API-45]啟用了 TLS 1.1 以下或 SSLv3 等舊版協定,連線可被降級破解;改用 TLS 或 TLSv1.2 以上,OkHttp 改用 ConnectionSpec.MODERN_TLS'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  any:
+    - pattern: SSLContext.getInstance($V)
+    - pattern: SSLContext.getInstance($V, $$$)
+    - pattern: javax.net.ssl.SSLContext.getInstance($V)
+    - pattern: javax.net.ssl.SSLContext.getInstance($V, $$$)
+    - all:
+        - any:
+            - pattern: ConnectionSpec.COMPATIBLE_TLS
+            - pattern: okhttp3.ConnectionSpec.COMPATIBLE_TLS
+        - not:
+            inside:
+              kind: navigation_expression
+              has:
+                kind: navigation_suffix
+                regex: ^\.(cipherSuites|tlsVersions|isTls)
+    - all:
+        - any:
+            - pattern: TlsVersion.TLS_1_0
+            - pattern: TlsVersion.TLS_1_1
+            - pattern: TlsVersion.SSL_3_0
+        - inside:
+            kind: value_arguments
+            stopBy: end
+            inside:
+              kind: call_suffix
+              inside:
+                kind: call_expression
+                has:
+                  kind: navigation_expression
+                  regex: \.\s*tlsVersions$
+    - all:
+        - any:
+            - pattern: $S.setEnabledProtocols(arrayOf($$$))
+            - pattern: setEnabledProtocols(arrayOf($$$))
+            - pattern: $S?.setEnabledProtocols(arrayOf($$$))
+            - pattern: $S.setEnabledProtocols(arrayOf<String>($$$))
+            - pattern: $S?.setEnabledProtocols(arrayOf<String>($$$))
+            - all:
+                - kind: assignment
+                - has:
+                    kind: directly_assignable_expression
+                    regex: (^|\.)\s*enabledProtocols$
+                - has:
+                    kind: call_expression
+                    regex: ^arrayOf\b
+        - has:
+            kind: string_literal
+            regex: ^"(SSLv2|SSLv3|TLSv1|TLSv1\.1)"$
+            stopBy: end
+constraints:
+  V:
+    regex: ^"(SSLv2|SSLv3|TLSv1|TLSv1\.1)"$
