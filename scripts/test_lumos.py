@@ -84849,7 +84849,8 @@ class _ClkgFakes:
             return {"status": "red", "reason": "受波及合約的測試沒過:t_fake_contract(1 支紅)"}
         return {"status": "green", "reason": "受波及合約的測試全綠(1 支)"}
 
-    def disp(self, repo_root, pf_data, marker_sha, marker_branch, at_sha, t, deadline=None, merge_side=None):
+    def disp(self, repo_root, pf_data, marker_sha, marker_branch, at_sha, t, deadline=None, merge_side=None,
+             diff_range=None, merge_ledger=None):   # 跟 _dispositions_verdict 同簽名(情境題加了 diff_range、merge_ledger)
         self.calls.append(("disp", t))
         if self.sc["disp"]:
             return {"blocked": True, "gate_mode": "all", "applicable": 2, "checked": 0,
