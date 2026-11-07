@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-09-05
-updated: 2026-10-26
+updated: 2026-11-07
 responsibility: 負責 lumos 的防護怎麼接到 Claude 與 Codex 兩家 CLI 上:進場提醒、改檔前推波及、派審查員附鏡頭、收工點名這四個時點的 hook 腳本,以及情境探針這支量「AI 有沒有自己去查脈絡」的儀器;不負責這些 hook 推出來的內容對不對(那是各機制自己的節點),也不負責 lumos 本體的讀寫語意
 self_audit: gpt-5.6-sol/2026-10-08
 aliases: []
@@ -43,6 +43,7 @@ summary: |-
   PITFALL:Codex 編排時派工鏡頭掛鉤領席(--claim)超時那條路一走就 NameError,超時說明附不出去——掛鉤呼叫 _frame_injected 卻從沒複製 ★注入框★ 區塊;框一致性守衛把這支檔列在清單上、但找不到框常數就略過,所以一直沒抓到 [出處:2026-10-07 [[Projects/派工鏡頭跨repo不再靜默_計劃]] 代碼審第三輪查證時發現] [根因:複製式共用(hook 彼此 import 不到)只守「有的複本一致」、沒守「該有的都有」] [修法:區塊逐字抄進來;守衛改成自動找:用到框函式或清理函式的 hook 都要有完整區塊、連同 lumos 本體整段逐字相同(原本只比框常數、只看寫死的清單,memory-sweep 不在清單上)] [test:t_dispatch_lens_hook_claim_timeout_framed]
   WHY:開場掛鉤另印一行 Android 端到端驗收「AI 放行還沒人看過」,自己讀 .lumos/e2e-records/ 底下檔名是 64 碼指紋的 JSON 數筆數,不呼叫 lumos、不進 enforcement 那一行 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [因:這支掛鉤只執行可信來源的 lumos,讀資料不算執行專案的碼;待看的放行是資料狀態,不是防護層沒裝上] [不選:放進 lumos enforcement(沒生效時會叫人重裝)] [test:t_android_e2e_ai_waiver_notice]
   WHY:開場掛鉤數 AI 放行待看時,讀紀錄的總時間取 3 秒跟這支掛鉤剩下時間(_inner_budget)的小者;超過 2MB 的紀錄不讀、另計成「超過 2MB 沒讀(修好或刪掉)」(裡面可能有已經生效過的 AI 放行;r3 算進沒讀時被講成讀超過時間、r4 不算時整個看不到,r5 改成獨立一類);待看計數函式 _e2e_ai_pending_one 是 scripts/lumos 同名函式的逐字複本 [出處:2026-10-27 代碼審 code-e2e-gate r2、r3 資源席,r4 正確性、通才、合約席] [因:外層整支只給 10 秒,前面 enforcement 那段卡住時再讀滿 3 秒會超過、整段開場指引送不出去;複本手抄條件會跟主程式分岔] [不選:每段各給固定秒數(相加會超過外層)] [test:t_android_e2e_gate_r4_paths]
+  WHY:入口第一句呼叫 _clean_path_env(主程式同名函式的逐字複本),PATH 只留絕對項,之後裸名呼叫 git 不會解到被打開資料夾裡的同名檔 [出處:governance/review-reports/code-android寫法回合結束檢查/r5-資安-sonnet.md F1] [因:PATH 空項等於目前目錄,信任邊界見 [[Systems/hook信任邊界]]] [test:t_r5path_hooks_verbatim]
 verified_by:
   - "[[Verification/2026-09-08_Codex席位可指定模型_兩席分流]]"
   - "[[Verification/2026-10-03_修復穩定性試行第1案]]"
@@ -93,7 +94,7 @@ related:
 | 審查席身分 | 派工詞自帶框架 | ★三席★ `CODEX_HOME/agents/` 下 `lumos_reviewer`(sol+medium,散文審,預設)、`lumos_reviewer_code`(sol+xhigh,程式碼審)、`lumos_reviewer_max`(sol+xhigh,tier=high);三席 `developer_instructions` 相同=框架單源,差別只在模型與推理強度。2026-09-08 實測 TOML 的 `model` / `model_reasoning_effort` 欄位有效 |
 | 逐字稿 | `~/.claude/projects/**/*.jsonl` | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`(首行 session_meta 帶 cli_version) |
 
-**只對 Claude 有意義的 hook 也照樣兩家都註冊**(2026-09-14,記憶過期清掃):註冊表兩家共用一份、不另開例外,Codex 那邊命令列帶 `--harness codex`,hook 進場讀到就安靜退出(記憶是 Claude Code 自己的機制)。所以 Codex 的 `hooks.json` 從五支變六支;代價是 Codex 每次開場多一個進場就結束的 Python 行程。現況與設計見 [[Systems/記憶過期清掃]]。
+**只對 Claude 有意義的 hook 也照樣兩家都註冊**(2026-09-14,記憶過期清掃):註冊表兩家共用一份、不另開例外,Codex 那邊命令列帶 `--harness codex`,hook 進場讀到就安靜退出(記憶是 Claude Code 自己的機制)。所以當時 Codex 的 `hooks.json` 從五支變六支;代價是 Codex 每次開場多一個進場就結束的 Python 行程(之後又加了收工寫法檢查等,現在幾支以註冊表為準,收工寫法檢查那支兩家都會真的跑、不是進場就結束)。現況與設計見 [[Systems/記憶過期清掃]]。
 
 ## 收工擋一次為什麼兩家一致
 

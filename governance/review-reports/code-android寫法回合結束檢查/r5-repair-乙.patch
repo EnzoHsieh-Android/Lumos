@@ -1,0 +1,254 @@
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 2c95c6375..b95217108 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -344,96 +344,109 @@ def _git(project_root: Path, *args, text=True, data=None):
+ # 不走共用模組;守衛 t_lwt_r3_nofilter_verbatim 盯著兩份一字不差。
+ def _wt_changed_nofilter(repo_root, run, paths=()):
+     """工作樹上還沒提交的改動,★不跑 git status、不經任何內容過濾器★ → [(X, Y, 路徑, 舊路徑或 None)] 或 None(任何一個 git 指令失敗)。
+     狀態碼同 git status --porcelain=v1:X 是 HEAD 對索引、Y 是索引對工作樹;?? 未追蹤、UU 衝突;HEAD 與索引同一物件、只換了路徑的算 R。
+     為什麼:git status 遇到大小不變、內容改過的檔會跑 .gitattributes 指到的 clean/process 過濾器,過濾器的名字與指令由被打開的目錄決定,
+     列名字再逐個關掉的做法被打穿三次。這裡只用不執行內容過濾器的指令:ls-tree -r -z(HEAD)、ls-files -s -z(索引的模式與物件編號)、
+     ls-files -s --debug -z(索引記下的時間與大小,只拿來省雜湊、格式認不得就全部算)、ls-files -o --exclude-standard -z(未追蹤)、
+     hash-object --no-filters --stdin-paths(工作樹內容照原樣算,https://git-scm.com/docs/git-hash-object )。
+     只看一般檔(100644、100755),符號連結與子模組(120000、160000)跳過。時間與大小跟索引記的一樣、而且比索引檔早寫的才不算雜湊(同 git 的 racy 判法)。
+     用了真過濾器的專案(LFS、autocrlf)會多報幾支(工作樹原樣跟索引裡轉過的不同),方向是多查不漏查。
+-    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。"""
++    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。
++    ★路徑基準一律是 repo 根★(代碼審 r4 正確性席 F1、邊界席 F1、通才席 F1):repo_root 可以是 repo 的子目錄(monorepo);先用
++    rev-parse --show-toplevel 取根、之後每個 git 指令都帶 -C <根>(ls-tree --full-tree 從根算、hash-object --stdin-paths 也從根開檔,
++    跟 ls-files 不統一時乾淨的樹會被報成一堆刪除與改名、改過的檔整次回 None),ls-files 加 --full-name;lstat 用根接路徑;
++    paths 是相對 repo_root 的,前面補 --show-prefix。回傳的路徑從 repo 根算起(同 git status --porcelain)。"""
+     import os as _os
+     import stat as _st
+-    lit = ("--", *paths) if paths else ()
+ 
+     def ok(*a, data=None):
+         r = run(*a, data=data)
+         return r.stdout if r is not None and r.returncode == 0 else None
++    t, pfx = ok("rev-parse", "--show-toplevel"), ok("rev-parse", "--show-prefix")
++    if not t or pfx is None:
++        return None
++    top = _os.fsdecode(t[:-1] if t.endswith(b"\n") else t)
++    pfx = _os.fsdecode(pfx[:-1] if pfx.endswith(b"\n") else pfx)
++    lit = ("--", *(pfx + p for p in paths)) if paths else ()
++    given = run                           # 呼叫端給的(-C 是 repo_root);之後每個指令都改在 repo 根跑
++
++    def run(*a, data=None):
++        return given("-C", top, *a, data=data)
+ 
+     def entries(raw):
+         for ent in (raw or b"").split(b"\0"):
+             meta, tab, p = ent.partition(b"\t")
+             f = meta.split(b" ")
+             if tab and len(f) == 3:
+                 yield f, p
+     reg = (b"100644", b"100755")
+     h = run("rev-parse", "--verify", "-q", "HEAD")
+     if h is None or h.returncode not in (0, 1):
+         return None
+     raw = ok("ls-tree", "-r", "-z", "--full-tree", "HEAD", *lit) if h.returncode == 0 else b""
+-    idx = ok("ls-files", "-s", "-z", *lit)
+-    unt = ok("ls-files", "-o", "--exclude-standard", "-z", *lit)
++    idx = ok("ls-files", "-s", "-z", "--full-name", *lit)
++    unt = ok("ls-files", "-o", "--exclude-standard", "-z", "--full-name", *lit)
+     if raw is None or idx is None or unt is None:
+         return None
+     head, index, conflict, skip = {}, {}, set(), set()
+     for f, p in entries(raw):
+         if f[0] in reg:
+             head[p] = f[2]
+         else:
+             skip.add(p)
+     for f, p in entries(idx):
+         if f[2] != b"0":
+             conflict.add(p)
+         elif f[0] in reg:
+             index[p] = f[1]
+         else:
+             skip.add(p)
+     stamp = {}
+-    dbg = ok("ls-files", "-s", "--debug", "-z", *lit) or b""
++    dbg = ok("ls-files", "-s", "--debug", "-z", "--full-name", *lit) or b""
+     prev = None
+     for chunk in dbg.split(b"\0"):
+         lines = chunk.split(b"\n")
+         info = {}
+         while lines and lines[0].startswith(b"  "):
+             for kv in lines.pop(0).strip().split(b"\t"):
+                 k, _c, v = kv.partition(b": ")
+                 info[k.strip()] = v.strip()
+         try:
+             if prev is not None and info:
+                 sec, _c, ns = info[b"mtime"].partition(b":")
+                 stamp[prev] = (int(sec) * 1000000000 + int(ns), int(info[b"size"]))
+         except (KeyError, ValueError):
+             pass
+         rest = b"\n".join(lines)
+         prev = rest.partition(b"\t")[2] if b"\t" in rest else None
+     gp = ok("rev-parse", "--git-path", "index")
+     try:
+-        idx_ns = _os.stat(_os.path.join(str(repo_root), _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
++        idx_ns = _os.stat(_os.path.join(top, _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
+     except OSError:
+         idx_ns = None
+     wt, ask = {}, []
+     for p, oid in index.items():
+         try:
+-            s = _os.lstat(_os.path.join(str(repo_root), _os.fsdecode(p)))
++            s = _os.lstat(_os.path.join(top, _os.fsdecode(p)))
+         except (FileNotFoundError, NotADirectoryError):
+             wt[p] = "D"
+             continue
+         except OSError:
+             wt[p] = "M"
+             continue
+         if not _st.S_ISREG(s.st_mode):
+             wt[p] = "T"
+         elif idx_ns is not None and s.st_mtime_ns < idx_ns and stamp.get(p) == (s.st_mtime_ns, s.st_size & 0xFFFFFFFF):
+             wt[p] = " "
+-        elif b"\n" in p or p[:1] == b'"':
+-            wt[p] = "M"                   # 一行一個路徑的輸入表達不了,當改過(多查)
++        elif b"\n" in p or p[:1] == b'"' or p.endswith(b"\r"):
++            wt[p] = "M"                   # 一行一個路徑的輸入表達不了(結尾的 CR 會被當行尾吃掉,代碼審 r4 正確性席 F2),當改過(多查)
+         else:
+             ask.append(p)
+     if ask:
+         got = ok("hash-object", "--no-filters", "--stdin-paths", data=b"\n".join(ask) + b"\n")
+         sums = (got or b"").split()
+         if got is None or len(sums) != len(ask):
+             return None
+         for p, sha in zip(ask, sums):
+             wt[p] = " " if sha == index[p] else "M"
+     res = {}
+@@ -750,20 +763,22 @@ def emit_queue_patrol(project_root: Path) -> None:
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 0c87459a0..4cb4ded79 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -421,20 +421,22 @@ def _emit_updated(tool_input: dict, prompt: str, text: str) -> None:
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 5c3c29c84..8f81a5e13 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -291,20 +291,22 @@ def _backdate_marker(session_id: str, file_abs: str, seconds_ago: float) -> None
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/lumos-entry-hook.py b/scripts/hooks/claude/lumos-entry-hook.py
+index f0c0a6ab3..238738822 100755
+--- a/scripts/hooks/claude/lumos-entry-hook.py
++++ b/scripts/hooks/claude/lumos-entry-hook.py
+@@ -211,20 +211,22 @@ def _enforcement_alert(rows):
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/stop-lint-hook.py b/scripts/hooks/claude/stop-lint-hook.py
+index 43a8396a4..8f0db9662 100644
+--- a/scripts/hooks/claude/stop-lint-hook.py
++++ b/scripts/hooks/claude/stop-lint-hook.py
+@@ -65,20 +65,22 @@ def _shared():
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡

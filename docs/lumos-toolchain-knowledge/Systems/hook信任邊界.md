@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-09-06
-updated: 2026-09-06
+updated: 2026-11-07
 aliases: []
 about_code:
   - scripts/lumos
@@ -22,6 +22,14 @@ summary: |-
   KEY:世界的解同一個結論——git safe.directory(CVE-2022-24765)、VS Code Workspace Trust:★工具自己的碼可以跑,從當前資料夾撿到的碼要先被信任★
   DEP:scripts/hooks/claude/lumos-entry-hook.py|scripts/hooks/claude/check-graph-sync.py|scripts/hooks/claude/impact-hook.py
   TEST:t_hooks_never_run_code_from_opened_folder
+  WHY:主程式對不信任的 repo 下 git 只用一份 -c 參數 _git_untrusted_c:固定關 core.fsmonitor、core.hooksPath、diff.external,每個過濾器的 clean、smudge、process 給空並設 required=false;lint-new 工作樹模式與 spec-freeze 都走它,工作樹模式的 status 一律帶 --ignore-submodules=all [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 甲組(正確性席 F1 fsmonitor、資安席 F1 子 repo 過濾器、合約席 F2 process)] [因:git 沒有選項或環境變數能不讀 repo 自己的設定 https://git-scm.com/docs/git ;子 repo 自己的過濾器名字列不到,只能不進子 repo https://git-scm.com/docs/git-status] [不選:各呼叫點各帶一份(同一類第二輪被打穿時兩份已各漏一項)] [代價:LFS 這類合法過濾器在這兩條路也被關掉;子 repo 的改動工作樹模式看不到] [status:superseded] [被取代:無 r3 改成不跑會經內容過濾器的指令,見本篇下一行 WHY]
+  WHY:找工作樹改動不跑 git status,只用不經內容過濾器的指令(ls-tree -r、ls-files -s、ls-files -o、hash-object --no-filters --stdin-paths 跟索引比),_git_untrusted_c 只留固定三項;收工點名鉤子 check-graph-sync.py 放 _wt_changed_nofilter 的逐字複本 [出處:governance/review-reports/code-android寫法回合結束檢查/r3-資安-sonnet.md F1、F2(名字含非 UTF-8 位元組的過濾器 --get-regexp 列不到,status 照樣執行;鉤子自己的 status 同手法造出記號檔)] [因:過濾器名字由被打開的目錄決定,列名字逐個關第三次被打穿,依同類兩輪換形狀整類拿掉;官方 hash-object --no-filters 照原樣算、不經屬性選的過濾器 https://git-scm.com/docs/git-hash-object] [不選:改用 git config --list 按位元組篩名字(仍是列舉)] [代價:用了 LFS、autocrlf 這類真過濾器的專案工作樹原樣跟索引不同,會多報幾支;改過內容又改名的檔當新檔] [test:t_lwt_r3_nofilter_attack] [test:t_lwt_r3_racy_stat] [test:t_lwt_r3_nofilter_verbatim] [test:t_lwt_r2_untrusted_exec_paths] [test:t_lwt_r2_untrusted_single_source] [test:t_lwt_r1_git_filter_off]
+  REVISIT:2027-05-07 對照 git 新版的 git-config 文件,有新增會被當成指令執行的設定就補進主程式的 _GIT_UNTRUSTED_FIXED 與鉤子共用模組的 _GIT_UNSAFE_CONFIG(列舉固定項只擋得到已知的那幾項)
+  REVISIT:2026-11-20 收工點名鉤子在動過筆記時呼叫的 lumos impact --diff HEAD 仍會經內容過濾器(候選清單 git diff --name-only HEAD、簿記模式 git diff --raw HEAD、逐檔取 hunk 的 git diff HEAD -- 檔,三處都讀工作樹);要讓它不經過濾器得換取 hunk 的內容來源、會改到 impact --diff HEAD 對所有呼叫端的輸出,範圍交人裁(鉤子自己的 git status 已在回合結束檢查代碼審 r3 改走 _wt_changed_nofilter) [closed:2026-11-07 鉤子改帶 impact --worktree-nofilter,候選與模式走 _wt_changed_nofilter、改動內容從兩版自己算(代碼審 r4 起數行次數相減,不用 difflib),不跑 git diff;其他呼叫端行為不變]
+  PITFALL:逐字複本守衛只比對第一個定義,鉤子裡再定義一次同名函式(或模組層改綁)時 Python 用後面那個,守衛照綠 [出處:governance/review-reports/code-android寫法回合結束檢查/r3-合約-sonnet.md F1(插第二個 _trusted_lumos 改從 PATH 找,46 條全綠)] [根因:守衛用 re.search 取第一段、語法樹排除了所有同名定義] [修法:_r3_one_def_problems 要求恰好一個定義、擋改綁(指定、匯入別名、參數名、字串指名),套到 _trusted_lumos、_mark_event、_wt_changed_nofilter 三組複本守衛] [test:t_hooks_never_run_code_from_opened_folder]
+  WHY:_trusted_lumos 的 _ok 第一步拒相對路徑:PATH 有空項或 .、LUMOS_HOME 給相對路徑時都會從目前目錄解出來,五支鉤子的逐字複本一起改 [出處:governance/review-reports/code-android寫法回合結束檢查/r4-資安-sonnet.md F1(PATH 有空項時 shutil.which 回相對的 lumos,收工點名鉤子執行了 repo 根那支)] [因:鉤子的目前目錄就是被打開的資料夾;_ok 只驗擁有者與可寫位元,使用者解開別人給的整個目錄後檔案本來就是自己名下] [不選:比照 _lint_wt_resolve_tool 逐項解析 PATH、跳過相對項往後找(五份複本都要多一套解析;拒掉後還有 LUMOS_HOME 與預設來源可退)] [代價:入口第一句 _clean_path_env 已先把 PATH 的相對項洗掉,shutil.which 碰不到相對項;這一步現在只剩 LUMOS_HOME 給相對路徑時會拒,拒了改用預設來源,沒有就跳過那段功能] [test:t_r4hook_relative_lumos]
+  WHY:主程式 main() 與八支鉤子的入口第一句呼叫 _clean_path_env,把 PATH 的空項、. 與相對項拿掉、只留絕對項(全被拿掉退回 os.defpath 的絕對項),之後同一程序開的子程序都吃乾淨的 PATH;每份是逐字複本 [出處:governance/review-reports/code-android寫法回合結束檢查/r5-資安-sonnet.md F1(PATH 有空項時鉤子裸名呼叫 git,執行了 repo 根那支)] [因:POSIX 規定 PATH 的空項等於目前目錄 https://pubs.opengroup.org/onlinepubs/9799919799/basedefs/V1_chap08.html ,鉤子的目前目錄就是被打開的資料夾;ast-grep、lumos、git 同類第三次被打穿,依同類兩輪換形狀] [不選:再替 git 寫一支逐項解析(每多一支工具就多一處要補)] [代價:使用者刻意放在 PATH 的相對目錄裡的工具,鉤子與 lumos 找不到] [test:t_r5path_attack]
+  WHY:三支 shell 掛鉤(pre-push、pre-commit、post-commit)在 set -u 之後第一段把 PATH 濾成只剩絕對項(空了退回 /usr/bin:/bin),三份逐字相同;找 python 那段(三支掛鉤與四支安裝腳本的七份逐字複本)取到的不是絕對路徑就當找不到,當第二層。PATH 有空項時,使用者自己打的 git、以及掛鉤第一行的 env bash 本身就可能解到目前目錄,這是環境層缺口,工具只保證自己不再多開一條路;第一行不改成 /bin/bash(bash 不在 /bin 的系統會壞,而且第一行在任何程式碼執行前就被解析) [出處:governance/review-reports/code-android寫法回合結束檢查/r6-資安-sonnet.md F1(PATH 有空項時 pre-push 用 command -v 找到並執行 repo 根的 python3.14)] [因:同一根因 Python 入口 r5 已洗、shell 入口沒洗,第四次被打穿;Go 1.19 os/exec 不透過相對於目前目錄的 PATH 項解析程式 https://pkg.go.dev/os/exec ;CWE-427 建議呼叫其他程式前先清理 PATH、只用完整路徑 https://cwe.mitre.org/data/definitions/427.html ] [不選:只替 python3.14 再補一處逐項解析(每多一支工具就多一處要補)] [代價:使用者刻意放在 PATH 的相對目錄裡的工具,三支掛鉤找不到] [test:t_r6sh_path_attack]
 plan_refs:
   - "[[Projects/全repo審視_計劃]]"
 related:
@@ -100,8 +108,10 @@ hook 是獨立檔,安裝時會被複製到 `~/.claude/hooks/`,**複製過去之�
 ### 現在的做法
 
 - **取差異內容的呼叫一律帶關掉外部程式與文字轉換的旗標**。主程式裡五處,`t_lumos_content_diffs_all_disable_external_drivers` 掃全檔釘住這條性質——新增一處沒帶的,測試自己會紅。
-- **範圍靠實測畫,不靠推論**:只取檔名/統計/狀態的呼叫實測不觸發,所以不強制它們帶旗標;取內容的才要。
+- **範圍靠實測畫,不靠推論**:只取檔名/統計的呼叫實測不觸發外部差異與文字轉換,所以不強制它們帶那兩個旗標;取內容的才要。★但查狀態(git status)會觸發內容過濾器★——遇到大小不變、內容改過的檔,status 要算內容才知道髒不髒,會執行 `.gitattributes` 指到的 clean/process 指令(2026-11-07 回合結束檢查代碼審 r3 資安席實測;推翻 r2 寫在鉤子共用模組([[Systems/回合結束寫法檢查]])的「過濾器的塗抹指令實測不觸發」)。
 - 另外保留一份具名清單關掉兩個已知的獨立設定項(它們不經屬性檔,旗標蓋不到)。
+- **主程式在不信任的 repo 上自動下 git 的兩條路(收工寫法檢查的 lint-new 工作樹模式、spec-freeze)只用一份 `-c` 參數**(`_git_untrusted_c`),只有固定三項(對齊上面那份具名清單再多關掛鉤目錄)。
+- **★內容過濾器不靠列名字關,改成根本不跑會經過濾器的指令★**(2026-11-07 回合結束檢查代碼審 r3)。r1、r2 的做法是「先從設定列出過濾器名字、再逐個給空指令」,第三輪被打穿:名字含非 UTF-8 位元組時 `git config --get-regexp` 在 UTF-8 環境下列不到,status 照樣執行它——又是〈教訓〉那句「鍵名由攻擊者決定、列不完」,只是這次列的是設定、不是寫死的清單。現在找工作樹改動走 `_wt_changed_nofilter`:索引用 `ls-files -s`、HEAD 用 `ls-tree -r`、未追蹤用 `ls-files -o`、工作樹內容用 `hash-object --no-filters` 照原樣算雜湊再跟索引比;只看一般檔,符號連結與子模組跳過。收工點名鉤子([[Systems/graph-sync-coverage]])放同一支的逐字複本(安全邏輯,照上面〈為什麼是「複製 + 守衛」〉),守衛 `t_lwt_r3_nofilter_verbatim` 盯兩份一字不差。**代價**:用了真過濾器的專案(LFS、autocrlf)工作樹原樣跟索引裡轉過的不同,會多報幾支——方向是多查不漏查。
 
 ### ★誠實邊界★
 

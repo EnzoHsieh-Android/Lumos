@@ -1,0 +1,1051 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index fb3280208..064613376 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40063,88 +40063,110 @@ _LINT_WT_GIT_STATES = (("MERGE_HEAD", "合併"), ("CHERRY_PICK_HEAD", "cherry-pi
+                        ("rebase-merge", "rebase"), ("rebase-apply", "rebase"), ("REBASE_HEAD", "rebase"))
+ _LINT_WT_DECL = (".lumos/lint.json", ".lumos/config.json")
+ _LINT_WT_BANNED = ("-U", "--update-all", "-i", "--interactive", "--custom-languages")
+ # { } 也不准(回合結束檢查代碼審 r1 正確性席 F1):佔位符只准單獨成一個詞;當旗標值({LINT_FILES} 接在 --filter 後)時,
+ # 換進去的檔名曾落在外層引號之外、被 shell 執行——現在不開 shell 了,這條仍留著,讓佔位符的位置只有一種
+ _LINT_WT_BAD_CHARS = (";", "|", "&", "`", "$", "<", ">", "*", "?", "~", "{", "}", "\n", "\r")
+ _LINT_WT_PLACEHOLDERS = ("{LINT_FILES}", "{LINT_FILES_CSV}")
+ _LINT_WT_REG = None                       # 工作樹模式的工具群組登記(None=沒在工作樹模式,_lint_spawn 照舊)
+ 
+ 
+-_LINT_WT_FILTER_ARGS = {}                 # repo 根 → 關掉內容過濾器的 -c 參數(一次程序算一次)
+-
+-
+-def _lint_wt_filter_args(repo_root):
+-    """關掉這個 repo 設定裡每個內容過濾器的 -c 參數清單,或 None(有過濾器名字收不了,整次不檢查)。
+-    ★為什麼★(回合結束檢查代碼審 r1 資安席 F2):`git status` 遇到大小相同但內容改過的檔會跑 .gitattributes 指到的
+-    filter.<名>.clean 指令,而被打開的目錄可以自帶 .git/config 與 .gitattributes。過濾器名字由設定決定、不能寫死,
+-    所以先列出設定裡有哪些(讀設定不執行任何東西),再對每一個給空的 clean、process 並設 required=false——
+-    git 遇到空指令就不跑(2026-11-06 git 2.39 實測:沒關時造出記號檔、關了不造;只給空 clean 不給 required=false 會讓 status 失敗)。
+-    名字含 = 或換行時 -c 解析不了,寧可不檢查。"""
++# ★「不信任 repo」的 git -c 參數:主程式只有這一份★(回合結束檢查代碼審 r2 甲組;lint-new 工作樹模式、spec-freeze 都走它)
++# 被打開的目錄可以自帶 .git/config,git 會把裡面幾種設定的值當成指令執行;git 沒有選項或環境變數能讓它不讀 repo 自己的設定
++# (GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM 只管全域與系統層,https://git-scm.com/docs/git ),所以只能逐項在命令列蓋掉(命令列優先)。
++# 固定三項對齊鉤子那份 _hookshared._GIT_UNSAFE_CONFIG(core.fsmonitor、diff.external;鉤子用空值,這裡用 false 明寫關掉),
++# 另補 core.hooksPath=/dev/null(暫存 index 的 read-tree、update-index 會跑 post-index-change 掛鉤);過濾器的名字由設定決定、不能寫死,
++# 每次先列出來再逐個關(clean/smudge/process 給空值、required=false)。★天花板★見 [[Systems/hook信任邊界]]〈第二個入口〉:
++# git 新版若新增會執行指令的設定要跟著補;子 repo 自己的設定列不到,所以工作樹模式的 status 一律帶 --ignore-submodules=all。
++_GIT_UNTRUSTED_FIXED = ("core.fsmonitor=false", "core.hooksPath=/dev/null", "diff.external=")
++_GIT_UNTRUSTED_C = {}                     # repo 根 → 參數清單(一次程序算一次)
++
++
++def _git_untrusted_c(repo_root):
++    """對不信任的 repo 下 git 時要帶的 -c 參數清單,或 None(有過濾器名字收不了,呼叫端整次不做)。
++    ★過濾器★(回合結束檢查代碼審 r1 資安席 F2、r2 合約席 F2):`git status` 遇到大小相同但內容改過的檔會跑 .gitattributes 指到的
++    filter.<名>.clean 或 process 指令;先列出設定裡有哪些過濾器(讀設定不執行任何東西),再對每一個給空的 clean、smudge、process 並設
++    required=false——git 遇到空指令就不跑(2026-11-06/07 git 2.39 實測:沒關時造出記號檔、關了不造;只給空 clean 不給 required=false
++    會讓 status 失敗)。名字含 = 或換行時 -c 解析不了,寧可不做。"""
+     key = str(repo_root)
+-    if key in _LINT_WT_FILTER_ARGS:
+-        return _LINT_WT_FILTER_ARGS[key]
+-    r = _lens_git(repo_root, "config", "-z", "--name-only", "--get-regexp", r"^filter\..*\.(clean|process)$",
++    if key in _GIT_UNTRUSTED_C:
++        return list(_GIT_UNTRUSTED_C[key])
++    r = _lens_git(repo_root, "config", "-z", "--name-only", "--get-regexp", r"^filter\..*\.(clean|smudge|process|required)$",
+                   binary=True, timeout=20, env={"GIT_OPTIONAL_LOCKS": "0"})
+     if r is None or r.returncode not in (0, 1):          # 1=一個都沒有
+         return None
+     drivers = set()
+     for k in r.stdout.split(b"\0"):
+         k = k.decode("utf-8", "replace")
+         if not k:
+             continue
+         if not k.startswith("filter.") or "=" in k or "\n" in k or k.count(".") < 2:
+             return None
+         drivers.add(k[len("filter."):].rsplit(".", 1)[0])
+-    args = []
++    args = [x for kv in _GIT_UNTRUSTED_FIXED for x in ("-c", kv)]
+     for d in sorted(drivers):
+-        args += ["-c", f"filter.{d}.clean=", "-c", f"filter.{d}.process=", "-c", f"filter.{d}.required=false"]
+-    _LINT_WT_FILTER_ARGS[key] = args
+-    return args
++        args += ["-c", f"filter.{d}.clean=", "-c", f"filter.{d}.smudge=", "-c", f"filter.{d}.process=", "-c", f"filter.{d}.required=false"]
++    _GIT_UNTRUSTED_C[key] = args
++    return list(args)
+ 
+ 
+ def _lint_wt_git(repo_root, *args, data=None):
+     """工作樹模式的 git 呼叫:走 _lens_git(位元組、關掉檔名轉義),一律不拿選用鎖(GIT_OPTIONAL_LOCKS=0,不順手改寫索引)、
+-    關掉 repo 設定裡的內容過濾器(_lint_wt_filter_args);回 CompletedProcess(位元組)或 None(含過濾器關不掉)。"""
+-    off = _lint_wt_filter_args(repo_root)
++    帶不信任 repo 的 -c 參數(_git_untrusted_c);status 一律加 --ignore-submodules=all(子 repo 自己 .git/config 裡的過濾器列不到名字,
++    status 算子 repo 髒不髒時會在子 repo 裡執行它;代碼審 r2 資安席 F1,https://git-scm.com/docs/git-status )。
++    回 CompletedProcess(位元組)或 None(含過濾器關不掉)。"""
++    off = _git_untrusted_c(repo_root)
+     if off is None:
+         return None
++    if args[:1] == ("status",):
++        args = ("status", "--ignore-submodules=all", *args[1:])
+     return _lens_git(repo_root, *off, *args, quote=True, binary=True, timeout=60, env={"GIT_OPTIONAL_LOCKS": "0"}, data=data)
+ 
+ 
++# 工作樹模式整次不檢查的兩種(代碼審 r2 通才席 F1):刻意不查(照設計做完了判斷)與沒能檢查(git 跑不起來、讀不出、過濾器關不掉)。
++# --json 的 unchecked_kind 照這個寫,收工鉤子照它記 ok 或 error,不再從 undone 的種類推測
++_LINT_WT_DELIBERATE, _LINT_WT_FAILED = "deliberate", "failed"
++
++
+ def _lint_wt_unready(repo_root):
+-    """整次不檢查的原因(一句白話)或 None:沒有 HEAD、合併/rebase/cherry-pick/revert 進行中、宣告檔不乾淨(範圍 1 第 3 條)。
++    """整次不檢查的 (種類, 原因一句白話) 或 None:沒有 HEAD、合併/rebase/cherry-pick/revert 進行中、宣告檔不乾淨(範圍 1 第 3 條)是刻意不查;
++    過濾器關不掉、git 跑不起來、查不出宣告檔狀態是沒能檢查(_LINT_WT_FAILED)。
+     宣告檔乾淨的判法:HEAD 有 .lumos/lint.json,而且它與 .lumos/config.json 用帶 --ignored=matching 的 status 查不出任何狀態
+     (實驗 E5:未追蹤 ??、被忽略 !!、有修改都抓得到,只 touch 過的不算;不用 git diff --quiet,實驗 E4 它會改寫索引)。"""
+-    if _lint_wt_filter_args(repo_root) is None:
+-        return "這個 repo 的 git 設定裡有內容過濾器,名字收不了、關不掉(查狀態時會被執行),不檢查"
++    D, F = _LINT_WT_DELIBERATE, _LINT_WT_FAILED
++    if _git_untrusted_c(repo_root) is None:
++        return F, "這個 repo 的 git 設定裡有內容過濾器,名字收不了、關不掉(查狀態時會被執行),不檢查"
+     r = _lint_wt_git(repo_root, "rev-parse", "--verify", "-q", "HEAD")
+-    if r is None or r.returncode != 0:
+-        return "這個 repo 還沒有任何提交(沒有 HEAD),工作樹模式沒有基準可比"
++    if r is None:
++        return F, "git 跑不起來,查不出 HEAD"
++    if r.returncode != 0:
++        return D, "這個 repo 還沒有任何提交(沒有 HEAD),工作樹模式沒有基準可比"
+     for name, label in _LINT_WT_GIT_STATES:
+         g = _lint_wt_git(repo_root, "rev-parse", "--git-path", name)
+         if g is None or g.returncode != 0:
+-            continue
++            return F, f"git 算不出 {name} 的位置,查不出 repo 是不是正在{label}"
+         p = Path(os.fsdecode(g.stdout).strip())
+         if not p.is_absolute():
+             p = Path(repo_root) / p
+         if p.exists():
+-            return f"repo 正在{label}(有 {name}),這時的工作樹不是一個完整的版本,不檢查"
++            return D, f"repo 正在{label}(有 {name}),這時的工作樹不是一個完整的版本,不檢查"
+     c = _lint_wt_git(repo_root, "cat-file", "-e", "HEAD:.lumos/lint.json")
+-    if c is None or c.returncode != 0:
+-        return "宣告檔不乾淨:.lumos/lint.json 不在 HEAD 裡(沒提交的宣告不自動執行)"
++    if c is None:
++        return F, "git 跑不起來,查不出宣告檔在不在 HEAD"
++    if c.returncode != 0:
++        return D, "宣告檔不乾淨:.lumos/lint.json 不在 HEAD 裡(沒提交的宣告不自動執行)"
+     s = _lint_wt_git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", *_LINT_WT_DECL)
+     if s is None or s.returncode != 0:
+-        return "宣告檔不乾淨:查不出 .lumos/lint.json 與 .lumos/config.json 的狀態"
++        return F, "宣告檔不乾淨:查不出 .lumos/lint.json 與 .lumos/config.json 的狀態"
+     dirty = _porcelain_v1_entries(s.stdout)
+     if dirty:
+-        return "宣告檔不乾淨:" + "、".join(f"{p}({x}{y})" for x, y, p, _o in dirty[:4]) + " 沒提交、被忽略或有修改(只自動執行已提交的宣告)"
++        return D, "宣告檔不乾淨:" + "、".join(f"{p}({x}{y})" for x, y, p, _o in dirty[:4]) + " 沒提交、被忽略或有修改(只自動執行已提交的宣告)"
+     return None
+ 
+ 
+ def _lint_wt_allow(cmd, root=None):
+     """工作樹模式的自動執行白名單(寫死、不讀專案設定)→ (改寫好的命令, None) 或 (None, 原因)。範圍 1 第 5 條:
+     shlex 切詞後第一個詞恰好 ast-grep、第二個 scan;恰好一個 --config/-c,值是絕對路徑或 $HOME/、${HOME}/ 開頭(整條唯一准出現 $ 的地方),
+     換成家目錄後取真實路徑、用 commonpath 比要落在 <工具鏈根>/configs/ast-grep/ 底下(實驗 E7:字串前綴擋不住 .. 與符號連結);
+     其餘每個詞只能是佔位符(單獨成一個詞,不准當旗標值)、--format/--json(含 =值)及其值、--filter、--globs 及其值,外加恰好一個 > 接 {LINT_SARIF_OUT};
+     --config 值以外不准有 ; | & 反引號 $ < >> * ? ~ 大括號 換行;-U、--update-all、-i、--interactive、--custom-languages 一律不准。
+     通過的命令整條重組:佔位符與 > 原樣、其餘每個詞 shlex.quote、--config 換成真實路徑(不含 $)。
+@@ -40233,37 +40255,32 @@ def _lint_wt_allow(cmd, root=None):
+                     return None, (f"設定檔路徑大小寫跟工具鏈實際目錄不同({anc} 對 {allow}),照實際大小寫改宣告")
+             except OSError:
+                 continue
+         return None, f"--config 的真實路徑不在工具鏈的 configs/ast-grep/ 底下({real})"
+     out[out.index(None)] = shlex.quote(real)
+     return " ".join(out), None
+ 
+ 
+ def _lint_wt_argv(cmd, files, cmd_dir=None):
+     """_lint_wt_allow 重組好的命令 + 要檢查的檔 → 不經 shell 的參數清單(不含輸出導向;SARIF 由呼叫端接標準輸出)。
+-    單獨成一個詞的 {LINT_FILES} 展開成一檔一個參數、{LINT_FILES_CSV} 換成一個逗號串參數(給了 cmd_dir 時絕對路徑改成相對它,
+-    同 _lint_cmd_with_files);「> {LINT_SARIF_OUT}」拿掉。白名單已保證佔位符只會單獨成詞,這裡只認整個詞相等。"""
+-    import os as _os
++    佔位符換成什麼走共用核心 _lint_placeholder_words(跟 shell 字串版 _lint_cmd_with_files 同一份;代碼審 r2 架構對齊席 F1),
++    這裡只負責把那幾個詞放進清單;「> {LINT_SARIF_OUT}」拿掉。白名單已保證佔位符只會單獨成詞,這裡只認整個詞相等。"""
+     import shlex
++    by_token = _lint_placeholder_words(files, cmd_dir)
+     words = shlex.split(cmd)
+     out, i = [], 0
+     while i < len(words):
+         w = words[i]
+         if w == ">" and i + 1 < len(words) and words[i + 1] == "{LINT_SARIF_OUT}":
+             i += 2
+             continue
+-        if w == _LINT_NEW_FILES_TOKEN:
+-            out += [str(f) for f in files]
+-        elif w == _LINT_NEW_FILES_CSV_TOKEN:
+-            out.append(",".join(_os.path.relpath(str(f), str(cmd_dir)) if cmd_dir and _os.path.isabs(str(f)) else str(f) for f in files))
+-        else:
+-            out.append(w)
++        out += by_token.get(w, [w])
+         i += 1
+     return out
+ 
+ 
+ def _lint_wt_begin(pgid_file=None):
+     """進工作樹模式:先裝 SIGTERM 處理器,再做任何開程序或建快照的事(範圍 1 第 7 條;主程式原本沒有訊號處理器,這是新慣例,
+     記在 [[Systems/hook逾時預算]])。pgid_file:鉤子指定的工具群組登記檔(一行一個群組編號),lint-new 沒機會收尾時鉤子照它去打。"""
+     import signal
+     global _LINT_WT_REG
+     _LINT_WT_REG = {"procs": {}, "pgid_file": str(pgid_file) if pgid_file else None, "work": None, "temps": set()}
+@@ -40340,175 +40357,203 @@ def _lint_wt_on_term(signum, frame):
+         os._exit(3)
+ 
+ 
+ def _lint_new_batch(new):
+     """一批告警的身分:新增告警指紋的多重集合(同一指紋幾次也算),排序後串起來取 sha256 前 16 碼(用詞「批次雜湊」)。"""
+     import hashlib as _hl
+     keys = sorted(str(c.get("key") or "") for c in new)
+     return _hl.sha256("\n".join(keys).encode("utf-8")).hexdigest()[:16]
+ 
+ 
+-def _lint_wt_blobs(repo_root, paths):
+-    """一次 `git cat-file --batch` 讀 HEAD 裡這些路徑 → {路徑: 位元組或 None(HEAD 沒有)};含換行的路徑傳不進去,當沒有。
+-    git 跑不起來或輸出對不上格式 → 回 None(呼叫端整次判沒檢查到),★不准當「全部是新檔」★——那會把舊告警全報成新增。
+-    ★HEAD 沒有的物件以行尾 ` missing` 判★(git 官方 BATCH OUTPUT:`<object> SP missing LF`,object 是我們送的 HEAD:<路徑>,
+-    路徑可以含空白;回合結束檢查代碼審 r1 正確性席 F2、資源席 F2:原本切詞數 3 就當成有大小,`HEAD:sp ace.kt missing` 讓 int() 崩)。
+-    找得到的物件標頭是 `<物件編號> SP <種類> SP <大小> LF`,物件編號不含空白,從右邊切兩刀。"""
++def _lint_wt_blobs(repo_root, paths, max_bytes=None, big=None):
++    """HEAD 裡這些路徑 → {路徑: 位元組或 None(HEAD 沒有、不是一般檔或超過 max_bytes)};含換行的路徑傳不進去,當沒有。
++    ★先問大小、超過上限的不讀★(回合結束檢查代碼審 r2 資源席 F1:改過的大檔原本整份讀進記憶體才被超大檔規則略過):
++    走既有的帶上限讀法(_nodehome_cat_sizes 問大小 → _nodehome_cat_blobs_capped 只讀沒超過的),兩趟 git 都帶不信任 repo 的 -c 參數;
++    超過上限的路徑放進 big(呼叫端給了集合的話)。git 跑不起來或輸出對不上 → 回 None(呼叫端整次判沒能檢查),
++    ★不准當「全部是新檔」★——那會把舊告警全報成新增。HEAD 沒有的物件:批次讀取那行是 `HEAD:<路徑> missing`,
++    路徑可以含空白(r1 正確性席 F2),大小那欄不是數字 → None。"""
+     want = [p for p in dict.fromkeys(paths) if p and "\n" not in p]
+     got = {p: None for p in paths}
+     if not want:
+         return got
+-    r = _lint_wt_git(repo_root, "cat-file", "--batch", data="".join(f"HEAD:{p}\n" for p in want).encode("utf-8"))
+-    if r is None or r.returncode != 0:
++    pre = _git_untrusted_c(repo_root)
++    if pre is None:
+         return None
+-    buf, pos = r.stdout, 0
+-    for p in want:
+-        nl = buf.find(b"\n", pos)
+-        if nl < 0:
+-            return None
+-        line = buf[pos:nl]
+-        pos = nl + 1
+-        if line.endswith(b" missing"):
+-            continue
+-        head = line.rsplit(b" ", 2)
+-        if len(head) != 3 or not head[2].isdigit():
+-            return None
+-        size = int(head[2])
+-        if head[1] == b"blob":
+-            got[p] = buf[pos:pos + size]
+-        pos += size + 1                   # 樹或其他物件:跳過內容
++    specs = [f"HEAD:{p}" for p in want]
++    sizes = _nodehome_cat_sizes(repo_root, specs, pre=pre)
++    if sizes is None:
++        return None
++    cap = max_bytes if max_bytes is not None else float("inf")
++    if big is not None:
++        big.update(p for p, n in zip(want, sizes) if n is not None and n > cap)
++    data = _nodehome_cat_blobs_capped(repo_root, specs, cap, sizes=sizes, pre=pre)
++    if data is None:
++        return None
++    for p, v in zip(want, data):
++        got[p] = v
+     return got
+ 
+ 
++def _lint_wt_head_oversize(fp, cfg):
++    """工作樹上這支檔是不是已經超過大小或行數上限(同 _lint_new_oversize 的兩個門檻;讀不到當沒超過,之後照常判)。
++    大小先看 stat、沒超過才逐塊數行,不整份留在記憶體。"""
++    try:
++        if fp.stat().st_size > cfg["max_file_bytes"]:
++            return True
++        n = 1
++        with open(fp, "rb") as fh:
++            for chunk in iter(lambda: fh.read(1 << 20), b""):
++                n += chunk.count(b"\n")
++                if n > cfg["max_file_lines"]:
++                    return True
++    except OSError:
++        return False
++    return False
++
++
+ def _lint_wt_pairs(repo_root, since, cfg):
+     """這一回合碰過的程式碼檔 → ([(現在路徑, 基準路徑或 None)], 基準內容 {現在路徑: 位元組}, skipped 清單, 錯誤或 None)。
+     用詞「這一回合碰過的檔」:工作樹上有未提交改動(列得到、不是刪除)而且修改時間不早於回合起點;.lumos/ 底下的一律不算。
+     基準:R/C 沿舊路徑追回 HEAD 有的那一端(串起來的改名鏈也追,最多追清單筆數那麼多步、遇到重複就停),追不到整支當新檔並列 skipped;
+     ?? 與 A 基準為空,但同一份清單裡有檔名(不含目錄)相同而且唯一的刪除檔時,拿那支的 HEAD 內容當基準(搬套件會改 package 行)。
+     衝突(任一格 U,或 AA、DD)不掃、列成衝突中沒檢查。
+     ★先判上限、再讀內容,而且只讀要用的★(回合結束檢查代碼審 r1 資源席 F1、F3):碰過的檔超過 _LINT_WT_MAX_FILES 支時一份內容都不讀;
+-    刪除檔只讀「有新增檔要拿它配對」的那幾支(原本整批刪除檔都從 HEAD 讀進記憶體:刪 200 個 5MB 的資產檔約 4GB、9 秒,最後什麼都沒檢查)。"""
++    刪除檔只讀「有新增檔要拿它配對」的那幾支(原本整批刪除檔都從 HEAD 讀進記憶體:刪 200 個 5MB 的資產檔約 4GB、9 秒,最後什麼都沒檢查)。
++    ★大檔不讀★(代碼審 r2 資源席 F1):工作樹那一版已經超過大小或行數上限的(之後一定被超大檔規則略過)不讀 HEAD 版;
++    HEAD 那一版超過大小上限的只問大小、不讀,整支當新檔並列 skipped。
++    錯誤是 (種類, 原因):超過上限是刻意不查,git 算不出、讀不出是沒能檢查(代碼審 r2 通才席 F1)。"""
+     r = _lint_wt_git(repo_root, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+     if r is None or r.returncode != 0:
+-        return [], {}, [], "git 算不出工作樹上的改動"
++        return [], {}, [], (_LINT_WT_FAILED, "git 算不出工作樹上的改動")
+     ents = [e for e in _porcelain_v1_entries(r.stdout) if not e[2].startswith(".lumos/")]
+     renames = {p: o for x, y, p, o in ents if (x in "RC" or y in "RC") and o}
+     deleted = [p for x, y, p, o in ents if "D" in (x, y) and not (x in "RC" or y in "RC")]
+     skipped, touched = [], []
+     for x, y, p, o in ents:
+         if "U" in (x, y) or x + y in ("AA", "DD"):
+             skipped.append({"file": p, "why": "合併衝突中,沒檢查"})
+             continue
+         fp = Path(repo_root) / p
+         try:
+             if not fp.is_file() or fp.is_symlink():
+                 continue                  # 刪除、鏈中間那一端(工作樹上已不在)、目錄或連結:不掃
+             if since is not None and fp.stat().st_mtime < since:
+                 continue
+         except OSError:
+             continue
+         if not _stack_changed_ok(p, keep_test_ext=cfg["include_test_paths"]):
+             continue
+         touched.append((x, y, p, o))
+     if len(touched) > _LINT_WT_MAX_FILES:
+-        return [], {}, skipped, f"這回合改了太多檔({len(touched)} 支,超過 {_LINT_WT_MAX_FILES} 支),留給推送前閘"
++        return [], {}, skipped, (_LINT_WT_DELIBERATE, f"這回合改了太多檔({len(touched)} 支,超過 {_LINT_WT_MAX_FILES} 支),留給推送前閘")
+     by_name = {}
+     for d in deleted:
+         by_name.setdefault(Path(d).name, []).append(d)
++    head_big = {p for _x, _y, p, _o in touched if _lint_wt_head_oversize(Path(repo_root) / p, cfg)}
+     want = []
+     for x, y, p, o in touched:
++        if p in head_big:
++            continue                      # 現在這一版之後一定被超大檔規則略過,基準不用讀
+         if x in "RC" or y in "RC":
+             cur, seen = o, set()
+             for _ in range(len(ents) + 1):    # 改名鏈上每一端都可能是 HEAD 有的那一端
+                 if cur is None or cur in seen:
+                     break
+                 want.append(cur)
+                 seen.add(cur)
+                 cur = renames.get(cur)
+         elif x + y == "??" or "A" in (x, y):
+             same = by_name.get(Path(p).name) or []
+             if len(same) == 1:
+                 want.append(same[0])
+         else:
+             want.append(p)
+-    blobs = _lint_wt_blobs(repo_root, want)
++    big = set()
++    blobs = _lint_wt_blobs(repo_root, want, max_bytes=cfg["max_file_bytes"], big=big)
+     if blobs is None:
+-        return [], {}, skipped, "git 讀不出這些檔在 HEAD 的版本"
++        return [], {}, skipped, (_LINT_WT_FAILED, "git 讀不出這些檔在 HEAD 的版本")
+     pairs, base_bytes = [], {}
+     for x, y, p, o in touched:
+         base = None
++        if p in head_big:
++            pairs.append((p, None))       # 照樣交給超大檔規則判(擋、可逐檔放行),只是不讀基準
++            continue
+         if x in "RC" or y in "RC":
+             cur, seen = o, set()
+             for _ in range(len(ents) + 1):
+                 if blobs.get(cur) is not None:
+                     base = cur
+                     break
+                 if cur in seen or cur not in renames:
+                     break
+                 seen.add(cur)
+                 cur = renames[cur]
+             if base is None:
+                 skipped.append({"file": p, "why": "改名追不到原檔,整支當新檔"})
+         elif x + y == "??" or "A" in (x, y):
+             same = by_name.get(Path(p).name) or []
+             if len(same) == 1 and blobs.get(same[0]) is not None:
+                 base = same[0]
+         elif blobs.get(p) is not None:
+             base = p
++        elif p in big:
++            skipped.append({"file": p, "why": f"HEAD 那一版超過 {cfg['max_file_bytes']} 位元組,沒讀基準,整支當新檔"})
+         pairs.append((p, base))
+         if base is not None:
+             base_bytes[p] = blobs[base]
+     return pairs, base_bytes, skipped, None
+ 
+ 
+ def _lint_new_wt_verdict(repo_root, since=None, deadline=None):
+     """工作樹模式的判定(_lint_new_verdict(worktree=True) 走這裡)→ 同形 dict,另帶 skipped 與 wt_rejected。
+     狀態沿用八種;整次不檢查的情況一律 not-checked(rc3)並寫原因;預算不夠沒跑到的命令歸沒檢查到、不擋。作弊比對要兩個提交,不跑。"""
+     import shutil
+     import tempfile
+     import time as _time
+     out = dict(_lint_new_out("工作樹"), skipped=[], wt_rejected=[])
+     cfg = _lint_new_config(repo_root)
+     out["mode"] = cfg["mode"]
+     out["warnings"] = list(cfg["warnings"]) + ["作弊比對要兩個提交,工作樹模式不跑,作弊比對留給推送前閘"]
+     if os.environ.get("LUMOS_SKIP_LINT_NEW") == "1" or cfg["mode"] == "off":
+         out["status"] = "off"
+         out["reason"] = "環境變數 LUMOS_SKIP_LINT_NEW 有設,整道閘關掉" if cfg["mode"] != "off" else "設定檔把這道閘設成 off"
+         return out
+-    why = _lint_wt_unready(repo_root)
+-    if why:
+-        out["status"], out["reason"] = "not-checked", why
++    unready = _lint_wt_unready(repo_root)
++    if unready:
++        out["unchecked_kind"], out["reason"] = unready
++        out["status"] = "not-checked"
+         return out
+     if not _lint_new_declared(repo_root):
+         out["status"], out["reason"] = "no-config", "這個專案沒有宣告任何檢查工具(.lumos/lint.json 不在)"
+         return out
+     pairs, base_bytes, skipped, err = _lint_wt_pairs(repo_root, since, cfg)   # 超過 _LINT_WT_MAX_FILES 支在裡面判(讀內容之前)
+     out["skipped"] = skipped
+     if err:
+-        out["status"], out["reason"] = "not-checked", err
++        out["unchecked_kind"], out["reason"] = err
++        out["status"] = "not-checked"
+         return out
+     if not pairs:
+         out["status"], out["reason"] = "no-files", "這一回合沒有碰過、還沒提交的程式碼檔"
+         return out
+     lint_cfg = _lint_load_config(repo_root) or {}
+     allowed = []
+     for cmd, files in _lint_new_cmd_targets(pairs, [], lint_cfg, (), repo_root=repo_root, ref=None):
+         new_cmd, why = _lint_wt_allow(cmd)
+         if new_cmd is None:
+             out["wt_rejected"].append({"cmd": cmd[:80], "why": why})
+         else:
+             allowed.append((new_cmd, files))
+     if not allowed:
+         if not out["wt_rejected"]:
+             out["status"], out["reason"] = "no-files", "這回合改的副檔名沒有對應的檢查工具宣告"
+             return out
+-        out["status"] = "not-checked"
++        out["status"], out["unchecked_kind"] = "not-checked", _LINT_WT_DELIBERATE
+         out["reason"] = (f"宣告的 {len(out['wt_rejected'])} 條命令都不在自動執行白名單裡,工作樹模式不跑(留給推送前閘)")
+         return out
+     waivers, werr = _lint_waivers_load(repo_root)
+     if werr:
+         _lint_new_autopass(out, werr)
+         return out
+     _lint_new_clean_stale(repo_root)
+     root = Path(repo_root) / ".lumos"
+     root.mkdir(parents=True, exist_ok=True)
+     work = tempfile.mkdtemp(prefix="lintbase-", dir=str(root))
+@@ -40551,33 +40596,42 @@ def _lint_new_wt_verdict(repo_root, since=None, deadline=None):
+         shutil.rmtree(work, ignore_errors=True)
+         if _LINT_WT_REG is not None:
+             _LINT_WT_REG["work"] = None
+     # 預算不夠或參數太長沒跑到的命令:工作樹模式歸「沒檢查到」(rc3),不擋
+     late = [u for u in out["undone"] if u["kind"] in ("budget", "too-long")]
+     out["undone"] = [u for u in out["undone"] if u["kind"] not in ("budget", "too-long")]
+     _lint_new_classify(out, cfg)
+     if late:
+         out["undone"] += late
+         if out["status"] in ("clean", "not-checked"):
+-            out["status"] = "not-checked"
++            out["status"], out["unchecked_kind"] = "not-checked", "timeout"
+             out["reason"] = f"{len(late)} 條命令因為時間預算或參數太長沒跑到,這回合沒檢查完"
++    if out["status"] == "not-checked" and not out.get("unchecked_kind"):
++        out["unchecked_kind"] = _LINT_WT_DELIBERATE   # 宣告的命令沒帶檔案佔位、或檔路徑都含分隔字元被拿掉:宣告形狀不讓跑,照設計判完了
+     return out
+ 
+ 
+ def _lint_new_wt_json(lv, rc):
+-    """工作樹模式 --json 的最後一行(鉤子只讀這一行):{status, rc_class, batch, total, new, undone, skipped, reason}。new 是全部新增告警。"""
++    """工作樹模式 --json 的最後一行(鉤子只讀這一行):{status, rc_class, batch, total, new, undone, skipped, reason, unchecked_kind}。
++    new 是全部新增告警。unchecked_kind 只在 rc3 時有值(代碼審 r2 通才席 F1;鉤子照它記事件,不再從 undone 推測):
++    deliberate=刻意不查(合併中、宣告檔不乾淨、超過上限、不在白名單)、timeout=時間預算或參數長度不夠沒跑到、
++    failed=沒能檢查(git 跑不起來、讀不出、過濾器關不掉、工具跑不出結果);判定裡沒寫明的 rc3 一律 failed,寧可記失敗、不記成綠。"""
+     new = lv.get("new") or []
++    kind = None
++    if rc == 3:
++        kind = lv.get("unchecked_kind") if lv.get("status") == "not-checked" else None
++        kind = kind if kind in (_LINT_WT_DELIBERATE, "timeout", _LINT_WT_FAILED) else _LINT_WT_FAILED
+     return {"status": lv.get("status"), "rc_class": {1: "blocked", 0: "pass"}.get(rc, "unchecked"),
+             "batch": _lint_new_batch(new) if new else "", "total": len(new),
+             "new": [{"file": c.get("file"), "line": c.get("line"), "rule": c.get("rule"), "message": str(c.get("message") or "")[:_LINT_MSG_SHOW],
+                      "fp": c.get("key"), "waive_cmd": _lint_waive_cmd(c)} for c in new],
+-            "undone": lv.get("undone") or [], "skipped": lv.get("skipped") or [], "reason": lv.get("reason") or ""}
++            "undone": lv.get("undone") or [], "skipped": lv.get("skipped") or [], "reason": lv.get("reason") or "", "unchecked_kind": kind}
+ 
+ 
+ def _lint_new_record_stop_block(repo_root, batch, count, prompt):
+     """`lint-new --record-stop-block`:收工鉤子真的擋下、輸出寫出去之後呼叫,寫一筆 stop-lint 擋下事件(「lint-new 不寫治理帳」的唯一例外,
+     範圍 1 第 9 條)。帳的格式與寫入規則在 _gate_event 一處,鉤子不能匯入主程式,所以給它這個入口而不是讓它自己寫帳檔。"""
+     _gate_event_or_warn(repo_root, "stop-lint", "blocked", f"回合結束寫法檢查擋下 {count} 條新增告警",
+                         hard=True, extra={"batch": str(batch)[:32], "count": count, "prompt_id": str(prompt)[:80]})
+     return 0
+ 
+ 
+@@ -41061,75 +41115,60 @@ def _testlayers_hits(files, config):
+     for f in files:
+         ext = Path(f).suffix.lstrip(".")
+         if ext in config:
+             if ext not in counts:
+                 order.append(ext)
+                 counts[ext] = 0
+             counts[ext] += 1
+     return [(k, config[k], counts[k]) for k in order]
+ 
+ 
+-def _lint_spawn(injected_cmd, repo_root, fail_info=None, out_path=None):
+-    """開程序跑一條已經換好佔位符的宣告命令(shell、在 repo_root、新 session 以便逾時整組殺、輸出丟掉)→ Popen。
+-    系統回「參數太長」(E2BIG,命令換完檔名後超過系統上限)時回 None,並在 fail_info(給了的話)寫 too_long=True;
+-    其他開程序錯誤照舊往外丟。從 _lint_run_and_parse 抽出來,那支已經很長([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 3)。
+-    ★injected_cmd 是參數清單時不開 shell★(lint-new 工作樹模式,回合結束檢查代碼審 r1 甲組):標準輸出接到 out_path(SARIF),
+-    執行檔找不到(ENOENT 等開不了程序的錯)回 None、不往外丟——跟 shell 版「找不到命令 → 沒產出 → 這條沒跑」同一個結果。"""
+-    import errno
+-    import signal
+-    import subprocess
+-    if isinstance(injected_cmd, list):
+-        return _lint_spawn_argv(injected_cmd, repo_root, fail_info, out_path)
+-    # 工作樹模式(_LINT_WT_REG 不是 None):開程序前先擋住 SIGTERM,開出來先登記(模組層清單與鉤子給的登記檔)再解除——
+-    # 開了沒登記的空窗收到 SIGTERM 時,處理器會等登記完才跑,那支工具照樣收得到(回合結束檢查計劃範圍 1 第 7 條)
+-    masked = _LINT_WT_REG is not None and hasattr(signal, "pthread_sigmask")
+-    if masked:
+-        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+-    try:
+-        # stdout/stderr → DEVNULL:linter 的 console 輸出(dotnet 警告走 stdout、detekt 走 stderr)
+-        # 不可洩漏到 lumos 的 stdout,否則污染 --json 輸出(SARIF 走檔案、console 輸出非契約)。
+-        proc = subprocess.Popen(injected_cmd, shell=True, cwd=repo_root, start_new_session=True,
+-                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+-        _lint_wt_register(proc)
+-        return proc
+-    except OSError as e:
+-        if e.errno != errno.E2BIG:
+-            raise
+-        if fail_info is not None:
+-            fail_info["too_long"] = True
+-        return None
+-    finally:
+-        if masked:
+-            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+-
+-
+-def _lint_spawn_argv(argv, repo_root, fail_info, out_path):
+-    """_lint_spawn 的參數清單版:不開 shell、標準輸出寫進 out_path、錯誤輸出丟掉;開程序前後擋 SIGTERM 的做法跟 shell 版相同。
++def _lint_spawn(injected_cmd, repo_root, fail_info=None, out_path=None, argv=None):
++    """開程序跑一條已經換好佔位符的宣告命令(在 repo_root、新 session 以便逾時整組殺)→ Popen 或 None。
++    ★用不用 shell 只有一種傳法:給了 argv(參數清單)就不開 shell★(lint-new 工作樹模式;代碼審 r1 甲組、r2 架構對齊席 F5):
++    標準輸出接到 out_path(SARIF)、錯誤輸出丟掉;沒給 argv 就照舊把 injected_cmd 交給 shell、輸出全丟(SARIF 由命令自己寫檔)。
++    開不了程序時:系統回「參數太長」(E2BIG)→ None 並在 fail_info 寫 too_long=True;參數清單版找不到執行檔或沒權限(ENOENT、EACCES 等)
++    → None,跟 shell 版「找不到命令 → 沒產出 → 這條沒跑」同一個結果;其他錯照舊往外丟(含接 SARIF 的檔開不了,代碼審 r2 架構對齊席 F2:
++    那不是工具沒裝,不准吞成沒跑)。從 _lint_run_and_parse 抽出來([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 3)。
++    工作樹模式(_LINT_WT_REG 不是 None):開程序前先擋住 SIGTERM,開出來先登記(模組層清單與鉤子給的登記檔)再解除——
++    開了沒登記的空窗收到 SIGTERM 時,處理器會等登記完才跑,那支工具照樣收得到(回合結束檢查計劃範圍 1 第 7 條)。
+     ★誠實邊界★:被擋的訊號遮罩會被子程序繼承,檢查工具因此收不到 SIGTERM;這裡收工具一律用 SIGKILL(_kill_proc_group,
+     鉤子那層對工具群組也是 SIGKILL),所以不影響收尾。收工鉤子開 lint-new 那處不能這樣做(lint-new 要靠 SIGTERM 自己收快照),改成先記下再補跑。"""
+     import errno
+     import signal
+     import subprocess
++    fh = open(out_path, "wb") if argv is not None else None      # 開不了照樣往外丟(不是工具沒裝)
+     masked = _LINT_WT_REG is not None and hasattr(signal, "pthread_sigmask")
+     if masked:
+         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM})
+     try:
+-        with open(out_path, "wb") as fh:
++        if argv is not None:
+             proc = subprocess.Popen(argv, shell=False, cwd=repo_root, start_new_session=True,
+                                     stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.DEVNULL)
++        else:
++            # stdout/stderr → DEVNULL:linter 的 console 輸出(dotnet 警告走 stdout、detekt 走 stderr)
++            # 不可洩漏到 lumos 的 stdout,否則污染 --json 輸出(SARIF 走檔案、console 輸出非契約)。
++            proc = subprocess.Popen(injected_cmd, shell=True, cwd=repo_root, start_new_session=True,
++                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+         _lint_wt_register(proc)
+         return proc
+     except OSError as e:
+-        if e.errno == errno.E2BIG and fail_info is not None:
+-            fail_info["too_long"] = True
+-        return None
++        if e.errno == errno.E2BIG:
++            if fail_info is not None:
++                fail_info["too_long"] = True
++            return None
++        if argv is not None and e.errno in (errno.ENOENT, errno.EACCES, errno.ENOEXEC, errno.ENOTDIR, errno.EPERM):
++            return None
++        raise
+     finally:
++        if fh is not None:
++            fh.close()
+         if masked:
+             signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTERM})
+ 
+ 
+ def _lint_run_and_parse(cmd, repo_root, path_prefix=None, timeout=None, fail_info=None, argv=None):
+     """執行宣告的 lint 指令並解析 SARIF 輸出為 claims 清單。
+     cmd: 含 {LINT_SARIF_OUT} 佔位符的 shell 指令字串。
+     repo_root: git repo 根目錄(Path 或 str)——★同時是「在哪裡跑」與「路徑相對誰」★(既有語意,不動)。
+     path_prefix: 選配。新增告警閘把兩份快照解到 .lumos/lintbase-<隨機>/{base,head}/ 底下跑,
+       工具回報的檔名會帶著那層前綴;給了就從結果裡剝掉,還原成專案相對路徑。
+@@ -41157,44 +41196,48 @@ def _lint_run_and_parse(cmd, repo_root, path_prefix=None, timeout=None, fail_inf
+         _LINT_WT_REG["temps"].add(temp_path)    # 工作樹模式:被 SIGTERM 時處理器照這份刪(os._exit 不跑下面的 finally)
+     try:
+         # 注入臨時檔路徑到指令
+         # ★佔位符沒被換掉就不跑★(2026-09-16):原樣送出去,linter 會把那串文字當成一個
+         # 不存在的路徑、回報「找不到檔」——而那條錯誤會被當成一條真發現,把風險分級撐高,
+         # 同時真正該檢查的檔一支都沒讀到。回 ok=False 讓呼叫端記成「這條沒跑」而不是「乾淨」。
+         # 兩種佔位符({LINT_FILES}、{LINT_FILES_CSV})都算,辨認走共用那支
+         # 參數清單(工作樹模式)是 _lint_wt_argv 照整詞展開的,檔名裡就算有佔位符字樣也只是檔名,不再判
+         if (_lint_gate_covers(cmd) if argv is None else not argv):
+             return [], False
+-        injected_cmd = argv if argv is not None else cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
++        injected_cmd = None if argv is not None else cmd.replace("{LINT_SARIF_OUT}", shlex.quote(temp_path))
+         # 執行指令:使用 Popen 以便 TimeoutExpired 時能 killpg(開程序與輸出丟掉在 _lint_spawn)。
+         # 開不了程序是因為參數太長時回沒跑,不往外丟(否則一路漏到新增告警閘外層、整道閘例外放行)
+-        proc = _lint_spawn(injected_cmd, repo_root, fail_info, out_path=temp_path)
++        proc = _lint_spawn(injected_cmd, repo_root, fail_info, out_path=temp_path, argv=argv)
+         if proc is None:
+             return ([], False)
+         try:
+             proc.communicate(timeout=(timeout if timeout else LINT_CMD_TIMEOUT))
+         except subprocess.TimeoutExpired:
+             _kill_proc_group(proc)
+             proc.wait()
+             return ([], False)
+         except BaseException:
+             # 工作樹模式:SIGINT(KeyboardInterrupt)或例外從這裡漏出去時,先收掉工具群組再從登記拿掉——
+             # 只拿掉不收,群組變孤兒、鉤子也找不到它(回合結束檢查代碼審 r1 資源席 F4);其他模式照舊不動
+             if _LINT_WT_REG is not None:
+                 _kill_proc_group(proc)
+             raise
+         finally:
+             _lint_wt_unregister(proc)      # 工作樹模式:工具結束就從登記(含鉤子的登記檔)拿掉;其他模式是空動作
+-        # 讀臨時檔:空或 parse 失敗 → ([], False)
++        # 讀臨時檔:空、超過大小上限或 parse 失敗 → ([], False)
++        # ★先看大小★(回合結束檢查代碼審 r2 資源席 F2):整份讀進來再解析約吃檔案大小 8 倍的記憶體(60 萬條約 2GB);
++        # 超過上限當這條跑不出可解析結果(環境類,不是乾淨),不讀內容
+         try:
++            if os.path.getsize(temp_path) > _LINT_SARIF_MAX_BYTES:
++                return ([], False)
+             with open(temp_path, encoding="utf-8") as f:
+-                content = f.read()
++                content = f.read(_LINT_SARIF_MAX_BYTES + 1)
+         except OSError:
+             return ([], False)
+         if not content.strip():
+             return ([], False)
+         try:
+             data = json.loads(content)
+         except json.JSONDecodeError:
+             return ([], False)
+         # 解析 SARIF(支援 v2.1 與 v1.0——dotnet/Roslyn ErrorLog 預設吐 v1,Landmark 真機坐實)
+         claims = []
+@@ -41292,20 +41335,21 @@ _LINT_NEW_DEFAULTS = {
+     "max_file_bytes": 5000000,  # ★只看行數會被「整支檔只有一行」的壓縮檔騙過去★,所以兩個都看
+     # 測試檔也掃的副檔名(預設空=照舊排除測試路徑)。Kotlin 的 src/test/ 被測試路徑樣式排除,
+     # 型錄 TEST 主題的規則在那裡永遠不響;只接在新增告警閘這一處,不改測試路徑樣式本身(它還有別的消費者)。
+     # [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5
+     "include_test_paths": frozenset(),
+ }
+ _LINT_NEW_BASE_PREFIX = ".lumos/lintbase-"   # 快照解在專案底下(解到系統暫存區,檢查工具往上找不到專案的規則設定)
+ _LINT_NEW_WAIVERS_REL = ".lumos/lint-waivers.json"   # ★這個檔要進版本控制★:只活在本機=換台機器整批復活擋人
+ _LINT_NEW_GATE_NAME = "lint-new"             # 閘名,要登記進 _KNOWN_GATES 否則記帳靜默失敗
+ _LINT_NEW_STALE_SEC = 86400                  # 開跑前清掉超過一天的殘骸(強殺時收尾不會執行)
++_LINT_SARIF_MAX_BYTES = 64 * 1024 * 1024     # 工具輸出的 SARIF 讀取上限(代碼審 r2 資源席 F2;超過當這條跑不出可解析結果)
+ _ISOLATED_WT_STALE_SEC = _LINT_NEW_STALE_SEC   # 共用隔離工作樹的殘骸時限沿用同一個值(Projects/代碼審修正關卡第0步_計劃,不另訂)
+ _LINT_NEW_FILES_TOKEN = "{LINT_FILES}"       # 命令沒有這個佔位=核心無法為它做基準比對
+ # ★逗號佔位符★(2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]]):detekt 的 --input 只收一個值、多檔用逗號分隔,
+ # 用空白串的 {LINT_FILES} 遇到兩支以上檔就拒跑(推送前從來沒擋過 detekt)。做成宣告裡明寫的第二種佔位符,
+ # 不在替換函式裡依工具名猜串法——一條命令裡可能串兩個工具,猜錯會壞另一個。
+ _LINT_NEW_FILES_CSV_TOKEN = "{LINT_FILES_CSV}"
+ # 逗號佔位符換完後整條命令的上限(UTF-8 位元組,含 shlex.quote 加的字元);超過就分批。Linux 單一參數上限 128 KB(MAX_ARG_STRLEN),留餘裕
+ _LINT_CSV_MAX_BYTES = 100000
+ 
+ 
+@@ -41351,30 +41395,36 @@ def _lint_cmd_with_files(cmd, files, cmd_dir=None):
+     找不到檔自己被當成一條發現、把風險分級撐成最高級。抽成一支就不會再漏第四個地方。
+ 
+     ★{LINT_FILES}:多檔各自跳脫再以空白相接★,不是整串一起跳脫(整串跳脫會把好幾個路徑黏成一個參數)。
+     ★{LINT_FILES_CSV}:多檔用逗號串成一個字串、整串交給 shlex.quote★(detekt 的 --input 只收一個值,
+     [[Projects/Android的detekt推送前真的擋_計劃]])。給了 cmd_dir(命令在哪個目錄執行)時,逗號串裡的絕對路徑
+     改寫成相對它的路徑——專案所在目錄的名字含逗號時整串才不會被拆錯;本來就是相對路徑的照原樣;{LINT_FILES} 不受影響。
+     ★兩個佔位符在一次掃描裡換完★:連續兩次字串替換的話,第二次會重掃第一次換進去的路徑(路徑裡剛好有佔位符字樣就被再換一次)。
+     指令沒有佔位符是合法的(例如直接掃整個資料夾或用 glob 的宣告),原樣回傳。
+     檔清單是空的也原樣回傳:塞一個空字串進去等於叫 linter 檢查「空檔名」。
+     """
+-    import os as _os
+     import re as _re
+     import shlex as _shlex
+     if not files or not _lint_gate_covers(cmd):
+         return cmd
+-    rel = [(_os.path.relpath(str(f), str(cmd_dir)) if cmd_dir and _os.path.isabs(str(f)) else str(f)) for f in files]
+-    by_token = {_LINT_NEW_FILES_TOKEN: " ".join(_shlex.quote(str(f)) for f in files),
+-                _LINT_NEW_FILES_CSV_TOKEN: _shlex.quote(",".join(rel))}
++    by_token = {t: " ".join(_shlex.quote(w) for w in ws) for t, ws in _lint_placeholder_words(files, cmd_dir).items()}
+     return _re.sub("|".join(_re.escape(t) for t in (_LINT_NEW_FILES_CSV_TOKEN, _LINT_NEW_FILES_TOKEN)),
+                    lambda mo: by_token[mo.group(0)], cmd)
++
++
++def _lint_placeholder_words(files, cmd_dir=None):
++    """佔位符展開的共用核心(代碼審 r2 架構對齊席 F1:shell 字串版與參數清單版原本各寫一份相對路徑改寫):
++    {LINT_FILES} → 一檔一個詞;{LINT_FILES_CSV} → 一個逗號串詞,給了 cmd_dir 時絕對路徑改成相對它(本來就相對的照原樣)。
++    回 {佔位符: [詞…]};跳脫(shell 版)或直接放進參數清單(工作樹模式)由呼叫端決定。"""
++    import os as _os
++    rel = [(_os.path.relpath(str(f), str(cmd_dir)) if cmd_dir and _os.path.isabs(str(f)) else str(f)) for f in files]
++    return {_LINT_NEW_FILES_TOKEN: [str(f) for f in files], _LINT_NEW_FILES_CSV_TOKEN: [",".join(rel)]}
+ # ★依賴層(2026-09-13)★:依賴宣告檔不是程式碼檔,既有的「要不要掃」過濾會把 .json/.txt/.lock 整批擋掉,
+ # 所以它們走自己這條路。宣告用 lint.json 的保留鍵 "deps"(不是副檔名),命中條件=這次改動碰到任何一支依賴宣告檔。
+ # 為什麼值得接:AI 寫碼特有的錯裡,捏造套件版本是最好抓的一種,而工具是現成的(免費、原生吐同一個格式)。
+ # ★不放 .lumos/lint.json★(r1 架構對齊席):那個檔的每個頂層鍵都被當成「副檔名→命令清單」嚴格驗證,
+ # 塞一個非副檔名的保留鍵進去=同一個檔混著兩種語意。這條共識程式註解與圖譜三處都寫過,
+ # 而 lint-watch 當初就是為同一個理由另開檔。所以依賴層的宣告走自己的檔。
+ _LINT_DEPS_REL = ".lumos/lint-deps.json"
+ _DEP_MANIFESTS = frozenset((
+     "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+     "requirements.txt", "requirements-dev.txt", "Pipfile", "Pipfile.lock",
+@@ -41795,25 +41845,41 @@ def _lint_waivers_add(repo_root, key, rule, file_rel, reason, who, origin="human
+                       "origin": origin, "acked": origin == "human"})
+         p.parent.mkdir(parents=True, exist_ok=True)
+         _write_lf(p, json.dumps({"waivers": items}, ensure_ascii=False, indent=2) + "\n")
+     return (True, None)
+ 
+ 
+ def _lint_new_clean_stale(repo_root):
+     """開跑前清掉同前綴、超過一天的殘骸。★強殺(機器休眠判死)時收尾不會執行★,
+     殘骸會留在專案底下那個被忽略的目錄裡;每次名字不同所以不會污染下一次比對,但要有人掃。"""
+     import shutil
++    import stat as _stat
++    import tempfile
+     import time as _time
++    now = _time.time()
++    # 系統暫存區的 lumos-lint-*.sarif(代碼審 r2 資源席 F3:lint-new 被 SIGKILL、SIGHUP 時 finally 與 SIGTERM 處理器都不跑,沒人掃):
++    # 只刪自己的、一般檔(不跟符號連結)、超過一天的
++    try:
++        tmp_items = list(Path(tempfile.gettempdir()).glob("lumos-lint-*.sarif"))
++    except OSError:
++        tmp_items = []
++    for f in tmp_items:
++        try:
++            st = f.lstat()
++            if (_stat.S_ISREG(st.st_mode) and (not hasattr(os, "getuid") or st.st_uid == os.getuid())
++                    and now - st.st_mtime > _LINT_NEW_STALE_SEC):
++                f.unlink()
++        except OSError:
++            continue
+     base = Path(repo_root) / ".lumos"
+     if not base.is_dir():
+         return
+-    now = _time.time()
+     for d in base.glob("lintbase-*"):
+         try:
+             if d.is_dir() and now - d.stat().st_mtime > _LINT_NEW_STALE_SEC:
+                 shutil.rmtree(d, ignore_errors=True)
+         except OSError:
+             continue
+ 
+ 
+ def _lint_new_oversize(head_files, base_files, cfg):
+     """挑出「太大所以不掃」的檔,並從兩邊的清單裡拿掉。回 [{file,lines,bytes,key,over}…]。
+@@ -42132,58 +42198,59 @@ def _lint_new_run_cmds(repo_root, cmd_targets, sides, cfg, out, budget_end):
+         if not _lint_gate_covers(cmd):
+             # 逐命令降級:只影響這一條命令,不讓整道閘降級(舊宣告不擋人,但不能拖累合格的新宣告)
+             out["report_only"].append(cmd)
+             continue
+         left = budget_end - _time.monotonic()
+         if left < cfg["per_cmd_floor_sec"]:
+             # ★不要用一個必然逾時的值去跑它★:剩下的命令沒跑到,判定跟「檔太大」同類(擋),不歸自動放行
+             out["undone"].append({"kind": "budget", "cmd": cmd[:80],
+                                   "detail": "時間預算剩 %.0f 秒,不足單條保底 %d 秒" % (max(left, 0), cfg["per_cmd_floor_sec"])})
+             continue
+-        got, fail = _lint_new_run_one(repo_root, cmd, want_files, sides, budget_end, argv_mode=bool(cfg.get("wt_argv")))
++        got, fail = _lint_new_run_one(repo_root, cmd, want_files, sides, budget_end, wt_argv=bool(cfg.get("wt_argv")))
+         if fail == "too-long":
+             # ★參數太長不是環境問題★:工具好好的,是這次改動的檔太多、命令換完太長;判成跟預算沒跑到同類(擋),
+             # 不歸自動放行([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 3)
+             out["undone"].append({"kind": "too-long", "cmd": cmd[:80],
+                                   "detail": "這條命令換完檔名後太長,開程序時被系統拒絕(參數太長),沒跑到"})
+             continue
+         if fail:
+             out["undone"].append({"kind": "env", "cmd": cmd[:80],
+                                   "detail": "這條命令跑不出可解析的結果(工具沒裝/逾時/拉不到規則)"})
+             continue
+         out["ran"].append(cmd)
+         base_claims += got["base"]
+         head_claims += got["head"]
+     return base_claims, head_claims
+ 
+ 
+-def _lint_new_run_one(repo_root, cmd, want_files, sides, budget_end, argv_mode=False):
++def _lint_new_run_one(repo_root, cmd, want_files, sides, budget_end, wt_argv=False):
+     """一條檢查命令在兩份快照上各跑一次 → ({side: 告警清單}, 失敗種類);失敗種類 None=都跑出來了、
+     "env"=有一邊跑不出可解析的結果、"too-long"=開程序時參數太長。
+     ★逗號佔位符的命令換完超過上限就分批跑、合併結果★(推送前只跑不用型別的規則,每支檔各自判,分批不影響結果);
+     舊 {LINT_FILES} 不分批([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 3)。
+     快照路徑是絕對路徑,命令在專案根執行,所以替換時給專案根當命令執行目錄,逗號串裡換成相對路徑。
+-    argv_mode=True(lint-new 工作樹模式):命令是白名單重組過的字串,改由 _lint_wt_argv 組參數清單、不開 shell 跑。"""
++    wt_argv=True(lint-new 工作樹模式,跟設定鍵同名):命令是白名單重組過的字串,在這裡由 _lint_wt_argv 組成參數清單往下傳(argv=),
++    不開 shell 跑;往下只有 argv 一種傳法,_lint_spawn 不再看型別(代碼審 r2 架構對齊席 F5)。"""
+     import os
+     import time as _time
+     got = {"base": [], "head": []}
+     csv = _lint_gate_covers(cmd, kind="csv")
+     for side, files, wdir in sides:
+         targets = [files[f] for f in want_files if f in files]
+         if not targets:
+             continue
+         prefix = os.path.relpath(str(wdir), str(repo_root))
+         for batch in (_lint_csv_batches(cmd, targets, repo_root) if csv else [targets]):
+             fi = {}
+-            claims, ok = _lint_run_and_parse(cmd if argv_mode else _lint_cmd_with_files(cmd, batch, repo_root), repo_root,
++            claims, ok = _lint_run_and_parse(cmd if wt_argv else _lint_cmd_with_files(cmd, batch, repo_root), repo_root,
+                                              path_prefix=prefix, timeout=max(1, int(budget_end - _time.monotonic())), fail_info=fi,
+-                                             argv=_lint_wt_argv(cmd, batch, repo_root) if argv_mode else None)
++                                             argv=_lint_wt_argv(cmd, batch, repo_root) if wt_argv else None)
+             if not ok:
+                 return None, ("too-long" if fi.get("too_long") else "env")
+             got[side] += claims
+     return got, None
+ 
+ 
+ def _lint_new_sep_split(cmd_targets, head_files, base_files, waivers, out):
+     """逗號佔位符的命令:要檢查的檔路徑含逗號或分號(detekt 拿這兩個字分 --input,整條會拒跑)就從那條命令拿掉、其餘照跑,
+     那幾支放進「檔太大沒檢查」同一組清單(擋,可逐檔放行;放行指紋跟大檔同形)→ 拿掉之後的 [(命令, [檔…])…]。
+     一條命令的檔全被拿掉時不跑它、記進 out["sep_emptied"](整次結果不准說乾淨)。舊 {LINT_FILES} 的命令不動。
+@@ -47061,88 +47128,90 @@ def _nodehome_merge_own_changes(repo_root, sha, parents):
+         # 任一個上一版的改名對照讀不到、或批次讀取失敗:整個合併照舊查(不是逐檔判)
+         return paths, src, gone
+     kept = set()
+     for n, x in enumerate(order):
+         merged, *olds = blobs[n * (1 + len(parents)):(n + 1) * (1 + len(parents))]
+         if _nodehome_merge_wrote_new_lines(merged, olds):
+             kept.add(x)
+     return kept, {k: v for k, v in src.items() if k in kept}, gone
+ 
+ 
+-def _nodehome_cat_sizes(repo_root, specs, timeout=60):
++def _nodehome_cat_sizes(repo_root, specs, timeout=60, pre=()):
+     """同 _nodehome_cat_blobs 的批次讀取,只問大小(cat-file --batch-check):回同順序的 int|None(沒有這個物件=None);git 跑不起來回 None。
+-    路徑裡有換行時批次讀取表達不了(輸出行數會錯位),跟 _nodehome_cat_blobs 一樣整批當判不了(r3 G8)。"""
++    路徑裡有換行時批次讀取表達不了(輸出行數會錯位),跟 _nodehome_cat_blobs 一樣整批當判不了(r3 G8)。
++    pre:放在子命令前面的 git 全域選項(不信任 repo 的 -c 參數,_git_untrusted_c;回合結束檢查代碼審 r2)。"""
+     import subprocess as _sp
+     if any("\n" in s_ for s_ in specs):
+         return None
+     try:
+-        chk = _sp.run(["git", "-C", str(repo_root), "cat-file", "--batch-check"],
++        chk = _sp.run(["git", "-C", str(repo_root), *pre, "cat-file", "--batch-check"],
+                       input=("\n".join(specs) + "\n").encode("utf-8", "surrogateescape"),
+                       capture_output=True, timeout=timeout)
+     except (OSError, ValueError, _sp.TimeoutExpired):   # ValueError:路徑字串帶 surrogateescape 編不回去的代理字元
+         return None
+     if chk.returncode != 0:
+         return None
+     heads = chk.stdout.split(b"\n")
+     out = []
+     for i in range(len(specs)):
+         parts = heads[i].split(b" ") if i < len(heads) else []
+         out.append(int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else None)
+     return out
+ 
+ 
+-def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60, max_total_bytes=None, deadline=None, sizes=None):
++def _nodehome_cat_blobs_capped(repo_root, specs, max_bytes, timeout=60, max_total_bytes=None, deadline=None, sizes=None, pre=()):
+     """_nodehome_cat_blobs 加大小上限:先用 _nodehome_cat_sizes 問大小,超過 max_bytes 的回 None、不讀進記憶體
+     (角色鏡頭代碼審 r1 外家 F6、r2 架構對齊 F1:上限放在批次讀取這一層,不另起查法)。
+     max_total_bytes 選填，限制整批宣告內容大小；deadline 選填，大小／內容兩趟共用剩餘時間。
+     sizes 選填:呼叫端已經查好的大小(同順序,None 是不知道 → 那一支不讀),給了就不再問一次(回頭重讀的指紋那一步先查過大小)。
+-    未指定時保留既有逐物件上限與每趟 timeout 語意。回同順序 bytes|None；失敗或截止期耗盡回 None。"""
++    未指定時保留既有逐物件上限與每趟 timeout 語意。回同順序 bytes|None；失敗或截止期耗盡回 None。
++    pre:兩趟 git 都帶的全域選項(同 _nodehome_cat_sizes;空的時候不往下傳,既有替身照舊接得住)。"""
+     def left():
+         return _git_timeout(deadline, cap=timeout)
+     remaining = left()
+     if remaining <= 0:
+         return None
+     if sizes is None:
+-        sizes = _nodehome_cat_sizes(repo_root, specs, remaining)
++        sizes = _nodehome_cat_sizes(repo_root, specs, remaining, **({"pre": pre} if pre else {}))
+     if sizes is None:
+         return None
+     ok, total = [], 0
+     for i, n in enumerate(sizes):
+         if n is None or n > max_bytes or (max_total_bytes is not None and total + n > max_total_bytes):
+             continue
+         ok.append(i)
+         total += n
+     remaining = left()
+     if remaining <= 0:
+         return None
+-    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=remaining) if ok else []
++    got = _nodehome_cat_blobs(repo_root, [specs[i] for i in ok], timeout=remaining, **({"pre": pre} if pre else {})) if ok else []
+     if got is None:
+         return None
+     res = [None] * len(specs)
+     for i, v in zip(ok, got):
+         res[i] = v
+     return res
+ 
+ 
+-def _nodehome_cat_blobs(repo_root, specs, timeout=60):
++def _nodehome_cat_blobs(repo_root, specs, timeout=60, pre=()):
+     """一次讀很多個「版本:路徑」的內容,回同順序的 bytes|None(那個版本沒有這支檔就是 None);git 跑不起來回 None。
+ 
+     ★為什麼不照鄰居逐支 git show★(代碼審 r1 通才席量代價):成本在開 git 行程本身——200 支衝突檔的合併,
+     每支三次讀取就是 600 個行程,實測 13.5 秒;用 git 內建的批次讀取(cat-file --batch)一個行程讀完。
+     原始內容照讀、不經任何轉換程式。路徑裡有換行時批次讀取表達不了,整批當判不了。"""
+     import subprocess as _sp
+     if not specs:
+         return []
+     if any("\n" in s_ for s_ in specs):
+         return None
+     try:
+-        r = _sp.run(["git", "-C", str(repo_root), "cat-file", "--batch"],
++        r = _sp.run(["git", "-C", str(repo_root), *pre, "cat-file", "--batch"],
+                     input=("\n".join(specs) + "\n").encode("utf-8", "surrogateescape"),
+                     capture_output=True, timeout=timeout)
+     except (OSError, _sp.TimeoutExpired):
+         return None
+     if r.returncode != 0:
+         return None
+     out, pos, res = r.stdout, 0, []
+     for _ in specs:
+         nl = out.find(b"\n", pos)
+         if nl < 0:
+@@ -69806,21 +69875,21 @@ def _spec_ls_tree_one(root, commit, path, long=False, pre=()):
+ 
+ def _spec_commit_blob(root, commit, path, pre=()):
+     """從提交讀一份一般檔(做法 3;dispatch-lens 與 spec-freeze 共用這一支讀法):ls-tree -z -l 判種類與大小,
+     內容用既有的 _nodehome_cat_blobs_capped 讀(上限放在批次讀取那一層,不另起查法)。回 (失敗代碼|None, blob 編號, bytes)。
+     大小已先判過,所以批次讀回 None 一律當讀不到(物件被清、git 失敗或逾時),回 spec_missing、不回 spec_too_large。"""
+     parts = _spec_ls_tree_one(root, commit, path, long=True, pre=pre)
+     if parts is None:
+         return "spec_missing", None, None
+     if int(parts[3]) > _LENS_SPEC_MAX_BYTES:
+         return "spec_too_large", parts[2], None
+-    got = _nodehome_cat_blobs_capped(root, [f"{commit}:{path}"], _LENS_SPEC_MAX_BYTES)
++    got = _nodehome_cat_blobs_capped(root, [f"{commit}:{path}"], _LENS_SPEC_MAX_BYTES, pre=pre)
+     if not got or got[0] is None:
+         return "spec_missing", parts[2], None
+     return None, parts[2], got[0]
+ 
+ 
+ def _dispatch_lens_read_spec(start, spec_value):
+     """設計審讀計劃的唯一入口(做法 4):cmd_dispatch_lens_spec 與 _dispatch_lens_spec_with_arch 都走這支,寫法只在這裡判。
+     值以第一個冒號切開,冒號前全是十六進位、至少 7 碼 → 提交寫法,在會談 repo 從物件庫讀那個提交裡的計劃(不碰值指到的任何目錄);
+     其他照原本當工作樹路徑(檢查一律不動)。
+     回 dict——成功:root、text、spec_source(commit|worktree)、commit、blob(工作樹寫法兩者 None)、vault_rel(docs/<名>/)、rel;
+@@ -70466,22 +70535,22 @@ def _dispatch_lens_spec_arch_text(root, vault_rel, text):
+         return _frame_injected(_arch_target_fail_text(e))
+ 
+ 
+ # ---------------------------------------------------------------------------
+ # lumos spec-freeze(Projects/派工鏡頭可指定目標repo_計劃 做法 9):在計劃所在的工作樹把計劃凍成一個不掛分支的提交、
+ # 從那個提交寫出凍結快照,印出要貼的 `LUMOS-SPEC: <完整提交編號>:<路徑>`。快照與提交因此一定一致,也不用先正式提交草稿。
+ # ★這是 lumos 第一個寫 git 物件的子命令,而且刻意落懸空物件★,跟 _replay_git_blob「只引用已被 tree 引用的物件、不用 hash-object -w
+ # 落兩週會被 gc 的懸空 blob」取向相反:replay 的凍結要長期回放,設計迴圈只活一晚;要長期回放的東西不用 spec-freeze。
+ # 不動任何 ref、真的 index 與分支;工作樹裡其他沒提交的改動不進這個提交(tree 只比 HEAD 多這份計劃)。
+ # ---------------------------------------------------------------------------
+-# 每個 git 呼叫都帶:指向暫存 index 時 read-tree 與 update-index 會跑 post-index-change 掛鉤,core.fsmonitor 也會執行外部程式
+-_SPEC_FREEZE_GIT_C = ("-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false")
++# 每個 git 呼叫都帶不信任 repo 的 -c 參數(_git_untrusted_c,主程式唯一一份;回合結束檢查代碼審 r2 甲組):指向暫存 index 時 read-tree 與
++# update-index 會跑 post-index-change 掛鉤,core.fsmonitor 也會執行外部程式;過濾器名字收不了時整次 git_failed、不建任何物件
+ _SPEC_FREEZE_ENV = {"GIT_AUTHOR_NAME": "lumos spec-freeze", "GIT_AUTHOR_EMAIL": "spec-freeze@lumos.invalid",
+                     "GIT_COMMITTER_NAME": "lumos spec-freeze", "GIT_COMMITTER_EMAIL": "spec-freeze@lumos.invalid"}
+ # spec-freeze 印得出的失敗代碼(--json 的 freeze_fail;代碼先登記才印得出去,同 dispatch-lens 的 _LENS_FAIL_CODES——
+ # 代碼審 code-派工鏡頭可指定目標repo r1 架構5;t_spec_freeze_fail_codes_registered 守)
+ # spec_rev_missing 是提交寫法(<完整提交編號>:<路徑>)的編號解不到(代碼審 code-派工鏡頭可指定目標repo r2 G3)
+ _SPEC_FREEZE_FAIL_CODES = frozenset({"not_git", "no_head", "spec_rev_missing", "spec_outside_repo", "spec_missing", "spec_too_large",
+                                      "out_outside_repo", "out_conflict", "git_failed"})
+ _SPEC_FREEZE_OUT_DIR = ("governance", "review-reports")   # --out 只收執行所在 repo 的這個資料夾底下
+ 
+ 
+@@ -70575,22 +70644,24 @@ def _spec_freeze_out_ok(outp, data):
+ 
+ 
+ def _spec_freeze_build(root, head, rel, mode):
+     """用暫存 index 建不掛 ref 的提交:read-tree HEAD → hash-object -w --no-filters → update-index --cacheinfo → write-tree → commit-tree。
+     固定作者、每個 git 呼叫關掉掛鉤與 fsmonitor;暫存 index 用完就刪。任何一步失敗回 None(可能已留下懸空物件,gc 會清)。回 (提交, blob)。"""
+     import shutil as _sh
+     import tempfile as _tf
+     tmpd = _tf.mkdtemp(prefix="lumos-spec-freeze-")
+     env = dict(_SPEC_FREEZE_ENV, GIT_INDEX_FILE=str(Path(tmpd) / "index"))
+ 
++    pre = _git_untrusted_c(root)
++
+     def g(*a):
+-        r = _lens_git(root, *_SPEC_FREEZE_GIT_C, *a, env=env, quote=True)
++        r = _lens_git(root, *pre, *a, env=env, quote=True) if pre is not None else None
+         return r.stdout.strip() if r is not None and r.returncode == 0 else None
+     try:
+         if g("read-tree", "HEAD") is None:
+             return None
+         blob = g("hash-object", "-w", "--no-filters", "--", rel)
+         if not blob or g("update-index", "--add", "--cacheinfo", f"{mode},{blob},{rel}") is None:
+             return None
+         tree = g("write-tree")
+         commit = g("commit-tree", tree, "-p", head, "--no-gpg-sign", "-m", "lumos spec-freeze") if tree else None
+         return (commit, blob) if commit and _LENS_SHA_RE.match(commit) else None
+@@ -70651,47 +70722,55 @@ def _spec_freeze_from_commit(root, cwd, value, out, as_json, fail):
+     (spec_rev_missing)→ 路徑字串(spec_outside_repo)→ NFC(spec_missing)→ 一般檔與大小、讀內容(spec_missing、spec_too_large)→ --out。"""
+     import unicodedata as _ud
+     head, _c, rel = str(value).partition(":")
+     low = _spec_commit_rev_ok(root, head)
+     if low is None:
+         return fail("spec_rev_missing", "提交編號要寫完整的 40 或 64 碼,而且要在這個 repo 的物件庫裡找得到")
+     if _spec_commit_path_bad(rel):
+         return fail("spec_outside_repo", "提交寫法的路徑要在 docs/<名>-knowledge/ 底下、不含空白與 . .. 段")
+     if not _ud.is_normalized("NFC", rel):
+         return fail("spec_missing", "計劃路徑不是 NFC")
+-    code, blob, data = _spec_commit_blob(root, low, rel, pre=_SPEC_FREEZE_GIT_C)
++    pre = _git_untrusted_c(root)
++    if pre is None:
++        return fail("git_failed", "這個 repo 的 git 設定裡有內容過濾器,名字收不了、關不掉,不讀")
++    code, blob, data = _spec_commit_blob(root, low, rel, pre=pre)
+     if code:
+         return fail(code, "那個提交裡沒有這份計劃、不是一般檔或讀不到" if code == "spec_missing" else f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
+     outp, rc = _spec_freeze_check_out(root, cwd, out, data, fail)
+     if rc is not None:
+         return rc
+     return _spec_freeze_finish(root, outp, out, low, blob, rel, data, as_json, fail)
+ 
+ 
+ def cmd_spec_freeze(plan, out, as_json=False):
+     """lumos spec-freeze <計劃> [--out <governance/review-reports/<編號>/rN-snapshot.md>]。兩種寫法:
+     - 路徑寫法(在計劃所在的工作樹跑):把工作樹上的計劃凍成不掛分支的提交;有給 --out 才寫快照(只收執行所在 repo 的
+       governance/review-reports/ 底下;計劃在別的工作樹時不帶 --out,不在那個工作樹留任何檔)。
+     - 提交寫法 `<完整提交編號>:<路徑>`(在會談目錄跑):從共用物件庫讀那個提交裡的計劃寫快照,不建新提交(_spec_freeze_from_commit)。
+     路徑寫法的檢查照編號做,同時違反回第一個(全部 rc 2,--json 印 {"freeze_fail": 代碼}):
+     ①形狀(not_git、no_head)②路徑字串(spec_outside_repo)③逐段 lstat(spec_missing)④大小(spec_too_large)
+     ⑤--out(位置 out_outside_repo、內容 out_conflict)⑥建提交與讀回(git_failed)。第 1 到 5 步都在建任何物件之前,拒絕時不建提交、不寫 --out。
++    ⓪ 不信任 repo 的 git 參數算不出來(過濾器名字收不了,_git_untrusted_c 回 None)在第 1 步之前就回 git_failed。
+     代碼表見 _SPEC_FREEZE_FAIL_CODES。"""
+     import stat as _st
+     import unicodedata as _ud
+     cwd = Path.cwd()
+ 
+     def fail(code, msg):
+         return _spec_freeze_fail(as_json, code, msg)
+ 
++    pre = _git_untrusted_c(cwd)
++    if pre is None:
++        return fail("git_failed", "這個 repo 的 git 設定裡有內容過濾器,名字收不了、關不掉,不建提交")
++
+     def g(*a):
+-        r = _lens_git(cwd, *_SPEC_FREEZE_GIT_C, *a)
++        r = _lens_git(cwd, *pre, *a)
+         return r.stdout if r is not None and r.returncode == 0 else None
+     top = (g("rev-parse", "--show-toplevel") or "").strip()
+     if not top:
+         return fail("not_git", "目前目錄不在 git 專案裡")
+     root = Path(top)
+     chead, colon, _cpath = str(plan).partition(":")
+     if colon and _LENS_SPEC_COMMIT_RE.fullmatch(chead):   # 提交寫法:冒號前全是十六進位、至少 7 碼(同 dispatch-lens 的分界)
+         return _spec_freeze_from_commit(root, cwd, plan, out, as_json, fail)
+     head = (g("rev-parse", "--verify", "-q", "--end-of-options", "HEAD^{commit}") or "").strip()
+     if not _LENS_SHA_RE.match(head):
+@@ -70714,21 +70793,21 @@ def cmd_spec_freeze(plan, out, as_json=False):
+         return fail("spec_missing", "計劃讀不到")
+     if len(data) > _LENS_SPEC_MAX_BYTES:
+         return fail("spec_too_large", f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
+     outp, rc = _spec_freeze_check_out(root, cwd, out, data, fail)
+     if rc is not None:
+         return rc
+     built = _spec_freeze_build(root, head, rel, "100755" if st.st_mode & _st.S_IXUSR else "100644")
+     if built is None:
+         return fail("git_failed", "建提交時 git 失敗(可能已留下懸空物件,gc 會清)")
+     commit, blob = built
+-    code, blob2, got = _spec_commit_blob(root, commit, rel, pre=_SPEC_FREEZE_GIT_C)   # 用 dispatch-lens 同一支讀法讀回
++    code, blob2, got = _spec_commit_blob(root, commit, rel, pre=_git_untrusted_c(root))   # 用 dispatch-lens 同一支讀法讀回(建得出提交就表示這份參數算得出來)
+     if code or blob2 != blob or got != data:
+         return fail("git_failed", "從剛建的提交讀回的計劃跟工作樹上的不同")
+     return _spec_freeze_finish(root, outp, out, commit, blob, rel, got, as_json, fail)
+ 
+ 
+ def _codeloop_git_head(repo_root):
+     """取 HEAD full sha。"""
+     import subprocess
+     r = subprocess.run(["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))

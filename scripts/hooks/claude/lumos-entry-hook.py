@@ -218,6 +218,8 @@ def _trusted_lumos():
     def _ok(cand):
         try:
             p = _P(cand)
+            if not p.is_absolute():
+                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
             if not p.is_file():
                 return None
             st = p.stat()
@@ -391,7 +393,23 @@ def main():
     return 0
 
 
+# ★下面這支是主程式 scripts/lumos 同名函式的逐字複本★(安全邏輯,照 [[Systems/hook信任邊界]];守衛 t_r5path_hooks_verbatim)
+def _clean_path_env():
+    """★程序一開始就把 PATH 洗成只剩絕對路徑項★(回合結束檢查代碼審 r5 資安席 F1):PATH 的空項(開頭、結尾或連續的冒號)、. 與
+    任何相對項,開子程序時都從目前目錄找,而鉤子與主程式的目前目錄常常就是被打開的資料夾——repo 根放一支可執行的 git,裸名呼叫
+    git 就執行它。ast-grep(r3)、lumos(r4)、git(r5)同一類第三次被打穿,不再一支工具一支工具解路徑:入口洗一次,之後同一程序
+    開的所有子程序都吃乾淨的 PATH(既有的逐支解析照留,當縱深)。洗完一項都不剩時改用 os.defpath 的絕對項(空字串的 PATH
+    一樣等於目前目錄);沒設 PATH 不動(子程序照 os.defpath 找)。安全邏輯:主程式與每支鉤子各一份逐字複本,照
+    [[Systems/hook信任邊界]],守衛 t_r5path_hooks_verbatim 盯著一字不差、入口第一句就呼叫。"""
+    import os as _os
+    if "PATH" not in _os.environ:
+        return
+    keep = [d for d in _os.environ["PATH"].split(_os.pathsep) if d and _os.path.isabs(d)]
+    _os.environ["PATH"] = _os.pathsep.join(keep or [d for d in _os.defpath.split(_os.pathsep) if d and _os.path.isabs(d)])
+
+
 if __name__ == "__main__":
+    _clean_path_env()
     # #19 S4:把「我跑完了」記成一筆事件,讓 lumos enforcement 答得出
     # 「它最近有沒有真的跑過」,而不是只答「有沒有註冊」。共用寫入器在 _hookevent.py。
     import sys as _s, pathlib as _p

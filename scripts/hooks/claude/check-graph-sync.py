@@ -29,12 +29,25 @@
 from __future__ import annotations
 import json
 import os
+import posixpath
 import re
-import time
 import shlex
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+# ── 鉤子共用程式(家目錄底下的標記目錄、標記檔名消毒與 O_EXCL 佔名額、檔名消毒、git 防護)在 _hookshared.py ──────────
+# 單源在那支檔([[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2:收工寫法檢查那支也要用,
+# 這支檔吃過「邏輯抄一份、一邊改另一邊沒跟上」的虧,所以不抄第二份)。照名字匯入回來,外部看到的名字不變;
+# 匯入失敗(共用模組沒裝過去)時 main 靜默放行,不讓收工卡住。
+# ★可信來源解析與逾時預算不在共用模組★:那兩段跟安全邊界綁在一起,照 [[Systems/hook信任邊界]] 留在這支檔當逐字複本(下面)。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # 不用 resolve():匯入這支檔不碰檔案系統中繼資料(t_handoff_hook_import_is_pure)
+try:
+    from _hookshared import (_cache_dir_under_home, _mkdir_under_home, _stop_dir_ok, _safe_path,  # noqa: F401
+                             _harden_git_env, _GIT_UNSAFE_CONFIG, _mark_name, _claim_mark)
+    _SHARED_OK = True
+except Exception:          # 共用模組不在或壞掉:整支靜默結束(rc0)
+    _SHARED_OK = False
 
 # === 觸發提醒的原始碼副檔名 ===
 CODE_EXTS = {
@@ -301,7 +314,7 @@ def is_graph_file(path: str, graph_root: Path) -> bool:
 # 而最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。
 # 列舉法原理上補不完(tee/patch/一行 python/包一層 shell/產生器),量結果不量過程才免疫。
 
-def _git(project_root: Path, *args, text=True):
+def _git(project_root: Path, *args, text=True, data=None):
     """對被檢查的那個資料夾跑一個版本控制指令。兩個旗標都是安全用的,不是裝飾:
 
     ★關掉檔名轉義★(代碼審 r1 外家備援+邊界+正確性 三席獨立報,編排者實測):
@@ -324,42 +337,180 @@ def _git(project_root: Path, *args, text=True):
     unsafe = [x for k in _GIT_UNSAFE_CONFIG for x in ("-c", k + "=")]
     return subprocess.run(
         ["git", "-C", str(project_root), "-c", "core.quotePath=false", *unsafe, *args],
-        capture_output=True, text=text, timeout=_inner_budget(default=20))
+        input=data, capture_output=True, text=text, timeout=_inner_budget(default=20))
 
 
-def _git_status_entries(project_root: Path):
-    """工作樹上有哪些檔還沒提交。回 [(狀態碼, repo 相對路徑)];狀態碼 '??' = 從未被追蹤。
+# ★下面這支是主程式 scripts/lumos 同名函式的逐字複本★(回合結束檢查代碼審 r3 甲組,資安席 F2):找工作樹改動不跑 git status
+# (status 會經被打開目錄自帶的內容過濾器,等於執行對方指定的指令)。這是安全邏輯,照 [[Systems/hook信任邊界]] 走「逐字複本+守衛」、
+# 不走共用模組;守衛 t_lwt_r3_nofilter_verbatim 盯著兩份一字不差。
+def _wt_changed_nofilter(repo_root, run, paths=()):
+    """工作樹上還沒提交的改動,★不跑 git status、不經任何內容過濾器★ → [(X, Y, 路徑, 舊路徑或 None)] 或 None(任何一個 git 指令失敗)。
+    狀態碼同 git status --porcelain=v1:X 是 HEAD 對索引、Y 是索引對工作樹;?? 未追蹤、UU 衝突;HEAD 與索引同一物件、只換了路徑的算 R。
+    為什麼:git status 遇到大小不變、內容改過的檔會跑 .gitattributes 指到的 clean/process 過濾器,過濾器的名字與指令由被打開的目錄決定,
+    列名字再逐個關掉的做法被打穿三次。這裡只用不執行內容過濾器的指令:ls-tree -r -z(HEAD)、ls-files -s -z(索引的模式與物件編號)、
+    ls-files -s --debug -z(索引記下的時間與大小,只拿來省雜湊、格式認不得就全部算)、ls-files -o --exclude-standard -z(未追蹤)、
+    hash-object --no-filters --stdin-paths(工作樹內容照原樣算,https://git-scm.com/docs/git-hash-object )。
+    只看一般檔(100644、100755),符號連結與子模組(120000、160000)跳過。時間與大小跟索引記的一樣、而且比索引檔早寫的才不算雜湊(同 git 的 racy 判法)。
+    用了真過濾器的專案(LFS、autocrlf)會多報幾支(工作樹原樣跟索引裡轉過的不同),方向是多查不漏查。
+    ★索引旗標照 git status★(代碼審 r5 正確性席 F1):ls-files -v 標 S(skip-worktree,sparse-checkout 圈外的檔也是這個)或小寫
+    (assume-unchanged)的條目不比工作樹(Y 一律空白、不 lstat 不算雜湊),HEAD 對索引照比——git status 對這類檔也只報索引那一欄
+    (https://git-scm.com/docs/git-ls-files 的 -t、-v)。
+    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。
+    ★路徑基準一律是 repo 根★(代碼審 r4 正確性席 F1、邊界席 F1、通才席 F1):repo_root 可以是 repo 的子目錄(monorepo);先用
+    rev-parse --show-toplevel 取根、之後每個 git 指令都帶 -C <根>(ls-tree --full-tree 從根算、hash-object --stdin-paths 也從根開檔,
+    跟 ls-files 不統一時乾淨的樹會被報成一堆刪除與改名、改過的檔整次回 None),ls-files 加 --full-name;lstat 用根接路徑;
+    paths 是相對 repo_root 的,前面補 --show-prefix。回傳的路徑從 repo 根算起(同 git status --porcelain)。"""
+    import os as _os
+    import stat as _st
 
-    ★-uall 是斷言不是裝飾★:不帶它,一個全新目錄會被整包摺成 `?? dir/` 一行,
-    裡面幾支檔一支都列不出來(本 repo 自己的程式碼早已記載這件事)。
-    ★為什麼不沿用閘門 3 那條現成的查詢★:那條底層是拿工作樹跟上次提交比,
-    **看不到從未被追蹤的新檔**——而 `echo > 新檔.py` 正是最常見的 shell 寫法,
-    沿用它這個病會原封不動留著(實測留痕見計劃的卷證目錄)。
+    def ok(*a, data=None, here=False):    # here=True 在呼叫端給的目錄跑(只有取根那兩次),其餘一律在 repo 根跑
+        r = (run if here else in_top)(*a, data=data)
+        return r.stdout if r is not None and r.returncode == 0 else None
+    t, pfx = ok("rev-parse", "--show-toplevel", here=True), ok("rev-parse", "--show-prefix", here=True)
+    if not t or pfx is None:
+        return None
+    top = _os.fsdecode(t[:-1] if t.endswith(b"\n") else t)
+    pfx = _os.fsdecode(pfx[:-1] if pfx.endswith(b"\n") else pfx)
+    lit = ("--", *(pfx + p for p in paths)) if paths else ()
 
-    任何失敗(不是倉庫、索引被鎖、逾時、空倉庫)一律回 None=算不出來,呼叫端 fail-open。
-    """
+    def in_top(*a, data=None):            # 呼叫端給的 run(-C 是 repo_root)前面再補 -C <根>;不重綁 run 這個名字(代碼審 r5 架構對齊席 F2)
+        return run("-C", top, *a, data=data)
+
+    def entries(raw, n=3):
+        for ent in (raw or b"").split(b"\0"):
+            meta, tab, p = ent.partition(b"\t")
+            f = meta.split(b" ")
+            if tab and len(f) == n:
+                yield f, p
+    reg = (b"100644", b"100755")
+    h = in_top("rev-parse", "--verify", "-q", "HEAD")
+    if h is None or h.returncode not in (0, 1):
+        return None
+    raw = ok("ls-tree", "-r", "-z", "--full-tree", "HEAD", *lit) if h.returncode == 0 else b""
+    idx = ok("ls-files", "-s", "-v", "-z", "--full-name", *lit)
+    unt = ok("ls-files", "-o", "--exclude-standard", "-z", "--full-name", *lit)
+    if raw is None or idx is None or unt is None:
+        return None
+    head, index, conflict, skip, hold = {}, {}, set(), set(), set()
+    for f, p in entries(raw):
+        if f[0] in reg:
+            head[p] = f[2]
+        else:
+            skip.add(p)
+    for g, p in entries(idx, 4):          # -v 多一欄旗標:S 是 skip-worktree、小寫是 assume-unchanged
+        tag, f = g[0], g[1:]
+        if f[2] != b"0":
+            conflict.add(p)
+        elif f[0] in reg:
+            index[p] = f[1]
+            if tag == b"S" or tag.islower():
+                hold.add(p)
+        else:
+            skip.add(p)
+    stamp = {}
+    dbg = ok("ls-files", "-s", "--debug", "-z", "--full-name", *lit) or b""
+    prev = None
+    for chunk in dbg.split(b"\0"):
+        lines = chunk.split(b"\n")
+        info = {}
+        while lines and lines[0].startswith(b"  "):
+            for kv in lines.pop(0).strip().split(b"\t"):
+                k, _c, v = kv.partition(b": ")
+                info[k.strip()] = v.strip()
+        try:
+            if prev is not None and info:
+                sec, _c, ns = info[b"mtime"].partition(b":")
+                stamp[prev] = (int(sec) * 1000000000 + int(ns), int(info[b"size"]))
+        except (KeyError, ValueError):
+            pass
+        rest = b"\n".join(lines)
+        prev = rest.partition(b"\t")[2] if b"\t" in rest else None
+    gp = ok("rev-parse", "--git-path", "index")
     try:
-        # ★關掉檔名轉義不是裝飾★(代碼審 r1 外家備援 blocker,編排者實測確認):
-        # 不帶它,非 ASCII 檔名會被跳脫成 `"scripts/\\346\\224\\266..."` 這種八進位形式,
-        # 只 strip 掉引號還原不了,解析出來的路徑指向一個不存在的檔——
-        # 而這個專案的檔名大量是中文,等於實務上一直踩。
-        # ★諷刺的地方★:凍結被審 diff 時本來就照流程帶了這個旗標,實作這支查詢時卻忘了(同一天、隔幾個指令)。
-        r = _git(project_root, "status", "--porcelain", "-uall")
-        if r.returncode != 0:
+        idx_ns = _os.stat(_os.path.join(top, _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
+    except OSError:
+        idx_ns = None
+    wt, ask = {}, []
+    for p, oid in index.items():
+        if p in hold:
+            continue                      # git status 不比這類檔的工作樹,Y 留空白
+        try:
+            s = _os.lstat(_os.path.join(top, _os.fsdecode(p)))
+        except (FileNotFoundError, NotADirectoryError):
+            wt[p] = "D"
+            continue
+        except OSError:
+            wt[p] = "M"
+            continue
+        if not _st.S_ISREG(s.st_mode):
+            wt[p] = "T"
+        elif idx_ns is not None and s.st_mtime_ns < idx_ns and stamp.get(p) == (s.st_mtime_ns, s.st_size & 0xFFFFFFFF):
+            wt[p] = " "
+        elif b"\n" in p or p[:1] == b'"' or p.endswith(b"\r"):
+            wt[p] = "M"                   # 一行一個路徑的輸入表達不了(結尾的 CR 會被當行尾吃掉,代碼審 r4 正確性席 F2),當改過(多查)
+        else:
+            ask.append(p)
+    if ask:
+        got = ok("hash-object", "--no-filters", "--stdin-paths", data=b"\n".join(ask) + b"\n")
+        sums = (got or b"").split()
+        if got is None or len(sums) != len(ask):
             return None
+        for p, sha in zip(ask, sums):
+            wt[p] = " " if sha == index[p] else "M"
+    res = {}
+    for p in set(head) | set(index) | conflict:
+        if p in skip:
+            continue
+        if p in conflict:
+            res[p] = ["U", "U", None]
+            continue
+        x = " " if head.get(p) == index.get(p) else ("A" if p not in head else ("D" if p not in index else "M"))
+        y = wt.get(p, " ") if p in index else " "
+        if x + y != "  ":
+            res[p] = [x, y, None]
+    gone = {}
+    for p, v in res.items():
+        if v[0] == "D":
+            gone.setdefault(head[p], []).append(p)
+    for p, v in res.items():
+        old = gone.get(index.get(p)) if v and v[0] == "A" else None
+        if old and len(old) == 1 and (res.get(old[0]) or [None])[0] == "D":
+            v[0], v[2] = "R", old[0]
+            res[old[0]] = None
+    out = [(v[0], v[1], _os.fsdecode(p), _os.fsdecode(v[2]) if v[2] is not None else None) for p, v in res.items() if v]
+    out += [("?", "?", _os.fsdecode(p), None) for p in (unt or b"").split(b"\0") if p]
+    return sorted(out, key=lambda e: e[2])
+
+
+def _git_status_entries(project_root: Path, top: Path | None = None):
+    """工作樹上有哪些檔還沒提交。回 [(狀態碼, repo 相對路徑)];狀態碼 '??' = 從未被追蹤。top 是 repo 根(沒給就自己問)。
+
+    ★只回專案底下的條目★(代碼審 r6 正確性、邊界、通才、合約四席 F1):找改動回的是整個 repo,專案根是 repo 子目錄時
+    兄弟目錄的改動原本混進來,活檔靠 is_code_file 擋掉、被刪的檔沒那道,於是被點名、還進擋停清單。子目錄專案這族
+    連三輪在不同下游各補一處(r4 路徑基準、r5 接路徑、r6 刪除分支),改在這個唯一出口整批濾,下游任何分支只看得到專案內的檔;
+    改名的兩端任一端在專案內就留。路徑照舊從 repo 根算起(同 prek 的 monorepo 做法:專案根不一定是 git 根,
+    掛鉤只看自己專案的檔 https://prek.j178.dev/monorepos/ )。
+
+    ★不跑 git status★(回合結束檢查代碼審 r3 甲組,資安席 F2 實測):status 遇到大小不變、內容改過的檔
+    會執行被打開目錄自帶的內容過濾器;改走 _wt_changed_nofilter(只用不經過濾器的 git 指令)。
+    未追蹤的檔逐支列(ls-files -o,不會把新目錄摺成一行);改名那列給新路徑。
+    ★為什麼不沿用閘門 3 那條現成的查詢★:那條底層是拿工作樹跟上次提交比,
+    **看不到從未被追蹤的新檔**——而 `echo > 新檔.py` 正是最常見的 shell 寫法。
+
+    任何失敗(不是倉庫、索引被鎖、逾時)一律回 None=算不出來,呼叫端 fail-open。
+    """
+    def run(*a, data=None):
+        return _git(project_root, *a, text=False, data=data)
+    try:
+        ents = _wt_changed_nofilter(project_root, run)
     except Exception:
         return None
-    out = []
-    for line in r.stdout.splitlines():
-        if len(line) < 4:
-            continue
-        code, rest = line[:2], line[3:]
-        if "R" in code or "C" in code:      # 改名/複製那一列是「舊路徑 -> 新路徑」,要的是新的
-            rest = rest.split(" -> ")[-1]
-        rest = rest.strip().strip('"')
-        if rest:
-            out.append((code, rest))
-    return out
+    if ents is None:
+        return None
+    if top is None:
+        top = _repo_top(project_root)
+    return [(x + y, p) for x, y, p, o in ents
+            if p and (_rel_in_project(p, project_root, top) or (o and _rel_in_project(o, project_root, top)))]
 
 
 def _head_shebang(project_root: Path, relpath: str) -> bool:
@@ -379,8 +530,37 @@ def _entry_is_deleted(code: str) -> bool:
     return "D" in code
 
 
-def _entry_is_code(code: str, relpath: str, project_root: Path) -> bool:
-    """狀態表的一列,是不是我們在意的程式碼檔。"""
+def _repo_top(project_root: Path) -> Path:
+    """被檢查目錄所在 git repo 的根;git 問不出來就照回 project_root(不崩)。找改動回的路徑從 repo 根算起(同 git status --porcelain),
+    ★要接在這個根上,不能接在專案根上★(代碼審 r5 邊界席 F1、通才席 F1:專案根是 repo 子目錄時原本接成 sub/sub/…,
+    沒副檔名的腳本認不出、筆記動過也認不出)。圖譜位置與「在不在專案底下」照舊用 project_root 判。
+    ★為什麼跟 _wt_changed_nofilter 各問一次根★(代碼審 r6 通才席 F2):那支是主程式的逐字複本(守衛 t_lwt_r3_nofilter_verbatim),
+    改它的回傳形狀要兩份連動,所以這裡多開一次 git,換複本不動。名字叫 _repo_top 不叫同目錄別支鉤子的 _repo_root(代碼審 r6 架構對齊席 F2):
+    那幾支失敗時各有各的退法,這支失敗照回 project_root;只是命名沒對齊,不改名(改名要動既有測試與筆記的指名,換不到行為差別)。"""
+    try:
+        r = _git(project_root, "rev-parse", "--show-toplevel")
+        t = r.stdout.rstrip("\n") if r.returncode == 0 else ""
+    except Exception:
+        t = ""
+    return Path(t) if t else project_root
+
+
+def _rel_in_project(relpath: str, project_root: Path, top: Path | None) -> bool:
+    """repo 根相對路徑 relpath 落不落在 project_root 底下;★不要求這支檔存在★(被刪的檔、改名前的舊路徑都要判)。
+    只解析兩個一定存在的目錄(repo 根、專案根)算出專案在 repo 裡的前綴,relpath 本身照字面逐段比:
+    macOS 的暫存目錄經 /var → /private/var,git 回的根是解析後的寫法,直接拿兩個字串比前綴會把專案裡的檔也判成在外面。"""
+    try:
+        pfx = project_root.resolve().relative_to((top or project_root).resolve()).parts
+    except (ValueError, OSError):
+        return False
+    parts = PurePosixPath(posixpath.normpath(relpath.replace("\\", "/"))).parts
+    if not parts or parts[0] in ("/", ".."):
+        return False
+    return parts[:len(pfx)] == pfx
+
+
+def _entry_is_code(code: str, relpath: str, project_root: Path, top: Path | None = None) -> bool:
+    """狀態表的一列,是不是我們在意的程式碼檔。relpath 從 repo 根算起,top 是 repo 根(沒給就當 project_root 就是根)。"""
     norm = relpath.replace("\\", "/")
     # ★比對前要補前導斜線★(代碼審 r1 邊界席):排除清單寫的是前後帶斜線的形式(例如 /dist/),
     # 而狀態查詢給的是不帶前導斜線的相對路徑(dist/bundle.js)——頂層目錄永遠對不上。
@@ -394,7 +574,7 @@ def _entry_is_code(code: str, relpath: str, project_root: Path) -> bool:
         if Path(relpath).suffix.lower() in CODE_EXTS:
             return True
         return _head_shebang(project_root, relpath)
-    return is_code_file(str(project_root / relpath), project_root)
+    return is_code_file(str((top or project_root) / relpath), project_root)
 
 
 # ── 抑制重複(同一批檔不要每輪重講)────────────────────────────────────
@@ -404,8 +584,8 @@ def _entry_is_code(code: str, relpath: str, project_root: Path) -> bool:
 # 對照:前一版被否決的方案把狀態放在正確性路徑(算差集),壞掉會少報,才需要原子寫入/版號/鍵值/清理全套。
 
 def _printed_mark_path(session_id: str):
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
-    if name in ("", ".", ".."):
+    name = _mark_name(session_id)           # 標記檔名消毒只有共用模組一份(擋停標記與去重紀錄同一套)
+    if name is None:
         return None
     return _printed_dir() / name
 
@@ -636,6 +816,8 @@ def _trusted_lumos():
     def _ok(cand):
         try:
             p = _P(cand)
+            if not p.is_absolute():
+                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
             if not p.is_file():
                 return None
             st = p.stat()
@@ -737,7 +919,8 @@ def _inner_budget(elapsed=None, default=10.0):
 # ── ★逾時預算結束★ ──────────────────────────────────────────────────
 
 def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
-    """跟 pre-commit/pre-push 同一條路:lumos impact --diff HEAD --sync-check --json(工作樹 vs HEAD),
+    """跟 pre-commit/pre-push 同一套判法:lumos impact --diff HEAD --sync-check --worktree-nofilter --json(工作樹 vs HEAD;
+    --worktree-nofilter 讓它不跑 git diff、不經被打開目錄自帶的內容過濾器,回合結束檢查代碼審 r3;舊版 lumos 不認得這個選項會 rc2 → 沒資料),
     取「固定席未動」的前 cap 篇。lumos 尋路同 impact-hook._find_lumos_script 的順序(PATH 先、repo 後);
     rc 協定同它:rc≠0 視為沒資料,fail-open 回 []。"""
     import json as _json
@@ -747,7 +930,7 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
     if lumos is None:
         return []
     try:
-        r = subprocess.run([sys.executable, lumos, "impact", "--diff", "HEAD", "--sync-check", "--json", "--repo", str(project_root)],
+        r = subprocess.run([sys.executable, lumos, "impact", "--diff", "HEAD", "--sync-check", "--worktree-nofilter", "--json", "--repo", str(project_root)],
                            capture_output=True, text=True, timeout=_inner_budget(default=30))
         if r.returncode != 0 or not r.stdout.strip():
             return []
@@ -765,42 +948,6 @@ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
 STOP_BLOCK_HEAD = "LUMOS-STOP:改了程式碼但知識筆記沒跟著動"
 
 
-def _cache_dir_under_home(name: str, label: str) -> Path:
-    """`<家目錄>/.cache/lumos/<name>`:mkdir(0700)後★先過 _stop_dir_ok 再做任何 chmod/清理★
-    (code-codex-refine r2 外家:目錄若被換成指向別處的 symlink,之前會跟著 chmod 並刪掉目標裡
-    超過 7 天的檔——現在 symlink/不是自己的/別人可寫 一律不碰,交給後面的 _stop_dir_ok 判不擋)。
-
-    ★參數化而不是抄第二份★(2026-09-18 收工點名改問版本控制那一批):收工點名的去重紀錄
-    需要自己的目錄(跟擋停標記混在一起會打破「只有擋過的 session 才留標記」這個性質),
-    而這支檔已經因為「邏輯抄一份、一邊改另一邊沒跟上」吃過虧——所以共用同一套判準。"""
-    d = Path.home() / ".cache" / "lumos" / name
-    try:
-        # ★逐層建、逐層檢查★(2026-09-16 補審 delta 那一輪):原本一次 mkdir 出整條路徑再檢查,
-        # 上層被換成指向別處的連結時,★別人的目錄裡已經多出一個 stop-block 資料夾了★,
-        # 檢查才說「不碰它」——跟上面那句「不在別人的目錄上寫標記」自己矛盾。
-        # 主程式的 `_mkdir_trusted_under_home` 同一天改成這樣,這支 hook 是獨立檔不能 import,
-        # ★所以邏輯抄一份、判準必須跟它對齊★(是真目錄、屬於自己、別人不可寫;任何一層不過就停手,
-        # 已經建好的不回頭刪——刪反而是在動別人的東西)。
-        if not _mkdir_under_home(".cache", "lumos", name):
-            print(f"lumos {label}停用:{d} 這條路徑上有一層不是自己的真目錄"
-                  "(被換成指向別處的連結、或別人也寫得進去)——不在那裡建東西。", file=sys.stderr)
-            return d
-        if not _stop_dir_ok(d):
-            print(f"lumos {label}停用:標記目錄 {d} 不是自己的 0700 目錄(symlink / 別人可寫 / chmod 失敗)——修好權限才會再啟用", file=sys.stderr)   # r2 delta #3:靜默停用要有訊號(給 log,Codex 模型看不到)
-            return d
-        os.chmod(d, 0o700)
-        now = time.time()   # lazy 清超過 7 天的標記(邊界 F5:註解與門檻要一致)
-        for f in d.iterdir():
-            try:
-                if now - f.stat().st_mtime > 7 * 86400:   # 保留 7 天=「同 session 七天內只擋一次」的承諾
-                    f.unlink()
-            except OSError:
-                pass
-    except OSError:
-        pass
-    return d
-
-
 def _stop_block_dir() -> Path:
     """擋停名額的標記目錄。既有測試在驗「只有擋過的 session 才會在這裡留東西」。"""
     return _cache_dir_under_home("stop-block", "收工擋停")
@@ -810,80 +957,6 @@ def _printed_dir() -> Path:
     """收工點名「上次印過什麼」的目錄。★刻意跟擋停標記分開★:兩者職責不同,
     混在一起會打破上面那個性質。跟它共用同一套安全建法,不另寫一份。"""
     return _cache_dir_under_home("stop-printed", "收工點名去重")
-
-
-def _mkdir_under_home(*segs) -> bool:
-    """從家目錄往下逐層建、逐層檢查,全過才回 True。
-
-    ★跟主程式 `_mkdir_trusted_under_home` 同一套判準★(2026-09-16):這支 hook 是獨立檔、
-    不 import 主程式,所以邏輯抄一份;★判準有任何一邊改了,另一邊要跟著改★
-    ——今天就是因為主程式改了、這裡沒跟上,兩份才不一致。
-
-    每一段必須是一個單純的名字(路徑接合遇到絕對路徑會整個重置,`..` 也照走);
-    每建一層就確認它是真目錄、屬於自己、別人不可寫;任何一層不過就停手,
-    ★已經建好的不回頭刪★(刪反而是在動別人的東西)。
-
-    ★誠實邊界★:路徑層檢查,擋不住同帳號搶跑(檢查完到下一層動作之間有時間差)。
-    要真正關掉得改用 dirfd / O_NOFOLLOW 那一套;沒做的理由是能在你帳號下跑程式的人
-    本來就能做任何事。**不得宣稱「換掉也擋得住」**。
-    """
-    import stat as _stat
-    cur = Path.home()
-    for seg in segs:
-        if (not isinstance(seg, str) or not seg or seg in (".", "..")
-                or "/" in seg or "\\" in seg or Path(seg).is_absolute()):
-            return False
-        cur = cur / seg
-        try:
-            cur.mkdir(exist_ok=True, mode=0o700)   # 不帶 parents:一層一層來才檢查得到每一層
-        except FileExistsError:
-            pass
-        except OSError:
-            return False
-        try:
-            if cur.is_symlink() or not cur.is_dir():
-                return False
-            st = cur.stat()
-        except OSError:
-            return False
-        if hasattr(os, "getuid"):
-            if st.st_uid != os.getuid():
-                return False
-            if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
-                return False
-    return True
-
-
-def _stop_dir_ok(d: Path) -> bool:
-    """標記目錄信任檢查(spec-conformance r1:跟 scripts/lumos 的 _lens_arm_dir_ok 同一套威脅模型):是目錄、owner 是自己、group/other 不可寫。
-    不過關=不擋(寧可漏),不在別人的目錄上寫標記。
-
-    ★誠實邊界(2026-09-16 補審 delta 那一輪:主程式那份有寫、這裡漏抄)★:這是路徑層檢查,
-    擋不住同帳號搶跑——檢查完到真的寫標記檔之間有時間差,同 UID 的程序可以在那個縫裡把目錄換掉。
-    要真正關掉得改用 dirfd / O_NOFOLLOW 那一套。**不得宣稱「換掉也擋得住」**。"""
-    import stat as _stat
-    try:
-        if d.is_symlink():      # r2 外家:symlink 指到別處=別人的目錄,不信
-            return False
-        # r3 delta:父層(~/.cache 或 ~/.cache/lumos)是 symlink 也一樣——家目錄以下整條路徑不得經過 symlink
-        # (家目錄本身可以是 symlink,macOS /var→/private/var 那種),所以拿「家目錄解析後 + 固定相對路徑」對照
-        # ★名字不寫死★(2026-09-18 收工點名改問版本控制那一批):原本這裡寫死 "stop-block",
-        # 於是同一個快取層底下新增任何目錄都永遠不過這關——去重紀錄就是這樣被靜默停用的。
-        # 改成比對「家目錄解析後 + 固定的兩層 + 這個目錄自己的名字」,防連結繞路的意圖不變:
-        # 解析後的路徑仍然必須落在 ~/.cache/lumos/<name>,中間經過任何連結都會對不上。
-        if d.resolve() != (Path.home().resolve() / ".cache" / "lumos" / d.name):
-            return False
-        st = d.stat()
-    except OSError:
-        return False
-    if not d.is_dir():
-        return False
-    if hasattr(os, "getuid"):
-        if st.st_uid != os.getuid():
-            return False
-        if st.st_mode & (_stat.S_IWGRP | _stat.S_IWOTH):
-            return False
-    return True
 
 
 def stop_block_decision(payload: dict, session_id: str) -> bool:
@@ -900,35 +973,20 @@ def stop_block_decision(payload: dict, session_id: str) -> bool:
 
 
 def _stop_mark_path(session_id: str):
-    """標記檔路徑;消毒後是空字串、"." 或 ".." 回 None(正確性席 F3:Path 語意會讓 "." 永遠「存在」而悄悄關掉擋停)。"""
-    name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)[:120]
-    if name in ("", ".", ".."):
+    """標記檔路徑;消毒後是空字串、"." 或 ".." 回 None(正確性席 F3:Path 語意會讓 "." 永遠「存在」而悄悄關掉擋停)。
+    消毒走共用模組的 _mark_name(收工寫法檢查的標記在同一個目錄,兩邊同一套規則)。"""
+    name = _mark_name(session_id)
+    if name is None:
         return None
     return _stop_block_dir() / name
 
 
 def _stop_mark_write(session_id: str) -> bool:
-    """O_EXCL 原子建檔佔名額(兩個 hook 同時來只有一個成功);任何 OSError 都回 False=不擋(寧可漏)。"""
+    """O_EXCL 原子建檔佔名額(兩個 hook 同時來只有一個成功);任何 OSError 都回 False=不擋(寧可漏)。佔名額走共用模組的 _claim_mark。"""
     mp = _stop_mark_path(session_id)
-    if mp is None or not _stop_dir_ok(mp.parent):
+    if mp is None:
         return False
-    try:
-        fd = os.open(str(mp), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except OSError:
-        return False
-    try:
-        os.write(fd, str(time.time()).encode("utf-8"))
-    except OSError:
-        pass          # 名額已佔(檔已建成),寫內容失敗不影響
-    finally:
-        os.close(fd)  # 正確性席 F2:fd 不漏
-    return True
-
-
-def _safe_path(p) -> str:
-    """reason 會變成 Codex 的下一個 user prompt(r1 通才 F3):檔名來自工作樹,不信任 repo 的檔名不能夾帶換行/控制字元進提示。"""
-    s = "".join(ch for ch in str(p) if ch.isprintable() and ch not in "\r\n")
-    return s.replace("`", "'")[:160]   # r2 delta #2:反引號會跳出 code span,換成單引號
+    return _claim_mark(mp.parent, mp.name)
 
 
 def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
@@ -947,48 +1005,17 @@ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
     return out if len(out) <= 1500 else out[:1490] + "…"
 
 
-# ★被打開的資料夾不准指使我們執行指令★
-# 版本控制有幾個設定項,它的值會被當成 shell 指令執行。這支 hook 是開啟資料夾就自動跑的,
-# 而它查的就是「被打開的那個資料夾」——所以那些設定由攻擊者控制。
-#
-# ★為什麼是一份清單而不是逐個補★(同類問題冒出第三次之後換的形狀):
-#   r1 資安席報了第一項 → 修法只補了自己新增的兩個呼叫點
-#   r2 驗收席抓到漏補第三處(會去呼叫主程式那條)→ 改成注入環境變數涵蓋所有子行程
-#   r2 資安複審又找到第二項設定 → 若繼續逐個補,下一輪還會有第三項
-# 所以收成一份具名清單,新發現的往這裡加一行,並補一筆測試釘住它。
-#
-# ★誠實邊界,不得宣稱更多(這句話本身被審查打過臉一次)★:
-#   這是★列舉法★,不是完備防護。清單上的擋得住,清單外的擋不住。
-#   前一版註解寫過「主程式內部的呼叫也涵蓋得到(實測驗過)」——那句話只對當時清單上的那一項成立,
-#   對後來發現的第二項是假的。**驗過的是哪幾項,就只能說哪幾項。**
-#   已實測不觸發、因此沒列入的:別名、分頁器、過濾器的塗抹指令(r2 資安複審試過這三個)。
-#   純 clone 不會把這些設定帶過來(實測);真正的交付路徑是「直接拿到別人的整個目錄」。
-#   這支 hook 以外的地方(提交前、推送前那兩道閘)沒有走這條路——那些是使用者主動執行的,
-#   不是開資料夾就自動跑,風險形狀不同,另案處理。
-_GIT_UNSAFE_CONFIG = (
-    "core.fsmonitor",   # r1 資安席:值會被當成指令執行,查工作樹狀態時觸發
-    "diff.external",    # r2 資安複審:值會被當成指令執行,主程式逐檔比對差異時觸發
-)
-
-
-def _harden_git_env() -> None:
-    """把上面那份清單套到★這支 hook 開出去的所有子行程★。
-
-    用環境變數而不是逐個呼叫點加參數:版本控制會把它當成命令列上的 -c 參數,
-    ★子行程一律繼承★,所以主程式內部的呼叫也涵蓋得到(實測驗過)。
-    同名鍵已存在時採後值優先,所以附加在尾端是安全的(r2 資安複審實測驗過)。"""
-    want = " ".join("'%s='" % k for k in _GIT_UNSAFE_CONFIG)
-    cur = os.environ.get("GIT_CONFIG_PARAMETERS", "")
-    os.environ["GIT_CONFIG_PARAMETERS"] = (cur + " " + want).strip()
-
-
 def main() -> int:
+    if not _SHARED_OK:
+        return 0
     _harden_git_env()
     harness = "codex" if "--harness" in sys.argv and sys.argv[sys.argv.index("--harness") + 1:][:1] == ["codex"] else "claude"
     try:
         payload = json.loads(sys.stdin.read())
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError, UnicodeDecodeError, OSError):   # 壞 JSON、深層巢狀、非 UTF-8、超長整數(代碼審 r3 邊界席 F1)
         return 0  # 寧可漏報
+    if not isinstance(payload, dict):
+        return 0
 
     project_root_str = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd")
     if not project_root_str:
@@ -1014,18 +1041,19 @@ def main() -> int:
         return 0
 
     # 閘門 2:清單問版本控制,不再靠列舉工具名(單源 Projects/收工點名問版本控制_計劃)
-    entries = _git_status_entries(project_root)
+    top = _repo_top(project_root)      # 狀態表的路徑從 repo 根算起,接在 repo 根上(代碼審 r5)
+    entries = _git_status_entries(project_root, top)   # 只含專案底下的條目(代碼審 r6)
     if entries is None:
         return 0                       # 算不出來就靜默放行:擋住收工的代價遠大於漏一次提醒
-    code_entries = [(c, r) for c, r in entries if _entry_is_code(c, r, project_root)]
+    code_entries = [(c, r) for c, r in entries if _entry_is_code(c, r, project_root, top)]
     if not code_entries:
         return 0
-    src_files = [str(project_root / r) for _, r in code_entries]
+    src_files = [str(top / r) for _, r in code_entries]
     deleted_rel = {r for c, r in code_entries if _entry_is_deleted(c)}
 
     # 閘門 3:判準同樣改問版本控制——原本它跟閘門 2 共用「認名字」那套,
     # 用 shell 改筆記時會誤判「筆記沒動」,同一種少報換個位置活下來(設計審正確性席 blocker)
-    graph_touched = any(is_graph_file(str(project_root / r), graph_root) for _, r in entries)
+    graph_touched = any(is_graph_file(str(top / r), graph_root) for _, r in entries)
     if graph_touched:
         # 2026-08-22(圖譜同步覆蓋):動過圖譜不等於動對篇——拿 impact 算「跟你改的碼直接相關、
         # 帶合約或出過事故、這輪卻沒動」的筆記點名。只提醒,不擋。
@@ -1114,7 +1142,23 @@ def main() -> int:
     return 0
 
 
+# ★下面這支是主程式 scripts/lumos 同名函式的逐字複本★(安全邏輯,照 [[Systems/hook信任邊界]];守衛 t_r5path_hooks_verbatim)
+def _clean_path_env():
+    """★程序一開始就把 PATH 洗成只剩絕對路徑項★(回合結束檢查代碼審 r5 資安席 F1):PATH 的空項(開頭、結尾或連續的冒號)、. 與
+    任何相對項,開子程序時都從目前目錄找,而鉤子與主程式的目前目錄常常就是被打開的資料夾——repo 根放一支可執行的 git,裸名呼叫
+    git 就執行它。ast-grep(r3)、lumos(r4)、git(r5)同一類第三次被打穿,不再一支工具一支工具解路徑:入口洗一次,之後同一程序
+    開的所有子程序都吃乾淨的 PATH(既有的逐支解析照留,當縱深)。洗完一項都不剩時改用 os.defpath 的絕對項(空字串的 PATH
+    一樣等於目前目錄);沒設 PATH 不動(子程序照 os.defpath 找)。安全邏輯:主程式與每支鉤子各一份逐字複本,照
+    [[Systems/hook信任邊界]],守衛 t_r5path_hooks_verbatim 盯著一字不差、入口第一句就呼叫。"""
+    import os as _os
+    if "PATH" not in _os.environ:
+        return
+    keep = [d for d in _os.environ["PATH"].split(_os.pathsep) if d and _os.path.isabs(d)]
+    _os.environ["PATH"] = _os.pathsep.join(keep or [d for d in _os.defpath.split(_os.pathsep) if d and _os.path.isabs(d)])
+
+
 if __name__ == "__main__":
+    _clean_path_env()
     # #19 S4:把「我跑完了」記成一筆事件,讓 lumos enforcement 答得出
     # 「它最近有沒有真的跑過」,而不是只答「有沒有註冊」。共用寫入器在 _hookevent.py。
     import sys as _s, pathlib as _p

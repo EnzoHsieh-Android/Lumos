@@ -2,9 +2,10 @@
 type: system
 status: doing
 created: 2026-09-07
-updated: 2026-09-07
+updated: 2026-11-06
 aliases: []
-about_code: []
+about_code:
+  - scripts/merge-claude-settings.py
 tags:
   - type/system
   - status/doing
@@ -17,6 +18,8 @@ summary: |-
   KEY:收工檢查的外層從 10 提到 30——不是內層寫太大,是外層給太少(它內層真的需要 25 秒)
   DEP:scripts/merge-claude-settings.py(HOOK_BUDGET 單一來源)|scripts/hooks/claude/*.py(_inner_budget 複本+守衛)
   TEST:t_hook_inner_timeout_always_below_outer,t_lens_timeout_keeps_warming_cache
+  WHY:收工寫法檢查天花板 30 秒、逾時要殺子程序,是本篇「超時放手不殺」的例外 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2 第 4 條、實驗 E3] [因:它的結果不快取、過時就作廢,放手讓它跑完沒有東西可撿;Claude Code 逾時送 SIGTERM、約 1 到 2 秒內收掉,所以先 SIGTERM 加 1 秒寬限再 SIGKILL 登記的群組] [test:t_stop_lint_hook_timeout]
+  WHY:主程式第一次裝訊號處理器:lint-new 工作樹模式一進來先裝 SIGTERM 處理器,開工具前用 pthread_sigmask 擋住 SIGTERM、登記完才解除 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 1 第 7 條、設計審 r1 可行性席 F2] [因:工具在自己的 session,lint-new 被 SIGKILL 時呼叫端打不到它們,要靠登記檔;沒擋住訊號的空窗會漏收剛開的那支] [test:t_lint_new_worktree_sigterm]
 plan_refs:
   - "[[Projects/全repo審視_計劃]]"
 decisions:

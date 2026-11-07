@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-09-23
-updated: 2026-10-07
+updated: 2026-11-07
 responsibility: 開場時讀 CI 帳,當前提交的 CI 是紅的就提醒一次(scripts/hooks/claude/ci-status-hook.py;只讀帳不打網路、不跑 CI、不寫帳);另管主程式裡 CI 回流的兩個指令 ci-wait(push 後等 CI 結論、寫帳)與 ci-status(只讀上次結果)——scripts/lumos 只管 cmd_ci_wait、cmd_ci_status 與它們的輔助函式,其餘歸各自的家。Claude 與 Codex 共用這支 hook(安裝時各複製一份)
 aliases: []
 about_code:
@@ -21,6 +21,7 @@ summary: |-
   RULE:[since:2026-09-23][confirmed:2026-09-23][retire:hook 改成能 import 主程式(不再是獨立複本)]★判法在主程式與這支 hook 各有一份逐字相同的複本★:hook 是獨立檔,複製到全域後 import 不到主程式。改了一邊沒改另一邊,主程式的 ci-status 與開場提醒對同一次 CI 會給相反結論;有測試比對所有複本的語法樹——★掃主程式加整個 hooks 目錄、函式從整棵樹找(包在 if、class、另一個函式裡的也算)、連 async 定義都算★;函式裡那組「算紅」的結論也要跟各檔自己的常數一致。守衛前兩版分別寫死兩個路徑、只看最外層,都被代碼審實際塞進錯的複本證明是假綠 [test:t_ci_latest_attempts_copies_identical]
   PITFALL:[2026-09-23 同一次實踩的另一半]★CI 重跑之後要再跑一次 `lumos ci-wait`★,不要只用 gh 看結果——不跑的話成功那次根本不會進帳,ci-status 與開場提醒讀到的永遠是重跑前那筆。重現:`gh run rerun <id> --failed` 後不跑 ci-wait,直接 `lumos ci-status`
   PITFALL:[2026-10-07 rtb 會談回報]`lumos ci-wait --sha` 給短版 sha 時,GitHub 照完整 sha 篩 run、永遠查不到,等滿三個 grace 窗判 no-run——跟「本機提交還沒推」那種([[Issues/ci-wait未推送sha誤導訊息]])同一族:訊息講成沒觸發。現在 ci-wait 先用既有 `_lens_full_sha` 在本機把短 sha 換成完整的(代碼審 r1 架構對齊席:原本另寫了一份同樣的 rev-parse 與 sha 正規式);換不成就 rc2,列出本機沒有、短碼對到不只一個、git 跑不起來三種可能 [根因:--sha 原樣交給 run list 的 head_sha 篩選] [test:t_ci_wait_short_sha_resolved]
+  WHY:入口第一句呼叫 _clean_path_env(主程式同名函式的逐字複本),PATH 只留絕對項,之後裸名呼叫 git 不會解到被打開資料夾裡的同名檔 [出處:governance/review-reports/code-android寫法回合結束檢查/r5-資安-sonnet.md F1] [因:PATH 空項等於目前目錄,信任邊界見 [[Systems/hook信任邊界]]] [test:t_r5path_hooks_verbatim]
 ---
 # CI回流開場提醒
 

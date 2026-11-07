@@ -1,0 +1,277 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
+index 8c468254f..1aa59da4c 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
+@@ -18,21 +18,21 @@ related:
+   - "[[Systems/pitfalls-code-loop]]"
+ lands_in:
+   - Systems/回合結束寫法檢查(新開)
+   - Systems/改檔前推播
+   - Systems/棧別提問表態閘
+   - Systems/hook逾時預算
+   - Systems/graph-sync-coverage
+   - Systems/pitfalls-code-loop
+ pending_questions:
+   - id: Q1
+-    text: 收工寫法檢查要不要從既有「同會談只擋一次」延伸成「同一批告警擋一次、一個會談最多三批」?建議:要——同一批不重擋已防住永遠解不了的條件,三批上限加 Claude Code 連續八次續做上限兜底;只擋一次的話續做時新冒出的另一批告警等到推送才看到
++    text: 收工寫法檢查要不要從既有「同會談只擋一次」延伸成「同一批告警擋一次、同一回合(prompt_id)最多三批、下一回合重算」?建議:要——同一批不重擋已防住永遠解不了的條件,回合內三批上限防卡死(Claude Code 連續八次續做上限會因呼叫工具歸零,不算兜底);只擋一次的話續做時新冒出的另一批告警等到推送才看到
+     class: 擋停策略
+     stage: 架構
+     status: 已決
+     blocking: true
+     decision: "#d1"
+   - id: Q2
+     text: 沒有知識圖譜的 Android 專案這一版不推決策列(沿用棧別題同一組條件、不改 impact 找不到圖譜時的 rc3 介面),可以嗎?建議:可以——接 lumos 的消費專案都有圖譜,真遇到沒圖譜的專案再照 REVISIT 改
+     class: 範圍
+     stage: 需求
+     status: 已決
+@@ -54,21 +54,21 @@ decisions:
+     id: d2
+     context: 推列依賴 cmd_impact,沒圖譜回 rc3
+     why_chosen: 編排者依使用者授權原話「我要睡了，你有裁量權、簽核權」代裁,使用者在場可改;先把有圖譜的路做穩
+     decided: 2026-11-06
+     valid: true
+ ---
+ # Android寫法回合結束檢查與改檔前推列_計劃
+ 
+ > 白話:兩個「寫的當下就提醒」的機制。①**回合結束寫法檢查**:像收工前有人看一眼你這回合寫的程式——AI 每回合要收工時,對「這一回合改過、還沒提交」的檔跑規則包,有新增告警就擋下叫它先修;②**改檔前推相關列**:像動手前遞一張小抄——AI 要改 kt 檔時,把型錄〈情境決策表〉跟這次寫入內容相關的一到三列推到眼前。兩者都從 [[Projects/Android寫法寫完當下自動檢查_計劃]] 第二輪設計審後拆出(2026-11-06)。本版照拆出時留下的十一組待解問題逐組改寫,每組先查官方文件或做實驗再定(見〈待解問題〉與〈實驗〉)。使用者目標原話:「目標是把Android靜態能先掃描的實務隱患都先處理過」。
+ 
+-PRIOR-ART: ①回合邊界:官方鉤子頁對 `prompt_id` 的定義是「UUID identifying the user prompt currently being processed」(https://code.claude.com/docs/en/hooks.md ,共通欄位);`UserPromptSubmit` 在送出提示時觸發。實驗 E1(2.1.319)實測 `claude -p` 與 `--resume` 下送出提示與 Stop 帶同一個 `prompt_id`、續做不再觸發送出提示;**背景任務或排程喚醒的回合觸不觸發送出提示,官方沒寫、本案還沒量**(實驗 E11 列為實作前必跑,行為定義見範圍 2 第 3 條)——採用:提示送出時記回合起點,不再自己用收工時刻推算;不選:SessionStart(一個會談只一次,切不出回合)、逐字稿猜回合開頭(r1 邊界席實測約 15% 首筆沒時間欄)。②擋停迴圈:官方原文「Check this value or process the transcript to avoid blocking on a condition that will never resolve」(Stop input 段);另有連續八次續做上限,但官方寫明這個計數「resets each time Claude calls a tool」,續做修檔一定會呼叫工具,所以它不能當兜底——採用「同一回合(`prompt_id`)裡同一批告警只擋一次、最多三批」當自己的判斷,`stop_hook_active` 那次照查(才查得到續做的修正)。③另開一支收工鉤子:官方說同一事件的鉤子並行跑(同頁),實驗 E2 實測兩支各回 block 時模型兩段理由都收到並照做——採用:寫法檢查開新檔 `stop-lint-hook.py`,不塞進既有收工點名那支(預算各算各的)。④鉤子與 lumos 的介面:沿用 lumos 既有 `--json`「最後一行是 JSON」慣例(收工點名那支呼叫 `impact --json` 就是這樣讀),不用文字解析;(推送前掛鉤的 `LUMOS-BLOCKS:` 是另一條給文字模式用的機讀行,兩者並存、各管各的呼叫端,不是本案的前例。)⑤工作樹改動清單:`git --no-optional-locks status --porcelain=v1 -z`(porcelain 是 git 給程式解析的穩定格式 https://git-scm.com/docs/git-status#_porcelain_format_version_1 ;`--no-optional-locks` 不順手改寫索引 https://git-scm.com/docs/git#Documentation/git.txt---no-optional-locks ;實驗 E4 實測一般 `status` 與 `git diff` 會改寫索引、這個不會)。⑥決策列比對放進棧別提問表態閘已在線上的那一段(`cmd_impact` 算 `stack_questions_applicable` 的地方),讀表、觸發字正規式與 Kotlin 剝註解字串都用盲判那條線建的共用函式(`_kt_decision_table`、`_kt_trigger_re`、`_strip_c_comments(kotlin=True)`),不另建。⑧鉤子共用程式:既有鉤子之間共用只有一種做法——底線開頭的共用模組(`_hookevent.py`)加 `sys.path.insert` 匯入;本案照做,不用 importlib 載另一支鉤子。⑦常用觸發字:資訊檢索的文件頻率概念(出現在太多文件的詞區辨力低,https://nlp.stanford.edu/IR-book/html/htmledition/inverse-document-frequency-1.html )——採用:拿 Now in Android 310 支 kt 檔量文件頻率,超過 8% 的觸發字列進停用字表。
++PRIOR-ART: ①回合邊界:官方鉤子頁對 `prompt_id` 的定義是「UUID identifying the user prompt currently being processed」(https://code.claude.com/docs/en/hooks.md ,共通欄位);`UserPromptSubmit` 在送出提示時觸發。實驗 E1(2.1.319)實測 `claude -p` 與 `--resume` 下送出提示與 Stop 帶同一個 `prompt_id`、續做不再觸發送出提示;**背景任務或排程喚醒的回合觸不觸發送出提示,官方沒寫、本案還沒量**(實驗 E11 列為實作前必跑,行為定義見範圍 2 第 3 條)——採用:提示送出時記回合起點,不再自己用收工時刻推算;不選:SessionStart(一個會談只一次,切不出回合)、逐字稿猜回合開頭(r1 邊界席實測約 15% 首筆沒時間欄)。②擋停迴圈:官方原文「Check this value or process the transcript to avoid blocking on a condition that will never resolve」(Stop input 段);另有連續八次續做上限,但官方寫明這個計數「resets each time Claude calls a tool」,續做修檔一定會呼叫工具,所以它不能當兜底——採用「同一回合(`prompt_id`)裡同一批告警只擋一次、最多三批」當自己的判斷,`stop_hook_active` 那次照查(才查得到續做的修正)。③另開一支收工鉤子:官方說同一事件的鉤子並行跑(同頁),實驗 E2 實測兩支各回 block 時模型兩段理由都收到並照做——採用:寫法檢查開新檔 `stop-lint-hook.py`,不塞進既有收工點名那支(預算各算各的)。④鉤子與 lumos 的介面:沿用 lumos 既有 `--json`「最後一行是 JSON」慣例(收工點名那支呼叫 `impact --json` 就是這樣讀),不用文字解析;(推送前掛鉤的 `LUMOS-BLOCKS:` 是另一條給文字模式用的機讀行,兩者並存、各管各的呼叫端,不是本案的前例。)⑤工作樹改動清單:`git --no-optional-locks status --porcelain=v1 -z`(porcelain 是 git 給程式解析的穩定格式 https://git-scm.com/docs/git-status#_porcelain_format_version_1 ;`--no-optional-locks` 不順手改寫索引 https://git-scm.com/docs/git#Documentation/git.txt---no-optional-locks ;實驗 E4 實測一般 `status` 與 `git diff` 會改寫索引、這個不會)。⑥決策列比對放進棧別提問表態閘已在線上的那一段(`cmd_impact` 算 `stack_questions_applicable` 的地方),讀表、觸發字正規式與 Kotlin 剝註解字串都用盲判那條線建的共用函式(`_kt_decision_table`、`_kt_trigger_re`、`_strip_c_comments(kotlin=True)`),不另建。⑧鉤子共用程式(代碼審 r1 改正):既有鉤子之間共用**有兩種做法、分流規則在 [[Systems/hook信任邊界]]〈2026-09-08 訂正〉**——會讓安全檢查失效的(可信來源解析、逾時預算)每支鉤子留逐字複本、守衛逐字比對;只是功能退化的(標記目錄、標記檔名消毒與 O_EXCL 佔名額、檔名消毒、git 防護)走底線開頭的共用模組(先例 `_hookevent.py`)加 `sys.path.insert` 匯入,複製清單與錨點清單兩道守衛一起加。原寫「只有一種做法」是設計審時沒讀到那篇訂正段;本案照分流規則做,不用 importlib 載另一支鉤子。⑦常用觸發字:資訊檢索的文件頻率概念(出現在太多文件的詞區辨力低,https://nlp.stanford.edu/IR-book/html/htmledition/inverse-document-frequency-1.html )——採用:拿 Now in Android 310 支 kt 檔量文件頻率,超過 8% 的觸發字列進停用字表。
+ RETIRE-IF: 回合結束寫法檢查上線後連續三個月治理帳零筆 `stop-lint` 擋下事件,而推送前閘同期照樣擋過新增告警 → 降成只在代碼審通過前跑、拿掉這支鉤子;改檔前推列上線三個月後,對消費專案近三個月 kt 提交的增行離線重播決策列比對,命中列數為零 → 拿掉推列,平均每次 kt 改檔推出超過 2 列 → 觸發字收窄或改成只在代碼審派工材料附列。
+ 
+ ## 決策
+ 
+ WHY:寫法檢查開新的一支收工鉤子,不併進收工點名那支 [出處:2026-11-06 實驗 E2、E3;第二輪設計審架構席 ⚠1、資源席 F2、通才席 F6] [因:官方鉤子並行跑、兩支 block 理由都送到模型,拆開後各自佔名額各自輸出、各自時間上限,第二輪的「名額先佔輸出延後」與「時間預算漏項」兩組問題整個消失] [不選:同一支裡兩道並列——要改 `_BUDGET_START` 時點、把上限提到 55 秒,還要擋既有那道的七條提早返回] [代價:多一支註冊、多一次 Python 啟動(約 0.03 到 0.05 秒,實驗 E10)]
+ WHY:回合起點在送出提示時記,收工時不推進任何狀態 [出處:2026-11-06 實驗 E1;第二輪通才 F3、F5,邊界 F1、F2,資源 F1、F9] [因:`claude -p` 這種單回合會談也有送出提示事件,第一次收工就查得到;收工不寫時間戳,續做那輪改的檔在續做的收工照樣落在回合起點之後] [不選:收工時寫時間戳、第一次收工不查——單回合會談永遠不被查,S7 手動驗收照字面跑不過]
+ WHY:檔集仍以工作樹狀態為底(`git status`),再用修改時間不早於回合起點收窄,承接 2026-09-18 收工點名改問版本控制的決策,不是翻案 [出處:[[Systems/graph-sync-coverage]] 2026-09-18 那條;第二輪架構席 F3] [因:09-18 否決的是「從逐字稿列舉工具名」(漏 shell 寫的檔),本案底集照樣問版本控制、shell 寫的檔照樣看得到;收窄是因為新增告警要先分出「這回合碰過的」,否則每個新會談第一回合都會被前人留下的未提交改動擋一次] [代價:時間戳被保留成舊值的檔(`mv`、`cp -p`)漏掉,見〈天花板〉]
+ WHY:決策列比對併進棧別提問那條通道,不另起剝字串與觸發比對 [出處:第二輪架構席 F1、F2,邊界席 F8] [因:`cmd_impact` 已在同一段對 kt 編輯跑棧別題觸發比對、由鉤子印;決策列放同一段、同一組啟用條件,剝字串與觸發式用盲判那條線建在主程式的共用函式,只多一個輸出鍵 `decision_rows`(列要帶編號給鉤子去重,題目沒有)] [不選:本案自己寫 Kotlin 剝字串或觸發比對(`_strip_c_comments` 註明全庫只此一個入口)、另一條平行通道]
+ WHY:擋停上限與去重綁回合(會談加 `prompt_id`),不綁整個會談 [出處:本篇設計審 r1 通才席 F1;官方 `prompt_id` 定義] [因:綁會談時一個長會談第一回合用光三批,之後每回合都不檢查;同一批告警在後面回合重現也永遠不擋] [不選:每次送出提示清掉本會談的標記——要多寫一個刪檔動作,而且跟「只有擋過的會談才留標記」的既有性質打架]
+ WHY:同一回合 `stop_hook_active` 為真照樣檢查,翻掉 [[Projects/README審視五修_計劃]] d2 那句「stop_hook_active 兩家語意相同(已續做過=不再擋)」在本道的適用 [出處:該篇 d2;本篇設計審 r1 依據席 F5;決策 d1] [因:那句是給收工點名那道的(點名只要提醒一次);寫法檢查要查得到續做時的修正與新冒出的另一批,續做那次不查就等於修完不驗。防迴圈改靠同批不重擋加每回合三批上限,不靠 `stop_hook_active`] [代價:同一回合最多多擋兩次]
+@@ -272,34 +272,38 @@ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻
+ | 停用字用文件頻率 | 資訊檢索 IDF 概念 | https://nlp.stanford.edu/IR-book/html/htmledition/inverse-document-frequency-1.html ;實驗 E9 | 範圍 3 第 5 條 |
+ | 撤除條件量得到 | 既有治理帳記帳路徑 `_gate_event_or_warn`,由呼叫層在真的擋下後記;`_hookevent` 只記活著沒、不記成效 | `scripts/hooks/claude/_hookevent.py` 檔頭說明;本篇設計審 r1 通才席 F2 | 範圍 1 第 9 條、範圍 2 第 6 條、RETIRE-IF |
+ | Codex 是否同形 | 既有調研記到 Codex 有 UserPromptSubmit、Stop、`turn_id`;第三方部落格(未核官方);2026-11-06 實測送出提示帶 `turn_id` 不帶 `prompt_id`,收工沒量到 | [[Projects/Codex工作流整合_調研]];https://codex.danielvaughan.com/2026/03/26/codex-cli-hooks-deep-dive ;〈實驗〉Codex 那條 | 範圍 2 第 3 條;[[Systems/回合結束寫法檢查]] PITFALL |
+ | 背景與排程回合也記得到起點 | 實測背景指令結束、一次性排程到點都觸發送出提示、帶新 `prompt_id` | 實驗 E11(Claude Code 2.1.319) | 範圍 2 第 3 條、〈天花板〉1 |
+ | 給了 `--config` 不吃專案設定 | ast-grep 0.51.1 實測;設定檔說明頁 | https://ast-grep.github.io/reference/sgconfig.html ;實驗 E13 | 範圍 1 第 5 條 |
+ | 共用模組匯入不拖慢送出提示 | 實測匯入 3.5 毫秒、整個程序 0.03 秒 | 實驗 E12 | 範圍 2 第 2 條 |
+ | 批次雜湊 | 指紋多重集合排序後取 sha256 前 16 碼(Python 標準庫 hashlib) | https://docs.python.org/3/library/hashlib.html | 用詞「批次雜湊」、S2 |
+ | 工作樹改動清單與基準讀取 | `git cat-file --batch` 一次讀多個 HEAD 物件 | https://git-scm.com/docs/git-cat-file#_batch_output | 範圍 1 第 2 條 |
+ | 原子寫回合起點 | `os.replace` 同一檔案系統上是原子的 | https://docs.python.org/3/library/os.html#os.replace | 範圍 2 第 2 條 |
+ | 名額先佔 | `os.open` 帶 `O_CREAT|O_EXCL` 已存在就失敗;既有收工點名同一做法 | https://docs.python.org/3/library/os.html#os.open ;`scripts/hooks/claude/check-graph-sync.py` 的 `_stop_mark_write` | 範圍 2 第 6 條 |
++| 工作樹模式不開 shell 執行(代碼審 r1) | Python 官方 subprocess〈Security Considerations〉:不開 shell 時所有字元原樣傳給程式;開 `shell=True` 時引號由應用程式自己負責 | https://docs.python.org/3/library/subprocess.html#security-considerations ;r1-intake.md〈先查世界〉 | `scripts/lumos` 的 `_lint_wt_argv`、`_lint_spawn_argv`;t_lwt_r1_shellfree_argv |
++| HEAD 沒有的物件以行尾判(代碼審 r1) | git 官方 BATCH OUTPUT:不存在的物件輸出 `<object> SP missing LF`,object 名可含空白 | https://git-scm.com/docs/git-cat-file#_batch_output | `_lint_wt_blobs`;t_lwt_r1_space_path_blob |
++| 查狀態時關掉內容過濾器(代碼審 r1) | gitattributes 的 filter 驅動:`git status` 遇到要重算雜湊的檔會跑 `filter.<名>.clean`;給空指令就不跑、`required=false` 才不會讓 status 失敗(git 2.39.2 實測) | https://git-scm.com/docs/gitattributes#_filter ;r1-intake.md 資安席 F2 | `_lint_wt_filter_args`;t_lwt_r1_git_filter_off |
++| 開程序到登記之間的訊號先記下(代碼審 r1) | 訊號遮罩跨 fork/exec 由子程序繼承,擋著開出去的子程序收不到那個訊號 | https://man7.org/linux/man-pages/man7/signal.7.html (Signal mask and pending signals);自測 S7② | `stop-lint-hook.py` 的 `_on_sigterm`;t_slh_r1_spawn_window_term |
+ 
+ ## 審計修正紀錄
+ 
+ - 拆出(2026-11-05):母計劃第二輪設計審 36 條加 2 條的一部分落在本案機制,依根因分七組;卷證 governance/review-reports/android寫法寫完當下自動檢查/。
+ - r1(2026-11-05,四席 sonnet):42 條/blocking 19;白名單改寫死、`lint-new` 自己接 SIGTERM、沿用既有狀態解法與標記寫法,回合邊界改用回合時間戳;逐條去向在 r1-intake.md。
+ - r2(2026-11-06,四席 sonnet):折入後依根因分十一組,照熔斷提示拆成本篇。
+ - 改寫(2026-11-06):十一組逐組處理,見〈待解問題〉;先做實驗 E1 到 E10(官方鉤子文件、`claude -p` 實測、git 索引實測、NIA 語料量觸發字頻率)再定設計;主要改變是寫法檢查拆成獨立鉤子、回合起點改在送出提示時記、鉤子與 lumos 之間改用 JSON、決策列併進棧別題通道。設計審待派(新卷證目錄)。
+ 
+ - 本篇 r1(2026-11-06,4 席):19 條/blocking 9/擋停與去重改綁回合、記帳移到鉤子真擋之後、冷卻窗不擋決策列、改名鏈追回原檔、工具群組先登記再開跑且鉤子打得到、背景與排程回合列實驗不當官方行為寫、相依改成整合分支先合第三批、新鉤子五個登記點全列、共用程式改走底線共用模組。
+ - 席報告與收貨:governance/review-reports/android寫法回合結束檢查與改檔前推列/(r1-通才-sonnet.md、r1-可行性-sonnet.md、r1-依據-sonnet.md、r1-架構對齊-sonnet.md、r1-intake.md)。
+ 
+ | 席 條 | 等級 | 去向 |
+ |---|---|---|
+-| 通才 F1 會談級上限與去重 | major 擋 | 折入:範圍 2 第 6 條改綁(會談, `prompt_id`, 批次);〈決策〉新 WHY;S6 與預期值。d1 開頭欄位原文寫「同一會談」,本篇不自改,交編排者改寫 |
++| 通才 F1 會談級上限與去重 | major 擋 | 折入:範圍 2 第 6 條改綁(會談, `prompt_id`, 批次);〈決策〉新 WHY;S6 與預期值。d1 開頭欄位已在 ede88ffb9 改成同一回合 |
+ | 通才 F2 記帳灌水 | major 擋 | 折入:範圍 1 第 9 條改成只記帳用法、範圍 2 第 6 條擋下並輸出後才呼叫;S2、S6 與預期值 |
+ | 通才 F3 冷卻窗擋掉決策列 | major 擋 | 折入:範圍 3 第 2 條決策列抽小函式、兩條路徑都算;〈不做〉、天花板 6 拿掉冷卻窗;S9 與預期值 |
+ | 通才 F4 缺 `prompt_id`、切工作樹沒起點 | minor | 折入:缺 `prompt_id` 當對不上;送出提示每次都記、不預篩 repo;S5、S6 |
+ | 通才 F5 自己起的回合沒量 | minor | 折入:列實驗 E11、S12 加案例(同依據 F1) |
+ | 可行性 F1 改名鏈 | major 擋 | 折入:範圍 1 第 2 條追回 HEAD 有的那端、追不到列 skipped;S1 與預期值 |
+ | 可行性 F2 SIGKILL 打不到工具群組 | major 擋 | 折入:範圍 1 第 7 條先擋訊號、登記(含 `--pgid-file`)再解除;範圍 2 第 4 條寬限後鉤子打登記的群組;S4、S7 與預期值 |
+ | 可行性 F3 大小寫 | minor | 折入:範圍 1 第 5 條另印大小寫原因;S3 |
+ | 可行性 F4 `-` 開頭檔名 | minor | 折入:工作樹模式檔名加 `./` 前綴;S1 |
+ | 依據 F1 自己起的回合當官方行為寫 | major 擋 | 折入:PRIOR-ART ① 改寫成官方原文加「沒寫、沒量」;範圍 2 第 3 條定行為(印背景或排程那一句);實驗 E11;依據表第一列 |
+ | 依據 F2 相依先後矛盾 | major 擋 | 折入:照裁決新增範圍 0「本機整合分支先合第三批分支再開工」;〈不做〉、相依案同步 |
+@@ -307,17 +311,23 @@ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻
+ | 依據 F4 官方措辭、八次上限 | minor | 折入:PRIOR-ART ② 用官方原文、寫明八次上限因呼叫工具歸零不算兜底;實務隱患、依據表 |
+ | 依據 F5 d1 舊決策出處 | minor | 折入:〈決策〉新 WHY 寫出 [[Projects/README審視五修_計劃]] d2 與翻案理由;待解第 10 組 |
+ | 依據 F6 平台排除題號 | minor | 折入:範圍 3 第 2 條定成「集合不含 `kt-compose`」;S9 |
+ | 依據 F7 載入成本與預篩順序 | minor | 折入:範圍 2 第 1 條預篩在匯入之前;送出提示路徑的匯入成本列實驗 E12 |
+ | 架構對齊 F1 importlib 載鉤子 | major 擋 | 折入:共用程式搬進 `_hookshared.py` 走 `sys.path.insert`;〈決策〉新 WHY;S14 |
+ | 架構對齊 F2 porcelain 三份 | minor | 折入:`_tg_rb_pending`、`_handoff_files` 一起收編;〈不做〉;S1 |
+ | 架構對齊 F3 訊號處理新慣例 | minor | 折入:範圍 1 第 7 條寫明新慣例並記進 [[Systems/hook逾時預算]](範圍 4 已列該篇) |
+ 
+ - 實作(2026-11-06):條款 S1 到 S14 的字面都沒改寫;下面是實作時多做或照條款精神調整的地方,理由逐條寫:
+   - **第六個登記點**:新鉤子與 `_hookshared.py` 另要進錨點清單 `ANCHOR_FILES`(既有守衛 t_anchor_covers_all_auto_running_hooks 要求每支版控裡的 hook 都在裡面;計劃五個登記點沒列到)。錨點基準 `governance/anchor-baseline.json` 要人跑 anchor approve 補上,補之前 t_anchor_files_match_baseline 是紅的。S8 的測試多驗這一點。
+-  - **既有守衛的調整**:①可信來源漂移守衛原本要求每支用到 `_trusted_lumos` 的鉤子自己定義一份,改成「從 `_hookshared` 匯入也算」(共用模組那份照樣逐字比對);②匯入純度探針(t_handoff_hook_import_is_pure)原本只准讀 hook 自己與標準庫,收工點名改從同目錄匯入共用模組後,匯入系統必然讀那支檔、列一次 hook 目錄,放寬成也准這兩件(其他兄弟檔照樣違規);③三條寫死數量的測試照新增的註冊與存活清單加一(Codex 註冊 6→8、enforcement 列 25→27、unknown 12→13)。②是放寬守衛,交編排者裁。
++  - **既有守衛的調整**(①②在代碼審 r1 撤回或收窄,見下面〈代碼審 r1〉):①可信來源漂移守衛原本要求每支用到 `_trusted_lumos` 的鉤子自己定義一份,改成「從 `_hookshared` 匯入也算」(共用模組那份照樣逐字比對);②匯入純度探針(t_handoff_hook_import_is_pure)原本只准讀 hook 自己與標準庫,收工點名改從同目錄匯入共用模組後,匯入系統必然讀那支檔、列一次 hook 目錄,放寬成也准這兩件(其他兄弟檔照樣違規);③三條寫死數量的測試照新增的註冊與存活清單加一(Codex 註冊 6→8、enforcement 列 25→27、unknown 12→13)。②是放寬守衛,交編排者裁。
+   - **收工點名模組層**:匯入路徑改用 `os.path.abspath` 而不是 `resolve()`,匯入這支檔不碰檔案系統中繼資料;共用模組匯入失敗時整支靜默放行(`_SHARED_OK`)。
+   - **白名單比條款嚴**:通過的命令整條重組(佔位符與 `>` 原樣、其餘每個詞 `shlex.quote`),不只換 `--config` 的值;禁用參數藏在 `--filter`、`--globs` 的值裡也擋(變異測試發現只靠「不在白名單」擋不到這種,補了斷言)。
+   - **`-` 開頭檔名**:快照路徑一律是絕對路徑,換進 `{LINT_FILES}` 的不會以 `-` 開頭,`./` 前綴由構造保證、沒有另寫一段(S1⑨ 照樣驗)。
+   - **工作樹模式的 `.lumos/lint-deps.json`、作弊比對**:照範圍 1 不跑;人讀輸出第一行提醒「作弊比對留給推送前閘」。
+-  - **決策 d1 開頭欄位**仍寫「同一會談」,本篇不自改,照上表交編排者改寫。
++  - **決策 d1 開頭欄位**:已在 ede88ffb9 改成「同一回合(prompt_id)」;代碼審 r1 修正時把待解 Q1 的題目文字一起改成同一回合。
+ - 實作期驗收:E11、E12、E13 與 S12 結果見〈實驗〉;每道新檢查各改壞一次的結果在交付回報裡(變異複本與 git clone --shared,清 `__pycache__` 再跑)。
++- **代碼審 r1(2026-11-06,七席 sonnet,範圍 `d241a3212..41f1b9abc`)**:35 條/major 10,依根因分五組全數折入;卷證 governance/review-reports/code-android寫法回合結束檢查/(七份席報告、r1-intake.md 的重現表與〈先查世界〉、r1-fix.json 逐條對測試)。設計審漏網一條:〈PRIOR-ART〉⑧ 寫「只有一種做法」,沒讀到 [[Systems/hook信任邊界]] 的分流規則(已改正)。
++  - **甲 shell 執行**:工作樹模式白名單通過的命令不再交給 shell——`_lint_wt_argv` 照整詞展開佔位符組參數清單、`shell=False` 執行,SARIF 由程式把標準輸出接到檔案;佔位符不准當旗標值(`{`、`}` 進禁字);放行指令先消毒各組成再 `shlex.quote`(`_lint_waive_part`),鉤子照原樣印、不截斷,看起來不是那樣產生的整行不印;擋下原因按條累加到 1500 字、結尾「另 N 條」一定留得下(範圍 2 第 7 條「整段最多 1500 字」照守,只是不再硬截)。推送前的 `--diff` 模式照舊走 shell,不在這輪。
++  - **乙 靜默失效**:`cat-file --batch` 以行尾 ` missing` 判、格式對不上或 git 失敗整次 rc3(不再當全部新檔);鉤子吞掉的逾時與失敗照 `_hookevent.mark` 記 timeout/error(刻意不查的 rc3 照記 ok);起點紀錄的時刻壞掉、payload 的 cwd 不是字串都當沒記到起點;沒有 `os.killpg` 的平台只收 lint-new 本身;status off(含 `LUMOS_SKIP_LINT_NEW`)鉤子印一行;lint-new 的 SIGTERM 處理器一併刪暫存 SARIF,SIGINT 與例外路徑先收工具群組再往上丟;鉤子開 lint-new 到登記之間收到的 SIGTERM 先記下、登記完補跑(★不用 `pthread_sigmask`:遮罩會被子程序繼承,lint-new 自己的 SIGTERM 收尾就跑不到——自測 S7② 當場抓到★)。
++  - **丙 資源**:碰過的檔超過 50 支在讀任何 HEAD 內容之前就回 rc3;刪除檔只讀「有同名新增檔要拿它配對」的那幾支。
++  - **丁 鉤子共用分流**:可信來源解析與逾時預算搬回每支鉤子的逐字複本,守衛恢復逐字比對、另要求「解析函式以外沒有自己從 PATH 找 lumos、真的呼叫它」與「用到預算的鉤子自己有那段」;標記檔名消毒(`_mark_name`)與 O_EXCL 佔名額(`_claim_mark`)搬進共用模組,收工點名的擋停標記與去重紀錄、收工寫法檢查的名額都走它;匯入純度探針的放寬只給真的匯入共用模組的鉤子、只給匯入系統自己那一次。收程序群組不抽共用:兩支(收工寫法檢查、記憶清掃)語意不同(一支有寬限與登記檔、一支直接殺),各自用平台判斷。
++  - **戊 其餘**:`.kts` 裁定不推決策列、鉤子不送 `delta_new`;伺服端判法改用情境題自己的題號 `_KT_SIT_QID`(範圍 3 第 2 條原寫 `kt-compose`,同一組 Android 專屬判斷不借別題題號);決策列比對改用 `_kt_sit_rows_rx` 的預編譯樣式加字集合預篩;工作樹模式的 git 呼叫改走 `_lens_git`(多一個標準輸入參數);判定結果骨架兩種模式共用 `_lint_new_out`;`lint-new` 說明改成「檢查本身不寫治理帳,只有 --record-stop-block 記一筆」;改 kt 檔時整份與新內容一次取段;決策列「挑到就落標記」接受並寫明(PreToolUse 看不到編輯成不成功);工作樹模式的 git 呼叫關掉 repo 設定裡每個內容過濾器(`-c filter.<名>.clean= … required=false`,名字收不了整次 rc3)。合約席的測試缺口(rebase-apply 等四種狀態、`--budget` 起算、退出碼不是 1 不擋、上限 50 的邊界)都補了案例。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md b/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md
+index c55911cce..a815b50ed 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md
++++ b/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md
+@@ -14,21 +14,21 @@ tags:
+   - scope/guards-gates
+ summary: |-
+   FLOW:改 code→(Stop hook 當輪點名)→git commit/git push 的點名 2026-09-11 起改由 [[Systems/每支檔有家]] 照家算(不再用本篇的反引號為種子那一套)→代碼審留痕前 `lumos impact --diff --sync-check` 仍照本篇算
+   KEY:★2026-09-11 起提交前與推送前的點名移出本篇★:原本兩個掛鉤都呼叫 impact --sync-only,以反引號命中的節點為種子,會把人推回寫了一堆別人檔名的大雜燴節點;改由每支檔有家照 about_code 宣告的家點名(家超過 8 篇只印一句)。本篇剩 Stop hook 當輪點名與代碼審留痕前的 --sync-check [test:t_nodehome_sync_nudge_by_home]
+   KEY:「動過圖譜」不等於「動對篇」——(2026-09-11 前)三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)
+   KEY:刻意不硬擋:單體大檔(scripts/lumos)一次牽 30+ 篇,硬擋會把人訓練成反射 --no-verify
+   KEY:[2026-09-17]收工擋停的標記目錄改成逐層建逐層檢查:原本一次 mkdir 整條路徑再檢查,上層被換成指向別人目錄的連結時,別人的目錄裡已經多出一個 stop-block 資料夾,檢查才說不碰它,跟它註解的承諾矛盾。判準跟主程式 _mkdir_trusted_under_home 同一套(真目錄、屬於自己、別人不可寫;任一層不過就停手、已建的不回頭刪),這支 hook 是獨立檔不 import 主程式所以邏輯抄一份,★一邊改了另一邊要跟著改★;誠實邊界:擋不住同帳號搶跑 [test:t_stop_block_dir_does_not_touch_someone_elses_dir]
+   KEY:[2026-09-18]★第一個時機(收工那一支)的清單改成問版本控制★——原本閘門 2 與閘門 3 的判準都靠列舉工具名,用 `>` 重導向/`sed -i`/heredoc 改的檔一支都不算(實測一輪改三支只報一支,全走 shell 時連響都不響;逐字稿量到 286 次走 shell 對 31 次走編輯工具)。兩處都改;★要帶展開旗標★否則全新目錄摺成一行。核心代價=不再宣稱切得出「這一輪」,措辭改口成工作樹語意;為了不刷屏,清單跟上次印的一樣就不印(那份紀錄壞掉只會多印一次不會少報)。★不沿用本篇原本那個查詢的理由:它看不到從未被追蹤的新檔,而 `echo > 新檔` 正是最常見的 shell 寫法★。查詢失敗一律靜默放行。單源 [[Projects/收工點名問版本控制_計劃]] [test:t_sync_nudge_lists_shell_written_files] [test:t_sync_nudge_gate3_sees_shell_written_notes] [test:t_sync_nudge_lists_untracked_dir_files_individually] [test:t_sync_nudge_suppresses_identical_repeat]
+   DEP:[[Systems/lumos-cli-read]]
+   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
+-  WHY:可信來源、預算、家目錄標記目錄、檔名消毒、git 防護那八個名字從 check-graph-sync.py 搬進共用模組 _hookshared.py,這支照名字匯入回來 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2、設計審 r1 架構對齊席 F1] [因:收工寫法檢查也要用同一套;這支檔吃過抄一份一邊沒跟上的虧,底線共用模組是既有 _hookevent.py 的做法] [不選:新鉤子用 importlib 載這支(會帶起它的模組層狀態)] [代價:替換本模組的 _stop_dir_ok 打不到共用模組裡的呼叫;匯入純度探針放寬成也准讀 _hookshared.py、列 hook 自己的目錄] [test:t_hookshared_move_keeps_graph_sync]
++  WHY:家目錄標記目錄、標記目錄信任檢查、標記檔名消毒(_mark_name)與 O_EXCL 佔名額(_claim_mark)、檔名消毒、git 防護從 check-graph-sync.py 搬進共用模組 _hookshared.py,這支照名字匯入回來;★可信來源解析與逾時預算留在這支當逐字複本★ [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2;代碼審 r1 丁組(governance/review-reports/code-android寫法回合結束檢查/r1-intake.md)] [因:收工寫法檢查也要用同一套、兩支的擋停標記在同一個目錄;安全邊界那兩段照 [[Systems/hook信任邊界]] 走複本] [不選:新鉤子用 importlib 載這支(會帶起它的模組層狀態)] [不選:安全邊界兩段也搬進共用模組(r1 架構對齊席 F1 擋下)] [代價:替換本模組的 _stop_dir_ok 打不到共用模組裡的呼叫;匯入純度探針放寬成「真的匯入共用模組的 hook、匯入系統自己」讀 _hookshared.py、列 hook 自己的目錄] [test:t_hookshared_move_keeps_graph_sync]
+   WHY:兩支收工鉤子的檔集刻意不同:這支點名工作樹上全部未提交的程式碼檔(不切回合),[[Systems/回合結束寫法檢查]] 只看修改時間不早於回合起點的檔,擋停標記也分開 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 決策第三條] [因:新增告警要先分出這回合碰過的,否則每個新會談第一回合都被前人的未提交改動擋;這支只是提醒寫筆記,不切回合] [不選:兩支共用同一份檔集]
+ verified_by:
+   - "[[Verification/2026-09-05_Codex行為精修f02後測]]"
+   - "[[Verification/2026-09-05_README審視量測]]"
+   - "[[Verification/2026-09-18_收工點名改問版本控制]]"
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
+ decisions:
+   - content: 收工 Stop hook 擋一次兩家一致(Claude 也擋):Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌、模型看不到,舊「軟提醒」實為零;07-06 撤的是每回合 nag,同 session 只擋一次且只在改了碼沒寫回時不算重開 nag。單源 Projects/README審視五修_計劃 d2
+     id: d1
+     decided: 2026-09-05
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index 3420ecd9f..5d2b4c4ab 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -83,20 +83,24 @@ summary: |-
+   WHY:新增告警閘多認 `.lumos/config.json` 的 `lint_new.include_test_paths`(副檔名清單,預設空=照舊排除測試路徑),只接在閘的呼叫處、不改測試路徑樣式本身 [出處:2026-11-05 [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5] [因:Kotlin 的 src/test/ 被排除,型錄 TEST 主題規則永遠不響] [test:t_lint_new_include_test_paths]
+   WHY:新增告警閘的擋下訊息每條告警印到 120 字(跟解析 SARIF 截斷同數) [出處:2026-11-05 同計劃 S5 實跑] [因:規則包訊息的修法在後半段,原本截 70 字把修法切掉] [test:t_lint_block_message_shows_fix]
+   WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘(含測試防竄改比對)與 Room 守衛都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
+   WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
+   WHY:新增告警閘對逗號佔位符({LINT_FILES_CSV})的命令:路徑含逗號或分號的檔從那條命令拿掉、列進「檔太大沒檢查」同一組(擋,可逐檔放行,指紋跟大檔同形),一條命令的檔全被拿掉時判沒被檢查;換完超過 100,000 位元組對半切分批跑、合併結果;開程序丟參數太長記成那條沒跑到並擋 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 2、3] [因:detekt 拿逗號與分號分 --input,那種路徑整條拒跑;Linux 單一參數上限 128 KB,改動檔多時命令會撐爆;參數太長原本是例外、整道閘例外放行] [不選:分隔字元路徑自動放行(改檔名就能繞過的可重現繞道);舊 {LINT_FILES} 也分批(不改既有行為)] [test:t_lint_new_csv_separator_path] [test:t_lint_new_csv_batches] [test:t_lint_new_detekt_csv_blocks_new] [test:t_lint_new_detekt_real_two_files]
+   WHY:`lumos code-loop pass` 記通過之前先跑新增告警與表態兩道:用推送檢查那支判定函式的收集模式加「只跑兩道」(mech_only,安全證據、端到端驗收、合約測試與代碼審留痕不跑),範圍是分岔點..HEAD;排在留痕驗證那兩條提早返回(沒有審查帳、light)之前;擋下不留痕、rc2、治理帳記一筆 code-loop-pass blocked [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 2] [因:使用者要審查迴圈裡就檢查乾淨,不等到推送] [不選:另寫一支共用判定(兩套判法會漂開)] [test:t_codeloop_pass_requires_clean_mechanical]
+   WHY:`lumos lint-new --diff <範圍>` 呼叫推送前同一支新增告警判定、不寫治理帳;八種狀態分三類:擋 rc1、乾淨或刻意不查 rc0、沒檢查到 rc3(這支指令的 rc3 不是其他指令的找不到知識圖譜) [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 1] [因:派審查席前自己先查,又不讓放行帳多出推送以外的筆數] [test:t_lint_new_cli_status_codes]
+   PITFALL:新增頂層指令自己寫了 description 時不會被灌入「什麼時候用」,又漏列 commands 索引,本機推功能分支只跑文件子集看不到、PR 的 CI 全套才紅 [出處:2026-11-06 PR #165 CI(lint-new)] [根因:_fill_help_when 只灌沒有 description 的子指令;兩支守衛測試不在功能分支推送的文件子集] [修法:自訂 description 開頭自己接 "什麼時候用:" + HELP_WHEN[名]] [test:t_command_index_complete]
+   WHY:code-loop check 的表態那一道多核情境題(kt-situation):用算適用題的同一個範圍,在被推版本上重算情境段、逐段逐列核對表態與證據樣式(缺段缺列與段算不出來擋,證據樣式對不上只提醒並記帳、附段放行指令,見 [[Systems/棧別提問表態閘]]);pitfalls --diff 的 JSON 多 situation_segments、人讀輸出每段一行;盲判記錄不在這一步核 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 3] [因:表態對程式要在推送前那一道就擋,不靠審查席] [test:t_dispositions_situation_evidence_pattern]
+   SEE:[[Systems/回合結束寫法檢查]] [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]]
++  WHY:lint-new 工作樹模式白名單通過的命令不交給 shell:照整詞展開佔位符組參數清單、shell=False 執行、SARIF 由程式把標準輸出接到檔案;佔位符不准當旗標值 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 甲組(正確性席 F1 實跑 --filter {LINT_FILES} 加檔名 $(touch…) 造出記號檔)] [因:Python 官方 subprocess Security Considerations:不開 shell 時每個字元原樣傳給程式;白名單同一類第二次被打穿,依手冊換形狀] [不選:繼續補白名單禁字] [代價:推送前 --diff 模式照舊走 shell,這輪不動] [test:t_lwt_r1_shellfree_argv]
++  WHY:lint-new 工作樹模式讀 HEAD 內容只讀要用的:碰過的檔超過 50 支在讀任何內容之前回 rc3,刪除檔只讀有同名新增檔要配對的那幾支;git cat-file --batch 以行尾 missing 判、格式對不上或 git 失敗整次 rc3 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 乙、丙組(資源席 F1 實測刪 200 個 5MB 資產檔約 4GB、9 秒;正確性席 F2、資源席 F2 實跑含空白路徑崩潰)] [因:git 官方 BATCH OUTPUT 不存在的物件是 <object> SP missing LF、object 名可含空白] [不選:git 失敗時當全部是新檔(會把舊告警全報成新增)] [test:t_lwt_r1_reads_only_needed] [test:t_lwt_r1_file_cap] [test:t_lwt_r1_space_path_blob]
++  WHY:lint-new 工作樹模式的 git 呼叫一律關掉 repo 設定裡每個內容過濾器(-c filter.<名>.clean= process= required=false),名字收不了(含 = 或換行)整次 rc3 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 戊組(資安席 F2 實跑 git status 觸發 clean 指令)] [因:被打開的目錄可以自帶 .git/config 與 .gitattributes;過濾器名字由設定決定、不能寫死,先列出再逐一關;git 2.39.2 實測給空指令不跑、不設 required=false 會讓 status 失敗] [不選:只在推送前閘處理(收工鉤子是開資料夾就自動跑的)] [代價:LFS 這類合法過濾器在這條路也被關掉,racy 檔可能被看成有改動] [test:t_lwt_r1_git_filter_off]
++  REVISIT:2026-11-20 既有收工點名 check-graph-sync.py 的 git status 與推送前閘的 git 呼叫還沒關內容過濾器(同族,這輪只修新呼叫點),開 Issue 列全部呼叫點再決定統一做法
+ decisions:
+   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+     id: d1
+     context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
+     why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
+     decided: 2026-07-04
+     valid: true
+   - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+     id: d2
+     context: 使用者質疑代碼 canary 污染風險比 spec 嚴重(假 hunk 改變語意、reviewer 推導衍生幻影 findings)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md b/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
+index d6d6ac6a2..d2743a81d 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
++++ b/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
+@@ -12,34 +12,41 @@ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   WHY:寫法檢查開新的一支收工鉤子、不併進收工點名 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 決策第一條、實驗 E2] [因:官方說同一事件的鉤子並行跑、實測兩支 block 理由都送到;拆開後名額、輸出、時間上限各算各的] [不選:同一支裡兩道並列(要改預算起算點、上限提到 55 秒)]
+   WHY:回合起點在送出提示時記、收工只讀不寫 [出處:同計劃 實驗 E1、E11] [因:claude -p 單回合會談也有送出提示事件;背景指令結束與排程到點的回合也有、帶新的 prompt_id(2.1.319 實測)] [不選:收工時寫時間戳(單回合會談永遠不被查)] [test:t_stop_lint_turn_start]
+   WHY:同一回合(會談加 prompt_id)同一批告警只擋一次、最多三批,stop_hook_active 為真照查 [出處:同計劃 決策 d1、設計審 r1 通才席 F1] [因:綁會談時長會談第一回合就用光名額;續做那次不查等於修完不驗] [不選:沿用收工點名的同會談只擋一次] [test:t_stop_lint_hook]
+   RULE:收工自動執行的檢查命令只准 lumos 寫死的 ast-grep 白名單形狀、宣告檔要已提交且乾淨,專案設定放寬不了 [依據:審計] [since:2026-11-06] [retire:when-symbol:scripts/lumos::_lint_wt_allow] [confirmed:2026-11-06] [test:t_lint_new_worktree_allowlist]
+   PITFALL:Codex 的送出提示事件帶 turn_id、沒有 prompt_id,這支鉤子在 Codex 下收工一律印「沒記到起點」不檢查 [出處:2026-11-06 codex-cli 0.160.0 專案層鉤子實測] [根因:兩家的回合編號欄位不同名] [repro:codex exec --dangerously-bypass-hook-trust 掛記錄鉤子看 UserPromptSubmit 的 payload]
+   SEE:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] [[Systems/graph-sync-coverage]] [[Systems/pitfalls-code-loop]] [[Systems/hook逾時預算]]
++  WHY:可信來源解析與逾時預算留在這支鉤子當逐字複本,共用模組只放漏帶時只會功能退化的段落 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 丁組(架構對齊席 F1、合約席 F1)] [因:[[Systems/hook信任邊界]] 的分流規則——會讓安全檢查失效的共用邏輯照逐字複本加守衛] [不選:兩段放共用模組、守衛改成認匯入(放寬後換成從 PATH 找 lumos 照綠)] [test:t_hooks_never_run_code_from_opened_folder] [test:t_hookshared_r1_mark_shared]
++  WHY:擋下原因裡的放行指令照 lint-new 給的原樣印、不截斷不改字元,擋下原因逐條累加、結尾另 N 條那行一定留得下 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 甲組(資安席 F1、邊界席 F1、通才席 F1、F2)] [因:先加引號再換反引號會拆掉引號、截 160 字會砍掉必填的 --note、整段硬截會把後面幾條與結尾提示一起砍掉] [不選:放行指令也過 _safe_path] [test:t_slh_r1_reason_fits] [test:t_lwt_r1_waive_cmd_quoting]
++  PITFALL:開子程序前用 pthread_sigmask 擋 SIGTERM,子程序繼承被擋的遮罩、自己的 SIGTERM 收尾永遠跑不到 [出處:2026-11-06 代碼審 r1 修正自測(t_stop_lint_hook_timeout 的 S7② 翻紅)] [根因:訊號遮罩跨 fork 與 exec 由子程序繼承] [修法:處理器在開程序到登記之間先記下、登記完補跑] [test:t_slh_r1_spawn_window_term]
++  WHY:吞掉的逾時與失敗自己記 _hookevent.mark,刻意不查的 rc3 照記 ok [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 乙組(邊界席 F2)] [因:guard 只看 main 有沒有丟例外,不記的話每次都逾時的鉤子在 lumos enforcement 上永遠是綠的] [不選:rc3 一律記 error(合併中、超過上限這種照設計不查也會被算成壞掉)] [test:t_slh_r1_marks_swallowed]
+ ---
+ # 回合結束寫法檢查
+ 
+ > 白話:像收工前有人看一眼你這回合寫的程式。AI 每回合要收工時,對「這一回合改過、還沒提交」的檔跑規則包,有新增告警就擋下叫它先修;同一批只擋一次,修不好就照放行指令寫理由。
+ 
+ ## 怎麼運作
+ 
+ - `stop-lint-hook.py` 同一支檔註冊兩個事件,依 payload 的 `hook_event_name` 分流:
+   - 送出提示:每次都把 `{prompt_id, 時刻}` 原子寫到 `~/.cache/lumos/stop-turn/<會談>`,不看專案有沒有宣告、不輸出。
+   - 收工:先只用標準庫預篩(repo 根 `.lumos/lint.json` 有 `ast-grep` 字樣),沒過就結束、連共用模組都不匯入;過了才比對起點、呼叫可信 lumos 的 `lint-new --worktree --since <起點> --json --pgid-file … --budget …`。
+-- 只在「退出碼 1、最後一行是 JSON、status 是 blocked 而且有新增告警」三件事都成立時擋;rc3 印一行、rc2 印「重跑安裝」,其餘不出聲。
++- 只在「退出碼 1、最後一行是 JSON、status 是 blocked 而且有新增告警」三件事都成立時擋;rc3 印一行、rc2 印「重跑安裝」、沒正常結束(traceback、被訊號殺掉)印一行、status off(含 `LUMOS_SKIP_LINT_NEW`)印一行,其餘不出聲。吞掉的逾時記 `timeout`、rc2 與沒正常結束與環境不可用記 `error`(`_hookevent.mark`),刻意不查的 rc3 照記 ok。
++- 擋下原因逐條累加(最多 10 條、整段不超過 1500 字),結尾「另 N 條」一定留得下;放行指令照 lint-new 給的原樣印、不截斷不改字元,看起來不是那樣產生的(有反引號、換行、控制字元)整行不印。
+ - 擋下名額記在 `stop-block/<會談>.lint-<回合>-<批次>`(O_EXCL);佔到名額立刻輸出,寫不出去就退名額;輸出寫出去之後才呼叫 `lint-new --record-stop-block` 記一筆 `stop-lint` 治理帳。
+-- 逾時:lint-new 在自己的程序群組;到內層時限先 SIGTERM、1 秒寬限,過了才 SIGKILL 它與登記檔裡的工具群組。鉤子自己被 SIGTERM 時同順序、等 0.5 秒。
++- 逾時:lint-new 在自己的程序群組;到內層時限先 SIGTERM、1 秒寬限,過了才 SIGKILL 它與登記檔裡的工具群組。鉤子自己被 SIGTERM 時同順序、等 0.5 秒;開 lint-new 到登記之間收到的 SIGTERM 先記下、登記完補跑。沒有 `os.killpg` 的平台只收 lint-new 本身。
+ - 檢查本體(工作樹模式、白名單、改名鏈、宣告檔乾淨判法)在主程式的 `lint-new`,見 [[Systems/pitfalls-code-loop]] 的新增告警閘;這篇不管判定本體。
+ 
+ ## 共用模組
+ 
+-`_hookshared.py` 放兩支收工鉤子共用的八個名字:可信來源、外層與內層預算、家目錄底下的標記目錄(逐層建逐層檢查)、標記目錄信任檢查、檔名消毒、git 防護清單與環境注入。收工點名照名字匯入回來(見 [[Systems/graph-sync-coverage]])。只用標準庫、沒有模組層 I/O;匯入約 3.5 毫秒(實驗 E12)。
++`_hookshared.py` 放兩支收工鉤子共用、漏帶只會功能退化的那幾段:家目錄底下的標記目錄(逐層建逐層檢查)、標記目錄信任檢查、標記檔名消毒 `_mark_name` 與 O_EXCL 佔名額 `_claim_mark`(兩支的標記在同一個 `stop-block/`,規則一分家檔名就對不上)、檔名消毒、git 防護清單與環境注入。收工點名照名字匯入回來(見 [[Systems/graph-sync-coverage]])。只用標準庫、沒有模組層 I/O;匯入約 3.5 毫秒(實驗 E12)。
++
++**可信來源解析與逾時預算不在這裡**:那兩段跟安全邊界綁在一起,照 [[Systems/hook信任邊界]] 是每支鉤子自己的逐字複本,守衛逐字比對(代碼審 r1 曾發現它們被搬進共用模組、守衛跟著放寬到擋不住「換成從 PATH 找」,已搬回)。
+ 
+ ## 登記點(漏一處就有守衛翻紅或靜默失效)
+ 
+ 合併器的天花板與兩個事件的註冊、`_GLOBAL_CLAUDE_HOOKS`、`_VENDORED_TREE_FILES`、enforcement 的 Claude 與 Codex 兩份存活清單、`__main__` 的 `_hookevent.guard`、錨點清單(新鉤子與共用模組都要;錨點基準要人跑 anchor approve 補上)。
+ 
+ REVISIT:2026-11-20 用能跑的 Codex 模型量收工事件帶不帶 turn_id、跟送出提示對不對得上;對得上就讓這支認 turn_id,對不上照計劃 S12 把 Codex 改成不註冊這支
+diff --git a/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md b/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
+index 58c1a253c..95a71526e 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
++++ b/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
+@@ -10,22 +10,23 @@ about_code:
+ tags:
+   - type/system
+   - status/doing
+   - scope/retrieval
+ summary: |-
+   WHY:[2026-10-02 修 worktree 推不出筆記時定]被改的檔若在「同一個 repo 的另一個 worktree」,查詢用那個 worktree 當 repo;★只認共用同一份 git 資料的 worktree,不跟去不相干的 repo★——跟去的話,改到剛 clone 的陌生 repo 裡的檔,就會把對方寫的筆記推進對話,原本不會。子模組也因此照舊。出處:修這個 bug 的那次提交與它的 Issue
+   PITFALL:[2026-10-02]session 切進 worktree 後,啟動目錄變數與這支 hook 行程所在的位置都還是主 repo;拿主 repo 去查 worktree 裡的檔,查詢回 0 筆、hook 靜默放行,照規矩開 worktree 做事的 session 一篇推播都收不到。[test:t_impact_hook_repo_follows_worktree]
+   FACT:[來源:生產][Claude Code 2.1.287,2026-10-02]用內建方式切進 worktree 後,對話紀錄記的目錄會跟著換,但 hook 事件帳記下的 repo 仍是啟動目錄——hook 行程不是在 worktree 裡跑的
+   TEST: t_impact_hook_repo_follows_worktree
+   WHY:[2026-10-29]圖譜專案裡推播沒跑成(找不到 lumos、逾時、啟動失敗、非零結束碼、輸出讀不懂、有圖譜卻回找不到圖譜)時附一段固定說明並記逾時或錯誤事件,同會談同原因只講一次;不是圖譜專案與零命中照舊安靜 [出處:[[Projects/改檔前推播失敗出聲_計劃]]] [因:原本六條路都靜默,AI 分不出「沒有相關筆記」與「推播壞了」,事件帳也全記成 ok] [不選:零命中也講(每次改檔都燒 token)] [不選:轉 lumos 錯誤原文(自由文字零輸出的消毒原則)] [test:t_impact_hook_six_failures_voiced]
+-  WHY:目標是 kt 時鉤子多送 delta_new(只取寫入的新內容),lumos 回 decision_rows,鉤子用 _voice_once 取前三列沒推過的印;決策列不受冷卻窗限制 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3、設計審 r1 通才席 F3] [因:冷卻窗是為了省完整影響推播,決策列只是一次本機正規式] [test:t_impact_hook_kotlin_decision_rows]
++  WHY:目標是 .kt 時鉤子多送 delta_new(只取寫入的新內容;整份與新內容一次取段,代碼審 r1 通才席 F6;.kts 建置腳本不送,r1 合約席 F6 裁定),lumos 回 decision_rows,鉤子用 _voice_once 取前三列沒推過的印;決策列不受冷卻窗限制 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3、設計審 r1 通才席 F3] [因:冷卻窗是為了省完整影響推播,決策列只是一次本機正規式] [test:t_impact_hook_kotlin_decision_rows]
+   PITFALL:測試裡讀決策表只拿到一列假表 [出處:2026-11-06 實作改檔前推列時] [根因:測試執行器把 LUMOS_KT_CATALOG 指到凍結型錄,讓既有測試停在情境題上線前的語意] [修法:要真型錄的測試用 _kt_decision_table(path=真型錄) 並在子程序環境明確指過去] [test:t_impact_hook_kotlin_decision_rows]
++  WHY:決策列挑到就落「推過」標記,不等這次編輯成功 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 戊組(通才席 F3,接受並寫明)] [因:PreToolUse 在工具執行前跑,鉤子看不到編輯後來被拒或 old_string 對不上;列文字那時已進模型脈絡,重試同一處再推一次只是重複] [代價:編輯失敗後同會談再碰同一列不再提醒,要等標記過期] [不選:輸出寫成功後才落標記(輸出成功也不代表編輯成功,一樣看不到)] [test:t_impact_hook_kotlin_decision_rows]
+ related:
+   - "[[Issues/worktree裡改檔推不出筆記]]"
+ verified_by:
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
+ ---
+ # 改檔前推播
+ 
+ 管的檔:`scripts/hooks/claude/impact-hook.py`。
+ 
+ 改檔前把「這次改動牽連到哪些筆記」推到模型眼前的那支 hook。排序與查詢本身在 lumos impact,不在這裡;只執行可信來源的 lumos 見 [[Systems/hook信任邊界]],內層逾時怎麼算見 [[Systems/hook逾時預算]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md b/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
+index c1c4ddcaa..760561972 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
+@@ -61,21 +61,21 @@ summary: |-
+   WHY:宣告頭判類別本體看括號外最後一個宣告關鍵字(class/object/interface 才算;constructor、init、get、set 不下結論,視窗從上一個 { } ; 起算不截字數) [出處:代碼審 r1 D8] [因:函式前一行的 data class 會把函式本體誤判成類別、函式裡的區域 val 被當成宣告起點,段材料縮成兩行、一個函式切成多段] [test:t_kt_situation_decl_header]
+   WHY:切段先用觸發字開頭那段英數底線做字集合預篩(增行原文沒有交集的檔不讀不剝)、被推版本的檔先問大小再用有上限的批次讀取(_nodehome_cat_blobs_capped,單次 git 逾時取剩餘預算),快取寫入時清掉過期檔、鍵只靠 schema 常數不看 lumos 檔時間、結果按範圍兩端與被推版本的提交加型錄內容快取在 ~/.cache/lumos/kt-situation/(一天),pitfalls 收集給 30 秒預算(超過印提醒);推送前核對跟表態那一道共用期限,超過照既有 over_budget 規則(已查出問題照擋、沒有就放行並記 fail-open 帳,代碼審 r2 架構 F5) [出處:代碼審 r1 D9] [因:300 支 kt 各 300 行 pitfalls 多 39 秒,一次推送重算四遍] [test:t_kt_situation_budget_and_cache]
+   WHY:情境題誤擋的出口是段放行,沿用新增告警閘的 lint-waive 與放行檔(指紋 kt-situation:<段身分>,理由門檻、origin、ack、doctor 計數全同一套);證據樣式提醒後面印好放行指令,有放行的段不再提醒並印 ⚠;缺段缺列照擋、不給放行出口(代碼審 r2 通才 F4);放行計數在 doctor 與推送前小結跟新增告警分開數;放行檔讀不了就當沒有放行並印一行提醒(r3 通才 F7);快取清理先驗目錄可信、最多留 200 份 [出處:代碼審 r1 D2(計劃範圍 5 提前)] [因:證據樣式誤擋實際發生,原本只能改型錄、答 applies:false 說謊或關掉整道閘] [不選:另起 code-loop situation-waive 指令與盲判標記檔(範圍 4 才有那套帳)] [test:t_kt_situation_waive]
+   WHY:證據樣式對不上不擋,推送前印提醒(哪一段、哪一列、哪條樣式)、記治理帳(閘 code-loop、kind warned、scope kt-situation、pending blind-judge,帳由 code-loop check 那一層寫、以 (版本,段,列) 去重、每次最多逐筆 20 筆其餘併總數,登記在不算迴圈收尾的事件)當待盲判清單;推送前照擋的只剩缺段、缺列、答案形狀不對與無法驗證 [出處:代碼審 code-android情境題與表態對程式 r2 換形狀;Semgrep 規則政策 Monitor(評估真陽性率)/Comment/Block https://semgrep.dev/docs/semgrep-code/policies ] [因:字面樣式兩輪被型錄自己的合法變體打穿(r1 9 列、r2 11 條),擋下等於擋掉照型錄寫的程式] [不選:繼續逐條補正規式(兩輪打穿)] [test:t_kt_situation_waive]
+   REVISIT:2027-01-08 跑 lumos gov --stats 看情境段「提醒確認」各列(證據樣式提醒與多數決提醒,scope kt-situation,以 (版本,段,列) 去重)經盲判終局確認的真陽性與誤報;某一列真陽性至少 20 個 (段,列)、誤報少於一成,才把那一列從提醒升成擋(在這篇寫明是哪幾列,並把 _kt_sit_row_verdict 那一列改回 block)
+   WHY:情境題多一道盲判核對(在表態那一道裡、跟 tier 無關):lumos code-loop blind-judge --template 印不含任何表態的材料(每份最多 30 段、--part 選份,每列附型錄出處),結果整份驗證後先寫治理帳 blind-judge 事件再併進本機標記檔(同一格只認第一筆,讀側標記檔優先、否則從治理帳重建);推送前缺第一盲判、作者與第一盲判不一致又缺仲裁就擋(紀錄在不在的機械核對,不給段放行出口),仲裁同作者放行,三方多數判作者沒照做只提醒並記 code-loop warned 帳(verdict majority-against-author,跟證據提醒同一套去重封頂) [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4、6 與〈審計修正紀錄〉的條款改寫] [因:盲判是模型判斷、各列誤判率要靠提醒帳逐列量,照代碼審 r2 換形狀先 Comment 不 Block;紀錄要齊才湊得出升擋統計的分母] [不選:多數判作者沒照做就擋(原設計)] [test:t_blind_judge_majority]
+   WHY:gov --stats 多一段 Android 情境題:每列作者判適用數、正一致率、相符率、二元 Cohen's kappa(樣本 ≥20 且兩方各有兩種答案才印,否則印 kappa 無意義)、仲裁採作者或採盲判、段放行分 ai 與 human、重判次數,以及證據提醒與多數決提醒依盲判終局分真陽性、誤報、待確認(依段身分把 warned、blind-judge、dispositions 三種帳對起來算,不在提醒事件寫回欄位);治理帳讀入把 blind-judge 跟表態一樣拿 written_at 當去重鑑別子 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 7] [因:升擋與 RETIRE-IF 要逐列的數,寫回欄位會在作者改表態或補仲裁後過期] [test:t_gov_stats_situation_agreement]
+   WHY:盲判結果整份驗證、有一筆不合就整份不寫,同一格只認第一筆,刪掉本機標記檔能從治理帳重建出同一份 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4] [因:寫一半的盲判會讓推送前核對讀到殘缺紀錄;只認第一筆才擋得住換個代理重抽到想要的答案] [test:t_blind_judge_record_required]
+   WHY:pitfalls --diff 有情境段就印要跑盲判的四步指令(跟 stack_questions.gate 走),blind-judge 事件登記在不算迴圈收尾的清單 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 6] [因:盲判核對跟 tier 無關,只寫在高風險才走的代碼審手冊會漏] [test:t_pitfalls_situation_blind_judge_hint]
+   WHY:證據樣式提醒的那一格盲判終局已判照做時,提醒照印但改標「盲判已判照做:多半是樣式誤報」;缺第一盲判的擋下訊息一段一句列出缺的列 [出處:2026-11-06 S8 實驗專案實跑([[Projects/Android寫法語意情境表態與盲判_計劃]])] [因:實跑時盲判已判照做的格仍印「待盲判」會讓人以為還要再跑;同一段四列缺盲判原本把位置重複印四次] [test:t_kt_situation_waive]
+-  WHY:改檔前推決策列併進 cmd_impact 算棧別題那一段、同一組啟用條件,只多一個輸出鍵 decision_rows;伺服端判法是平台排除集合含 kt-compose [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3 第 2 條、設計審 r1 依據席 F6] [因:剝字串與觸發式用盲判那條線的共用函式,不另起平行通道] [test:t_impact_decision_rows_table_states]
++  WHY:改檔前推決策列併進 cmd_impact 算棧別題那一段、同一組啟用條件,只多一個輸出鍵 decision_rows;伺服端判法是平台排除集合含情境題 _KT_SIT_QID(代碼審 r1 架構對齊席 F5:原寫 kt-compose,同一組 Android 專屬判斷不借別題題號);.kts 不推(r1 合約席 F6 裁定);比對用 _kt_sit_rows_rx 的預編譯樣式加字集合預篩(r1 架構對齊席 F6) [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3 第 2 條、設計審 r1 依據席 F6] [因:剝字串與觸發式用盲判那條線的共用函式,不另起平行通道] [test:t_impact_decision_rows_table_states] [test:t_impact_r1_kts_and_once]
+ verified_by:
+   - "[[Verification/2026-09-09_棧別提問表態閘實作測試]]"
+   - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+   - "[[Verification/2026-09-12_Java補棧合成樣本測試]]"
+   - "[[Verification/2026-09-13_Flutter補棧合成樣本測試]]"
+   - "[[Verification/2026-10-03_外部回應碼接線實作測試]]"
+   - "[[Verification/2026-10-15_React補棧合成樣本測試]]"
+   - "[[Verification/2026-11-06_Android情境題盲判實驗專案實跑]]"
+ ---
+ # 棧別提問表態閘

@@ -1,0 +1,306 @@
+{
+  "base": "adf857791dc17710eef7ef87e69fb2797959e29b",
+  "groups": [
+    {
+      "id": "G1",
+      "category": "path",
+      "note": "子目錄專案端到端",
+      "findings": [
+        "五邊1",
+        "五通1",
+        "五通2",
+        "五正2"
+      ],
+      "prior": {
+        "why_failed": "第四輪只把找改動的回傳路徑改成從 repo 根算,收工點名鉤子的消費端仍拿專案根去接(接成 sub/sub/…),影響分析的命令入口仍要求 --repo 底下有 .git;測試直接呼叫函式、沒走真鉤子與命令入口,所以全綠",
+        "new_approach": "鉤子用 _repo_top 取 repo 根,狀態表路徑一律接在根上,圖譜位置與在不在專案底下照舊用專案根判;cmd_impact_diff 只在 --worktree-nofilter 時改問 git 是不是 git 專案(其他呼叫端照舊要 .git);補走真鉤子入口與 lumos impact 命令的子目錄專案測試"
+      },
+      "paths": [
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def main",
+          "status": "fixed",
+          "tests": [
+            "t_r5sub_hook_e2e"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def _repo_top",
+          "status": "fixed",
+          "tests": [
+            "t_r5sub_hook_e2e"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def _entry_is_code",
+          "status": "fixed",
+          "tests": [
+            "t_r5sub_hook_e2e"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def cmd_impact_diff",
+          "status": "fixed",
+          "tests": [
+            "t_r5sub_impact_cli"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def _git_toplevel",
+          "status": "fixed",
+          "tests": [
+            "t_r5sub_impact_cli",
+            "t_r4wt_monorepo_subdir"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def _head_shebang",
+          "status": "unaffected",
+          "reason": "git show HEAD:路徑 本來就從 repo 根解路徑,跟找改動回的根相對路徑同一個基準,不用另外接"
+        },
+        {
+          "at": "scripts/hooks/claude/stop-lint-hook.py:def main",
+          "status": "unaffected",
+          "reason": "收工寫法檢查把 --repo 交給 lint-new,lint-new 進工作樹模式前已改在 repo 根判,鉤子自己不接改動路徑"
+        }
+      ]
+    },
+    {
+      "id": "G2",
+      "category": "boundary",
+      "note": "索引旗標照 git status",
+      "findings": [
+        "五正1"
+      ],
+      "prior": {
+        "why_failed": "第四輪補的邊界案例只談時間戳、大小、雜湊行數與改名配對,沒有看索引旗標;sparse-checkout 圈外的檔在索引有、磁碟沒有,被當成刪除,標了 skip-worktree 或 assume-unchanged 又改過的檔被當成改過",
+        "new_approach": "ls-files 改帶 -v 讀旗標,標 S 或小寫的條目不比工作樹、Y 留空白,HEAD 對索引照比(暫存過再標 skip-worktree 的照報,跟 git status 一致);兩份逐字複本一起改,測試直接對照 git status 的實際輸出"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:def _wt_changed_nofilter",
+          "status": "fixed",
+          "tests": [
+            "t_r5wt_sparse_checkout_no_delete",
+            "t_r5wt_skip_worktree_unchanged"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def _wt_changed_nofilter",
+          "status": "fixed",
+          "tests": [
+            "t_r5wt_sparse_checkout_no_delete",
+            "t_r5wt_skip_worktree_unchanged",
+            "t_lwt_r3_nofilter_verbatim"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G3",
+      "category": "other",
+      "note": "入口把 PATH 洗成只剩絕對項",
+      "findings": [
+        "五安1"
+      ],
+      "prior": {
+        "why_failed": "第三輪替 ast-grep、第四輪替 lumos 各寫一支只認絕對路徑的解析,一支工具補一支,鉤子與主程式裸名呼叫 git 的地方沒人管,PATH 有空項或點時照樣執行被打開資料夾裡的 git",
+        "new_approach": "不再逐支工具解路徑:主程式 main 與八支鉤子入口第一句呼叫 _clean_path_env,把空項、點與相對項拿掉(全被拿掉退回 os.defpath 的絕對項),之後同一程序的子程序都吃乾淨的 PATH;逐字複本加守衛盯一字不差與入口第一句,攻擊測試跑收工點名、收工寫法檢查、CI 狀態與 lint-new"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_attack",
+            "t_r5path_clean_rules",
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def main",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_attack",
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_attack",
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/ci-status-hook.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_attack",
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/stop-lint-hook.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_attack",
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/impact-hook.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/lumos-entry-hook.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/dispatch-lens-hook.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/bypass-ask-hook.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/memory-sweep.py:def _clean_path_env",
+          "status": "fixed",
+          "tests": [
+            "t_r5path_hooks_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/_hookevent.py:def _root_from_cwd",
+          "status": "unaffected",
+          "reason": "共用模組自己沒有入口,只在各支鉤子入口洗過 PATH 之後才被呼叫,裸名的 git 已經解不到目前目錄"
+        }
+      ]
+    },
+    {
+      "id": "G4",
+      "category": "boundary",
+      "note": "影響分析工作樹模式補測試",
+      "findings": [
+        "五約1",
+        "五約2",
+        "五約3"
+      ],
+      "prior": {
+        "why_failed": "第四輪重寫影響分析時只造了含換行的檔名與 100644 的刪除檔,FIFO 沒人造;不開非一般檔的守衛、結尾 CR 的退回、刪除檔取上一個提交的模式三處改壞都照綠",
+        "new_approach": "補三支案例:已追蹤的 .py 與簿記目錄的檔換成 FIFO(在子程序跑、30 秒逾時,改壞時紅而不卡住整套)、結尾 CR 的程式碼檔只用路徑、100755 沒有 #! 的刪除檔模式取上一個提交;三處照席位的改法各改壞一次都紅"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:def _impact_wt_nofilter",
+          "status": "fixed",
+          "tests": [
+            "t_r5imp_fifo_guard",
+            "t_r5imp_cr_name",
+            "t_r5imp_deleted_exec_mode"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "G5",
+      "category": "other",
+      "note": "查詢文字順序與說明",
+      "findings": [
+        "五通3",
+        "五約4"
+      ],
+      "prior": {
+        "why_failed": "第四輪換成數行次數相減時照 git diff 的習慣把刪掉的行排前面,沒想到 4000 字上限會先截掉新增的行;接查詢文字仍先把全部改動行接起來再切;選項說明與計劃天花板沒跟著改",
+        "new_approach": "_impact_line_delta 改成新增的行在前、刪掉的在後(不選兩邊各配一半:多一套配額算法);_impact_hunk_query 邊累積邊停、結果跟原本一樣;--worktree-nofilter 說明改寫成數行次數相減,計劃天花板第 8 條照實寫順序"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:def _impact_line_delta",
+          "status": "fixed",
+          "tests": [
+            "t_r5query_plus_first"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def _impact_hunk_query",
+          "status": "fixed",
+          "tests": [
+            "t_r5query_stop_early",
+            "t_r4imp_shared_shape"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def main",
+          "status": "fixed",
+          "tests": [
+            "t_r5query_help_text"
+          ]
+        },
+        {
+          "at": "docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md:天花板",
+          "status": "unaffected",
+          "reason": "計劃文件不是程式路徑,沒有可綁的測試;天花板第 8 條照實改成新增的行排前面、超過上限先截掉被刪的舊行"
+        }
+      ]
+    },
+    {
+      "id": "G6",
+      "category": "other",
+      "note": "架構小項",
+      "findings": [
+        "五架1",
+        "五架2",
+        "五架3"
+      ],
+      "prior": {
+        "why_failed": "第四輪各處需要時各寫一份取 repo 根,失敗語意不同;找改動函式中途用巢狀函式蓋掉參數 run;兩版合計上限另起一套記帳、刪除檔另查模式,都沒寫為什麼不重用既有寫法",
+        "new_approach": "取 repo 根收成 _git_toplevel 一支,lint-new、影響分析與 cmd_impact_diff 都用它;在 repo 根跑的那支改名 in_top、加守衛擋重綁;兩版合計上限與刪除檔模式查不能重用既有寫法的理由寫在程式旁與家節點"
+      },
+      "paths": [
+        {
+          "at": "scripts/lumos:def _git_toplevel",
+          "status": "fixed",
+          "tests": [
+            "t_r5sub_impact_cli",
+            "t_r4wt_monorepo_subdir"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def _wt_changed_nofilter",
+          "status": "fixed",
+          "tests": [
+            "t_r5arch_no_run_rebind",
+            "t_lwt_r3_nofilter_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/hooks/claude/check-graph-sync.py:def _wt_changed_nofilter",
+          "status": "fixed",
+          "tests": [
+            "t_r5arch_no_run_rebind",
+            "t_lwt_r3_nofilter_verbatim"
+          ]
+        },
+        {
+          "at": "scripts/lumos:def _impact_wt_nofilter",
+          "status": "unaffected",
+          "reason": "只加註解寫明兩版合計上限不能用既有 max_total_bytes(那個只算上一個提交那一版)、刪除檔模式不能重用找改動的表(只留物件編號且是逐字複本),行為不變"
+        }
+      ]
+    }
+  ]
+}

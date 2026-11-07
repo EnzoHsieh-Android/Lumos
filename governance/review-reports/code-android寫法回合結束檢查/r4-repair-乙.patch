@@ -1,0 +1,390 @@
+diff --git a/scripts/hooks/claude/_hookshared.py b/scripts/hooks/claude/_hookshared.py
+index c7bdd8254..dfd70ded5 100644
+--- a/scripts/hooks/claude/_hookshared.py
++++ b/scripts/hooks/claude/_hookshared.py
+@@ -173,21 +173,23 @@ def _safe_path(p) -> str:
+ # ★為什麼是一份清單而不是逐個補★(同類問題冒出第三次之後換的形狀):
+ #   r1 資安席報了第一項 → 修法只補了自己新增的兩個呼叫點
+ #   r2 驗收席抓到漏補第三處(會去呼叫主程式那條)→ 改成注入環境變數涵蓋所有子行程
+ #   r2 資安複審又找到第二項設定 → 若繼續逐個補,下一輪還會有第三項
+ # 所以收成一份具名清單,新發現的往這裡加一行,並補一筆測試釘住它。
+ #
+ # ★誠實邊界,不得宣稱更多(這句話本身被審查打過臉一次)★:
+ #   這是★列舉法★,不是完備防護。清單上的擋得住,清單外的擋不住。
+ #   前一版註解寫過「主程式內部的呼叫也涵蓋得到(實測驗過)」——那句話只對當時清單上的那一項成立,
+ #   對後來發現的第二項是假的。**驗過的是哪幾項,就只能說哪幾項。**
+-#   已實測不觸發、因此沒列入的:別名、分頁器、過濾器的塗抹指令(r2 資安複審試過這三個)。
++#   沒列入的:別名、分頁器(r2 資安複審試過、不觸發)。★內容過濾器(clean、process)會觸發★——git status 遇到大小不變、
++#   內容改過的檔會執行它(回合結束檢查代碼審 r3 資安席實測,推翻 r2 那句「塗抹指令不觸發」);它的名字由被打開的目錄決定、
++#   這份清單列不到,所以不在這裡擋,改成找改動的那條路根本不跑 status(check-graph-sync.py 的 _wt_changed_nofilter)。
+ #   純 clone 不會把這些設定帶過來(實測);真正的交付路徑是「直接拿到別人的整個目錄」。
+ #   這支 hook 以外的地方(提交前、推送前那兩道閘)沒有走這條路——那些是使用者主動執行的,
+ #   不是開資料夾就自動跑,風險形狀不同,另案處理。
+ _GIT_UNSAFE_CONFIG = (
+     "core.fsmonitor",   # r1 資安席:值會被當成指令執行,查工作樹狀態時觸發
+     "diff.external",    # r2 資安複審:值會被當成指令執行,主程式逐檔比對差異時觸發
+ )
+ 
+ 
+ def _harden_git_env() -> None:
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index cafd172a2..2c95c6375 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -306,21 +306,21 @@ def is_graph_file(path: str, graph_root: Path) -> bool:
+     except (ValueError, OSError):
+         return False
+ 
+ 
+ # ── 工作樹查詢(Projects/收工點名問版本控制_計劃)────────────────────────────
+ # 出身:清單原本靠列舉工具名算(三個編輯工具 + rm/mv/cp/git rm/git mv),
+ # 用 `echo >`、`sed -i`、heredoc 改的檔一支都不算——實測一輪改三支只報一支,
+ # 而最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。
+ # 列舉法原理上補不完(tee/patch/一行 python/包一層 shell/產生器),量結果不量過程才免疫。
+ 
+-def _git(project_root: Path, *args, text=True):
++def _git(project_root: Path, *args, text=True, data=None):
+     """對被檢查的那個資料夾跑一個版本控制指令。兩個旗標都是安全用的,不是裝飾:
+ 
+     ★關掉檔名轉義★(代碼審 r1 外家備援+邊界+正確性 三席獨立報,編排者實測):
+     不帶它,非 ASCII 檔名會被跳脫成 `"scripts/\\346\\224\\266..."` 這種八進位形式,
+     只 strip 掉引號還原不了,解析出來的路徑指向一個不存在的檔——
+     ★而這個專案的檔名大量是中文★,等於天天踩。
+ 
+     ★關掉那個會被當成指令執行的設定項★(代碼審 r1 資安席,編排者實測重現):
+     這支 hook 是開啟資料夾就自動跑的,而這個呼叫會吃★被打開那個資料夾自己的★版本控制設定;
+     其中有一項的值會被當成 shell 指令執行——實測在惡意設定的倉庫上查一次狀態,
+@@ -329,56 +329,165 @@ def _git(project_root: Path, *args, text=True):
+     ★誠實邊界,不得宣稱更多★:只關掉已知會執行指令的那一項;版本控制的設定面很大,
+     **不宣稱「所有設定都擋得住」**。純 clone 不會把該設定帶過來(實測),
+     真正的交付路徑是「直接拿到別人的整個目錄」。
+     這支檔其他地方的版本控制呼叫沒有走這條路,是否要一併收攏另案處理。"""
+     # ★防護讀同一份清單,不要寫死★:寫死的話清單加一項這裡不會跟,
+     # 就會出現「清單上有、某個呼叫點沒有」的不一致——而那正是這條問題前三輪的死法。
+     # 環境變數那層已經涵蓋所有子行程,這裡是雙保險:測試會直接呼叫這個函式、不經進入點。
+     unsafe = [x for k in _GIT_UNSAFE_CONFIG for x in ("-c", k + "=")]
+     return subprocess.run(
+         ["git", "-C", str(project_root), "-c", "core.quotePath=false", *unsafe, *args],
+-        capture_output=True, text=text, timeout=_inner_budget(default=20))
++        input=data, capture_output=True, text=text, timeout=_inner_budget(default=20))
++
++
++# ★下面這支是主程式 scripts/lumos 同名函式的逐字複本★(回合結束檢查代碼審 r3 甲組,資安席 F2):找工作樹改動不跑 git status
++# (status 會經被打開目錄自帶的內容過濾器,等於執行對方指定的指令)。這是安全邏輯,照 [[Systems/hook信任邊界]] 走「逐字複本+守衛」、
++# 不走共用模組;守衛 t_lwt_r3_nofilter_verbatim 盯著兩份一字不差。
++def _wt_changed_nofilter(repo_root, run, paths=()):
++    """工作樹上還沒提交的改動,★不跑 git status、不經任何內容過濾器★ → [(X, Y, 路徑, 舊路徑或 None)] 或 None(任何一個 git 指令失敗)。
++    狀態碼同 git status --porcelain=v1:X 是 HEAD 對索引、Y 是索引對工作樹;?? 未追蹤、UU 衝突;HEAD 與索引同一物件、只換了路徑的算 R。
++    為什麼:git status 遇到大小不變、內容改過的檔會跑 .gitattributes 指到的 clean/process 過濾器,過濾器的名字與指令由被打開的目錄決定,
++    列名字再逐個關掉的做法被打穿三次。這裡只用不執行內容過濾器的指令:ls-tree -r -z(HEAD)、ls-files -s -z(索引的模式與物件編號)、
++    ls-files -s --debug -z(索引記下的時間與大小,只拿來省雜湊、格式認不得就全部算)、ls-files -o --exclude-standard -z(未追蹤)、
++    hash-object --no-filters --stdin-paths(工作樹內容照原樣算,https://git-scm.com/docs/git-hash-object )。
++    只看一般檔(100644、100755),符號連結與子模組(120000、160000)跳過。時間與大小跟索引記的一樣、而且比索引檔早寫的才不算雜湊(同 git 的 racy 判法)。
++    用了真過濾器的專案(LFS、autocrlf)會多報幾支(工作樹原樣跟索引裡轉過的不同),方向是多查不漏查。
++    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。"""
++    import os as _os
++    import stat as _st
++    lit = ("--", *paths) if paths else ()
++
++    def ok(*a, data=None):
++        r = run(*a, data=data)
++        return r.stdout if r is not None and r.returncode == 0 else None
++
++    def entries(raw):
++        for ent in (raw or b"").split(b"\0"):
++            meta, tab, p = ent.partition(b"\t")
++            f = meta.split(b" ")
++            if tab and len(f) == 3:
++                yield f, p
++    reg = (b"100644", b"100755")
++    h = run("rev-parse", "--verify", "-q", "HEAD")
++    if h is None or h.returncode not in (0, 1):
++        return None
++    raw = ok("ls-tree", "-r", "-z", "--full-tree", "HEAD", *lit) if h.returncode == 0 else b""
++    idx = ok("ls-files", "-s", "-z", *lit)
++    unt = ok("ls-files", "-o", "--exclude-standard", "-z", *lit)
++    if raw is None or idx is None or unt is None:
++        return None
++    head, index, conflict, skip = {}, {}, set(), set()
++    for f, p in entries(raw):
++        if f[0] in reg:
++            head[p] = f[2]
++        else:
++            skip.add(p)
++    for f, p in entries(idx):
++        if f[2] != b"0":
++            conflict.add(p)
++        elif f[0] in reg:
++            index[p] = f[1]
++        else:
++            skip.add(p)
++    stamp = {}
++    dbg = ok("ls-files", "-s", "--debug", "-z", *lit) or b""
++    prev = None
++    for chunk in dbg.split(b"\0"):
++        lines = chunk.split(b"\n")
++        info = {}
++        while lines and lines[0].startswith(b"  "):
++            for kv in lines.pop(0).strip().split(b"\t"):
++                k, _c, v = kv.partition(b": ")
++                info[k.strip()] = v.strip()
++        try:
++            if prev is not None and info:
++                sec, _c, ns = info[b"mtime"].partition(b":")
++                stamp[prev] = (int(sec) * 1000000000 + int(ns), int(info[b"size"]))
++        except (KeyError, ValueError):
++            pass
++        rest = b"\n".join(lines)
++        prev = rest.partition(b"\t")[2] if b"\t" in rest else None
++    gp = ok("rev-parse", "--git-path", "index")
++    try:
++        idx_ns = _os.stat(_os.path.join(str(repo_root), _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
++    except OSError:
++        idx_ns = None
++    wt, ask = {}, []
++    for p, oid in index.items():
++        try:
++            s = _os.lstat(_os.path.join(str(repo_root), _os.fsdecode(p)))
++        except (FileNotFoundError, NotADirectoryError):
++            wt[p] = "D"
++            continue
++        except OSError:
++            wt[p] = "M"
++            continue
++        if not _st.S_ISREG(s.st_mode):
++            wt[p] = "T"
++        elif idx_ns is not None and s.st_mtime_ns < idx_ns and stamp.get(p) == (s.st_mtime_ns, s.st_size & 0xFFFFFFFF):
++            wt[p] = " "
++        elif b"\n" in p or p[:1] == b'"':
++            wt[p] = "M"                   # 一行一個路徑的輸入表達不了,當改過(多查)
++        else:
++            ask.append(p)
++    if ask:
++        got = ok("hash-object", "--no-filters", "--stdin-paths", data=b"\n".join(ask) + b"\n")
++        sums = (got or b"").split()
++        if got is None or len(sums) != len(ask):
++            return None
++        for p, sha in zip(ask, sums):
++            wt[p] = " " if sha == index[p] else "M"
++    res = {}
++    for p in set(head) | set(index) | conflict:
++        if p in skip:
++            continue
++        if p in conflict:
++            res[p] = ["U", "U", None]
++            continue
++        x = " " if head.get(p) == index.get(p) else ("A" if p not in head else ("D" if p not in index else "M"))
++        y = wt.get(p, " ") if p in index else " "
++        if x + y != "  ":
++            res[p] = [x, y, None]
++    gone = {}
++    for p, v in res.items():
++        if v[0] == "D":
++            gone.setdefault(head[p], []).append(p)
++    for p, v in res.items():
++        old = gone.get(index.get(p)) if v and v[0] == "A" else None
++        if old and len(old) == 1 and (res.get(old[0]) or [None])[0] == "D":
++            v[0], v[2] = "R", old[0]
++            res[old[0]] = None
++    out = [(v[0], v[1], _os.fsdecode(p), _os.fsdecode(v[2]) if v[2] is not None else None) for p, v in res.items() if v]
++    out += [("?", "?", _os.fsdecode(p), None) for p in (unt or b"").split(b"\0") if p]
++    return sorted(out, key=lambda e: e[2])
+ 
+ 
+ def _git_status_entries(project_root: Path):
+     """工作樹上有哪些檔還沒提交。回 [(狀態碼, repo 相對路徑)];狀態碼 '??' = 從未被追蹤。
+ 
+-    ★-uall 是斷言不是裝飾★:不帶它,一個全新目錄會被整包摺成 `?? dir/` 一行,
+-    裡面幾支檔一支都列不出來(本 repo 自己的程式碼早已記載這件事)。
++    ★不跑 git status★(回合結束檢查代碼審 r3 甲組,資安席 F2 實測):status 遇到大小不變、內容改過的檔
++    會執行被打開目錄自帶的內容過濾器;改走 _wt_changed_nofilter(只用不經過濾器的 git 指令)。
++    未追蹤的檔逐支列(ls-files -o,不會把新目錄摺成一行);改名那列給新路徑。
+     ★為什麼不沿用閘門 3 那條現成的查詢★:那條底層是拿工作樹跟上次提交比,
+-    **看不到從未被追蹤的新檔**——而 `echo > 新檔.py` 正是最常見的 shell 寫法,
+-    沿用它這個病會原封不動留著(實測留痕見計劃的卷證目錄)。
++    **看不到從未被追蹤的新檔**——而 `echo > 新檔.py` 正是最常見的 shell 寫法。
+ 
+-    任何失敗(不是倉庫、索引被鎖、逾時、空倉庫)一律回 None=算不出來,呼叫端 fail-open。
++    任何失敗(不是倉庫、索引被鎖、逾時)一律回 None=算不出來,呼叫端 fail-open。
+     """
++    def run(*a, data=None):
++        return _git(project_root, *a, text=False, data=data)
+     try:
+-        # ★關掉檔名轉義不是裝飾★(代碼審 r1 外家備援 blocker,編排者實測確認):
+-        # 不帶它,非 ASCII 檔名會被跳脫成 `"scripts/\\346\\224\\266..."` 這種八進位形式,
+-        # 只 strip 掉引號還原不了,解析出來的路徑指向一個不存在的檔——
+-        # 而這個專案的檔名大量是中文,等於實務上一直踩。
+-        # ★諷刺的地方★:凍結被審 diff 時本來就照流程帶了這個旗標,實作這支查詢時卻忘了(同一天、隔幾個指令)。
+-        r = _git(project_root, "status", "--porcelain", "-uall")
+-        if r.returncode != 0:
+-            return None
++        ents = _wt_changed_nofilter(project_root, run)
+     except Exception:
+         return None
+-    out = []
+-    for line in r.stdout.splitlines():
+-        if len(line) < 4:
+-            continue
+-        code, rest = line[:2], line[3:]
+-        if "R" in code or "C" in code:      # 改名/複製那一列是「舊路徑 -> 新路徑」,要的是新的
+-            rest = rest.split(" -> ")[-1]
+-        rest = rest.strip().strip('"')
+-        if rest:
+-            out.append((code, rest))
+-    return out
++    if ents is None:
++        return None
++    return [(x + y, p) for x, y, p, _o in ents if p]
+ 
+ 
+ def _head_shebang(project_root: Path, relpath: str) -> bool:
+     """這支檔在上一次提交裡,首行是不是 `#!`。
+ 
+     ★給已經被刪掉的檔用★:`_shebang_script` 第一步就問「這個檔存在嗎」,
+     檔案刪掉之後永遠回 False——而本 repo 主程式正是沒有副檔名、只能靠首行認出來的檔
+     (設計審三席獨立報同一條)。所以刪除的檔改讀它在上次提交裡的內容。"""
+     try:
+         r = _git(project_root, "show", "HEAD:" + relpath, text=False)
+@@ -742,31 +851,32 @@ def _inner_budget(elapsed=None, default=10.0):
+     """
+     import time as _tm
+     global _BUDGET_START
+     if _BUDGET_START is None:
+         _BUDGET_START = _tm.monotonic()
+     used = (_tm.monotonic() - _BUDGET_START) if elapsed is None else float(elapsed)
+     return max(_BUDGET_FLOOR, _outer_budget(default) * _BUDGET_RATIO - used)
+ # ── ★逾時預算結束★ ──────────────────────────────────────────────────
+ 
+ def _impact_missing(src_files, all_paths, project_root, graph_root, cap=8):
+-    """跟 pre-commit/pre-push 同一條路:lumos impact --diff HEAD --sync-check --json(工作樹 vs HEAD),
++    """跟 pre-commit/pre-push 同一套判法:lumos impact --diff HEAD --sync-check --worktree-nofilter --json(工作樹 vs HEAD;
++    --worktree-nofilter 讓它不跑 git diff、不經被打開目錄自帶的內容過濾器,回合結束檢查代碼審 r3;舊版 lumos 不認得這個選項會 rc2 → 沒資料),
+     取「固定席未動」的前 cap 篇。lumos 尋路同 impact-hook._find_lumos_script 的順序(PATH 先、repo 後);
+     rc 協定同它:rc≠0 視為沒資料,fail-open 回 []。"""
+     import json as _json
+     # ★2026-09-06 改★:原本 which 找不到就退回 `project_root/scripts/lumos`
+     # ——那是**被打開那個資料夾自己的碼**。改成只用可信來源,找不到就跳過。
+     lumos = _trusted_lumos()
+     if lumos is None:
+         return []
+     try:
+-        r = subprocess.run([sys.executable, lumos, "impact", "--diff", "HEAD", "--sync-check", "--json", "--repo", str(project_root)],
++        r = subprocess.run([sys.executable, lumos, "impact", "--diff", "HEAD", "--sync-check", "--worktree-nofilter", "--json", "--repo", str(project_root)],
+                            capture_output=True, text=True, timeout=_inner_budget(default=30))
+         if r.returncode != 0 or not r.stdout.strip():
+             return []
+         d = _json.loads(r.stdout.strip().splitlines()[-1])
+     except Exception:
+         return []
+     miss = [m for m in (d.get("sync") or {}).get("missing", []) if m.get("pinned")]
+     miss.sort(key=lambda m: -m.get("score", 0))
+     return [m["node"] for m in miss[:cap]]
+ 
+@@ -834,22 +944,24 @@ def stop_block_reason(rel: list, graph_rel, mentions: dict) -> str:
+     return out if len(out) <= 1500 else out[:1490] + "…"
+ 
+ 
+ def main() -> int:
+     if not _SHARED_OK:
+         return 0
+     _harden_git_env()
+     harness = "codex" if "--harness" in sys.argv and sys.argv[sys.argv.index("--harness") + 1:][:1] == ["codex"] else "claude"
+     try:
+         payload = json.loads(sys.stdin.read())
+-    except json.JSONDecodeError:
++    except (ValueError, RecursionError, UnicodeDecodeError, OSError):   # 壞 JSON、深層巢狀、非 UTF-8、超長整數(代碼審 r3 邊界席 F1)
+         return 0  # 寧可漏報
++    if not isinstance(payload, dict):
++        return 0
+ 
+     project_root_str = os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd")
+     if not project_root_str:
+         return 0
+     project_root = Path(project_root_str)
+ 
+     # 閘門 0
+     graph_root = find_graph_root(project_root)
+     if graph_root is None:
+         return 0
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 7b5536caf..5c3c29c84 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -879,21 +879,23 @@ def _fail_notes(fails: list, session_id: str) -> list[str]:
+         seen.add(code)
+         if _voice_once(session_id, code):
+             why = IMPACT_FAIL_REASONS[code].format(rc=int(rc) if isinstance(rc, int) else "?")
+             notes.append(_frame_injected(FAIL_NOTE.format(why=why)) + "\n" + FAIL_TAIL)
+     return notes
+ 
+ 
+ def main() -> int:
+     try:
+         payload = json.loads(sys.stdin.read())
+-    except json.JSONDecodeError:
++    except (ValueError, RecursionError, UnicodeDecodeError, OSError):   # 壞 JSON、深層巢狀、非 UTF-8、超長整數(代碼審 r3 邊界席 F1)
++        payload = None
++    if not isinstance(payload, dict):
+         _mark_event("error", "impact hook 收到的輸入讀不懂")   # 判不出是不是圖譜專案,只記不講
+         return 0  # fail-open
+ 
+     # 只處理 Edit/Write/MultiEdit
+     tool_name = payload.get("tool_name", "")
+     if tool_name not in EDIT_TOOLS:
+         return 0
+ 
+     # repo root: 優先 $CLAUDE_PROJECT_DIR,fallback payload cwd(同 check-graph-sync.py:348-355)
+     # ★先算 repo 再 hook_decide★:無副檔名檔的 shebang 判定要用 repo 解相對路徑(前置修正①)
+diff --git a/scripts/hooks/claude/stop-lint-hook.py b/scripts/hooks/claude/stop-lint-hook.py
+index 625a5d4f2..43a8396a4 100644
+--- a/scripts/hooks/claude/stop-lint-hook.py
++++ b/scripts/hooks/claude/stop-lint-hook.py
+@@ -364,21 +364,24 @@ def _claim(sid, pid, batch, sh):
+     return d / (prefix + bname) if sh._claim_mark(d, prefix + bname) else None
+ 
+ 
+ def _unchecked_kind(data):
+     """lint-new rc3 的 JSON → 要記的事件種類,★照 lint-new 明寫的 unchecked_kind★,不再從 undone 的種類推測(代碼審 r2 通才席 F1:
+     git 算不出改動、讀不出 HEAD、過濾器關不掉這三條 undone 是空的,推測會把它們當刻意不查記 ok):
+     deliberate(刻意不查)回 None(鉤子照設計做完了判斷,記 ok)、timeout 記 timeout、failed 記 error;
+     欄位缺、值不認得、JSON 不是物件一律記 error(寧可記失敗,不准記成綠)。"""
+     if not isinstance(data, dict):
+         return "error"
+-    return {"deliberate": None, "timeout": "timeout"}.get(data.get("unchecked_kind"), "error")
++    k = data.get("unchecked_kind")
++    if not isinstance(k, str):                  # 清單、物件拿去查表會丟 TypeError(代碼審 r3 通才席 F1)
++        return "error"
++    return {"deliberate": None, "timeout": "timeout"}.get(k, "error")
+ 
+ 
+ def _on_stop(payload, root):
+     sh = _shared()
+     if sh is None:
+         return 0
+     _inner_budget(default=30.0)               # 起算點第一次呼叫才記:預篩過後第一件事
+     if os.environ.get("LUMOS_STOP_LINT_OFF") == "1" or os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
+         return 0
+     sid = sh._mark_name(payload.get("session_id") or "")
+@@ -495,21 +498,21 @@ def _on_stop(payload, root):
+                         "--prompt", str(pid), "--repo", str(root)], capture_output=True, stdin=subprocess.DEVNULL,
+                        timeout=max(1.0, _inner_budget(default=30.0)), cwd=str(root))
+     except Exception:
+         pass
+     return 0
+ 
+ 
+ def main():
+     try:
+         payload = json.loads(sys.stdin.read())
+-    except (ValueError, OSError):
++    except (ValueError, RecursionError, UnicodeDecodeError, OSError):   # 壞 JSON、深層巢狀、非 UTF-8、超長整數(代碼審 r3 邊界席 F1)
+         return 0
+     if not isinstance(payload, dict):
+         return 0
+     ev = payload.get("hook_event_name")
+     if ev == "UserPromptSubmit":
+         sh = _shared()
+         return _on_prompt(payload, sh) if sh else 0
+     if ev != "Stop":
+         return 0
+     # 預篩在匯入共用模組之前:沒宣告的專案每次收工只付 Python 啟動加讀一個檔

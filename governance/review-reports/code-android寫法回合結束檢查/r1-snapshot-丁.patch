@@ -1,0 +1,430 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
+index 34f1d864f..8c468254f 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
+@@ -151,21 +151,27 @@ REVISIT:2026-12-15 照〈待解問題〉十一組改寫成完整設計(先查世
+ - **E2 兩支 Stop 並行同時擋**:兩支各回不同理由的 block。結果:兩支在 5 毫秒內同時啟動(並行),各自一個程序群組(pgid = pid);模型兩段理由都收到並各做一次。結論:拆成獨立鉤子可行。
+ - **E3 逾時訊號**:第三支 Stop 設 `timeout: 2`、接 SIGTERM 但不結束。結果:2 秒整收到 SIGTERM(15);不理會時約 1 到 2 秒內程序消失(最後一筆存活紀錄在 SIGTERM 後 1.06 秒);Claude Code 不等它,照常往下。結論:鉤子要在上限前自己收掉子程序;被 SIGTERM 時要轉給子程序群組。
+ - **E4 git 會不會改寫索引(git 2.39.2)**:檔案只 `touch` 過(內容沒變)時比對 `.git/index` 雜湊。`git --no-optional-locks status --porcelain=v1 -z -uall` 不變;`git --no-optional-locks diff-index --quiet HEAD` 不變但回 1(只看時間戳,誤判有修改);`git --no-optional-locks diff --quiet HEAD` **改寫**;一般 `git status` **改寫**。結論:只用帶 `--no-optional-locks` 的 `status`。
+ - **E5 宣告檔沒追蹤或被忽略**:未追蹤的 `.lumos/config.json`,`diff-index --quiet` 回 0(漏);`status ... --ignored=matching -- <檔>` 印 `??`;寫進 `.git/info/exclude` 後不帶 `--ignored` 什麼都不印、帶了印 `!!`;只 `touch` 過的 `lint.json` 不印;索引不變。
+ - **E6 改名狀態碼**:`cp` 到新目錄、`git add -N`、刪舊檔 → v1 輸出 ` R b/Foo.kt|a/Foo.kt|`(R 在第二格);另一組 `git add` 新檔 → `A  b/Bar.kt|`。
+ - **E7 白名單路徑**:`<根>/configs/ast-grep/../../proj/sgconfig.yml` 與 `<根>/configs/ast-grep/evil/sgconfig.yml`(evil 是指向專案的符號連結)字串前綴都通過、真實路徑加 `commonpath` 都擋下;相對路徑 `sgconfig.yml` 擋下;合法路徑通過。
+ - **E8 既有剝註解對 Kotlin 片段**:`'"'` 字元字面值,`_strip_c_comments` 與 `_stack_norm_line` 都沒把後面的 `.flatMapLatest` 剝掉(對);巢狀 `/* /* */ flatMapLatest */`,`_strip_c_comments` 漏出 `flatMapLatest`、`_stack_norm_line` 整行不算;字串樣板 `"${flow.flatMapLatest {…}}"` 兩者都剝成空(樣板裡的觸發字不算);沒收尾的字串片段只影響那一行。結論(前掃後更新):這兩個邊角是既有正規式掃描做不到的;盲判那條線已在 `_strip_c_comments` 加 `kotlin=True` 模式專門處理巢狀註解與字串樣板,本案改用它,只剩 Edit 片段本身切在字串或註解中間的情況(見〈天花板〉5)。
+ - **E9 觸發字文件頻率**:型錄 56 列的觸發字,對 Now in Android(本機複本 310 支 kt 檔,排除 build)算「出現在幾成檔案」。超過 5% 的:`Composable` 15.5%、`Inject` 14.5%、`Modifier` 9.4%、`runTest` 6.8%;以列計,D-39 17%、D-33 16%、D-34 11%、D-49 10%;整檔命中至少一列的佔 64%。結論:8% 門檻收前三個字;每次改檔只看寫入內容、最多推三列、同列同會談只推一次,剩下的量交 RETIRE-IF。
+ - **E10 Python 啟動成本**:`python3.14 -c 'import json,sys,os,time,pathlib'` 三次 0.03、0.03、0.05 秒——送出提示事件每回合多付這麼多。
+ - **E11(實作前必跑)背景任務與排程喚醒的回合**:互動模式下用 `run_in_background` 開一個會結束的背景指令、另設一個一分鐘後觸發的排程,讓 Claude Code 自己起回合;記下這兩種回合有沒有 `UserPromptSubmit`、Stop 的 `prompt_id` 是新是舊、`background_tasks` 與 `session_crons` 內容。量到之後回頭改範圍 2 第 3 條的描述(行為定義先照「對不上就不檢查並印一行」)。綁 S12。
++  - **結果(2026-11-06,Claude Code 2.1.319,互動模式用 expect 開、另用 `claude -p` 量背景那半,臨時設定檔掛三個事件記 payload)**:①背景指令結束 → Claude Code 起一個新回合,**有** `UserPromptSubmit`(提示內容是 `<task-notification>…`)、帶**新的** `prompt_id`,那回合的 Stop 帶同一個新編號、`background_tasks` 已是空的;`-p` 模式同形(行程會等背景結束再收)。②一次性排程到點 → 同樣**有** `UserPromptSubmit`(提示內容就是排程的提示)、新 `prompt_id`、Stop 同編號、`session_crons` 已清空。③開背景與排程的那一回合,自己的 Stop 帶 `background_tasks`(status running)與 `session_crons`(一筆)非空,`prompt_id` 跟它自己的送出提示相同。④`-p` 模式下排程到點前行程就結束,排程不會觸發。
++  - **對設計的意思**:這兩種回合都記得到起點,照一般回合檢查;範圍 2 第 3 條「對不上就不檢查並印一行」的退路照留(Codex、舊版或日後改版才會走到),背景或排程那一句只在真的對不上時印。`background_tasks` 非空**不代表**沒記到起點(③),所以那一句只換措辭、不拿來當判斷條件。新發現的漏網:背景指令在**開它的那回合收工之後**才寫的檔,修改時間早於通知回合的起點,兩個回合都不算——列進〈天花板〉1。
+ - **E12(實作時跑)共用模組匯入成本**:`python3.14 -c 'import sys; sys.path.insert(0, "scripts/hooks/claude"); import _hookshared'` 三次;超過 0.1 秒就照範圍 2 第 2 條改。
++  - **結果(2026-11-06)**:匯入本身 3.4、3.6、3.6 毫秒,整個程序 0.03 秒三次——遠低於 0.1 秒,送出提示那條路照原設計匯入共用模組。
++- **E13(實作時跑)ast-grep 給了 `--config` 還讀不讀專案設定**(r2 快照留的說法,S3 要實測一次):臨時 venv 裝 ast-grep 0.51.1,專案根放一份 `sgconfig.yml` 加一條自訂規則。結果:帶 `--config <工具鏈規則包>` 只出規則包的告警、專案那條不出;不帶 `--config` 才吃專案那份。白名單要求恰好一個 `--config` 的理由成立。同次取了一份真 SARIF 當測試假工具的樣本(相對路徑給相對 uri、絕對路徑給百分比編碼的絕對 uri、`-` 開頭的檔名要 `./` 才不被當選項)。
++- **S12 實機驗收(2026-11-06,Claude Code 2.1.319、`claude -p`、sonnet,暫存區實驗專案複本照範本接好、真 ast-grep 0.51.1)**:三次各約 31 到 35 秒(含模型)。三次第一次收工都被擋、原因首行 `LUMOS-STOP-LINT:`、帶檔:行、型錄編號與放行指令;提示裡指定要用 GlobalScope 的兩次,模型續做時選擇照放行指令寫理由放行(之後收工放行);提示說「被擋就照建議修」的那次,續做改成注入的 `applicationScope`、收工放行,全程只擋一次。
++- **Codex(codex-cli 0.160.0,專案層 `.codex/hooks.json` 掛記錄鉤子、`codex exec --dangerously-bypass-hook-trust`)**:送出提示事件**帶 `turn_id`、沒有 `prompt_id`**(鍵:cwd、hook_event_name、model、permission_mode、prompt、session_id、transcript_path、turn_id)。這台帳號試的三個模型都被伺服器拒絕(model_not_found),回合走不到收工,收工事件帶什麼、`turn_id` 對不對得上**沒量到**。照現在的程式,Codex 下收工會因缺 `prompt_id` 一律印「沒記到起點」不檢查(安全但沒作用);要不要改認 `turn_id` 或照 S12 改成不註冊,交編排者裁。
+ - **留到實作時實測、已轉成條款**:Codex 的送出提示與收工事件帶不帶同一個回合編號(既有調研記到 Codex 有 `UserPromptSubmit` 與 `turn_id`,沒實測跟 Stop 對不對得上)→ S12;`lint-new` 的 SIGTERM 收尾、白名單、JSON 要等實作 → S1 到 S4 的測試;ast-grep 給了 `--config` 就不再往上找專案設定(r2 快照的說法)→ S3 實作時實測一次。
+ 
+ ## 實務隱患
+ 
+ - **效能熱路徑**:送出提示每回合多一次 Python 啟動(約 0.03 到 0.05 秒,E10);收工那支跟收工點名並行,使用者多等的是 `max(兩支)`,寫法檢查最壞約 22.5 秒、通常是 lumos 啟動約 0.8 秒加 ast-grep 幾支檔毫秒級;沒宣告 `ast-grep` 的專案不啟動 lumos。改檔前多讀一次型錄表(一次指令內快取)。
+ - **擋錯人**:共用工作目錄時,別的會談同時改的檔修改時間也晚於回合起點,會被算進來;擋下訊息每條帶檔名,模型自己判斷,出口是放行;全域規則本來就要求各會談各用工作樹。lint-new 例外的 rc1 不會誤擋(要 JSON 且 status=blocked)。
+ - **擋停迴圈**:同一回合同一批只擋一次、最多三批;Claude Code 的連續八次續做上限會因呼叫工具而歸零(官方原文),不算兜底。
+ - **併發**:兩支收工鉤子並行,各用不同標記檔名;同會談兩次收工不會同時發生;回合起點用暫存檔加 `os.replace` 原子覆寫。
+ - **資源釋放**:鉤子逾時先 SIGTERM lint-new、1 秒寬限讓它自己收工具群組與快照,寬限過了鉤子自己 SIGKILL lint-new 與登記檔裡的工具群組;工具先登記再解除訊號擋住,不會有開了沒登記的空窗;SIGKILL 漏掉的快照照既有規則一天後清,而且 `.lumos/` 底下的檔不算碰過的檔。
+ - **資安**:回合結束會自動執行被打開專案宣告的命令。只准白名單(寫死在 lumos、逐詞驗、設定檔路徑取真實路徑比對、送 shell 前把 `$HOME` 換成引號包好的絕對路徑);宣告檔沒提交、被忽略或有修改時不跑;鉤子跑 git 前套既有 `_harden_git_env`(關掉會執行指令的兩個 git 設定);擋下原因裡的檔名與告警訊息當資料消毒。跟收工點名那支「被打開的資料夾不准指使我們執行指令」同一個威脅模型。
+@@ -225,21 +231,21 @@ REVISIT:2026-12-15 照〈待解問題〉十一組改寫成完整設計(先查世
+ | S7 | lint-new 的 SIGTERM 處理器被換成什麼都不做、工具是睡 60 秒的假程序 | 1 秒寬限後鉤子 SIGKILL 掉 lint-new 與假工具群組,沒有殘留 | 本篇設計審 r1 可行性席 F2 |
+ | S8 | 跑安裝並跑 `lumos enforcement` | 新鉤子在兩份存活清單裡出現;`_VENDORED_TREE_FILES` 逐檔比對測試綠 | 本篇設計審 r1 依據席 F3 |
+ | S14 | 搬完共用程式後跑 `check-graph-sync.py` 的既有測試 | 全綠 | 本篇設計審 r1 架構對齊席 F1 |
+ 
+ ## 回退
+ 
+ 退回本案的提交:`lint-new` 少了工作樹模式(`--diff` 不受影響);重跑安裝後新鉤子的兩筆註冊消失(檔不在白名單後 `_prune_dangling` 也會剪);`stop-turn/` 與 `stop-block/*.lint-*` 照七天清理自然消失;改檔前不再推列;型錄停用字與三列觸發字改回原樣;治理帳已寫的 `stop-lint` 事件留著(只追加,讀的人看不懂就略過)。
+ 
+ ## 天花板
+ 
+-1. 只看這一回合碰過、還沒提交的檔;同一回合先寫後提交的檔、修改時間被保留成舊值的檔、被逾時殺掉那回合的檔、沒記到起點的回合(含背景或排程喚醒而沒有送出提示事件的,見實驗 E11),等代碼審通過前或推送前閘。
++1. 只看這一回合碰過、還沒提交的檔;同一回合先寫後提交的檔、修改時間被保留成舊值的檔、被逾時殺掉那回合的檔、沒記到起點的回合、背景指令在開它的那回合收工之後才寫的檔(實驗 E11:通知回合的起點晚於寫檔時刻),等代碼審通過前或推送前閘。
+ 2. 回合結束只跑白名單命令(現在只有 ast-grep);detekt 這類工具的新增告警要等代碼審通過前或推送前閘。
+ 3. 共用工作目錄時,別的會談同時改的檔會被算進來。
+ 4. 搬檔配基準只認唯一的同名檔;一次改超過 50 支檔的回合不檢查。
+ 5. 決策列只看寫入的片段:Edit 的 `new_string` 若從字串或註解中間切起,剝字串會對錯邊,那一段的觸發字可能多算或漏算。
+ 6. 沒有知識圖譜的專案不推決策列(決策 d2)。
+ 7. 停用字門檻用一個開源專案(Now in Android)量出來;別的專案的常用字可能不同。
+ 
+ REVISIT:[when-status:Projects/Android寫法回合結束檢查與改檔前推列_計劃=done][by:2027-02-15] 查有沒有接了規則包、卻沒有知識圖譜的 Android 消費專案;有就把決策列改到 `cmd_impact` 找不到圖譜之前也算(天花板 6)
+ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻率,超過 8% 的補進停用字表(天花板 7)
+ 
+@@ -258,21 +264,28 @@ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻
+ | 機讀介面 `--json` 最後一行 | lumos 既有 `impact --json` 讀法(取最後一行解析) | `check-graph-sync.py` 的 `_impact_missing` | 範圍 1 第 8 條 |
+ | 工作樹清單不改寫索引 | git 官方 `--no-optional-locks`、porcelain v1 格式 | https://git-scm.com/docs/git#Documentation/git.txt---no-optional-locks ;https://git-scm.com/docs/git-status#_porcelain_format_version_1 ;實驗 E4、E6 | 範圍 1 第 2、3 條 |
+ | 宣告檔乾淨判法 | git status 的 `--ignored=matching` | https://git-scm.com/docs/git-status#Documentation/git-status.txt---ignoredltmodegt ;實驗 E5 | 範圍 1 第 3 條 |
+ | 白名單路徑比對 | Python `os.path.realpath`(解 `..` 與符號連結)、`os.path.commonpath` | https://docs.python.org/3/library/os.path.html ;實驗 E7 | 範圍 1 第 5 條 |
+ | 白名單資安動機 | 收工點名那支既有「被打開的資料夾不准指使我們執行指令」與 `_harden_git_env`;ast-grep 設定可宣告自訂語言載入原生程式庫 | https://ast-grep.github.io/reference/sgconfig.html | 範圍 1 第 5 條、〈實務隱患〉資安 |
+ | 決策列併進棧別題那一段 | 既有 `cmd_impact` 算 `stack_questions_applicable` 那段的啟用條件;盲判那條線的 `_strip_c_comments(kotlin=True)`、`_kt_decision_table` | 實驗 E8;`android-situation-evidence` 工作樹 `scripts/lumos`(2026-11-06 查) | 〈決策〉第四條、範圍 3 第 2、3 條;[[Systems/棧別提問表態閘]] |
+ | 觸發字邊界定義 | [[Projects/Android寫法語意情境表態與盲判_計劃]]〈用詞〉候選列;實作在盲判那條線的 `_kt_trigger_re` | `android-situation-evidence` 工作樹 `scripts/lumos` | 用詞 `_kt_trigger_re` |
+ | 工作樹模式保底與 `--budget` | 既有 `_LINT_NEW_DEFAULTS`(`budget_sec` 300、`per_cmd_floor_sec` 30)與「剩餘預算不到保底就不跑」的判法 | `scripts/lumos` 的 `_LINT_NEW_DEFAULTS`、`_lint_new_config` | 範圍 1 第 1、6 條;S13 |
+ | 停用字用文件頻率 | 資訊檢索 IDF 概念 | https://nlp.stanford.edu/IR-book/html/htmledition/inverse-document-frequency-1.html ;實驗 E9 | 範圍 3 第 5 條 |
+ | 撤除條件量得到 | 既有治理帳記帳路徑 `_gate_event_or_warn`,由呼叫層在真的擋下後記;`_hookevent` 只記活著沒、不記成效 | `scripts/hooks/claude/_hookevent.py` 檔頭說明;本篇設計審 r1 通才席 F2 | 範圍 1 第 9 條、範圍 2 第 6 條、RETIRE-IF |
+-| Codex 是否同形 | 既有調研記到 Codex 有 UserPromptSubmit、Stop、`turn_id`;第三方部落格(未核官方) | [[Projects/Codex工作流整合_調研]];https://codex.danielvaughan.com/2026/03/26/codex-cli-hooks-deep-dive | S12 實測後補 |
++| Codex 是否同形 | 既有調研記到 Codex 有 UserPromptSubmit、Stop、`turn_id`;第三方部落格(未核官方);2026-11-06 實測送出提示帶 `turn_id` 不帶 `prompt_id`,收工沒量到 | [[Projects/Codex工作流整合_調研]];https://codex.danielvaughan.com/2026/03/26/codex-cli-hooks-deep-dive ;〈實驗〉Codex 那條 | 範圍 2 第 3 條;[[Systems/回合結束寫法檢查]] PITFALL |
++| 背景與排程回合也記得到起點 | 實測背景指令結束、一次性排程到點都觸發送出提示、帶新 `prompt_id` | 實驗 E11(Claude Code 2.1.319) | 範圍 2 第 3 條、〈天花板〉1 |
++| 給了 `--config` 不吃專案設定 | ast-grep 0.51.1 實測;設定檔說明頁 | https://ast-grep.github.io/reference/sgconfig.html ;實驗 E13 | 範圍 1 第 5 條 |
++| 共用模組匯入不拖慢送出提示 | 實測匯入 3.5 毫秒、整個程序 0.03 秒 | 實驗 E12 | 範圍 2 第 2 條 |
++| 批次雜湊 | 指紋多重集合排序後取 sha256 前 16 碼(Python 標準庫 hashlib) | https://docs.python.org/3/library/hashlib.html | 用詞「批次雜湊」、S2 |
++| 工作樹改動清單與基準讀取 | `git cat-file --batch` 一次讀多個 HEAD 物件 | https://git-scm.com/docs/git-cat-file#_batch_output | 範圍 1 第 2 條 |
++| 原子寫回合起點 | `os.replace` 同一檔案系統上是原子的 | https://docs.python.org/3/library/os.html#os.replace | 範圍 2 第 2 條 |
++| 名額先佔 | `os.open` 帶 `O_CREAT|O_EXCL` 已存在就失敗;既有收工點名同一做法 | https://docs.python.org/3/library/os.html#os.open ;`scripts/hooks/claude/check-graph-sync.py` 的 `_stop_mark_write` | 範圍 2 第 6 條 |
+ 
+ ## 審計修正紀錄
+ 
+ - 拆出(2026-11-05):母計劃第二輪設計審 36 條加 2 條的一部分落在本案機制,依根因分七組;卷證 governance/review-reports/android寫法寫完當下自動檢查/。
+ - r1(2026-11-05,四席 sonnet):42 條/blocking 19;白名單改寫死、`lint-new` 自己接 SIGTERM、沿用既有狀態解法與標記寫法,回合邊界改用回合時間戳;逐條去向在 r1-intake.md。
+ - r2(2026-11-06,四席 sonnet):折入後依根因分十一組,照熔斷提示拆成本篇。
+ - 改寫(2026-11-06):十一組逐組處理,見〈待解問題〉;先做實驗 E1 到 E10(官方鉤子文件、`claude -p` 實測、git 索引實測、NIA 語料量觸發字頻率)再定設計;主要改變是寫法檢查拆成獨立鉤子、回合起點改在送出提示時記、鉤子與 lumos 之間改用 JSON、決策列併進棧別題通道。設計審待派(新卷證目錄)。
+ 
+ - 本篇 r1(2026-11-06,4 席):19 條/blocking 9/擋停與去重改綁回合、記帳移到鉤子真擋之後、冷卻窗不擋決策列、改名鏈追回原檔、工具群組先登記再開跑且鉤子打得到、背景與排程回合列實驗不當官方行為寫、相依改成整合分支先合第三批、新鉤子五個登記點全列、共用程式改走底線共用模組。
+ - 席報告與收貨:governance/review-reports/android寫法回合結束檢查與改檔前推列/(r1-通才-sonnet.md、r1-可行性-sonnet.md、r1-依據-sonnet.md、r1-架構對齊-sonnet.md、r1-intake.md)。
+@@ -291,10 +304,20 @@ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻
+ | 依據 F1 自己起的回合當官方行為寫 | major 擋 | 折入:PRIOR-ART ① 改寫成官方原文加「沒寫、沒量」;範圍 2 第 3 條定行為(印背景或排程那一句);實驗 E11;依據表第一列 |
+ | 依據 F2 相依先後矛盾 | major 擋 | 折入:照裁決新增範圍 0「本機整合分支先合第三批分支再開工」;〈不做〉、相依案同步 |
+ | 依據 F3 登記點漏列 | major 擋 | 折入:範圍 2 開頭列五個登記點(含 `_hookshared.py` 進 `_VENDORED_TREE_FILES`);S8 |
+ | 依據 F4 官方措辭、八次上限 | minor | 折入:PRIOR-ART ② 用官方原文、寫明八次上限因呼叫工具歸零不算兜底;實務隱患、依據表 |
+ | 依據 F5 d1 舊決策出處 | minor | 折入:〈決策〉新 WHY 寫出 [[Projects/README審視五修_計劃]] d2 與翻案理由;待解第 10 組 |
+ | 依據 F6 平台排除題號 | minor | 折入:範圍 3 第 2 條定成「集合不含 `kt-compose`」;S9 |
+ | 依據 F7 載入成本與預篩順序 | minor | 折入:範圍 2 第 1 條預篩在匯入之前;送出提示路徑的匯入成本列實驗 E12 |
+ | 架構對齊 F1 importlib 載鉤子 | major 擋 | 折入:共用程式搬進 `_hookshared.py` 走 `sys.path.insert`;〈決策〉新 WHY;S14 |
+ | 架構對齊 F2 porcelain 三份 | minor | 折入:`_tg_rb_pending`、`_handoff_files` 一起收編;〈不做〉;S1 |
+ | 架構對齊 F3 訊號處理新慣例 | minor | 折入:範圍 1 第 7 條寫明新慣例並記進 [[Systems/hook逾時預算]](範圍 4 已列該篇) |
++
++- 實作(2026-11-06):條款 S1 到 S14 的字面都沒改寫;下面是實作時多做或照條款精神調整的地方,理由逐條寫:
++  - **第六個登記點**:新鉤子與 `_hookshared.py` 另要進錨點清單 `ANCHOR_FILES`(既有守衛 t_anchor_covers_all_auto_running_hooks 要求每支版控裡的 hook 都在裡面;計劃五個登記點沒列到)。錨點基準 `governance/anchor-baseline.json` 要人跑 anchor approve 補上,補之前 t_anchor_files_match_baseline 是紅的。S8 的測試多驗這一點。
++  - **既有守衛的調整**:①可信來源漂移守衛原本要求每支用到 `_trusted_lumos` 的鉤子自己定義一份,改成「從 `_hookshared` 匯入也算」(共用模組那份照樣逐字比對);②匯入純度探針(t_handoff_hook_import_is_pure)原本只准讀 hook 自己與標準庫,收工點名改從同目錄匯入共用模組後,匯入系統必然讀那支檔、列一次 hook 目錄,放寬成也准這兩件(其他兄弟檔照樣違規);③三條寫死數量的測試照新增的註冊與存活清單加一(Codex 註冊 6→8、enforcement 列 25→27、unknown 12→13)。②是放寬守衛,交編排者裁。
++  - **收工點名模組層**:匯入路徑改用 `os.path.abspath` 而不是 `resolve()`,匯入這支檔不碰檔案系統中繼資料;共用模組匯入失敗時整支靜默放行(`_SHARED_OK`)。
++  - **白名單比條款嚴**:通過的命令整條重組(佔位符與 `>` 原樣、其餘每個詞 `shlex.quote`),不只換 `--config` 的值;禁用參數藏在 `--filter`、`--globs` 的值裡也擋(變異測試發現只靠「不在白名單」擋不到這種,補了斷言)。
++  - **`-` 開頭檔名**:快照路徑一律是絕對路徑,換進 `{LINT_FILES}` 的不會以 `-` 開頭,`./` 前綴由構造保證、沒有另寫一段(S1⑨ 照樣驗)。
++  - **工作樹模式的 `.lumos/lint-deps.json`、作弊比對**:照範圍 1 不跑;人讀輸出第一行提醒「作弊比對留給推送前閘」。
++  - **決策 d1 開頭欄位**仍寫「同一會談」,本篇不自改,照上表交編排者改寫。
++- 實作期驗收:E11、E12、E13 與 S12 結果見〈實驗〉;每道新檢查各改壞一次的結果在交付回報裡(變異複本與 git clone --shared,清 `__pycache__` 再跑)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md b/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md
+index 5aa7572ac..c55911cce 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md
++++ b/docs/lumos-toolchain-knowledge/Systems/graph-sync-coverage.md
+@@ -1,33 +1,35 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-08-22
+-updated: 2026-08-22
++updated: 2026-11-06
+ self_audit: sonnet/2026-08-30
+ aliases:
+   - 圖譜同步點名
+   - sync nudge
+   - 同步覆蓋
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   FLOW:改 code→(Stop hook 當輪點名)→git commit/git push 的點名 2026-09-11 起改由 [[Systems/每支檔有家]] 照家算(不再用本篇的反引號為種子那一套)→代碼審留痕前 `lumos impact --diff --sync-check` 仍照本篇算
+   KEY:★2026-09-11 起提交前與推送前的點名移出本篇★:原本兩個掛鉤都呼叫 impact --sync-only,以反引號命中的節點為種子,會把人推回寫了一堆別人檔名的大雜燴節點;改由每支檔有家照 about_code 宣告的家點名(家超過 8 篇只印一句)。本篇剩 Stop hook 當輪點名與代碼審留痕前的 --sync-check [test:t_nodehome_sync_nudge_by_home]
+   KEY:「動過圖譜」不等於「動對篇」——(2026-09-11 前)三個位置都用 lumos impact --sync-check 算「跟改到的 code 直接相關(固定席:合約/事故/直接相依)、這次卻沒動」的筆記,點名前 8 篇;★2026-09-05 起兩家都在改了碼沒寫回時回 block 一次讓模型續做補筆記(stop_hook_active+session 標記雙護欄;Codex 先做 [[Projects/Codex行為精修_計劃]],Claude 同日套用 [[Projects/README審視五修_計劃]] d2——舊 stderr 提醒官方文件明講模型看不到)★,逃生門仍是 --no-verify(有繞過帳)
+   KEY:刻意不硬擋:單體大檔(scripts/lumos)一次牽 30+ 篇,硬擋會把人訓練成反射 --no-verify
+   KEY:[2026-09-17]收工擋停的標記目錄改成逐層建逐層檢查:原本一次 mkdir 整條路徑再檢查,上層被換成指向別人目錄的連結時,別人的目錄裡已經多出一個 stop-block 資料夾,檢查才說不碰它,跟它註解的承諾矛盾。判準跟主程式 _mkdir_trusted_under_home 同一套(真目錄、屬於自己、別人不可寫;任一層不過就停手、已建的不回頭刪),這支 hook 是獨立檔不 import 主程式所以邏輯抄一份,★一邊改了另一邊要跟著改★;誠實邊界:擋不住同帳號搶跑 [test:t_stop_block_dir_does_not_touch_someone_elses_dir]
+   KEY:[2026-09-18]★第一個時機(收工那一支)的清單改成問版本控制★——原本閘門 2 與閘門 3 的判準都靠列舉工具名,用 `>` 重導向/`sed -i`/heredoc 改的檔一支都不算(實測一輪改三支只報一支,全走 shell 時連響都不響;逐字稿量到 286 次走 shell 對 31 次走編輯工具)。兩處都改;★要帶展開旗標★否則全新目錄摺成一行。核心代價=不再宣稱切得出「這一輪」,措辭改口成工作樹語意;為了不刷屏,清單跟上次印的一樣就不印(那份紀錄壞掉只會多印一次不會少報)。★不沿用本篇原本那個查詢的理由:它看不到從未被追蹤的新檔,而 `echo > 新檔` 正是最常見的 shell 寫法★。查詢失敗一律靜默放行。單源 [[Projects/收工點名問版本控制_計劃]] [test:t_sync_nudge_lists_shell_written_files] [test:t_sync_nudge_gate3_sees_shell_written_notes] [test:t_sync_nudge_lists_untracked_dir_files_individually] [test:t_sync_nudge_suppresses_identical_repeat]
+   DEP:[[Systems/lumos-cli-read]]
+   TEST:t_precommit_sync_nudge_names_missing_pinned_nodes(動錯篇點名/動對篇不點名)
++  WHY:可信來源、預算、家目錄標記目錄、檔名消毒、git 防護那八個名字從 check-graph-sync.py 搬進共用模組 _hookshared.py,這支照名字匯入回來 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2、設計審 r1 架構對齊席 F1] [因:收工寫法檢查也要用同一套;這支檔吃過抄一份一邊沒跟上的虧,底線共用模組是既有 _hookevent.py 的做法] [不選:新鉤子用 importlib 載這支(會帶起它的模組層狀態)] [代價:替換本模組的 _stop_dir_ok 打不到共用模組裡的呼叫;匯入純度探針放寬成也准讀 _hookshared.py、列 hook 自己的目錄] [test:t_hookshared_move_keeps_graph_sync]
++  WHY:兩支收工鉤子的檔集刻意不同:這支點名工作樹上全部未提交的程式碼檔(不切回合),[[Systems/回合結束寫法檢查]] 只看修改時間不早於回合起點的檔,擋停標記也分開 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 決策第三條] [因:新增告警要先分出這回合碰過的,否則每個新會談第一回合都被前人的未提交改動擋;這支只是提醒寫筆記,不切回合] [不選:兩支共用同一份檔集]
+ verified_by:
+   - "[[Verification/2026-09-05_Codex行為精修f02後測]]"
+   - "[[Verification/2026-09-05_README審視量測]]"
+   - "[[Verification/2026-09-18_收工點名改問版本控制]]"
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
+ decisions:
+   - content: 收工 Stop hook 擋一次兩家一致(Claude 也擋):Claude Code 官方文件明講 exit 0 的 stderr 只進除錯日誌、模型看不到,舊「軟提醒」實為零;07-06 撤的是每回合 nag,同 session 只擋一次且只在改了碼沒寫回時不算重開 nag。單源 Projects/README審視五修_計劃 d2
+     id: d1
+     decided: 2026-09-05
+     valid: true
+diff --git a/docs/lumos-toolchain-knowledge/Systems/hook逾時預算.md b/docs/lumos-toolchain-knowledge/Systems/hook逾時預算.md
+index dc5784c97..0721d5fde 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/hook逾時預算.md
++++ b/docs/lumos-toolchain-knowledge/Systems/hook逾時預算.md
+@@ -1,29 +1,32 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-07
+-updated: 2026-09-07
++updated: 2026-11-06
+ aliases: []
+-about_code: []
++about_code:
++  - scripts/merge-claude-settings.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/platform
+ summary: |-
+   FLOW:註冊表一處定天花板 → 指令列 --budget 傳給 hook → hook 內層一律取「天花板×0.7 減已耗、下限 1 秒」→ 逾時走自己的 fail-open,不是被外面砍掉
+   KEY:★量出來的症狀(2026-09-07)★五支 hook 三支違反自家「外要明顯大於內」:進場提醒 10 vs 10、影響鏡頭 30 vs 30、收工檢查外 10 內 25(內是外的 2.5 倍)
+   KEY:★內≥外代表那條 fail-open 分支結構上永遠跑不到★——外面先 SIGKILL 整支 hook、繞過 try/except;影響鏡頭那條分支裡有「清掉冷卻窗記號」,跑不到=超時後那個檔被鎖 20 分鐘不注入而沒人知道。一個為了 fail-open 而寫的分支,自己被 fail-closed 掉了
+   KEY:★超時不殺子行程★(同批第二刀)原本超時就砍,算到一半全丟、下一席再燒一次(實際:一天 39 次派工 21 次放空);改成到時間放手不管,它繼續算完寫進 20 分鐘快取。用獨立行程組,不然會跟著 hook 的行程組一起被收掉
+   KEY:收工檢查的外層從 10 提到 30——不是內層寫太大,是外層給太少(它內層真的需要 25 秒)
+   DEP:scripts/merge-claude-settings.py(HOOK_BUDGET 單一來源)|scripts/hooks/claude/*.py(_inner_budget 複本+守衛)
+   TEST:t_hook_inner_timeout_always_below_outer,t_lens_timeout_keeps_warming_cache
++  WHY:收工寫法檢查天花板 30 秒、逾時要殺子程序,是本篇「超時放手不殺」的例外 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2 第 4 條、實驗 E3] [因:它的結果不快取、過時就作廢,放手讓它跑完沒有東西可撿;Claude Code 逾時送 SIGTERM、約 1 到 2 秒內收掉,所以先 SIGTERM 加 1 秒寬限再 SIGKILL 登記的群組] [test:t_stop_lint_hook_timeout]
++  WHY:主程式第一次裝訊號處理器:lint-new 工作樹模式一進來先裝 SIGTERM 處理器,開工具前用 pthread_sigmask 擋住 SIGTERM、登記完才解除 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 1 第 7 條、設計審 r1 可行性席 F2] [因:工具在自己的 session,lint-new 被 SIGKILL 時呼叫端打不到它們,要靠登記檔;沒擋住訊號的空窗會漏收剛開的那支] [test:t_lint_new_worktree_sigterm]
+ plan_refs:
+   - "[[Projects/全repo審視_計劃]]"
+ decisions:
+   - content: 影響鏡頭單檔逾時不再寫死 30 秒,改成由外層天花板算(天花板×0.7 減已耗);翻掉舊的「單檔維持 30 秒(逐字等價)」
+     id: d1
+     context: 舊值 30 等於外層天花板。內層一到,外面會先把整支 hook 砍掉(SIGKILL、繞過 try/except),於是內層那條「逾時就 fail-open」的分支結構上永遠跑不到——而那條分支裡有「把冷卻窗記號清掉」。跑不到就表示:超時之後那個檔被鎖住 20 分鐘完全不注入,而且沒有人知道。翻的是 Projects/Codex完全支援_計劃 實作紀錄裡那句「單檔維持 30 秒(逐字等價)」。2026-09-07 代碼審 batch8 r1 架構席指出翻案沒走正式決策鏈、r2 再次指出仍未補,故補記。
+     why_chosen: 舊裁定的理由是「改寫時不動行為」,本身沒錯;但那個數字讓一條為了容錯而寫的分支自己被卡死,代價是使用者看不到的靜默失效。只調大外層不解決問題——內層等於外層這個結構還在。改成由天花板算,內層永遠明顯小於外層,逾時走得到自己的分支。
+     decided: 2026-09-07
+     valid: true
+ verified_by:
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 63094166b..af532c019 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -21,20 +21,21 @@ summary: |-
+   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
+   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
+   RULE:規則在真專案誤報超過命中的一成就降提示級或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+   REVISIT:2027-02-05 拿兩個以上新的真 Android 專案再量一次會擋的規則(2026-11-05 只量實驗專案與 nowinandroid 共 30 處命中,多數規則只命中 1–3 處,估不準每條的誤報率)
+   SEE:[[Systems/linter精選目錄]] [[Systems/pitfalls-code-loop]]
+   PITFALL:規則包測試用 rglob 的第一個檔去改壞,在 Linux 上可能挑到剛放進去的 review-fp 樣本、把它蓋掉,兩條改壞驗證跟著失效(macOS 綠、CI 紅) [出處:2026-11-05 PR #158 合併後主線 CI] [根因:目錄列舉順序依檔案系統而定,APFS 恰好照名稱排、ext4 不是] [修法:照檔名挑或整個目錄都改,不用 next(rglob)] [test:t_kotlin_rulepack_samples]
+   WHY:型錄〈情境決策表〉加「證據樣式」欄(主與例外兩段,各是(無)或一到三條正規式,照那一列標準寫法與不適用時的字面特徵推,不另立寫法);格式檢查改依表頭名稱取欄,另驗證據樣式能編譯、條數對、停用列的觸發字與證據樣式都是(無),列編號連號照舊 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 1] [因:推送前情境題要拿樣式核表態指的那一行] [test:t_kt_catalog_evidence_patterns]
+   WHY:決策表的讀法只有 check.py 的 dt_table/dt_row 一套(依表頭取欄、停用列不讀觸發字與證據樣式、標了換列的列例外一定要是(無)),scripts/lumos 用 importlib 借用;換列的列認「不適用時」格子開頭的(換列)標記,不從「見下一列」這類中文用語推 [出處:代碼審 code-android情境題與表態對程式 r1 D7、D10] [因:原本 lumos 與 check.py 各寫一套讀表、必有欄已經分歧(6 欄對 8 欄),換列靠中文字樣推、改個說法就悄悄變成可選例外] [test:t_kt_situation_catalog_single_reader]
+   WHY:每列證據樣式附正例與反例(samples/situation/<列編號>.kt.txt,副檔名不是 .kt 免得推送閘把教材當產品碼),自檢經 scripts/lumos 真的切段與核對程式跑:正例要有一行對得上、反例要每一行都對不上(推送前對不上只提醒,自測守的是樣式本身沒壞,代碼審 r2)、樣本要切得出含那一列的段,反例要碰得到樣式真正在管的地方(順序、型別參數,r2 邊界 F12);壞寫法跟標準寫法只差在語意時那一段寫(無)交盲判 [出處:代碼審 r1 D1;ast-grep test 的 valid/invalid https://ast-grep.github.io/guide/test-rule.html ;Semgrep 的 ok/ruleid https://docs.semgrep.dev/writing-rules/testing-rules ] [因:人逐列寫的樣式在 56 列裡有 9 列擋掉型錄自己的標準寫法或放過對應的壞寫法] [不選:靠人逐列看] [test:t_kt_situation_evidence_samples]
+   WHY:自檢程式多一支 dt_sources(型錄全文 → 每列決策表的出處:那列「來源」格,加上對應檢查在型錄主表的名稱與來源,縮寫照〈來源縮寫〉表展開),lumos 借它給盲判材料附出處;主表或縮寫表找不到時那幾格留空不報錯(讀得懂讀不懂歸 dt_table 與 catalog_problems) [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4;使用者 2026-11-05 第 3 要點(來源與依據在語意盲判時輔助判別)] [因:讀表只留一套,出處也從同一支讀] [不選:lumos 自己再寫一套讀主表] [test:t_blind_judge_template_excludes_dispositions]
++  WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+ - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+index 476d8ccd4..b7b462b3c 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lumos-cli-lifecycle.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-06-26
+-updated: 2026-10-08
++updated: 2026-11-06
+ self_audit: sonnet/2026-08-21
+ about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
+ responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
+ tags:
+   - type/system
+   - status/done
+   - risk/不可逆
+   - scope/platform
+ summary: |-
+   WHY:update --dry-run 用目前的工具來源預覽、不拉來源、不寫任何檔,結尾教人帶 --source 與 --no-pull 套用同一份 [出處:[[Projects/update預覽規範檔變更_計劃]]] [因:rtb 規定規範檔改動要先經使用者同意;預覽若先拉來源,會跑拉之前載入的舊程式算、且換掉全機共用工具] [不選:預覽時拉來源再算;每次 update 停下來問] [test:t_update_dry_run_writes_nothing]
+@@ -36,20 +36,21 @@ summary: |-
+   KEY:★2026-09-12 多語言 repo 實撞★——_init_config_skeleton 的多平台分支原本只取檔數前三名(ranked[:3]),一個九種語言的 repo 只產出三個平台,其餘六種的測試從此掃不到;而掃不到的症狀不是報錯,是合約綁不上、閘靜默放行。改成偵測得到的語言全部列出來,骨架註解叫使用者刪掉不要的。★代價不對等★:多列一個平台=使用者刪一段設定,少列一個=那個語言的守衛整批不存在 [test:t_init_writes_config_skeleton]
+   KEY:_scaffold_project 既有 vault 自動 skip(保護圖譜資料不被 init/update 動)
+   KEY:cmd_init slug 決定順序=①--name ②既有 vault 資料夾名(去 -knowledge)③repo basename;②先於③是硬要求——否則既有 vault 上 --force 用 basename 建錯空 vault + 寫錯 CLAUDE.md {{KG}} 路徑(見 [[init-force-slug誤用basename]]) [test:t_init_force_uses_existing_vault_slug]
+   DEP:scripts/lumos cmd_install/cmd_uninstall/cmd_bootstrap/cmd_init/cmd_update/cmd_deinit/cmd_teardown｜_vendor_toolchain/_install_skills/_install_hooks_py/_sync_global_claude/_teardown_global_claude/_link_or_copy/_scaffold_project｜merge-claude-settings.py(--prune-only)｜_VENDORED_TOOLKIT/_SKILLS 常數｜_lumos_src/_vault_in
+   TEST:258 passed(t_install_skills/t_install_includes_skills/t_install_hooks_py/t_scaffold_project/t_link_or_copy_idempotent/t_hooks_python_fallback + t_deinit_*)
+   KEY:★2026-09-04 Codex 完全支援 S0★:install/uninstall/teardown 多一家——skills 也連到 ~/.agents/skills(開放共用目錄:既有非我方真目錄跳過不刪,只重建帶 .lumos-managed 標記的複製物)、hook 同一批檔 copy 到 ~/.codex/hooks + 合併器 --target codex 寫 ~/.codex/hooks.json(matcher 對照 apply_patch/SubagentStart,命令列帶 --harness codex);_sync_global_hooks 回三態 ok/probe/merge-failed/absent(壞 JSON 不再印假成功);紀律區塊注入/剝除/Check D 三端共用目標清單 CLAUDE.md+AGENTS.md(有 AGENTS.override.md 寫它;插檔首);Codex 的 hook 要人在互動 codex 審過才跑,install 印提示。設計 [[Projects/Codex完全支援_計劃]]
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]安裝入口(install.sh、get.sh、get.ps1、install-hooks.sh、install-graph-toolchain.sh)只負責找一支任何版本的 python 把 lumos 叫起來,找 3.14 交給 lumos 開頭的檢查([[Systems/python直譯器選擇]]);原本寫死 python3,只裝了 python3.14 的機器進不去。get.ps1 與 Windows 的 lumos.cmd 用「真的執行成功」挑,因為商店替身 python.exe 找得到卻跑不起來
+   WHY:[2026-09-29 代碼審 r1 外家席]安裝入口與 git 掛鉤內嵌的那段第一步先認 LUMOS_PYTHON(設了而且能執行就用它叫 lumos):找不到時的說明叫人設它,第一步不認的話,只把 3.14 裝在自訂位置的人照說明設了仍被擋在門外
+   WHY:lumos 的 `main()` 一進來就設 `GIT_NO_REPLACE_OBJECTS=1`、`GIT_GRAFT_FILE` 指到不存在的路徑、拿掉 `GIT_DIFF_OPTS` 與 `GIT_EXTERNAL_DIFF`,所有子命令與它起的子行程都繼承;範圍外:`GIT_DIR`/`GIT_WORK_TREE` 不清——git 跑掛鉤時本來就設它們,同一設定也讓真正的推送推到假 repo,CI 在乾淨環境重算 [出處:governance/review-reports/code-派工鏡頭可指定目標repo/r1-資安-sonnet.md(替身讓提交寫法讀到假計劃)、r2-合約-sonnet.md 第七條(入口只寫在派工鏡頭節點)] [因:git replace、grafts 與差異選項環境變數會讓讀起點版本、檔名清單、差異的閘看到假歷史或少了前後文(`GIT_DIFF_OPTS` 會蓋掉明寫的 -U0)] [不選:逐個 git 呼叫各自帶 env(呼叫點上百個,天生會漏)] [代價:lumos 起的所有子行程都繼承,含 bound-tests、fix-check 跑的使用者專案測試;使用者自己設的 GIT_DIFF_OPTS/GIT_EXTERNAL_DIFF 在 lumos 底下不生效] [test:t_dispatch_lens_spec_commit_ignores_git_replace] [test:t_dispatch_lens_ignores_git_grafts] [test:t_dispatch_lens_ignores_git_diff_opts] [test:t_dispatch_lens_ignores_git_external_diff] [test:t_lumos_inproc_main_keeps_git_entry_env]
+   WHY:[2026-09-29 Projects/存量漂移改法_計劃]簿記名單多一個修復帳 governance/drift-fixes.jsonl(跟表態檔一樣是人對發現的處理紀錄,不是程式改動);舊版 lumos 的名單裡沒有它,只改帳檔的提交在舊版會被當成程式改動、推送前跑全套——修復帳本來就跟筆記一起提交,影響只是多跑測試
++  SEE:[[Systems/回合結束寫法檢查]]
+ decisions:
+   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
+     id: d1
+     context: 同事 onboarding 與多 repo 使用需要分清「一輩子裝一次的機器設定」與「每個 repo 各自要做的」;deinit 反安裝若誤碰機器共用項會傷到其他 repo
+     why_chosen: bootstrap 一鍵把機器層全裝(clone Lumos+全域+skills+repo hooks);init/deinit 對稱只在本 repo 增刪,deinit 明確不碰 ~/.claude,降低反安裝爆炸半徑
+     decided: 2026-06-26
+     valid: true
+   - content: 全域 lumos 與 skills 用 symlink/junction 指向來源 clone(非 copy),graph-discipline.md 則 per-project 注入
+     id: d2
+     context: 工具更新如何傳到夥伴機器;若全 copy 則每次更新都要重裝
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index b1895092b..3420ecd9f 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -82,20 +82,21 @@ summary: |-
+   REVISIT:2026-12-15 下次發版在 CHANGELOG 寫明 governance/redbase/ 是新的簿記資料夾:還沒 lumos update 的協作者沒有這項豁免,別人提交的紅燈版夾在他的留痕與推送之間會被判留痕過時([[Projects/規格閘紅燈測試快照_計劃]])
+   WHY:新增告警閘多認 `.lumos/config.json` 的 `lint_new.include_test_paths`(副檔名清單,預設空=照舊排除測試路徑),只接在閘的呼叫處、不改測試路徑樣式本身 [出處:2026-11-05 [[Projects/Android協程與API寫法機械檢查標準_計劃]] 範圍 5] [因:Kotlin 的 src/test/ 被排除,型錄 TEST 主題規則永遠不響] [test:t_lint_new_include_test_paths]
+   WHY:新增告警閘的擋下訊息每條告警印到 120 字(跟解析 SARIF 截斷同數) [出處:2026-11-05 同計劃 S5 實跑] [因:規則包訊息的修法在後半段,原本截 70 字把修法切掉] [test:t_lint_block_message_shows_fix]
+   WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘(含測試防竄改比對)與 Room 守衛都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
+   WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
+   WHY:新增告警閘對逗號佔位符({LINT_FILES_CSV})的命令:路徑含逗號或分號的檔從那條命令拿掉、列進「檔太大沒檢查」同一組(擋,可逐檔放行,指紋跟大檔同形),一條命令的檔全被拿掉時判沒被檢查;換完超過 100,000 位元組對半切分批跑、合併結果;開程序丟參數太長記成那條沒跑到並擋 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 2、3] [因:detekt 拿逗號與分號分 --input,那種路徑整條拒跑;Linux 單一參數上限 128 KB,改動檔多時命令會撐爆;參數太長原本是例外、整道閘例外放行] [不選:分隔字元路徑自動放行(改檔名就能繞過的可重現繞道);舊 {LINT_FILES} 也分批(不改既有行為)] [test:t_lint_new_csv_separator_path] [test:t_lint_new_csv_batches] [test:t_lint_new_detekt_csv_blocks_new] [test:t_lint_new_detekt_real_two_files]
+   WHY:`lumos code-loop pass` 記通過之前先跑新增告警與表態兩道:用推送檢查那支判定函式的收集模式加「只跑兩道」(mech_only,安全證據、端到端驗收、合約測試與代碼審留痕不跑),範圍是分岔點..HEAD;排在留痕驗證那兩條提早返回(沒有審查帳、light)之前;擋下不留痕、rc2、治理帳記一筆 code-loop-pass blocked [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 2] [因:使用者要審查迴圈裡就檢查乾淨,不等到推送] [不選:另寫一支共用判定(兩套判法會漂開)] [test:t_codeloop_pass_requires_clean_mechanical]
+   WHY:`lumos lint-new --diff <範圍>` 呼叫推送前同一支新增告警判定、不寫治理帳;八種狀態分三類:擋 rc1、乾淨或刻意不查 rc0、沒檢查到 rc3(這支指令的 rc3 不是其他指令的找不到知識圖譜) [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 1] [因:派審查席前自己先查,又不讓放行帳多出推送以外的筆數] [test:t_lint_new_cli_status_codes]
+   PITFALL:新增頂層指令自己寫了 description 時不會被灌入「什麼時候用」,又漏列 commands 索引,本機推功能分支只跑文件子集看不到、PR 的 CI 全套才紅 [出處:2026-11-06 PR #165 CI(lint-new)] [根因:_fill_help_when 只灌沒有 description 的子指令;兩支守衛測試不在功能分支推送的文件子集] [修法:自訂 description 開頭自己接 "什麼時候用:" + HELP_WHEN[名]] [test:t_command_index_complete]
+   WHY:code-loop check 的表態那一道多核情境題(kt-situation):用算適用題的同一個範圍,在被推版本上重算情境段、逐段逐列核對表態與證據樣式(缺段缺列與段算不出來擋,證據樣式對不上只提醒並記帳、附段放行指令,見 [[Systems/棧別提問表態閘]]);pitfalls --diff 的 JSON 多 situation_segments、人讀輸出每段一行;盲判記錄不在這一步核 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 3] [因:表態對程式要在推送前那一道就擋,不靠審查席] [test:t_dispositions_situation_evidence_pattern]
++  SEE:[[Systems/回合結束寫法檢查]] [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]]
+ decisions:
+   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+     id: d1
+     context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
+     why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
+     decided: 2026-07-04
+     valid: true
+   - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+     id: d2
+     context: 使用者質疑代碼 canary 污染風險比 spec 嚴重(假 hunk 改變語意、reviewer 推導衍生幻影 findings)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md b/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
+new file mode 100644
+index 000000000..d6d6ac6a2
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
+@@ -0,0 +1,45 @@
++---
++type: system
++status: doing
++created: 2026-11-06
++updated: 2026-11-06
++responsibility: 負責:收工寫法檢查鉤子的回合起點紀錄、收工時呼叫 lint-new 工作樹模式與擋停去重,以及兩支收工鉤子共用的 _hookshared 模組;不負責:新增告警判定本體(pitfalls-code-loop 的新增告警閘)、收工點名(graph-sync-coverage)
++aliases: []
++about_code:
++  - scripts/hooks/claude/stop-lint-hook.py
++  - scripts/hooks/claude/_hookshared.py
++tags:
++  - type/system
++  - status/doing
++  - scope/guards-gates
++summary: |-
++  WHY:寫法檢查開新的一支收工鉤子、不併進收工點名 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 決策第一條、實驗 E2] [因:官方說同一事件的鉤子並行跑、實測兩支 block 理由都送到;拆開後名額、輸出、時間上限各算各的] [不選:同一支裡兩道並列(要改預算起算點、上限提到 55 秒)]
++  WHY:回合起點在送出提示時記、收工只讀不寫 [出處:同計劃 實驗 E1、E11] [因:claude -p 單回合會談也有送出提示事件;背景指令結束與排程到點的回合也有、帶新的 prompt_id(2.1.319 實測)] [不選:收工時寫時間戳(單回合會談永遠不被查)] [test:t_stop_lint_turn_start]
++  WHY:同一回合(會談加 prompt_id)同一批告警只擋一次、最多三批,stop_hook_active 為真照查 [出處:同計劃 決策 d1、設計審 r1 通才席 F1] [因:綁會談時長會談第一回合就用光名額;續做那次不查等於修完不驗] [不選:沿用收工點名的同會談只擋一次] [test:t_stop_lint_hook]
++  RULE:收工自動執行的檢查命令只准 lumos 寫死的 ast-grep 白名單形狀、宣告檔要已提交且乾淨,專案設定放寬不了 [依據:審計] [since:2026-11-06] [retire:when-symbol:scripts/lumos::_lint_wt_allow] [confirmed:2026-11-06] [test:t_lint_new_worktree_allowlist]
++  PITFALL:Codex 的送出提示事件帶 turn_id、沒有 prompt_id,這支鉤子在 Codex 下收工一律印「沒記到起點」不檢查 [出處:2026-11-06 codex-cli 0.160.0 專案層鉤子實測] [根因:兩家的回合編號欄位不同名] [repro:codex exec --dangerously-bypass-hook-trust 掛記錄鉤子看 UserPromptSubmit 的 payload]
++  SEE:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] [[Systems/graph-sync-coverage]] [[Systems/pitfalls-code-loop]] [[Systems/hook逾時預算]]
++---
++# 回合結束寫法檢查
++
++> 白話:像收工前有人看一眼你這回合寫的程式。AI 每回合要收工時,對「這一回合改過、還沒提交」的檔跑規則包,有新增告警就擋下叫它先修;同一批只擋一次,修不好就照放行指令寫理由。
++
++## 怎麼運作
++
++- `stop-lint-hook.py` 同一支檔註冊兩個事件,依 payload 的 `hook_event_name` 分流:
++  - 送出提示:每次都把 `{prompt_id, 時刻}` 原子寫到 `~/.cache/lumos/stop-turn/<會談>`,不看專案有沒有宣告、不輸出。
++  - 收工:先只用標準庫預篩(repo 根 `.lumos/lint.json` 有 `ast-grep` 字樣),沒過就結束、連共用模組都不匯入;過了才比對起點、呼叫可信 lumos 的 `lint-new --worktree --since <起點> --json --pgid-file … --budget …`。
++- 只在「退出碼 1、最後一行是 JSON、status 是 blocked 而且有新增告警」三件事都成立時擋;rc3 印一行、rc2 印「重跑安裝」,其餘不出聲。
++- 擋下名額記在 `stop-block/<會談>.lint-<回合>-<批次>`(O_EXCL);佔到名額立刻輸出,寫不出去就退名額;輸出寫出去之後才呼叫 `lint-new --record-stop-block` 記一筆 `stop-lint` 治理帳。
++- 逾時:lint-new 在自己的程序群組;到內層時限先 SIGTERM、1 秒寬限,過了才 SIGKILL 它與登記檔裡的工具群組。鉤子自己被 SIGTERM 時同順序、等 0.5 秒。
++- 檢查本體(工作樹模式、白名單、改名鏈、宣告檔乾淨判法)在主程式的 `lint-new`,見 [[Systems/pitfalls-code-loop]] 的新增告警閘;這篇不管判定本體。
++
++## 共用模組
++
++`_hookshared.py` 放兩支收工鉤子共用的八個名字:可信來源、外層與內層預算、家目錄底下的標記目錄(逐層建逐層檢查)、標記目錄信任檢查、檔名消毒、git 防護清單與環境注入。收工點名照名字匯入回來(見 [[Systems/graph-sync-coverage]])。只用標準庫、沒有模組層 I/O;匯入約 3.5 毫秒(實驗 E12)。
++
++## 登記點(漏一處就有守衛翻紅或靜默失效)
++
++合併器的天花板與兩個事件的註冊、`_GLOBAL_CLAUDE_HOOKS`、`_VENDORED_TREE_FILES`、enforcement 的 Claude 與 Codex 兩份存活清單、`__main__` 的 `_hookevent.guard`、錨點清單(新鉤子與共用模組都要;錨點基準要人跑 anchor approve 補上)。
++
++REVISIT:2026-11-20 用能跑的 Codex 模型量收工事件帶不帶 turn_id、跟送出提示對不對得上;對得上就讓這支認 turn_id,對不上照計劃 S12 把 Codex 改成不註冊這支
+diff --git a/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md b/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
+index 3c5eb7582..58c1a253c 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
++++ b/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
+@@ -1,29 +1,31 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-02
+-updated: 2026-10-29
++updated: 2026-11-06
+ responsibility: 負責 Claude Code 改檔前那支推播鉤子:判斷這次改動要不要推、用哪個 repo 的圖譜查、冷卻窗、把查到的筆記框成參考資料交給模型;不負責排序與查詢本身(那在 lumos impact),也不負責執行檔信任與逾時預算(各有單源筆記)
+ aliases: []
+ about_code:
+   - scripts/hooks/claude/impact-hook.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/retrieval
+ summary: |-
+   WHY:[2026-10-02 修 worktree 推不出筆記時定]被改的檔若在「同一個 repo 的另一個 worktree」,查詢用那個 worktree 當 repo;★只認共用同一份 git 資料的 worktree,不跟去不相干的 repo★——跟去的話,改到剛 clone 的陌生 repo 裡的檔,就會把對方寫的筆記推進對話,原本不會。子模組也因此照舊。出處:修這個 bug 的那次提交與它的 Issue
+   PITFALL:[2026-10-02]session 切進 worktree 後,啟動目錄變數與這支 hook 行程所在的位置都還是主 repo;拿主 repo 去查 worktree 裡的檔,查詢回 0 筆、hook 靜默放行,照規矩開 worktree 做事的 session 一篇推播都收不到。[test:t_impact_hook_repo_follows_worktree]
+   FACT:[來源:生產][Claude Code 2.1.287,2026-10-02]用內建方式切進 worktree 後,對話紀錄記的目錄會跟著換,但 hook 事件帳記下的 repo 仍是啟動目錄——hook 行程不是在 worktree 裡跑的
+   TEST: t_impact_hook_repo_follows_worktree
+   WHY:[2026-10-29]圖譜專案裡推播沒跑成(找不到 lumos、逾時、啟動失敗、非零結束碼、輸出讀不懂、有圖譜卻回找不到圖譜)時附一段固定說明並記逾時或錯誤事件,同會談同原因只講一次;不是圖譜專案與零命中照舊安靜 [出處:[[Projects/改檔前推播失敗出聲_計劃]]] [因:原本六條路都靜默,AI 分不出「沒有相關筆記」與「推播壞了」,事件帳也全記成 ok] [不選:零命中也講(每次改檔都燒 token)] [不選:轉 lumos 錯誤原文(自由文字零輸出的消毒原則)] [test:t_impact_hook_six_failures_voiced]
++  WHY:目標是 kt 時鉤子多送 delta_new(只取寫入的新內容),lumos 回 decision_rows,鉤子用 _voice_once 取前三列沒推過的印;決策列不受冷卻窗限制 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3、設計審 r1 通才席 F3] [因:冷卻窗是為了省完整影響推播,決策列只是一次本機正規式] [test:t_impact_hook_kotlin_decision_rows]
++  PITFALL:測試裡讀決策表只拿到一列假表 [出處:2026-11-06 實作改檔前推列時] [根因:測試執行器把 LUMOS_KT_CATALOG 指到凍結型錄,讓既有測試停在情境題上線前的語意] [修法:要真型錄的測試用 _kt_decision_table(path=真型錄) 並在子程序環境明確指過去] [test:t_impact_hook_kotlin_decision_rows]
+ related:
+   - "[[Issues/worktree裡改檔推不出筆記]]"
+ verified_by:
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
+ ---
+ # 改檔前推播
+ 
+ 管的檔:`scripts/hooks/claude/impact-hook.py`。
+ 
+ 改檔前把「這次改動牽連到哪些筆記」推到模型眼前的那支 hook。排序與查詢本身在 lumos impact,不在這裡;只執行可信來源的 lumos 見 [[Systems/hook信任邊界]],內層逾時怎麼算見 [[Systems/hook逾時預算]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md b/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
+index 4bc03eeb9..c1c4ddcaa 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
++++ b/docs/lumos-toolchain-knowledge/Systems/棧別提問表態閘.md
+@@ -61,20 +61,21 @@ summary: |-
+   WHY:宣告頭判類別本體看括號外最後一個宣告關鍵字(class/object/interface 才算;constructor、init、get、set 不下結論,視窗從上一個 { } ; 起算不截字數) [出處:代碼審 r1 D8] [因:函式前一行的 data class 會把函式本體誤判成類別、函式裡的區域 val 被當成宣告起點,段材料縮成兩行、一個函式切成多段] [test:t_kt_situation_decl_header]
+   WHY:切段先用觸發字開頭那段英數底線做字集合預篩(增行原文沒有交集的檔不讀不剝)、被推版本的檔先問大小再用有上限的批次讀取(_nodehome_cat_blobs_capped,單次 git 逾時取剩餘預算),快取寫入時清掉過期檔、鍵只靠 schema 常數不看 lumos 檔時間、結果按範圍兩端與被推版本的提交加型錄內容快取在 ~/.cache/lumos/kt-situation/(一天),pitfalls 收集給 30 秒預算(超過印提醒);推送前核對跟表態那一道共用期限,超過照既有 over_budget 規則(已查出問題照擋、沒有就放行並記 fail-open 帳,代碼審 r2 架構 F5) [出處:代碼審 r1 D9] [因:300 支 kt 各 300 行 pitfalls 多 39 秒,一次推送重算四遍] [test:t_kt_situation_budget_and_cache]
+   WHY:情境題誤擋的出口是段放行,沿用新增告警閘的 lint-waive 與放行檔(指紋 kt-situation:<段身分>,理由門檻、origin、ack、doctor 計數全同一套);證據樣式提醒後面印好放行指令,有放行的段不再提醒並印 ⚠;缺段缺列照擋、不給放行出口(代碼審 r2 通才 F4);放行計數在 doctor 與推送前小結跟新增告警分開數;放行檔讀不了就當沒有放行並印一行提醒(r3 通才 F7);快取清理先驗目錄可信、最多留 200 份 [出處:代碼審 r1 D2(計劃範圍 5 提前)] [因:證據樣式誤擋實際發生,原本只能改型錄、答 applies:false 說謊或關掉整道閘] [不選:另起 code-loop situation-waive 指令與盲判標記檔(範圍 4 才有那套帳)] [test:t_kt_situation_waive]
+   WHY:證據樣式對不上不擋,推送前印提醒(哪一段、哪一列、哪條樣式)、記治理帳(閘 code-loop、kind warned、scope kt-situation、pending blind-judge,帳由 code-loop check 那一層寫、以 (版本,段,列) 去重、每次最多逐筆 20 筆其餘併總數,登記在不算迴圈收尾的事件)當待盲判清單;推送前照擋的只剩缺段、缺列、答案形狀不對與無法驗證 [出處:代碼審 code-android情境題與表態對程式 r2 換形狀;Semgrep 規則政策 Monitor(評估真陽性率)/Comment/Block https://semgrep.dev/docs/semgrep-code/policies ] [因:字面樣式兩輪被型錄自己的合法變體打穿(r1 9 列、r2 11 條),擋下等於擋掉照型錄寫的程式] [不選:繼續逐條補正規式(兩輪打穿)] [test:t_kt_situation_waive]
+   REVISIT:2027-01-08 跑 lumos gov --stats 看情境段「提醒確認」各列(證據樣式提醒與多數決提醒,scope kt-situation,以 (版本,段,列) 去重)經盲判終局確認的真陽性與誤報;某一列真陽性至少 20 個 (段,列)、誤報少於一成,才把那一列從提醒升成擋(在這篇寫明是哪幾列,並把 _kt_sit_row_verdict 那一列改回 block)
+   WHY:情境題多一道盲判核對(在表態那一道裡、跟 tier 無關):lumos code-loop blind-judge --template 印不含任何表態的材料(每份最多 30 段、--part 選份,每列附型錄出處),結果整份驗證後先寫治理帳 blind-judge 事件再併進本機標記檔(同一格只認第一筆,讀側標記檔優先、否則從治理帳重建);推送前缺第一盲判、作者與第一盲判不一致又缺仲裁就擋(紀錄在不在的機械核對,不給段放行出口),仲裁同作者放行,三方多數判作者沒照做只提醒並記 code-loop warned 帳(verdict majority-against-author,跟證據提醒同一套去重封頂) [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4、6 與〈審計修正紀錄〉的條款改寫] [因:盲判是模型判斷、各列誤判率要靠提醒帳逐列量,照代碼審 r2 換形狀先 Comment 不 Block;紀錄要齊才湊得出升擋統計的分母] [不選:多數判作者沒照做就擋(原設計)] [test:t_blind_judge_majority]
+   WHY:gov --stats 多一段 Android 情境題:每列作者判適用數、正一致率、相符率、二元 Cohen's kappa(樣本 ≥20 且兩方各有兩種答案才印,否則印 kappa 無意義)、仲裁採作者或採盲判、段放行分 ai 與 human、重判次數,以及證據提醒與多數決提醒依盲判終局分真陽性、誤報、待確認(依段身分把 warned、blind-judge、dispositions 三種帳對起來算,不在提醒事件寫回欄位);治理帳讀入把 blind-judge 跟表態一樣拿 written_at 當去重鑑別子 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 7] [因:升擋與 RETIRE-IF 要逐列的數,寫回欄位會在作者改表態或補仲裁後過期] [test:t_gov_stats_situation_agreement]
+   WHY:盲判結果整份驗證、有一筆不合就整份不寫,同一格只認第一筆,刪掉本機標記檔能從治理帳重建出同一份 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4] [因:寫一半的盲判會讓推送前核對讀到殘缺紀錄;只認第一筆才擋得住換個代理重抽到想要的答案] [test:t_blind_judge_record_required]
+   WHY:pitfalls --diff 有情境段就印要跑盲判的四步指令(跟 stack_questions.gate 走),blind-judge 事件登記在不算迴圈收尾的清單 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 6] [因:盲判核對跟 tier 無關,只寫在高風險才走的代碼審手冊會漏] [test:t_pitfalls_situation_blind_judge_hint]
+   WHY:證據樣式提醒的那一格盲判終局已判照做時,提醒照印但改標「盲判已判照做:多半是樣式誤報」;缺第一盲判的擋下訊息一段一句列出缺的列 [出處:2026-11-06 S8 實驗專案實跑([[Projects/Android寫法語意情境表態與盲判_計劃]])] [因:實跑時盲判已判照做的格仍印「待盲判」會讓人以為還要再跑;同一段四列缺盲判原本把位置重複印四次] [test:t_kt_situation_waive]
++  WHY:改檔前推決策列併進 cmd_impact 算棧別題那一段、同一組啟用條件,只多一個輸出鍵 decision_rows;伺服端判法是平台排除集合含 kt-compose [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3 第 2 條、設計審 r1 依據席 F6] [因:剝字串與觸發式用盲判那條線的共用函式,不另起平行通道] [test:t_impact_decision_rows_table_states]
+ verified_by:
+   - "[[Verification/2026-09-09_棧別提問表態閘實作測試]]"
+   - "[[Verification/2026-09-09_兩席相反時端出張力實作測試]]"
+   - "[[Verification/2026-09-12_Java補棧合成樣本測試]]"
+   - "[[Verification/2026-09-13_Flutter補棧合成樣本測試]]"
+   - "[[Verification/2026-10-03_外部回應碼接線實作測試]]"
+   - "[[Verification/2026-10-15_React補棧合成樣本測試]]"
+   - "[[Verification/2026-11-06_Android情境題盲判實驗專案實跑]]"
+ ---
+ # 棧別提問表態閘
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 28c19005e..ab9fc4f17 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -693,27 +693,27 @@
+ | D-23 | Retrofit 端點成功時沒有內容(204、刪除、只回狀態碼) | 宣告成 `Response<Unit>`:`@DELETE("users/{id}") suspend fun delete(@Path("id") id: Long): Response<Unit>`,用 `response.isSuccessful` 判成敗 | 端點會回內容 → 直接宣告實際型別 `suspend fun user(@Path("id") id: Long): User` | DELETE、Retrofit、isSuccessful | 主:`\bResponse<Unit>\|\.isSuccessful\b`;例外:(無) | API-26 | https://github.com/square/retrofit/blob/trunk/CHANGELOG.md |
+ | D-24 | Ktor 下載大檔或串流回應 | 在 `execute` 區塊內讀完:`client.prepareGet(url).execute { httpResponse -> val channel: ByteReadChannel = httpResponse.body(); while (!channel.exhausted()) { val chunk = channel.readRemaining(bufferSize); chunk.transferTo(stream) } }` | 回應小、可以整份放進記憶體 → 直接 `client.get(url)` 再 `body()` 讀完 | prepareGet、execute、ByteReadChannel、readRemaining、exhausted、HttpStatement、bodyAsChannel | 主:`\.execute\s*\{` `\bByteReadChannel\b\|\bbodyAsChannel\(` `\bexhausted\(\)\|\breadRemaining\(`;例外:(無) | API-30 | https://ktor.io/docs/client-responses.html |
+ | D-25 | 把「只會回一次結果」的回呼 API 包成 suspend | `suspendCancellableCoroutine { continuation -> val callback = object : Callback { override fun onCompleted(value: T) { continuation.resume(value) }; override fun onApiError(cause: Throwable) { continuation.resumeWithException(cause) } }; api.register(callback); continuation.invokeOnCancellation { api.unregister(callback) } }`;回呼可能被叫第二次時先看 `if (continuation.isActive)` 再 resume | 回呼會持續送多筆值 → 不用 suspend,改 `callbackFlow`(見既有「背壓」列);兩條執行緒可能同時 resume 時 `isActive` 檢查擋不住競態(官方:同時 resume 會丟 IllegalStateException),要讓回呼端保證只送一次 | suspendCancellableCoroutine、resume、resumeWithException、invokeOnCancellation、CancellableContinuation | 主:`\bsuspendCancellableCoroutine\b` `\binvokeOnCancellation\b` `\.resume(?:WithException)?\(`;例外:(無) | API-34 | https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/suspend-cancellable-coroutine.html ; https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellable-continuation/index.html |
+ | D-26 | 只取 Flow 或 Channel 的一部分就結束(拿第一筆、取一個就丟) | Flow 可能一筆都不發 → `val item = repo.find().firstOrNull()`;Channel 只要第一個 → `suspend fun <E> ReceiveChannel<E>.consumeFirst(): E = consume { return receive() }`,`consume` 結束時取消 channel、讓生產者停下 | 上游保證至少一筆、空是程式錯誤 → 用 `first()`(空時丟 NoSuchElementException);多個消費者分食同一個 channel(fan-out)→ 每個消費者用 `for (msg in channel)`,不要 `consumeEach`(它結束時會取消整個 channel);被丟掉的元素要善後 → 自建 `Channel` 並傳 `onUndeliveredElement` | firstOrNull、produce、consume、consumeEach、receive、ReceiveChannel | 主:`\bfirstOrNull\(\)\|\bconsume\s*\{`;例外:`\.first\(\)\|\bfor\s*\(\s*\w+\s+in\s+\w+\|\bonUndeliveredElement\b` | FLOW-23, FLOW-29 | https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/first.html ; https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/first-or-null.html ; https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/consume.html ; https://kotlinlang.org/docs/channels.html |
+ | D-27 | 畫面狀態建模(載入中、成功、錯誤怎麼表示,錯誤怎麼回到畫面) | 互斥狀態用單一狀態流:`private val _uiState = MutableStateFlow<LatestNewsUiState>(LatestNewsUiState.Loading)`,成功時 `_uiState.value = LatestNewsUiState.Success(latestNewsWithAuthors)`;彼此相關的欄位放同一個 `data class NewsUiState(val isSignedIn: Boolean = false, val newsItems: List<NewsItemUiState> = listOf(), val userMessages: List<Message> = listOf())`;錯誤在協程內接住寫進狀態:`viewModelScope.launch { try { val newsItems = repository.newsItemsForCategory(category); uiState = uiState.copy(newsItems = newsItems) } catch (ioe: IOException) { uiState = uiState.copy(userMessages = getMessagesFromThrowable(ioe)) } }` | 彼此無關、更新頻率差很多的狀態 → 可以拆成多條流;`CoroutineExceptionHandler` 只用來記錄、顯示錯誤或重啟 App,官方明說在 handler 裡無法恢復(呼叫時協程已結束),恢復一律寫在協程內的 try/catch | MutableStateFlow、UiState、viewModelScope.launch、CoroutineExceptionHandler、isLoading | 主:`\bMutableStateFlow\s*(?:<\s*\w*UiState\b\|\(\s*\w*UiState\b)\|\bdata\s+class\s+\w*UiState\b\|\.copy\(`;例外:(無) | STATE-13, CO-10 | https://developer.android.com/topic/architecture/ui-layer ; https://developer.android.com/kotlin/coroutines/coroutines-best-practices ; https://kotlinlang.org/docs/exception-handling.html |
+ | D-28 | Compose 要在重建後還原的狀態不是基本型別 | `@Parcelize` 讓型別可進 Bundle(`@Parcelize data class MyClass(val id: String) : Parcelable`),或給 saver:`rememberSaveable(saver = LazyListState.Saver) { LazyListState(initialFirstVisibleItemIndex, initialFirstVisibleItemScrollOffset) }`;也可用 `listSaver`、`mapSaver` 或自訂 `Saver`;ViewModel 端 `savedStateHandle.saveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue("")) }` | 大物件或物件清單 → 不放 Bundle(會 TransactionTooLarge),只存 id,其餘從資料層重建 | rememberSaveable、Parcelize、Parcelable、Saver、listSaver、mapSaver、stateSaver | 主:`@Parcelize\b\|\bsaver\s*=\|\blistSaver\b\|\bmapSaver\b\|\bstateSaver\s*=\|:\s*Saver<`;例外:(無) | STATE-23 | https://developer.android.com/develop/ui/compose/state-saving |
+ | D-29 | 非同步結果要回到畫面,或工作要比畫面活得久 | ViewModel 與長壽 scope 不持有 `Context`、`Resources`、View;要比畫面活得久的工作用注入的外部 scope:`externalScope.launch { articlesDataSource.bookmarkArticle(article) }.join()`;結果經 `StateFlow` 讓畫面在生命週期內收集,FragmentTransaction 也在這裡做:`viewLifecycleOwner.lifecycleScope.launch { viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) { viewModel.someDataFlow.collect { … } } }` | 只有在「UI 狀態意外變動也沒關係」時才用 `commitAllowingStateLoss()`(官方:commit 可能遺失);存過狀態後呼叫 `commit()` 會丟例外 | externalScope、applicationScope、repeatOnLifecycle、lifecycleScope、commit、commitAllowingStateLoss、beginTransaction | 主:`\bexternalScope\b\|\brepeatOnLifecycle\(`;例外:`\bcommitAllowingStateLoss\(\)` | CO-24, ARCH-31 | https://developer.android.com/topic/libraries/architecture/viewmodel ; https://developer.android.com/kotlin/coroutines/coroutines-best-practices ; https://developer.android.com/topic/libraries/architecture/views/coroutines-views ; https://developer.android.com/reference/androidx/fragment/app/FragmentTransaction |
+ | D-30 | Compose 裡由其他狀態算出來的值、或很常變的值要往下傳 | 輸出跟輸入一樣常變 → 直接算:`val fullNameCorrect = "$firstName $lastName"`;輸出比輸入少變 → `val showButton by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }`;很常變的值傳 lambda、延到要用處才讀:`Title(snack) { scroll.value }` 配 `Modifier.offset { IntOffset(x = 0, y = scrollProvider()) }`;要轉 Flow 時只讀 State 物件:`snapshotFlow { listState.firstVisibleItemIndex }` | Compose Runtime 1.13 以上的輕量判斷 → `remember { computedStateOf { listState.firstVisibleItemIndex > 0 } }`;計算昂貴 → `remember(contacts, comparator) { contacts.sortedWith(comparator) }`;不要把 derivedStateOf 內讀的狀態當 remember 的 key | derivedStateOf、computedStateOf、snapshotFlow、drawBehind、rememberScrollState | 主:(無);例外:`\bcomputedStateOf\b\|\bremember\s*\([^)]` | UI-21, UI-36, UI-42 | https://developer.android.com/develop/ui/compose/side-effects ; https://developer.android.com/develop/ui/compose/performance/bestpractices |
+ | D-31 | 傳進 Compose 的模型類別要不要處理穩定性、CompositionLocal 選哪種 | 屬性一律 `val` 且型別不可變,扁平 data class 編譯器會自動推成穩定;外部模組型別(如 `java.time.LocalDateTime`)寫進穩定設定檔:`composeCompiler { stabilityConfigurationFile = rootProject.layout.projectDirectory.file("stability_config.conf") }`;編譯器推不出來、又是小型扁平類時才標 `@Immutable data class SnackSummary(val id: Long, val name: String, val price: Long)`;值會變的 CompositionLocal 用 `val LocalElevations = compositionLocalOf { Elevations() }` | Kotlin 2.0.20 起強跳過模式預設開,不穩定參數也會用 `===` 跳過 → 先診斷並用基準量測確認是瓶頸再修;含大集合的模型不要加 `@Immutable`/`@Stable`、也不要急著換 `ImmutableList`(會改成逐元素比對);值幾乎不變或永不變 → `staticCompositionLocalOf` | Immutable、Stable、stabilityConfigurationFile、ImmutableList、compositionLocalOf、staticCompositionLocalOf、CompositionLocalProvider | 主:(無);例外:(無) | UI-39, UI-75 | https://developer.android.com/develop/ui/compose/performance/stability/fix ; https://developer.android.com/develop/ui/compose/compositionlocal |
+ | D-32 | Compose 效應(LaunchedEffect、DisposableEffect)的 key 要放什麼 | 只放「變了就該重啟」的值:`LaunchedEffect(pulseRateMs) { … }`;效應內用到、但變了不該重啟的回呼包 `val currentOnTimeout by rememberUpdatedState(onTimeout)`,效應裡呼叫 `currentOnTimeout()` | 要跟呼叫點同壽 → `LaunchedEffect(true)`,但官方提醒它跟 `while(true)` 一樣可疑,先確認;像 `lifecycleOwner` 這種換了就必須重來的值一定要當 key:`DisposableEffect(lifecycleOwner) { … onDispose { lifecycleOwner.lifecycle.removeObserver(observer) } }` | LaunchedEffect、DisposableEffect、rememberUpdatedState、produceState、onDispose | 主:(無);例外:`\bLaunchedEffect\(\s*true\s*\)\|\bDisposableEffect\s*\(\s*\w` | UI-35 | https://developer.android.com/develop/ui/compose/side-effects |
+-| D-33 | 設計可重用的 Composable 元件 API | 狀態提升成「值 + 改值回呼」,另給有狀態的包裝:`@Composable fun HelloContent(name: String, onNameChange: (String) -> Unit)`,包裝內 `var name by rememberSaveable { mutableStateOf("") }; HelloContent(name = name, onNameChange = { name = it })`;一個元件只解決一個問題,不同用途拆元件(`Button(onClick)`、`ToggleButton(checked, onCheckedChange)`、`OutlinedButton`);樣式收成 `class ButtonColors(...)` + `object ButtonDefaults { fun colors(...): ButtonColors }`,參數寫 `colors: ButtonColors = ButtonDefaults.colors()` | 沒有別的元件需要控制的內部 UI 狀態(例如展開、動畫)→ 可以留在內部:`var showDetails by rememberSaveable { mutableStateOf(false) }`;預設值很簡單時可省略 Defaults 物件、用 inline 常數 | rememberSaveable、onValueChange、Defaults、Colors、Composable、mutableStateOf | 主:`->\s*Unit\b\|\bobject\s+\w*Defaults\b`;例外:(無) | UI-28, UI-89, UI-90 | https://developer.android.com/develop/ui/compose/state ; https://developer.android.com/develop/ui/compose/state-hoisting ; https://github.com/androidx/androidx/blob/androidx-main/compose/docs/compose-component-api-guidelines.md |
+-| D-34 | Modifier 串接順序影響結果(點擊範圍、背景範圍) | 依想要的範圍排順序:`Modifier.clickable(onClick = onClick).padding(padding)` 連 padding 區都能點 | 想讓 padding 區不在效果範圍內 → 反過來寫 `Modifier.padding(padding).clickable(onClick = onClick)` | Modifier、padding、clickable、background | 主:`\.clickable\b` `\.clickable\s*(?:\((?:[^()]\|\((?:[^()]\|\([^()]*\))*\))*\))?(?:\s*\{[^{}]*\})?\s*\.padding\b`;例外:`\.padding\b` `\.padding\s*\((?:[^()]\|\((?:[^()]\|\([^()]*\))*\))*\)\s*\.clickable\b` | UI-66 | https://developer.android.com/develop/ui/compose/modifiers |
++| D-33 | 設計可重用的 Composable 元件 API | 狀態提升成「值 + 改值回呼」,另給有狀態的包裝:`@Composable fun HelloContent(name: String, onNameChange: (String) -> Unit)`,包裝內 `var name by rememberSaveable { mutableStateOf("") }; HelloContent(name = name, onNameChange = { name = it })`;一個元件只解決一個問題,不同用途拆元件(`Button(onClick)`、`ToggleButton(checked, onCheckedChange)`、`OutlinedButton`);樣式收成 `class ButtonColors(...)` + `object ButtonDefaults { fun colors(...): ButtonColors }`,參數寫 `colors: ButtonColors = ButtonDefaults.colors()` | 沒有別的元件需要控制的內部 UI 狀態(例如展開、動畫)→ 可以留在內部:`var showDetails by rememberSaveable { mutableStateOf(false) }`;預設值很簡單時可省略 Defaults 物件、用 inline 常數 | rememberSaveable、onValueChange、Defaults、Colors、mutableStateOf | 主:`->\s*Unit\b\|\bobject\s+\w*Defaults\b`;例外:(無) | UI-28, UI-89, UI-90 | https://developer.android.com/develop/ui/compose/state ; https://developer.android.com/develop/ui/compose/state-hoisting ; https://github.com/androidx/androidx/blob/androidx-main/compose/docs/compose-component-api-guidelines.md |
++| D-34 | Modifier 串接順序影響結果(點擊範圍、背景範圍) | 依想要的範圍排順序:`Modifier.clickable(onClick = onClick).padding(padding)` 連 padding 區都能點 | 想讓 padding 區不在效果範圍內 → 反過來寫 `Modifier.padding(padding).clickable(onClick = onClick)` | padding、clickable、background | 主:`\.clickable\b` `\.clickable\s*(?:\((?:[^()]\|\((?:[^()]\|\([^()]*\))*\))*\))?(?:\s*\{[^{}]*\})?\s*\.padding\b`;例外:`\.padding\b` `\.padding\s*\((?:[^()]\|\((?:[^()]\|\([^()]*\))*\))*\)\s*\.clickable\b` | UI-66 | https://developer.android.com/develop/ui/compose/modifiers |
+ | D-35 | Paging 清單在 ViewModel 與畫面上的收集、空狀態與項目尺寸 | ViewModel:`Pager(config = PagingConfig(pageSize = 20, enablePlaceholders = true), pagingSourceFactory = { ExamplePagingSource(backend, query) }).flow.cachedIn(viewModelScope)`,PagingData 不放進不可變 UiState、單獨一條流;畫面:`val lazyPagingItems = flow.collectAsLazyPagingItems()`;判空要連載入狀態一起看:`val isLocalEmpty = loadState.source.refresh is LoadState.NotLoading && pagingItems.itemSnapshotList.items.isEmpty()`;項目給預設尺寸或佔位:`AsyncImage(model = …, modifier = Modifier.size(30.dp), contentDescription = null)` | 要跟其他 Flow `combine` → 先 `cachedIn` 再 combine(沒 cachedIn 不能重收);有 RemoteMediator 時同步中另看 `loadState.mediator?.refresh is LoadState.Loading`,不要只看合併過的 `loadState.refresh` | PagingData、cachedIn、collectAsLazyPagingItems、loadState、itemCount、LoadState、combine | 主:`\.cachedIn\(\|\bcollectAsLazyPagingItems\(\|\bloadState\.`;例外:`\bloadState\.mediator\b\|\.cachedIn\(` | UI-52, DATA-58, DATA-63 | https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data ; https://developer.android.com/topic/libraries/architecture/paging/v3-transform ; https://developer.android.com/topic/libraries/architecture/paging/load-state ; https://developer.android.com/topic/architecture/ui-layer ; https://developer.android.com/develop/ui/compose/lists |
+ | D-36 | 網路 + 資料庫分頁(RemoteMediator)與刷新快取 | 資料庫當唯一來源:`Pager(config = PagingConfig(pageSize = 50), remoteMediator = ExampleRemoteMediator(query, database, networkService)) { userDao.pagingSource(query) }`;load 內先抓網路、成功後才在交易內換資料:`val response = networkService.searchUsers(query, loadKey); database.withTransaction { if (loadType == LoadType.REFRESH) { userDao.deleteByQuery(query) }; userDao.insertAll(response.users) }; MediatorResult.Success(endOfPaginationReached = response.nextKey == null)`;依快取年齡決定要不要開場刷新:`override suspend fun initialize(): InitializeAction { val cacheTimeout = TimeUnit.MILLISECONDS.convert(1, TimeUnit.HOURS); return if (System.currentTimeMillis() - db.lastUpdated() <= cacheTimeout) InitializeAction.SKIP_INITIAL_REFRESH else InitializeAction.LAUNCH_INITIAL_REFRESH }` | API 用的不是 page key(item key 型)→ `MediatorResult.Success(endOfPaginationReached = response.users.isEmpty())`;APPEND 時最後一筆為 null → 直接 `MediatorResult.Success(endOfPaginationReached = true)`;快取多久算新鮮是業務決定,TTL 數字要人定 | RemoteMediator、MediatorResult、endOfPaginationReached、InitializeAction、withTransaction、PagingSource、Pager | 主:`\bremoteMediator\s*=\|\bwithTransaction\b\|\bInitializeAction\b`;例外:`\bendOfPaginationReached\s*=` | DATA-60, DATA-61, DATA-62, DATA-69 | https://developer.android.com/topic/libraries/architecture/paging/v3-network-db |
+ | D-37 | Repository 對外要給什麼型別(資料模型與錯誤) | 資料來源的格式跟 App 需要的不一樣時,另建業務模型只留需要的欄位:`data class Article(val id: Long, val title: String, val content: String, val publicationDate: Date, val authorName: String, val readTimeMin: Int)`;錯誤用例外表達,資料層定義自訂例外(例:`UserNotAuthenticatedException`),suspend 函式呼叫端用 `try/catch`,Flow 用 `catch` 運算子 | 簡單 App → 官方允許 UiState 直接包資料層模型(每層各建模型只在複雜 App 才建議);沒有完善例外處理的反應式 API(如 LiveData)→ 改用 `Result<T>` 包結果 | Dto、toDomain、UiState | 主:(無);例外:(無) | ARCH-53, ARCH-66 | https://developer.android.com/topic/architecture/data-layer ; https://developer.android.com/topic/architecture/recommendations |
+ | D-38 | Repository 要在記憶體快取資料 | 用 Mutex 保護的快取,呼叫端可要求刷新:`private val latestNewsMutex = Mutex(); private var latestNews: List<ArticleHeadline> = emptyList()`,`suspend fun getLatestNews(refresh: Boolean = false)` 在要刷新或快取為空時重抓,寫入用 `latestNewsMutex.withLock { this.latestNews = networkResult }`;要限制容量時用 `LruCache<String, Bitmap>(cacheSize)` 並覆寫 `sizeOf`(LruCache 本身執行緒安全) | 需要「放多久就過期」(TTL)→ 兩份官方文件都沒有範例,過期時間是業務決定,交人裁;資料要跨程序存活 → 不靠記憶體快取 | Mutex、withLock、LruCache、sizeOf、mutableMapOf、cache、refresh | 主:`\.withLock\s*\{\|\bLruCache\s*<`;例外:(無) | DATA-68 | https://developer.android.com/topic/architecture/data-layer ; https://developer.android.com/reference/android/util/LruCache |
+-| D-39 | Hilt 綁定要不要加作用域、進入點要標在哪 | 預設不加作用域註解(Hilt 綁定預設 unscoped);Fragment 標了 `@AndroidEntryPoint`,用到它的 Activity 也要標:`@AndroidEntryPoint class MainActivity : AppCompatActivity()` | 有需要共用同一實例的內部狀態、需要同步、或量測過建立成本高 → 才標 `@Singleton` 等作用域;Compose 單一 Activity 只需根 `ComponentActivity` 標 `@AndroidEntryPoint`;Hilt 只支援 androidx Fragment、不支援 retained fragment | AndroidEntryPoint、Singleton、ActivityRetainedScoped、ViewModelScoped、Inject、HiltAndroidApp | 主:(無);例外:(無) | ARCH-55, ARCH-56 | https://developer.android.com/training/dependency-injection/hilt-android ; https://developer.android.com/topic/architecture/views/dependency-injection/hilt-android-views ; https://developer.android.com/topic/architecture/recommendations |
++| D-39 | Hilt 綁定要不要加作用域、進入點要標在哪 | 預設不加作用域註解(Hilt 綁定預設 unscoped);Fragment 標了 `@AndroidEntryPoint`,用到它的 Activity 也要標:`@AndroidEntryPoint class MainActivity : AppCompatActivity()` | 有需要共用同一實例的內部狀態、需要同步、或量測過建立成本高 → 才標 `@Singleton` 等作用域;Compose 單一 Activity 只需根 `ComponentActivity` 標 `@AndroidEntryPoint`;Hilt 只支援 androidx Fragment、不支援 retained fragment | AndroidEntryPoint、Singleton、ActivityRetainedScoped、ViewModelScoped、HiltAndroidApp | 主:(無);例外:(無) | ARCH-55, ARCH-56 | https://developer.android.com/training/dependency-injection/hilt-android ; https://developer.android.com/topic/architecture/views/dependency-injection/hilt-android-views ; https://developer.android.com/topic/architecture/recommendations |
+ | D-40 | App 有多個畫面要怎麼串 | 單一 Activity + Navigation 3:`val backStack = remember { mutableStateListOf<Any>(Home) }`,`NavDisplay(backStack = backStack, onBack = { backStack.removeLastOrNull() }, entryProvider = { key -> when (key) { is Home -> NavEntry(key) { … }; is Product -> NavEntry(key) { … }; else -> NavEntry(Unit) { Text("Unknown route") } } })`,往前走 `backStack.add(Product("123"))` | 只有一個畫面 → 不需要導航函式庫;既有專案用 Navigation 2 的 `NavHost` 不在本列裁(官方建議現已指 Navigation 3,遷移與否交專案決定) | startActivity、NavHost、NavDisplay、NavEntry、entryProvider、backStack | 主:`\bNavDisplay\s*\(\|\bNavEntry\s*\(\|\bbackStack\.add\(`;例外:(無) | ARCH-54 | https://developer.android.com/topic/architecture/recommendations ; https://developer.android.com/guide/navigation/navigation-3/basics |
+ | D-41 | 由狀態觸發導航,而且起點畫面留在返回堆疊(按返回會回來) | 用 UI 端「進行中」旗標,先重設再導航:`var validationInProgress by rememberSaveable { mutableStateOf(false) }`;按鈕 `onClick = { viewModel.validateInput(); validationInProgress = true }`;`if (validationInProgress) { val lifecycle = LocalLifecycleOwner.current.lifecycle; val currentNavigateToNextScreen by rememberUpdatedState(onNavigateToNextScreen); LaunchedEffect(viewModel, lifecycle) { snapshotFlow { viewModel.uiState }.filter { it.isDobValid }.flowWithLifecycle(lifecycle).collect { validationInProgress = false; currentNavigateToNextScreen() } } }` | 起點不留在返回堆疊(例:登入頁)→ 不需旗標,直接 `snapshotFlow { viewModel.uiState }.filter { it.isUserLoggedIn }.flowWithLifecycle(lifecycle)`;導航由 UI 點擊直接觸發 → `onClick = dropUnlessResumed { onHelp() }`;Views 版旗標存 `onSaveInstanceState` | LaunchedEffect、navigate、snapshotFlow、flowWithLifecycle、rememberSaveable、dropUnlessResumed、onSaveInstanceState | 主:`\bsnapshotFlow\s*\{\|\bflowWithLifecycle\(` `\brememberSaveable\s*\{\s*mutableStateOf\(\s*false\s*\)`;例外:`\bflowWithLifecycle\(\|\bdropUnlessResumed\b\|\bonSaveInstanceState\b` | ARCH-2 | https://developer.android.com/topic/architecture/ui-layer/events ; https://developer.android.com/topic/architecture/views/ui-layer/events-views |
+ | D-42 | 要在本機存設定或結構化資料 | 少量設定用 DataStore(取代 SharedPreferences),更新寫成一個交易:`context.dataStore.updateData { settings -> settings.copy(exampleCounter = settings.exampleCounter + 1) }`;大型或複雜資料、要部分更新或參照完整性 → 用 Room | DataStore 不支援部分更新;transform 或寫檔失敗整筆交易取消並丟例外 → 呼叫端要接;官方說 transform 本身是協程、可做 RPC 等重活(型錄 DATA-12「只放純計算」無官方依據,見 notes 人裁) | SharedPreferences、DataStore、updateData、putString、Room、preferencesDataStore | 主:`\.updateData\s*\{\|\bRoom\b\|\bRoomDatabase\b\|@Dao\b`;例外:(無) | DATA-7, DATA-12 | https://developer.android.com/topic/libraries/architecture/datastore ; https://developer.android.com/reference/kotlin/androidx/datastore/core/DataStore |
+ | D-43 | 權杖、憑證等敏感資料存在本機 | 從備份排除:`<data-extraction-rules><cloud-backup><exclude domain="sharedpref" path="device.xml"/></cloud-backup></data-extraction-rules>`,Android 11 以下另寫 `android:fullBackupContent="@xml/backup_rules"`(兩套都要);DataStore 把敏感資料拆檔再排除 `<exclude domain="file" path="datastore/secure_state.preferences_pb"/>`;加密直接用 Android Keystore | 登入憑證與權杖要跨裝置帶走 → 用 Block Store API,不放 prefs 或檔案;不要再用 `EncryptedSharedPreferences`、`EncryptedFile`(security-crypto 已整組棄用) | EncryptedSharedPreferences、EncryptedFile、dataExtractionRules、fullBackupContent、KeyStore | 主:`\bKeyStore\b\|\bAndroidKeyStore\b`;例外:`\bBlockstore\w*\b` | DATA-13 | https://developer.android.com/identity/data/autobackup ; https://developer.android.com/jetpack/androidx/releases/security ; https://developer.android.com/topic/libraries/architecture/datastore |
+ | D-44 | 改了 Room 的 Entity 或 schema | 升版本並給遷移:自動遷移 `@Database(version = 2, entities = [User::class], autoMigrations = [AutoMigration(from = 1, to = 2)])`(要開 exportSchema);手寫 `val MIGRATION_1_2 = object : Migration(1, 2) { override suspend fun migrate(connection: SQLiteConnection) { connection.executeSQL(…) } }` 再 `.addMigrations(MIGRATION_1_2)`;每條遷移都要測:`val migratedConnection = helper.runMigrationsAndValidate(2, listOf(MIGRATION_1_2))` | 可以接受清掉資料 → `fallbackToDestructiveMigration()`(會永久刪資料);改表名或欄名 → `AutoMigrationSpec` 搭 `@RenameTable` 等註解;上面是官方現行頁的簽名,舊版 Room 的 `migrate` 與 `MigrationTestHelper` 簽名不同,照專案所用版本的文件 | Database、Migration、AutoMigration、exportSchema、MigrationTestHelper、runMigrationsAndValidate、addMigrations | 主:`\bAutoMigration\s*\(\|\bMigration\s*\(\|\baddMigrations\(\|\brunMigrationsAndValidate\(`;例外:`\bfallbackToDestructiveMigration\(\|\bAutoMigrationSpec\b\|@RenameTable\b\|@RenameColumn\b` | DATA-17, DATA-19 | https://developer.android.com/training/data-storage/room/migrating-db-versions |
+ | D-45 | 寫 WorkManager 的 Worker(停止、輸入資料、執行條件) | 長迴圈裡檢查停止:`repeat(100) { if (isStopped) { break } … }`(`CoroutineWorker` 會自動取消協程,不必另外處理);輸入只傳小值:`setInputData(workDataOf("IMAGE_URI" to "http://..."))`;需要網路或電量就設條件:`val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).setRequiresCharging(true).build()`,再 `.setConstraints(constraints)` | 被停止後回傳的 Result 會被忽略,要釋放資源就覆寫 `onStopped()`;Data 是輕量容器、序列化超過 `MAX_DATA_BYTES` 會丟 IllegalStateException → 大資料不要塞 Data;條件在執行中失效時 WorkManager 會停掉 Worker | Worker、CoroutineWorker、isStopped、workDataOf、setInputData、Constraints、setRequiredNetworkType、NetworkType | 主:(無);例外:(無) | DATA-38, DATA-39, DATA-40 | https://developer.android.com/develop/background-work/background-tasks/persistent/threading/worker ; https://developer.android.com/develop/background-work/background-tasks/persistent/threading/coroutineworker ; https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/manage-work ; https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work ; https://developer.android.com/reference/kotlin/androidx/work/Data |
+ | D-46 | 背景工作選 WorkManager、前景服務還是鬧鐘 | 可延後、要保證完成的工作(含定期同步)→ WorkManager:`val sendLogsWorkRequest = PeriodicWorkRequestBuilder<SendLogsWorker>(24, TimeUnit.HOURS).build()`,`WorkManager.getInstance(context).enqueueUniquePeriodicWork("sendLogs", ExistingPeriodicWorkPolicy.KEEP, sendLogsWorkRequest)`(最短間隔 15 分鐘);真的要前景服務時,在 `onStartCommand` 裡呼叫 `ServiceCompat.startForeground(this, 100, notification, if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0)` | 不能延後或中斷、使用者看得到的工作 → 前景服務;3 分鐘內的短急工作 → `shortService` 類型;大量上傳下載 → user-initiated data transfer;要在精確時間點觸發(鬧鐘、行事曆)→ exact alarm;鬧鐘觸發後要做長工作 → 從 BroadcastReceiver 排 WorkManager;重複鬧鐘用 `setInexactRepeating()` 不用 `setRepeating()` | startService、startForegroundService、startForeground、ServiceCompat、AlarmManager、setRepeating、PeriodicWorkRequestBuilder、enqueueUniquePeriodicWork | 主:`\bPeriodicWorkRequestBuilder\b\|\benqueueUniquePeriodicWork\(\|\bServiceCompat\.startForeground\(`;例外:(無) | DATA-43, DATA-44, DATA-48 | https://developer.android.com/develop/background-work/background-tasks ; https://developer.android.com/develop/background-work/services/alarms/schedule ; https://developer.android.com/develop/background-work/services/fgs/launch |
+ | D-47 | kotlinx.serialization 解析伺服器 JSON(欄位可能缺、為 null、列舉會擴充、預設值要不要送) | 可缺的欄位給預設值:`@Serializable data class Project(val name: String, val language: String = "Kotlin")`;伺服器可能送 null 或未知列舉值 → `val format = Json { coerceInputValues = true }`(換成屬性預設值);伺服器必收的欄位 → `@EncodeDefault val language: String = "Kotlin"` 或 `Json { encodeDefaults = true }` | 欄位就算有預設值也必須出現 → `@Required`;未知列舉沒有預設值時,只有屬性可空且 `explicitNulls = false` 才會變 null;要忽略多出來的鍵 → `Json { ignoreUnknownKeys = true }`;某欄位永遠不送 → `@EncodeDefault(NEVER)` | Serializable、Json、coerceInputValues、explicitNulls、encodeDefaults、EncodeDefault、ignoreUnknownKeys、Required | 主:`\bcoerceInputValues\b\|@EncodeDefault\b\|\bencodeDefaults\b\|\bva[lr]\s+\w+\s*:[^=,)]{0,200}=`;例外:`@Required\b\|\bexplicitNulls\b\|\bignoreUnknownKeys\b\|\bEncodeDefault\(\s*(?:EncodeDefault\.Mode\.)?NEVER` | DATA-72, DATA-73, DATA-74 | https://kotlinlang.org/docs/serialization-json-configuration.html ; https://kotlinlang.org/docs/serialization-customization-options.html |
+ | D-48 | release 版開 R8 後,JSON 解析靠反射(Gson) | 首選改用 codegen 解析器,避免 Gson 的反射;留在 Gson 時每個欄位加 `@SerializedName("x")`,並用 Gson 2.11.0 以上(自帶 keep 規則) | Gson 2.11.0 以前、或模型沒加 `@SerializedName` → 要手寫 keep 規則:`-keepattributes Signature` 與 `-keep,allowobfuscation,allowshrinking,allowoptimization class com.google.gson.reflect.TypeToken { *; }` 等 | Gson、SerializedName、Keep、TypeToken、fromJson、proguard-rules、isMinifyEnabled | 主:(無);例外:(無) | DATA-77 | https://developer.android.com/topic/performance/app-optimization/full-mode |
+ | D-49 | 單元測試 ViewModel 的 StateFlow 或被 launch 的協程 | `stateIn` 產生的狀態要先有收集者:`backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.score.collect {} }`,再斷言 `viewModel.score.value`(官方建議把 StateFlow 當資料容器、斷言 `value`);被測協程裡有掛起點(如 `delay`)→ 先 `advanceUntilIdle()` 再斷言 | 能改 API → 讓函式變 suspend 或回傳 `Deferred`,測試直接 `await()`/`join()`,不靠推時間;不用 `backgroundScope` 收集 → 測試結束要手動取消那個協程 | runTest、backgroundScope、UnconfinedTestDispatcher、StandardTestDispatcher、advanceUntilIdle、stateIn、testScheduler | 主:`\bbackgroundScope\.launch\b\|\badvanceUntilIdle\(`;例外:`\.await\(\)\|\.join\(\)\|\.cancel\(\)` | TEST-6, TEST-14, TEST-20 | https://developer.android.com/kotlin/flow/test ; https://developer.android.com/kotlin/coroutines/test |
