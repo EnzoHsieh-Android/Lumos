@@ -1,0 +1,44 @@
+# 型錄〈統計〉重算:python3.14 stats.py <型錄> <規則包目錄>
+import re, sys, collections
+from pathlib import Path
+cat = Path(sys.argv[1]).read_text(encoding="utf-8")
+pack = Path(sys.argv[2])
+main = cat[:cat.find("\n## 情境決策表")]
+CELL = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')
+rows = []
+for ln in main.splitlines():
+    if re.match(r"^\|\s*(API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+\s*\|", ln):
+        c = [x.strip() for x in CELL.split(ln.strip().strip("|"))]
+        rows.append(c)
+print("總列數", len(rows))
+print("各主題", collections.Counter(r[0].split("-")[0] for r in rows))
+lv = [r[6] for r in rows]
+print("含字母", {k: sum(k in x for x in lv) for k in "ABCD"})
+print("第一字母", collections.Counter(x[0] for x in lv))
+print("組合", sorted(collections.Counter(lv).items()))
+print("形狀", sum(r[7].startswith("形狀") for r in rows), "語意", sum(r[7].startswith("語意") for r in rows),
+      "人裁", sum("(人裁)" in r[1] for r in rows))
+q1 = {r[0] for r in rows if "待查" in r[5]}
+q2 = {r[0] for r in rows if "(搜尋摘要)" in r[11] or "(未開頁核對)" in r[11]}
+print("待查證", len(q1 | q2), "代號待查", len(q1), "來源待核對", len(q2))
+print("出處不全", sum("(出處不全)" in r[1] for r in rows))
+ver = re.compile(r"〔查證 \d{4}-\d{2}-\d{2}:[^〕]*https?://[^〕]*〕")
+print("逐列查證", sum(bool(ver.search(r[11])) for r in rows))
+# 規則包
+sev = collections.Counter(); unw = 0; gate_ids = set(); total = 0
+for d in ("rules", "rules-review", "rules-hints", "rules-unwired"):
+    for f in sorted((pack / d).glob("*.yml")):
+        for doc in re.split(r"^---\s*$", f.read_text(encoding="utf-8"), flags=re.M):
+            m = re.search(r"^id:\s*(\S+)", doc, re.M)
+            if not m:
+                continue
+            total += 1
+            sev[re.search(r"^severity:\s*(\S+)", doc, re.M).group(1)] += 1
+            unw += d == "rules-unwired"
+            if d == "rules":
+                gate_ids.add(m.group(1))
+print("規則包", total, dict(sev), "unwired", unw)
+guard = [r[0] for r in rows if "告警帶寫法=批一" in r[9] and any(re.search(rf"(?<![\w-]){re.escape(i)}(?![\w-])", r[5] + " " + r[10]) for i in gate_ids)]
+print("會擋規則守到的列", len(guard))
+dt = cat[cat.find("\n## 情境決策表"):cat.find("\n## 待查證")]
+print("決策表列", len(re.findall(r"^\| D-\d+ \|", dt, re.M)))

@@ -52,14 +52,7 @@ rule:
     - pattern: HttpLoggingInterceptor.Level.BODY
     - pattern: Level.BODY
   not:
-    inside:
-      any:
-        - kind: if_expression
-        - kind: when_expression
-      has:
-        pattern: BuildConfig.DEBUG
-        stopBy: end
-      stopBy: end
+    matches: in-debug-only-branch
 ---
 id: kt-catch-only-httpexception
 language: kotlin
@@ -260,3 +253,30 @@ rule:
             pattern: OkHttpClient.Builder()
             stopBy: end
           stopBy: end
+---
+# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:認任何接收者的 setter 呼叫、apply/with 裡不帶接收者的呼叫,
+# 與左邊以這兩個屬性名結尾、右邊是 true 的賦值(用節點種類比對;中介變數在賦值左邊只吃單一節點,多層接收者會漏);
+# 只在除錯版才走到的不報(共用判斷 utils/debug-only.yml,代碼審 r1、r2)
+id: kt-webview-file-url-access
+language: kotlin
+severity: error
+message: '[API-40]WebView 開了檔案網址跨來源存取,本機 HTML 能讀私有檔再外送;改成 false(預設值),本機內容改用 WebViewAssetLoader 載入'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  any:
+    - pattern: $X.setAllowUniversalAccessFromFileURLs(true)
+    - pattern: $X.setAllowFileAccessFromFileURLs(true)
+    - pattern: $X?.setAllowUniversalAccessFromFileURLs(true)
+    - pattern: $X?.setAllowFileAccessFromFileURLs(true)
+    - pattern: setAllowUniversalAccessFromFileURLs(true)
+    - pattern: setAllowFileAccessFromFileURLs(true)
+    - all:
+        - kind: assignment
+        - has:
+            kind: directly_assignable_expression
+            regex: (^|\.)\s*allow(Universal|File)AccessFromFileURLs$
+        - has:
+            kind: boolean_literal
+            regex: ^true$
+  not:
+    matches: in-debug-only-branch

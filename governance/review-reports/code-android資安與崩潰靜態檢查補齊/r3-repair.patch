@@ -1,0 +1,451 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 1f9651450d908a66ac31bf8fd00eede6000dafc0..0829c0aab80cdf32ebefc0307e36099b2788c0d4 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -57,34 +57,35 @@ def _files_block_is_test_only(doc):
+     doc = "\n".join(_strip_yaml_comment(ln) for ln in doc.splitlines())
+     m = re.search(r"^files:(.*?)(?=^[A-Za-z_\"'][^\n]*:)", doc + "\nzz:", re.M | re.S)
+     if not m:
+         return False
+     block = m.group(1)
+     return bool(re.search(r"src/(test|androidTest|testFixtures)", block)) and "src/main" not in block
+ 
+ 
+ def load_rules():
+     """讀四個規則目錄 → [{id, severity, message, dir, file, test_only, ignores}];同一檔多份文件以 --- 分隔。
+-    ignores 是那份文件單行 `ignores: [...]` 裡用引號括住的路徑清單(沒寫就是空清單)。"""
++    ignores 是那份文件 `ignores:` 用引號括住的路徑清單,單行 `[...]` 與多行 `- '...'` 兩種寫法都讀(沒寫就是空清單)。"""
+     rules = []
+     for d, cfg in CONFIGS:
+         for f in sorted((HERE / d).glob("*.yml")):
+             for doc in re.split(r"^---\s*$", f.read_text(encoding="utf-8"), flags=re.M):
+                 m = re.search(r"^id:\s*(\S+)", doc, re.M)
+                 if not m:
+                     continue
+                 sev = re.search(r"^severity:\s*(\S+)", doc, re.M)
+                 msg = re.search(r"^message:\s*(.+)$", doc, re.M)
+                 text = msg.group(1).strip() if msg else ""
+                 if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
+                     text = text[1:-1].replace("''", "'") if text[0] == "'" else text[1:-1]
+-                ign = re.search(r"^ignores:\s*\[(.*)\]\s*$", doc, re.M)
++                ign = re.search(r"^ignores:\s*\[(.*)\]\s*(?:#.*)?$", doc, re.M) or \
++                    re.search(r"^ignores:\s*(?:#.*)?\n((?:[ \t]+-[^\n]*\n?)+)", doc, re.M)   # 單行 [...] 或多行 - 清單
+                 rules.append({"id": m.group(1), "severity": sev.group(1) if sev else "",
+                               "message": text, "dir": d, "config": cfg, "file": f.name,
+                               "test_only": _files_block_is_test_only(doc),
+                               "ignores": re.findall(r"['\"]([^'\"]+)['\"]", ign.group(1)) if ign else []})
+     return rules
+ 
+ 
+ def catalog_ids():
+     """型錄主表裡的編號(〈待查證〉節以後不算)。"""
+     text = CATALOG.read_text(encoding="utf-8")
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/api.yml b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+index 817623da13613198f08a9f183e2ac3b13c05b74e..07f20c6cf427292565c61acbfee0d9c11965349c 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/api.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+@@ -28,38 +28,21 @@ id: kt-webview-debugging-enabled
+ language: kotlin
+ severity: error
+ message: '[API-41]WebView 遠端除錯沒限定除錯版,接上電腦就能看與改 WebView 內容;改用 setWebContentsDebuggingEnabled(BuildConfig.DEBUG)'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ rule:
+   any:
+     - pattern: WebView.setWebContentsDebuggingEnabled(true)
+     - pattern: android.webkit.WebView.setWebContentsDebuggingEnabled(true)
+     - pattern: setWebContentsDebuggingEnabled(true)
+   not:
+-    inside:
+-      stopBy: end
+-      kind: control_structure_body
+-      any:
+-        - all:
+-            - not:
+-                follows:
+-                  regex: ^else$
+-            - inside:
+-                kind: if_expression
+-                has:
+-                  field: condition
+-                  regex: ^BuildConfig\.DEBUG$
+-        - inside:
+-            kind: when_entry
+-            has:
+-              kind: when_condition
+-              regex: ^BuildConfig\.DEBUG$
++    matches: kt-in-debug-only-branch
+ ---
+ # [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:不接閘(樣本內誤報已達 10.5%)。SSLContext.getInstance 第一個參數恰好是舊版本字串、
+ # ConnectionSpec.COMPATIBLE_TLS(讀 cipherSuites、tlsVersions、isTls 不報)、tlsVersions(...) 參數裡的舊 TlsVersion、setEnabledProtocols(arrayOf(...)) 裡的舊版本字串
+ id: kt-insecure-tls-version
+ language: kotlin
+ severity: error
+ message: '[API-45]啟用了 TLS 1.1 以下或 SSLv3 等舊版協定,連線可被降級破解;改用 TLS 或 TLSv1.2 以上,OkHttp 改用 ConnectionSpec.MODERN_TLS'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ rule:
+   any:
+@@ -89,17 +72,21 @@ rule:
+               kind: call_suffix
+               inside:
+                 kind: call_expression
+                 has:
+                   kind: navigation_expression
+                   regex: \.\s*tlsVersions$
+     - all:
+         - any:
+             - pattern: $S.setEnabledProtocols(arrayOf($$$))
+             - pattern: setEnabledProtocols(arrayOf($$$))
++            - pattern: $S?.setEnabledProtocols(arrayOf($$$))
++            - pattern: $S.setEnabledProtocols(arrayOf<String>($$$))
++            - pattern: $S.enabledProtocols = arrayOf($$$)
++            - pattern: $S?.enabledProtocols = arrayOf($$$)
+         - has:
+             kind: string_literal
+             regex: ^"(SSLv2|SSLv3|TLSv1|TLSv1\.1)"$
+             stopBy: end
+ constraints:
+   V:
+     regex: ^"(SSLv2|SSLv3|TLSv1|TLSv1\.1)"$
+diff --git a/configs/ast-grep/kotlin-android/rules/api.yml b/configs/ast-grep/kotlin-android/rules/api.yml
+index df172eec4e12ff2936e08a10fb0dcbdd083e4c69..f87ac8e449af8762bd907eb0189812f557771ed2 100644
+--- a/configs/ast-grep/kotlin-android/rules/api.yml
++++ b/configs/ast-grep/kotlin-android/rules/api.yml
+@@ -45,28 +45,21 @@ rule:
+ ---
+ id: kt-http-logging-body-unguarded
+ language: kotlin
+ severity: warning
+ message: '[API-19]BODY 日誌沒用 DEBUG 包住,正式版把權杖與個資寫進 logcat;改成 if (BuildConfig.DEBUG) Level.BODY else Level.NONE,並 redactHeader'
+ rule:
+   any:
+     - pattern: HttpLoggingInterceptor.Level.BODY
+     - pattern: Level.BODY
+   not:
+-    inside:
+-      any:
+-        - kind: if_expression
+-        - kind: when_expression
+-      has:
+-        pattern: BuildConfig.DEBUG
+-        stopBy: end
+-      stopBy: end
++    matches: kt-in-debug-only-branch
+ ---
+ id: kt-catch-only-httpexception
+ language: kotlin
+ severity: warning
+ message: '[API-24]只接 HttpException,斷網(IOException)與解析錯誤會直接往上炸;改成 HttpException、IOException、SerializationException 分開 catch 並轉成網域錯誤'
+ rule:
+   kind: try_expression
+   has:
+     kind: catch_block
+     has:
+@@ -256,21 +249,21 @@ rule:
+       # 外層(例:Retrofit.Builder().client(OkHttpClient.Builder().build()).build())不重報,只報內層那個 build()(代碼審 r1 m2)
+       - has:
+           pattern: $Z.build()
+           has:
+             pattern: OkHttpClient.Builder()
+             stopBy: end
+           stopBy: end
+ ---
+ # [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:認任何接收者的 setter 呼叫、apply/with 裡不帶接收者的呼叫,
+ # 與左邊以這兩個屬性名結尾、右邊是 true 的賦值(用節點種類比對;中介變數在賦值左邊只吃單一節點,多層接收者會漏);
+-# 寫在條件恰好是 BuildConfig.DEBUG 的 if 成立那一支或 when 分支裡不報(同 kt-webview-debugging-enabled 的判法,代碼審 r1)
++# 只在除錯版才走到的不報(共用判斷 utils/debug-only.yml,代碼審 r1、r2)
+ id: kt-webview-file-url-access
+ language: kotlin
+ severity: error
+ message: '[API-40]WebView 開了檔案網址跨來源存取,本機 HTML 能讀私有檔再外送;改成 false(預設值),本機內容改用 WebViewAssetLoader 載入'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ rule:
+   any:
+     - pattern: $X.setAllowUniversalAccessFromFileURLs(true)
+     - pattern: $X.setAllowFileAccessFromFileURLs(true)
+     - pattern: $X?.setAllowUniversalAccessFromFileURLs(true)
+@@ -279,28 +272,11 @@ rule:
+     - pattern: setAllowFileAccessFromFileURLs(true)
+     - all:
+         - kind: assignment
+         - has:
+             kind: directly_assignable_expression
+             regex: (^|\.)\s*allow(Universal|File)AccessFromFileURLs$
+         - has:
+             kind: boolean_literal
+             regex: ^true$
+   not:
+-    inside:
+-      stopBy: end
+-      kind: control_structure_body
+-      any:
+-        - all:
+-            - not:
+-                follows:
+-                  regex: ^else$
+-            - inside:
+-                kind: if_expression
+-                has:
+-                  field: condition
+-                  regex: ^BuildConfig\.DEBUG$
+-        - inside:
+-            kind: when_entry
+-            has:
+-              kind: when_condition
+-              regex: ^BuildConfig\.DEBUG$
++    matches: kt-in-debug-only-branch
+diff --git a/configs/ast-grep/kotlin-android/rules/data.yml b/configs/ast-grep/kotlin-android/rules/data.yml
+index ed8fb4d6153e1b59ecdd0b1baf8fff43e9fabc0b..ab94aaf1a5bd230fcd043154dfcfbdbd6b989190 100644
+--- a/configs/ast-grep/kotlin-android/rules/data.yml
++++ b/configs/ast-grep/kotlin-android/rules/data.yml
+@@ -128,26 +128,21 @@ rule:
+               stopBy: end
+           stopBy: end
+ ---
+ id: kt-room-destructive-migration
+ language: kotlin
+ severity: warning
+ message: '[DATA-16]fallbackToDestructiveMigration 進了正式版,schema 一改就清空使用者資料;改用 Migration 或 AutoMigration,並用 MigrationTestHelper 測'
+ rule:
+   pattern: $B.fallbackToDestructiveMigration($$$)
+   not:
+-    inside:
+-      kind: if_expression
+-      has:
+-        pattern: BuildConfig.DEBUG
+-        stopBy: end
+-      stopBy: end
++    matches: kt-in-debug-only-branch
+ ---
+ id: kt-room-export-schema-false
+ language: kotlin
+ severity: warning
+ message: '[DATA-18]exportSchema = false 讓 schema json 不進版控,之後寫不了也測不了 Migration;改成設 room.schemaLocation 並提交 schema json'
+ rule:
+   kind: annotation
+   regex: (?s)^@Database\b.*exportSchema\s*=\s*false
+ ---
+ id: kt-room-builder-not-singleton
+diff --git a/configs/ast-grep/kotlin-android/sgconfig-hints.yml b/configs/ast-grep/kotlin-android/sgconfig-hints.yml
+index bf4f91d588b253df7e3ce7c9e5cea330287dd492..f9c2ab12f78817f6211a16fc9e94dd86dabaa7dc 100644
+--- a/configs/ast-grep/kotlin-android/sgconfig-hints.yml
++++ b/configs/ast-grep/kotlin-android/sgconfig-hints.yml
+@@ -1,2 +1,4 @@
+ ruleDirs:
+   - rules-hints
++utilDirs:
++  - utils
+diff --git a/configs/ast-grep/kotlin-android/sgconfig-review.yml b/configs/ast-grep/kotlin-android/sgconfig-review.yml
+index a455ced57d510b7c411856724c07c003e74c18ba..f48434bfea219a0ecfcda23b664a799def22f4f2 100644
+--- a/configs/ast-grep/kotlin-android/sgconfig-review.yml
++++ b/configs/ast-grep/kotlin-android/sgconfig-review.yml
+@@ -1,2 +1,4 @@
+ ruleDirs:
+   - rules-review
++utilDirs:
++  - utils
+diff --git a/configs/ast-grep/kotlin-android/sgconfig-unwired.yml b/configs/ast-grep/kotlin-android/sgconfig-unwired.yml
+index 05dbb8be9040806a933eefaa4f45d039ef07a4d4..d06e9d149a50f9591c8f800ab1c22ad7889642b4 100644
+--- a/configs/ast-grep/kotlin-android/sgconfig-unwired.yml
++++ b/configs/ast-grep/kotlin-android/sgconfig-unwired.yml
+@@ -1,2 +1,4 @@
+ ruleDirs:
+   - rules-unwired
++utilDirs:
++  - utils
+diff --git a/configs/ast-grep/kotlin-android/sgconfig.yml b/configs/ast-grep/kotlin-android/sgconfig.yml
+index 2dd8e538b412db4310fe1054d0d9bd31f7824c3f..76eab6285d6653c9b2061c2d0990857be3636b15 100644
+--- a/configs/ast-grep/kotlin-android/sgconfig.yml
++++ b/configs/ast-grep/kotlin-android/sgconfig.yml
+@@ -1,2 +1,4 @@
+ ruleDirs:
+   - rules
++utilDirs:
++  - utils
+diff --git a/configs/ast-grep/kotlin-android/utils/debug-only.yml b/configs/ast-grep/kotlin-android/utils/debug-only.yml
+new file mode 100644
+index 0000000000000000000000000000000000000000..99b01ec703cfb1d127702c1e980c0ebc31a29c1f
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/utils/debug-only.yml
+@@ -0,0 +1,24 @@
++# 「只在除錯版才會走到」的共用判斷(代碼審 code-android資安與崩潰靜態檢查補齊 r2:原本 API-19、DATA-16 一套、兩條資安規則另抄一套)。
++# 命中=節點寫在條件是 BuildConfig.DEBUG(或只用「且」接別的條件)的 if 成立那一支,或條件恰好是 BuildConfig.DEBUG 的 when 分支裡;
++# 否定、else 分支、「或」連別的條件都不算。規則用 `not: matches: kt-in-debug-only-branch` 引用,四份 sgconfig 都掛 utilDirs。
++id: kt-in-debug-only-branch
++language: kotlin
++rule:
++  inside:
++    stopBy: end
++    kind: control_structure_body
++    any:
++      - all:
++          - not:
++              follows:
++                regex: ^else$
++          - inside:
++              kind: if_expression
++              has:
++                field: condition
++                regex: ^(BuildConfig\.DEBUG|BuildConfig\.DEBUG\s*&&[^|]*|[^|!]*&&\s*BuildConfig\.DEBUG)$
++      - inside:
++          kind: when_entry
++          has:
++            kind: when_condition
++            regex: ^BuildConfig\.DEBUG$
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md
+index 6d554e385ab2c3a1322cd78afae6845a1a459463..0b610b4db70f38e14491e57b20b35e4a94efab5b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md
+@@ -54,25 +54,24 @@ RETIRE-IF: 規則包新增的資安規則在樣本外語料量到的誤報超過
+    - **統計節**:總列數、各類列數、級的組合、規則包等級條數、會擋規則守到的列數,照型錄既有口徑重算;重算的指令(對主表列與 `rules*/` 的 grep 與計數)寫進實作收貨紀錄,不另寫程式。
+ 3. **第四批口徑認資安包**:型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `_B4_LINT` 多認 `資安包:` 前綴,通電批次照樣標「批四(CI 範本:Android Lint)」(資安包掛在 Android Lint 上、同一個 CI 步驟跑);檢查頁寫預設關的,加進 `B4_DEFAULT_OFF`;型錄〈輸入與口徑〉通電批次那條同步寫上。
+ 4. **自寫規則**(`configs/ast-grep/kotlin-android/`,訊息照既有格式「[型錄編號] 錯在哪;改用 <最短修法>」、不超過 120 字,每條附壞例好例樣本;放進按型錄主題分的既有規則檔,API 列的進 `api.yml`、DATA 列的進 `data.yml`):
+    - **會擋**(`rules/api.yml`)`kt-webview-file-url-access`:WebView 開檔案網址跨來源存取。認四種寫法:任何接收者的 `.setAllowUniversalAccessFromFileURLs(true)`、`.setAllowFileAccessFromFileURLs(true)`,不帶接收者的同名呼叫(`apply`/`with` 區塊裡),以及左邊整段以 `allowUniversalAccessFromFileURLs` 或 `allowFileAccessFromFileURLs` 結尾、右邊是 `true` 的賦值(節點種類比對,多層接收者、`?.`、`!!` 都認);寫在條件恰好是 `BuildConfig.DEBUG` 的 if 成立那一支或 when 分支裡不報(判法同下一條除錯模式,代碼審 r1 補)。
+    - **不接閘**(`rules-unwired/api.yml`)`kt-webview-debugging-enabled`:`WebView.setWebContentsDebuggingEnabled(true)`(含完整套件名、不帶接收者)。不報:寫在條件恰好是 `BuildConfig.DEBUG` 的 if 成立那一支、或條件恰好是 `BuildConfig.DEBUG` 的 when 分支裡;否定、else 分支、`||` 連別的條件、只包在 SDK 版本判斷裡、完全沒包,都報。標準寫法是直接傳 `BuildConfig.DEBUG` 當參數(不報)。放不接閘的理由:樣本外 42 處誤報 16(用 `FLAG_DEBUGGABLE`、別名旗標判除錯版)。
+    - **不接閘**(`rules-unwired/api.yml`)`kt-insecure-tls-version`:`SSLContext.getInstance` 第一個參數恰好是 `"SSLv2"`、`"SSLv3"`、`"TLSv1"`、`"TLSv1.1"`(含兩參數版與完整套件名;`"SSL"`、`"TLS"`、`"TLSv1.2"` 不報);`ConnectionSpec.COMPATIBLE_TLS`(含完整套件名,拿來讀 `cipherSuites`、`tlsVersions`、`isTls` 的不報);`tlsVersions(...)` 呼叫參數裡的 `TlsVersion.TLS_1_0`、`TLS_1_1`、`SSL_3_0`(看呼叫的參數節點,分行寫也認);`setEnabledProtocols(arrayOf(...))` 參數裡有上面四個字串。放不接閘的理由:樣本內誤報已達 10.5%。
+    - **不接閘**(`rules-unwired/data.yml`)`kt-secretkeyspec-literal-key`:`SecretKeySpec` 第一個參數(含具名參數 `key =`)是不含插值的字串字面值接 `.toByteArray(...)` 或 `.encodeToByteArray(...)`、或參數全是整數字面值的 `byteArrayOf(...)`;變數、插值字串、`byteArrayOf(變數)`、展開、空陣列不報。放不接閘的理由:樣本外只撈到 3 處,量不夠。
+    - **升級條件**(不接閘 → `rules/`):樣本外語料(排除這次出現過的 repo)至少 20 處命中、誤報不超過一成;升級時改型錄那列的通電批次與實測狀態。
+    - 路徑排除:四條都用規則包 `rules/state.yml` 那份七項清單(`**/src/test*/**`、`**/src/androidTest*/**`、`**/src/testFixtures/**`、`**/src/*Test/**`、`**/src/sharedTest/**`、`**/*-test/src/**`、`**/*testing/src/**`),另加 `**/src/debug*/**`(debug 變體目錄只進除錯版;樣本外語料有一筆誤報就落在這種目錄)。
+ 
+-**不做**:不改 `warningsAsErrors` 等範本既有設定;不在推送前跑 Android Lint(上一案已決定只在 CI 跑);不接 compose-rules 0.6 的兩條(PRIOR-ART ⑤);不寫 FLAG_SECURE、密碼欄鍵盤、反序列化、WebView 一般檔案存取的規則(PRIOR-ART ⑥⑦⑧);不新開型錄類別;不加健檢提醒(資安包沒裝的專案,A1/A2 那種字面提醒另案);不改既有 API-19 的除錯判法(它也認 `!BuildConfig.DEBUG`,同族問題另記)。
++**不做**:不改 `warningsAsErrors` 等範本既有設定;不在推送前跑 Android Lint(上一案已決定只在 CI 跑);不接 compose-rules 0.6 的兩條(PRIOR-ART ⑤);不寫 FLAG_SECURE、密碼欄鍵盤、反序列化、WebView 一般檔案存取的規則(PRIOR-ART ⑥⑦⑧);不新開型錄類別;不加健檢提醒(資安包沒裝的專案,A1/A2 那種字面提醒另案)。代碼審 r2 架構對齊席指出同一包裡出現兩套除錯判法,改成共用判斷 `configs/ast-grep/kotlin-android/utils/debug-only.yml`(新增),既有 API-19、DATA-16 一起改用(原本把 `!BuildConfig.DEBUG` 與 else 分支也當成有開關,改後照報),見〈審計修正紀錄〉。
+ 
+ REVISIT:2027-05-08 看 detekt 有沒有升 2.x;升了就把 compose-rules 換 0.6 以後的版本,型錄補 VarsWithoutStateBacking、StaleRememberUpdatedStateInRemember 兩列
+ REVISIT:2027-02-08 看資安包有沒有新版(Google Maven metadata),範本版本與型錄檢查清單照新版改;看 FLAG_SECURE 與密碼欄要不要進情境決策表;再撈一批樣本外語料,看三條不接閘規則能不能照升級條件升
+-REVISIT:[when-test:scripts/test_lumos.py::t_kotlin_rulepack_security_rules][by:2027-02-08] 既有 API-19 的除錯判法也認 `!BuildConfig.DEBUG`,看要不要照這次的收窄寫法改
+ 
+ ## 實驗
+ 
+ ### 第一輪(設計審前,樣本內)
+ 
+ 2026-11-08,ast-grep 0.51.1,草稿規則放 scratchpad 跑(未進 repo)。語料:①五個開源 App 淺複製整份(duckduckgo/Android、thunderbird-android、nextcloud/android、AntennaPod、Tusky,共 11,618 支 kt 檔);②GitHub 程式搜尋八個目標寫法、撈回 186 支 kt 檔(保留原路徑,路徑排除才量得到);③寫死金鑰另撈 74 支。②裡三個 repo 是靜態分析工具的規則樣本與 OWASP 示範檔(federicodotta/semgrep-rules、j3ssie/curated-semgrep-rules、OWASP/mastg),是刻意寫壞的教材、不是 App 程式,從語料移出。每處命中由代理打開命中行前後 15 行判真假,編排者看過判讀表、抽看上下文。
+ 
+ | 規則 | 第一版 | 改形狀 | 最後命中 | 誤報 |
+ |---|---|---|---|---|
+ | WebView 檔案網址跨來源存取 | 84 處,誤報 13 全是分析工具樣本 | 不改 | 71 | 0 |
+@@ -174,10 +173,11 @@ REVISIT:[when-test:scripts/test_lumos.py::t_kotlin_rulepack_security_rules][by:2
+ 2. 內建與資安包的檢查要消費專案 CI 跑才擋;lumos 判不到 CI 有沒有真的跑(既有 A1 只看字面)。
+ 3. 型錄自檢只核對通電批次已寫批四的列:新列漏寫批四那一段,自檢不會報(既有口徑的盲點,這案不改)。
+ 4. 這次只有一條自寫規則會擋;另外三條要等樣本外語料夠才升。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-11-08,4 席):27 條/blocking 9/規則形狀用中介變數配整串、自創除錯判法、樣本內量測三組根因;改用節點種類比對、對齊 API-19 再收窄、另撈樣本外語料定放置(只留一條會擋),資安包 24 條全登記並寫版本與基準線重產,條款改綁逐例測試;卷證 governance/review-reports/android資安與崩潰靜態檢查補齊/。
+ - 例:輸入 `webView.settings.allowUniversalAccessFromFileURLs = true` → 第一版不報、修後報;輸入 `if (!BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }` → 第一版不報、修後報。
+ - 2026-11-08 實作:型錄新增 41 列(API-37–47、ARCH-68–88、DATA-79–87),DataExtractionRules、DefaultCleartextTraffic、CheckResult 併進 DATA-13、API-23、PERF-36;API-23 原寫的 `內建:DefaultCleartextTraffic` 照檢查頁提供者改成資安包;63 個檢查頁逐頁查過都沒有「disabled by default」,`B4_DEFAULT_OFF` 不加;舊版 TLS 規則照範圍 4 補 `setEnabledProtocols`(草稿沒有);統計重算腳本存卷證 experiment/catalog-stats.py.txt。
+ - 2026-11-08 代碼審 r1(2 席):6 條/blocking 1/規則讀法收進 load_rules、訊息上限讀 MSG_MAX、會擋那條也認 BuildConfig.DEBUG 成立那一支、補 with 區塊與 setEnabledProtocols 案例;測試找檔路徑的寫法照鄰居兩種並存放行;卷證 governance/review-reports/code-android資安與崩潰靜態檢查補齊/。
++- 2026-11-08 代碼審 r2(2 席新席):5 條/blocking 2/同一包兩套除錯判法 → 抽成 utils/debug-only.yml、四份 sgconfig 掛 utilDirs,API-40、API-41、API-19、DATA-16 四條共用(條件是 BuildConfig.DEBUG 或只用「且」接別的條件的 if 成立那一支、或 when 的 DEBUG 分支);else、when、且、或四個子條件各補案例;舊版 TLS 補 `?.` 與屬性賦值寫法;load_rules 讀多行 ignores。例:`if (BuildConfig.DEBUG) Level.NONE else Level.BODY` → 改前 API-19 不報、改後報。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 842579e32c9f43516844de77305999ff428e4dd1..99309deb4c440805ed3b94650cb406f4c36dbef5 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -6,20 +6,21 @@ updated: 2026-11-08
+ responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
+ aliases: []
+ about_code:
+   - configs/ast-grep/kotlin-android/check.py
+   - configs/ast-grep/kotlin-android/sgconfig.yml
+   - configs/ast-grep/kotlin-android/sgconfig-hints.yml
+   - skills/kotlin-idioms/checks-catalog.md
+   - configs/ast-grep/kotlin-android/sgconfig-review.yml
+   - skills/kotlin-idioms/test-templates.md
+   - configs/ast-grep/kotlin-android/sgconfig-unwired.yml
++  - configs/ast-grep/kotlin-android/utils/debug-only.yml
+ tags:
+   - type/system
+   - status/doing
+   - scope/stack-knowledge
+ summary: |-
+   WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則依據不足、不准擋人 [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kotlin_catalog_rows_wired]
+   WHY:規則訊息格式「[型錄編號] 錯在哪;改用 <最短修法>」且不超過 120 字,完整寫法用編號查型錄 [出處:[[Projects/Android協程與API寫法機械檢查標準_計劃]] 設計審 r1] [因:新增告警閘解析 SARIF 截 120 字、擋下訊息也印 120 字] [test:t_kotlin_rulepack_messages_cite_catalog]
+   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
+   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
+   RULE:規則在真專案誤報超過命中的一成就降提示級、搬 rules-unwired/ 或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+@@ -44,20 +45,21 @@ summary: |-
+   PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+   REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,(2026-11-08 起 --sg 自檢的 SARIF 探針也載主程式,「零依賴路徑不載主程式」這個理由已不成立)
+   WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
+   WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
+   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
+   WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列(兩條會擋規則找不到官方原文,降不降級待人裁) [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
+   WHY:引用型錄出處不全列的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級,提示級也可能被專案自行宣告接閘),rules-unwired/ 也收還沒在真專案量過誤報的新規則,任何等級 [出處:[[Projects/規則包覆核兩級接新增告警閘_計劃]]] [因:覆核級與提示級將來可能接閘,依據不足的規則要有一個確定不擋的位置] [test:t_kotlin_rulepack_unwired_dir]
+   WHY:資安四條自寫規則只有 kt-webview-file-url-access 放會擋的 rules/api.yml;kt-webview-debugging-enabled、kt-insecure-tls-version 放 rules-unwired/api.yml,kt-secretkeyspec-literal-key 放 rules-unwired/data.yml;升到 rules/ 的條件是樣本外語料(排除已出現過的 repo)至少 20 處命中且誤報不超過一成,升時同步改型錄那列的通電批次與實測狀態 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 實驗第二輪] [因:樣本外量測檔案網址 80 處誤報 0;除錯模式 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版);舊版 TLS 樣本內已達 10.5%;寫死金鑰樣本外只撈到 3 處] [不選:四條都放 rules/(第一輪樣本內的結論,形狀是看同一批語料調的、偏樂觀)] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄現成規則欄的 Google 資安規則包檢查寫成「資安包:<檢查 id>」,批四口徑 _B4_LINT 照「內建:」一樣認,通電批次標「批四(CI 範本:Android Lint)」;24 條檢查頁都沒寫 disabled by default,B4_DEFAULT_OFF 不加 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3] [因:資安包掛在 Android Lint 上、同一個 CI 步驟跑;提供者原名太長且不是工具名] [test:t_kt_catalog_batch4_wiring] [test:t_kt_catalog_security_lint_ids]
++  WHY:「只在除錯版才走到」只有 utils/debug-only.yml 一份共用判斷(四份 sgconfig 掛 utilDirs,規則用 not: matches: kt-in-debug-only-branch 引用):條件是 BuildConfig.DEBUG 或只用「且」接別的條件的 if 成立那一支、或 when 的 DEBUG 分支;否定、else、「或」都不算 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 代碼審 r2] [因:原本 API-19、DATA-16 一套(連 !BuildConfig.DEBUG 與 else 分支都當開關)、兩條新資安規則另抄一套,同一包兩種判法] [不選:每條規則各寫一份(兩支檔要手抄同步)] [test:t_kotlin_rulepack_security_rules]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e407fdc5bf3cdbee582b7d6add5088d31eacfaf3..93c6b7b07e70071948b01a2ad6060d1416a7becd 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126583,20 +126583,38 @@ _KTSEC_CASES = (
+     ("src/main/kotlin/C18.kt", 'SecretKeySpec(byteArrayOf(x, y), "AES")', "kt-secretkeyspec-literal-key", 0),
+     ("src/debug/kotlin/C19.kt", "webView.settings.allowFileAccessFromFileURLs = true", "kt-webview-file-url-access", 0),
+     ("src/main/kotlin/C20.kt", "webView.settings.allowFileAccessFromFileURLs = true", "kt-webview-file-url-access", 1),
+     # 代碼審 r1 審查席 1、2、3:with 區塊不帶接收者的呼叫、setEnabledProtocols、會擋那條也認 BuildConfig.DEBUG 成立那一支
+     ("src/main/kotlin/C21.kt", "with(webView.settings) { setAllowUniversalAccessFromFileURLs(true) }", "kt-webview-file-url-access", 1),
+     ("src/main/kotlin/C22.kt", 'socket.setEnabledProtocols(arrayOf("TLSv1", "TLSv1.2"))', "kt-insecure-tls-version", 1),
+     ("src/main/kotlin/C23.kt", "if (BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }",
+      "kt-webview-file-url-access", 0),
+     ("src/main/kotlin/C24.kt", "if (!BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }",
+      "kt-webview-file-url-access", 1),
++    # 代碼審 r2:共用除錯判斷(utils/debug-only.yml)的 else、when、「且」三個子條件各自有案例;另兩條既有規則改用同一份
++    ("src/main/kotlin/C25.kt", "if (BuildConfig.DEBUG) { } else { webView.settings.allowFileAccessFromFileURLs = true }",
++     "kt-webview-file-url-access", 1),
++    ("src/main/kotlin/C26.kt", "when { BuildConfig.DEBUG -> webView.settings.allowFileAccessFromFileURLs = true }",
++     "kt-webview-file-url-access", 0),
++    ("src/main/kotlin/C27.kt", "if (BuildConfig.DEBUG && s != null) { webView.settings.allowFileAccessFromFileURLs = true }",
++     "kt-webview-file-url-access", 0),
++    ("src/main/kotlin/C28.kt", "if (BuildConfig.DEBUG || s != null) { webView.settings.allowFileAccessFromFileURLs = true }",
++     "kt-webview-file-url-access", 1),
++    ("src/main/kotlin/C29.kt", "with(webView.settings) { setAllowFileAccessFromFileURLs(true) }", "kt-webview-file-url-access", 1),
++    ("src/main/kotlin/C30.kt", 'socket?.setEnabledProtocols(arrayOf("SSLv3"))', "kt-insecure-tls-version", 1),
++    ("src/main/kotlin/C31.kt", 'socket.enabledProtocols = arrayOf("SSLv3")', "kt-insecure-tls-version", 1),
++    ("src/main/kotlin/C32.kt", "val l = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.NONE else HttpLoggingInterceptor.Level.BODY",
++     "kt-http-logging-body-unguarded", 1),
++    ("src/main/kotlin/C33.kt", "val l = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE",
++     "kt-http-logging-body-unguarded", 0),
++    ("src/main/kotlin/C34.kt", "if (!BuildConfig.DEBUG) { builder.fallbackToDestructiveMigration() }", "kt-room-destructive-migration", 1),
++    ("src/main/kotlin/C35.kt", "if (BuildConfig.DEBUG) { builder.fallbackToDestructiveMigration() }", "kt-room-destructive-migration", 0),
+ )
+ # 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號)(計劃範圍 4 與〈實驗〉第二輪的放置)
+ _KTSEC_PLACE = {
+     "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
+     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
+     "kt-insecure-tls-version": ("rules-unwired", "api.yml", "API-45"),
+     "kt-secretkeyspec-literal-key": ("rules-unwired", "data.yml", "DATA-87"),
+ }
+ # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+ _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+@@ -126604,21 +126622,22 @@ _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtu
+ 
+ 
+ def t_kotlin_rulepack_security_rules():
+     """[S3][S4] 資安四條自寫規則([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4):預期值表 S3 每一列各寫成一支 kt 檔
+     (src/debug 那列放 src/debug/kotlin/ 底下),用規則包四份設定檔(sgconfig*.yml)實跑 ast-grep,該報的恰好被對應那條報一次、
+     不該報的不被它報;S4 驗目錄配置、路徑排除八項、訊息以新型錄列編號開頭且不超過 120 字。判準來源是計劃預期值表
+     (MASTG-TEST-0252、0227、0217、0212 與設計審 r1 實測的寫法),預期值寫死在 _KTSEC_CASES,不拿規則自己算。
+     翻紅釘:賦值那支改回中介變數配整串 → C01 紅;除錯判法改回「條件含 DEBUG 就不報」→ C06 紅;else 分支沒排除 → C07 紅;
+     TLS 版本清單加回 "TLS" → C12 紅;tlsVersions 只認同一行 → C13 紅;寫死金鑰認變數組的 byteArrayOf → C18 紅;
+     拿掉 src/debug 排除 → C19 紅;拿掉不帶接收者的呼叫 → C21 紅;拿掉 setEnabledProtocols → C22 紅;
+-    會擋那條拿掉 BuildConfig.DEBUG 判斷 → C23 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。"""
++    會擋那條拿掉 BuildConfig.DEBUG 判斷 → C23 紅;共用判斷拿掉 else 排除 → C25 紅、拿掉 when 分支 → C26 紅、拿掉「且」→ C27 紅、
++    「或」也放行 → C28 紅;API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。"""
+     print("t_kotlin_rulepack_security_rules")
+     import shutil as _sh
+     m = _ktpack()
+     rules = {r["id"]: r for r in m.load_rules()}
+     for rid, (d, fname, cat) in _KTSEC_PLACE.items():
+         r = rules.get(rid)
+         check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
+               str(r and (r["dir"], r["file"])))
+         msg = (r or {}).get("message", "")
+         check(f"S4 {rid} 訊息以 [{cat}] 開頭、不超過 {m.MSG_MAX} 字", msg.startswith(f"[{cat}]") and len(msg) <= m.MSG_MAX,

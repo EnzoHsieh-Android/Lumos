@@ -13,6 +13,7 @@ about_code:
   - configs/ast-grep/kotlin-android/sgconfig-review.yml
   - skills/kotlin-idioms/test-templates.md
   - configs/ast-grep/kotlin-android/sgconfig-unwired.yml
+  - configs/ast-grep/kotlin-android/utils/debug-only.yml
 tags:
   - type/system
   - status/doing
@@ -49,6 +50,9 @@ summary: |-
   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
   WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列(兩條會擋規則找不到官方原文,降不降級待人裁) [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
   WHY:引用型錄出處不全列的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級,提示級也可能被專案自行宣告接閘),rules-unwired/ 也收還沒在真專案量過誤報的新規則,任何等級 [出處:[[Projects/規則包覆核兩級接新增告警閘_計劃]]] [因:覆核級與提示級將來可能接閘,依據不足的規則要有一個確定不擋的位置] [test:t_kotlin_rulepack_unwired_dir]
+  WHY:資安四條自寫規則只有 kt-webview-file-url-access 放會擋的 rules/api.yml;kt-webview-debugging-enabled、kt-insecure-tls-version 放 rules-unwired/api.yml,kt-secretkeyspec-literal-key 放 rules-unwired/data.yml;升到 rules/ 的條件是樣本外語料(排除已出現過的 repo)至少 20 處命中且誤報不超過一成,升時同步改型錄那列的通電批次與實測狀態 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 實驗第二輪] [因:樣本外量測檔案網址 80 處誤報 0;除錯模式 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版);舊版 TLS 樣本內已達 10.5%;寫死金鑰樣本外只撈到 3 處] [不選:四條都放 rules/(第一輪樣本內的結論,形狀是看同一批語料調的、偏樂觀)] [test:t_kotlin_rulepack_security_rules]
+  WHY:型錄現成規則欄的 Google 資安規則包檢查寫成「資安包:<檢查 id>」,批四口徑 _B4_LINT 照「內建:」一樣認,通電批次標「批四(CI 範本:Android Lint)」;24 條檢查頁都沒寫 disabled by default,B4_DEFAULT_OFF 不加 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3] [因:資安包掛在 Android Lint 上、同一個 CI 步驟跑;提供者原名太長且不是工具名] [test:t_kt_catalog_batch4_wiring] [test:t_kt_catalog_security_lint_ids]
+  WHY:「只在除錯版才走到」只有 utils/debug-only.yml 一份共用判斷(四份 sgconfig 掛 utilDirs,規則用 not: matches: in-debug-only-branch 引用,判法看語法節點種類不看字面):條件本身是 BuildConfig.DEBUG(可帶套件名)或用「且」連起來而其中一項是它的 if 成立那一支、條件是 !BuildConfig.DEBUG 的 if 的 else 那一支、when 的 DEBUG 分支、when (BuildConfig.DEBUG) 的 true 分支;「或」、否定、括號裡藏在「或」底下都不算;各規則檔內自帶的 utils:(compose.yml 等)只在同一檔內共用,跨檔的才放 utils/ [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 代碼審 r2] [因:原本 API-19、DATA-16 一套(連 !BuildConfig.DEBUG 與 else 分支都當開關)、兩條新資安規則另抄一套,同一包兩種判法] [不選:每條規則各寫一份(兩支檔要手抄同步)] [test:t_kotlin_rulepack_security_rules]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
@@ -63,7 +67,8 @@ verified_by:
 - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
 - `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本還沒接;接不接(覆核級有已知誤報樣本,使用者 d5 與上面誤報一成 RULE 相撞)見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
 - `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高,範本預設不接。
-- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):引用型錄出處不全列的規則(2026-11-08 從 `rules-hints/` 拆來 8 條),與還沒在真專案量過誤報的新規則;範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):引用型錄出處不全列的規則(2026-11-08 從 `rules-hints/` 拆來 8 條),與還沒在真專案量過、或量到誤報超過一成、或樣本量不夠的新規則(2026-11-08 資安三條:WebView 除錯、舊版 TLS、寫死金鑰,放哪一級與升級條件見摘要的 WHY);範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+- `configs/ast-grep/kotlin-android/utils/debug-only.yml`:跨檔共用判斷(`utils/`,不是規則、不出告警):四份 sgconfig 都用 `utilDirs` 掛它,規則以 `matches:` 引用;規則包自檢與 `load_rules` 不讀這個目錄
 - `rules/`、`rules-review/`、`rules-hints/`、`rules-unwired/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
 - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems);`--sg` 完整模式另用新增告警閘的 SARIF 解析掃兩條指定規則的壞例(SARIF 探針 `sarif_gate_rule_ids`)。
 - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。

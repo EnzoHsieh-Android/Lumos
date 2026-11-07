@@ -126558,6 +126558,140 @@ def t_kotlin_rulepack_unwired_dir():
     check("⑦ 真規則包沒有出處不全的放錯目錄", not real, str(real[:3]))
 
 
+# 資安四條自寫規則的逐例判準([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 預期值表 S3):(檔案相對路徑, 片段, 規則 id, 該報幾次)。
+# 片段照預期值表原文;最後一筆是 src/debug 那列的對照組(同一行放 src/main 要報),證明不報是路徑排除擋的、不是片段寫壞。
+_KTSEC_CASES = (
+    ("src/main/kotlin/C01.kt", "webView.settings.allowUniversalAccessFromFileURLs = true", "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C02.kt", "settings.apply { allowFileAccessFromFileURLs = true }", "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C03.kt", "s?.setAllowUniversalAccessFromFileURLs(true)", "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C04.kt", "webView.settings.allowFileAccessFromFileURLs = false", "kt-webview-file-url-access", 0),
+    ("src/main/kotlin/C05.kt", "if (BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }", "kt-webview-debugging-enabled", 0),
+    ("src/main/kotlin/C06.kt", "if (!BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }", "kt-webview-debugging-enabled", 1),
+    ("src/main/kotlin/C07.kt", "if (BuildConfig.DEBUG) { } else { WebView.setWebContentsDebuggingEnabled(true) }",
+     "kt-webview-debugging-enabled", 1),
+    ("src/main/kotlin/C08.kt", "if (Build.VERSION.SDK_INT >= 19) { WebView.setWebContentsDebuggingEnabled(true) }",
+     "kt-webview-debugging-enabled", 1),
+    ("src/main/kotlin/C09.kt", "WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)", "kt-webview-debugging-enabled", 0),
+    ("src/main/kotlin/C10.kt", 'SSLContext.getInstance("TLSv1")', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C11.kt", 'SSLContext.getInstance("TLSv1.2")', "kt-insecure-tls-version", 0),
+    ("src/main/kotlin/C12.kt", 'SSLContext.getInstance("TLS")', "kt-insecure-tls-version", 0),
+    ("src/main/kotlin/C13.kt", "val spec = ConnectionSpec.Builder(x)\n        .tlsVersions(TlsVersion.TLS_1_0)", "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C14.kt", "val cs = ConnectionSpec.COMPATIBLE_TLS.cipherSuites", "kt-insecure-tls-version", 0),
+    ("src/main/kotlin/C15.kt", 'SecretKeySpec("0123456789abcdef".toByteArray(), "AES")', "kt-secretkeyspec-literal-key", 1),
+    ("src/main/kotlin/C16.kt", 'SecretKeySpec(byteArrayOf(0x48, 0x65), "AES")', "kt-secretkeyspec-literal-key", 1),
+    ("src/main/kotlin/C17.kt", 'SecretKeySpec("$secret&".toByteArray(), "HmacSHA1")', "kt-secretkeyspec-literal-key", 0),
+    ("src/main/kotlin/C18.kt", 'SecretKeySpec(byteArrayOf(x, y), "AES")', "kt-secretkeyspec-literal-key", 0),
+    ("src/debug/kotlin/C19.kt", "webView.settings.allowFileAccessFromFileURLs = true", "kt-webview-file-url-access", 0),
+    ("src/main/kotlin/C20.kt", "webView.settings.allowFileAccessFromFileURLs = true", "kt-webview-file-url-access", 1),
+    # 代碼審 r1 審查席 1、2、3:with 區塊不帶接收者的呼叫、setEnabledProtocols、會擋那條也認 BuildConfig.DEBUG 成立那一支
+    ("src/main/kotlin/C21.kt", "with(webView.settings) { setAllowUniversalAccessFromFileURLs(true) }", "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C22.kt", 'socket.setEnabledProtocols(arrayOf("TLSv1", "TLSv1.2"))', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C23.kt", "if (BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 0),
+    ("src/main/kotlin/C24.kt", "if (!BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 1),
+    # 代碼審 r2:共用除錯判斷(utils/debug-only.yml)的 else、when、「且」三個子條件各自有案例;另兩條既有規則改用同一份
+    ("src/main/kotlin/C25.kt", "if (BuildConfig.DEBUG) { } else { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C26.kt", "when { BuildConfig.DEBUG -> webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 0),
+    ("src/main/kotlin/C27.kt", "if (BuildConfig.DEBUG && s != null) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 0),
+    ("src/main/kotlin/C28.kt", "if (BuildConfig.DEBUG || s != null) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C29.kt", "with(webView.settings) { setAllowFileAccessFromFileURLs(true) }", "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C30.kt", 'socket?.setEnabledProtocols(arrayOf("SSLv3"))', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C31.kt", 'socket.enabledProtocols = arrayOf("SSLv3")', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C32.kt", "val l = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.NONE else HttpLoggingInterceptor.Level.BODY",
+     "kt-http-logging-body-unguarded", 1),
+    ("src/main/kotlin/C33.kt", "val l = if (BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE",
+     "kt-http-logging-body-unguarded", 0),
+    ("src/main/kotlin/C34.kt", "if (!BuildConfig.DEBUG) { builder.fallbackToDestructiveMigration() }", "kt-room-destructive-migration", 1),
+    ("src/main/kotlin/C35.kt", "if (BuildConfig.DEBUG) { builder.fallbackToDestructiveMigration() }", "kt-room-destructive-migration", 0),
+    # 代碼審 r3:共用判斷改看語法結構(「且」的一項是除錯旗標、帶套件名、!DEBUG 的 else、when 主詞的 true 分支都算除錯版;「或」不算)
+    ("src/main/kotlin/C36.kt", "val l = if (x != null && BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE",
+     "kt-http-logging-body-unguarded", 0),
+    ("src/main/kotlin/C37.kt", "val l = if (!a && BuildConfig.DEBUG) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE",
+     "kt-http-logging-body-unguarded", 0),
+    ("src/main/kotlin/C38.kt", "val l = if (BuildConfig.DEBUG && (a || b)) HttpLoggingInterceptor.Level.BODY else HttpLoggingInterceptor.Level.NONE",
+     "kt-http-logging-body-unguarded", 0),
+    ("src/main/kotlin/C39.kt", "if (a || b && BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 1),
+    ("src/main/kotlin/C40.kt", "if (com.foo.BuildConfig.DEBUG) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 0),
+    ("src/main/kotlin/C41.kt", "if (!BuildConfig.DEBUG) { } else { builder.fallbackToDestructiveMigration() }", "kt-room-destructive-migration", 0),
+    ("src/main/kotlin/C42.kt", "when (BuildConfig.DEBUG) { true -> builder.fallbackToDestructiveMigration(); false -> Unit }",
+     "kt-room-destructive-migration", 0),
+    ("src/main/kotlin/C43.kt", "when (BuildConfig.DEBUG) { false -> builder.fallbackToDestructiveMigration(); true -> Unit }",
+     "kt-room-destructive-migration", 1),
+    ("src/main/kotlin/C44.kt", 'a.b.enabledProtocols = arrayOf("SSLv3")', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C45.kt", 'socket.apply { enabledProtocols = arrayOf("SSLv3") }', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C46.kt", 'sock?.setEnabledProtocols(arrayOf<String>("SSLv3"))', "kt-insecure-tls-version", 1),
+    ("src/main/kotlin/C47.kt", "if (a && (b || BuildConfig.DEBUG)) { webView.settings.allowFileAccessFromFileURLs = true }",
+     "kt-webview-file-url-access", 1),
+)
+# 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號)(計劃範圍 4 與〈實驗〉第二輪的放置)
+_KTSEC_PLACE = {
+    "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
+    "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
+    "kt-insecure-tls-version": ("rules-unwired", "api.yml", "API-45"),
+    "kt-secretkeyspec-literal-key": ("rules-unwired", "data.yml", "DATA-87"),
+}
+# 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+_KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+                  "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+
+
+def t_kotlin_rulepack_security_rules():
+    """[S3][S4] 資安四條自寫規則([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4):預期值表 S3 每一列各寫成一支 kt 檔
+    (src/debug 那列放 src/debug/kotlin/ 底下),用規則包四份設定檔(sgconfig*.yml)實跑 ast-grep,該報的恰好被對應那條報一次、
+    不該報的不被它報;S4 驗目錄配置、路徑排除八項、訊息以新型錄列編號開頭且不超過 120 字。判準來源是計劃預期值表
+    (MASTG-TEST-0252、0227、0217、0212 與設計審 r1 實測的寫法),預期值寫死在 _KTSEC_CASES,不拿規則自己算。
+    翻紅釘:賦值那支改回中介變數配整串 → C01 紅;除錯判法改回「條件含 DEBUG 就不報」→ C06 紅;else 分支沒排除 → C07 紅;
+    TLS 版本清單加回 "TLS" → C12 紅;tlsVersions 只認同一行 → C13 紅;寫死金鑰認變數組的 byteArrayOf → C18 紅;
+    拿掉 src/debug 排除 → C19 紅;拿掉不帶接收者的呼叫 → C21 紅;拿掉 setEnabledProtocols → C22 紅;
+    會擋那條拿掉 BuildConfig.DEBUG 判斷 → C23 紅;共用判斷拿掉 else 排除 → C25 紅、拿掉 when 分支 → C26 紅、拿掉「且」→ C27 紅、
+    「或」也放行 → C28、C39 紅;「且」那支拿掉 → C36、C37 紅;「且」的一項改成往下找 → C47 紅;拿掉 !DEBUG 的 else → C41 紅;拿掉 when 主詞 → C42 紅;
+    API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。"""
+    print("t_kotlin_rulepack_security_rules")
+    import shutil as _sh
+    m = _ktpack()
+    rules = {r["id"]: r for r in m.load_rules()}
+    for rid, (d, fname, cat) in _KTSEC_PLACE.items():
+        r = rules.get(rid)
+        check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
+              str(r and (r["dir"], r["file"])))
+        msg = (r or {}).get("message", "")
+        check(f"S4 {rid} 訊息以 [{cat}] 開頭、不超過 {m.MSG_MAX} 字", msg.startswith(f"[{cat}]") and len(msg) <= m.MSG_MAX,
+              f"{len(msg)} {msg}")
+        got = set((r or {}).get("ignores", []))   # 讀法只有 check.py 的 load_rules 一套(代碼審 r1 架構對齊 F1)
+        check(f"S4 {rid} 路徑排除恰好是八項", got == set(_KTSEC_IGNORES), str(sorted(got ^ set(_KTSEC_IGNORES))))
+    sg = _ktpack_sg()
+    if not sg:
+        print("  (本機沒有 ast-grep,只跑了 S4 那半;CI 裝了 0.51.1 會跑 S3 逐例)")
+        return
+    root = Path(tempfile.mkdtemp(prefix="gctl-ktsec-"))
+    try:
+        for rel, body, _rid, _n in _KTSEC_CASES:
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("package sec\n\nfun case(webView: WebView, settings: WebSettings, s: WebSettings?, x: ConnectionSpec,"
+                         " secret: String, y: Byte) {\n    " + body + "\n}\n", encoding="utf-8")
+        hits = {}
+        for _d, cfg in m.CONFIGS:
+            got = m.scan(sg, cfg, root)
+            check(f"★前置★ {cfg} 掃得起來", got is not None, cfg)
+            for rid, f in got or []:
+                key = (rid, Path(f).resolve().relative_to(root.resolve()).as_posix())
+                hits[key] = hits.get(key, 0) + 1
+        for rel, body, rid, n in _KTSEC_CASES:
+            got_n = hits.get((rid, rel), 0)
+            check(f"S3 {rel} {'報一次' if n else '不報'}({rid}):{body.splitlines()[0][:60]}", got_n == n, f"命中 {got_n}")
+    finally:
+        _sh.rmtree(str(root), ignore_errors=True)
+    print("  ✓ t_kotlin_rulepack_security_rules")
+
+
 def t_kotlin_catalog_rows_wired():
     """[S3] 型錄每列欄位數對、編號唯一、標準寫法/接電方式/通電批次非空;形狀類有告警或正向約束;
     語意類有表態對程式、沒標人裁的有盲判席;來源有網址或縮寫且不是未核對;決策表列編號連號、
@@ -128666,7 +128800,95 @@ def t_kt_catalog_batch4_wiring():
         cp.CATALOG.write_text("".join(mut), encoding="utf-8")
         got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
         check(f"★前置★ 自檢抓得到:{name}", len(got) >= 1, str(got[:3]))
+    # [S2] 資安包前綴([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3:資安包掛在 Android Lint 上、同一個 CI 步驟跑)
+    check("S2 資安包:檢查 id → Android Lint 標籤", tags("資安包:LogInfoDisclosure") == [lint], str(tags("資安包:LogInfoDisclosure")))
+    check("S2 同一欄拿掉資安包:前綴 → 回空", tags("LogInfoDisclosure") == [], str(tags("LogInfoDisclosure")))
+    check("S2 資安包那段寫待查 → 不標", tags("資安包:LogInfoDisclosure(待查)") == [], "")
+    # 只靠資安包前綴才判成批四的列(現成規則欄沒有別家前綴):標成別的批四值要報
+    i_asl = next((i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"批四({lint})" in ln
+                  and "資安包:" in ck._cells(ln)[5] and not _re.search(r"(?:androidx|內建|slack|Android Lint):", ck._cells(ln)[5])), None)
+    check("★前置★ 型錄有只靠資安包前綴判成批四的列", i_asl is not None, "")
+    if i_asl is not None:
+        asl_id = ck._cells(rows[i_asl])[0]
+        cp = _ktpack(copy=True)
+        mut = rows[:]
+        mut[i_asl] = mut[i_asl].replace(f"批四({lint})", "批四(現成規則)", 1)
+        cp.CATALOG.write_text("".join(mut), encoding="utf-8")
+        got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
+        check(f"S2 資安包列 {asl_id} 標成「批四(現成規則)」要報", any(a == asl_id for a, _b in got), str(got[:3]))
     print("  ✓ t_kt_catalog_batch4_wiring")
+
+
+# Google Android 資安 lint 規則包 README 列的 24 條檢查 id(https://github.com/google/android-security-lints 〈Lint checks included
+# in this library〉五張表,刪除線那條 UnsanitizedContentProviderFilename 已併進內建、不算;2026-11-08 讀 README 原文抄)
+_ASL_README_IDS = (
+    "DefaultCleartextTraffic", "DefaultTrustedUserCerts", "DisabledAllSafeBrowsing", "DotPathAttribute", "ExposedRootPath",
+    "ExtendedBluetoothDiscoveryDuration", "HardcodedAbsolutePath", "InsecureDnsSdkLevel", "InsecureLegacyExternalStorage",
+    "InsecurePermissionProtectionLevel", "InsecureStickyBroadcastsMethod", "InsecureStickyBroadcastsPermission",
+    "LogInfoDisclosure", "MissingAutoVerifyAttribute", "SensitiveExternalPath", "SlashPathAttribute", "StrandhoggVulnerable",
+    "TapjackingVulnerable", "UnintendedExposedUrl", "UnintendedPrivateIpAddress", "UnsafeCryptoAlgorithmUsage",
+    "VulnerableCryptoAlgorithm", "WeakPrng", "ZeroBluetoothDiscoveryDuration")
+
+
+def t_kt_catalog_security_lint_ids():
+    """[S5] 真型錄跑型錄自檢 0 個問題、還沒逐列查證維持 2 列(新增的列都帶〔查證 日期:網址〕),資安包 README 的 24 個檢查 id
+    每個恰好出現在主表一列的現成規則欄、寫成 `資安包:<id>`([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 2)。
+    判準來源:24 個 id 寫死在 _ASL_README_IDS(出處官方 README),不從型錄讀;「還沒逐列查證 2 列」是型錄逐列查證計劃收尾時的數字。
+    翻紅釘:漏登記一條或寫成 `內建:` → ①紅;同一條登記在兩列(違反同一個錯誤只留一列)→ ②紅;新列漏查證紀錄 → ③紅。"""
+    print("t_kt_catalog_security_lint_ids")
+    m = _ktpack()
+    check("★前置★ 判準清單恰好 24 個、不重複", len(set(_ASL_README_IDS)) == 24, str(len(set(_ASL_README_IDS))))
+    import re as _re
+    rows = m.main_rows()
+    where = {}
+    for i in _ASL_README_IDS:
+        where[i] = [rid for rid, c in rows.items()
+                    if _re.search(rf"資安包:(?:[A-Za-z0-9]+、)*{i}(?![A-Za-z0-9])", c[5])]
+    missing = [i for i, w in where.items() if not w]
+    check("① 24 個 id 都登記在主表的現成規則欄(資安包:前綴)", not missing, str(missing))
+    dup = {i: w for i, w in where.items() if len(w) > 1}
+    check("② 每個 id 只登記在一列", not dup, str(dup))
+    probs = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
+    check("S5 真型錄自檢 0 個問題", not probs, str(probs[:5]))
+    unv = m.catalog_unverified()
+    check("③ 還沒逐列查證維持 2 列(API-14、TEST-31)", unv == ["API-14", "TEST-31"], str(unv))
+    print("  ✓ t_kt_catalog_security_lint_ids")
+
+
+def t_linter_catalog_android_security_lint():
+    """[S1] linter 目錄〈Android Lint 與 Compose lint 標準接法〉第 1 步的 kotlin 圍欄,`dependencies` 區塊裡有
+    `lintChecks("com.android.security.lint:lint:1.0.4")`,同一步的文字寫出「AGP 8.5.1」與刪掉 lint-baseline.xml 重產的說明
+    ([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 1)。判準來源:官方 README 安裝法(lintChecks 那行)、Google Maven
+    maven-metadata.xml 的 latest 1.0.4、建置檔 lintVersion 31.5.1 換算 AGP 8.5.1。
+    翻紅釘:那行放在 android { } 或圍欄外 → ①紅;版本寫成 <版本> → ①紅;拿掉 AGP 句 → ②紅;拿掉刪基準線重產句 → ③紅。"""
+    print("t_linter_catalog_android_security_lint")
+    doc = (Path(GRAPHCTL).resolve().parents[1] / "docs" / "lumos-toolchain-knowledge" / "Systems" / "linter精選目錄.md").read_text(
+        encoding="utf-8")
+    sec = doc.split("### Android Lint 與 Compose lint 標準接法", 1)
+    check("★前置★ 找得到那一節", len(sec) == 2, "")
+    body = sec[1].split("\n### ", 1)[0] if len(sec) == 2 else ""
+    step1 = body.split("\n1. ", 1)[1].split("\n2. ", 1)[0] if "\n1. " in body else ""
+    check("★前置★ 找得到第 1 步", bool(step1), body[:200])
+    fence = step1.split("```kotlin", 1)[1].split("```", 1)[0] if "```kotlin" in step1 else ""
+    check("★前置★ 第 1 步有 kotlin 圍欄", bool(fence), step1[:200])
+    dep, depth, inside = [], 0, False
+    for ln in fence.splitlines():
+        s = ln.strip()
+        if not inside and depth == 0 and s.startswith("dependencies") and s.endswith("{"):
+            inside, depth = True, 1
+            continue
+        if inside:
+            depth += s.count("{") - s.count("}")
+            if depth <= 0:
+                inside = False
+                continue
+            dep.append(s)
+    check("① dependencies 區塊有資安包那一行(版本 1.0.4)", 'lintChecks("com.android.security.lint:lint:1.0.4")' in dep, str(dep))
+    prose = step1.replace(fence, "")
+    check("② 同一步的文字寫出 AGP 8.5.1", "AGP 8.5.1" in prose, prose[-600:])
+    check("③ 同一步的文字寫出刪掉 lint-baseline.xml 重產", "刪掉" in prose and "lint-baseline.xml" in prose and "重產" in prose,
+          prose[-600:])
+    print("  ✓ t_linter_catalog_android_security_lint")
 
 
 def _detekt_real_bin():

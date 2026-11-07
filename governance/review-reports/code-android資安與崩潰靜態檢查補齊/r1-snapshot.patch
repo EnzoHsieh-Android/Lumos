@@ -1,0 +1,1080 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 501d2f7cd..a4143f5fb 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -97,30 +97,32 @@ _MAIN_COLS = 12      # 編號|名稱|壞寫法形狀|標準寫法|後果|現成
+ _DT_HEADER = ("列編號", "情境", "標準寫法", "不適用時", "觸發字", "證據樣式", "對應檢查", "來源")
+ _RETIRED = "(停用)"
+ _SWITCH = "(換列)"     # 「不適用時」格子的明確標記:這一列的例外是換到別列,不准選例外寫法
+ _WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
+ # 第四批通電批次的判定口徑(Projects/Android現成檢查接上CI與推送前_計劃 範圍 4;口徑原文在型錄〈輸入與口徑〉)。
+ # 預設關的規則照官方規則頁列舉:Slack compose-lints 的兩條穩定性檢查與 M2 API(https://slackhq.github.io/compose-lints/rules/ ;
+ # ComposeRememberMissing 已移除),compose-rules 外掛自帶設定 active: false 的三條。
+ B4_DEFAULT_OFF = frozenset((
+     "ComposeUnstableReceiver", "ComposeUnstableCollections", "ComposeM2Api", "ComposeRememberMissing",
+     "unstable-collections", "UnstableCollections", "preview-naming", "PreviewNaming", "material-two", "Material2"))
+-_B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
++# 資安包:= Google 的 com.android.security.lint:lint,掛在 Android Lint 上、同一個 CI 步驟跑([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3);
++# 它 24 條的檢查頁(googlesamples.github.io/android-custom-lint-rules/checks/<id>.md.html)2026-11-08 逐頁看過都沒有 disabled by default,B4_DEFAULT_OFF 不加
++_B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|資安包|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
+ _B4_CR = re.compile(r"cr:compose:([\w-]+)")
+ _B4_SKIP = ("待查", "預設關", "相近", "opt-in")
+ B4_TAG_LINT = "CI 範本:Android Lint"
+ B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
+ 
+ 
+ def batch4_expected_tags(rule_col):
+     """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。
+-    以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
++    以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、資安包:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
+     而且那段不含待查、預設關、相近、opt-in,規則碼不是 B4_DEFAULT_OFF 才算。"""
+     lint = cr = False
+     for seg in re.split(r"[;；、]", rule_col):
+         if any(w in seg for w in _B4_SKIP):
+             continue
+         lint = lint or any(code not in B4_DEFAULT_OFF for code in _B4_LINT.findall(seg))
+         cr = cr or any(code not in B4_DEFAULT_OFF for code in _B4_CR.findall(seg))
+     return [tag for tag, on in ((B4_TAG_LINT, lint), (B4_TAG_CR, cr)) if on]
+ 
+ 
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/api.yml b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+index 1a2112aed..817623da1 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/api.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+@@ -14,10 +14,92 @@ utils:
+ rule:
+   matches: message-check
+   any:
+     - regex: ^(e|ex|exc|exception|t|th|throwable|err|error|cause)\.
+     - inside:
+         any:
+           - kind: catch_block
+           - pattern: $X.catch { $$$ }
+           - pattern: $X.onFailure { $$$ }
+         stopBy: end
++---
++# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:不接閘(樣本外 42 處誤報 16,用 FLAG_DEBUGGABLE 或別名旗標判除錯版)。
++# 只有條件恰好是 BuildConfig.DEBUG 的 if 成立那一支、或條件恰好是它的 when 分支不報;否定、else、|| 連別的條件、只包 SDK 判斷都報
++id: kt-webview-debugging-enabled
++language: kotlin
++severity: error
++message: '[API-41]WebView 遠端除錯沒限定除錯版,接上電腦就能看與改 WebView 內容;改用 setWebContentsDebuggingEnabled(BuildConfig.DEBUG)'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  any:
++    - pattern: WebView.setWebContentsDebuggingEnabled(true)
++    - pattern: android.webkit.WebView.setWebContentsDebuggingEnabled(true)
++    - pattern: setWebContentsDebuggingEnabled(true)
++  not:
++    inside:
++      stopBy: end
++      kind: control_structure_body
++      any:
++        - all:
++            - not:
++                follows:
++                  regex: ^else$
++            - inside:
++                kind: if_expression
++                has:
++                  field: condition
++                  regex: ^BuildConfig\.DEBUG$
++        - inside:
++            kind: when_entry
++            has:
++              kind: when_condition
++              regex: ^BuildConfig\.DEBUG$
++---
++# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:不接閘(樣本內誤報已達 10.5%)。SSLContext.getInstance 第一個參數恰好是舊版本字串、
++# ConnectionSpec.COMPATIBLE_TLS(讀 cipherSuites、tlsVersions、isTls 不報)、tlsVersions(...) 參數裡的舊 TlsVersion、setEnabledProtocols(arrayOf(...)) 裡的舊版本字串
++id: kt-insecure-tls-version
++language: kotlin
++severity: error
++message: '[API-45]啟用了 TLS 1.1 以下或 SSLv3 等舊版協定,連線可被降級破解;改用 TLS 或 TLSv1.2 以上,OkHttp 改用 ConnectionSpec.MODERN_TLS'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  any:
++    - pattern: SSLContext.getInstance($V)
++    - pattern: SSLContext.getInstance($V, $$$)
++    - pattern: javax.net.ssl.SSLContext.getInstance($V)
++    - pattern: javax.net.ssl.SSLContext.getInstance($V, $$$)
++    - all:
++        - any:
++            - pattern: ConnectionSpec.COMPATIBLE_TLS
++            - pattern: okhttp3.ConnectionSpec.COMPATIBLE_TLS
++        - not:
++            inside:
++              kind: navigation_expression
++              has:
++                kind: navigation_suffix
++                regex: ^\.(cipherSuites|tlsVersions|isTls)
++    - all:
++        - any:
++            - pattern: TlsVersion.TLS_1_0
++            - pattern: TlsVersion.TLS_1_1
++            - pattern: TlsVersion.SSL_3_0
++        - inside:
++            kind: value_arguments
++            stopBy: end
++            inside:
++              kind: call_suffix
++              inside:
++                kind: call_expression
++                has:
++                  kind: navigation_expression
++                  regex: \.\s*tlsVersions$
++    - all:
++        - any:
++            - pattern: $S.setEnabledProtocols(arrayOf($$$))
++            - pattern: setEnabledProtocols(arrayOf($$$))
++        - has:
++            kind: string_literal
++            regex: ^"(SSLv2|SSLv3|TLSv1|TLSv1\.1)"$
++            stopBy: end
++constraints:
++  V:
++    regex: ^"(SSLv2|SSLv3|TLSv1|TLSv1\.1)"$
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/data.yml b/configs/ast-grep/kotlin-android/rules-unwired/data.yml
+new file mode 100644
+index 000000000..51c5d1263
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/rules-unwired/data.yml
+@@ -0,0 +1,20 @@
++# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:不接閘(樣本外只撈到 3 處,量不夠)。第一個參數(含具名 key =)是不含插值的字串字面值
++# 接 toByteArray/encodeToByteArray,或參數全是整數字面值的 byteArrayOf(...);變數、插值字串、byteArrayOf(變數)、展開、空陣列不報
++id: kt-secretkeyspec-literal-key
++language: kotlin
++severity: error
++message: '[DATA-87]SecretKeySpec 的金鑰寫死在原始碼,反編譯就拿得到;改用 Android Keystore 產生並保存金鑰,不把金鑰放進 APK'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  kind: call_expression
++  regex: ^(javax\.crypto\.spec\.)?SecretKeySpec\s*\(
++  has:
++    kind: call_suffix
++    has:
++      kind: value_arguments
++      has:
++        nthChild: 1
++        kind: value_argument
++        any:
++          - regex: ^(key\s*=\s*)?"[^"$]*"\s*\.\s*(toByteArray|encodeToByteArray)\(
++          - regex: ^(key\s*=\s*)?byteArrayOf\(\s*[-+]?(0[xX][0-9a-fA-F_]+|[0-9_]+)(\.toByte\(\))?(\s*,\s*[-+]?(0[xX][0-9a-fA-F_]+|[0-9_]+)(\.toByte\(\))?)*\s*,?\s*\)$
+diff --git a/configs/ast-grep/kotlin-android/rules/api.yml b/configs/ast-grep/kotlin-android/rules/api.yml
+index 70f8cafe7..199973174 100644
+--- a/configs/ast-grep/kotlin-android/rules/api.yml
++++ b/configs/ast-grep/kotlin-android/rules/api.yml
+@@ -253,10 +253,34 @@ rule:
+             # apply { callTimeout(...) } 省略接收者(代碼審 r1 M13)
+             - pattern: callTimeout($$$)
+           stopBy: end
+       # 外層(例:Retrofit.Builder().client(OkHttpClient.Builder().build()).build())不重報,只報內層那個 build()(代碼審 r1 m2)
+       - has:
+           pattern: $Z.build()
+           has:
+             pattern: OkHttpClient.Builder()
+             stopBy: end
+           stopBy: end
++---
++# [[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4:認任何接收者的 setter 呼叫、apply/with 裡不帶接收者的呼叫,
++# 與左邊以這兩個屬性名結尾、右邊是 true 的賦值(用節點種類比對;中介變數在賦值左邊只吃單一節點,多層接收者會漏)
++id: kt-webview-file-url-access
++language: kotlin
++severity: error
++message: '[API-40]WebView 開了檔案網址跨來源存取,本機 HTML 能讀私有檔再外送;改成 false(預設值),本機內容改用 WebViewAssetLoader 載入'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  any:
++    - pattern: $X.setAllowUniversalAccessFromFileURLs(true)
++    - pattern: $X.setAllowFileAccessFromFileURLs(true)
++    - pattern: $X?.setAllowUniversalAccessFromFileURLs(true)
++    - pattern: $X?.setAllowFileAccessFromFileURLs(true)
++    - pattern: setAllowUniversalAccessFromFileURLs(true)
++    - pattern: setAllowFileAccessFromFileURLs(true)
++    - all:
++        - kind: assignment
++        - has:
++            kind: directly_assignable_expression
++            regex: (^|\.)\s*allow(Universal|File)AccessFromFileURLs$
++        - has:
++            kind: boolean_literal
++            regex: ^true$
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-insecure-tls-version/src/main/kotlin/kt-insecure-tls-version.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-insecure-tls-version/src/main/kotlin/kt-insecure-tls-version.kt
+new file mode 100644
+index 000000000..a5bf9806d
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-insecure-tls-version/src/main/kotlin/kt-insecure-tls-version.kt
+@@ -0,0 +1,12 @@
++fun oldContext(): SSLContext {
++    val a = SSLContext.getInstance("TLSv1") // BAD
++    val b = javax.net.ssl.SSLContext.getInstance("SSLv3", "AndroidOpenSSL") // BAD 兩參數版、完整套件名
++    return SSLContext.getInstance("TLSv1.1") // BAD
++}
++fun oldOkHttp(socket: SSLSocket): List<ConnectionSpec> {
++    socket.setEnabledProtocols(arrayOf("TLSv1", "TLSv1.2")) // BAD 陣列裡有舊版本
++    val spec = ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
++        .tlsVersions(TlsVersion.TLS_1_0) // BAD 分行寫的 tlsVersions
++        .build()
++    return listOf(spec, ConnectionSpec.COMPATIBLE_TLS) // BAD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-secretkeyspec-literal-key/src/main/kotlin/kt-secretkeyspec-literal-key.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-secretkeyspec-literal-key/src/main/kotlin/kt-secretkeyspec-literal-key.kt
+new file mode 100644
+index 000000000..626fa11d8
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-secretkeyspec-literal-key/src/main/kotlin/kt-secretkeyspec-literal-key.kt
+@@ -0,0 +1,6 @@
++fun keyFromString(): SecretKeySpec =
++    SecretKeySpec("0123456789abcdef".toByteArray(), "AES") // BAD 字串字面值轉位元組
++fun keyFromBytes(): List<SecretKeySpec> = listOf(
++    SecretKeySpec(byteArrayOf(0x48, 0x65, 0x21.toByte()), "AES"), // BAD 整數字面值的 byteArrayOf
++    javax.crypto.spec.SecretKeySpec(key = "38346591".encodeToByteArray(), algorithm = "DES"), // BAD 具名參數、完整套件名
++)
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-webview-debugging-enabled/src/main/kotlin/kt-webview-debugging-enabled.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-debugging-enabled/src/main/kotlin/kt-webview-debugging-enabled.kt
+new file mode 100644
+index 000000000..ccf5cec26
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-debugging-enabled/src/main/kotlin/kt-webview-debugging-enabled.kt
+@@ -0,0 +1,9 @@
++fun enableAlways() {
++    WebView.setWebContentsDebuggingEnabled(true) // BAD 完全沒包
++}
++fun enableWrongBranch(flavorDebug: Boolean) {
++    if (!BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) } // BAD 否定
++    if (BuildConfig.DEBUG) { } else { android.webkit.WebView.setWebContentsDebuggingEnabled(true) } // BAD else 分支
++    if (Build.VERSION.SDK_INT >= 19) { WebView.setWebContentsDebuggingEnabled(true) } // BAD 只包版本判斷
++    if (BuildConfig.DEBUG || flavorDebug) { WebView.setWebContentsDebuggingEnabled(true) } // BAD || 連別的條件
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-webview-file-url-access/src/main/kotlin/kt-webview-file-url-access.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-file-url-access/src/main/kotlin/kt-webview-file-url-access.kt
+new file mode 100644
+index 000000000..6ee9dc67a
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-file-url-access/src/main/kotlin/kt-webview-file-url-access.kt
+@@ -0,0 +1,9 @@
++fun setupOne(webView: WebView) {
++    webView.settings.allowUniversalAccessFromFileURLs = true // BAD 多層接收者的屬性賦值
++    webView.settings.setAllowFileAccessFromFileURLs(true) // BAD setter
++}
++fun setupTwo(webView: WebView, s: WebSettings?) {
++    webView.settings.apply { allowFileAccessFromFileURLs = true } // BAD apply 裡不帶接收者
++    with(webView.settings) { setAllowUniversalAccessFromFileURLs(true) } // BAD with 裡不帶接收者
++    s?.setAllowUniversalAccessFromFileURLs(true) // BAD 安全呼叫
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-insecure-tls-version/src/main/kotlin/kt-insecure-tls-version.kt b/configs/ast-grep/kotlin-android/samples/good/kt-insecure-tls-version/src/main/kotlin/kt-insecure-tls-version.kt
+new file mode 100644
+index 000000000..30070f213
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-insecure-tls-version/src/main/kotlin/kt-insecure-tls-version.kt
+@@ -0,0 +1,14 @@
++fun newContext(): SSLContext {
++    val a = SSLContext.getInstance("TLS") // GOOD 交給系統挑版本
++    val b = SSLContext.getInstance("TLSv1.2") // GOOD
++    return SSLContext.getInstance("SSL") // GOOD Android 上回傳的仍是 TLS 1.2 以上
++}
++fun newOkHttp(socket: SSLSocket): List<ConnectionSpec> {
++    socket.setEnabledProtocols(arrayOf("TLSv1.2", "TLSv1.3")) // GOOD
++    val spec = ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
++        .tlsVersions(TlsVersion.TLS_1_3, TlsVersion.TLS_1_2) // GOOD
++        .build()
++    val suites = ConnectionSpec.COMPATIBLE_TLS.cipherSuites // GOOD 只讀屬性、沒拿來啟用
++    println(suites)
++    return listOf(spec, ConnectionSpec.MODERN_TLS) // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-secretkeyspec-literal-key/src/main/kotlin/kt-secretkeyspec-literal-key.kt b/configs/ast-grep/kotlin-android/samples/good/kt-secretkeyspec-literal-key/src/main/kotlin/kt-secretkeyspec-literal-key.kt
+new file mode 100644
+index 000000000..325db3ee7
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-secretkeyspec-literal-key/src/main/kotlin/kt-secretkeyspec-literal-key.kt
+@@ -0,0 +1,11 @@
++fun keyFromKeystore(): SecretKey {
++    val gen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore") // GOOD 金鑰在 Keystore 產生
++    gen.init(KeyGenParameterSpec.Builder("k", KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT).build())
++    return gen.generateKey()
++}
++fun keyFromRuntime(secret: String, raw: ByteArray, x: Byte, y: Byte): List<SecretKeySpec> = listOf(
++    SecretKeySpec("$secret&".toByteArray(), "HmacSHA1"), // GOOD 執行時組出來的(OAuth 簽章金鑰)
++    SecretKeySpec(raw, "AES"), // GOOD 變數
++    SecretKeySpec(byteArrayOf(x, y), "AES"), // GOOD byteArrayOf(變數)
++    SecretKeySpec(byteArrayOf(*raw), "AES"), // GOOD 展開
++)
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-webview-debugging-enabled/src/main/kotlin/kt-webview-debugging-enabled.kt b/configs/ast-grep/kotlin-android/samples/good/kt-webview-debugging-enabled/src/main/kotlin/kt-webview-debugging-enabled.kt
+new file mode 100644
+index 000000000..87ded45f5
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-webview-debugging-enabled/src/main/kotlin/kt-webview-debugging-enabled.kt
+@@ -0,0 +1,10 @@
++fun enableStandard() {
++    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG) // GOOD 標準寫法:直接傳除錯旗標
++}
++fun enableInDebug() {
++    if (BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) } // GOOD
++    if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true) // GOOD 不帶大括號
++    when { BuildConfig.DEBUG -> WebView.setWebContentsDebuggingEnabled(true) } // GOOD when 分支
++    if (BuildConfig.DEBUG) { if (Build.VERSION.SDK_INT >= 19) { WebView.setWebContentsDebuggingEnabled(true) } } // GOOD 外層是 DEBUG
++    WebView.setWebContentsDebuggingEnabled(false) // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-webview-file-url-access/src/main/kotlin/kt-webview-file-url-access.kt b/configs/ast-grep/kotlin-android/samples/good/kt-webview-file-url-access/src/main/kotlin/kt-webview-file-url-access.kt
+new file mode 100644
+index 000000000..cc04f2fd0
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-webview-file-url-access/src/main/kotlin/kt-webview-file-url-access.kt
+@@ -0,0 +1,12 @@
++fun setupOne(webView: WebView) {
++    webView.settings.allowUniversalAccessFromFileURLs = false // GOOD 明寫 false
++    webView.settings.setAllowFileAccessFromFileURLs(false) // GOOD
++}
++fun setupTwo(webView: WebView, ctx: Context) {
++    // GOOD 本機內容用 WebViewAssetLoader 走 https 網址載入,不開檔案網址存取
++    val loader = WebViewAssetLoader.Builder()
++        .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(ctx))
++        .build()
++    webView.settings.allowFileAccess = true // GOOD 只是一般檔案存取,不是跨來源(MASTG-TEST-0252 不算漏洞)
++    webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
++}
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md
+new file mode 100644
+index 000000000..b699a7fba
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Android資安與崩潰靜態檢查補齊_計劃.md
+@@ -0,0 +1,178 @@
++---
++type: project
++status: done
++created: 2026-11-08
++updated: 2026-11-08
++tags:
++  - type/project
++  - status/done
++  - scope/stack-knowledge
++  - risk/守衛面
++related:
++  - "[[Projects/Android現成檢查接上CI與推送前_計劃]]"
++  - "[[Projects/Android寫法型錄逐列查證_計劃]]"
++  - "[[Systems/kotlin規則包]]"
++lands_in:
++  - Systems/kotlin規則包
++  - Systems/linter精選目錄
++---
++# Android資安與崩潰靜態檢查補齊_計劃
++
++> 白話:拿業界三份現成清單(Android Lint 內建檢查、Google 另發的 Android 資安 lint 規則包、OWASP 手機 App 資安測試指南 MASTG)對照 Kotlin/Android 寫法型錄,找到型錄還沒涵蓋、而且光讀程式碼或設定檔就判得出的實務隱患。大部分是現成檢查:內建的那批,消費專案照 linter 目錄範本接 CI 後(範本已開 `warningsAsErrors`)本來就會擋,缺的是型錄沒登記、AI 寫碼前查不到;Google 資安規則包(24 條檢查)範本根本沒裝。MASTG 裡現成檢查沒有的 4 種寫法自己寫成 ast-grep 規則,但只有一條在樣本外語料量到誤報低於一成、會擋;其餘三條先放不接閘目錄,量夠了再升。Compose 2 條要等 detekt 升版。
++
++PRIOR-ART: ①內建檢查:Android Lint 官方檢查索引列 id 與標題,每條的等級、提供者與「預設關」字樣在各自的檢查頁(https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html ,例 https://googlesamples.github.io/android-custom-lint-rules/checks/SetJavaScriptEnabled.md.html );linter 目錄範本已開 `warningsAsErrors = true`,官方 DSL 說明這會讓 warning 級也讓建置失敗(https://developer.android.com/reference/tools/gradle-api/8.7/com/android/build/api/dsl/Lint )。採用:不改範本的等級設定,型錄登記即可;每條檢查頁有「disabled by default」字樣的照既有口徑加進 `B4_DEFAULT_OFF`。②Google 資安規則包:`com.android.security.lint:lint`,官方 README 寫安裝法是 `lintChecks("com.android.security.lint:lint:<version>")`、列 24 條檢查(https://github.com/google/android-security-lints );Google Maven 最新 1.0.4(https://dl.google.com/android/maven2/com/android/security/lint/lint/maven-metadata.xml );建置檔 `build.gradle` 寫 `lintVersion = '31.5.1'`(該檔最後改於 2024-08-07,1.0.4 於 2025-11-13 發版前沒再改)。採用,跟 Slack compose-lints 同一個 `dependencies` 區塊,版本規則照範本既有那條(建置用 lint 版本不高於專案 lint = AGP+23),換算要 AGP 8.5.1 以上。③自寫規則:同類工具 MobSF mobsfscan 的 Kotlin 規則(https://github.com/MobSF/mobsfscan 的 `mobsfscan/rules/semgrep/kotlin/webview.yaml`、`network.yaml`)是「呼叫或屬性賦值加字面 true」的純語法比對,WebView 除錯模式一律報、不看外層判斷;MASTG 測試頁寫明要找的 API(檔案網址存取 MASTG-TEST-0252、WebView 除錯 0227、舊版 TLS 0217、寫死金鑰 0212,網址見〈依據來源〉)。採用同一種形狀規則,在 ast-grep 裡用節點種類比對(ast-grep 的中介變數在賦值左邊只吃單一節點,多層接收者會漏,設計審 r1 實測);除錯開關的判法對齊規則包既有 API-19(只認 `BuildConfig.DEBUG`),再收窄成只認條件恰好是它的那一支。④誤報量測:規則包 RULE「真專案誤報超過命中一成就降級」與操作第 1 條「新規則先放不接閘、量過再升」;資安 API 在 nowinandroid 幾乎不出現,改用 GitHub 程式搜尋撈含目標寫法的真實 repo 檔案,量「命中裡有幾成是誤報」;形狀定案後另撈一批沒看過的 repo 當樣本外語料,以樣本外為準(設計審 r1 整合席:樣本內數字會偏樂觀)。不選:⑤Compose 的 VarsWithoutStateBacking、StaleRememberUpdatedStateInRemember:只在 compose-rules 0.6 以後才有(v0.6.6 起的 docs/rules.md 才有,v0.5.0 沒有),0.5 以後配 detekt 2.x,規則包釘 detekt 1.23.8 加 0.4.28。⑥FLAG_SECURE(MASTG-TEST-0291)與密碼欄鍵盤快取(0258):哪些畫面或欄位算敏感要看業務,形狀判不出。⑦反序列化(MASTG-TEST-0337):測試頁講的是 Intent extras 與 Bundle 這類平台來源,不是 `ObjectInputStream`,寫不成對得上判準的形狀規則。⑧WebView 一般檔案與 content 存取(`allowFileAccess`、`allowContentAccess`):MASTG-TEST-0252 明寫 AllowFileAccess 本身不算漏洞,不寫規則。
++RETIRE-IF: 規則包新增的資安規則在樣本外語料量到的誤報超過命中的一成(照規則包 RULE 降級或搬 rules-unwired/);或 Android Lint 內建或 Google 資安規則包補上同一種檢查(那條自寫規則撤掉,型錄改指現成規則)。
++
++## 用詞
++
++- **資安規則包**:Google 發的 `com.android.security.lint:lint`,掛在 Android Lint 上的外掛檢查,不是 AGP 內建。型錄現成規則欄寫成 `資安包:<檢查 id>`(照 `內建:` 的中文前綴先例;提供者原名太長且不是工具名)。官方 README 列 24 條檢查。
++- **內建**:隨 AGP 附的 Android Lint 檢查,型錄寫 `內建:<檢查 id>`(既有寫法)。
++- **MASTG**:OWASP 手機 App 安全測試指南,每個測試頁有編號(MASTG-TEST-NNNN)。
++- **A1、A2**:`lumos lint-check` 與健檢印的 Android 現成檢查提醒代號(A1=CI 設定檔找不到 Android Lint 的跡象、A2=用 Compose 但兩套 Compose 規則都沒接),定義在 [[Systems/linter精選目錄]]。
++- **`lint-waive`**:lumos 的新增告警放行指令,對一筆告警的指紋留理由放行,留痕、會被統計。
++- **卷證**:審查與實驗的原始紀錄(席報告、判讀表),放 `governance/review-reports/<迴圈編號>/`。
++- **實務隱患節的「已排除:<類>」**:`lumos pitfalls --check` 反問的四類風險(金流、對外送出、不可逆、守衛面),每類要答碰不碰。
++
++- **樣本內/樣本外**:樣本內=調規則形狀時看過的語料;樣本外=形狀定案後另撈、排除前面出現過的 repo 的語料,誤報率以樣本外為準。
++
++## 範圍
++
++1. **範本加資安規則包**([[Systems/linter精選目錄]]〈Android Lint 與 Compose lint 標準接法〉第 1 步):`dependencies` 加 `lintChecks("com.android.security.lint:lint:1.0.4")`,附官方 README 與 Maven 網址;寫明:
++   - 官方自己說這包「比內建更偏資安、也更實驗性」(README 原文 more security-focused and experimental)。
++   - 版本要 AGP 8.5.1 以上(建置用 lint 31.5.1,照同節 Slack 外掛那條規則換算)。
++   - 第一次接一樣先產基準線;**已經照範本接過 CI 的專案**加這一行時,要先刪掉 `lint-baseline.xml` 重產再推,不然舊程式的資安告警會讓 CI 立刻紅。
++   - 包裡 24 條檢查都登記在型錄(範圍 2),要關哪一條照型錄的檢查 id 在 `lint { disable += "<id>" }` 關。
++2. **型錄登記**(`skills/kotlin-idioms/checks-catalog.md`):照既有 12 欄格式,分進現有三類,不新開類別(型錄自檢 `check.py` 的 `_MAIN_ROW_RE` 只認現有九類,lumos 讀型錄也借用同一支檔;下面括號是這次要加進去的內容,不是類別標題)。
++   - API(網路與 WebView):WebView 開 JavaScript(內建 SetJavaScriptEnabled)、JavaScript 介面(內建 JavascriptInterface、AddJavascriptInterface)、SSL 錯誤照樣繼續(內建 WebViewClientOnReceivedSslError)、WebView 檔案網址存取(自寫)、WebView 除錯模式(自寫)、Safe Browsing 關掉(資安包 DisabledAllSafeBrowsing)、不安全的 SSL socket(內建 SSLCertificateSocketFactoryGetInsecure、SSLCertificateSocketFactoryCreateSocket)、信任使用者憑證(內建 AcceptsUserCertificates;資安包 DefaultTrustedUserCerts)、舊版 TLS(自寫)、DNS 設定不安全(資安包 InsecureDnsSdkLevel)、寫死內部網址或私有 IP(資安包 UnintendedExposedUrl、UnintendedPrivateIpAddress)。
++   - ARCH(元件、Intent 與平台相容):外露 receiver(內建 ExportedReceiver)、外露 content provider(內建 ExportedContentProvider)、PendingIntent 可變又隱式(內建 UnspecifiedImmutableFlag、MutableImplicitPendingIntent)、轉發不可信 Intent(內建 UnsafeIntentLaunch)、沒 action 的隱式 Intent(內建 IntentWithNullActionLaunch、UnsafeImplicitIntentLaunch)、FileProvider 開太寬的路徑(資安包 ExposedRootPath、DotPathAttribute、SlashPathAttribute、HardcodedAbsolutePath;內建 GrantAllUris)、工作被劫持(資安包 StrandhoggVulnerable)、點擊劫持(資安包 TapjackingVulnerable)、App Links 沒驗證(資安包 MissingAutoVerifyAttribute)、黏性廣播(資安包 InsecureStickyBroadcastsMethod、InsecureStickyBroadcastsPermission)、自訂權限保護等級太低(資安包 InsecurePermissionProtectionLevel)、藍牙可被發現時間(資安包 ExtendedBluetoothDiscoveryDuration、ZeroBluetoothDiscoveryDuration)、寫死 debuggable(內建 HardcodedDebugMode)、呼叫超出 minSdk 的 API(內建 NewApi、InlinedApi)、沒權限就呼叫要權限的 API(內建 MissingPermission)、通知權限(內建 NotificationPermission)、manifest 元件無法建立(內建 Instantiatable、MissingClass)、私有 API(內建 SoonBlockedPrivateApi、BlockedPrivateApi)、參數範圍與常數型別(內建 Range、WrongConstant、ResourceType)、Parcelable 缺 CREATOR(內建 ParcelCreator)、通知跳板(內建 NotificationTrampoline)。
++   - DATA(秘密、加密、儲存):原始碼裡的秘密(內建 SecretInSource、AuthLeak)、打包私鑰(內建 PackagedPrivateKey)、敏感資料寫進 logcat(資安包 LogInfoDisclosure)、ECB 或沒指定模式的加密(內建 GetInstance;資安包 UnsafeCryptoAlgorithmUsage)、弱雜湊(資安包 VulnerableCryptoAlgorithm)、弱亂數(資安包 WeakPrng;內建 SecureRandom)、全域可讀寫檔(內建 WorldReadableFiles、WorldWriteableFiles、SetWorldReadable)、舊版外部儲存(資安包 InsecureLegacyExternalStorage、SensitiveExternalPath)、寫死金鑰(自寫)。
++   - **併進既有列**(型錄規則「同一個錯誤只留一列」):`內建:DataExtractionRules` 併進 DATA-13(那列講的就是 `data_extraction_rules`,級改 `A+D`、通電批次在原有兩段後加「告警帶寫法=批四(CI 範本:Android Lint)」);`資安包:DefaultCleartextTraffic` 併進 API-23(明文 HTTP);`內建:CheckResult` 併進 PERF-36(忽略回傳值,同一個錯誤)。另開不併的:信任使用者憑證跟 API-22(信任所有憑證)後果不同;外露 receiver、content provider 跟 DATA-45(外露 service)各開一列;舊版外部儲存跟 DATA-27(寫死 `/sdcard` 路徑)不是同一個錯誤。
++   - **情境怎麼認**:現成規則列寫「形狀:由 Android Lint <檢查 id> 判」(判定是那條檢查做的,型錄只登記);哪些資料算敏感、哪個亂數用在資安場合這類 lint 判不了的語意,不另開情境決策表列(lint 報了就是報了,誤報由專案在 lint 設定關,見範圍 1)。自寫規則列寫「形狀:<規則認的寫法>」。
++   - **通電批次**:現成規則列寫「告警帶寫法=批四(CI 範本:Android Lint)」;會擋的自寫規則列寫「告警帶寫法=批一」;放不接閘的寫「告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)」。
++   - **實測狀態**:自寫規則列照型錄既有寫法「規則 <id>:樣本實測中壞例、好例不報」,後面接「真實語料:樣本內 N 處誤報 M、樣本外 N 處誤報 M」;現成規則列寫「未測(lint 規則,CI 跑)」。
++   - **來源**:每列帶〔查證 2026-11-08:網址〕,網址是那條檢查的官方說明頁或 MASTG 測試頁;實作時逐一 curl 確認頁面存在、等級與預設開關照頁面寫。〈來源縮寫〉加 `ASL`(資安包 README)、`LINTREF`(lint 檢查索引)、`MASTG`(測試索引)。
++   - **統計節**:總列數、各類列數、級的組合、規則包等級條數、會擋規則守到的列數,照型錄既有口徑重算;重算的指令(對主表列與 `rules*/` 的 grep 與計數)寫進實作收貨紀錄,不另寫程式。
++3. **第四批口徑認資安包**:型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `_B4_LINT` 多認 `資安包:` 前綴,通電批次照樣標「批四(CI 範本:Android Lint)」(資安包掛在 Android Lint 上、同一個 CI 步驟跑);檢查頁寫預設關的,加進 `B4_DEFAULT_OFF`;型錄〈輸入與口徑〉通電批次那條同步寫上。
++4. **自寫規則**(`configs/ast-grep/kotlin-android/`,訊息照既有格式「[型錄編號] 錯在哪;改用 <最短修法>」、不超過 120 字,每條附壞例好例樣本;放進按型錄主題分的既有規則檔,API 列的進 `api.yml`、DATA 列的進 `data.yml`):
++   - **會擋**(`rules/api.yml`)`kt-webview-file-url-access`:WebView 開檔案網址跨來源存取。認四種寫法:任何接收者的 `.setAllowUniversalAccessFromFileURLs(true)`、`.setAllowFileAccessFromFileURLs(true)`,不帶接收者的同名呼叫(`apply`/`with` 區塊裡),以及左邊整段以 `allowUniversalAccessFromFileURLs` 或 `allowFileAccessFromFileURLs` 結尾、右邊是 `true` 的賦值(節點種類比對,多層接收者、`?.`、`!!` 都認)。
++   - **不接閘**(`rules-unwired/api.yml`)`kt-webview-debugging-enabled`:`WebView.setWebContentsDebuggingEnabled(true)`(含完整套件名、不帶接收者)。不報:寫在條件恰好是 `BuildConfig.DEBUG` 的 if 成立那一支、或條件恰好是 `BuildConfig.DEBUG` 的 when 分支裡;否定、else 分支、`||` 連別的條件、只包在 SDK 版本判斷裡、完全沒包,都報。標準寫法是直接傳 `BuildConfig.DEBUG` 當參數(不報)。放不接閘的理由:樣本外 42 處誤報 16(用 `FLAG_DEBUGGABLE`、別名旗標判除錯版)。
++   - **不接閘**(`rules-unwired/api.yml`)`kt-insecure-tls-version`:`SSLContext.getInstance` 第一個參數恰好是 `"SSLv2"`、`"SSLv3"`、`"TLSv1"`、`"TLSv1.1"`(含兩參數版與完整套件名;`"SSL"`、`"TLS"`、`"TLSv1.2"` 不報);`ConnectionSpec.COMPATIBLE_TLS`(含完整套件名,拿來讀 `cipherSuites`、`tlsVersions`、`isTls` 的不報);`tlsVersions(...)` 呼叫參數裡的 `TlsVersion.TLS_1_0`、`TLS_1_1`、`SSL_3_0`(看呼叫的參數節點,分行寫也認);`setEnabledProtocols(arrayOf(...))` 參數裡有上面四個字串。放不接閘的理由:樣本內誤報已達 10.5%。
++   - **不接閘**(`rules-unwired/data.yml`)`kt-secretkeyspec-literal-key`:`SecretKeySpec` 第一個參數(含具名參數 `key =`)是不含插值的字串字面值接 `.toByteArray(...)` 或 `.encodeToByteArray(...)`、或參數全是整數字面值的 `byteArrayOf(...)`;變數、插值字串、`byteArrayOf(變數)`、展開、空陣列不報。放不接閘的理由:樣本外只撈到 3 處,量不夠。
++   - **升級條件**(不接閘 → `rules/`):樣本外語料(排除這次出現過的 repo)至少 20 處命中、誤報不超過一成;升級時改型錄那列的通電批次與實測狀態。
++   - 路徑排除:四條都用規則包 `rules/state.yml` 那份七項清單(`**/src/test*/**`、`**/src/androidTest*/**`、`**/src/testFixtures/**`、`**/src/*Test/**`、`**/src/sharedTest/**`、`**/*-test/src/**`、`**/*testing/src/**`),另加 `**/src/debug*/**`(debug 變體目錄只進除錯版;樣本外語料有一筆誤報就落在這種目錄)。
++
++**不做**:不改 `warningsAsErrors` 等範本既有設定;不在推送前跑 Android Lint(上一案已決定只在 CI 跑);不接 compose-rules 0.6 的兩條(PRIOR-ART ⑤);不寫 FLAG_SECURE、密碼欄鍵盤、反序列化、WebView 一般檔案存取的規則(PRIOR-ART ⑥⑦⑧);不新開型錄類別;不加健檢提醒(資安包沒裝的專案,A1/A2 那種字面提醒另案);不改既有 API-19 的除錯判法(它也認 `!BuildConfig.DEBUG`,同族問題另記)。
++
++REVISIT:2027-05-08 看 detekt 有沒有升 2.x;升了就把 compose-rules 換 0.6 以後的版本,型錄補 VarsWithoutStateBacking、StaleRememberUpdatedStateInRemember 兩列
++REVISIT:2027-02-08 看資安包有沒有新版(Google Maven metadata),範本版本與型錄檢查清單照新版改;看 FLAG_SECURE 與密碼欄要不要進情境決策表;再撈一批樣本外語料,看三條不接閘規則能不能照升級條件升
++REVISIT:[when-test:scripts/test_lumos.py::t_kotlin_rulepack_security_rules][by:2027-02-08] 既有 API-19 的除錯判法也認 `!BuildConfig.DEBUG`,看要不要照這次的收窄寫法改
++
++## 實驗
++
++### 第一輪(設計審前,樣本內)
++
++2026-11-08,ast-grep 0.51.1,草稿規則放 scratchpad 跑(未進 repo)。語料:①五個開源 App 淺複製整份(duckduckgo/Android、thunderbird-android、nextcloud/android、AntennaPod、Tusky,共 11,618 支 kt 檔);②GitHub 程式搜尋八個目標寫法、撈回 186 支 kt 檔(保留原路徑,路徑排除才量得到);③寫死金鑰另撈 74 支。②裡三個 repo 是靜態分析工具的規則樣本與 OWASP 示範檔(federicodotta/semgrep-rules、j3ssie/curated-semgrep-rules、OWASP/mastg),是刻意寫壞的教材、不是 App 程式,從語料移出。每處命中由代理打開命中行前後 15 行判真假,編排者看過判讀表、抽看上下文。
++
++| 規則 | 第一版 | 改形狀 | 最後命中 | 誤報 |
++|---|---|---|---|---|
++| WebView 檔案網址跨來源存取 | 84 處,誤報 13 全是分析工具樣本 | 不改 | 71 | 0 |
++| 舊版 TLS | 18 處,誤報 2、判不準 1 | 拿掉 `"SSL"`(Android 上回傳的仍是 TLS 1.2 以上,判不準那筆);包在條件不是單純比 `Build.VERSION.SDK_INT` 的 if 裡不報(誤報那筆包在命令列除錯旗標裡) | 13 | 1(建好沒用的死程式),7.7% |
++| WebView 除錯模式 | 第一版只排除條件含 debug 的 if:五個 App 整份 3 處全被排除(都包在 `BuildConfig.DEBUG` 或 `isDebuggable` 裡);語料②17 處,誤報 2(包在熱重載旗標、開發版套件名判斷裡) | 同舊版 TLS 的結構判斷:只有單純比 SDK 版本的 if 照報,其他 if 一律當成有開關 | 11 | 0(代價:4 處真問題被放過,三處是 Xposed 模組刻意開、一處包在別的判斷) |
++| 寫死金鑰 | 五個 App 6 處全誤報(比到演算法名稱字串 `"AES"`) | 只看第一個參數是字串字面值轉位元組或 `byteArrayOf(...)`;字串有插值(`"$secret&"`,執行時才組出來)不報 | 語料②8 處、③60 處 | 2(Telegram WebApp 的 `"WebAppData"`、BIP32 的 `"Bitcoin seed"`,協定規定的公開常數),2.9% |
++
++- 第一輪結論已被第二輪推翻(四條都放 `rules/` 那個結論):形狀是看同一批語料調的,設計審 r1 指出樣本內偏樂觀,而且多層接收者、分行呼叫鏈、反向除錯判斷三類寫法沒在語料裡被量到。
++
++### 第二輪(設計審 r1 之後,樣本外)
++
++- 第二版規則照 PRIOR-ART ③ 改成節點種類比對,先拿審查席留下的樣本與編排者寫的逐例樣本實跑(卷證 experiment/v2-key-cases.kt.txt、v2-debug-cases.kt.txt:該報的全報、不該報的全不報);實跑時發現第二版寫死金鑰規則整條零命中(限制掛錯節點),改成看第一個參數節點後才對。
++- 樣本外語料:GitHub 程式搜尋另撈 250 支(檔案網址與除錯模式)加 419 支(寫死金鑰,按路徑分批查)kt 檔,排除前兩批出現過的 repo。每處命中由代理打開前後 20 行判真假(卷證 experiment/oos-judge.tsv)。
++
++| 規則 | 樣本外命中 | 誤報 | 放哪 |
++|---|---|---|---|
++| WebView 檔案網址跨來源存取 | 80 | 0 | `rules/`(會擋) |
++| WebView 除錯模式 | 42 | 16(38%):別名除錯旗標 8、直接判 `FLAG_DEBUGGABLE` 6、BuildType 比對 1、debug 變體目錄 1 | `rules-unwired/` |
++| 寫死金鑰 | 3 | 0 | `rules-unwired/`(量不夠) |
++| 舊版 TLS | 沒另撈(樣本內第二版 19 處誤報 2,已達 10.5%) | — | `rules-unwired/` |
++
++- 量不到的:漏報(語料偏向命中);寫死金鑰的樣本外分母太小。
++- 卷證:`governance/review-reports/android資安與崩潰靜態檢查補齊/experiment/`(兩版規則、判讀表、語料清單;語料本身不進 repo,清單附 repo 與路徑可重抓)。
++
++## 實務隱患
++
++- **資安包是實驗性**:官方自己說比內建更實驗,可能誤報;範本照樣先產基準線,新告警才擋,誤報由專案自己在 lint 設定關掉那一條(型錄有全部 24 條的 id)。
++- **已接過範本的專案加資安包會立刻紅**:範圍 1 寫明要先刪基準線重產。
++- **內建檢查要等 CI**:型錄登記後 AI 寫碼前查得到,但機器真的擋要消費專案照範本接 CI;推送前沒有。
++- **會擋的那條只認字面 true**:`val enable = true` 再傳進去、別名 import 會漏;只是漏報,不會誤擋。
++- **三條自寫規則不擋**:不接閘目錄只在規則包自檢跑樣本,消費專案推送前不報;型錄那列照實寫「未接」。
++- **GitHub 程式搜尋的語料偏向命中**:只量得出命中裡的誤報比例,量不出漏報。
++- 已排除:金流:不碰付款
++- 已排除:對外送出:規則與型錄都是本機讀檔;範本的依賴由人照抄,依賴從 Google Maven 拉是消費專案自己的供應鏈
++- 已排除:不可逆:新增規則、型錄列與範本文字,退提交即回原狀;已抄走範本的消費專案與留下的 `lint-waive` 理由不跟著退(見〈回退〉)
++- 守衛面:新增一條會擋的推送前規則(擋得更多)、範本讓消費專案 CI 多跑 24 條資安檢查,走完整設計審
++
++## 依據來源
++
++| 機制 | 依據 | 出處 |
++|---|---|---|
++| 要比對業界清單、出處要官方 | 使用者要求 | 使用者 2026-11-05「你的標準、最佳寫法來源要有依據，不要你自己寫」;2026-11-07「Android的規則也一樣，來源、依據」 |
++| 內建檢查的等級、提供者、預設開關 | Android Lint 官方各檢查頁 | https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html |
++| 資安規則包安裝法、檢查清單、版本 | 官方 README、Google Maven、建置檔 | https://github.com/google/android-security-lints 、https://dl.google.com/android/maven2/com/android/security/lint/lint/maven-metadata.xml |
++| 自寫規則用呼叫與賦值形狀 | MobSF mobsfscan 的 Kotlin 規則 | https://github.com/MobSF/mobsfscan |
++| WebView 檔案網址存取 | MASTG-TEST-0252(FileURL 設定是失敗的必要條件之一) | https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0252/ |
++| WebView 除錯模式 | MASTG-TEST-0227 | https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0227/ |
++| 舊版 TLS | MASTG-TEST-0217 | https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0217/ |
++| 寫死金鑰 | MASTG-TEST-0212 | https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0212/ |
++| 誤報超過一成要降級、新規則先不接閘 | 規則包 RULE 與操作第 1 條(Google Tricorder 門檻) | [[Systems/kotlin規則包]] |
++
++## 驗收條款
++
++- [S1] 當讀 linter 目錄〈Android Lint 與 Compose lint 標準接法〉第 1 步的 kotlin 圍欄時,`dependencies` 區塊 應 有 `lintChecks("com.android.security.lint:lint:1.0.4")` 這一行,而且同一步的文字 應 寫出「AGP 8.5.1」與「刪掉」基準線重產的說明 [test:t_linter_catalog_android_security_lint]
++- [S2] 當型錄某列現成規則欄有一段寫 `資安包:<大寫開頭的檢查 id>`、不含待查等四個字樣,而且通電批次寫了批四時,型錄自檢 應 要求標的是「批四(CI 範本:Android Lint)」,標成別的批四值 應 報問題;`batch4_expected_tags` 對同一欄拿掉 `資安包:` 前綴後 應 回空清單 [test:t_kt_catalog_batch4_wiring]
++- [S3] 當新寫的逐例測試對預期值表每一列 S3 的寫法各跑一次規則包時,該報的 應 恰好被那條規則報一次、不該報的 應 不被它報 [test:t_kotlin_rulepack_security_rules]
++- [S4] 當列舉規則包時,`kt-webview-file-url-access` 應 在 `rules/api.yml`,`kt-webview-debugging-enabled`、`kt-insecure-tls-version` 應 在 `rules-unwired/api.yml`,`kt-secretkeyspec-literal-key` 應 在 `rules-unwired/data.yml`,每條訊息 應 以這次新增的型錄列編號開頭、不超過 120 字 [test:t_kotlin_rulepack_security_rules]
++- [S5] 當跑型錄自檢時,真實型錄 應 是 0 個問題、還沒逐列查證 應 維持 2 列(新增的列都帶查證紀錄),型錄裡 應 找得到資安包 README 列的 24 個檢查 id [test:t_kt_catalog_security_lint_ids]
++
++## 預期值表
++
++| 條款 | 輸入 | 預期 | 來源 |
++|---|---|---|---|
++| S1 | linter 目錄第 1 步的 kotlin 圍欄 | 有 `lintChecks("com.android.security.lint:lint:1.0.4")` | 官方 README 安裝法與 Google Maven 最新版 1.0.4 |
++| S2 | 現成規則欄 `資安包:LogInfoDisclosure`、通電批次標「批四(現成規則)」 | 型錄自檢報這列不一致 | 本計劃範圍 3;資安包掛在 Android Lint 上同一步跑(官方 README 第 2 步 `./gradlew lint`) |
++| S3 | `webView.settings.allowUniversalAccessFromFileURLs = true` | 報 | MASTG-TEST-0252;設計審 r1 通才、邊界兩席實測多層接收者 |
++| S3 | `settings.apply { allowFileAccessFromFileURLs = true }` | 報 | MASTG-TEST-0252 |
++| S3 | `s?.setAllowUniversalAccessFromFileURLs(true)` | 報 | MASTG-TEST-0252 |
++| S3 | `webView.settings.allowFileAccessFromFileURLs = false` | 不報 | MASTG-TEST-0252:設成 false 是建議寫法 |
++| S3 | `if (BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }` | 不報 | MASTG-TEST-0227:只在除錯版開 |
++| S3 | `if (!BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }` | 報 | MASTG-TEST-0227;設計審 r1 通才席實測 |
++| S3 | `if (BuildConfig.DEBUG) { } else { WebView.setWebContentsDebuggingEnabled(true) }` | 報 | MASTG-TEST-0227;設計審 r1 通才席實測 |
++| S3 | `if (Build.VERSION.SDK_INT >= 19) { WebView.setWebContentsDebuggingEnabled(true) }` | 報 | MASTG-TEST-0227;版本判斷不是除錯開關 |
++| S3 | `WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)` | 不報 | 官方建議寫法:直接傳除錯旗標 |
++| S3 | `SSLContext.getInstance("TLSv1")` | 報 | MASTG-TEST-0217 列的舊版 TLS 寫法 |
++| S3 | `SSLContext.getInstance("TLSv1.2")` | 不報 | MASTG-TEST-0217 只點名舊版本;設計審 r1 整合席點名的邊界 |
++| S3 | `SSLContext.getInstance("TLS")` | 不報 | MASTG-TEST-0217 只點名指定舊版本的寫法 |
++| S3 | 分兩行的 `ConnectionSpec.Builder(x)` 接下一行 `.tlsVersions(TlsVersion.TLS_1_0)` | 報 | MASTG-TEST-0217;設計審 r1 邊界席實測分行寫法 |
++| S3 | `ConnectionSpec.COMPATIBLE_TLS.cipherSuites` | 不報 | 實驗語料 okhttp tlssurvey:只讀屬性沒啟用 |
++| S3 | `SecretKeySpec("0123456789abcdef".toByteArray(), "AES")` | 報 | MASTG-TEST-0212 寫死金鑰 |
++| S3 | `SecretKeySpec(byteArrayOf(0x48, 0x65), "AES")` | 報 | MASTG-TEST-0212;樣本外語料的真實寫法 |
++| S3 | `SecretKeySpec("$secret&".toByteArray(), "HmacSHA1")` | 不報 | 實驗語料 OAuth 簽章金鑰:執行時組出來的,不是寫死 |
++| S3 | `SecretKeySpec(byteArrayOf(x, y), "AES")` | 不報 | 設計審 r1 邊界席:變數組出來的不是寫死 |
++| S3 | 放在 `src/debug/kotlin/` 底下的 `webView.settings.allowFileAccessFromFileURLs = true` | 不報 | debug 變體目錄只進除錯版(樣本外語料一筆誤報在這種目錄) |
++| S4 | 列舉規則包 | 一條在 `rules/api.yml`、兩條在 `rules-unwired/api.yml`、一條在 `rules-unwired/data.yml`,訊息以新列編號開頭且不超過 120 字 | 規則包 WHY:訊息格式與 120 字上限;本計劃〈實驗〉第二輪的放置 |
++| S5 | 真實型錄跑型錄自檢、對資安包 README 的 24 個 id 逐一找 | 0 個問題、還沒逐列查證 2 列、24 個 id 都找得到 | 型錄逐列查證計劃:新增列要同提交帶查證紀錄;官方 README 檢查清單 |
++
++## 回退
++
++退回本計劃的提交:範本那一行依賴與說明、型錄新增列與 DATA-13、API-23、PERF-36 補的檢查 id、〈統計〉節數字、`_B4_LINT` 的 `資安包` 前綴與 `B4_DEFAULT_OFF` 新增項、自寫規則與樣本、新測試拿掉。已照範本加了資安包的消費專案與已留下的 `lint-waive` 理由不會跟著退,要另外通知。
++
++## 天花板
++
++1. 誤報只量了命中裡的比例,漏報沒量。
++2. 內建與資安包的檢查要消費專案 CI 跑才擋;lumos 判不到 CI 有沒有真的跑(既有 A1 只看字面)。
++3. 型錄自檢只核對通電批次已寫批四的列:新列漏寫批四那一段,自檢不會報(既有口徑的盲點,這案不改)。
++4. 這次只有一條自寫規則會擋;另外三條要等樣本外語料夠才升。
++
++## 審計修正紀錄
++
++- r1(2026-11-08,4 席):27 條/blocking 9/規則形狀用中介變數配整串、自創除錯判法、樣本內量測三組根因;改用節點種類比對、對齊 API-19 再收窄、另撈樣本外語料定放置(只留一條會擋),資安包 24 條全登記並寫版本與基準線重產,條款改綁逐例測試;卷證 governance/review-reports/android資安與崩潰靜態檢查補齊/。
++- 例:輸入 `webView.settings.allowUniversalAccessFromFileURLs = true` → 第一版不報、修後報;輸入 `if (!BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }` → 第一版不報、修後報。
++- 2026-11-08 實作:型錄新增 41 列(API-37–47、ARCH-68–88、DATA-79–87),DataExtractionRules、DefaultCleartextTraffic、CheckResult 併進 DATA-13、API-23、PERF-36;API-23 原寫的 `內建:DefaultCleartextTraffic` 照檢查頁提供者改成資安包;63 個檢查頁逐頁查過都沒有「disabled by default」,`B4_DEFAULT_OFF` 不加;舊版 TLS 規則照範圍 4 補 `setEnabledProtocols`(草稿沒有);統計重算腳本存卷證 experiment/catalog-stats.py.txt。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index cbc8a403b..842579e32 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -42,35 +42,37 @@ summary: |-
+   PITFALL:範本內容守衛只比對「整節有沒有這串字」時,散文也寫了同一串設定,把 properties 圍欄裡的設定行改成 true 或刪掉,守衛照綠 [出處:代碼審 code-android儀器測試範本 r1 測試 F1 翻紅實驗] [根因:_kt_instr_template_problems 對 T12 只做整節子字串比對] [修法:只在 T12 的 properties 與 kotlin 圍欄裡比對整行 key=value 與 systemProperty 行;改壞只改程式行] [同族:t_kotlin_catalog_instrumented_batch_notes 的改壞只比對舊字串本身(測試 F3),已改成拿改壞資料跑同一組判準 _kt_ui39_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+   REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,(2026-11-08 起 --sg 自檢的 SARIF 探針也載主程式,「零依賴路徑不載主程式」這個理由已不成立)
+   WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
+   WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
+   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
+   WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列(兩條會擋規則找不到官方原文,降不降級待人裁) [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
+   WHY:引用型錄出處不全列的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級,提示級也可能被專案自行宣告接閘),rules-unwired/ 也收還沒在真專案量過誤報的新規則,任何等級 [出處:[[Projects/規則包覆核兩級接新增告警閘_計劃]]] [因:覆核級與提示級將來可能接閘,依據不足的規則要有一個確定不擋的位置] [test:t_kotlin_rulepack_unwired_dir]
++  WHY:資安四條自寫規則只有 kt-webview-file-url-access 放會擋的 rules/api.yml;kt-webview-debugging-enabled、kt-insecure-tls-version 放 rules-unwired/api.yml,kt-secretkeyspec-literal-key 放 rules-unwired/data.yml;升到 rules/ 的條件是樣本外語料(排除已出現過的 repo)至少 20 處命中且誤報不超過一成,升時同步改型錄那列的通電批次與實測狀態 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 實驗第二輪] [因:樣本外量測檔案網址 80 處誤報 0;除錯模式 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版);舊版 TLS 樣本內已達 10.5%;寫死金鑰樣本外只撈到 3 處] [不選:四條都放 rules/(第一輪樣本內的結論,形狀是看同一批語料調的、偏樂觀)] [test:t_kotlin_rulepack_security_rules]
++  WHY:型錄現成規則欄的 Google 資安規則包檢查寫成「資安包:<檢查 id>」,批四口徑 _B4_LINT 照「內建:」一樣認,通電批次標「批四(CI 範本:Android Lint)」;24 條檢查頁都沒寫 disabled by default,B4_DEFAULT_OFF 不加 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3] [因:資安包掛在 Android Lint 上、同一個 CI 步驟跑;提供者原名太長且不是工具名] [test:t_kt_catalog_batch4_wiring] [test:t_kt_catalog_security_lint_ids]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+ - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+ - `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本還沒接;接不接(覆核級有已知誤報樣本,使用者 d5 與上面誤報一成 RULE 相撞)見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
+ - `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高,範本預設不接。
+-- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):引用型錄出處不全列的規則(2026-11-08 從 `rules-hints/` 拆來 8 條),與還沒在真專案量過誤報的新規則;範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
++- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):引用型錄出處不全列的規則(2026-11-08 從 `rules-hints/` 拆來 8 條),與還沒在真專案量過、或量到誤報超過一成、或樣本量不夠的新規則(2026-11-08 資安三條:WebView 除錯、舊版 TLS、寫死金鑰,放哪一級與升級條件見摘要的 WHY);範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+ - `rules/`、`rules-review/`、`rules-hints/`、`rules-unwired/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
+ - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems);`--sg` 完整模式另用新增告警閘的 SARIF 解析掃兩條指定規則的壞例(SARIF 探針 `sarif_gate_rule_ids`)。
+ - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。
+ - `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C 的列有 60 列(T0–T5 純 JVM,T6–T13 要 Android 模組、Robolectric 或模擬器)通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本的骨架節重跑那一組(T0–T5 照〈實驗專案骨架〉,T6–T13 照〈Android 實驗專案骨架〉)、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]](T6–T13 補進 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]])。
+ 
+ 自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(情境題證據樣式自測與 SARIF 探針用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式與新增告警閘的 SARIF 解析;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
+ 
+ ## 怎麼改
+ 
+ 1. 改規則或加規則:同時補樣本,跑 `python3 configs/ast-grep/kotlin-android/check.py --sg <ast-grep>` 到 0 個問題。新規則一律先放語意覆核級(`rules-review/`)或不接閘的 `rules-unwired/`,對真專案量過誤報低於一成才升到會擋的 `rules/`;審查中被點出形狀分不出對錯的,不再放寬形狀,直接留在覆核級(代碼審跑滿回顧,卷證 `governance/review-reports/code-kotlin規則包/cap-retro.json`:三輪的最大宗都是放寬形狀又帶出新誤報)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+index e3b43aa23..2e3bf1bfc 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
++++ b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-07-17
+-updated: 2026-11-06
++updated: 2026-11-08
+ self_audit: sonnet/2026-07-27
+ about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
+ tags:
+   - type/system
+   - status/done
+   - scope/stack-knowledge
+ related:
+   - "[[Systems/lint-version-watch]]"
+   - "[[Systems/pitfalls-lint-adapter]]"
+   - "[[Projects/社群規則第二批_計劃]]"
+@@ -171,23 +171,25 @@ Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模
+    android {
+        lint {
+            baseline = file("lint-baseline.xml")
+            warningsAsErrors = true      // 不開時只有 error 級會讓建置失敗;型錄的 Android Lint 列多半是 warning 級
+            checkDependencies = true     // app 連同函式庫模組一起查(官方建議)
+            sarifReport = true
+        }
+    }
+    dependencies {
+        lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>")
++       lintChecks("com.android.security.lint:lint:1.0.4")
+    }
+    ```
+    Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4.1 以上用 `1.6.1`(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 `1.5.5`(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 `1.5.0`(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 `1.4.2`(lint 31.7.1);AGP 8.7.0 用 `1.4.0`(發行說明寫 Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本,只列一串依賴更新的 PR 標題(lint-api 從 31.7.2 一路升到 32.2.0、lint 外掛升到 9.2.0,另一則寫 lint 31.13.2),看不出最後用哪版建置,不列。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
++   第二行 `lintChecks` 是 Google 的 Android 資安規則包(2026-11-08 加,[[Projects/Android資安與崩潰靜態檢查補齊_計劃]];官方 README https://github.com/google/android-security-lints ,版本查 Google Maven https://dl.google.com/android/maven2/com/android/security/lint/lint/maven-metadata.xml ,當天最新 1.0.4):官方自己說它比內建檢查「更偏資安、也更實驗性」(more security-focused and experimental),可能誤報。版本規則跟 Slack 外掛同一條:1.0.4 的建置檔寫 `lintVersion = '31.5.1'`,換算要 **AGP 8.5.1 以上**。第一次接一樣照第 2 步先產基準線;**已經照範本接過 CI 的專案**加這一行時,要先刪掉 `lint-baseline.xml`、照第 2 步重產並提交再推,不然舊程式的資安告警會讓 CI 立刻紅。包裡 24 條檢查都登記在 Kotlin 寫法型錄 checks-catalog.md(家在 [[Systems/kotlin規則包]];現成規則欄寫 `資安包:<檢查 id>`),專案要關哪一條,照型錄的檢查 id 在 `lint { disable += "<id>" }` 關。
+ 2. 第一次在本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true`(例 `lintDebug`)產 `lint-baseline.xml`、提交。**先產基準線、提交,再做第 3 步**——反過來 `warningsAsErrors` 會讓舊專案一接就紅。要清舊帳時刪掉基準線檔重產。
+ 3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 lint):有基準線以外的新告警就讓 CI 失敗。
+ - 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡都找不到 Android Lint 的跡象:lint 任務名,或跟 `gradlew`、`gradle` 寫在同一邏輯行(反斜線續行接起來算一行)的 `check`、`build`,或 Azure `tasks:`、gradle action 的 `arguments:`、Bitrise 的 `gradle_task:` 這三個欄位值裡的 `check`、`build`(CircleCI 的 `command:` 是通用欄位、不算,gradle orb 的 `command: build` 會多印);建置檔的 `lint { }` 區塊與 `lint-baseline.xml` 是第 1、2 步的痕跡,不算 CI 有跑;只看字面,找到一個就不印,找不到不代表一定沒跑)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看字面(A1 看 CI 設定檔、A2 看建置檔、A3 看宣告),不驗 CI 真的跑。
+ 
+ ### Kotlin 寫法規則包標準接法(2026-11-05 立,[[Projects/Android協程與API寫法機械檢查標準_計劃]])
+ 
+ 規則包本體、每條規則對應型錄哪一列、自我檢查怎麼跑,家在 [[Systems/kotlin規則包]];這裡只放宣告範本。
+ 
+ - **安裝**:`pipx install ast-grep-cli==0.51.1` 或 `brew install ast-grep`(要 0.51.1 以上;規則包用到的語法以 0.51.1 為準)。CI 要先裝同一版並 clone 工具鏈。沒裝時新增告警閘判環境不可用、照既有規則放行並記帳(看得到但不擋)。
+ - **`.lumos/lint.json` 樣板**(Kotlin 專案直接抄,跟 detekt 那條並列):
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 553422f83..5b3dc6dad 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126551,20 +126551,108 @@ def t_kotlin_rulepack_unwired_dir():
+     check("⑤ 假規則沒有 dir 鍵照不在 unwired 算、要報", any("rules-unwired" in b for b in p5), str(p5))
+     rules = m.load_rules()
+     weak_set = set(weak)
+     refs = [r for r in rules if re.match(r"\[([A-Z]+-\d+)\]", r["message"]) and re.match(r"\[([A-Z]+-\d+)\]", r["message"]).group(1) in weak_set]
+     check("⑥ 真規則包引用出處不全列的規則全在 rules-unwired/", refs and all(r["dir"] == "rules-unwired" for r in refs),
+           str([(r["id"], r["dir"]) for r in refs]))
+     real = [p for p in m.catalog_problems(rules) if "出處不全" in p[1]]
+     check("⑦ 真規則包沒有出處不全的放錯目錄", not real, str(real[:3]))
+ 
+ 
++# 資安四條自寫規則的逐例判準([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 預期值表 S3):(檔案相對路徑, 片段, 規則 id, 該報幾次)。
++# 片段照預期值表原文;最後一筆是 src/debug 那列的對照組(同一行放 src/main 要報),證明不報是路徑排除擋的、不是片段寫壞。
++_KTSEC_CASES = (
++    ("src/main/kotlin/C01.kt", "webView.settings.allowUniversalAccessFromFileURLs = true", "kt-webview-file-url-access", 1),
++    ("src/main/kotlin/C02.kt", "settings.apply { allowFileAccessFromFileURLs = true }", "kt-webview-file-url-access", 1),
++    ("src/main/kotlin/C03.kt", "s?.setAllowUniversalAccessFromFileURLs(true)", "kt-webview-file-url-access", 1),
++    ("src/main/kotlin/C04.kt", "webView.settings.allowFileAccessFromFileURLs = false", "kt-webview-file-url-access", 0),
++    ("src/main/kotlin/C05.kt", "if (BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }", "kt-webview-debugging-enabled", 0),
++    ("src/main/kotlin/C06.kt", "if (!BuildConfig.DEBUG) { WebView.setWebContentsDebuggingEnabled(true) }", "kt-webview-debugging-enabled", 1),
++    ("src/main/kotlin/C07.kt", "if (BuildConfig.DEBUG) { } else { WebView.setWebContentsDebuggingEnabled(true) }",
++     "kt-webview-debugging-enabled", 1),
++    ("src/main/kotlin/C08.kt", "if (Build.VERSION.SDK_INT >= 19) { WebView.setWebContentsDebuggingEnabled(true) }",
++     "kt-webview-debugging-enabled", 1),
++    ("src/main/kotlin/C09.kt", "WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)", "kt-webview-debugging-enabled", 0),
++    ("src/main/kotlin/C10.kt", 'SSLContext.getInstance("TLSv1")', "kt-insecure-tls-version", 1),
++    ("src/main/kotlin/C11.kt", 'SSLContext.getInstance("TLSv1.2")', "kt-insecure-tls-version", 0),
++    ("src/main/kotlin/C12.kt", 'SSLContext.getInstance("TLS")', "kt-insecure-tls-version", 0),
++    ("src/main/kotlin/C13.kt", "val spec = ConnectionSpec.Builder(x)\n        .tlsVersions(TlsVersion.TLS_1_0)", "kt-insecure-tls-version", 1),
++    ("src/main/kotlin/C14.kt", "val cs = ConnectionSpec.COMPATIBLE_TLS.cipherSuites", "kt-insecure-tls-version", 0),
++    ("src/main/kotlin/C15.kt", 'SecretKeySpec("0123456789abcdef".toByteArray(), "AES")', "kt-secretkeyspec-literal-key", 1),
++    ("src/main/kotlin/C16.kt", 'SecretKeySpec(byteArrayOf(0x48, 0x65), "AES")', "kt-secretkeyspec-literal-key", 1),
++    ("src/main/kotlin/C17.kt", 'SecretKeySpec("$secret&".toByteArray(), "HmacSHA1")', "kt-secretkeyspec-literal-key", 0),
++    ("src/main/kotlin/C18.kt", 'SecretKeySpec(byteArrayOf(x, y), "AES")', "kt-secretkeyspec-literal-key", 0),
++    ("src/debug/kotlin/C19.kt", "webView.settings.allowFileAccessFromFileURLs = true", "kt-webview-file-url-access", 0),
++    ("src/main/kotlin/C20.kt", "webView.settings.allowFileAccessFromFileURLs = true", "kt-webview-file-url-access", 1),
++)
++# 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號)(計劃範圍 4 與〈實驗〉第二輪的放置)
++_KTSEC_PLACE = {
++    "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
++    "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
++    "kt-insecure-tls-version": ("rules-unwired", "api.yml", "API-45"),
++    "kt-secretkeyspec-literal-key": ("rules-unwired", "data.yml", "DATA-87"),
++}
++# 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
++_KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
++                  "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
++
++
++def t_kotlin_rulepack_security_rules():
++    """[S3][S4] 資安四條自寫規則([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4):預期值表 S3 每一列各寫成一支 kt 檔
++    (src/debug 那列放 src/debug/kotlin/ 底下),用規則包四份設定檔(sgconfig*.yml)實跑 ast-grep,該報的恰好被對應那條報一次、
++    不該報的不被它報;S4 驗目錄配置、路徑排除八項、訊息以新型錄列編號開頭且不超過 120 字。判準來源是計劃預期值表
++    (MASTG-TEST-0252、0227、0217、0212 與設計審 r1 實測的寫法),預期值寫死在 _KTSEC_CASES,不拿規則自己算。
++    翻紅釘:賦值那支改回中介變數配整串 → C01 紅;除錯判法改回「條件含 DEBUG 就不報」→ C06 紅;else 分支沒排除 → C07 紅;
++    TLS 版本清單加回 "TLS" → C12 紅;tlsVersions 只認同一行 → C13 紅;寫死金鑰認變數組的 byteArrayOf → C18 紅;
++    拿掉 src/debug 排除 → C19 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。"""
++    print("t_kotlin_rulepack_security_rules")
++    import re
++    import shutil as _sh
++    m = _ktpack()
++    rules = {r["id"]: r for r in m.load_rules()}
++    for rid, (d, fname, cat) in _KTSEC_PLACE.items():
++        r = rules.get(rid)
++        check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
++              str(r and (r["dir"], r["file"])))
++        msg = (r or {}).get("message", "")
++        check(f"S4 {rid} 訊息以 [{cat}] 開頭、不超過 120 字", msg.startswith(f"[{cat}]") and len(msg) <= 120, f"{len(msg)} {msg}")
++        doc = next((x for x in re.split(r"^---\s*$", (m.HERE / d / fname).read_text(encoding="utf-8"), flags=re.MULTILINE)
++                    if re.search(rf"^id:\s*{re.escape(rid)}\s*$", x, re.MULTILINE)), "") if r else ""
++        ign = re.search(r"^ignores:\s*\[(.*)\]\s*$", doc, re.MULTILINE)
++        got = set(re.findall(r"'([^']+)'", ign.group(1))) if ign else set()
++        check(f"S4 {rid} 路徑排除恰好是八項", got == set(_KTSEC_IGNORES), str(sorted(got ^ set(_KTSEC_IGNORES))))
++    sg = _ktpack_sg()
++    if not sg:
++        print("  (本機沒有 ast-grep,只跑了 S4 那半;CI 裝了 0.51.1 會跑 S3 逐例)")
++        return
++    root = Path(tempfile.mkdtemp(prefix="gctl-ktsec-"))
++    try:
++        for rel, body, _rid, _n in _KTSEC_CASES:
++            p = root / rel
++            p.parent.mkdir(parents=True, exist_ok=True)
++            p.write_text("package sec\n\nfun case(webView: WebView, settings: WebSettings, s: WebSettings?, x: ConnectionSpec,"
++                         " secret: String, y: Byte) {\n    " + body + "\n}\n", encoding="utf-8")
++        hits = {}
++        for _d, cfg in m.CONFIGS:
++            got = m.scan(sg, cfg, root)
++            check(f"★前置★ {cfg} 掃得起來", got is not None, cfg)
++            for rid, f in got or []:
++                key = (rid, Path(f).resolve().relative_to(root.resolve()).as_posix())
++                hits[key] = hits.get(key, 0) + 1
++        for rel, body, rid, n in _KTSEC_CASES:
++            got_n = hits.get((rid, rel), 0)
++            check(f"S3 {rel} {'報一次' if n else '不報'}({rid}):{body.splitlines()[0][:60]}", got_n == n, f"命中 {got_n}")
++    finally:
++        _sh.rmtree(str(root), ignore_errors=True)
++    print("  ✓ t_kotlin_rulepack_security_rules")
++
++
+ def t_kotlin_catalog_rows_wired():
+     """[S3] 型錄每列欄位數對、編號唯一、標準寫法/接電方式/通電批次非空;形狀類有告警或正向約束;
+     語意類有表態對程式、沒標人裁的有盲判席;來源有網址或縮寫且不是未核對;決策表列編號連號、
+     觸發字不含常用字、對應檢查存在、每條語意列都被收;〈待查證〉節不在檢查範圍。改壞複本要逐項抓到。"""
+     m = _ktpack()
+     probs = m.catalog_problems()
+     check("S3 真型錄格式全過", not probs, f"{len(probs)} 個:{probs[:5]}")
+     mc = _ktpack(copy=True)
+     t = mc.CATALOG.read_text(encoding="utf-8")
+     lines = t.split("\n")
+@@ -128659,23 +128747,111 @@ def t_kt_catalog_batch4_wiring():
+     i_tag = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"批四({lint})" in ln)
+     i_old = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and "批四(現成規則)" in ln)
+     for name, idx, a, b in (("標籤改回舊值", i_tag, f"批四({lint})", "批四(現成規則)"),
+                             ("不該標的列標成接電", i_old, "批四(現成規則)", f"批四({lint})")):
+         cp = _ktpack(copy=True)
+         mut = rows[:]
+         mut[idx] = mut[idx].replace(a, b, 1)
+         cp.CATALOG.write_text("".join(mut), encoding="utf-8")
+         got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
+         check(f"★前置★ 自檢抓得到:{name}", len(got) >= 1, str(got[:3]))
++    # [S2] 資安包前綴([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3:資安包掛在 Android Lint 上、同一個 CI 步驟跑)
++    check("S2 資安包:檢查 id → Android Lint 標籤", tags("資安包:LogInfoDisclosure") == [lint], str(tags("資安包:LogInfoDisclosure")))
++    check("S2 同一欄拿掉資安包:前綴 → 回空", tags("LogInfoDisclosure") == [], str(tags("LogInfoDisclosure")))
++    check("S2 資安包那段寫待查 → 不標", tags("資安包:LogInfoDisclosure(待查)") == [], "")
++    # 只靠資安包前綴才判成批四的列(現成規則欄沒有別家前綴):標成別的批四值要報
++    i_asl = next((i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"批四({lint})" in ln
++                  and "資安包:" in ck._cells(ln)[5] and not _re.search(r"(?:androidx|內建|slack|Android Lint):", ck._cells(ln)[5])), None)
++    check("★前置★ 型錄有只靠資安包前綴判成批四的列", i_asl is not None, "")
++    if i_asl is not None:
++        asl_id = ck._cells(rows[i_asl])[0]
++        cp = _ktpack(copy=True)
++        mut = rows[:]
++        mut[i_asl] = mut[i_asl].replace(f"批四({lint})", "批四(現成規則)", 1)
++        cp.CATALOG.write_text("".join(mut), encoding="utf-8")
++        got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
++        check(f"S2 資安包列 {asl_id} 標成「批四(現成規則)」要報", any(a == asl_id for a, _b in got), str(got[:3]))
+     print("  ✓ t_kt_catalog_batch4_wiring")
+ 
+ 
++# Google Android 資安 lint 規則包 README 列的 24 條檢查 id(https://github.com/google/android-security-lints 〈Lint checks included
++# in this library〉五張表,刪除線那條 UnsanitizedContentProviderFilename 已併進內建、不算;2026-11-08 讀 README 原文抄)
++_ASL_README_IDS = (
++    "DefaultCleartextTraffic", "DefaultTrustedUserCerts", "DisabledAllSafeBrowsing", "DotPathAttribute", "ExposedRootPath",
++    "ExtendedBluetoothDiscoveryDuration", "HardcodedAbsolutePath", "InsecureDnsSdkLevel", "InsecureLegacyExternalStorage",
++    "InsecurePermissionProtectionLevel", "InsecureStickyBroadcastsMethod", "InsecureStickyBroadcastsPermission",
++    "LogInfoDisclosure", "MissingAutoVerifyAttribute", "SensitiveExternalPath", "SlashPathAttribute", "StrandhoggVulnerable",
++    "TapjackingVulnerable", "UnintendedExposedUrl", "UnintendedPrivateIpAddress", "UnsafeCryptoAlgorithmUsage",
++    "VulnerableCryptoAlgorithm", "WeakPrng", "ZeroBluetoothDiscoveryDuration")
++
++
++def t_kt_catalog_security_lint_ids():
++    """[S5] 真型錄跑型錄自檢 0 個問題、還沒逐列查證維持 2 列(新增的列都帶〔查證 日期:網址〕),資安包 README 的 24 個檢查 id
++    每個恰好出現在主表一列的現成規則欄、寫成 `資安包:<id>`([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 2)。
++    判準來源:24 個 id 寫死在 _ASL_README_IDS(出處官方 README),不從型錄讀;「還沒逐列查證 2 列」是型錄逐列查證計劃收尾時的數字。
++    翻紅釘:漏登記一條或寫成 `內建:` → ①紅;同一條登記在兩列(違反同一個錯誤只留一列)→ ②紅;新列漏查證紀錄 → ③紅。"""
++    print("t_kt_catalog_security_lint_ids")
++    m = _ktpack()
++    check("★前置★ 判準清單恰好 24 個、不重複", len(set(_ASL_README_IDS)) == 24, str(len(set(_ASL_README_IDS))))
++    import re as _re
++    rows = m.main_rows()
++    where = {}
++    for i in _ASL_README_IDS:
++        where[i] = [rid for rid, c in rows.items()
++                    if _re.search(rf"資安包:(?:[A-Za-z0-9]+、)*{i}(?![A-Za-z0-9])", c[5])]
++    missing = [i for i, w in where.items() if not w]
++    check("① 24 個 id 都登記在主表的現成規則欄(資安包:前綴)", not missing, str(missing))
++    dup = {i: w for i, w in where.items() if len(w) > 1}
++    check("② 每個 id 只登記在一列", not dup, str(dup))
++    probs = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
++    check("S5 真型錄自檢 0 個問題", not probs, str(probs[:5]))
++    unv = m.catalog_unverified()
++    check("③ 還沒逐列查證維持 2 列(API-14、TEST-31)", unv == ["API-14", "TEST-31"], str(unv))
++    print("  ✓ t_kt_catalog_security_lint_ids")
++
++
++def t_linter_catalog_android_security_lint():
++    """[S1] linter 目錄〈Android Lint 與 Compose lint 標準接法〉第 1 步的 kotlin 圍欄,`dependencies` 區塊裡有
++    `lintChecks("com.android.security.lint:lint:1.0.4")`,同一步的文字寫出「AGP 8.5.1」與刪掉 lint-baseline.xml 重產的說明
++    ([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 1)。判準來源:官方 README 安裝法(lintChecks 那行)、Google Maven
++    maven-metadata.xml 的 latest 1.0.4、建置檔 lintVersion 31.5.1 換算 AGP 8.5.1。
++    翻紅釘:那行放在 android { } 或圍欄外 → ①紅;版本寫成 <版本> → ①紅;拿掉 AGP 句 → ②紅;拿掉刪基準線重產句 → ③紅。"""
++    print("t_linter_catalog_android_security_lint")
++    doc = (Path(GRAPHCTL).resolve().parents[1] / "docs" / "lumos-toolchain-knowledge" / "Systems" / "linter精選目錄.md").read_text(
++        encoding="utf-8")
++    sec = doc.split("### Android Lint 與 Compose lint 標準接法", 1)
++    check("★前置★ 找得到那一節", len(sec) == 2, "")
++    body = sec[1].split("\n### ", 1)[0] if len(sec) == 2 else ""
++    step1 = body.split("\n1. ", 1)[1].split("\n2. ", 1)[0] if "\n1. " in body else ""
++    check("★前置★ 找得到第 1 步", bool(step1), body[:200])
++    fence = step1.split("```kotlin", 1)[1].split("```", 1)[0] if "```kotlin" in step1 else ""
++    check("★前置★ 第 1 步有 kotlin 圍欄", bool(fence), step1[:200])
++    dep, depth, inside = [], 0, False
++    for ln in fence.splitlines():
++        s = ln.strip()
++        if not inside and depth == 0 and s.startswith("dependencies") and s.endswith("{"):
++            inside, depth = True, 1
++            continue
++        if inside:
++            depth += s.count("{") - s.count("}")
++            if depth <= 0:
++                inside = False
++                continue
++            dep.append(s)
++    check("① dependencies 區塊有資安包那一行(版本 1.0.4)", 'lintChecks("com.android.security.lint:lint:1.0.4")' in dep, str(dep))
++    prose = step1.replace(fence, "")
++    check("② 同一步的文字寫出 AGP 8.5.1", "AGP 8.5.1" in prose, prose[-600:])
++    check("③ 同一步的文字寫出刪掉 lint-baseline.xml 重產", "刪掉" in prose and "lint-baseline.xml" in prose and "重產" in prose,
++          prose[-600:])
++    print("  ✓ t_linter_catalog_android_security_lint")
++
++
+ def _detekt_real_bin():
+     """找真的 detekt 1.23.8;CI 一定要有(計劃範圍 6:CI 下載釘版本),本機沒有或版本不對回 None。"""
+     import os as _os
+     import shutil as _sh
+     import subprocess as sp
+     det = _os.environ.get("LUMOS_DETEKT") or _sh.which("detekt")
+     ver = ""
+     if det:
+         try:
+             ver = sp.run([det, "--version"], capture_output=True, text=True, timeout=120).stdout.strip()
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 049da35ef..cc9e3ccf1 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1,25 +1,25 @@
+ # Android/Kotlin 常見錯誤寫法總清單(合併去重版)
+ 
+ 整理日:2026-11-05。只做整理,沒有上網重查。
+ 
+ ## 輸入與口徑
+ 
+ - 輸入:五份研究清單(協程與 Flow、架構與生命週期、Compose、資料層、測試與效能),既有計劃 `Projects/Android協程與API寫法機械檢查標準_計劃` 的 35 條(API-1~13、FLOW-1~7、STATE-1~6、CO-1~6、UI-1~3,編號照舊),以及2026-11-05 實驗時補的 14 條規則(已併入規則包 `configs/ast-grep/kotlin-android/`)。
+ - 去重:同一個錯誤(後果與壞寫法本質相同)只留一列;合併列保留所有來源與所有規則代號。被併進的原始列寫在「來源」欄的〔併:…〕裡,代號對照:`研C一3` = 協程研究第一節第 3 列;`研A12` = 架構研究第 12 列;`研M一4` = Compose 研究第一節第 4 列;`研D二5` = 資料層研究第二節第 5 列;`T5`/`P12` = 測試效能研究的列號;`X:規則id` = 14 條補充。
+ - 級:A 現成規則可開;B 自寫結構規則(ast-grep/semgrep);C 測試範本;D 人審。可複選,寫成 `A+B`。
+ - 情境怎麼認:「形狀」= 從程式長相認得出;「語意」= 要看語意才判得出。
+-- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,範本還沒接,接不接見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁;「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」(規則在 `rules-unwired/` 的列也寫未接:引用的型錄列出處不全,或規則還沒在真專案量過誤報)。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx 或 Slack compose-lints 的規則,消費專案照 linter 目錄範本接 CI 後才擋;「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。「行為測試或正向約束=」那一段另有幾種值:「範本 T<n>」=照行為測試範本那一組起手寫測試;「未接(儀器批)」=要模擬器、Robolectric 或 Android 專用套件才跑得動,實驗沒過、還沒有範本;「不接(代碼審或真機)」=測試派發器或純 JVM 測不出,靠代碼審與真機驗收。級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節(型錄自檢會驗那一節存在;[[Projects/Android行為測試範本與架構測試_計劃]]、儀器批與架構測試 T6–T13 見 [[Projects/Android儀器測試範本與架構測試_計劃]])。
++- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,範本還沒接,接不接見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁;「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」(規則在 `rules-unwired/` 的列也寫未接:引用的型錄列出處不全,或規則還沒在真專案量過誤報)。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx、Slack compose-lints 或資安包的規則,消費專案照 linter 目錄範本接 CI 後才擋(資安包:= Google 的 `com.android.security.lint:lint`,掛在 Android Lint 上、同一個 CI 步驟跑,2026-11-08 [[Projects/Android資安與崩潰靜態檢查補齊_計劃]];它 24 條的檢查頁都沒寫預設關);「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`資安包:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。「行為測試或正向約束=」那一段另有幾種值:「範本 T<n>」=照行為測試範本那一組起手寫測試;「未接(儀器批)」=要模擬器、Robolectric 或 Android 專用套件才跑得動,實驗沒過、還沒有範本;「不接(代碼審或真機)」=測試派發器或純 JVM 測不出,靠代碼審與真機驗收。級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節(型錄自檢會驗那一節存在;[[Projects/Android行為測試範本與架構測試_計劃]]、儀器批與架構測試 T6–T13 見 [[Projects/Android儀器測試範本與架構測試_計劃]])。
+ - 接電方式五種:告警帶寫法 / 當下推相關列 / 表態對程式 / 行為測試或正向約束 / 盲判席。形狀類至少有「告警帶寫法」或「行為測試或正向約束」;語意類必有「表態對程式」與「盲判席」;只剩業務判斷的 D 級只寫「表態對程式」,名稱後標(人裁)。
+ - 實測狀態:既有 35 條照抄原表「本機實測」欄(原表沒有這欄的寫「未測」);14 條補充寫「樣本實測:中壞例、好例不報」;其他寫「未測」。2026-11-05 起,被 ast-grep 規則包(`configs/ast-grep/kotlin-android/`)守到的列改寫成「規則 <id>:樣本實測中壞例、好例不報」(hint 規則標(hint));原本記了別的實測結果的,接在「原記:」後面保留。
+ - 現成規則欄的「待查」與來源欄的「(搜尋摘要)」「(未開頁核對)」照研究原文保留,〈待查證〉一節由程式從這兩欄撈出。
+-- 規則庫簡稱:detekt(1.23.x 寫 `detekt`,只在 2.x 的寫 `detekt 2.x`);SC = santimattius structured-coroutines(寫成 `SC 主題碼:層 規則名`);Sonar = SonarSource Kotlin;IJ = IntelliJ 檢查(只有顯示名稱,ID 待查);androidx/內建 = Android Lint;cr = mrmans0n compose-rules;slack = Slack compose-lints。
++- 規則庫簡稱:detekt(1.23.x 寫 `detekt`,只在 2.x 的寫 `detekt 2.x`);資安包 = Google Android 資安 lint 規則包(`com.android.security.lint:lint`,寫成 `資安包:<檢查 id>`);SC = santimattius structured-coroutines(寫成 `SC 主題碼:層 規則名`);Sonar = SonarSource Kotlin;IJ = IntelliJ 檢查(只有顯示名稱,ID 待查);androidx/內建 = Android Lint;cr = mrmans0n compose-rules;slack = Slack compose-lints。
+ 
+ ## 來源縮寫
+ 
+ | 縮寫 | 網址 |
+ |---|---|
+ | PLAN | 本 repo `docs/lumos-toolchain-knowledge/Projects/Android協程與API寫法機械檢查標準_計劃.md` |
+ | EXTRAS | 本 repo 規則包 `configs/ast-grep/kotlin-android/`(2026-11-05 實驗時的補充規則,已併入規則包) |
+ | DETEKT | https://detekt.dev/docs/1.23.8/rules/coroutines |
+ | DETEKT2 | https://detekt.dev/docs/rules/coroutines |
+ | DPB | https://detekt.dev/docs/rules/potential-bugs |
+@@ -27,20 +27,23 @@
+ | DEX | https://detekt.dev/docs/rules/exceptions |
+ | DST | https://detekt.dev/docs/rules/style |
+ | SC | https://github.com/santimattius/structured-coroutines/blob/main/docs/rule-codes.yml (repo:https://github.com/santimattius/structured-coroutines) |
+ | SONAR | https://community.sonarsource.com/t/the-kotlin-analyzer-prevents-developers-from-doing-mistakes-with-coroutines/47507 |
+ | SONAR-GH | https://github.com/SonarSource/sonar-kotlin |
+ | SONAR-FP6311 | https://community.sonarsource.com/t/kotlin-s6311-raises-a-false-positive-for-android-viewmodel-coroutines-usage/138038 |
+ | SONAR-FP6314 | https://community.sonarsource.com/t/kotlin-s6314-false-positive-for-nested-map-operator/97132 |
+ | IJ | https://blog.jetbrains.com/idea/2026/03/intellij-idea-s-new-kotlin-coroutine-inspections-explained/ (鏡像 https://kt-academy-next.vercel.app/article/intellij-coroutines-new-warnings) |
+ | LINT | https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html |
+ | LINT-V | https://googlesamples.github.io/android-custom-lint-rules/checks/vendors.md.html |
++| LINTREF | https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html (Android Lint 檢查索引;每條的等級、提供者與預設開關在各自的 `<id>.md.html` 檢查頁) |
++| ASL | https://github.com/google/android-security-lints (Google Android 資安 lint 規則包 README,`com.android.security.lint:lint`,列 24 條檢查) |
++| MASTG | https://mas.owasp.org/MASTG/tests/ (OWASP 手機 App 安全測試指南的測試索引,測試頁編號 MASTG-TEST-NNNN) |
+ | CR | https://mrmans0n.github.io/compose-rules/rules/ |
+ | SLACK | https://slackhq.github.io/compose-lints/rules/ |
+ | REACT-DOCTOR | https://react.doctor/docs/rules/react-doctor/server-sequential-independent-await |
+ | VERCEL | https://vercel.com/docs/conformance/rules/NO_SERIAL_ASYNC_CALLS |
+ | ESLINT-RAU | https://eslint.org/docs/latest/rules/require-atomic-updates |
+ | KX-TEST | https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md |
+ | AND-BP | https://developer.android.com/kotlin/coroutines/coroutines-best-practices |
+ | AND-FLOW | https://developer.android.com/kotlin/flow |
+ | AND-SSF | https://developer.android.com/kotlin/flow/stateflow-and-sharedflow |
+ | AND-TEST | https://developer.android.com/kotlin/coroutines/test |
+@@ -161,34 +164,45 @@
+ | API-13 | 阻塞呼叫不在協程裡直接跑 | `Thread.sleep`、`Call.execute()`、`Future.get()` 出現在 suspend 函式或 `launch` 裡、沒包 `withContext` | `delay()`;`withContext(ioDispatcher) { call.execute() }`;Retrofit 用 `suspend fun` | 卡住所在執行緒,在 Main 上 ANR、在 Default 上拖垮其他協程 | detekt:SleepInsteadOfDelay;structured-coroutines:BlockingCallInCoroutine、RunBlockingInSuspend;SC DISPATCH_001:detekt BlockingCallInCoroutine/lint MainDispatcherMisuse;SC INTEROP_004:detekt/lint BlockingFutureGet;SC FLOW_001:detekt/lint FlowBlockingCall;SC BACKEND_001:detekt BlockingCallInCoroutineBackend;IJ:「Possibly blocking call in non-blocking context」(待查);執行期 StrictMode | A | 形狀:已知阻塞 API 出現在協程內 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | SleepInsteadOfDelay 已實測 | PLAN;DETEKT;SC;SM〔併:API-13、研C補、TP補〕 〔查證 2026-11-07:https://detekt.dev/docs/rules/coroutines〕 |
+ | API-14 | async 立刻 await 等於沒並行 | `async { … }.await()`、`scope.async(ctx) { … }.await()` | 直接呼叫 `f()`;要換執行緒用 `withContext(io) { f() }` | 多建一個協程卻沒並行,讀者以為有並行 | 自寫 ast-grep:kt-async-await-immediately;SC CONCUR_003:detekt SequentialAsyncAwait | A+B | 形狀:async 呼叫後緊接 .await() | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-async-await-immediately:樣本實測中壞例、好例不報 | EXTRAS;SC〔併:X:kt-async-await-immediately、研C補〕 |
+ | API-15 | Retrofit `body()!!` 沒先看成功 | `response.body()!!` | `if (response.isSuccessful) response.body() ?: error("empty") else throw HttpException(response)`;或介面直接回傳 `T` 讓 Retrofit 丟 HttpException | 伺服器回 4xx/5xx 時 NPE 崩潰 | 自寫 ast-grep:kt-retrofit-body-bang | B | 形狀:`.body()!!` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-retrofit-body-bang:樣本實測中壞例、好例不報 | EXTRAS〔併:X:kt-retrofit-body-bang〕 〔查證 2026-11-07:https://raw.githubusercontent.com/square/retrofit/master/retrofit/src/main/java/retrofit2/Response.java〕 |
+ | API-16 | OkHttpClient 每次呼叫都新建 | 函式裡寫 `OkHttpClient()` 或 `OkHttpClient.Builder().build()`,不是單例或 DI 提供 | 全程式共用一個實例;不同設定用 `client.newBuilder()` 衍生 | 連線池與執行緒池重複建立,記憶體與 socket 洩漏 | 無 | B | 形狀:函式本體內建 OkHttpClient | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-okhttp-client-per-call:樣本實測中壞例、好例不報 | OKHTTP-CLIENT〔併:研D一1〕 〔查證 2026-11-07:https://raw.githubusercontent.com/square/okhttp/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/OkHttpClient.kt〕 |
+ | API-17 | OkHttp Response 沒有關閉 | `val r = client.newCall(req).execute()` 後面沒有 `.use{}`;只讀 `code` 就 return | `client.newCall(req).execute().use { r -> … }` | 連線洩漏、"A connection to … was leaked"、連線池耗盡 | 無 | B | 形狀:execute() 結果沒接 use | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-okhttp-response-not-closed:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(OkHttp 5 的 body 非空寫法)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | OKHTTP-BODY〔併:研D一2〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/index.html〕 |
+ | API-18 | `body.string()` 讀超大回應或讀兩次 | 大檔下載 `response.body!!.string()`;同一 body 呼叫兩次 `string()` | 大檔用 `body.byteStream()`/`body.source()` 串流;body 只讀一次並存成變數 | OOM;第二次讀丟 IllegalStateException | 無 | B | 形狀:同一 body 兩次 string(),或下載路徑用 string() | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-okhttp-body-string-twice(hint):樣本實測中壞例、好例不報 | OKHTTP-BODY〔併:研D一3〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/string.html https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-response-body/index.html〕 |
+ | API-19 | 正式版打開 BODY 等級日誌 | `HttpLoggingInterceptor().setLevel(Level.BODY)` 沒用 `BuildConfig.DEBUG` 包 | `HttpLoggingInterceptor().apply { level = if (BuildConfig.DEBUG) Level.BODY else Level.NONE; redactHeader("Authorization") }` | 權杖與個資寫進 logcat,大回應被整個讀進記憶體 | 無 | B | 形狀:Level.BODY 不在 DEBUG 判斷內 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-http-logging-body-unguarded:樣本實測中壞例、好例不報 | OKHTTP-INT〔併:研D一4〕〔查證 2026-11-05:https://raw.githubusercontent.com/lysine-dev/okhttp/master/okhttp-logging-interceptor/README.md〕 |
+ | API-20 | 攔截器吞例外或自造假回應 | `intercept()` 裡 `try { chain.proceed() } catch (e) { Response.Builder()… }` | 連線失敗讓 IOException 往上拋(也可以自己丟 IOException);攔截器要提早回報失敗時,回非 2xx 的合成回應,例(取自官方 KDoc):`if (myConfig.isInvalid()) { return Response.Builder().request(chain.request()).protocol(Protocol.HTTP_1_1).code(400).message("client config invalid").body("client config invalid".toResponseBody(null)).build() }; return chain.proceed(chain.request())`;不要丟 IOException 以外的例外。 | 錯誤被偽裝成成功,重試與逾時機制失效 | 無 | D | 語意:要看攔截器是否改變失敗語意 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | OKHTTP-INT〔併:研D一5〕〔查證 2026-11-05:https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-interceptor/index.html〕 |
+ | API-21 | 權杖刷新沒上限也沒加鎖(出處不全) | `authenticate()` 每次都打 refresh,不看 `responseCount`,多執行緒同時刷新 | 用 `response.priorResponse` 數次數,超過回 `null`;`mutex.withLock { if (token 已被別人刷新) 用新的 else refresh() }` | 401 無限迴圈、刷新風暴、權杖互相覆蓋 | 無 | C | 語意:要跑多執行緒 401 情境才看得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T4 | 未測 | OKHTTP-AUTH〔併:研D一6〕〔查證 2026-11-05:https://lysine.dev/okhttp/recipes/〕 |
+ | API-22 | 信任所有憑證或略過主機名驗證 | 空的 `X509TrustManager`;`hostnameVerifier { _, _ -> true }` | 用系統預設;釘選用 `CertificatePinner` 或 `network_security_config` | 中間人攻擊 | 內建:TrustAllX509TrustManager、CustomX509TrustManager、AllowAllHostnameVerifier、BadHostnameVerifier | A | 形狀:空 TrustManager、永遠 true 的 verifier | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D一7〕 〔查證 2026-11-07:https://developer.android.com/privacy-and-security/security-ssl〕 |
+-| API-23 | 明文 HTTP | baseUrl `"http://…"`;manifest `usesCleartextTraffic="true"` | 一律 `https://`;例外用 `network_security_config` 只開指定網域 | 資料被竊聽或竄改 | 內建:UsingHttp、DefaultCleartextTraffic、InsecureBaseConfiguration | A | 形狀:http:// 字面或 cleartext 設定 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D一8〕 〔查證 2026-11-07:https://developer.android.com/privacy-and-security/risks/cleartext-communications〕 |
++| API-23 | 明文 HTTP | baseUrl `"http://…"`;manifest `usesCleartextTraffic="true"` | 一律 `https://`;例外用 `network_security_config` 只開指定網域 | 資料被竊聽或竄改 | 內建:UsingHttp、InsecureBaseConfiguration;資安包:DefaultCleartextTraffic | A | 形狀:http:// 字面或 cleartext 設定 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT;ASL〔併:研D一8〕 〔查證 2026-11-07:https://developer.android.com/privacy-and-security/risks/cleartext-communications〕 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/DefaultCleartextTraffic.md.html〕 |
+ | API-24 | Retrofit suspend 只抓 HttpException | `try { api.get() } catch (e: HttpException) {}`,沒處理 IOException 與解析例外 | `catch (e: HttpException) { 對應 HTTP 錯 } catch (e: IOException) { 網路錯 } catch (e: SerializationException) { 解析錯 }`,轉成網域錯誤 | 斷網時崩潰 | 無 | B | 形狀:try 只有 HttpException 一個 catch | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-catch-only-httpexception:樣本實測中壞例、好例不報 | RETROFIT〔併:研D一9〕〔查證 2026-11-05:https://lysine.dev/retrofit/declarations/ https://lysine.dev/retrofit/2.x/retrofit/retrofit2/Call.html〕 |
+ | API-25 | 錯誤回應的 body 沒解析也沒關(出處不全) | 只看 `response.code()`,`errorBody()` 沒讀也沒 close(`string()` 讀完會自己關閉;洩漏的是沒讀也沒 close 的 errorBody) | `response.errorBody()?.use { parseError(it.string()) }` | 拿不到伺服器錯誤碼;連線洩漏 | 無 | B | 形狀:errorBody() 沒接 use | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | RETROFIT-RESP〔併:研D一12〕〔查證 2026-11-05:https://lysine.dev/retrofit/2.x/retrofit/retrofit2/Response.html https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/retrofit/src/main/java/retrofit2/OkHttpCall.java〕 |
+ | API-26 | 204 空 body 解析失敗(出處不全) | 介面回傳 `Foo`,伺服器回 204 | 空回應宣告成 `suspend fun delete(): Response<Unit>` 或 `Unit` | 成功被當失敗,或 KotlinNullPointerException/EOFException | 無 | C | 語意:要知道該端點會回 204 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T4 | 未測 | RETROFIT-2867〔併:研D一13〕〔查證 2026-11-05:https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/retrofit/src/main/java/retrofit2/KotlinExtensions.kt https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/CHANGELOG.md https://raw.githubusercontent.com/lysine-dev/retrofit/trunk/retrofit/src/main/java/retrofit2/OkHttpCall.java〕 |
+ | API-27 | 多個 converter 順序錯 | `addConverterFactory(Gson…)` 排在 `ScalarsConverterFactory` 前 | 先 `ScalarsConverterFactory.create()`/protobuf,通用 JSON converter 放最後 | String 回應被當 JSON 解析而失敗 | 無 | B | 形狀:Builder 鏈裡 JSON converter 在專用 converter 前 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-retrofit-converter-order:樣本實測中壞例、好例不報 | RETROFIT〔併:研D一14〕〔查證 2026-11-05:https://lysine.dev/retrofit/2.x/converter-gson/retrofit2/converter/gson/GsonConverterFactory.html〕 |
+ | API-28 | Ktor 沒開 expectSuccess 卻假設非 2xx 會丟例外 | `client.get(url).body<Foo>()` 沒檢查 `status` | `HttpClient { expectSuccess = true }`,或 `if (!response.status.isSuccess()) …` | 4xx/5xx 的錯誤 body 被當 Foo 解析,崩潰或空資料 | 無 | B | 形狀:body<T>() 前無 status 檢查且 client 沒 expectSuccess | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-ktor-body-without-status(hint):樣本實測中壞例、好例不報 | KTOR-VALID〔併:研D一15〕〔查證 2026-11-05:https://ktor.io/docs/client-response-validation.html〕 |
+ | API-29 | Ktor HttpClient 沒 close 或每次新建 | 函式裡 `HttpClient(OkHttp){}` 用完沒 `close()` | 單例注入;生命週期結束 `client.close()` | 引擎執行緒與連線洩漏 | 無 | B | 形狀:函式本體建 HttpClient | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-ktor-client-per-call:樣本實測中壞例、好例不報 | KTOR-CREATE〔併:研D一16〕〔查證 2026-11-05:https://ktor.io/docs/client-create-and-configure.html〕 |
+ | API-30 | Ktor 串流回應帶出 execute 區塊才讀 | `prepareGet().execute()` 把 response 帶到 block 外才讀 | `client.prepareGet(url).execute { resp -> resp.bodyAsChannel().copyTo(out) }` | 連線提前釋放,讀到不完整資料 | 無 | C | 語意:要看 response 是否逃出 execute 區塊 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T4 | 未測 | KTOR-RESP〔併:研D一17〕〔查證 2026-11-05:https://api.ktor.io/ktor-client-core/io.ktor.client.statement/-http-statement/execute.html https://ktor.io/docs/client-responses.html〕 |
+ | API-31 | 同一資源同時多個請求沒合併(出處不全) | 多個畫面同時呼叫 `refresh()`,各自打網路 | `private var inflight: Deferred<T>? = null; suspend fun refresh() = mutex.withLock { inflight?.takeIf { it.isActive } ?: scope.async { api.get() }.also { inflight = it } }.await()` | 流量浪費、結果互相覆蓋 | 無 | C | 語意:要知道有多個呼叫端會同時觸發 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T1 | 未測 | DL(未開頁核對)〔併:研D五10〕 |
+ | API-32 | withTimeout 逾時被當成一般取消 | `launch { withTimeout(5_000) { fetch() } }` 外層沒處理;`catch (e: CancellationException) { throw e }` 連逾時一起重拋 | `withTimeoutOrNull(5_000) { fetch() } ?: showTimeout()`;或明確 `catch (e: TimeoutCancellationException)` | 逾時協程靜默結束,畫面卡在載入 | SC CANCEL_006:detekt WithTimeoutScopeCancellation | A+C | 語意:要判斷逾時後要給使用者什麼結果 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T1 | 未測 | KT-CAN;SC;BH13〔併:研C一14〕 〔查證 2026-11-07:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html〕 |
+ | API-33 | 自己做逾時而不用協程 API | `while (System.currentTimeMillis() - start < t) { … }`、`Handler.postDelayed` 取消工作 | `withTimeout(t) { … }`/`withTimeoutOrNull(t) { … }` | 逾時不會取消底層工作 | Sonar:S6316 | A | 形狀:手刻時間迴圈或 postDelayed 取消 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | SONAR〔併:研C一16〕 〔查證 2026-11-07:https://community.sonarsource.com/t/the-kotlin-analyzer-prevents-developers-from-doing-mistakes-with-coroutines/47507 https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html〕 |
+ | API-34 | suspendCancellableCoroutine 被 resume 多次(出處不全) | 回呼可能觸發兩次時每次都 `cont.resume(x)` | `if (cont.isActive) cont.resume(x)`,或回呼只取第一次 | 第二次 resume 丟 IllegalStateException: Already resumed | 無 | C | 語意:要知道該回呼會不會被叫兩次 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T1 | 未測 | 〔併:研C六11〕〔查證 2026-11-05:https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.coroutines/suspend-coroutine.html https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellable-continuation/〕 |
+ | API-35 | HTTP 狀態碼全部當成同一種錯誤(出處不全) | 401、404、500 都顯示「網路錯誤」 | `when (e.code()) { 401 -> 轉重新登入; in 500..599 -> 可重試; else -> 顯示錯誤訊息 }`,對應成 sealed 網域錯誤 | 使用者無法處理;不該重試的也在重試 | 無 | D | 語意:要知道每種狀態碼的業務處理 | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | 未測 | 〔併:研D六7〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer/offline-first https://developer.android.com/topic/architecture/data-layer〕 |
+ | API-36 | 錯誤對應依賴例外訊息字串(出處不全) | `if (e.message?.contains("timeout") == true)` | 依型別判斷:`is SocketTimeoutException`、`is UnknownHostException` | 換語系或升版後判斷失效 | 無 | B | 形狀:對 e.message 做字串比對 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:型錄這列出處不全) | 規則 kt-error-by-message-string:樣本實測中壞例、好例不報 | 無網址(一般知識)(未開頁核對)〔併:研D六6〕 |
++| API-37 | WebView 開 JavaScript | `webView.settings.javaScriptEnabled = true`;`setJavaScriptEnabled(true)` | 頁面不需要 JavaScript 就不開(預設關);真的要開時只載入自己控制的內容 | 載入的內容被換掉時能跑腳本,形成跨站腳本攻擊(XSS) | 內建:SetJavaScriptEnabled | A | 形狀:由 Android Lint SetJavaScriptEnabled 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SetJavaScriptEnabled.md.html〕 |
++| API-38 | WebView 注入 JavaScript 介面 | `webView.addJavascriptInterface(obj, "app")`;注入物件的方法沒標 `@JavascriptInterface` | 只在必要時注入;要給網頁呼叫的方法逐一標 `@JavascriptInterface`,其餘方法不公開 | API 17 以下網頁能用反射操控注入物件;API 17 以上沒標註的方法網頁呼叫不到 | 內建:JavascriptInterface、AddJavascriptInterface | A | 形狀:由 Android Lint JavascriptInterface、AddJavascriptInterface 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/JavascriptInterface.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AddJavascriptInterface.md.html〕 |
++| API-39 | WebView 遇到 SSL 錯誤照樣繼續 | `override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.proceed() }` | 不覆寫(預設取消),或覆寫時呼叫 `handler.cancel()`;憑證問題在伺服器端修 | 憑證錯誤的連線照樣送資料,被中間人攻擊 | 內建:WebViewClientOnReceivedSslError | A | 形狀:由 Android Lint WebViewClientOnReceivedSslError 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WebViewClientOnReceivedSslError.md.html〕 |
++| API-40 | WebView 開檔案網址跨來源存取 | `settings.allowUniversalAccessFromFileURLs = true`;`settings.setAllowFileAccessFromFileURLs(true)` | 不設(預設 false)或明寫 false;本機內容改用 `WebViewAssetLoader` 以 https 網址載入 | 本機 HTML 的腳本能讀 App 私有檔與其他來源的資料,再送上網路 | 無(自寫 ast-grep kt-webview-file-url-access) | B | 形狀:任何接收者(含 `?.`)或 apply、with 裡不帶接收者的 setAllowUniversalAccessFromFileURLs(true)、setAllowFileAccessFromFileURLs(true),或左邊以這兩個屬性名結尾、右邊是 true 的賦值 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-webview-file-url-access:樣本實測中壞例、好例不報;真實語料:樣本內 71 處誤報 0、樣本外 80 處誤報 0 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0252/ https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion〕 |
++| API-41 | WebView 遠端除錯沒限定除錯版 | `WebView.setWebContentsDebuggingEnabled(true)` 沒包,或包在否定、else、版本判斷、用「或」連別的條件裡 | `WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)`,或只寫在 `if (BuildConfig.DEBUG)` 成立那一支;MASTG 另舉判 `ApplicationInfo.FLAG_DEBUGGABLE` 的寫法 | 接上電腦就能除錯、竊聽或竄改 App 裡所有 WebView 的內容 | 無(自寫 ast-grep kt-webview-debugging-enabled) | B | 形狀:setWebContentsDebuggingEnabled(true)(含完整套件名、不帶接收者)不在條件恰好是 BuildConfig.DEBUG 的 if 成立那一支或 when 分支裡 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-webview-debugging-enabled:樣本實測中壞例、好例不報;真實語料:樣本內(第一輪形狀)11 處誤報 0、樣本外 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版) | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0227/ https://mas.owasp.org/MASTG/best-practices/MASTG-BEST-0008/〕 |
++| API-42 | WebView 的 Safe Browsing 整個關掉 | manifest `<meta-data android:name="android.webkit.WebView.EnableSafeBrowsing" android:value="false" />` | 保持 Safe Browsing 開著(預設),App 的設計配合它的限制 | 使用者被帶到已知的惡意網址時不會被攔 | 資安包:DisabledAllSafeBrowsing | A | 形狀:由 Android Lint DisabledAllSafeBrowsing 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/DisabledAllSafeBrowsing.md.html〕 |
++| API-43 | 不安全的 SSL socket | `SSLCertificateSocketFactory.getInsecure(…)`;`createSocket(InetAddress, …)` 第一個參數是 InetAddress | 用 `SSLCertificateSocketFactory.getDefault(…)`;非用 InetAddress 不可時自己拿 `getDefaultHostnameVerifier()` 驗主機名 | 略過憑證或主機名驗證,任何憑證都被信任 | 內建:SSLCertificateSocketFactoryGetInsecure、SSLCertificateSocketFactoryCreateSocket | A | 形狀:由 Android Lint SSLCertificateSocketFactoryGetInsecure、SSLCertificateSocketFactoryCreateSocket 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SSLCertificateSocketFactoryGetInsecure.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SSLCertificateSocketFactoryCreateSocket.md.html〕 |
++| API-44 | 信任使用者自己裝的憑證 | `network_security_config` 的 `<certificates src="user" />` 不在 `<debug-overrides>` 裡;targetSdk 低於 24 又沒有 network_security_config | 使用者憑證只放進 `<debug-overrides>`(只在 debuggable 時生效);加 network_security_config 限定信任的憑證機構 | 能裝憑證的人或惡意程式可攔截、解開 App 的 HTTPS 流量 | 內建:AcceptsUserCertificates;資安包:DefaultTrustedUserCerts | A | 形狀:由 Android Lint AcceptsUserCertificates、DefaultTrustedUserCerts 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/AcceptsUserCertificates.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/DefaultTrustedUserCerts.md.html〕 |
++| API-45 | 啟用舊版 TLS 或 SSL | `SSLContext.getInstance("TLSv1")`;`ConnectionSpec.COMPATIBLE_TLS`;`.tlsVersions(TlsVersion.TLS_1_0)`;`setEnabledProtocols(arrayOf("TLSv1"))` | `SSLContext.getInstance("TLS")` 交給系統挑版本,或指定 TLSv1.2 以上;OkHttp 用 `ConnectionSpec.MODERN_TLS` | 連線可被降級到有已知弱點的協定、被解開 | 無(自寫 ast-grep kt-insecure-tls-version) | B | 形狀:SSLContext.getInstance 第一個參數恰好是 "SSLv2"、"SSLv3"、"TLSv1"、"TLSv1.1";ConnectionSpec.COMPATIBLE_TLS(讀 cipherSuites、tlsVersions、isTls 不算);tlsVersions(…) 參數裡的 TLS_1_0、TLS_1_1、SSL_3_0;setEnabledProtocols(arrayOf(…)) 裡有那四個字串 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-insecure-tls-version:樣本實測中壞例、好例不報;真實語料:樣本內(第二版)19 處誤報 2、樣本外沒另撈 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0217/〕 |
++| API-46 | targetSdk 太低、DNS 沒有系統的傳輸保護 | `targetSdkVersion` 低於 28 | targetSdk 升到 28 以上,用系統內建的傳輸安全(加密 DNS) | 易受 DNS 偽造與快取下毒攻擊 | 資安包:InsecureDnsSdkLevel | A | 形狀:由 Android Lint InsecureDnsSdkLevel 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureDnsSdkLevel.md.html〕 |
++| API-47 | 寫死開發用網址或私有 IP | 設定檔或程式裡的 `http://staging-app.com`、`192.168.1.10` 這類開發、測試環境位址 | 正式版不帶開發與測試環境的網址、私有 IP;不同環境用建置變體或設定分開 | 攻擊者從 App 找到測試環境或內網位址,拿到不該公開的存取 | 資安包:UnintendedExposedUrl、UnintendedPrivateIpAddress | A | 形狀:由 Android Lint UnintendedExposedUrl、UnintendedPrivateIpAddress 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnintendedExposedUrl.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnintendedPrivateIpAddress.md.html〕 |
+ 
+ ## FLOW 資料流合併與 Flow 運算
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | FLOW-1 | 合成用 combine,不巢狀收集 | `a.collect { x -> b.collect { y -> … } }`、`collectLatest` 裡再 `collect` | `combine(a, b) { x, y -> UiState(x, y) }.stateIn(viewModelScope, WhileSubscribed(5_000), init)` | 內層收集永不結束,外層新值卡住或重複訂閱,畫面只反映部分來源 | 無 | B | 形狀:collect/collectLatest 的 lambda 裡又出現 `.collect {`/`.collectLatest {` | 告警帶寫法、當下推相關列 | 告警帶寫法=批一;當下推相關列=批二 | 規則 kt-nested-collect:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、combine 好例不報 | PLAN〔併:FLOW-1〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/views/coroutines-views https://developer.android.com/topic/architecture/ui-layer/state-production〕 |
+ | FLOW-2 | zip 只用在嚴格一對一配對 | 對 StateFlow 或 `stateIn` 出來的流寫 `.zip(other)` | 持續更新的狀態用 `combine(a, b)`;只有「第 n 筆對第 n 筆」的冷流才 `zip` | 狀態流被配對後一邊更新另一邊不動就不發,畫面卡在舊值 | 無 | D | 語意:要知道兩邊是不是一對一的冷流(只看名字猜型別誤報高) | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | — | PLAN〔併:FLOW-2〕〔查證 2026-11-05:https://kotlinlang.org/docs/coroutines-flow-operators.html〕 |
+ | FLOW-3 | combine 的每個來源都要有初始值(出處不全) | `combine(repoFlow, prefsFlow) { … }`,其中一個來源在第一筆之前永遠不發 | 來源用 `StateFlow` 或 `.onStart { emit(default) }`;外層 `stateIn(…, initialValue = Loading)` | 任何一個來源沒發過值,combine 就一筆都不發,畫面卡在載入 | 無 | C | 語意:要知道哪個上游可能遲遲不發 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T2 | — | PLAN〔併:FLOW-3〕〔查證 2026-11-05:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/combine.html https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-start.html https://developer.android.com/topic/architecture/ui-layer/state-production〕 |
+ | FLOW-4 | `flow { }` 裡不換執行緒 | `flow { withContext(Dispatchers.IO) { emit(load()) } }` | `flow { emit(load()) }.flowOn(ioDispatcher)` | 執行期丟 `IllegalStateException: Flow invariant is violated` | 無靜態規則;執行期本來就丟 IllegalStateException | B | 形狀:`flow {` 本體內出現 `withContext(` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-withcontext-in-flow:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、flowOn 好例不報 | PLAN;研C補〔併:FLOW-4、研C補〕 〔查證 2026-11-07:https://kotlinlang.org/docs/coroutines-flow.html https://developer.android.com/kotlin/flow〕 |
+ | FLOW-5 | 回傳 Flow 的函式不標 suspend | `suspend fun observe(): Flow<User>` | `fun observe(): Flow<User>` | 呼叫端被迫進協程才能拿到冷流,語意誤導 | detekt:SuspendFunWithFlowReturnType(要型別);Sonar:S6309 | A | 形狀:`suspend fun` 回傳型別是 `Flow<` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 已實測(帶型別響) | PLAN;DETEKT;SONAR〔併:FLOW-5、研C補〕 〔查證 2026-11-07:https://detekt.dev/docs/rules/coroutines〕 |
+@@ -482,38 +496,59 @@
+ | ARCH-58 | super.onCreate() 或 onAttach 之前使用注入欄位 | `@Inject lateinit var x: X` 在屬性初始化、`init { }` 或 `super.onCreate()` 之前讀取 | 在 `super.onCreate()`(Activity)、`onAttach()`(Fragment)之後才使用 | UninitializedPropertyAccessException | 無 | B | 形狀:@Inject 欄位出現在屬性初始化、init 或 super.onCreate 之前 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DAGGER-EP〔併:研A90〕 〔查證 2026-11-07:https://dagger.dev/hilt/android-entry-point.html https://dagger.dev/hilt/components.html〕 |
+ | ARCH-59 | 同型別多個綁定其中一個沒加限定詞 | 兩個 `@Provides fun …(): OkHttpClient`,一個 `@AuthClient`、另一個沒加 | 每個綁定都加限定詞(`@AuthClient`、`@OtherClient`) | 注入到錯的實例 | 無 | B | 形狀:同回傳型別的 @Provides 有的有限定詞有的沒有 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | HILT-AND〔併:研A91〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-android〕 |
+ | ARCH-60 | 以為 @ViewModelScoped 會跨 ViewModel 共享 | 兩個 ViewModel 各注入同一個 `@ViewModelScoped` 類別,預期狀態同步 | 跨 ViewModel 共享改 `@ActivityRetainedScoped` 或 `@Singleton` | 各拿各的實例,狀態不同步 | 無 | D | 語意:要知道設計上是否預期跨 ViewModel 共享 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | HILT-JP〔併:研A92〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-jetpack https://dagger.dev/hilt/view-model.html〕 |
+ | ARCH-61 | HiltWorker 依賴有作用域的綁定或少 @Assisted | `@HiltWorker` 建構子注入 `@ActivityRetainedScoped`/`@ViewModelScoped` 物件;`Context`、`WorkerParameters` 沒 `@Assisted` | 只依賴 `@Singleton` 或無作用域綁定;`@AssistedInject constructor(@Assisted ctx: Context, @Assisted params: WorkerParameters, …)` | 編譯失敗或 Worker 無法建立(實際錯誤形式待查) | 無(待查:Hilt 編譯器是否會擋) | B | 形狀:@HiltWorker 建構子參數缺 @Assisted 或型別帶非 Singleton 作用域 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-hiltworker-missing-assisted:樣本實測中壞例、好例不報 | HILT-JP〔併:研A93〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-jetpack〕 |
+ | ARCH-62 | EntryPointAccessors 用錯 Context | `@InstallIn(ActivityComponent::class)` 的 entry point 用 `EntryPointAccessors.fromApplication(...)` 取 | `@InstallIn` 元件與 Accessor 對應:ActivityComponent 用 `fromActivity(activity)`,SingletonComponent 用 `fromApplication(app)` | 執行時錯誤或拿不到綁定 | 無 | B | 形狀:entry point 的 InstallIn 元件與 fromXxx 方法不一致 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | HILT-AND〔併:研A94〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-android https://dagger.dev/hilt/entry-points.html〕 |
+ | ARCH-63 | Dagger 模組寫法錯 | `@Binds` 不是 abstract、參數個數或型別不對;`@Provides` 寫成 abstract 或擴充函式;直接呼叫 `provideX()`;object 模組 `@Provides` 加 `@JvmStatic`;companion 標 `@Module` | 照 Dagger 規範:`@Binds abstract fun bind(impl: Impl): Api`;`@Provides fun provideX(): X` 放 object 模組且不加 `@JvmStatic` | 編譯錯或注入非預期實例 | dagger-lint:JvmStaticProvidesInObjectDetector、ModuleCompanionObjects、ModuleCompanionObjectsNotInModuleParent、FieldSiteTargetOnQualifierAnnotation;索引另有 BindsMustBeAbstract、BindsTypeMismatch、BindsWrongParameterCount、BindingReturnType、BindingReceiverParameter、DoNotCallProviders、MustBeInModule、ProvidesMustNotBeAbstract(廠商待查) | A | 形狀:@Binds/@Provides/@Module 宣告形狀 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT-V;LINT〔併:研A95〕 〔查證 2026-11-07:https://dagger.dev/api/latest/dagger/Binds.html https://developer.android.com/training/dependency-injection/hilt-android https://googlesamples.github.io/android-custom-lint-rules/checks/JvmStaticProvidesInObjectDetector.md.html〕 |
+ | ARCH-64 | UI 同時讀網路和 DB 兩個來源 | ViewModel 一邊呼叫 api、一邊呼叫 dao 自己合併 | Repository 只對外暴露 `dao.observeX(): Flow`;網路結果 `dao.upsert()` 寫進 DB(單一資料來源) | 資料不一致、畫面閃爍 | 無 | D | 語意:要判斷哪個是唯一資料來源 | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | 未測 | DL-OFFLINE〔併:研D五1〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer/offline-first〕 |
+ | ARCH-65 | 必須完成的寫入綁在 viewModelScope | `viewModelScope.launch { repo.save() }`,使用者離開就被取消 | Repository 由建構子注入 externalScope(官方註解:CoroutineScope(SupervisorJob() + Dispatchers.Default)),寫入用 externalScope.async { dao.save(x) }.await();必須在程序被殺後仍完成的業務操作(business-oriented)改用 WorkManager(enqueueUniqueWork) | 寫入只完成一半 | 無 | D | 語意:要判斷這筆工作是否必須在離開畫面後完成 | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | 未測 | DL#operations-outlive-screen〔併:研D五11〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer〕 |
+ | ARCH-66 | 把 kotlin.Result 當公開 API 錯誤模型,失敗種類不明 | `suspend fun x(): Result<T>`,失敗一律回 Throwable | `sealed interface LoadResult { data class Ok(val v: T); data object NotFound; data class Network(val e: IOException) }` 有型別的網域錯誤 | 呼叫端只能用字串判斷錯誤種類 | 無 | D | 語意:要判斷呼叫端是否需要區分錯誤種類 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DL#expose-errors〔併:研D六2〕〔查證 2026-11-05:https://github.com/Kotlin/KEEP/blob/master/proposals/stdlib/result.md〕 |
+ | ARCH-67 | 把 HttpException 或 IOException 直接丟到 UI 層 | ViewModel `import retrofit2.HttpException` 並 catch 判斷 | 資料層 catch 網路庫例外後改拋自訂例外(官方例:UserNotAuthenticatedException),ViewModel 對 suspend 呼叫用 try/catch、對 Flow 用 .catch 處理這些自訂例外,不 import retrofit2/okhttp3 | 層級耦合,換網路庫要改 UI | 待查(架構測試可以抓) | B | 形狀:ViewModel/UI 檔 import retrofit2 或 okhttp3 例外型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-viewmodel-knows-retrofit:樣本實測中壞例、好例不報 | DL〔併:研D六8〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer〕 |
++| ARCH-68 | receiver 外露又沒設權限 | manifest `<receiver android:exported="true">` 或帶 intent-filter 沒寫 exported=false,也沒有 `android:permission` | 不需要給別的 App 用就 `android:exported="false"`;要外露就加 `android:permission` | 任何 App 都能送廣播觸發它 | 內建:ExportedReceiver | A | 形狀:由 Android Lint ExportedReceiver 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExportedReceiver.md.html〕 |
++| ARCH-69 | content provider 外露又沒設權限 | manifest `<provider>` 外露、沒有 `android:permission`、`readPermission`、`writePermission` | `android:exported="false"`;要給別的 App 用就加權限保護 | 任何 App 都能讀寫它提供的資料 | 內建:ExportedContentProvider | A | 形狀:由 Android Lint ExportedContentProvider 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExportedContentProvider.md.html〕 |
++| ARCH-70 | PendingIntent 沒寫可變性或可變又隱式 | `PendingIntent.getActivity(ctx, 0, intent, 0)`;`FLAG_MUTABLE` 配沒指定元件的 Intent | 加 `PendingIntent.FLAG_IMMUTABLE`(幾乎都該用它);非可變不可時把 Intent 改成明確指定元件 | Android 12 以上建立時丟例外;可變的隱式 PendingIntent 能被別的 App 改寫去向,Android 14 以上禁止 | 內建:UnspecifiedImmutableFlag、MutableImplicitPendingIntent | A | 形狀:由 Android Lint UnspecifiedImmutableFlag、MutableImplicitPendingIntent 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnspecifiedImmutableFlag.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/MutableImplicitPendingIntent.md.html〕 |
++| ARCH-71 | 轉發不可信的 Intent | 外露元件從收到的 Intent 取出另一個 Intent 直接 `startActivity(intent.getParcelableExtra(…))` | 轉發前先檢查與清理(只放行預期的元件與旗標),或把元件設成不外露 | 別的 App 借你的權限開啟你的私有元件 | 內建:UnsafeIntentLaunch | A | 形狀:由 Android Lint UnsafeIntentLaunch 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeIntentLaunch.md.html〕 |
++| ARCH-72 | 隱式 Intent 沒 action 或指向自己的私有元件 | `Intent()` 沒設 action 也沒指定元件就送出;隱式 Intent 對到同一個 App 不外露的元件 | 要給特定 App 就 `setComponent`、`setClass` 或用帶 Class 的建構子;給自己的元件一律用明確 Intent | 訊息可能被惡意 App 攔截;新版 Android 上會當掉 | 內建:IntentWithNullActionLaunch、UnsafeImplicitIntentLaunch | A | 形狀:由 Android Lint IntentWithNullActionLaunch、UnsafeImplicitIntentLaunch 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/IntentWithNullActionLaunch.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeImplicitIntentLaunch.md.html〕 |
++| ARCH-73 | FileProvider 分享範圍開太寬 | file_paths.xml 的 `<root-path>`、`path="."`、`path="/"`、寫死絕對路徑;`<grant-uri-permission android:path="/">` | 只分享特定、窄的子目錄(例 `<files-path name="images" path="images/" />`) | 不小心把私有檔或整台裝置的檔案分享出去 | 資安包:ExposedRootPath、DotPathAttribute、SlashPathAttribute、HardcodedAbsolutePath;內建:GrantAllUris | A | 形狀:由 Android Lint ExposedRootPath、DotPathAttribute、SlashPathAttribute、HardcodedAbsolutePath、GrantAllUris 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExposedRootPath.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/DotPathAttribute.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SlashPathAttribute.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/HardcodedAbsolutePath.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/GrantAllUris.md.html〕 |
++| ARCH-74 | targetSdk 太低、工作會被劫持 | `targetSdkVersion` 低於 28 | targetSdk 升到 28 以上 | 惡意 App 用工作親和性(Strandhogg)偽裝成你的畫面騙取帳密 | 資安包:StrandhoggVulnerable | A | 形狀:由 Android Lint StrandhoggVulnerable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/StrandhoggVulnerable.md.html〕 |
++| ARCH-75 | 敏感按鈕沒防點擊劫持 | 版面上的 `<Switch>`、按鈕等敏感元件沒設 `android:filterTouchesWhenObscured` | 敏感元件加 `android:filterTouchesWhenObscured="true"` | 別的 App 用覆蓋層騙使用者按下去 | 資安包:TapjackingVulnerable | A | 形狀:由 Android Lint TapjackingVulnerable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/TapjackingVulnerable.md.html〕 |
++| ARCH-76 | App Links 沒驗證網域 | 處理 http/https、有 VIEW、BROWSABLE、DEFAULT 的 intent-filter 沒寫 `android:autoVerify="true"` | 加 `android:autoVerify="true"` 並在網域放 assetlinks.json | 別的 App 能搶走你網域的連結、攔截導向你 App 的資料 | 資安包:MissingAutoVerifyAttribute | A | 形狀:由 Android Lint MissingAutoVerifyAttribute 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/MissingAutoVerifyAttribute.md.html〕 |
++| ARCH-77 | 使用黏性廣播 | `sendStickyBroadcast(…)`;manifest 宣告 `android.permission.BROADCAST_STICKY` | 改用一般廣播,或資料庫等其他機制傳狀態 | 任何人都能讀、送、改黏性廣播(API 21 起已棄用) | 資安包:InsecureStickyBroadcastsMethod、InsecureStickyBroadcastsPermission | A | 形狀:由 Android Lint InsecureStickyBroadcastsMethod、InsecureStickyBroadcastsPermission 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureStickyBroadcastsMethod.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureStickyBroadcastsPermission.md.html〕 |
++| ARCH-78 | 自訂權限保護等級太低 | `<permission android:protectionLevel="normal">` 或沒寫保護等級 | 自訂權限用 `signature` 以上的保護等級 | 任何 App 都能拿到這個權限,保護形同虛設 | 資安包:InsecurePermissionProtectionLevel | A | 形狀:由 Android Lint InsecurePermissionProtectionLevel 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecurePermissionProtectionLevel.md.html〕 |
++| ARCH-79 | 藍牙可被發現的時間太長或設 0 | `putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 0)` 或大於 120 | 可被發現時間設在 120 秒以內、不設 0 | 裝置長時間(設 0 時 App 跑著就一直)可被發現,拉長被藍牙攻擊的時間窗 | 資安包:ExtendedBluetoothDiscoveryDuration、ZeroBluetoothDiscoveryDuration | A | 形狀:由 Android Lint ExtendedBluetoothDiscoveryDuration、ZeroBluetoothDiscoveryDuration 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExtendedBluetoothDiscoveryDuration.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/ZeroBluetoothDiscoveryDuration.md.html〕 |
++| ARCH-80 | manifest 寫死 debuggable | `<application android:debuggable="true">`(或寫死任何值) | manifest 不寫 `android:debuggable`,讓建置工具依變體自動帶 | 正式版可能帶著除錯資訊上架 | 內建:HardcodedDebugMode | A | 形狀:由 Android Lint HardcodedDebugMode 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/HardcodedDebugMode.md.html〕 |
++| ARCH-81 | 呼叫超出 minSdk 的 API | minSdk 24 卻直接呼叫 API 26 才有的方法或常數 | 用 `if (Build.VERSION.SDK_INT >= …)` 包住或用 Compat 函式庫;內嵌常數要確認舊版行為 | 舊版裝置上丟例外當掉或行為錯 | 內建:NewApi、InlinedApi | A | 形狀:由 Android Lint NewApi、InlinedApi 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NewApi.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/InlinedApi.md.html〕 |
++| ARCH-82 | 沒宣告或沒取得權限就呼叫要權限的 API | 呼叫定位、相機等 API 前沒檢查也沒處理 `SecurityException` | manifest 宣告權限,呼叫前 `checkSelfPermission`,沒有就先請求 | 執行時當掉;使用者拒絕權限時當掉 | 內建:MissingPermission | A | 形狀:由 Android Lint MissingPermission 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/MissingPermission.md.html〕 |
++| ARCH-83 | 發通知沒有通知權限 | targetSdk 33 以上發通知,沒有 `POST_NOTIFICATIONS` 權限 | 宣告並在執行時請求 `android.permission.POST_NOTIFICATIONS` | Android 13 以上通知發不出去 | 內建:NotificationPermission | A | 形狀:由 Android Lint NotificationPermission 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NotificationPermission.md.html〕 |
++| ARCH-84 | manifest 註冊的類別建不出來或不存在 | 註冊的 Activity、Service 不是 public、沒有無參數建構子、是非靜態內部類別;註冊名稱打錯或類別已搬走 | 註冊類別保持 public 並有無參數建構子;改名或搬類別時同步改 manifest | 系統建不出元件,執行時當掉 | 內建:Instantiatable、MissingClass | A | 形狀:由 Android Lint Instantiatable、MissingClass 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/Instantiatable.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/MissingClass.md.html〕 |
++| ARCH-85 | 用反射存取非 SDK 介面 | `Class.forName("android.…").getDeclaredMethod("hidden…")` 存取被限制的隱藏 API | 改用公開 SDK API;沒有替代就向平台回報需求 | 執行時丟例外;換版本就壞 | 內建:SoonBlockedPrivateApi、BlockedPrivateApi | A | 形狀:由 Android Lint SoonBlockedPrivateApi、BlockedPrivateApi 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SoonBlockedPrivateApi.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/BlockedPrivateApi.md.html〕 |
++| ARCH-86 | 參數超出範圍、常數或資源型別給錯 | 標了 `@IntRange` 的參數傳超出範圍的值;只收特定常數的參數傳別的整數;`resources.getColor(R.string.name)` | 照註記的範圍與常數集合傳值;資源 id 傳對型別 | 執行時例外或行為錯 | 內建:Range、WrongConstant、ResourceType | A | 形狀:由 Android Lint Range、WrongConstant、ResourceType 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/Range.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WrongConstant.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/ResourceType.md.html〕 |
++| ARCH-87 | Parcelable 缺 CREATOR | 手寫 `class X : Parcelable` 沒有 `CREATOR` 欄位 | 用 `@Parcelize`,或補 `companion object CREATOR : Parcelable.Creator<X>` | 還原時當掉 | 內建:ParcelCreator | A | 形狀:由 Android Lint ParcelCreator 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ParcelCreator.md.html〕 |
++| ARCH-88 | 通知經 receiver 或 service 轉開畫面 | 通知的 PendingIntent 指向 BroadcastReceiver 或 Service,再由它 `startActivity` | 通知直接用 Activity 的 PendingIntent 開畫面 | 某些情況延遲很大;targetSdk 31 以上被禁止、畫面開不出來 | 內建:NotificationTrampoline | A | 形狀:由 Android Lint NotificationTrampoline 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NotificationTrampoline.md.html〕 |
+ 
+ ## DATA 儲存、背景工作、分頁與解析
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | DATA-1 | Room 開 allowMainThreadQueries | `Room.databaseBuilder(...).allowMainThreadQueries()` | 拿掉;DAO 改 `suspend fun` 或回傳 `Flow`,呼叫端在 `withContext(io)` 或 viewModelScope 裡呼叫 | 資料庫查詢跑在主執行緒,卡頓、ANR | ast-grep:kt-room-main-thread-queries;Room 執行期檢查(沒開這個設定時主執行緒查詢丟 IllegalStateException,非 lint) | B | 形狀:builder 鏈上出現 `.allowMainThreadQueries()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-main-thread-queries:樣本實測中壞例、好例不報 | EXTRAS;LINT〔併:X:kt-room-main-thread-queries、研D補〕 〔查證 2026-11-07:https://developer.android.com/training/data-storage/room/async-queries〕 |
+ | DATA-2 | Room DAO 函式是阻塞的 | `@Dao` 介面裡 `@Query("…") fun all(): List<User>`(非 suspend、不回傳 Flow/LiveData/PagingSource) | `@Query("…") suspend fun all(): List<User>` 或 `fun all(): Flow<List<User>>` | 呼叫端在主執行緒會擋住或丟例外 | ast-grep:kt-room-dao-blocking | B | 形狀:`@Dao` 類別內帶 `@Query/@Insert/@Update/@Delete/@Upsert/@RawQuery/@Transaction` 的函式沒有 suspend 也不回傳串流型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-dao-blocking:樣本實測中壞例、好例不報 | EXTRAS〔併:X:kt-room-dao-blocking〕 〔查證 2026-11-07:https://developer.android.com/training/data-storage/room/async-queries〕 |
+ | DATA-3 | DataStore 不是單例 | 類別或函式裡 `PreferenceDataStoreFactory.create { … }`、`preferencesDataStore("x")` | 檔案頂層 `val Context.settings by preferencesDataStore("settings")`,或 DI 提供 `@Singleton` 的 DataStore | 同一個檔兩個實例,執行期丟 IllegalStateException | ast-grep:kt-datastore-not-singleton;DataStore 執行期檢查(非 lint) | B | 形狀:DataStore 工廠呼叫出現在 class body 或 function body,且不在 object 內 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-not-singleton:樣本實測中壞例、好例不報 | EXTRAS;DS〔併:X:kt-datastore-not-singleton、研D補〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 |
+ | DATA-4 | SharedPreferences Editor 沒提交 | `prefs.edit().putString(k, v)` 寫完就結束 | 結尾 `.apply()`,或 KTX `prefs.edit { putString(k, v) }` | 資料沒寫進去 | Android Lint:CommitPrefEdits;ApplySharedPref;MutatingSharedPrefs | A | 形狀:`edit()` 鏈沒接 `apply()`/`commit()` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT;AR-REC〔併:研A80、研D二2〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/CommitPrefEdits.md.html https://developer.android.com/reference/android/content/SharedPreferences〕 |
+ | DATA-5 | 主執行緒 commit() 且沒用回傳值 | `prefs.edit().putX(…).commit()` 回傳值丟掉 | 改 `apply()`;真要同步結果才在背景執行緒 `commit()` 並檢查回傳 | 主執行緒寫磁碟,卡頓 | Android Lint:ApplySharedPref | A | 形狀:`.commit()` 當單獨敘述 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT〔併:研D二1〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/ApplySharedPref.md.html https://developer.android.com/reference/android/content/SharedPreferences〕 |
+ | DATA-6 | 直接改 getStringSet 拿回的集合 | `prefs.getStringSet(k, …)!!.add(x)` | `val s = prefs.getStringSet(k, emptySet())!!.toMutableSet(); s.add(x); prefs.edit { putStringSet(k, s) }` | 改動不會保存,行為不一致 | Android Lint:MutatingSharedPrefs | A | 形狀:`getStringSet(…)` 的結果直接呼叫 add/remove | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D二3〕 〔查證 2026-11-07:https://developer.android.com/reference/android/content/SharedPreferences https://googlesamples.github.io/android-custom-lint-rules/checks/MutatingSharedPrefs.md.html〕 |
+ | DATA-7 | 用 SharedPreferences 存大量或結構化資料 | `prefs.edit { putString("list", json) }` 存整份清單 | 結構化資料進 Room;設定類用 `DataStore<Preferences>` 或 Proto DataStore | 初次讀取在主執行緒載入整檔、apply 造成 ANR、資料損毀 | 無 | D | 語意:要看存的東西大小與結構才判得出 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二4〕 〔查證 2026-11-07:https://developer.android.com/reference/android/content/SharedPreferences https://developer.android.com/topic/libraries/architecture/datastore〕 |
+ | DATA-8 | DataStore 的資料型別是可變的 | `DataStore<MyData>`,`data class MyData(var x: Int, val list: MutableList<…>)` | `data class MyData(val x: Int, val list: List<…>)` 或 proto;更新用 `updateData { it.copy(…) }` | 一致性被破壞,難抓的 bug | 無 | B | 形狀:DataStore 泛型參數的 data class 有 `var` 或 `Mutable*` 欄位 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DS〔併:研D二5〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 |
+ | DATA-9 | 同一檔混用單程序與多程序 DataStore | 同檔名同時 `dataStore(...)` 與 `MultiProcessDataStoreFactory.create(...)` | 只要跨程序就一律 `MultiProcessDataStoreFactory.create(...)` | 資料損毀或互相覆蓋 | 無 | B | 形狀:同一檔名字串出現在兩種工廠 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DS〔併:研D二6〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 |
+ | DATA-10 | DataStore 讀取沒處理 IOException | `dataStore.data.map { … }` 沒有 catch | `dataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }.map { … }` | 讀取失敗整條 Flow 終止,畫面不再更新 | 無 | B | 形狀:`.data` 鏈上沒有 `.catch` | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-datastore-read-no-catch:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(try/runCatching 裡的終端操作列舉不完)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | DS-CL〔併:研D二7〕〔查證 2026-11-05:https://developer.android.com/codelabs/android-preferences-datastore〕 |
+ | DATA-11 | Serializer 不轉 CorruptionException、沒設 corruptionHandler | `readFrom` 裡直接 `Json.decodeFromString(...)` 沒 try | `readFrom` 內 `try { … } catch (e: SerializationException) { throw CorruptionException("…", e) }`;建立時 `corruptionHandler = ReplaceFileCorruptionHandler { default }` | 檔案損毀後每次讀取都崩潰 | 無 | B | 形狀:實作 `Serializer` 的 `readFrom` 沒有 try,或建立 DataStore 沒帶 corruptionHandler | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-serializer-no-corruption:樣本實測中壞例、好例不報 | DS〔併:研D二8〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 |
+ | DATA-12 | updateData 裡做副作用或耗時 I/O(出處不全) | `dataStore.updateData { api.call(); it.copy(...) }` | transform 只放純計算:`val r = api.call(); dataStore.updateData { it.copy(x = r) }` | 交易被拖長、重試時副作用重複 | 無 | D | 語意:要看 transform 內呼叫的是不是副作用 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二9〕 |
+-| DATA-13 | 敏感資料放在會被備份的 DataStore 或 prefs | 權杖存一般 prefs,沒設 `data_extraction_rules` | 敏感資料分檔並在 `data_extraction_rules.xml`/`fullBackupContent` 排除;用 EncryptedFile 或 Keystore 加密 | 權杖隨備份外流,換機還原成無效狀態 | 無 | D | 語意:要知道哪些欄位算敏感 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二11〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 |
++| DATA-13 | 敏感資料放在會被備份的 DataStore 或 prefs | 權杖存一般 prefs,沒設 `data_extraction_rules` | 敏感資料分檔並在 `data_extraction_rules.xml`/`fullBackupContent` 排除;用 EncryptedFile 或 Keystore 加密 | 權杖隨備份外流,換機還原成無效狀態 | 內建:DataExtractionRules | A+D | 語意:要知道哪些欄位算敏感 | 表態對程式、盲判席、告警帶寫法 | 表態對程式=批三;盲判席=批三;告警帶寫法=批四(CI 範本:Android Lint) | 未測 | DS;LINTREF〔併:研D二11〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/DataExtractionRules.md.html〕 |
+ | DATA-14 | Room 多步寫入沒包交易 | `dao.deleteAll(); dao.insertAll(x)` 連續呼叫 | `@Transaction open suspend fun replaceAll(x: List<T>) { deleteAll(); insertAll(x) }` 或 `db.withTransaction { … }` | 中途失敗留下空表,觀察者看到中間狀態閃爍 | 無 | B | 形狀:同一函式連續兩個以上 DAO 寫入呼叫,外面沒有 `withTransaction` 或 `@Transaction` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-writes-no-transaction:樣本實測中壞例、好例不報 | ROOM-TX〔併:研D二12〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/room/Transaction https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-15 | @Relation 查詢沒加 @Transaction | 回傳帶 `@Relation` 的 POJO 的 DAO 方法沒標 `@Transaction` | `@Transaction @Query("SELECT …") fun userWithPosts(): Flow<List<UserWithPosts>>` | 主表與關聯表讀到不一致的快照 | 待查(Room 編譯期會發警告,文字與代號待查) | A+B | 形狀:DAO 方法回傳型別含 `@Relation` 欄位、方法沒有 `@Transaction` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | ROOM-TX〔併:研D二13〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/relationships/one-to-many https://developer.android.com/reference/kotlin/androidx/room/Transaction〕 |
+ | DATA-16 | fallbackToDestructiveMigration 進正式版 | `Room.databaseBuilder(...).fallbackToDestructiveMigration()` | 寫 `Migration(x, y)` 或 `@Database(autoMigrations = [AutoMigration(from = x, to = y)])`,並用 MigrationTestHelper 測 | 使用者升級後資料全部消失 | 無 | B | 形狀:builder 鏈出現 `fallbackToDestructiveMigration` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-destructive-migration:樣本實測中壞例、好例不報 | ROOM-MIG〔併:研D二14〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-17 | 改了 schema 沒升版本或沒寫 Migration | Entity 改欄位,`@Database(version = …)` 不變 | 升 `version` 並加 `Migration`;開 `exportSchema` 讓 schema 進版控 | 啟動崩潰(Room cannot verify the data integrity) | Room 執行期檢查(不是 lint) | C | 語意:要比對 schema 前後版本才知道 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | ROOM-MIG〔併:研D二15〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-18 | exportSchema 關掉或 schema 沒進版控 | `@Database(exportSchema = false)` | 設 `room.schemaLocation` 並提交 schema json | 無法做 AutoMigration 與遷移測試 | Room 編譯期警告(文字待查) | B | 形狀:`@Database` 參數 `exportSchema = false` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-export-schema-false:樣本實測中壞例、好例不報 | ROOM-MIG#export-schemas〔併:研D二16〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-19 | Migration 沒有測試 | 有 `Migration(x, y)`,沒有 `MigrationTestHelper` 測試 | @get:Rule val helper = MigrationTestHelper(instrumentation = instrumentation, databaseClass = AppDb::class, driver = AndroidSQLiteDriver(), file = …);測試內 helper.createDatabase(1) 塞資料後 helper.runMigrationsAndValidate(2, listOf(MIGRATION_1_2)) 並查資料;另寫一條 migrateAll 測試,Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS).build() 開到最新版讓 Room 驗 schema | 遷移 SQL 寫錯,上線崩潰 | 無 | C | 語意:要找對應測試是否存在且覆蓋每個版本對 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | ROOM-MIG#test〔併:研D二17〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-20 | RoomDatabase 建多個實例 | 函式或 Activity 裡 `Room.databaseBuilder(...).build()` | DI `@Provides @Singleton fun db(...)` 或 companion 單例 | 多連線池、InvalidationTracker 失效、寫入互鎖 | 無 | B | 形狀:`Room.databaseBuilder(...).build()` 出現在 function body 且不在 `@Provides`/object 單例裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-builder-not-singleton:樣本實測中壞例、好例不報 | ROOM-DB〔併:研D二18〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room〕 |
+ | DATA-21 | IN 查詢一次傳上千筆參數(出處不全) | `@Query("… WHERE id IN (:ids)")`,ids 數量沒上限 | `ids.chunked(500).flatMap { dao.byIds(it) }` 分批 | too many SQL variables 崩潰 | 無 | C | 語意:要知道參數數量上限 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | SQLITE-LIM〔併:研D二19〕〔查證 2026-11-05:https://www.sqlite.org/limits.html https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-22 | 用 OnConflictStrategy.REPLACE 當 upsert(出處不全) | `@Insert(onConflict = REPLACE)` 用在有外鍵 CASCADE 的父表 | `@Upsert` 或 `@Update` | REPLACE 先刪後插,連帶刪掉子表資料 | 無 | B | 形狀:`@Insert(onConflict = OnConflictStrategy.REPLACE)` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | ROOM-UPSERT〔併:研D二20〕〔查證 2026-11-05:https://www.sqlite.org/lang_conflict.html https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-23 | Room Flow 查詢沒去重 | 觀察整張表 `Flow<List<T>>`,不相關寫入也觸發 | `dao.observe().distinctUntilChanged()` | 多餘的重組與重算 | 無 | B | 形狀:DAO 回傳 Flow 的呼叫鏈沒有 `distinctUntilChanged` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | ROOM-ASYNC〔併:研D二21〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/async-queries〕 |
+@@ -565,20 +600,29 @@
+ | DATA-69 | 刷新失敗卻先清本機快取 | 先 `dao.clear()` 再呼叫 api | `val fresh = api.fetch(); db.withTransaction { dao.clear(); dao.insertAll(fresh) }`(成功後才換) | 離線時資料全空 | 無 | C | 語意:要看清除與網路呼叫的先後與失敗路徑 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | DL-OFFLINE〔併:研D五13〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-network-db https://developer.android.com/topic/architecture/data-layer/offline-first〕 |
+ | DATA-70 | kotlinx.serialization 沒開 ignoreUnknownKeys | `Json.decodeFromString<Foo>(s)` 用預設 Json 解析伺服器回應 | 共用 `val json = Json { ignoreUnknownKeys = true }`,`json.decodeFromString<Foo>(s)` | 伺服器新增欄位,舊版 App 全面解析失敗 | 無 | B | 形狀:對網路回應用 `Json.decodeFromString`(預設實例)或 Json builder 沒設 ignoreUnknownKeys | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-json-default-instance:樣本實測中壞例、好例不報 | KXS-IGNORE〔併:研D一18〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-71 | 每次都新建 Json 設定 | 函式裡 `Json { … }.decodeFromString(s)` | 頂層 `val json = Json { ignoreUnknownKeys = true }` 重用 | 效能差;各處設定不一致 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | B | 形狀:`Json {` 建構出現在 function body | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-json-config-per-call:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-json-config-per-call 命中 1、真 0、誤報 1,改形狀:排除測試 | KXS-JSON〔併:研D一19〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-72 | 非可空欄位沒預設值也沒開 coerceInputValues | `@Serializable data class U(val name: String)`,伺服器可能回 null 或缺欄位 | `val name: String? = null` 或 `val name: String = ""`,需要時 `Json { coerceInputValues = true }` | MissingFieldException 或 JsonDecodingException,整份清單解析失敗 | 無 | C | 語意:要知道伺服器哪些欄位可能缺或為 null | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T5 | 未測 | KXS-JSON#coercing-input-values〔併:研D一20〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-customization-options.html https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-73 | 列舉遇到未知值就崩潰 | `enum class Status { A, B }`,伺服器新增 C | `enum class Status { A, B, UNKNOWN }`,欄位 `val status: Status = Status.UNKNOWN` 並開 `coerceInputValues = true` | 新列舉值讓舊版 App 全面崩潰 | 無 | C | 語意:要知道列舉來自伺服器且會擴充 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T5 | 未測 | KXS-JSON#coercing-input-values〔併:研D一21〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-74 | 帶預設值的欄位沒被序列化出去 | 欄位等於預設值被省略(`encodeDefaults` 預設 false) | 必送欄位標 `@EncodeDefault`,或 `Json { encodeDefaults = true }` | 伺服器收不到必填欄位 | 無 | C | 語意:要知道伺服器哪些欄位必填 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T5 | 未測 | KXS-BASIC〔併:研D一22〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html https://kotlinlang.org/docs/serialization-customization-options.html〕 |
+ | DATA-75 | Gson 解析 Kotlin 非空欄位得到 null | Gson 搭配 `data class X(val a: String)`,JSON 缺 a | 改 Moshi codegen(`@JsonClass(generateAdapter = true)`)或 kotlinx.serialization | 非空型別裡裝 null,別處 NPE | 無 | B | 形狀:專案裡 Gson 解析目標是 Kotlin data class | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-gson-nonnull-field:樣本實測中壞例、好例不報 | GSON-TS〔併:研D一23〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/README.md https://github.com/square/moshi/blob/master/README.md〕 |
+ | DATA-76 | Moshi 反射沒 KotlinJsonAdapterFactory 或 codegen 漏標 | `Moshi.Builder().build()` 解析 Kotlin 類;漏 `@JsonClass(generateAdapter = true)` | 類別標 `@JsonClass(generateAdapter = true)`;用反射就 `Moshi.Builder().add(KotlinJsonAdapterFactory()).build()` | 執行期崩潰、預設值失效 | Android Lint(Slack):MoshiUsage* 系列(逐條代號待抄,待查) | A | 形狀:Moshi 解析的 data class 沒有 `@JsonClass` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一24〕 〔查證 2026-11-07:https://github.com/square/moshi〕 |
+ | DATA-77 | R8 混淆掉解析用的模型 | Gson 反射解析,沒有 `-keep` 或 `@SerializedName` | 設定 R8/ProGuard keep 規則保留解析模型的欄位名稱(與無參建構子);或改用以 code generation 取代反射的解析器(Gson README 指名 Kotlin Serialization) | 只有 release 版解析出全空欄位 | 無 | C | 語意:要用 release 版跑解析才看得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=不接(代碼審或真機) | 未測 | SHRINK〔併:研D一25〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/Troubleshooting.md https://github.com/google/gson/blob/main/README.md〕 |
+ | DATA-78 | 使用 java.io.Serializable | 資料類 `: Serializable` 拿去傳遞或存檔 | `@Parcelize data class X(…) : Parcelable`,或 `@Serializable`(kotlinx.serialization) | 慢,而且有反序列化風險 | Android Lint:SerializableUsage | A | 形狀:類別實作 `java.io.Serializable` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D一26〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/SerializableUsage.md.html〕 |
++| DATA-79 | 原始碼裡寫死秘密 | `const val API_KEY = "AIza…"`;網址裡帶帳密 `https://user:pass@host` | 秘密不進原始碼,用 Secrets Gradle Plugin 之類的方式在建置時注入 | 反編譯就拿得到金鑰或帳密 | 內建:SecretInSource、AuthLeak | A | 形狀:由 Android Lint SecretInSource、AuthLeak 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SecretInSource.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AuthLeak.md.html〕 |
++| DATA-80 | 把私鑰檔打包進 App | `res/raw`、`assets` 裡放 `.pem`、`.key` 私鑰檔 | 私鑰不放進 App | 私鑰隨 APK 外流 | 內建:PackagedPrivateKey | A | 形狀:由 Android Lint PackagedPrivateKey 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/PackagedPrivateKey.md.html〕 |
++| DATA-81 | 敏感資料寫進 logcat | `Log.d(TAG, "password=…")`、`Log.wtf("…passwd…", …)` | 不記敏感資料;非除錯版的日誌都要清理 | 其他工具或使用者從 logcat 讀到秘密 | 資安包:LogInfoDisclosure | A | 形狀:由 Android Lint LogInfoDisclosure 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/LogInfoDisclosure.md.html〕 |
++| DATA-82 | 加密用 ECB 或沒指定模式、不安全的填充 | `Cipher.getInstance("AES")`;`Cipher.getInstance("AES/ECB/PKCS5Padding")`;不安全的模式或填充組合 | 明寫安全的模式,例 `Cipher.getInstance("AES/GCM/NoPadding")` | Android 預設模式是 ECB,相同明文得到相同密文;不安全的填充可被填充預言攻擊 | 內建:GetInstance;資安包:UnsafeCryptoAlgorithmUsage | A | 形狀:由 Android Lint GetInstance、UnsafeCryptoAlgorithmUsage 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/GetInstance.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeCryptoAlgorithmUsage.md.html〕 |
++| DATA-83 | 用弱或已被攻破的雜湊、加密演算法 | `MessageDigest.getInstance("MD5")`、`"SHA-1"` 這類弱演算法 | 改用 SHA-256 以上等目前安全的演算法 | 攻擊者能推回原始輸入或造出相同雜湊 | 資安包:VulnerableCryptoAlgorithm | A | 形狀:由 Android Lint VulnerableCryptoAlgorithm 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/VulnerableCryptoAlgorithm.md.html〕 |
++| DATA-84 | 資安場合用弱亂數或固定種子 | 產生權杖、驗證碼用 `Math.random()`、`java.util.Random`;`SecureRandom` 給固定種子 | 資安用途用 `SecureRandom()` 且不設固定種子;非資安用途才用 `Random` | 攻擊者猜得到產生的數字,冒用身分 | 資安包:WeakPrng;內建:SecureRandom | A | 形狀:由 Android Lint WeakPrng、SecureRandom 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WeakPrng.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SecureRandom.md.html〕 |
++| DATA-85 | 建立全域可讀寫的檔案 | `openFileOutput(name, MODE_WORLD_READABLE)`、`MODE_WORLD_WRITEABLE`;`file.setReadable(true, false)` | 檔案留在 App 私有目錄;要給別的 App 用 ContentProvider 或 FileProvider | 別的 App 讀到或改掉你的檔案 | 內建:WorldReadableFiles、WorldWriteableFiles、SetWorldReadable | A | 形狀:由 Android Lint WorldReadableFiles、WorldWriteableFiles、SetWorldReadable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WorldReadableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WorldWriteableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldReadable.md.html〕 |
++| DATA-86 | 退出分區儲存或用外部路徑分享敏感資料 | `<application android:requestLegacyExternalStorage="true">`;file_paths.xml 的 `<external-path>` | 不退出分區儲存;敏感資料留在 App 私有目錄或系統憑證儲存 | 外部儲存的檔案別的 App 讀得到 | 資安包:InsecureLegacyExternalStorage、SensitiveExternalPath | A | 形狀:由 Android Lint InsecureLegacyExternalStorage、SensitiveExternalPath 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureLegacyExternalStorage.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SensitiveExternalPath.md.html〕 |
++| DATA-87 | SecretKeySpec 用寫死的金鑰 | `SecretKeySpec("0123456789abcdef".toByteArray(), "AES")`;`SecretKeySpec(byteArrayOf(0x48, 0x65), "AES")` | 金鑰用 Android Keystore 產生與保存(`KeyGenerator.getInstance("AES", "AndroidKeyStore")`),不放進 APK | 反編譯就拿得到金鑰,加密形同虛設 | 無(自寫 ast-grep kt-secretkeyspec-literal-key) | B | 形狀:SecretKeySpec 第一個參數(含具名參數 key =)是不含插值的字串字面值接 toByteArray 或 encodeToByteArray,或參數全是整數字面值的 byteArrayOf(…) | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-secretkeyspec-literal-key:樣本實測中壞例、好例不報;真實語料:樣本內(第一輪形狀)68 處誤報 2、樣本外 3 處誤報 0 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0212/ https://developer.android.com/privacy-and-security/keystore〕 |
+ 
+ ## TEST 測試
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | TEST-1 | Dispatchers.setMain 沒配 resetMain | 測試類別 `@Before { Dispatchers.setMain(d) }`,找不到 `Dispatchers.resetMain()` | 用 `MainDispatcherRule`(TestWatcher 的 starting 裡 setMain、finished 裡 resetMain),或 `@After fun tearDown() { Dispatchers.resetMain() }` | 汙染後面的測試,單跑綠、整套跑紅 | EXTRAS:kt-setmain-without-reset | B | 形狀:類別內有 `Dispatchers.setMain(` 卻沒有 `Dispatchers.resetMain()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-setmain-without-reset:樣本實測中壞例、好例不報 | EXTRAS;AND-TEST〔併:X:kt-setmain-without-reset〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md〕 |
+ | TEST-2 | 一個測試裡有多個排程器 | `val d1 = StandardTestDispatcher()`、`val d2 = UnconfinedTestDispatcher()` 各自新建,沒傳 `testScheduler` | `StandardTestDispatcher(testScheduler)`,或先 setMain 再建,全部共用一個排程器 | 虛擬時間分裂,`advanceUntilIdle` 推不動另一個,測試不確定或掛住 | 無 | B | 形狀:測試檔中 `*TestDispatcher()` 無參數,出現在 runTest 外或兩次以上 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-test-multiple-schedulers、kt-test-dispatcher-no-scheduler:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-test-multiple-schedulers 命中 1、真 0、誤報 1,改形狀:TestScope 參數直接帶排程器不報 | AND-TEST〔併:研C九1、T1〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test〕 |
+ | TEST-3 | 在設 Main 之前就建 TestDispatcher 屬性 | `private val repo = Repo(StandardTestDispatcher())` 寫在 `@get:Rule val mainRule` 之前或規則外 | Rule 宣告在最前面,其他屬性用 `mainDispatcherRule.testDispatcher` | 類別屬性在換 Main 之前初始化,另開新排程器 | 無 | B | 形狀:測試類別屬性初始值有 `TestDispatcher()` 且位置在 Rule 之前 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-testdispatcher-before-mainrule、kt-testdispatcher-before-mainrule:樣本實測中壞例、好例不報 | AND-TEST〔併:研C九2、T2〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test〕 |
+ | TEST-4 | StandardTestDispatcher 下沒推進就斷言 | `runTest { vm.load(); assertEquals(Loaded, vm.state.value) }`(load 內 launch);`val vm = VM(); assertEquals(expected, vm.state.value)`(init 裡 launch) | 斷言前 `advanceUntilIdle()`/`runCurrent()`,或 `job.join()`;init 不啟動,改由 `stateIn(WhileSubscribed)` | 新協程排隊未執行,斷言看到舊值 → 錯紅;或被誤「修」成 Unconfined 而蓋掉併發問題 | 無 | B+C | 形狀:runTest 內 launch 或呼叫被測函式後,下一句就是 assert 而無推進呼叫 | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=範本 T0 | 規則 kt-test-assert-after-launch-no-advance:樣本實測中壞例、好例不報 | AND-TEST〔併:研C九3、T5、T23〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test〕 |
+ | TEST-5 | 永不結束的收集放在 runTest 的一般 launch 或 TestScope 本體 | `runTest { launch { vm.state.collect { values += it } } }`;`UserState(scope = this)` 裡 collect 熱流;`launch { vm.state.toList(values) }` | `backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.toList(values) }`;注入 `backgroundScope` | runTest 一直等這個協程完成 → 測試掛住,最後 UncompletedCoroutinesError 逾時 | 無 | B+C | 形狀:runTest 本體內 `launch {` 的本體有 `.collect`/`toList`,且接收者不是 backgroundScope | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=範本 T0 | 規則 kt-runtest-launch-collect-forever、kt-test-tolist-not-background:樣本實測中壞例、好例不報;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | AND-FTEST;AND-TEST〔併:研C九4、T10、T16〕 〔查證 2026-11-07:https://developer.android.com/kotlin/flow/test https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md〕 |
+@@ -648,21 +692,21 @@
+ | PERF-26 | 熱路徑重複計算或重複查詢(出處不全) | 迴圈內重複 `map[key]!!`;大清單用 `list.contains` | 先存區域變數;查詢改 `toHashSet()` 後 `contains` | O(n²) | 無 | D | 語意:要判斷資料量與是否熱路徑 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | 無網址(一般知識)(未開頁核對)〔併:P45〕 |
+ | PERF-27 | 明確呼叫 GC | `System.gc()` | 刪掉 `System.gc()`、`Runtime.getRuntime().gc()`、`System.runFinalization()`;程式不應依賴在特定時間點觸發 GC。記憶體壓力改用 Android Studio 記憶體工具(配置追蹤、heap dump)或 LeakCanary 找出配置與洩漏來源再修 | 卡頓,治標不治本 | detekt:ExplicitGarbageCollectionCall | A | 形狀:呼叫 System.gc 或 Runtime.gc | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | DPB〔併:P46〕〔查證 2026-11-05:https://detekt.dev/docs/rules/potential-bugs/ https://developer.android.com/topic/performance/memory〕 |
+ | PERF-28 | 用 !! 處理可能為 null 的值 | `user!!.name`、`map[k]!!`、`dto.user!!.name` | `?.`、`?:`、`requireNotNull(x) { "訊息" }`、`map.getValue(k)`;DTO 在對應層給預設值或回報錯誤 | NPE 崩潰 | detekt:UnsafeCallOnNullableType、MapGetWithNotNullAssertionOperator、UnnecessaryNotNullOperator | A+B | 形狀:運算式後接 !! | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-dto-bang(hint):樣本實測中壞例、好例不報 | DPB〔併:P47、研D六9〕 〔查證 2026-11-07:https://kotlinlang.org/docs/null-safety.html https://detekt.dev/docs/rules/potential-bugs〕 |
+ | PERF-29 | lateinit 在初始化前讀取 | `lateinit var adapter` 在 `onCreate` 前被呼叫;測試沒在 `@Before` 設定 | 建構子注入、`by lazy { }`、可空型別;必要時 `::x.isInitialized` | UninitializedPropertyAccessException | detekt:LateinitUsage(預設關) | A | 形狀:lateinit 宣告 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | DPB〔併:P48〕 〔查證 2026-11-07:https://kotlinlang.org/docs/properties.html https://detekt.dev/docs/rules/potential-bugs〕 |
+ | PERF-30 | data class 帶 var 或可變集合欄位 | `data class S(var items: MutableList<T>)` | `data class S(val items: List<T>)`,改用 `copy(items = items + x)` | 放進 HashSet/HashMap 後雜湊變而找不到;StateFlow 判相等不發新值 | detekt:DataClassContainsFunctions、DataClassShouldBeImmutable(style,待查是否在 1.23 預設清單);detekt:DoubleMutabilityForCollection | A+B | 形狀:data class 主建構子有 var 或 Mutable* 型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-uistate-mutable-field、kt-data-class-mutable-field:樣本實測中壞例、好例不報 | DST;DPB〔併:P49〕 〔查證 2026-11-07:https://detekt.dev/docs/rules/style https://kotlinlang.org/docs/data-classes.html https://detekt.dev/docs/rules/potential-bugs〕 |
+ | PERF-31 | 只覆寫 equals 或 hashCode 其一、equals 參數型別錯 | `override fun equals(other: Foo)`;只寫 equals | `equals(other: Any?)` 與 `hashCode()` 一起覆寫 | 集合行為錯 | detekt:EqualsWithHashCodeExist、WrongEqualsTypeParameter、EqualsAlwaysReturnsTrueOrFalse | A | 形狀:類別只有 equals 沒 hashCode 或參數非 Any? | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | DPB〔併:P50〕 〔查證 2026-11-07:https://kotlinlang.org/docs/equality.html https://detekt.dev/docs/rules/potential-bugs〕 |
+ | PERF-32 | 陣列欄位的 data class 用預設 equals | `data class D(val bytes: ByteArray)` | 覆寫 `equals`/`hashCode` 用 `contentEquals`/`contentHashCode`,或改用 `List<Byte>` | 內容相同卻不相等 | 待查(IDE 檢查有,detekt 代號待查) | B | 形狀:data class 欄位型別是陣列且沒覆寫 equals | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-data-class-array-field:樣本實測中壞例、好例不報 | 〔併:P51〕〔查證 2026-11-05:https://raw.githubusercontent.com/SonarSource/sonar-kotlin/master/sonar-kotlin-plugin/src/main/resources/org/sonar/l10n/kotlin/rules/kotlin/S6218.html https://kotlinlang.org/docs/arrays.html〕 |
+ | PERF-33 | lazy 執行緒模式選錯 | 只在主執行緒用卻用預設 SYNCHRONIZED;多執行緒存取卻用 `LazyThreadSafetyMode.NONE` | 單執行緒 `by lazy(LazyThreadSafetyMode.NONE) { }`;多執行緒保持預設 `by lazy { }` | 前者多一把鎖;後者初始化兩次或拿到半成品 | 無 | B+D | 形狀:找 LazyThreadSafetyMode.NONE 再看存取執行緒 | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-lazy-thread-mode-none(hint):樣本實測中壞例、好例不報 | KT-LAZY〔併:P52〕 〔查證 2026-11-07:https://kotlinlang.org/docs/delegated-properties.html〕 |
+ | PERF-34 | 例外只記 log 或直接吞掉 | `catch (e: Exception) {}`;`catch (e) { Log.e(...); emptyList() }` | 往上回報錯誤狀態:`catch (e: IOException) { _state.update { it.copy(error = e.toDomain()) } }`,只 catch 具體型別 | 空畫面與真的沒資料無法區分;錯誤靜默消失 | detekt:SwallowedException、TooGenericExceptionCaught、PrintStackTrace | A+B | 形狀:catch 本體空或只有 log 再回傳預設值 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-catch-log-return-empty:樣本實測中壞例、好例不報 | DEX;DL#expose-errors〔併:研D六3、TP補〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/ui-layer https://developer.android.com/topic/architecture/data-layer https://detekt.dev/docs/rules/exceptions〕 |
+ | PERF-35 | 重新拋出時吞掉底層原因 | `throw MyError("x")` 沒傳 `cause` | `throw MyError("x", e)` | 失去堆疊,難除錯 | 待查(detekt 候選:ThrowingExceptionsWithoutMessageOrCause) | B | 形狀:catch 區塊內 throw 新例外未帶捕獲的 e | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-throw-without-cause:樣本實測中壞例、好例不報 | 〔併:研D六4〕〔查證 2026-11-05:https://detekt.dev/docs/rules/exceptions〕 |
+-| PERF-36 | 不安全轉型、平台型別外漏、忽略回傳值 | `x as Foo`;公開 API 回傳平台型別;`list.map { }` 結果沒用 | `x as? Foo ?: return`;公開 API 明寫可空性;使用回傳值 | ClassCastException、NPE、邏輯沒生效 | detekt:UnsafeCast、CastNullableToNonNullableType、HasPlatformType、IgnoredReturnValue | A | 形狀:as 轉型、未標型別的公開 API、未使用的回傳值 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | DPB〔併:TP補〕 〔查證 2026-11-07:https://kotlinlang.org/docs/typecasts.html https://detekt.dev/docs/rules/potential-bugs〕 |
++| PERF-36 | 不安全轉型、平台型別外漏、忽略回傳值 | `x as Foo`;公開 API 回傳平台型別;`list.map { }` 結果沒用 | `x as? Foo ?: return`;公開 API 明寫可空性;使用回傳值 | ClassCastException、NPE、邏輯沒生效 | detekt:UnsafeCast、CastNullableToNonNullableType、HasPlatformType、IgnoredReturnValue;內建:CheckResult | A | 形狀:as 轉型、未標型別的公開 API、未使用的回傳值 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | DPB;LINTREF〔併:TP補〕 〔查證 2026-11-07:https://kotlinlang.org/docs/typecasts.html https://detekt.dev/docs/rules/potential-bugs〕 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/CheckResult.md.html〕 |
+ | PERF-37 | 參考相等誤用 | `a === "text"` 比字串 | `a == "text"` | 內容相同卻判為不等 | detekt:AvoidReferentialEquality | A | 形狀:=== 用在字串等值型別 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | DPB〔併:TP補〕 〔查證 2026-11-07:https://kotlinlang.org/docs/equality.html https://detekt.dev/docs/rules/potential-bugs〕 |
+ | PERF-38 | 已不需要的 SDK 版本檢查 | `if (Build.VERSION.SDK_INT >= 21)` 而 minSdk 已 ≥ 21 | minSdk 已涵蓋的版本判斷整段拿掉,只留新版路徑:minSdk 23 時 `if (Build.VERSION.SDK_INT >= 21) { … }` 恆真、`if (Build.VERSION.SDK_INT < 21) { … }` 恆假,直接保留前者內容、刪掉後者;`values-v14` 這類版本限定資源夾若版本 ≤ minSdk,內容併入一般資料夾 | 死碼、維護負擔 | 內建:ObsoleteSdkInt | A | 形狀:SDK_INT 比較低於 minSdk | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:TP補〕〔查證 2026-11-05:https://googlesamples.github.io/android-custom-lint-rules/checks/ObsoleteSdkInt.md.html〕 |
+ | PERF-39 | 長集合運算鏈沒用 asSequence | `list.filter { }.map { }.take(10)` 在大集合 | `list.asSequence().filter { }.map { }.take(10).toList()` | 每一步配置中間清單 | detekt:CouldBeSequence | A | 形狀:同一集合三個以上中間運算子串接 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | DPF〔併:TP補〕 〔查證 2026-11-07:https://detekt.dev/docs/rules/performance〕 |
+ 
+ ## 情境決策表
+ 
+ 語意類的列歸納成「看到這個情境 → 預設這樣寫 → 什麼時候不適用、改怎麼寫」。寫程式或審查時先認情境,再看對應檢查編號的列。
+ 
+ 「證據樣式」欄給推送前的情境題核對用(`lumos code-loop check` 在表態那一道裡):寫成 `主:… ;例外:…`,每段是 `(無)` 或一到三條反引號包住的 Python 正規式(分大小寫;表格裡的直線寫成 `\|`)。表態某一列適用、照標準寫法(`main`)或例外寫法(`alt`)時,對照的方式是:第一條要出現在表態指的那一行(剝掉註解與字串之後),其餘每一條要出現在段材料裡(從那一段往上最近的頂層或類別層宣告——函式、屬性或類別;找不到或超過 120 行時是段前後各 20 行),所以跨宣告的特徵(類別屬性配方法、介面配呼叫端)不寫成第二條。樣式只照那一列「標準寫法」「不適用時」欄寫明的字面特徵推,不另立寫法;寫不出字面特徵的(標準寫法是「不要寫某樣東西」或「照某個順序」,或同一段裡有寫不出特徵的寫法)寫 `(無)`;每列樣式附正例與反例(`configs/ast-grep/kotlin-android/samples/situation/<列編號>.kt.txt`),規則包自檢經真的切段與核對程式跑過:正例(標準寫法、例外寫法的範例)要對得上、反例(對應檢查列裡字面上跟標準寫法不同的壞寫法)要對不上;推送前對不上只提醒、記帳、待盲判,不擋(字面樣式分不出合法變體,先量真陽性率再談擋);壞寫法跟標準寫法只差在語意(數量、物件大小、哪個值會變、測的是不是順序)時樣式分不出,那一段寫 `(無)` 交盲判,不留會擋掉標準寫法或放過壞寫法的樣式;「不適用時」是換到別列的(見下一列、見上一列),在「不適用時」格子裡標 `(換列)`(慣例寫在開頭)、例外寫 `(無)`,那一列不准選例外(工具只認這個標記,不從中文用語推)。列編號只准往後加,刪列時在情境欄標「(停用)」、觸發字與證據樣式都改成 `(無)` 留著。
+ 
+@@ -864,22 +908,22 @@
+ | PERF-26 | — | 無網址(一般知識)(未開頁核對)〔併:P45〕 |
+ | PERF-30 | detekt:DataClassContainsFunctions、DataClassShouldBeImmutable(style,待查是否在 1.23 預設清單) | — |
+ | PERF-32 | 待查(IDE 檢查有,detekt 代號待查) | 無網址(一般知識)(未開頁核對)〔併:P51〕 |
+ | PERF-34 | — | DL#expose-errors(未開頁核對)〔併:研D六3、TP補〕 |
+ | PERF-35 | 待查(detekt 候選:ThrowingExceptionsWithoutMessageOrCause) | 無網址(一般知識)(未開頁核對)〔併:研D六4〕 |
+ 
+ ## 統計
+ 
+ 用程式讀本檔各主題表格列數得出(不是手算;規則包數字讀 `configs/ast-grep/kotlin-android/rules*/*.yml`)。
+ 
+-- 總列數:473(其中沿用既有編號 35 列;規則包實作時補的新列 0 列)
+-- 各主題:API 36、FLOW 32、STATE 28、CO 44、UI 111、ARCH 67、DATA 78、TEST 38、PERF 39
+-- 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 202、B 206、C 68、D 58
+-- 各級(以第一個字母計,加總等於總列數):A 202、B 176、C 52、D 43
+-- 級的組合:A 168、A+B 28、A+B+C 2、A+C 3、A+C+D 1、B 157、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 43
+-- 情境:形狀類 367、語意類 106(其中標(人裁)的 3)
++- 總列數:514(其中沿用既有編號 35 列;規則包實作時補的新列 0 列;2026-11-08 資安補齊新增 41 列:API-37~47、ARCH-68~88、DATA-79~87)
++- 各主題:API 47、FLOW 32、STATE 28、CO 44、UI 111、ARCH 88、DATA 87、TEST 38、PERF 39
++- 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 240、B 210、C 68、D 58
++- 各級(以第一個字母計,加總等於總列數):A 240、B 180、C 52、D 42
++- 級的組合:A 205、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 161、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 42
++- 情境:形狀類 408、語意類 106(其中標(人裁)的 3)
+ - 待查證:135 列(規則代號待查 49 列、來源待核對 104 列,兩者可重疊)
+-- 規則包條數:207(error 30、warning 115、語意覆核級 info 12、hint 50,其中 8 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
+-- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):128
++- 規則包條數:211(error 34、warning 115、語意覆核級 info 12、hint 50,其中 11 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
++- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):129
+ - 出處不全的列:34;人裁的列:3
+-- 逐列查證(來源欄有〔查證 日期:網址〕):459 列;沒有的 14 列是查不到權威原文(已標出處不全)或待人裁(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]])
++- 逐列查證(來源欄有〔查證 日期:網址〕):500 列;沒有的 14 列是查不到權威原文(已標出處不全)或待人裁(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]])
+ - 情境決策表列數:56(證據樣式:主寫 `(無)` 的 8 列、例外寫 `(無)` 的 31 列、兩段都 `(無)` 的 5 列)

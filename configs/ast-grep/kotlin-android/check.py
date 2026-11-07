@@ -63,7 +63,8 @@ def _files_block_is_test_only(doc):
 
 
 def load_rules():
-    """讀四個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
+    """讀四個規則目錄 → [{id, severity, message, dir, file, test_only, ignores}];同一檔多份文件以 --- 分隔。
+    ignores 是那份文件 `ignores:` 用引號括住的路徑清單,單行 `[...]` 與多行 `- '...'` 兩種寫法都讀(沒寫就是空清單)。"""
     rules = []
     for d, cfg in CONFIGS:
         for f in sorted((HERE / d).glob("*.yml")):
@@ -76,9 +77,12 @@ def load_rules():
                 text = msg.group(1).strip() if msg else ""
                 if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
                     text = text[1:-1].replace("''", "'") if text[0] == "'" else text[1:-1]
+                ign = re.search(r"^ignores:\s*\[(.*)\]\s*(?:#.*)?$", doc, re.M) or \
+                    re.search(r"^ignores:\s*(?:#.*)?\n((?:[ \t]+-[^\n]*\n?)+)", doc, re.M)   # 單行 [...] 或多行 - 清單
                 rules.append({"id": m.group(1), "severity": sev.group(1) if sev else "",
                               "message": text, "dir": d, "config": cfg, "file": f.name,
-                              "test_only": _files_block_is_test_only(doc)})
+                              "test_only": _files_block_is_test_only(doc),
+                              "ignores": re.findall(r"['\"]([^'\"]+)['\"]", ign.group(1)) if ign else []})
     return rules
 
 
@@ -104,7 +108,9 @@ _WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
 B4_DEFAULT_OFF = frozenset((
     "ComposeUnstableReceiver", "ComposeUnstableCollections", "ComposeM2Api", "ComposeRememberMissing",
     "unstable-collections", "UnstableCollections", "preview-naming", "PreviewNaming", "material-two", "Material2"))
-_B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
+# 資安包:= Google 的 com.android.security.lint:lint,掛在 Android Lint 上、同一個 CI 步驟跑([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3);
+# 它 24 條的檢查頁(googlesamples.github.io/android-custom-lint-rules/checks/<id>.md.html)2026-11-08 逐頁看過都沒有 disabled by default,B4_DEFAULT_OFF 不加
+_B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|資安包|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
 _B4_CR = re.compile(r"cr:compose:([\w-]+)")
 _B4_SKIP = ("待查", "預設關", "相近", "opt-in")
 B4_TAG_LINT = "CI 範本:Android Lint"
@@ -113,7 +119,7 @@ B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
 
 def batch4_expected_tags(rule_col):
     """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。
-    以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
+    以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、資安包:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
     而且那段不含待查、預設關、相近、opt-in,規則碼不是 B4_DEFAULT_OFF 才算。"""
     lint = cr = False
     for seg in re.split(r"[;；、]", rule_col):
