@@ -1,0 +1,235 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md b/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md
+index fc9001d7d..60dcb65cd 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/新分支首推會擋的閘改用真起點_計劃.md
+@@ -55,24 +55,24 @@ RETIRE-IF: pitfalls、impact、spec-gate、code-loop check 都自己吃 --push-r
+ - **CI 後盾**:CI 只在推 main 與合併請求時跑,code-loop check 那步只在推 main 時跑;新分支首推本機放行之後,要到合進 main 才有 CI 的 code-loop check 再看一次(那時用的是跟主線的分岔點,同一個想法)。
+ - 已排除:金流:只改推送前掛鉤的範圍推導與一個唯讀指令,不碰任何金流
+ - 已排除:對外送出:不連網、不送任何東西出去
+ - 已排除:不可逆:只改掛鉤與一個唯讀指令,退回提交即恢復
+ - 守衛面:新分支首推時會擋的那幾步看的範圍變小(從整個 repo 變成跟主線的分岔點之後);起點由存量漂移檢查已在用的那支算,判不了、找不到主線、指令不存在一律退回空樹(多擋);其他推送形狀不變。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當推一個遠端還沒有、只比主線多一個乾淨提交的新分支,而主線本身有大量會被當成新增告警的舊寫法時,推送前掛鉤 應 放行,而且風險分級只算那一個提交 [test:t_prepush_new_branch_block_range]
+ - [S2] 當新分支裡那一個新提交真的帶進新告警時,推送前掛鉤 應 照擋 [test:t_prepush_new_branch_block_range]
+-- [S3] 當新分支先合過主線(主線在分岔後又多了會被當成告警的提交)再首推時,推送前掛鉤 應 只算分支自己的提交、放行 [test:t_prepush_new_branch_block_range]
+-- [S4] 當新分支的頂端已整段在主線上時,會擋的那幾步 應 跑空範圍並放行,doctor 應 收到空的觸及清單 [test:t_prepush_new_branch_block_range]
+-- [S5] 當遠端已有那個分支、遠端舊值本機找不到、或推的是標籤時,會擋的那幾步的範圍 應 跟改之前一樣 [test:t_prepush_new_branch_block_range]
+-- [S6] 當 `lumos push-range` 不存在或失敗時,掛鉤 應 退回空樹起點並印一句說明;被訊號中斷(rc 128 以上)時 應 停下不放行 [test:t_prepush_new_branch_block_range]
++- [S3] 當新分支先合過主線(主線在分岔後又多了會被當成告警的提交)再首推時,推送前掛鉤 應 只算分支自己的提交、放行 [test:t_prepush_newbranch_merged_tip]
++- [S4] 當新分支的頂端已整段在主線上時,會擋的那幾步 應 跑空範圍並放行,doctor 應 收到空的觸及清單 [test:t_prepush_newbranch_tip_on_main]
++- [S5] 當遠端已有那個分支、遠端舊值本機找不到、或推的是標籤時,會擋的那幾步的範圍 應 跟改之前一樣 [test:t_prepush_newbranch_tip_on_main]
++- [S6] 當 `lumos push-range` 不存在或失敗時,掛鉤 應 退回空樹起點並印一句說明;被訊號中斷(rc 128 以上)時 應 停下不放行 [test:t_prepush_newbranch_range_fallback]
+ - [S7] 當 `lumos push-range` 收到頂端已在主線、找得到分岔點、git 失敗、SHA-256 repo 找不到主線四種情形時,應 各印「頂端..頂端」「分岔點..頂端」「這個 repo 的空樹..頂端」「SHA-256 空樹..頂端」;少帶 --push-remote 或 --pushed-ref 應 rc2 [test:t_push_range_cli]
+ - [S8] 當掛鉤裡 `pp_touched_file`、`impact_once`、分支路徑的兩次 `pitfalls`、`spec-gate --push-check`、`code-loop check`、兩處 `loop escape` 任一處沒有吃 `_brange` 時,守衛測試 應 點名那一處並紅 [test:t_prepush_block_range_callers]
+ 
+ ## 回退
+ 
+ 退回本案的提交即可:只改推送前掛鉤與新增一個唯讀指令,退回後新分支首推恢復從空樹算(會再被誤擋)。消費專案要重跑 `lumos update` 才拿到新掛鉤;退回也一樣要更新一次。
+ 
+ ## 天花板
+ 
+ 1. 只修新分支首推;一般增量推送合過主線、重定基底後 force-push(舊值還在本機)時的多算照舊(另一張 Issue)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+index 44cbece7b..a9c3305bf 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
++++ b/docs/lumos-toolchain-knowledge/Systems/存量漂移守衛.md
+@@ -24,21 +24,21 @@ about_code:
+   - governance/eval/old-names/recall.py
+   - governance/eval/old-names/sample.py
+   - governance/eval/old-names/validate_vs_m1.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/node-content
+ summary: |-
+   WHY:[2026-10-07 [[Projects/結案時摘要跟正文只改一邊_計劃]]]新增 c7「自己已收尾、摘要還寫待定」只列出不擋,修法指 lumos summary-line;提交前另提醒「狀態改成收尾值、摘要沒動」 [出處:rtb 漂移盤點 1-2 兩篇已結案 Issue 摘要還寫尚未裁定、等某階段一起做] [因:既有只在 drift fix --close 擋待定決策行,手動改狀態與舊帳沒人看] [不選:比摘要與正文的共同條款編號(兩個實例都沒有)] [test:t_drift_c7_settled_summary_pending] [test:t_note_shape_close_summary_untouched]
+   WHY:c6 判子句有沒有待定詞前先把 [[…]] 連結(含別名)遮掉,找連結照用原文——連到標題寫「…還沒做」的已結案 Issue 不代表這句在待定 [出處:2026-10-06 [[Projects/c6不看連結標題裡的待定詞_計劃]];rtb 盤點兩條誤報] [因:原本拿含連結文字的子句比對待定詞] [test:t_drift_c6_ignores_link_title_words]
+-  WHY:`lumos push-range` 把 _push_range_start 的起點印成一行範圍給推送前掛鉤用:推分支的新分支首推時,會擋或決定擋不擋的那幾步(波及計算、分級、雙向門放行、code-loop check、逃逸記帳、給 doctor 的觸及清單)改用它;頂端已在主線印頂端..頂端,判不了或起點是空樹印這個 repo 自己的空樹(SHA-256 也對)。掛鉤只在遠端舊值全零而且是 refs/heads/* 時呼叫,舊值找不到、推標籤、一般增量照舊;指令不存在或失敗退回空樹、被訊號殺掉停下 [出處:2026-10-06 [[Projects/新分支首推會擋的閘改用真起點_計劃]];rtb 回報新分支首推被 715 條新增告警誤擋] [因:掛鉤對新 ref 拿空樹當起點,整個 repo 被當成新改動;起點只在 _push_range_start 算一處,不在掛鉤另算] [不選:舊值找不到也走它(找不到主線時只查最後一個提交,比空樹鬆)] [test:t_push_range_cli] [test:t_prepush_new_branch_block_range]
++  WHY:`lumos push-range` 把 _push_range_start 的起點印成一行範圍給推送前掛鉤用:推分支的新分支首推時,會擋或決定擋不擋的那幾步(波及計算、分級、雙向門放行、code-loop check、逃逸記帳、給 doctor 的觸及清單)改用它;頂端已在主線印頂端..頂端,判不了或起點是空樹印這個 repo 自己的空樹(SHA-256 也對)。掛鉤只在遠端舊值全零而且是 refs/heads/* 時呼叫,舊值找不到、推標籤、一般增量照舊;指令不存在或失敗退回空樹、被訊號殺掉停下 [出處:2026-10-06 [[Projects/新分支首推會擋的閘改用真起點_計劃]];rtb 回報新分支首推被 715 條新增告警誤擋] [因:掛鉤對新 ref 拿空樹當起點,整個 repo 被當成新改動;起點只在 _push_range_start 算一處,不在掛鉤另算] [不選:舊值找不到也走它(找不到主線時只查最後一個提交,比空樹鬆)] [test:t_push_range_cli] [test:t_prepush_new_branch_block_range] [test:t_prepush_newbranch_merged_tip] [test:t_prepush_newbranch_tip_on_main] [test:t_prepush_newbranch_range_fallback]
+   WHY:新增 c6「沒收尾的筆記在同一子句裡寫了待定詞、又連到已收尾的筆記」:只列出不擋推送,修法 drift fix --kind c6 --settled 在待定子句結尾補「(已裁定:日期 結論,見 [[…]])」;set 收尾、drift fix c2 --close、decision-add、decision-supersede 之後當場列出連到那篇還寫待定的行 [出處:2026-10-05 [[Projects/結案連帶掃描_計劃]]] [因:rtb 第三輪 29 筆「修了又壞」大多是一篇結案了、別篇還寫「等它」「待裁定」] [不選:待定詞收「待辦、TODO」(試算時名詞造成大量誤報);只在下指令當下列一次(之後再寫的抓不到)] [test:t_drift_c6_detects_pending_clause_to_settled_note] [test:t_drift_fix_c6_appends_settled_bracket] [test:t_settle_backrefs_listed_after_close_and_decisions]
+   WHY:drift fix --kind c2 --close 在寫入前擋兩件事:摘要 DECISION: 行還寫待定(要 --decision 換句)、還有沒結案的回頭條件(要逐行 [closed:] 或 --keep-revisits 寫理由,理由與行號記進修復帳);lumos set 結 Issue 維持只列出 [出處:2026-10-05 [[Projects/結案連帶掃描_計劃]]] [因:結案後才列出,現況就是沒人改;工具鏈自己有 3 篇已結案 Issue 的決策行還寫未處置] [不選:連 set 一起擋(set 是通用欄位寫入,擋了會卡住別的用途)] [test:t_drift_close_requires_decision_for_pending_line] [test:t_drift_close_blocks_live_revisits]
+   WHY:數量標記 `[count:路徑::名稱=N]` 由 drift scan 評估(新種類 count,同一棵樹、同一個總預算):用標準庫 ast 數 Python 模組最上層恰好一次的字面值集合(元組、清單、集合、字典、包一層 frozenset/set/tuple/list)與列舉成員,集合類照 Python 去重;找不到名稱、定義不只一次、非字面值、展開、非常數成員、列舉別名、列舉底線名稱與 _ignore_、Flag 組合值、列舉本體看不懂的語句、auto() 混明寫值、定義後被改過或被重新綁定(名稱在讀取、屬性名、關鍵字參數名、字串常數、import 模組路徑以外的每次出現都算綁定)、非 Python 一律判不了列成問題,不當成 0(看不懂就判不了,不略過、不模擬 Python 的列舉特例);doctor Z 段只數標籤不評估(同回頭條件,Z 段不讀程式檔);drift fix --kind count 標籤整個重寫、句子裡恰好一個前後不是英數字的舊數字一起改,寫之前先重抽確認 [出處:2026-10-04 [[Projects/數量標記檢查_計劃]]] [因:rtb 第三輪有一處數量從寫下就錯、沒有任何檢查在評] [不選:在 doctor N 段評估(第二條評估路徑、碰守衛面);推送擋(依賴欄位那份的待解問題大多是推送擋才有)] [test:t_count_tag_scan] [test:t_count_tag_fix]
+   PITFALL:本機設 log.showSignature=true 時,簽章提交的編號前面夾 gpg 訊息,版本清單解析原本跳過認不得的片段、沿用上一個提交編號,簽章提交整個消失,寫下時不成立的條件被說成「寫下時就已成立」,日期欄也夾進 gpg 訊息 [出處:2026-10-03 代碼審 code-回頭條件寫下時就成立 r2 正確性席] [根因:git 輸出受本機設定影響,解析不認得時用猜的] [修法:版本清單與取日期都帶 --no-show-signature;解析碰到認不得的片段整份判不了;日期不是 YYYY-MM-DD 就不給] [test:t_note_versions_stop_at_copy]
+   WHY:drift scan 對現在成立的回頭條件與撤除條件往回找寫下那一版(主線第一父鏈、條件組一模一樣、走過的每一版恰好一行、停在複製),在那一版判同一組條件,成立就標「寫下時就已成立」、已表態的照標;不用 blame(以文字行認同一條,改了待辦文字就算新寫,跟推送判定的「同一條」對不上);每一步不確定就判不了(標錯比漏標糟),一次最多在 6 個提交判 [出處:2026-10-03 [[Projects/回頭條件寫下時就成立_計劃]]] [因:表態後只剩「已表態」一行,生來就成立的舊條件看不出來] [test:t_drift_born_true_scan]
+   WHY:舊句檢查帳的 4 KB 裁法改呼叫共用的 _gate_event_fit(跟筆記形狀擋的放寬帳、回頭重讀有東西那一筆共用;家在 [[Systems/reversibility-governance-ledger]]),節點清單的截斷上限由這邊傳入,行為不變 [出處:2026-10-03 [[Projects/舊行尾追加不算新寫_計劃]]] [因:筆記形狀擋的放寬帳要同一種 4 KB 裁法,另寫一份就是第二種做法] [test:t_drift_m1_events_and_budget]
+   WHY:推送時多抽 RULE 摘要行的 [retire:when-*](_retire_lines,已作廢的不抽),沿用回頭條件同一個轉變判定、起點也用同一支抽;在核心判定之後另跑一支、自己一個 20 秒截止時間(不吃核心剩下的),判不了只列出不擋,子開關 drift_check.retire 沒寫照總開關;表態(drift ack --kind retire)記接回續行的整條,改了續行裡的條件舊表態就失效;記帳同閘其他判定放行不寫 [出處:2026-10-02 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 2 步] [因:RULE 行長命又多,判不了就擋會讓推送卡在跟這次改動無關的條件上;另寫判定會跟回頭條件各自漂] [test:t_slots_retire_when_push] [test:t_slots_retire_followups]
+   WHY:回頭條件(probe)與 RULE 撤除條件(retire)成立後的照留要嘛 `--tracked-in` 綁一篇開著的 Issue 或計劃(tracked_in,那篇收尾就失效),要嘛記 30 天期限(until);舊表態兩個都沒有,到 _DRIFT_ACK_LEGACY_UNTIL 為止。期限與開不開只在 drift scan 與 doctor(多一行已失效筆數)算,推送檢查不看日期也不看開不開,只對有起點、這次新寫就已成立的要求綁了去處 [出處:2026-10-06 [[Projects/照留表態要有期限或去處_計劃]];rtb 第三輪提案 B1、B2] [因:照留沒期限等於永久消音,新寫就成立的補一筆照留就能過;推送看日期或看別篇狀態會讓同一個提交今天綠明天紅、分支在合併前因別處收尾而變紅] [test:t_drift_check_born_needs_routed_ack] [test:t_drift_ack_live_rules]
+   WHY:drift scan 也評估 RULE 的 [retire:when-*](同一支 _drift_probe_scan 換抽取函式,排在回頭條件之後、共用 60 秒預算與同一棵樹),當推送那次判不了或被跳過的兜底;已作廢的不抽,已表態的照 scan 慣例列在已表態;doctor 照舊不評估 when-* 條件(度量式的撤除條件另由 doctor S18 判,見 [[Systems/lumos-cli-read]])。推送那支 rc 判完就定,先印後記(同 m1 與 c1 到 c5),記帳與印出出錯各自只講一句、不改判定,判定出錯的兜底帳條數記 null;--kind retire 的表態行號不是條目第一行就擋 [出處:2026-10-02 [[Projects/筆記格子寫法與過期檢查_計劃]] 第 3 步、[[Issues/撤除條件檢查末輪遺留四項]]] [因:轉變那次漏了就再也不會被擋;印出出錯原本會把該擋的放行] [test:t_slots_doctor_reminders] [test:t_slots_retire_issue_followups]
+   WHY:drift ack 多一種 kind=reread(回頭重讀第二層點出的規則類條目照留),證據欄是 verdicts(點出那一條的判定紀錄對照指紋);比對照 m1 自成一支 _drift_reread_split_acked、同條目所有表態的 verdicts 取聯集,不放進 _DRIFT_BOUND_KINDS;scan 與 doctor 不列(只在推送時由 reread-check 判);條目讀法與規則類判斷呼叫筆記內容審那邊的共用函式,不另寫 [出處:2026-10-09 [[Projects/舊句兩道轉擋_計劃]]〈照留表態〉] [因:表態要綁點出它的那份判定,判定換了要重新表態;取最新一筆會讓兩條分支各自表態後互相蓋掉] [不選:放進 _DRIFT_BOUND_KINDS 照 c2/c3 取 seq 最新] [test:t_drift_ack_reread_kind]
+diff --git a/scripts/lumos b/scripts/lumos
+index 3837cc0ef..464892bf6 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -40531,23 +40531,21 @@ def _android_plugin_missing(cmd, repo_root):
+     """這條命令宣告的外掛檔有沒有不在的:照 shell 的規則展開環境變數與 `~`(`os.path.expandvars`、`expanduser`),
+     相對路徑對 repo 根(新增告警閘以 repo 根當工作目錄跑命令);含反引號或萬用字元、展開後還有 `$`(變數沒設)
+     或大括號(`{p,q}.jar` 這類 shell 大括號展開,逗號切開後只剩半邊)的判不了、不算。"""
+     import os as _os
+     for raw in _detekt_plugin_values(cmd):
+         if any(ch in raw for ch in "`*?["):   # 命令替換與萬用字元要 shell 才算得出,判不了、不算
+             continue
+         pth = _os.path.expanduser(_os.path.expandvars(raw))
+         if any(ch in pth for ch in "${}"):   # 變數沒設、或 shell 的大括號展開:判不了、不算
+             continue
+-        pp = Path(pth)
+-        if not pp.is_absolute():
+-            pp = Path(repo_root) / pp
++        pp = _under_root(repo_root, pth)
+         if not pp.is_file():
+             return True
+     return False
+ 
+ 
+ def _lint_android_ci_advisories(config, repo_root):
+     """整份 lint 宣告的 Android 現成檢查提醒(字串清單)。A1、A2 看整個專案,寫成「[CI] 代號:一句」;A3 看單條命令,
+     寫成「[kt 第 N 條] A3:一句」(同 detekt 逐條提醒的標法,不回顯命令內容)。宣告不是物件、沒有 kt 棧、repo_root 是 None、
+     不是 Android 專案時回空清單。只看字面、不執行、不改退出碼;順序照 `_ANDROID_ADVICE_ORDER`。"""
+     if repo_root is None or not isinstance(config, dict):
+@@ -41157,23 +41155,21 @@ def _lint_wt_unready(repo_root):
+     if r is None:
+         return F, "git 跑不起來,查不出 HEAD"
+     if r.returncode == 1:
+         return D, "這個 repo 還沒有任何提交(沒有 HEAD),工作樹模式沒有基準可比"
+     if r.returncode != 0:
+         return F, f"git 查 HEAD 時出錯(退出碼 {r.returncode}),查不出基準,沒檢查"
+     for name, label in _LINT_WT_GIT_STATES:
+         g = _lint_wt_git(repo_root, "rev-parse", "--git-path", name)
+         if g is None or g.returncode != 0:
+             return F, f"git 算不出 {name} 的位置,查不出 repo 是不是正在{label}"
+-        p = Path(os.fsdecode(g.stdout).strip())
+-        if not p.is_absolute():
+-            p = Path(repo_root) / p
++        p = _under_root(repo_root, os.fsdecode(g.stdout).strip())
+         if p.exists():
+             return D, f"repo 正在{label}(有 {name}),這時的工作樹不是一個完整的版本,不檢查"
+     # 用 ls-tree 問:成功而且沒輸出才是「不在 HEAD」;cat-file -e 對「沒有這個路徑」與 git 出錯都回 128,分不開
+     c = _lint_wt_git(repo_root, "ls-tree", "-z", "HEAD", "--", ".lumos/lint.json")
+     if c is None or c.returncode != 0:
+         return F, "git 查不出宣告檔在不在 HEAD" + ("(跑不起來)" if c is None else f"(退出碼 {c.returncode})")
+     if not c.stdout.strip(b"\0"):
+         return D, "宣告檔不乾淨:.lumos/lint.json 不在 HEAD 裡(沒提交的宣告不自動執行)"
+     dirty = _lint_wt_changed(repo_root, _LINT_WT_DECL)
+     ign = _lint_wt_git(repo_root, "ls-files", "-o", "-i", "--exclude-standard", "-z", "--", *_LINT_WT_DECL)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index fddea96d0..665de859c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17143,20 +17143,21 @@ def t_lint_files_substitution_has_one_implementation():
+                 return True
+         return False
+ 
+     # ★改成白名單制★(r2 修正差異席):上一版只找「直接把佔位符當參數丟給 replace」的呼叫,
+     # 而 r1 明明示範過「先賦值給變數再用」這招——實測它完全沒防住,我卻在註解裡寫了
+     # 「拿變數繞也擋得住」。這是同一個毛病第三次:把守衛的能力講得比實際寬。
+     # 白名單制不看你怎麼寫,只看★哪些函式碰得到這個佔位符★:名單外的函式只要提到它就紅,
+     # 逼人當場說明為什麼要碰。
+     ALLOWED = {
+         "_lint_cmd_with_files",   # 唯一准做替換的那支
++        "_lint_placeholder_words",  # 佔位符 → 詞的共用核心(回合結束檢查代碼審 r2 架構對齊 F1:shell 字串版與參數清單版原本各寫一份相對路徑改寫,收成這一支);只算詞、不做替換
+         "_lint_gate_covers",      # 只做「這條命令有沒有檔案佔位符(哪一種)」的判斷;新增告警閘、執行入口「沒換掉就別跑」、
+                                   # 冒煙、規則索引、風險分級、detekt 宣告判定全部共用這一支
+                                   # (2026-11-04 [[Projects/Android的detekt規則說實話_計劃]] 抽出;2026-11-06 多認逗號佔位符時,
+                                   # 原本各自比字面的執行入口、冒煙、規則索引三處改呼叫它,所以從名單拿掉——兩種佔位符要認的地方只剩一份)
+         "_lint_csv_quoted_alone",  # 只判「逗號佔位符被一對引號單獨包住」這個宣告格式問題(lint-check 記成格式問題);不做替換
+                                   # (2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5 最後一點)
+     }
+     touchers = {}
+     for fn in _ast.walk(tree):
+         if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+@@ -30107,47 +30108,71 @@ def t_prepush_new_branch_block_range():
+     tip = g("rev-parse", "HEAD").stdout.strip()
+     rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+     check("①新分支首推、只多一個乾淨提交:放行(主線上的高風險寫法不算這次的)", rc == 0, out[-800:])
+     # ②分支自己的提交帶高風險寫法 → 照擋
+     (d / "svc.py").write_text(_FP_HIGH)
+     g("add", "svc.py")
+     g("commit", "-qm", "high on feat")
+     tip2 = g("rev-parse", "HEAD").stdout.strip()
+     rc, out = _fp_hook(d, f"refs/heads/feat {tip2} refs/heads/feat {zero}\n")
+     check("②分支自己帶高風險寫法:照擋", rc == 1, out[-800:])
++    print("  ✓ t_prepush_new_branch_block_range")
++
++
++def t_prepush_newbranch_merged_tip():
++    """[新分支首推 S3] 從 t_prepush_new_branch_block_range 拆出(2026-11-07:原本一支七組情境在 CI 上逾時 180 秒):
++    合過主線只算分支自己的、放行。翻紅釘:掛鉤不呼叫 push-range → ③紅。"""
++    print("t_prepush_newbranch_merged_tip")
++    zero = "0" * 40
+     # ③合過主線(主線在分岔後又多了高風險提交)再首推:只算分支自己的乾淨提交 → 放行
+     d, g = _fp_repo()
+     g("checkout", "-qb", "feat")
+     (d / "notes.md").write_text("docs only\n")
+     g("add", "notes.md")
+     g("commit", "-qm", "docs")
+     g("checkout", "-q", "main")
+     (d / "more.py").write_text(_FP_HIGH)
+     g("add", "more.py")
+     g("commit", "-qm", "more high on main")
+     g("push", "-q", "--no-verify", "origin", "main")
+     g("fetch", "-q", "origin")
+     g("checkout", "-q", "feat")
+     g("merge", "-q", "--no-edit", "main")
+     tip = g("rev-parse", "HEAD").stdout.strip()
+     rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+     check("③合過主線再首推:只算分支自己的、放行", rc == 0, out[-800:])
++    print("  ✓ t_prepush_newbranch_merged_tip")
++
++
++def t_prepush_newbranch_tip_on_main():
++    """[新分支首推 S4、S5] 從 t_prepush_new_branch_block_range 拆出:頂端已在主線放行;遠端舊值找不到、推標籤照舊空樹。
++    翻紅釘:掛鉤不呼叫 push-range → ④紅。"""
++    print("t_prepush_newbranch_tip_on_main")
++    zero = "0" * 40
+     # ④頂端已整段在主線上(把 main 推到新名字):放行
+     d, g = _fp_repo()
+     tip = g("rev-parse", "HEAD").stdout.strip()
+     rc, out = _fp_hook(d, f"refs/heads/copy {tip} refs/heads/copy {zero}\n")
+     check("④頂端已在主線:放行", rc == 0, out[-800:])
+     # ⑤遠端舊值本機找不到、推標籤:照舊從空樹算(主線那支高風險檔照算 → 分支擋、標籤只提醒)
+     rc, out = _fp_hook(d, f"refs/heads/copy {tip} refs/heads/copy {'1' * 40}\n")
+     check("⑤遠端舊值本機找不到:照舊空樹,擋", rc == 1, out[-600:])
+     rc, out = _fp_hook(d, f"refs/tags/v1 {tip} refs/tags/v1 {zero}\n")
+     check("⑤推標籤:照舊空樹,只提醒放行", rc == 0 and "advisory" in out, out[-600:])
++    print("  ✓ t_prepush_newbranch_tip_on_main")
++
++
++def t_prepush_newbranch_range_fallback():
++    """[新分支首推 S6] 從 t_prepush_new_branch_block_range 拆出:push-range 失敗退回空樹並講一句,被訊號殺掉停下。
++    翻紅釘:退回不講 → ⑥紅;不走 pp_stop_if_signaled → ⑦紅。"""
++    print("t_prepush_newbranch_range_fallback")
++    zero = "0" * 40
+     # ⑥push-range 不存在或失敗:退回空樹(同改之前)並講一句
+     wrap = ("#!/usr/bin/env python3\nimport sys, subprocess, os, signal\n"
+             "if len(sys.argv) > 1 and sys.argv[1] == 'push-range':\n"
+             "    if os.environ.get('FP_SIG'):\n        os.kill(os.getpid(), signal.SIGTERM)\n"
+             "    print('擋下:沒有「push-range」這個指令。', file=sys.stderr); sys.exit(2)\n"
+             "sys.exit(subprocess.run([sys.executable, '@REAL@', *sys.argv[1:]]).returncode)\n")
+     d, g = _fp_repo(lumos_wrapper=wrap)
+     g("checkout", "-qb", "feat")
+     (d / "notes.md").write_text("docs only\n")
+     g("add", "notes.md")
+@@ -30157,21 +30182,21 @@ def t_prepush_new_branch_block_range():
+     check("⑥push-range 失敗:退回空樹(主線高風險照算 → 擋)、講一句、不印它的錯誤文字",
+           rc == 1 and "新分支首推的起點沒算出來,照舊從空樹比" in out and "沒有「push-range」這個指令" not in out, out[-800:])
+     # ⑦push-range 被訊號殺掉:停下
+     import os as _os
+     _os.environ["FP_SIG"] = "1"
+     try:
+         rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
+     finally:
+         _os.environ.pop("FP_SIG", None)
+     check("⑦push-range 被訊號殺掉:停下、回那個回傳碼", rc >= 128 and "被中斷" in out, f"rc={rc} {out[-400:]}")
+-    print("  ✓ t_prepush_new_branch_block_range")
++    print("  ✓ t_prepush_newbranch_range_fallback")
+ 
+ 
+ def t_push_range_cli():
+     """[新分支首推 S7] lumos push-range:頂端已在主線 → 頂端..頂端;找得到分岔點 → 分岔點..頂端;判不了 → 這個 repo 的空樹..頂端;
+     SHA-256 repo 找不到主線 → SHA-256 空樹;少帶 --push-remote 或 --pushed-ref → rc2。
+     翻紅釘:判不了照印 _PUSH_START_UNKNOWN → ③紅;空樹寫死 SHA-1 → ④紅。"""
+     print("t_push_range_cli")
+     import subprocess as _sp, io, contextlib
+     zero = "0" * 40
+ 

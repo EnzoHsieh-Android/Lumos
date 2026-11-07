@@ -1,0 +1,55 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 665de859c..40a566995 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -17143,21 +17143,21 @@ def t_lint_files_substitution_has_one_implementation():
+                 return True
+         return False
+ 
+     # ★改成白名單制★(r2 修正差異席):上一版只找「直接把佔位符當參數丟給 replace」的呼叫,
+     # 而 r1 明明示範過「先賦值給變數再用」這招——實測它完全沒防住,我卻在註解裡寫了
+     # 「拿變數繞也擋得住」。這是同一個毛病第三次:把守衛的能力講得比實際寬。
+     # 白名單制不看你怎麼寫,只看★哪些函式碰得到這個佔位符★:名單外的函式只要提到它就紅,
+     # 逼人當場說明為什麼要碰。
+     ALLOWED = {
+         "_lint_cmd_with_files",   # 唯一准做替換的那支
+-        "_lint_placeholder_words",  # 佔位符 → 詞的共用核心(回合結束檢查代碼審 r2 架構對齊 F1:shell 字串版與參數清單版原本各寫一份相對路徑改寫,收成這一支);只算詞、不做替換
++        "_lint_placeholder_words",  # 2026-11-07 [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 佔位符 → 詞的共用核心(代碼審 r2 架構對齊 F1:shell 字串版與參數清單版原本各寫一份相對路徑改寫,收成這一支);只算詞、不做替換
+         "_lint_gate_covers",      # 只做「這條命令有沒有檔案佔位符(哪一種)」的判斷;新增告警閘、執行入口「沒換掉就別跑」、
+                                   # 冒煙、規則索引、風險分級、detekt 宣告判定全部共用這一支
+                                   # (2026-11-04 [[Projects/Android的detekt規則說實話_計劃]] 抽出;2026-11-06 多認逗號佔位符時,
+                                   # 原本各自比字面的執行入口、冒煙、規則索引三處改呼叫它,所以從名單拿掉——兩種佔位符要認的地方只剩一份)
+         "_lint_csv_quoted_alone",  # 只判「逗號佔位符被一對引號單獨包住」這個宣告格式問題(lint-check 記成格式問題);不做替換
+                                   # (2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5 最後一點)
+     }
+     touchers = {}
+     for fn in _ast.walk(tree):
+         if not isinstance(fn, (_ast.FunctionDef, _ast.AsyncFunctionDef)):
+@@ -30087,23 +30087,24 @@ def _fp_hook(d, stdin):
+     import subprocess as _sp, os as _os
+     hook = str(Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push")
+     env = dict(_os.environ)
+     env["GIT_DIR"] = str(d / ".git")
+     env.pop("LUMOS_SKIP_DRIFT_CHECK", None)
+     r = _sp.run(["bash", hook, "origin", "x"], cwd=str(d), input=stdin, capture_output=True, text=True, env=env)
+     return r.returncode, r.stdout + r.stderr
+ 
+ 
+ def t_prepush_new_branch_block_range():
+-    """[新分支首推 S1 到 S6] 推分支的新分支首推(遠端舊值全零)改用 lumos push-range 算的起點:主線上的舊高風險寫法不算這次的;
+-    分支自己的高風險照擋;合過主線只算分支自己的;頂端已在主線放行;一般增量、舊值找不到、推標籤照舊;push-range 失敗退回空樹並講一句,
+-    被訊號殺掉停下。翻紅釘:掛鉤不呼叫 push-range(照舊空樹)→ ①③④紅;退回不講 → ⑥紅;不走 pp_stop_if_signaled → ⑦紅。"""
++    """[新分支首推 S1、S2] 推分支的新分支首推(遠端舊值全零)改用 lumos push-range 算的起點:主線上的舊高風險寫法不算這次的;
++    分支自己的高風險照擋。翻紅釘:掛鉤不呼叫 push-range(照舊空樹)→ ①紅。
++    2026-11-07 原本一支七組情境在 CI 上逾時 180 秒,③ 搬到 t_prepush_newbranch_merged_tip、④⑤ 搬到 t_prepush_newbranch_tip_on_main、
++    ⑥⑦ 搬到 t_prepush_newbranch_range_fallback(判準不變)。"""
+     print("t_prepush_new_branch_block_range")
+     zero = "0" * 40
+     # ①只多一個乾淨提交的新分支:主線那支高風險檔不算 → 放行
+     d, g = _fp_repo()
+     g("checkout", "-qb", "feat")
+     (d / "notes.md").write_text("docs only\n")
+     g("add", "notes.md")
+     g("commit", "-qm", "docs")
+     tip = g("rev-parse", "HEAD").stdout.strip()
+     rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
