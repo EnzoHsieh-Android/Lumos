@@ -1,0 +1,1451 @@
+diff --git a/skills/kotlin-idioms/test-templates.md b/skills/kotlin-idioms/test-templates.md
+index d4615081e..d401ff862 100644
+--- a/skills/kotlin-idioms/test-templates.md
++++ b/skills/kotlin-idioms/test-templates.md
+@@ -1,21 +1,21 @@
+ # Kotlin 行為測試範本
+ 
+-型錄 [`checks-catalog.md`](checks-catalog.md) 裡級含 C 的列,是「長相看不出錯、要跑起來才知道」的寫法。這份檔替其中在電腦 JVM 上就跑得動的列放測試範本:每組一節,附「好寫法綠、壞寫法紅」的對照,每一格都在純 JVM Gradle 專案實跑過(結果見驗證紀錄 `Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑`(圖譜))。單源=[[Projects/Android行為測試範本與架構測試_計劃]]。
++型錄 [`checks-catalog.md`](checks-catalog.md) 裡級含 C 的列,是「長相看不出錯、要跑起來才知道」的寫法。這份檔替其中在電腦 JVM 上就跑得動的列放測試範本:每組一節,附「好寫法綠、壞寫法紅」的對照,T0–T5 每一格都在純 JVM Gradle 專案實跑過(結果見驗證紀錄 `Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑`(圖譜));T6–T13 是要 Android 模組的組(模擬器、Robolectric、架構測試),每一格在 Android 實驗專案與模擬器 `kds_bench`(API 34)實跑過(結果見驗證紀錄 `Verification/2026-11-06_Android儀器測試範本與架構測試實跑`(圖譜))。單源=[[Projects/Android行為測試範本與架構測試_計劃]]、[[Projects/Android儀器測試範本與架構測試_計劃]]。
+ 
+ ## 怎麼用
+ 
+ 1. 在型錄找到那一列,看「通電批次」欄寫的 `行為測試或正向約束=範本 T<n>`。
+-2. 到這份檔的 `## T<n>` 那一節。〈依據〉是每列的官方出處;〈依賴〉是要加進 `dependencies { }` 的行(版本跟專案實際解析到的對齊:先跑 `./gradlew :<模組>:dependencies --configuration <變體>RuntimeClasspath` 看,見測試品質標準〈Android 本機單元測試的驗收標準〉「加測試函式庫前看實際版本」)。
++2. 到這份檔的 `## T<n>` 那一節。〈依據〉是每列的官方出處;〈依賴〉是要加進 `dependencies { }` 的行(版本跟專案實際解析到的對齊:先跑 `./gradlew :<模組>:dependencies --configuration <變體>RuntimeClasspath` 看,見測試品質標準〈Android 本機單元測試的驗收標準〉「加測試函式庫前看實際版本」)。T6–T13 照〈Android 實驗專案骨架〉的專案形狀;Robolectric 組(T7–T9、T11)要連〈依賴〉裡的 `robolectric.properties` 一起抄。
+ 3. 照抄〈測試〉與〈假依賴〉,類別名、介面名換成專案自己的;〈假依賴〉放 `src/test`。同組有互斥版本的(標題寫「測試:<版本名>」),照那段程式的情境表態答案只留一個版本。
+ 4. 照抄的測試檔第一行留 `// 起手:kotlin-idioms test-templates T<n>`(之後要數有多少測試照範本起手)。
+-5. 在自己的專案跑一次,綠了才算;再照「故障證明挑本次需求」那條,把被測程式改成這一節〈壞寫法〉的樣子,確認對應的測試翻成**斷言紅**(不是例外或逾時紅,收證工具只把斷言失敗算成抓到錯)。
++5. 在自己的專案跑一次,綠了才算(T6、T10 與標「只在模擬器」的小節要開模擬器跑);再照「故障證明挑本次需求」那條,把被測程式改成這一節〈壞寫法〉的樣子,確認對應的測試翻成**斷言紅**(不是例外或逾時紅,收證工具只把斷言失敗算成抓到錯)。
+ 
+ 〈好寫法〉與〈壞寫法〉是實驗用的被測程式,不是要照抄進專案的東西;它們讓你看清楚這支測試抓的是哪一種錯。
+ 
+ **兩個所有組都適用的坑**(實驗踩到的):
+ 
+ - `backgroundScope` 裡的工作,`advanceUntilIdle()` 不會推:它只推到「前景」沒有工作為止。要讓 `backgroundScope` 裡的協程跑起來,用 `runCurrent()`(只跑現在這一刻的)或 `advanceTimeBy()`。
+ - Turbine 自己的檢查(`awaitItem()`、`awaitEvent()`、`awaitComplete()`、`awaitError()`、`skipItems()`、`expectNoEvents()`、`expectMostRecentItem()`、`ensureAllEventsConsumed()`、`takeItem()`/`takeEvent()`/`takeComplete()`/`takeError()`,以及 `test {}` 區塊結束時的 Unconsumed events;依 Turbine 1.2.1 原始碼 `channel.kt`、`ReceiveTurbine.kt`、`flow.kt` 列全)失敗時丟 `app.cash.turbine.TurbineAssertionError`;它雖然是 `AssertionError` 的子類別,收證工具 `lumos test-quality` 照型別名判,不算成斷言失敗。`awaitItem()`、`awaitEvent()` 等不到值時,3 秒後也丟同一個型別(`No value produced in 3s`)——所以「壞寫法少發一筆」也不會被算成抓到錯。範本的做法:每個 `test {}` 區塊先把虛擬時間推到靜止(`advanceUntilIdle()`;被測的流會掛起時少了這步,事件還沒發完就被取走,正確程式也會紅),再用 `cancelAndConsumeRemainingEvents()` 一次取出全部事件,用 `assertEquals`/`assertIs` 比。
+ - 有限的冷流(例如 `flow { emit(a); emit(b) }`)收完值之後還有一個 `Complete` 事件:型錄 TEST-18 寫的「結尾 `expectNoEvents()`」在這種流上對正確程式也會紅(`Expected no events but found Complete`);有限流要把 `Event.Complete` 當成最後一筆一起比,`expectNoEvents()` 只用在熱流。
+ - 範本的狀態類別用 `data object`(Kotlin 1.9 起才有);專案的 Kotlin 早於 1.9 時改成 `object` 並自己寫 `toString()`,不然斷言失敗訊息只印雜湊值。
+ - 會丟例外的壞寫法,測試先用 `runCatching { … }` 接住,再用斷言比結果;直接讓例外飛出去,紅的是例外紅,收證不算。
+@@ -46,20 +46,94 @@ repositories {
+ kotlin { jvmToolchain(17) }
+ 
+ dependencies {
+     testImplementation(kotlin("test"))
+     // 各組〈依賴〉的行貼在這裡
+ }
+ 
+ tasks.test { useJUnit() }
+ ```
+ 
++## Android 實驗專案骨架
++
++T6–T13 要 Android 模組(T6、T10 與 T7、T9 各一個小節要模擬器;T7–T9、T11 用 Robolectric;T12、T13 是 Android 模組的本機單元測試)。照下面幾個檔組一個 Android app 專案(Gradle 8.13、JDK 17、AGP 8.13.2、Kotlin 2.2.21;專案根目錄要有 Gradle wrapper,T13 的 Konsist 靠它找專案根,見 T13 節開頭),把某一組〈依賴〉的行貼進 `app/build.gradle.kts` 的 `dependencies { }`;〈依賴〉裡另有第一行標「plugins { } 加」「android { } 加」「檔尾」的圍欄,照標的位置貼(例:用到 Compose 的組要加 Compose 編譯器外掛與 `buildFeatures { compose = true }`;沒有 Compose runtime 卻開了外掛,編譯時 `IncompatibleComposeRuntimeVersionException`)。〈測試〉與〈假依賴〉放哪個資料夾看那一節開頭的「跑在哪」:Robolectric 與本機單元測試放 `app/src/test/kotlin`,模擬器放 `app/src/androidTest/kotlin`;被測程式放 `app/src/main/kotlin`,組法同〈實驗專案骨架〉。
++
++版本是 AGP 8.13.2(最高 compileSdk 36)能用的最新穩定版:Compose BOM 2026.06.01(Compose 1.11)、lifecycle 2.10.0、navigation 2.9.8;再新的 Compose 1.12、lifecycle 2.11、navigation 2.10 要 compileSdk 37 與 AGP 9.1,`checkDebugAarMetadata` 會擋(2026-11-06 實測)。
++
++```kotlin
++// settings.gradle.kts
++pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
++dependencyResolutionManagement { repositories { google(); mavenCentral() } }
++rootProject.name = "kotlin-idioms-android-lab"
++include(":app")
++```
++
++```kotlin
++// build.gradle.kts
++plugins {
++    id("com.android.application") version "8.13.2" apply false
++    id("org.jetbrains.kotlin.android") version "2.2.21" apply false
++    id("org.jetbrains.kotlin.plugin.compose") version "2.2.21" apply false
++}
++```
++
++```properties
++# gradle.properties
++android.useAndroidX=true
++```
++
++```kotlin
++// app/build.gradle.kts
++plugins {
++    id("com.android.application")
++    id("org.jetbrains.kotlin.android")
++}
++
++android {
++    namespace = "com.example.lab"
++    compileSdk = 36
++    defaultConfig {
++        applicationId = "com.example.lab"
++        minSdk = 24
++        targetSdk = 36   // 不寫的話 Robolectric 改用 minSdk(SDK 24)跑,跟模擬器 API 34 不同級
++        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
++    }
++    testOptions.unitTests.isIncludeAndroidResources = true   // Robolectric 要讀資源與 manifest
++    compileOptions {
++        sourceCompatibility = JavaVersion.VERSION_17
++        targetCompatibility = JavaVersion.VERSION_17
++    }
++}
++
++kotlin { jvmToolchain(17) }
++
++dependencies {
++    testImplementation("junit:junit:4.13.2")
++    testImplementation(kotlin("test"))
++    androidTestImplementation("androidx.test.ext:junit:1.3.0")
++    androidTestImplementation("androidx.test:runner:1.7.0")
++    // 各組〈依賴〉的行貼在這裡
++}
++```
++
++```properties
++# app/src/test/resources/robolectric.properties
++sdk=34
++```
++
++`sdk=34` 為什麼要寫:Robolectric 預設用 `targetSdk` 那一級跑,targetSdk 36 時要 JDK 21,在 JDK 17 上整個測試類別例外紅「Android SDK 36 requires Java 21 (have Java 17)」;釘 34 跟模擬器 `kds_bench`(API 34)同級。專案用 JDK 21 跑測試時可以拿掉。
++
++跑法:
++
++- Robolectric 與本機單元測試:`./gradlew :app:testDebugUnitTest --tests '<完整類名>'`,XML 在 `app/build/test-results/testDebugUnitTest/`。
++- 模擬器:`ANDROID_SERIAL=<模擬器> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=<完整類名>`,XML 在 `app/build/outputs/androidTest-results/connected/debug/<裝置名>/`。儀器報告的 XML 沒有例外型別,收證看第一行是不是 `java.lang.AssertionError`、堆疊裡有沒有 `org.junit.Assert` 的斷言框;所以模擬器上的〈測試〉一律用 `org.junit.Assert` 的斷言。
++
+ ## T0 測試骨架守則
+ 
+ 型錄列:TEST-4、TEST-5、TEST-6、TEST-7、TEST-9、TEST-14、TEST-17、TEST-18、TEST-19、TEST-20。矩陣是「好測試 vs 壞測試 × 正確程式 vs 埋錯程式」:〈測試〉對正確程式全綠、對埋錯程式只紅點名那支;〈壞測試:…〉示範錯的測試寫法對正確程式錯紅、卡住或錯綠。
+ 
+ ### 依據
+ 
+ - TEST-4、TEST-14:https://developer.android.com/kotlin/coroutines/test 「advanceUntilIdle: Runs all other coroutines on the scheduler until there is nothing left in the queue. This is a good default choice」「this doesn't mean that it'll run them to completion eagerly」
+ - TEST-9:同上頁「In tests, replace real dispatchers with instances of TestDispatchers」
+ - `MainDispatcherRule` 明傳 `StandardTestDispatcher()`:nowinandroid `core/testing` 的同名類別預設 `UnconfinedTestDispatcher()`(https://github.com/android/nowinandroid/blob/main/core/testing/src/main/kotlin/com/google/samples/apps/nowinandroid/core/testing/util/MainDispatcherRule.kt),照抄預設會讓〈壞測試:TEST-4 規則用預設 Unconfined〉照綠;測試品質標準〈Android 本機單元測試的驗收標準〉「預設用 `StandardTestDispatcher`」
+ - TEST-5、TEST-17:https://developer.android.com/kotlin/flow/test 「backgroundScope … ensures that the coroutine gets cancelled before the end of the test」
+@@ -2422,27 +2496,30 @@ class SearchFormViewModel(private val handle: SavedStateHandle) : ViewModel() {
+ | 測試 | 好寫法:STATE-6 用 setSavedStateProvider | query_survives_process_death 斷言紅「expected:<[kotlin]> but was:<[]>」;其他綠 |
+ | 測試:viewModelScenario 版 | 好寫法 | 全綠:query_survives_recreate、pending_scan_survives_recreate |
+ | 測試:viewModelScenario 版 | 壞寫法:STATE-6 輸入只放記憶體 | query_survives_recreate 斷言紅「expected:<[kotlin]> but was:<[]>」;其他綠 |
+ | 測試:viewModelScenario 版 | 壞寫法:STATE-26 待處理 id 放一般欄位 | pending_scan_survives_recreate 斷言紅「expected:<A-42:QR123> but was:<null>」;其他綠 |
+ | 測試:viewModelScenario 版 | 好寫法:STATE-6 用 setSavedStateProvider | 全綠:query_survives_recreate、pending_scan_survives_recreate |
+ 
+ 讀法:〈測試〉對〈好寫法:STATE-6 用 setSavedStateProvider〉紅,是這一版**不涵蓋**的寫法(誤紅),不是那段程式錯;用提供者存狀態的專案改用 viewModelScenario 版。〈測試〉的四格另在 Android library 模組(AGP 8.13.2、compileSdk 36、`testDebugUnitTest`,沒開 `isReturnDefaultValues`)跑過,結果同上;viewModelScenario 版的四格在那裡全部例外紅,所以它只標純 JVM 與 KMP。
+ 
+ ## T4 HTTP 邊界
+ 
+-型錄列:API-21、API-26。真的 OkHttp/Retrofit 打本機 MockWebServer。MockWebServer 照專案實際解析到的 OkHttp 主版本挑:OkHttp 4 用〈依賴:OkHttp 4〉與〈測試:OkHttp 4〉,OkHttp 5 用〈依賴:OkHttp 5〉與〈測試:OkHttp 5〉,兩份測試只差 import 與排回應的寫法。不要讓 OkHttp 4 的專案配 `mockwebserver3`:Gradle 會在測試的類別路徑上默默把 OkHttp 升成 5(測試綠,但測的不是正式用的版本);用 `strictly` 釘住 4.12.0 時每支測試都 `NoClassDefFoundError: okhttp3/internal/_UtilJvmKt`(實驗實測)。走真的 socket,不在 `runTest` 的虛擬時間裡用 `withTimeout`(虛擬時間遇到真實 I/O 會直接跳到逾時點);要等真實時間就包進 `withContext(Dispatchers.Default)`。
++型錄列:API-21、API-26、API-30。真的 OkHttp/Retrofit 打本機 MockWebServer;API-30 是 Ktor 用戶端,只有用 Ktor 的專案照抄〈依賴:Ktor〉〈測試:Ktor〉(見下)。MockWebServer 照專案實際解析到的 OkHttp 主版本挑:OkHttp 4 用〈依賴:OkHttp 4〉與〈測試:OkHttp 4〉,OkHttp 5 用〈依賴:OkHttp 5〉與〈測試:OkHttp 5〉,兩份測試只差 import 與排回應的寫法。不要讓 OkHttp 4 的專案配 `mockwebserver3`:Gradle 會在測試的類別路徑上默默把 OkHttp 升成 5(測試綠,但測的不是正式用的版本);用 `strictly` 釘住 4.12.0 時每支測試都 `NoClassDefFoundError: okhttp3/internal/_UtilJvmKt`(實驗實測)。走真的 socket,不在 `runTest` 的虛擬時間裡用 `withTimeout`(虛擬時間遇到真實 I/O 會直接跳到逾時點);要等真實時間就包進 `withContext(Dispatchers.Default)`。
++
++API-30(Ktor 串流回應帶出 `execute { }` 區塊)那一份:真的 Ktor 用戶端(CIO 引擎)打 JDK 內建的 `com.sun.net.httpserver.HttpServer`,不用 MockWebServer——測試不碰 OkHttp,跟〈依賴:OkHttp 4〉或〈依賴:OkHttp 5〉放在同一個專案都照跑(兩種組合實跑過)。壞寫法讀 body 時丟 `ClosedByteChannelException: Channel was cancelled`,測試先 `runCatching` 接住,再斷言讀到的位元組數。Ktor 3.6.1 在 Kotlin 2.2.21 編得過。
+ 
+ ### 依據
+ 
+ - MockWebServer:https://github.com/square/okhttp/tree/master/mockwebserver(README 的依賴行 `com.squareup.okhttp3:mockwebserver3`;OkHttp 4 對應的是 `com.squareup.okhttp3:mockwebserver`,套件 `okhttp3.mockwebserver`)
+ - API-21:OkHttp `Authenticator` 原始碼 KDoc「Returns null if the challenge cannot be satisfied」,範例 `while ((response = response.priorResponse()) != null)` 與「Give up, we've already failed to authenticate.」(https://github.com/square/okhttp/blob/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/Authenticator.kt);加鎖那一半照型錄 API-21 標準寫法 `mutex.withLock { if (token 已被別人刷新) 用新的 else refresh() }`(出處不全,KDoc 沒提並行);範本改用 `synchronized` 是旁證:`authenticate(route: Route?, response: Response): Request?` 是一般函式、不是 suspend(同一份原始碼的方法簽名),在它裡面用不了 `Mutex.withLock`
+ - API-26:Retrofit 對 204/205 不呼叫轉換器、body 是 null;型錄 API-26 標準寫法 `Response<Unit>`(出處不全)
++- API-30:https://api.ktor.io/ktor-client-core/io.ktor.client.statement/-http-statement/execute.html 「The response object should not be accessed outside of block as it will be canceled upon block completion」
+ 
+ ### 依賴:OkHttp 4
+ 
+ ```kotlin
+ implementation("com.squareup.okhttp3:okhttp:4.12.0")
+ implementation("com.squareup.retrofit2:retrofit:3.0.0")
+ implementation("com.squareup.retrofit2:converter-kotlinx-serialization:3.0.0")
+ implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+ testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+ testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+@@ -2452,20 +2529,29 @@ testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+ 
+ ```kotlin
+ implementation("com.squareup.okhttp3:okhttp:5.5.1")
+ implementation("com.squareup.retrofit2:retrofit:3.0.0")
+ implementation("com.squareup.retrofit2:converter-kotlinx-serialization:3.0.0")
+ implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+ testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
+ testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+ ```
+ 
++### 依賴:Ktor
++
++只有用 Ktor 的專案加;跟〈依賴:OkHttp 4〉或〈依賴:OkHttp 5〉並存。
++
++```kotlin
++implementation("io.ktor:ktor-client-cio:3.6.1")
++testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
+ ### 測試:OkHttp 4
+ 
+ ```kotlin
+ // 起手:kotlin-idioms test-templates T4
+ import java.util.concurrent.CountDownLatch
+ import java.util.concurrent.Executors
+ import java.util.concurrent.TimeUnit
+ import kotlin.test.assertEquals
+ import kotlin.test.assertTrue
+ import kotlinx.coroutines.test.runTest
+@@ -2624,20 +2710,57 @@ class HttpBoundaryTest {
+             .baseUrl(server.url("/"))
+             .addConverterFactory(Json.asConverterFactory("application/json".toMediaType()))
+             .build()
+             .create(CartService::class.java)
+         val r = runCatching { CartRepository(service).remove("42") }
+         assertEquals(true, r.getOrNull(), "204 要算成功,實際:$r")
+     }
+ }
+ ```
+ 
++### 測試:Ktor
++
++```kotlin
++// 起手:kotlin-idioms test-templates T4
++// API-30:Ktor 串流回應要在 execute { } 區塊裡讀完;打 JDK 內建的 HttpServer,不碰 OkHttp
++import com.sun.net.httpserver.HttpServer
++import io.ktor.client.HttpClient
++import io.ktor.client.engine.cio.CIO
++import java.net.InetAddress
++import java.net.InetSocketAddress
++import kotlin.test.assertEquals
++import kotlinx.coroutines.runBlocking
++import org.junit.Test
++
++class FileDownloaderTest {
++    private val size = 2_000_000   // 大到一次讀不完,壞寫法才會讀到被取消的串流
++
++    @Test
++    fun download_reads_whole_body() = runBlocking {
++        val server = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
++        server.createContext("/file") { ex ->
++            ex.sendResponseHeaders(200, size.toLong())
++            ex.responseBody.use { it.write(ByteArray(size) { 'x'.code.toByte() }) }
++        }
++        server.start()
++        try {
++            HttpClient(CIO).use { client ->
++                val got = runCatching { FileDownloader(client).download("http://127.0.0.1:${server.address.port}/file") }
++                assertEquals(size, got.getOrNull()?.size, "讀到的 body 不完整:${got.exceptionOrNull()}")
++            }
++        } finally {
++            server.stop(0)
++        }
++    }
++}
++```
++
+ ### 假依賴
+ 
+ ```kotlin
+ import java.util.concurrent.atomic.AtomicInteger
+ 
+ class FakeTokenStore : TokenStore {
+     @Volatile
+     private var token = "token-0"
+     val refreshes = AtomicInteger()
+ 
+@@ -2837,34 +2960,63 @@ interface CartService {
+ }
+ 
+ class CartRepository(private val service: CartService) {
+     suspend fun remove(id: String): Boolean {
+         service.remove(id)
+         return true
+     }
+ }
+ ```
+ 
++### 好寫法:API-30 區塊內讀完
++
++```kotlin
++import io.ktor.client.HttpClient
++import io.ktor.client.request.prepareGet
++import io.ktor.client.statement.bodyAsBytes
++
++class FileDownloader(private val client: HttpClient) {
++    suspend fun download(url: String): ByteArray = client.prepareGet(url).execute { response -> response.bodyAsBytes() }
++}
++```
++
++### 壞寫法:API-30 response 帶出區塊
++
++```kotlin
++import io.ktor.client.HttpClient
++import io.ktor.client.request.prepareGet
++import io.ktor.client.statement.bodyAsBytes
++
++class FileDownloader(private val client: HttpClient) {
++    suspend fun download(url: String): ByteArray {
++        val response = client.prepareGet(url).execute { it }   // 區塊結束時串流就被取消
++        return response.bodyAsBytes()
++    }
++}
++```
++
+ ### 紅綠矩陣
+ 
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試:OkHttp 4 | 好寫法 | 全綠:refresh_gives_up_after_three_tries、concurrent_401s_refresh_once、delete_204_is_success |
+ | 測試:OkHttp 4 | 壞寫法:API-21 刷新沒有上限 | refresh_gives_up_after_three_tries 斷言紅「打了 21 次才停」;其他綠 |
+ | 測試:OkHttp 4 | 壞寫法:API-21 沒加鎖 | concurrent_401s_refresh_once 斷言紅「5 個並行 401 刷新了 5 次」;其他綠 |
+ | 測試:OkHttp 4 | 壞寫法:API-21 不刷新直接放棄 | concurrent_401s_refresh_once 斷言紅「5 個並行請求的狀態碼」;其他綠 |
+ | 測試:OkHttp 4 | 壞寫法:API-26 204 宣告成有 body | delete_204_is_success 斷言紅「204 要算成功」;其他綠 |
+ | 測試:OkHttp 5 | 好寫法 | 全綠:refresh_gives_up_after_three_tries、concurrent_401s_refresh_once、delete_204_is_success |
+ | 測試:OkHttp 5 | 壞寫法:API-21 刷新沒有上限 | refresh_gives_up_after_three_tries 斷言紅「打了 21 次才停」;其他綠 |
+ | 測試:OkHttp 5 | 壞寫法:API-21 沒加鎖 | concurrent_401s_refresh_once 斷言紅「5 個並行 401 刷新了 5 次」;其他綠 |
+ | 測試:OkHttp 5 | 壞寫法:API-21 不刷新直接放棄 | concurrent_401s_refresh_once 斷言紅「5 個並行請求的狀態碼」;其他綠 |
+ | 測試:OkHttp 5 | 壞寫法:API-26 204 宣告成有 body | delete_204_is_success 斷言紅「204 要算成功」;其他綠 |
++| 測試:Ktor | 好寫法:API-30 區塊內讀完 | 全綠:download_reads_whole_body |
++| 測試:Ktor | 壞寫法:API-30 response 帶出區塊 | download_reads_whole_body 斷言紅「讀到的 body 不完整」 |
+ 
+ 讀法:〈壞寫法:API-21 不刷新直接放棄〉只靠上限那支抓不到(它本來就該回 401),要靠並行那支的「都成功」。
+ 
+ ## T5 序列化契約
+ 
+ 型錄列:DATA-72、DATA-73、DATA-74。用專案正式的 `Json {}` 設定物件(範本用 `AppJson` 佔位)解碼、編碼伺服器可能回的 JSON;不在測試裡另建一個 `Json`,不然測的不是正式設定。
+ 
+ ### 依據
+ 
+ - DATA-72、DATA-73:https://kotlinlang.org/docs/serialization-json-configuration.html coerceInputValues 套用於「null inputs for non-nullable types」「unknown values for enums」
+@@ -3076,10 +3228,3197 @@ data class OrderRequest(
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試 | 好寫法 | 全綠:missing_or_null_name_still_decodes、unknown_status_becomes_unknown、default_quantity_is_sent |
+ | 測試 | 好寫法:DATA-72 可空加 null 預設 | 全綠:missing_or_null_name_still_decodes、unknown_status_becomes_unknown、default_quantity_is_sent |
+ | 測試 | 好寫法:DATA-74 整個 Json 開 encodeDefaults | 全綠:missing_or_null_name_still_decodes、unknown_status_becomes_unknown、default_quantity_is_sent |
+ | 測試 | 壞寫法:DATA-72 非可空欄位沒預設值 | missing_or_null_name_still_decodes 斷言紅「MissingFieldException」;其他綠 |
+ | 測試 | 壞寫法:DATA-73 列舉沒有 UNKNOWN | unknown_status_becomes_unknown 斷言紅「SerializationException」;其他綠 |
+ | 測試 | 壞寫法:DATA-74 預設值沒送出去 | default_quantity_is_sent 斷言紅「expected:<1> but was:<null>」;其他綠 |
+ | 測試 | 壞寫法:DATA-74 預設值寫錯 | default_quantity_is_sent 斷言紅「expected:<1> but was:<10>」;其他綠 |
+ | 測試 | 壞寫法:DATA-74 數量送成字串 | default_quantity_is_sent 斷言紅「expected:<1> but was:<"1">」;其他綠 |
++
++## T6 Room 與資料層
++
++型錄列:DATA-17、DATA-19、DATA-21、DATA-65、DATA-69。跑在哪:模擬器(`app/src/androidTest`;官方不建議用 Robolectric 跑 Room,電腦上的 SQLite 版本可能跟手機不同)。
++
++Room 3 已是穩定版,這一組寫兩份:〈依賴:Room 2〉配〈測試:Room 2〉、〈依賴:Room 3〉配〈測試:Room 3〉,照專案用的主版本挑一份。〈好寫法〉〈壞寫法〉是 Room 2 的寫法;Room 3 的專案改兩個地方(實驗就是這樣改了跑的):import 的 `androidx.room.` 換成 `androidx.room3.`、`Migration` 的 `migrate(connection: SQLiteConnection)` 加 `suspend`(Room 3 的 `Migration.migrate` 是 suspend)。
++
++- DATA-17、DATA-19:`MigrationTestHelper` 一律用具名參數寫(`instrumentation = …, file = …, driver = …, databaseClass = AppDb::class`)——官方參考頁的參數順序是 `instrumentation, file, driver, databaseClass`,混位置參數容易編不過。一支一步升級(`createDatabase(舊版)` 用原始 SQL 塞資料 → `runMigrationsAndValidate(新版, 這一步的 Migration)` → 查資料還在),另一支從最舊版用 `addMigrations(*ALL_MIGRATIONS)` 開到最新(官方「include a test that covers all migrations」)。少一個 Migration 丟 `IllegalStateException`、SQL 寫錯也是 `IllegalStateException`(`Migration didn't properly handle`),都 `runCatching` 後斷言。這一組管的是「升了版本卻少 Migration 或 Migration 寫錯」;「改了 Entity 卻沒升版本」由推送前的 Room 守衛(`lumos room-guard`,同一版本的結構檔被改)擋,這裡不另測。
++- 結構檔:`exportSchema = true`,Room Gradle 外掛(`room { schemaDirectory(…) }`,Room 3 是 `room3 { … }`)把每一版的結構寫到 `schemas/<資料庫類別完整名稱>/<版本>.json`,要提交進版控(舊版本的檔是專案歷史留下的,範本不附)。`MigrationTestHelper` 從 `androidTest` 的 assets 讀;Room Gradle 外掛自己會把結構檔目錄接成 androidTest 的 assets(`copyRoomSchemasToAndroidTestAssets…` 任務),不用再手動 `sourceSets["androidTest"].assets.srcDir(…)`(兩個主版本實測);沒用外掛、改用 KSP 參數 `room.schemaLocation` 的專案才要手動加。讀不到時丟 `FileNotFoundException: Cannot find the schema file in the assets folder … Missing file: AppDb/3.json`,被 `runCatching` 接住後是斷言紅、訊息帶這一句。
++- 坑:升版後**第一次**建置就跑 `connectedDebugAndroidTest`,新版本的 json 這一輪才產生、複製到 androidTest assets 的任務已經先跑完,`runMigrationsAndValidate` 找不到最新版的 json(上一句的錯誤);再跑一次就綠。所以升版時先建置一次、把新的 json 提交,再跑升級測試(兩個主版本實測)。
++- DATA-21 查 40000 個 id:SQLite 3.32.0 起參數上限 32766、之前 999,用 40000 讓新舊裝置都紅。壞寫法不分批,丟 `SQLiteException`(too many SQL variables),測試先 `runCatching` 接住再斷言查到的筆數;好寫法 `chunked(500)`。
++- DATA-69 假 API 丟 `IOException`,斷言刷新失敗後本機清單不變。
++- DATA-65 照型錄標準寫法「後寫贏」:本機有較新的修改時,較舊的伺服器資料不得蓋掉。衝突策略是業務決定,照情境表態換斷言。
++
++### 依據
++
++- DATA-17、DATA-19:https://developer.android.com/training/data-storage/room/migrating-db-versions 「an incorrectly defined migration can cause your app to crash」「you should include a test that covers all migrations」;缺路徑「an IllegalStateException occurs」;現版範例已是 `androidx.room3:room3-testing:3.0.3`
++- `MigrationTestHelper` 參數:https://developer.android.com/reference/kotlin/androidx/room/testing/MigrationTestHelper(`instrumentation, file, driver, databaseClass`)
++- Room 3 穩定:https://developer.android.com/jetpack/androidx/releases/room3(3.0.0 於 2026-07-01、3.0.3 於 2026-09-09)
++- 不用 Robolectric:https://developer.android.com/training/data-storage/room/testing-db 「We don't recommend Android local unit tests with Robolectric」「create an in-memory version of your database」
++- DATA-21:https://www.sqlite.org/limits.html 「defaults to 999 for SQLite versions prior to 3.32.0 (2020-05-22) or 32766 for SQLite versions after 3.32.0」
++- DATA-65、DATA-69:https://developer.android.com/topic/architecture/data-layer/offline-first;型錄 DATA-65(「last write wins」)、DATA-69(成功後才換)標準寫法
++
++### 依賴:Room 2
++
++```kotlin
++// build.gradle.kts 的 plugins { } 加
++id("com.google.devtools.ksp") version "2.2.21-2.0.5" apply false
++id("androidx.room") version "2.8.5" apply false
++```
++
++```kotlin
++// app/build.gradle.kts 的 plugins { } 加
++id("com.google.devtools.ksp")
++id("androidx.room")
++```
++
++```kotlin
++// app/build.gradle.kts 檔尾
++room { schemaDirectory("$projectDir/schemas") }
++```
++
++```kotlin
++implementation("androidx.room:room-runtime:2.8.5")
++ksp("androidx.room:room-compiler:2.8.5")
++androidTestImplementation("androidx.room:room-testing:2.8.5")
++androidTestImplementation("androidx.test:core-ktx:1.7.0")
++androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
++### 依賴:Room 3
++
++```kotlin
++// build.gradle.kts 的 plugins { } 加
++id("com.google.devtools.ksp") version "2.2.21-2.0.5" apply false
++id("androidx.room3") version "3.0.3" apply false
++```
++
++```kotlin
++// app/build.gradle.kts 的 plugins { } 加
++id("com.google.devtools.ksp")
++id("androidx.room3")
++```
++
++```kotlin
++// app/build.gradle.kts 檔尾
++room3 { schemaDirectory("$projectDir/schemas") }
++```
++
++```kotlin
++implementation("androidx.room3:room3-runtime:3.0.3")
++ksp("androidx.room3:room3-compiler:3.0.3")
++androidTestImplementation("androidx.room3:room3-testing:3.0.3")
++androidTestImplementation("androidx.test:core-ktx:1.7.0")
++androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
++### 測試:Room 2
++
++```kotlin
++// 起手:kotlin-idioms test-templates T6
++import androidx.room.Room
++import androidx.room.testing.MigrationTestHelper
++import androidx.sqlite.driver.AndroidSQLiteDriver
++import androidx.sqlite.execSQL
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import androidx.test.platform.app.InstrumentationRegistry
++import kotlinx.coroutines.runBlocking
++import org.junit.Assert.assertEquals
++import org.junit.Before
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class NoteMigrationTest {
++    private val instrumentation = InstrumentationRegistry.getInstrumentation()
++    private val file = instrumentation.targetContext.getDatabasePath("migration-test.db")
++
++    @get:Rule
++    val helper = MigrationTestHelper(
++        instrumentation = instrumentation,
++        file = file,
++        driver = AndroidSQLiteDriver(),
++        databaseClass = AppDb::class,
++    )
++
++    // 每支測試從沒有資料庫檔開始:上一支留下的第 3 版檔案會讓 createDatabase(舊版) 去找 3→2 的路徑
++    @Before
++    fun deleteOldFile() {
++        instrumentation.targetContext.deleteDatabase(file.name)
++    }
++
++    // DATA-19:一步一支,舊資料要還在
++    @Test
++    fun migrate_2_to_3_keeps_notes() {
++        helper.createDatabase(2).apply {
++            execSQL("INSERT INTO note (id, title, body) VALUES (1, '買牛奶', '兩瓶')")
++            close()
++        }
++        val result = runCatching {
++            helper.runMigrationsAndValidate(3, listOf(MIGRATION_2_3)).use { c ->
++                c.prepare("SELECT title, body, updatedAt FROM note WHERE id = 1").use { st ->
++                    st.step()
++                    listOf(st.getText(0), st.getText(1), st.getLong(2).toString())
++                }
++            }
++        }
++        assertEquals("升級後的資料:${result.exceptionOrNull()}", listOf("買牛奶", "兩瓶", "0"), result.getOrNull())
++    }
++
++    // DATA-17、DATA-19:從最舊版開到最新,讓 Room 驗每一步與最後的結構
++    @Test
++    fun open_latest_from_oldest_with_all_migrations() {
++        helper.createDatabase(1).apply {
++            execSQL("INSERT INTO note (id, title) VALUES (1, '買牛奶')")
++            close()
++        }
++        val result = runCatching {
++            val db = Room.databaseBuilder(instrumentation.targetContext, AppDb::class.java, file.path)
++                .setDriver(AndroidSQLiteDriver())
++                .addMigrations(*ALL_MIGRATIONS)
++                .build()
++            try { runBlocking { db.notes().all().map { it.title } } } finally { db.close() }
++        }
++        assertEquals("開到最新版:${result.exceptionOrNull()}", listOf("買牛奶"), result.getOrNull())
++    }
++}
++```
++
++```kotlin
++// 起手:kotlin-idioms test-templates T6
++import androidx.room.Room
++import androidx.sqlite.driver.AndroidSQLiteDriver
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlinx.coroutines.test.runTest
++import org.junit.After
++import org.junit.Assert.assertEquals
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class NoteRepositoryTest {
++    private val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), AppDb::class.java)
++        .setDriver(AndroidSQLiteDriver())
++        .build()
++
++    @After fun close() = db.close()
++
++    // DATA-69:刷新失敗時本機資料還在
++    @Test
++    fun refresh_failure_keeps_local_notes() = runTest {
++        db.notes().upsertAll(listOf(Note(1, "本機的")))
++        runCatching { NoteRepository(db, FakeNoteApi(fail = true)).refresh() }
++        assertEquals("刷新失敗後的本機清單", listOf("本機的"), db.notes().all().map { it.title })
++    }
++
++    // DATA-65:後寫贏,較舊的伺服器資料不蓋掉本機較新的修改
++    @Test
++    fun older_server_copy_does_not_overwrite_newer_local_edit() = runTest {
++        db.notes().upsertAll(listOf(Note(1, "我剛改的", updatedAt = 200), Note(2, "舊標題", updatedAt = 100)))
++        NoteRepository(db, FakeNoteApi()).mergeFromServer(listOf(Note(1, "伺服器舊版", updatedAt = 150), Note(2, "伺服器新版", updatedAt = 300)))
++        assertEquals("合併後的標題", listOf("我剛改的", "伺服器新版"), db.notes().all().map { it.title })
++    }
++
++    // DATA-21:一次查 40000 個 id(超過新舊 SQLite 的參數上限)
++    @Test
++    fun query_40000_ids() = runTest {
++        db.notes().upsertAll(listOf(Note(1, "a"), Note(20_000, "b"), Note(40_000, "c")))
++        val found = runCatching { NoteRepository(db, FakeNoteApi()).byIds((1L..40_000L).toList()) }
++        // 訊息只帶例外類別名:SQLiteException 的訊息含整串 SQL(4 萬個 ?),儀器報告的失敗文字截在 64KB,
++        // 斷言框被截掉、收證判不到斷言(實驗實測)
++        assertEquals("查到的筆數:${found.exceptionOrNull()?.javaClass?.name}", 3, found.getOrNull()?.size)
++    }
++}
++```
++
++### 測試:Room 3
++
++```kotlin
++// 起手:kotlin-idioms test-templates T6
++// Room 3:createDatabase、runMigrationsAndValidate 是 suspend
++import androidx.room3.Room
++import androidx.room3.testing.MigrationTestHelper
++import androidx.sqlite.driver.AndroidSQLiteDriver
++import androidx.sqlite.execSQL
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import androidx.test.platform.app.InstrumentationRegistry
++import kotlinx.coroutines.runBlocking
++import org.junit.Assert.assertEquals
++import org.junit.Before
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class NoteMigrationTest {
++    private val instrumentation = InstrumentationRegistry.getInstrumentation()
++    private val file = instrumentation.targetContext.getDatabasePath("migration-test.db")
++
++    @get:Rule
++    val helper = MigrationTestHelper(
++        instrumentation = instrumentation,
++        file = file,
++        driver = AndroidSQLiteDriver(),
++        databaseClass = AppDb::class,
++    )
++
++    // 每支測試從沒有資料庫檔開始:上一支留下的第 3 版檔案會讓 createDatabase(舊版) 去找 3→2 的路徑
++    @Before
++    fun deleteOldFile() {
++        instrumentation.targetContext.deleteDatabase(file.name)
++    }
++
++    @Test
++    fun migrate_2_to_3_keeps_notes() = runBlocking {
++        helper.createDatabase(2).apply {
++            execSQL("INSERT INTO note (id, title, body) VALUES (1, '買牛奶', '兩瓶')")
++            close()
++        }
++        val result = runCatching {
++            helper.runMigrationsAndValidate(3, listOf(MIGRATION_2_3)).use { c ->
++                c.prepare("SELECT title, body, updatedAt FROM note WHERE id = 1").use { st ->
++                    st.step()
++                    listOf(st.getText(0), st.getText(1), st.getLong(2).toString())
++                }
++            }
++        }
++        assertEquals("升級後的資料:${result.exceptionOrNull()}", listOf("買牛奶", "兩瓶", "0"), result.getOrNull())
++    }
++
++    @Test
++    fun open_latest_from_oldest_with_all_migrations() = runBlocking {
++        helper.createDatabase(1).apply {
++            execSQL("INSERT INTO note (id, title) VALUES (1, '買牛奶')")
++            close()
++        }
++        val result = runCatching {
++            val db = Room.databaseBuilder(instrumentation.targetContext, AppDb::class.java, file.path)
++                .setDriver(AndroidSQLiteDriver())
++                .addMigrations(*ALL_MIGRATIONS)
++                .build()
++            try { db.notes().all().map { it.title } } finally { db.close() }
++        }
++        assertEquals("開到最新版:${result.exceptionOrNull()}", listOf("買牛奶"), result.getOrNull())
++    }
++}
++```
++
++```kotlin
++// 起手:kotlin-idioms test-templates T6
++import androidx.room3.Room
++import androidx.sqlite.driver.AndroidSQLiteDriver
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlinx.coroutines.test.runTest
++import org.junit.After
++import org.junit.Assert.assertEquals
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class NoteRepositoryTest {
++    private val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), AppDb::class.java)
++        .setDriver(AndroidSQLiteDriver())
++        .build()
++
++    @After fun close() = db.close()
++
++    @Test
++    fun refresh_failure_keeps_local_notes() = runTest {
++        db.notes().upsertAll(listOf(Note(1, "本機的")))
++        runCatching { NoteRepository(db, FakeNoteApi(fail = true)).refresh() }
++        assertEquals("刷新失敗後的本機清單", listOf("本機的"), db.notes().all().map { it.title })
++    }
++
++    @Test
++    fun older_server_copy_does_not_overwrite_newer_local_edit() = runTest {
++        db.notes().upsertAll(listOf(Note(1, "我剛改的", updatedAt = 200), Note(2, "舊標題", updatedAt = 100)))
++        NoteRepository(db, FakeNoteApi()).mergeFromServer(listOf(Note(1, "伺服器舊版", updatedAt = 150), Note(2, "伺服器新版", updatedAt = 300)))
++        assertEquals("合併後的標題", listOf("我剛改的", "伺服器新版"), db.notes().all().map { it.title })
++    }
++
++    @Test
++    fun query_40000_ids() = runTest {
++        db.notes().upsertAll(listOf(Note(1, "a"), Note(20_000, "b"), Note(40_000, "c")))
++        val found = runCatching { NoteRepository(db, FakeNoteApi()).byIds((1L..40_000L).toList()) }
++        // 訊息只帶例外類別名:SQLiteException 的訊息含整串 SQL(4 萬個 ?),儀器報告的失敗文字截在 64KB,
++        // 斷言框被截掉、收證判不到斷言(實驗實測)
++        assertEquals("查到的筆數:${found.exceptionOrNull()?.javaClass?.name}", 3, found.getOrNull()?.size)
++    }
++}
++```
++
++### 假依賴
++
++```kotlin
++import java.io.IOException
++
++class FakeNoteApi(private val fail: Boolean = false, private val notes: List<Note> = emptyList()) : NoteApi {
++    override suspend fun fetchAll(): List<Note> {
++        if (fail) throw IOException("離線")
++        return notes
++    }
++}
++```
++
++### 好寫法
++
++```kotlin
++import androidx.room.ColumnInfo
++import androidx.room.Dao
++import androidx.room.Database
++import androidx.room.Entity
++import androidx.room.Insert
++import androidx.room.OnConflictStrategy
++import androidx.room.PrimaryKey
++import androidx.room.Query
++import androidx.room.RoomDatabase
++import androidx.room.Transaction
++
++// 第 3 版:第 2 版加了 body,第 3 版加了 updatedAt
++@Entity(tableName = "note")
++data class Note(
++    @PrimaryKey val id: Long,
++    val title: String,
++    @ColumnInfo(defaultValue = "") val body: String = "",
++    @ColumnInfo(defaultValue = "0") val updatedAt: Long = 0,
++)
++
++@Dao
++interface NoteDao {
++    @Query("SELECT * FROM note ORDER BY id") suspend fun all(): List<Note>
++    @Query("SELECT * FROM note WHERE id IN (:ids)") suspend fun byIds(ids: List<Long>): List<Note>
++    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertAll(notes: List<Note>)
++    @Query("DELETE FROM note") suspend fun clear()
++
++    @Transaction
++    suspend fun replaceAll(notes: List<Note>) {
++        clear()
++        upsertAll(notes)
++    }
++}
++
++@Database(entities = [Note::class], version = 3, exportSchema = true)
++abstract class AppDb : RoomDatabase() {
++    abstract fun notes(): NoteDao
++}
++```
++
++```kotlin
++import androidx.room.migration.Migration
++import androidx.sqlite.SQLiteConnection
++import androidx.sqlite.execSQL
++
++val MIGRATION_1_2 = object : Migration(1, 2) {
++    override fun migrate(connection: SQLiteConnection) {
++        connection.execSQL("ALTER TABLE note ADD COLUMN body TEXT NOT NULL DEFAULT ''")
++    }
++}
++
++val MIGRATION_2_3 = object : Migration(2, 3) {
++    override fun migrate(connection: SQLiteConnection) {
++        connection.execSQL("ALTER TABLE note ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
++    }
++}
++
++val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
++```
++
++```kotlin
++interface NoteApi {
++    suspend fun fetchAll(): List<Note>
++}
++
++class NoteRepository(private val db: AppDb, private val api: NoteApi) {
++    // DATA-69:先拿到新資料,成功後才在交易裡換掉
++    suspend fun refresh() {
++        val fresh = api.fetchAll()
++        db.notes().replaceAll(fresh)
++    }
++
++    // DATA-21:分批查,每批遠低於參數上限
++    suspend fun byIds(ids: List<Long>): List<Note> = ids.chunked(500).flatMap { db.notes().byIds(it) }
++
++    // DATA-65:後寫贏,伺服器那份比本機舊就不寫
++    suspend fun mergeFromServer(server: List<Note>) {
++        val local = byIds(server.map { it.id }).associateBy { it.id }
++        db.notes().upsertAll(server.filter { s -> (local[s.id]?.updatedAt ?: Long.MIN_VALUE) <= s.updatedAt })
++    }
++}
++```
++
++### 壞寫法:DATA-17 少一個 Migration
++
++```kotlin
++import androidx.room.migration.Migration
++import androidx.sqlite.SQLiteConnection
++import androidx.sqlite.execSQL
++
++val MIGRATION_1_2 = object : Migration(1, 2) {
++    override fun migrate(connection: SQLiteConnection) {
++        connection.execSQL("ALTER TABLE note ADD COLUMN body TEXT NOT NULL DEFAULT ''")
++    }
++}
++
++val MIGRATION_2_3 = object : Migration(2, 3) {
++    override fun migrate(connection: SQLiteConnection) {
++        connection.execSQL("ALTER TABLE note ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0")
++    }
++}
++
++val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2)   // 升到第 3 版時忘了登記 2→3
++```
++
++### 壞寫法:DATA-19 Migration 的 SQL 寫錯
++
++```kotlin
++import androidx.room.migration.Migration
++import androidx.sqlite.SQLiteConnection
++import androidx.sqlite.execSQL
++
++val MIGRATION_1_2 = object : Migration(1, 2) {
++    override fun migrate(connection: SQLiteConnection) {
++        connection.execSQL("ALTER TABLE note ADD COLUMN body TEXT NOT NULL DEFAULT ''")
++    }
++}
++
++val MIGRATION_2_3 = object : Migration(2, 3) {
++    override fun migrate(connection: SQLiteConnection) {
++        connection.execSQL("ALTER TABLE note ADD COLUMN updatedAt INTEGER")   // 少了 NOT NULL DEFAULT 0,跟 Entity 不符
++    }
++}
++
++val ALL_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
++```
++
++### 壞寫法:DATA-21 不分批
++
++```kotlin
++interface NoteApi {
++    suspend fun fetchAll(): List<Note>
++}
++
++class NoteRepository(private val db: AppDb, private val api: NoteApi) {
++    suspend fun refresh() {
++        val fresh = api.fetchAll()
++        db.notes().replaceAll(fresh)
++    }
++
++    suspend fun byIds(ids: List<Long>): List<Note> = db.notes().byIds(ids)   // 參數數量沒上限
++
++    suspend fun mergeFromServer(server: List<Note>) {
++        val local = server.map { it.id }.chunked(500).flatMap { db.notes().byIds(it) }.associateBy { it.id }
++        db.notes().upsertAll(server.filter { s -> (local[s.id]?.updatedAt ?: Long.MIN_VALUE) <= s.updatedAt })
++    }
++}
++```
++
++### 壞寫法:DATA-65 伺服器資料直接覆蓋
++
++```kotlin
++interface NoteApi {
++    suspend fun fetchAll(): List<Note>
++}
++
++class NoteRepository(private val db: AppDb, private val api: NoteApi) {
++    suspend fun refresh() {
++        val fresh = api.fetchAll()
++        db.notes().replaceAll(fresh)
++    }
++
++    suspend fun byIds(ids: List<Long>): List<Note> = ids.chunked(500).flatMap { db.notes().byIds(it) }
++
++    suspend fun mergeFromServer(server: List<Note>) {
++        db.notes().upsertAll(server)   // 本機較新的修改被蓋掉
++    }
++}
++```
++
++### 壞寫法:DATA-69 先清本機再打 API
++
++```kotlin
++interface NoteApi {
++    suspend fun fetchAll(): List<Note>
++}
++
++class NoteRepository(private val db: AppDb, private val api: NoteApi) {
++    suspend fun refresh() {
++        db.notes().clear()   // 先清,API 失敗時本機就空了
++        db.notes().upsertAll(api.fetchAll())
++    }
++
++    suspend fun byIds(ids: List<Long>): List<Note> = ids.chunked(500).flatMap { db.notes().byIds(it) }
++
++    suspend fun mergeFromServer(server: List<Note>) {
++        val local = byIds(server.map { it.id }).associateBy { it.id }
++        db.notes().upsertAll(server.filter { s -> (local[s.id]?.updatedAt ?: Long.MIN_VALUE) <= s.updatedAt })
++    }
++}
++```
++
++### 紅綠矩陣
++
++舊版本的結構檔(`schemas/AppDb/1.json`、`2.json`)是實驗前先用第 1、2 版的 Entity 建置產生的,代表專案歷史留下的檔。
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試:Room 2 | 好寫法 | 全綠:migrate_2_to_3_keeps_notes、open_latest_from_oldest_with_all_migrations、refresh_failure_keeps_local_notes、older_server_copy_does_not_overwrite_newer_local_edit、query_40000_ids |
++| 測試:Room 2 | 壞寫法:DATA-17 少一個 Migration | open_latest_from_oldest_with_all_migrations 斷言紅「開到最新版」;其他綠 |
++| 測試:Room 2 | 壞寫法:DATA-19 Migration 的 SQL 寫錯 | migrate_2_to_3_keeps_notes 斷言紅「升級後的資料」;open_latest_from_oldest_with_all_migrations 斷言紅「開到最新版」;其他綠 |
++| 測試:Room 2 | 壞寫法:DATA-21 不分批 | query_40000_ids 斷言紅「查到的筆數」;其他綠 |
++| 測試:Room 2 | 壞寫法:DATA-65 伺服器資料直接覆蓋 | older_server_copy_does_not_overwrite_newer_local_edit 斷言紅「合併後的標題」;其他綠 |
++| 測試:Room 2 | 壞寫法:DATA-69 先清本機再打 API | refresh_failure_keeps_local_notes 斷言紅「刷新失敗後的本機清單」;其他綠 |
++| 測試:Room 3 | 好寫法 | 全綠:migrate_2_to_3_keeps_notes、open_latest_from_oldest_with_all_migrations、refresh_failure_keeps_local_notes、older_server_copy_does_not_overwrite_newer_local_edit、query_40000_ids |
++| 測試:Room 3 | 壞寫法:DATA-17 少一個 Migration | open_latest_from_oldest_with_all_migrations 斷言紅「開到最新版」;其他綠 |
++| 測試:Room 3 | 壞寫法:DATA-19 Migration 的 SQL 寫錯 | migrate_2_to_3_keeps_notes 斷言紅「升級後的資料」;open_latest_from_oldest_with_all_migrations 斷言紅「開到最新版」;其他綠 |
++| 測試:Room 3 | 壞寫法:DATA-21 不分批 | query_40000_ids 斷言紅「查到的筆數」;其他綠 |
++| 測試:Room 3 | 壞寫法:DATA-65 伺服器資料直接覆蓋 | older_server_copy_does_not_overwrite_newer_local_edit 斷言紅「合併後的標題」;其他綠 |
++| 測試:Room 3 | 壞寫法:DATA-69 先清本機再打 API | refresh_failure_keeps_local_notes 斷言紅「刷新失敗後的本機清單」;其他綠 |
++
++## T7 Paging
++
++型錄列:DATA-58、DATA-60。跑在哪:〈測試〉(DATA-58)Robolectric(`app/src/test`);〈測試:DATA-60 RemoteMediator〉模擬器(`app/src/androidTest`,要真的 Room,官方不建議用 Robolectric 跑 Room)。
++
++- DATA-58:對 ViewModel 的分頁流用 paging-testing 的 `asSnapshot { }` 收,收的途中改篩選條件(`combine` 的另一邊發新值)。沒先 `cachedIn` 就 `combine` 的壞寫法,同一份 `PagingData` 被收第二次,丟 `IllegalStateException: Attempt to collect twice from pageEventFlow`;測試先 `runCatching` 接住再斷言快照內容。`viewModelScope` 用 `Dispatchers.Main`,測試要先 `Dispatchers.setMain(…)`。
++- DATA-60:照官方 RemoteMediator 測試頁,直接呼叫 `mediator.load(LoadType.REFRESH, pagingState)`,配記憶體資料庫與假 API。四個情境:有下一頁(`endOfPaginationReached == false`)、空回應(`true`)、有資料的最後一頁(`true`;只看「資料是不是空的」的壞寫法在這裡錯)、API 丟例外(`MediatorResult.Error`)。
++
++### 依據
++
++- https://developer.android.com/topic/libraries/architecture/paging/test 「include the paging-testing dependency. It contains the asSnapshot extension」;RemoteMediator:「the endOfPaginationReached property should be true」
++- DATA-58:https://developer.android.com/reference/kotlin/androidx/paging/package-summary#(kotlinx.coroutines.flow.Flow).cachedIn(kotlinx.coroutines.CoroutineScope) `cachedIn` 讓同一個分頁流可以被多處或重新收;型錄 DATA-58 標準寫法
++- DATA-60:型錄 DATA-60 標準寫法 `MediatorResult.Success(endOfPaginationReached = response.nextKey == null)`
++
++### 依賴
++
++```kotlin
++// build.gradle.kts 的 plugins { } 加
++id("com.google.devtools.ksp") version "2.2.21-2.0.5" apply false
++```
++
++```kotlin
++// app/build.gradle.kts 的 plugins { } 加
++id("com.google.devtools.ksp")
++```
++
++```kotlin
++implementation("androidx.paging:paging-runtime-ktx:3.5.3")
++implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
++// RemoteMediator 寫進真的 Room(DATA-60);只做 DATA-58 的專案不用這三行與 KSP
++implementation("androidx.room:room-runtime:2.8.5")
++implementation("androidx.room:room-paging:2.8.5")
++ksp("androidx.room:room-compiler:2.8.5")
++testImplementation("androidx.paging:paging-testing:3.5.3")
++testImplementation("org.robolectric:robolectric:4.17")
++testImplementation("androidx.test.ext:junit:1.3.0")
++testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
++```properties
++# app/src/test/resources/robolectric.properties
++sdk=34
++```
++
++Robolectric 組都要連這個檔一起抄:`targetSdk = 36` 時 Robolectric 預設用 SDK 36 跑、要 JDK 21,JDK 17 上整個測試類別例外紅(見〈Android 實驗專案骨架〉)。
++
++### 依賴:DATA-60 RemoteMediator
++
++在〈依賴〉之外再加(模擬器上的測試):
++
++```kotlin
++androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T7
++import androidx.paging.testing.asSnapshot
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlin.test.AfterTest
++import kotlin.test.BeforeTest
++import kotlin.test.assertEquals
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.test.UnconfinedTestDispatcher
++import kotlinx.coroutines.test.resetMain
++import kotlinx.coroutines.test.runTest
++import kotlinx.coroutines.test.setMain
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@OptIn(ExperimentalCoroutinesApi::class)
++@RunWith(AndroidJUnit4::class)
++class FeedViewModelTest {
++    @BeforeTest fun setUp() = Dispatchers.setMain(UnconfinedTestDispatcher())
++    @AfterTest fun tearDown() = Dispatchers.resetMain()
++
++    // DATA-58:收的途中改篩選,分頁流還能用(不丟 Attempt to collect twice)
++    @Test
++    fun filter_change_while_collecting_keeps_paging_alive() = runTest {
++        val vm = FeedViewModel(FeedRepository(List(100) { "item-$it" }))
++        val snapshot = runCatching { vm.items.asSnapshot { vm.setQuery("-1") } }
++        assertEquals(listOf("item-1") + List(10) { "item-1$it" }, snapshot.getOrNull(), "篩選後的快照:${snapshot.exceptionOrNull()}")
++    }
++}
++```
++
++### 測試:DATA-60 RemoteMediator
++
++```kotlin
++// 起手:kotlin-idioms test-templates T7
++import androidx.paging.ExperimentalPagingApi
++import androidx.paging.LoadType
++import androidx.paging.PagingConfig
++import androidx.paging.PagingState
++import androidx.paging.RemoteMediator.MediatorResult
++import androidx.room.Room
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlinx.coroutines.test.runTest
++import org.junit.After
++import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@OptIn(ExperimentalPagingApi::class)
++@RunWith(AndroidJUnit4::class)
++class ArticleMediatorTest {
++    private val db = Room.inMemoryDatabaseBuilder(ApplicationProvider.getApplicationContext(), ArticleDb::class.java).build()
++    private val state = PagingState<Int, Article>(listOf(), null, PagingConfig(10), 10)
++
++    @After fun close() = db.close()
++
++    private suspend fun refresh(api: FakeArticleApi) = ArticleMediator(db, api).load(LoadType.REFRESH, state)
++
++    @Test
++    fun more_pages_not_end() = runTest {
++        val r = refresh(FakeArticleApi(items = List(10) { "a$it" }, nextKey = 2))
++        assertTrue("有下一頁時要是 Success(false):$r", r is MediatorResult.Success && !r.endOfPaginationReached)
++    }
++
++    @Test
++    fun empty_response_is_end() = runTest {
++        val r = refresh(FakeArticleApi(items = emptyList(), nextKey = null))
++        assertTrue("空回應要是 Success(true):$r", r is MediatorResult.Success && r.endOfPaginationReached)
++    }
++
++    @Test
++    fun last_page_with_items_is_end() = runTest {
++        val r = refresh(FakeArticleApi(items = List(3) { "a$it" }, nextKey = null))
++        assertTrue("有資料的最後一頁要是 Success(true):$r", r is MediatorResult.Success && r.endOfPaginationReached)
++        assertEquals(3, db.articles().count())
++    }
++
++    @Test
++    fun api_error_is_error() = runTest {
++        val r = refresh(FakeArticleApi(items = emptyList(), nextKey = null, fail = true))
++        assertTrue("API 丟例外要是 Error:$r", r is MediatorResult.Error)
++    }
++}
++```
++
++### 假依賴
++
++```kotlin
++import java.io.IOException
++
++class FakeArticleApi(private val items: List<String>, private val nextKey: Int?, private val fail: Boolean = false) : ArticleApi {
++    override suspend fun page(key: Int): ArticlePage {
++        if (fail) throw IOException("離線")
++        return ArticlePage(items, nextKey)
++    }
++}
++```
++
++### 好寫法
++
++```kotlin
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.viewModelScope
++import androidx.paging.Pager
++import androidx.paging.PagingConfig
++import androidx.paging.PagingData
++import androidx.paging.cachedIn
++import androidx.paging.filter
++import kotlinx.coroutines.flow.Flow
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.combine
++
++class FeedRepository(private val all: List<String>) {
++    fun pager() = Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) { ListPagingSource(all) }
++}
++
++// DATA-58:先 cachedIn 再 combine;cachedIn 會多播,重新收拿到的是可以再收的 PagingData
++class FeedViewModel(repo: FeedRepository) : ViewModel() {
++    private val query = MutableStateFlow("")
++    val items: Flow<PagingData<String>> = repo.pager().flow
++        .cachedIn(viewModelScope)
++        .combine(query) { data, q -> data.filter { q.isEmpty() || it.contains(q) } }
++
++    fun setQuery(q: String) { query.value = q }
++}
++```
++
++```kotlin
++import androidx.paging.PagingSource
++import androidx.paging.PagingState
++
++class ListPagingSource(private val all: List<String>) : PagingSource<Int, String>() {
++    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, String> {
++        val start = params.key ?: 0
++        val end = minOf(start + params.loadSize, all.size)
++        return LoadResult.Page(all.subList(start, end), prevKey = null, nextKey = if (end < all.size) end else null)
++    }
++
++    override fun getRefreshKey(state: PagingState<Int, String>): Int? = null
++}
++```
++
++```kotlin
++import androidx.room.Dao
++import androidx.room.Database
++import androidx.room.Entity
++import androidx.room.Insert
++import androidx.room.PrimaryKey
++import androidx.room.Query
++import androidx.room.RoomDatabase
++
++@Entity data class Article(@PrimaryKey val id: String)
++
++data class ArticlePage(val items: List<String>, val nextKey: Int?)
++
++interface ArticleApi { suspend fun page(key: Int): ArticlePage }
++
++@Dao interface ArticleDao {
++    @Insert suspend fun insertAll(items: List<Article>)
++    @Query("DELETE FROM Article") suspend fun clear()
++    @Query("SELECT COUNT(*) FROM Article") suspend fun count(): Int
++}
++
++@Database(entities = [Article::class], version = 1, exportSchema = false)
++abstract class ArticleDb : RoomDatabase() { abstract fun articles(): ArticleDao }
++```
++
++```kotlin
++import androidx.paging.ExperimentalPagingApi
++import androidx.paging.LoadType
++import androidx.paging.PagingState
++import androidx.paging.RemoteMediator
++import androidx.room.withTransaction
++
++// DATA-60:有沒有下一頁看伺服器給的 nextKey
++@OptIn(ExperimentalPagingApi::class)
++class ArticleMediator(private val db: ArticleDb, private val api: ArticleApi) : RemoteMediator<Int, Article>() {
++    override suspend fun load(loadType: LoadType, state: PagingState<Int, Article>): MediatorResult = try {
++        val page = api.page(key = 1)
++        db.withTransaction {
++            if (loadType == LoadType.REFRESH) db.articles().clear()
++            db.articles().insertAll(page.items.map { Article(it) })
++        }
++        MediatorResult.Success(endOfPaginationReached = page.nextKey == null)
++    } catch (e: java.io.IOException) {
++        MediatorResult.Error(e)
++    }
++}
++```
++
++### 壞寫法:DATA-58 沒 cachedIn 就 combine
++
++```kotlin
++import androidx.lifecycle.ViewModel
++import androidx.paging.Pager
++import androidx.paging.PagingConfig
++import androidx.paging.PagingData
++import androidx.paging.filter
++import kotlinx.coroutines.flow.Flow
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.combine
++
++class FeedRepository(private val all: List<String>) {
++    fun pager() = Pager(PagingConfig(pageSize = 20, enablePlaceholders = false)) { ListPagingSource(all) }
++}
++
++class FeedViewModel(repo: FeedRepository) : ViewModel() {
++    private val query = MutableStateFlow("")
++    val items: Flow<PagingData<String>> = repo.pager().flow   // 少了 cachedIn:篩選一變,同一份 PagingData 被收第二次
++        .combine(query) { data, q -> data.filter { q.isEmpty() || it.contains(q) } }
++
++    fun setQuery(q: String) { query.value = q }
++}
++```
++
++### 壞寫法:DATA-60 永遠回 false
++
++```kotlin
++import androidx.paging.ExperimentalPagingApi
++import androidx.paging.LoadType
++import androidx.paging.PagingState
++import androidx.paging.RemoteMediator
++import androidx.room.withTransaction
++
++@OptIn(ExperimentalPagingApi::class)
++class ArticleMediator(private val db: ArticleDb, private val api: ArticleApi) : RemoteMediator<Int, Article>() {
++    override suspend fun load(loadType: LoadType, state: PagingState<Int, Article>): MediatorResult = try {
++        val page = api.page(key = 1)
++        db.withTransaction {
++            if (loadType == LoadType.REFRESH) db.articles().clear()
++            db.articles().insertAll(page.items.map { Article(it) })
++        }
++        MediatorResult.Success(endOfPaginationReached = false)
++    } catch (e: java.io.IOException) {
++        MediatorResult.Error(e)
++    }
++}
++```
++
++### 壞寫法:DATA-60 看資料是不是空的
++
++```kotlin
++import androidx.paging.ExperimentalPagingApi
++import androidx.paging.LoadType
++import androidx.paging.PagingState
++import androidx.paging.RemoteMediator
++import androidx.room.withTransaction
++
++@OptIn(ExperimentalPagingApi::class)
++class ArticleMediator(private val db: ArticleDb, private val api: ArticleApi) : RemoteMediator<Int, Article>() {
++    override suspend fun load(loadType: LoadType, state: PagingState<Int, Article>): MediatorResult = try {
++        val page = api.page(key = 1)
++        db.withTransaction {
++            if (loadType == LoadType.REFRESH) db.articles().clear()
++            db.articles().insertAll(page.items.map { Article(it) })
++        }
++        MediatorResult.Success(endOfPaginationReached = page.items.isEmpty())   // 有資料的最後一頁會再要一次
++    } catch (e: java.io.IOException) {
++        MediatorResult.Error(e)
++    }
++}
++```
++
++### 紅綠矩陣
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:filter_change_while_collecting_keeps_paging_alive |
++| 測試 | 壞寫法:DATA-58 沒 cachedIn 就 combine | filter_change_while_collecting_keeps_paging_alive 斷言紅「Attempt to collect twice」 |
++| 測試:DATA-60 RemoteMediator | 好寫法 | 全綠:more_pages_not_end、empty_response_is_end、last_page_with_items_is_end、api_error_is_error |
++| 測試:DATA-60 RemoteMediator | 壞寫法:DATA-60 永遠回 false | empty_response_is_end 斷言紅「空回應要是 Success(true)」;last_page_with_items_is_end 斷言紅「有資料的最後一頁要是 Success(true)」;其他綠 |
++| 測試:DATA-60 RemoteMediator | 壞寫法:DATA-60 看資料是不是空的 | last_page_with_items_is_end 斷言紅「有資料的最後一頁要是 Success(true)」;其他綠 |
++
++## T8 WorkManager
++
++型錄列:DATA-38、DATA-39。跑在哪:Robolectric(`app/src/test`)。用 `TestListenableWorkerBuilder` 建 `CoroutineWorker`,在測試裡直接呼叫 `doWork()`,虛擬時間推進、取消,再用假依賴的計數斷言。
++
++- DATA-38 只做 `CoroutineWorker` 版(型錄標準寫法:它由框架自動取消)。被測 Worker 的迴圈次數有上限(從假設定讀,範本用 50),每圈呼叫假來源一次、`delay`,跑完呼叫 `markDone()`,錯誤時呼叫 `recordError()`,`finally` 關資源。測試在 `backgroundScope` 啟動 `doWork()`、推進兩圈、取消、`runCurrent()`,斷言「取消後假來源的呼叫次數沒再增加、`markDone` 0 次、`recordError` 0 次、資源 `close` 恰好 1 次」——全部是計數比較,不靠接例外:取消的例外丟在 `backgroundScope` 的協程裡,測試本體接不到。
++- 迴圈次數一定要有上限:迴圈裡吞掉取消的壞寫法,取消後每圈的 `delay` 立刻丟例外又被吞,沒上限就空轉卡死(r1 可行性席實跑在 Robolectric 卡 190 秒以上、`runTest` 的逾時沒生效);有上限它會跑完剩下的圈數並 `markDone`,斷言紅。
++- 一般 `Worker` 的 `isStopped` 從測試觸發不了(官方測試頁沒示範,`stop` 是框架內部方法),這一組不涵蓋。
++- DATA-39 斷言被測程式產的 `Data` 序列化後小於 `Data.MAX_DATA_BYTES`;超過時 WorkManager 丟 `IllegalStateException`,測試先 `runCatching` 接住再斷言。
++
++### 依據
++
++- https://developer.android.com/develop/background-work/background-tasks/testing/persistent/worker-impl 「To test a ListenableWorker or its variants (CoroutineWorker and RxWorker), use TestListenableWorkerBuilder」
++- DATA-38:https://developer.android.com/develop/background-work/background-tasks/persistent/threading/coroutineworker 「CoroutineWorkers handle stoppages automatically by cancelling the coroutine」
++- DATA-39:https://developer.android.com/reference/androidx/work/Data 「This class will throw IllegalStateExceptions if you try to serialize or deserialize past this limit」
++
++### 依賴
++
++```kotlin
++implementation("androidx.work:work-runtime-ktx:2.11.2")
++testImplementation("androidx.work:work-testing:2.11.2")
++testImplementation("org.robolectric:robolectric:4.17")
++testImplementation("androidx.test:core-ktx:1.7.0")
++testImplementation("androidx.test.ext:junit:1.3.0")
++testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
++```properties
++# app/src/test/resources/robolectric.properties
++sdk=34
++```
++
++Robolectric 組都要連這個檔一起抄:`targetSdk = 36` 時 Robolectric 預設用 SDK 36 跑、要 JDK 21,JDK 17 上整個測試類別例外紅(見〈Android 實驗專案骨架〉)。
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T8
++import android.content.Context
++import androidx.test.core.app.ApplicationProvider
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import androidx.work.Data
++import androidx.work.ListenableWorker
++import androidx.work.WorkerFactory
++import androidx.work.WorkerParameters
++import androidx.work.testing.TestListenableWorkerBuilder
++import kotlin.test.assertEquals
++import kotlin.test.assertTrue
++import kotlin.time.Duration.Companion.seconds
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.test.advanceTimeBy
++import kotlinx.coroutines.test.runCurrent
++import kotlinx.coroutines.test.runTest
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@OptIn(ExperimentalCoroutinesApi::class)
++@RunWith(AndroidJUnit4::class)
++class SyncWorkerTest {
++    private fun worker(deps: FakeSyncDeps): SyncWorker =
++        TestListenableWorkerBuilder<SyncWorker>(ApplicationProvider.getApplicationContext())
++            .setWorkerFactory(object : WorkerFactory() {
++                override fun createWorker(appContext: Context, workerClassName: String, workerParameters: WorkerParameters) =
++                    SyncWorker(appContext, workerParameters, deps)
++            })
++            .build()
++
++    // DATA-38:取消後不再跑下一圈、不記成錯誤、資源關一次
++    @Test
++    fun cancel_stops_loop_without_error_and_closes_once() = runTest(timeout = 10.seconds) {
++        val deps = FakeSyncDeps(maxRounds = 50)
++        val job = backgroundScope.launch { worker(deps).doWork() }
++        runCurrent()
++        advanceTimeBy(1_500)   // 跑過兩圈(第 0 秒、第 1 秒各一次 fetch)
++        runCurrent()
++        val fetchedBeforeCancel = deps.fetchCalls
++        job.cancel()
++        runCurrent()
++        advanceTimeBy(60_000)
++        runCurrent()
++        assertEquals(2, fetchedBeforeCancel, "取消前應跑了兩圈")
++        assertEquals(fetchedBeforeCancel, deps.fetchCalls, "取消後還在跑下一圈")
++        assertEquals(0, deps.doneCalls, "取消後不該 markDone")
++        assertEquals(0, deps.errorCalls, "取消不該記成錯誤")
++        assertEquals(1, deps.closeCalls, "資源要關恰好一次")
++    }
++
++    // DATA-39:輸出的 Data 序列化後在上限內
++    @Test
++    fun output_data_fits_limit() = runTest(timeout = 10.seconds) {
++        val deps = FakeSyncDeps(maxRounds = 1, idsPerFetch = 2_000)
++        val result = runCatching { worker(deps).doWork() }
++        val out = (result.getOrNull() as? ListenableWorker.Result.Success)?.outputData
++        val size = runCatching { out!!.toByteArray().size }
++        assertTrue(size.getOrNull()?.let { it < Data.MAX_DATA_BYTES } == true,
++            "輸出 Data 超過 ${Data.MAX_DATA_BYTES} bytes 或沒成功:result=$result size=$size")
++    }
++}
++```
++
++### 假依賴
++
++```kotlin
++import java.io.Closeable
++
++class FakeSyncDeps(override val maxRounds: Int, private val idsPerFetch: Int = 3) : SyncDeps {
++    var fetchCalls = 0
++    var doneCalls = 0
++    var errorCalls = 0
++    var closeCalls = 0
++
++    override suspend fun fetch(): List<String> {
++        fetchCalls++
++        return List(idsPerFetch) { "item-$fetchCalls-$it" }
++    }
++    override fun markDone() { doneCalls++ }
++    override fun recordError() { errorCalls++ }
++    override fun open(): Closeable = Closeable { closeCalls++ }
++}
++```
++
++### 好寫法
++
++```kotlin
++import java.io.Closeable
++
++interface SyncDeps {
++    val maxRounds: Int
++    suspend fun fetch(): List<String>
++    fun markDone()
++    fun recordError()
++    fun open(): Closeable
++}
++```
++
++```kotlin
++import android.content.Context
++import androidx.work.CoroutineWorker
++import androidx.work.WorkerParameters
++import androidx.work.workDataOf
++import kotlinx.coroutines.delay
++
++class SyncWorker(context: Context, params: WorkerParameters, private val deps: SyncDeps) : CoroutineWorker(context, params) {
++    override suspend fun doWork(): Result {
++        val resource = deps.open()
++        try {
++            var synced = 0
++            repeat(deps.maxRounds) {
++                synced += deps.fetch().size
++                delay(1_000)
++            }
++            deps.markDone()
++            return Result.success(workDataOf("synced" to synced))   // DATA-39:只回摘要,明細寫進資料庫
++        } catch (e: java.io.IOException) {
++            deps.recordError()   // 只接 I/O 錯誤;取消照常往外丟
++            return Result.retry()
++        } finally {
++            resource.close()
++        }
++    }
++}
++```
++
++### 壞寫法:DATA-38 迴圈裡吞取消
++
++```kotlin
++import android.content.Context
++import androidx.work.CoroutineWorker
++import androidx.work.WorkerParameters
++import androidx.work.workDataOf
++import kotlinx.coroutines.delay
++
++class SyncWorker(context: Context, params: WorkerParameters, private val deps: SyncDeps) : CoroutineWorker(context, params) {
++    override suspend fun doWork(): Result {
++        val resource = deps.open()
++        try {
++            var synced = 0
++            repeat(deps.maxRounds) {
++                synced += deps.fetch().size
++                try { delay(1_000) } catch (e: Exception) { }   // 取消的例外也被吞,迴圈繼續跑
++            }
++            deps.markDone()
++            return Result.success(workDataOf("synced" to synced))
++        } finally {
++            resource.close()
++        }
++    }
++}
++```
++
++### 壞寫法:DATA-38 迴圈外吞取消
++
++```kotlin
++import android.content.Context
++import androidx.work.CoroutineWorker
++import androidx.work.WorkerParameters
++import androidx.work.workDataOf
++import kotlinx.coroutines.delay
++
++class SyncWorker(context: Context, params: WorkerParameters, private val deps: SyncDeps) : CoroutineWorker(context, params) {
++    override suspend fun doWork(): Result {
++        val resource = deps.open()
++        try {
++            var synced = 0
++            repeat(deps.maxRounds) {
++                synced += deps.fetch().size
++                delay(1_000)
++            }
++            deps.markDone()
++            return Result.success(workDataOf("synced" to synced))
++        } catch (e: Exception) {   // CancellationException 也被當成錯誤
++            deps.recordError()
++            return Result.failure()
++        } finally {
++            resource.close()
++        }
++    }
++}
++```
++
++### 壞寫法:DATA-39 明細塞進 Data
++
++```kotlin
++import android.content.Context
++import androidx.work.CoroutineWorker
++import androidx.work.WorkerParameters
++import androidx.work.workDataOf
++import kotlinx.coroutines.delay
++
++class SyncWorker(context: Context, params: WorkerParameters, private val deps: SyncDeps) : CoroutineWorker(context, params) {
++    override suspend fun doWork(): Result {
++        val resource = deps.open()
++        try {
++            val ids = mutableListOf<String>()
++            repeat(deps.maxRounds) {
++                ids += deps.fetch()
++                delay(1_000)
++            }
++            deps.markDone()
++            return Result.success(workDataOf("ids" to ids.toTypedArray()))   // 整份明細放進 Data
++        } catch (e: java.io.IOException) {
++            deps.recordError()
++            return Result.retry()
++        } finally {
++            resource.close()
++        }
++    }
++}
++```
++
++### 紅綠矩陣
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:cancel_stops_loop_without_error_and_closes_once、output_data_fits_limit |
++| 測試 | 壞寫法:DATA-38 迴圈裡吞取消 | cancel_stops_loop_without_error_and_closes_once 斷言紅「取消後還在跑下一圈」;其他綠 |
++| 測試 | 壞寫法:DATA-38 迴圈外吞取消 | cancel_stops_loop_without_error_and_closes_once 斷言紅「取消不該記成錯誤」;其他綠 |
++| 測試 | 壞寫法:DATA-39 明細塞進 Data | output_data_fits_limit 斷言紅「超過 10240 bytes」;其他綠 |
++

@@ -1,0 +1,1094 @@
+diff --git a/skills/kotlin-idioms/test-templates.md b/skills/kotlin-idioms/test-templates.md
+index d4615081e..d401ff862 100644
+--- a/skills/kotlin-idioms/test-templates.md
++++ b/skills/kotlin-idioms/test-templates.md
+@@ -1,21 +1,21 @@
++## T11 生命週期與框架
++
++型錄列:ARCH-31、ARCH-35、STATE-17、ARCH-56,另接 API-9 的 Fragment 那一半(T12 判不到)。跑在哪:Robolectric(`app/src/test`)。
++
++- ARCH-31:`FragmentScenario` 移到 CREATED(狀態已存)後送非同步回呼,`runCatching` 接住「Can not perform this action after onSaveInstanceState」再斷言;回到 RESUMED 後斷言交易真的做了(只是丟掉回呼的寫法也會紅)。
++- ARCH-35:`TestLifecycleOwner` 走到 DESTROYED,斷言假匯流排上的監聽數歸零。
++- STATE-17:不用 `InstantTaskExecutorRule`(它讓 `postValue` 同步執行,壞寫法照綠);改用 Robolectric 暫停的主 Looper——背景執行緒連 `postValue` 兩次後 `shadowOf(getMainLooper()).idle()`,斷言觀察者總共看到兩筆。這一支只在 Robolectric 有意義:模擬器的主執行緒沒暫停,兩次 `postValue` 之間主執行緒可能先處理掉第一筆,壞寫法會時綠時紅。
++- API-9 的 Fragment 那一半(〈測試:API-9 Fragment 畫面銷毀後〉):Fragment 在 `onViewCreated` 收一個假的 `MutableSharedFlow`,每收到一筆就呼叫假畫面記錄器 `render()`;記錄器在 `onDestroyView` 被標成已銷毀,之後再被呼叫就把「銷毀後被呼叫次數」加一(不丟例外)。`moveToState(CREATED)` 讓 view 銷毀後再發一筆、推主 Looper,斷言次數是 0。不用 `runCatching`:例外丟在 `lifecycleScope.launch` 的協程裡,測試本體接不到(官方協程例外處理頁:launch 的例外交給 `CoroutineExceptionHandler`)。
++- ARCH-56(〈依賴:Hilt〉〈測試:Hilt〉,只有用 Hilt 的專案照抄):把 Hilt Fragment 放進宿主 Activity,`runCatching` 接住宿主沒標 `@AndroidEntryPoint` 時的 `IllegalStateException` 再斷言。Robolectric 用 `@HiltAndroidTest` 加 `HiltTestApplication`。
++
++### 依據
++
++- FragmentScenario 在 Robolectric:https://robolectric.org/androidx_test/ 「FragmentScenario, which offers APIs to safely create your Fragment under test and drive it through valid transitions」;https://developer.android.com/guide/fragments/test
++- ARCH-31:https://developer.android.com/reference/androidx/fragment/app/FragmentTransaction#commit() 「A transaction can only be committed with this method prior to its containing activity saving its state」
++- ARCH-35:https://developer.android.com/topic/libraries/architecture/lifecycle 生命週期觀察者對稱登記與解除;`TestLifecycleOwner`:https://developer.android.com/reference/kotlin/androidx/lifecycle/testing/TestLifecycleOwner
++- STATE-17:https://developer.android.com/reference/androidx/lifecycle/LiveData#postValue(T) 「If you called this method multiple times before a main thread executed a posted task, only the last value would be dispatched」;`InstantTaskExecutorRule`「executes each task synchronously」
++- API-9 Fragment:https://developer.android.com/topic/libraries/architecture/coroutines 「viewLifecycleOwner.lifecycleScope」與 `repeatOnLifecycle`;https://kotlinlang.org/docs/exception-handling.html
++- ARCH-56:https://dagger.dev/hilt/android-entry-point 「So before adding @AndroidEntryPoint to a fragment, the activity must be annotated as well.」;Robolectric 測試:https://dagger.dev/hilt/testing
++
++### 依賴
++
++```kotlin
++implementation("androidx.fragment:fragment-ktx:1.9.1")
++implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.10.0")
++implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
++debugImplementation("androidx.fragment:fragment-testing-manifest:1.9.1")
++testImplementation("androidx.fragment:fragment-testing:1.9.1")
++testImplementation("androidx.lifecycle:lifecycle-runtime-testing:2.10.0")
++testImplementation("org.robolectric:robolectric:4.17")
++testImplementation("androidx.test:core-ktx:1.7.0")
++testImplementation("androidx.test.ext:junit:1.3.0")
++testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
++```
++
++```properties
++# app/src/test/resources/robolectric.properties
++sdk=34
++```
++
++Robolectric 組都要連這個檔一起抄:`targetSdk = 36` 時 Robolectric 預設用 SDK 36 跑、要 JDK 21,JDK 17 上整個測試類別例外紅(見〈Android 實驗專案骨架〉)。
++
++### 依賴:Hilt
++
++在〈依賴〉之外再加(只有用 Hilt 的專案):
++
++```kotlin
++// build.gradle.kts 的 plugins { } 加
++id("com.google.dagger.hilt.android") version "2.58" apply false
++id("com.google.devtools.ksp") version "2.2.21-2.0.5" apply false
++```
++
++```kotlin
++// app/build.gradle.kts 的 plugins { } 加
++id("com.google.dagger.hilt.android")
++id("com.google.devtools.ksp")
++```
++
++```kotlin
++implementation("com.google.dagger:hilt-android:2.58")
++ksp("com.google.dagger:hilt-compiler:2.58")
++testImplementation("com.google.dagger:hilt-android-testing:2.58")
++kspTest("com.google.dagger:hilt-compiler:2.58")
++```
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T11
++import android.os.Looper
++import androidx.fragment.app.testing.launchFragmentInContainer
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.testing.TestLifecycleOwner
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlin.concurrent.thread
++import kotlin.test.assertEquals
++import kotlin.test.assertNotNull
++import kotlin.test.assertNull
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.Shadows.shadowOf
++
++@RunWith(AndroidJUnit4::class)
++class LifecycleTest {
++    // ARCH-31:狀態存過之後才到的回呼,不能直接 commit;回到前景後要真的顯示
++    @Test
++    fun result_after_state_saved_is_shown_on_return() {
++        val scenario = launchFragmentInContainer { OrderFragment() }
++        scenario.moveToState(Lifecycle.State.CREATED)
++        var error: Throwable? = null
++        scenario.onFragment { f -> error = runCatching { f.onPaymentResult("paid") }.exceptionOrNull() }
++        scenario.moveToState(Lifecycle.State.RESUMED)
++        assertNull(error, "狀態存過之後 commit 丟例外")
++        scenario.onFragment { f -> assertNotNull(f.childFragmentManager.findFragmentByTag("receipt"), "回到前景後沒顯示結果") }
++    }
++
++    // ARCH-35:走到 DESTROYED 後監聽要全部解除
++    @Test
++    fun listeners_released_after_destroy() {
++        val bus = FakeLocationBus()
++        val owner = TestLifecycleOwner(Lifecycle.State.INITIALIZED)
++        owner.lifecycle.addObserver(LocationTracker(bus))
++        owner.currentState = Lifecycle.State.RESUMED
++        owner.currentState = Lifecycle.State.DESTROYED
++        assertEquals(0, bus.listenerCount, "DESTROYED 後還掛著監聽")
++    }
++
++    // STATE-17:主執行緒處理前連發兩筆,兩筆都要看得到
++    @Test
++    fun two_quick_events_both_delivered() {
++        val vm = MessagesViewModel()
++        val seen = mutableListOf<List<String>>()
++        vm.messages.observeForever { seen += it }
++        thread { vm.onSyncFinished(listOf("已同步 3 筆", "有 1 筆衝突")) }.join()
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals(listOf("已同步 3 筆", "有 1 筆衝突"), seen.lastOrNull(), "觀察者最後看到的訊息清單")
++    }
++}
++```
++
++### 測試:API-9 Fragment 畫面銷毀後
++
++```kotlin
++// 起手:kotlin-idioms test-templates T11
++import android.os.Looper
++import androidx.fragment.app.testing.launchFragmentInContainer
++import androidx.lifecycle.Lifecycle
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlin.test.assertEquals
++import kotlinx.coroutines.flow.MutableSharedFlow
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.Shadows.shadowOf
++
++@RunWith(AndroidJUnit4::class)
++class FeedFragmentTest {
++    // API-9:view 銷毀後不該再收資料去更新畫面
++    @Test
++    fun no_render_after_view_destroyed() {
++        val updates = MutableSharedFlow<String>(extraBufferCapacity = 8)
++        val renderer = FakeRenderer()
++        val scenario = launchFragmentInContainer { FeedFragment(updates, renderer) }
++        updates.tryEmit("第一筆")
++        shadowOf(Looper.getMainLooper()).idle()
++        scenario.moveToState(Lifecycle.State.CREATED)   // view 銷毀,Fragment 本身還在
++        updates.tryEmit("第二筆")
++        shadowOf(Looper.getMainLooper()).idle()
++        assertEquals(listOf("第一筆"), renderer.rendered, "view 還在時要收到第一筆")
++        assertEquals(0, renderer.callsAfterDestroy, "view 銷毀後還在更新畫面")
++    }
++}
++```
++
++### 測試:Hilt
++
++```kotlin
++// 起手:kotlin-idioms test-templates T11
++// Hilt 測試類別要放在具名套件裡:產生的 HostActivityTest_GeneratedInjector 在預設套件時,
++// Hilt 彙整出的元件(具名套件)引用不到它,編譯失敗「cannot find symbol」(實驗實測)
++package com.example.lab
++
++import androidx.test.core.app.ActivityScenario
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import dagger.hilt.android.testing.HiltAndroidRule
++import dagger.hilt.android.testing.HiltAndroidTest
++import dagger.hilt.android.testing.HiltTestApplication
++import kotlin.test.assertNull
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.annotation.Config
++
++@HiltAndroidTest
++@Config(application = HiltTestApplication::class)
++@RunWith(AndroidJUnit4::class)
++class HostActivityTest {
++    @get:Rule
++    val hilt = HiltAndroidRule(this)
++
++    // ARCH-56:Hilt Fragment 放進宿主 Activity 不崩
++    @Test
++    fun hilt_fragment_attaches_to_host() {
++        val error = runCatching {
++            ActivityScenario.launch(HostActivity::class.java).use { scenario ->
++                scenario.onActivity { activity ->
++                    activity.supportFragmentManager.beginTransaction().add(android.R.id.content, ProfileFragment()).commitNow()
++                }
++            }
++        }.exceptionOrNull()
++        assertNull(error, "Hilt Fragment 放進宿主時崩潰")
++    }
++}
++```
++
++### 假依賴
++
++```kotlin
++class FakeLocationBus : LocationBus {
++    private val listeners = mutableSetOf<(Double) -> Unit>()
++    val listenerCount get() = listeners.size
++    override fun register(listener: (Double) -> Unit) { listeners += listener }
++    override fun unregister(listener: (Double) -> Unit) { listeners -= listener }
++}
++```
++
++```kotlin
++class FakeRenderer : Renderer {
++    val rendered = mutableListOf<String>()
++    var callsAfterDestroy = 0
++    private var destroyed = false
++    override fun render(item: String) {
++        if (destroyed) callsAfterDestroy++ else rendered += item
++    }
++    override fun viewDestroyed() { destroyed = true }
++}
++```
++
++### 好寫法
++
++```kotlin
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++
++class ReceiptFragment : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++}
++```
++
++```kotlin
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++import androidx.lifecycle.Lifecycle
++
++// ARCH-31:結果先記成狀態,STARTED 以上才做交易;回到前景時補做
++class OrderFragment : Fragment() {
++    private var pendingResult: String? = null
++
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++
++    fun onPaymentResult(result: String) {
++        pendingResult = result
++        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) showPending()
++    }
++
++    override fun onStart() {
++        super.onStart()
++        showPending()
++    }
++
++    private fun showPending() {
++        if (pendingResult == null) return
++        pendingResult = null
++        childFragmentManager.beginTransaction().add(ReceiptFragment(), "receipt").commit()
++    }
++}
++```
++
++```kotlin
++import androidx.lifecycle.DefaultLifecycleObserver
++import androidx.lifecycle.LifecycleOwner
++
++interface LocationBus {
++    fun register(listener: (Double) -> Unit)
++    fun unregister(listener: (Double) -> Unit)
++}
++
++// ARCH-35:onStart 登記、onStop 對稱解除
++class LocationTracker(private val bus: LocationBus) : DefaultLifecycleObserver {
++    private val listener: (Double) -> Unit = { }
++    override fun onStart(owner: LifecycleOwner) = bus.register(listener)
++    override fun onStop(owner: LifecycleOwner) = bus.unregister(listener)
++}
++```
++
++```kotlin
++import androidx.lifecycle.LiveData
++import androidx.lifecycle.MutableLiveData
++import androidx.lifecycle.ViewModel
++
++// STATE-17:要保留每一筆就放佇列狀態,每次 post 整份佇列
++class MessagesViewModel : ViewModel() {
++    private val queue = mutableListOf<String>()
++    private val _messages = MutableLiveData<List<String>>()
++    val messages: LiveData<List<String>> = _messages
++
++    fun onSyncFinished(events: List<String>) {
++        for (e in events) {
++            synchronized(queue) {
++                queue += e
++                _messages.postValue(queue.toList())
++            }
++        }
++    }
++}
++```
++
++```kotlin
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++import androidx.lifecycle.Lifecycle
++import androidx.lifecycle.lifecycleScope
++import androidx.lifecycle.repeatOnLifecycle
++import kotlinx.coroutines.flow.Flow
++import kotlinx.coroutines.launch
++
++interface Renderer {
++    fun render(item: String)
++    fun viewDestroyed()
++}
++
++// API-9:跟著 view 的生命週期收
++class FeedFragment(private val updates: Flow<String>, private val renderer: Renderer) : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++
++    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
++        viewLifecycleOwner.lifecycleScope.launch {
++            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
++                updates.collect { renderer.render(it) }
++            }
++        }
++    }
++
++    override fun onDestroyView() {
++        renderer.viewDestroyed()
++        super.onDestroyView()
++    }
++}
++```
++
++### 好寫法:ARCH-56 宿主也標 @AndroidEntryPoint
++
++```kotlin
++package com.example.lab
++
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++import androidx.fragment.app.FragmentActivity
++import dagger.hilt.android.AndroidEntryPoint
++
++@AndroidEntryPoint
++class HostActivity : FragmentActivity()
++
++@AndroidEntryPoint
++class ProfileFragment : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++}
++```
++
++```xml
++<!-- src/main/AndroidManifest.xml -->
++<manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <application>
++        <activity android:name="com.example.lab.HostActivity" android:exported="false" />
++    </application>
++</manifest>
++```
++
++### 壞寫法:ARCH-31 狀態存過後直接 commit
++
++```kotlin
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++
++class OrderFragment : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++
++    fun onPaymentResult(result: String) {
++        childFragmentManager.beginTransaction().add(ReceiptFragment(), "receipt").commit()
++    }
++}
++```
++
++### 壞寫法:ARCH-31 狀態存過就丟掉結果
++
++```kotlin
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++import androidx.lifecycle.Lifecycle
++
++class OrderFragment : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++
++    fun onPaymentResult(result: String) {
++        if (!lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return   // 不崩,但結果不見了
++        childFragmentManager.beginTransaction().add(ReceiptFragment(), "receipt").commit()
++    }
++}
++```
++
++### 壞寫法:ARCH-35 登記了沒解除
++
++```kotlin
++import androidx.lifecycle.DefaultLifecycleObserver
++import androidx.lifecycle.LifecycleOwner
++
++interface LocationBus {
++    fun register(listener: (Double) -> Unit)
++    fun unregister(listener: (Double) -> Unit)
++}
++
++class LocationTracker(private val bus: LocationBus) : DefaultLifecycleObserver {
++    private val listener: (Double) -> Unit = { }
++    override fun onStart(owner: LifecycleOwner) = bus.register(listener)
++}
++```
++
++### 壞寫法:STATE-17 連發兩次 postValue
++
++```kotlin
++import androidx.lifecycle.LiveData
++import androidx.lifecycle.MutableLiveData
++import androidx.lifecycle.ViewModel
++
++class MessagesViewModel : ViewModel() {
++    private val _messages = MutableLiveData<List<String>>()
++    val messages: LiveData<List<String>> = _messages
++
++    fun onSyncFinished(events: List<String>) {
++        val shown = mutableListOf<String>()
++        for (e in events) {
++            shown += e
++            _messages.postValue(listOf(e))   // 每筆當一個事件送,主執行緒處理前只剩最後一筆
++        }
++    }
++}
++```
++
++### 壞寫法:API-9 Fragment 自己的 lifecycleScope
++
++```kotlin
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++import androidx.lifecycle.lifecycleScope
++import kotlinx.coroutines.flow.Flow
++import kotlinx.coroutines.launch
++
++interface Renderer {
++    fun render(item: String)
++    fun viewDestroyed()
++}
++
++class FeedFragment(private val updates: Flow<String>, private val renderer: Renderer) : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++
++    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
++        lifecycleScope.launch {   // 跟著 Fragment 而不是 view:view 沒了還在收
++            updates.collect { renderer.render(it) }
++        }
++    }
++
++    override fun onDestroyView() {
++        renderer.viewDestroyed()
++        super.onDestroyView()
++    }
++}
++```
++
++### 壞寫法:ARCH-56 宿主沒標
++
++```kotlin
++package com.example.lab
++
++import android.os.Bundle
++import android.view.LayoutInflater
++import android.view.View
++import android.view.ViewGroup
++import android.widget.FrameLayout
++import androidx.fragment.app.Fragment
++import androidx.fragment.app.FragmentActivity
++import dagger.hilt.android.AndroidEntryPoint
++
++class HostActivity : FragmentActivity()   // 少了 @AndroidEntryPoint
++
++@AndroidEntryPoint
++class ProfileFragment : Fragment() {
++    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View = FrameLayout(requireContext())
++}
++```
++
++```xml
++<!-- src/main/AndroidManifest.xml -->
++<manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <application>
++        <activity android:name="com.example.lab.HostActivity" android:exported="false" />
++    </application>
++</manifest>
++```
++
++### 紅綠矩陣
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:result_after_state_saved_is_shown_on_return、listeners_released_after_destroy、two_quick_events_both_delivered |
++| 測試 | 壞寫法:ARCH-31 狀態存過後直接 commit | result_after_state_saved_is_shown_on_return 斷言紅「狀態存過之後 commit 丟例外」;其他綠 |
++| 測試 | 壞寫法:ARCH-31 狀態存過就丟掉結果 | result_after_state_saved_is_shown_on_return 斷言紅「回到前景後沒顯示結果」;其他綠 |
++| 測試 | 壞寫法:ARCH-35 登記了沒解除 | listeners_released_after_destroy 斷言紅「DESTROYED 後還掛著監聽」;其他綠 |
++| 測試 | 壞寫法:STATE-17 連發兩次 postValue | two_quick_events_both_delivered 斷言紅「觀察者最後看到的訊息清單」;其他綠 |
++| 測試:API-9 Fragment 畫面銷毀後 | 好寫法 | 全綠:no_render_after_view_destroyed |
++| 測試:API-9 Fragment 畫面銷毀後 | 壞寫法:API-9 Fragment 自己的 lifecycleScope | no_render_after_view_destroyed 斷言紅「view 銷毀後還在更新畫面」 |
++| 測試:Hilt | 好寫法:ARCH-56 宿主也標 @AndroidEntryPoint | 全綠:hilt_fragment_attaches_to_host |
++| 測試:Hilt | 壞寫法:ARCH-56 宿主沒標 | hilt_fragment_attaches_to_host 斷言紅「Hilt Fragment 放進宿主時崩潰」 |
++
++## T12 架構測試:協程歸屬
++
++型錄列:API-9(K1),順帶驗 CO-1 的整個範圍版(K2;型錄 CO-1 列的值不改)。跑在哪:Android 模組的本機單元測試(`app/src/test`,不用 Robolectric)。用 ArchUnit 讀編譯後的 `.class`,看「呼叫了哪個類別的哪個方法、存取了哪個欄位」,不看原始碼字面:星號匯入、完整名稱都判得到,註解與字串裡的 `GlobalScope`、名字含 `CoroutineScope(` 的 `rememberCoroutineScope()` 都不會誤判。
++
++- **K1 不准無主協程**:不准碰 `GlobalScope`;不准在允許的類別外呼叫 `CoroutineScope(…)`、`MainScope()`。允許的類別是 `Application` 子類別與標 `@Module` 的 DI 模組(常數 `SCOPE_OWNER_SUPERTYPES`、`DI_MODULE_ANNOTATIONS`,專案自己改);判允許與否看**最外層宣告類別**——Kotlin 會把程式編進別的類別:suspend lambda 編成 `App$onCreate$1`、companion 編成 `AppModule$Companion`,只看呼叫端類別會誤報。同一個方法裡也呼叫了 `goAsync()`(`BroadcastReceiver` 把工作帶出 `onReceive` 的官方做法)就豁免,跟規則包 `kt-unmanaged-scope-launch` 排除含 `goAsync()` 的函式同一件事。
++- **K2 資料層不寫死 dispatcher**:資料層套件(常數 `DATA_LAYER`)不准呼叫 `Dispatchers.IO`、`Dispatchers.Default`;建構子預設值(編成帶 `DefaultConstructorMarker` 參數的合成建構子)、一般函式的預設參數(編成名字結尾 `$default` 的合成方法)、DI 模組豁免——這三種都還能從外面注入,跟型錄 CO-1 標準寫法同精神。
++- **Fragment 用 `lifecycleScope`(API-9 的另一半)這裡判不到**:位元組碼看不出接收者是 Fragment 還是 `viewLifecycleOwner`,規則包也沒有規則判它。那一半照 T11〈測試:API-9 Fragment 畫面銷毀後〉的行為測試接。
++- **inline 函式**:自己寫的 inline 函式裡建 scope,定義處與每個呼叫端各報一筆(位元組碼裡呼叫被展開進呼叫端);別的模組的 inline 函式展開進資料層也會被報,看到這種違規先查是不是 inline 展開。
++- **不匯入測試類別**:`ClassFileImporter` 加自訂 `ImportOption`,排除 AGP 單元測試與儀器測試的編譯輸出(變體目錄 `…UnitTest`、`…AndroidTest`)與 Gradle 的 `test`;測試碼裡的 `CoroutineScope(UnconfinedTestDispatcher())` 不算違規。ArchUnit 內建的 `ImportOption.DoNotIncludeTests` 認不得 AGP 的路徑(實驗實測,見矩陣下方)。
++- **多模組**:資料層在別的 library 模組時,這支測試放 app 模組,`importPackages` 照根套件匯入;library 的類別以 jar 在 app 的本機測試類別路徑上,照樣判得到(實驗實測)。資料層套件或根套件一個類別都沒匯入時 ArchUnit 會失敗(`failOnEmptyShould` 預設開),那是常數設錯的大聲失敗。
++
++**舊違規凍結**:兩支 `@Test` 都用 `FreezingArchRule.freeze(…)` 包:第一次跑出的違規存成一份清單,之後只有清單外的新違規才紅,清單裡的修掉時清單自動縮小。清單只能縮小,新增一筆要在代碼審說明理由——清單讓舊違規永遠綠,不代表那些寫法沒問題。設定照下面〈依賴〉:`app/src/test/resources/archunit.properties` 寫 `freeze.store.default.path=src/test/resources/archunit_store`(相對模組目錄;不寫的話清單落在模組根的 `archunit_store`)與 `freeze.store.default.allowStoreCreation=false`(ArchUnit 手冊的預設就是 false,明寫是為了不讓人改成 true)。第一次建清單:
++
++1. `./gradlew :app:testDebugUnitTest -ParchunitFreezeInit --tests '*CoroutineOwnershipTest'`(有這個 Gradle 屬性時,`build.gradle.kts` 才把 `archunit.freeze.store.default.allowStoreCreation=true` 傳給測試;ArchUnit 的設定可被 `archunit.` 開頭的系統屬性蓋過)。
++2. 把 `app/src/test/resources/archunit_store/` 整個目錄提交進版控。
++3. 之後一律不帶 `-ParchunitFreezeInit` 跑。
++
++為什麼不常駐 true:常駐 true 時清單檔被刪或漏提交,下一次跑會把當下全部違規(含剛加的新違規)重新凍結、測試綠,CI 乾淨 checkout 每次都綠(實驗實測);設 false 時清單不見就丟 `StoreInitializationFailedException`,測試紅——這個紅是設定錯的大聲失敗,不是斷言紅,收證不算抓到錯,要照上面三步補清單。
++
++改 API-9、CO-1 的標準寫法時,規則包(`kt-unmanaged-scope-launch`、`kt-compose-globalscope-in-composable`、`kt-hardcoded-dispatchers-io`)、detekt(`GlobalCoroutineUsage`、`InjectDispatcher`)與這一組三邊一起看。規則包與 detekt 管「這次寫的」,這一組管「整個專案現在有沒有」,而且跑在專案自己的單元測試裡,不靠 lumos 有沒有裝。
++
++### 依據
++
++- 位元組碼判法:https://www.archunit.org/userguide/html/000_Index.html「It does so by analyzing given Java bytecode, importing all classes into a Java code structure」
++- 舊違規凍結:同上手冊〈Freezing Arch Rules〉;`freeze.store.default.allowStoreCreation` 預設 false、`freeze.store.default.path` 設清單位置;設定可用 `archunit.` 開頭的系統屬性蓋過(手冊〈Advanced Configuration〉)
++- API-9:https://developer.android.com/kotlin/coroutines/coroutines-best-practices 「Avoid GlobalScope」「the data and business layer should … use an injected CoroutineScope」;`goAsync`:https://developer.android.com/develop/background-work/background-tasks/broadcasts
++- K2(CO-1):https://developer.android.com/kotlin/coroutines/test 「Using dependency injection to provide dispatchers to your classes makes it easy to replace the real dispatchers in tests」
++- Kotlin 合成類別與 `$default`:r1 可行性席實跑(`governance/review-reports/android儀器測試範本與架構測試/r1-可行性-sonnet.md` F5、F6)
++
++### 依賴
++
++```kotlin
++testImplementation("com.tngtech.archunit:archunit:1.5.1")
++// 下面幾行只有實驗的被測程式要(專案本來就有)
++implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
++implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.10.0")
++implementation("androidx.fragment:fragment-ktx:1.9.1")
++implementation("androidx.compose.runtime:runtime:1.11.4")
++implementation("com.google.dagger:dagger:2.57.2")
++```
++
++```kotlin
++// app/build.gradle.kts 的 plugins { } 加(只有實驗的被測程式有 @Composable 才要)
++id("org.jetbrains.kotlin.plugin.compose")
++```
++
++```kotlin
++// app/build.gradle.kts 的 android { } 加(同上)
++buildFeatures { compose = true }
++```
++
++```kotlin
++// app/build.gradle.kts 檔尾
++// 只有帶 -ParchunitFreezeInit 時才准建凍結清單(第一次建清單用;平常清單不見就紅)
++tasks.withType<Test>().configureEach {
++    if (project.hasProperty("archunitFreezeInit")) {
++        systemProperty("archunit.freeze.store.default.allowStoreCreation", "true")
++    }
++}
++```
++
++```properties
++# app/src/test/resources/archunit.properties
++freeze.store.default.path=src/test/resources/archunit_store
++freeze.store.default.allowStoreCreation=false
++```
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T12
++package com.example.lab.arch
++
++import com.tngtech.archunit.core.domain.JavaAccess
++import com.tngtech.archunit.core.domain.JavaClass
++import com.tngtech.archunit.core.domain.JavaClasses
++import com.tngtech.archunit.core.domain.JavaCodeUnit
++import com.tngtech.archunit.core.domain.JavaConstructor
++import com.tngtech.archunit.core.importer.ClassFileImporter
++import com.tngtech.archunit.core.importer.ImportOption
++import com.tngtech.archunit.lang.ArchCondition
++import com.tngtech.archunit.lang.ArchRule
++import com.tngtech.archunit.lang.ConditionEvents
++import com.tngtech.archunit.lang.SimpleConditionEvent
++import com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes
++import com.tngtech.archunit.library.freeze.FreezingArchRule
++import java.util.regex.Pattern
++import org.junit.Test
++
++class CoroutineOwnershipTest {
++    companion object {
++        const val APP_PACKAGE = "com.example.lab"            // 專案根套件
++        const val DATA_LAYER = "com.example.lab.data.."      // 資料層(含子套件)
++        val SCOPE_OWNER_SUPERTYPES = setOf("android.app.Application")
++        val DI_MODULE_ANNOTATIONS = setOf("dagger.Module")
++
++        // AGP:build/tmp/kotlin-classes/debugUnitTest、build/intermediates/javac/debugUnitTest/…;
++        // Gradle:build/classes/kotlin/test。只比 build/ 底下第一層變體目錄,不比套件名
++        private val TEST_OUTPUT = Pattern.compile(
++            ".*/build/(?:tmp/kotlin-classes|intermediates/[^/]+|classes/(?:kotlin|java))/" +
++                "(?:[^/]*UnitTest|[^/]*AndroidTest|test)/.*",
++        )
++        private val excludeTests = ImportOption { location -> !location.matches(TEST_OUTPUT) }
++
++        val imported: JavaClasses by lazy {
++            ClassFileImporter().withImportOption(excludeTests).importPackages(APP_PACKAGE)
++        }
++    }
++
++    private fun JavaClass.outermost(): JavaClass {
++        var c = this
++        while (c.enclosingClass.isPresent) c = c.enclosingClass.get()
++        return c
++    }
++
++    private fun JavaClass.isScopeOwner(): Boolean {
++        val top = outermost()
++        return SCOPE_OWNER_SUPERTYPES.any { top.isAssignableTo(it) } ||
++            DI_MODULE_ANNOTATIONS.any { top.isAnnotatedWith(it) }
++    }
++
++    private fun JavaCodeUnit.callsGoAsync() = methodCallsFromSelf.any { it.name == "goAsync" && it.target.rawParameterTypes.isEmpty() }
++
++    private fun JavaCodeUnit.isDefaultValueSynthetic() =
++        (this is JavaConstructor && rawParameterTypes.any { it.name == "kotlin.jvm.internal.DefaultConstructorMarker" }) ||
++            name.endsWith("\$default")
++
++    private fun violation(events: ConditionEvents, access: JavaAccess<*>, why: String) =
++        events.add(SimpleConditionEvent.violated(access, "$why: ${access.description}"))
++
++    // K1(API-9)
++    private val noUnownedScope: ArchRule = classes().should(
++        object : ArchCondition<JavaClass>("not use GlobalScope nor create a CoroutineScope outside scope owners") {
++            override fun check(item: JavaClass, events: ConditionEvents) {
++                for (access in item.accessesFromSelf) {
++                    val owner = access.targetOwner.name
++                    if (owner == "kotlinx.coroutines.GlobalScope") {
++                        violation(events, access, "GlobalScope")
++                    } else if (owner == "kotlinx.coroutines.CoroutineScopeKt" && access.name in setOf("CoroutineScope", "MainScope") &&
++                        !item.isScopeOwner() && !access.origin.callsGoAsync()
++                    ) {
++                        violation(events, access, "unowned scope")
++                    }
++                }
++            }
++        },
++    )
++
++    // K2(CO-1 的整個範圍版)
++    private val dataLayerInjectsDispatchers: ArchRule = classes().that().resideInAPackage(DATA_LAYER).should(
++        object : ArchCondition<JavaClass>("not hardcode Dispatchers.IO or Dispatchers.Default") {
++            override fun check(item: JavaClass, events: ConditionEvents) {
++                if (DI_MODULE_ANNOTATIONS.any { item.outermost().isAnnotatedWith(it) }) return
++                for (call in item.methodCallsFromSelf) {
++                    if (call.targetOwner.name == "kotlinx.coroutines.Dispatchers" && call.name in setOf("getIO", "getDefault") &&
++                        !call.origin.isDefaultValueSynthetic()
++                    ) {
++                        violation(events, call, "hardcoded dispatcher")
++                    }
++                }
++            }
++        },
++    )
++
++    @Test
++    fun no_unowned_coroutine_scope() {
++        FreezingArchRule.freeze(noUnownedScope).check(imported)
++    }
++
++    @Test
++    fun data_layer_does_not_hardcode_dispatchers() {
++        FreezingArchRule.freeze(dataLayerInjectsDispatchers).check(imported)
++    }
++}
++```
++
++### 好寫法
++
++```kotlin
++package com.example.lab
++
++import android.app.Application
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.launch
++
++// 允許:Application 子類別建 appScope;suspend lambda 編成 App$onCreate$1,往外找到 App
++class App : Application() {
++    val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++
++    override fun onCreate() {
++        super.onCreate()
++        appScope.launch {
++            val child = CoroutineScope(SupervisorJob())
++            child.launch { }
++        }
++    }
++}
++```
++
++```kotlin
++package com.example.lab.di
++
++import dagger.Binds
++import dagger.Module
++import dagger.Provides
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++
++interface Clock { fun now(): Long }
++class SystemClock : Clock { override fun now() = 0L }
++
++// 允許:標 @Module 的 DI 模組;companion 編成 AppModule$Companion,往外找到 AppModule
++@Module
++abstract class AppModule {
++    @Binds abstract fun clock(impl: SystemClock): Clock
++
++    companion object {
++        @Provides fun appScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
++    }
++}
++```
++
++```kotlin
++package com.example.lab.data.di
++
++import dagger.Module
++import dagger.Provides
++import kotlinx.coroutines.CoroutineDispatcher
++import kotlinx.coroutines.Dispatchers
++
++// K2 豁免:資料層裡的 DI 模組提供 dispatcher
++@Module
++object DispatchersModule {
++    @Provides fun io(): CoroutineDispatcher = Dispatchers.IO
++}
++```
++
++```kotlin
++package com.example.lab.data
++
++import kotlinx.coroutines.CoroutineDispatcher
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++
++// K2 豁免:建構子預設值(合成建構子)與函式預設參數(load$default),都還能從外面注入
++class NoteRepository(private val io: CoroutineDispatcher = Dispatchers.IO) {
++    suspend fun count(): Int = withContext(io) { 3 }
++
++    suspend fun load(dispatcher: CoroutineDispatcher = Dispatchers.IO): String = withContext(dispatcher) { "x" }
++}
++```
++
++```kotlin
++package com.example.lab.ui
++
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.fragment.app.Fragment
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.lifecycleScope
++import androidx.lifecycle.viewModelScope
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.SupervisorJob
++import kotlinx.coroutines.launch
++
++// 註解與字串裡的 GlobalScope 不算:"GlobalScope.launch"
++class Screens {
++    val hint = "do not use GlobalScope.launch"
++}
++
++class ProfileViewModel : ViewModel() {
++    fun refresh() {
++        viewModelScope.launch { }
++    }
++}
++
++// 建構子注入的 scope
++class Syncer(private val scope: CoroutineScope) {
++    fun start() {
++        scope.launch { }
++    }
++}
++
++@Composable
++fun Banner() {
++    val scope = rememberCoroutineScope()   // 名字含 CoroutineScope( 的子字串,位元組碼呼叫的是 rememberCoroutineScope
++    scope.hashCode()
++}
++
++// T12 判不到 Fragment 的 lifecycleScope(那半由 T11 接),這裡綠
++class ListFragment : Fragment() {
++    fun load() {
++        lifecycleScope.launch { }
++    }
++}
++
++// goAsync 後把工作帶出 onReceive:同一個方法裡呼叫了 goAsync,豁免
++class SyncReceiver : BroadcastReceiver() {
++    override fun onReceive(context: Context, intent: Intent) {
++        val pending = goAsync()
++        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
++            try { } finally { pending.finish() }
++        }
++    }
++}
++```
++
++### 壞寫法:API-9 函式本體建 scope
++
++```kotlin
++package com.example.lab.ui
++
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++
++class CartPresenter {
++    fun refresh() {
++        CoroutineScope(Dispatchers.IO).launch { }
++    }
++}
++```
++
++### 壞寫法:API-9 GlobalScope 星號匯入
++
++```kotlin
++package com.example.lab.ui
++
++import kotlinx.coroutines.*
++
++class Uploader {
++    @OptIn(DelicateCoroutinesApi::class)
++    fun upload() {
++        GlobalScope.launch { }
++    }
++}
++```
++
++### 壞寫法:API-9 GlobalScope 完整名稱
++
++```kotlin
++package com.example.lab.ui
++
++import kotlinx.coroutines.DelicateCoroutinesApi
++import kotlinx.coroutines.launch
++
++class Tracker {
++    @OptIn(DelicateCoroutinesApi::class)
++    fun track() {
++        kotlinx.coroutines.GlobalScope.launch { }
++    }
++}
++```
++
++### 壞寫法:API-9 Receiver 沒有 goAsync
++
++```kotlin
++package com.example.lab.ui
++
++import android.content.BroadcastReceiver
++import android.content.Context
++import android.content.Intent
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.launch
++
++class BootReceiver : BroadcastReceiver() {
++    override fun onReceive(context: Context, intent: Intent) {
++        CoroutineScope(Dispatchers.IO).launch { }
++    }
++}
++```
++
++### 壞寫法:CO-1 資料層寫死 withContext
++
++```kotlin
++package com.example.lab.data
++
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.withContext
++
++class TagRepository {
++    suspend fun tags(): List<String> = withContext(Dispatchers.IO) { emptyList() }
++}
++```
++
++### 壞寫法:CO-1 屬性 limitedParallelism
++
++```kotlin
++package com.example.lab.data
++
++import kotlinx.coroutines.Dispatchers
++
++class ImageCache {
++    private val io = Dispatchers.IO.limitedParallelism(4)
++    fun dispatcherName() = io.toString()
++}
++```
++
++### 紅綠矩陣
++
++每一格先用〈好寫法〉帶 `-ParchunitFreezeInit` 建凍結清單(零違規),再換成那一格的被測程式、不帶屬性跑——這樣紅的是「清單外的新違規」。
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:no_unowned_coroutine_scope、data_layer_does_not_hardcode_dispatchers |
++| 測試 | 壞寫法:API-9 函式本體建 scope | no_unowned_coroutine_scope 斷言紅「CartPresenter.refresh」;其他綠 |
++| 測試 | 壞寫法:API-9 GlobalScope 星號匯入 | no_unowned_coroutine_scope 斷言紅「Uploader.upload」;其他綠 |
++| 測試 | 壞寫法:API-9 GlobalScope 完整名稱 | no_unowned_coroutine_scope 斷言紅「Tracker.track」;其他綠 |
++| 測試 | 壞寫法:API-9 Receiver 沒有 goAsync | no_unowned_coroutine_scope 斷言紅「BootReceiver.onReceive」;其他綠 |
++| 測試 | 壞寫法:CO-1 資料層寫死 withContext | data_layer_does_not_hardcode_dispatchers 斷言紅「TagRepository.tags」;其他綠 |
++| 測試 | 壞寫法:CO-1 屬性 limitedParallelism | data_layer_does_not_hardcode_dispatchers 斷言紅「ImageCache.<init>」;其他綠 |
++
++## T13 架構測試:UiState 不可變
++
++型錄列:UI-39(K3)。跑在哪:Android 模組的本機單元測試(`app/src/test`,不用 Robolectric)。用 Konsist 讀 Kotlin 原始碼的宣告(父型別、屬性是 `val` 還是 `var`、型別是不是可變型別),不看函式本體的文字。
++
++- **判哪些類別**:名字結尾在後綴清單(常數 `STATE_SUFFIXES`,預設只有 `UiState`)裡的類別,或父型別(含間接)名字結尾同樣後綴的類別——`sealed interface HomeUiState { data class Success(…) : HomeUiState }` 的 `Success` 也判。專案的狀態類別叫 `State`、`UiModel` 時自己加後綴;命名慣例以外的狀態類別不判,型錄 UI-39 寫「範本 T13」不代表全部狀態類別都接上了。
++- **判什麼**:類別自己的屬性(含主建構子的 `val`/`var` 參數與類別本體宣告的)不准 `var`、型別不准是 Kotlin 可變集合(`MutableList` 等,Konsist 的 `isMutableType`)或 `ArrayList`/`HashMap`/`HashSet` 這類可變實作(常數 `MUTABLE_IMPLS`)。標了 `@Immutable` 還是 `var` 照樣紅:標註只是對編譯器承諾,就地改照樣不更新畫面。
++- **只掃正式程式**:範圍一律 `Konsist.scopeFromProduction()`;測試碼裡的 `FakeProfileUiState(var loading: Boolean)` 不判。用 `scopeFromProject()` 會連測試碼一起判(實驗實測)。`scopeFromProduction()` 掃的是整個 Gradle 專案所有模組的正式程式,不只這支測試所在的模組。
++- **判不到的**:泛型參數裡的可變集合(`List<MutableList<String>>`,`isMutableType` 只看最外層,兩版都判不到);型別寫成型別別名(`typealias Items = MutableList<String>`)時 0.17.3 判不到、1.0.0-beta.1 判得到(2026-11-06 實跑);外部模組的類別(Konsist 只讀本專案原始碼)。
++- **不判外部模組型別**:`java.time.Instant` 這類型別不判。Kotlin 2.0.20 起預設開強跳過,不穩定的參數用實例相等(`===`)比:值相同的新實例只會輕微多餘重組,不是錯;真正的錯是 `var` 或可變集合就地改,實例沒變、畫面被跳過。
++- **舊違規**:Konsist 沒有凍結,單獨照抄時用逐檔常數清單 `LEGACY_FILES` 排除(只能縮小,新增一筆要在代碼審說明)。採用目標架構產生器(`lumos arch-template android`)的專案,把這支併進產生的測試檔,改用那支檔已從 `.lumos/arch-legacy.json` 讀好的 `legacyFiles`,不另留常數。三種舊違規容忍各管各的:產生器的 `.lumos/arch-legacy.json` 管目標架構分層與併進去的這支;這支單獨用時的常數只管這支;T12 的 ArchUnit 凍結清單只管 T12。
++- **斷言**:收集違規再 `assertEquals(emptyList(), 違規)`;不用 Konsist 的 `assertTrue`/`assertFalse`——它們失敗丟 `KoAssertionFailedException`,收證照型別名判、不算斷言失敗。
++- **版本**:只用 Konsist 0.17.3 與 1.0.0-beta.1 都有的 API(`scopeFromProduction()`、`classes(includeNested = true)`、`parents(indirectParents = true)`、`properties(includeNested = false)`、`isVar`、`type.isMutableType`、`type.name`),矩陣兩版實跑結果相同(型別別名那一點不同,見上)。Konsist 靠專案根目錄的 Gradle wrapper(`gradlew` 或 `gradle/wrapper/`)、Maven wrapper 或 `.git` 找專案根,三樣都沒有時測試類別初始化就丟 `KoInternalException: Project directory not found`(XML 上是 `ExceptionInInitializerError`,不是斷言紅)。
++
++改 UI-39 的標準寫法時,連型錄 PERF-30 與規則包 `kt-uistate-mutable-field`(訊息以 `[PERF-30]` 開頭,掛在 PERF-30)一起看:規則訊息掛的是 PERF-30,不會因 UI-39 改了而被看到。
++
++### 依據
++
++- UI-39 與不判外部模組型別:https://developer.android.com/develop/ui/compose/performance/stability/strongskipping 「Strong Skipping is enabled by default in Kotlin 2.0.20」「Unstable parameters are compared using instance equality (===)」「Add @Stable or @Immutable when the compiler can't infer stability (such as classes from non-Compose modules) and new instances with identical values are frequently allocated」;「就地改→畫面被跳過」是從 `===` 推出的,頁面沒逐字寫
++- 宣告判法與範圍:https://docs.konsist.lemonappdev.com/writing-tests/koscope(`scopeFromProduction`、`scopeFromProject`)
++- Konsist 換版不在本組:決策見 [[Projects/Android儀器測試範本與架構測試_計劃]] d2
++
++### 依賴
++
++```kotlin
++testImplementation("com.lemonappdev:konsist:0.17.3")   // 1.0.0-beta.1 同一份測試照跑
++// 下面一行只有實驗的被測程式要(專案本來就有)
++implementation("androidx.compose.runtime:runtime:1.11.4")
++```
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T13
++package com.example.lab.arch
++
++import com.lemonappdev.konsist.api.Konsist
++import com.lemonappdev.konsist.api.declaration.KoClassDeclaration
++import kotlin.test.assertEquals
++import org.junit.Test
++
++class UiStateImmutabilityTest {
++    companion object {
++        val STATE_SUFFIXES = listOf("UiState")   // 專案的狀態類別叫 State、UiModel 時加進來
++        val MUTABLE_IMPLS = setOf("ArrayList", "HashMap", "HashSet", "LinkedHashMap", "LinkedHashSet")
++        val LEGACY_FILES = setOf<String>()       // 舊違規逐檔排除(路徑結尾),只能縮小
++    }
++
++    private fun KoClassDeclaration.isUiState() =
++        STATE_SUFFIXES.any { s -> name.endsWith(s) || parents(indirectParents = true).any { it.name.endsWith(s) } }
++
++    @Test
++    fun ui_state_classes_are_immutable() {
++        val violations = Konsist.scopeFromProduction()
++            .classes(includeNested = true)
++            .filter { it.isUiState() && LEGACY_FILES.none { f -> it.path.endsWith(f) } }
++            .flatMap { c ->
++                c.properties(includeNested = false)
++                    .filter { p ->
++                        p.isVar || p.type?.isMutableType == true || p.type?.name?.substringBefore('<') in MUTABLE_IMPLS
++                    }
++                    .map { p -> "${c.name}.${p.name}" }
++            }
++        assertEquals(emptyList(), violations, "UiState 類別不准有 var 或可變集合")
++    }
++}
++```
++
++### 好寫法
++
++```kotlin
++package com.example.lab.ui
++
++import java.time.Instant
++
++// val 加唯讀集合,變更用 copy;外部模組型別 Instant 不判
++data class ListUiState(
++    val items: List<String> = emptyList(),
++    val updatedAt: Instant? = null,
++    val loading: Boolean = false,
++)
++
++sealed interface HomeUiState {
++    data object Loading : HomeUiState
++    data class Success(val items: List<String>) : HomeUiState
++}
++
++// 名字與父型別都不是 UiState 結尾:不判
++class ClickCounter {
++    var count = 0
++}
++```
++
++### 壞寫法:UI-39 sealed 子類 var 可變集合
++
++```kotlin
++package com.example.lab.ui
++
++sealed interface CartUiState {
++    data class Success(var items: MutableList<String>) : CartUiState
++}
++```
++
++### 壞寫法:UI-39 ArrayList 欄位
++
++```kotlin
++package com.example.lab.ui
++
++data class SearchUiState(val results: ArrayList<String>)
++```
++
++### 壞寫法:UI-39 類別本體 var
++
++```kotlin
++package com.example.lab.ui
++
++data class FormUiState(val name: String) {
++    var dirty: Boolean = false
++}
++```
++
++### 壞寫法:UI-39 標了 @Immutable 還是 var
++
++```kotlin
++package com.example.lab.ui
++
++import androidx.compose.runtime.Immutable
++
++@Immutable
++data class BadgeUiState(var count: Int)
++```
++
++### 紅綠矩陣
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:ui_state_classes_are_immutable |
++| 測試 | 壞寫法:UI-39 sealed 子類 var 可變集合 | ui_state_classes_are_immutable 斷言紅「Success.items」 |
++| 測試 | 壞寫法:UI-39 ArrayList 欄位 | ui_state_classes_are_immutable 斷言紅「SearchUiState.results」 |
++| 測試 | 壞寫法:UI-39 類別本體 var | ui_state_classes_are_immutable 斷言紅「FormUiState.dirty」 |
++| 測試 | 壞寫法:UI-39 標了 @Immutable 還是 var | ui_state_classes_are_immutable 斷言紅「BadgeUiState.count」 |

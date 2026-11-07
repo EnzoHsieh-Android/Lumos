@@ -1,0 +1,971 @@
+diff --git a/skills/kotlin-idioms/test-templates.md b/skills/kotlin-idioms/test-templates.md
+index d4615081e..d401ff862 100644
+--- a/skills/kotlin-idioms/test-templates.md
++++ b/skills/kotlin-idioms/test-templates.md
+@@ -1,21 +1,21 @@
++## T9 Compose UI
++
++型錄列:STATE-12、STATE-23、UI-36、UI-52、ARCH-2、ARCH-3、TEST-32、DATA-63,無障礙 UI-106、UI-110。TEST-29(無限動畫讓測試等不到 idle)的〈測試〉與〈壞測試〉留著當對照,但型錄那列沒接:Compose 1.11 下讓時鐘自動推進的〈壞測試〉在 Robolectric 與模擬器都綠、沒卡住(實驗實測),這一組抓不到差別,型錄寫「未接(儀器批)」。跑在哪:〈測試〉九列在 Robolectric(`app/src/test`);〈測試:無障礙〉只在模擬器(`app/src/androidTest`)——無障礙檢查在 Robolectric 不報(好寫法、壞寫法都綠,實驗實測),對比檢查要實際算繪。
++
++`createComposeRule()` 掛畫面,假 ViewModel 直接推狀態。幾個寫法要點:
++
++- STATE-12 不用 `waitUntil { vm.userMessage.value == null }`:等不到時丟的是 `ComposeTimeoutException`,不是斷言紅(實驗實測);改成推時鐘(超過 Snackbar 的顯示時間)後直接斷言。
++- STATE-23 存不進 `Bundle` 的型別在存狀態時丟例外,`emulateSavedInstanceStateRestore()` 包 `runCatching` 再斷言。
++- ARCH-3 先 `mainClock.autoAdvance = false`,同一個節點 `performClick()` 兩次(中間不推時鐘)後再推時鐘。時鐘自動推進時第一次點擊的轉場立刻跑完、按鈕已離開畫面,第二次點擊丟「Failed to inject touch input. The node is no longer in the tree」,好寫法壞寫法一起紅、分不出來(實驗實測)。
++- TEST-29、TEST-32 是測試的寫法:〈測試〉照正確寫法,〈壞測試:…〉示範錯的寫法對正確程式會怎樣。TEST-32 的〈壞測試〉紅的是 Compose 測試自己的 `AssertionError`:Robolectric 的 XML 有型別、收證算斷言;模擬器的儀器報告沒有 `org.junit.Assert` 框、收證不算(實驗實測)——這是錯的寫法示範,不影響〈測試〉。
++
++### 依據
++
++- https://developer.android.com/develop/ui/compose/testing/synchronization 「set the autoAdvance property in the mainClock to false」
++- https://developer.android.com/develop/ui/compose/testing/apis 「The useUnmergedTree parameter is available in all finders」
++- STATE-23:https://developer.android.com/develop/ui/compose/state-saving 「There are specific APIs to achieve this, such as StateRestorationTester」
++- STATE-12、ARCH-2:https://developer.android.com/topic/architecture/ui-layer/events 「the UI needs to notify the ViewModel of that」;ARCH-3 `dropUnlessResumed`:同頁與 https://developer.android.com/reference/kotlin/androidx/lifecycle/compose/package-summary
++- UI-36:https://developer.android.com/develop/ui/compose/side-effects#snapshotFlow 「converts Compose State<T> objects into a cold Flow」
++- UI-52:https://developer.android.com/develop/ui/compose/lists#avoid-0-pixel-items
++- DATA-63:https://developer.android.com/topic/libraries/architecture/paging/load-state
++- 無障礙:https://developer.android.com/develop/ui/compose/accessibility/testing 「Other available checks look for accessibility issues with color contrast, small touch target size」
++- ARCH-2 用 `TestNavHostController`:https://developer.android.com/guide/navigation/testing
++
++### 依賴
++
++```kotlin
++// app/build.gradle.kts 的 plugins { } 加
++id("org.jetbrains.kotlin.plugin.compose")
++```
++
++```kotlin
++// app/build.gradle.kts 的 android { } 加
++buildFeatures { compose = true }
++```
++
++```kotlin
++implementation(platform("androidx.compose:compose-bom:2026.06.01"))
++implementation("androidx.compose.material3:material3")
++implementation("androidx.activity:activity-compose:1.13.0")
++implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
++implementation("androidx.navigation:navigation-compose:2.9.8")
++implementation("androidx.paging:paging-compose:3.5.3")
++debugImplementation("androidx.compose.ui:ui-test-manifest")
++testImplementation(platform("androidx.compose:compose-bom:2026.06.01"))
++testImplementation("androidx.compose.ui:ui-test-junit4")
++testImplementation("androidx.navigation:navigation-testing:2.9.8")
++testImplementation("org.robolectric:robolectric:4.17")
++testImplementation("androidx.test.ext:junit:1.3.0")
++androidTestImplementation(platform("androidx.compose:compose-bom:2026.06.01"))
++androidTestImplementation("androidx.compose.ui:ui-test-junit4")
++androidTestImplementation("androidx.compose.ui:ui-test-junit4-accessibility")
++```
++
++```properties
++# app/src/test/resources/robolectric.properties
++sdk=34
++```
++
++Robolectric 組都要連這個檔一起抄:`targetSdk = 36` 時 Robolectric 預設用 SDK 36 跑、要 JDK 21,JDK 17 上整個測試類別例外紅(見〈Android 實驗專案骨架〉)。
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T9
++import androidx.compose.runtime.remember
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.assertTextEquals
++import androidx.compose.ui.test.junit4.StateRestorationTester
++import androidx.compose.ui.test.junit4.createComposeRule
++import androidx.compose.ui.test.onAllNodesWithText
++import androidx.compose.ui.test.onNodeWithText
++import androidx.compose.ui.test.performClick
++import androidx.navigation.compose.ComposeNavigator
++import androidx.navigation.testing.TestNavHostController
++import androidx.paging.Pager
++import androidx.paging.PagingConfig
++import androidx.paging.compose.collectAsLazyPagingItems
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import kotlin.test.assertEquals
++import kotlin.test.assertNull
++import kotlin.test.assertTrue
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class ScreensTest {
++    @get:Rule
++    val rule = createComposeRule()
++
++    // STATE-12:訊息顯示完要回報已消費
++    @Test
++    fun message_consumed_after_shown() {
++        val vm = MessageViewModel()
++        rule.setContent { MessageScreen(vm) }
++        rule.onNodeWithText("儲存").performClick()
++        rule.mainClock.advanceTimeBy(10_000)   // 超過 Snackbar 短顯示的 4 秒
++        rule.waitForIdle()
++        assertNull(vm.userMessage.value, "訊息顯示後沒回報已消費")
++    }
++
++    // STATE-23:畫面狀態在存取還原後還在
++    @Test
++    fun filter_survives_state_restore() {
++        val tester = StateRestorationTester(rule)
++        // 存不進 Bundle 的值在 rememberSaveable 登記時就丟例外(組建當下),所以整段包起來
++        val error = runCatching {
++            tester.setContent { FilterPanel() }
++            rule.onNodeWithText("套用").performClick()
++            tester.emulateSavedInstanceStateRestore()
++        }.exceptionOrNull()
++        assertNull(error, "存狀態時丟例外")
++        rule.onNodeWithText("關鍵字:kotlin").assertIsDisplayed()
++    }
++
++    // UI-36:snapshotFlow 要對每次改變發值
++    @Test
++    fun snapshot_flow_reports_every_tap() {
++        val counter = TapCounter()
++        val reported = mutableListOf<Int>()
++        rule.setContent { TapReporter(counter) { reported += it } }
++        rule.onNodeWithText("點我").performClick()
++        rule.waitForIdle()
++        rule.onNodeWithText("點我").performClick()
++        rule.waitForIdle()
++        assertEquals(listOf(0, 1, 2), reported, "snapshotFlow 發出的值")
++    }
++
++    // UI-52:資料還沒載入時項目也有高度,只組建畫面放得下的幾個
++    @Test
++    fun list_composes_only_visible_rows_before_load() {
++        val composed = mutableSetOf<Int>()
++        rule.setContent { PhotoList(ids = List(1_000) { it }, titles = emptyMap()) { composed += it } }
++        rule.waitForIdle()
++        assertTrue(composed.size < 50, "載入前就組建了 ${composed.size} 個項目")
++    }
++
++    // ARCH-2:從結果頁返回後停在原頁,不被推回
++    @Test
++    fun back_from_receipt_stays_on_checkout() {
++        val vm = CheckoutViewModel()
++        lateinit var nav: TestNavHostController
++        rule.setContent {
++            val context = LocalContext.current
++            nav = remember { TestNavHostController(context).apply { navigatorProvider.addNavigator(ComposeNavigator()) } }
++            CheckoutNav(nav, vm)
++        }
++        rule.onNodeWithText("付款").performClick()
++        rule.waitForIdle()
++        rule.runOnIdle { nav.popBackStack() }
++        rule.waitForIdle()
++        assertEquals("checkout", nav.currentDestination?.route, "返回後又被推回收據頁")
++    }
++
++    // ARCH-3:同一個按鈕在轉場完成前點兩次,只多一頁
++    @Test
++    fun double_click_opens_one_page() {
++        lateinit var nav: TestNavHostController
++        rule.setContent {
++            val context = LocalContext.current
++            nav = remember { TestNavHostController(context).apply { navigatorProvider.addNavigator(ComposeNavigator()) } }
++            ListNav(nav)
++        }
++        rule.waitForIdle()
++        rule.mainClock.autoAdvance = false
++        val open = rule.onNodeWithText("開啟")
++        open.performClick()
++        open.performClick()
++        rule.mainClock.advanceTimeBy(2_000)
++        rule.waitForIdle()
++        assertEquals("list", nav.previousBackStackEntry?.destination?.route, "連點後返回堆疊多了一頁")
++    }
++
++    // TEST-29:有無限動畫的畫面,關掉自動推進再推時鐘
++    @Test
++    fun syncing_banner_shown_with_frozen_clock() {
++        rule.mainClock.autoAdvance = false
++        rule.setContent { SyncingBanner() }
++        rule.mainClock.advanceTimeBy(1_000)
++        rule.onNodeWithText("同步中").assertIsDisplayed()
++    }
++
++    // TEST-32:合併語意樹裡的子節點,用未合併樹找
++    @Test
++    fun contact_phone_found_in_unmerged_tree() {
++        rule.setContent { ContactRow("王小明", "0912-345-678") }
++        rule.onNodeWithText("0912-345-678", useUnmergedTree = true).assertTextEquals("0912-345-678")
++    }
++
++    // DATA-63:還在載入時不顯示空畫面
++    @Test
++    fun loading_does_not_show_empty_view() {
++        val flow = Pager(PagingConfig(pageSize = 20)) { NeverLoadingSource() }.flow
++        rule.setContent { FeedList(flow.collectAsLazyPagingItems()) }
++        rule.waitForIdle()
++        assertEquals(0, rule.onAllNodesWithText("沒有資料").fetchSemanticsNodes().size, "載入中就顯示了空畫面")
++    }
++
++    // DATA-63 的另一半:真的沒資料時要顯示空畫面(只會「永遠不顯示」的寫法在這裡紅)
++    @Test
++    fun empty_result_shows_empty_view() {
++        val flow = Pager(PagingConfig(pageSize = 20)) { EmptySource() }.flow
++        rule.setContent { FeedList(flow.collectAsLazyPagingItems()) }
++        rule.waitForIdle()
++        assertEquals(1, rule.onAllNodesWithText("沒有資料").fetchSemanticsNodes().size, "沒資料時沒顯示空畫面")
++    }
++}
++```
++
++### 測試:無障礙
++
++只在模擬器跑(`app/src/androidTest`)。檢查失敗丟 `AccessibilityViewCheckException`,`runCatching` 接住再斷言;斷言用 `org.junit.Assert`(儀器報告的收證看 JUnit 斷言框)。
++
++`enableAccessibilityChecks()` 不帶參數時只對 ERROR 等級丟例外;文字對比不足被 ATF 報成 WARNING,預設照綠(白底 `#CCCCCC` 字、對比 1.61 也綠,實驗實測)。所以要自己傳 `AccessibilityValidator().setRunChecksFromRootView(true).setThrowExceptionFor(WARNING)`(`setRunChecksFromRootView(true)` 是不帶參數時的預設)。
++
++```kotlin
++// 起手:kotlin-idioms test-templates T9
++import androidx.compose.ui.test.junit4.createComposeRule
++import androidx.compose.ui.test.junit4.accessibility.enableAccessibilityChecks
++import androidx.compose.ui.test.onRoot
++import androidx.compose.ui.test.tryPerformAccessibilityChecks
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.google.android.apps.common.testing.accessibility.framework.AccessibilityCheckResult.AccessibilityCheckResultType
++import com.google.android.apps.common.testing.accessibility.framework.integrations.espresso.AccessibilityValidator
++import org.junit.Assert.assertNull
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class AccessibilityTest {
++    @get:Rule
++    val rule = createComposeRule()
++
++    // 對比不足是 WARNING,預設只對 ERROR 丟例外
++    private val validator = AccessibilityValidator()
++        .setRunChecksFromRootView(true)
++        .setThrowExceptionFor(AccessibilityCheckResultType.WARNING)
++
++    // UI-106:可點的目標至少 48dp
++    @Test
++    fun favorite_toggle_touch_target() {
++        rule.enableAccessibilityChecks(validator)
++        rule.setContent { FavoriteToggle() }
++        val error = runCatching { rule.onRoot().tryPerformAccessibilityChecks() }.exceptionOrNull()
++        assertNull("觸控目標檢查不過:$error", error)
++    }
++
++    // UI-110:文字對比夠
++    @Test
++    fun caption_contrast() {
++        rule.enableAccessibilityChecks(validator)
++        rule.setContent { Caption("最後同步:剛剛") }
++        val error = runCatching { rule.onRoot().tryPerformAccessibilityChecks() }.exceptionOrNull()
++        assertNull("對比檢查不過:$error", error)
++    }
++}
++```
++
++### 壞測試:TEST-29 讓時鐘自動推進
++
++```kotlin
++// 錯的寫法:有無限動畫時讓時鐘自動推進,測試等不到 idle
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.junit4.createComposeRule
++import androidx.compose.ui.test.onNodeWithText
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class SyncingBannerAutoClockTest {
++    @get:Rule
++    val rule = createComposeRule()
++
++    @Test
++    fun syncing_banner_shown_auto_clock() {
++        rule.setContent { SyncingBanner() }
++        rule.onNodeWithText("同步中").assertIsDisplayed()
++    }
++}
++```
++
++### 壞測試:TEST-32 在合併樹找子節點
++
++```kotlin
++// 錯的寫法:不加 useUnmergedTree,找到的是合併後的父節點,文字是兩段
++import androidx.compose.ui.test.assertTextEquals
++import androidx.compose.ui.test.junit4.createComposeRule
++import androidx.compose.ui.test.onNodeWithText
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class ContactRowMergedTest {
++    @get:Rule
++    val rule = createComposeRule()
++
++    @Test
++    fun contact_phone_in_merged_tree() {
++        rule.setContent { ContactRow("王小明", "0912-345-678") }
++        rule.onNodeWithText("0912-345-678").assertTextEquals("0912-345-678")
++    }
++}
++```
++
++### 好寫法
++
++```kotlin
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.Button
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Modifier
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++
++class MessageViewModel {
++    private val _userMessage = MutableStateFlow<String?>(null)
++    val userMessage: StateFlow<String?> = _userMessage
++    fun save() { _userMessage.value = "已儲存" }
++    fun userMessageShown() { _userMessage.value = null }
++}
++
++// STATE-12:顯示完回報已消費
++@Composable
++fun MessageScreen(vm: MessageViewModel) {
++    val snackbar = remember { SnackbarHostState() }
++    val message by vm.userMessage.collectAsState()
++    message?.let { m ->
++        LaunchedEffect(m) {
++            snackbar.showSnackbar(m)
++            vm.userMessageShown()
++        }
++    }
++    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
++        Button(onClick = vm::save, modifier = Modifier.padding(padding)) { Text("儲存") }
++    }
++}
++```
++
++```kotlin
++import androidx.compose.foundation.layout.Column
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.saveable.listSaver
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++
++data class Filter(val keyword: String, val onlyUnread: Boolean)
++
++val FilterSaver = listSaver<Filter, Any>(
++    save = { listOf(it.keyword, it.onlyUnread) },
++    restore = { Filter(it[0] as String, it[1] as Boolean) },
++)
++
++// STATE-23:不能直接放進 Bundle 的型別給 Saver(或 @Parcelize)
++@Composable
++fun FilterPanel() {
++    var filter by rememberSaveable(stateSaver = FilterSaver) { mutableStateOf(Filter("", false)) }
++    Column {
++        Text("關鍵字:${filter.keyword}")
++        Button(onClick = { filter = filter.copy(keyword = "kotlin") }) { Text("套用") }
++    }
++}
++```
++
++```kotlin
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableIntStateOf
++import androidx.compose.runtime.setValue
++
++// UI-36:snapshotFlow 讀的要是 State
++class TapCounter {
++    var taps by mutableIntStateOf(0)
++}
++```
++
++```kotlin
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.snapshotFlow
++
++@Composable
++fun TapReporter(counter: TapCounter, onTaps: (Int) -> Unit) {
++    LaunchedEffect(counter) { snapshotFlow { counter.taps }.collect { onTaps(it) } }
++    Button(onClick = { counter.taps++ }) { Text("點我") }
++}
++```
++
++```kotlin
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++
++// UI-52:項目在資料載入前就有固定高度
++@Composable
++fun PhotoList(ids: List<Int>, titles: Map<Int, String>, onCompose: (Int) -> Unit) {
++    LazyColumn(Modifier.height(400.dp)) {
++        items(ids) { id ->
++            onCompose(id)
++            PhotoRow(titles[id])
++        }
++    }
++}
++
++@Composable
++fun PhotoRow(title: String?) {
++    Box(Modifier.fillMaxWidth().height(72.dp)) { if (title != null) Text(title) }
++}
++```
++
++```kotlin
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.navigation.NavHostController
++import androidx.navigation.compose.NavHost
++import androidx.navigation.compose.composable
++import kotlinx.coroutines.flow.MutableStateFlow
++
++class CheckoutViewModel {
++    val done = MutableStateFlow(false)
++    fun pay() { done.value = true }
++    fun onNavigated() { done.value = false }
++}
++
++@Composable
++fun CheckoutNav(nav: NavHostController, vm: CheckoutViewModel) {
++    NavHost(nav, startDestination = "checkout") {
++        composable("checkout") { CheckoutScreen(vm) { nav.navigate("receipt") } }
++        composable("receipt") { Text("收據") }
++    }
++}
++
++// ARCH-2:導航後回報,狀態重設,返回時不會再觸發
++@Composable
++fun CheckoutScreen(vm: CheckoutViewModel, onDone: () -> Unit) {
++    val done by vm.done.collectAsState()
++    LaunchedEffect(done) {
++        if (done) {
++            onDone()
++            vm.onNavigated()
++        }
++    }
++    Button(onClick = vm::pay) { Text("付款") }
++}
++```
++
++```kotlin
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.lifecycle.compose.dropUnlessResumed
++import androidx.navigation.NavHostController
++import androidx.navigation.compose.NavHost
++import androidx.navigation.compose.composable
++
++// ARCH-3:點擊只在 RESUMED 時生效,轉場中的第二次點擊被丟掉
++@Composable
++fun ListNav(nav: NavHostController) {
++    NavHost(nav, startDestination = "list") {
++        composable("list") { Button(onClick = dropUnlessResumed { nav.navigate("detail") }) { Text("開啟") } }
++        composable("detail") { Text("詳細") }
++    }
++}
++```
++
++```kotlin
++import androidx.compose.animation.core.animateFloat
++import androidx.compose.animation.core.infiniteRepeatable
++import androidx.compose.animation.core.rememberInfiniteTransition
++import androidx.compose.animation.core.tween
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.alpha
++
++// TEST-29:畫面有無限動畫
++@Composable
++fun SyncingBanner() {
++    val transition = rememberInfiniteTransition(label = "sync")
++    val a by transition.animateFloat(0.3f, 1f, infiniteRepeatable(tween(800)), label = "alpha")
++    Text("同步中", Modifier.alpha(a))
++}
++```
++
++```kotlin
++import androidx.compose.foundation.layout.Row
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.semantics.semantics
++
++// TEST-32:整列合併成一個語意節點
++@Composable
++fun ContactRow(name: String, phone: String) {
++    Row(Modifier.semantics(mergeDescendants = true) {}) {
++        Text(name)
++        Text(phone)
++    }
++}
++```
++
++```kotlin
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.paging.LoadState
++import androidx.paging.PagingSource
++import androidx.paging.PagingState
++import androidx.paging.compose.LazyPagingItems
++import kotlinx.coroutines.awaitCancellation
++
++// DATA-63:refresh 不在載入中、而且沒有項目,才顯示空畫面
++@Composable
++fun FeedList(items: LazyPagingItems<String>) {
++    if (items.loadState.refresh is LoadState.NotLoading && items.itemCount == 0) {
++        Text("沒有資料")
++    } else {
++        LazyColumn { items(items.itemCount) { i -> Text(items[i] ?: "") } }
++    }
++}
++
++class NeverLoadingSource : PagingSource<Int, String>() {
++    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, String> = awaitCancellation()
++    override fun getRefreshKey(state: PagingState<Int, String>): Int? = null
++}
++
++class EmptySource : PagingSource<Int, String>() {
++    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, String> = LoadResult.Page(emptyList(), null, null)
++    override fun getRefreshKey(state: PagingState<Int, String>): Int? = null
++}
++```
++
++```kotlin
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.size
++import androidx.compose.material3.Text
++import androidx.compose.material3.minimumInteractiveComponentSize
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.unit.dp
++
++// UI-106:圖示 24dp,可點範圍至少 48dp
++@Composable
++fun FavoriteToggle() {
++    Box(Modifier.minimumInteractiveComponentSize().clickable { }.semantics { contentDescription = "收藏" }) {
++        Box(Modifier.size(24.dp).background(Color.Red))
++    }
++}
++
++// UI-110:文字用主題的前景色(這裡寫死成接近 onSurface 的深色)
++@Composable
++fun Caption(text: String) {
++    Box(Modifier.background(Color.White)) { Text(text, color = Color(0xFF1C1B1F)) }
++}
++```
++
++### 壞寫法:STATE-12 顯示完沒回報
++
++```kotlin
++import androidx.compose.foundation.layout.padding
++import androidx.compose.material3.Button
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.SnackbarHost
++import androidx.compose.material3.SnackbarHostState
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.remember
++import androidx.compose.ui.Modifier
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.StateFlow
++
++class MessageViewModel {
++    private val _userMessage = MutableStateFlow<String?>(null)
++    val userMessage: StateFlow<String?> = _userMessage
++    fun save() { _userMessage.value = "已儲存" }
++    fun userMessageShown() { _userMessage.value = null }
++}
++
++@Composable
++fun MessageScreen(vm: MessageViewModel) {
++    val snackbar = remember { SnackbarHostState() }
++    val message by vm.userMessage.collectAsState()
++    message?.let { m -> LaunchedEffect(m) { snackbar.showSnackbar(m) } }   // 沒呼叫 userMessageShown()
++    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
++        Button(onClick = vm::save, modifier = Modifier.padding(padding)) { Text("儲存") }
++    }
++}
++```
++
++### 壞寫法:STATE-23 存不進 Bundle 的型別
++
++```kotlin
++import androidx.compose.foundation.layout.Column
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.saveable.listSaver
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++
++data class Filter(val keyword: String, val onlyUnread: Boolean)
++
++val FilterSaver = listSaver<Filter, Any>(
++    save = { listOf(it.keyword, it.onlyUnread) },
++    restore = { Filter(it[0] as String, it[1] as Boolean) },
++)
++
++@Composable
++fun FilterPanel() {
++    var filter by rememberSaveable { mutableStateOf(Filter("", false)) }   // 沒給 Saver,Filter 也不是 Parcelable
++    Column {
++        Text("關鍵字:${filter.keyword}")
++        Button(onClick = { filter = filter.copy(keyword = "kotlin") }) { Text("套用") }
++    }
++}
++```
++
++### 壞寫法:UI-36 snapshotFlow 讀一般欄位
++
++```kotlin
++// 一般 var,不是 State:snapshotFlow 只會發第一個值
++class TapCounter {
++    var taps = 0
++}
++```
++
++### 壞寫法:UI-52 項目載入前高度 0
++
++```kotlin
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.items
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.unit.dp
++
++@Composable
++fun PhotoList(ids: List<Int>, titles: Map<Int, String>, onCompose: (Int) -> Unit) {
++    LazyColumn(Modifier.height(400.dp)) {
++        items(ids) { id ->
++            onCompose(id)
++            PhotoRow(titles[id])
++        }
++    }
++}
++
++@Composable
++fun PhotoRow(title: String?) {
++    Box(Modifier.fillMaxWidth()) { if (title != null) Text(title) }   // 沒資料時高度 0
++}
++```
++
++### 壞寫法:ARCH-2 狀態觸發導航沒重設
++
++```kotlin
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.navigation.NavHostController
++import androidx.navigation.compose.NavHost
++import androidx.navigation.compose.composable
++import kotlinx.coroutines.flow.MutableStateFlow
++
++class CheckoutViewModel {
++    val done = MutableStateFlow(false)
++    fun pay() { done.value = true }
++    fun onNavigated() { done.value = false }
++}
++
++@Composable
++fun CheckoutNav(nav: NavHostController, vm: CheckoutViewModel) {
++    NavHost(nav, startDestination = "checkout") {
++        composable("checkout") { CheckoutScreen(vm) { nav.navigate("receipt") } }
++        composable("receipt") { Text("收據") }
++    }
++}
++
++@Composable
++fun CheckoutScreen(vm: CheckoutViewModel, onDone: () -> Unit) {
++    val done by vm.done.collectAsState()
++    LaunchedEffect(done) { if (done) onDone() }   // 返回時 done 還是 true,又導航一次
++    Button(onClick = vm::pay) { Text("付款") }
++}
++```
++
++### 壞寫法:ARCH-3 點擊沒擋生命週期
++
++```kotlin
++import androidx.compose.material3.Button
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.navigation.NavHostController
++import androidx.navigation.compose.NavHost
++import androidx.navigation.compose.composable
++
++@Composable
++fun ListNav(nav: NavHostController) {
++    NavHost(nav, startDestination = "list") {
++        composable("list") { Button(onClick = { nav.navigate("detail") }) { Text("開啟") } }
++        composable("detail") { Text("詳細") }
++    }
++}
++```
++
++### 壞寫法:DATA-63 只看 itemCount
++
++```kotlin
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.paging.PagingSource
++import androidx.paging.PagingState
++import androidx.paging.compose.LazyPagingItems
++import kotlinx.coroutines.awaitCancellation
++
++@Composable
++fun FeedList(items: LazyPagingItems<String>) {
++    if (items.itemCount == 0) {   // 載入中也是 0
++        Text("沒有資料")
++    } else {
++        LazyColumn { items(items.itemCount) { i -> Text(items[i] ?: "") } }
++    }
++}
++
++class NeverLoadingSource : PagingSource<Int, String>() {
++    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, String> = awaitCancellation()
++    override fun getRefreshKey(state: PagingState<Int, String>): Int? = null
++}
++
++class EmptySource : PagingSource<Int, String>() {
++    override suspend fun load(params: LoadParams<Int>): LoadResult<Int, String> = LoadResult.Page(emptyList(), null, null)
++    override fun getRefreshKey(state: PagingState<Int, String>): Int? = null
++}
++```
++
++### 壞寫法:UI-106 可點範圍 24dp
++
++```kotlin
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.size
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.unit.dp
++
++@Composable
++fun FavoriteToggle() {
++    Box(Modifier.size(24.dp).background(Color.Red).clickable { }.semantics { contentDescription = "收藏" })
++}
++
++@Composable
++fun Caption(text: String) {
++    Box(Modifier.background(Color.White)) { Text(text, color = Color(0xFF1C1B1F)) }
++}
++```
++
++### 壞寫法:UI-110 淺灰字
++
++```kotlin
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.size
++import androidx.compose.material3.Text
++import androidx.compose.material3.minimumInteractiveComponentSize
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.semantics.contentDescription
++import androidx.compose.ui.semantics.semantics
++import androidx.compose.ui.unit.dp
++
++@Composable
++fun FavoriteToggle() {
++    Box(Modifier.minimumInteractiveComponentSize().clickable { }.semantics { contentDescription = "收藏" }) {
++        Box(Modifier.size(24.dp).background(Color.Red))
++    }
++}
++
++@Composable
++fun Caption(text: String) {
++    Box(Modifier.background(Color.White)) { Text(text, color = Color(0xFFCCCCCC)) }   // 白底淺灰字
++}
++```
++
++### 紅綠矩陣
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:message_consumed_after_shown、filter_survives_state_restore、snapshot_flow_reports_every_tap、list_composes_only_visible_rows_before_load、back_from_receipt_stays_on_checkout、double_click_opens_one_page、syncing_banner_shown_with_frozen_clock、contact_phone_found_in_unmerged_tree、loading_does_not_show_empty_view、empty_result_shows_empty_view |
++| 測試 | 壞寫法:STATE-12 顯示完沒回報 | message_consumed_after_shown 斷言紅「訊息顯示後沒回報已消費」;其他綠 |
++| 測試 | 壞寫法:STATE-23 存不進 Bundle 的型別 | filter_survives_state_restore 斷言紅「存狀態時丟例外」;其他綠 |
++| 測試 | 壞寫法:UI-36 snapshotFlow 讀一般欄位 | snapshot_flow_reports_every_tap 斷言紅「snapshotFlow 發出的值」;其他綠 |
++| 測試 | 壞寫法:UI-52 項目載入前高度 0 | list_composes_only_visible_rows_before_load 斷言紅「載入前就組建了」;其他綠 |
++| 測試 | 壞寫法:ARCH-2 狀態觸發導航沒重設 | back_from_receipt_stays_on_checkout 斷言紅「返回後又被推回收據頁」;其他綠 |
++| 測試 | 壞寫法:ARCH-3 點擊沒擋生命週期 | double_click_opens_one_page 斷言紅「連點後返回堆疊多了一頁」;其他綠 |
++| 測試 | 壞寫法:DATA-63 只看 itemCount | loading_does_not_show_empty_view 斷言紅「載入中就顯示了空畫面」;其他綠 |
++| 壞測試:TEST-29 讓時鐘自動推進 | 好寫法 | syncing_banner_shown_auto_clock 綠 |
++| 壞測試:TEST-32 在合併樹找子節點 | 好寫法 | contact_phone_in_merged_tree 斷言紅「王小明」 |
++| 測試:無障礙 | 好寫法 | 全綠:favorite_toggle_touch_target、caption_contrast |
++| 測試:無障礙 | 壞寫法:UI-106 可點範圍 24dp | favorite_toggle_touch_target 斷言紅「觸控目標檢查不過」;其他綠 |
++| 測試:無障礙 | 壞寫法:UI-110 淺灰字 | caption_contrast 斷言紅「對比檢查不過」;其他綠 |
++
++## T10 LeakCanary
++
++型錄列:TEST-35。跑在哪:模擬器(`app/src/androidTest`,debug 建置;LeakCanary 要能 dump 堆積,debug 建置是可除錯的)。走完一個畫面流程(開畫面、關掉)後呼叫 `LeakAssertions.assertNoLeaks()`。
++
++- 不用 `DetectLeaksAfterTestSuccess` 規則:它在測試本體外丟 `NoLeakAssertionFailedError`,紅的是那個型別名,收證工具照型別名判、儀器報告只看第一行是不是 `java.lang.AssertionError`,不算斷言失敗。改在測試最後 `runCatching { LeakAssertions.assertNoLeaks() }` 再 `assertNull`。
++- `debugImplementation` 的 `leakcanary-android` 一定要加,見〈依賴〉。
++- 斷言訊息只帶例外型別與前幾行:洩漏路徑的文字很長,儀器報告的失敗文字截在 64KB,斷言框被截掉時收證判不到。
++
++### 依據
++
++- https://square.github.io/leakcanary/ui-tests/ `androidTestImplementation 'com.squareup.leakcanary:leakcanary-android-instrumentation:2.14'`;「If application leaks are found, LeakAssertions.assertNoLeaks() will throw a NoLeakAssertionFailedError」
++- TEST-35:型錄標準寫法(儀器測試接 LeakCanary)
++
++### 依賴
++
++```kotlin
++debugImplementation("com.squareup.leakcanary:leakcanary-android:2.14")   // 不能省:監看物件的那一半裝在 App 裡
++androidTestImplementation("com.squareup.leakcanary:leakcanary-android-instrumentation:2.14")
++androidTestImplementation("androidx.test:core-ktx:1.7.0")
++```
++
++只加 `androidTestImplementation` 那一行不夠:App 這邊沒裝 LeakCanary 時沒有東西在監看被關掉的 Activity,`assertNoLeaks()` 什麼都找不到,壞寫法照綠(實驗實測;官方頁「You still need to include the LeakCanary artifact in your app」)。
++
++### 測試
++
++```kotlin
++// 起手:kotlin-idioms test-templates T10
++import androidx.lifecycle.Lifecycle
++import androidx.test.core.app.ActivityScenario
++import androidx.test.ext.junit.runners.AndroidJUnit4
++import com.example.lab.ProfileActivity
++import leakcanary.LeakAssertions
++import org.junit.Assert.assertNull
++import org.junit.Test
++import org.junit.runner.RunWith
++
++@RunWith(AndroidJUnit4::class)
++class ProfileLeakTest {
++    // TEST-35:開過再關掉的畫面不該被留住
++    @Test
++    fun profile_screen_does_not_leak() {
++        ActivityScenario.launch(ProfileActivity::class.java).use { it.moveToState(Lifecycle.State.DESTROYED) }
++        val leak = runCatching { LeakAssertions.assertNoLeaks() }.exceptionOrNull()
++        val kind = generateSequence(leak?.javaClass as Class<*>?) { it.superclass }.map { it.name }.toList()
++        assertNull("有洩漏:$kind ${leak?.message?.lineSequence()?.take(3)?.joinToString(" / ")}", leak)
++    }
++}
++```
++
++### 好寫法
++
++```kotlin
++package com.example.lab
++
++import android.app.Activity
++import android.os.Bundle
++
++object SessionTracker {
++    val listeners = mutableListOf<Any>()
++}
++
++// TEST-35 的被測程式:登記到單例的監聽在 onDestroy 解除
++class ProfileActivity : Activity() {
++    private val listener = Any()
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        SessionTracker.listeners += listener
++    }
++
++    override fun onDestroy() {
++        SessionTracker.listeners -= listener
++        super.onDestroy()
++    }
++}
++```
++
++```xml
++<!-- src/main/AndroidManifest.xml -->
++<manifest xmlns:android="http://schemas.android.com/apk/res/android">
++    <application>
++        <activity android:name="com.example.lab.ProfileActivity" android:exported="false" />
++    </application>
++</manifest>
++```
++
++### 壞寫法:TEST-35 單例留住 Activity
++
++```kotlin
++package com.example.lab
++
++import android.app.Activity
++import android.os.Bundle
++
++object SessionTracker {
++    val listeners = mutableListOf<Any>()
++}
++
++class ProfileActivity : Activity() {
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        SessionTracker.listeners += this   // 單例留住 Activity,關掉後也回收不了
++    }
++}
++```
++
++### 紅綠矩陣
++
++| 測試小節 | 被測程式小節 | 結果 |
++|---|---|---|
++| 測試 | 好寫法 | 全綠:profile_screen_does_not_leak |
++| 測試 | 壞寫法:TEST-35 單例留住 Activity | profile_screen_does_not_leak 斷言紅「有洩漏」 |
++
