@@ -1,0 +1,331 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md b/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md
+index a18e5fa38bc0cb170bdb1cbb6207946bf7ee9b17..9b490317a4d9764e15b7f25e8453715a90dc0bac 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md
+@@ -38,21 +38,21 @@ RETIRE-IF: 計數檔(`~/.cache/lumos/full-suite-guard/events.jsonl`)八週內逃
+ ## 範圍
+ 
+ ### 做
+ 
+ 1. **一進 main 就記下是不是在對話裡**:清 `GIT_*` 那段之前,先讀 `CLAUDECODE`、`LUMOS_PUSH_ATTEMPT`、`LUMOS_FANOUT_CHILD`、`LUMOS_ALLOW_FULL_SUITE` 四個值存進區域變數,接著把 `CLAUDECODE` 從 `os.environ` 拿掉(測試開的沙盒執行器與子程序不繼承);之後的判斷只讀存下來的值(解 r3 正確性 F1、通才 F1:原本「讀當下」與「先拿掉」順序打架)。
+ 2. **只看有沒有帶篩選條件**(取代第三版的估耗時佔比;使用者裁縮成最小形狀):新增 `_chat_full_suite_block(args, snap)`,回擋下訊息或 None。在對話裡(存下的 `CLAUDECODE` 是 `1`)、不是推送前閘、不是切片子程序、逃生門理由不合格時,參數裡沒有關鍵字(`-k` 或直接打名字)、沒有 `--suite`、沒有 `--list` 就擋;只帶 `--shard`、`--serial`、`-x`、`--ff`、`--seed` 這些不縮小範圍的旗標也擋。
+ 3. **接在參數解析之後、`_fanout_wanted` 與 `_isolate_environment()` 之前**:那時還沒開任何子程序、沒建暫存根目錄、`HOME` 還是真的家目錄(解 r3 通才 F2、正確性 F2、架構 F2:隔離之後 `HOME` 已換成拋棄式目錄,計數寫不到真的家目錄)。擋下時印訊息到 stderr、回 2。逃生門合格時照常往下走,全套照樣預設切片(解 r3 通才 F5:放行後被強制單程序)。
+ 4. **擋下訊息**:第一行「擋下:在對話裡不帶篩選條件會跑滿全套(約 8 分鐘),不准跑」;第二行講為什麼(超過對話工具上限、吃記憶體、推送前閘會自己跑);第三行起指令各自獨立一行:`python3.14 scripts/test_lumos.py -k <關鍵字>`、`--suite docs`、全套交給推送前閘(`git push` 放背景)或請使用者在一般終端機跑。**訊息不印逃生門的變數名**,逃生門只寫在 [[Systems/測試執行器]]。
+ 5. **推送前閘的補救提示**(解 r1 正確性 F4、r3 正確性 F3):`scripts/hooks/pre-push` 紅燈那段兩處「下一步」從 `--ff -x` 改成逐支 `-k`:從完整輸出抓 `✗ FAILED <測試名>` 行(執行器對每支紅的測試都印這一行)取出測試名,每支印一行 `<python> scripts/test_lumos.py -k <測試名>`(最多 10 支,超過印「還有 N 支,看完整輸出」);一支都抓不到(紅在測試以外,例如切片子程序沒寫出摘要)時印「打開上面的完整輸出看紅在哪」,不印指令。執行器本身沒有其他地方印 `--ff -x` 叫人跑(說明文字裡的旗標介紹不算指令)。
+ 6. **逃生門要帶理由**:`LUMOS_ALLOW_FULL_SUITE=<理由>`,理由照 `lint-waive --note` 既有判法(去空白後至少 10 字、至少一個文字或數字字元)才算數;不算數照擋並講要寫理由。只在「本來會擋」時印一行「對話裡放行,理由:<理由>」。
+-7. **計數**:擋下與逃生門放行各追加一行到 `~/.cache/lumos/full-suite-guard/events.jsonl`(時間、種類、理由),用一支 `_chat_guard_log` 開檔用附加模式寫一行,建目錄與寫入都只攔 `OSError`,寫不進去就略過、不影響判斷(解 r3 通才 F3:原本寫「照既有家目錄快取寫法」,那套是整檔覆蓋)。不借 `scripts/lumos` 的寫入函式:執行器一啟動就要判,載入那支四萬行的檔要多花時間,而且測試總檔單獨裝進消費專案時不保證有那支(解 r3 架構 F1)。全計劃計數檔路徑只有這一個(解 r3 架構 F5)。不寫治理帳:治理帳在 repo 裡,執行器寫了會讓「工作目錄乾淨」的測試與提交前檢查看到改動。
++7. **計數**:擋下與逃生門放行各追加一行到 `~/.cache/lumos/full-suite-guard/events.jsonl`(時間、種類、理由)。寫法走 `scripts/lumos` 的 `_home_cache_append_line`(從既有 `_drift_m1_ledger_miss` 抽出的單一來源:逐層信任檢查、`O_NOFOLLOW`、`0600`,開了再確認是自己的一般檔),只在真的要記時才載入 `scripts/lumos`,平常啟動不載;載入或寫入失敗都略過、不影響判斷(代碼審 r1 架構對齊席:原本自己開檔追加,少了信任檢查,`~/.cache/lumos` 被換成連結時會寫到別處)。不寫治理帳:治理帳在 repo 裡,執行器寫了會讓「工作目錄乾淨」的測試與提交前檢查看到改動。
+ 8. **手冊**:[[Systems/測試執行器]] 補 WHY、逃生門寫法、`CLAUDECODE` 被拿掉的副作用(之後開的子程序看不到它;現在只有 `scripts/scenario_probe.py` 讀它而且本來就拿掉)。
+ 
+ ### 不做
+ 
+ - 不在 CI 擋:CI 沒有 `CLAUDECODE`。
+ - 不擋人在一般終端機跑全套:沒有 `CLAUDECODE` 就不判。
+ - 不寫治理帳(理由見做 7)。
+ - 不管其他 AI 工具(Codex 等沒設 `CLAUDECODE` 的):另案。
+ - 不擋對話裡 `git push` 觸發的推送前閘全套:那是規定的跑法,推送要放背景跑。
+ - 不新增 `--lf`(理由見做 5)。
+@@ -121,10 +121,11 @@ REVISIT:2026-12-08 讀 `~/.cache/lumos/full-suite-guard/events.jsonl` 看這一
+ 3. `env -u CLAUDECODE`、`CLAUDECODE=0`、tmux 或 cron 這類不繼承環境的新程序都繞得過(r1 繞過席實測 `env -u` 有效)。
+ 4. 只要帶了任何篩選條件就放行:`-k t_`(每支測試名都含)等於全套,擋不到;`--suite docs` 也照放(r3 繞過席量過它不短)。這是使用者 2026-11-08 裁縮成最小形狀時接受的風險;分片輪流跑(`--shard i/16` 在只帶分片時會擋,但 `-k t_ --shard i/16` 不擋)同屬這一類。
+ 5. 對話裡 `git push` 讓推送前閘跑全套是規定的跑法,不擋;推送要放背景跑。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-11-08,四席 sonnet:通才、正確性、繞過、架構對齊):24 條/blocking 12/插入點落在預設切片之後(四席獨立)、清變數早於判斷、`-k t_` 與空字串繞過、推送前閘提示被反擋、訊息印出逃生門、計數量不到、子程序測試環境沒清會遞迴;全部折入做 1–8 與條款 S1–S5,分組在 r1-intake.md。卷證:governance/review-reports/對話裡不准跑全套測試/。
+ - r2(2026-11-08,四席 sonnet 新席):20 條/blocking 8(blocker 2)/`--lf` 被預設切片開成全套(兩席獨立)、`--lf` 紀錄過期與過大、三成門檻分母不明、分片輪流繞過、文件子集其實四分鐘、計數寫法不照既有、直接手跑掛鉤帶出豁免;同類「照旗標或支數猜耗時」第二輪打穿,換形狀成對話裡不切片、選完照耗時表估佔比,拿掉 `--lf`;分組在 r2-intake.md。
+ - r3(2026-11-08,四席 sonnet 新席):23 條/blocking 9(blocker 2)/拿掉 `CLAUDECODE` 的時機與「讀當下」打架、計數寫在隔離後的拋棄式 HOME、計數「照既有寫法」其實是整檔覆蓋、佔比不綁絕對耗時、分片輪流繞過、掛鉤手上沒有乾淨的紅測試名;三輪沒收斂,使用者 2026-11-08 裁「照你建議」(接受風險、縮成最小形狀):改成一進 main 先存四個環境值、判斷移到隔離之前、只看有沒有帶篩選條件、計數用附加模式寫一行、掛鉤從 `✗ FAILED` 行抓測試名,繞法寫進天花板 4;卷證 governance/review-reports/對話裡不准跑全套測試/。
+ - 例:輸入 `CLAUDECODE=1` 不帶參數 → 第三版要先選測試、估佔比(隔離之後才判,計數寫進拋棄式 HOME)、第四版在隔離前直接擋、計數寫進真的家目錄;輸入 `-k t_` → 第三版擋(100%)、第四版放(天花板 4)。
++- 代碼審 r1(2026-11-08,2 席):8 條/blocking 1/計數寫法改走 lumos 既有的安全附加(抽出 `_home_cache_append_line`,原呼叫端改用它)、真子程序測試開子程序前先確認判斷會擋(免得判斷被改壞時遞迴跑全套)、補 CLAUDECODE 真的從環境拿掉與紅燈超過 10 支的案例、切片子程序標記改讀既有常數;逃生門理由判法與子程序環境組法附理由放行;卷證 governance/review-reports/code-對話裡不准跑全套測試/。
+diff --git a/scripts/hooks/pre-push b/scripts/hooks/pre-push
+index 7c8f088de6e30abf80f0dceb713d122a6e6e56f8..0682ffb60101480e763e2a9cae6452cef941aa83 100755
+--- a/scripts/hooks/pre-push
++++ b/scripts/hooks/pre-push
+@@ -836,23 +836,20 @@ if ! { : > "$_AUTOLOOP_LOG" && : > "$_TESTS_LOG"; } 2>/dev/null; then
+     echo "擋下:建不出暫存檔,所以這次的測試沒辦法跑。"
+     echo "★不是測試紅了,是暫存目錄有問題★——多半是空間滿了或沒有寫入權限。"
+     echo ""
+     echo "先看一眼暫存目錄:"
+     echo "      df -h \"${TMPDIR:-/tmp}\" && ls -ld \"${TMPDIR:-/tmp}\""
+     echo ""
+   } >&2
+   exit 1
+ fi
+ 
+-# 測試紅時把要給人看的 log 搬到暫存資料夾外,印搬出去的那份路徑;$1=暫存資料夾裡那份 $2=檔名樣板的中段(autoloop/tests)。
+-# ★XXXXXX 必須在結尾★:macOS 的 mktemp 不吃「樣板中間有 XXXXXX」,會直接報「File exists」(第一版四支 pre-push 測試當場翻紅)。
+-# 搬不出去(暫存目錄滿或不可寫)就講明,下面印的末段照樣看得到紅的是哪幾支。
+ # ★紅燈提示逐支給 -k★(Projects/對話裡不准跑全套測試_計劃 做 5):對話裡不帶篩選條件會被執行器擋,
+ # 原本教的 `--ff -x` 在對話裡跑不了。從完整輸出的 `✗ FAILED <測試名>` 行(執行器對每支紅的測試都印)抓名字,
+ # 最多 10 支;一支都抓不到(紅在測試以外)就叫人看完整輸出、不印指令。
+ pp_red_names() {
+   grep -h -o "✗ FAILED t_[A-Za-z0-9_]*" "$1" 2>/dev/null | sed 's/^✗ FAILED //' | awk '!seen[$0]++'
+ }
+ pp_red_hint() {
+   local _names _n
+   _names="$(pp_red_names "$1")"
+   _n=$(printf '%s\n' "$_names" | grep -c . || true)
+@@ -867,20 +864,23 @@ pp_red_hint() {
+ pp_red_next() {
+   local _first
+   _first="$(pp_red_names "$1" | head -1)"
+   if [[ -n "$_first" ]]; then
+     echo "下一步:$(pp_q "$PY") scripts/test_lumos.py -k $_first"
+   else
+     echo "下一步:打開上面的完整輸出看紅在哪"
+   fi
+ }
+ 
++# 測試紅時把要給人看的 log 搬到暫存資料夾外,印搬出去的那份路徑;$1=暫存資料夾裡那份 $2=檔名樣板的中段(autoloop/tests)。
++# ★XXXXXX 必須在結尾★:macOS 的 mktemp 不吃「樣板中間有 XXXXXX」,會直接報「File exists」(第一版四支 pre-push 測試當場翻紅)。
++# 搬不出去(暫存目錄滿或不可寫)就講明,下面印的末段照樣看得到紅的是哪幾支。
+ pp_keep_log() {
+   local _k
+   _k="$(mktemp "${TMPDIR:-/tmp}/lumos-prepush-$2-XXXXXX" 2>/dev/null)" && cp "$1" "$_k" 2>/dev/null && { printf '%s' "$_k"; return 0; }
+   [[ -n "$_k" ]] && rm -f "$_k"
+   printf '%s' "(沒能把完整輸出存到暫存資料夾外,這次只看得到下面這一段)"
+ }
+ # 純文件推送(每個 ref 都判成 docs)自主迴圈那支只跑讀真 CLAUDE.md 的那一條(2026-09-18 實推量到整支 68 秒,
+ # 而它 144 支裡只有這一條讀 repo 的文件,其餘測的是自主迴圈的程式);light 或全套照舊整支跑。CI 同一條規則。
+ # light 也一樣(2026-09-18 實測 light 推送前 108 秒、其中 67 秒是這支):除非 pitfalls 說 autoloop_full——
+ # 改到的檔名或函式名整字出現在這支測試裡(它測自主迴圈模組、主程式常數、兩支探針腳本),或抽不出任何關鍵字(不知道改了什麼)。
+diff --git a/scripts/lumos b/scripts/lumos
+index 464892bf6aa030e429447681400446101aecff6a..0a8c5d2f20107d2654cac6b9edd7a1fde55d60df 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -62005,51 +62005,58 @@ def _drift_m1_rows(rows, n):
+              "text": _drift_m1_show(f["text"])[:80]} for f in rows[:n]]
+ 
+ 
+ def _drift_m1_fit(root, kind, note, hard, tip, nodes, extra):
+     """整行(照 _ledger_append 的量法,量 _gate_event_build 組出的完整事件)超過 4096 位元組:先從只列出、再從要處理尾端丟 rows;
+     丟光還超過 → nodes 截到 20;再超過照寫。有截就記 rows_truncated。裁法走共用的 _gate_event_fit(行為不變)。"""
+     return _gate_event_fit(root, "drift-check", kind, note, extra, "rows", hard=hard, head_sha=tip, nodes=nodes,
+                            nodes_cap=20)
+ 
+ 
+-def _drift_m1_ledger_miss(root, tip, state):
+-    """治理帳寫不進去時的留痕:~/.cache/lumos/drift-m1/ledger-miss.jsonl 追加一行(REVISIT 讀它算樣本不足)。"""
+-    import json as _j, datetime as _dt
+-    if not _mkdir_trusted_under_home(".cache", "lumos", "drift-m1"):
++def _home_cache_append_line(segments, filename, line):
++    """往 ~/<segments...>/<filename> 安全地追加一行(單一來源;治理帳寫不進去的留痕、測試執行器對話裡擋全套的計數都走這支)。
++    逐層建目錄並檢查可信(_mkdir_trusted_under_home、_trusted_private_dir),檔案用 O_NOFOLLOW、O_NONBLOCK、0600 開,
++    開了再確認是自己的一般檔;短寫不算寫成。任何一步不過回 False,不丟例外。"""
++    if not _mkdir_trusted_under_home(*segments):
+         return False
+-    d = Path.home() / ".cache" / "lumos" / "drift-m1"
+-    if not _trusted_private_dir(d, ".cache", "lumos", "drift-m1"):
++    d = Path.home().joinpath(*segments)
++    if not _trusted_private_dir(d, *segments):
+         return False
+-    line = _j.dumps({"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+-                     "repo": _drift_m1_show(os.path.realpath(str(root))), "head_sha": tip, "state": state},
+-                    ensure_ascii=False) + "\n"
+     try:
+         # O_NONBLOCK:有人在這裡放了同名 FIFO 時開檔不會卡住推送(沒有讀端就直接失敗);開了再確認是自己的一般檔
+         # (代碼審 r2 邊界席)
+-        fd = os.open(str(d / "ledger-miss.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
++        fd = os.open(str(d / filename), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+                      | getattr(os, "O_NONBLOCK", 0), 0o600)
+         try:
+             import stat as _stat
+             fst = os.fstat(fd)
+             if not _stat.S_ISREG(fst.st_mode) or (hasattr(os, "getuid") and fst.st_uid != os.getuid()):
+                 return False
+             data = line.encode("utf-8")
+             if os.write(fd, data) != len(data):   # 比照 _ledger_append:短寫(磁碟滿)不算寫成
+                 return False
+         finally:
+             os.close(fd)
+         return True
+     except OSError:
+         return False
+ 
+ 
++def _drift_m1_ledger_miss(root, tip, state):
++    """治理帳寫不進去時的留痕:~/.cache/lumos/drift-m1/ledger-miss.jsonl 追加一行(REVISIT 讀它算樣本不足)。"""
++    import json as _j, datetime as _dt
++    line = _j.dumps({"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
++                     "repo": _drift_m1_show(os.path.realpath(str(root))), "head_sha": tip, "state": state},
++                    ensure_ascii=False) + "\n"
++    return _home_cache_append_line((".cache", "lumos", "drift-m1"), "ledger-miss.jsonl", line)
++
++
+ def _drift_m1_ledger(root, mode, base, tip, res, found, note):
+     """記一筆治理帳(gate drift-check;欄位攤平在事件最外層,check=old-sentence)。found=(要處理, 只列出)(扣掉已表態)。"""
+     handle, listed = found
+     st = res["state"]
+     judged = st not in _DRIFT_M1_UNKNOWN
+     busy = _drift_m1_busy(res, handle)
+     # no-base 記 range-unavailable(既有結果詞,跟綁定測試閘算不出範圍同一個):原本記 skipped,gov --stats 會把它算進
+     # 「被跳過」——那一行講的是有人略過閘,這裡是沒起點可比(代碼審 r1 併發回滾席)
+     kind = "range-unavailable" if st == "no-base" else ("passed" if not busy else ("blocked" if mode == "block" else "warned"))
+     hard = kind == "blocked"
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 8eb7ef422f298f68a940ce180e36936cf4fda4ef..342692acaf16ef0c42ed92c9a8197370c1441e6c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -30887,43 +30887,59 @@ def t_runner_chat_full_suite_block():
+     check("S2 切片子程序 → 不擋", kind(ns(), {"CLAUDECODE": "1", "LUMOS_FANOUT_CHILD": "1"}) is None)
+     check("S2 逃生門理由合格 → 放行",
+           kind(ns(), {"CLAUDECODE": "1", "LUMOS_ALLOW_FULL_SUITE": "重現 CI 第三片紅燈要整套"}) == "allow")
+     for bad in ("1", ".........."):
+         msg, k = _chat_full_suite_block(ns(), {"CLAUDECODE": "1", "LUMOS_ALLOW_FULL_SUITE": bad})
+         check(f"S2 逃生門理由 {bad!r} 不合格 → 照擋並講要寫理由", k == "block" and "理由" in (msg or ""), str(msg))
+     msg, _k = _chat_full_suite_block(ns(), chat)
+     check("S2 擋下訊息不含逃生門變數名、有 -k 指令", "LUMOS_ALLOW_FULL_SUITE" not in msg and "-k <關鍵字>" in msg, msg)
+ 
+ 
++def t_runner_chat_env_probe():
++    """執行器跑測試時 CLAUDECODE 一定已從環境拿掉([[Projects/對話裡不准跑全套測試_計劃]] 做 1;代碼審 r1 審查席 2):
++    測試開的沙盒執行器不能繼承它,不然在對話裡跑任何開子執行器的測試都會被擋。這支對每一次執行都成立;
++    t_runner_chat_full_suite_block_process 帶 CLAUDECODE=1 起子程序跑它,證明進入點真的拿掉了。翻紅釘:拿掉 main 的 pop → 紅。"""
++    import os as _o
++    check("執行器跑測試時環境裡沒有 CLAUDECODE", "CLAUDECODE" not in _o.environ, str(_o.environ.get("CLAUDECODE")))
++
++
+ def t_runner_chat_full_suite_block_process():
+     """[[Projects/對話裡不准跑全套測試_計劃]] S3:從頭組環境(只給 PATH、CLAUDECODE=1、私有 HOME 與 TMPDIR)真的起執行器子程序,
+     不帶參數 → rc 2、TMPDIR 沒有 gctl-run-(擋在隔離之前)、私有 HOME 的計數檔多一行 block;
+     前置:同樣環境帶 -k 一支便宜的測試 → 不被擋(證明擋是不帶篩選條件造成的)。
+     ★子程序的關鍵字刻意不選這兩支自己★:選到 _process 會遞迴開子程序。"""
+     import json as _j, os as _o, shutil, subprocess as _sp, tempfile as _tf
+     root = Path(_tf.mkdtemp(prefix="chatguard-"))
+     home, tmp = root / "home", root / "tmp"
+     home.mkdir()
+     tmp.mkdir()
+     env = {"PATH": _o.environ.get("PATH", ""), "HOME": str(home), "TMPDIR": str(tmp), "CLAUDECODE": "1"}
+     me = str(Path(__file__).resolve())
++    # ★第二道保險★(代碼審 r1 審查席 1):判斷被改壞時,不帶參數的子程序會真的跑全套、全套又包含這支 → 遞迴開子程序。
++    # 開子程序前先確認判斷函式對這組環境真的會擋,不會擋就不開(判斷本身由 t_runner_chat_full_suite_block 驗)。
++    import argparse as _a
++    _ns = _a.Namespace(keyword=None, suite=None, list=False)
++    if _chat_full_suite_block(_ns, _chat_env_snapshot(env))[1] != "block":
++        check("★前置★ 判斷函式對不帶參數的對話環境會擋(不擋就不開子程序,免得遞迴跑全套)", False)
++        shutil.rmtree(root, ignore_errors=True)
++        return
+     r = _sp.run([sys.executable, me], env=env, capture_output=True, text=True, timeout=60)
+     check("S3 不帶參數 → rc 2 而且印擋下", r.returncode == 2 and "擋下" in r.stderr, (r.returncode, r.stderr[-300:]))
+     check("S3 擋在隔離之前:TMPDIR 沒有 gctl-run-", not [p for p in tmp.iterdir() if p.name.startswith("gctl-run-")],
+           str(list(tmp.iterdir())))
+     log = home / ".cache" / "lumos" / "full-suite-guard" / "events.jsonl"
+     rows = [_j.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+     check("S3 私有 HOME 的計數檔多一行 block", len(rows) == 1 and rows[0].get("kind") == "block", str(rows))
+-    r2 = _sp.run([sys.executable, me, "-k", "t_runner_disables_child_colors"], env=env, capture_output=True,
++    r2 = _sp.run([sys.executable, me, "-k", "t_runner_chat_env_probe"], env=env, capture_output=True,
+                  text=True, timeout=120)
+-    check("S3 前置:同樣環境帶 -k 不被擋", r2.returncode != 2 and "擋下:在對話裡" not in r2.stderr,
+-          (r2.returncode, r2.stderr[-300:]))
++    check("S3 前置:同樣環境帶 -k 不被擋,而且子程序跑測試時 CLAUDECODE 已從環境拿掉", r2.returncode == 0 and "擋下:在對話裡" not in r2.stderr,
++          (r2.returncode, r2.stdout[-300:], r2.stderr[-300:]))
+     shutil.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_prepush_red_hint_uses_k():
+     """[[Projects/對話裡不准跑全套測試_計劃]] S4:推送前閘紅燈提示從 `✗ FAILED <測試名>` 行抓名字,逐支印 -k,不再印 --ff -x;
+     抓不到測試名時不印 -k 指令、叫人看完整輸出。從掛鉤原文切出三個函式在 bash 裡真跑(不另抄一份)。
+     翻紅釘:改回印 --ff -x → 第一、二格紅;抓名字改成抓所有 ✗ 行 → 斷言行被當名字、第一格紅。"""
+     import re as _re, shutil, subprocess as _sp, tempfile as _tf
+     hook = (Path(__file__).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+     fns = "".join(m.group(0) for m in _re.finditer(r"(?ms)^pp_red_(?:names|hint|next)\(\) \{\n.*?\n\}\n", hook))
+@@ -30931,20 +30947,22 @@ def t_prepush_red_hint_uses_k():
+     d = Path(_tf.mkdtemp(prefix="redhint-"))
+     def run(log_text):
+         log = d / "log.txt"
+         log.write_text(log_text, encoding="utf-8")
+         script = 'PY=python3.14\npp_q() { printf "%s" "$1"; }\n' + fns + f'pp_red_hint "{log}"\npp_red_next "{log}"\n'
+         return _sp.run(["bash", "-c", script], capture_output=True, text=True, timeout=30).stdout
+     out = run("  ✗ 某條斷言  詳情\n  ✗ FAILED t_x(1 條斷言)\n  ✗ FAILED t_y(2 條斷言)\n  ✗ FAILED t_x(1 條斷言)\n")
+     check("S4 兩支紅 → 各一行 -k、不重複", out.count("-k t_x") == 2 and out.count("-k t_y") == 1, out)   # t_x:清單一行+下一步一行
+     check("S4 不再印 --ff -x", "--ff" not in out, out)
+     check("S4 斷言行不被當測試名", "-k 某條" not in out, out)
++    out3 = run("".join(f"  ✗ FAILED t_n{i}(1 條斷言)\n" for i in range(12)))
++    check("S4 超過 10 支 → 只列 10 行 -k、另印還有 2 支", out3.count("scripts/test_lumos.py -k t_n") == 11 and "還有 2 支" in out3, out3)   # 10 行清單 + 下一步一行
+     out2 = run("  ✗ 某條斷言  詳情\n分片 3 沒寫出摘要\n")
+     check("S4 抓不到測試名 → 不印 -k、叫人看完整輸出", "-k" not in out2 and "完整輸出" in out2, out2)
+     shutil.rmtree(d, ignore_errors=True)
+ 
+ 
+ def t_runner_default_fanout_serial():
+     """[S4] --serial、-x、片數 1、片數不是正整數、或帶 -k/--shard/--suite → 在本程序跑、不開子程序(所有假測試同一個程序編號、參數沒有被加 --shard)。"""
+     import shutil as _sh
+     box, runner, marks = _fan_box()
+     try:
+@@ -49463,68 +49481,62 @@ def _fanout_shards():
+     再壓在 _FANOUT_MAX 以內。"""
+     import os, re as _re
+     v = os.environ.get("LUMOS_TEST_SHARDS") or "4"
+     n = int(v) if _re.fullmatch(r"[0-9]+", v) else 0
+     return min(n, _FANOUT_MAX) if n >= 1 else 1
+ 
+ 
+ _FANOUT_CHILD_ENV = "LUMOS_FANOUT_CHILD"   # 預設切片開的子程序帶這個標記;帶著就絕不再切
+ 
+ 
+-_CHAT_GUARD_ENV = ("CLAUDECODE", "LUMOS_PUSH_ATTEMPT", "LUMOS_FANOUT_CHILD", "LUMOS_ALLOW_FULL_SUITE")
+-
+-
+ def _chat_env_snapshot(environ):
+     """一進 main 就存下判斷要用的四個環境值([[Projects/對話裡不准跑全套測試_計劃]] 做 1):之後會把 CLAUDECODE 從環境拿掉,
+-    判斷只讀這份,不讀當下環境(r3:拿掉與讀取的先後原本打架)。"""
+-    return {k: environ.get(k) for k in _CHAT_GUARD_ENV}
++    判斷只讀這份,不讀當下環境(r3:拿掉與讀取的先後原本打架)。切片子程序標記讀 _FANOUT_CHILD_ENV(呼叫時才讀,常數定義在後面)。"""
++    return {k: environ.get(k) for k in ("CLAUDECODE", "LUMOS_PUSH_ATTEMPT", _FANOUT_CHILD_ENV, "LUMOS_ALLOW_FULL_SUITE")}
+ 
+ 
+ def _chat_reason_ok(reason):
+     """逃生門理由照 lumos lint-waive --note 的判法:去空白後至少 10 字、至少一個文字或數字字元。"""
+     import re as _re_r
+     return bool(reason) and len(_re_r.sub(r"\s", "", reason)) >= 10 and bool(_re_r.search(r"[^\W_]", reason))
+ 
+ 
+ def _chat_full_suite_block(args, snap):
+     """對話裡不帶篩選條件跑全套 → 回 (擋下訊息, 種類);不擋回 (None, 種類)。種類:"block"、"allow"(逃生門放行)、None(不判)。
+     只看有沒有篩選條件(關鍵字、--suite、--list),--shard、--serial、-x、--ff、--seed 不縮小範圍、照擋(做 2)。
+     `-k t_` 這類等於全套的關鍵字擋不到,寫在計劃天花板 4。"""
+-    if snap.get("CLAUDECODE") != "1" or snap.get("LUMOS_PUSH_ATTEMPT") or snap.get("LUMOS_FANOUT_CHILD"):
++    if snap.get("CLAUDECODE") != "1" or snap.get("LUMOS_PUSH_ATTEMPT") or snap.get(_FANOUT_CHILD_ENV):
+         return None, None
+     if args.keyword or args.suite or args.list:
+         return None, None
+     reason = snap.get("LUMOS_ALLOW_FULL_SUITE") or ""
+     if _chat_reason_ok(reason):
+         return None, "allow"
+     lines = ["擋下:在對話裡不帶篩選條件會跑滿全套(約 8 分鐘),不准跑。",
+              "為什麼:超過對話工具的時間上限、會吃掉大量記憶體;推送前閘會自己跑全套。",
+              ("放行理由不算數:要寫清楚為什麼(去掉空白後至少 10 個字)。" if reason else None),
+              "跑子集:",
+              "    python3.14 scripts/test_lumos.py -k <關鍵字>",
+              "    python3.14 scripts/test_lumos.py --suite docs",
+              "全套交給推送前閘(git push 放背景跑),或請使用者在一般終端機跑。"]
+     return "\n".join(x for x in lines if x), "block"
+ 
+ 
+ def _chat_guard_log(kind, reason=""):
+     """擋下與逃生門放行各追加一行到 ~/.cache/lumos/full-suite-guard/events.jsonl(做 7);要在隔離環境之前叫,HOME 還是真的。
+-    只攔 OSError,寫不進去就略過,不影響判斷。"""
++    寫法走 scripts/lumos 的 _home_cache_append_line(逐層信任檢查、O_NOFOLLOW、0600,代碼審 r1 架構對齊席);
++    只在真的要記時才載入 scripts/lumos,平常啟動不載。載入或寫入失敗都略過,不影響判斷。"""
+     import json as _jg, time as _tg
+-    from pathlib import Path as _Pg
++    line = _jg.dumps({"ts": _tg.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "reason": reason[:200]}, ensure_ascii=False) + "\n"
+     try:
+-        d = _Pg.home() / ".cache" / "lumos" / "full-suite-guard"
+-        d.mkdir(parents=True, exist_ok=True)
+-        with open(d / "events.jsonl", "a", encoding="utf-8") as f:
+-            f.write(_jg.dumps({"ts": _tg.strftime("%Y-%m-%dT%H:%M:%S"), "kind": kind, "reason": reason[:200]},
+-                              ensure_ascii=False) + "\n")
+-    except OSError:
++        _load_lumos_inproc()._home_cache_append_line((".cache", "lumos", "full-suite-guard"), "events.jsonl", line)
++    except Exception:   # 計數是盡力而為:scripts/lumos 讀不到或載入出錯都不該讓擋下判斷跟著壞
+         pass
+ 
+ 
+ def _fanout_wanted(args):
+     """全套(沒帶 -k、--shard、--suite、--list、--serial、-x)而且片數大於 1 才切;其他照舊在本程序跑。
+     -x 要的是「一紅就停」,切片後只停得了紅的那一片、其他片照跑完,所以帶 -x 照舊單一程序跑(代碼審 r1)。
+     ★帶 LUMOS_FANOUT_CHILD 的一律不切★:子程序本來就帶 --shard,這是第二道——參數判斷哪天寫錯,子程序也不會一層層再開
+     (2026-11-05 自我變異把「帶 --shard 就不切」改壞,沙盒裡分裂出 245 支、吃光記憶體,整台當機)。"""
+     import os
+     if os.environ.get(_FANOUT_CHILD_ENV):

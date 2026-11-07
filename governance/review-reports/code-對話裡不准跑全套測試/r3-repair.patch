@@ -1,0 +1,177 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md b/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md
+index 9b490317a4d9764e15b7f25e8453715a90dc0bac..1eff5c059963e88e539039e9527160afaf1e1266 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/對話裡不准跑全套測試_計劃.md
+@@ -122,10 +122,11 @@ REVISIT:2026-12-08 讀 `~/.cache/lumos/full-suite-guard/events.jsonl` 看這一
+ 4. 只要帶了任何篩選條件就放行:`-k t_`(每支測試名都含)等於全套,擋不到;`--suite docs` 也照放(r3 繞過席量過它不短)。這是使用者 2026-11-08 裁縮成最小形狀時接受的風險;分片輪流跑(`--shard i/16` 在只帶分片時會擋,但 `-k t_ --shard i/16` 不擋)同屬這一類。
+ 5. 對話裡 `git push` 讓推送前閘跑全套是規定的跑法,不擋;推送要放背景跑。
+ 
+ ## 審計修正紀錄
+ 
+ - r1(2026-11-08,四席 sonnet:通才、正確性、繞過、架構對齊):24 條/blocking 12/插入點落在預設切片之後(四席獨立)、清變數早於判斷、`-k t_` 與空字串繞過、推送前閘提示被反擋、訊息印出逃生門、計數量不到、子程序測試環境沒清會遞迴;全部折入做 1–8 與條款 S1–S5,分組在 r1-intake.md。卷證:governance/review-reports/對話裡不准跑全套測試/。
+ - r2(2026-11-08,四席 sonnet 新席):20 條/blocking 8(blocker 2)/`--lf` 被預設切片開成全套(兩席獨立)、`--lf` 紀錄過期與過大、三成門檻分母不明、分片輪流繞過、文件子集其實四分鐘、計數寫法不照既有、直接手跑掛鉤帶出豁免;同類「照旗標或支數猜耗時」第二輪打穿,換形狀成對話裡不切片、選完照耗時表估佔比,拿掉 `--lf`;分組在 r2-intake.md。
+ - r3(2026-11-08,四席 sonnet 新席):23 條/blocking 9(blocker 2)/拿掉 `CLAUDECODE` 的時機與「讀當下」打架、計數寫在隔離後的拋棄式 HOME、計數「照既有寫法」其實是整檔覆蓋、佔比不綁絕對耗時、分片輪流繞過、掛鉤手上沒有乾淨的紅測試名;三輪沒收斂,使用者 2026-11-08 裁「照你建議」(接受風險、縮成最小形狀):改成一進 main 先存四個環境值、判斷移到隔離之前、只看有沒有帶篩選條件、計數用附加模式寫一行、掛鉤從 `✗ FAILED` 行抓測試名,繞法寫進天花板 4;卷證 governance/review-reports/對話裡不准跑全套測試/。
+ - 例:輸入 `CLAUDECODE=1` 不帶參數 → 第三版要先選測試、估佔比(隔離之後才判,計數寫進拋棄式 HOME)、第四版在隔離前直接擋、計數寫進真的家目錄;輸入 `-k t_` → 第三版擋(100%)、第四版放(天花板 4)。
+ - 代碼審 r1(2026-11-08,2 席):8 條/blocking 1/計數寫法改走 lumos 既有的安全附加(抽出 `_home_cache_append_line`,原呼叫端改用它)、真子程序測試開子程序前先確認判斷會擋(免得判斷被改壞時遞迴跑全套)、補 CLAUDECODE 真的從環境拿掉與紅燈超過 10 支的案例、切片子程序標記改讀既有常數;逃生門理由判法與子程序環境組法附理由放行;卷證 governance/review-reports/code-對話裡不准跑全套測試/。
++- 代碼審 r2(2026-11-08,2 席新席):4 條/blocking 1/守衛測試改盯共用的 _home_cache_append_line(並驗兩個呼叫端都轉呼叫)、補快取目錄是連結的真子程序案例、新函式搬到家目錄快取那群旁邊並改用 _regular_own_fd。
+diff --git a/scripts/lumos b/scripts/lumos
+index 0a8c5d2f20107d2654cac6b9edd7a1fde55d60df..c47df0641c162f76df98030d9f958e260f5935c4 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -62005,49 +62005,20 @@ def _drift_m1_rows(rows, n):
+              "text": _drift_m1_show(f["text"])[:80]} for f in rows[:n]]
+ 
+ 
+ def _drift_m1_fit(root, kind, note, hard, tip, nodes, extra):
+     """整行(照 _ledger_append 的量法,量 _gate_event_build 組出的完整事件)超過 4096 位元組:先從只列出、再從要處理尾端丟 rows;
+     丟光還超過 → nodes 截到 20;再超過照寫。有截就記 rows_truncated。裁法走共用的 _gate_event_fit(行為不變)。"""
+     return _gate_event_fit(root, "drift-check", kind, note, extra, "rows", hard=hard, head_sha=tip, nodes=nodes,
+                            nodes_cap=20)
+ 
+ 
+-def _home_cache_append_line(segments, filename, line):
+-    """往 ~/<segments...>/<filename> 安全地追加一行(單一來源;治理帳寫不進去的留痕、測試執行器對話裡擋全套的計數都走這支)。
+-    逐層建目錄並檢查可信(_mkdir_trusted_under_home、_trusted_private_dir),檔案用 O_NOFOLLOW、O_NONBLOCK、0600 開,
+-    開了再確認是自己的一般檔;短寫不算寫成。任何一步不過回 False,不丟例外。"""
+-    if not _mkdir_trusted_under_home(*segments):
+-        return False
+-    d = Path.home().joinpath(*segments)
+-    if not _trusted_private_dir(d, *segments):
+-        return False
+-    try:
+-        # O_NONBLOCK:有人在這裡放了同名 FIFO 時開檔不會卡住推送(沒有讀端就直接失敗);開了再確認是自己的一般檔
+-        # (代碼審 r2 邊界席)
+-        fd = os.open(str(d / filename), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+-                     | getattr(os, "O_NONBLOCK", 0), 0o600)
+-        try:
+-            import stat as _stat
+-            fst = os.fstat(fd)
+-            if not _stat.S_ISREG(fst.st_mode) or (hasattr(os, "getuid") and fst.st_uid != os.getuid()):
+-                return False
+-            data = line.encode("utf-8")
+-            if os.write(fd, data) != len(data):   # 比照 _ledger_append:短寫(磁碟滿)不算寫成
+-                return False
+-        finally:
+-            os.close(fd)
+-        return True
+-    except OSError:
+-        return False
+-
+-
+ def _drift_m1_ledger_miss(root, tip, state):
+     """治理帳寫不進去時的留痕:~/.cache/lumos/drift-m1/ledger-miss.jsonl 追加一行(REVISIT 讀它算樣本不足)。"""
+     import json as _j, datetime as _dt
+     line = _j.dumps({"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+                      "repo": _drift_m1_show(os.path.realpath(str(root))), "head_sha": tip, "state": state},
+                     ensure_ascii=False) + "\n"
+     return _home_cache_append_line((".cache", "lumos", "drift-m1"), "ledger-miss.jsonl", line)
+ 
+ 
+ def _drift_m1_ledger(root, mode, base, tip, res, found, note):
+@@ -69265,20 +69236,41 @@ def _home_cache_write(subdir, path, data):
+         fd, tmp = _tf.mkstemp(dir=str(path.parent), suffix=".tmp")
+         with os.fdopen(fd, "w", encoding="utf-8") as fh:
+             fh.write(_json.dumps(data, ensure_ascii=False))
+         os.chmod(tmp, 0o600)
+         os.replace(tmp, path)
+         return True
+     except OSError:
+         return False
+ 
+ 
++def _home_cache_append_line(segments, filename, line):
++    """往 ~/<segments...>/<filename> 安全地追加一行(單一來源;治理帳寫不進去的留痕、測試執行器對話裡擋全套的計數都走這支)。
++    逐層建目錄並檢查可信(_mkdir_trusted_under_home、_trusted_private_dir);開檔走 _regular_own_fd(擋捷徑、管線、別人的檔,
++    0600),單次寫入並核對長度,短寫不算寫成。任何一步不過回 False,不丟例外。"""
++    if not _mkdir_trusted_under_home(*segments):
++        return False
++    d = Path.home().joinpath(*segments)
++    if not _trusted_private_dir(d, *segments):
++        return False
++    fd = _regular_own_fd(d / filename, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
++    if fd is None:
++        return False
++    try:
++        data = line.encode("utf-8")
++        return os.write(fd, data) == len(data)   # 比照 _ledger_append:短寫(磁碟滿)不算寫成
++    except OSError:
++        return False
++    finally:
++        os.close(fd)
++
++
+ def _home_cache_evict(d, ttl_sec, max_files=None):
+     """~/.cache/lumos/<子目錄>/ 刪掉 mtime 超過 ttl_sec 的一般檔(捷徑不碰);max_files 給了就只留最新的那麼多份。
+     ★先過 _trusted_private_dir★(寫入端唯一的目錄可信判定,2026-09-06 全 repo 審視 #6):目錄被換成指向別處的捷徑、
+     不是自己的、別人可寫,一支都不刪(代碼審 r3 正確性 F1:原本清理端沒驗,捷徑會刪到快取以外的檔)。d 是 None 或讀不了也不做。"""
+     if d is None or not _trusted_private_dir(Path(d), ".cache", "lumos", Path(d).name):
+         return
+     try:
+         ents = [f for f in Path(d).iterdir() if f.is_file() and not f.is_symlink()]
+     except OSError:
+         return
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 342692acaf16ef0c42ed92c9a8197370c1441e6c..d6e1cf4e9b3e86d47412d522a0f6cee586c05fc7 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -28939,22 +28939,29 @@ def t_private_dir_trust_shared_across_four_sites():
+     src = Path(GRAPHCTL).resolve().read_text(encoding="utf-8")
+     # ★2026-09-16 起筆記庫寫入鎖那處改叫 _vault_lock_where★:原本檢查寫在 _vault_write_lock
+     #   裡面,推送前的新增告警閘嫌它太複雜,於是把「決定鎖放哪」抽成模組層獨立一支,
+     #   信任檢查跟著搬過去。★這條測試當場翻紅★——它是用函式名抓區段的,搬家就抓不到,
+     #   正好證明它真的在盯而不是擺著好看。
+     # ★2026-09-30 起快取寫入那段抽成 _home_cache_write★(鏡頭快取與舊句檢查的定義快取共用,Projects/舊句檢查_計劃):
+     #   _lens_cache_write 只剩一行轉呼叫,信任檢查跟著搬到共用那支;舊句檢查另兩處家目錄寫入點(快取目錄、帳沒記到的留痕)一起盯
+     import re as _re_w
+     mm = _re_w.search(r"def _lens_cache_write\(.*?(?=\ndef )", src, _re_w.S)
+     check("私有目錄: _lens_cache_write 走共用的 _home_cache_write", bool(mm) and "_home_cache_write(" in mm.group(0), "")
++    # ★2026-11-08 附加一行那段抽成 _home_cache_append_line★(Projects/對話裡不准跑全套測試_計劃 做 7):_drift_m1_ledger_miss 只剩轉呼叫,
++    #   信任檢查跟著搬到共用那支;測試執行器對話裡擋全套的計數也走它
++    mm = _re_w.search(r"def _drift_m1_ledger_miss\(.*?(?=\ndef )", src, _re_w.S)
++    check("私有目錄: _drift_m1_ledger_miss 走共用的 _home_cache_append_line", bool(mm) and "_home_cache_append_line(" in mm.group(0), "")
++    _runner_src = Path(__file__).read_text(encoding="utf-8")
++    mm = _re_w.search(r"def _chat_guard_log\(.*?(?=\ndef )", _runner_src, _re_w.S)
++    check("私有目錄: 執行器的 _chat_guard_log 走共用的 _home_cache_append_line", bool(mm) and "._home_cache_append_line(" in mm.group(0), "")
+     for site in ("_lens_arm_dir_ok", "_home_cache_write", "cmd_dispatch_lens_arm",
+-                 "cmd_dispatch_lens_disarm", "_vault_lock_where", "_drift_m1_cache_dir", "_drift_m1_ledger_miss"):
++                 "cmd_dispatch_lens_disarm", "_vault_lock_where", "_drift_m1_cache_dir", "_home_cache_append_line"):
+         import re as _re
+         mm = _re.search(rf"def {site}\(.*?(?=\ndef )", src, _re.S)
+         check(f"私有目錄: {site} 有走共用的信任檢查",
+               bool(mm) and ("_trusted_private_dir" in mm.group(0) or "_lens_arm_dir_ok" in mm.group(0)),
+               site)
+ 
+ 
+ def t_anchor_covers_all_auto_running_hooks():
+     """★會自動跑的 hook 檔,一支都不能沒人盯著★(2026-09-06 全 repo 審視 #6)。
+ 
+@@ -30922,20 +30929,29 @@ def t_runner_chat_full_suite_block_process():
+         check("★前置★ 判斷函式對不帶參數的對話環境會擋(不擋就不開子程序,免得遞迴跑全套)", False)
+         shutil.rmtree(root, ignore_errors=True)
+         return
+     r = _sp.run([sys.executable, me], env=env, capture_output=True, text=True, timeout=60)
+     check("S3 不帶參數 → rc 2 而且印擋下", r.returncode == 2 and "擋下" in r.stderr, (r.returncode, r.stderr[-300:]))
+     check("S3 擋在隔離之前:TMPDIR 沒有 gctl-run-", not [p for p in tmp.iterdir() if p.name.startswith("gctl-run-")],
+           str(list(tmp.iterdir())))
+     log = home / ".cache" / "lumos" / "full-suite-guard" / "events.jsonl"
+     rows = [_j.loads(x) for x in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+     check("S3 私有 HOME 的計數檔多一行 block", len(rows) == 1 and rows[0].get("kind") == "block", str(rows))
++    # ★計數不跟捷徑寫到別處★(代碼審 r2 審查席 2):~/.cache/lumos 換成指向別處的連結時,照樣擋下、但連結指到的地方不能多出檔
++    home2, other = root / "home2", root / "別人的樹"
++    home2.mkdir()
++    other.mkdir()
++    (home2 / ".cache").mkdir()
++    (home2 / ".cache" / "lumos").symlink_to(other)
++    r3 = _sp.run([sys.executable, me], env=dict(env, HOME=str(home2)), capture_output=True, text=True, timeout=60)
++    check("S3 快取目錄是連結 → 照樣擋下、連結指到的地方沒有被寫", r3.returncode == 2 and not any(other.rglob("*")),
++          (r3.returncode, [str(x) for x in other.rglob("*")]))
+     r2 = _sp.run([sys.executable, me, "-k", "t_runner_chat_env_probe"], env=env, capture_output=True,
+                  text=True, timeout=120)
+     check("S3 前置:同樣環境帶 -k 不被擋,而且子程序跑測試時 CLAUDECODE 已從環境拿掉", r2.returncode == 0 and "擋下:在對話裡" not in r2.stderr,
+           (r2.returncode, r2.stdout[-300:], r2.stderr[-300:]))
+     shutil.rmtree(root, ignore_errors=True)
+ 
+ 
+ def t_prepush_red_hint_uses_k():
+     """[[Projects/對話裡不准跑全套測試_計劃]] S4:推送前閘紅燈提示從 `✗ FAILED <測試名>` 行抓名字,逐支印 -k,不再印 --ff -x;
+     抓不到測試名時不印 -k 指令、叫人看完整輸出。從掛鉤原文切出三個函式在 bash 裡真跑(不另抄一份)。

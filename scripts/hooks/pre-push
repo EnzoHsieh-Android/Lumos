@@ -843,6 +843,34 @@ if ! { : > "$_AUTOLOOP_LOG" && : > "$_TESTS_LOG"; } 2>/dev/null; then
   exit 1
 fi
 
+# ★紅燈提示逐支給 -k★(Projects/對話裡不准跑全套測試_計劃 做 5):對話裡不帶篩選條件會被執行器擋,
+# 原本教的 `--ff -x` 在對話裡跑不了。從完整輸出的 `✗ FAILED <測試名>` 行(執行器對每支紅的測試都印)抓名字,
+# 最多 10 支;一支都抓不到(紅在測試以外)就叫人看完整輸出、不印指令。
+pp_red_names() {
+  grep -h -o "✗ FAILED t_[A-Za-z0-9_]*" "$1" 2>/dev/null | sed 's/^✗ FAILED //' | awk '!seen[$0]++'
+}
+pp_red_hint() {
+  local _names _n
+  _names="$(pp_red_names "$1")"
+  _n=$(printf '%s\n' "$_names" | grep -c . || true)
+  if [[ "$_n" -gt 0 ]]; then
+    echo "  1. 修到全綠再推。逐支重跑紅的那幾支:"
+    printf '%s\n' "$_names" | head -10 | while IFS= read -r _rn; do echo "       $PY scripts/test_lumos.py -k $_rn"; done
+    if [[ "$_n" -gt 10 ]]; then echo "       (還有 $((_n - 10)) 支,看上面的完整輸出)"; fi
+  else
+    echo "  1. 修到全綠再推。紅的不在個別測試裡(例:某一片沒寫出摘要),打開上面的完整輸出看紅在哪"
+  fi
+}
+pp_red_next() {
+  local _first
+  _first="$(pp_red_names "$1" | head -1)"
+  if [[ -n "$_first" ]]; then
+    echo "下一步:$(pp_q "$PY") scripts/test_lumos.py -k $_first"
+  else
+    echo "下一步:打開上面的完整輸出看紅在哪"
+  fi
+}
+
 # 測試紅時把要給人看的 log 搬到暫存資料夾外,印搬出去的那份路徑;$1=暫存資料夾裡那份 $2=檔名樣板的中段(autoloop/tests)。
 # ★XXXXXX 必須在結尾★:macOS 的 mktemp 不吃「樣板中間有 XXXXXX」,會直接報「File exists」(第一版四支 pre-push 測試當場翻紅)。
 # 搬不出去(暫存目錄滿或不可寫)就講明,下面印的末段照樣看得到紅的是哪幾支。
@@ -1028,11 +1056,10 @@ runpy.run_path(p[1], run_name="__main__")'
       echo "   $(pp_keep_log "$_TESTS_LOG" tests)"
       echo ""
       echo "兩條路選一條:"
-      echo "  1. 修到全綠再推。只重跑紅的那幾支:"
-      echo "       $PY scripts/test_lumos.py --ff -x"
+      pp_red_hint "$_TESTS_LOG"
       echo "  2. 確定是測試本身不穩或環境問題 → git push --no-verify(後果自負;推 main 或開了 PR 才有 CI 再跑一次)"
       echo ""
-      echo "下一步:$(pp_q "$PY") scripts/test_lumos.py --ff -x"
+      pp_red_next "$_TESTS_LOG"
       echo ""
     } >&2
     exit 1
