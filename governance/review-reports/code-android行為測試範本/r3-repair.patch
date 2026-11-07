@@ -1,0 +1,1226 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 6434324af..988d0e647 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -128,43 +128,32 @@ def dt_triggers(cell):
+     return trig, None
+ 
+ 
+ def catalog_problems(rules=None):
+     """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
+     problems = []
+     text = CATALOG.read_text(encoding="utf-8")
+     i_dt, i_pend = text.find("\n## 情境決策表"), text.find("\n## 待查證")
+     if i_dt < 0 or i_pend < 0:
+         return [("<catalog>", "找不到〈情境決策表〉或〈待查證〉節")]
+-    main, dt = text[:i_dt], text[i_dt:i_pend]
+-    rows, seen = {}, set()
++    dt = text[i_dt:i_pend]
++    rows = main_rows(text, problems)   # 主表的讀法只在 main_rows 一處(編號重複、欄位數也在那裡報)
+     # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
+     i_src = text.find("\n## 來源縮寫")
+     if i_src < 0:
+         # 記一筆、照樣往下檢查(縮寫當空集合),一次報齊其他問題
+         problems.append(("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)"))
+         abbrs = set()
+     else:
+         i_src_end = text.find("\n## ", i_src + 5)
+         abbrs = set(re.findall(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", text[i_src:i_src_end if i_src_end >= 0 else len(text)], re.M))
+-    for ln in main.splitlines():
+-        m = _MAIN_ROW_RE.match(ln)
+-        if not m:
+-            continue
+-        rid, c = m.group(1), _cells(ln)
+-        if rid in seen:
+-            problems.append((rid, "編號重複"))
+-        seen.add(rid)
+-        if len(c) != _MAIN_COLS:
+-            problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
+-            continue
+-        rows[rid] = c
++    for rid, c in rows.items():
+         name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
+         if not std or not wire or not batch:
+             problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
+         if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
+             problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
+         if kind.startswith("語意"):
+             if "表態對程式" not in wire:
+                 problems.append((rid, "語意類要有「表態對程式」"))
+             if "(人裁)" not in name and "盲判席" not in wire:
+                 problems.append((rid, "語意類(沒標人裁)要有「盲判席」"))
+@@ -207,82 +196,127 @@ def catalog_problems(rules=None):
+     for r in rules or []:
+         m = re.match(r"\[([A-Z]+-\d+)\]", r["message"])
+         if m and m.group(1) in weak_ids and r["severity"] != "hint":
+             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准 hint 級"))
+     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
+     return problems
+ 
+ 
+ _BEHAVIOR_RE = re.compile(r"行為測試或正向約束=([^;]*)")
+ _TEMPLATE_VALUE_RE = re.compile(r"範本 (T\d+)")
+-_FENCE_RE = re.compile(r"^\s*(```|~~~)")
++TEMPLATE_HEADING_RE = re.compile(r"^## (T\d+)(?:[ \t]|$)")   # 範本檔一組一節的標題;測試端也用這一條
+ 
+ 
+ def behavior_value(batch_cell):
+     """通電批次格子裡「行為測試或正向約束=」那一段的值(到分號為止);沒有這一段回 None。
+-    「範本 T<n>」只在這一段才算引用範本(型錄〈輸入與口徑〉的定義)。"""
++    「範本 T<n>」只在這一段才算引用範本(型錄〈輸入與口徑〉的定義)。測試端也呼叫這一支,不另抄。"""
+     m = _BEHAVIOR_RE.search(batch_cell)
+     return m.group(1).strip() if m else None
+ 
+ 
+-def main_rows(text=None):
+-    """型錄主表(〈情境決策表〉之前)欄數對的列 → {編號: 欄位}。給單獨呼叫 template_problems 用;
+-    catalog_problems 自己讀過主表,會把它的列直接傳給 template_problems,不重讀。"""
++def main_rows(text=None, problems=None):
++    """型錄主表(〈情境決策表〉之前)欄數對的列 → {編號: 欄位}。主表的唯一讀法:catalog_problems、
++    template_problems 與測試都走這裡。給了 problems 就把編號重複、欄位數不對記進去(重複時後面那列為準)。"""
+     text = CATALOG.read_text(encoding="utf-8") if text is None else text
+     cut = text.find("\n## 情境決策表")
+     main = text if cut < 0 else text[:cut]
+-    rows = {}
++    rows, seen = {}, set()
+     for ln in main.splitlines():
+         m = _MAIN_ROW_RE.match(ln)
+-        if m:
+-            c = _cells(ln)
+-            if len(c) == _MAIN_COLS:
+-                rows.setdefault(m.group(1), c)
++        if not m:
++            continue
++        rid, c = m.group(1), _cells(ln)
++        if rid in seen and problems is not None:
++            problems.append((rid, "編號重複"))
++        seen.add(rid)
++        if len(c) != _MAIN_COLS:
++            if problems is not None:
++                problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
++            continue
++        rows[rid] = c
+     return rows
+ 
+ 
+-def _outside_fences(text):
+-    """拿掉程式圍欄(``` 或 ~~~)裡的行:圍欄裡示範的「## T3 …」不是範本檔的節標題。"""
+-    out, fence = [], None
+-    for ln in text.splitlines():
+-        m = _FENCE_RE.match(ln)
+-        if m:
+-            if fence is None:
+-                fence = m.group(1)
+-            elif m.group(1) == fence:
+-                fence = None
++def _fence_regions(lines, strict):
++    """圍欄區段 → (區段清單, 收尾時還有沒有圍欄開著);區段是 (開頭行索引, 收尾行索引或 None)。
++    ★刻意的另一份★:規則照 CommonMark(https://spec.commonmark.org/0.31.2/#fenced-code-blocks),口徑跟
++    scripts/lumos 的 `_fence_regions` / `_visible_lines`(全檔唯一的圍欄判定)逐條對齊——縮排最多 3 格、
++    tab 開頭不算、收尾要同字元且長度不短於開頭、strict 時收尾行除圍欄字元只准空白;本檔零依賴(只用標準庫)、
++    scripts/lumos 沒有 .py 副檔名,不能 import 借用。兩份是否一致由 t_kotlin_template_fence_parity 機械比對。"""
++    fence, start, regions = None, None, []
++    for i, ln in enumerate(lines):
++        indent = len(ln) - len(ln.lstrip(" "))
++        s = ln.lstrip(" ")
++        if not (indent <= 3 and not ln.startswith("\t") and s.startswith(("```", "~~~"))):
+             continue
++        ch = s[0]
++        run = len(s) - len(s.lstrip(ch))
+         if fence is None:
+-            out.append(ln)
+-    return "\n".join(out)
++            fence, start = (ch, run), i
++            continue
++        if ch == fence[0] and run >= fence[1] and (not strict or s[run:].strip() == ""):
++            regions.append((start, i))
++            fence = None
++    if fence is not None:
++        regions.append((start, None))
++    return regions, fence is not None
++
++
++def _visible_lines(lines):
++    """圍欄外的行 → [(行號從 1 起, 原始行)]。先照 CommonMark 嚴格讀;讀完還有圍欄沒關,整份退回寬鬆讀法
++    (同字元、長度夠就算關)——跟 scripts/lumos 的 `_visible_lines` 同一個取捨。"""
++    def _scan(strict):
++        regions, unterminated = _fence_regions(lines, strict)
++        hidden = set()
++        for a, b in regions:
++            hidden.update(range(a, (b if b is not None else len(lines) - 1) + 1))
++        return [(i + 1, ln) for i, ln in enumerate(lines) if i not in hidden], unterminated
++    out, unterminated = _scan(True)
++    if unterminated:
++        out, _ = _scan(False)
++    return out
++
++
++def template_sections(text):
++    """範本檔 → [(組代號, 標題行索引)],只認圍欄外、符合 TEMPLATE_HEADING_RE 的標題。測試端切段也用這一支。"""
++    out = []
++    for no, ln in _visible_lines(text.splitlines()):
++        m = TEMPLATE_HEADING_RE.match(ln)
++        if m:
++            out.append((m.group(1), no - 1))
++    return out
+ 
+ 
+ def template_problems(rows=None):
+-    """通電批次的「行為測試或正向約束=」寫「範本 T<n>」的主表列,範本檔要有以 `## T<n>` 開頭
+-    (後面接空白或整行就這樣)、而且不在程式圍欄裡的標題;沒有就報那一列。範本檔不存在或不是 UTF-8 報一筆。
++    """通電批次的「行為測試或正向約束=」寫「範本 T<n>」的主表列,範本檔要有那一節(標題規則見
++    TEMPLATE_HEADING_RE,圍欄裡的不算);沒有就報那一列。值以「範本」開頭卻不是「範本 T<n>」整段
++    (例「範本 T3(備註)」「範本T3」)報格式錯,不靜默略過。範本檔不存在或不是 UTF-8 報一筆。
+     只驗「指得到那一節」,範本內容對不對靠實驗與驗證紀錄。不需要 ast-grep。"""
+     rows = main_rows() if rows is None else rows
+-    refs = []
++    refs, problems = [], []
+     for rid, c in rows.items():
+-        m = _TEMPLATE_VALUE_RE.fullmatch(behavior_value(c[9]) or "")
++        v = behavior_value(c[9]) or ""
++        m = _TEMPLATE_VALUE_RE.fullmatch(v)
+         if m:
+             refs.append((rid, m.group(1)))
++        elif v.startswith("範本"):
++            problems.append((rid, f"「行為測試或正向約束=」的範本值要寫成「範本 T<n>」整段,這裡是「{v}」"))
+     if not refs:
+-        return []
++        return problems
+     if not TEMPLATES.is_file():
+-        return [("<templates>", "找不到範本檔")]
++        return problems + [("<templates>", "找不到範本檔")]
+     try:
+         text = TEMPLATES.read_text(encoding="utf-8")
+     except UnicodeDecodeError as e:
+-        return [("<templates>", f"範本檔不是 UTF-8:第 {e.start} 個位元組讀不了({e.reason})")]
+-    have = set(re.findall(r"^## (T\d+)(?:[ \t]|$)", _outside_fences(text), re.M))
+-    return [(rid, f"範本檔沒有 {g} 節") for rid, g in refs if g not in have]
++        return problems + [("<templates>", f"範本檔不是 UTF-8:第 {e.start} 個位元組讀不了({e.reason})")]
++    have = {g for g, _i in template_sections(text)}
++    return problems + [(rid, f"範本檔沒有 {g} 節") for rid, g in refs if g not in have]
+ 
+ 
+ def message_problems(rules, cat_ids):
+     """每條規則的 id、severity、放哪個目錄、message 格式(計劃 S2)。不需要 ast-grep。"""
+     problems = []
+     for r in rules:
+         rid, msg = r["id"], r["message"]
+         if not rid.startswith("kt-"):
+             problems.append((rid, "id 要用 kt- 前綴"))
+         if r["severity"] not in SEVERITIES:
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android行為測試範本與架構測試_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android行為測試範本與架構測試_計劃.md
+index df130408c..fc2e3a6d0 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android行為測試範本與架構測試_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android行為測試範本與架構測試_計劃.md
+@@ -119,21 +119,21 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數照範本起
+    - 範本的程式碼要點(寫進範本、實驗驗過才算):
+      - T0:`@get:Rule val mainDispatcherRule = MainDispatcherRule(StandardTestDispatcher())`,宣告在其他用到 dispatcher 的屬性前面;`stateIn(WhileSubscribed)` 先在 `backgroundScope` 掛空收集者;斷言 StateFlow 的最終 `value`,不逐一比中間值;Turbine 結束前每個值都收掉,或用 `expectNoEvents()` 斷言沒有多的,真的不管後面的才明寫 `cancelAndIgnoreRemainingEvents()`;錯誤用 `awaitError()`。(實作實驗改寫:Turbine 這幾個檢查失敗丟 `TurbineAssertionError`,收證不算斷言失敗,範本改用 `awaitEvent()`、`cancelAndConsumeRemainingEvents()` 取事件再 `assertEquals`/`assertIs`,見審計修正紀錄〈實作〉)
+      - T1:虛擬時間讀 `testScheduler.currentTime`,測試類別加 `@OptIn(ExperimentalCoroutinesApi::class)`(它是成員屬性,只有實驗 API 警告;調研編譯失敗的是另一個頂層擴充 `TestScope.currentTime`)。API-4 是兩個互斥版本(決策 d1):〈測試:API-4 連坐版〉配〈好寫法:API-4 連坐〉、〈測試:API-4 不連坐版〉配〈好寫法:API-4 不連坐〉,各自交叉時斷言紅,範本註解寫「照情境表態的答案留一個版本」。API-10 與 API-31 分開斷言(決策 d5):API-10 斷言「`submit()` 連呼兩次只打一次 API」,另有〈測試:API-10 冪等鍵版〉配〈好寫法:API-10 冪等鍵〉(兩次呼叫帶同一個鍵);API-31 斷言「三個呼叫端同時 `refresh()` 只打一次網路、三個都拿到同一份結果」。會丟例外的壞寫法(API-34 第二次 resume 丟 `IllegalStateException: Already resumed`)用 `runCatching` 接住再斷言;FLOW-29 把被測函式放進 `backgroundScope.launch`、推進後斷言那個 Job `isCompleted`(可行性席實跑:壞寫法是斷言紅、不會卡到 60 秒逾時)。
+      - T2:STATE-10 斷言「同一則錯誤連發兩次,畫面收到兩個不同 id」;FLOW-18 數上游被執行幾次;FLOW-3 斷言第一筆是 Loading;FLOW-23 用 `runCatching` 接住 `NoSuchElementException` 再斷言被測函式回了 null;FLOW-20 跟 FLOW-29 同形,把「collect 之後那段」放進 `backgroundScope.launch`,推進後斷言那段的副作用有發生(壞寫法永遠走不到,斷言紅)。
+      - T3:照官方「用測試值建新的 SavedStateHandle」,把第一個 ViewModel 寫過的 handle 內容複製成第二個 handle 再建 ViewModel(可行性席在純 JVM 用 `lifecycle-viewmodel-savedstate:2.9.4` 實跑綠);`ViewModelScenario.recreate()` 能不能在純 JVM 用看實驗 E5。(實作:E5 在純 JVM 能用;代碼審 r1 實跑它在 Android 模組的本機單元測試例外紅,所以預設〈測試〉是複製 handle 版、viewModelScenario 版標成只在純 JVM 或 KMP 用,見審計修正紀錄〈代碼審 r1〉)
+      - T4:204 這類「壞寫法丟例外」的用 `runCatching` 後斷言成功;API-21 排 25 個 401,斷言 `requestCount <= 3`(沒上限的壞寫法會一路重試到 OkHttp 自己的 20 次追隨上限丟 `ProtocolException`,用 `runCatching` 接住,紅成為斷言紅)。走真的 socket,不在 `runTest` 的虛擬時間裡用 `withTimeout`(可行性席實跑:虛擬時間遇到真實 I/O 會直接跳到逾時點,好壞都例外紅);要等真實時間就包進 `withContext(Dispatchers.Default)`。MockWebServer 的版本照消費專案實際解析到的 OkHttp 主版本挑:OkHttp 4 用 `com.squareup.okhttp3:mockwebserver:4.12.0`(套件 `okhttp3.mockwebserver`),OkHttp 5 用 `com.squareup.okhttp3:mockwebserver3:5.5.1`(套件 `mockwebserver3`);版本號跟專案的 OkHttp 對齊,先用 `./gradlew :<模組>:dependencies` 看解析後的版本(測試品質標準「加測試函式庫前看實際版本」那條)。〈測試〉為兩個主版本各放一份 import 寫法。(實作:兩份測試配兩份〈依賴:OkHttp 4〉〈依賴:OkHttp 5〉;API-26 用 Retrofit 3.0.0 加 `converter-kotlinx-serialization`)
+      - T5:測試讀專案正式的 `Json` 設定物件(範本用 `AppJson` 佔位),不在測試裡另 new 一個;DATA-72 缺欄位丟 `MissingFieldException`、DATA-73 未知 enum 丟 `SerializationException`,都用 `runCatching` 接住再斷言解碼成功。
+ 2. **型錄改兩處**:
+    - 32 列的通電批次欄把「行為測試或正向約束=批五」改成「行為測試或正向約束=範本 T<n>」;不做的 36 列改成「行為測試或正向約束=未接(儀器批)」「行為測試或正向約束=未接(架構測試後續計劃)」「行為測試或正向約束=未接(Ktor 範本後續)」或「行為測試或正向約束=不接(代碼審或真機)」,其他接電方式的批次照舊;接電方式欄不動(型錄格式檢查要求形狀類至少有告警或正向約束,不能拿掉)。實驗把某列移出時,同一個提交裡把它改成對應的「未接」值。
+    - 〈輸入與口徑〉的「通電批次欄的值」那句補上新值的意思,並加一句「級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節」。2026-11-06 前掃核對時統計節沒有各批次列數,改值不影響統計;實作時照 `check.py` 讀表重算一次確認。
+-3. **型錄自檢多一項** `template_problems()`(在 `configs/ast-grep/kotlin-android/check.py`,回傳形狀跟 `catalog_problems` 一樣是 `(列編號, 原因)`;由 `catalog_problems` 在最後呼叫,所以 `--catalog-only`、完整模式與既有的 `t_kotlin_catalog_rows_wired` 都會走到):主表每列的通電批次裡出現「範本 T<n>」時,範本檔要有一個以 `## T<n> ` 開頭的標題,沒有就報那一列;範本檔不存在報一筆 `(<templates>, 找不到範本檔)`。只驗這一件事;範本內容對不對靠實驗與驗證紀錄。測試輔助 `_ktpack(copy=True)` 多複製範本檔,讓「改壞一份」的測試碰得到。
++3. **型錄自檢多一項** `template_problems(rows)`(在 `configs/ast-grep/kotlin-android/check.py`,回傳形狀跟 `catalog_problems` 一樣是 `(列編號, 原因)`;由 `catalog_problems` 在最後呼叫、把它用 `main_rows()` 讀好的主表列傳進去,所以 `--catalog-only`、完整模式與既有的 `t_kotlin_catalog_rows_wired` 都會走到,主表只有 `main_rows` 一條讀法):主表每列通電批次的「行為測試或正向約束=」那一段(`behavior_value`;別的接電方式那段寫了「範本」不算)寫「範本 T<n>」時,範本檔要有那一節——標題規則是 `TEMPLATE_HEADING_RE`(`## T<n>` 後接空白或整行就這樣),而且要在程式圍欄外(圍欄照 CommonMark 判,口徑跟 `scripts/lumos` 的 `_fence_regions` 對齊,`t_kotlin_template_fence_parity` 比對兩份)——沒有就報那一列;值以「範本」開頭卻不是「範本 T<n>」整段報格式錯;範本檔不存在報一筆 `(<templates>, 找不到範本檔)`、不是 UTF-8 報一筆 `(<templates>, 範本檔不是 UTF-8…)`。只驗這一件事;範本內容對不對靠實驗與驗證紀錄。測試輔助 `_ktpack(copy=True)` 多複製範本檔,讓「改壞一份」的測試碰得到;測試端的主表、批次值、標題切段都呼叫 check.py 的同名函式,不另抄。(代碼審 r1、r2 折入後的現況)
+ 4. **指路**:kotlin-idioms 的 `SKILL.md` 開頭那段(已指向型錄)加一句「寫協程、Flow、HTTP、序列化或 SavedStateHandle 的測試,先看型錄那列通電批次寫的範本組,到 `test-templates.md` 同名的節起手」;測試品質標準〈Android 本機單元測試的驗收標準〉的「協程」「Flow」兩小段尾各加一句指到範本檔。
+ 5. **實驗與驗證紀錄**:照〈實驗〉逐項跑,結果寫進一篇 `Verification/` 驗證紀錄(`plan_refs` 連回這篇);實驗推翻範本寫法的,改範本、重跑那一格。
+ 6. **寫回家**:[[Systems/kotlin規則包]] 記一行範本檔與自檢新項(範本檔加進它的 about_code);[[Systems/test-quality-cli]] 記一行測試品質標準多了指到範本的兩句(上一份 Android 單元測試標準計劃落在這篇)。
+ 
+ ### 不做(36 列,與理由)
+ 
+ - **儀器批 25 列**:STATE-12、STATE-17、STATE-23、UI-36、UI-52、UI-106、UI-110、ARCH-2、ARCH-3、ARCH-31、ARCH-35、DATA-17、DATA-19、DATA-21、DATA-38、DATA-39、DATA-58、DATA-60、DATA-63、DATA-65、DATA-69、TEST-29、TEST-32、TEST-35、ARCH-56。理由:要 Compose UI 測試、Room `MigrationTestHelper`、Paging、WorkManager、LeakCanary、Robolectric 或 Android 專用套件,本批的實驗環境(純 JVM Gradle)跑不動,消費專案也不能在推送前不開模擬器就跑完。STATE-17(LiveData)在純 JVM 解析不到:`androidx.arch.core:core-testing:2.2.0` 與 `lifecycle-livedata:2.9.4` 在純 JVM Kotlin 專案都解析失敗(可行性席實跑),`lifecycle-livedata-core` 的模組檔只發佈 `.aar`(依據席讀模組檔);另外官方 `InstantTaskExecutorRule` 讓背景工作同步執行,`postValue` 合併的壞寫法在它底下可能照綠,儀器批要另找測法。STATE-23 驗 Compose `rememberSaveable` 要用 `StateRestorationTester`。DATA-39 單看 `Data` 類別可測,但跟 DATA-38 同一組 WorkManager 範本。DATA-19 的 K5 跟 T6 一起做。ARCH-56 的 K4 另缺依據:Hilt 官方頁現版找不到「Fragment 標了宿主 Activity 也要標」的原句。
+ - **架構測試後續計劃 3 列**:API-9(K1)、CO-5(K2)、UI-39(K3),連同 Konsist 換版(決策 d4,取代原 d3)。理由:①規則包已有同形的三條規則 `kt-unmanaged-scope-launch`、`kt-hardcoded-dispatchers-io`、`kt-uistate-mutable-field` 接在新增告警閘;②設計審 r1 兩席各自打穿 K1–K3 的判斷形狀:函式本體裡 `CoroutineScope(Dispatchers.IO).launch` 漏報、`rememberCoroutineScope()` 與自訂 Application 的 `appScope` 誤報(K1),`sealed interface HomeUiState` 的巢狀 `data class Success(var …)` 漏報(K3),DI 模組 `@Provides fun io() = Dispatchers.IO` 誤報、CO-5 的阻塞呼叫沒有 Dispatchers 字樣漏報(K2);③Konsist 1.0.0-beta.1 是 2026-11-04 才發的 beta,`resideIn*` 改名讓現有產出在新依賴下編不過,lumos 照 0.17.3 反組譯的 `_arch_tpl_konsist_test` 也要跟著重核。後續計劃開的時候帶上這三點與 r1 席報告。產生器資料檔、技能文件 `skills/lumos-project-notes/commands/target-arch-android-template.md` 的版本說法這批都不動。
+ - **Ktor 1 列**:API-30(串流回應帶出 `execute` 區塊才讀)。理由:T4 用 OkHttp/Retrofit,驗不到 Ktor 的 `prepareGet().execute()`;要驗得加 Ktor client 與它的引擎依賴、另寫一組,而型錄這列的後果(離開區塊即釋放連線)官方頁沒寫,只能靠實驗。選「移出」不選「改用 Ktor client 寫」:只為一列多一套 HTTP 用戶端的依賴與骨架,成本跟其他 31 列的範本加起來差不多,而且依據不全;等有 Ktor 的消費專案時另開。
+ - **只能代碼審或真機的 7 列**:STATE-20(SavedStateHandle 的寫入時機看 Activity 停止的系統時序,官方頁 Caution 段寫「only saves data written to it when the host Activity is stopped」)、CO-39(多執行緒競態,測試派發器是單執行緒,測不出)、UI-109(截字要看實際字型與螢幕)、DATA-44(前景服務的時限由系統計時)、DATA-77(R8 只在 release 建置出現)、PERF-1、PERF-2(StrictMode 只在裝置上偵測)。維持代碼審與真機驗收(lumos-android-evidence)。
+@@ -143,21 +143,21 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數照範本起
+ - **不在型錄每列「實測狀態」欄補範本實測**:實測結果寫在範本檔的矩陣與驗證紀錄,型錄只靠通電批次的組代號指過去。
+ 
+ ## 實驗(每個機制都跑一遍,找漏洞)
+ 
+ 照使用者第二要點,下面每一項在實作時真的跑;結果不符預期就照第一要點先查官方與業界做法再改,寫進〈依據來源〉與審計修正紀錄。實驗跑在會談暫存區的資料夾,Gradle 用本機 `~/.gradle/wrapper/dists/gradle-8.13-bin/` 那份(調研與 r1 可行性席都用它跑通),Kotlin Gradle 外掛 2.2.21、JDK 17。
+ 
+ - **E1 紅要是斷言紅**:每組〈測試〉列的每個紅,讀 JUnit XML 的失敗型別,用 `scripts/test_quality.py` 的 `assertion_failure` 判,全部要判成斷言失敗。已知會是例外或逾時紅、範本要先改寫的:T1 的 API-34(`IllegalStateException`)與 FLOW-29(卡到 `runTest` 逾時)、T2 的 FLOW-23(`NoSuchElementException`)與 FLOW-20(熱流 collect 永不結束)、T4 的 API-26 204(`IllegalArgumentException: EOF`)與 API-21(`ProtocolException`)、T5 的 DATA-72(`MissingFieldException`)與 DATA-73(`SerializationException`)。
+ - **E2 每格只紅點名的那支**:〈測試〉×〈壞寫法:某變體〉那格,矩陣沒點名的測試要綠;小節裡每支 `@Test` 都要在矩陣出現。
+ - **E3 時序穩定**:T0 的 TEST-9 那幾格(壞例用真 dispatcher,型錄後果寫「偶發紅」)、T1(含 CO-14「逾時剛好落在取得資源之後」)、T2、T4(走真的 socket)每格各跑 20 次,結果要每次一樣;不穩的那支改寫或拿掉,型錄那列改「未接」並寫原因。
+ - **E4 MainDispatcherRule 的預設**:T0 的〈壞測試:TEST-4 沒推進就斷言〉對正確程式,在 `MainDispatcherRule(StandardTestDispatcher())` 下要斷言紅;另跑一次預設 Unconfined 的版本,記下它照綠(證明明傳的必要)。
+-- **E5 ViewModelScenario 在純 JVM**:Lifecycle 2.9.0 穩定版發行說明寫 `lifecycle-viewmodel-savedstate`(含 `SavedStateHandle`)已是 KMP、有 JVM 版,`lifecycle-viewmodel-testing` 的 `ViewModelScenario.recreate()` 也是 KMP 套件;實跑它在純 JVM 能不能還原 handle 內容。能的話範本 T3 改用它(跟測試品質標準「畫面重建與程序被回收」那條一致),不能就在測試品質標準那條補一句「純 JVM 用複製 handle 的寫法」。
++- **E5 ViewModelScenario 在純 JVM**:Lifecycle 2.9.0 穩定版發行說明寫 `lifecycle-viewmodel-savedstate`(含 `SavedStateHandle`)已是 KMP、有 JVM 版,`lifecycle-viewmodel-testing` 的 `ViewModelScenario.recreate()` 也是 KMP 套件;實跑它在純 JVM 能不能還原 handle 內容。能的話範本 T3 改用它(跟測試品質標準「畫面重建與程序被回收」那條一致),不能就在測試品質標準那條補一句「純 JVM 用複製 handle 的寫法」。(結果:純 JVM 能用;**代碼審 r1 推翻了「範本 T3 改用它」**——它在 Android 模組的本機單元測試例外紅,T3 預設改回複製 handle 版,它降成〈測試:viewModelScenario 版〉只標純 JVM 或 KMP,測試品質標準「畫面重建與程序被回收」那條也改寫了,見審計修正紀錄〈代碼審 r1〉)
+ - **E6 FLOW-3 的後果**:官方 `combine` 頁沒明寫「每個來源都要先發過」,用範本的紅綠對照實證,實跑訊息寫進驗證紀錄,當型錄那列「後果」欄的佐證。API-34(依序 resume 兩次的訊息)、FLOW-29(`send` 卡住讓父範圍不結束)同樣以實跑訊息當佐證。
+ - **E7 OkHttp 兩個主版本**:T4 整組在「OkHttp 4.12.0 加 `mockwebserver:4.12.0`」與「OkHttp 5.5.1 加 `mockwebserver3:5.5.1`」各跑一次矩陣,結果要一樣;另跑一次「OkHttp 4.12.0 加 `mockwebserver3:5.5.1`」,記下它的錯(證明要照主版本挑)。
+ - **E8 自檢那一項**:把型錄某列改成「範本 T9」、刪掉範本檔的 `## T2` 節、把範本檔改名,自檢要各自報;拿掉 `template_problems` 的判斷式,這三種改壞要轉成不報(證明是那一項在抓)。
+ 
+ ## 實務隱患
+ 
+ (`lumos pitfalls <計劃> --check` 逐類答,見節末)
+ 
+ - **範本照抄出錯被當成標準**:範本只在實驗專案跑過,消費專案的類別名、依賴版本不同;範本〈怎麼用〉寫明「照抄後在自己的專案跑一次,綠了才算」,並留「故障證明挑本次需求」那條既有標準讓審查看。
+ - **範本的壞例被本 repo 的推送閘當產品碼**:2026-11-05 規則包樣本 `.kt` 被測試作弊比對與 Room 守衛當產品碼擋過([[Issues/Kotlin規則包代碼審放行的小問題]] 第 7 條)。本批的壞例放在 Markdown 圍欄裡、repo 裡不新增任何 `.kt` 檔,實驗專案只在會談暫存區,不碰那個坑。
+@@ -225,21 +225,21 @@ REVISIT:2027-02-06 範本檔各組〈依賴〉的版本與 Maven Central、Googl
+ - T0 斷言前推進|官方「advanceUntilIdle … This is a good default choice」「If your test focuses on concurrency, prefer using StandardTestDispatcher」|https://developer.android.com/kotlin/coroutines/test(調研開頁;r1 依據席核對)|範本檔 T0 節、TEST-4/TEST-14
+ - T0 換測試 dispatcher|官方「In tests, replace real dispatchers with instances of TestDispatchers」|同上|TEST-9、`MainDispatcherRule`
+ - T0 Unconfined 不跑完|官方「this doesn't mean that it'll run them to completion eagerly」|同上|TEST-14
+ - T0 MainDispatcherRule 明傳 Standard|nowinandroid 原檔預設 `UnconfinedTestDispatcher()`,官方範例也是;既有標準「預設用 `StandardTestDispatcher`」|https://raw.githubusercontent.com/android/nowinandroid/main/core/testing/src/main/kotlin/com/google/samples/apps/nowinandroid/core/testing/util/MainDispatcherRule.kt (r1 依據席開頁);`skills/lumos-project-notes/commands/test-quality-standard.md`〈Android 本機單元測試的驗收標準〉協程段|範本檔 T0、實驗 E4
+ - T0 stateIn 要收集者|官方「there must be at least one collector present during the test」|https://developer.android.com/kotlin/flow/test(調研開頁;r1 依據席核對)|TEST-6
+ - T0 backgroundScope|官方「ensures that the coroutine gets cancelled before the end of the test」|同上|TEST-5、TEST-17
+ - T0 StateFlow 斷言 value|官方「we generally recommend treating StateFlow as a data holder and asserting on its value」|同上|TEST-7
+ - T0 Turbine 未消費事件會紅、收尾寫法|「Failing to consume all events before the end of a flow-based Turbine's validation block will fail your test」;型錄 TEST-18 標準寫法「`expectNoEvents()` 或明確 `cancelAndIgnoreRemainingEvents()`」;測試品質標準「每個發出的值都要收掉,或用 `cancelAndIgnoreRemainingEvents()` 明講不管」|https://github.com/cashapp/turbine(調研開頁;r1 依據席核對;Maven Central 現行 1.2.1);型錄 TEST-18 列;測試品質標準 Flow 段|TEST-18、TEST-19、TEST-20
+ - T1 虛擬時間跳過 delay|官方「it will automatically skip any delays in coroutines」「advanceTimeBy: Advances virtual time by the given amount」「There should only be one scheduler instance used in a test」|https://developer.android.com/kotlin/coroutines/test(調研開頁);本機實跑依序寫法 `expected:<1000> but was:<2000>`(調研 2026-11-06)|API-1、API-10、API-31、API-32
+ - T1 用 testScheduler.currentTime|實跑:`testScheduler.currentTime` 是成員屬性,只有 `ExperimentalCoroutinesApi` 警告;調研編譯失敗的是頂層擴充 `TestScope.currentTime`(缺 import)|調研 2026-11-06 實驗紀錄;r1 可行性席實跑 coroutines-test 1.10.2|範本檔 T1
+-- T1 逾時是取消的子類(代碼審 r1 改引 API 頁:指南那頁已改寫、沒有這兩句;API 頁原文「when coroutines finish with a CancellationException, the error does not get propagated to the parent」「may happen at any time, even after the block finishes executing but before the caller gets resumed with the result」「Values returned from withTimeout will typically be lost if the caller is cancelled」,https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html 本次開頁)|舊引句「The TimeoutCancellationException that is thrown by withTimeout is a subclass of CancellationException」「may happen at any time, even right before the return from inside of the timeout block」|kotlinx.coroutines 指南 cancellation-and-timeouts(調研時讀 android.googlesource 鏡像 https://android.googlesource.com/platform/external/kotlinx.coroutines/+/refs/heads/main/docs/cancellation-and-timeouts.md ;**無法複驗**:r1 依據席重開時那頁已改成「文件已搬家」的導向頁,https://kotlinlang.org/docs/cancellation-and-timeouts.html WebFetch 讀不到正文,GitHub raw 兩個路徑 404);以實驗 E1、E3 的 API-32、CO-14 格子實跑當實證|API-32、CO-14
++- T1 逾時是取消的子類|API 頁原文「when coroutines finish with a CancellationException, the error does not get propagated to the parent」「may happen at any time, even after the block finishes executing but before the caller gets resumed with the result」「Values returned from withTimeout will typically be lost if the caller is cancelled」(代碼審 r1 改引:舊引句「The TimeoutCancellationException that is thrown by withTimeout is a subclass of CancellationException」「may happen at any time, even right before the return from inside of the timeout block」出自指南 cancellation-and-timeouts,那頁已改寫、無法複驗)|https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/with-timeout.html(本次開頁;代碼審 r2 範本審逐字核對);舊出處 https://android.googlesource.com/platform/external/kotlinx.coroutines/+/refs/heads/main/docs/cancellation-and-timeouts.md|API-32、CO-14
+ - T1 重複 resume(旁證)|頁面只寫「Concurrent invocations of resume methods lead to a IllegalStateException」,沒寫依序 resume 兩次;r1 可行性席實跑依序兩次得 `IllegalStateException: Already resumed`|https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-cancellable-continuation/(調研開頁;r1 依據席核對);實驗 E6|API-34
+ - T1 produce 的父範圍等它結束(旁證)|頁面寫「The lifecycle of the parent [CoroutineScope] cannot end until this coroutine … completes」,沒寫 `send` 卡住會讓父範圍不結束,那是推論;r1 可行性席實跑 `backgroundScope` 加 `isCompleted` 的壞寫法是斷言紅|https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.channels/produce.html(調研開頁);實驗 E6|FLOW-29
+ - T1 API-31 合併在途請求|型錄 API-31 標準寫法:共用 `Deferred` 加 mutex|`skills/kotlin-idioms/checks-catalog.md` API-31 列;決策 d5|範本檔 T1
+ - T2 Turbine 寫法|README 範例 `flowOf("one", "two").test { assertEquals("one", awaitItem()); awaitComplete() }`;官方「The third-party Turbine library offers a convenient API」|https://github.com/cashapp/turbine ;https://developer.android.com/kotlin/flow/test(調研開頁);API-8 本機實跑 `expected:<result:a[b]> but was:<result:a[]>`|API-8
+ - T2 StateFlow 合併相等值、不會結束|「suppress emission of the values to collectors when new value is equal」「State flow never completes」|https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/-state-flow/(調研開頁;r1 依據席核對)|STATE-10、FLOW-20
+ - T2 SharedFlow 無訂閱者丟值|「the emitted value is immediately lost」「Shared flow never completes」|…/kotlinx.coroutines.flow/-shared-flow/(同上)|FLOW-24、FLOW-20
+ - T2 shareIn|「every time it is collected a fresh connection is established」|…/kotlinx.coroutines.flow/share-in.html(同上)|FLOW-18
+ - T2 first 空流丟例外|「Throws NoSuchElementException if the flow was empty」|…/kotlinx.coroutines.flow/first.html(同上)|FLOW-23
+ - T2 combine 首發條件(旁證)|頁面只寫「combining the most recently emitted values by each flow」,沒明寫要每個來源先發過|…/kotlinx.coroutines.flow/combine.html(同上);實驗 E6 實證|FLOW-3
+ - STATE-17 移到儀器批|LiveData 頁「If you called this method multiple times before a main thread executed a posted task, only the last value would be dispatched.」;`InstantTaskExecutorRule`「executes each task synchronously」,在 `androidx.arch.core:core-testing`;純 JVM 解析失敗(r1 可行性席實跑 core-testing 2.2.0、lifecycle-livedata 2.9.4);`lifecycle-livedata-core` 模組檔只發 `.aar`|https://developer.android.com/reference/androidx/lifecycle/LiveData ;https://developer.android.com/reference/androidx/arch/core/executor/testing/InstantTaskExecutorRule(本次開頁;r1 依據席核對);https://dl.google.com/dl/android/maven2/androidx/lifecycle/lifecycle-livedata-core/2.9.0/lifecycle-livedata-core-2.9.0.module(r1 依據席讀)|〈不做〉儀器批
+@@ -252,27 +252,32 @@ REVISIT:2027-02-06 範本檔各組〈依賴〉的版本與 Maven Central、Googl
+ - T4 權杖刷新有上限|OkHttp `Authenticator.kt` KDoc「Returns null if the challenge cannot be satisfied」,範例 `while ((response = response.priorResponse()) != null)` 與「Give up, we've already failed to authenticate.」|okhttp 原始碼 KDoc https://github.com/square/okhttp/blob/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/Authenticator.kt (調研開頁;r1 依據席核對;代碼審 r1 換掉 404 的文件站網址、本次開頁)|API-21
+ - T4 權杖刷新要加鎖(代碼審 r1)|型錄 API-21 標準寫法 `mutex.withLock { if (token 已被別人刷新) 用新的 else refresh() }`(出處不全;Authenticator KDoc 沒提並行);Authenticator 跑在 OkHttp 執行緒、不是 suspend,範本用 `synchronized`;實跑 5 個並行 401:沒加鎖刷新 5 次、加鎖 1 次|型錄 API-21 列;驗證紀錄〈代碼審 r1 修正後重跑〉|範本檔 T4
+ - T5 序列化設定|coerceInputValues 套用「null inputs for non-nullable types」「unknown values for enums」;「the JSON encoder omits default property values」(encodeDefaults);kotlinx-serialization-json Maven Central 現行 1.12.0(本次查)|https://kotlinlang.org/docs/serialization-json-configuration.html(調研開頁;r1 依據席核對)|DATA-72、DATA-73、DATA-74
+ - 壞例紅要是斷言紅|收證工具只把斷言失敗算成抓到錯;判定函式 `assertion_failure`(`UncompletedCoroutinesError` 判非斷言)|`scripts/test_quality.py`;測試品質標準「被當掉抓到的錯不算」|〈用詞〉紅綠矩陣、實驗 E1
+ - 範本檔放法|照抄式範本用一般圍欄、節用標題(DDD 範本);放 `skills/kotlin-idioms/` 跟 `check.py` 讀的型錄同目錄|`skills/lumos-project-notes/commands/target-arch-ddd-template.md`;`configs/ast-grep/kotlin-android/check.py` 的 `CATALOG`|〈用詞〉範本檔
+ - 對應沿用通電批次欄|既有欄位、`catalog_problems` 已讀表檢查|`configs/ast-grep/kotlin-android/check.py`;r1 架構對齊席 F6|〈做法〉2、3
+ - 壞例不放 .kt 進 repo|規則包樣本被推送閘當產品碼擋過|[[Issues/Kotlin規則包代碼審放行的小問題]] 第 7 條|〈實務隱患〉
+ - K1–K3 移出|規則包同形三條、r1 兩席打穿點、Konsist 1.0.0-beta.1 發行說明(「resideIn* → residesIn*」、JVM 11、`kotlin-stdlib` 2.0.21、`scopeFromProduction` 只收 `src`)|https://github.com/LemonAppDev/konsist/releases(本次開頁;r1 依據席核對);`governance/review-reports/android行為測試範本與架構測試/`|〈不做〉、決策 d4
+ - Turbine 失敗型別(實作實驗)|README 範例輸出「app.cash.turbine.TurbineAssertionError: Unconsumed events found」;`TurbineAssertionError extends java.lang.AssertionError`(javap 讀 turbine-jvm 1.2.1);`awaitEvent()`、`cancelAndConsumeRemainingEvents()` 是 `ReceiveTurbine` 的公開方法;收證 `assertion_failure` 照型別名判、不認這個子類別|https://github.com/cashapp/turbine(本次開頁);實驗 E1 T0 兩格|範本檔〈怎麼用〉、T0、T2;測試品質標準 Flow 段指路句
+ - backgroundScope 不被 advanceUntilIdle 推進(實作實驗)|`advanceUntilIdle` 只推到前景沒有工作為止;`backgroundScope` 的工作要 `runCurrent()` 或 `advanceTimeBy()`|kotlinx-coroutines-test 1.10.2 `TestCoroutineScheduler.advanceUntilIdle` 原始碼(條件 `events.none(isForeground)`);實驗 FLOW-29、FLOW-18、FLOW-20、FLOW-24 格|範本檔〈怎麼用〉、T1、T2;測試品質標準協程段指路句
+-- ViewModelScenario 在純 JVM(實驗 E5)|`lifecycle-viewmodel-testing:2.9.4` 的 `viewModelScenario { … }.recreate()` 在純 JVM 還原 `SavedStateHandle` 內容,實跑綠/壞寫法斷言紅|驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]|範本檔 T3
++- ViewModelScenario 在純 JVM(實驗 E5)|`lifecycle-viewmodel-testing:2.9.4` 的 `viewModelScenario { … }.recreate()` 在純 JVM 還原 `SavedStateHandle` 內容,實跑綠/壞寫法斷言紅|驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]|範本檔 T3〈測試:viewModelScenario 版〉(代碼審 r1 起不是預設版:Android 模組跑不起來)
+ - kotlinx-serialization 版本對 Kotlin(實作實驗)|發行說明 1.9.0「This release updates Kotlin version to 2.2.0」、1.12.0「This release is based on Kotlin 2.4.10」;1.12.0 配 Kotlin 2.2.21 實測編不過(metadata 2.4.0 vs 2.2.0)|https://github.com/Kotlin/kotlinx.serialization/releases(本次開頁)|範本檔 T4、T5〈依賴〉用 1.9.0
+ - OkHttp 主版本混用(實驗 E7)|OkHttp 4.12.0 配 mockwebserver3 5.5.1:不釘版本時 Gradle 把測試類別路徑的 OkHttp 升成 5.5.1;`strictly("4.12.0")` 時 `NoClassDefFoundError: okhttp3/internal/_UtilJvmKt`|實驗 E7,驗證紀錄|範本檔 T4 開頭說明
+ - API-4 摘句(代碼審 r1 改成原文)|「a failure or cancellation of a child does not propagate to the supervisor job or its other children」(舊引句不是逐字)|https://kotlinlang.org/docs/exception-handling.html(本次開頁)|範本檔 T1〈依據〉
+ - T3 在 Android 模組(代碼審 r1)|Android 本機單元測試跑在空殼 android.jar 上,`SavedState` 就是 `Bundle`;`viewModelScenario().recreate()` 例外紅 `Method containsKey in android.os.BaseBundle not mocked`,複製 handle 版綠/斷言紅|https://developer.android.com/training/testing/local-tests ;Android library 模組實跑(AGP 8.13.2)|範本檔 T3、測試品質標準「畫面重建與程序被回收」
+ - 測行為不測實作(代碼審 r1 先查世界)|斷言只驗型錄那列「後果」欄的可觀察行為;型錄有兩種以上標準寫法的,斷言要對每一種都成立|https://developer.android.com/training/testing/fundamentals ;Google Testing Blog「Test Behavior, Not Implementation」;`governance/review-reports/code-android行為測試範本/r1-intake.md`|範本檔 T1 CO-14、T2 FLOW-23、T5 DATA-72/74
+ - Turbine 等不到值也丟 TurbineAssertionError(代碼審 r1)|`awaitItem()` 等不到值 3 秒後丟 `TurbineAssertionError: No value produced in 3s`,收證不算斷言;〈測試〉一律推到靜止後 `cancelAndConsumeRemainingEvents()` 一次比|代碼審 r1 丙審實跑;驗證紀錄|範本檔〈怎麼用〉、T0、T2
++- 剝圍欄照 CommonMark(代碼審 r2)|「The closing code fence must be at least as long as the opening fence」、圍欄標記縮排最多 3 格、收尾不帶 info string;check.py 零依賴不能 import scripts/lumos,刻意另一份、口徑跟 `_fence_regions`/`_visible_lines` 對齊|https://spec.commonmark.org/0.31.2/#fenced-code-blocks ;`scripts/lumos` 的 `_fence_regions`;`t_kotlin_template_fence_parity`|`configs/ast-grep/kotlin-android/check.py` 的 `_fence_regions`
++- Turbine 會丟斷言錯的方法全表(代碼審 r2)|`awaitItem`、`awaitEvent`、`awaitComplete`、`awaitError`、`skipItems`、`expectNoEvents`、`expectMostRecentItem`、`ensureAllEventsConsumed`、`takeItem`、`takeEvent`、`takeComplete`、`takeError`;`test {}` 區塊結束的 Unconsumed events 檢查|turbine-jvm 1.2.1 sources(Maven Central `turbine-jvm-1.2.1-sources.jar` 的 `channel.kt`、`ReceiveTurbine.kt`、`Turbine.kt`、`flow.kt`)|`t_kotlin_test_templates_content_guards` 的 `_KT_TURBINE_THROWING`;範本〈怎麼用〉
++- 取事件前先推進(代碼審 r2)|官方 Flow 測試頁的 `advanceUntilIdle` 用法;被測流會掛起時,不推就 `cancelAndConsumeRemainingEvents()` 只拿到一部分事件(實跑)|https://developer.android.com/kotlin/flow/test ;範本審 r2 實跑|範本 T0、守衛測試
++- API-21 用 synchronized(旁證,代碼審 r2)|型錄寫 `mutex.withLock`;`Authenticator.authenticate(route: Route?, response: Response): Request?` 是一般函式、不是 suspend,用不了 `Mutex.withLock`——從方法簽名推出,OkHttp 文件沒寫並行刷新怎麼鎖|https://github.com/square/okhttp/blob/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/Authenticator.kt|範本 T4 好寫法
++- DATA-74 比整個 JSON 值(代碼審 r2)|`JsonPrimitive.intOrNull` 會把 `"1"` 字串也讀成 1;改比 `JsonPrimitive(1)`,型別不同就不相等(實跑〈壞寫法:DATA-74 數量送成字串〉斷言紅)|範本審 r2 實跑;驗證紀錄|範本 T5
+ - 儀器批的依據(下一批用)|Room 遷移「you should include a test that covers all migrations」;Paging「the endOfPaginationReached property should be true」;WorkManager「use TestListenableWorkerBuilder」;Compose 無障礙「color contrast, small touch target size」;LeakCanary「automatically call LeakAssertions.assertNoLeaks()」|調研稿第二節 T6–T11 的網址(調研開頁)|〈不做〉;下一批計劃要把這幾行搬過去
+ 
+ ## 待決問題
+ 
+ (開頭欄位的 Q1–Q4 都已決;這裡只放長版)
+ 
+ - Q1 API-4 一支失敗時連坐或不連坐 → 決策 d1:範本放兩個互斥版本,各配自己的好寫法,不設預設;採用時照第三批情境表態對那段程式的答案留一個。理由:型錄這列級是 C+D,「一支壞了其他還要不要」是業務決定([[Projects/Android寫法語意情境表態與盲判_計劃]] 把它交給表態與盲判)。
+ - Q2 API-10、API-31 → 決策 d5(取代 d2):兩列分開斷言。API-10 預設「連呼兩次只打一次 API」,後端有冪等鍵時換冪等鍵版;API-31 斷言「多個呼叫端同時要同一份資料只打一次網路」。理由:API-31 是讀取流量合併,冪等鍵版本對它無效(r1 依據席 F2)。
+ - Q3 Konsist 換版、Q4 K1–K3 要不要做 → 決策 d4(取代 d3):整組移出本批,另開架構測試後續計劃。
+ 
+@@ -329,21 +334,21 @@ REVISIT:2027-02-06 範本檔各組〈依賴〉的版本與 Maven Central、Googl
+ | 架構對齊 F5 回傳形狀與掛載點、`_ktpack` 複製不到 | minor | 折:〈做法〉3 寫明回 `(列編號, 原因)`、由 `catalog_problems` 呼叫、`_ktpack` 多複製範本檔 |
+ | 架構對齊 F6 另造兩種認領語法 | major | 折:拿掉 `涵蓋:` 與 `// 型錄:`,沿用通電批次欄 |
+ | 架構對齊 F7 MainDispatcherRule 借用對得上 | minor | 折:保留借用並寫明來源,另依依據 F1 改明傳 Standard |
+ 
+ ### 實作(2026-11-06,實驗推翻與改法)
+ 
+ - 實驗 57 格、20 次重跑全照矩陣,細節在 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]];沒有列被移出,型錄 68 列照〈範圍〉兩張清單改值。
+ - E1 推翻〈做法〉1 T0「錯誤用 `awaitError()`」與 Turbine 收尾寫法:`awaitComplete()`、`awaitError()`、`expectNoEvents()` 失敗丟 `app.cash.turbine.TurbineAssertionError`,收證工具不算斷言(本計劃不改收證判定)。先查世界:Turbine README 範例輸出就是這個型別、1.2.1 公開 API 有 `awaitEvent()` 與 `cancelAndConsumeRemainingEvents()`;改法是取出事件再用 kotlin.test 斷言,範本〈怎麼用〉與測試品質標準 Flow 段寫明。收證工具要不要認 Turbine 的型別留給收證工具自己的計劃(本批不動,記在 [[Systems/kotlin規則包]] 的 PITFALL)。
+ - 實作發現:`backgroundScope` 的工作 `advanceUntilIdle()` 不推(只推前景),用 `runCurrent()`;寫進範本與測試品質標準協程段。
+ - E2 抓到 DATA-73 壞寫法連帶紅 DATA-72 那支(測試 JSON 沒帶 status),改測試 JSON 只讓 name 缺。
+-- E5 成立:T3〈測試〉改用 `ViewModelScenario.recreate()`,複製 handle 的版本留作舊 lifecycle 的退路。
++- E5 成立:T3〈測試〉改用 `ViewModelScenario.recreate()`,複製 handle 的版本留作舊 lifecycle 的退路。(**已被代碼審 r1 推翻**:T3 預設改回複製 handle 版,見下方〈代碼審 r1〉)
+ - 依賴:kotlinx-serialization-json 1.12.0 配 Kotlin 2.2.21 編不過,範本用 1.9.0;API-26 用 Retrofit 3.0.0。範本的組法比〈用詞〉多一條規矩:〈壞寫法〉小節只寫被換掉的那段,實驗格子的被測程式=〈好寫法〉各段再用同名開頭宣告的段換掉,寫在範本〈實驗專案骨架〉;T4 依主版本各一份〈依賴:OkHttp 4/5〉。
+ 
+ ### 代碼審 r1(2026-11-06,4 席:甲審、乙審、丙審、架構對齊,全 sonnet,21 條、會擋 5 條)
+ 
+ 先查世界(編排者 r1-intake):兩類對稱問題——斷言比型錄那列要的多(寫死某一種標準寫法,誤紅另一種)與比要的少(只驗一次或一半,放過壞寫法變形);照「測行為不測實作」,每支只斷言「後果」欄的可觀察行為,型錄有兩種標準寫法的兩種都要綠,並把席位的變形實跑進矩陣。卷證 `governance/review-reports/code-android行為測試範本/`,修正紀錄 r1-fix.json。
+ 
+ | 席與編號 | 嚴重度 | 去向 |
+ |---|---|---|
+ | 丙 F1 T3 在 Android 模組跑不起來 | major | 折:預設〈測試〉改複製 handle 版,viewModelScenario 版標只在純 JVM/KMP,兩版不涵蓋什麼寫在節開頭;Android library 模組實跑;測試品質標準「畫面重建」那條同步改 |
+ | 丙 F2 API-21 沒測加鎖、好寫法沒鎖 | major | 折:好寫法加 `synchronized` 與「別人已刷新就用新的」,新測試並行 5 個 401 只刷新一次且都成功,壞寫法加「沒加鎖」「不刷新直接放棄」 |
+@@ -359,10 +364,33 @@ REVISIT:2027-02-06 範本檔各組〈依賴〉的版本與 Maven Central、Googl
+ | 丙 F5 複製版不涵蓋 provider | minor | 折:節開頭寫明,矩陣加〈好寫法:STATE-6 用 setSavedStateProvider〉兩格(複製版誤紅照列、viewModelScenario 版綠) |
+ | 丙 F6 不驗 Bundle 型別、Compose 寫入時機 | minor | 折:節開頭寫明兩版都不涵蓋 |
+ | 丙 F7 FLOW-18 假上游不掛起 | minor | 折:假 API 加 delay,加〈壞寫法:FLOW-18 沒同步的快取〉 |
+ | 丙 F8 FLOW-23/DATA-74 斷言過窄 | minor | 折:FLOW-23 收 null 或空字串並加好寫法變形;DATA-74 解回 JSON 比值,加〈壞寫法:DATA-74 預設值寫錯〉與〈好寫法:DATA-74 整個 Json 開 encodeDefaults〉 |
+ | 丙 F9 API-21 依據網址 404 | minor | 折:換 GitHub 原始碼網址(本次開頁) |
+ | 甲 F1 圍欄裡的假標題 | minor | 折:check.py 比對前剝程式圍欄,整行 `## T<n>` 也認 |
+ | 甲 F2 編碼錯丟例外 | minor | 折:回 (`<templates>`, 範本檔不是 UTF-8…) |
+ | 甲 F3 標準新舊 Turbine 句衝突、指路測試只比檔名 | minor | 折:舊句補一句指到收證那條;`t_kotlin_test_templates_linked` 驗連結目標存在、兩個坑的關鍵字、畫面重建那條 |
+ | 架 F1 主表讀兩次 | minor | 折:`catalog_problems` 把讀好的列傳給 `template_problems(rows)`,單獨呼叫才走 `main_rows()` |
+ | 架 F2 通電批次兩套口徑 | minor | 折:check.py 只認「行為測試或正向約束=」那段(`behavior_value`),跟測試同口徑 |
++
++### 代碼審 r2(2026-11-06,修訂輪,3 席:範本審、其他審、架構對齊,全 sonnet,16 條、會擋 3 條)
++
++先查世界(編排者 r2-intake):二範1 是上一輪修補自己帶進的退步(範本寫了「先推到靜止」,兩支漏做),照官方 Flow 測試頁補推進,並在守衛測試機械檢查「每個 `cancelAndConsumeRemainingEvents()` 之前同一 `test {}` 區塊有推進」;二架2 剝圍欄照 CommonMark 實作、刻意另一份並加對照測試防漂移。卷證 `governance/review-reports/code-android行為測試範本/`,修正紀錄 r2-fix.json。
++
++| 席與編號 | 嚴重度 | 去向 |
++|---|---|---|
++| 範 F1(二範1)新 Turbine 讀法對掛起的 save 誤紅 | major | 折:兩支 save 測試取事件前 `advanceUntilIdle()`;矩陣加〈好寫法:TEST-18 save 會掛起〉;守衛測試檢查推進 |
++| 範 F2(二範2)API-31 永久快取照綠 | major | 折:第一批完成後再 refresh 一次斷言共打兩次;加〈壞寫法:API-31 結果永久快取〉 |
++| 範 F3(二範3)FLOW-23 沒正向路徑 | minor | 折:加 `name("1")` 要回 "Ada";加〈壞寫法:FLOW-23 不查直接回 null〉 |
++| 範 F4(二範4)DATA-74 字串照綠、synchronized 沒出處 | minor | 折:比 `JsonPrimitive(1)`;加〈壞寫法:DATA-74 數量送成字串〉;synchronized 那句標旁證、依據改寫成方法簽名推論 |
++| 範 F5(二範5)其餘變形驗過 | minor | 確認:席位實跑的合法與壞變形結果都符合,不另改 |
++| 其 F1(二其1)~~~ 與未閉合圍欄沒測 | minor | 折:`t_kotlin_test_templates_sections` 加 `~~~`、四反引號包三反引號、縮排 4 格、檔尾未閉合;`t_kotlin_template_fence_parity` 同組輸入比 lumos |
++| 其 F2(二其2)非標準「範本」寫法靜默略過 | minor | 折:`template_problems` 對以「範本」開頭但不是「範本 T<n>」整段的值報格式錯 |
++| 其 F3(二其3)Turbine 禁用名單不全 | minor | 折:照 Turbine 1.2.1 原始碼列全 12 個方法,另檢查每個 `test {}` 區塊用 `cancelAndConsumeRemainingEvents()` 收尾 |
++| 其 F4(二其4)〈做法〉3 沒同步 | minor | 折:〈做法〉3 改寫成現況 |
++| 其 F5(二其5)E5 條文沒標過期 | minor | 折:計劃 E5、〈實作〉那行與驗證紀錄 E5 都標「已被代碼審 r1 推翻」 |
++| 其 F6(二其6)Systems/test-quality-cli 沒記 r1 改動 | minor | 折:那篇正文補 r1 三處改動(另一個提交,按家拆) |
++| 其 F7(二其7)依據表一行多一欄 | minor | 折:T1 逾時那行併回四欄 |
++| 架 F1(二架1)主表三份解析 | minor | 折:`catalog_problems` 改用 `main_rows`(編號重複、欄位數也在那裡報),測試直接呼叫 `m.main_rows()` |
++| 架 F2(二架2)第二份剝圍欄口徑分岔 | major | 折:照 CommonMark 與 lumos `_fence_regions` 重寫,註解寫明刻意另一份的理由,加對照測試 |
++| 架 F3(二架3)批次值正則抄兩份 | minor | 折:測試改呼叫 `m.behavior_value` |
++| 架 F4(二架4)標題規則測試端另一套 | minor | 折:check.py 抽出 `TEMPLATE_HEADING_RE`、`template_sections`,測試切段呼叫它;取 kotlin 程式塊改用 `_fence_regions`,不用成對非貪婪正則 |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 5ed0df945..95cc5b8e5 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -22,20 +22,21 @@ summary: |-
+   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
+   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
+   RULE:規則在真專案誤報超過命中的一成就降提示級或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+   REVISIT:2027-02-05 拿兩個以上新的真 Android 專案再量一次會擋的規則(2026-11-05 只量實驗專案與 nowinandroid 共 30 處命中,多數規則只命中 1–3 處,估不準每條的誤報率)
+   SEE:[[Systems/linter精選目錄]] [[Systems/pitfalls-code-loop]]
+   PITFALL:規則包測試用 rglob 的第一個檔去改壞,在 Linux 上可能挑到剛放進去的 review-fp 樣本、把它蓋掉,兩條改壞驗證跟著失效(macOS 綠、CI 紅) [出處:2026-11-05 PR #158 合併後主線 CI] [根因:目錄列舉順序依檔案系統而定,APFS 恰好照名稱排、ext4 不是] [修法:照檔名挑或整個目錄都改,不用 next(rglob)] [test:t_kotlin_rulepack_samples]
+   WHY:型錄 C 列的行為測試範本放 skills/kotlin-idioms/test-templates.md,型錄通電批次欄寫「行為測試或正向約束=範本 T<n>」指過去,自我檢查 template_problems 只驗那一節存在(範本內容對不對靠實驗與驗證紀錄) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 設計審 r1] [因:沿用既有欄位,不另造認領語法;範本紅綠要 Gradle 才跑得出,本 repo CI 不跑 Gradle] [不選:check.py --lab 產生實驗專案(自檢是唯讀職責)] [test:t_kotlin_test_templates_sections]
+   PITFALL:Turbine 自己的檢查(awaitComplete、awaitError、expectNoEvents、區塊結束的 Unconsumed events)失敗丟 app.cash.turbine.TurbineAssertionError,收證工具 assertion_failure 照型別名判、不算斷言失敗,範本照抄會讓壞寫法的紅不被收證認 [出處:2026-11-06 範本紅綠矩陣實跑 T0 兩格] [根因:assertion_failure 只認型別名以 AssertionError 等結尾且前面是點,Turbine 的類別名是 TurbineAssertionError] [修法:範本改用 awaitEvent() 或 cancelAndConsumeRemainingEvents() 取事件再 assertEquals] [repro:skills/kotlin-idioms/test-templates.md T0〈測試〉×〈壞寫法:TEST-18 Saved 多發一次〉改回 awaitComplete() 跑 Gradle]
+   WHY:template_problems 只認通電批次「行為測試或正向約束=」那一段的「範本 T<n>」、比對範本檔標題前先剝程式圍欄、讀不了 UTF-8 回 (<templates>, 原因);由 catalog_problems 把讀好的主表列傳進去,不另讀 [出處:代碼審 code-android行為測試範本 r1 甲 F1、F2,架構 F1、F2] [因:圍欄裡示範的標題會讓缺節被放過;同一格兩套解析口徑會漂移] [test:t_kotlin_test_templates_sections]
+   PITFALL:T3 用 viewModelScenario().recreate() 的測試放進 Android 模組的本機單元測試,好寫法壞寫法一律例外紅 Method containsKey in android.os.BaseBundle not mocked [出處:代碼審 code-android行為測試範本 r1 丙 F1 實跑] [根因:Android 上 SavedState 就是 Bundle,本機單元測試的 android.jar 是空殼] [修法:範本預設改官方的複製 SavedStateHandle 寫法,viewModelScenario 版只標純 JVM 或 KMP] [test:t_kotlin_test_templates_content_guards]
++  WHY:check.py 的剝圍欄(_fence_regions、_visible_lines)是刻意的另一份,規則照 CommonMark、口徑跟 scripts/lumos 的 _fence_regions 逐條對齊;主表只有 main_rows 一條讀法,範本標題只有 TEMPLATE_HEADING_RE 與 template_sections 一套,測試端呼叫同名函式不另抄 [出處:代碼審 code-android行為測試範本 r2 架 F1–F4] [因:check.py 零依賴、scripts/lumos 沒有 .py 副檔名不能 import;抄兩份的正則在邊界案例會分岔] [不選:check.py 動態載入 scripts/lumos(破壞零依賴、CI 單獨跑自檢時多一個相依)] [test:t_kotlin_template_fence_parity]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+index e03b51ef2..57db3b522 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
++++ b/docs/lumos-toolchain-knowledge/Systems/test-quality-cli.md
+@@ -84,16 +84,17 @@ PITFALL: 三支 sidecar 照指紋表的字典順序載入時，Semgrep 轉接器
+ - `commands/test-quality-standard.md` 加〈Android 資料層(Room)的撰寫補充〉:mock DAO 只證 Repository 邏輯、真的 Room 用記憶體資料庫;查詢、資料限制、交易、升級、Flow/LiveData 重送、型別轉換、預載資料庫七種情況各一條;官方不建議 Robolectric 跑 Room、Room KMP 用 `BundledSQLiteDriver`;升級用 `MigrationTestHelper` 加跑完全部升級的那支;Robolectric 跑升級測試要把結構檔放進 debug assets 標明是社群做法。`03-寫回圖譜.md` 那一句一併指過去。推送前的機械檢查在 [[Systems/room-guard]]。綁的測試 `t_test_quality_standard_android_room_section`。
+ 
+ ## 測試品質接入標準的 Android 本機單元測試節(2026-11-01,[[Projects/Android本機單元測試驗收標準_計劃]])
+ 
+ - `commands/test-quality-standard.md` 在原生收證那一節之後加〈Android 本機單元測試的驗收標準〉,分「要有哪些」「怎麼寫才算數」「什麼證據才算過」三段:必有單元與邊界情況、Robolectric 是最後手段、不開 `isReturnDefaultValues`;協程(一支一個 `runTest`、共用排程器、`MainDispatcherRule`、`backgroundScope`)與 Flow(斷言 `value`、`stateIn` 先起收集者)的寫法;零選中、靠預設回傳值才綠、本機綠當裝置綠、重試到過都不算過。放在原生收證之後是 Enzo 選的:驗收條件跟收證規則放在一起讀。`03-寫回圖譜.md` 那一句一併指過去。綁的測試 `t_test_quality_standard_android_unit_section`。
+ - 實機演練(2026-11-01,[[Projects/Android單元測試標準實機演練_計劃]])之後,同一節補了:加測試函式庫前看實際解析版本、儀器測試等真執行緒用真時間、收證前刪舊報告加 `--rerun`(Gradle 7.6 以前用 `--rerun-tasks`)、同類別混著當掉紅時縮小篩選、裝置那路哪些斷言收得到、Kotlin 靜態掃描要裝 Semgrep 並帶 `--semgrep`、機器抓不到要靠審查的四件事。綁的測試 `t_test_quality_standard_android_drill_lessons`。
+ 
+ ## 測試品質接入標準指到行為測試範本(2026-11-06,[[Projects/Android行為測試範本與架構測試_計劃]])
+ 
+ - `skills/lumos-project-notes/commands/test-quality-standard.md`〈Android 本機單元測試的驗收標準〉的協程與 Flow 兩小段尾各加一條「照抄起手」,指到 kotlin-idioms 的行為測試範本(範本檔的家是 [[Systems/kotlin規則包]]);兩條各帶一個範本實驗踩到的坑:`backgroundScope` 的工作 `advanceUntilIdle()` 不推、Turbine 自己的檢查失敗丟 `TurbineAssertionError` 收證不算斷言。綁的測試 `t_kotlin_test_templates_linked`。
++- 代碼審 r1(code-android行為測試範本,2026-11-06)改了同一份標準的三處:Flow 段舊的「錯誤用 `awaitError()` 收」那句補上「要當收證抓到錯的那一步不能靠這些,寫法見本段末條」;Flow 指路句補上 `awaitItem()` 等不到值也丟 `TurbineAssertionError`、要推到靜止後 `cancelAndConsumeRemainingEvents()` 一次比、有限流上 `expectNoEvents()` 會誤紅;〈畫面重建與程序被回收〉整條改寫成「Android 模組的本機單元測試照官方複製 SavedStateHandle,`ViewModelScenario.recreate()` 只在純 JVM 或 KMP 用」(它在 Android 模組因 `Bundle` 是空殼例外紅,實跑)。綁的測試同上,另驗連結目標存在與兩個坑的關鍵字。
+ 
+ ## 給安全證據閘用的讀法(2026-10-20,[[Projects/安全主張驗收閘_計劃]])
+ 
+ - `junit()` 改成自訂 XMLParser target 邊解析邊數深度(超過 64 層立刻停)、每個案例處理完就清掉元素,不先建整棵樹;拒收改丟帶原因代碼的 `JUnitRejected`(`ValueError` 子類別,既有呼叫端照樣接得到),訊息字串與優先序不變。C 版解析器的 iterparse 不收自訂 builder,所以不用 iterparse。拒 DTD 只有 `NoDtdTreeBuilder` 一處(target 委派給它),丟 `JUnitRejected("report_unparseable", 原訊息)`,安全證據閘不比對訊息字串;XML 語法錯照舊是 `ET.ParseError`(型別本身就分得出來)[test:t_secev_r1_junit_dtd_typed_rejection]。
+ - `load_receipt` 抽成只吃資料的 `load_receipt_data(get)`、核對本體抽成 `fault_check(phases, target)`;`check()` 改呼叫它們,輸出不變。閘門從提交樹讀三份 capture 重跑同一套,不採信作者存的結果檔;拒收丟帶代碼的 `ReceiptRejected`。說明的家在 [[Systems/安全證據閘]]。
+ - REVISIT:[when-status:Projects/安全主張驗收閘_計劃=done][by:2027-01-31] 照 [[Verification/測試品質第四輪修補驗證]] 的 revalidate_when 重驗那篇(這次改了拒收型別與 bundle 指紋)
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑.md b/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑.md
+index 796cc038e..79148cb16 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑.md
+@@ -20,21 +20,21 @@ plan_refs:
+ - 用一支會談暫存區的小程式讀範本檔:每組 `## T<n>` 節的〈紅綠矩陣〉每一列組成一個子專案——`build.gradle.kts` 照〈實驗專案骨架〉、`dependencies` 貼那組〈依賴〉(T4 依測試小節挑〈依賴:OkHttp 4〉或〈依賴:OkHttp 5〉);`src/test/kotlin` 放那一列的測試小節與〈假依賴〉;`src/main/kotlin` 放〈好寫法〉每一段,再用那一格點名的小節換掉開頭宣告同名的那段(不同名的加上去)。所以跑的程式就是範本檔裡的字,沒有另抄一份。
+ - 57 格一起建成多專案,`gradle test --continue` 跑一次;再 `gradle test --continue --rerun` 連跑 20 次(每次 11–14 秒,XML 的 timestamp 對得上最後一次,確認真的重跑、不是讀舊報告)。
+ - 判定:矩陣寫「斷言紅」的,XML 失敗節點要經 `assertion_failure` 判成真,而且訊息含矩陣寫的片段;寫「逾時紅」的,型別要是 `UncompletedCoroutinesError`;沒點名的(「其他綠」)要綠;小節裡每支 `@Test` 都要出現在矩陣(「全綠:」列出全部名字)。
+ 
+ ## 結果
+ 
+ - S3:57 格、209 個測試結果,第一次全對與 20 次重跑全部「不符 0 項」;每支測試 21 次的結果與失敗型別都一樣(T0 的 TEST-9 三格、T1、T2、T4 全部在內,T3、T5 也一起跑了)。
+ - E1:〈測試〉列的每個紅都判成斷言失敗;非斷言的紅只有 T0〈壞測試:TEST-5〉與〈壞測試:TEST-17〉兩格的 `UncompletedCoroutinesError`,矩陣本來就寫逾時紅。原本會是例外紅的八列(API-34、FLOW-29、FLOW-23、FLOW-20、API-26、API-21、DATA-72、DATA-73)都改成 `runCatching`/`backgroundScope` 加斷言,實跑是斷言紅。
+ - E2:每個〈壞寫法〉格只紅矩陣點名的那支;一次例外是 DATA-73 的壞寫法連帶讓 DATA-72 那支紅(JSON 沒帶 status),改測試 JSON 帶上 status 後只紅點名那支。
+ - E4:〈壞測試:TEST-4 沒推進就斷言〉在 `MainDispatcherRule(StandardTestDispatcher())` 下斷言紅 `expected:<Loaded(name=Ada)> but was:<Initial>`;同一支換成 nowinandroid 預設的 `MainDispatcherRule()`(Unconfined)照綠——明傳 Standard 是必要的。
+-- E5:`lifecycle-viewmodel-testing:2.9.4` 的 `viewModelScenario { … }.recreate()` 在純 JVM 能還原 `SavedStateHandle` 內容,T3〈測試〉改用它;舊專案沒有那個套件時用〈測試:複製 handle 版〉,兩版矩陣結果一樣。測試品質標準「畫面重建與程序被回收」那條不用補句。
++- E5:`lifecycle-viewmodel-testing:2.9.4` 的 `viewModelScenario { … }.recreate()` 在純 JVM 能還原 `SavedStateHandle` 內容,T3〈測試〉改用它;舊專案沒有那個套件時用〈測試:複製 handle 版〉,兩版矩陣結果一樣。測試品質標準「畫面重建與程序被回收」那條不用補句。(**已被代碼審 r1 推翻**:viewModelScenario 版在 Android 模組的本機單元測試例外紅,T3 預設改回複製 handle 版、測試品質標準那條也改寫,見下方〈代碼審 r1 修正後重跑〉)
+ - E6(後果欄的實跑佐證):FLOW-3 來源沒發過值時 `combine` 一筆都不發,畫面停在 `Loading`(`expected:<Ready(items=[a], compact=false)> but was:<Loading>`);API-34 依序 resume 兩次丟 `IllegalStateException: Already resumed`;FLOW-29 只 `receive()` 一次就走,`coroutineScope` 等生產者、函式不回來(Job 沒完成)。
+ - S4/E7:T4 在 OkHttp 4.12.0 配 mockwebserver 4.12.0、OkHttp 5.5.1 配 mockwebserver3 5.5.1 兩套的矩陣結果相同(各三格)。OkHttp 4.12.0 配 mockwebserver3 5.5.1:不釘版本時 Gradle 把測試類別路徑上的 OkHttp 升成 5.5.1(`okhttp:4.12.0 -> 5.5.1`),測試照綠但測的不是正式版本;用 `strictly("4.12.0")` 釘住時兩支都 `NoClassDefFoundError: okhttp3/internal/_UtilJvmKt`。
+ - 依賴版本:kotlinx-serialization-json 1.12.0(Maven Central 現行)配 Kotlin 2.2.21 編不過(拉進 kotlin-stdlib 2.4.10,`The binary version of its metadata is 2.4.0, expected version is 2.2.0`),範本用 1.9.0(官方發行說明「updates Kotlin version to 2.2.0」)。
+ 
+ ## 實驗推翻的寫法與改法
+ 
+ - **Turbine 自己的檢查不算斷言**:T0 的 `awaitComplete()`、`awaitError()` 對壞寫法紅的是 `app.cash.turbine.TurbineAssertionError`。它是 `java.lang.AssertionError` 的子類別,但 `assertion_failure` 照型別名判、不認它;計劃不改收證工具,範本改成 `awaitEvent()` 取事件後 `assertEquals(Event.Complete, …)`、`assertIs<Event.Error>(…)`,T2 的 `expectNoEvents()` 改成 `assertEquals(emptyList(), cancelAndConsumeRemainingEvents())`。依據:Turbine README 自己的範例輸出就是 `app.cash.turbine.TurbineAssertionError: Unconsumed events found`;`awaitEvent`、`cancelAndConsumeRemainingEvents` 是 1.2.1 的公開 API(javap 讀 `ReceiveTurbine`)。
+ - **backgroundScope 的工作 advanceUntilIdle() 不推**:它只推到前景沒有工作為止;FLOW-29、FLOW-18、FLOW-20、FLOW-24 這種工作在 `backgroundScope` 的,範本用 `runCurrent()`。寫在範本〈怎麼用〉與測試品質標準協程段的指路句。
+ 
+ ## 每格結果(第一版,代碼審 r1 前;第 20 次重跑的 XML;全綠的格子省略)
+@@ -149,10 +149,16 @@ plan_refs:
+ | T4 | 測試:OkHttp 5 × 壞寫法:API-21 刷新沒有上限 | 2 | refresh_gives_up_after_three_tries(AssertionError:java.lang.AssertionError: 打了 21 次才停,結果:Failure(java.net.ProtocolException: Too m;斷言) |
+ | T4 | 測試:OkHttp 5 × 壞寫法:API-21 沒加鎖 | 2 | concurrent_401s_refresh_once(AssertionError:java.lang.AssertionError: 5 個並行 401 刷新了 5 次 expected:<1> but was:<5>;斷言) |
+ | T4 | 測試:OkHttp 5 × 壞寫法:API-21 不刷新直接放棄 | 2 | concurrent_401s_refresh_once(AssertionError:java.lang.AssertionError: 5 個並行請求的狀態碼 expected:<[200, 200, 200, 200, 200]> but w;斷言) |
+ | T4 | 測試:OkHttp 5 × 壞寫法:API-26 204 宣告成有 body | 2 | delete_204_is_success(AssertionError:java.lang.AssertionError: 204 要算成功,實際:Failure(kotlin.KotlinNullPointerException:;斷言) |
+ | T5 | 測試 × 壞寫法:DATA-72 非可空欄位沒預設值 | 2 | missing_or_null_name_still_decodes(AssertionError:java.lang.AssertionError: 解碼失敗:kotlinx.serialization.MissingFieldException: Fiel;斷言) |
+ | T5 | 測試 × 壞寫法:DATA-73 列舉沒有 UNKNOWN | 2 | unknown_status_becomes_unknown(AssertionError:java.lang.AssertionError: 解碼失敗:kotlinx.serialization.SerializationException: Sta;斷言) |
+ | T5 | 測試 × 壞寫法:DATA-74 預設值沒送出去 | 2 | default_quantity_is_sent(AssertionError:java.lang.AssertionError: 送出去的 JSON:{"item":"pen"} expected:<1> but was:<null>;斷言) |
+ | T5 | 測試 × 壞寫法:DATA-74 預設值寫錯 | 2 | default_quantity_is_sent(AssertionError:java.lang.AssertionError: 送出去的 JSON:{"item":"pen","quantity":10} expected:<1> bu;斷言) |
+ 
+ 全綠的格子 19 格(每組〈測試〉×〈好寫法〉與各〈好寫法:…〉變形、T0 兩支錯綠或漏抓的壞測試等)。
++
++## 代碼審 r2 修正後重跑(2026-11-06)
++
++- 純 JVM:75 格、305 個測試結果,第一次全對,`--rerun` 連跑 20 次全部「不符 0 項」、每支結果與失敗型別都不變。T3 這輪沒改,Android 模組沒重跑。
++- 新增四格:〈好寫法:TEST-18 save 會掛起〉全綠(上一輪寫法在它上面會誤紅:同一份範本拿掉兩行 `advanceUntilIdle()` 實跑,兩支斷言紅 `expected:<[Item(Saving), Item(Saved), Complete]> but was:<[Item(Saving)]>`,補上推進後綠);〈壞寫法:API-31 結果永久快取〉斷言紅「第一批結束後再 refresh,一共打了 1 次網路」;〈壞寫法:FLOW-23 不查直接回 null〉斷言紅 `expected:<Ada> but was:<null>`;〈壞寫法:DATA-74 數量送成字串〉斷言紅 `expected:<1> but was:<"1">`。
++- 其餘 71 格結果與 r1 那一版相同。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index a93e56f1a..1cc694074 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -125718,47 +125718,33 @@ _KT_TEMPLATE_GROUPS = {
+ _KT_UNWIRED = {
+     "未接(儀器批)": {"STATE-12", "STATE-17", "STATE-23", "UI-36", "UI-52", "UI-106", "UI-110", "ARCH-2", "ARCH-3",
+                    "ARCH-31", "ARCH-35", "DATA-17", "DATA-19", "DATA-21", "DATA-38", "DATA-39", "DATA-58", "DATA-60",
+                    "DATA-63", "DATA-65", "DATA-69", "TEST-29", "TEST-32", "TEST-35", "ARCH-56"},
+     "未接(架構測試後續計劃)": {"API-9", "CO-5", "UI-39"},
+     "未接(Ktor 範本後續)": {"API-30"},
+     "不接(代碼審或真機)": {"STATE-20", "CO-39", "UI-109", "DATA-44", "DATA-77", "PERF-1", "PERF-2"},
+ }
+ 
+ 
+-def _kt_main_rows(m):
+-    """型錄主表 → {編號: 欄位};只讀〈情境決策表〉之前。"""
+-    t = m.CATALOG.read_text(encoding="utf-8")
+-    main = t[:t.find("\n## 情境決策表")]
+-    return {mm.group(1): m._cells(ln) for ln in main.splitlines() for mm in [m._MAIN_ROW_RE.match(ln)] if mm}
+-
+-
+-def _kt_behavior_value(batch_cell):
+-    """通電批次格子裡「行為測試或正向約束=」那一段的值(到分號為止)。"""
+-    import re as _re
+-    mm = _re.search(r"行為測試或正向約束=([^;]*)", batch_cell)
+-    return mm.group(1).strip() if mm else None
+-
+-
+ def t_kotlin_test_templates_sections():
+     """[S1] 型錄自檢:通電批次寫「範本 T<n>」的列,範本檔要有 `## T<n> ` 開頭的標題;
+     指到不存在的組、刪掉一節、範本檔不存在,都要以 (列編號, 原因) 報出;真檔零問題。
+     另把 template_problems 的判斷拿掉,三種改壞都轉成不報(證明是這一項在抓)。"""
+     m = _ktpack()
+     check("S1 真型錄與真範本檔:template_problems 零問題", m.template_problems() == [], str(m.template_problems()[:5]))
+     check("S1 真型錄全套格式檢查照樣零問題(含範本那一項)", m.catalog_problems() == [], str(m.catalog_problems()[:5]))
+ 
+     # 改壞一:API-1 指到範本檔沒有的 T9
+     m1 = _ktpack(copy=True)
+     _ktpack_edit(m1.CATALOG, "行為測試或正向約束=範本 T1", "行為測試或正向約束=範本 T9")
+-    rows1 = _kt_main_rows(m1)
+-    moved = next(r for r, c in rows1.items() if _kt_behavior_value(c[9]) == "範本 T9")
++    rows1 = m1.main_rows()
++    moved = next(r for r, c in rows1.items() if m1.behavior_value(c[9]) == "範本 T9")
+     p1 = m1.template_problems()
+     check("★改壞★ 列指到不存在的範本組要報 (列編號, 範本檔沒有 T9 節)", p1 == [(moved, "範本檔沒有 T9 節")], str(p1))
+     check("★改壞★ 這一項掛在 catalog_problems 裡(--catalog-only 與 CI 都走得到)",
+           (moved, "範本檔沒有 T9 節") in m1.catalog_problems(), str(m1.catalog_problems()[:5]))
+ 
+     # 改壞二:刪掉範本檔的 ## T2 那一節,引用 T2 的每一列都要報
+     m2 = _ktpack(copy=True)
+     tt = m2.TEMPLATES.read_text(encoding="utf-8")
+     i2, i3 = tt.index("\n## T2 "), tt.index("\n## T3 ")
+     m2.TEMPLATES.write_text(tt[:i2] + tt[i3:], encoding="utf-8")
+@@ -125799,105 +125785,230 @@ def t_kotlin_test_templates_sections():
+     m5.TEMPLATES.write_bytes(b"\xff\xfe## T0 x\n")
+     try:
+         p5 = m5.template_problems()
+     except Exception as e:  # noqa: BLE001 — 這支就是要驗不丟例外
+         p5 = [("例外", repr(e))]
+     check("★改壞★ 範本檔不是 UTF-8:報一筆 (<templates>, 範本檔不是 UTF-8…),不丟例外",
+           len(p5) == 1 and p5[0][0] == "<templates>" and p5[0][1].startswith("範本檔不是 UTF-8"), str(p5))
+ 
+     # 改壞六(架構 F2):「範本 T<n>」只認「行為測試或正向約束=」那一段;寫在別的接電方式那段不算引用
+     m6 = _ktpack(copy=True)
+-    rows6 = _kt_main_rows(m6)
+-    rid6 = next(r for r, c in rows6.items() if "告警帶寫法=批一" in c[9] and _kt_behavior_value(c[9]) is None)
++    rows6 = m6.main_rows()
++    rid6 = next(r for r, c in rows6.items() if "告警帶寫法=批一" in c[9] and m6.behavior_value(c[9]) is None)
+     lines6 = m6.CATALOG.read_text(encoding="utf-8").split("\n")
+     k6 = next(i for i, ln in enumerate(lines6) if ln.startswith(f"| {rid6} |"))
+     lines6[k6] = lines6[k6].replace("告警帶寫法=批一", "告警帶寫法=範本 T9", 1)
+     m6.CATALOG.write_text("\n".join(lines6), encoding="utf-8")
+     check("★對照★ 「範本 T9」寫在告警帶寫法那段不算引用,不報", m6.template_problems() == [], str(m6.template_problems()))
+ 
++    # 改壞七(代碼審 r2 其 F1、架 F2):圍欄照 CommonMark 判,跟 lumos 同口徑
++    def _t3_case(insert, at_end=False):
++        mx = _ktpack(copy=True)
++        tt = mx.TEMPLATES.read_text(encoding="utf-8").replace("\n## T3 ", "\n## T3X ", 1)
++        if at_end:
++            tt = tt + insert
++        else:
++            k = tt.index("## 怎麼用\n") + len("## 怎麼用\n")
++            tt = tt[:k] + insert + tt[k:]
++        mx.TEMPLATES.write_text(tt, encoding="utf-8")
++        return mx.template_problems()
++    want_t3 = sorted((r, "範本檔沒有 T3 節") for r in _KT_TEMPLATE_GROUPS["T3"])
++    got = _t3_case("\n~~~\n## T3 假\n~~~\n")
++    check("★改壞★ ~~~ 圍欄裡的假標題不算那一節", sorted(got) == want_t3, str(got))
++    got = _t3_case("\n````md\n```kotlin\nx\n```\n## T3 假\n````\n")
++    check("★改壞★ 四反引號圍欄裡面含三反引號時,內層收尾不會提早關掉外層,假標題仍不算", sorted(got) == want_t3, str(got))
++    got = _t3_case("\n````md\n```\n## T2 內層\n```\n````\n## T3 真的那一節\n")
++    check("★對照★ 四反引號圍欄關掉之後的真標題照算", got == [], str(got))
++    got = _t3_case("\n    ```\n## T3 真的那一節\n    ```\n")
++    check("★對照★ 縮排 4 格的 ``` 是縮排程式碼、不是圍欄,夾在中間的真標題照算", got == [], str(got))
++    got = _t3_case("\n```kotlin\n## T3 假\n", at_end=True)
++    check("★改壞★ 檔尾沒關的圍欄,裡面的假標題不算", sorted(got) == want_t3, str(got))
++    # 改壞八(其 F2):「範本」值寫成非標準格式要報,不靜默當沒引用
++    m8 = _ktpack(copy=True)
++    lines8 = m8.CATALOG.read_text(encoding="utf-8").split("\n")
++    k8 = next(i for i, ln in enumerate(lines8) if ln.startswith("| TEST-4 |"))
++    lines8[k8] = lines8[k8].replace("行為測試或正向約束=範本 T0", "行為測試或正向約束=範本 T0(備註)", 1)
++    m8.CATALOG.write_text("\n".join(lines8), encoding="utf-8")
++    p8 = m8.template_problems()
++    check("★改壞★ 「範本 T0(備註)」這種非標準寫法要報格式錯",
++          any(a == "TEST-4" and "要寫成「範本 T<n>」整段" in b for a, b in p8), str(p8))
++
+     # 架構 F1:主表讀一次共用——catalog_problems 把它讀好的列交給 template_problems,傳進來的列要被照用
+     m7 = _ktpack()
+     fake_rows = {"API-999": ["API-999"] + [""] * 8 + ["行為測試或正向約束=範本 T9"] + ["", ""]}
+     check("S1 template_problems 照用傳進來的主表列(不另讀型錄)",
+           m7.template_problems(fake_rows) == [("API-999", "範本檔沒有 T9 節")], str(m7.template_problems(fake_rows)))
+ 
+-    def _no_reread(text=None):
+-        raise AssertionError("catalog_problems 又另讀了一次主表")
+-    m7.main_rows = _no_reread
+-    try:
+-        p7 = m7.catalog_problems()
+-    except AssertionError as e:
+-        p7 = [("重讀", str(e))]
+-    check("S1 catalog_problems 把讀好的主表交給範本檢查,不走第二條讀表路徑", p7 == [], str(p7[:3]))
++    calls7, real7 = [], m7.main_rows
++
++    def _count_rows(*a, **kw):
++        calls7.append(1)
++        return real7(*a, **kw)
++    m7.main_rows = _count_rows
++    p7 = m7.catalog_problems()
++    check("S1 主表只有 main_rows 一條讀法:catalog_problems 整趟只讀一次,讀好的列交給範本檢查",
++          p7 == [] and len(calls7) == 1, f"呼叫 {len(calls7)} 次;{p7[:3]}")
+ 
+     # 對照:把判斷式拿掉(換成永遠不報),同三種改壞都不報——證明抓到的是 template_problems
+     for mx in (m1, m2, m3):
+         mx.template_problems = lambda rows=None: []
+         check("★對照★ 拿掉 template_problems 後同一份改壞不再報範本問題",
+               not any("範本" in b for _a, b in mx.catalog_problems()), str(mx.catalog_problems()[:3]))
+ 
+ 
+-def _kt_template_sections(text):
+-    """範本檔 → {組代號: {小節標題: 小節內文}};只看 `## T<n> ` 與 `### ` 標題。"""
+-    import re as _re
++def t_kotlin_template_fence_parity():
++    """[S1] check.py 的剝圍欄是刻意的另一份(零依賴、不能 import scripts/lumos),口徑要跟 lumos 的
++    `_visible_lines`(全檔唯一的圍欄判定)一致:同一組輸入,兩份留下的行要一模一樣(代碼審 r2 架 F2)。"""
++    m = _ktpack()
++    lm = _load_lumos_module()
++    cases = {
++        "一般": "a\n```kotlin\n## T1 x\n```\nb",
++        "波浪號": "a\n~~~\n## T1 x\n~~~\nb",
++        "四反引號包三反引號": "a\n````md\n```kotlin\nx\n```\n## T3 x\n````\n## T9 b",
++        "收尾比開頭短不算關": "a\n````\nx\n```\n## T3 x\n````\nb",
++        "收尾字元不同不算關": "a\n```\nx\n~~~\n## T3 x\n```\nb",
++        "收尾帶 info string 不算關(嚴格)": "a\n```\nx\n```kotlin\ny\n```\nb",
++        "縮排 3 格算圍欄": "a\n   ```\n## T1 x\n   ```\nb",
++        "縮排 4 格不算圍欄": "a\n    ```\n## T1 x\n    ```\nb",
++        "tab 開頭不算圍欄": "a\n\t```\n## T1 x\n\t```\nb",
++        "未閉合(嚴格讀不完退回寬鬆)": "a\n```\n## T1 x\n```kotlin\nb\n## T2 y",
++        "未閉合到檔尾": "a\n```kotlin\n## T1 x\nb",
++    }
++    for name, text in cases.items():
++        lines = text.split("\n")
++        mine = [ln for _no, ln in m._visible_lines(lines)]
++        theirs = [ln for _no, ln in lm._visible_lines(lines)]
++        check(f"S1 圍欄判定跟 lumos 一致:{name}", mine == theirs, f"check.py={mine} lumos={theirs}")
++
++
++def _kt_template_sections(m, text):
++    """範本檔 → {組代號: {小節標題: 小節內文}}。組的切法呼叫 check.py 的 template_sections
++    (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。"""
++    lines = text.splitlines()
++    starts = m.template_sections(text)
++    visible = {no - 1 for no, _ln in m._visible_lines(lines)}
+     out = {}
+-    for m in _re.finditer(r"^## (T\d+) .*$", text, _re.M):
+-        nxt = _re.search(r"^## ", text[m.end():], _re.M)
+-        body = text[m.end():m.end() + nxt.start()] if nxt else text[m.end():]
+-        subs = {}
+-        for s in _re.finditer(r"^### (.+)$", body, _re.M):
+-            n2 = _re.search(r"^### ", body[s.end():], _re.M)
+-            subs[s.group(1).strip()] = body[s.end():s.end() + n2.start()] if n2 else body[s.end():]
+-        out[m.group(1)] = subs
++    for k, (g, i) in enumerate(starts):
++        end = starts[k + 1][1] if k + 1 < len(starts) else len(lines)
++        nxt = next((j for j in range(i + 1, end) if j in visible and lines[j].startswith("## ")), end)
++        subs, cur = {}, None
++        for j in range(i + 1, nxt):
++            if j in visible and lines[j].startswith("### "):
++                cur = lines[j][4:].strip()
++                subs[cur] = []
++            elif cur is not None:
++                subs[cur].append(lines[j])
++        out[g] = {n: "\n".join(b) + "\n" for n, b in subs.items()}
+     return out
+ 
+ 
++def _kt_kotlin_blocks(m, body):
++    """小節內文 → 每個 ```kotlin 圍欄裡的程式。圍欄區段呼叫 check.py 的 _fence_regions(跟 lumos 同口徑),
++    不用成對非貪婪正則(看不見未閉合圍欄)。"""
++    lines = body.splitlines()
++    regions, _open = m._fence_regions(lines, True)
++    out = []
++    for a, b in regions:
++        if lines[a].lstrip(" ").lstrip("`~").startswith("kotlin"):
++            out.append("\n".join(lines[a + 1:b if b is not None else len(lines)]))
++    return out
++
++
++def _kt_block_after(code, start):
++    """從 code[start] 的 `{` 起配對大括號,回 (區塊內文, 結束位置);沒配到回到結尾。"""
++    depth = 0
++    for i in range(start, len(code)):
++        if code[i] == "{":
++            depth += 1
++        elif code[i] == "}":
++            depth -= 1
++            if depth == 0:
++                return code[start + 1:i], i
++    return code[start + 1:], len(code)
++
++
++# Turbine 1.2.1 原始碼(channel.kt、ReceiveTurbine.kt、Turbine.kt)裡失敗會丟 TurbineAssertionError
++# (或等不到值時丟)的方法,收證不算斷言;〈測試〉一律推到靜止後 cancelAndConsumeRemainingEvents() 再比
++_KT_TURBINE_THROWING = ("awaitItem", "awaitEvent", "awaitComplete", "awaitError", "skipItems", "expectNoEvents",
++                        "expectMostRecentItem", "ensureAllEventsConsumed", "takeItem", "takeEvent", "takeComplete",
++                        "takeError")
++_KT_ADVANCE_RE = r"\b(?:advanceUntilIdle|runCurrent|advanceTimeBy)\("
++
++
++def _kt_turbine_problems(code):
++    """一段〈測試〉程式 → 問題清單:用了會丟 TurbineAssertionError 的方法;某個 `.test {` 區塊沒用
++    cancelAndConsumeRemainingEvents() 收尾(區塊結束的 Unconsumed events 檢查也丟同一型別);
++    cancelAndConsumeRemainingEvents() 之前同一區塊沒有推進呼叫(被測流會掛起時事件還沒發完)。"""
++    import re as _re
++    code = _re.sub(r"//[^\n]*", "", code)   # 註解裡說「不用 awaitComplete()」不算用了
++    probs = [f"用了 {n}()" for n in _KT_TURBINE_THROWING if _re.search(r"\b" + n + r"\(", code)]
++    for mt in _re.finditer(r"\.test\s*\{", code):
++        block, _end = _kt_block_after(code, mt.end() - 1)
++        calls = [c.start() for c in _re.finditer(r"\bcancelAndConsumeRemainingEvents\(", block)]
++        if not calls:
++            probs.append("有 .test { } 區塊沒用 cancelAndConsumeRemainingEvents() 收尾")
++        for pos in calls:
++            if not _re.search(_KT_ADVANCE_RE, block[:pos]):
++                probs.append("cancelAndConsumeRemainingEvents() 之前同一區塊沒有推進(advanceUntilIdle/runCurrent/advanceTimeBy)")
++    return probs
++
++
+ def t_kotlin_test_templates_content_guards():
+     """[S3 的機械那一半] 範本內容的幾條規矩(代碼審 r1 折入;紅綠本身靠實驗與驗證紀錄):
+     ①〈測試〉小節不用 Turbine 自己的檢查——它們失敗丟 TurbineAssertionError,收證不算斷言;
+     ②每個〈好寫法:…〉〈壞寫法:…〉小節都出現在同組矩陣的「被測程式小節」欄(加了變形就要實跑進矩陣);
+     ③T3 預設〈測試〉不用 viewModelScenario(Android 模組本機測試跑不起來),另一版的條件寫在節開頭;
+     ④T4 矩陣有並行 401 那支抓「沒加鎖」。"""
+     import re as _re
+     repo = Path(GRAPHCTL).resolve().parents[1]
+-    groups = _kt_template_sections((repo / _KTTPL_REL).read_text(encoding="utf-8"))
++    m = _ktpack()
++    groups = _kt_template_sections(m, (repo / _KTTPL_REL).read_text(encoding="utf-8"))
+     check("範本檔讀得到 T0–T5 六組", sorted(groups) == [f"T{i}" for i in range(6)], str(sorted(groups)))
+-    banned = ("awaitItem(", "awaitError(", "awaitComplete(", "expectNoEvents(", "expectMostRecentItem(")
+     for g, subs in groups.items():
+         for name, body in subs.items():
+             if name == "測試" or name.startswith("測試:"):
+-                code = "".join(_re.findall(r"^```kotlin\n(.*?)^```", body, _re.M | _re.S))
+-                code = _re.sub(r"//[^\n]*", "", code)   # 註解裡說「不用 awaitComplete()」不算用了
+-                hit = [b for b in banned if b in code]
+-                check(f"{g}〈{name}〉不用 Turbine 自己的檢查(收證不算斷言)", not hit, str(hit))
++                probs = _kt_turbine_problems("\n".join(_kt_kotlin_blocks(m, body)))
++                check(f"{g}〈{name}〉Turbine 寫法收證算得到(不用會丟 TurbineAssertionError 的方法、推到靜止再一次取出)",
++                      not probs, str(probs))
+         mx = next((b for n, b in subs.items() if n.startswith("紅綠矩陣")), "")
+         cols = {c[1].strip() for ln in mx.splitlines() if ln.startswith("| ") and "測試小節" not in ln
+                 for c in [ln.strip().strip("|").split("|")] if len(c) >= 3}
+         for name in subs:
+             if name.startswith(("好寫法:", "壞寫法:")):
+                 check(f"{g}〈{name}〉有進矩陣", name in cols, str(sorted(cols))[:300])
++    # 守衛自己的對照(代碼審 r2 其 F3、範 F1):換名繞過、沒推進就取、沒收尾都要抓到;正確寫法不報
++    ok = "x.test {\n advanceUntilIdle()\n assertEquals(a, cancelAndConsumeRemainingEvents())\n}"
++    check("★對照★ 推進後一次取出的寫法不報", _kt_turbine_problems(ok) == [], str(_kt_turbine_problems(ok)))
++    for n in _KT_TURBINE_THROWING:
++        check(f"★改壞★ 用 {n}() 要報", any(n in p for p in _kt_turbine_problems(ok.replace("advanceUntilIdle()", f"{n}()\n advanceUntilIdle()"))), n)
++    check("★改壞★ cancelAndConsumeRemainingEvents() 前沒推進要報",
++          any("沒有推進" in p for p in _kt_turbine_problems("x.test {\n assertEquals(a, cancelAndConsumeRemainingEvents())\n}")), "")
++    check("★改壞★ 推進寫在別的 test 區塊不算",
++          any("沒有推進" in p for p in _kt_turbine_problems("a.test {\n advanceUntilIdle()\n cancelAndConsumeRemainingEvents()\n}\nb.test {\n cancelAndConsumeRemainingEvents()\n}")), "")
++    check("★改壞★ .test 區塊沒收尾要報",
++          any("沒用 cancelAndConsumeRemainingEvents" in p for p in _kt_turbine_problems("x.test {\n advanceUntilIdle()\n}")), "")
+     t3 = groups["T3"]
+     check("T3 預設〈測試〉不用 viewModelScenario", "viewModelScenario" not in t3["測試"], "")
+     check("T3 另有〈測試:viewModelScenario 版〉", "測試:viewModelScenario 版" in t3, str(list(t3)))
+     t4mx = next(b for n, b in groups["T4"].items() if n.startswith("紅綠矩陣"))
+     check("T4 矩陣有「沒加鎖」壞寫法對並行 401 那支斷言紅",
+           bool(_re.search(r"壞寫法:API-21 沒加鎖 \| concurrent_401s_refresh_once 斷言紅", t4mx)), t4mx[:300])
+ 
+ 
+ def t_kotlin_catalog_c_rows_batch_resolved():
+     """[S2] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T5 或四種未接/不接,沒有「批五」;
+     各值的列數與各範本組的列號等於計劃〈範圍〉兩張清單。"""
+     m = _ktpack()
+-    rows = _kt_main_rows(m)
++    rows = m.main_rows()   # 主表與批次值的讀法都呼叫 check.py,不另抄(代碼審 r2 架 F1、F3)
+     c_rows = {r: c for r, c in rows.items() if "C" in c[6]}
+     check("S2 型錄級含 C 的列是 68 列", len(c_rows) == 68, str(len(c_rows)))
+-    vals = {r: _kt_behavior_value(c[9]) for r, c in c_rows.items()}
++    vals = {r: m.behavior_value(c[9]) for r, c in c_rows.items()}
+     check("S2 不再出現「批五」", not [r for r, v in vals.items() if v == "批五"], str([r for r, v in vals.items() if v == "批五"]))
+     allowed = {f"範本 T{i}" for i in range(6)} | set(_KT_UNWIRED)
+     check("S2 每列的值都在允許清單裡", not {r: v for r, v in vals.items() if v not in allowed},
+           str({r: v for r, v in vals.items() if v not in allowed}))
+     for g, want in _KT_TEMPLATE_GROUPS.items():
+         got = {r for r, v in vals.items() if v == f"範本 {g}"}
+         check(f"S2 範本 {g} 的列等於計劃〈做〉表那一組", got == want, f"多 {sorted(got - want)} 少 {sorted(want - got)}")
+     for v, want in _KT_UNWIRED.items():
+         got = {r for r, x in vals.items() if x == v}
+         check(f"S2 {v} 的列等於計劃〈不做〉清單({len(want)} 列)", got == want, f"多 {sorted(got - want)} 少 {sorted(want - got)}")
+diff --git a/skills/kotlin-idioms/test-templates.md b/skills/kotlin-idioms/test-templates.md
+index 827a73c3c..d4615081e 100644
+--- a/skills/kotlin-idioms/test-templates.md
++++ b/skills/kotlin-idioms/test-templates.md
+@@ -8,21 +8,21 @@
+ 2. 到這份檔的 `## T<n>` 那一節。〈依據〉是每列的官方出處;〈依賴〉是要加進 `dependencies { }` 的行(版本跟專案實際解析到的對齊:先跑 `./gradlew :<模組>:dependencies --configuration <變體>RuntimeClasspath` 看,見測試品質標準〈Android 本機單元測試的驗收標準〉「加測試函式庫前看實際版本」)。
+ 3. 照抄〈測試〉與〈假依賴〉,類別名、介面名換成專案自己的;〈假依賴〉放 `src/test`。同組有互斥版本的(標題寫「測試:<版本名>」),照那段程式的情境表態答案只留一個版本。
+ 4. 照抄的測試檔第一行留 `// 起手:kotlin-idioms test-templates T<n>`(之後要數有多少測試照範本起手)。
+ 5. 在自己的專案跑一次,綠了才算;再照「故障證明挑本次需求」那條,把被測程式改成這一節〈壞寫法〉的樣子,確認對應的測試翻成**斷言紅**(不是例外或逾時紅,收證工具只把斷言失敗算成抓到錯)。
+ 
+ 〈好寫法〉與〈壞寫法〉是實驗用的被測程式,不是要照抄進專案的東西;它們讓你看清楚這支測試抓的是哪一種錯。
+ 
+ **兩個所有組都適用的坑**(實驗踩到的):
+ 
+ - `backgroundScope` 裡的工作,`advanceUntilIdle()` 不會推:它只推到「前景」沒有工作為止。要讓 `backgroundScope` 裡的協程跑起來,用 `runCurrent()`(只跑現在這一刻的)或 `advanceTimeBy()`。
+-- Turbine 自己的檢查(`awaitComplete()`、`awaitError()`、`expectNoEvents()`、區塊結束時的 Unconsumed events)失敗時丟 `app.cash.turbine.TurbineAssertionError`;它雖然是 `AssertionError` 的子類別,收證工具 `lumos test-quality` 照型別名判,不算成斷言失敗。`awaitItem()`、`awaitEvent()` 等不到值時,3 秒後也丟同一個型別(`No value produced in 3s`)——所以「壞寫法少發一筆」也不會被算成抓到錯。範本的做法:先把虛擬時間推到靜止,再用 `cancelAndConsumeRemainingEvents()` 一次取出全部事件,用 `assertEquals`/`assertIs` 比。
++- Turbine 自己的檢查(`awaitItem()`、`awaitEvent()`、`awaitComplete()`、`awaitError()`、`skipItems()`、`expectNoEvents()`、`expectMostRecentItem()`、`ensureAllEventsConsumed()`、`takeItem()`/`takeEvent()`/`takeComplete()`/`takeError()`,以及 `test {}` 區塊結束時的 Unconsumed events;依 Turbine 1.2.1 原始碼 `channel.kt`、`ReceiveTurbine.kt`、`flow.kt` 列全)失敗時丟 `app.cash.turbine.TurbineAssertionError`;它雖然是 `AssertionError` 的子類別,收證工具 `lumos test-quality` 照型別名判,不算成斷言失敗。`awaitItem()`、`awaitEvent()` 等不到值時,3 秒後也丟同一個型別(`No value produced in 3s`)——所以「壞寫法少發一筆」也不會被算成抓到錯。範本的做法:每個 `test {}` 區塊先把虛擬時間推到靜止(`advanceUntilIdle()`;被測的流會掛起時少了這步,事件還沒發完就被取走,正確程式也會紅),再用 `cancelAndConsumeRemainingEvents()` 一次取出全部事件,用 `assertEquals`/`assertIs` 比。
+ - 有限的冷流(例如 `flow { emit(a); emit(b) }`)收完值之後還有一個 `Complete` 事件:型錄 TEST-18 寫的「結尾 `expectNoEvents()`」在這種流上對正確程式也會紅(`Expected no events but found Complete`);有限流要把 `Event.Complete` 當成最後一筆一起比,`expectNoEvents()` 只用在熱流。
+ - 範本的狀態類別用 `data object`(Kotlin 1.9 起才有);專案的 Kotlin 早於 1.9 時改成 `object` 並自己寫 `toString()`,不然斷言失敗訊息只印雜湊值。
+ - 會丟例外的壞寫法,測試先用 `runCatching { … }` 接住,再用斷言比結果;直接讓例外飛出去,紅的是例外紅,收證不算。
+ 
+ ## 實驗專案骨架
+ 
+ 照下面兩個檔組一個純 JVM Gradle 專案(Gradle 8.13、JDK 17),把某一組〈依賴〉的行貼進 `dependencies { }`;〈測試〉與〈假依賴〉放 `src/test/kotlin`,那一格的被測程式放 `src/main/kotlin`。被測程式的組法:先放〈好寫法〉的每一段程式(一段一個檔),再把那一格點名的〈好寫法:…〉或〈壞寫法:…〉小節的每一段放進去——開頭宣告同名的那一段換掉,不同名的加上去。
+ 
+ `settings.gradle.kts`:
+ 
+@@ -141,31 +141,33 @@ class ProfileViewModelTest {
+             assertEquals(ProfileState.Initial, items.firstOrNull(), "收到:$items")
+             assertEquals(ProfileState.Loaded("Ada"), items.lastOrNull(), "收到:$items")
+         }
+     }
+ 
+     // TEST-18:每個值都收掉,有限流連結尾的 Complete 一起比,多一筆少一筆都紅
+     // 不用 awaitComplete()/expectNoEvents():失敗丟 TurbineAssertionError,收證工具不算斷言失敗
+     @Test
+     fun save_emits_saving_then_saved_once() = runTest {
+         ProfileViewModel(repo).save("Ada").test {
++            advanceUntilIdle()   // 先推到靜止:儲存會掛起時,不推就取會少拿事件
+             assertEquals(
+                 listOf(Event.Item(SaveEvent.Saving), Event.Item(SaveEvent.Saved), Event.Complete),
+                 cancelAndConsumeRemainingEvents(),
+             )
+         }
+     }
+ 
+     // TEST-19:錯誤要當成錯誤收,再斷言型別(同上理由不用 awaitError())
+     @Test
+     fun save_blank_name_reports_error() = runTest {
+         ProfileViewModel(repo).save("").test {
++            advanceUntilIdle()
+             val events = cancelAndConsumeRemainingEvents()
+             assertEquals(Event.Item(SaveEvent.Saving), events.firstOrNull(), "事件:$events")
+             val end = events.lastOrNull()
+             assertIs<Event.Error>(end, "儲存失敗要以錯誤結束,事件:$events")
+             assertIs<IOException>(end.throwable)
+         }
+     }
+ 
+     // TEST-9、TEST-14:被測物用注入的 scope(這裡是 TestScope 本身),有 delay 就推進後再斷言
+     @Test
+@@ -299,20 +301,58 @@ interface UploadApi {
+     suspend fun upload(file: String)
+ }
+ 
+ class Uploader(private val scope: CoroutineScope, private val api: UploadApi) {
+     fun start(file: String) {
+         scope.launch { api.upload(file) }
+     }
+ }
+ ```
+ 
++### 好寫法:TEST-18 save 會掛起
++
++```kotlin
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.viewModelScope
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.flow.Flow
++import kotlinx.coroutines.flow.MutableStateFlow
++import kotlinx.coroutines.flow.SharingStarted
++import kotlinx.coroutines.flow.StateFlow
++import kotlinx.coroutines.flow.asStateFlow
++import kotlinx.coroutines.flow.flow
++import kotlinx.coroutines.flow.stateIn
++import kotlinx.coroutines.launch
++
++class ProfileViewModel(private val repo: ProfileRepository) : ViewModel() {
++    private val _state = MutableStateFlow<ProfileState>(ProfileState.Initial)
++    val state: StateFlow<ProfileState> = _state.asStateFlow()
++
++    val score: StateFlow<Int> = repo.scores
++        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
++
++    fun load() {
++        viewModelScope.launch {
++            _state.value = ProfileState.Loading
++            _state.value = ProfileState.Loaded(repo.loadName())
++        }
++    }
++
++    fun save(name: String): Flow<SaveEvent> = flow {
++        emit(SaveEvent.Saving)
++        delay(100)   // 真的儲存通常會掛起(等網路或磁碟);正確寫法,測試要照綠
++        repo.save(name)
++        emit(SaveEvent.Saved)
++    }
++}
++```
++
+ ### 壞寫法:TEST-4 load 停在 Loading
+ 
+ ```kotlin
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
+ import kotlinx.coroutines.flow.Flow
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.SharingStarted
+ import kotlinx.coroutines.flow.StateFlow
+ import kotlinx.coroutines.flow.asStateFlow
+@@ -769,20 +809,21 @@ class BadForgetInitialTest {
+         }
+     }
+ }
+ ```
+ 
+ ### 紅綠矩陣
+ 
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試 | 好寫法 | 全綠:load_then_advance_shows_loaded、score_follows_repository_while_collected、state_starts_initial_then_loaded、save_emits_saving_then_saved_once、save_blank_name_reports_error、upload_runs_in_injected_scope、upload_stops_when_injected_scope_cancelled |
++| 測試 | 好寫法:TEST-18 save 會掛起 | 全綠:load_then_advance_shows_loaded、score_follows_repository_while_collected、state_starts_initial_then_loaded、save_emits_saving_then_saved_once、save_blank_name_reports_error、upload_runs_in_injected_scope、upload_stops_when_injected_scope_cancelled |
+ | 測試 | 壞寫法:TEST-4 load 停在 Loading | load_then_advance_shows_loaded 斷言紅「Loading」;state_starts_initial_then_loaded 斷言紅「Loading」;其他綠 |
+ | 測試 | 壞寫法:TEST-6 score 沒接上游 | score_follows_repository_while_collected 斷言紅「expected:<42> but was:<0>」;其他綠 |
+ | 測試 | 壞寫法:TEST-6 只取一次快照 | score_follows_repository_while_collected 斷言紅「expected:<42> but was:<0>」;其他綠 |
+ | 測試 | 壞寫法:TEST-9 自建 scope 用真 dispatcher | upload_runs_in_injected_scope 斷言紅「expected:<[a.jpg]> but was:<[]>」;其他綠 |
+ | 測試 | 壞寫法:TEST-9 自建 scope 用 Dispatchers.Main | upload_stops_when_injected_scope_cancelled 斷言紅「expected:<[]> but was:<[a.jpg]>」;其他綠 |
+ | 測試 | 壞寫法:TEST-18 Saved 多發一次 | save_emits_saving_then_saved_once 斷言紅「Item(Saved), Item(Saved)」;其他綠 |
+ | 測試 | 壞寫法:TEST-19 錯誤被吞掉 | save_blank_name_reports_error 斷言紅「儲存失敗要以錯誤結束」;其他綠 |
+ | 壞測試:TEST-4 沒推進就斷言 | 好寫法 | load_without_advance 斷言紅「Initial」 |
+ | 壞測試:TEST-4 規則用預設 Unconfined | 好寫法 | load_without_advance_unconfined_rule 綠 |
+ | 壞測試:TEST-5 熱流收集放一般 launch | 好寫法 | collect_state_in_plain_launch 逾時紅 |
+@@ -862,20 +903,22 @@ class VirtualTimeTest {
+     }
+ 
+     // API-31:三個呼叫端同時 refresh,只打一次網路、拿到同一份
+     @Test
+     fun concurrent_refresh_hits_network_once() = runTest {
+         val api = FakeConfigApi()
+         val repo = ConfigRepository(api, backgroundScope)
+         val results = List(3) { async { repo.refresh() } }.awaitAll()
+         assertEquals(1, api.calls, "打了 ${api.calls} 次網路")
+         assertEquals(1, results.toSet().size, "三個呼叫端拿到不同結果:$results")
++        repo.refresh()   // 第一批結束之後再要一次:合併的是「同時在途」的請求,不是永久快取
++        assertEquals(2, api.calls, "第一批結束後再 refresh,一共打了 ${api.calls} 次網路(應重抓一次)")
+     }
+ 
+     // API-32:逾時要變成畫面看得到的狀態,不是靜默取消
+     @Test
+     fun timeout_shows_timed_out_state() = runTest {
+         val vm = SearchViewModel(SlowSearchApi())
+         vm.search("kotlin")
+         advanceUntilIdle()
+         assertEquals(SearchState.TimedOut, vm.state.value)
+     }
+@@ -1381,20 +1424,43 @@ import kotlinx.coroutines.CoroutineScope
+ 
+ interface ConfigApi {
+     suspend fun fetch(): String
+ }
+ 
+ class ConfigRepository(private val api: ConfigApi, scope: CoroutineScope) {
+     suspend fun refresh(): String = api.fetch()   // 壞:同時三個呼叫端就打三次
+ }
+ ```
+ 
++### 壞寫法:API-31 結果永久快取
++
++```kotlin
++import kotlinx.coroutines.CoroutineScope
++import kotlinx.coroutines.Deferred
++import kotlinx.coroutines.async
++import kotlinx.coroutines.sync.Mutex
++import kotlinx.coroutines.sync.withLock
++
++interface ConfigApi {
++    suspend fun fetch(): String
++}
++
++class ConfigRepository(private val api: ConfigApi, private val scope: CoroutineScope) {
++    private val mutex = Mutex()
++    private var inflight: Deferred<String>? = null
++
++    suspend fun refresh(): String = mutex.withLock {
++        inflight ?: scope.async { api.fetch() }.also { inflight = it }   // 壞:做完的也一直重用,refresh 再也不會重抓
++    }.await()
++}
++```
++
+ ### 壞寫法:API-32 逾時被當成一般取消
+ 
+ ```kotlin
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
+ import kotlinx.coroutines.flow.MutableStateFlow
+ import kotlinx.coroutines.flow.StateFlow
+ import kotlinx.coroutines.flow.asStateFlow
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.withTimeout
+@@ -1503,20 +1569,21 @@ class DashboardLoader(private val api: DashboardApi) {
+ ```
+ 
+ ### 紅綠矩陣
+ 
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試 | 好寫法 | 全綠:independent_calls_run_in_parallel、double_submit_calls_api_once、concurrent_refresh_hits_network_once、timeout_shows_timed_out_state、callback_twice_resumes_once、first_page_releases_producer、timeout_after_open_still_closes_connection |
+ | 測試 | 壞寫法:API-1 依序呼叫 | independent_calls_run_in_parallel 斷言紅「expected:<1000> but was:<2000>」;其他綠 |
+ | 測試 | 壞寫法:API-10 沒有進行中判斷 | double_submit_calls_api_once 斷言紅「送出 2 次」;其他綠 |
+ | 測試 | 壞寫法:API-31 各自打網路 | concurrent_refresh_hits_network_once 斷言紅「打了 3 次網路」;其他綠 |
++| 測試 | 壞寫法:API-31 結果永久快取 | concurrent_refresh_hits_network_once 斷言紅「一共打了 1 次網路」;其他綠 |
+ | 測試 | 壞寫法:API-32 逾時被當成一般取消 | timeout_shows_timed_out_state 斷言紅「but was:<Loading>」;其他綠 |
+ | 測試 | 壞寫法:API-34 回呼兩次都 resume | callback_twice_resumes_once 斷言紅「Already resumed」;其他綠 |
+ | 測試 | 壞寫法:FLOW-29 produce 沒收掉 | first_page_releases_producer 斷言紅「firstPage() 沒結束」;其他綠 |
+ | 測試 | 壞寫法:CO-14 在 withTimeout 裡取得連線 | timeout_after_open_still_closes_connection 斷言紅「conn1(closed=false)」;其他綠 |
+ | 測試 | 好寫法:CO-14 區塊內 try/finally | 全綠:independent_calls_run_in_parallel、double_submit_calls_api_once、concurrent_refresh_hits_network_once、timeout_shows_timed_out_state、callback_twice_resumes_once、first_page_releases_producer、timeout_after_open_still_closes_connection |
+ | 測試:API-4 連坐版 | 好寫法:API-4 連坐 | 全綠:one_failure_fails_whole_dashboard |
+ | 測試:API-4 連坐版 | 好寫法:API-4 不連坐 | one_failure_fails_whole_dashboard 斷言紅「連坐版:一支失敗整體失敗」 |
+ | 測試:API-4 不連坐版 | 好寫法:API-4 不連坐 | 全綠:one_failure_keeps_other_parts |
+ | 測試:API-4 不連坐版 | 好寫法:API-4 連坐 | one_failure_keeps_other_parts 斷言紅「新聞服務掛了」 |
+ | 測試:API-4 不連坐版 | 壞寫法:API-4 supervisorScope 沒接住 await | one_failure_keeps_other_parts 斷言紅「新聞服務掛了」 |
+@@ -1622,20 +1689,21 @@ class FlowEmissionTest {
+         runCurrent()
+         assertEquals("歡迎 Ada", greeter.greeting)
+     }
+ 
+     // FLOW-23:空流回 null,不丟例外;壞寫法的例外用 runCatching 接住
+     @Test
+     fun missing_user_returns_null() = runTest {
+         val r = runCatching { UserFinder(FakeUserRepository()).name("404") }
+         assertTrue(r.isSuccess, "查不到不能丟例外,實際丟了:${r.exceptionOrNull()}")
+         assertTrue(r.getOrNull().isNullOrEmpty(), "查不到要回 null 或空字串,實際:${r.getOrNull()}")
++        assertEquals("Ada", UserFinder(FakeUserRepository()).name("1"))   // 正向路徑:查得到的要回名字
+     }
+ 
+     // FLOW-24:畫面晚一點才開始收,第一個事件也要收到
+     @Test
+     fun late_collector_still_gets_welcome() = runTest {
+         val vm = WelcomeViewModel()
+         advanceUntilIdle()
+         val got = mutableListOf<String>()
+         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.events.toList(got) }
+         runCurrent()
+@@ -2039,20 +2107,34 @@ import kotlinx.coroutines.flow.first
+ 
+ interface UserRepository {
+     fun find(id: String): Flow<String>
+ }
+ 
+ class UserFinder(private val repo: UserRepository) {
+     suspend fun name(id: String): String? = repo.find(id).first()   // 壞:空流丟 NoSuchElementException
+ }
+ ```
+ 
++### 壞寫法:FLOW-23 不查直接回 null
++
++```kotlin
++import kotlinx.coroutines.flow.Flow
++
++interface UserRepository {
++    fun find(id: String): Flow<String>
++}
++
++class UserFinder(private val repo: UserRepository) {
++    suspend fun name(id: String): String? = null   // 壞:永遠不查,查不到那支照綠
++}
++```
++
+ ### 壞寫法:FLOW-24 沒訂閱者就 emit
+ 
+ ```kotlin
+ import androidx.lifecycle.ViewModel
+ import androidx.lifecycle.viewModelScope
+ import kotlinx.coroutines.flow.Flow
+ import kotlinx.coroutines.flow.MutableSharedFlow
+ import kotlinx.coroutines.launch
+ 
+ class WelcomeViewModel : ViewModel() {
+@@ -2107,20 +2189,21 @@ class FormViewModel(private val repo: FormRepository) : ViewModel() {
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試 | 好寫法 | 全綠:latest_query_wins、feed_ready_even_if_prefs_never_emit、two_collectors_share_one_fetch、code_after_login_runs、missing_user_returns_null、late_collector_still_gets_welcome、same_error_twice_shows_twice |
+ | 測試 | 壞寫法:API-8 flatMapConcat 排隊 | latest_query_wins 斷言紅「Item([a:1]), Item([ab:1])」;其他綠 |
+ | 測試 | 壞寫法:API-8 每次 launch 不取消前一個 | latest_query_wins 斷言紅「Item([ab:1]), Item([a:1])」;其他綠 |
+ | 測試 | 壞寫法:FLOW-3 來源沒有初始值 | feed_ready_even_if_prefs_never_emit 斷言紅「but was:<Loading>」;其他綠 |
+ | 測試 | 壞寫法:FLOW-18 冷流各自收 | two_collectors_share_one_fetch 斷言紅「上游被執行 2 次」;其他綠 |
+ | 測試 | 壞寫法:FLOW-18 沒同步的快取 | two_collectors_share_one_fetch 斷言紅「上游被執行 2 次」;其他綠 |
+ | 測試 | 壞寫法:FLOW-20 collect 之後寫程式 | code_after_login_runs 斷言紅「expected:<歡迎 Ada> but was:<null>」;其他綠 |
+ | 測試 | 壞寫法:FLOW-23 空流用 first() | missing_user_returns_null 斷言紅「NoSuchElementException」;其他綠 |
++| 測試 | 壞寫法:FLOW-23 不查直接回 null | missing_user_returns_null 斷言紅「expected:<Ada> but was:<null>」;其他綠 |
+ | 測試 | 好寫法:FLOW-23 查不到回空字串 | 全綠:latest_query_wins、feed_ready_even_if_prefs_never_emit、two_collectors_share_one_fetch、code_after_login_runs、missing_user_returns_null、late_collector_still_gets_welcome、same_error_twice_shows_twice |
+ | 測試 | 壞寫法:FLOW-24 沒訂閱者就 emit | late_collector_still_gets_welcome 斷言紅「expected:<[歡迎回來]> but was:<[]>」;其他綠 |
+ | 測試 | 壞寫法:STATE-10 訊息沒有唯一 id | same_error_twice_shows_twice 斷言紅「expected:<2> but was:<1>」;其他綠 |
+ 
+ ## T3 程序被殺還原
+ 
+ 型錄列:STATE-6、STATE-26。把第一個 ViewModel 寫進 `SavedStateHandle` 的內容帶到「程序被殺後重建」的第二個 ViewModel,斷言輸入與待處理的 id 還在。
+ 
+ 兩個測試版本,照專案挑一個:
+ 
+@@ -2344,21 +2427,21 @@ class SearchFormViewModel(private val handle: SavedStateHandle) : ViewModel() {
+ 
+ 讀法:〈測試〉對〈好寫法:STATE-6 用 setSavedStateProvider〉紅,是這一版**不涵蓋**的寫法(誤紅),不是那段程式錯;用提供者存狀態的專案改用 viewModelScenario 版。〈測試〉的四格另在 Android library 模組(AGP 8.13.2、compileSdk 36、`testDebugUnitTest`,沒開 `isReturnDefaultValues`)跑過,結果同上;viewModelScenario 版的四格在那裡全部例外紅,所以它只標純 JVM 與 KMP。
+ 
+ ## T4 HTTP 邊界
+ 
+ 型錄列:API-21、API-26。真的 OkHttp/Retrofit 打本機 MockWebServer。MockWebServer 照專案實際解析到的 OkHttp 主版本挑:OkHttp 4 用〈依賴:OkHttp 4〉與〈測試:OkHttp 4〉,OkHttp 5 用〈依賴:OkHttp 5〉與〈測試:OkHttp 5〉,兩份測試只差 import 與排回應的寫法。不要讓 OkHttp 4 的專案配 `mockwebserver3`:Gradle 會在測試的類別路徑上默默把 OkHttp 升成 5(測試綠,但測的不是正式用的版本);用 `strictly` 釘住 4.12.0 時每支測試都 `NoClassDefFoundError: okhttp3/internal/_UtilJvmKt`(實驗實測)。走真的 socket,不在 `runTest` 的虛擬時間裡用 `withTimeout`(虛擬時間遇到真實 I/O 會直接跳到逾時點);要等真實時間就包進 `withContext(Dispatchers.Default)`。
+ 
+ ### 依據
+ 
+ - MockWebServer:https://github.com/square/okhttp/tree/master/mockwebserver(README 的依賴行 `com.squareup.okhttp3:mockwebserver3`;OkHttp 4 對應的是 `com.squareup.okhttp3:mockwebserver`,套件 `okhttp3.mockwebserver`)
+-- API-21:OkHttp `Authenticator` 原始碼 KDoc「Returns null if the challenge cannot be satisfied」,範例 `while ((response = response.priorResponse()) != null)` 與「Give up, we've already failed to authenticate.」(https://github.com/square/okhttp/blob/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/Authenticator.kt);加鎖那一半照型錄 API-21 標準寫法 `mutex.withLock { if (token 已被別人刷新) 用新的 else refresh() }`(出處不全,KDoc 沒提並行)
++- API-21:OkHttp `Authenticator` 原始碼 KDoc「Returns null if the challenge cannot be satisfied」,範例 `while ((response = response.priorResponse()) != null)` 與「Give up, we've already failed to authenticate.」(https://github.com/square/okhttp/blob/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/Authenticator.kt);加鎖那一半照型錄 API-21 標準寫法 `mutex.withLock { if (token 已被別人刷新) 用新的 else refresh() }`(出處不全,KDoc 沒提並行);範本改用 `synchronized` 是旁證:`authenticate(route: Route?, response: Response): Request?` 是一般函式、不是 suspend(同一份原始碼的方法簽名),在它裡面用不了 `Mutex.withLock`
+ - API-26:Retrofit 對 204/205 不呼叫轉換器、body 是 null;型錄 API-26 標準寫法 `Response<Unit>`(出處不全)
+ 
+ ### 依賴:OkHttp 4
+ 
+ ```kotlin
+ implementation("com.squareup.okhttp3:okhttp:4.12.0")
+ implementation("com.squareup.retrofit2:retrofit:3.0.0")
+ implementation("com.squareup.retrofit2:converter-kotlinx-serialization:3.0.0")
+ implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+ testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+@@ -2583,21 +2666,22 @@ interface TokenStore {
+ }
+ 
+ // 每個請求帶上目前的權杖
+ class AuthInterceptor(private val tokens: TokenStore) : Interceptor {
+     override fun intercept(chain: Interceptor.Chain): Response {
+         val token = tokens.current() ?: return chain.proceed(chain.request())
+         return chain.proceed(chain.request().newBuilder().header("Authorization", "Bearer $token").build())
+     }
+ }
+ 
+-// OkHttp 的 Authenticator 跑在 OkHttp 的執行緒上、不是 suspend,型錄的 mutex.withLock 在這裡用 synchronized
++// 型錄 API-21 寫 mutex.withLock;Authenticator.authenticate 是一般(非 suspend)函式,在 OkHttp 的執行緒上同步呼叫,
++// 所以這裡用 synchronized——這是從方法簽名推出來的(旁證),OkHttp 文件沒寫並行刷新該怎麼鎖
+ class TokenAuthenticator(private val tokens: TokenStore) : Authenticator {
+     private val lock = Any()
+ 
+     override fun authenticate(route: Route?, response: Response): Request? {
+         if (response.tries() >= MAX_TRIES) return null   // 有上限:放棄,讓 401 回到呼叫端
+         val sent = response.request.header("Authorization")?.removePrefix("Bearer ")
+         // 加鎖:同時收到 401 的請求排隊;別人已經刷新過(目前的權杖跟這次送出的不同)就直接用新的
+         val token = synchronized(lock) {
+             val current = tokens.current()
+             if (current != null && current != sent) current else tokens.refresh()
+@@ -2795,23 +2879,22 @@ implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+ ```
+ 
+ ### 測試
+ 
+ ```kotlin
+ // 起手:kotlin-idioms test-templates T5
+ import kotlin.test.assertEquals
+ import kotlin.test.assertTrue
+ import kotlinx.serialization.encodeToString
+ import kotlinx.serialization.json.Json
+-import kotlinx.serialization.json.intOrNull
++import kotlinx.serialization.json.JsonPrimitive
+ import kotlinx.serialization.json.jsonObject
+-import kotlinx.serialization.json.jsonPrimitive
+ import org.junit.Test
+ 
+ class SerializationContractTest {
+     // DATA-72:缺欄位或 null 照樣解得出來;壞寫法丟 MissingFieldException,用 runCatching 接住
+     // JSON 帶上 status:只讓 name 缺,DATA-73 的壞寫法才不會連這支一起紅
+     @Test
+     fun missing_or_null_name_still_decodes() {
+         val r = runCatching { AppJson.decodeFromString<List<UserDto>>("""[{"id":"1","status":"ACTIVE"},{"id":"2","name":null,"status":"ACTIVE"}]""") }
+         assertTrue(r.isSuccess, "解碼失敗:${r.exceptionOrNull()}")
+         // 只驗整份解得出來;缺的 name 變成 "" 還是 null 是型錄兩種標準寫法的差別,不寫死
+@@ -2823,23 +2906,22 @@ class SerializationContractTest {
+     fun unknown_status_becomes_unknown() {
+         val r = runCatching { AppJson.decodeFromString<UserDto>("""{"id":"1","name":"Ada","status":"SUSPENDED"}""") }
+         assertTrue(r.isSuccess, "解碼失敗:${r.exceptionOrNull()}")
+         assertEquals("UNKNOWN", r.getOrThrow().status.name)
+     }
+ 
+     // DATA-74:等於預設值的必填欄位也要送出去
+     @Test
+     fun default_quantity_is_sent() {
+         val body = AppJson.encodeToString(OrderRequest(item = "pen"))
+-        // 解回 JSON 比值,不比子字串("quantity":10 也含 "quantity":1)
+-        val quantity = Json.parseToJsonElement(body).jsonObject["quantity"]?.jsonPrimitive?.intOrNull
+-        assertEquals(1, quantity, "送出去的 JSON:$body")
++        // 解回 JSON 比整個值(含型別),不比子字串("quantity":10 也含 "quantity":1),也不用 intOrNull("1" 字串也會被讀成 1)
++        assertEquals(JsonPrimitive(1), Json.parseToJsonElement(body).jsonObject["quantity"], "送出去的 JSON:$body")
+     }
+ }
+ ```
+ 
+ ### 好寫法
+ 
+ ```kotlin
+ import kotlinx.serialization.json.Json
+ 
+ // 專案正式的 Json 設定;測試讀這一個
+@@ -2967,21 +3049,37 @@ import kotlinx.serialization.ExperimentalSerializationApi
+ import kotlinx.serialization.Serializable
+ 
+ @OptIn(ExperimentalSerializationApi::class)
+ @Serializable
+ data class OrderRequest(
+     val item: String,
+     @EncodeDefault val quantity: Int = 10,   // 壞:有送出去,但預設值不是需求寫的 1
+ )
+ ```
+ 
++### 壞寫法:DATA-74 數量送成字串
++
++```kotlin
++import kotlinx.serialization.EncodeDefault
++import kotlinx.serialization.ExperimentalSerializationApi
++import kotlinx.serialization.Serializable
++
++@OptIn(ExperimentalSerializationApi::class)
++@Serializable
++data class OrderRequest(
++    val item: String,
++    @EncodeDefault val quantity: String = "1",   // 壞:有送、值也對,但伺服器要的是數字,收到 "1" 字串
++)
++```
++
+ ### 紅綠矩陣
+ 
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試 | 好寫法 | 全綠:missing_or_null_name_still_decodes、unknown_status_becomes_unknown、default_quantity_is_sent |
+ | 測試 | 好寫法:DATA-72 可空加 null 預設 | 全綠:missing_or_null_name_still_decodes、unknown_status_becomes_unknown、default_quantity_is_sent |
+ | 測試 | 好寫法:DATA-74 整個 Json 開 encodeDefaults | 全綠:missing_or_null_name_still_decodes、unknown_status_becomes_unknown、default_quantity_is_sent |
+ | 測試 | 壞寫法:DATA-72 非可空欄位沒預設值 | missing_or_null_name_still_decodes 斷言紅「MissingFieldException」;其他綠 |
+ | 測試 | 壞寫法:DATA-73 列舉沒有 UNKNOWN | unknown_status_becomes_unknown 斷言紅「SerializationException」;其他綠 |
+ | 測試 | 壞寫法:DATA-74 預設值沒送出去 | default_quantity_is_sent 斷言紅「expected:<1> but was:<null>」;其他綠 |
+ | 測試 | 壞寫法:DATA-74 預設值寫錯 | default_quantity_is_sent 斷言紅「expected:<1> but was:<10>」;其他綠 |
++| 測試 | 壞寫法:DATA-74 數量送成字串 | default_quantity_is_sent 斷言紅「expected:<1> but was:<"1">」;其他綠 |

@@ -126197,10 +126197,11 @@ def t_lint_new_include_test_paths():
 # ── Kotlin 規則包與型錄(Projects/Android協程與API寫法機械檢查標準_計劃 S1–S3)──────────────
 _KTPACK_REL = Path("configs") / "ast-grep" / "kotlin-android"
 _KTCAT_REL = Path("skills") / "kotlin-idioms" / "checks-catalog.md"
+_KTTPL_REL = Path("skills") / "kotlin-idioms" / "test-templates.md"
 
 
 def _ktpack(copy=False, under=""):
-    """載入規則包自檢程式當模組。copy=True:把規則包與型錄複製到暫存目錄(同樣的相對位置),
+    """載入規則包自檢程式當模組。copy=True:把規則包、型錄與行為測試範本複製到暫存目錄(同樣的相對位置),
     模組改指向複本,給「改壞一份看檢查抓不抓得到」用,不碰真檔。"""
     import importlib.util as U
     import shutil as _sh
@@ -126214,8 +126215,11 @@ def _ktpack(copy=False, under=""):
         _sh.copytree(repo / _KTPACK_REL, root / _KTPACK_REL)
         (root / _KTCAT_REL).parent.mkdir(parents=True, exist_ok=True)
         _sh.copy(repo / _KTCAT_REL, root / _KTCAT_REL)
+        if (repo / _KTTPL_REL).is_file():
+            _sh.copy(repo / _KTTPL_REL, root / _KTTPL_REL)   # 行為測試範本:改壞範本檔的測試要碰得到複本
         m.HERE = root / _KTPACK_REL
         m.CATALOG = root / _KTCAT_REL
+        m.TEMPLATES = root / _KTTPL_REL
         m.TEST_ONLY_ANCESTOR = m.HERE / "samples" / "ancestor-named-test"
     return m
 
@@ -126450,6 +126454,364 @@ def t_kotlin_catalog_rows_wired():
     got2 = ms.catalog_problems()
     check("★改壞★ 缺〈來源縮寫〉節要報", any("找不到〈來源縮寫〉節" in b for _a, b in got2), str(got2[:3]))
     check("★改壞★ 缺〈來源縮寫〉節時其他問題照樣報齊", any("編號重複" in b for _a, b in got2), str(got2[:3]))
+
+
+# ── 型錄 C 列接到行為測試範本(Projects/Android行為測試範本與架構測試_計劃 S1、S2、S5)──────────
+# 判準來源是計劃〈範圍〉兩張清單與〈預期值表〉,不是照實作抄:各組列號、各「未接/不接」值的列數都抄自計劃。
+_KT_TEMPLATE_GROUPS = {
+    "T0": {"TEST-4", "TEST-5", "TEST-6", "TEST-7", "TEST-9", "TEST-14", "TEST-17", "TEST-18", "TEST-19", "TEST-20"},
+    "T1": {"API-1", "API-4", "API-10", "API-31", "API-32", "API-34", "FLOW-29", "CO-14"},
+    "T2": {"API-8", "FLOW-3", "FLOW-18", "FLOW-20", "FLOW-23", "FLOW-24", "STATE-10"},
+    "T3": {"STATE-6", "STATE-26"},
+    "T4": {"API-21", "API-26"},
+    "T5": {"DATA-72", "DATA-73", "DATA-74"},
+}
+_KT_UNWIRED = {
+    "未接(儀器批)": {"STATE-12", "STATE-17", "STATE-23", "UI-36", "UI-52", "UI-106", "UI-110", "ARCH-2", "ARCH-3",
+                   "ARCH-31", "ARCH-35", "DATA-17", "DATA-19", "DATA-21", "DATA-38", "DATA-39", "DATA-58", "DATA-60",
+                   "DATA-63", "DATA-65", "DATA-69", "TEST-29", "TEST-32", "TEST-35", "ARCH-56"},
+    "未接(架構測試後續計劃)": {"API-9", "CO-5", "UI-39"},
+    "未接(Ktor 範本後續)": {"API-30"},
+    "不接(代碼審或真機)": {"STATE-20", "CO-39", "UI-109", "DATA-44", "DATA-77", "PERF-1", "PERF-2"},
+}
+
+
+def t_kotlin_test_templates_sections():
+    """[S1] 型錄自檢:通電批次寫「範本 T<n>」的列,範本檔要有 `## T<n> ` 開頭的標題;
+    指到不存在的組、刪掉一節、範本檔不存在,都要以 (列編號, 原因) 報出;真檔零問題。
+    另把 template_problems 的判斷拿掉,三種改壞都轉成不報(證明是這一項在抓)。"""
+    m = _ktpack()
+    check("S1 真型錄與真範本檔:template_problems 零問題", m.template_problems() == [], str(m.template_problems()[:5]))
+    check("S1 真型錄全套格式檢查照樣零問題(含範本那一項)", m.catalog_problems() == [], str(m.catalog_problems()[:5]))
+
+    # 改壞一:API-1 指到範本檔沒有的 T9
+    m1 = _ktpack(copy=True)
+    _ktpack_edit(m1.CATALOG, "行為測試或正向約束=範本 T1", "行為測試或正向約束=範本 T9")
+    rows1 = m1.main_rows()
+    moved = next(r for r, c in rows1.items() if m1.behavior_value(c[9]) == "範本 T9")
+    p1 = m1.template_problems()
+    check("★改壞★ 列指到不存在的範本組要報 (列編號, 範本檔沒有 T9 節)", p1 == [(moved, "範本檔沒有 T9 節")], str(p1))
+    check("★改壞★ 這一項掛在 catalog_problems 裡(--catalog-only 與 CI 都走得到)",
+          (moved, "範本檔沒有 T9 節") in m1.catalog_problems(), str(m1.catalog_problems()[:5]))
+
+    # 改壞二:刪掉範本檔的 ## T2 那一節,引用 T2 的每一列都要報
+    m2 = _ktpack(copy=True)
+    tt = m2.TEMPLATES.read_text(encoding="utf-8")
+    i2, i3 = tt.index("\n## T2 "), tt.index("\n## T3 ")
+    m2.TEMPLATES.write_text(tt[:i2] + tt[i3:], encoding="utf-8")
+    p2 = m2.template_problems()
+    check("★改壞★ 刪掉 T2 節:引用 T2 的 7 列各報一筆",
+          sorted(p2) == sorted((r, "範本檔沒有 T2 節") for r in _KT_TEMPLATE_GROUPS["T2"]), str(p2))
+    # 標題要以「## T2 」開頭才算:只剩「## T20 …」或正文提到 T2 都不算那一節
+    m2b = _ktpack(copy=True)
+    tt = m2b.TEMPLATES.read_text(encoding="utf-8").replace("\n## T2 ", "\n## T20 ", 1)
+    m2b.TEMPLATES.write_text(tt, encoding="utf-8")
+    check("★改壞★ 標題寫成 ## T20 不算 T2 那一節", len(m2b.template_problems()) == 7, str(m2b.template_problems()))
+
+    # 改壞三:範本檔不存在
+    m3 = _ktpack(copy=True)
+    m3.TEMPLATES.rename(m3.TEMPLATES.with_name("test-templates.bak"))
+    p3 = m3.template_problems()
+    check("★改壞★ 範本檔不存在報一筆 (<templates>, 找不到範本檔)", p3 == [("<templates>", "找不到範本檔")], str(p3))
+
+    # 改壞四(代碼審 r1 甲 F1):真的 T3 標題改掉,只在程式圍欄裡留一行「## T3 範例」——圍欄裡的不算那一節
+    m4 = _ktpack(copy=True)
+    tt = m4.TEMPLATES.read_text(encoding="utf-8").replace("\n## T3 ", "\n## T3X ", 1)
+    i_use = tt.index("## 怎麼用\n") + len("## 怎麼用\n")
+    tt = tt[:i_use] + "\n```markdown\n## T3 範例\n```\n" + tt[i_use:]
+    m4.TEMPLATES.write_text(tt, encoding="utf-8")
+    p4 = m4.template_problems()
+    check("★改壞★ 程式圍欄裡的假標題不算那一節:引用 T3 的兩列要報",
+          sorted(p4) == sorted((r, "範本檔沒有 T3 節") for r in _KT_TEMPLATE_GROUPS["T3"]), str(p4))
+    # 對照:標題只寫「## T3」一整行(後面沒字)也算那一節,不誤報
+    m4b = _ktpack(copy=True)
+    tt = m4b.TEMPLATES.read_text(encoding="utf-8")
+    j = tt.index("\n## T3 ") + 1
+    tt = tt[:j] + "## T3\n" + tt[tt.index("\n", j) + 1:]
+    m4b.TEMPLATES.write_text(tt, encoding="utf-8")
+    check("★對照★ 標題只寫「## T3」整行也算那一節", m4b.template_problems() == [], str(m4b.template_problems()))
+
+    # 改壞五(甲 F2):範本檔不是 UTF-8 時報 (<templates>, 原因),不丟例外
+    m5 = _ktpack(copy=True)
+    m5.TEMPLATES.write_bytes(b"\xff\xfe## T0 x\n")
+    try:
+        p5 = m5.template_problems()
+    except Exception as e:  # noqa: BLE001 — 這支就是要驗不丟例外
+        p5 = [("例外", repr(e))]
+    check("★改壞★ 範本檔不是 UTF-8:報一筆 (<templates>, 範本檔不是 UTF-8…),不丟例外",
+          len(p5) == 1 and p5[0][0] == "<templates>" and p5[0][1].startswith("範本檔不是 UTF-8"), str(p5))
+
+    # 改壞六(架構 F2):「範本 T<n>」只認「行為測試或正向約束=」那一段;寫在別的接電方式那段不算引用
+    m6 = _ktpack(copy=True)
+    rows6 = m6.main_rows()
+    rid6 = next(r for r, c in rows6.items() if "告警帶寫法=批一" in c[9] and m6.behavior_value(c[9]) is None)
+    lines6 = m6.CATALOG.read_text(encoding="utf-8").split("\n")
+    k6 = next(i for i, ln in enumerate(lines6) if ln.startswith(f"| {rid6} |"))
+    lines6[k6] = lines6[k6].replace("告警帶寫法=批一", "告警帶寫法=範本 T9", 1)
+    m6.CATALOG.write_text("\n".join(lines6), encoding="utf-8")
+    check("★對照★ 「範本 T9」寫在告警帶寫法那段不算引用,不報", m6.template_problems() == [], str(m6.template_problems()))
+
+    # 改壞七(代碼審 r2 其 F1、架 F2):圍欄照 CommonMark 判,跟 lumos 同口徑
+    def _t3_case(insert, at_end=False):
+        mx = _ktpack(copy=True)
+        tt = mx.TEMPLATES.read_text(encoding="utf-8").replace("\n## T3 ", "\n## T3X ", 1)
+        if at_end:
+            tt = tt + insert
+        else:
+            k = tt.index("## 怎麼用\n") + len("## 怎麼用\n")
+            tt = tt[:k] + insert + tt[k:]
+        mx.TEMPLATES.write_text(tt, encoding="utf-8")
+        return mx.template_problems()
+    want_t3 = sorted((r, "範本檔沒有 T3 節") for r in _KT_TEMPLATE_GROUPS["T3"])
+    got = _t3_case("\n~~~\n## T3 假\n~~~\n")
+    check("★改壞★ ~~~ 圍欄裡的假標題不算那一節", sorted(got) == want_t3, str(got))
+    got = _t3_case("\n````md\n```kotlin\nx\n```\n## T3 假\n````\n")
+    check("★改壞★ 四反引號圍欄裡面含三反引號時,內層收尾不會提早關掉外層,假標題仍不算", sorted(got) == want_t3, str(got))
+    got = _t3_case("\n````md\n```\n## T2 內層\n```\n````\n## T3 真的那一節\n")
+    check("★對照★ 四反引號圍欄關掉之後的真標題照算", got == [], str(got))
+    got = _t3_case("\n    ```\n## T3 真的那一節\n    ```\n")
+    check("★對照★ 縮排 4 格的 ``` 是縮排程式碼、不是圍欄,夾在中間的真標題照算", got == [], str(got))
+    got = _t3_case("\n```kotlin\n## T3 假\n", at_end=True)
+    check("★改壞★ 檔尾沒關的圍欄,裡面的假標題不算", sorted(got) == want_t3, str(got))
+    # 改壞八(其 F2):「範本」值寫成非標準格式要報,不靜默當沒引用
+    m8 = _ktpack(copy=True)
+    lines8 = m8.CATALOG.read_text(encoding="utf-8").split("\n")
+    k8 = next(i for i, ln in enumerate(lines8) if ln.startswith("| TEST-4 |"))
+    lines8[k8] = lines8[k8].replace("行為測試或正向約束=範本 T0", "行為測試或正向約束=範本 T0(備註)", 1)
+    m8.CATALOG.write_text("\n".join(lines8), encoding="utf-8")
+    p8 = m8.template_problems()
+    check("★改壞★ 「範本 T0(備註)」這種非標準寫法要報格式錯",
+          any(a == "TEST-4" and "要寫成「範本 T<n>」整段" in b for a, b in p8), str(p8))
+
+    # 架構 F1:主表讀一次共用——catalog_problems 把它讀好的列交給 template_problems,傳進來的列要被照用
+    m7 = _ktpack()
+    fake_rows = {"API-999": ["API-999"] + [""] * 8 + ["行為測試或正向約束=範本 T9"] + ["", ""]}
+    check("S1 template_problems 照用傳進來的主表列(不另讀型錄)",
+          m7.template_problems(fake_rows) == [("API-999", "範本檔沒有 T9 節")], str(m7.template_problems(fake_rows)))
+
+    calls7, real7 = [], m7.main_rows
+
+    def _count_rows(*a, **kw):
+        calls7.append(1)
+        return real7(*a, **kw)
+    m7.main_rows = _count_rows
+    p7 = m7.catalog_problems()
+    check("S1 主表只有 main_rows 一條讀法:catalog_problems 整趟只讀一次,讀好的列交給範本檢查",
+          p7 == [] and len(calls7) == 1, f"呼叫 {len(calls7)} 次;{p7[:3]}")
+
+    # 對照:把判斷式拿掉(換成永遠不報),同三種改壞都不報——證明抓到的是 template_problems
+    for mx in (m1, m2, m3):
+        mx.template_problems = lambda rows=None: []
+        check("★對照★ 拿掉 template_problems 後同一份改壞不再報範本問題",
+              not any("範本" in b for _a, b in mx.catalog_problems()), str(mx.catalog_problems()[:3]))
+
+
+def t_kotlin_template_fence_parity():
+    """[S1] check.py 的剝圍欄是刻意的另一份(零依賴、不能 import scripts/lumos),口徑要跟 lumos 的
+    `_visible_lines`(全檔唯一的圍欄判定)一致:同一組輸入,兩份留下的行要一模一樣(代碼審 r2 架 F2)。"""
+    m = _ktpack()
+    lm = _load_lumos_module()
+    cases = {
+        "一般": "a\n```kotlin\n## T1 x\n```\nb",
+        "波浪號": "a\n~~~\n## T1 x\n~~~\nb",
+        "四反引號包三反引號": "a\n````md\n```kotlin\nx\n```\n## T3 x\n````\n## T9 b",
+        "收尾比開頭短不算關": "a\n````\nx\n```\n## T3 x\n````\nb",
+        "收尾字元不同不算關": "a\n```\nx\n~~~\n## T3 x\n```\nb",
+        "收尾帶 info string 不算關(嚴格)": "a\n```\nx\n```kotlin\ny\n```\nb",
+        "縮排 3 格算圍欄": "a\n   ```\n## T1 x\n   ```\nb",
+        "縮排 4 格不算圍欄": "a\n    ```\n## T1 x\n    ```\nb",
+        "tab 開頭不算圍欄": "a\n\t```\n## T1 x\n\t```\nb",
+        "未閉合(嚴格讀不完退回寬鬆)": "a\n```\n## T1 x\n```kotlin\nb\n## T2 y",
+        "未閉合到檔尾": "a\n```kotlin\n## T1 x\nb",
+    }
+    for name, text in cases.items():
+        lines = text.split("\n")
+        mine = [ln for _no, ln in m._visible_lines(lines)]
+        theirs = [ln for _no, ln in lm._visible_lines(lines)]
+        check(f"S1 圍欄判定跟 lumos 一致:{name}", mine == theirs, f"check.py={mine} lumos={theirs}")
+
+
+def _kt_template_sections(m, text):
+    """範本檔 → {組代號: {小節標題: 小節內文}}。組的切法呼叫 check.py 的 template_sections
+    (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。"""
+    lines = text.splitlines()
+    starts = m.template_sections(text)
+    visible = {no - 1 for no, _ln in m._visible_lines(lines)}
+    out = {}
+    for k, (g, i) in enumerate(starts):
+        end = starts[k + 1][1] if k + 1 < len(starts) else len(lines)
+        nxt = next((j for j in range(i + 1, end) if j in visible and lines[j].startswith("## ")), end)
+        subs, cur = {}, None
+        for j in range(i + 1, nxt):
+            if j in visible and lines[j].startswith("### "):
+                cur = lines[j][4:].strip()
+                subs[cur] = []
+            elif cur is not None:
+                subs[cur].append(lines[j])
+        out[g] = {n: "\n".join(b) + "\n" for n, b in subs.items()}
+    return out
+
+
+def _kt_kotlin_blocks(m, body):
+    """小節內文 → 每個 ```kotlin 圍欄裡的程式。圍欄區段呼叫 check.py 的 _fence_regions(跟 lumos 同口徑),
+    不用成對非貪婪正則(看不見未閉合圍欄)。"""
+    lines = body.splitlines()
+    regions, _open = m._fence_regions(lines, True)
+    out = []
+    for a, b in regions:
+        if lines[a].lstrip(" ").lstrip("`~").startswith("kotlin"):
+            out.append("\n".join(lines[a + 1:b if b is not None else len(lines)]))
+    return out
+
+
+def _kt_block_after(code, start):
+    """從 code[start] 的 `{` 起配對大括號,回 (區塊內文, 結束位置);沒配到回到結尾。"""
+    depth = 0
+    for i in range(start, len(code)):
+        if code[i] == "{":
+            depth += 1
+        elif code[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return code[start + 1:i], i
+    return code[start + 1:], len(code)
+
+
+# Turbine 1.2.1 原始碼(channel.kt、ReceiveTurbine.kt、Turbine.kt)裡失敗會丟 TurbineAssertionError
+# (或等不到值時丟)的方法,收證不算斷言;〈測試〉一律推到靜止後 cancelAndConsumeRemainingEvents() 再比
+_KT_TURBINE_THROWING = ("awaitItem", "awaitEvent", "awaitComplete", "awaitError", "skipItems", "expectNoEvents",
+                        "expectMostRecentItem", "ensureAllEventsConsumed", "takeItem", "takeEvent", "takeComplete",
+                        "takeError")
+_KT_ADVANCE_RE = r"\b(?:advanceUntilIdle|runCurrent|advanceTimeBy)\("
+
+
+def _kt_turbine_problems(code):
+    """一段〈測試〉程式 → 問題清單:用了會丟 TurbineAssertionError 的方法;某個 `.test {` 區塊沒用
+    cancelAndConsumeRemainingEvents() 收尾(區塊結束的 Unconsumed events 檢查也丟同一型別);
+    cancelAndConsumeRemainingEvents() 之前同一區塊沒有推進呼叫(被測流會掛起時事件還沒發完)。"""
+    import re as _re
+    code = _re.sub(r"//[^\n]*", "", code)   # 註解裡說「不用 awaitComplete()」不算用了
+    probs = [f"用了 {n}()" for n in _KT_TURBINE_THROWING if _re.search(r"\b" + n + r"\(", code)]
+    for mt in _re.finditer(r"\.test\s*\{", code):
+        block, _end = _kt_block_after(code, mt.end() - 1)
+        calls = [c.start() for c in _re.finditer(r"\bcancelAndConsumeRemainingEvents\(", block)]
+        if not calls:
+            probs.append("有 .test { } 區塊沒用 cancelAndConsumeRemainingEvents() 收尾")
+        for pos in calls:
+            if not _re.search(_KT_ADVANCE_RE, block[:pos]):
+                probs.append("cancelAndConsumeRemainingEvents() 之前同一區塊沒有推進(advanceUntilIdle/runCurrent/advanceTimeBy)")
+    return probs
+
+
+def t_kotlin_test_templates_content_guards():
+    """[S3 的機械那一半] 範本內容的幾條規矩(代碼審 r1 折入;紅綠本身靠實驗與驗證紀錄):
+    ①〈測試〉小節不用 Turbine 自己的檢查——它們失敗丟 TurbineAssertionError,收證不算斷言;
+    ②每個〈好寫法:…〉〈壞寫法:…〉小節都出現在同組矩陣的「被測程式小節」欄(加了變形就要實跑進矩陣);
+    ③T3 預設〈測試〉不用 viewModelScenario(Android 模組本機測試跑不起來),另一版的條件寫在節開頭;
+    ④T4 矩陣有並行 401 那支抓「沒加鎖」。"""
+    import re as _re
+    repo = Path(GRAPHCTL).resolve().parents[1]
+    m = _ktpack()
+    groups = _kt_template_sections(m, (repo / _KTTPL_REL).read_text(encoding="utf-8"))
+    check("範本檔讀得到 T0–T5 六組", sorted(groups) == [f"T{i}" for i in range(6)], str(sorted(groups)))
+    for g, subs in groups.items():
+        for name, body in subs.items():
+            if name == "測試" or name.startswith("測試:"):
+                probs = _kt_turbine_problems("\n".join(_kt_kotlin_blocks(m, body)))
+                check(f"{g}〈{name}〉Turbine 寫法收證算得到(不用會丟 TurbineAssertionError 的方法、推到靜止再一次取出)",
+                      not probs, str(probs))
+        mx = next((b for n, b in subs.items() if n.startswith("紅綠矩陣")), "")
+        cols = {c[1].strip() for ln in mx.splitlines() if ln.startswith("| ") and "測試小節" not in ln
+                for c in [ln.strip().strip("|").split("|")] if len(c) >= 3}
+        for name in subs:
+            if name.startswith(("好寫法:", "壞寫法:")):
+                check(f"{g}〈{name}〉有進矩陣", name in cols, str(sorted(cols))[:300])
+    # 守衛自己的對照(代碼審 r2 其 F3、範 F1):換名繞過、沒推進就取、沒收尾都要抓到;正確寫法不報
+    ok = "x.test {\n advanceUntilIdle()\n assertEquals(a, cancelAndConsumeRemainingEvents())\n}"
+    check("★對照★ 推進後一次取出的寫法不報", _kt_turbine_problems(ok) == [], str(_kt_turbine_problems(ok)))
+    for n in _KT_TURBINE_THROWING:
+        check(f"★改壞★ 用 {n}() 要報", any(n in p for p in _kt_turbine_problems(ok.replace("advanceUntilIdle()", f"{n}()\n advanceUntilIdle()"))), n)
+    check("★改壞★ cancelAndConsumeRemainingEvents() 前沒推進要報",
+          any("沒有推進" in p for p in _kt_turbine_problems("x.test {\n assertEquals(a, cancelAndConsumeRemainingEvents())\n}")), "")
+    check("★改壞★ 推進寫在別的 test 區塊不算",
+          any("沒有推進" in p for p in _kt_turbine_problems("a.test {\n advanceUntilIdle()\n cancelAndConsumeRemainingEvents()\n}\nb.test {\n cancelAndConsumeRemainingEvents()\n}")), "")
+    check("★改壞★ .test 區塊沒收尾要報",
+          any("沒用 cancelAndConsumeRemainingEvents" in p for p in _kt_turbine_problems("x.test {\n advanceUntilIdle()\n}")), "")
+    t3 = groups["T3"]
+    check("T3 預設〈測試〉不用 viewModelScenario", "viewModelScenario" not in t3["測試"], "")
+    check("T3 另有〈測試:viewModelScenario 版〉", "測試:viewModelScenario 版" in t3, str(list(t3)))
+    t4mx = next(b for n, b in groups["T4"].items() if n.startswith("紅綠矩陣"))
+    check("T4 矩陣有「沒加鎖」壞寫法對並行 401 那支斷言紅",
+          bool(_re.search(r"壞寫法:API-21 沒加鎖 \| concurrent_401s_refresh_once 斷言紅", t4mx)), t4mx[:300])
+
+
+def t_kotlin_catalog_c_rows_batch_resolved():
+    """[S2] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T5 或四種未接/不接,沒有「批五」;
+    各值的列數與各範本組的列號等於計劃〈範圍〉兩張清單。"""
+    m = _ktpack()
+    rows = m.main_rows()   # 主表與批次值的讀法都呼叫 check.py,不另抄(代碼審 r2 架 F1、F3)
+    c_rows = {r: c for r, c in rows.items() if "C" in c[6]}
+    check("S2 型錄級含 C 的列是 68 列", len(c_rows) == 68, str(len(c_rows)))
+    vals = {r: m.behavior_value(c[9]) for r, c in c_rows.items()}
+    check("S2 不再出現「批五」", not [r for r, v in vals.items() if v == "批五"], str([r for r, v in vals.items() if v == "批五"]))
+    allowed = {f"範本 T{i}" for i in range(6)} | set(_KT_UNWIRED)
+    check("S2 每列的值都在允許清單裡", not {r: v for r, v in vals.items() if v not in allowed},
+          str({r: v for r, v in vals.items() if v not in allowed}))
+    for g, want in _KT_TEMPLATE_GROUPS.items():
+        got = {r for r, v in vals.items() if v == f"範本 {g}"}
+        check(f"S2 範本 {g} 的列等於計劃〈做〉表那一組", got == want, f"多 {sorted(got - want)} 少 {sorted(want - got)}")
+    for v, want in _KT_UNWIRED.items():
+        got = {r for r, x in vals.items() if x == v}
+        check(f"S2 {v} 的列等於計劃〈不做〉清單({len(want)} 列)", got == want, f"多 {sorted(got - want)} 少 {sorted(want - got)}")
+    check("S2 範本 32 列", sum(1 for v in vals.values() if v and v.startswith("範本 ")) == 32, "")
+    # 預期值表逐列抽查
+    for rid, v in (("TEST-4", "範本 T0"), ("STATE-17", "未接(儀器批)"), ("API-9", "未接(架構測試後續計劃)"),
+                   ("API-30", "未接(Ktor 範本後續)"), ("PERF-1", "不接(代碼審或真機)")):
+        check(f"S2 {rid} 通電批次含「行為測試或正向約束={v}」", f"行為測試或正向約束={v}" in c_rows[rid][9], c_rows[rid][9])
+    # 接電方式欄不動:形狀類仍要有告警或正向約束(型錄格式檢查的要求)
+    check("S2 C 列的接電方式欄照舊含「行為測試或正向約束」", all("行為測試或正向約束" in c[8] for c in c_rows.values()), "")
+
+
+def t_kotlin_test_templates_linked():
+    """[S5] 指路:kotlin-idioms SKILL.md 開頭段、測試品質標準〈Android 本機單元測試的驗收標準〉的協程與 Flow
+    兩小段、型錄〈輸入與口徑〉,各有一句提到 test-templates.md。"""
+    repo = Path(GRAPHCTL).resolve().parents[1]
+    skill = (repo / "skills" / "kotlin-idioms" / "SKILL.md").read_text(encoding="utf-8")
+    body = skill.split("\n---\n", 1)[1] if skill.startswith("---") else skill
+    first_para = next(p for p in body.split("\n\n") if p.strip() and not p.lstrip().startswith("#"))
+    check("S5 SKILL.md 開頭段提到 test-templates.md", "test-templates.md" in first_para, first_para[:200])
+    # 代碼審 r1 甲 F3:連結目標要真的存在(打錯字的連結不算指到)
+    import re as _re
+    targets = _re.findall(r"\]\(([^)\s]*test-templates\.md)\)", first_para)
+    check("S5 SKILL.md 開頭段有指到範本檔的連結,而且目標檔存在",
+          bool(targets) and all((repo / "skills" / "kotlin-idioms" / t).is_file() for t in targets), str(targets))
+    std = (repo / "skills" / "lumos-project-notes" / "commands" / "test-quality-standard.md").read_text(encoding="utf-8")
+    sec = std[std.index("### Android 本機單元測試的驗收標準"):]
+    sec = sec[:sec.index("\n### ", 5)] if "\n### " in sec[5:] else sec
+    co = sec[sec.index("- **協程**"):sec.index("- **Flow**")]
+    fl = sec[sec.index("- **Flow**"):sec.index("- **斷言與命名**")]
+    check("S5 測試品質標準〈協程〉小段提到 test-templates.md", "test-templates.md" in co, co[-300:])
+    check("S5 測試品質標準〈Flow〉小段提到 test-templates.md", "test-templates.md" in fl, fl[-300:])
+    # 指路句要真的寫出那兩個坑,不是只留檔名
+    co_ptr = next((ln for ln in co.splitlines() if "test-templates.md" in ln), "")
+    fl_ptr = next((ln for ln in fl.splitlines() if "test-templates.md" in ln), "")
+    check("S5 協程指路句寫出「backgroundScope 的工作 advanceUntilIdle 不推,用 runCurrent」",
+          all(w in co_ptr for w in ("backgroundScope", "advanceUntilIdle", "runCurrent")), co_ptr)
+    check("S5 Flow 指路句寫出 TurbineAssertionError 收證不算斷言、改用 cancelAndConsumeRemainingEvents",
+          all(w in fl_ptr for w in ("TurbineAssertionError", "cancelAndConsumeRemainingEvents")), fl_ptr)
+    # 甲 F3:同段既有「錯誤用 awaitError() 收」那句要跟新句對齊,不能各說各的
+    old_turbine = next((ln for ln in fl.splitlines() if "錯誤用 `awaitError()` 收" in ln), "")
+    check("S5 Flow 段舊的 Turbine 建議句也指到不算斷言的那件事", "TurbineAssertionError" in old_turbine or "awaitEvent" in old_turbine, old_turbine)
+    # 丙 F1:畫面重建那條不能再無條件叫人用 ViewModelScenario(Android 模組本機測試跑不起來)
+    rec = next((ln for ln in sec.splitlines() if "畫面重建與程序被回收" in ln), "")
+    check("S5 〈畫面重建與程序被回收〉寫明 Android 模組照官方「用測試值建新的 SavedStateHandle」",
+          "Android 模組的本機單元測試照官方「用測試值建新的 SavedStateHandle」" in rec, rec)
+    check("S5 〈畫面重建與程序被回收〉寫明 ViewModelScenario 只在純 JVM 或 KMP 用", "只在純 JVM 或 KMP" in rec, rec)
+    cat = (repo / _KTCAT_REL).read_text(encoding="utf-8")
+    i = cat.index("## 輸入與口徑")
+    io = cat[i:cat.index("\n## ", i + 5)]
+    check("S5 型錄〈輸入與口徑〉提到範本檔", "skills/kotlin-idioms/test-templates.md" in io, io[:200])
+    check("S5 型錄指的範本檔存在", (repo / "skills" / "kotlin-idioms" / "test-templates.md").is_file(), "")
 
 
 def t_lint_new_astgrep_kotlin_two_files():

@@ -11,6 +11,7 @@ about_code:
   - configs/ast-grep/kotlin-android/sgconfig-hints.yml
   - skills/kotlin-idioms/checks-catalog.md
   - configs/ast-grep/kotlin-android/sgconfig-review.yml
+  - skills/kotlin-idioms/test-templates.md
 tags:
   - type/system
   - status/doing
@@ -29,8 +30,14 @@ summary: |-
   WHY:每列證據樣式附正例與反例(samples/situation/<列編號>.kt.txt,副檔名不是 .kt 免得推送閘把教材當產品碼),自檢經 scripts/lumos 真的切段與核對程式跑:正例要有一行對得上、反例要每一行都對不上(推送前對不上只提醒,自測守的是樣式本身沒壞,代碼審 r2)、樣本要切得出含那一列的段,反例要碰得到樣式真正在管的地方(順序、型別參數,r2 邊界 F12);壞寫法跟標準寫法只差在語意時那一段寫(無)交盲判 [出處:代碼審 r1 D1;ast-grep test 的 valid/invalid https://ast-grep.github.io/guide/test-rule.html ;Semgrep 的 ok/ruleid https://docs.semgrep.dev/writing-rules/testing-rules ] [因:人逐列寫的樣式在 56 列裡有 9 列擋掉型錄自己的標準寫法或放過對應的壞寫法] [不選:靠人逐列看] [test:t_kt_situation_evidence_samples]
   WHY:自檢程式的 dt_table 讀表那一輪順手帶出處(每列多 source 來源格、refs 展開後的網址、check_refs 對應檢查在型錄主表的名稱與來源與網址,縮寫照〈來源縮寫〉表展開;縮寫表讀法 _abbr_table 與比對 _abbr_hit 跟 catalog_problems 共用一套;縮寫表那兩支檔內輔助用底線開頭(代碼審 code-android情境題盲判 r2 戊);情境證據樣本的 situation_dir、situation_samples、load_lumos 沒加底線),lumos 從列上取出處給盲判材料;主表或縮寫表找不到時那幾格留空不報錯(讀得懂讀不懂歸 dt_table 與 catalog_problems) [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4;使用者 2026-11-05 第 3 要點(來源與依據在語意盲判時輔助判別)] [因:讀表只留一套,出處也從同一輪讀(代碼審 code-android情境題盲判 r1 架構對齊 F6:原本另有 dt_sources 再走一輪決策表、縮寫比對的正規式寫了三處)] [不選:lumos 自己再寫一套讀主表;另一支 dt_sources 再走一輪] [test:t_kt_catalog_sources_in_rows] [test:t_blind_judge_template_excludes_dispositions] [test:t_kt_catalog_private_helpers]
   WHY:型錄第四批通電批次照固定口徑判(切段、認規則碼、排除待查、預設關、相近、opt-in 與官方預設關的六條),由型錄自檢 check.py 的 batch4_expected_tags 逐列重算比對(代碼審 r1 架構席:口徑只住一處) [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:兩席指出 compose-rules 預設關的三條會被標成已接電,實際沒在跑] [不選:一次性腳本改完就算(沒有守衛,下次改型錄就漂)] [test:t_kt_catalog_batch4_wiring]
+  WHY:型錄 C 列的行為測試範本放 skills/kotlin-idioms/test-templates.md,型錄通電批次欄寫「行為測試或正向約束=範本 T<n>」指過去,自我檢查 template_problems 只驗那一節存在(範本內容對不對靠實驗與驗證紀錄) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 設計審 r1] [因:沿用既有欄位,不另造認領語法;範本紅綠要 Gradle 才跑得出,本 repo CI 不跑 Gradle] [不選:check.py --lab 產生實驗專案(自檢是唯讀職責)] [test:t_kotlin_test_templates_sections]
+  PITFALL:Turbine 自己的檢查(awaitComplete、awaitError、expectNoEvents、區塊結束的 Unconsumed events)失敗丟 app.cash.turbine.TurbineAssertionError,收證工具 assertion_failure 照型別名判、不算斷言失敗,範本照抄會讓壞寫法的紅不被收證認 [出處:2026-11-06 範本紅綠矩陣實跑 T0 兩格] [根因:assertion_failure 只認型別名以 AssertionError 等結尾且前面是點,Turbine 的類別名是 TurbineAssertionError] [修法:範本改用 awaitEvent() 或 cancelAndConsumeRemainingEvents() 取事件再 assertEquals] [repro:skills/kotlin-idioms/test-templates.md T0〈測試〉×〈壞寫法:TEST-18 Saved 多發一次〉改回 awaitComplete() 跑 Gradle]
+  WHY:template_problems 只認通電批次「行為測試或正向約束=」那一段的「範本 T<n>」、比對範本檔標題前先剝程式圍欄、讀不了 UTF-8 回 (<templates>, 原因);由 catalog_problems 把讀好的主表列傳進去,不另讀 [出處:代碼審 code-android行為測試範本 r1 甲 F1、F2,架構 F1、F2] [因:圍欄裡示範的標題會讓缺節被放過;同一格兩套解析口徑會漂移] [test:t_kotlin_test_templates_sections]
+  PITFALL:T3 用 viewModelScenario().recreate() 的測試放進 Android 模組的本機單元測試,好寫法壞寫法一律例外紅 Method containsKey in android.os.BaseBundle not mocked [出處:代碼審 code-android行為測試範本 r1 丙 F1 實跑] [根因:Android 上 SavedState 就是 Bundle,本機單元測試的 android.jar 是空殼] [修法:範本預設改官方的複製 SavedStateHandle 寫法,viewModelScenario 版只標純 JVM 或 KMP] [test:t_kotlin_test_templates_content_guards]
+  WHY:check.py 的剝圍欄(_fence_regions、_visible_lines)是刻意的另一份,規則照 CommonMark、口徑跟 scripts/lumos 的 _fence_regions 逐條對齊;主表只有 main_rows 一條讀法,範本標題只有 TEMPLATE_HEADING_RE 與 template_sections 一套,測試端呼叫同名函式不另抄 [出處:代碼審 code-android行為測試範本 r2 架 F1–F4] [因:check.py 零依賴、scripts/lumos 沒有 .py 副檔名不能 import;抄兩份的正則在邊界案例會分岔] [不選:check.py 動態載入 scripts/lumos(破壞零依賴、CI 單獨跑自檢時多一個相依)] [test:t_kotlin_template_fence_parity]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+  - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
 ---
 # kotlin規則包
 
@@ -44,6 +51,7 @@ verified_by:
 - `rules/`、`rules-review/`、`rules-hints/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
 - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems)。
 - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。
+- `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C、在純 JVM 跑得動的 32 列,通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本開頭〈實驗專案骨架〉重跑那一組、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]。
 
 自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(只有情境題證據樣式自測用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
 

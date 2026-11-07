@@ -144,13 +144,15 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
   - 不會自己結束的協程(例如一直收集的),注入 `backgroundScope`,測試結束自動取消。
   - 儀器測試不換 Main 時,工作跑在真的執行緒上,`runTest` 裡的 `withTimeout` 卻用虛擬時間,測試執行緒一閒就快轉、提早逾時;要等真執行緒的結果,把等待包進 `withContext(Dispatchers.Default) { withTimeout(…) }` 改用真時間(協程測試函式庫說明:`Dispatchers.Default` 不走虛擬時間;演練實測)。
   - 不用 `Thread.sleep` 或真實時間等結果,用虛擬時間;非同步工作改用可控制的 dispatcher,固定等待只會讓測試又慢又不穩。
+  - 照抄起手:虛擬時間、並行、逾時、防重複送出這類寫法的測試範本在 kotlin-idioms 的 `skills/kotlin-idioms/test-templates.md`(型錄那列通電批次寫哪一組就看哪一節,T0 是測試骨架、T1 是虛擬時間);`backgroundScope` 裡的工作 `advanceUntilIdle()` 不推,要用 `runCurrent()` 或 `advanceTimeBy()`(範本實驗實測)。
 - **Flow**:
   - StateFlow 斷言 `value`,不去收每個中間值(值變得快時,收集的一方只保證拿到最新那個)。
   - `stateIn` 配 `WhileSubscribed` 或 `Lazily` 的,就算只斷言 `value`,也要先起一個空的收集者:`backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { viewModel.uiState.collect {} }`,不然上游不會跑、`value` 永遠是初始值。
   - 有限的流用 `first()`、`toList()`、`take(n).toList()`;不會結束的流在 `backgroundScope` 收,不然 `toList()` 永遠不回來。
   - 被測對象收別人的流時,把來源換成可以從測試推值的假實作(`MutableSharedFlow` 加一個 `emit`)。
-  - 社群:用 Turbine 時,每個發出的值都要收掉,或用 `cancelAndIgnoreRemainingEvents()` 明講不管;錯誤用 `awaitError()` 收;不要用 `runCurrent()` 去推 Turbine。
+  - 社群:用 Turbine 時,每個發出的值都要收掉,或用 `cancelAndIgnoreRemainingEvents()` 明講不管;錯誤用 `awaitError()` 收;不要用 `runCurrent()` 去推 Turbine。要拿來當收證「抓到錯」的那一步時不能靠這些:它們失敗丟 `TurbineAssertionError`,收證不算斷言,寫法見本段末條。
   - ViewModel 的一次性結果化成狀態後(kotlin-idioms R19),測「出現在狀態裡 → 呼叫已顯示 → 從狀態清掉」三步。
+  - 照抄起手:Flow 發射、共享、程序被殺還原、HTTP 邊界、序列化契約的測試範本在 `skills/kotlin-idioms/test-templates.md`(T2–T5 節)。Turbine 自己的檢查(`awaitComplete()`、`awaitError()`、`expectNoEvents()`)失敗、`awaitItem()` 等不到值,都丟 `TurbineAssertionError`,收證工具不算斷言失敗;要當「抓到錯」的那一步,先推到靜止,再用 `cancelAndConsumeRemainingEvents()` 一次取出全部事件 `assertEquals`。有限的冷流結尾還有一個 `Complete`,在它上面 `expectNoEvents()` 對正確程式也會紅(範本實驗實測)。
 - **斷言與命名**:斷言輸出、狀態、寫入結果或錯誤理由(共用規範第 3 條);測試名照官方範例的形式 `被測對象_動作或輸入_預期結果`。
 - **Compose 畫面行為在本機跑**(選配):測試放 `src/test`,加 `@RunWith(RobolectricTestRunner::class)` 與 `createComposeRule()`,`isIncludeAndroidResources = true`;適合「點了按鈕畫面有變」這類行為。Robolectric 沒有螢幕、部分 API 只部分支援(系統 UI、WebView 不支援),這些照樣要上裝置驗。
 - **截圖測試**(選配):官方推薦用來驗 Compose 的視覺;官方工具是 Compose Preview Screenshot Testing(實驗性),Robolectric 要搭第三方函式庫(社群:Now in Android 用 Roborazzi)。張數要少、每張給獨特的回饋;容差門檻會漏掉門檻以下的差異;參考圖在固定環境(例如 CI)產,不同作業系統的渲染不一樣。
@@ -172,7 +174,7 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
   - 裝置測試在 PR 跑 3–5 次。
   - Robolectric 每支測試給新的 Application,但 App 自己的單例與靜態快取不會重設,這類最該打亂順序跑;`RobolectricTestRunner` 吃不吃 `@OrderWith` 還沒人驗過(計劃〈第二批〉),先做最小實驗再用。
   - 裝置測試開 Orchestrator 加 `clearPackageData`(`testInstrumentationRunnerArguments clearPackageData: 'true'`,每支測試跑完清掉 App 資料),代價是每支都重啟 App。
-- **畫面重建與程序被回收**:用 `ViewModelScenario.recreate()`(lifecycle-viewmodel-testing 2.9.0 起)模擬程序被回收再還原,斷言 SavedStateHandle 存的狀態還在。
+- **畫面重建與程序被回收**:斷言 SavedStateHandle 存的狀態在重建後還在。Android 模組的本機單元測試照官方「用測試值建新的 SavedStateHandle」,把第一個 handle 的內容複製給重建的 ViewModel;`ViewModelScenario.recreate()`(lifecycle-viewmodel-testing 2.9.0 起)只在純 JVM 或 KMP 共用模組用——放進 Android 模組的本機測試會因為 `Bundle` 是空殼而例外紅(`Method containsKey in android.os.BaseBundle not mocked`),要用就配 Robolectric 或儀器測試。兩種寫法各自不涵蓋的(提供者、`Bundle` 可存型別)見 `skills/kotlin-idioms/test-templates.md` 的 T3 節(範本實驗實測)。
 - **涵蓋率只拿來找漏**:官方說它找得出沒測到的地方,但不能當測試策略好不好的唯一指標。要量就用 AGP 的 `enableUnitTestCoverage = true`(會自動套 JaCoCo)或 Kover;兩者算出的分支涵蓋率可能不同,不跨工具比數字。
 - **故障證明挑本次需求**(共用規範第 5 條):例如拿掉 ViewModel 更新狀態那一行、讓假 Repository 丟錯、刪掉一個邊界檢查,確認對應的斷言翻紅、還原後翻綠。
 - **變異測試**(選配,補故障證明):

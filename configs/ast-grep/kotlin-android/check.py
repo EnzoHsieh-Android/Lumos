@@ -18,6 +18,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CATALOG = HERE.parents[2] / "skills" / "kotlin-idioms" / "checks-catalog.md"
+# 行為測試範本:型錄 C 列通電批次寫「範本 T<n>」時要在這份檔有 `## T<n> ` 那一節([[Projects/Android行為測試範本與架構測試_計劃]])
+TEMPLATES = HERE.parents[2] / "skills" / "kotlin-idioms" / "test-templates.md"
 # 三級:rules=會擋(error/warning);rules-review=語意覆核級(info,形狀分不出對錯、要盲判代理逐筆判,
 # [[Projects/規則包語意覆核級命中走盲判_計劃]] 接上前不擋);rules-hints=提示級(hint,預設不接)
 CONFIGS = (("rules", "sgconfig.yml"), ("rules-review", "sgconfig-review.yml"), ("rules-hints", "sgconfig-hints.yml"))
@@ -332,26 +334,15 @@ def catalog_problems(rules=None):
     i_dt, i_pend = text.find("\n## 情境決策表"), text.find("\n## 待查證")
     if i_dt < 0 or i_pend < 0:
         return [("<catalog>", "找不到〈情境決策表〉或〈待查證〉節")]
-    main, dt = text[:i_dt], text[i_dt:i_pend]
-    rows, seen = {}, set()
+    dt = text[i_dt:i_pend]
+    rows = main_rows(text, problems)   # 主表的讀法只在 main_rows 一處(編號重複、欄位數也在那裡報)
     # 〈來源縮寫〉表登記過的縮寫才算來源;TBD、TODO 這類大寫佔位字不算
     abbrs = _abbr_table(text)
     if abbrs is None:
         # 記一筆、照樣往下檢查(縮寫當空集合),一次報齊其他問題
         problems.append(("<catalog>", "找不到〈來源縮寫〉節(來源欄的縮寫要對照它)"))
         abbrs = {}
-    for ln in main.splitlines():
-        m = _MAIN_ROW_RE.match(ln)
-        if not m:
-            continue
-        rid, c = m.group(1), _cells(ln)
-        if rid in seen:
-            problems.append((rid, "編號重複"))
-        seen.add(rid)
-        if len(c) != _MAIN_COLS:
-            problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
-            continue
-        rows[rid] = c
+    for rid, c in rows.items():
         name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
         if not std or not wire or not batch:
             problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
@@ -399,6 +390,7 @@ def catalog_problems(rules=None):
         m = re.match(r"\[([A-Z]+-\d+)\]", r["message"])
         if m and m.group(1) in weak_ids and r["severity"] != "hint":
             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准 hint 級"))
+    problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
     return problems
 
 
@@ -523,6 +515,117 @@ def situation_sample_problems(lumos=None):
                 if got is not None:
                     out.append((rid, f"反例「{title}」沒提醒({v}:evidence 指第 {got[1]} 行就對得上;壞寫法被當成照做)"))
     return out
+
+
+_BEHAVIOR_RE = re.compile(r"行為測試或正向約束=([^;]*)")
+_TEMPLATE_VALUE_RE = re.compile(r"範本 (T\d+)")
+TEMPLATE_HEADING_RE = re.compile(r"^## (T\d+)(?:[ \t]|$)")   # 範本檔一組一節的標題;測試端也用這一條
+
+
+def behavior_value(batch_cell):
+    """通電批次格子裡「行為測試或正向約束=」那一段的值(到分號為止);沒有這一段回 None。
+    「範本 T<n>」只在這一段才算引用範本(型錄〈輸入與口徑〉的定義)。測試端也呼叫這一支,不另抄。"""
+    m = _BEHAVIOR_RE.search(batch_cell)
+    return m.group(1).strip() if m else None
+
+
+def main_rows(text=None, problems=None):
+    """型錄主表(〈情境決策表〉之前)欄數對的列 → {編號: 欄位}。主表的唯一讀法:catalog_problems、
+    template_problems 與測試都走這裡。給了 problems 就把編號重複、欄位數不對記進去(重複時後面那列為準)。"""
+    text = CATALOG.read_text(encoding="utf-8") if text is None else text
+    cut = text.find("\n## 情境決策表")
+    main = text if cut < 0 else text[:cut]
+    rows, seen = {}, set()
+    for ln in main.splitlines():
+        m = _MAIN_ROW_RE.match(ln)
+        if not m:
+            continue
+        rid, c = m.group(1), _cells(ln)
+        if rid in seen and problems is not None:
+            problems.append((rid, "編號重複"))
+        seen.add(rid)
+        if len(c) != _MAIN_COLS:
+            if problems is not None:
+                problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
+            continue
+        rows[rid] = c
+    return rows
+
+
+def _fence_regions(lines, strict):
+    """圍欄區段 → (區段清單, 收尾時還有沒有圍欄開著);區段是 (開頭行索引, 收尾行索引或 None)。
+    ★刻意的另一份★:規則照 CommonMark(https://spec.commonmark.org/0.31.2/#fenced-code-blocks),口徑跟
+    scripts/lumos 的 `_fence_regions` / `_visible_lines`(全檔唯一的圍欄判定)逐條對齊——縮排最多 3 格、
+    tab 開頭不算、收尾要同字元且長度不短於開頭、strict 時收尾行除圍欄字元只准空白;本檔零依賴(只用標準庫)、
+    scripts/lumos 沒有 .py 副檔名,不能 import 借用。兩份是否一致由 t_kotlin_template_fence_parity 機械比對。"""
+    fence, start, regions = None, None, []
+    for i, ln in enumerate(lines):
+        indent = len(ln) - len(ln.lstrip(" "))
+        s = ln.lstrip(" ")
+        if not (indent <= 3 and not ln.startswith("\t") and s.startswith(("```", "~~~"))):
+            continue
+        ch = s[0]
+        run = len(s) - len(s.lstrip(ch))
+        if fence is None:
+            fence, start = (ch, run), i
+            continue
+        if ch == fence[0] and run >= fence[1] and (not strict or s[run:].strip() == ""):
+            regions.append((start, i))
+            fence = None
+    if fence is not None:
+        regions.append((start, None))
+    return regions, fence is not None
+
+
+def _visible_lines(lines):
+    """圍欄外的行 → [(行號從 1 起, 原始行)]。先照 CommonMark 嚴格讀;讀完還有圍欄沒關,整份退回寬鬆讀法
+    (同字元、長度夠就算關)——跟 scripts/lumos 的 `_visible_lines` 同一個取捨。"""
+    def _scan(strict):
+        regions, unterminated = _fence_regions(lines, strict)
+        hidden = set()
+        for a, b in regions:
+            hidden.update(range(a, (b if b is not None else len(lines) - 1) + 1))
+        return [(i + 1, ln) for i, ln in enumerate(lines) if i not in hidden], unterminated
+    out, unterminated = _scan(True)
+    if unterminated:
+        out, _ = _scan(False)
+    return out
+
+
+def template_sections(text):
+    """範本檔 → [(組代號, 標題行索引)],只認圍欄外、符合 TEMPLATE_HEADING_RE 的標題。測試端切段也用這一支。"""
+    out = []
+    for no, ln in _visible_lines(text.splitlines()):
+        m = TEMPLATE_HEADING_RE.match(ln)
+        if m:
+            out.append((m.group(1), no - 1))
+    return out
+
+
+def template_problems(rows=None):
+    """通電批次的「行為測試或正向約束=」寫「範本 T<n>」的主表列,範本檔要有那一節(標題規則見
+    TEMPLATE_HEADING_RE,圍欄裡的不算);沒有就報那一列。值以「範本」開頭卻不是「範本 T<n>」整段
+    (例「範本 T3(備註)」「範本T3」)報格式錯,不靜默略過。範本檔不存在或不是 UTF-8 報一筆。
+    只驗「指得到那一節」,範本內容對不對靠實驗與驗證紀錄。不需要 ast-grep。"""
+    rows = main_rows() if rows is None else rows
+    refs, problems = [], []
+    for rid, c in rows.items():
+        v = behavior_value(c[9]) or ""
+        m = _TEMPLATE_VALUE_RE.fullmatch(v)
+        if m:
+            refs.append((rid, m.group(1)))
+        elif v.startswith("範本"):
+            problems.append((rid, f"「行為測試或正向約束=」的範本值要寫成「範本 T<n>」整段,這裡是「{v}」"))
+    if not refs:
+        return problems
+    if not TEMPLATES.is_file():
+        return [*problems, ("<templates>", "找不到範本檔")]
+    try:
+        text = TEMPLATES.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        return [*problems, ("<templates>", f"範本檔不是 UTF-8:第 {e.start} 個位元組讀不了({e.reason})")]
+    have = {g for g, _i in template_sections(text)}
+    return problems + [(rid, f"範本檔沒有 {g} 節") for rid, g in refs if g not in have]
 
 
 def message_problems(rules, cat_ids):
