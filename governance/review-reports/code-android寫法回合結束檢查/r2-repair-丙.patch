@@ -1,0 +1,1041 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index f47971cc2..1fe4ab3a4 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -28783,30 +28783,41 @@ def t_hooks_never_run_code_from_opened_folder():
+     # ci-status-hook 只跑 git、從設定檔讀值,不執行 lumos,所以它不需要那段解析函式。
+     # 用「檔案裡有沒有 which("lumos") 或 _trusted_lumos」當判準——會找 lumos 來跑的才算。
+     need = [n for n in all_hooks
+             if _re.search(r'which\(\s*["\']lumos["\']\s*\)|_trusted_lumos',
+                           (hooks_dir / n).read_text(encoding="utf-8"))]
+     check("★前置★ 現場成立: 真的有幾支會去找 lumos 來跑", len(need) >= 4, str(need))
+     bodies = {}
+     for name in need:
+         txt = (hooks_dir / name).read_text(encoding="utf-8")
+         m = _re.search(r"def _trusted_lumos\(\):.*?\n    return None\n", txt, _re.S)
+-        # 2026-11-06 起收工點名與收工寫法檢查從共用模組 _hookshared.py 匯入這支(Projects/Android寫法回合結束檢查與改檔前推列_計劃);
+-        # 那份本身也在這個目錄、照樣進下面的逐字比對,所以「有匯入共用模組那份」等於有那段解析函式。共用模組要真的有它。
+-        shared = (name != "_hookshared.py" and ("from _hookshared import" in txt or "import _hookshared" in txt) and "_trusted_lumos" in txt
+-                  and "def _trusted_lumos():" in (hooks_dir / "_hookshared.py").read_text(encoding="utf-8"))
+-        check(f"信任邊界: {name} 裡有那段解析函式(或從共用模組匯入)", bool(m) or shared, name)
++        # ★不認「從共用模組匯入」★(回合結束檢查代碼審 r1 合約席 F1、架構對齊席 F1,依 Systems/hook信任邊界〈2026-09-08 訂正〉:
++        # 跟安全邊界綁在一起的共用邏輯照逐字複本加守衛)。曾放寬成「匯入共用模組、檔裡提到這個名字」也算,
++        # 結果把呼叫換成從 PATH 找、在註解寫上這個名字,這條照綠。每支會找 lumos 來跑的 hook 都要自己定義這段。
++        check(f"信任邊界: {name} 裡有那段解析函式(自己的逐字複本)", bool(m), name)
+         if m:
+             bodies[name] = m.group(0)
++            # ★定義了還要真的用它找 lumos★(語法樹判,註解與說明文字不算):那段函式以外不准再呼叫 which("lumos"),而且要呼叫得到它
++            import ast as _ast
++            _tree = _ast.parse(txt)
++            _defs = [(n.lineno, n.end_lineno) for n in _ast.walk(_tree) if isinstance(n, _ast.FunctionDef) and n.name == "_trusted_lumos"]
++            _inside = lambda ln: any(a <= ln <= b for a, b in _defs)
++            _calls = [n for n in _ast.walk(_tree) if isinstance(n, _ast.Call) and not _inside(n.lineno)]
++            _fname = lambda c: c.func.attr if isinstance(c.func, _ast.Attribute) else (c.func.id if isinstance(c.func, _ast.Name) else "")
++            _which = [c.lineno for c in _calls if _fname(c) == "which" and c.args and isinstance(c.args[0], _ast.Constant) and c.args[0].value == "lumos"]
++            check(f"信任邊界: {name} 解析函式以外沒有自己從 PATH 找 lumos", not _which, f"{name} 第 {_which} 行")
++            check(f"信任邊界: {name} 真的呼叫那段解析函式", any(isinstance(c.func, _ast.Name) and c.func.id == "_trusted_lumos" for c in _calls), name)
+     check("信任邊界: 三支 hook 的解析函式逐字相同(改一支忘了另兩支,破口會悄悄長回來)",
+           len(set(bodies.values())) == 1,
+           f"有 {len(set(bodies.values()))} 種版本:{list(bodies)}")
++    check("信任邊界: 共用模組 _hookshared.py 沒有這段(它不在安全邊界的共用範圍)",
++          "_hookshared.py" not in need, str(need))
+ 
+     # ③ 沒有人再從「被打開的資料夾」組出 lumos 路徑(同樣掃全部)
+     for name in all_hooks:
+         txt = (hooks_dir / name).read_text(encoding="utf-8")
+         # 只看程式碼行,註解裡講這件事是應該的
+         code = "\n".join(l for l in txt.splitlines() if not l.lstrip().startswith("#"))
+         bad = [l for l in code.splitlines()
+                if _re.search(r'(root|project_root)\s*/\s*"scripts"\s*/\s*"lumos"', l)
+                or _re.search(r'parent\s*/\s*"scripts"\s*/\s*"lumos"', l)
+                or _re.search(r'\.parent(\.parent)+\s*/\s*"scripts"', l)]
+@@ -29281,20 +29292,29 @@ def t_hook_inner_timeout_always_below_outer():
+     # 正是這個專案一再踩到的那型。補上,不是把那句話刪掉。
+     import hashlib as _hl2, re as _re2
+     _sigs = {}
+     for _f in sorted(hooks_dir.glob("*.py")):
+         _txt = _f.read_text(encoding="utf-8")
+         _mm = _re2.search(r"_BUDGET_RATIO = .*?\n    return max\(_BUDGET_FLOOR,.*?\n", _txt, _re2.S)
+         if _mm:
+             _sigs.setdefault(_hl2.sha256(_mm.group(0).encode()).hexdigest(), []).append(_f.name)
+     check("★前置★ 現場成立: 至少五支 hook 有那段預算複本",
+           sum(len(v2) for v2 in _sigs.values()) >= 5, str(_sigs))
++    # ★用到預算的 hook 都要自己有那段★(回合結束檢查代碼審 r1 架構對齊席 F1:預算曾搬進共用模組、兩支 hook 改匯入,
++    # 上面的逐字比對只看「有複本的檔」,匯入的那兩支整個不在比對裡)。共用模組不准有它。
++    _have = {v3 for v2 in _sigs.values() for v3 in v2}
++    for _f in sorted(hooks_dir.glob("*.py")):
++        _code = "\n".join(l for l in _f.read_text(encoding="utf-8").splitlines() if not l.lstrip().startswith("#"))
++        if _f.name == "_hookshared.py":
++            check("★複本不准漂★: 共用模組沒有預算那段(它跟安全邊界綁在一起,照逐字複本)", _f.name not in _have, "")
++        elif _re2.search(r"(?<!def )\b_inner_budget\(", _code):
++            check(f"★複本不准漂★: {_f.name} 用到預算,自己就有那段複本(不准從共用模組匯入)", _f.name in _have, _f.name)
+     check("★複本不准漂★: 各 hook 的逾時預算那段逐字相同(碼裡宣稱有守衛,這就是那個守衛)",
+           len(_sigs) == 1, f"{len(_sigs)} 種版本:{ {k[:8]: v2 for k, v2 in _sigs.items()} }")
+ 
+ 
+ def t_lens_tests_avoid_branch_dependent_range():
+     """[鏡頭測試範圍固定 S2] 對真實 repo 呼叫 dispatch-lens 的測試,不准用「…..HEAD」當範圍——那段範圍就是當下分支的改動,
+     改到讓鏡頭算很久的東西時測試就逾時(2026-10-06 合併請求 #14:改一篇計劃筆記,鏡頭 3 分 14 秒,兩支認領測試卡過 180 秒)。
+     改用 _lens_smallest_commit 挑主線上改動最小的那一個提交。翻紅釘:任一支改回 f"{ml}..HEAD" → 紅並列出函式名。"""
+     print("t_lens_tests_avoid_branch_dependent_range")
+     import re as _re
+@@ -65763,20 +65783,23 @@ def t_handoff_view():
+         r = run(vault, "handoff", "沒這個節點")
+         check("節點不存在 rc2 + 擋下", r.returncode == 2 and "擋下" in r.stderr, r.stderr)
+     finally:
+         shutil.rmtree(root, ignore_errors=True)
+ 
+ 
+ _HOOK_PURE_PROBE = r'''
+ import importlib.util as u, sys, os, json, sysconfig
+ hook = os.path.realpath(sys.argv[1])
+ shared = os.path.join(os.path.dirname(hook), "_hookshared.py")
++# 共用模組那條放寬只給「真的匯入它」的 hook(回合結束檢查代碼審 r1 合約席 F7);在裝稽核鉤子之前讀,不算 hook 的動作
++_hsrc = open(hook, encoding="utf-8").read()
++imports_shared = "from _hookshared import" in _hsrc or "import _hookshared" in _hsrc
+ paths = sysconfig.get_paths()
+ # r3 外家 #7:只准標準庫本體(stdlib / platstdlib),不准 site-packages、不准整個 Python 安裝目錄;
+ # 路徑先 realpath 再用 commonpath 驗目錄邊界(startswith 會把 /lib/python3.14-foo 也放行)
+ std = set()
+ for s in (paths.get("stdlib"), paths.get("platstdlib")):
+     if s:
+         std.add(os.path.realpath(s))
+ def under_std(p):
+     p = os.path.realpath(str(p))
+     for s in std:
+@@ -65797,41 +65820,48 @@ def is_write(mode, flags):
+     return (f & os.O_ACCMODE) != os.O_RDONLY or bool(f & (os.O_CREAT | os.O_TRUNC | os.O_APPEND))
+ DENY = ("subprocess.", "os.system", "os.exec", "os.spawn", "os.fork", "os.posix_spawn", "os.kill", "os.putenv", "os.unsetenv",
+         "os.chdir", "os.remove", "os.unlink", "os.rename", "os.mkdir", "os.rmdir", "os.chmod", "os.chown", "os.link", "os.symlink",
+         "os.truncate", "os.utime", "shutil.", "socket.", "http.", "urllib.", "ftplib.", "smtplib.", "poplib.", "imaplib.",
+         "webbrowser.", "ctypes.", "tempfile.", "pty.", "signal.", "sys.setprofile", "sys.settrace", "glob.", "mmap.", "sqlite3.")
+ bad = []
+ _depth = [0]   # 檢查深度:稽核鉤子與 stat 包裝在做路徑判定時自己也會 lstat/realpath,深度>0 的呼叫一律放行不記
+ def audit(ev, args):
+     _depth[0] += 1
+     try:
+-        _audit_inner(ev, args)
++        # 只在要判路徑的事件取呼叫者:sys._getframe 自己也是稽核事件,每次都取會無限遞迴
++        _audit_inner(ev, args, sys._getframe(1).f_code.co_filename if ev in ("open", "os.listdir", "os.scandir") else "")
+     finally:
+         _depth[0] -= 1
+-def _audit_inner(ev, args):
++def _audit_inner(ev, args, caller=""):
++    # caller:直接呼叫這個動作的那一層 Python 程式碼在哪支檔;匯入系統自己的動作是 <frozen importlib...>,hook 頂層碼是 hook 檔本身
++    by_import = caller.startswith("<frozen importlib")
+     if ev == "open":
+         path = args[0] if len(args) > 0 else ""
+         mode = args[1] if len(args) > 1 else None
+         flags = args[2] if len(args) > 2 else 0
+         if not isinstance(path, (str, bytes, os.PathLike)):   # 用 fd 開的看不出目標,保守算違規
+             bad.append([ev, repr(path), repr(mode)]); return
+         p = os.path.realpath(os.fsdecode(path))
+         own_cache = os.path.join(os.path.dirname(hook), "__pycache__")   # Python 匯入系統讀 hook 自己的快取,不是 hook 的動作
+         in_own_cache = os.path.commonpath([p, own_cache]) == own_cache if p.startswith(os.path.dirname(hook)) else False
+         # 2026-11-06:收工點名從同目錄的共用模組 _hookshared.py 匯入(Projects/Android寫法回合結束檢查與改檔前推列_計劃 範圍 2)。
+-        # 那支是 hook 本體的一部分(一起安裝、一起進錨點清單),讀它的原始碼等同讀 hook 自己;只放這一支,別的兄弟檔照樣違規
+-        if is_write(mode, flags) or not (p == hook or p == shared or in_own_cache or under_std(p)):
++        # 那支是 hook 本體的一部分(一起安裝、一起進錨點清單),讀它的原始碼等同讀 hook 自己;只放這一支、只放真的匯入它的 hook、
++        # 只放匯入系統自己去讀的那一次,別的兄弟檔與 hook 頂層碼自己去讀照樣違規
++        shared_ok = p == shared and imports_shared and by_import
++        if is_write(mode, flags) or not (p == hook or shared_ok or in_own_cache or under_std(p)):
+             bad.append([ev, p, repr(mode), int(flags) if isinstance(flags, int) else repr(flags)])
+     elif ev in ("os.listdir", "os.scandir"):
+         p = str(args[0]) if args and args[0] is not None else "."
+-        # 匯入系統找同目錄的共用模組時會列一次 hook 自己的目錄(同上那條放寬,只放這一個目錄)
+-        if not (under_std(os.path.realpath(p)) or os.path.realpath(p) == os.path.dirname(hook)):
++        # 匯入系統找同目錄的共用模組時會列一次 hook 自己的目錄(同上那條放寬):只給真的匯入共用模組的 hook、
++        # 只給匯入系統自己列的那一次(hook 頂層碼自己去列同一個目錄照樣違規;代碼審 r1 合約席 F7)
++        own_dir_ok = os.path.realpath(p) == os.path.dirname(hook) and imports_shared and by_import
++        if not (under_std(os.path.realpath(p)) or own_dir_ok):
+             bad.append([ev, p])
+     elif ev.startswith(DENY):
+         bad.append([ev, str(args)[:120]])
+ sys.addaudithook(audit)
+ # r4 外家 #8:stat 家族在 CPython 沒有稽核事件(os.stat("/etc/passwd") 零事件),匯入期間把它們包起來套同一套路徑政策。
+ # 只包 os 模組的名字:importlib 自己走 posix 模組的原函式,不受影響;hook 裡 os.stat / os.path.exists / pathlib 都會經過這裡。
+ def _wrap_pathfn(name):
+     orig = getattr(os, name)
+     def wrapped(path, *a, **kw):
+         if _depth[0] == 0:   # 政策檢查裡的 realpath 自己會呼叫 os.lstat,深度>0 就放行,不然無限遞迴
+@@ -65856,20 +65886,23 @@ sys.stdout.write("AUDIT:" + json.dumps(bad, ensure_ascii=False))
+ '''
+ 
+ 
+ def t_handoff_hook_import_is_pure():
+     """r1 外家 #5:`lumos handoff` 用 importlib 匯入收工 hook 檔,等於執行它的頂層碼——唯讀查詢不該有副作用。
+     不搬 hook(範圍刀:不動 hook),改用這條鎖住「匯入不產生任何外部動作」。
+     ★r2 外家:只看印字與 tmp 留檔鎖不住開程序 / 連網 / 讀別的檔 / 寫 tmp 外的路徑★ → 改用 Python 稽核鉤子
+     (sys.addaudithook)全程監看匯入:open 只准讀 hook 自己的原始碼與標準庫本體(stdlib/platstdlib,realpath+commonpath 驗邊界;
+     site-packages 與 Python 安裝目錄其他部分都不算——r3 外家 #7);寫入意圖同時看 mode 字串與 os.open 的數字 flags(r3 外家 #6);
+     listdir/scandir 只准標準庫;stat/lstat/access/readlink/statvfs(沒有稽核事件,r4 外家 #8)在匯入期間包起來套同一套政策;
++    ★唯一的放寬★(2026-11-06 回合結束檢查;代碼審 r1 合約席 F7 收窄):真的匯入同目錄共用模組 _hookshared.py 的 hook,
++    匯入系統自己去讀那支原始碼、列一次 hook 所在目錄不算違規——判準是「hook 原始碼有匯入它」加「直接呼叫的那一層是匯入系統」,
++    hook 頂層碼自己去讀或去列照樣違規,沒匯入共用模組的 hook 一律不放;
+     子程序、socket、http/urllib、shutil、os 的改檔系統呼叫、ctypes、tempfile、signal、glob… 一律違規。
+     另外 stdout/stderr 必須乾淨(hook 印字會污染 handoff 的 JSON 輸出)、tmp 不得留檔。
+     PYTHONDONTWRITEBYTECODE=1 是關掉 Python 自己寫 __pycache__,那不是 hook 的動作。
+     ★宣稱的精確範圍★:鎖的是「寫/建/刪/改權限任何檔、開子程序、開 socket、讀 hook 與標準庫以外的檔案內容 / 目錄清單 / 中繼資料」。
+     ★明寫的殘餘面(不在鎖內)★:讀程序自身狀態(os.getcwd / os.environ / os.getpid / time)、經 posix 模組直呼原函式
+     (posix.stat 不經 os 名字)、以及 CPython 其他沒有稽核事件又不經 os 模組名字的讀取原語。要縮這個面得改 hook 檔或
+     換成不執行 hook,兩者都在範圍刀外;殘餘面是否可接受歸人裁(2026-09-07 r4 後攤給 Enzo)。
+     翻紅釘:hook 頂層塞 print / subprocess.run / open 別的檔 / socket.socket / 寫檔 / listdir / os.open(O_WRONLY) 自己 /
+     讀 sys.executable 各一種,這條都要紅。"""
+     import json as _j
+@@ -130321,25 +130354,28 @@ def t_stop_lint_hook_registration():
+ 
+ def t_hookshared_move_keeps_graph_sync():
+     """[S14] 共用程式從 check-graph-sync.py 搬進 _hookshared.py:收工點名對外的函式名照樣找得到、而且就是共用模組那一份;
+     共用模組只用標準庫、不做模組層 I/O;scripts/hooks/claude/ 底下沒有鉤子用 importlib 載另一支鉤子。
+     (check-graph-sync 的既有測試全綠由 -k graph_sync/stop_block/cgs 那幾支照跑驗,不在這裡重寫一次。)"""
+     print("t_hookshared_move_keeps_graph_sync")
+     import ast as _ast
+     hooks = Path(GRAPHCTL).resolve().parent / "hooks" / "claude"
+     cgs = _load_hook_mod("cgs_shared_move", "check-graph-sync.py")
+     shared = sys.modules.get("_hookshared")
+-    names = ("_cache_dir_under_home", "_mkdir_under_home", "_stop_dir_ok", "_safe_path", "_trusted_lumos", "_harden_git_env",
+-             "_GIT_UNSAFE_CONFIG", "_outer_budget", "_inner_budget")
++    names = ("_cache_dir_under_home", "_mkdir_under_home", "_stop_dir_ok", "_safe_path", "_harden_git_env",
++             "_GIT_UNSAFE_CONFIG", "_mark_name", "_claim_mark")
+     check("★前置★ 共用模組被匯入了", shared is not None, "")
+     for n in names:
+         check(f"S14 check-graph-sync.{n} 找得到、而且是共用模組那一份", hasattr(cgs, n) and shared is not None and getattr(cgs, n) is getattr(shared, n, None), n)
++    # 安全邊界那兩段(可信來源、逾時預算)照 Systems/hook信任邊界 是每支 hook 自己的逐字複本,不在共用模組(代碼審 r1 丁組)
++    for n in ("_trusted_lumos", "_outer_budget", "_inner_budget"):
++        check(f"S14 check-graph-sync.{n} 是自己的複本、共用模組沒有它", hasattr(cgs, n) and shared is not None and not hasattr(shared, n), n)
+     src = (hooks / "_hookshared.py").read_text(encoding="utf-8")
+     tree = _ast.parse(src)
+     mods = {a.name.split(".")[0] for n in _ast.walk(tree) if isinstance(n, _ast.Import) for a in n.names}
+     mods |= {n.module.split(".")[0] for n in _ast.walk(tree) if isinstance(n, _ast.ImportFrom) and n.module}
+     check("S14 共用模組只用標準庫", mods <= set(sys.stdlib_module_names), str(mods - set(sys.stdlib_module_names)))
+     top_calls = [n for n in tree.body if isinstance(n, _ast.Expr) and isinstance(n.value, _ast.Call)]
+     check("S14 共用模組沒有模組層呼叫(不做模組層 I/O)", not top_calls, str([_ast.dump(n)[:80] for n in top_calls]))
+     for f in sorted(hooks.glob("*.py")):
+         t = f.read_text(encoding="utf-8")
+         check(f"S14 {f.name} 沒有用 importlib 載另一支鉤子", "spec_from_file_location" not in t and "SourceFileLoader" not in t, f.name)
+@@ -130561,12 +130597,825 @@ def t_catalog_stop_triggers():
+     print("t_catalog_stop_triggers")
+     m = _ktpack()
+     for w in ("Composable", "Inject", "Modifier"):
+         check(f"S11 {w} 在停用字表", w in m.STOP_TRIGGERS, "")
+         cells = {"情境": "某情境", "觸發字": f"{w}、rememberSaveable", "來源": "https://developer.android.com/x"}
+         probs = m._dt_row_lint(lambda k: cells.get(k, ""))
+         check(f"S11 觸發字含 {w} → 報觸發字含常用字", any("觸發字含常用字" in p and w in p for p in probs), str(probs))
+     check("S11 改寫後的型錄通過檢查", m.catalog_problems() == [], str(m.catalog_problems()[:5]))
+ 
+ 
++# ── 回合結束檢查代碼審 r1 修正(governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 五組)──────────
++# 白話:工作樹模式不再把命令字串交給 shell、放行指令照抄得動、靜默失效的路徑都留下訊號、只讀要用的內容、
++# 鉤子共用邏輯照 Systems/hook信任邊界 分流。每支開頭的★前置★斷言確認現場成立;在修正前的版本上各自翻紅(r1-fix.json 記)。
++
++def _r1_tool_dead(pid, wait=3.0):
++    """pid 那支程序是不是已經不在(或只剩等人收的殭屍):ps 查不到或狀態是 Z 就算不在。"""
++    import subprocess as _sp
++    import time as _t
++    t0 = _t.monotonic()
++    while True:
++        r = _sp.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
++        st = r.stdout.strip()
++        if not st or st.startswith("Z"):
++            return True
++        if _t.monotonic() - t0 > wait:
++            return False
++        _t.sleep(0.1)
++
++
++def t_lwt_r1_shellfree_argv():
++    """[r1 甲] 工作樹模式:佔位符不准當旗標值(--filter/--globs/--format 的值、--x=佔位符、夾在別的字裡);
++    通過的命令照參數清單、不開 shell 跑;{LINT_FILES} 一檔一個參數、{LINT_FILES_CSV} 一個逗號串、輸出導向拿掉;
++    檔名含 $(…)、引號、空白的新檔照樣被檢查而且不執行任何東西。
++    出身:正確性席 F1 實跑 `--filter {LINT_FILES}` 加檔名 `x$(touch${IFS}PWN2).kt`,repo 根多出 PWN2。"""
++    print("t_lwt_r1_shellfree_argv")
++    import os as _os
++    import shlex as _shlex
++    import shutil as _sh
++    import subprocess as _sp
++    import time as _t
++    m = _lng_module()
++    cfg = _lwt_pack_cfg()
++    q = _shlex.quote(str(cfg))
++    check("★前置★ 範本命令照樣通過", m._lint_wt_allow(_lwt_sg_cmd(), _lwt_pack_cfg().parents[3])[0] is not None,
++          str(m._lint_wt_allow(_lwt_sg_cmd(), _lwt_pack_cfg().parents[3])))
++    root_tc = _lwt_pack_cfg().parents[3]
++    for label, cmd in {
++        "--filter 的值是 {LINT_FILES}": f"ast-grep scan --config {q} --filter {{LINT_FILES}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}",
++        "--globs 的值是 {LINT_FILES_CSV}": f"ast-grep scan --config {q} --globs {{LINT_FILES_CSV}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}",
++        "--format 的值是 {LINT_FILES}": f"ast-grep scan --config {q} --format {{LINT_FILES}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}",
++        "--filter={LINT_FILES}": f"ast-grep scan --config {q} --filter={{LINT_FILES}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}",
++        "--format={LINT_FILES_CSV}": f"ast-grep scan --config {q} --format={{LINT_FILES_CSV}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}",
++        "佔位符夾在別的字裡": f"ast-grep scan --config {q} --filter x{{LINT_FILES}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}",
++    }.items():
++        g, w = m._lint_wt_allow(cmd, root_tc)
++        check(f"r1甲 {label} → 不通過", g is None and bool(w), f"{g!r} {w!r}")
++    # 參數清單:佔位符整詞展開、導向拿掉
++    allowed, _w = m._lint_wt_allow(f"ast-grep scan --config {q} --format sarif {{LINT_FILES}} > {{LINT_SARIF_OUT}}", root_tc)
++    argv = m._lint_wt_argv(allowed, ["/r/.lumos/lintbase-x/head/app/a b.kt", "/r/.lumos/lintbase-x/head/app/x$(id).kt"], "/r")
++    check("r1甲 {LINT_FILES} 一檔一個參數、原樣不跳脫、導向拿掉",
++          argv == ["ast-grep", "scan", "--config", _os.path.realpath(str(cfg)), "--format", "sarif",
++                   "/r/.lumos/lintbase-x/head/app/a b.kt", "/r/.lumos/lintbase-x/head/app/x$(id).kt"], str(argv))
++    allowed2, _w = m._lint_wt_allow(f"ast-grep scan --config {q} {{LINT_FILES_CSV}} > {{LINT_SARIF_OUT}}", root_tc)
++    argv2 = m._lint_wt_argv(allowed2, ["/r/.lumos/lintbase-x/head/a.kt", "/r/.lumos/lintbase-x/head/b c.kt"], "/r")
++    check("r1甲 {LINT_FILES_CSV} 一個逗號串參數(相對命令執行目錄)", argv2[-1] == ".lumos/lintbase-x/head/a.kt,.lumos/lintbase-x/head/b c.kt"
++          and len(argv2) == 5, str(argv2))
++    helper = Path(tempfile.mkdtemp(prefix="gctl-r1sf-"))
++    _lwt_fake_sg(helper)
++    roots = []
++    try:
++        # 端到端:正確性席的繞法(宣告 --filter {LINT_FILES})→ 不跑、記號檔不出現
++        evil = f"ast-grep scan --config {q} --filter {{LINT_FILES}} {{LINT_FILES}} > {{LINT_SARIF_OUT}}"
++        root, git = _lwt_repo(cmds=[evil])
++        roots.append(root)
++        since = _t.time()
++        _lwt_put(root, "app/x$(touch${IFS}PWN2).kt", "fun n() {\n" + _LWT_BAD + "}\n", since + 5)
++        r = _lwt_run(root, helper, "--worktree", "--since", str(since))
++        check("r1甲 宣告 --filter {LINT_FILES} 加惡意檔名 → 不執行(repo 根沒有記號檔)", not (root / "PWN2").exists(), str(list(root.iterdir())))
++        check("r1甲 那條宣告被拒、這回合沒檢查到(rc3)", r.returncode == 3 and "工作樹模式不跑" in (r.stdout + r.stderr), (r.stdout + r.stderr)[-400:])
++        # 端到端:合格命令 + 檔名含 $(…)、引號、空白 → 照樣檢查、不執行
++        root, git = _lwt_repo()
++        roots.append(root)
++        since = _t.time()
++        weird = "app/w$(touch${IFS}PWN3)'q \"d.kt"
++        _lwt_put(root, weird, "fun n() {\n" + _LWT_BAD + "}\n", since + 5)
++        log = helper / "argv.jsonl"
++        log.unlink(missing_ok=True)
++        r = _lwt_run(root, helper, "--worktree", "--since", str(since), "--json", env={"FAKE_SG_LOG": str(log)})
++        j = _lwt_json(r)
++        check("r1甲 怪檔名的新檔照樣被檢查(rc1、new 有它)", r.returncode == 1 and any(c.get("file") == weird for c in j.get("new") or []),
++              f"rc={r.returncode} {(r.stdout + r.stderr)[-500:]}")
++        check("r1甲 怪檔名不執行任何東西", not (root / "PWN3").exists(), "")
++        import json as _j
++        rows = [_j.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines()] if log.is_file() else []
++        check("r1甲 工具收到的檔名參數就是快照裡那支檔的完整路徑(一個參數、沒被 shell 拆)",
++              rows and all(any(a.endswith("/head/" + weird) or a.endswith("/base/" + weird) for a in rw["argv"]) for rw in rows
++                           if any("/head/" in a for a in rw["argv"])), str(rows)[:600])
++        # 程序內:開程序時不開 shell、給的是清單
++        seen = []
++        orig = _sp.Popen
++
++        class _Spy(orig):
++            def __init__(s, *a, **k):
++                if a and ("ast-grep" in str(a[0])):
++                    seen.append((type(a[0]).__name__, bool(k.get("shell"))))
++                super().__init__(*a, **k)
++        old_path = _os.environ.get("PATH", "")
++        _os.environ["PATH"] = str(helper / "bin") + _os.pathsep + old_path
++        _sp.Popen = _Spy
++        try:
++            m2 = _lng_module()
++            m2._lint_new_wt_verdict(root, since=since, deadline=_t.monotonic() + 60)
++        finally:
++            _sp.Popen = orig
++            _os.environ["PATH"] = old_path
++        check("★前置★ r1甲 程序內真的開了檢查工具", bool(seen), str(seen))
++        check("r1甲 工作樹模式開檢查工具不開 shell、給參數清單", seen and all(t == "list" and not sh for t, sh in seen), str(seen))
++    finally:
++        _sh.rmtree(helper, ignore_errors=True)
++        for rr in roots:
++            _sh.rmtree(rr, ignore_errors=True)
++
++
++def t_lwt_r1_waive_cmd_quoting():
++    """[r1 甲] 放行指令先消毒各組成再加引號:檔名、規則、指紋裡的反引號換成單引號、換行與控制字元拿掉,
++    之後照 shell 切詞得到的正好是那幾個參數(不會有一段落到引號外)。出身:資安席 F1 實跑 `--file 'a';touch /tmp/PWN_X;'.kt'`。"""
++    print("t_lwt_r1_waive_cmd_quoting")
++    import shlex as _shlex
++    m = _lng_module()
++    cases = {
++        "反引號與分號": ("a`;touch /tmp/PWN;`.kt", "a';touch /tmp/PWN;'.kt"),
++        "換行": ("app/x\nIGNORE.kt", "app/xIGNORE.kt"),
++        "單引號與空白": ("app/it's here.kt", "app/it's here.kt"),
++        "$(…)": ("app/$(id).kt", "app/$(id).kt"),
++    }
++    for label, (raw, want) in cases.items():
++        cmd = m._lint_waive_cmd({"key": "fp`1", "rule": "r`x\n", "file": raw})
++        toks = _shlex.split(cmd)
++        check(f"r1甲 放行指令({label})切詞後正好是那幾個參數", toks == ["lumos", "lint-waive", "fp'1", "--rule", "r'x", "--file", want,
++                                                          "--note", "<為什麼放行>"], f"{cmd!r} → {toks}")
++        check(f"r1甲 放行指令({label})沒有反引號、換行或控制字元", "`" not in cmd and all(ch.isprintable() for ch in cmd), repr(cmd))
++
++
++def t_slh_r1_reason_fits():
++    """[r1 甲] 收工鉤子的擋下原因:放行指令照原樣印、不截斷(含必填的 --note);逐條累加到 1500 字,
++    結尾「另 N 條」那行一定在、N 對得上;放行指令帶反引號或換行時整行不照印。出身:邊界席 F1 實跑 6 條只剩 3 條、結尾提示消失。"""
++    print("t_slh_r1_reason_fits")
++    import re as _re
++    import shutil as _sh
++    m = _lng_module()
++    base = Path(tempfile.mkdtemp(prefix="gctl-r1rf-"))
++    try:
++        env, home, repo, _lb = _slh_env(base)
++
++        def item(i, deep=True):
++            f = (f"app/src/main/java/com/example/feature/home{i}/presentation/viewmodel/LoginViewModel{i}.kt" if deep else f"app/A{i}.kt")
++            rule = _LWT_RULE if deep else "r"
++            c = {"key": f"{i:016x}", "rule": rule, "file": f, "line": i + 1}
++            return {"file": f, "line": i + 1, "rule": rule, "message": _LWT_MSG if deep else "m", "fp": c["key"], "waive_cmd": m._lint_waive_cmd(c)}
++
++        def block_reason(sess, new):
++            _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": sess, "prompt_id": "p", "cwd": str(repo)}, env)
++            _slh_plan(base, {"lint": {"rc": 1, "stdout": _slh_lint_json(f"{abs(hash(sess)) % (1 << 60):016x}", new)}})
++            r = _slh_run({"hook_event_name": "Stop", "session_id": sess, "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False}, env)
++            b = _slh_block(r)
++            return b["reason"] if b else ""
++        six = [item(i) for i in range(6)]
++        check("★前置★ 真格式的放行指令超過 160 字", all(len(x["waive_cmd"]) > 160 for x in six), str(len(six[0]["waive_cmd"])))
++        rs = block_reason("rf1", six)
++        shown = [x for x in six if f"    放行:{x['waive_cmd']}" in rs]
++        check("r1甲 6 條長路徑:整段不超過 1500 字", 0 < len(rs) <= 1500, str(len(rs)))
++        check("r1甲 印出來的每條放行指令都完整(含 --note)", shown and all(rs.count(x["waive_cmd"]) == 1 for x in shown)
++              and not _re.search(r"放行:.*--note $", rs, _re.M), rs[-600:])
++        mm = _re.search(r"(另 (\d+) 條,跑 lumos lint-new --worktree --all 看全部)", rs)
++        check("r1甲 結尾「另 N 條」那行在、N = 總數減印出的條數", (len(shown) == 6 and mm is None) or (mm and int(mm.group(2)) == 6 - len(shown)),
++              f"shown={len(shown)} {rs[-300:]}")
++        check("r1甲 沒有一條被攔腰截斷(每個「•」那條都跟著它的放行行)", rs.count("  • ") == len(shown), rs[-400:])
++        twelve = [item(i, deep=False) for i in range(12)]
++        rs = block_reason("rf2", twelve)
++        check("r1甲 12 條短路徑:印 10 條、結尾另 2 條", rs.count("  • ") == 10 and "另 2 條" in rs, rs[-300:])
++        bad = dict(item(1, deep=False), waive_cmd="lumos lint-waive x --file 'a`b'")
++        rs = block_reason("rf3", [bad])
++        check("r1甲 放行指令帶反引號 → 那行不照印、不改字元", "a`b" not in rs and "a'b" not in rs and "放行:" in rs, rs[-300:])
++    finally:
++        _sh.rmtree(base, ignore_errors=True)
++
++
++def t_lwt_r1_space_path_blob():
++    """[r1 乙] 新增的檔路徑含空白(HEAD 沒有它):git cat-file --batch 回 `HEAD:<路徑> missing`,以行尾判、不崩;
++    整次照常檢查(rc1、JSON 有它)。git 讀不出時回 None(整次沒檢查到),不當成全部是新檔。
++    出身:正確性席 F2、資源席 F2 各自實跑 `ValueError: invalid literal for int()`、rc1 沒 JSON、鉤子靜默放行。"""
++    print("t_lwt_r1_space_path_blob")
++    import shutil as _sh
++    import time as _t
++    helper = Path(tempfile.mkdtemp(prefix="gctl-r1sp-"))
++    _lwt_fake_sg(helper)
++    root, git = _lwt_repo(files={"app/Old.kt": _LWT_OLD, "app/x missing.kt": "package app\n"})
++    nonrepo = Path(tempfile.mkdtemp(prefix="gctl-r1nr-"))
++    try:
++        m = _lng_module()
++        got = m._lint_wt_blobs(root, ["app/sp ace.kt", "app/Old.kt", "app/x missing.kt", "app/no such.kt"])
++        check("r1乙 HEAD 沒有的含空白路徑 → None、其他照讀", isinstance(got, dict) and got.get("app/sp ace.kt") is None
++              and got.get("app/no such.kt") is None and got.get("app/Old.kt") == _LWT_OLD.encode() and got.get("app/x missing.kt") == b"package app\n",
++              str(got)[:300])
++        check("r1乙 git 讀不出(不是 repo)→ None,不是「全部當新檔」", m._lint_wt_blobs(nonrepo, ["a.kt"]) is None,
++              str(m._lint_wt_blobs(nonrepo, ["a.kt"])))
++        since = _t.time()
++        _lwt_put(root, "app/sp ace.kt", "fun n() {\n" + _LWT_BAD + "}\n", since + 5)
++        _lwt_put(root, "app/x missing.kt", "package app\nfun m() {\n" + _LWT_BAD + "}\n", since + 5)
++        r = _lwt_run(root, helper, "--worktree", "--since", str(since), "--json")
++        j = _lwt_json(r)
++        files = sorted({c.get("file") for c in j.get("new") or []})
++        check("r1乙 新增含空白路徑的檔 → rc1、JSON 有它(不崩)", r.returncode == 1 and "Traceback" not in r.stderr and "app/sp ace.kt" in files,
++              f"rc={r.returncode} {files} {r.stderr[-400:]}")
++        check("r1乙 HEAD 已有、名字帶 missing 的檔照常比基準", "app/x missing.kt" in files, str(files))
++    finally:
++        for d in (helper, root, nonrepo):
++            _sh.rmtree(d, ignore_errors=True)
++
++
++def _r1_hook_kinds(repo):
++    import json as _j
++    p = Path(repo) / "governance" / "runtime" / "hook-events.jsonl"
++    if not p.is_file():
++        return []
++    return [_j.loads(ln).get("kind") for ln in p.read_text(encoding="utf-8").splitlines()
++            if ln.strip() and '"stop-lint-hook"' in ln]
++
++
++def t_slh_r1_marks_swallowed():
++    """[r1 乙] 鉤子吞掉的逾時與失敗要自己記(_hookevent.mark),不然 guard 記成 ok、lumos enforcement 永遠是綠的:
++    逾時 → timeout;lint-new rc2、rc1 但最後一行不是 JSON、rc3 環境不可用 → error;rc3 因預算沒跑到 → timeout;
++    刻意不查的 rc3 與真擋下照記 ok(對照)。出身:邊界席 F2 實跑逾時記成 ok。"""
++    print("t_slh_r1_marks_swallowed")
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import signal as _sig
++    base = Path(tempfile.mkdtemp(prefix="gctl-r1mk-"))
++    leftovers = []
++    try:
++        env, home, repo, _lb = _slh_env(base)
++
++        def one(plan, budget="30"):
++            (base / "hang.json").unlink(missing_ok=True)
++            _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "mk", "prompt_id": "p", "cwd": str(repo)}, env)
++            _slh_plan(base, plan)
++            before = len(_r1_hook_kinds(repo))
++            _slh_run({"hook_event_name": "Stop", "session_id": "mk", "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False}, env,
++                     args=("--budget", budget))
++            if (base / "hang.json").is_file():
++                h = _j.loads((base / "hang.json").read_text(encoding="utf-8"))
++                leftovers.extend([h.get("tool"), h.get("lint")])
++            ks = _r1_hook_kinds(repo)
++            return ks[before:]
++
++        def unchecked(undone, status="not-checked"):
++            return _j.dumps({"status": status, "rc_class": "unchecked", "batch": "", "total": 0, "new": [], "undone": undone,
++                             "skipped": [], "reason": "x"}) + "\n"
++        got = one({"lint": {"rc": 1, "stdout": _slh_lint_json("a" * 16, [_slh_item()])}})
++        check("★前置★ r1乙 鉤子跑完會在 repo 記一筆事件(對照:真擋下記 ok)", got == ["ok"], str(got))
++        check("r1乙 lint-new 逾時 → 記 timeout", one({"lint": {"hang": "ignore"}}, budget="3") == ["timeout"], str(_r1_hook_kinds(repo)[-2:]))
++        check("r1乙 lint-new rc2 → 記 error", one({"lint": {"rc": 2, "stderr": "usage"}}) == ["error"], str(_r1_hook_kinds(repo)[-2:]))
++        check("r1乙 rc1 但最後一行是 traceback → 記 error", one({"lint": {"rc": 1, "stdout": "Traceback\nValueError: x\n"}}) == ["error"],
++              str(_r1_hook_kinds(repo)[-2:]))
++        check("r1乙 rc3 環境不可用 → 記 error", one({"lint": {"rc": 3, "stdout": unchecked([{"kind": "env", "cmd": "x"}], "env-unavailable")}}) == ["error"],
++              str(_r1_hook_kinds(repo)[-2:]))
++        check("r1乙 rc3 因預算沒跑到 → 記 timeout", one({"lint": {"rc": 3, "stdout": unchecked([{"kind": "budget", "cmd": "x"}])}}) == ["timeout"],
++              str(_r1_hook_kinds(repo)[-2:]))
++        check("r1乙 rc3 刻意不查(合併中、超過上限)→ 記 ok(對照)", one({"lint": {"rc": 3, "stdout": unchecked([])}}) == ["ok"],
++              str(_r1_hook_kinds(repo)[-2:]))
++    finally:
++        for g in leftovers:
++            if g:
++                try:
++                    _os.killpg(g, _sig.SIGKILL)
++                except OSError:
++                    pass
++        _sh.rmtree(base, ignore_errors=True)
++
++
++def t_slh_r1_bad_start_payload():
++    """[r1 乙] 回合起點紀錄被改壞(t 是字串、清單、inf)或 payload 的 cwd 不是字串:不丟例外、rc0、不擋,起點壞的印「沒記到起點」。
++    出身:邊界席 F3 實跑 `ValueError: could not convert string to float`、`TypeError`(Path(5)),鉤子 rc1。"""
++    print("t_slh_r1_bad_start_payload")
++    import json as _j
++    import shutil as _sh
++    base = Path(tempfile.mkdtemp(prefix="gctl-r1bs-"))
++    try:
++        env, home, repo, _lb = _slh_env(base)
++        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "bs", "prompt_id": "p", "cwd": str(repo)}, env)
++        rec = home / ".cache" / "lumos" / "stop-turn" / "bs"
++        check("★前置★ r1乙 起點紀錄檔在", rec.is_file(), "")
++        _slh_plan(base, {"lint": {"rc": 1, "stdout": _slh_lint_json("b" * 16, [_slh_item()])}})
++        for label, t in (("字串", "abc"), ("清單", [1]), ("inf", "inf")):
++            rec.write_text(_j.dumps({"prompt_id": "p", "t": t}), encoding="utf-8")
++            r = _slh_run({"hook_event_name": "Stop", "session_id": "bs", "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False}, env)
++            check(f"r1乙 起點的 t 是{label} → rc0、不丟例外、不擋、印沒記到起點", r.returncode == 0 and "Traceback" not in r.stderr
++                  and _slh_block(r) is None and "沒記到起點" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++        for label, cwd in (("整數", 5), ("清單", ["x"])):
++            r = _slh_run(_j.dumps({"hook_event_name": "Stop", "session_id": "bs", "prompt_id": "p", "cwd": cwd, "stop_hook_active": False}), env)
++            check(f"r1乙 payload 的 cwd 是{label} → rc0、不丟例外", r.returncode == 0 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    finally:
++        _sh.rmtree(base, ignore_errors=True)
++
++
++def t_slh_r1_no_killpg():
++    """[r1 乙] 沒有 os.killpg 的平台(Windows):逾時收尾不崩,退回收 lint-new 本身。出身:邊界席 F4(只捕 OSError,AttributeError 漏出去)。"""
++    print("t_slh_r1_no_killpg")
++    import os as _os
++    import subprocess as _sp
++    hm = _load_hook_mod("slh_r1_nokillpg", "stop-lint-hook.py")
++    p = _sp.Popen(["sleep", "30"], start_new_session=True)
++    saved = _os.killpg
++    err = None
++    try:
++        del _os.killpg
++        hm._STATE["proc"], hm._STATE["pgid_file"] = p, None
++        try:
++            alive = hm._alive_group(p.pid)
++            hm._kill_all(0.2)
++        except Exception as e:      # noqa: BLE001
++            err = e
++            alive = None
++    finally:
++        _os.killpg = saved
++        hm._STATE["proc"] = None
++    check("r1乙 沒有 killpg 時查群組不崩、回 False", err is None and alive is False, repr(err))
++    check("r1乙 沒有 killpg 時逾時收尾不崩、lint-new 本身被收掉", err is None and p.poll() is not None, repr(err))
++    if p.poll() is None:
++        p.kill()
++        p.wait()
++
++
++def t_slh_r1_skip_env_notice():
++    """[r1 乙] LUMOS_SKIP_LINT_NEW 在工作樹模式生效(lint-new 回 rc0、status off):鉤子往 stderr 印一行,不再靜默。
++    lumos 那端也在自己的 stderr 講原因(對照)。出身:資安席 F3。"""
++    print("t_slh_r1_skip_env_notice")
++    import json as _j
++    import shutil as _sh
++    import time as _t
++    base = Path(tempfile.mkdtemp(prefix="gctl-r1sk-"))
++    helper = base / "sg"
++    _lwt_fake_sg(helper)
++    root, git = _lwt_repo()
++    try:
++        r = _lwt_run(root, helper, "--worktree", "--since", str(_t.time()), "--json", env={"LUMOS_SKIP_LINT_NEW": "1"})
++        j = _lwt_json(r)
++        check("★前置★ r1乙 lint-new 設了變數 → rc0、status off、原因講變數", r.returncode == 0 and j.get("status") == "off"
++              and "LUMOS_SKIP_LINT_NEW" in str(j.get("reason")) and "LUMOS_SKIP_LINT_NEW" in r.stderr, f"{j} {r.stderr[-200:]}")
++        env, home, repo, _lb = _slh_env(base / "hk")
++        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "sk", "prompt_id": "p", "cwd": str(repo)}, env)
++        _slh_plan(base / "hk", {"lint": {"rc": 0, "stdout": r.stdout}})
++        rr = _slh_run({"hook_event_name": "Stop", "session_id": "sk", "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False}, env)
++        check("r1乙 鉤子收到 status off → stderr 印一行(帶原因)、不擋", "LUMOS_SKIP_LINT_NEW" in rr.stderr and _slh_block(rr) is None,
++              rr.stderr[-300:])
++    finally:
++        _sh.rmtree(base, ignore_errors=True)
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_lwt_r1_term_int_cleanup():
++    """[r1 乙] lint-new 工作樹模式跑工具時:收到 SIGTERM 也刪掉系統暫存區的 lumos-lint-*.sarif(正確性席 F3);
++    收到 SIGINT 時工具群組一起收掉、暫存與快照不留(資源席 F4:原本只從登記拿掉,群組變孤兒)。"""
++    print("t_lwt_r1_term_int_cleanup")
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import signal as _sig
++    import subprocess as _sp
++    import time as _t
++    helper = Path(tempfile.mkdtemp(prefix="gctl-r1ti-"))
++    _lwt_fake_sg(helper)
++    root, git = _lwt_repo()
++    pgs = []
++    try:
++        since = _t.time()
++        _lwt_put(root, "app/New1.kt", "fun n1() {\n" + _LWT_BAD + "}\n", since + 5)
++        for label, sig in (("SIGTERM", _sig.SIGTERM), ("SIGINT", _sig.SIGINT)):
++            tmpd = helper / f"tmp-{label}"
++            tmpd.mkdir()
++            log = helper / f"sg-{label}.jsonl"
++            e = dict(_os.environ, PATH=str(helper / "bin") + _os.pathsep + _os.environ.get("PATH", ""),
++                     FAKE_SG_SLEEP="30", FAKE_SG_LOG=str(log), TMPDIR=str(tmpd))
++            e.pop("LUMOS_SKIP_LINT_NEW", None)
++            p = _sp.Popen([sys.executable, GRAPHCTL, "lint-new", "--worktree", "--since", str(since), "--repo", str(root)],
++                          cwd=str(root), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, env=e)
++            t0 = _t.monotonic()
++            while _t.monotonic() - t0 < 60 and not (log.is_file() and log.read_text(encoding="utf-8").strip()):
++                _t.sleep(0.05)
++            rows = [_j.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()] if log.is_file() else []
++            tool = rows[0]["pid"] if rows else None
++            if tool:
++                pgs.append(tool)
++            check(f"★前置★ r1乙 {label}:假工具開起來了、暫存 SARIF 在", tool is not None and bool(list(tmpd.glob("lumos-lint-*.sarif"))),
++                  str(list(tmpd.iterdir())))
++            p.send_signal(sig)
++            try:
++                p.communicate(timeout=20)
++            except _sp.TimeoutExpired:
++                p.kill()
++                p.communicate()
++            check(f"r1乙 {label}:lint-new 結束、工具群組收掉", tool is not None and _r1_tool_dead(tool), f"rc={p.returncode} tool={tool}")
++            check(f"r1乙 {label}:系統暫存區不留 lumos-lint-*.sarif", not list(tmpd.glob("lumos-lint-*.sarif")), str(list(tmpd.iterdir())))
++            check(f"r1乙 {label}:快照目錄不留", not list((root / ".lumos").glob("lintbase-*")), str(list((root / ".lumos").iterdir())))
++    finally:
++        for g in pgs:
++            try:
++                _os.killpg(g, _sig.SIGKILL)
++            except OSError:
++                pass
++        _sh.rmtree(helper, ignore_errors=True)
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_lwt_r1_exception_kills_tool():
++    """[r1 乙] 工作樹模式跑工具時等待那一步丟出例外:工具群組先收掉再往上丟(資源席 F4 的例外路徑);shell 字串與參數清單兩條都驗。"""
++    print("t_lwt_r1_exception_kills_tool")
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import signal as _sig
++    import subprocess as _sp
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-r1ex-"))
++    pids = []
++    try:
++        for label, call in (("參數清單", 'm._lint_run_and_parse("x {LINT_SARIF_OUT}", ".", argv=["sleep", "30"])'),
++                            ("shell 字串", 'm._lint_run_and_parse("sleep 30 > {LINT_SARIF_OUT}", ".")')):
++            out_f = tmp / f"{label}.json"
++            child = f'''
++import sys, os, json, subprocess
++from importlib.machinery import SourceFileLoader
++import importlib.util as U
++spec = U.spec_from_file_location("lng", {GRAPHCTL!r}, loader=SourceFileLoader("lng", {GRAPHCTL!r}))
++m = U.module_from_spec(spec); spec.loader.exec_module(m)
++m._lint_wt_begin(None)
++def boom(self, *a, **k):
++    json.dump({{"pid": self.pid}}, open({str(out_f)!r}, "w"))
++    raise RuntimeError("boom")
++subprocess.Popen.communicate = boom
++try:
++    {call}
++except RuntimeError:
++    pass
++'''
++            r = _sp.run([sys.executable, "-c", child], capture_output=True, text=True, timeout=60)
++            pid = _j.loads(out_f.read_text(encoding="utf-8"))["pid"] if out_f.is_file() else None
++            if pid:
++                pids.append(pid)
++            check(f"★前置★ r1乙 {label}:工具開了、等待時丟了例外", pid is not None, r.stderr[-300:])
++            check(f"r1乙 {label}:例外往上丟之前工具群組已收掉", pid is not None and _r1_tool_dead(pid), f"pid={pid}")
++    finally:
++        for g in pids:
++            try:
++                _os.killpg(g, _sig.SIGKILL)
++            except OSError:
++                pass
++        _sh.rmtree(tmp, ignore_errors=True)
++
++
++def t_slh_r1_spawn_window_term():
++    """[r1 乙] 鉤子開 lint-new 到登記之間收到 SIGTERM:登記完才處理,lint-new 照樣被收掉(通才席 F4)。
++    在程序內造:開完程序、回到鉤子之前就對自己送 SIGTERM。另驗 lint-new 沒有繼承被擋的 SIGTERM(它自己的收尾跑得到)。"""
++    print("t_slh_r1_spawn_window_term")
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import signal as _sig
++    import subprocess as _sp
++    base = Path(tempfile.mkdtemp(prefix="gctl-r1sw-"))
++    pids = []
++    try:
++        env, home, repo, _lb = _slh_env(base)
++        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "sw", "prompt_id": "p", "cwd": str(repo)}, env)
++        _slh_plan(base, {"lint": {"hang": "ignore"}})
++        out_f = base / "child.json"
++        payload = _j.dumps({"hook_event_name": "Stop", "session_id": "sw", "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False})
++        child = f'''
++import sys, os, io, json, signal, subprocess
++from importlib.machinery import SourceFileLoader
++import importlib.util as U
++spec = U.spec_from_file_location("slh", {str(_SLH_HOOK)!r}, loader=SourceFileLoader("slh", {str(_SLH_HOOK)!r}))
++hm = U.module_from_spec(spec); spec.loader.exec_module(hm)
++orig = subprocess.Popen
++class P(orig):
++    def __init__(s, *a, **k):
++        super().__init__(*a, **k)
++        if "lint-new" in a[0] and "--worktree" in a[0]:
++            json.dump({{"pid": s.pid}}, open({str(out_f)!r}, "w"))
++            os.kill(os.getpid(), signal.SIGTERM)
++subprocess.Popen = P
++sys.argv = [{str(_SLH_HOOK)!r}, "--budget", "30"]
++sys.stdin = io.StringIO({payload!r})
++sys.exit(hm.main())
++'''
++        r = _sp.run([sys.executable, "-c", child], capture_output=True, text=True, timeout=60, env=env, cwd=str(repo))
++        pid = _j.loads(out_f.read_text(encoding="utf-8"))["pid"] if out_f.is_file() else None
++        if pid:
++            pids.append(pid)
++        h = _j.loads((base / "hang.json").read_text(encoding="utf-8")) if (base / "hang.json").is_file() else {}
++        if h.get("tool"):
++            pids.append(h["tool"])
++        check("★前置★ r1乙 程序內造的空窗:lint-new 開出來了", pid is not None, r.stderr[-300:])
++        check("r1乙 空窗裡收到的 SIGTERM 登記完才處理、lint-new 照樣被收掉", pid is not None and _r1_tool_dead(pid), f"rc={r.returncode} pid={pid}")
++        # 對照:lint-new 自己收 SIGTERM 的路徑沒被擋掉(鉤子不准用會被子程序繼承的訊號遮罩)
++        (base / "hang.json").unlink(missing_ok=True)
++        _slh_plan(base, {"lint": {"hang": "exit"}})
++        _slh_run({"hook_event_name": "Stop", "session_id": "sw", "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False}, env,
++                 args=("--budget", "3"))
++        h = _j.loads((base / "hang.json").read_text(encoding="utf-8")) if (base / "hang.json").is_file() else {}
++        pids += [x for x in (h.get("tool"), h.get("lint")) if x]
++        check("r1乙 lint-new 收得到 SIGTERM、自己結束(它留下的工具鉤子沒去打)", h and not _r1_tool_dead(h["tool"], wait=0.3) and _r1_tool_dead(h["lint"]),
++              str(h))
++    finally:
++        for g in pids:
++            try:
++                _os.killpg(g, _sig.SIGKILL)
++            except OSError:
++                pass
++        _sh.rmtree(base, ignore_errors=True)
++
++
++def t_lwt_r1_reads_only_needed():
++    """[r1 丙] 只讀要用的 HEAD 內容:刪除檔只讀「有同名新增檔要拿它配對」的那幾支,跟程式碼無關的刪除檔(資產)、
++    沒有新檔配對的刪除檔都不讀。出身:資源席 F1 實測刪 200 個 5MB 資產檔約 4GB、9 秒,最後什麼都沒檢查。"""
++    print("t_lwt_r1_reads_only_needed")
++    import os as _os
++    import shutil as _sh
++    import time as _t
++    files = {"app/Old.kt": _LWT_OLD, "app/pkg/Moved.kt": "package app.pkg\n", "app/Gone.kt": "package app\n",
++             **{f"assets/b{i}.bin": "x" * 100 for i in range(5)}}
++    root, git = _lwt_repo(files=files)
++    try:
++        m = _lng_module()
++        since = _t.time()
++        for i in range(5):
++            (root / "assets" / f"b{i}.bin").unlink()
++        (root / "app" / "Gone.kt").unlink()
++        (root / "app" / "pkg" / "Moved.kt").unlink()
++        _lwt_put(root, "app/other/Moved.kt", "package app.other\n", since + 5)
++        _lwt_put(root, "app/Old.kt", _LWT_OLD + "fun y() = 1\n", since + 5)
++        asked = []
++        orig = m._lint_wt_blobs
++
++        def spy(repo_root, paths):
++            asked.extend(paths)
++            return orig(repo_root, paths)
++        m._lint_wt_blobs = spy
++        pairs, base_bytes, _sk, err = m._lint_wt_pairs(root, since, m._lint_new_config(root))
++        check("★前置★ r1丙 配對照常:搬家的新檔拿刪掉那支當基準", err is None and dict(pairs).get("app/other/Moved.kt") == "app/pkg/Moved.kt",
++              f"{err} {pairs}")
++        check("r1丙 只讀要用的:改過的檔與要配對的刪除檔", sorted(set(asked)) == ["app/Old.kt", "app/pkg/Moved.kt"], str(sorted(set(asked))))
++        check("r1丙 資產刪除檔與沒新檔配對的刪除檔一支都不讀", not any(a.startswith("assets/") or a == "app/Gone.kt" for a in asked), str(asked))
++    finally:
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_lwt_r1_file_cap():
++    """[r1 丙] 碰過的檔超過上限:一份 HEAD 內容都不讀就回沒檢查到;上限值是 50;剛好 50 支照樣檢查、51 支不檢查。
++    出身:資源席 F3(上限在讀完內容之後才判)、合約席 F2(上限值與邊界沒被釘住)。"""
++    print("t_lwt_r1_file_cap")
++    import shutil as _sh
++    import time as _t
++    helper = Path(tempfile.mkdtemp(prefix="gctl-r1fc-"))
++    _lwt_fake_sg(helper)
++    root, git = _lwt_repo()
++    try:
++        m = _lng_module()
++        check("r1丙 上限值是 50", m._LINT_WT_MAX_FILES == 50, str(m._LINT_WT_MAX_FILES))
++        since = _t.time()
++        for i in range(50):
++            _lwt_put(root, f"app/M{i}.kt", f"package app\nfun m{i}() {{\n" + _LWT_BAD + "}\n", since + 5)
++        r = _lwt_run(root, helper, "--worktree", "--since", str(since), "--json")
++        j = _lwt_json(r)
++        check("r1丙 剛好 50 支 → 照樣檢查(rc1、50 條)", r.returncode == 1 and j.get("total") == 50, f"rc={r.returncode} {j.get('status')} {j.get('reason')}")
++        _lwt_put(root, "app/M50.kt", "package app\nfun m50() = 1\n", since + 5)
++        asked = []
++        orig = m._lint_wt_blobs
++        m._lint_wt_blobs = lambda rr, pp: (asked.extend(pp), orig(rr, pp))[1]
++        pairs, _b, _s, err = m._lint_wt_pairs(root, since, m._lint_new_config(root))
++        check("r1丙 51 支 → 沒檢查到、一份內容都沒讀", err and "51 支" in err and asked == [], f"{err} {len(asked)}")
++        r = _lwt_run(root, helper, "--worktree", "--since", str(since), "--json")
++        check("r1丙 51 支走指令 → rc3、原因講超過 50 支", r.returncode == 3 and "51 支" in str(_lwt_json(r).get("reason")), (r.stdout + r.stderr)[-300:])
++    finally:
++        _sh.rmtree(helper, ignore_errors=True)
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_hookshared_r1_mark_shared():
++    """[r1 丁] 標記檔名消毒與 O_EXCL 佔名額只有共用模組一份,收工點名與收工寫法檢查都用它(架構對齊席 F2):
++    同一個會談編號在兩邊消毒出同一個名字;兩支鉤子的程式碼裡不再自己寫消毒正規式或 O_EXCL。"""
++    print("t_hookshared_r1_mark_shared")
++    hooks = Path(GRAPHCTL).resolve().parent / "hooks" / "claude"
++    cgs = _load_hook_mod("cgs_r1_mark", "check-graph-sync.py")
++    sh = sys.modules.get("_hookshared")
++    check("★前置★ 共用模組被匯入了", sh is not None, "")
++    check("r1丁 共用模組有 _mark_name 與 _claim_mark", sh is not None and callable(getattr(sh, "_mark_name", None)) and callable(getattr(sh, "_claim_mark", None)), "")
++    if sh is not None and hasattr(sh, "_mark_name"):
++        for sid in ("abc-1", "a/b", ".", "..", "", "x" * 200, "會談 1", "a\nb"):
++            want = sh._mark_name(sid)
++            for fn in ("_stop_mark_path", "_printed_mark_path"):
++                mp = getattr(cgs, fn)(sid)
++                check(f"r1丁 收工點名 {fn} 的名字 = 共用消毒({sid[:12]!r})", (mp is None and want is None) or (mp is not None and mp.name == want),
++                      f"{mp} {want}")
++    for f in ("check-graph-sync.py", "stop-lint-hook.py"):
++        code = "\n".join(ln for ln in (hooks / f).read_text(encoding="utf-8").splitlines() if not ln.lstrip().startswith("#"))
++        check(f"r1丁 {f} 不再自己寫標記消毒正規式與 O_EXCL 建檔", '[^A-Za-z0-9_.-]"' not in code and "os.O_EXCL" not in code, f)
++
++
++def t_hook_pure_probe_r1_scope():
++    """[r1 丁] 匯入純度探針的放寬只給真的匯入共用模組的 hook、只給匯入系統自己那一次(合約席 F7):
++    沒匯入共用模組的 hook 頂層列自己目錄或讀共用模組 → 違規;匯入了但頂層碼自己再去列目錄 → 也違規;只匯入 → 乾淨(對照)。"""
++    print("t_hook_pure_probe_r1_scope")
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    import subprocess as _sp
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-r1pp-"))
++    cwd = Path(tempfile.mkdtemp(prefix="gctl-r1pc-"))
++    try:
++        (tmp / "_hookshared.py").write_text("X = 1\n", encoding="utf-8")
++        common = "import os, sys\ndef collect_turn_actions(p):\n    return []\ndef _is_real_user_input(o):\n    return False\n"
++        imp = "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\nimport _hookshared\n"
++        lst = "os.listdir(os.path.dirname(os.path.abspath(__file__)))\n"
++        rd = "open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '_hookshared.py')).read()\n"
++        cases = {"noimp_list": (common + lst, True), "imp_list": (common + imp + lst, True), "noimp_read": (common + rd, True),
++                 "imp_only": (common + imp, False)}
++
++        def probe(name, body):
++            f = tmp / f"{name}.py"
++            f.write_text(body, encoding="utf-8")
++            r = _sp.run([sys.executable, "-c", _HOOK_PURE_PROBE, str(f)], cwd=str(cwd),
++                        env=dict(_os.environ, HOME=str(cwd), PYTHONDONTWRITEBYTECODE="1"), capture_output=True, text=True)
++            try:
++                return _j.loads(r.stdout[len("AUDIT:"):]) if r.stdout.startswith("AUDIT:") else ["(探針沒輸出)" + r.stderr[-200:]]
++            except ValueError:
++                return ["(探針輸出不是 JSON)"]
++        for name, (body, want_bad) in cases.items():
++            ev = probe(name, body)
++            check(f"r1丁 探針:{name} → {'違規' if want_bad else '乾淨'}", bool(ev) == want_bad, str(ev)[:300])
++    finally:
++        _sh.rmtree(tmp, ignore_errors=True)
++        _sh.rmtree(cwd, ignore_errors=True)
++
++
++def t_lwt_r1_git_states():
++    """[r1 戊] rebase(apply 型)、REBASE_HEAD、cherry-pick、revert 進行中都整次不檢查(合約席 F3:原本只測了合併與 rebase-merge)。"""
++    print("t_lwt_r1_git_states")
++    import shutil as _sh
++    m = _lng_module()
++    for name, label, is_dir in (("rebase-apply", "rebase", True), ("REBASE_HEAD", "rebase", False),
++                                ("CHERRY_PICK_HEAD", "cherry-pick", False), ("REVERT_HEAD", "revert", False)):
++        root, git = _lwt_repo()
++        try:
++            check(f"★前置★ r1戊 {name} 不在時可以檢查", m._lint_wt_unready(root) is None, str(m._lint_wt_unready(root)))
++            p = root / ".git" / name
++            if is_dir:
++                p.mkdir()
++            else:
++                p.write_text(git("rev-parse", "HEAD").stdout, encoding="utf-8")
++            why = m._lint_wt_unready(root)
++            check(f"r1戊 {name} 進行中 → 不檢查、原因講{label}", why is not None and label in why and name in why, str(why))
++        finally:
++            _sh.rmtree(root, ignore_errors=True)
++
++
++def t_lwt_r1_budget_from_entry():
++    """[r1 戊] --budget 從指令一開始起算:指令前段(找 repo 根)慢 1 秒時,交給判定的剩餘時間要少掉那 1 秒(合約席 F4:原斷言恆真)。"""
++    print("t_lwt_r1_budget_from_entry")
++    import contextlib as _cl
++    import io as _io
++    import shutil as _sh
++    import time as _t
++    root, git = _lwt_repo()
++    m = _lng_module()
++    seen = {}
++    orig_v, orig_a = m._lint_new_verdict, m._anchor_repo_root
++    try:
++        m._lint_new_verdict = lambda repo_root, diff_range, deadline=None, **kw: (seen.__setitem__("left", deadline - _t.monotonic()),
++                                                                                  {"status": "clean", "new": [], "warnings": [], "reason": "x"})[1]
++
++        def slow(repo):
++            _t.sleep(1.0)
++            return orig_a(repo)
++        m._anchor_repo_root = slow
++        with _cl.redirect_stdout(_io.StringIO()), _cl.redirect_stderr(_io.StringIO()):
++            m.cmd_lint_new(diff_range="main..HEAD", repo=str(root), budget="7")
++        check("r1戊 前段慢 1 秒 → 判定拿到的剩餘時間 ≤ 6.1 秒", seen.get("left") is not None and seen["left"] <= 6.1, str(seen))
++    finally:
++        m._lint_new_verdict, m._anchor_repo_root = orig_v, orig_a
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_slh_r1_needs_rc_one():
++    """[r1 戊] 擋下要三件事都成立:退出碼不是 1(0、3、被訊號殺掉的負數)但最後一行是 blocked JSON → 不擋(合約席 F5)。"""
++    print("t_slh_r1_needs_rc_one")
++    import shutil as _sh
++    base = Path(tempfile.mkdtemp(prefix="gctl-r1rc-"))
++    try:
++        env, home, repo, _lb = _slh_env(base)
++        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "rc", "prompt_id": "p", "cwd": str(repo)}, env)
++        stop = {"hook_event_name": "Stop", "session_id": "rc", "prompt_id": "p", "cwd": str(repo), "stop_hook_active": False}
++        _slh_plan(base, {"lint": {"rc": 1, "stdout": _slh_lint_json("c" * 16, [_slh_item()])}})
++        check("★前置★ r1戊 rc1 加 blocked JSON → 擋(對照)", _slh_block(_slh_run(stop, env)) is not None, "")
++        for i, rc in enumerate((0, 3, 143)):
++            _slh_plan(base, {"lint": {"rc": rc, "stdout": _slh_lint_json(f"d{i}" + "0" * 14, [_slh_item()])}})
++            r = _slh_run(stop, env)
++            check(f"r1戊 退出碼 {rc} 而最後一行是 blocked JSON → 不擋", _slh_block(r) is None, r.stdout[-200:])
++    finally:
++        _sh.rmtree(base, ignore_errors=True)
++
++
++def t_impact_r1_kts_and_once():
++    """[r1 戊] .kts(建置腳本)不推決策列、鉤子也不送 delta_new;.kt 照送(合約席 F6 裁定)。
++    改 kt 檔時整份與新內容一次取段,結果跟各取一次相同(通才席 F6)。"""
++    print("t_impact_r1_kts_and_once")
++    import json as _j
++    import os as _os
++    import shutil as _sh
++    hm = _load_hook_mod("impact_hook_r1_kts", "impact-hook.py")
++    for pl in ({"tool_name": "Edit", "tool_input": {"old_string": "OLD", "new_string": "NEW"}},
++               {"tool_name": "MultiEdit", "tool_input": {"edits": [{"old_string": "o1", "new_string": "n1"}, {"old_string": "o2", "new_string": "n2"}]}},
++               {"tool_name": "Write", "tool_input": {"content": "C" * (hm.DELTA_TEXT_CAP + 5)}}):
++        full = hm.extract_delta_text(pl)
++        new = hm.extract_delta_text(pl, new_only=True)
++        check(f"r1戊 一次取段的兩份跟各取一次相同({pl['tool_name']})", hm.extract_delta_texts(pl) == (*full, *new), "")
++    repo = _drow_repo()
++    try:
++        sent = []
++        hm._run_impact = lambda cmd, stdin_payload, timeout, repo_, fails: (sent.append(_j.loads(stdin_payload)), None)[1]
++        (repo / "app" / "build.gradle.kts").write_text("plugins {}\n", encoding="utf-8")
++        for rel in ("app/Screen.kt", "app/build.gradle.kts"):
++            pl = {"tool_name": "Edit", "session_id": "", "tool_input": {"file_path": str(repo / rel), "old_string": "a", "new_string": "b"}}
++            hm._impact_for_file(pl, str(repo), str(repo / rel), "", "lumos")
++        check("★前置★ r1戊 兩次都送了 impact", len(sent) == 2, str(sent))
++        check("r1戊 .kt 送 delta_new", len(sent) == 2 and sent[0].get("delta_new") == "b", str(sent[:1]))
++        check("r1戊 .kts 不送 delta_new", len(sent) == 2 and "delta_new" not in sent[1], str(sent[1:]))
++        lm = _load_lumos_inproc()
++        real_cat = Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL
++        table, _e = lm._kt_decision_table(path=real_cat)
++        rows = _drow_pick_rows(table, 1)
++        trig = rows[0][1] if rows else "x"
++        env = dict(_os.environ, LUMOS_KT_CATALOG=str(real_cat))
++        _r, d = _drow_impact(repo, "app/Screen.kt", {"query": "x", "prospective": {}, "delta_text": f"val x = {trig}()\n", "delta_new": f"val x = {trig}()\n"}, env=env)
++        check("★前置★ r1戊 同一個觸發字在 .kt 會推", bool(d.get("decision_rows")), str(d.get("decision_rows")))
++        _r, d = _drow_impact(repo, "app/build.gradle.kts", {"query": "x", "prospective": {}, "delta_text": f"val x = {trig}()\n", "delta_new": f"val x = {trig}()\n"}, env=env)
++        check("r1戊 lumos 對 .kts 不推決策列", not d.get("decision_rows"), str(d.get("decision_rows")))
++    finally:
++        _sh.rmtree(repo, ignore_errors=True)
++
++
++def t_lwt_r1_help_and_skeleton():
++    """[r1 戊] lint-new 說明講清楚「檢查本身不寫治理帳,只有 --record-stop-block 記一筆」(架構對齊席 F4);
++    判定結果的骨架兩種模式共用一份 _lint_new_out,加鍵不用兩邊跟(架構對齊席 F8)。"""
++    print("t_lwt_r1_help_and_skeleton")
++    import os as _os
++    import shutil as _sh
++    import subprocess as _sp
++    r = _sp.run([sys.executable, GRAPHCTL, "lint-new", "--help"], capture_output=True, text=True, timeout=60)
++    sub = _sp.run([sys.executable, GRAPHCTL, "--help"], capture_output=True, text=True, timeout=60)
++    check("r1戊 lint-new 的說明講到只有 --record-stop-block 記帳", "--record-stop-block" in (sub.stdout + r.stdout)
++          and "檢查本身不寫治理帳" in sub.stdout, sub.stdout[-400:])
++    m = _lng_module()
++    check("★前置★ r1戊 有共用骨架", callable(getattr(m, "_lint_new_out", None)), "")
++    root, git = _lwt_repo()
++    old = _os.environ.get("LUMOS_SKIP_LINT_NEW")
++    try:
++        orig = m._lint_new_out
++        m._lint_new_out = lambda r_: dict(orig(r_), _probe_key=1)
++        _os.environ["LUMOS_SKIP_LINT_NEW"] = "1"
++        wt = m._lint_new_wt_verdict(root)
++        df = m._lint_new_verdict(root, "HEAD..HEAD")
++        check("r1戊 工作樹與 --diff 兩種模式都從共用骨架起", wt.get("_probe_key") == 1 and df.get("_probe_key") == 1, f"{sorted(wt)} {sorted(df)}")
++    finally:
++        if old is None:
++            _os.environ.pop("LUMOS_SKIP_LINT_NEW", None)
++        else:
++            _os.environ["LUMOS_SKIP_LINT_NEW"] = old
++        _sh.rmtree(root, ignore_errors=True)
++
++
++def t_lwt_r1_git_filter_off():
++    """[r1 戊] 工作樹模式查狀態時不執行被打開目錄自帶的內容過濾器(資安席 F2:`git status` 遇到大小相同但內容改過的檔
++    會跑 filter.<名>.clean);過濾器名字收不了(含 =)時整次不檢查。對照:同一個現場直接跑 git status 會造出記號檔。"""
++    print("t_lwt_r1_git_filter_off")
++    import shutil as _sh
++    import subprocess as _sp
++    import time as _t
++    helper = Path(tempfile.mkdtemp(prefix="gctl-r1gf-"))
++    _lwt_fake_sg(helper)
++    roots = []
++    try:
++        for label, drv in (("一般名字", "evil"), ("名字含等號", "a=b")):
++            root, git = _lwt_repo()
++            roots.append(root)
++            marker = helper / f"PWNED-{len(roots)}"
++            (root / ".gitattributes").write_text(f"*.kt filter={drv}\n", encoding="utf-8")
++            git("config", f"filter.{drv}.clean", f"touch '{marker}'; cat")
++            git("config", f"filter.{drv}.required", "true")
++            since = _t.time()
++            old = (root / "app" / "Old.kt").read_text(encoding="utf-8")
++            _lwt_put(root, "app/Old.kt", old.replace("old", "olx"), since + 5)
++            if drv == "evil":
++                probe = Path(tempfile.mkdtemp(prefix="gctl-r1gp-"))
++                try:
++                    _sh.copytree(root, probe / "r", symlinks=True)
++                    _sp.run(["git", "-C", str(probe / "r"), "status", "--porcelain"], capture_output=True)
++                    check("★前置★ r1戊 同一個現場直接跑 git status 會執行過濾器", marker.exists(), "")
++                finally:
++                    _sh.rmtree(probe, ignore_errors=True)
++                    marker.unlink(missing_ok=True)
++            r = _lwt_run(root, helper, "--worktree", "--since", str(since), "--json")
++            check(f"r1戊 過濾器{label}:lint-new 工作樹模式不執行它", not marker.exists(), (r.stdout + r.stderr)[-300:])
++            if drv == "evil":
++                check("r1戊 一般名字:照樣檢查(不是沒檢查到)", r.returncode in (0, 1), f"rc={r.returncode} {(r.stdout + r.stderr)[-300:]}")
++            else:
++                check("r1戊 名字收不了:整次不檢查(rc3)", r.returncode == 3 and "過濾器" in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    finally:
++        _sh.rmtree(helper, ignore_errors=True)
++        for rr in roots:
++            _sh.rmtree(rr, ignore_errors=True)
++
++
+ if __name__ == "__main__":
+     sys.exit(main())

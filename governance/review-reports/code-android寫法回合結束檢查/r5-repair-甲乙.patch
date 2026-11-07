@@ -1,0 +1,845 @@
+diff --git a/scripts/lumos b/scripts/lumos
+index 47da821c2..c7aec5828 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -39931,20 +39931,22 @@ def cmd_lint_new(diff_range=None, repo=None, show_all=False, worktree=False, sin
+     if err:
+         print("用法:lumos lint-new --diff <起點>..<終點> [--repo <根>]   例:lumos lint-new --diff main..HEAD", file=sys.stderr)
+         print("      lumos lint-new --worktree [--since <epoch 秒>] [--json] [--pgid-file <檔>] [--budget <秒>] [--repo <根>]", file=sys.stderr)
+         print(f"  擋下:{err}", file=sys.stderr)
+         return 2
+     repo_root = _anchor_repo_root(repo)
+     if repo_root is None:
+         return 2
+     if record is not None:
+         return _lint_new_record_stop_block(repo_root, record, int(count), prompt)
++    if worktree:
++        repo_root = _lint_wt_toplevel(repo_root)
+     deadline = t0 + (float(budget) if budget is not None else _lint_new_config(repo_root)["budget_sec"])
+     if worktree:
+         return _lint_new_cli_worktree(repo_root, float(since) if since is not None else None, deadline, as_json, pgid_file, show_all)
+     _base, head_ref = _diff_range_ends(repo_root, diff_range)
+     lv = _lint_new_verdict(repo_root, diff_range, deadline=deadline)
+     for w in lv.get("warnings") or []:
+         print(f"提醒:{w}", file=sys.stderr)
+     st = lv.get("status")
+     rc = _LINT_NEW_CLI_RC.get(st, 3)
+     if rc == 1:
+@@ -40066,118 +40068,135 @@ _LINT_WT_BANNED = ("-U", "--update-all", "-i", "--interactive", "--custom-langua
+ # { } 也不准(回合結束檢查代碼審 r1 正確性席 F1):佔位符只准單獨成一個詞;當旗標值({LINT_FILES} 接在 --filter 後)時,
+ # 換進去的檔名曾落在外層引號之外、被 shell 執行——現在不開 shell 了,這條仍留著,讓佔位符的位置只有一種
+ _LINT_WT_BAD_CHARS = (";", "|", "&", "`", "$", "<", ">", "*", "?", "~", "{", "}", "\n", "\r")
+ _LINT_WT_PLACEHOLDERS = ("{LINT_FILES}", "{LINT_FILES_CSV}")
+ _LINT_WT_REG = None                       # 工作樹模式的工具群組登記(None=沒在工作樹模式,_lint_spawn 照舊)
+ 
+ 
+ # ★「不信任 repo」的 git -c 參數:主程式只有這一份★(回合結束檢查代碼審 r2 甲組;lint-new 工作樹模式、spec-freeze 都走它)
+ # 被打開的目錄可以自帶 .git/config,git 會把裡面幾種設定的值當成指令執行;git 沒有選項或環境變數能讓它不讀 repo 自己的設定
+ # (GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM 只管全域與系統層,https://git-scm.com/docs/git ),所以固定那幾項在命令列蓋掉(命令列優先)。
+-# 固定三項對齊鉤子那份 _hookshared._GIT_UNSAFE_CONFIG(core.fsmonitor、diff.external;鉤子用空值,這裡用 false 明寫關掉),
+-# 另補 core.hooksPath=/dev/null(暫存 index 的 read-tree、update-index 會跑 post-index-change 掛鉤)。
++# ★跟鉤子那份 _hookshared._GIT_UNSAFE_CONFIG 是兩份、刻意各自存在★(代碼審 r4 架構對齊席 F4):鉤子是獨立檔、不能匯入主程式,
++# 它那份經環境變數 GIT_CONFIG_PARAMETERS 涵蓋鉤子開的所有子程序,值給空字串;這裡由呼叫端放在 git 命令列。差異只有兩處:
++# ①這裡多 core.hooksPath=/dev/null——主程式會建暫存 index(spec-freeze 的 read-tree、update-index 會跑 post-index-change 掛鉤),
++# 鉤子不動索引所以不需要;②core.fsmonitor 這裡寫 false(明寫關掉),鉤子寫空值(git 也當成關掉)。
++# 守衛 t_r4note_untrusted_two_lists 兩個方向都驗:鉤子那份每一項這裡都有,這裡比鉤子多的恰好只有 core.hooksPath。
+ # ★內容過濾器不在這裡關★(回合結束檢查代碼審 r3 甲組):名字由被打開的目錄決定,列出名字再逐個關的做法被打穿三次(名字含非 UTF-8 位元組時
+ # 列不到);改成工作樹模式根本不跑會經過濾器的指令(_wt_changed_nofilter),其餘呼叫(cat-file、ls-tree、rev-parse、read-tree、
+ # hash-object --no-filters、update-index --cacheinfo、write-tree、commit-tree)本來就不經過濾器。★天花板★見 [[Systems/hook信任邊界]]。
+ _GIT_UNTRUSTED_FIXED = ("core.fsmonitor=false", "core.hooksPath=/dev/null", "diff.external=")
+ 
+ 
+-def _git_untrusted_c(repo_root=None):
+-    """對不信任的 repo 下 git 時要帶的 -c 參數清單(固定三項,_GIT_UNTRUSTED_FIXED)。repo_root 不用,留著讓呼叫端寫法不變。"""
++def _git_untrusted_c():
++    """對不信任的 repo 下 git 時要帶的 -c 參數清單(固定三項,_GIT_UNTRUSTED_FIXED)。不收參數(代碼審 r4 架構對齊席 F2:
++    原本留著用不到的 repo_root,呼叫端有傳有不傳兩種寫法)。"""
+     return [x for kv in _GIT_UNTRUSTED_FIXED for x in ("-c", kv)]
+ 
+ 
+ def _wt_changed_nofilter(repo_root, run, paths=()):
+     """工作樹上還沒提交的改動,★不跑 git status、不經任何內容過濾器★ → [(X, Y, 路徑, 舊路徑或 None)] 或 None(任何一個 git 指令失敗)。
+     狀態碼同 git status --porcelain=v1:X 是 HEAD 對索引、Y 是索引對工作樹;?? 未追蹤、UU 衝突;HEAD 與索引同一物件、只換了路徑的算 R。
+     為什麼:git status 遇到大小不變、內容改過的檔會跑 .gitattributes 指到的 clean/process 過濾器,過濾器的名字與指令由被打開的目錄決定,
+     列名字再逐個關掉的做法被打穿三次。這裡只用不執行內容過濾器的指令:ls-tree -r -z(HEAD)、ls-files -s -z(索引的模式與物件編號)、
+     ls-files -s --debug -z(索引記下的時間與大小,只拿來省雜湊、格式認不得就全部算)、ls-files -o --exclude-standard -z(未追蹤)、
+     hash-object --no-filters --stdin-paths(工作樹內容照原樣算,https://git-scm.com/docs/git-hash-object )。
+     只看一般檔(100644、100755),符號連結與子模組(120000、160000)跳過。時間與大小跟索引記的一樣、而且比索引檔早寫的才不算雜湊(同 git 的 racy 判法)。
+     用了真過濾器的專案(LFS、autocrlf)會多報幾支(工作樹原樣跟索引裡轉過的不同),方向是多查不漏查。
+-    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。"""
++    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。
++    ★路徑基準一律是 repo 根★(代碼審 r4 正確性席 F1、邊界席 F1、通才席 F1):repo_root 可以是 repo 的子目錄(monorepo);先用
++    rev-parse --show-toplevel 取根、之後每個 git 指令都帶 -C <根>(ls-tree --full-tree 從根算、hash-object --stdin-paths 也從根開檔,
++    跟 ls-files 不統一時乾淨的樹會被報成一堆刪除與改名、改過的檔整次回 None),ls-files 加 --full-name;lstat 用根接路徑;
++    paths 是相對 repo_root 的,前面補 --show-prefix。回傳的路徑從 repo 根算起(同 git status --porcelain)。"""
+     import os as _os
+     import stat as _st
+-    lit = ("--", *paths) if paths else ()
+ 
+     def ok(*a, data=None):
+         r = run(*a, data=data)
+         return r.stdout if r is not None and r.returncode == 0 else None
++    t, pfx = ok("rev-parse", "--show-toplevel"), ok("rev-parse", "--show-prefix")
++    if not t or pfx is None:
++        return None
++    top = _os.fsdecode(t[:-1] if t.endswith(b"\n") else t)
++    pfx = _os.fsdecode(pfx[:-1] if pfx.endswith(b"\n") else pfx)
++    lit = ("--", *(pfx + p for p in paths)) if paths else ()
++    given = run                           # 呼叫端給的(-C 是 repo_root);之後每個指令都改在 repo 根跑
++
++    def run(*a, data=None):
++        return given("-C", top, *a, data=data)
+ 
+     def entries(raw):
+         for ent in (raw or b"").split(b"\0"):
+             meta, tab, p = ent.partition(b"\t")
+             f = meta.split(b" ")
+             if tab and len(f) == 3:
+                 yield f, p
+     reg = (b"100644", b"100755")
+     h = run("rev-parse", "--verify", "-q", "HEAD")
+     if h is None or h.returncode not in (0, 1):
+         return None
+     raw = ok("ls-tree", "-r", "-z", "--full-tree", "HEAD", *lit) if h.returncode == 0 else b""
+-    idx = ok("ls-files", "-s", "-z", *lit)
+-    unt = ok("ls-files", "-o", "--exclude-standard", "-z", *lit)
++    idx = ok("ls-files", "-s", "-z", "--full-name", *lit)
++    unt = ok("ls-files", "-o", "--exclude-standard", "-z", "--full-name", *lit)
+     if raw is None or idx is None or unt is None:
+         return None
+     head, index, conflict, skip = {}, {}, set(), set()
+     for f, p in entries(raw):
+         if f[0] in reg:
+             head[p] = f[2]
+         else:
+             skip.add(p)
+     for f, p in entries(idx):
+         if f[2] != b"0":
+             conflict.add(p)
+         elif f[0] in reg:
+             index[p] = f[1]
+         else:
+             skip.add(p)
+     stamp = {}
+-    dbg = ok("ls-files", "-s", "--debug", "-z", *lit) or b""
++    dbg = ok("ls-files", "-s", "--debug", "-z", "--full-name", *lit) or b""
+     prev = None
+     for chunk in dbg.split(b"\0"):
+         lines = chunk.split(b"\n")
+         info = {}
+         while lines and lines[0].startswith(b"  "):
+             for kv in lines.pop(0).strip().split(b"\t"):
+                 k, _c, v = kv.partition(b": ")
+                 info[k.strip()] = v.strip()
+         try:
+             if prev is not None and info:
+                 sec, _c, ns = info[b"mtime"].partition(b":")
+                 stamp[prev] = (int(sec) * 1000000000 + int(ns), int(info[b"size"]))
+         except (KeyError, ValueError):
+             pass
+         rest = b"\n".join(lines)
+         prev = rest.partition(b"\t")[2] if b"\t" in rest else None
+     gp = ok("rev-parse", "--git-path", "index")
+     try:
+-        idx_ns = _os.stat(_os.path.join(str(repo_root), _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
++        idx_ns = _os.stat(_os.path.join(top, _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
+     except OSError:
+         idx_ns = None
+     wt, ask = {}, []
+     for p, oid in index.items():
+         try:
+-            s = _os.lstat(_os.path.join(str(repo_root), _os.fsdecode(p)))
++            s = _os.lstat(_os.path.join(top, _os.fsdecode(p)))
+         except (FileNotFoundError, NotADirectoryError):
+             wt[p] = "D"
+             continue
+         except OSError:
+             wt[p] = "M"
+             continue
+         if not _st.S_ISREG(s.st_mode):
+             wt[p] = "T"
+         elif idx_ns is not None and s.st_mtime_ns < idx_ns and stamp.get(p) == (s.st_mtime_ns, s.st_size & 0xFFFFFFFF):
+             wt[p] = " "
+-        elif b"\n" in p or p[:1] == b'"':
+-            wt[p] = "M"                   # 一行一個路徑的輸入表達不了,當改過(多查)
++        elif b"\n" in p or p[:1] == b'"' or p.endswith(b"\r"):
++            wt[p] = "M"                   # 一行一個路徑的輸入表達不了(結尾的 CR 會被當行尾吃掉,代碼審 r4 正確性席 F2),當改過(多查)
+         else:
+             ask.append(p)
+     if ask:
+         got = ok("hash-object", "--no-filters", "--stdin-paths", data=b"\n".join(ask) + b"\n")
+         sums = (got or b"").split()
+         if got is None or len(sums) != len(ask):
+             return None
+         for p, sha in zip(ask, sums):
+             wt[p] = " " if sha == index[p] else "M"
+     res = {}
+@@ -40205,30 +40224,43 @@ def _wt_changed_nofilter(repo_root, run, paths=()):
+     return sorted(out, key=lambda e: e[2])
+ 
+ 
+ def _lint_wt_git(repo_root, *args, data=None):
+     """工作樹模式的 git 呼叫:走 _lens_git(位元組、關掉檔名轉義),一律不拿選用鎖(GIT_OPTIONAL_LOCKS=0,不順手改寫索引)、
+     帶不信任 repo 的 -c 參數(_git_untrusted_c)。★不准拿來跑 status、diff 這類會讀工作樹內容的指令★(會經內容過濾器;
+     找改動走 _wt_changed_nofilter)。回 CompletedProcess(位元組)或 None(git 跑不起來)。"""
+     return _lens_git(repo_root, *_git_untrusted_c(), *args, quote=True, binary=True, timeout=60, env={"GIT_OPTIONAL_LOCKS": "0"}, data=data)
+ 
+ 
++def _lint_wt_toplevel(repo_root):
++    """lint-new --worktree 的 --repo 指到 repo 的子目錄時改在 repo 根判(代碼審 r4 正確性席 F1、邊界席 F1、通才席 F1):
++    宣告檔(.lumos/)、改動路徑(_wt_changed_nofilter 回的從 repo 根算起)、工具的工作目錄全部以 repo 根為準——收工鉤子本來就傳 repo 根。
++    已經是根、或 git 問不出來就照原樣(問不出來的之後 _lint_wt_unready 判沒能檢查)。"""
++    pfx = _lint_wt_git(repo_root, "rev-parse", "--show-prefix")
++    top = _lint_wt_git(repo_root, "rev-parse", "--show-toplevel")
++    if pfx is None or top is None or pfx.returncode != 0 or top.returncode != 0 or not pfx.stdout.strip() or not top.stdout.strip():
++        return repo_root
++    return Path(os.fsdecode(top.stdout[:-1] if top.stdout.endswith(b"\n") else top.stdout))
++
++
+ def _lint_wt_changed(repo_root, paths=()):
+     """工作樹模式找改過的檔:_wt_changed_nofilter 接上 _lint_wt_git。"""
+     return _wt_changed_nofilter(repo_root, lambda *a, data=None: _lint_wt_git(repo_root, *a, data=data), paths)
+ 
+ 
+ # 工作樹模式整次不檢查的兩種(代碼審 r2 通才席 F1):刻意不查(照設計做完了判斷)與沒能檢查(git 跑不起來、出錯、讀不出)。
+ # --json 的 unchecked_kind 照這個寫,收工鉤子照它記 ok 或 error,不再從 undone 的種類推測
+ _LINT_WT_DELIBERATE, _LINT_WT_FAILED, _LINT_WT_TIMEOUT = "deliberate", "failed", "timeout"
+-# ★種類只在兩處寫★(代碼審 r3 通才席 F2、架構對齊席 F1):判定層每條 not-checked 路徑自己明寫種類,不補預設;
+-# 沒寫明的交給 JSON 層(_lint_new_wt_json)一律落 failed——寧可記失敗、不記成綠
++# ★種類由每條 not-checked 出口自己寫、不補預設★(代碼審 r3 通才席 F2、架構對齊席 F1;r4 架構對齊席 F3 照實改寫這句):
++# 寫的地方是 _lint_wt_unready 與 _lint_wt_pairs 回的 (種類, 原因)、_lint_new_wt_verdict 的白名單全擋(刻意不查)與時間不夠
++# (_LINT_WT_TIMEOUT)、_lint_new_classify 的宣告形狀與路徑形狀兩處(刻意不查);沒寫明的交給 JSON 層(_lint_new_wt_json)一律落 failed
++# ——新加一條出口忘了寫,會記成失敗、不會記成綠
+ 
+ 
+ def _lint_wt_unready(repo_root):
+     """整次不檢查的 (種類, 原因一句白話) 或 None:沒有 HEAD、合併/rebase/cherry-pick/revert 進行中、宣告檔不乾淨(範圍 1 第 3 條)是刻意不查;
+     git 跑不起來、查不出宣告檔狀態是沒能檢查(_LINT_WT_FAILED)。
+     宣告檔乾淨的判法:HEAD 有 .lumos/lint.json,而且它與 .lumos/config.json 沒有未提交的改動、沒有未追蹤、沒有被忽略
+     (改動走 _wt_changed_nofilter,被忽略的用 ls-files -o -i --exclude-standard;只 touch 過的不算。不用 git status:會經內容過濾器,
+     代碼審 r3 甲組;不用 git diff --quiet,實驗 E4 它會改寫索引)。"""
+     D, F = _LINT_WT_DELIBERATE, _LINT_WT_FAILED
+     # ★git 出錯不能當刻意不查★(代碼審 r3 正確性席 F1):--verify -q 只在 HEAD 真的不存在時回 1;128 等是 git 本身出錯
+@@ -40470,21 +40502,21 @@ def _lint_wt_blobs(repo_root, paths, max_bytes=None, big=None):
+     """HEAD 裡這些路徑 → {路徑: 位元組或 None(HEAD 沒有、不是一般檔或超過 max_bytes)};含換行的路徑傳不進去,當沒有。
+     ★先問大小、超過上限的不讀★(回合結束檢查代碼審 r2 資源席 F1:改過的大檔原本整份讀進記憶體才被超大檔規則略過):
+     走既有的帶上限讀法(_nodehome_cat_sizes 問大小 → _nodehome_cat_blobs_capped 只讀沒超過的),兩趟 git 都帶不信任 repo 的 -c 參數;
+     超過上限的路徑放進 big(呼叫端給了集合的話)。git 跑不起來或輸出對不上 → 回 None(呼叫端整次判沒能檢查),
+     ★不准當「全部是新檔」★——那會把舊告警全報成新增。HEAD 沒有的物件:批次讀取那行是 `HEAD:<路徑> missing`,
+     路徑可以含空白(r1 正確性席 F2),大小那欄不是數字 → None。"""
+     want = [p for p in dict.fromkeys(paths) if p and "\n" not in p]
+     got = {p: None for p in paths}
+     if not want:
+         return got
+-    pre = _git_untrusted_c(repo_root)
++    pre = _git_untrusted_c()
+     specs = [f"HEAD:{p}" for p in want]
+     sizes = _nodehome_cat_sizes(repo_root, specs, pre=pre)
+     if sizes is None:
+         return None
+     cap = max_bytes if max_bytes is not None else float("inf")
+     if big is not None:
+         big.update(p for p, n in zip(want, sizes) if n is not None and n > cap)
+     data = _nodehome_cat_blobs_capped(repo_root, specs, cap, sizes=sizes, pre=pre)
+     if data is None:
+         return None
+@@ -67212,35 +67244,33 @@ def _impact_diff_modes(repo_root, files, *diff_args, deadline=None):
+     if not any(f in _BOOKKEEPING_FILES or f.startswith(_IMPACT_RECORD_DIRS) for f in files):
+         return {}
+     import time as _t
+     raw = _impact_diff_raw(repo_root, diff_args, deadline)
+     changes = _codeloop_raw_changes(raw) if raw is not None else None
+     if changes is None:
+         return None
+     out, ask = {}, []
+     for f, (old, new, old_oid, new_oid) in changes.items():
+         mode, oid = (old, old_oid) if new == "000000" else (new, new_oid)
+-        out[f] = (mode, None)
+-        if (f.startswith(_IMPACT_RECORD_DIRS) and mode != "100755"
+-                and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False)
+-                and oid.strip("0") and len(ask) < _ROLE_READ_CAP):
++        out[f] = _impact_mode_entry(mode, None)
++        if _impact_wants_head(f, mode) and oid.strip("0") and len(ask) < _ROLE_READ_CAP:
+             ask.append((f, oid))
+     if ask:
+         left = _disp_git_timeout() if deadline is None else min(_disp_git_timeout(), deadline - _t.monotonic())
+         if left <= 0:
+             return out
+         heads = _nodehome_cat_blobs_capped(repo_root, [oid for _f, oid in ask],
+                                           _CODELOOP_BOOKKEEPING_HEAD_CAP, timeout=left,
+                                           max_total_bytes=_CODELOOP_BOOKKEEPING_HEAD_CAP, deadline=deadline)
+         if heads is not None:
+             for (f, _oid), head in zip(ask, heads):
+-                out[f] = (out[f][0], None if head is None else _head_is_shebang(head, lenient=True))
++                out[f] = _impact_mode_entry(out[f][0], head)
+     return out
+ 
+ 
+ def _impact_payload_read(path):
+     """讀一份已經算好的波及結果(pre-push 每次推送只算一次,兩個消費者共用同一份)。
+ 
+     ★為什麼要有這支★(2026-09-07 全 repo 審視 #17,設計 [S1] 第 3 步):
+     推送關卡本來就對每個 ref 跑一次完整的波及計算(同步點名用)。合約測試閘要的是
+     同一份東西裡「帶合約而且綁了測試」的那幾篇——★再算一次就是把一次推送算兩次★,
+     而那正是這一案 r1 拿來否決原設計的那個成本(那條裁定後來被查出已作廢,
+@@ -67275,74 +67305,154 @@ def _impact_payload_read(path):
+     if not isinstance(res, list) or any(not isinstance(r, dict) for r in res):
+         return None
+     sync = data.get("sync")
+     if sync is not None and not (isinstance(sync, dict)
+                                  and isinstance(sync.get("missing"), list)
+                                  and isinstance(sync.get("touched_nodes"), list)):
+         return None
+     return data
+ 
+ 
++# 影響分析 --worktree-nofilter 讀內容的總量上限(上一個提交那一版加工作樹那一版合計;代碼審 r4 資源席 F1、通才席 F2):
++# 每支另受 _CODELOOP_BOOKKEEPING_HEAD_CAP(1MB)管。取 8 支滿上限的量:解碼加切行加數次數約是原始大小的數倍,8MB 讓尖峰記憶體留在
++# 一兩百 MB 內;一般回合改的程式碼遠小於這個量。超過的那幾支只用路徑當查詢文字,列進 query_path_only。
++_IMPACT_WT_READ_TOTAL = 8 * 1024 * 1024
++
++
++def _impact_hunk_query(lines):
++    """改動行 → 查詢文字:只留 + 或 - 開頭的行、去掉 +++/--- 檔頭,每行去掉第一個字與前後空白,接成一行、最多 4000 字。
++    ★git diff 那條與 --worktree-nofilter 那條共用這一支★(代碼審 r4 架構對齊席 F1:原本兩處各寫一份整形,改一邊另一邊不會跟)。"""
++    return " ".join(ln[1:].strip() for ln in lines if ln[:1] in "+-" and not ln.startswith(("+++", "---")))[:4000]
++
++
++def _impact_wants_head(f, mode):
++    """這支檔的分類要不要看首行是不是 #!:只有簿記目錄裡、模式不是 100755、副檔名認不出(_nodehome_code_kind 回 shebang?)的才要
++    (_impact_diff_seed_ok)。git diff 那條(_impact_diff_modes)與 --worktree-nofilter 那條共用(代碼審 r4 架構對齊席 F1)。"""
++    return (f.startswith(_IMPACT_RECORD_DIRS) and mode != "100755"
++            and _nodehome_code_kind(f) == "shebang?" and not _path_special_chars(f, surrogate=False))
++
++
++def _impact_mode_entry(mode, head):
++    """(模式, 首行是不是 #!) 那一格:head 是讀到的開頭位元組,None 是沒讀或讀不到(不知道)。兩條路共用(代碼審 r4 架構對齊席 F1)。"""
++    return (mode, None if head is None else _head_is_shebang(head, lenient=True))
++
++
++def _impact_line_delta(old, new):
++    """兩版內容(位元組)→ 改動行:舊版多出來的行前面加 -、新版多出來的加 +。★線性時間★:兩邊各用 collections.Counter 數每行出現幾次再相減
++    (代碼審 r4 通才席 F2、資源席 F2:difflib 最壞是平方時間,https://docs.python.org/3/library/difflib.html ;重複行多的 2 萬行檔實測 57 秒,
++    收工點名的預算只有約 30 秒)。行序不保留、移動過的行不算改動——查詢文字只給事故正規式比對與排名用,不看行序。
++    任一版前 8000 位元組有 NUL 就當二進位、沒有改動行(同 git diff 的二進位判法:只印「Binary files differ」,沒有 +/- 行)。"""
++    from collections import Counter
++    if b"\0" in old[:8000] or b"\0" in new[:8000]:
++        return []
++    a = Counter(old.decode("utf-8", "replace").splitlines())
++    b = Counter(new.decode("utf-8", "replace").splitlines())
++    return ["-" + ln for ln in (a - b).elements()] + ["+" + ln for ln in (b - a).elements()]
++
++
+ def _impact_wt_nofilter(repo_root):
+     """impact --diff HEAD --worktree-nofilter 的候選與查詢文字,★不跑 git diff★(回合結束檢查代碼審 r3:git diff 拿工作樹比會經
+-    被打開目錄自帶的內容過濾器)→ (候選路徑清單, {路徑: (模式, 首行是不是 #!)}, {路徑: 查詢文字}, [查詢文字退回只用路徑的檔]) 或 None。
+-    候選與模式走 _wt_changed_nofilter(同 git diff --name-only --no-renames HEAD:不含未追蹤、改名兩端都列);上一個提交那一版用
+-    _nodehome_cat_blobs_capped 讀、工作樹那一版直接讀檔,兩邊都受 _CODELOOP_BOOKKEEPING_HEAD_CAP 管;用 difflib 算出 +/- 行,
+-    接成跟 git diff 段落同形狀的查詢文字。超過上限或讀不到的那支只用路徑當查詢文字,列進第四個回傳值。"""
+-    import difflib
++    被打開目錄自帶的內容過濾器)→ (候選路徑清單, {路徑: (模式, 首行是不是 #!)}, {路徑: 查詢文字}, [查詢文字退回只用路徑的程式碼檔]) 或 None。
++    候選走 _wt_changed_nofilter(同 git diff --name-only --no-renames HEAD:不含未追蹤、改名兩端都列;路徑從 repo 根算起,--repo 可以是子目錄)。
++    模式:工作樹上還在的看 lstat,已刪除的取 HEAD 的(ls-tree);要看首行的(_impact_wants_head)讀開頭,刪除檔讀 HEAD 那一版(代碼審 r4 通才席 F3)。
++    ★先判是不是程式碼、才讀內容★(代碼審 r4 資源席 F1):不是程式碼的(_impact_diff_seed_ok)不讀、不進查詢文字。程式碼檔兩版各受
++    _CODELOOP_BOOKKEEPING_HEAD_CAP 管、合計受 _IMPACT_WT_READ_TOTAL 管,工作樹那一版逐支讀逐支放;路徑含換行或結尾是 CR 的批次讀取表達不了
++    (代碼審 r4 正確性席 F3)、超過上限或讀不到的那支只用路徑當查詢文字,列進第四個回傳值。改動行用 _impact_line_delta(線性時間)。"""
+     import stat as _st
+     ents = _lint_wt_changed(repo_root)
+-    if ents is None:
++    t = _lint_wt_git(repo_root, "rev-parse", "--show-toplevel")
++    if ents is None or t is None or t.returncode != 0 or not t.stdout.strip():
+         return None
++    top = Path(os.fsdecode(t.stdout[:-1] if t.stdout.endswith(b"\n") else t.stdout))   # 路徑從 repo 根算起(代碼審 r4:--repo 可以是子目錄)
+     cands = []
+     for x, y, p, o in ents:
+         if x + y in ("??", "AD"):
+             continue                      # 未追蹤、加進索引又從工作樹刪掉的:git diff HEAD 兩邊都沒有
+         for q in ((o, p) if o else (p,)):
+             if q not in cands:
+                 cands.append(q)
+-    cap = _CODELOOP_BOOKKEEPING_HEAD_CAP
+-    specs = [f"HEAD:{p}" for p in cands]
+-    sizes = _nodehome_cat_sizes(repo_root, specs, pre=_git_untrusted_c()) if specs else []
+-    if sizes is None:
+-        return None
+-    blobs = _nodehome_cat_blobs_capped(repo_root, specs, cap, sizes=sizes, pre=_git_untrusted_c()) if specs else []
+-    if blobs is None:
+-        return None
+-    modes, texts, fallback = {}, {}, []
+-    for p, n, old in zip(cands, sizes, blobs):
+-        fp = Path(repo_root) / p
++    cap, pre = _CODELOOP_BOOKKEEPING_HEAD_CAP, _git_untrusted_c()
++    stats = {}
++    for p in cands:
+         try:
+-            st = os.lstat(fp)
++            stats[p] = os.lstat(top / p)
+         except OSError:
+-            st = None
+-        new, ok = b"", True
+-        if st is not None:
+-            ok = _st.S_ISREG(st.st_mode) and st.st_size <= cap
+-            if ok:
++            stats[p] = None
++    head_mode = {}
++    if any(v is None for v in stats.values()):
++        r = _lint_wt_git(top, "ls-tree", "-r", "-z", "--full-tree", "HEAD")
++        if r is None or r.returncode != 0:
++            return None
++        for ent in r.stdout.split(b"\0"):
++            meta, tab, path = ent.partition(b"\t")
++            fl = meta.split(b" ")
++            if tab and len(fl) == 3:
++                head_mode[os.fsdecode(path)] = fl[0].decode("ascii", "replace")
++    modes, ask = {}, []
++    for p in cands:
++        st = stats[p]
++        mode = ("100755" if st.st_mode & 0o111 else "100644") if st is not None else head_mode.get(p)
++        head = None
++        if _impact_wants_head(p, mode):
++            if st is None:
++                if len(ask) < _ROLE_READ_CAP:
++                    ask.append(p)
++            elif _st.S_ISREG(st.st_mode):
+                 try:
+-                    with open(fp, "rb") as fh:
+-                        new = fh.read(cap + 1)
+-                    ok = len(new) <= cap
++                    with open(top / p, "rb") as fh:
++                        head = fh.read(64 * 1024)
+                 except OSError:
+-                    ok = False
+-            modes[p] = ("100755" if st.st_mode & 0o111 else "100644", _head_is_shebang(new, lenient=True) if ok else None)
+-        if n is not None and old is None:
+-            ok = False                        # 上一個提交那一版超過上限或讀不到
+-        if not ok:
+-            texts[p] = p
++                    head = None
++        modes[p] = _impact_mode_entry(mode, head)
++    if ask:
++        heads = _nodehome_cat_blobs_capped(top, [f"HEAD:{p}" for p in ask], cap, max_total_bytes=cap, pre=pre)
++        for p, h in zip(ask, heads or []):
++            modes[p] = _impact_mode_entry(modes[p][0], h)
++    texts, fallback, readable = {}, [], []
++    for p in cands:
++        if not _impact_diff_seed_ok(p, *modes[p]):
++            continue                      # 不是程式碼:cmd_impact_diff 不拿它當種子,內容不讀
++        if "\n" in p or p.endswith("\r"):
++            fallback.append(p)            # 批次讀取一行一個路徑,表達不了
++        else:
++            readable.append(p)
++    sizes = _nodehome_cat_sizes(top, [f"HEAD:{p}" for p in readable], pre=pre) if readable else []
++    if sizes is None:
++        return None
++    pick, used = [], 0
++    for p, n in zip(readable, sizes):
++        st = stats[p]
++        add = (n or 0) + (st.st_size if st is not None else 0)
++        if (st is not None and (not _st.S_ISREG(st.st_mode) or st.st_size > cap)) or (n is not None and n > cap) \
++                or used + add > _IMPACT_WT_READ_TOTAL:
+             fallback.append(p)
+             continue
+-        a = (old or b"").decode("utf-8", "replace").splitlines()
+-        b = new.decode("utf-8", "replace").splitlines()
+-        lines = [ln for ln in difflib.unified_diff(a, b, lineterm="", n=0) if ln[:1] in "+-" and not ln.startswith(("+++", "---"))]
+-        texts[p] = " ".join(ln[1:].strip() for ln in lines)[:4000]
++        used += add
++        pick.append((p, n))
++    blobs = _nodehome_cat_blobs_capped(top, [f"HEAD:{p}" for p, _n in pick], cap, sizes=[n for _p, n in pick], pre=pre) if pick else []
++    if blobs is None:
++        return None
++    for i, (p, n) in enumerate(pick):
++        old, blobs[i] = blobs[i], None    # 逐支放掉,尖峰只多一支
++        new = b""
++        if stats[p] is not None:
++            try:
++                with open(top / p, "rb") as fh:
++                    new = fh.read(cap + 1)
++            except OSError:
++                new = None
++        if (n is not None and old is None) or new is None or len(new) > cap:
++            fallback.append(p)            # 上一個提交那一版讀不到、工作樹那一版讀不到或讀的時候變大
++            continue
++        texts[p] = _impact_hunk_query(_impact_line_delta(old or b"", new))
++    for p in fallback:
++        texts[p] = p
+     return cands, modes, texts, fallback
+ 
+ 
+ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as_json=False,
+                     sync_check=False, sync_only=False, from_json=None, wt_nofilter=False):
+     """code-loop 橋接:對整段 diff 的每支改動 code 檔跑 ranked impact(query=該檔 hunk 文字),
+     聚合成「受影響功能面」manifest——固定席(合約/事故)全保、非固定取跨檔最高分 top-N。
+     定位=審計員鏡頭(advisory,人判),非自動推播(hook 面 goldset 評測未過線,故不接 hook)。
+     rc: 0=成功 / 2=git 失敗 / 3=vault 缺。
+ 
+@@ -67412,22 +67522,21 @@ def cmd_impact_diff(diff_range, repo=None, depth=None, top=8, min_score=0.20, as
+     # 文件本來就寫著這條路會回「圖譜缺」,只是零檔時走不到。
+     if _vault is None:
+         return _no_vault_msg()
+     _env_shared = Env(_vault)   # 建一次,逐檔復用(r1 N+1)
+     for f in files:
+         if wt_texts is not None:
+             hunk = wt_texts.get(f, f)
+         else:
+             d = _sp.run(["git", "-C", str(repo_root), "-c", "core.quotePath=false",
+                          "diff", "--no-ext-diff", "--no-textconv", diff_range, "--", f], capture_output=True, text=True, errors="replace")
+-            hunk = " ".join(l[1:].strip() for l in d.stdout.splitlines()
+-                            if l[:1] in "+-" and not l.startswith(("+++", "---")))[:4000]
++            hunk = _impact_hunk_query(d.stdout.splitlines())
+         buf = io.StringIO()
+         with contextlib.redirect_stdout(buf):
+             rc = cmd_impact(f, repo=str(repo_root), depth=depth, as_json=True,
+                             ranked=True, top=top, min_score=min_score,
+                             payload={"query": hunk, "prospective": {}},
+                             preloaded=(_vault, _env_shared) if _env_shared is not None else None)
+         if rc == 3:
+             print("IMPACT-DEBUG: vault 找不到(rc3)", file=sys.stderr)
+             return 3
+         if rc != 0:
+@@ -70876,21 +70985,21 @@ def _spec_freeze_out_ok(outp, data):
+ 
+ 
+ def _spec_freeze_build(root, head, rel, mode):
+     """用暫存 index 建不掛 ref 的提交:read-tree HEAD → hash-object -w --no-filters → update-index --cacheinfo → write-tree → commit-tree。
+     固定作者、每個 git 呼叫關掉掛鉤與 fsmonitor;暫存 index 用完就刪。任何一步失敗回 None(可能已留下懸空物件,gc 會清)。回 (提交, blob)。"""
+     import shutil as _sh
+     import tempfile as _tf
+     tmpd = _tf.mkdtemp(prefix="lumos-spec-freeze-")
+     env = dict(_SPEC_FREEZE_ENV, GIT_INDEX_FILE=str(Path(tmpd) / "index"))
+ 
+-    pre = _git_untrusted_c(root)
++    pre = _git_untrusted_c()
+ 
+     def g(*a):
+         r = _lens_git(root, *pre, *a, env=env, quote=True)
+         return r.stdout.strip() if r is not None and r.returncode == 0 else None
+     try:
+         if g("read-tree", "HEAD") is None:
+             return None
+         blob = g("hash-object", "-w", "--no-filters", "--", rel)
+         if not blob or g("update-index", "--add", "--cacheinfo", f"{mode},{blob},{rel}") is None:
+             return None
+@@ -70954,21 +71063,21 @@ def _spec_freeze_from_commit(root, cwd, value, out, as_json, fail):
+     (spec_rev_missing)→ 路徑字串(spec_outside_repo)→ NFC(spec_missing)→ 一般檔與大小、讀內容(spec_missing、spec_too_large)→ --out。"""
+     import unicodedata as _ud
+     head, _c, rel = str(value).partition(":")
+     low = _spec_commit_rev_ok(root, head)
+     if low is None:
+         return fail("spec_rev_missing", "提交編號要寫完整的 40 或 64 碼,而且要在這個 repo 的物件庫裡找得到")
+     if _spec_commit_path_bad(rel):
+         return fail("spec_outside_repo", "提交寫法的路徑要在 docs/<名>-knowledge/ 底下、不含空白與 . .. 段")
+     if not _ud.is_normalized("NFC", rel):
+         return fail("spec_missing", "計劃路徑不是 NFC")
+-    pre = _git_untrusted_c(root)
++    pre = _git_untrusted_c()
+     code, blob, data = _spec_commit_blob(root, low, rel, pre=pre)
+     if code:
+         return fail(code, "那個提交裡沒有這份計劃、不是一般檔或讀不到" if code == "spec_missing" else f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
+     outp, rc = _spec_freeze_check_out(root, cwd, out, data, fail)
+     if rc is not None:
+         return rc
+     return _spec_freeze_finish(root, outp, out, low, blob, rel, data, as_json, fail)
+ 
+ 
+ def cmd_spec_freeze(plan, out, as_json=False):
+@@ -70980,21 +71089,21 @@ def cmd_spec_freeze(plan, out, as_json=False):
+     ①形狀(not_git、no_head)②路徑字串(spec_outside_repo)③逐段 lstat(spec_missing)④大小(spec_too_large)
+     ⑤--out(位置 out_outside_repo、內容 out_conflict)⑥建提交與讀回(git_failed)。第 1 到 5 步都在建任何物件之前,拒絕時不建提交、不寫 --out。
+     代碼表見 _SPEC_FREEZE_FAIL_CODES。"""
+     import stat as _st
+     import unicodedata as _ud
+     cwd = Path.cwd()
+ 
+     def fail(code, msg):
+         return _spec_freeze_fail(as_json, code, msg)
+ 
+-    pre = _git_untrusted_c(cwd)
++    pre = _git_untrusted_c()
+ 
+     def g(*a):
+         r = _lens_git(cwd, *pre, *a)
+         return r.stdout if r is not None and r.returncode == 0 else None
+     top = (g("rev-parse", "--show-toplevel") or "").strip()
+     if not top:
+         return fail("not_git", "目前目錄不在 git 專案裡")
+     root = Path(top)
+     chead, colon, _cpath = str(plan).partition(":")
+     if colon and _LENS_SPEC_COMMIT_RE.fullmatch(chead):   # 提交寫法:冒號前全是十六進位、至少 7 碼(同 dispatch-lens 的分界)
+@@ -71020,21 +71129,21 @@ def cmd_spec_freeze(plan, out, as_json=False):
+         return fail("spec_missing", "計劃讀不到")
+     if len(data) > _LENS_SPEC_MAX_BYTES:
+         return fail("spec_too_large", f"計劃超過 {_LENS_SPEC_MAX_BYTES} 位元組")
+     outp, rc = _spec_freeze_check_out(root, cwd, out, data, fail)
+     if rc is not None:
+         return rc
+     built = _spec_freeze_build(root, head, rel, "100755" if st.st_mode & _st.S_IXUSR else "100644")
+     if built is None:
+         return fail("git_failed", "建提交時 git 失敗(可能已留下懸空物件,gc 會清)")
+     commit, blob = built
+-    code, blob2, got = _spec_commit_blob(root, commit, rel, pre=_git_untrusted_c(root))   # 用 dispatch-lens 同一支讀法讀回
++    code, blob2, got = _spec_commit_blob(root, commit, rel, pre=_git_untrusted_c())   # 用 dispatch-lens 同一支讀法讀回
+     if code or blob2 != blob or got != data:
+         return fail("git_failed", "從剛建的提交讀回的計劃跟工作樹上的不同")
+     return _spec_freeze_finish(root, outp, out, commit, blob, rel, got, as_json, fail)
+ 
+ 
+ def _codeloop_git_head(repo_root):
+     """取 HEAD full sha。"""
+     import subprocess
+     r = subprocess.run(["git", "rev-parse", "HEAD"],
+                        capture_output=True, text=True, errors="replace", cwd=str(repo_root))
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 2c95c6375..b95217108 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -344,96 +344,109 @@ def _git(project_root: Path, *args, text=True, data=None):
+ # 不走共用模組;守衛 t_lwt_r3_nofilter_verbatim 盯著兩份一字不差。
+ def _wt_changed_nofilter(repo_root, run, paths=()):
+     """工作樹上還沒提交的改動,★不跑 git status、不經任何內容過濾器★ → [(X, Y, 路徑, 舊路徑或 None)] 或 None(任何一個 git 指令失敗)。
+     狀態碼同 git status --porcelain=v1:X 是 HEAD 對索引、Y 是索引對工作樹;?? 未追蹤、UU 衝突;HEAD 與索引同一物件、只換了路徑的算 R。
+     為什麼:git status 遇到大小不變、內容改過的檔會跑 .gitattributes 指到的 clean/process 過濾器,過濾器的名字與指令由被打開的目錄決定,
+     列名字再逐個關掉的做法被打穿三次。這裡只用不執行內容過濾器的指令:ls-tree -r -z(HEAD)、ls-files -s -z(索引的模式與物件編號)、
+     ls-files -s --debug -z(索引記下的時間與大小,只拿來省雜湊、格式認不得就全部算)、ls-files -o --exclude-standard -z(未追蹤)、
+     hash-object --no-filters --stdin-paths(工作樹內容照原樣算,https://git-scm.com/docs/git-hash-object )。
+     只看一般檔(100644、100755),符號連結與子模組(120000、160000)跳過。時間與大小跟索引記的一樣、而且比索引檔早寫的才不算雜湊(同 git 的 racy 判法)。
+     用了真過濾器的專案(LFS、autocrlf)會多報幾支(工作樹原樣跟索引裡轉過的不同),方向是多查不漏查。
+-    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。"""
++    run(*參數, data=位元組或 None) → 有 returncode 與 stdout(位元組)的結果或 None;-C 與 -c 參數由呼叫端決定。paths 給了就只看這幾支(字面路徑)。
++    ★路徑基準一律是 repo 根★(代碼審 r4 正確性席 F1、邊界席 F1、通才席 F1):repo_root 可以是 repo 的子目錄(monorepo);先用
++    rev-parse --show-toplevel 取根、之後每個 git 指令都帶 -C <根>(ls-tree --full-tree 從根算、hash-object --stdin-paths 也從根開檔,
++    跟 ls-files 不統一時乾淨的樹會被報成一堆刪除與改名、改過的檔整次回 None),ls-files 加 --full-name;lstat 用根接路徑;
++    paths 是相對 repo_root 的,前面補 --show-prefix。回傳的路徑從 repo 根算起(同 git status --porcelain)。"""
+     import os as _os
+     import stat as _st
+-    lit = ("--", *paths) if paths else ()
+ 
+     def ok(*a, data=None):
+         r = run(*a, data=data)
+         return r.stdout if r is not None and r.returncode == 0 else None
++    t, pfx = ok("rev-parse", "--show-toplevel"), ok("rev-parse", "--show-prefix")
++    if not t or pfx is None:
++        return None
++    top = _os.fsdecode(t[:-1] if t.endswith(b"\n") else t)
++    pfx = _os.fsdecode(pfx[:-1] if pfx.endswith(b"\n") else pfx)
++    lit = ("--", *(pfx + p for p in paths)) if paths else ()
++    given = run                           # 呼叫端給的(-C 是 repo_root);之後每個指令都改在 repo 根跑
++
++    def run(*a, data=None):
++        return given("-C", top, *a, data=data)
+ 
+     def entries(raw):
+         for ent in (raw or b"").split(b"\0"):
+             meta, tab, p = ent.partition(b"\t")
+             f = meta.split(b" ")
+             if tab and len(f) == 3:
+                 yield f, p
+     reg = (b"100644", b"100755")
+     h = run("rev-parse", "--verify", "-q", "HEAD")
+     if h is None or h.returncode not in (0, 1):
+         return None
+     raw = ok("ls-tree", "-r", "-z", "--full-tree", "HEAD", *lit) if h.returncode == 0 else b""
+-    idx = ok("ls-files", "-s", "-z", *lit)
+-    unt = ok("ls-files", "-o", "--exclude-standard", "-z", *lit)
++    idx = ok("ls-files", "-s", "-z", "--full-name", *lit)
++    unt = ok("ls-files", "-o", "--exclude-standard", "-z", "--full-name", *lit)
+     if raw is None or idx is None or unt is None:
+         return None
+     head, index, conflict, skip = {}, {}, set(), set()
+     for f, p in entries(raw):
+         if f[0] in reg:
+             head[p] = f[2]
+         else:
+             skip.add(p)
+     for f, p in entries(idx):
+         if f[2] != b"0":
+             conflict.add(p)
+         elif f[0] in reg:
+             index[p] = f[1]
+         else:
+             skip.add(p)
+     stamp = {}
+-    dbg = ok("ls-files", "-s", "--debug", "-z", *lit) or b""
++    dbg = ok("ls-files", "-s", "--debug", "-z", "--full-name", *lit) or b""
+     prev = None
+     for chunk in dbg.split(b"\0"):
+         lines = chunk.split(b"\n")
+         info = {}
+         while lines and lines[0].startswith(b"  "):
+             for kv in lines.pop(0).strip().split(b"\t"):
+                 k, _c, v = kv.partition(b": ")
+                 info[k.strip()] = v.strip()
+         try:
+             if prev is not None and info:
+                 sec, _c, ns = info[b"mtime"].partition(b":")
+                 stamp[prev] = (int(sec) * 1000000000 + int(ns), int(info[b"size"]))
+         except (KeyError, ValueError):
+             pass
+         rest = b"\n".join(lines)
+         prev = rest.partition(b"\t")[2] if b"\t" in rest else None
+     gp = ok("rev-parse", "--git-path", "index")
+     try:
+-        idx_ns = _os.stat(_os.path.join(str(repo_root), _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
++        idx_ns = _os.stat(_os.path.join(top, _os.fsdecode(gp.rstrip(b"\n")))).st_mtime_ns if gp else None
+     except OSError:
+         idx_ns = None
+     wt, ask = {}, []
+     for p, oid in index.items():
+         try:
+-            s = _os.lstat(_os.path.join(str(repo_root), _os.fsdecode(p)))
++            s = _os.lstat(_os.path.join(top, _os.fsdecode(p)))
+         except (FileNotFoundError, NotADirectoryError):
+             wt[p] = "D"
+             continue
+         except OSError:
+             wt[p] = "M"
+             continue
+         if not _st.S_ISREG(s.st_mode):
+             wt[p] = "T"
+         elif idx_ns is not None and s.st_mtime_ns < idx_ns and stamp.get(p) == (s.st_mtime_ns, s.st_size & 0xFFFFFFFF):
+             wt[p] = " "
+-        elif b"\n" in p or p[:1] == b'"':
+-            wt[p] = "M"                   # 一行一個路徑的輸入表達不了,當改過(多查)
++        elif b"\n" in p or p[:1] == b'"' or p.endswith(b"\r"):
++            wt[p] = "M"                   # 一行一個路徑的輸入表達不了(結尾的 CR 會被當行尾吃掉,代碼審 r4 正確性席 F2),當改過(多查)
+         else:
+             ask.append(p)
+     if ask:
+         got = ok("hash-object", "--no-filters", "--stdin-paths", data=b"\n".join(ask) + b"\n")
+         sums = (got or b"").split()
+         if got is None or len(sums) != len(ask):
+             return None
+         for p, sha in zip(ask, sums):
+             wt[p] = " " if sha == index[p] else "M"
+     res = {}
+@@ -750,20 +763,22 @@ def emit_queue_patrol(project_root: Path) -> None:
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/dispatch-lens-hook.py b/scripts/hooks/claude/dispatch-lens-hook.py
+index 0c87459a0..4cb4ded79 100755
+--- a/scripts/hooks/claude/dispatch-lens-hook.py
++++ b/scripts/hooks/claude/dispatch-lens-hook.py
+@@ -421,20 +421,22 @@ def _emit_updated(tool_input: dict, prompt: str, text: str) -> None:
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index 5c3c29c84..8f81a5e13 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -291,20 +291,22 @@ def _backdate_marker(session_id: str, file_abs: str, seconds_ago: float) -> None
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/lumos-entry-hook.py b/scripts/hooks/claude/lumos-entry-hook.py
+index f0c0a6ab3..238738822 100755
+--- a/scripts/hooks/claude/lumos-entry-hook.py
++++ b/scripts/hooks/claude/lumos-entry-hook.py
+@@ -211,20 +211,22 @@ def _enforcement_alert(rows):
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡
+diff --git a/scripts/hooks/claude/stop-lint-hook.py b/scripts/hooks/claude/stop-lint-hook.py
+index 43a8396a4..8f0db9662 100644
+--- a/scripts/hooks/claude/stop-lint-hook.py
++++ b/scripts/hooks/claude/stop-lint-hook.py
+@@ -65,20 +65,22 @@ def _shared():
+ # 是自己的、group/other 不可寫。
+ # ★誠實邊界★:完全控制你 PATH 的人本來就能在你帳號下跑任何東西,這條擋不住那種;
+ # 它擋的是「專案順手塞一個 bin 進 PATH」與「別人可寫的目錄裡放一支同名的」。
+ def _trusted_lumos():
+     import shutil as _sh, os as _os, stat as _st
+     from pathlib import Path as _P
+ 
+     def _ok(cand):
+         try:
+             p = _P(cand)
++            if not p.is_absolute():
++                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
+             if not p.is_file():
+                 return None
+             st = p.stat()
+             if hasattr(_os, "getuid") and st.st_uid != _os.getuid():
+                 return None          # 不是自己的檔
+             if st.st_mode & (_st.S_IWGRP | _st.S_IWOTH):
+                 return None          # 別人可寫 = 別人可換內容
+             par = p.parent.stat()
+             if hasattr(_os, "getuid") and par.st_uid != _os.getuid():
+                 return None          # 放在別人的目錄裡

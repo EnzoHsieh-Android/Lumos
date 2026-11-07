@@ -1,0 +1,258 @@
+diff --git a/scripts/hooks/claude/check-graph-sync.py b/scripts/hooks/claude/check-graph-sync.py
+index 8deb53deb..cafd172a2 100755
+--- a/scripts/hooks/claude/check-graph-sync.py
++++ b/scripts/hooks/claude/check-graph-sync.py
+@@ -23,21 +23,20 @@
+ 用 `echo >`、`sed -i`、heredoc 改的檔一支都不算——實測一輪改三支只報一支,
+ 而最近 12 份逐字稿裡改 code 的動作 286 次走 shell、31 次走編輯工具。列舉法原理上補不完。
+ 代價:清單是「工作樹上未提交的」,★不再宣稱切得出這一輪★,訊息措辭已跟著改口;
+ 為了不變成每輪唸同一批檔,跟「上次印過什麼」比對,一樣就不印
+ (那份紀錄在體驗路徑不在正確性路徑——壞掉只會多印一次,不會少報)。
+ """
+ from __future__ import annotations
+ import json
+ import os
+ import re
+-import time
+ import shlex
+ import subprocess
+ import sys
+ from pathlib import Path
+ 
+ # ── 鉤子共用程式(家目錄底下的標記目錄、標記檔名消毒與 O_EXCL 佔名額、檔名消毒、git 防護)在 _hookshared.py ──────────
+ # 單源在那支檔([[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2:收工寫法檢查那支也要用,
+ # 這支檔吃過「邏輯抄一份、一邊改另一邊沒跟上」的虧,所以不抄第二份)。照名字匯入回來,外部看到的名字不變;
+ # 匯入失敗(共用模組沒裝過去)時 main 靜默放行,不讓收工卡住。
+ # ★可信來源解析與逾時預算不在共用模組★:那兩段跟安全邊界綁在一起,照 [[Systems/hook信任邊界]] 留在這支檔當逐字複本(下面)。
+diff --git a/scripts/hooks/claude/impact-hook.py b/scripts/hooks/claude/impact-hook.py
+index ee2b7ad5e..7b5536caf 100755
+--- a/scripts/hooks/claude/impact-hook.py
++++ b/scripts/hooks/claude/impact-hook.py
+@@ -434,27 +434,26 @@ def _join_capped(texts: list, cap_bytes: int):
+     """各段以換行相接、超過 cap_bytes 截前 cap_bytes 並標記 → (text, truncated)。字數乘 4 都不到上限時不用編碼就知道沒超過。"""
+     text = "\n".join(t for t in texts if t)
+     if len(text) * 4 <= cap_bytes:
+         return text, False
+     b = text.encode("utf-8")
+     if len(b) > cap_bytes:
+         return b[:cap_bytes].decode("utf-8", errors="ignore"), True
+     return text, False
+ 
+ 
+-def extract_delta_text(payload: dict, cap_bytes: int = DELTA_TEXT_CAP, new_only: bool = False):
++def extract_delta_text(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
+     """表態閘 S3(r3 外家 F10/正確性席 C2/接手席 H5):把「這次編輯的原始內容」保留換行送給 lumos 逐行比對 when。
+     query 那欄(extract_delta_query)是 8000 字/512 詞的截斷版、用空白重組會丟換行,只給詞彙融合用;拿它算觸發會把後段靜默漏掉。
+-    new_only=True 只取寫入的新內容(Edit 的 new_string、MultiEdit 每段 new_string、Write 的 content):改檔前推決策列用,
+-    old_string 裡的觸發字不算([[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3 第 1 條;不另寫第三份取段函式)。
+-    兩份都要時用 extract_delta_texts(段只取一次)。回 (text, truncated)。"""
+-    return _join_capped([t for is_new, t in _delta_parts(payload) if is_new or not new_only], cap_bytes)
++    只取寫入的新內容(改檔前推決策列用,old_string 裡的觸發字不算)一律走 extract_delta_texts(段只取一次、整份與新內容一起回;
++    代碼審 r2 通才席 F3:原本這裡另有 new_only 參數,正式路徑沒人帶,等於兩套取段入口)。回 (text, truncated)。"""
++    return _join_capped([t for _n, t in _delta_parts(payload)], cap_bytes)
+ 
+ 
+ def extract_delta_texts(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
+     """改 kt 檔時整份與只含新內容的兩份一次取:段只取一次、各自組字串與截斷 → (整份, 整份截了沒, 新內容, 新內容截了沒)
+     (回合結束檢查代碼審 r1 通才席 F6:原本同一份編輯內容取兩次,大型 Write 在逐次編輯的熱路徑上多一次取段與編碼)。"""
+     parts = _delta_parts(payload)
+     full, full_tr = _join_capped([t for _n, t in parts], cap_bytes)
+     new, new_tr = _join_capped([t for is_new, t in parts if is_new], cap_bytes)
+     return full, full_tr, new, new_tr
+ 
+diff --git a/scripts/hooks/claude/stop-lint-hook.py b/scripts/hooks/claude/stop-lint-hook.py
+index a72ad1335..625a5d4f2 100644
+--- a/scripts/hooks/claude/stop-lint-hook.py
++++ b/scripts/hooks/claude/stop-lint-hook.py
+@@ -188,35 +188,35 @@ def _repo_root(start):
+ def _prefiltered(root):
+     """repo 根的 .lumos/lint.json 有 ast-grep 字樣(只是省一次 lumos 啟動的預篩,不是安全判斷;安全判斷在 lumos 的白名單)。"""
+     try:
+         return "ast-grep" in (root / ".lumos" / "lint.json").read_text(encoding="utf-8", errors="replace")
+     except OSError:
+         return False
+ 
+ 
+ def _mark_event(kind, note) -> None:
+     """吞掉逾時或失敗的地方自己記一筆掛鉤事件(_hookevent.mark),不然共用的 guard 會記成 ok。
+-    記不到不影響本業;★寬接 Exception 是刻意的★(同派工鏡頭 hook 的同名函式)。"""
++    記不到不影響本業;★寬接 Exception 是刻意的★。本體跟派工鏡頭、影響鏡頭兩支的同名函式逐字相同(說明文字除外),
++    有守衛盯著(t_hook_r2_mark_event_verbatim;代碼審 r2 架構對齊席 F3)。"""
+     try:
+-        if _HERE not in sys.path:
+-            sys.path.insert(0, _HERE)
++        sys.path.insert(0, str(Path(__file__).resolve().parent))
+         from _hookevent import mark
+         mark(kind, note)
+     except Exception:
+         return
+ 
+ 
+ def _turn_start(rec):
+     """回合起點紀錄的時刻 → 正的有限 epoch 秒,或 None(紀錄被改壞、舊版寫的、型別不對:當沒記到起點,不丟例外;邊界席 F3)。"""
+     try:
+         t = float(rec.get("t"))
+-    except (TypeError, ValueError):
++    except (TypeError, ValueError, OverflowError):      # 超大整數轉不了浮點數(代碼審 r2 邊界席 F1)
+         return None
+     return t if math.isfinite(t) and t > 0 else None
+ 
+ 
+ def _on_prompt(payload, sh):
+     """送出提示:覆寫 stop-turn/<會談>(先寫暫存檔再 os.replace)。會談編號空或目錄不可信就不寫;不輸出、rc0。"""
+     sid = sh._mark_name(payload.get("session_id") or "")
+     if sid is None:
+         return 0
+     d = sh._cache_dir_under_home("stop-turn", "回合起點紀錄")
+@@ -229,22 +229,23 @@ def _on_prompt(payload, sh):
+     except OSError:
+         try:
+             tmp.unlink()
+         except OSError:
+             pass
+     return 0
+ 
+ 
+ def _killpg(g, sig):
+     """對程序群組 g 送 sig;沒有程序群組的平台(Windows 沒有 os.killpg)回 False、什麼都不做(邊界席 F4:原本拋 AttributeError,
+-    逾時收尾當場崩)。送不到(群組已不在等)也回 False。收群組是功能類(漏收是殘留程序,不是安全檢查失效),
+-    跟記憶清掃那支的 _kill_tree 一樣用平台判斷,不另抽共用。"""
++    逾時收尾當場崩)。送不到(群組已不在等)也回 False。收群組是功能類(漏收是殘留程序,不是安全檢查失效),不另抽共用;
++    平台判斷直接看 os 有沒有 killpg(要用的就是它)——記憶清掃那支的 _kill_tree 看 os.name、主程式的 _kill_proc_group 接 AttributeError,
++    三種寫法判的是同一件事(代碼審 r2 架構對齊席 F4:原註解寫「一樣」不實)。"""
+     if not hasattr(os, "killpg"):
+         return False
+     try:
+         os.killpg(g, sig)
+         return True
+     except (OSError, ValueError):
+         return False
+ 
+ 
+ def _alive_group(g):
+@@ -287,20 +288,21 @@ def _kill_all(grace):
+     if pgf:
+         try:
+             Path(pgf).unlink()
+         except OSError:
+             pass
+     return True
+ 
+ 
+ def _on_sigterm(signum, frame):
+     """鉤子自己被 Claude Code 逾時 SIGTERM(實驗 E3:之後約 1 到 2 秒被收掉):先 SIGTERM lint-new、等 0.5 秒、再 SIGKILL,不輸出。
++    SIGINT、SIGHUP 也裝這支(終端機關掉、Ctrl-C;代碼審 r2 邊界席 F2)。
+     ★開程序到登記之間收到的先記下★(代碼審 r1 通才席 F4):那時處理器還看不到 proc,直接結束會讓 lint-new 與它的工具變孤兒;
+     記下後由 _on_stop 在登記完當場補跑這支。不用 pthread_sigmask 擋訊號:被擋的遮罩會被子程序繼承,
+     lint-new 自己的 SIGTERM 收尾(刪快照、收工具)就永遠跑不到(2026-11-06 自測 S7② 抓到)。"""
+     if _STATE["spawning"] and _STATE["proc"] is None:
+         _STATE["pending"] = True
+         return
+     _kill_all(0.5)
+     os._exit(0)
+ 
+ 
+@@ -356,66 +358,65 @@ def _claim(sid, pid, batch, sh):
+         return None
+     try:
+         if sum(1 for x in d.iterdir() if x.name.startswith(prefix)) >= MAX_BATCHES:
+             return None
+     except OSError:
+         return None
+     return d / (prefix + bname) if sh._claim_mark(d, prefix + bname) else None
+ 
+ 
+ def _unchecked_kind(data):
+-    """lint-new rc3 的 JSON → 要記的事件種類:預算沒跑到記 timeout、環境不可用或工具跑不出結果記 error、
+-    刻意不查(合併中、宣告檔不乾淨、超過上限、不在白名單)回 None(鉤子照設計做完了判斷,記 ok)。"""
++    """lint-new rc3 的 JSON → 要記的事件種類,★照 lint-new 明寫的 unchecked_kind★,不再從 undone 的種類推測(代碼審 r2 通才席 F1:
++    git 算不出改動、讀不出 HEAD、過濾器關不掉這三條 undone 是空的,推測會把它們當刻意不查記 ok):
++    deliberate(刻意不查)回 None(鉤子照設計做完了判斷,記 ok)、timeout 記 timeout、failed 記 error;
++    欄位缺、值不認得、JSON 不是物件一律記 error(寧可記失敗,不准記成綠)。"""
+     if not isinstance(data, dict):
+         return "error"
+-    kinds = {u.get("kind") for u in (data.get("undone") or []) if isinstance(u, dict)}
+-    if kinds & {"budget", "too-long"}:
+-        return "timeout"
+-    if data.get("status") == "env-unavailable" or "env" in kinds:
+-        return "error"
+-    return None
++    return {"deliberate": None, "timeout": "timeout"}.get(data.get("unchecked_kind"), "error")
+ 
+ 
+ def _on_stop(payload, root):
+     sh = _shared()
+     if sh is None:
+         return 0
+     _inner_budget(default=30.0)               # 起算點第一次呼叫才記:預篩過後第一件事
+     if os.environ.get("LUMOS_STOP_LINT_OFF") == "1" or os.environ.get("LUMOS_STOP_BLOCK_OFF") == "1":
+         return 0
+     sid = sh._mark_name(payload.get("session_id") or "")
+     if sid is None:
+         return 0
+     turn_dir = sh._cache_dir_under_home("stop-turn", "回合起點紀錄")
+     rec = None
+     if sh._stop_dir_ok(turn_dir):
+         try:
+             rec = json.loads((turn_dir / sid).read_text(encoding="utf-8"))
+-        except (OSError, ValueError):
++        except (OSError, ValueError, RecursionError):      # 深層巢狀的 JSON(代碼審 r2 邊界席 F1)
+             rec = None
+     pid = payload.get("prompt_id")
+     since = _turn_start(rec) if isinstance(rec, dict) else None
+     if not isinstance(rec, dict) or not pid or rec.get("prompt_id") != pid or since is None:
+         if payload.get("background_tasks") or payload.get("session_crons"):
+             print("lumos 收工寫法檢查:這回合是背景工作或排程喚醒的,沒記到起點,不檢查", file=sys.stderr)
+         else:
+             print("lumos 收工寫法檢查:這回合沒記到起點,不檢查", file=sys.stderr)
+         return 0
+     lumos = _trusted_lumos()
+     if lumos is None:
+         return 0
+     sh._harden_git_env()
+     inner = _inner_budget(default=30.0)
+     pgf = str(turn_dir / f"{sid}.pgids")
+     cmd = [sys.executable, lumos, "lint-new", "--worktree", "--since", repr(since), "--json",
+            "--pgid-file", pgf, "--repo", str(root), "--budget", str(max(1, int(inner - 2)))]
+-    prev = signal.signal(signal.SIGTERM, _on_sigterm)
++    # SIGINT、SIGHUP 跟 SIGTERM 同一個收法(代碼審 r2 邊界席 F2:原本只接 SIGTERM,lint-new 在自己的 session 裡不會跟著死、變孤兒)
++    sigs = [x for x in (signal.SIGTERM, getattr(signal, "SIGINT", None), getattr(signal, "SIGHUP", None)) if x is not None]
++    prev = {x: signal.signal(x, _on_sigterm) for x in sigs}
+     _STATE["pgid_file"] = pgf
+     try:
+         # 開程序到登記進 _STATE 之間收到的 SIGTERM 由處理器記下、這裡登記完補跑(見 _on_sigterm)
+         _STATE["spawning"] = True
+         try:
+             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+                                     start_new_session=True, cwd=str(root))
+             _STATE["proc"] = proc
+         except OSError as e:
+             _mark_event("error", f"開不了 lint-new:{type(e).__name__}")
+@@ -425,22 +426,26 @@ def _on_stop(payload, root):
+         if _STATE["pending"]:
+             _on_sigterm(signal.SIGTERM, None)
+         try:
+             so, se = proc.communicate(timeout=inner)
+         except subprocess.TimeoutExpired:
+             _kill_all(1.0)
+             _mark_event("timeout", f"lint-new 超過內層時限 {inner:.0f} 秒")
+             print("lumos 收工寫法檢查:lint-new 超過時限,這次不檢查(推送前閘照樣會判)", file=sys.stderr)
+             return 0
+     finally:
++        p = _STATE["proc"]
++        if p is not None and p.poll() is None:
++            _kill_all(0.5)            # 其他沒接到的例外從這裡漏出去時 lint-new 還在跑:一樣收掉,不留孤兒
+         _STATE["proc"] = None
+-        signal.signal(signal.SIGTERM, prev)
++        for x, h in prev.items():
++            signal.signal(x, h)
+         try:
+             Path(pgf).unlink()       # 登記檔只在 lint-new 跑著時有用;跑完(含逾時收掉後)不留
+         except OSError:
+             pass
+     rc = proc.returncode
+     so = so.decode("utf-8", "replace") if isinstance(so, bytes) else (so or "")
+     if rc == 2:
+         _mark_event("error", "lint-new 不認得工作樹旗標(rc2)")
+         print("lumos 收工寫法檢查:這支 lumos 不認得 lint-new 的工作樹旗標,重跑安裝(lumos install)", file=sys.stderr)
+         return 0

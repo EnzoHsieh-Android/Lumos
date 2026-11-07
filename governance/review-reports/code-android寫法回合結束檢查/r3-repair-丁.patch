@@ -1,0 +1,709 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
+index 1aa59da4c..cab29fd11 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md
+@@ -95,32 +95,32 @@ WHY:鉤子共用程式搬進底線開頭的共用模組 `_hookshared.py`,走 `sy
+ 
+ 0. **開工方式(相依)**:白名單的工具鏈根、決策表讀表、觸發字正規式、Kotlin 剝註解字串都在盲判那條線的分支 `EnzoHsieh-Android/android-situation-evidence`。照編排者裁決(使用者 2026-11-06:主線不會再動、全部做完再一起推):實作在本機整合分支上進行——**先把那條分支合進來再開工**,不另寫同名函式、不等主線;範圍 1 到 3 都在合進來之後做。
+ 1. **`lint-new` 多一個工作樹模式**(`scripts/lumos`):
+    1. 旗標:`--worktree`、`--since <epoch 秒>`、`--json`、`--pgid-file <路徑>`(工具群組登記檔,見第 7 條)、`--budget <秒>`(新增;現在的 `lint-new` 沒有這個旗標,鉤子照舊帶會被參數解析擋成 rc2)。`--budget` 兩種模式都收:覆寫設定檔 `lint_new.budget_sec`(預設 300),從指令一開始起算,要是正數,0、負數或不是數字 rc2;不給照設定檔。`--diff` 與 `--worktree` 恰好給一個,都給或都沒給 rc2;`--since`、`--pgid-file` 只能跟 `--worktree` 一起給,否則 rc2。判定函式 `_lint_new_verdict` 多一個明示參數「終點是工作樹」,不走「終點解不出來 → 環境不可用」那條既有路徑(那條照舊)。
+    2. 改動清單:新寫解析函式 `_porcelain_v1_entries(raw)` → `[(X, Y, 路徑, 舊路徑或 None)]`:X 或 Y 任一格是 `R`、`C` 都多吃一欄舊路徑(實驗 E6:`git add -N` 加 `mv` 會出 ` R 新|舊|`,R 在第二格)。既有 `_porcelain_z_paths` 已會吃舊路徑,但只回路徑、丟掉狀態碼與舊路徑,本案三樣都要;所以把切欄邏輯搬進新函式,`_porcelain_z_paths` 改成呼叫它再只取路徑(長度不到 4 的片段照舊略過),它的兩個既有呼叫端行為不變、既有測試釘住。另兩處自己解 porcelain 而且要狀態碼的 `_tg_rb_pending`、`_handoff_files` 也改成呼叫新函式(這樣帶狀態碼的解析只剩一份,不是從兩份變三份),兩處既有行為不變、既有測試釘住。衝突(任一格 `U`,或 `AA`、`DD`)不掃、列成「衝突中、沒檢查」。基準:`R`/`C` 沿著舊路徑**追回 HEAD 有的那一端**——舊路徑本身在 HEAD 有就用它;沒有就看它是不是清單裡另一筆改名的新路徑(先 `git mv` 再 `mv` 再 `git add -N` 會出兩筆串起來的 `R  b/Foo.kt|a/Foo.kt|` 與 ` R b/Foo2.kt|b/Foo.kt|`,第二筆的舊路徑只在索引裡),是就繼續往回追(最多追清單筆數那麼多步,遇到重複就停);追不到才算基準為空,並在 JSON 的 `skipped` 與人讀輸出列「改名追不到原檔,整支當新檔」。工作樹上已不存在的「新路徑」(鏈的中間那一端)不掃;`??` 與 `A`(HEAD 沒有這支)基準為空,但同一份清單裡有已刪除(`D`)的檔、檔名(不含目錄)相同而且唯一時,拿那支的 HEAD 內容當基準(搬套件會改 `package` 行);讀基準用一次 `git cat-file --batch`。
+    3. 整次不檢查、rc3 的情況(各印一句原因):repo 正在合併、rebase、cherry-pick 或 revert(`git rev-parse --git-path` 找 `MERGE_HEAD` 等);沒有 HEAD;宣告檔不乾淨——`git cat-file -e HEAD:.lumos/lint.json` 失敗,或 `git --no-optional-locks status --porcelain=v1 -z --untracked-files=all --ignored=matching -- .lumos/lint.json .lumos/config.json` 有任何輸出(實驗 E5:這樣未追蹤 `??`、被忽略 `!!`、有修改都抓得到,而且不改寫索引;不用 `git diff --quiet`,實驗 E4 實測它帶了 `--no-optional-locks` 照樣改寫索引);碰過的檔超過 50 支(印「這回合改了太多檔,留給推送前閘」)。
+    4. 給 `--since` 時只看「這一回合碰過的檔」;交集是空的 → no-files(rc0)。所有 git 呼叫都帶 `--no-optional-locks`;路徑一律相對 `git rev-parse --show-toplevel`。
+    5. **自動執行白名單**(只在工作樹模式套用):`shlex` 切詞後——第一個詞恰好是 `ast-grep`;第二個是 `scan`;恰好一個 `--config`/`-c`,它的值只能是絕對路徑或以 `$HOME/`、`${HOME}/` 開頭(這是整條命令唯一准出現 `$` 的地方),把開頭那段換成 `os.path.expanduser("~")` 後取 `os.path.realpath`,要落在 `<工具鏈根>/configs/ast-grep/` 底下(用 `os.path.commonpath` 比,實驗 E7:字串前綴擋不住 `..` 與符號連結,真實路徑擋得住);其餘每個詞只能是 `{LINT_FILES}`、`{LINT_FILES_CSV}`、`--format`/`--json`(含 `=值`)及其值、`--filter`、`--globs` 及其值,外加恰好一個 `>` 接 `{LINT_SARIF_OUT}`;`--config` 值以外不得含 `;`、`|`、`&`、反引號、`$`、`<`、`>>`、`*`、`?`、`~`、換行;`-U`、`--update-all`、`-i`、`--interactive`、`--custom-languages` 一律不准。通過的命令在送進既有 `_lint_spawn`(shell 執行)之前,把 `--config` 的值換成 `shlex.quote(真實路徑)`,所以送出去的命令不含 `$`。不合的命令列成「工作樹模式不跑」;一條都沒跑時是 not-checked(rc3),不是 clean。依賴層 `lint-deps.json` 工作樹模式全部不跑。路徑大小寫:macOS 預設檔案系統不分大小寫,`realpath` 不校正大小寫,`commonpath` 卻分大小寫比;所以「真實路徑字面對不上、但用 `os.path.samefile` 比 `configs/ast-grep/` 這一層是同一個目錄」時照樣擋,原因另印一句「設定檔路徑大小寫跟工具鏈實際目錄不同(例如 `harness` 對 `Harness`),照實際大小寫改宣告」。換進 `{LINT_FILES}`、`{LINT_FILES_CSV}` 的每個相對路徑在工作樹模式一律加 `./` 前綴,`-` 開頭的檔名不會被 ast-grep 當成選項。
+    6. 作弊比對要兩個提交,工作樹模式不跑,輸出註明「作弊比對留給推送前閘」。單條命令保底:既有設定 `per_cmd_floor_sec` 預設 30 秒(剩餘預算不到它就不跑那條),鉤子給的預算約 19 秒,照用會每條都不跑、永遠 rc3;所以工作樹模式改用程式常數 `_LINT_NEW_WORKTREE_FLOOR_SEC = 1`,不讀設定檔的 `per_cmd_floor_sec`(專案設定不能讓收工那道永遠不跑);`--diff` 模式照舊 30 秒。預算不夠沒跑到的命令在工作樹模式歸「沒檢查到」(rc3),不擋。
+    7. **收尾**(主程式現在沒有任何訊號處理器,這是新慣例,記進 [[Systems/hook逾時預算]]):工作樹模式一進來就先裝 SIGTERM 處理器,再做任何開程序或建快照的事。開每個檢查工具時用 `signal.pthread_sigmask` 先擋住 SIGTERM,`_lint_spawn` 開出程序(既有,`start_new_session=True`,所以工具在自己的程序群組)後**先登記再解除擋住**:登記兩處——模組層清單,以及鉤子用 `--pgid-file <路徑>` 指定的檔(一行一個群組編號,寫完 flush);工具結束就從兩處拿掉。處理器對清單裡每個群組呼叫既有 `_kill_proc_group`——它**直接送 SIGKILL、沒有寬限**,刻意照用:檢查工具是唯讀掃描,沒有要它自己收的東西,結果檔是 lint-new 開的暫存 SARIF、由 lint-new 自己刪;接著刪掉這次的快照目錄,印「被中止」後 rc3。寬限只放在上一層(鉤子對 lint-new 先 SIGTERM、1 秒寬限讓它自己收),寬限過了還在,鉤子自己去打登記檔裡的工具群組(見範圍 2 第 4 條)。不加登記檔的最小解是「只靠 lint-new 的處理器」,不夠:處理器沒跑完就被 SIGKILL 時,工具在新 session 裡,鉤子殺 lint-new 的群組打不到它們(本篇設計審 r1 可行性席 F2)。
+-   8. `--json`:人讀訊息照印到 stderr;stdout 最後一行是一個 JSON 物件 `{status, rc_class, batch, total, new:[{file, line, rule, message, fp, waive_cmd}], undone:[…], skipped:[…], reason}`,`new` 是全部新增告警(不受 20 條顯示上限),`batch` 是批次雜湊。
++   8. `--json`:人讀訊息照印到 stderr;stdout 最後一行是一個 JSON 物件 `{status, rc_class, batch, total, new:[{file, line, rule, message, fp, waive_cmd}], undone:[…], skipped:[…], reason, unchecked_kind}`,`new` 是全部新增告警(不受 20 條顯示上限),`batch` 是批次雜湊;`unchecked_kind` 只在 rc3 時有值:`deliberate`(刻意不查)、`timeout`(時間預算或參數長度不夠沒跑到)、`failed`(沒能檢查),判定裡沒寫明的 rc3 一律 `failed`(代碼審 r2 乙組)。
+    9. **記帳**:工作樹檢查本身不寫帳。另給一個只記帳的用法 `lumos lint-new --record-stop-block <批次雜湊> --count <條數> --prompt <prompt_id> --repo <根>`(跟 `--diff`、`--worktree` 互斥,其餘旗標一概不收),用既有 `_gate_event_or_warn` 寫一筆 `stop-lint` 擋下事件就結束、rc0;`stop-lint` 登記進 `_KNOWN_GATES`。只由鉤子在真的擋下、輸出寫出去之後呼叫(範圍 2 第 6 條)。這是「`lint-new` 不寫治理帳」的唯一例外。不加這個用法的最小解是「鉤子自己寫治理帳檔」,不夠:帳的格式與寫入規則在 `_gate_event` 一處,鉤子不能匯入主程式,抄一份就是第二個寫帳者。
+ 2. **新鉤子 `scripts/hooks/claude/stop-lint-hook.py`**,註冊在 `UserPromptSubmit` 與 `Stop` 兩個事件(同一支檔,依 payload 的 `hook_event_name` 分流;註冊命令由 `_hook_cmd` 產生,會帶 `--budget 30`,Codex 目標另帶 `--harness codex`,鉤子只讀 `--budget`、其他參數一律忽略)。**登記點全列**(漏一處就有既有守衛翻紅或靜默失效):①`merge-claude-settings.py` 的 `HOOK_BUDGET` 新增一值 30 秒與兩個事件的註冊;②主程式 `_GLOBAL_CLAUDE_HOOKS`(否則 `_prune_dangling` 剪掉註冊);③主程式 `_VENDORED_TREE_FILES`(有測試逐檔比對 `scripts/hooks` 底下受版控的檔,少登記會翻紅,消費專案裡這支也會被推送閘當成產品碼)——新鉤子與新共用模組 `_hookshared.py` 兩支都要登記;④`enforcement_status` 裡 Claude 與 Codex 兩份寫死的存活清單各加一行(`stop-lint-hook`、`codex-stop-lint-hook`);⑤`__main__` 用 `_hookevent.guard("stop-lint-hook", __file__, main)` 包住 `main`(照 `check-graph-sync.py`),跑完、逾時、出錯才記得到。**共用程式**:`_cache_dir_under_home`、`_mkdir_under_home`、`_stop_dir_ok`、`_safe_path`、`_trusted_lumos`、`_harden_git_env`(含 `_GIT_UNSAFE_CONFIG`)、`_outer_budget`、`_inner_budget` 從 `check-graph-sync.py` 搬進新共用模組 `scripts/hooks/claude/_hookshared.py`(只用標準庫、不做任何模組層 I/O),兩支鉤子都 `sys.path.insert` 本目錄後 `from _hookshared import …`;`check-graph-sync.py` 照名字匯入回來,外部看到的名字不變。實作時先搜它的既有測試有沒有替換這幾個名字(替換 `cgs._stop_dir_ok` 這種寫法搬家後打不到共用模組裡的呼叫),有就改成替換共用模組那邊;搬完它的既有測試全綠。匯入失敗整支靜默結束(rc0)。`main()` 在預篩過後第一件事呼叫一次 `_inner_budget()`(它的起算點第一次呼叫才記);外層秒數由它從 `sys.argv` 的 `--budget` 讀,預設給 30。
+    1. **找專案與預篩(收工時才做)**:先只用標準庫做:專案根取 `CLAUDE_PROJECT_DIR` 或 payload 的 `cwd`,往上找第一個有 `.git` 的目錄當 repo 根;repo 根沒有 `.lumos/lint.json`,或檔裡沒有 `ast-grep` 字樣(只是省一次 lumos 啟動的預篩,不是安全判斷),整支靜默結束——**預篩在匯入共用模組之前**,沒宣告的專案每次收工只付 Python 啟動加讀一個檔。
+    2. **送出提示時**:每一次都記(不預篩 repo):匯入共用模組,會談編號非空、目錄過信任檢查,就覆寫 `stop-turn/<會談>`(先寫暫存檔再 `os.replace`);不輸出任何東西、rc0。共用模組只用標準庫,匯入成本由實驗 E12 量(實作時跑,超過 0.1 秒就把送出提示這條路改成不匯入、只用標準庫寫檔)。
+    3. **收工時**:條件依序——`LUMOS_STOP_LINT_OFF` 與 `LUMOS_STOP_BLOCK_OFF` 都不是 1;會談編號非空;讀得到 `stop-turn/<會談>`;payload 有 `prompt_id` 而且跟紀錄相同。**payload 缺 `prompt_id` 一律當對不上**。對不上或沒紀錄:stderr 印一行「這回合沒記到起點,不檢查」——payload 的 `background_tasks` 或 `session_crons` 非空時這行改成「這回合是背景工作或排程喚醒的,沒記到起點,不檢查」(官方 Stop 段說這兩個欄位是用來分辨這類回合的),然後結束。這類回合到底有沒有送出提示事件、帶的是新的還是舊的 `prompt_id`,由實驗 E11 量;若量到它們帶舊的 `prompt_id` 而且跟紀錄相同,起點會落在上一個使用者提示的時刻,多算前一回合碰過的檔——那是多查不是漏查,照樣進同一套去重。**`stop_hook_active` 為真照樣查**(理由見〈決策〉,防迴圈靠下面的批次去重與每回合上限)。
+    4. 呼叫 `<可信 lumos> lint-new --worktree --since <起點> --json --pgid-file <stop-turn/<會談>.pgids> --repo <repo 根> --budget <內層-2,至少 1>`,先 `_harden_git_env()`,子程序 `start_new_session=True`。等到內層時限(30 × 0.7 − 已耗)它仍在跑:對 lint-new 的群組送 SIGTERM、給 1 秒寬限讓它自己收;寬限過了還在,就對 lint-new 的群組和登記檔裡每個群組都送 SIGKILL(送之前確認那個群組編號仍是存活程序的群組,`os.killpg(g, 0)` 不丟例外才送),刪掉登記檔,這次不擋。鉤子自己收到 SIGTERM(Claude Code 逾時)時同樣先 SIGTERM lint-new、等 0.5 秒、再 SIGKILL lint-new 與登記檔裡的群組,不輸出(實驗 E3:Claude Code 送 SIGTERM 後約 1 到 2 秒收掉鉤子,0.5 秒在那之內)。
+    5. **只在三件事都成立時擋**:退出碼是 1、stdout 最後一行解析得出 JSON、`status == "blocked"` 而且 `new` 非空。其他(含未捕捉例外的 rc1、空輸出、rc3)一律不擋;rc3 印一行到 stderr;rc2 也印一行「這支 lumos 不認得 lint-new 的工作樹旗標,重跑安裝」(不讓版本對不上變成沒聲音的永不擋)。
+-   6. **防無限擋**(決策 d1 的「同一批只擋一次、最多三批」,範圍照本篇設計審 r1 通才席 F1 收窄到同一回合;d1 開頭欄位原文寫的是「同一會談」,要編排者改寫,見〈審計修正紀錄〉):在既有 `stop-block/` 用 O_EXCL 建 `<消毒後會談>.lint-<prompt_id 消毒後前 16 字>-<batch>`——已存在 = 這一回合這批擋過、不擋;同會談同回合(同一個前綴)的已有 3 個 = 這回合不再擋,下一回合重算。名額佔到之後立刻寫 stdout,寫不出去就刪掉剛佔的檔(既有那道的順序);佔名額到輸出之間沒有任何提早返回。輸出寫出去之後,在剩餘預算內(至少 1 秒)呼叫 `lint-new --record-stop-block <batch> --count <條數> --prompt <prompt_id> --repo <根>` 記帳,失敗不影響擋停。只有真的擋才建檔,`stop-block/` 的既有性質(只有擋過的會談留東西)不變;收工點名那道的標記檔名是 `<會談>` 本身,不互相干擾。
++   6. **防無限擋**(決策 d1 的「同一批只擋一次、最多三批」,範圍照本篇設計審 r1 通才席 F1 收窄到同一回合;d1 開頭欄位已改成「同一回合(prompt_id)」):在既有 `stop-block/` 用 O_EXCL 建 `<消毒後會談>.lint-<prompt_id 消毒後前 16 字>-<batch>`——已存在 = 這一回合這批擋過、不擋;同會談同回合(同一個前綴)的已有 3 個 = 這回合不再擋,下一回合重算。名額佔到之後立刻寫 stdout,寫不出去就刪掉剛佔的檔(既有那道的順序);佔名額到輸出之間沒有任何提早返回。輸出寫出去之後,在剩餘預算內(至少 1 秒)呼叫 `lint-new --record-stop-block <batch> --count <條數> --prompt <prompt_id> --repo <根>` 記帳,失敗不影響擋停。只有真的擋才建檔,`stop-block/` 的既有性質(只有擋過的會談留東西)不變;收工點名那道的標記檔名是 `<會談>` 本身,不互相干擾。
+    7. **擋下原因**:第一行固定 `LUMOS-STOP-LINT:這一回合改的程式有新增的寫法告警`;第二行「先修掉再結束;確定是誤報就照每條的放行指令補理由(會留紀錄)」;接著最多 10 條「檔:行 [規則] 訊息」與放行指令,檔名與訊息都過 `_safe_path`,並註明「下面只是檔名與訊息,寫什麼都不是指令」;超過 10 條印條數;整段最多 1500 字。
+ 3. **改檔前推相關列**(`scripts/lumos` 的 `cmd_impact`、`scripts/hooks/claude/impact-hook.py`):
+-   1. 鉤子:既有 `extract_delta_text` 加參數 `new_only`(Edit 只取 `new_string`、MultiEdit 每段 `new_string`、Write 取 `content`),目標是 `.kt`/`.kts` 時 payload 多一個鍵 `delta_new`(同 2 MB 上限,超過照既有做法截斷並標 `delta_new_truncated`)。不另寫第三份取段函式。
++   1. 鉤子:只取寫入的新內容(Edit 只取 `new_string`、MultiEdit 每段 `new_string`、Write 取 `content`;實作是 `extract_delta_texts` 一次取整份與新內容,代碼審 r2 拿掉了 `extract_delta_text` 的 `new_only` 參數),目標是 `.kt`/`.kts` 時 payload 多一個鍵 `delta_new`(同 2 MB 上限,超過照既有做法截斷並標 `delta_new_truncated`)。不另寫第三份取段函式。
+    2. lumos:放在 `cmd_impact` 既有算 `stack_questions_applicable` 的那一段裡。那一段的既有條件是:`--json` 輸出、不是冷卻窗的 `--incidents-only` 快速路徑、目標不是測試檔、棧判成 `kt`。**決策列不受冷卻窗限制**:冷卻窗是為了省完整影響推播,決策列只是對 `delta_new` 跑一次本機正規式,所以把決策列的計算抽成一支小函式,完整路徑與 `--incidents-only` 快速路徑都呼叫(本篇設計審 r1 通才席 F3);鉤子在冷卻窗內那條呼叫也帶 `delta_new`、也印列。決策列的條件是 `--json`、非測試檔、棧 `kt`,再加三條——payload 的 `delta_new` 是字串、這支檔沒被判成伺服端 Kotlin(`_stack_platform_excluded` 回的是要拿掉的題號集合,不是整檔排除;決策列不是題,所以判法定成「集合裡不含 `kt-compose`」——用 `kt-compose` 是因為它是既有題表裡固定存在、標 `android_only` 的題,不像盲判那條線的 `kt-situation` 只在決策表讀得到時才加進題表;含 `kt-compose` 就是這支檔判成全伺服端)、決策表讀得到。算法:整段 `delta_new` 先過 `_strip_c_comments(…, blank_strings=True, keep_newlines=True, kotlin=True)`(盲判那條線加的 Kotlin 模式:巢狀區塊註解、字串樣板 `${…}` 裡的程式碼照算),再用每列每個觸發字的 `_kt_trigger_re` 比;停用列(`retired`)跳過;一列命中至少一個觸發字就算,照命中的不同觸發字數多寡、再照表序,最多回 10 列 `[{id, situation, standard, alt, hits}]`(欄名照 `_kt_decision_table` 的列字典)。
+    3. 讀表:**歸屬盲判那條線**,本案只呼叫。它已在 `android-situation-evidence` 工作樹的 `scripts/lumos` 建好 `_kt_decision_table(path=None)` → `(列清單, 問題或 None)`,透過共用的 `_load_hook_file` 借用規則包自檢程式 `check.py` 新增的 `dt_table`(依表頭名稱取欄;既有的 `catalog_problems` 是固定 7 欄依欄序讀,`_cells`、`dt_triggers` 是兩邊共用的切格與觸發字解析);模組載入時讀一次存成 `_KT_DT_ROWS`、`_KT_DT_ERR`。本案用那兩個值:有錯就不推、不報錯(型錄讀不到的提醒歸盲判那條線印)。
+    4. 鉤子印列:在既有印棧別題那一段之後,逐列用既有 `_voice_once(會談, "row-<D-n>")`,取前三列沒推過的印「[決策表 D-n] 情境|標準寫法|不適用時」;既有「影響脈絡是空就不印」那條判空改成也看 `decision_rows`(有要印的列就印)。沒印出的列下次還能推。判空要改的是鉤子這邊(`_ranked_ctx` 那條「results、棧別題、lane 都空就不注入」再加看 `decision_rows`),不是 lumos 那一段。標記檔落在 `<系統暫存目錄>/lumos-impact-<會談>/voice-row-D-n`;清理靠既有 `_ttl_lazy_cleanup`:每次改檔前鉤子跑時,刪掉目錄本身修改時間超過 24 小時的 `lumos-impact-*` 目錄——所以是「這個會談最後一次新增標記後 24 小時」整個目錄一起清,不是每個標記各算 24 小時。
+    5. 型錄停用字:型錄格式檢查的 `STOP_TRIGGERS` 加 `Composable`、`Inject`、`Modifier`(實驗 E9:在 Now in Android 310 支 kt 檔的文件頻率 15.5%、14.5%、9.4%,超過 8% 門檻),D-33、D-34、D-39 的觸發字同批改寫成較專一的字(或寫「(無)」)。門檻管的是字、不是列:D-49 以列計 10%,但它每個觸發字都低於 8%(最高 `runTest` 6.8%),不改;列太常推的情況交 RETIRE-IF 的「平均每次推出超過 2 列」量。
+ 4. **筆記**:新開 [[Systems/回合結束寫法檢查]](`--code scripts/hooks/claude/stop-lint-hook.py --code scripts/hooks/claude/_hookshared.py`,共用模組的家也在這篇,負責:回合起點紀錄、收工呼叫工作樹檢查與擋停;不負責:新增告警判定本體、收工點名);[[Systems/hook逾時預算]] 記新一值 30 秒與「這支逾時要殺子程序」的例外(它不快取、結果過時就作廢,跟該篇「超時放手」那條針對的派工鏡頭快取不同);[[Systems/graph-sync-coverage]] 記兩支收工鉤子檔集定義的差別;[[Systems/改檔前推播]]、[[Systems/棧別提問表態閘]] 記 `decision_rows`;[[Systems/pitfalls-code-loop]] 只留指向新篇的連結。
+ 
+ ## 不做
+ 
+ - 推送前閘與 `lint-new --diff` 的判定結果不變(範圍 1 加的是明示參數與旗標,既有測試釘住)。
+ - 不在收工鉤子裡呼叫模型;收工不跑白名單以外的命令(detekt 等等代碼審通過前或推送前閘)。
+@@ -276,20 +276,23 @@ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻
+ | 給了 `--config` 不吃專案設定 | ast-grep 0.51.1 實測;設定檔說明頁 | https://ast-grep.github.io/reference/sgconfig.html ;實驗 E13 | 範圍 1 第 5 條 |
+ | 共用模組匯入不拖慢送出提示 | 實測匯入 3.5 毫秒、整個程序 0.03 秒 | 實驗 E12 | 範圍 2 第 2 條 |
+ | 批次雜湊 | 指紋多重集合排序後取 sha256 前 16 碼(Python 標準庫 hashlib) | https://docs.python.org/3/library/hashlib.html | 用詞「批次雜湊」、S2 |
+ | 工作樹改動清單與基準讀取 | `git cat-file --batch` 一次讀多個 HEAD 物件 | https://git-scm.com/docs/git-cat-file#_batch_output | 範圍 1 第 2 條 |
+ | 原子寫回合起點 | `os.replace` 同一檔案系統上是原子的 | https://docs.python.org/3/library/os.html#os.replace | 範圍 2 第 2 條 |
+ | 名額先佔 | `os.open` 帶 `O_CREAT|O_EXCL` 已存在就失敗;既有收工點名同一做法 | https://docs.python.org/3/library/os.html#os.open ;`scripts/hooks/claude/check-graph-sync.py` 的 `_stop_mark_write` | 範圍 2 第 6 條 |
+ | 工作樹模式不開 shell 執行(代碼審 r1) | Python 官方 subprocess〈Security Considerations〉:不開 shell 時所有字元原樣傳給程式;開 `shell=True` 時引號由應用程式自己負責 | https://docs.python.org/3/library/subprocess.html#security-considerations ;r1-intake.md〈先查世界〉 | `scripts/lumos` 的 `_lint_wt_argv`、`_lint_spawn_argv`;t_lwt_r1_shellfree_argv |
+ | HEAD 沒有的物件以行尾判(代碼審 r1) | git 官方 BATCH OUTPUT:不存在的物件輸出 `<object> SP missing LF`,object 名可含空白 | https://git-scm.com/docs/git-cat-file#_batch_output | `_lint_wt_blobs`;t_lwt_r1_space_path_blob |
+ | 查狀態時關掉內容過濾器(代碼審 r1) | gitattributes 的 filter 驅動:`git status` 遇到要重算雜湊的檔會跑 `filter.<名>.clean`;給空指令就不跑、`required=false` 才不會讓 status 失敗(git 2.39.2 實測) | https://git-scm.com/docs/gitattributes#_filter ;r1-intake.md 資安席 F2 | `_lint_wt_filter_args`;t_lwt_r1_git_filter_off |
+ | 開程序到登記之間的訊號先記下(代碼審 r1) | 訊號遮罩跨 fork/exec 由子程序繼承,擋著開出去的子程序收不到那個訊號 | https://man7.org/linux/man-pages/man7/signal.7.html (Signal mask and pending signals);自測 S7② | `stop-lint-hook.py` 的 `_on_sigterm`;t_slh_r1_spawn_window_term |
++| 不信任 repo 的 git 參數只有一份(代碼審 r2) | git 官方:沒有選項或環境變數能讓 git 不讀 repo 自己的 `.git/config`(`GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` 只管全域與系統層),命令列 `-c` 優先;`core.fsmonitor` 設成指令時 status 會執行它;`git status --ignore-submodules=all` 不看子模組的變更(子 repo 自己的過濾器名字列不到);git 2.39.2 實測 fsmonitor、clean、process、子 repo 過濾器四條都會被一般 status 執行、帶參數後都不執行 | https://git-scm.com/docs/git ;https://git-scm.com/docs/git-status (UNTRACKED FILES AND PERFORMANCE、--ignore-submodules);governance/review-reports/code-android寫法回合結束檢查/r2-intake.md〈先查世界〉 | 範圍 1 第 2、3 條;[[Systems/hook信任邊界]] |
++| 沒檢查到的種類由 lint-new 明寫(代碼審 r2) | 外層照欄位判、不靠推測;判定裡沒寫明的一律算沒能檢查(寧可記失敗) | governance/review-reports/code-android寫法回合結束檢查/r2-intake.md〈先查世界〉 | 範圍 1 第 8 條、範圍 2 第 5 條 |
++| 佔位符展開共用核心(代碼審 r2) | 既有 `_lint_cmd_with_files` 宣告唯一實作(三處各寫一份時漏一處出事);字串版與參數清單版只差跳脫 | `scripts/lumos` 的 `_lint_cmd_with_files` 說明;r2-intake.md〈先查世界〉 | 範圍 1 第 5 條 |
+ 
+ ## 審計修正紀錄
+ 
+ - 拆出(2026-11-05):母計劃第二輪設計審 36 條加 2 條的一部分落在本案機制,依根因分七組;卷證 governance/review-reports/android寫法寫完當下自動檢查/。
+ - r1(2026-11-05,四席 sonnet):42 條/blocking 19;白名單改寫死、`lint-new` 自己接 SIGTERM、沿用既有狀態解法與標記寫法,回合邊界改用回合時間戳;逐條去向在 r1-intake.md。
+ - r2(2026-11-06,四席 sonnet):折入後依根因分十一組,照熔斷提示拆成本篇。
+ - 改寫(2026-11-06):十一組逐組處理,見〈待解問題〉;先做實驗 E1 到 E10(官方鉤子文件、`claude -p` 實測、git 索引實測、NIA 語料量觸發字頻率)再定設計;主要改變是寫法檢查拆成獨立鉤子、回合起點改在送出提示時記、鉤子與 lumos 之間改用 JSON、決策列併進棧別題通道。設計審待派(新卷證目錄)。
+ 
+ - 本篇 r1(2026-11-06,4 席):19 條/blocking 9/擋停與去重改綁回合、記帳移到鉤子真擋之後、冷卻窗不擋決策列、改名鏈追回原檔、工具群組先登記再開跑且鉤子打得到、背景與排程回合列實驗不當官方行為寫、相依改成整合分支先合第三批、新鉤子五個登記點全列、共用程式改走底線共用模組。
+ - 席報告與收貨:governance/review-reports/android寫法回合結束檢查與改檔前推列/(r1-通才-sonnet.md、r1-可行性-sonnet.md、r1-依據-sonnet.md、r1-架構對齊-sonnet.md、r1-intake.md)。
+@@ -324,10 +327,16 @@ REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻
+   - **`-` 開頭檔名**:快照路徑一律是絕對路徑,換進 `{LINT_FILES}` 的不會以 `-` 開頭,`./` 前綴由構造保證、沒有另寫一段(S1⑨ 照樣驗)。
+   - **工作樹模式的 `.lumos/lint-deps.json`、作弊比對**:照範圍 1 不跑;人讀輸出第一行提醒「作弊比對留給推送前閘」。
+   - **決策 d1 開頭欄位**:已在 ede88ffb9 改成「同一回合(prompt_id)」;代碼審 r1 修正時把待解 Q1 的題目文字一起改成同一回合。
+ - 實作期驗收:E11、E12、E13 與 S12 結果見〈實驗〉;每道新檢查各改壞一次的結果在交付回報裡(變異複本與 git clone --shared,清 `__pycache__` 再跑)。
+ - **代碼審 r1(2026-11-06,七席 sonnet,範圍 `d241a3212..41f1b9abc`)**:35 條/major 10,依根因分五組全數折入;卷證 governance/review-reports/code-android寫法回合結束檢查/(七份席報告、r1-intake.md 的重現表與〈先查世界〉、r1-fix.json 逐條對測試)。設計審漏網一條:〈PRIOR-ART〉⑧ 寫「只有一種做法」,沒讀到 [[Systems/hook信任邊界]] 的分流規則(已改正)。
+   - **甲 shell 執行**:工作樹模式白名單通過的命令不再交給 shell——`_lint_wt_argv` 照整詞展開佔位符組參數清單、`shell=False` 執行,SARIF 由程式把標準輸出接到檔案;佔位符不准當旗標值(`{`、`}` 進禁字);放行指令先消毒各組成再 `shlex.quote`(`_lint_waive_part`),鉤子照原樣印、不截斷,看起來不是那樣產生的整行不印;擋下原因按條累加到 1500 字、結尾「另 N 條」一定留得下(範圍 2 第 7 條「整段最多 1500 字」照守,只是不再硬截)。推送前的 `--diff` 模式照舊走 shell,不在這輪。
+   - **乙 靜默失效**:`cat-file --batch` 以行尾 ` missing` 判、格式對不上或 git 失敗整次 rc3(不再當全部新檔);鉤子吞掉的逾時與失敗照 `_hookevent.mark` 記 timeout/error(刻意不查的 rc3 照記 ok);起點紀錄的時刻壞掉、payload 的 cwd 不是字串都當沒記到起點;沒有 `os.killpg` 的平台只收 lint-new 本身;status off(含 `LUMOS_SKIP_LINT_NEW`)鉤子印一行;lint-new 的 SIGTERM 處理器一併刪暫存 SARIF,SIGINT 與例外路徑先收工具群組再往上丟;鉤子開 lint-new 到登記之間收到的 SIGTERM 先記下、登記完補跑(★不用 `pthread_sigmask`:遮罩會被子程序繼承,lint-new 自己的 SIGTERM 收尾就跑不到——自測 S7② 當場抓到★)。
+   - **丙 資源**:碰過的檔超過 50 支在讀任何 HEAD 內容之前就回 rc3;刪除檔只讀「有同名新增檔要拿它配對」的那幾支。
+   - **丁 鉤子共用分流**:可信來源解析與逾時預算搬回每支鉤子的逐字複本,守衛恢復逐字比對、另要求「解析函式以外沒有自己從 PATH 找 lumos、真的呼叫它」與「用到預算的鉤子自己有那段」;標記檔名消毒(`_mark_name`)與 O_EXCL 佔名額(`_claim_mark`)搬進共用模組,收工點名的擋停標記與去重紀錄、收工寫法檢查的名額都走它;匯入純度探針的放寬只給真的匯入共用模組的鉤子、只給匯入系統自己那一次。收程序群組不抽共用:兩支(收工寫法檢查、記憶清掃)語意不同(一支有寬限與登記檔、一支直接殺),各自用平台判斷。
+   - **戊 其餘**:`.kts` 裁定不推決策列、鉤子不送 `delta_new`;伺服端判法改用情境題自己的題號 `_KT_SIT_QID`(範圍 3 第 2 條原寫 `kt-compose`,同一組 Android 專屬判斷不借別題題號);決策列比對改用 `_kt_sit_rows_rx` 的預編譯樣式加字集合預篩;工作樹模式的 git 呼叫改走 `_lens_git`(多一個標準輸入參數);判定結果骨架兩種模式共用 `_lint_new_out`;`lint-new` 說明改成「檢查本身不寫治理帳,只有 --record-stop-block 記一筆」;改 kt 檔時整份與新內容一次取段;決策列「挑到就落標記」接受並寫明(PreToolUse 看不到編輯成不成功);工作樹模式的 git 呼叫關掉 repo 設定裡每個內容過濾器(`-c filter.<名>.clean= … required=false`,名字收不了整次 rc3)。合約席的測試缺口(rebase-apply 等四種狀態、`--budget` 起算、退出碼不是 1 不擋、上限 50 的邊界)都補了案例。
++- **代碼審 r2(2026-11-07,七席 sonnet,範圍 `41f1b9abc..a1456f8f6` 的修補差異)**:25 條/major 6,依根因分五組全數折入;卷證同目錄(七份席報告、r2-intake.md 的重現表與〈先查世界〉、r2-fix.json 逐條對測試)。第一輪 35 條各席核對都已修好(資源席重跑刪大檔:4GB → 375MB)。
++  - **甲 git 不信任參數單一來源**:主程式只留一份 `_git_untrusted_c`(原本 spec-freeze 一份、工作樹模式一份,各漏一項):固定關 `core.fsmonitor`、`core.hooksPath`、`diff.external`,每個過濾器的 clean、smudge、process 給空並設 `required=false`;工作樹模式的 status 一律 `--ignore-submodules=all`(子 repo 自己的過濾器名字列不到)。四條執行途徑(fsmonitor、clean、process、子 repo 過濾器)各一支用真 git 造記號檔的測試。主程式會讀工作樹的 git 呼叫盤點過:工作樹模式實際只有 `_lint_wt_*` 那幾支加讀 HEAD 內容的批次讀取,都走它;收工點名鉤子自己的 status 與它呼叫的 `impact --diff HEAD` 同族、這輪不動,回頭條件寫在 [[Systems/hook信任邊界]]。
++  - **乙 失效分類明示**:`--json` 多 `unchecked_kind`;過濾器關不掉、git 算不出工作樹改動、讀不出 HEAD 內容三條標 `failed`,鉤子照欄位記 ok/timeout/error、欄位缺或不認得記 error。
++  - **丙 佔位符展開一份**:抽出 `_lint_placeholder_words`,字串版與參數清單版都呼叫它;用不用 shell 只剩 `argv=` 一種傳法(`_lint_spawn_argv` 併回 `_lint_spawn`,參數清單版只把找不到執行檔或沒權限當沒裝)。
++  - **丁 測試缺口**:空窗補跑的測試加「遠小於內層時限就結束」;過濾器 process、訊息長度掃邊界、放行指令含換行與控制字元、起點時刻 0 與負數、標記檔名獨立期望表、匯入純度探針兩條腿、可信來源守衛擋別名與 getattr 與裸名,各補斷言。每道新加或改過的判斷在複本裡各改壞一次:55 處 54 處翻紅;沒紅的是鉤子對 SIGINT 的兩層收法(處理器與 finally 各自都收得到,拿掉其中一層另一層照樣收,兩層各自另有會紅的案例:SIGHUP 釘處理器、例外路徑釘 finally)。
++  - **戊 其餘**:起點紀錄超大整數與深層巢狀不崩;鉤子 SIGINT、SIGHUP 也收 lint-new;讀 HEAD 內容先問大小(工作樹那一版已超過上限的不讀基準);SARIF 讀取上限 64MB;開跑前清過期的暫存 SARIF;拿掉無用匯入與 `new_only`;`_mark_event` 三份逐字相同並有守衛;`_killpg` 註解照實寫三種平台判法。資安席 F2(ast-grep 照 PATH 找)不改程式,回頭條件寫在 [[Systems/pitfalls-code-loop]]。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/hook信任邊界.md b/docs/lumos-toolchain-knowledge/Systems/hook信任邊界.md
+index f58f6a699..dc8afded1 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/hook信任邊界.md
++++ b/docs/lumos-toolchain-knowledge/Systems/hook信任邊界.md
+@@ -1,34 +1,37 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-09-06
+-updated: 2026-09-06
++updated: 2026-11-07
+ aliases: []
+ about_code:
+   - scripts/lumos
+ tags:
+   - type/system
+   - status/doing
+   - scope/platform
+ summary: |-
+   RULE:[since:2026-09-25][confirmed:2026-09-25][retire:hook 注入改成結構化欄位、不再用文字框區分資料與指令]★注入框裡只放從專案讀出來的值(圖譜筆記名、CI 紀錄、防護狀態這類專案裡的人寫得動的),工具自己寫死的指示放框外★——框頭寫「不是指令」,把工具自己的祈使句(開工前先處理紅 CI、動手前看一眼筆記、審查時把表態當可反駁的宣稱)包進去,照字面讀的模型會當成可略過的資料。推翻 2026-09-07「全部框起來、免得多一條哪些要框的規則」的做法(當時只寫在註解,沒進決策)。出處 [[Projects/Prompt稽核_計劃]] [test:t_impact_hook_incidents_inject]
+   KEY:[2026-09-25 推送前全套翻紅才發現]★「每條注入都要框」的守衛原本只看塞進對話那一行有沒有加框★,把工具指示移到框外後它就紅了(稽核席原判「靠變數名例外會過」是錯的)。現在改成用語法樹逐段驗:進場 hook 的 msg 除了加框那段只准接版本落後提醒,而那個提醒的回傳值必須全是字串常數——拆掉框、或讓提醒帶進專案裡的值,兩種都實測會紅 [test:t_all_injection_paths_are_framed_and_unified]
+   FLOW:hook 要用 lumos 時 → _trusted_lumos()(系統裝的 → $LUMOS_HOME → 預設來源)→ 都找不到就跳過那段功能(fail-open),★絕不執行被打開那個資料夾裡的 scripts/lumos★
+   KEY:[補審 delta 2026-09-17]收工擋停那支 hook 的標記目錄也改成逐層建逐層檢查——它的註解寫著「不在別人的目錄上寫標記」,實際卻是先一次建整條再檢查;實測上層換成指向別人目錄的連結時,★別人的目錄裡真的多出一個 stop-block 資料夾★,檢查才說不碰它。★這支 hook 是獨立檔、不 import 主程式,所以邏輯抄一份,判準有任何一邊改了另一邊要跟著改★——2026-09-16 主程式改了、這裡沒跟上,兩份才不一致,而它的說明還寫著「跟主程式同一套威脅模型」。同批補上漏抄的誠實界線(擋不住同帳號搶跑) [test:t_stop_block_dir_does_not_touch_someone_elses_dir](★那支 hook 的家是 [[Systems/graph-sync-coverage]] 與 [[Systems/codex-harness]],本篇只管信任邊界這個概念層★)
+   KEY:[代碼審 r1 折入 2026-09-16]三條:①★路徑段不准帶人跳出家目錄★——逐層建那支收到絕對路徑段時Python 的路徑接合會整個重置、`..` 也照走,實測直接在別的地方建出資料夾還回報成功;呼叫端都是寫死的字面段所以利用不到,這是守衛完整性。②★改權限不准跟著連結走★——父層逐層驗了,★葉節點那一層還是先建先改權限才驗★;實測葉節點是指向別人目錄的連結時,那個目錄權限被從 0755 改成 0700。改用 O_NOFOLLOW|O_DIRECTORY 開再 fchmod,★這是這份工具第一處真的把競速窗口關掉的地方,其餘幾處仍是路徑層檢查、仍擋不住同帳號搶跑★。③死碼與訊息混淆:改用逐層建之後「資料夾建不起來」已不可能發生,呼叫端還留著兩段在處理,而且把兩種原因混成一句、會叫人去檢查一條其實沒問題的路徑。★這一輪外家席正主額度用完缺席★,由備援家族代打,收斂結論只到「單家族視角下未發現」 [test:t_never_create_dirs_under_an_untrusted_path,t_arm_dir_chmod_must_not_follow_a_symlink]
+   KEY:[逐層建逐層檢查 2026-09-16]★家目錄底下不再一次 mkdir 出整條路徑★——原本四個寫入點(派工鏡頭快取、武裝目錄、綁定測試快取、筆記庫寫入鎖)都是「先建整條、再檢查這條可不可信」,★順序反了★:檢查不過時,連結指到的地方已經被建出一層空資料夾。真正危險的動作(寫檔、改權限、刪目錄)確實都排在檢查之後,所以原本只當殘留寫在註解裡——但在別人的目錄裡留東西本來就不該做,而且這是那幾處★共用的★缺口。改法=`_mkdir_trusted_under_home` 從家目錄往下逐層建、逐層驗(是真目錄、是自己的、別人不可寫),★任何一層不過就停手,已經建好的不回頭刪★(刪反而是在動別人的東西)。實測:中間一層換成指向別人目錄的連結,攻擊者目錄裡一個東西都沒留下;舊行為則是既說可以建、又真的留下一個資料夾。★誠實邊界★:路徑層檢查,擋不住同帳號搶跑(檢查完到下一層動作之間有時間差),要真正關掉得改用 dirfd / O_NOFOLLOW 那一套 [test:t_never_create_dirs_under_an_untrusted_path]
+   KEY:★2026-09-06 實地重現★進場 hook 原本執行「被打開那個資料夾」自己的 scripts/lumos,唯一判準是它有 docs/*-knowledge——clone 陌生 repo、開一下 Claude,對方的 python 就跑了;而且是被 python 執行的,那個檔連執行權限都不需要(實測權限 -rw-r--r-- 照樣跑)
+   KEY:三支 hook(進場 / 圖譜同步 / 影響鏡頭)的解析函式是逐字相同的複本——hook 是獨立檔、複製到 ~/.claude/hooks 後彼此 import 不到,所以用「複製+守衛」不是抽共用模組;守衛盯著三份不准漂,改一支忘了另兩支破口會悄悄長回來
+   KEY:世界的解同一個結論——git safe.directory(CVE-2022-24765)、VS Code Workspace Trust:★工具自己的碼可以跑,從當前資料夾撿到的碼要先被信任★
+   DEP:scripts/hooks/claude/lumos-entry-hook.py|scripts/hooks/claude/check-graph-sync.py|scripts/hooks/claude/impact-hook.py
+   TEST:t_hooks_never_run_code_from_opened_folder
++  WHY:主程式對不信任的 repo 下 git 只用一份 -c 參數 _git_untrusted_c:固定關 core.fsmonitor、core.hooksPath、diff.external,每個過濾器的 clean、smudge、process 給空並設 required=false;lint-new 工作樹模式與 spec-freeze 都走它,工作樹模式的 status 一律帶 --ignore-submodules=all [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 甲組(正確性席 F1 fsmonitor、資安席 F1 子 repo 過濾器、合約席 F2 process)] [因:git 沒有選項或環境變數能不讀 repo 自己的設定 https://git-scm.com/docs/git ;子 repo 自己的過濾器名字列不到,只能不進子 repo https://git-scm.com/docs/git-status] [不選:各呼叫點各帶一份(同一類第二輪被打穿時兩份已各漏一項)] [代價:LFS 這類合法過濾器在這兩條路也被關掉;子 repo 的改動工作樹模式看不到] [test:t_lwt_r2_untrusted_exec_paths] [test:t_lwt_r2_untrusted_single_source]
++  REVISIT:2027-05-07 對照 git 新版的 git-config 文件,有新增會被當成指令執行的設定就補進主程式的 _GIT_UNTRUSTED_FIXED 與鉤子共用模組的 _GIT_UNSAFE_CONFIG(列舉固定項只擋得到已知的那幾項)
++  REVISIT:2026-11-20 收工點名鉤子自動跑的兩條還沒走 _git_untrusted_c、沒帶 --ignore-submodules:check-graph-sync.py 自己的 git status,與它呼叫的 lumos impact --diff HEAD(git diff 拿工作樹對 HEAD,racy 檔會跑 clean 過濾器);鉤子那份 _GIT_UNSAFE_CONFIG 經環境變數只關得到固定兩項、關不到過濾器,要不要改由主程式那份單一來源供給交人裁
+ plan_refs:
+   - "[[Projects/全repo審視_計劃]]"
+ related:
+   - "[[Projects/enforcement可觀測性_計劃]]"
+   - "[[Systems/graph-sync-coverage]]"
+   - "[[Projects/收工點名問版本控制_計劃]]"
+ ---
+ # hook信任邊界
+ 
+ > 白話:hook 是「你一打開資料夾它就自己跑」的東西。所以它去執行什麼碼,決定了「打開一個陌生專案」有多危險。
+@@ -95,20 +98,21 @@ hook 是獨立檔,安裝時會被複製到 `~/.claude/hooks/`,**複製過去之
+ | r2 | 資安複審 | 找到第二個設定項 | 收成具名清單 + 逐項跑的測試 | **鍵名可以由攻擊者自己取** |
+ | r3 | 資安終審 | 屬性檔可以把檔案指到攻擊者命名的驅動器 | **改用旗標關掉整類機制** | 端到端驗過擋住 |
+ 
+ ★教訓★:**「列舉危險設定」這個形狀原理上不可行**——只要鍵名有一部分由攻擊者決定,清單再長也列不到。要擋就得關掉整類機制,不是逐項點名。
+ 
+ ### 現在的做法
+ 
+ - **取差異內容的呼叫一律帶關掉外部程式與文字轉換的旗標**。主程式裡五處,`t_lumos_content_diffs_all_disable_external_drivers` 掃全檔釘住這條性質——新增一處沒帶的,測試自己會紅。
+ - **範圍靠實測畫,不靠推論**:只取檔名/統計/狀態的呼叫實測不觸發,所以不強制它們帶旗標;取內容的才要。
+ - 另外保留一份具名清單關掉兩個已知的獨立設定項(它們不經屬性檔,旗標蓋不到)。
++- **主程式在不信任的 repo 上自動下 git 的兩條路(收工寫法檢查的 lint-new 工作樹模式、spec-freeze)只用一份 `-c` 參數**(`_git_untrusted_c`):固定項對齊上面那份具名清單再多關掛鉤目錄;過濾器名字先從設定讀出來再逐個關(讀設定不執行任何東西,所以這裡列得到全部名字——上面〈教訓〉講的「鍵名由攻擊者決定、列不完」指的是寫死清單的做法);子 repo 自己的設定讀不到,所以查狀態一律不進子 repo。
+ 
+ ### ★誠實邊界★
+ 
+ - 這兩個旗標關掉的是「外部差異程式」與「文字轉換」兩類機制。**不宣稱版本控制沒有第三類**——只是這三輪試過的攻擊都落在這兩類裡(r2、r3 兩席合計試過別名、分頁器、過濾器塗抹、檔案監視、外部差異、自訂驅動器六種)。
+ - **純 clone 不會把這些設定帶過來**(實測);真正的交付路徑是「直接拿到別人的整個目錄」。
+ - **提交前、推送前那兩道閘沒有走這條路**——那些是使用者主動執行的,不是開資料夾就自動跑,風險形狀不同,本批未處理。
+ 
+ ### ★一個更難看的發現:修了不等於生效★
+ 
+ 端到端驗這條時,攻擊一直打得穿——查下去才發現**hook 跑的是系統裝的那份主程式,不是工作區改過的那份**。分開驗證:
+diff --git a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+index 5d2b4c4ab..43bdf04b4 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
++++ b/docs/lumos-toolchain-knowledge/Systems/pitfalls-code-loop.md
+@@ -1,15 +1,15 @@
+ ---
+ type: system
+ status: done
+ created: 2026-07-04
+-updated: 2026-11-06
++updated: 2026-11-07
+ self_audit: gpt-5.6-sol/2026-10-03
+ about_code_stamp: batch-2026-08-23/2026-08-23/a57f70871fa9
+ tags:
+   - type/system
+   - status/done
+   - risk/守衛面
+   - scope/loop-engineering
+ verified_by:
+   - "[[Verification/2026-07-04_pitfalls-code-loop]]"
+   - "[[Verification/2026-07-05_code-loop必用守衛]]"
+@@ -85,22 +85,26 @@ summary: |-
+   WHY:規則包樣本目錄 `configs/ast-grep/<包>/samples/` 跟審計證物同理,風險分級、棧別題、新增告警閘(含測試防竄改比對)與 Room 守衛都不當產品碼掃 [出處:2026-11-05 [[Systems/kotlin規則包]]] [因:樣本故意埋壞寫法,改一條規則的樣本會讓分級把教材當新 bug] [不選:每支樣本登記有家] [test:t_rulepack_sample_dir_skips_risk_scan]
+   WHY:pitfalls 加 --pushed-ref(只判主線、不改 --diff 範圍、不需要遠端名所以單獨收),--json 多 pushed_mainline(標籤、空字串、main/master、遠端 HEAD 指的分支 → true,沿用 _note_reread_mainline_names 不看遠端名)與 suite_computed(_test_suite_for_range 回傳 computed,改動清單算不出為 false) [出處:[[Projects/推送只跑受影響測試_計劃]]] [因:推送前掛鉤要知道推的是不是功能分支、範圍算不算得出來,才能決定能不能不跑全套] [不選:掛鉤自己比對分支名(設計審 r2–r3:第三套主線判法、綁遠端名是已淘汰的舊形狀)] [test:t_pitfalls_pushed_mainline]
+   WHY:新增告警閘對逗號佔位符({LINT_FILES_CSV})的命令:路徑含逗號或分號的檔從那條命令拿掉、列進「檔太大沒檢查」同一組(擋,可逐檔放行,指紋跟大檔同形),一條命令的檔全被拿掉時判沒被檢查;換完超過 100,000 位元組對半切分批跑、合併結果;開程序丟參數太長記成那條沒跑到並擋 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 2、3] [因:detekt 拿逗號與分號分 --input,那種路徑整條拒跑;Linux 單一參數上限 128 KB,改動檔多時命令會撐爆;參數太長原本是例外、整道閘例外放行] [不選:分隔字元路徑自動放行(改檔名就能繞過的可重現繞道);舊 {LINT_FILES} 也分批(不改既有行為)] [test:t_lint_new_csv_separator_path] [test:t_lint_new_csv_batches] [test:t_lint_new_detekt_csv_blocks_new] [test:t_lint_new_detekt_real_two_files]
+   WHY:`lumos code-loop pass` 記通過之前先跑新增告警與表態兩道:用推送檢查那支判定函式的收集模式加「只跑兩道」(mech_only,安全證據、端到端驗收、合約測試與代碼審留痕不跑),範圍是分岔點..HEAD;排在留痕驗證那兩條提早返回(沒有審查帳、light)之前;擋下不留痕、rc2、治理帳記一筆 code-loop-pass blocked [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 2] [因:使用者要審查迴圈裡就檢查乾淨,不等到推送] [不選:另寫一支共用判定(兩套判法會漂開)] [test:t_codeloop_pass_requires_clean_mechanical]
+   WHY:`lumos lint-new --diff <範圍>` 呼叫推送前同一支新增告警判定、不寫治理帳;八種狀態分三類:擋 rc1、乾淨或刻意不查 rc0、沒檢查到 rc3(這支指令的 rc3 不是其他指令的找不到知識圖譜) [出處:[[Projects/Android寫法寫完當下自動檢查_計劃]] 範圍 1] [因:派審查席前自己先查,又不讓放行帳多出推送以外的筆數] [test:t_lint_new_cli_status_codes]
+   PITFALL:新增頂層指令自己寫了 description 時不會被灌入「什麼時候用」,又漏列 commands 索引,本機推功能分支只跑文件子集看不到、PR 的 CI 全套才紅 [出處:2026-11-06 PR #165 CI(lint-new)] [根因:_fill_help_when 只灌沒有 description 的子指令;兩支守衛測試不在功能分支推送的文件子集] [修法:自訂 description 開頭自己接 "什麼時候用:" + HELP_WHEN[名]] [test:t_command_index_complete]
+   WHY:code-loop check 的表態那一道多核情境題(kt-situation):用算適用題的同一個範圍,在被推版本上重算情境段、逐段逐列核對表態與證據樣式(缺段缺列與段算不出來擋,證據樣式對不上只提醒並記帳、附段放行指令,見 [[Systems/棧別提問表態閘]]);pitfalls --diff 的 JSON 多 situation_segments、人讀輸出每段一行;盲判記錄不在這一步核 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 3] [因:表態對程式要在推送前那一道就擋,不靠審查席] [test:t_dispositions_situation_evidence_pattern]
+   SEE:[[Systems/回合結束寫法檢查]] [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]]
+   WHY:lint-new 工作樹模式白名單通過的命令不交給 shell:照整詞展開佔位符組參數清單、shell=False 執行、SARIF 由程式把標準輸出接到檔案;佔位符不准當旗標值 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 甲組(正確性席 F1 實跑 --filter {LINT_FILES} 加檔名 $(touch…) 造出記號檔)] [因:Python 官方 subprocess Security Considerations:不開 shell 時每個字元原樣傳給程式;白名單同一類第二次被打穿,依手冊換形狀] [不選:繼續補白名單禁字] [代價:推送前 --diff 模式照舊走 shell,這輪不動] [test:t_lwt_r1_shellfree_argv]
+   WHY:lint-new 工作樹模式讀 HEAD 內容只讀要用的:碰過的檔超過 50 支在讀任何內容之前回 rc3,刪除檔只讀有同名新增檔要配對的那幾支;git cat-file --batch 以行尾 missing 判、格式對不上或 git 失敗整次 rc3 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 乙、丙組(資源席 F1 實測刪 200 個 5MB 資產檔約 4GB、9 秒;正確性席 F2、資源席 F2 實跑含空白路徑崩潰)] [因:git 官方 BATCH OUTPUT 不存在的物件是 <object> SP missing LF、object 名可含空白] [不選:git 失敗時當全部是新檔(會把舊告警全報成新增)] [test:t_lwt_r1_reads_only_needed] [test:t_lwt_r1_file_cap] [test:t_lwt_r1_space_path_blob]
+-  WHY:lint-new 工作樹模式的 git 呼叫一律關掉 repo 設定裡每個內容過濾器(-c filter.<名>.clean= process= required=false),名字收不了(含 = 或換行)整次 rc3 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 戊組(資安席 F2 實跑 git status 觸發 clean 指令)] [因:被打開的目錄可以自帶 .git/config 與 .gitattributes;過濾器名字由設定決定、不能寫死,先列出再逐一關;git 2.39.2 實測給空指令不跑、不設 required=false 會讓 status 失敗] [不選:只在推送前閘處理(收工鉤子是開資料夾就自動跑的)] [代價:LFS 這類合法過濾器在這條路也被關掉,racy 檔可能被看成有改動] [test:t_lwt_r1_git_filter_off]
++  WHY:lint-new 工作樹模式的 git 呼叫一律關掉 repo 設定裡每個內容過濾器(-c filter.<名>.clean= process= required=false;r2 起併進 [[Systems/hook信任邊界]] 那份單一來源 _git_untrusted_c,多關 smudge 與固定三項、status 不進子 repo),名字收不了(含 = 或換行)整次 rc3 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 戊組(資安席 F2 實跑 git status 觸發 clean 指令)] [因:被打開的目錄可以自帶 .git/config 與 .gitattributes;過濾器名字由設定決定、不能寫死,先列出再逐一關;git 2.39.2 實測給空指令不跑、不設 required=false 會讓 status 失敗] [不選:只在推送前閘處理(收工鉤子是開資料夾就自動跑的)] [代價:LFS 這類合法過濾器在這條路也被關掉,racy 檔可能被看成有改動] [test:t_lwt_r1_git_filter_off] [test:t_lwt_r2_untrusted_exec_paths]
+   REVISIT:2026-11-20 既有收工點名 check-graph-sync.py 的 git status 與推送前閘的 git 呼叫還沒關內容過濾器(同族,這輪只修新呼叫點),開 Issue 列全部呼叫點再決定統一做法
++  WHY:lint-new --worktree --json 多一欄 unchecked_kind 明寫 rc3 是 deliberate(刻意不查:合併中、宣告檔不乾淨、超過 50 支、不在白名單、宣告形狀不讓跑)、timeout(預算或參數長度不夠)還是 failed(過濾器關不掉、git 算不出或讀不出、工具跑不出結果);判定裡沒寫明的 rc3 一律 failed [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 乙組(通才席 F1)] [因:這三條內部失敗的 undone 是空的,鉤子從 undone 推測時當成刻意不查記 ok,每回合 git 失敗的專案在 lumos enforcement 上永遠是綠的] [不選:往 undone 補一筆 git 種類讓鉤子再推測(外層仍靠猜)] [test:t_lwt_r2_unchecked_kind_json]
++  WHY:佔位符展開只有一份核心 _lint_placeholder_words(佔位符 → 詞、逗號串的相對路徑改寫),shell 字串版 _lint_cmd_with_files 與參數清單版 _lint_wt_argv 都呼叫它;用不用 shell 只有一種傳法,_lint_spawn 收 argv= 而不看型別,參數清單版只把找不到執行檔或沒權限當沒裝 [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 丙組(架構對齊席 F1、F2、F5)] [因:_lint_cmd_with_files 宣告過唯一實作(曾因三處各寫一份漏一處出事),工作樹模式又寫了第二份相對路徑改寫] [不選:兩份並存加等價守衛] [test:t_lwt_r2_placeholder_one_core]
++  WHY:lint-new 工作樹模式讀 HEAD 內容先問大小:工作樹那一版已超過大小或行數上限的不讀基準,HEAD 那一版超過 max_file_bytes 的只問大小、整支當新檔列 skipped,走既有帶上限讀法 _nodehome_cat_blobs_capped;工具輸出的 SARIF 超過 64MB 當跑不出可解析結果;開跑前也清系統暫存區超過一天的自己的 lumos-lint-*.sarif [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 戊組(資源席 F1、F2、F3)] [因:40 支 4.3MB 的 kt 各加一行時最大常駐約 1GB 而這些檔最後全被略過;SARIF 整份讀進來約吃 8 倍記憶體;被 SIGKILL 或 SIGHUP 時暫存 SARIF 沒人掃] [不選:另寫一套帶上限的 cat-file 讀法] [test:t_lwt_r2_blob_size_cap] [test:t_lwt_r2_sarif_cap] [test:t_lwt_r2_stale_sarif_sweep]
++  REVISIT:2027-02-07 工作樹模式白名單通過的 ast-grep 照 PATH 找、沒像 _trusted_lumos 那樣驗擁有者與可寫位元(回合結束檢查代碼審 r2 資安席 F2,縱深題,舊 shell 版同樣),專案自帶的 bin 進了 PATH(direnv、node_modules/.bin)就會跑到同名程式;要不要比照驗來源交人裁
+ decisions:
+   - content: 共用層(手動 pipeline + 自主 loop 都吃);checklist=通用3問+類專屬追問;載體=lumos 新指令;--check 機械擋;code-loop 風險分級觸發;醒著訊號=reviewer bug-canary+mutation 冒煙
+     id: d1
+     context: 效能/併發主戰場在業務專案、治理面在 loop,擇一都缺半;純 prompt 違反 mechanical-not-motivational;全分支跑 code-loop 日常太貴
+     why_chosen: 每軸都選機械可驗+分級控總量;bug canary 驗審查層醒著、mutation 驗測試層守著,兩者正交
+     decided: 2026-07-04
+     valid: true
+   - content: 代碼 canary 用三道防污染(真代碼永不含+低耦合植入+溯源排除),不採純 mutation
+     id: d2
+     context: 使用者質疑代碼 canary 污染風險比 spec 嚴重(假 hunk 改變語意、reviewer 推導衍生幻影 findings)
+diff --git a/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md b/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
+index d2743a81d..aea3f72a9 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
++++ b/docs/lumos-toolchain-knowledge/Systems/回合結束寫法檢查.md
+@@ -1,49 +1,51 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-11-06
+-updated: 2026-11-06
++updated: 2026-11-07
+ responsibility: 負責:收工寫法檢查鉤子的回合起點紀錄、收工時呼叫 lint-new 工作樹模式與擋停去重,以及兩支收工鉤子共用的 _hookshared 模組;不負責:新增告警判定本體(pitfalls-code-loop 的新增告警閘)、收工點名(graph-sync-coverage)
+ aliases: []
+ about_code:
+   - scripts/hooks/claude/stop-lint-hook.py
+   - scripts/hooks/claude/_hookshared.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/guards-gates
+ summary: |-
+   WHY:寫法檢查開新的一支收工鉤子、不併進收工點名 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 決策第一條、實驗 E2] [因:官方說同一事件的鉤子並行跑、實測兩支 block 理由都送到;拆開後名額、輸出、時間上限各算各的] [不選:同一支裡兩道並列(要改預算起算點、上限提到 55 秒)]
+   WHY:回合起點在送出提示時記、收工只讀不寫 [出處:同計劃 實驗 E1、E11] [因:claude -p 單回合會談也有送出提示事件;背景指令結束與排程到點的回合也有、帶新的 prompt_id(2.1.319 實測)] [不選:收工時寫時間戳(單回合會談永遠不被查)] [test:t_stop_lint_turn_start]
+   WHY:同一回合(會談加 prompt_id)同一批告警只擋一次、最多三批,stop_hook_active 為真照查 [出處:同計劃 決策 d1、設計審 r1 通才席 F1] [因:綁會談時長會談第一回合就用光名額;續做那次不查等於修完不驗] [不選:沿用收工點名的同會談只擋一次] [test:t_stop_lint_hook]
+   RULE:收工自動執行的檢查命令只准 lumos 寫死的 ast-grep 白名單形狀、宣告檔要已提交且乾淨,專案設定放寬不了 [依據:審計] [since:2026-11-06] [retire:when-symbol:scripts/lumos::_lint_wt_allow] [confirmed:2026-11-06] [test:t_lint_new_worktree_allowlist]
+   PITFALL:Codex 的送出提示事件帶 turn_id、沒有 prompt_id,這支鉤子在 Codex 下收工一律印「沒記到起點」不檢查 [出處:2026-11-06 codex-cli 0.160.0 專案層鉤子實測] [根因:兩家的回合編號欄位不同名] [repro:codex exec --dangerously-bypass-hook-trust 掛記錄鉤子看 UserPromptSubmit 的 payload]
+   SEE:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] [[Systems/graph-sync-coverage]] [[Systems/pitfalls-code-loop]] [[Systems/hook逾時預算]]
+   WHY:可信來源解析與逾時預算留在這支鉤子當逐字複本,共用模組只放漏帶時只會功能退化的段落 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 丁組(架構對齊席 F1、合約席 F1)] [因:[[Systems/hook信任邊界]] 的分流規則——會讓安全檢查失效的共用邏輯照逐字複本加守衛] [不選:兩段放共用模組、守衛改成認匯入(放寬後換成從 PATH 找 lumos 照綠)] [test:t_hooks_never_run_code_from_opened_folder] [test:t_hookshared_r1_mark_shared]
+   WHY:擋下原因裡的放行指令照 lint-new 給的原樣印、不截斷不改字元,擋下原因逐條累加、結尾另 N 條那行一定留得下 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 甲組(資安席 F1、邊界席 F1、通才席 F1、F2)] [因:先加引號再換反引號會拆掉引號、截 160 字會砍掉必填的 --note、整段硬截會把後面幾條與結尾提示一起砍掉] [不選:放行指令也過 _safe_path] [test:t_slh_r1_reason_fits] [test:t_lwt_r1_waive_cmd_quoting]
+   PITFALL:開子程序前用 pthread_sigmask 擋 SIGTERM,子程序繼承被擋的遮罩、自己的 SIGTERM 收尾永遠跑不到 [出處:2026-11-06 代碼審 r1 修正自測(t_stop_lint_hook_timeout 的 S7② 翻紅)] [根因:訊號遮罩跨 fork 與 exec 由子程序繼承] [修法:處理器在開程序到登記之間先記下、登記完補跑] [test:t_slh_r1_spawn_window_term]
+-  WHY:吞掉的逾時與失敗自己記 _hookevent.mark,刻意不查的 rc3 照記 ok [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 乙組(邊界席 F2)] [因:guard 只看 main 有沒有丟例外,不記的話每次都逾時的鉤子在 lumos enforcement 上永遠是綠的] [不選:rc3 一律記 error(合併中、超過上限這種照設計不查也會被算成壞掉)] [test:t_slh_r1_marks_swallowed]
++  WHY:吞掉的逾時與失敗自己記 _hookevent.mark,刻意不查的 rc3 照記 ok;r2 起照 lint-new 明寫的 unchecked_kind 記(deliberate 記 ok、timeout 記 timeout、failed 與欄位缺或不認得記 error),不再從 undone 的種類推測 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 乙組(邊界席 F2)、r2-intake.md 乙組(通才席 F1:git 算不出改動等三條 undone 是空的,推測時被記成 ok)] [因:guard 只看 main 有沒有丟例外,不記的話每次都逾時的鉤子在 lumos enforcement 上永遠是綠的] [不選:rc3 一律記 error(合併中、超過上限這種照設計不查也會被算成壞掉)] [test:t_slh_r1_marks_swallowed] [test:t_slh_r2_unchecked_field]
++  WHY:鉤子跑 lint-new 時 SIGINT、SIGHUP 跟 SIGTERM 裝同一個收法,其他沒接到的例外從 finally 漏出去時 lint-new 還在跑也一樣收掉 [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 戊組(邊界席 F2 實跑留下孤兒 lint-new)] [因:lint-new 在自己的 session 裡,鉤子死了它不會跟著死;它自己的 --budget 會讓孤兒最後結束,但工具群組與快照要等到那時] [不選:訊號遮罩(會被子程序繼承,lint-new 自己的 SIGTERM 收尾就跑不到)] [test:t_slh_r2_sigint_sighup_reap]
++  WHY:回合起點紀錄的時刻是超大整數或紀錄檔是深層巢狀 JSON 也當沒記到起點(多接 OverflowError、RecursionError) [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 戊組(邊界席 F1)] [因:鉤子自己寫的一定是浮點數,只有紀錄檔被手動改壞才走到,但走到時原本 rc1 崩] [test:t_slh_r2_turn_start_edges]
+ ---
+ # 回合結束寫法檢查
+ 
+ > 白話:像收工前有人看一眼你這回合寫的程式。AI 每回合要收工時,對「這一回合改過、還沒提交」的檔跑規則包,有新增告警就擋下叫它先修;同一批只擋一次,修不好就照放行指令寫理由。
+ 
+ ## 怎麼運作
+ 
+ - `stop-lint-hook.py` 同一支檔註冊兩個事件,依 payload 的 `hook_event_name` 分流:
+   - 送出提示:每次都把 `{prompt_id, 時刻}` 原子寫到 `~/.cache/lumos/stop-turn/<會談>`,不看專案有沒有宣告、不輸出。
+   - 收工:先只用標準庫預篩(repo 根 `.lumos/lint.json` 有 `ast-grep` 字樣),沒過就結束、連共用模組都不匯入;過了才比對起點、呼叫可信 lumos 的 `lint-new --worktree --since <起點> --json --pgid-file … --budget …`。
+-- 只在「退出碼 1、最後一行是 JSON、status 是 blocked 而且有新增告警」三件事都成立時擋;rc3 印一行、rc2 印「重跑安裝」、沒正常結束(traceback、被訊號殺掉)印一行、status off(含 `LUMOS_SKIP_LINT_NEW`)印一行,其餘不出聲。吞掉的逾時記 `timeout`、rc2 與沒正常結束與環境不可用記 `error`(`_hookevent.mark`),刻意不查的 rc3 照記 ok。
++- 只在「退出碼 1、最後一行是 JSON、status 是 blocked 而且有新增告警」三件事都成立時擋;rc3 印一行、rc2 印「重跑安裝」、沒正常結束(traceback、被訊號殺掉)印一行、status off(含 `LUMOS_SKIP_LINT_NEW`)印一行,其餘不出聲。吞掉的逾時記 `timeout`、rc2 與沒正常結束記 `error`(`_hookevent.mark`);rc3 照 lint-new JSON 的 `unchecked_kind` 記——`deliberate` 記 ok、`timeout` 記 timeout、`failed` 與欄位缺或不認得記 error。
+ - 擋下原因逐條累加(最多 10 條、整段不超過 1500 字),結尾「另 N 條」一定留得下;放行指令照 lint-new 給的原樣印、不截斷不改字元,看起來不是那樣產生的(有反引號、換行、控制字元)整行不印。
+ - 擋下名額記在 `stop-block/<會談>.lint-<回合>-<批次>`(O_EXCL);佔到名額立刻輸出,寫不出去就退名額;輸出寫出去之後才呼叫 `lint-new --record-stop-block` 記一筆 `stop-lint` 治理帳。
+-- 逾時:lint-new 在自己的程序群組;到內層時限先 SIGTERM、1 秒寬限,過了才 SIGKILL 它與登記檔裡的工具群組。鉤子自己被 SIGTERM 時同順序、等 0.5 秒;開 lint-new 到登記之間收到的 SIGTERM 先記下、登記完補跑。沒有 `os.killpg` 的平台只收 lint-new 本身。
++- 逾時:lint-new 在自己的程序群組;到內層時限先 SIGTERM、1 秒寬限,過了才 SIGKILL 它與登記檔裡的工具群組。鉤子自己被 SIGTERM、SIGINT 或 SIGHUP 時同順序、等 0.5 秒;開 lint-new 到登記之間收到的先記下、登記完補跑;其他例外漏出去時 lint-new 還在跑也一樣收掉。沒有 `os.killpg` 的平台只收 lint-new 本身。
+ - 檢查本體(工作樹模式、白名單、改名鏈、宣告檔乾淨判法)在主程式的 `lint-new`,見 [[Systems/pitfalls-code-loop]] 的新增告警閘;這篇不管判定本體。
+ 
+ ## 共用模組
+ 
+ `_hookshared.py` 放兩支收工鉤子共用、漏帶只會功能退化的那幾段:家目錄底下的標記目錄(逐層建逐層檢查)、標記目錄信任檢查、標記檔名消毒 `_mark_name` 與 O_EXCL 佔名額 `_claim_mark`(兩支的標記在同一個 `stop-block/`,規則一分家檔名就對不上)、檔名消毒、git 防護清單與環境注入。收工點名照名字匯入回來(見 [[Systems/graph-sync-coverage]])。只用標準庫、沒有模組層 I/O;匯入約 3.5 毫秒(實驗 E12)。
+ 
+ **可信來源解析與逾時預算不在這裡**:那兩段跟安全邊界綁在一起,照 [[Systems/hook信任邊界]] 是每支鉤子自己的逐字複本,守衛逐字比對(代碼審 r1 曾發現它們被搬進共用模組、守衛跟著放寬到擋不住「換成從 PATH 找」,已搬回)。
+ 
+ ## 登記點(漏一處就有守衛翻紅或靜默失效)
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md b/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
+index 95a71526e..2b85768e6 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
++++ b/docs/lumos-toolchain-knowledge/Systems/改檔前推播.md
+@@ -1,32 +1,33 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-10-02
+-updated: 2026-11-06
++updated: 2026-11-07
+ responsibility: 負責 Claude Code 改檔前那支推播鉤子:判斷這次改動要不要推、用哪個 repo 的圖譜查、冷卻窗、把查到的筆記框成參考資料交給模型;不負責排序與查詢本身(那在 lumos impact),也不負責執行檔信任與逾時預算(各有單源筆記)
+ aliases: []
+ about_code:
+   - scripts/hooks/claude/impact-hook.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/retrieval
+ summary: |-
+   WHY:[2026-10-02 修 worktree 推不出筆記時定]被改的檔若在「同一個 repo 的另一個 worktree」,查詢用那個 worktree 當 repo;★只認共用同一份 git 資料的 worktree,不跟去不相干的 repo★——跟去的話,改到剛 clone 的陌生 repo 裡的檔,就會把對方寫的筆記推進對話,原本不會。子模組也因此照舊。出處:修這個 bug 的那次提交與它的 Issue
+   PITFALL:[2026-10-02]session 切進 worktree 後,啟動目錄變數與這支 hook 行程所在的位置都還是主 repo;拿主 repo 去查 worktree 裡的檔,查詢回 0 筆、hook 靜默放行,照規矩開 worktree 做事的 session 一篇推播都收不到。[test:t_impact_hook_repo_follows_worktree]
+   FACT:[來源:生產][Claude Code 2.1.287,2026-10-02]用內建方式切進 worktree 後,對話紀錄記的目錄會跟著換,但 hook 事件帳記下的 repo 仍是啟動目錄——hook 行程不是在 worktree 裡跑的
+   TEST: t_impact_hook_repo_follows_worktree
+   WHY:[2026-10-29]圖譜專案裡推播沒跑成(找不到 lumos、逾時、啟動失敗、非零結束碼、輸出讀不懂、有圖譜卻回找不到圖譜)時附一段固定說明並記逾時或錯誤事件,同會談同原因只講一次;不是圖譜專案與零命中照舊安靜 [出處:[[Projects/改檔前推播失敗出聲_計劃]]] [因:原本六條路都靜默,AI 分不出「沒有相關筆記」與「推播壞了」,事件帳也全記成 ok] [不選:零命中也講(每次改檔都燒 token)] [不選:轉 lumos 錯誤原文(自由文字零輸出的消毒原則)] [test:t_impact_hook_six_failures_voiced]
+   WHY:目標是 .kt 時鉤子多送 delta_new(只取寫入的新內容;整份與新內容一次取段,代碼審 r1 通才席 F6;.kts 建置腳本不送,r1 合約席 F6 裁定),lumos 回 decision_rows,鉤子用 _voice_once 取前三列沒推過的印;決策列不受冷卻窗限制 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3、設計審 r1 通才席 F3] [因:冷卻窗是為了省完整影響推播,決策列只是一次本機正規式] [test:t_impact_hook_kotlin_decision_rows]
+   PITFALL:測試裡讀決策表只拿到一列假表 [出處:2026-11-06 實作改檔前推列時] [根因:測試執行器把 LUMOS_KT_CATALOG 指到凍結型錄,讓既有測試停在情境題上線前的語意] [修法:要真型錄的測試用 _kt_decision_table(path=真型錄) 並在子程序環境明確指過去] [test:t_impact_hook_kotlin_decision_rows]
+   WHY:決策列挑到就落「推過」標記,不等這次編輯成功 [出處:governance/review-reports/code-android寫法回合結束檢查/r1-intake.md 戊組(通才席 F3,接受並寫明)] [因:PreToolUse 在工具執行前跑,鉤子看不到編輯後來被拒或 old_string 對不上;列文字那時已進模型脈絡,重試同一處再推一次只是重複] [代價:編輯失敗後同會談再碰同一列不再提醒,要等標記過期] [不選:輸出寫成功後才落標記(輸出成功也不代表編輯成功,一樣看不到)] [test:t_impact_hook_kotlin_decision_rows]
++  WHY:改 kt 檔時只取新內容一律走 extract_delta_texts(整份與新內容一次取),extract_delta_text 不再有 new_only 參數 [出處:governance/review-reports/code-android寫法回合結束檢查/r2-intake.md 戊組(通才席 F3)] [因:正式路徑沒有呼叫帶 new_only,留著等於兩套取段入口,改取段規則要顧三個函式] [test:t_impact_r2_no_new_only_param]
+ related:
+   - "[[Issues/worktree裡改檔推不出筆記]]"
+ verified_by:
+   - "[[Verification/測試品質分支第二輪修復驗證]]"
+ ---
+ # 改檔前推播
+ 
+ 管的檔:`scripts/hooks/claude/impact-hook.py`。
+ 
+ 改檔前把「這次改動牽連到哪些筆記」推到模型眼前的那支 hook。排序與查詢本身在 lumos impact,不在這裡;只執行可信來源的 lumos 見 [[Systems/hook信任邊界]],內層逾時怎麼算見 [[Systems/hook逾時預算]]。
+diff --git a/governance/review-reports/code-android寫法回合結束檢查/r2-fix.json b/governance/review-reports/code-android寫法回合結束檢查/r2-fix.json
+new file mode 100644
+index 000000000..a34faf14f
+--- /dev/null
++++ b/governance/review-reports/code-android寫法回合結束檢查/r2-fix.json
+@@ -0,0 +1,409 @@
++{
++  "base": "a1456f8f64df5a533ab897395d2b24fd0028076f",
++  "groups": [
++    {
++      "id": "G1",
++      "category": "escaping",
++      "findings": [
++        "二正1",
++        "二安1",
++        "二約2"
++      ],
++      "prior": {
++        "why_failed": "第一輪只在工作樹模式另寫一份過濾器參數,spec-freeze 又有自己一份,兩份各漏一項(檔案監視、smudge),也沒想到子 repo 自己的設定列不到名字;測試只設 clean",
++        "new_approach": "收成單一產生器 _git_untrusted_c,工作樹模式與 spec-freeze 共用,status 一律不進子 repo;四種執行途徑各一支真 git 記號檔測試,另加結構測試掃每個 git 呼叫都帶整份參數"
++      },
++      "paths": [
++        {
++          "at": "scripts/lumos:def _git_untrusted_c",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_untrusted_exec_paths",
++            "t_lwt_r2_untrusted_single_source"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_wt_git",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_untrusted_exec_paths",
++            "t_lwt_r2_untrusted_single_source"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_wt_blobs",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_untrusted_single_source"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _spec_freeze_build",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_untrusted_single_source",
++            "t_spec_freeze_runs_no_hooks_or_filters"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def cmd_spec_freeze",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_untrusted_single_source"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _spec_freeze_from_commit",
++          "status": "fixed",
++          "tests": [
++            "t_spec_freeze_commit_form_from_session"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/_hookshared.py:_GIT_UNSAFE_CONFIG",
++          "status": "unaffected",
++          "reason": "鉤子那份清單在不同層(經環境變數套到鉤子開的子程序),主程式這份已對齊它並補齊;過濾器名字要逐個列,鉤子層沒有這套,同步補交人裁,回頭條件寫在 Systems/hook信任邊界"
++        },
++        {
++          "at": "scripts/hooks/claude/check-graph-sync.py:def _git_status_entries",
++          "status": "unaffected",
++          "reason": "收工點名自己的 git status 同族、不在這次差異範圍內;這輪不動,回頭條件 REVISIT:2026-11-20 寫在 Systems/hook信任邊界"
++        }
++      ]
++    },
++    {
++      "id": "G2",
++      "category": "other",
++      "note": "失效分類:沒檢查到的種類由 lint-new 明寫、鉤子照欄位記事件",
++      "findings": [
++        "二通1"
++      ],
++      "prior": {
++        "why_failed": "第一輪讓鉤子從 undone 的種類推測是不是刻意不查,lint-new 自己的三條內部失敗 undone 是空的,被推成刻意不查記 ok",
++        "new_approach": "lint-new 在 JSON 明寫 unchecked_kind(刻意不查、時間不夠、沒能檢查),沒寫明的一律算沒能檢查;鉤子只看這個欄位,不再推測"
++      },
++      "paths": [
++        {
++          "at": "scripts/lumos:def _lint_wt_unready",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_unchecked_kind_json",
++            "t_lwt_r1_git_states"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_wt_pairs",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_unchecked_kind_json",
++            "t_lwt_r1_file_cap"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_new_wt_verdict",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_unchecked_kind_json"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_new_wt_json",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_unchecked_kind_json"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _unchecked_kind",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_unchecked_field",
++            "t_slh_r1_marks_swallowed"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "G3",
++      "category": "other",
++      "note": "第二種做法:佔位符展開與用不用 shell 的開關各收成一份",
++      "findings": [
++        "二架1",
++        "二架2",
++        "二架5"
++      ],
++      "prior": {
++        "why_failed": "第一輪把工作樹模式改成不開 shell 時另寫了參數清單版的佔位符展開,沒有回頭用宣告過唯一實作的那支;開關也在四層用了三種寫法",
++        "new_approach": "抽出共用核心 _lint_placeholder_words,字串版與參數清單版都呼叫它;參數清單版的開程序併回 _lint_spawn,開關只剩 argv= 一種傳法,開不了程序的分類跟 shell 版對齊"
++      },
++      "paths": [
++        {
++          "at": "scripts/lumos:def _lint_placeholder_words",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_placeholder_one_core"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_cmd_with_files",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_placeholder_one_core"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_wt_argv",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_placeholder_one_core",
++            "t_lwt_r1_shellfree_argv"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_spawn",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_placeholder_one_core"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_new_run_one",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_placeholder_one_core"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "G4",
++      "category": "other",
++      "note": "測試缺口:改壞被守的程式測試照綠,逐處補斷言",
++      "findings": [
++        "二約1",
++        "二約3",
++        "二約4",
++        "二約5",
++        "二約6",
++        "二約7",
++        "二約8"
++      ],
++      "prior": {
++        "why_failed": "第一輪補的測試只看最後結果(lint-new 有沒有死)或只造一種輸入,也有拿同一支函式對自己的循環驗證,改壞那段程式照綠",
++        "new_approach": "每道判斷在複本裡各改壞一次確認會紅:補耗時斷言、掃長度邊界、獨立期望表、放寬的每條腿各一個逼紅案例、守衛改用語法樹擋別名與 getattr 與裸名"
++      },
++      "paths": [
++        {
++          "at": "scripts/test_lumos.py:def t_slh_r1_spawn_window_term",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r1_spawn_window_term"
++          ]
++        },
++        {
++          "at": "scripts/test_lumos.py:def t_hooks_never_run_code_from_opened_folder",
++          "status": "fixed",
++          "tests": [
++            "t_hooks_never_run_code_from_opened_folder"
++          ]
++        },
++        {
++          "at": "scripts/test_lumos.py:def t_slh_r2_reason_cap_sweep",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_reason_cap_sweep"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _unchecked_kind",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_unchecked_field"
++          ]
++        },
++        {
++          "at": "scripts/test_lumos.py:def t_slh_r2_turn_start_edges",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_turn_start_edges"
++          ]
++        },
++        {
++          "at": "scripts/test_lumos.py:def t_hookshared_r2_mark_name_table",
++          "status": "fixed",
++          "tests": [
++            "t_hookshared_r2_mark_name_table"
++          ]
++        },
++        {
++          "at": "scripts/test_lumos.py:def t_hook_pure_probe_r1_scope",
++          "status": "fixed",
++          "tests": [
++            "t_hook_pure_probe_r1_scope"
++          ]
++        }
++      ]
++    },
++    {
++      "id": "G5",
++      "category": "boundary",
++      "findings": [
++        "二邊1"
++      ],
++      "paths": [
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _turn_start",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_turn_start_edges"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _on_stop",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_turn_start_edges"
++          ]
++        }
++      ],
++      "prior": {
++        "why_failed": "第一輪只修了起點檔讀不到與格式錯兩種情況,沒想到超大整數與深層巢狀會讓解析丟出別種例外",
++        "new_approach": "起點檔解析的例外清單補上超大整數轉浮點的 OverflowError 與深層巢狀的 RecursionError,當沒有起點處理,並用這兩種最壞輸入的測試釘住"
++      }
++    },
++    {
++      "id": "G6",
++      "category": "concurrency",
++      "findings": [
++        "二邊2"
++      ],
++      "paths": [
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _on_stop",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_sigint_sighup_reap"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _on_sigterm",
++          "status": "fixed",
++          "tests": [
++            "t_slh_r2_sigint_sighup_reap"
++          ]
++        }
++      ],
++      "prior": {
++        "why_failed": "第一輪只接了 SIGTERM 的收尾,SIGINT、SIGHUP 與未捕捉例外走另外的出口,子程序沒人收",
++        "new_approach": "SIGINT 與 SIGHUP 改成跟 SIGTERM 共用同一支收尾函式,收到任一訊號都會收掉 lint-new 的程序群組,測試逐一送這兩種訊號驗收"
++      }
++    },
++    {
++      "id": "G7",
++      "category": "perf-memory",
++      "findings": [
++        "二資源1",
++        "二資源2",
++        "二資源3"
++      ],
++      "paths": [
++        {
++          "at": "scripts/lumos:def _lint_wt_pairs",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_blob_size_cap"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_wt_head_oversize",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_blob_size_cap"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_wt_blobs",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_blob_size_cap"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_run_and_parse",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_sarif_cap"
++          ]
++        },
++        {
++          "at": "scripts/lumos:def _lint_new_clean_stale",
++          "status": "fixed",
++          "tests": [
++            "t_lwt_r2_stale_sarif_sweep"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _on_stop",
++          "status": "unaffected",
++          "reason": "鉤子整份收 lint-new 的 --json 輸出:來源已被一回合最多 50 支檔與 SARIF 64MB 上限限住(10 萬條告警約 20MB),這輪不另設上限"
++        }
++      ],
++      "prior": {
++        "why_failed": "第一輪只限制了要讀的檔案數,沒限制單檔大小與 SARIF 輸出大小,也沒有清理被強制中止留下的暫存",
++        "new_approach": "改動過的檔先問大小、超過上限就不讀並列為刻意略過;SARIF 暫存檔超過位元組上限就不讀、當這條跑不出結果;另外清掃過期的暫存 SARIF"
++      }
++    },
++    {
++      "id": "G8",
++      "category": "other",
++      "note": "其餘小項:無用匯入、多餘參數、逐字複本、註解與計劃過期句、縱深題只記回頭條件",
++      "findings": [
++        "二通2",
++        "二通3",
++        "二架3",
++        "二架4",
++        "二約9",
++        "二安2"
++      ],
++      "paths": [
++        {
++          "at": "scripts/hooks/claude/check-graph-sync.py:from _hookshared import",
++          "status": "fixed",
++          "tests": [
++            "t_hook_r2_cgs_no_unused_time"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/impact-hook.py:def extract_delta_text",
++          "status": "fixed",
++          "tests": [
++            "t_impact_r2_no_new_only_param",
++            "t_impact_r1_kts_and_once"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _mark_event",
++          "status": "fixed",
++          "tests": [
++            "t_hook_r2_mark_event_verbatim"
++          ]
++        },
++        {
++          "at": "scripts/hooks/claude/stop-lint-hook.py:def _killpg",
++          "status": "unaffected",
++          "reason": "只改註解,照實寫三種平台判法各在哪;行為不變,沒有可綁的測試"
++        },
++        {
++          "at": "docs/lumos-toolchain-knowledge/Projects/Android寫法回合結束檢查與改檔前推列_計劃.md:d1 開頭欄位已改成",
++          "status": "unaffected",
++          "reason": "計劃裡的過期句,改成現況;文件不是程式路徑,沒有可綁的測試"
++        },
++        {
++          "at": "scripts/lumos:def _lint_spawn",
++          "status": "unaffected",
++          "reason": "ast-grep 照 PATH 找是縱深題、舊 shell 版同樣,這輪不改程式;天花板與 REVISIT:2027-02-07 寫在 Systems/pitfalls-code-loop"
++        }
++      ]
++    }
++  ]
++}

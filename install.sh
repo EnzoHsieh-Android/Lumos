@@ -12,6 +12,12 @@
 # 之後的檢查會因同一個值擋下(代碼審 r3、r4;印在這段裡,七個呼叫端不必各寫一份)。
 _lumos_any_python() {
   if _lumos_any_python_find; then
+    # 取到的不是絕對路徑就當找不到(PATH 有空項或相對項時 command -v 會回 ./python3.14 這種,解到目前目錄的檔;代碼審 r6 資安席 F1)
+    case "$_LUMOS_ANY_EXE" in
+      /*|[A-Za-z]:[\\/]*) ;;
+      *) _LUMOS_NO_PY_MSG="找到的 python 是相對路徑 $_LUMOS_ANY_EXE(PATH 有空項或相對項,會解到目前目錄的檔),不用。
+$_LUMOS_ANY_NOTE$_LUMOS_NO_PY_BASE"; _LUMOS_ANY_EXE=""; _LUMOS_ANY_ARG=""; return 1 ;;
+    esac
     if [ -n "$_LUMOS_ANY_NOTE" ]; then
       printf '%s改用 %s;但 lumos 只認 LUMOS_PYTHON,之後提交與推送前的檢查會因這個值擋下——修正它或 unset LUMOS_PYTHON。\n' \
         "$_LUMOS_ANY_NOTE" "$_LUMOS_ANY_EXE${_LUMOS_ANY_ARG:+ $_LUMOS_ANY_ARG}" >&2

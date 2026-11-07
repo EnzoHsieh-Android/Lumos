@@ -119,6 +119,10 @@ HOOK_BUDGET = {
     # 代價誠實講:這支掛在收工事件,使用者最壞情況要多等到 28 秒。
     # REVISIT:2026-12-07 量一次這段實際耗時分布;若多數遠低於 25 秒,把天花板調回去
     "check-graph-sync.py": 40,
+    # 收工寫法檢查([[Projects/Android寫法回合結束檢查與改檔前推列_計劃]]):內層 30×0.7=21 秒,lint-new 逾時先 SIGTERM、
+    # 1 秒寬限再 SIGKILL,最壞約 22.5 秒加啟動,離 Claude Code 送 SIGTERM 的 30 秒留 7 秒;跟收工點名並行,使用者等的是兩者較長的那個。
+    # 送出提示那次只記回合起點(約 0.03 秒,實驗 E10、E12)。
+    "stop-lint-hook.py": 30,
     # 記憶過期清掃:多數檢查是本機指令(毫秒),慢的是要連遠端問「推了沒」那幾條。
     # 預算用完會明說「還有幾條沒驗到」,不會假裝驗過。
     "memory-sweep.py": 12,
@@ -253,6 +257,18 @@ HOOK_ENTRIES = {
     # 逐候選 claude -p 25s)撤除——docs/.rot-check-cache.json 與 .rot-queue.jsonl 從未被建立,
     # 核心邏輯從沒跑到卻每次付啟動成本;且註冊曾重複兩份。要復活先修到核心可觸發再接回。
     "PostToolUse": [],
+    # 收工寫法檢查的回合起點:每次送出提示都記 {prompt_id, 時刻}(同一支檔依 hook_event_name 分流;不輸出)
+    "UserPromptSubmit": [
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("stop-lint-hook.py"),
+                    "timeout": HOOK_BUDGET["stop-lint-hook.py"],
+                }
+            ]
+        },
+    ],
     "Stop": [
         {
             "hooks": [
@@ -260,6 +276,16 @@ HOOK_ENTRIES = {
                     "type": "command",
                     "command": _hook_cmd("check-graph-sync.py"),
                     "timeout": HOOK_BUDGET["check-graph-sync.py"],
+                }
+            ]
+        },
+        {
+            # 收工寫法檢查:這一回合碰過的 kt 檔有新增的規則包告警就擋(同回合同批一次、最多三批);跟收工點名各佔名額各自輸出
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": _hook_cmd("stop-lint-hook.py"),
+                    "timeout": HOOK_BUDGET["stop-lint-hook.py"],
                 }
             ]
         },

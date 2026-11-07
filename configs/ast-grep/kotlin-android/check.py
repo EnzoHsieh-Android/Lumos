@@ -133,6 +133,8 @@ STOP_TRIGGERS = frozenset((
     "version", "size", "token", "edit", "Application", "Intent", "Context", "delay", "Dao", "Repository",
     # 第三批設計審 r2 通才席:幾乎每支 ViewModel 或資料層都有,當觸發字會讓每次推送都出一堆情境段
     "suspend fun", "StateFlow", "withContext", "viewModelScope", "Deferred", "Dispatchers.IO", "Dispatchers.Default",
+    # 回合結束檢查與改檔前推列計劃實驗 E9:Now in Android 的文件頻率超過 8%(15.5%、14.5%、9.4%),改檔前推列會每次都亮
+    "Composable", "Inject", "Modifier",
 ))
 
 

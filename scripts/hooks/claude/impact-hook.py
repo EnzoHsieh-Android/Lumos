@@ -298,6 +298,8 @@ def _trusted_lumos():
     def _ok(cand):
         try:
             p = _P(cand)
+            if not p.is_absolute():
+                return None          # 相對路徑(PATH 有空項或 .)會從目前目錄、也就是被打開的資料夾解出來(代碼審 r4 資安席 F1)
             if not p.is_file():
                 return None
             st = p.stat()
@@ -414,26 +416,48 @@ def _find_lumos_script() -> str | None:
 DELTA_TEXT_CAP = 2 * 1024 * 1024   # 表態閘 S3:原始編輯內容送給 lumos 算觸發式適用性的上限(2 MB;超過截前 2 MB 並註記)
 
 
-def extract_delta_text(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
-    """表態閘 S3(r3 外家 F10/正確性席 C2/接手席 H5):把「這次編輯的原始內容」保留換行送給 lumos 逐行比對 when。
-    query 那欄(extract_delta_query)是 8000 字/512 詞的截斷版、用空白重組會丟換行,只給詞彙融合用;拿它算觸發會把後段靜默漏掉。
-    回 (text, truncated)。"""
+def _delta_parts(payload: dict) -> list:
+    """這次編輯的各段原文 → [(是不是寫入的新內容, 文字)…](Edit 的 old/new、MultiEdit 每段 old/new、Write 的 content)。取段只有這一份。"""
     ti = payload.get("tool_input") or {}
     tool = payload.get("tool_name", "")
-    parts: list[str] = []
+    parts: list = []
     if tool == "Edit":
-        parts = [str(ti.get("old_string") or ""), str(ti.get("new_string") or "")]
+        parts = [(False, str(ti.get("old_string") or "")), (True, str(ti.get("new_string") or ""))]
     elif tool == "MultiEdit":
         for e in (ti.get("edits") or []):
             if isinstance(e, dict):
-                parts += [str(e.get("old_string") or ""), str(e.get("new_string") or "")]
+                parts += [(False, str(e.get("old_string") or "")), (True, str(e.get("new_string") or ""))]
     elif tool == "Write":
-        parts = [str(ti.get("content") or "")]
-    text = "\n".join(p for p in parts if p)
+        parts = [(True, str(ti.get("content") or ""))]
+    return parts
+
+
+def _join_capped(texts: list, cap_bytes: int):
+    """各段以換行相接、超過 cap_bytes 截前 cap_bytes 並標記 → (text, truncated)。字數乘 4 都不到上限時不用編碼就知道沒超過。"""
+    text = "\n".join(t for t in texts if t)
+    if len(text) * 4 <= cap_bytes:
+        return text, False
     b = text.encode("utf-8")
     if len(b) > cap_bytes:
         return b[:cap_bytes].decode("utf-8", errors="ignore"), True
     return text, False
+
+
+def extract_delta_text(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
+    """表態閘 S3(r3 外家 F10/正確性席 C2/接手席 H5):把「這次編輯的原始內容」保留換行送給 lumos 逐行比對 when。
+    query 那欄(extract_delta_query)是 8000 字/512 詞的截斷版、用空白重組會丟換行,只給詞彙融合用;拿它算觸發會把後段靜默漏掉。
+    只取寫入的新內容(改檔前推決策列用,old_string 裡的觸發字不算)一律走 extract_delta_texts(段只取一次、整份與新內容一起回;
+    代碼審 r2 通才席 F3:原本這裡另有 new_only 參數,正式路徑沒人帶,等於兩套取段入口)。回 (text, truncated)。"""
+    return _join_capped([t for _n, t in _delta_parts(payload)], cap_bytes)
+
+
+def extract_delta_texts(payload: dict, cap_bytes: int = DELTA_TEXT_CAP):
+    """改 kt 檔時整份與只含新內容的兩份一次取:段只取一次、各自組字串與截斷 → (整份, 整份截了沒, 新內容, 新內容截了沒)
+    (回合結束檢查代碼審 r1 通才席 F6:原本同一份編輯內容取兩次,大型 Write 在逐次編輯的熱路徑上多一次取段與編碼)。"""
+    parts = _delta_parts(payload)
+    full, full_tr = _join_capped([t for _n, t in parts], cap_bytes)
+    new, new_tr = _join_capped([t for is_new, t in parts if is_new], cap_bytes)
+    return full, full_tr, new, new_tr
 
 
 def extract_delta_query(payload: dict, cap_tokens: int = 512, cap_chars: int = 8000) -> str:
@@ -693,6 +717,13 @@ def build_ranked_context(data: dict) -> str:
             lines.append(f"  - {q}")
     if data.get("delta_truncated"):
         lines.append("  (這次編輯內容超過 2 MB,效能檢核只掃了前 2 MB)")
+    # 決策列([[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 3):lumos 算出的列由 _impact_for_file 挑好這次要印的(同會談同列只推一次、最多三列)
+    rows = data.get("_rows_voice") or []
+    if rows:
+        lines.append("[Kotlin 寫法決策表——這次寫入的內容碰到下面這幾列:照標準寫法寫,不適用時照最後一段]")
+        for r in rows:
+            lines.append(f"  [決策表 {_plain_label(r.get('id'), cap=12)}] {_plain_label(r.get('situation'), cap=120)}"
+                         f"|{_plain_label(r.get('standard'), cap=400)}|不適用時:{_plain_label(r.get('alt'), cap=300)}")
     # ★這條渲染路徑也要框★:第一版我只框了另一條,結果同一支 hook 有一半的輸出沒框
     # ——是全套測試翻紅才發現的(那條測試走的正是這一條路)。
     framed = _frame_injected("\n".join(lines))
@@ -710,8 +741,8 @@ def _stack_section(data: dict) -> dict:
 
 
 def inject_ranked_context(data: dict) -> bool:
-    """ranked 版注入:results/stack_questions/lane 皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
-    if not data.get("results") and not _stack_section(data) and not data.get("lane"):
+    """ranked 版注入:results/stack_questions/lane/要印的決策列皆空 → 不輸出(lane-only 的題也要注入,v4 Codex f2)。"""
+    if not data.get("results") and not _stack_section(data) and not data.get("lane") and not data.get("_rows_voice"):
         return False
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -857,7 +888,9 @@ def _fail_notes(fails: list, session_id: str) -> list[str]:
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError, UnicodeDecodeError, OSError):   # 壞 JSON、深層巢狀、非 UTF-8、超長整數(代碼審 r3 邊界席 F1)
+        payload = None
+    if not isinstance(payload, dict):
         _mark_event("error", "impact hook 收到的輸入讀不懂")   # 判不出是不是圖譜專案,只記不講
         return 0  # fail-open
 
@@ -990,11 +1023,26 @@ def _run_impact(cmd: list, stdin_payload: str, timeout: float, repo: str, fails:
         return None
 
 
+def _rows_to_voice(impact_data, session_id: str) -> list:
+    """lumos 回的 decision_rows 逐列問 _voice_once(會談, "row-<D-n>"),取前三列沒推過的;沒挑到的列下次還能推。
+    標記落在冷卻窗同一個暫存目錄(lumos-impact-<會談>/voice-row-D-n),跟著既有的 24 小時惰性清理走。
+    ★挑到就落標記,不等這次編輯成功★(代碼審 r1 通才席 F3,接受並寫明):PreToolUse 在工具執行前跑,鉤子看不到這次編輯
+    後來被拒絕或 old_string 對不上;列文字這時已經進了模型的脈絡,重試同一處時再推一次只是重複。代價:編輯失敗後
+    同會談再碰同一列不再提醒(24 小時標記過期後才會)。"""
+    picked = []
+    for r in (impact_data or {}).get("decision_rows") or []:
+        if len(picked) >= 3:
+            break
+        if isinstance(r, dict) and r.get("id") and _voice_once(session_id, "row-" + re.sub(r"[^A-Za-z0-9-]", "_", str(r["id"]))[:16]):
+            picked.append(r)
+    return picked
+
+
 def _ranked_ctx(impact_data) -> str:
-    """可注入的文字;判空與 inject_ranked_context 同一條:results/stack_questions/lane 皆空 → 空字串(lane-only 也注入)。"""
+    """可注入的文字;判空與 inject_ranked_context 同一條:results/stack_questions/lane/要印的決策列皆空 → 空字串(lane-only 也注入)。"""
     if not impact_data:
         return ""
-    has = impact_data.get("results") or _stack_section(impact_data) or impact_data.get("lane")
+    has = impact_data.get("results") or _stack_section(impact_data) or impact_data.get("lane") or impact_data.get("_rows_voice")
     return build_ranked_context(impact_data) if has else ""
 
 
@@ -1023,13 +1071,24 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
     # 窗外 → ranked 降噪版(固定席+top-8,delta 當查詢詞);
     # 窗內 → --incidents-only 快速路(只跑事故比對——安全面每次都看,重型 BFS 降頻)。
     delta_q = extract_delta_query(payload)
-    delta_text, delta_trunc = extract_delta_text(payload)
-    stdin_payload = json.dumps({"query": delta_q, "prospective": {}, "delta_text": delta_text, "delta_truncated": delta_trunc}, ensure_ascii=False)
+    if Path(file_path_abs).suffix.lower() == ".kt":
+        # 改檔前推決策列:另送寫入的新內容(同 2 MB 上限,超過照既有做法截斷並標記);段只取一次。
+        # ★.kts 不送★:決策表只管 Kotlin 原始碼,建置腳本 lumos 端也不推(代碼審 r1 合約席 F6 裁定)
+        delta_text, delta_trunc, delta_new, new_trunc = extract_delta_texts(payload)
+        pl = {"query": delta_q, "prospective": {}, "delta_text": delta_text, "delta_truncated": delta_trunc, "delta_new": delta_new}
+        if new_trunc:
+            pl["delta_new_truncated"] = True
+    else:
+        delta_text, delta_trunc = extract_delta_text(payload)
+        pl = {"query": delta_q, "prospective": {}, "delta_text": delta_text, "delta_truncated": delta_trunc}
+    stdin_payload = json.dumps(pl, ensure_ascii=False)
     cmd = [sys.executable, lumos, "impact", "--file", file_path_abs, "--repo", repo,
            "--ranked", "--stdin-payload", "--json"]
     if in_cooldown:
         cmd.append("--incidents-only")
     impact_data = _run_impact(cmd, stdin_payload, timeout, repo, fails)
+    if impact_data:
+        impact_data["_rows_voice"] = _rows_to_voice(impact_data, session_id)
     ctx = _ranked_ctx(impact_data)
     if not ctx.strip():
         # 沒注入(沒跑成、輸出空、零命中)一律撤冷卻標記:零注入不開冷卻窗(前置修正②);標記在判定當下已寫,這裡只撤
@@ -1039,7 +1098,23 @@ def _impact_for_file(payload: dict, repo: str, file_path: str, session_id: str, 
     return ctx
 
 
+# ★下面這支是主程式 scripts/lumos 同名函式的逐字複本★(安全邏輯,照 [[Systems/hook信任邊界]];守衛 t_r5path_hooks_verbatim)
+def _clean_path_env():
+    """★程序一開始就把 PATH 洗成只剩絕對路徑項★(回合結束檢查代碼審 r5 資安席 F1):PATH 的空項(開頭、結尾或連續的冒號)、. 與
+    任何相對項,開子程序時都從目前目錄找,而鉤子與主程式的目前目錄常常就是被打開的資料夾——repo 根放一支可執行的 git,裸名呼叫
+    git 就執行它。ast-grep(r3)、lumos(r4)、git(r5)同一類第三次被打穿,不再一支工具一支工具解路徑:入口洗一次,之後同一程序
+    開的所有子程序都吃乾淨的 PATH(既有的逐支解析照留,當縱深)。洗完一項都不剩時改用 os.defpath 的絕對項(空字串的 PATH
+    一樣等於目前目錄);沒設 PATH 不動(子程序照 os.defpath 找)。安全邏輯:主程式與每支鉤子各一份逐字複本,照
+    [[Systems/hook信任邊界]],守衛 t_r5path_hooks_verbatim 盯著一字不差、入口第一句就呼叫。"""
+    import os as _os
+    if "PATH" not in _os.environ:
+        return
+    keep = [d for d in _os.environ["PATH"].split(_os.pathsep) if d and _os.path.isabs(d)]
+    _os.environ["PATH"] = _os.pathsep.join(keep or [d for d in _os.defpath.split(_os.pathsep) if d and _os.path.isabs(d)])
+
+
 if __name__ == "__main__":
+    _clean_path_env()
     # #19 S4:把「我跑完了」記成一筆事件,讓 lumos enforcement 答得出
     # 「它最近有沒有真的跑過」,而不是只答「有沒有註冊」。共用寫入器在 _hookevent.py。
     import sys as _s, pathlib as _p
