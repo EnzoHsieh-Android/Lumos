@@ -105999,11 +105999,20 @@ def t_cap_retro_template_write_no_clobber():
     for k, o in outs.items():
         check(f"1 狀態過期:{k} 叫人改好現有回顧檔、不印重導向", "改好現有回顧檔" in o and "--template >" not in o, o[-500:])
     repo = Path(GRAPHCTL).resolve().parent.parent
+    # 只擋「跑滿回顧」那支(loop retro)教重導向:別的指令(例:code-loop blind-judge --template)每次重印、不蓋人寫的檔,
+    # 重導向是它唯一用法(2026-11-07 推送閘:字面比對把盲判那行誤判成回顧)。
+    import re as _re
+    _retro_redirect = _re.compile(r"loop retro\b[^`\n]*--template\s*>")
+    check("1 前置:判準抓得到回顧樣板的重導向寫法",
+          bool(_retro_redirect.search("`lumos loop retro code-x --template > governance/x/cap-retro.json`")), "")
+    check("1 前置:判準不把盲判樣板的重導向當成回顧",
+          not _retro_redirect.search("`lumos code-loop blind-judge --template > /tmp/bj.json`"), "")
     for rel in _CR_MANUALS + ("skills/lumos-design-loop/templates.md",):
         f = repo / rel
         if f.exists():
             t = f.read_text(encoding="utf-8")
-            check(f"1 手冊 {rel} 不教重導向、教 --template --write", "--template >" not in t and "--template --write" in t, rel)
+            check(f"1 手冊 {rel} 不教重導向、教 --template --write",
+                  not _retro_redirect.search(t) and "--template --write" in t, rel)
 
 
 @_cap_real_cutoff
