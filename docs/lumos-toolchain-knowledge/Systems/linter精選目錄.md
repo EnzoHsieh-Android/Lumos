@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-11-06
+updated: 2026-11-08
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -178,9 +178,11 @@ Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模�
    }
    dependencies {
        lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>")
+       lintChecks("com.android.security.lint:lint:1.0.4")
    }
    ```
    Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4.1 以上用 `1.6.1`(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 `1.5.5`(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 `1.5.0`(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 `1.4.2`(lint 31.7.1);AGP 8.7.0 用 `1.4.0`(發行說明寫 Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本,只列一串依賴更新的 PR 標題(lint-api 從 31.7.2 一路升到 32.2.0、lint 外掛升到 9.2.0,另一則寫 lint 31.13.2),看不出最後用哪版建置,不列。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
+   第二行 `lintChecks` 是 Google 的 Android 資安規則包(2026-11-08 加,[[Projects/Android資安與崩潰靜態檢查補齊_計劃]];官方 README https://github.com/google/android-security-lints ,版本查 Google Maven https://dl.google.com/android/maven2/com/android/security/lint/lint/maven-metadata.xml ,當天最新 1.0.4):官方自己說它比內建檢查「更偏資安、也更實驗性」(more security-focused and experimental),可能誤報。版本規則跟 Slack 外掛同一條:1.0.4 的建置檔寫 `lintVersion = '31.5.1'`,換算要 **AGP 8.5.1 以上**。第一次接一樣照第 2 步先產基準線;**已經照範本接過 CI 的專案**加這一行時,要先刪掉 `lint-baseline.xml`、照第 2 步重產並提交再推,不然舊程式的資安告警會讓 CI 立刻紅。包裡 24 條檢查都登記在 Kotlin 寫法型錄 checks-catalog.md(家在 [[Systems/kotlin規則包]];現成規則欄寫 `資安包:<檢查 id>`),專案要關哪一條,照型錄的檢查 id 在 `lint { disable += "<id>" }` 關。
 2. 第一次在本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true`(例 `lintDebug`)產 `lint-baseline.xml`、提交。**先產基準線、提交,再做第 3 步**——反過來 `warningsAsErrors` 會讓舊專案一接就紅。要清舊帳時刪掉基準線檔重產。
 3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 lint):有基準線以外的新告警就讓 CI 失敗。
 - 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡都找不到 Android Lint 的跡象:lint 任務名,或跟 `gradlew`、`gradle` 寫在同一邏輯行(反斜線續行接起來算一行)的 `check`、`build`,或 Azure `tasks:`、gradle action 的 `arguments:`、Bitrise 的 `gradle_task:` 這三個欄位值裡的 `check`、`build`(CircleCI 的 `command:` 是通用欄位、不算,gradle orb 的 `command: build` 會多印);建置檔的 `lint { }` 區塊與 `lint-baseline.xml` 是第 1、2 步的痕跡,不算 CI 有跑;只看字面,找到一個就不印,找不到不代表一定沒跑)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看字面(A1 看 CI 設定檔、A2 看建置檔、A3 看宣告),不驗 CI 真的跑。
