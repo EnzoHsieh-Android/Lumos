@@ -1,0 +1,42 @@
+// D-4 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
+// === main-ok 標準寫法:debounce 之後 flatMapLatest
+class SearchVm(private val repo: Repo) : ViewModel() {
+    val results = query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+}
+// === main-ok 命令式:先取消前一個 Job 再 launch
+class SearchVm(private val repo: Repo) : ViewModel() {
+    private var searchJob: Job? = null
+    fun search(q: String) {
+        searchJob?.cancel()
+        searchJob = viewModelScope.launch { _state.value = repo.search(q) }
+    }
+}
+// === alt-ok 每一次都要做完:collect 依序處理
+class UploadVm(private val repo: Repo) : ViewModel() {
+    fun start() {
+        viewModelScope.launch { uploads.collect { repo.upload(it) } }
+    }
+}
+// === alt-ok 每一次都要做完:Channel 排隊、單一消費者
+class UploadVm(private val repo: Repo) : ViewModel() {
+    private val queue = Channel<Upload>(capacity = 64)
+    fun start() {
+        viewModelScope.launch { for (u in queue) repo.upload(u) }
+    }
+}
+// === bad API-8 每次呼叫都 launch,沒取消前一個
+class SearchVm(private val repo: Repo) : ViewModel() {
+    fun search(q: String) {
+        viewModelScope.launch { _state.value = repo.search(q) }
+    }
+}
+// === bad 搜尋框用 flatMapConcat
+class SearchVm(private val repo: Repo) : ViewModel() {
+    val results = query.debounce(300).flatMapConcat { repo.search(it) }
+}
+// === bad FLOW-22 collectLatest 用在不能被中斷的寫入
+class SyncVm(private val db: Db) : ViewModel() {
+    fun start() {
+        viewModelScope.launch { events.collectLatest { db.insert(it) } }
+    }
+}

@@ -1,0 +1,26 @@
+// D-17 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
+// === main-ok 注入的長壽 scope 並 join
+class Repo(private val applicationScope: CoroutineScope, private val ds: Ds) {
+    suspend fun save(x: Item) {
+        applicationScope.launch { ds.save(x) }.join()
+    }
+}
+// === main-ok WorkManager enqueueUniqueWork
+fun scheduleSave(context: Context, req: OneTimeWorkRequest) {
+    WorkManager.getInstance(context).enqueueUniqueWork("save", ExistingWorkPolicy.KEEP, req)
+}
+// === alt-ok 跟著畫面取消也沒關係的讀取用 viewModelScope
+class ListVm(private val repo: Repo, private val applicationScope: CoroutineScope) : ViewModel() {
+    fun load() = viewModelScope.launch { _items.value = repo.items() }
+    fun save(x: Item) = applicationScope.launch { repo.save(x) }
+}
+// === bad CO-23 onCleared 裡用 viewModelScope 啟動工作(一行)
+class EditVm(private val repo: Repo) : ViewModel() {
+    override fun onCleared() { viewModelScope.launch { repo.save() } }
+}
+// === bad CO-23 onCleared 裡用 viewModelScope 啟動工作(多行)
+class EditVm(private val repo: Repo) : ViewModel() {
+    override fun onCleared() {
+        viewModelScope.launch { repo.save() }
+    }
+}

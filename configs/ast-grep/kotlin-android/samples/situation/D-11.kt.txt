@@ -1,0 +1,24 @@
+// D-11 的證據樣式自測樣本(規則包自檢 check.py 的 situation_sample_problems 讀;格式見那支檔〈證據樣式自測〉)
+// === main-ok Flow:retryWhen 有上限並退避
+fun Flow<Data>.withRetry() = retryWhen { cause, attempt -> (cause is IOException && attempt < 3).also { if (it) delay(500L shl attempt.toInt()) } }
+// === main-ok 命令式:repeat 有上限並退避
+suspend fun fetch(api: Api): Data {
+    repeat(3) { attempt ->
+        runCatching { return api.x() }
+        delay(500L shl attempt)
+    }
+    return api.x()
+}
+// === main-ok WorkManager:Result.retry 搭 runAttemptCount 上限
+class SyncWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
+    override suspend fun doWork(): Result {
+        if (runAttemptCount >= 3) return Result.failure()
+        return Result.retry()
+    }
+}
+// === bad API-7 Flow 的 retry 不帶次數
+fun Flow<Data>.withRetry() = retry()
+// === bad DATA-36 Worker 遇到永久錯誤也回 retry
+class SyncWorker(ctx: Context, p: WorkerParameters) : CoroutineWorker(ctx, p) {
+    override suspend fun doWork(): Result = try { api.sync(); Result.success() } catch (e: Exception) { Result.retry() }
+}

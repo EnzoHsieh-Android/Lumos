@@ -49245,6 +49245,13 @@ def _isolate_environment():
     for k in [k for k in os.environ if k.startswith("LUMOS_SKIP_")]:
         os.environ.pop(k, None)
     os.environ["LUMOS_SKIP_CLAUDE_PLUGIN"] = "1"
+    # 2026-11-06 Android 寫法情境題(Projects/Android寫法語意情境表態與盲判_計劃):★既有測試停在情境題上線前的語意★——
+    # 型錄指到一份觸發字永遠不會中的小表(kt-situation 照樣在題表裡、id 集合照釘,只是不會亮;不然 _disp_repo 那類
+    # 含 viewModelScope.launch 的樣本全部多出一題要答)。要測情境題的測試自己用 _sit_run / table= 指到測試型錄;
+    # 真型錄的讀法由 t_kt_catalog_evidence_patterns 直接讀檔驗。
+    _frozen = root / "kt-catalog-frozen.md"
+    _frozen.write_text(_SIT_FROZEN_CATALOG, encoding="utf-8")
+    os.environ["LUMOS_KT_CATALOG"] = str(_frozen)
     # ★LUMOS_HOME 不是使用者家目錄,是「lumos 來源 repo 在哪」★——一開始我把它也設成假家目錄,
     #   結果有支測試找不到來源就跳過了(跑得到變跑不到=覆蓋悄悄少掉,是比 skip 數字才發現)。
     #   它的預設值是 ~/harness/lumos-toolchain,家目錄一換成假的那條路就斷了。
@@ -65977,6 +65984,7 @@ def t_stack_question_triggers():
     check("①id 集合釘住(改 id 要來改這條測試——改語意才換 id 的紀律靠這裡逼)",
           set(ids) == {"kt-compose", "kt-coroutines", "kt-dispatchers", "kt-flow", "kt-collections", "kt-leaks", "kt-startup",
                        "kt-springdata", "kt-springhttp",   # 2026-10-12 Kotlin 寫 Spring 後端(後端工程提問與證據擴充 S4)
+                       "kt-situation",   # 2026-11-06 Android 寫法情境題(Android寫法語意情境表態與盲判_計劃 範圍 2)
                        "cs-async", "cs-data", "cs-cache", "cs-linq", "cs-connection",
                        "vue-parallel", "vue-lcp", "vue-bundle", "vue-watch", "vue-reactive",
                        # 2026-10-15 React 補棧(Projects/前端框架從vue分出_計劃 d1)
@@ -66069,7 +66077,7 @@ def t_stack_question_triggers():
         r = _disp_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", d])
         data = _j.loads([l for l in r.stdout.splitlines() if l.startswith("{")][0])
         check("⑤stack_questions 語意不變(kt 整組 7 題;Spring 後端兩題是 shape_only 不進整組清單)", len(data["stack_questions"]["kt"]) == 7, str(data.get("stack_questions")))
-        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 10, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+Spring 後端兩題+extcode
+        check("⑤applicable 只列命中題、meta 列全表", data["stack_questions_applicable"] == {"kt": [m._STACK_QUESTION_SPECS["kt"][1]["q"]]} and len(data["stack_questions_meta"]["kt"]) == 11, str(data.get("stack_questions_applicable")))   # meta 列全表:kt 七題+Spring 後端兩題+extcode+情境題
         # 刪行也算:拿掉 viewModelScope 那行 → kt-coroutines 仍適用
         P = Path(d); (P / "app" / "Screen.kt").write_text("class VM : ViewModel() {\n}\n", encoding="utf-8")
         import subprocess as _sp
@@ -113464,6 +113472,7 @@ def _kt_app_ids(data):
 
 
 _ANDROID3 = {"kt-compose", "kt-leaks", "kt-startup"}
+_ANDROID_ONLY = _ANDROID3 | {"kt-situation"}   # 標 android_only 的全部題(2026-11-06 多了情境題),伺服端排除的是這一組
 
 
 def t_kt_spring_android_questions_gone_on_triggers():
@@ -113541,7 +113550,7 @@ def t_kt_flavor_cap_keeps_android_questions():
         files.append(f"src/S{i}.kt")
     m._WORKTREE_TEXT_CACHE.clear()
     check("S34:301 支 → 不排除任何題", m._stack_platform_excluded(files, str(d)) == frozenset(), "")
-    check("S34 對照:300 支 → 排除 Android 三題", m._stack_platform_excluded(files[:300], str(d)) == frozenset(_ANDROID3), "")
+    check("S34 對照:300 支 → 排除 Android 三題(與情境題)", m._stack_platform_excluded(files[:300], str(d)) == frozenset(_ANDROID_ONLY), "")
 
 
 def t_tension_candidates_skip_android_only():
@@ -114288,7 +114297,7 @@ def t_kt_missing_not_deleted_is_unknown():
     m._KT_BUILD_VERDICT_CACHE.clear()
     check("G8:不在工作樹也沒被刪 → 不排除(判不出)", m._stack_platform_excluded(["src/S.kt", "src/Gone.kt"], str(d)) == frozenset(), "")
     check("G8:不在工作樹而 diff 標為刪除 → 略過它、照樣排除",
-          m._stack_platform_excluded(["src/S.kt", "src/Gone.kt"], str(d), deleted={"src/Gone.kt"}) == frozenset(_ANDROID3), "")
+          m._stack_platform_excluded(["src/S.kt", "src/Gone.kt"], str(d), deleted={"src/Gone.kt"}) == frozenset(_ANDROID_ONLY), "")
 
 
 def t_nodehome_cat_sizes_newline_path_whole_batch_none():
@@ -127622,6 +127631,1080 @@ def t_codeloop_pass_requires_clean_mechanical():
         _sh.rmtree(helper, ignore_errors=True)
         for x in roots:
             _sh.rmtree(x, ignore_errors=True)
+# ── Android 寫法情境題(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1 到 3)──────────────
+# 測試用的小型決策表:列的內容是手寫的,預期的段與證據判定都由下面每支測試按條款字面手算,不呼叫被測函式產生。
+_SIT_CATALOG = r"""# 測試型錄
+
+## 情境決策表
+
+| 列編號 | 情境 | 標準寫法 | 不適用時 | 觸發字 | 證據樣式 | 對應檢查 | 來源 |
+|---|---|---|---|---|---|---|---|
+| D-1 | 互不依賴的呼叫 | `coroutineScope { val a = async { api.a() }; Ui(a.await()) }` | (換列)第二支要用第一支的結果 → 見下一列 | coroutineScope | 主:`\basync\s*\{` `\bcoroutineScope\b` `\.await\(\)`;例外:(無) | API-1 | 測 |
+| D-2 | 有依賴的串接 | 直接循序呼叫 | 串接裡有一段互不依賴 → 那一段改用上一列 | (無) | 主:(無);例外:(無) | API-1 | 測 |
+| D-3 | 失敗各自承擔 | `supervisorScope { launch { } }` | 每個子協程要自己接 → `runCatching { }` 包起來 | supervisorScope | 主:(無);例外:`runCatching\|catch\s*\(` | API-1 | 測 |
+| D-4 | (停用)舊列 | (停用) | (停用) | (無) | 主:(無);例外:(無) | API-1 | 測 |
+
+## 待查證
+
+"""
+
+
+# 測試執行器預設用的型錄(_isolate_environment 設給整輪):觸發字是一個程式裡不會出現的字,情境題永遠不亮
+_SIT_FROZEN_CATALOG = r"""# 測試型錄(既有測試用)
+
+## 情境決策表
+
+| 列編號 | 情境 | 標準寫法 | 不適用時 | 觸發字 | 證據樣式 | 對應檢查 | 來源 |
+|---|---|---|---|---|---|---|---|
+| D-1 | 不會出現的情境 | 無 | 無 | lumosFrozenNeverTriggers | 主:(無);例外:(無) | API-1 | 測 |
+
+## 待查證
+
+"""
+
+
+def _sit_catalog(text=_SIT_CATALOG):
+    p = Path(tempfile.mkdtemp(prefix="gctl-sitcat-")) / "checks-catalog.md"
+    p.write_text(text, encoding="utf-8")
+    return p
+
+
+def _sit_run(args, cat, cwd=None):
+    """跑 lumos,型錄指到 cat(LUMOS_KT_CATALOG)。"""
+    env = dict(_os_mod.environ)
+    env["LUMOS_KT_CATALOG"] = str(cat)
+    return subprocess.run([sys.executable, GRAPHCTL, *args], capture_output=True, text=True, cwd=cwd, env=env)
+
+
+def _sit_repo(base, change, extra=None, config=None):
+    """臨時 repo:main 上提交 base({路徑: 內容}),feat/sit 分支寫 change 提交成 HEAD。內容是 bytes 就照位元組寫。"""
+    import json as _j
+    root = Path(tempfile.mkdtemp(prefix="gctl-sit-"))
+    def g(*a):
+        return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True)
+    for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@t.t"), ("config", "user.name", "t")):
+        g(*args)
+    (root / ".lumos").mkdir()
+    (root / ".lumos" / "config.json").write_text(_j.dumps(config or {"test_profile": "python", "test": {"method_regex": "(?m)^def (test_[A-Za-z0-9_]+)\\s*\\(", "run_cmd": "true"}}), encoding="utf-8")
+    (root / "docs").mkdir()
+    (root / "README.md").write_text("x\n", encoding="utf-8")
+    def put(files):
+        for rel, txt in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(txt if isinstance(txt, bytes) else txt.encode("utf-8"))
+    put({**(extra or {}), **base})
+    g("add", "-A")
+    g("commit", "-qm", "init")
+    g("checkout", "-q", "-b", "feat/sit")
+    put(change)
+    g("add", "-A")
+    g("commit", "-qm", "change")
+    return root
+
+
+def _sit_pf(root, cat):
+    import json as _j
+    r = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(root)], cat)
+    lines = [ln for ln in r.stdout.splitlines() if ln.startswith("{")]
+    return (_j.loads(lines[0]) if lines else {}), r
+
+
+def _sit_app(data):
+    """kt-situation 在不在適用題裡(meta 那一列 applicable)。"""
+    return any(r["id"] == "kt-situation" and r["applicable"] for r in (data.get("stack_questions_meta") or {}).get("kt", []))
+
+
+def _sit_segs(root, cat, base, change, **kw):
+    data, r = _sit_pf(_sit_repo(base, change, **kw), cat)
+    return data.get("situation_segments") or [], data, r
+
+
+def _sit_segs_ip(cat, base, change):
+    """同 _sit_segs,但在行程內直接叫切段函式(表從 cat 讀):切法的細項用這個,省掉每案一支子行程。"""
+    m = _load_lumos_inproc()
+    rows, err = m._kt_decision_table(cat)
+    root = _sit_repo(base, change)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    return m._kt_sit_public(m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)) if not err else None
+
+
+_SIT_HEAD = "package app\n\nclass A {\n    suspend fun f() {\n"
+_SIT_TAIL = "    }\n}\n"
+
+
+def _sit_file(*body):
+    """一支檔:第 1 到 4 行是檔頭與 fun f() {,body 從第 5 行起,後面接收尾兩行。"""
+    return _SIT_HEAD + "".join(b + "\n" for b in body) + _SIT_TAIL
+
+
+def _sit_s1_basic(cat):
+    base = {"app/A.kt": _sit_file("        val x = 1")}
+    segs, data, _r = _sit_segs(None, cat, base, {"app/A.kt": _sit_file("        val x = 1", "        coroutineScope { val a = async { api.a() } }")})
+    check("S1 增行有 coroutineScope → 適用題含 kt-situation", _sit_app(data), str((data.get("stack_questions_meta") or {}).get("kt")))
+    check("S1 印一個情境段(第 6 行,候選列 D-1,檔 app/A.kt)",
+          len(segs) == 1 and segs[0]["file"] == "app/A.kt" and segs[0]["lines"] == [6] and segs[0]["rows"] == ["D-1"], str(segs))
+    check("S1 段範圍=增行前後各 3 行(第 3 到 9 行,截在檔尾第 8 行)", segs and (segs[0]["start"], segs[0]["end"]) == (3, 8), str(segs))
+    import re as _re
+    check("S1 段身分是 16 碼十六進位", segs and _re.fullmatch(r"[0-9a-f]{16}", segs[0]["seg"]) is not None, str(segs))
+    root = _sit_repo(base, {"app/A.kt": _sit_file("        val x = 1", "        coroutineScope { val a = async { api.a() } }")})
+    h = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--repo", str(root)], cat)
+    check("S1 人讀輸出印情境段(身分、檔:行範圍、候選列)", segs and segs[0]["seg"] in h.stdout and "app/A.kt:3-8" in h.stdout and "D-1" in h.stdout, h.stdout[-600:])
+
+
+def _sit_s1_not_segments(cat):
+    base = {"app/A.kt": _sit_file("        val x = 1")}
+    cases = [
+        ("只有註解裡出現", ["        // coroutineScope 之後再改", "        val y = 2 /* coroutineScope */"]),
+        ("只有字串裡出現", ['        val s = "coroutineScope"', '        val t = """coroutineScope"""']),
+        ("大小寫不同(CoroutineScope)", ["        val s = CoroutineScope(Dispatchers.Main)"]),
+        ("import 行", ["        val y = 2"]),
+        ("巢狀註解 /* /* x */ */ 裡", ["        val y = 1 /* /* coroutineScope */ coroutineScope */"]),
+        ("字串樣板的字串部分裡", ['        val s = "${"coroutineScope"}"', '        val t = """${"coroutineScope"}"""']),
+    ]
+    for k, (label, body) in enumerate(cases):
+        change = _sit_file("        val x = 1", *body)
+        if label == "import 行":
+            change = "package app\n\nimport kotlinx.coroutines.coroutineScope\n" + _sit_file("        val x = 1", *body)[len("package app\n\n"):]
+        if k == 0:   # 第一案走完整的 pitfalls(觸發字中了但切不出段 → 這題不適用);其餘直接看切段結果
+            segs, data, _r = _sit_segs(None, cat, base, {"app/A.kt": change})
+            check(f"S1 {label} → 不出段、這題不適用", not segs and not _sit_app(data), str(segs))
+        else:
+            segs = _sit_segs_ip(cat, base, {"app/A.kt": change})
+            check(f"S1 {label} → 不出段", segs == [], str(segs))
+    # 對照:字串樣板的大括號裡是程式碼,觸發字在那裡要算(全部剝掉的實作會漏)
+    segs, _d, _r = _sit_segs(None, cat, base, {"app/A.kt": _sit_file("        val x = 1", '        val s = "${coroutineScope { 1 }}"')})
+    check("S1 ★對照★ 字串樣板 ${…} 裡的程式碼照算(pitfalls 也出這題)", len(segs) == 1 and segs[0]["lines"] == [6] and _sit_app(_d), str(segs))
+    segs = _sit_segs_ip(cat, base, {"app/A.kt": _sit_file("        val x = 1", "        val y = 1 /* /* a */ */ ; coroutineScope { }")})
+    check("S1 ★對照★ 巢狀註解收完之後的觸發字照算", segs is not None and len(segs) == 1, str(segs))
+
+
+def _sit_s1_deleted_and_whitespace(cat):
+    base = {"app/A.kt": _sit_file("        val x = 1", "        coroutineScope { val a = async { api.a() } }")}
+    segs, data, _r = _sit_segs(None, cat, base, {"app/A.kt": _sit_file("        val x = 1")})
+    check("S1 只有刪行命中 → 不出段", not segs and not _sit_app(data), str(segs))
+    segs = _sit_segs_ip(cat, base, {"app/A.kt": _sit_file("        val x = 1", "            coroutineScope { val a = async { api.a() } }")})
+    check("S1 只改縮排 → 不出段", segs == [], str(segs))
+    segs = _sit_segs_ip(cat, base, {"app/A.kt": _sit_file("        val x = 1", "        coroutineScope { val a = async { api.b() } }")})
+    check("S1 ★對照★ 同一行改了內容 → 出段", segs is not None and len(segs) == 1, str(segs))
+
+
+def _sit_s1_split_rules(cat):
+    filler = ["        val k%d = %d" % (i, i) for i in range(6)]
+    hit = "        coroutineScope { }"
+    # 跨 hunk:第 5 行與第 9 行命中(差 4),中間三行沒改 → 兩個 hunk → 兩段
+    base = {"app/A.kt": _sit_file(*filler)}
+    segs = _sit_segs_ip(cat, base, {"app/A.kt": _sit_file(hit, *filler[:3], hit, *filler[3:])})
+    check("S1 跨 hunk 的兩處命中不併段", segs is not None and len(segs) == 2 and [s["lines"] for s in segs or []] == [[5], [9]], str([s.get("lines") for s in segs or []]))
+    # 同一 hunk、行號差 4 → 一段;差 5 → 兩段
+    base0 = {"app/A.kt": _sit_file()}
+    segs = _sit_segs_ip(cat, base0, {"app/A.kt": _sit_file(hit, *filler[:3], hit)})
+    check("S1 行號差 4 的兩處命中併成一段", segs is not None and len(segs) == 1 and segs[0]["lines"] == [5, 9], str([s.get("lines") for s in segs or []]))
+    segs = _sit_segs_ip(cat, base0, {"app/A.kt": _sit_file(hit, *filler[:4], hit)})
+    check("S1 行號差 5 分成兩段", segs is not None and len(segs) == 2 and [s["lines"] for s in segs or []] == [[5], [10]], str([s.get("lines") for s in segs or []]))
+    # 跨函式:相鄰兩行分屬兩個函式 → 兩段
+    two = "package app\n\nfun a() { coroutineScope { } }\nfun b() { coroutineScope { } }\n"
+    segs = _sit_segs_ip(cat, {"app/A.kt": "package app\n"}, {"app/A.kt": two})
+    check("S1 跨函式的兩處命中不併段", segs is not None and len(segs) == 2 and [s["lines"] for s in segs or []] == [[3], [4]], str([s.get("lines") for s in segs or []]))
+    # 45 行連續命中 → 40 + 5
+    segs = _sit_segs_ip(cat, base0, {"app/A.kt": _sit_file(*[hit] * 45)})
+    check("S1 45 行連續命中切成兩段(40 行+5 行)", [len(s["lines"]) for s in segs or []] == [40, 5] and segs[1]["lines"][0] == 45, str([len(s.get("lines", [])) for s in segs or []]))
+
+
+def _sit_s1_crlf(cat):
+    body = _sit_file("        val x = 1", "        coroutineScope { val a = async { api.a() } }")
+    lf = _sit_segs_ip(cat, {"app/A.kt": _sit_file("        val x = 1")}, {"app/A.kt": body})
+    crlf = _sit_segs_ip(cat, {"app/A.kt": _sit_file("        val x = 1").replace("\n", "\r\n").encode()},
+                         {"app/A.kt": body.replace("\n", "\r\n").encode()})
+    check("S1 CRLF 與 LF 的同一份檔切出同樣身分的段", lf and [s["seg"] for s in lf] == [s["seg"] for s in crlf], f"{lf} / {crlf}")
+
+
+def _sit_s1_scope_limits(cat):
+    # 改動超過整組門檻但沒有觸發字:別題整組適用,這題不出
+    many = ["        val y%d = %d" % (i, i) for i in range(6)]
+    _s, data, _r = _sit_segs(None, cat, {"app/A.kt": _sit_file()}, {"app/A.kt": _sit_file(*many)},
+                             config={"stack_questions": {"ask_all_over_lines": 3}})
+    kt = {r["id"]: r["applicable"] for r in (data.get("stack_questions_meta") or {}).get("kt", [])}
+    check("S1 超過行數門檻、沒有觸發字 → 不出這題(別題整組適用)", kt.get("kt-coroutines") is True and kt.get("kt-situation") is False, str(kt))
+    # Spring 專案的 kt 檔:這題整列不出
+    gradle = 'plugins {\n    id("org.springframework.boot") version "3.3.0"\n    kotlin("jvm")\n}\n'
+    segs, data, _r = _sit_segs(None, cat, {"src/S.kt": _sit_file()}, {"src/S.kt": _sit_file("        coroutineScope { }")},
+                               extra={"build.gradle.kts": gradle})
+    ids = {r["id"] for r in (data.get("stack_questions_meta") or {}).get("kt", [])}
+    check("S1 Spring 專案的 kt 檔不出這題", "kt-situation" not in ids and not segs and "kt-coroutines" in ids, str(ids))
+
+
+def _sit_fill_others(tpl):
+    """樣板裡 kt-situation 以外、要人答的題一律填 na(理由過門檻),讓核對只剩情境題。"""
+    for qid, ent in tpl.items():
+        if qid != "kt-situation" and not ent.get("auto"):
+            tpl[qid] = {"status": "na", "question": ent["question"], "reason": "這次只是測試情境題的核對,這一題跟本案無關"}
+    return tpl
+
+
+def _sit_s1_catalog_missing(cat_unused):
+    """型錄找不到(檔不在)= 環境不可用:照新增告警閘「工具沒裝」的先例,印提醒、記一筆 fail-open 帳、不擋;
+    型錄找得到但讀表失敗(證據樣式編譯不過)= 無法驗證、擋下(代碼審 r1 D3,2026-11-06 編排者裁定)。"""
+    import json as _j
+    nowhere = Path(tempfile.mkdtemp(prefix="gctl-sitcat-")) / "missing.md"
+    for label, cat in (("型錄找不到", nowhere), ("型錄格式壞(證據樣式編譯不過)", _sit_catalog(_SIT_CATALOG.replace(r"`\.await\(\)`", r"`\.await((`")))):
+        root = _sit_repo({"app/A.kt": _sit_file()}, {"app/A.kt": _sit_file("        coroutineScope { val a = async { api.a() } }")})
+        data, r = _sit_pf(root, cat)
+        ids = {x["id"] for x in (data.get("stack_questions_meta") or {}).get("kt", [])}
+        check(f"S1 {label} → 不出這題、rc 0", r.returncode == 0 and "kt-situation" not in ids and "kt-coroutines" in ids, str(ids) + r.stderr[-300:])
+        check(f"S1 {label} → 印一行提醒", r.stderr.count("情境決策表") == 1, r.stderr[-400:])
+        if cat is not nowhere:
+            # 格式壞那案:推送前的判定在行程內直接核(省掉樣板、寫入、check 三支子行程,代碼審 r2 正確性 F3)
+            m = _load_lumos_inproc()
+            rows_, err_ = m._kt_decision_table(cat)
+            orig = (m._KT_DT_ERR, m._KT_DT_MISSING, m._kt_catalog_path)
+            m._KT_DT_ERR, m._KT_DT_MISSING = err_, m._kt_catalog_missing(cat)
+            m._kt_catalog_path = lambda: (cat, None)
+            try:
+                kind, msg = m._kt_sit_catalog_problem({"kt": [{"id": "kt-compose"}]}) or (None, "")
+            finally:
+                m._KT_DT_ERR, m._KT_DT_MISSING, m._kt_catalog_path = orig
+            check(f"S1 {label} → 型錄在但讀表失敗:推送前擋下(無法驗證),訊息印型錄路徑(r2 接手 F4)",
+                  rows_ == [] and kind == "block" and "無法驗證" in msg and str(cat) in msg, f"{kind} {msg}")
+            continue
+        t = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root)], cat)
+        tpl = _sit_fill_others(_j.loads(t.stdout))
+        check(f"S1 {label} → 樣板沒有這題、印提醒", "kt-situation" not in tpl and "情境決策表" in t.stderr, t.stderr[-300:])
+        f = root / "disp.json"
+        f.write_text(_j.dumps(tpl, ensure_ascii=False), encoding="utf-8")
+        w = _sit_run(["code-loop", "dispositions", str(f), "--repo", str(root)], cat)
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+        c = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--repo", str(root)], cat)
+        out = c.stdout + c.stderr
+        check(f"S1 {label} → 環境不可用:不擋(其他題答完就放行)", w.returncode == 0 and c.returncode == 0 and "kt-situation 無法驗證" not in out,
+              w.stderr[-300:] + out[-500:])
+        check(f"S1 {label} → code-loop check 印一行環境不可用的提醒", "環境不可用" in out and "情境決策表" in out, out[-500:])
+        evs = []
+        for name in (".governance-log.jsonl", ".governance-local.jsonl"):
+            lp = root / "docs" / name
+            if lp.is_file():
+                evs += [_j.loads(ln) for ln in lp.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("{")]
+        check(f"S1 {label} → 記一筆 fail-open 帳(閘 code-loop,原因講情境題型錄)",
+              any(e.get("gate") == "code-loop" and e.get("kind") == "fail-open" and "情境" in _j.dumps(e, ensure_ascii=False) for e in evs), str(evs[-3:])[:500])
+
+
+def t_kt_situation_segments():
+    """[Android寫法語意情境表態與盲判 S1] 情境段怎麼切:型錄觸發字 coroutineScope(分大小寫、整字),只看增行、剝掉整支檔的註解與字串
+    (巢狀註解、字串樣板的字串部分);刪行、只改縮排、import 不出段;同一 hunk 且同一函式、行號差 ≤4 才併;一段最多 40 行;
+    CRLF 與 LF 同身分;行數門檻不讓這題整組亮;Spring 專案不出;型錄讀不到或格式壞不出題、印一行提醒;找不到型錄判環境不可用、記帳不擋,
+    型錄在但讀表失敗判無法驗證擋下(代碼審 r1 D3)。
+    判準來源:計劃〈用詞〉情境段/段材料/段身分/候選列與 S1 條款字面;預期的行號與段數都按條款手算。"""
+    cat = _sit_catalog()
+    _sit_s1_basic(cat)
+    _sit_s1_not_segments(cat)
+    _sit_s1_deleted_and_whitespace(cat)
+    _sit_s1_split_rules(cat)
+    _sit_s1_crlf(cat)
+    _sit_s1_scope_limits(cat)
+    _sit_s1_catalog_missing(cat)
+
+
+# S2 用的檔:第 11 行 coroutineScope(D-1)、第 18 行 supervisorScope(D-3);段一的範圍 8 到 14、段材料 fun load 第 4 到 16 行。
+_SIT_S2_KT = ("package app\n"                                   # 1
+              "\n"                                              # 2
+              "class Repo(private val api: Api) {\n"            # 3
+              "    suspend fun load(): Ui {\n"                  # 4
+              "        val first = 1\n"                         # 5
+              "        val second = 2\n"                        # 6
+              "        val third = 3\n"                         # 7
+              "        val fourth = 4\n"                        # 8
+              "        val fifth = 5\n"                         # 9
+              "        val sixth = 6\n"                         # 10
+              "        return coroutineScope {\n"               # 11
+              "            val a = async { api.a() }\n"         # 12
+              "            val b = async { api.b() }\n"         # 13
+              "            Ui(a.await(), b.await())\n"          # 14
+              "        }\n"                                     # 15
+              "    }\n"                                         # 16
+              "\n"                                              # 17
+              "    suspend fun both() = supervisorScope {\n"    # 18
+              "        launch { api.c() }\n"                    # 19
+              "    }\n"                                         # 20
+              "}\n")                                            # 21
+
+
+def _sit_s2_setup(cat, kt=_SIT_S2_KT):
+    import json as _j
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": kt})
+    t = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root)], cat)
+    tpl = _j.loads(t.stdout) if t.stdout.strip().startswith("{") else {}
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    return root, _sit_fill_others(tpl), sha
+
+
+def _sit_s2_try(root, cat, sha, tpl, sit):
+    """寫一份表態(kt-situation 換成 sit)再跑 code-loop check;回 (寫入結果, check rc, check 輸出)。"""
+    import json as _j
+    doc = dict(tpl)
+    doc["kt-situation"] = sit
+    f = root / "disp.json"
+    f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    w = _sit_run(["code-loop", "dispositions", str(f), "--repo", str(root)], cat)
+    c = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--json", "--repo", str(root)], cat)
+    return w, c.returncode, c.stdout + c.stderr
+
+
+def _sit_ans(segs, d1=None, d3=None):
+    """依樣板的段清單填答案:第一段答 D-1、第二段答 D-3。"""
+    out = []
+    for s in segs:
+        rows = {}
+        for rid in s["rows"]:
+            rows[rid] = (d1 if rid == "D-1" else d3) or {"applies": False}
+        out.append({"seg": s["seg"], "rows": rows})
+    return {"status": "satisfied", "question": "x", "segments": out}
+
+
+def _sit_s2_ip(cat, kt, sit, rem=None):
+    """行程內直接核對(表態對程式那一步):在 kt 這份檔的提交上重算段,拿 sit 的 segments 去比 → 問題句清單。
+    段身分從切段結果拿(同樣板),答案照 sit 的「第一段 / 第二段」順序對上。"""
+    m = _load_lumos_inproc()
+    rows, _e = m._kt_decision_table(cat)
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": kt})
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    segs = m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
+    ent = sit(segs) if callable(sit) else sit
+    return m._kt_sit_check(ent, segs, table=rows, reminders=rem), segs
+
+
+def t_dispositions_situation_evidence_pattern():
+    """[Android寫法語意情境表態與盲判 S2] 表態對程式:D-1 主證據樣式第一條要在 evidence 那一行、其餘在段材料;
+    evidence 要在段範圍內;缺段缺列擋;(無) 不比樣式;kt-situation 填 na 擋;只填 segments 沒有頂層 evidence 照樣過表態驗證。
+    判準來源:計劃 S2 與〈用詞〉證據樣式、情境表態;第 12 行有 async {、段材料有 coroutineScope 與 .await() 是照上面檔案手數的。
+    整條路(樣板 → 寫入 → code-loop check)跑放行、擋下、na 三案;其餘擋下的細項在行程內直接核對同一支函式。"""
+    cat = _sit_catalog()
+    root, tpl, sha = _sit_s2_setup(cat)
+    sit = tpl.get("kt-situation") or {}
+    segs = sit.get("segments") or []
+    check("S2 樣板對 kt-situation 印每段的身分、檔:行範圍與候選列",
+          [(s.get("where"), sorted(s.get("rows", {}))) for s in segs] == [("app/Screen.kt:8-14", ["D-1"]), ("app/Screen.kt:15-21", ["D-3"])]
+          and all(len(s.get("seg", "")) == 16 for s in segs), str(segs))
+    segs = [{"seg": s["seg"], "rows": list(s["rows"])} for s in segs]
+    main12 = {"applies": True, "variant": "main", "evidence": "app/Screen.kt:12"}
+    main19 = {"applies": True, "variant": "main", "evidence": "app/Screen.kt:19"}
+    w, rc, out = _sit_s2_try(root, cat, sha, tpl, _sit_ans(segs, main12, main19))
+    check("S2 只填 segments、沒有頂層 evidence → 通過表態驗證(寫入 rc0)", w.returncode == 0, w.stderr[-400:])
+    check("S2 第 12 行有第一條、段材料有其餘每一條 → 放行;(無) 的列不比樣式", rc == 0, out[-800:])
+    _w, rc, out = _sit_s2_try(root, cat, sha, tpl, _sit_ans(segs, {**main12, "evidence": "app/Screen.kt:11"}, main19))
+    # 代碼審 r2 換形狀:證據樣式對不上不擋,印提醒(哪一段、哪一列、哪條樣式)並記帳
+    check("S2 第一條不在 evidence 那一行 → 不擋、印證據樣式提醒(code-loop check)",
+          rc == 0 and "證據樣式提醒" in out and "D-1" in out and "不在 evidence 那一行" in out, out[-600:])
+    na = {**_sit_ans(segs, main12, main19), "status": "na", "reason": "這一題我覺得不適用所以先不答好了喔"}   # segments 形狀是對的,只有 status 錯
+    w, _rc, _out = _sit_s2_try(root, cat, sha, tpl, na)
+    check("S2 kt-situation 填 na → 擋(寫入 rc2 並講只收 satisfied)", w.returncode == 2 and "kt-situation:這一題只收 satisfied" in w.stderr, w.stderr[-400:])
+    _sit_s2_inproc(cat, main12, main19)
+
+
+def _sit_s2_inproc(cat, main12, main19):
+    ok, _s = _sit_s2_ip(cat, _SIT_S2_KT, lambda sg: _sit_ans(sg, main12, main19))
+    check("S2 ★對照★ 行程內同一份答案 → 沒有問題", ok == [], str(ok))
+    for ev, label in (("app/Screen.kt:2", "落在段材料外"), ("app/Screen.kt:16", "在段材料裡但不在段範圍內"), ("app/Other.kt:12", "別的檔")):
+        pr, _s = _sit_s2_ip(cat, _SIT_S2_KT, lambda sg, ev=ev: _sit_ans(sg, {**main12, "evidence": ev}, main19))
+        check(f"S2 evidence {label} → 擋", len(pr) == 1 and "D-1" in pr[0] and "段範圍" in pr[0], str(pr))
+    pr, sg = _sit_s2_ip(cat, _SIT_S2_KT, lambda sg: {"status": "satisfied", "question": "x", "segments": [_sit_ans(sg, main12, main19)["segments"][1]]})
+    check("S2 缺段 → 擋", len(pr) == 1 and "缺段" in pr[0] and sg[0]["seg"] in pr[0], str(pr))
+    def _drop_row(sg):
+        a = _sit_ans(sg, main12, main19)
+        a["segments"][0]["rows"] = {}
+        return a
+    pr, _s = _sit_s2_ip(cat, _SIT_S2_KT, _drop_row)
+    check("S2 缺一個候選列 → 擋", len(pr) == 1 and "缺列 D-1" in pr[0], str(pr))
+    rem = []
+    pr, _s = _sit_s2_ip(cat, _SIT_S2_KT, lambda sg: _sit_ans(sg, main12, {**main19, "variant": "alt"}), rem)
+    check("S2 ★對照★ 有樣式的那個 variant(D-3 例外)照比 → 第 19 行沒有 runCatching 就提醒(不擋)",
+          pr == [] and len(rem) == 1 and rem[0]["row"] == "D-3" and "runCatching" in rem[0]["text"], str(pr) + str(rem))
+    pr, _s = _sit_s2_ip(cat, _SIT_S2_KT, lambda sg: _sit_ans(sg, {**main12, "variant": "alt"}, main19))
+    check("S2 換列的列(D-1 不適用時標了(換列))不准選 alt → 擋", len(pr) == 1 and "D-1" in pr[0] and "alt" in pr[0], str(pr))
+    kt2 = _SIT_S2_KT.replace("Ui(a.await(), b.await())", "Ui(a.getCompleted(), b.getCompleted())")
+    rem = []
+    pr, _s = _sit_s2_ip(cat, kt2, lambda sg: _sit_ans(sg, main12, main19), rem)
+    check("S2 段材料少一條 → 不擋、提醒裡印 D-1 的標準寫法與證據樣式",
+          pr == [] and len(rem) == 1 and "coroutineScope { val a = async { api.a() }; Ui(a.await()) }" in rem[0]["text"]
+          and "`\\.await\\(\\)` 不在段材料" in rem[0]["text"], str(pr) + str(rem))
+    pr, _s = _sit_s2_ip(cat, _SIT_S2_KT, lambda sg: _sit_ans(sg, {"applies": False}, {"applies": False}))
+    check("S2 兩列都答不適用 → 不比證據(這一步只核表態形狀與段範圍)", pr == [], str(pr))
+
+
+def t_kt_catalog_evidence_patterns():
+    """[Android寫法語意情境表態與盲判 範圍 1] 型錄〈情境決策表〉有「證據樣式」欄,每列都填;lumos 依表頭名稱讀得出每一列(列數照型錄實數,不寫死);
+    格式檢查抓得到:正規式編譯不過、段數或條數不對、停用列還有觸發字、表頭少了證據樣式欄。改壞的是複本,不碰真檔。"""
+    m = _load_lumos_inproc()
+    _real = Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL
+    rows, err = m._kt_decision_table(_real)
+    import re as _re
+    _n = len(_re.findall(r"(?m)^\|\s*D-\d+\s*\|", _real.read_text(encoding="utf-8")))   # 型錄裡決策表列的實數(代碼審 r1 正確性 F5:不寫死)
+    check("真型錄讀得出每一列、從 D-1 連號、沒有問題", err is None and _n > 0 and [r["id"] for r in rows] == [f"D-{k}" for k in range(1, _n + 1)], str(err))
+    d1 = rows[0] if rows else {}
+    check("D-1 依表頭取欄:觸發字 coroutineScope、主證據樣式三條、例外(無)、是換列的列",
+          d1.get("triggers") == ["coroutineScope"] and len((d1.get("evidence") or {}).get("main") or []) == 3
+          and (d1.get("evidence") or {}).get("alt") is None and d1.get("switch") is True, str(d1)[:300])
+    check("表格裡跳脫過的直線還原成 | 再編(D-4 主證據樣式是兩種寫法的或)",
+          rows and rows[3]["evidence"]["main"] == [r"\bflatMapLatest\b|\?\.cancel\(\)"], str(rows[3]["evidence"] if rows else None))
+    kp = _ktpack()
+    check("型錄格式檢查全過", not kp.catalog_problems(), str(kp.catalog_problems()[:3]))
+    mc = _ktpack(copy=True)
+    lines = mc.CATALOG.read_text(encoding="utf-8").split("\n")
+    hdr_i = next(i for i, ln in enumerate(lines) if ln.startswith("| 列編號 |"))
+    hdr = {n: k for k, n in enumerate(mc._cells(lines[hdr_i]))}
+    dts = [i for i, ln in enumerate(lines) if ln.startswith("| D-")]
+    def setcell(i, name, val):
+        c = mc._cells(lines[i])
+        c[hdr[name]] = val
+        lines[i] = "| " + " | ".join(c) + " |"
+        return c[0]
+    bad_re = setcell(dts[0], "證據樣式", "主:`async(`;例外:(無)")
+    no_alt = setcell(dts[2], "證據樣式", "主:`awaitAll`")
+    four = setcell(dts[3], "證據樣式", "主:`a` `b` `c` `d`;例外:(無)")
+    retired = setcell(dts[4], "情境", "(停用)舊列")
+    mc.CATALOG.write_text("\n".join(lines), encoding="utf-8")
+    got = mc.catalog_problems()
+    txt = "\n".join(f"{a}: {b}" for a, b in got)
+    check("★改壞★ 證據樣式編譯不過要抓到", f"{bad_re}: 證據樣式的主 `async(` 編譯不過" in txt, txt[:500])
+    check("★改壞★ 證據樣式少了例外段要抓到", f"{no_alt}: 證據樣式要寫成" in txt, txt[:500])
+    check("★改壞★ 證據樣式超過三條要抓到", f"{four}: 證據樣式的主:要寫" in txt, txt[:500])
+    check("★改壞★ 停用列還有觸發字要抓到", f"{retired}: 停用列的觸發字要寫(無)" in txt, txt[:500])
+    rows2, err2 = m._kt_decision_table(mc.CATALOG)
+    check("★改壞★ lumos 讀到編譯不過的證據樣式 → 整張表不用(不出情境題)", rows2 == [] and err2 and "編譯不過" in err2, str(err2))
+    lines[hdr_i] = lines[hdr_i].replace("| 證據樣式 |", "| 證據 |")
+    mc.CATALOG.write_text("\n".join(lines), encoding="utf-8")
+    check("★改壞★ 表頭少了證據樣式欄要抓到", any("決策表表頭缺欄:證據樣式" in b for _a, b in mc.catalog_problems()), str(mc.catalog_problems()[:3]))
+    _r3, err3 = m._kt_decision_table(mc.CATALOG)
+    check("★改壞★ lumos 讀到少欄的表頭 → 不出情境題並講缺哪欄", err3 and "證據樣式" in err3, str(err3))
+
+
+def t_strip_c_comments_kotlin():
+    """[Android寫法語意情境表態與盲判〈用詞〉_kotlin_strip] _strip_c_comments(kotlin=True):區塊註解可巢狀、字串樣板 ${…} 裡是程式碼
+    (裡面的字串照剝)、三引號字串沒有跳脫且尾端多的引號算內容、字元常值、不認三個單引號與 @ 開頭字串;keep_length 長度與換行不變;
+    巢狀很深或很長的輸入不爆、線性。預期輸出是照 Kotlin 語法手寫的;kotlin=False 的舊行為不變。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    def f(t):
+        return m._strip_c_comments(t, blank_strings=True, keep_length=True, kotlin=True)
+    q3 = "'" * 3
+    cases = [
+        ("巢狀區塊註解整段剝掉", "a /* x /* y */ z */ b", "a " + " " * 17 + " b"),
+        ("字串樣板裡的字串剝掉、樣板的大括號留著", 'v = "${"k"}" + 1', 'v = "${" "}" + 1'),
+        ("字串樣板裡的程式碼留著(含它自己的大括號)", 'v = "${f { 1 }}x"', 'v = "${f { 1 }} "'),
+        ("三引號字串沒有跳脫、尾端多的引號算內容", 'r = """a\\"""" ; q', 'r = """   """ ; q'),
+        ("三引號字串跨行,換行照留", 'r = """a\nb""" + c', 'r = """ \n """ + c'),
+        ("字元常值裡的雙引號不開字串", "c = '\"' + k // n", "c = ' ' + k     "),
+        ("一般字串的跳脫引號", 'v = "a\\"b" + k', 'v = "    " + k'),
+        ("沒收尾的字串收在行尾,下一行照算", 'v = "abc\nk', 'v = "   \nk'),
+        ("不認三個單引號(Kotlin 沒有):當成字元常值", "a " + q3 + "x" + q3 + " b", "a " + q3 + " " + q3 + " b"),
+        ("不認 @ 開頭字串(Kotlin 沒有):照一般字串", 'a @"x\\"y" b', 'a @"    " b'),
+        ("反引號識別字照留", "fun `a // b`() = 1", "fun `a // b`() = 1"),
+    ]
+    for label, src, want in cases:
+        got = f(src)
+        check(f"Kotlin 剝法:{label}", got == want and len(got) == len(src), f"{got!r} 應為 {want!r}")
+    keep = m._strip_c_comments('v = "${"k"}" /* c */', kotlin=True)
+    check("blank_strings=False 只剝註解、字串照留", keep == 'v = "${"k"}" ', repr(keep))
+    old = m._strip_c_comments("a /* x /* y */ z */ b")
+    check("★對照★ kotlin=False 的舊行為不變(巢狀註解收在第一個 */)", old == "a  z */ b", repr(old))
+    for name, txt in (("字串樣板巢狀 10 萬層", '"${' * 100000), ("區塊註解巢狀 10 萬層", "/*" * 100000),
+                      ("跳脫引號重複", '"\\' * 262144), ("未閉合三引號長行", '"""' + "x" * 524288)):
+        t0 = _t.monotonic()
+        out = f(txt)
+        dt = _t.monotonic() - t0
+        check(f"Kotlin 剝法:{name} 不爆、3 秒內、長度不變", dt < 3.0 and len(out) == len(txt), f"{dt:.2f}s")
+
+
+# ── 情境題代碼審 r1 的修補(governance/review-reports/code-android情境題與表態對程式/r1-intake.md 裁決 D1–D11)──────────
+def _sit_env(**over):
+    """跑 lumos 子行程的環境:預設拿掉 LUMOS_KT_CATALOG(要的話 over 裡給);值給 None 表示拿掉那個變數。"""
+    env = {k: v for k, v in _os_mod.environ.items() if k != "LUMOS_KT_CATALOG"}
+    for k, v in over.items():
+        if v is None:
+            env.pop(k, None)
+        else:
+            env[k] = str(v)
+    return env
+
+
+def _sit_pf_with(root, script, env):
+    import json as _j
+    r = subprocess.run([sys.executable, str(script), "pitfalls", "--diff", "HEAD~1..HEAD", "--json", "--repo", str(root)],
+                       capture_output=True, text=True, env=env)
+    lines = [ln for ln in r.stdout.splitlines() if ln.startswith("{")]
+    return (_j.loads(lines[0]) if lines else {}), r
+
+
+_SIT_REAL_KT = ("package app\n\nclass Repo(private val api: Api) {\n    suspend fun load(): Ui = coroutineScope {\n"
+                "        val a = async { api.a() }\n        val b = async { api.b() }\n        Ui(a.await(), b.await())\n    }\n}\n")
+
+
+def t_kt_situation_catalog_location():
+    """[代碼審 r1 D5、D4] 型錄位置與覆寫:①被複製進消費專案的 lumos(旁邊沒有 skills/)照 _lumos_src()(LUMOS_HOME)找到工具鏈的型錄,
+    真型錄的觸發字 coroutineScope 會切出情境段;LUMOS_HOME 指到沒有型錄的地方 → 讀不到、印提醒、不出段(對照)。
+    ②LUMOS_KT_CATALOG 只在測試執行器裡生效(TMPDIR 是 gctl-run-* 根目錄):不在執行器裡時照預設型錄出段、印一句沒採用;
+    在執行器裡才換成那份型錄(永遠不亮的小表 → 不出段)。用到型錄時 stderr 印用的是哪一份。
+    預期:真型錄 D-1 的觸發字是 coroutineScope(型錄原文),所以 _SIT_REAL_KT 第 4 行要出段。"""
+    import shutil as _sh
+    src_repo = Path(GRAPHCTL).resolve().parents[1]
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Repo.kt": _SIT_REAL_KT})
+    consumer = Path(tempfile.mkdtemp(prefix="gctl-sitconsumer-"))
+    (consumer / "scripts").mkdir()
+    _sh.copy(GRAPHCTL, consumer / "scripts" / "lumos")
+    data, r = _sit_pf_with(root, consumer / "scripts" / "lumos", _sit_env(LUMOS_HOME=src_repo))
+    segs = data.get("situation_segments") or []
+    check("D5 消費專案的 lumos 照 LUMOS_HOME 找到工具鏈型錄 → 切出情境段", any(s["file"] == "app/Repo.kt" and 4 in s["lines"] for s in segs),
+          str(segs)[:300] + r.stderr[-300:])
+    check("D5 用到型錄時印出用的是哪一份(工具鏈裡那份)", f"情境題型錄:{src_repo / _KTCAT_REL}" in r.stderr, r.stderr[-300:])
+    nowhere = Path(tempfile.mkdtemp(prefix="gctl-sitnohome-"))
+    data, r = _sit_pf_with(root, consumer / "scripts" / "lumos", _sit_env(LUMOS_HOME=nowhere))
+    check("D5 ★對照★ LUMOS_HOME 底下沒有型錄 → 不出段、印讀不到", not data.get("situation_segments") and "情境決策表讀不到" in r.stderr,
+          r.stderr[-300:])
+    frozen = _sit_catalog(_SIT_FROZEN_CATALOG)
+    outside = Path(tempfile.mkdtemp(prefix="gctl-notrunner-"))
+    data, r = _sit_pf_with(root, GRAPHCTL, _sit_env(LUMOS_KT_CATALOG=frozen, TMPDIR=outside))
+    check("D4 不在測試執行器裡:LUMOS_KT_CATALOG 不採用、照預設型錄出段", bool(data.get("situation_segments")), r.stderr[-300:])
+    check("D4 不在測試執行器裡:印一句這個變數沒被採用", "只在測試執行器裡生效" in r.stderr, r.stderr[-300:])
+    inside = Path(tempfile.mkdtemp(prefix="gctl-run-sit"))
+    data, r = _sit_pf_with(root, GRAPHCTL, _sit_env(LUMOS_KT_CATALOG=frozen, TMPDIR=inside))
+    check("D4 ★對照★ 在測試執行器裡:換成那份型錄(永遠不亮)→ 不出段、印用的是那份", not data.get("situation_segments") and str(frozen) in r.stderr,
+          r.stderr[-300:])
+
+
+def t_kt_situation_catalog_single_reader():
+    """[代碼審 r1 D7、D10] 讀表只有一套:lumos 讀到的列跟 check.py 的 dt_table 一模一樣;換列的列只認「不適用時」格子的(換列)標記
+    (把標記拿掉、只留「見下一列」字樣 → 不是換列的列;加上標記 → 是),標了換列而例外不是(無)兩邊都當讀不懂。"""
+    m = _load_lumos_inproc()
+    kp = _ktpack()
+    real = Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL
+    rows, err = m._kt_decision_table(real)
+    rows2, probs = kp.dt_table(real.read_text(encoding="utf-8"))
+    check("D7 lumos 讀到的列跟 check.py 的 dt_table 一模一樣", err is None and not probs and rows and rows == rows2, str(err) + str(probs[:2]))
+    check("D10 真型錄的換列列 = 「不適用時」標了(換列)的列", [r["id"] for r in rows if r["switch"]]
+          == [r["id"] for r in rows if r["alt"].replace("（", "(").replace("）", ")").startswith("(換列)")] and any(r["switch"] for r in rows),
+          str([r["id"] for r in rows if r["switch"]]))
+    plain = _sit_catalog(_SIT_CATALOG.replace("(換列)第二支", "第二支"))
+    r1, e1 = m._kt_decision_table(plain)
+    check("D10 拿掉標記、只剩「見下一列」字樣 → 不是換列的列(不從中文用語推)", e1 is None and r1 and r1[0]["switch"] is False, str(e1))
+    r2, e2 = m._kt_decision_table(_sit_catalog())
+    check("D10 ★對照★ 有(換列)標記 → 是換列的列", e2 is None and r2 and r2[0]["switch"] is True, str(e2))
+    both = _SIT_CATALOG.replace("主:`\\basync\\s*\\{` `\\bcoroutineScope\\b` `\\.await\\(\\)`;例外:(無)",
+                                "主:`\\basync\\s*\\{` `\\bcoroutineScope\\b` `\\.await\\(\\)`;例外:`runCatching`")
+    _r3, e3 = m._kt_decision_table(_sit_catalog(both))
+    _r4, p4 = kp.dt_table(both)
+    check("D10 標了(換列)而例外不是(無) → lumos 不用這張表、check.py 報出來", e3 and "換列" in e3 and any("換列" in b for _a, b in p4), str(e3) + str(p4))
+
+
+def t_kt_situation_decl_header():
+    """[代碼審 r1 D8] 宣告頭視窗:函式前面有一行沒大括號的宣告(data class、interface、typealias)時,函式本體不能被當成類別本體、
+    函式裡的區域 val 不能被當成宣告起點。預期按檔案手數:fun loadAll2 從第 5 行到第 10 行;四處命中(第 5 行 coroutineScope、
+    第 6、7、8 行)同一段。"""
+    for label, pre in (("data class", "data class Item(val id: Int)"), ("interface", "interface Marker"), ("typealias", "typealias Ids = List<Int>")):
+        kt = ("package app\n\n" + pre + "\n\n"
+              "suspend fun loadAll2(api: Api, ids: List<Int>): List<Int> = coroutineScope {\n"     # 5
+              "    val sem = Semaphore(8)\n"                                                         # 6
+              "    val deferred = ids.map { id -> async { sem.withPermit { api.load(id) } } }\n"     # 7
+              "    val results = deferred.awaitAll()\n"                                              # 8
+              "    results\n"                                                                        # 9
+              "}\n")
+        cat = _sit_catalog(_SIT_CATALOG.replace("| D-3 | 失敗各自承擔 |", "| D-3 | 多筆同型 |").replace(
+            "| supervisorScope | 主:(無);例外:`runCatching\\|catch\\s*\\(` |", "| Semaphore、withPermit、awaitAll | 主:`\\.awaitAll\\(\\)` `\\basync\\b`;例外:(無) |"))
+        segs = _sit_segs_ip(cat, {"README2.md": "x\n"}, {"app/A.kt": kt})
+        check(f"D8 前面有一行 {label}:四處命中同一段、段材料是整個函式(第 5 到 10 行)",
+              segs is not None and len(segs) == 1 and segs[0]["lines"] == [5, 6, 7, 8] and segs[0]["material"] == [5, 10], str(segs)[:400])
+    _sit_decl_header_ctor()
+
+
+def _sit_decl_header_ctor():
+    """[代碼審 r2 通才 F1、正確性 F1] class 之後的 constructor(@Inject constructor、private constructor、constructor)屬於同一個宣告頭
+    (Kotlin 主建構子文法),類別本體照樣是類別層:bad() 的段材料只到 bad() 本身,不擴成整個類別;12 個參數的長建構子也一樣
+    (視窗從上一個 { } ; 起算,不截 300 字)。預期按檔案手數:bad() 第 N+1 到 N+4 行(N=建構子結束那行)。"""
+    m = _load_lumos_inproc()
+    body = ("    fun good() = coroutineScope {\n        val a = async { api.a() }\n        a.await()\n    }\n"
+            "    fun bad() = coroutineScope {\n        val a = async { api.a() }\n        a\n    }\n}\n")
+    long_params = ",\n".join(f"    private val dependencyNumber{i:02d}: SomeVeryLongRepositoryTypeName{i:02d}" for i in range(12))
+    cases = (("@Inject constructor", "class UserViewModel @Inject constructor(private val api: Api) : ViewModel() {\n"),
+             ("private constructor", "class UserViewModel private constructor(private val api: Api) : ViewModel() {\n"),
+             ("constructor", "class UserViewModel constructor(private val api: Api) : ViewModel() {\n"),
+             ("12 個參數的長建構子", "class UserViewModel @Inject constructor(\n" + long_params + "\n) : ViewModel() {\n"))
+    for label, head in cases:
+        src = "package app\n\n" + head + body
+        lines = src.split("\n")
+        bad_at = next(i for i, ln in enumerate(lines, 1) if "fun bad()" in ln)
+        stripped = m._strip_c_comments(src, blank_strings=True, keep_length=True, kotlin=True).split("\n")
+        levels = m._kt_sit_levels("\n".join(stripped))
+        mat = m._kt_sit_material(stripped, levels, bad_at + 1, {})
+        check(f"r2 宣告頭 {label}:bad() 的段材料只到 bad() 本身(第 {bad_at} 到 {bad_at + 3} 行)", mat == (bad_at, bad_at + 3), f"{mat}")
+    check("r2 ★對照★ 次建構子(constructor 開頭)的本體是程式,不是類別層", m._kt_sit_hdr_is_class("constructor(x: Int) : this(x) ") is False, "")
+    # 代碼審 r3 通才 F5:init、get、set、次建構子前面接一行沒本體的 data class,本體照樣是程式(不是類別層)
+    for label, blk in (("init", "    init {"), ("get", "    val x: Int\n        get() {"), ("次建構子", "    constructor(a: Int) : this() {")):
+        src = "class VM {\n    data class State(val a: Int)\n" + blk + "\n        coroutineScope { }\n    }\n}\n"
+        st = m._strip_c_comments(src, blank_strings=True, keep_length=True, kotlin=True)
+        lv = m._kt_sit_levels(st)
+        inner = next(i for i, ln in enumerate(src.split("\n")) if "coroutineScope" in ln)
+        check(f"r3 宣告頭:前一行 data class、接著 {label} → 本體那行不是類別層", lv[inner] is False, str(lv))
+    # 代碼審 r3 邊界 F3:多行主建構子的參數行不當成下一個宣告,class 標頭命中的段材料是整個類別
+    src = "class A @Inject constructor(\n    private val api: Api,\n    private val db: Db,\n) : ViewModel() {\n    fun a() = 1\n}\n"
+    st = m._strip_c_comments(src, blank_strings=True, keep_length=True, kotlin=True).split("\n")
+    lv = m._kt_sit_levels("\n".join(st))
+    check("r3 多行主建構子:class 標頭的段材料是整個類別(第 1 到 6 行)", m._kt_sit_material(st, lv, 1, {}) == (1, 6), str(m._kt_sit_material(st, lv, 1, {})))
+
+
+def t_kt_situation_git_config_pinned():
+    """[代碼審 r1 D6] 切段讀 diff 釘住形狀:本機設 diff.interHunkContext、diff.noprefix、color.ui/color.diff=always 都不改段
+    (跟沒設定的同一份檔一樣切出兩段,第 3 行與第 7 行)。快取關掉跑,免得被前一案的結果蓋過。"""
+    m = _load_lumos_inproc()
+    rows, _e = m._kt_decision_table(_sit_catalog())
+    base = "package app\n\nfun a() {\n    val x = 1\n}\n\nfun b() {\n    val y = 2\n}\n"
+    chg = "package app\n\nfun a() { coroutineScope { } }\n    \n}\n\nfun b() { supervisorScope { } }\n    \n}\n"
+    want = None
+    orig_get = getattr(m, "_kt_sit_cache_get", None)
+    if orig_get is not None:
+        m._kt_sit_cache_get = lambda key: None
+    try:
+        for label, cfgs in (("沒設定", []), ("diff.interHunkContext 10", [("diff.interHunkContext", "10")]),
+                            ("diff.noprefix", [("diff.noprefix", "true")]), ("color.ui always", [("color.ui", "always")]),
+                            ("color.diff always", [("color.diff", "always")])):
+            root = _sit_repo({"app/A.kt": base}, {"app/A.kt": chg})
+            for k, v in cfgs:
+                subprocess.run(["git", "config", k, v], cwd=root, capture_output=True)
+            sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+            got = [(s["file"], s["lines"], s["rows"]) for s in m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)]
+            if want is None:
+                want = got
+                check("D6 ★前置★ 沒設定時切出兩段(第 3 行 D-1、第 7 行 D-3)", got == [("app/A.kt", [3], ["D-1"]), ("app/A.kt", [7], ["D-3"])], str(got))
+            else:
+                check(f"D6 本機設了 {label} → 段不變", got == want, f"{got} 應為 {want}")
+    finally:
+        if orig_get is not None:
+            m._kt_sit_cache_get = orig_get
+
+
+def t_kt_situation_unverifiable_blocks():
+    """[代碼審 r1 D3] 算不出情境段一律判無法驗證、擋下(不當成沒有段放行):範圍不存在、沒有範圍、被推版本不存在、
+    有 .kt 的檔名 git 加了引號讀不出來;pitfalls 那次算不出來時樣板寫一句要重跑(不給一份答不了的空樣板)。
+    對照:範圍與版本都對時照常過。"""
+    m = _load_lumos_inproc()
+    cat = _sit_catalog()
+    rows, _e = m._kt_decision_table(cat)
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": _SIT_S2_KT})
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    ent = {"status": "satisfied", "question": "x", "segments": [{"seg": "x", "rows": {"D-1": {"applies": False}}}]}
+    orig = m._KT_DT_ROWS
+    m._KT_DT_ROWS = rows
+    try:
+        for label, rng, at in (("範圍不存在", "nonexistent..HEAD", sha), ("沒有範圍", None, sha), ("被推版本不存在", "HEAD~1..HEAD", "0" * 40)):
+            pr = m._kt_sit_verdict_one(str(root), rng, at, ent, {})
+            check(f"D3 {label} → 無法驗證、擋下", isinstance(pr, str) and "無法驗證" in pr, repr(pr))
+        good = m._kt_sit_verdict_one(str(root), "HEAD~1..HEAD", sha, {"status": "satisfied", "question": "x", "segments": [
+            {"seg": s["seg"], "rows": {rid: {"applies": False} for rid in s["rows"]}} for s in m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)]}, {})
+        check("D3 ★對照★ 範圍與版本都對、每段每列都答 → 過", good is None, repr(good))
+        qroot = _sit_repo({"README2.md": "x\n"}, {'app/q"uo te.kt': _SIT_S2_KT})
+        qsha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=qroot, capture_output=True, text=True).stdout.strip()
+        pr = m._kt_sit_verdict_one(str(qroot), "HEAD~1..HEAD", qsha, ent, {})
+        check("D3 有 .kt 的檔名被 git 加了引號 → 無法驗證(不當成沒有這支檔)", isinstance(pr, str) and "無法驗證" in pr and "檔名" in pr, repr(pr))
+    finally:
+        m._KT_DT_ROWS = orig
+    tpl = m._dispositions_template({"stack_questions_meta": {"kt": [{"id": "kt-situation", "question": "情境", "applicable": True,
+                                                                      "situation_error": "git diff 跑不起來"}]}}, str(root))
+    note = (tpl.get("kt-situation") or {}).get("note") or ""
+    check("D3 pitfalls 那次算不出來 → 樣板寫明這份答不了、要重跑(通才 F5)", "重跑" in note and "git diff 跑不起來" in note, str(tpl.get("kt-situation")))
+
+
+def t_kt_situation_budget_and_cache():
+    """[代碼審 r1 D9] 效能與預算:①一次核對裡被推版本的檔用一個批次讀取(cat-file --batch)讀完,不逐檔開 git;
+    ②增行原文連觸發字的字都沒有的檔不讀、不剝;③同一範圍、同一版本、同一份型錄第二次直接用快取(把 diff 那一步弄壞也拿得到同一份);
+    ④超過期限 → 無法驗證、擋下。"""
+    import time as _t
+    m = _load_lumos_inproc()
+    cat = _sit_catalog()
+    rows, _e = m._kt_decision_table(cat)
+    hit = "package app\n\nfun f() {\n    coroutineScope { }\n}\n"
+    root = _sit_repo({"README2.md": "x\n"}, {"app/A.kt": hit, "app/B.kt": hit.replace("f()", "g()"), "app/C.kt": hit.replace("f()", "h()"),
+                                            "app/Plain.kt": "package app\n\nfun p() = 1\n"})
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    calls = []
+    orig_blobs, orig_hunks, orig_get = m._nodehome_cat_blobs, m._kt_sit_hunks, m._kt_sit_cache_get
+    def spy(repo, specs, timeout=60):
+        calls.append(list(specs))
+        return orig_blobs(repo, specs, timeout=timeout)
+    m._nodehome_cat_blobs = spy
+    try:
+        segs = m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
+        check("D9 ①三支命中的檔一個批次讀完(只開一次批次讀取)", len(calls) == 1 and len(calls[0]) == 3, str(calls))
+        check("D9 ②沒有觸發字的檔不讀", calls and not any("Plain.kt" in s for s in calls[0]), str(calls))
+        check("D9 ★前置★ 三支檔各一段", sorted(s["file"] for s in segs) == ["app/A.kt", "app/B.kt", "app/C.kt"], str(segs)[:300])
+        def broken(*_a, **_k):
+            raise m._KtSitUnverifiable("快取沒用上")
+        m._kt_sit_hunks = broken
+        again = m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
+        check("D9 ③同一範圍同一版本第二次直接用快取", again == segs, str(again)[:200])
+        m._kt_sit_cache_get = lambda key: None
+        try:
+            m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
+            check("D9 ★對照★ 不用快取時真的會再算(diff 那步壞了就算不出來)", False, "沒有丟出算不出來")
+        except m._KtSitUnverifiable:
+            check("D9 ★對照★ 不用快取時真的會再算(diff 那步壞了就算不出來)", True, "")
+    finally:
+        m._nodehome_cat_blobs, m._kt_sit_hunks, m._kt_sit_cache_get = orig_blobs, orig_hunks, orig_get
+    m._kt_sit_cache_get = lambda key: None
+    orig_rows = m._KT_DT_ROWS
+    m._KT_DT_ROWS = rows
+    try:
+        ent = {"status": "satisfied", "question": "x", "segments": [{"seg": s["seg"], "rows": {"D-1": {"applies": False}}} for s in segs]}
+        cache = {}
+        pr = m._kt_sit_verdict_one(str(root), "HEAD~1..HEAD", sha, ent, cache, deadline=_t.monotonic() - 1)
+        check("D9 ④超過期限 → 不判無法驗證,記 over_budget 交給表態閘既有規則(代碼審 r2 架構 F5)", pr is None and cache.get("over_budget") is True, repr(pr) + str(cache))
+        segs2 = m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
+        try:
+            m._kt_sit_check(ent, segs2, table=rows, deadline=_t.monotonic() - 1)
+            check("D9 ④核對迴圈本身也看期限", False, "沒有丟出")
+        except m._KtSitOverBudget:
+            check("D9 ④核對迴圈本身也看期限", True, "")
+    finally:
+        m._kt_sit_cache_get, m._KT_DT_ROWS = orig_get, orig_rows
+
+
+def t_kt_situation_filename_escaped():
+    """[代碼審 r1 D11] 問題句裡的檔名照既有的 _kill_esc 跳脫:缺段、缺列、evidence 不在段範圍三種句子都不帶控制字元。"""
+    m = _load_lumos_inproc()
+    bad = "app/a\x1b[31mX\x07.kt"
+    sg = {"seg": "s1", "file": bad, "start": 1, "end": 3, "lines": [2], "rows": ["D-1"], "material": [1, 3], "_mat": "", "_code": ["", "", ""]}
+    table = [{"id": "D-1", "switch": False, "evidence": {"main": None, "alt": None}, "alt": "", "standard": ""}]
+    cases = (("缺段", {"status": "satisfied", "question": "x", "segments": [{"seg": "other", "rows": {}}]}),
+             ("缺列", {"status": "satisfied", "question": "x", "segments": [{"seg": "s1", "rows": {}}]}),
+             ("evidence 不在段範圍", {"status": "satisfied", "question": "x", "segments": [{"seg": "s1", "rows": {"D-1": {"applies": True, "variant": "main", "evidence": "x\x1b.kt:2"}}}]}))
+    for label, ent in cases:
+        pr = m._kt_sit_check(ent, [sg], table=table)
+        check(f"D11 {label}的問題句不帶控制字元", pr and not any(ch in "".join(pr) for ch in "\x1b\x07"), repr(pr))
+
+
+def _sit_gov_events(root):
+    import json as _j
+    evs = []
+    for name in (".governance-log.jsonl", ".governance-local.jsonl"):
+        lp = Path(root) / "docs" / name
+        if lp.is_file():
+            evs += [_j.loads(ln) for ln in lp.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("{")]
+    return evs
+
+
+def t_kt_situation_waive():
+    """[代碼審 r1 D2、r2 換形狀] 證據樣式對不上不擋:推送前印提醒(哪一段、哪一列、哪條樣式),每條記一筆治理帳
+    (閘 code-loop、kind warned、scope kt-situation、pending blind-judge),提醒後面附照抄就能用的段放行指令;
+    照抄放行(沒有互動終端 → 記成 AI 放的、要人 ack)後那段不再提醒、印 ⚠;缺段照擋而且不給段放行出口(r2 通才 F4),
+    放行過的段缺答也照擋;放行檔壞掉 → 當沒有放行、印一行提醒、不擋(r3 通才 F7)。"""
+    import json as _j
+    import re as _re
+    import shlex as _shlex
+    cat = _sit_catalog()
+    root, tpl, sha = _sit_s2_setup(cat)
+    segs = [{"seg": s["seg"], "rows": list(s["rows"])} for s in (tpl.get("kt-situation") or {}).get("segments") or []]
+    wrong = {"applies": True, "variant": "main", "evidence": "app/Screen.kt:11"}      # 第 11 行沒有 async {:證據樣式對不上
+    main19 = {"applies": True, "variant": "main", "evidence": "app/Screen.kt:19"}
+    _w, rc, _out = _sit_s2_try(root, cat, sha, tpl, _sit_ans(segs, wrong, main19))
+    check("r2 證據樣式對不上 → 不擋(rc 0)", rc == 0, _out[-500:])
+    c0 = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--repo", str(root)], cat)
+    out = c0.stdout + c0.stderr           # 人讀輸出(JSON 會把引號跳脫,照抄不了)
+    check("r2 提醒講出哪一段、哪一列、哪條樣式", segs and "證據樣式提醒" in out and segs[0]["seg"] in out and "D-1" in out and "不在 evidence 那一行" in out, out[-600:])
+    evs = [e for e in _sit_gov_events(root) if e.get("gate") == "code-loop" and e.get("kind") == "warned"]
+    check("r2 每條提醒記一筆帳(scope kt-situation、待盲判、帶段與列)",
+          any(e.get("scope") == "kt-situation" and e.get("pending") == "blind-judge" and e.get("row") == "D-1" and e.get("seg") == segs[0]["seg"] for e in evs),
+          str(evs[-2:])[:500])
+    m = _re.search(r"`(lumos lint-waive kt-situation:[0-9a-f]{16}[^`]*)`", out)
+    n_before = len([e for e in _sit_gov_events(root) if e.get("kind") == "warned"])
+    for _ in range(2):
+        _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--repo", str(root)], cat)
+    check("r3 同一版本重跑兩次 check → 提醒帳筆數不變(以(版本,段,列)去重)",
+          len([e for e in _sit_gov_events(root) if e.get("kind") == "warned"]) == n_before, str(n_before))
+    check("D2 提醒後面印好段放行指令(指紋 kt-situation:<段身分>)", m is not None and segs and segs[0]["seg"] in (m.group(1) if m else ""), out[-600:])
+    cmd = (m.group(1) if m else "").replace('"<為什麼放行>"', '"第十一行的寫法是照型錄寫的,證據樣式誤報這一段"')
+    wv = _sit_run(_shlex.split(cmd)[1:] + ["--repo", str(root)], cat)
+    check("D2 照抄放行指令 → 放行成功、記成 AI 放的(沒有互動終端)", wv.returncode == 0 and "AI 放的" in wv.stdout, wv.stdout[-400:] + wv.stderr[-300:])
+    rec = _j.loads((root / ".lumos" / "lint-waivers.json").read_text(encoding="utf-8")) if (root / ".lumos" / "lint-waivers.json").is_file() else {}
+    it = next((x for x in rec.get("waivers", []) if str(x.get("key", "")).startswith("kt-situation:")), {})
+    check("D2 放行紀錄有理由、origin=ai、還沒 ack(會被 doctor 數到)", it.get("origin") == "ai" and it.get("acked") is False and len(it.get("reason", "")) >= 10, str(it))
+    c = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--repo", str(root)], cat)
+    o = c.stdout + c.stderr
+    check("D2 有段放行 → 那段不再提醒、放行並印 ⚠", c.returncode == 0 and "段放行" in o and "證據樣式提醒" not in o, o[-500:])
+    only2 = {"status": "satisfied", "question": "x", "segments": [_sit_ans(segs, wrong, main19)["segments"][1]]}
+    _w, rc, o = _sit_s2_try(root, cat, sha, tpl, only2)
+    check("r2 放行過的段缺答 → 照擋(段放行只管證據提醒)", rc == 1 and "缺段" in o and segs[0]["seg"] in o, o[-500:])
+    c = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--repo", str(root)], cat)
+    o = c.stdout + c.stderr
+    check("r2 缺段的擋下不附段放行出口(通才 F4)", c.returncode == 1 and "缺段" in o and "lint-waive kt-situation:" not in o, o[-500:])
+    (root / ".lumos" / "lint-waivers.json").write_text("{壞掉", encoding="utf-8")
+    _w, rc, o = _sit_s2_try(root, cat, sha, tpl, _sit_ans(segs, wrong, main19))
+    check("r3 放行檔讀不了 → 當沒有放行:不擋、證據提醒照印、多一行講放行檔讀不了(通才 F7)",
+          rc == 0 and "證據樣式提醒" in o and "當沒有放行" in o, o[-500:])
+
+
+def t_kt_situation_over_budget():
+    """[代碼審 r2 架構 F5] 情境題切段或核對超過時間預算,照表態閘既有的 over_budget 規則:沒查出別的問題 → 放行並標 over_budget
+    (呼叫端記 fail-open 帳),不判無法驗證;已查出問題 → 照擋、註明沒查完。"""
+    m = _load_lumos_inproc()
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": _SIT_S2_KT})
+    q = "情境題"
+    pf = {"stack_questions_applicable": {"kt": [q]}, "stack_questions_meta": {"kt": [{"id": "kt-situation", "question": q, "applicable": True}]}}
+    ent = {"status": "satisfied", "question": q, "segments": [{"seg": "x", "rows": {"D-1": {"applies": False}}}]}
+    orig = (m._disp_record_for, m._kt_situation_segments)
+    def boom(*_a, **_k):
+        raise m._KtSitOverBudget("情境段切段超過時間預算")
+    m._disp_record_for = lambda repo, sha, br, ms, dl: ({"dispositions": {"kt-situation": ent}}, True, "", dl)
+    m._kt_situation_segments = boom
+    try:
+        out = m._dispositions_verdict(str(root), pf, "0" * 40, "feat/sit", "0" * 40, "high", diff_range="HEAD~1..HEAD")
+        check("r2 逾時、沒有別的問題 → 不擋、標 over_budget、不判無法驗證",
+              out.get("over_budget") is True and out["blocked"] is False and not any("無法驗證" in p for p in out["problems"]), str(out)[:400])
+        pf2 = {"stack_questions_applicable": {"kt": [q, "x"]}, "stack_questions_meta": {"kt": [
+            {"id": "kt-coroutines", "question": "x", "applicable": True}, {"id": "kt-situation", "question": q, "applicable": True}]}}
+        out = m._dispositions_verdict(str(root), pf2, "0" * 40, "feat/sit", "0" * 40, "high", diff_range="HEAD~1..HEAD")
+        check("r2 ★對照★ 逾時但別題已查出問題(缺表態)→ 照擋並註明沒查完",
+              out.get("over_budget") is True and out["blocked"] is True and any("沒查完" in p for p in out["problems"]), str(out)[:400])
+    finally:
+        m._disp_record_for, m._kt_situation_segments = orig
+
+
+
+def t_kt_situation_r2_minor():
+    """[代碼審 r2 通才 F2、F3,架構 F7,資安 F2] ①切段快取寫入時清掉同目錄超過保鮮期的舊檔、留下保鮮期內的;②快取鍵不看 lumos 檔
+    的時間(換一份同內容的 lumos 鍵不變,切法改了靠 schema 常數);③AI 下、還沒人看過的放行,新增告警與情境段分開數;
+    ④樣板的 where 欄位跳脫檔名。"""
+    import json as _j
+    import os as _o
+    import time as _t
+    m = _load_lumos_inproc()
+    rows, _e = m._kt_decision_table(_sit_catalog())
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": _SIT_S2_KT})
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    d = Path.home() / ".cache" / "lumos" / "kt-situation"
+    d.mkdir(parents=True, exist_ok=True)
+    _o.chmod(d, 0o700)
+    old, fresh = d / ("0" * 64 + ".json"), d / ("1" * 64 + ".json")
+    for f in (old, fresh):
+        f.write_text('{"segs": []}', encoding="utf-8")
+    _o.utime(old, (_t.time() - m._KT_SIT_CACHE_TTL - 60,) * 2)
+    m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows, skip=frozenset({"x" + str(_t.time())}))   # 新鍵 → 一定會寫
+    check("r2 ①快取寫入時清掉過期的舊檔", not old.exists(), str(list(d.iterdir()))[:300])
+    check("r2 ①★對照★ 保鮮期內的照留", fresh.exists(), "")
+    k1 = m._kt_sit_cache_key(root, "HEAD~1..HEAD", sha, rows, frozenset())
+    orig = m.__file__
+    try:
+        m.__file__ = str(Path(tempfile.mkdtemp(prefix="gctl-sitkey-")) / "lumos")
+        Path(m.__file__).write_text("x", encoding="utf-8")
+        k2 = m._kt_sit_cache_key(root, "HEAD~1..HEAD", sha, rows, frozenset())
+    finally:
+        m.__file__ = orig
+    check("r2 ②快取鍵不看 lumos 檔的大小與時間", k1 is not None and k1 == k2, f"{k1} {k2}")
+    (root / ".lumos").mkdir(exist_ok=True)
+    (root / ".lumos" / "lint-waivers.json").write_text(_j.dumps({"waivers": [
+        {"key": "abc", "origin": "ai", "acked": False}, {"key": "kt-situation:0123456789abcdef", "origin": "ai", "acked": False},
+        {"key": "kt-situation:fedcba9876543210", "origin": "ai", "acked": False}]}), encoding="utf-8")
+    check("r2 ③AI 放行分開數:新增告警 1 條、情境段 2 條",
+          (m._lint_waivers_ai_pending(str(root)), m._lint_waivers_ai_pending(str(root), situation=True)) == (1, 2),
+          str((m._lint_waivers_ai_pending(str(root)), m._lint_waivers_ai_pending(str(root), situation=True))))
+    tpl = m._kt_sit_template("q", [{"seg": "s", "file": "app/a\x1b[31m.kt", "start": 1, "end": 3, "rows": ["D-1"]}])
+    check("r2 ④樣板 where 欄位跳脫檔名", "\x1b" not in tpl["segments"][0]["where"], repr(tpl["segments"][0]["where"]))
+    orig_max, orig_get = m._KT_SIT_READ_MAX, m._kt_sit_cache_get
+    m._KT_SIT_READ_MAX, m._kt_sit_cache_get = 10, (lambda key: None)
+    try:
+        m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
+        check("r2 ⑤讀檔有大小上限(超過就算不出來,不讀進記憶體;架構 F6)", False, "沒有丟出")
+    except m._KtSitUnverifiable as e:
+        check("r2 ⑤讀檔有大小上限(超過就算不出來,不讀進記憶體;架構 F6)", "超過" in str(e), str(e))
+    finally:
+        m._KT_SIT_READ_MAX, m._kt_sit_cache_get = orig_max, orig_get
+
+
+def t_kt_situation_r3_cache_symlink():
+    """[代碼審 r3 正確性 F1、資源 F2、通才 F6] 快取清理先過 _trusted_private_dir:kt-situation 快取目錄被換成指向別處的捷徑時,
+    別處的舊檔不被刪(drift 那個呼叫端行為不變);目錄可信時只留最新 max_files 份;切法常數與宣告頭正規式在快取鍵裡。"""
+    import os as _o
+    import time as _t
+    m = _load_lumos_inproc()
+    base = Path.home() / ".cache" / "lumos"
+    base.mkdir(parents=True, exist_ok=True)
+    _o.chmod(base, 0o700)
+    d = base / "kt-situation"
+    if d.is_symlink():
+        d.unlink()
+    elif d.exists():
+        import shutil as _sh
+        _sh.rmtree(d)
+    elsewhere = Path(tempfile.mkdtemp(prefix="gctl-sitelse-"))
+    precious = elsewhere / "precious.txt"
+    precious.write_text("x", encoding="utf-8")
+    _o.utime(precious, (_t.time() - 3 * 86400,) * 2)
+    d.symlink_to(elsewhere, target_is_directory=True)
+    try:
+        m._home_cache_evict(d, m._KT_SIT_CACHE_TTL)
+        check("r3 快取目錄是捷徑 → 別處的舊檔不被刪", precious.exists(), str(list(elsewhere.iterdir())))
+    finally:
+        d.unlink()
+    d.mkdir()
+    _o.chmod(d, 0o700)
+    for i in range(5):
+        f = d / f"{i}.json"
+        f.write_text("{}", encoding="utf-8")
+        _o.utime(f, (_t.time() - 100 + i,) * 2)
+    m._home_cache_evict(d, m._KT_SIT_CACHE_TTL, max_files=2)
+    check("r3 ★對照★ 目錄可信時只留最新 2 份", sorted(f.name for f in d.iterdir()) == ["3.json", "4.json"], str(sorted(f.name for f in d.iterdir())))
+    # 代碼審 r3 通才 F6、正確性 F4:切法常數與宣告頭正規式在快取鍵裡,改了切法不必記得升 schema
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": _SIT_S2_KT})
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    rows, _e = m._kt_decision_table(_sit_catalog())
+    k0 = m._kt_sit_cache_key(root, "HEAD~1..HEAD", sha, rows, frozenset())
+    for name, val in (("_KT_SIT_GAP", 5), ("_KT_SIT_CTX", 4), ("_KT_SIT_HDR_KW_RE", r"(fun)\b")):
+        old = getattr(m, name)
+        setattr(m, name, val)
+        try:
+            k1 = m._kt_sit_cache_key(root, "HEAD~1..HEAD", sha, rows, frozenset())
+        finally:
+            setattr(m, name, old)
+        check(f"r3 改了 {name} → 快取鍵跟著變", k0 is not None and k1 != k0, f"{k0} {k1}")
+
+
+def t_kt_situation_r3_ledger():
+    """[代碼審 r3 資源 F1、接手 F1、通才 F9、邊界 F2、正確性 F3] 證據提醒記帳以 (head_sha, seg, row) 去重、每次封頂:
+    同一份提醒重記 3 次帳上筆數不變;2000 條提醒只逐筆記 _KT_SIT_LEDGER_CAP 筆加一筆總數、耗時有上限,總數那筆收的(段,列)
+    下次也不重記;判定函式只回傳不記帳(帳由 code-loop check 那一層寫)。"""
+    import json as _j
+    import time as _t
+    m = _load_lumos_inproc()
+    root = _sit_repo({"README2.md": "x\n"}, {"app/Screen.kt": _SIT_S2_KT})
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    rem = [{"seg": f"s{i:04d}", "file": "app/A.kt", "row": "D-1", "variant": "main", "text": f"段 s{i:04d} 的 D-1 證據樣式對不上"} for i in range(3)]
+    def warned():
+        return [e for e in _sit_gov_events(root) if e.get("gate") == "code-loop" and e.get("kind") == "warned"]
+    for _ in range(3):
+        m._kt_sit_reminder_log(str(root), sha, rem)
+    check("r3 同一版本同一份提醒記 3 次 → 帳上只有 3 筆(每個(段,列)一筆)", len(warned()) == 3, str(len(warned())))
+    check("r3 每筆帶被推版本的 head_sha", all(e.get("head_sha") == sha for e in warned()), str(warned()[:1]))
+    m._kt_sit_reminder_log(str(root), "f" * 40, rem[:1])
+    check("r3 ★對照★ 換一個版本 → 照記", len(warned()) == 4, str(len(warned())))
+    big = [{"seg": f"b{i:04d}", "file": "app/A.kt", "row": "D-1", "variant": "main", "text": "x"} for i in range(2000)]
+    t0 = _t.monotonic()
+    n = m._kt_sit_reminder_log(str(root), sha, big)
+    dt = _t.monotonic() - t0
+    check(f"r3 2000 條提醒只記 {m._KT_SIT_LEDGER_CAP} 筆加一筆總數、5 秒內({dt:.2f}s)", n == m._KT_SIT_LEDGER_CAP + 1 and dt < 5.0, f"{n} {dt:.2f}")
+    m._kt_sit_reminder_log(str(root), sha, big)
+    check("r3 同一份 2000 條再記一次 → 一筆都不多(總數那筆收的也去重)", len(warned()) == 4 + m._KT_SIT_LEDGER_CAP + 1, str(len(warned())))
+    lines = m._kt_sit_reminder_lines(rem)
+    check("r3 判定函式只回傳提醒句、不記帳", len(lines) == 3 and len(warned()) == 4 + m._KT_SIT_LEDGER_CAP + 1, str(lines[:1]))
+
+
+def t_kt_situation_r3_partial_over_budget():
+    """[代碼審 r3 通才 F1、正確性 F2] 核對迴圈中途逾時時,逾時前已查出的缺段照擋:3 段、第 1 段沒答,第 2 次期限檢查逾時 →
+    _kt_sit_verdict_one 回擋下句(含缺段)並標 over_budget;_kt_sit_check 丟出的逾時帶著已查出的問題。"""
+    m = _load_lumos_inproc()
+    segs = [{"seg": f"s{i}", "file": "app/A.kt", "start": 1, "end": 3, "lines": [2], "rows": ["D-1"], "material": [1, 3], "_mat": "", "_code": ["", "", ""]}
+            for i in range(3)]
+    ent = {"status": "satisfied", "question": "x", "segments": [{"seg": s["seg"], "rows": {"D-1": {"applies": False}}} for s in segs[1:]]}
+    calls = [0]
+    orig = (m._kt_sit_deadline_check, m._kt_situation_segments, m._KT_DT_ROWS)
+    def dl(deadline, what):
+        calls[0] += 1
+        if calls[0] >= 2:
+            raise m._KtSitOverBudget(f"{what}超過時間預算")
+    m._kt_sit_deadline_check = dl
+    m._kt_situation_segments = lambda *a, **k: segs
+    m._KT_DT_ROWS = [{"id": "D-1", "switch": False, "evidence": {"main": None, "alt": None}, "alt": "", "standard": "", "retired": False, "triggers": ["x"]}]
+    try:
+        cache = {}
+        pr = m._kt_sit_verdict_one(str(_sit_repo({"README2.md": "x\n"}, {"README3.md": "y\n"})), "HEAD~1..HEAD", "0" * 40, ent, cache, deadline=1.0)
+        check("r3 中途逾時、第 1 段沒答 → 照擋(缺段)並標 over_budget", isinstance(pr, str) and "缺段 s0" in pr and cache.get("over_budget") is True, repr(pr))
+        calls[0] = 0
+        try:
+            m._kt_sit_check(ent, segs, deadline=1.0)
+            check("r3 _kt_sit_check 逾時帶著已查出的問題", False, "沒有丟出")
+        except m._KtSitOverBudget as e:
+            check("r3 _kt_sit_check 逾時帶著已查出的問題", any("缺段 s0" in x for x in e.probs), str(e.probs))
+    finally:
+        m._kt_sit_deadline_check, m._kt_situation_segments, m._KT_DT_ROWS = orig
+
+
+def t_loop_close_kinds_situation_warned():
+    """[代碼審 r3 通才 F2] 情境題證據提醒 (code-loop, warned) 登記在「不算關門」;寫一筆這種事件進帳後,照分類守衛的判法照綠。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    root = _sit_repo({"README2.md": "x\n"}, {"README3.md": "y\n"})
+    m._kt_sit_reminder_log(str(root), "e" * 40, [{"seg": "s", "file": "a.kt", "row": "D-1", "variant": "main", "text": "x"}])
+    seen = {(e.get("gate"), e.get("kind")) for e in _sit_gov_events(root) if e.get("gate") in ("design-loop", "code-loop")}
+    classified = set(m.LOOP_CLOSE_EVENTS) | set(m.LOOP_CLOSE_EVENTS_BY_DETAIL) | set(m.LOOP_NOT_CLOSE_EVENTS)
+    check("r3 ★前置★ 帳上真的有一筆 (code-loop, warned)", ("code-loop", "warned") in seen, str(seen))
+    check("r3 寫進帳的 (code-loop, warned) 有歸類、而且歸在不算關門", not (seen - classified) and ("code-loop", "warned") in set(m.LOOP_NOT_CLOSE_EVENTS), str(seen - classified))
+
+# 席報告點名的寫法(代碼審 r1 接手 F1–F6、F10,邊界 F2、F3,正確性 F1):(列, 寫法, 程式, 該放行嗎)。
+# 該放行=照型錄標準寫法或例外寫法寫的;不該放行=對應檢查列的壞寫法。那一段證據樣式是(無)時,壞寫法交盲判、不算漏擋。
+_SIT_NAMED = [
+    ("D-34", "main", "@Composable\nfun Row1(onClick: () -> Unit) {\n    Box(Modifier.clickable { onClick() }.padding(8.dp))\n}\n", True),
+    ("D-34", "main", "@Composable\nfun Row1(vm: Vm) {\n    Box(Modifier.clickable(onClick = { vm.go(item(1)) }).padding(8.dp))\n}\n", True),
+    ("D-34", "alt", "@Composable\nfun Row1(onClick: () -> Unit) {\n    Box(Modifier.padding(8.dp).clickable { onClick() })\n}\n", True),
+    ("D-23", "main", "interface Api {\n    @DELETE(\"users/{id}\") suspend fun delete(@Path(\"id\") id: Long): Response<Unit>\n}\n", True),
+    ("D-47", "main", "val format = Json { coerceInputValues = true }\n", True),
+    ("D-21", "main", "class VmTest {\n    private val dispatcher = StandardTestDispatcher()\n    @Test\n    fun loads() = runTest(dispatcher) { vm.load(); runCurrent(); advanceTimeBy(500) }\n}\n", True),
+    ("D-1", "main", "suspend fun f(api: Api) = coroutineScope {\n    val a = async(Dispatchers.IO) { api.a() }\n    val b = async(Dispatchers.IO) { api.b() }\n    Ui(a.await(), b.await())\n}\n", True),
+    ("D-20", "main", "class Repo(private val io: CoroutineDispatcher = Dispatchers.IO) {\n    suspend fun load() = withContext(io) { read() }\n}\n", True),
+    ("D-20", "main", "class UserRepository(\n    private val api: Api,\n    private val ioDispatcher: CoroutineDispatcher,\n) {\n    fun a() = 1\n    fun b() = 2\n    fun c() = 3\n    suspend fun load(): User {\n        return withContext(ioDispatcher) { api.user() }\n    }\n}\n", True),
+    ("D-8", "main", "suspend fun load(api: Api): Ui = coroutineScope { val d = async { api.fail() }; try { Ui(d.await()) } catch (e: Exception) { Ui.Error } }\n", False),
+    ("D-10", "main", "suspend fun open(): Res {\n    val r = withTimeout(1000) { openResource() }\n    return r\n}\n", False),
+    ("D-16", "main", "fun Flow<Int>.unbounded() = buffer(Channel.UNLIMITED)\n", False),
+    ("D-16", "main", "fun events(src: Source) = callbackFlow {\n    val l = Listener { v -> trySend(v) }\n    src.add(l)\n    awaitClose { src.remove(l) }\n}\n", False),
+    ("D-32", "main", "@Composable\nfun Screen(viewModel: Vm, onClick: () -> Unit, list: List<Item>) {\n    LaunchedEffect(viewModel, onClick, list) { viewModel.load() }\n}\n", False),
+    ("D-14", "main", "@Composable\nfun Step(navController: NavController) {\n    val parent = navController.getBackStackEntry(\"checkout\")\n}\n", False),
+    ("D-13", "main", "@Composable\nfun Editor(bigObject: Big) {\n    val s = rememberSaveable { bigObject }\n}\n", False),
+    ("D-45", "main", "fun req(bigJson: String) = OneTimeWorkRequestBuilder<Up>().setInputData(workDataOf(\"list\" to bigJson)).build()\nclass Up(c: Context, p: WorkerParameters) : CoroutineWorker(c, p)\n", False),
+]
+
+
+def t_kt_situation_evidence_samples():
+    """[代碼審 r1 D1] 證據樣式附正反例自測(ast-grep test 的 valid/invalid、Semgrep 的 ok/ruleid):①真型錄每列的樣本經 lumos 真的切段
+    與核對全過(正例放行、反例擋);②席報告點名的寫法逐條照真型錄核:該放行的放行、該擋的擋,那一段樣式是(無)的交盲判;
+    ③改壞複本要抓到:拿掉一列的正例、把 D-10 放回會放過 withTimeout 的舊樣式(反例沒擋)、把 D-34 放回只認圓括號的舊樣式(正例被擋)、
+    樣本檔對不到列、反例沒中觸發字。列數不寫死。"""
+    m = _load_lumos_inproc()
+    kp = _ktpack()
+    probs = kp.situation_sample_problems(lumos=m)
+    check("D1 ①真型錄的證據樣式自測全過", probs == [], str(probs[:5]))
+    rows, _e = m._kt_decision_table(Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL)
+    by = {r["id"]: r for r in rows}
+    for rid, var, code, ok in _SIT_NAMED:
+        row = by[rid]
+        if not row["evidence"][var]:
+            check(f"D1 ②{rid}({var})樣式是(無):{'標準寫法不會被擋' if ok else '壞寫法交盲判'}", True, "")
+            continue
+        segs = [s for s in m._kt_sit_text_segments(f"{rid}.kt", code, rows) if rid in s["rows"]]
+        got, why = kp._sit_first_pass(m, segs, row, var)
+        check(f"D1 ②{rid}({var}){'標準寫法對得上' if ok else '壞寫法會提醒'}:{code.splitlines()[min(1, len(code.splitlines()) - 1)].strip()[:60]}",
+              segs and ((got is not None) == ok), f"segs={len(segs)} got={got and got[1]} why={why}")
+    mc = _ktpack(copy=True)
+    sdir = mc.situation_dir()
+    (sdir / "D-1.kt.txt").write_text("\n".join(ln for ln in (sdir / "D-1.kt.txt").read_text(encoding="utf-8").split("\n")
+                                               if True).replace("// === main-ok", "// === bad main"), encoding="utf-8")
+    t = mc.CATALOG.read_text(encoding="utf-8")
+    t = t.replace("主:`\\bcallTimeout\\(\\|\\bHttpTimeout\\b\\|\\bwithTimeoutOrNull\\(`", "主:`\\bcallTimeout\\(\\|\\bHttpTimeout\\b\\|\\bwithTimeout(?:OrNull)?\\(`")
+    old34 = "主:`\\.clickable\\b` `\\.clickable\\s*\\((?:[^()]\\|\\([^()]*\\))*\\)\\s*\\.padding\\s*\\(`"
+    t = __import__("re").sub(r"主:`\\\.clickable\\b` `[^`]*`", lambda _m: old34, t, count=1)
+    mc.CATALOG.write_text(t, encoding="utf-8")
+    (sdir / "D-99.kt.txt").write_text("// === main-ok x\nfun x() = 1\n", encoding="utf-8")
+    with open(sdir / "D-3.kt.txt", "a", encoding="utf-8") as fh:
+        fh.write("// === bad 沒中觸發字\nfun y() = ids.map { it.await() }\n")
+    got = mc.situation_sample_problems(lumos=m)
+    txt = "\n".join(f"{a}: {b}" for a, b in got)
+    check("D1 ③改壞:拿掉 D-1 的正例 → 報缺正例", "D-1: 證據樣式的主沒有正例" in txt, txt[:600])
+    check("D1 ③改壞:D-10 放回會放過 withTimeout 的舊樣式 → 反例沒提醒", any(a == "D-10" and "反例" in b and "沒提醒" in b for a, b in got), txt[:600])
+    check("D1 ③改壞:D-34 放回只認圓括號的舊樣式 → 尾隨 lambda 的正例對不上", any(a == "D-34" and "正例" in b and "尾隨 lambda" in b and "對不上" in b for a, b in got), txt[:600])
+    check("D1 ③改壞:樣本檔對不到列 → 報出來", any(a == "D-99.kt.txt" for a, _b in got), txt[:600])
+    check("D1 ③改壞:反例沒中觸發字 → 報測不到樣式", any(a == "D-3" and "切不出" in b for a, b in got), txt[:600])
+    mc = _ktpack(copy=True)      # 另一份複本:F12 的放寬跟上面的改壞分開,免得互相蓋掉
+    # 代碼審 r2 邊界 F12:放寬到碰不到順序與型別參數也要被反例抓到
+    t = mc.CATALOG.read_text(encoding="utf-8")
+    t = __import__("re").sub(r"主:`\\\.clickable\\b` `[^`]*`", lambda _m: "主:`\\.clickable\\b` `\\.padding\\b`", t, count=1)
+    t = t.replace("主:`\\bResponse<Unit>\\|\\.isSuccessful\\b`", "主:`\\bResponse\\b\\|\\.isSuccessful\\b`")
+    mc.CATALOG.write_text(t, encoding="utf-8")
+    got = mc.situation_sample_problems(lumos=m)
+    txt = "\n".join(f"{a}: {b}" for a, b in got)
+    check("D1 ③改壞(r2 邊界 F12):D-34 主樣式放寬成不管順序 → 順序顛倒的反例沒提醒", any(a == "D-34" and "反例" in b and "padding 在前" in b for a, b in got), txt[:900])
+    check("D1 ③改壞(r2 邊界 F12):D-23 放寬成任何 Response → Response<User> 的反例沒提醒", any(a == "D-23" and "反例" in b and "Response<實體>" in b for a, b in got), txt[:900])
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-11-05
-updated: 2026-11-05
+updated: 2026-11-06
 responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
 aliases: []
 about_code:
@@ -24,6 +24,9 @@ summary: |-
   REVISIT:2027-02-05 拿兩個以上新的真 Android 專案再量一次會擋的規則(2026-11-05 只量實驗專案與 nowinandroid 共 30 處命中,多數規則只命中 1–3 處,估不準每條的誤報率)
   SEE:[[Systems/linter精選目錄]] [[Systems/pitfalls-code-loop]]
   PITFALL:規則包測試用 rglob 的第一個檔去改壞,在 Linux 上可能挑到剛放進去的 review-fp 樣本、把它蓋掉,兩條改壞驗證跟著失效(macOS 綠、CI 紅) [出處:2026-11-05 PR #158 合併後主線 CI] [根因:目錄列舉順序依檔案系統而定,APFS 恰好照名稱排、ext4 不是] [修法:照檔名挑或整個目錄都改,不用 next(rglob)] [test:t_kotlin_rulepack_samples]
+  WHY:型錄〈情境決策表〉加「證據樣式」欄(主與例外兩段,各是(無)或一到三條正規式,照那一列標準寫法與不適用時的字面特徵推,不另立寫法);格式檢查改依表頭名稱取欄,另驗證據樣式能編譯、條數對、停用列的觸發字與證據樣式都是(無),列編號連號照舊 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 1] [因:推送前情境題要拿樣式核表態指的那一行] [test:t_kt_catalog_evidence_patterns]
+  WHY:決策表的讀法只有 check.py 的 dt_table/dt_row 一套(依表頭取欄、停用列不讀觸發字與證據樣式、標了換列的列例外一定要是(無)),scripts/lumos 用 importlib 借用;換列的列認「不適用時」格子開頭的(換列)標記,不從「見下一列」這類中文用語推 [出處:代碼審 code-android情境題與表態對程式 r1 D7、D10] [因:原本 lumos 與 check.py 各寫一套讀表、必有欄已經分歧(6 欄對 8 欄),換列靠中文字樣推、改個說法就悄悄變成可選例外] [test:t_kt_situation_catalog_single_reader]
+  WHY:每列證據樣式附正例與反例(samples/situation/<列編號>.kt.txt,副檔名不是 .kt 免得推送閘把教材當產品碼),自檢經 scripts/lumos 真的切段與核對程式跑:正例要有一行對得上、反例要每一行都對不上(推送前對不上只提醒,自測守的是樣式本身沒壞,代碼審 r2)、樣本要切得出含那一列的段,反例要碰得到樣式真正在管的地方(順序、型別參數,r2 邊界 F12);壞寫法跟標準寫法只差在語意時那一段寫(無)交盲判 [出處:代碼審 r1 D1;ast-grep test 的 valid/invalid https://ast-grep.github.io/guide/test-rule.html ;Semgrep 的 ok/ruleid https://docs.semgrep.dev/writing-rules/testing-rules ] [因:人逐列寫的樣式在 56 列裡有 9 列擋掉型錄自己的標準寫法或放過對應的壞寫法] [不選:靠人逐列看] [test:t_kt_situation_evidence_samples]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
 ---
@@ -45,7 +48,7 @@ verified_by:
 ## 怎麼改
 
 1. 改規則或加規則:同時補樣本,跑 `python3 configs/ast-grep/kotlin-android/check.py --sg <ast-grep>` 到 0 個問題。新規則一律先放語意覆核級(`rules-review/`),對真專案量過誤報低於一成才升到會擋的 `rules/`;審查中被點出形狀分不出對錯的,不再放寬形狀,直接留在覆核級(代碼審跑滿回顧,卷證 `governance/review-reports/code-kotlin規則包/cap-retro.json`:三輪的最大宗都是放寬形狀又帶出新誤報)。
-2. 改型錄:跑 `--catalog-only`;新寫的標準寫法一定附真的打開讀過的官方網址,查不到就在名稱標「(出處不全)」。
+2. 改型錄:跑 `--catalog-only`(連證據樣式自測一起跑,會載入旁邊的 scripts/lumos;改了某列的證據樣式就同時改 `samples/situation/<列編號>.kt.txt` 的正反例,到 0 個問題);新寫的標準寫法一定附真的打開讀過的官方網址,查不到就在名稱標「(出處不全)」。
 3. 決策表觸發字不准收常用字(停用字表在 check.py 的 `STOP_TRIGGERS`);第二批改檔前推列與第三批情境題靠它不吵。情境沒有不常見的字面特徵時觸發字寫「(無)」(全形半形括號都認),`dt_triggers` 解析成空清單、不出情境段;「(無)」跟別的觸發字並列、或格子空白,自我檢查都會報。第二、三批讀觸發字要走 `dt_triggers`,不要自己拆格子,不然「(無)」會被當成一個字去比對。
 4. 有消費專案或範例專案時,拿會擋的規則對整份原始碼跑一次,逐條判真假;誤報超過一成照上面那條規則處理,結果寫回型錄的「實測狀態」欄。
 

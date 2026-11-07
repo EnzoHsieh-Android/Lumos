@@ -89,7 +89,10 @@ def catalog_ids():
 _CELL_RE = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')   # 反引號裡的直線不算欄位分隔
 _MAIN_ROW_RE = re.compile(r"^\|\s*((?:API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+)\s*\|")
 _MAIN_COLS = 12      # 編號|名稱|壞寫法形狀|標準寫法|後果|現成規則|級|情境怎麼認|接電方式|通電批次|實測狀態|來源
-_DT_COLS = 7         # 列編號|情境|標準寫法|不適用時|觸發字|對應檢查|來源
+# 決策表依表頭名稱取欄(scripts/lumos 的 _kt_decision_table 同一套);這幾欄一定要有
+_DT_HEADER = ("列編號", "情境", "標準寫法", "不適用時", "觸發字", "證據樣式", "對應檢查", "來源")
+_RETIRED = "(停用)"
+_SWITCH = "(換列)"     # 「不適用時」格子的明確標記:這一列的例外是換到別列,不准選例外寫法
 _WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
 # 觸發字停用字表:這些字幾乎每支 Kotlin 檔都有,當觸發字會讓改檔前推列與情境題每次都亮(第二、三批計劃的依賴)
 STOP_TRIGGERS = frozenset((
@@ -124,6 +127,121 @@ def dt_triggers(cell):
     if not trig:
         return [], "觸發字不准空(刻意不設寫「(無)」)"
     return trig, None
+
+
+def _norm(cell):
+    """全形括號與冒號換成半形(型錄格子兩種都有人寫)。"""
+    return cell.replace("（", "(").replace("）", ")").replace("：", ":")
+
+
+def dt_evidence_parse(cell):
+    """證據樣式格子「主:… ;例外:…」→ ({"main": [正規式…] 或 None, "alt": …} 或 None, 問題清單)。每段是「(無)」或一到三條
+    反引號包住的 Python 正規式,每條要編譯得過;表格裡跳脫過的直線還原成 | 再編。scripts/lumos 借用這一支讀表(只有這一套)。"""
+    norm = _norm(cell).strip()
+    if not norm.startswith("主:") or norm.count("例外:") != 1:
+        return None, ["證據樣式要寫成「主:… ;例外:…」"]
+    main, alt = norm[len("主:"):].split("例外:", 1)
+    probs, out = [], {}
+    for key, name, part in (("main", "主", re.sub("[;；]+$", "", main.strip()).strip()), ("alt", "例外", alt.strip())):
+        if part == _NONE_TRIGGER:
+            out[key] = None
+            continue
+        pats = [x.replace("\\|", "|") for x in re.findall(r"`([^`]+)`", part)]
+        if not 1 <= len(pats) <= 3 or re.sub(r"`[^`]+`", "", part).strip():
+            probs.append(f"證據樣式的{name}:要寫「(無)」或一到三條反引號包住的正規式")
+            continue
+        for x in pats:
+            try:
+                re.compile(x)
+            except re.error as e:
+                probs.append(f"證據樣式的{name} `{x}` 編譯不過({e})")
+        out[key] = pats
+    return (None if probs else out), probs
+
+
+def dt_evidence(cell):
+    """證據樣式格子 → 問題清單(空=合法);解析見 dt_evidence_parse。"""
+    return dt_evidence_parse(cell)[1]
+
+
+def _dt_header(dt):
+    """決策表表頭 → {欄名: 位置};缺欄回 (None, 問題)。"""
+    for ln in dt.splitlines():
+        if ln.startswith("| ") and not re.match(r"^\|\s*D-\d+\s*\|", ln):
+            cols = {name: i for i, name in enumerate(_cells(ln))}
+            missing = [n for n in _DT_HEADER if n not in cols]
+            return (None, "決策表表頭缺欄:" + "、".join(missing)) if missing else (cols, None)
+    return None, "找不到決策表表頭"
+
+
+def dt_row(get):
+    """決策表一列(get(欄名) 取格子)→ (列 dict 或 None, 讀不懂的問題清單)。只管讀得懂讀不懂(scripts/lumos 讀到問題就整張表不用);
+    常用字、來源、停用列寫法這類格式要求在 catalog_problems。
+    列:{id, situation, standard, alt(不適用時), triggers, evidence{main, alt}, retired(停用列), switch(換列的列), checks(對應檢查)}。
+    停用列不讀觸發字與證據樣式(當成沒有);換列的列認「不適用時」格子裡的明確標記「(換列)」,不從中文用語推,而且例外一定要是(無)。"""
+    retired = _RETIRED in _norm(get("情境"))
+    row = {"id": get("列編號"), "situation": get("情境"), "standard": get("標準寫法"), "alt": get("不適用時"),
+           "triggers": [], "evidence": {"main": None, "alt": None}, "retired": retired,
+           "switch": _SWITCH in _norm(get("不適用時")), "checks": get("對應檢查")}
+    if retired:
+        return row, []
+    trig, err = dt_triggers(get("觸發字"))
+    ev, probs = dt_evidence_parse(get("證據樣式"))
+    probs = ([err] if err else []) + probs
+    if ev and row["switch"] and ev["alt"] is not None:
+        probs.append(f"「不適用時」標了{_SWITCH}(換到別列)的列,證據樣式的例外要寫(無)")
+    if probs:
+        return None, probs
+    row.update(triggers=trig, evidence=ev)
+    return row, []
+
+
+def dt_table(text):
+    """型錄全文 → (列清單, 讀不懂的問題清單 [(列編號或 <決策表>, 原因)])。依表頭名稱取欄(欄位順序可以換);
+    列編號要從 D-1 連號。scripts/lumos 用 importlib 借這一支讀表(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1;
+    代碼審 r1 架構對齊席:原本兩邊各寫一套、必有欄數已經分歧)。"""
+    i = text.find("\n## 情境決策表")
+    if i < 0:
+        return [], [("<決策表>", "找不到〈情境決策表〉節")]
+    j = text.find("\n## ", i + 5)
+    dt = text[i:j if j >= 0 else len(text)]
+    hdr, herr = _dt_header(dt)
+    if herr:
+        return [], [("<決策表>", herr)]
+    rows, probs, seen = [], [], []
+    for ln in dt.splitlines():
+        if not re.match(r"^\|\s*D-\d+\s*\|", ln):
+            continue
+        c = _cells(ln)
+        did = c[0]
+        if len(c) != len(hdr):
+            probs.append((did, f"決策表欄位數 {len(c)},應為 {len(hdr)}"))
+            continue
+        seen.append(did)
+        row, rp = dt_row(lambda name, c=c: c[hdr[name]])
+        probs += [(did, p) for p in rp]
+        if row:
+            rows.append(row)
+    if not seen or seen != [f"D-{k}" for k in range(1, len(seen) + 1)]:
+        # 列編號只准往後加、不准重排或重用;刪列時那一列在情境欄標(停用)留著(Projects/Android寫法語意情境表態與盲判_計劃 範圍 1)
+        probs.append(("<決策表>", "列編號要從 D-1 連號(刪列時標(停用)留著,不要拿掉或重排)"))
+    return rows, probs
+
+
+def _dt_row_lint(get):
+    """決策表一列的格式要求(讀得懂之外):停用列的觸發字與證據樣式都要是(無)、觸發字不含常用字、來源不准空。"""
+    if _RETIRED in _norm(get("情境")):
+        trig, _e = dt_triggers(get("觸發字"))
+        ok_ev = re.fullmatch(r"主:\(無\);\s*例外:\(無\)", _norm(get("證據樣式")))
+        return [] if not trig and ok_ev else ["停用列的觸發字要寫(無)、證據樣式要寫「主:(無);例外:(無)」(不再出段)"]
+    trig, _e = dt_triggers(get("觸發字"))
+    probs = []
+    bad = [t for t in trig if t in STOP_TRIGGERS]
+    if bad:
+        probs.append("觸發字含常用字:" + "、".join(bad))
+    if not get("來源"):
+        probs.append("來源不准空")
+    return probs
 
 
 def catalog_problems(rules=None):
@@ -171,31 +289,22 @@ def catalog_problems(rules=None):
                 problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
             if not (re.search(r"https?://", src) or any(re.search(r"(?<![A-Z0-9-])" + re.escape(a) + r"(?![A-Z0-9-])", src) for a in abbrs)):
                 problems.append((rid, "來源沒有網址或來源縮寫"))
-    referenced, d_seen = set(), []
-    for ln in dt.splitlines():
+    referenced = set()
+    _dt_rows, dt_probs = dt_table(dt)          # 讀得懂讀不懂:跟 scripts/lumos 同一支
+    problems += dt_probs
+    hdr, _herr = _dt_header(dt)
+    for ln in dt.splitlines() if hdr else []:
         if not re.match(r"^\|\s*D-\d+\s*\|", ln):
             continue
         c = _cells(ln)
         did = c[0]
-        if len(c) != _DT_COLS:
-            problems.append((did, f"決策表欄位數 {len(c)},應為 {_DT_COLS}"))
-            continue
-        d_seen.append(did)
-        trig, err = dt_triggers(c[4])
-        if err:
-            problems.append((did, err))
-        bad = [t for t in trig if t in STOP_TRIGGERS]
-        if bad:
-            problems.append((did, "觸發字含常用字:" + "、".join(bad)))
-        if not c[6]:
-            problems.append((did, "來源不准空"))
-        refs = set(re.findall(r"[A-Z]+-\d+", c[5]))
+        if len(c) != len(hdr):
+            continue                              # 欄位數不對已經在 dt_table 報過
+        problems += [(did, p) for p in _dt_row_lint(lambda name, c=c: c[hdr[name]])]
+        refs = set(re.findall(r"[A-Z]+-\d+", c[hdr["對應檢查"]]))
         for r in sorted(refs - set(rows)):
             problems.append((did, f"對應檢查 {r} 不在型錄主表"))
         referenced |= refs
-    want = [f"D-{i}" for i in range(1, len(d_seen) + 1)]
-    if d_seen != want:
-        problems.append(("<決策表>", "列編號要從 D-1 連號"))
     for rid, c in rows.items():
         if c[7].startswith("語意") and rid not in referenced and "(出處不全)" not in c[1] and "(人裁)" not in c[1]:
             problems.append((rid, "語意類沒有被任何決策表列收進去"))
@@ -207,6 +316,129 @@ def catalog_problems(rules=None):
         if m and m.group(1) in weak_ids and r["severity"] != "hint":
             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准 hint 級"))
     return problems
+
+
+# ── 證據樣式自測(代碼審 code-android情境題與表態對程式 r1 D1)──────────────────────────────
+# 每列證據樣式附正例與反例,經 scripts/lumos 真的切段與核對程式跑過:正例(那列標準寫法、例外寫法的範例程式)要對得上樣式,
+# 反例(對應檢查列的壞寫法)要對不上樣式。推送前對不上只提醒、記帳、待盲判(代碼審 r2 換形狀),這裡守的是樣式本身沒壞:
+# 正例被樣式拒絕=提醒會誤報、反例被樣式接受=提醒會漏;做不到的那一段改寫(無)交盲判。依據:ast-grep test 的 valid/invalid
+# (https://ast-grep.github.io/guide/test-rule.html )、Semgrep 的 ok/ruleid(https://docs.semgrep.dev/writing-rules/testing-rules )。
+# 樣本放 samples/situation/<列編號>.kt.txt(一支檔放很多段互不相干的片段,不是能編譯的 Kotlin,所以不用 .kt),一支檔多段,
+# 每段一行標題 `// === <種類> <說明>` 開頭;種類:main-ok、alt-ok(那個寫法的正例)、bad(每個有樣式的寫法都要擋)、
+# bad main、bad alt(只對那個寫法擋:壞寫法剛好是另一個寫法的合法長相時用)。
+_SIT_SAMPLE_HEAD = re.compile(r"^// === (main-ok|alt-ok|bad main|bad alt|bad)(?=\s|$)(.*)$")
+
+
+def situation_dir():
+    return HERE / "samples" / "situation"
+
+
+def situation_samples(rid):
+    """samples/situation/<列編號>.kt.txt → [(種類, 標題, 程式)];沒有這支檔回 [];第一個標題前的字不收(檔頭說明)。"""
+    p = situation_dir() / f"{rid}.kt.txt"
+    if not p.is_file():
+        return []
+    out, cur = [], None
+    for ln in p.read_text(encoding="utf-8").split("\n"):
+        m = _SIT_SAMPLE_HEAD.match(ln)
+        if m:
+            cur = [m.group(1), (m.group(1) + m.group(2)).strip(), []]
+            out.append(cur)
+        elif cur is not None:
+            cur[2].append(ln)
+    return [(k, title, "\n".join(body).rstrip("\n") + "\n") for k, title, body in out]
+
+
+def load_lumos():
+    """把旁邊的 scripts/lumos 當模組載入(不寫 __pycache__)→ (模組或 None, 原因或 None)。"""
+    import importlib.machinery
+    import importlib.util
+    path = HERE.parents[2] / "scripts" / "lumos"
+    if not path.is_file():
+        return None, f"找不到 {path}"
+    prev = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        loader = importlib.machinery.SourceFileLoader("lumos_for_kt_pack_check", str(path))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+    except Exception as e:   # 別支檔,什麼都可能炸:變成一句原因
+        return None, f"載入 {path} 失敗({e.__class__.__name__}:{e})"
+    finally:
+        sys.dont_write_bytecode = prev
+    return mod, None
+
+
+def _sit_first_pass(lm, segs, row, variant):
+    """這些段裡有沒有哪一行當 evidence 能過這個寫法的核對 → (段, 行號) 或 None;同時回第一句擋下的原因。"""
+    why = None
+    for sg in segs:
+        for ln in range(sg["start"], sg["end"] + 1):
+            ans = {"applies": True, "variant": variant, "evidence": f"{sg['file']}:{ln}"}
+            pr = lm._kt_sit_row_check(sg, row["id"], ans, row)
+            if pr is None:
+                return (sg, ln), None
+            why = why or pr
+    return None, why
+
+
+def situation_sample_problems(lumos=None):
+    """證據樣式自測 → [(列編號, 原因)]。lumos=已載入的 scripts/lumos 模組(預設載入旁邊那支)。
+    每列每個不是(無)的寫法要有至少一段正例、整列(有任何樣式時)要有至少一段反例;每段樣本整支當新增,經
+    lumos 的 _kt_sit_text_segments 切段(觸發字要中、要切得出含這一列的段),再拿段範圍每一行當 evidence 經 _kt_sit_row_check 核:
+    正例要有一行對得上,反例要每一行都對不上(推送前會提醒)。(無)的寫法有正例或反例、沒有任何樣式的列有樣本、樣本檔對不到列,都算問題(樣本沒有作用)。"""
+    rows, probs = dt_table(CATALOG.read_text(encoding="utf-8"))
+    if probs:
+        return [(a, "決策表讀不懂,證據樣式自測沒跑:" + b) for a, b in probs]
+    if lumos is None:
+        lumos, why = load_lumos()
+        if lumos is None:
+            return [("<situation>", "證據樣式自測要載入 scripts/lumos:" + why)]
+    out = []
+    ids = {r["id"] for r in rows}
+    for f in sorted(situation_dir().glob("*.kt.txt")) if situation_dir().is_dir() else []:
+        if f.name[:-len(".kt.txt")] not in ids:
+            out.append((f.name, "樣本檔對不到決策表的列"))
+    for r in rows:
+        if r["retired"]:
+            continue
+        rid, ev = r["id"], r["evidence"]
+        variants = [v for v in ("main", "alt") if ev[v]]
+        samples = situation_samples(rid)
+        if not variants:
+            if samples:
+                out.append((rid, "證據樣式兩段都是(無),樣本沒有作用(拿掉樣本檔)"))
+            continue
+        kinds = {k for k, _t, _c in samples}
+        for v in variants:
+            if f"{v}-ok" not in kinds:
+                out.append((rid, f"證據樣式的{'主' if v == 'main' else '例外'}沒有正例({v}-ok:{'標準寫法' if v == 'main' else '不適用時的例外寫法'}的範例程式)"))
+        if not any(k.startswith("bad") for k in kinds):
+            out.append((rid, "證據樣式沒有反例(bad:對應檢查列的壞寫法範例)"))
+        for kind, title, code in samples:
+            segs = [sg for sg in lumos._kt_sit_text_segments(f"{rid}.kt", code, rows) if rid in sg["rows"]]
+            if not segs:
+                out.append((rid, f"樣本「{title}」切不出含這一列的段(觸發字沒中,這段樣本測不到樣式)"))
+                continue
+            if kind.endswith("-ok"):
+                v = kind[:-3]
+                if not ev[v]:
+                    out.append((rid, f"樣本「{title}」:這個寫法的證據樣式是(無),正例沒有作用"))
+                    continue
+                got, why = _sit_first_pass(lumos, segs, r, v)
+                if got is None:
+                    out.append((rid, f"正例「{title}」對不上樣式(推送前會誤報提醒):{why}"))
+                continue
+            targets = [kind.split()[1]] if " " in kind else variants
+            for v in targets:
+                if not ev[v]:
+                    out.append((rid, f"樣本「{title}」:{v} 的證據樣式是(無),反例沒有作用"))
+                    continue
+                got, _why = _sit_first_pass(lumos, segs, r, v)
+                if got is not None:
+                    out.append((rid, f"反例「{title}」沒提醒({v}:evidence 指第 {got[1]} 行就對得上;壞寫法被當成照做)"))
+    return out
 
 
 def message_problems(rules, cat_ids):
@@ -311,6 +543,7 @@ def check(sg):
     cat_ids, _cat_text = catalog_ids()
     problems += message_problems(rules, cat_ids)
     problems += catalog_problems(rules)
+    problems += situation_sample_problems()
     for d, cfg in CONFIGS:
         want = sum(1 for r in rules if r["dir"] == d)
         got, skipped = loaded_count(sg, cfg)
@@ -367,7 +600,7 @@ def check(sg):
 
 def main(argv):
     if "--catalog-only" in argv:
-        probs = catalog_problems(load_rules())
+        probs = catalog_problems(load_rules()) + situation_sample_problems()
         for rid, why in probs:
             print(f"{rid}: {why}")
         print(f"型錄問題 {len(probs)} 個")
