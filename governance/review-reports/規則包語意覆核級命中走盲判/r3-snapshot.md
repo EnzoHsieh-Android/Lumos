@@ -1,0 +1,226 @@
+---
+type: project
+status: todo
+created: 2026-11-05
+updated: 2026-11-07
+tags:
+  - type/project
+  - status/todo
+  - scope/stack-knowledge
+related:
+  - "[[Projects/Android寫法語意情境表態與盲判_計劃]]"
+  - "[[Projects/Android協程與API寫法機械檢查標準_計劃]]"
+  - "[[Systems/kotlin規則包]]"
+  - "[[Systems/pitfalls-code-loop]]"
+lands_in:
+  - Systems/pitfalls-code-loop
+  - Systems/kotlin規則包
+  - Systems/linter精選目錄
+  - Systems/棧別提問表態閘
+pending_questions:
+  - id: Q1
+    text: 盲判判成真問題的覆核命中要不要擋推送?建議:要擋,跟新增告警同一句擋下與同一個放行出口;出處不全的 7 條例外,只提醒
+    class: 擋停策略
+    stage: 架構
+    status: 已決
+    blocking: true
+    decision: "#d5"
+  - id: Q2
+    text: 有覆核命中卻還沒盲判時要不要擋推送?建議:要擋並印跑盲判的指令,跟情境題缺盲判同一條規則;代價是每次有命中都要派一個代理
+    class: 擋停策略
+    stage: 架構
+    status: 已決
+    blocking: true
+    decision: "#d5"
+  - id: Q3
+    text: 盲判判成誤報的命中自動記一筆 AI 放行、進既有的人工複查清單(doctor 會數還沒人看過的),可以嗎?建議:可以,照 Semgrep 判誤報不直接消失的做法,沿用既有清單不另起一套
+    class: 範圍
+    stage: 架構
+    status: 已決
+    blocking: true
+    decision: "#d6"
+decisions:
+  - content: Q1:盲判判成真問題的覆核命中擋推送,擋下訊息與放行出口跟新增告警相同;出處不全的 7 條判成真只提醒
+    id: d1
+    context: 覆核命中原本不擋也沒人看
+    why_chosen: 使用者 2026-11-07 原話「照建議」;依據不足的規則不准擋人,跟型錄自檢出處不全只准提示級同一條線
+    decided: 2026-11-07
+    valid: false
+    superseded_by: "#d5"
+    ended: 2026-11-07
+  - content: Q2:有覆核命中卻還沒盲判時擋推送,印跑盲判的指令
+    id: d2
+    context: 盲判要派代理,有成本
+    why_chosen: 使用者 2026-11-07 原話「照建議」;跟情境題缺盲判同一條規則,不擋等於沒判
+    decided: 2026-11-07
+    valid: false
+    superseded_by: "#d5"
+    ended: 2026-11-07
+  - content: Q3:判成誤報的覆核命中自動記一筆 origin ai 的放行,進既有 AI 放行複查清單,直到人 ack
+    id: d3
+    context: 判成誤報的不能直接消失
+    why_chosen: 使用者 2026-11-07 原話「照建議」;照 Semgrep 判誤報藏起來集中給人複查的做法,沿用既有清單不另起一套
+    decided: 2026-11-07
+    valid: false
+    superseded_by: "#d4"
+    ended: 2026-11-07
+  - content: Q3 改裁:盲判判成誤報的覆核命中不寫放行,只記在治理帳;推送時那筆不擋,另列「AI 判誤報待人看」清單;人推翻(單筆或整批)就恢復成要擋
+    id: d4
+    context: 設計審 r1 六席中五席獨立點出原做法(判誤報自動寫成 AI 放行)撤不回、推翻無效、兩處寫一半、會被偽造身分利用
+    why_chosen: 使用者 2026-11-07 原話「照建議」;照 Semgrep AI 判誤報不自動關、藏起來集中給人複查、人不同意就重新打開的做法;真相只留治理帳一處
+    decided: 2026-11-07
+    valid: false
+    superseded_by: "#d6"
+    ended: 2026-11-07
+  - content: Q1、Q2 改裁:覆核命中不由 AI 判定決定擋不擋;每筆新增命中都要作者交代(改掉了/誤報加理由/接受風險加理由),沒交代就擋推送;判成真問題的要改掉或寫接受風險才推得上去
+    id: d5
+    context: 設計審 r2 六席 31 條 major 集中在 AI 判定直接決定擋停牽出的合併側、推翻重判、偽造複查、沒跑政策;業界(Semgrep 規則模式、sast-triage)擋不擋由規則模式或人決定,模型只註解分流
+    why_chosen: 使用者 2026-11-07 原話「我會希望近判斷，證偽的可以回頭來eval判別方式」「你理解沒錯」;擋的是沒判斷、不是判斷錯,AI 一定要逐筆看那一行;判斷理由留帳可查
+    decided: 2026-11-07
+    valid: true
+  - content: 判成誤報的交代由沒看過作者交代的代理抽查;抽查也同意是誤報的程式片段收成那條規則的誤報樣本,改規則形狀時回測(誤報樣本不再命中、壞例照樣命中);誤報多的列改形狀候選、真問題多且誤報少的列升擋候選
+    id: d6
+    context: 使用者要被證偽的判斷回頭評估規則的判別方式
+    why_chosen: 使用者 2026-11-07 原話「我會希望近判斷，證偽的可以回頭來eval判別方式」「你理解沒錯」;沿用規則包既有好例零命中、壞例要命中的自檢
+    decided: 2026-11-07
+    valid: true
+---
+
+# 規則包語意覆核級命中走盲判_計劃
+
+> 白話:Kotlin 規則包有一類規則,形狀抓得到可疑寫法、卻分不出它是不是真的錯(要知道型別或語意,例:`.setValue` 是 LiveData 還是 Firebase、`.value.add` 是狀態容器還是 Map.Entry)。語意覆核級(`rules-review/`)12 條與提示級(`rules-hints/`)50 條,共 62 條,現在既不擋、也不量、也沒人看。這份計劃讓它們的每一筆新增命中都要作者當場交代(改掉了/誤報加理由/接受風險加理由),沒交代就擋推送——擋的是「沒判斷」,不是「判斷錯」;交代成誤報的再由沒看過作者說法的代理抽查,抽查也同意的程式片段收成那條規則的誤報樣本,日後改規則形狀時拿來回測。使用者原話(2026-11-07):「62 條一起處理，先建語意覆核接盲判的計劃」「我會希望近判斷，證偽的可以回頭來eval判別方式」「你理解沒錯」。使用者原話(2026-11-05):「如果形狀都改不好,是不是可以參語意判斷?會不會比 hint 靠譜一點,因為 hint 感覺是會被忽略的東西」。從 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 8 拆出。
+
+PRIOR-ART: Semgrep 的規則有三種模式(Monitor 只記、Comment 留言、Block 擋),擋不擋由規則模式決定;它的 AI 判誤報只做註解分流、不改擋停,判成誤報的藏起來集中給人複查(https://semgrep.dev/docs/semgrep-code/policies 、https://semgrep.dev/blog/2025/announcing-ai-noise-filtering-and-triage-memories )。SonarQube 用「規則加命中行內容雜湊」當問題身分,作者可把問題標成誤報或接受(Won't Fix)並附理由,標記跟著身分走(https://docs.sonarsource.com/sonarqube-server/latest/user-guide/issues/solution-overview/ )。本專案既有的表態閘(棧別檢核題與 Kotlin 情境題)已經是「每題要作者交代、沒交代就擋、交代真假由下游抽查」。採用:命中接進表態閘當一題,誤報對應 SonarQube 的 False Positive、接受風險對應 Won't Fix,AI 盲判只抽查、對不上只提醒。不採:第二版的「AI 判定直接決定擋不擋」(設計審 r2 六席 31 條 major 大半出在它牽出的推翻、重判、偽造複查、合併側與 token)。
+RETIRE-IF: 上線八週後,62 條規則的新增命中總數少於 10 筆 → 撤掉這一題,規則留在原等級;或作者交代被盲判抽查推翻的比例連續八週超過三成(交代形同虛設)→ 停用這一題、回頭重裁擋法。
+
+## 狀態
+
+設計第三版(2026-11-07,照使用者改裁 d5、d6 換形狀,折入設計審 r2 六席),還沒過第三輪。
+
+## 用詞
+
+- **覆核規則**:規則包 `rules-review/` 與 `rules-hints/` 底下的規則(現在 12 + 50 條)。
+- **規則命中**:覆核規則在這次改動新帶進來的命中。算法見範圍 2;身分(`seg`)是新增告警閘的指紋(`_lint_new_key`:規則、檔名、命中行片段取 sha256 前 16 碼),同檔同片段多處共用一個身分。
+- **命中題**:表態閘新增的一題,題號 `kt-rule-hits`,形狀照情境題 `kt-situation`。只在這次改動有規則命中時適用。
+- **作者交代**:對一筆規則命中答 `fp`(誤報,附理由)或 `risk`(接受風險,附理由與 Issue);改掉了的命中重算時就不在,不用答。
+- **抽查**:盲判代理對一筆答 `fp` 的命中,只看程式與規則、不看作者理由,判 `real`(真問題)、`false`(誤報)或 `unsure`。
+- **誤報樣本**:抽查判 `false` 的命中所在的程式片段,存成規則包 `samples/good/<規則 id>/` 底下 `review-fp-` 開頭的檔(規則包既有的已知誤報樣本格式)。
+
+## 範圍
+
+### 做
+
+1. **命中怎麼來**(解 r2 整合 6、架構對齊 5:不另開宣告檔):專案的 `.lumos/lint.json` 某條命令的 `--config` 指到規則包的 `sgconfig.yml` 時,命中題就用同一條命令、把那個參數換成同目錄的 `sgconfig-review.yml` 與 `sgconfig-hints.yml` 各跑一次。沒宣告規則包的專案這一題永遠不適用。`.lumos/lint.json` 的格式與驗證不動,不新增設定檔。
+2. **算命中只有一支函式**(解 r2 邊界 2、資源 3、整合 1):新增 `_kt_rule_hits(repo_root, diff_range, at_sha, deadline)`,內部呼叫新增告警閘跑命令與比對新增的那一組函式(`_lint_new_run_cmds` 那一支,抽兩份快照、只回新增),回命中清單 `[{seg, rule, file, lines, message}]`。範圍一律用 `_codeloop_disp_range`(表態與情境題共用),所以樣板、推送前核對、盲判材料三處算出同一組身分。結果照情境段的做法記在 `~/.cache/lumos/kt-rule-hits/`(鍵含範圍、版本、規則包指紋),同一範圍同一版本只跑一次。不讀放行檔(一般告警的放行管不到這一題,答 `fp` 才是這一題的出口)。工具沒附命中行、身分退成「規則+檔名+訊息」的弱比對時照樣列成一筆、照樣要答。超過時間預算(含參數太長、命令沒跑完)丟 `_KtSitOverBudget` 同型的例外,算不出來(工具沒裝、git 失敗)丟無法驗證。逾時這一點跟一般新增告警不同(一般段沒跑完是擋):這一題是表態題,照表態閘與情境題既有的逾時規則走 fail-open 並記帳,理由是同一道閘的題目要同一個逾時政策,而且沒算出命中時沒有東西可以叫作者交代。
+3. **接進表態閘**(使用者裁定 d5;解 r2 正確性 1、5、回滾 5、資源 9):
+   - `lumos pitfalls --dispositions-template` 在有規則命中時多一題 `kt-rule-hits`,列出每筆命中(seg、規則、檔名、行號、規則訊息),答案欄留空;`--carry` 帶過來同一個 seg 的舊答案。
+   - 答案形狀:`status: satisfied`,`hits: [{seg, answer: fp|risk, reason, issue?}]`;`reason` 去空白後至少 10 個字、有實字、最多 500 字;`risk` 必附 `issue: Issues/<名>`(Issue 要存在且 open 或 doing,照既有 todo 的驗法)。寫側與讀側共用同一支形狀檢查。
+   - 推送前與 `code-loop pass` 的表態核對:在被推版本上重算命中(範圍 2),每筆都要有答案;缺答案、答案形狀不對 → 照表態閘既有的「表態不完整」擋。答案指的 seg 不在重算結果裡的不擋(那筆已改掉),只在小結印「多答 N 筆」。
+   - 分支名下、綁版本、合併提交認合進來那一側、`--carry`、`stack_questions.mode`(warn/off)、逾時 fail-open 全照表態閘既有規則,本案不另寫讀法。
+4. **抽查**(使用者裁定 d6;解 r2 整合 4、回滾 2、3、4、正確性 2、3):
+   - `lumos code-loop blind-judge --template --rule-hits` 印答 `fp` 的命中那一份材料,每筆給檔名、命中處前後各 8 行(同片段多處各給一段,一筆最多 5 處、每段最多 40 行,超過的印「另有 N 處」)、規則訊息、對應型錄列的壞寫法形狀與標準寫法兩欄(主表另用 check.py 的 `main_rows` 讀,不改情境題載入要求的 `dt_table`;讀不到就那兩欄寫「型錄讀不到」,抽查照判、擋停不受影響),不給作者理由;一份最多 30 筆、`--part` 分份。
+   - 結果檔 `rule_hits: [{seg, verdict: real|false|unsure, reason}]`,記進治理帳(`code-loop` 閘、種類 `blind-judge`、新欄 `rule_hits`,這種事件不帶 `blind_judge` 與 `role` 欄,舊版讀情境盲判的 `_kt_bj_event_ok` 照缺欄略過;結果檔只收 `rule_hits` 一個鍵,不跟情境題的 `segments` 同檔,情境題結果檔的驗證與錯誤訊息不動;理由最多 500 字);`seg` 不在當下答 `fp` 的命中裡的那一筆略過並印一行,其餘照記(解 r2 邊界 5:不因一筆整份拒收)。
+   - 抽查結果**不擋**:抽查判 `real` 而作者答 `fp` → 推送前小結印一行「抽查不同意 N 筆」並列 seg;沒抽查也不擋,小結印「待抽查 N 筆」。同一個 seg 有多筆抽查時取最新一筆。
+5. **誤報樣本回流**(使用者裁定 d6):
+   - `lumos code-loop rule-hits --fp-samples <輸出目錄>`:把治理帳裡「作者答 fp、抽查判 false」的命中,各寫成 `<輸出目錄>/<規則 id>/review-fp-<seg>.kt`(內容是抽查材料裡那幾段程式,檔頭一行註解寫來源專案與日期);已存在的同名檔不覆寫。在工具鏈來源 repo 裡跑時,輸出目錄預設是規則包的 `samples/good/`;消費專案要自己給目錄,再人工帶回工具鏈。
+   - 型錄自檢 `check.py` 的「已知誤報樣本不算好例誤報」從只認語意覆核級擴到覆核規則兩級(`rules-review/` 與 `rules-hints/`)。
+   - 型錄自檢多一個 `--fp-regress` 模式:逐條覆核規則印「誤報樣本 N 個、仍命中 M 個;壞例命中 K 處」,只印不擋。改規則形狀時看 M 有沒有降、K 有沒有照樣至少 2。
+6. **統計與候選**(使用者裁定 d6;解 r2 整合 3、10、正確性 7、邊界 7):`lumos gov --stats` 多一段「覆核規則」,從治理帳的表態紀錄與抽查紀錄算;同一分支只取最後一筆表態,避免一個分支推多次被數多次。每條規則列:作者答 fp 幾筆、答 risk 幾筆、抽查幾筆與其中 real/false/unsure 各幾筆。只出候選、不自動改:答過至少 20 筆、fp 佔八成以上、而且抽查判 false 至少九成 → 列「改形狀候選」;答過至少 20 筆、fp 少於一成(恰好一成不算)→ 列「升擋候選」(移到 `rules/`)。改掉了的命中不會留下答案,所以不進統計(寫進〈天花板〉)。
+7. **範本與手冊**:[[Systems/linter精選目錄]] 的 Kotlin 規則包範本「提示級規則預設不接」那句改成「宣告了 `sgconfig.yml` 就自動接覆核兩級、命中要表態」;同步改 `skills/lumos-code-loop/SKILL.md` 與 `skills/lumos-project-notes/commands/06-代碼審與推送.md` 的表態段與盲判段、`skills/kotlin-idioms/checks-catalog.md` 統計節「語意覆核級要等計劃接上」那句、`configs/ast-grep/kotlin-android/check.py` 開頭「接上前不擋」註解。
+
+### 不做
+
+- 不讓 AI 判定決定擋不擋(d5):擋的只有「沒交代」。
+- 不新增設定檔、不改 `.lumos/lint.json` 的格式與驗證。
+- 不新增放行出口:誤擋的出口就是答 `fp`;不寫放行檔。
+- 不做人複查指令、不做推翻:抽查結果只提醒,推翻沒有對象。
+- 不在收工鉤子(回合結束檢查)與 `lint-new --worktree` 跑覆核命令:那一道要秒級。
+- 不自動升降規則等級:只列候選,改等級要改規則檔、過代碼審。
+- 不替出處不全的提示級規則補出處(型錄逐列查證那條線)。
+
+## 實務隱患
+
+- **作者隨手答 fp**:擋的是沒交代,交代真假只有抽查把關、抽查只提醒;理由至少 10 字只擋空答。RETIRE-IF 的第二條看抽查推翻比例。
+- **命中多時交代成本**:62 條在真專案的命中量沒量過(2026-11-05 只跑了會擋的 `sgconfig.yml`)。上線前用實驗專案與 nowinandroid 各跑一次兩份覆核設定,量新增命中筆數;改檔名或整段重新縮排會讓舊命中換身分、被當成新增,要重新交代(`--carry` 帶不過去)。壓提交、amend 讓表態綁的版本失效時,`--carry` 照身分帶回舊答案,不用重答。
+- **同家族偏誤**:抽查跟作者是同一家模型。
+- **語境變了、命中行沒變**:身分只看命中行(SonarQube 同做法),`--carry` 會帶過舊答案;寫進〈天花板〉。
+- **治理帳長大**:每筆答案理由與抽查理由進版控治理帳;REVISIT 看帳的大小。
+- **誤報樣本帶專案程式碼**:回流到工具鏈的樣本是消費專案的程式片段,所以消費專案只輸出到它自己給的目錄,帶回工具鏈要人做。
+- 已排除:金流:不碰付款
+- 已排除:對外送出:只讀本機檔與跑本機 ast-grep,不連網;樣本回流只寫本機目錄
+- 已排除:不可逆:新增一題表態、一份材料、一個帳欄、一個子指令與自檢一個模式,退提交即回原狀;治理帳已寫的答案與抽查留著,舊版不認 `kt-rule-hits` 題(未知題號照表態閘既有規則略過)
+- 守衛面:不排除——表態閘多一題會擋的題目,動的是守衛面;判風險高,走完整設計審
+
+## 依據來源
+
+| 機制 | 依據 | 出處 |
+|---|---|---|
+| 擋不擋由規則模式或人決定,AI 只註解分流 | Semgrep 規則模式與 AI 雜訊過濾 | https://semgrep.dev/docs/semgrep-code/policies 、https://semgrep.dev/blog/2025/announcing-ai-noise-filtering-and-triage-memories |
+| 作者標誤報、接受風險並附理由,跟著命中身分走 | SonarQube 的問題狀態(False Positive、Accepted)與命中行雜湊比對 | https://docs.sonarsource.com/sonarqube-server/latest/user-guide/issues/solution-overview/ |
+| 只看這次新帶進來的命中 | SonarQube Clean as You Code | https://docs.sonarsource.com/sonarcloud/improving/clean-as-you-code |
+| 誤報門檻一成 | Google 靜態分析經驗:有效誤報壓在一成以下 | https://cacm.acm.org/magazines/2018/4/226371-lessons-from-building-static-analysis-tools-at-google/pdf |
+| 每筆要交代、沒交代就擋、AI 判定不決定擋停 | 使用者裁定 d5 | 使用者 2026-11-07:「我會希望近判斷，證偽的可以回頭來eval判別方式」「你理解沒錯」 |
+| 誤報抽查、樣本回流、改形狀與升擋候選 | 使用者裁定 d6 | 同上 |
+| 兩級 62 條一起處理 | 使用者裁定 | 使用者 2026-11-07:「62 條一起處理，先建語意覆核接盲判的計劃」 |
+| 不降成提示級、要語意判斷 | 使用者提問 | 使用者 2026-11-05:「如果形狀都改不好,是不是可以參語意判斷?會不會比 hint 靠譜一點」 |
+| 接進表態閘、照情境題的形狀 | 本專案既有做法 | [[Projects/Android寫法語意情境表態與盲判_計劃]]、[[Systems/棧別提問表態閘]] |
+| 樣本下限 20 筆 | 情境題升擋門檻同一個樣本下限 | [[Systems/棧別提問表態閘]] |
+
+## 驗收條款
+
+- [S1] 當專案 `.lumos/lint.json` 宣告了規則包 `sgconfig.yml`、這次改動有覆核規則新增命中時,`pitfalls --dispositions-template` 應 多出 `kt-rule-hits` 一題並列出每筆命中;沒宣告規則包或沒有新增命中時 應 不出現這一題 [test:t_kt_rule_hits_template]
+- [S2] 當 `kt-rule-hits` 有一筆命中沒有答案、或答案形狀不對(理由太短、risk 沒附 Issue)時,`code-loop check` 應 照表態不完整擋;每筆都答了 應 放行;答案指的 seg 已不在重算結果裡 應 不擋 [test:t_kt_rule_hits_disposition_check]
+- [S3] 當作者答 fp 而抽查判 real 時,推送前檢查 應 不擋並在小結印抽查不同意的筆數與 seg;沒抽查 應 印待抽查筆數、應 不擋 [test:t_kt_rule_hits_blind_reminder]
+- [S4] 當 `blind-judge --template --rule-hits` 印材料時,每筆 應 只含答 fp 的命中、檔名、每處前後 8 行、規則訊息與型錄兩欄,應 不含作者理由;一筆超過 5 處 應 只給 5 處並印另有幾處 [test:t_kt_rule_hits_blind_material]
+- [S5] 當抽查結果檔有一筆 seg 不在當下答 fp 的命中裡時,記帳 應 略過那一筆、照記其餘 [test:t_kt_rule_hits_blind_record_skips_unknown]
+- [S6] 當治理帳有「答 fp、抽查判 false」的命中時,`rule-hits --fp-samples <目錄>` 應 寫出 `<目錄>/<規則 id>/review-fp-<seg>.kt`,同名檔已存在 應 不覆寫 [test:t_kt_rule_hits_fp_samples_export]
+- [S7] 當型錄自檢跑 `--fp-regress` 時,應 逐條覆核規則印誤報樣本數、仍命中數與壞例命中數,退出碼 應 不因此改變;好例檢查 應 不把兩級覆核規則的 `review-fp-` 樣本算成好例誤報 [test:t_kt_rule_hits_fp_regress]
+- [S8] 當治理帳有表態與抽查紀錄時,`gov --stats` 應 逐條規則列筆數;同一分支推多次 應 只算最後一筆表態;符合門檻 應 列改形狀或升擋候選,不足 20 筆 應 不列 [test:t_kt_rule_hits_stats]
+- [S9] 當收工鉤子或 `lint-new --worktree` 跑工作樹模式時,覆核命令 應 不被執行 [test:t_kt_rule_hits_skipped_in_worktree]
+- [S10] 當算命中超過時間預算或工具不可用時,表態核對 應 照表態閘既有的逾時與無法驗證規則處理(逾時 fail-open 記帳、無法驗證擋) [test:t_kt_rule_hits_over_budget]
+
+## 預期值表
+
+| 條款 | 輸入 | 預期 | 來源 |
+|---|---|---|---|
+| S1 | lint.json 宣告 `--config …/kotlin-android/sgconfig.yml`,改動新增一筆 `kt-livedata-setvalue-background` 命中 | 樣板有 `kt-rule-hits`,hits 一筆 | 範圍 1、3 |
+| S1 | lint.json 沒宣告規則包 | 沒有這一題 | 範圍 1 |
+| S2 | 一筆命中沒答 | 擋(表態不完整) | 範圍 3;d5 |
+| S2 | 答 risk 沒附 Issue | 擋 | 範圍 3 |
+| S2 | 答 fp、理由「誤報」(2 字) | 擋 | 範圍 3 |
+| S2 | 答案的 seg 已改掉、不在重算結果 | 不擋,小結印多答 1 筆 | 範圍 3 |
+| S3 | 答 fp、抽查判 real | 不擋,印抽查不同意 1 筆 | 範圍 4;d5 |
+| S4 | 同片段 7 處 | 給 5 處,印另有 2 處 | 範圍 4 |
+| S5 | 結果檔 2 筆,其中 1 筆 seg 是一般告警的指紋 | 記 1 筆、印略過 1 筆 | 範圍 4 |
+| S6 | 答 fp 抽查 false 一筆,目錄裡已有同名檔 | 不覆寫 | 範圍 5 |
+| S7 | `kt-mutate-state-collection` 有 1 個誤報樣本仍命中 | 印「誤報樣本 1、仍命中 1」,退出碼照舊 | 範圍 5 |
+| S8 | 同分支推 3 次、每次答同一筆 fp | 只算 1 筆 | 範圍 6 |
+| S8 | 某規則答 20 筆、fp 1 筆 | 列升擋候選 | 範圍 6 |
+| S8 | 某規則答 20 筆、fp 2 筆(恰好一成) | 不列升擋候選 | 範圍 6 |
+| S8 | 某規則答 19 筆、fp 0 筆 | 不列 | 範圍 6 |
+| S8 | 某規則答 20 筆、fp 16 筆(八成)、抽查 10 筆判 false 9 筆 | 列改形狀候選 | 範圍 6 |
+| S9 | 收工鉤子、有規則包宣告 | 覆核命令沒被執行 | 不做 5 |
+| S10 | 時間預算剩 0 | fail-open、記一筆治理帳 | 範圍 2、3 |
+| S10 | ast-grep 沒裝 | 無法驗證、擋 | 範圍 2 |
+
+## 回退
+
+退回本計劃的提交:表態閘少了 `kt-rule-hits` 一題,治理帳裡這一題的舊答案與 `rule_hits` 抽查欄留著、舊版照未知題號略過;沒寫放行檔、沒改 `.lumos/lint.json`,消費專案不用收拾;已回流的誤報樣本是規則包好例,留著也無害(退回後自檢照舊只對語意覆核級排除,提示級的 `review-fp-` 樣本若命中會被算成好例誤報——回退時一併刪掉提示級規則目錄底下的 `review-fp-` 檔)。
+
+## 天花板
+
+1. 擋的是沒交代,不是交代錯;交代真假只有抽查把關、而且抽查只提醒。
+2. 身分只看命中那一行:行沒變、前後語境變了時 `--carry` 會沿用舊答案。
+3. 抽查與作者是同一家模型。
+4. 改掉了的命中不留答案,統計只看得到誤報與接受風險,「真問題被改掉」的筆數數不到,升擋候選會偏保守。
+5. 覆核只在推送前與記通過前跑;收工時與寫的當下不跑。
+6. 抽查材料帶程式碼,註解可以對代理下指示(跟情境題盲判同一個天花板)。
+
+REVISIT:2026-12-07 看上線一個月:總共幾筆規則命中、作者答 fp 與 risk 各幾筆、抽查幾次與推翻比例、逾時 fail-open 幾次、誤報樣本回流幾個、治理帳長了多少
+
+## 審計修正紀錄
+
+- 2026-11-07 改寫:母計劃設計審 r2 帶來的七個問題逐條解進〈範圍〉1–7;範圍擴大到提示級 50 條(使用者裁定)。
+- 2026-11-07 舊否決比對(lumos rejections 512 行,按概念篩):「AI 放行一律擋」「AI 放行累積幾筆就擋」被否決過(Systems/test-guard、Projects/Android端到端驗收_計劃)——本案判誤報記成 AI 放行、只讓它事後可見不擋,跟那兩次裁定一致;「多數判作者沒照做就擋」被否決過(Systems/棧別提問表態閘)——規則命中沒有作者表態,不適用;「LLM 判可逆性」被否決過(Systems/doctor-irreversible-hint#d1,選字面掃描加軟提醒)——本案是模型判規則命中真假、不是判可逆性,而且情境題盲判已審過上線,概念相近處交設計審判。
+- r1(2026-11-07,六席 sonnet:正確性、邊界、整合、資源、回滾、架構對齊):55 條/blocking 33/判誤報寫成放行撤不回、推翻無效、兩處寫一半(五席獨立)、身分不綁語境、宣告放進 lint.json 違反既有共識、擋停接線與例外隔離沒寫;照 Semgrep 與 SonarQube 換形狀(判誤報只留治理帳、人推翻就重新擋,使用者改裁 d4),全部折入,分組在 r1-intake.md。卷證:governance/review-reports/規則包語意覆核級命中走盲判/。
+- r2(2026-11-07,六席 sonnet:正確性、邊界、整合、資源、回滾、架構對齊):50 條/blocking 31/AI 判定直接決定擋停牽出推翻與重判語意、偽造複查、合併側、token、預算耗盡繞道、宣告檔與既有讀法不合;使用者改裁 d5、d6,照 Semgrep 規則模式與 SonarQube 問題狀態換形狀:命中接進表態閘當一題、作者交代、AI 抽查只提醒、誤報樣本回流;第二版的人複查、推翻、token、覆核宣告檔、AI 判定擋停整組拿掉。逐條去向在 r2-intake.md。

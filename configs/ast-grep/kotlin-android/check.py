@@ -20,13 +20,15 @@ HERE = Path(__file__).resolve().parent
 CATALOG = HERE.parents[2] / "skills" / "kotlin-idioms" / "checks-catalog.md"
 # 行為測試範本:型錄 C 列通電批次寫「範本 T<n>」時要在這份檔有 `## T<n> ` 那一節([[Projects/Android行為測試範本與架構測試_計劃]])
 TEMPLATES = HERE.parents[2] / "skills" / "kotlin-idioms" / "test-templates.md"
-# 三級:rules=會擋(error/warning);rules-review=語意覆核級(info,形狀分不出對錯、要盲判代理逐筆判,
-# [[Projects/規則包語意覆核級命中走盲判_計劃]] 接上前不擋);rules-hints=提示級(hint,預設不接)
-CONFIGS = (("rules", "sgconfig.yml"), ("rules-review", "sgconfig-review.yml"), ("rules-hints", "sgconfig-hints.yml"))
+# 四級:rules=會擋(error/warning);rules-review=語意覆核級(info,形狀分不出對錯,範本還沒接,
+# 接不接見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁);rules-hints=提示級(hint,預設不接);
+# rules-unwired=不接閘(任何等級):引用型錄出處不全列的規則,與還沒在真專案量過誤報的新規則
+CONFIGS = (("rules", "sgconfig.yml"), ("rules-review", "sgconfig-review.yml"), ("rules-hints", "sgconfig-hints.yml"),
+           ("rules-unwired", "sgconfig-unwired.yml"))
 SEVERITIES = ("error", "warning", "info", "hint")
-_DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": ("error", "warning")}
+_DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": ("error", "warning"), "rules-unwired": SEVERITIES}
 MSG_MAX = 120          # 新增告警閘解析 SARIF 時把訊息截在 120 字
-REVIEW_FP_PREFIX = "review-fp-"   # 好例樣本裡記「語意覆核級規則已知會誤報、要靠盲判排除」的檔名開頭
+REVIEW_FP_PREFIX = "review-fp-"   # 好例樣本裡記「語意覆核級或不接閘規則已知會誤報」的檔名開頭,改規則形狀時拿來對照
 SCAN_TIMEOUT = 120     # 一次掃描的上限(秒);正常不到一秒,卡住時不要拖到外層測試逾時
 # 好例「一段」= 頂格開頭的宣告(函式、類別、物件、介面、帶註記的宣告)
 _DECL_RE = re.compile(r"^(?:@|fun |suspend fun |private |internal |public |class |data class |object |interface |abstract |open |sealed |enum |val |var |inline )")
@@ -61,7 +63,7 @@ def _files_block_is_test_only(doc):
 
 
 def load_rules():
-    """讀三個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
+    """讀四個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
     rules = []
     for d, cfg in CONFIGS:
         for f in sorted((HERE / d).glob("*.yml")):
@@ -390,8 +392,8 @@ def catalog_problems(rules=None):
     weak_ids = {rid for rid, c in rows.items() if "(出處不全)" in c[1]}
     for r in rules or []:
         m = re.match(r"\[([A-Z]+-\d+)\]", r["message"])
-        if m and m.group(1) in weak_ids and r["severity"] != "hint":
-            problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准 hint 級"))
+        if m and m.group(1) in weak_ids and r.get("dir") != "rules-unwired":   # 缺 dir 鍵照不在 unwired 算
+            problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准放 rules-unwired/"))
     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
     return problems
 
@@ -662,7 +664,7 @@ def message_problems(rules, cat_ids):
         if r["severity"] not in SEVERITIES:
             problems.append((rid, f"severity 只能是 {'/'.join(SEVERITIES)}"))
         if r["severity"] not in _DIR_SEVERITY.get(r["dir"], ()):
-            problems.append((rid, f"{r['dir']}/ 只收 {'/'.join(_DIR_SEVERITY.get(r['dir'], ()))} 級(hint 放 rules-hints/、info 放 rules-review/)"))
+            problems.append((rid, f"{r['dir']}/ 只收 {'/'.join(_DIR_SEVERITY.get(r['dir'], ()))} 級(hint 放 rules-hints/、info 放 rules-review/、還沒量過或出處不全的放 rules-unwired/)"))
         m = re.match(r"\[([A-Z]+-\d+)\]", msg)
         if not m:
             problems.append((rid, "message 要以 [型錄編號] 開頭"))
@@ -706,6 +708,34 @@ def scan(sg, cfg, target):
     return out
 
 
+# 規則包 SARIF 輸出的自檢(Projects/規則包覆核兩級接新增告警閘_計劃 做 3):新增告警閘讀的是 SARIF,覆核與提示級在 SARIF 裡是 note;
+# 各拿一條規則的壞例樣本用它自己目錄的設定掃,結果裡要有那條規則,換 ast-grep 版本時工具鏈 CI 會紅
+SARIF_PROBES = (("sgconfig-review.yml", "kt-livedata-setvalue-background"), ("sgconfig-hints.yml", "kt-value-assign-background"))
+
+
+def sarif_gate_rule_ids(sg, cfg, target):
+    """用新增告警閘讀 SARIF 的同一支 scripts/lumos `_lint_run_and_parse` 掃一次 → (閘讀得到的 ruleId 集合, 原因)。
+    閘讀 SARIF 時要工具名、每筆的檔案位置與訊息,缺一個就靜默略過那筆(代碼審 r1 通才 F1:只看 ruleId 的話,
+    換版本拿掉位置時探針照綠、閘卻讀到零筆);借同一支,閘讀得到才算有。跑不起來、逾時、主程式載不進來回 (None, 原因),不丟例外。"""
+    import time
+    if _TIMED_OUT[0]:
+        return None, "之前已逾時"
+    lm, why = load_lumos()
+    if lm is None:
+        return None, "lumos:" + why     # 呼叫端認這個前綴、另報一句,跟情境題證據樣式自測的寫法一樣
+    t0 = time.monotonic()
+    try:
+        claims, ok = lm._lint_run_and_parse("", str(HERE), timeout=SCAN_TIMEOUT,
+                                            argv=[sg, "scan", "--config", str(HERE / cfg), "--format", "sarif", str(target)])
+    except Exception as e:      # 主程式那支在各種異常輸入下都不該丟,丟了就當跑不起來,不讓自檢噴 traceback
+        return None, f"{type(e).__name__}"
+    if not ok:
+        if time.monotonic() - t0 >= SCAN_TIMEOUT:
+            _TIMED_OUT[0] = True
+        return None, "沒產出閘讀得懂的 SARIF"
+    return {c.get("rule") for c in claims if c.get("file") and c.get("message")}, None
+
+
 def loaded_count(sg, cfg):
     if _TIMED_OUT[0]:
         return (None, None)
@@ -746,7 +776,7 @@ def check(sg):
     problems = []
     rules = load_rules()
     if not rules:
-        problems.append(("<pack>", "一條規則都沒讀到(rules/、rules-review/、rules-hints/ 都是空的?)"))
+        problems.append(("<pack>", "一條規則都沒讀到(rules/、rules-review/、rules-hints/、rules-unwired/ 都是空的?)"))
     ids = [r["id"] for r in rules]
     dup = sorted({i for i in ids if ids.count(i) > 1})
     if dup:
@@ -762,7 +792,21 @@ def check(sg):
             problems.append(("<pack>", f"{cfg} 讀不到載入條數(掃描逾時或 ast-grep 跑不起來)"))
         elif got != want or skipped:
             problems.append(("<pack>", f"{cfg} 載入 {got} 條(略過 {skipped}),規則檔裡有 {want} 個 id"))
-    review_ids = {r["id"] for r in rules if r["dir"] == "rules-review"}
+    by_id = {r["id"]: r for r in rules}
+    for cfg, rid in SARIF_PROBES:
+        want_dir = next(d for d, c in CONFIGS if c == cfg)
+        if by_id.get(rid, {}).get("dir") != want_dir:     # 探針規則改名或搬走時講清楚,不要看起來像 SARIF 壞了(代碼審 r1 邊界 F4)
+            problems.append(("<pack>", f"SARIF 探針的樣本規則 {rid} 不在 {want_dir}/,SARIF_PROBES 要換一條"))
+            continue
+        got, why = sarif_gate_rule_ids(sg, cfg, HERE / "samples" / "bad" / rid)
+        if got is None and why.startswith("lumos:"):
+            problems.append(("<pack>", f"SARIF 自測要載入 scripts/lumos:{why[6:]}"))
+            break
+        if got is None:
+            problems.append(("<pack>", f"SARIF 掃壞例樣本跑不起來({cfg},{rid}:{why})"))
+        elif rid not in got:
+            problems.append(("<pack>", f"SARIF 掃壞例樣本沒有新增告警閘讀得到的 {rid} 結果({cfg})"))
+    review_ids = {r["id"] for r in rules if r["dir"] in ("rules-review", "rules-unwired")}
     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
     hits = {}
     for kind in ("bad", "good"):
@@ -774,7 +818,7 @@ def check(sg):
             for rule_id, f in got:
                 owner = _sample_owner(f, kind)
                 if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
-                    continue      # 語意覆核級規則已知的形狀誤報:記在樣本裡給盲判對照,不算好例誤報
+                    continue      # 語意覆核級或不接閘規則已知的形狀誤報:記在樣本裡、改形狀時對照,不算好例誤報
                 hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
     for r in rules:
         rid = r["id"]

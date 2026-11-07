@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-11-05
-updated: 2026-11-07
+updated: 2026-11-08
 responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
 aliases: []
 about_code:
@@ -12,16 +12,17 @@ about_code:
   - skills/kotlin-idioms/checks-catalog.md
   - configs/ast-grep/kotlin-android/sgconfig-review.yml
   - skills/kotlin-idioms/test-templates.md
+  - configs/ast-grep/kotlin-android/sgconfig-unwired.yml
 tags:
   - type/system
   - status/doing
   - scope/stack-knowledge
 summary: |-
-  WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則只准提示級 [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kotlin_catalog_rows_wired]
+  WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則依據不足、不准擋人 [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kotlin_catalog_rows_wired]
   WHY:規則訊息格式「[型錄編號] 錯在哪;改用 <最短修法>」且不超過 120 字,完整寫法用編號查型錄 [出處:[[Projects/Android協程與API寫法機械檢查標準_計劃]] 設計審 r1] [因:新增告警閘解析 SARIF 截 120 字、擋下訊息也印 120 字] [test:t_kotlin_rulepack_messages_cite_catalog]
   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
-  RULE:規則在真專案誤報超過命中的一成就降提示級或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+  RULE:規則在真專案誤報超過命中的一成就降提示級、搬 rules-unwired/ 或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
   REVISIT:2027-02-05 拿兩個以上新的真 Android 專案再量一次會擋的規則(2026-11-05 只量實驗專案與 nowinandroid 共 30 處命中,多數規則只命中 1–3 處,估不準每條的誤報率)
   SEE:[[Systems/linter精選目錄]] [[Systems/pitfalls-code-loop]]
   PITFALL:規則包測試用 rglob 的第一個檔去改壞,在 Linux 上可能挑到剛放進去的 review-fp 樣本、把它蓋掉,兩條改壞驗證跟著失效(macOS 綠、CI 紅) [出處:2026-11-05 PR #158 合併後主線 CI] [根因:目錄列舉順序依檔案系統而定,APFS 恰好照名稱排、ext4 不是] [修法:照檔名挑或整個目錄都改,不用 next(rglob)] [test:t_kotlin_rulepack_samples]
@@ -42,11 +43,12 @@ summary: |-
   PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
   PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
   PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
-  REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,或把理由改成「零依賴路徑(--sg 自檢)不載主程式」
+  REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,(2026-11-08 起 --sg 自檢的 SARIF 探針也載主程式,「零依賴路徑不載主程式」這個理由已不成立)
   WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
   WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
   WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列(兩條會擋規則找不到官方原文,降不降級待人裁) [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
+  WHY:引用型錄出處不全列的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級,提示級也可能被專案自行宣告接閘),rules-unwired/ 也收還沒在真專案量過誤報的新規則,任何等級 [出處:[[Projects/規則包覆核兩級接新增告警閘_計劃]]] [因:覆核級與提示級將來可能接閘,依據不足的規則要有一個確定不擋的位置] [test:t_kotlin_rulepack_unwired_dir]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
@@ -59,18 +61,19 @@ verified_by:
 ## 檔案
 
 - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
-- `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;每個新增命中之後要由盲判代理逐筆判,接法在 [[Projects/規則包語意覆核級命中走盲判_計劃]],接上前範本不接。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報、要靠盲判排除的寫法,自我檢查不算好例誤報。
-- `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高或依據的型錄列出處不全,範本預設不接。
-- `rules/`、`rules-review/`、`rules-hints/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
-- `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems)。
+- `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本還沒接;接不接(覆核級有已知誤報樣本,使用者 d5 與上面誤報一成 RULE 相撞)見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
+- `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高,範本預設不接。
+- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):引用型錄出處不全列的規則(2026-11-08 從 `rules-hints/` 拆來 8 條),與還沒在真專案量過誤報的新規則;範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+- `rules/`、`rules-review/`、`rules-hints/`、`rules-unwired/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
+- `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems);`--sg` 完整模式另用新增告警閘的 SARIF 解析掃兩條指定規則的壞例(SARIF 探針 `sarif_gate_rule_ids`)。
 - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。
 - `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C 的列有 60 列(T0–T5 純 JVM,T6–T13 要 Android 模組、Robolectric 或模擬器)通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本的骨架節重跑那一組(T0–T5 照〈實驗專案骨架〉,T6–T13 照〈Android 實驗專案骨架〉)、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]](T6–T13 補進 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]])。
 
-自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(只有情境題證據樣式自測用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
+自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(情境題證據樣式自測與 SARIF 探針用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式與新增告警閘的 SARIF 解析;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
 
 ## 怎麼改
 
-1. 改規則或加規則:同時補樣本,跑 `python3 configs/ast-grep/kotlin-android/check.py --sg <ast-grep>` 到 0 個問題。新規則一律先放語意覆核級(`rules-review/`),對真專案量過誤報低於一成才升到會擋的 `rules/`;審查中被點出形狀分不出對錯的,不再放寬形狀,直接留在覆核級(代碼審跑滿回顧,卷證 `governance/review-reports/code-kotlin規則包/cap-retro.json`:三輪的最大宗都是放寬形狀又帶出新誤報)。
+1. 改規則或加規則:同時補樣本,跑 `python3 configs/ast-grep/kotlin-android/check.py --sg <ast-grep>` 到 0 個問題。新規則一律先放語意覆核級(`rules-review/`)或不接閘的 `rules-unwired/`,對真專案量過誤報低於一成才升到會擋的 `rules/`;審查中被點出形狀分不出對錯的,不再放寬形狀,直接留在覆核級(代碼審跑滿回顧,卷證 `governance/review-reports/code-kotlin規則包/cap-retro.json`:三輪的最大宗都是放寬形狀又帶出新誤報)。
 2. 改型錄:跑 `--catalog-only`(連證據樣式自測一起跑,會載入旁邊的 scripts/lumos;改了某列的證據樣式就同時改 `samples/situation/<列編號>.kt.txt` 的正反例,到 0 個問題);新寫的標準寫法一定附真的打開讀過的官方網址,查不到就在名稱標「(出處不全)」。
 3. 決策表觸發字不准收常用字(停用字表在 check.py 的 `STOP_TRIGGERS`);第二批改檔前推列與第三批情境題靠它不吵。情境沒有不常見的字面特徵時觸發字寫「(無)」(全形半形括號都認),`dt_triggers` 解析成空清單、不出情境段;「(無)」跟別的觸發字並列、或格子空白,自我檢查都會報。第二、三批讀觸發字要走 `dt_triggers`,不要自己拆格子,不然「(無)」會被當成一個字去比對。
 4. 有消費專案或範例專案時,拿會擋的規則對整份原始碼跑一次,逐條判真假;誤報超過一成照上面那條規則處理,結果寫回型錄的「實測狀態」欄。

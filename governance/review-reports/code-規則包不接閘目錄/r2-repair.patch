@@ -1,0 +1,419 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index dbf5fc9b2..501d2f7cd 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -56,21 +56,21 @@ def _files_block_is_test_only(doc):
+     # 先去掉註解(整行與行尾):註解裡提到 src/main 不算 files 區塊的內容,頂格註解也不該把區塊截斷
+     doc = "\n".join(_strip_yaml_comment(ln) for ln in doc.splitlines())
+     m = re.search(r"^files:(.*?)(?=^[A-Za-z_\"'][^\n]*:)", doc + "\nzz:", re.M | re.S)
+     if not m:
+         return False
+     block = m.group(1)
+     return bool(re.search(r"src/(test|androidTest|testFixtures)", block)) and "src/main" not in block
+ 
+ 
+ def load_rules():
+-    """讀三個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
++    """讀四個規則目錄 → [{id, severity, message, dir, file}];同一檔多份文件以 --- 分隔。"""
+     rules = []
+     for d, cfg in CONFIGS:
+         for f in sorted((HERE / d).glob("*.yml")):
+             for doc in re.split(r"^---\s*$", f.read_text(encoding="utf-8"), flags=re.M):
+                 m = re.search(r"^id:\s*(\S+)", doc, re.M)
+                 if not m:
+                     continue
+                 sev = re.search(r"^severity:\s*(\S+)", doc, re.M)
+                 msg = re.search(r"^message:\s*(.+)$", doc, re.M)
+                 text = msg.group(1).strip() if msg else ""
+@@ -706,39 +706,41 @@ def scan(sg, cfg, target):
+                 return None   # 輸出讀不懂就當這次掃描跑不起來,由呼叫端報「跑不起來」,不噴 traceback
+ 
+     return out
+ 
+ 
+ # 規則包 SARIF 輸出的自檢(Projects/規則包覆核兩級接新增告警閘_計劃 做 3):新增告警閘讀的是 SARIF,覆核與提示級在 SARIF 裡是 note;
+ # 各拿一條規則的壞例樣本用它自己目錄的設定掃,結果裡要有那條規則,換 ast-grep 版本時工具鏈 CI 會紅
+ SARIF_PROBES = (("sgconfig-review.yml", "kt-livedata-setvalue-background"), ("sgconfig-hints.yml", "kt-value-assign-background"))
+ 
+ 
+-def sarif_rule_ids(sg, cfg, target):
+-    """用 SARIF 格式掃一次 → 結果裡的 ruleId 集合;跑不起來、逾時或讀不懂回 None(不丟例外,共用 _TIMED_OUT)。"""
++def sarif_gate_rule_ids(sg, cfg, target):
++    """用新增告警閘讀 SARIF 的同一支 scripts/lumos `_lint_run_and_parse` 掃一次 → (閘讀得到的 ruleId 集合, 原因)。
++    閘讀 SARIF 時要工具名、每筆的檔案位置與訊息,缺一個就靜默略過那筆(代碼審 r1 通才 F1:只看 ruleId 的話,
++    換版本拿掉位置時探針照綠、閘卻讀到零筆);借同一支,閘讀得到才算有。跑不起來、逾時、主程式載不進來回 (None, 原因),不丟例外。"""
++    import time
+     if _TIMED_OUT[0]:
+-        return None
+-    try:
+-        r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--format", "sarif", str(target)],
+-                           capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
+-    except subprocess.TimeoutExpired:
+-        _TIMED_OUT[0] = True
+-        return None
+-    except OSError:
+-        return None
+-    if r.returncode not in (0, 1):
+-        return None
++        return None, "之前已逾時"
++    lm, why = load_lumos()
++    if lm is None:
++        return None, "lumos:" + why     # 呼叫端認這個前綴、另報一句,跟情境題證據樣式自測的寫法一樣
++    t0 = time.monotonic()
+     try:
+-        runs = json.loads(r.stdout).get("runs") or []
+-        return {res.get("ruleId") for run in runs for res in (run.get("results") or []) if isinstance(res, dict)}
+-    except (ValueError, AttributeError, TypeError):
+-        return None
++        claims, ok = lm._lint_run_and_parse("", str(HERE), timeout=SCAN_TIMEOUT,
++                                            argv=[sg, "scan", "--config", str(HERE / cfg), "--format", "sarif", str(target)])
++    except Exception as e:      # 主程式那支在各種異常輸入下都不該丟,丟了就當跑不起來,不讓自檢噴 traceback
++        return None, f"{type(e).__name__}"
++    if not ok:
++        if time.monotonic() - t0 >= SCAN_TIMEOUT:
++            _TIMED_OUT[0] = True
++        return None, "沒產出閘讀得懂的 SARIF"
++    return {c.get("rule") for c in claims if c.get("file") and c.get("message")}, None
+ 
+ 
+ def loaded_count(sg, cfg):
+     if _TIMED_OUT[0]:
+         return (None, None)
+     try:
+         r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--inspect", "summary", str(HERE / "samples" / "good")],
+                            capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
+     except subprocess.TimeoutExpired:
+         _TIMED_OUT[0] = True
+@@ -783,26 +785,34 @@ def check(sg):
+     problems += message_problems(rules, cat_ids)
+     problems += catalog_problems(rules)
+     problems += situation_sample_problems()
+     for d, cfg in CONFIGS:
+         want = sum(1 for r in rules if r["dir"] == d)
+         got, skipped = loaded_count(sg, cfg)
+         if got is None:
+             problems.append(("<pack>", f"{cfg} 讀不到載入條數(掃描逾時或 ast-grep 跑不起來)"))
+         elif got != want or skipped:
+             problems.append(("<pack>", f"{cfg} 載入 {got} 條(略過 {skipped}),規則檔裡有 {want} 個 id"))
++    by_id = {r["id"]: r for r in rules}
+     for cfg, rid in SARIF_PROBES:
+-        got = sarif_rule_ids(sg, cfg, HERE / "samples" / "bad" / rid)
++        want_dir = next(d for d, c in CONFIGS if c == cfg)
++        if by_id.get(rid, {}).get("dir") != want_dir:     # 探針規則改名或搬走時講清楚,不要看起來像 SARIF 壞了(代碼審 r1 邊界 F4)
++            problems.append(("<pack>", f"SARIF 探針的樣本規則 {rid} 不在 {want_dir}/,SARIF_PROBES 要換一條"))
++            continue
++        got, why = sarif_gate_rule_ids(sg, cfg, HERE / "samples" / "bad" / rid)
++        if got is None and why.startswith("lumos:"):
++            problems.append(("<pack>", f"SARIF 自測要載入 scripts/lumos:{why[6:]}"))
++            break
+         if got is None:
+-            problems.append(("<pack>", f"SARIF 掃壞例樣本跑不起來({cfg},{rid})"))
++            problems.append(("<pack>", f"SARIF 掃壞例樣本跑不起來({cfg},{rid}:{why})"))
+         elif rid not in got:
+-            problems.append(("<pack>", f"SARIF 掃壞例樣本沒有 {rid} 的結果({cfg})"))
++            problems.append(("<pack>", f"SARIF 掃壞例樣本沒有新增告警閘讀得到的 {rid} 結果({cfg})"))
+     review_ids = {r["id"] for r in rules if r["dir"] in ("rules-review", "rules-unwired")}
+     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
+     hits = {}
+     for kind in ("bad", "good"):
+         for _d, cfg in CONFIGS:
+             got = scan(sg, cfg, HERE / "samples" / kind)
+             if got is None:
+                 problems.append(("<pack>", f"{cfg} 掃 samples/{kind} 跑不起來"))
+                 continue
+             for rule_id, f in got:
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/.gitkeep b/configs/ast-grep/kotlin-android/rules-unwired/.gitkeep
+new file mode 100644
+index 000000000..e69de29bb
+diff --git a/docs/lumos-toolchain-knowledge/Projects/規則包覆核兩級接新增告警閘_計劃.md b/docs/lumos-toolchain-knowledge/Projects/規則包覆核兩級接新增告警閘_計劃.md
+index 72b9fb310..dcc53a247 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/規則包覆核兩級接新增告警閘_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/規則包覆核兩級接新增告警閘_計劃.md
+@@ -48,26 +48,26 @@ RETIRE-IF: 〈待人裁〉那題結果是「覆核兩級都不接」而且八週
+ ## 範圍
+ 
+ ### 做
+ 
+ 1. **不接閘的目錄 `rules-unwired/`**:新增 `rules-unwired/` 與只載它的 `sgconfig-unwired.yml`,範本不宣告它。它收「依據還不夠擋人」的規則:(a) 引用型錄「出處不全」列的規則;(b) 還沒在真專案量過誤報的新規則。2026-11-08 主線上 (a) 有 8 條,用型錄自檢的讀表函式數出:API-36、ARCH-3、UI-103、CO-37、FLOW-14、STATE-9、TEST-16、TEST-33 這 8 列各掛一條,分散在 `rules-hints/` 的 7 支檔裡(每支同檔還有 4 到 6 條有出處的規則),所以是拆檔:照 `---` 切出那幾條,搬到 `rules-unwired/` 的同名主題檔,原檔留下其餘規則;壞例、好例樣本以規則 id 分目錄,不用搬。搬完 `sgconfig-hints.yml` 載入 42 條、`sgconfig-unwired.yml` 載入 8 條。
+ 2. **型錄自檢跟著改**:`configs/ast-grep/kotlin-android/check.py` 的 `CONFIGS` 加第四組;`_DIR_SEVERITY` 給 `rules-unwired` 四個等級全集 `("error", "warning", "info", "hint")`(不另寫跳過檢查的特判,前一道「等級只能是這四種」照舊);「引用出處不全的列只准 hint 級」那條檢查改成「只准放在 `rules-unwired/`」(放在 `rules/`、`rules-review/`、`rules-hints/` 任一個都報,原因句照既有二元組:「引用出處不全的 <列>,只准放 rules-unwired/」),讀規則所在目錄用 `r.get("dir")`(既有測試的假規則沒有這個鍵,缺鍵照「不在 unwired」算)。另外兩句寫死三個目錄的訊息(嚴重度與目錄不符那句、「一條規則都沒讀到」那句)補第四個目錄。好例檢查「已知誤報樣本不算好例誤報」對 `rules-review/` 與 `rules-unwired/` 生效(擴 `review_ids`)。`scripts/test_lumos.py` 的 `t_kotlin_rulepack_samples` 裡「規則目錄全空」那段迴圈把第四個目錄加進去(改測試檔要簽名)。
+ 3. **SARIF 自檢**(設計審 r1、r2 整合席實測 ast-grep 0.51.1:覆核級與提示級在 SARIF 都有輸出、level 是 note、新增告警閘照收):型錄自檢的完整模式多一項,用 `sgconfig-review.yml` 掃 `kt-livedata-setvalue-background`(`rules-review/state.yml`)的壞例樣本、用 `sgconfig-hints.yml` 掃 `kt-value-assign-background`(`rules-hints/state.yml`)的壞例樣本,格式 `--format sarif`,結果裡要各有一筆 `ruleId` 是那條規則;沒有就報「SARIF 掃壞例樣本沒有 <規則> 的結果」,輸出讀不懂報「SARIF 掃壞例樣本跑不起來」(兩句都含「樣本」,`t_kotlin_rulepack_samples` 只留含「壞例、好例、樣本、載入、祖先」的問題);掃描共用既有的逾時旗標、不丟例外。這一項先把「覆核兩級將來接閘時 SARIF 有輸出」釘住,換 ast-grep 版本時工具鏈 CI 會紅。
+ 4. **文字同步**:
+    - `skills/kotlin-idioms/checks-catalog.md`:出處不全那 8 列的通電批次格改成既有值「未接」並註明「規則在 rules-unwired/」;第 11 行定義加一句「規則在 `rules-unwired/` 的列寫未接」(r3 正確性席說 STATE-9 格裡的 `kt-statein-lazily-or-no-timeout` 不存在,實作時查證它在 `rules/state.yml`、掛 STATE-4,那格是兩條規則的實測紀錄,照舊不改)。覆核級與其餘提示級的格子不動(擋停沒變);指向前案的那句改指本計劃。
+    - `configs/ast-grep/kotlin-android/check.py` 開頭三級說明補第四級;`REVIEW_FP_PREFIX` 與好例檢查兩處講前案盲判的註解改成「已知誤報樣本,改規則形狀時對照」。
+-   - [[Systems/kotlin規則包]]:「查不到的列標(出處不全),引用它的規則只准提示級」那條 WHY 改成「只准放 rules-unwired/」,`[test:]` 改掛 `t_kt_rulepack_unwired_dir`;「誤報超過一成就降提示級或改形狀」那條 RULE 改成「降提示級、搬 rules-unwired/ 或改形狀」並重新 `[confirmed:]`;檔案節分檔那行補第四個目錄、補一行 `sgconfig-unwired.yml`,`sgconfig-review.yml` 那行指向前案的半句改指本計劃。
++   - [[Systems/kotlin規則包]]:「查不到的列標(出處不全),引用它的規則只准提示級」那條 WHY 改成「只准放 rules-unwired/」,`[test:]` 改掛 `t_kotlin_rulepack_unwired_dir`;「誤報超過一成就降提示級或改形狀」那條 RULE 改成「降提示級、搬 rules-unwired/ 或改形狀」並重新 `[confirmed:]`;檔案節分檔那行補第四個目錄、補一行 `sgconfig-unwired.yml`,`sgconfig-review.yml` 那行指向前案的半句改指本計劃。
+    - 其他計劃:[[Projects/Android協程與API寫法機械檢查標準_計劃]] 條款 [S2](綁 `t_kotlin_rulepack_messages_cite_catalog`,寫「應 是提示級」)與第 126 行、[[Projects/Android寫法型錄逐列查證_計劃]] 第 36、48 行「應降到 rules-hints/」改成「應 放 rules-unwired/」(已實作的計劃改條款只改字面、測試意圖不變,在各自審計修正紀錄寫一行);[[Projects/Android寫法語意情境表態與盲判_計劃]] 指向前案那句改指本計劃;[[Issues/Kotlin規則包代碼審放行的小問題]] 的 REVISIT「規則誤報就改規則或搬語意覆核級」補「或搬 rules-unwired/」。
+ 
+ ### 不做
+ 
+-- 不改任何擋停:範本不新增宣告、收工白名單不改、新增告警閘與分級都不動(理由見〈待人裁〉;設計審 r3 整合席指出覆核級本身有已知誤報樣本,接閘會撞上規則包那條誤報一成 RULE,跟使用者 d5 衝突)。
++- 不收緊任何擋停:範本不新增宣告、收工白名單不改、新增告警閘與分級都不動(唯一的行為差異是放寬:自行宣告了提示級設定的專案少擋 8 條依據不足的規則)(理由見〈待人裁〉;設計審 r3 整合席指出覆核級本身有已知誤報樣本,接閘會撞上規則包那條誤報一成 RULE,跟使用者 d5 衝突)。
+ - 不做表態題、盲判抽查、人複查、推翻、另開宣告檔(前案三版的機制,整組不要)。
+ - 不做誤報抽查與誤報樣本回流(前案 d6):另開計劃。
+ - 不替出處不全的 8 條補出處(型錄逐列查證那條線)。
+ 
+ ## 待人裁
+ 
+ - **覆核級(與提示級)要不要接上新增告警閘**:使用者 d5(2026-11-07)要「每筆新命中都要作者交代、沒交代就擋」;規則包 RULE「規則在真專案誤報超過命中的一成就降提示級或改形狀」(2026-11-05 確認,欄位齊全,有效力)要誤報高的規則不擋人。覆核級的定義就是形狀分不出對錯,好例樣本裡已記錄 12 份已知誤報。兩條都有效力、判不出誰讓,照專案 CLAUDE.md「判不出來:兩邊都不改,在結果裡明講」這一版不接。可選的路:(a) 照 d5 接覆核級,作者用 lint-waive 附理由放行,RULE 改成「誤報高的規則仍擋、但放行要理由」;(b) 照 RULE 先在實驗專案量誤報,一成以下的才接;(c) 只接沒有已知誤報樣本的覆核級規則。
+ - 接閘時要一起做的(設計審 r1–r3 已審過的形狀,記在這裡免得重來):範本加宣告、收工檢查只准會擋的那份(用函式內的 `root` 算路徑、`os.path.samefile` 丟 OSError 一律判不是同一支、大小寫寫錯的照既有目錄規則不通過)、範本說明預算耗盡會擋、上線前量測。
+ 
+ ## 實務隱患
+@@ -86,21 +86,21 @@ REVISIT:2026-12-08 看〈待人裁〉那題結了沒;結了就照結果開接閘
+ | 機制 | 依據 | 出處 |
+ |---|---|---|
+ | 依據不足的規則不准擋人 | 規則包既有 WHY 與 RULE | [[Systems/kotlin規則包]] 的 WHY「查不到的列標(出處不全),引用它的規則只准提示級」、RULE「規則在真專案誤報超過命中的一成就降提示級或改形狀」 |
+ | 新規則先試水溫 | Semgrep 規則模式(Monitor/Comment/Block) | https://semgrep.dev/docs/semgrep-code/policies |
+ | 判不出來兩邊都不改 | 專案 CLAUDE.md〈怎麼用〉第 3 條 | `CLAUDE.md` |
+ | 覆核級與提示級在 SARIF 有輸出 | 實測 | 實測 2026-11-08:設計審 r1、r2 整合席在臨時目錄裝 ast-grep 0.51.1 實掃與端到端實跑;實作時在 scratchpad 虛擬環境裝同版跑 `-k rulepack` 全綠(卷證 `governance/review-reports/規則包覆核兩級接新增告警閘/r2-整合-sonnet.md`) |
+ | 改用既有閘重寫 | 使用者裁定 | 使用者 2026-11-08:「語意覆核照計畫重寫」 |
+ 
+ ## 驗收條款
+ 
+-- [S1] 當型錄自檢讀規則包時,引用出處不全列的規則放在 `rules/`、`rules-review/` 或 `rules-hints/` 任一個 應 報問題;放在 `rules-unwired/`(任何等級) 應 不報;真實規則包 應 0 個問題 [test:t_kt_rulepack_unwired_dir]
++- [S1] 當型錄自檢讀規則包時,引用出處不全列的規則放在 `rules/`、`rules-review/` 或 `rules-hints/` 任一個 應 報問題;放在 `rules-unwired/`(任何等級) 應 不報;真實規則包 應 0 個問題 [test:t_kotlin_rulepack_unwired_dir]
+ - [S2] 當型錄自檢的完整模式跑時,兩條指定規則的壞例樣本用 SARIF 格式掃 應 各有一筆 ruleId 是那條規則的結果;沒有或讀不懂 應 報一個含「樣本」的問題 [test:t_kotlin_rulepack_samples]
+ 
+ ## 預期值表
+ 
+ | 條款 | 輸入 | 預期 | 來源 |
+ |---|---|---|---|
+ | S1 | 一條引用出處不全列的 hint 規則放在 `rules-hints/` | 報問題 | 範圍做 2:出處不全只准不接閘的目錄 |
+ | S1 | 同一條放在 `rules-review/` | 報問題 | 範圍做 2:出處不全只准不接閘的目錄 |
+ | S1 | 同一條放在 `rules-unwired/`、warning 級 | 不報 | 範圍做 1、2:不接閘目錄不限等級 |
+ | S1 | 假規則沒有 dir 鍵、引用出處不全列 | 報問題 | 範圍做 2:缺鍵照不在 unwired 算 |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 0af1ed671..efeb242f1 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -5,30 +5,31 @@ created: 2026-11-05
+ updated: 2026-11-08
+ responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
+ aliases: []
+ about_code:
+   - configs/ast-grep/kotlin-android/check.py
+   - configs/ast-grep/kotlin-android/sgconfig.yml
+   - configs/ast-grep/kotlin-android/sgconfig-hints.yml
+   - skills/kotlin-idioms/checks-catalog.md
+   - configs/ast-grep/kotlin-android/sgconfig-review.yml
+   - skills/kotlin-idioms/test-templates.md
++  - configs/ast-grep/kotlin-android/sgconfig-unwired.yml
+ tags:
+   - type/system
+   - status/doing
+   - scope/stack-knowledge
+ summary: |-
+-  WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級) [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kt_rulepack_unwired_dir]
++  WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則依據不足、不准擋人 [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kotlin_catalog_rows_wired]
+   WHY:規則訊息格式「[型錄編號] 錯在哪;改用 <最短修法>」且不超過 120 字,完整寫法用編號查型錄 [出處:[[Projects/Android協程與API寫法機械檢查標準_計劃]] 設計審 r1] [因:新增告警閘解析 SARIF 截 120 字、擋下訊息也印 120 字] [test:t_kotlin_rulepack_messages_cite_catalog]
+   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
+   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
+-  RULE:規則在真專案誤報超過命中的一成就降提示級、搬 rules-unwired/ 或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-08] [查:Google Tricorder「沒用的告警壓在一成以下」]
++  RULE:規則在真專案誤報超過命中的一成就降提示級、搬 rules-unwired/ 或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+   REVISIT:2027-02-05 拿兩個以上新的真 Android 專案再量一次會擋的規則(2026-11-05 只量實驗專案與 nowinandroid 共 30 處命中,多數規則只命中 1–3 處,估不準每條的誤報率)
+   SEE:[[Systems/linter精選目錄]] [[Systems/pitfalls-code-loop]]
+   PITFALL:規則包測試用 rglob 的第一個檔去改壞,在 Linux 上可能挑到剛放進去的 review-fp 樣本、把它蓋掉,兩條改壞驗證跟著失效(macOS 綠、CI 紅) [出處:2026-11-05 PR #158 合併後主線 CI] [根因:目錄列舉順序依檔案系統而定,APFS 恰好照名稱排、ext4 不是] [修法:照檔名挑或整個目錄都改,不用 next(rglob)] [test:t_kotlin_rulepack_samples]
+   WHY:型錄〈情境決策表〉加「證據樣式」欄(主與例外兩段,各是(無)或一到三條正規式,照那一列標準寫法與不適用時的字面特徵推,不另立寫法);格式檢查改依表頭名稱取欄,另驗證據樣式能編譯、條數對、停用列的觸發字與證據樣式都是(無),列編號連號照舊 [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 1] [因:推送前情境題要拿樣式核表態指的那一行] [test:t_kt_catalog_evidence_patterns]
+   WHY:決策表的讀法只有 check.py 的 dt_table/dt_row 一套(依表頭取欄、停用列不讀觸發字與證據樣式、標了換列的列例外一定要是(無)),scripts/lumos 用 importlib 借用;換列的列認「不適用時」格子裡出現的(換列)標記(格子任何位置都算),不從「見下一列」這類中文用語推 [出處:代碼審 code-android情境題與表態對程式 r1 D7、D10] [因:原本 lumos 與 check.py 各寫一套讀表、必有欄已經分歧(6 欄對 8 欄),換列靠中文字樣推、改個說法就悄悄變成可選例外] [test:t_kt_situation_catalog_single_reader]
+   WHY:每列證據樣式附正例與反例(samples/situation/<列編號>.kt.txt,副檔名不是 .kt 免得推送閘把教材當產品碼),自檢經 scripts/lumos 真的切段與核對程式跑:正例要有一行對得上、反例要每一行都對不上(推送前對不上只提醒,自測守的是樣式本身沒壞,代碼審 r2)、樣本要切得出含那一列的段,反例要碰得到樣式真正在管的地方(順序、型別參數,r2 邊界 F12);壞寫法跟標準寫法只差在語意時那一段寫(無)交盲判 [出處:代碼審 r1 D1;ast-grep test 的 valid/invalid https://ast-grep.github.io/guide/test-rule.html ;Semgrep 的 ok/ruleid https://docs.semgrep.dev/writing-rules/testing-rules ] [因:人逐列寫的樣式在 56 列裡有 9 列擋掉型錄自己的標準寫法或放過對應的壞寫法] [不選:靠人逐列看] [test:t_kt_situation_evidence_samples]
+   WHY:自檢程式的 dt_table 讀表那一輪順手帶出處(每列多 source 來源格、refs 展開後的網址、check_refs 對應檢查在型錄主表的名稱與來源與網址,縮寫照〈來源縮寫〉表展開;縮寫表讀法 _abbr_table 與比對 _abbr_hit 跟 catalog_problems 共用一套;縮寫表那兩支檔內輔助用底線開頭(代碼審 code-android情境題盲判 r2 戊);情境證據樣本的 situation_dir、situation_samples、load_lumos 沒加底線),lumos 從列上取出處給盲判材料;主表或縮寫表找不到時那幾格留空不報錯(讀得懂讀不懂歸 dt_table 與 catalog_problems) [出處:2026-11-06 [[Projects/Android寫法語意情境表態與盲判_計劃]] 範圍 4;使用者 2026-11-05 第 3 要點(來源與依據在語意盲判時輔助判別)] [因:讀表只留一套,出處也從同一輪讀(代碼審 code-android情境題盲判 r1 架構對齊 F6:原本另有 dt_sources 再走一輪決策表、縮寫比對的正規式寫了三處)] [不選:lumos 自己再寫一套讀主表;另一支 dt_sources 再走一輪] [test:t_kt_catalog_sources_in_rows] [test:t_blind_judge_template_excludes_dispositions] [test:t_kt_catalog_private_helpers]
+   WHY:型錄第四批通電批次照固定口徑判(切段、認規則碼、排除待查、預設關、相近、opt-in 與官方預設關的六條),由型錄自檢 check.py 的 batch4_expected_tags 逐列重算比對(代碼審 r1 架構席:口徑只住一處) [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:兩席指出 compose-rules 預設關的三條會被標成已接電,實際沒在跑] [不選:一次性腳本改完就算(沒有守衛,下次改型錄就漂)] [test:t_kt_catalog_batch4_wiring]
+   WHY:型錄 C 列的行為測試範本放 skills/kotlin-idioms/test-templates.md,型錄通電批次欄寫「行為測試或正向約束=範本 T<n>」指過去,自我檢查 template_problems 只驗那一節存在(範本內容對不對靠實驗與驗證紀錄) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 設計審 r1] [因:沿用既有欄位,不另造認領語法;範本紅綠要 Gradle 才跑得出,本 repo CI 不跑 Gradle] [不選:check.py --lab 產生實驗專案(自檢是唯讀職責)] [test:t_kotlin_test_templates_sections]
+   PITFALL:Turbine 自己的檢查(awaitComplete、awaitError、expectNoEvents、區塊結束的 Unconsumed events)失敗丟 app.cash.turbine.TurbineAssertionError,收證工具 assertion_failure 照型別名判、不算斷言失敗,範本照抄會讓壞寫法的紅不被收證認 [出處:2026-11-06 範本紅綠矩陣實跑 T0 兩格] [根因:assertion_failure 只認型別名以 AssertionError 等結尾且前面是點,Turbine 的類別名是 TurbineAssertionError] [修法:範本改用 awaitEvent() 或 cancelAndConsumeRemainingEvents() 取事件再 assertEquals] [repro:skills/kotlin-idioms/test-templates.md T0〈測試〉×〈壞寫法:TEST-18 Saved 多發一次〉改回 awaitComplete() 跑 Gradle]
+@@ -40,33 +41,34 @@ summary: |-
+   PITFALL:ArchUnit 凍結清單只設 allowStoreCreation=false 時,加一支用 FreezingArchRule 包的新規則或改既有規則的描述,會把當下違規靜默存成新的一份、測試綠(改描述時連同時新加的違規一起凍結) [出處:代碼審 code-android儀器測試範本 r1 範本丙 F1;驗證紀錄 E13 實跑] [根因:清單以規則描述當鍵,allowStoreCreation 只管索引檔 stored.rules 整份不見,不在索引裡的規則 FreezingArchRule.evaluate 直接存檔回成功,allowStoreUpdate 預設 true] [修法:範本 T12 的 archunit.properties 加 allowStoreUpdate=false,-ParchunitFreezeInit 同時打開建立與更新;代價是修掉舊違規也要帶屬性跑一次] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本內容守衛只比對「整節有沒有這串字」時,散文也寫了同一串設定,把 properties 圍欄裡的設定行改成 true 或刪掉,守衛照綠 [出處:代碼審 code-android儀器測試範本 r1 測試 F1 翻紅實驗] [根因:_kt_instr_template_problems 對 T12 只做整節子字串比對] [修法:只在 T12 的 properties 與 kotlin 圍欄裡比對整行 key=value 與 systemProperty 行;改壞只改程式行] [同族:t_kotlin_catalog_instrumented_batch_notes 的改壞只比對舊字串本身(測試 F3),已改成拿改壞資料跑同一組判準 _kt_ui39_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+   REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,或把理由改成「零依賴路徑(--sg 自檢)不載主程式」
+   WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
+   WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
+   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
+   WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列(兩條會擋規則找不到官方原文,降不降級待人裁) [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
++  WHY:引用型錄出處不全列的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級,提示級也可能被專案自行宣告接閘),rules-unwired/ 也收還沒在真專案量過誤報的新規則,任何等級 [出處:[[Projects/規則包覆核兩級接新增告警閘_計劃]]] [因:覆核級與提示級將來可能接閘,依據不足的規則要有一個確定不擋的位置] [test:t_kotlin_rulepack_unwired_dir]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+ - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+-- `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本還沒接;接不接(覆核級有已知誤報樣本,使用者 d5 與上面誤報一成 RULE 相撞)見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報、要靠盲判排除的寫法,自我檢查不算好例誤報。
++- `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本還沒接;接不接(覆核級有已知誤報樣本,使用者 d5 與上面誤報一成 RULE 相撞)見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 待人裁。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
+ - `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高,範本預設不接。
+ - `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):引用型錄出處不全列的規則(2026-11-08 從 `rules-hints/` 拆來 8 條),與還沒在真專案量過誤報的新規則;範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+ - `rules/`、`rules-review/`、`rules-hints/`、`rules-unwired/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
+ - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems)。
+ - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。
+ - `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C 的列有 60 列(T0–T5 純 JVM,T6–T13 要 Android 模組、Robolectric 或模擬器)通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本的骨架節重跑那一組(T0–T5 照〈實驗專案骨架〉,T6–T13 照〈Android 實驗專案骨架〉)、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]](T6–T13 補進 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]])。
+ 
+ 自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(只有情境題證據樣式自測用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
+ 
+ ## 怎麼改
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 352274790..553422f83 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126338,20 +126338,21 @@ def _ktpack_sg():
+ def _ktpack_edit(path, old, new):
+     t = Path(path).read_text(encoding="utf-8")
+     assert old in t, f"{path} 找不到要改的字:{old[:40]}"
+     Path(path).write_text(t.replace(old, new, 1), encoding="utf-8")
+ 
+ 
+ def t_kotlin_rulepack_samples():
+     """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
+     只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""
+     import shlex as _shlex
++    import shutil
+     sg = _ktpack_sg()
+     m = _ktpack()
+     # files: 區塊判讀(不需要 ast-grep;代碼審 r3 正確性席):頂格清單要認得、頂格註解不算區塊內容
+     top_list = "id: x\nfiles:\n- '**/src/test*/**'\nrule:\n  pattern: a\n"
+     top_cmt = "id: x\nfiles:\n  - '**/src/test*/**'\n# 不掃 src/main\nrule:\n  pattern: a\n"
+     check("★改壞★ files 頂格清單也算只掃測試碼", m._files_block_is_test_only(top_list) is True, "")
+     check("★改壞★ files 區塊後面的頂格註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(top_cmt) is True, "")
+     inline = "id: x\nfiles:\n  - '**/src/test*/**'   # 不含 src/main\nrule:\n  pattern: a\n"
+     check("★改壞★ files 清單項目的行尾註解(提到 src/main)不算區塊內容", m._files_block_is_test_only(inline) is True, "")
+     check("★對照★ 引號裡的 # 不是註解,後面的 src/main 照算",
+@@ -126447,46 +126448,59 @@ def t_kotlin_rulepack_samples():
+     junk.write_text("#!/bin/sh\ncase \"$*\" in *--inspect*) exec " + _shlex.quote(sg) + " \"$@\";; esac\necho 'not json'\nexit 1\n", encoding="utf-8")
+     junk.chmod(0o755)
+     try:
+         _r, cp = mj.check(str(junk))
+         ok = any("跑不起來" in b for _a, b in cp)
+     except Exception as e:      # 要驗的就是不噴例外,所以接住任何例外
+         ok, cp = False, [("exc", repr(e))]
+     check("★改壞★ ast-grep 輸出不是 JSON 時報跑不起來、不噴例外", ok, str(cp[:3]))
+     # SARIF 自檢(Projects/規則包覆核兩級接新增告警閘_計劃 S2):SARIF 掃出別條規則或讀不懂,都要報含「樣本」的問題,
+     # 不然上面 sample_probs 的篩選會把它濾掉、換 ast-grep 版本時 CI 照綠
+-    for tag, body in (("空結果", "echo '{\"runs\":[{\"results\":[{\"ruleId\":\"kt-other\"}]}]}'; exit 0"),
++    _loc = ('{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\"x.kt\"},\"region\":{\"startLine\":1}}}')
++    _drv = '\"tool\":{\"driver\":{\"name\":\"ast-grep\"}}'
++    for tag, body in (("別條規則", "echo '{\"runs\":[{" + _drv + ",\"results\":[{\"ruleId\":\"kt-other\",\"message\":{\"text\":\"m\"},\"locations\":[" + _loc + "]}]}]}'; exit 0"),
++                      ("規則對但沒有檔案位置(閘會靜默略過)", "echo '{\"runs\":[{" + _drv + ",\"results\":[{\"ruleId\":\"kt-livedata-setvalue-background\",\"message\":{\"text\":\"m\"}},{\"ruleId\":\"kt-value-assign-background\",\"message\":{\"text\":\"m\"}}]}]}'; exit 0"),
+                       ("讀不懂", "echo 'not json'; exit 0")):
+-        msx = _ktpack(copy=True)
++        msx = _ktpack()      # 假 ast-grep 不改檔,用真的規則包(複本沒帶 scripts/lumos,SARIF 探針借不到閘的解析函式)
+         fake = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+         fake.write_text("#!/bin/sh\ncase \"$*\" in *\"--format sarif\"*) " + body + ";; esac\nexec " + _shlex.quote(sg) + " \"$@\"\n",
+                         encoding="utf-8")
+         fake.chmod(0o755)
+         _r, cp = msx.check(str(fake))
+         hit = [b for _a, b in cp if "SARIF" in b]
+         check(f"★改壞★ SARIF {tag}要報、原因句含「樣本」(才不會被篩掉)",
+               len(hit) == 2 and all("樣本" in b for b in hit), str(hit[:3]))
++        shutil.rmtree(str(fake.parent), ignore_errors=True)
++    # 不接閘目錄的規則也有已知誤報樣本可放(代碼審 r1 正確性 F1、通才 F3:review_ids 擴到 rules-unwired 那條沒人守)
++    mu = _ktpack(copy=True)
++    _uid = next(r["id"] for r in mu.load_rules() if r["dir"] == "rules-unwired")
++    _ubad = next((mu.HERE / "samples" / "bad" / _uid).rglob("*.kt"))
++    _ugood = mu.HERE / "samples" / "good" / _uid / _ubad.relative_to(mu.HERE / "samples" / "bad" / _uid).parent
++    _ugood.mkdir(parents=True, exist_ok=True)
++    (_ugood / (mu.REVIEW_FP_PREFIX + "known.kt")).write_text(_ubad.read_text(encoding="utf-8"), encoding="utf-8")
++    _r, cp = mu.check(sg)
++    check("★改壞★ 不接閘規則的 review-fp- 樣本不算好例誤報", not any(a == _uid and "好例誤報" in b for a, b in cp), str([p for p in cp if p[0] == _uid][:3]))
+     # 規則目錄全空不准判通過
+     me = _ktpack(copy=True)
+     for d in ("rules", "rules-review", "rules-hints", "rules-unwired"):
+         for y in (me.HERE / d).glob("*.yml"):
+             y.unlink()
+     _r, cp = me.check(sg)
+     check("★改壞★ 一條規則都沒讀到要報", any("一條規則都沒讀到" in b for _a, b in cp), str(cp[:3]))
+     # 規則包放在祖先目錄叫 good 的地方:命中照樣歸對規則(代碼審 r1 通才、正確性席)
+     mg = _ktpack(copy=True, under="good/bad")
+     _r, cp = mg.check(sg)
+     check("祖先目錄叫 good/bad 時樣本歸屬照樣對", not [p for p in cp if "壞例" in p[1] or "好例誤報" in p[1]], str(cp[:3]))
+ 
+ def t_kotlin_rulepack_messages_cite_catalog():
+     """[S2] 每條規則訊息以型錄裡存在的 [編號] 開頭、≤120 字、有分號與改用/改成、不含 $;id 唯一;
+-    severity 只三種;引用出處不全的列只准放 rules-unwired/(2026-11-08 起,見 t_kt_rulepack_unwired_dir)。改壞的訊息要被逐條抓到。"""
++    severity 只三種;引用出處不全的列只准放 rules-unwired/(2026-11-08 起,見 t_kotlin_rulepack_unwired_dir)。改壞的訊息要被逐條抓到。"""
+     m = _ktpack()
+     rules = m.load_rules()
+     cat_ids, _t = m.catalog_ids()
+     probs = m.message_problems(rules, cat_ids)
+     check("S2 真規則包的訊息格式全過", not probs, str(probs[:5]))
+     ids = [r["id"] for r in rules]
+     check("S2 id 唯一", len(ids) == len(set(ids)), str(len(ids)))
+     fake = [
+         {"id": "kt-a", "severity": "error", "dir": "rules", "message": "[API-3] 太長;改用 launch" + "字" * 120},
+         {"id": "kt-b", "severity": "error", "dir": "rules", "message": "[API-3] 有錢號 $X;改用 launch"},
+@@ -126503,26 +126517,25 @@ def t_kotlin_rulepack_messages_cite_catalog():
+     want = {"kt-a": "超過", "kt-b": "$", "kt-c": "分號", "kt-d": "不在型錄", "kt-h": "不在型錄", "kt-e": "severity", "kt-f": "只收", "kt-i": "只收", "kt-j": "只收", "x-g": "前綴"}
+     for rid, key in want.items():
+         check(f"★改壞★ {rid} 要被抓到({key})", any(a == rid and key in b for a, b in got), str([p for p in got if p[0] == rid]))
+     weak = next((r for r in m.catalog_ids()[1].splitlines() if "(出處不全)" in r and r.startswith("| ")), None)
+     if weak:
+         wid = weak.split("|")[1].strip()
+         p2 = m.catalog_problems([{"id": "kt-w", "severity": "error", "message": f"[{wid}] 測;改用 x"}])
+         check("★改壞★ 非 hint 規則引用出處不全的列要被抓到", any(a == "kt-w" for a, _b in p2), str(p2[-3:]))
+ 
+ 
+-def t_kt_rulepack_unwired_dir():
++def t_kotlin_rulepack_unwired_dir():
+     """[[Projects/規則包覆核兩級接新增告警閘_計劃]] S1:引用型錄「出處不全」列的規則只准放在不接閘的 rules-unwired/
+     (任何等級);放在 rules/、rules-review/、rules-hints/ 都報;假規則沒有 dir 鍵照「不在 unwired」算;真規則包 0 個問題、
+     引用出處不全列的規則全在 rules-unwired/。判準來源是計劃預期值表;預期值來自造的假規則,不拿被測函式算。
+     翻紅釘:檢查改回只看等級 → ①紅;rules-unwired 不給全集等級 → ④紅;缺 dir 當成在 unwired → ⑤紅;8 條沒搬 → ⑥紅。"""
+-    print("t_kt_rulepack_unwired_dir")
+     import re
+     m = _ktpack()
+     cat_text = m.catalog_ids()[1]
+     weak = [ln.split("|")[1].strip() for ln in cat_text.splitlines() if ln.startswith("| ") and "(出處不全)" in ln.split("|")[2]]
+     check("★前置★ 型錄有出處不全的列(不是讀表失敗才變少)", len(weak) >= 1, str(len(weak)))
+     wid = weak[0]
+     def probs(rule):
+         return [b for a, b in m.catalog_problems([rule]) if a == rule["id"]]
+     p1 = probs({"id": "kt-u1", "severity": "hint", "dir": "rules-hints", "message": f"[{wid}] 測;改用 x"})
+     check("① 出處不全的 hint 規則放在 rules-hints/ 要報", any("rules-unwired" in b for b in p1), str(p1))
+@@ -126536,21 +126549,21 @@ def t_kt_rulepack_unwired_dir():
+     check("④ rules-unwired/ 收任何等級(warning 不報只收)", not any("只收" in b for b in p4), str(p4))
+     p5 = probs({"id": "kt-u5", "severity": "hint", "message": f"[{wid}] 測;改用 x"})
+     check("⑤ 假規則沒有 dir 鍵照不在 unwired 算、要報", any("rules-unwired" in b for b in p5), str(p5))
+     rules = m.load_rules()
+     weak_set = set(weak)
+     refs = [r for r in rules if re.match(r"\[([A-Z]+-\d+)\]", r["message"]) and re.match(r"\[([A-Z]+-\d+)\]", r["message"]).group(1) in weak_set]
+     check("⑥ 真規則包引用出處不全列的規則全在 rules-unwired/", refs and all(r["dir"] == "rules-unwired" for r in refs),
+           str([(r["id"], r["dir"]) for r in refs]))
+     real = [p for p in m.catalog_problems(rules) if "出處不全" in p[1]]
+     check("⑦ 真規則包沒有出處不全的放錯目錄", not real, str(real[:3]))
+-    print("  ✓ t_kt_rulepack_unwired_dir")
++
+ 
+ def t_kotlin_catalog_rows_wired():
+     """[S3] 型錄每列欄位數對、編號唯一、標準寫法/接電方式/通電批次非空;形狀類有告警或正向約束;
+     語意類有表態對程式、沒標人裁的有盲判席;來源有網址或縮寫且不是未核對;決策表列編號連號、
+     觸發字不含常用字、對應檢查存在、每條語意列都被收;〈待查證〉節不在檢查範圍。改壞複本要逐項抓到。"""
+     m = _ktpack()
+     probs = m.catalog_problems()
+     check("S3 真型錄格式全過", not probs, f"{len(probs)} 個:{probs[:5]}")
+     mc = _ktpack(copy=True)
+     t = mc.CATALOG.read_text(encoding="utf-8")
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 330a5d800..049da35ef 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -871,15 +871,15 @@
+ 
+ 用程式讀本檔各主題表格列數得出(不是手算;規則包數字讀 `configs/ast-grep/kotlin-android/rules*/*.yml`)。
+ 
+ - 總列數:473(其中沿用既有編號 35 列;規則包實作時補的新列 0 列)
+ - 各主題:API 36、FLOW 32、STATE 28、CO 44、UI 111、ARCH 67、DATA 78、TEST 38、PERF 39
+ - 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 202、B 206、C 68、D 58
+ - 各級(以第一個字母計,加總等於總列數):A 202、B 176、C 52、D 43
+ - 級的組合:A 168、A+B 28、A+B+C 2、A+C 3、A+C+D 1、B 157、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 43
+ - 情境:形狀類 367、語意類 106(其中標(人裁)的 3)
+ - 待查證:135 列(規則代號待查 49 列、來源待核對 104 列,兩者可重疊)
+-- 規則包條數:207(error 30、warning 115、語意覆核級 info 12、hint 50;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
+-- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):129
++- 規則包條數:207(error 30、warning 115、語意覆核級 info 12、hint 50,其中 8 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
++- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):128
+ - 出處不全的列:34;人裁的列:3
+ - 逐列查證(來源欄有〔查證 日期:網址〕):459 列;沒有的 14 列是查不到權威原文(已標出處不全)或待人裁(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]])
+ - 情境決策表列數:56(證據樣式:主寫 `(無)` 的 8 列、例外寫 `(無)` 的 31 列、兩段都 `(無)` 的 5 列)
