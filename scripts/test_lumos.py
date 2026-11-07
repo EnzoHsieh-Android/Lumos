@@ -17150,6 +17150,7 @@ def t_lint_files_substitution_has_one_implementation():
     # 逼人當場說明為什麼要碰。
     ALLOWED = {
         "_lint_cmd_with_files",   # 唯一准做替換的那支
+        "_lint_placeholder_words",  # 2026-11-07 [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 佔位符 → 詞的共用核心(代碼審 r2 架構對齊 F1:shell 字串版與參數清單版原本各寫一份相對路徑改寫,收成這一支);只算詞、不做替換
         "_lint_gate_covers",      # 只做「這條命令有沒有檔案佔位符(哪一種)」的判斷;新增告警閘、執行入口「沒換掉就別跑」、
                                   # 冒煙、規則索引、風險分級、detekt 宣告判定全部共用這一支
                                   # (2026-11-04 [[Projects/Android的detekt規則說實話_計劃]] 抽出;2026-11-06 多認逗號佔位符時,
@@ -30093,9 +30094,10 @@ def _fp_hook(d, stdin):
 
 
 def t_prepush_new_branch_block_range():
-    """[新分支首推 S1 到 S6] 推分支的新分支首推(遠端舊值全零)改用 lumos push-range 算的起點:主線上的舊高風險寫法不算這次的;
-    分支自己的高風險照擋;合過主線只算分支自己的;頂端已在主線放行;一般增量、舊值找不到、推標籤照舊;push-range 失敗退回空樹並講一句,
-    被訊號殺掉停下。翻紅釘:掛鉤不呼叫 push-range(照舊空樹)→ ①③④紅;退回不講 → ⑥紅;不走 pp_stop_if_signaled → ⑦紅。"""
+    """[新分支首推 S1、S2] 推分支的新分支首推(遠端舊值全零)改用 lumos push-range 算的起點:主線上的舊高風險寫法不算這次的;
+    分支自己的高風險照擋。翻紅釘:掛鉤不呼叫 push-range(照舊空樹)→ ①紅。
+    2026-11-07 原本一支七組情境在 CI 上逾時 180 秒,③ 搬到 t_prepush_newbranch_merged_tip、④⑤ 搬到 t_prepush_newbranch_tip_on_main、
+    ⑥⑦ 搬到 t_prepush_newbranch_range_fallback(判準不變)。"""
     print("t_prepush_new_branch_block_range")
     zero = "0" * 40
     # ①只多一個乾淨提交的新分支:主線那支高風險檔不算 → 放行
@@ -30114,6 +30116,14 @@ def t_prepush_new_branch_block_range():
     tip2 = g("rev-parse", "HEAD").stdout.strip()
     rc, out = _fp_hook(d, f"refs/heads/feat {tip2} refs/heads/feat {zero}\n")
     check("②分支自己帶高風險寫法:照擋", rc == 1, out[-800:])
+    print("  ✓ t_prepush_new_branch_block_range")
+
+
+def t_prepush_newbranch_merged_tip():
+    """[新分支首推 S3] 從 t_prepush_new_branch_block_range 拆出(2026-11-07:原本一支七組情境在 CI 上逾時 180 秒):
+    合過主線只算分支自己的、放行。翻紅釘:掛鉤不呼叫 push-range → ③紅。"""
+    print("t_prepush_newbranch_merged_tip")
+    zero = "0" * 40
     # ③合過主線(主線在分岔後又多了高風險提交)再首推:只算分支自己的乾淨提交 → 放行
     d, g = _fp_repo()
     g("checkout", "-qb", "feat")
@@ -30131,6 +30141,14 @@ def t_prepush_new_branch_block_range():
     tip = g("rev-parse", "HEAD").stdout.strip()
     rc, out = _fp_hook(d, f"refs/heads/feat {tip} refs/heads/feat {zero}\n")
     check("③合過主線再首推:只算分支自己的、放行", rc == 0, out[-800:])
+    print("  ✓ t_prepush_newbranch_merged_tip")
+
+
+def t_prepush_newbranch_tip_on_main():
+    """[新分支首推 S4、S5] 從 t_prepush_new_branch_block_range 拆出:頂端已在主線放行;遠端舊值找不到、推標籤照舊空樹。
+    翻紅釘:掛鉤不呼叫 push-range → ④紅。"""
+    print("t_prepush_newbranch_tip_on_main")
+    zero = "0" * 40
     # ④頂端已整段在主線上(把 main 推到新名字):放行
     d, g = _fp_repo()
     tip = g("rev-parse", "HEAD").stdout.strip()
@@ -30141,6 +30159,14 @@ def t_prepush_new_branch_block_range():
     check("⑤遠端舊值本機找不到:照舊空樹,擋", rc == 1, out[-600:])
     rc, out = _fp_hook(d, f"refs/tags/v1 {tip} refs/tags/v1 {zero}\n")
     check("⑤推標籤:照舊空樹,只提醒放行", rc == 0 and "advisory" in out, out[-600:])
+    print("  ✓ t_prepush_newbranch_tip_on_main")
+
+
+def t_prepush_newbranch_range_fallback():
+    """[新分支首推 S6] 從 t_prepush_new_branch_block_range 拆出:push-range 失敗退回空樹並講一句,被訊號殺掉停下。
+    翻紅釘:退回不講 → ⑥紅;不走 pp_stop_if_signaled → ⑦紅。"""
+    print("t_prepush_newbranch_range_fallback")
+    zero = "0" * 40
     # ⑥push-range 不存在或失敗:退回空樹(同改之前)並講一句
     wrap = ("#!/usr/bin/env python3\nimport sys, subprocess, os, signal\n"
             "if len(sys.argv) > 1 and sys.argv[1] == 'push-range':\n"
@@ -30164,7 +30190,7 @@ def t_prepush_new_branch_block_range():
     finally:
         _os.environ.pop("FP_SIG", None)
     check("⑦push-range 被訊號殺掉:停下、回那個回傳碼", rc >= 128 and "被中斷" in out, f"rc={rc} {out[-400:]}")
-    print("  ✓ t_prepush_new_branch_block_range")
+    print("  ✓ t_prepush_newbranch_range_fallback")
 
 
 def t_push_range_cli():
