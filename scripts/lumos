@@ -16940,6 +16940,8 @@ _KNOWN_GATES = ("L2", "anchor-approve", "canary", "check-cascade", "check-revisi
                 "nodehome-check", "check-s8", "check-s9", "check-s10",
                 # 2026-09-13 新增告警閘:環境不可用自動放行、擋下新增告警,兩種事件都用這個閘名
                 "lint-new",
+                # 2026-11-06 代碼審記通過前先跑新增告警與表態兩道,被擋下的那一次(Projects/Android寫法寫完當下自動檢查_計劃 範圍 2)
+                "code-loop-pass",
                 # 2026-09-12 推筆記認家:健檢新段(重建出來卻不管檔的節點 / 管了卻連檔名都沒提到的配對)
                 "check-s11",
                 # 2026-09-27 筆記形狀擋:擋下與跳過(Projects/筆記形狀擋_計劃)
@@ -39075,6 +39077,93 @@ def _lintcheck_smoke_cmd(cmd, stack, repo_root, sample=3):
     if not files:
         return None
     return _lint_cmd_with_files(cmd, files)
+
+
+# ── lumos lint-new:審查前自己先跑新增告警那道(Projects/Android寫法寫完當下自動檢查_計劃 範圍 1)──────────────
+# 判定是推送前閘同一支 _lint_new_verdict(同一份設定、同一個預算),這裡只多一層退出碼與白話輸出;★不寫治理帳★(放行帳只有推送前閘記)。
+_LINT_NEW_CLI_RC = {"blocked": 1, "clean": 0, "warn": 0, "off": 0, "no-config": 0, "no-files": 0,
+                    "not-checked": 3, "env-unavailable": 3}   # 不認得的狀態一律當沒檢查到(rc3),不說乾淨
+_LINT_NEW_CLI_SHOW = 20
+_LINT_NEW_CLI_RC3 = "這次沒有被檢查,不算乾淨(退出碼 3 在 lint-new 的意思是「沒檢查到」,不是其他指令的「找不到知識圖譜」)"
+
+
+def cmd_lint_new(diff_range=None, repo=None, show_all=False):
+    """`lumos lint-new --diff <範圍> [--repo <根>]`:跟推送前閘的新增告警那道同判。
+    rc:1=擋(blocked)/0=乾淨或刻意不查(clean、warn、off、no-config、no-files)/3=沒檢查到(not-checked、env-unavailable)/2=參數錯。"""
+    import time as _time
+    if not diff_range:
+        print("用法:lumos lint-new --diff <起點>..<終點> [--repo <根>]   例:lumos lint-new --diff main..HEAD", file=sys.stderr)
+        print("  要給 --diff:這支指令只判這段範圍帶進來的新告警,不給範圍沒有東西可判。", file=sys.stderr)
+        return 2
+    repo_root = _anchor_repo_root(repo)
+    if repo_root is None:
+        return 2
+    _base, head_ref = _diff_range_ends(repo_root, diff_range)
+    lv = _lint_new_verdict(repo_root, diff_range, deadline=_time.monotonic() + _lint_new_config(repo_root)["budget_sec"])
+    for w in lv.get("warnings") or []:
+        print(f"提醒:{w}", file=sys.stderr)
+    st = lv.get("status")
+    rc = _LINT_NEW_CLI_RC.get(st, 3)
+    if rc == 1:
+        print(f"擋下:{diff_range} 帶進了新的問題({lv.get('reason')})(狀態 blocked)", file=sys.stderr)
+        _lint_new_cli_items(lv, sys.stderr, show_all)
+        print("確認是誤報就照上面的放行指令補理由放行(會留紀錄、被統計);不是就修掉再跑一次。", file=sys.stderr)
+    elif rc == 3:
+        _lint_new_cli_unchecked(lv, diff_range, head_ref)
+    elif st == "warn":
+        print(f"新增告警閘設定成只報告(.lumos/config.json 的 lint_new.gate=warn),這次不擋(狀態 warn):{lv.get('reason')}")
+        _lint_new_cli_items(lv, sys.stdout, show_all)
+    elif st == "clean":
+        print(f"✓ {diff_range} 沒有新增的告警(狀態 clean)")
+    else:
+        print(f"這次沒有檢查,是刻意的:{lv.get('reason')}(狀態 {st})")
+    return rc
+
+
+def _lint_new_cli_items(lv, stream, show_all=False):
+    """擋下或只報告時逐條印:檔:行、規則訊息、放行用的指紋(照抄得到的 lint-waive 指令);最多印 _LINT_NEW_CLI_SHOW 條,其餘印條數。
+    檔太大、路徑含分隔字元沒檢查的檔與預算不夠沒跑到的命令接著印(它們也算擋)。"""
+    new = lv.get("new") or []
+    for c in (new if show_all else new[:_LINT_NEW_CLI_SHOW]):
+        print(f"  - {c.get('file')}:{c.get('line')} [{c.get('rule')}] {str(c.get('message', ''))[:_LINT_MSG_SHOW]}", file=stream)
+        print(f"      放行:{_lint_waive_cmd(c)}", file=stream)
+    if not show_all and len(new) > _LINT_NEW_CLI_SHOW:
+        # 不指去 code-loop check:那支會寫治理帳、真跑合約測試(代碼審 r1 正確性席);同一支指令加 --all 照樣唯讀
+        print(f"  …其餘 {len(new) - _LINT_NEW_CLI_SHOW} 條沒列(全部看:lumos lint-new --diff {lv.get('range')} --all)", file=stream)
+    for o in lv.get("oversize") or []:
+        print(f"  - {o.get('file')}:超過{o.get('over')}上限或路徑收不了,沒被檢查;放行:{_lint_waive_cmd(o)}", file=stream)
+    for u in lv.get("undone") or []:
+        if u.get("kind") != "env":
+            print(f"  - 沒跑到:{u.get('detail')}｜{u.get('cmd')}", file=stream)
+
+
+def _lint_new_cli_missing(cmd):
+    """命令的第一個詞(跳過 KEY=VAL 這種環境變數設定)找不到執行檔 → 那個詞;找得到或切不出來 → None。"""
+    import shlex
+    import shutil
+    try:
+        words = shlex.split(cmd)
+    except ValueError:      # 截斷過的命令引號可能配不平,退回照空白切
+        words = cmd.split()
+    first = next((w for w in words if "=" not in w), None)
+    return first if first and shutil.which(first) is None else None
+
+
+def _lint_new_cli_unchecked(lv, diff_range, head_ref):
+    """沒檢查到(not-checked、env-unavailable):印哪條命令沒跑、為什麼,結尾一句不算乾淨。"""
+    # 環境不可用時 reason 是推送前閘的說法(「已自動放行並記帳」),這支指令不記帳,改印自動放行的原因本身
+    print(f"沒檢查到:{lv.get('autopass_reason') or lv.get('reason')}(狀態 {lv.get('status')})")
+    if head_ref is None:
+        print(f"  --diff {diff_range} 只有一個版本:要給兩端,例 --diff main..HEAD(終點不給時是工作目錄,算不出「現在」那一版)")
+    for u in lv.get("undone") or []:
+        if u.get("kind") == "env":
+            miss = _lint_new_cli_missing(str(u.get("cmd") or ""))
+            print(f"  - 沒跑:{u.get('cmd')}——" + (f"沒裝 {miss}(找不到這個執行檔)" if miss else str(u.get("detail") or "原因不明")))
+    for cmd in lv.get("report_only") or []:
+        print(f"  - 沒跑:{cmd}——沒有檔案清單佔位({{LINT_FILES}} 或 {{LINT_FILES_CSV}})")
+    for cmd in lv.get("sep_emptied") or []:
+        print(f"  - 沒跑:{cmd}——要檢查的檔路徑都含逗號或分號,全被拿掉")
+    print(_LINT_NEW_CLI_RC3)
 
 
 def cmd_lint_check(repo=None, smoke=False, as_json=False):
@@ -69469,8 +69558,32 @@ def _codeloop_pass_verify(repo_root, loop):
     return refused, None if refused else loop, say
 
 
+def _codeloop_pass_mech(repo_root, head_sha, branch):
+    """code-loop pass 記通過之前先跑新增告警與表態兩道(Projects/Android寫法寫完當下自動檢查_計劃 範圍 2)→ 放不放行。
+    判法是推送檢查那支判定函式的收集模式加「只跑兩道」(mech_only),範圍跟 code-loop check 不帶 --diff 時相同(分岔點..HEAD)。
+    擋下:每道印推送前同一段擋下訊息,再印 pass 自己的出口;治理帳記一筆 code-loop-pass 擋下(撤除條件數這個)。
+    分岔點等於 HEAD、算不出分岔點、工具沒裝的放行與記帳都由判定函式照推送檢查的規則處理,這裡不另判。"""
+    v = _codeloop_guard_verdict(repo_root, keep_going=True, mech_only=True)
+    if not v.get("blocked"):
+        return True
+    blocks = v.get("blocks") or []     # 收集模式擋下時一定帶 blocks(_codeloop_kg_finish)
+    dv = v.get("dispositions") or getattr(_codeloop_guard_verdict, "last_dispositions", None)
+    for b in blocks:
+        _cl_say_block(b.get("reason_kind"), b.get("reason", ""), v, dv, branch, head_sha, None, None, None)
+    print("代碼審還不能記通過:新增告警與表態兩道要先過(跟推送前同一份判定;範圍是跟主線的分岔點到 HEAD)。", file=sys.stderr)
+    print("  照上面修好、放行或補表態之後,提交再重跑:", file=sys.stderr)
+    print('    lumos code-loop pass --loop <編號> --note "<審了什麼>"', file=sys.stderr)
+    kinds = [b.get("reason_kind") or "?" for b in blocks]
+    _gate_event_or_warn(repo_root, "code-loop-pass", "blocked", "；".join(str(b.get("reason", ""))[:120] for b in blocks)[:300],
+                        hard=True, head_sha=head_sha, ref=branch, extra={"blocks": kinds})
+    return False
+
+
 def _codeloop_pass_gate(repo_root, loop, head_sha, branch):
-    """跑判定、印訊息、擋下就落帳 → (放不放行, 要寫進 nodes 的編號或 None)。"""
+    """跑判定、印訊息、擋下就落帳 → (放不放行, 要寫進 nodes 的編號或 None)。
+    ★機械檢查排在留痕驗證之前★:驗證那支有「沒有審查帳」與 light 兩條提早返回,排在後面會被它們跳過。"""
+    if not _codeloop_pass_mech(repo_root, head_sha, branch):
+        return False, None
     refused, node, say = _codeloop_pass_verify(repo_root, loop)
     if refused:
         code, lines = refused
@@ -71454,12 +71567,15 @@ def _codeloop_pitfalls_tier(repo_root, diff_range):
 
 
 def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None, skip_bound=False, skip_note="", payload=None, bound_advisory=False,
-                            keep_going=False):
+                            keep_going=False, mech_only=False):
     """判定式:tier=high(pitfalls --diff <range> --no-lint --json)
     AND 無有效 pass/skip 留痕 → blocked=True。
     keep_going(code-loop check --keep-going,Projects/推送前一次列出全部擋下原因_計劃〈做法〉5):六道判定(安全證據、Android 端到端驗收、合約測試、表態、新增告警、
     代碼審留痕)都跑完,擋下累積進 blocks;★所有 return 都經過收尾函式 _fin★——清單非空就回擋下,放行站點不能蓋掉前面記下的擋下。
     不帶時 _fin 原樣交回,行為與回傳一字不變。
+    mech_only(code-loop pass 記通過之前用,Projects/Android寫法寫完當下自動檢查_計劃 範圍 2):只跑表態與新增告警兩道、一律走收集模式;
+    安全證據、Android 端到端驗收、合約測試與代碼審留痕都不跑(帶進留痕那道會讓 pass 自己擋自己)。範圍算法、分岔點等於 HEAD 直接放行、
+    算不出分岔點記放行帳、pitfalls 失敗時新增告警照跑,都跟推送檢查同一條路;不帶時行為一字不變。
     留痕座標(prepush範圍修法 #2):at_sha/branch 給了則綁該座標(hook 傳被推送 ref 的
     local_sha 與 remote_ref 分支),否則讀當前 checkout HEAD/branch(向後相容)。
     diff_range 給了則跳 merge-base 推導直接算 tier;否則沿 merge-base..HEAD 現行為。
@@ -71480,17 +71596,18 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     marker_branch = branch or _codeloop_git_branch(repo_root)
     raw_range = diff_range        # 改寫全零起點之前的原值:合併提交認合進來那一側要拿它比第一個母
     merge_cache = {}
-    kg = _CodeloopKg(keep_going)  # 收集模式的分流(記下的擋下、算出來的分級)
+    kg = _CodeloopKg(keep_going or mech_only)  # 收集模式的分流(記下的擋下、算出來的分級);只跑兩道時一律收集
     _fin = kg.fin                 # 唯一的收尾:所有 return 都經過它(本體在 _codeloop_kg_finish)
 
     # 1.5 安全證據(Projects/安全主張驗收閘_計劃〈四〉):★排在所有放行早退之前★——取不到 HEAD、merge-base 等於 HEAD、
     # 算不出 merge-base、全零起點、pitfalls 失敗這五條直接放行的路上照樣判;不看 tier。沒登記痕跡回 None,輸出一字不變。
-    _sec_stop = kg.hit(_codeloop_security_step(repo_root, marker_sha, marker_branch, raw_range))
+    # 只跑兩道(mech_only)時這兩道不跑
+    _sec_stop = kg.hit(None if mech_only else _codeloop_security_step(repo_root, marker_sha, marker_branch, raw_range))
     if _sec_stop:
         return _sec_stop
     # 1.6 Android 端到端驗收(Projects/Android端到端驗收_計劃〈資料怎麼流〉第 4 步):跟安全證據一樣排在所有放行早退之前、不看 tier;
     # 這個專案(被推送提交與主線候選)沒有 e2e 段回 None,輸出一字不變
-    _e2e_stop = kg.hit(_codeloop_e2e_step(repo_root, marker_sha, marker_branch, raw_range))
+    _e2e_stop = kg.hit(None if mech_only else _codeloop_e2e_step(repo_root, marker_sha, marker_branch, raw_range))
     if _e2e_stop:
         return _e2e_stop
 
@@ -71527,8 +71644,10 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     # 第一版只接了低風險那條,於是高風險推送仍然算兩次(一次給同步點名、一次在這裡)
     # ——而我在 pre-push 的註解裡寫的是「★一次推送只算一次波及★」。
     # ★那句話當時只在低風險成立,是我自己寫太大的宣稱。★ 接上之後才是真的。
-    bt = _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note,
-                            payload=payload, advisory=bound_advisory)   # advisory 也要傳進去(r1 外家否決 f3:不傳會對低風險跑整套 600 秒)
+    # 只跑兩道(mech_only)時合約測試不跑,狀態記成沒跑(不紅、不擋)
+    bt = ({"status": "skipped", "reason": "只跑新增告警與表態兩道,合約測試沒跑"} if mech_only else
+          _bound_tests_check(repo_root, diff_range, skip=skip_bound, skip_note=skip_note,
+                             payload=payload, advisory=bound_advisory))   # advisory 也要傳進去(r1 外家否決 f3:不傳會對低風險跑整套 600 秒)
     _codeloop_guard_verdict.last_bound = bt
     # ★「證不出跑過」跟紅一樣擋★(2026-09-09 r1 單reviewer f2,blocker):
     # 第一版只把狀態從 green 換成 unfilterable、印一行到 stderr 就結束,決定擋不擋的這裡
@@ -71623,8 +71742,8 @@ def _codeloop_guard_verdict(repo_root, diff_range=None, at_sha=None, branch=None
     if _stop:
         return _stop
 
-    if tier != "high":
-        return _fin({"blocked": False, "reason": f"tier={tier}(非 high)", "tier": tier})
+    if tier != "high" or mech_only:   # 只跑兩道時到這裡就判完,不看代碼審留痕
+        return _fin({"blocked": False, "reason": "新增告警與表態兩道都過" if mech_only else f"tier={tier}(非 high)", "tier": tier})
 
     # 4. 讀留痕,pass/skip 且 sha == marker_sha → 有效(marker_sha/marker_branch 綁被推送 ref 或 checkout)
     rec = _codeloop_read(repo_root, marker_branch)
@@ -73149,6 +73268,7 @@ HELP_WHEN = {
     "test-layers": "改了這些檔,該跑哪一層測試(單元 / 整合 / UI)的提醒,不擋。",
     "lint-check": ".lumos/lint.json 宣告的 linter 真的跑得動嗎。--smoke 真跑。",
     "lint-waive": "新增告警閘擋下來的那條是誤報?帶指紋和理由放行,會留痕被統計。--list 看放行過什麼。",
+    "lint-new": "派審查員或記通過之前自己先跑新增告警那道(跟推送前同判):lumos lint-new --diff main..HEAD;rc1 擋、rc0 乾淨或刻意不查、rc3 沒檢查到(不算乾淨)。",
     "rule-check": "自寫規則每條都有會翻紅的樣本嗎。沒樣本的規則可能是死的。",
     "rule-gap": "逃逸帳標了該抓卻還沒寫的規則,列成待辦。",
     "sqlfluff-sarif": "把 sqlfluff 的 JSON 輸出轉成 SARIF,接進 lint 適配器。",
@@ -74197,6 +74317,14 @@ def main():
     p.add_argument("--smoke", dest="lc_smoke", action="store_true", help="真跑每條宣告命令、驗有無產出可解析 SARIF(抓 task 不存在/工具沒裝的空殼)")
     p.add_argument("--json", dest="lc_json", action="store_true", help="JSON 輸出")
 
+    p = sub.add_parser("lint-new", help="跟推送前閘同判的新增告警檢查(審查前自己先跑;不寫治理帳)",
+                       description="什麼時候用:" + HELP_WHEN["lint-new"] + "\n退出碼:1=擋(有未放行的新增告警);0=乾淨或刻意不查(clean、warn、off、no-config、no-files);"
+                                   "3=沒檢查到(not-checked、env-unavailable;這支指令的 3 是「沒檢查到、不算乾淨」,"
+                                   "不是其他指令的「找不到知識圖譜」);2=參數錯(沒給 --diff)。")
+    p.add_argument("--diff", dest="ln_diff", help="要判的範圍,兩端都要給(例 main..HEAD)")
+    p.add_argument("--repo", dest="ln_repo", help="repo root(預設 cwd 向上找 .git,跟 code-loop check 同一個找法)")
+    p.add_argument("--all", dest="ln_all", action="store_true", help="新增告警全部列出(預設最多 20 條)")
+
     p = sub.add_parser("lint-waive", help="把某條新增告警的指紋標成已放行(新增告警閘的逃生門;要寫理由、會被統計)")
     p.add_argument("waive_key", nargs="?", help="擋下訊息裡印的那串指紋")
     p.add_argument("--note", dest="waive_note", help="為什麼放行(必填)")
@@ -74599,6 +74727,8 @@ def main():
         return cmd_rule_check(repo=args.rc_repo, as_json=args.rc_json)
     if args.cmd == "rule-gap":
         return cmd_rule_gap(repo=args.rg_repo, as_json=args.rg_json)
+    if args.cmd == "lint-new":
+        return cmd_lint_new(diff_range=args.ln_diff, repo=args.ln_repo, show_all=args.ln_all)
     if args.cmd == "lint-waive":
         return cmd_lint_waive(key=args.waive_key, note=args.waive_note, repo=args.waive_repo,
                               as_json=args.waive_json, show=args.waive_list,

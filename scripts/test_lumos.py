@@ -27554,6 +27554,8 @@ def t_codeloop_pass_survives_bookkeeping_commits():
         check("★簿記豁免不外溢:code commit 後照樣 blocked rc1★", r2.returncode == 1,
               f"rc={r2.returncode}\n{r2.stdout[:200]}")
         # 收緊釘②:改寫史(amend)→ 留痕 sha 非祖先,拒認
+        # pass 記通過前先跑表態那道(Projects/Android寫法寫完當下自動檢查_計劃 範圍 2):新的程式提交讓舊表態失效,照真實做法重答
+        _answer_stack_questions(d)
         check("★前置★ 第二次 pass 真的寫進去,不然下面的拒認是舊留痕代打",
               run_lumos(["code-loop", "pass", "--note", "re-pass", "--repo", d, "--loop", "code-x"]) == 0, "")
         g("commit", "-q", "--amend", "-m", "more code (amended)")
@@ -73727,7 +73729,8 @@ def t_lint_new_gate():
     i_disp = src.index("dv = _dispositions_verdict(")
     i_lint = src.index("_stop = kg.hit(_codeloop_lint_new_step(")
     check("S6 新增告警那一步本體仍是 _lint_new_verdict", "lv = _lint_new_verdict(" in Path(GRAPHCTL).read_text(encoding="utf-8"), "")
-    i_tier = src.index('if tier != "high":\n        return _fin({"blocked": False, "reason": f"tier={tier}(非 high)"')   # 收集模式起所有回傳都經 _fin
+    # 收集模式起所有回傳都經 _fin;2026-11-06 起同一行也是「只跑兩道」(code-loop pass 記通過前)判完的出口
+    i_tier = src.index('if tier != "high" or mech_only:')
     check("S6 排在表態之後", i_lint > i_disp, f"{i_disp} {i_lint}")
     check("S6 排在風險分級早退之前(低風險也要跑)", i_lint < i_tier, f"{i_lint} {i_tier}")
     check("S6 擋下時有自己的理由種類", '"reason_kind": "lint_new"' in Path(GRAPHCTL).read_text(encoding="utf-8"), "")
@@ -127259,6 +127262,366 @@ def t_room_guard_skips_rulepack_samples():
     _nh_commit(root4, "app dao + sample test")
     rc4, out4 = _rg(root4)
     check("樣本裡的測試不充當真 DAO 的測試", rc4 == 1 and "UserDao.all" in out4, out4[-600:])
+
+
+# ── 代碼審記通過前先跑機械檢查(Projects/Android寫法寫完當下自動檢查_計劃)────────────────────────
+# 判準來源是計劃〈驗收條款〉S1、S2 的字面;預期值來自情境本身(造了什麼現場就該判成哪一種),
+# 不拿被測函式算預期。假檢查工具沿用 _lng_fake_linter(照真的 SARIF 形狀吐),現場用 _lng_repo 建。
+
+def _lnc_run(cwd, *args):
+    """在 cwd 跑 `lumos lint-new …` → CompletedProcess(輸出合併看:有的狀態印 stdout、有的印 stderr)。"""
+    import subprocess as _sp
+    return _sp.run([sys.executable, GRAPHCTL, "lint-new", *args], cwd=str(cwd), capture_output=True, text=True, timeout=180)
+
+
+def _lnc_repo(helper, cmds, head, base=None, cfg=None, branch=None):
+    """臨時 repo:docs/ 在(治理帳寫得進去,才驗得到「不寫帳」)、cmds 是宣告的檢查命令(None=不宣告)、
+    cfg 是 .lumos/config.json 的 lint_new 段;base / head 是兩個提交的 {檔: 內容} → (root, 起點 sha, git)。
+    branch 給了:起點那個提交留在 main,第二個提交開在 branch 上(code-loop pass 要算得出分岔點)。"""
+    import json as _j
+    root, git = _lng_repo("gctl-lnc-")
+    git("checkout", "-q", "-b", "main")
+    (root / "docs").mkdir()
+    if cmds is not None:
+        _lng_declare(root, cmds)
+    if cfg is not None:
+        (root / ".lumos").mkdir(exist_ok=True)
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"lint_new": cfg}), encoding="utf-8")
+    for f, t in (base or {"app.py": "a = 1\n"}).items():
+        (root / f).write_text(t, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "base", "--no-verify")
+    sha = git("rev-parse", "HEAD").stdout.strip()
+    if branch:
+        git("checkout", "-q", "-b", branch)
+    for f, t in head.items():
+        (root / f).write_text(t, encoding="utf-8")
+    git("add", "-A")
+    git("commit", "-qm", "two", "--no-verify")
+    return root, sha, git
+
+
+def _lnc_gov(root, gate=None):
+    import json as _j
+    p = Path(root) / "docs" / ".governance-log.jsonl"
+    if not p.is_file():
+        return []
+    evs = [_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    return [e for e in evs if gate is None or e.get("gate") == gate]
+
+
+def t_lint_new_cli_status_codes():
+    """[S1] `lumos lint-new --diff <範圍>`:狀態跟推送前閘同一支判定;擋 rc1、乾淨或刻意不查 rc0、沒檢查到 rc3;
+    沒給 --diff rc2;只給一個版本 rc3 並提醒給兩端;沒裝工具 rc3 並印「沒裝 <工具>」;--repo 指到另一個 repo 判那個 repo;
+    不寫治理帳。預期狀態來自造的現場(八種各造一個),再拿推送前閘那支判定在同一範圍的狀態對照「相同」。
+    翻紅釘:退出碼對照表任一格改掉 → 那一格紅;第一個詞找得到也印「沒裝」→ ⑨b紅;擋下不印指紋 → ②紅(放行後重跑才會變 rc0)。"""
+    print("t_lint_new_cli_status_codes")
+    import json as _j
+    import shutil as _sh
+    import subprocess as _sp
+    m = _lng_module()
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lnch-"))
+    roots = []
+    bad_cmd = _lng_fake_linter(helper, "fake.py", [["BAD", "R1", "不准用 BAD"]])
+    try:
+        def mk(cmds, head, **kw):
+            root, sha, _git = _lnc_repo(helper, cmds, head, **kw)
+            roots.append(root)
+            return root, f"{sha}..HEAD"
+
+        def out(r):
+            return r.stdout + r.stderr
+
+        def status_of(r):
+            import re as _re
+            mm = _re.search(r"狀態 ([a-z-]+)", out(r))
+            return mm.group(1) if mm else None
+
+        # ① 沒給 --diff → rc2 印用法
+        r0root, _rng0 = mk([bad_cmd], {"app.py": "a = 2\n"})
+        r = _lnc_run(r0root)
+        check("①沒給 --diff → rc2、印用法", r.returncode == 2 and "--diff" in out(r) and "用法" in out(r), out(r)[-400:])
+        r = _lnc_run(r0root, "--help")
+        check("①--help 講明 rc3 在這支指令的意思是沒檢查到", r.returncode == 0 and "3" in r.stdout and "沒檢查到" in r.stdout,
+              r.stdout[-600:])
+
+        # ② blocked → rc1,每條印「檔:行、規則訊息、放行用的指紋」;狀態跟推送前閘(code-loop check)相同
+        broot, brng = mk([bad_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lnc_run(broot, "--diff", brng)
+        o = out(r)
+        check("②blocked → rc1", r.returncode == 1, f"rc={r.returncode} {o[-600:]}")
+        check("②印檔:行與規則訊息", "app.py:2" in o and "R1" in o and "不准用 BAD" in o, o[-600:])
+        check("②不寫治理帳(帳檔沒被建出來)", _lnc_gov(broot) == [], str(_lnc_gov(broot))[:300])
+        cl = _sp.run([sys.executable, GRAPHCTL, "code-loop", "check", "--diff", brng, "--json", "--repo", str(broot)],
+                     capture_output=True, text=True, timeout=180)
+        v = _j.loads(cl.stdout.strip().splitlines()[-1]) if cl.stdout.strip() else {}
+        check("②狀態跟推送前閘相同(code-loop check 同一範圍判 blocked)",
+              (v.get("lint_new") or {}).get("status") == "blocked" == status_of(r), f"{status_of(r)} {str(v)[:400]}")
+        import re as _re
+        keys = _re.findall(r"lumos lint-waive (\S+)", o)
+        check("②印放行用的指紋(照抄得到的 lint-waive 指令)", len(keys) == 1, o[-600:])
+        if keys:
+            w = _sp.run([sys.executable, GRAPHCTL, "lint-waive", keys[0].strip("'"), "--note", "測試:這條是誤報要放行",
+                         "--repo", str(broot)], capture_output=True, text=True, timeout=60, stdin=_sp.DEVNULL)
+            r2 = _lnc_run(broot, "--diff", brng)
+            check("②印的指紋就是推送前閘認的那個:放行後重跑 → rc0", w.returncode == 0 and r2.returncode == 0,
+                  f"waive rc={w.returncode} {w.stderr[-200:]} / rc={r2.returncode} {out(r2)[-300:]}")
+
+        # ③ 超過 20 條:印 20 條、其餘印條數
+        many = "a = 1\n" + "".join(f"BAD{i} = {i}\n" for i in range(25))
+        mroot, mrng = mk([bad_cmd], {"app.py": many})
+        r = _lnc_run(mroot, "--diff", mrng)
+        shown = [ln for ln in out(r).splitlines() if "app.py:" in ln]
+        check("③25 條新增 → 只印 20 條、其餘印條數", r.returncode == 1 and len(shown) == 20 and "5 條" in out(r),
+              f"rc={r.returncode} 印了 {len(shown)} 條 {out(r)[-300:]}")
+        # 代碼審 r1 折入:「看全部」指回同一支唯讀指令的 --all,不指去會寫治理帳的 code-loop check
+        check("③看全部的提示是 lint-new --all、不是 code-loop check", "--all" in out(r) and "code-loop check" not in out(r),
+              out(r)[-300:])
+        gov_before = _lnc_gov(mroot)
+        ra = _lnc_run(mroot, "--diff", mrng, "--all")
+        shown_all = [ln for ln in out(ra).splitlines() if "app.py:" in ln]
+        check("③--all 全部 25 條都印、照樣不寫治理帳", ra.returncode == 1 and len(shown_all) == 25 and _lnc_gov(mroot) == gov_before,
+              f"rc={ra.returncode} 印了 {len(shown_all)} 條")
+
+        # ④ rc0 的五種:每種各一句講明是哪一種
+        cases = (("clean", dict(cmds=[bad_cmd], head={"app.py": "a = 2\n"}), "沒有新增的告警"),
+                 ("warn", dict(cmds=[bad_cmd], head={"app.py": "a = 1\nBAD = 2\n"}, cfg={"gate": "warn"}), "只報告"),
+                 ("off", dict(cmds=[bad_cmd], head={"app.py": "a = 1\nBAD = 2\n"}, cfg={"gate": "off"}), "off"),
+                 ("no-config", dict(cmds=None, head={"app.py": "a = 1\nBAD = 2\n"}), "沒有宣告"),
+                 ("no-files", dict(cmds=[bad_cmd], head={"notes.md": "BAD\n"}), "沒有要掃"))
+        for want, kw, word in cases:
+            root, rng = mk(kw.pop("cmds"), kw.pop("head"), **kw)
+            r = _lnc_run(root, "--diff", rng)
+            push = m._lint_new_verdict(root, rng)["status"]
+            check(f"④{want} → rc0、狀態 {want}、跟推送前閘同判、講明是哪一種",
+                  r.returncode == 0 and status_of(r) == want == push and word in out(r), f"rc={r.returncode} 推送前閘={push} {out(r)[-400:]}")
+            if want == "warn":
+                check("④warn 照印新增告警", "app.py:2" in out(r) and "R1" in out(r), out(r)[-400:])
+
+        # ⑤ rc3 的兩種:印哪條沒跑、為什麼,結尾「這次沒有被檢查,不算乾淨」與 rc3 的意思
+        nroot, nrng = mk(["echo x > {LINT_SARIF_OUT}"], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lnc_run(nroot, "--diff", nrng)
+        last = (out(r).strip().splitlines() or [""])[-1]
+        check("⑤not-checked → rc3、跟推送前閘同判", r.returncode == 3 and status_of(r) == "not-checked" == m._lint_new_verdict(nroot, nrng)["status"],
+              f"rc={r.returncode} {out(r)[-400:]}")
+        check("⑤not-checked 印哪條沒跑", "echo x" in out(r), out(r)[-400:])
+        check("⑤結尾一句不算乾淨、講明 rc3 在這裡的意思", "這次沒有被檢查,不算乾淨" in last and "3" in last, last)
+        eroot, erng = mk(["lumos-no-such-tool-xyz {LINT_SARIF_OUT} {LINT_FILES}"], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lnc_run(eroot, "--diff", erng)
+        last = (out(r).strip().splitlines() or [""])[-1]
+        check("⑥沒裝工具 → rc3、狀態 env-unavailable、跟推送前閘同判",
+              r.returncode == 3 and status_of(r) == "env-unavailable" == m._lint_new_verdict(eroot, erng)["status"],
+              f"rc={r.returncode} {out(r)[-400:]}")
+        check("⑥印「沒裝 <工具>」", "沒裝 lumos-no-such-tool-xyz" in out(r), out(r)[-400:])
+        check("⑥結尾一句不算乾淨", "這次沒有被檢查,不算乾淨" in last, last)
+        check("⑥不寫治理帳(推送前閘在這裡會記自動放行)", _lnc_gov(eroot) == [], str(_lnc_gov(eroot))[:300])
+        fail_cmd = f"{sys.executable} -c 'import sys; sys.exit(1)' {{LINT_SARIF_OUT}} {{LINT_FILES}}"
+        froot, frng = mk([fail_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lnc_run(froot, "--diff", frng)
+        check("⑥b工具裝了但跑不出結果 → rc3、不說「沒裝 <工具>」(通用說明的「工具沒裝/逾時」照印)、印那條命令(推送前閘記帳時截到 80 字,印的是同一段)",
+              r.returncode == 3 and "沒裝 " not in out(r) and "-c 'import sys" in out(r), out(r)[-400:])
+        check("⑥b不寫帳就不說「已記帳」", "記帳" not in out(r), out(r)[-400:])
+
+        # ⑦ 只給一個版本 → rc3 並提醒要給兩端
+        r = _lnc_run(broot, "--diff", "HEAD")
+        check("⑦只給一個版本 → rc3、提醒給兩端", r.returncode == 3 and "兩端" in out(r), f"rc={r.returncode} {out(r)[-400:]}")
+
+        # ⑧ --repo 指到另一個 repo:判那個 repo;不給時從目前目錄往上找 git 根
+        r = _lnc_run(r0root, "--diff", mrng, "--repo", str(mroot))
+        check("⑧在乾淨的 repo 裡用 --repo 指到有新增告警的 repo → 判那個(rc1)", r.returncode == 1 and "app.py:" in out(r),
+              f"rc={r.returncode} {out(r)[-300:]}")
+        sub = mroot / "deep" / "er"
+        sub.mkdir(parents=True)
+        r = _lnc_run(sub, "--diff", mrng)
+        check("⑧不給 --repo:從子目錄往上找到 git 根", r.returncode == 1 and "app.py:" in out(r), f"rc={r.returncode} {out(r)[-300:]}")
+    finally:
+        _sh.rmtree(helper, ignore_errors=True)
+        for x in roots:
+            _sh.rmtree(x, ignore_errors=True)
+
+
+def _lcp_pass(root, *args, sub="pass"):
+    import subprocess as _sp
+    return _sp.run([sys.executable, GRAPHCTL, "code-loop", sub, "--note", "n", "--repo", str(root), *args],
+                   capture_output=True, text=True, timeout=300)
+
+
+def _lcp_inproc(root, subcmd, **sc):
+    """在行程內跑 code-loop pass / skip / check(沿用 _ClkgFakes:表態、新增告警、pitfalls 換成假的),
+    另把安全證據、端到端驗收兩道換成只記呼叫的假的,並記下判定函式被叫時帶的參數 → (rc, stdout, stderr, 呼叫紀錄, 判定函式參數)。"""
+    import io, contextlib, subprocess as _sp
+    m = _load_lumos_inproc()
+    head = _na_head(root)
+    full = {"bt": "green", "tier": "standard", "disp": False, "lint": False, "pf": "ok", "marker": None, "merge_pass": False}
+    full.update(sc)
+    fk = _ClkgFakes(head, full)
+    seen = []
+    real_verdict = m._codeloop_guard_verdict
+
+    def verdict(*a, **kw):
+        seen.append(kw)
+        return real_verdict(*a, **kw)
+    for k in ("last_bound", "last_dispositions", "last_lint_new", "last_arch", "last_security", "last_e2e"):
+        setattr(verdict, k, None)
+    swaps = {"_bound_tests_check": fk.bt, "_dispositions_verdict": fk.disp, "_lint_new_verdict": fk.lint,
+             "_lint_new_config": lambda repo_root, **k: {"budget_sec": 5, "mode": "block"},
+             "_codeloop_read": fk.read, "_mainline_ref": lambda repo_root, remote_only=False: None,
+             "_arch_target_check_lines": lambda r, d, g: [],
+             "_codeloop_security_step": lambda *a, **k: fk.calls.append(("security",)),
+             "_codeloop_e2e_step": lambda *a, **k: fk.calls.append(("e2e",))}
+    saved = {k: getattr(m, k) for k in swaps}
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        for k, v in swaps.items():
+            setattr(m, k, v)
+        _sp.run = fk.run
+        # 判定函式換成記參數的包裝:判定函式與它叫的各道都用模組全域名寫 last_*,所以那些屬性落在包裝上,讀的一方也讀包裝
+        m._codeloop_guard_verdict = verdict
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            kw = {"keep_going": True} if subcmd == "check" else {}
+            rc = m.cmd_code_loop(subcmd, note="n", repo=str(root), **kw)
+    finally:
+        _sp.run = fk.real_run
+        m._codeloop_guard_verdict = real_verdict
+        for k, v in saved.items():
+            setattr(m, k, v)
+    return rc, out.getvalue(), err.getvalue(), fk.calls, seen
+
+
+def t_codeloop_pass_requires_clean_mechanical():
+    """[S2] code-loop pass 從主線分岔點到 HEAD 有未放行的新增告警或表態不完整 → 不寫留痕、rc2、印擋下原因與修法、
+    治理帳留一筆 code-loop-pass 擋下;pitfalls 出錯時新增告警照跑;沒有審查帳或走 light 時照樣先跑;工具沒裝照推送前閘
+    自動放行並記帳;分岔點等於 HEAD 直接放行不記帳;兩道都乾淨照舊寫留痕;skip 不受影響;pass 與推送檢查走同一個收集模式,
+    pass 只跑兩道(安全證據、端到端驗收、合約測試不跑)。
+    翻紅釘:pass 不呼叫機械檢查 → ①②③⑤紅;擋下不記帳或記錯閘名 → ①⑤紅;放在留痕驗證之後 → ②③紅(light/沒帶編號先走掉);
+    只跑兩道的選項沒生效 → ⑨紅;不帶收集模式 → ⑧⑨紅(pitfalls 失敗時新增告警不跑)。"""
+    print("t_codeloop_pass_requires_clean_mechanical")
+    import shutil as _sh
+    import subprocess as _sp
+    helper = Path(tempfile.mkdtemp(prefix="gctl-lcph-"))
+    roots = []
+    bad_cmd = _lng_fake_linter(helper, "fake.py", [["BAD", "R1", "不准用 BAD"]])
+    missing_cmd = "lumos-no-such-tool-xyz {LINT_SARIF_OUT} {LINT_FILES}"
+    try:
+        def mk(cmds, head):
+            root, _sha, git = _lnc_repo(helper, cmds, head, branch="feat")
+            roots.append(root)
+            return root, git
+
+        def passed_events(root):
+            return [e for e in _lnc_gov(root, "code-loop") if e.get("kind") == "passed"]
+
+        # ① 沒有審查帳 + 分支帶進新增告警 → rc2、不寫留痕、印原因與修法、記 code-loop-pass 擋下
+        root, _g = mk([bad_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lcp_pass(root)
+        e = r.stdout + r.stderr
+        check("①新增告警 → rc2", r.returncode == 2, f"rc={r.returncode} {e[-600:]}")
+        check("①不寫留痕(marker 與 passed 帳都沒有)", _codeloop_read(root, "feat") is None and passed_events(root) == [],
+              str(_lnc_gov(root))[:400])
+        check("①印擋下原因(檔:行、規則)與修法(放行指令、修好重跑 pass)",
+              "app.py:2" in r.stderr and "R1" in r.stderr and "lumos lint-waive" in r.stderr and "code-loop pass" in r.stderr,
+              r.stderr[-800:])
+        blk = [x for x in _lnc_gov(root, "code-loop-pass") if x.get("kind") == "blocked"]
+        check("①治理帳留一筆 code-loop-pass 擋下(hard、綁 HEAD、帶種類)", len(blk) == 1 and blk[0].get("hard") is True
+              and blk[0].get("head_sha") == _na_head(root) and blk[0].get("blocks") == ["lint_new"], str(_lnc_gov(root))[:600])
+        # 修好(放行)之後同一個現場照舊寫留痕:擋下的是那條告警,不是 pass 本身壞了
+        import re as _re
+        keys = _re.findall(r"lumos lint-waive (\S+)", r.stderr)
+        if keys:
+            _sp.run([sys.executable, GRAPHCTL, "lint-waive", keys[0].strip("'"), "--note", "測試:放行後再記通過",
+                     "--repo", str(root)], capture_output=True, text=True, timeout=60, stdin=_sp.DEVNULL)
+        r = _lcp_pass(root)
+        check("①放行後重跑 pass → rc0、寫留痕", r.returncode == 0 and (_codeloop_read(root, "feat") or {}).get("status") == "passed",
+              f"keys={keys} rc={r.returncode} {r.stderr[-400:]}")
+
+        # ② 有審查帳但沒帶編號:機械檢查排在留痕驗證之前 → 擋的是新增告警,不是「要帶編號」
+        root, _g = mk([bad_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        _clp_ledger(root, _clp_lines([_clp_row("code-x")]))
+        r = _lcp_pass(root)
+        check("②有審查帳沒帶編號 → 先被新增告警擋(rc2、記 code-loop-pass、沒有 pass-refused)",
+              r.returncode == 2 and [x.get("kind") for x in _lnc_gov(root, "code-loop-pass")] == ["blocked"]
+              and not [x for x in _lnc_gov(root, "code-loop") if str(x.get("note", "")).startswith("pass-refused")],
+              f"rc={r.returncode} {str(_lnc_gov(root))[:500]}")
+
+        # ③ 走 light 的迴圈:light 那條提早返回之前就先跑兩道
+        lines = _clp_lines([_clp_row("code-x", rnd=None, tier="light")])
+        root, _g = mk([bad_cmd], {"app.py": "a = 2\n"})
+        _clp_ledger(root, lines)
+        r = _lcp_pass(root, "--loop", "code-x")
+        check("③前置:light 迴圈、改動乾淨 → rc0(真的走到 light 放行)", r.returncode == 0
+              and (passed_events(root) or [{}])[-1].get("nodes") == ["code-x"], f"rc={r.returncode} {r.stderr[-300:]}")
+        root, _g = mk([bad_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        _clp_ledger(root, lines)
+        r = _lcp_pass(root, "--loop", "code-x")
+        check("③light 迴圈、有新增告警 → 照樣先擋(rc2、不寫留痕、記 code-loop-pass)",
+              r.returncode == 2 and _codeloop_read(root, "feat") is None and len(_lnc_gov(root, "code-loop-pass")) == 1,
+              f"rc={r.returncode} {r.stderr[-300:]}")
+
+        # ④ 工具沒裝 → 照推送前閘自動放行並記帳;兩道都乾淨 → 照舊寫留痕
+        root, _g = mk([missing_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lcp_pass(root)
+        fo = [x for x in _lnc_gov(root, "lint-new") if x.get("kind") == "fail-open"]
+        check("④工具沒裝 → rc0、寫留痕、記一筆新增告警閘的自動放行帳", r.returncode == 0
+              and (_codeloop_read(root, "feat") or {}).get("status") == "passed" and len(fo) == 1
+              and _lnc_gov(root, "code-loop-pass") == [], f"rc={r.returncode} {str(_lnc_gov(root))[:500]}")
+        root, git = mk([bad_cmd], {"app.py": "a = 2\n"})
+        r = _lcp_pass(root)
+        check("④兩道都乾淨 → rc0、照舊寫留痕、不記擋下", r.returncode == 0 and (_codeloop_read(root, "feat") or {}).get("status") == "passed"
+              and _lnc_gov(root, "code-loop-pass") == [], f"rc={r.returncode} {r.stderr[-300:]}")
+
+        # ⑤ 分岔點等於 HEAD(沒有改動)→ 直接放行不記帳:用沒裝的工具當探針,只要跑了就會記一筆自動放行
+        root, git = mk([missing_cmd], {"app.py": "a = 2\n"})
+        git("checkout", "-q", "main")
+        r = _lcp_pass(root)
+        others = [x for x in _lnc_gov(root) if not (x.get("gate") == "code-loop" and x.get("kind") == "passed")]
+        check("⑤分岔點等於 HEAD → rc0、寫留痕、除了 passed 那筆沒有任何帳", r.returncode == 0
+              and (_codeloop_read(root, "main") or {}).get("status") == "passed" and others == [], f"rc={r.returncode} {others}")
+
+        # ⑥ code-loop skip 不受影響:有新增告警照樣寫 skipped
+        root, _g = mk([bad_cmd], {"app.py": "a = 1\nBAD = 2\n"})
+        r = _lcp_pass(root, sub="skip")
+        check("⑥skip 有新增告警照樣 rc0、寫 skipped、不記擋下", r.returncode == 0
+              and (_codeloop_read(root, "feat") or {}).get("status") == "skipped" and _lnc_gov(root, "code-loop-pass") == [],
+              f"rc={r.returncode} {r.stderr[-300:]}")
+
+        # ⑦ 表態不完整(行程內,表態判定換成假的)→ rc2、印表態擋下、記帳帶 dispositions
+        root, _g = mk(None, {"app.py": "a = 2\n"})
+        rc, _o, e, calls, seen = _lcp_inproc(root, "pass", disp=True)
+        blk = [x for x in _lnc_gov(root, "code-loop-pass") if x.get("kind") == "blocked"]
+        check("⑦表態不完整 → rc2、印表態擋下、不寫留痕", rc == 2 and "表態不完整" in e and _codeloop_read(root, "feat") is None,
+              f"rc={rc} {e[-500:]}")
+        check("⑦治理帳記 code-loop-pass 擋下、種類 dispositions", len(blk) == 1 and blk[0].get("blocks") == ["dispositions"], str(blk))
+
+        # ⑧ pitfalls 出錯時新增告警那道照跑
+        root, _g = mk(None, {"app.py": "a = 2\n"})
+        rc, _o, e, calls, seen = _lcp_inproc(root, "pass", pf="fail", lint=True)
+        check("⑧pitfalls 出錯、有新增告警 → 新增告警照跑並擋下(rc2)", rc == 2 and ("lint",) in calls
+              and [x.get("blocks") for x in _lnc_gov(root, "code-loop-pass")] == [["lint_new"]], f"rc={rc} {calls} {e[-400:]}")
+        rc, _o, e, calls, seen = _lcp_inproc(root, "pass", pf="fail")
+        check("⑧pitfalls 出錯、新增告警乾淨 → 放行寫留痕", rc == 0 and ("lint",) in calls
+              and (_codeloop_read(root, "feat") or {}).get("status") == "passed", f"rc={rc} {calls} {e[-300:]}")
+
+        # ⑨b 分級是 high、沒有留痕:pass 照樣記通過(兩道不含代碼審留痕那道,帶進來會讓 pass 自己擋自己)
+        root, _g = mk(None, {"app.py": "a = 2\n"})
+        rc, _o, e, calls, seen = _lcp_inproc(root, "pass", tier="high")
+        check("⑨b tier=high 沒留痕 → pass 照樣 rc0、寫留痕、不記擋下", rc == 0 and (_codeloop_read(root, "feat") or {}).get("status") == "passed"
+              and _lnc_gov(root, "code-loop-pass") == [], f"rc={rc} {e[-400:]}")
+
+        # ⑨ pass 與推送檢查走同一個收集模式;pass 只跑兩道,推送檢查照舊全跑
+        root, _g = mk(None, {"app.py": "a = 2\n"})
+        rc, _o, e, calls, seen = _lcp_inproc(root, "pass", disp=True, lint=True)
+        check("⑨pass 走收集模式:兩道都擋時兩道都記", rc == 2 and seen and seen[0].get("keep_going") is True
+              and [x.get("blocks") for x in _lnc_gov(root, "code-loop-pass")] == [["dispositions", "lint_new"]],
+              f"rc={rc} {seen} {str(_lnc_gov(root, 'code-loop-pass'))[:300]}")
+        check("⑨pass 只跑兩道:安全證據、端到端驗收、合約測試都沒叫", ("disp", "standard") in calls and ("lint",) in calls
+              and not [c for c in calls if c[0] in ("security", "e2e", "bound")], str(calls))
+        rc, _o, e, calls, seen = _lcp_inproc(root, "check", disp=True, lint=True)
+        check("⑨推送檢查(check --keep-going)照舊六道都叫、同一個收集模式", rc == 1 and seen and seen[0].get("keep_going") is True
+              and {"security", "e2e", "bound", "disp", "lint"} <= {c[0] for c in calls}, f"rc={rc} {calls}")
+    finally:
+        _sh.rmtree(helper, ignore_errors=True)
+        for x in roots:
+            _sh.rmtree(x, ignore_errors=True)
 
 
 if __name__ == "__main__":
