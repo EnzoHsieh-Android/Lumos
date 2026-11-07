@@ -1,0 +1,671 @@
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android儀器測試範本與架構測試_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android儀器測試範本與架構測試_計劃.md
+index d5ccc925f..18d719d14 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android儀器測試範本與架構測試_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android儀器測試範本與架構測試_計劃.md
+@@ -111,21 +111,21 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留
+ | 組 | 型錄列 | 測法(一句) | 跑在哪 |
+ |---|---|---|---|
+ | T6 Room 與資料層 | DATA-17、DATA-19、DATA-21、DATA-65、DATA-69(5) | `MigrationTestHelper` 從最舊版逐版升、另一支 `addMigrations(*ALL_MIGRATIONS)` 開到最新;記憶體資料庫配會失敗的假 API 斷言本機資料還在、衝突照「後寫贏」;一次查 40000 個 id | 模擬器(官方不建議 Robolectric 跑 Room) |
+ | T7 Paging | DATA-58、DATA-60(2) | `asSnapshot` 對 ViewModel 的分頁流收兩次;RemoteMediator 三情境(有資料 false、空 true、例外 Error) | DATA-58 Robolectric;DATA-60 模擬器(要真 Room) |
+ | T8 WorkManager | DATA-38、DATA-39(2) | `TestListenableWorkerBuilder` 建 CoroutineWorker,取消後用假依賴的計數斷言「取消後沒再跑一圈、沒記成錯誤、資源關了一次」;被測程式產的 `Data` 斷言小於上限 | Robolectric |
+ | T9 Compose UI | STATE-12、STATE-23、UI-36、UI-52、ARCH-2、ARCH-3、TEST-29、TEST-32、DATA-63;無障礙 UI-106、UI-110(11) | `createComposeRule` 掛畫面、假 ViewModel 推狀態;訊息顯示後已消費、`StateRestorationTester` 還原、`snapshotFlow` 有發、項目載入前有高度、返回不被推回、連點只多一頁、動畫關自動推進、子節點用未合併樹、載入中不顯示空畫面;無障礙用 `enableAccessibilityChecks()` | 九列 Robolectric(實驗 E4 在模擬器對一次);無障礙兩列只在模擬器(預實驗 P1) |
+ | T10 LeakCanary | TEST-35(1) | 走完一個畫面流程後 `LeakAssertions.assertNoLeaks()`,用 `runCatching` 接住再斷言 | 模擬器 |
+ | T11 生命週期與框架 | ARCH-31、ARCH-35、STATE-17、ARCH-56(4) | `FragmentScenario` 移到 CREATED 後送回呼斷言沒丟例外;`TestLifecycleOwner` 走到 DESTROYED 斷言監聽數歸零;LiveData 在暫停的主 Looper 上連發兩次斷言兩筆都收到;Hilt Fragment 放進宿主 Activity 斷言沒丟例外;另接 API-9 的 Fragment 那半(view 銷毀後不再收) | Robolectric(ARCH-56 要 Hilt 測試設定,實驗 E9 決定) |
+ | T12 架構測試:協程歸屬(ArchUnit) | API-9(1;K1),另含 K2(CO-1,型錄 CO-1 列不改值) | 位元組碼判:不准 `GlobalScope`、不准在允許類別外呼叫 `CoroutineScope()`/`MainScope()`(允許與否看最外層宣告類別);資料層不准呼叫 `Dispatchers.IO/Default`(建構子與函式的預設值、DI 模組豁免);不匯入測試類別;舊違規凍結 | 專案的本機單元測試(JVM) |
+ | T13 架構測試:UiState 不可變(Konsist) | UI-39(1;K3) | 宣告判,只掃正式程式(`scopeFromProduction`):名字結尾 `UiState`(後綴清單是常數,可加)或父型別(含間接)結尾同樣後綴的類別,屬性不准 `var`、型別不准是可變型別或 `ArrayList`/`HashMap`/`HashSet` | 專案的本機單元測試(JVM) |
+-| T4 補 Ktor | API-30(1) | 真的 Ktor client 打本機 MockWebServer,斷言在 `execute { }` 區塊裡讀完的 body 是完整的;壞寫法把 response 帶出區塊再讀 | 純 JVM(前半骨架) |
++| T4 補 Ktor | API-30(1) | 真的 Ktor client(CIO 引擎)打 JDK 內建的 `com.sun.net.httpserver.HttpServer`(不用 MockWebServer,測試不碰 OkHttp),斷言在 `execute { }` 區塊裡讀完的 body 是完整的;壞寫法把 response 帶出區塊再讀 | Android app 模組的本機單元測試(照〈Android 實驗專案骨架〉組;沒在純 JVM 專案跑過) |
+ 
+ 做法:
+ 
+ 1. **範本檔 `skills/kotlin-idioms/test-templates.md` 加節**(不另開檔;節標題照前半 `## T<n> ` 規則,`check.py` 的 `template_problems` 原樣驗得到):
+    - 新節〈Android 實驗專案骨架〉放在〈實驗專案骨架〉之後:`settings.gradle.kts`、根 `build.gradle.kts`、`app/build.gradle.kts` 全文(AGP 8.13.2、Kotlin 2.2.21 與 Compose 外掛、compileSdk 36、`targetSdk = 36`、minSdk 24、`testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"`、`testOptions.unitTests.isIncludeAndroidResources = true`),`src/test/resources/robolectric.properties` 一行 `sdk=34` 與為什麼(預實驗 P2);儀器測試指令 `ANDROID_SERIAL=<模擬器> ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=<類別>`、Robolectric 指令 `./gradlew :app:testDebugUnitTest --tests <類別>`;每組〈依賴〉標明是 `androidTestImplementation`、`testImplementation` 還是 `debugImplementation`;跑在 Robolectric 的組(T7–T9、T11),〈依賴〉節尾另寫 `robolectric.properties` 那一行 `sdk=34` 與一句理由——〈怎麼用〉只叫消費專案抄〈依賴〉,只放骨架節的話照抄的人會漏(r1 架構對齊 F3);〈怎麼用〉第 2 步也補一句「Robolectric 組要連 `robolectric.properties` 一起抄」。
+    - 每組節裡的小節照前半(〈依據〉〈依賴〉〈測試〉〈假依賴〉〈好寫法〉〈壞寫法:變體〉〈紅綠矩陣〉);節開頭一句寫「跑在哪」。
+    - 範本的程式要點(寫進範本、實驗驗過才算):
+      - **T6**:Room 3 已是穩定版(官方版本頁 3.0.0 於 2026-07-01、穩定版 3.0.3 於 2026-09-09;遷移頁的 `MigrationTestHelper` 範例已是 `androidx.room3:room3-testing:3.0.3`),所以 T6 寫兩份〈依賴〉:〈依賴:Room 2〉(2.8.5,套件 `androidx.room`)與〈依賴:Room 3〉(3.0.3,套件 `androidx.room3`),〈測試〉照兩個套件名各一份 import;`MigrationTestHelper` 一律用具名參數寫(`instrumentation = …, file = …, driver = …, databaseClass = AppDb::class`),不混位置參數——官方參考頁的參數順序是 `instrumentation, file, driver, databaseClass`,前一版計劃把 `AppDb::class` 放在第二個位置參數會編不過(r1 可行性 F10);DATA-17、DATA-19 一支逐版 `runMigrationsAndValidate`、一支 `addMigrations(*ALL_MIGRATIONS)` 開到最新(官方「include a test that covers all migrations」),壞寫法「少一個 Migration」丟 `IllegalStateException`、「SQL 寫錯」丟 `SQLiteException`,都 `runCatching` 後斷言;結構檔要進 `androidTest` 的 assets(`sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")`,實驗驗);DATA-21 查 40000 個 id(SQLite 3.32.0 起參數上限 32766、之前 999,用 40000 讓新舊裝置都紅,壞寫法不分批、好寫法 `chunked(500)`;壞寫法丟 `SQLiteException`(too many SQL variables),測試先 `runCatching` 接住再斷言查到的筆數);DATA-69 假 API 丟 `IOException`,斷言刷新失敗後本機清單不變;DATA-65 照型錄標準寫法「後寫贏」:本機有較新未同步修改時,較舊的伺服器資料不得蓋掉,範本註解寫「衝突策略是業務決定,照情境表態換斷言」。
+      - **T7**:DATA-58 對 `vm.items` 連呼兩次 `asSnapshot { }`,壞寫法(沒 `cachedIn` 再 `combine` 或兩處收)丟 `IllegalStateException`,`runCatching` 後斷言;DATA-60 照官方 RemoteMediator 頁的三情境,空回應斷言 `endOfPaginationReached == true`。
+      - **T8**:DATA-38 只做 CoroutineWorker 版(型錄標準寫法說它由框架自動取消)。被測 Worker 的迴圈次數有上限(從假設定讀,範本用 50),每圈呼叫假來源一次、`delay`,跑完呼叫假結果的 `markDone()`,錯誤時呼叫 `recordError()`,`finally` 關假資源;測試在 `backgroundScope` 啟動 `worker.doWork()`、推進兩圈、取消、`runCurrent()`,用 `runTest(timeout = 10.seconds)`,斷言「取消後假來源的呼叫次數沒再增加、`markDone` 0 次、`recordError` 0 次、資源 `close` 恰好 1 次」——全部是計數比較,不靠接例外。壞寫法兩種:〈壞寫法:DATA-38 迴圈裡吞取消〉(`try { delay } catch (e: Exception) {}` 在迴圈內,取消後每圈的 `delay` 立刻丟例外又被吞,沒有上限會空轉卡死——r1 可行性 F3 實跑在 Robolectric 卡 190 秒以上、`runTest` 逾時沒生效;有上限就跑完剩下的圈數並 `markDone`,斷言紅)與〈壞寫法:DATA-38 迴圈外吞取消〉(`catch (e: Exception)` 在迴圈外並 `recordError()`,前一版測試分不出它,現在 `recordError` 1 次斷言紅)。一般 `Worker` 的 `isStopped` 從測試觸發不了(官方測試頁沒示範,`stop` 是框架內部方法),寫進天花板。DATA-39 斷言被測程式產的 `Data.toByteArray().size < Data.MAX_DATA_BYTES`。
+@@ -195,30 +195,30 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留
+ ## 實務隱患
+ 
+ (`lumos pitfalls <計劃> --check` 逐類答,結果見節末)
+ 
+ - **範本照抄出錯被當成標準**:同前半,〈怎麼用〉第 5 步「在自己的專案跑一次,綠了才算」照舊;儀器範本另寫明「要開模擬器跑」。
+ - **範本的壞例被本 repo 的推送閘當產品碼**:壞例都在 Markdown 圍欄裡,repo 不新增 `.kt` 檔;實驗專案只在會談暫存區。
+ - **實驗動到別人的工作目錄**:lab 有別人沒提交的改動;一律 `git clone` 到暫存區,不在原地改、不在原地跑 Gradle。
+ - **模擬器與 Gradle 常駐程序吃資源**:模擬器 2G RAM、無視窗;實驗完 `adb -s emulator-5554 emu kill` 關掉自己開的那台;Gradle daemon 是共用的,不停。
+ - **消費專案的 JDK**:Robolectric 對 SDK 36 要 JDK 21;骨架釘 `sdk=34`,專案用 JDK 21 時可拿掉(回頭條件見節末)。
+ - **ArchUnit 與 Konsist 的版本漂移**:版本只寫在範本檔各組〈依賴〉;Konsist 正式版出來後 T13 要重跑(回頭條件見節末)。
+-- **凍結清單被當成「已處理」**:`FreezingArchRule` 的清單檔讓舊違規永遠綠;範本節開頭寫明「清單只能縮小,新增一筆要在代碼審說明」,不機械擋(消費專案的事,本 repo 驗不到)。
++- **凍結清單被當成「已處理」**:`FreezingArchRule` 的清單檔讓舊違規永遠綠;範本節開頭寫明清單裡的違規只准變少、帶 `-ParchunitFreezeInit` 那次多出來的要在代碼審說明;改了規則描述時舊描述的清單條目與檔案一起刪(新描述另存、舊的不會自己消失,驗證紀錄 E13),帶屬性那次的清單差異在代碼審特別看新增的違規;不機械擋(消費專案的事,本 repo 驗不到)。
+ - **凍結清單漏提交或被刪變假綠**:`allowStoreCreation` 常駐 true 時會發生(r1 可行性 F1 實跑);範本預設 false、只在初次建清單時用 Gradle 屬性打開,並教使用者提交 `archunit_store`。
+ - **新規則或改描述被靜默凍結**:`allowStoreCreation=false` 只擋索引檔整份不見;加凍結規則、改規則描述時,沒設 `allowStoreUpdate=false` 會把當下違規存成新的一份、測試綠(驗證紀錄 E13 實跑);範本設 false,代價是修掉舊違規也要帶屬性跑一次,清單每次變動都在版控裡。
+ - **效能**:型錄自檢多讀的只有範本檔變長(多八節),判法不變。
+ - **併發**:實驗在會談暫存區;本 repo 只改 Markdown(範本檔、型錄、測試品質標準、前半計劃)與五支資料測試。
+ - **守衛面**:型錄自檢與資料測試在本 repo CI 跑;不改任何推送閘或收證判定。
+ - **舊否決對照**:見審計修正紀錄第一行。
+ - 前端:不改任何前端檔;本計劃的「畫面」都是 Android Compose。
+ - 已排除:金流:範本與實驗只用假資料。
+-- 已排除:對外送出:MockWebServer 只聽本機回環位址;實驗只從 Maven Central 與 Google Maven 下載依賴;模擬器不登入任何帳號。
++- 已排除:對外送出:MockWebServer 與 T4 Ktor 小節用的 JDK 內建 HttpServer 都只聽本機回環位址(HttpServer 綁 InetAddress.getLoopbackAddress());實驗只從 Maven Central 與 Google Maven 下載依賴;模擬器不登入任何帳號。
+ - 已排除:不可逆:新增 Markdown 節、改型錄文字與一支測試的期望,退提交即回原狀。
+ 
+ REVISIT:2027-02-06 範本檔 T6–T13 各組〈依賴〉的版本(Room、Paging、WorkManager、Compose BOM、LeakCanary、Robolectric、ArchUnit、Konsist、Ktor)與 Maven Central、Google Maven 最新版對一次,有大版本差就重跑那組的紅綠矩陣
+ REVISIT:2027-03-31 Konsist 出 1.0.0 正式版時,重跑實驗 E6(T13 兩版共通),並開 [[Systems/android-arch-template]] 的換版工作(產生器資料檔三處 `resideInPackage`、技能文件版本句、`_arch_tpl_konsist_test` 對新版重核);到期還沒出正式版就人裁要不要翻 d2、改換 beta
+ REVISIT:2027-03-31 Robolectric 的 Android 15 以上要 JDK 21:查消費專案與本機 JDK,都到 21 就拿掉骨架的 `sdk=34` 那行並重跑 T7–T11
+ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)時,重跑預實驗 P1(無障礙在 Robolectric 不報)與 P2(JDK 17 對 SDK 36),結論變了就改範本骨架與〈依賴〉
+ 
+ ## 驗收條款
+ 
+ - [S1] 當讀型錄 C 列時,每列通電批次的「行為測試或正向約束=」值應是「範本 T0」到「範本 T13」、「未接(儀器批)」、「不接(代碼審或真機)」之一,應不再出現「未接(架構測試後續計劃)」與「未接(Ktor 範本後續)」;各值的列數與各範本組的列應等於本計劃〈範圍〉〈做〉表(實驗移出的列照〈做法〉2 計入「未接(儀器批)」),CO-5 應是「不接(代碼審或真機)」。 [test:t_kotlin_catalog_c_rows_batch_resolved]
+@@ -397,10 +397,22 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)
+ 
+ ### 代碼審 code-android儀器測試範本 r1 修正(2026-11-06)
+ 
+ 五席(範本甲、範本乙、範本丙、測試、架構對齊,全 sonnet)13 條、major 2 條,全數折入;卷證 `governance/review-reports/code-android儀器測試範本/`(五份席報告與 `r1-intake.md`)。
+ 
+ - T12 凍結(範本丙 F1,major):範本照實寫 `allowStoreCreation=false` 只擋索引檔整份不見;加 `freeze.store.default.allowStoreUpdate=false`,`-ParchunitFreezeInit` 同時打開建立與更新;矩陣補四格(加規則、改描述、修掉舊違規、刪清單)。實驗見驗證紀錄 E13。
+ - T12 守衛(測試 F1,major):`_kt_instr_template_problems` 只在 T12 的 properties 與 kotlin 圍欄裡比對整行設定,加矩陣 `StoreUpdateFailedException` 格的檢查;改壞只改圍欄行(含搬到散文、搬進 build 圍欄),另有「只改散文不報」的對照。
+ - UI-39 守衛(測試 F2、F3):判準抽成 `_kt_ui39_problems`,加好寫法欄;改壞對照拿改壞後的型錄跑同一組判準。
+ - 措辭(範本甲 F1、範本乙 F1/F2、範本丙 F2、測試 F4):檔頭把 T4 Ktor 小節寫進 Android 模組那一半;TEST-29 兩處註解改成實測結論;T9「九列」改成「〈測試〉10 支」;STATE-17 說明改成通知一次、內容兩筆;UI-39 後果欄寫明 `===` 是官方頁原文、只有畫面不更新是推論。新加 `_kt_instr_wording_problems` 守這幾句。
+ - 一致性(架構對齊 F1、F2):缺節訊息改成跟 `template_problems` 同一句「範本檔沒有 T<n> 節」;後半 S2 的內容檢查從 `t_kotlin_test_templates_sections` 搬進 `t_kotlin_test_templates_content_guards`(S2 綁定跟著改);測試品質標準的指路句改成「照抄起手:…(T7–T11 節…)」,`sdk=34` 指到骨架節(S7 與預期值表跟著改)。
++
++### 代碼審 code-android儀器測試範本 r2 修正(2026-11-06)
++
++兩席(通才、架構對齊,全 sonnet)6 條、全 minor,全數折入;卷證同上目錄的 `r2-intake.md` 與兩份席報告。
++
++- T12 矩陣基準(通才 F1):末四格的被測程式欄照 E13 實際基準改成〈好寫法〉加〈壞寫法:CO-1 資料層寫死 withContext〉(舊違規 `TagRepository`);「修掉舊違規」那格改寫在被測程式欄、〈測試〉不動;前導句分開前七格的零違規基準與末四格的一筆舊違規基準。守衛 `_kt_t12_freeze_rows_problems` 查凍結格的被測程式帶舊違規、修掉那格寫在被測程式欄、前導句不再說每一格零違規。
++- T12 建清單條件(通才 F2):`_kt_instr_template_problems` 要求兩行 `systemProperty(… "true")` 在 `if (project.hasProperty("archunitFreezeInit")) {` 區塊裡(配大括號);改壞含 `if (true)`、別的屬性、拿掉條件、把一行搬到條件外。
++- 改描述的清單(通才 F3):範本寫明改描述時把 `stored.rules` 裡舊描述那一行與它的清單檔一起刪、帶屬性那次的清單差異要特別看新增的違規;「清單只能縮小」改成「違規只准變少,多出來的在代碼審說明」;〈風險〉那行跟著改。`_kt_instr_wording_problems` 守這三句。
++- 計劃與驗證紀錄(通才 F4):〈做〉表 T4 補 Ktor 列改成 Android app 模組的本機單元測試;驗證紀錄總格數 61→65、T12 7→11,寫明末 4 格是 E13 新加、每格跑一次(原 7 格連跑 20 次)。新加 `_kt_instr_records_problems` 守:驗證紀錄 S4 的 T12 格數等於範本 T12 矩陣列數、總格數等於各組加總、T4 補 Ktor 列不寫純 JVM;拿修正前的兩篇筆記跑會報 T12 格數與 Ktor 列兩處。
++- 測試總檔寫法(架構對齊 F1、F2):`_kt_template_sections` 多一個 `""` 鍵放組開頭段,T9、T11、T12 開頭都從這裡取,不再手切字串(圍欄裡的 `###` 不算小節,有對照案例);圍欄語言收成 `_kt_lang_fences`/`_kt_fence_blocks`,照 CommonMark 取 info string 第一個字整字比對,`_kt_kotlin_blocks`、T12 設定比對與改壞輔助 `_in_t12_fence` 都走它。
++- 改壞:新加與改過的 17 道判準在 `git clone --shared` 複本各拿掉一次,各自翻紅(其中「修掉舊違規寫在測試欄」第一次沒紅——改壞案例的期望字太寬、落到另一條訊息也命中,收緊後翻紅)。
++- 代碼審 r2 後補(2026-11-06):T12 第 2 步(改描述時刪 `stored.rules` 舊行與舊清單檔)實跑,與範本說法一致、範本不改,原 `REVISIT:2027-02-06 實跑一次 T12 範本第 2 步` 那行刪掉,結果見驗證紀錄 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]] E14;〈做〉表 T4 補 Ktor 列的「本機 MockWebServer」改成範本實際用的 JDK `HttpServer`;測試總檔 `_kt_instr_wording_problems` 的檔頭改取到第一個圍欄外的 `## `(不再 `split("\n## ")` 手切),新加「檔頭圍欄裡的 `## `」對照案例,先紅後綠,`git clone --shared` 複本改回手切翻紅。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 092fe8ace..bb4c5f8c2 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -28,20 +28,22 @@ summary: |-
+   WHY:型錄 C 列的行為測試範本放 skills/kotlin-idioms/test-templates.md,型錄通電批次欄寫「行為測試或正向約束=範本 T<n>」指過去,自我檢查 template_problems 只驗那一節存在(範本內容對不對靠實驗與驗證紀錄) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 設計審 r1] [因:沿用既有欄位,不另造認領語法;範本紅綠要 Gradle 才跑得出,本 repo CI 不跑 Gradle] [不選:check.py --lab 產生實驗專案(自檢是唯讀職責)] [test:t_kotlin_test_templates_sections]
+   PITFALL:Turbine 自己的檢查(awaitComplete、awaitError、expectNoEvents、區塊結束的 Unconsumed events)失敗丟 app.cash.turbine.TurbineAssertionError,收證工具 assertion_failure 照型別名判、不算斷言失敗,範本照抄會讓壞寫法的紅不被收證認 [出處:2026-11-06 範本紅綠矩陣實跑 T0 兩格] [根因:assertion_failure 只認型別名以 AssertionError 等結尾且前面是點,Turbine 的類別名是 TurbineAssertionError] [修法:範本改用 awaitEvent() 或 cancelAndConsumeRemainingEvents() 取事件再 assertEquals] [repro:skills/kotlin-idioms/test-templates.md T0〈測試〉×〈壞寫法:TEST-18 Saved 多發一次〉改回 awaitComplete() 跑 Gradle]
+   WHY:template_problems 只認通電批次「行為測試或正向約束=」那一段的「範本 T<n>」、比對範本檔標題前先剝程式圍欄、讀不了 UTF-8 回 (<templates>, 原因);由 catalog_problems 把讀好的主表列傳進去,不另讀 [出處:代碼審 code-android行為測試範本 r1 甲 F1、F2,架構 F1、F2] [因:圍欄裡示範的標題會讓缺節被放過;同一格兩套解析口徑會漂移] [test:t_kotlin_test_templates_sections]
+   PITFALL:T3 用 viewModelScenario().recreate() 的測試放進 Android 模組的本機單元測試,好寫法壞寫法一律例外紅 Method containsKey in android.os.BaseBundle not mocked [出處:代碼審 code-android行為測試範本 r1 丙 F1 實跑] [根因:Android 上 SavedState 就是 Bundle,本機單元測試的 android.jar 是空殼] [修法:範本預設改官方的複製 SavedStateHandle 寫法,viewModelScenario 版只標純 JVM 或 KMP] [test:t_kotlin_test_templates_content_guards]
+   WHY:check.py 的剝圍欄(_fence_regions、_visible_lines)是刻意的另一份,規則照 CommonMark、口徑跟 scripts/lumos 的 _fence_regions 逐條對齊;主表只有 main_rows 一條讀法,範本標題只有 TEMPLATE_HEADING_RE 與 template_sections 一套,測試端呼叫同名函式不另抄 [出處:代碼審 code-android行為測試範本 r2 架 F1–F4] [因:check.py 零依賴、scripts/lumos 沒有 .py 副檔名不能 import;抄兩份的正則在邊界案例會分岔] [不選:check.py 動態載入 scripts/lumos(破壞零依賴、CI 單獨跑自檢時多一個相依)] [test:t_kotlin_template_fence_parity]
+   WHY:範本檔加 T6–T13 與〈Android 實驗專案骨架〉,接型錄儀器批 25 列、API-9(T12,ArchUnit 讀位元組碼)、UI-39(T13,Konsist 讀宣告)、API-30(T4 補 Ktor);CO-5 改「不接(代碼審或真機)」,UI-39 名稱、壞寫法、標準寫法、後果四欄照強跳過頁改寫 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 設計審 r1、決策 d1、d3] [因:要不看字面判協程歸屬與寫死 dispatcher,Konsist 看不進函式本體] [不選:K4 架構測試(宿主由執行時決定,改 T11 行為測試);K5(room-guard 已擋)] [test:t_kotlin_catalog_c_rows_batch_resolved]
+   PITFALL:範本矩陣在 Android 實驗專案實跑時,儀器報告的失敗文字截在 64KB,斷言訊息帶整串例外(例 SQLiteException 的 4 萬個 ?)會把 JUnit 斷言框截掉,assertion_failure 判成不是斷言紅 [出處:2026-11-06 T6 DATA-21 模擬器實跑] [根因:AGP 儀器報告截斷失敗文字,收證要在第一個 Caused by 前找到 org.junit.Assert 框] [修法:儀器範本的斷言訊息只帶例外類別名或前幾行] [repro:skills/kotlin-idioms/test-templates.md T6〈測試:Room 2〉query_40000_ids 的訊息改回 exceptionOrNull() 在模擬器跑〈壞寫法:DATA-21 不分批〉]
+   PITFALL:ArchUnit 凍結清單只設 allowStoreCreation=false 時,加一支用 FreezingArchRule 包的新規則或改既有規則的描述,會把當下違規靜默存成新的一份、測試綠(改描述時連同時新加的違規一起凍結) [出處:代碼審 code-android儀器測試範本 r1 範本丙 F1;驗證紀錄 E13 實跑] [根因:清單以規則描述當鍵,allowStoreCreation 只管索引檔 stored.rules 整份不見,不在索引裡的規則 FreezingArchRule.evaluate 直接存檔回成功,allowStoreUpdate 預設 true] [修法:範本 T12 的 archunit.properties 加 allowStoreUpdate=false,-ParchunitFreezeInit 同時打開建立與更新;代價是修掉舊違規也要帶屬性跑一次] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本內容守衛只比對「整節有沒有這串字」時,散文也寫了同一串設定,把 properties 圍欄裡的設定行改成 true 或刪掉,守衛照綠 [出處:代碼審 code-android儀器測試範本 r1 測試 F1 翻紅實驗] [根因:_kt_instr_template_problems 對 T12 只做整節子字串比對] [修法:只在 T12 的 properties 與 kotlin 圍欄裡比對整行 key=value 與 systemProperty 行;改壞只改程式行] [同族:t_kotlin_catalog_instrumented_batch_notes 的改壞只比對舊字串本身(測試 F3),已改成拿改壞資料跑同一組判準 _kt_ui39_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
++  PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
++  PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android儀器測試範本與架構測試實跑.md b/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android儀器測試範本與架構測試實跑.md
+index 95a09f79b..e69334640 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android儀器測試範本與架構測試實跑.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-11-06_Android儀器測試範本與架構測試實跑.md
+@@ -13,25 +13,25 @@ plan_refs:
+ ---
+ # 2026-11-06_Android儀器測試範本與架構測試實跑
+ 
+ > 白話:照範本檔〈Android 實驗專案骨架〉把 T6–T13 與 T4 的 Ktor 小節每一格(測試小節 × 被測程式小節)組成一個 Android app 模組,真的在 Robolectric、純 JVM 與模擬器 `kds_bench`(API 34)跑,讀 JUnit XML 看每支測試是不是矩陣寫的結果,每個紅用收證工具的 `assertion_failure` 判是不是斷言失敗。驗 [[Projects/Android儀器測試範本與架構測試_計劃]] 的 S4、S5 與實驗 E1–E12;S1–S3、S6、S7 是 repo 裡的資料測試,見 [[Systems/kotlin規則包]]。
+ 
+ ## 做法
+ 
+ - 實驗專案從 lab(macrobench-lab)`git clone` 到會談暫存區,只拿它的 Gradle wrapper 與 `local.properties`;每格一個 app 模組,`build.gradle.kts` 照骨架的 `app/build.gradle.kts`(只換 namespace),`dependencies` 貼那組〈依賴〉(〈依賴:X〉配〈測試:X〉;寫「在〈依賴〉之外再加」的兩份合併),標「plugins { } 加」「android { } 加」「檔尾」的圍欄照標的位置貼;〈測試〉〈假依賴〉照節開頭的「跑在哪」放 `src/test` 或 `src/androidTest`;被測程式組法同前半(〈好寫法〉每段一檔,再用那一格點名的小節換掉同名的)。跑的就是範本檔裡的字,沒有另抄。
+ - 例外:T6 的舊結構檔(`schemas/AppDb/1.json`、`2.json`)由小程式先用第 1、2 版 Entity 建置產生(代表專案歷史);Room 3 那幾格照範本寫的兩處機械改法(import 換 `androidx.room3.`、`migrate` 加 `suspend`)套到〈好寫法〉〈壞寫法〉;T12 每格先用〈好寫法〉帶 `-ParchunitFreezeInit` 建凍結清單再換回那格程式跑;T13 每格自成一個 Gradle 專案(Konsist 掃整個專案)。
+ - 判定:矩陣寫「斷言紅」的,XML 失敗節點經 `assertion_failure` 判成真、訊息含矩陣寫的片段;沒點名的要綠;小節裡每支 `@Test` 都要出現在矩陣。模擬器的 XML 在 `build/outputs/androidTest-results/connected/debug/`。
+-- 重跑:JVM 與 Robolectric 每格連跑 20 次(`--rerun`),模擬器每格 5 次(每次重裝 APK)。
++- 重跑:JVM 與 Robolectric 每格連跑 20 次(`--rerun`),模擬器每格 5 次(每次重裝 APK);例外是 T12 由 E13 新加的 4 格,每格跑一次(理由見 E13 末條)。
+ 
+ ## 結果
+ 
+-- **S4 矩陣**:61 格全部「不符 0」——T4 Ktor 4 格(OkHttp 4、5 兩種並存)、T6 12 格(Room 2、Room 3 各 6)、T7 5 格(Robolectric 2、模擬器 3)、T8 4 格、T9 13 格(Robolectric 10、模擬器 3)、T10 2 格、T11 9 格、T12 7 格、T13 5 格(0.17.3 與 1.0.0-beta.1 各一輪)。
++- **S4 矩陣**:65 格全部「不符 0」——T4 Ktor 4 格(OkHttp 4、5 兩種並存)、T6 12 格(Room 2、Room 3 各 6)、T7 5 格(Robolectric 2、模擬器 3)、T8 4 格、T9 13 格(Robolectric 10、模擬器 3)、T10 2 格、T11 9 格、T12 11 格(原 7 格見 E5;末 4 格驗凍結設定本身——加規則、改描述、修掉舊違規、刪清單——是 E13 新加的)、T13 5 格(0.17.3 與 1.0.0-beta.1 各一輪)。
+ - **E1 紅都是斷言紅**:〈測試〉列的每個紅都判成斷言失敗。計劃列的會是例外紅的,改寫後實跑:T6 少 Migration、SQL 寫錯(`IllegalStateException`)、DATA-21(`SQLiteException`)、T7 DATA-58(`Attempt to collect twice`)、T9 STATE-23(`IllegalArgumentException`,在 `rememberSaveable` 組建時就丟)、無障礙兩列(`AccessibilityViewCheckException`)、T11 ARCH-31(`Can not perform this action after onSaveInstanceState`)、ARCH-56(`Hilt Fragments must be attached to an @AndroidEntryPoint Activity`)、T4 API-30(`ClosedByteChannelException: Channel was cancelled`)都被 `runCatching` 接住後斷言紅;T12 是 ArchUnit 的 `java.lang.AssertionError`;T13 改收集違規再 `assertEquals`。T10 的 `NoLeakAssertionFailedError` 父類別鏈是 `java.lang.AssertionError → Error → Throwable`(子類別、型別名不同,收證照型別名判不認,所以照計劃包 `runCatching`)。STATE-12 若用 `waitUntil`,壞寫法紅的是 `ComposeTimeoutException`(非斷言,另跑對照)。
+ - **E1 新發現**:儀器報告的失敗文字截在 64KB——DATA-21 的斷言訊息帶整個 `SQLiteException`(含 4 萬個 `?`)時斷言框被截掉、判成非斷言;改成只帶例外類別名後判對。
+ - **E2**:每個〈壞寫法〉格只紅矩陣點名的那支;DATA-19 SQL 寫錯同時紅兩支(逐步升級與全部升級),DATA-60 永遠回 false 同時紅兩支,矩陣本來就點名兩支。
+ - **E4 跑在哪的對照**:Robolectric 4.17 重做 P1:〈測試:無障礙〉放 `src/test` 跑,好寫法、UI-106、UI-110 三格全綠(Robolectric 不報無障礙);P2:拿掉 `robolectric.properties` 的 `sdk=34`,整個類別紅 `UnsupportedOperationException: Failed to create a Robolectric sandbox: Android SDK 36 requires Java 21 (have Java 17)`。Robolectric 組原樣搬到模擬器(`androidTest`):T8 4 格、T7 DATA-58 2 格、T9 九列 10 格全部跟 Robolectric 一樣;T11 的 ARCH-31、ARCH-35 一樣;STATE-17 與 API-9 Fragment 用 Robolectric 暫停的主 Looper(`shadowOf`),不能原樣搬,範本寫明只在 Robolectric;Hilt 那兩格在模擬器要自訂 runner,沒對照。TEST-29〈壞測試〉(讓時鐘自動推進)在 Robolectric 與模擬器都綠、沒卡住;TEST-32〈壞測試〉在 Robolectric 是斷言紅、在模擬器收證判不到(Compose 自己的 `AssertionError` 沒有 `org.junit.Assert` 框)。
+ - **E4 推翻**:模擬器上 UI-110(白底 `#CCCCCC`,對比 1.61)預設照綠——`enableAccessibilityChecks()` 不帶參數只對 ERROR 丟例外,ATF 把文字對比報成 WARNING;傳 `setThrowExceptionFor(WARNING)` 的 validator 後斷言紅「The item's text contrast ratio is 1.61」。範本改傳 validator。
+ - **TEST-29 移出**:上一條的〈壞測試〉兩邊都綠,範本抓不到差別,型錄 TEST-29 改回「未接(儀器批)」。
+ - **ARCH-3 對照**:不關自動時鐘時,好寫法與壞寫法的第二次點擊都丟「Failed to inject touch input. The node is no longer in the tree」(轉場已跑完、按鈕離開畫面),兩邊一起紅、分不出——關自動時鐘是必要的(計劃寫的機制是「好寫法也多一頁」,實際是節點不見,結論相同)。
+ - **E5 K1、K2 在 Android 模組**(lab 複本的 app 模組):〈好寫法〉的 Android 樣本(`viewModelScope`、Fragment `lifecycleScope`、`Application` 裡 `appScope` 與 suspend lambda `App$onCreate$1`、`@Module` abstract class 的 `@Binds` 加 companion `@Provides`、`goAsync` 的 Receiver、`rememberCoroutineScope`、註解字串裡的 `GlobalScope`、建構子注入、建構子預設值、`load$default`、資料層 DI 模組)全綠;壞樣本(函式本體建 scope、星號匯入與完整名稱的 `GlobalScope`、沒 `goAsync` 的 Receiver、資料層 `withContext(Dispatchers.IO)`、屬性 `limitedParallelism`)各自只紅點名那支。`@HiltAndroidApp` 版的 Application 沒在這裡跑(T11 的 Hilt 那兩格沒有 Application 類別)。
+   - 凍結五步:①沒有清單、`allowStoreCreation=false` → 兩支都紅 `StoreInitializationFailedException: Creating new violation store is disabled`;②帶 `-ParchunitFreezeInit`(含一筆舊違規 TagRepository)→ 清單建在 `src/test/resources/archunit_store`、1 行違規、綠;③不帶屬性加新違規 CartPresenter → 只紅那一筆(斷言紅);④修掉舊違規 → 綠、清單縮成 0 行;⑤刪掉清單、不帶屬性(含新違規)→ 回到①的紅,不是全綠。對照:常駐 true、刪清單、含新違規 → 全綠(新違規一起被凍結);沒寫 `freeze.store.default.path` → 清單落在模組根 `archunit_store/`。
+   - 測試源集:`src/test` 裡資料層套件的 `CoroutineScope(UnconfinedTestDispatcher())`、`Dispatchers.Default.limitedParallelism(1)` → 自訂 `ImportOption` 下綠;改用內建 `DoNotIncludeTests` → 兩支都紅(`FakeScopes.<init>`、`FakeScopes.x`),內建的認不得 AGP 的 `debugUnitTest` 路徑,範本保留自訂排除。
+@@ -47,20 +47,34 @@ plan_refs:
+   - 預設設定(`allowStoreCreation=false`、沒寫 `allowStoreUpdate`):(a)加第三支 `FreezingArchRule` 包的 `@Test`(新描述「not call withContext」,當下 3 筆違規)→ 三支全綠,`stored.rules` 多一行、多一份 3 行的清單檔;(b)改 `dataLayerInjectsDispatchers` 的描述 → 全綠,舊描述那行留著、新描述另存一份;(b')改描述同時加新違規 `ImageCache` → 全綠,新違規一起被凍結。印證範本丙席讀原始碼的說法。
+   - 加 `freeze.store.default.allowStoreUpdate=false`:(a)新那支紅 `StoreUpdateFailedException: Updating frozen violations is disabled (enable by configuration freeze.store.default.allowStoreUpdate=true)`;(b)、(b')同一個例外紅;新規則就算零違規也紅同一個例外(存空清單也是寫入);清單外的新違規照舊 `java.lang.AssertionError`;修掉舊違規 `TagRepository` → 紅 `StoreUpdateFailedException`,帶屬性再跑一次綠、清單縮一行;刪掉清單目錄 → 兩支紅 `StoreInitializationFailedException`(不變)。
+   - 建清單那一步:`build.gradle.kts` 只傳 `allowStoreCreation=true` 時,刪清單後帶 `-ParchunitFreezeInit` 跑兩支都紅 `StoreUpdateFailedException`(建清單要寫入違規);兩個系統屬性都傳才綠。範本改成兩個都傳。
+   - 新設定下〈好寫法〉建零違規清單、T12 原七格逐格跑一次:好寫法全綠,六個壞寫法各自只紅點名那支、都是 `java.lang.AssertionError`,跟 E5 一致。凍結五步的④由「綠、清單自動縮小」改成「紅 `StoreUpdateFailedException`,帶屬性跑一次縮小」。
+   - 順帶:照骨架組 app 模組時 AGP 要 `app/src/main/AndroidManifest.xml`(`processDebugMainManifest` 找不到檔就停),骨架節沒列這個檔;這次補一行空的 `<manifest />` 才建置得起來。
+   - 每格跑一次:ArchUnit 讀 `.class` 與清單檔,結果不受時序影響(E3 的 T12 七格連跑 20 次也沒有翻轉)。
+ - **E11**:`python3.14 scripts/test_lumos.py -k kotlin` 342 支綠,`template_problems` 零問題;把某列改成「範本 T20」被報(既有改壞改用 T20,因為 T9 現在存在)。
+ 
+ ## 重跑(E3)
+ 
+-- JVM 與 Robolectric 每格連跑 20 次(`--rerun`),每次全部「不符 0」:T8 4 格、T11 9 格、T9 10 格、T7 DATA-58 2 格、T12 7 格(每次先重建凍結清單)、T13 5 格(Konsist 0.17.3;1.0.0-beta.1 跑一輪)、T4 Ktor 4 格。T9 的 TEST-29、STATE-12(時鐘)與 T11 的 STATE-17(Looper 排程)沒有一次翻轉。
++- JVM 與 Robolectric 每格連跑 20 次(`--rerun`),每次全部「不符 0」:T8 4 格、T11 9 格、T9 10 格、T7 DATA-58 2 格、T12 原 7 格(每次先重建凍結清單;E13 新加的 4 格不在這裡,每格跑一次,見 E13)、T13 5 格(Konsist 0.17.3;1.0.0-beta.1 跑一輪)、T4 Ktor 4 格。T9 的 TEST-29、STATE-12(時鐘)與 T11 的 STATE-17(Looper 排程)沒有一次翻轉。
+ - 模擬器每格 5 次(每次重裝 APK),全部「不符 0」:T6 12 格、T7 DATA-60 3 格、T9 無障礙 3 格、T10 2 格。T6 在重跑前另有一輪「升版後第一次建置」,照〈E10〉的坑紅了逐步升級那支,第二次建置起全綠。
+ 
++## T12 改描述的清理步驟實跑(E14,2026-11-06)
++
++驗範本 T12〈舊違規凍結〉第 2 步「改了規則描述時,把 `stored.rules` 裡舊描述那一行與它的清單檔一起刪」照做真的清得乾淨(代碼審 r2 通才 F3 折入時只照清單格式推得,沒跑)。
++
++- 專案:照〈Android 實驗專案骨架〉組一個 app 模組(Gradle 8.13 wrapper、JDK 17、AGP 8.13.2、Kotlin 2.2.21),放 T12〈依賴〉(含 Compose 外掛與 `buildFeatures`、檔尾的 `-ParchunitFreezeInit` 區塊、`archunit.properties` 三行)、〈測試〉、〈好寫法〉五段,加〈壞寫法:CO-1 資料層寫死 withContext〉的 `TagRepository` 當一筆舊違規;程式用小程式從範本檔逐字抽出,不手抄。
++- 建清單:帶 `-ParchunitFreezeInit` 跑 → 兩支綠,`stored.rules` 兩行,K2 那份清單一行 `TagRepository.tags … Dispatchers.getIO()`,K1 那份空檔;提交。不帶屬性跑 2 支 0 失敗。
++- 改描述:K2 的 `ArchCondition` 描述字串尾巴加「in the data layer」。不帶屬性跑 → `data_layer_does_not_hardcode_dispatchers` 紅 `StoreUpdateFailedException: Updating frozen violations is disabled`(與矩陣第 9 格一致)。
++- 對照(不刪舊條目、直接帶屬性跑):綠,`stored.rules` 變三行——舊描述那行與它的清單檔留著、新描述另存一份。印證範本「舊描述那一份不會自己消失」;對照現場用 `git checkout` 還原。
++- 照第 2 步做:從 `stored.rules` 刪舊描述那一行、刪它指的清單檔,再帶 `-ParchunitFreezeInit` 跑 → 綠;`stored.rules` 剩兩行(K1 原行、K2 新描述一行),資料夾裡只有這兩份清單,舊清單檔沒有長回來;新描述那份清單只有一行,內容與舊清單一字不差(`TagRepository.tags`)。提交。
++- 之後不帶屬性跑:2 支 0 失敗,清單沒有變動(`git status` 乾淨)。
++- 清單外的新違規:再放〈壞寫法:CO-1 屬性 limitedParallelism〉的 `ImageCache`、不帶屬性跑 → `data_layer_does_not_hardcode_dispatchers` 紅 `java.lang.AssertionError`,訊息規則名是新描述、「was violated (1 times)」只列 `ImageCache.<init>()`,沒列已凍結的 `TagRepository`;另一支綠;清單沒被改寫。
++- 結論:結果與範本第 2 步說法一致,範本不改。刪舊條目與帶屬性跑的先後不影響結果(對照那一跑證明新描述那份不論舊行在不在都會另存,事後再刪舊行與舊檔得到同一份清單)。每步跑一次,理由同 E13 末條。
++- 現場:實驗專案在 `/tmp/lumos-seat-work/丙線實跑3/`,結果寫進這一節後已刪。
++
+ ## 版本天花板(實作時查到)
+ 
+ AGP 8.13.2 能用的最新:Compose BOM 2026.06.01(Compose 1.11.4)、lifecycle 2.10.0、navigation 2.9.8、Hilt 2.58;再新的版本 `checkDebugAarMetadata` 擋(要 compileSdk 37 與 AGP 9.1)或 Hilt 外掛拒用。Room 2.8.5、Room 3.0.3、Paging 3.5.3、WorkManager 2.11.2、fragment 1.9.1、activity-compose 1.13.0 可用。
+ 
+ ## 現場
+ 
+ 實驗專案、輸出與小程式都在會談暫存區 `b5b-impl/`,要留的結果都寫在這一篇;收尾已刪。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 723db1291..c21702384 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126623,51 +126623,66 @@ def t_kotlin_template_fence_parity():
+     }
+     for name, text in cases.items():
+         lines = text.split("\n")
+         mine = [ln for _no, ln in m._visible_lines(lines)]
+         theirs = [ln for _no, ln in lm._visible_lines(lines)]
+         check(f"S1 圍欄判定跟 lumos 一致:{name}", mine == theirs, f"check.py={mine} lumos={theirs}")
+ 
+ 
+ def _kt_template_sections(m, text):
+     """範本檔 → {組代號: {小節標題: 小節內文}}。組的切法呼叫 check.py 的 template_sections
+-    (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。"""
++    (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。
++    鍵 "" 是組標題到第一個小節之間的開頭段(代碼審 code-android儀器測試範本 r2 架構對齊 F1:開頭段也走這支,
++    不另外手切字串)。"""
+     lines = text.splitlines()
+     starts = m.template_sections(text)
+     visible = {no - 1 for no, _ln in m._visible_lines(lines)}
+     out = {}
+     for k, (g, i) in enumerate(starts):
+         end = starts[k + 1][1] if k + 1 < len(starts) else len(lines)
+         nxt = next((j for j in range(i + 1, end) if j in visible and lines[j].startswith("## ")), end)
+-        subs, cur = {}, None
++        subs, cur = {"": []}, ""
+         for j in range(i + 1, nxt):
+             if j in visible and lines[j].startswith("### "):
+                 cur = lines[j][4:].strip()
+                 subs[cur] = []
+-            elif cur is not None:
++            else:
+                 subs[cur].append(lines[j])
+         out[g] = {n: "\n".join(b) + "\n" for n, b in subs.items()}
+     return out
+ 
+ 
+-def _kt_kotlin_blocks(m, body):
+-    """小節內文 → 每個 ```kotlin 圍欄裡的程式。圍欄區段呼叫 check.py 的 _fence_regions(跟 lumos 同口徑),
+-    不用成對非貪婪正則(看不見未閉合圍欄)。"""
+-    lines = body.splitlines()
+-    regions, _open = m._fence_regions(lines, True)
++def _kt_lang_fences(m, lines, lang):
++    """行清單 → 語言是 lang 的圍欄內容範圍 [(第一行索引, 結尾索引不含)]。圍欄區段呼叫 check.py 的
++    _fence_regions(跟 lumos 同口徑),不用成對非貪婪正則(看不見未閉合圍欄);語言照 CommonMark 取 info string
++    的第一個字整字比對(```kotlinx 不算 kotlin、```kotlin title=… 算)。範本檔取某語言圍欄一律走這支
++    (代碼審 r2 架構對齊 F2:原本三處各寫一份、比對方式不同)。"""
+     out = []
+-    for a, b in regions:
+-        if lines[a].lstrip(" ").lstrip("`~").startswith("kotlin"):
+-            out.append("\n".join(lines[a + 1:b if b is not None else len(lines)]))
++    for a, b in m._fence_regions(lines, True)[0]:
++        s = lines[a].lstrip(" ")
++        info = s.lstrip(s[0]).split()
++        if info and info[0] == lang:
++            out.append((a + 1, b if b is not None else len(lines)))
+     return out
+ 
+ 
++def _kt_fence_blocks(m, body, lang):
++    """內文 → 每個語言是 lang 的圍欄裡的內容(見 _kt_lang_fences)。"""
++    lines = body.splitlines()
++    return ["\n".join(lines[a:b]) for a, b in _kt_lang_fences(m, lines, lang)]
++
++
++def _kt_kotlin_blocks(m, body):
++    """小節內文 → 每個 ```kotlin 圍欄裡的程式。"""
++    return _kt_fence_blocks(m, body, "kotlin")
++
++
+ def _kt_block_after(code, start):
+     """從 code[start] 的 `{` 起配對大括號,回 (區塊內文, 結束位置);沒配到回到結尾。"""
+     depth = 0
+     for i in range(start, len(code)):
+         if code[i] == "{":
+             depth += 1
+         elif code[i] == "}":
+             depth -= 1
+             if depth == 0:
+                 return code[start + 1:i], i
+@@ -126746,26 +126761,54 @@ def _kt_instr_test_guard_selfcheck():
+ 
+ 
+ # 後半 S2:範本檔的儀器批與架構測試內容檢查(章節存在之外的內容;Projects/Android儀器測試範本與架構測試_計劃 S2)
+ _KT_T11_API9_SUB = "測試:API-9 Fragment 畫面銷毀後"
+ # T12 凍結設定(驗證紀錄 E5、E13):清單不見要紅、新規則與改描述不准靜默凍結;建清單那一步兩個都臨時打開
+ _KT_T12_FREEZE_PROPS = ("freeze.store.default.path=src/test/resources/archunit_store",
+                         "freeze.store.default.allowStoreCreation=false",
+                         "freeze.store.default.allowStoreUpdate=false")
+ _KT_T12_INIT_PROPS = ('systemProperty("archunit.freeze.store.default.allowStoreCreation", "true")',
+                       'systemProperty("archunit.freeze.store.default.allowStoreUpdate", "true")')
++_KT_T12_INIT_COND = 'if (project.hasProperty("archunitFreezeInit"))'
++_KT_T12_OLD_VIOLATION = "壞寫法:CO-1 資料層寫死 withContext"   # 凍結格的舊違規 TagRepository(驗證紀錄 E13 的基準)
++
++
++def _kt_t12_freeze_rows_problems(mx):
++    """T12〈紅綠矩陣〉內文 → 凍結格(結果欄有 StoreUpdateFailedException 或 StoreInitializationFailedException)
++    的基準對不上 E13 的地方(代碼審 r2 通才 F1):E13 的清單是〈好寫法〉加舊違規 TagRepository 建的,所以凍結格的
++    被測程式要帶 _KT_T12_OLD_VIOLATION;「修掉舊違規」改的是被測程式,寫在被測程式欄、而且拿掉 TagRepository;
++    前導句不准再說每一格都用零違規的〈好寫法〉建清單。"""
++    probs = []
++    lead = mx.split("\n| ", 1)[0]
++    if "每一格先用〈好寫法〉" in lead or "TagRepository" not in lead:
++        probs.append("T12 矩陣前導句沒分開零違規的基準與凍結格帶舊違規 TagRepository 的基準")
++    for ln in mx.splitlines():
++        c = [x.strip() for x in ln.strip().strip("|").split("|")]
++        if not ln.startswith("| ") or len(c) < 3 or not any(
++                w in c[2] for w in ("StoreUpdateFailedException", "StoreInitializationFailedException")):
++            continue
++        test, prog = c[0], c[1]
++        if "修掉舊違規" in test:
++            probs.append(f"T12 矩陣「{test}」:修掉舊違規改的是被測程式,要寫在被測程式欄")
++        elif "修掉舊違規" in prog:
++            if _KT_T12_OLD_VIOLATION in prog or "TagRepository" not in prog:
++                probs.append(f"T12 矩陣修掉舊違規那格的被測程式要寫明拿掉 TagRepository:{prog}")
++        elif _KT_T12_OLD_VIOLATION not in prog:
++            probs.append(f"T12 矩陣凍結格「{test}」的被測程式沒帶舊違規〈{_KT_T12_OLD_VIOLATION}〉(E13 的基準)")
++    return probs
+ 
+ 
+ def _kt_instr_template_problems(m, text):
+     """範本檔全文 → 問題清單:T6–T13 八節、〈Android 實驗專案骨架〉與它的三個必有字、每節〈紅綠矩陣〉、
+     T12 指到 T11 的小節名、凍結設定與矩陣的 StoreUpdateFailedException 格。節的切法照 template_sections(圍欄裡的不算)。
+     凍結設定只認 T12 節圍欄裡整行相等的設定(代碼審 r1 測試 F1:散文也寫了同一串字,只比整節字串時改設定行不會紅)。"""
++    import re as _re
+     probs = []
+     lines = text.splitlines()
+     heads = [i for i, ln in enumerate(lines) if ln.startswith("## ")]
+     vis_set = {no - 1 for no, _ln in m._visible_lines(lines)}
+     skel = [i for i in heads if i in vis_set and lines[i].strip() == "## Android 實驗專案骨架"]
+     if not skel:
+         probs.append("沒有〈Android 實驗專案骨架〉一節")
+     else:
+         i = skel[0]
+         nxt = next((j for j in heads if j > i and j in vis_set), len(lines))
+@@ -126781,34 +126824,43 @@ def _kt_instr_template_problems(m, text):
+             continue
+         if not any(n.startswith("紅綠矩陣") for n in groups[g]):
+             probs.append(f"{g} 沒有〈紅綠矩陣〉小節")
+     if "T12" in groups:
+         starts = m.template_sections(text)
+         idx = [i for g, i in starts if g == "T12"][0]
+         after = [i for g, i in starts if i > idx]
+         seg = lines[idx:after[0] if after else len(lines)]
+         if _KT_T11_API9_SUB not in "\n".join(seg):
+             probs.append(f"T12 節缺 {_KT_T11_API9_SUB}")
+-        fenced = {"properties": set(), "kotlin": set()}
+-        for a0, b0 in m._fence_regions(seg, True)[0]:
+-            lang = seg[a0].lstrip(" ").lstrip("`~").strip()
+-            if lang in fenced:
+-                fenced[lang] |= {ln.strip() for ln in seg[a0 + 1:b0 if b0 is not None else len(seg)]}
++        seg_text = "\n".join(seg)
++        fenced = {lang: {ln.strip() for blk in _kt_fence_blocks(m, seg_text, lang) for ln in blk.splitlines()}
++                  for lang in ("properties", "kotlin")}
++        kotlin_codes = _kt_fence_blocks(m, seg_text, "kotlin")
+         for kv in _KT_T12_FREEZE_PROPS:
+             if kv not in fenced["properties"]:
+                 probs.append(f"T12 archunit.properties 圍欄缺 {kv}")
++        # 兩個 systemProperty 只准出現在 -ParchunitFreezeInit 條件區塊裡:條件拿掉或改成 if (true) 就是常駐 true
++        # (代碼審 r2 通才 F2);區塊用 _kt_block_after 配大括號
++        in_cond = set()
++        for code in kotlin_codes:
++            for mt in _re.finditer(r"^[ \t]*" + _re.escape(_KT_T12_INIT_COND) + r"[ \t]*\{", code, _re.M):
++                body, _end = _kt_block_after(code, mt.end() - 1)
++                in_cond |= {ln.strip() for ln in body.splitlines()}
+         for ln in _KT_T12_INIT_PROPS:
+             if ln not in fenced["kotlin"]:
+                 probs.append(f"T12 建清單的 build.gradle.kts 片段缺 {ln}")
++            elif ln not in in_cond:
++                probs.append(f"T12 建清單的 {ln} 沒包在 {_KT_T12_INIT_COND} 區塊裡(會常駐 true)")
+         mx12 = next((b for n, b in groups["T12"].items() if n.startswith("紅綠矩陣")), "")
+         if "StoreUpdateFailedException" not in mx12:
+             probs.append("T12 矩陣沒有新規則或改描述被擋的 StoreUpdateFailedException 格")
++        probs += _kt_t12_freeze_rows_problems(mx12)
+     if "T11" in groups and _KT_T11_API9_SUB not in groups["T11"]:
+         probs.append(f"T11 沒有〈{_KT_T11_API9_SUB}〉小節")
+     return probs
+ 
+ 
+ def t_kotlin_test_templates_content_guards():
+     """[S3 的機械那一半] 範本內容的幾條規矩(代碼審 r1 折入;紅綠本身靠實驗與驗證紀錄):
+     ①〈測試〉小節不用 Turbine 自己的檢查——它們失敗丟 TurbineAssertionError,收證不算斷言;
+     ②每個〈好寫法:…〉〈壞寫法:…〉小節都出現在同組矩陣的「被測程式小節」欄(加了變形就要實跑進矩陣);
+     ③T3 預設〈測試〉不用 viewModelScenario(Android 模組本機測試跑不起來),另一版的條件寫在節開頭;
+@@ -126881,25 +126933,21 @@ def t_kotlin_test_templates_content_guards():
+         lines = txt.split("\n")
+         starts = m.template_sections(txt)
+         i12 = [i for g, i in starts if g == "T12"][0]
+         end = next((i for _g, i in starts if i > i12), len(lines))
+         return lines, i12, end
+ 
+     def _in_t12_fence(txt, lang, a, b):
+         """只改 T12 節裡 lang 圍欄內含 a 的行(b 是 None 就刪掉那行);散文不動。沒改到任何行就丟例外(改壞不能空轉)。"""
+         lines, i12, end = _t12_span(txt)
+         seg = lines[i12:end]
+-        regions, _open = m._fence_regions(seg, True)
+-        hit = set()
+-        for a0, b0 in regions:
+-            if seg[a0].lstrip(" ").lstrip("`~").startswith(lang):
+-                hit |= {k for k in range(a0 + 1, b0 if b0 is not None else len(seg)) if a in seg[k]}
++        hit = {k for a0, b0 in _kt_lang_fences(m, seg, lang) for k in range(a0, b0) if a in seg[k]}
+         if not hit:
+             raise AssertionError(f"改壞沒改到 T12 {lang} 圍欄裡含 {a!r} 的行")
+         seg = [ln if k not in hit else ln.replace(a, b) for k, ln in enumerate(seg) if not (k in hit and b is None)]
+         return "\n".join(lines[:i12] + seg + lines[end:])
+ 
+     def _in_t12_prose(txt, a, b):
+         """只改 T12 節圍欄外的行;改到的行數要大於 0(對照不能空轉)。"""
+         lines, i12, end = _t12_span(txt)
+         vis = {no - 1 for no, _ln in m._visible_lines(lines)}
+         n = 0
+@@ -126914,20 +126962,24 @@ def t_kotlin_test_templates_content_guards():
+     def _t12_prose_line(txt, line):
+         """在 T12 標題下一行插一段散文。"""
+         lines, i12, _end = _t12_span(txt)
+         return "\n".join(lines[:i12 + 1] + ["", line] + lines[i12 + 1:])
+ 
+     _cre = "freeze.store.default.allowStoreCreation=false"
+     _upd = "freeze.store.default.allowStoreUpdate=false"
+     _path = "freeze.store.default.path=src/test/resources/archunit_store"
+     _init_upd = 'systemProperty("archunit.freeze.store.default.allowStoreUpdate", "true")'
+     _init_cre = 'systemProperty("archunit.freeze.store.default.allowStoreCreation", "true")'
++    _init_if = 'if (project.hasProperty("archunitFreezeInit")) {'
++    _init_task = "tasks.withType<Test>().configureEach {"
++    _t12_base = "好寫法+壞寫法:CO-1 資料層寫死 withContext"
++    _t12_fix = "好寫法(修掉舊違規:被測程式拿掉 `TagRepository`)"
+     muts = (
+         ("拿掉 ## T9 標題", lambda x: x.replace("\n## T9 ", "\n## X9 ", 1), "範本檔沒有 T9 節"),
+         ("骨架節標題改名", lambda x: x.replace("\n## Android 實驗專案骨架\n", "\n## Android 骨架\n", 1), "沒有〈Android 實驗專案骨架〉"),
+         ("骨架節拿掉 sdk=34", lambda x: _in_skel(x, "sdk=34", "sdk=33"), "骨架節缺 sdk=34"),
+         ("骨架節拿掉 targetSdk = 36", lambda x: _in_skel(x, "targetSdk = 36", "targetSdk = 35"), "骨架節缺 targetSdk = 36"),
+         ("T8 矩陣改名", lambda x: _drop_sub(x, "T8", "紅綠矩陣"), "T8 沒有〈紅綠矩陣〉"),
+         ("T11 小節改名", lambda x: x.replace("### " + _KT_T11_API9_SUB, "### 測試:API-9 Fragment", 1), "T11 沒有"),
+         # 代碼審 r1 測試 F1:凍結設定只改 properties 圍欄那一行(散文照留)也要報
+         ("T12 圍欄裡 allowStoreCreation 改成 true", lambda x: _in_t12_fence(x, "properties", _cre, _cre.replace("false", "true")), _cre),
+         ("T12 圍欄裡刪掉 allowStoreCreation 那行", lambda x: _in_t12_fence(x, "properties", _cre, None), _cre),
+@@ -126936,80 +126988,176 @@ def t_kotlin_test_templates_content_guards():
+         # 代碼審 r1 範本丙 F1:allowStoreUpdate=false 擋新規則與改描述被靜默凍結(驗證紀錄 E13)
+         ("T12 圍欄裡 allowStoreUpdate 改成 true", lambda x: _in_t12_fence(x, "properties", _upd, _upd.replace("false", "true")), _upd),
+         ("T12 圍欄裡刪掉 allowStoreUpdate 那行", lambda x: _in_t12_fence(x, "properties", _upd, None), _upd),
+         ("T12 建清單片段拿掉 allowStoreUpdate 那行", lambda x: _in_t12_fence(x, "kotlin", _init_upd, None), _init_upd),
+         ("T12 建清單片段拿掉 allowStoreCreation 那行", lambda x: _in_t12_fence(x, "kotlin", _init_cre, None), _init_cre),
+         ("T12 圍欄那行搬到散文", lambda x: _t12_prose_line(_in_t12_fence(x, "properties", _cre, None), f"`{_cre}`"), _cre),
+         ("T12 設定行搬進 build.gradle.kts 圍欄", lambda x: _in_t12_fence(_in_t12_fence(x, "properties", _upd, None),
+                                                                  "kotlin", _init_upd, _init_upd + "\n" + _upd), _upd),
+         ("T12 矩陣拿掉 StoreUpdateFailedException 的格", lambda x: _in_t12_prose(x, "StoreUpdateFailedException", "StoreFailed"),
+          "StoreUpdateFailedException"),
++        # 代碼審 r2 通才 F2:兩個 systemProperty 要包在 -ParchunitFreezeInit 條件裡,常駐 true 等於沒設 false
++        ("T12 建清單條件改成 if (true)", lambda x: _in_t12_fence(x, "kotlin", _init_if, "if (true) {"), "沒包在"),
++        ("T12 建清單條件改成別的屬性", lambda x: _in_t12_fence(x, "kotlin", _init_if, 'if (project.hasProperty("other")) {'),
++         "沒包在"),
++        ("T12 建清單拿掉條件(只剩大括號)", lambda x: _in_t12_fence(x, "kotlin", _init_if, "run {"), "沒包在"),
++        ("T12 allowStoreUpdate 那行搬到條件外", lambda x: _in_t12_fence(_in_t12_fence(x, "kotlin", _init_upd, None), "kotlin",
++                                                                  _init_task, _init_task + "\n    " + _init_upd), "沒包在"),
++        # 代碼審 r2 通才 F1:凍結格的基準是〈好寫法〉加舊違規 TagRepository(驗證紀錄 E13)
++        ("T12 凍結格的被測程式改回只有好寫法", lambda x: _in_t12_prose(x, f"| {_t12_base} |", "| 好寫法 |"), "沒帶舊違規"),
++        ("T12 修掉舊違規寫回測試欄", lambda x: _in_t12_prose(x, f"| 測試 | {_t12_fix} |", "| 測試+修掉舊違規 `TagRepository` | 好寫法 |"),
++         "要寫在被測程式欄"),
++        ("T12 修掉舊違規那格被測程式還帶 TagRepository", lambda x: _in_t12_prose(x, f"| 測試 | {_t12_fix} |",
++                                                                      f"| 測試 | {_t12_fix}+壞寫法:CO-1 資料層寫死 withContext |"),
++         "要寫明拿掉 TagRepository"),
++        ("T12 矩陣前導句改回每一格零違規", lambda x: _in_t12_prose(x, "前七格先用〈好寫法〉", "每一格先用〈好寫法〉"), "前導句"),
+     )
+     for name, fn, want in muts:
+         g2 = _mut(fn)
+         check(f"★改壞★ {name} 要報", any(want in s for s in g2), str(g2))
++    # 代碼審 r2 架構對齊 F2:圍欄語言照 CommonMark info string 第一個字比對,三處同一支(_kt_fence_blocks)
++    demo = "```kotlinx\na\n```\n```kotlin title=x\nb\n```\n~~~ properties\nc\n~~~\n```\nd\n```\n"
++    check("圍欄語言取第一個字:kotlinx 不算 kotlin、帶註記的 kotlin 算", _kt_fence_blocks(m, demo, "kotlin") == ["b"],
++          str(_kt_fence_blocks(m, demo, "kotlin")))
++    check("圍欄語言取第一個字:波浪號圍欄、前置空白的 properties 算", _kt_fence_blocks(m, demo, "properties") == ["c"],
++          str(_kt_fence_blocks(m, demo, "properties")))
++    titled = _in_t12_fence(real, "kotlin", _init_task, _init_task)   # 先確定建清單那個圍欄在
++    tl = titled.split("\n")
++    k = next(i for i, ln in enumerate(tl) if ln.strip() == _init_task)
++    k0 = max(i for i in range(k) if tl[i].strip() == "```kotlin")
++    tl[k0] = '```kotlin title="app/build.gradle.kts"'
++    titled = "\n".join(tl).replace("```properties\n# app/src/test", "```properties title=x\n# app/src/test", 1)
++    check("★對照★ T12 圍欄的語言標籤帶註記照樣認得、不報", titled != real and _kt_instr_template_problems(m, titled) == [],
++          str(_kt_instr_template_problems(m, titled)))
+     # 對照:散文裡的設定字串改掉、圍欄照舊,不報(判的是圍欄裡的設定行,不是散文)
+     prose_only = _in_t12_prose(real, _cre, "allowStoreCreation 設成 false")
+     check("★對照★ 只改 T12 散文裡的設定字串、圍欄照舊不報", _kt_instr_template_problems(m, prose_only) == [],
+           str(_kt_instr_template_problems(m, prose_only)))
+     # 骨架必有字只在骨架節裡算:同一個字只出現在別的節時要報
+     sk = real.index("## Android 實驗專案骨架")
+     sk_end = real.index("\n## ", sk + 5)
+     moved = real[:sk] + real[sk:sk_end].replace("testInstrumentationRunner", "instrumentationRunner") + real[sk_end:]
+     g3 = _kt_instr_template_problems(m, moved)
+     check("★改壞★ testInstrumentationRunner 只出現在骨架節以外要報", any("testInstrumentationRunner" in s for s in g3), str(g3))
+     # 骨架沒列 Manifest 時照抄會停在 processDebugMainManifest(代碼審 r1 修補時實跑發現)
+     no_mf = real[:sk] + real[sk:sk_end].replace("app/src/main/AndroidManifest.xml", "app/src/main/x.xml") + real[sk_end:]
+     g4 = _kt_instr_template_problems(m, no_mf)
+     check("★改壞★ 骨架節拿掉 AndroidManifest.xml 要報", any("AndroidManifest.xml" in s for s in g4), str(g4))
+     # 代碼審 r1 範本甲 F1、範本乙 F1/F2、範本丙 F2:範本說法跟實跑結果對齊
+     _kt_instr_wording_selfcheck(m, real)
++    # 代碼審 r2 通才 F4:計劃與驗證紀錄跟範本對齊
++    plan = (repo / _KT_INSTR_PLAN_REL).read_text(encoding="utf-8")
++    ver = (repo / _KT_INSTR_VER_REL).read_text(encoding="utf-8")
++    got = _kt_instr_records_problems(m, real, plan, ver)
++    check("計劃 T4 補 Ktor 列、驗證紀錄 S4 總格數與 T12 格數跟範本對齊", got == [], str(got))
++    for name, p2, v2, want in (
++        ("驗證紀錄 T12 格數少算 E13 那四格", plan, _re.sub(r"T12 \d+ 格", "T12 7 格", ver, count=1), "T12 格數"),
++        ("驗證紀錄總格數沒跟著加", plan, _re.sub(r"\d+ 格全部", "61 格全部", ver, count=1), "總格數"),
++        ("計劃 T4 補 Ktor 列寫回純 JVM", _re.sub(r"(?m)^(\| T4 補 Ktor \|.*\| )[^|]*\|$", r"\1純 JVM(前半骨架) |", plan, count=1),
++         ver, "T4 補 Ktor"),
++    ):
++        check(f"★對照★ {name}:改壞真的改到", (p2, v2) != (plan, ver), name)
++        g5 = _kt_instr_records_problems(m, real, p2, v2)
++        check(f"★改壞★ {name} 要報", any(want in x for x in g5), str(g5))
+ 
+ def _kt_instr_wording_problems(m, text):
+-    """範本檔全文 → 說法跟驗證紀錄對不上的地方(代碼審 r1 範本甲 F1、範本乙 F1/F2、範本丙 F2)。"""
++    """範本檔全文 → 說法跟驗證紀錄對不上的地方(代碼審 r1 範本甲 F1、範本乙 F1/F2、範本丙 F2;r2 通才 F3)。
++    T9、T11、T12 開頭取自 _kt_template_sections 的 "" 鍵(圍欄裡的 ### 不算小節標題);檔頭取到第一個圍欄外的
++    `## `,不手切字串。"""
+     import re as _re
+     probs = []
+-    head = text.split("\n## ", 1)[0]
++    # 檔頭 = 第一個圍欄外 `## ` 標題之前;圍欄判定走 check.py 的 _visible_lines(跟 _kt_template_sections 同口徑)
++    lines = text.splitlines()
++    first_h2 = next((no - 1 for no, ln in m._visible_lines(lines) if ln.startswith("## ")), len(lines))
++    head = "\n".join(lines[:first_h2])
+     if not _re.search(r"T4 的 Ktor 小節[^。]*Android", head):
+         probs.append("檔頭沒把 T4 的 Ktor 小節寫進 Android 模組實跑的那一半")
+     groups = _kt_template_sections(m, text)
+     t9 = groups.get("T9", {})
+-    intro = text[text.index("\n## T9 "):]
+-    intro = intro[:intro.index("\n### ")]
++    intro = t9.get("", "")
+     n_said = _re.search(r"〈測試〉(\d+) 支在 Robolectric", intro)
+     n_real = len(_re.findall(r"@Test\b", "\n".join(_kt_kotlin_blocks(m, t9.get("測試", "")))))
+     if not n_said or int(n_said.group(1)) != n_real:
+         probs.append(f"T9 開頭寫的〈測試〉支數跟〈測試〉小節的 @Test 數({n_real})不一致")
+     t9code = "\n".join("\n".join(_kt_kotlin_blocks(m, b)) for b in t9.values())
+     if "等不到 idle" in t9code:
+         probs.append("T9 程式註解還說自動推進會等不到 idle(1.11 實測兩邊都綠)")
+-    t11 = text[text.index("\n## T11 "):]
+-    s17 = next((ln for ln in t11[:t11.index("\n### ")].splitlines() if ln.startswith("- STATE-17")), "")
++    s17 = next((ln for ln in groups.get("T11", {}).get("", "").splitlines() if ln.startswith("- STATE-17")), "")
+     if "總共看到兩筆" in s17 or "通知一次" not in s17:
+         probs.append("T11 STATE-17 說明要寫「通知一次、內容兩筆」")
++    # 代碼審 r2 通才 F3:改描述時 ArchUnit 另存一份、舊描述的條目留著(驗證紀錄 E13),清單不是只會縮小
++    t12 = groups.get("T12", {}).get("", "")
++    if "清單只能縮小" in t12:
++        probs.append("T12 開頭還寫「清單只能縮小」(改描述時清單會多一份新描述的,E13)")
++    if "舊描述" not in t12 or "一起刪" not in t12:
++        probs.append("T12 開頭沒寫改描述時要把舊描述的清單條目與檔案一起刪")
++    if "新增的違規" not in t12:
++        probs.append("T12 開頭沒提醒帶 -ParchunitFreezeInit 那次的清單差異要特別看新增的違規")
++    return probs
++
++
++_KT_INSTR_PLAN_REL = Path("docs") / "lumos-toolchain-knowledge" / "Projects" / "Android儀器測試範本與架構測試_計劃.md"
++_KT_INSTR_VER_REL = (Path("docs") / "lumos-toolchain-knowledge" / "Verification"
++                     / "2026-11-06_Android儀器測試範本與架構測試實跑.md")
++
++
++def _kt_instr_records_problems(m, tpl, plan, ver):
++    """範本檔、計劃、驗證紀錄全文 → 計劃與驗證紀錄跟範本對不上的地方(代碼審 r2 通才 F4):驗證紀錄 S4 的 T12 格數
++    等於範本 T12 矩陣列數、S4 總格數等於各組加總;計劃〈做〉表 T4 補 Ktor 列寫 Android app 模組,不寫純 JVM。"""
++    import re as _re
++    probs = []
++    mx = next((b for n, b in _kt_template_sections(m, tpl).get("T12", {}).items() if n.startswith("紅綠矩陣")), "")
++    n12 = sum(1 for ln in mx.splitlines() if ln.startswith("| ") and "測試小節" not in ln)
++    s4 = next((ln for ln in ver.splitlines() if ln.startswith("- **S4 矩陣**")), "")
++    if f"T12 {n12} 格" not in s4:
++        probs.append(f"驗證紀錄 S4 的 T12 格數不是範本 T12 矩陣的 {n12} 格")
++    total = _re.search(r"(\d+) 格全部", s4)
++    parts = [int(x) for x in _re.findall(r"T\d+(?: Ktor)? (\d+) 格", s4)]
++    if not total or int(total.group(1)) != sum(parts):
++        probs.append(f"驗證紀錄 S4 總格數跟各組加總({sum(parts)})不一致")
++    row = next((ln for ln in plan.splitlines() if ln.startswith("| T4 補 Ktor |")), "")
++    last = row.strip().strip("|").split("|")[-1]
++    if "純 JVM(前半骨架)" in last or "Android app 模組" not in last:
++        probs.append(f"計劃〈做〉表 T4 補 Ktor 列要寫 Android app 模組的本機單元測試:{last.strip()}")
+     return probs
+ 
+ 
+ def _kt_instr_wording_selfcheck(m, real):
+     got = _kt_instr_wording_problems(m, real)
+     check("真範本檔:檔頭實跑環境、T9 支數、TEST-29 註解、STATE-17 說法跟實跑對齊", got == [], str(got))
+     cases = (
+         ("檔頭的 T4 Ktor 拿掉", lambda x: x.replace("T4 的 Ktor 小節", "T4 Ktor", 1), "檔頭"),
+         ("T9 支數寫錯", lambda x: __import__("re").sub(r"〈測試〉\d+ 支在 Robolectric", "〈測試〉9 支在 Robolectric", x, count=1), "T9 開頭"),
+         ("TEST-29 註解改回等不到 idle", lambda x: x.replace("// 錯的寫法:", "// 錯的寫法:測試等不到 idle;", 1), "等不到 idle"),
+         ("STATE-17 改回總共看到兩筆", lambda x: x.replace("通知一次", "總共看到兩筆", 1), "STATE-17"),
++        # 代碼審 r2 通才 F3:改描述時舊條目留著、新描述另存(驗證紀錄 E13),「只能縮小」不成立
++        ("T12 改回清單只能縮小", lambda x: x.replace("清單裡的違規只准變少", "清單只能縮小", 1), "清單只能縮小"),
++        ("T12 拿掉刪舊描述條目那句", lambda x: x.replace("與它指的清單檔一起刪", "留著", 1), "舊描述"),
++        ("T12 拿掉特別看新增的違規", lambda x: x.replace("特別看清單裡新增的違規", "照常看", 1), "新增的違規"),
+     )
+     for name, fn, want in cases:
+         bad = fn(real)
+         check(f"★對照★ {name}:改壞真的改到", bad != real, name)
+         g = _kt_instr_wording_problems(m, bad)
+         check(f"★改壞★ {name} 要報", any(want in x for x in g), str(g))
++    # 代碼審 r2 架構對齊 F1:T9、T11 開頭取自 _kt_template_sections(圍欄裡的 ### 不算小節標題),不手切字串
++    for g, want in (("T9", "T9 開頭"), ("T11", "STATE-17")):
++        lines = real.split("\n")
++        hi = next(i for i, ln in enumerate(lines) if ln.startswith(f"## {g} "))
++        fenced_h3 = "\n".join(lines[:hi + 1] + ["", "```", "### 圍欄裡的假標題", "```"] + lines[hi + 1:])
++        got = _kt_instr_wording_problems(m, fenced_h3)
++        check(f"★對照★ {g} 開頭圍欄裡的 ### 不算小節標題、不報", not any(want in x for x in got), str(got))
++    # 檔頭也不手切字串:圍欄裡的 `## ` 不算檔頭結束(手切 split("\n## ") 會在這裡截斷、漏掉後面的 Ktor 句而誤報)
++    lines = real.split("\n")
++    fenced_h2 = "\n".join(lines[:1] + ["", "```md", "## 圍欄裡的假組標題", "```"] + lines[1:])
++    got = _kt_instr_wording_problems(m, fenced_h2)
++    check("★對照★ 檔頭圍欄裡的 ## 不算檔頭結束、不報", not any("檔頭" in x for x in got), str(got))
+ 
+ def t_kotlin_catalog_c_rows_batch_resolved():
+     """[S2;後半 S1] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T13、「未接(儀器批)」或
+     「不接(代碼審或真機)」,沒有「批五」與兩個作廢值;各值的列數與各範本組的列號等於計劃〈範圍〉。"""
+     m = _ktpack()
+     rows = m.main_rows()   # 主表與批次值的讀法都呼叫 check.py,不另抄(代碼審 r2 架 F1、F3)
+     c_rows = {r: c for r, c in rows.items() if "C" in c[6]}
+     check("S2 型錄級含 C 的列是 68 列", len(c_rows) == 68, str(len(c_rows)))
+     vals = {r: m.behavior_value(c[9]) for r, c in c_rows.items()}
+     check("S2 不再出現「批五」", not [r for r, v in vals.items() if v == "批五"], str([r for r, v in vals.items() if v == "批五"]))
+diff --git a/skills/kotlin-idioms/test-templates.md b/skills/kotlin-idioms/test-templates.md
+index 66672233b..753f617f2 100644
+--- a/skills/kotlin-idioms/test-templates.md
++++ b/skills/kotlin-idioms/test-templates.md
+@@ -5874,24 +5874,24 @@ class ProfileFragment : Fragment() {
+ 
+ 型錄列:API-9(K1),順帶驗 CO-1 的整個範圍版(K2;型錄 CO-1 列的值不改)。跑在哪:Android 模組的本機單元測試(`app/src/test`,不用 Robolectric)。用 ArchUnit 讀編譯後的 `.class`,看「呼叫了哪個類別的哪個方法、存取了哪個欄位」,不看原始碼字面:星號匯入、完整名稱都判得到,註解與字串裡的 `GlobalScope`、名字含 `CoroutineScope(` 的 `rememberCoroutineScope()` 都不會誤判。
+ 
+ - **K1 不准無主協程**:不准碰 `GlobalScope`;不准在允許的類別外呼叫 `CoroutineScope(…)`、`MainScope()`。允許的類別是 `Application` 子類別與標 `@Module` 的 DI 模組(常數 `SCOPE_OWNER_SUPERTYPES`、`DI_MODULE_ANNOTATIONS`,專案自己改);判允許與否看**最外層宣告類別**——Kotlin 會把程式編進別的類別:suspend lambda 編成 `App$onCreate$1`、companion 編成 `AppModule$Companion`,只看呼叫端類別會誤報。同一個方法裡也呼叫了 `goAsync()`(`BroadcastReceiver` 把工作帶出 `onReceive` 的官方做法)就豁免,跟規則包 `kt-unmanaged-scope-launch` 排除含 `goAsync()` 的函式同一件事。
+ - **K2 資料層不寫死 dispatcher**:資料層套件(常數 `DATA_LAYER`)不准呼叫 `Dispatchers.IO`、`Dispatchers.Default`;建構子預設值(編成帶 `DefaultConstructorMarker` 參數的合成建構子)、一般函式的預設參數(編成名字結尾 `$default` 的合成方法)、DI 模組豁免——這三種都還能從外面注入,跟型錄 CO-1 標準寫法同精神。
+ - **Fragment 用 `lifecycleScope`(API-9 的另一半)這裡判不到**:位元組碼看不出接收者是 Fragment 還是 `viewLifecycleOwner`,規則包也沒有規則判它。那一半照 T11〈測試:API-9 Fragment 畫面銷毀後〉的行為測試接。
+ - **inline 函式**:自己寫的 inline 函式裡建 scope,定義處與每個呼叫端各報一筆(位元組碼裡呼叫被展開進呼叫端);別的模組的 inline 函式展開進資料層也會被報,看到這種違規先查是不是 inline 展開。
+ - **不匯入測試類別**:`ClassFileImporter` 加自訂 `ImportOption`,排除 AGP 單元測試與儀器測試的編譯輸出(變體目錄 `…UnitTest`、`…AndroidTest`)與 Gradle 的 `test`;測試碼裡的 `CoroutineScope(UnconfinedTestDispatcher())` 不算違規。ArchUnit 內建的 `ImportOption.DoNotIncludeTests` 認不得 AGP 的路徑(實驗實測,見矩陣下方)。
+ - **多模組**:資料層在別的 library 模組時,這支測試放 app 模組,`importPackages` 照根套件匯入;library 的類別以 jar 在 app 的本機測試類別路徑上,照樣判得到(實驗實測)。資料層套件或根套件一個類別都沒匯入時 ArchUnit 會失敗(`failOnEmptyShould` 預設開),那是常數設錯的大聲失敗。
+ 
+-**舊違規凍結**:兩支 `@Test` 都用 `FreezingArchRule.freeze(…)` 包:第一次跑出的違規存成一份清單,之後只有清單外的新違規才紅。清單只能縮小,新增一筆要在代碼審說明理由——清單讓舊違規永遠綠,不代表那些寫法沒問題。設定照下面〈依賴〉:`app/src/test/resources/archunit.properties` 寫三行——`freeze.store.default.path=src/test/resources/archunit_store`(相對模組目錄;不寫的話清單落在模組根的 `archunit_store`)、`freeze.store.default.allowStoreCreation=false`(ArchUnit 手冊的預設就是 false,明寫是為了不讓人改成 true)、`freeze.store.default.allowStoreUpdate=false`(手冊預設 true;理由見下兩段)。第一次建清單,以及清單要變的時候(加了凍結規則、改了規則描述、修掉舊違規):
++**舊違規凍結**:兩支 `@Test` 都用 `FreezingArchRule.freeze(…)` 包:第一次跑出的違規存成一份清單,之後只有清單外的新違規才紅。清單裡的違規只准變少;帶 `-ParchunitFreezeInit` 那次清單多出來的違規,要在代碼審說明理由(見下面第 2 步)——清單讓舊違規永遠綠,不代表那些寫法沒問題。設定照下面〈依賴〉:`app/src/test/resources/archunit.properties` 寫三行——`freeze.store.default.path=src/test/resources/archunit_store`(相對模組目錄;不寫的話清單落在模組根的 `archunit_store`)、`freeze.store.default.allowStoreCreation=false`(ArchUnit 手冊的預設就是 false,明寫是為了不讓人改成 true)、`freeze.store.default.allowStoreUpdate=false`(手冊預設 true;理由見下兩段)。第一次建清單,以及清單要變的時候(加了凍結規則、改了規則描述、修掉舊違規):
+ 
+ 1. `./gradlew :app:testDebugUnitTest -ParchunitFreezeInit --tests '*CoroutineOwnershipTest'`(有這個 Gradle 屬性時,`build.gradle.kts` 才把 `archunit.freeze.store.default.allowStoreCreation=true` 與 `archunit.freeze.store.default.allowStoreUpdate=true` 傳給測試,兩個都要:只開建立的話,建清單時寫入違規那一步被擋,丟 `StoreUpdateFailedException`(實驗實測);ArchUnit 的設定可被 `archunit.` 開頭的系統屬性蓋過)。
+-2. 把 `app/src/test/resources/archunit_store/` 整個目錄提交進版控;清單的改動跟程式一起過代碼審。
++2. 改了規則描述時,先清掉舊描述留下的條目:清單以描述當鍵,新描述另存一份,舊描述那一份不會自己消失(實驗實測)——把 `archunit_store/stored.rules` 裡舊描述那一行與它指的清單檔一起刪。然後把 `app/src/test/resources/archunit_store/` 整個目錄提交進版控;清單的改動跟程式一起過代碼審,**特別看清單裡新增的違規**:帶屬性那一跑會把當下所有違規照單全收,跟著加規則、改描述一起進來的新違規,只有代碼審看得到。
+ 3. 之後一律不帶 `-ParchunitFreezeInit` 跑。
+ 
+ `allowStoreCreation=false` 只擋「清單索引檔 `archunit_store/stored.rules` 整份不見」:常駐 true 時清單被刪或漏提交,下一次跑會把當下全部違規(含剛加的新違規)重新凍結、測試綠,CI 乾淨 checkout 每次都綠(實驗實測);設 false 時索引不見就丟 `StoreInitializationFailedException`,測試紅。它不管「索引在、但這條規則不在索引裡」:清單以規則描述(`ArchCondition("…")` 的字串、`.as(…)` 的名字)當鍵,加第三支用 `FreezingArchRule` 包的 `@Test`、或改了既有規則的描述,ArchUnit 把那條當成新規則,把當下全部違規存成新的一份、測試綠——描述改名時連同時新加的違規一起被凍結(實驗實測,ArchUnit 1.5.1 `FreezingArchRule.evaluate` 對不在索引裡的規則直接存檔回成功)。
+ 
+ 所以要再加 `allowStoreUpdate=false`:設了之後,新規則、改描述都紅 `StoreUpdateFailedException: Updating frozen violations is disabled`,要照上面三步帶 `-ParchunitFreezeInit` 建好、清單改動提交;代價是修掉舊違規時也紅同一個例外(清單要縮小也是一次寫入),同樣帶屬性跑一次、提交縮小後的清單——清單每次變動都在版控裡看得到。這兩種紅都是設定錯的大聲失敗,不是斷言紅,收證不算抓到錯。
+ 
+ 改 API-9、CO-1 的標準寫法時,規則包(`kt-unmanaged-scope-launch`、`kt-compose-globalscope-in-composable`、`kt-hardcoded-dispatchers-io`)、detekt(`GlobalCoroutineUsage`、`InjectDispatcher`)與這一組三邊一起看。規則包與 detekt 管「這次寫的」,這一組管「整個專案現在有沒有」,而且跑在專案自己的單元測試裡,不靠 lumos 有沒有裝。
+ 
+ ### 依據
+ 
+@@ -6276,35 +6276,35 @@ package com.example.lab.data
+ import kotlinx.coroutines.Dispatchers
+ 
+ class ImageCache {
+     private val io = Dispatchers.IO.limitedParallelism(4)
+     fun dispatcherName() = io.toString()
+ }
+ ```
+ 
+ ### 紅綠矩陣
+ 
+-每一格先用〈好寫法〉帶 `-ParchunitFreezeInit` 建凍結清單(零違規),再換成那一格的被測程式、不帶屬性跑——這樣紅的是「清單外的新違規」。最後四格驗凍結設定本身:測試小節寫「測試+…」的是〈測試〉照那樣改一處再跑(都不帶屬性;清單是〈好寫法〉加一筆舊違規 `TagRepository` 建的)。
++前七格先用〈好寫法〉帶 `-ParchunitFreezeInit` 建凍結清單(零違規),再換成那一格的被測程式、不帶屬性跑——這樣紅的是「清單外的新違規」。最後四格驗凍結設定本身,基準不同:清單用〈好寫法〉加〈壞寫法:CO-1 資料層寫死 withContext〉(`TagRepository`,當一筆舊違規)帶屬性建(清單一筆違規,跟驗證紀錄 E13 同一個基準),再照那一格改一處、不帶屬性跑。測試小節寫「測試+…」的是〈測試〉照那樣改;被測程式小節用「+」連的是那幾個小節一起放;寫「修掉舊違規」的是被測程式拿掉 `TagRepository`,〈測試〉不動。
+ 
+ | 測試小節 | 被測程式小節 | 結果 |
+ |---|---|---|
+ | 測試 | 好寫法 | 全綠:no_unowned_coroutine_scope、data_layer_does_not_hardcode_dispatchers |
+ | 測試 | 壞寫法:API-9 函式本體建 scope | no_unowned_coroutine_scope 斷言紅「CartPresenter.refresh」;其他綠 |
+ | 測試 | 壞寫法:API-9 GlobalScope 星號匯入 | no_unowned_coroutine_scope 斷言紅「Uploader.upload」;其他綠 |
+ | 測試 | 壞寫法:API-9 GlobalScope 完整名稱 | no_unowned_coroutine_scope 斷言紅「Tracker.track」;其他綠 |
+ | 測試 | 壞寫法:API-9 Receiver 沒有 goAsync | no_unowned_coroutine_scope 斷言紅「BootReceiver.onReceive」;其他綠 |
+ | 測試 | 壞寫法:CO-1 資料層寫死 withContext | data_layer_does_not_hardcode_dispatchers 斷言紅「TagRepository.tags」;其他綠 |
+ | 測試 | 壞寫法:CO-1 屬性 limitedParallelism | data_layer_does_not_hardcode_dispatchers 斷言紅「ImageCache.<init>」;其他綠 |
+-| 測試+多一支用 `FreezingArchRule` 包的 `@Test`(新描述) | 好寫法 | 新那支紅 `StoreUpdateFailedException`(不是靜默凍結成綠);其他綠。沒設 `allowStoreUpdate=false` 時全綠、清單多一份新規則的檔 |
+-| 測試+改 `dataLayerInjectsDispatchers` 的 `ArchCondition` 描述 | 壞寫法:CO-1 屬性 limitedParallelism | data_layer_does_not_hardcode_dispatchers 紅 `StoreUpdateFailedException`;其他綠。沒設 `allowStoreUpdate=false` 時全綠,新違規 `ImageCache` 跟舊違規一起被凍結 |
+-| 測試+修掉舊違規 `TagRepository` | 好寫法 | data_layer_does_not_hardcode_dispatchers 紅 `StoreUpdateFailedException`;帶 `-ParchunitFreezeInit` 再跑一次全綠、清單縮小一行 |
+-| 測試+刪掉 `archunit_store` 目錄 | 好寫法 | 兩支都紅 `StoreInitializationFailedException`(不是全綠) |
++| 測試+多一支用 `FreezingArchRule` 包的 `@Test`(新描述) | 好寫法+壞寫法:CO-1 資料層寫死 withContext | 新那支紅 `StoreUpdateFailedException`(不是靜默凍結成綠);其他綠。沒設 `allowStoreUpdate=false` 時全綠、清單多一份新規則的檔 |
++| 測試+改 `dataLayerInjectsDispatchers` 的 `ArchCondition` 描述 | 好寫法+壞寫法:CO-1 資料層寫死 withContext+壞寫法:CO-1 屬性 limitedParallelism | data_layer_does_not_hardcode_dispatchers 紅 `StoreUpdateFailedException`;其他綠。沒設 `allowStoreUpdate=false` 時全綠,新違規 `ImageCache` 跟舊違規一起被凍結 |
++| 測試 | 好寫法(修掉舊違規:被測程式拿掉 `TagRepository`) | data_layer_does_not_hardcode_dispatchers 紅 `StoreUpdateFailedException`;帶 `-ParchunitFreezeInit` 再跑一次全綠、清單縮小一行 |
++| 測試+刪掉 `archunit_store` 目錄 | 好寫法+壞寫法:CO-1 資料層寫死 withContext | 兩支都紅 `StoreInitializationFailedException`(不是全綠) |
+ 
+ ## T13 架構測試:UiState 不可變
+ 
+ 型錄列:UI-39(K3)。跑在哪:Android 模組的本機單元測試(`app/src/test`,不用 Robolectric)。用 Konsist 讀 Kotlin 原始碼的宣告(父型別、屬性是 `val` 還是 `var`、型別是不是可變型別),不看函式本體的文字。
+ 
+ - **判哪些類別**:名字結尾在後綴清單(常數 `STATE_SUFFIXES`,預設只有 `UiState`)裡的類別,或父型別(含間接)名字結尾同樣後綴的類別——`sealed interface HomeUiState { data class Success(…) : HomeUiState }` 的 `Success` 也判。專案的狀態類別叫 `State`、`UiModel` 時自己加後綴;命名慣例以外的狀態類別不判,型錄 UI-39 寫「範本 T13」不代表全部狀態類別都接上了。
+ - **判什麼**:類別自己的屬性(含主建構子的 `val`/`var` 參數與類別本體宣告的)不准 `var`、型別不准是 Kotlin 可變集合(`MutableList` 等,Konsist 的 `isMutableType`)或 `ArrayList`/`HashMap`/`HashSet` 這類可變實作(常數 `MUTABLE_IMPLS`)。標了 `@Immutable` 還是 `var` 照樣紅:標註只是對編譯器承諾,就地改照樣不更新畫面。
+ - **只掃正式程式**:範圍一律 `Konsist.scopeFromProduction()`;測試碼裡的 `FakeProfileUiState(var loading: Boolean)` 不判。用 `scopeFromProject()` 會連測試碼一起判(實驗實測)。`scopeFromProduction()` 掃的是整個 Gradle 專案所有模組的正式程式,不只這支測試所在的模組。
+ - **判不到的**:泛型參數裡的可變集合(`List<MutableList<String>>`,`isMutableType` 只看最外層,兩版都判不到);型別寫成型別別名(`typealias Items = MutableList<String>`)時 0.17.3 判不到、1.0.0-beta.1 判得到(2026-11-06 實跑);外部模組的類別(Konsist 只讀本專案原始碼)。
+ - **不判外部模組型別**:`java.time.Instant` 這類型別不判。Kotlin 2.0.20 起預設開強跳過,不穩定的參數用實例相等(`===`)比:值相同的新實例只會輕微多餘重組,不是錯;真正的錯是 `var` 或可變集合就地改,實例沒變、畫面被跳過。

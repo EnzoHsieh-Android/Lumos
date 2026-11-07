@@ -1,11 +1,11 @@
 ---
 type: project
-status: todo
+status: doing
 created: 2026-11-06
 updated: 2026-11-06
 tags:
   - type/project
-  - status/todo
+  - status/doing
   - scope/stack-knowledge
 lands_in:
   - Systems/kotlin規則包
@@ -88,7 +88,7 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留�
 - **K 測試**:架構測試,判斷「整個程式有沒有某種寫法」,不跑被測程式。K1 不准無主協程(API-9)、K2 資料層不寫死 dispatcher(CO-1 的整個範圍版;**前半的 K2 掛在 CO-5,本計劃改掛 CO-1**,理由見決定 3,其餘代號意思沿用前半)、K3 UiState 不可變(UI-39)、K4 Hilt 宿主(ARCH-56)、K5 Migration 有測試(DATA-19)。
 - **位元組碼判法**:讀編譯後的 `.class`(ArchUnit),看的是「呼叫了哪個類別的哪個方法、存取了哪個欄位」,不看原始碼字面;import 寫法、完整名稱、註解與字串都不影響。
 - **宣告判法**:讀 Kotlin 原始碼的宣告(Konsist),看的是「這個類別的父型別、屬性是 val 還是 var、型別是不是可變型別」,不看函式本體的文字。
-- **凍結**:ArchUnit `FreezingArchRule` 把第一次跑出的違規存成一份清單檔,之後只有清單外的新違規才紅;清單裡的修掉時清單自動縮小。
+- **凍結**:ArchUnit `FreezingArchRule` 把第一次跑出的違規存成一份清單檔,之後只有清單外的新違規才紅;清單要變(建清單、加規則、改規則描述、修掉舊違規)一律帶 `-ParchunitFreezeInit` 跑一次並提交,不帶時這些都紅(代碼審 code-android儀器測試範本 r1 後加 `allowStoreUpdate=false`,見審計修正紀錄)。
 
 ## 前提(2026-11-06 動筆時本機查到與預實驗)
 
@@ -118,7 +118,7 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留�
 | T11 生命週期與框架 | ARCH-31、ARCH-35、STATE-17、ARCH-56(4) | `FragmentScenario` 移到 CREATED 後送回呼斷言沒丟例外;`TestLifecycleOwner` 走到 DESTROYED 斷言監聽數歸零;LiveData 在暫停的主 Looper 上連發兩次斷言兩筆都收到;Hilt Fragment 放進宿主 Activity 斷言沒丟例外;另接 API-9 的 Fragment 那半(view 銷毀後不再收) | Robolectric(ARCH-56 要 Hilt 測試設定,實驗 E9 決定) |
 | T12 架構測試:協程歸屬(ArchUnit) | API-9(1;K1),另含 K2(CO-1,型錄 CO-1 列不改值) | 位元組碼判:不准 `GlobalScope`、不准在允許類別外呼叫 `CoroutineScope()`/`MainScope()`(允許與否看最外層宣告類別);資料層不准呼叫 `Dispatchers.IO/Default`(建構子與函式的預設值、DI 模組豁免);不匯入測試類別;舊違規凍結 | 專案的本機單元測試(JVM) |
 | T13 架構測試:UiState 不可變(Konsist) | UI-39(1;K3) | 宣告判,只掃正式程式(`scopeFromProduction`):名字結尾 `UiState`(後綴清單是常數,可加)或父型別(含間接)結尾同樣後綴的類別,屬性不准 `var`、型別不准是可變型別或 `ArrayList`/`HashMap`/`HashSet` | 專案的本機單元測試(JVM) |
-| T4 補 Ktor | API-30(1) | 真的 Ktor client 打本機 MockWebServer,斷言在 `execute { }` 區塊裡讀完的 body 是完整的;壞寫法把 response 帶出區塊再讀 | 純 JVM(前半骨架) |
+| T4 補 Ktor | API-30(1) | 真的 Ktor client(CIO 引擎)打 JDK 內建的 `com.sun.net.httpserver.HttpServer`(不用 MockWebServer,測試不碰 OkHttp),斷言在 `execute { }` 區塊裡讀完的 body 是完整的;壞寫法把 response 帶出區塊再讀 | Android app 模組的本機單元測試(照〈Android 實驗專案骨架〉組;沒在純 JVM 專案跑過) |
 
 做法:
 
@@ -132,17 +132,17 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留�
      - **T9**:STATE-12 `waitUntil` 等 `userMessage == null` 改成推時鐘後直接斷言(`waitUntil` 逾時丟的是 `ComposeTimeoutException`,不是斷言紅);STATE-23 `StateRestorationTester.emulateSavedInstanceStateRestore()` 後斷言畫面狀態還在,存不進 Bundle 的型別丟例外用 `runCatching`;TEST-29 `mainClock.autoAdvance = false` 加 `advanceTimeBy`;TEST-32 `useUnmergedTree = true`;ARCH-3 先 `mainClock.autoAdvance = false`,同一個節點 `performClick()` 兩次(中間不推時鐘)後再推時鐘,斷言返回堆疊只多一頁——時鐘自動推進時第一次點擊的轉場立刻跑完、生命週期回到 RESUMED,好寫法 `dropUnlessResumed` 也會多一頁(r1 依據 F6);ARCH-2 用 `TestNavHostController`(Navigation 測試套件,實驗查版本)導航到 B、`popBackStack()` 後斷言目前目的地是 A;無障礙兩列(〈測試:無障礙〉小節,節開頭寫「只在模擬器」)照預實驗 P1 的寫法。
      - **T10**:不用 `DetectLeaksAfterTestSuccess` 規則(它在測試本體外丟 `NoLeakAssertionFailedError`;這個型別雖可能是 `AssertionError` 的子類,收證照型別名判、儀器 XML 只看第一行是不是 `java.lang.AssertionError`,所以不認,實驗 E1 實跑確認型別),改在測試最後 `runCatching { LeakAssertions.assertNoLeaks() }` 再 `assertNull`。
      - **T11**:STATE-17 不用 `InstantTaskExecutorRule`(它讓 `postValue` 同步執行,壞寫法照綠),改 Robolectric 暫停的主 Looper:背景執行緒連 `postValue` 兩次後 `shadowOf(getMainLooper()).idle()`,斷言觀察者收到兩筆;ARCH-31 `scenario.moveToState(CREATED)` 後送回呼,`runCatching` 接住「Can not perform this action after onSaveInstanceState」再斷言;ARCH-35 用 `TestLifecycleOwner`;ARCH-56 見 E9;**API-9 的 Fragment 那半**另一個小節〈測試:API-9 Fragment 畫面銷毀後〉:Fragment 在 `onViewCreated` 收一個假的 `MutableSharedFlow`,每收到一筆就呼叫假畫面記錄器 `render()`;記錄器在 `onDestroyView` 被標成已銷毀,之後再被呼叫就把「銷毀後被呼叫次數」加一(不丟例外)。`scenario.moveToState(CREATED)` 讓 view 銷毀後再發一筆、推主 Looper,斷言「銷毀後被呼叫次數 == 0」。壞寫法用 Fragment 自己的 `lifecycleScope`(view 沒了還在收,次數變 1,斷言紅),好寫法用 `viewLifecycleOwner.lifecycleScope` 加 `repeatOnLifecycle`(型錄 API-9 標準寫法)。不用 `runCatching`:例外丟在 `lifecycleScope.launch` 的協程裡,測試本體接不到——r1 可行性 F4 實跑 `runCatching` 沒接到、例外只印到 stderr、建置照樣成功;官方協程例外處理頁也寫 launch 的例外交給 `CoroutineExceptionHandler`。型錄 API-9 的值仍寫「範本 T12」(一列只寫一個組),T12 節開頭指到這個小節。
-     - **T12**:兩支 `@Test`,各用 `FreezingArchRule.freeze(...)` 包;允許建 scope 的類別是「`Application` 子類別或標 `@Module` 的類別」,範本留一個常數讓專案改;**判允許與否看最外層宣告類別**——呼叫端類別用 `JavaClass.getEnclosingClass` 一路往外找到頂層再判,因為 Kotlin 會把程式編進別的類別:suspend lambda 的狀態機 `App$onCreate$1`(r1 可行性 F5 實跑誤報)、`AppModule$Companion` 裡的 `@Provides`(通才 F4);**預設值豁免兩種**:帶 `DefaultConstructorMarker` 參數的合成建構子(建構子預設值)與名字結尾 `$default` 的合成靜態方法(一般函式的預設參數 `fun load(io: CoroutineDispatcher = Dispatchers.IO)`,r1 可行性 F6 實跑誤報;它一樣可注入、跟型錄 CO-1 標準寫法同精神);**不匯入測試類別**:`ClassFileImporter` 加自訂 `ImportOption`,排除路徑含 AGP 的單元測試與儀器測試輸出(`/debugUnitTest/`、`/releaseUnitTest/`、`UnitTest/`、`AndroidTest/` 這類變體目錄)與 Gradle 的 `/test/`,ArchUnit 內建的 `DoNotIncludeTests` 認不認 AGP 路徑由實驗 E5 決定(r1 通才 F3);多模組專案(資料層在 library 模組)時,K 測試放在 app 模組、`importPackages` 照根套件匯入(library 模組的類別以 jar 或類別目錄在測試類別路徑上),實驗 E5 驗;**inline 函式**:使用者自己的 inline 函式裡建 scope,定義處與每個呼叫端各報一筆(r1 可行性 F8 實跑),範本節開頭寫明,library 的 inline 展開進資料層也會被報,寫進天花板;Fragment 用 `lifecycleScope` 那一半位元組碼判不到(看不出接收者是 Fragment 還是 `viewLifecycleOwner`),規則包也沒有規則判它(只有 STATE-5、PERF-4、ARCH-50 三條碰 `lifecycleScope`,都不是這件事),所以本計劃改用 T11 的行為測試接(見 T11 的 API-9 小節),T12 節開頭指過去。另一個允許:呼叫了 `BroadcastReceiver.goAsync()` 的方法裡建 scope 豁免(規則包 `kt-unmanaged-scope-launch` 排除含 `goAsync()` 的函式,K1 用位元組碼判同一件事:同一個方法裡也呼叫了 `goAsync`)。**凍結清單**:`src/test/resources/archunit.properties` 寫 `freeze.store.default.path=src/test/resources/archunit_store`(相對模組目錄,Gradle 測試的工作目錄是模組根;不寫的話清單落在模組根的 `archunit_store`,r1 可行性 F2 實跑)與 `freeze.store.default.allowStoreCreation=false`(官方手冊 8.6.2 的預設就是 false,明寫是為了不讓人改成 true)。只有第一次建清單時臨時打開:範本的 `build.gradle.kts` 片段在 `tasks.withType<Test>` 裡,有 Gradle 屬性 `archunitFreezeInit` 時才把系統屬性 `archunit.freeze.store.default.allowStoreCreation=true` 傳給測試(ArchUnit 設定可被 `archunit.` 開頭的系統屬性蓋過,實驗 E5 驗),指令 `./gradlew :app:testDebugUnitTest -ParchunitFreezeInit --tests '*CoroutineOwnershipTest'`;建好後**把 `archunit_store` 目錄提交進版控**,範本〈怎麼用〉這一組多一步寫明。為什麼不常駐 true:r1 可行性 F1 實跑,常駐 true 時刪掉或漏提交清單檔,下一次跑會把當下所有違規(含剛加的新違規)重新凍結、測試綠;設 false 時清單不見就丟 `StoreInitializationFailedException`,測試紅(這個紅是設定錯的大聲失敗,不是斷言紅,範本節開頭寫明)。
+     - **T12**:兩支 `@Test`,各用 `FreezingArchRule.freeze(...)` 包;允許建 scope 的類別是「`Application` 子類別或標 `@Module` 的類別」,範本留一個常數讓專案改;**判允許與否看最外層宣告類別**——呼叫端類別用 `JavaClass.getEnclosingClass` 一路往外找到頂層再判,因為 Kotlin 會把程式編進別的類別:suspend lambda 的狀態機 `App$onCreate$1`(r1 可行性 F5 實跑誤報)、`AppModule$Companion` 裡的 `@Provides`(通才 F4);**預設值豁免兩種**:帶 `DefaultConstructorMarker` 參數的合成建構子(建構子預設值)與名字結尾 `$default` 的合成靜態方法(一般函式的預設參數 `fun load(io: CoroutineDispatcher = Dispatchers.IO)`,r1 可行性 F6 實跑誤報;它一樣可注入、跟型錄 CO-1 標準寫法同精神);**不匯入測試類別**:`ClassFileImporter` 加自訂 `ImportOption`,排除路徑含 AGP 的單元測試與儀器測試輸出(`/debugUnitTest/`、`/releaseUnitTest/`、`UnitTest/`、`AndroidTest/` 這類變體目錄)與 Gradle 的 `/test/`,ArchUnit 內建的 `DoNotIncludeTests` 認不認 AGP 路徑由實驗 E5 決定(r1 通才 F3);多模組專案(資料層在 library 模組)時,K 測試放在 app 模組、`importPackages` 照根套件匯入(library 模組的類別以 jar 或類別目錄在測試類別路徑上),實驗 E5 驗;**inline 函式**:使用者自己的 inline 函式裡建 scope,定義處與每個呼叫端各報一筆(r1 可行性 F8 實跑),範本節開頭寫明,library 的 inline 展開進資料層也會被報,寫進天花板;Fragment 用 `lifecycleScope` 那一半位元組碼判不到(看不出接收者是 Fragment 還是 `viewLifecycleOwner`),規則包也沒有規則判它(只有 STATE-5、PERF-4、ARCH-50 三條碰 `lifecycleScope`,都不是這件事),所以本計劃改用 T11 的行為測試接(見 T11 的 API-9 小節),T12 節開頭指過去。另一個允許:呼叫了 `BroadcastReceiver.goAsync()` 的方法裡建 scope 豁免(規則包 `kt-unmanaged-scope-launch` 排除含 `goAsync()` 的函式,K1 用位元組碼判同一件事:同一個方法裡也呼叫了 `goAsync`)。**凍結清單**:`src/test/resources/archunit.properties` 寫 `freeze.store.default.path=src/test/resources/archunit_store`(相對模組目錄,Gradle 測試的工作目錄是模組根;不寫的話清單落在模組根的 `archunit_store`,r1 可行性 F2 實跑)與 `freeze.store.default.allowStoreCreation=false`(官方手冊 8.6.2 的預設就是 false,明寫是為了不讓人改成 true)。只有第一次建清單時臨時打開:範本的 `build.gradle.kts` 片段在 `tasks.withType<Test>` 裡,有 Gradle 屬性 `archunitFreezeInit` 時才把系統屬性 `archunit.freeze.store.default.allowStoreCreation=true` 傳給測試(ArchUnit 設定可被 `archunit.` 開頭的系統屬性蓋過,實驗 E5 驗),指令 `./gradlew :app:testDebugUnitTest -ParchunitFreezeInit --tests '*CoroutineOwnershipTest'`;建好後**把 `archunit_store` 目錄提交進版控**,範本〈怎麼用〉這一組多一步寫明。另加 `freeze.store.default.allowStoreUpdate=false`,`-ParchunitFreezeInit` 同時傳 `allowStoreCreation=true` 與 `allowStoreUpdate=true`:`allowStoreCreation` 只管索引檔 `stored.rules` 整份不見,新加的凍結規則或改了描述的規則不在索引裡時 ArchUnit 會把當下違規靜默存成新的一份、測試綠,`allowStoreUpdate=false` 讓這兩種情況紅 `StoreUpdateFailedException`(代碼審 code-android儀器測試範本 r1 範本丙 F1,驗證紀錄 E13 實跑)。為什麼不常駐 true:r1 可行性 F1 實跑,常駐 true 時刪掉或漏提交清單檔,下一次跑會把當下所有違規(含剛加的新違規)重新凍結、測試綠;設 false 時清單不見就丟 `StoreInitializationFailedException`,測試紅(這個紅是設定錯的大聲失敗,不是斷言紅,範本節開頭寫明)。
      - **T13**:範圍一律 `Konsist.scopeFromProduction()`(只掃正式程式;測試碼裡的 `FakeProfileUiState(var loading: Boolean)` 不判,r1 通才 F6),只用 0.17.3 與 1.0.0-beta.1 都有的 API(`scopeFromProduction()`、`classes(includeNested = true)`、`parents(indirectParents = true)`、`properties(includeNested = false)`、`isVar`、`type.isMutableType`、`type.name`,預實驗 P3);後綴清單是常數(預設只有 `UiState`,專案的狀態類別叫 `State`、`UiModel` 時自己加)。舊違規的容忍:單獨照抄時用一個逐檔常數清單排除(Konsist 沒有凍結);採用目標架構產生器的專案,把這支併進產生的測試檔,改用那支檔已從 `.lumos/arch-legacy.json` 讀好的 `legacyFiles`,不另留常數。三種舊違規容忍的邊界(r1 架構對齊 F2):產生器的 `.lumos/arch-legacy.json` 管目標架構分層與併進去的 T13;T13 單獨用時的常數只管 T13;T12 的 ArchUnit 凍結清單只管 K1、K2——各管各的測試,不互相讀。不判 `java.*` 型別(見〈範圍〉決定 2)。
      - **T4 補**:〈測試:API-30 Ktor 版〉配〈依賴:Ktor〉(引擎用 CIO,避開跟 T4 的 OkHttp 主版本打架;版本照實驗 E8 挑對得上 Kotlin 2.2.21 的),〈好寫法:API-30 區塊內讀完〉、〈壞寫法:API-30 response 帶出區塊〉;壞寫法讀 body 丟取消例外,`runCatching` 後斷言。
 2. **型錄改值**(`skills/kotlin-idioms/checks-catalog.md` 通電批次欄的「行為測試或正向約束=」那段):儀器批 25 列改「範本 T6」~「範本 T11」;API-9 改「範本 T12」、UI-39 改「範本 T13」、API-30 改「範本 T4」;CO-5 改「不接(代碼審或真機)」。實驗把某列移出時,同一個提交裡改回「未接(儀器批)」並在驗證紀錄記原因。另改內容:UI-39 的標題、壞寫法、好寫法、後果四欄一起改(見決定 2,附出處)——標題改成「資料類別含 var 或可變集合 → 就地修改後畫面不更新」,壞寫法只留 `var` 與可變集合(`MutableList`、`ArrayList` 等)就地修改,`java.time.*` 這類外部模組型別從壞寫法拿掉、在後果欄寫成「外部模組型別:輕微多餘重組、不判」,好寫法改成「`val` 加唯讀集合、變更用 `copy`;外部模組型別值相同的新實例常配時才考慮 `@Immutable`/`@Stable` 或穩定設定檔」;只改後果欄的話,盲判席讀到的壞寫法欄仍說 `java.time.*` 是壞的、跟 T13 判綠矛盾(r1 通才 F2、依據 F3)。ARCH-56 的出處欄補 dagger.dev 原句。〈輸入與口徑〉那段拿掉「未接(架構測試後續計劃)」「未接(Ktor 範本後續)」兩個值的說明(本批後不該再出現,r1 架構對齊 F4)。
 3. **資料測試跟著改期望**(都在 `scripts/test_lumos.py`,共五支):
    - `t_kotlin_catalog_c_rows_batch_resolved`:允許的範本組從 T0–T5 擴成 T0–T13;未接值清單(`_KT_UNWIRED`)拿掉「未接(架構測試後續計劃)」與「未接(Ktor 範本後續)」兩個值(這兩個值本批後不該再出現);寫死的「範本 32 列」改成照新〈範圍〉的列數與各組列編號。允許的值不新增新種類,只是範圍變了。
-   - `t_kotlin_test_templates_sections`:**新寫內容檢查**——範本檔有 `## T6`~`## T13` 與〈Android 實驗專案骨架〉,骨架節含 `sdk=34`、`targetSdk = 36` 與 `testInstrumentationRunner`;T6–T13 每一節都有〈紅綠矩陣〉小節;T12 節有指到 T11〈測試:API-9 Fragment 畫面銷毀後〉的那句(小節名字串);T12 節含 `allowStoreCreation=false` 與 `freeze.store.default.path`(現在這支只驗 `template_problems` 與三種改壞,沒有內容檢查;r1 通才 F8)。
+   - `t_kotlin_test_templates_sections`:**新寫內容檢查**——範本檔有 `## T6`~`## T13` 與〈Android 實驗專案骨架〉,骨架節含 `sdk=34`、`targetSdk = 36` 與 `testInstrumentationRunner`;T6–T13 每一節都有〈紅綠矩陣〉小節;T12 節有指到 T11〈測試:API-9 Fragment 畫面銷毀後〉的那句(小節名字串);T12 節含 `allowStoreCreation=false` 與 `freeze.store.default.path`(現在這支只驗 `template_problems` 與三種改壞,沒有內容檢查;r1 通才 F8)。**代碼審 r1 後改**:這段內容檢查搬進 `t_kotlin_test_templates_content_guards`(`sections` 是 [S1] 型錄自檢);T12 的凍結設定只在 properties 與 kotlin 圍欄裡比對整行(三行設定與建清單的兩行 `systemProperty`),矩陣要有 `StoreUpdateFailedException` 格。
    - `t_kotlin_test_templates_content_guards`:斷言範本組清單的地方從 T0–T5 改成 T0–T13;加 S3 那幾個禁用寫法。
    - `t_kotlin_test_templates_linked`:加 S7 的兩句。
    - `t_kotlin_catalog_instrumented_batch_notes`(新增):驗 S6。
-4. **指路**:測試品質標準(`skills/lumos-project-notes/commands/test-quality-standard.md`)〈Android 資料層(Room)的撰寫補充〉一節的「升級」條尾加一句指到範本 T6;〈Android 本機單元測試的驗收標準〉加一句「要 Android 框架的測試(Fragment、LiveData、WorkManager、Compose)先看範本 T7–T11,Robolectric 釘 `sdk=34` 的理由在範本骨架」;kotlin-idioms `SKILL.md` 開頭那句(已指 `test-templates.md`)不用改。
+4. **指路**:測試品質標準(`skills/lumos-project-notes/commands/test-quality-standard.md`)〈Android 資料層(Room)的撰寫補充〉一節的「升級」條尾加一句指到範本 T6;〈Android 本機單元測試的驗收標準〉加一句照既有格式的「照抄起手:要 Android 框架的測試(Fragment、LiveData、WorkManager、Compose、Paging)的範本在 `…test-templates.md`(T7–T11 節;…專案形狀與 Robolectric 設定照該檔〈Android 實驗專案骨架〉節)」,`sdk=34` 這類骨架細節不在標準重抄(代碼審 r1 架構對齊 F2);kotlin-idioms `SKILL.md` 開頭那句(已指 `test-templates.md`)不用改。
 5. **實驗與驗證紀錄**:照〈實驗〉逐項跑,結果寫進一篇 `Verification/` 驗證紀錄(`plan_refs` 連回這篇)。
 6. **前半計劃同步**(r1 依據 F2):前半 [[Projects/Android行為測試範本與架構測試_計劃]] 的 S2 與本計劃 S1 綁同一支 `t_kotlin_catalog_c_rows_batch_resolved`、期望相反;實作的同一個提交裡,前半 S2 句尾加「(已被 [[Projects/Android儀器測試範本與架構測試_計劃]] S1 取代,那支測試的期望以後半為準)」,前半 `REVISIT:2027-01-31 開「架構測試後續計劃」` 那行刪掉、前半〈審計修正紀錄〉記一行「由後半計劃結案」。
 7. **寫回家**:[[Systems/kotlin規則包]] 記範本檔多了 T6–T13 與 Android 骨架、型錄 UI-39 後果改寫與 CO-5 改歸;[[Systems/test-quality-cli]] 記指路兩句。
@@ -183,7 +183,7 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留�
 - **E2 每格只紅點名的那支**:同前半;小節裡每支 `@Test` 都在矩陣出現。
 - **E3 時序穩定**:JVM 與 Robolectric 的每格重跑 20 次、模擬器的每格重跑 5 次(一次要裝 APK,約一分鐘),結果要每次一樣;不穩的那支改寫或拿掉,型錄那列改回「未接(儀器批)」並寫原因。T9 有動畫與時鐘的格子(TEST-29、STATE-12)、T11 STATE-17(Looper 排程)特別看。
 - **E4 跑在哪的對照**:Robolectric 用實作當天 Maven Central 的最新穩定版(2026-11-06 是 4.17),先重跑預實驗 P1、P2 確認結論沒變;T7 DATA-58、T8、T9 九列、T11 在 Robolectric 跑完矩陣後,再在模擬器跑一次同一份(放 `androidTest`),結果要一樣;不一樣的照官方說法改成只在模擬器跑,節開頭寫明。T9 無障礙兩列反過來在 Robolectric 跑一次,記下它照綠(重做預實驗 P1,證明「只在模擬器」那句)。
-- **E5 K1、K2 在 Android 模組**:lab 複本的 `src/test` 放 T12,`ClassFileImporter` 匯入 app 的套件(Android 本機單元測試的類別路徑有編譯後的 app 類別),預實驗 P3 的樣本搬進 `src/main` 跑一次,結果要一樣;另加 Android 才有的樣本:`viewModelScope.launch`(綠)、Fragment 裡 `lifecycleScope.launch`(T12 綠——那半由 T11 的 API-9 小節接)、`@HiltAndroidApp class App : Application()` 裡建 `appScope`(綠)、`BroadcastReceiver.onReceive` 裡 `goAsync()` 後建 scope(綠)、同一個 Receiver 沒有 `goAsync()` 就建 scope(紅)、`class App : Application` 裡 `launch { CoroutineScope(…) }`(suspend lambda 編成 `App$onCreate$1`,綠)、`@Module abstract class AppModule { @Binds …; companion object { @Provides fun appScope() = CoroutineScope(SupervisorJob() + Dispatchers.Default) } }`(綠)、資料層 `suspend fun load(io: CoroutineDispatcher = Dispatchers.IO)`(`load$default`,綠)、`src/test` 裡的 `CoroutineScope(UnconfinedTestDispatcher())` 與 `withContext(Dispatchers.Default.limitedParallelism(1))`(不被匯入,綠;另跑一次只用 ArchUnit 內建 `DoNotIncludeTests`,記下它認不認 AGP 的 `debugUnitTest` 路徑)、資料層放在另一個 library 模組的樣本(K2 仍判得到)。凍結五步(預期照 r1 可行性 F1、F2 實跑):①沒有清單檔、`allowStoreCreation=false` → `StoreInitializationFailedException` 紅;②帶 `-ParchunitFreezeInit` 跑 → 清單檔建在 `src/test/resources/archunit_store`、綠;③不帶屬性、加一個新違規 → 斷言紅;④修掉一個舊違規 → 綠、清單縮小;⑤刪掉清單檔、不帶屬性 → 回到①的紅(不會全綠)。另跑一次「常駐 true」的對照,記下刪檔後全綠且新違規一起被凍結(證明為什麼不常駐)。
+- **E5 K1、K2 在 Android 模組**:lab 複本的 `src/test` 放 T12,`ClassFileImporter` 匯入 app 的套件(Android 本機單元測試的類別路徑有編譯後的 app 類別),預實驗 P3 的樣本搬進 `src/main` 跑一次,結果要一樣;另加 Android 才有的樣本:`viewModelScope.launch`(綠)、Fragment 裡 `lifecycleScope.launch`(T12 綠——那半由 T11 的 API-9 小節接)、`@HiltAndroidApp class App : Application()` 裡建 `appScope`(綠)、`BroadcastReceiver.onReceive` 裡 `goAsync()` 後建 scope(綠)、同一個 Receiver 沒有 `goAsync()` 就建 scope(紅)、`class App : Application` 裡 `launch { CoroutineScope(…) }`(suspend lambda 編成 `App$onCreate$1`,綠)、`@Module abstract class AppModule { @Binds …; companion object { @Provides fun appScope() = CoroutineScope(SupervisorJob() + Dispatchers.Default) } }`(綠)、資料層 `suspend fun load(io: CoroutineDispatcher = Dispatchers.IO)`(`load$default`,綠)、`src/test` 裡的 `CoroutineScope(UnconfinedTestDispatcher())` 與 `withContext(Dispatchers.Default.limitedParallelism(1))`(不被匯入,綠;另跑一次只用 ArchUnit 內建 `DoNotIncludeTests`,記下它認不認 AGP 的 `debugUnitTest` 路徑)、資料層放在另一個 library 模組的樣本(K2 仍判得到)。凍結五步(預期照 r1 可行性 F1、F2 實跑):①沒有清單檔、`allowStoreCreation=false` → `StoreInitializationFailedException` 紅;②帶 `-ParchunitFreezeInit` 跑 → 清單檔建在 `src/test/resources/archunit_store`、綠;③不帶屬性、加一個新違規 → 斷言紅;④修掉一個舊違規 → 紅 `StoreUpdateFailedException`,帶 `-ParchunitFreezeInit` 再跑一次綠、清單縮小(代碼審 r1 後加 `allowStoreUpdate=false` 的結果;原本是「綠、清單自動縮小」);⑤刪掉清單檔、不帶屬性 → 回到①的紅(不會全綠)。另跑一次「常駐 true」的對照,記下刪檔後全綠且新違規一起被凍結(證明為什麼不常駐)。
 - **E6 K3 在 Android 模組**:同上放 T13,樣本加 `@Immutable data class XUiState(var a: Int)`(紅:標註不改變就地修改的壞處)、`typealias Items = MutableList<String>` 的屬性、泛型 `List<MutableList<String>>`(記下 `isMutableType` 只看最外層的話是天花板)、`data object Loading : HomeUiState`(物件沒有屬性,不影響)、`src/test` 裡的 `class FakeProfileUiState(var loading: Boolean)` 與 `data class TestUiState(val xs: ArrayList<String>)`(不在正式程式範圍,綠;另用 `scopeFromProject()` 跑一次記下它會紅,證明要指定範圍)、加了後綴常數 `State` 後 `data class ProfileState(var name: String)` 轉紅;Konsist 0.17.3 與 1.0.0-beta.1 各跑一次,結果要一樣;沒有 gradlew 的資料夾 Konsist 例外紅(調研實測),骨架寫明。
 - **E7 每道檢查各改壞一次**:T12 的各個豁免與條件(允許類別、往外找最外層類別、帶 `DefaultConstructorMarker` 的合成建構子、`$default` 合成方法、`goAsync`、排除測試類別的 `ImportOption`)、T13 的「間接父型別」條件與 `scopeFromProduction` 範圍,各拿掉一次,對應的好樣本要轉紅(預實驗 P3 已在純 JVM 做過一次,這裡在 Android 模組重做)。
 - **E8 Ktor 版本**:Ktor client(CIO 引擎)在 Kotlin 2.2.21 編得過的最新版(前半 kotlinx-serialization 1.12.0 就因綁 Kotlin 2.4 編不過);跟 T4 的 OkHttp 4 與 5 兩套依賴並存時都要能跑;好寫法綠、壞寫法斷言紅。
@@ -202,15 +202,16 @@ RETIRE-IF: 2027-05-06 人裁時,在消費專案的 git 歷史裡數第一行留�
 - **模擬器與 Gradle 常駐程序吃資源**:模擬器 2G RAM、無視窗;實驗完 `adb -s emulator-5554 emu kill` 關掉自己開的那台;Gradle daemon 是共用的,不停。
 - **消費專案的 JDK**:Robolectric 對 SDK 36 要 JDK 21;骨架釘 `sdk=34`,專案用 JDK 21 時可拿掉(回頭條件見節末)。
 - **ArchUnit 與 Konsist 的版本漂移**:版本只寫在範本檔各組〈依賴〉;Konsist 正式版出來後 T13 要重跑(回頭條件見節末)。
-- **凍結清單被當成「已處理」**:`FreezingArchRule` 的清單檔讓舊違規永遠綠;範本節開頭寫明「清單只能縮小,新增一筆要在代碼審說明」,不機械擋(消費專案的事,本 repo 驗不到)。
+- **凍結清單被當成「已處理」**:`FreezingArchRule` 的清單檔讓舊違規永遠綠;範本節開頭寫明清單裡的違規只准變少、帶 `-ParchunitFreezeInit` 那次多出來的要在代碼審說明;改了規則描述時舊描述的清單條目與檔案一起刪(新描述另存、舊的不會自己消失,驗證紀錄 E13),帶屬性那次的清單差異在代碼審特別看新增的違規;不機械擋(消費專案的事,本 repo 驗不到)。
 - **凍結清單漏提交或被刪變假綠**:`allowStoreCreation` 常駐 true 時會發生(r1 可行性 F1 實跑);範本預設 false、只在初次建清單時用 Gradle 屬性打開,並教使用者提交 `archunit_store`。
+- **新規則或改描述被靜默凍結**:`allowStoreCreation=false` 只擋索引檔整份不見;加凍結規則、改規則描述時,沒設 `allowStoreUpdate=false` 會把當下違規存成新的一份、測試綠(驗證紀錄 E13 實跑);範本設 false,代價是修掉舊違規也要帶屬性跑一次,清單每次變動都在版控裡。
 - **效能**:型錄自檢多讀的只有範本檔變長(多八節),判法不變。
 - **併發**:實驗在會談暫存區;本 repo 只改 Markdown(範本檔、型錄、測試品質標準、前半計劃)與五支資料測試。
 - **守衛面**:型錄自檢與資料測試在本 repo CI 跑;不改任何推送閘或收證判定。
 - **舊否決對照**:見審計修正紀錄第一行。
 - 前端:不改任何前端檔;本計劃的「畫面」都是 Android Compose。
 - 已排除:金流:範本與實驗只用假資料。
-- 已排除:對外送出:MockWebServer 只聽本機回環位址;實驗只從 Maven Central 與 Google Maven 下載依賴;模擬器不登入任何帳號。
+- 已排除:對外送出:MockWebServer 與 T4 Ktor 小節用的 JDK 內建 HttpServer 都只聽本機回環位址(HttpServer 綁 InetAddress.getLoopbackAddress());實驗只從 Maven Central 與 Google Maven 下載依賴;模擬器不登入任何帳號。
 - 已排除:不可逆:新增 Markdown 節、改型錄文字與一支測試的期望,退提交即回原狀。
 
 REVISIT:2027-02-06 範本檔 T6–T13 各組〈依賴〉的版本(Room、Paging、WorkManager、Compose BOM、LeakCanary、Robolectric、ArchUnit、Konsist、Ktor)與 Maven Central、Google Maven 最新版對一次,有大版本差就重跑那組的紅綠矩陣
@@ -221,12 +222,12 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)�
 ## 驗收條款
 
 - [S1] 當讀型錄 C 列時,每列通電批次的「行為測試或正向約束=」值應是「範本 T0」到「範本 T13」、「未接(儀器批)」、「不接(代碼審或真機)」之一,應不再出現「未接(架構測試後續計劃)」與「未接(Ktor 範本後續)」;各值的列數與各範本組的列應等於本計劃〈範圍〉〈做〉表(實驗移出的列照〈做法〉2 計入「未接(儀器批)」),CO-5 應是「不接(代碼審或真機)」。 [test:t_kotlin_catalog_c_rows_batch_resolved]
-- [S2] 當型錄自檢讀真的型錄與範本檔時,應零問題;範本檔應有 `## T6` 到 `## T13` 八節與〈Android 實驗專案骨架〉一節,骨架節應含 `sdk=34`、`targetSdk = 36` 與 `testInstrumentationRunner`;T6–T13 每節應有〈紅綠矩陣〉小節;T12 節應含指到 T11〈測試:API-9 Fragment 畫面銷毀後〉的字串、`allowStoreCreation=false` 與 `freeze.store.default.path`。 [test:t_kotlin_test_templates_sections]
+- [S2] 當型錄自檢讀真的型錄與範本檔時,應零問題;範本檔應有 `## T6` 到 `## T13` 八節與〈Android 實驗專案骨架〉一節,骨架節應含 `sdk=34`、`targetSdk = 36` 與 `testInstrumentationRunner`;T6–T13 每節應有〈紅綠矩陣〉小節;T12 節應含指到 T11〈測試:API-9 Fragment 畫面銷毀後〉的字串;T12 的 properties 圍欄應有整行 `freeze.store.default.path=src/test/resources/archunit_store`、`freeze.store.default.allowStoreCreation=false`、`freeze.store.default.allowStoreUpdate=false`,建清單的 kotlin 圍欄應有傳 `allowStoreCreation` 與 `allowStoreUpdate` 為 true 的兩行,T12 矩陣應有 `StoreUpdateFailedException` 的格;只改散文、圍欄照舊時應零問題。 [test:t_kotlin_test_templates_content_guards]
 - [S3] 當讀範本檔 T6–T13 的〈測試〉小節時,應不出現 `DetectLeaksAfterTestSuccess`、`InstantTaskExecutorRule` 與不帶 `runCatching` 的 `LeakAssertions.assertNoLeaks()`;T13 的〈測試〉應不呼叫 Konsist 的 `assertTrue`/`assertFalse`(改收集違規再比)。 [test:t_kotlin_test_templates_content_guards]
 - [S4] 當在 Android 實驗專案照骨架逐格跑時,每格每支測試的結果應等於矩陣,〈測試〉列的每個紅經 `assertion_failure` 判定應是斷言失敗;JVM 與 Robolectric 的格子重跑 20 次、模擬器的格子重跑 5 次結果應不變;E4 對照兩邊結果應一致或已照官方改成只在模擬器;結果寫進驗證紀錄。 [manual:會談暫存區的 lab 複本逐格跑 Gradle 與模擬器,記每格結果、失敗型別與重跑次數]
-- [S5] 當 T12、T13 在 Android 實驗專案對〈實驗〉E5、E6 列的樣本跑時,壞樣本應紅、好樣本應綠,拿掉每個豁免或條件後對應的好樣本應轉紅,凍結清單應照 E5 的五步變化(清單不見時紅、不是全綠);T13 在 Konsist 0.17.3 與 1.0.0-beta.1 的結果應相同。 [manual:會談暫存區的 lab 複本跑 E5、E6、E7,結果寫進驗證紀錄]
+- [S5] 當 T12、T13 在 Android 實驗專案對〈實驗〉E5、E6 列的樣本跑時,壞樣本應紅、好樣本應綠,拿掉每個豁免或條件後對應的好樣本應轉紅,凍結清單應照 E5 的五步變化(清單不見時紅、不是全綠),加一支凍結規則或改規則描述時應紅 `StoreUpdateFailedException`、不是靜默凍結成綠(E13);T13 在 Konsist 0.17.3 與 1.0.0-beta.1 的結果應相同。 [manual:會談暫存區的 lab 複本跑 E5、E6、E7,結果寫進驗證紀錄]
 - [S6] 當讀型錄 UI-39 列時,「後果」欄應提到強跳過模式與實例相等比較、外部模組型別「輕微多餘重組、不判」,標題與壞寫法欄應不再出現「外部模組型別」與 `java.time`,出處欄應有強跳過頁網址;讀型錄〈輸入與口徑〉時應不再出現「未接(架構測試後續計劃)」與「未接(Ktor 範本後續)」;讀 ARCH-56 列時出處欄應有 dagger.dev 的網址。 [test:t_kotlin_catalog_instrumented_batch_notes](新增)
-- [S7] 當讀測試品質標準時,〈Android 資料層(Room)的撰寫補充〉的升級條應提到範本 T6,〈Android 本機單元測試的驗收標準〉應有一句提到範本 T7–T11 與 Robolectric 的 `sdk=34`。 [test:t_kotlin_test_templates_linked]
+- [S7] 當讀測試品質標準時,〈Android 資料層(Room)的撰寫補充〉的升級條應提到範本 T6,〈Android 本機單元測試的驗收標準〉應有一句「照抄起手:…(T7–T11 節…)」指到範本〈Android 實驗專案骨架〉,那句應不重抄 `sdk=34`。 [test:t_kotlin_test_templates_linked]
 
 ## 預期值表
 
@@ -252,6 +253,7 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)�
 | S5 | `class App : Application` 裡 `launch { CoroutineScope(SupervisorJob()) }` | T12 K1 綠(往外找到 `App`) | r1 可行性 F5 實跑;通才 F4 |
 | S5 | 資料層 `suspend fun load(io: CoroutineDispatcher = Dispatchers.IO)` | T12 K2 綠(`load$default` 豁免) | r1 可行性 F6 實跑;型錄 CO-1 標準寫法 |
 | S5 | 刪掉 `archunit_store`、不帶 `-ParchunitFreezeInit` | T12 紅(`StoreInitializationFailedException`),不是全綠 | ArchUnit 手冊 8.6.2 `allowStoreCreation` 預設 false;r1 可行性 F1 實跑 |
+| S5 | 清單提交後加一支 `FreezingArchRule` 包的 `@Test`,或改既有規則的 `ArchCondition` 描述,不帶 `-ParchunitFreezeInit` | 那支紅 `StoreUpdateFailedException`,不是靜默凍結成綠 | ArchUnit 手冊 8.6.2 `allowStoreUpdate`;代碼審 code-android儀器測試範本 r1 範本丙 F1;驗證紀錄 E13 實跑 |
 | S5 | `src/test` 裡的 `class FakeProfileUiState(var loading: Boolean)` | T13 K3 綠(不在正式程式範圍) | r1 通才 F6;Konsist `scopeFromProduction` |
 | S4 | T8〈測試〉×〈壞寫法:DATA-38 迴圈裡吞取消〉 | 斷言紅(`markDone` 1 次),10 秒內結束、不卡死 | r1 可行性 F3 實跑;官方 CoroutineWorker 頁「由框架自動取消」 |
 | S4 | T11〈測試:API-9 Fragment 畫面銷毀後〉×〈壞寫法:API-9 Fragment 自己的 lifecycleScope〉 | 斷言紅(銷毀後被呼叫 1 次) | r1 可行性 F4 實跑;官方協程例外處理頁 |
@@ -259,7 +261,7 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)�
 | S6 | 型錄 UI-39 壞寫法欄 | 不含 `java.time` | 本計劃〈範圍〉決定 2;r1 通才 F2 |
 | S6 | 型錄 ARCH-56 出處欄 | 含 `https://dagger.dev/hilt/android-entry-point` | 本計劃〈範圍〉決定 4;dagger.dev 原句 |
 | S7 | 測試品質標準〈Android 資料層(Room)的撰寫補充〉升級條 | 含「範本 T6」 | 本計劃〈做法〉4 指路 |
-| S7 | 測試品質標準〈Android 本機單元測試的驗收標準〉 | 有一句同時提到「範本 T7–T11」與 `sdk=34` | 本計劃〈做法〉4;預實驗 P2 |
+| S7 | 測試品質標準〈Android 本機單元測試的驗收標準〉 | 有一句「照抄起手:…(T7–T11 節…)」提到〈Android 實驗專案骨架〉,不含 `sdk=34` | 本計劃〈做法〉4;代碼審 r1 架構對齊 F2 |
 
 ## 回退
 
@@ -284,6 +286,7 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)�
 
 - K1、K2 用位元組碼|「It does so by analyzing given Java bytecode, importing all classes into a Java code structure」;ArchUnit 現行 1.5.1|https://www.archunit.org/userguide/html/000_Index.html(本次開頁);預實驗 P3|範本 T12、決定 1
 - 舊違規凍結|ArchUnit 使用手冊的 `FreezingArchRule`(既有專案只擋新違規);手冊 8.6.2 `freeze.store.default.allowStoreCreation` 預設 false、要設 true 才能建新清單;`freeze.store.default.path` 設清單位置;常駐 true 時刪清單全綠、不設路徑時清單落在模組根(r1 可行性 F1、F2 實跑)|https://www.archunit.org/userguide/html/000_Index.html ;r1 可行性席報告|範本 T12、E5
+- 凍結清單擋新規則與改描述|手冊 8.6.2「can be set to false to forbid updates of the violations stored for frozen rules」(`freeze.store.default.allowStoreUpdate`,預設 true);手冊沒寫「索引在、規則是新的」怎麼辦,ArchUnit 1.5.1 `FreezingArchRule.evaluate` 對不在索引裡的規則直接存檔回成功(代碼審 r1 範本丙席讀原始碼);實測預設設定下新規則、改描述都靜默凍結成綠,設 false 後紅 `StoreUpdateFailedException`,建清單那一步要同時打開更新|https://www.archunit.org/userguide/html/000_Index.html(2026-11-06 開頁);驗證紀錄 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]] E13|範本 T12〈依賴〉與矩陣末四格、S2、S5
 - 判允許類別看最外層、預設值兩種豁免|Kotlin 把 suspend lambda 編成 `X$f$1`、companion 編成 `X$Companion`、函式預設參數編成 `f$default`;r1 可行性 F5、F6 實跑誤報|`governance/review-reports/android儀器測試範本與架構測試/r1-可行性-sonnet.md`|範本 T12、E5、E7
 - 協程裡的例外測試本體接不到|官方協程例外處理頁(launch 的例外交給 `CoroutineExceptionHandler`);r1 可行性 F4 實跑 `runCatching` 沒接到|https://kotlinlang.org/docs/exception-handling.html ;r1 可行性席報告|範本 T11 API-9 小節、T8
 - 翻案用 ArchUnit|舊否決「ArchUnit 加 jMolecules 規則最完整但屬 Java 生態,沒查到在 Kotlin 編譯出的類別上的實證,不選」;使用者 2026-11-06 原話「A」|[[Projects/Android的MVVM與DDD目標架構範本_計劃]] PRIOR-ART;決策 d3|決定 1
@@ -314,6 +317,15 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)�
 - ARCH-3 要關自動時鐘|時鐘自動推進時轉場立刻跑完,`dropUnlessResumed` 的好寫法也多一頁(r1 依據 F6 讀文件推論,E1、E2 實證)|https://developer.android.com/develop/ui/compose/testing/synchronization|範本 T9 ARCH-3
 - 儀器測試的紅要是斷言紅|AGP 儀器測試 XML 沒有型別,收證看第一行與 JUnit 斷言框;預實驗 P1 的 `runCatching` 加 `assertNull` 第一行是 `java.lang.AssertionError`|`scripts/test_quality.py` 的 `assertion_failure`;預實驗 P1|實驗 E1
 - 範本放法與自檢|沿用前半的範本檔、`template_problems`、通電批次欄|[[Projects/Android行為測試範本與架構測試_計劃]]〈做法〉1–3|〈做法〉1–3
+- 實作時 AGP 8.13.2 的版本天花板|Compose 1.12(BOM 2026.08 起)、lifecycle 2.11、navigation 2.10 的 AAR 要 compileSdk 37 與 AGP 9.1,`checkDebugAarMetadata` 擋;Hilt 2.59 起 Gradle 外掛要 AGP 9.0(「The Hilt Android Gradle plugin is only compatible with Android Gradle plugin (AGP) version 9.0.0 or higher」),改用 2.58|2026-11-06 實作實跑|範本〈Android 實驗專案骨架〉、T11〈依賴:Hilt〉
+- Konsist 找專案根的條件|Konsist 0.17.3 的 `GradleProjectRootDirResolver` 認 `gradlew`、`gradlew.bat`、`gradle/wrapper/gradle-wrapper.jar`/`.properties`,另有 Maven wrapper 與 `.git` 兩種解析器;只拿掉 `gradlew` 照綠,三樣都拿掉才 `KoInternalException`(調研稿「沒有 gradlew 就例外」不精確)|javap 讀 konsist-0.17.3.jar;實驗 E6|範本 T13、骨架
+- Compose 無障礙檢查的對比門檻|`enableAccessibilityChecks()` 不帶參數時只對 ERROR 丟例外,ATF 的文字對比報 WARNING(白底 `#CCCCCC` 對比 1.61 照綠);傳 `AccessibilityValidator().setRunChecksFromRootView(true).setThrowExceptionFor(WARNING)` 才紅;API 在 `androidx.compose.ui.test.junit4.accessibility` 套件|2026-11-06 模擬器實跑;javap 讀 ui-test-junit4-accessibility 1.11.4|範本 T9〈測試:無障礙〉
+- LeakCanary 要裝在 App 裡|「You still need to include the LeakCanary artifact in your app」`debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.14'`;只加 instrumentation 那一行時壞寫法照綠;`NoLeakAssertionFailedError` 父類別是 `java.lang.AssertionError`(實驗 E1、E12)|https://square.github.io/leakcanary/ui-tests/(本次開頁);模擬器實跑|範本 T10
+- Room Gradle 外掛自己接 androidTest assets|外掛的 `AndroidPluginIntegration` 把結構檔目錄加進 `AndroidTest` 的 assets(`copyRoomSchemasToAndroidTestAssets…` 任務),手動 `srcDir` 不必要;升版後第一次建置時最新版 json 還沒進 assets,`runMigrationsAndValidate` 丟 `FileNotFoundException … Missing file: AppDb/3.json`,第二次建置才綠|javap 讀 room-gradle-plugin 2.8.5、room3-gradle-plugin 3.0.3;實驗 E10|範本 T6
+- Room 3 與 Room 2 的程式差異|Room 3 的 `Migration.migrate(SQLiteConnection)`、`MigrationTestHelper.createDatabase`、`runMigrationsAndValidate` 都是 suspend;外掛 id `androidx.room3`、擴充 `room3 { }`|javap 讀 room3-runtime/room3-testing 3.0.3;實驗 E10|範本 T6
+- 儀器報告截斷|AGP 儀器報告的失敗文字截在 64KB:DATA-21 的 `SQLiteException` 訊息含 4 萬個 `?`,斷言框被截掉、`assertion_failure` 判不到;訊息只帶例外類別名|2026-11-06 模擬器實跑|範本 T6 DATA-21、T10
+- Hilt 測試類別要有具名套件|預設套件的 `@HiltAndroidTest` 類別產生的 `…_GeneratedInjector` 在預設套件,Hilt 彙整的元件引用不到,`hiltJavaCompileDebugUnitTest` 失敗 cannot find symbol|2026-11-06 Robolectric 實跑|範本 T11〈測試:Hilt〉
+- API-30 不用 MockWebServer|Ktor 測試改打 JDK 內建 `com.sun.net.httpserver.HttpServer`,不碰 OkHttp,跟 T4 的 OkHttp 4、5 兩套依賴並存都照跑;Ktor 3.6.1 在 Kotlin 2.2.21 編得過|2026-11-06 實跑(實驗 E8)|範本 T4〈測試:Ktor〉
 
 ## 待決問題
 
@@ -370,3 +382,37 @@ REVISIT:2027-02-06 Robolectric 出 4.17 之後的穩定版(或 4.18 正式版)�
 | 架構對齊 F3(更正版)`sdk=34` 只在骨架、新元素 | minor | 折:Robolectric 組〈依賴〉節尾寫 `sdk=34`、〈怎麼用〉補一句;PRIOR-ART ③ 承認兩個新的小元素與理由 |
 | 架構對齊 F4〈輸入與口徑〉留作廢值 | minor | 折:〈做法〉2 拿掉兩個值的說明;S6 檢查 |
 
+### 實作實驗修正(2026-11-06)
+
+實驗照〈實驗〉E1–E12 跑完,結果與證據在 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]];計劃預期被實驗推翻或補充的地方,範本照實跑寫,這裡記改了什麼:
+
+- 骨架:`buildFeatures { compose = true }` 與 Compose 外掛不放骨架,改由用到 Compose 的組(T9、T12 的實驗樣本)在〈依賴〉加;骨架開著外掛時沒有 Compose runtime 的組編譯 `IncompatibleComposeRuntimeVersionException`。版本照 AGP 8.13.2 的天花板(見〈依據來源〉)。
+- T6:手動 `sourceSets["androidTest"].assets.srcDir(…)` 拿掉(Room 外掛自己接);補「升版後第一次建置就跑升級測試會找不到最新版 json」的坑;Room 3 的差異不只 import(`migrate` 是 suspend、helper 的方法是 suspend),所以〈測試:Room 3〉另寫一份、〈好寫法〉照 Room 2 寫並寫明兩處機械改法;每支升級測試先刪資料庫檔(上一支留下的第 3 版檔會讓 `createDatabase(2)` 找 3→2 路徑);DATA-21 訊息只帶例外類別名(儀器報告 64KB 截斷)。
+- T9:無障礙要傳 WARNING 門檻的 validator(預設不報對比);ARCH-3 不關自動時鐘時第二次點擊丟「node is no longer in the tree」、好壞一起紅(不是計劃寫的「好寫法也多一頁」,結論相同:要關);STATE-23 的例外在 `rememberSaveable` 登記時(組建當下)就丟,`runCatching` 要包住 `setContent`;DATA-63 加一支「真的沒資料要顯示空畫面」;TEST-29 的〈壞測試〉在 Robolectric 與模擬器的結果記在驗證紀錄。
+- T10:`debugImplementation` 要加 `leakcanary-android`(官方頁有寫、計劃漏了),只加 instrumentation 時壞寫法照綠。
+- T11:Hilt 用 2.58(2.59 起要 AGP 9);Hilt 測試類別放具名套件。
+- T13:「沒有 gradlew 就例外」改成「Gradle wrapper、Maven wrapper、`.git` 都沒有才例外」;型別別名 0.17.3 判不到、1.0.0-beta.1 判得到(兩版矩陣相同,這一點不同,寫進範本)。
+- T4 API-30:測試伺服器改 JDK `HttpServer`,不用 MockWebServer(避開 OkHttp 主版本分岔)。
+- TEST-29 照〈做法〉2 移出、改回「未接(儀器批)」:Compose 1.11 下讓時鐘自動推進的〈壞測試〉在 Robolectric 與模擬器都綠、沒卡住(官方同步頁也沒說無限動畫會卡),範本抓不到差別;〈測試〉與〈壞測試〉留在 T9 當對照。其餘 28 列照〈範圍〉接上,範本 59 列、「未接(儀器批)」1 列。
+
+### 代碼審 code-android儀器測試範本 r1 修正(2026-11-06)
+
+五席(範本甲、範本乙、範本丙、測試、架構對齊,全 sonnet)13 條、major 2 條,全數折入;卷證 `governance/review-reports/code-android儀器測試範本/`(五份席報告與 `r1-intake.md`)。
+
+- T12 凍結(範本丙 F1,major):範本照實寫 `allowStoreCreation=false` 只擋索引檔整份不見;加 `freeze.store.default.allowStoreUpdate=false`,`-ParchunitFreezeInit` 同時打開建立與更新;矩陣補四格(加規則、改描述、修掉舊違規、刪清單)。實驗見驗證紀錄 E13。
+- T12 守衛(測試 F1,major):`_kt_instr_template_problems` 只在 T12 的 properties 與 kotlin 圍欄裡比對整行設定,加矩陣 `StoreUpdateFailedException` 格的檢查;改壞只改圍欄行(含搬到散文、搬進 build 圍欄),另有「只改散文不報」的對照。
+- UI-39 守衛(測試 F2、F3):判準抽成 `_kt_ui39_problems`,加好寫法欄;改壞對照拿改壞後的型錄跑同一組判準。
+- 措辭(範本甲 F1、範本乙 F1/F2、範本丙 F2、測試 F4):檔頭把 T4 Ktor 小節寫進 Android 模組那一半;TEST-29 兩處註解改成實測結論;T9「九列」改成「〈測試〉10 支」;STATE-17 說明改成通知一次、內容兩筆;UI-39 後果欄寫明 `===` 是官方頁原文、只有畫面不更新是推論。新加 `_kt_instr_wording_problems` 守這幾句。
+- 一致性(架構對齊 F1、F2):缺節訊息改成跟 `template_problems` 同一句「範本檔沒有 T<n> 節」;後半 S2 的內容檢查從 `t_kotlin_test_templates_sections` 搬進 `t_kotlin_test_templates_content_guards`(S2 綁定跟著改);測試品質標準的指路句改成「照抄起手:…(T7–T11 節…)」,`sdk=34` 指到骨架節(S7 與預期值表跟著改)。
+
+### 代碼審 code-android儀器測試範本 r2 修正(2026-11-06)
+
+兩席(通才、架構對齊,全 sonnet)6 條、全 minor,全數折入;卷證同上目錄的 `r2-intake.md` 與兩份席報告。
+
+- T12 矩陣基準(通才 F1):末四格的被測程式欄照 E13 實際基準改成〈好寫法〉加〈壞寫法:CO-1 資料層寫死 withContext〉(舊違規 `TagRepository`);「修掉舊違規」那格改寫在被測程式欄、〈測試〉不動;前導句分開前七格的零違規基準與末四格的一筆舊違規基準。守衛 `_kt_t12_freeze_rows_problems` 查凍結格的被測程式帶舊違規、修掉那格寫在被測程式欄、前導句不再說每一格零違規。
+- T12 建清單條件(通才 F2):`_kt_instr_template_problems` 要求兩行 `systemProperty(… "true")` 在 `if (project.hasProperty("archunitFreezeInit")) {` 區塊裡(配大括號);改壞含 `if (true)`、別的屬性、拿掉條件、把一行搬到條件外。
+- 改描述的清單(通才 F3):範本寫明改描述時把 `stored.rules` 裡舊描述那一行與它的清單檔一起刪、帶屬性那次的清單差異要特別看新增的違規;「清單只能縮小」改成「違規只准變少,多出來的在代碼審說明」;〈風險〉那行跟著改。`_kt_instr_wording_problems` 守這三句。
+- 計劃與驗證紀錄(通才 F4):〈做〉表 T4 補 Ktor 列改成 Android app 模組的本機單元測試;驗證紀錄總格數 61→65、T12 7→11,寫明末 4 格是 E13 新加、每格跑一次(原 7 格連跑 20 次)。新加 `_kt_instr_records_problems` 守:驗證紀錄 S4 的 T12 格數等於範本 T12 矩陣列數、總格數等於各組加總、T4 補 Ktor 列不寫純 JVM;拿修正前的兩篇筆記跑會報 T12 格數與 Ktor 列兩處。
+- 測試總檔寫法(架構對齊 F1、F2):`_kt_template_sections` 多一個 `""` 鍵放組開頭段,T9、T11、T12 開頭都從這裡取,不再手切字串(圍欄裡的 `###` 不算小節,有對照案例);圍欄語言收成 `_kt_lang_fences`/`_kt_fence_blocks`,照 CommonMark 取 info string 第一個字整字比對,`_kt_kotlin_blocks`、T12 設定比對與改壞輔助 `_in_t12_fence` 都走它。
+- 改壞:新加與改過的 17 道判準在 `git clone --shared` 複本各拿掉一次,各自翻紅(其中「修掉舊違規寫在測試欄」第一次沒紅——改壞案例的期望字太寬、落到另一條訊息也命中,收緊後翻紅)。
+- 代碼審 r2 後補(2026-11-06):T12 第 2 步(改描述時刪 `stored.rules` 舊行與舊清單檔)實跑,與範本說法一致、範本不改,原 `REVISIT:2027-02-06 實跑一次 T12 範本第 2 步` 那行刪掉,結果見驗證紀錄 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]] E14;〈做〉表 T4 補 Ktor 列的「本機 MockWebServer」改成範本實際用的 JDK `HttpServer`;測試總檔 `_kt_instr_wording_problems` 的檔頭改取到第一個圍欄外的 `## `(不再 `split("\n## ")` 手切),新加「檔頭圍欄裡的 `## `」對照案例,先紅後綠,`git clone --shared` 複本改回手切翻紅。

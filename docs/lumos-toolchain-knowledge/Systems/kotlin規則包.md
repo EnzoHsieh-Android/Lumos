@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-11-05
-updated: 2026-11-06
+updated: 2026-11-07
 responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
 aliases: []
 about_code:
@@ -35,9 +35,20 @@ summary: |-
   WHY:template_problems 只認通電批次「行為測試或正向約束=」那一段的「範本 T<n>」、比對範本檔標題前先剝程式圍欄、讀不了 UTF-8 回 (<templates>, 原因);由 catalog_problems 把讀好的主表列傳進去,不另讀 [出處:代碼審 code-android行為測試範本 r1 甲 F1、F2,架構 F1、F2] [因:圍欄裡示範的標題會讓缺節被放過;同一格兩套解析口徑會漂移] [test:t_kotlin_test_templates_sections]
   PITFALL:T3 用 viewModelScenario().recreate() 的測試放進 Android 模組的本機單元測試,好寫法壞寫法一律例外紅 Method containsKey in android.os.BaseBundle not mocked [出處:代碼審 code-android行為測試範本 r1 丙 F1 實跑] [根因:Android 上 SavedState 就是 Bundle,本機單元測試的 android.jar 是空殼] [修法:範本預設改官方的複製 SavedStateHandle 寫法,viewModelScenario 版只標純 JVM 或 KMP] [test:t_kotlin_test_templates_content_guards]
   WHY:check.py 的剝圍欄(_fence_regions、_visible_lines)是刻意的另一份,規則照 CommonMark、口徑跟 scripts/lumos 的 _fence_regions 逐條對齊;主表只有 main_rows 一條讀法,範本標題只有 TEMPLATE_HEADING_RE 與 template_sections 一套,測試端呼叫同名函式不另抄 [出處:代碼審 code-android行為測試範本 r2 架 F1–F4] [因:check.py 零依賴、scripts/lumos 沒有 .py 副檔名不能 import;抄兩份的正則在邊界案例會分岔] [不選:check.py 動態載入 scripts/lumos(破壞零依賴、CI 單獨跑自檢時多一個相依)] [test:t_kotlin_template_fence_parity]
+  WHY:範本檔加 T6–T13 與〈Android 實驗專案骨架〉,接型錄儀器批 25 列、API-9(T12,ArchUnit 讀位元組碼)、UI-39(T13,Konsist 讀宣告)、API-30(T4 補 Ktor);CO-5 改「不接(代碼審或真機)」,UI-39 名稱、壞寫法、標準寫法、後果四欄照強跳過頁改寫 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 設計審 r1、決策 d1、d3] [因:要不看字面判協程歸屬與寫死 dispatcher,Konsist 看不進函式本體] [不選:K4 架構測試(宿主由執行時決定,改 T11 行為測試);K5(room-guard 已擋)] [test:t_kotlin_catalog_c_rows_batch_resolved]
+  PITFALL:範本矩陣在 Android 實驗專案實跑時,儀器報告的失敗文字截在 64KB,斷言訊息帶整串例外(例 SQLiteException 的 4 萬個 ?)會把 JUnit 斷言框截掉,assertion_failure 判成不是斷言紅 [出處:2026-11-06 T6 DATA-21 模擬器實跑] [根因:AGP 儀器報告截斷失敗文字,收證要在第一個 Caused by 前找到 org.junit.Assert 框] [修法:儀器範本的斷言訊息只帶例外類別名或前幾行] [repro:skills/kotlin-idioms/test-templates.md T6〈測試:Room 2〉query_40000_ids 的訊息改回 exceptionOrNull() 在模擬器跑〈壞寫法:DATA-21 不分批〉]
+  PITFALL:ArchUnit 凍結清單只設 allowStoreCreation=false 時,加一支用 FreezingArchRule 包的新規則或改既有規則的描述,會把當下違規靜默存成新的一份、測試綠(改描述時連同時新加的違規一起凍結) [出處:代碼審 code-android儀器測試範本 r1 範本丙 F1;驗證紀錄 E13 實跑] [根因:清單以規則描述當鍵,allowStoreCreation 只管索引檔 stored.rules 整份不見,不在索引裡的規則 FreezingArchRule.evaluate 直接存檔回成功,allowStoreUpdate 預設 true] [修法:範本 T12 的 archunit.properties 加 allowStoreUpdate=false,-ParchunitFreezeInit 同時打開建立與更新;代價是修掉舊違規也要帶屬性跑一次] [test:t_kotlin_test_templates_content_guards]
+  PITFALL:範本內容守衛只比對「整節有沒有這串字」時,散文也寫了同一串設定,把 properties 圍欄裡的設定行改成 true 或刪掉,守衛照綠 [出處:代碼審 code-android儀器測試範本 r1 測試 F1 翻紅實驗] [根因:_kt_instr_template_problems 對 T12 只做整節子字串比對] [修法:只在 T12 的 properties 與 kotlin 圍欄裡比對整行 key=value 與 systemProperty 行;改壞只改程式行] [同族:t_kotlin_catalog_instrumented_batch_notes 的改壞只比對舊字串本身(測試 F3),已改成拿改壞資料跑同一組判準 _kt_ui39_problems] [test:t_kotlin_test_templates_content_guards]
+  PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
+  PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
+  PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+  REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,或把理由改成「零依賴路徑(--sg 自檢)不載主程式」
+  WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
+  WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+  - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
 ---
 # kotlin規則包
 
@@ -51,7 +62,7 @@ verified_by:
 - `rules/`、`rules-review/`、`rules-hints/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
 - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems)。
 - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉節不受檢查。
-- `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C、在純 JVM 跑得動的 32 列,通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本開頭〈實驗專案骨架〉重跑那一組、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]。
+- `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C 的列有 60 列(T0–T5 純 JVM,T6–T13 要 Android 模組、Robolectric 或模擬器)通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本的骨架節重跑那一組(T0–T5 照〈實驗專案骨架〉,T6–T13 照〈Android 實驗專案骨架〉)、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]](T6–T13 補進 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]])。
 
 自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(只有情境題證據樣式自測用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
 
@@ -65,3 +76,7 @@ verified_by:
 ## 2026-11-05 真專案實測
 
 實驗專案(13 支 kt 檔)與 Google 官方範例 nowinandroid(310 支 kt 檔)整份掃:修前命中 30 處、誤報 13 處(nowinandroid 誤報率 55%);誤報集中在測試變體目錄(`src/testDemo`)、Compose 預覽與截圖測試、分不出查詢與指令。照實測改形狀 6 條、降提示級 3 條後重掃:實驗專案 8 處(7 真、1 判不準)、nowinandroid 9 處全真。逐條紀錄在型錄「實測狀態」欄,驗證紀錄見 [[Verification/2026-11-05_Kotlin規則包真專案實測]]。
+
+## 測試品質接入標準指到行為測試範本(2026-11-06,[[Projects/Android行為測試範本與架構測試_計劃]])
+- `skills/lumos-project-notes/commands/test-quality-standard.md`〈Android 本機單元測試的驗收標準〉的協程與 Flow 兩小段尾各加一條「照抄起手」,指到 kotlin-idioms 的行為測試範本(標準檔的家是 [[Systems/test-quality-cli]],這裡記的是範本這一側為什麼要它指過來);兩條各帶一個範本實驗踩到的坑:`backgroundScope` 的工作 `advanceUntilIdle()` 不推、Turbine 自己的檢查失敗丟 `TurbineAssertionError` 收證不算斷言。綁的測試 `t_kotlin_test_templates_linked`。
+- 代碼審 r1(code-android行為測試範本,2026-11-06)改了同一份標準的三處:Flow 段舊的「錯誤用 `awaitError()` 收」那句補上「要當收證抓到錯的那一步不能靠這些,寫法見本段末條」;Flow 指路句補上 `awaitItem()` 等不到值也丟 `TurbineAssertionError`、要推到靜止後 `cancelAndConsumeRemainingEvents()` 一次比、有限流上 `expectNoEvents()` 會誤紅;〈畫面重建與程序被回收〉整條改寫成「Android 模組的本機單元測試照官方複製 SavedStateHandle,`ViewModelScenario.recreate()` 只在純 JVM 或 KMP 用」(它在 Android 模組因 `Bundle` 是空殼例外紅,實跑)。綁的測試同上,另驗連結目標存在與兩個坑的關鍵字。

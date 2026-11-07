@@ -126456,24 +126456,34 @@ def t_kotlin_catalog_rows_wired():
     check("★改壞★ 缺〈來源縮寫〉節時其他問題照樣報齊", any("編號重複" in b for _a, b in got2), str(got2[:3]))
 
 
-# ── 型錄 C 列接到行為測試範本(Projects/Android行為測試範本與架構測試_計劃 S1、S2、S5)──────────
-# 判準來源是計劃〈範圍〉兩張清單與〈預期值表〉,不是照實作抄:各組列號、各「未接/不接」值的列數都抄自計劃。
+# ── 型錄 C 列接到行為測試範本(Projects/Android行為測試範本與架構測試_計劃 S1、S2、S5;
+#    後半 Projects/Android儀器測試範本與架構測試_計劃 S1–S3、S6、S7)──────────
+# 判準來源是兩份計劃〈範圍〉的清單與〈預期值表〉,不是照實作抄:各組列號、各「未接/不接」值的列數都抄自計劃;
+# 後半實驗把某列移出時,那列搬進「未接(儀器批)」並在驗證紀錄記原因(後半〈做法〉2)。
 _KT_TEMPLATE_GROUPS = {
     "T0": {"TEST-4", "TEST-5", "TEST-6", "TEST-7", "TEST-9", "TEST-14", "TEST-17", "TEST-18", "TEST-19", "TEST-20"},
     "T1": {"API-1", "API-4", "API-10", "API-31", "API-32", "API-34", "FLOW-29", "CO-14"},
     "T2": {"API-8", "FLOW-3", "FLOW-18", "FLOW-20", "FLOW-23", "FLOW-24", "STATE-10"},
     "T3": {"STATE-6", "STATE-26"},
-    "T4": {"API-21", "API-26"},
+    "T4": {"API-21", "API-26", "API-30"},
     "T5": {"DATA-72", "DATA-73", "DATA-74"},
+    "T6": {"DATA-17", "DATA-19", "DATA-21", "DATA-65", "DATA-69"},
+    "T7": {"DATA-58", "DATA-60"},
+    "T8": {"DATA-38", "DATA-39"},
+    "T9": {"STATE-12", "STATE-23", "UI-36", "UI-52", "ARCH-2", "ARCH-3", "TEST-32", "DATA-63",
+           "UI-106", "UI-110"},
+    "T10": {"TEST-35"},
+    "T11": {"ARCH-31", "ARCH-35", "STATE-17", "ARCH-56"},
+    "T12": {"API-9"},
+    "T13": {"UI-39"},
 }
 _KT_UNWIRED = {
-    "未接(儀器批)": {"STATE-12", "STATE-17", "STATE-23", "UI-36", "UI-52", "UI-106", "UI-110", "ARCH-2", "ARCH-3",
-                   "ARCH-31", "ARCH-35", "DATA-17", "DATA-19", "DATA-21", "DATA-38", "DATA-39", "DATA-58", "DATA-60",
-                   "DATA-63", "DATA-65", "DATA-69", "TEST-29", "TEST-32", "TEST-35", "ARCH-56"},
-    "未接(架構測試後續計劃)": {"API-9", "CO-5", "UI-39"},
-    "未接(Ktor 範本後續)": {"API-30"},
-    "不接(代碼審或真機)": {"STATE-20", "CO-39", "UI-109", "DATA-44", "DATA-77", "PERF-1", "PERF-2"},
+    # TEST-29 實驗移出:Compose 1.11 的無限動畫在 Robolectric 與模擬器都不讓測試卡住,範本抓不到差別(驗證紀錄 E3/E4)
+    "未接(儀器批)": {"TEST-29"},
+    "不接(代碼審或真機)": {"STATE-20", "CO-39", "UI-109", "DATA-44", "DATA-77", "PERF-1", "PERF-2", "CO-5"},
 }
+# 後半計劃〈做法〉2、S1:本批後不該再出現的兩個舊值
+_KT_RETIRED_VALUES = ("未接(架構測試後續計劃)", "未接(Ktor 範本後續)")
 
 
 def t_kotlin_test_templates_sections():
@@ -126484,15 +126494,15 @@ def t_kotlin_test_templates_sections():
     check("S1 真型錄與真範本檔:template_problems 零問題", m.template_problems() == [], str(m.template_problems()[:5]))
     check("S1 真型錄全套格式檢查照樣零問題(含範本那一項)", m.catalog_problems() == [], str(m.catalog_problems()[:5]))
 
-    # 改壞一:API-1 指到範本檔沒有的 T9
+    # 改壞一:API-1 指到範本檔沒有的 T20(T9 後半已有,改用 T20)
     m1 = _ktpack(copy=True)
-    _ktpack_edit(m1.CATALOG, "行為測試或正向約束=範本 T1", "行為測試或正向約束=範本 T9")
+    _ktpack_edit(m1.CATALOG, "行為測試或正向約束=範本 T1", "行為測試或正向約束=範本 T20")
     rows1 = m1.main_rows()
-    moved = next(r for r, c in rows1.items() if m1.behavior_value(c[9]) == "範本 T9")
+    moved = next(r for r, c in rows1.items() if m1.behavior_value(c[9]) == "範本 T20")
     p1 = m1.template_problems()
-    check("★改壞★ 列指到不存在的範本組要報 (列編號, 範本檔沒有 T9 節)", p1 == [(moved, "範本檔沒有 T9 節")], str(p1))
+    check("★改壞★ 列指到不存在的範本組要報 (列編號, 範本檔沒有 T20 節)", p1 == [(moved, "範本檔沒有 T20 節")], str(p1))
     check("★改壞★ 這一項掛在 catalog_problems 裡(--catalog-only 與 CI 都走得到)",
-          (moved, "範本檔沒有 T9 節") in m1.catalog_problems(), str(m1.catalog_problems()[:5]))
+          (moved, "範本檔沒有 T20 節") in m1.catalog_problems(), str(m1.catalog_problems()[:5]))
 
     # 改壞二:刪掉範本檔的 ## T2 那一節,引用 T2 的每一列都要報
     m2 = _ktpack(copy=True)
@@ -126585,9 +126595,9 @@ def t_kotlin_test_templates_sections():
 
     # 架構 F1:主表讀一次共用——catalog_problems 把它讀好的列交給 template_problems,傳進來的列要被照用
     m7 = _ktpack()
-    fake_rows = {"API-999": ["API-999"] + [""] * 8 + ["行為測試或正向約束=範本 T9"] + ["", ""]}
+    fake_rows = {"API-999": ["API-999"] + [""] * 8 + ["行為測試或正向約束=範本 T20"] + ["", ""]}
     check("S1 template_problems 照用傳進來的主表列(不另讀型錄)",
-          m7.template_problems(fake_rows) == [("API-999", "範本檔沒有 T9 節")], str(m7.template_problems(fake_rows)))
+          m7.template_problems(fake_rows) == [("API-999", "範本檔沒有 T20 節")], str(m7.template_problems(fake_rows)))
 
     calls7, real7 = [], m7.main_rows
 
@@ -126633,7 +126643,9 @@ def t_kotlin_template_fence_parity():
 
 def _kt_template_sections(m, text):
     """範本檔 → {組代號: {小節標題: 小節內文}}。組的切法呼叫 check.py 的 template_sections
-    (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。"""
+    (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。
+    鍵 "" 是組標題到第一個小節之間的開頭段(代碼審 code-android儀器測試範本 r2 架構對齊 F1:開頭段也走這支,
+    不另外手切字串)。"""
     lines = text.splitlines()
     starts = m.template_sections(text)
     visible = {no - 1 for no, _ln in m._visible_lines(lines)}
@@ -126641,27 +126653,40 @@ def _kt_template_sections(m, text):
     for k, (g, i) in enumerate(starts):
         end = starts[k + 1][1] if k + 1 < len(starts) else len(lines)
         nxt = next((j for j in range(i + 1, end) if j in visible and lines[j].startswith("## ")), end)
-        subs, cur = {}, None
+        subs, cur = {"": []}, ""
         for j in range(i + 1, nxt):
             if j in visible and lines[j].startswith("### "):
                 cur = lines[j][4:].strip()
                 subs[cur] = []
-            elif cur is not None:
+            else:
                 subs[cur].append(lines[j])
         out[g] = {n: "\n".join(b) + "\n" for n, b in subs.items()}
     return out
 
 
-def _kt_kotlin_blocks(m, body):
-    """小節內文 → 每個 ```kotlin 圍欄裡的程式。圍欄區段呼叫 check.py 的 _fence_regions(跟 lumos 同口徑),
-    不用成對非貪婪正則(看不見未閉合圍欄)。"""
-    lines = body.splitlines()
-    regions, _open = m._fence_regions(lines, True)
+def _kt_lang_fences(m, lines, lang):
+    """行清單 → 語言是 lang 的圍欄內容範圍 [(第一行索引, 結尾索引不含)]。圍欄區段呼叫 check.py 的
+    _fence_regions(跟 lumos 同口徑),不用成對非貪婪正則(看不見未閉合圍欄);語言照 CommonMark 取 info string
+    的第一個字整字比對(```kotlinx 不算 kotlin、```kotlin title=… 算)。範本檔取某語言圍欄一律走這支
+    (代碼審 r2 架構對齊 F2:原本三處各寫一份、比對方式不同)。"""
     out = []
-    for a, b in regions:
-        if lines[a].lstrip(" ").lstrip("`~").startswith("kotlin"):
-            out.append("\n".join(lines[a + 1:b if b is not None else len(lines)]))
+    for a, b in m._fence_regions(lines, True)[0]:
+        s = lines[a].lstrip(" ")
+        info = s.lstrip(s[0]).split()
+        if info and info[0] == lang:
+            out.append((a + 1, b if b is not None else len(lines)))
     return out
+
+
+def _kt_fence_blocks(m, body, lang):
+    """內文 → 每個語言是 lang 的圍欄裡的內容(見 _kt_lang_fences)。"""
+    lines = body.splitlines()
+    return ["\n".join(lines[a:b]) for a, b in _kt_lang_fences(m, lines, lang)]
+
+
+def _kt_kotlin_blocks(m, body):
+    """小節內文 → 每個 ```kotlin 圍欄裡的程式。"""
+    return _kt_fence_blocks(m, body, "kotlin")
 
 
 def _kt_block_after(code, start):
@@ -126702,6 +126727,150 @@ def _kt_turbine_problems(code):
                 probs.append("cancelAndConsumeRemainingEvents() 之前同一區塊沒有推進(advanceUntilIdle/runCurrent/advanceTimeBy)")
     return probs
 
+# 後半 S3:儀器與架構範本〈測試〉的禁用寫法(Projects/Android儀器測試範本與架構測試_計劃〈做法〉1、S3)。
+# DetectLeaksAfterTestSuccess 在測試本體外丟 NoLeakAssertionFailedError、InstantTaskExecutorRule 讓 postValue
+# 同步(壞寫法照綠)、沒包 runCatching 的 assertNoLeaks() 紅的是例外型別名、Konsist 的 assertTrue/assertFalse
+# 丟 KoAssertionFailedException——收證工具 assertion_failure 照型別名判,都不算斷言失敗。
+_KT_LEAK_WRAPPED_RE = r"runCatching\s*\{\s*LeakAssertions\.assertNoLeaks\(\s*\)\s*\}"
+
+
+def _kt_instr_test_problems(group, code):
+    """T6–T13 某〈測試〉小節的程式 → 問題清單(註解裡提到不算)。"""
+    import re as _re
+    code = _re.sub(r"//[^\n]*", "", code)
+    probs = []
+    for word in ("DetectLeaksAfterTestSuccess", "InstantTaskExecutorRule"):
+        if _re.search(r"\b" + word + r"\b", code):
+            probs.append(f"用了 {word}")
+    total = len(_re.findall(r"\bLeakAssertions\.assertNoLeaks\(", code))
+    wrapped = len(_re.findall(_KT_LEAK_WRAPPED_RE, code))
+    if total > wrapped:
+        probs.append("LeakAssertions.assertNoLeaks() 沒包在 runCatching { } 裡")
+    if group == "T13" and _re.search(r"\.\s*assert(?:True|False)\s*[({]", code):
+        probs.append("T13 用了 Konsist 的 assertTrue/assertFalse(丟 KoAssertionFailedException,改收集違規再 assertEquals)")
+    return probs
+
+
+def _kt_instr_test_guard_selfcheck():
+    """S3 守衛自己的對照:每一道各改壞一次要報、正確寫法不報。"""
+    ok = ("val leak = runCatching { LeakAssertions.assertNoLeaks() }.exceptionOrNull()\nassertNull(leak)\n"
+          "// 不用 DetectLeaksAfterTestSuccess、InstantTaskExecutorRule\n")
+    check("★對照★ 包 runCatching 的 assertNoLeaks、註解提到禁用字不報", _kt_instr_test_problems("T10", ok) == [],
+          str(_kt_instr_test_problems("T10", ok)))
+    cases = (
+        ("T10", "@get:Rule val rule = DetectLeaksAfterTestSuccess()", "DetectLeaksAfterTestSuccess"),
+        ("T11", "@get:Rule val r = InstantTaskExecutorRule()", "InstantTaskExecutorRule"),
+        ("T10", ok + "LeakAssertions.assertNoLeaks()\n", "沒包在 runCatching"),
+        ("T13", "Konsist.scopeFromProduction().classes().assertFalse { it.hasVar }", "assertTrue/assertFalse"),
+        ("T13", "scope.properties().assertTrue { !it.isVar }", "assertTrue/assertFalse"),
+    )
+    for g, code, want in cases:
+        got = _kt_instr_test_problems(g, code)
+        check(f"★改壞★ {g}〈測試〉{want} 要報", any(want in x for x in got), str(got))
+    check("★對照★ T12 以外的組用 kotlin.test 的 assertTrue(x) 不算 Konsist 那條",
+          _kt_instr_test_problems("T9", "assertTrue(clicked)") == [], "")
+    check("★對照★ T13 用 assertEquals(emptyList(), 違規) 不報",
+          _kt_instr_test_problems("T13", "assertEquals(emptyList<String>(), violations)") == [], "")
+
+
+# 後半 S2:範本檔的儀器批與架構測試內容檢查(章節存在之外的內容;Projects/Android儀器測試範本與架構測試_計劃 S2)
+_KT_T11_API9_SUB = "測試:API-9 Fragment 畫面銷毀後"
+# T12 凍結設定(驗證紀錄 E5、E13):清單不見要紅、新規則與改描述不准靜默凍結;建清單那一步兩個都臨時打開
+_KT_T12_FREEZE_PROPS = ("freeze.store.default.path=src/test/resources/archunit_store",
+                        "freeze.store.default.allowStoreCreation=false",
+                        "freeze.store.default.allowStoreUpdate=false")
+_KT_T12_INIT_PROPS = ('systemProperty("archunit.freeze.store.default.allowStoreCreation", "true")',
+                      'systemProperty("archunit.freeze.store.default.allowStoreUpdate", "true")')
+_KT_T12_INIT_COND = 'if (project.hasProperty("archunitFreezeInit"))'
+_KT_T12_OLD_VIOLATION = "壞寫法:CO-1 資料層寫死 withContext"   # 凍結格的舊違規 TagRepository(驗證紀錄 E13 的基準)
+
+
+def _kt_t12_freeze_rows_problems(mx):
+    """T12〈紅綠矩陣〉內文 → 凍結格(結果欄有 StoreUpdateFailedException 或 StoreInitializationFailedException)
+    的基準對不上 E13 的地方(代碼審 r2 通才 F1):E13 的清單是〈好寫法〉加舊違規 TagRepository 建的,所以凍結格的
+    被測程式要帶 _KT_T12_OLD_VIOLATION;「修掉舊違規」改的是被測程式,寫在被測程式欄、而且拿掉 TagRepository;
+    前導句不准再說每一格都用零違規的〈好寫法〉建清單。"""
+    probs = []
+    lead = mx.split("\n| ", 1)[0]
+    if "每一格先用〈好寫法〉" in lead or "TagRepository" not in lead:
+        probs.append("T12 矩陣前導句沒分開零違規的基準與凍結格帶舊違規 TagRepository 的基準")
+    for ln in mx.splitlines():
+        c = [x.strip() for x in ln.strip().strip("|").split("|")]
+        if not ln.startswith("| ") or len(c) < 3 or not any(
+                w in c[2] for w in ("StoreUpdateFailedException", "StoreInitializationFailedException")):
+            continue
+        test, prog = c[0], c[1]
+        if "修掉舊違規" in test:
+            probs.append(f"T12 矩陣「{test}」:修掉舊違規改的是被測程式,要寫在被測程式欄")
+        elif "修掉舊違規" in prog:
+            if _KT_T12_OLD_VIOLATION in prog or "TagRepository" not in prog:
+                probs.append(f"T12 矩陣修掉舊違規那格的被測程式要寫明拿掉 TagRepository:{prog}")
+        elif _KT_T12_OLD_VIOLATION not in prog:
+            probs.append(f"T12 矩陣凍結格「{test}」的被測程式沒帶舊違規〈{_KT_T12_OLD_VIOLATION}〉(E13 的基準)")
+    return probs
+
+
+def _kt_instr_template_problems(m, text):
+    """範本檔全文 → 問題清單:T6–T13 八節、〈Android 實驗專案骨架〉與它的三個必有字、每節〈紅綠矩陣〉、
+    T12 指到 T11 的小節名、凍結設定與矩陣的 StoreUpdateFailedException 格。節的切法照 template_sections(圍欄裡的不算)。
+    凍結設定只認 T12 節圍欄裡整行相等的設定(代碼審 r1 測試 F1:散文也寫了同一串字,只比整節字串時改設定行不會紅)。"""
+    import re as _re
+    probs = []
+    lines = text.splitlines()
+    heads = [i for i, ln in enumerate(lines) if ln.startswith("## ")]
+    vis_set = {no - 1 for no, _ln in m._visible_lines(lines)}
+    skel = [i for i in heads if i in vis_set and lines[i].strip() == "## Android 實驗專案骨架"]
+    if not skel:
+        probs.append("沒有〈Android 實驗專案骨架〉一節")
+    else:
+        i = skel[0]
+        nxt = next((j for j in heads if j > i and j in vis_set), len(lines))
+        body = "\n".join(lines[i:nxt])
+        for w in ("sdk=34", "targetSdk = 36", "testInstrumentationRunner", "app/src/main/AndroidManifest.xml"):
+            if w not in body:
+                probs.append(f"骨架節缺 {w}")
+    groups = _kt_template_sections(m, text)
+    for k in range(6, 14):
+        g = f"T{k}"
+        if g not in groups:
+            probs.append(f"範本檔沒有 {g} 節")   # 跟 check.py template_problems 同一句(代碼審 r1 架構對齊 F1)
+            continue
+        if not any(n.startswith("紅綠矩陣") for n in groups[g]):
+            probs.append(f"{g} 沒有〈紅綠矩陣〉小節")
+    if "T12" in groups:
+        starts = m.template_sections(text)
+        idx = [i for g, i in starts if g == "T12"][0]
+        after = [i for g, i in starts if i > idx]
+        seg = lines[idx:after[0] if after else len(lines)]
+        if _KT_T11_API9_SUB not in "\n".join(seg):
+            probs.append(f"T12 節缺 {_KT_T11_API9_SUB}")
+        seg_text = "\n".join(seg)
+        fenced = {lang: {ln.strip() for blk in _kt_fence_blocks(m, seg_text, lang) for ln in blk.splitlines()}
+                  for lang in ("properties", "kotlin")}
+        kotlin_codes = _kt_fence_blocks(m, seg_text, "kotlin")
+        for kv in _KT_T12_FREEZE_PROPS:
+            if kv not in fenced["properties"]:
+                probs.append(f"T12 archunit.properties 圍欄缺 {kv}")
+        # 兩個 systemProperty 只准出現在 -ParchunitFreezeInit 條件區塊裡:條件拿掉或改成 if (true) 就是常駐 true
+        # (代碼審 r2 通才 F2);區塊用 _kt_block_after 配大括號
+        in_cond = set()
+        for code in kotlin_codes:
+            for mt in _re.finditer(r"^[ \t]*" + _re.escape(_KT_T12_INIT_COND) + r"[ \t]*\{", code, _re.M):
+                body, _end = _kt_block_after(code, mt.end() - 1)
+                in_cond |= {ln.strip() for ln in body.splitlines()}
+        for ln in _KT_T12_INIT_PROPS:
+            if ln not in fenced["kotlin"]:
+                probs.append(f"T12 建清單的 build.gradle.kts 片段缺 {ln}")
+            elif ln not in in_cond:
+                probs.append(f"T12 建清單的 {ln} 沒包在 {_KT_T12_INIT_COND} 區塊裡(會常駐 true)")
+        mx12 = next((b for n, b in groups["T12"].items() if n.startswith("紅綠矩陣")), "")
+        if "StoreUpdateFailedException" not in mx12:
+            probs.append("T12 矩陣沒有新規則或改描述被擋的 StoreUpdateFailedException 格")
+        probs += _kt_t12_freeze_rows_problems(mx12)
+    if "T11" in groups and _KT_T11_API9_SUB not in groups["T11"]:
+        probs.append(f"T11 沒有〈{_KT_T11_API9_SUB}〉小節")
+    return probs
+
 
 def t_kotlin_test_templates_content_guards():
     """[S3 的機械那一半] 範本內容的幾條規矩(代碼審 r1 折入;紅綠本身靠實驗與驗證紀錄):
@@ -126713,7 +126882,15 @@ def t_kotlin_test_templates_content_guards():
     repo = Path(GRAPHCTL).resolve().parents[1]
     m = _ktpack()
     groups = _kt_template_sections(m, (repo / _KTTPL_REL).read_text(encoding="utf-8"))
-    check("範本檔讀得到 T0–T5 六組", sorted(groups) == [f"T{i}" for i in range(6)], str(sorted(groups)))
+    check("範本檔讀得到 T0–T13 十四組", sorted(groups, key=lambda g: int(g[1:])) == [f"T{i}" for i in range(14)],
+          str(sorted(groups)))
+    # 後半 S3:T6–T13〈測試〉不用收證不算斷言的寫法
+    for g in (f"T{i}" for i in range(6, 14)):
+        for name, body in groups.get(g, {}).items():
+            if name == "測試" or name.startswith("測試:"):
+                probs = _kt_instr_test_problems(g, "\n".join(_kt_kotlin_blocks(m, body)))
+                check(f"{g}〈{name}〉沒有收證不算斷言的寫法(S3)", not probs, str(probs))
+    _kt_instr_test_guard_selfcheck()
     for g, subs in groups.items():
         for name, body in subs.items():
             if name == "測試" or name.startswith("測試:"):
@@ -126743,18 +126920,261 @@ def t_kotlin_test_templates_content_guards():
     t4mx = next(b for n, b in groups["T4"].items() if n.startswith("紅綠矩陣"))
     check("T4 矩陣有「沒加鎖」壞寫法對並行 401 那支斷言紅",
           bool(_re.search(r"壞寫法:API-21 沒加鎖 \| concurrent_401s_refresh_once 斷言紅", t4mx)), t4mx[:300])
+    # 後半 S2:儀器批與架構測試的內容檢查,真檔零問題,逐道改壞各自報(代碼審 r1 架構對齊 F1:從
+    # t_kotlin_test_templates_sections 搬來——那支是 [S1] 型錄自檢,範本內容的檢查歸這支)
+    real = m.TEMPLATES.read_text(encoding="utf-8")
+    got = _kt_instr_template_problems(m, real)
+    check("S2(後半)真範本檔:T6–T13、Android 骨架、每節矩陣、T12 指路與凍結設定都在", got == [], str(got))
 
+    def _mut(fn):
+        return _kt_instr_template_problems(m, fn(real))
+
+    def _drop_sub(txt, group, prefix):
+        lines = txt.split("\n")
+        starts = m.template_sections(txt)
+        gi = [i for g, i in starts if g == group][0]
+        j = next(k for k in range(gi + 1, len(lines)) if lines[k].startswith("### " + prefix))
+        lines[j] = "### 改名" + lines[j][4:]
+        return "\n".join(lines)
+
+    def _in_skel(txt, a, b):
+        s = txt.index("## Android 實驗專案骨架")
+        e = txt.index("\n## ", s + 5)
+        return txt[:s] + txt[s:e].replace(a, b) + txt[e:]
+
+    def _t12_span(txt):
+        lines = txt.split("\n")
+        starts = m.template_sections(txt)
+        i12 = [i for g, i in starts if g == "T12"][0]
+        end = next((i for _g, i in starts if i > i12), len(lines))
+        return lines, i12, end
+
+    def _in_t12_fence(txt, lang, a, b):
+        """只改 T12 節裡 lang 圍欄內含 a 的行(b 是 None 就刪掉那行);散文不動。沒改到任何行就丟例外(改壞不能空轉)。"""
+        lines, i12, end = _t12_span(txt)
+        seg = lines[i12:end]
+        hit = {k for a0, b0 in _kt_lang_fences(m, seg, lang) for k in range(a0, b0) if a in seg[k]}
+        if not hit:
+            raise AssertionError(f"改壞沒改到 T12 {lang} 圍欄裡含 {a!r} 的行")
+        seg = [ln if k not in hit else ln.replace(a, b) for k, ln in enumerate(seg) if not (k in hit and b is None)]
+        return "\n".join(lines[:i12] + seg + lines[end:])
+
+    def _in_t12_prose(txt, a, b):
+        """只改 T12 節圍欄外的行;改到的行數要大於 0(對照不能空轉)。"""
+        lines, i12, end = _t12_span(txt)
+        vis = {no - 1 for no, _ln in m._visible_lines(lines)}
+        n = 0
+        for k in range(i12, end):
+            if k in vis and a in lines[k]:
+                lines[k] = lines[k].replace(a, b)
+                n += 1
+        if not n:
+            raise AssertionError(f"對照沒改到 T12 散文裡的 {a!r}")
+        return "\n".join(lines)
+
+    def _t12_prose_line(txt, line):
+        """在 T12 標題下一行插一段散文。"""
+        lines, i12, _end = _t12_span(txt)
+        return "\n".join(lines[:i12 + 1] + ["", line] + lines[i12 + 1:])
+
+    _cre = "freeze.store.default.allowStoreCreation=false"
+    _upd = "freeze.store.default.allowStoreUpdate=false"
+    _path = "freeze.store.default.path=src/test/resources/archunit_store"
+    _init_upd = 'systemProperty("archunit.freeze.store.default.allowStoreUpdate", "true")'
+    _init_cre = 'systemProperty("archunit.freeze.store.default.allowStoreCreation", "true")'
+    _init_if = 'if (project.hasProperty("archunitFreezeInit")) {'
+    _init_task = "tasks.withType<Test>().configureEach {"
+    _t12_base = "好寫法+壞寫法:CO-1 資料層寫死 withContext"
+    _t12_fix = "好寫法(修掉舊違規:被測程式拿掉 `TagRepository`)"
+    muts = (
+        ("拿掉 ## T9 標題", lambda x: x.replace("\n## T9 ", "\n## X9 ", 1), "範本檔沒有 T9 節"),
+        ("骨架節標題改名", lambda x: x.replace("\n## Android 實驗專案骨架\n", "\n## Android 骨架\n", 1), "沒有〈Android 實驗專案骨架〉"),
+        ("骨架節拿掉 sdk=34", lambda x: _in_skel(x, "sdk=34", "sdk=33"), "骨架節缺 sdk=34"),
+        ("骨架節拿掉 targetSdk = 36", lambda x: _in_skel(x, "targetSdk = 36", "targetSdk = 35"), "骨架節缺 targetSdk = 36"),
+        ("T8 矩陣改名", lambda x: _drop_sub(x, "T8", "紅綠矩陣"), "T8 沒有〈紅綠矩陣〉"),
+        ("T11 小節改名", lambda x: x.replace("### " + _KT_T11_API9_SUB, "### 測試:API-9 Fragment", 1), "T11 沒有"),
+        # 代碼審 r1 測試 F1:凍結設定只改 properties 圍欄那一行(散文照留)也要報
+        ("T12 圍欄裡 allowStoreCreation 改成 true", lambda x: _in_t12_fence(x, "properties", _cre, _cre.replace("false", "true")), _cre),
+        ("T12 圍欄裡刪掉 allowStoreCreation 那行", lambda x: _in_t12_fence(x, "properties", _cre, None), _cre),
+        ("T12 圍欄裡刪掉 path 那行", lambda x: _in_t12_fence(x, "properties", _path, None), _path),
+        ("T12 圍欄裡 path 改到模組根", lambda x: _in_t12_fence(x, "properties", _path, "freeze.store.default.path=archunit_store"), _path),
+        # 代碼審 r1 範本丙 F1:allowStoreUpdate=false 擋新規則與改描述被靜默凍結(驗證紀錄 E13)
+        ("T12 圍欄裡 allowStoreUpdate 改成 true", lambda x: _in_t12_fence(x, "properties", _upd, _upd.replace("false", "true")), _upd),
+        ("T12 圍欄裡刪掉 allowStoreUpdate 那行", lambda x: _in_t12_fence(x, "properties", _upd, None), _upd),
+        ("T12 建清單片段拿掉 allowStoreUpdate 那行", lambda x: _in_t12_fence(x, "kotlin", _init_upd, None), _init_upd),
+        ("T12 建清單片段拿掉 allowStoreCreation 那行", lambda x: _in_t12_fence(x, "kotlin", _init_cre, None), _init_cre),
+        ("T12 圍欄那行搬到散文", lambda x: _t12_prose_line(_in_t12_fence(x, "properties", _cre, None), f"`{_cre}`"), _cre),
+        ("T12 設定行搬進 build.gradle.kts 圍欄", lambda x: _in_t12_fence(_in_t12_fence(x, "properties", _upd, None),
+                                                                 "kotlin", _init_upd, _init_upd + "\n" + _upd), _upd),
+        ("T12 矩陣拿掉 StoreUpdateFailedException 的格", lambda x: _in_t12_prose(x, "StoreUpdateFailedException", "StoreFailed"),
+         "StoreUpdateFailedException"),
+        # 代碼審 r2 通才 F2:兩個 systemProperty 要包在 -ParchunitFreezeInit 條件裡,常駐 true 等於沒設 false
+        ("T12 建清單條件改成 if (true)", lambda x: _in_t12_fence(x, "kotlin", _init_if, "if (true) {"), "沒包在"),
+        ("T12 建清單條件改成別的屬性", lambda x: _in_t12_fence(x, "kotlin", _init_if, 'if (project.hasProperty("other")) {'),
+         "沒包在"),
+        ("T12 建清單拿掉條件(只剩大括號)", lambda x: _in_t12_fence(x, "kotlin", _init_if, "run {"), "沒包在"),
+        ("T12 allowStoreUpdate 那行搬到條件外", lambda x: _in_t12_fence(_in_t12_fence(x, "kotlin", _init_upd, None), "kotlin",
+                                                                  _init_task, _init_task + "\n    " + _init_upd), "沒包在"),
+        # 代碼審 r2 通才 F1:凍結格的基準是〈好寫法〉加舊違規 TagRepository(驗證紀錄 E13)
+        ("T12 凍結格的被測程式改回只有好寫法", lambda x: _in_t12_prose(x, f"| {_t12_base} |", "| 好寫法 |"), "沒帶舊違規"),
+        ("T12 修掉舊違規寫回測試欄", lambda x: _in_t12_prose(x, f"| 測試 | {_t12_fix} |", "| 測試+修掉舊違規 `TagRepository` | 好寫法 |"),
+         "要寫在被測程式欄"),
+        ("T12 修掉舊違規那格被測程式還帶 TagRepository", lambda x: _in_t12_prose(x, f"| 測試 | {_t12_fix} |",
+                                                                      f"| 測試 | {_t12_fix}+壞寫法:CO-1 資料層寫死 withContext |"),
+         "要寫明拿掉 TagRepository"),
+        ("T12 矩陣前導句改回每一格零違規", lambda x: _in_t12_prose(x, "前七格先用〈好寫法〉", "每一格先用〈好寫法〉"), "前導句"),
+    )
+    for name, fn, want in muts:
+        g2 = _mut(fn)
+        check(f"★改壞★ {name} 要報", any(want in s for s in g2), str(g2))
+    # 代碼審 r2 架構對齊 F2:圍欄語言照 CommonMark info string 第一個字比對,三處同一支(_kt_fence_blocks)
+    demo = "```kotlinx\na\n```\n```kotlin title=x\nb\n```\n~~~ properties\nc\n~~~\n```\nd\n```\n"
+    check("圍欄語言取第一個字:kotlinx 不算 kotlin、帶註記的 kotlin 算", _kt_fence_blocks(m, demo, "kotlin") == ["b"],
+          str(_kt_fence_blocks(m, demo, "kotlin")))
+    check("圍欄語言取第一個字:波浪號圍欄、前置空白的 properties 算", _kt_fence_blocks(m, demo, "properties") == ["c"],
+          str(_kt_fence_blocks(m, demo, "properties")))
+    titled = _in_t12_fence(real, "kotlin", _init_task, _init_task)   # 先確定建清單那個圍欄在
+    tl = titled.split("\n")
+    k = next(i for i, ln in enumerate(tl) if ln.strip() == _init_task)
+    k0 = max(i for i in range(k) if tl[i].strip() == "```kotlin")
+    tl[k0] = '```kotlin title="app/build.gradle.kts"'
+    titled = "\n".join(tl).replace("```properties\n# app/src/test", "```properties title=x\n# app/src/test", 1)
+    check("★對照★ T12 圍欄的語言標籤帶註記照樣認得、不報", titled != real and _kt_instr_template_problems(m, titled) == [],
+          str(_kt_instr_template_problems(m, titled)))
+    # 對照:散文裡的設定字串改掉、圍欄照舊,不報(判的是圍欄裡的設定行,不是散文)
+    prose_only = _in_t12_prose(real, _cre, "allowStoreCreation 設成 false")
+    check("★對照★ 只改 T12 散文裡的設定字串、圍欄照舊不報", _kt_instr_template_problems(m, prose_only) == [],
+          str(_kt_instr_template_problems(m, prose_only)))
+    # 骨架必有字只在骨架節裡算:同一個字只出現在別的節時要報
+    sk = real.index("## Android 實驗專案骨架")
+    sk_end = real.index("\n## ", sk + 5)
+    moved = real[:sk] + real[sk:sk_end].replace("testInstrumentationRunner", "instrumentationRunner") + real[sk_end:]
+    g3 = _kt_instr_template_problems(m, moved)
+    check("★改壞★ testInstrumentationRunner 只出現在骨架節以外要報", any("testInstrumentationRunner" in s for s in g3), str(g3))
+    # 骨架沒列 Manifest 時照抄會停在 processDebugMainManifest(代碼審 r1 修補時實跑發現)
+    no_mf = real[:sk] + real[sk:sk_end].replace("app/src/main/AndroidManifest.xml", "app/src/main/x.xml") + real[sk_end:]
+    g4 = _kt_instr_template_problems(m, no_mf)
+    check("★改壞★ 骨架節拿掉 AndroidManifest.xml 要報", any("AndroidManifest.xml" in s for s in g4), str(g4))
+    # 代碼審 r1 範本甲 F1、範本乙 F1/F2、範本丙 F2:範本說法跟實跑結果對齊
+    _kt_instr_wording_selfcheck(m, real)
+    # 代碼審 r2 通才 F4:計劃與驗證紀錄跟範本對齊
+    plan = (repo / _KT_INSTR_PLAN_REL).read_text(encoding="utf-8")
+    ver = (repo / _KT_INSTR_VER_REL).read_text(encoding="utf-8")
+    got = _kt_instr_records_problems(m, real, plan, ver)
+    check("計劃 T4 補 Ktor 列、驗證紀錄 S4 總格數與 T12 格數跟範本對齊", got == [], str(got))
+    for name, p2, v2, want in (
+        ("驗證紀錄 T12 格數少算 E13 那四格", plan, _re.sub(r"T12 \d+ 格", "T12 7 格", ver, count=1), "T12 格數"),
+        ("驗證紀錄總格數沒跟著加", plan, _re.sub(r"\d+ 格全部", "61 格全部", ver, count=1), "總格數"),
+        ("計劃 T4 補 Ktor 列寫回純 JVM", _re.sub(r"(?m)^(\| T4 補 Ktor \|.*\| )[^|]*\|$", r"\1純 JVM(前半骨架) |", plan, count=1),
+         ver, "T4 補 Ktor"),
+    ):
+        check(f"★對照★ {name}:改壞真的改到", (p2, v2) != (plan, ver), name)
+        g5 = _kt_instr_records_problems(m, real, p2, v2)
+        check(f"★改壞★ {name} 要報", any(want in x for x in g5), str(g5))
+
+def _kt_instr_wording_problems(m, text):
+    """範本檔全文 → 說法跟驗證紀錄對不上的地方(代碼審 r1 範本甲 F1、範本乙 F1/F2、範本丙 F2;r2 通才 F3)。
+    T9、T11、T12 開頭取自 _kt_template_sections 的 "" 鍵(圍欄裡的 ### 不算小節標題);檔頭取到第一個圍欄外的
+    `## `,不手切字串。"""
+    import re as _re
+    probs = []
+    # 檔頭 = 第一個圍欄外 `## ` 標題之前;圍欄判定走 check.py 的 _visible_lines(跟 _kt_template_sections 同口徑)
+    lines = text.splitlines()
+    first_h2 = next((no - 1 for no, ln in m._visible_lines(lines) if ln.startswith("## ")), len(lines))
+    head = "\n".join(lines[:first_h2])
+    if not _re.search(r"T4 的 Ktor 小節[^。]*Android", head):
+        probs.append("檔頭沒把 T4 的 Ktor 小節寫進 Android 模組實跑的那一半")
+    groups = _kt_template_sections(m, text)
+    t9 = groups.get("T9", {})
+    intro = t9.get("", "")
+    n_said = _re.search(r"〈測試〉(\d+) 支在 Robolectric", intro)
+    n_real = len(_re.findall(r"@Test\b", "\n".join(_kt_kotlin_blocks(m, t9.get("測試", "")))))
+    if not n_said or int(n_said.group(1)) != n_real:
+        probs.append(f"T9 開頭寫的〈測試〉支數跟〈測試〉小節的 @Test 數({n_real})不一致")
+    t9code = "\n".join("\n".join(_kt_kotlin_blocks(m, b)) for b in t9.values())
+    if "等不到 idle" in t9code:
+        probs.append("T9 程式註解還說自動推進會等不到 idle(1.11 實測兩邊都綠)")
+    s17 = next((ln for ln in groups.get("T11", {}).get("", "").splitlines() if ln.startswith("- STATE-17")), "")
+    if "總共看到兩筆" in s17 or "通知一次" not in s17:
+        probs.append("T11 STATE-17 說明要寫「通知一次、內容兩筆」")
+    # 代碼審 r2 通才 F3:改描述時 ArchUnit 另存一份、舊描述的條目留著(驗證紀錄 E13),清單不是只會縮小
+    t12 = groups.get("T12", {}).get("", "")
+    if "清單只能縮小" in t12:
+        probs.append("T12 開頭還寫「清單只能縮小」(改描述時清單會多一份新描述的,E13)")
+    if "舊描述" not in t12 or "一起刪" not in t12:
+        probs.append("T12 開頭沒寫改描述時要把舊描述的清單條目與檔案一起刪")
+    if "新增的違規" not in t12:
+        probs.append("T12 開頭沒提醒帶 -ParchunitFreezeInit 那次的清單差異要特別看新增的違規")
+    return probs
+
+
+_KT_INSTR_PLAN_REL = Path("docs") / "lumos-toolchain-knowledge" / "Projects" / "Android儀器測試範本與架構測試_計劃.md"
+_KT_INSTR_VER_REL = (Path("docs") / "lumos-toolchain-knowledge" / "Verification"
+                     / "2026-11-06_Android儀器測試範本與架構測試實跑.md")
+
+
+def _kt_instr_records_problems(m, tpl, plan, ver):
+    """範本檔、計劃、驗證紀錄全文 → 計劃與驗證紀錄跟範本對不上的地方(代碼審 r2 通才 F4):驗證紀錄 S4 的 T12 格數
+    等於範本 T12 矩陣列數、S4 總格數等於各組加總;計劃〈做〉表 T4 補 Ktor 列寫 Android app 模組,不寫純 JVM。"""
+    import re as _re
+    probs = []
+    mx = next((b for n, b in _kt_template_sections(m, tpl).get("T12", {}).items() if n.startswith("紅綠矩陣")), "")
+    n12 = sum(1 for ln in mx.splitlines() if ln.startswith("| ") and "測試小節" not in ln)
+    s4 = next((ln for ln in ver.splitlines() if ln.startswith("- **S4 矩陣**")), "")
+    if f"T12 {n12} 格" not in s4:
+        probs.append(f"驗證紀錄 S4 的 T12 格數不是範本 T12 矩陣的 {n12} 格")
+    total = _re.search(r"(\d+) 格全部", s4)
+    parts = [int(x) for x in _re.findall(r"T\d+(?: Ktor)? (\d+) 格", s4)]
+    if not total or int(total.group(1)) != sum(parts):
+        probs.append(f"驗證紀錄 S4 總格數跟各組加總({sum(parts)})不一致")
+    row = next((ln for ln in plan.splitlines() if ln.startswith("| T4 補 Ktor |")), "")
+    last = row.strip().strip("|").split("|")[-1]
+    if "純 JVM(前半骨架)" in last or "Android app 模組" not in last:
+        probs.append(f"計劃〈做〉表 T4 補 Ktor 列要寫 Android app 模組的本機單元測試:{last.strip()}")
+    return probs
+
+
+def _kt_instr_wording_selfcheck(m, real):
+    got = _kt_instr_wording_problems(m, real)
+    check("真範本檔:檔頭實跑環境、T9 支數、TEST-29 註解、STATE-17 說法跟實跑對齊", got == [], str(got))
+    cases = (
+        ("檔頭的 T4 Ktor 拿掉", lambda x: x.replace("T4 的 Ktor 小節", "T4 Ktor", 1), "檔頭"),
+        ("T9 支數寫錯", lambda x: __import__("re").sub(r"〈測試〉\d+ 支在 Robolectric", "〈測試〉9 支在 Robolectric", x, count=1), "T9 開頭"),
+        ("TEST-29 註解改回等不到 idle", lambda x: x.replace("// 錯的寫法:", "// 錯的寫法:測試等不到 idle;", 1), "等不到 idle"),
+        ("STATE-17 改回總共看到兩筆", lambda x: x.replace("通知一次", "總共看到兩筆", 1), "STATE-17"),
+        # 代碼審 r2 通才 F3:改描述時舊條目留著、新描述另存(驗證紀錄 E13),「只能縮小」不成立
+        ("T12 改回清單只能縮小", lambda x: x.replace("清單裡的違規只准變少", "清單只能縮小", 1), "清單只能縮小"),
+        ("T12 拿掉刪舊描述條目那句", lambda x: x.replace("與它指的清單檔一起刪", "留著", 1), "舊描述"),
+        ("T12 拿掉特別看新增的違規", lambda x: x.replace("特別看清單裡新增的違規", "照常看", 1), "新增的違規"),
+    )
+    for name, fn, want in cases:
+        bad = fn(real)
+        check(f"★對照★ {name}:改壞真的改到", bad != real, name)
+        g = _kt_instr_wording_problems(m, bad)
+        check(f"★改壞★ {name} 要報", any(want in x for x in g), str(g))
+    # 代碼審 r2 架構對齊 F1:T9、T11 開頭取自 _kt_template_sections(圍欄裡的 ### 不算小節標題),不手切字串
+    for g, want in (("T9", "T9 開頭"), ("T11", "STATE-17")):
+        lines = real.split("\n")
+        hi = next(i for i, ln in enumerate(lines) if ln.startswith(f"## {g} "))
+        fenced_h3 = "\n".join(lines[:hi + 1] + ["", "```", "### 圍欄裡的假標題", "```"] + lines[hi + 1:])
+        got = _kt_instr_wording_problems(m, fenced_h3)
+        check(f"★對照★ {g} 開頭圍欄裡的 ### 不算小節標題、不報", not any(want in x for x in got), str(got))
+    # 檔頭也不手切字串:圍欄裡的 `## ` 不算檔頭結束(手切 split("\n## ") 會在這裡截斷、漏掉後面的 Ktor 句而誤報)
+    lines = real.split("\n")
+    fenced_h2 = "\n".join(lines[:1] + ["", "```md", "## 圍欄裡的假組標題", "```"] + lines[1:])
+    got = _kt_instr_wording_problems(m, fenced_h2)
+    check("★對照★ 檔頭圍欄裡的 ## 不算檔頭結束、不報", not any("檔頭" in x for x in got), str(got))
 
 def t_kotlin_catalog_c_rows_batch_resolved():
-    """[S2] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T5 或四種未接/不接,沒有「批五」;
-    各值的列數與各範本組的列號等於計劃〈範圍〉兩張清單。"""
+    """[S2;後半 S1] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T13、「未接(儀器批)」或
+    「不接(代碼審或真機)」,沒有「批五」與兩個作廢值;各值的列數與各範本組的列號等於計劃〈範圍〉。"""
     m = _ktpack()
     rows = m.main_rows()   # 主表與批次值的讀法都呼叫 check.py,不另抄(代碼審 r2 架 F1、F3)
     c_rows = {r: c for r, c in rows.items() if "C" in c[6]}
     check("S2 型錄級含 C 的列是 68 列", len(c_rows) == 68, str(len(c_rows)))
     vals = {r: m.behavior_value(c[9]) for r, c in c_rows.items()}
     check("S2 不再出現「批五」", not [r for r, v in vals.items() if v == "批五"], str([r for r, v in vals.items() if v == "批五"]))
-    allowed = {f"範本 T{i}" for i in range(6)} | set(_KT_UNWIRED)
+    allowed = {f"範本 T{i}" for i in range(14)} | set(_KT_UNWIRED)
     check("S2 每列的值都在允許清單裡", not {r: v for r, v in vals.items() if v not in allowed},
           str({r: v for r, v in vals.items() if v not in allowed}))
     for g, want in _KT_TEMPLATE_GROUPS.items():
@@ -126763,14 +127183,83 @@ def t_kotlin_catalog_c_rows_batch_resolved():
     for v, want in _KT_UNWIRED.items():
         got = {r for r, x in vals.items() if x == v}
         check(f"S2 {v} 的列等於計劃〈不做〉清單({len(want)} 列)", got == want, f"多 {sorted(got - want)} 少 {sorted(want - got)}")
-    check("S2 範本 32 列", sum(1 for v in vals.values() if v and v.startswith("範本 ")) == 32, "")
-    # 預期值表逐列抽查
-    for rid, v in (("TEST-4", "範本 T0"), ("STATE-17", "未接(儀器批)"), ("API-9", "未接(架構測試後續計劃)"),
-                   ("API-30", "未接(Ktor 範本後續)"), ("PERF-1", "不接(代碼審或真機)")):
+    n_tpl = sum(len(v) for v in _KT_TEMPLATE_GROUPS.values())
+    check(f"S1 範本 {n_tpl} 列(計劃〈範圍〉:前半 32、T4 補 1、T6–T11 共 25、T12 1、T13 1,扣實驗移出的)",
+          sum(1 for v in vals.values() if v and v.startswith("範本 ")) == n_tpl
+          and n_tpl + sum(len(v) for v in _KT_UNWIRED.values()) == 68, str(n_tpl))
+    for old in _KT_RETIRED_VALUES:
+        check(f"S1 不再出現「{old}」", not [r for r, v in vals.items() if v == old], str([r for r, v in vals.items() if v == old]))
+    # 預期值表逐列抽查(前半與後半)
+    for rid, v in (("TEST-4", "範本 T0"), ("PERF-1", "不接(代碼審或真機)"), ("DATA-19", "範本 T6"),
+                   ("API-9", "範本 T12"), ("UI-39", "範本 T13"), ("API-30", "範本 T4"),
+                   ("CO-5", "不接(代碼審或真機)")):
         check(f"S2 {rid} 通電批次含「行為測試或正向約束={v}」", f"行為測試或正向約束={v}" in c_rows[rid][9], c_rows[rid][9])
     # 接電方式欄不動:形狀類仍要有告警或正向約束(型錄格式檢查的要求)
     check("S2 C 列的接電方式欄照舊含「行為測試或正向約束」", all("行為測試或正向約束" in c[8] for c in c_rows.values()), "")
 
+
+_KT_UI39_OLD_STD = "`val` 欄位 + `@Immutable`/`@Stable`,或穩定設定檔"   # 改 UI-39 前好寫法欄的舊說法
+
+
+def _kt_ui39_problems(rows, io):
+    """[後半 S6] 型錄主表列與〈輸入與口徑〉內文 → 問題清單。真檔與改壞的資料跑同一組判準
+    (代碼審 r1 測試 F3:改壞對照要拿改壞後的資料跑這裡,不是只比對舊字串)。"""
+    probs = []
+    ui = rows["UI-39"]
+    conseq, std = ui[4], ui[3]
+    if "強跳過" not in conseq:
+        probs.append("UI-39 後果欄沒提強跳過")
+    if "===" not in conseq:
+        probs.append("UI-39 後果欄沒提實例相等比較(===)")
+    if not ("外部模組型別" in conseq and "輕微多餘重組、不判" in conseq):
+        probs.append("UI-39 後果欄沒寫外部模組型別「輕微多餘重組、不判」")
+    # 代碼審 r1 測試 F4:`===` 是官方頁原文,只有「畫面被跳過、不更新」是推論
+    if "從 `===` 推論" in conseq or "推論" not in conseq or "官方頁原文" not in conseq:
+        probs.append("UI-39 後果欄要寫明 === 是官方頁原文、只有畫面不更新那一半是推論")
+    for col, label in ((1, "名稱"), (2, "壞寫法")):
+        if "外部模組型別" in ui[col] or "java.time" in ui[col]:
+            probs.append(f"UI-39 {label}欄還提外部模組型別或 java.time")
+    # 代碼審 r1 測試 F2:好寫法欄跟另三欄一起改,改回舊說法(直接標 @Immutable)要報
+    if not ("唯讀集合" in std and "copy(" in std and "外部模組型別" in std) or _KT_UI39_OLD_STD in std:
+        probs.append("UI-39 好寫法欄沒寫「val 加唯讀集合、copy 產新實例、外部模組型別才考慮 @Immutable」")
+    if "https://developer.android.com/develop/ui/compose/performance/stability/strongskipping" not in ui[11]:
+        probs.append("UI-39 來源欄沒有強跳過頁網址")
+    if "https://dagger.dev/hilt/android-entry-point" not in rows["ARCH-56"][11]:
+        probs.append("ARCH-56 來源欄沒有 dagger.dev 網址")
+    for old in _KT_RETIRED_VALUES:
+        if old in io:
+            probs.append(f"〈輸入與口徑〉還寫「{old}」")
+    return probs
+
+
+def t_kotlin_catalog_instrumented_batch_notes():
+    """[後半 S6] 型錄內容:UI-39 後果欄提到強跳過與實例相等、外部模組型別「輕微多餘重組、不判」,名稱與壞寫法欄
+    不再提外部模組型別與 java.time,好寫法欄是 val 加唯讀集合與 copy,來源欄有強跳過頁網址;〈輸入與口徑〉不再寫
+    兩個作廢值;ARCH-56 來源欄有 dagger.dev。判準抄自 Projects/Android儀器測試範本與架構測試_計劃 S6 與預期值表。"""
+    m = _ktpack()
+
+    def _io(mm):
+        cat = mm.CATALOG.read_text(encoding="utf-8")
+        i = cat.index("## 輸入與口徑")
+        return cat[i:cat.index("\n## ", i + 5)]
+    got = _kt_ui39_problems(m.main_rows(), _io(m))
+    check("S6 真型錄:UI-39 四欄、來源、ARCH-56 來源、〈輸入與口徑〉都對", got == [], str(got))
+    ui = m.main_rows()["UI-39"]
+    # 改壞對照:改壞後的資料跑同一組判準,各自報(證明不是讀錯欄、也不是空轉)
+    cases = (
+        ("後果欄改回舊說法", ui[4], "不可跳過,多餘重組", "後果欄沒提強跳過"),
+        ("好寫法欄改回舊說法", ui[3], _KT_UI39_OLD_STD, "好寫法欄"),
+        ("後果欄把 === 也標成推論", "官方頁原文", "官方頁沒逐字寫", "只有畫面不更新那一半是推論"),
+        ("來源欄拿掉強跳過頁", "https://developer.android.com/develop/ui/compose/performance/stability/strongskipping",
+         "https://example.invalid/x", "強跳過頁網址"),
+    )
+    for name, old, new, want in cases:
+        m2 = _ktpack(copy=True)
+        before = m2.CATALOG.read_text(encoding="utf-8")
+        _ktpack_edit(m2.CATALOG, old, new)
+        check(f"★對照★ {name}:改壞真的改到型錄", m2.CATALOG.read_text(encoding="utf-8") != before, name)
+        g2 = _kt_ui39_problems(m2.main_rows(), _io(m2))
+        check(f"★改壞★ {name} 要報", any(want in x for x in g2), str(g2))
 
 def t_kotlin_test_templates_linked():
     """[S5] 指路:kotlin-idioms SKILL.md 開頭段、測試品質標準〈Android 本機單元測試的驗收標準〉的協程與 Flow
@@ -126811,6 +127300,16 @@ def t_kotlin_test_templates_linked():
     i = cat.index("## 輸入與口徑")
     io = cat[i:cat.index("\n## ", i + 5)]
     check("S5 型錄〈輸入與口徑〉提到範本檔", "skills/kotlin-idioms/test-templates.md" in io, io[:200])
+    # 後半 S7:Room 升級條指到範本 T6;本機單元測試驗收標準有一句提到範本 T7–T11 與 sdk=34
+    room = std[std.index("### Android 資料層(Room)的撰寫補充"):]
+    room = room[:room.index("\n### ", 5)]
+    upg = next((ln for ln in room.splitlines() if ln.startswith("- **升級**")), "")
+    check("S7(後半)Room〈升級〉條提到範本 T6", "範本 T6" in upg, upg[-300:])
+    # 代碼審 r1 架構對齊 F2:照既有「照抄起手:…(Tx 節)」格式,骨架細節(sdk=34)指到骨架節、不重抄
+    ptr = [ln for ln in sec.splitlines() if "照抄起手:" in ln and "(T7–T11 節" in ln]
+    check("S7(後半)〈Android 本機單元測試的驗收標準〉有一句「照抄起手:…(T7–T11 節…)」", len(ptr) == 1, sec[-400:])
+    check("S7(後半)那句指到範本〈Android 實驗專案骨架〉、不重抄 sdk=34",
+          bool(ptr) and "Android 實驗專案骨架" in ptr[0] and "sdk=34" not in ptr[0], str(ptr))
     check("S5 型錄指的範本檔存在", (repo / "skills" / "kotlin-idioms" / "test-templates.md").is_file(), "")
 
 

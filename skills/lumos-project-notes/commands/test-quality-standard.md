@@ -91,7 +91,7 @@
 - **查詢**:先寫入涵蓋「該出現、不該出現、排序邊界」的資料,再斷言回傳的內容與順序;不要只斷言筆數或「不是空的」。
 - **資料限制**:主鍵、唯一索引、外鍵(Room 宣告了 `ForeignKey` 就會開外鍵檢查)各寫一支:違反時丟 `SQLiteConstraintException`,而且資料沒被改;衝突策略是 `REPLACE` 或 `IGNORE` 的,改成斷言覆蓋或略過後的結果。
 - **交易**:`@Transaction` 方法或 `withTransaction` 區塊,讓後半步失敗(例如第二筆主鍵重複),斷言前半步也撤回、舊資料原樣在;只測成功路徑證不了交易。
-- **升級**:`exportSchema` 要開、`schemas/<類別完整名稱>/<版本>.json` 要提交;每一步升級用 `MigrationTestHelper` 先 `createDatabase(舊版)` 用原始 SQL 塞資料,再 `runMigrationsAndValidate(新版, …)` 驗結構與資料都還在;另有一支跑完全部升級的測試(官方建議,`addMigrations(*全部)` 從最舊版開到最新版)。Room 2 是 `androidx.room`、Room 3 是 `androidx.room3`,後者的 `MigrationTestHelper` 要帶 driver 與資料庫檔。社群做法(非官方):用 Robolectric 跑升級測試時,結構檔要加進 debug 的 assets,測試資料夾的 assets 讀不到。升級測試一跑就丟 `AbstractMethodError`(kotlinx.serialization 的方法)時,多半是 Android 測試套件的依賴版本被鎖成跟 App 一樣、App 這邊的 kotlinx-serialization 比 room-testing 要的舊而被降版;在 App 端明確加較新的 `kotlinx-serialization-core`(2026-10-28 Room 2.8.5 實測要 1.8.1)。
+- **升級**:`exportSchema` 要開、`schemas/<類別完整名稱>/<版本>.json` 要提交;每一步升級用 `MigrationTestHelper` 先 `createDatabase(舊版)` 用原始 SQL 塞資料,再 `runMigrationsAndValidate(新版, …)` 驗結構與資料都還在;另有一支跑完全部升級的測試(官方建議,`addMigrations(*全部)` 從最舊版開到最新版)。Room 2 是 `androidx.room`、Room 3 是 `androidx.room3`,後者的 `MigrationTestHelper` 要帶 driver 與資料庫檔。社群做法(非官方):用 Robolectric 跑升級測試時,結構檔要加進 debug 的 assets,測試資料夾的 assets 讀不到。升級測試一跑就丟 `AbstractMethodError`(kotlinx.serialization 的方法)時,多半是 Android 測試套件的依賴版本被鎖成跟 App 一樣、App 這邊的 kotlinx-serialization 比 room-testing 要的舊而被降版;在 App 端明確加較新的 `kotlinx-serialization-core`(2026-10-28 Room 2.8.5 實測要 1.8.1)。照抄起手見 `skills/kotlin-idioms/test-templates.md` 範本 T6(Room 2 與 Room 3 兩份依賴、逐版升與全部升級兩支、`MigrationTestHelper` 一律具名參數)。
 - **Flow/LiveData 重送**:收第一次發出的值、寫入、斷言下一次發出的值;Room 只要表有寫入就會重送(值沒變也送),畫面層要的是「值變了才更新」時另驗 `distinctUntilChanged`。LiveData 要搭 `InstantTaskExecutorRule` 或 `observeForever`。
 - **TypeConverter**:經 DAO 寫進去再讀出來一圈,斷言值相等,另測 null、時區、極端值;只單獨呼叫轉換函式證不了 Room 有用到它。
 - **預載資料庫(createFromAsset)**:第一次開啟時斷言預載的資料讀得到;資產檔的結構要跟目前版本一致,不一致 Room 會在開啟時丟例外,升版時連資產檔一起測。
@@ -154,6 +154,7 @@ C#固定SDK與packages.lock.json，Android固定AGP/Kotlin/Gradle與測試依賴
   - ViewModel 的一次性結果化成狀態後(kotlin-idioms R19),測「出現在狀態裡 → 呼叫已顯示 → 從狀態清掉」三步。
   - 照抄起手:Flow 發射、共享、程序被殺還原、HTTP 邊界、序列化契約的測試範本在 `skills/kotlin-idioms/test-templates.md`(T2–T5 節)。Turbine 自己的檢查(`awaitComplete()`、`awaitError()`、`expectNoEvents()`)失敗、`awaitItem()` 等不到值,都丟 `TurbineAssertionError`,收證工具不算斷言失敗;要當「抓到錯」的那一步,先推到靜止,再用 `cancelAndConsumeRemainingEvents()` 一次取出全部事件 `assertEquals`。有限的冷流結尾還有一個 `Complete`,在它上面 `expectNoEvents()` 對正確程式也會紅(範本實驗實測)。
 - **斷言與命名**:斷言輸出、狀態、寫入結果或錯誤理由(共用規範第 3 條);測試名照官方範例的形式 `被測對象_動作或輸入_預期結果`。
+- 照抄起手:要 Android 框架的測試(Fragment、LiveData、WorkManager、Compose、Paging)的範本在 `skills/kotlin-idioms/test-templates.md`(T7–T11 節;哪些跑 Robolectric、哪些只能在模擬器,寫在各節開頭;專案形狀與 Robolectric 設定照該檔〈Android 實驗專案骨架〉節)。
 - **Compose 畫面行為在本機跑**(選配):測試放 `src/test`,加 `@RunWith(RobolectricTestRunner::class)` 與 `createComposeRule()`,`isIncludeAndroidResources = true`;適合「點了按鈕畫面有變」這類行為。Robolectric 沒有螢幕、部分 API 只部分支援(系統 UI、WebView 不支援),這些照樣要上裝置驗。
 - **截圖測試**(選配):官方推薦用來驗 Compose 的視覺;官方工具是 Compose Preview Screenshot Testing(實驗性),Robolectric 要搭第三方函式庫(社群:Now in Android 用 Roborazzi)。張數要少、每張給獨特的回饋;容差門檻會漏掉門檻以下的差異;參考圖在固定環境(例如 CI)產,不同作業系統的渲染不一樣。
 
