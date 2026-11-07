@@ -62015,32 +62015,10 @@ def _drift_m1_fit(root, kind, note, hard, tip, nodes, extra):
 def _drift_m1_ledger_miss(root, tip, state):
     """治理帳寫不進去時的留痕:~/.cache/lumos/drift-m1/ledger-miss.jsonl 追加一行(REVISIT 讀它算樣本不足)。"""
     import json as _j, datetime as _dt
-    if not _mkdir_trusted_under_home(".cache", "lumos", "drift-m1"):
-        return False
-    d = Path.home() / ".cache" / "lumos" / "drift-m1"
-    if not _trusted_private_dir(d, ".cache", "lumos", "drift-m1"):
-        return False
     line = _j.dumps({"ts": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
                      "repo": _drift_m1_show(os.path.realpath(str(root))), "head_sha": tip, "state": state},
                     ensure_ascii=False) + "\n"
-    try:
-        # O_NONBLOCK:有人在這裡放了同名 FIFO 時開檔不會卡住推送(沒有讀端就直接失敗);開了再確認是自己的一般檔
-        # (代碼審 r2 邊界席)
-        fd = os.open(str(d / "ledger-miss.jsonl"), os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-                     | getattr(os, "O_NONBLOCK", 0), 0o600)
-        try:
-            import stat as _stat
-            fst = os.fstat(fd)
-            if not _stat.S_ISREG(fst.st_mode) or (hasattr(os, "getuid") and fst.st_uid != os.getuid()):
-                return False
-            data = line.encode("utf-8")
-            if os.write(fd, data) != len(data):   # 比照 _ledger_append:短寫(磁碟滿)不算寫成
-                return False
-        finally:
-            os.close(fd)
-        return True
-    except OSError:
-        return False
+    return _home_cache_append_line((".cache", "lumos", "drift-m1"), "ledger-miss.jsonl", line)
 
 
 def _drift_m1_ledger(root, mode, base, tip, res, found, note):
@@ -69263,6 +69241,27 @@ def _home_cache_write(subdir, path, data):
         return True
     except OSError:
         return False
+
+
+def _home_cache_append_line(segments, filename, line):
+    """往 ~/<segments...>/<filename> 安全地追加一行(單一來源;治理帳寫不進去的留痕、測試執行器對話裡擋全套的計數都走這支)。
+    逐層建目錄並檢查可信(_mkdir_trusted_under_home、_trusted_private_dir);開檔走 _regular_own_fd(擋捷徑、管線、別人的檔,
+    0600),單次寫入並核對長度,短寫不算寫成。任何一步不過回 False,不丟例外。"""
+    if not _mkdir_trusted_under_home(*segments):
+        return False
+    d = Path.home().joinpath(*segments)
+    if not _trusted_private_dir(d, *segments):
+        return False
+    fd = _regular_own_fd(d / filename, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    if fd is None:
+        return False
+    try:
+        data = line.encode("utf-8")
+        return os.write(fd, data) == len(data)   # 比照 _ledger_append:短寫(磁碟滿)不算寫成
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def _home_cache_evict(d, ttl_sec, max_files=None):
