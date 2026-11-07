@@ -1,0 +1,1198 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index c416d68db..1717c62eb 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -84,20 +84,46 @@ def catalog_ids():
+     cut = text.find("\n## 情境決策表")   # 主表在決策表之前;決策表的 D-n 與來源索引的編號都不是規則該引的編號
+     main = text if cut < 0 else text[:cut]
+     return {m.group(1) for m in map(_MAIN_ROW_RE.match, main.splitlines()) if m}, text
+ 
+ 
+ _CELL_RE = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')   # 反引號裡的直線不算欄位分隔
+ _MAIN_ROW_RE = re.compile(r"^\|\s*((?:API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+)\s*\|")
+ _MAIN_COLS = 12      # 編號|名稱|壞寫法形狀|標準寫法|後果|現成規則|級|情境怎麼認|接電方式|通電批次|實測狀態|來源
+ _DT_COLS = 7         # 列編號|情境|標準寫法|不適用時|觸發字|對應檢查|來源
+ _WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
++# 第四批通電批次的判定口徑(Projects/Android現成檢查接上CI與推送前_計劃 範圍 4;口徑原文在型錄〈輸入與口徑〉)。
++# 預設關的規則照官方規則頁列舉:Slack compose-lints 的兩條穩定性檢查與 M2 API(https://slackhq.github.io/compose-lints/rules/ ;
++# ComposeRememberMissing 已移除),compose-rules 外掛自帶設定 active: false 的三條。
++B4_DEFAULT_OFF = frozenset((
++    "ComposeUnstableReceiver", "ComposeUnstableCollections", "ComposeM2Api", "ComposeRememberMissing",
++    "unstable-collections", "UnstableCollections", "preview-naming", "PreviewNaming", "material-two", "Material2"))
++_B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
++_B4_CR = re.compile(r"cr:compose:([\w-]+)")
++_B4_SKIP = ("待查", "預設關", "相近", "opt-in")
++B4_TAG_LINT = "CI 範本:Android Lint"
++B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
++
++
++def batch4_expected_tags(rule_col):
++    """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。
++    以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
++    而且那段不含待查、預設關、相近、opt-in,規則碼不是 B4_DEFAULT_OFF 才算。"""
++    lint = cr = False
++    for seg in re.split(r"[;；、]", rule_col):
++        if any(w in seg for w in _B4_SKIP):
++            continue
++        lint = lint or any(code not in B4_DEFAULT_OFF for code in _B4_LINT.findall(seg))
++        cr = cr or any(code not in B4_DEFAULT_OFF for code in _B4_CR.findall(seg))
++    return [tag for tag, on in ((B4_TAG_LINT, lint), (B4_TAG_CR, cr)) if on]
++
++
+ # 觸發字停用字表:這些字幾乎每支 Kotlin 檔都有,當觸發字會讓改檔前推列與情境題每次都亮(第二、三批計劃的依賴)
+ STOP_TRIGGERS = frozenset((
+     "map", "filter", "forEach", "let", "run", "apply", "also", "with", "if", "else", "when", "try", "catch",
+     "val", "var", "fun", "class", "object", "return", "suspend", "launch", "async", "await", "flow", "Flow",
+     "collect", "first", "take", "list", "List", "remember", "enabled", "Job", "cancel", "data", "String",
+     "Int", "Unit", "null", "true", "false", "this", "it", "get", "set", "value", "state", "State",
+     # r1 接手席點名的(第二、三批設計審):型別名或方法名太泛,出現在大量無關程式裡
+     "Exception", "Result", "Response", "insert", "offset", "sealed", "onClick", "isActive", "key", "test",
+     "version", "size", "token", "edit", "Application", "Intent", "Context", "delay", "Dao", "Repository",
+     # 第三批設計審 r2 通才席:幾乎每支 ViewModel 或資料層都有,當觸發字會讓每次推送都出一堆情境段
+@@ -152,20 +178,26 @@ def catalog_problems(rules=None):
+         if rid in seen:
+             problems.append((rid, "編號重複"))
+         seen.add(rid)
+         if len(c) != _MAIN_COLS:
+             problems.append((rid, f"欄位數 {len(c)},應為 {_MAIN_COLS}"))
+             continue
+         rows[rid] = c
+         name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
+         if not std or not wire or not batch:
+             problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
++        want = batch4_expected_tags(c[5]) if "批四" in batch else []   # 只判第四批的列(批一等照它自己的批次)
++        have = [tag for tag in (B4_TAG_LINT, B4_TAG_CR) if tag in batch]
++        if want and ("批四(" + ";".join(want) + ")" not in batch or "批四(現成規則)" in batch):
++            problems.append((rid, "第四批通電批次要寫「批四(" + ";".join(want) + ")」(照型錄〈輸入與口徑〉的口徑)"))
++        elif have and not want:
++            problems.append((rid, "第四批通電批次寫了接電標籤,但口徑判成還沒接上(預設關、opt-in、待查或沒有規則碼)"))
+         if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
+             problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
+         if kind.startswith("語意"):
+             if "表態對程式" not in wire:
+                 problems.append((rid, "語意類要有「表態對程式」"))
+             if "(人裁)" not in name and "盲判席" not in wire:
+                 problems.append((rid, "語意類(沒標人裁)要有「盲判席」"))
+         if "(出處不全)" not in name:
+             if any(w in src for w in _WEAK_SRC):
+                 problems.append((rid, "來源還寫著未核對或無網址,要補查證網址或標(出處不全)"))
+diff --git a/configs/detekt/android.yml b/configs/detekt/android.yml
+index 04483575b..7f7b3fe79 100644
+--- a/configs/detekt/android.yml
++++ b/configs/detekt/android.yml
+@@ -50,21 +50,22 @@ style:
+   ForbiddenMethodCall:
+     active: true
+     methods:
+       - reason: 'collectAsState 在 App 退到背景時照樣收集,改用 collectAsStateWithLifecycle'
+         value: 'androidx.compose.runtime.collectAsState'
+ 
+ naming:
+   # Compose:回傳 Unit 的 @Composable 用大寫開頭命名(Compose 慣例);命名改由 compose-rules 的 ComposableNaming 檢查
+   FunctionNaming:
+     ignoreAnnotated: ['Composable']
+-  # Compose:頂層常數用 PascalCase(Compose 指引)
++  # Compose:頂層常數用 PascalCase(Compose 指引);同時保留 Kotlin 慣例的全大寫加底線(MAX_ITEMS),所以樣式收底線
++  #   (只寫 '[A-Z][A-Za-z0-9]*' 會讓 MAX_ITEMS 從不報變成被報,代碼審 r1 接手席實跑抓到)
+   TopLevelPropertyNaming:
+-    constantPattern: '[A-Z][A-Za-z0-9]*'
++    constantPattern: '[A-Z][A-Za-z0-9_]*'
+ 
+ complexity:
+   # Compose:元件參數多半有預設值,不算進參數上限
+   LongParameterList:
+     ignoreDefaultParameters: true
+   # Compose:@Preview 函式不增加複雜度,不算進函式數
+   TooManyFunctions:
+     ignoreAnnotatedFunctions: ['Preview']
+diff --git a/docs/lumos-toolchain-knowledge/Issues/工具鏈範圍外手法紀錄.md b/docs/lumos-toolchain-knowledge/Issues/工具鏈範圍外手法紀錄.md
+index 015419054..d898f6835 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/工具鏈範圍外手法紀錄.md
++++ b/docs/lumos-toolchain-knowledge/Issues/工具鏈範圍外手法紀錄.md
+@@ -36,10 +36,11 @@ related:
+ 
+ ## 什麼條件算修好
+ 
+ 計劃的 RETIRE-IF 任一條成立,就撤掉兩條 RULE、回到所有專案同一份資安與併發鏡頭,這篇隨之結案(內容保留):①工具改成多人共用或雲端執行(帳本或圖譜放到共用伺服器、多人同時對同一工作目錄跑 lumos);②範圍外手法累計 2 次被證實造成真實損害;③工具鏈本 repo 的審查在範圍內三類漏掉、事後證實是真洞,累計 2 次。
+ 
+ ## 紀錄
+ 
+ | 日期 | 迴圈與輪次 | 手法 | 被繞過的守衛 | 保護說法位置 |
+ |---|---|---|---|---|
+ | 2026-10-15 | code-工具鏈代碼審資安與資源鏡頭範圍 r1 | 被審 repo 根放一支空的同名檔就被判成工具鏈 | 鏡頭範圍判別 | Systems/pitfalls-code-loop 鏡頭範圍那節的正文說明 |
++| 2026-11-06 | code-android現成檢查 r1 | shell 殘留測試用環境變數讓外掛測試改載入別支 jar | compose-rules 外掛測試找檔順序 | 無(測試設定,沒有保護說法) |
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md
+index 51577eae1..4618beb56 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android現成檢查接上CI與推送前_計劃.md
+@@ -43,21 +43,21 @@ RETIRE-IF: 連續三個月沒有任何消費專案照範本接 Android Lint 或
+    - 模組層 `android { lint { baseline = file("lint-baseline.xml"); warningsAsErrors = true; checkDependencies = true; sarifReport = true } }`。`warningsAsErrors` 的理由寫明:不開時只有 error 級會讓建置失敗,型錄 Android Lint 列多半是 warning 級。
+    - `dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>") }`,版本表:AGP 9.3 以上用 1.6.1;AGP 8.x 用 1.4.2(用 lint 31.7.1 建);判法是「lint 版本 = AGP 版本加 23」,表寫在範本裡、附發行說明網址。
+    - 第一次本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true` 產基準線並提交;之後 CI 加一步 `./gradlew lint<變體>`。步驟順序寫死「先產基準線、提交,再加 CI 步驟」。
+    - detekt 的 CI 範本(`detekt<變體>`)那段加 `detektPlugins("io.nlopez.compose.rules:detekt:0.4.28")`,讓 CI 那步也帶 compose-rules。
+ 2. **推送前 compose-rules 與共用設定**:
+    - linter 目錄的 detekt 標準接法加第二條宣告,只跑外掛規則:`detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins $HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/compose.yml --report sarif:{LINT_SARIF_OUT}`(`--build-upon-default-config` 不能少,見審計修正紀錄的實作更正);原本那條不動。外掛下載指令釘版本與 sha256(`b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6`,2026-11-06 自算;官方沒公布雜湊),放本機固定目錄(理由見 PRIOR-ART ⑥,linter 目錄「一律裝進套件管理器」那一條補上這個例外)。外掛缺檔時只有這條被新增告警閘判環境不可用(閘的既有行為),原本那條照擋。
+    - 新增 `configs/detekt/compose.yml`(新增):只寫 compose-rules 三條預設關規則要不要開——`UnstableCollections`、`PreviewNaming`、`Material2` 照外掛預設不開,檔內註解寫原因(外掛作者標成選用);其餘外掛規則用外掛預設。
+    - 共用設定 `configs/detekt/android.yml` 加 PRIOR-ART ④ 的六項(1.23 版規則名),檔頭用法註解與 linter 目錄「共用設定開的五條」那句一起改寫。
+    - 本 repo 的 CI(`.github/workflows/ci.yml` 裝 detekt 那一步)照 detekt 的做法多下載 compose-rules 0.4.28 外掛、比對同一個 sha256,路徑放進環境變數 `LUMOS_DETEKT_COMPOSE_JAR`;S3 的測試用這個變數找外掛,沒設時找本機固定目錄;環境變數 `CI` 為真而找不到外掛時測試判紅,本機找不到才跳過並印原因。
+ 3. **健檢提醒**(lint-check 與健檢 F 段;跟 detekt 的 T4 一樣只看字面、不執行、不改退出碼):新函式 `_lint_android_ci_advisories(config, repo_root)`(新增)自帶代號與文字表,條目格式 `[CI] A1:<一句>`;lint-check 用新的印出函式另起標題「Android 現成檢查有沒有接上」,`--json` 的 `advisories` 清單接在 detekt 提醒之後;健檢 F 段另起一則同標題的提醒。讀 CI 設定檔抽一支共用函式 `_ci_config_texts(repo_root)`(新增,T4 的 `_detekt_ci_has_typed_task` 改用它,判定不變,檔案範圍照它原本只看 `.github/workflows/`,由參數決定);讀檔一律 `errors="replace"`。條件是宣告裡有 `kt` 棧而且是 Android 專案:
+-   - **A1**:CI 設定檔裡沒有任何一行同時是 Gradle 呼叫(那行含 `gradlew`、`gradle ` 或 `arguments:`)而且含 Android Lint 任務字樣——任務字樣是一個詞(可帶 `:模組:` 前綴)剛好是 `lint`、`check`、`build`(AGP 讓 `check` 依賴 `lint`,出處是 AOSP 的提交 https://android.googlesource.com/platform/tools/base/+/cc9093a%5E%21 ,年代較舊,S5 實跑時用 `./gradlew check --dry-run` 核對;Gradle 的 `build` 依賴 `check`,https://docs.gradle.org/current/userguide/base_plugin.html ),或 `lint` 接大寫開頭的變體名;變體名以 `Kotlin`、`Fix`、`Vital`、`Analyze`、`Report` 開頭的不算(`lintKotlin` 是 kotlinter 的 ktlint 任務、`lintFix` 改檔、`lintVital<變體>` 只看 fatal 級、後兩者是中間步驟),`updateLintBaseline` 也不算 → 印「Android Lint 與 Slack compose-lints 在 CI 設定檔裡找不到」並指向範本。
++   - **A1**:CI 設定檔裡找不到 Android Lint 任務字樣 → 印「Android Lint 與 Slack compose-lints 可能沒有在 CI 跑」並指向範本。字樣的判法跟 T4 找 `detekt<變體>` 同一個形狀,只看字面、不解析命令:CI 設定檔先經既有的 `_ci_workflow_texts` 去掉註解(整行註解拿掉、行尾註解切掉,哪些算註解只有那一份),整份檔任何地方出現 `lint` 接大寫開頭的變體名就算(可帶 `:模組:` 前綴;`Kotlin`、`Fix`、`Vital`、`Analyze`、`Report` 接結尾或大寫的不算——`lintKotlin` 是 kotlinter 的 ktlint 任務、`lintFix` 改檔、`lintVital<變體>` 只看 fatal 級、後兩者是中間步驟;`lintFixtureDebug` 這種 flavor 名剛好以這幾個字開頭的照算);`lint`、`check`、`build` 這三個常見字只在提到 gradlew、gradle 或 `arguments:` 的行上才算(AGP 讓 `check` 依賴 `lint`,出處是 AOSP 的提交 https://android.googlesource.com/platform/tools/base/+/cc9093a%5E%21 ,年代較舊,S5 實跑時用 `./gradlew check --dry-run` 核對;Gradle 的 `build` 依賴 `check`,https://docs.gradle.org/current/userguide/base_plugin.html )。寫了卻沒真的跑(`-x lint`、`echo gradlew build`)判成找得到——寧可少印提醒、不誤報(見〈依據來源〉A1)。
+    - **A2**:用 Compose 的專案,建置檔沒有 `compose-lint-checks` 也沒有 `io.nlopez.compose.rules`,而且宣告的 kt 命令都沒帶 `detekt-compose` 字樣(不看版本) → 印「Compose 規則哪裡都沒接」並指向範本。
+    - **A3**:宣告的 kt 命令帶 `--plugins <路徑>`(展開 `$HOME`)而那支檔不存在 → 印「外掛檔不在,這條命令推送前會被判環境不可用、自動放行」並印下載指令所在的範本段落。
+    掃建置檔:專案根目錄往下最多三層,`build/`、`.gradle/`、`node_modules/`、隱藏資料夾不進、不跟符號連結進資料夾;每支最多讀前 1 MB、依路徑排序後最多看 200 支;讀不了的當沒有。
+ 4. **型錄通電批次**(`skills/kotlin-idioms/checks-catalog.md`):現成規則欄以「;」「、」切段,某一段以 `androidx`、`內建`、`slack` 開頭、帶一個大寫開頭的規則碼,而且那一段不含「待查」「預設關」「相近」「opt-in」的列,通電批次從「批四(現成規則)」改成「批四(CI 範本:Android Lint)」;某一段以 `cr` 開頭、帶規則碼、不含上述四個字樣的列改成「批四(推送前:detekt 外掛 compose-rules)」;兩者都有寫成「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」。其他列不動。改由一次性腳本依這個口徑判,不手改;腳本不進 repo,口徑寫進型錄〈輸入與口徑〉通電批次那一條,值清單同步加這三個字樣;S4 的測試照同一口徑重算一次、跟型錄比對。
+ 5. **跟著變假的句子**:`skills/kotlin-idioms/SKILL.md` 第 R16 條的 compose-rules 條數(寫 32 條,型錄口徑 29 列,改成指向型錄)、「加掛 compose-rules(detekt plugin jar)補 R16 整組」那句改成指向 linter 目錄的接法、開頭那條 `REVISIT:2027-05-01` 核對 compose-rules 與 Slack 規則名的回頭條件改寫成本案實跑的日期與還沒核對的部分。
+ 
+ **不做**:不在推送前跑 Android Lint 或 Slack compose-lints;不替消費專案改 Gradle 檔;不接 Sonar、IntelliJ 檢查;structured-coroutines 留在待查證;不改新增告警閘本身的判定;不開 compose-rules 預設關的三條。
+ 
+ ## 實務隱患
+ 
+@@ -101,20 +101,48 @@ RETIRE-IF: 連續三個月沒有任何消費專案照範本接 Android Lint 或
+ | S4 | 現成規則欄寫 `slack:ComposeItemKeyHashCode` 的列 | 通電批次含「CI 範本:Android Lint」 | 本計劃範圍 4 |
+ | S5 | 範例專案照範本接好、產基準線後加一處沒包 remember 的 `mutableStateOf` | `lint<變體>` 與 `detekt<變體>` 失敗並點名那一處 | 官方 lint 頁:基準線之後只報新增;compose-rules 規則頁 RememberMissing |
+ 
+ ## 回退
+ 
+ 退回本案的提交:A1、A2、A3 提醒不再印;共用設定的六項放寬拿掉後,標準 Compose 寫法又會被報 6 條(推送前新增告警閘只擋新增的);`configs/detekt/compose.yml` 消失,消費專案照範本加的 compose-rules 那條宣告會因設定檔找不到而被判環境不可用、自動放行;型錄通電批次字樣回到「批四(現成規則)」。消費專案已照範本加的 Gradle 設定不受影響。
+ 
+ ## 天花板
+ 
+ 1. Android Lint 與 Slack compose-lints 只在 CI 擋,推送前不擋;AI 寫完到 CI 跑完之間的空窗,只有規則包與 detekt(含 compose-rules)守。
+-2. 健檢只看 CI 設定檔字面,不驗 CI 真的跑、跑的是哪個模組;多模組專案只對 `:app:lint` 有字樣也算接上。
++2. 健檢只看 CI 設定檔字面(GitHub、GitLab、Bitrise、CircleCI、Jenkins、Azure 的固定檔名;Taskcluster 這類別的 CI 會多印 A1),不驗 CI 真的跑、跑的是哪個模組;多模組專案只對 `:app:lint` 有字樣也算接上;寫了 lint 字樣卻用 `-x lint` 排除、或只出現在 `echo` 裡,也判成接上(A1 少印,不誤報)。
+ 3. 健檢的三則提醒只在專案有 `.lumos/lint.json` 而且宣告了 kt 棧時才判(跟 T4 同一個前提);完全沒宣告的 Android 專案不會被提醒。
+-4. structured-coroutines 26 列、Sonar 7 列、IntelliJ 4 列與 compose-rules 預設關的三條,仍沒有機械守衛,只靠告警訊息與代碼審。
++4. A2 只讀 Gradle 建置檔與版本目錄;把 `lintChecks`、`detektPlugins` 寫在 `build-logic/`、`buildSrc/` 這類建置邏輯模組的 `.kt` 檔裡的專案(Now in Android 的寫法),健檢看不到、會多印 A2(只是提醒,不擋)。任務藏在 shell 腳本或 composite action 裡時,A1 照樣判成沒接(多印提醒)。
++5. structured-coroutines 26 列、Sonar 7 列、IntelliJ 4 列與 compose-rules 預設關的三條,仍沒有機械守衛,只靠告警訊息與代碼審。
+ 
+ REVISIT:2026-12-15 照 S5 在一個 AGP 8.x 與一個 AGP 9.3 以上的公開 Android 專案各實跑一次範本,記下 Slack compose-lints 版本表是否成立
+ REVISIT:2027-02-15 判 structured-coroutines 有沒有正式版、compose-rules 預設關的三條要不要開
+ 
++## 依據來源
++
++每個機制一行:依據是什麼、在哪裡看得到。(使用者 2026-11-06:「我們開發的過程中，所有機制的依據來源，最後也要補回plan，方便後續迭代」「而且我要變成規則，機制來源必填」)
++
++| 機制 | 依據 | 出處 |
++|---|---|---|
++| Android Lint 只在 CI 跑、不在推送前跑 | 官方:Gradle 專案一律用 `./gradlew lint`,單機版對 Gradle 專案會報錯;官方建議把 lint 放進 CI | https://developer.android.com/studio/write/lint |
++| CI 範本的 `baseline`、`warningsAsErrors`、`checkDependencies`、`sarifReport` | AGP Lint DSL 官方參考頁各屬性的說明 | https://developer.android.com/reference/tools/gradle-api/8.7/com/android/build/api/dsl/Lint |
++| 先產基準線再加 CI 步驟、`-Dlint.baselines.continue=true` | 官方 lint 頁〈Create a warnings baseline〉 | https://developer.android.com/studio/write/lint |
++| Slack compose-lints 的接法與版本表(lint 版本 = AGP 加 23) | 官方安裝頁;GitHub 發行說明 1.6.0「requires AGP/lint 9.3+」、1.6.1 用 lint 32.4.1、1.4.2 用 lint 31.7.1 建 | https://slackhq.github.io/compose-lints/ 、https://github.com/slackhq/compose-lints/releases |
++| Slack 預設關的三條不標接電 | Slack 規則頁:ComposeUnstableReceiver、ComposeUnstableCollections「disabled by default」、ComposeM2Api「opt-in」 | https://slackhq.github.io/compose-lints/rules/ |
++| compose-rules 用 detekt 外掛、不用型別資訊 | 官方 detekt 頁 CLI 用法與版本表;2026-11-06 本機 detekt 1.23.8 加外掛 0.4.28 實跑壞例,四條規則都報 | https://mrmans0n.github.io/compose-rules/detekt/ ;代碼審卷證 governance/review-reports/code-android現成檢查/ |
++| compose-rules 另開一條宣告(`--disable-default-rulesets`) | 2026-11-06 實測:`--plugins` 指不存在的 jar 時 detekt rc 1、不產 SARIF,整條會被判環境不可用 | 設計審卷證 governance/review-reports/android現成檢查接上ci與推送前/r1-intake.md |
++| 那條宣告一定要帶 `--build-upon-default-config` | 2026-11-06 實測:少了它外掛規則一條都不跑、也不報錯 | 本計劃審計修正紀錄「實作更正」;測試 t_detekt_compose_rules_shared_config |
++| compose-rules 預設關的三條不開 | 外掛自帶設定 `active: false`(UnstableCollections、PreviewNaming、Material2) | 外掛 jar 內 config/config.yml;設計審 r1 邊界席實讀 |
++| 共用 detekt 設定的六項 Compose 放寬 | detekt 官方 Compose 頁的六項建議;compose-rules 規則頁要求 `ignoreAnnotated: ['Preview']`;2026-11-06 實跑現行設定對標準 Compose 檔報 6 條、加上後只剩一般函式那條 | https://detekt.dev/docs/introduction/compose/ 、https://mrmans0n.github.io/compose-rules/rules/ |
++| `TopLevelPropertyNaming` 樣式收底線 | detekt 預設樣式 `[A-Z][_A-Z0-9]*`(Kotlin 慣例全大寫加底線)要保留;代碼審 r1 接手席實跑抓到只寫 PascalCase 會讓 `MAX_ITEMS` 被報 | 代碼審卷證 r1-接手-sonnet.md;測試 t_detekt_compose_rules_shared_config |
++| 外掛 jar 放本機固定目錄、下載釘雜湊、驗過才改名 | linter 目錄既有規則「外部工具一律裝進套件管理器,嚴禁易失位置」的例外:brew、sdkman 沒有配方;下載加比對雜湊沿用本 repo CI 下載 detekt 的做法;暫存檔驗過才改名是代碼審 r1 資安席指出壞檔會留在正式位置 | Systems/linter精選目錄;.github/workflows/ci.yml 裝 detekt 那一步 |
++| A1 只看字面找字(不解析命令) | OpenSSF Scorecard 判 CI 有沒有跑靜態分析只認簡單字面證據、承認判不到不代表沒做;專案鄰居 T4 同形;代碼審 r1 四席連續打穿逐條解析命令的寫法後換形狀(同類字面判斷第二次被打穿就換形狀) | https://github.com/ossf/scorecard/pull/5103 ;Systems/lint-declaration-health 的 T4;Systems/pitfalls-code-loop 換形狀規則 |
++| A1 換形狀後的實測 | 2026-11-06 下載 6 個公開 Android 專案的 GitHub workflow 實跑:nowinandroid(`lintProdRelease`)、thunderbird(`./gradlew lint`)、element-x(`lintGplayDebug`)、NewPipe(`lintContinuous`)判成有接,architecture-samples(只有 `connectedCheck`)判成沒接,五個都對;firefox-android 的 CI 在 Taskcluster、GitHub workflow 不跑 Gradle,判成沒接、多印一次提醒(天花板 2) | 代碼審卷證 governance/review-reports/code-android現成檢查/r1-intake.md |
++| A1 認 `check`、`build` | AGP 讓 `check` 依賴 `lint`;Gradle `build` 依賴 `check` | https://android.googlesource.com/platform/tools/base/+/cc9093a%5E%21 、https://docs.gradle.org/current/userguide/base_plugin.html |
++| A1 不算 `lintKotlin`、`lintFix`、`lintVital`、`lintAnalyze`、`lintReport` | kotlinter 外掛的任務名;AGP 的 lintFix 改檔、lintVital 只看 fatal、後兩者是 lint 任務的中間步驟 | https://github.com/jeremymailen/kotlinter-gradle ;https://developer.android.com/reference/tools/gradle-api/8.7/com/android/build/api/dsl/Lint(checkReleaseBuilds) |
++| CI 設定檔納入 GitLab、Bitrise、CircleCI、Jenkins、Azure | 設計審 r1 邊界與接手兩席指出只看 GitHub 會讓其他 CI 的專案永遠誤印 | 設計審卷證 r1-intake.md |
++| A3 外掛路徑照 shell 展開、相對 repo 根 | 新增告警閘以 repo 根當工作目錄、經 shell 執行命令;Python `os.path.expandvars` 對沒設的變數原樣保留 | scripts/lumos 的 `_lint_spawn`;https://docs.python.org/3/library/os.path.html#os.path.expandvars |
++| Android 專案判法、建置檔剝註解、資料夾跳過名單 | 沿用 lumos 既有的 `_KT_BUILD_ANDROID`、`_kt_strip_comments`、`_stack_scan_skip`(代碼審 r1 架構對齊席:不另立一套) | scripts/lumos |
++| 型錄第四批口徑住在型錄自檢 | 型錄的欄位、出處檢查原本就集中在 check.py 的 `catalog_problems`(代碼審 r1 架構對齊席) | configs/ast-grep/kotlin-android/check.py |
++
+ ## 審計修正紀錄
+ - r1(2026-11-06,四席 sonnet:正確性、邊界、接手、架構對齊):30 條/blocking 12/接上 compose-rules 後 detekt 內建規則對 Compose 寫法還有五種誤報(兩席獨立實跑抓到,其實現行設定就有)、預設關的三條規則會被型錄標成已接電(兩席)、A1 的字面判法對常見 CI 寫法誤報又把 `lintKotlin` 當 Android Lint(四席)、外掛缺檔會拖垮整條 detekt(三席);共用設定照 detekt 官方 Compose 頁加六項、compose-rules 另開一條只跑外掛的宣告、A1 改整行掃任務詞、型錄口徑改切段判並排除預設關與 opt-in、Android 判法沿用既有正規式;全部折入,逐條去向在 r1-intake.md。卷證:governance/review-reports/android現成檢查接上ci與推送前/。
+ - 實作更正(2026-11-06):範圍 2 原本寫的 compose-rules 命令少了 `--build-upon-default-config`,實作時本機實跑發現少了它外掛規則一條都不跑、也不報錯(rc 0、SARIF 空),照實改正文並在 S3 釘住範本那行要帶它;測試執行器會隔離家目錄,S3 在本機靠 `LUMOS_DETEKT_COMPOSE_JAR` 找外掛,本機固定目錄那個後備路徑只在真實使用時用得到。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 26ae31d2e..55a4e99c7 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -17,21 +17,21 @@ tags:
+   - scope/stack-knowledge
+ summary: |-
+   WHY:標準寫法的單一來源是型錄 checks-catalog.md,每列要有真的打開讀過的官方出處;查不到的列標(出處不全),引用它的規則只准提示級 [出處:2026-11-05 使用者「你的標準、最佳寫法來源要有依據,不要你自己寫」] [因:AI 自己寫的標準寫法會跟官方現況打架(查證時 18 列與官方衝突、DataStore 加密整組已棄用)] [test:t_kotlin_catalog_rows_wired]
+   WHY:規則訊息格式「[型錄編號] 錯在哪;改用 <最短修法>」且不超過 120 字,完整寫法用編號查型錄 [出處:[[Projects/Android協程與API寫法機械檢查標準_計劃]] 設計審 r1] [因:新增告警閘解析 SARIF 截 120 字、擋下訊息也印 120 字] [test:t_kotlin_rulepack_messages_cite_catalog]
+   PITFALL:只掃測試碼的規則若寫 `**/test/**`,祖先目錄叫 test 時整個反轉;還有測試變體目錄 `src/testDemo` 會被當正式碼 [出處:2026-11-05 設計審 r2 實測、nowinandroid 實測] [根因:ast-grep 的 files/ignores 相對規則設定檔所在目錄、比對完整路徑] [修法:錨在 `**/src/test*/**`、`**/src/androidTest*/**`] [test:t_kotlin_rulepack_samples]
+   PITFALL:ast-grep 規則把 follows 與 not.has $A 平行寫在同一層時,$A 還沒綁定就被比對,規則對任何程式都不命中 [出處:2026-11-05 樣本實測 kt-sequential-independent-await 0 命中] [根因:ast-grep 不保證同層條件的執行順序] [修法:用 all 排順序] [test:t_kotlin_rulepack_samples]
+   RULE:規則在真專案誤報超過命中的一成就降提示級或改形狀 [依據:外部] [since:2026-11-05] [retire:人裁] [until:2027-05-05] [confirmed:2026-11-05] [查:Google Tricorder「沒用的告警壓在一成以下」]
+   REVISIT:2027-02-05 拿兩個以上新的真 Android 專案再量一次會擋的規則(2026-11-05 只量實驗專案與 nowinandroid 共 30 處命中,多數規則只命中 1–3 處,估不準每條的誤報率)
+   SEE:[[Systems/linter精選目錄]] [[Systems/pitfalls-code-loop]]
+   PITFALL:規則包測試用 rglob 的第一個檔去改壞,在 Linux 上可能挑到剛放進去的 review-fp 樣本、把它蓋掉,兩條改壞驗證跟著失效(macOS 綠、CI 紅) [出處:2026-11-05 PR #158 合併後主線 CI] [根因:目錄列舉順序依檔案系統而定,APFS 恰好照名稱排、ext4 不是] [修法:照檔名挑或整個目錄都改,不用 next(rglob)] [test:t_kotlin_rulepack_samples]
+-  WHY:型錄第四批通電批次照固定口徑判(切段、認規則碼、排除待查、預設關、相近、opt-in 與官方預設關的六條),由測試對全表重算比對 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:兩席指出 compose-rules 預設關的三條會被標成已接電,實際沒在跑] [不選:一次性腳本改完就算(沒有守衛,下次改型錄就漂)] [test:t_kt_catalog_batch4_wiring]
++  WHY:型錄第四批通電批次照固定口徑判(切段、認規則碼、排除待查、預設關、相近、opt-in 與官方預設關的六條),由型錄自檢 check.py 的 batch4_expected_tags 逐列重算比對(代碼審 r1 架構席:口徑只住一處) [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:兩席指出 compose-rules 預設關的三條會被標成已接電,實際沒在跑] [不選:一次性腳本改完就算(沒有守衛,下次改型錄就漂)] [test:t_kt_catalog_batch4_wiring]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+ - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md b/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md
+index 6edc2a83f..b090b00c3 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md
++++ b/docs/lumos-toolchain-knowledge/Systems/lint-declaration-health.md
+@@ -23,21 +23,21 @@ summary: |-
+   KEY:lint-check 收「宣告了跑不動的東西」破口——同 lint-watch 空轉([[Issues/lint-watch空轉假綠]])同病根:宣告與現實脫鉤、無機制對帳。lumos lint-check <repo> 兩層:靜態格式校驗(恆跑)+ --smoke 真跑冒煙
+   FLOW:讀 .lumos/lint.json → _lintcheck_validate 靜態校驗(非dict/value非list/命令空/缺{LINT_SARIF_OUT}佔位符)→ [--smoke:格式過才對每條命令 _lint_run_and_parse、無可解析SARIF產出=跑不動]→ rc 0健康(含無宣告)/1有問題/2非JSON
+   KEY:兩層各抓一類——靜態層抓「格式錯」(便宜、純靜態);smoke層抓「格式對但跑不動」(工具/task/檔案缺;唯一能抓 gradle task 或外部 jar 存不存在的方法,靜態永遠抓不到)
+   KEY:真實案例(2026-07-17 KDS)——Citrus_KDS 的 lint.json 格式完全正確(`{"kt":["java -jar /tmp/detekt-dist/...detekt-cli.jar --report sarif:{LINT_SARIF_OUT}..."]}`),但 detekt jar 放在 /tmp 被系統清掉→靜態層正確放行、--smoke 正確抓「跑不出 SARIF」rc1。靜態抓不到、smoke 抓得到,正是兩層必要性的鐵證;[2026-07-27]同案重演(jar 又被清)→根治=改 brew 安裝+共用 config(標準接法立於[[Systems/linter精選目錄]]),KDS lint.json 換宣告後 smoke 綠
+   KEY:誠實天花板——靜態層驗格式不驗命令跑不跑得動;smoke真跑=慢(每linter一次完整run)、且對「輸出SARIF到stdout而非佔位符檔」的宣告會報錯(那也是宣告錯,smoke正確抓出,非誤報);外部工具放 /tmp 這類易失位置=宣告脆弱,smoke 是唯一守衛
+   KEY:設計哲學=宣告即契約需對帳——lint.json/lint-watch.json/test-layers.json 三個宣告檔都吃「宣告了不存在/跑不動的東西沒人知道」風險;lint-check 是 lint.json 這條的對帳器,同族收口
+   DEP:scripts/lumos cmd_lint_check + _lintcheck_validate｜復用 _lint_run_and_parse(smoke)
+   TEST:t_lintcheck_validate(格式校驗含 value 非 list 誤植案例)+t_lintcheck_cli(無檔rc0/空殼rc1/格式對rc0/smoke抓跑不動rc1/smoke真產SARIF rc0/非JSON rc2);全套 1236 passed
+   WHY:lint-check 與健檢 F 段對 detekt 宣告照指令字面印「實際會怎樣」的提醒(型別資訊缺、等號寫法、Gradle 純 detekt 任務、推送只記錄不擋、多檔拒跑),只提醒不改退出碼;「推送閘接不接得住」改由新增告警閘、風險分級、本判定共用同一支小函式 [出處:[[Projects/Android的detekt規則說實話_計劃]] 設計審 r1] [因:這些落差 detekt 本身不報錯,沒人說就以為有在檢查;Android 專案目前沒有修法,擋了只會訓練人繞過] [不選:記成宣告問題讓 CI 變紅(沒出口的紅);冒煙探針實跑驗規則(改到推送前真的擋那案)] [test:t_lint_detekt_advice_table] [test:t_lintcheck_detekt_advice_output] [test:t_doctor_lint_detekt_advice]
+   WHY:detekt 宣告提醒跟著逗號佔位符改:帶 {LINT_FILES_CSV} 的不印 P1、P2,P2 只看舊 {LINT_FILES} 並指向 {LINT_FILES_CSV},T1 指向 CI 型別檢查範本,新增 T4(宣告有 detekt 而 .github/workflows/ 沒有 detekt<變體> 任務字樣就印型別規則哪裡都沒擋);冒煙取樣跳過分隔字元路徑;{LINT_FILES_CSV} 單獨被引號包住記成格式問題 [出處:2026-11-06 [[Projects/Android的detekt推送前真的擋_計劃]] 範圍 4、5] [因:推送前只擋不用型別的規則,型別規則改由消費專案 CI 擋,沒接的要講出來不讓人以為有在擋;引號疊兩層讓含空白的路徑多出字面引號] [不選:T4 改退出碼(先提醒,REVISIT 2027-02-01 看有沒有人接);叫 T3(代號已被等號寫法用掉)] [test:t_lint_detekt_advice_csv_and_ci] [test:t_lintcheck_smoke_csv]
+-  WHY:Android 現成檢查的三則提醒(A1 CI 設定檔沒有 Android Lint 任務、A2 用 Compose 卻一套 Compose 規則都沒接、A3 宣告的外掛檔不在)另起一則、不放進 detekt 那支函式與標題 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:T4 要求宣告裡有 detekt 命令,這三則只要 kt 棧加 Android 專案;混在 detekt 標題底下會誤導] [不選:沿用 T4 只看 .github/workflows/(GitLab、Bitrise 等專案會永遠誤印)] [test:t_lint_android_ci_advice]
++  WHY:Android 現成檢查的三則提醒(A1 CI 設定檔沒有 Android Lint 任務、A2 用 Compose 卻一套 Compose 規則都沒接、A3 宣告的外掛檔不在)另起一則(lint-check 的 --json 仍與 detekt 提醒共用同一個 advisories 字串清單,A 系列條目以 [CI] A1:、[kt 第 N 條] A3: 開頭可分)、不放進 detekt 那支函式與標題 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 設計審 r1] [因:T4 要求宣告裡有 detekt 命令,這三則只要 kt 棧加 Android 專案;混在 detekt 標題底下會誤導] [不選:沿用 T4 只看 .github/workflows/(GitLab、Bitrise 等專案會永遠誤印)] [test:t_lint_android_ci_advice]
+ aliases:
+   - lint 宣告健康檢查
+ about_code:
+   - scripts/lumos
+ verified_by:
+   - "[[Verification/2026-08-26_lint接線收口落地]]"
+ ---
+ # lint-declaration-health——lint 宣告健康檢查(收「宣告了跑不動的東西」破口)
+ 
+ > **緣起**:2026-07-17 收窄 lint-watch 後盤點消費專案,使用者指出「宣告了跑不動的東西,也要是被檢測出來的一環」——這正是 lint-watch 空轉([[Issues/lint-watch空轉假綠]])的同病根:**宣告與現實脫鉤,沒有機制逼對帳**。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+index 414cd3ee7..007bb929a 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
++++ b/docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md
+@@ -129,41 +129,46 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開
+ 接法分兩段([[Projects/Android的detekt推送前真的擋_計劃]],2026-11-06):**推送前只擋不用型別資訊的規則**(GlobalScope 裸用、複雜度、命名這類),**要型別資訊的規則放在專案 CI 用 Gradle 型別解析任務加基準線擋**——detekt 官方提交前掛鉤那頁明寫「只跑改到的檔時,要型別資訊的檢查有些不準,CI 要另跑全量檢查」。
+ 
+ - **①推送前:lint.json 樣板**(新 Android 專案 setup 直接抄):
+   ```
+   detekt --input {LINT_FILES_CSV} --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/android.yml --report sarif:{LINT_SARIF_OUT}
+   ```
+   Compose 專案另加第二條,只跑 compose-rules 外掛規則(`--disable-default-rulesets`,內建規則照上一條跑):
+   ```
+   detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins $HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/compose.yml --report sarif:{LINT_SARIF_OUT}
+   ```
+-  外掛先下載到固定目錄並比對雜湊(sha256 是 2026-11-06 自算,官方沒公布;不符就不要用):
++  外掛先下載到固定目錄並比對雜湊(sha256 是 2026-11-06 自算,官方沒公布;寫法跟本 repo CI 那一步同一個網址)。先下載成暫存檔,雜湊對了才改名成正式檔名,對不上就刪掉暫存檔——推送前那條命令每次都會載入這支 jar,不能留一支沒驗過的在正式位置:
+   ```
+-  mkdir -p "$HOME/.local/share/lumos/detekt-plugins" && cd "$HOME/.local/share/lumos/detekt-plugins" && gh release download v0.4.28 -R mrmans0n/compose-rules -p 'detekt-compose-0.4.28-all.jar' && echo "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6  detekt-compose-0.4.28-all.jar" | shasum -a 256 -c -
++  d="$HOME/.local/share/lumos/detekt-plugins"; mkdir -p "$d" && curl -sSfL -o "$d/detekt-compose-0.4.28-all.jar.part" "https://github.com/mrmans0n/compose-rules/releases/download/v0.4.28/detekt-compose-0.4.28-all.jar" && (cd "$d" && echo "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6  detekt-compose-0.4.28-all.jar.part" | shasum -a 256 -c -) && mv "$d/detekt-compose-0.4.28-all.jar.part" "$d/detekt-compose-0.4.28-all.jar" || { rm -f "$d/detekt-compose-0.4.28-all.jar.part"; echo "下載或雜湊比對失敗,沒有裝"; false; }
+   ```
+   ★`--build-upon-default-config` 不能少★:少了它外掛規則一條都不跑、也不報錯(2026-11-06 實測)。外掛 0.4.x 對 detekt 1.23.x,0.5 起對 detekt 2.x(https://mrmans0n.github.io/compose-rules/detekt/ ),本機 detekt 升版時兩個一起換。外掛檔不在時 detekt rc 1、不產結果,新增告警閘把這一條判環境不可用、自動放行並記帳,上一條照擋;`lumos lint-check` 與健檢會印 A3。外掛自帶設定預設關的三條(`UnstableCollections`、`PreviewNaming`、`Material2`)在 `compose.yml` 寫明照預設不開。
+   `{LINT_FILES_CSV}` 是給 detekt 用的逗號佔位符:新增告警閘把這次改到的 kt 檔用逗號串成一個值交給 `--input`(detekt 只收逗號分隔,用空白串的 `{LINT_FILES}` 兩支以上檔就拒跑),只擋這次新增的告警。別在它外面再包一對引號(換進去的值已經加過 shell 引號;`lumos lint-check` 會記成格式問題)。路徑含逗號或分號的檔 detekt 收不了:閘把它從這條命令拿掉、列進「沒檢查」並擋下,改檔名或照擋下訊息印的指令放行;檔多到命令換完超過 100,000 位元組時自動分批跑。`$HOME` 可用:lint 命令走 shell 執行。
+ - **②CI 型別檢查範本**(專案自己貼進它的 CI;lumos 不執行 Gradle、不改專案的檔):
+   1. 專案的 Gradle 套 detekt 外掛(版本跟本機 CLI 同一版,1.23.8),設定指共用設定:
+      ```kotlin
+      plugins { id("io.gitlab.arturbosch.detekt") version "1.23.8" }
+      detekt {
+          buildUponDefaultConfig = true
+          config.setFrom(files("<共用設定 android.yml 的路徑>"))   // CI 上要先 clone 工具鏈,或把這份複製進專案
+          baseline = file("config/detekt/baseline.xml")
+      }
+      ```
+   2. 第一次在本機跑 `./gradlew detektBaseline<變體>`(例 `detektBaselineDebug`)產基準線檔、提交(檔名以外掛實際寫出的為準)。要清舊帳時重產。
+   3. CI 加一步 `./gradlew detekt<變體>`(例 `detektDebug`;純 Kotlin 模組是 `detektMain`):有基準線以外的新告警就讓 CI 失敗。這一步才有型別資訊,InjectDispatcher、吞取消、`collectAsState` 這類規則在這裡擋。
+   - Compose 專案在 `dependencies` 加 `detektPlugins("io.nlopez.compose.rules:detekt:0.4.28")`,CI 這步也帶 compose-rules;外掛的設定照推送前那條指 `compose.yml`(`config.setFrom(files("<android.yml>", "<compose.yml>"))`)。
+   - 沒貼的專案,`lumos lint-check` 與健檢會印 T4「型別規則目前哪裡都沒擋」(只看 `.github/workflows/` 字面有沒有 `detekt<變體>`,不驗它真的跑)。
+ 
++- **這個樣板拿不到型別資訊**(2026-11-01 用 detekt 1.23.8 實測,[[Projects/Kotlin慣例對齊Android官方與本機detekt_計劃]]):只給 `--input` 時,detekt 那批「要型別資訊」的規則一條都不報、也不出錯——kotlin-idioms 點名的協程規則裡只剩 `GlobalCoroutineUsage` 會報;共用設定開的五條裡,除 `GlobalCoroutineUsage` 外四條(`SuspendFunSwallowedCancellation`、`SuspendFunWithCoroutineScopeReceiver`、`CouldBeSequence`、`ForbiddenMethodCall`)都在這批裡,照樣板跑只有 `GlobalCoroutineUsage` 有效。同一份樣本帶上 `--classpath`(協程與標準庫 jar)和 `--jdk-home` 之後,`ForbiddenMethodCall`、`InjectDispatcher`、`RedundantSuspendModifier`、`SuspendFunWithFlowReturnType`、`SleepInsteadOfDelay`、`CouldBeSequence` 都會報;`SuspendFunSwallowedCancellation` 只抓 `runCatching` 包 suspend 呼叫,`try/catch(Exception)` 吞取消帶齊型別資訊也不報。Android 專案的 classpath 要靠 Gradle 才組得出來,所以這些規則走上面第②段的 CI 型別檢查範本,不在推送前硬組 classpath(設計審兩輪實測:參數檔不存在、路徑含空白、flavor、CI 沒有建置產物,每一種都讓閘不是靜默放行就是恆擋)。
++  `lumos lint-check` 與健檢會照指令字面印出這些提醒(判定表見 [[Projects/Android的detekt規則說實話_計劃]]):沒有檔案佔位符的印 P1(只記錄不擋)、帶舊 `{LINT_FILES}` 的印 P2(改用 `{LINT_FILES_CSV}`)。
++- 自有設定要跟共用設定疊加:用逗號合成一個 `--config a.yml,b.yml`(分開寫兩次 `--config` 會拒跑);清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
++- 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛);冒煙只驗有沒有產出結果,不驗規則有沒有響。
++
+ ### Android Lint 與 Compose lint 標準接法(2026-11-06 立,[[Projects/Android現成檢查接上CI與推送前_計劃]])
+ 
+ Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模組(單機版 lint 對 Gradle 專案會報錯,https://developer.android.com/studio/write/lint ),推送前不跑;放在專案 CI 用基準線擋新增(官方也建議「把 lint 明確放進 CI」)。Slack compose-lints 掛在 Android Lint 上,同一步跑。lumos 不執行 Gradle、不改專案的檔,下面是給專案自己貼的範本。
+ 
+ 1. 模組層 `build.gradle.kts`:
+    ```kotlin
+    android {
+        lint {
+            baseline = file("lint-baseline.xml")
+            warningsAsErrors = true      // 不開時只有 error 級會讓建置失敗;型錄的 Android Lint 列多半是 warning 級
+@@ -171,25 +176,21 @@ Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模
+            sarifReport = true
+        }
+    }
+    dependencies {
+        lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>")
+    }
+    ```
+    Slack 外掛版本要對 AGP:lint 的版本號等於 AGP 版本加 23(lint 31.x 對 AGP 8.x、32.x 對 AGP 9.x)。AGP 9.3 以上用 `1.6.1`(發行說明 1.6.0 寫「requires AGP/lint 9.3+」);AGP 8.x 用 `1.4.2`(用 lint 31.7.1 建);更舊的照發行說明挑建置用 lint 版本不高於「AGP 加 23」的(https://github.com/slackhq/compose-lints/releases )。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
+ 2. 第一次在本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true`(例 `lintDebug`)產 `lint-baseline.xml`、提交。**先產基準線、提交,再做第 3 步**——反過來 `warningsAsErrors` 會讓舊專案一接就紅。要清舊帳時刪掉基準線檔重產。
+ 3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 lint):有基準線以外的新告警就讓 CI 失敗。
+-- 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡找不到 Android Lint 任務)、A2(用 Compose 但三套 Compose 規則一套都沒接);只看建置檔與 CI 設定檔字面,不驗 CI 真的跑。
+-- **這個樣板拿不到型別資訊**(2026-11-01 用 detekt 1.23.8 實測,[[Projects/Kotlin慣例對齊Android官方與本機detekt_計劃]]):只給 `--input` 時,detekt 那批「要型別資訊」的規則一條都不報、也不出錯——kotlin-idioms 點名的協程規則裡只剩 `GlobalCoroutineUsage` 會報;共用設定開的五條裡,除 `GlobalCoroutineUsage` 外四條(`SuspendFunSwallowedCancellation`、`SuspendFunWithCoroutineScopeReceiver`、`CouldBeSequence`、`ForbiddenMethodCall`)都在這批裡,照樣板跑只有 `GlobalCoroutineUsage` 有效。同一份樣本帶上 `--classpath`(協程與標準庫 jar)和 `--jdk-home` 之後,`ForbiddenMethodCall`、`InjectDispatcher`、`RedundantSuspendModifier`、`SuspendFunWithFlowReturnType`、`SleepInsteadOfDelay`、`CouldBeSequence` 都會報;`SuspendFunSwallowedCancellation` 只抓 `runCatching` 包 suspend 呼叫,`try/catch(Exception)` 吞取消帶齊型別資訊也不報。Android 專案的 classpath 要靠 Gradle 才組得出來,所以這些規則走上面第②段的 CI 型別檢查範本,不在推送前硬組 classpath(設計審兩輪實測:參數檔不存在、路徑含空白、flavor、CI 沒有建置產物,每一種都讓閘不是靜默放行就是恆擋)。
+-  `lumos lint-check` 與健檢會照指令字面印出這些提醒(判定表見 [[Projects/Android的detekt規則說實話_計劃]]):沒有檔案佔位符的印 P1(只記錄不擋)、帶舊 `{LINT_FILES}` 的印 P2(改用 `{LINT_FILES_CSV}`)。
+-- 自有設定要跟共用設定疊加:用逗號合成一個 `--config a.yml,b.yml`(分開寫兩次 `--config` 會拒跑);清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
+-- 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛);冒煙只驗有沒有產出結果,不驗規則有沒有響。
++- 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡找不到 Android Lint 任務字樣:`lint<變體>`,或 gradlew 那行的 `lint`、`check`、`build`;跟 T4 一樣只看字面找字,寫了 `-x lint` 也算有,寧可少印不誤報)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看建置檔與 CI 設定檔字面,不驗 CI 真的跑。
+ 
+ ### Kotlin 寫法規則包標準接法(2026-11-05 立,[[Projects/Android協程與API寫法機械檢查標準_計劃]])
+ 
+ 規則包本體、每條規則對應型錄哪一列、自我檢查怎麼跑,家在 [[Systems/kotlin規則包]];這裡只放宣告範本。
+ 
+ - **安裝**:`pipx install ast-grep-cli==0.51.1` 或 `brew install ast-grep`(要 0.51.1 以上;規則包用到的語法以 0.51.1 為準)。CI 要先裝同一版並 clone 工具鏈。沒裝時新增告警閘判環境不可用、照既有規則放行並記帳(看得到但不擋)。
+ - **`.lumos/lint.json` 樣板**(Kotlin 專案直接抄,跟 detekt 那條並列):
+   ```
+   {"kt": ["ast-grep scan --config $HOME/harness/lumos-toolchain/configs/ast-grep/kotlin-android/sgconfig.yml --format sarif {LINT_FILES} > {LINT_SARIF_OUT}"]}
+   ```
+diff --git a/scripts/lumos b/scripts/lumos
+index 73ba3c810..68efe575e 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4170,22 +4170,23 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+         # 合成一段、空清單提醒(不計問題、不改 --ci/--strict 退出碼),最多列 20 條
+         if _lf["declared"] and not _lf["parse_error"]:
+             _dadv = _lint_detekt_advisories(_lf.get("config"), _vault_repo_root(env))
+             if _dadv:
+                 _dshow = [*_dadv[:20], *([f"… 另 {len(_dadv) - 20} 條(lumos lint-check 看全部)"] if len(_dadv) > 20 else [])]
+                 warn([], "detekt 宣告實際會怎樣(只看指令字面判的):以為有在檢查的規則,其實沒在跑、或推送時沒在擋",
+                      "\n        ".join(["逐條:", *_dshow, "細節與能做什麼:看 kotlin-idioms 慣例文件的「型別資訊」一節"]))
+             # Android 現成檢查有沒有接上([[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3):另起一則,不混進 detekt 那則
+             _aadv = _lint_android_ci_advisories(_lf.get("config"), _vault_repo_root(env))
+             if _aadv:
++                _ashow = [*_aadv[:20], *([f"… 另 {len(_aadv) - 20} 條(lumos lint-check 看全部)"] if len(_aadv) > 20 else [])]
+                 warn([], "Android 現成檢查有沒有接上(只看建置檔與 CI 設定檔字面判的):型錄裡只靠 Android Lint 與 Compose 規則擋的列,沒接上就沒有機器在擋",
+-                     "\n        ".join(["逐條:", *_aadv, "細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉"]))
++                     "\n        ".join(["逐條:", *_ashow, "細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉"]))
+         # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
+         # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
+         _lnr = _vault_repo_root(env)
+         if _lnr is not None:
+             _kc = _lint_new_kind_counts(_lnr)
+             _auto = _kc.get("fail-open", 0)
+             _wv, _wverr = _lint_waivers_load(_lnr)
+             _bits = []
+             if _auto:
+                 _bits.append(f"最近 30 天自動放行 {_auto} 次(工具沒裝/逾時/拉不到規則都算)")
+@@ -38914,164 +38915,195 @@ def _detekt_gradle_codes(args):
+         if kind in ("plain", "typed", "unknown"):
+             is_detekt = True
+             codes |= {"plain": {"G1"}, "unknown": {"G2"}}.get(kind, set())
+     return is_detekt, codes
+ 
+ 
+ # 健檢只看字面的「CI 設定檔」:GitHub 的 workflow 加上其他常見 CI 的固定檔名([[Projects/Android現成檢查接上CI與推送前_計劃]] 〈用詞〉)
+ _CI_OTHER_CONFIG_FILES = (".gitlab-ci.yml", "bitrise.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml")
+ 
+ 
+-def _ci_config_texts(repo_root, github_only=False):
+-    """專案 CI 設定檔的文字清單:`.github/workflows/` 底下的 .yml/.yaml(依檔名排序),github_only=False 時再加
+-    `_CI_OTHER_CONFIG_FILES`。只讀不執行;讀不了的檔當沒有、非 UTF-8 位元組換成替代字元。T4 與 Android 那幾則提醒共用。"""
++def _ci_config_paths(repo_root, github_only=False):
++    """專案 CI 設定檔的路徑清單:`.github/workflows/` 底下的 .yml/.yaml(依檔名排序),github_only=False 時再加
++    `_CI_OTHER_CONFIG_FILES` 裡存在的一般檔。T4 與 Android 那幾則提醒共用。"""
+     root = Path(repo_root)
+     out = []
+     wf = root / ".github" / "workflows"
+     if wf.is_dir():
+-        for p in sorted(wf.iterdir()):
+-            if p.suffix.lower() not in (".yml", ".yaml") or not p.is_file():
+-                continue
+-            try:
+-                out.append(p.read_text(encoding="utf-8", errors="replace"))
+-            except OSError:
+-                continue
++        out.extend(p for p in sorted(wf.iterdir()) if p.suffix.lower() in (".yml", ".yaml") and p.is_file())
+     if not github_only:
+-        for rel in _CI_OTHER_CONFIG_FILES:
+-            p = root / rel
+-            if p.is_file():
+-                try:
+-                    out.append(p.read_text(encoding="utf-8", errors="replace"))
+-                except OSError:
+-                    continue
++        out.extend(root / rel for rel in _CI_OTHER_CONFIG_FILES if (root / rel).is_file())
++    return out
++
++
++def _ci_config_texts(repo_root, github_only=False):
++    """專案 CI 設定檔的原文清單(`_ci_config_paths`);只讀不執行,讀不了的檔當沒有、非 UTF-8 位元組換成替代字元。"""
++    out = []
++    for p in _ci_config_paths(repo_root, github_only):
++        try:
++            out.append(p.read_text(encoding="utf-8", errors="replace"))
++        except OSError:
++            continue
+     return out
+ 
+ 
+ def _detekt_ci_has_typed_task(repo_root):
+     """專案 .github/workflows/ 底下有沒有任何一支(.yml/.yaml)提到 detekt<變體> 的 Gradle 任務字樣(例 detektDebug、detektMain)。
+     只看字面、不執行;讀不了的檔當沒有。T4 用([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5)。"""
+     for text in _ci_config_texts(repo_root, github_only=True):
+         if any(_detekt_gradle_task_kind(w) == "typed" for w in re.findall(r"\bdetekt[A-Za-z0-9]*", text)):
+             return True
+     return False
+ 
+ 
+ # ── Android 現成檢查有沒有接上(A1 到 A3,只看字面)─────────────────────────────────────────────
+ # 單源 [[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3。跟 T4 一樣只讀檔、不執行、不改退出碼,但不放進 detekt 那支函式:
+ # T4 要求宣告裡有 detekt 命令,這幾則只要宣告有 kt 棧而且是 Android 專案。
+ _ANDROID_ADVICE_ORDER = ("A1", "A2", "A3")
+ _ANDROID_ADVICE_TEXT = {
+-    "A1": "專案是 Android,但 CI 設定檔(.github/workflows/、.gitlab-ci.yml 等)裡找不到 Android Lint 任務(lint<變體>、check、build):"
+-          "Android Lint 與 Slack compose-lints 在 CI 設定檔裡找不到;照 linter 目錄(Systems/linter精選目錄)的"
++    "A1": "專案是 Android,但 CI 設定檔(.github/workflows/、.gitlab-ci.yml 等)裡找不到 Android Lint 任務字樣(lint<變體>,或 gradlew 那行的 lint、check、build;"
++          "只看字面,任務藏在 shell 腳本裡也會印):Android Lint 與 Slack compose-lints 可能沒有在 CI 跑;照 linter 目錄(Systems/linter精選目錄)的"
+           "〈Android Lint 與 Compose lint 標準接法〉貼 CI 範本,先產基準線再加 CI 步驟",
+     "A2": "專案用 Compose,但建置檔沒有 Slack compose-lints(compose-lint-checks)或 compose-rules(io.nlopez.compose.rules),"
+           "宣告也沒有帶 detekt-compose 外掛的 detekt 命令:Compose 規則哪裡都沒接;範本同 A1",
+-    "A3": "宣告的 --plugins 外掛檔不在({name}):這條命令推送前會被新增告警閘判環境不可用、自動放行;"
++    "A3": "這條命令宣告的 --plugins 外掛檔不在:推送前會被新增告警閘判環境不可用、自動放行;"
+           "下載指令(釘 sha256)在 linter 目錄 detekt 標準接法的 compose-rules 那條",
+ }
+-_ANDROID_SCAN_SKIP_DIRS = frozenset(("build", ".gradle", "node_modules"))
+ _ANDROID_SCAN_NAMES = frozenset((*_KT_BUILD_FILES, "settings.gradle", "settings.gradle.kts"))
+ _ANDROID_COMPOSE = re.compile(r"compose[ \t]*=[ \t]*true|org\.jetbrains\.kotlin\.plugin\.compose|kotlin-compose|androidx\.compose")
+-_ANDROID_LINT_SKIP_VARIANT = ("Kotlin", "Fix", "Vital", "Analyze", "Report")
++# lint 開頭但不是「跑 Android Lint 檢查」的 Gradle 任務:kotlinter 的 ktlint 任務、lintFix 改檔、lintVital 只看 fatal、
++# lintAnalyze/lintReport 是中間步驟。前綴後面要接結尾或大寫(lintFixtureDebug 是 flavor 叫 Fixture 的 lint,照算)
++_ANDROID_LINT_NONCHECK = re.compile(r"lint(?:Kotlin|Fix|Vital|Analyze|Report)(?:[A-Z]\w*)?")
+ 
+ 
+ def _android_build_texts(repo_root, max_depth=3, max_files=200, max_bytes=1 << 20):
+-    """專案根目錄往下最多 max_depth 層的建置檔(`_KT_BUILD_FILES`、settings.gradle(.kts))與 gradle/libs.versions.toml 的文字。
+-    build/、.gradle/、node_modules/、隱藏資料夾不進,不跟符號連結進資料夾;依相對路徑排序後取前 max_files 支,每支讀前 max_bytes。"""
++    """專案根目錄往下最多 max_depth 層的建置檔(`_KT_BUILD_FILES`、settings.gradle(.kts))與 gradle/libs.versions.toml,
++    剝掉註解後的文字(同 `_kt_build_verdict`:註解裡提到的不算宣告)。資料夾照 `_stack_scan_skip` 跳過、另不進隱藏資料夾,
++    不跟符號連結進資料夾、不開一般檔以外的東西(具名管道會讓 open 卡住);依(層數、路徑)排序,根目錄的檔先讀,
++    取前 max_files 支、每支讀前 max_bytes。"""
+     import os as _os
+     root = Path(repo_root)
+     cands = []
+     for dirpath, dirnames, filenames in _os.walk(root, followlinks=False):
+         rel = Path(dirpath).relative_to(root)
+         depth = 0 if str(rel) == "." else len(rel.parts)
+         dirnames[:] = [] if depth >= max_depth else [
+-            d for d in dirnames if d not in _ANDROID_SCAN_SKIP_DIRS and not d.startswith(".")]
++            d for d in dirnames if not _stack_scan_skip(d) and not d.startswith(".")]
+         for fn in filenames:
+             rp = (rel / fn).as_posix() if depth else fn
+-            if fn in _ANDROID_SCAN_NAMES or rp == "gradle/libs.versions.toml":
+-                cands.append(rp)
++            if (fn in _ANDROID_SCAN_NAMES or rp == "gradle/libs.versions.toml") and _os.path.isfile(_os.path.join(dirpath, fn)):
++                cands.append((depth, rp))
+     out = []
+-    for rp in sorted(cands)[:max_files]:
++    for _d, rp in sorted(cands)[:max_files]:
+         try:
+             with open(root / rp, "rb") as fh:
+-                out.append(fh.read(max_bytes).decode("utf-8", errors="replace"))
++                txt = fh.read(max_bytes).decode("utf-8", errors="replace")
+         except OSError:
+             continue
++        out.append(_kt_strip_comments(txt, xml=rp.endswith("pom.xml")))
+     return out
+ 
+ 
+-def _android_ci_has_lint_task(texts):
+-    """CI 設定檔文字裡有沒有一行是 Gradle 呼叫(含 gradlew、`gradle `、`arguments:`)而且帶 Android Lint 任務詞:
+-    `lint`、`check`、`build`(可帶 `:模組:` 前綴),或 `lint` 接大寫開頭的變體名(`Kotlin`、`Fix`、`Vital`、`Analyze`、`Report` 開頭的不算)。"""
+-    for text in texts:
+-        for line in text.splitlines():
+-            if not re.search(r"gradlew|\bgradle[ \t]|\barguments:", line):
+-                continue
+-            for tok in re.split(r"[\s'\"`,;&|()\[\]{}=]+", line):
+-                name = tok.rsplit(":", 1)[-1]
+-                if name in ("lint", "check", "build"):
+-                    return True
+-                m = re.fullmatch(r"lint([A-Z]\w*)", name)
+-                if m and not m.group(1).startswith(_ANDROID_LINT_SKIP_VARIANT):
+-                    return True
++def _android_lint_task_kind(name):
++    """Gradle 任務名(可帶 `:模組:` 前綴)→ "lint"(跑 Android Lint 檢查)/"umbrella"(check、build,AGP 讓 check 帶 lint)/None。"""
++    name = name.rsplit(":", 1)[-1]
++    if name == "lint" or (re.fullmatch(r"lint[A-Z]\w*", name) and not _ANDROID_LINT_NONCHECK.fullmatch(name)):
++        return "lint"
++    if name in ("check", "build"):
++        return "umbrella"
++    return None
++
++
++def _android_ci_has_lint_task(lines_per_file):
++    """CI 設定檔裡找不找得到 Android Lint 任務字樣(只看字面,跟 T4 找 detekt<變體> 同一個形狀)。收的是 `_ci_workflow_texts`
++    去掉註解後的行(哪些算註解只有那一份),每支檔一串行;
++    整份檔任何地方出現 `lint<變體>`(`_ANDROID_LINT_NONCHECK` 那幾種不算)就算;`lint`、`check`、`build` 這三個常見字
++    只在提到 gradlew、gradle 或 `arguments:` 的行上才算。不解析命令:續行、多行區塊、矩陣變數因此都自然涵蓋;
++    寫了卻沒真的跑(`-x lint`、`echo`)會判成找得到——寧可少印提醒,不誤報(OpenSSF Scorecard 判 CI 有沒有跑靜態分析也只認
++    簡單字面證據、承認判不到不代表沒做;代碼審 r1 之後從逐條解析命令換成這個形狀)。"""
++    for lines in lines_per_file:
++        for ln in lines:
++            words = re.findall(r"[A-Za-z][\w:-]*", ln)
++            if any(re.fullmatch(r"(?:[\w-]*:)*lint[A-Z]\w*", w) and _android_lint_task_kind(w) == "lint" for w in words):
++                return True
++            if re.search(r"gradlew|\bgradle\b|\barguments:", ln) and any(
++                    _android_lint_task_kind(w) is not None for w in words if not w.endswith(":")):
++                return True
+     return False
+ 
+ 
+-def _android_plugin_paths(cmd):
+-    """一條 detekt 命令的 --plugins/-p 值(逗號分隔的多支,展開 $HOME 與 ~);切不開或不是 detekt 命令回空清單。"""
+-    import os as _os
+-    import shlex as _shlex
+-    if not isinstance(cmd, str) or "detekt" not in cmd:
+-        return []
+-    try:
+-        words = _shlex.split(cmd)
+-    except ValueError:
+-        return []
++def _detekt_plugin_values(cmd, depth=0):
++    """一條宣告命令裡 detekt 的 --plugins/-p 值(逗號分隔的多支拆開,字面原樣);沿用 detekt 判定的切段、剝包裝詞與
++    `sh -c` 展開(`_detekt_split_segments`、`_detekt_strip_prefix`、`_detekt_cli_args`),兩邊對同一條命令看到同樣的詞。"""
++    import posixpath as _pp
+     out = []
+-    for i, w in enumerate(words):
+-        val = None
+-        if w in ("--plugins", "-p") and i + 1 < len(words):
+-            val = words[i + 1]
+-        elif w.startswith("--plugins="):
+-            val = w.split("=", 1)[1]
+-        if val:
+-            for part in val.split(","):
+-                part = part.strip()
+-                if part:
+-                    out.append(_os.path.expanduser(part.replace("$HOME", str(Path.home())).replace("${HOME}", str(Path.home()))))
++    if not isinstance(cmd, str):
++        return out
++    for line in cmd.replace("\\\n", " ").split("\n"):
++        for seg in _detekt_split_segments(line) or []:
++            seg = _detekt_strip_prefix(seg)
++            if not seg:
++                continue
++            head = _pp.basename(seg[0])
++            if head in ("sh", "bash", "zsh"):
++                if depth == 0 and len(seg) >= 3 and seg[1] == "-c":
++                    out.extend(_detekt_plugin_values(seg[2], depth + 1))
++                continue
++            args = _detekt_cli_args(seg, head)
++            for i, a in enumerate(args or []):
++                val = args[i + 1] if a in ("--plugins", "-p") and i + 1 < len(args) else (
++                    a.split("=", 1)[1] if a.startswith("--plugins=") else None)
++                if val:
++                    out.extend(v.strip() for v in val.split(",") if v.strip())
+     return out
+ 
+ 
++def _android_plugin_missing(cmd, repo_root):
++    """這條命令宣告的外掛檔有沒有不在的:照 shell 的規則展開環境變數與 `~`(`os.path.expandvars`、`expanduser`),
++    相對路徑對 repo 根(新增告警閘以 repo 根當工作目錄跑命令);展開後還有 `$`(變數沒設)的判不了、不算。"""
++    import os as _os
++    for raw in _detekt_plugin_values(cmd):
++        pth = _os.path.expanduser(_os.path.expandvars(raw))
++        if "$" in pth:
++            continue
++        pp = Path(pth)
++        if not pp.is_absolute():
++            pp = Path(repo_root) / pp
++        if not pp.is_file():
++            return True
++    return False
++
++
+ def _lint_android_ci_advisories(config, repo_root):
+-    """整份 lint 宣告的 Android 現成檢查提醒(字串清單,每條「[CI] 代號:一句」)。宣告不是物件、沒有 kt 棧、
+-    repo_root 是 None、不是 Android 專案時回空清單。只看字面、不執行、不改退出碼。"""
++    """整份 lint 宣告的 Android 現成檢查提醒(字串清單)。A1、A2 看整個專案,寫成「[CI] 代號:一句」;A3 看單條命令,
++    寫成「[kt 第 N 條] A3:一句」(同 detekt 逐條提醒的標法,不回顯命令內容)。宣告不是物件、沒有 kt 棧、repo_root 是 None、
++    不是 Android 專案時回空清單。只看字面、不執行、不改退出碼;順序照 `_ANDROID_ADVICE_ORDER`。"""
+     if repo_root is None or not isinstance(config, dict):
+         return []
+     kt = config.get("kt")
+     if not isinstance(kt, list):
+         return []
+     builds = _android_build_texts(repo_root)
+     if not any(_KT_BUILD_ANDROID.search(b) for b in builds):
+         return []
+     cmds = [c for c in kt if isinstance(c, str)]
+-    out = []
+-    if not _android_ci_has_lint_task(_ci_config_texts(repo_root)):
+-        out.append(f"[CI] A1:{_ANDROID_ADVICE_TEXT['A1']}")
++    found = []
++    if not _android_ci_has_lint_task([ln for _p, ln in _ci_workflow_texts(_ci_config_paths(repo_root))]):
++        found.append(("A1", f"[CI] A1:{_ANDROID_ADVICE_TEXT['A1']}"))
+     if any(_ANDROID_COMPOSE.search(b) for b in builds) and not any(
+             "compose-lint-checks" in b or "io.nlopez.compose.rules" in b for b in builds) and not any(
+             "detekt-compose" in c for c in cmds):
+-        out.append(f"[CI] A2:{_ANDROID_ADVICE_TEXT['A2']}")
+-    for c in cmds:
+-        for pth in _android_plugin_paths(c):
+-            if not Path(pth).is_file():
+-                out.append("[CI] A3:" + _ANDROID_ADVICE_TEXT["A3"].format(name=Path(pth).name[:80]))
+-    return out
++        found.append(("A2", f"[CI] A2:{_ANDROID_ADVICE_TEXT['A2']}"))
++    for idx, c in enumerate(kt, 1):
++        if isinstance(c, str) and _android_plugin_missing(c, repo_root):
++            found.append(("A3", f"[kt 第 {idx} 條] A3:{_ANDROID_ADVICE_TEXT['A3']}"))
++    return [s for _c, s in sorted(found, key=lambda x: _ANDROID_ADVICE_ORDER.index(x[0]))]
+ 
+ 
+ def _lint_android_print(advisories):
+     """lint-check 人讀輸出的 Android 現成檢查提醒(三段式:發生什麼 → 為什麼在意 → 細節去哪看)。"""
+     if not advisories:
+         return
+     print("  提醒:Android 現成檢查有沒有接上(只看建置檔與 CI 設定檔字面判的,不影響這次結果):")
+     for a in advisories:
+         print(f"    • {a}")
+     print("  為什麼在意:型錄裡約一百列錯誤寫法只靠 Android Lint 與 Compose 規則擋,沒接上就沒有任何機器在擋。")
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index eddcfc1ab..5c4a931e7 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126251,38 +126251,131 @@ def t_lint_android_ci_advice():
+     check("S1 T4:沒有 workflow → 沒有 detekt<變體>", m._detekt_ci_has_typed_task(root) is False)
+     wf(root, ".github/workflows/a.yaml", "steps:\n  - run: ./gradlew detektBaselineDebug\n")
+     check("S1 T4:只有 detektBaseline<變體> → 還是沒有", m._detekt_ci_has_typed_task(root) is False)
+     wf(root, ".github/workflows/b.yml", "steps:\n  - run: ./gradlew :app:detektProdDebug\n")
+     check("S1 T4:有 detekt<變體> → 有", m._detekt_ci_has_typed_task(root) is True)
+     wf(root, ".gitlab-ci.yml", "x:\n  script: ./gradlew detektDebug\n")
+     root2 = fresh()
+     wf(root2, ".gitlab-ci.yml", "x:\n  script: ./gradlew detektDebug\n")
+     check("S1 T4:檔案範圍照舊只看 .github/workflows/", m._detekt_ci_has_typed_task(root2) is False)
+ 
++    # ── 代碼審 r1 折入:A1 的字面判法(續行、註解、-x 排除、echo 夾帶、選項值、變體名撞前綴、YAML 區塊、矩陣變數)──
++    def has(texts):
++        """照 lumos 的讀法:每支檔的文字經既有的去註解(整行註解拿掉、行尾註解切掉)再判。"""
++        return m._android_ci_has_lint_task([[m._ci_strip_comment(ln) for ln in tx.split("\n") if not ln.lstrip().startswith("#")]
++                                            for tx in texts])
++    for txt in ("run: |\n  ./gradlew assembleDebug \\\n    lintDebug\n",
++                "run: |\n  ./gradlew \\\n    --no-daemon \\\n    :app:lintDebug\n",
++                "- uses: gradle/actions/setup-gradle@v4\n  with:\n    arguments: |\n      assembleDebug\n      lintDebug\n",
++                "sh './gradlew lintDebug'\n", "./gradlew lintFixtureDebug\n", "./gradlew lintReportingDebug\n",
++                "strategy:\n  matrix:\n    task: [lintDebug, test]\nsteps:\n  - run: ./gradlew ${{ matrix.task }}\n",
++                "- run: ./gradlew test && ./gradlew lintDebug\n"):
++        check(f"r1 折入 A1 認得已接:{txt.strip().splitlines()[-1][:40]!r}", has([txt]) is True, txt)
++    for txt in ("# ./gradlew lintDebug\n", "- run: ./gradlew detekt  # TODO add lint check later\n",
++                "sh ci/run.sh   # runs gradlew lintDebug\n", "detekt check\n", "./gradlew lintKotlin\n",
++                "./gradlew lintFixDebug\n", "- name: build\n  run: ./gradlew assembleDebug\n", "echo lint\n"):
++        check(f"r1 折入 A1 找不到 lint 任務字樣:{txt.strip()[:40]!r}", has([txt]) is False, txt)
++    # 已知天花板(寧可少印、不誤報,換形狀後刻意接受):寫了 lint 字樣卻沒真的跑,判成找得到
++    for txt in ("./gradlew build -x lint\n", "echo gradlew build later\n"):
++        check(f"天花板 A1 只看字面、寫了就算:{txt.strip()!r}", has([txt]) is True, txt)
++    # ── 代碼審 r1 折入:建置檔掃描沿用既有跳過名單與剝註解、不開非一般檔、根目錄優先 ──
++    import os as _os
++    root = fresh(build=None)
++    wf(root, "Pods/x/build.gradle.kts", 'plugins { id("com.android.application") }\n')
++    wf(root, "vendor/build.gradle.kts", 'plugins { id("com.android.application") }\n')
++    check("r1 折入 沿用 _stack_scan_skip:Pods/、vendor/ 底下不算", codes(root)[1] == set(), str(codes(root)[2]))
++    root = fresh(build='// plugins { id("com.android.application") }\nplugins { kotlin("jvm") }\n')
++    check("r1 折入 註解裡的 com.android. 不算 Android", codes(root)[1] == set(), str(codes(root)[2]))
++    root = fresh(build='plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n'
++                       '// TODO add compose-lint-checks\n')
++    check("r1 折入 註解裡的 compose-lint-checks 不算接上 → 印 A2", "A2" in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=None)
++    _os.mkfifo(root / "build.gradle")
++    wf(root, "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
++    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root), "--json"], cwd=str(root),
++               capture_output=True, text=True, timeout=30)
++    check("r1 折入 建置檔是具名管道時不卡住、照判其他檔", r.returncode == 0 and " A1:" in r.stdout, r.stdout[-300:])
++    root = fresh(build='dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:1.6.1") }\n')
++    wf(root, "a000/build.gradle.kts", 'plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n')
++    for i in range(1, 205):
++        wf(root, f"a{i:03d}/build.gradle.kts", 'plugins { id("com.android.library") }\n')
++    check("r1 折入 超過 200 支時根目錄的建置檔優先讀(不被子模組擠掉)", "A2" not in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=None)
++    wf(root, ".hidden/build.gradle.kts", 'plugins { id("com.android.application") }\n')
++    check("r1 折入 隱藏資料夾不進", codes(root)[1] == set(), str(codes(root)[2]))
++    real = Path(tempfile.mkdtemp(prefix="gctl-andci-real-"))
++    (real / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
++    root = fresh(build=None)
++    _os.symlink(real, root / "linked")
++    check("r1 折入 不跟符號連結進資料夾", codes(root)[1] == set(), str(codes(root)[2]))
++    root = fresh(build=None)
++    wf(root, "gradle/libs.versions.toml", 'android-application = { id = "com.android.application" }\n')
++    check("r1 折入 只有 gradle/libs.versions.toml 寫外掛也認得", "A1" in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=None)
++    wf(root, "settings.gradle.kts", 'plugins { id("com.android.settings") }\n')
++    check("r1 折入 settings.gradle.kts 也掃", "A1" in codes(root)[1], str(codes(root)[2]))
++    root = fresh(build=('// x\n' * 10) + "x" * (1 << 20) + '\nplugins { id("com.android.application") }\n')
++    check("r1 折入 每支只讀前 1 MB(超過的部分不算)", codes(root)[1] == set(), str(codes(root)[2]))
++    for name in ("bitrise.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml"):
++        root = fresh()
++        wf(root, name, "x:\n  - ./gradlew lintDebug\n")
++        check(f"r1 折入 {name} 也算 CI 設定檔", "A1" not in codes(root)[1], str(codes(root)[2]))
+     # ── S2:A2 與 A3 ──
+     comp = 'plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n'
+     root = fresh(build=comp)
+     check("S2 用 Compose、沒有任何 Compose 規則 → 印 A2", "A2" in codes(root)[1], str(codes(root)[2]))
+     root = fresh(build=comp + 'dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:1.6.1") }\n')
+     check("S2 建置檔有 compose-lint-checks → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+     root = fresh(build=comp + 'dependencies { detektPlugins("io.nlopez.compose.rules:detekt:0.4.28") }\n')
+     check("S2 建置檔有 io.nlopez.compose.rules → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+     for ver in ("0.4.28", "0.5.0"):
+         jar = Path(tempfile.mkdtemp(prefix="gctl-andci-jar-")) / f"detekt-compose-{ver}-all.jar"
+         jar.write_bytes(b"x")
+         root = fresh(build=comp, cmds=[det, f"detekt --input {{LINT_FILES_CSV}} --disable-default-rulesets --plugins {jar} "
+                                             "--build-upon-default-config --config c.yml --report sarif:{LINT_SARIF_OUT}"])
+         _rc, cs, adv = codes(root)
+         check(f"S2 宣告帶 detekt-compose-{ver}-all.jar(檔在)→ 不印 A2、A3", not ({"A2", "A3"} & cs), str(adv))
+         jar.unlink()
+         _rc, cs, adv = codes(root)
+         check(f"S2 同一條({ver})、外掛檔不在 → 印 A3", "A3" in cs, str(adv))
++        check(f"r1 折入 A3 標成第幾條、不印命令裡的檔名({ver})",
++              any(a.startswith("[kt 第 2 條] A3:") for a in adv) and not any(jar.name in a for a in adv), str(adv))
++    # ── 代碼審 r1 折入:A3 沿用 detekt 切命令、照 shell 展開環境變數、相對路徑對 repo 根、判不了不印、同一條只印一次 ──
++    home = Path(tempfile.mkdtemp(prefix="gctl-andci-home-"))
++    (home / "p").mkdir()
++    (home / "p" / "c.jar").write_bytes(b"x")
++
++    def a3(cmd, env_extra=None, cwd=None, files=()):
++        import json as _jj
++        import os as _o
++        root = fresh(build=comp, cmds=[det, cmd])
++        for f in files:
++            (root / f).parent.mkdir(parents=True, exist_ok=True)
++            (root / f).write_bytes(b"x")
++        env = {**_o.environ, "HOME": str(home), **(env_extra or {})}
++        r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root), "--json"], cwd=cwd or str(root),
++                   capture_output=True, text=True, timeout=60, env=env)
++        adv = _jj.loads(r.stdout).get("advisories", [])
++        return [a for a in adv if " A3:" in a]
++    tail = " --build-upon-default-config --config c.yml --report sarif:{LINT_SARIF_OUT}"
++    base = "detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins "
++    check("r1 折入 A3:$HOME 照 shell 展開,檔在 → 不印", a3(base + "$HOME/p/c.jar" + tail) == [], "")
++    check("r1 折入 A3:${HOME} 與 ~ 也展開", a3(base + "${HOME}/p/c.jar" + tail) == [] and a3(base + "~/p/c.jar" + tail) == [], "")
++    check("r1 折入 A3:其他環境變數照 shell 展開", a3(base + "$LUMOS_T_PLUG/c.jar" + tail, {"LUMOS_T_PLUG": str(home / "p")}) == [], "")
++    check("r1 折入 A3:沒設的環境變數判不了 → 不印", a3(base + "$LUMOS_T_UNSET_X/c.jar" + tail) == [], "")
++    check("r1 折入 A3:相對路徑對 repo 根解析(從別的目錄跑也一樣)",
++          a3(base + "tools/p.jar" + tail, cwd="/", files=["tools/p.jar"]) == [], "")
++    check("r1 折入 A3:sh -c 包住也看得到", len(a3("sh -c '" + base + "$HOME/nope.jar" + tail + "'")) == 1, "")
++    check("r1 折入 A3:一條命令裡兩支都不在 → 只印一則",
++          len(a3(base + "$HOME/n1.jar,$HOME/n2.jar" + tail)) == 1, "")
++    check("r1 折入 A3:--plugins= 等號寫法與 -p 也認", len(a3(base.replace("--plugins ", "--plugins=") + "$HOME/n.jar" + tail)) == 1
++          and len(a3(base.replace("--plugins ", "-p ") + "$HOME/n.jar" + tail)) == 1, "")
+     root = fresh(build='plugins { id("com.android.application") }\n')
+     check("S2 不用 Compose → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+     root = fresh()
+     wf(root, "app/build/intermediates/build.gradle.kts", comp)
+     check("S2 build/ 底下的建置檔不算 → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+     root = fresh(build=None)
+     for i in range(200):
+         wf(root, f"m{i:03d}/build.gradle.kts", 'plugins { id("com.android.library") }\n')
+     wf(root, "z999/build.gradle.kts", comp)
+     check("S2 第 201 支(依路徑排序)以後才有 Compose 字樣 → 不算", "A2" not in codes(root)[1], str(codes(root)[2]))
+@@ -126313,34 +126406,20 @@ def _detekt_compose_jar():
+     import os as _os
+     p = _os.environ.get("LUMOS_DETEKT_COMPOSE_JAR") or str(
+         Path.home() / ".local" / "share" / "lumos" / "detekt-plugins" / "detekt-compose-0.4.28-all.jar")
+     if Path(p).is_file():
+         return p
+     if _os.environ.get("CI"):
+         check("CI 上一定要有 compose-rules 外掛(ci.yml 下載釘版本,路徑放 LUMOS_DETEKT_COMPOSE_JAR)", False, p)
+     return None
+ 
+ 
+-def _sarif_rule_lines(path):
+-    import json as _j
+-    try:
+-        d = _j.loads(Path(path).read_text(encoding="utf-8"))
+-    except (OSError, ValueError):
+-        return None
+-    out = []
+-    for run_ in d.get("runs", []):
+-        for r in run_.get("results", []):
+-            loc = (r.get("locations") or [{}])[0].get("physicalLocation", {}).get("region", {})
+-            out.append((r.get("ruleId", ""), loc.get("startLine")))
+-    return out
+-
+-
+ def t_detekt_compose_rules_shared_config():
+     """[[Projects/Android現成檢查接上CI與推送前_計劃]] S3:共用設定照 detekt 官方 Compose 頁的六項,標準 Compose 寫法不再被內建規則誤報、
+     一般函式照報;compose-rules 那條(linter 目錄範本的寫法)只報外掛規則;外掛不在時不產 SARIF。本機沒 detekt 或外掛跳過,CI 必跑。"""
+     import subprocess as sp
+     det = _detekt_real_bin()
+     if not det:
+         print("    (本機沒有 detekt 1.23.8,略過)")
+         print("  ✓ t_detekt_compose_rules_shared_config")
+         return
+     base = Path(__file__).resolve().parent.parent
+@@ -126348,149 +126427,134 @@ def t_detekt_compose_rules_shared_config():
+     ccfg = base / "configs" / "detekt" / "compose.yml"
+     td = Path(tempfile.mkdtemp(prefix="gctl-dtcompose-"))
+     src = td / "Ui.kt"
+     src.write_text(
+         "package demo\n\n"
+         "import androidx.compose.runtime.Composable\n"
+         "import androidx.compose.runtime.mutableStateOf\n"
+         "import androidx.compose.ui.graphics.Color\n"
+         "import androidx.compose.ui.tooling.preview.Preview\n\n"
+         "private const val BrandAlpha = 1\n"
++        "const val MAX_ITEMS = 5\n"
+         "val Brand = Color(0xFFEA6D7E)\n\n"
+         "@Composable\n"
+         "fun Header(a: Int = 1, b: Int = 2, c: Int = 3, d: Int = 4, e: Int = 5, f: Int = 6, g: Int = 7) {\n"
+         "    println(a + b + c + d + e + f + g + BrandAlpha)\n"
+         "}\n\n"
+         "@Preview\n"
+         "@Composable\n"
+         "private fun HeaderPreview() {\n"
+         "    Header()\n"
+         "}\n\n"
+         "@Composable\n"
+         "fun Counter() {\n"
+         "    val s = mutableStateOf(0)\n"
+         "    println(s.value)\n"
+         "}\n\n"
+         "fun Other() = Unit\n",
+         encoding="utf-8")
+-    out = td / "a.sarif"
+-    sp.run([det, "--input", str(src), "--build-upon-default-config", "--config", str(cfg),
+-            "--report", f"sarif:{out}"], capture_output=True, text=True, timeout=300)
+-    res = _sarif_rule_lines(out)
+-    check("★前置★ 共用設定那條真的產出 SARIF", res is not None, str(res))
+-    res = res or []
+-    rules = {r.split(".")[-1] for r, _ln in res}
+-    for bad in ("LongParameterList", "UnusedPrivateMember", "TopLevelPropertyNaming", "MagicNumber"):
+-        check(f"S3 標準 Compose 寫法不報 {bad}", bad not in rules, str(res))
+-    fn_lines = sorted(ln for r, ln in res if r.endswith("FunctionNaming"))
+-    lines = src.read_text(encoding="utf-8").splitlines()
+-    other_ln = lines.index("fun Other() = Unit") + 1
+-    state_ln = lines.index("    val s = mutableStateOf(0)") + 1
+-    check("S3 FunctionNaming 只報一般函式 fun Other(),不報 @Composable", fn_lines == [other_ln], f"{other_ln} {res}")
+-    # 範本那行必須帶 --build-upon-default-config 與 --disable-default-rulesets(少了前者外掛規則全部不跑、也不報錯,2026-11-06 實測)
++    # ★走閘真正用的那條路★(代碼審 r1 架構席):照 linter 目錄範本那兩行原文,換掉執行檔、工具鏈路徑與檔名佔位,
++    # 交給新增告警閘的 _lint_run_and_parse 跑——驗的是「照範本接,閘看到什麼」,不是另寫一套 SARIF 解析
++    import shlex as _shlex
++    m = _lng_module()
+     doc = (base / "docs" / "lumos-toolchain-knowledge" / "Systems" / "linter精選目錄.md").read_text(encoding="utf-8")
+-    tline = [ln for ln in doc.splitlines() if "detekt-compose-0.4.28-all.jar" in ln and "--plugins" in ln]
+-    check("S3 linter 目錄有 compose-rules 那條範本", bool(tline), "")
++    tline = [ln.strip() for ln in doc.splitlines() if ln.strip().startswith("detekt --input {LINT_FILES_CSV}")]
++    main_t = [ln for ln in tline if "--disable-default-rulesets" not in ln]
++    comp_t = [ln for ln in tline if "detekt-compose-0.4.28-all.jar" in ln]
++    check("S3 linter 目錄有 detekt 推送前範本那一行", len(main_t) == 1, str(tline))
++    check("S3 linter 目錄有 compose-rules 那條範本", len(comp_t) == 1, str(tline))
+     check("S3 範本那條帶 --disable-default-rulesets 與 --build-upon-default-config",
+           all("--disable-default-rulesets" in ln and "--build-upon-default-config" in ln and "configs/detekt/compose.yml" in ln
+-              for ln in tline), str(tline))
++              for ln in comp_t) and bool(comp_t), str(comp_t))
++
++    def ready(tpl, jar=None):
++        c = tpl.replace("$HOME/harness/lumos-toolchain", str(base)).replace("{LINT_FILES_CSV}", _shlex.quote(str(src)))
++        if jar is not None:
++            c = c.replace("$HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar", _shlex.quote(jar))
++        return _shlex.quote(det) + c[len("detekt"):]
++    lines = src.read_text(encoding="utf-8").splitlines()
++    other_ln = lines.index("fun Other() = Unit") + 1
++    state_ln = lines.index("    val s = mutableStateOf(0)") + 1
++    snake_ln = lines.index("const val MAX_ITEMS = 5") + 1
++    claims, ok = m._lint_run_and_parse(ready(main_t[0]), td) if main_t else ([], False)
++    check("★前置★ 共用設定那條經閘真的跑出結果", ok is True, str(claims)[:300])
++    rules = {c["rule"].split(".")[-1] for c in claims}
++    for bad in ("LongParameterList", "UnusedPrivateMember", "TopLevelPropertyNaming", "MagicNumber"):
++        check(f"S3 標準 Compose 寫法不報 {bad}", bad not in rules, str([(c['rule'], c['line']) for c in claims]))
++    fn_lines = sorted(c["line"] for c in claims if c["rule"].endswith("FunctionNaming"))
++    check("S3 FunctionNaming 只報一般函式 fun Other(),不報 @Composable", fn_lines == [other_ln], f"{other_ln} {fn_lines}")
++    check("r1 折入 全大寫加底線的頂層常數(Kotlin 慣例)照舊不報",
++          not any(c["line"] == snake_ln for c in claims), str([(c['rule'], c['line']) for c in claims]))
+     jar = _detekt_compose_jar()
+     if not jar:
+         print("    (本機沒有 compose-rules 0.4.28 外掛,外掛那半略過)")
+         print("  ✓ t_detekt_compose_rules_shared_config")
+         return
+-    out2 = td / "b.sarif"
+-    sp.run([det, "--input", str(src), "--disable-default-rulesets", "--plugins", jar, "--build-upon-default-config",
+-            "--config", str(ccfg), "--report", f"sarif:{out2}"], capture_output=True, text=True, timeout=300)
+-    res2 = _sarif_rule_lines(out2)
+-    check("★前置★ 外掛那條真的產出 SARIF", res2 is not None, str(res2))
+-    res2 = res2 or []
+-    check("S3 外掛那條報 RememberMissing(在 mutableStateOf 那一行)", ("detekt.Compose.RememberMissing", state_ln) in res2, str(res2))
+-    check("S3 外掛那條不報任何 detekt 內建規則", all(r.startswith("detekt.Compose.") for r, _ln in res2), str(res2))
+-    out3 = td / "c.sarif"
+-    sp.run([det, "--input", str(src), "--disable-default-rulesets", "--plugins", str(td / "nope-all.jar"),
+-            "--build-upon-default-config", "--config", str(ccfg), "--report", f"sarif:{out3}"],
+-           capture_output=True, text=True, timeout=300)
+-    check("S3 外掛路徑不存在時不產 SARIF(新增告警閘會判環境不可用)", not out3.exists(), "")
++    claims2, ok2 = m._lint_run_and_parse(ready(comp_t[0], jar), td) if comp_t else ([], False)
++    check("★前置★ 外掛那條經閘真的跑出結果", ok2 is True, str(claims2)[:300])
++    check("S3 外掛那條報 RememberMissing(在 mutableStateOf 那一行)",
++          any(c["rule"].endswith("RememberMissing") and c["line"] == state_ln for c in claims2), str(claims2)[:400])
++    check("S3 外掛那條不報任何 detekt 內建規則", all(".Compose." in c["rule"] for c in claims2), str(claims2)[:400])
++    _c3, ok3 = m._lint_run_and_parse(ready(comp_t[0], str(td / "nope-all.jar")), td) if comp_t else ([], True)
++    check("S3 外掛路徑不存在時閘判成沒跑出結果(走環境不可用)", ok3 is False, "")
+     print("  ✓ t_detekt_compose_rules_shared_config")
+ 
+ 
+ 
+-# 型錄第四批通電批次的判定口徑([[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 4;口徑原文寫在型錄〈輸入與口徑〉)。
+-# 預設關的規則照官方規則頁列舉:Slack compose-lints 的兩條穩定性檢查與 M2 API(https://slackhq.github.io/compose-lints/rules/ ;
+-# ComposeRememberMissing 已移除),compose-rules 外掛自帶設定 active: false 的三條。
+-_KT_B4_DEFAULT_OFF = frozenset((
+-    "ComposeUnstableReceiver", "ComposeUnstableCollections", "ComposeM2Api", "ComposeRememberMissing",
+-    "unstable-collections", "UnstableCollections", "preview-naming", "PreviewNaming", "material-two", "Material2"))
+-_KT_B4_LINT = r"(?:androidx(?:\.[\w.]+)?|內建|slack):\s*([A-Z][A-Za-z0-9]+)"
+-_KT_B4_CR = r"cr:compose:([\w-]+)"
+-_KT_B4_SKIP = ("待查", "預設關", "相近", "opt-in")
+-_KT_B4_TAG_LINT = "CI 範本:Android Lint"
+-_KT_B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
+-
+-
+-def _kt_b4_expected_tags(rule_col):
+-    """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。"""
+-    import re as _re
+-    lint = cr = False
+-    for seg in _re.split(r"[;；、]", rule_col):
+-        if any(w in seg for w in _KT_B4_SKIP):
+-            continue
+-        for code in _re.findall(_KT_B4_LINT, seg):
+-            if code not in _KT_B4_DEFAULT_OFF:
+-                lint = True
+-        for code in _re.findall(_KT_B4_CR, seg):
+-            if code not in _KT_B4_DEFAULT_OFF:
+-                cr = True
+-    return [t for t, on in ((_KT_B4_TAG_LINT, lint), (_KT_B4_TAG_CR, cr)) if on]
++def _kt_pack_check_module():
++    """載入型錄與規則包自檢程式 configs/ast-grep/kotlin-android/check.py(型錄口徑的唯一住處)。"""
++    import importlib.util as _u
++    path = Path(__file__).resolve().parent.parent / "configs" / "ast-grep" / "kotlin-android" / "check.py"
++    spec = _u.spec_from_file_location("kt_pack_check", path)
++    mod = _u.module_from_spec(spec)
++    spec.loader.exec_module(mod)
++    return mod
+ 
+ 
+ def t_kt_catalog_batch4_wiring():
+-    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:照範圍 4 的口徑重算型錄每一列,通電批次寫的第四批標籤要一字不差;
+-    預設關、opt-in、待查的規則不准被標成已接電。"""
+-    import re as _re
+-    check("★前置★ slack 規則碼 → Android Lint 標籤", _kt_b4_expected_tags("slack:ComposeItemKeyHashCode") == [_KT_B4_TAG_LINT])
+-    check("★前置★ 內建規則碼 → Android Lint 標籤", _kt_b4_expected_tags("內建:TrustAllX509TrustManager") == [_KT_B4_TAG_LINT])
+-    check("★前置★ androidx.套件:規則碼 → Android Lint 標籤",
+-          _kt_b4_expected_tags("androidx.lifecycle:NullSafeMutableLiveData") == [_KT_B4_TAG_LINT])
+-    check("★前置★ opt-in 的 compose-rules → 不標",
+-          _kt_b4_expected_tags("cr:compose:unstable-collections / UnstableCollections(opt-in)") == [])
+-    check("★前置★ Slack 預設關的穩定性檢查 → 不標", _kt_b4_expected_tags("slack:ComposeUnstableCollections") == [])
+-    check("★前置★ 預設關 → 不標", _kt_b4_expected_tags("內建:WrongThreadInterprocedural(預設關)") == [])
+-    check("★前置★ 待查 → 不標", _kt_b4_expected_tags("androidx UnnecessaryLambdaCreation 待查") == [])
++    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;
++    預設關、opt-in、待查的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
++    ck = _kt_pack_check_module()
++    lint, cr = ck.B4_TAG_LINT, ck.B4_TAG_CR
++    tags = ck.batch4_expected_tags
++    check("★前置★ slack 規則碼 → Android Lint 標籤", tags("slack:ComposeItemKeyHashCode") == [lint])
++    check("★前置★ 內建規則碼 → Android Lint 標籤", tags("內建:TrustAllX509TrustManager") == [lint])
++    check("r1 折入 Android Lint:規則碼 → Android Lint 標籤", tags("Android Lint:CommitPrefEdits") == [lint])
++    check("★前置★ androidx.套件:規則碼 → Android Lint 標籤", tags("androidx.lifecycle:NullSafeMutableLiveData") == [lint])
++    check("★前置★ opt-in 的 compose-rules → 不標", tags("cr:compose:unstable-collections / UnstableCollections(opt-in)") == [])
++    check("★前置★ Slack 預設關的穩定性檢查 → 不標", tags("slack:ComposeUnstableCollections") == [])
++    check("★前置★ 預設關 → 不標", tags("內建:WrongThreadInterprocedural(預設關)") == [])
++    check("★前置★ 待查 → 不標", tags("androidx UnnecessaryLambdaCreation 待查") == [])
+     check("★前置★ 兩家都有 → 兩個標籤",
+-          _kt_b4_expected_tags("cr:compose:mutable-params-check / MutableParams;slack:ComposeMutableParameters")
+-          == [_KT_B4_TAG_LINT, _KT_B4_TAG_CR])
+-    cat = Path(__file__).resolve().parent.parent / "skills" / "kotlin-idioms" / "checks-catalog.md"
+-    text = cat.read_text(encoding="utf-8")
+-    main_part = text.split("## 情境決策表")[0]
+-    rows = [ln.split("|") for ln in main_part.splitlines()
+-            if _re.match(r"\| (API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+ ", ln)]
+-    check("★前置★ 讀到型錄主表的列", len(rows) > 400, str(len(rows)))
+-    bad, n_tag = [], 0
+-    for r in rows:
+-        rid, rule_col, batch = r[1].strip(), r[6], r[10]
+-        want = _kt_b4_expected_tags(rule_col)
+-        have = [t for t in (_KT_B4_TAG_LINT, _KT_B4_TAG_CR) if t in batch]
+-        if "批四" not in batch and not have:
+-            continue          # 不是第四批的列(批一等)不在這次口徑裡
+-        if want:
+-            n_tag += 1
+-            exp = "批四(" + ";".join(want) + ")"
+-            if exp not in batch or "批四(現成規則)" in batch:
+-                bad.append(f"{rid}:要 {exp},寫的是 {batch.strip()[:60]}")
+-        elif have:
+-            bad.append(f"{rid}:口徑判成不該標,卻寫了 {have}")
+-    check("S4 每一列的第四批標籤跟口徑重算一致", bad == [], "\n".join(bad[:15]))
+-    check("S4 有列被標成接電(口徑不是空轉)", n_tag > 50, str(n_tag))
+-    check("S4 型錄〈輸入與口徑〉寫了這兩個標籤", _KT_B4_TAG_LINT in text.split("## 來源縮寫")[0]
+-          and _KT_B4_TAG_CR in text.split("## 來源縮寫")[0], "")
++          tags("cr:compose:mutable-params-check / MutableParams;slack:ComposeMutableParameters") == [lint, cr])
++    probs = [p for p in ck.catalog_problems(ck.load_rules()) if "第四批" in p[1]]
++    check("S4 每一列的第四批標籤跟口徑重算一致", probs == [], "\n".join(f"{a}:{b}" for a, b in probs[:15]))
++    cat = ck.CATALOG.read_text(encoding="utf-8")
++    check("S4 型錄〈輸入與口徑〉寫了這兩個標籤", lint in cat.split("## 來源縮寫")[0] and cr in cat.split("## 來源縮寫")[0], "")
++    # ★前置★ 自檢真的抓得到:改壞一列的標籤、把不該標的列標上,各要報
++    import re as _re
++    tmp = Path(tempfile.mkdtemp(prefix="gctl-b4cat-")) / "checks-catalog.md"
++    rows = cat.splitlines(keepends=True)
++    i_tag = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"批四({lint})" in ln)
++    i_old = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and "批四(現成規則)" in ln)
++    for name, idx, a, b in (("標籤改回舊值", i_tag, f"批四({lint})", "批四(現成規則)"),
++                            ("不該標的列標成接電", i_old, "批四(現成規則)", f"批四({lint})")):
++        mut = rows[:]
++        mut[idx] = mut[idx].replace(a, b, 1)
++        tmp.write_text("".join(mut), encoding="utf-8")
++        saved = ck.CATALOG
++        ck.CATALOG = tmp
++        try:
++            got = [p for p in ck.catalog_problems(ck.load_rules()) if "第四批" in p[1]]
++        finally:
++            ck.CATALOG = saved
++        check(f"★前置★ 自檢抓得到:{name}", len(got) >= 1, str(got[:3]))
+     print("  ✓ t_kt_catalog_batch4_wiring")
+ 
+ 
+ def _detekt_real_bin():
+     """找真的 detekt 1.23.8;CI 一定要有(計劃範圍 6:CI 下載釘版本),本機沒有或版本不對回 None。"""
+     import os as _os
+     import shutil as _sh
+     import subprocess as sp
+     det = _os.environ.get("LUMOS_DETEKT") or _sh.which("detekt")
+     ver = ""
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 83eb9439a..d7c353f37 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1,21 +1,21 @@
+ # Android/Kotlin 常見錯誤寫法總清單(合併去重版)
+ 
+ 整理日:2026-11-05。只做整理,沒有上網重查。
+ 
+ ## 輸入與口徑
+ 
+ - 輸入:五份研究清單(協程與 Flow、架構與生命週期、Compose、資料層、測試與效能),既有計劃 `Projects/Android協程與API寫法機械檢查標準_計劃` 的 35 條(API-1~13、FLOW-1~7、STATE-1~6、CO-1~6、UI-1~3,編號照舊),以及2026-11-05 實驗時補的 14 條規則(已併入規則包 `configs/ast-grep/kotlin-android/`)。
+ - 去重:同一個錯誤(後果與壞寫法本質相同)只留一列;合併列保留所有來源與所有規則代號。被併進的原始列寫在「來源」欄的〔併:…〕裡,代號對照:`研C一3` = 協程研究第一節第 3 列;`研A12` = 架構研究第 12 列;`研M一4` = Compose 研究第一節第 4 列;`研D二5` = 資料層研究第二節第 5 列;`T5`/`P12` = 測試效能研究的列號;`X:規則id` = 14 條補充。
+ - 級:A 現成規則可開;B 自寫結構規則(ast-grep/semgrep);C 測試範本;D 人審。可複選,寫成 `A+B`。
+ - 情境怎麼認:「形狀」= 從程式長相認得出;「語意」= 要看語意才判得出。
+-- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,要等 [[Projects/規則包語意覆核級命中走盲判_計劃]] 接上盲判才有作用;「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx 或 Slack compose-lints 的規則,消費專案照 linter 目錄範本接 CI 後才擋;「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`slack:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑與重算比對在測試 `t_kt_catalog_batch4_wiring`。
++- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,要等 [[Projects/規則包語意覆核級命中走盲判_計劃]] 接上盲判才有作用;「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx 或 Slack compose-lints 的規則,消費專案照 linter 目錄範本接 CI 後才擋;「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。
+ - 接電方式五種:告警帶寫法 / 當下推相關列 / 表態對程式 / 行為測試或正向約束 / 盲判席。形狀類至少有「告警帶寫法」或「行為測試或正向約束」;語意類必有「表態對程式」與「盲判席」;只剩業務判斷的 D 級只寫「表態對程式」,名稱後標(人裁)。
+ - 實測狀態:既有 35 條照抄原表「本機實測」欄(原表沒有這欄的寫「未測」);14 條補充寫「樣本實測:中壞例、好例不報」;其他寫「未測」。2026-11-05 起,被 ast-grep 規則包(`configs/ast-grep/kotlin-android/`)守到的列改寫成「規則 <id>:樣本實測中壞例、好例不報」(hint 規則標(hint));原本記了別的實測結果的,接在「原記:」後面保留。
+ - 現成規則欄的「待查」與來源欄的「(搜尋摘要)」「(未開頁核對)」照研究原文保留,〈待查證〉一節由程式從這兩欄撈出。
+ - 規則庫簡稱:detekt(1.23.x 寫 `detekt`,只在 2.x 的寫 `detekt 2.x`);SC = santimattius structured-coroutines(寫成 `SC 主題碼:層 規則名`);Sonar = SonarSource Kotlin;IJ = IntelliJ 檢查(只有顯示名稱,ID 待查);androidx/內建 = Android Lint;cr = mrmans0n compose-rules;slack = Slack compose-lints。
+ 
+ ## 來源縮寫
+ 
+ | 縮寫 | 網址 |
+ |---|---|
+ | PLAN | 本 repo `docs/lumos-toolchain-knowledge/Projects/Android協程與API寫法機械檢查標準_計劃.md` |
+@@ -490,68 +490,68 @@
+ | ARCH-66 | 把 kotlin.Result 當公開 API 錯誤模型,失敗種類不明 | `suspend fun x(): Result<T>`,失敗一律回 Throwable | `sealed interface LoadResult { data class Ok(val v: T); data object NotFound; data class Network(val e: IOException) }` 有型別的網域錯誤 | 呼叫端只能用字串判斷錯誤種類 | 無 | D | 語意:要判斷呼叫端是否需要區分錯誤種類 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DL#expose-errors〔併:研D六2〕〔查證 2026-11-05:https://github.com/Kotlin/KEEP/blob/master/proposals/stdlib/result.md〕 |
+ | ARCH-67 | 把 HttpException 或 IOException 直接丟到 UI 層 | ViewModel `import retrofit2.HttpException` 並 catch 判斷 | 資料層 catch 網路庫例外後改拋自訂例外(官方例:UserNotAuthenticatedException),ViewModel 對 suspend 呼叫用 try/catch、對 Flow 用 .catch 處理這些自訂例外,不 import retrofit2/okhttp3 | 層級耦合,換網路庫要改 UI | 待查(架構測試可以抓) | B | 形狀:ViewModel/UI 檔 import retrofit2 或 okhttp3 例外型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-viewmodel-knows-retrofit:樣本實測中壞例、好例不報 | DL〔併:研D六8〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer〕 |
+ 
+ ## DATA 儲存、背景工作、分頁與解析
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | DATA-1 | Room 開 allowMainThreadQueries | `Room.databaseBuilder(...).allowMainThreadQueries()` | 拿掉;DAO 改 `suspend fun` 或回傳 `Flow`,呼叫端在 `withContext(io)` 或 viewModelScope 裡呼叫 | 資料庫查詢跑在主執行緒,卡頓、ANR | ast-grep:kt-room-main-thread-queries;Room 執行期檢查(沒開這個設定時主執行緒查詢丟 IllegalStateException,非 lint) | B | 形狀:builder 鏈上出現 `.allowMainThreadQueries()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-main-thread-queries:樣本實測中壞例、好例不報 | EXTRAS;LINT〔併:X:kt-room-main-thread-queries、研D補〕 |
+ | DATA-2 | Room DAO 函式是阻塞的 | `@Dao` 介面裡 `@Query("…") fun all(): List<User>`(非 suspend、不回傳 Flow/LiveData/PagingSource) | `@Query("…") suspend fun all(): List<User>` 或 `fun all(): Flow<List<User>>` | 呼叫端在主執行緒會擋住或丟例外 | ast-grep:kt-room-dao-blocking | B | 形狀:`@Dao` 類別內帶 `@Query/@Insert/@Update/@Delete/@Upsert/@RawQuery/@Transaction` 的函式沒有 suspend 也不回傳串流型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-dao-blocking:樣本實測中壞例、好例不報 | EXTRAS〔併:X:kt-room-dao-blocking〕 |
+ | DATA-3 | DataStore 不是單例 | 類別或函式裡 `PreferenceDataStoreFactory.create { … }`、`preferencesDataStore("x")` | 檔案頂層 `val Context.settings by preferencesDataStore("settings")`,或 DI 提供 `@Singleton` 的 DataStore | 同一個檔兩個實例,執行期丟 IllegalStateException | ast-grep:kt-datastore-not-singleton;DataStore 執行期檢查(非 lint) | B | 形狀:DataStore 工廠呼叫出現在 class body 或 function body,且不在 object 內 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-not-singleton:樣本實測中壞例、好例不報 | EXTRAS;DS〔併:X:kt-datastore-not-singleton、研D補〕 |
+-| DATA-4 | SharedPreferences Editor 沒提交 | `prefs.edit().putString(k, v)` 寫完就結束 | 結尾 `.apply()`,或 KTX `prefs.edit { putString(k, v) }` | 資料沒寫進去 | Android Lint:CommitPrefEdits;ApplySharedPref;MutatingSharedPrefs | A | 形狀:`edit()` 鏈沒接 `apply()`/`commit()` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT;AR-REC〔併:研A80、研D二2〕 |
+-| DATA-5 | 主執行緒 commit() 且沒用回傳值 | `prefs.edit().putX(…).commit()` 回傳值丟掉 | 改 `apply()`;真要同步結果才在背景執行緒 `commit()` 並檢查回傳 | 主執行緒寫磁碟,卡頓 | Android Lint:ApplySharedPref | A | 形狀:`.commit()` 當單獨敘述 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT〔併:研D二1〕 |
+-| DATA-6 | 直接改 getStringSet 拿回的集合 | `prefs.getStringSet(k, …)!!.add(x)` | `val s = prefs.getStringSet(k, emptySet())!!.toMutableSet(); s.add(x); prefs.edit { putStringSet(k, s) }` | 改動不會保存,行為不一致 | Android Lint:MutatingSharedPrefs | A | 形狀:`getStringSet(…)` 的結果直接呼叫 add/remove | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D二3〕 |
++| DATA-4 | SharedPreferences Editor 沒提交 | `prefs.edit().putString(k, v)` 寫完就結束 | 結尾 `.apply()`,或 KTX `prefs.edit { putString(k, v) }` | 資料沒寫進去 | Android Lint:CommitPrefEdits;ApplySharedPref;MutatingSharedPrefs | A | 形狀:`edit()` 鏈沒接 `apply()`/`commit()` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT;AR-REC〔併:研A80、研D二2〕 |
++| DATA-5 | 主執行緒 commit() 且沒用回傳值 | `prefs.edit().putX(…).commit()` 回傳值丟掉 | 改 `apply()`;真要同步結果才在背景執行緒 `commit()` 並檢查回傳 | 主執行緒寫磁碟,卡頓 | Android Lint:ApplySharedPref | A | 形狀:`.commit()` 當單獨敘述 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT〔併:研D二1〕 |
++| DATA-6 | 直接改 getStringSet 拿回的集合 | `prefs.getStringSet(k, …)!!.add(x)` | `val s = prefs.getStringSet(k, emptySet())!!.toMutableSet(); s.add(x); prefs.edit { putStringSet(k, s) }` | 改動不會保存,行為不一致 | Android Lint:MutatingSharedPrefs | A | 形狀:`getStringSet(…)` 的結果直接呼叫 add/remove | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D二3〕 |
+ | DATA-7 | 用 SharedPreferences 存大量或結構化資料 | `prefs.edit { putString("list", json) }` 存整份清單 | 結構化資料進 Room;設定類用 `DataStore<Preferences>` 或 Proto DataStore | 初次讀取在主執行緒載入整檔、apply 造成 ANR、資料損毀 | 無 | D | 語意:要看存的東西大小與結構才判得出 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二4〕 |
+ | DATA-8 | DataStore 的資料型別是可變的 | `DataStore<MyData>`,`data class MyData(var x: Int, val list: MutableList<…>)` | `data class MyData(val x: Int, val list: List<…>)` 或 proto;更新用 `updateData { it.copy(…) }` | 一致性被破壞,難抓的 bug | 無 | B | 形狀:DataStore 泛型參數的 data class 有 `var` 或 `Mutable*` 欄位 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DS〔併:研D二5〕 |
+ | DATA-9 | 同一檔混用單程序與多程序 DataStore | 同檔名同時 `dataStore(...)` 與 `MultiProcessDataStoreFactory.create(...)` | 只要跨程序就一律 `MultiProcessDataStoreFactory.create(...)` | 資料損毀或互相覆蓋 | 無 | B | 形狀:同一檔名字串出現在兩種工廠 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | DS〔併:研D二6〕 |
+ | DATA-10 | DataStore 讀取沒處理 IOException | `dataStore.data.map { … }` 沒有 catch | `dataStore.data.catch { if (it is IOException) emit(emptyPreferences()) else throw it }.map { … }` | 讀取失敗整條 Flow 終止,畫面不再更新 | 無 | B | 形狀:`.data` 鏈上沒有 `.catch` | 告警帶寫法 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋) | 規則 kt-datastore-read-no-catch:樣本實測中壞例、一般好例不報;代碼審 r3 實測形狀分不出對錯(try/runCatching 裡的終端操作列舉不完)改放語意覆核級;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | DS-CL〔併:研D二7〕〔查證 2026-11-05:https://developer.android.com/codelabs/android-preferences-datastore〕 |
+ | DATA-11 | Serializer 不轉 CorruptionException、沒設 corruptionHandler | `readFrom` 裡直接 `Json.decodeFromString(...)` 沒 try | `readFrom` 內 `try { … } catch (e: SerializationException) { throw CorruptionException("…", e) }`;建立時 `corruptionHandler = ReplaceFileCorruptionHandler { default }` | 檔案損毀後每次讀取都崩潰 | 無 | B | 形狀:實作 `Serializer` 的 `readFrom` 沒有 try,或建立 DataStore 沒帶 corruptionHandler | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-serializer-no-corruption:樣本實測中壞例、好例不報 | DS〔併:研D二8〕 |
+ | DATA-12 | updateData 裡做副作用或耗時 I/O(出處不全) | `dataStore.updateData { api.call(); it.copy(...) }` | transform 只放純計算:`val r = api.call(); dataStore.updateData { it.copy(x = r) }` | 交易被拖長、重試時副作用重複 | 無 | D | 語意:要看 transform 內呼叫的是不是副作用 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二9〕 |
+ | DATA-13 | 敏感資料放在會被備份的 DataStore 或 prefs | 權杖存一般 prefs,沒設 `data_extraction_rules` | 敏感資料分檔並在 `data_extraction_rules.xml`/`fullBackupContent` 排除;用 EncryptedFile 或 Keystore 加密 | 權杖隨備份外流,換機還原成無效狀態 | 無 | D | 語意:要知道哪些欄位算敏感 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DS〔併:研D二11〕 |
+ | DATA-14 | Room 多步寫入沒包交易 | `dao.deleteAll(); dao.insertAll(x)` 連續呼叫 | `@Transaction open suspend fun replaceAll(x: List<T>) { deleteAll(); insertAll(x) }` 或 `db.withTransaction { … }` | 中途失敗留下空表,觀察者看到中間狀態閃爍 | 無 | B | 形狀:同一函式連續兩個以上 DAO 寫入呼叫,外面沒有 `withTransaction` 或 `@Transaction` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-writes-no-transaction:樣本實測中壞例、好例不報 | ROOM-TX〔併:研D二12〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/room/Transaction https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-15 | @Relation 查詢沒加 @Transaction | 回傳帶 `@Relation` 的 POJO 的 DAO 方法沒標 `@Transaction` | `@Transaction @Query("SELECT …") fun userWithPosts(): Flow<List<UserWithPosts>>` | 主表與關聯表讀到不一致的快照 | 待查(Room 編譯期會發警告,文字與代號待查) | A+B | 形狀:DAO 方法回傳型別含 `@Relation` 欄位、方法沒有 `@Transaction` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | ROOM-TX〔併:研D二13〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/relationships/one-to-many https://developer.android.com/reference/kotlin/androidx/room/Transaction〕 |
+ | DATA-16 | fallbackToDestructiveMigration 進正式版 | `Room.databaseBuilder(...).fallbackToDestructiveMigration()` | 寫 `Migration(x, y)` 或 `@Database(autoMigrations = [AutoMigration(from = x, to = y)])`,並用 MigrationTestHelper 測 | 使用者升級後資料全部消失 | 無 | B | 形狀:builder 鏈出現 `fallbackToDestructiveMigration` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-destructive-migration:樣本實測中壞例、好例不報 | ROOM-MIG〔併:研D二14〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-17 | 改了 schema 沒升版本或沒寫 Migration | Entity 改欄位,`@Database(version = …)` 不變 | 升 `version` 並加 `Migration`;開 `exportSchema` 讓 schema 進版控 | 啟動崩潰(Room cannot verify the data integrity) | Room 執行期檢查(不是 lint) | C | 語意:要比對 schema 前後版本才知道 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | ROOM-MIG〔併:研D二15〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-18 | exportSchema 關掉或 schema 沒進版控 | `@Database(exportSchema = false)` | 設 `room.schemaLocation` 並提交 schema json | 無法做 AutoMigration 與遷移測試 | Room 編譯期警告(文字待查) | B | 形狀:`@Database` 參數 `exportSchema = false` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-export-schema-false:樣本實測中壞例、好例不報 | ROOM-MIG#export-schemas〔併:研D二16〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-19 | Migration 沒有測試 | 有 `Migration(x, y)`,沒有 `MigrationTestHelper` 測試 | @get:Rule val helper = MigrationTestHelper(instrumentation = instrumentation, databaseClass = AppDb::class, driver = AndroidSQLiteDriver(), file = …);測試內 helper.createDatabase(1) 塞資料後 helper.runMigrationsAndValidate(2, listOf(MIGRATION_1_2)) 並查資料;另寫一條 migrateAll 測試,Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS).build() 開到最新版讓 Room 驗 schema | 遷移 SQL 寫錯,上線崩潰 | 無 | C | 語意:要找對應測試是否存在且覆蓋每個版本對 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | ROOM-MIG#test〔併:研D二17〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-20 | RoomDatabase 建多個實例 | 函式或 Activity 裡 `Room.databaseBuilder(...).build()` | DI `@Provides @Singleton fun db(...)` 或 companion 單例 | 多連線池、InvalidationTracker 失效、寫入互鎖 | 無 | B | 形狀:`Room.databaseBuilder(...).build()` 出現在 function body 且不在 `@Provides`/object 單例裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-builder-not-singleton:樣本實測中壞例、好例不報 | ROOM-DB〔併:研D二18〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room〕 |
+ | DATA-21 | IN 查詢一次傳上千筆參數(出處不全) | `@Query("… WHERE id IN (:ids)")`,ids 數量沒上限 | `ids.chunked(500).flatMap { dao.byIds(it) }` 分批 | too many SQL variables 崩潰 | 無 | C | 語意:要知道參數數量上限 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | SQLITE-LIM〔併:研D二19〕〔查證 2026-11-05:https://www.sqlite.org/limits.html https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-22 | 用 OnConflictStrategy.REPLACE 當 upsert(出處不全) | `@Insert(onConflict = REPLACE)` 用在有外鍵 CASCADE 的父表 | `@Upsert` 或 `@Update` | REPLACE 先刪後插,連帶刪掉子表資料 | 無 | B | 形狀:`@Insert(onConflict = OnConflictStrategy.REPLACE)` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | ROOM-UPSERT〔併:研D二20〕〔查證 2026-11-05:https://www.sqlite.org/lang_conflict.html https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-23 | Room Flow 查詢沒去重 | 觀察整張表 `Flow<List<T>>`,不相關寫入也觸發 | `dao.observe().distinctUntilChanged()` | 多餘的重組與重算 | 無 | B | 形狀:DAO 回傳 Flow 的呼叫鏈沒有 `distinctUntilChanged` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | ROOM-ASYNC〔併:研D二21〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/async-queries〕 |
+ | DATA-24 | SQL 字串串接使用者輸入 | `rawQuery("… where n='$name'")`;`@RawQuery` 用拼接字串 | `rawQuery("… where n = ?", arrayOf(name))`;`SimpleSQLiteQuery(sql, args)` | SQL 注入,特殊字元崩潰 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | B | 形狀:`rawQuery`/`execSQL`/`SimpleSQLiteQuery` 的字串參數含 `$` 樣板或 `+` 串接 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-sql-string-concat:樣本實測中壞例、好例不報 | SQLI〔併:研D二23〕〔查證 2026-11-05:https://developer.android.com/privacy-and-security/risks/sql-injection〕 |
+-| DATA-25 | SQL 欄位型別寫成 STRING | `CREATE TABLE t(x STRING)` | `CREATE TABLE t(x TEXT)` | 被當數值親和,前導零被吃 | Android Lint:SQLiteString | A | 形狀:SQL 字串含 ` STRING` 型別 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D二24〕 |
++| DATA-25 | SQL 欄位型別寫成 STRING | `CREATE TABLE t(x STRING)` | `CREATE TABLE t(x TEXT)` | 被當數值親和,前導零被吃 | Android Lint:SQLiteString | A | 形狀:SQL 字串含 ` STRING` 型別 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D二24〕 |
+ | DATA-26 | 檔案寫入不是原子性的 | `File(path).writeText(json)` 直接覆蓋 | `AtomicFile(file).run { val s = startWrite(); try { s.write(bytes); finishWrite(s) } catch (e: IOException) { failWrite(s); throw e } }`,或寫暫存檔再 rename | 寫到一半當機檔案毀損 | 無 | B | 形狀:對持久檔直接 `writeText`/`writeBytes`/`FileOutputStream(file)` | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-file-write-not-atomic(hint):樣本實測中壞例、好例不報 | ATOMICFILE〔併:研D二25〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/core/util/AtomicFile〕 |
+ | DATA-27 | 外部儲存路徑寫死或用淘汰 API | `Environment.getExternalStorageDirectory()`;字串 `"/sdcard/"` | `context.getExternalFilesDir(null)` 或 MediaStore | Android 10 以上分區儲存失敗 | 待查(Lint SdCardPath 代號待查) | B | 形狀:出現 `getExternalStorageDirectory` 或 `"/sdcard` 字串 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-external-storage-hardcoded:樣本實測中壞例、好例不報 | STORAGE〔併:研D二28〕〔查證 2026-11-05:https://developer.android.com/reference/android/os/Environment https://developer.android.com/training/data-storage/app-specific https://googlesamples.github.io/android-custom-lint-rules/checks/SdCardPath.md.html〕 |
+-| DATA-28 | 週期工作用 enqueue 排入 | `WorkManager.getInstance(c).enqueue(periodicRequest)` | `enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.KEEP, req)`(要換設定用 UPDATE) | 每次啟動多排一份,工作堆積 | Android Lint:BadPeriodicWorkRequestEnqueue | A | 形狀:`enqueue(` 參數是 PeriodicWorkRequest | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三1〕 |
+-| DATA-29 | 週期少於 15 分鐘 | `PeriodicWorkRequestBuilder<W>(5, TimeUnit.MINUTES)` | `PeriodicWorkRequestBuilder<W>(15, TimeUnit.MINUTES)` 以上 | 被系統強制改成 15 分鐘,行為與預期不同 | Android Lint:InvalidPeriodicWorkRequestInterval | A | 形狀:週期常數小於 15 分鐘 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT;WM-DEFINE〔併:研D三2〕 |
++| DATA-28 | 週期工作用 enqueue 排入 | `WorkManager.getInstance(c).enqueue(periodicRequest)` | `enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.KEEP, req)`(要換設定用 UPDATE) | 每次啟動多排一份,工作堆積 | Android Lint:BadPeriodicWorkRequestEnqueue | A | 形狀:`enqueue(` 參數是 PeriodicWorkRequest | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三1〕 |
++| DATA-29 | 週期少於 15 分鐘 | `PeriodicWorkRequestBuilder<W>(5, TimeUnit.MINUTES)` | `PeriodicWorkRequestBuilder<W>(15, TimeUnit.MINUTES)` 以上 | 被系統強制改成 15 分鐘,行為與預期不同 | Android Lint:InvalidPeriodicWorkRequestInterval | A | 形狀:週期常數小於 15 分鐘 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT;WM-DEFINE〔併:研D三2〕 |
+ | DATA-30 | 一次性工作沒用 unique 或 policy 選錯 | `enqueue(OneTimeWorkRequest)` 做同步;`ExistingWorkPolicy.REPLACE` 打斷進行中的工作 | `enqueueUniqueWork("sync", ExistingWorkPolicy.KEEP, req)`;要排隊接續用 `APPEND_OR_REPLACE` | 重複上傳,或進行中的工作被取消 | Android Lint:EnqueueWork(範圍待讀細節,待查) | B | 語意:要判斷同一件事會不會重複排、要不要打斷進行中的那份 | 告警帶寫法、當下推相關列、表態對程式、盲判席 | 告警帶寫法=批一(只有提示級規則,預設不接);當下推相關列=批二;表態對程式=批三;盲判席=批三 | 規則 kt-work-enqueue-not-unique(hint)、kt-work-policy-replace(hint):樣本實測中壞例、好例不報 | WM-MANAGE;LINT〔併:研D三3〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/manage-work〕 |
+-| DATA-31 | 自訂 Configuration 卻沒拿掉預設初始化器 | 實作 `Configuration.Provider`,manifest 沒移除 WorkManagerInitializer | manifest 裡 `<meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" />` | 自訂設定不生效或崩潰 | Android Lint:RemoveWorkManagerInitializer;BadConfigurationProvider | A | 形狀:有 `Configuration.Provider` 實作而 manifest 沒有 remove | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三4〕 |
+-| DATA-32 | Worker 類別不是 public | `internal class SyncWorker : CoroutineWorker(...)` | `class SyncWorker`(public),或自訂 `WorkerFactory` | 預設工廠反射建不出來,工作永遠失敗 | Android Lint:WorkerHasAPublicModifier | A | 形狀:繼承 Worker 的類別帶 internal/private | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三5〕 |
+-| DATA-33 | 長時間工作沒宣告前景服務類型 | `setForeground(ForegroundInfo(id, n))` 沒帶類型;manifest 的 SystemForegroundService 沒宣告 | `ForegroundInfo(id, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)` 並在 manifest 宣告 `foregroundServiceType` 與權限 | Android 14 以上丟 MissingForegroundServiceTypeException | Android Lint:SpecifyForegroundServiceType;ForegroundServiceType;ForegroundServicePermission | A | 形狀:`ForegroundInfo(` 只有兩個參數 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三6〕 |
++| DATA-31 | 自訂 Configuration 卻沒拿掉預設初始化器 | 實作 `Configuration.Provider`,manifest 沒移除 WorkManagerInitializer | manifest 裡 `<meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" />` | 自訂設定不生效或崩潰 | Android Lint:RemoveWorkManagerInitializer;BadConfigurationProvider | A | 形狀:有 `Configuration.Provider` 實作而 manifest 沒有 remove | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三4〕 |
++| DATA-32 | Worker 類別不是 public | `internal class SyncWorker : CoroutineWorker(...)` | `class SyncWorker`(public),或自訂 `WorkerFactory` | 預設工廠反射建不出來,工作永遠失敗 | Android Lint:WorkerHasAPublicModifier | A | 形狀:繼承 Worker 的類別帶 internal/private | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三5〕 |
++| DATA-33 | 長時間工作沒宣告前景服務類型 | `setForeground(ForegroundInfo(id, n))` 沒帶類型;manifest 的 SystemForegroundService 沒宣告 | `ForegroundInfo(id, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)` 並在 manifest 宣告 `foregroundServiceType` 與權限 | Android 14 以上丟 MissingForegroundServiceTypeException | Android Lint:SpecifyForegroundServiceType;ForegroundServiceType;ForegroundServicePermission | A | 形狀:`ForegroundInfo(` 只有兩個參數 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三6〕 |
+ | DATA-34 | 加急工作沒實作 getForegroundInfo | `setExpedited(...)`,Worker 沒覆寫 `getForegroundInfo()` | Worker 覆寫 `override suspend fun getForegroundInfo(): ForegroundInfo` | Android 12 以下執行期崩潰 | 無 | B | 形狀:專案有 `setExpedited` 而對應 Worker 類別沒有 `getForegroundInfo` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | WM-DEFINE〔併:研D三7〕 |
+ | DATA-35 | setForeground 沒有 try/catch | `setForeground(info)` 直接呼叫 | `try { setForeground(info) } catch (e: IllegalStateException) { … }`(含 ForegroundServiceStartNotAllowedException) | Android 12 以上背景啟動被限制而崩潰 | 無 | B | 形狀:`setForeground(` 不在 try 區塊裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-setforeground-no-try:樣本實測中壞例、好例不報 | WM-DEFINE〔併:研D三8〕 |
+ | DATA-36 | Worker 遇到永久錯誤也回 retry | `catch (e: Exception) { Result.retry() }`,4xx 也一樣 | `if (runAttemptCount >= MAX) Result.failure() else if (e is IOException) Result.retry() else Result.failure()` | 無限重試,耗電耗流量 | 無 | B | 形狀:`Result.retry()` 不在 `runAttemptCount` 判斷之內 | 告警帶寫法、當下推相關列、表態對程式 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋);當下推相關列=批二;表態對程式=批三 | 規則 kt-worker-retry-unbounded:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-worker-retry-unbounded 命中 1、真 1、誤報 0,留;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | WM-DEFINE〔併:研D三9〕 |
+ | DATA-37 | Worker 吞例外回 success | `try { … } catch (e: Exception) {}; return Result.success()` | 依錯誤型別回 `Result.failure()` 或 `Result.retry()` | 工作失敗被當成完成,資料默默遺失 | 待查(detekt SwallowedException 候選) | B | 形狀:doWork 裡空 catch 後面接 `Result.success()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-worker-swallow-success:樣本實測中壞例、好例不報 | WM-DEFINE〔併:研D三10〕 |
+ | DATA-38 | Worker 不處理停止或取消 | 長迴圈不檢查 `isStopped`,或吞 CancellationException | Worker 長迴圈內頻繁檢查 isStopped,為真就盡快結束,並覆寫 onStopped() 關閉 DB/檔案等資源;CoroutineWorker 由框架自動取消協程並傳遞取消訊號,不需另外處理 | 條件不再滿足時停不下,被系統殺 | 無 | C | 語意:要看迴圈長度與取消點才判得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | WM-MANAGE〔併:研D三11〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/manage-work https://developer.android.com/develop/background-work/background-tasks/persistent/threading/coroutineworker〕 |
+ | DATA-39 | 用 Data 傳大量資料 | `workDataOf("list" to bigJson)` | `workDataOf("id" to id)`,內容存 DB 或檔案 | 超過 10KB 上限丟 IllegalStateException | 無 | C | 語意:要知道值的大小 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | WM-DATA〔併:研D三12〕〔查證 2026-11-05:https://developer.android.com/reference/androidx/work/Data〕 |
+ | DATA-40 | 該設限制條件卻沒設 | 上傳或同步工作沒有 `setRequiredNetworkType(CONNECTED)` | `setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())` | 離線空跑後失敗,浪費重試 | 無 | D | 語意:要知道工作需不需要網路或電量 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | WM-DEFINE〔併:研D三13〕 |
+ | DATA-41 | Worker 裡另開 scope 或 thread 就 return | `doWork() { scope.launch { upload() }; return Result.success() }` | `class W : CoroutineWorker(…) { override suspend fun doWork(): Result { upload(); return Result.success() } }` | 工作被標完成、程序被殺,實際沒做完 | 無 | B | 形狀:doWork 本體有 `launch`/`thread {` 且後面直接 return | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-worker-fire-and-forget:樣本實測中壞例、好例不報 | WM-CW〔併:研D三14〕〔查證 2026-11-05:https://developer.android.com/reference/androidx/work/Worker https://developer.android.com/develop/background-work/background-tasks/persistent/threading/coroutineworker〕 |
+ | DATA-42 | Worker 裡 runBlocking 跑 suspend | `Worker.doWork() { runBlocking { … } }` | 改繼承 `CoroutineWorker`,`override suspend fun doWork()` | 阻塞與資源浪費 | 無 | B | 形狀:`Worker` 子類的 doWork 裡出現 `runBlocking` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-worker-runblocking:樣本實測中壞例、好例不報 | WM-CW〔併:研D三15〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/background-tasks/persistent/threading/coroutineworker〕 |
+ | DATA-43 | 用 Service 做可延後的工作 | `startService` 做同步;背景呼叫 `startForegroundService` | 改用 `WorkManager.enqueueUniqueWork(...)` | Android 8 以上 IllegalStateException;12 以上 ForegroundServiceStartNotAllowedException | 待查 | D | 語意:要知道工作可不可以延後 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | BG〔併:研D三16〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/services https://developer.android.com/about/versions/oreo/background〕 |
+ | DATA-44 | startForegroundService 後沒及時 startForeground、服務回呼做重活 | `onStartCommand` 先做 I/O 才呼叫 `startForeground` | `onStartCommand` 第一行 `startForeground(id, notification)`,重活丟背景執行緒 | ANR、RemoteServiceException 或 ForegroundServiceDidNotStartInTimeException | 無 | C | 語意:要看呼叫順序與耗時 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | FGS;ANR〔併:研D三17、P7〕〔查證 2026-11-05:https://developer.android.com/about/versions/oreo/background https://developer.android.com/develop/background-work/services〕 |
+-| DATA-45 | 服務沒設權限卻 exported | `<service android:exported="true">` 沒有 permission | `android:exported="false"`,或加 `android:permission` | 被其他 App 呼叫 | Android Lint:ExportedService | A | 形狀:manifest service exported=true 且無 permission | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三18〕 |
+-| DATA-46 | 精確鬧鐘沒有權限或濫用 | `setExact`/`setExactAndAllowWhileIdle` 沒檢查 `canScheduleExactAlarms()` | 一般用途改 `setWindow` 或 WorkManager;真需要時先 `if (alarmManager.canScheduleExactAlarms())` | Android 12 以上 SecurityException | Android Lint:ScheduleExactAlarm;ExactAlarm;ExactAlarmPolicy | A | 形狀:呼叫 `setExact*` 前沒有 canScheduleExactAlarms 判斷 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三19〕 |
+-| DATA-47 | 鬧鐘間隔太短 | `setRepeating(..., 5000, ...)` | 別設短間隔(系統強制至少 60 秒);改用不精確重複加間隔常數:`alarmMgr?.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + AlarmManager.INTERVAL_HALF_HOUR, AlarmManager.INTERVAL_HALF_HOUR, alarmIntent)`;週期工作改 `PeriodicWorkRequestBuilder<MyWorker>(1, TimeUnit.HOURS).build()`(最短 15 分鐘) | 被系統調整且耗電 | Android Lint:ShortAlarm | A | 形狀:setRepeating 間隔常數小於 60000 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三20〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/services/alarms https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work https://googlesamples.github.io/android-custom-lint-rules/checks/ShortAlarm.md.html〕 |
++| DATA-45 | 服務沒設權限卻 exported | `<service android:exported="true">` 沒有 permission | `android:exported="false"`,或加 `android:permission` | 被其他 App 呼叫 | Android Lint:ExportedService | A | 形狀:manifest service exported=true 且無 permission | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三18〕 |
++| DATA-46 | 精確鬧鐘沒有權限或濫用 | `setExact`/`setExactAndAllowWhileIdle` 沒檢查 `canScheduleExactAlarms()` | 一般用途改 `setWindow` 或 WorkManager;真需要時先 `if (alarmManager.canScheduleExactAlarms())` | Android 12 以上 SecurityException | Android Lint:ScheduleExactAlarm;ExactAlarm;ExactAlarmPolicy | A | 形狀:呼叫 `setExact*` 前沒有 canScheduleExactAlarms 判斷 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三19〕 |
++| DATA-47 | 鬧鐘間隔太短 | `setRepeating(..., 5000, ...)` | 別設短間隔(系統強制至少 60 秒);改用不精確重複加間隔常數:`alarmMgr?.setInexactRepeating(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + AlarmManager.INTERVAL_HALF_HOUR, AlarmManager.INTERVAL_HALF_HOUR, alarmIntent)`;週期工作改 `PeriodicWorkRequestBuilder<MyWorker>(1, TimeUnit.HOURS).build()`(最短 15 分鐘) | 被系統調整且耗電 | Android Lint:ShortAlarm | A | 形狀:setRepeating 間隔常數小於 60000 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三20〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/services/alarms https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work https://googlesamples.github.io/android-custom-lint-rules/checks/ShortAlarm.md.html〕 |
+ | DATA-48 | 用 AlarmManager 做重複資料同步 | `setRepeating` 觸發同步 | `enqueueUniquePeriodicWork("sync", KEEP, PeriodicWorkRequestBuilder<SyncWorker>(…).setConstraints(…).build())` | 沒有限制條件與重試,重開機後消失 | 無 | D | 語意:要知道鬧鐘觸發的是不是資料同步 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | BG〔併:研D三21〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/services/alarms https://developer.android.com/topic/architecture/data-layer〕 |
+-| DATA-49 | WakeLock 沒逾時或沒釋放 | `wl.acquire()` 無 timeout;release 沒放 finally | `wl.acquire(10 * 60 * 1000L); try { … } finally { if (wl.isHeld) wl.release() }` | 耗電 | Android Lint:WakelockTimeout;Wakelock;InvalidWakeLockTag | A | 形狀:`acquire()` 無參數,或 release 不在 finally | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三22、P20〕 |
+-| DATA-50 | JobScheduler ID 與 WorkManager 衝突 | 自用 JobScheduler,ID 與 WorkManager 範圍重疊 | `Configuration.Builder().setJobSchedulerJobIdRange(min, max)` | 工作互相覆蓋 | Android Lint:SpecifyJobSchedulerIdRange;JobSchedulerService | A | 形狀:專案同時有 JobInfo.Builder 與 WorkManager 且沒設範圍 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三23〕 |
+-| DATA-51 | 限制條件同時要閒置與充電 | `setRequiresDeviceIdle(true)` 搭配 `setRequiresCharging(true)` | 只留真正必要的一個條件,例 `setRequiresCharging(true)` | 某些裝置上工作永遠不跑 | Android Lint:IdleBatteryChargingConstraints | A | 形狀:同一 Constraints 鏈同時出現兩者 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D三24〕 |
++| DATA-49 | WakeLock 沒逾時或沒釋放 | `wl.acquire()` 無 timeout;release 沒放 finally | `wl.acquire(10 * 60 * 1000L); try { … } finally { if (wl.isHeld) wl.release() }` | 耗電 | Android Lint:WakelockTimeout;Wakelock;InvalidWakeLockTag | A | 形狀:`acquire()` 無參數,或 release 不在 finally | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三22、P20〕 |
++| DATA-50 | JobScheduler ID 與 WorkManager 衝突 | 自用 JobScheduler,ID 與 WorkManager 範圍重疊 | `Configuration.Builder().setJobSchedulerJobIdRange(min, max)` | 工作互相覆蓋 | Android Lint:SpecifyJobSchedulerIdRange;JobSchedulerService | A | 形狀:專案同時有 JobInfo.Builder 與 WorkManager 且沒設範圍 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三23〕 |
++| DATA-51 | 限制條件同時要閒置與充電 | `setRequiresDeviceIdle(true)` 搭配 `setRequiresCharging(true)` | 只留真正必要的一個條件,例 `setRequiresCharging(true)` | 某些裝置上工作永遠不跑 | Android Lint:IdleBatteryChargingConstraints | A | 形狀:同一 Constraints 鏈同時出現兩者 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三24〕 |
+ | DATA-52 | BroadcastReceiver.onReceive 做長時間工作 | `onReceive` 內網路請求、讀檔,或 launch 協程後直接返回 | 短工作 `val p = goAsync(); scope.launch { try { … } finally { p.finish() } }`;長工作 `WorkManager.enqueue…` | ANR,或程序被殺工作遺失 | 無 | B | 形狀:`onReceive` 本體有 `launch`/網路/檔案呼叫而沒有 `goAsync()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-receiver-long-work、kt-onreceive-async-without-goasync:樣本實測中壞例、好例不報 | BCAST;ANR〔併:研D三25、P6〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/background-tasks/broadcasts〕 |
+ | DATA-53 | getRefreshKey 回傳 null 或沒用 anchorPosition | `override fun getRefreshKey(state: PagingState<Int, T>) = null` | `state.anchorPosition?.let { a -> state.closestPageToPosition(a)?.let { it.prevKey?.plus(1) ?: it.nextKey?.minus(1) } }` | 刷新後跳回第一頁,捲動位置遺失 | 無 | B | 形狀:getRefreshKey 本體直接 return null | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-paging-refreshkey-null:樣本實測中壞例、好例不報 | PG-PAGED〔併:研D四1〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data https://developer.android.com/reference/kotlin/androidx/paging/PagingSource〕 |
+ | DATA-54 | PagingSource.load 讓例外往外拋 | `load()` 沒有 try,沒回 `LoadResult.Error` | `try { … LoadResult.Page(…) } catch (e: IOException) { LoadResult.Error(e) } catch (e: HttpException) { LoadResult.Error(e) }` | App 崩潰,無法顯示重試 UI | 無 | B | 形狀:load 覆寫本體沒有 try | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-paging-load-no-error:樣本實測中壞例、好例不報 | PG-PAGED〔併:研D四2〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data https://developer.android.com/reference/kotlin/androidx/paging/PagingSource〕 |
+ | DATA-55 | PagingSource 被重複使用 | `val source = MySource(); Pager(config) { source }` | `Pager(config) { MySource(api) }`,factory 每次回新實例 | IllegalStateException: An instance of PagingSource was re-used | 無 | B | 形狀:pagingSourceFactory lambda 回傳外部已建好的變數 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-paging-source-reused:樣本實測中壞例、好例不報 | PG-PAGED〔併:研D四3〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/paging/PagingSource https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data〕 |
+ | DATA-56 | Pager.flow 沒 cachedIn 或每次重組重建 | Composable 或 getter 裡 `Pager(...).flow`;ViewModel 沒 `.cachedIn(viewModelScope)` | ViewModel 屬性 `val items = Pager(config) { … }.flow.cachedIn(viewModelScope)` | 旋轉後重新載入、重複請求、崩潰 | 無 | B | 形狀:`Pager(…).flow` 在函式本體或 getter,或鏈尾沒有 cachedIn | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-paging-flow-not-cached:樣本實測中壞例、好例不報 | PG-PAGED#pagingdata-stream〔併:研D四4〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-paged-data https://developer.android.com/reference/kotlin/androidx/paging/Pager〕 |
+ | DATA-57 | cachedIn 之後才 map 或 filter | `pager.flow.cachedIn(s).map { … }` | `pager.flow.map { pd -> pd.map { … } }.cachedIn(viewModelScope)` | 每次收集都重算,狀態不一致 | 無 | B | 形狀:`.cachedIn(` 後面還接 map/filter | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-paging-transform-after-cachedin:樣本實測中壞例、好例不報 | PG-TRANSFORM〔併:研D四5〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-transform〕 |
+ | DATA-58 | PagingData 放進 combine 或收集兩次 | `combine(pagingFlow, other) { … }` 再兩處 collect | val items = pager.flow.cachedIn(viewModelScope);需要和其他狀態 combine 或多處收集時,一律接在 cachedIn 之後的 flow 上(cachedIn 會多播,讓後續收集拿到新的 PagingData) | IllegalStateException: Attempt to collect twice | 無 | C | 語意:要追收集者數量 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | PG-TRANSFORM〔併:研D四6〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-transform https://developer.android.com/reference/kotlin/androidx/paging/Pager〕 |
+ | DATA-59 | RemoteMediator 寫資料與 remote key 沒包交易 | 清表、插入、寫 key 三個獨立呼叫 | `db.withTransaction { if (refresh) { keyDao.clear(); itemDao.clear() }; keyDao.insertAll(keys); itemDao.insertAll(items) }` | 資料與 key 不一致,重複或漏頁 | 無 | B | 形狀:RemoteMediator.load 內多個 DAO 寫入不在 withTransaction 裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-remote-mediator-no-transaction:樣本實測中壞例、好例不報 | PG-NETDB〔併:研D四7〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-network-db〕 |
+ | DATA-60 | endOfPaginationReached 判斷錯 | 永遠回 false,或用 `data.isEmpty()` 配錯的 key | `MediatorResult.Success(endOfPaginationReached = response.nextKey == null)` | 無限載入或提早停止 | 無 | C | 語意:要知道伺服器怎麼表示最後一頁 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | PG-NETDB〔併:研D四8〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-network-db〕 |
+ | DATA-61 | 用了 RemoteMediator,UI 卻直接讀網路 | PagingSource 直接打 API,同時又有 mediator | `Pager(config, remoteMediator = m) { db.itemDao().pagingSource() }`,Room 當唯一資料來源 | 離線沒資料、畫面閃爍 | 無 | D | 語意:要看資料流向 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | PG-NETDB〔併:研D四9〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-network-db〕 |
+@@ -564,21 +564,21 @@
+ | DATA-68 | 快取沒有失效策略(人裁)(出處不全) | 記憶體 `mutableMapOf` 快取不限大小也沒 TTL | `LruCache<K, Entry>(maxSize)`,`Entry(value, savedAt)` 讀取時檢查 `now - savedAt < TTL` | 記憶體成長、資料過期 | 無 | D | 語意:大小上限與 TTL 是業務取捨 | 表態對程式 | 表態對程式=批三 | 未測 | DL#cache〔併:研D五8〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/collection/LruCache https://developer.android.com/topic/libraries/architecture/paging/v3-network-db〕 |
+ | DATA-69 | 刷新失敗卻先清本機快取 | 先 `dao.clear()` 再呼叫 api | `val fresh = api.fetch(); db.withTransaction { dao.clear(); dao.insertAll(fresh) }`(成功後才換) | 離線時資料全空 | 無 | C | 語意:要看清除與網路呼叫的先後與失敗路徑 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | DL-OFFLINE〔併:研D五13〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-network-db https://developer.android.com/topic/architecture/data-layer/offline-first〕 |
+ | DATA-70 | kotlinx.serialization 沒開 ignoreUnknownKeys | `Json.decodeFromString<Foo>(s)` 用預設 Json 解析伺服器回應 | 共用 `val json = Json { ignoreUnknownKeys = true }`,`json.decodeFromString<Foo>(s)` | 伺服器新增欄位,舊版 App 全面解析失敗 | 無 | B | 形狀:對網路回應用 `Json.decodeFromString`(預設實例)或 Json builder 沒設 ignoreUnknownKeys | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-json-default-instance:樣本實測中壞例、好例不報 | KXS-IGNORE〔併:研D一18〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-71 | 每次都新建 Json 設定 | 函式裡 `Json { … }.decodeFromString(s)` | 頂層 `val json = Json { ignoreUnknownKeys = true }` 重用 | 效能差;各處設定不一致 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | B | 形狀:`Json {` 建構出現在 function body | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-json-config-per-call:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-json-config-per-call 命中 1、真 0、誤報 1,改形狀:排除測試 | KXS-JSON〔併:研D一19〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-72 | 非可空欄位沒預設值也沒開 coerceInputValues | `@Serializable data class U(val name: String)`,伺服器可能回 null 或缺欄位 | `val name: String? = null` 或 `val name: String = ""`,需要時 `Json { coerceInputValues = true }` | MissingFieldException 或 JsonDecodingException,整份清單解析失敗 | 無 | C | 語意:要知道伺服器哪些欄位可能缺或為 null | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | KXS-JSON#coercing-input-values〔併:研D一20〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-customization-options.html https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-73 | 列舉遇到未知值就崩潰 | `enum class Status { A, B }`,伺服器新增 C | `enum class Status { A, B, UNKNOWN }`,欄位 `val status: Status = Status.UNKNOWN` 並開 `coerceInputValues = true` | 新列舉值讓舊版 App 全面崩潰 | 無 | C | 語意:要知道列舉來自伺服器且會擴充 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | KXS-JSON#coercing-input-values〔併:研D一21〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-74 | 帶預設值的欄位沒被序列化出去 | 欄位等於預設值被省略(`encodeDefaults` 預設 false) | 必送欄位標 `@EncodeDefault`,或 `Json { encodeDefaults = true }` | 伺服器收不到必填欄位 | 無 | C | 語意:要知道伺服器哪些欄位必填 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | KXS-BASIC〔併:研D一22〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html https://kotlinlang.org/docs/serialization-customization-options.html〕 |
+ | DATA-75 | Gson 解析 Kotlin 非空欄位得到 null | Gson 搭配 `data class X(val a: String)`,JSON 缺 a | 改 Moshi codegen(`@JsonClass(generateAdapter = true)`)或 kotlinx.serialization | 非空型別裡裝 null,別處 NPE | 無 | B | 形狀:專案裡 Gson 解析目標是 Kotlin data class | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-gson-nonnull-field:樣本實測中壞例、好例不報 | GSON-TS〔併:研D一23〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/README.md https://github.com/square/moshi/blob/master/README.md〕 |
+ | DATA-76 | Moshi 反射沒 KotlinJsonAdapterFactory 或 codegen 漏標 | `Moshi.Builder().build()` 解析 Kotlin 類;漏 `@JsonClass(generateAdapter = true)` | 類別標 `@JsonClass(generateAdapter = true)`;用反射就 `Moshi.Builder().add(KotlinJsonAdapterFactory()).build()` | 執行期崩潰、預設值失效 | Android Lint(Slack):MoshiUsage* 系列(逐條代號待抄,待查) | A | 形狀:Moshi 解析的 data class 沒有 `@JsonClass` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一24〕 |
+ | DATA-77 | R8 混淆掉解析用的模型 | Gson 反射解析,沒有 `-keep` 或 `@SerializedName` | 設定 R8/ProGuard keep 規則保留解析模型的欄位名稱(與無參建構子);或改用以 code generation 取代反射的解析器(Gson README 指名 Kotlin Serialization) | 只有 release 版解析出全空欄位 | 無 | C | 語意:要用 release 版跑解析才看得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | SHRINK〔併:研D一25〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/Troubleshooting.md https://github.com/google/gson/blob/main/README.md〕 |
+-| DATA-78 | 使用 java.io.Serializable | 資料類 `: Serializable` 拿去傳遞或存檔 | `@Parcelize data class X(…) : Parcelable`,或 `@Serializable`(kotlinx.serialization) | 慢,而且有反序列化風險 | Android Lint:SerializableUsage | A | 形狀:類別實作 `java.io.Serializable` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一26〕 |
++| DATA-78 | 使用 java.io.Serializable | 資料類 `: Serializable` 拿去傳遞或存檔 | `@Parcelize data class X(…) : Parcelable`,或 `@Serializable`(kotlinx.serialization) | 慢,而且有反序列化風險 | Android Lint:SerializableUsage | A | 形狀:類別實作 `java.io.Serializable` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D一26〕 |
+ 
+ ## TEST 測試
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | TEST-1 | Dispatchers.setMain 沒配 resetMain | 測試類別 `@Before { Dispatchers.setMain(d) }`,找不到 `Dispatchers.resetMain()` | 用 `MainDispatcherRule`(TestWatcher 的 starting 裡 setMain、finished 裡 resetMain),或 `@After fun tearDown() { Dispatchers.resetMain() }` | 汙染後面的測試,單跑綠、整套跑紅 | EXTRAS:kt-setmain-without-reset | B | 形狀:類別內有 `Dispatchers.setMain(` 卻沒有 `Dispatchers.resetMain()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-setmain-without-reset:樣本實測中壞例、好例不報 | EXTRAS;AND-TEST〔併:X:kt-setmain-without-reset〕 |
+ | TEST-2 | 一個測試裡有多個排程器 | `val d1 = StandardTestDispatcher()`、`val d2 = UnconfinedTestDispatcher()` 各自新建,沒傳 `testScheduler` | `StandardTestDispatcher(testScheduler)`,或先 setMain 再建,全部共用一個排程器 | 虛擬時間分裂,`advanceUntilIdle` 推不動另一個,測試不確定或掛住 | 無 | B | 形狀:測試檔中 `*TestDispatcher()` 無參數,出現在 runTest 外或兩次以上 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-test-multiple-schedulers、kt-test-dispatcher-no-scheduler:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-test-multiple-schedulers 命中 1、真 0、誤報 1,改形狀:TestScope 參數直接帶排程器不報 | AND-TEST〔併:研C九1、T1〕 |
+ | TEST-3 | 在設 Main 之前就建 TestDispatcher 屬性 | `private val repo = Repo(StandardTestDispatcher())` 寫在 `@get:Rule val mainRule` 之前或規則外 | Rule 宣告在最前面,其他屬性用 `mainDispatcherRule.testDispatcher` | 類別屬性在換 Main 之前初始化,另開新排程器 | 無 | B | 形狀:測試類別屬性初始值有 `TestDispatcher()` 且位置在 Rule 之前 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-testdispatcher-before-mainrule、kt-testdispatcher-before-mainrule:樣本實測中壞例、好例不報 | AND-TEST〔併:研C九2、T2〕 |
+ | TEST-4 | StandardTestDispatcher 下沒推進就斷言 | `runTest { vm.load(); assertEquals(Loaded, vm.state.value) }`(load 內 launch);`val vm = VM(); assertEquals(expected, vm.state.value)`(init 裡 launch) | 斷言前 `advanceUntilIdle()`/`runCurrent()`,或 `job.join()`;init 不啟動,改由 `stateIn(WhileSubscribed)` | 新協程排隊未執行,斷言看到舊值 → 錯紅;或被誤「修」成 Unconfined 而蓋掉併發問題 | 無 | B+C | 形狀:runTest 內 launch 或呼叫被測函式後,下一句就是 assert 而無推進呼叫 | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=批五 | 規則 kt-test-assert-after-launch-no-advance:樣本實測中壞例、好例不報 | AND-TEST〔併:研C九3、T5、T23〕 |
+ | TEST-5 | 永不結束的收集放在 runTest 的一般 launch 或 TestScope 本體 | `runTest { launch { vm.state.collect { values += it } } }`;`UserState(scope = this)` 裡 collect 熱流;`launch { vm.state.toList(values) }` | `backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.toList(values) }`;注入 `backgroundScope` | runTest 一直等這個協程完成 → 測試掛住,最後 UncompletedCoroutinesError 逾時 | 無 | B+C | 形狀:runTest 本體內 `launch {` 的本體有 `.collect`/`toList`,且接收者不是 backgroundScope | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=批五 | 規則 kt-runtest-launch-collect-forever、kt-test-tolist-not-background:樣本實測中壞例、好例不報;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | AND-FTEST;AND-TEST〔併:研C九4、T10、T16〕 |
+@@ -593,23 +593,23 @@
+ | TEST-14 | 以為 Unconfined 會跑完整個協程 | `runTest(UnconfinedTestDispatcher()) { launch { a(); delay(10); b() }; assert(a, b) }` | 協程裡有 delay 就先 `advanceUntilIdle()` 再斷言 | 協程停在 delay,斷言時 b 還沒執行 | 無 | C | 語意:要看被啟動的協程裡有沒有掛起點 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | AND-TEST〔併:T6〕 |
+ | TEST-15 | 測併發順序卻用 UnconfinedTestDispatcher | 測競態或順序的測試寫 `UnconfinedTestDispatcher` | 用 `StandardTestDispatcher(testScheduler)`,用 `runCurrent()`/`advanceTimeBy()` 一步步推進 | 立即執行的排程跟正式環境不同,競態測不出來 | 無 | D | 語意:要知道這支測試在驗順序或競態 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | AND-TEST〔併:T7〕 |
+ | TEST-16 | 正式碼直接讀系統時鐘 | `System.currentTimeMillis()`、`Instant.now()`、`SystemClock.elapsedRealtime()` 寫在商業邏輯 | 從建構子注入 `Clock`/`TimeSource`;測試用 `testScheduler.timeSource` | 時間邏輯測不到邊界,跨日或跨時區才出錯 | 無 | B | 形狀:非測試、非 UI 類別裡呼叫這三個 API | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-prod-reads-system-clock(hint):樣本實測中壞例、好例不報 | AND-TEST〔併:T14〕 |
+ | TEST-17 | Flow 測試用 first()/toList() 收熱流 | `stateFlow.toList()`、`sharedFlow.first()` 等一個永不結束的流 | Turbine `flow.test { awaitItem() }`,或 `backgroundScope.launch { flow.toList(list) }` | 測試卡到逾時 | 無 | B+C | 形狀:測試裡對 StateFlow/SharedFlow 呼叫 toList()/first()(熱流判斷要型別) | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一(只有提示級規則,預設不接);行為測試或正向約束=批五 | 規則 kt-test-hot-flow-terminal(hint):樣本實測中壞例、好例不報 | AND-FTEST〔併:T15〕 |
+ | TEST-18 | Turbine 有未消費事件就結束 | `flow.test { awaitItem() }`,後面還有事件沒處理 | 逐一 `awaitItem()`,結尾 `expectNoEvents()` 或明確 `cancelAndIgnoreRemainingEvents()` | 區塊結束丟 Unconsumed events 失敗;濫用 ignore 又可能吞掉真 bug | 無 | C | 語意:要知道流後面還會不會發 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | TURB〔併:T18〕 |
+ | TEST-19 | Turbine 用 awaitItem 等錯誤 | 流丟例外,測試用 `awaitItem()` | `assertIs<IOException>(awaitError())` | 錯誤訊息難讀,或錯誤路徑根本沒測 | 無 | C | 語意:要知道這個情境預期流以錯誤結束 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | TURB〔併:T19〕 |
+ | TEST-20 | Turbine 搭配 StateFlow 忘了初始值 | `vm.state.test { vm.load(); assertEquals(Success, awaitItem()) }` | 先 `assertEquals(Initial, awaitItem())` 消掉初始值,再觸發與斷言 | 收到的是初始值,斷言失敗 | 無 | C | 語意:要知道受測流是 StateFlow | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | TURB〔併:T20〕 |
+ | TEST-21 | Turbine 的 test{} 外面套 withTimeout | `runTest { withTimeout(5000) { flow.test {} } }` | `flow.test(timeout = 5.seconds) { }` | 虛擬時間下 withTimeout 被瞬間跳過,得到假逾時 | 無 | B | 形狀:`withTimeout(` 本體直接包 `.test {` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-turbine-inside-withtimeout:樣本實測中壞例、好例不報 | TURB〔併:T21〕 |
+ | TEST-22 | ViewModel 測試沒換 Main dispatcher | 用 `viewModelScope.launch` 的 ViewModel 測試沒有 MainDispatcherRule | `@get:Rule val mainDispatcherRule = MainDispatcherRule()` 或 `Dispatchers.setMain` | 本機 JVM 丟 Module with the Main dispatcher is missing | 無 | B | 形狀:測試類別引用 ViewModel 子類卻沒有 setMain 或 MainDispatcherRule | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-viewmodel-test-no-main-rule:樣本實測中壞例、好例不報 | AND-TEST〔併:T22〕 |
+ | TEST-23 | 只用 mock verify 驗呼叫而不驗結果 | `verify(repo).save(any())` 是唯一斷言 | 假實作 `FakeRepo` + 斷言可觀察的狀態 `assertEquals(listOf(x), fakeRepo.saved)` | 重構就紅、真正行為錯也綠 | Android Lint:DoNotMock* 系列(只擋被 @DoNotMock 標記的型別,間接) | B | 形狀:@Test 函式裡只有 verify 沒有 assert | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-test-verify-only(hint):樣本實測中壞例、好例不報 | TEST-DOUBLES;LINT〔併:T25、TP補〕 |
+-| TEST-24 | mock 資料類別、值物件、sealed、object、平台型別 | `mockk<User>()`、`mock<Context>()`、`mock<List<…>>()` | 直接建立實例;Context 用 `ApplicationProvider.getApplicationContext()` 或 Robolectric | 測試脆弱,掩蓋真實行為 | Android Lint:DoNotMockDataClass、DoNotMockSealedClass、DoNotMockObjectClass、DoNotMockPlatformTypes、DoNotMockRecordClass | A | 形狀:mock/mockk 的型別參數是 data/sealed/object/平台型別 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:T26〕 |
+-| TEST-25 | 測試斷言有副作用或成本高 | `assert(list.removeAt(0) == x)`、`assert(expensiveCheck())` | 先算值再斷言:`val first = list.removeAt(0); assertEquals(x, first)` | 開關斷言後行為不同 | Android Lint:AssertionSideEffect、ExpensiveAssertion | A | 形狀:assert 參數內有會改狀態或昂貴的呼叫 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:T27〕 |
+-| TEST-26 | @Ignore 不寫理由 | `@Ignore @Test fun …` | `@Ignore("issue #123: 原因")` | 測試被永久遺忘 | Android Lint:IgnoreWithoutReason | A | 形狀:`@Ignore` 沒有字串參數 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:T28〕 |
++| TEST-24 | mock 資料類別、值物件、sealed、object、平台型別 | `mockk<User>()`、`mock<Context>()`、`mock<List<…>>()` | 直接建立實例;Context 用 `ApplicationProvider.getApplicationContext()` 或 Robolectric | 測試脆弱,掩蓋真實行為 | Android Lint:DoNotMockDataClass、DoNotMockSealedClass、DoNotMockObjectClass、DoNotMockPlatformTypes、DoNotMockRecordClass | A | 形狀:mock/mockk 的型別參數是 data/sealed/object/平台型別 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:T26〕 |
++| TEST-25 | 測試斷言有副作用或成本高 | `assert(list.removeAt(0) == x)`、`assert(expensiveCheck())` | 先算值再斷言:`val first = list.removeAt(0); assertEquals(x, first)` | 開關斷言後行為不同 | Android Lint:AssertionSideEffect、ExpensiveAssertion | A | 形狀:assert 參數內有會改狀態或昂貴的呼叫 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:T27〕 |
++| TEST-26 | @Ignore 不寫理由 | `@Ignore @Test fun …` | `@Ignore("issue #123: 原因")` | 測試被永久遺忘 | Android Lint:IgnoreWithoutReason | A | 形狀:`@Ignore` 沒有字串參數 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:T28〕 |
+ | TEST-27 | 測試裡沒有任何斷言 | `@Test fun t() { vm.load() }` | 至少一個 `assertEquals`/`verify`/`awaitItem()` | 永遠綠的假測試 | 待查(Sonar 有此規則,代號待查) | B | 形狀:@Test 函式本體找不到 assert/verify/await 類呼叫 | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-test-no-assertion:樣本實測中壞例、好例不報 | 〔併:T29〕〔查證 2026-11-05:https://github.com/SonarSource/sonar-java/blob/master/sonar-java-plugin/src/main/resources/org/sonar/l10n/java/rules/java/S2699.html〕 |
+ | TEST-28 | Compose UI 測試用 Thread.sleep 等畫面 | `Thread.sleep(2000); onNodeWithText("x").assertExists()` | `composeTestRule.waitUntil(timeoutMillis = 5_000) { … }`、`waitForIdle()`、`mainClock.advanceTimeBy()` | 慢又不穩 | 無(Thread.sleep 規則只管協程) | B | 形狀:androidTest 或 Compose 測試裡出現 `Thread.sleep(` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-test-thread-sleep:樣本實測中壞例、好例不報 | CUI〔併:T30〕 |
+ | TEST-29 | 無限動畫讓 Compose 測試永不 idle(出處不全) | 有 `rememberInfiniteTransition` 的畫面直接 `assertIsDisplayed()` | `composeTestRule.mainClock.autoAdvance = false` + `mainClock.advanceTimeBy(…)` | 卡到 idle 逾時,或動畫中間狀態不穩 | 無 | C | 語意:要知道受測畫面含持續動畫 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | CUI〔併:T31〕 |
+ | TEST-30 | 外部非同步工作沒註冊 IdlingResource | Compose/Espresso 測試等 Retrofit 或自建執行緒結果,沒 `registerIdlingResource` 也沒 `waitUntil` | `composeTestRule.registerIdlingResource(r)`,或注入測試 dispatcher | 同步機制不知道還有工作,過早斷言 | 無 | D | 語意:要知道畫面依賴哪些框架看不到的非同步工作 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | CUI〔併:T32〕 |
+ | TEST-31 | 用顯示文字或索引找節點 | `onAllNodes(…)[2]`、`onNodeWithText("確定")` | `Modifier.testTag("confirm")` + `onNodeWithTag("confirm")`,或 contentDescription | 改文案或語系就壞 | 無 | B | 形狀:`onAllNodes(…)[` 或 `onNodeWithText("中文字面")` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-compose-test-node-by-index、kt-compose-test-node-by-literal-text(hint):樣本實測中壞例、好例不報 | CUI〔併:T33〕 |
+ | TEST-32 | 合併語意樹造成找不到子節點 | `onNodeWithText("子文字")`,父節點 mergeDescendants | `onNodeWithText("子文字", useUnmergedTree = true)`,或對合併後節點斷言 | 找不到節點或找到多個 | 無 | C | 語意:要知道父節點有沒有合併語意 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | CUI〔併:T34〕 |
+ | TEST-33 | Robolectric 測試依賴未設定的 SDK 或 looper 模式(出處不全) | 沒有 `@Config(sdk = …)`;`@LooperMode(LEGACY)`;忘記 `shadowOf(getMainLooper()).idle()` | PAUSED looper(預設)+ 明確 `shadowOf(getMainLooper()).idle()`;固定 `@Config(sdk = [34])` | 主執行緒排的工作沒跑,斷言失敗;升級 Robolectric 就壞 | 無 | B | 形狀:`@LooperMode(LEGACY)` 或 Robolectric 測試類別沒有 @Config | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-robolectric-legacy-looper:樣本實測中壞例、好例不報 | ROBO〔併:T35〕 |
+ | TEST-34 | 測試之間共用可變狀態或殘留資料 | `companion object` 裡的 `var`、單例 repo、靜態 Dispatchers 沒復原、`@FixMethodOrder`;測試間殘留資料庫或 SharedPreferences | 每個測試在 `@Before` 重建;Rule 負責復原;in-memory Room `Room.inMemoryDatabaseBuilder(…)`;`@After` 清除 | 單獨跑綠、一起跑紅;並行時不穩 | 無 | B | 形狀:測試類別有 companion var、`@FixMethodOrder`,或用檔案型資料庫 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-test-shared-mutable-state:樣本實測中壞例、好例不報 | FLAKY〔併:T36、TP不穩定成因〕 |
+ | TEST-35 | 洩漏回歸沒有自動化檢查 | 只靠手動開 LeakCanary 看 | 儀器測試接 LeakCanary:`androidTestImplementation("com.squareup.leakcanary:leakcanary-android-instrumentation:2.14")`;測試成功後檢查 `@get:Rule val rule = DetectLeaksAfterTestSuccess()`;中途檢查 `LeakAssertions.assertNoLeaks()`;併用其他規則 `RuleChain.outerRule(LoginRule()).around(DetectLeaksAfterTestSuccess())` | 洩漏回歸沒人發現 | 無 | C | 語意:要決定哪些畫面流程要跑洩漏偵測 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=批五 | 未測 | LC〔併:研A76〕〔查證 2026-11-05:https://square.github.io/leakcanary/ui-tests/〕 |
+ | TEST-36 | fragment-testing 依賴設定錯 | `implementation("androidx.fragment:fragment-testing…")` 或 `androidTestImplementation` | `debugImplementation("androidx.fragment:fragment-testing-manifest:…")` | 測試用空 Activity 沒合併進 manifest,Fragment 測試無法啟動 | androidx.fragment.testing:FragmentGradleConfiguration | A | 形狀:Gradle 依賴的設定名不是 debugImplementation | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT-V〔併:研A96〕 |

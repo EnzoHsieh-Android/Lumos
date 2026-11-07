@@ -4174,6 +4174,12 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
                 _dshow = [*_dadv[:20], *([f"… 另 {len(_dadv) - 20} 條(lumos lint-check 看全部)"] if len(_dadv) > 20 else [])]
                 warn([], "detekt 宣告實際會怎樣(只看指令字面判的):以為有在檢查的規則,其實沒在跑、或推送時沒在擋",
                      "\n        ".join(["逐條:", *_dshow, "細節與能做什麼:看 kotlin-idioms 慣例文件的「型別資訊」一節"]))
+            # Android 現成檢查有沒有接上([[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3):另起一則,不混進 detekt 那則
+            _aadv = _lint_android_ci_advisories(_lf.get("config"), _vault_repo_root(env))
+            if _aadv:
+                _ashow = [*_aadv[:20], *([f"… 另 {len(_aadv) - 20} 條(lumos lint-check 看全部)"] if len(_aadv) > 20 else [])]
+                warn([], "Android 現成檢查有沒有接上(只看字面判的:A1 看 CI 設定檔、A2 看建置檔、A3 看宣告):型錄裡只靠 Android Lint 與 Compose 規則擋的列,沒接上就沒有機器在擋",
+                     "\n        ".join(["逐條:", *_ashow, "細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉"]))
         # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
         # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
         _lnr = _vault_repo_root(env)
@@ -7266,7 +7272,7 @@ def _secinv_vault_problem(p, root=None):
             return f"檢查圖譜路徑時讀不了: {e.__class__.__name__}"
         if bad:
             return (f"圖譜路徑上的 {bad[1]} 是捷徑,不跟隨" if bad[0] == "symlink"
-                    else f"圖譜目錄 {p} 解析後不在 repo 根 {root} 底下,不讀")
+                    else f"圖譜目錄 {p} 解析後不在 repo 根 {root} 底下(或解析時讀不了),不讀")
     if not p.is_dir():
         return f"--vault 指的不是目錄: {p}"
     if not any((p / d).is_dir() for d in _SECINV_VAULT_DIRS):
@@ -37016,7 +37022,7 @@ def _events_path_safe(root, base):
         p = p / part
         if p.is_symlink():
             return False
-    return Path(base).resolve().is_relative_to(Path(root).resolve())
+    return _path_resolves_in_root(root, base)
 
 
 def cmd_events(repo=None, session=None, as_json=False, prune=False, days="30"):
@@ -39683,15 +39689,31 @@ def _detekt_gradle_codes(args):
     return is_detekt, codes
 
 
+# 健檢只看字面的「CI 設定檔」:GitHub 的 workflow 加上其他常見 CI 的固定檔名([[Projects/Android現成檢查接上CI與推送前_計劃]] 〈用詞〉)
+_CI_OTHER_CONFIG_FILES = (".gitlab-ci.yml", "bitrise.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml")
+
+
+def _ci_config_paths(repo_root, github_only=False):
+    """專案 CI 設定檔的路徑清單:`.github/workflows/` 底下的 .yml/.yaml(依檔名排序),github_only=False 時再加
+    `_CI_OTHER_CONFIG_FILES` 裡存在的一般檔;解析後(檔案或資料夾那層是符號連結都算)不在 repo 根底下的略過、在的照讀
+    (`_path_resolves_in_root`;代碼審 r3 資安席、r4 通才席)。T4(只看 GitHub、讀原文)與 A1(全部、經 `_ci_workflow_texts`
+    去註解)共用。"""
+    root = Path(repo_root)
+    out = []
+    wf = root / ".github" / "workflows"
+    if wf.is_dir():
+        out.extend(p for p in sorted(wf.iterdir())
+                   if p.suffix.lower() in (".yml", ".yaml") and p.is_file() and _path_resolves_in_root(root, p))
+    if not github_only:
+        out.extend(root / rel for rel in _CI_OTHER_CONFIG_FILES
+                   if (root / rel).is_file() and _path_resolves_in_root(root, root / rel))
+    return out
+
+
 def _detekt_ci_has_typed_task(repo_root):
     """專案 .github/workflows/ 底下有沒有任何一支(.yml/.yaml)提到 detekt<變體> 的 Gradle 任務字樣(例 detektDebug、detektMain)。
     只看字面、不執行;讀不了的檔當沒有。T4 用([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5)。"""
-    wf = Path(repo_root) / ".github" / "workflows"
-    if not wf.is_dir():
-        return False
-    for p in sorted(wf.iterdir()):
-        if p.suffix.lower() not in (".yml", ".yaml") or not p.is_file():
-            continue
+    for p in _ci_config_paths(repo_root, github_only=True):
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -39701,20 +39723,224 @@ def _detekt_ci_has_typed_task(repo_root):
     return False
 
 
-def _detekt_segment_codes(seg, depth):
-    """一段的判定:回傳 (是不是 detekt 宣告, 代號集合)。表外寫法與退化寫法回 (False, 空集合)。"""
-    import posixpath as _pp
-    seg = _detekt_strip_prefix(seg)
-    if not seg:
-        return False, set()
-    head = _pp.basename(seg[0])
-    if head in ("sh", "bash", "zsh"):
-        if depth == 0 and len(seg) >= 3 and seg[1] == "-c":
-            return _detekt_command_codes(seg[2], depth + 1)
-        return False, set()
-    if head in ("gradlew", "gradlew.bat", "gradle"):
+# ── Android 現成檢查有沒有接上(A1 到 A3,只看字面)─────────────────────────────────────────────
+# 單源 [[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3。跟 T4 一樣只讀檔、不執行、不改退出碼,但不放進 detekt 那支函式:
+# T4 要求宣告裡有 detekt 命令,這幾則只要宣告有 kt 棧而且是 Android 專案。
+_ANDROID_ADVICE_ORDER = ("A1", "A2", "A3")
+_ANDROID_ADVICE_TEXT = {
+    "A1": "專案是 Android,但 CI 設定檔(.github/workflows/、.gitlab-ci.yml 等)裡都找不到 Android Lint 的跡象"
+          "(lint 任務名、跟 gradlew 或 gradle 寫在同一行的 check 或 build);只看字面,"
+          "找不到不代表一定沒跑(CI 在別的系統或任務藏在腳本裡也會印):Android Lint 與 Slack compose-lints 可能沒有在 CI 跑;"
+          "照 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉貼 CI 範本,先產基準線再加 CI 步驟",
+    "A2": "專案用 Compose,但建置檔沒有 Slack compose-lints(compose-lint-checks)或 compose-rules(io.nlopez.compose.rules),"
+          "宣告也沒有帶 detekt-compose 外掛的 detekt 命令:Compose 規則哪裡都沒接;範本同 A1",
+    "A3": "這條命令宣告的 --plugins 外掛檔不在:推送前會被新增告警閘判環境不可用、自動放行;"
+          "下載指令(釘 sha256)在 linter 目錄 detekt 標準接法的 compose-rules 那條",
+}
+_ANDROID_SCAN_NAMES = frozenset((*_KT_BUILD_FILES, "settings.gradle", "settings.gradle.kts"))
+_ANDROID_COMPOSE = re.compile(r"compose[ \t]*=[ \t]*true|org\.jetbrains\.kotlin\.plugin\.compose|kotlin-compose|androidx\.compose")
+# lint 開頭但不是「跑 Android Lint 檢查」的 Gradle 任務(各有出處,見計劃〈依據來源〉):kotlinter 的 ktlint 任務 lintKotlin、
+# lintFix 套用快速修正會改原始碼、lintVital 只看 fatal 級。前綴後面要接結尾或大寫(lintFixtureDebug 是 flavor 叫 Fixture 的 lint,照算)。
+# 找不到官方出處的名字不收(寧可多算跡象、少印提醒)
+_ANDROID_LINT_NONCHECK = re.compile(r"lint(?:Kotlin|Fix|Vital)(?:[A-Z]\w*)?")
+
+
+def _android_build_texts(repo_root, max_depth=3, max_files=200, max_bytes=1 << 20):
+    """專案根目錄往下最多 max_depth 層的建置檔(`_KT_BUILD_FILES`、settings.gradle(.kts))與 gradle/libs.versions.toml,
+    剝掉註解後的文字(同 `_kt_build_verdict`:註解裡提到的不算宣告)。資料夾照 `_stack_scan_skip` 跳過、另不進隱藏資料夾,
+    不跟符號連結進資料夾(避免迴圈與重複)、檔案解析後不在 repo 根底下的略過(`_path_resolves_in_root`,
+    repo 內的連結照讀;代碼審 r3 資安席、r4 通才席)、不開一般檔以外的東西
+    (具名管道會讓 open 卡住);依(層數、路徑)排序,根目錄的檔先讀,
+    取前 max_files 支、每支讀前 max_bytes。版本目錄 gradle/libs.versions.toml 照 TOML 的 # 註解剝。"""
+    import os as _os
+    root = Path(repo_root)
+    cands = []
+    for dirpath, dirnames, filenames in _os.walk(root, followlinks=False):
+        rel = Path(dirpath).relative_to(root)
+        depth = 0 if str(rel) == "." else len(rel.parts)
+        dirnames[:] = [] if depth >= max_depth else [
+            d for d in dirnames if not _stack_scan_skip(d) and not d.startswith(".")]
+        for fn in filenames:
+            rp = (rel / fn).as_posix() if depth else fn
+            fp = _os.path.join(dirpath, fn)
+            if (fn in _ANDROID_SCAN_NAMES or rp == "gradle/libs.versions.toml") and _os.path.isfile(fp) \
+                    and _path_resolves_in_root(root, fp):
+                cands.append((depth, rp))
+    out = []
+    for _d, rp in sorted(cands)[:max_files]:
+        try:
+            with open(root / rp, "rb") as fh:
+                txt = fh.read(max_bytes).decode("utf-8", errors="replace")
+        except OSError:
+            continue
+        if rp.endswith(".toml"):   # TOML 的註解是 #,不是 C 式;沿用 CI 設定檔那支去行尾註解,整行註解拿掉
+            txt = "\n".join(_ci_strip_comment(ln) for ln in txt.split("\n") if not ln.lstrip().startswith("#"))
+        else:
+            txt = _kt_strip_comments(txt, xml=rp.endswith("pom.xml"))
+        out.append(txt)
+    return out
+
+
+_ANDROID_LINT_WORD = re.compile(r":?(?:[\w-]+:)*(?:android-)?lint(?:[A-Z]\w*)?")
+_ANDROID_UMBRELLA_WORD = re.compile(r":?(?:[\w-]+:)*(?:check|build)")
+_CI_WORD_SPLIT = re.compile(r"[\s'\"`,;&|()\[\]{}=@]+")
+# 已知會叫 gradle 跑任務的 CI 欄位(值視同 gradle 任務列):Azure Gradle 任務的 tasks、gradle/actions 的 arguments、
+# Bitrise gradle-runner 的 gradle_task(出處見計劃〈依據來源〉;代碼審 r4 四席)。值可以寫在同一行(含引號、YAML 流式清單),
+# 或是區塊純量(| >)與縮排更深的清單。不收 command:它是 CircleCI run 的通用欄位,`command: npm run build` 會吞掉提醒
+# (代碼審 r5 三席);CircleCI gradle orb 的 command: build 因此會多印 A1,寫在計劃天花板
+_CI_GRADLE_TASK_FIELD = re.compile(r"^([ \t]*(?:-[ \t]+)?)(?:tasks|arguments|gradle_task)[ \t]*:(?:[ \t]+(.*))?$")
+
+
+def _android_ci_lint_evidence(texts):
+    """CI 設定檔裡有沒有「可能在跑 Android Lint」的跡象(證據模型:找到任何一個就算,找不到才提醒;
+    照 OpenSSF Scorecard 的做法——只找已知的名字、承認自動偵測會漏,見計劃〈依據來源〉)。收的是 `_ci_workflow_texts`
+    的 [(路徑, 去掉註解後的行)](Jenkinsfile 的 Groovy 註解也在那裡剝)。反斜線續行先接成同一邏輯行,再以空白、引號、
+    標點切詞(`/`、`.` 不切,路徑 `app/build/outputs` 與 `-Dkotlin.build.x` 是一個詞、不算)。跡象只有兩種:
+    ①任何一個詞是 lint 任務名(`lint`、`lint<變體>`、`:模組:lint`、Bitrise 的 `android-lint`;`_ANDROID_LINT_NONCHECK`
+    那幾種不算;任何位置都算,Bitrise step 名與 YAML 多行區塊才涵蓋得到);②「gradle 任務列」裡有一個詞是 `check` 或 `build`
+    (AGP 讓 check 帶 lint、Gradle 的 build 帶 check)。gradle 任務列是:同一邏輯行裡有 gradle 呼叫詞(`_is_gradle_head`)的行,
+    或 `_CI_GRADLE_TASK_FIELD` 那三個已知欄位的值(同一行、區塊純量、縮排更深的清單都算)。其他欄位與整檔有 gradle 字樣
+    不算——`needs: build`、`stage: build`、`name: build` 跟 `cache: gradle` 湊在一起會讓沒接 lint 的專案被當成有跡象
+    (代碼審 r3 三席)。寫了卻沒真的跑(`-x lint`、`echo gradlew build`)判成有跡象——寧可少印提醒、不誤報。"""
+    for _path, lines in texts:
+        field_col = None   # 區塊或清單寫法的已知欄位:欄位名那一欄;後面縮排更深的行(或同欄的清單項)是它的值
+        for ln in "\n".join(lines).replace("\\\n", " ").split("\n"):   # CRLF 已由 read_text 的通用換行轉成 \n
+            words = _CI_WORD_SPLIT.split(ln)
+            for w in words:
+                if _ANDROID_LINT_WORD.fullmatch(w) and not _ANDROID_LINT_NONCHECK.fullmatch(w.rsplit(":", 1)[-1]):
+                    return True
+            task_line = False
+            if field_col is not None:
+                ind = len(ln) - len(ln.lstrip())
+                if not ln.strip() or ind > field_col or (ind == field_col and ln.lstrip().startswith("-")):
+                    task_line = True
+                else:
+                    field_col = None
+            mo = _CI_GRADLE_TASK_FIELD.match(ln)
+            if mo:
+                val = (mo.group(2) or "").strip()
+                if not val or re.fullmatch(r"[|>][-+0-9]*", val):
+                    field_col = len(mo.group(1))
+                else:
+                    task_line = True
+            if any(_ANDROID_UMBRELLA_WORD.fullmatch(w) for w in words) and (
+                    task_line or any(_is_gradle_head(w) for w in words)):
+                return True
+    return False
+
+
+def _detekt_plugin_values(cmd):
+    """一條宣告命令裡 detekt 的 --plugins/-p 值(逗號分隔的多支拆開,字面原樣);走 `_detekt_walk_segments`,
+    跟 detekt 判定(T1-T3、P2)看到同樣的段。"""
+    out = []
+    if not isinstance(cmd, str):
+        return out
+    for seg in _detekt_walk_segments(cmd):
+        if _is_gradle_head(seg[0]):
+            continue
+        args = _detekt_cli_args(seg, _cmd_basename(seg[0]))
+        for i, a in enumerate(args or []):
+            val = args[i + 1] if a in ("--plugins", "-p") and i + 1 < len(args) else (
+                a.split("=", 1)[1] if a.startswith("--plugins=") else None)
+            if val:
+                out.extend(v.strip() for v in val.split(",") if v.strip())
+    return out
+
+
+def _android_plugin_missing(cmd, repo_root):
+    """這條命令宣告的外掛檔有沒有不在的:照 shell 的規則展開環境變數與 `~`(`os.path.expandvars`、`expanduser`),
+    相對路徑對 repo 根(新增告警閘以 repo 根當工作目錄跑命令);含反引號或萬用字元、展開後還有 `$`(變數沒設)
+    或大括號(`{p,q}.jar` 這類 shell 大括號展開,逗號切開後只剩半邊)的判不了、不算。"""
+    import os as _os
+    for raw in _detekt_plugin_values(cmd):
+        if any(ch in raw for ch in "`*?["):   # 命令替換與萬用字元要 shell 才算得出,判不了、不算
+            continue
+        pth = _os.path.expanduser(_os.path.expandvars(raw))
+        if any(ch in pth for ch in "${}"):   # 變數沒設、或 shell 的大括號展開:判不了、不算
+            continue
+        pp = Path(pth)
+        if not pp.is_absolute():
+            pp = Path(repo_root) / pp
+        if not pp.is_file():
+            return True
+    return False
+
+
+def _lint_android_ci_advisories(config, repo_root):
+    """整份 lint 宣告的 Android 現成檢查提醒(字串清單)。A1、A2 看整個專案,寫成「[CI] 代號:一句」;A3 看單條命令,
+    寫成「[kt 第 N 條] A3:一句」(同 detekt 逐條提醒的標法,不回顯命令內容)。宣告不是物件、沒有 kt 棧、repo_root 是 None、
+    不是 Android 專案時回空清單。只看字面、不執行、不改退出碼;順序照 `_ANDROID_ADVICE_ORDER`。"""
+    if repo_root is None or not isinstance(config, dict):
+        return []
+    kt = config.get("kt")
+    if not isinstance(kt, list):
+        return []
+    builds = _android_build_texts(repo_root)
+    if not any(_KT_BUILD_ANDROID.search(b) for b in builds):
+        return []
+    cmds = [c for c in kt if isinstance(c, str)]
+    found = []
+    if not _android_ci_lint_evidence(_ci_workflow_texts(_ci_config_paths(repo_root))):
+        found.append(("A1", f"[CI] A1:{_ANDROID_ADVICE_TEXT['A1']}"))
+    if any(_ANDROID_COMPOSE.search(b) for b in builds) and not any(
+            "compose-lint-checks" in b or "io.nlopez.compose.rules" in b for b in builds) and not any(
+            "detekt-compose" in c for c in cmds):
+        found.append(("A2", f"[CI] A2:{_ANDROID_ADVICE_TEXT['A2']}"))
+    for idx, c in enumerate(kt, 1):
+        if isinstance(c, str) and _android_plugin_missing(c, repo_root):
+            found.append(("A3", f"[kt 第 {idx} 條] A3:{_ANDROID_ADVICE_TEXT['A3']}"))
+    return [s for _c, s in sorted(found, key=lambda x: _ANDROID_ADVICE_ORDER.index(x[0]))]
+
+
+def _lint_android_print(advisories):
+    """lint-check 人讀輸出的 Android 現成檢查提醒(三段式:發生什麼 → 為什麼在意 → 細節去哪看)。"""
+    if not advisories:
+        return
+    print("  提醒:Android 現成檢查有沒有接上(只看字面判的:A1 看 CI 設定檔、A2 看建置檔、A3 看宣告;不影響這次結果):")
+    for a in advisories:
+        print(f"    • {a}")
+    print("  為什麼在意:型錄裡約一百列錯誤寫法只靠 Android Lint 與 Compose 規則擋,沒接上就沒有任何機器在擋。")
+    print("  細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉")
+
+
+# gradle 的呼叫詞(命令開頭的那個字,用 `_cmd_basename` 去掉路徑前綴後比對):detekt 判定、外掛路徑提醒、A1 的 check/build 共用這一份
+_GRADLE_HEADS = ("gradlew", "gradlew.bat", "gradle")
+
+
+def _cmd_basename(word):
+    """命令詞的檔名部分(`./gradlew`、Windows 的 `.\\gradlew.bat`、`tools/detekt-cli` → 最後一段)。detekt 判定、外掛路徑提醒、
+    gradle 呼叫詞判定取檔名都用這一支(代碼審 r4 架構對齊席:原本 posixpath.basename 與自寫切法並存,`\\` 只有一邊認)。"""
+    return re.split(r"[/\\]", word)[-1]
+
+
+def _is_gradle_head(word):
+    """這個詞(可帶 `./`、`.\\`、`tools/` 這類路徑前綴)是不是 gradle 的呼叫詞(`_GRADLE_HEADS`)。"""
+    return _cmd_basename(word) in _GRADLE_HEADS
+
+
+def _detekt_walk_segments(cmd, depth=0):
+    """一條命令照判定表拆成段:續行接起來、逐行切段(`_detekt_split_segments`)、剝環境變數與包裝詞(`_detekt_strip_prefix`)、
+    `sh -c '…'` 展開一層;產出剝好的非空段。detekt 判定與外掛路徑提醒共用這一支,兩邊對同一條命令看到同樣的段。"""
+    for line in cmd.replace("\\\n", " ").split("\n"):
+        segs = _detekt_split_segments(line)
+        if segs is None:
+            continue
+        for seg in segs:
+            seg = _detekt_strip_prefix(seg)
+            if not seg:
+                continue
+            if _cmd_basename(seg[0]) in ("sh", "bash", "zsh"):
+                if depth == 0 and len(seg) >= 3 and seg[1] == "-c":
+                    yield from _detekt_walk_segments(seg[2], depth + 1)
+                continue
+            yield seg
+
+
+def _detekt_segment_codes(seg):
+    """一段(已剝前綴、不是 shell 包裝)的判定:回傳 (是不是 detekt 宣告, 代號集合)。表外寫法回 (False, 空集合)。"""
+    if _is_gradle_head(seg[0]):
         return _detekt_gradle_codes(seg[1:])
-    args = _detekt_cli_args(seg, head)
+    args = _detekt_cli_args(seg, _cmd_basename(seg[0]))
     if args is None:
         return False, set()
     return True, _detekt_cli_codes(seg, args)
@@ -39722,14 +39948,13 @@ def _detekt_segment_codes(seg, depth):
 
 def _detekt_cli_args(seg, head):
     """認出 detekt 指令列,回傳 detekt 自己的參數(java -jar 之前給 JVM 的不算);不是 detekt 回 None。"""
-    import posixpath as _pp
     if head in ("detekt", "detekt-cli"):
         return seg[1:]
     if head != "java":
         return None
     if "-jar" in seg:
         j = seg.index("-jar")
-        jar = _pp.basename(seg[j + 1]) if j + 1 < len(seg) else ""
+        jar = _cmd_basename(seg[j + 1]) if j + 1 < len(seg) else ""
         return seg[j + 2:] if jar.startswith("detekt-cli") and jar.endswith(".jar") else None
     if _DETEKT_MAIN_CLASS in seg:
         return seg[seg.index(_DETEKT_MAIN_CLASS) + 1:]
@@ -39754,17 +39979,13 @@ def _detekt_cli_codes(seg, args):
     return codes
 
 
-def _detekt_command_codes(cmd, depth=0):
+def _detekt_command_codes(cmd):
     """整條命令的判定:回傳 (有沒有 detekt 宣告, 代號集合);P1 由呼叫端看整條命令決定。"""
     found, codes = False, set()
-    for line in cmd.replace("\\\n", " ").split("\n"):
-        segs = _detekt_split_segments(line)
-        if segs is None:
-            continue
-        for seg in segs:
-            f, c = _detekt_segment_codes(seg, depth)
-            found = found or f
-            codes |= c
+    for seg in _detekt_walk_segments(cmd):
+        f, c = _detekt_segment_codes(seg)
+        found = found or f
+        codes |= c
     return found, codes
 
 
@@ -39970,8 +40191,10 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
                 if not ok:
                     problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{ready[:60]}"})
     advisories = _lint_detekt_advisories(config, repo_root)   # 只是提醒:不進 problems、不改退出碼
+    android_adv = _lint_android_ci_advisories(config, repo_root)
     if as_json:
-        print(json.dumps({"problems": problems, "declared": True, "advisories": advisories}, ensure_ascii=False))
+        print(json.dumps({"problems": problems, "declared": True, "advisories": [*advisories, *android_adv]},
+                         ensure_ascii=False))
         return 1 if problems else 0
     if not problems:
         print(f"✓ lint-check: .lumos/lint.json 宣告健康({'冒煙通過' if smoke else '格式通過,--smoke 可再驗命令'})")
@@ -39980,11 +40203,13 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
             print("  為什麼在意:宣告寫對了不等於命令跑得動,寫了第一支檔之後再驗一次才算數:")
             print("    lumos lint-check --smoke")
         _lint_detekt_print(advisories)
+        _lint_android_print(android_adv)
         return 0
     print(f"✗ lint-check: .lumos/lint.json 有 {len(problems)} 個問題:")
     for pr in problems:
         print(f"  [{pr['stack']}] {pr['issue']}")
     _lint_detekt_print(advisories)
+    _lint_android_print(android_adv)
     return 1
 
 
@@ -53154,7 +53379,8 @@ def _note_audit_check_evidence(root, tip, evidence):
 def _repo_path_unsafe(root, rel, dirs=False):
     """repo 內一條要寫的路徑安不安全 → None(可以寫)或 (種類, 出問題那一層的 Path);種類:
     "symlink"(從 repo 根往下某一層是符號連結;repo 根以上不管)、"notdir"(dirs=True 時某一層已存在卻不是資料夾)、
-    "outside"(解析後不在 repo 根底下)。不存在的層不算錯(呼叫端自己建)。OSError 往上拋、呼叫端自己講。
+    "outside"(解析後不在 repo 根底下,或解析時讀不了——`_path_resolves_in_root` 把那步的 OSError 當不在)。不存在的層不算錯
+    (呼叫端自己建)。逐層檢查(is_symlink、exists)的 OSError 往上拋、呼叫端自己講。
     ★「逐層擋符號連結+解析後要在 repo 內」只有這一份★(回頭重讀代碼審 r2 架構對齊席 F2):筆記內容審的資料夾守衛
     _note_audit_safe_dir 與存量漂移的帳檔檢查 _drift_ledger_path_err 都呼叫它,各自加自己的額外檢查(每層是資料夾/
     硬連結數)與訊息——原本兩份各寫一套,一邊補洞(例如 Windows junction)另一邊不會跟。"""
@@ -53167,9 +53393,24 @@ def _repo_path_unsafe(root, rel, dirs=False):
         if dirs and cur.exists() and not cur.is_dir():
             return "notdir", cur
     fp = rootp / rel
-    if not fp.resolve().is_relative_to(rootp.resolve()):
+    if not _path_resolves_in_root(rootp, fp):
         return "outside", fp
     return None
+
+
+def _path_resolves_in_root(root, p):
+    """p 解析(跟完所有符號連結,含資料夾那幾層)後還在 root 解析後的底下嗎。★「解析後要在某個根底下」用 is_relative_to
+    判的只有這一份★:_repo_path_unsafe 的 outside 判定、事件帳路徑守衛 _events_path_safe、殺傷力配方讀筆記、CI 設定檔清單
+    _ci_config_paths、建置檔掃描 _android_build_texts 都呼叫它(代碼審 code-android現成檢查 r4 通才、資安席,r5 架構對齊席收齊)。
+    不算在內的:Windows 自我刪除守衛 _selfdelete_risk 刻意用 parts 比對而且解不開時放行(那道守衛的失敗模式不同);
+    各處 `resolve().relative_to(...)` 是在算相對路徑。
+    非嚴格解析:不存在的層照字面接(_repo_path_unsafe 要判還沒建的路徑);解析時的 OSError 當不在。連結迴圈在 Python 3.13 起
+    的非嚴格 resolve() 不丟例外、停在迴圈那一層,迴圈留在 root 底下就判在——後面 is_file()/開檔自然失敗,讀不到 root 外
+    (代碼審 r5 資源席實測)。"""
+    try:
+        return Path(p).resolve().is_relative_to(Path(root).resolve())
+    except OSError:
+        return False
 
 
 def _repo_path_unsafe_why(root, rel, bad):
@@ -60946,12 +61187,17 @@ def _ci_strip_comment(line):
 
 def _ci_workflow_texts(ymls):
     """CI 設定檔 → [(路徑, 去掉註解後的行)]:整行註解拿掉、行尾註解(後面沒有引號的 ` #…`)切掉;讀不了的檔跳過。
-    兩層 doctor 都經這裡讀,容錯跟「哪些算註解」只有一份(筆記內容審代碼審 r3 架構對齊席、通才席)。"""
+    檔名是 Jenkinsfile 的照 Groovy 剝 `/* */` 與 `//`(沿用 `_strip_c_comments`,字串裡的 `//` 不算;換行照留,行數不變),
+    不套 `#` 規則。兩層 doctor 與 Android 的 A1 都經這裡讀,容錯跟「哪些算註解」只有一份(筆記內容審代碼審 r3 架構對齊席、
+    通才席;code-android現成檢查 r4 架構對齊席:Jenkinsfile 原本由 A1 自己補剝)。"""
     out = []
     for p in ymls:
         try:
             raw = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
+            continue
+        if Path(p).name == "Jenkinsfile":
+            out.append((p, _strip_c_comments(raw, keep_newlines=True).split("\n")))
             continue
         out.append((p, [_ci_strip_comment(ln) for ln in raw.split("\n") if not ln.lstrip().startswith("#")]))
     return out
@@ -73693,7 +73939,7 @@ def _backing_note_recipes(repo_root, rows):
             got, p = {}, vault / node
             try:
                 ok = (p.suffix == ".md" and not p.is_symlink() and p.is_file()
-                      and p.resolve().is_relative_to(vroot))
+                      and _path_resolves_in_root(vroot, p))
             except (OSError, ValueError):
                 ok = False
             recipes = _kill_read_recipes(p)[0] if ok else None

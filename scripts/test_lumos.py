@@ -126922,6 +126922,672 @@ def t_lint_detekt_advice_csv_and_ci():
     print("  ✓ t_lint_detekt_advice_csv_and_ci")
 
 
+
+def _android_adv(td, *extra):
+    """跑 lint-check(--json),回 advisories 清單裡 A1/A2/A3 那幾則。"""
+    import json as _j
+    import subprocess as sp
+    import sys as _s
+    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(td), "--json", *extra],
+               cwd=str(td), capture_output=True, text=True, timeout=60)
+    try:
+        adv = _j.loads(r.stdout).get("advisories", [])
+    except ValueError:
+        adv = ["<非 JSON>" + r.stdout[-300:]]
+    return r.returncode, [a for a in adv if " A1:" in a or " A2:" in a or " A3:" in a]
+
+
+def t_lint_android_ci_advice():
+    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S1、S2:宣告有 kt 棧的 Android 專案,CI 設定檔沒有 Android Lint 任務印 A1、
+    沒接任何 Compose 規則印 A2、宣告的 --plugins 檔不在印 A3;只看字面、不改退出碼;T4 改用共用讀檔函式後判定不變。"""
+    import subprocess as sp
+    import sys as _s
+    m = _lng_module()
+    det = "detekt --input {LINT_FILES_CSV} --build-upon-default-config --config a.yml --report sarif:{LINT_SARIF_OUT}"
+
+    def fresh(build='plugins { id("com.android.application") }\n', cmds=None, ext="kt"):
+        root, _git = _lng_repo("gctl-andci-")
+        _lng_declare(root, cmds or [det], ext=ext)
+        if build is not None:
+            (root / "build.gradle.kts").write_text(build, encoding="utf-8")
+        return root
+
+    def codes(root):
+        rc, adv = _android_adv(root)
+        return rc, {c for c in ("A1", "A2", "A3") if any(f" {c}:" in a for a in adv)}, adv
+
+    def wf(root, name, text):
+        p = root / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+    root = fresh()
+    rc, cs, adv = codes(root)
+    check("S1 Android 專案、沒有 CI 設定檔 → 印 A1", "A1" in cs, str(adv))
+    check("S1 A1 的條目格式是 [CI] A1:", any(a.startswith("[CI] A1:") for a in adv), str(adv))
+    check("S1 退出碼不因提醒改變(宣告本身健康 → 0)", rc == 0, str(rc))
+    for line in ("./gradlew lintDebug", "./gradlew --no-daemon assembleDebug lintDebug", "./gradlew :app:lint",
+                 "./gradlew check", "with:\n          arguments: lintDebug"):
+        root = fresh()
+        wf(root, ".github/workflows/ci.yml", f"jobs:\n  a:\n    steps:\n      - run: {line}\n")
+        _rc, cs, adv = codes(root)
+        check(f"S1 workflow 有 {line.splitlines()[-1].strip()!r} → 不印 A1", "A1" not in cs, str(adv))
+    for line in ("./gradlew lintKotlin", "./gradlew lintFix", "./gradlew lintVitalRelease",
+                 "./gradlew updateLintBaseline", "./gradlew ktlintCheck"):
+        root = fresh()
+        wf(root, ".github/workflows/ci.yml", f"jobs:\n  a:\n    steps:\n      - run: {line}\n")
+        _rc, cs, adv = codes(root)
+        check(f"S1 workflow 只有 {line!r} → 照印 A1", "A1" in cs, str(adv))
+    root = fresh()
+    wf(root, ".gitlab-ci.yml", "lint:\n  script:\n    - ./gradlew lintDebug\n")
+    check("S1 只在 .gitlab-ci.yml 寫 lintDebug → 不印 A1", "A1" not in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build="plugins {\n    alias(libs.plugins.androidApplication)\n}\n")
+    check("S1 camelCase 版本目錄別名 → 認成 Android", "A1" in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=None)
+    wf(root, "apps/android/app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    check("S1 Android 模組在第三層 → 認得", "A1" in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=None)
+    wf(root, "a/b/c/d/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    check("S1 Android 模組在第四層 → 不掃(最多三層)", codes(root)[1] == set(), str(codes(root)[2]))
+    root = fresh(build='plugins { kotlin("jvm") version "2.2.0"; id("org.jetbrains.kotlin.jvm") }\ncompose = true\n')
+    check("S1 不是 Android 專案 → 不印 A1、A2、A3", codes(root)[1] == set(), str(codes(root)[2]))
+    root = fresh(cmds=["ruff check {LINT_FILES} --output-format sarif > {LINT_SARIF_OUT}"], ext="py")
+    check("S1 宣告沒有 kt 棧 → 不印", codes(root)[1] == set(), str(codes(root)[2]))
+    root = fresh(build=None)
+    (root / "build.gradle").write_bytes(b"// \xb5\xf9\xb8\xd1 big5\napply plugin: 'com.android.application'\n")
+    rc, cs, adv = codes(root)
+    check("S1 建置檔有非 UTF-8 位元組 → 照判、不出錯", "A1" in cs and rc == 0, f"{rc} {adv}")
+    # T4 改用共用讀檔函式後判定不變
+    root = fresh()
+    check("S1 T4:沒有 workflow → 沒有 detekt<變體>", m._detekt_ci_has_typed_task(root) is False)
+    wf(root, ".github/workflows/a.yaml", "steps:\n  - run: ./gradlew detektBaselineDebug\n")
+    check("S1 T4:只有 detektBaseline<變體> → 還是沒有", m._detekt_ci_has_typed_task(root) is False)
+    wf(root, ".github/workflows/b.yml", "steps:\n  - run: ./gradlew :app:detektProdDebug\n")
+    check("S1 T4:有 detekt<變體> → 有", m._detekt_ci_has_typed_task(root) is True)
+    wf(root, ".gitlab-ci.yml", "x:\n  script: ./gradlew detektDebug\n")
+    root2 = fresh()
+    wf(root2, ".gitlab-ci.yml", "x:\n  script: ./gradlew detektDebug\n")
+    check("S1 T4:檔案範圍照舊只看 .github/workflows/", m._detekt_ci_has_typed_task(root2) is False)
+
+    # ── 代碼審 r1、r2 折入:A1 改成證據模型(找到任何 lint 跡象就不印),走真實的讀檔與去註解路徑 ──
+    ci_dir = Path(tempfile.mkdtemp(prefix="gctl-andci-ci-"))
+
+    def has(texts, name=None):
+        """照 lumos 的讀法:寫成暫存 CI 檔(name 給 "Jenkinsfile" 時放進子資料夾、檔名照給),經既有 _ci_workflow_texts
+        去註解,再判有沒有 lint 跡象。"""
+        paths = []
+        for i, tx in enumerate(texts):
+            if name:
+                d = ci_dir / f"j{len(list(ci_dir.iterdir()))}_{i}"
+                d.mkdir()
+                f = d / name
+            else:
+                f = ci_dir / f"w{len(list(ci_dir.iterdir()))}_{i}.yml"
+            f.write_text(tx, encoding="utf-8")
+            paths.append(f)
+        return m._android_ci_lint_evidence(m._ci_workflow_texts(paths))
+    for txt in ("run: |\n  ./gradlew assembleDebug \\\n    lintDebug\n",
+                "run: |\n  ./gradlew \\\n    --no-daemon \\\n    :app:lintDebug\n",
+                "run: |\n  ./gradlew \\\n    --no-daemon \\\n    check\n",
+                "- uses: gradle/actions/setup-gradle@v4\n  with:\n    arguments: |\n      assembleDebug\n      lint\n",
+                "sh './gradlew lintDebug'\n", "./gradlew lintFixtureDebug\n", "./gradlew lintReportingDebug\n",
+                "strategy:\n  matrix:\n    task: [lint, test]\nsteps:\n  - run: ./gradlew ${{ matrix.task }}\n",
+                "- run: ./gradlew test && ./gradlew lintDebug\n",
+                "workflows:\n  primary:\n    steps:\n    - gradle-runner@2:\n        inputs:\n        - gradle_task: lint\n",
+                "steps:\n- android-lint@0.9:\n    inputs: []\n",
+                "- run: ./gradlew --no-daemon build\n", "- run: gradle check\n", "- run: .\\gradlew.bat build\n",
+                "- run: ./gradlew \\\r\n    check\r\n"):
+        check(f"r2 折入 A1 找得到跡象:{txt.strip().splitlines()[-1][:40]!r}", has([txt]) is True, txt)
+    for txt in ("# ./gradlew lintDebug\n", "- run: ./gradlew detekt  # TODO add lint check later\n",
+                "sh ci/run.sh   # runs gradlew lintDebug\n", "detekt check\n", "./gradlew lintKotlin\n",
+                "./gradlew lintFixDebug\n",
+                "- run: ./gradlew assembleDebug && cp app/build/outputs/apk/debug/app-debug.apk out/\n",
+                "- run: ./gradlew assembleDebug -Dkotlin.build.report.output=f -Pci.check=true\n",
+                "- run: ./gradlew assembleDebug --init-script ci/check.gradle\n"):
+        check(f"r2 折入 A1 找不到跡象:{txt.strip()[:40]!r}", has([txt]) is False, txt)
+    # 已知天花板(證據模型刻意接受的少印):寫了 lint 字樣、或 gradle 同一行寫了 check/build 卻沒真的跑,判成有跡象
+    for txt in ("./gradlew build -x lint\n", "echo gradlew build later\n", "echo lint\n"):
+        check(f"天花板 A1 寫了字樣就算有跡象:{txt.strip()[:40]!r}", has([txt]) is True, txt)
+    # ── 代碼審 r3 折入:check/build 只在同一邏輯行(續行合併後)有 gradle 呼叫詞時才算;整檔有 gradle 字樣不算 ──
+    for txt in ("jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n          cache: gradle\n"
+                "      - run: ./gradlew assembleDebug\n  release:\n    needs: build\n    steps:\n      - run: echo done\n",
+                "stages: [build]\nassemble:\n  stage: build\n  image: gradle:8\n  script:\n    - ./gradlew assemble\n",
+                "jobs:\n  a:\n    name: build\n    steps:\n      - run: ./gradlew assembleDebug\n",
+                "- uses: gradle/actions/setup-gradle@v4\n- run: test -f check && ./build.sh\n",
+                "- uses: gradle/actions/setup-gradle@v4\n  with:\n    build-scan-publish: true\n    gradle-version: build\n",
+                "- run:\n    command: ./gradlew assembleDebug\n"):
+        check(f"r3 折入 A1 check/build 不在 gradle 那一行 → 找不到跡象:{txt.strip().splitlines()[-1][:40]!r}",
+              has([txt]) is False, txt)
+    # ── 代碼審 r4 折入:tasks:、arguments:、command:、gradle_task: 這四個已知欄位的值視同 gradle 任務列 ──
+    # (Azure Gradle 任務、gradle/actions 的 arguments、CircleCI gradle orb、Bitrise gradle-runner;值可以是單行、引號、YAML 清單或多行)
+    for txt in ("steps:\n- task: Gradle@2\n  inputs:\n    tasks: 'clean build test'\n",
+                "steps:\n- task: Gradle@3\n  inputs:\n    tasks: check\n",
+                "- uses: gradle/gradle-build-action@v3\n  with:\n    arguments: build\n",
+                "- uses: gradle/actions/setup-gradle@v4\n  with:\n    arguments: \"--no-daemon check\"\n",
+                "- uses: gradle/gradle-build-action@v3\n  with:\n    arguments: |\n      assembleDebug\n      build\n",
+                "workflows:\n  primary:\n    steps:\n    - gradle-runner@2:\n        inputs:\n        - gradle_task: build\n",
+                "inputs:\n  tasks:\n  - assemble\n  - check\n",
+                "inputs:\n  tasks: [assemble, check]\n"):
+        check(f"r4 折入 A1 已知欄位的值當 gradle 任務:{txt.strip().splitlines()[-1][:40]!r}", has([txt]) is True, txt)
+    for txt in ("jobs:\n  a:\n    needs: build\n    steps:\n      - run: ./gradlew assembleDebug\n",
+                "a:\n  stage: build\n  script:\n    - ./gradlew assemble\n",
+                "jobs:\n  a:\n    name: build\n    steps:\n      - uses: gradle/actions/setup-gradle@v4\n",
+                "inputs:\n  tasks: |\n    assemble\nnext:\n  name: build\n",
+                "inputs:\n  tasks: |\n    assemble\nnext:\n  needs:\n    - build\n",
+                "- gradle/run:\n    command: assembleDebug\n    name: check\n"):
+        check(f"r4 折入 A1 其他欄位的 build/check 照舊不算:{txt.strip().splitlines()[-1][:40]!r}", has([txt]) is False, txt)
+    # ── 代碼審 r5 折入:command: 是 CircleCI run 的通用欄位,不算 gradle 任務列;同欄兄弟鍵結束欄位值;區塊純量標記 ──
+    for txt in ("jobs:\n  b:\n    steps:\n      - run:\n          command: npm run build\n      - run: ./gradlew assembleDebug\n",
+                "jobs:\n  b:\n    steps:\n      - run:\n          command: |\n            make build\n            ./gradlew assembleDebug\n",
+                "- uses: gradle/gradle-build-action@v3\n  with:\n    arguments: |\n      assembleDebug\n    name: build\n"):
+        check(f"r5 折入 A1 找不到跡象:{txt.strip().splitlines()[-2:]!r}", has([txt]) is False, txt)
+    for mark in (">", ">-", "|-"):
+        txt = f"- uses: gradle/gradle-build-action@v3\n  with:\n    arguments: {mark}\n      assembleDebug\n      build\n"
+        check(f"r5 折入 A1 區塊純量 {mark} 的欄位值照認", has([txt]) is True, txt)
+    # 天花板(已知會多印):CircleCI gradle orb 的 command: build 會跑 build,但 command 是通用欄位、不收
+    orb = "orbs:\n  gradle: circleci/gradle@3\nworkflows:\n  w:\n    jobs:\n      - gradle/run:\n          command: build\n"
+    check("天花板 A1 CircleCI gradle orb 的 command: build 認不得(已知會多印)", has([orb]) is False, orb)
+    # Jenkinsfile 照 Groovy 剝 /* */ 區塊與行尾 //,字串裡的 // 不算註解
+    for txt, want in (("/*\n sh './gradlew lint'\n*/\nsh './gradlew assemble'\n", False),
+                      ("sh './gradlew assembleDebug' // lint later\n", False),
+                      ("// sh './gradlew lintDebug'\nsh './gradlew assembleDebug'\n", False),
+                      ("sh 'curl -o x https://h/a && ./gradlew lintDebug'\n", True),
+                      ("sh \"echo http://x\" /* c */ ; sh './gradlew check'\n", True)):
+        check(f"r3 折入 A1 Jenkinsfile 剝 Groovy 註解:{txt.strip()[:40]!r} → {want}", has([txt], name="Jenkinsfile") is want, txt)
+    def quick(root):
+        """直接呼叫 _lint_android_ci_advisories(不起 lint-check 子程序,壓測試耗時;端到端另有一條)。"""
+        adv = m._lint_android_ci_advisories({"kt": [det]}, root)
+        return {c for c in ("A1", "A2", "A3") if any(f" {c}:" in a for a in adv)}
+    # 建置檔的 lint { } 區塊與 lint-baseline.xml 是範本第 1、2 步的痕跡、不代表 CI 有跑:不再算跡象,照印 A1
+    root = fresh(build='plugins { id("com.android.application") }\nandroid {\n    lint {\n        baseline = file("lint-baseline.xml")\n    }\n}\n')
+    check("r3 折入 建置檔只有 lint { } 區塊、沒有 CI → 照印 A1", "A1" in quick(root), str(quick(root)))
+    root = fresh(build='plugins { id("com.android.application") }\nandroid {\n    lintOptions {\n        abortOnError false\n    }\n}\n')
+    check("r3 折入 建置檔只有 lintOptions { } 區塊、沒有 CI → 照印 A1", "A1" in quick(root), str(quick(root)))
+    root = fresh()
+    wf(root, "app/lint-baseline.xml", "<issues/>\n")
+    check("r3 折入 只有 lint-baseline.xml、沒有 CI → 照印 A1", "A1" in quick(root), str(quick(root)))
+    root = fresh()
+    wf(root, ".github/workflows/ci.yml", "jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n"
+                                         "          cache: gradle\n      - run: ./gradlew assembleDebug\n  release:\n"
+                                         "    needs: build\n    steps:\n      - run: echo done\n")
+    check("r3 折入 needs: build 加 cache: gradle 加 ./gradlew assembleDebug → 照印 A1(端到端)", "A1" in codes(root)[1], str(codes(root)[2]))
+    root = fresh()
+    wf(root, ".gitlab-ci.yml", "stages: [build]\nassemble:\n  stage: build\n  script:\n    - ./gradlew assemble\n")
+    check("r3 折入 GitLab stage: build 加 ./gradlew assemble → 照印 A1", "A1" in quick(root), str(quick(root)))
+    root = fresh()
+    wf(root, ".github/workflows/ci.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew check\n")
+    check("r3 折入 ./gradlew check → 不印 A1", "A1" not in quick(root), str(quick(root)))
+    # 解析後落在 repo 外的符號連結略過、repo 內的照讀(建置檔與 CI 設定檔都是;資安席縱深防禦,r4 改成看真實路徑)
+    import os as _os
+    import shutil as _sh
+    made = []
+
+    def fresh_t(**kw):
+        """同 fresh,另記下來、這一段用完刪(代碼審 r5 通才席:暫存用完要刪)。"""
+        made.append(fresh(**kw))
+        return made[-1]
+    outside = Path(tempfile.mkdtemp(prefix="gctl-andci-out-"))
+    (outside / "b.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+    (outside / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug\n", encoding="utf-8")
+    root = fresh_t(build=None)
+    _os.symlink(outside / "b.kts", root / "build.gradle.kts")
+    check("r3 折入 建置檔是指到 repo 外的符號連結 → 略過(不認成 Android)", quick(root) == set(), str(quick(root)))
+    root = fresh_t()
+    (root / ".github" / "workflows").mkdir(parents=True)
+    _os.symlink(outside / "ci.yml", root / ".github" / "workflows" / "ci.yml")
+    check("r3 折入 CI 設定檔是指到 repo 外的符號連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
+    check("r3 折入 _ci_config_paths 不列指到 repo 外的符號連結", m._ci_config_paths(root) == [], str(m._ci_config_paths(root)))
+    root = fresh_t()
+    _os.symlink(outside / "ci.yml", root / ".gitlab-ci.yml")
+    check("r3 折入 .gitlab-ci.yml 是指到 repo 外的符號連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
+    # r4 折入:資料夾是連結也看真實路徑;repo 內的連結照讀(T4 不誤印、建置檔照認)
+    odir = Path(tempfile.mkdtemp(prefix="gctl-andci-odir-"))
+    (odir / "ci.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug detektDebug\n", encoding="utf-8")
+    (odir / "config.yml").write_text("jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug\n", encoding="utf-8")
+    root = fresh_t()
+    (root / ".github").mkdir()
+    _os.symlink(odir, root / ".github" / "workflows")
+    check("r4 折入 .github/workflows 是指到 repo 外的資料夾連結 → 略過(照印 A1)", "A1" in quick(root), str(quick(root)))
+    check("r4 折入 T4 也不讀 repo 外的資料夾連結", m._detekt_ci_has_typed_task(root) is False)
+    root = fresh_t()
+    _os.symlink(odir, root / ".circleci")
+    check("r4 折入 .circleci 是指到 repo 外的資料夾連結 → 略過", m._ci_config_paths(root) == [], str(m._ci_config_paths(root)))
+    root = fresh_t()
+    wf(root, "ci/real.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug detektDebug\n")
+    (root / ".github" / "workflows").mkdir(parents=True)
+    _os.symlink("../../ci/real.yml", root / ".github" / "workflows" / "ci.yml")
+    check("r4 折入 workflow 是指到 repo 內的檔案連結 → 照讀(T4 認得 detektDebug)", m._detekt_ci_has_typed_task(root) is True)
+    check("r4 折入 workflow 是指到 repo 內的檔案連結 → 照讀(不印 A1)", "A1" not in quick(root), str(quick(root)))
+    root = fresh_t(build=None)
+    wf(root, "gradle/real.kts", 'plugins { id("com.android.application") }\n')
+    _os.symlink("gradle/real.kts", root / "build.gradle.kts")
+    check("r4 折入 建置檔是指到 repo 內的連結 → 照讀(認成 Android、印 A1)", "A1" in quick(root), str(quick(root)))
+    # r5 折入:連結迴圈——Python 3.14 的非嚴格 resolve() 遇到迴圈不丟例外、回原路徑,迴圈留在 repo 內就判在;
+    # 後面 is_file() 為假,CI 設定檔清單照樣不列、不會讀到 repo 外
+    root = fresh_t()
+    _os.symlink("loop2", root / "loop1")
+    _os.symlink("loop1", root / "loop2")
+    check("r5 折入 repo 內的連結迴圈 → 判在 repo 內(非嚴格解析不丟例外)", m._path_resolves_in_root(root, root / "loop1") is True)
+    _os.symlink(".gitlab-ci.yml", root / ".gitlab-ci.yml")
+    check("r5 折入 自指的 .gitlab-ci.yml 不是一般檔 → 不列、照印 A1",
+          m._ci_config_paths(root) == [] and "A1" in quick(root), str(m._ci_config_paths(root)))
+    # r5 折入:事件帳路徑守衛改呼叫 _path_resolves_in_root。逐層 is_symlink 先擋一般連結;逐層看不出來的連結
+    # (Windows junction 這類)靠最後的真實路徑判定——拿 is_symlink 永遠回假模擬
+    root = fresh_t()
+    (outside / "ev").mkdir()
+    _os.symlink(outside / "ev", root / "governance")
+    base = root / "governance" / "runtime" / "events"
+    check("r5 折入 事件帳路徑上層是連結 → 逐層擋下", m._events_path_safe(root, base) is False)
+    real_isl = m.Path.is_symlink
+    m.Path.is_symlink = lambda self: False
+    try:
+        got = m._events_path_safe(root, base)
+    finally:
+        m.Path.is_symlink = real_isl
+    check("r5 折入 事件帳路徑:逐層看不出連結時,真實路徑判定照樣擋(模擬 junction)", got is False, str(got))
+    for d in (outside, odir, *made):
+        _sh.rmtree(d, ignore_errors=True)
+    root = fresh(build=None)
+    wf(root, "build.gradle.kts", 'plugins { kotlin("jvm") }\n')
+    wf(root, "gradle/libs.versions.toml", '# android-application = { id = "com.android.application" }\n[versions]\n')
+    check("r2 折入 版本目錄 # 註解裡的 Android 外掛不算 Android", codes(root)[1] == set(), str(codes(root)[2]))
+    # ── 代碼審 r1 折入:建置檔掃描沿用既有跳過名單與剝註解、不開非一般檔、根目錄優先 ──
+    import os as _os
+    root = fresh(build=None)
+    wf(root, "Pods/x/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    wf(root, "vendor/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    check("r1 折入 沿用 _stack_scan_skip:Pods/、vendor/ 底下不算", codes(root)[1] == set(), str(codes(root)[2]))
+    root = fresh(build='// plugins { id("com.android.application") }\nplugins { kotlin("jvm") }\n')
+    check("r1 折入 註解裡的 com.android. 不算 Android", codes(root)[1] == set(), str(codes(root)[2]))
+    root = fresh(build='plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n'
+                       '// TODO add compose-lint-checks\n')
+    check("r1 折入 註解裡的 compose-lint-checks 不算接上 → 印 A2", "A2" in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=None)
+    _os.mkfifo(root / "build.gradle")
+    wf(root, "app/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(root), "--json"], cwd=str(root),
+               capture_output=True, text=True, timeout=30)
+    check("r1 折入 建置檔是具名管道時不卡住、照判其他檔", r.returncode == 0 and " A1:" in r.stdout, r.stdout[-300:])
+    root = fresh(build='dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:1.6.1") }\n')
+    wf(root, "a000/build.gradle.kts", 'plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n')
+    for i in range(1, 205):
+        wf(root, f"a{i:03d}/build.gradle.kts", 'plugins { id("com.android.library") }\n')
+    check("r1 折入 超過 200 支時根目錄的建置檔優先讀(不被子模組擠掉)", "A2" not in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=None)
+    wf(root, ".hidden/build.gradle.kts", 'plugins { id("com.android.application") }\n')
+    check("r1 折入 隱藏資料夾不進", codes(root)[1] == set(), str(codes(root)[2]))
+    real = Path(tempfile.mkdtemp(prefix="gctl-andci-real-"))
+    (real / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+    root = fresh(build=None)
+    _os.symlink(real, root / "linked")
+    check("r1 折入 不跟符號連結進資料夾", codes(root)[1] == set(), str(codes(root)[2]))
+    root = fresh(build=None)
+    wf(root, "gradle/libs.versions.toml", 'android-application = { id = "com.android.application" }\n')
+    check("r1 折入 只有 gradle/libs.versions.toml 寫外掛也認得", "A1" in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=None)
+    wf(root, "settings.gradle.kts", 'plugins { id("com.android.settings") }\n')
+    check("r1 折入 settings.gradle.kts 也掃", "A1" in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=('// x\n' * 10) + "x" * (1 << 20) + '\nplugins { id("com.android.application") }\n')
+    check("r1 折入 每支只讀前 1 MB(超過的部分不算)", codes(root)[1] == set(), str(codes(root)[2]))
+    for name in ("bitrise.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml"):
+        root = fresh()
+        wf(root, name, "x:\n  - ./gradlew lintDebug\n")
+        check(f"r1 折入 {name} 也算 CI 設定檔", "A1" not in codes(root)[1], str(codes(root)[2]))
+    # ── S2:A2 與 A3 ──
+    comp = 'plugins { id("com.android.application") }\nandroid { buildFeatures { compose = true } }\n'
+    root = fresh(build=comp)
+    check("S2 用 Compose、沒有任何 Compose 規則 → 印 A2", "A2" in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=comp + 'dependencies { lintChecks("com.slack.lint.compose:compose-lint-checks:1.6.1") }\n')
+    check("S2 建置檔有 compose-lint-checks → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=comp + 'dependencies { detektPlugins("io.nlopez.compose.rules:detekt:0.4.28") }\n')
+    check("S2 建置檔有 io.nlopez.compose.rules → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+    for ver in ("0.4.28", "0.5.0"):
+        jar = Path(tempfile.mkdtemp(prefix="gctl-andci-jar-")) / f"detekt-compose-{ver}-all.jar"
+        jar.write_bytes(b"x")
+        root = fresh(build=comp, cmds=[det, f"detekt --input {{LINT_FILES_CSV}} --disable-default-rulesets --plugins {jar} "
+                                            "--build-upon-default-config --config c.yml --report sarif:{LINT_SARIF_OUT}"])
+        _rc, cs, adv = codes(root)
+        check(f"S2 宣告帶 detekt-compose-{ver}-all.jar(檔在)→ 不印 A2、A3", not ({"A2", "A3"} & cs), str(adv))
+        jar.unlink()
+        _rc, cs, adv = codes(root)
+        check(f"S2 同一條({ver})、外掛檔不在 → 印 A3", "A3" in cs, str(adv))
+        check(f"r1 折入 A3 標成第幾條、不印命令裡的檔名({ver})",
+              any(a.startswith("[kt 第 2 條] A3:") for a in adv) and not any(jar.name in a for a in adv), str(adv))
+    # ── 代碼審 r1、r2 折入:A3 沿用 detekt 判定的走訪、照 shell 展開、相對路徑對 repo 根、判不了不印、同一條只印一次 ──
+    # (r2:直接呼叫函式,不再每例起一個 lint-check 子程序,壓測試耗時;端到端那條上面 S2 已驗)
+    import os as _os
+    home = Path(tempfile.mkdtemp(prefix="gctl-andci-home-"))
+    (home / "p").mkdir()
+    (home / "p" / "c.jar").write_bytes(b"x")
+    rroot = fresh(build=comp)
+    (rroot / "tools").mkdir()
+    (rroot / "tools" / "p.jar").write_bytes(b"x")
+    saved = {k: _os.environ.get(k) for k in ("HOME", "LUMOS_T_PLUG", "LUMOS_T_UNSET_X")}
+    _os.environ["HOME"] = str(home)
+    _os.environ["LUMOS_T_PLUG"] = str(home / "p")
+    _os.environ.pop("LUMOS_T_UNSET_X", None)
+    old_cwd = _os.getcwd()
+    try:
+        _os.chdir("/")
+        tail = " --build-upon-default-config --config c.yml --report sarif:{LINT_SARIF_OUT}"
+        base = "detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins "
+        miss = lambda c: m._android_plugin_missing(c, rroot)  # noqa: E731
+        check("r1 折入 A3:$HOME 照 shell 展開,檔在 → 不缺", miss(base + "$HOME/p/c.jar" + tail) is False)
+        check("r1 折入 A3:${HOME} 與 ~ 也展開", miss(base + "${HOME}/p/c.jar" + tail) is False and miss(base + "~/p/c.jar" + tail) is False)
+        check("r1 折入 A3:其他環境變數照 shell 展開", miss(base + "$LUMOS_T_PLUG/c.jar" + tail) is False)
+        check("r1 折入 A3:沒設的環境變數判不了 → 不算缺", miss(base + "$LUMOS_T_UNSET_X/c.jar" + tail) is False)
+        check("r1 折入 A3:相對路徑對 repo 根解析(工作目錄在 / 也一樣)", miss(base + "tools/p.jar" + tail) is False)
+        check("r1 折入 A3:sh -c 包住也看得到", miss("sh -c '" + base + "$HOME/nope.jar" + tail + "'") is True)
+        check("r1 折入 A3:--plugins= 等號寫法與 -p 也認", miss(base.replace("--plugins ", "--plugins=") + "$HOME/n.jar" + tail) is True
+              and miss(base.replace("--plugins ", "-p ") + "$HOME/n.jar" + tail) is True)
+        check("r2 折入 A3:反引號命令替換判不了 → 不算缺", miss(base + "`echo $HOME/p/c.jar`" + tail) is False)
+        check("r2 折入 A3:萬用字元判不了 → 不算缺", miss(base + "tools/*.jar" + tail) is False)
+        check("r3 折入 A3:大括號展開判不了 → 不算缺", miss(base + "tools/{p,q}.jar" + tail) is False)
+        check("r3 折入 A3:${HOME} 展開後沒有大括號,照判(檔不在 → 缺)", miss(base + "${HOME}/nope.jar" + tail) is True)
+    finally:
+        _os.chdir(old_cwd)
+        for k, v in saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+    two = fresh(build=comp, cmds=[det, base + "/nonexist/n1.jar,/nonexist/n2.jar" + tail])
+    _rc, _cs, adv = codes(two)
+    check("r1 折入 A3:一條命令裡兩支都不在 → 只印一則", sum(" A3:" in a for a in adv) == 1, str(adv))
+    root = fresh(build='plugins { id("com.android.application") }\n')
+    check("S2 不用 Compose → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+    root = fresh()
+    wf(root, "app/build/intermediates/build.gradle.kts", comp)
+    check("S2 build/ 底下的建置檔不算 → 不印 A2", "A2" not in codes(root)[1], str(codes(root)[2]))
+    root = fresh(build=None)
+    for i in range(200):
+        wf(root, f"m{i:03d}/build.gradle.kts", 'plugins { id("com.android.library") }\n')
+    wf(root, "z999/build.gradle.kts", comp)
+    check("S2 第 201 支(依路徑排序)以後才有 Compose 字樣 → 不算", "A2" not in codes(root)[1], str(codes(root)[2]))
+    # 健檢 F 段:同一份 Android 宣告印 A1(另起一則提醒)
+    import json as _j
+    import shutil as _sh
+    src = mkvault()
+    repo_root = Path(tempfile.mkdtemp(prefix="gctl-andci-doc-")) / "repo"
+    vault = repo_root / "docs" / "proj-knowledge"
+    vault.parent.mkdir(parents=True)
+    _sh.copytree(src, vault)
+    (repo_root / ".git").mkdir()
+    (repo_root / ".lumos").mkdir()
+    (repo_root / ".lumos" / "lint.json").write_text(_j.dumps({"kt": [det]}), encoding="utf-8")
+    (repo_root / "build.gradle.kts").write_text('plugins { id("com.android.application") }\n', encoding="utf-8")
+    rd = run(vault, "doctor", "--ci")
+    fsec = rd.stdout[rd.stdout.find("[F]"):]
+    check("S1 健檢 F 段另起一則「Android 現成檢查有沒有接上」並印 A1",
+          "Android 現成檢查有沒有接上" in fsec and "A1:" in fsec, fsec[:1200])
+    r = sp.run([_s.executable, GRAPHCTL, "lint-check", "--repo", str(repo_root)], cwd=str(repo_root),
+               capture_output=True, text=True, timeout=60)
+    check("S1 lint-check 文字輸出另起標題", "Android 現成檢查有沒有接上" in r.stdout and "A1:" in r.stdout, r.stdout[-800:])
+    print("  ✓ t_lint_android_ci_advice")
+
+
+# ── 代碼審 r4 邊界席的固定語料:15 個公開專案真實 CI 檔最小節錄,加 12 列負例、正例與合成例;修補前後都跑,斷言人工判定 ──
+# 每列:(來源, CI 檔名, 節錄, 人工判定, 預期印 A1, 註解)。人工判定 True=CI 真的會叫起 Android Lint、False=不會、None=判不了。
+# 預期跟人工判定不一致的列是天花板,斷言的是現行行為並標「已知判錯」,不假裝判對。節錄抓自 2026-11-06 各專案預設分支。
+_ANDROID_CI_CORPUS = (
+    ("android/nowinandroid", ".github/workflows/Build.yaml",
+     "jobs:\n  test_and_apk:\n    steps:\n      - name: Setup Gradle\n        uses: gradle/actions/setup-gradle@v4\n"
+     "      - name: Check lint\n        run: ./gradlew :app:lintProdRelease :app-nia-catalog:lintRelease :lint:lint\n",
+     True, False, "lint 任務名"),
+    ("android/architecture-samples", ".github/workflows/build_test.yaml",
+     "jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n          cache: 'gradle'\n"
+     "      - uses: gradle/actions/setup-gradle@v4\n      - uses: reactivecircus/android-emulator-runner@v2\n        with:\n"
+     "          script: ./gradlew :app:connectedCheck --stacktrace\n",
+     False, True, "只有 connectedCheck(儀器測試,不帶 lint)"),
+    ("thunderbird/thunderbird-android", ".github/workflows/quality-checks.yml",
+     "jobs:\n  quality-lint:\n    steps:\n      - name: Running Android lint\n        run: ./gradlew lint\n",
+     True, False, "./gradlew lint"),
+    ("TeamNewPipe/NewPipe", ".github/workflows/ci.yml",
+     "jobs:\n  build-and-test-jvm:\n    steps:\n      - name: Build debug APK and run jvm tests\n"
+     "        run: ./gradlew assembleContinuous lintContinuous testDebugUnitTest --stacktrace -DskipFormatKtlint\n",
+     True, False, "lint<變體> lintContinuous"),
+    ("element-hq/element-android", ".github/workflows/quality.yml",
+     "jobs:\n  lint:\n    steps:\n      - name: Run ktlint\n        run: |\n"
+     "          ./gradlew ktlintCheck $CI_GRADLE_ARG_PROPERTIES --continue\n      - name: Run lint\n        run: |\n"
+     "          ./gradlew vector-app:lintGplayRelease $CI_GRADLE_ARG_PROPERTIES\n",
+     True, False, "模組前綴的 lint<變體>"),
+    ("signalapp/Signal-Android", ".github/workflows/android.yml",
+     "jobs:\n  build:\n    steps:\n      - uses: gradle/actions/setup-gradle@v6\n"
+     "      - run: ./gradlew ${{ github.event_name == 'pull_request' && 'ciRemote' || 'qaRemote' }}\n",
+     True, True, "已知判錯(天花板):ciRemote 在根 build.gradle.kts 依賴 :Signal-Android:lintPlayProdDebug,聚合任務看不到"),
+    ("owncloud/android", ".github/workflows/detekt.yml",
+     "jobs:\n  detekt:\n    steps:\n      - run: ./gradlew detekt\n  unit:\n    steps:\n"
+     "      - run: ./gradlew testDebugUnitTest testMdmDebugUnitTest --continue\n",
+     False, True, "只有 detekt 與單元測試"),
+    ("android/compose-samples", ".github/workflows/build-sample.yml",
+     "jobs:\n  build:\n    steps:\n      - name: Check lint\n        run: ./gradlew lintDebug --stacktrace\n",
+     True, False, "lintDebug"),
+    ("android/sunflower", ".github/workflows/android.yml",
+     "jobs:\n  build:\n    steps:\n      - run: .github/scripts/gradlew_recursive.sh assembleDebug\n"
+     "#        run: ./gradlew pixel2api27DebugAndroidTest --info\n",
+     False, True, "只有 assembleDebug(註解掉的那行不算)"),
+    ("fdroid/fdroidclient(GitLab)", ".gitlab-ci.yml",
+     "stages:\n  - lint\n  - test\napp lint:\n  stage: lint\n  script:\n    - ./gradlew :app:lint :app:ktfmtCheck\n",
+     True, False, ":app:lint"),
+    ("AuroraOSS/AuroraStore(GitLab)", ".gitlab-ci.yml",
+     "stages:\n- build\n- lint\nbuild:\n  stage: build\n  script:\n    - './gradlew assembleVanillaDebug'\n"
+     "lintChecks:\n  stage: lint\n  script:\n    - './gradlew ktlintCheck'\n",
+     False, False, "已知判錯(天花板):stage 名叫 lint,底下只跑 ktlintCheck"),
+    ("bitrise-io/sample-apps-android-sdk22", "bitrise.yml",
+     "workflows:\n  primary:\n    steps:\n    - script:\n        title: gradlew\n        inputs:\n        - content: |\n"
+     "            bash ./gradlew assemble\n    - script:\n        title: gradle assemble & move to DEPLOY dir\n",
+     False, True, "只有 assemble"),
+    ("nickbutcher/plaid(CircleCI)", ".circleci/config.yml",
+     "jobs:\n  build:\n    steps:\n      - run:\n          name: Check and assemble\n"
+     "          command: ./gradlew check assemble assembleAndroidTest --stacktrace\n",
+     True, False, "./gradlew check"),
+    ("microsoft/appcenter-sampleapp-android(Azure)", "azure-pipelines.yml",
+     "steps:\n- task: Gradle@2\n  inputs:\n    gradleWrapperFile: '$(Build.Repository.LocalPath)/gradlew'\n"
+     "    tasks: 'clean build test assembleRelease assembleDebug assembleAndroidTest'\n",
+     True, False, "Azure Gradle 任務的 tasks: 欄位帶 build(r4 修)"),
+    ("wireapp/wire-android(Jenkinsfile)", "Jenkinsfile",
+     "pipeline {\n  stages {\n    stage('Trigger') {\n      steps {\n        script {\n"
+     "          build job: 'android_reloaded_critical_flows', parameters: [string(name: 'TAGS', value: '@CriticalFlows')]\n"
+     "        }\n      }\n    }\n  }\n}\n",
+     None, True, "判不了:gradle 命令在共用函式庫,現行照印"),
+    ("負例:needs: build 加 cache: gradle", ".github/workflows/ci.yml",
+     "jobs:\n  build:\n    steps:\n      - uses: actions/setup-java@v4\n        with:\n          cache: gradle\n"
+     "      - run: ./gradlew assembleDebug\n  release:\n    needs: build\n    steps:\n      - run: echo done\n",
+     False, True, "needs: 是 job 依賴"),
+    ("負例:GitLab stage: build 加 cache gradle", ".gitlab-ci.yml",
+     "stages: [build]\nassemble:\n  stage: build\n  cache:\n    key: gradle\n  script:\n    - ./gradlew assemble\n",
+     False, True, "stage 名不是任務"),
+    ("負例:只有基準線檔與 lint {} 區塊", None, None, False, True, "範本第 1、2 步的痕跡,沒有 CI"),
+    ("負例:npm run lint 加 assembleRelease", ".github/workflows/web.yml",
+     "jobs:\n  a:\n    steps:\n      - run: npm run lint\n      - run: ./gradlew assembleRelease\n",
+     False, False, "已知判錯(天花板):別的工具的 lint 字樣也算跡象"),
+    ("負例:ktlintCheck detekt assembleDebug", ".github/workflows/ci.yml",
+     "jobs:\n  a:\n    steps:\n      - run: ./gradlew ktlintCheck detekt assembleDebug\n",
+     False, True, "都不是 Android Lint"),
+    ("負例:Bitrise android-build", "bitrise.yml",
+     "workflows:\n  primary:\n    steps:\n    - android-build@1:\n        inputs:\n        - variant: debug\n",
+     False, True, "android-build 不是 android-lint"),
+    ("負例:沒有任何 CI", None, "", False, True, "沒有 CI 設定檔"),
+    ("正例:lintDebug", ".github/workflows/ci.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew lintDebug\n",
+     True, False, "lint<變體>"),
+    ("正例:./gradlew check", ".github/workflows/ci.yml", "jobs:\n  a:\n    steps:\n      - run: ./gradlew check\n",
+     True, False, "check 帶 lint"),
+    ("正例:Jenkinsfile lintRelease", "Jenkinsfile", "pipeline {\n  stages {\n    stage('L') { steps { sh './gradlew lintRelease' } }\n  }\n}\n",
+     True, False, "Jenkinsfile 的 sh"),
+    ("正例:Jenkinsfile clean build", "Jenkinsfile", "node {\n  sh './gradlew clean build'\n}\n",
+     True, False, "build 帶 check 帶 lint"),
+    ("合成例:CircleCI gradle orb(orb 文件的寫法)", ".circleci/config.yml",
+     "orbs:\n  gradle: circleci/gradle@3\nworkflows:\n  checkout-build-test:\n    jobs:\n      - gradle/run:\n          command: build\n",
+     True, True, "command 是 CircleCI run 的通用欄位、不收(代碼審 r5),orb 的 command: build 會多印"),
+)
+
+
+def t_lint_android_ci_corpus():
+    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S6:代碼審 r4 邊界席的固定語料(真實 CI 檔節錄加負例)一列一列跑 A1,
+    斷言人工判定;天花板那幾列斷言現行行為並標成已知判錯。"""
+    m = _lng_module()
+    det = "detekt --input {LINT_FILES_CSV} --build-upon-default-config --config a.yml --report sarif:{LINT_SARIF_OUT}"
+    import shutil as _sh
+    for src, name, text, human, want_a1, note in _ANDROID_CI_CORPUS:
+        root = Path(tempfile.mkdtemp(prefix="gctl-andcorp-"))
+        try:
+            build = 'plugins { id("com.android.application") }\n'
+            if text is None:   # 只有基準線檔與 lint {} 區塊
+                build += 'android {\n    lint {\n        baseline = file("lint-baseline.xml")\n    }\n}\n'
+                (root / "app").mkdir()
+                (root / "app" / "lint-baseline.xml").write_text("<issues/>\n", encoding="utf-8")
+            (root / "build.gradle.kts").write_text(build, encoding="utf-8")
+            if name:
+                p = root / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text, encoding="utf-8")
+            adv = m._lint_android_ci_advisories({"kt": [det]}, root)
+        finally:
+            _sh.rmtree(root, ignore_errors=True)
+        got = any(" A1:" in a for a in adv)
+        right = human is not None and want_a1 == (not human)
+        tag = "判對" if right else ("判不了" if human is None else "已知判錯(天花板)")
+        check(f"r4 語料 {src}:預期{'印' if want_a1 else '不印'} A1({tag};{note})", got is want_a1, str(adv))
+    print("  ✓ t_lint_android_ci_corpus")
+
+
+def _detekt_compose_jar():
+    """compose-rules 0.4.28 外掛:先看 LUMOS_DETEKT_COMPOSE_JAR(CI 下載後設),再看本機固定目錄;CI 上找不到判紅。"""
+    import os as _os
+    p = _os.environ.get("LUMOS_DETEKT_COMPOSE_JAR") or str(
+        Path.home() / ".local" / "share" / "lumos" / "detekt-plugins" / "detekt-compose-0.4.28-all.jar")
+    if Path(p).is_file():
+        return p
+    if _os.environ.get("CI"):
+        check("CI 上一定要有 compose-rules 外掛(ci.yml 下載釘版本,路徑放 LUMOS_DETEKT_COMPOSE_JAR)", False, p)
+    return None
+
+
+def t_detekt_compose_rules_shared_config():
+    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S3:共用設定照 detekt 官方 Compose 頁的六項,標準 Compose 寫法不再被內建規則誤報、
+    一般函式照報;compose-rules 那條(linter 目錄範本的寫法)只報外掛規則;外掛不在時不產 SARIF。本機沒 detekt 或外掛跳過,CI 必跑。"""
+    import subprocess as sp
+    det = _detekt_real_bin()
+    base = Path(__file__).resolve().parent.parent
+    cfg = base / "configs" / "detekt" / "android.yml"
+    ccfg = base / "configs" / "detekt" / "compose.yml"
+    if not det:
+        check("S3 靜態那半:共用 Android 設定與 compose-rules 設定都在", cfg.is_file() and ccfg.is_file(),
+              f"{cfg} / {ccfg}")
+        print("    (本機沒有 detekt 1.23.8,略過真跑;CI 下載釘版本會跑)")
+        print("  ✓ t_detekt_compose_rules_shared_config")
+        return
+    td = Path(tempfile.mkdtemp(prefix="gctl-dtcompose-"))
+    src = td / "Ui.kt"
+    src.write_text(
+        "package demo\n\n"
+        "import androidx.compose.runtime.Composable\n"
+        "import androidx.compose.runtime.mutableStateOf\n"
+        "import androidx.compose.ui.graphics.Color\n"
+        "import androidx.compose.ui.tooling.preview.Preview\n\n"
+        "private const val BrandAlpha = 1\n"
+        "const val MAX_ITEMS = 5\n"
+        "val Brand = Color(0xFFEA6D7E)\n\n"
+        "@Composable\n"
+        "fun Header(a: Int = 1, b: Int = 2, c: Int = 3, d: Int = 4, e: Int = 5, f: Int = 6, g: Int = 7) {\n"
+        "    println(a + b + c + d + e + f + g + BrandAlpha)\n"
+        "}\n\n"
+        "@Preview\n"
+        "@Composable\n"
+        "private fun HeaderPreview() {\n"
+        "    Header()\n"
+        "}\n\n"
+        "@Composable\n"
+        "fun Counter() {\n"
+        "    val s = mutableStateOf(0)\n"
+        "    println(s.value)\n"
+        "}\n\n"
+        "fun Other() = Unit\n",
+        encoding="utf-8")
+    # ★走閘真正用的那條路★(代碼審 r1 架構席):照 linter 目錄範本那兩行原文,換掉執行檔、工具鏈路徑與檔名佔位,
+    # 交給新增告警閘的 _lint_run_and_parse 跑——驗的是「照範本接,閘看到什麼」,不是另寫一套 SARIF 解析
+    import shlex as _shlex
+    m = _lng_module()
+    doc = (base / "docs" / "lumos-toolchain-knowledge" / "Systems" / "linter精選目錄.md").read_text(encoding="utf-8")
+    tline = [ln.strip() for ln in doc.splitlines() if ln.strip().startswith("detekt --input {LINT_FILES_CSV}")]
+    main_t = [ln for ln in tline if "--disable-default-rulesets" not in ln]
+    comp_t = [ln for ln in tline if "detekt-compose-0.4.28-all.jar" in ln]
+    check("S3 linter 目錄有 detekt 推送前範本那一行", len(main_t) == 1, str(tline))
+    check("S3 linter 目錄有 compose-rules 那條範本", len(comp_t) == 1, str(tline))
+    check("S3 範本那條帶 --disable-default-rulesets 與 --build-upon-default-config",
+          all("--disable-default-rulesets" in ln and "--build-upon-default-config" in ln and "configs/detekt/compose.yml" in ln
+              for ln in comp_t) and bool(comp_t), str(comp_t))
+
+    def ready(tpl, jar=None):
+        c = tpl.replace("$HOME/harness/lumos-toolchain", str(base)).replace("{LINT_FILES_CSV}", _shlex.quote(str(src)))
+        if jar is not None:
+            c = c.replace("$HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar", _shlex.quote(jar))
+        return _shlex.quote(det) + c[len("detekt"):]
+    lines = src.read_text(encoding="utf-8").splitlines()
+    other_ln = lines.index("fun Other() = Unit") + 1
+    state_ln = lines.index("    val s = mutableStateOf(0)") + 1
+    snake_ln = lines.index("const val MAX_ITEMS = 5") + 1
+    claims, ok = m._lint_run_and_parse(ready(main_t[0]), td) if main_t else ([], False)
+    check("★前置★ 共用設定那條經閘真的跑出結果", ok is True, str(claims)[:300])
+    rules = {c["rule"].split(".")[-1] for c in claims}
+    for bad in ("LongParameterList", "UnusedPrivateMember", "TopLevelPropertyNaming", "MagicNumber"):
+        check(f"S3 標準 Compose 寫法不報 {bad}", bad not in rules, str([(c['rule'], c['line']) for c in claims]))
+    fn_lines = sorted(c["line"] for c in claims if c["rule"].endswith("FunctionNaming"))
+    check("S3 FunctionNaming 只報一般函式 fun Other(),不報 @Composable", fn_lines == [other_ln], f"{other_ln} {fn_lines}")
+    check("r1 折入 全大寫加底線的頂層常數(Kotlin 慣例)照舊不報",
+          not any(c["line"] == snake_ln for c in claims), str([(c['rule'], c['line']) for c in claims]))
+    jar = _detekt_compose_jar()
+    if not jar:
+        print("    (本機沒有 compose-rules 0.4.28 外掛,外掛那半略過)")
+        print("  ✓ t_detekt_compose_rules_shared_config")
+        return
+    claims2, ok2 = m._lint_run_and_parse(ready(comp_t[0], jar), td) if comp_t else ([], False)
+    check("★前置★ 外掛那條經閘真的跑出結果", ok2 is True, str(claims2)[:300])
+    check("S3 外掛那條報 RememberMissing(在 mutableStateOf 那一行)",
+          any(c["rule"].endswith("RememberMissing") and c["line"] == state_ln for c in claims2), str(claims2)[:400])
+    check("S3 外掛那條不報任何 detekt 內建規則", all(".Compose." in c["rule"] for c in claims2), str(claims2)[:400])
+    _c3, ok3 = m._lint_run_and_parse(ready(comp_t[0], str(td / "nope-all.jar")), td) if comp_t else ([], True)
+    check("S3 外掛路徑不存在時閘判成沒跑出結果(走環境不可用)", ok3 is False, "")
+    print("  ✓ t_detekt_compose_rules_shared_config")
+
+
+
+def t_kt_catalog_batch4_wiring():
+    """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;
+    預設關、opt-in、待查的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
+    ck = _ktpack()
+    lint, cr = ck.B4_TAG_LINT, ck.B4_TAG_CR
+    tags = ck.batch4_expected_tags
+    check("★前置★ slack 規則碼 → Android Lint 標籤", tags("slack:ComposeItemKeyHashCode") == [lint])
+    check("★前置★ 內建規則碼 → Android Lint 標籤", tags("內建:TrustAllX509TrustManager") == [lint])
+    check("r1 折入 Android Lint:規則碼 → Android Lint 標籤", tags("Android Lint:CommitPrefEdits") == [lint])
+    check("★前置★ androidx.套件:規則碼 → Android Lint 標籤", tags("androidx.lifecycle:NullSafeMutableLiveData") == [lint])
+    check("★前置★ opt-in 的 compose-rules → 不標", tags("cr:compose:unstable-collections / UnstableCollections(opt-in)") == [])
+    check("★前置★ Slack 預設關的穩定性檢查 → 不標", tags("slack:ComposeUnstableCollections") == [])
+    check("★前置★ 預設關 → 不標", tags("內建:WrongThreadInterprocedural(預設關)") == [])
+    check("★前置★ 待查 → 不標", tags("androidx UnnecessaryLambdaCreation 待查") == [])
+    check("★前置★ 兩家都有 → 兩個標籤",
+          tags("cr:compose:mutable-params-check / MutableParams;slack:ComposeMutableParameters") == [lint, cr])
+    probs = [p for p in ck.catalog_problems(ck.load_rules()) if "第四批" in p[1]]
+    check("S4 每一列的第四批標籤跟口徑重算一致", probs == [], "\n".join(f"{a}:{b}" for a, b in probs[:15]))
+    cat = ck.CATALOG.read_text(encoding="utf-8")
+    check("S4 型錄〈輸入與口徑〉寫了這兩個標籤", lint in cat.split("## 來源縮寫")[0] and cr in cat.split("## 來源縮寫")[0], "")
+    # ★前置★ 自檢真的抓得到:改壞一列的標籤、把不該標的列標上,各要報(沿用 _ktpack(copy=True) 的複本,不碰真檔)
+    import re as _re
+    rows = cat.splitlines(keepends=True)
+    i_tag = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"批四({lint})" in ln)
+    i_old = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and "批四(現成規則)" in ln)
+    for name, idx, a, b in (("標籤改回舊值", i_tag, f"批四({lint})", "批四(現成規則)"),
+                            ("不該標的列標成接電", i_old, "批四(現成規則)", f"批四({lint})")):
+        cp = _ktpack(copy=True)
+        mut = rows[:]
+        mut[idx] = mut[idx].replace(a, b, 1)
+        cp.CATALOG.write_text("".join(mut), encoding="utf-8")
+        got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
+        check(f"★前置★ 自檢抓得到:{name}", len(got) >= 1, str(got[:3]))
+    print("  ✓ t_kt_catalog_batch4_wiring")
+
+
 def _detekt_real_bin():
     """找真的 detekt 1.23.8;CI 一定要有(計劃範圍 6:CI 下載釘版本),本機沒有或版本不對回 None。"""
     import os as _os

@@ -1,0 +1,401 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 5f1b05873..3a95395a3 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -156,20 +156,33 @@ jobs:
+           java -version
+           d="$RUNNER_TEMP/detekt"
+           mkdir -p "$d/bin"
+           curl -sSfL --retry 3 -o "$d/detekt-cli.zip" \
+             "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}.zip"
+           echo "${DETEKT_SHA256}  $d/detekt-cli.zip" | sha256sum -c -
+           unzip -q "$d/detekt-cli.zip" -d "$d"
+           ln -s "$d/detekt-cli-${DETEKT_VERSION}/bin/detekt-cli" "$d/bin/detekt"
+           echo "$d/bin" >> "$GITHUB_PATH"
+           "$d/bin/detekt" --version
++      # compose-rules 的 detekt 外掛(0.4.28 對 detekt 1.23.8;Projects/Android現成檢查接上CI與推送前_計劃 範圍 2、S3):照上一步同一個做法,
++      # 下載 → 比對寫死的 sha256(2026-11-06 本機算的,官方沒公布)→ 路徑放進 LUMOS_DETEKT_COMPOSE_JAR;測試在 CI 上找不到這支會判紅。
++      - name: 裝釘版本的 compose-rules detekt 外掛
++        env:
++          COMPOSE_RULES_VERSION: "0.4.28"
++          COMPOSE_RULES_SHA256: "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6"
++        run: |
++          set -eu
++          j="$RUNNER_TEMP/detekt/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
++          curl -sSfL --retry 3 -o "$j" \
++            "https://github.com/mrmans0n/compose-rules/releases/download/v${COMPOSE_RULES_VERSION}/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
++          echo "${COMPOSE_RULES_SHA256}  $j" | sha256sum -c -
++          echo "LUMOS_DETEKT_COMPOSE_JAR=$j" >> "$GITHUB_ENV"
+       - name: 全套的這幾份(${{ matrix.shards }} / 共 ${{ env.SHARD_TOTAL }} 份)
+         env:
+           MY_SHARDS: ${{ matrix.shards }}
+         run: |
+           set -u
+           rc=0
+           for i in $MY_SHARDS; do
+             # 每份印開始時間與「第 i 份耗時 N 秒」:看分片平不平均用;撤除條件量的是每台(兩份)的耗時,看這個工作的總時間(推送與CI提速 RETIRE-IF)
+             # 子殼層裡先 set +e:預設 bash -e 會在測試紅時直接結束子殼層,紅的那份就印不出耗時(代碼審 r1 通才、合約圖譜席)
+             ( set +e; s=$(date +%s); echo "第 $i 份開始 $(date -u +%H:%M:%S)"; python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"; rc=$?; echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"; exit $rc ) > "/tmp/shard-$i.log" 2>&1 &
+diff --git a/configs/detekt/android.yml b/configs/detekt/android.yml
+index 3f30b09ac..04483575b 100644
+--- a/configs/detekt/android.yml
++++ b/configs/detekt/android.yml
+@@ -1,26 +1,29 @@
+ # detekt 共用差分設定——Android 專案標準（lumos-toolchain 分發，各專案 .lumos/lint.json 引用）
+ #
+ # 用法（兩段接法，見 docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md 的 detekt 標準接法）:
+ #   推送前(.lumos/lint.json 樣板):
+ #   detekt --input {LINT_FILES_CSV} --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/android.yml --report sarif:{LINT_SARIF_OUT}
+ #   CI(專案自己貼):detekt Gradle 外掛指這份設定,先 ./gradlew detektBaseline<變體> 產基準線並提交,CI 跑 ./gradlew detekt<變體>
++#   Compose 專案另加一條只跑 compose-rules 外掛的宣告,設定指同目錄的 compose.yml(寫法見 linter 目錄)
+ #
+ # ★講實話(2026-11-06,detekt 1.23.8 實測;lumos lint-check 與健檢會照指令字面印出同樣的提醒)★:
+ #   ①下面標「要型別資訊」的規則,推送前那條命令不帶型別參數,所以推送前不跑、也不報錯;
+ #     照 detekt 官方建議放在 CI 的 Gradle 型別解析任務(detekt<變體>)加基準線擋(上面的 CI 那行)。沒接 CI 時健檢印 T4。
+ #   ②推送前用 {LINT_FILES_CSV}(這次改到的 kt 檔用逗號串成一個值,detekt 只收逗號分隔),新增告警閘會真的跑、只擋新增的,
+ #     擋得到的是不用型別資訊的規則(GlobalScope 裸用、複雜度、命名這類)。用空白串的 {LINT_FILES} 多檔時 detekt 會拒跑。
+ #   ③自有設定要跟這份疊加時,用逗號合成一個 --config a.yml,b.yml(分開寫兩次 --config 會拒跑);
+ #     清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
+ #
+-# 定位:只收「detekt 預設關、但效能檢核目錄/kotlin-idioms 點名要開」的差分。
++# 定位:收兩種差分——①「detekt 預設關、但效能檢核目錄/kotlin-idioms 點名要開」的規則;②detekt 官方 Compose 頁
++#   (https://detekt.dev/docs/introduction/compose/ )建議的六項放寬,不然標準 Compose 寫法會被內建規則誤報
++#   (2026-11-06 實跑:一支標準 Compose 檔報 6 條;Projects/Android現成檢查接上CI與推送前_計劃)。
+ # 格式規則歸 ktlint/ktfmt（linter精選目錄分工），不在此開。
+ # 規則名與規則集要是 detekt 1.23.8 真的有的(寫錯整次拒跑);t_detekt_shared_config_valid 會擋。
+ 
+ coroutines:
+   # 效能三問②:GlobalScope 裸用（scope 不跟生命週期=洩漏）。不要型別資訊
+   GlobalCoroutineUsage:
+     active: true
+   # 效能三問③:runCatching 裡呼叫 suspend 函式=取消訊號被吞。要型別資訊:只給 --input 的命令列跑法下零命中、也不出錯。
+   #   1.23.8 只抓 runCatching 包 suspend 呼叫,try/catch(Exception) 那種寫法帶齊型別資訊也不報(2026-11-01 實測,見 kotlin-idioms R10);
+   #   Kotlin 標準庫 2.2 以上時補了型別資訊也不響(2026-11-04 逐版實測)。
+@@ -29,16 +32,39 @@ coroutines:
+   # suspend 函式又掛在 CoroutineScope 上(兩種語意混用)。要型別資訊
+   SuspendFunWithCoroutineScopeReceiver:
+     active: true
+ 
+ performance:
+   # 效能三問⑤前半:長鏈 map/filter 該 asSequence（threshold 3 步起報）。要型別資訊:只給 --input 的命令列跑法下不報(2026-11-01 實測 1.23.8)
+   CouldBeSequence:
+     active: true
+ 
+ style:
++  # Compose:屬性宣告裡的顏色、尺寸常數(例 Color(0xFFEA6D7E))是刻意的,不算魔術數字(detekt 官方 Compose 頁)
++  MagicNumber:
++    ignorePropertyDeclaration: true
++  # Compose:@Preview 函式沒人直接呼叫,不算沒用到;多重預覽註解(例 @PreviewLightDark)要各自列上,ignoreAnnotated 不看元註解
++  #   (detekt 官方 Compose 頁;compose-rules 規則頁也要求 ['Preview']。detekt 2.x 這條改名 UnusedPrivateFunction)
++  UnusedPrivateMember:
++    ignoreAnnotated: ['Preview']
+   # 畫面收集要用 collectAsStateWithLifecycle(collectAsState 在 App 退到背景時照樣收)。要型別資訊;方法要寫全名
+   ForbiddenMethodCall:
+     active: true
+     methods:
+       - reason: 'collectAsState 在 App 退到背景時照樣收集,改用 collectAsStateWithLifecycle'
+         value: 'androidx.compose.runtime.collectAsState'
++
++naming:
++  # Compose:回傳 Unit 的 @Composable 用大寫開頭命名(Compose 慣例);命名改由 compose-rules 的 ComposableNaming 檢查
++  FunctionNaming:
++    ignoreAnnotated: ['Composable']
++  # Compose:頂層常數用 PascalCase(Compose 指引)
++  TopLevelPropertyNaming:
++    constantPattern: '[A-Z][A-Za-z0-9]*'
++
++complexity:
++  # Compose:元件參數多半有預設值,不算進參數上限
++  LongParameterList:
++    ignoreDefaultParameters: true
++  # Compose:@Preview 函式不增加複雜度,不算進函式數
++  TooManyFunctions:
++    ignoreAnnotatedFunctions: ['Preview']
+diff --git a/configs/detekt/compose.yml b/configs/detekt/compose.yml
+new file mode 100644
+index 000000000..928d23825
+--- /dev/null
++++ b/configs/detekt/compose.yml
+@@ -0,0 +1,20 @@
++# compose-rules(mrmans0n)detekt 外掛那條宣告用的設定——lumos-toolchain 分發,各 Android 專案 .lumos/lint.json 引用
++#
++# 用法(linter 目錄 docs/lumos-toolchain-knowledge/Systems/linter精選目錄.md 的 detekt 標準接法第二條):
++#   detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins $HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar
++#          --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/compose.yml --report sarif:{LINT_SARIF_OUT}
++#   ★--build-upon-default-config 不能少★:少了它外掛規則一條都不跑、也不報錯(2026-11-06 detekt 1.23.8 加外掛 0.4.28 實測)。
++#   --disable-default-rulesets 讓這條只跑外掛規則;detekt 內建規則照原本那條宣告跑,外掛檔不在時只有這條被判環境不可用。
++#
++# 這份只寫外掛預設關的三條要不要開:照外掛預設不開——外掛作者把它們標成選用
++# (UnstableCollections 在 Compose 預設開啟 strong skipping 之後多半是雜訊,Slack 官方規則頁同樣把它預設關;PreviewNaming 是命名偏好;Material2 只給還在用 M2 的專案)。
++# 其餘外掛規則照外掛自帶的預設(https://mrmans0n.github.io/compose-rules/detekt/ )。
++# Projects/Android現成檢查接上CI與推送前_計劃
++
++Compose:
++  UnstableCollections:
++    active: false
++  PreviewNaming:
++    active: false
++  Material2:
++    active: false
+diff --git a/scripts/lumos b/scripts/lumos
+index 0fad20ff9..73ba3c810 100755
+--- a/scripts/lumos
++++ b/scripts/lumos
+@@ -4167,20 +4167,25 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
+                "含檔案佔位符({LINT_FILES} 或 detekt 用的 {LINT_FILES_CSV})的命令,推送前的新增告警閘會真的執行;不含的只記錄、不擋"
+                "(2026-09-13 起,見 [[Projects/新增告警閘_計劃]])")
+         # detekt 宣告實際會怎樣([[Projects/Android的detekt規則說實話_計劃]]):宣告讀得出來就判,不管格式有沒有問題;
+         # 合成一段、空清單提醒(不計問題、不改 --ci/--strict 退出碼),最多列 20 條
+         if _lf["declared"] and not _lf["parse_error"]:
+             _dadv = _lint_detekt_advisories(_lf.get("config"), _vault_repo_root(env))
+             if _dadv:
+                 _dshow = [*_dadv[:20], *([f"… 另 {len(_dadv) - 20} 條(lumos lint-check 看全部)"] if len(_dadv) > 20 else [])]
+                 warn([], "detekt 宣告實際會怎樣(只看指令字面判的):以為有在檢查的規則,其實沒在跑、或推送時沒在擋",
+                      "\n        ".join(["逐條:", *_dshow, "細節與能做什麼:看 kotlin-idioms 慣例文件的「型別資訊」一節"]))
++            # Android 現成檢查有沒有接上([[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3):另起一則,不混進 detekt 那則
++            _aadv = _lint_android_ci_advisories(_lf.get("config"), _vault_repo_root(env))
++            if _aadv:
++                warn([], "Android 現成檢查有沒有接上(只看建置檔與 CI 設定檔字面判的):型錄裡只靠 Android Lint 與 Compose 規則擋的列,沒接上就沒有機器在擋",
++                     "\n        ".join(["逐條:", *_aadv, "細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉"]))
+         # 新增告警閘的兩個數字:自動放行幾次、放行清單幾條。
+         # ★沒有人去數,「有記帳」這句話就是空頭支票★——自動放行是已知的繞道向量(把工具移掉或弄慢就能過)。
+         _lnr = _vault_repo_root(env)
+         if _lnr is not None:
+             _kc = _lint_new_kind_counts(_lnr)
+             _auto = _kc.get("fail-open", 0)
+             _wv, _wverr = _lint_waivers_load(_lnr)
+             _bits = []
+             if _auto:
+                 _bits.append(f"最近 30 天自動放行 {_auto} 次(工具沒裝/逾時/拉不到規則都算)")
+@@ -38905,38 +38910,181 @@ def _detekt_gradle_codes(args):
+             i += 2 if ("=" not in t and t in _GRADLE_VALUE_OPTS) else 1
+             continue
+         i += 1
+         kind = _detekt_gradle_task_kind(t.rsplit(":", 1)[-1])
+         if kind in ("plain", "typed", "unknown"):
+             is_detekt = True
+             codes |= {"plain": {"G1"}, "unknown": {"G2"}}.get(kind, set())
+     return is_detekt, codes
+ 
+ 
++# 健檢只看字面的「CI 設定檔」:GitHub 的 workflow 加上其他常見 CI 的固定檔名([[Projects/Android現成檢查接上CI與推送前_計劃]] 〈用詞〉)
++_CI_OTHER_CONFIG_FILES = (".gitlab-ci.yml", "bitrise.yml", ".circleci/config.yml", "Jenkinsfile", "azure-pipelines.yml")
++
++
++def _ci_config_texts(repo_root, github_only=False):
++    """專案 CI 設定檔的文字清單:`.github/workflows/` 底下的 .yml/.yaml(依檔名排序),github_only=False 時再加
++    `_CI_OTHER_CONFIG_FILES`。只讀不執行;讀不了的檔當沒有、非 UTF-8 位元組換成替代字元。T4 與 Android 那幾則提醒共用。"""
++    root = Path(repo_root)
++    out = []
++    wf = root / ".github" / "workflows"
++    if wf.is_dir():
++        for p in sorted(wf.iterdir()):
++            if p.suffix.lower() not in (".yml", ".yaml") or not p.is_file():
++                continue
++            try:
++                out.append(p.read_text(encoding="utf-8", errors="replace"))
++            except OSError:
++                continue
++    if not github_only:
++        for rel in _CI_OTHER_CONFIG_FILES:
++            p = root / rel
++            if p.is_file():
++                try:
++                    out.append(p.read_text(encoding="utf-8", errors="replace"))
++                except OSError:
++                    continue
++    return out
++
++
+ def _detekt_ci_has_typed_task(repo_root):
+     """專案 .github/workflows/ 底下有沒有任何一支(.yml/.yaml)提到 detekt<變體> 的 Gradle 任務字樣(例 detektDebug、detektMain)。
+     只看字面、不執行;讀不了的檔當沒有。T4 用([[Projects/Android的detekt推送前真的擋_計劃]] 範圍 5)。"""
+-    wf = Path(repo_root) / ".github" / "workflows"
+-    if not wf.is_dir():
+-        return False
+-    for p in sorted(wf.iterdir()):
+-        if p.suffix.lower() not in (".yml", ".yaml") or not p.is_file():
+-            continue
++    for text in _ci_config_texts(repo_root, github_only=True):
++        if any(_detekt_gradle_task_kind(w) == "typed" for w in re.findall(r"\bdetekt[A-Za-z0-9]*", text)):
++            return True
++    return False
++
++
++# ── Android 現成檢查有沒有接上(A1 到 A3,只看字面)─────────────────────────────────────────────
++# 單源 [[Projects/Android現成檢查接上CI與推送前_計劃]] 範圍 3。跟 T4 一樣只讀檔、不執行、不改退出碼,但不放進 detekt 那支函式:
++# T4 要求宣告裡有 detekt 命令,這幾則只要宣告有 kt 棧而且是 Android 專案。
++_ANDROID_ADVICE_ORDER = ("A1", "A2", "A3")
++_ANDROID_ADVICE_TEXT = {
++    "A1": "專案是 Android,但 CI 設定檔(.github/workflows/、.gitlab-ci.yml 等)裡找不到 Android Lint 任務(lint<變體>、check、build):"
++          "Android Lint 與 Slack compose-lints 在 CI 設定檔裡找不到;照 linter 目錄(Systems/linter精選目錄)的"
++          "〈Android Lint 與 Compose lint 標準接法〉貼 CI 範本,先產基準線再加 CI 步驟",
++    "A2": "專案用 Compose,但建置檔沒有 Slack compose-lints(compose-lint-checks)或 compose-rules(io.nlopez.compose.rules),"
++          "宣告也沒有帶 detekt-compose 外掛的 detekt 命令:Compose 規則哪裡都沒接;範本同 A1",
++    "A3": "宣告的 --plugins 外掛檔不在({name}):這條命令推送前會被新增告警閘判環境不可用、自動放行;"
++          "下載指令(釘 sha256)在 linter 目錄 detekt 標準接法的 compose-rules 那條",
++}
++_ANDROID_SCAN_SKIP_DIRS = frozenset(("build", ".gradle", "node_modules"))
++_ANDROID_SCAN_NAMES = frozenset((*_KT_BUILD_FILES, "settings.gradle", "settings.gradle.kts"))
++_ANDROID_COMPOSE = re.compile(r"compose[ \t]*=[ \t]*true|org\.jetbrains\.kotlin\.plugin\.compose|kotlin-compose|androidx\.compose")
++_ANDROID_LINT_SKIP_VARIANT = ("Kotlin", "Fix", "Vital", "Analyze", "Report")
++
++
++def _android_build_texts(repo_root, max_depth=3, max_files=200, max_bytes=1 << 20):
++    """專案根目錄往下最多 max_depth 層的建置檔(`_KT_BUILD_FILES`、settings.gradle(.kts))與 gradle/libs.versions.toml 的文字。
++    build/、.gradle/、node_modules/、隱藏資料夾不進,不跟符號連結進資料夾;依相對路徑排序後取前 max_files 支,每支讀前 max_bytes。"""
++    import os as _os
++    root = Path(repo_root)
++    cands = []
++    for dirpath, dirnames, filenames in _os.walk(root, followlinks=False):
++        rel = Path(dirpath).relative_to(root)
++        depth = 0 if str(rel) == "." else len(rel.parts)
++        dirnames[:] = [] if depth >= max_depth else [
++            d for d in dirnames if d not in _ANDROID_SCAN_SKIP_DIRS and not d.startswith(".")]
++        for fn in filenames:
++            rp = (rel / fn).as_posix() if depth else fn
++            if fn in _ANDROID_SCAN_NAMES or rp == "gradle/libs.versions.toml":
++                cands.append(rp)
++    out = []
++    for rp in sorted(cands)[:max_files]:
+         try:
+-            text = p.read_text(encoding="utf-8", errors="replace")
++            with open(root / rp, "rb") as fh:
++                out.append(fh.read(max_bytes).decode("utf-8", errors="replace"))
+         except OSError:
+             continue
+-        if any(_detekt_gradle_task_kind(w) == "typed" for w in re.findall(r"\bdetekt[A-Za-z0-9]*", text)):
+-            return True
++    return out
++
++
++def _android_ci_has_lint_task(texts):
++    """CI 設定檔文字裡有沒有一行是 Gradle 呼叫(含 gradlew、`gradle `、`arguments:`)而且帶 Android Lint 任務詞:
++    `lint`、`check`、`build`(可帶 `:模組:` 前綴),或 `lint` 接大寫開頭的變體名(`Kotlin`、`Fix`、`Vital`、`Analyze`、`Report` 開頭的不算)。"""
++    for text in texts:
++        for line in text.splitlines():
++            if not re.search(r"gradlew|\bgradle[ \t]|\barguments:", line):
++                continue
++            for tok in re.split(r"[\s'\"`,;&|()\[\]{}=]+", line):
++                name = tok.rsplit(":", 1)[-1]
++                if name in ("lint", "check", "build"):
++                    return True
++                m = re.fullmatch(r"lint([A-Z]\w*)", name)
++                if m and not m.group(1).startswith(_ANDROID_LINT_SKIP_VARIANT):
++                    return True
+     return False
+ 
+ 
++def _android_plugin_paths(cmd):
++    """一條 detekt 命令的 --plugins/-p 值(逗號分隔的多支,展開 $HOME 與 ~);切不開或不是 detekt 命令回空清單。"""
++    import os as _os
++    import shlex as _shlex
++    if not isinstance(cmd, str) or "detekt" not in cmd:
++        return []
++    try:
++        words = _shlex.split(cmd)
++    except ValueError:
++        return []
++    out = []
++    for i, w in enumerate(words):
++        val = None
++        if w in ("--plugins", "-p") and i + 1 < len(words):
++            val = words[i + 1]
++        elif w.startswith("--plugins="):
++            val = w.split("=", 1)[1]
++        if val:
++            for part in val.split(","):
++                part = part.strip()
++                if part:
++                    out.append(_os.path.expanduser(part.replace("$HOME", str(Path.home())).replace("${HOME}", str(Path.home()))))
++    return out
++
++
++def _lint_android_ci_advisories(config, repo_root):
++    """整份 lint 宣告的 Android 現成檢查提醒(字串清單,每條「[CI] 代號:一句」)。宣告不是物件、沒有 kt 棧、
++    repo_root 是 None、不是 Android 專案時回空清單。只看字面、不執行、不改退出碼。"""
++    if repo_root is None or not isinstance(config, dict):
++        return []
++    kt = config.get("kt")
++    if not isinstance(kt, list):
++        return []
++    builds = _android_build_texts(repo_root)
++    if not any(_KT_BUILD_ANDROID.search(b) for b in builds):
++        return []
++    cmds = [c for c in kt if isinstance(c, str)]
++    out = []
++    if not _android_ci_has_lint_task(_ci_config_texts(repo_root)):
++        out.append(f"[CI] A1:{_ANDROID_ADVICE_TEXT['A1']}")
++    if any(_ANDROID_COMPOSE.search(b) for b in builds) and not any(
++            "compose-lint-checks" in b or "io.nlopez.compose.rules" in b for b in builds) and not any(
++            "detekt-compose" in c for c in cmds):
++        out.append(f"[CI] A2:{_ANDROID_ADVICE_TEXT['A2']}")
++    for c in cmds:
++        for pth in _android_plugin_paths(c):
++            if not Path(pth).is_file():
++                out.append("[CI] A3:" + _ANDROID_ADVICE_TEXT["A3"].format(name=Path(pth).name[:80]))
++    return out
++
++
++def _lint_android_print(advisories):
++    """lint-check 人讀輸出的 Android 現成檢查提醒(三段式:發生什麼 → 為什麼在意 → 細節去哪看)。"""
++    if not advisories:
++        return
++    print("  提醒:Android 現成檢查有沒有接上(只看建置檔與 CI 設定檔字面判的,不影響這次結果):")
++    for a in advisories:
++        print(f"    • {a}")
++    print("  為什麼在意:型錄裡約一百列錯誤寫法只靠 Android Lint 與 Compose 規則擋,沒接上就沒有任何機器在擋。")
++    print("  細節與能做什麼:看 linter 目錄(Systems/linter精選目錄)的〈Android Lint 與 Compose lint 標準接法〉")
++
++
+ def _detekt_segment_codes(seg, depth):
+     """一段的判定:回傳 (是不是 detekt 宣告, 代號集合)。表外寫法與退化寫法回 (False, 空集合)。"""
+     import posixpath as _pp
+     seg = _detekt_strip_prefix(seg)
+     if not seg:
+         return False, set()
+     head = _pp.basename(seg[0])
+     if head in ("sh", "bash", "zsh"):
+         if depth == 0 and len(seg) >= 3 and seg[1] == "-c":
+             return _detekt_command_codes(seg[2], depth + 1)
+@@ -39105,35 +39253,39 @@ def cmd_lint_check(repo=None, smoke=False, as_json=False):
+             for cmd in (cmds if isinstance(cmds, list) else []):
+                 ready = _lintcheck_smoke_cmd(cmd, stack, repo_root)
+                 if ready is None:
+                     # ★沒檔可驗,不是命令壞了★:講實話,不要假警報也不要假裝驗過
+                     skipped_stacks.append(stack)
+                     continue
+                 _claims, ok = _lint_run_and_parse(ready, repo_root)
+                 if not ok:
+                     problems.append({"stack": stack, "issue": f"冒煙失敗:命令跑不出可解析 SARIF(task 不存在/工具沒裝?)｜{ready[:60]}"})
+     advisories = _lint_detekt_advisories(config, repo_root)   # 只是提醒:不進 problems、不改退出碼
++    android_adv = _lint_android_ci_advisories(config, repo_root)
+     if as_json:
+-        print(json.dumps({"problems": problems, "declared": True, "advisories": advisories}, ensure_ascii=False))
++        print(json.dumps({"problems": problems, "declared": True, "advisories": [*advisories, *android_adv]},
++                         ensure_ascii=False))
+         return 1 if problems else 0
+     if not problems:
+         print(f"✓ lint-check: .lumos/lint.json 宣告健康({'冒煙通過' if smoke else '格式通過,--smoke 可再驗命令'})")
+         if skipped_stacks:
+             print(f"  提醒:這幾個棧的命令沒有真的跑過,因為專案裡還沒有它們的檔:{', '.join(sorted(set(skipped_stacks)))}")
+             print("  為什麼在意:宣告寫對了不等於命令跑得動,寫了第一支檔之後再驗一次才算數:")
+             print("    lumos lint-check --smoke")
+         _lint_detekt_print(advisories)
++        _lint_android_print(android_adv)
+         return 0
+     print(f"✗ lint-check: .lumos/lint.json 有 {len(problems)} 個問題:")
+     for pr in problems:
+         print(f"  [{pr['stack']}] {pr['issue']}")
+     _lint_detekt_print(advisories)
++    _lint_android_print(android_adv)
+     return 1
+ 
+ 
+ def _lint_detekt_print(advisories):
+     """lint-check 人讀輸出的 detekt 提醒(三段式:發生什麼 → 為什麼在意 → 細節去哪看)。"""
+     if not advisories:
+         return
+     print("  提醒:detekt 宣告實際會怎樣(只看指令字面判的,不影響這次結果):")
+     for a in advisories:
+         print(f"    • {a}")

@@ -94,6 +94,32 @@ _DT_HEADER = ("列編號", "情境", "標準寫法", "不適用時", "觸發字"
 _RETIRED = "(停用)"
 _SWITCH = "(換列)"     # 「不適用時」格子的明確標記:這一列的例外是換到別列,不准選例外寫法
 _WEAK_SRC = ("未開頁核對", "搜尋摘要", "無網址")
+# 第四批通電批次的判定口徑(Projects/Android現成檢查接上CI與推送前_計劃 範圍 4;口徑原文在型錄〈輸入與口徑〉)。
+# 預設關的規則照官方規則頁列舉:Slack compose-lints 的兩條穩定性檢查與 M2 API(https://slackhq.github.io/compose-lints/rules/ ;
+# ComposeRememberMissing 已移除),compose-rules 外掛自帶設定 active: false 的三條。
+B4_DEFAULT_OFF = frozenset((
+    "ComposeUnstableReceiver", "ComposeUnstableCollections", "ComposeM2Api", "ComposeRememberMissing",
+    "unstable-collections", "UnstableCollections", "preview-naming", "PreviewNaming", "material-two", "Material2"))
+_B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
+_B4_CR = re.compile(r"cr:compose:([\w-]+)")
+_B4_SKIP = ("待查", "預設關", "相近", "opt-in")
+B4_TAG_LINT = "CI 範本:Android Lint"
+B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
+
+
+def batch4_expected_tags(rule_col):
+    """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。
+    以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
+    而且那段不含待查、預設關、相近、opt-in,規則碼不是 B4_DEFAULT_OFF 才算。"""
+    lint = cr = False
+    for seg in re.split(r"[;；、]", rule_col):
+        if any(w in seg for w in _B4_SKIP):
+            continue
+        lint = lint or any(code not in B4_DEFAULT_OFF for code in _B4_LINT.findall(seg))
+        cr = cr or any(code not in B4_DEFAULT_OFF for code in _B4_CR.findall(seg))
+    return [tag for tag, on in ((B4_TAG_LINT, lint), (B4_TAG_CR, cr)) if on]
+
+
 # 觸發字停用字表:這些字幾乎每支 Kotlin 檔都有,當觸發字會讓改檔前推列與情境題每次都亮(第二、三批計劃的依賴)
 STOP_TRIGGERS = frozenset((
     "map", "filter", "forEach", "let", "run", "apply", "also", "with", "if", "else", "when", "try", "catch",
@@ -329,6 +355,12 @@ def catalog_problems(rules=None):
         name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
         if not std or not wire or not batch:
             problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
+        want = batch4_expected_tags(c[5]) if "批四" in batch else []   # 只判第四批的列(批一等照它自己的批次)
+        have = [tag for tag in (B4_TAG_LINT, B4_TAG_CR) if tag in batch]
+        if want and ("批四(" + ";".join(want) + ")" not in batch or "批四(現成規則)" in batch):
+            problems.append((rid, "第四批通電批次要寫「批四(" + ";".join(want) + ")」(照型錄〈輸入與口徑〉的口徑)"))
+        elif have and not want:
+            problems.append((rid, "第四批通電批次寫了接電標籤,但口徑判成還沒接上(預設關、opt-in、待查或沒有規則碼)"))
         if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
             problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
         if kind.startswith("語意"):
