@@ -33,7 +33,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 1. **逐列查 331 列**:主表裡來源欄沒有〔查證〕的列,照類別切 12 批,各派一個代理用 WebFetch 打開官方頁面(developer.android.com、kotlinlang.org、androidx 原始碼 KDoc、官方 lint 規則說明、detekt.dev、compose-rules、Square 與 Google 官方 GitHub),每列判 verified(附網址與逐字原文)、weak(找不到權威原文)、contradicted(官方說法相反)。部落格、問答網站只當線索、不當出處。
 2. **抽查**:編排者隨機抽 20 列 verified,用 curl 直接抓原頁比對引句(WebFetch 的回傳可能是摘要,不一定逐字):20 列都找得到(17 列逐字、3 列字詞全中)。contradicted 3 列、二次深查新 verified 3 列也逐一抓原頁核對,全中。
 3. **套回型錄**:verified 的列在來源欄尾加〔查證 2026-11-07:網址〕;weak 的列名稱標(出處不全);contradicted 的列照官方原文改(CO-27 後果、UI-100 標準寫法與情境怎麼認)。
-4. **掛著會擋規則的 weak 列再深查一次**:API-14、DATA-37、FLOW-8、STATE-21、TEST-31 第一次查不到、但掛著 `rules/` 底下會擋的規則,另派一個代理深查;DATA-37、FLOW-8、STATE-21 找到官方原文(都是官方建議的寫法,壞寫法是從建議推出來的),補上查證紀錄,規則照擋;API-14、TEST-31 仍找不到,這一批不標出處不全(一標就違反「出處不全只准提示級」、等於同時降級會擋的規則),留在「還沒逐列查證」的數字裡,降不降級交使用者裁(見〈待人裁〉)。
+4. **掛著會擋規則的 weak 列再深查一次**:API-14、DATA-37、FLOW-8、STATE-21、TEST-31 第一次查不到、但掛著 `rules/` 底下會擋的規則,另派一個代理深查;DATA-37、FLOW-8、STATE-21 找到官方原文(都是官方建議的寫法,壞寫法是從建議推出來的),補上查證紀錄,規則照擋;API-14、TEST-31 仍找不到,這一批不標出處不全(一標就違反「出處不全只准放不接閘的 rules-unwired/」、等於同時降級會擋的規則),留在「還沒逐列查證」的數字裡,降不降級交使用者裁(見〈待人裁〉)。
 5. **接上數字**:`check.py` 新增 `catalog_unverified`,`--catalog-only` 與完整檢查的文字輸出都另印一行「還沒逐列查證 N 列」與前 20 個編號(`--json` 例外:維持純 JSON,這個數字不在 JSON 裡),不進問題清單、不改退出碼([[Projects/計劃依據來源必填_計劃]] S5 的實作,那條條款原本懸空等兩條分支合併)。
 6. **統計節**:規則包等級條數、會擋規則守到的列數、出處不全列數照程式重算,另加一行逐列查證列數。
 
@@ -45,7 +45,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 
 ## 待人裁
 
-- **兩條會擋規則要不要降級**:API-14(`kt-async-await-immediately`)、TEST-31 用索引找節點那半(`kt-compose-test-node-by-index`)兩次查證都找不到官方原文。照「出處不全只准提示級」應降到 `rules-hints/`;降了之後消費專案這兩種寫法不再被擋,動到守衛面,所以拆出來等使用者裁定,裁定前規則照擋、型錄自檢的數字顯示這 2 列。
+- **兩條會擋規則要不要降級**:API-14(`kt-async-await-immediately`)、TEST-31 用索引找節點那半(`kt-compose-test-node-by-index`)兩次查證都找不到官方原文。照「出處不全只准放不接閘的 rules-unwired/」應搬到 `rules-unwired/`;降了之後消費專案這兩種寫法不再被擋,動到守衛面,所以拆出來等使用者裁定,裁定前規則照擋、型錄自檢的數字顯示這 2 列。
 - **DATA-12**(updateData 裡做副作用或耗時 I/O):型錄寫「transform 只放純計算」,官方 `DataStore.updateData` 文件寫「the transform itself is a coroutine so it can perform heavy work such as RPCs」,兩者相反;情境決策表 D-42 早已標「無官方依據,見 notes 人裁」。這列沒有掛規則。建議改成取捨提醒(寫入排隊執行,transform 跑太久會讓後面的寫入一起等),等使用者裁定;裁定前不動這一列。
 
 ## 實務隱患
@@ -89,3 +89,4 @@ REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增�
 - 2026-11-07 代碼審 r1(2 席):4 條 minor/blocking 0/折 3 條半(節點數字、標記比對、完整路徑測試、函式位置),正規式跳脫附理由放行;卷證 governance/review-reports/code-android寫法型錄逐列查證/。
 - 2026-11-07 代碼審 r2(2 席):2 條 minor/blocking 0/全折(計劃補 `--json` 例外並加測試守純 JSON、欄位取成具名變數);卷證同上。
 - 2026-11-07 r3 之後:catalog_unverified 的說明文字也有龜甲括號、被新增告警閘抓到(RUF002),改成文字描述;只動說明文字,行為與測試不變。
+- 2026-11-08 文字同步([[Projects/規則包覆核兩級接新增告警閘_計劃]]):「出處不全的規則只准提示級」改成「只准放不接閘的 rules-unwired/」、指向前案的連結改指新計劃;只改字面,條款綁的測試與意圖不變。

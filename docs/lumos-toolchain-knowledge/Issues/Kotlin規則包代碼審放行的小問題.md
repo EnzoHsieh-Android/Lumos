@@ -2,7 +2,7 @@
 type: issue
 status: open
 created: 2026-11-05
-updated: 2026-11-06
+updated: 2026-11-08
 aliases: []
 about_code: []
 tags:
@@ -14,7 +14,7 @@ summary: |-
   FLAG:TECHNICAL
   PITFALL:規則檔 files 清單項目後面接行內註解提到 src/main 時,只掃測試碼的規則被誤判成不是,祖先目錄守衛靜默略過 [出處:2026-11-05 code-kotlin規則包 r4 正確性、邊界席] [根因:_files_block_is_test_only 只去整行註解] [repro:check.py 對 files 區塊 `- '**/src/test*/**'  # 不含 src/main` 回 False]
   PITFALL:推送閘把規則包教材樣本當產品碼:測試作弊比對報沒斷言、Room 守衛報範例 DAO 沒測試 [出處:2026-11-05 Kotlin 規則包第一次推送被擋] [根因:樣本目錄排除只接到風險分級、棧別題與 linter 那半,作弊比對與 Room 守衛各自挑檔] [防回歸:修好時各補一條樣本目錄不報、同形一般檔照報的測試]
-  REVISIT:2026-11-20 逐處判好例目錄被別條會擋規則命中的 15 處(樣本寫得不夠標準就改樣本,規則誤報就改規則或搬語意覆核級),判完再決定要不要加「好例被別條規則命中也報」的檢查
+  REVISIT:2026-11-20 逐處判好例目錄被別條會擋規則命中的 15 處(樣本寫得不夠標準就改樣本,規則誤報就改規則、搬語意覆核級或 rules-unwired/),判完再決定要不要加「好例被別條規則命中也報」的檢查
   REVISIT:2026-12-04 kt-long-lived-scope-plain-job 還會誤報 `+ (job)` 與兩層巢狀加法(代碼審規則包樣本不當產品碼 r1 正確性席實測);改成遞迴認括號與加法、補好例,或判定少見就寫進規則註解
 related:
   - "[[Systems/kotlin規則包]]"

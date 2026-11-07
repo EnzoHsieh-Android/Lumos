@@ -126345,6 +126345,7 @@ def t_kotlin_rulepack_samples():
     """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
     只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""
     import shlex as _shlex
+    import shutil
     sg = _ktpack_sg()
     m = _ktpack()
     # files: 區塊判讀(不需要 ast-grep;代碼審 r3 正確性席):頂格清單要認得、頂格註解不算區塊內容
@@ -126452,9 +126453,35 @@ def t_kotlin_rulepack_samples():
     except Exception as e:      # 要驗的就是不噴例外,所以接住任何例外
         ok, cp = False, [("exc", repr(e))]
     check("★改壞★ ast-grep 輸出不是 JSON 時報跑不起來、不噴例外", ok, str(cp[:3]))
+    # SARIF 自檢(Projects/規則包覆核兩級接新增告警閘_計劃 S2):SARIF 掃出別條規則或讀不懂,都要報含「樣本」的問題,
+    # 不然上面 sample_probs 的篩選會把它濾掉、換 ast-grep 版本時 CI 照綠
+    _loc = ('{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\"x.kt\"},\"region\":{\"startLine\":1}}}')
+    _drv = '\"tool\":{\"driver\":{\"name\":\"ast-grep\"}}'
+    for tag, body in (("別條規則", "echo '{\"runs\":[{" + _drv + ",\"results\":[{\"ruleId\":\"kt-other\",\"message\":{\"text\":\"m\"},\"locations\":[" + _loc + "]}]}]}'; exit 0"),
+                      ("規則對但沒有檔案位置(閘會靜默略過)", "echo '{\"runs\":[{" + _drv + ",\"results\":[{\"ruleId\":\"kt-livedata-setvalue-background\",\"message\":{\"text\":\"m\"}},{\"ruleId\":\"kt-value-assign-background\",\"message\":{\"text\":\"m\"}}]}]}'; exit 0"),
+                      ("讀不懂", "echo 'not json'; exit 0")):
+        msx = _ktpack()      # 假 ast-grep 不改檔,用真的規則包(複本沒帶 scripts/lumos,SARIF 探針借不到閘的解析函式)
+        fake = Path(tempfile.mkdtemp(prefix="gctl-ktsg-")) / "sg"
+        fake.write_text("#!/bin/sh\ncase \"$*\" in *\"--format sarif\"*) " + body + ";; esac\nexec " + _shlex.quote(sg) + " \"$@\"\n",
+                        encoding="utf-8")
+        fake.chmod(0o755)
+        _r, cp = msx.check(str(fake))
+        hit = [b for _a, b in cp if "SARIF" in b]
+        check(f"★改壞★ SARIF {tag}要報、原因句含「樣本」(才不會被篩掉)",
+              len(hit) == 2 and all("樣本" in b for b in hit), str(hit[:3]))
+        shutil.rmtree(str(fake.parent), ignore_errors=True)
+    # 不接閘目錄的規則也有已知誤報樣本可放(代碼審 r1 正確性 F1、通才 F3:review_ids 擴到 rules-unwired 那條沒人守)
+    mu = _ktpack(copy=True)
+    _uid = next(r["id"] for r in mu.load_rules() if r["dir"] == "rules-unwired")
+    _ubad = next((mu.HERE / "samples" / "bad" / _uid).rglob("*.kt"))
+    _ugood = mu.HERE / "samples" / "good" / _uid / _ubad.relative_to(mu.HERE / "samples" / "bad" / _uid).parent
+    _ugood.mkdir(parents=True, exist_ok=True)
+    (_ugood / (mu.REVIEW_FP_PREFIX + "known.kt")).write_text(_ubad.read_text(encoding="utf-8"), encoding="utf-8")
+    _r, cp = mu.check(sg)
+    check("★改壞★ 不接閘規則的 review-fp- 樣本不算好例誤報", not any(a == _uid and "好例誤報" in b for a, b in cp), str([p for p in cp if p[0] == _uid][:3]))
     # 規則目錄全空不准判通過
     me = _ktpack(copy=True)
-    for d in ("rules", "rules-review", "rules-hints"):
+    for d in ("rules", "rules-review", "rules-hints", "rules-unwired"):
         for y in (me.HERE / d).glob("*.yml"):
             y.unlink()
     _r, cp = me.check(sg)
@@ -126466,7 +126493,7 @@ def t_kotlin_rulepack_samples():
 
 def t_kotlin_rulepack_messages_cite_catalog():
     """[S2] 每條規則訊息以型錄裡存在的 [編號] 開頭、≤120 字、有分號與改用/改成、不含 $;id 唯一;
-    severity 只三種;引用出處不全的列只准 hint 級。改壞的訊息要被逐條抓到。"""
+    severity 只三種;引用出處不全的列只准放 rules-unwired/(2026-11-08 起,見 t_kotlin_rulepack_unwired_dir)。改壞的訊息要被逐條抓到。"""
     m = _ktpack()
     rules = m.load_rules()
     cat_ids, _t = m.catalog_ids()
@@ -126495,6 +126522,40 @@ def t_kotlin_rulepack_messages_cite_catalog():
         wid = weak.split("|")[1].strip()
         p2 = m.catalog_problems([{"id": "kt-w", "severity": "error", "message": f"[{wid}] 測;改用 x"}])
         check("★改壞★ 非 hint 規則引用出處不全的列要被抓到", any(a == "kt-w" for a, _b in p2), str(p2[-3:]))
+
+
+def t_kotlin_rulepack_unwired_dir():
+    """[[Projects/規則包覆核兩級接新增告警閘_計劃]] S1:引用型錄「出處不全」列的規則只准放在不接閘的 rules-unwired/
+    (任何等級);放在 rules/、rules-review/、rules-hints/ 都報;假規則沒有 dir 鍵照「不在 unwired」算;真規則包 0 個問題、
+    引用出處不全列的規則全在 rules-unwired/。判準來源是計劃預期值表;預期值來自造的假規則,不拿被測函式算。
+    翻紅釘:檢查改回只看等級 → ①紅;rules-unwired 不給全集等級 → ④紅;缺 dir 當成在 unwired → ⑤紅;8 條沒搬 → ⑥紅。"""
+    import re
+    m = _ktpack()
+    cat_text = m.catalog_ids()[1]
+    weak = [ln.split("|")[1].strip() for ln in cat_text.splitlines() if ln.startswith("| ") and "(出處不全)" in ln.split("|")[2]]
+    check("★前置★ 型錄有出處不全的列(不是讀表失敗才變少)", len(weak) >= 1, str(len(weak)))
+    wid = weak[0]
+    def probs(rule):
+        return [b for a, b in m.catalog_problems([rule]) if a == rule["id"]]
+    p1 = probs({"id": "kt-u1", "severity": "hint", "dir": "rules-hints", "message": f"[{wid}] 測;改用 x"})
+    check("① 出處不全的 hint 規則放在 rules-hints/ 要報", any("rules-unwired" in b for b in p1), str(p1))
+    p2 = probs({"id": "kt-u2", "severity": "info", "dir": "rules-review", "message": f"[{wid}] 測;改用 x"})
+    check("② 放在 rules-review/ 要報", any("rules-unwired" in b for b in p2), str(p2))
+    p3 = probs({"id": "kt-u3", "severity": "warning", "dir": "rules-unwired", "message": f"[{wid}] 測;改用 x"})
+    check("③ 放在 rules-unwired/(warning 級)不報出處不全", not any("rules-unwired" in b for b in p3), str(p3))
+    cat_ids, _t = m.catalog_ids()
+    p4 = [b for a, b in m.message_problems([{"id": "kt-u4", "severity": "warning", "dir": "rules-unwired",
+                                             "message": "[API-3] 試水溫的新規則;改用 launch"}], cat_ids) if a == "kt-u4"]
+    check("④ rules-unwired/ 收任何等級(warning 不報只收)", not any("只收" in b for b in p4), str(p4))
+    p5 = probs({"id": "kt-u5", "severity": "hint", "message": f"[{wid}] 測;改用 x"})
+    check("⑤ 假規則沒有 dir 鍵照不在 unwired 算、要報", any("rules-unwired" in b for b in p5), str(p5))
+    rules = m.load_rules()
+    weak_set = set(weak)
+    refs = [r for r in rules if re.match(r"\[([A-Z]+-\d+)\]", r["message"]) and re.match(r"\[([A-Z]+-\d+)\]", r["message"]).group(1) in weak_set]
+    check("⑥ 真規則包引用出處不全列的規則全在 rules-unwired/", refs and all(r["dir"] == "rules-unwired" for r in refs),
+          str([(r["id"], r["dir"]) for r in refs]))
+    real = [p for p in m.catalog_problems(rules) if "出處不全" in p[1]]
+    check("⑦ 真規則包沒有出處不全的放錯目錄", not real, str(real[:3]))
 
 
 def t_kotlin_catalog_rows_wired():
