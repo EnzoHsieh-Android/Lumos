@@ -30,8 +30,11 @@ summary: |-
   DEP:[[Systems/pitfalls-lint-adapter]]
   FACT:照 detekt 標準接法的命令列樣板(只給 --input)跑,要型別資訊的規則一條都不報也不出錯,kotlin-idioms 點名的協程規則與共用設定開的五條都只剩 GlobalCoroutineUsage 會報;帶 --classpath 與 --jdk-home 才報 [來源:外部] [confirmed:2026-11-01] [查:detekt 1.23.8 最小樣本帶與不帶型別資訊各跑一次]
   REVISIT:2026-12-15 在一個裝了 detekt Gradle 外掛的 Android 專案照 CI 型別檢查範本實跑 detektBaseline<變體> 與 detekt<變體>(驗收 S9),記下任務名、耗時與基準線檔名,跑過就把範本裡「以外掛實際寫出的為準」改成實測值
+  PITFALL:compose-rules 那條 detekt 宣告少了 --build-upon-default-config 時,外掛規則一條都不跑、也不報錯 [出處:2026-11-06 本機 detekt 1.23.8 加外掛 0.4.28 實測] [根因:沒帶這個旗標時外掛規則沒被啟用(推測:外掛自帶的預設設定沒疊進來)] [test:t_detekt_compose_rules_shared_config]
+  WHY:共用 detekt 設定照 detekt 官方 Compose 頁加六項放寬(Composable 命名、Preview 沒被呼叫與函式數、有預設值的參數、屬性宣告的數字、PascalCase 頂層常數) [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃;https://detekt.dev/docs/introduction/compose/] [因:現行設定對一支標準 Compose 檔報 6 條,推送前會擋每個新寫的元件] [代價:非 Compose 專案的有預設值長參數、屬性宣告魔術數字、PascalCase 頂層常數也不再報] [test:t_detekt_compose_rules_shared_config]
 about_code:
   - configs/detekt/android.yml
+  - configs/detekt/compose.yml
 verified_by:
   - "[[Verification/2026-09-08_iOS與Node補棧合成樣本測試]]"
   - "[[Verification/2026-09-11_Python補棧合成樣本測試]]"
@@ -121,14 +124,23 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
 
 ### detekt 標準接法（2026-07-27 立;消費端:Citrus_KDS、mOrangePos——mOrangePos 首掃唯一 GlobalScope 命中=crash 補送 App 層正當用法,同 KDS 閃退家族 pattern）
 
-- **安裝=`brew install detekt`**(套件管理器管生命週期)。⚠ 前科:KDS 曾把 detekt jar 放 `/tmp` 被系統清掉兩次(2026-07-17 首發、2026-07-27 重演,見 [[Systems/lint-declaration-health]])——外部工具一律裝進套件管理器,嚴禁易失位置。
-- **共用差分設定=`configs/detekt/android.yml`**(本 repo,隨 clone 分發):開 detekt 預設關但效能檢核目錄或 kotlin-idioms 點名的五條——`GlobalCoroutineUsage`(GlobalScope 裸用)/`SuspendFunSwallowedCancellation`(runCatching 裡呼叫 suspend=吞取消;try/catch 那型不抓)/`SuspendFunWithCoroutineScopeReceiver`(suspend 又掛在 scope 上)/`CouldBeSequence`(長鏈該 asSequence)/`ForbiddenMethodCall`(禁 `androidx.compose.runtime.collectAsState`,方法要寫全名、放 `style:`)。⚠ 兩層落差:①「有裝≠有開」——`--build-upon-default-config` 裸跑時這五條不開;②「有開≠有跑」(2026-11-04 實測)——除 GlobalCoroutineUsage 外都要型別資訊(`--classpath <依賴 jar>` 加 `--jdk-home <JDK>`),下面推送前那段樣板沒帶,所以它們在推送前安靜不跑、不報錯;要它們擋就照下面第二段「CI 型別檢查範本」接(detekt 官方建議的做法)。Kotlin 標準庫 2.2 以上時吞取消那條補了也不響(detekt 1.23.8 限制)。設定檔的規則名與規則集有一支共用設定檢查測試擋錯(寫錯 detekt 整次拒跑;測試與判定表的家是 [[Systems/lint-declaration-health]])。
+- **安裝=`brew install detekt`**(套件管理器管生命週期)。⚠ 前科:KDS 曾把 detekt jar 放 `/tmp` 被系統清掉兩次(2026-07-17 首發、2026-07-27 重演,見 [[Systems/lint-declaration-health]])——外部工具一律裝進套件管理器,嚴禁易失位置。例外只有 compose-rules 的 detekt 外掛 jar:brew、sdkman 都沒有它的配方、二進位檔不進 repo,所以放本機固定目錄 `$HOME/.local/share/lumos/detekt-plugins/`(不是 `/tmp`),下載指令釘版本與 sha256(見下面推送前第二條)。
+- **共用差分設定=`configs/detekt/android.yml`**(本 repo,隨 clone 分發):兩種差分。一是開 detekt 預設關但效能檢核目錄或 kotlin-idioms 點名的五條——`GlobalCoroutineUsage`(GlobalScope 裸用)/`SuspendFunSwallowedCancellation`(runCatching 裡呼叫 suspend=吞取消;try/catch 那型不抓)/`SuspendFunWithCoroutineScopeReceiver`(suspend 又掛在 scope 上)/`CouldBeSequence`(長鏈該 asSequence)/`ForbiddenMethodCall`(禁 `androidx.compose.runtime.collectAsState`,方法要寫全名、放 `style:`)。⚠ 兩層落差:①「有裝≠有開」——`--build-upon-default-config` 裸跑時這五條不開;②「有開≠有跑」(2026-11-04 實測)——除 GlobalCoroutineUsage 外都要型別資訊(`--classpath <依賴 jar>` 加 `--jdk-home <JDK>`),下面推送前那段樣板沒帶,所以它們在推送前安靜不跑、不報錯;要它們擋就照下面第二段「CI 型別檢查範本」接(detekt 官方建議的做法)。Kotlin 標準庫 2.2 以上時吞取消那條補了也不響(detekt 1.23.8 限制)。二是 detekt 官方 Compose 頁(https://detekt.dev/docs/introduction/compose/ )建議的六項放寬:`FunctionNaming` 對 `@Composable` 忽略、`TopLevelPropertyNaming` 常數允許 PascalCase、`LongParameterList` 忽略有預設值的參數、`MagicNumber` 忽略屬性宣告、`UnusedPrivateMember` 對 `@Preview` 忽略、`TooManyFunctions` 不算 `@Preview`——不加的話一支標準 Compose 檔會被內建規則報 6 條(2026-11-06 實跑,[[Projects/Android現成檢查接上CI與推送前_計劃]]);專案用多重預覽註解(例 `@PreviewLightDark`)時要自己把它加進 `UnusedPrivateMember` 的 `ignoreAnnotated`(這個鍵不看元註解)。設定檔的規則名與規則集有一支共用設定檢查測試擋錯(寫錯 detekt 整次拒跑;測試與判定表的家是 [[Systems/lint-declaration-health]])。
 接法分兩段([[Projects/Android的detekt推送前真的擋_計劃]],2026-11-06):**推送前只擋不用型別資訊的規則**(GlobalScope 裸用、複雜度、命名這類),**要型別資訊的規則放在專案 CI 用 Gradle 型別解析任務加基準線擋**——detekt 官方提交前掛鉤那頁明寫「只跑改到的檔時,要型別資訊的檢查有些不準,CI 要另跑全量檢查」。
 
 - **①推送前:lint.json 樣板**(新 Android 專案 setup 直接抄):
   ```
   detekt --input {LINT_FILES_CSV} --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/android.yml --report sarif:{LINT_SARIF_OUT}
   ```
+  Compose 專案另加第二條,只跑 compose-rules 外掛規則(`--disable-default-rulesets`,內建規則照上一條跑):
+  ```
+  detekt --input {LINT_FILES_CSV} --disable-default-rulesets --plugins $HOME/.local/share/lumos/detekt-plugins/detekt-compose-0.4.28-all.jar --build-upon-default-config --config $HOME/harness/lumos-toolchain/configs/detekt/compose.yml --report sarif:{LINT_SARIF_OUT}
+  ```
+  外掛先下載到固定目錄並比對雜湊(sha256 是 2026-11-06 自算,官方沒公布;寫法跟本 repo CI 那一步同一個網址)。先下載成暫存檔,雜湊對了才改名成正式檔名,對不上就刪掉暫存檔——推送前那條命令每次都會載入這支 jar,不能留一支沒驗過的在正式位置:
+  ```
+  d="$HOME/.local/share/lumos/detekt-plugins"; mkdir -p "$d" && curl -sSfL -o "$d/detekt-compose-0.4.28-all.jar.part" "https://github.com/mrmans0n/compose-rules/releases/download/v0.4.28/detekt-compose-0.4.28-all.jar" && (cd "$d" && echo "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6  detekt-compose-0.4.28-all.jar.part" | shasum -a 256 -c -) && mv "$d/detekt-compose-0.4.28-all.jar.part" "$d/detekt-compose-0.4.28-all.jar" || { rm -f "$d/detekt-compose-0.4.28-all.jar.part"; echo "下載或雜湊比對失敗,沒有裝"; false; }
+  ```
+  ★`--build-upon-default-config` 不能少★:少了它外掛規則一條都不跑、也不報錯(2026-11-06 實測)。外掛 0.4.x 對 detekt 1.23.x,0.5 起對 detekt 2.x(https://mrmans0n.github.io/compose-rules/detekt/ ),本機 detekt 升版時兩個一起換。外掛檔不在時 detekt rc 1、不產結果,新增告警閘把這一條判環境不可用、自動放行並記帳,上一條照擋;`lumos lint-check` 與健檢會印 A3。外掛自帶設定預設關的三條(`UnstableCollections`、`PreviewNaming`、`Material2`)在 `compose.yml` 寫明照預設不開。
   `{LINT_FILES_CSV}` 是給 detekt 用的逗號佔位符:新增告警閘把這次改到的 kt 檔用逗號串成一個值交給 `--input`(detekt 只收逗號分隔,用空白串的 `{LINT_FILES}` 兩支以上檔就拒跑),只擋這次新增的告警。別在它外面再包一對引號(換進去的值已經加過 shell 引號;`lumos lint-check` 會記成格式問題)。路徑含逗號或分號的檔 detekt 收不了:閘把它從這條命令拿掉、列進「沒檢查」並擋下,改檔名或照擋下訊息印的指令放行;檔多到命令換完超過 100,000 位元組時自動分批跑。`$HOME` 可用:lint 命令走 shell 執行。
 - **②CI 型別檢查範本**(專案自己貼進它的 CI;lumos 不執行 Gradle、不改專案的檔):
   1. 專案的 Gradle 套 detekt 外掛(版本跟本機 CLI 同一版,1.23.8),設定指共用設定:
@@ -142,11 +154,36 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
      ```
   2. 第一次在本機跑 `./gradlew detektBaseline<變體>`(例 `detektBaselineDebug`)產基準線檔、提交(檔名以外掛實際寫出的為準)。要清舊帳時重產。
   3. CI 加一步 `./gradlew detekt<變體>`(例 `detektDebug`;純 Kotlin 模組是 `detektMain`):有基準線以外的新告警就讓 CI 失敗。這一步才有型別資訊,InjectDispatcher、吞取消、`collectAsState` 這類規則在這裡擋。
+  - Compose 專案在 `dependencies` 加 `detektPlugins("io.nlopez.compose.rules:detekt:0.4.28")`,CI 這步也帶 compose-rules;外掛的設定照推送前那條指 `compose.yml`(`config.setFrom(files("<android.yml>", "<compose.yml>"))`)。
   - 沒貼的專案,`lumos lint-check` 與健檢會印 T4「型別規則目前哪裡都沒擋」(只看 `.github/workflows/` 字面有沒有 `detekt<變體>`,不驗它真的跑)。
+
 - **這個樣板拿不到型別資訊**(2026-11-01 用 detekt 1.23.8 實測,[[Projects/Kotlin慣例對齊Android官方與本機detekt_計劃]]):只給 `--input` 時,detekt 那批「要型別資訊」的規則一條都不報、也不出錯——kotlin-idioms 點名的協程規則裡只剩 `GlobalCoroutineUsage` 會報;共用設定開的五條裡,除 `GlobalCoroutineUsage` 外四條(`SuspendFunSwallowedCancellation`、`SuspendFunWithCoroutineScopeReceiver`、`CouldBeSequence`、`ForbiddenMethodCall`)都在這批裡,照樣板跑只有 `GlobalCoroutineUsage` 有效。同一份樣本帶上 `--classpath`(協程與標準庫 jar)和 `--jdk-home` 之後,`ForbiddenMethodCall`、`InjectDispatcher`、`RedundantSuspendModifier`、`SuspendFunWithFlowReturnType`、`SleepInsteadOfDelay`、`CouldBeSequence` 都會報;`SuspendFunSwallowedCancellation` 只抓 `runCatching` 包 suspend 呼叫,`try/catch(Exception)` 吞取消帶齊型別資訊也不報。Android 專案的 classpath 要靠 Gradle 才組得出來,所以這些規則走上面第②段的 CI 型別檢查範本,不在推送前硬組 classpath(設計審兩輪實測:參數檔不存在、路徑含空白、flavor、CI 沒有建置產物,每一種都讓閘不是靜默放行就是恆擋)。
   `lumos lint-check` 與健檢會照指令字面印出這些提醒(判定表見 [[Projects/Android的detekt規則說實話_計劃]]):沒有檔案佔位符的印 P1(只記錄不擋)、帶舊 `{LINT_FILES}` 的印 P2(改用 `{LINT_FILES_CSV}`)。
 - 自有設定要跟共用設定疊加:用逗號合成一個 `--config a.yml,b.yml`(分開寫兩次 `--config` 會拒跑);清單類欄位(例 ForbiddenMethodCall 的 methods)後面那份整份蓋掉前面那份,不合併、不警告。
 - 接完跑 `lumos lint-check --smoke` 驗宣告真跑得動(這正是抓到 /tmp jar 蒸發的守衛);冒煙只驗有沒有產出結果,不驗規則有沒有響。
+
+### Android Lint 與 Compose lint 標準接法(2026-11-06 立,[[Projects/Android現成檢查接上CI與推送前_計劃]])
+
+Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模組(單機版 lint 對 Gradle 專案會報錯,https://developer.android.com/studio/write/lint ),推送前不跑;放在專案 CI 用基準線擋新增(官方也建議「把 lint 明確放進 CI」)。Slack compose-lints 掛在 Android Lint 上,同一步跑。lumos 不執行 Gradle、不改專案的檔,下面是給專案自己貼的範本。
+
+1. 模組層 `build.gradle.kts`:
+   ```kotlin
+   android {
+       lint {
+           baseline = file("lint-baseline.xml")
+           warningsAsErrors = true      // 不開時只有 error 級會讓建置失敗;型錄的 Android Lint 列多半是 warning 級
+           checkDependencies = true     // app 連同函式庫模組一起查(官方建議)
+           sarifReport = true
+       }
+   }
+   dependencies {
+       lintChecks("com.slack.lint.compose:compose-lint-checks:<版本>")
+   }
+   ```
+   Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4.1 以上用 `1.6.1`(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 `1.5.5`(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 `1.5.0`(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 `1.4.2`(lint 31.7.1);AGP 8.7.0 用 `1.4.0`(發行說明寫 Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本,只列一串依賴更新的 PR 標題(lint-api 從 31.7.2 一路升到 32.2.0、lint 外掛升到 9.2.0,另一則寫 lint 31.13.2),看不出最後用哪版建置,不列。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
+2. 第一次在本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true`(例 `lintDebug`)產 `lint-baseline.xml`、提交。**先產基準線、提交,再做第 3 步**——反過來 `warningsAsErrors` 會讓舊專案一接就紅。要清舊帳時刪掉基準線檔重產。
+3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 lint):有基準線以外的新告警就讓 CI 失敗。
+- 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡都找不到 Android Lint 的跡象:lint 任務名,或跟 `gradlew`、`gradle` 寫在同一邏輯行(反斜線續行接起來算一行)的 `check`、`build`,或 Azure `tasks:`、gradle action 的 `arguments:`、Bitrise 的 `gradle_task:` 這三個欄位值裡的 `check`、`build`(CircleCI 的 `command:` 是通用欄位、不算,gradle orb 的 `command: build` 會多印);建置檔的 `lint { }` 區塊與 `lint-baseline.xml` 是第 1、2 步的痕跡,不算 CI 有跑;只看字面,找到一個就不印,找不到不代表一定沒跑)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看字面(A1 看 CI 設定檔、A2 看建置檔、A3 看宣告),不驗 CI 真的跑。
 
 ### Kotlin 寫法規則包標準接法(2026-11-05 立,[[Projects/Android協程與API寫法機械檢查標準_計劃]])
 

@@ -127468,13 +127468,15 @@ def t_detekt_compose_rules_shared_config():
     一般函式照報;compose-rules 那條(linter 目錄範本的寫法)只報外掛規則;外掛不在時不產 SARIF。本機沒 detekt 或外掛跳過,CI 必跑。"""
     import subprocess as sp
     det = _detekt_real_bin()
-    if not det:
-        print("    (本機沒有 detekt 1.23.8,略過)")
-        print("  ✓ t_detekt_compose_rules_shared_config")
-        return
     base = Path(__file__).resolve().parent.parent
     cfg = base / "configs" / "detekt" / "android.yml"
     ccfg = base / "configs" / "detekt" / "compose.yml"
+    if not det:
+        check("S3 靜態那半:共用 Android 設定與 compose-rules 設定都在", cfg.is_file() and ccfg.is_file(),
+              f"{cfg} / {ccfg}")
+        print("    (本機沒有 detekt 1.23.8,略過真跑;CI 下載釘版本會跑)")
+        print("  ✓ t_detekt_compose_rules_shared_config")
+        return
     td = Path(tempfile.mkdtemp(prefix="gctl-dtcompose-"))
     src = td / "Ui.kt"
     src.write_text(
