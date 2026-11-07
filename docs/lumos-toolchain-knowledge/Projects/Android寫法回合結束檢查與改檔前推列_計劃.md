@@ -19,7 +19,6 @@ lands_in:
   - Systems/改檔前推播
   - Systems/hook逾時預算
   - Systems/棧別提問表態閘
-  - Systems/回合結束寫法檢查(新開)
 ---
 # Android寫法回合結束檢查與改檔前推列_計劃
 
