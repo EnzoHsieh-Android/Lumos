@@ -45,6 +45,7 @@ summary: |-
   WHY:[2026-09-29 Projects/存量漂移改法_計劃]簿記名單多一個修復帳 governance/drift-fixes.jsonl(跟表態檔一樣是人對發現的處理紀錄,不是程式改動);舊版 lumos 的名單裡沒有它,只改帳檔的提交在舊版會被當成程式改動、推送前跑全套——修復帳本來就跟筆記一起提交,影響只是多跑測試
   SEE:[[Systems/回合結束寫法檢查]]
   WHY:四支安裝腳本內嵌的找 python 段(跟三支 git 掛鉤逐字相同)取到的不是絕對路徑就當找不到、印原因:安裝腳本自己不洗 PATH,PATH 有空項時 command -v 會回 ./python3.14 這種相對路徑 [出處:governance/review-reports/code-android寫法回合結束檢查/r6-資安-sonnet.md F1] [因:信任邊界見 [[Systems/hook信任邊界]]] [test:t_r6sh_launcher_relative]
+  WHY:紀律範本〈設計與排查〉的 PRIOR-ART 那句後面只接一個短子句「每個機制的依據另寫進計劃〈依據來源〉表(新計劃規格閘與推送前會擋)」,機制定義、出處五種、三處分工寫進 lumos-project-notes skill 第 2 節;消費專案照既有重新注入流程拿到 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 4] [因:範本每回合注入、已超過瘦身門檻,細節搬進 skill] [test:t_graph_discipline_sources_line]
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
     id: d1

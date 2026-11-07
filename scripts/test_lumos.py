@@ -157,6 +157,7 @@ def _need_src(*rels):
 import os as _os_mod
 _os_mod.environ.setdefault("LUMOS_PANEL_RETIRE_CUTOFF", "9999-12-31")   # probe輪退場 d1:既有 panel 行為測試凍結在退役前語意;退役行為由 t_panel_probe_retired 自帶 cutoff 覆寫驗
 _os_mod.environ.setdefault("LUMOS_HIGH_RISK_EVIDENCE_SINCE", "9999-12-31")   # 高風險測試證據加嚴:既有規格閘測試停在生效前(不要求預期值表與簽);新測試用 _hre_since 改
+_os_mod.environ.setdefault("LUMOS_PLAN_SOURCES_SINCE", "9999-12-31")   # 計劃依據來源必填:既有規格閘、推送前與健檢測試停在生效前(不要求〈依據來源〉);新測試用 _psrc_since 改
 
 
 def run(vault, *args, expect_rc=None):
@@ -136128,6 +136129,1506 @@ def t_r5arch_no_run_rebind():
         check(f"r5L6 {f.name}:_wt_changed_nofilter 不重綁 run", not rebind, str(rebind))
         direct = [n.lineno for n in _ast.walk(fn) if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name) and n.func.id == "run"] if fn else []
         check(f"r5L6 {f.name}:直接呼叫 run 的只有 in_top 裡那一次", len(direct) == 1, str(direct))
+# ── 計劃依據來源必填(Projects/計劃依據來源必填_計劃):規格閘、推送前、健檢查〈依據來源〉表 ──
+def _psrc_since(day):
+    """測試期間把〈依據來源〉的生效日改成 day(總開關預設 9999,既有測試停在生效前),跑完還原。"""
+    import functools
+
+    def deco(fn):
+        @functools.wraps(fn)
+        def _w(*a, **k):
+            old = _os_mod.environ.get("LUMOS_PLAN_SOURCES_SINCE")
+            _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = day
+            try:
+                return fn(*a, **k)
+            finally:
+                if old is None:
+                    _os_mod.environ.pop("LUMOS_PLAN_SOURCES_SINCE", None)
+                else:
+                    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = old
+        return _w
+    return deco
+
+
+_PSRC_HEAD = ["", "## 依據來源", "", "| 機制 | 依據 | 出處 |", "|---|---|---|"]
+_PSRC_OK = "| 擋在規格閘 | 既有計劃格式檢查集中在規格閘 | https://developer.android.com/studio/write/lint |"
+
+
+def _psrc_repo(name):
+    """規格閘測試倉庫 + 出處要用到的東西:根目錄 README.md、.github/workflows/ci.yml、scripts/a.py(scripts/ 是目錄)、節點 Systems/規格閘。"""
+    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / name)
+    (d / "README.md").write_text("# x\n", encoding="utf-8")
+    (d / ".github" / "workflows").mkdir(parents=True)
+    (d / ".github" / "workflows" / "ci.yml").write_text("on: push\n", encoding="utf-8")
+    (d / "scripts").mkdir()
+    (d / "scripts" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (kg / "Systems").mkdir(exist_ok=True)
+    (kg / "Systems" / "規格閘.md").write_text("---\ntype: system\nstatus: doing\n---\n# 規格閘\n", encoding="utf-8")
+    _sg_commit(d, "base")   # 出處的 repo 路徑對 HEAD 的版控樹判(代碼審 r1 邊界席 F1):骨架先提交,計劃本身不提交
+    return d, kg
+
+
+def _psrc_text(rows=None, table=None, clauses=None, status="doing", created=_SG_CREATED):
+    """一份風險高(沒有已排除行)的計劃:驗收條款 + 〈依據來源〉表;table=[] 就沒有這一節。"""
+    tbl = table if table is not None else _PSRC_HEAD + (rows if rows is not None else [_PSRC_OK])
+    return ("---\ntype: project\nstatus: " + status + "\n" + created + "---\n"
+            + _hre_text(table=[], clauses=_HRE_CLAUSES if clauses is None else clauses) + "\n".join(tbl) + "\n" + _SG_ROLLBACK)
+
+
+def _psrc_gate(kg, node="Projects/甲_計劃", no_run=True):
+    """在行程內跑規格閘本身(cmd_spec_gate),回 (rc, 輸出)。"""
+    import io, contextlib
+    m = _load_lumos_inproc()
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        rc = m.cmd_spec_gate(m.Env(kg), node, no_run=no_run)
+    return rc, buf.getvalue()
+
+
+@_psrc_since("2000-01-01")
+def t_spec_gate_sources_section():
+    """[S1] 新計劃的〈依據來源〉:缺節、沒資料列、表頭不對、出處五種都不是、三格有空的 → 擋;五種出處各自放行;
+    零條款、風險低、--no-run 一樣擋;複製舊計劃(created 早、進 git 晚)擋;讀不到日期而生效日 9999 不擋;舊計劃只提醒。
+    判準來源:計劃〈用詞〉出處合格與範圍 1。翻紅釘:插入點挪到條款綁定之後 → 零條款那條紅;判新舊反過來 → 舊計劃那條紅。"""
+    print("t_spec_gate_sources_section")
+    d, kg = _psrc_repo("psrc1")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text(), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 前置:合格的表 → 放行、印「依據來源: ✓ 1 列」", rc == 0 and "依據來源: ✓ 1 列" in out, out[-800:])
+    p.write_text(_psrc_text(table=[]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 沒有〈依據來源〉節 → 擋、印 ✗ 與缺節", rc == 1 and "依據來源: ✗" in out and "沒有「## 依據來源」這一節" in out, out[-800:])
+    check("S1 擋下印的範例講明是示範、照抄會被擋", "範例:" in out and "照抄會被擋" in out, out[-800:])
+    check("S1 擋下附一列合格的範例", "範例:" in out, out[-400:])
+    p.write_text(_psrc_text(table=[], clauses=[]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 零條款、風險高的新計劃缺這一節 → 一樣擋", rc == 1 and "依據來源: ✗" in out, out[-800:])
+    rc, out = _psrc_gate(kg, no_run=False)
+    check("S1 不帶 --no-run 也一樣擋(零條款)", rc == 1 and "依據來源: ✗" in out, out[-800:])
+    p.unlink()
+    _sg_plan2(kg, "乙", _HRE_CLAUSES)
+    rc, out = _psrc_gate(kg, "Projects/乙_計劃")
+    check("S1 風險低的新計劃缺這一節 → 一樣擋", rc == 1 and "計劃風險: 低" in out and "依據來源: ✗" in out, out[-800:])
+    (kg / "Projects" / "乙_計劃.md").unlink()
+    rc_cases = [
+        ("有節但沒有資料列", _PSRC_HEAD, 1, "資料列"),
+        ("表頭寫成「機制|出處」兩欄", ["", "## 依據來源", "", "| 機制 | 出處 |", "|---|---|", "| 擋在規格閘 | https://example.com/a |"], 1, "表頭"),
+        ("出處寫「一般知識」", _PSRC_HEAD + [_PSRC_OK, "| 預設門檻三次 | 大家都這樣做 | 一般知識 |"], 1, "預設門檻三次"),
+    ]
+    for label, table, want, kw in rc_cases:
+        p.write_text(_psrc_text(table=table), encoding="utf-8")
+        rc, out = _psrc_gate(kg)
+        check(f"S1 {label} → 擋、點名「{kw}」", rc == want and "依據來源: ✗" in out and kw in out, out[-800:])
+    ok_cells = [
+        ("https 網址", "https://developer.android.com/studio/write/lint"),
+        ("存在的 repo 路徑", "`scripts/a.py`"),
+        ("存在的 repo 路徑帶行號", "`scripts/a.py:1`"),
+        ("存在的根目錄檔 README.md", "`README.md`"),
+        ("存在的 .github/workflows/ci.yml", "`.github/workflows/ci.yml`"),
+        ("存在的節點連結", "[[Systems/規格閘]]"),
+        ("使用者原話(半形冒號)", "使用者 2026-11-06:「選甲不選乙的理由」"),
+        ("使用者原話(全形冒號)", "使用者 2026-11-05：「這樣做比較穩」"),
+        ("使用者原話(沒冒號)", "使用者 2026-11-05「這樣做比較穩」"),
+        ("使用者原話(半形雙引號)", '使用者 2026-11-05:"這樣做比較穩"'),
+        ("使用者原話剛好 4 個實字", "使用者 2026-11-05:「甲乙丙丁」"),
+        ("實測", "實測 2026-11-06:跑某指令得到某數"),
+        ("實測剛好 4 個實字", "實測 2026-11-06:甲乙丙丁"),
+        ("含即可:一般知識(參考網址)", "一般知識(參考 https://developer.android.com/a)"),
+        ("日期是閏年 2 月 29 日", "使用者 2024-02-29:「這樣做比較穩」"),
+    ]
+    for label, cell in ok_cells:
+        p.write_text(_psrc_text([_PSRC_OK, f"| 某機制 | 某個理由 | {cell} |"]), encoding="utf-8")
+        rc, out = _psrc_gate(kg)
+        check(f"S1 出處是{label} → 放行", rc == 0 and "依據來源: ✓ 2 列" in out, cell + "\n" + out[-600:])
+    bad_cells = [
+        ("目錄 scripts/", "`scripts/`"),
+        ("目錄 scripts(不帶斜線)", "`scripts`"),
+        ("不存在的 scripts/x.py(新增)", "`scripts/x.py`(新增)"),
+        ("不存在的 repo 路徑", "`docs/none.md`"),
+        ("含 .. 的路徑", "`../README.md`"),
+        ("絕對路徑", "`/etc/hosts`"),
+        ("不存在的節點連結", "[[Systems/不存在]]"),
+        ("「實測 2026-11-06:」後面空白", "實測 2026-11-06:"),
+        ("實測只有 3 個實字", "實測 2026-11-06:甲乙丙"),
+        ("實測沒冒號", "實測 2026-11-06 跑某指令得到某數"),
+        ("使用者原話只有 3 個實字", "使用者 2026-11-05:「甲乙丙」"),
+        ("使用者原話沒引號", "使用者 2026-11-05:這樣做比較穩"),
+        ("使用者原話日期不合法 2026-13-40", "使用者 2026-13-40:「選甲不選乙的理由」"),
+        ("日期是平年 2 月 29 日", "使用者 2026-02-29:「選甲不選乙的理由」"),
+        ("網址沒有含點的主機名", "https://localhost/x"),
+        ("沒有 https 的網址", "developer.android.com/studio"),
+        ("RFC 2606 示範網域 example.com", "https://example.com/paper.pdf"),
+        ("未來日期", "使用者 2099-12-31:「這樣做比較穩」"),
+        ("行號超出檔尾", "`scripts/a.py:999`"),
+        ("符號連結指向 repo 外", "`scripts/out.txt`"),
+    ]
+    import os as _o, subprocess as _sp0
+    _o.symlink("/etc/hosts", d / "scripts" / "out.txt")
+    _sp0.run(["git", "-C", str(d), "add", "scripts/out.txt"])   # 只提交連結,計劃本身不提交(首次加入日要留在讀不到)
+    _sp0.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "link out", "--no-verify"])
+    for label, cell in bad_cells:
+        p.write_text(_psrc_text([_PSRC_OK, f"| 某機制 | 某個理由 | {cell} |"]), encoding="utf-8")
+        rc, out = _psrc_gate(kg)
+        check(f"S1 出處是{label} → 擋、印那一列機制名", rc == 1 and "依據來源: ✗" in out and "某機制" in out, cell + "\n" + out[-600:])
+    for label, row, kw in (("依據格空白", "| 某機制 |  | https://example.com/a |", "依據"),
+                           ("機制格只有標點", "| 。 | 某個理由 | https://example.com/a |", "機制"),
+                           ("某列只有兩格", "| 某機制 | https://example.com/a |", "3 格")):
+        p.write_text(_psrc_text([_PSRC_OK, row]), encoding="utf-8")
+        rc, out = _psrc_gate(kg)
+        check(f"S1 {label} → 擋、點名「{kw}」", rc == 1 and "依據來源: ✗" in out and kw in out, out[-600:])
+    p.write_text(_psrc_text(table=_PSRC_HEAD + ["| 甲 | 乙 \\| 丙 | https://developer.android.com/a |"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 格內的 \\| 不算分隔", rc == 0 and "依據來源: ✓ 1 列" in out, out[-600:])
+    p.write_text(_psrc_text(table=["", "## 依據來源", "", "```", "| 機制 | 依據 | 出處 |", "|---|---|---|", _PSRC_OK, "```"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 表寫在圍欄裡不算 → 擋", rc == 1 and "依據來源: ✗" in out, out[-600:])
+    p.write_text(_psrc_text(table=["", "<!--", "## 依據來源", "", "| 機制 | 依據 | 出處 |", "|---|---|---|", _PSRC_OK, "-->"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 整節在 HTML 註解裡不算 → 擋", rc == 1 and "依據來源: ✗" in out, out[-600:])
+    # 舊計劃:生效日之後才算新;created 早於生效日、還沒進 git → 舊,只提醒
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "2026-06-01"
+    p.write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 舊計劃缺這一節 → 只印提醒不擋", rc == 0 and "依據來源: 舊計劃不擋" in out and "依據來源: ✗" not in out, out[-600:])
+    p.write_text(_psrc_text(table=[], created="created: 2026-06-01\n"), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S1 計劃日期剛好是生效日 → 算新、擋", rc == 1 and "依據來源: ✗" in out, out[-600:])
+    # 複製舊計劃:created 寫舊日期,但第一次進 git 在生效日之後 → 新
+    import subprocess as _sp
+    p.write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    env = dict(_os_mod.environ, GIT_AUTHOR_DATE="2026-07-01T10:00:00+08:00", GIT_COMMITTER_DATE="2026-07-01T10:00:00+08:00")
+    _sp.run(["git", "-C", str(d), "add", "-A"], env=env)
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "copy", "--no-verify"], env=env)
+    rc, out = _psrc_gate(kg)
+    check("S1 created 早、第一次進 git 晚(複製舊計劃)缺這一節 → 擋", rc == 1 and "依據來源: ✗" in out, out[-600:])
+    # 兩個日期都讀不到(沒 created、沒進 git)、生效日 9999 → 當今天 → 舊 → 不擋
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "9999-12-31"
+    q = kg / "Projects" / "丁_計劃.md"
+    q.write_text(_psrc_text(table=[], clauses=[], created=""), encoding="utf-8")   # 零條款:沒 created 的計劃預期值表那道(既有行為)也會要表,避開它
+    rc, out = _psrc_gate(kg, "Projects/丁_計劃")
+    check("S1 兩個日期都讀不到、生效日 9999-12-31 → 不擋", rc == 0 and "依據來源: 舊計劃不擋" in out, out[-600:])
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "2000-01-01"
+    rc, out = _psrc_gate(kg, "Projects/丁_計劃")
+    check("S1 兩個日期都讀不到、生效日在過去 → 當今天、算新、擋", rc == 1 and "依據來源: ✗" in out, out[-600:])
+    r = (kg / "Projects" / "甲_調研.md")
+    r.write_text(_psrc_text(table=[]), encoding="utf-8")
+    rc, out = _psrc_gate(kg, "Projects/甲_調研")
+    check("S1 _調研.md 不是計劃 → 不查", "依據來源" not in out, out[-600:])
+
+
+@_psrc_since("2000-01-01")
+def t_spec_gate_sources_blocked_logged():
+    """[S2] 規格閘因〈依據來源〉擋下 → 治理帳多一筆 spec-gate/sources-missing(節點是那份計劃、帶被擋的格子原文前 200 字);
+    放行與舊計劃提醒不寫。翻紅釘:拿掉 _gate_event → 第一條紅;放行也寫 → 第二條紅。"""
+    print("t_spec_gate_sources_blocked_logged")
+    d, kg = _psrc_repo("psrc2")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text([_PSRC_OK, "| 預設門檻三次 | 大家都這樣做 | 一般知識" + "甲" * 300 + " |"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    ev = _hre_gov(d, "spec-gate", "sources-missing")
+    check("S2 擋下 → 寫一筆 spec-gate/sources-missing、節點是那份計劃", rc == 1 and len(ev) == 1
+          and ev[0].get("nodes") == ["Projects/甲_計劃.md"] and ev[0].get("plan") == "Projects/甲_計劃.md", repr(ev)[:600])
+    cell = str((ev[0] if ev else {}).get("cells", ""))
+    check("S2 事件帶被擋的格子原文、最多 200 字", cell.startswith("一般知識") and len(cell) == 200, repr(cell)[:300])
+    p.write_text(_psrc_text(), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S2 放行 → 不寫", rc == 0 and len(_hre_gov(d, "spec-gate", "sources-missing")) == 1, out[-400:])
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "2099-01-01"
+    p.write_text(_psrc_text(table=[]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("S2 舊計劃提醒 → 不寫", rc == 0 and "舊計劃不擋" in out and len(_hre_gov(d, "spec-gate", "sources-missing")) == 1, out[-400:])
+
+
+@_psrc_since("2000-01-01")
+def t_spec_gate_push_sources():
+    """[S3] 推送前:範圍改到一份新計劃的檔案、〈依據來源〉有一列出處不合格 → 擋、標題講依據來源;todo/doing/done 都擋;補好放行;
+    只改到舊計劃、只連到被改 Systems 節點的別人的新計劃、_調研.md 都不擋;擋下寫 sources-missing、stage=push。"""
+    print("t_spec_gate_push_sources")
+    d, kg = _psrc_repo("psrc3")
+    _sg_commit(d, "base")
+    bad_row = "| 預設門檻三次 | 大家都這樣做 | 一般知識 |"
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text([_PSRC_OK, bad_row], status="todo"), encoding="utf-8")
+    _sg_commit(d, "todo plan")
+    r = _hre_push(d, kg, "HEAD~1..HEAD")
+    check("S3 todo 新計劃一列出處不合格 → 擋、印計劃與那一列", r.returncode == 1 and "甲_計劃" in r.stdout and "預設門檻三次" in r.stdout, r.stdout[-800:])
+    check("S3 標題講新計劃的〈依據來源〉,不講風險低計劃", "✗ — 1 份新計劃的〈依據來源〉不合格" in r.stdout and "風險低計劃沒過" not in r.stdout, r.stdout[-800:])
+    m = _load_lumos_inproc()
+    mixed = m._spec_gate_push_bad_head([m._SOURCES_PUSH_TAG + "甲", m._EXPECTED_PUSH_TAG + "乙", "丙"])
+    check("S3 混著別種原因 → 標題講總項數、〈依據來源〉幾份、另有別種", mixed.startswith("3 項沒過") and "〈依據來源〉1 份" in mixed, mixed)
+    check("S3 帳讀不到的原因照舊排最前", m._spec_gate_push_bad_head([m._SOURCES_PUSH_TAG + "甲", m._SPEC_GATE_PUSH_LEDGER_TAG + "乙"]).startswith("帳讀不到"))
+    ev = [e for e in _hre_gov(d, "spec-gate", "sources-missing") if e.get("stage") == "push"]
+    check("S3 擋下寫一筆 sources-missing、stage=push", len(ev) == 1 and ev[0].get("plan") == "Projects/甲_計劃.md", repr(ev)[:500])
+    for st in ("doing", "done"):
+        p.write_text(_psrc_text([_PSRC_OK, bad_row], status=st), encoding="utf-8")
+        _sg_commit(d, st)
+        r = _hre_push(d, kg, "HEAD~1..HEAD")
+        check(f"S3 {st} 的新計劃一樣擋", r.returncode == 1 and "預設門檻三次" in r.stdout, r.stdout[-600:])
+    p.write_text(_psrc_text(status="todo"), encoding="utf-8")
+    _sg_commit(d, "fixed")
+    r = _hre_push(d, kg, "HEAD~1..HEAD")
+    check("S3 補好之後 → 放行", r.returncode == 0, r.stdout[-600:])
+    # 別人的新計劃:沒在範圍裡改到,只連到被改的 Systems 節點 → 不擋
+    other = kg / "Projects" / "丙_計劃.md"
+    other.write_text(_psrc_text(table=[]).replace("status: doing\n", "status: doing\nlands_in:\n  - Systems/規格閘\n"), encoding="utf-8")
+    _sg_commit(d, "other plan")
+    (kg / "Systems" / "規格閘.md").write_text("---\ntype: system\nstatus: doing\n---\n# 規格閘\n\n補一句。\n", encoding="utf-8")
+    _sg_commit(d, "touch system")
+    r = _hre_push(d, kg, "HEAD~1..HEAD")
+    check("S3 範圍沒改到、只連到被改 Systems 節點的別人的新計劃缺這一節 → 不擋", r.returncode == 0 and "依據來源" not in r.stdout, r.stdout[-600:])
+    x = kg / "Projects" / "X_調研.md"
+    x.write_text(_psrc_text(table=[]), encoding="utf-8")
+    _sg_commit(d, "research")
+    r = _hre_push(d, kg, "HEAD~1..HEAD")
+    check("S3 範圍改到 Projects/X_調研.md → 不查", r.returncode == 0 and "依據來源" not in r.stdout, r.stdout[-600:])
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "2099-01-01"
+    p.write_text(_psrc_text([_PSRC_OK, bad_row], status="todo"), encoding="utf-8")
+    _sg_commit(d, "old plan bad")
+    r = _hre_push(d, kg, "HEAD~1..HEAD")
+    check("S3 範圍只改到舊計劃 → 不擋", r.returncode == 0, r.stdout[-600:])
+
+
+@_psrc_since("2026-06-01")
+def t_doctor_plan_sources_missing():
+    """[S4] 健檢列出 todo/doing 的新計劃裡〈依據來源〉不合格的;合格、done、舊計劃不列;條數照健檢軟提醒慣例截斷(預設 3 條加「另 N 條」)、
+    --verbose 看全部;退出碼不因這則提醒改變;created 不早於生效日的計劃不呼叫 git 就判新、其餘整次只跑一次 git。"""
+    print("t_doctor_plan_sources_missing")
+    d, kg = _psrc_repo("psrc4")
+    P = kg / "Projects"
+    new = "created: 2026-10-01\n"
+    (P / "缺節_計劃.md").write_text(_psrc_text(table=[], status="todo", created=new), encoding="utf-8")
+    (P / "壞列_計劃.md").write_text(_psrc_text([_PSRC_OK, "| 預設三次 | 大家都這樣做 | 一般知識 |"], created=new), encoding="utf-8")
+    (P / "合格_計劃.md").write_text(_psrc_text(created=new), encoding="utf-8")
+    (P / "結案_計劃.md").write_text(_psrc_text(table=[], status="done", created=new), encoding="utf-8")
+    (P / "舊的_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    (P / "調研的_調研.md").write_text(_psrc_text(table=[], created=new), encoding="utf-8")
+    r = run(kg, "doctor")
+    sec = r.stdout[r.stdout.find("[S22]"):] if "[S22]" in r.stdout else ""
+    sec = sec[:sec.find("\n[", 1)] if "\n[" in sec[1:] else sec
+    check("S4 todo 新計劃缺節 → 列出", "缺節_計劃" in sec, r.stdout[-1500:])
+    check("S4 doing 新計劃有一列出處不合格 → 列出", "壞列_計劃" in sec, sec)
+    check("S4 每列都合格 → 不列", "合格_計劃" not in sec, sec)
+    check("S4 done → 不列", "結案_計劃" not in sec, sec)
+    check("S4 舊計劃缺節 → 不列", "舊的_計劃" not in sec, sec)
+    check("S4 _調研.md → 不列", "調研的_調研" not in sec, sec)
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "9999-12-31"
+    r0 = run(kg, "doctor")
+    _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = "2026-06-01"
+    check("S4 前置:生效日 9999 時一篇都不列", "缺節_計劃" not in r0.stdout, r0.stdout[-800:])
+    check("S4 退出碼不因這則提醒改變", r.returncode == r0.returncode, (r.returncode, r0.returncode))
+    for i in range(21):
+        (P / f"批{i:02d}_計劃.md").write_text(_psrc_text(table=[], created=new), encoding="utf-8")
+    r = run(kg, "doctor")
+    sec = r.stdout[r.stdout.find("[S22]"):]
+    sec = sec[:sec.find("\n[", 1)]
+    listed = [ln for ln in sec.splitlines() if ln.strip().startswith("• ")]
+    check("S4 23 篇 → 照軟提醒慣例只列 3 篇、印總數與「另 20 條」", len(listed) == 3 and "共 23 篇" in sec and "另 20 條" in sec, sec[-1500:])
+    rv = run(kg, "doctor", "--verbose")
+    secv = rv.stdout[rv.stdout.find("[S22]"):]
+    secv = secv[:secv.find("\n[", 1)]
+    check("S4 --verbose 列全部 23 篇", len([ln for ln in secv.splitlines() if ln.strip().startswith("• ")]) == 23, secv[-800:])
+    # created 不早於生效日:不呼叫 git 就判新(首次加入日只在有 created 早於生效日或讀不到的計劃時查一次)
+    m = _load_lumos_inproc()
+    calls = []
+    orig = m._plan_first_days
+    m._plan_first_days = lambda *a, **k: (calls.append(a), orig(*a, **k))[1]
+    try:
+        (P / "舊的_計劃.md").unlink()
+        total = len(m._doctor_plan_sources_lines(m.Env(kg)))
+        check("S4 全部 created 不早於生效日 → 不呼叫 git", calls == [] and total == 23, repr((calls, total)))
+        (P / "舊的_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+        (P / "沒日期_計劃.md").write_text(_psrc_text(table=[], created=""), encoding="utf-8")
+        m._PLAN_FIRST_DAYS_CACHE.clear()
+        logs, orun = [], m.subprocess.run
+        m.subprocess.run = lambda argv, *a, **k: (logs.append(argv) if "log" in argv else None, orun(argv, *a, **k))[1]
+        try:
+            total = len(m._doctor_plan_sources_lines(m.Env(kg)))
+        finally:
+            m.subprocess.run = orun
+        check("S4 有 created 早於生效日或讀不到的 → 首次加入日整次只跑一次 git log", len(logs) == 1 and total == 24, repr((len(logs), total)))
+    finally:
+        m._plan_first_days = orig
+
+
+@_psrc_since("2026-06-01")
+def t_doctor_plan_sources_batch_dates():
+    """[S4] 健檢的首次加入日跟 _plan_effective_day 同一支(_plan_first_days):created 早、進 git 晚的複製計劃判新;生效日前加入、之後 git mv 改名的判舊。"""
+    print("t_doctor_plan_sources_batch_dates")
+    import subprocess as _sp
+    d, kg = _psrc_repo("psrc4b")
+    P = kg / "Projects"
+
+    def commit(msg, date):
+        env = dict(_os_mod.environ, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+        _sp.run(["git", "-C", str(d), "add", "-A"], env=env)
+        _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg, "--no-verify"], env=env)
+    (P / "早_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    commit("early", "2026-01-01T10:00:00+08:00")
+    _sp.run(["git", "-C", str(d), "mv", str(P / "早_計劃.md"), str(P / "早改名_計劃.md")])
+    commit("mv", "2026-08-01T10:00:00+08:00")
+    (P / "抄_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    commit("copy", "2026-07-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    joined = "\n".join(m._doctor_plan_sources_lines(m.Env(kg)))
+    check("S4 created 早、進 git 晚(複製舊計劃)→ 判新、列出", "抄_計劃" in joined, joined)
+    check("S4 生效日前加入、之後改名 → 照舊判舊、不列", "早改名_計劃" not in joined, joined)
+
+
+def _psrc_git_commit(d, msg, date):
+    """帶固定提交日期的提交(首次加入日取提交日期)。"""
+    import subprocess as _sp
+    env = dict(_os_mod.environ, GIT_AUTHOR_DATE=date, GIT_COMMITTER_DATE=date)
+    _sp.run(["git", "-C", str(d), "add", "-A"], env=env)
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", msg, "--no-verify"], env=env)
+
+
+def _psrc_doctor_s22(m, kg, verbose=False):
+    """行程內跑健檢,回 S22 那一段的輸出。"""
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        m.run_doctor(m.Env(kg), False, False, verbose=verbose)
+    out = buf.getvalue()
+    sec = out[out.find("[S22]"):] if "[S22]" in out else ""
+    return sec[:sec.find("\n[", 1)] if "\n[" in sec[1:] else sec
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_first_day_moved_in():
+    """首次加入日只有一套算法(代碼審 r1 架構對齊席 F1、邊界席 F3、正確性席 F1、合約席 F2):圖譜外 Inbox/ 的檔生效日前進 git、
+    生效日後 git mv 進 Projects/(沒有 created)→ 首次加入日接舊日期、判舊;規格閘只提醒、健檢不列,兩處一致。
+    翻紅釘:git log 限在 Projects 路徑底下 → 改名來源看不到、印成 A → 健檢判新列出 → 紅。"""
+    print("t_psrc_first_day_moved_in")
+    d, kg = _psrc_repo("psrc_mv")
+    (kg / "Inbox").mkdir()
+    (kg / "Inbox" / "移_計劃.md").write_text(_psrc_text(table=[], created=""), encoding="utf-8")
+    _psrc_git_commit(d, "inbox", "2026-01-01T10:00:00+08:00")
+    import subprocess as _sp
+    _sp.run(["git", "-C", str(d), "mv", "docs/x-knowledge/Inbox/移_計劃.md", "docs/x-knowledge/Projects/移_計劃.md"])
+    _psrc_git_commit(d, "move in", "2026-08-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    day = m._plan_effective_day(d, "docs/x-knowledge/Projects/移_計劃.md", None)
+    check("從 Projects 外搬進來 → 首次加入日接搬家前的 2026-01-01", day == "2026-01-01", repr(day))
+    rc, out = _psrc_gate(kg, "Projects/移_計劃")
+    check("規格閘判舊、只提醒", rc == 0 and "依據來源: 舊計劃不擋" in out, out[-500:])
+    sec = _psrc_doctor_s22(m, kg)
+    check("健檢跟規格閘一致、不列", "移_計劃" not in sec and "[S22]" in sec, sec)
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_first_day_renamed_late():
+    """created 早於生效日、第一次進 git 晚於生效日、之後又改名 → 計劃日期是第一次進 git 那天、判新;健檢列出改名後的名字,規格閘擋。
+    翻紅釘(合約席 M8):改名那行不把舊路徑的日期接給新路徑 → 新路徑只剩 created、判舊 → 紅。"""
+    print("t_psrc_first_day_renamed_late")
+    d, kg = _psrc_repo("psrc_rn")
+    P = kg / "Projects"
+    (P / "晚_計劃.md").write_text(_psrc_text(table=[], status="doing", created="created: 2026-01-01\n"), encoding="utf-8")
+    _psrc_git_commit(d, "add late", "2026-07-01T10:00:00+08:00")
+    import subprocess as _sp
+    _sp.run(["git", "-C", str(d), "mv", "docs/x-knowledge/Projects/晚_計劃.md", "docs/x-knowledge/Projects/晚改名_計劃.md"])
+    _psrc_git_commit(d, "rename", "2026-08-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    day = m._plan_effective_day(d, "docs/x-knowledge/Projects/晚改名_計劃.md", "2026-01-01")
+    check("改名後的計劃日期是第一次進 git 的 2026-07-01", day == "2026-07-01", repr(day))
+    sec = _psrc_doctor_s22(m, kg)
+    check("健檢判新、列出改名後的名字", "晚改名_計劃" in sec, sec)
+    rc, out = _psrc_gate(kg, "Projects/晚改名_計劃")
+    check("規格閘判新、擋", rc == 1 and "依據來源: ✗" in out, out[-500:])
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_first_day_vault_root():
+    """圖譜就在 repo 根目錄(代碼審 r1 通才席 F4):複製舊計劃(created 早、生效日後才進 git)→ 健檢照樣判新、列出。
+    翻紅釘:_plan_sources_prel 回的 repo 相對路徑多帶 "./" 前綴 → 查不到首次加入日 → 只剩 created、判舊不列 → 紅(代碼審 r2 合約席 F4 實驗過)。"""
+    print("t_psrc_first_day_vault_root")
+    import subprocess as _sp
+    root = mkvault().parent / "psrc_root"
+    root.mkdir()
+    _sp.run(["git", "init", "-q", str(root)])
+    (root / "Projects").mkdir()
+    (root / "README.md").write_text("# x\n", encoding="utf-8")
+    _psrc_git_commit(root, "base", "2026-01-01T10:00:00+08:00")
+    (root / "Projects" / "抄_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    _psrc_git_commit(root, "copy", "2026-07-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    joined = "\n".join(m._doctor_plan_sources_lines(m.Env(root)))
+    check("圖譜在 repo 根:複製舊計劃照樣判新、列出", "抄_計劃" in joined, joined)
+
+
+def t_psrc_first_day_timeout_notice():
+    """首次加入日的 git log 逾時 → 回讀不到(呼叫端只看 created),並往 stderr 印一行(代碼審 r1 通才席 F5)。
+    翻紅釘:逾時退路不印 → 紅。"""
+    print("t_psrc_first_day_timeout_notice")
+    import io, contextlib
+    d, kg = _psrc_repo("psrc_to")
+    m = _load_lumos_inproc()
+    old = m._PLAN_FIRST_DAYS_TIMEOUT
+    m._PLAN_FIRST_DAYS_CACHE.clear()
+    m._PLAN_FIRST_DAYS_TIMEOUT = 1e-6
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            got = m._plan_first_days(d)
+    finally:
+        m._PLAN_FIRST_DAYS_TIMEOUT = old
+        m._PLAN_FIRST_DAYS_CACHE.clear()
+    check("逾時 → 讀不到", got is None, repr(got)[:200])
+    check("逾時 → stderr 印一行、講只看 created", "只看 created" in err.getvalue(), err.getvalue())
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_cell_tracked_file_only():
+    """出處的反引號路徑對 HEAD 版控樹判(代碼審 r1 邊界席 F1、正確性席 F3):沒進版控、`.git` 底下、大小寫不符都不算;進了版控的算。
+    翻紅釘:改回只看工作目錄 → 未追蹤檔、.git/HEAD 放行 → 紅。"""
+    print("t_psrc_cell_tracked_file_only")
+    d, kg = _psrc_repo("psrc_tr")
+    (d / "scripts" / "untracked.py").write_text("y = 2\n", encoding="utf-8")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for label, cell, want in (("進了版控的 scripts/a.py", "`scripts/a.py`", True),
+                              ("工作目錄有、沒進版控", "`scripts/untracked.py`", False),
+                              (".git/HEAD", "`.git/HEAD`", False),
+                              ("大小寫不符 SCRIPTS/A.PY", "`SCRIPTS/A.PY`", False),
+                              ("大小寫不符 Scripts/a.py", "`Scripts/a.py`", False)):
+        check(f"出處 {label} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_cell_symlink_outside():
+    """出處的反引號路徑是符號連結:指向 repo 外(絕對路徑或 ..)不算,指向 repo 裡的檔算(代碼審 r1 正確性席 F3)。
+    翻紅釘:不看符號連結目標 → 指向 /etc/hosts 的放行 → 紅。"""
+    print("t_psrc_cell_symlink_outside")
+    import os as _o
+    d, kg = _psrc_repo("psrc_ln")
+    _o.symlink("/etc/hosts", d / "scripts" / "out.txt")
+    _o.symlink("../../outside.txt", d / "scripts" / "up.txt")
+    _o.symlink("a.py", d / "scripts" / "in.py")
+    _sg_commit(d, "links")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for label, cell, want in (("指向 /etc/hosts", "`scripts/out.txt`", False), ("指向 ../../outside.txt", "`scripts/up.txt`", False),
+                              ("指向 repo 裡的 a.py", "`scripts/in.py`", True)):
+        check(f"符號連結{label} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_cell_line_range():
+    """出處帶 :行號 → 交給 _validate_repo_ref 驗範圍:超出檔尾、範圍倒過來都不算;在檔內的算(代碼審 r1 通才席 F6)。
+    翻紅釘:行號先剝掉不傳 → `scripts/a.py:999` 放行 → 紅。"""
+    print("t_psrc_cell_line_range")
+    d, kg = _psrc_repo("psrc_ln2")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell, want in (("`scripts/a.py:1`", True), ("`scripts/a.py:999`", False), ("`README.md:1-1`", True), ("`README.md:5-2`", False)):
+        check(f"出處 {cell} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_cell_example_domains():
+    """RFC 2606 保留的示範網域 example.com、example.net、example.org(含子網域、大寫)不算出處;擋下訊息自己印的範例列原封貼回也擋
+    (代碼審 r1 正確性席 F2)。翻紅釘:不排除示範網域 → 範例列放行 → 紅。"""
+    print("t_psrc_cell_example_domains")
+    d, kg = _psrc_repo("psrc_ex")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell, want in (("https://example.com/paper.pdf", False), ("https://example.net/a", False), ("https://example.org/a", False),
+                       ("https://www.example.com/a", False), ("https://EXAMPLE.COM/a", False), ("https://example.com./a", False),
+                       ("https://myexample.com/a", True), ("https://example.com.tw/a", True)):
+        check(f"出處 {cell} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text([_PSRC_OK, m._PLAN_SOURCES_EXAMPLE]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("擋下訊息印的範例列原封貼回 → 擋", rc == 1 and "擋下要留帳" in out, out[-500:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_cell_future_dates():
+    """使用者原話與實測的日期晚於今天不算(代碼審 r1 正確性席 F2);今天算。翻紅釘:只驗日期合法 → 2099 放行 → 紅。"""
+    print("t_psrc_cell_future_dates")
+    import datetime as _dt
+    d, kg = _psrc_repo("psrc_fd")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    today = _dt.date.today()
+    tomorrow = (today + _dt.timedelta(days=1)).isoformat()
+    for cell, want in ((f"使用者 {today.isoformat()}:「這樣做比較穩」", True), (f"使用者 {tomorrow}:「這樣做比較穩」", False),
+                       ("使用者 2099-12-31:「這樣做比較穩」", False), (f"實測 {today.isoformat()}:跑某指令得到某數", True),
+                       (f"實測 {tomorrow}:跑某指令得到某數", False)):
+        check(f"出處 {cell[:20]} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_cell_wikilink_dir():
+    """節點連結寫了目錄就要那個目錄真的有那篇:[[Foo/規格閘]] 不算(不退回只比檔名);[[Systems/規格閘]]、[[規格閘]] 算(代碼審 r1 正確性席 F3)。"""
+    print("t_psrc_cell_wikilink_dir")
+    d, kg = _psrc_repo("psrc_wl")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell, want in (("[[Systems/規格閘]]", True), ("[[規格閘]]", True), ("[[Foo/規格閘]]", False), ("[[Systems/規格閘.md]]", True)):
+        check(f"出處 {cell} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_section_html_comment():
+    """〈依據來源〉整節(或只有表)被 HTML 註解包住 → 渲染後看不到、不算有這一節(代碼審 r1 邊界席 F2);註解外的表照算,行號不變。
+    翻紅釘:找節前不去註解 → 註解裡的表放行 → 紅。"""
+    print("t_psrc_section_html_comment")
+    d, kg = _psrc_repo("psrc_cm")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text(table=["", "<!--", "## 依據來源", "", "| 機制 | 依據 | 出處 |", "|---|---|---|", _PSRC_OK, "-->"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("整節在註解裡 → 擋、講沒有這一節", rc == 1 and "沒有「## 依據來源」這一節" in out, out[-500:])
+    p.write_text(_psrc_text(table=["", "## 依據來源", "", "<!-- | 機制 | 依據 | 出處 |", "|---|---|---|", _PSRC_OK + " -->"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("只有表在註解裡 → 擋、講節裡沒有表", rc == 1 and "節裡沒有表" in out, out[-500:])
+    p.write_text(_psrc_text(table=["", "<!-- 舊表已撤 -->", "## 依據來源", "", "| 機制 | 依據 | 出處 |", "|---|---|---|", _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("註解在節外、表在外面 → 照放行", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+    p.write_text(_psrc_text([_PSRC_OK, "| 找節前去掉 `<!-- … -->` | 行內程式碼裡的 `<!--` 不是註解 | https://spec.commonmark.org/0.31.2/#code-spans |"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("行內程式碼裡寫 `<!-- … -->` 不算註解 → 照放行", rc == 0 and "依據來源: ✓ 2 列" in out, out[-500:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_type_unreadable_notice():
+    """Projects/ 底下的 _計劃.md 開頭欄位讀不到 type(開頭 --- 沒收尾)→ 規格閘印一行「讀不到 type,不查」(代碼審 r1 邊界席 F4);
+    寫了別的 type(例 note)印另一句「type 不是 project」、不印讀不到(代碼審 r2 邊界席 F3 起,見 t_psrc_type_other_notice)。"""
+    print("t_psrc_type_unreadable_notice")
+    d, kg = _psrc_repo("psrc_ty")
+    p = kg / "Projects" / "壞_計劃.md"
+    p.write_text("---\nstatus: doing\n" + _SG_CREATED + "---\n" + _hre_text(table=[], clauses=_HRE_CLAUSES) + _SG_ROLLBACK, encoding="utf-8")
+    rc, out = _psrc_gate(kg, "Projects/壞_計劃")
+    check("沒寫 type → 印讀不到 type、不查", "依據來源: 開頭欄位讀不到 type" in out, out[-500:])
+    p.write_text("---\ntype: note\nstatus: doing\n" + _SG_CREATED + "---\n" + _hre_text(table=[], clauses=_HRE_CLAUSES) + _SG_ROLLBACK, encoding="utf-8")
+    rc, out = _psrc_gate(kg, "Projects/壞_計劃")
+    check("type: note → 不印讀不到 type、不查", "讀不到 type" not in out and "依據來源: ✗" not in out, out[-500:])
+
+
+def _psrc_push_inproc(m, kg, d, rng):
+    """行程內跑 _spec_gate_push_check,回 (rc, 輸出)。"""
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
+        rc = m._spec_gate_push_check(m.Env(kg), rng, repo=str(d))
+    return rc, buf.getvalue()
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_push_scan_unavailable():
+    """推送前預期值表那圈因測試索引讀不動而放行(回 None)時,〈依據來源〉照擋(代碼審 r1 合約席 F1,計劃〈待決問題〉那列)。
+    翻紅釘(合約席 M3):那圈回 None 就整個回 0 → 紅。"""
+    print("t_psrc_push_scan_unavailable")
+    d, kg = _psrc_repo("psrc_pu")
+    (kg / "Projects" / "甲_計劃.md").write_text(_psrc_text(table=[], status="todo"), encoding="utf-8")
+    _sg_commit(d, "plan")
+    m = _load_lumos_inproc()
+    oc, osn = m._spec_gate_push_candidates, m._spec_gate_push_scan
+    m._spec_gate_push_candidates = lambda *a, **k: ["docs/x-knowledge/Projects/乙_計劃.md"]
+    m._spec_gate_push_scan = lambda *a, **k: (None, [])
+    try:
+        rc, out = _psrc_push_inproc(m, kg, d, "HEAD~1..HEAD")
+    finally:
+        m._spec_gate_push_candidates, m._spec_gate_push_scan = oc, osn
+    check("那一圈放行(None)、新計劃缺〈依據來源〉→ 照擋", rc == 1 and "[依據來源]" in out and "甲_計劃" in out, out[-600:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_push_unreadable_blocks():
+    """推送範圍改到的新計劃讀不成文字(非 UTF-8)→ 擋、講讀不成文字(代碼審 r1 合約席 F1)。翻紅釘(M4):不 append → 放行 → 紅。"""
+    print("t_psrc_push_unreadable_blocks")
+    d, kg = _psrc_repo("psrc_pr")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text(status="todo"), encoding="utf-8")
+    _sg_commit(d, "plan")
+    p.write_bytes(_psrc_text(status="todo").encode("utf-8") + b"\n\xff\xfe bad\n")
+    _sg_commit(d, "bad bytes")
+    m = _load_lumos_inproc()
+    # 讀不成文字的檔,索引讀不出開頭欄位(type 空)、這一圈本來就略過;這裡模擬「索引時讀得到、這一圈讀時壞了」那條路
+    oa = m._plan_sources_applies
+    m._plan_sources_applies = lambda rel, n: str(rel).endswith("_計劃.md")
+    try:
+        rc, out = _psrc_push_inproc(m, kg, d, "HEAD~1..HEAD")
+    finally:
+        m._plan_sources_applies = oa
+    check("讀不成文字 → 擋、講讀不成文字", rc == 1 and "[依據來源] Projects/甲_計劃.md:計劃讀不成文字" in out, out[-600:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_push_tail_lines():
+    """推送前擋下的最後兩行:只有〈依據來源〉時印它的補法與範例、不印「把條款的測試做綠」;混著別種原因兩行都印(代碼審 r1 合約席 F4)。
+    翻紅釘(M1):條件改成永遠印條款那句 → 第一條紅;(M2)不印〈依據來源〉補法 → 兩條都紅。"""
+    print("t_psrc_push_tail_lines")
+    d, kg = _psrc_repo("psrc_tl")
+    (kg / "Projects" / "甲_計劃.md").write_text(_psrc_text(table=[], status="todo"), encoding="utf-8")
+    _sg_commit(d, "plan")
+    m = _load_lumos_inproc()
+    rc, out = _psrc_push_inproc(m, kg, d, "HEAD~1..HEAD")
+    check("範例後面講明是示範、照抄會被擋(代碼審 r1 正確性 F2 後續)", "照抄會被擋" in out, out[-400:])
+    check("只有〈依據來源〉→ 印補法與範例、不印條款測試那句", rc == 1 and "〈依據來源〉每個機制一列" in out and "範例:" in out
+          and "把條款的測試做綠" not in out, out[-600:])
+    oc, osn = m._spec_gate_push_candidates, m._spec_gate_push_scan
+    m._spec_gate_push_candidates = lambda *a, **k: ["docs/x-knowledge/Projects/乙_計劃.md"]
+    m._spec_gate_push_scan = lambda *a, **k: (["乙_計劃:條款測試紅"], [])
+    try:
+        rc, out = _psrc_push_inproc(m, kg, d, "HEAD~1..HEAD")
+    finally:
+        m._spec_gate_push_candidates, m._spec_gate_push_scan = oc, osn
+    check("混著別種原因 → 兩行都印", rc == 1 and "〈依據來源〉每個機制一列" in out and "把條款的測試做綠" in out, out[-600:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_table_sep_and_dup():
+    """〈依據來源〉表少了分隔列 → 擋、講第二列要是分隔列;「## 依據來源」出現兩次 → 擋、講出現 2 次(代碼審 r1 合約席 F6)。
+    翻紅釘(M5、M6):兩道檢查各自拿掉 → 各自那條紅。"""
+    print("t_psrc_table_sep_and_dup")
+    d, kg = _psrc_repo("psrc_sd")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text(table=["", "## 依據來源", "", "| 機制 | 依據 | 出處 |", _PSRC_OK, _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("少了分隔列 → 擋、講第二列要是分隔列", rc == 1 and "第二列要是分隔列" in out, out[-500:])
+    p.write_text(_psrc_text(table=_PSRC_HEAD + [_PSRC_OK] + _PSRC_HEAD + [_PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("出現兩次 → 擋、講出現 2 次", rc == 1 and "這一節出現 2 次" in out, out[-500:])
+
+
+def t_psrc_hook_generic_message():
+    """推送前掛鉤 spec-gate --push-check 回 1 那段:印通用的「推送前規格閘擋下,原因見上面列的每一條」、擋下紀錄理由也是通用說法,
+    不再是只講條款測試的舊句(代碼審 r1 通才席 F1、合約席 F5;Systems/bound-tests-gate 那行 WHY 綁這支)。翻紅釘(M13):文案換回舊句 → 紅。"""
+    print("t_psrc_hook_generic_message")
+    src = (Path(GRAPHCTL).resolve().parent / "hooks" / "pre-push").read_text(encoding="utf-8")
+    i = src.find('if [[ "$sg_rc" -eq 1 ]]; then')
+    blk = src[i:src.find("\n  fi\n", i)] if i >= 0 else ""
+    check("rc1 那段印通用文案", 'echo "推送前規格閘擋下,原因見上面列的每一條。" >&2' in blk, blk[:600])
+    check("擋下紀錄理由是通用說法", "pp_record_block spec-gate" in blk and "推送前規格閘擋下(原因見 push-check 列的每一條)" in blk, blk[:600])
+    check("沒有只講條款測試的舊句", "條款測試沒全綠" not in blk, blk[:600])
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_doctor_exception_warns():
+    """健檢 S22 那段出例外 → 不印綠勾,改用軟提醒印例外類名與訊息(代碼審 r1 通才席 F2)。翻紅釘:改回 ok(...) → 紅。"""
+    print("t_psrc_doctor_exception_warns")
+    d, kg = _psrc_repo("psrc_dx")
+    m = _load_lumos_inproc()
+    orig = m._doctor_plan_sources_lines
+
+    def boom(env):
+        raise RuntimeError("壞掉了")
+    m._doctor_plan_sources_lines = boom
+    try:
+        sec = _psrc_doctor_s22(m, kg)
+    finally:
+        m._doctor_plan_sources_lines = orig
+    check("例外 → ⚠ 印例外類名與訊息", "⚠" in sec and "RuntimeError: 壞掉了" in sec, sec)
+    check("例外 → 沒有綠勾", "✓" not in sec, sec)
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_doctor_uses_is_new():
+    """健檢判新舊只走 _plan_sources_is_new 一份(代碼審 r1 通才席 F3、架構對齊席 F3):把它換成永遠回新 → 舊計劃也列出。
+    翻紅釘:健檢自己內聯一份新舊判斷 → 換掉也照判舊 → 紅。"""
+    print("t_psrc_doctor_uses_is_new")
+    d, kg = _psrc_repo("psrc_dn")
+    (kg / "Projects" / "舊的_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    m = _load_lumos_inproc()
+    check("前置:舊計劃不列", "舊的_計劃" not in "\n".join(m._doctor_plan_sources_lines(m.Env(kg))))
+    orig = m._plan_sources_is_new
+    m._plan_sources_is_new = lambda *a, **k: True
+    try:
+        joined = "\n".join(m._doctor_plan_sources_lines(m.Env(kg)))
+    finally:
+        m._plan_sources_is_new = orig
+    check("_plan_sources_is_new 說新 → 健檢列出", "舊的_計劃" in joined, joined)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_block_event_dedup():
+    """擋下留帳以(計劃, 出處格內容指紋, 階段)去重(代碼審 r1 資源席 F3):同一份沒改過的計劃規格閘跑兩次只記一筆;出處格改了再記;
+    推送前(stage=push)跟規格閘各記各的、推兩次也只記一筆。翻紅釘:拿掉去重 → 第一條紅。"""
+    print("t_psrc_block_event_dedup")
+    d, kg = _psrc_repo("psrc_dd")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text([_PSRC_OK, "| 預設三次 | 大家都這樣做 | 一般知識 |"], status="todo"), encoding="utf-8")
+    _psrc_gate(kg)
+    _psrc_gate(kg)
+    ev = _hre_gov(d, "spec-gate", "sources-missing")
+    check("沒改過的計劃規格閘跑兩次 → 一筆", len(ev) == 1 and isinstance(ev[0].get("fp"), str), repr(ev)[:500])
+    p.write_text(_psrc_text([_PSRC_OK, "| 預設三次 | 大家都這樣做 | 一般常識 |"], status="todo"), encoding="utf-8")
+    _psrc_gate(kg)
+    check("出處格改了 → 再記一筆", len(_hre_gov(d, "spec-gate", "sources-missing")) == 2)
+    _sg_commit(d, "plan")
+    m = _load_lumos_inproc()
+    _psrc_push_inproc(m, kg, d, "HEAD~1..HEAD")
+    _psrc_push_inproc(m, kg, d, "HEAD~1..HEAD")
+    ev = _hre_gov(d, "spec-gate", "sources-missing")
+    check("推送前另記一筆 stage=push、推兩次也只一筆", len(ev) == 3 and sum(1 for e in ev if e.get("stage") == "push") == 1, repr(ev)[-500:])
+
+
+def t_psrc_since_override_notice():
+    """LUMOS_PLAN_SOURCES_SINCE 覆寫生效日時往 stderr 講一行「生效日被環境變數覆寫為 X」,同一個程序同一個值只講一次;
+    值跟常數一樣、或不是日期(用常數)不講(代碼審 r1 資安席 F1)。翻紅釘:不印 → 紅。"""
+    print("t_psrc_since_override_notice")
+    import io, contextlib
+    m = _load_lumos_inproc()
+    old = _os_mod.environ.get("LUMOS_PLAN_SOURCES_SINCE")
+    told = set(m._PLAN_SOURCES_SINCE_TOLD)
+    m._PLAN_SOURCES_SINCE_TOLD.clear()
+    outs = []
+    try:
+        for v in ("2031-02-03", "2031-02-03", m._PLAN_SOURCES_SINCE, "不是日期"):
+            _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = v
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                got = m._plan_sources_since()
+            outs.append((got, err.getvalue()))
+    finally:
+        if old is None:
+            _os_mod.environ.pop("LUMOS_PLAN_SOURCES_SINCE", None)
+        else:
+            _os_mod.environ["LUMOS_PLAN_SOURCES_SINCE"] = old
+        m._PLAN_SOURCES_SINCE_TOLD.clear()
+        m._PLAN_SOURCES_SINCE_TOLD.update(told)
+    check("覆寫生效 → stderr 講被覆寫為那個值", outs[0][0] == "2031-02-03" and "生效日被環境變數覆寫為 2031-02-03" in outs[0][1], repr(outs[0]))
+    check("同一個值第二次不再講", outs[1][1] == "", repr(outs[1]))
+    check("值跟常數一樣 → 不講", outs[2][1] == "", repr(outs[2]))
+    check("不是日期 → 用常數、不講", outs[3][0] == m._PLAN_SOURCES_SINCE and outs[3][1] == "", repr(outs[3]))
+
+
+def _psrc_count_git(m, fn):
+    """跑 fn(),回 (結果, 這段時間開了幾次 subprocess.run);m.subprocess 與 _git_tree_* 裡 import 的是同一個模組物件。"""
+    calls = [0]
+    orig = m.subprocess.run
+
+    def counted(*a, **k):
+        calls[0] += 1
+        return orig(*a, **k)
+    m.subprocess.run = counted
+    try:
+        got = fn()
+    finally:
+        m.subprocess.run = orig
+    return got, calls[0]
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_tree_dir_symlink_mid():
+    """出處路徑在 HEAD 的樹清單裡解析符號連結(代碼審 r2 邊界席 F1、通才席 F3):路徑中段是指向 repo 內目錄的連結 `alias/a.py`(alias -> scripts)算;
+    連結本身指向目錄 `alias` 不算;指向不存在的檔、指向 `.git` 底下、兩跳後跑出 repo、互指成環都不算;兩跳後落在檔案的算。
+    翻紅釘:中段不解連結 → `alias/a.py` 擋 → 紅;符號連結只看第一層目標的字面路徑 → 懸空連結放行 → 紅;拿掉跳數上限 → 成環那條卡死或紅。"""
+    print("t_psrc_tree_dir_symlink_mid")
+    import os as _o
+    d, kg = _psrc_repo("psrc_tdl")
+    S = d / "scripts"
+    _o.symlink("scripts", d / "alias")
+    _o.symlink("nope.py", S / "dangling.py")
+    _o.symlink("../.git/config", S / "gitcfg")
+    _o.symlink("hop2", S / "hop1")
+    _o.symlink("/etc/hosts", S / "hop2")
+    _o.symlink("in2", S / "in1")
+    _o.symlink("a.py", S / "in2")
+    _o.symlink("loopb", S / "loopa")
+    _o.symlink("loopa", S / "loopb")
+    _sg_commit(d, "links")
+    import subprocess as _sp
+    sha = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    _sp.run(["git", "-C", str(d), "update-index", "--add", "--cacheinfo", f"160000,{sha},sub"])
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "submodule", "--no-verify"])
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for label, cell, want in (("中段是目錄連結 alias/a.py", "`alias/a.py`", True), ("中段是目錄連結帶行號", "`alias/a.py:1`", True),
+                              ("開頭寫 ./", "`./scripts/a.py`", True), ("沒正規化的 alias//a.py", "`alias//a.py`", False),
+                              ("行號超過 1 行的檔", "`scripts/a.py:2`", False), ("子模組", "`sub`", False),
+                              ("連結本身指向目錄 alias", "`alias`", False), ("懸空連結", "`scripts/dangling.py`", False),
+                              ("指向 .git/config", "`scripts/gitcfg`", False), ("兩跳後跑出 repo", "`scripts/hop1`", False),
+                              ("兩跳後落在檔案", "`scripts/in1`", True), ("互指成環", "`scripts/loopa`", False)):
+        check(f"出處 {label} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_tree_uncommitted_hint():
+    """出處路徑工作目錄有、HEAD 沒有(剛 git add 或剛建)→ 擋下訊息講「還沒提交,先提交再跑」;工作目錄也沒有的不講;
+    整個 repo 還沒有任何提交時同樣講(代碼審 r2 正確性席 F2、邊界席 F2)。翻紅釘:不分這兩種 → 訊息沒有「還沒提交」→ 紅。"""
+    print("t_psrc_tree_uncommitted_hint")
+    import subprocess as _sp
+    d, kg = _psrc_repo("psrc_tuh")
+    (d / "scripts" / "new.py").write_text("z = 1\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(d), "add", "scripts/new.py"])
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `scripts/new.py` |"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("剛 git add 還沒提交 → 擋、講還沒提交先提交再跑", rc == 1 and "還沒提交" in out and "scripts/new.py" in out, out[-800:])
+    p.write_text(_psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `scripts/nothere.py` |"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("工作目錄也沒有 → 擋、不講還沒提交", rc == 1 and "還沒提交" not in out, out[-800:])
+    p.write_text(_psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `.git/HEAD` |"]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check(".git 底下 → 擋、不講還沒提交(永遠提交不了)", rc == 1 and "還沒提交" not in out, out[-800:])
+    root = mkvault().parent / "psrc_tuh0"
+    root.mkdir()
+    _sp.run(["git", "init", "-q", str(root)])
+    (root / "Projects").mkdir()
+    (root / "README.md").write_text("# x\n", encoding="utf-8")
+    text = _psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `README.md` |"])
+    (root / "Projects" / "甲_計劃.md").write_text(text, encoding="utf-8")
+    m = _load_lumos_inproc()
+    _n, probs, _c = m._plan_sources_problems(m.Env(root), root, text)
+    check("repo 還沒有任何提交 → 講還沒提交", any("還沒提交" in x for x in probs), repr(probs)[:600])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_tree_git_calls_bounded():
+    """出處判路徑每個 HEAD 只列一次樹清單,`:行號` 同一支檔只讀一次(代碼審 r2 資源席 F1、邊界席 F4):一份計劃 9 列反引號路徑、
+    其中 4 列帶行號指向兩支檔 → 整份 git 至多 6 次(問 HEAD、列樹、兩支檔各讀一次——讀檔走批次讀取加上限,先問大小再讀,一支算 2 次;
+    代碼審 code-計劃依據來源必填 r4 架構對齊席 F1)。翻紅釘:每個路徑各開 git → 次數隨列數長 → 紅。"""
+    print("t_psrc_tree_git_calls_bounded")
+    d, kg = _psrc_repo("psrc_tgc")
+    cells = ["`README.md`", "`scripts/a.py`", "`.github/workflows/ci.yml`", "`scripts/a.py:1`", "`README.md:1`",
+             "`scripts/a.py:1-1`", "`README.md:1-1`", "`scripts/none.py`", "`docs/none.md`"]
+    text = _psrc_text([f"| 機制{i} | 某個理由 | {c} |" for i, c in enumerate(cells)])
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    (nrows, probs, _c), n = _psrc_count_git(m, lambda: m._plan_sources_problems(env, d, text))
+    check("9 列判完、兩列不存在的被擋", nrows == 9 and len(probs) == 2, repr(probs)[:600])
+    check("整份 git 至多 6 次", n <= 6, repr(n))
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_doctor_one_head_query():
+    """健檢逐篇判〈依據來源〉時 HEAD 只問一次、樹清單與首次加入日各跑一次(代碼審 r2 架構對齊席 F3、資源席 F1):
+    3 篇新計劃各有 3 列反引號路徑(各一列不存在、一列帶行號指同一支檔)→ 全部列出、整段 git 至多 5 次(HEAD、首次加入日、樹清單、
+    那支檔的行數讀一次——讀檔走批次讀取加上限,先問大小再讀,算 2 次;代碼審 code-計劃依據來源必填 r4 架構對齊席 F1)。
+    翻紅釘:逐篇或逐路徑問 git → 紅(修前 20 次)。"""
+    print("t_psrc_doctor_one_head_query")
+    d, kg = _psrc_repo("psrc_dhq")
+    for i in range(3):
+        rows = [f"| 機制甲{i} | 理由 | `README.md` |", f"| 機制乙{i} | 理由 | `scripts/a.py:1` |", f"| 機制丙{i} | 理由 | `scripts/none{i}.py` |"]
+        (kg / "Projects" / f"批{i}_計劃.md").write_text(_psrc_text(rows, status="todo", created="created: 2026-01-01\n"), encoding="utf-8")
+    _psrc_git_commit(d, "plans", "2026-07-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    m._PLAN_FIRST_DAYS_CACHE.clear()
+    env = m.Env(kg)
+    lines, n = _psrc_count_git(m, lambda: m._doctor_plan_sources_lines(env))
+    check("3 篇都列出", sum(1 for x in lines if "批" in x) == 3, repr(lines)[:600])
+    check("整段 git 至多 5 次(HEAD、首次加入日、樹清單、行數問大小與讀)", n <= 5, repr(n))
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_push_one_head_query():
+    """推送前〈依據來源〉那圈逐份判時 HEAD 只問一次、樹清單與首次加入日各跑一次(代碼審 r2 架構對齊席 F3、資源席 F1,同健檢那支):
+    3 份被改到的新計劃各有 3 列反引號路徑(各一列不存在)→ 3 份都擋、整圈 git 至多 5 次
+    (行數那支檔先問大小再讀,算 2 次;代碼審 code-計劃依據來源必填 r4 架構對齊席 F1)。翻紅釘:逐份問 HEAD → 紅。"""
+    print("t_psrc_push_one_head_query")
+    d, kg = _psrc_repo("psrc_phq")
+    touched = []
+    for i in range(3):
+        rows = [f"| 機制甲{i} | 理由 | `README.md` |", f"| 機制乙{i} | 理由 | `scripts/a.py:1` |", f"| 機制丙{i} | 理由 | `scripts/none{i}.py` |"]
+        (kg / "Projects" / f"批{i}_計劃.md").write_text(_psrc_text(rows, status="todo", created="created: 2026-01-01\n"), encoding="utf-8")
+        touched.append(f"docs/x-knowledge/Projects/批{i}_計劃.md")
+    _psrc_git_commit(d, "plans", "2026-07-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    m._PLAN_FIRST_DAYS_CACHE.clear()
+    m._PLAN_TREE_CACHE.clear()
+    env = m.Env(kg)
+    ev = m._plan_sources_block_event
+    m._plan_sources_block_event = lambda *a, **k: None   # 只數判定的 git,不寫帳
+    try:
+        bad, n = _psrc_count_git(m, lambda: m._spec_gate_push_sources(env, d, "docs/x-knowledge", touched))
+    finally:
+        m._plan_sources_block_event = ev
+    check("3 份都擋", sum(1 for x in bad if "批" in x) == 3, repr(bad)[:600])
+    check("整圈 git 至多 5 次(HEAD、首次加入日、樹清單、行數問大小與讀)", n <= 5, repr(n))
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_uncomment_inline_open():
+    """HTML 註解照 CommonMark(代碼審 r2 正確性席 F1):行中的 `<!--` 後面沒有 `-->` 不是註解,不吃掉後面的〈依據來源〉;
+    反引號沒配對的 `` `<!-- `` 一樣;行中有閉合的照去掉;行中沒閉合、後面隔了空白行、標題或圍欄才有 `-->` 也不是註解(行內註解只在同一行判,
+    代碼審 code-計劃依據來源必填 r3 起不再往後面行找閉合,見 t_psrc_inline_same_line);行首(前面至多 3 個空白)的 `<!--` 沒閉合照區塊規則蓋到檔尾。
+    翻紅釘:行中的 `<!--` 不看有沒有閉合就當註解 → 前兩條紅;行首區塊不蓋到檔尾 → 最後一條紅。"""
+    print("t_psrc_uncomment_inline_open")
+    d, kg = _psrc_repo("psrc_uio")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text(table=["", "註解開頭寫成 <!-- 不閉合", *_PSRC_HEAD, _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("行中沒閉合的 <!-- → 不是註解、照放行", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+    p.write_text(_psrc_text(table=["", "反引號沒配對 `<!-- 也一樣", *_PSRC_HEAD, _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("反引號沒配對的 <!-- → 照放行", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+    m = _load_lumos_inproc()
+    got = m._plan_sources_uncomment("前文 <!-- 藏起來 --> 後文\n第二行")
+    check("行中有閉合 → 去掉註解、行數不變", "藏起來" not in got and "後文" in got and got.count("\n") == 1, repr(got))
+    got = m._plan_sources_uncomment("<!-- 區塊\n第二行 -->\n後文")
+    check("行首區塊到含 --> 那行就結束、後面照留", got == "\n\n後文", repr(got))
+    got = m._plan_sources_uncomment("說明 `<!--` 與 `-->` 都在程式碼裡")
+    check("行內程式碼裡的 <!-- 不開註解", got == "說明 `<!--` 與 `-->` 都在程式碼裡", repr(got))
+    tbl = ["| 機制 | 依據 | 出處 |", "|---|---|---|", "| 擋在規格閘 | 箭頭寫成 --> 也行 | https://developer.android.com/studio/write/lint |"]
+    for label, table in (("隔了空白行", ["", "## 依據來源", "", "說明 <!-- 沒閉合", "", *tbl]),
+                         ("隔了標題", ["", "說明 <!-- 沒閉合", "## 依據來源", *tbl]),
+                         ("隔了圍欄", ["", "## 依據來源", "說明 <!-- 沒閉合", "```", "x", "```", *tbl])):
+        p.write_text(_psrc_text(table=table), encoding="utf-8")
+        rc, out = _psrc_gate(kg)
+        check(f"行中沒閉合({label}之後才有 -->)→ 只在同一行判、不是註解、表照算", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+    p.write_text(_psrc_text(table=["", "   <!-- 行首沒閉合", *_PSRC_HEAD, _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("行首(3 個空白內)沒閉合 → 照區塊規則蓋到檔尾、擋", rc == 1 and "沒有「## 依據來源」這一節" in out, out[-500:])
+
+
+def t_psrc_tree_timeout_notice():
+    """HEAD 的檔案清單列不出來(git ls-tree 失敗或逾時,共用的 _nodehome_list 回 None)→ 回讀不到(路徑都不算),往 stderr 印一行,
+    同一個 HEAD 不再重試(代碼審 r2 資源席 F1:逾時原本被吞成不合格,看不出原因;r3 起列樹走 _drift_list)。
+    翻紅釘:列不出來不印 → 紅;不記失敗、每個路徑重列 → 第二次又叫 _nodehome_list → 紅。"""
+    print("t_psrc_tree_timeout_notice")
+    import io, contextlib
+    d, kg = _psrc_repo("psrc_tto")
+    m = _load_lumos_inproc()
+    old = m._nodehome_list
+    m._PLAN_TREE_CACHE.clear()
+    m._DRIFT_LS_CACHE.clear()
+    head = m._plan_head(d)
+    calls = []
+    m._nodehome_list = lambda *a, **k: calls.append(a) or None
+    err = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(err):
+            got = m._plan_tree(d, head)
+            again = m._plan_tree(d, head)
+    finally:
+        m._nodehome_list = old
+        m._PLAN_TREE_CACHE.clear()
+    check("列不出來 → 讀不到", got is None and again is None, repr(got)[:200])
+    check("列不出來 → stderr 印一行、講路徑這次都不算", err.getvalue().count("ls-tree 失敗或逾時") == 1, err.getvalue())
+    check("同一個 HEAD 不再重試", len(calls) == 1, repr(len(calls)))
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_uncomment_code_blocks():
+    """圍欄與縮排程式碼裡的 `<!--` 不是註解(代碼審 r2 合約席 F2、正確性席 F1):圍欄裡寫沒閉合的 `<!--`、縮排 4 格的 `<!--`,
+    後面的〈依據來源〉照算。翻紅釘:拿掉「圍欄內的行原樣留著」→ 第一條紅;縮排 4 格也當區塊開頭 → 第二條紅。"""
+    print("t_psrc_uncomment_code_blocks")
+    d, kg = _psrc_repo("psrc_ucb")
+    p = kg / "Projects" / "甲_計劃.md"
+    p.write_text(_psrc_text(table=["", "```html", "<!-- 示範:註解開頭", "```", *_PSRC_HEAD, _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("圍欄裡沒閉合的 <!-- → 照放行", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+    p.write_text(_psrc_text(table=["", "範例:", "", "    <!-- 縮排程式碼", *_PSRC_HEAD, _PSRC_OK]), encoding="utf-8")
+    rc, out = _psrc_gate(kg)
+    check("縮排 4 格的 <!-- → 不是區塊開頭、照放行", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_uncomment_short_forms():
+    """`<!-->` 與 `<!--->` 是完整的空註解(CommonMark 0.31.2 6.6):行首、行中都不吃掉後面(代碼審 r2 邊界席)。
+    翻紅釘:不認這兩種短寫 → 當成沒閉合 → 紅。"""
+    print("t_psrc_uncomment_short_forms")
+    d, kg = _psrc_repo("psrc_usf")
+    p = kg / "Projects" / "甲_計劃.md"
+    for label, ln in (("行首 <!-->", "<!--> 空註解"), ("行首 <!--->", "<!---> 空註解"),
+                      ("行中 <!-->", "前文 <!--> 後文"), ("行中 <!--->", "前文 <!---> 後文")):
+        p.write_text(_psrc_text(table=["", ln, *_PSRC_HEAD, _PSRC_OK]), encoding="utf-8")
+        rc, out = _psrc_gate(kg)
+        check(f"{label} → 完整註解、照放行", rc == 0 and "依據來源: ✓ 1 列" in out, out[-500:])
+    m = _load_lumos_inproc()
+    for ln in ("前文 <!--> 中間 --> 後文", "前文 <!---> 中間 --> 後文"):
+        got = m._plan_sources_uncomment(ln)
+        check(f"{ln[:9]} 短寫自己就閉合、後面的 --> 不算 → 中間留著", "中間" in got and "<!--" not in got, repr(got))
+
+
+@_psrc_since("2026-06-01")
+def t_psrc_since_same_day():
+    """生效日當天算新(代碼審 r2 合約席 F3):created 剛好是生效日 → 判新、不呼叫 git;created 早、第一次進 git 剛好是生效日 → 判新、規格閘擋。
+    翻紅釘:created 那道 `>=` 改 `>` → 第一條的 git 次數不是 0 → 紅;計劃日期那道 `>=` 改 `>` → 第二條紅。"""
+    print("t_psrc_since_same_day")
+    d, kg = _psrc_repo("psrc_ssd")
+    P = kg / "Projects"
+    (P / "當天_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-06-01\n"), encoding="utf-8")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    got, n = _psrc_count_git(m, lambda: m._plan_sources_is_new(env, d, "Projects/當天_計劃.md"))
+    check("created 剛好是生效日 → 判新、不呼叫 git", got is True and n == 0, repr((got, n)))
+    (P / "當天_計劃.md").unlink()
+    (P / "進git當天_計劃.md").write_text(_psrc_text(table=[], created="created: 2026-01-01\n"), encoding="utf-8")
+    _psrc_git_commit(d, "same day", "2026-06-01T10:00:00+08:00")
+    check("第一次進 git 剛好是生效日 → 判新", m._plan_sources_is_new(m.Env(kg), d, "Projects/進git當天_計劃.md") is True)
+    rc, out = _psrc_gate(kg, "Projects/進git當天_計劃")
+    check("規格閘擋", rc == 1 and "依據來源: ✗" in out, out[-500:])
+
+
+def t_psrc_first_day_nfd_rename():
+    """改名來源是 NFD 檔名(macOS 關掉 precomposeunicode 提交的)也接得上舊日期(代碼審 r2 合約席 F4):
+    `git log` 印的是樹裡的原始位元組,改名來源要先轉 NFC 才查得到新增時記的那筆。翻紅釘:改名來源不轉 NFC → 回改名那天 → 紅。"""
+    print("t_psrc_first_day_nfd_rename")
+    import subprocess as _sp, unicodedata as _ud, datetime as _dt
+    root = mkvault().parent / "psrc_nfd"
+    root.mkdir()
+    _sp.run(["git", "init", "-q", "-b", "main", str(root)])
+    old = "docs/x-knowledge/Projects/" + _ud.normalize("NFD", "café_計劃.md")
+    new = "docs/x-knowledge/Projects/咖啡_計劃.md"
+    t1 = int(_dt.datetime(2026, 1, 1, 10, tzinfo=_dt.timezone(_dt.timedelta(hours=8))).timestamp())
+    t2 = int(_dt.datetime(2026, 8, 1, 10, tzinfo=_dt.timezone(_dt.timedelta(hours=8))).timestamp())
+    body = "---\ntype: project\n---\n# 計劃內容夠長才認得出改名\n" * 4
+    stream = (f"commit refs/heads/main\ncommitter t <t@t> {t1} +0800\ndata 1\na\n"
+              f"M 100644 inline {old}\ndata {len(body.encode('utf-8'))}\n{body}\n"
+              f"commit refs/heads/main\ncommitter t <t@t> {t2} +0800\ndata 1\nb\n"
+              f"R {old} {new}\n\n").encode("utf-8")
+    r = _sp.run(["git", "-C", str(root), "fast-import", "--quiet"], input=stream, capture_output=True)
+    check("前置:fast-import 建好兩個提交", r.returncode == 0, r.stderr.decode("utf-8", "replace")[:300])
+    m = _load_lumos_inproc()
+    check("NFD 改名來源接得上 2026-01-01", m._plan_first_day(root, new) == "2026-01-01", repr(m._plan_first_day(root, new)))
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_type_other_notice():
+    """Projects/ 底下的 _計劃.md 寫了 type 但不是 project(Project、plan、note)→ 規格閘印一行「type 不是 project,這次不查」
+    (代碼審 r2 邊界席 F3)。翻紅釘:只在 type 空時才印 → 紅。"""
+    print("t_psrc_type_other_notice")
+    d, kg = _psrc_repo("psrc_tyo")
+    p = kg / "Projects" / "壞_計劃.md"
+    for ty in ("Project", "plan", "note"):
+        p.write_text(f"---\ntype: {ty}\nstatus: doing\n" + _SG_CREATED + "---\n" + _hre_text(table=[], clauses=_HRE_CLAUSES) + _SG_ROLLBACK, encoding="utf-8")
+        rc, out = _psrc_gate(kg, "Projects/壞_計劃")
+        check(f"type: {ty} → 印不是 project、不查", f"依據來源: 開頭欄位 type 是「{ty}」不是 project" in out and "依據來源: ✗" not in out, out[-500:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_block_fp_probs():
+    """擋下留帳的去重指紋算(計劃, 出處格, 問題清單)(代碼審 r2 通才席 F4):被擋的出處格沒變、但多了別的問題 → 再記一筆。
+    翻紅釘:有出處格時指紋只算出處格 → 少一筆 → 紅。"""
+    print("t_psrc_block_fp_probs")
+    d, kg = _psrc_repo("psrc_bfp")
+    p = kg / "Projects" / "甲_計劃.md"
+    bad = "| 預設三次 | 大家都這樣做 | 一般知識 |"
+    p.write_text(_psrc_text([_PSRC_OK, bad]), encoding="utf-8")
+    _psrc_gate(kg)
+    p.write_text(_psrc_text([_PSRC_OK, bad, "| 只有兩格 | https://developer.android.com/a |"]), encoding="utf-8")
+    _psrc_gate(kg)
+    check("出處格沒變、問題多了 → 兩筆", len(_hre_gov(d, "spec-gate", "sources-missing")) == 2, repr(_hre_gov(d, "spec-gate", "sources-missing"))[:600])
+
+
+def t_psrc_first_days_plans_only():
+    """首次加入日的結果只留 Projects 底下的 _計劃.md 與它們改名鏈上的舊路徑(代碼審 r2 通才席 F2、資源席 F2):
+    從 Inbox 搬進來的計劃留新舊兩條路徑;README.md、scripts/a.py、Systems 節點、_調研.md 都不留。翻紅釘:不篩 → 紅。"""
+    print("t_psrc_first_days_plans_only")
+    import subprocess as _sp
+    d, kg = _psrc_repo("psrc_fpo")
+    (kg / "Inbox").mkdir()
+    (kg / "Inbox" / "移_計劃.md").write_text(_psrc_text(table=[], created=""), encoding="utf-8")
+    (kg / "Projects" / "查_調研.md").write_text("---\ntype: research\n---\n# x\n", encoding="utf-8")
+    _psrc_git_commit(d, "inbox", "2026-01-01T10:00:00+08:00")
+    _sp.run(["git", "-C", str(d), "mv", "docs/x-knowledge/Inbox/移_計劃.md", "docs/x-knowledge/Projects/移_計劃.md"])
+    _psrc_git_commit(d, "move in", "2026-08-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    days = m._plan_first_days(d) or {}
+    check("留計劃與改名前的舊路徑", days.get("docs/x-knowledge/Projects/移_計劃.md") == "2026-01-01"
+          and "docs/x-knowledge/Inbox/移_計劃.md" in days, repr(days)[:600])
+    check("不留計劃以外的路徑", not any(k in days for k in ("README.md", "scripts/a.py", "docs/x-knowledge/Systems/規格閘.md",
+                                                          "docs/x-knowledge/Projects/查_調研.md")), repr(sorted(days))[:600])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_block_event_vc_ledger():
+    """擋下留帳去重只掃版控帳,所以 sources-missing 一定要寫進版控帳(代碼審 r2 架構對齊席 F2):擋下後事件在版控帳、本機帳沒有;
+    (spec-gate, sources-missing) 不在本機帳白名單,hard 是 False 也不會分到本機帳。翻紅釘:把它加進本機帳白名單 → 紅。"""
+    print("t_psrc_block_event_vc_ledger")
+    d, kg = _psrc_repo("psrc_bvc")
+    (kg / "Projects" / "甲_計劃.md").write_text(_psrc_text([_PSRC_OK, "| 預設三次 | 大家都這樣做 | 一般知識 |"]), encoding="utf-8")
+    rc, _out = _psrc_gate(kg)
+    m = _load_lumos_inproc()
+    loc = d / "docs" / m.GOV_LOCAL_LOG_NAME
+    check("擋下 → 版控帳一筆、本機帳沒有", rc == 1 and len(_hre_gov(d, "spec-gate", "sources-missing")) == 1
+          and "sources-missing" not in (loc.read_text(encoding="utf-8") if loc.is_file() else ""))
+    ev = m._gate_event_build(d, "spec-gate", "sources-missing", "x", hard=True)
+    check("hard=True、hard=False 都不分到本機帳", m._gov_routes_local(ev) is False and m._gov_routes_local(dict(ev, hard=False)) is False)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_lineno_edges():
+    """出處 `:行號` 的邊界(代碼審 code-計劃依據來源必填 r3 合約席 F3、F4、邊界席 F1、通才席 F4):`:0`、倒序 `:5-2`、迄超出檔尾 `:2-7`
+    都不算;最後一行沒有結尾換行的檔寫最後一行算、再下一行不算;行號寫成超長數字(5000 位)不崩潰、判不合格、訊息講行號。
+    翻紅釘:下界 `1 <=` 拿掉 → `:0` 放行 → 紅;起不大於迄拿掉 → `:5-2` 放行 → 紅;迄不看檔尾 → `:2-7` 放行 → 紅;
+    結尾沒換行不多算一行 → `:3` 擋 → 紅;只有 CR 的檔不把 CR 當換行 → `cr.py:3` 擋 → 紅;行數讀不到也放行 → 紅;
+    位數不設限也不接 ValueError → 丟例外 → 紅。"""
+    print("t_psrc_lineno_edges")
+    d, kg = _psrc_repo("psrc_lne")
+    (d / "scripts" / "six.py").write_text("1\n2\n3\n4\n5\n6\n", encoding="utf-8")
+    (d / "scripts" / "nonl.py").write_text("a\nb\nc", encoding="utf-8")
+    (d / "scripts" / "cr.py").write_bytes(b"a\rb\rc")
+    _sg_commit(d, "lines")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell, want in (("`scripts/six.py:0`", False), ("`scripts/six.py:5-2`", False), ("`scripts/six.py:2-7`", False),
+                       ("`scripts/six.py:2-6`", True), ("`scripts/nonl.py:3`", True), ("`scripts/nonl.py:4`", False),
+                       ("`scripts/cr.py:3`", True), ("`scripts/cr.py:4`", False)):
+        check(f"出處 {cell} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+    blob = m._plan_blob
+    m._plan_blob = lambda root, spec, kind: None if kind == "lines" else blob(root, spec, kind)
+    try:
+        got = m._plan_source_cell_ok(env, d, "`scripts/six.py:1`")
+    finally:
+        m._plan_blob = blob
+    check("檔案行數讀不到 → `:1` 也不算", got is False, repr(got))
+    huge = "9" * 5000
+    for tok in (f"scripts/six.py:{huge}", f"scripts/six.py:2-{huge}"):
+        try:
+            got = m._plan_source_cell_ok(env, d, f"`{tok}`")
+        except ValueError as e:
+            got = e
+        check(f"超長行號 {tok[:20]}… → 不崩潰、不算", got is False, repr(got)[:200])
+    text = _psrc_text([_PSRC_OK, f"| 某機制 | 某個理由 | `scripts/six.py:{huge}` |"])
+    try:
+        _n, probs, _c = m._plan_sources_problems(env, d, text)
+    except ValueError as e:
+        probs = [repr(e)]
+    check("超長行號 → 擋下訊息講行號不在範圍", any("行號" in x for x in probs), repr(probs)[:600])
+    import subprocess as _sp
+    sha = _sp.run(["git", "-C", str(d), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    for at in (sha, None):
+        try:
+            got = m._validate_repo_ref(d, "scripts/six.py", huge, at_sha=at)[0]
+        except ValueError as e:
+            got = repr(e)[:80]
+        check(f"_validate_repo_ref 超長行號({'樹' if at else '工作樹'})→ line_out_of_range", got == "line_out_of_range", got)
+    check("_validate_repo_ref 最後一行沒換行的檔 :3 → ok", m._validate_repo_ref(d, "scripts/nonl.py", "3", at_sha=sha) == ("ok", "c"))
+
+@_psrc_since("2000-01-01")
+def t_psrc_tree_shared_drift():
+    """出處判路徑的樹清單共用 _drift_list 那一套(代碼審 code-計劃依據來源必填 r3 架構對齊席 F1、F3、通才席 F5):同一個 HEAD 先被
+    _drift_list 列過,判路徑就不再列樹(0 次 git);非 UTF-8 檔名的解碼跟 _nodehome_list 一致(無損解碼,不換成替代字元)。
+    翻紅釘:另寫一份 ls-tree → 先列過照樣再列一次 → 紅;檔名改用 decode("utf-8", "replace") → 鍵跟 _nodehome_list 不同 → 紅。"""
+    print("t_psrc_tree_shared_drift")
+    import subprocess as _sp
+    d, kg = _psrc_repo("psrc_tsd")
+    blob = _sp.run(["git", "-C", str(d), "hash-object", "-w", "--stdin"], input=b"x\n", capture_output=True).stdout.strip().decode()
+    _sp.run([b"git", b"-C", str(d).encode(), b"update-index", b"--add", b"--cacheinfo", f"100644,{blob},".encode() + b"scripts/bad\xff.py"])
+    _sp.run(["git", "-C", str(d), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "bad name", "--no-verify"])
+    m = _load_lumos_inproc()
+    m._DRIFT_LS_CACHE.clear()
+    m._DRIFT_OID_CACHE.clear()
+    m._PLAN_TREE_CACHE.clear()
+    head = m._plan_head(d)
+    lst = m._drift_list(head[0], head[1])
+    check("前置:_drift_list 列得出來", lst is not None)
+    got, n = _psrc_count_git(m, lambda: m._plan_src_path_ok(d, "scripts/a.py", head))
+    check("先被 _drift_list 列過 → 判路徑不再列樹(0 次 git)", got is True and n == 0, repr((got, n)))
+    tree = m._plan_tree(d, head)
+    keys = set(tree[0])
+    check("一般檔的路徑鍵跟 _nodehome_list 一致(非 UTF-8 檔名無損解碼)", keys == set(lst[0]), repr(sorted(keys ^ set(lst[0])))[:300])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_tree_nfd_source():
+    """出處路徑寫成 NFD(從 macOS 檔名複製),樹裡存的是 NFC → 照算(代碼審 code-計劃依據來源必填 r3 合約席 F5)。
+    翻紅釘:出處路徑不轉 NFC → 擋 → 紅。"""
+    print("t_psrc_tree_nfd_source")
+    import unicodedata as _ud
+    d, kg = _psrc_repo("psrc_tnf")
+    (d / "scripts" / _ud.normalize("NFC", "café.py")).write_text("c = 1\n", encoding="utf-8")
+    _sg_commit(d, "nfc name")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    cell = "`scripts/" + _ud.normalize("NFD", "café.py") + ":1`"
+    check("前置:出處真的是 NFD 寫法", cell != _ud.normalize("NFC", cell))
+    check("NFD 寫法的出處 → 算", m._plan_source_cell_ok(env, d, cell) is True, cell)
+
+
+@_hre_since("2026-06-01")
+def t_psrc_first_days_note_scope():
+    """預期值表那道的新舊判斷要拿到計劃以外節點的首次加入日(代碼審 code-計劃依據來源必填 r3 通才席 F1):首次加入日只留 _計劃.md
+    之後,`Projects/` 底下不是 _計劃.md 的風險高節點日期變成讀不到、被當新計劃要求補預期值表。生效日前進 git、沒有 created → 判舊、不要表;
+    created 寫舊日期、生效日後才進 git(複製來的)→ 判新、要表;〈依據來源〉那道照舊只拿計劃。
+    翻紅釘:預期值表那道也只拿計劃的範圍 → 第一條要表、第二條只剩 created 判舊 → 紅。"""
+    print("t_psrc_first_days_note_scope")
+    d, kg = _psrc_repo("psrc_fdn")
+    P = kg / "Projects"
+    body = _psrc_text(table=[], created="").replace("type: project", "type: impl")
+    (P / "舊_實作計畫.md").write_text(body, encoding="utf-8")
+    _psrc_git_commit(d, "old", "2026-01-01T10:00:00+08:00")
+    (P / "抄_實作計畫.md").write_text(body.replace("---\n#", "created: 2026-01-01\n---\n#", 1), encoding="utf-8")
+    _psrc_git_commit(d, "copy", "2026-07-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    m._PLAN_FIRST_DAYS_CACHE.clear()
+    env = m.Env(kg)
+    old = (P / "舊_實作計畫.md").read_text(encoding="utf-8")
+    cp = (P / "抄_實作計畫.md").read_text(encoding="utf-8")
+    check("前置:複製那篇帶 created", "created: 2026-01-01" in cp, cp[:120])
+    check("生效日前進 git、沒有 created → 預期值表判舊、不要表", m._expected_requirement(env, "Projects/舊_實作計畫.md", old, door="high") is None)
+    check("created 舊、生效日後才進 git → 預期值表判新、要表", m._expected_requirement(env, "Projects/抄_實作計畫.md", cp, door="high") is not None)
+    days = m._plan_first_days(d) or {}
+    check("〈依據來源〉那道照舊只拿計劃", not any(k.endswith("_實作計畫.md") for k in days), repr(sorted(days))[:300])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_hint_not_commit():
+    """「還沒提交,先提交再跑」只在提交後真的會過時才講(代碼審 code-計劃依據來源必填 r3 正確性席 F2、邊界席 F2):
+    已提交但解析不到的符號連結(互指成環、指向 /etc/hosts)講符號連結解析不到;已提交的檔大小寫寫錯(`SCRIPTS/a.py`,macOS 工作目錄找得到)
+    講大小寫;未版控的符號連結指到 repo 外(絕對路徑、`..`)講指到 repo 外。這幾種都不講「先提交」。剛建、指向 repo 內的檔照講還沒提交。
+    翻紅釘:只看工作目錄有沒有就講先提交 → 前幾條紅;各種原因分不出來 → 原因那半紅。"""
+    print("t_psrc_hint_not_commit")
+    import os as _o
+    d, kg = _psrc_repo("psrc_hnc")
+    S = d / "scripts"
+    _o.symlink("loopb", S / "loopa")
+    _o.symlink("loopa", S / "loopb")
+    _o.symlink("/etc/hosts", S / "abs")
+    _sg_commit(d, "links")
+    _o.symlink("/etc/hosts", d / "abslink")
+    _o.symlink(_o.path.relpath("/etc", d), d / "up")   # 相對路徑一路 .. 到 /etc
+    (S / "fresh.py").write_text("f = 1\n", encoding="utf-8")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell, why in (("`scripts/loopa`", "符號連結"), ("`scripts/abs`", "符號連結"), ("`SCRIPTS/a.py`", "大小寫"),
+                      ("`abslink`", "repo 外"), ("`up/hosts`", "repo 外"), ("`scripts/fresh.py`", "還沒提交")):
+        text = _psrc_text([_PSRC_OK, f"| 某機制 | 某個理由 | {cell} |"])
+        _n, probs, _c = m._plan_sources_problems(env, d, text)
+        joined = "\n".join(probs)
+        check(f"出處 {cell} → 擋", len(probs) == 1, joined[-300:])
+        check(f"出處 {cell} → 原因講{why}", why in joined, joined[-300:])
+        if why != "還沒提交":
+            check(f"出處 {cell} → 不叫人先提交", "先提交" not in joined, joined[-300:])
+    _n, probs, _c = m._plan_sources_problems(env, d, _psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `.git/HEAD` |"]))
+    check("`.git/HEAD` → 擋、不附任何原因(不是連結、也不是沒提交)", len(probs) == 1 and ";`" not in probs[0], repr(probs)[-300:])
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_inline_same_line():
+    """行內 HTML 註解只在同一行判(代碼審 code-計劃依據來源必填 r3 正確性席 F1、通才席 F3、合約席 F2):表格列、清單項各自解析,
+    第一列沒閉合的 `<!--` 跟後面幾列的 `-->` 不成一段註解——兩列都照原樣留著、表照算;清單中間項不被換空;同一行閉合的照去掉;
+    沒閉合的 `<!--` 照一般文字留著,同一行後面的字也留著(CommonMark 0.31.2 6.6;GFM 表格每列各自解析行內)。
+    翻紅釘:行中 `<!--` 往後面幾行找 `-->` → 表那條擋成 2 格、清單中間項被換空 → 紅;沒閉合改成蓋到行尾 → 表那條擋 → 紅。"""
+    print("t_psrc_inline_same_line")
+    d, kg = _psrc_repo("psrc_isl")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    rows = ["| 寫法一 | 註解用 <!-- 起頭 | https://developer.android.com/studio/write/lint |",
+            "| 寫法二 | 註解用 --> 收尾 | https://developer.android.com/studio/write/lint |"]
+    n, probs, _c = m._plan_sources_problems(env, d, _psrc_text(rows))
+    check("表格兩列各有 <!-- 與 --> → 兩列都算、沒有問題", n == 2 and probs == [], repr(probs)[:400])
+    got = m._plan_sources_uncomment("- a <!-- x\n- b\n- c -->")
+    check("清單項跨行 → 不成註解、三行照留", got == "- a <!-- x\n- b\n- c -->", repr(got))
+    got = m._plan_sources_uncomment("前文 <!-- x\n第二行 -->\n後文")
+    check("段落內跨行 → 後幾行當看得見的文字", got == "前文 <!-- x\n第二行 -->\n後文", repr(got))
+    got = m._plan_sources_uncomment("甲 <!-- 藏 --> 乙 <!-- 沒閉合 丙")
+    check("同一行:閉合的去掉、沒閉合的照留到行尾", got == "甲  乙 <!-- 沒閉合 丙", repr(got))
+
+
+def t_psrc_inline_linear_time():
+    """去註解是線性時間(代碼審 code-計劃依據來源必填 r3 資源席 F1、F2、通才席 F2):8000 行每行都是沒閉合的 `<!--`(同一段)、
+    單行 2 萬個與 8 萬個 `<!--` 沒有 `-->`,各在 1 秒內(寬鬆上限,避免 CI 抖動;修前實測 7.2 秒、0.65 秒、約 10 秒——
+    2 萬個那條修前也在 1 秒內,單行的平方退化靠 8 萬個那條抓)。
+    翻紅釘:沒閉合後同一行還繼續找 `-->` 或往後面幾行找 → 平方時間 → 紅。"""
+    print("t_psrc_inline_linear_time")
+    import time
+    m = _load_lumos_inproc()
+    for label, text in (("8000 行每行一個沒閉合的 <!--", "\n".join(f"- item {i} <!-- note" for i in range(8000))),
+                        ("單行 2 萬個 <!--", "x " + "<!--" * 20000),
+                        ("單行 8 萬個 <!--(2 萬個在平方時間下也只要 0.6 秒,抓不到退化)", "x " + "<!--" * 80000)):
+        t0 = time.perf_counter()
+        got = m._plan_sources_uncomment(text)
+        dt = time.perf_counter() - t0
+        print(f"    {label}: {dt:.3f} 秒")
+        check(f"{label} → 1 秒內", dt < 1.0, f"{dt:.2f}s")
+        check(f"{label} → 沒閉合照原樣留著", got == text, repr(got[:80]))
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_blob_crlf_count():
+    """出處 `:行號` 對 CRLF 檔照算(代碼審 code-計劃依據來源必填 r4 合約席 F3):讀的是 blob 原始位元組、沒經過通用換行轉換,
+    3 行的 CRLF 檔 `:3` 算、`:4`、`:5` 不算;只計數的 _repo_ref_source_line_count 跟建行清單的 _repo_ref_source_lines 同語意
+    (CRLF、CR、混用、結尾換行、空檔,str 與 bytes 都一樣)。
+    翻紅釘:CRLF 先換那步拿掉(只把 CR 當換行)→ 3 行算成 6 行、`:5` 放行 → 紅;計數版結尾換行多算一行 → `:4` 放行、對照紅。"""
+    print("t_psrc_blob_crlf_count")
+    d, kg = _psrc_repo("psrc_bcc")
+    (d / "scripts" / "crlf.py").write_bytes(b"a\r\nb\r\nc\r\n")
+    _sg_commit(d, "crlf")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell, want in (("`scripts/crlf.py:3`", True), ("`scripts/crlf.py:1-3`", True), ("`scripts/crlf.py:4`", False),
+                       ("`scripts/crlf.py:5`", False)):
+        check(f"CRLF 三行檔 {cell} → {'算' if want else '不算'}", m._plan_source_cell_ok(env, d, cell) is want, cell)
+    for t in ("", "\n", "\r", "\r\n", "a", "a\n", "a\r\nb", "a\r\nb\r\n", "a\rb\rc", "a\r\r\nb", "\n\n", "a\n\rb\r",
+              "x y\n", "\r\n\r\n\r"):
+        want = len(m._repo_ref_source_lines(t))
+        check(f"計數版跟行清單版同語意 {t!r}", m._repo_ref_source_line_count(t) == want, repr((t, want)))
+        check(f"計數版 bytes 也一樣 {t!r}", m._repo_ref_source_line_count(t.encode("utf-8")) == want, repr(t))
+    check("計數版 None → None", m._repo_ref_source_line_count(None) is None)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_blob_capped_reader():
+    """出處讀 blob 走既有的批次讀取加上限(_nodehome_cat_blobs_capped;代碼審 code-計劃依據來源必填 r4 架構對齊席 F1、資源席 F1):
+    不另開一條 cat-file;超過上限不讀進記憶體、`:行號` 判不合格。上限沿用 _NOTE_REREAD_FP_MAX(測試裡暫時調小)。
+    翻紅釘:_plan_blob 自己跑 git cat-file blob → 批次讀取沒被叫到 → 紅;不設上限 → 調小上限後 `:1` 照放行 → 紅。"""
+    print("t_psrc_blob_capped_reader")
+    d, kg = _psrc_repo("psrc_bcr")
+    (d / "scripts" / "big.py").write_text("".join(f"v{i} = {i}\n" for i in range(50)), encoding="utf-8")
+    _sg_commit(d, "big")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    seen = []
+    orig = m._nodehome_cat_blobs_capped
+
+    def spy(root, specs, max_bytes, *a, **k):
+        seen.append((list(specs), max_bytes))
+        return orig(root, specs, max_bytes, *a, **k)
+    m._nodehome_cat_blobs_capped = spy
+    m._PLAN_BLOB_CACHE.clear()
+    try:
+        got = m._plan_source_cell_ok(env, d, "`scripts/big.py:50`")
+    finally:
+        m._nodehome_cat_blobs_capped = orig
+    check("讀行數走 _nodehome_cat_blobs_capped、`:50` 算", got is True and len(seen) == 1, repr((got, seen))[:300])
+    check("上限用 _NOTE_REREAD_FP_MAX", bool(seen) and seen[0][1] == m._NOTE_REREAD_FP_MAX, repr(seen)[:300])
+    cap = m._NOTE_REREAD_FP_MAX
+    m._NOTE_REREAD_FP_MAX = 100
+    m._PLAN_BLOB_CACHE.clear()
+    try:
+        big = m._plan_source_cell_ok(env, d, "`scripts/big.py:1`")
+        small = m._plan_source_cell_ok(env, d, "`scripts/a.py:1`")
+        why = []
+        m._plan_src_path_ok(d, "scripts/big.py:1", None, why)
+    finally:
+        m._NOTE_REREAD_FP_MAX = cap
+        m._PLAN_BLOB_CACHE.clear()
+    check("超過上限 → `:1` 不算", big is False, repr(big))
+    check("上限內的小檔 → `:1` 照算", small is True, repr(small))
+    check("超過上限 → 原因照既有寫法講行號、不報行數", len(why) == 1 and "行號不在檔案範圍內" in why[0][1] and "共" not in why[0][1],
+          repr(why))
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_reason_bad_chars():
+    """出處路徑含 NUL 或編不成檔名的字元(孤立的代理字元)→ 擋、不附原因、不崩潰(代碼審 code-計劃依據來源必填 r4 邊界席 F1:
+    擋下原因那支的 os.path.realpath、exists 遇 NUL 丟 ValueError,規格閘、推送前、健檢整個崩)。
+    翻紅釘:開頭不先擋這兩種、os.path 呼叫也不接 ValueError → 丟例外 → 紅。"""
+    print("t_psrc_reason_bad_chars")
+    d, kg = _psrc_repo("psrc_rbc")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    for cell in ("`x\0y`", "`scripts/a\0.py`", "`scripts/\ud800.py`"):
+        text = _psrc_text([_PSRC_OK, f"| 某機制 | 某個理由 | {cell} |"])
+        try:
+            _n, probs, _c = m._plan_sources_problems(env, d, text)
+        except (ValueError, OSError) as e:
+            probs = [f"例外 {e!r}"]
+        check(f"出處 {cell!r} → 擋一條、不崩潰", len(probs) == 1 and "例外" not in probs[0], repr(probs)[-300:])
+        check(f"出處 {cell!r} → 不附原因", len(probs) == 1 and ";`" not in probs[0], repr(probs)[-300:])
+    for tok in ("x\0y", "scripts/\ud800.py"):
+        try:
+            got = m._plan_src_miss_reason(m._plan_head(d), None, tok)
+        except (ValueError, OSError) as e:
+            got = e
+        check(f"擋下原因 {tok!r}(沒有樹清單那條路)→ None", got is None, repr(got))
+    # 兩道各自要咬得住:開頭先擋(不碰 os.path),os.path 那段另外接 OSError、ValueError
+    import os as _o
+    rp = m.os.path.realpath
+    head = m._plan_head(d)
+
+    class _Touched(Exception):
+        pass
+
+    def boom(*a, **k):
+        raise _Touched()
+    m.os.path.realpath = boom
+    try:
+        for tok in ("x\0y", "scripts/\ud800.py"):
+            try:
+                got = m._plan_src_miss_reason(head, None, tok)
+            except _Touched:
+                got = "碰到 os.path"
+            check(f"擋下原因 {tok!r} → 開頭就回 None、不碰 os.path", got is None, repr(got))
+    finally:
+        m.os.path.realpath = rp
+
+    def bad(*a, **k):
+        raise ValueError("模擬 os.path 丟 ValueError")
+    for exc in (bad, lambda *a, **k: (_ for _ in ()).throw(OSError("模擬 OSError"))):
+        m.os.path.realpath = exc
+        try:
+            try:
+                got = m._plan_src_miss_reason(head, None, "scripts/fresh.py")
+            except (ValueError, OSError) as e:
+                got = e
+        finally:
+            m.os.path.realpath = rp
+        check(f"os.path 丟 {type(got).__name__ if got is not None else '例外'} → 擋下原因回 None", got is None, repr(got))
+    check("前置:realpath 已還原", m.os.path.realpath is rp and _o.path.realpath is rp)
+
+
+@_psrc_since("2000-01-01")
+def t_psrc_reason_case_links():
+    """大小寫寫錯的出處經過已提交的符號連結、或本身就是連結 → 講大小寫,不叫人先提交(代碼審 code-計劃依據來源必填 r4 通才席 F1):
+    `lnd -> scripts`、`ln -> scripts/a.py` 已提交,寫 `Lnd/a.py`、`LND/A.py`、`LN` 都講大小寫並帶版控裡解析到的檔;
+    `.GIT/config` 跟 `.git/config` 一樣不附原因(邊界席 F2:macOS 上 `.GIT` 就是 `.git`)。不靠檔案系統大小寫不分:Linux 上也一樣。
+    翻紅釘:大小寫只掃一般檔的完整路徑 → 連結與經過連結的路徑沒有大小寫原因 → 紅;`.git` 判斷分大小寫 → macOS 上講先提交 → 紅
+    (Linux 上 `.GIT/config` 不存在,那條只在大小寫不分的檔案系統翻紅)。"""
+    print("t_psrc_reason_case_links")
+    import os as _o
+    d, kg = _psrc_repo("psrc_rcl")
+    _o.symlink("scripts", d / "lnd")
+    _o.symlink("scripts/a.py", d / "ln")
+    _sg_commit(d, "links")
+    m = _load_lumos_inproc()
+    env = m.Env(kg)
+    _o.symlink("loopb", d / "scripts" / "loopa")
+    _o.symlink("loopa", d / "scripts" / "loopb")
+    _sg_commit(d, "loop")
+    for cell, why in (("`Lnd/a.py`", "經過符號連結"), ("`LND/A.py`", "經過符號連結"), ("`LN`", "經過符號連結"),
+                      ("`lnd/A.py`", "經過符號連結"), ("`SCRIPTS/A.py`", "版控裡的 `scripts/a.py`")):
+        text = _psrc_text([_PSRC_OK, f"| 某機制 | 某個理由 | {cell} |"])
+        _n, probs, _c = m._plan_sources_problems(env, d, text)
+        joined = "\n".join(probs)
+        check(f"出處 {cell} → 擋", len(probs) == 1, joined[-300:])
+        check(f"出處 {cell} → 講大小寫、帶版控裡的 scripts/a.py", "大小寫" in joined and "scripts/a.py" in joined, joined[-300:])
+        check(f"出處 {cell} → 原因講{why}", why in joined, joined[-300:])
+        check(f"出處 {cell} → 不叫人先提交", "先提交" not in joined, joined[-300:])
+    text = _psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `SCRIPTS/LOOPA` |"])
+    _n, probs, _c = m._plan_sources_problems(env, d, text)
+    joined = "\n".join(probs)
+    check("大小寫寫錯的成環連結 `SCRIPTS/LOOPA` → 講符號連結解析不到、不講大小寫與先提交",
+          "解析不到" in joined and "大小寫" not in joined and "先提交" not in joined, joined[-300:])
+    _n, probs, _c = m._plan_sources_problems(env, d, _psrc_text([_PSRC_OK, "| 某機制 | 某個理由 | `.GIT/config` |"]))
+    check("`.GIT/config` → 擋、不附任何原因", len(probs) == 1 and ";`" not in probs[0], repr(probs)[-300:])
+    check("`.GIT/config` → 判 .git 不分大小寫(擋下原因直接回 None)",
+          m._plan_src_miss_reason(m._plan_head(d), m._plan_tree(d), ".GIT/config") is None)
+
+
+@_hre_since("2026-06-01")
+def t_psrc_first_days_systems_node():
+    """預期值表那道的首次加入日涵蓋 Projects/ 以外的節點(代碼審 code-計劃依據來源必填 r4 合約席 F4:規格閘對任何節點跑,
+    原本的測試只用 Projects/ 底下的檔,範圍縮成只認 Projects/ 也全綠)。Systems/ 底下沒有 created 的風險高節點:
+    生效日前進 git → 判舊、不要表;生效日後才進 git → 判新、要表。
+    翻紅釘:_plan_path_is_note 只認 Projects/ 底下 → Systems 節點首次加入日讀不到、被當新節點 → 第一條紅。"""
+    print("t_psrc_first_days_systems_node")
+    d, kg = _psrc_repo("psrc_fds")
+    S = kg / "Systems"
+    body = _psrc_text(table=[], created="").replace("type: project", "type: system")
+    (S / "舊系統.md").write_text(body, encoding="utf-8")
+    _psrc_git_commit(d, "old", "2026-01-01T10:00:00+08:00")
+    (S / "新系統.md").write_text(body, encoding="utf-8")
+    _psrc_git_commit(d, "new", "2026-07-01T10:00:00+08:00")
+    m = _load_lumos_inproc()
+    m._PLAN_FIRST_DAYS_CACHE.clear()
+    env = m.Env(kg)
+    old = (S / "舊系統.md").read_text(encoding="utf-8")
+    check("前置:Systems 節點沒有 created", "created:" not in old, old[:160])
+    check("Systems 節點生效日前進 git → 預期值表判舊、不要表",
+          m._expected_requirement(env, "Systems/舊系統.md", old, door="high") is None)
+    check("Systems 節點生效日後才進 git → 預期值表判新、要表",
+          m._expected_requirement(env, "Systems/新系統.md", old, door="high") is not None)
+
+
+def t_graph_discipline_sources_line():
+    """[S6] 紀律範本重新注入到消費專案時,CLAUDE.md 含「每個機制的依據另寫進計劃〈依據來源〉表」。
+    範本會 vendor 進消費專案,這支在消費端照跑。翻紅釘:範本拿掉那個子句 → 紅。"""
+    print("t_graph_discipline_sources_line")
+    import tempfile
+    tpl = (_repo_root_for_discipline() / "scripts" / "templates" / "graph-discipline.md").read_text(encoding="utf-8")
+    with tempfile.TemporaryDirectory() as td:
+        root, mod = _make_reinject_root(td, tpl_content=tpl, claude_content="# 我的專案\n\n自己的規矩。\n")
+        res = mod._reinject_claude_block(root, "proj")
+        body = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        check("S6 重新注入後 CLAUDE.md 含新子句", res.status in ("updated", "appended", "created")
+              and "每個機制的依據另寫進計劃〈依據來源〉表" in body, res.status)
+        check("S6 子句接在 PRIOR-ART 那句後面(同一行)", any("`PRIOR-ART:` 記進計劃筆記" in ln and "〈依據來源〉表" in ln for ln in body.splitlines()), "")
 
 
 if __name__ == "__main__":

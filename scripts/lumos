@@ -3428,6 +3428,21 @@ def run_doctor(env: Env, strict: bool, color: bool, suggest=False, ci=False, ver
         warn_soft(_rr21, f"{len(_rr21)} 處指向別篇的回頭條件已不在(不計入問題數):",
                   "改指到那篇現在的那條回頭條件;那件事已不用回頭看,就把這句改寫成已處理(寫明哪天、怎麼處理的)")
     print()
+    # 新計劃的〈依據來源〉(Projects/計劃依據來源必填_計劃 範圍 3):只列 todo/doing 的新計劃(舊計劃規格閘也不擋,列了永遠清不掉);
+    # 不計入問題數、不寫帳(同 S17 到 S21);列幾條照軟段既有上限(_SOFT_CAP,--verbose 全列;代碼審 r1 架構對齊席 F2:不另訂截斷)
+    section("S22", "todo 或 doing 的新計劃〈依據來源〉合不合格(提醒,不擋;進實作前的規格閘與推送前會擋)")
+    try:
+        _ps22 = _doctor_plan_sources_lines(env)
+        if not _ps22:
+            ok("todo 或 doing 的新計劃〈依據來源〉都合格(舊計劃不列)")
+        else:
+            warn_soft(_ps22, f"共 {len(_ps22)} 篇 todo 或 doing 的新計劃〈依據來源〉不合格(不計入問題數):",
+                      "每個機制一列「機制 | 依據 | 出處」,出處寫網址、repo 內存在的檔、節點連結、使用者原話或實測;逐處看:lumos spec-gate <計劃> --no-run")
+    except Exception as _e22:   # 這段壞了要看得到:不印綠勾,照軟提醒印例外(代碼審 r1 通才席 F2)
+        warn_soft([_esc_clean(f"{_e22.__class__.__name__}: {_e22}", _DOCTOR_LINE_MAX)],
+                  "〈依據來源〉這段跑到一半出錯,這次沒查完(不計入問題數):",
+                  "回報這個例外;要看是哪篇計劃,逐篇跑 lumos spec-gate <計劃> --no-run")
+    print()
 
     # ── 每支檔有家的舊帳(2026-09-11,Projects/每支檔有家_計劃 [S28]):排在合約條數那段之後、[H] 之前——
     # 軟段截斷那支測試切的是 [S] 到 [E1],插進那個窗口會被數進去而翻紅(鄰居三段同一條位置紀律)。
@@ -4786,6 +4801,25 @@ def _doctor_metric_lines(env, root, now=None):
 
 _FACT_RECHECK_DEFAULT_DAYS = {"生產": 30, "資料庫": 90, "外部": 90, "部署": 90, "人工": 180}
 _FACT_RECHECK_UNIT_DAYS = {"天": 1, "週": 7, "月": 30}
+
+
+def _doctor_plan_sources_lines(env):
+    """doctor S22:todo 或 doing、判成新計劃、〈依據來源〉不合格的計劃 → 每篇一行「計劃:第一處問題」。
+    新舊判斷只有 _plan_sources_is_new 一份(代碼審 r1 通才席 F3、架構對齊席 F3):created 已不早於生效日不呼叫 git 就判新;
+    其餘查首次加入日;HEAD 在迴圈外問一次(_plan_head)傳下去,整次健檢首次加入日與樹清單各只跑一次 git。"""
+    rr = _vault_repo_root(env)
+    out, head = [], _plan_head(rr)   # HEAD 整次只問一次,首次加入日與樹清單都用它當快取鍵
+    for rel, n in sorted(env.notes.items()):
+        if not _plan_sources_applies(rel, n) or str(n.fields.get("status") or "") not in ("todo", "doing"):
+            continue
+        try:
+            text = (env.vault / rel).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError):
+            continue
+        _nrows, probs, _cells = _plan_sources_problems(env, rr, text, head)
+        if probs and _plan_sources_is_new(env, rr, rel, head):
+            out.append(_esc_clean(f"{rel[:-3]}:{probs[0]}", _DOCTOR_LINE_MAX))
+    return out
 
 
 def _doctor_fact_recheck_lines(env, today=None):
@@ -14356,53 +14390,125 @@ _EXPECTED_MAX_CELL = 2000
 _DAY_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
-def _plan_first_day(rr, plan_repo_rel, hops=20):
-    """計劃第一次進 git 歷史的日期(YYYY-MM-DD),改名、搬目錄跟得過去;讀不到回 None。
-    ★不用 `git log --follow`★:它連「複製」一起追,拿舊計劃複製一份來寫新計劃時,新計劃會被追到舊計劃的日期而漏查(實作時測試現場實測 C097)。
-    改成只追改名:找這條路徑第一次新增的提交(同 _plan_first_commit 的 --diff-filter=A),再用 diff-tree -M(只開改名偵測)看那個提交是不是把別的檔改名過來,
-    是就換成舊路徑再找;最多 hops 跳。每次 git 逾時 20 秒,逾時當讀不到。"""
-    cur, day = plan_repo_rel, None
-    for _ in range(hops):
-        try:
-            r = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "log", "--diff-filter=A", "--format=%H %cs", "--", cur],
-                               capture_output=True, text=True, errors="replace", timeout=20)
-        except (OSError, subprocess.TimeoutExpired):
-            return day
-        got = [x.split() for x in r.stdout.splitlines() if x.strip()] if r.returncode == 0 else []
-        if not got or len(got[-1]) != 2 or not _DAY_RE.fullmatch(got[-1][1]):
-            return day
-        sha, day = got[-1]
-        try:
-            t = subprocess.run(["git", "-C", str(rr), "-c", "core.quotePath=false", "diff-tree", "--no-commit-id", "--root", "-r", "-M", "--name-status", "-z", sha],
-                               capture_output=True, timeout=20)
-        except (OSError, subprocess.TimeoutExpired):
-            return day
-        codes = {}
-        _paths, src, _gone = _nodehome_name_status(t.stdout if t.returncode == 0 else b"", norm=False, codes=codes)
-        prev = src.get(cur)
-        if prev is None or codes.get(cur) != "R":
-            return day
-        cur = prev
-    return day
+_PLAN_FIRST_DAYS_CACHE = {}   # (repo 根, HEAD) → {範圍: {路徑與它改名鏈上的舊路徑(NFC): YYYY-MM-DD}} 或 None(範圍見 _PLAN_FIRST_DAYS_SCOPES);同一個程序只跑一次 git,HEAD 變了重掃
+_PLAN_FIRST_DAYS_CACHE_MAX = 8   # 最多留 8 份(測試在同一個程序裡開很多 repo),超過丟最早那份,記憶體有界
+_PLAN_FIRST_DAYS_TIMEOUT = 60
 
 
-def _plan_effective_day(rr, plan_repo_rel, created):
+def _plan_head(rr):
+    """(repo 根絕對路徑, HEAD 提交或 None, 淺複製?):首次加入日與出處判路徑的快取鍵。★HEAD 每個指令只問一次★:
+    逐篇跑很多份的呼叫端(健檢、推送前)在迴圈外叫一次,把結果傳給 _plan_sources_problems、_plan_sources_is_new;
+    單篇呼叫端不傳,由那支自己問(代碼審 code-計劃依據來源必填 r2 架構對齊席 F3:原本另有一層「只跑一次」的取值函式,兩層管同一件事)。
+    不是 git、沒有提交或讀不到 → 提交是 None。"""
+    root = str(Path(rr).resolve())
+    try:
+        sh = subprocess.run(["git", "-C", root, "rev-parse", "--is-shallow-repository", "HEAD"], capture_output=True, text=True,
+                            errors="replace", timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        return (root, None, False)
+    out = sh.stdout.split() if sh.returncode == 0 else []
+    if len(out) != 2 or out[0] not in ("true", "false"):
+        return (root, None, False)
+    return (root, out[1], out[0] == "true")
+
+
+def _plan_cache_put(cache, cap, key, val):
+    """程序內快取放一份,超過 cap 丟最早那份(記憶體有界)。"""
+    while len(cache) >= cap:
+        cache.pop(next(iter(cache)))
+    cache[key] = val
+    return val
+
+
+def _plan_path_is_note(path):
+    """repo 相對路徑是不是 .md(圖譜節點):預期值表那道(_expected_requirement)的首次加入日範圍——規格閘對任何節點跑、
+    推送前涵蓋 Projects/ 底下所有 .md,不限 _計劃.md(代碼審 code-計劃依據來源必填 r3 通才席 F1)。"""
+    return path.endswith(".md")
+
+
+def _plan_path_is_plan(path):
+    """repo 相對路徑是不是某個圖譜 Projects/ 底下(含子目錄)的 _計劃.md(首次加入日只留這些,見 _plan_first_days;範圍同 _plan_sources_applies)。"""
+    return path.endswith("_計劃.md") and "/Projects/" in "/" + path
+
+
+_PLAN_FIRST_DAYS_SCOPES = (("plan", _plan_path_is_plan), ("note", _plan_path_is_note))   # 首次加入日的兩個範圍,見 _plan_first_days
+
+
+def _plan_first_days(rr, head=None, scope="plan"):
+    """每份計劃第一次進 git 歷史的日期 {repo 相對路徑(NFC): YYYY-MM-DD}(提交日期);淺複製、沒有提交、沒有 git 或讀不到回 None。
+    ★首次加入日只有這一套算法★(代碼審 code-計劃依據來源必填 r1 架構對齊席 F1:原本單篇逐跳追改名、健檢批次各一套,從 Projects 外搬進來時兩邊分岔):
+    一次 `git log --reverse -M --diff-filter=AR --name-status`,★不限 pathspec★——限了路徑,從範圍外改名進來的檔 git 會印成 A、舊日期接不上;
+    依時間順序走,A 記第一次、R 把舊路徑的日期接給新路徑(改名跟得過去,改名來源也轉 NFC 再查);只開 -M 不開 -C,複製出來的檔是 A、不跟原檔
+    (★不用 `git log --follow`★:它連複製一起追,拿舊計劃複製一份寫新計劃會被追到舊日期而漏查,實作時測試現場實測 C097)。
+    ★結果照範圍只留要查的路徑★與它們改名鏈上的舊路徑,全部路徑都留會讓快取隨 repo 歷史線性長(代碼審 r2 通才席 F2、資源席 F2;
+    掃的當下仍要全部路徑才接得上改名,用完就丟):scope="plan"(〈依據來源〉那道)只留 _plan_path_is_plan 的計劃;
+    scope="note"(預期值表那道 _expected_requirement)留所有 .md(_plan_path_is_note)——它查的不只 _計劃.md,只留計劃會讓其他節點的日期
+    讀不到、被當新計劃(代碼審 r3 通才席 F1)。兩個範圍在同一次 git log 裡一起算、一起快取,不多跑 git。
+    head 是 _plan_head 的結果(沒給就自己問);結果以 (repo 根, HEAD) 快取在程序裡,同一次執行只跑一次 git log。逾時往 stderr 印一行(呼叫端只看 created)。"""
+    root, sha, shallow = head or _plan_head(rr)
+    if sha is None or shallow:   # 淺複製、沒有提交或不是 git:只看 created(設計審 r5 邊界席、決策 d11)
+        return None
+    key = (root, sha)
+    if key in _PLAN_FIRST_DAYS_CACHE:
+        got = _PLAN_FIRST_DAYS_CACHE[key]
+        return None if got is None else got[scope]
+    days = None
+    try:
+        r = subprocess.run(["git", "-C", root, "-c", "core.quotePath=false", "log", "--reverse", "-M", "--diff-filter=AR",
+                            "--name-status", "--format=%x01%cs"],
+                           capture_output=True, text=True, errors="replace", timeout=_PLAN_FIRST_DAYS_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        print(f"[lumos] 計劃首次進 git 的日期讀不到(git log 超過 {_PLAN_FIRST_DAYS_TIMEOUT} 秒),這次新舊判斷只看 created", file=sys.stderr)
+        r = None
+    except OSError:
+        r = None
+    if r is not None and r.returncode == 0:
+        seen, prev, day = {}, {}, None
+        for ln in r.stdout.splitlines():
+            if ln.startswith("\x01"):
+                day = ln[1:].strip()
+                continue
+            parts = ln.split("\t")
+            if not day or not _DAY_RE.fullmatch(day) or len(parts) < 2:
+                continue
+            if parts[0] == "A":
+                seen.setdefault(nfc(parts[1]), day)
+            elif parts[0].startswith("R") and len(parts) >= 3:
+                old, new = nfc(parts[1]), nfc(parts[2])
+                if new not in seen:
+                    seen[new] = seen.get(old, day)
+                    prev[new] = old
+        days = {}
+        for name, keep in _PLAN_FIRST_DAYS_SCOPES:
+            out = days[name] = {}
+            for path in seen:
+                cur, hops = path, 0
+                if not keep(path):
+                    continue
+                while cur is not None and cur not in out and hops <= len(prev):
+                    out[cur] = seen.get(cur, seen[path])
+                    cur, hops = prev.get(cur), hops + 1
+    got = _plan_cache_put(_PLAN_FIRST_DAYS_CACHE, _PLAN_FIRST_DAYS_CACHE_MAX, key, days)
+    return None if got is None else got[scope]
+
+
+def _plan_first_day(rr, plan_repo_rel, head=None, scope="plan"):
+    """計劃第一次進 git 歷史的日期(YYYY-MM-DD),改名、搬目錄(含從別的目錄搬進來)跟得過去、複製不跟;讀不到回 None。
+    查 _plan_first_days 那一份;scope 見那支(預期值表那道傳 "note")。"""
+    days = _plan_first_days(rr, head, scope)
+    return None if days is None else days.get(nfc(str(plan_repo_rel)))
+
+
+def _plan_effective_day(rr, plan_repo_rel, created, head=None, scope="plan"):
     """計劃的日期:開頭欄位 created 與第一次進 git 歷史的日期(_plan_first_day,改名跟得過去)取較晚者;兩個都讀不到回 None(呼叫端當生效日之後)。
-    淺複製只看 created(設計審 r5 邊界席、決策 d11)。"""
+    淺複製只看 created(設計審 r5 邊界席、決策 d11;判淺複製在 _plan_first_days)。head:逐篇迴圈傳 _plan_head 的結果(見那支)。"""
     days = []
     c = str(created or "").strip()[:10]
     if _DAY_RE.fullmatch(c):
         days.append(c)
-    try:
-        sh = subprocess.run(["git", "-C", str(rr), "rev-parse", "--is-shallow-repository"], capture_output=True, text=True,
-                            errors="replace", timeout=20)
-        shallow = not (sh.returncode == 0 and sh.stdout.strip() == "false")
-    except (OSError, subprocess.TimeoutExpired):
-        shallow = True
-    if not shallow:
-        g = _plan_first_day(rr, plan_repo_rel)
-        if g:
-            days.append(g)
+    g = _plan_first_day(rr, plan_repo_rel, head, scope)
+    if g:
+        days.append(g)
     return max(days) if days else None
 
 
@@ -14437,7 +14543,7 @@ def _expected_requirement(env, rel, text, door=None):
     except ValueError:
         prel = rel
     n = env.notes.get(rel)
-    day = _plan_effective_day(rr, prel, n.fields.get("created") if n is not None else None)
+    day = _plan_effective_day(rr, prel, n.fields.get("created") if n is not None else None, scope="note")   # 不限 _計劃.md(r3 通才席 F1)
     if day is not None and day < _expected_since():
         return None
     return new, keeps, ids
@@ -14545,6 +14651,445 @@ def _expected_table_sha(data):
 
 
 _EXPECTED_EXAMPLE = "| S2 | 單筆消費 1000 元 | 折扣 100 元 | 需求文件〈滿額折扣〉第 2 點:滿 1000 打九折 |"
+
+
+# ── 計劃〈依據來源〉(Projects/計劃依據來源必填_計劃):規格閘、推送前重查、健檢三處共用 ──
+# 生效日:計劃日期(同 _plan_effective_day)不早於它才算新計劃、才擋;純日期,取本案合併進主線的隔天。
+# 不共用 _HIGH_RISK_EVIDENCE_SINCE:它早於本案合併,共用會追溯擋照舊規矩寫的計劃,測試總開關也會綁在一起。
+_PLAN_SOURCES_SINCE = "2026-11-08"
+_PLAN_SOURCES_H2_RE = re.compile(r"^##\s+依據來源\s*$")
+_PLAN_SOURCES_HEAD = ("機制", "依據", "出處")
+_PLAN_SOURCES_EXAMPLE = "| 擋下要留帳 | 誤報率要持續量才知道該不該撤 | https://example.com/paper.pdf |"
+_PLAN_SOURCES_EXAMPLE_NOTE = "(只示範格式:example.com 是 RFC 2606 保留的示範網域,照抄會被擋;出處換成你真正查到的網址)"
+_PLAN_SRC_URL_RE = re.compile(r"https?://([^\s/?#<>\"'`|()（）「」，。；、]+)")
+_PLAN_SRC_HOST_RE = re.compile(r"[^.\s]+(?:\.[^.\s]+)+")
+_PLAN_SRC_TICK_RE = re.compile(r"`([^`\n]+)`")
+_PLAN_SRC_LINENO_RE = re.compile(r"^(.*?):(\d+(?:-\d+)?)$")
+# RFC 2606 第 3 節保留給文件範例用的二級網域(https://www.rfc-editor.org/rfc/rfc2606 ):寫它等於沒寫出處,連子網域都不算
+_PLAN_SRC_EXAMPLE_HOSTS = ("example.com", "example.net", "example.org")
+_PLAN_SRC_CODE_SPAN_RE = re.compile(r"(`+)(?:(?!\1).)+?\1")
+_PLAN_SRC_USER_RE = re.compile(r"使用者\s*(\d{4}-\d{2}-\d{2})\s*(?:[:：]\s*)?(?:「([^」]*)」|\"([^\"]*)\")")
+_PLAN_SRC_TEST_RE = re.compile(r"實測\s*(\d{4}-\d{2}-\d{2})\s*[:：](.*)", re.S)
+
+
+_PLAN_SOURCES_SINCE_TOLD = set()   # 這個程序已經講過「生效日被覆寫」的值:一個值只講一次
+
+
+def _plan_sources_since():
+    """〈依據來源〉的生效日:常數 _PLAN_SOURCES_SINCE;環境變數 LUMOS_PLAN_SOURCES_SINCE 是 YYYY-MM-DD 就用它(測試與緊急覆寫,寫法同 _expected_since)。
+    覆寫生效(值跟常數不同)時往 stderr 講一次:殘留的變數會讓守衛無聲失效(代碼審 r1 資安席 F1);每個程序每個值只講一次,
+    測試總檔的預設值在同一個程序裡只多一行、子程序的 stderr 由測試收走。"""
+    v = os.environ.get("LUMOS_PLAN_SOURCES_SINCE", "").strip()
+    if not _DAY_RE.fullmatch(v):
+        return _PLAN_SOURCES_SINCE
+    if v != _PLAN_SOURCES_SINCE and v not in _PLAN_SOURCES_SINCE_TOLD:
+        _PLAN_SOURCES_SINCE_TOLD.add(v)
+        print(f"[lumos] 〈依據來源〉生效日被環境變數覆寫為 {v}(LUMOS_PLAN_SOURCES_SINCE;原本是 {_PLAN_SOURCES_SINCE})", file=sys.stderr)
+    return v
+
+
+def _plan_sources_applies(rel, n):
+    """這篇是不是〈依據來源〉要管的計劃:Projects/ 底下檔名以 _計劃.md 結尾、開頭欄位 type: project(_調研.md 等不算)。"""
+    return (n is not None and str(rel).startswith("Projects/") and str(rel).endswith("_計劃.md")
+            and str(n.fields.get("type") or "") == "project")
+
+
+def _plan_src_day_ok(s):
+    """真的日期(月份 1–12、日子在那個月裡),而且不晚於今天(使用者原話與實測不會發生在未來;代碼審 r1 正確性席 F2)。"""
+    import datetime as _dt
+    try:
+        return _dt.date.fromisoformat(s) <= _dt.date.today()
+    except ValueError:
+        return False
+
+
+def _plan_src_host_ok(host):
+    """網址主機名算不算出處:含點、不是 RFC 2606 的示範網域(example.com/net/org 與它們的子網域)。"""
+    h = host.lower().rstrip(".")
+    if not _PLAN_SRC_HOST_RE.fullmatch(h):
+        return False
+    return not any(h == x or h.endswith("." + x) for x in _PLAN_SRC_EXAMPLE_HOSTS)
+
+
+_PLAN_TREE_CACHE = {}   # (repo 根, HEAD) → 非一般檔(符號連結、子模組)的路徑集合,或 None(列不出來,這個 HEAD 不再重試);只放非一般檔,數量很小
+_PLAN_TREE_CACHE_MAX = 8   # 同 _DRIFT_LS_CACHE_MAX:一個 HEAD 一份,測試在同一個程序裡開很多 repo,超過丟最早那份
+_PLAN_BLOB_CACHE = {}   # (repo 根, 物件或「提交:路徑」, "link" 或 "lines") → 符號連結目標或行數:同一支只讀一次
+_PLAN_BLOB_CACHE_MAX = 256
+_PLAN_LINK_HOPS = 8     # 符號連結最多跟 8 跳,再多當解析不到(互指成環也停得下來)
+
+
+def _plan_tree(rr, head=None):
+    """HEAD 整棵樹的清單:回 (一般檔 {路徑(NFC): 物件}, 非一般檔路徑集合);沒有提交、不是 git 或列不出來回 None。
+    ★不另寫 ls-tree★:列樹、解碼、快取都走既有的 _drift_list / _drift_oids(_nodehome_list 那套;代碼審 code-計劃依據來源必填 r3
+    架構對齊席 F1:原本這裡是專案第四份 ls-tree 解碼;F3:非 UTF-8 檔名改成跟它一樣無損解碼)。整棵樹的清單存在 _DRIFT_LS_CACHE,
+    上限與生命週期照那邊(最多 8 個提交、滿了整個清掉;一個 HEAD 一份)。★呼叫點補一層★:_nodehome_list 只回一般檔的物件編號,
+    符號連結與子模組只出現在全部路徑裡——這裡把「全部路徑減一般檔」記成非一般檔集合(只有連結與子模組,通常個位數),
+    解析符號連結時再用「提交:路徑」讀它的目標(_plan_tree_resolve),不為了一個欄位改共用函式的簽章。
+    列不出來(git 失敗或逾時)往 stderr 印一行,同一個 HEAD 不再重試(代碼審 r2 資源席 F1)。"""
+    root, sha, _shallow = head or _plan_head(rr)
+    if sha is None:
+        return None
+    key = (root, sha)
+    if key in _PLAN_TREE_CACHE and _PLAN_TREE_CACHE[key] is None:   # 這個 HEAD 查過、列不出來:不重試(代碼審 r4 通才席 F4:原本三種狀態擠在一行)
+        return None
+    lst = _drift_list(root, sha)
+    if lst is None:
+        print("[lumos] HEAD 的檔案清單讀不到(git ls-tree 失敗或逾時),〈依據來源〉的 repo 路徑這次都不算", file=sys.stderr)
+        _plan_cache_put(_PLAN_TREE_CACHE, _PLAN_TREE_CACHE_MAX, key, None)
+        return None
+    nonreg = _PLAN_TREE_CACHE.get(key)
+    if nonreg is None:   # 查到才存
+        nonreg = _plan_cache_put(_PLAN_TREE_CACHE, _PLAN_TREE_CACHE_MAX, key, frozenset(p for p in lst[1] if p not in lst[0]))
+    return _drift_oids(root, sha), nonreg
+
+
+def _plan_blob(root, spec, kind):
+    """讀一支 blob(spec 是物件編號,或符號連結的「提交:路徑」):kind="link" 回內容(符號連結的目標,NFC),
+    kind="lines" 回行數(_repo_ref_source_line_count,與 _validate_repo_ref 的 _repo_ref_source_lines 同語意、只計數);
+    讀不到、超過上限回 None(子模組這種不是 blob 的也是)。以 (repo 根, spec, kind) 快取,同一支只讀一次。
+    ★不另開讀取路★(代碼審 code-計劃依據來源必填 r4 架構對齊席 F1、資源席 F1):讀取走既有的 _nodehome_cat_blobs_capped
+    (先問大小、超過上限不讀進記憶體;路徑含換行整批當讀不到),上限沿用 _NOTE_REREAD_FP_MAX——同樣是「讀版控裡任一支原始碼的整份內容」,
+    那邊已量過本 repo 最大的檔;不另訂一個數。逾時照舊用 _disp_git_timeout。"""
+    key = (root, spec, kind)
+    if key in _PLAN_BLOB_CACHE:
+        return _PLAN_BLOB_CACHE[key]
+    got = _nodehome_cat_blobs_capped(root, [spec], _NOTE_REREAD_FP_MAX, timeout=_disp_git_timeout())
+    if got is None:
+        return None   # git 跑不起來或逾時:不快取,下次再試(同原本的例外處理)
+    raw = got[0]
+    if raw is None:
+        val = None
+    elif kind == "link":
+        val = nfc(raw.decode("utf-8", "replace"))
+    else:
+        val = _repo_ref_source_line_count(raw)
+    return _plan_cache_put(_PLAN_BLOB_CACHE, _PLAN_BLOB_CACHE_MAX, key, val)
+
+
+def _plan_tree_resolve(head, tree, path, fold=False):
+    """在樹清單(_plan_tree 的結果)裡把路徑解析到一支檔案:逐段走,遇到非一般檔就當符號連結讀它的目標(子模組讀不到、回 None)、
+    相對連結所在目錄正規化、接上剩下的段再從頭走(路徑中段是目錄連結也解得開;git 的樹不會穿過符號連結,所以要自己解;
+    代碼審 r2 邊界席 F1、通才席 F3);最多 _PLAN_LINK_HOPS 跳,目標是絕對路徑、跑出 repo、解析不到,或最後不是一般檔(目錄、子模組)
+    都回 None。成功回 (路徑, 物件)。限制:連結本身的檔名在 git 裡存成 NFD 時,「提交:路徑」用 NFC 讀不到、當解析不到(只會多擋,不會放錯)。
+    fold=True 只給擋下原因用(_plan_src_miss_reason):每一段比對(連結與最後的檔)都不分大小寫,同一條走法——寫錯大小寫的路徑
+    經過連結、或本身就是連結時也找得到版控裡的那支檔(代碼審 code-計劃依據來源必填 r4 通才席 F1);★判合不合格永遠用 fold=False★。"""
+    import posixpath as _pp
+    files, nonreg = tree
+    if fold:
+        nl, fl = {}, {}
+        for p in nonreg:
+            k = p.lower()
+            nl[k] = min(nl.get(k, p), p)   # 只差大小寫的同名項取字典序最小那個,結果不隨集合順序變
+        for p in files:
+            fl.setdefault(p.lower(), p)    # files 照 git 列樹的順序,同名取先列到的
+        link_at, file_at = (lambda c: nl.get(c.lower())), (lambda c: fl.get(c.lower()))
+    else:
+        link_at, file_at = (lambda c: c if c in nonreg else None), (lambda c: c)
+    parts, i, hops = path.split("/"), 0, 0
+    while i < len(parts):
+        cur = link_at("/".join(parts[:i + 1]))
+        if cur is not None:
+            hops += 1
+            target = _plan_blob(head[0], f"{head[1]}:{cur}", "link") if hops <= _PLAN_LINK_HOPS else None
+            if not target or target.startswith("/"):
+                return None
+            joined = _pp.normpath(_pp.join(_pp.dirname(cur), target, *parts[i + 1:]))
+            if joined in (".", "..") or joined.startswith("../") or joined.startswith("/"):
+                return None
+            parts, i = joined.split("/"), 0
+            continue
+        i += 1   # 中段是檔案時,最後整條路徑在清單裡查不到,下面回 None
+    real = file_at("/".join(parts))
+    oid = files.get(real) if real is not None else None
+    return None if oid is None else (real, oid)
+
+
+def _plan_src_miss_reason(head, tree, path):
+    """出處路徑在 HEAD 解析不到時,講得出原因的回一句原因,講不出(打錯路徑、真的沒有)回 None。
+    ★「先提交」只在提交後真的會過時才講★(代碼審 code-計劃依據來源必填 r3 正確性席 F2、邊界席 F2:原本只看工作目錄有沒有,
+    已提交的路徑與指到 repo 外的未版控連結也叫人先提交,照做之後同一句再出現):依序判——
+    ⓪含 NUL 或編不成檔名(孤立的代理字元):不是檔名,不講(代碼審 r4 邊界席 F1:原本 os.path 遇到直接丟 ValueError,整個閘崩潰);
+    ①`.git` 底下(不分大小寫,macOS 上 `.GIT` 就是 `.git`;r4 邊界席 F2):永遠提交不了,不講;
+    ②HEAD 裡不分大小寫解析得到(_plan_tree_resolve fold=True,連結本身與經過連結的路徑都算;r4 通才席 F1):講版控裡的寫法;
+    ③HEAD 裡這條路徑上有符號連結或子模組(不分大小寫):已提交、解析不到 repo 裡的檔;
+    ④工作目錄這條路徑(含中途的連結)實際落在 repo 外或 `.git` 底下:提交了也不算;⑤工作目錄是檔案:還沒提交。
+    ④⑤的 os.path 呼叫遇到 OSError、ValueError 一律當講不出。"""
+    if "\0" in path:
+        return None
+    try:
+        os.fsencode(path)
+    except (UnicodeError, ValueError):
+        return None
+    parts = path.split("/")
+    if parts[0].lower() == ".git":
+        return None
+    if tree is not None:
+        hit = _plan_tree_resolve(head, tree, path, fold=True)
+        low = {p.lower() for p in tree[1]}
+        via = any("/".join(parts[:i + 1]).lower() in low for i in range(len(parts)))
+        if hit is not None:
+            shown = _esc_clean(hit[0][:80], 80)
+            return (f"大小寫跟版控不同(這條路徑經過符號連結,版控裡解析到 `{shown}`;要照版控的寫法)" if via
+                    else f"大小寫跟版控裡的 `{shown}` 不同(要照版控的寫法)")
+        if via:
+            return "在 HEAD 裡經過符號連結或子模組,解析不到 repo 裡的檔(指到 repo 外、絕對路徑、懸空、成環或超過 8 跳都算)"
+    try:
+        root = os.path.realpath(head[0])
+        wp = Path(head[0]) / path
+        real = os.path.realpath(wp)
+        if real != root and not real.startswith(root + os.sep) or real.startswith(os.path.join(root, ".git") + os.sep):
+            return "工作目錄裡是符號連結、指到 repo 外或 `.git` 底下,提交了也不算" if os.path.exists(real) else None
+        if wp.is_file():
+            return "工作目錄有、HEAD 還沒有——還沒提交,先提交再跑"
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def _plan_src_path_ok(rr, tok, head=None, why=None):
+    """反引號路徑算不算出處:讀者 clone 下來查得到——在 HEAD 的樹清單(_plan_tree)裡查:大小寫要對、要進版控、`.git` 底下不算、
+    目錄不算;符號連結在清單裡解析(_plan_tree_resolve,最後要落在 repo 裡的檔案);帶 `:行號` 的再讀那支檔的行數驗範圍
+    (代碼審 r1 邊界席 F1、正確性席 F3、通才席 F6;r2 換形狀:不再每個路徑各開 git)。消毒同 _validate_repo_ref(_repo_ref_token_unsafe:
+    空值、絕對路徑、`..`),開頭的 `./` 去掉,其餘寫法要已經正規化(`scripts//a.py`、`scripts/` 不算)。
+    head 是 _plan_head 的結果(沒給就自己問)。why 給了清單時,不合格的原因以 (路徑, 原因) 加進去,呼叫端接在擋下訊息後面:
+    路徑解析不到時原因見 _plan_src_miss_reason(還沒提交、大小寫、符號連結解析不到、指到 repo 外;代碼審 r2 正確性席 F2、r3 正確性席 F2);
+    `:行號` 不在範圍講行號(代碼審 r3 邊界席 F1:超長數字原本直接崩潰)。"""
+    import posixpath as _pp
+    m = _PLAN_SRC_LINENO_RE.match(tok)
+    path, line = (m.group(1), m.group(2)) if m else (tok, None)
+    path = nfc(path.strip())
+    if path.startswith("./"):
+        path = path[2:]
+    if _repo_ref_token_unsafe(path) or path.endswith("/") or path != _pp.normpath(path):
+        return False
+    head = head or _plan_head(rr)
+    tree = _plan_tree(rr, head)
+    hit = _plan_tree_resolve(head, tree, path) if tree is not None else None
+    if hit is None:
+        reason = _plan_src_miss_reason(head, tree, path) if why is not None else None
+        if reason:
+            why.append((path, reason))
+        return False
+    if line is None:
+        return True
+    n = _plan_blob(head[0], hit[1], "lines")
+    if _repo_ref_line_span(line, n) is None:   # 範圍判斷與 _validate_repo_ref 同一支(位數上限、0、倒序、超出檔尾)
+        if why is not None:
+            why.append((f"{path}:{line[:12]}{'…' if len(line) > 12 else ''}",
+                        f"行號不在檔案範圍內(要從 1 起、起不大於迄、不超過 9 位{'' if n is None else f';這支檔共 {n} 行'})"))
+        return False
+    return True
+
+
+def _plan_source_cell_ok(env, rr, cell, head=None, why=None):
+    """出處格合不合格(計劃〈用詞〉出處合格):含下列任一個就算——①網址(http/https 接含點的主機名,RFC 2606 示範網域不算);
+    ②反引號包住、HEAD 版控樹裡有的檔案(_plan_src_path_ok,可帶 :行號、行號要在檔內);③圖譜索引裡存在的 [[節點]](寫了目錄就要那個目錄真的有);
+    ④「使用者 YYYY-MM-DD」接冒號或直接接引號、引號內至少 4 個實字;⑤「實測 YYYY-MM-DD」接冒號、冒號後至少 4 個實字。
+    ④⑤的日期要是真的日期而且不晚於今天。規格閘、推送前重查、健檢三處共用這一支。head、why 照傳給 _plan_src_path_ok(見那支)。"""
+    cell = cell or ""
+    for m in _PLAN_SRC_URL_RE.finditer(cell):
+        host = m.group(1).rsplit("@", 1)[-1].split(":", 1)[0]
+        if _plan_src_host_ok(host):
+            return True
+    for m in _PLAN_SRC_TICK_RE.finditer(cell):
+        head = head or _plan_head(rr)   # 一格裡幾個路徑共用一次 HEAD
+        if _plan_src_path_ok(rr, m.group(1).strip(), head, why):
+            return True
+    for m in _SINGLE_WIKILINK_RE.finditer(cell):
+        target = nfc(m.group(1).split("|", 1)[0].split("#", 1)[0].strip())
+        hit = env.resolve(target) if target else None
+        if hit is not None and ("/" not in target or hit == (target if target.lower().endswith(".md") else target + ".md")):
+            return True
+    for m in _PLAN_SRC_USER_RE.finditer(cell):
+        quote = next((g for g in m.groups()[1:] if g is not None), "")
+        if _plan_src_day_ok(m.group(1)) and _real_chars(quote) >= 4:
+            return True
+    for m in _PLAN_SRC_TEST_RE.finditer(cell):
+        if _plan_src_day_ok(m.group(1)) and _real_chars(m.group(2)) >= 4:
+            return True
+    return False
+
+
+_PLAN_SRC_HTML_BLOCK_RE = re.compile(r" {0,3}<!--")
+
+
+def _plan_sources_uncomment(text):
+    """把 HTML 註解換掉(行數不變),線性時間,分兩種:
+    ①行首(前面至多 3 個空白)的 `<!--` 是 HTML 區塊(CommonMark 0.31.2 4.6 第 2 型,https://spec.commonmark.org/0.31.2/ ):
+    從那一行到含 `-->` 的那一行(同一行就含也算)整行換空,沒有就到檔尾;
+    ②其他位置的 `<!--` 是行內註解,★只在同一行內判★:同一行後面有 `-->` 就去掉那一段,`<!-->`、`<!--->` 本身就是完整的空註解;
+    沒閉合就照一般文字留著(CommonMark 6.6:沒閉合就不是註解),而且同一行後面的 `<!--` 也不會有閉合,不再往下找。
+    ★刻意偏離規格★:段落內跨行的行內註解(行中 `<!--`、後面幾行才 `-->`),後幾行當看得見的文字——GFM 表格每列各自解析行內
+    (https://github.github.com/gfm/ 表格擴充:「Each row consists of cells containing arbitrary text, in which inlines are parsed」),
+    清單項也各自成段,而「同一段」的判準連兩輪被打穿(代碼審 code-計劃依據來源必填 r2 正確性席 F1 吃掉後文;r3 正確性席 F1、
+    通才席 F3 表格列與清單項被當成同一段、資源席 F1 往後找閉合是平方時間),所以整類拿掉,不再往後面行找閉合。
+    圍欄裡的行原樣留著;行內程式碼裡的 `<!--` 不算(縮排 4 格是程式碼,不是區塊開頭)。
+    〈依據來源〉找節之前先過這一支:渲染後看不到的表不算(代碼審 r1 邊界席 F2)。只給這一節用,不動全檔共用的 _visible_lines
+    (它刻意不偵測 HTML 註解,見 _fence_regions)。★不共用 _XML_COMMENT_RE★:那支給建置檔(XML)用,不分圍欄、行內程式碼、
+    區塊與行內,而且任何位置沒閉合都吃到結尾(代碼審 r2 架構對齊席 F1)。"""
+    lines = _note_lines(text)
+    vis = {no for no, _ln in _visible_lines(lines)}
+    out, block = list(lines), False
+    for i, ln in enumerate(lines):
+        if block:
+            out[i] = ""
+            block = "-->" not in ln
+            continue
+        if (i + 1) not in vis:
+            continue
+        if _PLAN_SRC_HTML_BLOCK_RE.match(ln):
+            out[i] = ""
+            block = "-->" not in ln
+            continue
+        if "<!--" not in ln:
+            continue
+        pos, keep, spans, si = 0, [], [mm.span() for mm in _PLAN_SRC_CODE_SPAN_RE.finditer(ln)], 0
+        while True:
+            j = ln.find("<!--", pos)
+            while j >= 0:   # 跳過行內程式碼裡的 <!--(spans 依位置排好,指標只往前走)
+                while si < len(spans) and spans[si][1] <= j:
+                    si += 1
+                if si < len(spans) and spans[si][0] <= j:
+                    j = ln.find("<!--", spans[si][1])
+                    continue
+                break
+            if j < 0:
+                break
+            short = 5 if ln.startswith("<!-->", j) else 6 if ln.startswith("<!--->", j) else 0
+            e = j + short if short else ln.find("-->", j + 4)
+            if e < 0:   # 沒閉合:照一般文字留著;後面不會再有 -->,這一行不再往下找(線性時間)
+                break
+            keep.append(ln[pos:j])
+            pos = e if short else e + 3
+        keep.append(ln[pos:])
+        out[i] = "".join(keep)
+    return "\n".join(out)
+
+
+def _plan_sources_problems(env, rr, text, head=None):
+    """〈依據來源〉節檢查:回 (資料列數, 問題清單, 被擋的格子原文清單)。找節用 _h2_section_lines、切表與切格重用預期值表那組;
+    表頭要剛好「機制 | 依據 | 出處」、第二列是分隔列、至少一列資料;每列三格都要有實字(_real_chars ≥1),出處格要過 _plan_source_cell_ok。
+    head:逐篇迴圈傳 _plan_head 的結果;沒給就在第一個有反引號的出處格問一次(整份共用)。被擋的路徑工作目錄有、HEAD 沒有的,訊息講還沒提交。"""
+    probs, heads, cells = [], [], []
+    sec = _h2_section_lines(_plan_sources_uncomment(text), _PLAN_SOURCES_H2_RE, heads=heads)
+    if len(heads) > 1:
+        probs.append(f"「## 依據來源」這一節出現 {len(heads)} 次(第 {'、'.join(str(x) for x in heads)} 行),只能有一節")
+    if sec is None:
+        return 0, [*probs, "沒有「## 依據來源」這一節(標題要剛好是 `## 依據來源`)"], cells
+    tbl = _expected_table_lines(sec, probs)
+    if not tbl:
+        return 0, [*probs, "「## 依據來源」節裡沒有表(寫在圍欄裡的不算)"], cells
+    rows = [(no, [unicodedata.normalize("NFC", c.strip()) for c in _expected_split_cells(s)]) for no, s in tbl]
+    if tuple(rows[0][1]) != _PLAN_SOURCES_HEAD:
+        probs.append(f"第 {rows[0][0]} 行:表頭要是「機制 | 依據 | 出處」三欄")
+    if len(rows) < 2 or not (len(rows[1][1]) == 3 and all(_EXPECTED_SEP_RE.fullmatch(c) for c in rows[1][1])):
+        probs.append(f"第 {rows[1][0] if len(rows) > 1 else rows[0][0]} 行:第二列要是分隔列(三格,每格像 --- 或 :---:)")
+    data = rows[2:]
+    if not data:
+        probs.append("節裡沒有資料列(一個機制一列)")
+    for no, r in data:
+        name = _esc_clean(r[0][:40], 40) if r else ""
+        if len(r) != 3:
+            probs.append(f"第 {no} 行:{name}:要剛好 3 格(機制、依據、出處),現在 {len(r)} 格(格內的 | 要寫成 \\|)")
+            continue
+        for label, v in zip(_PLAN_SOURCES_HEAD, r):
+            if _real_chars(v) < 1:
+                probs.append(f"第 {no} 行:{name or '(機制格空白)'}:{label}格是空的(只有標點或看不見的字元也算空)")
+        if head is None and _PLAN_SRC_TICK_RE.search(r[2]):
+            head = _plan_head(rr)
+        why = []
+        if _real_chars(r[2]) >= 1 and not _plan_source_cell_ok(env, rr, r[2], head, why):
+            hint = "".join(f";`{_esc_clean(w[:80], 80)}` {reason}" for w, reason in why[:3])
+            probs.append(f"第 {no} 行:{name}:出處欄沒有讀者查得到的出處(網址、repo 內存在的檔、存在的節點連結、"
+                         f"「使用者 YYYY-MM-DD:「原話」」、「實測 YYYY-MM-DD:做了什麼」至少一種){hint}")
+            cells.append(r[2])
+    return len(data), probs, cells
+
+
+def _plan_sources_prel(env, rr, rel):
+    try:
+        return str((env.vault / rel).resolve().relative_to(Path(rr).resolve())).replace(os.sep, "/")
+    except ValueError:
+        return rel
+
+
+def _plan_sources_is_new(env, rr, rel, head=None):
+    """新計劃:計劃日期(_plan_effective_day:created 與第一次進 git 取較晚者)不早於生效日;兩個都讀不到當成今天。
+    ★「是不是新計劃」只有這一份★(規格閘、推送前、健檢共用;代碼審 r1 通才席 F3)。created 已不早於生效日就不呼叫 git
+    (較晚者一定也不早於生效日,結果相同;健檢與寬範圍推送省 git)。生效日當天算新(不早於)。head:逐篇迴圈傳 _plan_head 的結果。"""
+    import datetime as _dt
+    since = _plan_sources_since()
+    n = env.notes.get(rel)
+    created = n.fields.get("created") if n is not None else None
+    c = str(created or "").strip()[:10]
+    if _DAY_RE.fullmatch(c) and c >= since:
+        return True
+    day = _plan_effective_day(rr, _plan_sources_prel(env, rr, rel), created, head)
+    if day is None:
+        day = _dt.date.today().isoformat()
+    return day >= since
+
+
+def _plan_sources_note(cells, probs):
+    """擋下留帳的格子原文:被擋的出處格(沒有就用問題清單)接起來取前 200 字。"""
+    return ("\n".join(cells) if cells else "\n".join(probs))[:200]
+
+
+def _plan_sources_block_event(rr, rel, note, cells, probs, stage=None):
+    """擋下留帳(sources-missing),以(計劃, 指紋, 階段)去重:同一份沒改過的計劃反覆跑規格閘或推送前只記一筆
+    (代碼審 r1 資源席 F3;去重寫法同本檔寫入端先掃再寫的 _ci_write)。指紋是 [計劃, 被擋的出處格, 問題清單] 的 sha256,記在事件的 fp 欄
+    (代碼審 r2 通才席 F4:原本有出處格就只算出處格,格子沒變、別的問題變了會被當成重複);帳讀不到就照寫(寧可多一筆,不漏記)。
+    ★只掃版控帳★:這筆是 hard=True、(spec-gate, sources-missing) 也不在本機帳白名單 _GOV_LOCAL_PAIRS,_gate_event 一定寫進版控帳
+    (_gov_routes_local);哪天把它分到本機帳,這裡要跟著掃本機帳,否則去重永遠找不到、每次都寫(t_psrc_block_event_vc_ledger 守著;
+    代碼審 r2 架構對齊席 F2)。回 _gate_event 的回傳值,去重略過回 None。"""
+    import hashlib as _hl
+    import json as _j
+    fp = _hl.sha256(_j.dumps([rel, cells, probs], ensure_ascii=False).encode("utf-8")).hexdigest()
+    path = _docs_ledger_path(Path(rr) / "docs", GOV_LOG_NAME)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            for ln in f:
+                if fp not in ln:
+                    continue
+                try:
+                    d = _j.loads(ln)
+                except ValueError:
+                    continue
+                if (isinstance(d, dict) and d.get("kind") == "sources-missing" and d.get("fp") == fp
+                        and d.get("plan") == rel and d.get("stage") == stage):
+                    return None
+    except OSError:
+        pass
+    extra = {"plan": rel, **({"stage": stage} if stage else {}), "cells": _plan_sources_note(cells, probs), "fp": fp}
+    return _gate_event(rr, "spec-gate", "sources-missing", note, hard=True, nodes=[rel], extra=extra)
+
+
+def _spec_gate_sources_part(env, rel, text):
+    """規格閘的〈依據來源〉那一道(插在待決問題之後、條款綁定之前;不看門、不看條款):新計劃不合格 → 印、寫 sources-missing、回 1;
+    舊計劃不合格印一行提醒;合格印 ✓;不是計劃(_調研 等)不印。形狀同 _spec_gate_pending:擋回 1、沒事回 None。"""
+    n = env.notes.get(rel)
+    if not _plan_sources_applies(rel, n):
+        if n is not None and str(rel).startswith("Projects/") and str(rel).endswith("_計劃.md"):
+            ty = str(n.fields.get("type") or "").strip()
+            if not ty:
+                print("[spec-gate] 依據來源: 開頭欄位讀不到 type(開頭 --- 沒收尾或沒寫 type: project),這次不查")   # 代碼審 r1 邊界席 F4
+            else:   # 寫了但不是 project(Project、plan…):照樣講一句,免得以為查過(代碼審 r2 邊界席 F3)
+                print(f"[spec-gate] 依據來源: 開頭欄位 type 是「{_esc_clean(ty[:30], 30)}」不是 project,這次不查(計劃要寫 type: project)")
+        return None
+    rr = _vault_repo_root(env)
+    nrows, probs, cells = _plan_sources_problems(env, rr, text)
+    if not probs:
+        print(f"[spec-gate] 依據來源: ✓ {nrows} 列")
+        return None
+    if not _plan_sources_is_new(env, rr, rel):
+        print(f"[spec-gate] 依據來源: 舊計劃不擋——{probs[0]}")
+        return None
+    print(f"[spec-gate] 依據來源: ✗ — {len(probs)} 處不合:")
+    for x in probs:
+        print(f"    • {x}")
+    print(f"    範例:{_PLAN_SOURCES_EXAMPLE}{_PLAN_SOURCES_EXAMPLE_NOTE}")
+    _plan_sources_block_event(rr, rel, f"{rel}:" + ";".join(probs)[:300], cells, probs)
+    return 1
 
 
 def _test_exists_before(rr, commit, name):
@@ -15611,6 +16156,9 @@ def _spec_gate_front(env, node, no_run):
     pq_rc = _spec_gate_pending(env, rel, text)   # 待決問題:判門之後、條款與 --no-run 之前(待決問題改存開頭欄位_計劃 S1)
     if pq_rc is not None:
         return pq_rc
+    src_rc = _spec_gate_sources_part(env, rel, text)   # 〈依據來源〉:待決問題之後、條款綁定之前,不看門與條款(計劃依據來源必填_計劃 範圍 1)
+    if src_rc is not None:
+        return src_rc
     door = judged["door"]
     rc, rows_b = _spec_gate_clause_part(env, text, rel, rr, door=door)
     if rc is not None:
@@ -16679,6 +17227,31 @@ def _spec_gate_push_scan(env, rr, plans, git_range, touched_plans=()):
 
 _EXPECTED_PUSH_TAG = "[預期值表] "
 _SPEC_GATE_PUSH_LEDGER_TAG = "[帳] "     # 推送前規格閘讀不動審查帳或治理帳:整份判不了,標題不講風險高低
+_SOURCES_PUSH_TAG = "[依據來源] "        # 推送前重查新計劃的〈依據來源〉(計劃依據來源必填_計劃 範圍 2):標題講依據來源,不講風險高低
+
+
+def _spec_gate_push_sources(env, rr, vrel, touched):
+    """推送前重查〈依據來源〉:只看這次範圍裡檔案本身被改到的計劃(_plan_sources_applies;不看狀態、不走 _spec_gate_push_candidates 的連結候選,
+    別人的計劃不擋你),判成新計劃又不合格的 → 原因(開頭 _SOURCES_PUSH_TAG)並寫 sources-missing(stage=push)。計劃文字讀工作目錄(同預期值表簽核那圈)。"""
+    bad, head = [], _plan_head(rr)   # HEAD 整圈只問一次
+    for prel in sorted(_spec_gate_touched_plans(vrel, touched)):
+        n = env.notes.get(prel)
+        if not _plan_sources_applies(prel, n):   # 這次被刪、不是 _計劃.md、或不是 type: project 的不查
+            continue
+        q = _sh_quote(Path(prel).stem)
+        try:
+            text = (env.vault / prel).read_text(encoding="utf-8-sig")
+        except (OSError, UnicodeDecodeError) as e:
+            bad.append(f"{_SOURCES_PUSH_TAG}{prel}:計劃讀不成文字({e.__class__.__name__}),判不了〈依據來源〉")
+            continue
+        _nrows, probs, cells = _plan_sources_problems(env, rr, text, head)
+        if not probs or not _plan_sources_is_new(env, rr, prel, head):
+            continue
+        why = (f"{prel}:新計劃的〈依據來源〉不合格——" + ";".join(probs[:5]) + (f"(另有 {len(probs) - 5} 處)" if len(probs) > 5 else "")
+               + f";補好後跑 lumos spec-gate {q} 看這一節")
+        _plan_sources_block_event(rr, prel, why[:400], cells, probs, stage="push")
+        bad.append(_SOURCES_PUSH_TAG + why)
+    return bad
 
 
 def _expected_push_one(env, rr, prel, ctx):
@@ -16723,6 +17296,11 @@ def _spec_gate_push_bad_head(bad):
     """推送前規格閘擋下的標題:帳讀不到(整份檢查判不了,不分風險高低)講判不了;有預期值表簽核的原因就連風險高一起講;否則照舊只講風險低。"""
     if any(x.startswith(_SPEC_GATE_PUSH_LEDGER_TAG) for x in bad):
         return "帳讀不到,這次推送碰到的計劃判不了:"
+    src = sum(1 for x in bad if x.startswith(_SOURCES_PUSH_TAG))
+    if src and src == len(bad):
+        return f"{src} 份新計劃的〈依據來源〉不合格(每個機制一列,出處要讀者查得到):"
+    if src:
+        return f"{len(bad)} 項沒過(新計劃的〈依據來源〉{src} 份;另有風險低計劃的留痕與測試或風險高計劃的預期值表簽核):"
     if any(x.startswith(_EXPECTED_PUSH_TAG) for x in bad):
         return f"{len(bad)} 份計劃沒過(風險低計劃的留痕與測試、風險高計劃的預期值表簽核):"
     return f"{len(bad)} 份風險低計劃沒過(風險低不派審,推送閘是它唯一的閘):"
@@ -16753,19 +17331,22 @@ def _spec_gate_push_check(env, git_range, repo=None):
         return 0
     touched = [nfc(ln.strip()) for ln in r.stdout.splitlines() if ln.strip()]
     _pq_push_remind(env, rr, vrel, touched, git_range)   # 只提醒、不改回傳碼(待決問題改存開頭欄位_計劃 S1)
+    src_bad = _spec_gate_push_sources(env, rr, vrel, touched)   # 〈依據來源〉另開一圈:範圍裡被改到的新計劃,不看狀態(計劃依據來源必填_計劃 範圍 2)
     plans = _spec_gate_push_candidates(env, rr, vrel, touched)
-    if not plans:
-        return 0
-    bad, oks = _spec_gate_push_scan(env, rr, plans, git_range, _spec_gate_touched_plans(vrel, touched))
-    if bad is None:
-        return 0
+    bad, oks = _spec_gate_push_scan(env, rr, plans, git_range, _spec_gate_touched_plans(vrel, touched)) if plans else ([], [])
+    if bad is None:   # 測試跑不了、輕量審也沒擋:那一圈放行;〈依據來源〉照擋
+        bad, oks = [], []
+    bad = src_bad + bad
     if not bad and oks and all(mo for _p, mo in oks):   # 計劃風險低+全靠人驗+小改動閘過 → 改動風險分級 light(2026-09-18 Enzo 裁;pitfalls/code-loop 都是 vault-free,只有這裡有圖譜)
         print(f"{P} 改動風險分級:light(計劃風險低且全靠人驗,小改動閘通過:{'、'.join(Path(p).stem for p, _m in oks)})——代碼審只派架構對齊席;lumos loop next <編號> --tier light")
     if bad:
         print(f"{P} ✗ — {_spec_gate_push_bad_head(bad)}")
         for x in bad:
             print(f"    • {x}")
-        print("    規格閘要紅、推送閘要綠,兩頭夾住:把條款的測試做綠再推;留痕過期就重跑 lumos spec-gate <計劃>")
+        if any(not x.startswith(_SOURCES_PUSH_TAG) for x in bad):
+            print("    規格閘要紅、推送閘要綠,兩頭夾住:把條款的測試做綠再推;留痕過期就重跑 lumos spec-gate <計劃>")
+        if any(x.startswith(_SOURCES_PUSH_TAG) for x in bad):
+            print(f"    〈依據來源〉每個機制一列,出處寫網址、repo 內存在的檔、節點連結、使用者原話或實測;範例:{_PLAN_SOURCES_EXAMPLE}{_PLAN_SOURCES_EXAMPLE_NOTE}")
         return 1
     return 0
 
@@ -37647,6 +38228,55 @@ def cmd_anchor_approve(repo=None, note=None, vault=None):
     return 0
 
 
+def _repo_ref_token_unsafe(token):
+    """repo 內檔案指涉的消毒(_validate_repo_ref 與〈依據來源〉出處判路徑 _plan_src_path_ok 共用):空值、絕對路徑(POSIX 或 Windows)、
+    含 `..` 一段的,一律不算(說明見 _validate_repo_ref)。"""
+    from pathlib import PurePosixPath, PureWindowsPath
+    return (not token or PurePosixPath(token).is_absolute() or PureWindowsPath(token).is_absolute()
+            or ".." in PurePosixPath(token).parts)
+
+
+_REPO_REF_LINE_RE = re.compile(r"(\d{1,9})(?:-(\d{1,9}))?")   # 行號至多 9 位:int() 對 4300 位以上的字串丟 ValueError(Python 3.11 起),
+                                                           # 超長數字原本讓規格閘、推送前、健檢整個崩潰(代碼審 code-計劃依據來源必填 r3 邊界席 F1)
+
+
+def _repo_ref_source_lines(text):
+    """檔案文字 → 行清單;★行數算法只有這一份★(_validate_repo_ref 與〈依據來源〉的 _plan_blob 共用;代碼審 code-計劃依據來源必填
+    r3 架構對齊席 F2:原本兩邊各寫一份、只靠註解說一致)。CRLF、CR 當換行(讀取層已正規化的再做一次也一樣),
+    結尾換行不多算一行、最後一行沒換行照算一行,空檔 0 行;其他 splitlines 分隔符仍是來源字元。None 回 None。"""
+    if text is None:
+        return None
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    if lines[-1] == "":
+        lines.pop()  # 只移除末尾換行哨兵;空檔與真實空白行分開。
+    return lines
+
+
+def _repo_ref_source_line_count(text):
+    """_repo_ref_source_lines 的只計數版:回 len(_repo_ref_source_lines(text)),不建行清單(代碼審 code-計劃依據來源必填 r4 資源席 F1:
+    大檔建一份行清單,記憶體是只計數的好幾倍)。語意跟它同一份:CRLF 算一個換行、單獨的 CR 與 LF 各算一個,結尾換行不多算一行、
+    空檔 0 行、其他 splitlines 分隔符不算。text 可以是 str 或 bytes(UTF-8 的 CR、LF 不會出現在多位元組字元裡,直接數位元組跟先解碼一樣)。
+    None 回 None。"""
+    if text is None:
+        return None
+    cr, lf = ("\r", "\n") if isinstance(text, str) else (b"\r", b"\n")
+    if not text:
+        return 0
+    crlf = text.count(cr + lf)
+    breaks = text.count(cr) + text.count(lf) - crlf
+    return breaks + 1 - (1 if text[-1:] in (cr, lf) else 0)
+
+
+def _repo_ref_line_span(line, n):
+    """`行` 或 `起-迄` 在 n 行的檔裡合不合格:回 (起, 迄);★範圍判斷只有這一份★(_validate_repo_ref 與 _plan_src_path_ok 共用)。
+    寫法不是數字、位數超過 9 位、0、倒序、超出檔尾、n 是 None(讀不到)都回 None。"""
+    m = _REPO_REF_LINE_RE.fullmatch(str(line or "").strip())
+    if m is None or n is None:
+        return None
+    lo, hi = int(m.group(1)), int(m.group(2) or m.group(1))
+    return (lo, hi) if 1 <= lo <= hi <= n else None
+
+
 def _validate_repo_ref(repo_root, token, line, at_sha=None):
     """驗一條 repo 內檔案指涉:回 (status, excerpt)。status ∈ missing/line_out_of_range/ok。
     _refcheck_scan 與 check_regen_provenance(Check J 的 [src:] 驗證)共用——
@@ -37655,20 +38285,9 @@ def _validate_repo_ref(repo_root, token, line, at_sha=None):
     token 消毒(code-review blocker 修):空/絕對路徑/含 .. 一律 missing——top_dirs 過濾
     被拆掉時它隱含的安全性(空值/絕對/traversal 天然進不了 top_dirs)必須在此顯式補回,
     否則 [src: ]/[src:/etc/passwd]/[src:../..] 會 resolve 到 repo 外真實存在的路徑而判 ok。"""
-    def source_lines(text):
-        # 讀取層已正規化 CR/CRLF；其他 splitlines 分隔符仍是來源字元。
-        if text is None:
-            return None
-        lines = text.split("\n")
-        if lines[-1] == "":
-            lines.pop()  # 只移除末尾換行哨兵；空檔與真實空白行分開。
-        return lines
-
+    source_lines = _repo_ref_source_lines
     token = token.strip()
-    from pathlib import PurePosixPath, PureWindowsPath
-    if (not token
-            or PurePosixPath(token).is_absolute() or PureWindowsPath(token).is_absolute()
-            or ".." in PurePosixPath(token).parts):
+    if _repo_ref_token_unsafe(token):
         return "missing", ""
     # at_sha 給了就對那個 commit 的 git 樹驗,不看工作樹(表態閘 2026-09-09,r3 架構對齊席 A3:同一件事同一個入口,
     # 別在 code-loop 那邊另造一套);三態語意(missing/line_out_of_range/ok)兩條路一致。
@@ -37679,28 +38298,24 @@ def _validate_repo_ref(repo_root, token, line, at_sha=None):
             return "ok", ""
         txt = _git_tree_text(repo_root, at_sha, token)
         file_lines = source_lines(txt)
-        if "-" in line:
-            lo, hi = (int(x) for x in line.split("-", 1))
-        else:
-            lo = hi = int(line)
-        if file_lines is None or lo < 1 or hi < lo or lo > len(file_lines) or hi > len(file_lines):
+        span = _repo_ref_line_span(line, None if file_lines is None else len(file_lines))
+        if span is None:
             return "line_out_of_range", ""   # r1 邊界席 f1:10-5 / 5-0 這種範圍以前會 IndexError 或負索引繞回
+        lo, hi = span
         return "ok", (file_lines[lo - 1] if lo == hi else file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1])
     target = repo_root / token
     if not target.exists():
         return "missing", ""
     if target.is_dir() or not line:
         return "ok", ""
-    if "-" in line:
-        lo, hi = (int(x) for x in line.split("-", 1))
-    else:
-        lo = hi = int(line)
     try:
         file_lines = source_lines(target.read_text(encoding="utf-8-sig", errors="replace"))
     except OSError:
         file_lines = None
-    if file_lines is None or lo < 1 or hi < lo or lo > len(file_lines) or hi > len(file_lines):
+    span = _repo_ref_line_span(line, None if file_lines is None else len(file_lines))
+    if span is None:
         return "line_out_of_range", ""
+    lo, hi = span
     if lo == hi:
         return "ok", file_lines[lo - 1]
     return "ok", file_lines[lo - 1] + "\n…\n" + file_lines[hi - 1]
