@@ -133365,6 +133365,74 @@ def t_stop_lint_turn_start():
         _sh.rmtree(base, ignore_errors=True)
 
 
+def t_stop_lint_hook_codex_turn_id():
+    """[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] S12 Codex 那半:Codex 的送出提示與收工事件沒有 prompt_id、帶 turn_id
+    (官方 codex-rs/core/src/hook_runtime.rs 兩事件都取 turn_context.sub_id),鉤子改認 turn_id 當回合編號:只帶 turn_id 的回合
+    記得到起點、收工照擋並以它記帳;turn_id 對不上照舊不檢查;兩個都有時以 prompt_id 為準。判準來源:官方原始碼,不是本機實測。
+    翻紅釘:_turn_key 只認 prompt_id → ①②紅;改成 turn_id 優先 → ④紅;對不上照擋 → ③紅;送出提示不保留同回合起點 → ⑤同一個 turn_id 紅;
+    不管回合編號一律保留 → ⑤換 turn_id 紅;認領名額不看回合編號 → ⑥紅;讀起點紀錄不接壞檔 → ⑦紅。"""
+    print("t_stop_lint_hook_codex_turn_id")
+    import json as _j
+    import shutil as _sh
+    base = Path(tempfile.mkdtemp(prefix="gctl-slhc-"))
+    try:
+        fb = base / "fake"
+        env, home, repo, _lbin = _slh_env(fb)
+        f = home / ".cache" / "lumos" / "stop-turn" / "cx1"
+
+        def stop_with(pl, batch):
+            _slh_plan(fb, {"lint": {"rc": 1, "stdout": _slh_lint_json(batch, [_slh_item()])}})
+            return _slh_run(dict({"hook_event_name": "Stop", "cwd": str(repo), "stop_hook_active": False}, **pl), env)
+        r = _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx1", "turn_id": "t-1", "cwd": str(repo)}, env)
+        rec = _j.loads(f.read_text(encoding="utf-8")) if f.is_file() else {}
+        check("①只帶 turn_id 的送出提示 → 起點記下這個回合編號", rec.get("prompt_id") == "t-1" and r.returncode == 0, f"{rec} {r.stderr[-200:]}")
+        r = stop_with({"session_id": "cx1", "turn_id": "t-1"}, "ccccccccccccccc1")
+        b = _slh_block(r)
+        recs = [c for c in _slh_calls(fb) if "--record-stop-block" in c["argv"]]
+        check("②同一個 turn_id 收工、有新增告警 → 擋下並以 turn_id 記帳", b is not None and b["reason"].startswith("LUMOS-STOP-LINT:")
+              and len(recs) == 1 and "t-1" in recs[0]["argv"], f"{r.stdout[-200:]} {r.stderr[-300:]} {recs}")
+        r = stop_with({"session_id": "cx1", "turn_id": "t-9"}, "ccccccccccccccc2")
+        check("③turn_id 對不上 → 不檢查、印沒記到起點", _slh_block(r) is None and "沒記到起點" in r.stderr, r.stderr[-200:])
+        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx2", "prompt_id": "p-1", "turn_id": "t-a", "cwd": str(repo)}, env)
+        r = stop_with({"session_id": "cx2", "prompt_id": "p-1", "turn_id": "t-b"}, "ccccccccccccccc3")
+        check("④兩個都有時以 prompt_id 為準(turn_id 不同照擋)", _slh_block(r) is not None, r.stdout[-200:] + r.stderr[-200:])
+        # ⑤ 代碼審 r1 審查席 F1:Codex 回合中途插話以同一個 turn_id 再送一次送出提示(官方 core/src/session/turn.rs 的 steer 走同一個
+        # turn_context),起點時刻不准被往後蓋——不然插話前改的檔早於起點、收工不查
+        f3 = home / ".cache" / "lumos" / "stop-turn" / "cx3"
+        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx3", "turn_id": "t-s", "cwd": str(repo)}, env)
+        t_first = float(_j.loads(f3.read_text(encoding="utf-8"))["t"])
+        import time as _t
+        _t.sleep(0.05)
+        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx3", "turn_id": "t-s", "cwd": str(repo), "prompt": "插話"}, env)
+        check("⑤同一個 turn_id 再送一次送出提示 → 起點時刻保留第一次的", float(_j.loads(f3.read_text(encoding="utf-8"))["t"]) == t_first,
+              f3.read_text(encoding="utf-8"))
+        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx3", "turn_id": "t-s2", "cwd": str(repo)}, env)
+        check("⑤換了 turn_id(下一回合)→ 起點換成新的", _j.loads(f3.read_text(encoding="utf-8"))["prompt_id"] == "t-s2"
+              and float(_j.loads(f3.read_text(encoding="utf-8"))["t"]) > t_first, f3.read_text(encoding="utf-8"))
+        # ⑥ 代碼審 r1 審查席 F2:Codex 路徑的防無限擋——同一個 turn_id 同一批不重擋、換 turn_id 同一批再擋
+        r = stop_with({"session_id": "cx1", "turn_id": "t-1", "stop_hook_active": True}, "ccccccccccccccc1")   # _slh_plan 會清呼叫紀錄
+        check("⑥同一個 turn_id、同一批 → 不重擋、不記帳", _slh_block(r) is None
+              and not [c for c in _slh_calls(fb) if "--record-stop-block" in c["argv"]], r.stdout[-200:] + str(_slh_calls(fb)[-2:]))
+        _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx1", "turn_id": "t-2", "cwd": str(repo)}, env)
+        r = stop_with({"session_id": "cx1", "turn_id": "t-2"}, "ccccccccccccccc1")
+        check("⑥換 turn_id(下一回合)、同一批 → 再擋", _slh_block(r) is not None, r.stdout[-200:] + r.stderr[-200:])
+        # ⑦ 代碼審 r2 審查二席:起點紀錄壞掉(時刻不合法、深層巢狀 JSON)時,同一個回合編號再送一次送出提示 → 改寫成正的新時刻,不靜默卡住
+        # 不是 JSON 的那一例才走得到 _read_turn_rec 的例外攔截(3.14 解深層巢狀不丟 RecursionError;代碼審 r3 審查三席)
+        for label, junk in (("時刻是負數", '{"prompt_id": "t-j", "t": -1}'), ("深層巢狀", "[" * 100000 + "]" * 100000),
+                            ("不是 JSON", "not json{")):
+            f4 = home / ".cache" / "lumos" / "stop-turn" / "cx4"
+            f4.write_text(junk, encoding="utf-8")
+            r = _slh_run({"hook_event_name": "UserPromptSubmit", "session_id": "cx4", "turn_id": "t-j", "cwd": str(repo)}, env)
+            try:
+                rec4 = _j.loads(f4.read_text(encoding="utf-8"))
+            except (ValueError, RecursionError):
+                rec4 = None
+            check(f"⑦起點紀錄{label} → 送出提示改寫成正的新時刻、rc0", isinstance(rec4, dict) and rec4.get("prompt_id") == "t-j"
+                  and float(rec4.get("t", 0)) > 0 and r.returncode == 0, f"{str(rec4)[:120]} {r.stderr[-200:]}")
+    finally:
+        _sh.rmtree(base, ignore_errors=True)
+
+
 def t_stop_lint_hook():
     """[S6] 新鉤子收到 Stop:回合起點之後改過的 kt 檔有新增告警 → decision block、首行 LUMOS-STOP-LINT:;
     同回合同批不重擋、另一批再擋、第四批不擋、下一回合重算;沒記到起點、對不上、缺 prompt_id 不檢查並印一行;

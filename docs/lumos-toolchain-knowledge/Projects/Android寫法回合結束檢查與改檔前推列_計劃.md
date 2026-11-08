@@ -1,11 +1,11 @@
 ---
 type: project
-status: todo
+status: done
 created: 2026-11-06
 updated: 2026-11-06
 tags:
   - type/project
-  - status/todo
+  - status/done
   - scope/stack-knowledge
 related:
   - "[[Projects/Android寫法寫完當下自動檢查_計劃]]"
@@ -164,7 +164,7 @@ REVISIT:2026-12-15 照〈待解問題〉十一組改寫成完整設計(先查世
   - **結果(2026-11-06)**:匯入本身 3.4、3.6、3.6 毫秒,整個程序 0.03 秒三次——遠低於 0.1 秒,送出提示那條路照原設計匯入共用模組。
 - **E13(實作時跑)ast-grep 給了 `--config` 還讀不讀專案設定**(r2 快照留的說法,S3 要實測一次):臨時 venv 裝 ast-grep 0.51.1,專案根放一份 `sgconfig.yml` 加一條自訂規則。結果:帶 `--config <工具鏈規則包>` 只出規則包的告警、專案那條不出;不帶 `--config` 才吃專案那份。白名單要求恰好一個 `--config` 的理由成立。同次取了一份真 SARIF 當測試假工具的樣本(相對路徑給相對 uri、絕對路徑給百分比編碼的絕對 uri、`-` 開頭的檔名要 `./` 才不被當選項)。
 - **S12 實機驗收(2026-11-06,Claude Code 2.1.319、`claude -p`、sonnet,暫存區實驗專案複本照範本接好、真 ast-grep 0.51.1)**:三次各約 31 到 35 秒(含模型)。三次第一次收工都被擋、原因首行 `LUMOS-STOP-LINT:`、帶檔:行、型錄編號與放行指令;提示裡指定要用 GlobalScope 的兩次,模型續做時選擇照放行指令寫理由放行(之後收工放行);提示說「被擋就照建議修」的那次,續做改成注入的 `applicationScope`、收工放行,全程只擋一次。
-- **Codex(codex-cli 0.160.0,專案層 `.codex/hooks.json` 掛記錄鉤子、`codex exec --dangerously-bypass-hook-trust`)**:送出提示事件**帶 `turn_id`、沒有 `prompt_id`**(鍵:cwd、hook_event_name、model、permission_mode、prompt、session_id、transcript_path、turn_id)。這台帳號試的三個模型都被伺服器拒絕(model_not_found),回合走不到收工,收工事件帶什麼、`turn_id` 對不對得上**沒量到**。照現在的程式,Codex 下收工會因缺 `prompt_id` 一律印「沒記到起點」不檢查(安全但沒作用);要不要改認 `turn_id` 或照 S12 改成不註冊,交編排者裁。
+- **Codex(codex-cli 0.160.0,專案層 `.codex/hooks.json` 掛記錄鉤子、`codex exec --dangerously-bypass-hook-trust`)**:送出提示事件**帶 `turn_id`、沒有 `prompt_id`**(鍵:cwd、hook_event_name、model、permission_mode、prompt、session_id、transcript_path、turn_id)。這台帳號試的三個模型都被伺服器拒絕(model_not_found),回合走不到收工,收工事件帶什麼、`turn_id` 對不對得上**沒量到**。照現在的程式,Codex 下收工會因缺 `prompt_id` 一律印「沒記到起點」不檢查(安全但沒作用);要不要改認 `turn_id` 或照 S12 改成不註冊,交編排者裁。→ 2026-11-08 編排者裁:改認 `turn_id`。這台帳號 Codex 的模型仍全被伺服器拒絕、跑不出回合,改讀官方原始碼 `codex-rs/core/src/hook_runtime.rs`:送出提示與收工兩事件的 `turn_id` 都取 `turn_context.sub_id`,同一回合相同;鉤子的回合編號改成 `prompt_id` 沒有就用 `turn_id`,測試 t_stop_lint_hook_codex_turn_id。在 Codex 上實跑擋下的回頭條件見 [[Systems/回合結束寫法檢查]]。
 - **留到實作時實測、已轉成條款**:Codex 的送出提示與收工事件帶不帶同一個回合編號(既有調研記到 Codex 有 `UserPromptSubmit` 與 `turn_id`,沒實測跟 Stop 對不對得上)→ S12;`lint-new` 的 SIGTERM 收尾、白名單、JSON 要等實作 → S1 到 S4 的測試;ast-grep 給了 `--config` 就不再往上找專案設定(r2 快照的說法)→ S3 實作時實測一次。
 
 ## 實務隱患
@@ -248,7 +248,7 @@ REVISIT:2026-12-15 照〈待解問題〉十一組改寫成完整設計(先查世
 8. 收工點名呼叫的影響分析(`impact --worktree-nofilter`)不用 git diff 算改動行,改成兩版各數每行出現幾次再相減(代碼審 r4 起,線性時間;difflib 最壞平方時間,重複行多的 2 萬行檔實測 57 秒):行序不保留,只移動位置的行不算改動(git diff 會列成一刪一加),新版多出來的行(+)全部排在前面、舊版多出來的(-)排在後面(代碼審 r5 起;原本 - 在前,刪得多的檔會把新增的行截掉),超過 4000 字時先截掉的是被刪的舊行,截掉的那一段跟 git diff 不同(git diff 照 hunk 先刪後加)——主要影響非 pinned 的排名分數;`content:` 事故的比對也吃這段改動內容,邊緣情況可能多或少一筆。先判是不是程式碼才讀內容(`_impact_diff_seed_ok`;它收 .png 這類副檔名,這種檔照讀、受總量上限管,含 NUL 的當二進位、沒有改動行);每支上限 1MB、兩版合計上限 8MB(`_IMPACT_WT_READ_TOTAL`),超過的、路徑含換行或結尾是 CR 的,查詢文字只用路徑、列進 `query_path_only`。
 9. PATH 有空項時,使用者自己打的 git、以及掛鉤第一行的 env bash 本身就可能解到目前目錄,這是環境層缺口,工具只保證自己不再多開一條路(代碼審 r6 起三支 shell 掛鉤在 `set -u` 之後先把 PATH 濾成只剩絕對項,Python 入口在 r5 已由 `_clean_path_env` 洗過;第一行在任何程式碼執行前就被解析,改成 `#!/bin/bash` 會在 bash 不在 /bin 的系統壞掉,所以不改)。
 
-REVISIT:[when-status:Projects/Android寫法回合結束檢查與改檔前推列_計劃=done][by:2027-02-15] 查有沒有接了規則包、卻沒有知識圖譜的 Android 消費專案;有就把決策列改到 `cmd_impact` 找不到圖譜之前也算(天花板 6)
+REVISIT:2027-02-15 查有沒有接了規則包、卻沒有知識圖譜的 Android 消費專案;有就把決策列改到 `cmd_impact` 找不到圖譜之前也算(天花板 6)
 REVISIT:2027-05-06 拿一個消費專案的 kt 檔重量一次觸發字文件頻率,超過 8% 的補進停用字表(天花板 7)
 
 ## 依據來源

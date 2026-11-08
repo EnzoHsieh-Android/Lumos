@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-11-05
-updated: 2026-11-05
+updated: 2026-11-08
 tags:
   - type/project
   - status/done
@@ -67,10 +67,9 @@ RETIRE-IF: `code-loop pass` 被這兩道擋下的治理帳事件連續三個月�
 ## 天花板
 
 1. 機械檢查只在「記通過」那一刻跑;審查迴圈中間的每一輪修補不會自動查,派席前跑 `lint-new --diff` 是手冊建議。
-2. AI 寫完到記通過之間的自動檢查拆到另一份計劃。
+2. AI 寫完到記通過之間的自動檢查拆到 [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]],2026-11-07 上線:每回合收工對這回合改過、還沒提交的 kt 檔跑規則包,有新增告警就擋下;規則細節與限制見 [[Systems/回合結束寫法檢查]]。
 
 REVISIT:2026-12-15 看 `code-loop-pass` 擋下事件與派席前有沒有跑 `lint-new` 的比例,判要不要把派席前那步改成機械擋
-REVISIT:[when-status:Projects/Android寫法回合結束檢查與改檔前推列_計劃=done][by:2027-02-15] 回合結束檢查上線後改寫天花板 2
 
 ## 審計修正紀錄
 

@@ -6,11 +6,11 @@
 """收工寫法檢查:每回合結束時,對「這一回合碰過、還沒提交」的程式碼檔跑規則包,有新增告警就擋下叫它先修。
 
 單源在 [[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 範圍 2 與 [[Systems/回合結束寫法檢查]]。同一支檔註冊兩個事件:
-  UserPromptSubmit:記回合起點 {prompt_id, 時刻} 到 ~/.cache/lumos/stop-turn/<會談>(每次都記、不預篩 repo;不輸出)
+  UserPromptSubmit:記回合起點 {回合編號(prompt_id,Codex 用 turn_id), 時刻} 到 ~/.cache/lumos/stop-turn/<會談>(每次都記、不預篩 repo;不輸出)
   Stop:預篩(repo 根的 .lumos/lint.json 有 ast-grep 字樣)→ 起點對得上 → 呼叫可信 lumos 的 lint-new --worktree → 三件事都成立才擋
 跟收工點名(check-graph-sync.py)並列、各自佔名額各自輸出(官方:同一事件的鉤子並行跑;實驗 E2 兩支 block 理由都送到)。
 
-★防無限擋★(決策 d1):同一回合(prompt_id)同一批告警只擋一次、最多三批,下一回合重算;stop_hook_active 為真照查
+★防無限擋★(決策 d1):同一回合(回合編號:prompt_id,Codex 用 turn_id)同一批告警只擋一次、最多三批,下一回合重算;stop_hook_active 為真照查
 (續做的修正要驗得到);Claude Code 的連續八次續做上限會因呼叫工具歸零,不算兜底。
 ★逾時★:lint-new 在自己的程序群組;到內層時限先 SIGTERM、1 秒寬限讓它自己收,過了就 SIGKILL 它與 --pgid-file 登記的工具群組。
 ★吞掉的逾時與失敗自己記一筆★(_hookevent.mark,單源在 _hookevent.guard 的說明):不記的話 guard 會把它記成 ok,
@@ -216,17 +216,49 @@ def _turn_start(rec):
     return t if math.isfinite(t) and t > 0 else None
 
 
+def _turn_key(payload):
+    """回合編號:Claude Code 帶 prompt_id;Codex 沒有 prompt_id、帶 turn_id——官方原始碼 codex-rs/core/src/hook_runtime.rs
+    送出提示與收工兩個事件都取 turn_context.sub_id,同一回合值相同(2026-11-08 讀 openai/codex 主線;這台帳號 Codex 跑不出回合、沒實測)。
+    兩個都有時以 prompt_id 為準;都沒有回 None(當沒記到起點)。"""
+    for k in ("prompt_id", "turn_id"):
+        v = payload.get(k)
+        if isinstance(v, str) and v:
+            return v
+    return None
+
+
+def _read_turn_rec(path):
+    """讀 stop-turn/<會談> 的起點紀錄 → 解出來的值,讀不到或壞掉回 None(送出提示與收工共用;代碼審 r2 架構對齊席:原本兩處各寫一份)。"""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):      # 深層巢狀的 JSON(代碼審 r2 邊界席 F1)
+        return None
+
+
+def _kept_start(path, key):
+    """既有起點紀錄的回合編號跟這次相同、時刻可用 → 回那個時刻,否則 None。Codex 回合中途插話會以同一個 turn_id 再送一次送出提示
+    (官方 codex-rs/core/src/session/turn.rs 的 steer 走同一個 turn_context;代碼審 code-回合結束檢查認Codex回合 r1 審查席 F1),
+    起點要保留第一次的,不然插話前改的檔早於起點、收工不查。Claude Code 每次送出提示各一個 prompt_id,不會走到這裡。"""
+    if key is None:
+        return None
+    rec = _read_turn_rec(path)
+    return _turn_start(rec) if isinstance(rec, dict) and rec.get("prompt_id") == key else None
+
+
 def _on_prompt(payload, sh):
-    """送出提示:覆寫 stop-turn/<會談>(先寫暫存檔再 os.replace)。會談編號空或目錄不可信就不寫;不輸出、rc0。"""
+    """送出提示:覆寫 stop-turn/<會談>(先寫暫存檔再 os.replace);同一個回合編號再送一次時保留原本的起點時刻(_kept_start)。
+    會談編號空或目錄不可信就不寫;不輸出、rc0。"""
     sid = sh._mark_name(payload.get("session_id") or "")
     if sid is None:
         return 0
     d = sh._cache_dir_under_home("stop-turn", "回合起點紀錄")
     if not sh._stop_dir_ok(d):
         return 0
+    key = _turn_key(payload)
+    t = _kept_start(d / sid, key) or time.time()
     tmp = d / f".{sid}.{os.getpid()}.tmp"
     try:
-        tmp.write_text(json.dumps({"prompt_id": payload.get("prompt_id"), "t": time.time()}), encoding="utf-8")
+        tmp.write_text(json.dumps({"prompt_id": key, "t": t}), encoding="utf-8")   # 鍵名照舊,值是回合編號
         os.replace(tmp, d / sid)
     except OSError:
         try:
@@ -390,13 +422,8 @@ def _on_stop(payload, root):
     if sid is None:
         return 0
     turn_dir = sh._cache_dir_under_home("stop-turn", "回合起點紀錄")
-    rec = None
-    if sh._stop_dir_ok(turn_dir):
-        try:
-            rec = json.loads((turn_dir / sid).read_text(encoding="utf-8"))
-        except (OSError, ValueError, RecursionError):      # 深層巢狀的 JSON(代碼審 r2 邊界席 F1)
-            rec = None
-    pid = payload.get("prompt_id")
+    rec = _read_turn_rec(turn_dir / sid) if sh._stop_dir_ok(turn_dir) else None
+    pid = _turn_key(payload)
     since = _turn_start(rec) if isinstance(rec, dict) else None
     if not isinstance(rec, dict) or not pid or rec.get("prompt_id") != pid or since is None:
         if payload.get("background_tasks") or payload.get("session_crons"):
