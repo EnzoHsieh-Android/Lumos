@@ -48,7 +48,7 @@ RETIRE-IF: 規則包新增的資安規則在樣本外語料量到的誤報超過
    - DATA(秘密、加密、儲存):原始碼裡的秘密(內建 SecretInSource、AuthLeak)、打包私鑰(內建 PackagedPrivateKey)、敏感資料寫進 logcat(資安包 LogInfoDisclosure)、ECB 或沒指定模式的加密(內建 GetInstance;資安包 UnsafeCryptoAlgorithmUsage)、弱雜湊(資安包 VulnerableCryptoAlgorithm)、弱亂數(資安包 WeakPrng;內建 SecureRandom)、全域可讀寫檔(內建 WorldReadableFiles、WorldWriteableFiles、SetWorldReadable)、舊版外部儲存(資安包 InsecureLegacyExternalStorage、SensitiveExternalPath)、寫死金鑰(自寫)。
    - **併進既有列**(型錄規則「同一個錯誤只留一列」):`內建:DataExtractionRules` 併進 DATA-13(那列講的就是 `data_extraction_rules`,級改 `A+D`、通電批次在原有兩段後加「告警帶寫法=批四(CI 範本:Android Lint)」);`資安包:DefaultCleartextTraffic` 併進 API-23(明文 HTTP);`內建:CheckResult` 併進 PERF-36(忽略回傳值,同一個錯誤)。另開不併的:信任使用者憑證跟 API-22(信任所有憑證)後果不同;外露 receiver、content provider 跟 DATA-45(外露 service)各開一列;舊版外部儲存跟 DATA-27(寫死 `/sdcard` 路徑)不是同一個錯誤。
    - **情境怎麼認**:現成規則列寫「形狀:由 Android Lint <檢查 id> 判」(判定是那條檢查做的,型錄只登記);哪些資料算敏感、哪個亂數用在資安場合這類 lint 判不了的語意,不另開情境決策表列(lint 報了就是報了,誤報由專案在 lint 設定關,見範圍 1)。自寫規則列寫「形狀:<規則認的寫法>」。
-   - **通電批次**:現成規則列寫「告警帶寫法=批四(CI 範本:Android Lint)」;會擋的自寫規則列寫「告警帶寫法=批一」;放不接閘的寫「告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)」。
+   - **通電批次**(2026-11-08 起批四寫不寫改以型錄〈接電證據〉節的真跑判定為準,見 [[Projects/型錄接電要附證據_計劃]];下面是本計劃當時的寫法):現成規則列寫「告警帶寫法=批四(CI 範本:Android Lint)」;會擋的自寫規則列寫「告警帶寫法=批一」;放不接閘的寫「告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)」。
    - **實測狀態**:自寫規則列照型錄既有寫法「規則 <id>:樣本實測中壞例、好例不報」,後面接「真實語料:樣本內 N 處誤報 M、樣本外 N 處誤報 M」;現成規則列寫「未測(lint 規則,CI 跑)」。
    - **來源**:每列帶〔查證 2026-11-08:網址〕,網址是那條檢查的官方說明頁或 MASTG 測試頁;實作時逐一 curl 確認頁面存在、等級與預設開關照頁面寫。〈來源縮寫〉加 `ASL`(資安包 README)、`LINTREF`(lint 檢查索引)、`MASTG`(測試索引)。
    - **統計節**:總列數、各類列數、級的組合、規則包等級條數、會擋規則守到的列數,照型錄既有口徑重算;重算的指令(對主表列與 `rules*/` 的 grep 與計數)寫進實作收貨紀錄,不另寫程式。
