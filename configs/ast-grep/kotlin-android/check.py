@@ -114,7 +114,9 @@ B4_DEFAULT_OFF = frozenset((
 # 它 24 條的檢查頁(googlesamples.github.io/android-custom-lint-rules/checks/<id>.md.html)2026-11-08 逐頁看過都沒有 disabled by default,B4_DEFAULT_OFF 不加
 _B4_LINT = re.compile(r"(?:androidx(?:\.[\w.]+)?|內建|資安包|slack|Android Lint):\s*([A-Z][A-Za-z0-9]+)")
 _B4_CR = re.compile(r"cr:compose:([\w-]+)")
-_B4_SKIP = ("待查", "預設關", "相近", "opt-in")
+# 「間接」「相關」「需標註」= 那條現成檢查擋不到這列的壞寫法(2026-11-08 代碼審 code-型錄批一列也寫批四 r1 審查席 F1:TEST-23、UI-1、PERF-2);
+# 「只管…」「只部分涵蓋」= 擋得到其中一部分,照算接電
+_B4_SKIP = ("待查", "預設關", "相近", "opt-in", "間接", "相關", "需標註")
 B4_TAG_LINT = "CI 範本:Android Lint"
 B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
 
@@ -122,7 +124,7 @@ B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
 def batch4_expected_tags(rule_col):
     """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。
     以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、資安包:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
-    而且那段不含待查、預設關、相近、opt-in,規則碼不是 B4_DEFAULT_OFF 才算。"""
+    而且那段不含 _B4_SKIP 裡任一個註記字樣,規則碼不是 B4_DEFAULT_OFF 才算。"""
     lint = cr = False
     for seg in re.split(r"[;；、]", rule_col):
         if any(w in seg for w in _B4_SKIP):
@@ -339,6 +341,19 @@ def _dt_row_lint(get):
     return probs
 
 
+def _batch4_problems(rule_col, batch):
+    """一列的現成規則欄與通電批次 → 第四批標籤的問題(空=對)。不論這列原本標批幾:現成規則欄登了口徑認得的現成檢查,
+    通電批次就要寫「批四(<標籤>)」(批一的列寫成「批一、批四(…)」);口徑判成沒接上的不准寫標籤。原本只判已寫批四的列,
+    批一的列登了 Android Lint 檢查也不會被點到(2026-11-08 量到 11 列;第四批計劃範圍 4 寫「其他列不動」,不是判過這些列不接)。"""
+    want = batch4_expected_tags(rule_col)
+    have = [tag for tag in (B4_TAG_LINT, B4_TAG_CR) if tag in batch]
+    if want and ("批四(" + ";".join(want) + ")" not in batch or "批四(現成規則)" in batch):
+        return ["第四批通電批次要寫「批四(" + ";".join(want) + ")」(照型錄〈輸入與口徑〉的口徑)"]
+    if have and not want:
+        return ["第四批通電批次寫了接電標籤,但口徑判成還沒接上(段裡註記" + "、".join(_B4_SKIP) + ",或規則預設關、沒有規則碼)"]
+    return []
+
+
 def catalog_problems(rules=None):
     """型錄自己的格式檢查(計劃 S3,與第二、三批要的觸發字停用字、出處要求)。不需要 ast-grep。"""
     problems = []
@@ -358,12 +373,7 @@ def catalog_problems(rules=None):
         name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
         if not std or not wire or not batch:
             problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
-        want = batch4_expected_tags(c[5]) if "批四" in batch else []   # 只判第四批的列(批一等照它自己的批次)
-        have = [tag for tag in (B4_TAG_LINT, B4_TAG_CR) if tag in batch]
-        if want and ("批四(" + ";".join(want) + ")" not in batch or "批四(現成規則)" in batch):
-            problems.append((rid, "第四批通電批次要寫「批四(" + ";".join(want) + ")」(照型錄〈輸入與口徑〉的口徑)"))
-        elif have and not want:
-            problems.append((rid, "第四批通電批次寫了接電標籤,但口徑判成還沒接上(預設關、opt-in、待查或沒有規則碼)"))
+        problems += [(rid, p) for p in _batch4_problems(c[5], batch)]
         if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
             problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
         if kind.startswith("語意"):

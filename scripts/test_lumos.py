@@ -129127,7 +129127,7 @@ def t_kt_catalog_unverified_rows():
 
 def t_kt_catalog_batch4_wiring():
     """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;
-    預設關、opt-in、待查的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
+    段裡帶排除註記(check.py 的 _B4_SKIP)或預設關的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
     ck = _ktpack()
     lint, cr = ck.B4_TAG_LINT, ck.B4_TAG_CR
     tags = ck.batch4_expected_tags
@@ -129139,19 +129139,39 @@ def t_kt_catalog_batch4_wiring():
     check("★前置★ Slack 預設關的穩定性檢查 → 不標", tags("slack:ComposeUnstableCollections") == [])
     check("★前置★ 預設關 → 不標", tags("內建:WrongThreadInterprocedural(預設關)") == [])
     check("★前置★ 待查 → 不標", tags("androidx UnnecessaryLambdaCreation 待查") == [])
+    # 代碼審 code-型錄批一列也寫批四 r1 審查席 F1:註記「間接」「相關」「需標註」= 擋不到這列的壞寫法,不算接電;「只管…」照算
+    for w in ("間接", "相關", "需標註"):
+        check(f"r1 折入 段裡註記「{w}」→ 不標", tags(f"內建:WrongThread({w})") == [], str(tags(f"內建:WrongThread({w})")))
+    check("r1 折入 段裡註記「只管…」→ 照算接電", tags("cr:compose:lambda-param-in-effect / LambdaParameterInRestartableEffect(只管 lambda 參數)") == [cr],
+          str(tags("cr:compose:lambda-param-in-effect / LambdaParameterInRestartableEffect(只管 lambda 參數)")))
     check("★前置★ 兩家都有 → 兩個標籤",
           tags("cr:compose:mutable-params-check / MutableParams;slack:ComposeMutableParameters") == [lint, cr])
     probs = [p for p in ck.catalog_problems(ck.load_rules()) if "第四批" in p[1]]
     check("S4 每一列的第四批標籤跟口徑重算一致", probs == [], "\n".join(f"{a}:{b}" for a, b in probs[:15]))
     cat = ck.CATALOG.read_text(encoding="utf-8")
     check("S4 型錄〈輸入與口徑〉寫了這兩個標籤", lint in cat.split("## 來源縮寫")[0] and cr in cat.split("## 來源縮寫")[0], "")
+    # 代碼審 code-型錄批一列也寫批四 r2 審查席 F2、架構對齊席 1:排除字樣只住 _B4_SKIP,給人看的兩個出口(自檢錯誤訊息、型錄口徑句)要列齊
+    msg = " ".join(ck._batch4_problems("內建:WrongThread(相關)", f"告警帶寫法=批一、批四({lint})"))
+    check("★前置★ 註記「相關」卻寫了接電標籤 → 自檢要報", bool(msg), msg)
+    check("r2 折入 自檢錯誤訊息列出口徑的每個排除字樣", all(w in msg for w in ck._B4_SKIP),
+          f"缺 {[w for w in ck._B4_SKIP if w not in msg]}:{msg}")
+    # r3 審查席 F3:只看口徑句那一行(開頭說明別行也有「待查」,整段比對會被遮住)
+    rule_ln = [ln for ln in cat.split("## 來源縮寫")[0].splitlines() if "而且那一段不含" in ln]
+    check("★前置★ 型錄〈輸入與口徑〉恰好一行口徑句", len(rule_ln) == 1, str(len(rule_ln)))
+    check("r2 折入 型錄〈輸入與口徑〉的口徑句列出每個排除字樣", all(f"「{w}」" in rule_ln[0] for w in ck._B4_SKIP),
+          str([w for w in ck._B4_SKIP if f"「{w}」" not in rule_ln[0]]))
     # ★前置★ 自檢真的抓得到:改壞一列的標籤、把不該標的列標上,各要報(沿用 _ktpack(copy=True) 的複本,不碰真檔)
     import re as _re
     rows = cat.splitlines(keepends=True)
     i_tag = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"批四({lint})" in ln)
     i_old = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and "批四(現成規則)" in ln)
+    # 2026-11-08:批一的列登了現成檢查也要寫批四(原本只判已寫批四的列,11 列漏標);拿掉批一後面那段批四要報
+    i_b1 = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"告警帶寫法=批一、批四({lint})" in ln)
+    i_b1cr = next(i for i, ln in enumerate(rows) if _re.match(r"\| [A-Z]+-\d+ ", ln) and f"告警帶寫法=批一、批四({cr})" in ln)
     for name, idx, a, b in (("標籤改回舊值", i_tag, f"批四({lint})", "批四(現成規則)"),
-                            ("不該標的列標成接電", i_old, "批四(現成規則)", f"批四({lint})")):
+                            ("不該標的列標成接電", i_old, "批四(現成規則)", f"批四({lint})"),
+                            ("批一的列拿掉批四", i_b1, f"告警帶寫法=批一、批四({lint})", "告警帶寫法=批一"),
+                            ("批一的列拿掉 compose-rules 那種批四", i_b1cr, f"告警帶寫法=批一、批四({cr})", "告警帶寫法=批一")):
         cp = _ktpack(copy=True)
         mut = rows[:]
         mut[idx] = mut[idx].replace(a, b, 1)
