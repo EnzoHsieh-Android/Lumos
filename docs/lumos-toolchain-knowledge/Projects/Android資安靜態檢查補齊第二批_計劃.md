@@ -95,7 +95,7 @@ REVISIT:2027-05-08 換一批語料(至少三個不是這次出現過的 Kotlin �
 REVISIT:2027-05-08 看 Android Lint 或 Google 資安包有沒有補上 MessageDigest 弱雜湊、一般寫死秘密、RSA 無填充的檢查,有就把 DATA-96、DATA-97、DATA-98 改指現成檢查、自寫規則撤掉
 REVISIT:2027-05-08 查 MASTG 與 Android 官方安全指南有沒有出 LocalServerSocket、自寫 XOR 加密、通知敏感資料的測試頁;有權威出處且寫得出形狀的,開型錄列與不接閘規則
 REVISIT:2026-11-22 型錄〈統計〉的情境決策表那行(證據樣式主寫、例外、兩段都寫(無)的列數 8、31、5)重數對不上,查清口徑後改成程式數得出的值
-REVISIT:2026-12-08 型錄自檢的批四口徑只判「已寫批四的列標籤對不對」,不判「現成規則欄登了 Android Lint 檢查的列一定要寫批四」;2026-11-08 量過全型錄有 11 列會被新判法點到(API-9、STATE-5、UI-1、UI-3、UI-10、UI-16、ARCH-16、ARCH-17、ARCH-44、TEST-23、PERF-2,多半註記只部分涵蓋,疑似第四批刻意只標批一),查第四批計劃的理由後決定改 check.py 還是在口徑寫明例外
+REVISIT:2026-12-08 型錄自檢的批四口徑只判「已寫批四的列標籤對不對」,不判「現成規則欄登了 Android Lint 檢查的列一定要寫批四」;2026-11-08 量過全型錄有 11 列會被新判法點到(API-9、STATE-5、UI-1、UI-3、UI-10、UI-16、ARCH-16、ARCH-17、ARCH-44、TEST-23、PERF-2,多半註記只部分涵蓋,疑似第四批刻意只標批一),查第四批計劃的理由後決定改 check.py 還是在口徑寫明例外 [closed:2026-11-08 查第四批計劃範圍 4 寫明其他列不動,那 11 列沒被判過;型錄自檢改成不論批幾都判,11 列逐列對官方檢查頁後 6 列補成批一、批四,其餘 5 列擋不到該列壞寫法、註記「相關」或「需標註」照標批一]
 REVISIT:2027-05-08 查規則包有沒有開始掃版面 XML;有就把密碼欄 `inputType` 沒帶 textNoSuggestions 寫成規則
 REVISIT:2027-05-08 再用 GitHub 程式搜尋撈 Jackson `enableDefaultTyping`、`activateDefaultTyping` 的 Kotlin 檔;正式碼命中 ≥5 處就開型錄列與不接閘規則
 
