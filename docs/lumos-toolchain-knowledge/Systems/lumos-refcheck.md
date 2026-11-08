@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-02
-updated: 2026-10-15
+updated: 2026-11-08
 self_audit: sonnet/2026-07-24
 about_code_stamp: batch-2026-08-23/2026-08-23/20313a52aa84
 tags:
@@ -24,6 +24,8 @@ summary: |-
   VERIFY:[[2026-07-02_lumos-refcheck]]
   WHY:[2026-10-15 [[Projects/筆記指令健檢與規格閘小修_計劃]]]refcheck 認三種不是真不存在的路徑:反引號後面緊接(新增)的列 planned、被 git 忽略的執行期檔列 ignored,兩種都不算 missing、不讓回傳碼變 1;一行指令(第一個詞是存在的路徑、第二個詞不像路徑——不含 / 也沒有副檔名,代碼審 r2)只核對第一個詞,帶空白的路徑照整串核對(_node_code_ref_tokens 的 cmdline 選項,預設關、推筆記與每支檔有家不受影響);doctor P 段用同一組 _planned_ref_tokens、_ref_cmdline_token、_git_ignored [出處:web 示範前端新專案每個路徑都是新的,每輪派工要手動說明] [因:refcheck 只核對存在,分不出打錯字與還沒建] [test:t_refcheck_planned_path]
   WHY:[2026-10-15 代碼審 code-筆記指令健檢與規格閘小修 r3]一行指令的判法再收:第一個詞要是存在的檔案(資料夾開頭的帶空白路徑照整串核對),大寫開頭接小寫的限定名(Env.run)不算副檔名路徑、全大寫的 README.md 照算檔名 [出處:代碼審 r3 正確性、邊界席:src/app notes 被截成存在的資料夾] [因:資料夾不會是指令] [test:t_ref_path_dir_first_word_is_path]
+  PITFALL:效能測試用牆鐘時間配絕對門檻,在 CI 16 份切片同時跑時被排隊時間拉長而誤判紅(t_refcheck_planned_many_paths_linear 牆鐘 8.27 秒、本機同一版三次都在 4 秒內) [出處:2026-11-08 #183 合併後主線 CI 切片 5/6] [根因:牆鐘時間含機器忙時的排隊,不只程式自己用掉的時間] [修法:改量子程序 CPU 時間(resource.getrusage RUSAGE_CHILDREN 前後相減),門檻照舊;每 20 個缺檔重算一次集合的改壞量到 10.27 秒會紅] [test:t_refcheck_planned_many_paths_linear] [同族:測試總檔另有約 120 處牆鐘時間配絕對門檻的斷言,多數在同一程序內量,2026-11-08 前沒見過 CI 誤判,這次只改實際紅的這支]
+  REVISIT:2026-12-08 數主線 CI 一個月內因牆鐘時間門檻判紅的測試,出現第二支就把同族整批改成量 CPU 時間或比較放大輸入後的倍數
 decisions:
   - content: 抽取邏輯從 Check P 複製而非抽共用 helper;去重粒度 (token,line) 與 Check P 的 token 級刻意分歧
     id: d1

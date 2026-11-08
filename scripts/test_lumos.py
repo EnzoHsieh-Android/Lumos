@@ -112458,16 +112458,18 @@ def t_lint_excluded_line_many_spaces_fast():
 
 def t_refcheck_planned_many_paths_linear():
     """[代碼審 r1 資2] 一份文件 8000 條標了新增的路徑加 8000 條不存在的路徑:refcheck 在 4 秒內跑完(標了新增的集合只算一次;
-    舊寫法每個缺檔重算一次集合,8000 條實測 9 秒)。"""
-    import time as _t
+    舊寫法每個缺檔重算一次集合,8000 條實測 9 秒)。量的是子程序實際用掉的 CPU 時間、不是牆鐘時間:2026-11-08 主線 CI 16 份切片
+    同時跑,牆鐘量到 8.27 秒判紅,本機同一版連跑三次都在 4 秒內(機器忙時排隊的時間不算程式慢)。"""
+    import resource as _rs
     root = _rp_repo()
     md = root / "plan.md"
     md.write_text("".join(f"`src/new_{i}.py`(新增)\n`src/gone_{i}.py`\n" for i in range(8000)), encoding="utf-8")
-    t0 = _t.monotonic()
+    r0 = _rs.getrusage(_rs.RUSAGE_CHILDREN)
     rc, st, d = _rp_refcheck(root, md)
-    dt = _t.monotonic() - t0
+    r1 = _rs.getrusage(_rs.RUSAGE_CHILDREN)
+    dt = (r1.ru_utime - r0.ru_utime) + (r1.ru_stime - r0.ru_stime)
     check("①計數對", d.get("planned") == 8000 and d.get("missing") == 8000, str({k: d.get(k) for k in ("planned", "missing")}))
-    check("②4 秒內跑完", dt < 4.0, f"{dt:.2f}s")
+    check("②子程序 CPU 時間 4 秒內", dt < 4.0, f"{dt:.2f}s")
 
 
 def t_spec_gate_pick_bad_ts():
