@@ -1,0 +1,83 @@
+"""形狀列補規則的語料撈取:GitHub 程式碼搜尋 → 清單 → 依 blob sha 下載。
+用法:python3 -I fetch.py <輸出目錄> <排除 repo 清單檔>
+可續跑:做完的 (查詢, 頁) 記在 done.txt,清單已有的 (規則, sha) 不重記;每頁印一行進度。
+被速率限制擋時照 rate_limit 的重置時間等;422(超過搜尋可翻的範圍)就換下一組查詢。"""
+import json, subprocess, sys, time, base64, os
+OUT, EXCL = sys.argv[1], sys.argv[2]
+QUERIES = {
+  "kt-map-await-deferred": ['"map { it.await() }" language:Kotlin', '".await() }" "map {" "Deferred" language:Kotlin'],
+  "kt-compose-dispose-not-needed": ['"onDispose { }" language:Kotlin', '"onDispose {}" language:Kotlin'],
+  "kt-hilt-binding-missing-qualifier": ['"@Provides" "@Named" language:Kotlin', '"@Qualifier" "@Provides" language:Kotlin', '"@Binds" "@Named" language:Kotlin'],
+  "kt-hilt-entrypoint-accessor-mismatch": ['"EntryPointAccessors.fromApplication" language:Kotlin', '"EntryPointAccessors.fromActivity" language:Kotlin',
+                                           '"EntryPointAccessors.fromFragment" language:Kotlin', '"EntryPointAccessors.fromView" language:Kotlin'],
+}
+def log(*a):
+    print(*a, file=sys.stderr, flush=True)
+excl = set(l.strip().lower() for l in open(EXCL, encoding="utf-8") if l.strip())
+def wait_reset(kind):
+    r = subprocess.run(["gh", "api", "rate_limit"], capture_output=True, text=True)
+    try:
+        res = json.loads(r.stdout)["resources"][kind]
+        if res["remaining"] == 0:
+            w = max(5, res["reset"] - int(time.time()) + 3); log(f"  速率限制 {kind},等 {w} 秒"); time.sleep(w); return
+    except Exception:
+        pass
+    log("  次要速率限制或其他錯誤,等 90 秒"); time.sleep(90)
+def gh(args, kind):
+    for attempt in range(6):
+        r = subprocess.run(["gh", "api", "-X", "GET"] + args, capture_output=True, text=True)
+        if r.returncode == 0:
+            return json.loads(r.stdout)
+        err = (r.stderr or "")[:200].replace("\n", " ")
+        log(f"  失敗({attempt + 1}):{err}")
+        if "422" in err or "Cannot access beyond" in err:
+            return "stop"
+        wait_reset(kind)
+    return None
+os.makedirs(OUT, exist_ok=True)
+tsv = os.path.join(OUT, "corpus.tsv"); donef = os.path.join(OUT, "done.txt")
+seen = set()
+if os.path.exists(tsv):
+    for ln in open(tsv, encoding="utf-8"):
+        p = ln.rstrip("\n").split("\t")
+        if len(p) == 5: seen.add((p[0], p[3]))
+done = set(open(donef, encoding="utf-8").read().splitlines()) if os.path.exists(donef) else set()
+lst = open(tsv, "a", encoding="utf-8"); dn = open(donef, "a", encoding="utf-8")
+for rid, qs in QUERIES.items():
+    for q in qs:
+        for page in range(1, 11):
+            key = f"{q}\t{page}"
+            if key in done:
+                continue
+            d = gh(["search/code", "-f", f"q={q}", "-f", "per_page=100", "-f", f"page={page}"], "code_search")
+            time.sleep(7)
+            if d == "stop" or not d:
+                log(f"{rid} | {q} | 第 {page} 頁:停({d!r:.10})"); break
+            new = 0
+            for it in d.get("items", []):
+                repo = it["repository"]["full_name"]
+                if repo.lower() in excl or (rid, it["sha"]) in seen:
+                    continue
+                seen.add((rid, it["sha"])); new += 1
+                lst.write(f"{rid}\t{repo}\t{it['path']}\t{it['sha']}\t{q}\n")
+            lst.flush(); dn.write(key + "\n"); dn.flush()
+            log(f"{rid} | {q} | 第 {page} 頁:{len(d.get('items', []))} 筆,新增 {new}")
+            if len(d.get("items", [])) < 100:
+                break
+blobs = {}
+for ln in open(tsv, encoding="utf-8"):
+    rid, repo, path, sha, q = ln.rstrip("\n").split("\t")
+    blobs.setdefault(sha, (repo, path))
+log(f"下載 {len(blobs)} 支檔")
+n = 0
+for sha, (repo, path) in blobs.items():
+    dst = os.path.join(OUT, "files", sha + ".kt")
+    if os.path.exists(dst):
+        continue
+    d = gh([f"repos/{repo}/git/blobs/{sha}"], "core")
+    if not isinstance(d, dict):
+        continue
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    open(dst, "wb").write(base64.b64decode(d["content"])); n += 1
+    if n % 200 == 0: log(f"  已下載 {n}")
+log("done")

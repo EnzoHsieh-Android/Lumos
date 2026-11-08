@@ -1,0 +1,321 @@
+diff --git a/configs/ast-grep/kotlin-android/rules/architecture.yml b/configs/ast-grep/kotlin-android/rules/architecture.yml
+index b0f88323a..f5da754d5 100644
+--- a/configs/ast-grep/kotlin-android/rules/architecture.yml
++++ b/configs/ast-grep/kotlin-android/rules/architecture.yml
+@@ -594,41 +594,42 @@ rule:
+   has:
+     kind: variable_declaration
+     regex: ':\s*(\w*Activity|\w*Fragment|\w*View)\??$'
+   inside:
+     kind: class_body
+     inside:
+       any:
+         - kind: companion_object
+         - kind: object_declaration
+ ---
+-# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:只列出不擋(樣本外 68 處抽 40 處誤報 0;出處是建議語氣 As a best practice … error-prone,只放 warning)。
++# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:會擋(樣本外 68 處抽 40 處誤報 0;原文寫明後果 could result in Hilt injecting the wrong dependency)。
+ # 同一個 module 裡同型別的綁定,有的確定有限定詞、有的確定沒有,報沒有的那幾個。
+ # 確定有=帶 @Named(…) 或同檔用 @Qualifier 宣告的註解;確定沒有=身上的註解全在 plain-provider 清單裡;多重綁定兩邊都不算;其他判不準不報
++# 多重綁定的鍵只認 Dagger 內建的 StringKey、IntKey、LongKey、ClassKey、LazyClassKey(自訂 MapKey 一定配 @IntoMap,已被排除);寫成 \w+Key 會把同檔宣告的 @ApiKey 這類限定詞也排掉
+ id: kt-hilt-binding-missing-qualifier
+ language: kotlin
+ severity: warning
+ message: '[ARCH-59]同型別有多個綁定,這個沒加限定詞,Hilt 可能注入錯的實例;改成每個綁定都加限定詞'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ utils:
+   plain-provider:
+     kind: modifiers
+     regex: '\A(\s*(@(Provides|Binds|Singleton|Reusable|JvmStatic|Suppress|Deprecated|OptIn|[A-Z][A-Za-z]*Scoped)(\([^)]*\))?|public|internal|private|protected|abstract|open|override|suspend)\s*)+\z'
+   binding:
+     kind: function_declaration
+     has:
+       kind: modifiers
+       regex: '@(Provides|Binds)\b'
+     not:
+       has:
+         kind: modifiers
+-        regex: '@(IntoSet|IntoMap|ElementsIntoSet|\w+Key)\b'
++        regex: '@(IntoSet|IntoMap|ElementsIntoSet|StringKey|IntKey|LongKey|ClassKey|LazyClassKey)\b'
+ rule:
+   matches: binding
+   has:
+     matches: plain-provider
+   all:
+     - has:
+         kind: user_type
+         pattern: $T
+   inside:
+     kind: class_body
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md
+index 114c0e8cd..5690317ae 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md
+@@ -10,28 +10,28 @@ tags:
+   - risk/守衛面
+ related:
+   - "[[Projects/Android協程與API寫法機械檢查標準_計劃]]"
+   - "[[Systems/kotlin規則包]]"
+   - "[[Projects/Android資安靜態檢查補齊第三批_計劃]]"
+ lands_in:
+   - Systems/kotlin規則包
+ ---
+ # Android形狀列補規則_計劃
+ 
+-> 白話:型錄裡有 15 列「有出處、看形狀判得出、但還沒有任何檢查」的壞寫法。2026-11-09 逐列查了現成檢查(Android Lint、androidx 各函式庫自帶的 lint、detekt、compose-rules、Slack compose-lints)與權威出處:15 列都沒有 CI 跑得到的現成檢查;其中 4 列出處直接講到那個寫法、而且單一檔案的語法樹就認得出——對 Deferred 清單用 map 逐一 await(API-2)、DisposableEffect 沒有註冊任何東西卻寫了空的 onDispose(UI-33,既有規則 UI-32 管「有註冊卻留空」的那半)、同型別多個 Hilt 綁定只有部分加限定詞(ARCH-59)、EntryPointAccessors 的 fromX 跟 entry point 的 @InstallIn 元件不對應(ARCH-62)。這 4 條寫成 ast-grep 規則,先放只登記不擋的目錄,照前幾批的量法在樣本外量誤報:map 逐一 await 那條誤報 3/40、過條件,推送前會擋;Hilt 限定詞那條誤報 0/40、過條件,但出處是建議語氣,只列出不擋;空 onDispose 那條誤報 6/40、EntryPointAccessors 那條只命中 1 處,都留在只登記。其餘 11 列寫明為什麼不寫(要跨檔、讀 XML 或 Gradle,或出處要推論才接得上)。
++> 白話:型錄裡有 15 列「有出處、看形狀判得出、但還沒有任何檢查」的壞寫法。2026-11-09 逐列查了現成檢查(Android Lint、androidx 各函式庫自帶的 lint、detekt、compose-rules、Slack compose-lints)與權威出處:15 列都沒有 CI 跑得到的現成檢查;其中 4 列出處直接講到那個寫法、而且單一檔案的語法樹就認得出——對 Deferred 清單用 map 逐一 await(API-2)、DisposableEffect 沒有註冊任何東西卻寫了空的 onDispose(UI-33,既有規則 UI-32 管「有註冊卻留空」的那半)、同型別多個 Hilt 綁定只有部分加限定詞(ARCH-59)、EntryPointAccessors 的 fromX 跟 entry point 的 @InstallIn 元件不對應(ARCH-62)。這 4 條寫成 ast-grep 規則,先放只登記不擋的目錄,照前幾批的量法在樣本外量誤報:map 逐一 await 那條誤報 3/40、Hilt 限定詞那條誤報 0/40,都過條件,推送前會擋;空 onDispose 那條誤報 6/40、EntryPointAccessors 那條只命中 1 處,都留在只登記。其餘 11 列寫明為什麼不寫(要跨檔、讀 XML 或 Gradle,或出處要推論才接得上)。
+ 
+ PRIOR-ART: 現成檢查逐列查過(androidx compose/runtime/runtime-lint 16 支、work/work-lint 10 支、navigation-runtime-lint 6 支 Detector,detekt 官方 coroutines 規則集 9 條,compose-rules 與 Slack compose-lints 規則頁),15 列都沒有;API-2 只有 IntelliJ 的 IDE 檢查 MapAwaitOnCollectionOfDeferred,CI 與命令列不跑。UI-33 的另一半(有註冊監聽卻留空 onDispose)規則包已有會擋的 kt-compose-dispose-empty-cleanup(UI-32),本篇只補互補的那半,兩條共用同一份「什麼算註冊」的判斷。型錄 API-2 現成規則欄寫的「detekt SequentialAsyncAwait」在 detekt 規則集查不到,照查證結果更正。量法沿用第一到三批(樣本外語料排除已出現過的 repo,每個 repo 最多抽一處、固定種子抽 40 處,升級條件命中 ≥20、誤報 ≤10%,誤報比例=誤報÷判讀數)與 [[Projects/Android不接閘資安規則重量_計劃]] 的判準 v2 寫法(範例碼只看路徑、排除教材與掃描器固件、同源只抽一處)。規則寫法借規則包既有的 `inside`/`has` 關係規則與 `utils/` 共用判斷,測試擴充既有逐例表,不新增機制。
+ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出了同一種檢查 → 該條自寫規則撤掉、型錄改指現成檢查;會擋的那幾條在消費專案推送前一個月內被放行(lint-waive)超過三成 → 降回只登記重量。
+ 
+ ## 用詞
+ 
+-- **規則包**:`configs/ast-grep/kotlin-android/`。`rules/` 收 error 與 warning 等級,消費專案照範本宣告 `sgconfig.yml`(只含 `rules/`)後,**新增告警閘**(推送前把改動前後各掃一次、只擋這次新增的告警)擋其中 error 等級的新告警;`rules-unwired/` 不在範本宣告裡,只登記、不擋。**lint-waive**:`lumos lint-waive <指紋> --note` 對一筆告警留帳放行。**型錄**:`skills/kotlin-idioms/checks-catalog.md`,每列寫壞寫法、標準寫法、後果、出處;**通電批次欄**寫這列由哪一批接上機械檢查(值的寫法見型錄〈輸入與口徑〉:「告警帶寫法=批一」是會擋的規則已上線、「告警帶寫法=未接(…)」是規則在 `rules-unwired/` 或還沒有規則),**實測狀態欄**寫量過的數字;**〈統計〉**是型錄末尾那一節,規則包條數、各等級條數、不接閘條數、被會擋規則守到的列數、待查證列數由型錄自檢核對;**〈待查證〉**是現成規則欄還寫著「待查」的列的清單。
++- **規則包**:`configs/ast-grep/kotlin-android/`。`rules/` 收 error 與 warning 等級,消費專案照範本宣告 `sgconfig.yml`(只含 `rules/`)後,**新增告警閘**(推送前把改動前後各掃一次、只擋這次新增的告警)擋其中的新告警(error 與 warning 都擋,看的是規則放哪個目錄,不看等級;代碼審 r3 查新增告警閘程式確認);`rules-unwired/` 不在範本宣告裡,只登記、不擋。**lint-waive**:`lumos lint-waive <指紋> --note` 對一筆告警留帳放行。**型錄**:`skills/kotlin-idioms/checks-catalog.md`,每列寫壞寫法、標準寫法、後果、出處;**通電批次欄**寫這列由哪一批接上機械檢查(值的寫法見型錄〈輸入與口徑〉:「告警帶寫法=批一」是會擋的規則已上線、「告警帶寫法=未接(…)」是規則在 `rules-unwired/` 或還沒有規則),**實測狀態欄**寫量過的數字;**〈統計〉**是型錄末尾那一節,規則包條數、各等級條數、不接閘條數、被會擋規則守到的列數、待查證列數由型錄自檢核對;**〈待查證〉**是現成規則欄還寫著「待查」的列的清單。
+ - **單檔語法**:ast-grep 只看一支檔的語法樹,沒有型別資訊、不跨檔、不讀 XML 與 Gradle。
+ - **樣本內**:調規則形狀時看過的語料。**樣本外**:形狀定案後另撈、排除先前出現過的 repo 的語料,判升級只看這一份、只用一次(**保留集**的用法:定案後只用一次、不拿來調形狀)。**升級條件**:樣本外命中 ≥20、誤報 ≤10%。**判讀代理**:派去逐處打開前後文判真問題、誤報、判不準的子代理;**判不準**不算真問題,留在誤報比例的分母。
+ - **限定詞**:Hilt/Dagger 的 qualifier,例如 `@Named("auth")` 或自訂的 `@AuthClient`,用來分辨同型別的多個綁定。
+ - **壞例、好例樣本**:規則包每條規則在 `samples/bad/<id>/` 放至少 2 處會報的寫法、`samples/good/<id>/` 放至少 2 段頂格宣告且一處都不報的寫法(規則包自測的要求);好例裡容易被誤會成壞寫法的,其他規則的好例樣本慣例在註解寫「容易誤報:」。只登記與覆核級規則另可放檔名 `review-fp-` 開頭的樣本,記下**已知會報**的誤報寫法,自測不把它算成好例失敗。
+ - **逐例表**:測試裡寫死「哪支檔、哪段程式、哪條規則、報在哪幾行」的表,預期值不拿規則自己算。
+ 
+ ## 範圍
+ 
+ 1. **四條新規則**(先放 `rules-unwired/`,等級 hint;訊息照規則包既有句式「[型錄編號]錯在哪;改用 …」;路徑排除照既有八項測試碼排除):
+ 
+@@ -44,21 +44,21 @@ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出
+ 
+    - 每條附壞例(至少 2 處)、好例(至少 2 段)樣本;好例裡「不報」的寫法照其他規則好例的慣例寫成「容易誤報:」註解。UI-33 的好例收「有註冊、onDispose 有解除」與改用 LaunchedEffect 的寫法。提早返回或某條分支寫空 `onDispose { }`、別的分支有真正清理時不報:DisposableEffect 規定每條分支都要回傳 onDispose,那支只能寫空的(樣本內調形狀時看到,推翻設計審 r1 放行 f7 時的判斷);全部 onDispose 都空才報。API-2 另放一份 `review-fp-` 樣本,記下 Play services `Task.await()` 這個已知誤報。
+    - ARCH-62 的好例樣本 interface 本體寫成多行(一行寫完會被解析器認錯,見〈實驗〉)。
+ 2. **型錄改寫**:四列的現成規則欄改成型錄既有寫法「自寫 ast-grep <規則 id>」;通電批次的「告警帶寫法=」那段改成「未接(規則在 rules-unwired/:還沒在真專案量過誤報)」,其他段(例如 API-2 的「當下推相關列=批二」)照留;UI-33 的「情境怎麼認」照規則改成「空 onDispose 且區塊內沒有註冊呼叫(有註冊的歸 UI-32)」;ARCH-62 的來源欄補 EntryPointAccessors.kt 的網址;API-1、API-2 兩列都拿掉「detekt SequentialAsyncAwait」(detekt 規則集查不到),API-2 改寫 IntelliJ 檢查名 MapAwaitOnCollectionOfDeferred(只在 IDE 跑,來源欄補它的說明頁網址);API-2 的「待查」字樣因此消失,從〈待查證〉拿掉那一列。〈統計〉跟著改:規則包條數、hint 條數、不接閘條數各加 4(224→228、47→51、25→29)(量完搬到 `rules/` 的再照實改等級條數與被會擋規則守到的列數),待查證與規則代號待查各減 1(51→50、48→47)。量完照第 4 點再改。
+ 3. **其餘 11 列寫明不寫的理由**(實測狀態欄補一句,通電批次不變):API-7、UI-18、UI-51、ARCH-43、ARCH-58、DATA-8、DATA-9、DATA-23、DATA-34、TEST-38、PERF-8。理由分三種:要跨檔或型別(UI-18、DATA-8、DATA-9、DATA-23、DATA-34、PERF-8)、要讀 XML 或 Gradle(ARCH-43、TEST-38)、形狀分不出正當用法或出處要推論(API-7:Flow retry KDoc 只說明不帶次數時預設會一直重試,沒說不帶次數是錯的;「要有上限」寫在另一頁離線優先指南的退避策略裡,要兩頁拼起來才成立,照判法不算直接;UI-51:看不到筆數,官方另說小清單用 Column 加 forEach 是對的;ARCH-58:出處只說注入在 super.onCreate() 發生,沒說之前讀會怎樣)。
+ 4. **量誤報與升級**:每條規則照前幾批的量法量一次:
+    - 語料:用 GitHub 程式碼搜尋撈一份,排除前幾批出現過的 repo;撈到之後、還沒看任何結果之前,依 repo 全名的 sha256 第一個位元組奇偶固定切成兩半。判準先寫定、算雜湊再撈。
+    - 樣本內(偶數那半):看命中、把明顯誤報寫成排除;形狀定案後記規則檔雜湊。
+    - 樣本外(奇數那半):形狀定案後只用一次,判升級只看它。跟「另撈一份」一樣保證調形狀時看過的 repo 不拿來判升級。
+    - 命中多的每個 repo 抽一處、固定種子抽 40 處;命中 20 多處全判。判讀代理乾淨脈絡、照判準逐處判真問題、誤報、判不準。
+-   - 過升級條件的規則搬到 `rules/`、等級改 error,型錄通電批次改「告警帶寫法=批一」,逐例表那條的目錄與檔名跟著改;API-2 若過,`review-fp-` 樣本拿掉(`rules/` 的規則不豁免它),那個已知誤報改寫進型錄實測狀態欄;出處是建議語氣的(UI-33「不是好做法,請重新考慮」、ARCH-59「As a best practice … error-prone」),過了也只搬 `rules/` 的 warning(推送前不擋,只在報告列出),不升 error;沒過的留在 `rules-unwired/`,通電批次改「未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)」,實測狀態欄寫數字。
++   - 過升級條件的規則搬到 `rules/`、等級改 error,型錄通電批次改「告警帶寫法=批一」,逐例表那條的目錄與檔名跟著改;API-2 若過,`review-fp-` 樣本拿掉(`rules/` 的規則不豁免它),那個已知誤報改寫進型錄實測狀態欄;出處只有建議語氣、沒寫後果的(UI-33 只寫「不是好做法,請重新考慮」),過了也只搬提示目錄 `rules-hints/`(hint,範本預設不接,推送前不擋),不放 `rules/`——`rules/` 的 warning 也會擋(代碼審 r3 架構對齊點出,原本誤以為 warning 不擋);ARCH-59 原文除了 As a best practice 也寫明後果 could result in Hilt injecting the wrong dependency,照一般規則放 `rules/`;
+    - 證據放卷證 `governance/review-reports/android形狀列補規則/experiment/`(新增)。
+ 5. **測試**(擴充既有的,不另開):
+    - `t_kotlin_rulepack_security_rules` 的逐例表 `_KTSEC_CASES` 加一個選填的第五欄,照 `_KTSEC_PLACE` 加選填位置欄的先例:值是預期報在哪幾行的 tuple;有這欄就表示本體是完整的 kt 檔(含 package 與頂層宣告),不包進 `fun case(...) { … }`(Kotlin 不准在函式裡宣告 interface)(ast-grep 報的是節點起始行:ARCH-59 報在函式第一個註解那行,API-2 鏈式寫法報在接收者那行)。沒帶第五欄的既有一百多例照舊。
+    - 行號要從 ast-grep 的 JSON 取 `range.start.line`;規則包 `check.py` 的 `scan` 原本只回 (規則, 檔),改成一律回 (規則, 檔, 起始行),兩個既有呼叫端跟著多解一個值(代碼審 r1:不用旗標切換回傳形狀)。
+    - 四條規則加進 `_KTSEC_PLACE`(目錄、檔名、型錄編號、路徑排除),套既有的「目錄、訊息以 [編號] 開頭且不超過 120 字、路徑排除恰好幾項」檢查;同一支測試再驗四列型錄現成規則欄寫著「自寫 ast-grep <規則 id>」而且那個 id 在規則包裡。
+    - 逐例表每個樣式至少一例報:API-2 的 `it` 與具名參數兩式各一;ARCH-62 的四個 fromX 各一例報、一例不報,泛型寫法一例,`@InstallIn` 多元件一例不報;ARCH-59 的「@Named」「同檔 @Qualifier 宣告」各一例報,多重綁定、`@Suppress` 對照組各一例不報;UI-33 的有註冊不報(歸 UI-32)、沒註冊報各一例。
+    - 樣本自測 `t_kotlin_rulepack_samples` 照舊驗壞例報、好例不報。
+    - 統計測試:`_KT_STATS_LINES` 的寫死值照新數改;`_KT_STATS_MUTATIONS` 裡寫死的「待查證:51 列」「50 列」「規則代號待查 48 列」幾個改壞案例的原字串跟著改成新數(不改的話替換找不到原字串、改壞不生效);用 `| API-2 | IJ:「Use awaitAll()` 當錨點的那例,API-2 拿掉後換一列仍在〈待查證〉的當錨點。
+ 6. **圖譜**:[[Systems/kotlin規則包]] 不接閘目錄那行(現在寫共 25 條)的條數與規則清單,新增一條 WHY 記本批的放置與升級條件(記資安各批放置的那條是資安專用,不併進去);[[Projects/Android協程與API寫法機械檢查標準_計劃]] 補一行指向本篇。
+ 
+@@ -72,21 +72,21 @@ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出
+ - ARCH-59:只比對函式宣告直接帶的回傳型別,參數型別不會被當成回傳型別。
+ - GitHub 程式碼搜尋粗估(2026-11-09):`onDispose { }` 約 5976 支檔、`onDispose {}` 約 5416、`.map { it.await() }` 約 2116、`EntryPointAccessors.fromApplication` 約 7936、`fromActivity` 約 343、同檔有 `@Provides` 與 `@Named` 約 10432。這些是呼叫點或關鍵字的檔數,不是壞寫法的命中數:ARCH-62 寫錯元件在執行時就會崩潰,ARCH-59 要同檔同型別才算,真命中可能遠少於 20;不到 20 就照第 4 點留在只登記。
+ 
+ ## 量測結果(2026-11-09)
+ 
+ 語料、切分、掃描、抽樣的程式與結果都在卷證 `experiment/`:`corpus.tsv`(每支檔的 repo、路徑、blob sha、查詢)、`fetch.py.txt`、`pipeline.py.txt`、`summary-A.json` 與 `summary-B.json`、`hits-*.json`、`sample-*.txt`;判準 `judge-criteria.md`(雜湊在 `judge-criteria.sha.txt`,撈語料前寫定);規則定案的雜湊在 `rules-freeze.sha.txt`;判讀原文 `judge-*.md`。
+ 
+ | 規則 | 樣本外檔數 | 命中(合併後;repo 數) | 抽判 | 真問題、誤報、判不準 | 誤報比例(Wilson 95%) | 結果 |
+ |---|---|---|---|---|---|---|
+ | kt-map-await-deferred | 545 | 294(207) | 40 | 36、3、1 | 7.5%(2.6%–19.9%) | 搬 `rules/`、error |
+-| kt-hilt-binding-missing-qualifier | 872 | 68(50) | 40 | 40、0、0 | 0%(0%–8.8%) | 搬 `rules/`、warning(出處是建議語氣) |
++| kt-hilt-binding-missing-qualifier | 872 | 68(50) | 40 | 40、0、0 | 0%(0%–8.8%) | 搬 `rules/`、warning(會擋;原文寫明會注入錯的實例) |
+ | kt-compose-dispose-not-needed | 514 | 311(268) | 40 | 32、6、2 | 15%(7.1%–29.1%) | 留只登記 |
+ | kt-hilt-entrypoint-accessor-mismatch | 512 | 1(1) | — | — | — | 留只登記(不到 20 處) |
+ 
+ - 誤報類:map 那條是 Flow 的 map 2 處(`.asFlow().map { it.await() }`)、範例碼 1 處;空 onDispose 那條是區塊裡其實有該清理的東西 5 處(背景音樂、螢幕常亮、一直跑的協程、掛到 client 的攔截器,名字不在註冊字表裡)、範例碼 1 處。Play services `Task.await()` 這次抽樣沒出現。
+ - 樣本內調形狀一次:空 onDispose 那條改成全部 onDispose 都空才報,樣本內命中 410 → 321。
+ - 樣本外掃描後改一次:EntryPointAccessors 那條的唯一命中用的是 `ApplicationComponent`(SingletonComponent 改名前的舊名,Dagger 2.30 發布說明),規則補認舊名;這條命中不到 20 處、不判升級,改了不影響任何升級判斷,雜湊在 `rules-freeze.sha.txt` 另記。
+ - 語料 5011 支檔撈到 5000 支,其餘 11 支撞到 GitHub API 每小時上限沒抓,全屬 EntryPointAccessors 那條(清單在 `corpus-missing.tsv`)。
+ 
+ ## 依據來源
+ 
+@@ -164,27 +164,28 @@ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出
+ - 規則包:四條新規則與它們的壞例好例樣本、重開的 `rules-unwired/compose.yml`、`utils/` 的註冊判斷;量完搬到 `rules/` 的那幾條。
+ - 型錄:四列的現成規則、通電批次、實測狀態欄;API-1、API-2 的現成規則更正與 API-2 移出〈待查證〉;11 列實測狀態的補句;〈統計〉。
+ - 測試:逐例表的第五欄與新例、`_KTSEC_PLACE` 新增的四筆、統計寫死值與改壞案例的原字串、待查證那支的改壞錨點。
+ - 規則包 `check.py` 的 `scan` 行號參數;UI-32 規則改引共用的註冊判斷(行為不變)。
+ - 圖譜:Systems/kotlin規則包 的不接閘那行;機械檢查標準計劃的指向;本篇。
+ - 卷證留著。
+ 
+ ## 天花板
+ 
+ - 誤報率是 40 處的點估計:map 那條 7.5% 的 Wilson 95% 上界約 20%,搬去會擋之後真專案的誤報可能高於一成。
+-- 單檔語法看不到型別:API-2 會報 Play services `Task`、`ListenableFuture` 這類也有 `await()` 的接收者,也會報型別是 `Flow<Deferred>` 的變數的 map(接收者以 `.asFlow()` 結尾的已排除,變數看不出型別);lambda 第一行是註解、參數寫了型別、`it.await() + 1` 這類寫法不報。
++- 單檔語法看不到型別:API-2 會報 Play services `Task`、`ListenableFuture` 這類也有 `await()` 的接收者,也會報型別是 `Flow<Deferred>` 的變數的 map(接收者以 `.asFlow()` 結尾的已排除,變數看不出型別);lambda 第一行是註解、參數寫了型別、`it.await() + 1`、安全呼叫 `ds?.map { it.await() }` 這類寫法不報。
+ - ARCH-62 不認具名參數、完整套件名的呼叫、巢狀類別名與 import 別名(別名可能誤報);`@InstallIn(` 參數裡夾註解寫了另一個元件名時,會當成有那個元件而漏報;ARCH-59 看不到別的檔宣告的自訂限定詞,只認 `@Named` 與同檔 `@Qualifier`,其餘少報。
+ - ARCH-59、ARCH-62 只看同一支檔:綁定或 entry point 分在不同檔時漏報;一行寫完又掛兩個註解的 interface 或 object 會漏報(解析器限制)。
+ - 誤報只量命中裡的比例,漏報沒量。
+ 
+ REVISIT:2027-02-09 看 kt-map-await-deferred 搬到會擋後三個月,消費專案對它的 lint-waive 放行占新增告警的比例;超過三成照 RETIRE-IF 降回只登記,Flow 的 map(`.asFlow().map { it.await() }`)若是主要放行原因,先試把它寫成排除再重量
+ REVISIT:2027-05-09 空 onDispose 那條:把「區塊裡其實有該清理的東西」的寫法(start/stop、keepScreenOn、無限迴圈協程、掛攔截器)整理成共用註冊判斷的補充字表,換一批語料重量;補了以後同一份判斷也會讓會擋的 UI-32 多抓,要一起量
+ REVISIT:2027-05-09 量一次這四條的漏報:在新語料裡用文字搜尋找出該報沒報的寫法(跨檔的 entry point、分檔的綁定與別檔的自訂限定詞、一行寫完的 interface 與 object、有型別的 lambda 參數),逐處判是不是形狀漏的,寫進型錄實測狀態欄
+ 
+ ## 審計修正紀錄
+ 
++- 代碼審 r3(2026-11-09,兩席):9 條/blocking 2/同一類第三輪被打穿(結構條件 has/not/inside、變數綁定、字邊界、stopBy 沒有例子),上網查 ast-grep 官方規則測試與變異測試的標準算子後,把自動列舉擴到這四類共 102 項:71 項抓到、8 項規則載入不了、7 項是拿掉註解比對開頭 ^ 的等價改壞、16 項缺口補 C202~C217;ARCH-59 的 \w+Key 會吃掉同檔宣告的 @ApiKey 限定詞,改成只認 Dagger 內建的 Key;更正「warning 只列出不擋」的錯誤前提(warning 也擋)。
+ - 代碼審 r2(2026-11-09,兩席):7 條/blocking 2/同一類第二輪被打穿(規則某個樣式或清單選項沒有例子,改壞照綠),換形狀:自動列出四條規則與共用註冊判斷的每個樣式與正規式選項共 51 項逐項拿掉,修前 25 項沒紅,補 C158~C184 後全紅;3 條寫法 minor 附理由放行。
+ - 代碼審 r1(2026-11-09,兩席):11 條/blocking 2/fromFragment、fromView 的元件對應改壞測不到,補三例;測試另寫一套型錄讀法,改用 main_rows;@InstallIn 比對不跨行會誤報,改成可跨行;map 那條把量測時的 `.asFlow()` 誤報寫成排除(只會少報,不影響升級判斷);scan 改成固定回三元組;逐例表選填欄改成位置欄、照編號排;卷證 `governance/review-reports/code-android形狀列補規則/`。
+-- 實作與量測(2026-11-09,沒有派席,記在這裡給代碼審看):樣本內看到空 onDispose 的分支寫法誤報,推翻 r1 放行 f7 時「提早返回照報」的判斷,改成全部都空才報;量完 ARCH-59 過條件,照 UI-33 同一套「建議語氣只升 warning」放 warning(範圍 4 原文只寫 UI-33,這裡擴到同語氣的 ARCH-59);EntryPointAccessors 補認舊名 ApplicationComponent。
++- 實作與量測(2026-11-09,沒有派席,記在這裡給代碼審看):樣本內看到空 onDispose 的分支寫法誤報,推翻 r1 放行 f7 時「提早返回照報」的判斷,改成全部都空才報;量完 ARCH-59 過條件放 `rules/` 的 warning(當時誤以為 warning 不擋,代碼審 r3 更正:warning 也擋,而原文寫明後果,擋是對的);EntryPointAccessors 補認舊名 ApplicationComponent。
+ 
+ - r1(2026-11-09,四席):28 條/blocking 10/ARCH-59 判斷限定詞的方向寫反(清單外的註解當限定詞會多報),改成只認確定的限定詞、多重綁定排除;API-2 拿掉出處沒講到的 forEach;UI-33 改成既有 UI-32 的互補、共用註冊判斷;ARCH-62 的對應改引 Hilt 原始碼 KDoc、加泛型寫法與多元件;測試改成擴充既有逐例表(選填頂層與行號欄)而不另開一支,每個樣式至少一例;統計改壞案例的寫死數字列進範圍;API-2 升級時拿掉 review-fp 樣本、UI-33 最多升 warning。
+ - 席報告與收貨紀錄:`governance/review-reports/android形狀列補規則/`(r1-*.md、r1-intake.md)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 8494a7cfa..f1af041b7 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -54,37 +54,38 @@ summary: |-
+   WHY:資安自寫規則兩批各只有一條放會擋的 rules/api.yml(第一批 kt-webview-file-url-access、第二批 kt-webview-mixed-content-always);第一批 kt-webview-debugging-enabled、kt-insecure-tls-version 放 rules-unwired/api.yml,kt-secretkeyspec-literal-key 放 rules-unwired/data.yml;第二批 kt-loadurl-external、kt-weak-cipher-suite、kt-webview-file-access 放 rules-unwired/api.yml,kt-command-exec-nonliteral、kt-biometric-no-crypto 放 rules-unwired/architecture.yml,其餘 10 條放 rules-unwired/data.yml;第三批 kt-compose-password-keyboard 放會擋的 rules/compose.yml(凍結形狀後另撈全新樣本外單獨判,誤報 7.5%),kt-jackson-default-typing 放 rules-unwired/data.yml(樣本外誤報 83%,幾乎全是後端拿 Redis 當快取、兩端可信);三批升到 rules/ 的條件都是樣本外語料(排除已出現過的 repo)至少 20 處命中且誤報不超過一成,升時同步改型錄那列的通電批次與實測狀態 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 實驗第二輪、[[Projects/Android資安靜態檢查補齊第二批_計劃]] 實驗] [因:第一批樣本外量測檔案網址 80 處誤報 0;除錯模式 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版);舊版 TLS 樣本內已達 10.5%;寫死金鑰樣本外只撈到 3 處;第二批混合內容樣本外 fork 去重 244 處抽判 120 處誤報 2,其餘 15 條樣本外誤報超過一成或命中不到 20 處(外部網址 14 處誤報 1;生物辨識誤報 5% 但判真問題要看保護的是什麼,形狀定不了);2026-11-08 換一批語料重量命中不夠的 7 條都沒過(舊版 TLS 27.5%、外部網址 20% 且抓 manifest 重判第二份只有 5/40 是真問題、指令執行 75%、Provider 38%、資料庫 16%,寫死金鑰與弱加密套件命中仍不到 20),見 [[Projects/Android不接閘資安規則重量_計劃]]] [不選:四條都放 rules/(第一輪樣本內的結論,形狀是看同一批語料調的、偏樂觀)] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄現成規則欄的 Google 資安規則包檢查寫成「資安包:<檢查 id>」,批四口徑 _B4_LINT 照「內建:」一樣認(認得只算出候選,通電批次標不標批四以型錄〈接電證據〉判定為準,2026-11-08 起);24 條檢查頁都沒寫 disabled by default,B4_DEFAULT_OFF 不加 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3] [因:資安包掛在 Android Lint 上、同一個 CI 步驟跑;提供者原名太長且不是工具名] [test:t_kt_catalog_batch4_wiring] [test:t_kt_catalog_security_lint_ids]
+   WHY:「只在除錯版才走到」只有 utils/debug-only.yml 一份共用判斷(四份 sgconfig 掛 utilDirs,規則用 not: matches: in-debug-only-branch 引用,判法看語法節點種類不看字面):條件本身是 BuildConfig.DEBUG(可帶套件名)或用「且」連起來而其中一項是它的 if 成立那一支、條件是 !BuildConfig.DEBUG 的 if 的 else 那一支、when 的 DEBUG 分支、when (BuildConfig.DEBUG) 的 true 分支;「或」、否定、括號裡藏在「或」底下都不算;各規則檔內自帶的 utils:(compose.yml 等)只在同一檔內共用,跨檔的才放 utils/ [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 代碼審 r2] [因:原本 API-19、DATA-16 一套(連 !BuildConfig.DEBUG 與 else 分支都當開關)、兩條新資安規則另抄一套,同一包兩種判法] [不選:每條規則各寫一份(兩支檔要手抄同步)] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄〈統計〉〈待查證〉〈接電證據〉三節是手寫的,判準住在 check.py 的 stats_problems(每個手寫的數——總列數、各主題、各級、級的組合、情境、出處不全與人裁、規則包各等級與不接閘、被會擋的規則守到的列數、逐列查證、待查證、接電證據筆數——要等於從主表、〈待查證〉、規則檔重數的值;主題前綴只在 _MAIN_TOPICS 一處,主表列的認法也從它組)與 pending_problems(〈待查證〉跟主表雙向一致:該列的都列、已解決的不列、兩格寫不寫內容跟主表一致、編號不重複、少寫格子照空格判不崩)與 wiring_problems(〈接電證據〉每個候選恰好一筆判定、判定對得到候選、批四標籤等於判定擋得到的標籤),接在 catalog_problems,推送前的規則包自檢與 --catalog-only 都會跑;〈待查證〉的未核對字樣用 _PENDING_SRC(未開頁核對、搜尋摘要),不含 _WEAK_SRC 的「無網址」(那種列要標出處不全) [出處:[[Projects/Android資安靜態檢查補齊第二批_計劃]] 代碼審 r2 架構對齊乙、審查乙] [因:判準寫在測試檔時兩份抄本字樣不一致,推送閘也看不到統計漂移] [不選:測試裡另寫一套重數(第二種做法)] [test:t_kt_catalog_stats_consistent]
+   WHY:[status:superseded] [被取代:[[Projects/型錄接電要附證據_計劃]]] 型錄自檢的第四批標籤不論那列原本標批幾都判(原 _batch4_problems,2026-11-08 已刪):現成規則欄登了口徑認得的現成檢查,通電批次就要寫批四標籤,批一的列寫成「批一、批四(…)」;2026-11-08 補了 6 列(API-9、UI-3、UI-10、UI-16、ARCH-16、ARCH-44;STATE-5、ARCH-17 代碼審 r2、r3 對官方檢查頁擋不到該列壞寫法,註記「相關」退回只標批一),其中 UI-3、UI-10、UI-16 的 compose-rules 推送前就在擋卻沒標;段裡註記「間接」「相關」「需標註」的不算接電(那條檢查擋不到這列的壞寫法:TEST-23、UI-1、PERF-2),「只管…」「只部分涵蓋」照算(只限擋得到該列壞寫法欄至少一個例子) [出處:[[Projects/Android資安靜態檢查補齊第二批_計劃]] REVISIT 2026-12-08 結案] [因:原口徑只判已寫批四的列,第四批計劃範圍 4 寫「其他列不動」,批一的列登了 Android Lint 或 compose-rules 也沒被點到,型錄說的比實際擋得少] [不選:逐列寫例外(用註記字樣判,同一條口徑;代碼審 r1 審查席 F1)]
+   REVISIT:2027-02-08 接了 CI 範本的 Android 消費專案跑過一次 Android Lint 之後,拿型錄標批四(CI 範本:Android Lint)的每列壞例真跑一次,沒命中的列退回只標批一(第四批接電靠讀官方檢查頁判,代碼審 code-型錄批一列也寫批四 r1 到 r3 連三輪各抓到標錯的列) [closed:2026-11-08 改成每個候選在本機照範本設定真跑,判定寫在型錄〈接電證據〉;消費專案真跑那一半移到 Projects/型錄接電要附證據_計劃 的 REVISIT]
+   WHY:第四批批四標籤以型錄〈接電證據〉節的判定為準:每個候選(編號,標籤,檢查)一筆,照範本設定真跑 Android Lint 與推送前的 detekt 命令,檢查原本等級 Warning 以上而且預設開(或 compose-rules 報出)才算擋得到;型錄自檢 check.py 的 wiring_problems 雙向比對判定表與通電批次 [出處:[[Projects/型錄接電要附證據_計劃]] 設計審三輪] [因:字面判斷註記字樣連四次被打穿(代碼審三輪加事後審查),2026-11-08 真跑 210 個候選有 63 個擋不到,其中 46 列一個都擋不到] [不選:繼續補排除字表(四次被打穿);用 lint-api 讀檢查清單當判定(沒載入的套件會被誤判不存在);樣本逐行比對壞寫法欄(實作時三包有 30 多列被擋錯,改由代碼審看樣本)] [test:t_kt_catalog_batch4_evidence]
+   RULE:改了型錄某列的壞寫法欄或現成規則欄,那列〈接電證據〉的真跑樣本要照新的壞寫法重寫、照範本設定重跑,判定照結果改(自檢只驗樣本檔在不在,驗不了樣本跟壞寫法欄還一不一致) [依據:審計] [since:2026-11-08] [retire:when-gone:configs/ast-grep/kotlin-android/samples/lint-wiring] [confirmed:2026-11-08]
+   WHY:check.py 的 wiring_table、wiring_dir 不加底線,是給測試讀判定表與樣本目錄用(同 situation_dir 的例外) [出處:代碼審 code-型錄接電要附證據 r1 架構對齊席] [因:測試要用複本的樣本目錄做改壞]
+   WHY:規則掛的型錄列出處不全時,先再查一次權威出處,查得到就照原文改寫型錄列並保留規則,查不到或跟官方說法相反就把規則移出規則包,不再停放在 rules-unwired/;型錄列保留出處不全當參考、不掛規則 [出處:使用者 2026-11-08「每條納入規則的檢查,都必須有憑據、有來源,總不能讓來歷不明的規則來把關」「移掉之前,先查明出處,有的就不用刪」;[[Projects/Android不接閘資安規則重量_計劃]] 範圍 5] [因:只登記不擋的規則也會在推送前印出來、被當成標準看,出處不明就不該出現] [不選:照舊停放在 rules-unwired/(來歷不明的規則照樣印給人看)] [test:t_kotlin_rulepack_unwired_dir]
+-  WHY:有出處、單檔語法認得出的形狀列補自寫規則,先放 rules-unwired/(hint)、樣本外量過升級條件才搬 rules/;已知單檔排除不了的誤報類(API-2 的 Play services Task)搬 rules/ 時拿掉 review-fp 樣本、誤報寫進實測欄,出處是建議語氣的(UI-33)最多升 warning [出處:[[Projects/Android形狀列補規則_計劃]]] [因:出處只證明是壞寫法,不證明規則抓得準;rules/ 的規則不豁免 review-fp 樣本] [不選:出處有就直接放 rules/] [test:t_kotlin_rulepack_security_rules]
++  WHY:有出處、單檔語法認得出的形狀列補自寫規則,先放 rules-unwired/(hint)、樣本外量過升級條件才搬 rules/;已知單檔排除不了的誤報類(API-2 的 Play services Task)搬 rules/ 時拿掉 review-fp 樣本、誤報寫進實測欄,出處只有建議語氣、沒寫後果的(UI-33)過了也只放 rules-hints/(rules/ 的 warning 也會擋,推送前擋不擋看目錄不看等級) [出處:[[Projects/Android形狀列補規則_計劃]]] [因:出處只證明是壞寫法,不證明規則抓得準;rules/ 的規則不豁免 review-fp 樣本] [不選:出處有就直接放 rules/] [test:t_kotlin_rulepack_security_rules]
+   WHY:同一個 DisposableEffect 判斷「有沒有註冊監聽」只准一份,UI-32(有註冊卻留空 onDispose,會擋)與 UI-33(沒註冊卻寫空 onDispose,只登記)都引用 utils/has-registration-call,同一段只會被其中一條報 [出處:[[Projects/Android形狀列補規則_計劃]] 設計審 r1 架構對齊] [因:兩條各寫一份判斷會漂移,給出相反建議] [不選:UI-33 自己複製一份註冊字表] [test:t_kotlin_rulepack_security_rules]
++  WHY:自寫規則的逐例測試要附改壞列舉證據:逐項拿掉每個比對樣式、正規式選項、has/not/inside 結構條件、變數綁定、字邊界與錨點、stopBy,每項都要有例子變紅;拿掉也不影響行為的記成等價改壞,規則載入不了的另列,證據放卷證 [出處:[[Projects/Android形狀列補規則_計劃]] 代碼審 r1~r3 跑滿回顧] [因:三輪都卡在規則條件沒例子守,靠審查席逐項點名補一輪只補一類] [不選:只靠審查席點名補例] [test:t_kotlin_rulepack_security_rules]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+ 
+ - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
+ - `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本不接:2026-11-08 使用者裁先量誤報、一成以下才接,六個開源 App 量下來沒有一條達標(見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉)。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
+ - `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高,範本預設不接。
+-- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):還沒在真專案量過誤報、或量到誤報超過一成、或樣本量不夠的規則;過去也停放引用型錄出處不全列的規則(2026-11-08 先從 `rules-hints/` 拆來 8 條;同日 API-14、TEST-31 人裁標出處不全,再從 `rules/` 搬 2 條、`rules-hints/` 搬 1 條,範本預設會擋的那份因此少 2 條,見 [[Projects/Android寫法型錄逐列查證_計劃]];同日改成查不到出處就移出規則包,現在這個目錄沒有掛出處不全列的規則),與還沒在真專案量過、或量到誤報超過一成、或樣本量不夠的新規則(2026-11-08 資安第一批三條、第二批十五條、第三批一條(kt-jackson-default-typing);2026-11-08 再查出處,查不到或跟官方相反的五條(kt-async-await-immediately、kt-error-by-message-string、kt-compose-preview-no-theme、kt-compose-test-node-by-literal-text、kt-compose-test-node-by-index)移出規則包,不接閘的 `rules-unwired/compose.yml` 因此刪掉,見 [[Projects/Android不接閘資安規則重量_計劃]];2026-11-09 補有出處、單檔認得出的四條,量完 kt-map-await-deferred 搬 `rules/api.yml`(error)、kt-hilt-binding-missing-qualifier 搬 `rules/architecture.yml`(warning),kt-compose-dispose-not-needed 與 kt-hilt-entrypoint-accessor-mismatch 留這裡,`rules-unwired/compose.yml` 重開,共 27 條在這個目錄,見 [[Projects/Android形狀列補規則_計劃]];放哪一級與升級條件見摘要裡三批合寫的那行 WHY);範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
++- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):還沒在真專案量過誤報、或量到誤報超過一成、或樣本量不夠的規則;過去也停放引用型錄出處不全列的規則(2026-11-08 先從 `rules-hints/` 拆來 8 條;同日 API-14、TEST-31 人裁標出處不全,再從 `rules/` 搬 2 條、`rules-hints/` 搬 1 條,範本預設會擋的那份因此少 2 條,見 [[Projects/Android寫法型錄逐列查證_計劃]];同日改成查不到出處就移出規則包,現在這個目錄沒有掛出處不全列的規則),與還沒在真專案量過、或量到誤報超過一成、或樣本量不夠的新規則(2026-11-08 資安第一批三條、第二批十五條、第三批一條(kt-jackson-default-typing);2026-11-08 再查出處,查不到或跟官方相反的五條(kt-async-await-immediately、kt-error-by-message-string、kt-compose-preview-no-theme、kt-compose-test-node-by-literal-text、kt-compose-test-node-by-index)移出規則包,不接閘的 `rules-unwired/compose.yml` 因此刪掉,見 [[Projects/Android不接閘資安規則重量_計劃]];2026-11-09 補有出處、單檔認得出的四條,量完 kt-map-await-deferred 搬 `rules/api.yml`(error)、kt-hilt-binding-missing-qualifier 搬 `rules/architecture.yml`(warning,也會擋),kt-compose-dispose-not-needed 與 kt-hilt-entrypoint-accessor-mismatch 留這裡,`rules-unwired/compose.yml` 重開,共 27 條在這個目錄,見 [[Projects/Android形狀列補規則_計劃]];放哪一級與升級條件見摘要裡三批合寫的那行 WHY);範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+ - `configs/ast-grep/kotlin-android/utils/debug-only.yml`:跨檔共用判斷(`utils/`,不是規則、不出告警):四份 sgconfig 都用 `utilDirs` 掛它,規則以 `matches:` 引用;規則包自檢與 `load_rules` 不讀這個目錄
+ - `configs/ast-grep/kotlin-android/utils/has-registration-call.yml`:「區塊裡有註冊監聽的呼叫」共用判斷,掛法同上;會擋的 UI-32(有註冊卻留空 onDispose)與只登記的 UI-33(沒註冊卻寫空 onDispose)都引用它,改字表兩條一起變
+ - `rules/`、`rules-review/`、`rules-hints/`、`rules-unwired/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
+ - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems);`--sg` 完整模式另用新增告警閘的 SARIF 解析掃兩條指定規則的壞例(SARIF 探針 `sarif_gate_rule_ids`)。
+ - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉〈統計〉〈接電證據〉三節是手寫的,由 `check.py` 的 pending_problems、stats_problems、wiring_problems 核對(見摘要 WHY)。
+ - `skills/kotlin-idioms/test-templates.md`:行為測試範本。型錄級含 C 的列有 60 列(T0–T5 純 JVM,T6–T13 要 Android 模組、Robolectric 或模擬器)通電批次寫「行為測試或正向約束=範本 T<n>」,範本檔每組一節 `## T<n> `,節裡有依據、依賴、測試、假依賴、好寫法、壞寫法與紅綠矩陣;`check.py` 的 `template_problems`(由 `catalog_problems` 呼叫)只驗「型錄寫的組在範本檔有那一節」。範本的紅綠只在實驗專案跑過(本 repo CI 不跑 Gradle),改範本程式就照範本的骨架節重跑那一組(T0–T5 照〈實驗專案骨架〉,T6–T13 照〈Android 實驗專案骨架〉)、把結果補進驗證紀錄 [[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]](T6–T13 補進 [[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]])。
+ 
+ 自我檢查程式是零依賴的獨立檔,YAML 規則檔與型錄表格用自己的行級讀法(情境題證據樣式自測與 SARIF 探針用 load_lumos 把旁邊的 scripts/lumos 當模組載入,借它的比對函式與新增告警閘的 SARIF 解析;載不到就把原因當問題報出):規則檔統一寫成單行 `message:`、`id:` 不加引號,寫成別種形式會被報錯(不會漏報)。樣本目錄排除只認 `configs/ast-grep/<包>/samples/` 底下的 `.kt/.kts`(風險分級、測試防竄改比對、Room 守衛共用的 `_RULEPACK_SAMPLE_RE` 與每支檔有家的 `node_home.ignore` 兩處同一個範圍);消費專案若剛好有同形路徑的正式碼也會被排除,這是接受的取捨。
+ 
+ ## 怎麼改
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6ec86b805..118e5ce63 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -127107,20 +127107,60 @@ _KTSEC_CASES = (
+     ("src/main/kotlin/C175.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect {\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+     ("src/main/kotlin/C176.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-empty-cleanup", 1, (5,)),
+     ("src/main/kotlin/C177.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+     ("src/main/kotlin/C178.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+     ("src/main/kotlin/C179.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.subscribe(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+     ("src/main/kotlin/C180.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.setOnChangeListener(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+     ("src/main/kotlin/C181.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        listen(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+     ("src/main/kotlin/C182.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.addNetworkCallback(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+     ("src/main/kotlin/C183.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        registerReceiver(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+     ("src/main/kotlin/C184.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoMap\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    # 代碼審 r3(C185~):結構條件的例子——型別綁定、同檔限定詞綁定、同檔兩個 entry point、元件名字邊界、巢狀 entry point、註冊名字的錨點
++    ("src/main/kotlin/C185.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun gson(): Gson {\n        return Gson()\n    }\n\n    @Provides\n    @Named("auth")\n    fun client(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C186.kt", 'package sec\n\n@Qualifier\nannotation class AuthClient\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @MyScopeLike\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C187.kt", 'package sec\n\n@javax.inject.Qualifier\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
++    ("src/main/kotlin/C188.kt", 'package sec\n\n@Qualifier\nannotation class ApiKey\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun plain(): String {\n        return String()\n    }\n\n    @Provides\n    @ApiKey\n    fun key(): String {\n        return String()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
++    ("src/main/kotlin/C189.kt", 'package sec\n\n@EntryPoint\n@InstallIn(FragmentComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
++    ("src/main/kotlin/C190.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
++    ("src/main/kotlin/C191.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
++    ("src/main/kotlin/C192.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
++    ("src/main/kotlin/C193.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewWithFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C194.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewWithFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C195.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityRetainedComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C196.kt", 'package sec\n\n@EntryPoint\n@InstallIn(MySingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C197.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(ActivityComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (11,)),
++    ("src/main/kotlin/C198.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        unregisterReceiver(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
++    ("src/main/kotlin/C199.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.subscribeOn(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
++    ("src/main/kotlin/C200.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.setOnClick(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
++    ("src/main/kotlin/C201.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.addListenerCount(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
++    # 代碼審 r3 結構條件改壞列舉(C202~):拿掉 has/not/inside、解開綁定、拿掉字邊界與 stopBy 後沒翻紅的那幾項補例
++    ("src/main/kotlin/C202.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().toList().map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
++    ("src/main/kotlin/C203.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @MyScopeLike\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C204.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    private fun helper(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C205.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @BindsOptionalOf\n    @Named("x")\n    abstract fun b(): OkHttpClient\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C206.kt", 'package sec\n\n@Qualifier\nannotation class StringKeyAuth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @StringKeyAuth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
++    ("src/main/kotlin/C207.kt", 'package sec\n\nobject Qualifiers {\n    @Qualifier\n    annotation class Auth\n}\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (11,)),
++    ("src/main/kotlin/C208.kt", 'package sec\n\nannotation class Tag\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Tag\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C209.kt", 'package sec\n\n@QualifierLike\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C210.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, r: DisposableEffectResult) {\n    DisposableEffect(o) {\n        log("x")\n        r\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
++    ("src/main/kotlin/C211.kt", 'package sec\n\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C212.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(SingletonComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C213.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(ActivityComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C214.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(FragmentComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C215.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(ViewComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C216.kt", 'package sec\n\n@EntryPoint\n@InstallIn(MyActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C217.kt", 'package sec\n\n@EntryPoint\n@InstallIn(CustomViewComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    # 多重綁定的鍵改成只認 Dagger 內建五個之後,每個 Key 各一例(C218~C221)
++    ("src/main/kotlin/C218.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntKey(1)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C219.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @LongKey(1L)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C220.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @ClassKey(Foo::class)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C221.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @LazyClassKey(Foo::class)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+ )
+ # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+ _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+                   "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+ # 第三批計劃範圍 2:Compose 多平台的桌面原始碼(桌面沒有手機鍵盤快取)
+ _KTSEC_IGNORES_DESKTOP = (*_KTSEC_IGNORES, "**/src/desktopMain/**", "**/src/jvmMain/**", "**/desktop*/src/**", "**/*-desktop/src/**")
+ # 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號[, 路徑排除;沒寫的是 _KTSEC_IGNORES 八項])(計劃範圍 4 與〈實驗〉第二輪的放置)
+ _KTSEC_PLACE = {
+     "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
+     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
+@@ -127171,21 +127211,21 @@ def t_kotlin_rulepack_security_rules():
+     API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。
+     第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] S1、S2 擴充同一組,C48~C71 是預期值表 S1 逐列、C72~C86 是代碼審 r1 補的覆蓋、C87~C94 是代碼審 r2 對會擋那條逐條件改壞後補的,_KTSEC_PLACE 後 16 筆):混合內容 setter 改回 stopBy: end → C53 紅;
+     賦值 0 拿掉接收者條件 → C52 紅、接收者條件只認 settings → C50 紅、setter 不認 0 → C54 紅、拿掉 src/test 排除 → C55 紅;
+     Zip Slip 拿掉 canonicalPath 排除 → C57 紅;寫死秘密拿掉值的鍵名樣式排除與數字要求 → C65 紅(passwordKey 不是靠名稱排除擋的);
+     生物辨識拿掉單參數限制 → C69 紅;指令執行拿掉串接那支 → C70 紅、改成任何參數都報 → C71 紅;
+     混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。
+     第三批([[Projects/Android資安靜態檢查補齊第三批_計劃]] S1、S2,C95~C116 是預期值表 S1 逐列、C117~C120 是代碼審 r1 補的):
+     密碼欄拿掉「字面 KeyboardOptions 沒設密碼鍵盤」那支 → C101~C103 紅;拿掉 keyboardType 字面值後接逗號那支 → C117 紅;
+     名單拿掉 BasicTextField2 → C108 紅;放行只認 Password 不認 NumberPassword → C104 紅;拿掉 desktopMain 排除 → C100 與 S4 紅;
+     等級改 warning → S2 紅;Jackson 拿掉 AsProperty 兩個名字 → C118、C119 紅;呼叫名拿掉 ^ 錨點 → C121、C122 紅(代碼審 r2)。
+-    形狀列補規則([[Projects/Android形狀列補規則_計劃]] S2、S4,C127~C184,選填第五欄=預期行號):API-2 拿掉具名參數樣式 → C128 紅;
++    形狀列補規則([[Projects/Android形狀列補規則_計劃]] S2、S4,C127~C221,選填第五欄=預期行號):API-2 拿掉具名參數樣式 → C128 紅;
+     UI-33 拿掉「沒註冊」條件 → C132 紅;共用註冊判斷不認 Observer → C132 兩列紅;ARCH-59 拿掉多重綁定排除 → C148 紅、
+     不認 @Named → C134 紅、不認同檔 @Qualifier → C136 紅;ARCH-62 拿掉泛型寫法 → C145 紅、fromActivity 或 fromFragment 認錯元件 → C142、C143 紅、
+     fromView 不認 ViewNoFragmentComponent → C144 紅、多元件只認第一個 → C146 紅、不認舊名 ApplicationComponent → C152 紅;UI-33 別處有清理的排除失效 → C149、C150 紅;fromFragment 或 fromView 認錯元件 → C153、C154、C155 紅;@InstallIn 比對不跨行 → C156 紅;拿掉 asFlow 排除 → C157 紅;scan 行號差一 → 帶 lines 的各例紅;型錄現成規則欄沒寫規則 id → S4 紅。"""
+     print("t_kotlin_rulepack_security_rules")
+     import shutil as _sh
+     m = _ktpack()
+     rules = {r["id"]: r for r in m.load_rules()}
+     for rid, (d, fname, cat, *extra) in _KTSEC_PLACE.items():
+         want_ign = extra[0] if extra else _KTSEC_IGNORES
+         r = rules.get(rid)
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index bbaac4e74..ec7cd2647 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -493,21 +493,21 @@
+ | ARCH-49 | ViewModel 或 composable 直接碰資料來源 | ViewModel 建構子參數型別 `*Dao`、`*Api`/`*Service`、`SharedPreferences`、`DataStore<…>`、`FirebaseFirestore`、`LocationManager`;composable 直接呼叫 dao | 一律經 `XRepository`(只有一個來源也建),共用邏輯抽 UseCase | 業務邏輯散在 UI 層,無法離線、難換來源、測試要 mock 一堆 | 無;待查(可用 Konsist 或 ArchUnit 架構測試自寫) | B | 形狀:ViewModel 建構參數型別名稱是資料來源 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-vm-direct-datasource、kt-vm-direct-datasource(原 kt-viewmodel-depends-on-api-dao 併入):樣本實測中壞例、好例不報 | AR-REC;DL〔併:研A81、研D五2〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/recommendations https://developer.android.com/topic/architecture/data-layer〕 |
+ | ARCH-50 | 畫面層直接呼叫 Repository 或 UseCase 啟動業務協程 | Fragment/composable 注入 `XRepository`,`onClick` 裡 `lifecycleScope.launch { repo.save(x) }` | UI 只呼叫 `vm.onSave(x)`,ViewModel 內 `viewModelScope.launch` | 違反單向資料流;旋轉時工作被取消;業務邏輯只能儀器測試 | 無 | B+D | 形狀:UI 類別或 composable 參數型別是 Repository/UseCase | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-ui-uses-repository、kt-view-launches-business-logic(hint):樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-ui-uses-repository 命中 2、真 0、誤報 2,降 hint:分不出持有與呼叫 | AR-REC;AND-BP〔併:研A82、研C八2〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/coroutines-best-practices〕 |
+ | ARCH-51 | Repository 回傳快照而不是資料流 | `suspend fun getModel(): Model` 用來顯示會變動的資料 | 讀取回傳 `fun getModelStream(): Flow<Model>`,寫入用 suspend | 資料過期、畫面不會自動更新 | 無 | B | 形狀:Repository 的 get 系列 suspend 函式回傳非 Flow | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-repo-suspend-snapshot(hint):樣本實測中壞例、好例不報 | NIA;AR-REC〔併:研A83〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/coroutines-best-practices https://developer.android.com/topic/architecture/recommendations〕 |
+ | ARCH-52 | UiState 或 domain 模型夾帶 Android UI 型別 | `data class UiState(val icon: Drawable, val ctx: Context, val view: View)` | 帶 `@DrawableRes`/`@StringRes` id 或純資料,由 UI 解析 | 洩漏、無法序列化、測試困難 | 無 | B | 形狀:UiState/模型 data class 欄位型別是 Drawable/Context/View | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-uistate-android-type:樣本實測中壞例、好例不報 | AR-REC〔併:研A84〕 〔查證 2026-11-07:https://developer.android.com/topic/architecture/ui-layer https://googlesamples.github.io/android-custom-lint-rules/checks/StaticFieldLeak.md.html〕 |
+ | ARCH-53 | 網路或資料庫模型一路傳到 UI | `UiState(val user: UserNetworkDto)`、composable 參數是 `@Entity` 類別;Repository 回傳網路 DTO | 各層各自建模型並轉換:`fun UserDto.toDomain(): User`,UI 只吃 domain/UI 模型 | 後端欄位一改 UI 跟著壞;UI 暴露不需要的欄位 | 無 | B+D | 語意:要判斷 App 複雜度是否需要分層模型(官方標 Recommended) | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 規則 kt-repository-exposes-mutable-or-dto:樣本實測中壞例、好例不報 | AR-REC;DL〔併:研A85、研D五3(DTO 那半)〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer/offline-first https://developer.android.com/topic/architecture/recommendations〕 |
+ | ARCH-54 | 多 Activity 架構用 Intent 串畫面(人裁) | 每畫面一個 Activity,`startActivity(Intent(this, X::class.java))` 串流程 | 單一 Activity + `NavHost`(Navigation Compose 或 NavHostFragment) | 畫面間共享狀態困難,deep link 與返回堆疊難一致 | 無 | D | 語意:架構選型取捨 | 表態對程式 | 表態對程式=批三 | 未測 | AR-REC〔併:研A86〕 〔查證 2026-11-07:https://developer.android.com/topic/architecture/recommendations〕 |
+ | ARCH-55 | 濫用作用域到處標 @Singleton | 無內部可變狀態、建立便宜的類別標 `@Singleton`、`@ActivityRetainedScoped` | 預設不設作用域(無註解);只有共享可變狀態或量測過建立成本高的才標 `@Singleton` | 常駐記憶體;單例夾帶狀態跨畫面殘留 | 無 | D | 語意:要判斷類別是否有共享可變狀態或高建立成本 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | HILT-AND〔併:研A87〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-android〕 |
+ | ARCH-56 | Fragment 標 @AndroidEntryPoint 但宿主 Activity 沒標 | `@AndroidEntryPoint class F : Fragment()`,宿主 `class MainActivity : AppCompatActivity()` 無註解 | 宿主 Activity 也標 `@AndroidEntryPoint` | 執行時崩潰 | 無 | C | 語意:要跨檔追哪個 Activity 承載這個 Fragment | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T11 | 未測 | DAGGER-EP〔併:研A88〕〔查證 2026-11-06:https://dagger.dev/hilt/android-entry-point「So before adding @AndroidEntryPoint to a fragment, the activity must be annotated as well.」〕 |
+ | ARCH-57 | 保留(retain)Hilt Fragment | `@AndroidEntryPoint` 的 Fragment 設 `retainInstance = true`;非 Hilt 保留 Fragment 底下掛 Hilt 子 Fragment | Hilt 的 Fragment 一律不保留(不設 `retainInstance = true`,Hilt 會在設定變更時丟執行期例外);要跨設定變更留住的資料放 ViewModel,畫面以 `val viewModel: DiceRollViewModel by viewModels()` 取得;需要重新掛上時每次建新的 Fragment 實例,不重用舊實例 | 設定變更時丟執行期例外;留住上一個 Activity | 無(Hilt 在執行期拋例外) | B | 形狀:@AndroidEntryPoint 類別內 retainInstance = true | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-hilt-retain-instance:樣本實測中壞例、好例不報 | DAGGER-EP〔併:研A89〕〔查證 2026-11-05:https://dagger.dev/hilt/android-entry-point https://developer.android.com/topic/libraries/architecture/views/viewmodel〕 |
+ | ARCH-58 | super.onCreate() 或 onAttach 之前使用注入欄位 | `@Inject lateinit var x: X` 在屬性初始化、`init { }` 或 `super.onCreate()` 之前讀取 | 在 `super.onCreate()`(Activity)、`onAttach()`(Fragment)之後才使用 | UninitializedPropertyAccessException | 無 | B | 形狀:@Inject 欄位出現在屬性初始化、init 或 super.onCreate 之前 | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 2026-11-09 不寫規則:出處只說注入在 super.onCreate() 發生,沒說之前讀會怎樣,要推論才接得上 | DAGGER-EP〔併:研A90〕 〔查證 2026-11-07:https://dagger.dev/hilt/android-entry-point.html https://dagger.dev/hilt/components.html〕 |
+-| ARCH-59 | 同型別多個綁定其中一個沒加限定詞 | 兩個 `@Provides fun …(): OkHttpClient`,一個 `@AuthClient`、另一個沒加 | 每個綁定都加限定詞(`@AuthClient`、`@OtherClient`) | 注入到錯的實例 | 自寫 ast-grep kt-hilt-binding-missing-qualifier | B | 形狀:同一個 module 裡同回傳型別的 @Provides/@Binds,有的帶 @Named 或同檔 @Qualifier 宣告的註解、有的只有非限定詞註解;多重綁定不算 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-hilt-binding-missing-qualifier:樣本實測中壞例、好例不報;2026-11-09 樣本外 68 處(50 個 repo)抽 40 處誤報 0,搬 rules/;出處是建議語氣,跟 UI-33 同一套只放 warning 不擋 | HILT-AND〔併:研A91〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-android〕 |
++| ARCH-59 | 同型別多個綁定其中一個沒加限定詞 | 兩個 `@Provides fun …(): OkHttpClient`,一個 `@AuthClient`、另一個沒加 | 每個綁定都加限定詞(`@AuthClient`、`@OtherClient`) | 注入到錯的實例 | 自寫 ast-grep kt-hilt-binding-missing-qualifier | B | 形狀:同一個 module 裡同回傳型別的 @Provides/@Binds,有的帶 @Named 或同檔 @Qualifier 宣告的註解、有的只有非限定詞註解;多重綁定不算 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-hilt-binding-missing-qualifier:樣本實測中壞例、好例不報;2026-11-09 樣本外 68 處(50 個 repo)抽 40 處誤報 0,搬 rules/(warning,推送前會擋;原文寫明會注入錯的實例) | HILT-AND〔併:研A91〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-android〕 |
+ | ARCH-60 | 以為 @ViewModelScoped 會跨 ViewModel 共享 | 兩個 ViewModel 各注入同一個 `@ViewModelScoped` 類別,預期狀態同步 | 跨 ViewModel 共享改 `@ActivityRetainedScoped` 或 `@Singleton` | 各拿各的實例,狀態不同步 | 無 | D | 語意:要知道設計上是否預期跨 ViewModel 共享 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | HILT-JP〔併:研A92〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-jetpack https://dagger.dev/hilt/view-model.html〕 |
+ | ARCH-61 | HiltWorker 依賴有作用域的綁定或少 @Assisted | `@HiltWorker` 建構子注入 `@ActivityRetainedScoped`/`@ViewModelScoped` 物件;`Context`、`WorkerParameters` 沒 `@Assisted` | 只依賴 `@Singleton` 或無作用域綁定;`@AssistedInject constructor(@Assisted ctx: Context, @Assisted params: WorkerParameters, …)` | 編譯失敗或 Worker 無法建立(實際錯誤形式待查) | 無(待查:Hilt 編譯器是否會擋) | B | 形狀:@HiltWorker 建構子參數缺 @Assisted 或型別帶非 Singleton 作用域 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-hiltworker-missing-assisted:樣本實測中壞例、好例不報 | HILT-JP〔併:研A93〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-jetpack〕 |
+ | ARCH-62 | EntryPointAccessors 用錯 Context | `@InstallIn(ActivityComponent::class)` 的 entry point 用 `EntryPointAccessors.fromApplication(...)` 取 | `@InstallIn` 元件與 Accessor 對應:ActivityComponent 用 `fromActivity(activity)`,SingletonComponent 用 `fromApplication(app)` | 執行時錯誤或拿不到綁定 | 自寫 ast-grep kt-hilt-entrypoint-accessor-mismatch | B | 形狀:EntryPointAccessors.fromX 的元件不在同檔 entry point 的 @InstallIn 裡;entry point 不在同檔不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-hilt-entrypoint-accessor-mismatch:樣本實測中壞例、好例不報;2026-11-09 樣本內 0 處、樣本外 1 處(用了改名前的 ApplicationComponent,規則補認舊名),寫錯元件執行時就會出錯,開源專案幾乎沒有,命中不到 20 不判 | HILT-AND〔併:研A94〕 〔查證 2026-11-07:https://developer.android.com/training/dependency-injection/hilt-android https://dagger.dev/hilt/entry-points.html〕 〔查證 2026-11-09:https://github.com/google/dagger/blob/master/hilt-android/main/java/dagger/hilt/android/EntryPointAccessors.kt〕 |
+ | ARCH-63 | Dagger 模組寫法錯 | `@Binds` 不是 abstract、參數個數或型別不對;`@Provides` 寫成 abstract 或擴充函式;直接呼叫 `provideX()`;object 模組 `@Provides` 加 `@JvmStatic`;companion 標 `@Module` | 照 Dagger 規範:`@Binds abstract fun bind(impl: Impl): Api`;`@Provides fun provideX(): X` 放 object 模組且不加 `@JvmStatic` | 編譯錯或注入非預期實例 | dagger-lint:JvmStaticProvidesInObjectDetector、ModuleCompanionObjects、ModuleCompanionObjectsNotInModuleParent、FieldSiteTargetOnQualifierAnnotation;索引另有 BindsMustBeAbstract、BindsTypeMismatch、BindsWrongParameterCount、BindingReturnType、BindingReceiverParameter、DoNotCallProviders、MustBeInModule、ProvidesMustNotBeAbstract(廠商待查) | A | 形狀:@Binds/@Provides/@Module 宣告形狀 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT-V;LINT〔併:研A95〕 〔查證 2026-11-07:https://dagger.dev/api/latest/dagger/Binds.html https://developer.android.com/training/dependency-injection/hilt-android https://googlesamples.github.io/android-custom-lint-rules/checks/JvmStaticProvidesInObjectDetector.md.html〕 |
+ | ARCH-64 | UI 同時讀網路和 DB 兩個來源 | ViewModel 一邊呼叫 api、一邊呼叫 dao 自己合併 | Repository 只對外暴露 `dao.observeX(): Flow`;網路結果 `dao.upsert()` 寫進 DB(單一資料來源) | 資料不一致、畫面閃爍 | 無 | D | 語意:要判斷哪個是唯一資料來源 | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | 未測 | DL-OFFLINE〔併:研D五1〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer/offline-first〕 |
+ | ARCH-65 | 必須完成的寫入綁在 viewModelScope | `viewModelScope.launch { repo.save() }`,使用者離開就被取消 | Repository 由建構子注入 externalScope(官方註解:CoroutineScope(SupervisorJob() + Dispatchers.Default)),寫入用 externalScope.async { dao.save(x) }.await();必須在程序被殺後仍完成的業務操作(business-oriented)改用 WorkManager(enqueueUniqueWork) | 寫入只完成一半 | 無 | D | 語意:要判斷這筆工作是否必須在離開畫面後完成 | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | 未測 | DL#operations-outlive-screen〔併:研D五11〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer〕 |
+ | ARCH-66 | 把 kotlin.Result 當公開 API 錯誤模型,失敗種類不明 | `suspend fun x(): Result<T>`,失敗一律回 Throwable | `sealed interface LoadResult { data class Ok(val v: T); data object NotFound; data class Network(val e: IOException) }` 有型別的網域錯誤 | 呼叫端只能用字串判斷錯誤種類 | 無 | D | 語意:要判斷呼叫端是否需要區分錯誤種類 | 表態對程式、盲判席 | 表態對程式=批三;盲判席=批三 | 未測 | DL#expose-errors〔併:研D六2〕〔查證 2026-11-05:https://github.com/Kotlin/KEEP/blob/master/proposals/stdlib/result.md〕 |
+ | ARCH-67 | 把 HttpException 或 IOException 直接丟到 UI 層 | ViewModel `import retrofit2.HttpException` 並 catch 判斷 | 資料層 catch 網路庫例外後改拋自訂例外(官方例:UserNotAuthenticatedException),ViewModel 對 suspend 呼叫用 try/catch、對 Flow 用 .catch 處理這些自訂例外,不 import retrofit2/okhttp3 | 層級耦合,換網路庫要改 UI | 待查(架構測試可以抓) | B | 形狀:ViewModel/UI 檔 import retrofit2 或 okhttp3 例外型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-viewmodel-knows-retrofit:樣本實測中壞例、好例不報 | DL〔併:研D六8〕〔查證 2026-11-05:https://developer.android.com/topic/architecture/data-layer〕 |
+ | ARCH-68 | receiver 外露又沒設權限 | manifest `<receiver android:exported="true">` 或帶 intent-filter 沒寫 exported=false,也沒有 `android:permission` | 不需要給別的 App 用就 `android:exported="false"`;要外露就加 `android:permission` | 任何 App 都能送廣播觸發它 | 內建:ExportedReceiver | A | 形狀:由 Android Lint ExportedReceiver 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExportedReceiver.md.html〕 |
+ | ARCH-69 | content provider 外露又沒設權限 | manifest `<provider>` 外露、沒有 `android:permission`、`readPermission`、`writePermission` | `android:exported="false"`;要給別的 App 用就加權限保護 | 任何 App 都能讀寫它提供的資料 | 內建:ExportedContentProvider | A | 形狀:由 Android Lint ExportedContentProvider 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExportedContentProvider.md.html〕 |

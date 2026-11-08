@@ -1,0 +1,60 @@
+# 形狀列補規則的切分、掃描、抽樣(2026-11-09;卷證裡存成 .txt):
+# 1. 切分:repo 全名(小寫)的 sha256 第一個位元組是偶數 → A(樣本內,拿來調形狀),奇數 → B(樣本外,形狀定案後只用一次)。
+# 2. 排除:路徑含 fixtures、testdata、testData 的不進(教材與掃描器固件)。
+# 3. 掃描:把每支檔照 <repo>/<原路徑> 放好(規則的測試碼路徑排除照原路徑生效),用 sgconfig-unwired.yml 加 --filter <規則> 跑 ast-grep。
+# 4. 同源合併:同檔名、命中行前後 20 行去空白後相同的,只留路徑排序最前那處。
+# 5. 抽樣:有命中的 repo 不少於 40 個 → repo 名排序後 random.Random(20261109) 洗牌取前 40 個 repo,每個 repo 用同一個亂數產生器抽一處;
+#    少於 40 個 repo 但合併後命中不少於 20 處 → 全判;不到 20 處 → 只記數,不判。
+# 用法:python3 -I pipeline.py <data 目錄> <ast-grep> <規則包目錄> <A|B> <輸出目錄>
+import json, os, sys, hashlib, random, collections, shutil, subprocess, re
+DATA, SG, PACK, SPLIT, OUT = sys.argv[1:6]
+SKIP = re.compile(r"fixtures|testdata|testData")
+rows = [l.rstrip("\n").split("\t") for l in open(os.path.join(DATA, "corpus.tsv"), encoding="utf-8") if l.strip()]
+def side(repo):
+    return "A" if hashlib.sha256(repo.lower().encode()).digest()[0] % 2 == 0 else "B"
+os.makedirs(OUT, exist_ok=True)
+summary = {}
+for rid in sorted(set(r[0] for r in rows)):
+    tree = os.path.join(OUT, "tree-" + SPLIT + "-" + rid)
+    shutil.rmtree(tree, ignore_errors=True)
+    nfiles = 0
+    for _rid, repo, path, sha, _q in rows:
+        if _rid != rid or side(repo) != SPLIT or SKIP.search(path):
+            continue
+        src = os.path.join(DATA, "files", sha + ".kt")
+        if not os.path.exists(src):
+            continue
+        dst = os.path.join(tree, repo.replace("/", "__"), path)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst); nfiles += 1
+    r = subprocess.run([SG, "scan", "--config", os.path.join(PACK, "sgconfig-unwired.yml"), "--filter", "^" + rid + "$",
+                        "--json=stream", tree], capture_output=True, text=True, cwd=PACK)
+    hits = []
+    for ln in r.stdout.splitlines():
+        if ln.strip():
+            d = json.loads(ln)
+            hits.append((os.path.relpath(d["file"], tree), d["range"]["start"]["line"] + 1))
+    hits = sorted(set(hits))
+    seen, dedup = {}, []
+    for f, l in hits:
+        lines = open(os.path.join(tree, f), encoding="utf-8", errors="replace").read().split("\n")
+        ctx = re.sub(r"\s+", "", "\n".join(lines[max(0, l - 21):l + 20]))
+        key = (os.path.basename(f), hashlib.sha256(ctx.encode()).hexdigest())
+        if key in seen:
+            continue
+        seen[key] = f; dedup.append((f, l))
+    by = collections.defaultdict(list)
+    for f, l in dedup:
+        by[f.split("/", 1)[0]].append((f, l))
+    if len(by) >= 40:
+        rng = random.Random(20261109); repos = sorted(by); rng.shuffle(repos)
+        sample = [sorted(by[x])[rng.randrange(len(by[x]))] for x in repos[:40]]; mode = "抽 40"
+    elif len(dedup) >= 20:
+        sample = dedup; mode = "全判"
+    else:
+        sample = []; mode = "不到 20 處,不判"
+    json.dump(hits, open(os.path.join(OUT, f"hits-{SPLIT}-{rid}.json"), "w"), ensure_ascii=False)
+    open(os.path.join(OUT, f"sample-{SPLIT}-{rid}.txt"), "w").write("".join(f"{f}:{l}\n" for f, l in sample))
+    summary[rid] = dict(files=nfiles, hits=len(hits), dedup=len(dedup), repos=len(by), mode=mode, sampled=len(sample))
+json.dump(summary, open(os.path.join(OUT, f"summary-{SPLIT}.json"), "w"), ensure_ascii=False, indent=1)
+print(json.dumps(summary, ensure_ascii=False, indent=1))

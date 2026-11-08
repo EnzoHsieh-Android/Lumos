@@ -15,6 +15,7 @@ related:
   - "[[Systems/效能檢核目錄]]"
   - "[[Systems/棧別提問表態閘]]"
   - "[[Projects/Android寫法寫完當下自動檢查_計劃]]"
+  - "[[Projects/Android形狀列補規則_計劃]]"
 lands_in:
   - Systems/linter精選目錄
   - Systems/pitfalls-code-loop
