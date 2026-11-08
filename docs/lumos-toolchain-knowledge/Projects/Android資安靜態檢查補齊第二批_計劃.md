@@ -81,11 +81,11 @@ RETIRE-IF: 放 `rules-unwired/` 的 15 條,到 2027-05-08 換語料重量仍沒�
    - 判準放進型錄自檢 `configs/ast-grep/kotlin-android/check.py`(接在 catalog_problems,推送前的規則包自檢會跑):〈統計〉每個手寫的數(總列數、各主題、各級、級的組合、情境、出處不全與人裁、規則包各等級與不接閘、被會擋的規則守到的列數、逐列查證、待查證)要等於重數的值;〈待查證〉跟主表雙向一致(該列的都列、已解決的不列、兩格寫不寫內容跟主表一致、編號不重複)。情境決策表那行另見下面 REVISIT。測試只驗自檢真型錄乾淨、寫死的改壞各被抓到(〈驗收條款〉S4;代碼審 r2 改,原本判準寫在測試檔)。
 
 **不做**:
-- 通知放敏感資料、密碼欄鍵盤快取:要看內容敏不敏感;鍵盤快取的設定在版面 XML 的 `android:inputType`,不在 Kotlin 原始碼裡,規則包掃不到。
+- 通知放敏感資料、密碼欄鍵盤快取:要看內容敏不敏感;鍵盤快取的設定在版面 XML 的 `android:inputType`,不在 Kotlin 原始碼裡,規則包掃不到。(2026-11-08 更正:Compose 的密碼欄設定在 Kotlin 原始碼裡,第三批寫成會擋的規則;通知寫成語意列。只有版面 XML 那半仍掃不到)
 - LocalServerSocket 沒驗證連線方:Android 參考頁只寫它是什麼、沒寫風險,找不到權威出處支持「出現就是錯」;MobSF 那條也沒附出處。
 - 自寫 XOR 加密:XOR 在雜湊、校驗、圖形運算都常見,形狀分不出是不是拿來加密,MASTG 也只寫「看到 XOR 要再查」。
 - 深層連結資料跨函式流進 WebView:要追資料流;同一函式內直接 `loadUrl(intent…)` 的那段由 `kt-loadurl-external` 管。
-- Jackson default typing:Android 少用 Jackson,語料撈不到。
+- Jackson default typing:Android 少用 Jackson,語料撈不到。(2026-11-08 更正:第三批撈到樣本內外各 120 多處,大多是 Kotlin 後端;誤報太高,放不接閘)
 - MobSF 的 XMLInputFactory、XMLDecoder 三種 XXE:Android SDK 沒有這兩個 API(官方參考頁 404)。
 - MobSF 的 hidden UI:只是可疑,不是隱患。
 - OAuth 自訂 scheme:RFC 8252 允許自訂 scheme 搭 PKCE,MobSF 講得太重。
@@ -93,11 +93,11 @@ RETIRE-IF: 放 `rules-unwired/` 的 15 條,到 2027-05-08 換語料重量仍沒�
 
 REVISIT:2027-05-08 換一批語料(至少三個不是這次出現過的 Kotlin 為主開源 App)重量第二批 15 條不接閘規則,照升級條件升;外部網址丟進 WebView 那條(樣本外誤報 7%、只差命中數)優先
 REVISIT:2027-05-08 看 Android Lint 或 Google 資安包有沒有補上 MessageDigest 弱雜湊、一般寫死秘密、RSA 無填充的檢查,有就把 DATA-96、DATA-97、DATA-98 改指現成檢查、自寫規則撤掉
-REVISIT:2027-05-08 查 MASTG 與 Android 官方安全指南有沒有出 LocalServerSocket、自寫 XOR 加密、通知敏感資料的測試頁;有權威出處且寫得出形狀的,開型錄列與不接閘規則
-REVISIT:2026-11-22 型錄〈統計〉的情境決策表那行(證據樣式主寫、例外、兩段都寫(無)的列數 8、31、5)重數對不上,查清口徑後改成程式數得出的值
+REVISIT:2027-05-08 查 MASTG 與 Android 官方安全指南有沒有出 LocalServerSocket、自寫 XOR 加密的測試頁;有權威出處且寫得出形狀的,開型錄列與不接閘規則(通知敏感資料那件已由 [[Projects/Android資安靜態檢查補齊第三批_計劃]] 開成語意列 DATA-100)
+REVISIT:2026-11-22 型錄〈統計〉的情境決策表那行(證據樣式主寫、例外、兩段都寫(無)的列數 8、31、5)重數對不上,查清口徑後改成程式數得出的值 [closed:2026-11-08 第三批用 check.py 的 dt_table 重數,57 列是 15、34、11(不含 D-57 是 14、33、10,三種口徑都對不上舊值,舊值過期);型錄那行已改]
 REVISIT:2026-12-08 型錄自檢的批四口徑只判「已寫批四的列標籤對不對」,不判「現成規則欄登了 Android Lint 檢查的列一定要寫批四」;2026-11-08 量過全型錄有 11 列會被新判法點到(API-9、STATE-5、UI-1、UI-3、UI-10、UI-16、ARCH-16、ARCH-17、ARCH-44、TEST-23、PERF-2,多半註記只部分涵蓋,疑似第四批刻意只標批一),查第四批計劃的理由後決定改 check.py 還是在口徑寫明例外 [closed:2026-11-08 查第四批計劃範圍 4 寫明其他列不動,那 11 列沒被判過;型錄自檢改成不論批幾都判,11 列逐列對官方檢查頁後 6 列補成批一、批四,其餘 5 列擋不到該列壞寫法、註記「相關」或「需標註」照標批一]
-REVISIT:2027-05-08 查規則包有沒有開始掃版面 XML;有就把密碼欄 `inputType` 沒帶 textNoSuggestions 寫成規則
-REVISIT:2027-05-08 再用 GitHub 程式搜尋撈 Jackson `enableDefaultTyping`、`activateDefaultTyping` 的 Kotlin 檔;正式碼命中 ≥5 處就開型錄列與不接閘規則
+REVISIT:2027-05-08 查規則包有沒有開始掃版面 XML;有就把密碼欄 `inputType` 沒帶 textNoSuggestions 寫成規則(Compose 那半已由第三批 kt-compose-password-keyboard 做了)
+REVISIT:2027-05-08 再用 GitHub 程式搜尋撈 Jackson `enableDefaultTyping`、`activateDefaultTyping` 的 Kotlin 檔;正式碼命中 ≥5 處就開型錄列與不接閘規則 [closed:2026-11-08 第三批撈到樣本外 121 處,開了 DATA-99 與不接閘規則 kt-jackson-default-typing]
 
 ## 實驗
 
