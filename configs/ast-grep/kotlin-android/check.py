@@ -912,7 +912,8 @@ _TIMED_OUT = [False]   # 一次掃描逾時後,這次自我檢查剩下的掃描
 
 
 def scan(sg, cfg, target):
-    """跑一次 ast-grep,回 [(ruleId, file)];失敗或之前已逾時回 None。"""
+    """跑一次 ast-grep,回 [(ruleId, file, 起始行)](行從 1 起算,ast-grep 報的是比對到的節點的起始行);
+    失敗或之前已逾時回 None。"""
     if _TIMED_OUT[0]:
         return None
     try:
@@ -930,7 +931,7 @@ def scan(sg, cfg, target):
         if ln.strip():
             try:
                 d = json.loads(ln)
-                out.append((d["ruleId"], d["file"]))
+                out.append((d["ruleId"], d["file"], d["range"]["start"]["line"] + 1))
             except (ValueError, KeyError, TypeError):
                 return None   # 輸出讀不懂就當這次掃描跑不起來,由呼叫端報「跑不起來」,不噴 traceback
 
@@ -1044,7 +1045,7 @@ def check(sg):
             if got is None:
                 problems.append(("<pack>", f"{cfg} 掃 samples/{kind} 跑不起來"))
                 continue
-            for rule_id, f in got:
+            for rule_id, f, _line in got:
                 owner = _sample_owner(f, kind)
                 if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
                     continue      # 語意覆核級或不接閘規則已知的形狀誤報:記在樣本裡、改形狀時對照,不算好例誤報
@@ -1076,7 +1077,7 @@ def check(sg):
                 if got is None:
                     problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))
                     continue
-                for (i, f) in got:
+                for (i, f, _line) in got:
                     if any(r["id"] == i for r in test_only):
                         problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
     return rules, problems

@@ -1,0 +1,72 @@
+"""結構條件的改壞列舉(代碼審 r3 換形狀的延伸,依據變異測試的「拿掉條件」「反轉條件」算子):
+A 拿掉 has/not/inside 整段;B 解開變數綁定(pattern: $X 換成沒綁的新變數);C 拿掉正規式的 \\b ^ $ \\A \\z;D 拿掉 stopBy: end。
+規則改壞後載入不了(★前置★掃得起來那道紅)的算無效改壞,另列。用法:python3 -I sweep2.py [--list]"""
+import os, re, subprocess, shutil, sys
+os.chdir('/Users/enzo/orca/workspaces/lumos-toolchain/shape-rows-rules')
+K='configs/ast-grep/kotlin-android/'
+IDS=['kt-map-await-deferred','kt-compose-dispose-not-needed','kt-hilt-binding-missing-qualifier','kt-hilt-entrypoint-accessor-mismatch','kt-compose-dispose-empty-cleanup']
+FILES=[K+'rules/api.yml',K+'rules/architecture.yml',K+'rules/compose.yml',K+'rules-unwired/compose.yml',K+'rules-unwired/architecture.yml',K+'utils/has-registration-call.yml']
+def blocks(path):
+    L=open(path,encoding='utf-8').read().split('\n')
+    if 'utils/' in path: return [(0,len(L))]
+    out=[]; start=0
+    for i in range(len(L)+1):
+        if i==len(L) or L[i]=='---':
+            seg=L[start:i]
+            if any((m:=re.match(r'^id: (\S+)',x)) and m.group(1) in IDS for x in seg): out.append((start,i))
+            start=i+1
+    return out
+ind=lambda l: len(l)-len(l.lstrip(' '))
+muts=[]
+for f in FILES:
+    L=open(f,encoding='utf-8').read().split('\n')
+    for s,e in blocks(f):
+        for n in range(s,e):
+            l=L[n]; t=l.strip()
+            if t.startswith('#') or not t: continue
+            # A 拿掉 has/not/inside 整段(含底下縮排更深的行)
+            if re.match(r'^(- )?(has|not|inside):', t):
+                end=n+1; base=ind(l)+(2 if t.startswith('- ') else 0)
+                while end<e and L[end].strip() and ind(L[end])>base - (0 if not t.startswith('- ') else 0) and ind(L[end])>ind(l): end+=1
+                muts.append((f,('del',n,end),f'A 拿掉 {t[:50]}'))
+            # B 解開變數綁定
+            for m in re.finditer(r'pattern: (\$[A-Z]+)\s*(\}|$)', l):
+                muts.append((f,('sub',n,m.group(0),m.group(0).replace(m.group(1),'$ZZUNBOUND')),f'B 解開綁定 {m.group(1)} @{t[:40]}'))
+            # C 正規式錨點與字邊界
+            rm=re.search(r"regex: '(.*)'",l) or re.search(r'regex: (\^.*)$',l)
+            if rm:
+                rx=rm.group(1)
+                for tok in [r'\b','^','$',r'\A',r'\z']:
+                    i=rx.find(tok)
+                    while i>=0:
+                        if not (tok in('^','$') and i>0 and rx[i-1]=='\\'):
+                            new=rx[:i]+rx[i+len(tok):]
+                            muts.append((f,('sub',n,rx,new),f'C 正規式拿掉 {tok} 第{i}字 @{t[:30]}'))
+                        i=rx.find(tok,i+1)
+            # D stopBy: end
+            if 'stopBy: end' in l:
+                if t in ('stopBy: end','- stopBy: end'): muts.append((f,('del',n,n+1),f'D 拿掉 stopBy @行{n+1}'))
+                else: muts.append((f,('sub',n,'stopBy: end, ','') if 'stopBy: end, ' in l else ('sub',n,', stopBy: end',''),f'D 拿掉行內 stopBy @{t[:40]}'))
+if '--list' in sys.argv:
+    for f,op,d in muts: print(f.split('kotlin-android/')[1], op[1]+1, d)
+    print(len(muts)); sys.exit()
+env=dict(os.environ, LUMOS_AST_GREP='/private/tmp/claude-501/-Users-enzo-orca-workspaces-lumos-toolchain-shearwater/5b6d202a-9139-47f7-b6b9-deb227707ba4/scratchpad/sgvenv/bin/ast-grep')
+gaps=inv=0
+for f,op,desc in muts:
+    orig=open(f,encoding='utf-8').read(); L=orig.split('\n')
+    if op[0]=='del': del L[op[1]:op[2]]
+    else:
+        assert op[2] in L[op[1]]; L[op[1]]=L[op[1]].replace(op[2],op[3],1)
+    open(f,'w',encoding='utf-8').write('\n'.join(L)); shutil.rmtree(K+'__pycache__',ignore_errors=True)
+    try:
+        r=subprocess.run(['python3.14','scripts/test_lumos.py','-k','kotlin_rulepack_s'],capture_output=True,text=True,env=env,timeout=900)
+        red=[x for x in r.stdout.splitlines() if x.strip().startswith('✗') and 'FAILED' not in x]
+        bad=any('★前置★' in x or '載入' in x or '跑不起來' in x for x in red)
+        tag='無效' if bad else ('✓ 紅' if red else '✗ 沒紅')
+        if tag=='✗ 沒紅': gaps+=1
+        if tag=='無效': inv+=1
+        print(tag, f.split('kotlin-android/')[1], op[1]+1, desc, f'({len(red)})', flush=True)
+    finally:
+        open(f,'w',encoding='utf-8').write(orig)
+shutil.rmtree(K+'__pycache__',ignore_errors=True)
+print('沒紅', gaps, '無效', inv, '/', len(muts))

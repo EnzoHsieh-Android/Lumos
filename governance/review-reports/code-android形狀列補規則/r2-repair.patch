@@ -1,0 +1,577 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 569eeaf53..e9b053392 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -904,42 +904,41 @@ def message_problems(rules, cat_ids):
+         if ";" not in msg or not ("改用" in msg or "改成" in msg):
+             problems.append((rid, "message 要有分號,並寫「改用」或「改成」"))
+         if "$" in msg:
+             problems.append((rid, "message 不准含 $"))
+     return problems
+ 
+ 
+ _TIMED_OUT = [False]   # 一次掃描逾時後,這次自我檢查剩下的掃描都不跑(避免卡住時每次各等滿上限)
+ 
+ 
+-def scan(sg, cfg, target, with_lines=False):
+-    """跑一次 ast-grep,回 [(ruleId, file)];with_lines=True 時回 [(ruleId, file, 起始行)](從 1 起算,
+-    ast-grep 報的是比對到的節點的起始行);失敗或之前已逾時回 None。"""
++def scan(sg, cfg, target):
++    """跑一次 ast-grep,回 [(ruleId, file, 起始行)](行從 1 起算,ast-grep 報的是比對到的節點的起始行);
++    失敗或之前已逾時回 None。"""
+     if _TIMED_OUT[0]:
+         return None
+     try:
+         r = subprocess.run([sg, "scan", "--config", str(HERE / cfg), "--json=stream", str(target)],
+                            capture_output=True, text=True, cwd=str(HERE), timeout=SCAN_TIMEOUT)
+     except subprocess.TimeoutExpired:
+         _TIMED_OUT[0] = True
+         return None
+     except OSError:
+         return None
+     if r.returncode not in (0, 1):
+         return None
+     out = []
+     for ln in r.stdout.splitlines():
+         if ln.strip():
+             try:
+                 d = json.loads(ln)
+-                out.append((d["ruleId"], d["file"], d["range"]["start"]["line"] + 1) if with_lines
+-                           else (d["ruleId"], d["file"]))
++                out.append((d["ruleId"], d["file"], d["range"]["start"]["line"] + 1))
+             except (ValueError, KeyError, TypeError):
+                 return None   # 輸出讀不懂就當這次掃描跑不起來,由呼叫端報「跑不起來」,不噴 traceback
+ 
+     return out
+ 
+ 
+ # 規則包 SARIF 輸出的自檢(Projects/規則包覆核兩級接新增告警閘_計劃 做 3):新增告警閘讀的是 SARIF,覆核與提示級在 SARIF 裡是 note;
+ # 各拿一條規則的壞例樣本用它自己目錄的設定掃,結果裡要有那條規則,換 ast-grep 版本時工具鏈 CI 會紅
+ SARIF_PROBES = (("sgconfig-review.yml", "kt-livedata-setvalue-background"), ("sgconfig-hints.yml", "kt-value-assign-background"))
+ 
+@@ -1039,21 +1038,21 @@ def check(sg):
+             problems.append(("<pack>", f"SARIF 掃壞例樣本沒有新增告警閘讀得到的 {rid} 結果({cfg})"))
+     review_ids = {r["id"] for r in rules if r["dir"] in ("rules-review", "rules-unwired")}
+     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
+     hits = {}
+     for kind in ("bad", "good"):
+         for _d, cfg in CONFIGS:
+             got = scan(sg, cfg, HERE / "samples" / kind)
+             if got is None:
+                 problems.append(("<pack>", f"{cfg} 掃 samples/{kind} 跑不起來"))
+                 continue
+-            for rule_id, f in got:
++            for rule_id, f, _line in got:
+                 owner = _sample_owner(f, kind)
+                 if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
+                     continue      # 語意覆核級或不接閘規則已知的形狀誤報:記在樣本裡、改形狀時對照,不算好例誤報
+                 hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
+     for r in rules:
+         rid = r["id"]
+         bad, good = HERE / "samples" / "bad" / rid, HERE / "samples" / "good" / rid
+         if not bad.is_dir():
+             problems.append((rid, "缺壞例樣本 samples/bad/" + rid))
+         else:
+@@ -1071,21 +1070,21 @@ def check(sg):
+     test_only = [r for r in rules if r["test_only"]]
+     if test_only:
+         if not TEST_ONLY_ANCESTOR.is_dir():
+             problems.append(("<pack>", "缺 samples/ancestor-named-test(祖先目錄叫 test 的正式碼樣本)"))
+         else:
+             for _d, cfg in CONFIGS:
+                 got = scan(sg, cfg, TEST_ONLY_ANCESTOR)
+                 if got is None:
+                     problems.append(("<pack>", f"{cfg} 掃 samples/ancestor-named-test 跑不起來"))
+                     continue
+-                for (i, f) in got:
++                for (i, f, _line) in got:
+                     if any(r["id"] == i for r in test_only):
+                         problems.append((i, "只掃測試碼的規則命中了祖先目錄叫 test 的正式碼:" + f))
+     return rules, problems
+ 
+ 
+ def main(argv):
+     if "--catalog-only" in argv:
+         probs = catalog_problems(load_rules()) + situation_sample_problems()
+         for rid, why in probs:
+             print(f"{rid}: {why}")
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/api.yml b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+index 32c6fd951..df9208a05 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/api.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+@@ -212,11 +212,11 @@ rule:
+     - pattern: setAllowFileAccess(true)
+     - all:
+         - kind: assignment
+         - has:
+             kind: directly_assignable_expression
+             regex: (^|\.)\s*allowFileAccess$
+         - has:
+             kind: boolean_literal
+             regex: ^true$
+   not:
+-    matches: in-debug-only-branch
+\ No newline at end of file
++    matches: in-debug-only-branch
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml b/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml
+index 96548ae54..ad977734d 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml
+@@ -98,23 +98,23 @@ rule:
+         - has:
+             kind: simple_identifier
+             regex: ^ProcessBuilder$
+         - matches: dash-c-then-nonliteral
+   not:
+     matches: in-debug-only-branch
+ constraints:
+   RT:
+     regex: '(?i)^(this\.)?(m?runtime|rt)$'
+ ---
+-# ARCH-62([[Projects/Android形狀列補規則_計劃]] 範圍 1):Hilt 原始碼 EntryPointAccessors.kt 的 KDoc 寫明每個方法只能用在哪個元件;
++# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:不接閘(樣本外只命中 1 處)。Hilt 原始碼 EntryPointAccessors.kt 的 KDoc 寫明每個方法只能用在哪個元件;
+ # 同檔 entry point 的 @InstallIn 裡沒有那個元件才報(列多個元件時含允許的就不報),entry point 不在同檔不報
+-# fromApplication 另認 ApplicationComponent:SingletonComponent 改名前的舊名(Dagger 2.30 發布說明),樣本外唯一命中就是它
++# fromApplication 另認 ApplicationComponent:SingletonComponent 改名前的舊名(Dagger 2.30 發布說明);@InstallIn 的參數可以跨行寫
+ id: kt-hilt-entrypoint-accessor-mismatch
+ language: kotlin
+ severity: hint
+ message: '[ARCH-62]EntryPointAccessors 的方法跟 entry point 的 @InstallIn 元件對不上,執行時拿不到綁定;改用跟元件對應的 fromX'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ utils:
+   entry-point-not-in:
+     kind: source_file
+     has:
+       stopBy: end
+@@ -135,53 +135,53 @@ rule:
+             - pattern: EntryPointAccessors.fromApplication<$I>($$$)
+         - inside:
+             stopBy: end
+             matches: entry-point-not-in
+             not:
+               has:
+                 stopBy: end
+                 kind: class_declaration
+                 all:
+                   - has: { kind: type_identifier, pattern: $I }
+-                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\(.*\b(SingletonComponent|ApplicationComponent)::class' }
++                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\([\s\S]*\b(SingletonComponent|ApplicationComponent)::class' }
+     - all:
+         - any:
+             - pattern: EntryPointAccessors.fromActivity($$$, $I::class.java)
+             - pattern: EntryPointAccessors.fromActivity<$I>($$$)
+         - inside:
+             stopBy: end
+             matches: entry-point-not-in
+             not:
+               has:
+                 stopBy: end
+                 kind: class_declaration
+                 all:
+                   - has: { kind: type_identifier, pattern: $I }
+-                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\(.*\bActivityComponent::class' }
++                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\([\s\S]*\bActivityComponent::class' }
+     - all:
+         - any:
+             - pattern: EntryPointAccessors.fromFragment($$$, $I::class.java)
+             - pattern: EntryPointAccessors.fromFragment<$I>($$$)
+         - inside:
+             stopBy: end
+             matches: entry-point-not-in
+             not:
+               has:
+                 stopBy: end
+                 kind: class_declaration
+                 all:
+                   - has: { kind: type_identifier, pattern: $I }
+-                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\(.*\bFragmentComponent::class' }
++                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\([\s\S]*\bFragmentComponent::class' }
+     - all:
+         - any:
+             - pattern: EntryPointAccessors.fromView($$$, $I::class.java)
+             - pattern: EntryPointAccessors.fromView<$I>($$$)
+         - inside:
+             stopBy: end
+             matches: entry-point-not-in
+             not:
+               has:
+                 stopBy: end
+                 kind: class_declaration
+                 all:
+                   - has: { kind: type_identifier, pattern: $I }
+-                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\(.*\b(ViewComponent|ViewNoFragmentComponent)::class' }
++                  - has: { stopBy: end, kind: annotation, regex: '^@(dagger\.hilt\.)?InstallIn\([\s\S]*\b(ViewComponent|ViewNoFragmentComponent)::class' }
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/compose.yml b/configs/ast-grep/kotlin-android/rules-unwired/compose.yml
+index 834055a5c..b59247c61 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/compose.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/compose.yml
+@@ -1,25 +1,26 @@
+-# UI-33([[Projects/Android形狀列補規則_計劃]] 範圍 1):沒有註冊任何東西卻寫空的 onDispose;有註冊的那半歸會擋的 UI-32(rules/compose.yml),
++# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:不接閘(樣本外 311 處抽 40 處誤報 6,區塊裡其實有該清理的東西但名字不在註冊字表)。
++# 沒有註冊任何東西卻寫空的 onDispose;有註冊的那半歸會擋的 UI-32(rules/compose.yml),
+ # 兩條用同一份 utils/has-registration-call 判斷,同一段 DisposableEffect 只會被其中一條報
+ id: kt-compose-dispose-not-needed
+ language: kotlin
+ severity: hint
+ message: '[UI-33]DisposableEffect 沒有要清理的東西卻寫空的 onDispose,官方說這不是好做法;改用 LaunchedEffect(key) 或 SideEffect'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ rule:
+   any:
+     - pattern: DisposableEffect($$$) { $$$ }
+     - pattern: DisposableEffect { $$$ }
+   has:
+     pattern: onDispose { }
+     stopBy: end
+   all:
+     - not:
+         matches: has-registration-call
+-    # 樣本內調形狀(2026-11-09):別的分支有真正清理時,提早結束那支只能寫空 onDispose,不報;全部的 onDispose 都空才報
++    # 別的分支有真正清理時,提早結束那支只能寫空 onDispose(API 規定每條分支都要回傳),不報;全部的 onDispose 都空才報
+     - not:
+         has:
+           stopBy: end
+           all:
+             - pattern: onDispose { $$$ }
+             - not:
+                 pattern: onDispose { }
+diff --git a/configs/ast-grep/kotlin-android/rules/api.yml b/configs/ast-grep/kotlin-android/rules/api.yml
+index 26d94798e..a8896b754 100644
+--- a/configs/ast-grep/kotlin-android/rules/api.yml
++++ b/configs/ast-grep/kotlin-android/rules/api.yml
+@@ -314,21 +314,25 @@ rule:
+                 - has:
+                     kind: directly_assignable_expression
+                     regex: '(^|\.)\s*(\w*[sS]ettings|getSettings\(\s*\))\s*(\?|!!)?\s*\.'
+                 - has:
+                     kind: directly_assignable_expression
+                     regex: '\.\s*mixedContentMode$'
+                 - has: {matches: zero-lit}
+   not:
+     matches: in-debug-only-branch
+ ---
+-# 2026-11-09 樣本外 294 處抽 40 處誤報 3(7.5%),過升級條件搬來會擋([[Projects/Android形狀列補規則_計劃]] 範圍 4)
+-# API-2([[Projects/Android形狀列補規則_計劃]] 範圍 1):awaitAll KDoc 與 IntelliJ 檢查 MapAwaitOnCollectionOfDeferred 都只講 map,不收 forEach
++# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:會擋(樣本外 294 處抽 40 處誤報 3)。awaitAll KDoc 與 IntelliJ 檢查
++# MapAwaitOnCollectionOfDeferred 都只講 map,不收 forEach;接收者以 .asFlow() 結尾的不報(Flow 一筆一筆來,沒有集合可 awaitAll)
+ id: kt-map-await-deferred
+ language: kotlin
+ severity: error
+ message: '[API-2]對 Deferred 清單用 map 逐一 await,要等到失敗的那個才會失敗;改用 awaitAll(),任一個失敗就立刻失敗'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ rule:
+   any:
+     - pattern: $L.map { it.await() }
+     - pattern: $L.map { $X -> $X.await() }
++constraints:
++  L:
++    not:
++      regex: '\.asFlow\(\)$'
+diff --git a/configs/ast-grep/kotlin-android/rules/architecture.yml b/configs/ast-grep/kotlin-android/rules/architecture.yml
+index c8266dae8..b0f88323a 100644
+--- a/configs/ast-grep/kotlin-android/rules/architecture.yml
++++ b/configs/ast-grep/kotlin-android/rules/architecture.yml
+@@ -594,22 +594,22 @@ rule:
+   has:
+     kind: variable_declaration
+     regex: ':\s*(\w*Activity|\w*Fragment|\w*View)\??$'
+   inside:
+     kind: class_body
+     inside:
+       any:
+         - kind: companion_object
+         - kind: object_declaration
+ ---
+-# 2026-11-09 樣本外 68 處抽 40 處誤報 0,過升級條件搬來;出處是建議語氣(As a best practice … error-prone),跟 UI-33 同一套,只升 warning 不擋
+-# ARCH-59([[Projects/Android形狀列補規則_計劃]] 範圍 1):同一個 module 裡同型別的綁定,有的確定有限定詞、有的確定沒有,報沒有的那幾個。
++# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:只列出不擋(樣本外 68 處抽 40 處誤報 0;出處是建議語氣 As a best practice … error-prone,只放 warning)。
++# 同一個 module 裡同型別的綁定,有的確定有限定詞、有的確定沒有,報沒有的那幾個。
+ # 確定有=帶 @Named(…) 或同檔用 @Qualifier 宣告的註解;確定沒有=身上的註解全在 plain-provider 清單裡;多重綁定兩邊都不算;其他判不準不報
+ id: kt-hilt-binding-missing-qualifier
+ language: kotlin
+ severity: warning
+ message: '[ARCH-59]同型別有多個綁定,這個沒加限定詞,Hilt 可能注入錯的實例;改成每個綁定都加限定詞'
+ ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+ utils:
+   plain-provider:
+     kind: modifiers
+     regex: '\A(\s*(@(Provides|Binds|Singleton|Reusable|JvmStatic|Suppress|Deprecated|OptIn|[A-Z][A-Za-z]*Scoped)(\([^)]*\))?|public|internal|private|protected|abstract|open|override|suspend)\s*)+\z'
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md
+index 4daf99b45..e941b914e 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/Android形狀列補規則_計劃.md
+@@ -47,22 +47,22 @@ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出
+ 2. **型錄改寫**:四列的現成規則欄改成型錄既有寫法「自寫 ast-grep <規則 id>」;通電批次的「告警帶寫法=」那段改成「未接(規則在 rules-unwired/:還沒在真專案量過誤報)」,其他段(例如 API-2 的「當下推相關列=批二」)照留;UI-33 的「情境怎麼認」照規則改成「空 onDispose 且區塊內沒有註冊呼叫(有註冊的歸 UI-32)」;ARCH-62 的來源欄補 EntryPointAccessors.kt 的網址;API-1、API-2 兩列都拿掉「detekt SequentialAsyncAwait」(detekt 規則集查不到),API-2 改寫 IntelliJ 檢查名 MapAwaitOnCollectionOfDeferred(只在 IDE 跑,來源欄補它的說明頁網址);API-2 的「待查」字樣因此消失,從〈待查證〉拿掉那一列。〈統計〉跟著改:規則包條數、hint 條數、不接閘條數各加 4(224→228、47→51、25→29)(量完搬到 `rules/` 的再照實改等級條數與被會擋規則守到的列數),待查證與規則代號待查各減 1(51→50、48→47)。量完照第 4 點再改。
+ 3. **其餘 11 列寫明不寫的理由**(實測狀態欄補一句,通電批次不變):API-7、UI-18、UI-51、ARCH-43、ARCH-58、DATA-8、DATA-9、DATA-23、DATA-34、TEST-38、PERF-8。理由分三種:要跨檔或型別(UI-18、DATA-8、DATA-9、DATA-23、DATA-34、PERF-8)、要讀 XML 或 Gradle(ARCH-43、TEST-38)、形狀分不出正當用法或出處要推論(API-7:Flow retry KDoc 只說明不帶次數時預設會一直重試,沒說不帶次數是錯的;「要有上限」寫在另一頁離線優先指南的退避策略裡,要兩頁拼起來才成立,照判法不算直接;UI-51:看不到筆數,官方另說小清單用 Column 加 forEach 是對的;ARCH-58:出處只說注入在 super.onCreate() 發生,沒說之前讀會怎樣)。
+ 4. **量誤報與升級**:每條規則照前幾批的量法量一次:
+    - 語料:用 GitHub 程式碼搜尋撈一份,排除前幾批出現過的 repo;撈到之後、還沒看任何結果之前,依 repo 全名的 sha256 第一個位元組奇偶固定切成兩半。判準先寫定、算雜湊再撈。
+    - 樣本內(偶數那半):看命中、把明顯誤報寫成排除;形狀定案後記規則檔雜湊。
+    - 樣本外(奇數那半):形狀定案後只用一次,判升級只看它。跟「另撈一份」一樣保證調形狀時看過的 repo 不拿來判升級。
+    - 命中多的每個 repo 抽一處、固定種子抽 40 處;命中 20 多處全判。判讀代理乾淨脈絡、照判準逐處判真問題、誤報、判不準。
+    - 過升級條件的規則搬到 `rules/`、等級改 error,型錄通電批次改「告警帶寫法=批一」,逐例表那條的目錄與檔名跟著改;API-2 若過,`review-fp-` 樣本拿掉(`rules/` 的規則不豁免它),那個已知誤報改寫進型錄實測狀態欄;出處是建議語氣的(UI-33「不是好做法,請重新考慮」、ARCH-59「As a best practice … error-prone」),過了也只搬 `rules/` 的 warning(推送前不擋,只在報告列出),不升 error;沒過的留在 `rules-unwired/`,通電批次改「未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)」,實測狀態欄寫數字。
+    - 證據放卷證 `governance/review-reports/android形狀列補規則/experiment/`(新增)。
+ 5. **測試**(擴充既有的,不另開):
+-   - `t_kotlin_rulepack_security_rules` 的逐例表 `_KTSEC_CASES` 加一個選填的第五欄,照 `_KTSEC_PLACE` 加選填項的先例:`{"top": True, "lines": (…)}`——`top` 表示本體就是完整的 kt 檔(含 package 與頂層宣告),不包進 `fun case(...) { … }`(Kotlin 不准在函式裡宣告 interface);`lines` 是預期報在哪幾行(ast-grep 報的是節點起始行:ARCH-59 報在函式第一個註解那行,API-2 鏈式寫法報在接收者那行)。沒帶第五欄的既有一百多例照舊。
+-   - 行號要從 ast-grep 的 JSON 取 `range.start.line`;規則包 `check.py` 的 `scan` 現在只回 (規則, 檔),加一個選填參數讓它多回行號,既有呼叫端不帶參數、行為不變。
++   - `t_kotlin_rulepack_security_rules` 的逐例表 `_KTSEC_CASES` 加一個選填的第五欄,照 `_KTSEC_PLACE` 加選填位置欄的先例:值是預期報在哪幾行的 tuple;有這欄就表示本體是完整的 kt 檔(含 package 與頂層宣告),不包進 `fun case(...) { … }`(Kotlin 不准在函式裡宣告 interface)(ast-grep 報的是節點起始行:ARCH-59 報在函式第一個註解那行,API-2 鏈式寫法報在接收者那行)。沒帶第五欄的既有一百多例照舊。
++   - 行號要從 ast-grep 的 JSON 取 `range.start.line`;規則包 `check.py` 的 `scan` 原本只回 (規則, 檔),改成一律回 (規則, 檔, 起始行),兩個既有呼叫端跟著多解一個值(代碼審 r1:不用旗標切換回傳形狀)。
+    - 四條規則加進 `_KTSEC_PLACE`(目錄、檔名、型錄編號、路徑排除),套既有的「目錄、訊息以 [編號] 開頭且不超過 120 字、路徑排除恰好幾項」檢查;同一支測試再驗四列型錄現成規則欄寫著「自寫 ast-grep <規則 id>」而且那個 id 在規則包裡。
+    - 逐例表每個樣式至少一例報:API-2 的 `it` 與具名參數兩式各一;ARCH-62 的四個 fromX 各一例報、一例不報,泛型寫法一例,`@InstallIn` 多元件一例不報;ARCH-59 的「@Named」「同檔 @Qualifier 宣告」各一例報,多重綁定、`@Suppress` 對照組各一例不報;UI-33 的有註冊不報(歸 UI-32)、沒註冊報各一例。
+    - 樣本自測 `t_kotlin_rulepack_samples` 照舊驗壞例報、好例不報。
+    - 統計測試:`_KT_STATS_LINES` 的寫死值照新數改;`_KT_STATS_MUTATIONS` 裡寫死的「待查證:51 列」「50 列」「規則代號待查 48 列」幾個改壞案例的原字串跟著改成新數(不改的話替換找不到原字串、改壞不生效);用 `| API-2 | IJ:「Use awaitAll()` 當錨點的那例,API-2 拿掉後換一列仍在〈待查證〉的當錨點。
+ 6. **圖譜**:[[Systems/kotlin規則包]] 不接閘目錄那行(現在寫共 25 條)的條數與規則清單,新增一條 WHY 記本批的放置與升級條件(記資安各批放置的那條是資安專用,不併進去);[[Projects/Android協程與API寫法機械檢查標準_計劃]] 補一行指向本篇。
+ 
+ **不做**:不寫跨檔或讀 XML、Gradle 的規則;不寫 ARCH-58(出處不直接);不改新增告警閘。
+ 
+ ## 實驗(寫計劃前的最小實驗,2026-11-09,ast-grep 0.51.1)
+ 
+@@ -145,39 +145,45 @@ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出
+ | S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromActivity(act, E::class.java)` | 報 | 同上 |
+ | S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromFragment(f, E::class.java)` | 報 | 同上 |
+ | S2 | `@InstallIn(ViewNoFragmentComponent::class)` 的 `E` 與 `fromView(v, E::class.java)` | 不報 | 同上 |
+ | S2 | `@InstallIn(ActivityComponent::class)` 的 `E` 與泛型 `fromApplication<E>(ctx)` | 報 | 同上 |
+ | S2 | `@InstallIn(ActivityComponent::class, SingletonComponent::class)` 的 `E` 與 `fromApplication(ctx, E::class.java)` | 不報 | 含允許的元件 |
+ | S2 | `EntryPointAccessors.fromApplication(ctx, Other::class.java)`,`Other` 不在同檔 | 不報 | 單檔看不到 @InstallIn |
+ | S2 | DisposableEffect 裡 `val w = window ?: return@DisposableEffect onDispose { }`,後面 `onDispose { w.clearFlags(FLAG) }` | kt-compose-dispose-not-needed 不報 | 樣本內調形狀:那支 API 規定要回傳 onDispose |
+ | S2 | DisposableEffect 裡 if 分支 `onDispose { }`、else 分支 `onDispose { window.clearFlags(FLAG) }` | 不報 | 同上 |
+ | S2 | DisposableEffect 裡提早返回 `onDispose { }`、後面也是 `onDispose { }` | 報 | 全部都空 |
+ | S2 | `@InstallIn(ApplicationComponent::class)` 的 `E` 與 `fromApplication(x, E::class.java)` | kt-hilt-entrypoint-accessor-mismatch 不報 | Dagger 2.30 發布說明:ApplicationComponent 是 SingletonComponent 的舊名 |
++| S2 | `@InstallIn(FragmentComponent::class)` 的 `E` 與 `fromFragment(x, E::class.java)` | 不報 | EntryPointAccessors.kt KDoc(代碼審 r1 補:對應改壞測不到) |
++| S2 | `@InstallIn(ViewComponent::class)` 的 `E` 與 `fromView(x, E::class.java)` | 不報 | 同上 |
++| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromView(x, E::class.java)` | 報 | 同上 |
++| S2 | `@InstallIn(` 換行 `SingletonComponent::class,` 換行 `)` 的 `E` 與 `fromApplication(x, E::class.java)` | 不報 | 同上;代碼審 r1:參數跨行寫原本會誤報 |
++| S2 | `ds.asFlow().map { it.await() }.toList()` | kt-map-await-deferred 不報 | Flow 一筆一筆來,沒有集合可 awaitAll(量測時的誤報類,代碼審 r1 寫成排除) |
+ 
+ ## 回退
+ 
+ 退回本計劃的提交,逐項是:
+ - 規則包:四條新規則與它們的壞例好例樣本、重開的 `rules-unwired/compose.yml`、`utils/` 的註冊判斷;量完搬到 `rules/` 的那幾條。
+ - 型錄:四列的現成規則、通電批次、實測狀態欄;API-1、API-2 的現成規則更正與 API-2 移出〈待查證〉;11 列實測狀態的補句;〈統計〉。
+ - 測試:逐例表的第五欄與新例、`_KTSEC_PLACE` 新增的四筆、統計寫死值與改壞案例的原字串、待查證那支的改壞錨點。
+ - 規則包 `check.py` 的 `scan` 行號參數;UI-32 規則改引共用的註冊判斷(行為不變)。
+ - 圖譜:Systems/kotlin規則包 的不接閘那行;機械檢查標準計劃的指向;本篇。
+ - 卷證留著。
+ 
+ ## 天花板
+ 
+ - 誤報率是 40 處的點估計:map 那條 7.5% 的 Wilson 95% 上界約 20%,搬去會擋之後真專案的誤報可能高於一成。
+-- 單檔語法看不到型別:API-2 會報 Play services `Task`、`ListenableFuture` 這類也有 `await()` 的接收者,也會報 `Flow<Deferred>` 的 map(Flow 本來就是一筆一筆來);lambda 第一行是註解、參數寫了型別、`it.await() + 1` 這類寫法不報。
++- 單檔語法看不到型別:API-2 會報 Play services `Task`、`ListenableFuture` 這類也有 `await()` 的接收者,也會報型別是 `Flow<Deferred>` 的變數的 map(接收者以 `.asFlow()` 結尾的已排除,變數看不出型別);lambda 第一行是註解、參數寫了型別、`it.await() + 1` 這類寫法不報。
+ - ARCH-62 不認具名參數、完整套件名的呼叫、巢狀類別名與 import 別名(別名可能誤報);ARCH-59 看不到別的檔宣告的自訂限定詞,只認 `@Named` 與同檔 `@Qualifier`,其餘少報。
+ - ARCH-59、ARCH-62 只看同一支檔:綁定或 entry point 分在不同檔時漏報;一行寫完又掛兩個註解的 interface 或 object 會漏報(解析器限制)。
+ - 誤報只量命中裡的比例,漏報沒量。
+ 
+ REVISIT:2027-02-09 看 kt-map-await-deferred 搬到會擋後三個月,消費專案對它的 lint-waive 放行占新增告警的比例;超過三成照 RETIRE-IF 降回只登記,Flow 的 map(`.asFlow().map { it.await() }`)若是主要放行原因,先試把它寫成排除再重量
+ REVISIT:2027-05-09 空 onDispose 那條:把「區塊裡其實有該清理的東西」的寫法(start/stop、keepScreenOn、無限迴圈協程、掛攔截器)整理成共用註冊判斷的補充字表,換一批語料重量;補了以後同一份判斷也會讓會擋的 UI-32 多抓,要一起量
+ REVISIT:2027-05-09 量一次這四條的漏報:在新語料裡用文字搜尋找出該報沒報的寫法(跨檔的 entry point、分檔的綁定與別檔的自訂限定詞、一行寫完的 interface 與 object、有型別的 lambda 參數),逐處判是不是形狀漏的,寫進型錄實測狀態欄
+ 
+ ## 審計修正紀錄
+ 
++- 代碼審 r1(2026-11-09,兩席):11 條/blocking 2/fromFragment、fromView 的元件對應改壞測不到,補三例;測試另寫一套型錄讀法,改用 main_rows;@InstallIn 比對不跨行會誤報,改成可跨行;map 那條把量測時的 `.asFlow()` 誤報寫成排除(只會少報,不影響升級判斷);scan 改成固定回三元組;逐例表選填欄改成位置欄、照編號排;卷證 `governance/review-reports/code-android形狀列補規則/`。
+ - 實作與量測(2026-11-09,沒有派席,記在這裡給代碼審看):樣本內看到空 onDispose 的分支寫法誤報,推翻 r1 放行 f7 時「提早返回照報」的判斷,改成全部都空才報;量完 ARCH-59 過條件,照 UI-33 同一套「建議語氣只升 warning」放 warning(範圍 4 原文只寫 UI-33,這裡擴到同語氣的 ARCH-59);EntryPointAccessors 補認舊名 ApplicationComponent。
+ 
+ - r1(2026-11-09,四席):28 條/blocking 10/ARCH-59 判斷限定詞的方向寫反(清單外的註解當限定詞會多報),改成只認確定的限定詞、多重綁定排除;API-2 拿掉出處沒講到的 forEach;UI-33 改成既有 UI-32 的互補、共用註冊判斷;ARCH-62 的對應改引 Hilt 原始碼 KDoc、加泛型寫法與多元件;測試改成擴充既有逐例表(選填頂層與行號欄)而不另開一支,每個樣式至少一例;統計改壞案例的寫死數字列進範圍;API-2 升級時拿掉 review-fp 樣本、UI-33 最多升 warning。
+ - 席報告與收貨紀錄:`governance/review-reports/android形狀列補規則/`(r1-*.md、r1-intake.md)。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 527e6c1c7..14d3688a9 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -127043,51 +127043,56 @@ _KTSEC_CASES = (
+     ("src/main/kotlin/C119.kt", "mapper.enableDefaultTypingAsProperty(ObjectMapper.DefaultTyping.NON_FINAL, \"@class\")", "kt-jackson-default-typing", 1),
+     ("src/main/kotlin/C120.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(\n        imeAction = ImeAction.Done, // TODO KeyboardType.Password\n    ))", "kt-compose-password-keyboard", 0),
+     # 代碼審 r2 審查席:釘住〈天花板〉的自訂元件名、完整套件名不報(拿掉呼叫名的 ^ 錨點會翻紅),與括號裡再有括號(if (…))不報
+     ("src/main/kotlin/C121.kt", "MyTextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+     ("src/main/kotlin/C122.kt", "androidx.compose.material3.TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+     ("src/main/kotlin/C123.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = if (x) ImeAction.Done else ImeAction.Next))", "kt-compose-password-keyboard", 0),
+     # [[Projects/Android不接閘資安規則重量_計劃]] 範圍 5:系統時鐘規則只報有權威原文的 API;帶套件前綴的 Clock.System 要報(設計審 r3 抓到原本比對不到)
+     ("src/main/kotlin/C124.kt", "fun stampKt() = kotlin.time.Clock.System.now()", "kt-prod-reads-system-clock", 1),
+     ("src/main/kotlin/C125.kt", "fun expired() = System.currentTimeMillis() > deadline", "kt-prod-reads-system-clock", 0),
+     ("src/main/kotlin/C126.kt", "fun elapsed() = SystemClock.elapsedRealtime() - start", "kt-prod-reads-system-clock", 0),
+-    # [[Projects/Android形狀列補規則_計劃]] 預期值表 S2:選填第五欄 top=本體就是完整 kt 檔(不包進 fun case,Kotlin 不准在函式裡宣告 interface)、
+-    # lines=預期報在哪幾行(ast-grep 報節點起始行;ARCH-59 報在函式第一個註解那行)。C132 同一支檔兩列:UI-33 不報、既有 UI-32 報。
+-    ("src/main/kotlin/C127.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.map { it.await() }\n', "kt-map-await-deferred", 1, {"top": True, "lines": (3,)}),
+-    ("src/main/kotlin/C128.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.map { d -> d.await() }\n', "kt-map-await-deferred", 1, {"top": True, "lines": (3,)}),
+-    ("src/main/kotlin/C129.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.awaitAll()\n', "kt-map-await-deferred", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C130.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) {\n    ds.forEach { it.await() }\n}\n', "kt-map-await-deferred", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C131.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, {"top": True, "lines": (5,)}),
+-    ("src/main/kotlin/C132.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C132.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-empty-cleanup", 1, {"top": True, "lines": (5,)}),
+-    ("src/main/kotlin/C133.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { o.removeObserver(obs) }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C134.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, {"top": True, "lines": (6,)}),
+-    ("src/main/kotlin/C135.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    fun c(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 2, {"top": True, "lines": (6, 17)}),
+-    ("src/main/kotlin/C136.kt", 'package sec\n\n@Qualifier\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, {"top": True, "lines": (9,)}),
+-    ("src/main/kotlin/C137.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoSet\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C138.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Suppress("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C148.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoSet\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, {"top": True, "lines": ()}),
+-    # 樣本內調形狀(2026-11-09):別的分支有真正清理時,提早結束那支只能寫空 onDispose(API 規定每條分支都要回傳),不報;全部都空才報
+-    ("src/main/kotlin/C149.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        val w = window ?: return@DisposableEffect onDispose { }\n        w.addFlags(FLAG)\n        onDispose { w.clearFlags(FLAG) }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C150.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        if (window == null) {\n            onDispose { }\n        } else {\n            window.addFlags(FLAG)\n            onDispose { window.clearFlags(FLAG) }\n        }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C151.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        val w = window ?: return@DisposableEffect onDispose { }\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, {"top": True, "lines": (5,)}),
+-    # 樣本外唯一命中(2026-11-09):ApplicationComponent 是 SingletonComponent 改名前的舊名(Dagger 2.30 發布說明),fromApplication 配它是對的
+-    ("src/main/kotlin/C152.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ApplicationComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C139.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    fun g(): Gson {\n        return Gson()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C140.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, {"top": True, "lines": (9,)}),
+-    ("src/main/kotlin/C141.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C142.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, {"top": True, "lines": (9,)}),
+-    ("src/main/kotlin/C143.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, {"top": True, "lines": (9,)}),
+-    ("src/main/kotlin/C144.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewNoFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C145.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, {"top": True, "lines": (9,)}),
+-    ("src/main/kotlin/C146.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class, SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, {"top": True, "lines": ()}),
+-    ("src/main/kotlin/C147.kt", 'package sec\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Other::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, {"top": True, "lines": ()}),
++    # [[Projects/Android形狀列補規則_計劃]] 預期值表 S2(C127~C157):選填第五欄=預期報在哪幾行,有這欄就表示本體是完整 kt 檔
++    # (不包進 fun case,Kotlin 不准在函式裡宣告 interface);ast-grep 報節點起始行,ARCH-59 報在函式第一個註解那行。
++    # C132 同一支檔兩列:UI-33 不報、既有 UI-32 報。C149~C151 是樣本內調形狀補的(別的分支有真正清理時不報);
++    # C152 是樣本外唯一命中(ApplicationComponent 舊名);C153~C157 是代碼審 r1 補的(fromFragment、fromView 對應、多行 @InstallIn、asFlow)。
++    ("src/main/kotlin/C127.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
++    ("src/main/kotlin/C128.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.map { d -> d.await() }\n', "kt-map-await-deferred", 1, (3,)),
++    ("src/main/kotlin/C129.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.awaitAll()\n', "kt-map-await-deferred", 0, ()),
++    ("src/main/kotlin/C130.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) {\n    ds.forEach { it.await() }\n}\n', "kt-map-await-deferred", 0, ()),
++    ("src/main/kotlin/C131.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
++    ("src/main/kotlin/C132.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-empty-cleanup", 1, (5,)),
++    ("src/main/kotlin/C132.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
++    ("src/main/kotlin/C133.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { o.removeObserver(obs) }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
++    ("src/main/kotlin/C134.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
++    ("src/main/kotlin/C135.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    fun c(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 2, (6, 17)),
++    ("src/main/kotlin/C136.kt", 'package sec\n\n@Qualifier\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
++    ("src/main/kotlin/C137.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoSet\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C138.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Suppress("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C139.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    fun g(): Gson {\n        return Gson()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C140.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C141.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C142.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C143.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C144.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewNoFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C145.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C146.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class, SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C147.kt", 'package sec\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Other::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C148.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoSet\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
++    ("src/main/kotlin/C149.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        val w = window ?: return@DisposableEffect onDispose { }\n        w.addFlags(FLAG)\n        onDispose { w.clearFlags(FLAG) }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
++    ("src/main/kotlin/C150.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        if (window == null) {\n            onDispose { }\n        } else {\n            window.addFlags(FLAG)\n            onDispose { window.clearFlags(FLAG) }\n        }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
++    ("src/main/kotlin/C151.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        val w = window ?: return@DisposableEffect onDispose { }\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
++    ("src/main/kotlin/C152.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ApplicationComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C153.kt", 'package sec\n\n@EntryPoint\n@InstallIn(FragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C154.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C155.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
++    ("src/main/kotlin/C156.kt", 'package sec\n\n@EntryPoint\n@InstallIn(\n    SingletonComponent::class,\n)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
++    ("src/main/kotlin/C157.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().map { it.await() }.toList()\n', "kt-map-await-deferred", 0, ()),
+ )
+ # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+ _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+                   "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+ # 第三批計劃範圍 2:Compose 多平台的桌面原始碼(桌面沒有手機鍵盤快取)
+ _KTSEC_IGNORES_DESKTOP = (*_KTSEC_IGNORES, "**/src/desktopMain/**", "**/src/jvmMain/**", "**/desktop*/src/**", "**/*-desktop/src/**")
+ # 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號[, 路徑排除;沒寫的是 _KTSEC_IGNORES 八項])(計劃範圍 4 與〈實驗〉第二輪的放置)
+ _KTSEC_PLACE = {
+     "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
+     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
+@@ -127138,77 +127143,73 @@ def t_kotlin_rulepack_security_rules():
+     API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。
+     第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] S1、S2 擴充同一組,C48~C71 是預期值表 S1 逐列、C72~C86 是代碼審 r1 補的覆蓋、C87~C94 是代碼審 r2 對會擋那條逐條件改壞後補的,_KTSEC_PLACE 後 16 筆):混合內容 setter 改回 stopBy: end → C53 紅;
+     賦值 0 拿掉接收者條件 → C52 紅、接收者條件只認 settings → C50 紅、setter 不認 0 → C54 紅、拿掉 src/test 排除 → C55 紅;
+     Zip Slip 拿掉 canonicalPath 排除 → C57 紅;寫死秘密拿掉值的鍵名樣式排除與數字要求 → C65 紅(passwordKey 不是靠名稱排除擋的);
+     生物辨識拿掉單參數限制 → C69 紅;指令執行拿掉串接那支 → C70 紅、改成任何參數都報 → C71 紅;
+     混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。
+     第三批([[Projects/Android資安靜態檢查補齊第三批_計劃]] S1、S2,C95~C116 是預期值表 S1 逐列、C117~C120 是代碼審 r1 補的):
+     密碼欄拿掉「字面 KeyboardOptions 沒設密碼鍵盤」那支 → C101~C103 紅;拿掉 keyboardType 字面值後接逗號那支 → C117 紅;
+     名單拿掉 BasicTextField2 → C108 紅;放行只認 Password 不認 NumberPassword → C104 紅;拿掉 desktopMain 排除 → C100 與 S4 紅;
+     等級改 warning → S2 紅;Jackson 拿掉 AsProperty 兩個名字 → C118、C119 紅;呼叫名拿掉 ^ 錨點 → C121、C122 紅(代碼審 r2)。
+-    形狀列補規則([[Projects/Android形狀列補規則_計劃]] S2、S4,C127~C148,選填第五欄 top 與 lines):API-2 拿掉具名參數樣式 → C128 紅;
++    形狀列補規則([[Projects/Android形狀列補規則_計劃]] S2、S4,C127~C157,選填第五欄=預期行號):API-2 拿掉具名參數樣式 → C128 紅;
+     UI-33 拿掉「沒註冊」條件 → C132 紅;共用註冊判斷不認 Observer → C132 兩列紅;ARCH-59 拿掉多重綁定排除 → C148 紅、
+     不認 @Named → C134 紅、不認同檔 @Qualifier → C136 紅;ARCH-62 拿掉泛型寫法 → C145 紅、fromActivity 或 fromFragment 認錯元件 → C142、C143 紅、
+-    fromView 不認 ViewNoFragmentComponent → C144 紅、多元件只認第一個 → C146 紅、不認舊名 ApplicationComponent → C152 紅;UI-33 別處有清理的排除失效 → C149、C150 紅;scan 行號差一 → 帶 lines 的各例紅;型錄現成規則欄沒寫規則 id → S4 紅。"""
++    fromView 不認 ViewNoFragmentComponent → C144 紅、多元件只認第一個 → C146 紅、不認舊名 ApplicationComponent → C152 紅;UI-33 別處有清理的排除失效 → C149、C150 紅;fromFragment 或 fromView 認錯元件 → C153、C154、C155 紅;@InstallIn 比對不跨行 → C156 紅;拿掉 asFlow 排除 → C157 紅;scan 行號差一 → 帶 lines 的各例紅;型錄現成規則欄沒寫規則 id → S4 紅。"""
+     print("t_kotlin_rulepack_security_rules")
+     import shutil as _sh
+     m = _ktpack()
+     rules = {r["id"]: r for r in m.load_rules()}
+     for rid, (d, fname, cat, *extra) in _KTSEC_PLACE.items():
+         want_ign = extra[0] if extra else _KTSEC_IGNORES
+         r = rules.get(rid)
+         check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
+               str(r and (r["dir"], r["file"])))
+         msg = (r or {}).get("message", "")
+         check(f"S4 {rid} 訊息以 [{cat}] 開頭、不超過 {m.MSG_MAX} 字", msg.startswith(f"[{cat}]") and len(msg) <= m.MSG_MAX,
+               f"{len(msg)} {msg}")
+         got = set((r or {}).get("ignores", []))   # 讀法只有 check.py 的 load_rules 一套(代碼審 r1 架構對齊 F1)
+         check(f"S4 {rid} 路徑排除恰好是 {len(want_ign)} 項", got == set(want_ign), str(sorted(got ^ set(want_ign))))
+-    cat_rows = {}
+-    for ln in m.CATALOG.read_text(encoding="utf-8").splitlines():
+-        cells = [c.strip() for c in ln.split("|")]
+-        if len(cells) > 7 and ln.startswith("| ") and cells[1] not in cat_rows:
+-            cat_rows[cells[1]] = cells[6]
++    cat_rows = {r: c[5] for r, c in m.main_rows().items()}   # 主表只有 main_rows 一條讀法(代碼審 code-android形狀列補規則 r1 架構對齊)
+     for rid in _KTSHAPE_CATALOG_IDS:
+         code = _KTSEC_PLACE[rid][2]
+         check(f"S4(形狀列)型錄 {code} 現成規則欄寫著 自寫 ast-grep {rid}", f"自寫 ast-grep {rid}" in cat_rows.get(code, ""),
+               cat_rows.get(code, "(找不到這列)")[:120])
+     pw = rules.get("kt-compose-password-keyboard") or {}
+     check("S2(第三批)kt-compose-password-keyboard 是 error", pw.get("severity") == "error", str(pw.get("severity")))
+     sg = _ktpack_sg()
+     if not sg:
+         print("  (本機沒有 ast-grep,只跑了 S4 那半;CI 裝了 0.51.1 會跑 S3 逐例)")
+         return
+     root = Path(tempfile.mkdtemp(prefix="gctl-ktsec-"))
+     try:
+         for rel, body, _rid, _n, *opt in _KTSEC_CASES:
+             p = root / rel
+             p.parent.mkdir(parents=True, exist_ok=True)
+-            if opt and opt[0].get("top"):
++            if opt:   # 有預期行號欄 = 本體是完整 kt 檔
+                 p.write_text(body, encoding="utf-8")
+                 continue
+             p.write_text("package sec\n\nfun case(webView: WebView, settings: WebSettings, s: WebSettings?, x: ConnectionSpec,"
+                          " secret: String, y: Byte) {\n    " + body + "\n}\n", encoding="utf-8")
+         hits, at = {}, {}
+         for _d, cfg in m.CONFIGS:
+-            got = m.scan(sg, cfg, root, with_lines=True)
++            got = m.scan(sg, cfg, root)
+             check(f"★前置★ {cfg} 掃得起來", got is not None, cfg)
+             for rid, f, line in got or []:
+                 key = (rid, Path(f).resolve().relative_to(root.resolve()).as_posix())
+                 hits[key] = hits.get(key, 0) + 1
+                 at.setdefault(key, []).append(line)
+         for rel, body, rid, n, *opt in _KTSEC_CASES:
+             got_n = hits.get((rid, rel), 0)
+             head = next((x for x in body.splitlines() if x.strip() and not x.startswith("package")), "")
+             check(f"S3 {rel} 報 {n} 次({rid}):{head[:60]}", got_n == n, f"命中 {got_n}")
+-            if opt and "lines" in opt[0]:
+-                want = sorted(opt[0]["lines"])
++            if opt:
++                want = sorted(opt[0])
+                 check(f"S2(形狀列){rel} 報在第 {want} 行({rid})", sorted(at.get((rid, rel), [])) == want,
+                       str(sorted(at.get((rid, rel), []))))
+     finally:
+         _sh.rmtree(str(root), ignore_errors=True)
+     print("  ✓ t_kotlin_rulepack_security_rules")
+ 
+ 
+ def t_kotlin_catalog_rows_wired():
+     """[S3] 型錄每列欄位數對、編號唯一、標準寫法/接電方式/通電批次非空;形狀類有告警或正向約束;
+     語意類有表態對程式、沒標人裁的有盲判席;來源有網址或縮寫且不是未核對;決策表列編號連號、
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index a3eb96d6c..bbaac4e74 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -144,21 +144,21 @@
+ | FLAKY | https://developer.android.com/training/testing/instrumented-tests/stability |
+ | TEST-DOUBLES | https://developer.android.com/training/testing/fundamentals/test-doubles |
+ 
+ 來源欄裡帶 `#錨點` 的(例 `AND-BP#inject-dispatchers`)是同一頁的段落。Compose 研究裡沒附網址的出處(「預覽文件」「modifier 文件」「CompositionLocal 文件」「導航指引」「社群文章」)照原文寫,標(無網址)。
+ 
+ ## API 一次性呼叫與網路
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | API-1 | 互不依賴的呼叫要並行 | suspend 函式裡相鄰 `val a = x.f(…)`、`val b = y.g(…)`,第二句的參數、具名參數、接收者都沒用到 a | `coroutineScope { val a = async { x.f() }; val b = async { y.g() }; use(a.await(), b.await()) }` | 總耗時變成兩支相加,畫面等比較久 | SC CONCUR_003 列的 detekt SequentialAsyncAwait 在 detekt 規則集查不到;自寫 ast-grep kt-sequential-independent-await(提示級) | B+C | 形狀:相鄰兩句都在等、第二句沒讀第一句的名字 | 告警帶寫法、當下推相關列、行為測試或正向約束 | 告警帶寫法=批一(只有提示級規則,預設不接);當下推相關列=批二;行為測試或正向約束=範本 T1 | 規則 kt-sequential-independent-await(hint):2026-11-05 修好同層條件順序後,樣本實測中兩個壞例、好例不報;原記:2026-11-04 樣本 2 壞例全中,3 個有依賴的好例(位置參數、具名參數、接收者)不報 | PLAN;REACT-DOCTOR;VERCEL;SC〔併:API-1、研C補〕 〔查證 2026-11-07:https://kotlinlang.org/docs/composing-suspending-functions.html〕 |
+-| API-2 | 多筆同型要用 awaitAll | `.map { it.await() }`、`forEach { it.await() }` | `ids.map { async { api.get(it) } }.awaitAll()`;Job 用 `joinAll()` | 第一個失敗前其他結果白等、例外傳遞順序錯,寫法也誤導 | 自寫 ast-grep kt-map-await-deferred;IntelliJ:MapAwaitOnCollectionOfDeferred(只在 IDE 跑,CI 不跑);SC CONCUR_003、SCOPE_004 列的現成規則都查不到實作 | B | 形狀:對清單 map { it.await() } 或 map { d -> d.await() };forEach 不報(出處沒講到) | 告警帶寫法、當下推相關列 | 告警帶寫法=批一;當下推相關列=批二 | 規則 kt-map-await-deferred:樣本實測中壞例、好例不報;Play services Task.await() 是已知誤報(review-fp 樣本);2026-11-09 樣本外 294 處(207 個 repo)抽 40 處誤報 3(Flow 的 map 2、範例碼 1)、判不準 1,過升級條件搬 rules/(error);Play services Task.await() 是已知誤報(單檔看不到型別),這次抽樣沒出現 | PLAN;IJ;SC〔併:API-2、研C補〕 〔查證 2026-11-07:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/await-all.html〕 〔查證 2026-11-09:https://www.jetbrains.com/help/inspectopedia/MapAwaitOnCollectionOfDeferred.html〕 |
++| API-2 | 多筆同型要用 awaitAll | `.map { it.await() }`、`forEach { it.await() }` | `ids.map { async { api.get(it) } }.awaitAll()`;Job 用 `joinAll()` | 第一個失敗前其他結果白等、例外傳遞順序錯,寫法也誤導 | 自寫 ast-grep kt-map-await-deferred;IntelliJ:MapAwaitOnCollectionOfDeferred(只在 IDE 跑,CI 不跑);SC CONCUR_003、SCOPE_004 列的現成規則都查不到實作 | B | 形狀:對清單 map { it.await() } 或 map { d -> d.await() };forEach 不報(出處沒講到) | 告警帶寫法、當下推相關列 | 告警帶寫法=批一;當下推相關列=批二 | 規則 kt-map-await-deferred:樣本實測中壞例、好例不報,接收者以 .asFlow() 結尾的不報(代碼審 r1 補的排除);2026-11-09 樣本外 294 處(207 個 repo)抽 40 處誤報 3(Flow 的 map 2、範例碼 1)、判不準 1,過升級條件搬 rules/(error);Play services Task.await() 是已知誤報(單檔看不到型別),這次抽樣沒出現 | PLAN;IJ;SC〔併:API-2、研C補〕 〔查證 2026-11-07:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/await-all.html〕 〔查證 2026-11-09:https://www.jetbrains.com/help/inspectopedia/MapAwaitOnCollectionOfDeferred.html〕 |
+ | API-3 | async 的結果要有人接 | 單獨一句 `async { }`,回傳的 Deferred 沒人用 | 不要結果就 `launch { }`;要結果就 `val d = async { }; d.await()` | 例外被藏在 Deferred 裡沒人看到,工作也可能被當成已完成 | structured-coroutines:UnusedDeferred;IDE:DeferredResultUnused;Sonar:S6315;SC SCOPE_002:detekt UnusedDeferred/lint AsyncWithoutAwait/編譯器 UNUSED_DEFERRED;IJ:「Unused Deferred」(ID 待查) | A | 形狀:async 呼叫當敘述句 | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未在本機跑 | PLAN;SONAR;SC;IJ〔併:API-3、研C補〕 〔查證 2026-11-07:https://jetbrains.com/help/inspectopedia/DeferredResultUnused.html https://kotlinlang.org/docs/exception-handling.html〕 |
+ | API-4 | 一支失敗時連坐或不連坐要選對 | `supervisorScope { … async … await }` 沒有 try 包住 await;或該各自失敗的放在 `coroutineScope` 裡 | 要一起失敗:`coroutineScope { awaitAll(...) }`;要各自失敗:`supervisorScope { listOf(async{..}, async{..}).map { runCatching { it.await() } } }`(runCatching 內遇 CancellationException 要重拋) | 一支失敗把其他也取消、整頁空白;或該整體失敗的卻顯示半套資料 | 無 | C+D | 語意:要看業務上「一支壞了其他還要不要」 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T1 | — | PLAN;KX-TEST〔併:API-4〕 〔查證 2026-11-07:https://kotlinlang.org/docs/exception-handling.html〕 |
+ | API-5 | HTTP 整個呼叫要有上限 | `OkHttpClient.Builder()…build()` 鏈上沒有 `callTimeout(` | `OkHttpClient.Builder().callTimeout(30, TimeUnit.SECONDS).build()` | OkHttp 預設 0=沒上限,請求可能永遠等,畫面卡在載入 | 自寫 ast-grep | B | 形狀:Builder 鏈缺 callTimeout | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-okhttp-no-calltimeout:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-okhttp-no-calltimeout 命中 1、真 1、誤報 0,留 | PLAN;OKHTTP-CLIENT〔併:API-5〕 〔查證 2026-11-07:https://raw.githubusercontent.com/square/okhttp/master/okhttp/src/commonJvmAndroid/kotlin/okhttp3/OkHttpClient.kt〕 |
+ | API-6 | Ktor 要裝逾時(出處不全) | `HttpClient(…) { }` 裡沒有 `install(HttpTimeout)` | `HttpClient(OkHttp) { install(HttpTimeout) { requestTimeoutMillis = 30_000 } }` | 請求沒上限,卡住不回 | 自寫 ast-grep | B | 形狀:HttpClient 設定區塊缺 install(HttpTimeout) | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未寫 | PLAN〔併:API-6〕〔查證 2026-11-05:https://ktor.io/docs/client-timeout.html https://lysine.dev/okhttp/5.x/okhttp/okhttp3/-ok-http-client/-builder/call-timeout.html〕 |
+ | API-7 | 重試要有上限與退避 | Flow 的 `retry()` 不帶次數;`while (true)` 裡重送;重試迴圈用固定 `delay(常數)` | `retryWhen { cause, attempt -> if (cause is IOException && attempt < 3) { delay(1000L shl attempt.toInt()); true } else false }` | 無限重試耗電耗流量,打爆伺服器 | 自寫 ast-grep | B | 形狀:retry 無參數、while(true) 重送、固定 delay | 告警帶寫法、當下推相關列 | 告警帶寫法=未接(還沒有規則);當下推相關列=批二 | 2026-11-09 不寫規則:Flow retry KDoc 只說明不帶次數時預設會一直重試,沒說不帶次數是錯的;要有上限寫在另一頁離線優先指南,兩頁拼起來才成立,出處不算直接([[Projects/Android形狀列補規則_計劃]]) | PLAN〔併:API-7〕〔查證 2026-11-05:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/retry.html https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/retry-when.html https://kotlinlang.org/docs/coroutines-flow.html https://developer.android.com/topic/architecture/data-layer/offline-first https://ktor.io/docs/client-request-retry.html〕 |
+ | API-8 | 舊回應不能蓋新資料(只要最新一次) | ViewModel 裡帶參數、非 private 函式每次呼叫都 `viewModelScope.launch { }` 寫 state,沒取消前一個 Job;搜尋框用 `flatMapConcat { search(it) }` 或 `flatMapMerge` | 輸入進 `MutableStateFlow`,`query.flatMapLatest { repo.search(it) }.stateIn(…)`;或 `job?.cancel(); job = viewModelScope.launch { }` | 慢的舊查詢晚到,把新查詢的結果蓋掉;或排隊延遲 | 自寫 ast-grep;SC FLOW_009(主題有,三層無實作) | B+C+D | 形狀:每呼叫一次就 launch 寫 state 而無取消;flatMapConcat/Merge 接搜尋輸入 | 告警帶寫法、當下推相關列、行為測試或正向約束 | 告警帶寫法=批一(只有提示級規則,預設不接);當下推相關列=批二;行為測試或正向約束=範本 T2 | 規則 kt-stale-response-launch:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、先取消的好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-stale-response-launch 命中 1、真 0、誤報 1,降 hint:分不出查詢與指令 | PLAN;ESLINT-RAU;SC〔併:API-8、研C五10〕 〔查證 2026-11-07:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/flat-map-latest.html〕 |
+ | API-9 | 離開畫面要取消在途請求 | `GlobalScope.`、當場 `CoroutineScope(…).launch`、Fragment 裡用 `lifecycleScope` 而不是 `viewLifecycleOwner.lifecycleScope`;資料層 `GlobalScope.launch { api.sync() }`;`GlobalScope.launch { anim.animateTo() }` 跑 UI 動畫 | 畫面工作用 `viewModelScope`/`viewLifecycleOwner.lifecycleScope` + `repeatOnLifecycle`;Compose 動畫用 `rememberCoroutineScope()`;要活過畫面的用注入的 applicationScope 或 WorkManager | 請求與協程洩漏、例外沒人接;Fragment View 銷毀後還更新 binding 而崩潰 | detekt:GlobalCoroutineUsage;structured-coroutines:InlineCoroutineScope;androidx:UnsafeRepeatOnLifecycleDetector;Sonar:S6306;SC SCOPE_001:detekt/lint GlobalScopeUsage/編譯器 GLOBAL_SCOPE_USAGE;SC SCOPE_003:detekt InlineCoroutineScope、ExternalScopeLaunch/lint UnstructuredLaunch、InlineCoroutineScope;SC ARCH_002:lint ViewModelScopeLeak、LifecycleAwareScope、LifecycleAwareFlowCollection;編譯器 @DelicateCoroutinesApi 警告;待查(資料層研究的 detekt 候選 GlobalCoroutineUsage) | A+B+C | 形狀:GlobalScope、當場建 scope、Fragment 用 lifecycleScope | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=範本 T12 | 規則 kt-compose-globalscope-in-composable、kt-unmanaged-scope-launch:樣本實測中壞例、好例不報;原記:GlobalScope 已實測(detekt 不需型別就響);Android Lint 照這列壞寫法真跑沒報 UnsafeRepeatOnLifecycleDetector(2026-11-08,見〈接電證據〉;2026-11-05 那次命中的樣本另寫了 repeatOnLifecycle) | PLAN;DETEKT;SC;SONAR;LINT;AND-BP#create-coroutines-data-layer;PAD-LIFE;CMP-SE〔併:API-9、研C補、研C二13、研D一30、研M二9〕〔查證 2026-11-05:https://developer.android.com/kotlin/coroutines/coroutines-best-practices https://developer.android.com/topic/libraries/architecture/views/coroutines-views https://developer.android.com/develop/ui/compose/side-effects https://developer.android.com/topic/architecture/data-layer〕 |
+ | API-10 | 防重複送出(出處不全) | `onClick` 觸發的函式裡直接 `launch`,沒有「進行中」判斷 | `fun submit() { if (job?.isActive == true) return; job = viewModelScope.launch { … } }`,或 uiState 帶 `isSubmitting` 讓按鈕 `enabled = !isSubmitting` | 連點送出兩筆訂單或兩次扣款 | 無 | C+D | 語意:要知道這個動作重複執行有沒有害 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T1 | — | PLAN〔併:API-10〕 |
+ | API-11 | callback 轉 suspend 要能取消 | `suspendCoroutine { }`;`suspendCancellableCoroutine { }` 裡沒有 `invokeOnCancellation`;`suspendCoroutine { api.call().enqueue(…) }` | `suspendCancellableCoroutine { cont -> val call = api.call(); cont.invokeOnCancellation { call.cancel() }; call.enqueue(…) }`;Retrofit 直接宣告 `suspend fun` | 請求無法取消,資源洩漏、畫面關了還在跑 | 自寫 ast-grep;IDE:SuspendCoroutineLacksCancellationGuarantees;IJ:「Use suspendCancellableCoroutine instead of suspendCoroutine」(ID 待查);SC INTEROP_001:detekt SuspendCoroutineWithoutCancellation/編譯器 SUSPEND_COROUTINE_WITHOUT_CANCELLATION | A+B | 形狀:suspendCoroutine 或缺 invokeOnCancellation | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-suspendcoroutine:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本兩壞例中、好例不報;規則 kt-suspendcancellable-no-oncancel(語意覆核級):缺 invokeOnCancellation 那支另拆出來,包一次性 Task 的寫法形狀分不出對錯 | PLAN;IJ;SC;RETROFIT〔併:API-11、研C補、研D一11〕〔查證 2026-11-05:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/suspend-cancellable-coroutine.html https://lysine.dev/retrofit/declarations/〕 |
+ | API-12 | callbackFlow 要 awaitClose | `callbackFlow { }` 裡沒有 `awaitClose` | `callbackFlow { val l = Listener { trySend(it) }; api.register(l); awaitClose { api.unregister(l) } }` | 監聽器沒移除而洩漏;執行期丟 IllegalStateException | 自寫 ast-grep;SC INTEROP_002:detekt CallbackFlowWithoutAwaitClose/編譯器 CALLBACK_FLOW_WITHOUT_AWAIT_CLOSE | A+B | 形狀:callbackFlow 區塊缺 awaitClose | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-callbackflow-no-awaitclose:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、好例不報 | PLAN;SC〔併:API-12、研C補〕 〔查證 2026-11-07:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/callback-flow.html〕 |

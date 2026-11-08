@@ -1,0 +1,72 @@
+"""逐項拿掉規則裡的每個比對樣式與每個正規式選項,看測試會不會紅(代碼審 r2 換形狀:不再手挑改壞)。
+用法:python3 -I sweep.py [--list]"""
+import os, re, subprocess, shutil, sys
+os.chdir('/Users/enzo/orca/workspaces/lumos-toolchain/shape-rows-rules')
+K='configs/ast-grep/kotlin-android/'
+IDS=['kt-map-await-deferred','kt-compose-dispose-not-needed','kt-hilt-binding-missing-qualifier','kt-hilt-entrypoint-accessor-mismatch','kt-compose-dispose-empty-cleanup']
+FILES=[K+'rules/api.yml',K+'rules/architecture.yml',K+'rules/compose.yml',K+'rules-unwired/compose.yml',K+'rules-unwired/architecture.yml',K+'utils/has-registration-call.yml']
+def blocks(path):
+    """回 (起行, 迄行) 的區塊,只取 IDS 或 utils 檔整份"""
+    L=open(path,encoding='utf-8').read().split('\n')
+    if 'utils/' in path: return [(0,len(L))]
+    out=[]; start=0
+    for i,l in enumerate(L+['---']):
+        if l=='---' or i==len(L):
+            seg=L[start:i]
+            if any(re.match(r'^id: (\S+)',x) and re.match(r'^id: (\S+)',x).group(1) in IDS for x in seg): out.append((start,i))
+            start=i+1
+    return out
+def alts(rx):
+    """正規式裡每個含 | 的括號群組,逐一列出拿掉某個選項後的字串"""
+    res=[]
+    for i,ch in enumerate(rx):
+        if ch!='(' or (i>0 and rx[i-1]=='\\'): continue
+        depth=0; parts=[]; last=i+1; j=i
+        while j<len(rx):
+            c=rx[j]
+            if c=='\\': j+=2; continue
+            if c=='(': depth+=1
+            elif c==')':
+                depth-=1
+                if depth==0: parts.append((last,j)); break
+            elif c=='|' and depth==1: parts.append((last,j)); last=j+1
+            j+=1
+        if len(parts)>=2:
+            for a,b in parts:
+                body=rx[a:b]
+                if body.startswith('?:') or body.startswith('?'): continue
+                keep=[rx[x:y] for x,y in parts if (x,y)!=(a,b)]
+                res.append((body, rx[:i+1]+'|'.join(keep)+rx[parts[-1][1]:]))
+    return res
+muts=[]
+for f in FILES:
+    L=open(f,encoding='utf-8').read().split('\n')
+    for s,e in blocks(f):
+        for n in range(s,e):
+            l=L[n]
+            if re.match(r'^\s*- pattern: ',l):
+                muts.append((f,n,l,None,f'拿掉樣式 {l.strip()[11:60]}'))
+            m=re.search(r"regex: '(.*)'",l) or re.search(r'regex: (\^.*\$)\s*$',l)
+            if m:
+                for body,new in alts(m.group(1)):
+                    muts.append((f,n,l,l.replace(m.group(1),new,1),f'正規式拿掉選項 {body[:40]}'))
+if '--list' in sys.argv:
+    for x in muts: print(x[0].split('/')[-2]+'/'+x[0].split('/')[-1], x[1]+1, x[4])
+    print(len(muts)); sys.exit()
+env=dict(os.environ, LUMOS_AST_GREP='/private/tmp/claude-501/-Users-enzo-orca-workspaces-lumos-toolchain-shearwater/5b6d202a-9139-47f7-b6b9-deb227707ba4/scratchpad/sgvenv/bin/ast-grep')
+gaps=0
+for f,n,old,new,desc in muts:
+    orig=open(f,encoding='utf-8').read(); L=orig.split('\n')
+    if new is None: del L[n]
+    else: L[n]=new
+    open(f,'w',encoding='utf-8').write('\n'.join(L)); shutil.rmtree(K+'__pycache__',ignore_errors=True)
+    try:
+        r=subprocess.run(['python3.14','scripts/test_lumos.py','-k','kotlin_rulepack_s'],capture_output=True,text=True,env=env,timeout=900)
+        red=[l for l in r.stdout.splitlines() if l.strip().startswith('✗') and 'FAILED' not in l]
+        ok=bool(red)
+        if not ok: gaps+=1
+        print(('✓ 紅' if ok else '✗ 沒紅'), f.split('kotlin-android/')[1], n+1, desc, f'({len(red)})', flush=True)
+    finally:
+        open(f,'w',encoding='utf-8').write(orig)
+shutil.rmtree(K+'__pycache__',ignore_errors=True)
+print('沒紅', gaps, '/', len(muts))

@@ -127050,6 +127050,116 @@ _KTSEC_CASES = (
     ("src/main/kotlin/C124.kt", "fun stampKt() = kotlin.time.Clock.System.now()", "kt-prod-reads-system-clock", 1),
     ("src/main/kotlin/C125.kt", "fun expired() = System.currentTimeMillis() > deadline", "kt-prod-reads-system-clock", 0),
     ("src/main/kotlin/C126.kt", "fun elapsed() = SystemClock.elapsedRealtime() - start", "kt-prod-reads-system-clock", 0),
+    # [[Projects/Android形狀列補規則_計劃]] 預期值表 S2(C127~C157):選填第五欄=預期報在哪幾行,有這欄就表示本體是完整 kt 檔
+    # (不包進 fun case,Kotlin 不准在函式裡宣告 interface);ast-grep 報節點起始行,ARCH-59 報在函式第一個註解那行。
+    # C132 同一支檔兩列:UI-33 不報、既有 UI-32 報。C149~C151 是樣本內調形狀補的(別的分支有真正清理時不報);
+    # C152 是樣本外唯一命中(ApplicationComponent 舊名);C153~C157 是代碼審 r1 補的(fromFragment、fromView 對應、多行 @InstallIn、asFlow)。
+    ("src/main/kotlin/C127.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
+    ("src/main/kotlin/C128.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.map { d -> d.await() }\n', "kt-map-await-deferred", 1, (3,)),
+    ("src/main/kotlin/C129.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.awaitAll()\n', "kt-map-await-deferred", 0, ()),
+    ("src/main/kotlin/C130.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) {\n    ds.forEach { it.await() }\n}\n', "kt-map-await-deferred", 0, ()),
+    ("src/main/kotlin/C131.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    ("src/main/kotlin/C132.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-empty-cleanup", 1, (5,)),
+    ("src/main/kotlin/C132.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C133.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        o.addObserver(obs)\n        onDispose { o.removeObserver(obs) }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C134.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C135.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    fun c(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 2, (6, 17)),
+    ("src/main/kotlin/C136.kt", 'package sec\n\n@Qualifier\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
+    ("src/main/kotlin/C137.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoSet\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C138.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Suppress("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C139.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    fun g(): Gson {\n        return Gson()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C140.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C141.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C142.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C143.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C144.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewNoFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C145.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C146.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class, SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C147.kt", 'package sec\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Other::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C148.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoSet\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C149.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        val w = window ?: return@DisposableEffect onDispose { }\n        w.addFlags(FLAG)\n        onDispose { w.clearFlags(FLAG) }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C150.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        if (window == null) {\n            onDispose { }\n        } else {\n            window.addFlags(FLAG)\n            onDispose { window.clearFlags(FLAG) }\n        }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C151.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect(o) {\n        val w = window ?: return@DisposableEffect onDispose { }\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    ("src/main/kotlin/C152.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ApplicationComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C153.kt", 'package sec\n\n@EntryPoint\n@InstallIn(FragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C154.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C155.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C156.kt", 'package sec\n\n@EntryPoint\n@InstallIn(\n    SingletonComponent::class,\n)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C157.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().map { it.await() }.toList()\n', "kt-map-await-deferred", 0, ()),
+    # 代碼審 r2 換形狀(C158~):逐項拿掉規則裡每個樣式與正規式選項,沒翻紅的那幾項補例(非限定詞清單每一項、多重綁定註解、不帶 key 的 DisposableEffect、泛型 fromFragment/fromView、每個註冊名字)
+    ("src/main/kotlin/C158.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @Singleton\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C159.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @Reusable\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C160.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @JvmStatic\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C161.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @Suppress("UNUSED")\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C162.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @Deprecated("old")\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C163.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @OptIn(ExperimentalApi::class)\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C164.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    @ActivityScoped\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C165.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    public fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C166.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    internal fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C167.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    private fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C168.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    protected fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C169.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    open fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C170.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    override fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C171.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    suspend fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (6,)),
+    ("src/main/kotlin/C172.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoMap\n    @StringKey("k")\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C173.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @ElementsIntoSet\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C174.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @StringKey("k")\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C175.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect {\n        log("x")\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    ("src/main/kotlin/C176.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, obs: LifecycleObserver) {\n    DisposableEffect {\n        o.addObserver(obs)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-empty-cleanup", 1, (5,)),
+    ("src/main/kotlin/C177.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C178.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView<E>(x)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C179.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.subscribe(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C180.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.setOnChangeListener(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C181.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        listen(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C182.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.addNetworkCallback(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C183.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        registerReceiver(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C184.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntoMap\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    # 代碼審 r3(C185~):結構條件的例子——型別綁定、同檔限定詞綁定、同檔兩個 entry point、元件名字邊界、巢狀 entry point、註冊名字的錨點
+    ("src/main/kotlin/C185.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun gson(): Gson {\n        return Gson()\n    }\n\n    @Provides\n    @Named("auth")\n    fun client(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C186.kt", 'package sec\n\n@Qualifier\nannotation class AuthClient\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @MyScopeLike\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C187.kt", 'package sec\n\n@javax.inject.Qualifier\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
+    ("src/main/kotlin/C188.kt", 'package sec\n\n@Qualifier\nannotation class ApiKey\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun plain(): String {\n        return String()\n    }\n\n    @Provides\n    @ApiKey\n    fun key(): String {\n        return String()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
+    ("src/main/kotlin/C189.kt", 'package sec\n\n@EntryPoint\n@InstallIn(FragmentComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
+    ("src/main/kotlin/C190.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
+    ("src/main/kotlin/C191.kt", 'package sec\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
+    ("src/main/kotlin/C192.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityComponent::class)\ninterface E1 {\n    fun a(): A\n}\n\n@EntryPoint\n@InstallIn(SingletonComponent::class)\ninterface E2 {\n    fun b(): B\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E2::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (15,)),
+    ("src/main/kotlin/C193.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewWithFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C194.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ViewWithFragmentComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C195.kt", 'package sec\n\n@EntryPoint\n@InstallIn(ActivityRetainedComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C196.kt", 'package sec\n\n@EntryPoint\n@InstallIn(MySingletonComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C197.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(ActivityComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (11,)),
+    ("src/main/kotlin/C198.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        unregisterReceiver(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    ("src/main/kotlin/C199.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.subscribeOn(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    ("src/main/kotlin/C200.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.setOnClick(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    ("src/main/kotlin/C201.kt", 'package sec\n\n@Composable\nfun A(o: Source, l: Listener) {\n    DisposableEffect(o) {\n        o.addListenerCount(l)\n        onDispose { }\n    }\n}\n', "kt-compose-dispose-not-needed", 1, (5,)),
+    # 代碼審 r3 結構條件改壞列舉(C202~):拿掉 has/not/inside、解開綁定、拿掉字邊界與 stopBy 後沒翻紅的那幾項補例
+    ("src/main/kotlin/C202.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().toList().map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
+    ("src/main/kotlin/C203.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @MyScopeLike\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C204.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    private fun helper(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C205.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @BindsOptionalOf\n    @Named("x")\n    abstract fun b(): OkHttpClient\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C206.kt", 'package sec\n\n@Qualifier\nannotation class StringKeyAuth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @StringKeyAuth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (9,)),
+    ("src/main/kotlin/C207.kt", 'package sec\n\nobject Qualifiers {\n    @Qualifier\n    annotation class Auth\n}\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 1, (11,)),
+    ("src/main/kotlin/C208.kt", 'package sec\n\nannotation class Tag\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Tag\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C209.kt", 'package sec\n\n@QualifierLike\nannotation class Auth\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @Auth\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C210.kt", 'package sec\n\n@Composable\nfun A(o: Lifecycle, r: DisposableEffectResult) {\n    DisposableEffect(o) {\n        log("x")\n        r\n    }\n}\n', "kt-compose-dispose-not-needed", 0, ()),
+    ("src/main/kotlin/C211.kt", 'package sec\n\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C212.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(SingletonComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromApplication(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C213.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(ActivityComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C214.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(FragmentComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromFragment(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C215.kt", 'package sec\n\nclass Host {\n    @EntryPoint\n    @InstallIn(ViewComponent::class)\n    interface Nested {\n        fun foo(): Foo\n    }\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, Nested::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 0, ()),
+    ("src/main/kotlin/C216.kt", 'package sec\n\n@EntryPoint\n@InstallIn(MyActivityComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromActivity(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    ("src/main/kotlin/C217.kt", 'package sec\n\n@EntryPoint\n@InstallIn(CustomViewComponent::class)\ninterface E {\n    fun foo(): Foo\n}\n\nfun get(x: Any) = EntryPointAccessors.fromView(x, E::class.java)\n', "kt-hilt-entrypoint-accessor-mismatch", 1, (9,)),
+    # 多重綁定的鍵改成只認 Dagger 內建五個之後,每個 Key 各一例(C218~C221)
+    ("src/main/kotlin/C218.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntKey(1)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C219.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @LongKey(1L)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C220.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @ClassKey(Foo::class)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    ("src/main/kotlin/C221.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @LazyClassKey(Foo::class)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+    # 代碼審 r4(C222~C224):asFlow() 後面接 buffer、flowOn 這類 Flow 算子仍是 Flow,不報;收成 toList() 之後又是清單,照報
+    ("src/main/kotlin/C222.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().buffer().map { it.await() }.toList()\n', "kt-map-await-deferred", 0, ()),
+    ("src/main/kotlin/C223.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().flowOn(io).map { it.await() }.toList()\n', "kt-map-await-deferred", 0, ()),
+    ("src/main/kotlin/C224.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().buffer().toList().map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
+    ("src/main/kotlin/C225.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().toSet().map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
+    ("src/main/kotlin/C226.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().toCollection(mutableListOf()).map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
 )
 # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
 _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
@@ -127082,6 +127192,18 @@ _KTSEC_PLACE = {
     # 第三批(計劃範圍 2):密碼欄另帶 Compose 多平台的桌面四項排除
     "kt-compose-password-keyboard": ("rules", "compose.yml", "UI-112", _KTSEC_IGNORES_DESKTOP),
     "kt-jackson-default-typing": ("rules-unwired", "data.yml", "DATA-99"),
+    # [[Projects/Android形狀列補規則_計劃]] 範圍 1 的放置(量完升到 rules/ 的,同一個提交改這裡)
+    "kt-map-await-deferred": ("rules", "api.yml", "API-2"),
+    "kt-compose-dispose-not-needed": ("rules-unwired", "compose.yml", "UI-33"),
+    "kt-hilt-binding-missing-qualifier": ("rules", "architecture.yml", "ARCH-59"),
+    "kt-hilt-entrypoint-accessor-mismatch": ("rules-unwired", "architecture.yml", "ARCH-62"),
+}
+# 型錄現成規則欄要寫著「自寫 ast-grep <id>」的規則(形狀列補規則計劃 S4)
+_KTSHAPE_CATALOG_IDS = {   # 規則 id → 型錄通電批次欄裡「告警帶寫法=」那段該寫的值(代碼審 r4:量完改的就是這欄,要釘住)
+    "kt-map-await-deferred": "告警帶寫法=批一",
+    "kt-compose-dispose-not-needed": "告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)",
+    "kt-hilt-binding-missing-qualifier": "告警帶寫法=批一",
+    "kt-hilt-entrypoint-accessor-mismatch": "告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)",
 }
 
 
@@ -127105,7 +127227,11 @@ def t_kotlin_rulepack_security_rules():
     第三批([[Projects/Android資安靜態檢查補齊第三批_計劃]] S1、S2,C95~C116 是預期值表 S1 逐列、C117~C120 是代碼審 r1 補的):
     密碼欄拿掉「字面 KeyboardOptions 沒設密碼鍵盤」那支 → C101~C103 紅;拿掉 keyboardType 字面值後接逗號那支 → C117 紅;
     名單拿掉 BasicTextField2 → C108 紅;放行只認 Password 不認 NumberPassword → C104 紅;拿掉 desktopMain 排除 → C100 與 S4 紅;
-    等級改 warning → S2 紅;Jackson 拿掉 AsProperty 兩個名字 → C118、C119 紅;呼叫名拿掉 ^ 錨點 → C121、C122 紅(代碼審 r2)。"""
+    等級改 warning → S2 紅;Jackson 拿掉 AsProperty 兩個名字 → C118、C119 紅;呼叫名拿掉 ^ 錨點 → C121、C122 紅(代碼審 r2)。
+    形狀列補規則([[Projects/Android形狀列補規則_計劃]] S2、S4,C127~C226,選填第五欄=預期行號):API-2 拿掉具名參數樣式 → C128 紅;
+    UI-33 拿掉「沒註冊」條件 → C132 紅;共用註冊判斷不認 Observer → C132 兩列紅;ARCH-59 拿掉多重綁定排除 → C148 紅、
+    不認 @Named → C134 紅、不認同檔 @Qualifier → C136 紅;ARCH-62 拿掉泛型寫法 → C145 紅、fromActivity 或 fromFragment 認錯元件 → C142、C143 紅、
+    fromView 不認 ViewNoFragmentComponent → C144 紅、多元件只認第一個 → C146 紅、不認舊名 ApplicationComponent → C152 紅;UI-33 別處有清理的排除失效 → C149、C150 紅;fromFragment 或 fromView 認錯元件 → C153、C154、C155 紅;@InstallIn 比對不跨行 → C156 紅;拿掉 asFlow 排除 → C157 紅;scan 行號差一 → 帶 lines 的各例紅;型錄現成規則欄沒寫規則 id → S4 紅。"""
     print("t_kotlin_rulepack_security_rules")
     import shutil as _sh
     m = _ktpack()
@@ -127120,6 +127246,12 @@ def t_kotlin_rulepack_security_rules():
               f"{len(msg)} {msg}")
         got = set((r or {}).get("ignores", []))   # 讀法只有 check.py 的 load_rules 一套(代碼審 r1 架構對齊 F1)
         check(f"S4 {rid} 路徑排除恰好是 {len(want_ign)} 項", got == set(want_ign), str(sorted(got ^ set(want_ign))))
+    rows_all = m.main_rows()   # 主表只有 main_rows 一條讀法(代碼審 code-android形狀列補規則 r1 架構對齊)
+    for rid, batch in _KTSHAPE_CATALOG_IDS.items():
+        code = _KTSEC_PLACE[rid][2]
+        c = rows_all.get(code) or [""] * 12
+        check(f"S4(形狀列)型錄 {code} 現成規則欄寫著 自寫 ast-grep {rid}", f"自寫 ast-grep {rid}" in c[5], c[5][:120])
+        check(f"S4(形狀列)型錄 {code} 通電批次寫著 {batch}", batch in c[9], c[9][:120])
     pw = rules.get("kt-compose-password-keyboard") or {}
     check("S2(第三批)kt-compose-password-keyboard 是 error", pw.get("severity") == "error", str(pw.get("severity")))
     sg = _ktpack_sg()
@@ -127128,21 +127260,30 @@ def t_kotlin_rulepack_security_rules():
         return
     root = Path(tempfile.mkdtemp(prefix="gctl-ktsec-"))
     try:
-        for rel, body, _rid, _n in _KTSEC_CASES:
+        for rel, body, _rid, _n, *opt in _KTSEC_CASES:
             p = root / rel
             p.parent.mkdir(parents=True, exist_ok=True)
+            if opt:   # 有預期行號欄 = 本體是完整 kt 檔
+                p.write_text(body, encoding="utf-8")
+                continue
             p.write_text("package sec\n\nfun case(webView: WebView, settings: WebSettings, s: WebSettings?, x: ConnectionSpec,"
                          " secret: String, y: Byte) {\n    " + body + "\n}\n", encoding="utf-8")
-        hits = {}
+        hits, at = {}, {}
         for _d, cfg in m.CONFIGS:
             got = m.scan(sg, cfg, root)
             check(f"★前置★ {cfg} 掃得起來", got is not None, cfg)
-            for rid, f in got or []:
+            for rid, f, line in got or []:
                 key = (rid, Path(f).resolve().relative_to(root.resolve()).as_posix())
                 hits[key] = hits.get(key, 0) + 1
-        for rel, body, rid, n in _KTSEC_CASES:
+                at.setdefault(key, []).append(line)
+        for rel, body, rid, n, *opt in _KTSEC_CASES:
             got_n = hits.get((rid, rel), 0)
-            check(f"S3 {rel} {'報一次' if n else '不報'}({rid}):{body.splitlines()[0][:60]}", got_n == n, f"命中 {got_n}")
+            head = next((x for x in body.splitlines() if x.strip() and not x.startswith("package")), "")
+            check(f"S3 {rel} 報 {n} 次({rid}):{head[:60]}", got_n == n, f"命中 {got_n}")
+            if opt:
+                want = sorted(opt[0])
+                check(f"S2(形狀列){rel} 報在第 {want} 行({rid})", sorted(at.get((rid, rel), [])) == want,
+                      str(sorted(at.get((rid, rel), []))))
     finally:
         _sh.rmtree(str(root), ignore_errors=True)
     print("  ✓ t_kotlin_rulepack_security_rules")
@@ -129612,9 +129753,9 @@ _KT_STATS_LINES = (
     ("- 級的組合:", (":A 207", "、A+B 28", "、A+B+C 2", "、A+C 3", "、A+C+D 1", "、A+D 1", "、B 179", "、B+C 9", "、B+C+D 1",
                     "、B+D 9", "、C 48", "、C+D 4", "、D 43")),
     ("- 情境:", ("形狀類 428", "語意類 107")),
-    ("- 待查證:", ("待查證:51 列", "規則代號待查 48 列", "來源待核對 3 列")),
-    ("- 規則包條數:", ("規則包條數:224", "error 48", "warning 117", "info 12", "hint 47", "其中 25 條")),
-    ("- 被會擋的規則守到的列數", (":129",)),
+    ("- 待查證:", ("待查證:50 列", "規則代號待查 47 列", "來源待核對 3 列")),
+    ("- 規則包條數:", ("規則包條數:228", "error 49", "warning 118", "info 12", "hint 49", "其中 27 條")),
+    ("- 被會擋的規則守到的列數", (":131",)),
     ("- 出處不全的列:", ("列:29", "人裁的列:4")),
     ("- 逐列查證", ("\u3015):525 列",)),
 )
@@ -129632,9 +129773,9 @@ _KT_STATS_MUTATIONS = (
     # 下面兩個連〈統計〉的待查證數一起改到一致,只留給〈待查證〉跟主表的雙向比對抓(不讓統計那道代抓)
     ("待查證列著主表已解決的 DATA-27", lambda t: t.replace("| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n",
         "| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n| DATA-27 | — | — |\n", 1)
-        .replace("- 待查證:51 列", "- 待查證:52 列", 1)),
-    ("待查證漏列主表還待查的 API-2", lambda t: _kt_drop_line("| API-2 | IJ:「Use awaitAll()")(t)
-        .replace("- 待查證:51 列", "- 待查證:50 列", 1).replace("規則代號待查 48 列", "規則代號待查 47 列", 1)),
+        .replace("- 待查證:50 列", "- 待查證:51 列", 1)),
+    ("待查證漏列主表還待查的 API-3", lambda t: _kt_drop_line("| API-3 | IJ:「Unused Deferred」")(t)
+        .replace("- 待查證:50 列", "- 待查證:49 列", 1).replace("規則代號待查 47 列", "規則代號待查 46 列", 1)),
     ("待查證來源格寫了主表沒有的待核對", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |",
         "| API-3 | IJ:「Unused Deferred」(ID 待查) | X(未開頁核對) |", 1)),
     ("待查證代號格寫 — 但主表還待查", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", "| API-3 | — | — |", 1)),

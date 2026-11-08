@@ -600,3 +600,68 @@ rule:
       any:
         - kind: companion_object
         - kind: object_declaration
+---
+# [[Projects/Android形狀列補規則_計劃]] 範圍 1、4:會擋(樣本外 68 處抽 40 處誤報 0;原文寫明後果 could result in Hilt injecting the wrong dependency)。
+# 同一個 module 裡同型別的綁定,有的確定有限定詞、有的確定沒有,報沒有的那幾個。
+# 確定有=帶 @Named(…) 或同檔用 @Qualifier 宣告的註解;確定沒有=身上的註解全在 plain-provider 清單裡;多重綁定兩邊都不算;其他判不準不報
+# 多重綁定的鍵只認 Dagger 內建的 StringKey、IntKey、LongKey、ClassKey、LazyClassKey(自訂 MapKey 一定配 @IntoMap,已被排除);寫成 \w+Key 會把同檔宣告的 @ApiKey 這類限定詞也排掉
+id: kt-hilt-binding-missing-qualifier
+language: kotlin
+severity: warning
+message: '[ARCH-59]同型別有多個綁定,這個沒加限定詞,Hilt 可能注入錯的實例;改成每個綁定都加限定詞'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  plain-provider:
+    kind: modifiers
+    regex: '\A(\s*(@(Provides|Binds|Singleton|Reusable|JvmStatic|Suppress|Deprecated|OptIn|[A-Z][A-Za-z]*Scoped)(\([^)]*\))?|public|internal|private|protected|abstract|open|override|suspend)\s*)+\z'
+  binding:
+    kind: function_declaration
+    has:
+      kind: modifiers
+      regex: '@(Provides|Binds)\b'
+    not:
+      has:
+        kind: modifiers
+        regex: '@(IntoSet|IntoMap|ElementsIntoSet|StringKey|IntKey|LongKey|ClassKey|LazyClassKey)\b'
+rule:
+  matches: binding
+  has:
+    matches: plain-provider
+  all:
+    - has:
+        kind: user_type
+        pattern: $T
+  inside:
+    kind: class_body
+    has:
+      matches: binding
+      all:
+        - has:
+            kind: user_type
+            pattern: $T
+        - has:
+            kind: modifiers
+            any:
+              - has:
+                  kind: annotation
+                  regex: '^@Named\('
+              - has:
+                  kind: annotation
+                  has:
+                    stopBy: end
+                    kind: type_identifier
+                    pattern: $Q
+                  inside:
+                    stopBy: end
+                    kind: source_file
+                    has:
+                      stopBy: end
+                      kind: class_declaration
+                      all:
+                        - has:
+                            stopBy: end
+                            kind: annotation
+                            regex: '^@(javax\.inject\.)?Qualifier\b'
+                        - has:
+                            kind: type_identifier
+                            pattern: $Q

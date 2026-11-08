@@ -2,7 +2,7 @@
 type: system
 status: doing
 created: 2026-11-05
-updated: 2026-11-08
+updated: 2026-11-09
 responsibility: 負責 Kotlin/Android 寫法的 ast-grep 規則包(規則、樣本、自我檢查)與型錄 checks-catalog.md 的格式;不負責新增告警閘本身的判定(那在 pitfalls-code-loop)、不負責 detekt 共用設定
 aliases: []
 about_code:
@@ -14,6 +14,7 @@ about_code:
   - skills/kotlin-idioms/test-templates.md
   - configs/ast-grep/kotlin-android/sgconfig-unwired.yml
   - configs/ast-grep/kotlin-android/utils/debug-only.yml
+  - configs/ast-grep/kotlin-android/utils/has-registration-call.yml
 tags:
   - type/system
   - status/doing
@@ -60,6 +61,9 @@ summary: |-
   RULE:改了型錄某列的壞寫法欄或現成規則欄,那列〈接電證據〉的真跑樣本要照新的壞寫法重寫、照範本設定重跑,判定照結果改(自檢只驗樣本檔在不在,驗不了樣本跟壞寫法欄還一不一致) [依據:審計] [since:2026-11-08] [retire:when-gone:configs/ast-grep/kotlin-android/samples/lint-wiring] [confirmed:2026-11-08]
   WHY:check.py 的 wiring_table、wiring_dir 不加底線,是給測試讀判定表與樣本目錄用(同 situation_dir 的例外) [出處:代碼審 code-型錄接電要附證據 r1 架構對齊席] [因:測試要用複本的樣本目錄做改壞]
   WHY:規則掛的型錄列出處不全時,先再查一次權威出處,查得到就照原文改寫型錄列並保留規則,查不到或跟官方說法相反就把規則移出規則包,不再停放在 rules-unwired/;型錄列保留出處不全當參考、不掛規則 [出處:使用者 2026-11-08「每條納入規則的檢查,都必須有憑據、有來源,總不能讓來歷不明的規則來把關」「移掉之前,先查明出處,有的就不用刪」;[[Projects/Android不接閘資安規則重量_計劃]] 範圍 5] [因:只登記不擋的規則也會在推送前印出來、被當成標準看,出處不明就不該出現] [不選:照舊停放在 rules-unwired/(來歷不明的規則照樣印給人看)] [test:t_kotlin_rulepack_unwired_dir]
+  WHY:有出處、單檔語法認得出的形狀列補自寫規則,先放 rules-unwired/(hint)、樣本外量過升級條件才搬 rules/;已知單檔排除不了的誤報類(API-2 的 Play services Task)搬 rules/ 時拿掉 review-fp 樣本、誤報寫進實測欄,出處只有建議語氣、沒寫後果的(UI-33)過了也只放 rules-hints/(rules/ 的 warning 也會擋,推送前擋不擋看目錄不看等級) [出處:[[Projects/Android形狀列補規則_計劃]]] [因:出處只證明是壞寫法,不證明規則抓得準;rules/ 的規則不豁免 review-fp 樣本] [不選:出處有就直接放 rules/] [test:t_kotlin_rulepack_security_rules]
+  WHY:同一個 DisposableEffect 判斷「有沒有註冊監聽」只准一份,UI-32(有註冊卻留空 onDispose,會擋)與 UI-33(沒註冊卻寫空 onDispose,只登記)都引用 utils/has-registration-call,同一段只會被其中一條報 [出處:[[Projects/Android形狀列補規則_計劃]] 設計審 r1 架構對齊] [因:兩條各寫一份判斷會漂移,給出相反建議] [不選:UI-33 自己複製一份註冊字表] [test:t_kotlin_rulepack_security_rules]
+  WHY:自寫規則的逐例測試要附改壞列舉證據:逐項拿掉每個比對樣式、正規式選項、has/not/inside 結構條件、變數綁定、字邊界與錨點、stopBy,每項都要有例子變紅;拿掉也不影響行為的記成等價改壞,規則載入不了的另列,證據放卷證 [出處:[[Projects/Android形狀列補規則_計劃]] 代碼審 r1~r3 跑滿回顧] [因:三輪都卡在規則條件沒例子守,靠審查席逐項點名補一輪只補一類] [不選:只靠審查席點名補例] [test:t_kotlin_rulepack_security_rules]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
@@ -73,9 +77,10 @@ verified_by:
 
 - `configs/ast-grep/kotlin-android/sgconfig.yml`:會擋的規則(`rules/` 底下,error 與 warning)。消費專案照 [[Systems/linter精選目錄]] 的範本宣告這一份。
 - `configs/ast-grep/kotlin-android/sgconfig-review.yml`:語意覆核級規則(`rules-review/`,ast-grep 的 info 等級):形狀抓得到可疑寫法、但要知道型別或語意才分得出對錯的規則(例:Firebase 的 `setValue` 跟 LiveData 同名)。不擋、也不降成提示級;範本不接:2026-11-08 使用者裁先量誤報、一成以下才接,六個開源 App 量下來沒有一條達標(見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉)。好例樣本裡檔名開頭 `review-fp-` 的,是這級規則已知會誤報的寫法,改規則形狀時拿來對照,自我檢查不算好例誤報。
-- `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),誤報可能較高,範本預設不接。
-- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):還沒在真專案量過誤報、或量到誤報超過一成、或樣本量不夠的規則;過去也停放引用型錄出處不全列的規則(2026-11-08 先從 `rules-hints/` 拆來 8 條;同日 API-14、TEST-31 人裁標出處不全,再從 `rules/` 搬 2 條、`rules-hints/` 搬 1 條,範本預設會擋的那份因此少 2 條,見 [[Projects/Android寫法型錄逐列查證_計劃]];同日改成查不到出處就移出規則包,現在這個目錄沒有掛出處不全列的規則),與還沒在真專案量過、或量到誤報超過一成、或樣本量不夠的新規則(2026-11-08 資安第一批三條、第二批十五條、第三批一條(kt-jackson-default-typing);2026-11-08 再查出處,查不到或跟官方相反的五條(kt-async-await-immediately、kt-error-by-message-string、kt-compose-preview-no-theme、kt-compose-test-node-by-literal-text、kt-compose-test-node-by-index)移出規則包,不接閘的 `rules-unwired/compose.yml` 因此刪掉,共 25 條在這個目錄,見 [[Projects/Android不接閘資安規則重量_計劃]];放哪一級與升級條件見摘要裡三批合寫的那行 WHY);範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
+- `configs/ast-grep/kotlin-android/sgconfig-hints.yml`:提示級規則(`rules-hints/`),兩種:誤報可能較高的,或出處只有建議語氣、沒寫後果的(2026-11-09 [[Projects/Android形狀列補規則_計劃]]);範本預設不接。
+- `configs/ast-grep/kotlin-android/sgconfig-unwired.yml`:不接閘的規則(`rules-unwired/`,任何等級):還沒在真專案量過誤報、或量到誤報超過一成、或樣本量不夠的規則;過去也停放引用型錄出處不全列的規則(2026-11-08 先從 `rules-hints/` 拆來 8 條;同日 API-14、TEST-31 人裁標出處不全,再從 `rules/` 搬 2 條、`rules-hints/` 搬 1 條,範本預設會擋的那份因此少 2 條,見 [[Projects/Android寫法型錄逐列查證_計劃]];同日改成查不到出處就移出規則包,現在這個目錄沒有掛出處不全列的規則),與還沒在真專案量過、或量到誤報超過一成、或樣本量不夠的新規則(2026-11-08 資安第一批三條、第二批十五條、第三批一條(kt-jackson-default-typing);2026-11-08 再查出處,查不到或跟官方相反的五條(kt-async-await-immediately、kt-error-by-message-string、kt-compose-preview-no-theme、kt-compose-test-node-by-literal-text、kt-compose-test-node-by-index)移出規則包,不接閘的 `rules-unwired/compose.yml` 因此刪掉,見 [[Projects/Android不接閘資安規則重量_計劃]];2026-11-09 補有出處、單檔認得出的四條,量完 kt-map-await-deferred 搬 `rules/api.yml`(error)、kt-hilt-binding-missing-qualifier 搬 `rules/architecture.yml`(warning,也會擋),kt-compose-dispose-not-needed 與 kt-hilt-entrypoint-accessor-mismatch 留這裡,`rules-unwired/compose.yml` 重開,共 27 條在這個目錄,見 [[Projects/Android形狀列補規則_計劃]];放哪一級與升級條件見摘要裡三批合寫的那行 WHY);範本不宣告,型錄自檢 `catalog_problems` 擋出處不全的規則放到別的目錄。
 - `configs/ast-grep/kotlin-android/utils/debug-only.yml`:跨檔共用判斷(`utils/`,不是規則、不出告警):四份 sgconfig 都用 `utilDirs` 掛它,規則以 `matches:` 引用;規則包自檢與 `load_rules` 不讀這個目錄
+- `configs/ast-grep/kotlin-android/utils/has-registration-call.yml`:「區塊裡有註冊監聽的呼叫」共用判斷,掛法同上;會擋的 UI-32(有註冊卻留空 onDispose)與只登記的 UI-33(沒註冊卻寫空 onDispose)都引用它,改字表兩條一起變
 - `rules/`、`rules-review/`、`rules-hints/`、`rules-unwired/` 底下的 yml 依型錄主題分檔;每條規則 `samples/bad/<id>/`、`samples/good/<id>/` 各有樣本(只掃測試碼的規則放 `src/test/` 底下)。樣本故意埋壞寫法,風險分級、棧別題、新增告警閘(含測試防竄改比對)、Room 守衛與每支檔有家都不把它們當產品碼(`_RULEPACK_SAMPLE_RE`、`.lumos/config.json` 的 `node_home.ignore`)。
 - `configs/ast-grep/kotlin-android/check.py`:自我檢查(零依賴),`python3 check.py --sg <ast-grep>` 驗:每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、只掃測試碼的規則對「祖先目錄叫 test 的正式碼」不命中、訊息格式;`--catalog-only` 驗型錄,另跑情境題證據樣式的正反例自測(situation_sample_problems);`--sg` 完整模式另用新增告警閘的 SARIF 解析掃兩條指定規則的壞例(SARIF 探針 `sarif_gate_rule_ids`)。
 - `skills/kotlin-idioms/checks-catalog.md`:型錄。欄位與規則見它開頭的〈輸入與口徑〉;〈情境決策表〉是語意類情境的「看到這個 → 預設這樣寫 → 什麼時候例外」,列編號 D-n 只准往後加;〈待查證〉〈統計〉〈接電證據〉三節是手寫的,由 `check.py` 的 pending_problems、stats_problems、wiring_problems 核對(見摘要 WHY)。
