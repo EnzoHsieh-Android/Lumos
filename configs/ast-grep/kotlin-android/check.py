@@ -121,20 +121,31 @@ B4_TAG_LINT = "CI 範本:Android Lint"
 B4_TAG_CR = "推送前:detekt 外掛 compose-rules"
 
 
-def batch4_expected_tags(rule_col):
-    """一列現成規則欄 → 該有的第四批接電標籤(清單,依 Android Lint、compose-rules 順序)。
+def batch4_candidates(rule_col):
+    """一列現成規則欄 → 第四批的候選 [(標籤, 規則碼)](去重、照出現順序;[[Projects/型錄接電要附證據_計劃]] 〈用詞〉候選)。
     以「;」「、」切段;某段含 androidx:、androidx.<套件>:、內建:、資安包:、slack:、Android Lint: 接大寫開頭的規則碼,或含 cr:compose:<規則>,
-    而且那段不含 _B4_SKIP 裡任一個註記字樣,規則碼不是 B4_DEFAULT_OFF 才算。"""
-    lint = cr = False
+    而且那段不含 _B4_SKIP 裡任一個註記字樣,規則碼不是 B4_DEFAULT_OFF 才算。排除字只會讓候選變少(少宣稱)。"""
+    out = []
     for seg in re.split(r"[;；、]", rule_col):
         if any(w in seg for w in _B4_SKIP):
             continue
-        lint = lint or any(code not in B4_DEFAULT_OFF for code in _B4_LINT.findall(seg))
-        cr = cr or any(code not in B4_DEFAULT_OFF for code in _B4_CR.findall(seg))
-    return [tag for tag, on in ((B4_TAG_LINT, lint), (B4_TAG_CR, cr)) if on]
+        for tag, pat in ((B4_TAG_LINT, _B4_LINT), (B4_TAG_CR, _B4_CR)):
+            out += [(tag, code) for code in pat.findall(seg) if code not in B4_DEFAULT_OFF and (tag, code) not in out]
+    return out
 
 
-# 觸發字停用字表:這些字幾乎每支 Kotlin 檔都有,當觸發字會讓改檔前推列與情境題每次都亮(第二、三批計劃的依賴)
+def batch4_expected_tags(rule_col):
+    """一列現成規則欄 → 有候選的第四批標籤(清單,依 Android Lint、compose-rules 順序)。"""
+    tags = {tag for tag, _code in batch4_candidates(rule_col)}
+    return [tag for tag in (B4_TAG_LINT, B4_TAG_CR) if tag in tags]
+
+
+
+# 〈接電證據〉節的真跑樣本:自檢只驗樣本檔名恰好是 <編號>.kt.txt 而且存在。樣本有沒有照壞寫法欄寫、有沒有另加會觸發檢查的呼叫,
+# 不用字面規則判——實作時「只准加外殼」的逐行比對連兩包被打穿(壞寫法欄多是文字描述、XML 與 Gradle 有必寫結構、「沒寫 X」型的列
+# 最長那段反引號是正確寫法),改由代碼審派一席逐支對照壞寫法欄判讀([[Projects/型錄接電要附證據_計劃]]〈天花板〉)
+
+
 STOP_TRIGGERS = frozenset((
     "map", "filter", "forEach", "let", "run", "apply", "also", "with", "if", "else", "when", "try", "catch",
     "val", "var", "fun", "class", "object", "return", "suspend", "launch", "async", "await", "flow", "Flow",
@@ -279,14 +290,22 @@ def dt_table(text):
     return rows, probs
 
 
-def _abbr_table(text):
-    """〈來源縮寫〉表 → {縮寫: 那一列的網址或說明};找不到那一節回 None。catalog_problems 與 dt_table 共用(縮寫表只讀一套)。"""
-    i = text.find("\n## 來源縮寫")
+def _section(text, title):
+    """型錄一節的文字(從「## <title>」那行到下一個「## 」之前);找不到回 None。〈來源縮寫〉、〈待查證〉、〈接電證據〉共用這一套切法。"""
+    i = text.find("\n## " + title)
     if i < 0:
         return None
-    j = text.find("\n## ", i + 5)
+    j = text.find("\n## ", i + 1)
+    return text[i:j] if j >= 0 else text[i:]
+
+
+def _abbr_table(text):
+    """〈來源縮寫〉表 → {縮寫: 那一列的網址或說明};找不到那一節回 None。catalog_problems 與 dt_table 共用(縮寫表只讀一套)。"""
+    sec = _section(text, "來源縮寫")
+    if sec is None:
+        return None
     out = {}
-    for ln in text[i:j if j >= 0 else len(text)].splitlines():
+    for ln in sec.splitlines():
         m = re.match(r"^\|\s*([A-Z][A-Z0-9-]+)\s*\|", ln)
         if m:
             c = _cells(ln)
@@ -341,17 +360,108 @@ def _dt_row_lint(get):
     return probs
 
 
-def _batch4_problems(rule_col, batch):
-    """一列的現成規則欄與通電批次 → 第四批標籤的問題(空=對)。不論這列原本標批幾:現成規則欄登了口徑認得的現成檢查,
-    通電批次就要寫「批四(<標籤>)」(批一的列寫成「批一、批四(…)」);口徑判成沒接上的不准寫標籤。原本只判已寫批四的列,
-    批一的列登了 Android Lint 檢查也不會被點到(2026-11-08 量到 11 列;第四批計劃範圍 4 寫「其他列不動」,不是判過這些列不接)。"""
-    want = batch4_expected_tags(rule_col)
-    have = [tag for tag in (B4_TAG_LINT, B4_TAG_CR) if tag in batch]
-    if want and ("批四(" + ";".join(want) + ")" not in batch or "批四(現成規則)" in batch):
-        return ["第四批通電批次要寫「批四(" + ";".join(want) + ")」(照型錄〈輸入與口徑〉的口徑)"]
-    if have and not want:
-        return ["第四批通電批次寫了接電標籤,但口徑判成還沒接上(段裡註記" + "、".join(_B4_SKIP) + ",或規則預設關、沒有規則碼)"]
-    return []
+# 〈接電證據〉節([[Projects/型錄接電要附證據_計劃]] 範圍 1、3):每個候選(編號,標籤,檢查)恰好一筆判定,批四標籤以判定為準
+_WIRING_TITLE = "接電證據"
+_WIRING_COLS = 7          # 編號|標籤|檢查|判定|等級|理由|出處
+_WIRING_VERDICTS = ("擋得到", "擋不到")
+_WIRING_LEVELS = ("Fatal", "Error", "Warning", "Hint", "Informational", "detekt", "沒報")
+_WIRING_BLOCKING = {B4_TAG_LINT: ("Fatal", "Error", "Warning"), B4_TAG_CR: ("detekt",)}
+_WIRING_ENV_RE = re.compile(r"^真跑環境:\d{4}-\d{2}-\d{2},AGP \d+(?:\.\d+)+,Gradle \d+(?:\.\d+)+", re.M)
+_WIRING_RUN_RE = re.compile(r"^\u3014真跑 \d{4}-\d{2}-\d{2}:([^\u3015]+)\u3015$")
+_WIRING_NO_BUILD = "樣本編不過:"
+_BATCH4_RE = re.compile(r"批四\(([^)]*)\)")
+
+
+def wiring_dir():
+    return HERE / "samples" / "lint-wiring"
+
+
+def wiring_table(text):
+    """〈接電證據〉節 → (判定列清單 [欄位], 節的文字或 None)。讀法照 _pending_table:_MAIN_ROW_RE 認列、_cells 切欄。"""
+    sec = _section(text, _WIRING_TITLE)
+    if sec is None:
+        return [], None
+    return [_cells(ln) for ln in sec.splitlines() if _MAIN_ROW_RE.match(ln)], sec
+
+
+def _batch4_have(batch):
+    """通電批次欄 → (批四括號寫的標籤清單或 None, 位置問題)。整格找全部批四括號(代碼審 r1 審查席 a2:只看告警帶寫法之後的第一個,
+    寫在別的子段或寫兩個都漏):超過一個、或不在「告警帶寫法=」那段值裡(兩者之間不准有別的「=」),都報。"""
+    ms = list(_BATCH4_RE.finditer(batch))
+    if not ms:
+        return None, []
+    i = batch.find("告警帶寫法=")
+    probs = ["〈接電證據〉通電批次的批四括號只准一個"] if len(ms) > 1 else []
+    if i < 0 or ms[0].start() < i or "=" in batch[i + len("告警帶寫法="):ms[0].start()]:
+        probs.append("〈接電證據〉通電批次的批四只准寫在「告警帶寫法=」那段值裡")
+    return [t.strip() for t in ms[0].group(1).split(";")], probs
+
+
+def wiring_problems(text, rows):
+    """〈接電證據〉節跟主表雙向對得上、每筆格式對、樣本檔在,而且有候選的列通電批次的批四標籤恰好等於判定擋得到的標籤。"""
+    table, sec = wiring_table(text)
+    if sec is None:
+        return [("<catalog>", "找不到〈接電證據〉節")]
+    out = [] if _WIRING_ENV_RE.search(sec) else [("<catalog>", "〈接電證據〉缺「真跑環境:<日期>,AGP <版本>,Gradle <版本>…」那一行")]
+    seen, hits = set(), {}
+    for c in table:
+        out += [(c[0], p) for p in _wiring_entry_problems(c, rows, seen, hits)]
+    for rid, c in rows.items():
+        out += [(rid, p) for p in _wiring_row_problems(rid, c, seen, hits)]
+    return out
+
+
+def _wiring_entry_problems(c, rows, seen, hits):
+    """〈接電證據〉一筆判定 → 問題;順手把(編號,標籤,檢查)記進 seen、擋得到的標籤記進 hits。"""
+    rid = c[0]
+    if len(c) != _WIRING_COLS:
+        return [f"〈接電證據〉欄位數 {len(c)},應為 {_WIRING_COLS}"]
+    tag, code, verdict, level, why, src = c[1:]
+    if rid not in rows:
+        return ["〈接電證據〉的列不在主表"]
+    key = (rid, tag, code)
+    if key in seen:
+        return [f"〈接電證據〉判定重複:{tag} {code}"]
+    seen.add(key)
+    out = [] if (tag, code) in batch4_candidates(rows[rid][5]) else [f"〈接電證據〉判定的檢查不是候選:{tag} {code}"]
+    if verdict not in _WIRING_VERDICTS or level not in _WIRING_LEVELS:
+        return [*out, f"〈接電證據〉判定或等級不是固定值:{verdict} {level}"]
+    if verdict == "擋得到":
+        if level not in _WIRING_BLOCKING.get(tag, ()):
+            out.append(f"〈接電證據〉等級跟判定矛盾:{tag} {code} 擋得到卻是 {level}")
+        hits.setdefault(rid, set()).add(tag)
+    elif not why.strip():
+        out.append(f"〈接電證據〉擋不到要寫理由:{tag} {code}")
+    return out + _wiring_source_problems(src, rid, why)
+
+
+def _wiring_row_problems(rid, c, seen, hits):
+    """主表一列 → 候選沒判定的、批四標籤跟判定不一致的問題。沒有候選的列(例:批四(現成規則))照舊值,但不准寫接電標籤。"""
+    cands = batch4_candidates(c[5])
+    out = [f"〈接電證據〉要補判定:{tag} {code}" for tag, code in cands if (rid, tag, code) not in seen]
+    have, where = _batch4_have(c[9])
+    have = have or []
+    out += where
+    if not cands:
+        if any(t in (B4_TAG_LINT, B4_TAG_CR) for t in have):
+            out.append("〈接電證據〉通電批次寫了接電標籤,但現成規則欄沒有候選(沒有口徑認得的現成檢查)")
+        return out
+    want = [t for t in (B4_TAG_LINT, B4_TAG_CR) if t in hits.get(rid, set())]
+    if have != want:
+        out.append("〈接電證據〉通電批次的批四標籤跟判定不一致:要寫" + ("「批四(" + ";".join(want) + ")」" if want else "沒有批四"))
+    return out
+
+
+def _wiring_source_problems(src, rid, why):
+    """一筆判定的出處 → 問題。真跑:樣本檔名恰好是 <編號>.kt.txt 而且存在;查證:重用 _VERIFIED_RE、理由以樣本編不過開頭。"""
+    m = _WIRING_RUN_RE.match(src.strip())
+    if m:
+        if m.group(1) != f"{rid}.kt.txt":
+            return [f"〈接電證據〉樣本檔名不是 {rid}.kt.txt:{m.group(1)}"]
+        return [] if (wiring_dir() / m.group(1)).is_file() else [f"〈接電證據〉樣本檔不存在:{m.group(1)}"]
+    if _VERIFIED_RE.fullmatch(src.strip()):
+        return [] if why.startswith(_WIRING_NO_BUILD) else [f"〈接電證據〉出處是查證時理由要以「{_WIRING_NO_BUILD}」開頭"]
+    return ["〈接電證據〉出處要是\u3014真跑 日期:檔名\u3015或\u3014查證 日期:網址\u3015"]
 
 
 def catalog_problems(rules=None):
@@ -373,7 +483,6 @@ def catalog_problems(rules=None):
         name, std, kind, wire, batch, src = c[1], c[3], c[7], c[8], c[9], c[11]
         if not std or not wire or not batch:
             problems.append((rid, "標準寫法、接電方式、通電批次不准空"))
-        problems += [(rid, p) for p in _batch4_problems(c[5], batch)]
         if kind.startswith("形狀") and not ("告警帶寫法" in wire or "行為測試或正向約束" in wire):
             problems.append((rid, "形狀類要有「告警帶寫法」或「行為測試或正向約束」"))
         if kind.startswith("語意"):
@@ -413,7 +522,7 @@ def catalog_problems(rules=None):
         if m and m.group(1) in weak_ids and r.get("dir") != "rules-unwired":   # 缺 dir 鍵照不在 unwired 算
             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准放 rules-unwired/"))
     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
-    problems += pending_problems(text, rows) + stats_problems(text, rows, rules)
+    problems += pending_problems(text, rows) + wiring_problems(text, rows) + stats_problems(text, rows, rules)
     return problems
 
 
@@ -425,12 +534,11 @@ _PENDING_EMPTY = ("—", "")
 
 def _pending_table(text):
     """〈待查證〉節的列 → ({編號: 欄位(補到三欄)}, 重複的編號);節尾是下一個 `## `(同 _abbr_table)。找不到這一節回 ({}, [])。"""
-    i = text.find("\n## 待查證")
-    if i < 0:
+    sec = _section(text, "待查證")
+    if sec is None:
         return {}, []
-    j = text.find("\n## ", i + 1)
     rows, dup = {}, []
-    for ln in (text[i:j] if j > 0 else text[i:]).splitlines():
+    for ln in sec.splitlines():
         m = _MAIN_ROW_RE.match(ln)
         if m:
             if m.group(1) in rows:
@@ -486,7 +594,8 @@ def _stats_expected(text, rows, rules):
     want += [("逐列查證", r"- 逐列查證[^\n]*?:(\d+) 列", sum(1 for c in rows.values() if _VERIFIED_RE.search(c[11]))),
              ("待查證", r"- 待查證:(\d+) 列", len(pend)),
              ("待查證代號待查", r"- 待查證:[^\n]*?規則代號待查 (\d+) 列", sum(1 for a, _b in need if a)),
-             ("待查證來源待核對", r"- 待查證:[^\n]*?來源待核對 (\d+) 列", sum(1 for _a, b in need if b))]
+             ("待查證來源待核對", r"- 待查證:[^\n]*?來源待核對 (\d+) 列", sum(1 for _a, b in need if b)),
+             ("接電證據", r"- 接電證據:(\d+) 筆", len(wiring_table(text)[0]))]
     if rules is not None:
         want += [("規則包條數", r"- 規則包條數:(\d+)", len(rules)),
                  ("不接閘條數", r"- 規則包條數:[^\n]*?其中 (\d+) 條在不接閘", sum(1 for r in rules if r.get("dir") == "rules-unwired"))]

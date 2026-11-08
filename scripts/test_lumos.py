@@ -129125,6 +129125,91 @@ def t_kt_catalog_unverified_rows():
     print("  ✓ t_kt_catalog_unverified_rows")
 
 
+def t_kt_catalog_batch4_evidence():
+    """[[Projects/型錄接電要附證據_計劃]] S1~S4:〈接電證據〉節每個候選(編號,標籤,檢查)恰好一筆判定,批四標籤以判定擋得到的為準,
+    真跑出處的樣本檔要在、檔名恰好是那一列編號。改壞照計劃〈預期值表〉逐列做,各要報一個以〈接電證據〉開頭、指名那一列的問題。"""
+    ck = _ktpack()
+    lint = ck.B4_TAG_LINT
+    text = ck.CATALOG.read_text(encoding="utf-8")
+    rows = ck.main_rows(text)
+    probs = ck.wiring_problems(text, rows)
+    check("S1 真型錄〈接電證據〉0 個問題", probs == [], "\n".join(f"{a}:{b}" for a, b in probs[:15]))
+    table, _sec = ck.wiring_table(text)
+    keys = [tuple(c[:3]) for c in table]
+    cands = {(rid, t, code) for rid, c in rows.items() for t, code in ck.batch4_candidates(c[5])}
+    check("S1 每個候選恰好一筆判定", set(keys) == cands and len(keys) == len(set(keys)), f"{len(keys)} 筆、候選 {len(cands)}")
+    check("S1 API-3(沒有候選)通電批次照舊", "批四(現成規則)" in rows["API-3"][9] and not ck.batch4_candidates(rows["API-3"][5]), rows["API-3"][9])
+    for rid in ("UI-49", "UI-96", "UI-92"):
+        check(f"S3 {rid} 判定沒有擋得到 → 不含批四、不新增批一", "批四(" not in rows[rid][9] and "批一" not in rows[rid][9], rows[rid][9])
+    check("S3 API-9 不含批四、保留原本的批一", "批四(" not in rows["API-9"][9] and "批一" in rows["API-9"][9], rows["API-9"][9])
+    i24 = next(i for i, c in enumerate(table) if c[0] == "UI-24" and c[1] == lint)
+    check("★前置★ UI-24 有一筆擋得到的 Android Lint 判定", table[i24][3] == "擋得到", str(table[i24]))
+    lines = text.split("\n")
+    li = next(i for i, ln in enumerate(lines) if ln.startswith("| UI-24 |") and lint in ln and "擋得到" in ln and i > text[:text.find("\n## " + ck._WIRING_TITLE)].count("\n"))
+
+    def mutate(name, fn, want_rid, want_word):
+        cp = _ktpack(copy=True)              # 改壞一律寫進複本、用複本的總檢查讀(代碼審 r1 架構對齊席 b5)
+        ls = lines[:]
+        fn(ls)
+        cp.CATALOG.write_text("\n".join(ls), encoding="utf-8")
+        allp = cp.catalog_problems(cp.load_rules())
+        got = [(a, b) for a, b in allp if a == want_rid and b.startswith("〈接電證據〉") and want_word in b]
+        check(f"S2/S4 改壞抓得到:{name}", len(got) >= 1, str([x for x in allp if x[0] == want_rid][:4]))
+        return cp
+
+    def setcol(ls, col, val, at=None):
+        k = li if at is None else at
+        c = ck._cells(ls[k])
+        c[col] = val
+        ls[k] = "| " + " | ".join(c) + " |"
+    main24 = next(i for i, ln in enumerate(lines) if ln.startswith("| UI-24 |"))
+    check("★前置★ UI-24 主表列在〈接電證據〉那筆之前", main24 < li, f"{main24} {li}")
+    mutate("刪掉 UI-24 那筆判定", lambda ls: ls.pop(li), "UI-24", "要補判定")
+    mutate("UI-24 判定的檢查改成 NewApi", lambda ls: setcol(ls, 2, "NewApi"), "UI-24", "不是候選")
+    mutate("UI-24 判定改成擋不到、通電批次不動", lambda ls: (setcol(ls, 3, "擋不到"), setcol(ls, 4, "沒報")), "UI-24", "不一致")
+    mutate("UI-24 判定重複一筆", lambda ls: ls.insert(li, ls[li]), "UI-24", "重複")
+    mutate("UI-24 等級寫成 Severe", lambda ls: setcol(ls, 4, "Severe"), "UI-24", "固定值")
+    mutate("UI-24 擋得到配 Hint", lambda ls: setcol(ls, 4, "Hint"), "UI-24", "矛盾")
+    # 代碼審 r1 審查席 a1:下面五道原本拿掉後測試照綠
+    mutate("UI-24 出處改成查證、理由不是樣本編不過", lambda ls: (setcol(ls, 6, "\u3014查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ConfigurationScreenWidthHeight.md.html\u3015"), setcol(ls, 5, "官方頁寫會報")), "UI-24", "樣本編不過")
+    mutate("UI-24 擋不到卻沒寫理由", lambda ls: (setcol(ls, 3, "擋不到"), setcol(ls, 4, "沒報"), setcol(ls, 5, "")), "UI-24", "要寫理由")
+    mutate("UI-24 判定少一欄", lambda ls: ls.__setitem__(li, "| " + " | ".join(ck._cells(ls[li])[:6]) + " |"), "UI-24", "欄位數")
+    mutate("UI-24 判定寫成隨便", lambda ls: setcol(ls, 3, "隨便"), "UI-24", "固定值")
+    mutate("UI-24 判定的標籤換成 compose-rules(檢查不變)", lambda ls: setcol(ls, 1, ck.B4_TAG_CR), "UI-24", "不是候選")
+    cp_ok = _ktpack(copy=True)
+    ls_ok = lines[:]
+    setcol(ls_ok, 6, "\u3014查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ConfigurationScreenWidthHeight.md.html\u3015")
+    setcol(ls_ok, 5, "樣本編不過:測試用")
+    cp_ok.CATALOG.write_text("\n".join(ls_ok), encoding="utf-8")
+    check("★前置★ 查證出處配樣本編不過的理由不報", not [b for a, b in cp_ok.catalog_problems(cp_ok.load_rules()) if a == "UI-24"], "")
+    # 代碼審 r1 審查席 a2:批四寫在別的子段、或寫兩個,都要報
+    mutate("UI-24 批四寫在行為測試那段", lambda ls: setcol(ls, 9, "行為測試或正向約束=批四(" + lint + ");告警帶寫法=未接(x)", main24), "UI-24", "只准寫在")
+    # 代碼審 r2 審查席:位置檢查另兩個條件(批四在告警帶寫法之後的別的子段、整格沒有告警帶寫法)
+    mutate("UI-24 批四寫在告警帶寫法之後的別的子段", lambda ls: setcol(ls, 9, "告警帶寫法=未接(x);行為測試或正向約束=批四(" + lint + ")", main24), "UI-24", "只准寫在")
+    mutate("UI-24 通電批次沒有告警帶寫法只有批四", lambda ls: setcol(ls, 9, "批四(" + lint + ")", main24), "UI-24", "只准寫在")
+    mutate("UI-24 通電批次兩個批四括號", lambda ls: setcol(ls, 9, "告警帶寫法=批四(" + lint + ")、批四(" + lint + ")", main24), "UI-24", "只准一個")
+    mutate("多一筆 ZZ-1 的判定", lambda ls: ls.insert(li, "| " + " | ".join(["UI-999", lint, "NewApi", "擋得到", "Error", "x", "\u3014真跑 2026-11-08:UI-999.kt.txt\u3015"]) + " |"), "UI-999", "不在主表")
+    env_i = next(i for i, ln in enumerate(lines) if ln.startswith("真跑環境:"))
+    cp = _ktpack(copy=True)
+    ls = lines[:]
+    ls.pop(env_i)
+    cp.CATALOG.write_text("\n".join(ls), encoding="utf-8")
+    check("S2 改壞抓得到:刪掉真跑環境行", any(b.startswith("〈接電證據〉缺「真跑環境") for _a, b in cp.catalog_problems(cp.load_rules())), "")
+    i2 = next(i for i, c in enumerate(table) if c[0] == "UI-2")
+    l2 = next(i for i, ln in enumerate(lines) if ln == "| " + " | ".join(table[i2]) + " |")
+    def rename(ls):
+        c = ck._cells(ls[l2])
+        c[6] = "\u3014真跑 2026-11-08:UI-24.kt.txt\u3015"
+        ls[l2] = "| " + " | ".join(c) + " |"
+    mutate("UI-2 的樣本檔名改成 UI-24.kt.txt", rename, "UI-2", "樣本檔名")
+    cp = _ktpack(copy=True)
+    (cp.wiring_dir() / "UI-24.kt.txt").unlink()
+    check("S4 改壞抓得到:刪掉 UI-24 的樣本檔", any(a == "UI-24" and "樣本檔不存在" in b for a, b in cp.catalog_problems(cp.load_rules())), "")
+    check("★前置★ UI-24 樣本檔存在", (ck.wiring_dir() / "UI-24.kt.txt").is_file(), "")
+    check("〈統計〉接電證據筆數有被核對", any(lbl == "接電證據" for lbl, _p, _n in ck._stats_expected(text, rows, None)), "")
+    print("  ✓ t_kt_catalog_batch4_evidence")
+
+
 def t_kt_catalog_batch4_wiring():
     """[[Projects/Android現成檢查接上CI與推送前_計劃]] S4:型錄自檢照範圍 4 的口徑重算每一列,通電批次寫的第四批標籤要一字不差;
     段裡帶排除註記(check.py 的 _B4_SKIP)或預設關的規則不准被標成已接電。口徑住在 check.py(代碼審 r1 架構席:不在測試裡另立一套)。"""
@@ -129146,15 +129231,13 @@ def t_kt_catalog_batch4_wiring():
           str(tags("cr:compose:lambda-param-in-effect / LambdaParameterInRestartableEffect(只管 lambda 參數)")))
     check("★前置★ 兩家都有 → 兩個標籤",
           tags("cr:compose:mutable-params-check / MutableParams;slack:ComposeMutableParameters") == [lint, cr])
-    probs = [p for p in ck.catalog_problems(ck.load_rules()) if "第四批" in p[1]]
+    probs = [p for p in ck.catalog_problems(ck.load_rules()) if ("批四" in p[1] or "接電" in p[1])]
     check("S4 每一列的第四批標籤跟口徑重算一致", probs == [], "\n".join(f"{a}:{b}" for a, b in probs[:15]))
     cat = ck.CATALOG.read_text(encoding="utf-8")
     check("S4 型錄〈輸入與口徑〉寫了這兩個標籤", lint in cat.split("## 來源縮寫")[0] and cr in cat.split("## 來源縮寫")[0], "")
     # 代碼審 code-型錄批一列也寫批四 r2 審查席 F2、架構對齊席 1:排除字樣只住 _B4_SKIP,給人看的兩個出口(自檢錯誤訊息、型錄口徑句)要列齊
-    msg = " ".join(ck._batch4_problems("內建:WrongThread(相關)", f"告警帶寫法=批一、批四({lint})"))
-    check("★前置★ 註記「相關」卻寫了接電標籤 → 自檢要報", bool(msg), msg)
-    check("r2 折入 自檢錯誤訊息列出口徑的每個排除字樣", all(w in msg for w in ck._B4_SKIP),
-          f"缺 {[w for w in ck._B4_SKIP if w not in msg]}:{msg}")
+    # 2026-11-08 起批四標籤以〈接電證據〉判定為準([[Projects/型錄接電要附證據_計劃]]):排除字只讓候選變少,舊的錯誤訊息那組斷言移到 t_kt_catalog_batch4_evidence
+    check("★前置★ 註記「相關」的段不產生候選", ck.batch4_candidates("內建:WrongThread(相關)") == [], str(ck.batch4_candidates("內建:WrongThread(相關)")))
     # r3 審查席 F3:只看口徑句那一行(開頭說明別行也有「待查」,整段比對會被遮住)
     rule_ln = [ln for ln in cat.split("## 來源縮寫")[0].splitlines() if "而且那一段不含" in ln]
     check("★前置★ 型錄〈輸入與口徑〉恰好一行口徑句", len(rule_ln) == 1, str(len(rule_ln)))
@@ -129176,7 +129259,7 @@ def t_kt_catalog_batch4_wiring():
         mut = rows[:]
         mut[idx] = mut[idx].replace(a, b, 1)
         cp.CATALOG.write_text("".join(mut), encoding="utf-8")
-        got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
+        got = [p for p in cp.catalog_problems(cp.load_rules()) if ("批四" in p[1] or "接電" in p[1])]
         check(f"★前置★ 自檢抓得到:{name}", len(got) >= 1, str(got[:3]))
     # [S2] 資安包前綴([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3:資安包掛在 Android Lint 上、同一個 CI 步驟跑)
     check("S2 資安包:檢查 id → Android Lint 標籤", tags("資安包:LogInfoDisclosure") == [lint], str(tags("資安包:LogInfoDisclosure")))
@@ -129192,7 +129275,7 @@ def t_kt_catalog_batch4_wiring():
         mut = rows[:]
         mut[i_asl] = mut[i_asl].replace(f"批四({lint})", "批四(現成規則)", 1)
         cp.CATALOG.write_text("".join(mut), encoding="utf-8")
-        got = [p for p in cp.catalog_problems(cp.load_rules()) if "第四批" in p[1]]
+        got = [p for p in cp.catalog_problems(cp.load_rules()) if ("批四" in p[1] or "接電" in p[1])]
         check(f"S2 資安包列 {asl_id} 標成「批四(現成規則)」要報", any(a == asl_id for a, _b in got), str(got[:3]))
     print("  ✓ t_kt_catalog_batch4_wiring")
 
@@ -129279,8 +129362,8 @@ def _kt_batch2_b4_problems(m, cell):
     for rid in _KT_BATCH2_B4_ROWS:
         if m.B4_TAG_LINT not in m.batch4_expected_tags(cell(rid, 5)):
             out.append(f"{rid} 現成規則欄沒有批四口徑認得的 Android Lint 檢查")
-        elif f"批四({m.B4_TAG_LINT})" not in cell(rid, 9):
-            out.append(f"{rid} 通電批次沒寫「批四({m.B4_TAG_LINT})」")
+        elif not any(c[0] == rid and c[1] == m.B4_TAG_LINT for c in m.wiring_table(m.CATALOG.read_text(encoding="utf-8"))[0]):
+            out.append(f"{rid} 〈接電證據〉沒有 Android Lint 的判定(批四標不標以判定為準,2026-11-08 真跑 DATA-79 沒報)")
     return out
 
 
