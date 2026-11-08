@@ -2,7 +2,7 @@
 type: project
 status: done
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-08
 tags:
   - type/project
   - status/done
@@ -24,13 +24,13 @@ PRIOR-ART: 先盤點本工具既有三道(共用 detekt 設定、棧別提問、
 
 | 項目 | 機械檢查 | 審查員提問 | 只在文件 |
 |---|---|---|---|
-| GlobalScope 裸用 | 共用 detekt 設定已開(不要型別資訊,照標準接法會響;推送時只記錄不擋) | 協程題 | |
-| 吞掉取消訊號 | 共用設定已開(要型別資訊,見下方實驗:多半沒在跑;推送時不擋) | 執行緒題 | kotlin-idioms R10 |
-| Dispatcher 寫死 | detekt 預設開(同樣要型別資訊;推送時不擋) | 執行緒題 | |
+| GlobalScope 裸用 | 共用 detekt 設定已開(不要型別資訊,照標準接法會響;2026-11-08 起照 `{LINT_FILES_CSV}` 接法推送前擋新增) | 協程題 | |
+| 吞掉取消訊號 | 共用設定已開(要型別資訊,見下方實驗:照命令列樣板多半沒在跑;推送前不擋,消費專案照 [[Systems/linter精選目錄]] 的 CI 型別檢查範本接上後由 CI 擋新增) | 執行緒題 | kotlin-idioms R10 |
+| Dispatcher 寫死 | detekt 預設開(同樣要型別資訊;推送前不擋,消費專案照 [[Systems/linter精選目錄]] 的 CI 型別檢查範本接上後由 CI 擋新增) | 執行緒題 | |
 | scope 沒跟生命週期 | | 協程題 | |
 | runBlocking | | 協程題 | R12 原說要禁,2026-11-04 改成不全面禁(同步介面橋接是正當用法) |
 | Job/SupervisorJob 傳進 launch | | | R12 |
-| Flow 收集跟生命週期 | 2026-11-04 起共用設定禁 collectAsState(要型別資訊才跑、推送時不擋) | Flow 題 | R13 |
+| Flow 收集跟生命週期 | 2026-11-04 起共用設定禁 collectAsState(要型別資訊才跑;推送前不擋,消費專案照 [[Systems/linter精選目錄]] 的 CI 型別檢查範本接上後由 CI 擋新增) | Flow 題 | R13 |
 | 互不依賴的 API 串著等 | | 協程題第一問 | R1 |
 | 一支失敗其他支要不要取消 | | | R1 |
 | 行動端外呼逾時與重試 | | **Kotlin 沒有**(同題只掛在 Java 棧) | |
@@ -90,5 +90,4 @@ REVISIT:2026-12-15 第 2、3 步還沒立案就回來決定做不做,不做寫�
 - kotlinx-coroutines-test:https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md
 - androidx lint 清單:https://googlesamples.github.io/android-custom-lint-rules/checks/index.md.html
 
-REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-03-01] 推送前真的擋落地了,把現況表「推送時不擋」改掉
 REVISIT:2026-12-15 實測本工具讀不讀得懂 Android Lint 的 SARIF(B 段要接 androidx 隨附 lint 的前提),讀得懂就把 B 段併進寫法檢查標準的 A 級

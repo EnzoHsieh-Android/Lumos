@@ -1,14 +1,14 @@
 ---
 type: issue
-status: open
+status: done
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-08
 aliases: []
 about_code:
   - scripts/lumos
 tags:
   - type/issue
-  - status/open
+  - status/done
   - scope/stack-knowledge
 summary: |-
   FLAG:TECHNICAL
@@ -17,8 +17,11 @@ related:
   - "[[Systems/pitfalls-lint-adapter]]"
   - "[[Systems/linter精選目錄]]"
   - "[[Projects/Android的detekt推送前真的擋_計劃]]"
+  - "[[Verification/2026-11-08_detekt的CI型別檢查範本實跑]]"
 ---
 # 推送閘對Android的detekt只記錄不擋
+
+> **已結案(2026-11-08)**:[[Projects/Android的detekt推送前真的擋_計劃]] 做完——推送前用 `{LINT_FILES_CSV}` 讓不用型別的 detekt 規則對新增告警真的擋(條款 S1~S8 綁測試),要型別資訊的規則改由消費專案 CI 跑 `detekt<變體>` 加基準線擋(S9 實跑見 [[Verification/2026-11-08_detekt的CI型別檢查範本實跑]])。以下是當時的排查紀錄,不是現況。
 
 > 白話:Android 專案宣告了 detekt,看起來推送前會擋新增的問題,實際上從來沒擋過。
 

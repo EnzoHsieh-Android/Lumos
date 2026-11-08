@@ -2,7 +2,7 @@
 type: project
 status: doing
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-08
 tags:
   - type/project
   - status/doing
@@ -162,7 +162,7 @@ P1 看整條命令(新增告警檢查本來就以整條命令為單位決定跑�
 4. Kotlin 標準庫 2.2 以上時,吞取消訊號那條與標準庫的 ForbiddenMethodCall 補了型別資訊也不響(detekt 1.23.8 限制),判定表不另外提醒,只寫在 T1 的文字與文件裡。
 
 REVISIT:2027-03-01 查 detekt 2.0 出正式版沒;出了就重跑〈判定依據〉的實測,確認吞取消訊號那條在新版 Kotlin 標準庫下恢復,並評估補開 2.0 才有的 SuspendFunInFinallySection 與 CoroutineLaunchedInTestWithoutRunTest。
-REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-03-01] 推送前真的擋落地了,照〈知識同步〉清單把各處「推送時不擋」改掉,判定表的 P1、P2 拿掉
+- 2026-11-08 [[Projects/Android的detekt推送前真的擋_計劃]] 做完後同步過:協程調研的現況表與 [[Systems/效能檢核目錄]] 那幾列改成「不用型別的推送前擋、要型別的由消費專案 CI 擋」;判定表的 P1、P2 沒拿掉——命令沒寫檔案佔位符、或用空白分隔的 `{LINT_FILES}` 時推送前照樣擋不住,程式照舊印這兩則提醒,拿掉反而跟程式對不上。
 
 ## 審計修正紀錄
 

@@ -1,11 +1,11 @@
 ---
 type: project
-status: todo
+status: done
 created: 2026-11-04
-updated: 2026-11-05
+updated: 2026-11-08
 tags:
   - type/project
-  - status/todo
+  - status/done
   - scope/stack-knowledge
 related:
   - "[[Issues/推送閘對Android的detekt只記錄不擋]]"
@@ -97,7 +97,7 @@ RETIRE-IF: 連續三個月沒有任何消費專案用到 `{LINT_FILES_CSV}`(拆�
 3. 用 wrapper 腳本包 detekt 的命令不會被字面判定認成 detekt,說實話那套提醒不印;逗號佔位符照樣能用。
 
 REVISIT:2027-03-01 查 detekt 2.0 出正式版沒;出了就驗 2.0 的 `--input` 是否仍只收逗號、型別解析任務與基準線任務名是否改了,同步改範本與 T4 的字樣比對。
-REVISIT:[when-status:Projects/Android的detekt推送前真的擋_計劃=done][by:2027-02-01] 看消費專案有沒有人照 CI 型別檢查範本接上;都沒有就評估由 lumos 在健檢裡把 T4 升級成問題(改退出碼)
+REVISIT:2027-02-01 看消費專案有沒有人照 CI 型別檢查範本接上;都沒有就評估由 lumos 在健檢裡把 T4 升級成問題(改退出碼)
 
 ## 審計修正紀錄
 
