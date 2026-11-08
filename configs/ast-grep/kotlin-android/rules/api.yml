@@ -269,3 +269,54 @@ rule:
             regex: ^true$
   not:
     matches: in-debug-only-branch
+---
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:會擋(樣本外 fork 去重 244 處抽 120 處,誤報 2)。
+# setter 只看 setMixedContentMode 自己的直接參數(逐層寫到 value_argument,不用 stopBy: end,setMixedContentMode(resolve(0, 1)) 不報);
+# 賦值:常數 MIXED_CONTENT_ALWAYS_ALLOW 左邊以 mixedContentMode 結尾就報;字面值 0 另要接收者鏈有一段名字以 settings 或 Settings 結尾或是 getSettings()
+id: kt-webview-mixed-content-always
+language: kotlin
+severity: error
+message: '[API-48]WebView 允許 HTTPS 頁面載入 HTTP 子資源,中間人能換掉腳本;改用 MIXED_CONTENT_NEVER_ALLOW(預設值),要相容舊站才用 COMPATIBILITY_MODE'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  always-const:
+    regex: '^([\w.]+\.)?MIXED_CONTENT_ALWAYS_ALLOW$'
+  zero-lit:
+    kind: integer_literal
+    regex: '^0$'
+  always-allow:
+    any:
+      - matches: always-const
+      - matches: zero-lit
+rule:
+  any:
+    - all:
+        - any:
+            - pattern: $X.setMixedContentMode($M)
+            - pattern: $X?.setMixedContentMode($M)
+            - pattern: setMixedContentMode($M)
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                has: {matches: always-allow}
+    - all:
+        - kind: assignment
+        - any:
+            - all:
+                - has:
+                    kind: directly_assignable_expression
+                    regex: '(^|\.)\s*mixedContentMode$'
+                - has: {matches: always-const}
+            - all:
+                - has:
+                    kind: directly_assignable_expression
+                    regex: '(^|\.)\s*(\w*[sS]ettings|getSettings\(\s*\))\s*(\?|!!)?\s*\.'
+                - has:
+                    kind: directly_assignable_expression
+                    regex: '\.\s*mixedContentMode$'
+                - has: {matches: zero-lit}
+  not:
+    matches: in-debug-only-branch

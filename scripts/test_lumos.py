@@ -126844,6 +126844,77 @@ _KTSEC_CASES = (
     ("src/main/kotlin/C46.kt", 'sock?.setEnabledProtocols(arrayOf<String>("SSLv3"))', "kt-insecure-tls-version", 1),
     ("src/main/kotlin/C47.kt", "if (a && (b || BuildConfig.DEBUG)) { webView.settings.allowFileAccessFromFileURLs = true }",
      "kt-webview-file-url-access", 1),
+    # 第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] 預期值表 S1,片段照原文):混合內容(會擋)
+    ("src/main/kotlin/C48.kt", "webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C49.kt", "webView.settings.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C50.kt", "webSettings.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C51.kt", "webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW", "kt-webview-mixed-content-always", 0),
+    ("src/main/kotlin/C52.kt", "cfg.mixedContentMode = 0", "kt-webview-mixed-content-always", 0),
+    ("src/main/kotlin/C53.kt", "webView.settings.setMixedContentMode(resolve(0, 1))", "kt-webview-mixed-content-always", 0),
+    ("src/main/kotlin/C54.kt", "webView.settings.setMixedContentMode(0)", "kt-webview-mixed-content-always", 1),
+    # 放在 src/test 底下不報;對照組是 C48(同一行放 src/main 要報),證明不報是路徑排除擋的
+    ("src/test/kotlin/C55.kt", "webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
+    # 第二批不接閘的 15 條(rules-unwired/,四份設定檔照樣掃)
+    ("src/main/kotlin/C56.kt", "fun unzip(zis: ZipInputStream, destDir: File) { var entry = zis.nextEntry; while (entry != null) {"
+     " val f = File(destDir, entry.name); f.outputStream().use { zis.copyTo(it) }; entry = zis.nextEntry } }", "kt-zip-slip", 1),
+    ("src/main/kotlin/C57.kt", "fun unzip(zis: ZipInputStream, destDir: File) { var entry = zis.nextEntry; while (entry != null) {"
+     " val f = File(destDir, entry.name); if (!f.canonicalPath.startsWith(destDir.canonicalPath + File.separator)) throw SecurityException();"
+     " f.outputStream().use { zis.copyTo(it) }; entry = zis.nextEntry } }", "kt-zip-slip", 0),
+    ("src/main/kotlin/C58.kt", 'Cipher.getInstance("RSA/ECB/NoPadding")', "kt-rsa-no-oaep", 1),
+    ("src/main/kotlin/C59.kt", 'Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")', "kt-rsa-no-oaep", 0),
+    ("src/main/kotlin/C60.kt", "IvParameterSpec(byteArrayOf(0, 0, 0, 0))", "kt-static-iv", 1),
+    ("src/main/kotlin/C61.kt", 'MessageDigest.getInstance("MD5")', "kt-weak-message-digest", 1),
+    ("src/main/kotlin/C62.kt", 'MessageDigest.getInstance("SHA-256")', "kt-weak-message-digest", 0),
+    ("src/main/kotlin/C63.kt", 'webView.loadUrl(intent.getStringExtra("url")!!)', "kt-loadurl-external", 1),
+    ("src/main/kotlin/C64.kt", 'val password = "Abc12345xyz"', "kt-hardcoded-secret-name", 1),
+    ("src/main/kotlin/C65.kt", 'val passwordKey = "pref_password"', "kt-hardcoded-secret-name", 0),
+    ("src/main/kotlin/C66.kt", "webView.settings.allowFileAccess = true", "kt-webview-file-access", 1),
+    ("src/main/kotlin/C67.kt", "webView.settings.allowFileAccess = false", "kt-webview-file-access", 0),
+    # 生物辨識那條另要同檔出現 BiometricPrompt(真程式會 import 它);片段前加一行帶型別的宣告,第二行才是預期值表原文
+    ("src/main/kotlin/C68.kt", "val biometricPrompt: BiometricPrompt = prompt()\n    biometricPrompt.authenticate(promptInfo)", "kt-biometric-no-crypto", 1),
+    ("src/main/kotlin/C69.kt", "val biometricPrompt: BiometricPrompt = prompt()\n    biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))",
+     "kt-biometric-no-crypto", 0),
+    ("src/main/kotlin/C70.kt", 'Runtime.getRuntime().exec("ping -c 1 " + host)', "kt-command-exec-nonliteral", 1),
+    ("src/main/kotlin/C71.kt", 'Runtime.getRuntime().exec("ls")', "kt-command-exec-nonliteral", 0),
+    # 代碼審 r1 補(審查甲 1:setter 帶常數、getSettings()!!、apply 裡不帶接收者的常數;架構對齊乙 1:六條只驗放置的規則各補一壞一好,形狀照 samples/)
+    ("src/main/kotlin/C72.kt", "webView.settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW)", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C73.kt", "webView.getSettings()!!.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C74.kt", "settings.apply { mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW }", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C75.kt", "ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS).cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_SHA).build()",
+     "kt-weak-cipher-suite", 1),
+    ("src/main/kotlin/C76.kt", "ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS).cipherSuites(CipherSuite.TLS_AES_128_GCM_SHA256).build()",
+     "kt-weak-cipher-suite", 0),
+    ("src/main/kotlin/C77.kt", "class DocProvider : ContentProvider() { override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {"
+     " val file = File(context!!.filesDir, uri.path!!); return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) } }",
+     "kt-provider-openfile-traversal", 1),
+    ("src/main/kotlin/C78.kt", "class DocProvider : ContentProvider() { override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {"
+     " val base = context!!.filesDir; val file = File(base, uri.path!!);"
+     " if (!file.canonicalPath.startsWith(base.canonicalPath + File.separator)) throw SecurityException();"
+     " return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) } }", "kt-provider-openfile-traversal", 0),
+    ("src/main/kotlin/C79.kt", 'val g = KeyPairGenerator.getInstance("RSA")\n    g.initialize(1024)', "kt-weak-key-size", 1),
+    ("src/main/kotlin/C80.kt", 'val g = KeyPairGenerator.getInstance("RSA")\n    g.initialize(3072)', "kt-weak-key-size", 0),
+    ("src/main/kotlin/C81.kt", "ObjectInputStream(socket.getInputStream()).readObject()", "kt-object-input-stream", 1),
+    ("src/main/kotlin/C82.kt", 'ObjectInputStream(ctx.openFileInput("state.bin")).use { it.readObject() }', "kt-object-input-stream", 0),
+    ("src/main/kotlin/C83.kt", 'SQLiteDatabase.openOrCreateDatabase(File(ctx.getExternalFilesDir(null), "app.db"), null)', "kt-db-on-external-files", 1),
+    ("src/main/kotlin/C84.kt", 'SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("app.db"), null)', "kt-db-on-external-files", 0),
+    ("src/main/kotlin/C85.kt", "fun parseOne(input: InputStream): Document { val factory = DocumentBuilderFactory.newInstance();"
+     " return factory.newDocumentBuilder().parse(input) }", "kt-xxe-documentbuilder", 1),
+    ("src/main/kotlin/C86.kt", "fun parseOne(input: InputStream): Document { val factory = DocumentBuilderFactory.newInstance();"
+     ' factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);'
+     " return factory.newDocumentBuilder().parse(input) }", "kt-xxe-documentbuilder", 0),
+    # 代碼審 r2 補(會擋那條逐條件改壞掃一遍,改壞後照綠的 8 種各補一例;改壞清單見 r2-intake.md〈逐條件改壞〉)
+    ("src/main/kotlin/C87.kt", "webView.settings?.setMixedContentMode(0)", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C88.kt", "settings.apply { setMixedContentMode(0) }", "kt-webview-mixed-content-always", 1),
+    # 右邊是常數但左邊不是 mixedContentMode:把常數存進自己的變數,規則只認直接給這個屬性
+    ("src/main/kotlin/C89.kt", "lastMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
+    # 審查甲二 1:WebView 設定別的屬性給 0 是正常設定,不准被這條會擋的規則報
+    ("src/main/kotlin/C90.kt", "webView.settings.textZoom = 0", "kt-webview-mixed-content-always", 0),
+    ("src/main/kotlin/C91.kt", "webView.settings?.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
+    ("src/main/kotlin/C92.kt", "if (BuildConfig.DEBUG) { webView.settings.mixedContentMode = 0 }", "kt-webview-mixed-content-always", 0),
+    # 名稱只是剛好以這串結尾的自家常數,不是 WebSettings 的那個
+    ("src/main/kotlin/C93.kt", "webView.settings.mixedContentMode = Cfg.NO_MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
+    # 字面值要恰好是 0,不是含 0 的別的整數
+    ("src/main/kotlin/C94.kt", "webView.settings.mixedContentMode = 10", "kt-webview-mixed-content-always", 0),
 )
 # 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號)(計劃範圍 4 與〈實驗〉第二輪的放置)
 _KTSEC_PLACE = {
@@ -126851,6 +126922,23 @@ _KTSEC_PLACE = {
     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
     "kt-insecure-tls-version": ("rules-unwired", "api.yml", "API-45"),
     "kt-secretkeyspec-literal-key": ("rules-unwired", "data.yml", "DATA-87"),
+    # 第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 3 的型錄編號、範圍 4 的放置)
+    "kt-webview-mixed-content-always": ("rules", "api.yml", "API-48"),
+    "kt-loadurl-external": ("rules-unwired", "api.yml", "API-49"),
+    "kt-weak-cipher-suite": ("rules-unwired", "api.yml", "API-50"),
+    "kt-webview-file-access": ("rules-unwired", "api.yml", "API-51"),
+    "kt-command-exec-nonliteral": ("rules-unwired", "architecture.yml", "ARCH-90"),
+    "kt-biometric-no-crypto": ("rules-unwired", "architecture.yml", "ARCH-91"),
+    "kt-zip-slip": ("rules-unwired", "data.yml", "DATA-88"),
+    "kt-provider-openfile-traversal": ("rules-unwired", "data.yml", "DATA-89"),
+    "kt-static-iv": ("rules-unwired", "data.yml", "DATA-90"),
+    "kt-weak-key-size": ("rules-unwired", "data.yml", "DATA-91"),
+    "kt-object-input-stream": ("rules-unwired", "data.yml", "DATA-92"),
+    "kt-db-on-external-files": ("rules-unwired", "data.yml", "DATA-93"),
+    "kt-xxe-documentbuilder": ("rules-unwired", "data.yml", "DATA-94"),
+    "kt-weak-message-digest": ("rules-unwired", "data.yml", "DATA-96"),
+    "kt-hardcoded-secret-name": ("rules-unwired", "data.yml", "DATA-97"),
+    "kt-rsa-no-oaep": ("rules-unwired", "data.yml", "DATA-98"),
 }
 # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
 _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
@@ -126867,7 +126955,12 @@ def t_kotlin_rulepack_security_rules():
     拿掉 src/debug 排除 → C19 紅;拿掉不帶接收者的呼叫 → C21 紅;拿掉 setEnabledProtocols → C22 紅;
     會擋那條拿掉 BuildConfig.DEBUG 判斷 → C23 紅;共用判斷拿掉 else 排除 → C25 紅、拿掉 when 分支 → C26 紅、拿掉「且」→ C27 紅、
     「或」也放行 → C28、C39 紅;「且」那支拿掉 → C36、C37 紅;「且」的一項改成往下找 → C47 紅;拿掉 !DEBUG 的 else → C41 紅;拿掉 when 主詞 → C42 紅;
-    API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。"""
+    API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。
+    第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] S1、S2 擴充同一組,C48~C71 是預期值表 S1 逐列、C72~C86 是代碼審 r1 補的覆蓋、C87~C94 是代碼審 r2 對會擋那條逐條件改壞後補的,_KTSEC_PLACE 後 16 筆):混合內容 setter 改回 stopBy: end → C53 紅;
+    賦值 0 拿掉接收者條件 → C52 紅、接收者條件只認 settings → C50 紅、setter 不認 0 → C54 紅、拿掉 src/test 排除 → C55 紅;
+    Zip Slip 拿掉 canonicalPath 排除 → C57 紅;寫死秘密拿掉值的鍵名樣式排除與數字要求 → C65 紅(passwordKey 不是靠名稱排除擋的);
+    生物辨識拿掉單參數限制 → C69 紅;指令執行拿掉串接那支 → C70 紅、改成任何參數都報 → C71 紅;
+    混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。"""
     print("t_kotlin_rulepack_security_rules")
     import shutil as _sh
     m = _ktpack()
@@ -129068,6 +129161,210 @@ def t_kt_catalog_security_lint_ids():
     unv = m.catalog_unverified()
     check("③ 還沒逐列查證是 0 列(2026-11-08 使用者裁 API-14、TEST-31 標出處不全)", unv == [], str(unv))
     print("  ✓ t_kt_catalog_security_lint_ids")
+
+
+# 第二批型錄新列([[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 3 那張表,原文抄):型錄編號 → (名稱, 管它的:自寫規則 id 或內建檢查 id)
+_KT_BATCH2_ROWS = {
+    "API-48": ("WebView 允許混合內容", "kt-webview-mixed-content-always"),
+    "API-49": ("外部傳進來的網址直接丟進 WebView", "kt-loadurl-external"),
+    "API-50": ("TLS 開弱加密套件", "kt-weak-cipher-suite"),
+    "API-51": ("WebView 開啟本機檔案存取", "kt-webview-file-access"),
+    "ARCH-89": ("從非程式庫目錄動態載入程式碼", "內建:UnsafeDynamicallyLoadedCode"),
+    "ARCH-90": ("用非字面值組外部指令", "kt-command-exec-nonliteral"),
+    "ARCH-91": ("生物辨識沒綁加密物件", "kt-biometric-no-crypto"),
+    "DATA-88": ("解壓縮沒擋路徑穿越(Zip Slip)", "kt-zip-slip"),
+    "DATA-89": ("ContentProvider 開檔沒擋路徑穿越", "kt-provider-openfile-traversal"),
+    "DATA-90": ("加密用固定 IV", "kt-static-iv"),
+    "DATA-91": ("金鑰長度太短", "kt-weak-key-size"),
+    "DATA-92": ("ObjectInputStream 反序列化", "kt-object-input-stream"),
+    "DATA-93": ("資料庫放外部儲存", "kt-db-on-external-files"),
+    "DATA-94": ("XML 解析沒關外部實體(XXE)", "kt-xxe-documentbuilder"),
+    "DATA-95": ("信任別人 provider 給的檔名", "內建:UnsanitizedFilenameFromContentProvider"),
+    "DATA-96": ("用弱雜湊(MD5、SHA-1、MD4)", "kt-weak-message-digest"),
+    "DATA-97": ("原始碼裡寫死一般秘密", "kt-hardcoded-secret-name"),
+    "DATA-98": ("RSA 不帶 OAEP 填充", "kt-rsa-no-oaep"),
+}
+# 計劃範圍 2 的四條漏登內建檢查 → 該登在哪一列(DATA-27、DATA-85 是併進既有列,另兩條是新列)
+_KT_BATCH2_LINT = {"SdCardPath": "DATA-27", "SetWorldWritable": "DATA-85", "UnsafeDynamicallyLoadedCode": "ARCH-89",
+                   "UnsanitizedFilenameFromContentProvider": "DATA-95"}
+
+
+def _kt_batch2_catalog_problems(m):
+    """型錄 → 第二批 S3 的問題清單(空=全過);m 是 _ktpack() 載入的模組(改壞實驗給複本)。要看哪幾列、哪些字樣寫死在本檔
+    (_KT_BATCH2_ROWS、_KT_BATCH2_LINT、_KT_BATCH2_B4_ROWS 與下面的字樣),不從型錄算;批四該寫什麼標籤用 check.py 的口徑
+    (batch4_expected_tags、B4_TAG_LINT),口徑只住那裡。"""
+    rows = m.main_rows()
+    def cell(rid, i):
+        return rows[rid][i] if rid in rows else ""
+    return _kt_batch2_misreg_problems(cell) + _kt_batch2_row_problems(rows, cell) + _kt_batch2_b4_problems(m, cell)
+
+
+# 這批改到、現成規則欄登了 Android Lint 檢查的列(計劃範圍 1、2):通電批次要照型錄自檢的批四口徑寫(代碼審 r1 審查乙 3;
+# 口徑只住在 check.py 的 batch4_expected_tags,這裡只列要看哪幾列)
+_KT_BATCH2_B4_ROWS = ("DATA-27", "DATA-79", "DATA-82", "DATA-83", "DATA-85", "ARCH-89", "DATA-95")
+
+
+def _kt_batch2_b4_problems(m, cell):
+    out = []
+    for rid in _KT_BATCH2_B4_ROWS:
+        if m.B4_TAG_LINT not in m.batch4_expected_tags(cell(rid, 5)):
+            out.append(f"{rid} 現成規則欄沒有批四口徑認得的 Android Lint 檢查")
+        elif f"批四({m.B4_TAG_LINT})" not in cell(rid, 9):
+            out.append(f"{rid} 通電批次沒寫「批四({m.B4_TAG_LINT})」")
+    return out
+
+
+def _kt_batch2_misreg_problems(cell):
+    """錯登那三列縮範圍:現成規則欄寫明只看哪裡,壞寫法欄不再含移到新列的那半(S3 第一段)。"""
+    import re as _re
+    out = []
+    if not ("VulnerableCryptoAlgorithm" in cell("DATA-83", 5) and "只看 Cipher" in cell("DATA-83", 5)):
+        out.append("DATA-83 現成規則欄沒寫明 VulnerableCryptoAlgorithm 只看 Cipher")
+    if "MessageDigest" in cell("DATA-83", 2):
+        out.append("DATA-83 壞寫法還含 MessageDigest(雜湊那半該在 DATA-96)")
+    if not ("SecretInSource" in cell("DATA-79", 5) and "只看 Gemini" in cell("DATA-79", 5)):
+        out.append("DATA-79 現成規則欄沒寫明 SecretInSource 只看 Gemini 金鑰")
+    if _re.search(r"API_KEY|const val", cell("DATA-79", 2)):
+        out.append("DATA-79 壞寫法還含一般寫死秘密(那半該在 DATA-97)")
+    bad82 = cell("DATA-82", 2)
+    if "見 DATA-98" not in bad82 or _re.search(r'getInstance\("RSA', bad82):
+        out.append("DATA-82 壞寫法要只用一句指向 DATA-98 帶過 RSA 無填充,不列成這列的壞寫法")
+    return out
+
+
+def _kt_batch2_row_problems(rows, cell):
+    """範圍 3 的 18 列與範圍 2 的四條內建檢查(S3 第二段)。"""
+    import re as _re
+    out = []
+    for rid, (name, owner) in _KT_BATCH2_ROWS.items():
+        if rid not in rows:
+            out.append(f"{rid} 不在型錄主表")
+            continue
+        if not rows[rid][1].startswith(name):
+            out.append(f"{rid} 名稱不是「{name}」:{rows[rid][1]}")
+        if owner not in rows[rid][5]:
+            out.append(f"{rid} 現成規則欄沒寫管它的 {owner}")
+    if "AGP 8.8.0" not in cell("DATA-95", 1):
+        out.append("DATA-95 名稱沒標 AGP 8.8.0")
+    for lid, rid in _KT_BATCH2_LINT.items():
+        if not _re.search(rf"內建:(?:[A-Za-z0-9]+、)*{lid}(?![A-Za-z0-9])", cell(rid, 5)):
+            out.append(f"{lid} 沒登在 {rid} 的現成規則欄(內建:前綴)")
+    return out
+
+
+def t_kt_catalog_security_lint_batch2():
+    """[[Projects/Android資安靜態檢查補齊第二批_計劃]] S3:第二批型錄(範圍 1~3):DATA-83 寫明 VulnerableCryptoAlgorithm 只看 Cipher、
+    DATA-79 寫明 SecretInSource 只看 Gemini 金鑰,兩列壞寫法不再含移到 DATA-96、DATA-97 的那半,DATA-82 只用一句指向 DATA-98;
+    範圍 3 那張表的 18 列各在主表、名稱照表、現成規則欄寫管它的規則;四條漏登的內建檢查各登在該登的列;DATA-95 名稱帶 AGP 8.8.0;
+    真型錄自檢 0 個問題、還沒逐列查證 0 列。判準來源:計劃範圍 1~3 原文(寫死在 _KT_BATCH2_ROWS、_KT_BATCH2_LINT)。
+    翻紅釘:刪一列新列、DATA-83 壞寫法改回 MessageDigest、DATA-95 拿掉 AGP 8.8.0、SetWorldWritable 從 DATA-85 拿掉 → ①紅;
+    新列漏查證紀錄 → ③紅;DATA-27 等七列的通電批次拿掉批四 → ①紅。"""
+    print("t_kt_catalog_security_lint_batch2")
+    m = _ktpack()
+    check("★前置★ 判準表恰好 18 列、四條內建", len(_KT_BATCH2_ROWS) == 18 and len(_KT_BATCH2_LINT) == 4, "")
+    probs = _kt_batch2_catalog_problems(m)
+    check("① 三列縮範圍、18 列新列、四條內建檢查都照計劃登記", not probs, "\n".join(probs[:10]))
+    selfp = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
+    check("② 真型錄自檢 0 個問題", not selfp, str(selfp[:5]))
+    unv = m.catalog_unverified()
+    check("③ 還沒逐列查證是 0 列", unv == [], str(unv))
+    print("  ✓ t_kt_catalog_security_lint_batch2")
+
+
+def _kt_drop_line(prefix):
+    """改壞用:刪掉以 prefix 開頭的那一行(只刪第一處)。"""
+    def f(t):
+        i = t.find("\n" + prefix)
+        return t if i < 0 else t[:i] + t[t.index("\n", i + 1):]
+    return f
+
+
+def _kt_line_sub(prefix, old, new):
+    """改壞用:在以 prefix 開頭的那一行裡,把第一處 old 換成 new(別行不動)。"""
+    def f(t):
+        i = t.find("\n" + prefix)
+        if i < 0:
+            return t
+        j = t.find("\n", i + 1)
+        j = len(t) if j < 0 else j
+        return t[:i] + t[i:j].replace(old, new, 1) + t[j:]
+    return f
+
+
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] S4 的判準:〈統計〉每個手寫的數(照真型錄現行寫法寫死在這裡,不從型錄或被測函式算),
+# 各改成另一個數,型錄自檢都要抓到。(行首, 那行裡的「名稱 數」);名稱前的分隔(: 或 、)一起寫死,免得 B 對到 A+B
+_KT_STATS_LINES = (
+    ("- 總列數:", ("總列數:532",)),
+    ("- 各主題:", ("API 51", "FLOW 32", "STATE 28", "CO 44", "UI 111", "ARCH 91", "DATA 98", "TEST 38", "PERF 39")),
+    ("- 各級(列的級含該字母", ("A 242", "B 226", "C 68", "D 58")),
+    ("- 各級(以第一個字母計", ("A 242", "B 196", "C 52", "D 42")),
+    ("- 級的組合:", (":A 207", "、A+B 28", "、A+B+C 2", "、A+C 3", "、A+C+D 1", "、A+D 1", "、B 177", "、B+C 9", "、B+C+D 1",
+                    "、B+D 9", "、C 48", "、C+D 4", "、D 42")),
+    ("- 情境:", ("形狀類 426", "語意類 106")),
+    ("- 待查證:", ("待查證:51 列", "規則代號待查 48 列", "來源待核對 3 列")),
+    ("- 規則包條數:", ("規則包條數:227", "error 46", "warning 119", "info 12", "hint 50", "其中 29 條")),
+    ("- 被會擋的規則守到的列數", (":128",)),
+    ("- 出處不全的列:", ("列:35", "人裁的列:4")),
+    ("- 逐列查證", ("\u3015):519 列",)),
+)
+
+
+def _kt_bump(item):
+    """「名稱 數」裡最後一個整數加 1。"""
+    import re as _re
+    head, num, tail = _re.match(r"^(.*?)(\d+)(\D*)$", item).groups()
+    return f"{head}{int(num) + 1}{tail}"
+
+
+_KT_STATS_MUTATIONS = (
+    *((f"〈統計〉{item}", _kt_line_sub(prefix, item, _kt_bump(item))) for prefix, items in _KT_STATS_LINES for item in items),
+    # 下面兩個連〈統計〉的待查證數一起改到一致,只留給〈待查證〉跟主表的雙向比對抓(不讓統計那道代抓)
+    ("待查證列著主表已解決的 DATA-27", lambda t: t.replace("| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n",
+        "| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n| DATA-27 | — | — |\n", 1)
+        .replace("- 待查證:51 列", "- 待查證:52 列", 1)),
+    ("待查證漏列主表還待查的 API-2", lambda t: _kt_drop_line("| API-2 | IJ:「Use awaitAll()")(t)
+        .replace("- 待查證:51 列", "- 待查證:50 列", 1).replace("規則代號待查 48 列", "規則代號待查 47 列", 1)),
+    ("待查證來源格寫了主表沒有的待核對", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |",
+        "| API-3 | IJ:「Unused Deferred」(ID 待查) | X(未開頁核對) |", 1)),
+    ("待查證代號格寫 — 但主表還待查", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", "| API-3 | — | — |", 1)),
+    # 代碼審 r3 審查甲三 1:只寫編號一格的列不准讓自檢崩,要照格子空著報
+    ("待查證只寫編號一格", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", "| API-3 |", 1)),
+    ("待查證編號重複", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |",
+        "| API-3 | IJ:「Unused Deferred」(ID 待查) | — |\n| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", 1)),
+)
+
+
+def t_kt_catalog_stats_consistent():
+    """[[Projects/Android資安靜態檢查補齊第二批_計劃]] S4:型錄〈統計〉手寫的數(總列數、各主題、各級、級的組合、情境、出處不全與人裁、
+    規則包各等級與不接閘、被會擋的規則守到的列數、逐列查證、待查證)要等於重數的值,〈待查證〉要跟主表雙向一致(該列的都列、
+    已解決的不列、兩格寫不寫內容跟主表一致、編號不重複、少寫格子不崩)。判準住在型錄自檢 check.py 的 stats_problems、
+    pending_problems(接在 catalog_problems,推送前的規則包自檢與 --catalog-only 都會跑);本測試只驗它:真型錄這兩類問題 0 筆,
+    _KT_STATS_MUTATIONS 每一個寫死的改壞(〈統計〉每個數各加 1,〈待查證〉六種)都讓自檢多報、不丟例外。
+    翻紅釘:stats_problems 少核對任何一個數、pending_problems 只判單向、不比格子、不報重複、少格就崩 → ②對應那一項紅;
+    沒接進 catalog_problems → ②全紅。"""
+    import shutil
+    print("t_kt_catalog_stats_consistent")
+    m = _ktpack(copy=True)                       # 改壞寫進複本,同鄰居的改壞實驗
+    try:
+        rules = m.load_rules()
+        text = m.CATALOG.read_text(encoding="utf-8")
+        base = m.catalog_problems(rules)
+        mine = [p for p in base if "〈統計〉" in p[1] or "待查證" in p[1]]
+        check("① 真型錄:〈統計〉〈待查證〉這兩類自檢問題 0 筆", not mine, str(mine[:10]))
+        for label, fn in _KT_STATS_MUTATIONS:
+            mut = fn(text)
+            check(f"★前置★ 改壞「{label}」有套上", mut != text, "")
+            m.CATALOG.write_text(mut, encoding="utf-8")
+            try:
+                got = m.catalog_problems(rules)
+            except Exception as e:   # 崩了也要記成這一項紅,不讓整支測試中斷
+                got = None
+                err = repr(e)
+            check(f"② 改壞「{label}」型錄自檢多報、不丟例外", got is not None and len(got) > len(base),
+                  err if got is None else str([p for p in got if p not in base][:3]))
+    finally:
+        shutil.rmtree(m.CATALOG.parents[2], ignore_errors=True)
+    print("  ✓ t_kt_catalog_stats_consistent")
 
 
 def t_linter_catalog_android_security_lint():

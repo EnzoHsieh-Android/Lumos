@@ -95,7 +95,9 @@ def catalog_ids():
 
 
 _CELL_RE = re.compile(r'(?<!\\)\|(?=(?:[^`]*`[^`]*`)*[^`]*$)')   # 反引號裡的直線不算欄位分隔
-_MAIN_ROW_RE = re.compile(r"^\|\s*((?:API|FLOW|STATE|CO|UI|ARCH|DATA|TEST|PERF)-\d+)\s*\|")
+# 主表的主題前綴只列這一處:主表列的認法與〈統計〉各主題列數都從這裡來(代碼審 第二批 r3 架構對齊甲三:不准另抄一份)
+_MAIN_TOPICS = ("API", "FLOW", "STATE", "CO", "UI", "ARCH", "DATA", "TEST", "PERF")
+_MAIN_ROW_RE = re.compile(r"^\|\s*((?:" + "|".join(_MAIN_TOPICS) + r")-\d+)\s*\|")
 _MAIN_COLS = 12      # 編號|名稱|壞寫法形狀|標準寫法|後果|現成規則|級|情境怎麼認|接電方式|通電批次|實測狀態|來源
 # 決策表依表頭名稱取欄(scripts/lumos 的 _kt_decision_table 同一套);這幾欄一定要有
 _DT_HEADER = ("列編號", "情境", "標準寫法", "不適用時", "觸發字", "證據樣式", "對應檢查", "來源")
@@ -401,7 +403,109 @@ def catalog_problems(rules=None):
         if m and m.group(1) in weak_ids and r.get("dir") != "rules-unwired":   # 缺 dir 鍵照不在 unwired 算
             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准放 rules-unwired/"))
     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
+    problems += pending_problems(text, rows) + stats_problems(text, rows, rules)
     return problems
+
+
+# 〈待查證〉節的口徑(型錄〈待查證〉節說明句):現成規則欄含「待查」,或來源欄標 _WEAK_SRC 的前兩種字樣。
+# 不含第三種「無網址」:只寫無網址的列要標(出處不全),不列進〈待查證〉
+_PENDING_SRC = _WEAK_SRC[:2]
+_PENDING_EMPTY = ("—", "")
+
+
+def _pending_table(text):
+    """〈待查證〉節的列 → ({編號: 欄位(補到三欄)}, 重複的編號);節尾是下一個 `## `(同 _abbr_table)。找不到這一節回 ({}, [])。"""
+    i = text.find("\n## 待查證")
+    if i < 0:
+        return {}, []
+    j = text.find("\n## ", i + 1)
+    rows, dup = {}, []
+    for ln in (text[i:j] if j > 0 else text[i:]).splitlines():
+        m = _MAIN_ROW_RE.match(ln)
+        if m:
+            if m.group(1) in rows:
+                dup.append(m.group(1))
+            rows[m.group(1)] = [*_cells(ln), "", ""][:3]   # 少寫格子的列照空格判,不讓 pc[1]、pc[2] 崩
+    return rows, dup
+
+
+def _pending_need(c):
+    """主表一列 → (代號還待查, 來源還待核對)。"""
+    return "待查" in c[5], any(w in c[11] for w in _PENDING_SRC)
+
+
+def pending_problems(text, rows):
+    """〈待查證〉節跟主表雙向對得上([[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 6):該列的都列、不該列的不列,
+    兩格寫不寫內容跟主表那列還有沒有待查、待核對一致(沒有就寫 —)。"""
+    pend, dup = _pending_table(text)          # 找不到〈待查證〉節時 catalog_problems 開頭就先報了
+    out = [(rid, "〈待查證〉編號重複") for rid in dup]
+    for rid, c in rows.items():
+        if any(_pending_need(c)) and rid not in pend:
+            out.append((rid, "主表還有待查或待核對的來源,〈待查證〉沒列"))
+    for rid, pc in pend.items():
+        if rid not in rows:
+            out.append((rid, "〈待查證〉的列不在主表"))
+            continue
+        code, src = _pending_need(rows[rid])
+        if not (code or src):
+            out.append((rid, "主表已解決,〈待查證〉還列著"))
+            continue
+        for want, cell, what in ((code, pc[1], "待查的規則代號"), (src, pc[2], "待核對的來源")):
+            if want == (cell.strip() in _PENDING_EMPTY):
+                out.append((rid, f"〈待查證〉的「{what}」格跟主表對不上(主表{'還有' if want else '已沒有'},這格要{'寫內容' if want else '寫 —'})"))
+    return out
+
+
+def _stats_expected(text, rows, rules):
+    """〈統計〉每個要核對的數 → [(標籤, 在〈統計〉找數字的正規式, 重數的值)]。rules 是 None 時不核對規則包那幾個。"""
+    pend, _dup = _pending_table(text)
+    need = [_pending_need(rows[r]) for r in pend if r in rows]
+    cs = rows.values()
+    want = [("總列數", r"- 總列數:(\d+)", len(rows))]
+    want += [(f"{t} 列數", rf"- 各主題:[^\n]*?\b{t} (\d+)", sum(1 for r in rows if r.split("-")[0] == t)) for t in _MAIN_TOPICS]
+    want += [(f"級的組合 {g}", rf"- 級的組合:(?:|[^\n]*?、){re.escape(g)} (\d+)", sum(1 for c in cs if c[6] == g))
+             for g in sorted({c[6] for c in cs})]
+    want += [("形狀類", r"- 情境:形狀類 (\d+)", sum(1 for c in cs if c[7].startswith("形狀"))),
+             ("語意類", r"- 情境:[^\n]*?語意類 (\d+)", sum(1 for c in cs if c[7].startswith("語意"))),
+             ("出處不全", r"- 出處不全的列:(\d+)", sum(1 for c in cs if "(出處不全)" in c[1])),
+             ("人裁", r"- 出處不全的列:[^\n]*?人裁的列:(\d+)", sum(1 for c in cs if "(人裁)" in c[1]))]
+    want += [(f"各級含 {lv}", rf"- 各級\(列的級含該字母[^\n]*?{lv} (\d+)", sum(1 for c in rows.values() if lv in c[6]))
+             for lv in "ABCD"]
+    want += [(f"各級首字 {lv}", rf"- 各級\(以第一個字母計[^\n]*?{lv} (\d+)", sum(1 for c in rows.values() if c[6][:1] == lv))
+             for lv in "ABCD"]
+    want += [("逐列查證", r"- 逐列查證[^\n]*?:(\d+) 列", sum(1 for c in rows.values() if _VERIFIED_RE.search(c[11]))),
+             ("待查證", r"- 待查證:(\d+) 列", len(pend)),
+             ("待查證代號待查", r"- 待查證:[^\n]*?規則代號待查 (\d+) 列", sum(1 for a, _b in need if a)),
+             ("待查證來源待核對", r"- 待查證:[^\n]*?來源待核對 (\d+) 列", sum(1 for _a, b in need if b))]
+    if rules is not None:
+        want += [("規則包條數", r"- 規則包條數:(\d+)", len(rules)),
+                 ("不接閘條數", r"- 規則包條數:[^\n]*?其中 (\d+) 條在不接閘", sum(1 for r in rules if r.get("dir") == "rules-unwired"))]
+        want += [(f"規則包 {k}", rf"- 規則包條數:[^\n]*?\b{k} (\d+)", sum(1 for r in rules if r.get("severity") == k))
+                 for k in ("error", "warning", "info", "hint")]
+        want += [("被會擋的規則守到的列數", r"- 被會擋的規則守到的列數[^\n]*?:(\d+)\s*$", _guarded_rows(rows, rules))]
+    return want
+
+
+def _guarded_rows(rows, rules):
+    """〈統計〉「被會擋的規則守到的列數」的口徑(那一行的括號原文):通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄
+    提到至少一條 rules/ 底下的規則 id(id 前後不接字母、數字、連字號)。"""
+    pats = [re.compile(r"(?<![\w-])" + re.escape(r["id"]) + r"(?![\w-])") for r in rules if r.get("dir") == "rules"]
+    return sum(1 for c in rows.values() if "告警帶寫法=批一" in c[9] and any(p.search(c[5] + " " + c[10]) for p in pats))
+
+
+def stats_problems(text, rows, rules=None):
+    """〈統計〉節手寫的數字要等於從主表、〈待查證〉與規則檔重數的值(同上計劃範圍 6;節說明句寫明是手寫)。"""
+    i = text.find("\n## 統計")
+    if i < 0:
+        return [("<catalog>", "找不到〈統計〉節")]
+    st = text[i:]
+    out = []
+    for label, pat, n in _stats_expected(text, rows, rules):
+        m = re.search(pat, st, re.M)
+        got = int(m.group(1)) if m else None
+        if got != n:
+            out.append(("<catalog>", f"〈統計〉{label} 寫 {got},重數是 {n}"))
+    return out
 
 
 # ── 證據樣式自測(代碼審 code-android情境題與表態對程式 r1 D1)──────────────────────────────

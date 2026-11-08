@@ -1,0 +1,79 @@
+id: kt-webview-file-access
+language: kotlin
+severity: error
+message: '[API-xx]WebView 開了本機檔案存取(allowFileAccess),被導到惡意頁面或本機 HTML 時能讀 App 私有檔;改成 false,本機內容改用 WebViewAssetLoader 載入'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  any:
+    - pattern: $X.setAllowFileAccess(true)
+    - pattern: $X?.setAllowFileAccess(true)
+    - pattern: setAllowFileAccess(true)
+    - all:
+        - kind: assignment
+        - has:
+            kind: directly_assignable_expression
+            regex: (^|\.)\s*allowFileAccess$
+        - has:
+            kind: boolean_literal
+            regex: ^true$
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-biometric-no-crypto
+language: kotlin
+severity: error
+message: '[API-xx]BiometricPrompt.authenticate 只帶 promptInfo、沒帶 CryptoObject,驗證結果只是一個布林回呼,被 hook 就能繞過;要保護金鑰或敏感資料就改成 authenticate(promptInfo, CryptoObject) 並用 Keystore 金鑰綁生物辨識'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  all:
+    - any:
+        - pattern: $X.authenticate($A)
+        - pattern: $X?.authenticate($A)
+    - regex: '(?is)^[\w.?!]*(prompt|biometric)[\w.?!]*\??\.authenticate|^BiometricPrompt\(|authenticate\(\s*[\w.]*info\w*(\(\))?\s*\)|PromptInfo'
+    - inside:
+        kind: source_file
+        regex: BiometricPrompt
+        stopBy: end
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-command-exec-nonliteral
+language: kotlin
+severity: error
+message: '[API-xx]Runtime.exec / ProcessBuilder 的參數不是純字串字面值,外部輸入進到指令會變成指令注入(CWE-78);改成固定指令、白名單比對,或把使用者資料當獨立參數傳而不是拼進指令字串'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**', '**/buildSrc/**', '**/build-logic/**', '**/*.kts']
+rule:
+  all:
+    - any:
+        - all:
+            - any:
+                - pattern: $R.getRuntime().exec($$$A)
+                - pattern: $R.getRuntime()?.exec($$$A)
+                - pattern: $RT.exec($$$A)
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    kind: value_argument
+                    nthChild: 1
+                    not:
+                      regex: '^\s*((arrayOf|listOf|arrayListOf)\(\s*)?(?:"(?:[^"$\\\n]|\\.)*"(?:\s*\+\s*"(?:[^"$\\\n]|\\.)*")*|[A-Z][A-Z0-9_]*)(?:\s*,\s*(?:"(?:[^"$\\\n]|\\.)*"(?:\s*\+\s*"(?:[^"$\\\n]|\\.)*")*|[A-Z][A-Z0-9_]*))*\s*,?\s*\)?\s*$'
+        - all:
+            - kind: call_expression
+            - has:
+                kind: simple_identifier
+                regex: ^ProcessBuilder$
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    kind: value_argument
+                    not:
+                      regex: '^\s*((arrayOf|listOf|arrayListOf)\(\s*)?(?:"(?:[^"$\\\n]|\\.)*"(?:\s*\+\s*"(?:[^"$\\\n]|\\.)*")*|[A-Z][A-Z0-9_]*)(?:\s*,\s*(?:"(?:[^"$\\\n]|\\.)*"(?:\s*\+\s*"(?:[^"$\\\n]|\\.)*")*|[A-Z][A-Z0-9_]*))*\s*,?\s*\)?\s*$'
+  not:
+    matches: in-debug-only-branch
+constraints:
+  RT:
+    regex: '(?i)^(this\.)?(m?runtime|rt)$'

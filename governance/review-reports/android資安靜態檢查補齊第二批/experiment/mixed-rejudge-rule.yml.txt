@@ -1,0 +1,51 @@
+id: kt-webview-mixed-content-always
+language: kotlin
+severity: error
+message: '[SEC-03]WebView 允許 HTTPS 頁面載入 HTTP 子資源,中間人能換掉腳本;改用 <MIXED_CONTENT_NEVER_ALLOW(預設值),真的要相容舊站再用 COMPATIBILITY_MODE>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  always-const:
+    regex: '^([\w.]+\.)?MIXED_CONTENT_ALWAYS_ALLOW$'
+  zero-lit:
+    kind: integer_literal
+    regex: '^0$'
+  always-allow:
+    any:
+      - matches: always-const
+      - matches: zero-lit
+rule:
+  any:
+    # setter:只看 setMixedContentMode 自己的直接參數(呼叫 > call_suffix > value_arguments > value_argument > 值),
+    # 不往下鑽,setMixedContentMode(resolve(0, 1)) 不報
+    - all:
+        - any:
+            - pattern: $X.setMixedContentMode($M)
+            - pattern: $X?.setMixedContentMode($M)
+            - pattern: setMixedContentMode($M)
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                has: {matches: always-allow}
+    # 賦值:常數 MIXED_CONTENT_ALWAYS_ALLOW 左邊只要以 mixedContentMode 結尾就認;
+    # 字面值 0 另要左邊以 .mixedContentMode 結尾、且接收者鏈有一段正好是 settings 或 getSettings()
+    - all:
+        - kind: assignment
+        - any:
+            - all:
+                - has:
+                    kind: directly_assignable_expression
+                    regex: '(^|\.)\s*mixedContentMode$'
+                - has: {matches: always-const}
+            - all:
+                - has:
+                    kind: directly_assignable_expression
+                    regex: '(^|\.)\s*(settings|getSettings\(\s*\))\s*(\?|!!)?\s*\.'
+                - has:
+                    kind: directly_assignable_expression
+                    regex: '\.\s*mixedContentMode$'
+                - has: {matches: zero-lit}
+  not:
+    matches: in-debug-only-branch
