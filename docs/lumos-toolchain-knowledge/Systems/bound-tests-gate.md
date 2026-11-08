@@ -56,6 +56,7 @@ summary: |-
   WHY:CI 裝 detekt 之後多下載 compose-rules detekt 外掛 0.4.28、比對寫死的 sha256,路徑放進 LUMOS_DETEKT_COMPOSE_JAR,CI 上找不到時外掛那支測試判紅 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 範圍 2] [因:本機沒外掛時測試只能略過,CI 不真跑就等於沒驗] [test:t_detekt_compose_rules_shared_config]
   WHY:pre-push 呼叫 spec-gate --push-check 回 1 時印通用的「推送前規格閘擋下,原因見上面列的每一條」(擋下記錄的理由同樣改通用),不再只講風險低計劃的條款測試 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 2] [因:push-check 擋的原因已有條款測試、預期值表簽核、新計劃的〈依據來源〉三種,固定文案會把缺〈依據來源〉講成測試沒綠] [test:t_psrc_hook_generic_message]
   PITFALL:純文件推送時 CI 只跑 prep 工作的文件子集,原本只裝 ruff;文件子集裡有要外部工具的測試(t_detekt_compose_rules_shared_config 等,CI 上找不到 ast-grep、detekt、compose-rules 外掛會判紅),#178 合併後主線紅 3 支,而且只印每片尾巴、查不出名字 [出處:2026-11-08 #178 主線 CI] [根因:三支工具只在全套的 shards 工作裝,prep 跑文件子集前沒裝] [修法:prep 在文件子集前照 shards 抄那三步、只多一行 if suite == docs(照專案每個工作各自抄的做法,不另立複合動作;代碼審 r1 架構對齊),兩處除了 if 逐字相同由 t_ci_yml_test_tools_in_sync 守;文件子集紅時照全套那步先撈 ✗ 行] [repro:CI=1 不給 LUMOS_AST_GREP 跑 python3.14 scripts/test_lumos.py --shard 4/4 --suite docs --graph,t_detekt_compose_rules_shared_config 紅]
+  PITFALL:CI 用 curl 未驗證身分下載 detekt 與 compose-rules 外掛的發布檔,GitHub 有「未驗證使用者逾時增加」事件時 504 或連線中斷,#182 合併後主線同一類下載連紅四次(curl --retry 3 預設只等約 7 秒) [出處:2026-11-08 githubstatus 事件 Increase in timeouts for some unauthenticated users] [根因:發布檔下載沒帶 token、重試時間短過下載站故障] [修法:改 gh release download 帶 github.token,包 5 次逐次拉長的重試(共等 150 秒),sha256 校驗照留] [test:t_ci_yml_release_downloads_authenticated]
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
