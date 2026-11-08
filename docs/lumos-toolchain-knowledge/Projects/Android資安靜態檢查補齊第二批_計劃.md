@@ -19,7 +19,7 @@ lands_in:
 > 白話:第一批(#174)拿三份業界清單補了資安與閃退檢查。使用者要「靜態能先掃描的實務隱患都先處理過」,於是再拿第四份獨立清單——資安掃描工具 MobSF 的 Kotlin 規則集(50 條)——逐條對照:已涵蓋 17、部分涵蓋 1、型錄有列但規則不接閘 4、型錄登記的現成檢查其實抓不到 5、型錄完全沒有 23(對照表在卷證 `experiment/mobsf-compare.md`)。抓不到的 5 條落在兩列錯登:DATA-83 登記的 Google 資安包 VulnerableCryptoAlgorithm 其實只看 `Cipher.getInstance`、抓不到 `MessageDigest.getInstance("MD5")`;DATA-79 登記的內建 SecretInSource 其實只看 Gemini SDK 的金鑰;另外 DATA-82 登記的兩條檢查都不報 `RSA/ECB/NoPadding`。這批把錯登那幾列縮回現成檢查真正管得到的範圍、管不到的另開新列,登記 Android Lint 內建有但型錄漏的 4 條,把形狀判得出的 16 種寫法寫成規則(量誤報後只有一條會擋),剩下只能看語意或沒有權威出處的寫進〈不做〉並各附回頭條件。
 
 PRIOR-ART: ①第四份清單:MobSF mobsfscan 的 Kotlin 規則集(https://github.com/MobSF/mobsfscan 的 `mobsfscan/rules/semgrep/kotlin/`),跟第一批用的 Android Lint、Google 資安包、MASTG 是不同來源;逐條對照由代理做、再派一個沒看過結論的乾淨代理用原始問題獨立複核(專案 CLAUDE.md「說沒有之前先派乾淨 agent 對一次」),對照代理原始回報存卷證 `experiment/mobsf-compare.md`。②錯登的依據:Google 資安包原始碼 `BadCryptographyUsageDetector.kt` 先判呼叫的是不是 `javax.crypto.Cipher`,弱演算法以前綴比對 Blowfish、DES、RC2、RC5、RC4、ARCFOUR(所以 DESede 也會報),RSA 只在配 PKCS1Padding 時報(摘錄存卷證 `experiment/lint-badcrypto-excerpt.md`);`SecretDetector.kt` 只看 `GenerativeModel` 建構子。③自寫規則的寫法沿用第一批:節點種類比對、八項路徑排除、共用除錯判斷 `utils/debug-only.yml`、樣本外語料量誤報(樣本外命中 ≥20、誤報 ≤10% 才放 `rules/`)。④生物辨識那條借 OWASP 的示範(MASTG-DEMO-0090 用 Semgrep 認「authenticate 沒帶 CryptoObject」);指令執行那條參考 Semgrep 的 Kotlin 規則 `kotlin.lang.security.command-injection-formatted-runtime-call`(只認串接與 String.format,官方標低信心)。⑤官方出處:各規則與型錄列的出處見〈依據來源〉,以 OWASP MASTG 測試頁與 Android 官方安全風險指南(https://developer.android.com/privacy-and-security/risks)為主。
-RETIRE-IF: 放 `rules-unwired/` 的 15 條,到 2027-05-08 換語料重量仍沒有一條達到升級條件 → 檢討是不是該整類改成表態題而不是規則;或 Android Lint、Google 資安包補上同一種檢查 → 那條自寫規則撤掉、型錄改指現成檢查。
+RETIRE-IF: 放 `rules-unwired/` 的 15 條,到 2027-05-08 換語料重量仍沒有一條達到升級條件 → 檢討是不是該整類改成表態題而不是規則;(2026-11-08 [[Projects/Android不接閘資安規則重量_計劃]] 提前重量了其中 5 條,都沒過;前半段條件已成立,要不要整類改成表態題交人裁,回頭條件見下)或 Android Lint、Google 資安包補上同一種檢查 → 那條自寫規則撤掉、型錄改指現成檢查。
 
 ## 用詞
 
@@ -91,7 +91,8 @@ RETIRE-IF: 放 `rules-unwired/` 的 15 條,到 2027-05-08 換語料重量仍沒�
 - OAuth 自訂 scheme:RFC 8252 允許自訂 scheme 搭 PKCE,MobSF 講得太重。
 - 不改第一批已上線的規則形狀(`kt-webview-file-url-access` 只管 …FromFileURLs 兩個開關,`setAllowFileAccess` 另開新規則)。
 
-REVISIT:2027-05-08 換一批語料(至少三個不是這次出現過的 Kotlin 為主開源 App)重量第二批 15 條不接閘規則,照升級條件升;外部網址丟進 WebView 那條(樣本外誤報 7%、只差命中數)優先
+REVISIT:2026-11-22 人裁第二批 15 條不接閘規則要不要整類改成推送前表態題(重量 5 條都沒過、10 條誤報超過一成或刻意不升);改的話開新計劃,不改就把 RETIRE-IF 前半段劃掉並寫理由
+REVISIT:2027-05-08 換一批語料(至少三個不是這次出現過的 Kotlin 為主開源 App)重量第二批 15 條不接閘規則,照升級條件升;外部網址丟進 WebView 那條(樣本外誤報 7%、只差命中數)優先 [closed:2026-11-08 [[Projects/Android不接閘資安規則重量_計劃]] 換一批語料重量了第二批命中不夠或沒重量過的 5 條(外部網址 20%,另用抓 manifest 的新判準重判第二份語料只有 5/40 是真問題;指令執行 75%、Provider 38%、資料庫 16%,誤報比例照本批口徑,判不準只留分母;弱套件命中仍不到 20),都沒過、照舊不接閘;其餘 10 條不重量:9 條誤報超過一成是形狀分不出正當用法,生物辨識那條照本批理由刻意不升]
 REVISIT:2027-05-08 看 Android Lint 或 Google 資安包有沒有補上 MessageDigest 弱雜湊、一般寫死秘密、RSA 無填充的檢查,有就把 DATA-96、DATA-97、DATA-98 改指現成檢查、自寫規則撤掉
 REVISIT:2027-05-08 查 MASTG 與 Android 官方安全指南有沒有出 LocalServerSocket、自寫 XOR 加密的測試頁;有權威出處且寫得出形狀的,開型錄列與不接閘規則(通知敏感資料那件已由 [[Projects/Android資安靜態檢查補齊第三批_計劃]] 開成語意列 DATA-100)
 REVISIT:2026-11-22 型錄〈統計〉的情境決策表那行(證據樣式主寫、例外、兩段都寫(無)的列數 8、31、5)重數對不上,查清口徑後改成程式數得出的值 [closed:2026-11-08 第三批用 check.py 的 dt_table 重數,57 列是 15、34、11(不含 D-57 是 14、33、10,三種口徑都對不上舊值,舊值過期);型錄那行已改]

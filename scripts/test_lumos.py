@@ -126854,17 +126854,20 @@ def t_kotlin_rulepack_unwired_dir():
     rules = m.load_rules()
     weak_set = set(weak)
     refs = [r for r in rules if re.match(r"\[([A-Z]+-\d+)\]", r["message"]) and re.match(r"\[([A-Z]+-\d+)\]", r["message"]).group(1) in weak_set]
-    check("⑥ 真規則包引用出處不全列的規則全在 rules-unwired/", refs and all(r["dir"] == "rules-unwired" for r in refs),
+    # 2026-11-08 再查出處後已沒有規則掛在出處不全列上(refs 可以是空的);偵測能力由 ⑩ 的假規則守
+    check("⑥ 真規則包引用出處不全列的規則全在 rules-unwired/", all(r["dir"] == "rules-unwired" for r in refs),
           str([(r["id"], r["dir"]) for r in refs]))
     real = [p for p in m.catalog_problems(rules) if "出處不全" in p[1]]
     check("⑦ 真規則包沒有出處不全的放錯目錄", not real, str(real[:3]))
-    # ⑧⑨ [[Projects/Android寫法型錄逐列查證_計劃]] S3(2026-11-08 使用者裁):API-14、TEST-31 標出處不全,引用它們的三條規則寫死在這裡驗
-    #    (⑥ 只驗「目前標出處不全的列」,這兩列的標記被拿掉時 ⑥ 照綠,要靠這兩道)
+    # ⑧⑨ [[Projects/Android不接閘資安規則重量_計劃]] 範圍 5(2026-11-08 使用者要求「移掉之前,先查明出處,有的就不用刪」):
+    #    API-14、TEST-31 再查三次、設計審三輪,都找不到直接講到規則判定寫法的權威原文,維持出處不全;
+    #    引用它們的規則與另外查不到出處的規則一律移出規則包,不再停放在 rules-unwired/(取代同日逐列查證計劃「搬 rules-unwired/」的做法)。
     check("⑧ API-14、TEST-31 名稱標了(出處不全)", {"API-14", "TEST-31"} <= weak_set, str(sorted(weak_set & {"API-14", "TEST-31"})))
     by_id = {r["id"]: r for r in rules}
-    three = ("kt-async-await-immediately", "kt-compose-test-node-by-index", "kt-compose-test-node-by-literal-text")
-    check("⑨ 引用 API-14、TEST-31 的三條規則都在 rules-unwired/", all(by_id.get(i, {}).get("dir") == "rules-unwired" for i in three),
-          str([(i, by_id.get(i, {}).get("dir")) for i in three]))
+    gone = ("kt-async-await-immediately", "kt-compose-test-node-by-index", "kt-compose-test-node-by-literal-text",
+            "kt-error-by-message-string", "kt-compose-preview-no-theme")
+    check("⑨ 查不到出處的五條規則不在規則包", not any(i in by_id for i in gone),
+          str([(i, by_id.get(i, {}).get("dir")) for i in gone]))
     p10 = probs({"id": "kt-u10", "severity": "error", "dir": "rules", "message": f"[{wid}] 測;改用 x"})
     check("⑩ 出處不全的規則放在會擋的 rules/ 要報", any("rules-unwired" in b for b in p10), str(p10))
 
@@ -127043,6 +127046,10 @@ _KTSEC_CASES = (
     ("src/main/kotlin/C121.kt", "MyTextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
     ("src/main/kotlin/C122.kt", "androidx.compose.material3.TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
     ("src/main/kotlin/C123.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = if (x) ImeAction.Done else ImeAction.Next))", "kt-compose-password-keyboard", 0),
+    # [[Projects/Android不接閘資安規則重量_計劃]] 範圍 5:系統時鐘規則只報有權威原文的 API;帶套件前綴的 Clock.System 要報(設計審 r3 抓到原本比對不到)
+    ("src/main/kotlin/C124.kt", "fun stampKt() = kotlin.time.Clock.System.now()", "kt-prod-reads-system-clock", 1),
+    ("src/main/kotlin/C125.kt", "fun expired() = System.currentTimeMillis() > deadline", "kt-prod-reads-system-clock", 0),
+    ("src/main/kotlin/C126.kt", "fun elapsed() = SystemClock.elapsedRealtime() - start", "kt-prod-reads-system-clock", 0),
 )
 # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
 _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
@@ -129606,10 +129613,10 @@ _KT_STATS_LINES = (
                     "、B+D 9", "、C 48", "、C+D 4", "、D 43")),
     ("- 情境:", ("形狀類 428", "語意類 107")),
     ("- 待查證:", ("待查證:51 列", "規則代號待查 48 列", "來源待核對 3 列")),
-    ("- 規則包條數:", ("規則包條數:229", "error 48", "warning 119", "info 12", "hint 50", "其中 30 條")),
+    ("- 規則包條數:", ("規則包條數:224", "error 48", "warning 117", "info 12", "hint 47", "其中 25 條")),
     ("- 被會擋的規則守到的列數", (":129",)),
-    ("- 出處不全的列:", ("列:35", "人裁的列:4")),
-    ("- 逐列查證", ("\u3015):522 列",)),
+    ("- 出處不全的列:", ("列:29", "人裁的列:4")),
+    ("- 逐列查證", ("\u3015):525 列",)),
 )
 
 

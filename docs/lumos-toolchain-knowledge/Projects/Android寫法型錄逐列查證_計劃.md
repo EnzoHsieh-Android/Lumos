@@ -17,6 +17,14 @@ decisions:
   - content: API-14、TEST-31 標出處不全、引用它們的三條規則搬 rules-unwired/;DATA-12 照官方 updateData 原文改成取捨提醒
     id: d1
     decided: 2026-11-08
+    valid: false
+    superseded_by: "[[Projects/Android不接閘資安規則重量_計劃]]#d3"
+    ended: 2026-11-08
+  - content: DATA-12 照官方 DataStore.updateData 原文改成人裁列(原 d1 的這半照舊有效;d1 的 API-14、TEST-31 那半由 [[Projects/Android不接閘資安規則重量_計劃]] d3 取代:兩列維持出處不全,規則移出規則包)
+    id: d2
+    context: 原 d1 同時記了兩件事,其中一半被翻案
+    why_chosen: 把仍有效的那半單獨留一筆,免得查決策時找不到
+    decided: 2026-11-08
     valid: true
 ---
 
@@ -52,7 +60,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 
 使用者 2026-11-08 對編排者的建議回「照你建議」,三件照建議定案:
 
-- **API-14、TEST-31 標出處不全**:兩列名稱加(出處不全),引用它們的規則 `kt-async-await-immediately`(原在 `rules/api.yml`)、`kt-compose-test-node-by-index`(原在 `rules/testing.yml`)、`kt-compose-test-node-by-literal-text`(原在 `rules-hints/testing.yml`,同一列的另一半)搬到 `rules-unwired/`,照規則包 WHY「引用出處不全列的規則只准放 rules-unwired/」。代價:消費專案推送前不再擋這兩種寫法。
+- **(2026-11-08 再查翻案,見 [[Projects/Android不接閘資安規則重量_計劃]] 範圍 5:使用者要求「移掉之前先查明出處,有的就不用刪」,派兩個乾淨代理逐頁再查;結果兩列都維持出處不全:API-14 只有 IntelliJ 檢查的名稱與訊息字串(沒寫判定的形狀)和協程維護者的議題留言(只算佐證);TEST-31 的 codelab「不能用節點編號找」講的是語意樹印出的除錯編號、不是取索引,用顯示文字找則跟官方建議相反。三條規則不再停放在 rules-unwired/,改成移出規則包。以下是當時的裁定紀錄,不是現況)** **API-14、TEST-31 標出處不全**:兩列名稱加(出處不全),引用它們的規則 `kt-async-await-immediately`(原在 `rules/api.yml`)、`kt-compose-test-node-by-index`(原在 `rules/testing.yml`)、`kt-compose-test-node-by-literal-text`(原在 `rules-hints/testing.yml`,同一列的另一半)搬到 `rules-unwired/`,照規則包 WHY「引用出處不全列的規則只准放 rules-unwired/」。代價:消費專案推送前不再擋這兩種寫法。
 - **DATA-12 改成人裁列**(型錄既有口徑:只剩業務判斷的列名稱標(人裁)、接電方式只寫表態對程式,不派盲判席;不掛規則、不擋):照官方 `DataStore.updateData` 原文(All operations are serialized, and the transform itself is a coroutine so it can perform heavy work such as RPCs)改寫:官方允許 transform 做耗時工作,但同一個 DataStore 的寫入依序執行,transform 跑多久後面的寫入就等多久;拿掉(出處不全)、補查證紀錄。這列沒有掛規則。
 
 ## 實務隱患
@@ -99,7 +107,7 @@ RETIRE-IF: 型錄自檢的「還沒逐列查證」連續八週都是 0、而且�
 2. verified 的口徑是「核心主張有官方原文、不相反」,不是「每個細節都有原文」。
 
 REVISIT:2026-12-07 看型錄自檢的「還沒逐列查證」有沒有因新增列而變多
-REVISIT:2027-02-08 重查 API-14 與 TEST-31 的官方出處(線索:JetBrains IDE 有「Redundant 'async' call」檢查,建議把 async(...).await() 改成 withContext;Compose 測試官方頁對用索引與顯示文字找節點的說法),找到就把那一列的(出處不全)拿掉、規則搬回 `rules/`(拆出 literal-text 那條回 `rules-hints/`)
+REVISIT:2027-02-08 重查 API-14 與 TEST-31 的官方出處(線索:JetBrains IDE 有「Redundant 'async' call」檢查,建議把 async(...).await() 改成 withContext;Compose 測試官方頁對用索引與顯示文字找節點的說法),找到就把那一列的(出處不全)拿掉、規則搬回 `rules/`(拆出 literal-text 那條回 `rules-hints/`) [closed:2026-11-08 [[Projects/Android不接閘資安規則重量_計劃]] 提前重查(三次查證、三輪設計審):兩列都找不到直接講到規則判定寫法的權威原文,維持出處不全;引用它們的三條規則移出規則包,不搬回 rules/]
 REVISIT:2027-02-08 型錄自檢「出處不全只准 unwired」只看規則訊息開頭的編號,不看型錄列的現成規則欄(STATE-9 標出處不全,它列的 kt-statein-lazily-or-no-timeout 訊息開頭是 [STATE-4]、在 rules/);看要不要改成也比現成規則欄
 
 ## 審計修正紀錄

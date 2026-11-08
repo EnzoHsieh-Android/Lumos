@@ -1,0 +1,30 @@
+# 第一份語料五條規則的敏感度重算(2026-11-08;存成 .txt 免得被當腳本執行)。
+# 用法:python3 -I - <第一份語料根目錄 rm/corpus> <experiment 目錄> < 本檔(去掉這幾行註解)。
+# 三種算法:A 原判;B 排除教材與掃描器/基準語料(repo 名或路徑含下列字)、同源合併(同檔名且前後 20 行去空白相同);
+#           C 在 B 之上,「只因 repo 名帶 demo/example/sample 這類字」判成範例碼的誤報改算真問題(路徑判的不改)。
+import sys, re, hashlib, collections, pathlib
+C, E = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+TEACH = re.compile(r'(?i)insecure|vulnerab|vuln|goat|damn|ctf|owasp|testdata|sast|fixtures|swe-gen|harbor-datagen|masaudit')
+NAMEDEMO = re.compile(r'(?i)repo 名')
+jf = {'kt-insecure-tls-version': 'judge-tls.md', 'kt-loadurl-external': 'judge-loadurl.md', 'kt-command-exec-nonliteral': 'judge-cmd.md',
+      'kt-provider-openfile-traversal': 'judge-provider-db.md', 'kt-db-on-external-files': 'judge-provider-db.md'}
+for rid, j in jf.items():
+    rows = []
+    for l in open(E / j, encoding='utf-8'):
+        c = l.rstrip('\n').split('\t')
+        if len(c) >= 5 and c[0] == rid and c[3] in ('TP', 'FP', 'UNSURE'): rows.append(c)
+    samp = [s.strip().rsplit(':', 1) for s in open(E / f'sample-{rid}.txt') if s.strip()]
+    full = {(f.split('/')[0], ln): f for f, ln in samp}
+    a_fp = sum(r[3] == 'FP' for r in rows); n = len(rows)
+    seen = {}; units = []; excl = []
+    for r in rows:
+        f = full.get((r[1].split('/')[0], r[2]))
+        if f is None: continue
+        if TEACH.search(f): excl.append(f); continue
+        L = (C / rid / f).read_text(errors='replace').splitlines(); i = int(r[2]) - 1
+        key = (f.rsplit('/', 1)[-1], hashlib.sha1(re.sub(r'\s+', '', '\n'.join(L[max(0, i - 20):i + 21])).encode()).hexdigest())
+        if key in seen: continue
+        seen[key] = 1; units.append(r)
+    b_fp = sum(r[3] == 'FP' for r in units)
+    c_fp = sum(r[3] == 'FP' and not ('範例碼' in r[4] and NAMEDEMO.search(r[4])) for r in units)
+    print(f"{rid}: A {a_fp}/{n}={a_fp/n:.1%} | B {b_fp}/{len(units)}={b_fp/len(units):.1%} | C {c_fp}/{len(units)}={c_fp/len(units):.1%} | 排除:{';'.join(x.split('/')[0] for x in excl) or '無'}")
