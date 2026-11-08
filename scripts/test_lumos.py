@@ -88689,6 +88689,56 @@ def _dr_ci_step_fp(block):
     return _h.sha256("\n".join(keep).rstrip().encode()).hexdigest()[:16]
 
 
+_CI_TEST_TOOL_STEPS = ("裝釘版本的 ast-grep", "裝釘版本的 detekt", "裝釘版本的 compose-rules detekt 外掛")
+
+
+def _ci_job_steps(ci):
+    """ci.yml 文字 → {工作名: {步驟名: 步驟原文(不含 # 註解行)}, 工作名 + "#order": [步驟名…]}(照 t_ci_yml_matrix_and_gates_shape 的切法)。"""
+    import re as _re
+    body = ci[ci.index("\njobs:\n") + len("\njobs:\n"):]
+    parts = _re.split(r"(?m)^  ([A-Za-z0-9_-]+):\s*$", body)
+    out = {}
+    for k in range(1, len(parts) - 1, 2):
+        steps, order = {}, []
+        for blk in _re.split(r"\n(?=      - )", parts[k + 1]):
+            m = _re.match(r"      - name: (.+)", blk)
+            if m:
+                name = m.group(1).strip()
+                order.append(name)
+                steps[name] = "\n".join(ln for ln in blk.splitlines() if not ln.lstrip().startswith("#")).rstrip()
+        out[parts[k]], out[parts[k] + "#order"] = steps, order
+    return out
+
+
+def t_ci_yml_test_tools_in_sync():
+    """[[Systems/bound-tests-gate]] 2026-11-08:純文件推送時 CI 只在 prep 工作跑文件子集,文件子集裡有要外部工具的測試;
+    prep 照 shards 抄了三支工具的安裝步驟。守:prep 三步都在、都帶 if suite == docs、排在「純文件推送的文件子集」之前;
+    除了那一行 if,跟 shards 的同名步驟逐字相同(版本與雜湊兩處一起改)。判準來源:這次事故(#178 合併後 prep 沒裝、主線紅 3 支)
+    與專案「每個工作各自抄」的既有做法(代碼審 code-ci文件子集裝工具 r1 架構對齊、審查兩席)。
+    翻紅釘:prep 刪掉任一步、拿掉或改錯 if、搬到文件子集之後、只改一邊的版本或雜湊 → 紅。"""
+    print("t_ci_yml_test_tools_in_sync")
+    _need_src(".github/workflows/ci.yml")
+    ci = (Path(GRAPHCTL).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    _ci_test_tools_problems_check(_ci_job_steps(ci))
+    print("  ✓ t_ci_yml_test_tools_in_sync")
+
+
+def _ci_test_tools_problems_check(jobs):
+    prep, shards, order = jobs.get("prep", {}), jobs.get("shards", {}), jobs.get("prep#order", [])
+    cond = "        if: steps.suite.outputs.suite == 'docs'"
+    docs_at = order.index("純文件推送的文件子集") if "純文件推送的文件子集" in order else -1
+    check("★前置★ prep 有「純文件推送的文件子集」、shards 有三支工具的安裝步驟",
+          docs_at >= 0 and all(n in shards for n in _CI_TEST_TOOL_STEPS), str(order))
+    for n in _CI_TEST_TOOL_STEPS:
+        p = prep.get(n)
+        check(f"①prep 有「{n}」且排在文件子集之前", p is not None and order.index(n) < docs_at, str(order))
+        if p is None:
+            continue
+        check(f"②prep 的「{n}」帶 if suite == docs", cond in p.splitlines(), p[:200])
+        check(f"③prep 的「{n}」除了 if 跟 shards 逐字相同",
+              "\n".join(ln for ln in p.splitlines() if ln != cond) == shards.get(n, ""), p[:200])
+
+
 def t_ci_yml_matrix_and_gates_shape():
     """[CI加速 S1] CI 拆成 prep/shards/gates:全套在 matrix 工作、份數編號 1..N 各一次、fail-fast 關、只在 suite=full 跑;
     後盾七步全在 gates、指令與環境變數跟拆分前逐字相同、順序相同;三個工作都抓完整歷史、都有逾時上限。

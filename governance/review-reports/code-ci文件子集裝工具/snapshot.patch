@@ -1,0 +1,221 @@
+diff --git a/.github/actions/test-tools/action.yml b/.github/actions/test-tools/action.yml
+new file mode 100644
+index 000000000..b7e5f77b6
+--- /dev/null
++++ b/.github/actions/test-tools/action.yml
+@@ -0,0 +1,48 @@
++# 測試要的三支外部工具:釘版本的 ast-grep、detekt、compose-rules 的 detekt 外掛。全套的分片工作與純文件推送的文件子集都用這一份
++# (2026-11-08 純文件推送第一次撞到:文件子集裡有要這幾支工具的測試,prep 工作原本沒裝,CI 上判紅;版本與雜湊只寫這裡,升版改這一處)。
++name: 裝測試要的外部工具
++description: 釘版本的 ast-grep、detekt、compose-rules detekt 外掛
++runs:
++  using: composite
++  steps:
++  # Kotlin 規則包的測試要真的 ast-grep;CI 上沒裝那幾支會判紅(本機沒裝才略過)。釘 0.51.1:規則包用到的語法以這版為準
++  # (Projects/Android協程與API寫法機械檢查標準_計劃 範圍 4、S1)
++  - name: 裝釘版本的 ast-grep
++    shell: bash
++    run: python -m pip install --quiet ast-grep-cli==0.51.1
++  # detekt 推送前真的擋的測試要真的 detekt;CI 上沒裝會判紅(本機沒裝才略過)。釘 1.23.8(Projects/Android的detekt推送前真的擋_計劃 範圍 6、S8)。
++  # ★CI 第一個非 pip 的工具下載,以後別的工具照這步抄★:下載 GitHub 發布檔 → 比對寫死的 sha256(不符整步失敗)→ 解開 → 放進 PATH。
++  # sha256 是 2026-11-06 本機下載同一個檔算的;官方發布頁沒公布這個檔的雜湊(GitHub 這個舊發布的資產沒有 digest 欄),
++  # 所以釘死它:發布檔被換掉這步就紅。升版時照同一個指令重下、重算、兩處(版本與雜湊)一起改。
++  # detekt-cli 要 Java:ubuntu-latest 預設裝了 Temurin 17,先印版本確認。
++  - name: 裝釘版本的 detekt
++    env:
++      DETEKT_VERSION: "1.23.8"
++      DETEKT_SHA256: "ff9f9258879ff2ec4349114740221498afec46a85cf6302c9f80b06eb4429501"
++    shell: bash
++    run: |
++      set -eu
++      java -version
++      d="$RUNNER_TEMP/detekt"
++      mkdir -p "$d/bin"
++      curl -sSfL --retry 3 -o "$d/detekt-cli.zip" \
++        "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}.zip"
++      echo "${DETEKT_SHA256}  $d/detekt-cli.zip" | sha256sum -c -
++      unzip -q "$d/detekt-cli.zip" -d "$d"
++      ln -s "$d/detekt-cli-${DETEKT_VERSION}/bin/detekt-cli" "$d/bin/detekt"
++      echo "$d/bin" >> "$GITHUB_PATH"
++      "$d/bin/detekt" --version
++  # compose-rules 的 detekt 外掛(0.4.28 對 detekt 1.23.8;Projects/Android現成檢查接上CI與推送前_計劃 範圍 2、S3):照上一步同一個做法,
++  # 下載 → 比對寫死的 sha256(2026-11-06 本機算的,官方沒公布)→ 路徑放進 LUMOS_DETEKT_COMPOSE_JAR;測試在 CI 上找不到這支會判紅。
++  - name: 裝釘版本的 compose-rules detekt 外掛
++    env:
++      COMPOSE_RULES_VERSION: "0.4.28"
++      COMPOSE_RULES_SHA256: "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6"
++    shell: bash
++    run: |
++      set -eu
++      j="$RUNNER_TEMP/detekt/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
++      curl -sSfL --retry 3 -o "$j" \
++        "https://github.com/mrmans0n/compose-rules/releases/download/v${COMPOSE_RULES_VERSION}/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
++      echo "${COMPOSE_RULES_SHA256}  $j" | sha256sum -c -
++      echo "LUMOS_DETEKT_COMPOSE_JAR=$j" >> "$GITHUB_ENV"
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 3a95395a3..86e11caf9 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -91,34 +91,43 @@ jobs:
+           if [ "${{ github.event_name }}" = push ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+             out="$(python scripts/lumos pitfalls --diff "$BEFORE..$SHA" --no-lint --json --repo . 2>/dev/null || true)"
+             s="$(printf '%s' "$out" | python -c 'import json,sys; d=json.load(sys.stdin); print(d.get("suite","full")); print(d.get("suite_reason","")); print("graph" if d.get("suite_graph") else "")' 2>/dev/null || printf 'full\nlumos 算不出來\n')"
+             suite="$(printf '%s' "$s" | sed -n 1p)"; why="$(printf '%s' "$s" | sed -n 2p)"; graph="$(printf '%s' "$s" | sed -n 3p)"
+             [ "$suite" = docs ] || suite=full
+           fi
+           echo "suite=$suite" >> "$GITHUB_OUTPUT"
+           echo "graph=$graph" >> "$GITHUB_OUTPUT"
+           echo "測試範圍:$suite($why)"
++      # 文件子集裡也有要外部工具的測試(例:t_detekt_compose_rules_shared_config),CI 上沒裝會判紅(2026-11-08 #178 合併後撞到)
++      - name: 裝測試要的外部工具(文件子集)
++        if: steps.suite.outputs.suite == 'docs'
++        uses: ./.github/actions/test-tools
+       - name: 純文件推送的文件子集
+         if: steps.suite.outputs.suite == 'docs'
+         env:
+           GRAPH: ${{ steps.suite.outputs.graph }}
+         run: |
+           set -u
+           extra="--suite docs"; echo "純文件推送:只跑文件子集(--suite docs),不跑全套"
+           if [ "$GRAPH" = graph ]; then extra="$extra --graph"; echo "含圖譜筆記:加跑讀真圖譜的測試(--graph)"; fi
+           rc=0
+           for i in 1 2 3 4; do
+             python scripts/test_lumos.py --shard "$i/4" $extra > "/tmp/shard-$i.log" 2>&1 &
+           done
+           for job in $(jobs -p); do wait "$job" || rc=1; done
+-          for i in 1 2 3 4; do echo "===== 第 $i 片 ====="; tail -25 "/tmp/shard-$i.log"; done
++          for i in 1 2 3 4; do
++            echo "===== 第 $i 片 ====="
++            # 紅的時候先撈失敗的斷言與所在測試(tail 只看得到尾巴;2026-11-08 文件子集紅了查不出名字,照全套那步補)
++            grep -nE "^  ✗|EXCEPTION" "/tmp/shard-$i.log" | tail -40 || true
++            tail -25 "/tmp/shard-$i.log"
++          done
+           exit $rc
+   shards:
+     needs: prep
+     if: needs.prep.outputs.suite == 'full'
+     runs-on: ubuntu-latest
+     timeout-minutes: 30
+     strategy:
+       fail-fast: false
+       matrix:
+         # 每台跑幾份、共幾份:Projects/CI加速_計劃〈做法〉0 量出來的(一台同時跑兩份不會變慢,瓶頸是每份的量);改台數時兩處一起改,t_ci_yml_matrix_and_gates_shape 守 1..N 各一次
+@@ -131,58 +140,24 @@ jobs:
+           fetch-depth: 0   # code-loop gate 要算 before..sha 的 diff(體檢 #5);全套與範圍判定也要歷史
+       # PR 事件取出的是不在任何分支上的合併提交,本機只有 origin/main、沒有 main;找主線的測試(main@{upstream})
+       # 會整支紅。補一個追蹤 origin/main 的本機 main,讓 PR 跟推到 main 時是同一種環境(2026-10-03 第一個 PR 實際踩到)。
+       # 工作之間不共用機器,每個工作都要自己補(Projects/CI加速_計劃)
+       - name: PR 事件補上本機 main
+         if: github.event_name == 'pull_request'
+         run: git branch --track main origin/main
+       - uses: actions/setup-python@v5
+         with:
+           python-version: "3.14"   # 2026-09-29 工具最低版本改 3.14(Projects/最低Python版本改3.14_計劃)
+-      # Kotlin 規則包的測試要真的 ast-grep;CI 上沒裝那幾支會判紅(本機沒裝才略過)。釘 0.51.1:規則包用到的語法以這版為準
+-      # (Projects/Android協程與API寫法機械檢查標準_計劃 範圍 4、S1)
+-      - name: 裝釘版本的 ast-grep
+-        run: python -m pip install --quiet ast-grep-cli==0.51.1
+-      # detekt 推送前真的擋的測試要真的 detekt;CI 上沒裝會判紅(本機沒裝才略過)。釘 1.23.8(Projects/Android的detekt推送前真的擋_計劃 範圍 6、S8)。
+-      # ★CI 第一個非 pip 的工具下載,以後別的工具照這步抄★:下載 GitHub 發布檔 → 比對寫死的 sha256(不符整步失敗)→ 解開 → 放進 PATH。
+-      # sha256 是 2026-11-06 本機下載同一個檔算的;官方發布頁沒公布這個檔的雜湊(GitHub 這個舊發布的資產沒有 digest 欄),
+-      # 所以釘死它:發布檔被換掉這步就紅。升版時照同一個指令重下、重算、兩處(版本與雜湊)一起改。
+-      # detekt-cli 要 Java:ubuntu-latest 預設裝了 Temurin 17,先印版本確認。
+-      - name: 裝釘版本的 detekt
+-        env:
+-          DETEKT_VERSION: "1.23.8"
+-          DETEKT_SHA256: "ff9f9258879ff2ec4349114740221498afec46a85cf6302c9f80b06eb4429501"
+-        run: |
+-          set -eu
+-          java -version
+-          d="$RUNNER_TEMP/detekt"
+-          mkdir -p "$d/bin"
+-          curl -sSfL --retry 3 -o "$d/detekt-cli.zip" \
+-            "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}.zip"
+-          echo "${DETEKT_SHA256}  $d/detekt-cli.zip" | sha256sum -c -
+-          unzip -q "$d/detekt-cli.zip" -d "$d"
+-          ln -s "$d/detekt-cli-${DETEKT_VERSION}/bin/detekt-cli" "$d/bin/detekt"
+-          echo "$d/bin" >> "$GITHUB_PATH"
+-          "$d/bin/detekt" --version
+-      # compose-rules 的 detekt 外掛(0.4.28 對 detekt 1.23.8;Projects/Android現成檢查接上CI與推送前_計劃 範圍 2、S3):照上一步同一個做法,
+-      # 下載 → 比對寫死的 sha256(2026-11-06 本機算的,官方沒公布)→ 路徑放進 LUMOS_DETEKT_COMPOSE_JAR;測試在 CI 上找不到這支會判紅。
+-      - name: 裝釘版本的 compose-rules detekt 外掛
+-        env:
+-          COMPOSE_RULES_VERSION: "0.4.28"
+-          COMPOSE_RULES_SHA256: "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6"
+-        run: |
+-          set -eu
+-          j="$RUNNER_TEMP/detekt/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
+-          curl -sSfL --retry 3 -o "$j" \
+-            "https://github.com/mrmans0n/compose-rules/releases/download/v${COMPOSE_RULES_VERSION}/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
+-          echo "${COMPOSE_RULES_SHA256}  $j" | sha256sum -c -
+-          echo "LUMOS_DETEKT_COMPOSE_JAR=$j" >> "$GITHUB_ENV"
++      # 測試要的外部工具(ast-grep、detekt、compose-rules 外掛)的版本與雜湊只寫在 .github/actions/test-tools/action.yml,
++      # 文件子集那步也用同一份(Systems/bound-tests-gate)
++      - name: 裝測試要的外部工具
++        uses: ./.github/actions/test-tools
+       - name: 全套的這幾份(${{ matrix.shards }} / 共 ${{ env.SHARD_TOTAL }} 份)
+         env:
+           MY_SHARDS: ${{ matrix.shards }}
+         run: |
+           set -u
+           rc=0
+           for i in $MY_SHARDS; do
+             # 每份印開始時間與「第 i 份耗時 N 秒」:看分片平不平均用;撤除條件量的是每台(兩份)的耗時,看這個工作的總時間(推送與CI提速 RETIRE-IF)
+             # 子殼層裡先 set +e:預設 bash -e 會在測試紅時直接結束子殼層,紅的那份就印不出耗時(代碼審 r1 通才、合約圖譜席)
+             ( set +e; s=$(date +%s); echo "第 $i 份開始 $(date -u +%H:%M:%S)"; python scripts/test_lumos.py --shard "$i/$SHARD_TOTAL"; rc=$?; echo "第 $i 份耗時 $(( $(date +%s) - s )) 秒"; exit $rc ) > "/tmp/shard-$i.log" 2>&1 &
+diff --git a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+index fef6e5c36..9e09bcc10 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
++++ b/docs/lumos-toolchain-knowledge/Systems/bound-tests-gate.md
+@@ -1,17 +1,18 @@
+ ---
+ type: system
+ status: done
+ created: 2026-08-22
+-updated: 2026-11-06
++updated: 2026-11-08
+ about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
+ self_audit: sonnet/2026-08-30
++responsibility: 負責推送前與 CI 跑哪些測試:合約測試閘(綁了 [test:] 的測試當場跑)、推送前掛鉤的閘順序與一次列出全部擋下原因、CI 的範圍判定與測試要的外部工具安裝;不負責各道閘自己的判定(歸各閘的家)
+ aliases:
+   - 受波及合約測試真跑閘
+   - bound tests
+   - 合約測試閘
+ tags:
+   - type/system
+   - status/done
+   - scope/guards-gates
+ summary: |-
+   WHY:全套分片改照耗時分:執行器讀 `governance/test-durations.json`,權重由大到小丟給總耗時最少的一份(下限 0.05 秒、平手比支數);沒有表照名字輪流分,表格式不對每一份都擋;同一個 PR 有新推送就取消舊 CI,推到 main 每個提交各自一組不被取代 [出處:[[Projects/推送與CI提速_計劃]]] [因:照名字輪流分時 CI 各台 6.1–14.3 分不等,最慢那台決定整次時間] [不選:主線同一提交略過全套與快轉合併(設計審 r1 三席指出 PR 與主線環境對不齊、排隊中的主線 CI 會被取代,只省機器時間不省人的等待,使用者裁定拿掉);讀表失敗各份自行退回輪流分(各份可能混用兩種分法、聯集出錯)] [test:t_runner_shard_by_duration] [test:t_ci_yml_speed_shape]
+@@ -47,28 +48,30 @@ summary: |-
+   KEY:[2026-09-18]推送前與 CI 的全套測試,純文件改動只跑文件子集(Enzo 裁「像這種改動 CI 可以跳過吧」「判成 light 的也不用」):掛鉤每個 ref 讀 pitfalls 的 suite,全部 docs → 分片改帶 `--suite docs`(執行器挑「讀真 repo 根、而且讀 README/根目錄文件/assets/docs 底下非圖譜文件」的測試,連看它呼叫的本檔輔助函式一跳;2026-09-18 實推量到舊挑法 209 支四片跑 234 秒、跟全套一樣慢——假環境裡順手寫 CLAUDE.md 的重測試全被挑進來;收緊後 63/1021 支、四片 21 秒,測試釘 ≤10% 且不含 t_ci_wait/t_slim_gate;讀真圖譜的測試平常不算;★推送碰到圖譜筆記時★(pitfalls 的 suite_graph)加 `--graph` 把讀★真★圖譜(lumos 找到的那個目錄名,不是任何 -knowledge 字樣:假環境 x-knowledge 會把 34 支評測 fixture 帶回來)的 12 支加回——圖譜健檢只驗結構、驗不到檢索品質(代碼審 code-文件子集收緊 r1/r2 通才席),合計 75 支、四片 55 秒;掛鉤先讀檔探執行器認不認得 `--graph`,不認得退全套;先挑子集再切片);改到程式但 spec-gate --push-check 判 light ★且 pitfalls light_ok★ 的,文件子集之外再跑 `--suite keys --keys <affected_keys>`(原始碼整字提到改到的頂層函式/檔名的測試;一個關鍵字選中 >30% 就丟),兩組各自分片、真的同時跑(2026-09-18 實測前一版是一組跑完才跑下一組,註解卻寫平行);keys 每片都 rc3(沒對到)不擋、講明全套由 CI 跑(推 main 有主線 CI;功能分支要開 PR 才有 CI),有紅照擋;其餘全套。CI 只認 docs(push 事件用 before..sha 問 lumos;首推/force-push 對不到起點/pull_request 一律全套)。純文件推送的自主迴圈測試(整支 68 秒)兩邊都只跑讀真 CLAUDE.md 那一條(`-k real_claude_md`,接線測試真跑確認選得到 1 支);★light 推送前也一樣★,除非 pitfalls 的 `autoloop_full` 為真:affected_keys 有任一個整字出現在那支測試的原始碼裡(它測自主迴圈模組、主程式常數、兩支探針腳本),或抽不出任何關鍵字(不知道改了什麼就整支跑);整字比對只有 lumos `_keys_mentioned` 一份,執行器 `--suite keys` 也用它(代碼審 code-light自主迴圈 r1)——2026-09-18 在隔離工作樹造真 light 情境實測 108 秒 → 40 秒。CI 對 light 照跑全套(推 main 的 push 事件與 PR 事件;功能分支沒開 PR 前沒有 CI)。[2026-11-05 [[Projects/推送只跑受影響測試_計劃]]]推功能分支(pitfalls `--pushed-ref` 判出 `pushed_mainline` false 而且 `suite_computed` true)原本判全套的也降成 light 跑法,不受 light_ok 約束;判主線看的是推去的目的地(掛鉤每行的遠端 ref),不看本機分支名——`git push Lumos feat:main` 照全套(t_prepush_feature_branch_mixed_with_main 釘兩個不同名案例,代碼審 r2 通才席抓到原測試全同名);全套由 PR 的 CI 跑(PR 事件一律全套),推 main 照舊本機全套。執行器不認得 --suite(讀檔探旗標)就退全套。push-check 輸出用 tee 即時印(r1 併發席:先存檔再印人會以為卡住);暫存檔全收 _PP_TMP 掛 trap。★誠實界線★:文件子集是「原始碼字樣」挑的,不是真的追蹤誰讀了哪個檔——第一版單看字樣挑到 254 支跑 9 分半比全套分片還慢,現在 docs/、governance/ 要跟真 repo 根寫法同現才算
+   TEST:t_bound_tests_gate(綠/紅/懸空/逃生門/env/no-config/壞設定檔/新分支首推 12 斷言(2026-08-30 機械重數訂正,原記十));本 repo 實跑 42 支 29s
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]測試指令用 {python} 佔位符,由 lumos 代入自己那支直譯器並依平台加引號;原本吃 PATH 上的 python3,3.14 只以 python3.14 存在的機器會把每一支綁定測試跑紅、被當成「證不出跑過」擋推送。三處代入點(guard kill、合約測試閘本體、過濾探針)都經同一支函式 [test:t_test_run_cmd_uses_running_python]
+   WHY:[2026-09-29 [[Projects/最低Python版本改3.14_計劃]]]pre-push 有 scripts/lumos 卻找不到 Python 3.14 就擋下,不再像以前「找不到 python 就放行、找到 3.9 就拿 3.9 跑」;沒有 scripts/lumos 的 repo 照舊放行 [test:t_hooks_block_without_python314]
+   WHY:pp_cl_reason 加第六種 android_e2e,逃生路文字補 Android 端到端驗收那條(跑驗收、提交紀錄、waive 放行、LUMOS_SKIP_ANDROID_E2E=1);ci.yml 的擋下說明不加這一種 [出處:[[Projects/Android端到端驗收_計劃]] 設計審 r3 整合席] [因:CI 不跑這道,列進 ci.yml 是永遠不會出現的死條目;種類名帶數字,兩支守衛測試抽種類名的樣式改成收數字] [test:t_prepush_cl_reason_table_matches_lumos] [test:t_prepush_cl_reason_sentences_match_plan]
+   WHY:[2026-10-30 Enzo 裁]推送被擋時掛鉤輸出的最後一行改成第一筆擋下那道閘實際跑的指令(`下一步:…`),全套測試紅與自主迴圈紅兩條不經彙總的路也各補一行重跑指令;重查會印該道修法,所以不把修法再抄一份;指令由各閘交給 `pp_record_block`,掛鉤自己印、不經 lumos,所以配舊版 lumos 走簡版彙總時也有 [出處:2026-10-30 研究報告現況核對抽 5 道閘] [因:原本最後一行是散文或 git push --no-verify,而受控實驗顯示訊息指名下一個做得到的呼叫才恢復得好(2609.35381 v2,OpenAI 模型與無終端情境,套到 Claude 是推論)] [不選:lumos 依閘名查表再填一個共用範圍(各閘範圍不同,新分支首推與推標籤會重查到別的東西,2026-10-30 代碼審抓到);只調換各閘順序(全套前的閘最後印的是彙總,換了也看不到);印預演指令(預演沒落地)] [test:t_prepush_next_step_is_the_call_the_gate_ran] [test:t_prepush_blocked_last_line_is_next_step]
+   PITFALL:被擋時「最後一行是重查指令」只到掛鉤輸出為止,真的 git push 之後還會印自己的 error: failed to push some refs 那行 [出處:2026-10-30 代碼審實測] [根因:那行由 git 在掛鉤回非零後印,掛鉤管不到] [防回歸:量代理被擋後的行為時,要把這行算進它讀到的最後一句]
+   PITFALL:掛鉤多一行含閘門指令名的提示字串,掃掛鉤文字數呼叫的接線測試就把它算成第二個呼叫而變紅 [出處:2026-10-31 推送被全套測試擋下] [根因:測試用指令名子字串認呼叫,分不出真的呼叫與印給人看的字串] [修法:只認帶 "$GRAPHCTL" 前綴的呼叫行] [test:t_reread_block_hook_and_ci_wiring]
+   WHY:CI 裝 detekt 之後多下載 compose-rules detekt 外掛 0.4.28、比對寫死的 sha256,路徑放進 LUMOS_DETEKT_COMPOSE_JAR,CI 上找不到時外掛那支測試判紅 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 範圍 2] [因:本機沒外掛時測試只能略過,CI 不真跑就等於沒驗] [test:t_detekt_compose_rules_shared_config]
+   WHY:pre-push 呼叫 spec-gate --push-check 回 1 時印通用的「推送前規格閘擋下,原因見上面列的每一條」(擋下記錄的理由同樣改通用),不再只講風險低計劃的條款測試 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 2] [因:push-check 擋的原因已有條款測試、預期值表簽核、新計劃的〈依據來源〉三種,固定文案會把缺〈依據來源〉講成測試沒綠] [test:t_psrc_hook_generic_message]
++  PITFALL:純文件推送時 CI 只跑 prep 工作的文件子集,原本只裝 ruff;文件子集裡有要外部工具的測試(t_detekt_compose_rules_shared_config 等,CI 上找不到 ast-grep、detekt、compose-rules 外掛會判紅),#178 合併後主線紅 3 支,而且只印每片尾巴、查不出名字 [出處:2026-11-08 #178 主線 CI] [根因:三支工具只在全套的 shards 工作裝,prep 跑文件子集前沒裝] [修法:三支工具抽成 .github/actions/test-tools/action.yml,shards 與 prep 的文件子集都用它,版本與雜湊只寫一處;文件子集紅時照全套那步先撈 ✗ 行] [repro:CI=1 不給 LUMOS_AST_GREP 跑 python3.14 scripts/test_lumos.py --shard 4/4 --suite docs --graph,t_detekt_compose_rules_shared_config 紅]
+ verified_by:
+   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
+   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
+   - "[[Verification/2026-10-15_order-web實地跑vitest合約測試]]"
+ about_code:
+   - .github/workflows/ci.yml
+   - scripts/hooks/pre-push
+   - scripts/lumos
++  - .github/actions/test-tools/action.yml
+ ---
+ # bound-tests-gate
+ 
+ # bound-tests-gate
+ 
+ > 白話:改到相依功能,以前工具只會「點名」那些功能綁的測試,跑不跑靠自律。現在 pre-push 每次呼叫的 `code-loop check` 會把被點名的測試當場跑完:紅的、綁了不存在測試的、名字不合法的,一律擋推送。
+ 
+ 本機的掛接點在 `scripts/hooks/pre-push`(推送前呼叫 `code-loop check`,tag 推送另走 `bound-tests --advisory`);CI 那一側在 `.github/workflows/ci.yml`,全套與後盾閘分成平行的工作跑。
+ 
+ ## 怎麼跑
