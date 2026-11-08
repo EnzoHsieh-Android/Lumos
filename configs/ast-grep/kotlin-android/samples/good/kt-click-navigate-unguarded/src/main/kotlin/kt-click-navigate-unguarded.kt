@@ -21,3 +21,10 @@ class E2Fragment : Fragment() {
 fun Card1(onOpen: () -> Unit) {
     Button(onClick = { onOpen() }) { Text("Open") }
 }
+
+// 容易誤報:View 的點擊導航官方沒有給標準防護寫法(dropUnlessResumed 是 Compose 的),找不到權威出處就不報
+class G9Fragment : Fragment() {
+    fun bind(b: View) {
+        b.setOnClickListener { findNavController().navigate(R.id.action_x) }
+    }
+}

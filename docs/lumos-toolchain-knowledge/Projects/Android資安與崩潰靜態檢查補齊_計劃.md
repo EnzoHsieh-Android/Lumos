@@ -64,7 +64,7 @@ RETIRE-IF: 規則包新增的資安規則在樣本外語料量到的誤報超過
 **不做**:不改 `warningsAsErrors` 等範本既有設定;不在推送前跑 Android Lint(上一案已決定只在 CI 跑);不接 compose-rules 0.6 的兩條(PRIOR-ART ⑤);不寫 FLAG_SECURE、密碼欄鍵盤、反序列化、WebView 一般檔案存取的規則(PRIOR-ART ⑥⑦⑧);不新開型錄類別;不加健檢提醒(資安包沒裝的專案,A1/A2 那種字面提醒另案)。代碼審 r2 架構對齊席指出同一包裡出現兩套除錯判法,改成共用判斷 `configs/ast-grep/kotlin-android/utils/debug-only.yml`(新增),既有 API-19、DATA-16 一起改用(原本把 `!BuildConfig.DEBUG` 與 else 分支也當成有開關,改後照報),見〈審計修正紀錄〉。
 
 REVISIT:2027-05-08 看 detekt 有沒有升 2.x;升了就把 compose-rules 換 0.6 以後的版本,型錄補 VarsWithoutStateBacking、StaleRememberUpdatedStateInRemember 兩列
-REVISIT:2027-02-08 看資安包有沒有新版(Google Maven metadata),範本版本與型錄檢查清單照新版改;看 FLAG_SECURE 與密碼欄要不要進情境決策表;再撈一批樣本外語料,看三條不接閘規則能不能照升級條件升
+REVISIT:2027-02-08 看資安包有沒有新版(Google Maven metadata),範本版本與型錄檢查清單照新版改;看 FLAG_SECURE 與密碼欄要不要進情境決策表;再撈一批樣本外語料,看三條不接閘規則能不能照升級條件升(2026-11-08 [[Projects/Android不接閘資安規則重量_計劃]] 已重量其中兩條:TLS 版本誤報 27.5%、寫死金鑰命中仍不到 20,都沒升;除錯旗標那條誤報 38% 是形狀問題,沒重量)
 
 ## 實驗
 

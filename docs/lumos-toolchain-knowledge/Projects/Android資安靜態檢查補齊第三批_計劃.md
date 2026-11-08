@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-11-08
 updated: 2026-11-08
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/stack-knowledge
   - risk/守衛面
 related:
