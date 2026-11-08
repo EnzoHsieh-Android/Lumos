@@ -98,6 +98,41 @@ jobs:
           echo "suite=$suite" >> "$GITHUB_OUTPUT"
           echo "graph=$graph" >> "$GITHUB_OUTPUT"
           echo "測試範圍:$suite($why)"
+      # 文件子集裡也有要外部工具的測試(例:t_detekt_compose_rules_shared_config),CI 上沒裝會判紅(2026-11-08 純文件推送第一次撞到,
+      # Systems/bound-tests-gate)。下面三步照 shards 工作的同名三步抄(工作之間不共用機器,每個工作都要自己裝),只多一行 if;
+      # 兩處除了 if 逐字相同,升版時兩處一起改,t_ci_yml_test_tools_in_sync 守
+      - name: 裝釘版本的 ast-grep
+        if: steps.suite.outputs.suite == 'docs'
+        run: python -m pip install --quiet ast-grep-cli==0.51.1
+      - name: 裝釘版本的 detekt
+        if: steps.suite.outputs.suite == 'docs'
+        env:
+          DETEKT_VERSION: "1.23.8"
+          DETEKT_SHA256: "ff9f9258879ff2ec4349114740221498afec46a85cf6302c9f80b06eb4429501"
+        run: |
+          set -eu
+          java -version
+          d="$RUNNER_TEMP/detekt"
+          mkdir -p "$d/bin"
+          curl -sSfL --retry 3 -o "$d/detekt-cli.zip" \
+            "https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}.zip"
+          echo "${DETEKT_SHA256}  $d/detekt-cli.zip" | sha256sum -c -
+          unzip -q "$d/detekt-cli.zip" -d "$d"
+          ln -s "$d/detekt-cli-${DETEKT_VERSION}/bin/detekt-cli" "$d/bin/detekt"
+          echo "$d/bin" >> "$GITHUB_PATH"
+          "$d/bin/detekt" --version
+      - name: 裝釘版本的 compose-rules detekt 外掛
+        if: steps.suite.outputs.suite == 'docs'
+        env:
+          COMPOSE_RULES_VERSION: "0.4.28"
+          COMPOSE_RULES_SHA256: "b8c732880e9d26fac90f44733ecd9dab099e2abb1f597b76ceab29e676d4ddd6"
+        run: |
+          set -eu
+          j="$RUNNER_TEMP/detekt/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
+          curl -sSfL --retry 3 -o "$j" \
+            "https://github.com/mrmans0n/compose-rules/releases/download/v${COMPOSE_RULES_VERSION}/detekt-compose-${COMPOSE_RULES_VERSION}-all.jar"
+          echo "${COMPOSE_RULES_SHA256}  $j" | sha256sum -c -
+          echo "LUMOS_DETEKT_COMPOSE_JAR=$j" >> "$GITHUB_ENV"
       - name: 純文件推送的文件子集
         if: steps.suite.outputs.suite == 'docs'
         env:
@@ -111,7 +146,12 @@ jobs:
             python scripts/test_lumos.py --shard "$i/4" $extra > "/tmp/shard-$i.log" 2>&1 &
           done
           for job in $(jobs -p); do wait "$job" || rc=1; done
-          for i in 1 2 3 4; do echo "===== 第 $i 片 ====="; tail -25 "/tmp/shard-$i.log"; done
+          for i in 1 2 3 4; do
+            echo "===== 第 $i 片 ====="
+            # 紅的時候先撈失敗的斷言與所在測試(tail 只看得到尾巴;2026-11-08 文件子集紅了查不出名字,照全套那步補)
+            grep -nE "^  ✗|EXCEPTION" "/tmp/shard-$i.log" | tail -40 || true
+            tail -25 "/tmp/shard-$i.log"
+          done
           exit $rc
   shards:
     needs: prep
@@ -143,6 +183,7 @@ jobs:
       - name: 裝釘版本的 ast-grep
         run: python -m pip install --quiet ast-grep-cli==0.51.1
       # detekt 推送前真的擋的測試要真的 detekt;CI 上沒裝會判紅(本機沒裝才略過)。釘 1.23.8(Projects/Android的detekt推送前真的擋_計劃 範圍 6、S8)。
+      # (這三步在 prep 工作的文件子集前抄了一份,升版兩處一起改,t_ci_yml_test_tools_in_sync 守)
       # ★CI 第一個非 pip 的工具下載,以後別的工具照這步抄★:下載 GitHub 發布檔 → 比對寫死的 sha256(不符整步失敗)→ 解開 → 放進 PATH。
       # sha256 是 2026-11-06 本機下載同一個檔算的;官方發布頁沒公布這個檔的雜湊(GitHub 這個舊發布的資產沒有 digest 欄),
       # 所以釘死它:發布檔被換掉這步就紅。升版時照同一個指令重下、重算、兩處(版本與雜湊)一起改。

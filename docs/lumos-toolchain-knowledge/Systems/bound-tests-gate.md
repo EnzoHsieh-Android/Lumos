@@ -2,9 +2,10 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-11-06
+updated: 2026-11-08
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
+responsibility: 負責推送前與 CI 跑哪些測試:合約測試閘(綁了 [test:] 的測試當場跑)、推送前掛鉤的閘順序與一次列出全部擋下原因、CI 的範圍判定與測試要的外部工具安裝;不負責各道閘自己的判定(歸各閘的家)
 aliases:
   - 受波及合約測試真跑閘
   - bound tests
@@ -54,6 +55,7 @@ summary: |-
   PITFALL:掛鉤多一行含閘門指令名的提示字串,掃掛鉤文字數呼叫的接線測試就把它算成第二個呼叫而變紅 [出處:2026-10-31 推送被全套測試擋下] [根因:測試用指令名子字串認呼叫,分不出真的呼叫與印給人看的字串] [修法:只認帶 "$GRAPHCTL" 前綴的呼叫行] [test:t_reread_block_hook_and_ci_wiring]
   WHY:CI 裝 detekt 之後多下載 compose-rules detekt 外掛 0.4.28、比對寫死的 sha256,路徑放進 LUMOS_DETEKT_COMPOSE_JAR,CI 上找不到時外掛那支測試判紅 [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃 範圍 2] [因:本機沒外掛時測試只能略過,CI 不真跑就等於沒驗] [test:t_detekt_compose_rules_shared_config]
   WHY:pre-push 呼叫 spec-gate --push-check 回 1 時印通用的「推送前規格閘擋下,原因見上面列的每一條」(擋下記錄的理由同樣改通用),不再只講風險低計劃的條款測試 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 2] [因:push-check 擋的原因已有條款測試、預期值表簽核、新計劃的〈依據來源〉三種,固定文案會把缺〈依據來源〉講成測試沒綠] [test:t_psrc_hook_generic_message]
+  PITFALL:純文件推送時 CI 只跑 prep 工作的文件子集,原本只裝 ruff;文件子集裡有要外部工具的測試(t_detekt_compose_rules_shared_config 等,CI 上找不到 ast-grep、detekt、compose-rules 外掛會判紅),#178 合併後主線紅 3 支,而且只印每片尾巴、查不出名字 [出處:2026-11-08 #178 主線 CI] [根因:三支工具只在全套的 shards 工作裝,prep 跑文件子集前沒裝] [修法:prep 在文件子集前照 shards 抄那三步、只多一行 if suite == docs(照專案每個工作各自抄的做法,不另立複合動作;代碼審 r1 架構對齊),兩處除了 if 逐字相同由 t_ci_yml_test_tools_in_sync 守;文件子集紅時照全套那步先撈 ✗ 行] [repro:CI=1 不給 LUMOS_AST_GREP 跑 python3.14 scripts/test_lumos.py --shard 4/4 --suite docs --graph,t_detekt_compose_rules_shared_config 紅]
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
