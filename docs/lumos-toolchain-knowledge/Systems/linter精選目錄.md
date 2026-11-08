@@ -29,7 +29,7 @@ summary: |-
   DEP:[[Systems/lint-version-watch]]
   DEP:[[Systems/pitfalls-lint-adapter]]
   FACT:照 detekt 標準接法的命令列樣板(只給 --input)跑,要型別資訊的規則一條都不報也不出錯,kotlin-idioms 點名的協程規則與共用設定開的五條都只剩 GlobalCoroutineUsage 會報;帶 --classpath 與 --jdk-home 才報 [來源:外部] [confirmed:2026-11-01] [查:detekt 1.23.8 最小樣本帶與不帶型別資訊各跑一次]
-  REVISIT:2026-12-15 在一個裝了 detekt Gradle 外掛的 Android 專案照 CI 型別檢查範本實跑 detektBaseline<變體> 與 detekt<變體>(驗收 S9),記下任務名、耗時與基準線檔名,跑過就把範本裡「以外掛實際寫出的為準」改成實測值
+  REVISIT:2026-12-15 在一個裝了 detekt Gradle 外掛的 Android 專案照 CI 型別檢查範本實跑 detektBaseline<變體> 與 detekt<變體>(驗收 S9),記下任務名、耗時與基準線檔名,跑過就把範本裡「以外掛實際寫出的為準」改成實測值 [closed:2026-11-08 已在 macrobench-lab 複本實跑(AGP 8.13.2、detekt 1.23.8),範本改成實測檔名,紀錄在本篇 verified_by 那篇 2026-11-08 的驗證紀錄]
   PITFALL:compose-rules 那條 detekt 宣告少了 --build-upon-default-config 時,外掛規則一條都不跑、也不報錯 [出處:2026-11-06 本機 detekt 1.23.8 加外掛 0.4.28 實測] [根因:沒帶這個旗標時外掛規則沒被啟用(推測:外掛自帶的預設設定沒疊進來)] [test:t_detekt_compose_rules_shared_config]
   WHY:共用 detekt 設定照 detekt 官方 Compose 頁加六項放寬(Composable 命名、Preview 沒被呼叫與函式數、有預設值的參數、屬性宣告的數字、PascalCase 頂層常數) [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃;https://detekt.dev/docs/introduction/compose/] [因:現行設定對一支標準 Compose 檔報 6 條,推送前會擋每個新寫的元件] [代價:非 Compose 專案的有預設值長參數、屬性宣告魔術數字、PascalCase 頂層常數也不再報] [test:t_detekt_compose_rules_shared_config]
 about_code:
@@ -39,6 +39,7 @@ verified_by:
   - "[[Verification/2026-09-08_iOS與Node補棧合成樣本測試]]"
   - "[[Verification/2026-09-11_Python補棧合成樣本測試]]"
   - "[[Verification/2026-11-01_Kotlin慣例對齊官方與detekt實測]]"
+  - "[[Verification/2026-11-08_detekt的CI型別檢查範本實跑]]"
 ---
 # linter 精選目錄——各語言該掌握的 linter（2026-07 社群現況）
 
@@ -152,7 +153,7 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
          baseline = file("config/detekt/baseline.xml")
      }
      ```
-  2. 第一次在本機跑 `./gradlew detektBaseline<變體>`(例 `detektBaselineDebug`)產基準線檔、提交(檔名以外掛實際寫出的為準)。要清舊帳時重產。
+  2. 第一次在本機跑 `./gradlew detektBaseline<變體>`(例 `detektBaselineDebug`)產基準線檔、提交(2026-11-08 實測 detekt 1.23.8:變體任務在 `baseline` 設的檔名後面自動加變體名,上面那樣設會寫成 `config/detekt/baseline-debug.xml`,`detektDebug` 也讀這支;要提交的是它)。要清舊帳時重產。
   3. CI 加一步 `./gradlew detekt<變體>`(例 `detektDebug`;純 Kotlin 模組是 `detektMain`):有基準線以外的新告警就讓 CI 失敗。這一步才有型別資訊,InjectDispatcher、吞取消、`collectAsState` 這類規則在這裡擋。
   - Compose 專案在 `dependencies` 加 `detektPlugins("io.nlopez.compose.rules:detekt:0.4.28")`,CI 這步也帶 compose-rules;外掛的設定照推送前那條指 `compose.yml`(`config.setFrom(files("<android.yml>", "<compose.yml>"))`)。
   - 沒貼的專案,`lumos lint-check` 與健檢會印 T4「型別規則目前哪裡都沒擋」(只看 `.github/workflows/` 字面有沒有 `detekt<變體>`,不驗它真的跑)。
