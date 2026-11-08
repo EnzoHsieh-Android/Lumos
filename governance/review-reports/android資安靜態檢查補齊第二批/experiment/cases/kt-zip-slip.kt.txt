@@ -1,0 +1,83 @@
+import java.io.File
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipFile
+
+fun bad1(zis: ZipInputStream, dir: File) {
+    var entry = zis.nextEntry
+    while (entry != null) {
+        val out = File(dir, entry.name) //BAD
+        out.outputStream().use { zis.copyTo(it) }
+        entry = zis.nextEntry
+    }
+}
+
+fun bad2(zip: ZipFile, dir: File) {
+    zip.entries().asSequence().forEach { e ->
+        val name = e.name
+        val f = File(dir, name) //BAD
+        zip.getInputStream(e).copyTo(f.outputStream())
+    }
+}
+
+fun bad3(zis: ZipInputStream, dir: File) {
+    val entry = zis.nextEntry ?: return
+    val f = java.io.File(dir.path + File.separator + entry.name) //BAD
+    f.writeBytes(zis.readBytes())
+}
+
+fun bad4(zis: ZipInputStream, dir: File) {
+    generateSequence { zis.nextEntry }.forEach { ze ->
+        dir.resolve(ze.name).writeBytes(zis.readBytes()) //BAD
+    }
+}
+
+fun bad5(zis: ZipInputStream, target: String) {
+    val entry = zis.nextEntry
+    val f = File("$target/${entry.name}") //BAD
+    f.writeBytes(zis.readBytes())
+}
+
+fun good1(zis: ZipInputStream, dir: File) { //GOOD
+    var entry = zis.nextEntry
+    while (entry != null) {
+        val out = File(dir, entry.name)
+        if (!out.canonicalPath.startsWith(dir.canonicalPath + File.separator)) throw SecurityException()
+        entry = zis.nextEntry
+    }
+}
+
+fun good2(zis: ZipInputStream, dir: File) { //GOOD
+    val entry = zis.nextEntry
+    val out = File(dir, entry.name).toPath().normalize()
+    require(out.startsWith(dir.toPath()))
+}
+
+fun good3(src: File, dir: File) { //GOOD
+    // 不是壓縮檔情境:複製檔案用 file.name 很正常
+    val out = File(dir, src.name)
+    src.copyTo(out)
+}
+
+fun good4(zis: ZipInputStream, dir: File) { //GOOD
+    val entry = zis.nextEntry
+    if (entry.name.contains("..")) return
+    File(dir, entry.name).writeBytes(zis.readBytes())
+}
+
+fun good5(zis: ZipInputStream, dir: File) { //GOOD
+    if (BuildConfig.DEBUG) {
+        val entry = zis.nextEntry
+        File(dir, "fixed.bin").writeBytes(zis.readBytes())
+    }
+}
+fun good6(zis: ZipInputStream, dir: File) { //GOOD
+    val entry = zis.nextEntry
+    if (File(entry.name).isAbsolute) return
+    File(dir, entry.name.substringAfterLast("/")).writeBytes(zis.readBytes())
+}
+fun good7(ctx: Context, dir: File) { //GOOD
+    ZipInputStream(ctx.assets.open("bundle.zip")).use { zis ->
+        val entry = zis.nextEntry
+        File(dir, entry.name).writeBytes(zis.readBytes())
+    }
+}

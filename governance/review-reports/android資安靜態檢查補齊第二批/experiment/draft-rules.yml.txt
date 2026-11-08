@@ -1,0 +1,669 @@
+# 第二批資安形狀規則初稿(實驗用,不是正式規則包)
+id: kt-zip-slip
+language: kotlin
+severity: error
+message: '[SEC-01]壓縮檔項目名稱直接拿來組路徑,名稱帶 ../ 就能寫到目標資料夾外面(Zip Slip);改用 <先取 canonicalPath 再檢查 startsWith(目標資料夾 canonicalPath + File.separator),不符就丟例外>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**', '**/buildSrc/**', '**/build-logic/**', '**/*.gradle.kts']
+utils:
+  file-ctor:
+    any:
+      - pattern: File($$$A)
+      - pattern: java.io.File($$$A)
+      - pattern: $D.resolve($$$A)
+  entry-name:
+    kind: navigation_expression
+    regex: '\.name$'
+  zip-fn:
+    kind: function_declaration
+    regex: 'Zip(InputStream|File|Entry)|nextEntry|JarInputStream|JarFile|ArchiveEntry|ArchiveInputStream'
+rule:
+  all:
+    - matches: file-ctor
+    - inside:
+        stopBy: end
+        matches: zip-fn
+    - any:
+        - has:
+            stopBy: end
+            kind: value_arguments
+            has:
+              stopBy: end
+              matches: entry-name
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_declaration
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $N}}
+                    - has: {matches: entry-name}
+            - has:
+                stopBy: end
+                kind: value_arguments
+                has: {stopBy: end, kind: simple_identifier, pattern: $N}
+  not:
+    any:
+      - inside:
+          stopBy: end
+          kind: function_declaration
+          regex: 'canonicalPath|canonicalFile|getCanonical|normalize\(|toRealPath|"\.\."'
+      # 壓縮檔來自 App 內建資源(assets / jar 資源 / raw),攻擊者塞不進來
+      - inside:
+          stopBy: end
+          kind: function_declaration
+          regex: '(Zip|ZipArchive|Jar)InputStream\(\s*([\w.()!?]+\.)?(assets\.open|getResourceAsStream|openRawResource)'
+      # File(entry.name).isAbsolute 這類只拿來檢查、不拿來寫檔
+      - inside:
+          kind: navigation_expression
+          regex: '\.(isAbsolute|name|extension|nameWithoutExtension|isDirectory)$'
+      # 名稱先去掉目錄部分(只留最後一段)
+      - has:
+          stopBy: end
+          kind: value_arguments
+          regex: 'substringAfterLast\(|lastIndexOf\(\s*(File\.separator|[\x27"]/)'
+      - matches: in-debug-only-branch
+---
+id: kt-provider-openfile-traversal
+language: kotlin
+severity: error
+message: '[SEC-02]ContentProvider 的 openFile 用呼叫端給的 Uri 路徑直接組檔案,傳 ..%2F 就能讀到私有資料夾外的檔(路徑穿越);改用 <組好後取 canonicalPath,檢查 startsWith(允許資料夾 canonicalPath + File.separator),或改用 FileProvider 的路徑白名單>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  file-ctor:
+    any:
+      - pattern: File($$$A)
+      - pattern: java.io.File($$$A)
+      - pattern: $D.resolve($$$A)
+  uri-path:
+    any:
+      - kind: navigation_expression
+        regex: '(?i)uri\w*(!!)?\??\.(path|encodedPath|lastPathSegment|pathSegments|getPath\(\)|getLastPathSegment\(\)|getPathSegments\(\)|getEncodedPath\(\))'
+  open-fn:
+    kind: function_declaration
+    all:
+      - has: {kind: modifiers, regex: '\boverride\b'}
+      - has: {kind: simple_identifier, regex: '^(openFile|openAssetFile|openTypedAssetFile)$'}
+rule:
+  all:
+    - matches: file-ctor
+    - inside:
+        stopBy: end
+        matches: open-fn
+    - any:
+        - has:
+            stopBy: end
+            kind: value_arguments
+            has: {stopBy: end, matches: uri-path}
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_declaration
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {stopBy: end, matches: uri-path}
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $N}}
+            - has:
+                stopBy: end
+                kind: value_arguments
+                has: {stopBy: end, kind: simple_identifier, pattern: $N}
+  not:
+    any:
+      - inside:
+          stopBy: end
+          kind: function_declaration
+          regex: 'canonicalPath|canonicalFile|getCanonical|normalize\(|toRealPath|"\.\."'
+      - matches: in-debug-only-branch
+---
+id: kt-webview-mixed-content-always
+language: kotlin
+severity: error
+message: '[SEC-03]WebView 允許 HTTPS 頁面載入 HTTP 子資源,中間人能換掉腳本;改用 <MIXED_CONTENT_NEVER_ALLOW(預設值),真的要相容舊站再用 COMPATIBILITY_MODE>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  always-allow:
+    any:
+      - regex: '^([\w.]+\.)?MIXED_CONTENT_ALWAYS_ALLOW$'
+      - {kind: integer_literal, regex: '^0$'}
+rule:
+  any:
+    - all:
+        - any:
+            - pattern: $X.setMixedContentMode($M)
+            - pattern: $X?.setMixedContentMode($M)
+            - pattern: setMixedContentMode($M)
+        - has:
+            stopBy: end
+            kind: value_argument
+            has: {matches: always-allow}
+    - all:
+        - kind: assignment
+        - has:
+            kind: directly_assignable_expression
+            regex: (^|\.)\s*mixedContentMode$
+        - has:
+            matches: always-allow
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-rsa-no-oaep
+language: kotlin
+severity: error
+message: '[SEC-04]RSA 沒指定填充或用 NoPadding(教科書 RSA),同一明文永遠同一密文、可被改寫;改用 <"RSA/ECB/OAEPWithSHA-256AndMGF1Padding">'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  all:
+    - any:
+        - pattern: $RECV.getInstance($$$ARGS)
+    - has:
+        kind: navigation_expression
+        regex: '^(javax\.crypto\.)?Cipher\.getInstance$'
+    - any:
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                nthChild: 1
+                has: {kind: string_literal, regex: '^"(?i:RSA(/[^/"]*/NoPadding)?)"$'}
+        # 同檔常數:const val ALGO = "MD5",再 getInstance(ALGO)
+        - all:
+            - inside:
+                stopBy: end
+                kind: source_file
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $C}}
+                    - has: {kind: string_literal, regex: '^"(?i:RSA(/[^/"]*/NoPadding)?)"$'}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    kind: value_argument
+                    nthChild: 1
+                    has: {kind: simple_identifier, pattern: $C}
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-static-iv
+language: kotlin
+severity: error
+message: '[SEC-05]IV / nonce 寫死(字面值或全零陣列),同一把金鑰每次都用同一個 IV,CBC 會洩漏明文前綴、GCM 會整個破;改用 <每次加密用 SecureRandom 產生新 IV(或讓 Cipher.init 自己產生再讀 cipher.iv),跟密文一起存>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  literal-bytes:
+    kind: call_expression
+    all:
+      - has: {kind: simple_identifier, regex: '^byteArrayOf$'}
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                kind: value_argument
+                not:
+                  regex: '^-?\s*(0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*)(\.toByte\(\))?$'
+  literal-string-bytes:
+    kind: call_expression
+    regex: '^"[^"$\\]*"\s*\.\s*(toByteArray|encodeToByteArray|getBytes)\('
+  zero-bytes:
+    kind: call_expression
+    pattern: ByteArray($N)
+  static-bytes:
+    any:
+      - matches: literal-bytes
+      - matches: literal-string-bytes
+      - matches: zero-bytes
+  iv-ctor:
+    any:
+      - pattern: IvParameterSpec($B)
+      - pattern: IvParameterSpec($B, $$$R)
+      - pattern: javax.crypto.spec.IvParameterSpec($B)
+      - pattern: javax.crypto.spec.IvParameterSpec($B, $$$R)
+      - pattern: GCMParameterSpec($T, $B)
+      - pattern: GCMParameterSpec($T, $B, $$$R)
+      - pattern: javax.crypto.spec.GCMParameterSpec($T, $B)
+      - pattern: javax.crypto.spec.GCMParameterSpec($T, $B, $$$R)
+rule:
+  all:
+    - matches: iv-ctor
+    - any:
+        # 直接把寫死的位元組丟進去
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                has: {matches: static-bytes}
+        # 同一檔案裡 val IV = byteArrayOf(…) / "…".toByteArray(),再 IvParameterSpec(IV)
+        - all:
+            - inside:
+                stopBy: end
+                kind: source_file
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
+                    - has:
+                        any:
+                          - matches: literal-bytes
+                          - matches: literal-string-bytes
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    kind: value_argument
+                    has: {kind: simple_identifier, pattern: $V}
+        # 同一檔案裡 const val IV = "…",再 IvParameterSpec(IV.toByteArray())
+        - all:
+            - inside:
+                stopBy: end
+                kind: source_file
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $S}}
+                    - has: {kind: string_literal, regex: '^"[^"$\\]*"$'}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    kind: value_argument
+                    has:
+                      kind: call_expression
+                      regex: '\.\s*(toByteArray|encodeToByteArray|getBytes)\('
+                      has:
+                        kind: navigation_expression
+                        has: {kind: simple_identifier, pattern: $S}
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-weak-key-size
+language: kotlin
+severity: error
+message: '[SEC-06]金鑰長度太短:RSA/DSA/DH 低於 2048 位元、對稱金鑰低於 128 位元(NIST SP 800-131A Rev.2 已不准用來產生新金鑰);改用 <RSA 至少 2048(建議 3072)、AES 至少 128(建議 256)>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  lt2048:
+    kind: integer_literal
+    regex: '^(\d{1,3}|1\d{3}|20[0-3]\d|204[0-7])$'
+  lt128:
+    kind: integer_literal
+    regex: '^(\d{1,2}|1[01]\d|12[0-7])$'
+  asym-gen:
+    regex: 'KeyPairGenerator\.getInstance\(\s*("(?i:RSA|DSA|DH|DiffieHellman)"|KeyProperties\.KEY_ALGORITHM_RSA)'
+  ec-gen:
+    regex: 'KeyPairGenerator\.getInstance\(\s*("(?i:EC|ECDSA|ECDH|X25519|Ed25519|XDH)"|KeyProperties\.KEY_ALGORITHM_EC)'
+  first-arg-lt2048:
+    has:
+      kind: call_suffix
+      has:
+        kind: value_arguments
+        has:
+          kind: value_argument
+          nthChild: 1
+          has: {matches: lt2048}
+rule:
+  any:
+    # KeyPairGenerator(RSA/DSA/DH).initialize(<2048)
+    - all:
+        - any:
+            - pattern: $G.initialize($$$A)
+            - pattern: $G?.initialize($$$A)
+            - pattern: initialize($$$A)
+        - matches: first-arg-lt2048
+        - any:
+            - inside: {stopBy: end, kind: function_declaration, matches: asym-gen}
+            # 產生器宣告在類別屬性:看接收者名稱對得上同檔 val g = KeyPairGenerator.getInstance("RSA")
+            - all:
+                - not: {inside: {stopBy: end, kind: function_declaration, matches: ec-gen}}
+                - inside:
+                    stopBy: end
+                    kind: source_file
+                    has:
+                      stopBy: end
+                      kind: property_declaration
+                      all:
+                        - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $G}}
+                        - matches: asym-gen
+    # RSAKeyGenParameterSpec(<2048, …)
+    - all:
+        - any:
+            - pattern: RSAKeyGenParameterSpec($$$A)
+            - pattern: java.security.spec.RSAKeyGenParameterSpec($$$A)
+        - matches: first-arg-lt2048
+    # KeyGenerator.init(<128)
+    - all:
+        - any:
+            - pattern: $K.init($N)
+            - pattern: $K.init($N, $R)
+            - pattern: $K?.init($N)
+            - pattern: init($N)
+            - pattern: init($N, $R)
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                nthChild: 1
+                has: {matches: lt128}
+        - inside:
+            stopBy: end
+            any:
+              - kind: function_declaration
+              - kind: source_file
+            regex: 'KeyGenerator\.getInstance\('
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-weak-message-digest
+language: kotlin
+severity: warning
+message: '[SEC-07]MD5 / SHA-1 / MD4 / MD2 已可造碰撞,拿來做密碼雜湊、簽章、防竄改都不安全;改用 <SHA-256 以上;密碼用 PBKDF2/Argon2;只做檢查碼或快取鍵這類非資安用途就加註說明>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  all:
+    - any:
+        - pattern: $RECV.getInstance($$$ARGS)
+    - has:
+        kind: navigation_expression
+        regex: '^(java\.security\.)?MessageDigest\.getInstance$'
+    - any:
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                kind: value_argument
+                nthChild: 1
+                has: {kind: string_literal, regex: '^"(?i:MD5|SHA-?1|MD4|MD2)"$'}
+        # 同檔常數:const val ALGO = "MD5",再 getInstance(ALGO)
+        - all:
+            - inside:
+                stopBy: end
+                kind: source_file
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $C}}
+                    - has: {kind: string_literal, regex: '^"(?i:MD5|SHA-?1|MD4|MD2)"$'}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    kind: value_argument
+                    nthChild: 1
+                    has: {kind: simple_identifier, pattern: $C}
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-weak-cipher-suite
+language: kotlin
+severity: error
+message: '[SEC-08]TLS 加密套件含 NULL / 匿名 / EXPORT / RC4 / DES / 3DES / MD5,連線可被解密或冒充;改用 <拿掉這些套件,OkHttp 直接用 ConnectionSpec.MODERN_TLS / RESTRICTED_TLS>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  weak-name:
+    regex: '(_NULL_|_anon_|_EXPORT|_RC4_|_DES_|_DES40_|3DES|_MD5"?$)'
+rule:
+  any:
+    - all:
+        - kind: navigation_expression
+        - regex: '^(okhttp3\.)?CipherSuite\.(TLS|SSL)_\w+$'
+        - matches: weak-name
+    - all:
+        - kind: string_literal
+        - regex: '^"(TLS|SSL)_\w+"$'
+        - matches: weak-name
+        - inside:
+            stopBy: end
+            any:
+              - kind: call_expression
+                regex: '^([\w.?]+\.)?(setEnabledCipherSuites|cipherSuites)\('
+              - kind: assignment
+                has: {kind: directly_assignable_expression, regex: '(^|\.)\s*enabledCipherSuites$'}
+  not:
+    any:
+      - matches: in-debug-only-branch
+      # 函式庫自己的原始碼複本(OkHttp 的 ConnectionSpec.COMPATIBLE_TLS 清單等),不是 App 的設定
+      - inside:
+          stopBy: end
+          kind: source_file
+          has:
+            kind: package_header
+            regex: '^package\s+(okhttp3|org\.eclipse\.paho)\b'
+---
+id: kt-object-input-stream
+language: kotlin
+severity: warning
+message: '[SEC-09]用 ObjectInputStream 反序列化,資料若可被別人塞(網路、外部儲存、Intent、其他 App)就能觸發 gadget 鏈;改用 <JSON / Protobuf 這類只帶資料的格式;非用不可就繼承 ObjectInputStream 覆寫 resolveClass 只放行白名單類別>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  any:
+    - pattern: ObjectInputStream($$$A)
+    - pattern: java.io.ObjectInputStream($$$A)
+  not:
+    any:
+      - matches: in-debug-only-branch
+      # 記憶體內深複製:同一函式先用 ObjectOutputStream 寫出,再從 ByteArrayInputStream 讀回
+      - all:
+          - has: {stopBy: end, kind: value_arguments, regex: 'ByteArrayInputStream\('}
+          - inside: {stopBy: end, kind: function_declaration, regex: 'ObjectOutputStream\('}
+      # 來源是 App 私有檔或內建資源
+      - has:
+          stopBy: end
+          kind: value_arguments
+          regex: 'openFileInput\(|getResourceAsStream\(|openRawResource\(|assets\.open\(|filesDir|cacheDir|noBackupFilesDir'
+---
+id: kt-loadurl-external
+language: kotlin
+severity: error
+message: '[SEC-10]WebView 直接載入 Intent 帶進來的網址,別的 App 送 Intent 就能讓你的 WebView 開任意頁(含 javascript:/file:);改用 <先 Uri.parse 驗 scheme 是 https、host 在白名單內才 loadUrl>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  intent-src:
+    regex: '^\(?\s*(this\.|activity\??\.|requireActivity\(\)\.)?(intent|getIntent\(\))(!!)?\??\.(data\b|dataString\b|getData\(\)|getDataString\(\)|getStringExtra\(|extras\b|getExtras\(\))'
+  load-call:
+    any:
+      - pattern: $W.loadUrl($$$A)
+      - pattern: $W?.loadUrl($$$A)
+      - pattern: loadUrl($$$A)
+  first-arg:
+    kind: value_argument
+    nthChild: 1
+rule:
+  all:
+    - matches: load-call
+    - any:
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                matches: first-arg
+                has: {matches: intent-src}
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_declaration
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
+                    - has: {matches: intent-src}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    matches: first-arg
+                    has: {stopBy: end, kind: simple_identifier, pattern: $V}
+        # 同一函式裡 url = intent.getStringExtra(…)(指定給既有變數),再 loadUrl(url)
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_declaration
+                has:
+                  stopBy: end
+                  kind: assignment
+                  all:
+                    - has: {kind: directly_assignable_expression, has: {kind: simple_identifier, pattern: $V}}
+                    - has: {matches: intent-src}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    matches: first-arg
+                    has: {stopBy: end, kind: simple_identifier, pattern: $V}
+        # intent.getStringExtra("url")?.let { webView.loadUrl(it) }
+        - all:
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    matches: first-arg
+                    regex: '^it(\.toString\(\))?$'
+            - inside:
+                stopBy: end
+                kind: call_expression
+                regex: '^\(?\s*(this\.|activity\??\.|requireActivity\(\)\.)?(intent|getIntent\(\))(!!)?\??\.(data\b|dataString\b|getData\(\)|getDataString\(\)|getStringExtra\(|extras\b|getExtras\(\))[^{]*\.(let|also|run)\s*\{'
+  not:
+    any:
+      - matches: in-debug-only-branch
+      # 同一函式有驗 scheme/host,或 intent 其實是 Intent.parseUri 解出來的區域變數
+      - inside:
+          stopBy: end
+          kind: function_declaration
+          regex: '\.(scheme|host)\b|getScheme\(|getHost\(|Intent\.parseUri'
+---
+id: kt-db-on-external-files
+language: kotlin
+severity: error
+message: '[SEC-11]資料庫檔放在外部儲存,其他 App(舊版 Android 或有儲存權限者)能讀改;改用 <預設的內部路徑(Room.databaseBuilder 只給檔名,或 context.getDatabasePath)>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  ext-path:
+    regex: 'getExternalFilesDirs?\(|externalCacheDirs?\b|getExternalCacheDirs?\(|externalMediaDirs|getExternalMediaDirs\(|getExternalStorageDirectory\(|getExternalStoragePublicDirectory\('
+  db-call:
+    any:
+      - pattern: SQLiteDatabase.openOrCreateDatabase($$$A)
+      - pattern: SQLiteDatabase.openDatabase($$$A)
+      - pattern: android.database.sqlite.SQLiteDatabase.openOrCreateDatabase($$$A)
+      - pattern: android.database.sqlite.SQLiteDatabase.openDatabase($$$A)
+      - pattern: Room.databaseBuilder($$$A)
+      - pattern: androidx.room.Room.databaseBuilder($$$A)
+rule:
+  all:
+    - matches: db-call
+    - any:
+        - has: {kind: call_suffix, has: {kind: value_arguments, matches: ext-path}}
+        - all:
+            - inside:
+                stopBy: end
+                any:
+                  - kind: function_declaration
+                  - kind: class_body
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
+                    - matches: ext-path
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has: {stopBy: end, kind: simple_identifier, pattern: $V}
+  not:
+    matches: in-debug-only-branch
+---
+id: kt-xxe-documentbuilder
+language: kotlin
+severity: warning
+message: '[SEC-12]XML 解析器沒關 DOCTYPE / 外部實體,惡意 XML 能讀本機檔或灌爆記憶體(XXE / billion laughs);改用 <factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) 並 isExpandEntityReferences = false;XmlPullParser 別開 FEATURE_PROCESS_DOCDECL>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**', '**/buildSrc/**', '**/build-logic/**', '**/*.gradle.kts']
+utils:
+  mitigated:
+    regex: 'disallow-doctype-decl|external-general-entities|isExpandEntityReferences\s*=\s*false|setExpandEntityReferences\(\s*false|FEATURE_SECURE_PROCESSING|ACCESS_EXTERNAL_DTD'
+rule:
+  any:
+    - all:
+        - any:
+            - pattern: DocumentBuilderFactory.newInstance()
+            - pattern: javax.xml.parsers.DocumentBuilderFactory.newInstance()
+        - not: {inside: {stopBy: end, kind: function_declaration, matches: mitigated}}
+        - any:
+            - inside: {stopBy: end, kind: function_declaration}
+            - not: {inside: {stopBy: end, kind: source_file, matches: mitigated}}
+        # 只用 newDocument() 產生 XML、從頭到尾不解析的不算(樣本內最大宗誤報)
+        - any:
+            - inside: {stopBy: end, kind: function_declaration, regex: '\.parse\('}
+            - all:
+                - not: {inside: {stopBy: end, kind: function_declaration}}
+                - inside: {stopBy: end, kind: source_file, regex: '\.parse\('}
+    - all:
+        - any:
+            - pattern: $P.setFeature($F, true)
+            - pattern: $P?.setFeature($F, true)
+            - pattern: setFeature($F, true)
+  not:
+    matches: in-debug-only-branch
+constraints:
+  F:
+    regex: '(^|\.)FEATURE_PROCESS_DOCDECL$|#process-docdecl"$'
+---
+id: kt-hardcoded-secret-name
+language: kotlin
+severity: warning
+message: '[SEC-13]名稱像密碼 / 金鑰 / token 的變數寫死了字面值,反編譯 APK 就拿得到;改用 <伺服器端換發的短效 token,或放 local.properties → BuildConfig / 加密儲存,別進版本庫>'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  secret-name:
+    kind: simple_identifier
+    regex: '(?i)password|passwd|secret|api_?key|token|private_?key'
+  not-a-key-name:
+    kind: simple_identifier
+    regex: '(?i)(^|_)(pref|prefs|extra|arg|param|field|header|column|action|tag|url|uri|endpoint|path|type|label|hint|title|error|msg|message|bundle|event|regex|pattern)(_|$)|^(pref|extra|arg|param|key|header|column|action)[A-Z_]|^KEY_|(Pref|Extra|Arg|Param|Header|Column|Field|Url|Path|Type|Label|Hint|Title)(Key|Name)?$|(File|Dir|Path|FileName|Filename)$|(_FILE|_DIR|_PATH)$'
+  secret-value:
+    kind: string_literal
+    all:
+      - regex: '^"[A-Za-z0-9+/=_\-.]{8,}"$'
+      - regex: '[0-9]'
+      - regex: '[A-Za-z]'
+      - not: {regex: '(?i)example|placeholder|changeme|xxx|your_|dummy|sample|fake|todo|replace'}
+      # 公開協定常數(各家第三方客戶端都抄同一個值,不是這個 App 的秘密)
+      - not: {regex: '^"(e82ckenh8dichen8|6A5AA1D4EAFF4E9FB37E23D68491D6F4)"$'}
+      # 長得像 snake_case 鍵名或點分隔名稱的值是設定鍵,不是秘密
+      - not: {regex: '^"[a-z][a-z0-9]*([_.\-][a-z0-9]+)+"$'}
+      - not: {regex: '^"[A-Z][A-Z0-9]*(_[A-Z0-9]+)+"$'}
+rule:
+  kind: property_declaration
+  all:
+    - has:
+        kind: variable_declaration
+        has:
+          all:
+            - matches: secret-name
+            - not: {matches: not-a-key-name}
+    - has: {matches: secret-value}
+  not:
+    matches: in-debug-only-branch

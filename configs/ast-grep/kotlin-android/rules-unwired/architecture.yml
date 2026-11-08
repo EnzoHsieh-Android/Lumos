@@ -17,3 +17,97 @@ rule:
       kind: simple_identifier
       regex: ^currentDestination$
       stopBy: end
+---
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 2,但要不要綁加密物件看保護的是什麼,形狀定不了)。
+# 只帶一個參數的 authenticate,接收者或參數名稱含 prompt、biometric、info 字樣、檔裡有 BiometricPrompt;bp.authenticate(pi) 這種會漏
+id: kt-biometric-no-crypto
+language: kotlin
+severity: error
+message: '[ARCH-91]生物辨識只帶 promptInfo、沒綁 CryptoObject,結果只是回呼、被 hook 就繞過;保護金鑰或敏感資料改用 authenticate(promptInfo, CryptoObject)'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  all:
+    - any:
+        - pattern: $X.authenticate($A)
+        - pattern: $X?.authenticate($A)
+    - regex: '(?is)^[\w.?!]*(prompt|biometric)[\w.?!]*\??\.authenticate|^BiometricPrompt\(|authenticate\(\s*[\w.]*info\w*(\(\))?\s*\)|PromptInfo'
+    - inside:
+        kind: source_file
+        regex: BiometricPrompt
+        stopBy: end
+  not:
+    matches: in-debug-only-branch
+---
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(量到的寬形狀樣本外 40 處抽判誤報 28,收窄後沒重量)。收窄成 Semgrep
+# command-injection-formatted-runtime-call 的形狀:Runtime 的 exec 只帶一個參數、而且是串接、String.format 或帶插值的字串樣板;
+# 或 ProcessBuilder、exec 的參數(含 arrayOf、listOf 裡)有 "-c" 而緊接著的那個參數不是純字串字面值。exec("ls")、exec(arrayOf("ls", "-l")) 不報
+id: kt-command-exec-nonliteral
+language: kotlin
+severity: error
+message: '[ARCH-90]用串接、format 或字串樣板組外部指令,外部輸入進來就是指令注入;改成固定指令,使用者資料當獨立參數傳、先過白名單'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  exec-call:
+    any:
+      - pattern: $R.getRuntime().exec($$$A)
+      - pattern: $R.getRuntime()?.exec($$$A)
+      - pattern: $RT.exec($$$A)
+  built-string:
+    any:
+      # 串接:兩邊都是不帶插值的字串字面值("ls" + " -l")不算
+      - kind: additive_expression
+        not:
+          regex: '^\s*"[^"$\\\n]*"(\s*\+\s*"[^"$\\\n]*")*\s*$'
+      - pattern: String.format($$$F)
+      - pattern: java.lang.String.format($$$F)
+      - pattern: $S.format($$$F)
+      - kind: string_literal
+        has:
+          any:
+            - kind: interpolated_identifier
+            - kind: interpolated_expression
+  plain-literal:
+    kind: value_argument
+    regex: '^\s*"(?:[^"$\\\n]|\\.)*"\s*$'
+  dash-c-then-nonliteral:
+    has:
+      stopBy: end
+      kind: value_argument
+      regex: '^\s*"-c"\s*$'
+      # 兄弟節點中間隔著逗號那個記號:"-c" 之後是逗號、逗號之後才是下一個參數
+      precedes:
+        regex: '^,$'
+        precedes:
+          kind: value_argument
+          not: {matches: plain-literal}
+rule:
+  any:
+    - all:
+        - matches: exec-call
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              all:
+                - has:
+                    kind: value_argument
+                    nthChild: 1
+                    has: {matches: built-string}
+                - not:
+                    has:
+                      kind: value_argument
+                      nthChild: 2
+    - all:
+        - matches: exec-call
+        - matches: dash-c-then-nonliteral
+    - all:
+        - kind: call_expression
+        - has:
+            kind: simple_identifier
+            regex: ^ProcessBuilder$
+        - matches: dash-c-then-nonliteral
+  not:
+    matches: in-debug-only-branch
+constraints:
+  RT:
+    regex: '(?i)^(this\.)?(m?runtime|rt)$'

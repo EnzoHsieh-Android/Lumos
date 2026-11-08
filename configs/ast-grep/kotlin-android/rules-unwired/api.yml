@@ -108,3 +108,150 @@ rule:
     - pattern: async($$$) { $$$ }.await()
     - pattern: $S.async { $$$ }.await()
     - pattern: $S.async($$$) { $$$ }.await()
+---
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外命中 14 處、誤報 1,命中不到 20)。loadUrl 第一個參數直接、經同函式區域變數、或 let 的 it 來自 intent 的 data、dataString、getStringExtra、extras;
+# 同函式有驗 scheme、host 或是 Intent.parseUri 不報
+id: kt-loadurl-external
+language: kotlin
+severity: error
+message: '[API-49]WebView 直接載入 Intent 帶進來的網址,別的 App 能讓它開任意頁;改成先驗 scheme 是 https、host 在白名單內才 loadUrl'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  intent-src:
+    regex: '^\(?\s*(this\.|activity\??\.|requireActivity\(\)\.)?(intent|getIntent\(\))(!!)?\??\.(data\b|dataString\b|getData\(\)|getDataString\(\)|getStringExtra\(|extras\b|getExtras\(\))'
+  load-call:
+    any:
+      - pattern: $W.loadUrl($$$A)
+      - pattern: $W?.loadUrl($$$A)
+      - pattern: loadUrl($$$A)
+  first-arg:
+    kind: value_argument
+    nthChild: 1
+rule:
+  all:
+    - matches: load-call
+    - any:
+        - has:
+            kind: call_suffix
+            has:
+              kind: value_arguments
+              has:
+                matches: first-arg
+                has: {matches: intent-src}
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_declaration
+                has:
+                  stopBy: end
+                  kind: property_declaration
+                  all:
+                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
+                    - has: {matches: intent-src}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    matches: first-arg
+                    has: {stopBy: end, kind: simple_identifier, pattern: $V}
+        # 同一函式裡 url = intent.getStringExtra(…)(指定給既有變數),再 loadUrl(url)
+        - all:
+            - inside:
+                stopBy: end
+                kind: function_declaration
+                has:
+                  stopBy: end
+                  kind: assignment
+                  all:
+                    - has: {kind: directly_assignable_expression, has: {kind: simple_identifier, pattern: $V}}
+                    - has: {matches: intent-src}
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    matches: first-arg
+                    has: {stopBy: end, kind: simple_identifier, pattern: $V}
+        # intent.getStringExtra("url")?.let { webView.loadUrl(it) }
+        - all:
+            - has:
+                kind: call_suffix
+                has:
+                  kind: value_arguments
+                  has:
+                    matches: first-arg
+                    regex: '^it(\.toString\(\))?$'
+            - inside:
+                stopBy: end
+                kind: call_expression
+                regex: '^\(?\s*(this\.|activity\??\.|requireActivity\(\)\.)?(intent|getIntent\(\))(!!)?\??\.(data\b|dataString\b|getData\(\)|getDataString\(\)|getStringExtra\(|extras\b|getExtras\(\))[^{]*\.(let|also|run)\s*\{'
+  not:
+    any:
+      - matches: in-debug-only-branch
+      # 同一函式有驗 scheme/host,或 intent 其實是 Intent.parseUri 解出來的區域變數
+      - inside:
+          stopBy: end
+          kind: function_declaration
+          regex: '\.(scheme|host)\b|getScheme\(|getHost\(|Intent\.parseUri'
+---
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 6 處誤報 0,樣本內 82%:模仿舊版 TLS 指紋這類外部協定強制)。CipherSuite.<弱套件> 或
+# setEnabledCipherSuites、cipherSuites(…)、enabledCipherSuites = 裡的弱套件字串;okhttp3、paho 套件自己的原始碼複本不報
+id: kt-weak-cipher-suite
+language: kotlin
+severity: error
+message: '[API-50]TLS 加密套件含 NULL、匿名、EXPORT、RC4、DES、3DES 或 MD5,連線可被解密或冒充;改用 ConnectionSpec.MODERN_TLS 或 RESTRICTED_TLS'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+utils:
+  weak-name:
+    regex: '(_NULL_|_anon_|_EXPORT|_RC4_|_DES_|_DES40_|3DES|_MD5"?$)'
+rule:
+  any:
+    - all:
+        - kind: navigation_expression
+        - regex: '^(okhttp3\.)?CipherSuite\.(TLS|SSL)_\w+$'
+        - matches: weak-name
+    - all:
+        - kind: string_literal
+        - regex: '^"(TLS|SSL)_\w+"$'
+        - matches: weak-name
+        - inside:
+            stopBy: end
+            any:
+              - kind: call_expression
+                regex: '^([\w.?]+\.)?(setEnabledCipherSuites|cipherSuites)\('
+              - kind: assignment
+                has: {kind: directly_assignable_expression, regex: '(^|\.)\s*enabledCipherSuites$'}
+  not:
+    any:
+      - matches: in-debug-only-branch
+      # 函式庫自己的原始碼複本(OkHttp 的 ConnectionSpec.COMPATIBLE_TLS 清單等),不是 App 的設定
+      - inside:
+          stopBy: end
+          kind: source_file
+          has:
+            kind: package_header
+            regex: '^package\s+(okhttp3|org\.eclipse\.paho)\b'
+---
+# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 16:只載自家 file:///android_asset、範例碼)。setAllowFileAccess(true) 或
+# 左邊以 allowFileAccess 結尾、右邊是 true 的賦值;…FromFileURLs 兩個開關歸 kt-webview-file-url-access
+id: kt-webview-file-access
+language: kotlin
+severity: error
+message: '[API-51]WebView 開了本機檔案存取,被導到惡意頁或本機 HTML 時能讀 App 私有檔;改成 false,本機內容改用 WebViewAssetLoader 載入'
+ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
+rule:
+  any:
+    - pattern: $X.setAllowFileAccess(true)
+    - pattern: $X?.setAllowFileAccess(true)
+    - pattern: setAllowFileAccess(true)
+    - all:
+        - kind: assignment
+        - has:
+            kind: directly_assignable_expression
+            regex: (^|\.)\s*allowFileAccess$
+        - has:
+            kind: boolean_literal
+            regex: ^true$
+  not:
+    matches: in-debug-only-branch

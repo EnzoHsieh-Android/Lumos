@@ -8,11 +8,11 @@
 - 去重:同一個錯誤(後果與壞寫法本質相同)只留一列;合併列保留所有來源與所有規則代號。被併進的原始列寫在「來源」欄的〔併:…〕裡,代號對照:`研C一3` = 協程研究第一節第 3 列;`研A12` = 架構研究第 12 列;`研M一4` = Compose 研究第一節第 4 列;`研D二5` = 資料層研究第二節第 5 列;`T5`/`P12` = 測試效能研究的列號;`X:規則id` = 14 條補充。
 - 級:A 現成規則可開;B 自寫結構規則(ast-grep/semgrep);C 測試範本;D 人審。可複選,寫成 `A+B`。
 - 情境怎麼認:「形狀」= 從程式長相認得出;「語意」= 要看語意才判得出。
-- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,範本不接(2026-11-08 量過誤報沒有一條在一成以下,見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉);「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」(規則在 `rules-unwired/` 的列也寫未接:引用的型錄列出處不全,或規則還沒在真專案量過誤報)。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx、Slack compose-lints 或資安包的規則,消費專案照 linter 目錄範本接 CI 後才擋(資安包:= Google 的 `com.android.security.lint:lint`,掛在 Android Lint 上、同一個 CI 步驟跑,2026-11-08 [[Projects/Android資安與崩潰靜態檢查補齊_計劃]];它 24 條的檢查頁都沒寫預設關);「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`資安包:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。「行為測試或正向約束=」那一段另有幾種值:「範本 T<n>」=照行為測試範本那一組起手寫測試;「未接(儀器批)」=要模擬器、Robolectric 或 Android 專用套件才跑得動,實驗沒過、還沒有範本;「不接(代碼審或真機)」=測試派發器或純 JVM 測不出,靠代碼審與真機驗收。級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節(型錄自檢會驗那一節存在;[[Projects/Android行為測試範本與架構測試_計劃]]、儀器批與架構測試 T6–T13 見 [[Projects/Android儀器測試範本與架構測試_計劃]])。
+- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,範本不接(2026-11-08 量過誤報沒有一條在一成以下,見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉);「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」(規則在 `rules-unwired/` 的列也寫未接:引用的型錄列出處不全、規則還沒在真專案量過誤報,或量過誤報但超過一成或樣本外命中不到 20 處)。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx、Slack compose-lints 或資安包的規則,消費專案照 linter 目錄範本接 CI 後才擋(資安包:= Google 的 `com.android.security.lint:lint`,掛在 Android Lint 上、同一個 CI 步驟跑,2026-11-08 [[Projects/Android資安與崩潰靜態檢查補齊_計劃]];它 24 條的檢查頁都沒寫預設關);「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`資安包:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。「行為測試或正向約束=」那一段另有幾種值:「範本 T<n>」=照行為測試範本那一組起手寫測試;「未接(儀器批)」=要模擬器、Robolectric 或 Android 專用套件才跑得動,實驗沒過、還沒有範本;「不接(代碼審或真機)」=測試派發器或純 JVM 測不出,靠代碼審與真機驗收。級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節(型錄自檢會驗那一節存在;[[Projects/Android行為測試範本與架構測試_計劃]]、儀器批與架構測試 T6–T13 見 [[Projects/Android儀器測試範本與架構測試_計劃]])。
 - 接電方式五種:告警帶寫法 / 當下推相關列 / 表態對程式 / 行為測試或正向約束 / 盲判席。形狀類至少有「告警帶寫法」或「行為測試或正向約束」;語意類必有「表態對程式」與「盲判席」;只剩業務判斷的 D 級只寫「表態對程式」,名稱後標(人裁)。
 - 名稱標(出處不全)=這一列的標準寫法或壞寫法的錯因,找不到權威原文直接支持;來源欄另有〔查證 日期:網址〕的,是查過、那一頁只支持部分主張(例:只寫了建議寫法、沒寫壞寫法的後果)。出處不全的列只當參考、不當標準,引用它的規則只准放 `rules-unwired/`。
 - 實測狀態:既有 35 條照抄原表「本機實測」欄(原表沒有這欄的寫「未測」);14 條補充寫「樣本實測:中壞例、好例不報」;其他寫「未測」。2026-11-05 起,被 ast-grep 規則包(`configs/ast-grep/kotlin-android/`)守到的列改寫成「規則 <id>:樣本實測中壞例、好例不報」(hint 規則標(hint));原本記了別的實測結果的,接在「原記:」後面保留。
-- 現成規則欄的「待查」與來源欄的「(搜尋摘要)」「(未開頁核對)」照研究原文保留,〈待查證〉一節由程式從這兩欄撈出。
+- 現成規則欄的「待查」與來源欄的「(搜尋摘要)」「(未開頁核對)」照研究原文保留;〈待查證〉一節是手寫的,改主表時一起改。
 - 規則庫簡稱:detekt(1.23.x 寫 `detekt`,只在 2.x 的寫 `detekt 2.x`);資安包 = Google Android 資安 lint 規則包(`com.android.security.lint:lint`,寫成 `資安包:<檢查 id>`);SC = santimattius structured-coroutines(寫成 `SC 主題碼:層 規則名`);Sonar = SonarSource Kotlin;IJ = IntelliJ 檢查(只有顯示名稱,ID 待查);androidx/內建 = Android Lint;cr = mrmans0n compose-rules;slack = Slack compose-lints。
 
 ## 來源縮寫
@@ -197,6 +197,10 @@
 | API-45 | 啟用舊版 TLS 或 SSL | `SSLContext.getInstance("TLSv1")`;`ConnectionSpec.COMPATIBLE_TLS`;`.tlsVersions(TlsVersion.TLS_1_0)`;`setEnabledProtocols(arrayOf("TLSv1"))` | `SSLContext.getInstance("TLS")` 交給系統挑版本,或指定 TLSv1.2 以上;OkHttp 用 `ConnectionSpec.MODERN_TLS` | 連線可被降級到有已知弱點的協定、被解開 | 無(自寫 ast-grep kt-insecure-tls-version) | B | 形狀:SSLContext.getInstance 第一個參數恰好是 "SSLv2"、"SSLv3"、"TLSv1"、"TLSv1.1";ConnectionSpec.COMPATIBLE_TLS(讀 cipherSuites、tlsVersions、isTls 不算);tlsVersions(…) 參數裡的 TLS_1_0、TLS_1_1、SSL_3_0;setEnabledProtocols(arrayOf(…)) 裡有那四個字串 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-insecure-tls-version:樣本實測中壞例、好例不報;真實語料:樣本內(第二版)19 處誤報 2、樣本外沒另撈 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0217/〕 |
 | API-46 | targetSdk 太低、DNS 沒有系統的傳輸保護 | `targetSdkVersion` 低於 28 | targetSdk 升到 28 以上,用系統內建的傳輸安全(加密 DNS) | 易受 DNS 偽造與快取下毒攻擊 | 資安包:InsecureDnsSdkLevel | A | 形狀:由 Android Lint InsecureDnsSdkLevel 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureDnsSdkLevel.md.html〕 |
 | API-47 | 寫死開發用網址或私有 IP | 設定檔或程式裡的 `http://staging-app.com`、`192.168.1.10` 這類開發、測試環境位址 | 正式版不帶開發與測試環境的網址、私有 IP;不同環境用建置變體或設定分開 | 攻擊者從 App 找到測試環境或內網位址,拿到不該公開的存取 | 資安包:UnintendedExposedUrl、UnintendedPrivateIpAddress | A | 形狀:由 Android Lint UnintendedExposedUrl、UnintendedPrivateIpAddress 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnintendedExposedUrl.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnintendedPrivateIpAddress.md.html〕 |
+| API-48 | WebView 允許混合內容 | `settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW`;`settings.setMixedContentMode(0)`;`webSettings.mixedContentMode = 0` | 不設(預設 MIXED_CONTENT_NEVER_ALLOW)或明寫 NEVER_ALLOW;真的要相容舊站才用 MIXED_CONTENT_COMPATIBILITY_MODE;自訂書源、App 內建瀏覽器這類產品需求用 lint-waive 附理由放行 | HTTPS 頁面載入 HTTP 子資源,中間人能換掉腳本或內容 | 無(自寫 ast-grep kt-webview-mixed-content-always) | B | 形狀:setMixedContentMode 的直接參數是 MIXED_CONTENT_ALWAYS_ALLOW 或 0;左邊以 mixedContentMode 結尾、右邊是那個常數的賦值;右邊是 0 時另要接收者鏈有一段名字以 settings 或 Settings 結尾或是 getSettings();值藏在 if、elvis、變數裡,或 apply 裡不帶接收者的 0 不報 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-webview-mixed-content-always:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 5、樣本外 273 處(fork 去重 244)抽判 120 處誤報 2(真問題 118 處裡 25 處是產品需求) | 〔查證 2026-11-08:https://developer.android.com/reference/android/webkit/WebSettings〕 |
+| API-49 | 外部傳進來的網址直接丟進 WebView | `webView.loadUrl(intent.getStringExtra("url")!!)`;`val u = intent.dataString` 再 `webView.loadUrl(u)` | 先 `Uri.parse` 驗 scheme 是 https、host 在白名單內才 loadUrl | 別的 App 送一個 Intent 就能讓 WebView 開任意網頁(含 javascript:、file:) | 無(自寫 ast-grep kt-loadurl-external) | B | 形狀:loadUrl 第一個參數直接、經同函式區域變數、或 let 的 it 來自 intent 的 data、dataString、getStringExtra、extras;同函式有讀 scheme、host 或用 Intent.parseUri 的不報;跨函式的資料流不認 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-loadurl-external:樣本實測中壞例、好例不報;真實語料:樣本內抽判 9 處誤報 3、樣本外 14 處誤報 1(命中不到 20;都沒看 AndroidManifest,不確定那些畫面有沒有 exported) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/unsafe-uri-loading〕 |
+| API-50 | TLS 開弱加密套件 | `.cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_SHA)`;`socket.setEnabledCipherSuites(arrayOf("TLS_RSA_WITH_NULL_SHA256"))` | 不自己列套件:OkHttp 用 `ConnectionSpec.MODERN_TLS` 或 `RESTRICTED_TLS`,SSLSocket 用系統預設 | 連線可被解密或冒充 | 無(自寫 ast-grep kt-weak-cipher-suite) | B | 形狀:CipherSuite.<名稱>,或 setEnabledCipherSuites、cipherSuites(…)、enabledCipherSuites = 裡的套件字串,名稱含 NULL、anon、EXPORT、RC4、DES、3DES 或以 MD5 結尾;okhttp3、paho 套件自己的原始碼複本不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-weak-cipher-suite:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 33(模仿舊版 TLS 指紋這類外部協定強制)、樣本外 6 處誤報 0(命中不到 20) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm〕 |
+| API-51 | WebView 開啟本機檔案存取 | `webView.settings.allowFileAccess = true`;`settings.setAllowFileAccess(true)` | 明寫 false;本機內容改用 `WebViewAssetLoader` 以 https 網址載入 | 被導到惡意頁或載入不可信的本機 HTML 時,能讀 App 私有檔 | 無(自寫 ast-grep kt-webview-file-access) | B | 形狀:任何接收者(含 `?.`)或不帶接收者的 setAllowFileAccess(true),或左邊以 allowFileAccess 結尾、右邊是 true 的賦值;FromFileURLs 那兩個開關歸 API-40 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-webview-file-access:樣本實測中壞例、好例不報;真實語料:樣本外 59 處抽判 40 處誤報 16(只載自家 file:///android_asset 的 WebView、範例碼;判不準 7 處多是 EPUB 閱讀器這類要讀本機檔的功能) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion〕 |
 
 ## FLOW 資料流合併與 Flow 運算
 
@@ -525,6 +529,9 @@
 | ARCH-86 | 參數超出範圍、常數或資源型別給錯 | 標了 `@IntRange` 的參數傳超出範圍的值;只收特定常數的參數傳別的整數;`resources.getColor(R.string.name)` | 照註記的範圍與常數集合傳值;資源 id 傳對型別 | 執行時例外或行為錯 | 內建:Range、WrongConstant、ResourceType | A | 形狀:由 Android Lint Range、WrongConstant、ResourceType 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/Range.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WrongConstant.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/ResourceType.md.html〕 |
 | ARCH-87 | Parcelable 缺 CREATOR | 手寫 `class X : Parcelable` 沒有 `CREATOR` 欄位 | 用 `@Parcelize`,或補 `companion object CREATOR : Parcelable.Creator<X>` | 還原時當掉 | 內建:ParcelCreator | A | 形狀:由 Android Lint ParcelCreator 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ParcelCreator.md.html〕 |
 | ARCH-88 | 通知經 receiver 或 service 轉開畫面 | 通知的 PendingIntent 指向 BroadcastReceiver 或 Service,再由它 `startActivity` | 通知直接用 Activity 的 PendingIntent 開畫面 | 某些情況延遲很大;targetSdk 31 以上被禁止、畫面開不出來 | 內建:NotificationTrampoline | A | 形狀:由 Android Lint NotificationTrampoline 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NotificationTrampoline.md.html〕 |
+| ARCH-89 | 從非程式庫目錄動態載入程式碼 | `System.load("/data/data/<套件>/files/libx.so")`;`Runtime.getRuntime().load(path)` | 原生程式庫放進 APK 的 lib 目錄,用 `System.loadLibrary("x")` 載入 | 載入的檔案可能被竄改,等於執行別人的程式碼 | 內建:UnsafeDynamicallyLoadedCode | A | 形狀:由 Android Lint UnsafeDynamicallyLoadedCode 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeDynamicallyLoadedCode.md.html〕 |
+| ARCH-90 | 用非字面值組外部指令 | `Runtime.getRuntime().exec("ping -c 1 " + host)`;`exec("ping $host")`;`ProcessBuilder("su", "-c", cmd)` | 指令固定;使用者資料當獨立參數傳(`ProcessBuilder("ping", "-c", "1", host)`)、不經 shell,先過白名單 | 外部輸入組進指令字串就是指令注入,能用 App 的權限(su 之後是 root)執行任意指令 | 無(自寫 ast-grep kt-command-exec-nonliteral) | B | 形狀:Runtime 的 exec 只帶一個參數,而且是串接(兩邊都是字面值的不算)、String.format 或帶插值的字串樣板;或 ProcessBuilder、exec 的參數裡有 "-c" 而緊接著的參數不是純字串字面值 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-command-exec-nonliteral:樣本實測中壞例、好例不報;真實語料:收窄前的寬形狀(任何非字面參數)樣本外 55 處抽判 40 處誤報 28,收窄成 Semgrep command-injection-formatted-runtime-call 的形狀後沒重量(事後分類:-c 型 10 處裡真問題 2、單一字串 21 處裡 0) | 〔查證 2026-11-08:https://cwe.mitre.org/data/definitions/78.html https://github.com/semgrep/semgrep-rules/blob/develop/kotlin/lang/security/command-injection-formatted-runtime-call.yaml〕 |
+| ARCH-91 | 生物辨識沒綁加密物件 | `biometricPrompt.authenticate(promptInfo)`,成功回呼裡直接放行錢包、密碼、金鑰、登入或 App 鎖 | 保護金鑰或敏感資料時用 `authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))`,金鑰放 Keystore 並要求使用者驗證,成功回呼裡用解鎖的 cipher 做事 | 驗證結果只是一個回呼,被 hook 就能繞過 | 無(自寫 ast-grep kt-biometric-no-crypto) | B | 形狀:只帶一個參數的 authenticate,接收者或參數名稱含 prompt、biometric、info 字樣,檔裡有 BiometricPrompt;要不要綁加密物件看保護的是什麼,形狀只認得出沒綁 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-biometric-no-crypto:樣本實測中壞例、好例不報;真實語料:樣本外 46 處抽判 40 處誤報 2(真問題多數是 App 鎖畫面;判真問題要看保護的是什麼,不升會擋);名稱不帶那些字樣的 `bp.authenticate(pi)` 會漏 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-AUTH/MASTG-TEST-0327/〕 |
 
 ## DATA 儲存、背景工作、分頁與解析
 
@@ -556,7 +563,7 @@
 | DATA-24 | SQL 字串串接使用者輸入 | `rawQuery("… where n='$name'")`;`@RawQuery` 用拼接字串 | `rawQuery("… where n = ?", arrayOf(name))`;`SimpleSQLiteQuery(sql, args)` | SQL 注入,特殊字元崩潰 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | B | 形狀:`rawQuery`/`execSQL`/`SimpleSQLiteQuery` 的字串參數含 `$` 樣板或 `+` 串接 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-sql-string-concat:樣本實測中壞例、好例不報 | SQLI〔併:研D二23〕〔查證 2026-11-05:https://developer.android.com/privacy-and-security/risks/sql-injection〕 |
 | DATA-25 | SQL 欄位型別寫成 STRING | `CREATE TABLE t(x STRING)` | `CREATE TABLE t(x TEXT)` | 被當數值親和,前導零被吃 | Android Lint:SQLiteString | A | 形狀:SQL 字串含 ` STRING` 型別 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D二24〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/SQLiteString.md.html〕 |
 | DATA-26 | 檔案寫入不是原子性的 | `File(path).writeText(json)` 直接覆蓋 | `AtomicFile(file).run { val s = startWrite(); try { s.write(bytes); finishWrite(s) } catch (e: IOException) { failWrite(s); throw e } }`,或寫暫存檔再 rename | 寫到一半當機檔案毀損 | 無 | B | 形狀:對持久檔直接 `writeText`/`writeBytes`/`FileOutputStream(file)` | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-file-write-not-atomic(hint):樣本實測中壞例、好例不報 | ATOMICFILE〔併:研D二25〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/core/util/AtomicFile〕 |
-| DATA-27 | 外部儲存路徑寫死或用淘汰 API | `Environment.getExternalStorageDirectory()`;字串 `"/sdcard/"` | `context.getExternalFilesDir(null)` 或 MediaStore | Android 10 以上分區儲存失敗 | 待查(Lint SdCardPath 代號待查) | B | 形狀:出現 `getExternalStorageDirectory` 或 `"/sdcard` 字串 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-external-storage-hardcoded:樣本實測中壞例、好例不報 | STORAGE〔併:研D二28〕〔查證 2026-11-05:https://developer.android.com/reference/android/os/Environment https://developer.android.com/training/data-storage/app-specific https://googlesamples.github.io/android-custom-lint-rules/checks/SdCardPath.md.html〕 |
+| DATA-27 | 外部儲存路徑寫死或用淘汰 API | `Environment.getExternalStorageDirectory()`;字串 `"/sdcard/"` | `context.getExternalFilesDir(null)` 或 MediaStore;別照 Lint 訊息改用 `Environment.getExternalStorageDirectory().getPath()`,那個寫法會被同列的自寫規則 kt-external-storage-hardcoded 擋;改用 `getExternalFilesDir` 或 MediaStore | Android 10 以上分區儲存失敗 | 內建:SdCardPath | B | 形狀:出現 `getExternalStorageDirectory` 或 `"/sdcard` 字串;Android Lint SdCardPath 另判寫死的 /sdcard 字串 | 告警帶寫法 | 告警帶寫法=批一、批四(CI 範本:Android Lint) | 規則 kt-external-storage-hardcoded:樣本實測中壞例、好例不報 | STORAGE〔併:研D二28〕〔查證 2026-11-05:https://developer.android.com/reference/android/os/Environment https://developer.android.com/training/data-storage/app-specific https://googlesamples.github.io/android-custom-lint-rules/checks/SdCardPath.md.html〕 |
 | DATA-28 | 週期工作用 enqueue 排入 | `WorkManager.getInstance(c).enqueue(periodicRequest)` | `enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.KEEP, req)`(要換設定用 UPDATE) | 每次啟動多排一份,工作堆積 | Android Lint:BadPeriodicWorkRequestEnqueue | A | 形狀:`enqueue(` 參數是 PeriodicWorkRequest | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三1〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/BadPeriodicWorkRequestEnqueue.md.html〕 |
 | DATA-29 | 週期少於 15 分鐘 | `PeriodicWorkRequestBuilder<W>(5, TimeUnit.MINUTES)` | `PeriodicWorkRequestBuilder<W>(15, TimeUnit.MINUTES)` 以上 | 被系統強制改成 15 分鐘,行為與預期不同 | Android Lint:InvalidPeriodicWorkRequestInterval | A | 形狀:週期常數小於 15 分鐘 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT;WM-DEFINE〔併:研D三2〕 〔查證 2026-11-07:https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work〕 |
 | DATA-30 | 一次性工作沒用 unique 或 policy 選錯 | `enqueue(OneTimeWorkRequest)` 做同步;`ExistingWorkPolicy.REPLACE` 打斷進行中的工作 | `enqueueUniqueWork("sync", ExistingWorkPolicy.KEEP, req)`;要排隊接續用 `APPEND_OR_REPLACE` | 重複上傳,或進行中的工作被取消 | Android Lint:EnqueueWork(範圍待讀細節,待查) | B | 語意:要判斷同一件事會不會重複排、要不要打斷進行中的那份 | 告警帶寫法、當下推相關列、表態對程式、盲判席 | 告警帶寫法=批一(只有提示級規則,預設不接);當下推相關列=批二;表態對程式=批三;盲判席=批三 | 規則 kt-work-enqueue-not-unique(hint)、kt-work-policy-replace(hint):樣本實測中壞例、好例不報 | WM-MANAGE;LINT〔併:研D三3〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/manage-work〕 |
@@ -608,15 +615,26 @@
 | DATA-76 | Moshi 反射沒 KotlinJsonAdapterFactory 或 codegen 漏標 | `Moshi.Builder().build()` 解析 Kotlin 類;漏 `@JsonClass(generateAdapter = true)` | 類別標 `@JsonClass(generateAdapter = true)`;用反射就 `Moshi.Builder().add(KotlinJsonAdapterFactory()).build()` | 執行期崩潰、預設值失效 | Android Lint(Slack):MoshiUsage* 系列(逐條代號待抄,待查) | A | 形狀:Moshi 解析的 data class 沒有 `@JsonClass` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一24〕 〔查證 2026-11-07:https://github.com/square/moshi〕 |
 | DATA-77 | R8 混淆掉解析用的模型 | Gson 反射解析,沒有 `-keep` 或 `@SerializedName` | 設定 R8/ProGuard keep 規則保留解析模型的欄位名稱(與無參建構子);或改用以 code generation 取代反射的解析器(Gson README 指名 Kotlin Serialization) | 只有 release 版解析出全空欄位 | 無 | C | 語意:要用 release 版跑解析才看得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=不接(代碼審或真機) | 未測 | SHRINK〔併:研D一25〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/Troubleshooting.md https://github.com/google/gson/blob/main/README.md〕 |
 | DATA-78 | 使用 java.io.Serializable | 資料類 `: Serializable` 拿去傳遞或存檔 | `@Parcelize data class X(…) : Parcelable`,或 `@Serializable`(kotlinx.serialization) | 慢,而且有反序列化風險 | Android Lint:SerializableUsage | A | 形狀:類別實作 `java.io.Serializable` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D一26〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/SerializableUsage.md.html〕 |
-| DATA-79 | 原始碼裡寫死秘密 | `const val API_KEY = "AIza…"`;網址裡帶帳密 `https://user:pass@host` | 秘密不進原始碼,用 Secrets Gradle Plugin 之類的方式在建置時注入 | 反編譯就拿得到金鑰或帳密 | 內建:SecretInSource、AuthLeak | A | 形狀:由 Android Lint SecretInSource、AuthLeak 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SecretInSource.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AuthLeak.md.html〕 |
+| DATA-79 | 寫死 Gemini API 金鑰或網址帶帳密 | `GenerativeModel(modelName = "…", apiKey = "AIza…")`;網址裡帶帳密 `https://user:pass@host`(一般寫死秘密見 DATA-97) | 秘密不進原始碼,用 Secrets Gradle Plugin 之類的方式在建置時注入 | 反編譯就拿得到金鑰或帳密 | 內建:SecretInSource(只看 Gemini SDK 的 GenerativeModel 金鑰,AGP 8.3.0 以上才有)、AuthLeak(只看網址裡的 user:pass@) | A | 形狀:由 Android Lint SecretInSource(只看 GenerativeModel 建構子)、AuthLeak 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 2026-11-08 讀 Google 原始碼確認 SecretInSource 只看 Gemini SDK 的 GenerativeModel 建構子,原登記多算的一般寫死秘密那半移到 DATA-97;原記:未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SecretInSource.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AuthLeak.md.html〕 |
 | DATA-80 | 把私鑰檔打包進 App | `res/raw`、`assets` 裡放 `.pem`、`.key` 私鑰檔 | 私鑰不放進 App | 私鑰隨 APK 外流 | 內建:PackagedPrivateKey | A | 形狀:由 Android Lint PackagedPrivateKey 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/PackagedPrivateKey.md.html〕 |
 | DATA-81 | 敏感資料寫進 logcat | `Log.d(TAG, "password=…")`、`Log.wtf("…passwd…", …)` | 不記敏感資料;非除錯版的日誌都要清理 | 其他工具或使用者從 logcat 讀到秘密 | 資安包:LogInfoDisclosure | A | 形狀:由 Android Lint LogInfoDisclosure 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/LogInfoDisclosure.md.html〕 |
-| DATA-82 | 加密用 ECB 或沒指定模式、不安全的填充 | `Cipher.getInstance("AES")`;`Cipher.getInstance("AES/ECB/PKCS5Padding")`;不安全的模式或填充組合 | 明寫安全的模式,例 `Cipher.getInstance("AES/GCM/NoPadding")` | Android 預設模式是 ECB,相同明文得到相同密文;不安全的填充可被填充預言攻擊 | 內建:GetInstance;資安包:UnsafeCryptoAlgorithmUsage | A | 形狀:由 Android Lint GetInstance、UnsafeCryptoAlgorithmUsage 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/GetInstance.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeCryptoAlgorithmUsage.md.html〕 |
-| DATA-83 | 用弱或已被攻破的雜湊、加密演算法 | `MessageDigest.getInstance("MD5")`、`"SHA-1"` 這類弱演算法 | 改用 SHA-256 以上等目前安全的演算法 | 攻擊者能推回原始輸入或造出相同雜湊 | 資安包:VulnerableCryptoAlgorithm | A | 形狀:由 Android Lint VulnerableCryptoAlgorithm 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/VulnerableCryptoAlgorithm.md.html〕 |
+| DATA-82 | 加密用 ECB 或沒指定模式、不安全的填充 | `Cipher.getInstance("AES")`;`Cipher.getInstance("AES/ECB/PKCS5Padding")`;不安全的模式或填充組合;RSA 不帶 OAEP 填充(`RSA/ECB/NoPadding`)這列登記的兩條檢查都不報,見 DATA-98 | 明寫安全的模式,例 `Cipher.getInstance("AES/GCM/NoPadding")` | Android 預設模式是 ECB,相同明文得到相同密文;不安全的填充可被填充預言攻擊 | 內建:GetInstance;資安包:UnsafeCryptoAlgorithmUsage | A | 形狀:由 Android Lint GetInstance、UnsafeCryptoAlgorithmUsage 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 2026-11-08 讀 Google 原始碼確認這列登記的兩條檢查都不報 `RSA/ECB/NoPadding`,原登記多算的 RSA 無填充那半移到 DATA-98;原記:未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/GetInstance.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeCryptoAlgorithmUsage.md.html〕 |
+| DATA-83 | 加密用弱演算法 | `Cipher.getInstance("DES/CBC/PKCS5Padding")`、`"RC4"`、`"Blowfish"` 這類弱加密演算法(雜湊的 MD5、SHA-1 見 DATA-96) | 改用 AES-128 或 AES-256 搭 GCM,例 `Cipher.getInstance("AES/GCM/NoPadding")` | 密文能被暴力破解或已知攻擊解開 | 資安包:VulnerableCryptoAlgorithm(只看 Cipher.getInstance,前綴比對 DES、RC2、RC5、Blowfish、RC4、ARCFOUR,DESede 也會報) | A | 形狀:由 Android Lint VulnerableCryptoAlgorithm 判(只看 Cipher.getInstance 的演算法字串) | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 2026-11-08 讀 Google 原始碼確認 VulnerableCryptoAlgorithm 只看 Cipher.getInstance、不看 MessageDigest,原登記多算的雜湊那半移到 DATA-96;原記:未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/VulnerableCryptoAlgorithm.md.html〕 |
 | DATA-84 | 資安場合用弱亂數或固定種子 | 產生權杖、驗證碼用 `Math.random()`、`java.util.Random`;`SecureRandom` 給固定種子 | 資安用途用 `SecureRandom()` 且不設固定種子;非資安用途才用 `Random` | 攻擊者猜得到產生的數字,冒用身分 | 資安包:WeakPrng;內建:SecureRandom | A | 形狀:由 Android Lint WeakPrng、SecureRandom 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WeakPrng.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SecureRandom.md.html〕 |
-| DATA-85 | 建立全域可讀寫的檔案 | `openFileOutput(name, MODE_WORLD_READABLE)`、`MODE_WORLD_WRITEABLE`;`file.setReadable(true, false)` | 檔案留在 App 私有目錄;要給別的 App 用 ContentProvider 或 FileProvider | 別的 App 讀到或改掉你的檔案 | 內建:WorldReadableFiles、WorldWriteableFiles、SetWorldReadable | A | 形狀:由 Android Lint WorldReadableFiles、WorldWriteableFiles、SetWorldReadable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WorldReadableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WorldWriteableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldReadable.md.html〕 |
+| DATA-85 | 建立全域可讀寫的檔案 | `openFileOutput(name, MODE_WORLD_READABLE)`、`MODE_WORLD_WRITEABLE`;`file.setReadable(true, false)`、`file.setWritable(true, false)` | 檔案留在 App 私有目錄;要給別的 App 用 ContentProvider 或 FileProvider | 別的 App 讀到或改掉你的檔案 | 內建:WorldReadableFiles、WorldWriteableFiles、SetWorldReadable、SetWorldWritable | A | 形狀:由 Android Lint WorldReadableFiles、WorldWriteableFiles、SetWorldReadable、SetWorldWritable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WorldReadableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WorldWriteableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldReadable.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldWritable.md.html〕 |
 | DATA-86 | 退出分區儲存或用外部路徑分享敏感資料 | `<application android:requestLegacyExternalStorage="true">`;file_paths.xml 的 `<external-path>` | 不退出分區儲存;敏感資料留在 App 私有目錄或系統憑證儲存 | 外部儲存的檔案別的 App 讀得到 | 資安包:InsecureLegacyExternalStorage、SensitiveExternalPath | A | 形狀:由 Android Lint InsecureLegacyExternalStorage、SensitiveExternalPath 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureLegacyExternalStorage.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SensitiveExternalPath.md.html〕 |
 | DATA-87 | SecretKeySpec 用寫死的金鑰 | `SecretKeySpec("0123456789abcdef".toByteArray(), "AES")`;`SecretKeySpec(byteArrayOf(0x48, 0x65), "AES")` | 金鑰用 Android Keystore 產生與保存(`KeyGenerator.getInstance("AES", "AndroidKeyStore")`),不放進 APK | 反編譯就拿得到金鑰,加密形同虛設 | 無(自寫 ast-grep kt-secretkeyspec-literal-key) | B | 形狀:SecretKeySpec 第一個參數(含具名參數 key =)是不含插值的字串字面值接 toByteArray 或 encodeToByteArray,或參數全是整數字面值的 byteArrayOf(…) | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-secretkeyspec-literal-key:樣本實測中壞例、好例不報;真實語料:樣本內(第一輪形狀)68 處誤報 2、樣本外 3 處誤報 0 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0212/ https://developer.android.com/privacy-and-security/keystore〕 |
+| DATA-88 | 解壓縮沒擋路徑穿越(Zip Slip) | `val f = File(destDir, entry.name)` 之後直接寫檔 | 取 `f.canonicalPath`,檢查 `startsWith(destDir.canonicalPath + File.separator)`,不符就丟例外 | 項目名稱帶 `../` 就能寫到目標資料夾外,覆寫 App 的程式或設定 | 無(自寫 ast-grep kt-zip-slip) | B | 形狀:處理 ZipInputStream、ZipFile、JarFile 的函式裡,File(…)、resolve(…) 的參數直接或經區域變數用到 .name;同函式有 canonicalPath、normalize、".." 檢查、壓縮檔來自 assets 或資源、名稱先去掉目錄部分的不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-zip-slip:樣本實測中壞例、好例不報;真實語料:樣本內抽判 27 處誤報 6、樣本外 24 處誤報 10;實驗時多排除了建置腳本,規則包沒排除,建置腳本裡的命中會比量到的多 | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/zip-path-traversal〕 |
+| DATA-89 | ContentProvider 開檔沒擋路徑穿越 | `override fun openFile(uri: Uri, mode: String)` 裡 `File(context!!.filesDir, uri.path!!)` | 組好後取 canonicalPath,檢查在允許資料夾內;或改用 FileProvider 的路徑白名單 | 呼叫端傳 `..%2F` 就能讀到私有資料夾外的檔 | 無(自寫 ast-grep kt-provider-openfile-traversal) | B | 形狀:override 的 openFile、openAssetFile、openTypedAssetFile 裡,File(…)、resolve(…) 的參數直接或經區域變數用到 uri 的 path、lastPathSegment、pathSegments;同函式有 canonicalPath 這類檢查不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-provider-openfile-traversal:樣本實測中壞例、好例不報;真實語料:樣本內抽判 4 處誤報 1、樣本外 6 處誤報 0(命中太少) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/path-traversal〕 |
+| DATA-90 | 加密用固定 IV | `IvParameterSpec(byteArrayOf(0, 0, 0, 0))`;`GCMParameterSpec(128, "fixed".toByteArray())`;同檔 `val IV = byteArrayOf(…)` 再 `IvParameterSpec(IV)` | 每次加密用 SecureRandom 產生新 IV(或讓 `Cipher.init` 自己產生再讀 `cipher.iv`),跟密文一起存 | 同一把金鑰配同一個 IV,CBC 洩漏明文前綴、GCM 可被偽造與解密 | 無(自寫 ast-grep kt-static-iv) | B | 形狀:IvParameterSpec、GCMParameterSpec 的位元組參數是整數字面值的 byteArrayOf、字串字面值接 toByteArray、ByteArray(n),或同檔以這些寫法宣告的屬性 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-static-iv:樣本實測中壞例、好例不報;真實語料:樣本內抽判 23 處誤報 12、樣本外 30 處誤報 16(外部協定強制居多) | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0309/〕 |
+| DATA-91 | 金鑰長度太短 | `KeyPairGenerator.getInstance("RSA")` 再 `initialize(1024)`;`KeyGenerator.getInstance("AES")` 再 `init(64)` | RSA 至少 2048(建議 3072)、AES 至少 128(建議 256) | 短金鑰能被暴力破解 | 無(自寫 ast-grep kt-weak-key-size) | B | 形狀:RSA、DSA、DH 的 KeyPairGenerator.initialize 或 RSAKeyGenParameterSpec 第一個參數小於 2048;KeyGenerator 的 init 第一個參數小於 128 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-weak-key-size:樣本實測中壞例、好例不報;真實語料:樣本內抽判 6 處誤報 1、樣本外 6 處誤報 4 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0208/〕 |
+| DATA-92 | ObjectInputStream 反序列化 | `ObjectInputStream(socket.getInputStream()).readObject()` | 改用 JSON、Protobuf 這類只帶資料的格式;非用不可就繼承 ObjectInputStream 覆寫 resolveClass 只放行白名單類別 | 資料可被別人塞(網路、外部儲存、Intent、其他 App)時能觸發 gadget 鏈 | 無(自寫 ast-grep kt-object-input-stream) | B | 形狀:任何 ObjectInputStream(…);同函式先寫 ObjectOutputStream 再從 ByteArrayInputStream 讀回的深複製、來源是 App 私有檔或內建資源的不報;跟 DATA-78(類別實作 Serializable)不同一件事 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-object-input-stream:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 29、樣本外 194 處抽判 40 處誤報 30(資料來自自己的私有檔或設定) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/unsafe-deserialization〕 |
+| DATA-93 | 資料庫放外部儲存 | `SQLiteDatabase.openOrCreateDatabase(File(ctx.getExternalFilesDir(null), "app.db"), null)`;`Room.databaseBuilder` 給外部儲存的路徑 | Room.databaseBuilder 只給檔名(預設內部路徑),或用 `context.getDatabasePath` | 舊版 Android 或有儲存權限的 App 能讀改資料庫 | 無(自寫 ast-grep kt-db-on-external-files) | B | 形狀:SQLiteDatabase.openOrCreateDatabase、openDatabase、Room.databaseBuilder 的參數直接或經同函式、同類別的屬性用到 getExternalFilesDir、externalCacheDir、getExternalStorageDirectory 這類外部路徑 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-db-on-external-files:樣本實測中壞例、好例不報;真實語料:樣本內抽判 14 處誤報 0、樣本外 1 處誤報 0(量不夠) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/sensitive-data-external-storage〕 |
+| DATA-94 | XML 解析沒關外部實體(XXE) | `DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(input)` 沒設任何防護;`parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, true)` | `factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)` 並設 `isExpandEntityReferences = false`;XmlPullParser 別開 FEATURE_PROCESS_DOCDECL | 惡意 XML 能讀本機檔或用實體展開灌爆記憶體 | 無(自寫 ast-grep kt-xxe-documentbuilder) | B | 形狀:會 parse 的函式或檔案裡的 DocumentBuilderFactory.newInstance(),同函式或同檔沒看到 disallow-doctype-decl、external-general-entities、isExpandEntityReferences = false、FEATURE_SECURE_PROCESSING 這類防護;或 setFeature(FEATURE_PROCESS_DOCDECL, true) | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-xxe-documentbuilder:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 29、樣本外 66 處抽判 40 處誤報 25(資料來自可信來源);Android 的 DOM 解析器預設會不會解析外部實體沒實測;實驗時多排除了建置腳本,規則包沒排除 | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/xml-external-entities-injection〕 |
+| DATA-95 | 信任別人 provider 給的檔名(AGP 8.8.0 以上才有) | 從別的 App 的 ContentProvider 讀 `OpenableColumns.DISPLAY_NAME` 拿到檔名,直接 `File(dir, fileName)` | 檔名先消毒(只留最後一段、拒絕 ..)或自己產生檔名 | 對方給 `../` 開頭的檔名就能覆寫 App 私有檔 | 內建:UnsanitizedFilenameFromContentProvider | A | 形狀:由 Android Lint UnsanitizedFilenameFromContentProvider 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑);這條 AGP 8.8.0 才有,範本下限 AGP 8.5.1 的專案在 8.8.0 以前照接 CI 也不會有這條檢查 | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnsanitizedFilenameFromContentProvider.md.html〕 |
+| DATA-96 | 用弱雜湊(MD5、SHA-1、MD4) | `MessageDigest.getInstance("MD5")`、`"SHA-1"`;同檔 `const val ALGO = "MD5"` 再 `getInstance(ALGO)` | SHA-256 以上;密碼雜湊用 PBKDF2 或 Argon2;只做檢查碼或快取鍵這類非資安用途就加註說明 | 已能造碰撞,拿來做密碼雜湊、簽章、防竄改都不安全 | 無(自寫 ast-grep kt-weak-message-digest) | B | 形狀:MessageDigest.getInstance 第一個參數是 MD5、SHA-1、SHA1、MD4、MD2 的字串,或同檔以這些字串宣告的常數;DATA-83 登記的資安包檢查只看 Cipher、不看 MessageDigest | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-weak-message-digest:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 36、樣本外 143 處抽判 40 處誤報 32(檢查碼、快取鍵、外部協定) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm〕 |
+| DATA-97 | 原始碼裡寫死一般秘密 | `const val API_KEY = "sk9f2Lq0xP7mZ3vB"`;`val password = "Abc12345xyz"` | 秘密不進原始碼:用伺服器換發的短效 token,或放 local.properties 經 BuildConfig 在建置時注入(Secrets Gradle Plugin 之類),別進版本庫 | 反編譯 APK 就拿得到金鑰或密碼 | 無(自寫 ast-grep kt-hardcoded-secret-name) | B | 形狀:屬性名含 password、passwd、secret、api_key、token、private_key(偏好鍵、欄位名、標頭名、路徑名這類鍵名型名稱除外),值是八字以上、英數都有、不像鍵名或佔位字的字串字面值;DATA-79 登記的內建檢查只看 Gemini 金鑰 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-hardcoded-secret-name:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 6、樣本外 36 處誤報 9 | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/hardcoded-cryptographic-secrets〕 |
+| DATA-98 | RSA 不帶 OAEP 填充 | `Cipher.getInstance("RSA/ECB/NoPadding")`;`Cipher.getInstance("RSA")` | `Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")` | 同一明文永遠同一密文、密文可被改寫(教科書 RSA) | 無(自寫 ast-grep kt-rsa-no-oaep) | B | 形狀:Cipher.getInstance 第一個參數是 "RSA" 或 "RSA/…/NoPadding",或同檔以這些字串宣告的常數;DATA-82 登記的兩條檢查都不報這個寫法 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-rsa-no-oaep:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 38、樣本外 39 處誤報 31(ADB 簽章、護照晶片這類外部協定強制) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm〕 |
 
 ## TEST 測試
 
@@ -772,67 +790,30 @@
 
 ## 待查證
 
-由程式從各表撈出:「現成規則」欄含「待查」的規則代號,以及「來源」欄標(搜尋摘要)或(未開頁核對)的出處。這些之後要在實驗專案實測或開頁核對。
+手寫(沒有程式產生,改主表時一起改):列「現成規則」欄含「待查」的規則代號,以及「來源」欄標(搜尋摘要)或(未開頁核對)的出處;主表那列已解決卻還列在這裡、主表還有卻沒列、或兩格寫不寫內容跟主表對不上,型錄自檢(`configs/ast-grep/kotlin-android/check.py` 的 pending_problems)都會報。這些之後要在實驗專案實測或開頁核對。
 
 | 編號 | 待查的規則代號 | 待核對的來源 |
 |---|---|---|
 | API-2 | IJ:「Use awaitAll() and joinAll()」(ID 待查); SC CONCUR_003:detekt SequentialAsyncAwait(是否涵蓋 map{await} 待查) | — |
 | API-3 | IJ:「Unused Deferred」(ID 待查) | — |
-| API-9 | 待查(資料層研究的 detekt 候選 GlobalCoroutineUsage) | AND-BP#create-coroutines-data-layer(未開頁核對); PAD-LIFE(搜尋摘要) |
-| API-11 | IJ:「Use suspendCancellableCoroutine instead of suspendCoroutine」(ID 待查) | RETROFIT(未開頁核對)〔併:API-11、研C補、研D一11〕 |
+| API-9 | 待查(資料層研究的 detekt 候選 GlobalCoroutineUsage) | — |
+| API-11 | IJ:「Use suspendCancellableCoroutine instead of suspendCoroutine」(ID 待查) | — |
 | API-13 | IJ:「Possibly blocking call in non-blocking context」(待查) | — |
-| API-17 | — | OKHTTP-BODY(未開頁核對)〔併:研D一2〕 |
-| API-18 | — | OKHTTP-BODY(未開頁核對)〔併:研D一3〕 |
-| API-19 | — | OKHTTP-INT(未開頁核對)〔併:研D一4〕 |
-| API-20 | — | OKHTTP-INT(未開頁核對)〔併:研D一5〕 |
-| API-21 | — | OKHTTP-AUTH(未開頁核對)〔併:研D一6〕 |
-| API-24 | — | RETROFIT(未開頁核對)〔併:研D一9〕 |
-| API-25 | — | RETROFIT-RESP(未開頁核對)〔併:研D一12〕 |
-| API-26 | — | RETROFIT-2867(未開頁核對)〔併:研D一13〕 |
-| API-27 | — | RETROFIT(未開頁核對)〔併:研D一14〕 |
-| API-28 | — | KTOR-VALID(未開頁核對)〔併:研D一15〕 |
-| API-29 | — | KTOR-CREATE(未開頁核對)〔併:研D一16〕 |
-| API-30 | — | KTOR-RESP(未開頁核對)〔併:研D一17〕 |
 | API-31 | — | DL(未開頁核對)〔併:研D五10〕 |
-| API-34 | — | 無網址(一般知識)(未開頁核對)〔併:研C六11〕 |
-| API-35 | — | 無網址(一般知識)(未開頁核對)〔併:研D六7〕 |
 | API-36 | — | 無網址(一般知識)(未開頁核對)〔併:研D六6〕 |
-| FLOW-7 | — | VIVO-EVT(搜尋摘要) |
-| FLOW-9 | — | AND-FLOW#catch(未開頁核對)〔併:研C一9、研D六5〕 |
-| FLOW-13 | — | KT-FLOW(未開頁核對)〔併:研C一13〕 |
-| FLOW-14 | — | KT-FLOW(未開頁核對)〔併:研C二5〕 |
 | FLOW-21 | 待查(kotlinx 對部分組合有棄用宣告,未核對) | — |
-| FLOW-23 | — | 無網址(一般知識)(未開頁核對)〔併:研C五12〕 |
-| FLOW-25 | — | VIVO-EVT(搜尋摘要)〔併:研C六2〕 |
-| FLOW-26 | — | KT-CHAN(未開頁核對)〔併:研C六4〕 |
-| FLOW-28 | — | 無網址(一般知識)(未開頁核對)〔併:研C六6〕 |
-| FLOW-29 | — | KT-CHAN(未開頁核對)〔併:研C六7〕 |
-| FLOW-30 | — | 無網址(一般知識)(未開頁核對)〔併:研C六8〕 |
-| STATE-2 | — | DL(未開頁核對)〔併:STATE-2、研C補、X:kt-public-mutable-holder、研D五3〕 |
 | STATE-4 | SC FLOW_006:detekt/lint StateInWithEagerlyStrategy(只抓 Eagerly,Lazily 待查) | — |
 | STATE-5 | P18 現成規則待查; androidx 對 collectAsState 的代號待查 | — |
-| STATE-9 | — | VIVO-STATEIN(未開頁核對)〔併:研C五13〕 |
 | STATE-16 | 待查:WrongThread 依 @MainThread 判斷,對協程 dispatcher 切換能不能看出來沒驗證 | — |
-| STATE-17 | — | LD-POST(未開頁核對)〔併:研A26〕 |
 | CO-1 | Slack lint:RawDispatchersUse(歸屬待查); 待查(資料層研究的 detekt 候選 InjectDispatcher) | — |
-| CO-2 | 待查(detekt 候選 TooGenericExceptionCaught、SwallowedException; Sonar 相關規則代號待查) | KT-CAN(未開頁核對); KX-1814(未開頁核對)〔併:CO-2、研C補、研D一10、研D六1、TP補〕 |
-| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查); 待查(JobInBuilderContext 是否涵蓋 NonCancellable) | KT-CAN(未開頁核對)〔併:CO-3、研C補、研C二2〕 |
-| CO-5 | — | AND-BP#main-safe(未開頁核對)〔併:CO-5、研C補、研D一29〕 |
-| CO-7 | — | PAD-ANTI(搜尋摘要)〔併:研C一1〕 |
-| CO-8 | — | PAD-ANTI(搜尋摘要)〔併:研C一2〕 |
-| CO-18 | — | KT-EXC(未開頁核對)〔併:研C二6〕 |
+| CO-2 | 待查(detekt 候選 TooGenericExceptionCaught、SwallowedException; Sonar 相關規則代號待查) | — |
+| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查); 待查(JobInBuilderContext 是否涵蓋 NonCancellable) | — |
 | CO-19 | IJ:「runBlocking inside a suspending function」(ID 待查) | — |
 | CO-22 | 內建:MainScopeUsage(說明待查) | — |
-| CO-23 | — | AND-BP(未開頁核對)〔併:研C二12〕 |
 | CO-28 | SC DISPATCH_001:detekt BlockingCallInCoroutine(是否涵蓋 Default 待查) | — |
-| CO-29 | — | KT-SMS(未開頁核對)〔併:研C三6〕 |
-| CO-30 | — | 無網址(一般知識)(未開頁核對)〔併:研C三7〕 |
 | CO-33 | IJ:「Prefer currentCoroutineContext() over coroutineContext」(ID 待查) | — |
-| CO-37 | — | KT-SMS(未開頁核對)〔併:研C四4〕 |
-| CO-38 | — | 無網址(一般知識)(未開頁核對)〔併:研C四5〕 |
-| CO-39 | SC CONCUR_002(涵蓋範圍待查) | DL(未開頁核對)〔併:研C四6、研D五9〕 |
-| CO-44 | — | AND-BP(未開頁核對)〔併:研C三2〕 |
-| UI-1 | compose-rules 類似規則 待查 | PG-COMPOSE(未開頁核對) |
+| CO-39 | SC CONCUR_002(涵蓋範圍待查) | — |
+| UI-1 | compose-rules 類似規則 待查 | — |
 | UI-3 | 研C七9 現成規則 待查 | — |
 | UI-16 | UnrememberedAnimatable 待查; UnrememberedMutableState 涵蓋 derivedStateOf 待查; RememberInComposition 是否涵蓋 LazyListState 待查 | — |
 | UI-47 | androidx UnnecessaryLambdaCreation 待查 | — |
@@ -841,90 +822,43 @@
 | UI-98 | MissingColorAlphaChannel 待查; InvalidColorHexValue 待查 | — |
 | ARCH-4 | 內建:StaticFieldLeak(對 ViewModel 欄位是否觸發待查) | — |
 | ARCH-28 | FragmentConstructorInjection、FragmentFieldInjection(廠商與觸發條件待查) | — |
-| ARCH-49 | 待查(可用 Konsist 或 ArchUnit 架構測試自寫) | DL(未開頁核對)〔併:研A81、研D五2〕 |
-| ARCH-53 | — | DL(未開頁核對)〔併:研A85、研D五3(DTO 那半)〕 |
+| ARCH-49 | 待查(可用 Konsist 或 ArchUnit 架構測試自寫) | — |
 | ARCH-61 | 無(待查:Hilt 編譯器是否會擋) | — |
 | ARCH-63 | 索引另有 BindsMustBeAbstract、BindsTypeMismatch、BindsWrongParameterCount、BindingReturnType、BindingReceiverParameter、DoNotCallProviders、MustBeInModule、ProvidesMustNotBeAbstract(廠商待查) | — |
-| ARCH-64 | — | DL-OFFLINE(未開頁核對)〔併:研D五1〕 |
-| ARCH-65 | — | DL#operations-outlive-screen(未開頁核對)〔併:研D五11〕 |
-| ARCH-66 | — | DL#expose-errors(未開頁核對)〔併:研D六2〕 |
-| ARCH-67 | 待查(架構測試可以抓) | DL(未開頁核對)〔併:研D六8〕 |
-| DATA-10 | — | DS-CL(未開頁核對)〔併:研D二7〕 |
-| DATA-14 | — | ROOM-TX(未開頁核對)〔併:研D二12〕 |
-| DATA-15 | 待查(Room 編譯期會發警告,文字與代號待查) | ROOM-TX(未開頁核對)〔併:研D二13〕 |
-| DATA-16 | — | ROOM-MIG(未開頁核對)〔併:研D二14〕 |
-| DATA-17 | — | ROOM-MIG(未開頁核對)〔併:研D二15〕 |
-| DATA-18 | Room 編譯期警告(文字待查) | ROOM-MIG#export-schemas(未開頁核對)〔併:研D二16〕 |
-| DATA-19 | — | ROOM-MIG#test(未開頁核對)〔併:研D二17〕 |
-| DATA-20 | — | ROOM-DB(未開頁核對)〔併:研D二18〕 |
-| DATA-21 | — | SQLITE-LIM(未開頁核對)〔併:研D二19〕 |
-| DATA-22 | — | ROOM-UPSERT(未開頁核對)〔併:研D二20〕 |
-| DATA-23 | — | ROOM-ASYNC(未開頁核對)〔併:研D二21〕 |
-| DATA-24 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | SQLI(未開頁核對)〔併:研D二23〕 |
-| DATA-26 | — | ATOMICFILE(未開頁核對)〔併:研D二25〕 |
-| DATA-27 | 待查(Lint SdCardPath 代號待查) | STORAGE(未開頁核對)〔併:研D二28〕 |
-| DATA-30 | Android Lint:EnqueueWork(範圍待讀細節,待查) | WM-MANAGE(未開頁核對) |
+| ARCH-67 | 待查(架構測試可以抓) | — |
+| DATA-15 | 待查(Room 編譯期會發警告,文字與代號待查) | — |
+| DATA-18 | Room 編譯期警告(文字待查) | — |
+| DATA-24 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | — |
+| DATA-30 | Android Lint:EnqueueWork(範圍待讀細節,待查) | — |
 | DATA-37 | 待查(detekt SwallowedException 候選) | — |
-| DATA-38 | — | WM-MANAGE(未開頁核對)〔併:研D三11〕 |
-| DATA-39 | — | WM-DATA(未開頁核對)〔併:研D三12〕 |
-| DATA-41 | — | WM-CW(未開頁核對)〔併:研D三14〕 |
-| DATA-42 | — | WM-CW(未開頁核對)〔併:研D三15〕 |
-| DATA-43 | 待查 | BG(未開頁核對)〔併:研D三16〕 |
-| DATA-44 | — | FGS(未開頁核對) |
-| DATA-48 | — | BG(未開頁核對)〔併:研D三21〕 |
-| DATA-52 | — | BCAST(未開頁核對) |
-| DATA-53 | — | PG-PAGED(未開頁核對)〔併:研D四1〕 |
-| DATA-54 | — | PG-PAGED(未開頁核對)〔併:研D四2〕 |
-| DATA-55 | — | PG-PAGED(未開頁核對)〔併:研D四3〕 |
-| DATA-56 | — | PG-PAGED#pagingdata-stream(未開頁核對)〔併:研D四4〕 |
-| DATA-57 | — | PG-TRANSFORM(未開頁核對)〔併:研D四5〕 |
-| DATA-58 | — | PG-TRANSFORM(未開頁核對)〔併:研D四6〕 |
-| DATA-59 | — | PG-NETDB(未開頁核對)〔併:研D四7〕 |
-| DATA-60 | — | PG-NETDB(未開頁核對)〔併:研D四8〕 |
-| DATA-61 | — | PG-NETDB(未開頁核對)〔併:研D四9〕 |
-| DATA-62 | — | PG-NETDB(未開頁核對)〔併:研D四10〕 |
-| DATA-63 | — | PG-LOADSTATE(未開頁核對)〔併:研D四11〕 |
-| DATA-64 | — | DL-OFFLINE#writes(未開頁核對)〔併:研D五4〕 |
-| DATA-65 | — | DL-OFFLINE(未開頁核對)〔併:研D五5〕 |
-| DATA-66 | — | DL-OFFLINE(未開頁核對)〔併:研D五6〕 |
-| DATA-67 | — | DL-OFFLINE(未開頁核對)〔併:研D五7〕 |
-| DATA-68 | — | DL#cache(未開頁核對)〔併:研D五8〕 |
-| DATA-69 | — | DL-OFFLINE(未開頁核對)〔併:研D五13〕 |
-| DATA-70 | — | KXS-IGNORE(未開頁核對)〔併:研D一18〕 |
-| DATA-71 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | KXS-JSON(未開頁核對)〔併:研D一19〕 |
-| DATA-72 | — | KXS-JSON#coercing-input-values(未開頁核對)〔併:研D一20〕 |
-| DATA-73 | — | KXS-JSON#coercing-input-values(未開頁核對)〔併:研D一21〕 |
-| DATA-74 | — | KXS-BASIC(未開頁核對)〔併:研D一22〕 |
-| DATA-75 | — | GSON-TS(未開頁核對)〔併:研D一23〕 |
+| DATA-43 | 待查 | — |
+| DATA-71 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | — |
 | DATA-76 | Android Lint(Slack):MoshiUsage* 系列(逐條代號待抄,待查) | — |
-| DATA-77 | — | SHRINK(未開頁核對)〔併:研D一25〕 |
 | TEST-12 | 具體棄用等級待查) | — |
 | TEST-27 | 待查(Sonar 有此規則,代號待查) | — |
-| PERF-2 | 待查(Android Lint NetworkOnMainThread 確切代號待查) | NOMT(未開頁核對)〔併:P2、研D一27〕 |
+| PERF-2 | 待查(Android Lint NetworkOnMainThread 確切代號待查) | — |
 | PERF-4 | 待查(Sonar/structured-coroutines 有類似規則,代號待查) | — |
 | PERF-9 | 待查 | — |
 | PERF-10 | detekt:MissingUseCall(待查是否涵蓋 Cursor) | — |
-| PERF-11 | — | SM-VM(未開頁核對)〔併:P23、研D二26〕 |
 | PERF-23 | 待查(未在 detekt performance 清單中看到) | — |
 | PERF-26 | — | 無網址(一般知識)(未開頁核對)〔併:P45〕 |
 | PERF-30 | detekt:DataClassContainsFunctions、DataClassShouldBeImmutable(style,待查是否在 1.23 預設清單) | — |
-| PERF-32 | 待查(IDE 檢查有,detekt 代號待查) | 無網址(一般知識)(未開頁核對)〔併:P51〕 |
-| PERF-34 | — | DL#expose-errors(未開頁核對)〔併:研D六3、TP補〕 |
-| PERF-35 | 待查(detekt 候選:ThrowingExceptionsWithoutMessageOrCause) | 無網址(一般知識)(未開頁核對)〔併:研D六4〕 |
+| PERF-32 | 待查(IDE 檢查有,detekt 代號待查) | — |
+| PERF-35 | 待查(detekt 候選:ThrowingExceptionsWithoutMessageOrCause) | — |
 
 ## 統計
 
-用程式讀本檔各主題表格列數得出(不是手算;規則包數字讀 `configs/ast-grep/kotlin-android/rules*/*.yml`)。
+手寫(沒有程式產生):改主表或規則包時用程式重數各主題表格列數後手動更新(規則包數字數 `configs/ast-grep/kotlin-android/rules*/*.yml`);總列數、各主題、各級、級的組合、情境、出處不全與人裁、規則包各等級、不接閘、被會擋的規則守到的列數、逐列查證、待查證這幾個數由型錄自檢(同一支 check.py 的 stats_problems)核對;情境決策表那行還沒核對。
 
-- 總列數:514(其中沿用既有編號 35 列;規則包實作時補的新列 0 列;2026-11-08 資安補齊新增 41 列:API-37~47、ARCH-68~88、DATA-79~87)
-- 各主題:API 47、FLOW 32、STATE 28、CO 44、UI 111、ARCH 88、DATA 87、TEST 38、PERF 39
-- 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 240、B 210、C 68、D 58
-- 各級(以第一個字母計,加總等於總列數):A 240、B 180、C 52、D 42
-- 級的組合:A 205、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 161、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 42
-- 情境:形狀類 408、語意類 106(其中標(人裁)的 4)
-- 待查證:135 列(規則代號待查 49 列、來源待核對 104 列,兩者可重疊)
-- 規則包條數:211(error 34、warning 115、語意覆核級 info 12、hint 50,其中 14 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
-- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):127
+- 總列數:532(其中沿用既有編號 35 列;規則包實作時補的新列 0 列;2026-11-08 資安補齊新增 41 列:API-37~47、ARCH-68~88、DATA-79~87;同日資安補齊第二批新增 18 列:API-48~51、ARCH-89~91、DATA-88~98)
+- 各主題:API 51、FLOW 32、STATE 28、CO 44、UI 111、ARCH 91、DATA 98、TEST 38、PERF 39
+- 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 242、B 226、C 68、D 58
+- 各級(以第一個字母計,加總等於總列數):A 242、B 196、C 52、D 42
+- 級的組合:A 207、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 177、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 42
+- 情境:形狀類 426、語意類 106(其中標(人裁)的 4)
+- 待查證:51 列(規則代號待查 48 列、來源待核對 3 列,兩者可重疊;2026-11-08 刪掉主表已解決的 84 列)
+- 規則包條數:227(error 46、warning 119、語意覆核級 info 12、hint 50,其中 29 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
+- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):128
 - 出處不全的列:35;人裁的列:4
-- 逐列查證(來源欄有〔查證 日期:網址〕):501 列;沒有的 13 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列)
+- 逐列查證(來源欄有〔查證 日期:網址〕):519 列;沒有的 13 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列)
 - 情境決策表列數:56(證據樣式:主寫 `(無)` 的 8 列、例外寫 `(無)` 的 31 列、兩段都 `(無)` 的 5 列)

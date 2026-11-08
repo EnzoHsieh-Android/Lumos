@@ -1,0 +1,2440 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index 0829c0aab..16655d210 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -394,23 +394,108 @@ def catalog_problems(rules=None):
+         if c[7].startswith("語意") and rid not in referenced and "(出處不全)" not in c[1] and "(人裁)" not in c[1]:
+             problems.append((rid, "語意類沒有被任何決策表列收進去"))
+     if _SCRATCH_RE.search(text):
+         problems.append(("<catalog>", "型錄裡有指向會談暫存區的路徑"))
+     weak_ids = {rid for rid, c in rows.items() if "(出處不全)" in c[1]}
+     for r in rules or []:
+         m = re.match(r"\[([A-Z]+-\d+)\]", r["message"])
+         if m and m.group(1) in weak_ids and r.get("dir") != "rules-unwired":   # 缺 dir 鍵照不在 unwired 算
+             problems.append((r["id"], f"引用出處不全的 {m.group(1)},只准放 rules-unwired/"))
+     problems += template_problems(rows)   # 主表只讀一次:把上面讀好的列交過去
++    problems += pending_problems(text, rows) + stats_problems(text, rows, rules)
+     return problems
+ 
+ 
++# 〈待查證〉節的口徑(型錄〈待查證〉節說明句):現成規則欄含「待查」,或來源欄標這兩種字樣。
++# 跟 _WEAK_SRC 不同:只寫「無網址」的列要標(出處不全),不列進〈待查證〉
++_PENDING_SRC = ("未開頁核對", "搜尋摘要")
++_PENDING_EMPTY = ("—", "")
++
++
++def _pending_table(text):
++    """〈待查證〉節的列 → {編號: 欄位};找不到這一節回 None。"""
++    i, j = text.find("\n## 待查證"), text.find("\n## 統計")
++    if i < 0:
++        return None
++    sec = text[i:j] if j > i else text[i:]
++    return {m.group(1): _cells(ln) for ln in sec.splitlines() for m in [_MAIN_ROW_RE.match(ln)] if m}
++
++
++def _pending_need(c):
++    """主表一列 → (代號還待查, 來源還待核對)。"""
++    return "待查" in c[5], any(w in c[11] for w in _PENDING_SRC)
++
++
++def pending_problems(text, rows):
++    """〈待查證〉節跟主表雙向對得上([[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 6):該列的都列、不該列的不列,
++    兩格寫不寫內容跟主表那列還有沒有待查、待核對一致(沒有就寫 —)。"""
++    pend = _pending_table(text)
++    if pend is None:
++        return [("<catalog>", "找不到〈待查證〉節")]
++    out = []
++    for rid, c in rows.items():
++        if any(_pending_need(c)) and rid not in pend:
++            out.append((rid, "主表還有待查或待核對的來源,〈待查證〉沒列"))
++    for rid, pc in pend.items():
++        if rid not in rows:
++            out.append((rid, "〈待查證〉的列不在主表"))
++            continue
++        code, src = _pending_need(rows[rid])
++        if not (code or src):
++            out.append((rid, "主表已解決,〈待查證〉還列著"))
++            continue
++        for want, cell, what in ((code, pc[1], "待查的規則代號"), (src, pc[2] if len(pc) > 2 else "", "待核對的來源")):
++            if want == (cell.strip() in _PENDING_EMPTY):
++                out.append((rid, f"〈待查證〉的「{what}」格跟主表對不上(主表{'還有' if want else '已沒有'},這格要{'寫內容' if want else '寫 —'})"))
++    return out
++
++
++_STAT_TOPICS = ("API", "FLOW", "STATE", "CO", "UI", "ARCH", "DATA", "TEST", "PERF")
++
++
++def _stats_expected(text, rows, rules):
++    """〈統計〉每個要核對的數 → [(標籤, 在〈統計〉找數字的正規式, 重數的值)]。rules 是 None 時不核對規則包那幾個。"""
++    pend = _pending_table(text) or {}
++    need = [_pending_need(rows[r]) for r in pend if r in rows]
++    want = [("總列數", r"- 總列數:(\d+)", len(rows))]
++    want += [(f"{t} 列數", rf"- 各主題:[^\n]*?\b{t} (\d+)", sum(1 for r in rows if r.split("-")[0] == t)) for t in _STAT_TOPICS]
++    want += [(f"各級含 {lv}", rf"- 各級\(列的級含該字母[^\n]*?{lv} (\d+)", sum(1 for c in rows.values() if lv in c[6]))
++             for lv in "ABCD"]
++    want += [(f"各級首字 {lv}", rf"- 各級\(以第一個字母計[^\n]*?{lv} (\d+)", sum(1 for c in rows.values() if c[6][:1] == lv))
++             for lv in "ABCD"]
++    want += [("逐列查證", r"- 逐列查證[^\n]*?:(\d+) 列", sum(1 for c in rows.values() if _VERIFIED_RE.search(c[11]))),
++             ("待查證", r"- 待查證:(\d+) 列", len(pend)),
++             ("待查證代號待查", r"- 待查證:[^\n]*?規則代號待查 (\d+) 列", sum(1 for a, _b in need if a)),
++             ("待查證來源待核對", r"- 待查證:[^\n]*?來源待核對 (\d+) 列", sum(1 for _a, b in need if b))]
++    if rules is not None:
++        want += [("規則包條數", r"- 規則包條數:(\d+)", len(rules)),
++                 ("不接閘條數", r"- 規則包條數:[^\n]*?其中 (\d+) 條在不接閘", sum(1 for r in rules if r.get("dir") == "rules-unwired"))]
++        want += [(f"規則包 {k}", rf"- 規則包條數:[^\n]*?\b{k} (\d+)", sum(1 for r in rules if r.get("severity") == k))
++                 for k in ("error", "warning", "info", "hint")]
++    return want
++
++
++def stats_problems(text, rows, rules=None):
++    """〈統計〉節手寫的數字要等於從主表、〈待查證〉與規則檔重數的值(同上計劃範圍 6;節說明句寫明是手寫)。"""
++    i = text.find("\n## 統計")
++    if i < 0:
++        return [("<catalog>", "找不到〈統計〉節")]
++    st = text[i:]
++    out = []
++    for label, pat, n in _stats_expected(text, rows, rules):
++        m = re.search(pat, st)
++        got = int(m.group(1)) if m else None
++        if got != n:
++            out.append(("<統計>", f"{label} 寫 {got},重數是 {n}"))
++    return out
++
++
+ # ── 證據樣式自測(代碼審 code-android情境題與表態對程式 r1 D1)──────────────────────────────
+ # 每列證據樣式附正例與反例,經 scripts/lumos 真的切段與核對程式跑過:正例(那列標準寫法、例外寫法的範例程式)要對得上樣式,
+ # 反例(對應檢查列的壞寫法)要對不上樣式。推送前對不上只提醒、記帳、待盲判(代碼審 r2 換形狀),這裡守的是樣式本身沒壞:
+ # 正例被樣式拒絕=提醒會誤報、反例被樣式接受=提醒會漏;做不到的那一段改寫(無)交盲判。依據:ast-grep test 的 valid/invalid
+ # (https://ast-grep.github.io/guide/test-rule.html )、Semgrep 的 ok/ruleid(https://docs.semgrep.dev/writing-rules/testing-rules )。
+ # 樣本放 samples/situation/<列編號>.kt.txt(一支檔放很多段互不相干的片段,不是能編譯的 Kotlin,所以不用 .kt),一支檔多段,
+ # 每段一行標題 `// === <種類> <說明>` 開頭;種類:main-ok、alt-ok(那個寫法的正例)、bad(每個有樣式的寫法都要擋)、
+ # bad main、bad alt(只對那個寫法擋:壞寫法剛好是另一個寫法的合法長相時用)。
+ _SIT_SAMPLE_HEAD = re.compile(r"^// === (main-ok|alt-ok|bad main|bad alt|bad)(?=\s|$)(.*)$")
+ 
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/api.yml b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+index 1dc84a5d1..8be0afed6 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/api.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/api.yml
+@@ -101,10 +101,157 @@ constraints:
+ id: kt-async-await-immediately
+ language: kotlin
+ severity: warning
+ message: '[API-14]async 立刻 await 等於沒並行;改成直接呼叫 f(),要換執行緒就改用 withContext(io) { f() }'
+ rule:
+   any:
+     - pattern: async { $$$ }.await()
+     - pattern: async($$$) { $$$ }.await()
+     - pattern: $S.async { $$$ }.await()
+     - pattern: $S.async($$$) { $$$ }.await()
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外命中 14 處、誤報 1,命中不到 20)。loadUrl 第一個參數直接、經同函式區域變數、或 let 的 it 來自 intent 的 data、dataString、getStringExtra、extras;
++# 同函式有驗 scheme、host 或是 Intent.parseUri 不報
++id: kt-loadurl-external
++language: kotlin
++severity: error
++message: '[API-49]WebView 直接載入 Intent 帶進來的網址,別的 App 能讓它開任意頁;改成先驗 scheme 是 https、host 在白名單內才 loadUrl'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  intent-src:
++    regex: '^\(?\s*(this\.|activity\??\.|requireActivity\(\)\.)?(intent|getIntent\(\))(!!)?\??\.(data\b|dataString\b|getData\(\)|getDataString\(\)|getStringExtra\(|extras\b|getExtras\(\))'
++  load-call:
++    any:
++      - pattern: $W.loadUrl($$$A)
++      - pattern: $W?.loadUrl($$$A)
++      - pattern: loadUrl($$$A)
++  first-arg:
++    kind: value_argument
++    nthChild: 1
++rule:
++  all:
++    - matches: load-call
++    - any:
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              has:
++                matches: first-arg
++                has: {matches: intent-src}
++        - all:
++            - inside:
++                stopBy: end
++                kind: function_declaration
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
++                    - has: {matches: intent-src}
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    matches: first-arg
++                    has: {stopBy: end, kind: simple_identifier, pattern: $V}
++        # 同一函式裡 url = intent.getStringExtra(…)(指定給既有變數),再 loadUrl(url)
++        - all:
++            - inside:
++                stopBy: end
++                kind: function_declaration
++                has:
++                  stopBy: end
++                  kind: assignment
++                  all:
++                    - has: {kind: directly_assignable_expression, has: {kind: simple_identifier, pattern: $V}}
++                    - has: {matches: intent-src}
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    matches: first-arg
++                    has: {stopBy: end, kind: simple_identifier, pattern: $V}
++        # intent.getStringExtra("url")?.let { webView.loadUrl(it) }
++        - all:
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    matches: first-arg
++                    regex: '^it(\.toString\(\))?$'
++            - inside:
++                stopBy: end
++                kind: call_expression
++                regex: '^\(?\s*(this\.|activity\??\.|requireActivity\(\)\.)?(intent|getIntent\(\))(!!)?\??\.(data\b|dataString\b|getData\(\)|getDataString\(\)|getStringExtra\(|extras\b|getExtras\(\))[^{]*\.(let|also|run)\s*\{'
++  not:
++    any:
++      - matches: in-debug-only-branch
++      # 同一函式有驗 scheme/host,或 intent 其實是 Intent.parseUri 解出來的區域變數
++      - inside:
++          stopBy: end
++          kind: function_declaration
++          regex: '\.(scheme|host)\b|getScheme\(|getHost\(|Intent\.parseUri'
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 6 處誤報 0,樣本內 82%:模仿舊版 TLS 指紋這類外部協定強制)。CipherSuite.<弱套件> 或
++# setEnabledCipherSuites、cipherSuites(…)、enabledCipherSuites = 裡的弱套件字串;okhttp3、paho 套件自己的原始碼複本不報
++id: kt-weak-cipher-suite
++language: kotlin
++severity: error
++message: '[API-50]TLS 加密套件含 NULL、匿名、EXPORT、RC4、DES、3DES 或 MD5,連線可被解密或冒充;改用 ConnectionSpec.MODERN_TLS 或 RESTRICTED_TLS'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  weak-name:
++    regex: '(_NULL_|_anon_|_EXPORT|_RC4_|_DES_|_DES40_|3DES|_MD5"?$)'
++rule:
++  any:
++    - all:
++        - kind: navigation_expression
++        - regex: '^(okhttp3\.)?CipherSuite\.(TLS|SSL)_\w+$'
++        - matches: weak-name
++    - all:
++        - kind: string_literal
++        - regex: '^"(TLS|SSL)_\w+"$'
++        - matches: weak-name
++        - inside:
++            stopBy: end
++            any:
++              - kind: call_expression
++                regex: '^([\w.?]+\.)?(setEnabledCipherSuites|cipherSuites)\('
++              - kind: assignment
++                has: {kind: directly_assignable_expression, regex: '(^|\.)\s*enabledCipherSuites$'}
++  not:
++    any:
++      - matches: in-debug-only-branch
++      # 函式庫自己的原始碼複本(OkHttp 的 ConnectionSpec.COMPATIBLE_TLS 清單等),不是 App 的設定
++      - inside:
++          stopBy: end
++          kind: source_file
++          has:
++            kind: package_header
++            regex: '^package\s+(okhttp3|org\.eclipse\.paho)\b'
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 16:只載自家 file:///android_asset、範例碼)。setAllowFileAccess(true) 或
++# 左邊以 allowFileAccess 結尾、右邊是 true 的賦值;…FromFileURLs 兩個開關歸 kt-webview-file-url-access
++id: kt-webview-file-access
++language: kotlin
++severity: error
++message: '[API-51]WebView 開了本機檔案存取,被導到惡意頁或本機 HTML 時能讀 App 私有檔;改成 false,本機內容改用 WebViewAssetLoader 載入'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  any:
++    - pattern: $X.setAllowFileAccess(true)
++    - pattern: $X?.setAllowFileAccess(true)
++    - pattern: setAllowFileAccess(true)
++    - all:
++        - kind: assignment
++        - has:
++            kind: directly_assignable_expression
++            regex: (^|\.)\s*allowFileAccess$
++        - has:
++            kind: boolean_literal
++            regex: ^true$
++  not:
++    matches: in-debug-only-branch
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml b/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml
+index c7ca68a7c..ebff29cdf 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/architecture.yml
+@@ -10,10 +10,104 @@ rule:
+     - kind: value_argument
+       regex: ^onClick\s*=\s*\{
+   has:
+     pattern: $N.navigate($$$)
+     stopBy: end
+   not:
+     has:
+       kind: simple_identifier
+       regex: ^currentDestination$
+       stopBy: end
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 2,但要不要綁加密物件看保護的是什麼,形狀定不了)。
++# 只帶一個參數的 authenticate,接收者或參數名稱含 prompt、biometric、info 字樣、檔裡有 BiometricPrompt;bp.authenticate(pi) 這種會漏
++id: kt-biometric-no-crypto
++language: kotlin
++severity: error
++message: '[ARCH-91]生物辨識只帶 promptInfo、沒綁 CryptoObject,結果只是回呼、被 hook 就繞過;保護金鑰或敏感資料改用 authenticate(promptInfo, CryptoObject)'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  all:
++    - any:
++        - pattern: $X.authenticate($A)
++        - pattern: $X?.authenticate($A)
++    - regex: '(?is)^[\w.?!]*(prompt|biometric)[\w.?!]*\??\.authenticate|^BiometricPrompt\(|authenticate\(\s*[\w.]*info\w*(\(\))?\s*\)|PromptInfo'
++    - inside:
++        kind: source_file
++        regex: BiometricPrompt
++        stopBy: end
++  not:
++    matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(量到的寬形狀樣本外 40 處抽判誤報 28,收窄後沒重量)。收窄成 Semgrep
++# command-injection-formatted-runtime-call 的形狀:Runtime 的 exec 只帶一個參數、而且是串接、String.format 或帶插值的字串樣板;
++# 或 ProcessBuilder、exec 的參數(含 arrayOf、listOf 裡)有 "-c" 而緊接著的那個參數不是純字串字面值。exec("ls")、exec(arrayOf("ls", "-l")) 不報
++id: kt-command-exec-nonliteral
++language: kotlin
++severity: error
++message: '[ARCH-90]用串接、format 或字串樣板組外部指令,外部輸入進來就是指令注入;改成固定指令,使用者資料當獨立參數傳、先過白名單'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  exec-call:
++    any:
++      - pattern: $R.getRuntime().exec($$$A)
++      - pattern: $R.getRuntime()?.exec($$$A)
++      - pattern: $RT.exec($$$A)
++  built-string:
++    any:
++      # 串接:兩邊都是不帶插值的字串字面值("ls" + " -l")不算
++      - kind: additive_expression
++        not:
++          regex: '^\s*"[^"$\\\n]*"(\s*\+\s*"[^"$\\\n]*")*\s*$'
++      - pattern: String.format($$$F)
++      - pattern: java.lang.String.format($$$F)
++      - pattern: $S.format($$$F)
++      - kind: string_literal
++        has:
++          any:
++            - kind: interpolated_identifier
++            - kind: interpolated_expression
++  plain-literal:
++    kind: value_argument
++    regex: '^\s*"(?:[^"$\\\n]|\\.)*"\s*$'
++  dash-c-then-nonliteral:
++    has:
++      stopBy: end
++      kind: value_argument
++      regex: '^\s*"-c"\s*$'
++      # 兄弟節點中間隔著逗號那個記號:"-c" 之後是逗號、逗號之後才是下一個參數
++      precedes:
++        regex: '^,$'
++        precedes:
++          kind: value_argument
++          not: {matches: plain-literal}
++rule:
++  any:
++    - all:
++        - matches: exec-call
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              all:
++                - has:
++                    kind: value_argument
++                    nthChild: 1
++                    has: {matches: built-string}
++                - not:
++                    has:
++                      kind: value_argument
++                      nthChild: 2
++    - all:
++        - matches: exec-call
++        - matches: dash-c-then-nonliteral
++    - all:
++        - kind: call_expression
++        - has:
++            kind: simple_identifier
++            regex: ^ProcessBuilder$
++        - matches: dash-c-then-nonliteral
++  not:
++    matches: in-debug-only-branch
++constraints:
++  RT:
++    regex: '(?i)^(this\.)?(m?runtime|rt)$'
+diff --git a/configs/ast-grep/kotlin-android/rules-unwired/data.yml b/configs/ast-grep/kotlin-android/rules-unwired/data.yml
+index 51c5d1263..d05053849 100644
+--- a/configs/ast-grep/kotlin-android/rules-unwired/data.yml
++++ b/configs/ast-grep/kotlin-android/rules-unwired/data.yml
+@@ -11,10 +11,548 @@ rule:
+   has:
+     kind: call_suffix
+     has:
+       kind: value_arguments
+       has:
+         nthChild: 1
+         kind: value_argument
+         any:
+           - regex: ^(key\s*=\s*)?"[^"$]*"\s*\.\s*(toByteArray|encodeToByteArray)\(
+           - regex: ^(key\s*=\s*)?byteArrayOf\(\s*[-+]?(0[xX][0-9a-fA-F_]+|[0-9_]+)(\.toByte\(\))?(\s*,\s*[-+]?(0[xX][0-9a-fA-F_]+|[0-9_]+)(\.toByte\(\))?)*\s*,?\s*\)$
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 24 處誤報 10)。在處理 Zip/Jar 的函式裡,File(…)、resolve(…) 的參數直接或經區域變數用到 .name;
++# 同函式有 canonicalPath、normalize、".." 檢查、壓縮檔來自 assets 或資源、名稱先去掉目錄部分的不報。實驗時多排除的建置腳本三項這裡不帶
++id: kt-zip-slip
++language: kotlin
++severity: error
++message: '[DATA-88]壓縮檔項目名稱直接組路徑,名稱帶 ../ 就寫到目標資料夾外(Zip Slip);改成先比 canonicalPath 是否在目標資料夾內,不符就丟例外'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  file-ctor:
++    any:
++      - pattern: File($$$A)
++      - pattern: java.io.File($$$A)
++      - pattern: $D.resolve($$$A)
++  entry-name:
++    kind: navigation_expression
++    regex: '\.name$'
++  zip-fn:
++    kind: function_declaration
++    regex: 'Zip(InputStream|File|Entry)|nextEntry|JarInputStream|JarFile|ArchiveEntry|ArchiveInputStream'
++rule:
++  all:
++    - matches: file-ctor
++    - inside:
++        stopBy: end
++        matches: zip-fn
++    - any:
++        - has:
++            stopBy: end
++            kind: value_arguments
++            has:
++              stopBy: end
++              matches: entry-name
++        - all:
++            - inside:
++                stopBy: end
++                kind: function_declaration
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $N}}
++                    - has: {matches: entry-name}
++            - has:
++                stopBy: end
++                kind: value_arguments
++                has: {stopBy: end, kind: simple_identifier, pattern: $N}
++  not:
++    any:
++      - inside:
++          stopBy: end
++          kind: function_declaration
++          regex: 'canonicalPath|canonicalFile|getCanonical|normalize\(|toRealPath|"\.\."'
++      # 壓縮檔來自 App 內建資源(assets / jar 資源 / raw),攻擊者塞不進來
++      - inside:
++          stopBy: end
++          kind: function_declaration
++          regex: '(Zip|ZipArchive|Jar)InputStream\(\s*([\w.()!?]+\.)?(assets\.open|getResourceAsStream|openRawResource)'
++      # File(entry.name).isAbsolute 這類只拿來檢查、不拿來寫檔
++      - inside:
++          kind: navigation_expression
++          regex: '\.(isAbsolute|name|extension|nameWithoutExtension|isDirectory)$'
++      # 名稱先去掉目錄部分(只留最後一段)
++      - has:
++          stopBy: end
++          kind: value_arguments
++          regex: 'substringAfterLast\(|lastIndexOf\(\s*(File\.separator|[\x27"]/)'
++      - matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外只有 6 處,量不夠)。override 的 openFile、openAssetFile、openTypedAssetFile 裡,
++# File(…)、resolve(…) 的參數直接或經區域變數用到 uri 的 path、lastPathSegment、pathSegments;同函式有 canonicalPath 這類檢查不報
++id: kt-provider-openfile-traversal
++language: kotlin
++severity: error
++message: '[DATA-89]ContentProvider 的 openFile 用呼叫端給的路徑組檔案,傳 ../ 就讀到資料夾外;改成比 canonicalPath 在允許資料夾內,或改用 FileProvider'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  file-ctor:
++    any:
++      - pattern: File($$$A)
++      - pattern: java.io.File($$$A)
++      - pattern: $D.resolve($$$A)
++  uri-path:
++    any:
++      - kind: navigation_expression
++        regex: '(?i)uri\w*(!!)?\??\.(path|encodedPath|lastPathSegment|pathSegments|getPath\(\)|getLastPathSegment\(\)|getPathSegments\(\)|getEncodedPath\(\))'
++  open-fn:
++    kind: function_declaration
++    all:
++      - has: {kind: modifiers, regex: '\boverride\b'}
++      - has: {kind: simple_identifier, regex: '^(openFile|openAssetFile|openTypedAssetFile)$'}
++rule:
++  all:
++    - matches: file-ctor
++    - inside:
++        stopBy: end
++        matches: open-fn
++    - any:
++        - has:
++            stopBy: end
++            kind: value_arguments
++            has: {stopBy: end, matches: uri-path}
++        - all:
++            - inside:
++                stopBy: end
++                kind: function_declaration
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {stopBy: end, matches: uri-path}
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $N}}
++            - has:
++                stopBy: end
++                kind: value_arguments
++                has: {stopBy: end, kind: simple_identifier, pattern: $N}
++  not:
++    any:
++      - inside:
++          stopBy: end
++          kind: function_declaration
++          regex: 'canonicalPath|canonicalFile|getCanonical|normalize\(|toRealPath|"\.\."'
++      - matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 30 處誤報 16:外部協定強制居多)。IvParameterSpec、GCMParameterSpec 的位元組參數是整數字面值的
++# byteArrayOf、字串字面值 toByteArray、ByteArray(n),或同檔以這些寫法宣告的屬性
++id: kt-static-iv
++language: kotlin
++severity: error
++message: '[DATA-90]IV 寫死(字面值或全零陣列),同一把金鑰每次同一個 IV,CBC 洩漏明文、GCM 整個破;改用 SecureRandom 每次產生新 IV,跟密文一起存'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  literal-bytes:
++    kind: call_expression
++    all:
++      - has: {kind: simple_identifier, regex: '^byteArrayOf$'}
++      - has:
++          kind: call_suffix
++          has:
++            kind: value_arguments
++            not:
++              has:
++                kind: value_argument
++                not:
++                  regex: '^-?\s*(0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*)(\.toByte\(\))?$'
++  literal-string-bytes:
++    kind: call_expression
++    regex: '^"[^"$\\]*"\s*\.\s*(toByteArray|encodeToByteArray|getBytes)\('
++  zero-bytes:
++    kind: call_expression
++    pattern: ByteArray($N)
++  static-bytes:
++    any:
++      - matches: literal-bytes
++      - matches: literal-string-bytes
++      - matches: zero-bytes
++  iv-ctor:
++    any:
++      - pattern: IvParameterSpec($B)
++      - pattern: IvParameterSpec($B, $$$R)
++      - pattern: javax.crypto.spec.IvParameterSpec($B)
++      - pattern: javax.crypto.spec.IvParameterSpec($B, $$$R)
++      - pattern: GCMParameterSpec($T, $B)
++      - pattern: GCMParameterSpec($T, $B, $$$R)
++      - pattern: javax.crypto.spec.GCMParameterSpec($T, $B)
++      - pattern: javax.crypto.spec.GCMParameterSpec($T, $B, $$$R)
++rule:
++  all:
++    - matches: iv-ctor
++    - any:
++        # 直接把寫死的位元組丟進去
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              has:
++                kind: value_argument
++                has: {matches: static-bytes}
++        # 同一檔案裡 val IV = byteArrayOf(…) / "…".toByteArray(),再 IvParameterSpec(IV)
++        - all:
++            - inside:
++                stopBy: end
++                kind: source_file
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
++                    - has:
++                        any:
++                          - matches: literal-bytes
++                          - matches: literal-string-bytes
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    kind: value_argument
++                    has: {kind: simple_identifier, pattern: $V}
++        # 同一檔案裡 const val IV = "…",再 IvParameterSpec(IV.toByteArray())
++        - all:
++            - inside:
++                stopBy: end
++                kind: source_file
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $S}}
++                    - has: {kind: string_literal, regex: '^"[^"$\\]*"$'}
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    kind: value_argument
++                    has:
++                      kind: call_expression
++                      regex: '\.\s*(toByteArray|encodeToByteArray|getBytes)\('
++                      has:
++                        kind: navigation_expression
++                        has: {kind: simple_identifier, pattern: $S}
++  not:
++    matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 6 處誤報 4)。RSA/DSA/DH 的 KeyPairGenerator.initialize、RSAKeyGenParameterSpec 第一個參數小於 2048;
++# 同函式或同檔有 KeyGenerator.getInstance 的 init 第一個參數小於 128
++id: kt-weak-key-size
++language: kotlin
++severity: error
++message: '[DATA-91]金鑰太短:RSA、DSA、DH 低於 2048 位元或對稱金鑰低於 128 位元;改用 RSA 至少 2048、AES 至少 128 位元'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  lt2048:
++    kind: integer_literal
++    regex: '^(\d{1,3}|1\d{3}|20[0-3]\d|204[0-7])$'
++  lt128:
++    kind: integer_literal
++    regex: '^(\d{1,2}|1[01]\d|12[0-7])$'
++  asym-gen:
++    regex: 'KeyPairGenerator\.getInstance\(\s*("(?i:RSA|DSA|DH|DiffieHellman)"|KeyProperties\.KEY_ALGORITHM_RSA)'
++  ec-gen:
++    regex: 'KeyPairGenerator\.getInstance\(\s*("(?i:EC|ECDSA|ECDH|X25519|Ed25519|XDH)"|KeyProperties\.KEY_ALGORITHM_EC)'
++  first-arg-lt2048:
++    has:
++      kind: call_suffix
++      has:
++        kind: value_arguments
++        has:
++          kind: value_argument
++          nthChild: 1
++          has: {matches: lt2048}
++rule:
++  any:
++    # KeyPairGenerator(RSA/DSA/DH).initialize(<2048)
++    - all:
++        - any:
++            - pattern: $G.initialize($$$A)
++            - pattern: $G?.initialize($$$A)
++            - pattern: initialize($$$A)
++        - matches: first-arg-lt2048
++        - any:
++            - inside: {stopBy: end, kind: function_declaration, matches: asym-gen}
++            # 產生器宣告在類別屬性:看接收者名稱對得上同檔 val g = KeyPairGenerator.getInstance("RSA")
++            - all:
++                - not: {inside: {stopBy: end, kind: function_declaration, matches: ec-gen}}
++                - inside:
++                    stopBy: end
++                    kind: source_file
++                    has:
++                      stopBy: end
++                      kind: property_declaration
++                      all:
++                        - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $G}}
++                        - matches: asym-gen
++    # RSAKeyGenParameterSpec(<2048, …)
++    - all:
++        - any:
++            - pattern: RSAKeyGenParameterSpec($$$A)
++            - pattern: java.security.spec.RSAKeyGenParameterSpec($$$A)
++        - matches: first-arg-lt2048
++    # KeyGenerator.init(<128)
++    - all:
++        - any:
++            - pattern: $K.init($N)
++            - pattern: $K.init($N, $R)
++            - pattern: $K?.init($N)
++            - pattern: init($N)
++            - pattern: init($N, $R)
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              has:
++                kind: value_argument
++                nthChild: 1
++                has: {matches: lt128}
++        - inside:
++            stopBy: end
++            any:
++              - kind: function_declaration
++              - kind: source_file
++            regex: 'KeyGenerator\.getInstance\('
++  not:
++    matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 30:資料來自自己的私有檔或設定)。任何 ObjectInputStream(…);
++# 同函式先寫 ObjectOutputStream 再從 ByteArrayInputStream 讀回的深複製、來源是私有檔或內建資源的不報
++id: kt-object-input-stream
++language: kotlin
++severity: warning
++message: '[DATA-92]用 ObjectInputStream 反序列化,資料若可被別人塞就能觸發 gadget 鏈;改用 JSON 或 Protobuf,非用不可就覆寫 resolveClass 只放白名單'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  any:
++    - pattern: ObjectInputStream($$$A)
++    - pattern: java.io.ObjectInputStream($$$A)
++  not:
++    any:
++      - matches: in-debug-only-branch
++      # 記憶體內深複製:同一函式先用 ObjectOutputStream 寫出,再從 ByteArrayInputStream 讀回
++      - all:
++          - has: {stopBy: end, kind: value_arguments, regex: 'ByteArrayInputStream\('}
++          - inside: {stopBy: end, kind: function_declaration, regex: 'ObjectOutputStream\('}
++      # 來源是 App 私有檔或內建資源
++      - has:
++          stopBy: end
++          kind: value_arguments
++          regex: 'openFileInput\(|getResourceAsStream\(|openRawResource\(|assets\.open\(|filesDir|cacheDir|noBackupFilesDir'
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外只有 1 處,量不夠)。SQLiteDatabase.openOrCreateDatabase、openDatabase、Room.databaseBuilder 的參數
++# 直接或經同函式、同類別的屬性用到 getExternalFilesDir、externalCacheDir、getExternalStorageDirectory 這類外部路徑
++id: kt-db-on-external-files
++language: kotlin
++severity: error
++message: '[DATA-93]資料庫檔放在外部儲存,別的 App 能讀改;改用預設的內部路徑(Room.databaseBuilder 只給檔名,或 getDatabasePath)'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  ext-path:
++    regex: 'getExternalFilesDirs?\(|externalCacheDirs?\b|getExternalCacheDirs?\(|externalMediaDirs|getExternalMediaDirs\(|getExternalStorageDirectory\(|getExternalStoragePublicDirectory\('
++  db-call:
++    any:
++      - pattern: SQLiteDatabase.openOrCreateDatabase($$$A)
++      - pattern: SQLiteDatabase.openDatabase($$$A)
++      - pattern: android.database.sqlite.SQLiteDatabase.openOrCreateDatabase($$$A)
++      - pattern: android.database.sqlite.SQLiteDatabase.openDatabase($$$A)
++      - pattern: Room.databaseBuilder($$$A)
++      - pattern: androidx.room.Room.databaseBuilder($$$A)
++rule:
++  all:
++    - matches: db-call
++    - any:
++        - has: {kind: call_suffix, has: {kind: value_arguments, matches: ext-path}}
++        - all:
++            - inside:
++                stopBy: end
++                any:
++                  - kind: function_declaration
++                  - kind: class_body
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $V}}
++                    - matches: ext-path
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has: {stopBy: end, kind: simple_identifier, pattern: $V}
++  not:
++    matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 25:資料來自可信來源)。會 parse 的函式或檔案裡 DocumentBuilderFactory.newInstance()
++# 而沒看到 disallow-doctype-decl 這類防護,或 setFeature(FEATURE_PROCESS_DOCDECL, true)。實驗時多排除的建置腳本三項這裡不帶
++id: kt-xxe-documentbuilder
++language: kotlin
++severity: warning
++message: '[DATA-94]XML 解析器沒關 DOCTYPE,惡意 XML 能讀本機檔或灌爆記憶體(XXE);改成 setFeature 關掉 DOCTYPE'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  mitigated:
++    regex: 'disallow-doctype-decl|external-general-entities|isExpandEntityReferences\s*=\s*false|setExpandEntityReferences\(\s*false|FEATURE_SECURE_PROCESSING|ACCESS_EXTERNAL_DTD'
++rule:
++  any:
++    - all:
++        - any:
++            - pattern: DocumentBuilderFactory.newInstance()
++            - pattern: javax.xml.parsers.DocumentBuilderFactory.newInstance()
++        - not: {inside: {stopBy: end, kind: function_declaration, matches: mitigated}}
++        - any:
++            - inside: {stopBy: end, kind: function_declaration}
++            - not: {inside: {stopBy: end, kind: source_file, matches: mitigated}}
++        # 只用 newDocument() 產生 XML、從頭到尾不解析的不算(樣本內最大宗誤報)
++        - any:
++            - inside: {stopBy: end, kind: function_declaration, regex: '\.parse\('}
++            - all:
++                - not: {inside: {stopBy: end, kind: function_declaration}}
++                - inside: {stopBy: end, kind: source_file, regex: '\.parse\('}
++    - all:
++        - any:
++            - pattern: $P.setFeature($F, true)
++            - pattern: $P?.setFeature($F, true)
++            - pattern: setFeature($F, true)
++  not:
++    matches: in-debug-only-branch
++constraints:
++  F:
++    regex: '(^|\.)FEATURE_PROCESS_DOCDECL$|#process-docdecl"$'
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 40 處抽判誤報 32:檢查碼、快取鍵、外部協定)。MessageDigest.getInstance 第一個參數是
++# 這四種演算法的字串,或同檔以這些字串宣告的常數
++id: kt-weak-message-digest
++language: kotlin
++severity: warning
++message: '[DATA-96]MD5、SHA-1、MD4、MD2 已能造碰撞,拿來做密碼雜湊、簽章、防竄改不安全;改用 SHA-256 以上,密碼改用 PBKDF2 或 Argon2'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  all:
++    - any:
++        - pattern: $RECV.getInstance($$$ARGS)
++    - has:
++        kind: navigation_expression
++        regex: '^(java\.security\.)?MessageDigest\.getInstance$'
++    - any:
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              has:
++                kind: value_argument
++                nthChild: 1
++                has: {kind: string_literal, regex: '^"(?i:MD5|SHA-?1|MD4|MD2)"$'}
++        # 同檔常數:const val ALGO = "MD5",再 getInstance(ALGO)
++        - all:
++            - inside:
++                stopBy: end
++                kind: source_file
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $C}}
++                    - has: {kind: string_literal, regex: '^"(?i:MD5|SHA-?1|MD4|MD2)"$'}
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    kind: value_argument
++                    nthChild: 1
++                    has: {kind: simple_identifier, pattern: $C}
++  not:
++    matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 36 處誤報 9)。屬性名含 password、secret、api_key、token、private_key(偏好鍵、欄位名、路徑名這類鍵名型名稱除外),
++# 值是八字以上、英數都有、不像鍵名或佔位字的字串字面值
++id: kt-hardcoded-secret-name
++language: kotlin
++severity: warning
++message: '[DATA-97]名稱像密碼、金鑰、token 的變數寫死字面值,反編譯 APK 就拿得到;改用伺服器換發的短效 token,或建置時注入、別進版本庫'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  secret-name:
++    kind: simple_identifier
++    regex: '(?i)password|passwd|secret|api_?key|token|private_?key'
++  not-a-key-name:
++    kind: simple_identifier
++    regex: '(?i)(^|_)(pref|prefs|extra|arg|param|field|header|column|action|tag|url|uri|endpoint|path|type|label|hint|title|error|msg|message|bundle|event|regex|pattern)(_|$)|^(pref|extra|arg|param|key|header|column|action)[A-Z_]|^KEY_|(Pref|Extra|Arg|Param|Header|Column|Field|Url|Path|Type|Label|Hint|Title)(Key|Name)?$|(File|Dir|Path|FileName|Filename)$|(_FILE|_DIR|_PATH)$'
++  secret-value:
++    kind: string_literal
++    all:
++      - regex: '^"[A-Za-z0-9+/=_\-.]{8,}"$'
++      - regex: '[0-9]'
++      - regex: '[A-Za-z]'
++      - not: {regex: '(?i)example|placeholder|changeme|xxx|your_|dummy|sample|fake|todo|replace'}
++      # 公開協定常數(各家第三方客戶端都抄同一個值,不是這個 App 的秘密)
++      - not: {regex: '^"(e82ckenh8dichen8|6A5AA1D4EAFF4E9FB37E23D68491D6F4)"$'}
++      # 長得像 snake_case 鍵名或點分隔名稱的值是設定鍵,不是秘密
++      - not: {regex: '^"[a-z][a-z0-9]*([_.\-][a-z0-9]+)+"$'}
++      - not: {regex: '^"[A-Z][A-Z0-9]*(_[A-Z0-9]+)+"$'}
++rule:
++  kind: property_declaration
++  all:
++    - has:
++        kind: variable_declaration
++        has:
++          all:
++            - matches: secret-name
++            - not: {matches: not-a-key-name}
++    - has: {matches: secret-value}
++  not:
++    matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:不接閘(樣本外 39 處誤報 31:ADB 簽章、護照晶片這類外部協定強制)。Cipher.getInstance 第一個參數是 "RSA" 或
++# "RSA/…/NoPadding",或同檔以這些字串宣告的常數
++id: kt-rsa-no-oaep
++language: kotlin
++severity: error
++message: '[DATA-98]RSA 沒指定填充或用 NoPadding,同一明文永遠同一密文、可被改寫;改用 "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++rule:
++  all:
++    - any:
++        - pattern: $RECV.getInstance($$$ARGS)
++    - has:
++        kind: navigation_expression
++        regex: '^(javax\.crypto\.)?Cipher\.getInstance$'
++    - any:
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              has:
++                kind: value_argument
++                nthChild: 1
++                has: {kind: string_literal, regex: '^"(?i:RSA(/[^/"]*/NoPadding)?)"$'}
++        # 同檔常數:const val ALGO = "MD5",再 getInstance(ALGO)
++        - all:
++            - inside:
++                stopBy: end
++                kind: source_file
++                has:
++                  stopBy: end
++                  kind: property_declaration
++                  all:
++                    - has: {kind: variable_declaration, has: {kind: simple_identifier, pattern: $C}}
++                    - has: {kind: string_literal, regex: '^"(?i:RSA(/[^/"]*/NoPadding)?)"$'}
++            - has:
++                kind: call_suffix
++                has:
++                  kind: value_arguments
++                  has:
++                    kind: value_argument
++                    nthChild: 1
++                    has: {kind: simple_identifier, pattern: $C}
++  not:
++    matches: in-debug-only-branch
+diff --git a/configs/ast-grep/kotlin-android/rules/api.yml b/configs/ast-grep/kotlin-android/rules/api.yml
+index 5897b9a56..a5e0c8a7f 100644
+--- a/configs/ast-grep/kotlin-android/rules/api.yml
++++ b/configs/ast-grep/kotlin-android/rules/api.yml
+@@ -262,10 +262,61 @@ rule:
+     - all:
+         - kind: assignment
+         - has:
+             kind: directly_assignable_expression
+             regex: (^|\.)\s*allow(Universal|File)AccessFromFileURLs$
+         - has:
+             kind: boolean_literal
+             regex: ^true$
+   not:
+     matches: in-debug-only-branch
++---
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 4:會擋(樣本外 fork 去重 244 處抽 120 處,誤報 2)。
++# setter 只看 setMixedContentMode 自己的直接參數(逐層寫到 value_argument,不用 stopBy: end,setMixedContentMode(resolve(0, 1)) 不報);
++# 賦值:常數 MIXED_CONTENT_ALWAYS_ALLOW 左邊以 mixedContentMode 結尾就報;字面值 0 另要接收者鏈有一段名字以 settings 或 Settings 結尾或是 getSettings()
++id: kt-webview-mixed-content-always
++language: kotlin
++severity: error
++message: '[API-48]WebView 允許 HTTPS 頁面載入 HTTP 子資源,中間人能換掉腳本;改用 MIXED_CONTENT_NEVER_ALLOW(預設值),要相容舊站才用 COMPATIBILITY_MODE'
++ignores: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**', '**/*-test/src/**', '**/*testing/src/**', '**/src/debug*/**']
++utils:
++  always-const:
++    regex: '^([\w.]+\.)?MIXED_CONTENT_ALWAYS_ALLOW$'
++  zero-lit:
++    kind: integer_literal
++    regex: '^0$'
++  always-allow:
++    any:
++      - matches: always-const
++      - matches: zero-lit
++rule:
++  any:
++    - all:
++        - any:
++            - pattern: $X.setMixedContentMode($M)
++            - pattern: $X?.setMixedContentMode($M)
++            - pattern: setMixedContentMode($M)
++        - has:
++            kind: call_suffix
++            has:
++              kind: value_arguments
++              has:
++                kind: value_argument
++                has: {matches: always-allow}
++    - all:
++        - kind: assignment
++        - any:
++            - all:
++                - has:
++                    kind: directly_assignable_expression
++                    regex: '(^|\.)\s*mixedContentMode$'
++                - has: {matches: always-const}
++            - all:
++                - has:
++                    kind: directly_assignable_expression
++                    regex: '(^|\.)\s*(\w*[sS]ettings|getSettings\(\s*\))\s*(\?|!!)?\s*\.'
++                - has:
++                    kind: directly_assignable_expression
++                    regex: '\.\s*mixedContentMode$'
++                - has: {matches: zero-lit}
++  not:
++    matches: in-debug-only-branch
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-biometric-no-crypto/src/main/kotlin/kt-biometric-no-crypto.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-biometric-no-crypto/src/main/kotlin/kt-biometric-no-crypto.kt
+new file mode 100644
+index 000000000..5ee01f119
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-biometric-no-crypto/src/main/kotlin/kt-biometric-no-crypto.kt
+@@ -0,0 +1,8 @@
++class LockScreen(private val biometricPrompt: BiometricPrompt) {
++    fun unlockOne(promptInfo: BiometricPrompt.PromptInfo) {
++        biometricPrompt.authenticate(promptInfo) // BAD 沒帶 CryptoObject
++    }
++    fun unlockTwo(prompt: BiometricPrompt, info: BiometricPrompt.PromptInfo) {
++        prompt.authenticate(info) // BAD
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-command-exec-nonliteral/src/main/kotlin/kt-command-exec-nonliteral.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-command-exec-nonliteral/src/main/kotlin/kt-command-exec-nonliteral.kt
+new file mode 100644
+index 000000000..c366467ac
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-command-exec-nonliteral/src/main/kotlin/kt-command-exec-nonliteral.kt
+@@ -0,0 +1,9 @@
++fun pingOne(host: String) {
++    Runtime.getRuntime().exec("ping -c 1 " + host) // BAD 串接
++    Runtime.getRuntime().exec("ping -c 1 $host") // BAD 字串樣板帶插值
++    Runtime.getRuntime().exec(String.format("ping -c 1 %s", host)) // BAD String.format
++}
++fun rootOne(cmd: String) {
++    ProcessBuilder("su", "-c", cmd).start() // BAD -c 後面接非字面值
++    Runtime.getRuntime().exec(arrayOf("sh", "-c", cmd)) // BAD exec 的陣列參數
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-db-on-external-files/src/main/kotlin/kt-db-on-external-files.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-db-on-external-files/src/main/kotlin/kt-db-on-external-files.kt
+new file mode 100644
+index 000000000..a9477c45a
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-db-on-external-files/src/main/kotlin/kt-db-on-external-files.kt
+@@ -0,0 +1,7 @@
++fun openOne(ctx: Context): SQLiteDatabase {
++    return SQLiteDatabase.openOrCreateDatabase(File(ctx.getExternalFilesDir(null), "app.db"), null) // BAD 外部儲存
++}
++fun openTwo(ctx: Context): AppDb {
++    val path = File(ctx.getExternalFilesDir(null), "room.db").path
++    return Room.databaseBuilder(ctx, AppDb::class.java, path).build() // BAD 經區域變數
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-hardcoded-secret-name/src/main/kotlin/kt-hardcoded-secret-name.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-hardcoded-secret-name/src/main/kotlin/kt-hardcoded-secret-name.kt
+new file mode 100644
+index 000000000..bdcbecb8b
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-hardcoded-secret-name/src/main/kotlin/kt-hardcoded-secret-name.kt
+@@ -0,0 +1,4 @@
++object ApiConfig {
++    const val API_KEY = "sk9f2Lq0xP7mZ3vB" // BAD 寫死金鑰
++    val password = "Abc12345xyz" // BAD 寫死密碼
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-loadurl-external/src/main/kotlin/kt-loadurl-external.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-loadurl-external/src/main/kotlin/kt-loadurl-external.kt
+new file mode 100644
+index 000000000..06fddb03f
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-loadurl-external/src/main/kotlin/kt-loadurl-external.kt
+@@ -0,0 +1,12 @@
++class WebActivity : Activity() {
++    fun showOne(webView: WebView) {
++        webView.loadUrl(intent.getStringExtra("url")!!) // BAD 直接用 Intent 帶來的網址
++    }
++    fun showTwo(webView: WebView) {
++        val target = intent.dataString ?: return
++        webView.loadUrl(target) // BAD 經區域變數
++    }
++    fun showThree(webView: WebView) {
++        intent.getStringExtra("url")?.let { webView.loadUrl(it) } // BAD let 的 it
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-object-input-stream/src/main/kotlin/kt-object-input-stream.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-object-input-stream/src/main/kotlin/kt-object-input-stream.kt
+new file mode 100644
+index 000000000..62c819408
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-object-input-stream/src/main/kotlin/kt-object-input-stream.kt
+@@ -0,0 +1,6 @@
++fun readOne(socket: Socket): Any? {
++    return ObjectInputStream(socket.getInputStream()).readObject() // BAD 網路來的資料
++}
++fun readTwo(file: File): Any? {
++    return java.io.ObjectInputStream(FileInputStream(file)).use { it.readObject() } // BAD 外部檔案
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-provider-openfile-traversal/src/main/kotlin/kt-provider-openfile-traversal.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-provider-openfile-traversal/src/main/kotlin/kt-provider-openfile-traversal.kt
+new file mode 100644
+index 000000000..97b4e031b
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-provider-openfile-traversal/src/main/kotlin/kt-provider-openfile-traversal.kt
+@@ -0,0 +1,13 @@
++class DocProvider : ContentProvider() {
++    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
++        val file = File(context!!.filesDir, uri.path!!) // BAD 直接用呼叫端給的路徑
++        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
++    }
++}
++class ImgProvider : ContentProvider() {
++    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
++        val name = uri.lastPathSegment
++        val file = File(context!!.cacheDir, name) // BAD 經區域變數
++        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-rsa-no-oaep/src/main/kotlin/kt-rsa-no-oaep.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-rsa-no-oaep/src/main/kotlin/kt-rsa-no-oaep.kt
+new file mode 100644
+index 000000000..b15f2f70f
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-rsa-no-oaep/src/main/kotlin/kt-rsa-no-oaep.kt
+@@ -0,0 +1,10 @@
++fun encryptOne(pub: PublicKey, data: ByteArray): ByteArray {
++    val c = Cipher.getInstance("RSA/ECB/NoPadding") // BAD 無填充
++    c.init(Cipher.ENCRYPT_MODE, pub)
++    return c.doFinal(data)
++}
++fun encryptTwo(pub: PublicKey, data: ByteArray): ByteArray {
++    val c = javax.crypto.Cipher.getInstance("RSA") // BAD 沒指定填充
++    c.init(Cipher.ENCRYPT_MODE, pub)
++    return c.doFinal(data)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-static-iv/src/main/kotlin/kt-static-iv.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-static-iv/src/main/kotlin/kt-static-iv.kt
+new file mode 100644
+index 000000000..e9ff681fd
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-static-iv/src/main/kotlin/kt-static-iv.kt
+@@ -0,0 +1,10 @@
++fun encryptOne(key: SecretKey, data: ByteArray): ByteArray {
++    val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
++    cipher.init(Cipher.ENCRYPT_MODE, key, IvParameterSpec(byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))) // BAD 全零 IV
++    return cipher.doFinal(data)
++}
++fun encryptTwo(key: SecretKey, data: ByteArray): ByteArray {
++    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
++    cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, "fixed-nonce1".toByteArray())) // BAD 寫死 nonce
++    return cipher.doFinal(data)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-weak-cipher-suite/src/main/kotlin/kt-weak-cipher-suite.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-weak-cipher-suite/src/main/kotlin/kt-weak-cipher-suite.kt
+new file mode 100644
+index 000000000..e34ed758a
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-weak-cipher-suite/src/main/kotlin/kt-weak-cipher-suite.kt
+@@ -0,0 +1,6 @@
++fun specOne(): ConnectionSpec = ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
++    .cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_SHA, CipherSuite.TLS_RSA_WITH_3DES_EDE_CBC_SHA) // BAD RC4、3DES
++    .build()
++fun specTwo(socket: SSLSocket) {
++    socket.setEnabledCipherSuites(arrayOf("TLS_RSA_WITH_NULL_SHA256")) // BAD NULL 加密
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-weak-key-size/src/main/kotlin/kt-weak-key-size.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-weak-key-size/src/main/kotlin/kt-weak-key-size.kt
+new file mode 100644
+index 000000000..6b4240caf
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-weak-key-size/src/main/kotlin/kt-weak-key-size.kt
+@@ -0,0 +1,10 @@
++fun genOne(): KeyPair {
++    val g = KeyPairGenerator.getInstance("RSA")
++    g.initialize(1024) // BAD RSA 1024
++    return g.generateKeyPair()
++}
++fun genTwo(): SecretKey {
++    val kg = KeyGenerator.getInstance("AES")
++    kg.init(64) // BAD 對稱金鑰 64 位元
++    return kg.generateKey()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-weak-message-digest/src/main/kotlin/kt-weak-message-digest.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-weak-message-digest/src/main/kotlin/kt-weak-message-digest.kt
+new file mode 100644
+index 000000000..4265408d4
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-weak-message-digest/src/main/kotlin/kt-weak-message-digest.kt
+@@ -0,0 +1,6 @@
++fun hashOne(pw: String): ByteArray {
++    return MessageDigest.getInstance("MD5").digest(pw.toByteArray()) // BAD MD5
++}
++fun hashTwo(data: ByteArray): ByteArray {
++    return java.security.MessageDigest.getInstance("SHA-1").digest(data) // BAD SHA-1
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-webview-file-access/src/main/kotlin/kt-webview-file-access.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-file-access/src/main/kotlin/kt-webview-file-access.kt
+new file mode 100644
+index 000000000..b833b60d6
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-file-access/src/main/kotlin/kt-webview-file-access.kt
+@@ -0,0 +1,7 @@
++fun setupOne(webView: WebView) {
++    webView.settings.allowFileAccess = true // BAD 屬性賦值
++    webView.settings.setAllowFileAccess(true) // BAD setter
++}
++fun setupTwo(s: WebSettings?) {
++    s?.setAllowFileAccess(true) // BAD 安全呼叫
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-webview-mixed-content-always/src/main/kotlin/kt-webview-mixed-content-always.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-mixed-content-always/src/main/kotlin/kt-webview-mixed-content-always.kt
+new file mode 100644
+index 000000000..f74902071
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-webview-mixed-content-always/src/main/kotlin/kt-webview-mixed-content-always.kt
+@@ -0,0 +1,10 @@
++fun setupOne(webView: WebView) {
++    webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW // BAD 常數
++    webView.settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW) // BAD setter
++}
++fun setupTwo(webView: WebView, webSettings: WebSettings) {
++    webView.settings.mixedContentMode = 0 // BAD 0 就是 MIXED_CONTENT_ALWAYS_ALLOW
++    webSettings.mixedContentMode = 0 // BAD 接收者名字以 Settings 結尾
++    webView.getSettings()!!.mixedContentMode = 0 // BAD getSettings()
++    webView.settings.setMixedContentMode(0) // BAD setter 寫字面值
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-xxe-documentbuilder/src/main/kotlin/kt-xxe-documentbuilder.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-xxe-documentbuilder/src/main/kotlin/kt-xxe-documentbuilder.kt
+new file mode 100644
+index 000000000..f51dd53f4
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-xxe-documentbuilder/src/main/kotlin/kt-xxe-documentbuilder.kt
+@@ -0,0 +1,8 @@
++fun parseOne(input: InputStream): Document {
++    val factory = DocumentBuilderFactory.newInstance() // BAD 沒關 DOCTYPE
++    return factory.newDocumentBuilder().parse(input)
++}
++fun parseTwo(parser: XmlPullParser, input: InputStream) {
++    parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, true) // BAD 開了 DOCTYPE 處理
++    parser.setInput(input, null)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-zip-slip/src/main/kotlin/kt-zip-slip.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-zip-slip/src/main/kotlin/kt-zip-slip.kt
+new file mode 100644
+index 000000000..93bfdd0c6
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-zip-slip/src/main/kotlin/kt-zip-slip.kt
+@@ -0,0 +1,13 @@
++fun unzipOne(zis: ZipInputStream, destDir: File) {
++    var entry = zis.nextEntry
++    while (entry != null) {
++        val f = File(destDir, entry.name) // BAD 名稱直接組路徑
++        f.outputStream().use { zis.copyTo(it) }
++        entry = zis.nextEntry
++    }
++}
++fun unzipTwo(zip: ZipFile, destDir: File) {
++    for (e in zip.entries()) {
++        destDir.resolve(e.name).outputStream().use { out -> zip.getInputStream(e).copyTo(out) } // BAD resolve
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-biometric-no-crypto/src/main/kotlin/kt-biometric-no-crypto.kt b/configs/ast-grep/kotlin-android/samples/good/kt-biometric-no-crypto/src/main/kotlin/kt-biometric-no-crypto.kt
+new file mode 100644
+index 000000000..155324a1c
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-biometric-no-crypto/src/main/kotlin/kt-biometric-no-crypto.kt
+@@ -0,0 +1,8 @@
++class LockScreen(private val biometricPrompt: BiometricPrompt) {
++    fun unlockOne(promptInfo: BiometricPrompt.PromptInfo, cipher: Cipher) {
++        biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher)) // GOOD 綁 Keystore 金鑰
++    }
++}
++fun loginOne(auth: AuthClient, request: LoginRequest) {
++    auth.authenticate(request) // GOOD 不是生物辨識
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-command-exec-nonliteral/src/main/kotlin/kt-command-exec-nonliteral.kt b/configs/ast-grep/kotlin-android/samples/good/kt-command-exec-nonliteral/src/main/kotlin/kt-command-exec-nonliteral.kt
+new file mode 100644
+index 000000000..aa4c325ab
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-command-exec-nonliteral/src/main/kotlin/kt-command-exec-nonliteral.kt
+@@ -0,0 +1,9 @@
++fun listOne() {
++    Runtime.getRuntime().exec("ls") // GOOD 純字面值
++    Runtime.getRuntime().exec(arrayOf("ls", "-l")) // GOOD 字面值陣列
++}
++fun pingOne(host: String) {
++    require(host.matches(Regex("^[a-z0-9.-]+$")))
++    ProcessBuilder("ping", "-c", "1", host).start() // GOOD 使用者資料當獨立參數、不經 shell
++    ProcessBuilder("su", "-c", "id").start() // GOOD -c 後面是字面值
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-db-on-external-files/src/main/kotlin/kt-db-on-external-files.kt b/configs/ast-grep/kotlin-android/samples/good/kt-db-on-external-files/src/main/kotlin/kt-db-on-external-files.kt
+new file mode 100644
+index 000000000..4c9eecc60
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-db-on-external-files/src/main/kotlin/kt-db-on-external-files.kt
+@@ -0,0 +1,6 @@
++fun openOne(ctx: Context): AppDb {
++    return Room.databaseBuilder(ctx, AppDb::class.java, "room.db").build() // GOOD 只給檔名,放內部儲存
++}
++fun openTwo(ctx: Context): SQLiteDatabase {
++    return SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("app.db"), null) // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-hardcoded-secret-name/src/main/kotlin/kt-hardcoded-secret-name.kt b/configs/ast-grep/kotlin-android/samples/good/kt-hardcoded-secret-name/src/main/kotlin/kt-hardcoded-secret-name.kt
+new file mode 100644
+index 000000000..49eff806c
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-hardcoded-secret-name/src/main/kotlin/kt-hardcoded-secret-name.kt
+@@ -0,0 +1,7 @@
++object PrefKeys {
++    const val passwordKey = "pref_password" // GOOD 鍵名型名稱
++    const val TOKEN_HEADER = "Authorization" // GOOD 標頭名稱
++}
++object ApiConfig {
++    val apiKey = BuildConfig.MAPS_API_KEY // GOOD 建置時注入
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-loadurl-external/src/main/kotlin/kt-loadurl-external.kt b/configs/ast-grep/kotlin-android/samples/good/kt-loadurl-external/src/main/kotlin/kt-loadurl-external.kt
+new file mode 100644
+index 000000000..2f42e3ba8
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-loadurl-external/src/main/kotlin/kt-loadurl-external.kt
+@@ -0,0 +1,12 @@
++class WebActivity : Activity() {
++    fun showOne(webView: WebView) {
++        val uri = Uri.parse(intent.getStringExtra("url") ?: return)
++        if (uri.scheme == "https" && uri.host in ALLOWED_HOSTS) webView.loadUrl(uri.toString()) // GOOD 驗過 scheme 與 host
++    }
++    fun showTwo(webView: WebView) {
++        webView.loadUrl("https://example.com/help") // GOOD 固定網址
++    }
++}
++fun showHelp(webView: WebView, page: String) {
++    webView.loadUrl("https://example.com/help/" + page) // GOOD 網址不是 Intent 帶進來的
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-object-input-stream/src/main/kotlin/kt-object-input-stream.kt b/configs/ast-grep/kotlin-android/samples/good/kt-object-input-stream/src/main/kotlin/kt-object-input-stream.kt
+new file mode 100644
+index 000000000..1e0d9a235
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-object-input-stream/src/main/kotlin/kt-object-input-stream.kt
+@@ -0,0 +1,8 @@
++fun readOne(ctx: Context): Any? {
++    return ObjectInputStream(ctx.openFileInput("state.bin")).use { it.readObject() } // GOOD App 私有檔
++}
++fun deepCopy(src: Serializable): Any? {
++    val bos = ByteArrayOutputStream()
++    ObjectOutputStream(bos).use { it.writeObject(src) }
++    return ObjectInputStream(ByteArrayInputStream(bos.toByteArray())).readObject() // GOOD 記憶體內深複製
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-provider-openfile-traversal/src/main/kotlin/kt-provider-openfile-traversal.kt b/configs/ast-grep/kotlin-android/samples/good/kt-provider-openfile-traversal/src/main/kotlin/kt-provider-openfile-traversal.kt
+new file mode 100644
+index 000000000..38491b482
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-provider-openfile-traversal/src/main/kotlin/kt-provider-openfile-traversal.kt
+@@ -0,0 +1,14 @@
++class DocProvider : ContentProvider() {
++    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
++        val base = context!!.filesDir
++        val file = File(base, uri.path!!)
++        if (!file.canonicalPath.startsWith(base.canonicalPath + File.separator)) throw SecurityException() // GOOD
++        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
++    }
++}
++class FixedProvider : ContentProvider() {
++    override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {
++        val file = File(context!!.filesDir, "export.json") // GOOD 固定檔名
++        return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
++    }
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-rsa-no-oaep/src/main/kotlin/kt-rsa-no-oaep.kt b/configs/ast-grep/kotlin-android/samples/good/kt-rsa-no-oaep/src/main/kotlin/kt-rsa-no-oaep.kt
+new file mode 100644
+index 000000000..e830ee67b
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-rsa-no-oaep/src/main/kotlin/kt-rsa-no-oaep.kt
+@@ -0,0 +1,10 @@
++fun encryptOne(pub: PublicKey, data: ByteArray): ByteArray {
++    val c = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding") // GOOD
++    c.init(Cipher.ENCRYPT_MODE, pub)
++    return c.doFinal(data)
++}
++fun encryptTwo(key: SecretKey, data: ByteArray): ByteArray {
++    val c = Cipher.getInstance("AES/GCM/NoPadding") // GOOD 不是 RSA
++    c.init(Cipher.ENCRYPT_MODE, key)
++    return c.doFinal(data)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-static-iv/src/main/kotlin/kt-static-iv.kt b/configs/ast-grep/kotlin-android/samples/good/kt-static-iv/src/main/kotlin/kt-static-iv.kt
+new file mode 100644
+index 000000000..138879a55
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-static-iv/src/main/kotlin/kt-static-iv.kt
+@@ -0,0 +1,11 @@
++fun encryptOne(key: SecretKey, data: ByteArray): Pair<ByteArray, ByteArray> {
++    val iv = ByteArray(16).also { SecureRandom().nextBytes(it) }
++    val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
++    cipher.init(Cipher.ENCRYPT_MODE, key, IvParameterSpec(iv)) // GOOD 每次新的 IV
++    return iv to cipher.doFinal(data)
++}
++fun decryptOne(key: SecretKey, iv: ByteArray, data: ByteArray): ByteArray {
++    val cipher = Cipher.getInstance("AES/GCM/NoPadding")
++    cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv)) // GOOD 用跟密文一起存的 IV
++    return cipher.doFinal(data)
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-weak-cipher-suite/src/main/kotlin/kt-weak-cipher-suite.kt b/configs/ast-grep/kotlin-android/samples/good/kt-weak-cipher-suite/src/main/kotlin/kt-weak-cipher-suite.kt
+new file mode 100644
+index 000000000..450da1cce
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-weak-cipher-suite/src/main/kotlin/kt-weak-cipher-suite.kt
+@@ -0,0 +1,6 @@
++fun specOne(): ConnectionSpec = ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
++    .cipherSuites(CipherSuite.TLS_AES_128_GCM_SHA256, CipherSuite.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256) // GOOD
++    .build()
++fun specTwo(socket: SSLSocket) {
++    socket.setEnabledCipherSuites(arrayOf("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384")) // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-weak-key-size/src/main/kotlin/kt-weak-key-size.kt b/configs/ast-grep/kotlin-android/samples/good/kt-weak-key-size/src/main/kotlin/kt-weak-key-size.kt
+new file mode 100644
+index 000000000..c87df35cc
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-weak-key-size/src/main/kotlin/kt-weak-key-size.kt
+@@ -0,0 +1,15 @@
++fun genOne(): KeyPair {
++    val g = KeyPairGenerator.getInstance("RSA")
++    g.initialize(3072) // GOOD
++    return g.generateKeyPair()
++}
++fun genTwo(): SecretKey {
++    val kg = KeyGenerator.getInstance("AES")
++    kg.init(256) // GOOD
++    return kg.generateKey()
++}
++fun genThree(): KeyPair {
++    val g = KeyPairGenerator.getInstance("EC")
++    g.initialize(256) // GOOD EC 256 位元夠
++    return g.generateKeyPair()
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-weak-message-digest/src/main/kotlin/kt-weak-message-digest.kt b/configs/ast-grep/kotlin-android/samples/good/kt-weak-message-digest/src/main/kotlin/kt-weak-message-digest.kt
+new file mode 100644
+index 000000000..0d5289e44
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-weak-message-digest/src/main/kotlin/kt-weak-message-digest.kt
+@@ -0,0 +1,6 @@
++fun hashOne(data: ByteArray): ByteArray {
++    return MessageDigest.getInstance("SHA-256").digest(data) // GOOD
++}
++fun hashTwo(data: ByteArray): ByteArray {
++    return MessageDigest.getInstance("SHA-512").digest(data) // GOOD
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-webview-file-access/src/main/kotlin/kt-webview-file-access.kt b/configs/ast-grep/kotlin-android/samples/good/kt-webview-file-access/src/main/kotlin/kt-webview-file-access.kt
+new file mode 100644
+index 000000000..9e3e9a6bd
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-webview-file-access/src/main/kotlin/kt-webview-file-access.kt
+@@ -0,0 +1,9 @@
++fun setupOne(webView: WebView) {
++    webView.settings.allowFileAccess = false // GOOD 明寫 false
++    webView.settings.setAllowFileAccess(false) // GOOD
++}
++fun setupTwo(webView: WebView, ctx: Context) {
++    // GOOD 本機內容走 WebViewAssetLoader 的 https 網址
++    val loader = WebViewAssetLoader.Builder().addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(ctx)).build()
++    webView.loadUrl("https://appassets.androidplatform.net/assets/index.html")
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-webview-mixed-content-always/src/main/kotlin/kt-webview-mixed-content-always.kt b/configs/ast-grep/kotlin-android/samples/good/kt-webview-mixed-content-always/src/main/kotlin/kt-webview-mixed-content-always.kt
+new file mode 100644
+index 000000000..ebfd7fdb6
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-webview-mixed-content-always/src/main/kotlin/kt-webview-mixed-content-always.kt
+@@ -0,0 +1,11 @@
++fun setupOne(webView: WebView) {
++    webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW // GOOD 建議值
++    webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE // GOOD 相容模式
++}
++fun setupTwo(webView: WebView, cfg: PlayerConfig) {
++    cfg.mixedContentMode = 0 // GOOD 接收者不是 WebView 設定
++    webView.settings.setMixedContentMode(resolve(0, 1)) // GOOD 0 是內層呼叫的參數
++}
++fun setupThree(webView: WebView) {
++    if (BuildConfig.DEBUG) { webView.settings.mixedContentMode = 0 } // GOOD 只在除錯版
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-xxe-documentbuilder/src/main/kotlin/kt-xxe-documentbuilder.kt b/configs/ast-grep/kotlin-android/samples/good/kt-xxe-documentbuilder/src/main/kotlin/kt-xxe-documentbuilder.kt
+new file mode 100644
+index 000000000..8bb6992a6
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-xxe-documentbuilder/src/main/kotlin/kt-xxe-documentbuilder.kt
+@@ -0,0 +1,9 @@
++fun parseOne(input: InputStream): Document {
++    val factory = DocumentBuilderFactory.newInstance()
++    factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) // GOOD 官方 XXE 指引
++    factory.isExpandEntityReferences = false
++    return factory.newDocumentBuilder().parse(input)
++}
++fun buildOne(): Document {
++    return DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument() // GOOD 只產生 XML、不解析
++}
+diff --git a/configs/ast-grep/kotlin-android/samples/good/kt-zip-slip/src/main/kotlin/kt-zip-slip.kt b/configs/ast-grep/kotlin-android/samples/good/kt-zip-slip/src/main/kotlin/kt-zip-slip.kt
+new file mode 100644
+index 000000000..b36e67732
+--- /dev/null
++++ b/configs/ast-grep/kotlin-android/samples/good/kt-zip-slip/src/main/kotlin/kt-zip-slip.kt
+@@ -0,0 +1,17 @@
++fun unzipOne(zis: ZipInputStream, destDir: File) {
++    var entry = zis.nextEntry
++    while (entry != null) {
++        val f = File(destDir, entry.name)
++        if (!f.canonicalPath.startsWith(destDir.canonicalPath + File.separator)) throw SecurityException() // GOOD 官方建議的檢查
++        f.outputStream().use { zis.copyTo(it) }
++        entry = zis.nextEntry
++    }
++}
++fun unzipTwo(ctx: Context, destDir: File) {
++    val zis = ZipInputStream(ctx.assets.open("seed.zip")) // GOOD App 內建資源
++    var entry = zis.nextEntry
++    while (entry != null) {
++        File(destDir, entry.name).outputStream().use { zis.copyTo(it) }
++        entry = zis.nextEntry
++    }
++}
+diff --git a/docs/lumos-toolchain-knowledge/Projects/Android資安靜態檢查補齊第二批_計劃.md b/docs/lumos-toolchain-knowledge/Projects/Android資安靜態檢查補齊第二批_計劃.md
+new file mode 100644
+index 000000000..2604aaa24
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Projects/Android資安靜態檢查補齊第二批_計劃.md
+@@ -0,0 +1,231 @@
++---
++type: project
++status: doing
++created: 2026-11-08
++updated: 2026-11-08
++tags:
++  - type/project
++  - status/doing
++  - scope/stack-knowledge
++  - risk/守衛面
++related:
++  - "[[Projects/Android資安與崩潰靜態檢查補齊_計劃]]"
++  - "[[Systems/kotlin規則包]]"
++lands_in:
++  - Systems/kotlin規則包
++---
++# Android資安靜態檢查補齊第二批_計劃
++
++> 白話:第一批(#174)拿三份業界清單補了資安與閃退檢查。使用者要「靜態能先掃描的實務隱患都先處理過」,於是再拿第四份獨立清單——資安掃描工具 MobSF 的 Kotlin 規則集(50 條)——逐條對照:已涵蓋 17、部分涵蓋 1、型錄有列但規則不接閘 4、型錄登記的現成檢查其實抓不到 5、型錄完全沒有 23(對照表在卷證 `experiment/mobsf-compare.md`)。抓不到的 5 條落在兩列錯登:DATA-83 登記的 Google 資安包 VulnerableCryptoAlgorithm 其實只看 `Cipher.getInstance`、抓不到 `MessageDigest.getInstance("MD5")`;DATA-79 登記的內建 SecretInSource 其實只看 Gemini SDK 的金鑰;另外 DATA-82 登記的兩條檢查都不報 `RSA/ECB/NoPadding`。這批把錯登那幾列縮回現成檢查真正管得到的範圍、管不到的另開新列,登記 Android Lint 內建有但型錄漏的 4 條,把形狀判得出的 16 種寫法寫成規則(量誤報後只有一條會擋),剩下只能看語意或沒有權威出處的寫進〈不做〉並各附回頭條件。
++
++PRIOR-ART: ①第四份清單:MobSF mobsfscan 的 Kotlin 規則集(https://github.com/MobSF/mobsfscan 的 `mobsfscan/rules/semgrep/kotlin/`),跟第一批用的 Android Lint、Google 資安包、MASTG 是不同來源;逐條對照由代理做、再派一個沒看過結論的乾淨代理用原始問題獨立複核(專案 CLAUDE.md「說沒有之前先派乾淨 agent 對一次」),對照代理原始回報存卷證 `experiment/mobsf-compare.md`。②錯登的依據:Google 資安包原始碼 `BadCryptographyUsageDetector.kt` 先判呼叫的是不是 `javax.crypto.Cipher`,弱演算法以前綴比對 Blowfish、DES、RC2、RC5、RC4、ARCFOUR(所以 DESede 也會報),RSA 只在配 PKCS1Padding 時報(摘錄存卷證 `experiment/lint-badcrypto-excerpt.md`);`SecretDetector.kt` 只看 `GenerativeModel` 建構子。③自寫規則的寫法沿用第一批:節點種類比對、八項路徑排除、共用除錯判斷 `utils/debug-only.yml`、樣本外語料量誤報(樣本外命中 ≥20、誤報 ≤10% 才放 `rules/`)。④生物辨識那條借 OWASP 的示範(MASTG-DEMO-0090 用 Semgrep 認「authenticate 沒帶 CryptoObject」);指令執行那條參考 Semgrep 的 Kotlin 規則 `kotlin.lang.security.command-injection-formatted-runtime-call`(只認串接與 String.format,官方標低信心)。⑤官方出處:各規則與型錄列的出處見〈依據來源〉,以 OWASP MASTG 測試頁與 Android 官方安全風險指南(https://developer.android.com/privacy-and-security/risks)為主。
++RETIRE-IF: 放 `rules-unwired/` 的 15 條,到 2027-05-08 換語料重量仍沒有一條達到升級條件 → 檢討是不是該整類改成表態題而不是規則;或 Android Lint、Google 資安包補上同一種檢查 → 那條自寫規則撤掉、型錄改指現成檢查。
++
++## 用詞
++
++- **樣本內/樣本外**:同第一批([[Projects/Android資安與崩潰靜態檢查補齊_計劃]]):樣本內=調規則形狀時看過的語料;樣本外=形狀凍結後另撈、排除前面出現過的 repo 的語料,誤報率以樣本外為準。
++- **錯登**:型錄某列的現成規則欄登記了某個檢查,但那個檢查實際抓不到這列寫的壞寫法。
++- **判不準**:判讀表的 `UNSURE`;算誤報比例時留在分母。
++- **外部協定強制**:寫法是外部格式或對方伺服器規定的(例:ADB 簽章用 RSA 無填充、模仿舊版 TLS 指紋),開發者改不了;這次判讀一律算誤報。
++- **產品需求**:App 的功能本身就要這種寫法(例:閱讀 App 讓使用者加自訂 http 書源、App 內建瀏覽器);開發者改得動、只是改了功能就沒了,判讀照真問題算,另外計數。
++- **fork 去重**:同一份程式被 fork 成多個 repo 時(同檔名、同內容),判讀只算一次。
++
++## 範圍
++
++1. **錯登那幾列縮回現成檢查真正管的範圍**(`skills/kotlin-idioms/checks-catalog.md`;管不到的那半另開新列,不併進同一列——同一列的通電批次只能寫一種值,型錄自檢 `check.py` 的批四口徑看到現成規則欄有 `內建:`、`資安包:` 規則碼就要求整列寫批四,併進去型錄又會說「整列都擋」):
++   - DATA-83:名稱改「加密用弱演算法」;壞寫法換成 `Cipher.getInstance("DES/CBC/PKCS5Padding")`、`"RC4"`、`"Blowfish"`;現成規則欄寫成 `資安包:VulnerableCryptoAlgorithm(只看 Cipher.getInstance,前綴比對 DES、RC2、RC5、Blowfish、RC4、ARCFOUR,DESede 也會報)`;情境欄照新範圍寫。雜湊那半移到新列 DATA-96。
++   - DATA-79:名稱改「寫死 Gemini API 金鑰或網址帶帳密」;壞寫法換成 `GenerativeModel(modelName = "…", apiKey = "AIza…")`、`https://user:pass@host`;現成規則欄寫成 `內建:SecretInSource(只看 Gemini SDK 的 GenerativeModel 金鑰,AGP 8.3.0 以上才有)、AuthLeak(只看網址裡的 user:pass@)`。一般寫死秘密移到新列 DATA-97。
++   - DATA-82:壞寫法欄尾加一句「RSA 不帶 OAEP 填充(`RSA/ECB/NoPadding`)這列登記的兩條檢查都不報,見 DATA-98」。
++   - 三列的實測狀態欄在原記之前加一句:2026-11-08 讀 Google 原始碼確認範圍、原登記多算的那半移到哪一列。
++2. **登記 Android Lint 內建漏登的 4 條**(都是 Android Open Source Project 提供、Warning、預設開;各檢查頁的 Since 版本:SdCardPath 最早、SetWorldWritable 1.5.0、UnsafeDynamicallyLoadedCode 2.0.0、UnsanitizedFilenameFromContentProvider **8.8.0**):
++   - `SdCardPath` 進 DATA-27 的現成規則欄(原寫「待查(Lint SdCardPath 代號待查)」),通電批次改「告警帶寫法=批一、批四(CI 範本:Android Lint)」;標準寫法欄加一句「別照 Lint 訊息改用 `Environment.getExternalStorageDirectory().getPath()`,那個寫法會被同列的自寫規則 kt-external-storage-hardcoded 擋;改用 `getExternalFilesDir` 或 MediaStore」。
++   - `SetWorldWritable` 併進 DATA-85(同列都是 Lint,通電批次不變)。
++   - `UnsafeDynamicallyLoadedCode`(從非程式庫目錄動態載入程式碼)另開 ARCH-89。
++   - `UnsanitizedFilenameFromContentProvider`(信任別人 provider 給的檔名)另開 DATA-95,名稱尾標「(AGP 8.8.0 以上才有)」,實測狀態寫明範本下限 AGP 8.5.1 的專案在 8.8.0 以前照接 CI 也不會有這條檢查。
++3. **型錄新列**(編號照型錄現有最大號往下:API 到 47、ARCH 到 88、DATA 到 87;規則訊息開頭用下列編號):
++
++   | 型錄列 | 內容 | 管它的 |
++   |---|---|---|
++   | API-48 | WebView 允許混合內容 | `kt-webview-mixed-content-always` |
++   | API-49 | 外部傳進來的網址直接丟進 WebView | `kt-loadurl-external` |
++   | API-50 | TLS 開弱加密套件 | `kt-weak-cipher-suite` |
++   | API-51 | WebView 開啟本機檔案存取 | `kt-webview-file-access` |
++   | ARCH-89 | 從非程式庫目錄動態載入程式碼 | 內建 UnsafeDynamicallyLoadedCode |
++   | ARCH-90 | 用非字面值組外部指令 | `kt-command-exec-nonliteral` |
++   | ARCH-91 | 生物辨識沒綁加密物件 | `kt-biometric-no-crypto` |
++   | DATA-88 | 解壓縮沒擋路徑穿越(Zip Slip) | `kt-zip-slip` |
++   | DATA-89 | ContentProvider 開檔沒擋路徑穿越 | `kt-provider-openfile-traversal` |
++   | DATA-90 | 加密用固定 IV | `kt-static-iv` |
++   | DATA-91 | 金鑰長度太短 | `kt-weak-key-size` |
++   | DATA-92 | ObjectInputStream 反序列化 | `kt-object-input-stream` |
++   | DATA-93 | 資料庫放外部儲存 | `kt-db-on-external-files` |
++   | DATA-94 | XML 解析沒關外部實體(XXE) | `kt-xxe-documentbuilder` |
++   | DATA-95 | 信任別人 provider 給的檔名 | 內建 UnsanitizedFilenameFromContentProvider |
++   | DATA-96 | 用弱雜湊(MD5、SHA-1、MD4) | `kt-weak-message-digest` |
++   | DATA-97 | 原始碼裡寫死一般秘密 | `kt-hardcoded-secret-name` |
++   | DATA-98 | RSA 不帶 OAEP 填充 | `kt-rsa-no-oaep` |
++
++   來源欄帶〔查證 2026-11-08:網址〕(〈依據來源〉那幾頁,實作時逐一 curl 確認);實測狀態寫樣本內外的命中與誤報。DATA-92 跟 DATA-78 不同一件事(DATA-78 管的是類別實作 Serializable)。
++4. **自寫規則 16 條**(`configs/ast-grep/kotlin-android/`,形狀照卷證 `experiment/draft-rules.yml.txt`,混合內容那條照 `experiment/mixed-rejudge-rule.yml.txt`,新三條照〈實驗〉):
++   - **會擋**(`rules/api.yml`)`kt-webview-mixed-content-always`:`mixedContentMode = …MIXED_CONTENT_ALWAYS_ALLOW`、`setMixedContentMode(…ALWAYS_ALLOW)`,以及寫整數字面值 `0`(這個常數的值)。setter 只看 `setMixedContentMode` 自己的直接參數(往下逐層寫到 value_argument,不用 `stopBy: end`:ast-grep 的 has 帶 `stopBy: end` 會一路找到葉節點,參數裡任何內層呼叫帶 0 都會報);賦值的 `0` 只在左邊接收者鏈有一段名字以 `settings` 或 `Settings` 結尾(`settings`、`webSettings`、`getSettings()`,容許 `?.`、`!!.`)時才報,`cfg.mixedContentMode = 0` 不報。
++   - **不接閘**(`rules-unwired/`)其餘 15 條;放哪支檔:`rules-unwired/api.yml` 放 `kt-loadurl-external`、`kt-weak-cipher-suite`、`kt-webview-file-access`;`rules-unwired/architecture.yml` 放 `kt-command-exec-nonliteral`、`kt-biometric-no-crypto`;`rules-unwired/data.yml` 放其餘 10 條。理由分兩型:誤報超過一成、或樣本外命中不到 20 處(各條數字見〈實驗〉)。
++   - **路徑排除**:每條都恰好是規則包既有的八項清單(同第一批,測試 `_KTSEC_IGNORES` 照比)。實驗時 Zip Slip 與 XXE 多排除了建置腳本(`buildSrc`、`build-logic`、`*.gradle.kts`),進 repo 不帶這三項,所以那兩條在建置腳本裡的命中會比〈實驗〉量到的多;兩條都不接閘,不影響推送。
++   - **訊息**:照規則包 WHY「[型錄編號] 錯在哪;改用 <最短修法>」,連前綴不超過 120 字(`check.py` 的 MSG_MAX;初稿有 8 條超過,實作時縮修法說明,XXE 只留「改成 setFeature 關掉 DOCTYPE」一句,完整修法寫在型錄那列的標準寫法欄)。
++   - **樣本**:每條 `samples/bad/<id>/` 至少兩處命中、`samples/good/<id>/` 至少兩段,照規則包既有硬要求(`check.py` 樣本檢查)。
++   - 升級條件同第一批:樣本外命中 ≥20、誤報 ≤10%。
++5. **規則包節點**([[Systems/kotlin規則包]]):把「資安四條自寫規則放哪一級、升級條件」那行 WHY 改寫成涵蓋兩批(第二批:混合內容放 `rules/api.yml`、其餘 15 條放哪支檔與理由),不另開新行,升級條件只寫一處。
++6. **型錄的手寫節跟著改**(〈待查證〉〈統計〉〈輸入與口徑〉都是人手寫的,沒有程式產生;型錄〈輸入與口徑〉那句「〈待查證〉一節由程式從這兩欄撈出」跟程式對不上,改寫成「手寫,改主表時一起改」):
++   - 〈待查證〉刪主表已解決的列:DATA-27(主表現成規則欄已不含待查、來源欄已有〔查證〕),以及 2026-11-05 逐列查證後主表已解決、這一節沒跟著刪的 83 列(實作時用 S4 的判準機械挑出;刪完剩 51 列)。
++   - 〈統計〉用程式重數:總列數、各主題、各級、情境、待查證、規則包條數(含不接閘條數)、被會擋的規則守到的列數、逐列查證列數。
++   - 〈輸入與口徑〉的「未接」定義補「量過誤報但超過一成或樣本外命中不到 20 處」。
++   - 判準放進型錄自檢 `configs/ast-grep/kotlin-android/check.py`(接在 catalog_problems,推送前的規則包自檢會跑):〈統計〉每個手寫的數(總列數、各主題、各級、規則包各等級與不接閘、逐列查證、待查證)要等於重數的值;〈待查證〉跟主表雙向一致(該列的都列、已解決的不列、兩格寫不寫內容跟主表一致)。測試只驗自檢真型錄乾淨、寫死的改壞各被抓到(〈驗收條款〉S4;代碼審 r2 改,原本判準寫在測試檔)。
++
++**不做**:
++- 通知放敏感資料、密碼欄鍵盤快取:要看內容敏不敏感;鍵盤快取的設定在版面 XML 的 `android:inputType`,不在 Kotlin 原始碼裡,規則包掃不到。
++- LocalServerSocket 沒驗證連線方:Android 參考頁只寫它是什麼、沒寫風險,找不到權威出處支持「出現就是錯」;MobSF 那條也沒附出處。
++- 自寫 XOR 加密:XOR 在雜湊、校驗、圖形運算都常見,形狀分不出是不是拿來加密,MASTG 也只寫「看到 XOR 要再查」。
++- 深層連結資料跨函式流進 WebView:要追資料流;同一函式內直接 `loadUrl(intent…)` 的那段由 `kt-loadurl-external` 管。
++- Jackson default typing:Android 少用 Jackson,語料撈不到。
++- MobSF 的 XMLInputFactory、XMLDecoder 三種 XXE:Android SDK 沒有這兩個 API(官方參考頁 404)。
++- MobSF 的 hidden UI:只是可疑,不是隱患。
++- OAuth 自訂 scheme:RFC 8252 允許自訂 scheme 搭 PKCE,MobSF 講得太重。
++- 不改第一批已上線的規則形狀(`kt-webview-file-url-access` 只管 …FromFileURLs 兩個開關,`setAllowFileAccess` 另開新規則)。
++
++REVISIT:2027-05-08 換一批語料(至少三個不是這次出現過的 Kotlin 為主開源 App)重量第二批 15 條不接閘規則,照升級條件升;外部網址丟進 WebView 那條(樣本外誤報 7%、只差命中數)優先
++REVISIT:2027-05-08 看 Android Lint 或 Google 資安包有沒有補上 MessageDigest 弱雜湊、一般寫死秘密、RSA 無填充的檢查,有就把 DATA-96、DATA-97、DATA-98 改指現成檢查、自寫規則撤掉
++REVISIT:2027-05-08 查 MASTG 與 Android 官方安全指南有沒有出 LocalServerSocket、自寫 XOR 加密、通知敏感資料的測試頁;有權威出處且寫得出形狀的,開型錄列與不接閘規則
++REVISIT:2026-11-22 型錄〈統計〉的情境決策表那行(證據樣式主寫、例外、兩段都寫(無)的列數 8、31、5)重數對不上,查清口徑後改成程式數得出的值
++REVISIT:2026-12-08 型錄自檢的批四口徑只判「已寫批四的列標籤對不對」,不判「現成規則欄登了 Android Lint 檢查的列一定要寫批四」;2026-11-08 量過全型錄有 11 列會被新判法點到(API-9、STATE-5、UI-1、UI-3、UI-10、UI-16、ARCH-16、ARCH-17、ARCH-44、TEST-23、PERF-2,多半註記只部分涵蓋,疑似第四批刻意只標批一),查第四批計劃的理由後決定改 check.py 還是在口徑寫明例外
++REVISIT:2027-05-08 查規則包有沒有開始掃版面 XML;有就把密碼欄 `inputType` 沒帶 textNoSuggestions 寫成規則
++REVISIT:2027-05-08 再用 GitHub 程式搜尋撈 Jackson `enableDefaultTyping`、`activateDefaultTyping` 的 Kotlin 檔;正式碼命中 ≥5 處就開型錄列與不接閘規則
++
++## 實驗
++
++2026-11-08,ast-grep 0.51.1,規則初稿放 scratchpad 跑(未進 repo),卷證 `governance/review-reports/android資安靜態檢查補齊第二批/experiment/`。語料:①五個開源 App 整份加 Now in Android;②GitHub 程式搜尋按規則關鍵字撈約 1,560 個 repo、2,067 支檔(排除資安教材與規則樣本 repo);③形狀凍結後另撈 2,952 個 repo 當樣本外(與①②不重疊)。每處命中由判讀代理打開前後 20 行判,單條超過 40 處以種子 20261109 抽 40 處;誤報比例=誤報÷抽判數(判不準留在分母)。判準:正式碼、開發者改得動才算真問題;外部協定強制、測試碼、範例碼算誤報。
++
++**MobSF 對照**(50 條):23 條型錄沒有的,13 條寫成規則(弱 IV 與固定 IV 兩條併成 `kt-static-iv`,命令注入兩條併成 `kt-command-exec-nonliteral`,深層連結進 WebView 由 `kt-loadurl-external` 管同函式那段)、5 條不做(hidden UI、OAuth、三種 Android 沒有的 XXE)、5 條寫進〈不做〉加回頭條件(鍵盤快取、通知、XOR、LocalServerSocket、Jackson);5 條錯登由 3 條規則管(MD4、MD5、SHA-1 併成 `kt-weak-message-digest`);部分涵蓋 1 條由 `kt-db-on-external-files` 補。16 條規則裡 `kt-xxe-documentbuilder` 不是 MobSF 來的(MobSF 的 XXE 用的都是 Android 沒有的 API,Android 真正的入口 DocumentBuilderFactory 是對照代理順帶指出的),4 條內建漏登也是順帶發現。
++
++| 規則 | 樣本外命中/抽判/誤報 | 誤報比例 | 放哪 |
++|---|---|---|---|
++| kt-webview-mixed-content-always | 273(fork 去重 244)/120/2 | 1.7%(95% 上界 5.9%) | `rules/` |
++| kt-loadurl-external | 14/14/1 | 7.1% | `rules-unwired/`(命中不到 20) |
++| kt-provider-openfile-traversal | 6/6/0 | 0% | `rules-unwired/`(命中太少) |
++| kt-weak-cipher-suite | 6/6/0 | 0%(樣本內 82%) | `rules-unwired/` |
++| kt-db-on-external-files | 1/1/0 | — | `rules-unwired/` |
++| kt-hardcoded-secret-name | 36/36/9 | 25.0% | `rules-unwired/` |
++| kt-zip-slip | 24/24/10 | 41.7% | `rules-unwired/` |
++| kt-static-iv | 30/30/16 | 53.3% | `rules-unwired/` |
++| kt-xxe-documentbuilder | 66/40/25 | 62.5% | `rules-unwired/` |
++| kt-weak-key-size | 6/6/4 | 66.7% | `rules-unwired/` |
++| kt-object-input-stream | 194/40/30 | 75.0% | `rules-unwired/` |
++| kt-rsa-no-oaep | 39/39/31 | 79.5% | `rules-unwired/` |
++| kt-weak-message-digest | 143/40/32 | 80.0% | `rules-unwired/` |
++| kt-webview-file-access | 59/40/16 | 40.0% | `rules-unwired/` |
++| kt-biometric-no-crypto | 46/40/2 | 5.0%(95% 上界 16.5%) | `rules-unwired/`(判真問題要看保護的是什麼) |
++| kt-command-exec-nonliteral | 55/40/28 | 70.0%(收窄前) | `rules-unwired/`(收窄後未重量) |
++
++- **新三條**(設計審 r1 後補,語料另撈:6 個單詞查詢、排除前面出現過的 repo 與資安教材,871 個 repo;repo 名雜湊奇偶分樣本內外,形狀在樣本內調完凍結,雜湊 `experiment/new3-frozen.sha.txt`;判讀表 `experiment/new3-judge.tsv`):
++  - WebView 本機檔案存取:誤報大宗是只載自家 `file:///android_asset` 的 WebView、範例碼;判不準 7 處多是 EPUB 閱讀器這類要讀本機檔的功能。
++  - 生物辨識:判讀另加一條準則「成功回呼放行的是錢包、密碼、金鑰、帳號、登入、App 鎖這類敏感資產才算真問題」;真問題 32 處多數是 App 鎖畫面。MASTG-TEST-0327 寫的是「每個值得保護的敏感操作」,要不要綁加密物件看保護的是什麼,形狀定不了,所以點估計 5% 也不升 `rules/`。規則靠接收者或參數名稱含 prompt、biometric、info 這類字樣擋自家包裝,`bp.authenticate(pi)` 會漏。
++  - 指令執行:量到的形狀(任何非字面參數)誤報 70%,大宗是桌面或 CLI 工具、內部常數與 pid、執行使用者指令本來就是功能的工具;真問題 3 處都是外部資料組進 `su -c`。進 repo 時收窄成 Semgrep `command-injection-formatted-runtime-call` 的形狀:`exec` 的單一字串參數是串接、`String.format` 或帶插值的字串樣板,或 `ProcessBuilder` / `exec` 的參數有 `"-c"` 而後面接非字面值;收窄後沒重量(事後分類:`-c` 型 10 處裡真問題 2、單一字串 21 處裡 0)。路徑排除照八項,不帶實驗時多加的建置腳本三項。
++- **混合內容那條重判**(設計審 r1 後):修 setter 與 `= 0` 兩處形狀,語料③命中數不變(273,兩處修法只對人造例子有效);同一份程式 fork 成多個 repo 的只留一處(244 處),以種子 20261110 抽 120 處:真問題 118、誤報 2(都是函式庫附帶的示範 App)。真問題裡 25 處是產品需求(自訂書源 8、App 內建瀏覽器 7、自架區網主機 3、預覽使用者自寫 HTML 2、開第三方文章網址 5)。判讀表 `experiment/mixed-rejudge-judge.tsv`、去重表 `experiment/mixed-rejudge-dedup-groups.tsv`;第一次 40 處抽判(誤報 2)保留在 `judge-oos.tsv`。
++- 誤報最大宗:外部協定強制(ADB 簽章、模仿舊版 TLS 指紋、護照晶片、第三方 API 格式)集中在 RSA、靜態 IV、弱雜湊、弱套件四條;資料來自可信來源(自己的私有檔、自己的設定)集中在反序列化與 XXE。
++- 量不到的:漏報(語料偏向命中);外部網址那條的命中都沒看 AndroidManifest,不確定那些畫面有沒有 exported。
++- XXE 的修法照 Android 官方 XXE 指引(https://developer.android.com/privacy-and-security/risks/xml-external-entities-injection);Android 的 DOM 解析器預設會不會解析外部實體,沒實測。
++
++## 實務隱患
++
++- **只有一條會擋**:其餘 15 條只登記、不擋,消費專案推送前不會被這些寫法擋;型錄那幾列照實寫「未接」。
++- **混合內容那條會擋人**:被擋的多半是真問題,但裡面約兩成是產品需求(自訂書源、內建瀏覽器),那種用 `lint-waive` 附理由放行;誤報是函式庫附帶的示範 App。
++- **混合內容那條的已知漏報**:值藏在 if、elvis、括號、轉型裡(`= if (b) ALWAYS_ALLOW else NEVER_ALLOW`)、先存進變數或常數再給、`settings.apply { mixedContentMode = 0 }` 這種不帶接收者的 `0`、`0x0` 這類寫法都不報;規則只認「直接把這個常數或 0 給它」。
++- **錯登修正讓型錄看起來「少防」**:DATA-83、DATA-79、DATA-82 原本看起來整列有現成檢查,修正後縮回現成檢查真正管的範圍,管不到的那半另開新列寫「未接」;這是讓型錄說實話,不是放寬。
++- **DATA-95 在舊 AGP 上不存在**:範本下限 AGP 8.5.1,這條 8.8.0 才有;8.8.0 以前的專案照範本接 CI 也不會擋,型錄那列名稱標版本。
++- **SdCardPath 的建議跟自家規則打架**:Lint 訊息建議改用 `Environment.getExternalStorageDirectory().getPath()`,同列的 kt-external-storage-hardcoded 會擋這個寫法;型錄 DATA-27 標準寫法寫明改用 `getExternalFilesDir` 或 MediaStore。
++- 已排除:金流:不碰付款
++- 已排除:對外送出:規則與型錄都是本機讀檔;實驗語料由 GitHub 公開檔下載,只讀
++- 已排除:不可逆:新增規則、型錄列與文字,退提交即回原狀
++- 守衛面:新增一條會擋的推送前規則(擋得更多),走完整設計審
++
++## 依據來源
++
++| 機制 | 依據 | 出處 |
++|---|---|---|
++| 要把靜態能掃描的隱患都先處理 | 使用者要求 | 使用者 2026-11-07:「目標是把Android靜態能先掃描的實務隱患都先處理過」 |
++| 第四份對照清單 | MobSF mobsfscan Kotlin 規則集 | https://github.com/MobSF/mobsfscan |
++| DATA-83、DATA-82 錯登 | Google 資安包原始碼與檢查頁 | https://github.com/google/android-security-lints 、https://googlesamples.github.io/android-custom-lint-rules/checks/VulnerableCryptoAlgorithm.md.html |
++| DATA-79 錯登 | Android Lint 檢查頁 | https://googlesamples.github.io/android-custom-lint-rules/checks/SecretInSource.md.html |
++| 四條漏登的內建檢查與 Since 版本 | Android Lint 檢查頁(2026-11-08 curl 確認 200、Warning、預設開) | https://googlesamples.github.io/android-custom-lint-rules/checks/UnsanitizedFilenameFromContentProvider.md.html |
++| Zip Slip | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/zip-path-traversal |
++| provider 路徑穿越 | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/path-traversal |
++| 混合內容 | Android WebSettings 參考頁 | https://developer.android.com/reference/android/webkit/WebSettings |
++| setter 只看直接參數 | ast-grep 關係規則文件:has 預設只看下一層,stopBy: end 一路找到底 | https://ast-grep.github.io/guide/rule-config/relational-rule.html |
++| WebView 本機檔案存取 | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion |
++| RSA 無填充、弱雜湊 | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm |
++| 固定 IV | MASTG-TEST-0309 | https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0309/ |
++| 金鑰太短 | MASTG-TEST-0208 | https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0208/ |
++| 反序列化 | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/unsafe-deserialization |
++| 弱加密套件 | Android 官方安全風險指南(DES、RC4 列為弱加密) | https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm |
++| 外部網址丟進 WebView | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/unsafe-uri-loading |
++| 外部儲存資料庫 | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/sensitive-data-external-storage |
++| XXE | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/xml-external-entities-injection |
++| 寫死秘密 | Android 官方安全風險指南 | https://developer.android.com/privacy-and-security/risks/hardcoded-cryptographic-secrets |
++| 生物辨識沒綁加密物件 | MASTG-TEST-0327 與示範 MASTG-DEMO-0090 | https://mas.owasp.org/MASTG/tests/android/MASVS-AUTH/MASTG-TEST-0327/ |
++| 用非字面值組外部指令 | CWE-78;Semgrep Kotlin 規則 | https://cwe.mitre.org/data/definitions/78.html 、https://github.com/semgrep/semgrep-rules/blob/develop/kotlin/lang/security/command-injection-formatted-runtime-call.yaml |
++| 誤報一成門檻、新規則先不接閘 | 規則包 RULE 與操作第 1 條 | [[Systems/kotlin規則包]] |
++
++## 驗收條款
++
++- [S1] 當逐例測試對預期值表每一列 S1 的寫法各跑一次規則包時,該報的 應 恰好被那條規則報一次、不該報的 應 不被它報 [test:t_kotlin_rulepack_security_rules]
++- [S2] 當列舉規則包時,16 條新規則 應 各在範圍 4 寫的那支檔(會擋的 `rules/api.yml` 一條,其餘照 `rules-unwired/` 的三支檔),每條訊息 應 以範圍 3 那張表的型錄列編號開頭、連前綴不超過 120 字,路徑排除 應 恰好是規則包既有八項 [test:t_kotlin_rulepack_security_rules]
++- [S3] 當讀型錄時,DATA-83 的現成規則欄 應 寫明 VulnerableCryptoAlgorithm 只看 Cipher、DATA-79 應 寫明 SecretInSource 只看 Gemini 金鑰,兩列與 DATA-82 的壞寫法 應 不再含移到新列的那半;範圍 3 那張表的 18 列 應 各在型錄出現;SdCardPath、SetWorldWritable、UnsafeDynamicallyLoadedCode、UnsanitizedFilenameFromContentProvider 應 各在型錄出現,DATA-95 名稱 應 帶 AGP 8.8.0;型錄自檢 應 是 0 個問題、還沒逐列查證 0 列 [test:t_kt_catalog_security_lint_batch2]
++- [S4] 當讀型錄〈統計〉與〈待查證〉時,總列數、各主題列數、規則包條數、不接閘條數 應 等於程式從表格與規則檔數出的值,〈待查證〉應 不列主表現成規則欄已不含待查、來源欄已不含未核對字樣的列 [test:t_kt_catalog_stats_consistent]
++
++## 預期值表
++
++| 條款 | 輸入 | 預期 | 來源 |
++|---|---|---|---|
++| S1 | `webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW` | 報 | Android WebSettings 參考頁:建議 MIXED_CONTENT_NEVER_ALLOW |
++| S1 | `webView.settings.mixedContentMode = 0` | 報 | Android WebSettings 參考頁:MIXED_CONTENT_ALWAYS_ALLOW 的常數值是 0 |
++| S1 | `webSettings.mixedContentMode = 0` | 報 | 同上;接收者名字以 Settings 結尾 |
++| S1 | `webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW` | 不報 | 同上:建議值 |
++| S1 | `cfg.mixedContentMode = 0` | 不報 | 設計審 r1 通才席:接收者不是 WebView 設定 |
++| S1 | `webView.settings.setMixedContentMode(resolve(0, 1))` | 不報 | 設計審 r1 邊界席:0 是內層呼叫的參數,不是這個 setter 的 |
++| S1 | `webView.settings.setMixedContentMode(0)` | 報 | Android WebSettings 參考頁 |
++| S1 | 放在 `src/test/kotlin/` 底下的混合內容寫法 | 不報 | 規則包既有路徑排除八項 |
++| S1 | `fun unzip(zis: ZipInputStream, destDir: File) { var entry = zis.nextEntry; while (entry != null) { val f = File(destDir, entry.name); f.outputStream().use { zis.copyTo(it) }; entry = zis.nextEntry } }` | 報(不接閘那條) | Android 官方 Zip Path Traversal 頁 |
++| S1 | 同上一列,`val f = …` 之後加 `if (!f.canonicalPath.startsWith(destDir.canonicalPath + File.separator)) throw SecurityException()` | 不報 | 同上:官方建議的檢查 |
++| S1 | `Cipher.getInstance("RSA/ECB/NoPadding")` | 報(不接閘那條) | Android 官方 broken-cryptographic-algorithm 頁:RSA 要 OAEP |
++| S1 | `Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")` | 不報 | Android 官方 broken-cryptographic-algorithm 頁 |
++| S1 | `IvParameterSpec(byteArrayOf(0, 0, 0, 0))` | 報(不接閘那條) | MASTG-TEST-0309:CBC 要每次新的 IV |
++| S1 | `MessageDigest.getInstance("MD5")` | 報(不接閘那條) | Android 官方 broken-cryptographic-algorithm 頁 |
++| S1 | `MessageDigest.getInstance("SHA-256")` | 不報 | Android 官方 broken-cryptographic-algorithm 頁 |
++| S1 | `webView.loadUrl(intent.getStringExtra("url")!!)` | 報(不接閘那條) | Android 官方 unsafe-uri-loading 頁 |
++| S1 | `val password = "Abc12345xyz"` | 報(不接閘那條) | Android 官方 hardcoded-cryptographic-secrets 頁 |
++| S1 | `val passwordKey = "pref_password"` | 不報 | 實驗語料:鍵名型名稱不是秘密 |
++| S1 | `webView.settings.allowFileAccess = true` | 報(不接閘那條) | Android 官方 webview-unsafe-file-inclusion 頁 |
++| S1 | `webView.settings.allowFileAccess = false` | 不報 | 同上:建議值 |
++| S1 | `biometricPrompt.authenticate(promptInfo)` | 報(不接閘那條) | MASTG-TEST-0327:沒帶 CryptoObject 只靠回呼判成功 |
++| S1 | `biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))` | 不報 | MASTG-TEST-0327 |
++| S1 | `Runtime.getRuntime().exec("ping -c 1 " + host)` | 報(不接閘那條) | CWE-78:外部輸入組進指令 |
++| S1 | `Runtime.getRuntime().exec("ls")` | 不報 | 同上:純字面值沒有外部輸入 |
++| S2 | 列舉規則包 | 一條在 `rules/api.yml`、15 條照範圍 4 的三支 `rules-unwired/` 檔,訊息都 ≤120 字、以型錄編號開頭,路徑排除都是八項 | 本計劃〈實驗〉的放置與規則包既有格式 |
++| S3 | 真實型錄跑型錄自檢、讀 DATA-79、DATA-82、DATA-83、DATA-95 與範圍 3 的 18 列 | 0 個問題、還沒逐列查證 0 列、三列只寫現成檢查管得到的範圍、18 列都在、DATA-95 帶 AGP 8.8.0 | Google 檢查原始碼與 Android Lint 檢查頁 |
++| S4 | 真實型錄 | 〈統計〉總列數等於表格列數加總、規則包與不接閘條數等於規則檔裡的 id 數;〈待查證〉沒有 DATA-27 | 本計劃範圍 6:〈統計〉的數要等於重數的值 |
++
++## 回退
++
++退回本計劃的提交:16 條規則與樣本、型錄新列與 DATA-27、DATA-79、DATA-82、DATA-83、DATA-85 的改動、〈待查證〉〈統計〉〈輸入與口徑〉的改動、測試擴充與新測試、規則包節點那行改回第一批版本。卷證留著。
++
++## 天花板
++
++1. 誤報只量了命中裡的比例,漏報沒量;四條規則的樣本外命中不到 10 處。
++2. 只能看語意或沒有權威出處的 5 種隱患這批不處理(〈不做〉,各附回頭條件)。
++3. 判讀把外部協定強制算誤報、把產品需求算真問題;換個算法幾條規則的誤報率會變,混合內容那條若把產品需求也算誤報是 27/120(22.5%)。
++4. 指令執行那條進 repo 的是收窄後的形狀,誤報沒重量;生物辨識那條靠名稱字樣擋自家包裝,換了名字的寫法會漏。
++5. 混合內容那條的 fork 去重只認逐字相同,換了路徑或套件名的近親重複還在(合併兩對後是 2/118,結論不變)。
++
++## 審計修正紀錄
++
++- r1(2026-11-08,4 席:通才、邊界、整合、架構對齊):19 條/blocking 6/錯登修正會讓型錄自檢逼整列寫批四、〈待查證〉〈統計〉其實手寫、DATA-95 要 AGP 8.8、Zip Slip 預期值照字面測不到、語意 7 種判得太快、混合內容 setter 帶 stopBy: end 誤報;全數折入,混合內容那條擴大抽判到 120 處重判仍留 `rules/`,新增 3 條形狀規則。
++- 席報告:`governance/review-reports/android資安靜態檢查補齊第二批/r1-*.md`;處置與先查世界見 `r1-intake.md`。
++- 實作時更正(2026-11-08):S4 的〈待查證〉判準在真型錄上挑出 DATA-27 以外還有 83 列過期,範圍 6 照條款原意擴成一起刪;Semgrep registry 網址回 404,改用 GitHub 規則原始檔;補弱加密套件的依據列。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 17b669ee7..d39cb6a2c 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -43,23 +43,24 @@ summary: |-
+   PITFALL:範本內容守衛只比對「整節有沒有這串字」時,散文也寫了同一串設定,把 properties 圍欄裡的設定行改成 true 或刪掉,守衛照綠 [出處:代碼審 code-android儀器測試範本 r1 測試 F1 翻紅實驗] [根因:_kt_instr_template_problems 對 T12 只做整節子字串比對] [修法:只在 T12 的 properties 與 kotlin 圍欄裡比對整行 key=value 與 systemProperty 行;改壞只改程式行] [同族:t_kotlin_catalog_instrumented_batch_notes 的改壞只比對舊字串本身(測試 F3),已改成拿改壞資料跑同一組判準 _kt_ui39_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:照 Android 實驗專案骨架組 app 模組建置停在 processDebugMainManifest [出處:2026-11-06 儀器測試範本代碼審 r1 修補實跑(驗證紀錄 E13)] [根因:骨架節沒列 app/src/main/AndroidManifest.xml,AGP 找不到就停] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本 T12 建清單片段的條件改成 if (true) 或拿掉,兩個 systemProperty 變常駐 true,內容守衛照綠 [出處:代碼審 code-android儀器測試範本 r2 通才 F2 翻紅實驗] [根因:_kt_instr_template_problems 只比對 systemProperty 行在不在 kotlin 圍欄,不看有沒有被 -ParchunitFreezeInit 條件包住] [修法:配大括號取 if (project.hasProperty("archunitFreezeInit")) 區塊,兩行只認區塊內] [同族:凍結格矩陣基準與 E13 對不上(通才 F1),加 _kt_t12_freeze_rows_problems] [test:t_kotlin_test_templates_content_guards]
+   PITFALL:範本檔頭在第一個 `## ` 之前插一段含 `## ` 的圍欄,內容守衛把檔頭截在圍欄裡、漏讀後面的 T4 Ktor 句而誤報 [出處:代碼審 code-android儀器測試範本 r2 架構對齊 F1 同族收尾] [根因:_kt_instr_wording_problems 的檔頭用 split("\n## ") 手切字串,不看圍欄] [修法:檔頭取到第一個圍欄外的 `## `,圍欄判定走 check.py 的 _visible_lines,同 _kt_template_sections] [test:t_kotlin_test_templates_content_guards]
+   REVISIT:2026-11-21 check.py 剝圍欄另寫一份的理由寫「scripts/lumos 沒有 .py 副檔名、不能 import 借用」,但情境題證據自測已用 load_lumos 載入主程式;決定要不要改成借主程式的 _fence_regions,(2026-11-08 起 --sg 自檢的 SARIF 探針也載主程式,「零依賴路徑不載主程式」這個理由已不成立)
+   WHY:測試品質標準〈Android 本機單元測試的驗收標準〉協程與 Flow 兩段尾各加一句「照抄起手」指到 kotlin-idioms 的行為測試範本,並寫下範本實驗踩到的兩個坑(backgroundScope 的工作 advanceUntilIdle 不推、Turbine 自己的檢查失敗收證不算斷言) [出處:[[Projects/Android行為測試範本與架構測試_計劃]] 做法 4] [因:寫測試的人先讀標準,範本放在 kotlin-idioms 那邊,沒指路句就找不到] [不選:把範本全文搬進標準(會變兩份要同步)] [test:t_kotlin_test_templates_linked]
+   WHY:測試品質標準加兩句指路:Room〈升級〉條指範本 T6,〈Android 本機單元測試的驗收標準〉用既有「照抄起手:…(T7–T11 節)」格式指範本,Robolectric 的 sdk=34 等骨架細節指到範本〈Android 實驗專案骨架〉節、不在標準重抄 [出處:[[Projects/Android儀器測試範本與架構測試_計劃]] 做法 4;代碼審 code-android儀器測試範本 r1 架構對齊 F2] [因:照抄起手的範本跟撰寫標準放兩處,標準要指得到範本;骨架細節抄兩處要同步維護] [test:t_kotlin_test_templates_linked]
+   WHY:觸發字停用字表加 Composable、Inject、Modifier,D-33、D-34、D-39 拿掉這三個字 [出處:[[Projects/Android寫法回合結束檢查與改檔前推列_計劃]] 實驗 E9] [因:Now in Android 文件頻率超過 8%,當觸發字會讓改檔前推列每次都亮;三列剩下的字複量都低於 8%] [test:t_catalog_stop_triggers]
+   WHY:型錄自檢另印「還沒逐列查證 N 列」:來源欄沒有〔查證 日期:網址〕、名稱也沒標(出處不全)的列,只提醒、不進 catalog_problems、不改退出碼;2026-11-07 逐列查完後剩 API-14、TEST-31 兩列,2026-11-08 使用者裁定標出處不全、三條規則搬 rules-unwired/,現在 0 列 [出處:[[Projects/Android寫法型錄逐列查證_計劃]]、[[Projects/計劃依據來源必填_計劃]] S5] [因:使用者要每列有打開讀過的官方出處,數字讓新增的列沒查證時每次自檢都看得到] [test:t_kt_catalog_unverified_rows]
+   WHY:引用型錄出處不全列的規則只准放不接閘的 rules-unwired/(2026-11-08 起;原本是只准提示級,提示級也可能被專案自行宣告接閘),rules-unwired/ 也收還沒在真專案量過誤報的新規則,任何等級 [出處:[[Projects/規則包覆核兩級接新增告警閘_計劃]]] [因:覆核級與提示級將來可能接閘,依據不足的規則要有一個確定不擋的位置] [test:t_kotlin_rulepack_unwired_dir]
+-  WHY:資安四條自寫規則只有 kt-webview-file-url-access 放會擋的 rules/api.yml;kt-webview-debugging-enabled、kt-insecure-tls-version 放 rules-unwired/api.yml,kt-secretkeyspec-literal-key 放 rules-unwired/data.yml;升到 rules/ 的條件是樣本外語料(排除已出現過的 repo)至少 20 處命中且誤報不超過一成,升時同步改型錄那列的通電批次與實測狀態 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 實驗第二輪] [因:樣本外量測檔案網址 80 處誤報 0;除錯模式 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版);舊版 TLS 樣本內已達 10.5%;寫死金鑰樣本外只撈到 3 處] [不選:四條都放 rules/(第一輪樣本內的結論,形狀是看同一批語料調的、偏樂觀)] [test:t_kotlin_rulepack_security_rules]
++  WHY:資安自寫規則兩批各只有一條放會擋的 rules/api.yml(第一批 kt-webview-file-url-access、第二批 kt-webview-mixed-content-always);第一批 kt-webview-debugging-enabled、kt-insecure-tls-version 放 rules-unwired/api.yml,kt-secretkeyspec-literal-key 放 rules-unwired/data.yml;第二批 kt-loadurl-external、kt-weak-cipher-suite、kt-webview-file-access 放 rules-unwired/api.yml,kt-command-exec-nonliteral、kt-biometric-no-crypto 放 rules-unwired/architecture.yml,其餘 10 條放 rules-unwired/data.yml;兩批升到 rules/ 的條件都是樣本外語料(排除已出現過的 repo)至少 20 處命中且誤報不超過一成,升時同步改型錄那列的通電批次與實測狀態 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 實驗第二輪、[[Projects/Android資安靜態檢查補齊第二批_計劃]] 實驗] [因:第一批樣本外量測檔案網址 80 處誤報 0;除錯模式 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版);舊版 TLS 樣本內已達 10.5%;寫死金鑰樣本外只撈到 3 處;第二批混合內容樣本外 fork 去重 244 處抽判 120 處誤報 2,其餘 15 條樣本外誤報超過一成或命中不到 20 處(外部網址 14 處誤報 1;生物辨識誤報 5% 但判真問題要看保護的是什麼,形狀定不了)] [不選:四條都放 rules/(第一輪樣本內的結論,形狀是看同一批語料調的、偏樂觀)] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄現成規則欄的 Google 資安規則包檢查寫成「資安包:<檢查 id>」,批四口徑 _B4_LINT 照「內建:」一樣認,通電批次標「批四(CI 範本:Android Lint)」;24 條檢查頁都沒寫 disabled by default,B4_DEFAULT_OFF 不加 [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 3] [因:資安包掛在 Android Lint 上、同一個 CI 步驟跑;提供者原名太長且不是工具名] [test:t_kt_catalog_batch4_wiring] [test:t_kt_catalog_security_lint_ids]
+   WHY:「只在除錯版才走到」只有 utils/debug-only.yml 一份共用判斷(四份 sgconfig 掛 utilDirs,規則用 not: matches: in-debug-only-branch 引用,判法看語法節點種類不看字面):條件本身是 BuildConfig.DEBUG(可帶套件名)或用「且」連起來而其中一項是它的 if 成立那一支、條件是 !BuildConfig.DEBUG 的 if 的 else 那一支、when 的 DEBUG 分支、when (BuildConfig.DEBUG) 的 true 分支;「或」、否定、括號裡藏在「或」底下都不算;各規則檔內自帶的 utils:(compose.yml 等)只在同一檔內共用,跨檔的才放 utils/ [出處:[[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 代碼審 r2] [因:原本 API-19、DATA-16 一套(連 !BuildConfig.DEBUG 與 else 分支都當開關)、兩條新資安規則另抄一套,同一包兩種判法] [不選:每條規則各寫一份(兩支檔要手抄同步)] [test:t_kotlin_rulepack_security_rules]
++  WHY:型錄〈統計〉〈待查證〉兩節是手寫的,判準住在 check.py 的 stats_problems(每個手寫的數要等於從主表、〈待查證〉、規則檔重數的值)與 pending_problems(〈待查證〉跟主表雙向一致:該列的都列、已解決的不列、兩格寫不寫內容跟主表一致),接在 catalog_problems,推送前的規則包自檢與 --catalog-only 都會跑;〈待查證〉的未核對字樣用 _PENDING_SRC(未開頁核對、搜尋摘要),不含 _WEAK_SRC 的「無網址」(那種列要標出處不全) [出處:[[Projects/Android資安靜態檢查補齊第二批_計劃]] 代碼審 r2 架構對齊乙、審查乙] [因:判準寫在測試檔時兩份抄本字樣不一致,推送閘也看不到統計漂移] [不選:測試裡另寫一套重數(第二種做法)] [test:t_kt_catalog_stats_consistent]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+ 
+ ## 檔案
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 6229983bb..c198c0486 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126837,44 +126837,137 @@ _KTSEC_CASES = (
+     ("src/main/kotlin/C41.kt", "if (!BuildConfig.DEBUG) { } else { builder.fallbackToDestructiveMigration() }", "kt-room-destructive-migration", 0),
+     ("src/main/kotlin/C42.kt", "when (BuildConfig.DEBUG) { true -> builder.fallbackToDestructiveMigration(); false -> Unit }",
+      "kt-room-destructive-migration", 0),
+     ("src/main/kotlin/C43.kt", "when (BuildConfig.DEBUG) { false -> builder.fallbackToDestructiveMigration(); true -> Unit }",
+      "kt-room-destructive-migration", 1),
+     ("src/main/kotlin/C44.kt", 'a.b.enabledProtocols = arrayOf("SSLv3")', "kt-insecure-tls-version", 1),
+     ("src/main/kotlin/C45.kt", 'socket.apply { enabledProtocols = arrayOf("SSLv3") }', "kt-insecure-tls-version", 1),
+     ("src/main/kotlin/C46.kt", 'sock?.setEnabledProtocols(arrayOf<String>("SSLv3"))', "kt-insecure-tls-version", 1),
+     ("src/main/kotlin/C47.kt", "if (a && (b || BuildConfig.DEBUG)) { webView.settings.allowFileAccessFromFileURLs = true }",
+      "kt-webview-file-url-access", 1),
++    # 第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] 預期值表 S1,片段照原文):混合內容(會擋)
++    ("src/main/kotlin/C48.kt", "webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C49.kt", "webView.settings.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C50.kt", "webSettings.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C51.kt", "webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW", "kt-webview-mixed-content-always", 0),
++    ("src/main/kotlin/C52.kt", "cfg.mixedContentMode = 0", "kt-webview-mixed-content-always", 0),
++    ("src/main/kotlin/C53.kt", "webView.settings.setMixedContentMode(resolve(0, 1))", "kt-webview-mixed-content-always", 0),
++    ("src/main/kotlin/C54.kt", "webView.settings.setMixedContentMode(0)", "kt-webview-mixed-content-always", 1),
++    # 放在 src/test 底下不報;對照組是 C48(同一行放 src/main 要報),證明不報是路徑排除擋的
++    ("src/test/kotlin/C55.kt", "webView.settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
++    # 第二批不接閘的 15 條(rules-unwired/,四份設定檔照樣掃)
++    ("src/main/kotlin/C56.kt", "fun unzip(zis: ZipInputStream, destDir: File) { var entry = zis.nextEntry; while (entry != null) {"
++     " val f = File(destDir, entry.name); f.outputStream().use { zis.copyTo(it) }; entry = zis.nextEntry } }", "kt-zip-slip", 1),
++    ("src/main/kotlin/C57.kt", "fun unzip(zis: ZipInputStream, destDir: File) { var entry = zis.nextEntry; while (entry != null) {"
++     " val f = File(destDir, entry.name); if (!f.canonicalPath.startsWith(destDir.canonicalPath + File.separator)) throw SecurityException();"
++     " f.outputStream().use { zis.copyTo(it) }; entry = zis.nextEntry } }", "kt-zip-slip", 0),
++    ("src/main/kotlin/C58.kt", 'Cipher.getInstance("RSA/ECB/NoPadding")', "kt-rsa-no-oaep", 1),
++    ("src/main/kotlin/C59.kt", 'Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")', "kt-rsa-no-oaep", 0),
++    ("src/main/kotlin/C60.kt", "IvParameterSpec(byteArrayOf(0, 0, 0, 0))", "kt-static-iv", 1),
++    ("src/main/kotlin/C61.kt", 'MessageDigest.getInstance("MD5")', "kt-weak-message-digest", 1),
++    ("src/main/kotlin/C62.kt", 'MessageDigest.getInstance("SHA-256")', "kt-weak-message-digest", 0),
++    ("src/main/kotlin/C63.kt", 'webView.loadUrl(intent.getStringExtra("url")!!)', "kt-loadurl-external", 1),
++    ("src/main/kotlin/C64.kt", 'val password = "Abc12345xyz"', "kt-hardcoded-secret-name", 1),
++    ("src/main/kotlin/C65.kt", 'val passwordKey = "pref_password"', "kt-hardcoded-secret-name", 0),
++    ("src/main/kotlin/C66.kt", "webView.settings.allowFileAccess = true", "kt-webview-file-access", 1),
++    ("src/main/kotlin/C67.kt", "webView.settings.allowFileAccess = false", "kt-webview-file-access", 0),
++    # 生物辨識那條另要同檔出現 BiometricPrompt(真程式會 import 它);片段前加一行帶型別的宣告,第二行才是預期值表原文
++    ("src/main/kotlin/C68.kt", "val biometricPrompt: BiometricPrompt = prompt()\n    biometricPrompt.authenticate(promptInfo)", "kt-biometric-no-crypto", 1),
++    ("src/main/kotlin/C69.kt", "val biometricPrompt: BiometricPrompt = prompt()\n    biometricPrompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))",
++     "kt-biometric-no-crypto", 0),
++    ("src/main/kotlin/C70.kt", 'Runtime.getRuntime().exec("ping -c 1 " + host)', "kt-command-exec-nonliteral", 1),
++    ("src/main/kotlin/C71.kt", 'Runtime.getRuntime().exec("ls")', "kt-command-exec-nonliteral", 0),
++    # 代碼審 r1 補(審查甲 1:setter 帶常數、getSettings()!!、apply 裡不帶接收者的常數;架構對齊乙 1:六條只驗放置的規則各補一壞一好,形狀照 samples/)
++    ("src/main/kotlin/C72.kt", "webView.settings.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW)", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C73.kt", "webView.getSettings()!!.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C74.kt", "settings.apply { mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW }", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C75.kt", "ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS).cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_SHA).build()",
++     "kt-weak-cipher-suite", 1),
++    ("src/main/kotlin/C76.kt", "ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS).cipherSuites(CipherSuite.TLS_AES_128_GCM_SHA256).build()",
++     "kt-weak-cipher-suite", 0),
++    ("src/main/kotlin/C77.kt", "class DocProvider : ContentProvider() { override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {"
++     " val file = File(context!!.filesDir, uri.path!!); return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) } }",
++     "kt-provider-openfile-traversal", 1),
++    ("src/main/kotlin/C78.kt", "class DocProvider : ContentProvider() { override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor? {"
++     " val base = context!!.filesDir; val file = File(base, uri.path!!);"
++     " if (!file.canonicalPath.startsWith(base.canonicalPath + File.separator)) throw SecurityException();"
++     " return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY) } }", "kt-provider-openfile-traversal", 0),
++    ("src/main/kotlin/C79.kt", 'val g = KeyPairGenerator.getInstance("RSA")\n    g.initialize(1024)', "kt-weak-key-size", 1),
++    ("src/main/kotlin/C80.kt", 'val g = KeyPairGenerator.getInstance("RSA")\n    g.initialize(3072)', "kt-weak-key-size", 0),
++    ("src/main/kotlin/C81.kt", "ObjectInputStream(socket.getInputStream()).readObject()", "kt-object-input-stream", 1),
++    ("src/main/kotlin/C82.kt", 'ObjectInputStream(ctx.openFileInput("state.bin")).use { it.readObject() }', "kt-object-input-stream", 0),
++    ("src/main/kotlin/C83.kt", 'SQLiteDatabase.openOrCreateDatabase(File(ctx.getExternalFilesDir(null), "app.db"), null)', "kt-db-on-external-files", 1),
++    ("src/main/kotlin/C84.kt", 'SQLiteDatabase.openOrCreateDatabase(ctx.getDatabasePath("app.db"), null)', "kt-db-on-external-files", 0),
++    ("src/main/kotlin/C85.kt", "fun parseOne(input: InputStream): Document { val factory = DocumentBuilderFactory.newInstance();"
++     " return factory.newDocumentBuilder().parse(input) }", "kt-xxe-documentbuilder", 1),
++    ("src/main/kotlin/C86.kt", "fun parseOne(input: InputStream): Document { val factory = DocumentBuilderFactory.newInstance();"
++     ' factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);'
++     " return factory.newDocumentBuilder().parse(input) }", "kt-xxe-documentbuilder", 0),
++    # 代碼審 r2 補(會擋那條逐條件改壞掃一遍,改壞後照綠的 8 種各補一例;改壞清單見 r2-intake.md〈逐條件改壞〉)
++    ("src/main/kotlin/C87.kt", "webView.settings?.setMixedContentMode(0)", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C88.kt", "settings.apply { setMixedContentMode(0) }", "kt-webview-mixed-content-always", 1),
++    # 右邊是常數但左邊不是 mixedContentMode:把常數存進自己的變數,規則只認直接給這個屬性
++    ("src/main/kotlin/C89.kt", "lastMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
++    # 審查甲二 1:WebView 設定別的屬性給 0 是正常設定,不准被這條會擋的規則報
++    ("src/main/kotlin/C90.kt", "webView.settings.textZoom = 0", "kt-webview-mixed-content-always", 0),
++    ("src/main/kotlin/C91.kt", "webView.settings?.mixedContentMode = 0", "kt-webview-mixed-content-always", 1),
++    ("src/main/kotlin/C92.kt", "if (BuildConfig.DEBUG) { webView.settings.mixedContentMode = 0 }", "kt-webview-mixed-content-always", 0),
++    # 名稱只是剛好以這串結尾的自家常數,不是 WebSettings 的那個
++    ("src/main/kotlin/C93.kt", "webView.settings.mixedContentMode = Cfg.NO_MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
++    # 字面值要恰好是 0,不是含 0 的別的整數
++    ("src/main/kotlin/C94.kt", "webView.settings.mixedContentMode = 10", "kt-webview-mixed-content-always", 0),
+ )
+ # 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號)(計劃範圍 4 與〈實驗〉第二輪的放置)
+ _KTSEC_PLACE = {
+     "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
+     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
+     "kt-insecure-tls-version": ("rules-unwired", "api.yml", "API-45"),
+     "kt-secretkeyspec-literal-key": ("rules-unwired", "data.yml", "DATA-87"),
++    # 第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 3 的型錄編號、範圍 4 的放置)
++    "kt-webview-mixed-content-always": ("rules", "api.yml", "API-48"),
++    "kt-loadurl-external": ("rules-unwired", "api.yml", "API-49"),
++    "kt-weak-cipher-suite": ("rules-unwired", "api.yml", "API-50"),
++    "kt-webview-file-access": ("rules-unwired", "api.yml", "API-51"),
++    "kt-command-exec-nonliteral": ("rules-unwired", "architecture.yml", "ARCH-90"),
++    "kt-biometric-no-crypto": ("rules-unwired", "architecture.yml", "ARCH-91"),
++    "kt-zip-slip": ("rules-unwired", "data.yml", "DATA-88"),
++    "kt-provider-openfile-traversal": ("rules-unwired", "data.yml", "DATA-89"),
++    "kt-static-iv": ("rules-unwired", "data.yml", "DATA-90"),
++    "kt-weak-key-size": ("rules-unwired", "data.yml", "DATA-91"),
++    "kt-object-input-stream": ("rules-unwired", "data.yml", "DATA-92"),
++    "kt-db-on-external-files": ("rules-unwired", "data.yml", "DATA-93"),
++    "kt-xxe-documentbuilder": ("rules-unwired", "data.yml", "DATA-94"),
++    "kt-weak-message-digest": ("rules-unwired", "data.yml", "DATA-96"),
++    "kt-hardcoded-secret-name": ("rules-unwired", "data.yml", "DATA-97"),
++    "kt-rsa-no-oaep": ("rules-unwired", "data.yml", "DATA-98"),
+ }
+ # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+ _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+                   "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+ 
+ 
+ def t_kotlin_rulepack_security_rules():
+     """[S3][S4] 資安四條自寫規則([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 4):預期值表 S3 每一列各寫成一支 kt 檔
+     (src/debug 那列放 src/debug/kotlin/ 底下),用規則包四份設定檔(sgconfig*.yml)實跑 ast-grep,該報的恰好被對應那條報一次、
+     不該報的不被它報;S4 驗目錄配置、路徑排除八項、訊息以新型錄列編號開頭且不超過 120 字。判準來源是計劃預期值表
+     (MASTG-TEST-0252、0227、0217、0212 與設計審 r1 實測的寫法),預期值寫死在 _KTSEC_CASES,不拿規則自己算。
+     翻紅釘:賦值那支改回中介變數配整串 → C01 紅;除錯判法改回「條件含 DEBUG 就不報」→ C06 紅;else 分支沒排除 → C07 紅;
+     TLS 版本清單加回 "TLS" → C12 紅;tlsVersions 只認同一行 → C13 紅;寫死金鑰認變數組的 byteArrayOf → C18 紅;
+     拿掉 src/debug 排除 → C19 紅;拿掉不帶接收者的呼叫 → C21 紅;拿掉 setEnabledProtocols → C22 紅;
+     會擋那條拿掉 BuildConfig.DEBUG 判斷 → C23 紅;共用判斷拿掉 else 排除 → C25 紅、拿掉 when 分支 → C26 紅、拿掉「且」→ C27 紅、
+     「或」也放行 → C28、C39 紅;「且」那支拿掉 → C36、C37 紅;「且」的一項改成往下找 → C47 紅;拿掉 !DEBUG 的 else → C41 紅;拿掉 when 主詞 → C42 紅;
+-    API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。"""
++    API-19、DATA-16 改回舊判法 → C32、C34 紅;四條搬錯目錄或訊息編號寫錯 → S4 紅。沒有 ast-grep 時只跑 S4 那半(照 _ktpack_sg 的做法)。
++    第二批([[Projects/Android資安靜態檢查補齊第二批_計劃]] S1、S2 擴充同一組,C48~C71 是預期值表 S1 逐列、C72~C86 是代碼審 r1 補的覆蓋、C87~C94 是代碼審 r2 對會擋那條逐條件改壞後補的,_KTSEC_PLACE 後 16 筆):混合內容 setter 改回 stopBy: end → C53 紅;
++    賦值 0 拿掉接收者條件 → C52 紅、接收者條件只認 settings → C50 紅、setter 不認 0 → C54 紅、拿掉 src/test 排除 → C55 紅;
++    Zip Slip 拿掉 canonicalPath 排除 → C57 紅;寫死秘密拿掉值的鍵名樣式排除與數字要求 → C65 紅(passwordKey 不是靠名稱排除擋的);
++    生物辨識拿掉單參數限制 → C69 紅;指令執行拿掉串接那支 → C70 紅、改成任何參數都報 → C71 紅;
++    混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。"""
+     print("t_kotlin_rulepack_security_rules")
+     import shutil as _sh
+     m = _ktpack()
+     rules = {r["id"]: r for r in m.load_rules()}
+     for rid, (d, fname, cat) in _KTSEC_PLACE.items():
+         r = rules.get(rid)
+         check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
+               str(r and (r["dir"], r["file"])))
+         msg = (r or {}).get("message", "")
+         check(f"S4 {rid} 訊息以 [{cat}] 開頭、不超過 {m.MSG_MAX} 字", msg.startswith(f"[{cat}]") and len(msg) <= m.MSG_MAX,
+@@ -129063,20 +129156,191 @@ def t_kt_catalog_security_lint_ids():
+     check("① 24 個 id 都登記在主表的現成規則欄(資安包:前綴)", not missing, str(missing))
+     dup = {i: w for i, w in where.items() if len(w) > 1}
+     check("② 每個 id 只登記在一列", not dup, str(dup))
+     probs = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
+     check("S5 真型錄自檢 0 個問題", not probs, str(probs[:5]))
+     unv = m.catalog_unverified()
+     check("③ 還沒逐列查證是 0 列(2026-11-08 使用者裁 API-14、TEST-31 標出處不全)", unv == [], str(unv))
+     print("  ✓ t_kt_catalog_security_lint_ids")
+ 
+ 
++# 第二批型錄新列([[Projects/Android資安靜態檢查補齊第二批_計劃]] 範圍 3 那張表,原文抄):型錄編號 → (名稱, 管它的:自寫規則 id 或內建檢查 id)
++_KT_BATCH2_ROWS = {
++    "API-48": ("WebView 允許混合內容", "kt-webview-mixed-content-always"),
++    "API-49": ("外部傳進來的網址直接丟進 WebView", "kt-loadurl-external"),
++    "API-50": ("TLS 開弱加密套件", "kt-weak-cipher-suite"),
++    "API-51": ("WebView 開啟本機檔案存取", "kt-webview-file-access"),
++    "ARCH-89": ("從非程式庫目錄動態載入程式碼", "內建:UnsafeDynamicallyLoadedCode"),
++    "ARCH-90": ("用非字面值組外部指令", "kt-command-exec-nonliteral"),
++    "ARCH-91": ("生物辨識沒綁加密物件", "kt-biometric-no-crypto"),
++    "DATA-88": ("解壓縮沒擋路徑穿越(Zip Slip)", "kt-zip-slip"),
++    "DATA-89": ("ContentProvider 開檔沒擋路徑穿越", "kt-provider-openfile-traversal"),
++    "DATA-90": ("加密用固定 IV", "kt-static-iv"),
++    "DATA-91": ("金鑰長度太短", "kt-weak-key-size"),
++    "DATA-92": ("ObjectInputStream 反序列化", "kt-object-input-stream"),
++    "DATA-93": ("資料庫放外部儲存", "kt-db-on-external-files"),
++    "DATA-94": ("XML 解析沒關外部實體(XXE)", "kt-xxe-documentbuilder"),
++    "DATA-95": ("信任別人 provider 給的檔名", "內建:UnsanitizedFilenameFromContentProvider"),
++    "DATA-96": ("用弱雜湊(MD5、SHA-1、MD4)", "kt-weak-message-digest"),
++    "DATA-97": ("原始碼裡寫死一般秘密", "kt-hardcoded-secret-name"),
++    "DATA-98": ("RSA 不帶 OAEP 填充", "kt-rsa-no-oaep"),
++}
++# 計劃範圍 2 的四條漏登內建檢查 → 該登在哪一列(DATA-27、DATA-85 是併進既有列,另兩條是新列)
++_KT_BATCH2_LINT = {"SdCardPath": "DATA-27", "SetWorldWritable": "DATA-85", "UnsafeDynamicallyLoadedCode": "ARCH-89",
++                   "UnsanitizedFilenameFromContentProvider": "DATA-95"}
++
++
++def _kt_batch2_catalog_problems(m):
++    """型錄 → 第二批 S3 的問題清單(空=全過);m 是 _ktpack() 載入的模組(改壞實驗給複本)。判準全部寫死在本檔
++    (_KT_BATCH2_ROWS、_KT_BATCH2_LINT 與下面的字樣),不從型錄或規則包算。"""
++    rows = m.main_rows()
++    def cell(rid, i):
++        return rows[rid][i] if rid in rows else ""
++    return _kt_batch2_misreg_problems(cell) + _kt_batch2_row_problems(rows, cell) + _kt_batch2_b4_problems(m, cell)
++
++
++# 這批改到、現成規則欄登了 Android Lint 檢查的列(計劃範圍 1、2):通電批次要照型錄自檢的批四口徑寫(代碼審 r1 審查乙 3;
++# 口徑只住在 check.py 的 batch4_expected_tags,這裡只列要看哪幾列)
++_KT_BATCH2_B4_ROWS = ("DATA-27", "DATA-79", "DATA-82", "DATA-83", "DATA-85", "ARCH-89", "DATA-95")
++
++
++def _kt_batch2_b4_problems(m, cell):
++    out = []
++    for rid in _KT_BATCH2_B4_ROWS:
++        want = m.batch4_expected_tags(cell(rid, 5))
++        if not want:
++            out.append(f"{rid} 現成規則欄沒有批四口徑認得的 Android Lint 檢查")
++        elif "批四(" + ";".join(want) + ")" not in cell(rid, 9):
++            out.append(f"{rid} 通電批次沒寫「批四({';'.join(want)})」")
++    return out
++
++
++def _kt_batch2_misreg_problems(cell):
++    """錯登那三列縮範圍:現成規則欄寫明只看哪裡,壞寫法欄不再含移到新列的那半(S3 第一段)。"""
++    import re as _re
++    out = []
++    if not ("VulnerableCryptoAlgorithm" in cell("DATA-83", 5) and "只看 Cipher" in cell("DATA-83", 5)):
++        out.append("DATA-83 現成規則欄沒寫明 VulnerableCryptoAlgorithm 只看 Cipher")
++    if "MessageDigest" in cell("DATA-83", 2):
++        out.append("DATA-83 壞寫法還含 MessageDigest(雜湊那半該在 DATA-96)")
++    if not ("SecretInSource" in cell("DATA-79", 5) and "只看 Gemini" in cell("DATA-79", 5)):
++        out.append("DATA-79 現成規則欄沒寫明 SecretInSource 只看 Gemini 金鑰")
++    if _re.search(r"API_KEY|const val", cell("DATA-79", 2)):
++        out.append("DATA-79 壞寫法還含一般寫死秘密(那半該在 DATA-97)")
++    bad82 = cell("DATA-82", 2)
++    if "見 DATA-98" not in bad82 or _re.search(r'getInstance\("RSA', bad82):
++        out.append("DATA-82 壞寫法要只用一句指向 DATA-98 帶過 RSA 無填充,不列成這列的壞寫法")
++    return out
++
++
++def _kt_batch2_row_problems(rows, cell):
++    """範圍 3 的 18 列與範圍 2 的四條內建檢查(S3 第二段)。"""
++    import re as _re
++    out = []
++    for rid, (name, owner) in _KT_BATCH2_ROWS.items():
++        if rid not in rows:
++            out.append(f"{rid} 不在型錄主表")
++            continue
++        if not rows[rid][1].startswith(name):
++            out.append(f"{rid} 名稱不是「{name}」:{rows[rid][1]}")
++        if owner not in rows[rid][5]:
++            out.append(f"{rid} 現成規則欄沒寫管它的 {owner}")
++    if "AGP 8.8.0" not in cell("DATA-95", 1):
++        out.append("DATA-95 名稱沒標 AGP 8.8.0")
++    for lid, rid in _KT_BATCH2_LINT.items():
++        if not _re.search(rf"內建:(?:[A-Za-z0-9]+、)*{lid}(?![A-Za-z0-9])", cell(rid, 5)):
++            out.append(f"{lid} 沒登在 {rid} 的現成規則欄(內建:前綴)")
++    return out
++
++
++def t_kt_catalog_security_lint_batch2():
++    """[[Projects/Android資安靜態檢查補齊第二批_計劃]] S3:第二批型錄(範圍 1~3):DATA-83 寫明 VulnerableCryptoAlgorithm 只看 Cipher、
++    DATA-79 寫明 SecretInSource 只看 Gemini 金鑰,兩列壞寫法不再含移到 DATA-96、DATA-97 的那半,DATA-82 只用一句指向 DATA-98;
++    範圍 3 那張表的 18 列各在主表、名稱照表、現成規則欄寫管它的規則;四條漏登的內建檢查各登在該登的列;DATA-95 名稱帶 AGP 8.8.0;
++    真型錄自檢 0 個問題、還沒逐列查證 0 列。判準來源:計劃範圍 1~3 原文(寫死在 _KT_BATCH2_ROWS、_KT_BATCH2_LINT)。
++    翻紅釘:刪一列新列、DATA-83 壞寫法改回 MessageDigest、DATA-95 拿掉 AGP 8.8.0、SetWorldWritable 從 DATA-85 拿掉 → ①紅;
++    新列漏查證紀錄 → ③紅。"""
++    print("t_kt_catalog_security_lint_batch2")
++    m = _ktpack()
++    check("★前置★ 判準表恰好 18 列、四條內建", len(_KT_BATCH2_ROWS) == 18 and len(_KT_BATCH2_LINT) == 4, "")
++    probs = _kt_batch2_catalog_problems(m)
++    check("① 三列縮範圍、18 列新列、四條內建檢查都照計劃登記", not probs, "\n".join(probs[:10]))
++    selfp = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
++    check("② 真型錄自檢 0 個問題", not selfp, str(selfp[:5]))
++    unv = m.catalog_unverified()
++    check("③ 還沒逐列查證是 0 列", unv == [], str(unv))
++    print("  ✓ t_kt_catalog_security_lint_batch2")
++
++
++def _kt_drop_line(prefix):
++    """改壞用:刪掉以 prefix 開頭的那一行(只刪第一處)。"""
++    def f(t):
++        i = t.find("\n" + prefix)
++        return t if i < 0 else t[:i] + t[t.index("\n", i + 1):]
++    return f
++
++
++# [[Projects/Android資安靜態檢查補齊第二批_計劃]] S4 的改壞清單:舊字串照真型錄現行寫法寫死、新值手寫,不從型錄或被測函式算。
++# 每一個套上真型錄後,型錄自檢 catalog_problems 都要多報(〈統計〉的數、〈待查證〉多列、漏列、兩格寫不寫內容)
++_KT_STATS_MUTATIONS = (
++    ("總列數", lambda t: t.replace("- 總列數:532", "- 總列數:533", 1)),
++    ("DATA 列數", lambda t: t.replace("DATA 98、", "DATA 97、", 1)),
++    ("各級含 A", lambda t: t.replace("加總大於總列數):A 242", "加總大於總列數):A 999", 1)),
++    ("各級首字 B", lambda t: t.replace("加總等於總列數):A 242、B 196", "加總等於總列數):A 242、B 195", 1)),
++    ("規則包 error", lambda t: t.replace("(error 46、", "(error 40、", 1)),
++    ("不接閘條數", lambda t: t.replace("其中 29 條在不接閘", "其中 28 條在不接閘", 1)),
++    ("逐列查證", lambda t: t.replace("\u3014查證 日期:網址\u3015):519 列", "\u3014查證 日期:網址\u3015):518 列", 1)),
++    ("待查證總數", lambda t: t.replace("- 待查證:51 列", "- 待查證:50 列", 1)),
++    ("待查證代號待查", lambda t: t.replace("規則代號待查 48 列", "規則代號待查 47 列", 1)),
++    ("待查證來源待核對", lambda t: t.replace("來源待核對 3 列", "來源待核對 9 列", 1)),
++    # 下面兩個連〈統計〉的待查證數一起改到一致,只留給〈待查證〉跟主表的雙向比對抓(不讓統計那道代抓)
++    ("待查證列著主表已解決的 DATA-27", lambda t: t.replace("| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n",
++        "| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n| DATA-27 | — | — |\n", 1)
++        .replace("- 待查證:51 列", "- 待查證:52 列", 1)),
++    ("待查證漏列主表還待查的 API-2", lambda t: _kt_drop_line("| API-2 | IJ:「Use awaitAll()")(t)
++        .replace("- 待查證:51 列", "- 待查證:50 列", 1).replace("規則代號待查 48 列", "規則代號待查 47 列", 1)),
++    ("待查證來源格寫了主表沒有的待核對", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |",
++        "| API-3 | IJ:「Unused Deferred」(ID 待查) | X(未開頁核對) |", 1)),
++    ("待查證代號格寫 — 但主表還待查", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", "| API-3 | — | — |", 1)),
++)
++
++
++def t_kt_catalog_stats_consistent():
++    """[[Projects/Android資安靜態檢查補齊第二批_計劃]] S4:型錄〈統計〉手寫的數(總列數、各主題、各級、規則包各等級與不接閘、
++    逐列查證、待查證)要等於重數的值,〈待查證〉要跟主表雙向一致(該列的都列、已解決的不列、兩格寫不寫內容跟主表一致)。
++    判準住在型錄自檢 check.py 的 stats_problems、pending_problems(接在 catalog_problems,推送前的規則包自檢與 --catalog-only
++    都會跑);本測試只驗它:真型錄這兩類問題 0 筆,_KT_STATS_MUTATIONS 每一個寫死的改壞都讓自檢多報。
++    翻紅釘:stats_problems 少核對其中任何一個數、pending_problems 只判單向或不比格子 → ②對應那一項紅;沒接進 catalog_problems → ②全紅。"""
++    import shutil
++    print("t_kt_catalog_stats_consistent")
++    m = _ktpack()
++    rules = m.load_rules()
++    text = m.CATALOG.read_text(encoding="utf-8")
++    base = m.catalog_problems(rules)
++    mine = [p for p in base if p[0] == "<統計>" or "待查證" in p[1]]
++    check("① 真型錄:〈統計〉〈待查證〉這兩類自檢問題 0 筆", not mine, str(mine[:10]))
++    real = m.CATALOG
++    tmp = Path(tempfile.mkdtemp(prefix="kt-stats-"))
++    try:
++        m.CATALOG = tmp / "checks-catalog.md"      # 改壞的複本放暫存檔,型錄自檢照它讀檔的原路徑走
++        for label, fn in _KT_STATS_MUTATIONS:
++            mut = fn(text)
++            check(f"★前置★ 改壞「{label}」有套上", mut != text, "")
++            m.CATALOG.write_text(mut, encoding="utf-8")
++            got = m.catalog_problems(rules)
++            check(f"② 改壞「{label}」型錄自檢多報", len(got) > len(base), str([p for p in got if p not in base][:3]))
++    finally:
++        m.CATALOG = real
++        shutil.rmtree(tmp, ignore_errors=True)
++    print("  ✓ t_kt_catalog_stats_consistent")
++
++
+ def t_linter_catalog_android_security_lint():
+     """[S1] linter 目錄〈Android Lint 與 Compose lint 標準接法〉第 1 步的 kotlin 圍欄,`dependencies` 區塊裡有
+     `lintChecks("com.android.security.lint:lint:1.0.4")`,同一步的文字寫出「AGP 8.5.1」與刪掉 lint-baseline.xml 重產的說明
+     ([[Projects/Android資安與崩潰靜態檢查補齊_計劃]] 範圍 1)。判準來源:官方 README 安裝法(lintChecks 那行)、Google Maven
+     maven-metadata.xml 的 latest 1.0.4、建置檔 lintVersion 31.5.1 換算 AGP 8.5.1。
+     翻紅釘:那行放在 android { } 或圍欄外 → ①紅;版本寫成 <版本> → ①紅;拿掉 AGP 句 → ②紅;拿掉刪基準線重產句 → ③紅。"""
+     print("t_linter_catalog_android_security_lint")
+     doc = (Path(GRAPHCTL).resolve().parents[1] / "docs" / "lumos-toolchain-knowledge" / "Systems" / "linter精選目錄.md").read_text(
+         encoding="utf-8")
+     sec = doc.split("### Android Lint 與 Compose lint 標準接法", 1)
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index a0c942943..9f52d0183 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -1,25 +1,25 @@
+ # Android/Kotlin 常見錯誤寫法總清單(合併去重版)
+ 
+ 整理日:2026-11-05。只做整理,沒有上網重查。
+ 
+ ## 輸入與口徑
+ 
+ - 輸入:五份研究清單(協程與 Flow、架構與生命週期、Compose、資料層、測試與效能),既有計劃 `Projects/Android協程與API寫法機械檢查標準_計劃` 的 35 條(API-1~13、FLOW-1~7、STATE-1~6、CO-1~6、UI-1~3,編號照舊),以及2026-11-05 實驗時補的 14 條規則(已併入規則包 `configs/ast-grep/kotlin-android/`)。
+ - 去重:同一個錯誤(後果與壞寫法本質相同)只留一列;合併列保留所有來源與所有規則代號。被併進的原始列寫在「來源」欄的〔併:…〕裡,代號對照:`研C一3` = 協程研究第一節第 3 列;`研A12` = 架構研究第 12 列;`研M一4` = Compose 研究第一節第 4 列;`研D二5` = 資料層研究第二節第 5 列;`T5`/`P12` = 測試效能研究的列號;`X:規則id` = 14 條補充。
+ - 級:A 現成規則可開;B 自寫結構規則(ast-grep/semgrep);C 測試範本;D 人審。可複選,寫成 `A+B`。
+ - 情境怎麼認:「形狀」= 從程式長相認得出;「語意」= 要看語意才判得出。
+-- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,範本不接(2026-11-08 量過誤報沒有一條在一成以下,見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉);「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」(規則在 `rules-unwired/` 的列也寫未接:引用的型錄列出處不全,或規則還沒在真專案量過誤報)。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx、Slack compose-lints 或資安包的規則,消費專案照 linter 目錄範本接 CI 後才擋(資安包:= Google 的 `com.android.security.lint:lint`,掛在 Android Lint 上、同一個 CI 步驟跑,2026-11-08 [[Projects/Android資安與崩潰靜態檢查補齊_計劃]];它 24 條的檢查頁都沒寫預設關);「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`資安包:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。「行為測試或正向約束=」那一段另有幾種值:「範本 T<n>」=照行為測試範本那一組起手寫測試;「未接(儀器批)」=要模擬器、Robolectric 或 Android 專用套件才跑得動,實驗沒過、還沒有範本;「不接(代碼審或真機)」=測試派發器或純 JVM 測不出,靠代碼審與真機驗收。級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節(型錄自檢會驗那一節存在;[[Projects/Android行為測試範本與架構測試_計劃]]、儀器批與架構測試 T6–T13 見 [[Projects/Android儀器測試範本與架構測試_計劃]])。
++- 通電批次欄的值:「批一」=會擋的規則已上線;「語意覆核級」=規則在 `rules-review/`(info),形狀分不出對錯,範本不接(2026-11-08 量過誤報沒有一條在一成以下,見 [[Projects/規則包覆核兩級接新增告警閘_計劃]] 〈待人裁〉);「批一(只有提示級規則,預設不接)」;「批二~五」=那一批才接上;「未接」(規則在 `rules-unwired/` 的列也寫未接:引用的型錄列出處不全、規則還沒在真專案量過誤報,或量過誤報但超過一成或樣本外命中不到 20 處)。第四批的三個值(2026-11-06,[[Projects/Android現成檢查接上CI與推送前_計劃]]):「批四(CI 範本:Android Lint)」=Android Lint、androidx、Slack compose-lints 或資安包的規則,消費專案照 linter 目錄範本接 CI 後才擋(資安包:= Google 的 `com.android.security.lint:lint`,掛在 Android Lint 上、同一個 CI 步驟跑,2026-11-08 [[Projects/Android資安與崩潰靜態檢查補齊_計劃]];它 24 條的檢查頁都沒寫預設關);「批四(推送前:detekt 外掛 compose-rules)」=compose-rules 外掛規則,照範本加第二條 detekt 宣告後推送前就擋;兩者都有寫「批四(CI 範本:Android Lint;推送前:detekt 外掛 compose-rules)」;其餘照舊寫「批四(現成規則)」。判定口徑:現成規則欄以「;」「、」切段,某段含 `androidx:`、`androidx.<套件>:`、`內建:`、`資安包:`、`slack:`、`Android Lint:` 接大寫開頭的規則碼,或含 `cr:compose:<規則>`,而且那一段不含「待查」「預設關」「相近」「opt-in」、規則碼不是官方預設關的那幾條(Slack 的 ComposeUnstableReceiver、ComposeUnstableCollections、ComposeM2Api,compose-rules 的 UnstableCollections、PreviewNaming、Material2)才算;口徑寫在型錄自檢 `configs/ast-grep/kotlin-android/check.py` 的 `batch4_expected_tags`,自檢逐列重算比對(`--catalog-only` 會報不一致的列)。「行為測試或正向約束=」那一段另有幾種值:「範本 T<n>」=照行為測試範本那一組起手寫測試;「未接(儀器批)」=要模擬器、Robolectric 或 Android 專用套件才跑得動,實驗沒過、還沒有範本;「不接(代碼審或真機)」=測試派發器或純 JVM 測不出,靠代碼審與真機驗收。級含 C 的列,通電批次寫的範本組在 `skills/kotlin-idioms/test-templates.md` 同名的節(型錄自檢會驗那一節存在;[[Projects/Android行為測試範本與架構測試_計劃]]、儀器批與架構測試 T6–T13 見 [[Projects/Android儀器測試範本與架構測試_計劃]])。
+ - 接電方式五種:告警帶寫法 / 當下推相關列 / 表態對程式 / 行為測試或正向約束 / 盲判席。形狀類至少有「告警帶寫法」或「行為測試或正向約束」;語意類必有「表態對程式」與「盲判席」;只剩業務判斷的 D 級只寫「表態對程式」,名稱後標(人裁)。
+ - 名稱標(出處不全)=這一列的標準寫法或壞寫法的錯因,找不到權威原文直接支持;來源欄另有〔查證 日期:網址〕的,是查過、那一頁只支持部分主張(例:只寫了建議寫法、沒寫壞寫法的後果)。出處不全的列只當參考、不當標準,引用它的規則只准放 `rules-unwired/`。
+ - 實測狀態:既有 35 條照抄原表「本機實測」欄(原表沒有這欄的寫「未測」);14 條補充寫「樣本實測:中壞例、好例不報」;其他寫「未測」。2026-11-05 起,被 ast-grep 規則包(`configs/ast-grep/kotlin-android/`)守到的列改寫成「規則 <id>:樣本實測中壞例、好例不報」(hint 規則標(hint));原本記了別的實測結果的,接在「原記:」後面保留。
+-- 現成規則欄的「待查」與來源欄的「(搜尋摘要)」「(未開頁核對)」照研究原文保留,〈待查證〉一節由程式從這兩欄撈出。
++- 現成規則欄的「待查」與來源欄的「(搜尋摘要)」「(未開頁核對)」照研究原文保留;〈待查證〉一節是手寫的,改主表時一起改。
+ - 規則庫簡稱:detekt(1.23.x 寫 `detekt`,只在 2.x 的寫 `detekt 2.x`);資安包 = Google Android 資安 lint 規則包(`com.android.security.lint:lint`,寫成 `資安包:<檢查 id>`);SC = santimattius structured-coroutines(寫成 `SC 主題碼:層 規則名`);Sonar = SonarSource Kotlin;IJ = IntelliJ 檢查(只有顯示名稱,ID 待查);androidx/內建 = Android Lint;cr = mrmans0n compose-rules;slack = Slack compose-lints。
+ 
+ ## 來源縮寫
+ 
+ | 縮寫 | 網址 |
+ |---|---|
+ | PLAN | 本 repo `docs/lumos-toolchain-knowledge/Projects/Android協程與API寫法機械檢查標準_計劃.md` |
+ | EXTRAS | 本 repo 規則包 `configs/ast-grep/kotlin-android/`(2026-11-05 實驗時的補充規則,已併入規則包) |
+ | DETEKT | https://detekt.dev/docs/1.23.8/rules/coroutines |
+ | DETEKT2 | https://detekt.dev/docs/rules/coroutines |
+@@ -190,20 +190,24 @@
+ | API-38 | WebView 注入 JavaScript 介面 | `webView.addJavascriptInterface(obj, "app")`;注入物件的方法沒標 `@JavascriptInterface` | 只在必要時注入;要給網頁呼叫的方法逐一標 `@JavascriptInterface`,其餘方法不公開 | API 17 以下網頁能用反射操控注入物件;API 17 以上沒標註的方法網頁呼叫不到 | 內建:JavascriptInterface、AddJavascriptInterface | A | 形狀:由 Android Lint JavascriptInterface、AddJavascriptInterface 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/JavascriptInterface.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AddJavascriptInterface.md.html〕 |
+ | API-39 | WebView 遇到 SSL 錯誤照樣繼續 | `override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) { handler.proceed() }` | 不覆寫(預設取消),或覆寫時呼叫 `handler.cancel()`;憑證問題在伺服器端修 | 憑證錯誤的連線照樣送資料,被中間人攻擊 | 內建:WebViewClientOnReceivedSslError | A | 形狀:由 Android Lint WebViewClientOnReceivedSslError 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WebViewClientOnReceivedSslError.md.html〕 |
+ | API-40 | WebView 開檔案網址跨來源存取 | `settings.allowUniversalAccessFromFileURLs = true`;`settings.setAllowFileAccessFromFileURLs(true)` | 不設(預設 false)或明寫 false;本機內容改用 `WebViewAssetLoader` 以 https 網址載入 | 本機 HTML 的腳本能讀 App 私有檔與其他來源的資料,再送上網路 | 無(自寫 ast-grep kt-webview-file-url-access) | B | 形狀:任何接收者(含 `?.`)或 apply、with 裡不帶接收者的 setAllowUniversalAccessFromFileURLs(true)、setAllowFileAccessFromFileURLs(true),或左邊以這兩個屬性名結尾、右邊是 true 的賦值 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-webview-file-url-access:樣本實測中壞例、好例不報;真實語料:樣本內 71 處誤報 0、樣本外 80 處誤報 0 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0252/ https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion〕 |
+ | API-41 | WebView 遠端除錯沒限定除錯版 | `WebView.setWebContentsDebuggingEnabled(true)` 沒包,或包在否定、else、版本判斷、用「或」連別的條件裡 | `WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)`,或只寫在 `if (BuildConfig.DEBUG)` 成立那一支;MASTG 另舉判 `ApplicationInfo.FLAG_DEBUGGABLE` 的寫法 | 接上電腦就能除錯、竊聽或竄改 App 裡所有 WebView 的內容 | 無(自寫 ast-grep kt-webview-debugging-enabled) | B | 形狀:setWebContentsDebuggingEnabled(true)(含完整套件名、不帶接收者)不在條件恰好是 BuildConfig.DEBUG 的 if 成立那一支或 when 分支裡 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-webview-debugging-enabled:樣本實測中壞例、好例不報;真實語料:樣本內(第一輪形狀)11 處誤報 0、樣本外 42 處誤報 16(用 FLAG_DEBUGGABLE、別名旗標判除錯版) | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-RESILIENCE/MASTG-TEST-0227/ https://mas.owasp.org/MASTG/best-practices/MASTG-BEST-0008/〕 |
+ | API-42 | WebView 的 Safe Browsing 整個關掉 | manifest `<meta-data android:name="android.webkit.WebView.EnableSafeBrowsing" android:value="false" />` | 保持 Safe Browsing 開著(預設),App 的設計配合它的限制 | 使用者被帶到已知的惡意網址時不會被攔 | 資安包:DisabledAllSafeBrowsing | A | 形狀:由 Android Lint DisabledAllSafeBrowsing 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/DisabledAllSafeBrowsing.md.html〕 |
+ | API-43 | 不安全的 SSL socket | `SSLCertificateSocketFactory.getInsecure(…)`;`createSocket(InetAddress, …)` 第一個參數是 InetAddress | 用 `SSLCertificateSocketFactory.getDefault(…)`;非用 InetAddress 不可時自己拿 `getDefaultHostnameVerifier()` 驗主機名 | 略過憑證或主機名驗證,任何憑證都被信任 | 內建:SSLCertificateSocketFactoryGetInsecure、SSLCertificateSocketFactoryCreateSocket | A | 形狀:由 Android Lint SSLCertificateSocketFactoryGetInsecure、SSLCertificateSocketFactoryCreateSocket 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SSLCertificateSocketFactoryGetInsecure.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SSLCertificateSocketFactoryCreateSocket.md.html〕 |
+ | API-44 | 信任使用者自己裝的憑證 | `network_security_config` 的 `<certificates src="user" />` 不在 `<debug-overrides>` 裡;targetSdk 低於 24 又沒有 network_security_config | 使用者憑證只放進 `<debug-overrides>`(只在 debuggable 時生效);加 network_security_config 限定信任的憑證機構 | 能裝憑證的人或惡意程式可攔截、解開 App 的 HTTPS 流量 | 內建:AcceptsUserCertificates;資安包:DefaultTrustedUserCerts | A | 形狀:由 Android Lint AcceptsUserCertificates、DefaultTrustedUserCerts 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/AcceptsUserCertificates.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/DefaultTrustedUserCerts.md.html〕 |
+ | API-45 | 啟用舊版 TLS 或 SSL | `SSLContext.getInstance("TLSv1")`;`ConnectionSpec.COMPATIBLE_TLS`;`.tlsVersions(TlsVersion.TLS_1_0)`;`setEnabledProtocols(arrayOf("TLSv1"))` | `SSLContext.getInstance("TLS")` 交給系統挑版本,或指定 TLSv1.2 以上;OkHttp 用 `ConnectionSpec.MODERN_TLS` | 連線可被降級到有已知弱點的協定、被解開 | 無(自寫 ast-grep kt-insecure-tls-version) | B | 形狀:SSLContext.getInstance 第一個參數恰好是 "SSLv2"、"SSLv3"、"TLSv1"、"TLSv1.1";ConnectionSpec.COMPATIBLE_TLS(讀 cipherSuites、tlsVersions、isTls 不算);tlsVersions(…) 參數裡的 TLS_1_0、TLS_1_1、SSL_3_0;setEnabledProtocols(arrayOf(…)) 裡有那四個字串 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-insecure-tls-version:樣本實測中壞例、好例不報;真實語料:樣本內(第二版)19 處誤報 2、樣本外沒另撈 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0217/〕 |
+ | API-46 | targetSdk 太低、DNS 沒有系統的傳輸保護 | `targetSdkVersion` 低於 28 | targetSdk 升到 28 以上,用系統內建的傳輸安全(加密 DNS) | 易受 DNS 偽造與快取下毒攻擊 | 資安包:InsecureDnsSdkLevel | A | 形狀:由 Android Lint InsecureDnsSdkLevel 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureDnsSdkLevel.md.html〕 |
+ | API-47 | 寫死開發用網址或私有 IP | 設定檔或程式裡的 `http://staging-app.com`、`192.168.1.10` 這類開發、測試環境位址 | 正式版不帶開發與測試環境的網址、私有 IP;不同環境用建置變體或設定分開 | 攻擊者從 App 找到測試環境或內網位址,拿到不該公開的存取 | 資安包:UnintendedExposedUrl、UnintendedPrivateIpAddress | A | 形狀:由 Android Lint UnintendedExposedUrl、UnintendedPrivateIpAddress 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnintendedExposedUrl.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnintendedPrivateIpAddress.md.html〕 |
++| API-48 | WebView 允許混合內容 | `settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW`;`settings.setMixedContentMode(0)`;`webSettings.mixedContentMode = 0` | 不設(預設 MIXED_CONTENT_NEVER_ALLOW)或明寫 NEVER_ALLOW;真的要相容舊站才用 MIXED_CONTENT_COMPATIBILITY_MODE;自訂書源、App 內建瀏覽器這類產品需求用 lint-waive 附理由放行 | HTTPS 頁面載入 HTTP 子資源,中間人能換掉腳本或內容 | 無(自寫 ast-grep kt-webview-mixed-content-always) | B | 形狀:setMixedContentMode 的直接參數是 MIXED_CONTENT_ALWAYS_ALLOW 或 0;左邊以 mixedContentMode 結尾、右邊是那個常數的賦值;右邊是 0 時另要接收者鏈有一段名字以 settings 或 Settings 結尾或是 getSettings();值藏在 if、elvis、變數裡,或 apply 裡不帶接收者的 0 不報 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-webview-mixed-content-always:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 5、樣本外 273 處(fork 去重 244)抽判 120 處誤報 2(真問題 118 處裡 25 處是產品需求) | 〔查證 2026-11-08:https://developer.android.com/reference/android/webkit/WebSettings〕 |
++| API-49 | 外部傳進來的網址直接丟進 WebView | `webView.loadUrl(intent.getStringExtra("url")!!)`;`val u = intent.dataString` 再 `webView.loadUrl(u)` | 先 `Uri.parse` 驗 scheme 是 https、host 在白名單內才 loadUrl | 別的 App 送一個 Intent 就能讓 WebView 開任意網頁(含 javascript:、file:) | 無(自寫 ast-grep kt-loadurl-external) | B | 形狀:loadUrl 第一個參數直接、經同函式區域變數、或 let 的 it 來自 intent 的 data、dataString、getStringExtra、extras;同函式有讀 scheme、host 或用 Intent.parseUri 的不報;跨函式的資料流不認 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-loadurl-external:樣本實測中壞例、好例不報;真實語料:樣本內抽判 9 處誤報 3、樣本外 14 處誤報 1(命中不到 20;都沒看 AndroidManifest,不確定那些畫面有沒有 exported) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/unsafe-uri-loading〕 |
++| API-50 | TLS 開弱加密套件 | `.cipherSuites(CipherSuite.TLS_RSA_WITH_RC4_128_SHA)`;`socket.setEnabledCipherSuites(arrayOf("TLS_RSA_WITH_NULL_SHA256"))` | 不自己列套件:OkHttp 用 `ConnectionSpec.MODERN_TLS` 或 `RESTRICTED_TLS`,SSLSocket 用系統預設 | 連線可被解密或冒充 | 無(自寫 ast-grep kt-weak-cipher-suite) | B | 形狀:CipherSuite.<名稱>,或 setEnabledCipherSuites、cipherSuites(…)、enabledCipherSuites = 裡的套件字串,名稱含 NULL、anon、EXPORT、RC4、DES、3DES 或以 MD5 結尾;okhttp3、paho 套件自己的原始碼複本不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-weak-cipher-suite:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 33(模仿舊版 TLS 指紋這類外部協定強制)、樣本外 6 處誤報 0(命中不到 20) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm〕 |
++| API-51 | WebView 開啟本機檔案存取 | `webView.settings.allowFileAccess = true`;`settings.setAllowFileAccess(true)` | 明寫 false;本機內容改用 `WebViewAssetLoader` 以 https 網址載入 | 被導到惡意頁或載入不可信的本機 HTML 時,能讀 App 私有檔 | 無(自寫 ast-grep kt-webview-file-access) | B | 形狀:任何接收者(含 `?.`)或不帶接收者的 setAllowFileAccess(true),或左邊以 allowFileAccess 結尾、右邊是 true 的賦值;FromFileURLs 那兩個開關歸 API-40 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-webview-file-access:樣本實測中壞例、好例不報;真實語料:樣本外 59 處抽判 40 處誤報 16(只載自家 file:///android_asset 的 WebView、範例碼;判不準 7 處多是 EPUB 閱讀器這類要讀本機檔的功能) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/webview-unsafe-file-inclusion〕 |
+ 
+ ## FLOW 資料流合併與 Flow 運算
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | FLOW-1 | 合成用 combine,不巢狀收集 | `a.collect { x -> b.collect { y -> … } }`、`collectLatest` 裡再 `collect` | `combine(a, b) { x, y -> UiState(x, y) }.stateIn(viewModelScope, WhileSubscribed(5_000), init)` | 內層收集永不結束,外層新值卡住或重複訂閱,畫面只反映部分來源 | 無 | B | 形狀:collect/collectLatest 的 lambda 裡又出現 `.collect {`/`.collectLatest {` | 告警帶寫法、當下推相關列 | 告警帶寫法=批一;當下推相關列=批二 | 規則 kt-nested-collect:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、combine 好例不報 | PLAN〔併:FLOW-1〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/views/coroutines-views https://developer.android.com/topic/architecture/ui-layer/state-production〕 |
+ | FLOW-2 | zip 只用在嚴格一對一配對 | 對 StateFlow 或 `stateIn` 出來的流寫 `.zip(other)` | 持續更新的狀態用 `combine(a, b)`;只有「第 n 筆對第 n 筆」的冷流才 `zip` | 狀態流被配對後一邊更新另一邊不動就不發,畫面卡在舊值 | 無 | D | 語意:要知道兩邊是不是一對一的冷流(只看名字猜型別誤報高) | 表態對程式、盲判席、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三 | — | PLAN〔併:FLOW-2〕〔查證 2026-11-05:https://kotlinlang.org/docs/coroutines-flow-operators.html〕 |
+ | FLOW-3 | combine 的每個來源都要有初始值(出處不全) | `combine(repoFlow, prefsFlow) { … }`,其中一個來源在第一筆之前永遠不發 | 來源用 `StateFlow` 或 `.onStart { emit(default) }`;外層 `stateIn(…, initialValue = Loading)` | 任何一個來源沒發過值,combine 就一筆都不發,畫面卡在載入 | 無 | C | 語意:要知道哪個上游可能遲遲不發 | 表態對程式、盲判席、行為測試或正向約束、當下推相關列 | 當下推相關列=批二;表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T2 | — | PLAN〔併:FLOW-3〕〔查證 2026-11-05:https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/combine.html https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/on-start.html https://developer.android.com/topic/architecture/ui-layer/state-production〕 |
+ | FLOW-4 | `flow { }` 裡不換執行緒 | `flow { withContext(Dispatchers.IO) { emit(load()) } }` | `flow { emit(load()) }.flowOn(ioDispatcher)` | 執行期丟 `IllegalStateException: Flow invariant is violated` | 無靜態規則;執行期本來就丟 IllegalStateException | B | 形狀:`flow {` 本體內出現 `withContext(` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-withcontext-in-flow:樣本實測中壞例、好例不報(規則包沒有它專屬的好例,其他組好例都不報);原記:樣本壞例中、flowOn 好例不報 | PLAN;研C補〔併:FLOW-4、研C補〕 〔查證 2026-11-07:https://kotlinlang.org/docs/coroutines-flow.html https://developer.android.com/kotlin/flow〕 |
+ | FLOW-5 | 回傳 Flow 的函式不標 suspend | `suspend fun observe(): Flow<User>` | `fun observe(): Flow<User>` | 呼叫端被迫進協程才能拿到冷流,語意誤導 | detekt:SuspendFunWithFlowReturnType(要型別);Sonar:S6309 | A | 形狀:`suspend fun` 回傳型別是 `Flow<` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 已實測(帶型別響) | PLAN;DETEKT;SONAR〔併:FLOW-5、研C補〕 〔查證 2026-11-07:https://detekt.dev/docs/rules/coroutines〕 |
+@@ -518,20 +522,23 @@
+ | ARCH-79 | 藍牙可被發現的時間太長或設 0 | `putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 0)` 或大於 120 | 可被發現時間設在 120 秒以內、不設 0 | 裝置長時間(設 0 時 App 跑著就一直)可被發現,拉長被藍牙攻擊的時間窗 | 資安包:ExtendedBluetoothDiscoveryDuration、ZeroBluetoothDiscoveryDuration | A | 形狀:由 Android Lint ExtendedBluetoothDiscoveryDuration、ZeroBluetoothDiscoveryDuration 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ExtendedBluetoothDiscoveryDuration.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/ZeroBluetoothDiscoveryDuration.md.html〕 |
+ | ARCH-80 | manifest 寫死 debuggable | `<application android:debuggable="true">`(或寫死任何值) | manifest 不寫 `android:debuggable`,讓建置工具依變體自動帶 | 正式版可能帶著除錯資訊上架 | 內建:HardcodedDebugMode | A | 形狀:由 Android Lint HardcodedDebugMode 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/HardcodedDebugMode.md.html〕 |
+ | ARCH-81 | 呼叫超出 minSdk 的 API | minSdk 24 卻直接呼叫 API 26 才有的方法或常數 | 用 `if (Build.VERSION.SDK_INT >= …)` 包住或用 Compat 函式庫;內嵌常數要確認舊版行為 | 舊版裝置上丟例外當掉或行為錯 | 內建:NewApi、InlinedApi | A | 形狀:由 Android Lint NewApi、InlinedApi 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NewApi.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/InlinedApi.md.html〕 |
+ | ARCH-82 | 沒宣告或沒取得權限就呼叫要權限的 API | 呼叫定位、相機等 API 前沒檢查也沒處理 `SecurityException` | manifest 宣告權限,呼叫前 `checkSelfPermission`,沒有就先請求 | 執行時當掉;使用者拒絕權限時當掉 | 內建:MissingPermission | A | 形狀:由 Android Lint MissingPermission 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/MissingPermission.md.html〕 |
+ | ARCH-83 | 發通知沒有通知權限 | targetSdk 33 以上發通知,沒有 `POST_NOTIFICATIONS` 權限 | 宣告並在執行時請求 `android.permission.POST_NOTIFICATIONS` | Android 13 以上通知發不出去 | 內建:NotificationPermission | A | 形狀:由 Android Lint NotificationPermission 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NotificationPermission.md.html〕 |
+ | ARCH-84 | manifest 註冊的類別建不出來或不存在 | 註冊的 Activity、Service 不是 public、沒有無參數建構子、是非靜態內部類別;註冊名稱打錯或類別已搬走 | 註冊類別保持 public 並有無參數建構子;改名或搬類別時同步改 manifest | 系統建不出元件,執行時當掉 | 內建:Instantiatable、MissingClass | A | 形狀:由 Android Lint Instantiatable、MissingClass 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/Instantiatable.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/MissingClass.md.html〕 |
+ | ARCH-85 | 用反射存取非 SDK 介面 | `Class.forName("android.…").getDeclaredMethod("hidden…")` 存取被限制的隱藏 API | 改用公開 SDK API;沒有替代就向平台回報需求 | 執行時丟例外;換版本就壞 | 內建:SoonBlockedPrivateApi、BlockedPrivateApi | A | 形狀:由 Android Lint SoonBlockedPrivateApi、BlockedPrivateApi 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SoonBlockedPrivateApi.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/BlockedPrivateApi.md.html〕 |
+ | ARCH-86 | 參數超出範圍、常數或資源型別給錯 | 標了 `@IntRange` 的參數傳超出範圍的值;只收特定常數的參數傳別的整數;`resources.getColor(R.string.name)` | 照註記的範圍與常數集合傳值;資源 id 傳對型別 | 執行時例外或行為錯 | 內建:Range、WrongConstant、ResourceType | A | 形狀:由 Android Lint Range、WrongConstant、ResourceType 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/Range.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WrongConstant.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/ResourceType.md.html〕 |
+ | ARCH-87 | Parcelable 缺 CREATOR | 手寫 `class X : Parcelable` 沒有 `CREATOR` 欄位 | 用 `@Parcelize`,或補 `companion object CREATOR : Parcelable.Creator<X>` | 還原時當掉 | 內建:ParcelCreator | A | 形狀:由 Android Lint ParcelCreator 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/ParcelCreator.md.html〕 |
+ | ARCH-88 | 通知經 receiver 或 service 轉開畫面 | 通知的 PendingIntent 指向 BroadcastReceiver 或 Service,再由它 `startActivity` | 通知直接用 Activity 的 PendingIntent 開畫面 | 某些情況延遲很大;targetSdk 31 以上被禁止、畫面開不出來 | 內建:NotificationTrampoline | A | 形狀:由 Android Lint NotificationTrampoline 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/NotificationTrampoline.md.html〕 |
++| ARCH-89 | 從非程式庫目錄動態載入程式碼 | `System.load("/data/data/<套件>/files/libx.so")`;`Runtime.getRuntime().load(path)` | 原生程式庫放進 APK 的 lib 目錄,用 `System.loadLibrary("x")` 載入 | 載入的檔案可能被竄改,等於執行別人的程式碼 | 內建:UnsafeDynamicallyLoadedCode | A | 形狀:由 Android Lint UnsafeDynamicallyLoadedCode 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeDynamicallyLoadedCode.md.html〕 |
++| ARCH-90 | 用非字面值組外部指令 | `Runtime.getRuntime().exec("ping -c 1 " + host)`;`exec("ping $host")`;`ProcessBuilder("su", "-c", cmd)` | 指令固定;使用者資料當獨立參數傳(`ProcessBuilder("ping", "-c", "1", host)`)、不經 shell,先過白名單 | 外部輸入組進指令字串就是指令注入,能用 App 的權限(su 之後是 root)執行任意指令 | 無(自寫 ast-grep kt-command-exec-nonliteral) | B | 形狀:Runtime 的 exec 只帶一個參數,而且是串接(兩邊都是字面值的不算)、String.format 或帶插值的字串樣板;或 ProcessBuilder、exec 的參數裡有 "-c" 而緊接著的參數不是純字串字面值 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-command-exec-nonliteral:樣本實測中壞例、好例不報;真實語料:收窄前的寬形狀(任何非字面參數)樣本外 55 處抽判 40 處誤報 28,收窄成 Semgrep command-injection-formatted-runtime-call 的形狀後沒重量(事後分類:-c 型 10 處裡真問題 2、單一字串 21 處裡 0) | 〔查證 2026-11-08:https://cwe.mitre.org/data/definitions/78.html https://github.com/semgrep/semgrep-rules/blob/develop/kotlin/lang/security/command-injection-formatted-runtime-call.yaml〕 |
++| ARCH-91 | 生物辨識沒綁加密物件 | `biometricPrompt.authenticate(promptInfo)`,成功回呼裡直接放行錢包、密碼、金鑰、登入或 App 鎖 | 保護金鑰或敏感資料時用 `authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))`,金鑰放 Keystore 並要求使用者驗證,成功回呼裡用解鎖的 cipher 做事 | 驗證結果只是一個回呼,被 hook 就能繞過 | 無(自寫 ast-grep kt-biometric-no-crypto) | B | 形狀:只帶一個參數的 authenticate,接收者或參數名稱含 prompt、biometric、info 字樣,檔裡有 BiometricPrompt;要不要綁加密物件看保護的是什麼,形狀只認得出沒綁 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-biometric-no-crypto:樣本實測中壞例、好例不報;真實語料:樣本外 46 處抽判 40 處誤報 2(真問題多數是 App 鎖畫面;判真問題要看保護的是什麼,不升會擋);名稱不帶那些字樣的 `bp.authenticate(pi)` 會漏 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-AUTH/MASTG-TEST-0327/〕 |
+ 
+ ## DATA 儲存、背景工作、分頁與解析
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | DATA-1 | Room 開 allowMainThreadQueries | `Room.databaseBuilder(...).allowMainThreadQueries()` | 拿掉;DAO 改 `suspend fun` 或回傳 `Flow`,呼叫端在 `withContext(io)` 或 viewModelScope 裡呼叫 | 資料庫查詢跑在主執行緒,卡頓、ANR | ast-grep:kt-room-main-thread-queries;Room 執行期檢查(沒開這個設定時主執行緒查詢丟 IllegalStateException,非 lint) | B | 形狀:builder 鏈上出現 `.allowMainThreadQueries()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-main-thread-queries:樣本實測中壞例、好例不報 | EXTRAS;LINT〔併:X:kt-room-main-thread-queries、研D補〕 〔查證 2026-11-07:https://developer.android.com/training/data-storage/room/async-queries〕 |
+ | DATA-2 | Room DAO 函式是阻塞的 | `@Dao` 介面裡 `@Query("…") fun all(): List<User>`(非 suspend、不回傳 Flow/LiveData/PagingSource) | `@Query("…") suspend fun all(): List<User>` 或 `fun all(): Flow<List<User>>` | 呼叫端在主執行緒會擋住或丟例外 | ast-grep:kt-room-dao-blocking | B | 形狀:`@Dao` 類別內帶 `@Query/@Insert/@Update/@Delete/@Upsert/@RawQuery/@Transaction` 的函式沒有 suspend 也不回傳串流型別 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-dao-blocking:樣本實測中壞例、好例不報 | EXTRAS〔併:X:kt-room-dao-blocking〕 〔查證 2026-11-07:https://developer.android.com/training/data-storage/room/async-queries〕 |
+ | DATA-3 | DataStore 不是單例 | 類別或函式裡 `PreferenceDataStoreFactory.create { … }`、`preferencesDataStore("x")` | 檔案頂層 `val Context.settings by preferencesDataStore("settings")`,或 DI 提供 `@Singleton` 的 DataStore | 同一個檔兩個實例,執行期丟 IllegalStateException | ast-grep:kt-datastore-not-singleton;DataStore 執行期檢查(非 lint) | B | 形狀:DataStore 工廠呼叫出現在 class body 或 function body,且不在 object 內 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-datastore-not-singleton:樣本實測中壞例、好例不報 | EXTRAS;DS〔併:X:kt-datastore-not-singleton、研D補〕 〔查證 2026-11-07:https://developer.android.com/topic/libraries/architecture/datastore〕 |
+ | DATA-4 | SharedPreferences Editor 沒提交 | `prefs.edit().putString(k, v)` 寫完就結束 | 結尾 `.apply()`,或 KTX `prefs.edit { putString(k, v) }` | 資料沒寫進去 | Android Lint:CommitPrefEdits;ApplySharedPref;MutatingSharedPrefs | A | 形狀:`edit()` 鏈沒接 `apply()`/`commit()` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT;AR-REC〔併:研A80、研D二2〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/CommitPrefEdits.md.html https://developer.android.com/reference/android/content/SharedPreferences〕 |
+ | DATA-5 | 主執行緒 commit() 且沒用回傳值 | `prefs.edit().putX(…).commit()` 回傳值丟掉 | 改 `apply()`;真要同步結果才在背景執行緒 `commit()` 並檢查回傳 | 主執行緒寫磁碟,卡頓 | Android Lint:ApplySharedPref | A | 形狀:`.commit()` 當單獨敘述 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測;Android Lint 實跑命中 ApplySharedPref(2026-11-05,AGP 8.13.2 實驗專案複本) | LINT〔併:研D二1〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/ApplySharedPref.md.html https://developer.android.com/reference/android/content/SharedPreferences〕 |
+@@ -549,21 +556,21 @@
+ | DATA-17 | 改了 schema 沒升版本或沒寫 Migration | Entity 改欄位,`@Database(version = …)` 不變 | 升 `version` 並加 `Migration`;開 `exportSchema` 讓 schema 進版控 | 啟動崩潰(Room cannot verify the data integrity) | Room 執行期檢查(不是 lint) | C | 語意:要比對 schema 前後版本才知道 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | ROOM-MIG〔併:研D二15〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-18 | exportSchema 關掉或 schema 沒進版控 | `@Database(exportSchema = false)` | 設 `room.schemaLocation` 並提交 schema json | 無法做 AutoMigration 與遷移測試 | Room 編譯期警告(文字待查) | B | 形狀:`@Database` 參數 `exportSchema = false` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-export-schema-false:樣本實測中壞例、好例不報 | ROOM-MIG#export-schemas〔併:研D二16〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-19 | Migration 沒有測試 | 有 `Migration(x, y)`,沒有 `MigrationTestHelper` 測試 | @get:Rule val helper = MigrationTestHelper(instrumentation = instrumentation, databaseClass = AppDb::class, driver = AndroidSQLiteDriver(), file = …);測試內 helper.createDatabase(1) 塞資料後 helper.runMigrationsAndValidate(2, listOf(MIGRATION_1_2)) 並查資料;另寫一條 migrateAll 測試,Room.databaseBuilder(...).addMigrations(*ALL_MIGRATIONS).build() 開到最新版讓 Room 驗 schema | 遷移 SQL 寫錯,上線崩潰 | 無 | C | 語意:要找對應測試是否存在且覆蓋每個版本對 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | ROOM-MIG#test〔併:研D二17〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/migrating-db-versions〕 |
+ | DATA-20 | RoomDatabase 建多個實例 | 函式或 Activity 裡 `Room.databaseBuilder(...).build()` | DI `@Provides @Singleton fun db(...)` 或 companion 單例 | 多連線池、InvalidationTracker 失效、寫入互鎖 | 無 | B | 形狀:`Room.databaseBuilder(...).build()` 出現在 function body 且不在 `@Provides`/object 單例裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-room-builder-not-singleton:樣本實測中壞例、好例不報 | ROOM-DB〔併:研D二18〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room〕 |
+ | DATA-21 | IN 查詢一次傳上千筆參數(出處不全) | `@Query("… WHERE id IN (:ids)")`,ids 數量沒上限 | `ids.chunked(500).flatMap { dao.byIds(it) }` 分批 | too many SQL variables 崩潰 | 無 | C | 語意:要知道參數數量上限 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | SQLITE-LIM〔併:研D二19〕〔查證 2026-11-05:https://www.sqlite.org/limits.html https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-22 | 用 OnConflictStrategy.REPLACE 當 upsert(出處不全) | `@Insert(onConflict = REPLACE)` 用在有外鍵 CASCADE 的父表 | `@Upsert` 或 `@Update` | REPLACE 先刪後插,連帶刪掉子表資料 | 無 | B | 形狀:`@Insert(onConflict = OnConflictStrategy.REPLACE)` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | ROOM-UPSERT〔併:研D二20〕〔查證 2026-11-05:https://www.sqlite.org/lang_conflict.html https://developer.android.com/training/data-storage/room/accessing-data〕 |
+ | DATA-23 | Room Flow 查詢沒去重 | 觀察整張表 `Flow<List<T>>`,不相關寫入也觸發 | `dao.observe().distinctUntilChanged()` | 多餘的重組與重算 | 無 | B | 形狀:DAO 回傳 Flow 的呼叫鏈沒有 `distinctUntilChanged` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | ROOM-ASYNC〔併:研D二21〕〔查證 2026-11-05:https://developer.android.com/training/data-storage/room/async-queries〕 |
+ | DATA-24 | SQL 字串串接使用者輸入 | `rawQuery("… where n='$name'")`;`@RawQuery` 用拼接字串 | `rawQuery("… where n = ?", arrayOf(name))`;`SimpleSQLiteQuery(sql, args)` | SQL 注入,特殊字元崩潰 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | B | 形狀:`rawQuery`/`execSQL`/`SimpleSQLiteQuery` 的字串參數含 `$` 樣板或 `+` 串接 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-sql-string-concat:樣本實測中壞例、好例不報 | SQLI〔併:研D二23〕〔查證 2026-11-05:https://developer.android.com/privacy-and-security/risks/sql-injection〕 |
+ | DATA-25 | SQL 欄位型別寫成 STRING | `CREATE TABLE t(x STRING)` | `CREATE TABLE t(x TEXT)` | 被當數值親和,前導零被吃 | Android Lint:SQLiteString | A | 形狀:SQL 字串含 ` STRING` 型別 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D二24〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/SQLiteString.md.html〕 |
+ | DATA-26 | 檔案寫入不是原子性的 | `File(path).writeText(json)` 直接覆蓋 | `AtomicFile(file).run { val s = startWrite(); try { s.write(bytes); finishWrite(s) } catch (e: IOException) { failWrite(s); throw e } }`,或寫暫存檔再 rename | 寫到一半當機檔案毀損 | 無 | B | 形狀:對持久檔直接 `writeText`/`writeBytes`/`FileOutputStream(file)` | 告警帶寫法 | 告警帶寫法=批一(只有提示級規則,預設不接) | 規則 kt-file-write-not-atomic(hint):樣本實測中壞例、好例不報 | ATOMICFILE〔併:研D二25〕〔查證 2026-11-05:https://developer.android.com/reference/kotlin/androidx/core/util/AtomicFile〕 |
+-| DATA-27 | 外部儲存路徑寫死或用淘汰 API | `Environment.getExternalStorageDirectory()`;字串 `"/sdcard/"` | `context.getExternalFilesDir(null)` 或 MediaStore | Android 10 以上分區儲存失敗 | 待查(Lint SdCardPath 代號待查) | B | 形狀:出現 `getExternalStorageDirectory` 或 `"/sdcard` 字串 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-external-storage-hardcoded:樣本實測中壞例、好例不報 | STORAGE〔併:研D二28〕〔查證 2026-11-05:https://developer.android.com/reference/android/os/Environment https://developer.android.com/training/data-storage/app-specific https://googlesamples.github.io/android-custom-lint-rules/checks/SdCardPath.md.html〕 |
++| DATA-27 | 外部儲存路徑寫死或用淘汰 API | `Environment.getExternalStorageDirectory()`;字串 `"/sdcard/"` | `context.getExternalFilesDir(null)` 或 MediaStore;別照 Lint 訊息改用 `Environment.getExternalStorageDirectory().getPath()`,那個寫法會被同列的自寫規則 kt-external-storage-hardcoded 擋;改用 `getExternalFilesDir` 或 MediaStore | Android 10 以上分區儲存失敗 | 內建:SdCardPath | B | 形狀:出現 `getExternalStorageDirectory` 或 `"/sdcard` 字串;Android Lint SdCardPath 另判寫死的 /sdcard 字串 | 告警帶寫法 | 告警帶寫法=批一、批四(CI 範本:Android Lint) | 規則 kt-external-storage-hardcoded:樣本實測中壞例、好例不報 | STORAGE〔併:研D二28〕〔查證 2026-11-05:https://developer.android.com/reference/android/os/Environment https://developer.android.com/training/data-storage/app-specific https://googlesamples.github.io/android-custom-lint-rules/checks/SdCardPath.md.html〕 |
+ | DATA-28 | 週期工作用 enqueue 排入 | `WorkManager.getInstance(c).enqueue(periodicRequest)` | `enqueueUniquePeriodicWork(name, ExistingPeriodicWorkPolicy.KEEP, req)`(要換設定用 UPDATE) | 每次啟動多排一份,工作堆積 | Android Lint:BadPeriodicWorkRequestEnqueue | A | 形狀:`enqueue(` 參數是 PeriodicWorkRequest | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三1〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/BadPeriodicWorkRequestEnqueue.md.html〕 |
+ | DATA-29 | 週期少於 15 分鐘 | `PeriodicWorkRequestBuilder<W>(5, TimeUnit.MINUTES)` | `PeriodicWorkRequestBuilder<W>(15, TimeUnit.MINUTES)` 以上 | 被系統強制改成 15 分鐘,行為與預期不同 | Android Lint:InvalidPeriodicWorkRequestInterval | A | 形狀:週期常數小於 15 分鐘 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT;WM-DEFINE〔併:研D三2〕 〔查證 2026-11-07:https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work〕 |
+ | DATA-30 | 一次性工作沒用 unique 或 policy 選錯 | `enqueue(OneTimeWorkRequest)` 做同步;`ExistingWorkPolicy.REPLACE` 打斷進行中的工作 | `enqueueUniqueWork("sync", ExistingWorkPolicy.KEEP, req)`;要排隊接續用 `APPEND_OR_REPLACE` | 重複上傳,或進行中的工作被取消 | Android Lint:EnqueueWork(範圍待讀細節,待查) | B | 語意:要判斷同一件事會不會重複排、要不要打斷進行中的那份 | 告警帶寫法、當下推相關列、表態對程式、盲判席 | 告警帶寫法=批一(只有提示級規則,預設不接);當下推相關列=批二;表態對程式=批三;盲判席=批三 | 規則 kt-work-enqueue-not-unique(hint)、kt-work-policy-replace(hint):樣本實測中壞例、好例不報 | WM-MANAGE;LINT〔併:研D三3〕〔查證 2026-11-05:https://developer.android.com/develop/background-work/background-tasks/persistent/how-to/manage-work〕 |
+ | DATA-31 | 自訂 Configuration 卻沒拿掉預設初始化器 | 實作 `Configuration.Provider`,manifest 沒移除 WorkManagerInitializer | manifest 裡 `<meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" />` | 自訂設定不生效或崩潰 | Android Lint:RemoveWorkManagerInitializer;BadConfigurationProvider | A | 形狀:有 `Configuration.Provider` 實作而 manifest 沒有 remove | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三4〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/RemoveWorkManagerInitializer.md.html〕 |
+ | DATA-32 | Worker 類別不是 public | `internal class SyncWorker : CoroutineWorker(...)` | `class SyncWorker`(public),或自訂 `WorkerFactory` | 預設工廠反射建不出來,工作永遠失敗 | Android Lint:WorkerHasAPublicModifier | A | 形狀:繼承 Worker 的類別帶 internal/private | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三5〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/WorkerHasAPublicModifier.md.html〕 |
+ | DATA-33 | 長時間工作沒宣告前景服務類型 | `setForeground(ForegroundInfo(id, n))` 沒帶類型;manifest 的 SystemForegroundService 沒宣告 | `ForegroundInfo(id, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)` 並在 manifest 宣告 `foregroundServiceType` 與權限 | Android 14 以上丟 MissingForegroundServiceTypeException | Android Lint:SpecifyForegroundServiceType;ForegroundServiceType;ForegroundServicePermission | A | 形狀:`ForegroundInfo(` 只有兩個參數 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D三6〕 〔查證 2026-11-07:https://developer.android.com/develop/background-work/services/fgs/service-types https://googlesamples.github.io/android-custom-lint-rules/checks/SpecifyForegroundServiceType.md.html〕 |
+ | DATA-34 | 加急工作沒實作 getForegroundInfo | `setExpedited(...)`,Worker 沒覆寫 `getForegroundInfo()` | Worker 覆寫 `override suspend fun getForegroundInfo(): ForegroundInfo` | Android 12 以下執行期崩潰 | 無 | B | 形狀:專案有 `setExpedited` 而對應 Worker 類別沒有 `getForegroundInfo` | 告警帶寫法 | 告警帶寫法=未接(還沒有規則) | 未測 | WM-DEFINE〔併:研D三7〕 〔查證 2026-11-07:https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work〕 |
+ | DATA-35 | setForeground 沒有 try/catch | `setForeground(info)` 直接呼叫 | `try { setForeground(info) } catch (e: IllegalStateException) { … }`(含 ForegroundServiceStartNotAllowedException) | Android 12 以上背景啟動被限制而崩潰 | 無 | B | 形狀:`setForeground(` 不在 try 區塊裡 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-setforeground-no-try:樣本實測中壞例、好例不報 | WM-DEFINE〔併:研D三8〕 〔查證 2026-11-07:https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work〕 |
+ | DATA-36 | Worker 遇到永久錯誤也回 retry | `catch (e: Exception) { Result.retry() }`,4xx 也一樣 | `if (runAttemptCount >= MAX) Result.failure() else if (e is IOException) Result.retry() else Result.failure()` | 無限重試,耗電耗流量 | 無 | B | 形狀:`Result.retry()` 不在 `runAttemptCount` 判斷之內 | 告警帶寫法、當下推相關列、表態對程式 | 告警帶寫法=語意覆核級(規則包語意覆核級命中走盲判_計劃接上前不擋);當下推相關列=批二;表態對程式=批三 | 規則 kt-worker-retry-unbounded:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-worker-retry-unbounded 命中 1、真 1、誤報 0,留;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | WM-DEFINE〔併:研D三9〕 〔查證 2026-11-07:https://developer.android.com/reference/androidx/work/ListenableWorker.Result〕 |
+ | DATA-37 | Worker 吞例外回 success | `try { … } catch (e: Exception) {}; return Result.success()` | 依錯誤型別回 `Result.failure()` 或 `Result.retry()` | 工作失敗被當成完成,資料默默遺失 | 待查(detekt SwallowedException 候選) | B | 形狀:doWork 裡空 catch 後面接 `Result.success()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-worker-swallow-success:樣本實測中壞例、好例不報 | WM-DEFINE〔併:研D三10〕 〔查證 2026-11-07:https://developer.android.com/reference/androidx/work/ListenableWorker.Result https://developer.android.com/develop/background-work/background-tasks/persistent/threading/worker https://detekt.dev/docs/rules/empty-blocks〕 |
+@@ -601,29 +608,40 @@
+ | DATA-69 | 刷新失敗卻先清本機快取 | 先 `dao.clear()` 再呼叫 api | `val fresh = api.fetch(); db.withTransaction { dao.clear(); dao.insertAll(fresh) }`(成功後才換) | 離線時資料全空 | 無 | C | 語意:要看清除與網路呼叫的先後與失敗路徑 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T6 | 未測 | DL-OFFLINE〔併:研D五13〕〔查證 2026-11-05:https://developer.android.com/topic/libraries/architecture/paging/v3-network-db https://developer.android.com/topic/architecture/data-layer/offline-first〕 |
+ | DATA-70 | kotlinx.serialization 沒開 ignoreUnknownKeys | `Json.decodeFromString<Foo>(s)` 用預設 Json 解析伺服器回應 | 共用 `val json = Json { ignoreUnknownKeys = true }`,`json.decodeFromString<Foo>(s)` | 伺服器新增欄位,舊版 App 全面解析失敗 | 無 | B | 形狀:對網路回應用 `Json.decodeFromString`(預設實例)或 Json builder 沒設 ignoreUnknownKeys | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-json-default-instance:樣本實測中壞例、好例不報 | KXS-IGNORE〔併:研D一18〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-71 | 每次都新建 Json 設定 | 函式裡 `Json { … }.decodeFromString(s)` | 頂層 `val json = Json { ignoreUnknownKeys = true }` 重用 | 效能差;各處設定不一致 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | B | 形狀:`Json {` 建構出現在 function body | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-json-config-per-call:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-json-config-per-call 命中 1、真 0、誤報 1,改形狀:排除測試 | KXS-JSON〔併:研D一19〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-72 | 非可空欄位沒預設值也沒開 coerceInputValues | `@Serializable data class U(val name: String)`,伺服器可能回 null 或缺欄位 | `val name: String? = null` 或 `val name: String = ""`,需要時 `Json { coerceInputValues = true }` | MissingFieldException 或 JsonDecodingException,整份清單解析失敗 | 無 | C | 語意:要知道伺服器哪些欄位可能缺或為 null | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T5 | 未測 | KXS-JSON#coercing-input-values〔併:研D一20〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-customization-options.html https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-73 | 列舉遇到未知值就崩潰 | `enum class Status { A, B }`,伺服器新增 C | `enum class Status { A, B, UNKNOWN }`,欄位 `val status: Status = Status.UNKNOWN` 並開 `coerceInputValues = true` | 新列舉值讓舊版 App 全面崩潰 | 無 | C | 語意:要知道列舉來自伺服器且會擴充 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T5 | 未測 | KXS-JSON#coercing-input-values〔併:研D一21〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html〕 |
+ | DATA-74 | 帶預設值的欄位沒被序列化出去 | 欄位等於預設值被省略(`encodeDefaults` 預設 false) | 必送欄位標 `@EncodeDefault`,或 `Json { encodeDefaults = true }` | 伺服器收不到必填欄位 | 無 | C | 語意:要知道伺服器哪些欄位必填 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=範本 T5 | 未測 | KXS-BASIC〔併:研D一22〕〔查證 2026-11-05:https://kotlinlang.org/docs/serialization-json-configuration.html https://kotlinlang.org/docs/serialization-customization-options.html〕 |
+ | DATA-75 | Gson 解析 Kotlin 非空欄位得到 null | Gson 搭配 `data class X(val a: String)`,JSON 缺 a | 改 Moshi codegen(`@JsonClass(generateAdapter = true)`)或 kotlinx.serialization | 非空型別裡裝 null,別處 NPE | 無 | B | 形狀:專案裡 Gson 解析目標是 Kotlin data class | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-gson-nonnull-field:樣本實測中壞例、好例不報 | GSON-TS〔併:研D一23〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/README.md https://github.com/square/moshi/blob/master/README.md〕 |
+ | DATA-76 | Moshi 反射沒 KotlinJsonAdapterFactory 或 codegen 漏標 | `Moshi.Builder().build()` 解析 Kotlin 類;漏 `@JsonClass(generateAdapter = true)` | 類別標 `@JsonClass(generateAdapter = true)`;用反射就 `Moshi.Builder().add(KotlinJsonAdapterFactory()).build()` | 執行期崩潰、預設值失效 | Android Lint(Slack):MoshiUsage* 系列(逐條代號待抄,待查) | A | 形狀:Moshi 解析的 data class 沒有 `@JsonClass` | 告警帶寫法 | 告警帶寫法=批四(現成規則) | 未測 | LINT〔併:研D一24〕 〔查證 2026-11-07:https://github.com/square/moshi〕 |
+ | DATA-77 | R8 混淆掉解析用的模型 | Gson 反射解析,沒有 `-keep` 或 `@SerializedName` | 設定 R8/ProGuard keep 規則保留解析模型的欄位名稱(與無參建構子);或改用以 code generation 取代反射的解析器(Gson README 指名 Kotlin Serialization) | 只有 release 版解析出全空欄位 | 無 | C | 語意:要用 release 版跑解析才看得出 | 表態對程式、盲判席、行為測試或正向約束 | 表態對程式=批三;盲判席=批三;行為測試或正向約束=不接(代碼審或真機) | 未測 | SHRINK〔併:研D一25〕〔查證 2026-11-05:https://github.com/google/gson/blob/main/Troubleshooting.md https://github.com/google/gson/blob/main/README.md〕 |
+ | DATA-78 | 使用 java.io.Serializable | 資料類 `: Serializable` 拿去傳遞或存檔 | `@Parcelize data class X(…) : Parcelable`,或 `@Serializable`(kotlinx.serialization) | 慢,而且有反序列化風險 | Android Lint:SerializableUsage | A | 形狀:類別實作 `java.io.Serializable` | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測 | LINT〔併:研D一26〕 〔查證 2026-11-07:https://googlesamples.github.io/android-custom-lint-rules/checks/SerializableUsage.md.html〕 |
+-| DATA-79 | 原始碼裡寫死秘密 | `const val API_KEY = "AIza…"`;網址裡帶帳密 `https://user:pass@host` | 秘密不進原始碼,用 Secrets Gradle Plugin 之類的方式在建置時注入 | 反編譯就拿得到金鑰或帳密 | 內建:SecretInSource、AuthLeak | A | 形狀:由 Android Lint SecretInSource、AuthLeak 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SecretInSource.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AuthLeak.md.html〕 |
++| DATA-79 | 寫死 Gemini API 金鑰或網址帶帳密 | `GenerativeModel(modelName = "…", apiKey = "AIza…")`;網址裡帶帳密 `https://user:pass@host`(一般寫死秘密見 DATA-97) | 秘密不進原始碼,用 Secrets Gradle Plugin 之類的方式在建置時注入 | 反編譯就拿得到金鑰或帳密 | 內建:SecretInSource(只看 Gemini SDK 的 GenerativeModel 金鑰,AGP 8.3.0 以上才有)、AuthLeak(只看網址裡的 user:pass@) | A | 形狀:由 Android Lint SecretInSource(只看 GenerativeModel 建構子)、AuthLeak 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 2026-11-08 讀 Google 原始碼確認 SecretInSource 只看 Gemini SDK 的 GenerativeModel 建構子,原登記多算的一般寫死秘密那半移到 DATA-97;原記:未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/SecretInSource.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/AuthLeak.md.html〕 |
+ | DATA-80 | 把私鑰檔打包進 App | `res/raw`、`assets` 裡放 `.pem`、`.key` 私鑰檔 | 私鑰不放進 App | 私鑰隨 APK 外流 | 內建:PackagedPrivateKey | A | 形狀:由 Android Lint PackagedPrivateKey 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/PackagedPrivateKey.md.html〕 |
+ | DATA-81 | 敏感資料寫進 logcat | `Log.d(TAG, "password=…")`、`Log.wtf("…passwd…", …)` | 不記敏感資料;非除錯版的日誌都要清理 | 其他工具或使用者從 logcat 讀到秘密 | 資安包:LogInfoDisclosure | A | 形狀:由 Android Lint LogInfoDisclosure 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/LogInfoDisclosure.md.html〕 |
+-| DATA-82 | 加密用 ECB 或沒指定模式、不安全的填充 | `Cipher.getInstance("AES")`;`Cipher.getInstance("AES/ECB/PKCS5Padding")`;不安全的模式或填充組合 | 明寫安全的模式,例 `Cipher.getInstance("AES/GCM/NoPadding")` | Android 預設模式是 ECB,相同明文得到相同密文;不安全的填充可被填充預言攻擊 | 內建:GetInstance;資安包:UnsafeCryptoAlgorithmUsage | A | 形狀:由 Android Lint GetInstance、UnsafeCryptoAlgorithmUsage 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/GetInstance.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeCryptoAlgorithmUsage.md.html〕 |
+-| DATA-83 | 用弱或已被攻破的雜湊、加密演算法 | `MessageDigest.getInstance("MD5")`、`"SHA-1"` 這類弱演算法 | 改用 SHA-256 以上等目前安全的演算法 | 攻擊者能推回原始輸入或造出相同雜湊 | 資安包:VulnerableCryptoAlgorithm | A | 形狀:由 Android Lint VulnerableCryptoAlgorithm 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/VulnerableCryptoAlgorithm.md.html〕 |
++| DATA-82 | 加密用 ECB 或沒指定模式、不安全的填充 | `Cipher.getInstance("AES")`;`Cipher.getInstance("AES/ECB/PKCS5Padding")`;不安全的模式或填充組合;RSA 不帶 OAEP 填充(`RSA/ECB/NoPadding`)這列登記的兩條檢查都不報,見 DATA-98 | 明寫安全的模式,例 `Cipher.getInstance("AES/GCM/NoPadding")` | Android 預設模式是 ECB,相同明文得到相同密文;不安全的填充可被填充預言攻擊 | 內建:GetInstance;資安包:UnsafeCryptoAlgorithmUsage | A | 形狀:由 Android Lint GetInstance、UnsafeCryptoAlgorithmUsage 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 2026-11-08 讀 Google 原始碼確認這列登記的兩條檢查都不報 `RSA/ECB/NoPadding`,原登記多算的 RSA 無填充那半移到 DATA-98;原記:未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/GetInstance.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/UnsafeCryptoAlgorithmUsage.md.html〕 |
++| DATA-83 | 加密用弱演算法 | `Cipher.getInstance("DES/CBC/PKCS5Padding")`、`"RC4"`、`"Blowfish"` 這類弱加密演算法(雜湊的 MD5、SHA-1 見 DATA-96) | 改用 AES-128 或 AES-256 搭 GCM,例 `Cipher.getInstance("AES/GCM/NoPadding")` | 密文能被暴力破解或已知攻擊解開 | 資安包:VulnerableCryptoAlgorithm(只看 Cipher.getInstance,前綴比對 DES、RC2、RC5、Blowfish、RC4、ARCFOUR,DESede 也會報) | A | 形狀:由 Android Lint VulnerableCryptoAlgorithm 判(只看 Cipher.getInstance 的演算法字串) | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 2026-11-08 讀 Google 原始碼確認 VulnerableCryptoAlgorithm 只看 Cipher.getInstance、不看 MessageDigest,原登記多算的雜湊那半移到 DATA-96;原記:未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/VulnerableCryptoAlgorithm.md.html〕 |
+ | DATA-84 | 資安場合用弱亂數或固定種子 | 產生權杖、驗證碼用 `Math.random()`、`java.util.Random`;`SecureRandom` 給固定種子 | 資安用途用 `SecureRandom()` 且不設固定種子;非資安用途才用 `Random` | 攻擊者猜得到產生的數字,冒用身分 | 資安包:WeakPrng;內建:SecureRandom | A | 形狀:由 Android Lint WeakPrng、SecureRandom 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WeakPrng.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SecureRandom.md.html〕 |
+-| DATA-85 | 建立全域可讀寫的檔案 | `openFileOutput(name, MODE_WORLD_READABLE)`、`MODE_WORLD_WRITEABLE`;`file.setReadable(true, false)` | 檔案留在 App 私有目錄;要給別的 App 用 ContentProvider 或 FileProvider | 別的 App 讀到或改掉你的檔案 | 內建:WorldReadableFiles、WorldWriteableFiles、SetWorldReadable | A | 形狀:由 Android Lint WorldReadableFiles、WorldWriteableFiles、SetWorldReadable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WorldReadableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WorldWriteableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldReadable.md.html〕 |
++| DATA-85 | 建立全域可讀寫的檔案 | `openFileOutput(name, MODE_WORLD_READABLE)`、`MODE_WORLD_WRITEABLE`;`file.setReadable(true, false)`、`file.setWritable(true, false)` | 檔案留在 App 私有目錄;要給別的 App 用 ContentProvider 或 FileProvider | 別的 App 讀到或改掉你的檔案 | 內建:WorldReadableFiles、WorldWriteableFiles、SetWorldReadable、SetWorldWritable | A | 形狀:由 Android Lint WorldReadableFiles、WorldWriteableFiles、SetWorldReadable、SetWorldWritable 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/WorldReadableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/WorldWriteableFiles.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldReadable.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SetWorldWritable.md.html〕 |
+ | DATA-86 | 退出分區儲存或用外部路徑分享敏感資料 | `<application android:requestLegacyExternalStorage="true">`;file_paths.xml 的 `<external-path>` | 不退出分區儲存;敏感資料留在 App 私有目錄或系統憑證儲存 | 外部儲存的檔案別的 App 讀得到 | 資安包:InsecureLegacyExternalStorage、SensitiveExternalPath | A | 形狀:由 Android Lint InsecureLegacyExternalStorage、SensitiveExternalPath 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑) | ASL;LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/InsecureLegacyExternalStorage.md.html https://googlesamples.github.io/android-custom-lint-rules/checks/SensitiveExternalPath.md.html〕 |
+ | DATA-87 | SecretKeySpec 用寫死的金鑰 | `SecretKeySpec("0123456789abcdef".toByteArray(), "AES")`;`SecretKeySpec(byteArrayOf(0x48, 0x65), "AES")` | 金鑰用 Android Keystore 產生與保存(`KeyGenerator.getInstance("AES", "AndroidKeyStore")`),不放進 APK | 反編譯就拿得到金鑰,加密形同虛設 | 無(自寫 ast-grep kt-secretkeyspec-literal-key) | B | 形狀:SecretKeySpec 第一個參數(含具名參數 key =)是不含插值的字串字面值接 toByteArray 或 encodeToByteArray,或參數全是整數字面值的 byteArrayOf(…) | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-secretkeyspec-literal-key:樣本實測中壞例、好例不報;真實語料:樣本內(第一輪形狀)68 處誤報 2、樣本外 3 處誤報 0 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0212/ https://developer.android.com/privacy-and-security/keystore〕 |
++| DATA-88 | 解壓縮沒擋路徑穿越(Zip Slip) | `val f = File(destDir, entry.name)` 之後直接寫檔 | 取 `f.canonicalPath`,檢查 `startsWith(destDir.canonicalPath + File.separator)`,不符就丟例外 | 項目名稱帶 `../` 就能寫到目標資料夾外,覆寫 App 的程式或設定 | 無(自寫 ast-grep kt-zip-slip) | B | 形狀:處理 ZipInputStream、ZipFile、JarFile 的函式裡,File(…)、resolve(…) 的參數直接或經區域變數用到 .name;同函式有 canonicalPath、normalize、".." 檢查、壓縮檔來自 assets 或資源、名稱先去掉目錄部分的不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-zip-slip:樣本實測中壞例、好例不報;真實語料:樣本內抽判 27 處誤報 6、樣本外 24 處誤報 10;實驗時多排除了建置腳本,規則包沒排除,建置腳本裡的命中會比量到的多 | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/zip-path-traversal〕 |
++| DATA-89 | ContentProvider 開檔沒擋路徑穿越 | `override fun openFile(uri: Uri, mode: String)` 裡 `File(context!!.filesDir, uri.path!!)` | 組好後取 canonicalPath,檢查在允許資料夾內;或改用 FileProvider 的路徑白名單 | 呼叫端傳 `..%2F` 就能讀到私有資料夾外的檔 | 無(自寫 ast-grep kt-provider-openfile-traversal) | B | 形狀:override 的 openFile、openAssetFile、openTypedAssetFile 裡,File(…)、resolve(…) 的參數直接或經區域變數用到 uri 的 path、lastPathSegment、pathSegments;同函式有 canonicalPath 這類檢查不報 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-provider-openfile-traversal:樣本實測中壞例、好例不報;真實語料:樣本內抽判 4 處誤報 1、樣本外 6 處誤報 0(命中太少) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/path-traversal〕 |
++| DATA-90 | 加密用固定 IV | `IvParameterSpec(byteArrayOf(0, 0, 0, 0))`;`GCMParameterSpec(128, "fixed".toByteArray())`;同檔 `val IV = byteArrayOf(…)` 再 `IvParameterSpec(IV)` | 每次加密用 SecureRandom 產生新 IV(或讓 `Cipher.init` 自己產生再讀 `cipher.iv`),跟密文一起存 | 同一把金鑰配同一個 IV,CBC 洩漏明文前綴、GCM 可被偽造與解密 | 無(自寫 ast-grep kt-static-iv) | B | 形狀:IvParameterSpec、GCMParameterSpec 的位元組參數是整數字面值的 byteArrayOf、字串字面值接 toByteArray、ByteArray(n),或同檔以這些寫法宣告的屬性 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-static-iv:樣本實測中壞例、好例不報;真實語料:樣本內抽判 23 處誤報 12、樣本外 30 處誤報 16(外部協定強制居多) | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0309/〕 |
++| DATA-91 | 金鑰長度太短 | `KeyPairGenerator.getInstance("RSA")` 再 `initialize(1024)`;`KeyGenerator.getInstance("AES")` 再 `init(64)` | RSA 至少 2048(建議 3072)、AES 至少 128(建議 256) | 短金鑰能被暴力破解 | 無(自寫 ast-grep kt-weak-key-size) | B | 形狀:RSA、DSA、DH 的 KeyPairGenerator.initialize 或 RSAKeyGenParameterSpec 第一個參數小於 2048;KeyGenerator 的 init 第一個參數小於 128 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-weak-key-size:樣本實測中壞例、好例不報;真實語料:樣本內抽判 6 處誤報 1、樣本外 6 處誤報 4 | MASTG 〔查證 2026-11-08:https://mas.owasp.org/MASTG/tests/android/MASVS-CRYPTO/MASTG-TEST-0208/〕 |
++| DATA-92 | ObjectInputStream 反序列化 | `ObjectInputStream(socket.getInputStream()).readObject()` | 改用 JSON、Protobuf 這類只帶資料的格式;非用不可就繼承 ObjectInputStream 覆寫 resolveClass 只放行白名單類別 | 資料可被別人塞(網路、外部儲存、Intent、其他 App)時能觸發 gadget 鏈 | 無(自寫 ast-grep kt-object-input-stream) | B | 形狀:任何 ObjectInputStream(…);同函式先寫 ObjectOutputStream 再從 ByteArrayInputStream 讀回的深複製、來源是 App 私有檔或內建資源的不報;跟 DATA-78(類別實作 Serializable)不同一件事 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-object-input-stream:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 29、樣本外 194 處抽判 40 處誤報 30(資料來自自己的私有檔或設定) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/unsafe-deserialization〕 |
++| DATA-93 | 資料庫放外部儲存 | `SQLiteDatabase.openOrCreateDatabase(File(ctx.getExternalFilesDir(null), "app.db"), null)`;`Room.databaseBuilder` 給外部儲存的路徑 | Room.databaseBuilder 只給檔名(預設內部路徑),或用 `context.getDatabasePath` | 舊版 Android 或有儲存權限的 App 能讀改資料庫 | 無(自寫 ast-grep kt-db-on-external-files) | B | 形狀:SQLiteDatabase.openOrCreateDatabase、openDatabase、Room.databaseBuilder 的參數直接或經同函式、同類別的屬性用到 getExternalFilesDir、externalCacheDir、getExternalStorageDirectory 這類外部路徑 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-db-on-external-files:樣本實測中壞例、好例不報;真實語料:樣本內抽判 14 處誤報 0、樣本外 1 處誤報 0(量不夠) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/sensitive-data-external-storage〕 |
++| DATA-94 | XML 解析沒關外部實體(XXE) | `DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(input)` 沒設任何防護;`parser.setFeature(XmlPullParser.FEATURE_PROCESS_DOCDECL, true)` | `factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)` 並設 `isExpandEntityReferences = false`;XmlPullParser 別開 FEATURE_PROCESS_DOCDECL | 惡意 XML 能讀本機檔或用實體展開灌爆記憶體 | 無(自寫 ast-grep kt-xxe-documentbuilder) | B | 形狀:會 parse 的函式或檔案裡的 DocumentBuilderFactory.newInstance(),同函式或同檔沒看到 disallow-doctype-decl、external-general-entities、isExpandEntityReferences = false、FEATURE_SECURE_PROCESSING 這類防護;或 setFeature(FEATURE_PROCESS_DOCDECL, true) | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-xxe-documentbuilder:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 29、樣本外 66 處抽判 40 處誤報 25(資料來自可信來源);Android 的 DOM 解析器預設會不會解析外部實體沒實測;實驗時多排除了建置腳本,規則包沒排除 | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/xml-external-entities-injection〕 |
++| DATA-95 | 信任別人 provider 給的檔名(AGP 8.8.0 以上才有) | 從別的 App 的 ContentProvider 讀 `OpenableColumns.DISPLAY_NAME` 拿到檔名,直接 `File(dir, fileName)` | 檔名先消毒(只留最後一段、拒絕 ..)或自己產生檔名 | 對方給 `../` 開頭的檔名就能覆寫 App 私有檔 | 內建:UnsanitizedFilenameFromContentProvider | A | 形狀:由 Android Lint UnsanitizedFilenameFromContentProvider 判 | 告警帶寫法 | 告警帶寫法=批四(CI 範本:Android Lint) | 未測(lint 規則,CI 跑);這條 AGP 8.8.0 才有,範本下限 AGP 8.5.1 的專案在 8.8.0 以前照接 CI 也不會有這條檢查 | LINTREF 〔查證 2026-11-08:https://googlesamples.github.io/android-custom-lint-rules/checks/UnsanitizedFilenameFromContentProvider.md.html〕 |
++| DATA-96 | 用弱雜湊(MD5、SHA-1、MD4) | `MessageDigest.getInstance("MD5")`、`"SHA-1"`;同檔 `const val ALGO = "MD5"` 再 `getInstance(ALGO)` | SHA-256 以上;密碼雜湊用 PBKDF2 或 Argon2;只做檢查碼或快取鍵這類非資安用途就加註說明 | 已能造碰撞,拿來做密碼雜湊、簽章、防竄改都不安全 | 無(自寫 ast-grep kt-weak-message-digest) | B | 形狀:MessageDigest.getInstance 第一個參數是 MD5、SHA-1、SHA1、MD4、MD2 的字串,或同檔以這些字串宣告的常數;DATA-83 登記的資安包檢查只看 Cipher、不看 MessageDigest | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-weak-message-digest:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 36、樣本外 143 處抽判 40 處誤報 32(檢查碼、快取鍵、外部協定) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm〕 |
++| DATA-97 | 原始碼裡寫死一般秘密 | `const val API_KEY = "sk9f2Lq0xP7mZ3vB"`;`val password = "Abc12345xyz"` | 秘密不進原始碼:用伺服器換發的短效 token,或放 local.properties 經 BuildConfig 在建置時注入(Secrets Gradle Plugin 之類),別進版本庫 | 反編譯 APK 就拿得到金鑰或密碼 | 無(自寫 ast-grep kt-hardcoded-secret-name) | B | 形狀:屬性名含 password、passwd、secret、api_key、token、private_key(偏好鍵、欄位名、標頭名、路徑名這類鍵名型名稱除外),值是八字以上、英數都有、不像鍵名或佔位字的字串字面值;DATA-79 登記的內建檢查只看 Gemini 金鑰 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-hardcoded-secret-name:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 6、樣本外 36 處誤報 9 | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/hardcoded-cryptographic-secrets〕 |
++| DATA-98 | RSA 不帶 OAEP 填充 | `Cipher.getInstance("RSA/ECB/NoPadding")`;`Cipher.getInstance("RSA")` | `Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")` | 同一明文永遠同一密文、密文可被改寫(教科書 RSA) | 無(自寫 ast-grep kt-rsa-no-oaep) | B | 形狀:Cipher.getInstance 第一個參數是 "RSA" 或 "RSA/…/NoPadding",或同檔以這些字串宣告的常數;DATA-82 登記的兩條檢查都不報這個寫法 | 告警帶寫法 | 告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠) | 規則 kt-rsa-no-oaep:樣本實測中壞例、好例不報;真實語料:樣本內抽判 40 處誤報 38、樣本外 39 處誤報 31(ADB 簽章、護照晶片這類外部協定強制) | 〔查證 2026-11-08:https://developer.android.com/privacy-and-security/risks/broken-cryptographic-algorithm〕 |
+ 
+ ## TEST 測試
+ 
+ | 編號 | 名稱 | 壞寫法形狀 | 標準寫法(這個情境該怎麼寫) | 後果 | 現成規則 | 級 | 情境怎麼認 | 接電方式 | 通電批次 | 實測狀態 | 來源 |
+ |---|---|---|---|---|---|---|---|---|---|---|---|
+ | TEST-1 | Dispatchers.setMain 沒配 resetMain | 測試類別 `@Before { Dispatchers.setMain(d) }`,找不到 `Dispatchers.resetMain()` | 用 `MainDispatcherRule`(TestWatcher 的 starting 裡 setMain、finished 裡 resetMain),或 `@After fun tearDown() { Dispatchers.resetMain() }` | 汙染後面的測試,單跑綠、整套跑紅 | EXTRAS:kt-setmain-without-reset | B | 形狀:類別內有 `Dispatchers.setMain(` 卻沒有 `Dispatchers.resetMain()` | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-setmain-without-reset:樣本實測中壞例、好例不報 | EXTRAS;AND-TEST〔併:X:kt-setmain-without-reset〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md〕 |
+ | TEST-2 | 一個測試裡有多個排程器 | `val d1 = StandardTestDispatcher()`、`val d2 = UnconfinedTestDispatcher()` 各自新建,沒傳 `testScheduler` | `StandardTestDispatcher(testScheduler)`,或先 setMain 再建,全部共用一個排程器 | 虛擬時間分裂,`advanceUntilIdle` 推不動另一個,測試不確定或掛住 | 無 | B | 形狀:測試檔中 `*TestDispatcher()` 無參數,出現在 runTest 外或兩次以上 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-test-multiple-schedulers、kt-test-dispatcher-no-scheduler:樣本實測中壞例、好例不報;2026-11-05 真專案實測(實驗專案+nowinandroid):kt-test-multiple-schedulers 命中 1、真 0、誤報 1,改形狀:TestScope 參數直接帶排程器不報 | AND-TEST〔併:研C九1、T1〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test〕 |
+ | TEST-3 | 在設 Main 之前就建 TestDispatcher 屬性 | `private val repo = Repo(StandardTestDispatcher())` 寫在 `@get:Rule val mainRule` 之前或規則外 | Rule 宣告在最前面,其他屬性用 `mainDispatcherRule.testDispatcher` | 類別屬性在換 Main 之前初始化,另開新排程器 | 無 | B | 形狀:測試類別屬性初始值有 `TestDispatcher()` 且位置在 Rule 之前 | 告警帶寫法 | 告警帶寫法=批一 | 規則 kt-testdispatcher-before-mainrule、kt-testdispatcher-before-mainrule:樣本實測中壞例、好例不報 | AND-TEST〔併:研C九2、T2〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test〕 |
+ | TEST-4 | StandardTestDispatcher 下沒推進就斷言 | `runTest { vm.load(); assertEquals(Loaded, vm.state.value) }`(load 內 launch);`val vm = VM(); assertEquals(expected, vm.state.value)`(init 裡 launch) | 斷言前 `advanceUntilIdle()`/`runCurrent()`,或 `job.join()`;init 不啟動,改由 `stateIn(WhileSubscribed)` | 新協程排隊未執行,斷言看到舊值 → 錯紅;或被誤「修」成 Unconfined 而蓋掉併發問題 | 無 | B+C | 形狀:runTest 內 launch 或呼叫被測函式後,下一句就是 assert 而無推進呼叫 | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=範本 T0 | 規則 kt-test-assert-after-launch-no-advance:樣本實測中壞例、好例不報 | AND-TEST〔併:研C九3、T5、T23〕 〔查證 2026-11-07:https://developer.android.com/kotlin/coroutines/test〕 |
+ | TEST-5 | 永不結束的收集放在 runTest 的一般 launch 或 TestScope 本體 | `runTest { launch { vm.state.collect { values += it } } }`;`UserState(scope = this)` 裡 collect 熱流;`launch { vm.state.toList(values) }` | `backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { vm.state.toList(values) }`;注入 `backgroundScope` | runTest 一直等這個協程完成 → 測試掛住,最後 UncompletedCoroutinesError 逾時 | 無 | B+C | 形狀:runTest 本體內 `launch {` 的本體有 `.collect`/`toList`,且接收者不是 backgroundScope | 告警帶寫法、行為測試或正向約束 | 告警帶寫法=批一;行為測試或正向約束=範本 T0 | 規則 kt-runtest-launch-collect-forever、kt-test-tolist-not-background:樣本實測中壞例、好例不報;這列有規則在語意覆核級(info):好例目錄裡 review-fp- 開頭的檔是已知會誤報、留給盲判排除的寫法 | AND-FTEST;AND-TEST〔併:研C九4、T10、T16〕 〔查證 2026-11-07:https://developer.android.com/kotlin/flow/test https://github.com/Kotlin/kotlinx.coroutines/blob/master/kotlinx-coroutines-test/README.md〕 |
+@@ -765,166 +783,82 @@
+ | D-50 | 用 Turbine 逐筆驗 Flow 事件 | 區塊結束前把事件消費完,確定後面不在意才明確忽略:`flow.test { assertEquals(expected, awaitItem()); cancelAndIgnoreRemainingEvents() }`;預期以錯誤結束 → `val error = awaitError()` 再斷言型別 | (換列)沒消費完就結束會失敗(Unconsumed events found)→ 這是在提醒漏驗,不要一律加 ignore;受測的是 StateFlow → 優先改用上一列斷言 `.value` | awaitItem、awaitError、awaitComplete、cancelAndIgnoreRemainingEvents、Turbine | 主:`\bawaitItem\(\)\|\bawaitError\(\)` `\bcancelAndIgnoreRemainingEvents\(\)\|\bawaitComplete\(\)\|\bawaitError\(\)\|\bensureAllEventsConsumed\(\)`;例外:(無) | TEST-18, TEST-19 | https://github.com/cashapp/turbine ; https://developer.android.com/kotlin/flow/test |
+ | D-51 | Compose UI 測試的同步與節點查找(動畫、外部非同步、合併語意) | 自己控時鐘:`composeTestRule.mainClock.autoAdvance = false` 後 `composeTestRule.mainClock.advanceTimeBy(milliseconds)` 或 `advanceTimeUntil(timeoutMs) { condition }`;框架看不到的非同步工作 → `composeTestRule.registerIdlingResource(idlingResource)`(收尾 `unregisterIdlingResource`)或 `composeTestRule.waitUntil(timeoutMs) { condition }`;子節點被父節點合併 → `composeTestRule.onNodeWithText("World", useUnmergedTree = true).assertIsDisplayed()` | `autoAdvance = false` 時 `waitForIdle()` 只等 idling resource;不要用外部 `CountDownLatch` 等(測試時鐘不會前進);要斷言整張卡片的合併語意 → 用預設的合併樹 | mainClock、autoAdvance、advanceTimeBy、registerIdlingResource、waitUntil、useUnmergedTree、onNodeWithText | 主:`\bmainClock\.\|\bregisterIdlingResource\(\|\bwaitUntil\s*\(\|\buseUnmergedTree\s*=\s*true`;例外:(無) | TEST-29, TEST-30, TEST-32 | https://developer.android.com/develop/ui/compose/testing/synchronization ; https://developer.android.com/develop/ui/compose/testing/apis |
+ | D-52 | Compose 無障礙(觸控大小、語意合併、標題) | 可點元素至少 48dp:`Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)`;外觀必須小 → `Modifier.clickable { … }.minimumInteractiveComponentSize().size(24.dp)`(要放在 size 之前);同一資訊單位合併讀出:`Row(modifier = Modifier.semantics(mergeDescendants = true) {}) { … }`;段落標題:`Text(text = text, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })` | `Button`、`IconButton`、`ListItem` 已保證最小尺寸,`clickable`、`toggleable` 已會合併 → 不用重加;點擊交給外層 → `Row(Modifier.toggleable(…)) { Checkbox(checked, onCheckedChange = null) }`;要改寫子元件語意 → `clearAndSetSemantics`(節制使用),純裝飾 → `hideFromAccessibility()`;滑鼠或觸控板等精準輸入可小於 48dp | minimumInteractiveComponentSize、sizeIn、semantics、mergeDescendants、heading、clearAndSetSemantics、IconButton | 主:`\bsizeIn\(\|^(?:(?!\.size\().)*\bminimumInteractiveComponentSize\(\)\|\bmergeDescendants\s*=\s*true\|\bheading\(\)`;例外:(無) | UI-106, UI-108, UI-111 | https://developer.android.com/develop/ui/compose/accessibility/api-defaults ; https://developer.android.com/develop/ui/compose/accessibility/merging-clearing ; https://developer.android.com/develop/ui/compose/accessibility/semantics |
+ | D-53 | 測試會碰到網路或後端等外部服務 | 做成封閉(hermetic)測試,注入假實作(官方首選 fake):`object FakeUserRepository : UserRepository { fun getUsers() = listOf(UserAlice, UserBob) }`;較大的測試用 Hilt 抽換元件 | 刻意驗證與真實後端相容的端對端測試 → 另立一類,不混進單元或 UI 測試;要測網路層本身(MockWebServer)官方查無出處,見 notes 人裁 | Retrofit、baseUrl、MockWebServer、Fake、TestInstallIn、UninstallModules | 主:`\bFake\w*\|@TestInstallIn\b\|@UninstallModules\b`;例外:(無) | TEST-37 | https://developer.android.com/training/testing/fundamentals/test-doubles |
+ | D-54 | 要自動抓記憶體洩漏回歸 | instrumentation 測試接 LeakCanary:`androidTestImplementation 'com.squareup.leakcanary:leakcanary-android-instrumentation:2.14'`,測試類別加 `@get:Rule val rule = DetectLeaksAfterTestSuccess()`;或在測試中任意位置呼叫 `LeakAssertions.assertNoLeaks()` | 已用 RuleChain 串多條規則 → 改用 `RuleChain` 的 `detectLeaksAfterTestSuccessWrapping()`;App 端仍要有 `debugImplementation 'com.squareup.leakcanary:leakcanary-android:2.14'` | LeakCanary、DetectLeaksAfterTestSuccess、LeakAssertions、assertNoLeaks、RuleChain、androidTestImplementation | 主:`\bDetectLeaksAfterTestSuccess\(\)\|\bLeakAssertions\.assertNoLeaks\(\)`;例外:`\bdetectLeaksAfterTestSuccessWrapping\(` | TEST-35 | https://square.github.io/leakcanary/ui-tests/ |
+ | D-55 | 會在主執行緒跑的重運算(排序大清單、解析、解碼) | 做重活的類別自己切到注入的 dispatcher:`class NewsRepository(private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default) { suspend fun loadNews() = withContext(defaultDispatcher) { … } }`;Composable 裡的計算用 `remember(contacts, comparator) { contacts.sortedWith(comparator) }` 快取,更好是移到 ViewModel | 計算很輕(只組清單)→ 不切換,呼叫端也不用管 dispatcher;不要在類別裡寫死 `Dispatchers.Default`,要注入(測試才能換) | CoroutineDispatcher、sortedWith、onBindViewHolder | 主:`\bwithContext\(\s*[a-z][\w.]*\s*\)\|\bremember\s*\([^)]*\)\s*\{`;例外:(無) | PERF-6 | https://developer.android.com/kotlin/coroutines/coroutines-best-practices ; https://developer.android.com/develop/ui/compose/performance/bestpractices |
+ | D-56 | App 啟動時要初始化多個元件或 SDK | 用 App Startup:`class ExampleLoggerInitializer : Initializer<ExampleLogger> { override fun create(context: Context): ExampleLogger = ExampleLogger(WorkManager.getInstance(context)); override fun dependencies(): List<Class<out Initializer<*>>> = listOf(WorkManagerInitializer::class.java) }`,manifest 在 `androidx.startup.InitializationProvider` 下加 `<meta-data android:name="com.example.ExampleLoggerInitializer" android:value="androidx.startup" />` | 啟動時不需要的元件 → 在 meta-data 加 `tools:node="remove"` 關掉自動初始化,要用時才 `AppInitializer.getInstance(context).initializeComponent(ExampleLoggerInitializer::class.java)` | onCreate、ContentProvider、Initializer、AppInitializer、InitializationProvider | 主:`\bInitializer\s*<` `\boverride\s+fun\s+create\(`;例外:`\bAppInitializer\.getInstance\(` | PERF-7 | https://developer.android.com/topic/libraries/app-startup |
+ 
+ ## 待查證
+ 
+-由程式從各表撈出:「現成規則」欄含「待查」的規則代號,以及「來源」欄標(搜尋摘要)或(未開頁核對)的出處。這些之後要在實驗專案實測或開頁核對。
++手寫(沒有程式產生,改主表時一起改):列「現成規則」欄含「待查」的規則代號,以及「來源」欄標(搜尋摘要)或(未開頁核對)的出處;主表那列已解決卻還列在這裡、主表還有卻沒列、或兩格寫不寫內容跟主表對不上,型錄自檢(`configs/ast-grep/kotlin-android/check.py` 的 pending_problems)都會報。這些之後要在實驗專案實測或開頁核對。
+ 
+ | 編號 | 待查的規則代號 | 待核對的來源 |
+ |---|---|---|
+ | API-2 | IJ:「Use awaitAll() and joinAll()」(ID 待查); SC CONCUR_003:detekt SequentialAsyncAwait(是否涵蓋 map{await} 待查) | — |
+ | API-3 | IJ:「Unused Deferred」(ID 待查) | — |
+-| API-9 | 待查(資料層研究的 detekt 候選 GlobalCoroutineUsage) | AND-BP#create-coroutines-data-layer(未開頁核對); PAD-LIFE(搜尋摘要) |
+-| API-11 | IJ:「Use suspendCancellableCoroutine instead of suspendCoroutine」(ID 待查) | RETROFIT(未開頁核對)〔併:API-11、研C補、研D一11〕 |
++| API-9 | 待查(資料層研究的 detekt 候選 GlobalCoroutineUsage) | — |
++| API-11 | IJ:「Use suspendCancellableCoroutine instead of suspendCoroutine」(ID 待查) | — |
+ | API-13 | IJ:「Possibly blocking call in non-blocking context」(待查) | — |
+-| API-17 | — | OKHTTP-BODY(未開頁核對)〔併:研D一2〕 |
+-| API-18 | — | OKHTTP-BODY(未開頁核對)〔併:研D一3〕 |
+-| API-19 | — | OKHTTP-INT(未開頁核對)〔併:研D一4〕 |
+-| API-20 | — | OKHTTP-INT(未開頁核對)〔併:研D一5〕 |
+-| API-21 | — | OKHTTP-AUTH(未開頁核對)〔併:研D一6〕 |
+-| API-24 | — | RETROFIT(未開頁核對)〔併:研D一9〕 |
+-| API-25 | — | RETROFIT-RESP(未開頁核對)〔併:研D一12〕 |
+-| API-26 | — | RETROFIT-2867(未開頁核對)〔併:研D一13〕 |
+-| API-27 | — | RETROFIT(未開頁核對)〔併:研D一14〕 |
+-| API-28 | — | KTOR-VALID(未開頁核對)〔併:研D一15〕 |
+-| API-29 | — | KTOR-CREATE(未開頁核對)〔併:研D一16〕 |
+-| API-30 | — | KTOR-RESP(未開頁核對)〔併:研D一17〕 |
+ | API-31 | — | DL(未開頁核對)〔併:研D五10〕 |
+-| API-34 | — | 無網址(一般知識)(未開頁核對)〔併:研C六11〕 |
+-| API-35 | — | 無網址(一般知識)(未開頁核對)〔併:研D六7〕 |
+ | API-36 | — | 無網址(一般知識)(未開頁核對)〔併:研D六6〕 |
+-| FLOW-7 | — | VIVO-EVT(搜尋摘要) |
+-| FLOW-9 | — | AND-FLOW#catch(未開頁核對)〔併:研C一9、研D六5〕 |
+-| FLOW-13 | — | KT-FLOW(未開頁核對)〔併:研C一13〕 |
+-| FLOW-14 | — | KT-FLOW(未開頁核對)〔併:研C二5〕 |
+ | FLOW-21 | 待查(kotlinx 對部分組合有棄用宣告,未核對) | — |
+-| FLOW-23 | — | 無網址(一般知識)(未開頁核對)〔併:研C五12〕 |
+-| FLOW-25 | — | VIVO-EVT(搜尋摘要)〔併:研C六2〕 |
+-| FLOW-26 | — | KT-CHAN(未開頁核對)〔併:研C六4〕 |
+-| FLOW-28 | — | 無網址(一般知識)(未開頁核對)〔併:研C六6〕 |
+-| FLOW-29 | — | KT-CHAN(未開頁核對)〔併:研C六7〕 |
+-| FLOW-30 | — | 無網址(一般知識)(未開頁核對)〔併:研C六8〕 |
+-| STATE-2 | — | DL(未開頁核對)〔併:STATE-2、研C補、X:kt-public-mutable-holder、研D五3〕 |
+ | STATE-4 | SC FLOW_006:detekt/lint StateInWithEagerlyStrategy(只抓 Eagerly,Lazily 待查) | — |
+ | STATE-5 | P18 現成規則待查; androidx 對 collectAsState 的代號待查 | — |
+-| STATE-9 | — | VIVO-STATEIN(未開頁核對)〔併:研C五13〕 |
+ | STATE-16 | 待查:WrongThread 依 @MainThread 判斷,對協程 dispatcher 切換能不能看出來沒驗證 | — |
+-| STATE-17 | — | LD-POST(未開頁核對)〔併:研A26〕 |
+ | CO-1 | Slack lint:RawDispatchersUse(歸屬待查); 待查(資料層研究的 detekt 候選 InjectDispatcher) | — |
+-| CO-2 | 待查(detekt 候選 TooGenericExceptionCaught、SwallowedException; Sonar 相關規則代號待查) | KT-CAN(未開頁核對); KX-1814(未開頁核對)〔併:CO-2、研C補、研D一10、研D六1、TP補〕 |
+-| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查); 待查(JobInBuilderContext 是否涵蓋 NonCancellable) | KT-CAN(未開頁核對)〔併:CO-3、研C補、研C二2〕 |
+-| CO-5 | — | AND-BP#main-safe(未開頁核對)〔併:CO-5、研C補、研D一29〕 |
+-| CO-7 | — | PAD-ANTI(搜尋摘要)〔併:研C一1〕 |
+-| CO-8 | — | PAD-ANTI(搜尋摘要)〔併:研C一2〕 |
+-| CO-18 | — | KT-EXC(未開頁核對)〔併:研C二6〕 |
++| CO-2 | 待查(detekt 候選 TooGenericExceptionCaught、SwallowedException; Sonar 相關規則代號待查) | — |
++| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查); 待查(JobInBuilderContext 是否涵蓋 NonCancellable) | — |
+ | CO-19 | IJ:「runBlocking inside a suspending function」(ID 待查) | — |
+ | CO-22 | 內建:MainScopeUsage(說明待查) | — |
+-| CO-23 | — | AND-BP(未開頁核對)〔併:研C二12〕 |
+ | CO-28 | SC DISPATCH_001:detekt BlockingCallInCoroutine(是否涵蓋 Default 待查) | — |
+-| CO-29 | — | KT-SMS(未開頁核對)〔併:研C三6〕 |
+-| CO-30 | — | 無網址(一般知識)(未開頁核對)〔併:研C三7〕 |
+ | CO-33 | IJ:「Prefer currentCoroutineContext() over coroutineContext」(ID 待查) | — |
+-| CO-37 | — | KT-SMS(未開頁核對)〔併:研C四4〕 |
+-| CO-38 | — | 無網址(一般知識)(未開頁核對)〔併:研C四5〕 |
+-| CO-39 | SC CONCUR_002(涵蓋範圍待查) | DL(未開頁核對)〔併:研C四6、研D五9〕 |
+-| CO-44 | — | AND-BP(未開頁核對)〔併:研C三2〕 |
+-| UI-1 | compose-rules 類似規則 待查 | PG-COMPOSE(未開頁核對) |
++| CO-39 | SC CONCUR_002(涵蓋範圍待查) | — |
++| UI-1 | compose-rules 類似規則 待查 | — |
+ | UI-3 | 研C七9 現成規則 待查 | — |
+ | UI-16 | UnrememberedAnimatable 待查; UnrememberedMutableState 涵蓋 derivedStateOf 待查; RememberInComposition 是否涵蓋 LazyListState 待查 | — |
+ | UI-47 | androidx UnnecessaryLambdaCreation 待查 | — |
+ | UI-61 | androidx ComposableModifierFactory 待查 | — |
+ | UI-67 | androidx:ReturnFromAwaitPointerEventScope 待查; MultipleAwaitPointerEventScopes 待查 | — |
+ | UI-98 | MissingColorAlphaChannel 待查; InvalidColorHexValue 待查 | — |
+ | ARCH-4 | 內建:StaticFieldLeak(對 ViewModel 欄位是否觸發待查) | — |
+ | ARCH-28 | FragmentConstructorInjection、FragmentFieldInjection(廠商與觸發條件待查) | — |
+-| ARCH-49 | 待查(可用 Konsist 或 ArchUnit 架構測試自寫) | DL(未開頁核對)〔併:研A81、研D五2〕 |
+-| ARCH-53 | — | DL(未開頁核對)〔併:研A85、研D五3(DTO 那半)〕 |
++| ARCH-49 | 待查(可用 Konsist 或 ArchUnit 架構測試自寫) | — |
+ | ARCH-61 | 無(待查:Hilt 編譯器是否會擋) | — |
+ | ARCH-63 | 索引另有 BindsMustBeAbstract、BindsTypeMismatch、BindsWrongParameterCount、BindingReturnType、BindingReceiverParameter、DoNotCallProviders、MustBeInModule、ProvidesMustNotBeAbstract(廠商待查) | — |
+-| ARCH-64 | — | DL-OFFLINE(未開頁核對)〔併:研D五1〕 |
+-| ARCH-65 | — | DL#operations-outlive-screen(未開頁核對)〔併:研D五11〕 |
+-| ARCH-66 | — | DL#expose-errors(未開頁核對)〔併:研D六2〕 |
+-| ARCH-67 | 待查(架構測試可以抓) | DL(未開頁核對)〔併:研D六8〕 |
+-| DATA-10 | — | DS-CL(未開頁核對)〔併:研D二7〕 |
+-| DATA-14 | — | ROOM-TX(未開頁核對)〔併:研D二12〕 |
+-| DATA-15 | 待查(Room 編譯期會發警告,文字與代號待查) | ROOM-TX(未開頁核對)〔併:研D二13〕 |
+-| DATA-16 | — | ROOM-MIG(未開頁核對)〔併:研D二14〕 |
+-| DATA-17 | — | ROOM-MIG(未開頁核對)〔併:研D二15〕 |
+-| DATA-18 | Room 編譯期警告(文字待查) | ROOM-MIG#export-schemas(未開頁核對)〔併:研D二16〕 |
+-| DATA-19 | — | ROOM-MIG#test(未開頁核對)〔併:研D二17〕 |
+-| DATA-20 | — | ROOM-DB(未開頁核對)〔併:研D二18〕 |
+-| DATA-21 | — | SQLITE-LIM(未開頁核對)〔併:研D二19〕 |
+-| DATA-22 | — | ROOM-UPSERT(未開頁核對)〔併:研D二20〕 |
+-| DATA-23 | — | ROOM-ASYNC(未開頁核對)〔併:研D二21〕 |
+-| DATA-24 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | SQLI(未開頁核對)〔併:研D二23〕 |
+-| DATA-26 | — | ATOMICFILE(未開頁核對)〔併:研D二25〕 |
+-| DATA-27 | 待查(Lint SdCardPath 代號待查) | STORAGE(未開頁核對)〔併:研D二28〕 |
+-| DATA-30 | Android Lint:EnqueueWork(範圍待讀細節,待查) | WM-MANAGE(未開頁核對) |
++| ARCH-67 | 待查(架構測試可以抓) | — |
++| DATA-15 | 待查(Room 編譯期會發警告,文字與代號待查) | — |
++| DATA-18 | Room 編譯期警告(文字待查) | — |
++| DATA-24 | 待查(Sonar 與 semgrep 有通用 SQL 注入規則) | — |
++| DATA-30 | Android Lint:EnqueueWork(範圍待讀細節,待查) | — |
+ | DATA-37 | 待查(detekt SwallowedException 候選) | — |
+-| DATA-38 | — | WM-MANAGE(未開頁核對)〔併:研D三11〕 |
+-| DATA-39 | — | WM-DATA(未開頁核對)〔併:研D三12〕 |
+-| DATA-41 | — | WM-CW(未開頁核對)〔併:研D三14〕 |
+-| DATA-42 | — | WM-CW(未開頁核對)〔併:研D三15〕 |
+-| DATA-43 | 待查 | BG(未開頁核對)〔併:研D三16〕 |
+-| DATA-44 | — | FGS(未開頁核對) |
+-| DATA-48 | — | BG(未開頁核對)〔併:研D三21〕 |
+-| DATA-52 | — | BCAST(未開頁核對) |
+-| DATA-53 | — | PG-PAGED(未開頁核對)〔併:研D四1〕 |
+-| DATA-54 | — | PG-PAGED(未開頁核對)〔併:研D四2〕 |
+-| DATA-55 | — | PG-PAGED(未開頁核對)〔併:研D四3〕 |
+-| DATA-56 | — | PG-PAGED#pagingdata-stream(未開頁核對)〔併:研D四4〕 |
+-| DATA-57 | — | PG-TRANSFORM(未開頁核對)〔併:研D四5〕 |
+-| DATA-58 | — | PG-TRANSFORM(未開頁核對)〔併:研D四6〕 |
+-| DATA-59 | — | PG-NETDB(未開頁核對)〔併:研D四7〕 |
+-| DATA-60 | — | PG-NETDB(未開頁核對)〔併:研D四8〕 |
+-| DATA-61 | — | PG-NETDB(未開頁核對)〔併:研D四9〕 |
+-| DATA-62 | — | PG-NETDB(未開頁核對)〔併:研D四10〕 |
+-| DATA-63 | — | PG-LOADSTATE(未開頁核對)〔併:研D四11〕 |
+-| DATA-64 | — | DL-OFFLINE#writes(未開頁核對)〔併:研D五4〕 |
+-| DATA-65 | — | DL-OFFLINE(未開頁核對)〔併:研D五5〕 |
+-| DATA-66 | — | DL-OFFLINE(未開頁核對)〔併:研D五6〕 |
+-| DATA-67 | — | DL-OFFLINE(未開頁核對)〔併:研D五7〕 |
+-| DATA-68 | — | DL#cache(未開頁核對)〔併:研D五8〕 |
+-| DATA-69 | — | DL-OFFLINE(未開頁核對)〔併:研D五13〕 |
+-| DATA-70 | — | KXS-IGNORE(未開頁核對)〔併:研D一18〕 |
+-| DATA-71 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | KXS-JSON(未開頁核對)〔併:研D一19〕 |
+-| DATA-72 | — | KXS-JSON#coercing-input-values(未開頁核對)〔併:研D一20〕 |
+-| DATA-73 | — | KXS-JSON#coercing-input-values(未開頁核對)〔併:研D一21〕 |
+-| DATA-74 | — | KXS-BASIC(未開頁核對)〔併:研D一22〕 |
+-| DATA-75 | — | GSON-TS(未開頁核對)〔併:研D一23〕 |
++| DATA-43 | 待查 | — |
++| DATA-71 | 待查(kotlinx.serialization 外掛有「Redundant creation of Json format」檢查,代號待查) | — |
+ | DATA-76 | Android Lint(Slack):MoshiUsage* 系列(逐條代號待抄,待查) | — |
+-| DATA-77 | — | SHRINK(未開頁核對)〔併:研D一25〕 |
+ | TEST-12 | 具體棄用等級待查) | — |
+ | TEST-27 | 待查(Sonar 有此規則,代號待查) | — |
+-| PERF-2 | 待查(Android Lint NetworkOnMainThread 確切代號待查) | NOMT(未開頁核對)〔併:P2、研D一27〕 |
++| PERF-2 | 待查(Android Lint NetworkOnMainThread 確切代號待查) | — |
+ | PERF-4 | 待查(Sonar/structured-coroutines 有類似規則,代號待查) | — |
+ | PERF-9 | 待查 | — |
+ | PERF-10 | detekt:MissingUseCall(待查是否涵蓋 Cursor) | — |
+-| PERF-11 | — | SM-VM(未開頁核對)〔併:P23、研D二26〕 |
+ | PERF-23 | 待查(未在 detekt performance 清單中看到) | — |
+ | PERF-26 | — | 無網址(一般知識)(未開頁核對)〔併:P45〕 |
+ | PERF-30 | detekt:DataClassContainsFunctions、DataClassShouldBeImmutable(style,待查是否在 1.23 預設清單) | — |
+-| PERF-32 | 待查(IDE 檢查有,detekt 代號待查) | 無網址(一般知識)(未開頁核對)〔併:P51〕 |
+-| PERF-34 | — | DL#expose-errors(未開頁核對)〔併:研D六3、TP補〕 |
+-| PERF-35 | 待查(detekt 候選:ThrowingExceptionsWithoutMessageOrCause) | 無網址(一般知識)(未開頁核對)〔併:研D六4〕 |
++| PERF-32 | 待查(IDE 檢查有,detekt 代號待查) | — |
++| PERF-35 | 待查(detekt 候選:ThrowingExceptionsWithoutMessageOrCause) | — |
+ 
+ ## 統計
+ 
+-用程式讀本檔各主題表格列數得出(不是手算;規則包數字讀 `configs/ast-grep/kotlin-android/rules*/*.yml`)。
+-
+-- 總列數:514(其中沿用既有編號 35 列;規則包實作時補的新列 0 列;2026-11-08 資安補齊新增 41 列:API-37~47、ARCH-68~88、DATA-79~87)
+-- 各主題:API 47、FLOW 32、STATE 28、CO 44、UI 111、ARCH 88、DATA 87、TEST 38、PERF 39
+-- 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 240、B 210、C 68、D 58
+-- 各級(以第一個字母計,加總等於總列數):A 240、B 180、C 52、D 42
+-- 級的組合:A 205、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 161、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 42
+-- 情境:形狀類 408、語意類 106(其中標(人裁)的 4)
+-- 待查證:135 列(規則代號待查 49 列、來源待核對 104 列,兩者可重疊)
+-- 規則包條數:211(error 34、warning 115、語意覆核級 info 12、hint 50,其中 14 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
+-- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):127
++手寫(沒有程式產生):改主表或規則包時用程式重數各主題表格列數後手動更新(規則包數字數 `configs/ast-grep/kotlin-android/rules*/*.yml`);總列數、各主題、各級、規則包各等級、不接閘、逐列查證、待查證這幾個數由型錄自檢(同一支 check.py 的 stats_problems)核對。
++
++- 總列數:532(其中沿用既有編號 35 列;規則包實作時補的新列 0 列;2026-11-08 資安補齊新增 41 列:API-37~47、ARCH-68~88、DATA-79~87;同日資安補齊第二批新增 18 列:API-48~51、ARCH-89~91、DATA-88~98)
++- 各主題:API 51、FLOW 32、STATE 28、CO 44、UI 111、ARCH 91、DATA 98、TEST 38、PERF 39
++- 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 242、B 226、C 68、D 58
++- 各級(以第一個字母計,加總等於總列數):A 242、B 196、C 52、D 42
++- 級的組合:A 207、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 177、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 42
++- 情境:形狀類 426、語意類 106(其中標(人裁)的 4)
++- 待查證:51 列(規則代號待查 48 列、來源待核對 3 列,兩者可重疊;2026-11-08 刪掉主表已解決的 84 列)
++- 規則包條數:227(error 46、warning 119、語意覆核級 info 12、hint 50,其中 29 條在不接閘的 `rules-unwired/`;用程式讀 `configs/ast-grep/kotlin-android/rules*/*.yml` 數)
++- 被會擋的規則守到的列數(通電批次欄含「告警帶寫法=批一」,而且現成規則欄或實測狀態欄提到至少一條 `rules/` 底下的規則 id):128
+ - 出處不全的列:35;人裁的列:4
+-- 逐列查證(來源欄有〔查證 日期:網址〕):501 列;沒有的 13 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列)
++- 逐列查證(來源欄有〔查證 日期:網址〕):519 列;沒有的 13 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列)
+ - 情境決策表列數:56(證據樣式:主寫 `(無)` 的 8 列、例外寫 `(無)` 的 31 列、兩段都 `(無)` 的 5 列)
