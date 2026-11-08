@@ -126965,8 +126965,45 @@ _KTSEC_CASES = (
     ("src/main/kotlin/C93.kt", "webView.settings.mixedContentMode = Cfg.NO_MIXED_CONTENT_ALWAYS_ALLOW", "kt-webview-mixed-content-always", 0),
     # 字面值要恰好是 0,不是含 0 的別的整數
     ("src/main/kotlin/C94.kt", "webView.settings.mixedContentMode = 10", "kt-webview-mixed-content-always", 0),
+    # 第三批([[Projects/Android資安靜態檢查補齊第三批_計劃]] 預期值表 S1 逐列;C100、C110~C112 是桌面四項排除各一例;C116 釘住隱含接收者不報的天花板)
+    ("src/main/kotlin/C95.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C96.kt", "OutlinedTextField(value = p, onValueChange = {}, visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation())", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C97.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C98.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = opts)", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C99.kt", "TextField(value = p, onValueChange = {})", "kt-compose-password-keyboard", 0),
+    ("src/desktopMain/kotlin/C100.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C101.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done))", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C102.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions.Default)", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C103.kt", "OutlinedTextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text))", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C104.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done))", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C105.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = kt))", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C106.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions.Default.copy(keyboardType = KeyboardType.Password))", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C107.kt", "BasicTextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C108.kt", "BasicTextField2(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C109.kt", "SecureTextField(state = s)", "kt-compose-password-keyboard", 0),
+    ("src/jvmMain/kotlin/C110.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+    ("desktop/src/main/kotlin/C111.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+    ("app-desktop/src/main/kotlin/C112.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C113.kt", "mapper.activateDefaultTyping(mapper.polymorphicTypeValidator, ObjectMapper.DefaultTyping.NON_FINAL)", "kt-jackson-default-typing", 1),
+    ("src/main/kotlin/C114.kt", "JsonMapper.builder().activateDefaultTyping(ptv).build()", "kt-jackson-default-typing", 1),
+    ("src/main/kotlin/C115.kt", "mapper.registerModule(KotlinModule())", "kt-jackson-default-typing", 0),
+    ("src/main/kotlin/C116.kt", "ObjectMapper().apply { activateDefaultTyping(ptv) }", "kt-jackson-default-typing", 0),
+    # 代碼審 r1 審查席:逗號分支、兩個 AsProperty 名字各一例;C120 釘住註解裡寫到 KeyboardType.Password 也會被當成已設的天花板
+    ("src/main/kotlin/C117.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Done))", "kt-compose-password-keyboard", 1),
+    ("src/main/kotlin/C118.kt", "mapper.activateDefaultTypingAsProperty(ptv, ObjectMapper.DefaultTyping.NON_FINAL, \"@class\")", "kt-jackson-default-typing", 1),
+    ("src/main/kotlin/C119.kt", "mapper.enableDefaultTypingAsProperty(ObjectMapper.DefaultTyping.NON_FINAL, \"@class\")", "kt-jackson-default-typing", 1),
+    ("src/main/kotlin/C120.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(\n        imeAction = ImeAction.Done, // TODO KeyboardType.Password\n    ))", "kt-compose-password-keyboard", 0),
+    # 代碼審 r2 審查席:釘住〈天花板〉的自訂元件名、完整套件名不報(拿掉呼叫名的 ^ 錨點會翻紅),與括號裡再有括號(if (…))不報
+    ("src/main/kotlin/C121.kt", "MyTextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C122.kt", "androidx.compose.material3.TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation())", "kt-compose-password-keyboard", 0),
+    ("src/main/kotlin/C123.kt", "TextField(value = p, onValueChange = {}, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = if (x) ImeAction.Done else ImeAction.Next))", "kt-compose-password-keyboard", 0),
 )
-# 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號)(計劃範圍 4 與〈實驗〉第二輪的放置)
+# 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+_KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+                  "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+# 第三批計劃範圍 2:Compose 多平台的桌面原始碼(桌面沒有手機鍵盤快取)
+_KTSEC_IGNORES_DESKTOP = (*_KTSEC_IGNORES, "**/src/desktopMain/**", "**/src/jvmMain/**", "**/desktop*/src/**", "**/*-desktop/src/**")
+# 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號[, 路徑排除;沒寫的是 _KTSEC_IGNORES 八項])(計劃範圍 4 與〈實驗〉第二輪的放置)
 _KTSEC_PLACE = {
     "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
@@ -126989,10 +127026,11 @@ _KTSEC_PLACE = {
     "kt-weak-message-digest": ("rules-unwired", "data.yml", "DATA-96"),
     "kt-hardcoded-secret-name": ("rules-unwired", "data.yml", "DATA-97"),
     "kt-rsa-no-oaep": ("rules-unwired", "data.yml", "DATA-98"),
+    # 第三批(計劃範圍 2):密碼欄另帶 Compose 多平台的桌面四項排除
+    "kt-compose-password-keyboard": ("rules", "compose.yml", "UI-112", _KTSEC_IGNORES_DESKTOP),
+    "kt-jackson-default-typing": ("rules-unwired", "data.yml", "DATA-99"),
 }
-# 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
-_KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
-                  "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+
 
 
 def t_kotlin_rulepack_security_rules():
@@ -127010,12 +127048,17 @@ def t_kotlin_rulepack_security_rules():
     賦值 0 拿掉接收者條件 → C52 紅、接收者條件只認 settings → C50 紅、setter 不認 0 → C54 紅、拿掉 src/test 排除 → C55 紅;
     Zip Slip 拿掉 canonicalPath 排除 → C57 紅;寫死秘密拿掉值的鍵名樣式排除與數字要求 → C65 紅(passwordKey 不是靠名稱排除擋的);
     生物辨識拿掉單參數限制 → C69 紅;指令執行拿掉串接那支 → C70 紅、改成任何參數都報 → C71 紅;
-    混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。"""
+    混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。
+    第三批([[Projects/Android資安靜態檢查補齊第三批_計劃]] S1、S2,C95~C116 是預期值表 S1 逐列、C117~C120 是代碼審 r1 補的):
+    密碼欄拿掉「字面 KeyboardOptions 沒設密碼鍵盤」那支 → C101~C103 紅;拿掉 keyboardType 字面值後接逗號那支 → C117 紅;
+    名單拿掉 BasicTextField2 → C108 紅;放行只認 Password 不認 NumberPassword → C104 紅;拿掉 desktopMain 排除 → C100 與 S4 紅;
+    等級改 warning → S2 紅;Jackson 拿掉 AsProperty 兩個名字 → C118、C119 紅;呼叫名拿掉 ^ 錨點 → C121、C122 紅(代碼審 r2)。"""
     print("t_kotlin_rulepack_security_rules")
     import shutil as _sh
     m = _ktpack()
     rules = {r["id"]: r for r in m.load_rules()}
-    for rid, (d, fname, cat) in _KTSEC_PLACE.items():
+    for rid, (d, fname, cat, *extra) in _KTSEC_PLACE.items():
+        want_ign = extra[0] if extra else _KTSEC_IGNORES
         r = rules.get(rid)
         check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
               str(r and (r["dir"], r["file"])))
@@ -127023,7 +127066,9 @@ def t_kotlin_rulepack_security_rules():
         check(f"S4 {rid} 訊息以 [{cat}] 開頭、不超過 {m.MSG_MAX} 字", msg.startswith(f"[{cat}]") and len(msg) <= m.MSG_MAX,
               f"{len(msg)} {msg}")
         got = set((r or {}).get("ignores", []))   # 讀法只有 check.py 的 load_rules 一套(代碼審 r1 架構對齊 F1)
-        check(f"S4 {rid} 路徑排除恰好是八項", got == set(_KTSEC_IGNORES), str(sorted(got ^ set(_KTSEC_IGNORES))))
+        check(f"S4 {rid} 路徑排除恰好是 {len(want_ign)} 項", got == set(want_ign), str(sorted(got ^ set(want_ign))))
+    pw = rules.get("kt-compose-password-keyboard") or {}
+    check("S2(第三批)kt-compose-password-keyboard 是 error", pw.get("severity") == "error", str(pw.get("severity")))
     sg = _ktpack_sg()
     if not sg:
         print("  (本機沒有 ast-grep,只跑了 S4 那半;CI 裝了 0.51.1 會跑 S3 逐例)")
@@ -129424,6 +129469,66 @@ def t_kt_catalog_security_lint_batch2():
     print("  ✓ t_kt_catalog_security_lint_batch2")
 
 
+# [[Projects/Android資安靜態檢查補齊第三批_計劃]] 範圍 1 的三列:(名稱開頭, 管它的, 通電批次)(寫死計劃原文,不從型錄算)
+_KT_BATCH3_ROWS = {
+    "UI-112": ("Compose 密碼欄只遮字沒設密碼鍵盤", "kt-compose-password-keyboard", "告警帶寫法=批一"),
+    "DATA-99": ("Jackson 開全域預設型別", "kt-jackson-default-typing", "告警帶寫法=未接(規則在 rules-unwired/:樣本外誤報超過一成或量不夠)"),
+    "DATA-100": ("通知放敏感資料", "", "表態對程式=批三;盲判席=批三"),
+}
+
+
+def _kt_batch3_catalog_problems(m):
+    """型錄 → 第三批 S4 的問題清單(空=全過);m 是 _ktpack() 載入的模組(改壞實驗給複本)。"""
+    out = []
+    rows = m.main_rows()
+    for rid, (name, owner, batch) in _KT_BATCH3_ROWS.items():
+        if rid not in rows:
+            out.append(f"{rid} 不在型錄主表")
+            continue
+        c = rows[rid]
+        if not c[1].startswith(name):
+            out.append(f"{rid} 名稱不是「{name}」:{c[1]}")
+        if owner and owner not in c[5]:
+            out.append(f"{rid} 現成規則欄沒寫管它的 {owner}")
+        if c[9] != batch:
+            out.append(f"{rid} 通電批次不是「{batch}」:{c[9]}")
+    dts, dprobs = m.dt_table(m.CATALOG.read_text(encoding="utf-8"))
+    out += [f"決策表讀不懂:{a} {b}" for a, b in dprobs]
+    d57 = next((r for r in dts if r["id"] == "D-57"), None)
+    if d57 is None:
+        out.append("D-57 不在情境決策表")
+    else:
+        if "DATA-100" not in d57["checks"]:
+            out.append(f"D-57 對應檢查不是 DATA-100:{d57['checks']}")
+        if d57["evidence"] != {"main": None, "alt": None}:
+            out.append(f"D-57 證據樣式要兩段都是(無):{d57['evidence']}")
+    if (m.situation_dir() / "D-57.kt.txt").exists():
+        out.append("D-57 有情境樣本檔(兩段(無)的列不放樣本)")
+    return out
+
+
+def t_kt_catalog_security_lint_batch3():
+    """[[Projects/Android資安靜態檢查補齊第三批_計劃]] S4:UI-112、DATA-99、DATA-100 各在主表、名稱與通電批次照範圍 1 的表,
+    D-57 在情境決策表、對應檢查是 DATA-100、證據樣式兩段(無)、沒有情境樣本檔;型錄自檢與情境樣本自檢都是 0 個問題。
+    判準來源:計劃範圍 1、3 原文(寫死在 _KT_BATCH3_ROWS)。改壞:刪 UI-112 那列、多放一支 D-57 樣本 → ①紅。"""
+    print("t_kt_catalog_security_lint_batch3")
+    m = _ktpack()
+    probs = _kt_batch3_catalog_problems(m)
+    check("① 三列與 D-57 照計劃登記", not probs, "\n".join(probs[:10]))
+    selfp = m.catalog_problems(m.load_rules()) + m.situation_sample_problems()
+    check("② 真型錄自檢與情境樣本自檢 0 個問題", not selfp, str(selfp[:5]))
+    mc = _ktpack(copy=True)
+    t = mc.CATALOG.read_text(encoding="utf-8")
+    mut = "\n".join(ln for ln in t.split("\n") if not ln.startswith("| UI-112 |"))
+    check("★前置★ 刪列有套上", mut != t, "")
+    mc.CATALOG.write_text(mut, encoding="utf-8")
+    check("★改壞★ 刪 UI-112 那列要抓到", "UI-112 不在型錄主表" in _kt_batch3_catalog_problems(mc), "")
+    mc.CATALOG.write_text(t, encoding="utf-8")
+    (mc.situation_dir() / "D-57.kt.txt").write_text("// === bad x\nfoo()\n", encoding="utf-8")
+    check("★改壞★ 多放 D-57 樣本要抓到", any("情境樣本檔" in p for p in _kt_batch3_catalog_problems(mc)), "")
+    print("  ✓ t_kt_catalog_security_lint_batch3")
+
+
 def _kt_drop_line(prefix):
     """改壞用:刪掉以 prefix 開頭的那一行(只刪第一處)。"""
     def f(t):
@@ -129447,18 +129552,18 @@ def _kt_line_sub(prefix, old, new):
 # [[Projects/Android資安靜態檢查補齊第二批_計劃]] S4 的判準:〈統計〉每個手寫的數(照真型錄現行寫法寫死在這裡,不從型錄或被測函式算),
 # 各改成另一個數,型錄自檢都要抓到。(行首, 那行裡的「名稱 數」);名稱前的分隔(: 或 、)一起寫死,免得 B 對到 A+B
 _KT_STATS_LINES = (
-    ("- 總列數:", ("總列數:532",)),
-    ("- 各主題:", ("API 51", "FLOW 32", "STATE 28", "CO 44", "UI 111", "ARCH 91", "DATA 98", "TEST 38", "PERF 39")),
-    ("- 各級(列的級含該字母", ("A 242", "B 226", "C 68", "D 58")),
-    ("- 各級(以第一個字母計", ("A 242", "B 196", "C 52", "D 42")),
-    ("- 級的組合:", (":A 207", "、A+B 28", "、A+B+C 2", "、A+C 3", "、A+C+D 1", "、A+D 1", "、B 177", "、B+C 9", "、B+C+D 1",
-                    "、B+D 9", "、C 48", "、C+D 4", "、D 42")),
-    ("- 情境:", ("形狀類 426", "語意類 106")),
+    ("- 總列數:", ("總列數:535",)),
+    ("- 各主題:", ("API 51", "FLOW 32", "STATE 28", "CO 44", "UI 112", "ARCH 91", "DATA 100", "TEST 38", "PERF 39")),
+    ("- 各級(列的級含該字母", ("A 242", "B 228", "C 68", "D 59")),
+    ("- 各級(以第一個字母計", ("A 242", "B 198", "C 52", "D 43")),
+    ("- 級的組合:", (":A 207", "、A+B 28", "、A+B+C 2", "、A+C 3", "、A+C+D 1", "、A+D 1", "、B 179", "、B+C 9", "、B+C+D 1",
+                    "、B+D 9", "、C 48", "、C+D 4", "、D 43")),
+    ("- 情境:", ("形狀類 428", "語意類 107")),
     ("- 待查證:", ("待查證:51 列", "規則代號待查 48 列", "來源待核對 3 列")),
-    ("- 規則包條數:", ("規則包條數:227", "error 46", "warning 119", "info 12", "hint 50", "其中 29 條")),
-    ("- 被會擋的規則守到的列數", (":128",)),
+    ("- 規則包條數:", ("規則包條數:229", "error 48", "warning 119", "info 12", "hint 50", "其中 30 條")),
+    ("- 被會擋的規則守到的列數", (":129",)),
     ("- 出處不全的列:", ("列:35", "人裁的列:4")),
-    ("- 逐列查證", ("\u3015):519 列",)),
+    ("- 逐列查證", ("\u3015):522 列",)),
 )
 
 
