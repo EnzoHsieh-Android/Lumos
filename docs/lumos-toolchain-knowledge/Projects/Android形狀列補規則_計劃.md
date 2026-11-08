@@ -126,36 +126,40 @@ RETIRE-IF: Android Lint、androidx 函式庫 lint、detekt 或 compose-rules 出
 
 | 條款 | 輸入 | 預期 | 來源 |
 |---|---|---|---|
+| S1 | 規則包四條新規則的壞例、好例樣本 | 壞例各報至少 2 處、好例 0 處 | 規則包自測的樣本要求 |
+| S3 | 真型錄 | 型錄自檢 0 個問題 | 本計劃範圍 2、3 |
+| S4 | 真型錄與規則包 | API-2、UI-33、ARCH-59、ARCH-62 的現成規則欄寫「自寫 ast-grep <規則 id>」;通電批次 API-2、ARCH-59 是批一,UI-33、ARCH-62 是未接 | 本計劃範圍 2、4 與〈量測結果〉 |
+| S5 | 型錄四列的實測狀態欄 | API-2 誤報 3/40、ARCH-59 誤報 0/40、UI-33 誤報 6/40、ARCH-62 樣本外 1 處不判,跟卷證 judge-*.md 一致 | 本計劃〈量測結果〉 |
 | S2 | `suspend fun f(ds: List<Deferred<Int>>) = ds.map { it.await() }` | kt-map-await-deferred 報 | awaitAll KDoc、IntelliJ 檢查說明 |
-| S2 | `suspend fun f(ds: List<Deferred<Int>>) = ds.map { d -> d.await() }` | 報 | 同上 |
+| S2 | `suspend fun f(ds: List<Deferred<Int>>) = ds.map { d -> d.await() }` | 報 | awaitAll KDoc、IntelliJ 檢查說明 |
 | S2 | `suspend fun f(ds: List<Deferred<Int>>) = ds.awaitAll()` | 不報 | 標準寫法 |
 | S2 | `suspend fun f(ds: List<Deferred<Int>>) { ds.forEach { it.await() } }` | 不報 | 出處沒講到 forEach |
 | S2 | `DisposableEffect(Unit) { log("x"); onDispose { } }` | kt-compose-dispose-not-needed 報 | side-effects 頁 |
 | S2 | `DisposableEffect(o) { o.addObserver(obs); onDispose { } }` | kt-compose-dispose-not-needed 不報(kt-compose-dispose-empty-cleanup 報) | 有註冊的歸 UI-32 |
 | S2 | `DisposableEffect(o) { o.addObserver(obs); onDispose { o.removeObserver(obs) } }` | 兩條都不報 | side-effects 頁的範例 |
 | S2 | 同一個 object 裡 `@Provides fun a(): OkHttpClient` 與 `@Provides @Named("x") fun b(): OkHttpClient` | kt-hilt-binding-missing-qualifier 只報 a 的 `@Provides` 那行 | Hilt 限定詞段 |
-| S2 | 同一個 object 裡兩個沒加的 `a`、`c` 與一個 `@Named("x")` 的 `b`,都回傳 OkHttpClient | 報 a、c 兩行,不報 b | 同上 |
-| S2 | 同檔宣告 `@Qualifier annotation class Auth`,`@Provides @Auth fun b(): OkHttpClient` 與 `@Provides fun a(): OkHttpClient` | 報 a | 同上 |
+| S2 | 同一個 object 裡兩個沒加的 `a`、`c` 與一個 `@Named("x")` 的 `b`,都回傳 OkHttpClient | 報 a、c 兩行,不報 b | awaitAll KDoc、IntelliJ 檢查說明 |
+| S2 | 同檔宣告 `@Qualifier annotation class Auth`,`@Provides @Auth fun b(): OkHttpClient` 與 `@Provides fun a(): OkHttpClient` | 報 a | Hilt 官方頁限定詞段 |
 | S2 | `@Provides @IntoSet fun b(): Interceptor` 與 `@Provides fun a(): Interceptor` | 不報 | 多重綁定不是限定詞 |
 | S2 | `@Provides @Suppress("x") fun b(): Foo` 與 `@Provides fun a(): Foo` | 不報 | Suppress 不是限定詞 |
 | S2 | `@Provides @IntoSet @Named("x") fun b(): OkHttpClient` 與 `@Provides fun a(): OkHttpClient` | 不報 | 多重綁定是往集合放東西,不是同型別的另一個綁定(實作時改壞多重綁定排除沒翻紅才補的例) |
 | S2 | `@Provides fun a(): OkHttpClient` 與 `@Provides fun g(): Gson` | 不報 | 型別不同 |
 | S2 | 同檔 `@InstallIn(ActivityComponent::class)` 的 `interface E` 與 `EntryPointAccessors.fromApplication(ctx, E::class.java)` | kt-hilt-entrypoint-accessor-mismatch 報 | EntryPointAccessors.kt KDoc |
-| S2 | 同上但 `@InstallIn(SingletonComponent::class)` | 不報 | 同上 |
-| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromActivity(act, E::class.java)` | 報 | 同上 |
-| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromFragment(f, E::class.java)` | 報 | 同上 |
-| S2 | `@InstallIn(ViewNoFragmentComponent::class)` 的 `E` 與 `fromView(v, E::class.java)` | 不報 | 同上 |
-| S2 | `@InstallIn(ActivityComponent::class)` 的 `E` 與泛型 `fromApplication<E>(ctx)` | 報 | 同上 |
+| S2 | 同上但 `@InstallIn(SingletonComponent::class)` | 不報 | Hilt EntryPointAccessors.kt KDoc |
+| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromActivity(act, E::class.java)` | 報 | Hilt EntryPointAccessors.kt KDoc |
+| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromFragment(f, E::class.java)` | 報 | Hilt EntryPointAccessors.kt KDoc |
+| S2 | `@InstallIn(ViewNoFragmentComponent::class)` 的 `E` 與 `fromView(v, E::class.java)` | 不報 | Hilt EntryPointAccessors.kt KDoc |
+| S2 | `@InstallIn(ActivityComponent::class)` 的 `E` 與泛型 `fromApplication<E>(ctx)` | 報 | Hilt EntryPointAccessors.kt KDoc |
 | S2 | `@InstallIn(ActivityComponent::class, SingletonComponent::class)` 的 `E` 與 `fromApplication(ctx, E::class.java)` | 不報 | 含允許的元件 |
 | S2 | `EntryPointAccessors.fromApplication(ctx, Other::class.java)`,`Other` 不在同檔 | 不報 | 單檔看不到 @InstallIn |
 | S2 | DisposableEffect 裡 `val w = window ?: return@DisposableEffect onDispose { }`,後面 `onDispose { w.clearFlags(FLAG) }` | kt-compose-dispose-not-needed 不報 | 樣本內調形狀:那支 API 規定要回傳 onDispose |
-| S2 | DisposableEffect 裡 if 分支 `onDispose { }`、else 分支 `onDispose { window.clearFlags(FLAG) }` | 不報 | 同上 |
+| S2 | DisposableEffect 裡 if 分支 `onDispose { }`、else 分支 `onDispose { window.clearFlags(FLAG) }` | 不報 | Compose side-effects 頁 |
 | S2 | DisposableEffect 裡提早返回 `onDispose { }`、後面也是 `onDispose { }` | 報 | 全部都空 |
 | S2 | `@InstallIn(ApplicationComponent::class)` 的 `E` 與 `fromApplication(x, E::class.java)` | kt-hilt-entrypoint-accessor-mismatch 不報 | Dagger 2.30 發布說明:ApplicationComponent 是 SingletonComponent 的舊名 |
 | S2 | `@InstallIn(FragmentComponent::class)` 的 `E` 與 `fromFragment(x, E::class.java)` | 不報 | EntryPointAccessors.kt KDoc(代碼審 r1 補:對應改壞測不到) |
-| S2 | `@InstallIn(ViewComponent::class)` 的 `E` 與 `fromView(x, E::class.java)` | 不報 | 同上 |
-| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromView(x, E::class.java)` | 報 | 同上 |
-| S2 | `@InstallIn(` 換行 `SingletonComponent::class,` 換行 `)` 的 `E` 與 `fromApplication(x, E::class.java)` | 不報 | 同上;代碼審 r1:參數跨行寫原本會誤報 |
+| S2 | `@InstallIn(ViewComponent::class)` 的 `E` 與 `fromView(x, E::class.java)` | 不報 | Hilt EntryPointAccessors.kt KDoc |
+| S2 | `@InstallIn(SingletonComponent::class)` 的 `E` 與 `fromView(x, E::class.java)` | 報 | Hilt EntryPointAccessors.kt KDoc |
+| S2 | `@InstallIn(` 換行 `SingletonComponent::class,` 換行 `)` 的 `E` 與 `fromApplication(x, E::class.java)` | 不報 | Hilt EntryPointAccessors.kt KDoc;代碼審 r1:參數跨行寫原本會誤報 |
 | S2 | `ds.asFlow().buffer().map { it.await() }.toList()` | kt-map-await-deferred 不報 | 代碼審 r4:asFlow 後接 Flow 算子仍是 Flow |
 | S2 | `ds.asFlow().buffer().toList().map { it.await() }` | 報 | 收成清單後又是集合 |
 | S2 | `ds.asFlow().map { it.await() }.toList()` | kt-map-await-deferred 不報 | Flow 一筆一筆來,沒有集合可 awaitAll(量測時的誤報類,代碼審 r1 寫成排除) |
