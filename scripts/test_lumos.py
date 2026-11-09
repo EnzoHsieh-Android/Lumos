@@ -129766,11 +129766,11 @@ _KT_STATS_LINES = (
     ("- 級的組合:", (":A 207", "、A+B 28", "、A+B+C 2", "、A+C 3", "、A+C+D 1", "、A+D 1", "、B 179", "、B+C 9", "、B+C+D 1",
                     "、B+D 9", "、C 48", "、C+D 4", "、D 43")),
     ("- 情境:", ("形狀類 428", "語意類 107")),
-    ("- 待查證:", ("待查證:50 列", "規則代號待查 47 列", "來源待核對 3 列")),
+    ("- 待查證:", ("待查證:5 列", "規則代號待查 2 列", "來源待核對 3 列")),
     ("- 規則包條數:", ("規則包條數:228", "error 49", "warning 118", "info 12", "hint 49", "其中 27 條")),
     ("- 被會擋的規則守到的列數", (":131",)),
     ("- 出處不全的列:", ("列:29", "人裁的列:4")),
-    ("- 逐列查證", ("\u3015):525 列",)),
+    ("- 逐列查證", ("\u3015):526 列",)),
 )
 
 
@@ -129786,16 +129786,16 @@ _KT_STATS_MUTATIONS = (
     # 下面兩個連〈統計〉的待查證數一起改到一致,只留給〈待查證〉跟主表的雙向比對抓(不讓統計那道代抓)
     ("待查證列著主表已解決的 DATA-27", lambda t: t.replace("| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n",
         "| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n| DATA-27 | — | — |\n", 1)
-        .replace("- 待查證:50 列", "- 待查證:51 列", 1)),
-    ("待查證漏列主表還待查的 API-3", lambda t: _kt_drop_line("| API-3 | IJ:「Unused Deferred」")(t)
-        .replace("- 待查證:50 列", "- 待查證:49 列", 1).replace("規則代號待查 47 列", "規則代號待查 46 列", 1)),
-    ("待查證來源格寫了主表沒有的待核對", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |",
-        "| API-3 | IJ:「Unused Deferred」(ID 待查) | X(未開頁核對) |", 1)),
-    ("待查證代號格寫 — 但主表還待查", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", "| API-3 | — | — |", 1)),
+        .replace("- 待查證:5 列", "- 待查證:6 列", 1)),
+    ("待查證漏列主表還待查的 CO-3", lambda t: _kt_drop_line("| CO-3 | IJ:「Job used as an argument")(t)
+        .replace("- 待查證:5 列", "- 待查證:4 列", 1).replace("規則代號待查 2 列", "規則代號待查 1 列", 1)),
+    ("待查證來源格寫了主表沒有的待核對", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |",
+        "| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | X(未開頁核對) |", 1)),
+    ("待查證代號格寫 — 但主表還待查", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |", "| CO-3 | — | — |", 1)),
     # 代碼審 r3 審查甲三 1:只寫編號一格的列不准讓自檢崩,要照格子空著報
-    ("待查證只寫編號一格", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", "| API-3 |", 1)),
-    ("待查證編號重複", lambda t: t.replace("| API-3 | IJ:「Unused Deferred」(ID 待查) | — |",
-        "| API-3 | IJ:「Unused Deferred」(ID 待查) | — |\n| API-3 | IJ:「Unused Deferred」(ID 待查) | — |", 1)),
+    ("待查證只寫編號一格", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |", "| CO-3 |", 1)),
+    ("待查證編號重複", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |",
+        "| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |\n| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |", 1)),
 )
 
 
