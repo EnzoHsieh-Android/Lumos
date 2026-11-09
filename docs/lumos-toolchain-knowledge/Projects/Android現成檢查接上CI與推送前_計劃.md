@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-09
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/stack-knowledge
 related:
   - "[[Projects/Android協程與API寫法機械檢查標準_計劃]]"
@@ -119,7 +119,7 @@ RETIRE-IF: 連續三個月沒有任何消費專案照範本接 Android Lint 或 
 4. A2 只讀 Gradle 建置檔與版本目錄;把 `lintChecks`、`detektPlugins` 寫在 `build-logic/`、`buildSrc/` 這類建置邏輯模組的 `.kt` 檔裡的專案(Now in Android 的寫法),健檢看不到、會多印 A2。任務藏在 shell 腳本或 composite action 裡時,A1 找不到跡象而多印提醒。A3 的相對外掛路徑一律對 repo 根解析,命令先 `cd tools && detekt-cli --plugins x.jar` 再用相對路徑時會誤印 A3。
 5. structured-coroutines 26 列、Sonar 7 列、IntelliJ 4 列與 compose-rules 預設關的三條,仍沒有機械守衛,只靠告警訊息與代碼審。
 
-REVISIT:2026-12-15 照 S5 在一個 AGP 8.x 與一個 AGP 9.3 以上的公開 Android 專案各實跑一次範本,記下 Slack compose-lints 版本表是否成立,並用 ./gradlew check --dry-run 核對 lint 任務真的掛在 check 底下
+REVISIT:2026-12-15 照 S5 在一個 AGP 8.x 與一個 AGP 9.3 以上的公開 Android 專案各實跑一次範本,記下 Slack compose-lints 版本表是否成立,並用 ./gradlew check --dry-run 核對 lint 任務真的掛在 check 底下 [closed:2026-11-09 已在 architecture-samples(AGP 8.7.3)與 nowinandroid(AGP 9.3.2)實跑,版本表成立、check 有掛 lint;AGP 9 下 detekt 要換 2.0.0-alpha.6 等三處範本落差已改,見 Verification/2026-11-09_Android現成檢查範本在兩個公開專案實跑]
 REVISIT:2027-02-15 數消費專案健檢印 A2 的次數裡有幾次其實接在 build-logic 的 .kt 檔,超過一半就把建置邏輯模組納入掃描
 REVISIT:2027-02-15 判 structured-coroutines 有沒有正式版、compose-rules 預設關的三條要不要開
 
@@ -157,3 +157,4 @@ REVISIT:2027-02-15 判 structured-coroutines 有沒有正式版、compose-rules 
 - r1(2026-11-06,四席 sonnet:正確性、邊界、接手、架構對齊):30 條/blocking 12/接上 compose-rules 後 detekt 內建規則對 Compose 寫法還有五種誤報(兩席獨立實跑抓到,其實現行設定就有)、預設關的三條規則會被型錄標成已接電(兩席)、A1 的字面判法對常見 CI 寫法誤報又把 `lintKotlin` 當 Android Lint(四席)、外掛缺檔會拖垮整條 detekt(三席);共用設定照 detekt 官方 Compose 頁加六項、compose-rules 另開一條只跑外掛的宣告、A1 改整行掃任務詞、型錄口徑改切段判並排除預設關與 opt-in、Android 判法沿用既有正規式;全部折入,逐條去向在 r1-intake.md。卷證:governance/review-reports/android現成檢查接上ci與推送前/。
 - 實作更正(2026-11-06):範圍 2 原本寫的 compose-rules 命令少了 `--build-upon-default-config`,實作時本機實跑發現少了它外掛規則一條都不跑、也不報錯(rc 0、SARIF 空),照實改正文並在 S3 釘住範本那行要帶它;測試執行器會隔離家目錄,S3 在本機靠 `LUMOS_DETEKT_COMPOSE_JAR` 找外掛,本機固定目錄那個後備路徑只在真實使用時用得到。
 - 推送閘更正(2026-11-07):搬到最新主線後推送,規格閘重跑主線「測試總檔預設切片」的條款測試翻紅,追下去是 S3 的測試 t_detekt_compose_rules_shared_config 在本機沒裝 detekt 時一條斷言都沒跑就返回,被零斷言守衛 t_no_zero_assertion_return_paths 判紅(預設切片那支拿它當「直接打測試名」的靶);代碼審五輪都沒抓到,因為席位本機也沒裝 detekt、整支走略過分支。改照同檔 t_lint_new_detekt_real_two_files 的寫法:沒有 detekt 時先斷言兩份共用設定都在,再略過真跑。
+- 實測更正(2026-11-09,S5):在 architecture-samples(AGP 8.7.3)與 nowinandroid(AGP 9.3.2)照範本實跑,兩組錯誤寫法都被 `lint<變體>` 與 `detekt<變體>` 點名、拿掉都通過;但範本有三處跟實測不合,都改在 [[Systems/linter精選目錄]]:①AGP 9 內建 Kotlin 下 detekt 1.23.8 不產按變體任務,改寫成 detekt 2.0.0-alpha.6 加 `android.disallowKotlinSourceSets=false`、共用設定一個鍵名要改;②Slack「預設關的三條」只對 1.5.2 以後成立,1.5.1 以前 `ComposeUnstableCollections`、`ComposeUnstableReceiver` 預設開;③`check` 掛 lint 但不掛 `detekt<變體>`,CI 要寫明任務名。細節 [[Verification/2026-11-09_Android現成檢查範本在兩個公開專案實跑]]。
