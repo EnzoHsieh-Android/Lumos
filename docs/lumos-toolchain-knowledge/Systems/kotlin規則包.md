@@ -70,6 +70,7 @@ verified_by:
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
   - "[[Verification/2026-11-09_Android型錄待查證列逐列核對]]"
+  - "[[Verification/2026-11-09_Android型錄出處不全列重查]]"
 ---
 # kotlin規則包
 
