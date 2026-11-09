@@ -3,6 +3,6 @@ fun buildDb(context: Context): AppDb = Room.databaseBuilder(context, AppDb::clas
 
 // 容易誤報:同一條 builder 鏈掛別的設定
 fun buildCache(context: Context): CacheDb = Room.databaseBuilder(context, CacheDb::class.java, "cache.db")
-    .fallbackToDestructiveMigration()
+    .addMigrations(MIGRATION_1_2)
     .setQueryCallback({ sql, _ -> log(sql) }, executor)
     .build()

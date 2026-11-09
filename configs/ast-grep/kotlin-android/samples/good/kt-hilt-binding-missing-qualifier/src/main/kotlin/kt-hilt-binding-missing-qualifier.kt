@@ -12,7 +12,7 @@ object NetworkModule {
     @Provides
     @Named("auth")
     fun provideAuthClient(auth: AuthInterceptor): OkHttpClient {
-        return OkHttpClient.Builder().addInterceptor(auth).build()
+        return OkHttpClient.Builder().addInterceptor(auth).callTimeout(30, TimeUnit.SECONDS).build()
     }
 }
 

@@ -1,0 +1,155 @@
+diff --git a/configs/ast-grep/kotlin-android/rules/testing.yml b/configs/ast-grep/kotlin-android/rules/testing.yml
+index ce9a1b413..c9332316a 100644
+--- a/configs/ast-grep/kotlin-android/rules/testing.yml
++++ b/configs/ast-grep/kotlin-android/rules/testing.yml
+@@ -231,20 +231,21 @@ rule:
+         any:
+           - pattern: runTest { $$$ }
+           - pattern: $S.runTest { $$$ }
+         stopBy: end
+     - not:
+         inside:
+           pattern: runTest(UnconfinedTestDispatcher($$$)) { $$$ }
+           stopBy: end
+ ---
+ # T16
++# 容易誤報:收集的是有限流(例 flowOf(1, 2))時一般 launch 會自己結束、不會卡住,這條照樣報;形狀看不出流是不是無限(2026-11-09 好例跨規則檢查發現,原本記在 kt-runtest-launch-collect-forever 的 review-fp 樣本)
+ id: kt-test-tolist-not-background
+ language: kotlin
+ severity: warning
+ message: '[TEST-5]用一般 launch 收集 toList 不會自動取消,測試結束不了或漏收第一個值;改用 backgroundScope.launch(UnconfinedTestDispatcher(…)) { }'
+ files: ['**/src/test*/**', '**/src/androidTest*/**', '**/src/testFixtures/**', '**/src/*Test/**', '**/src/sharedTest/**']
+ rule:
+   pattern: $F.toList($D)
+   inside:
+     any:
+       - pattern: launch { $$$ }
+diff --git a/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md b/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md
+index 0382c1894..215f9163e 100644
+--- a/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md
++++ b/docs/lumos-toolchain-knowledge/Issues/Kotlin規則包代碼審放行的小問題.md
+@@ -56,11 +56,11 @@ related:
+ 
+ ## 修好紀錄(2026-11-05,分支 kt-rulepack-followups)
+ 
+ - 1:`_strip_yaml_comment` 照 YAML 規格去掉行尾註解(`#` 前面是空白、不在引號裡);測試 `t_kotlin_rulepack_samples` 的行尾註解與引號裡 `#` 兩條。
+ - 2:觸發字拆字補全形逗號;測試 `t_kotlin_catalog_rows_wired` 的全形逗號兩條。
+ - 3:`scan` 讀不懂 ast-grep 輸出時回「跑不起來」;測試 `t_kotlin_rulepack_samples` 的非 JSON 假工具。
+ - 4:型錄 API-17、DATA-10 的搬級理由分開寫。
+ - 5:`kt-long-lived-scope-plain-job` 認括號裡再包一層加法;好例 `Holder3`、反向壞例 `S3`。
+ - 7:測試防竄改比對(`_tg_kind`)與 Room 守衛(觸發判斷、git grep、DAO 差異)都走 `_RULEPACK_SAMPLE_RE`;測試 `t_tq_guard_skips_rulepack_samples`、`t_room_guard_skips_rulepack_samples`(四個排除點各自改壞都翻紅)。自我檢查的迴圈變數也改成底線。
+ - 6 未修,改成分流:好例目錄被別條會擋規則命中的有 13 組、15 處(2026-11-05 量),每一處要判是樣本寫得不夠標準、還是那條規則誤報(例:`kt-public-mutable-holder` 的好例用事件 Channel 被 `kt-vm-channel-event` 報 3 處)。逐處判完前不加「好例被別條規則命中也報」的檢查,免得把規則誤報當樣本問題修掉。
+-- 6(2026-11-09 修好):重算是 15 組、17 處,逐處判完全是好例沒照別條會擋規則的標準寫(沒有規則誤報),13 處照標準寫法改樣本;另 4 處是刻意放別條壞寫法證明不重複報的去重案例,搬到 `cross-` 開頭的檔。規則包自檢加跨規則檢查:好例被別條會擋規則命中要報、`cross-` 檔略過但一定要被別條規則命中、不算好例段數;測試 `t_kotlin_rulepack_good_cross_rule`(四道各自改壞都翻紅)。順帶 kt-runtest-launch-collect-forever 的 review-fp 樣本第二例改成不用 toList(原本撞會擋的 TEST-5)。
++- 6(2026-11-09 修好):重算是 15 組、17 處,逐處判完全是好例沒照別條會擋規則的標準寫(沒有規則誤報),13 處照標準寫法改樣本;另 4 處是刻意放別條壞寫法證明不重複報的去重案例,搬到 `cross-` 開頭的檔。規則包自檢加跨規則檢查:好例被別條會擋規則命中要報、`cross-` 檔略過但一定要被別條規則命中、不算好例段數;測試 `t_kotlin_rulepack_good_cross_rule`(各道各自改壞都翻紅;沒有 ast-grep 的環境只跑「cross- 不算段數」那半,免得零斷言判紅)。另外 kt-runtest-launch-collect-forever 的 review-fp 樣本第二例 `launch { flowOf(1, 2).toList(values) }` 是會擋的 TEST-5(kt-test-tolist-not-background)對有限流的真實誤報;會擋規則不准在好例留已知誤報,所以樣本改成不用 toList,誤報寫進那條規則的「容易誤報」註解;review-fp- 檔被別條會擋規則命中也照報(測試有釘)。
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index e2f31b9a6..e5f15f6d3 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -58,21 +58,21 @@ summary: |-
+   WHY:[status:superseded] [被取代:[[Projects/型錄接電要附證據_計劃]]] 型錄自檢的第四批標籤不論那列原本標批幾都判(原 _batch4_problems,2026-11-08 已刪):現成規則欄登了口徑認得的現成檢查,通電批次就要寫批四標籤,批一的列寫成「批一、批四(…)」;2026-11-08 補了 6 列(API-9、UI-3、UI-10、UI-16、ARCH-16、ARCH-44;STATE-5、ARCH-17 代碼審 r2、r3 對官方檢查頁擋不到該列壞寫法,註記「相關」退回只標批一),其中 UI-3、UI-10、UI-16 的 compose-rules 推送前就在擋卻沒標;段裡註記「間接」「相關」「需標註」的不算接電(那條檢查擋不到這列的壞寫法:TEST-23、UI-1、PERF-2),「只管…」「只部分涵蓋」照算(只限擋得到該列壞寫法欄至少一個例子) [出處:[[Projects/Android資安靜態檢查補齊第二批_計劃]] REVISIT 2026-12-08 結案] [因:原口徑只判已寫批四的列,第四批計劃範圍 4 寫「其他列不動」,批一的列登了 Android Lint 或 compose-rules 也沒被點到,型錄說的比實際擋得少] [不選:逐列寫例外(用註記字樣判,同一條口徑;代碼審 r1 審查席 F1)]
+   REVISIT:2027-02-08 接了 CI 範本的 Android 消費專案跑過一次 Android Lint 之後,拿型錄標批四(CI 範本:Android Lint)的每列壞例真跑一次,沒命中的列退回只標批一(第四批接電靠讀官方檢查頁判,代碼審 code-型錄批一列也寫批四 r1 到 r3 連三輪各抓到標錯的列) [closed:2026-11-08 改成每個候選在本機照範本設定真跑,判定寫在型錄〈接電證據〉;消費專案真跑那一半移到 Projects/型錄接電要附證據_計劃 的 REVISIT]
+   WHY:第四批批四標籤以型錄〈接電證據〉節的判定為準:每個候選(編號,標籤,檢查)一筆,照範本設定真跑 Android Lint 與推送前的 detekt 命令,檢查原本等級 Warning 以上而且預設開(或 compose-rules 報出)才算擋得到;型錄自檢 check.py 的 wiring_problems 雙向比對判定表與通電批次 [出處:[[Projects/型錄接電要附證據_計劃]] 設計審三輪] [因:字面判斷註記字樣連四次被打穿(代碼審三輪加事後審查),2026-11-08 真跑 210 個候選有 63 個擋不到,其中 46 列一個都擋不到] [不選:繼續補排除字表(四次被打穿);用 lint-api 讀檢查清單當判定(沒載入的套件會被誤判不存在);樣本逐行比對壞寫法欄(實作時三包有 30 多列被擋錯,改由代碼審看樣本)] [test:t_kt_catalog_batch4_evidence]
+   RULE:改了型錄某列的壞寫法欄或現成規則欄,那列〈接電證據〉的真跑樣本要照新的壞寫法重寫、照範本設定重跑,判定照結果改(自檢只驗樣本檔在不在,驗不了樣本跟壞寫法欄還一不一致) [依據:審計] [since:2026-11-08] [retire:when-gone:configs/ast-grep/kotlin-android/samples/lint-wiring] [confirmed:2026-11-08]
+   WHY:check.py 的 wiring_table、wiring_dir 不加底線,是給測試讀判定表與樣本目錄用(同 situation_dir 的例外) [出處:代碼審 code-型錄接電要附證據 r1 架構對齊席] [因:測試要用複本的樣本目錄做改壞]
+   WHY:規則掛的型錄列出處不全時,先再查一次權威出處,查得到就照原文改寫型錄列並保留規則,查不到或跟官方說法相反就把規則移出規則包,不再停放在 rules-unwired/;型錄列保留出處不全當參考、不掛規則 [出處:使用者 2026-11-08「每條納入規則的檢查,都必須有憑據、有來源,總不能讓來歷不明的規則來把關」「移掉之前,先查明出處,有的就不用刪」;[[Projects/Android不接閘資安規則重量_計劃]] 範圍 5] [因:只登記不擋的規則也會在推送前印出來、被當成標準看,出處不明就不該出現] [不選:照舊停放在 rules-unwired/(來歷不明的規則照樣印給人看)] [test:t_kotlin_rulepack_unwired_dir]
+   WHY:有出處、單檔語法認得出的形狀列補自寫規則,先放 rules-unwired/(hint)、樣本外量過升級條件才搬 rules/;已知單檔排除不了的誤報類(API-2 的 Play services Task)搬 rules/ 時拿掉 review-fp 樣本、誤報寫進實測欄,出處只有建議語氣、沒寫後果的(UI-33)過了也只放 rules-hints/(rules/ 的 warning 也會擋,推送前擋不擋看目錄不看等級) [出處:[[Projects/Android形狀列補規則_計劃]]] [因:出處只證明是壞寫法,不證明規則抓得準;rules/ 的規則不豁免 review-fp 樣本] [不選:出處有就直接放 rules/] [test:t_kotlin_rulepack_security_rules]
+   WHY:同一個 DisposableEffect 判斷「有沒有註冊監聽」只准一份,UI-32(有註冊卻留空 onDispose,會擋)與 UI-33(沒註冊卻寫空 onDispose,只登記)都引用 utils/has-registration-call,同一段只會被其中一條報 [出處:[[Projects/Android形狀列補規則_計劃]] 設計審 r1 架構對齊] [因:兩條各寫一份判斷會漂移,給出相反建議] [不選:UI-33 自己複製一份註冊字表] [test:t_kotlin_rulepack_security_rules]
+   WHY:自寫規則的逐例測試要附改壞列舉證據:逐項拿掉每個比對樣式、正規式選項、has/not/inside 結構條件、變數綁定、字邊界與錨點、stopBy,每項都要有例子變紅;拿掉也不影響行為的記成等價改壞,規則載入不了的另列,證據放卷證 [出處:[[Projects/Android形狀列補規則_計劃]] 代碼審 r1~r3 跑滿回顧] [因:三輪都卡在規則條件沒例子守,靠審查席逐項點名補一輪只補一類] [不選:只靠審查席點名補例] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄現成規則欄寫某條檢查涵蓋這列,要拿這列壞寫法實跑過、或有寫明判斷條件的原始碼與說明原文;只確認代號存在不算 [出處:2026-11-09 待查證逐列核對 Verification/2026-11-09_Android型錄待查證列逐列核對] [因:CO-2 的 detekt 候選代號都存在,實跑卻連好寫法也報、壞寫法反而不報;另有四個代號根本不存在] [不選:只比對工具的代號清單]
+-  WHY:好例樣本也要照每條會擋規則的標準寫,自檢會報被別條會擋規則命中的好例;刻意放別條壞寫法證明本條不重複報的去重案例,放 cross- 開頭的檔(略過跨規則檢查、但一定要被別條規則命中、不算好例段數) [出處:2026-11-09 Issues/Kotlin規則包代碼審放行的小問題 第 6 項逐處判定] [因:17 處好例命中全是樣本沒照別條標準寫,沒有一處是規則誤報;不擋的話新樣本會再犯] [不選:把去重案例整段刪掉(失去不重複報的回歸保護)] [test:t_kotlin_rulepack_good_cross_rule]
++  WHY:好例樣本也要照每條會擋規則的標準寫,自檢會報被別條會擋規則命中的好例;刻意放別條壞寫法證明本條不重複報的去重案例,放 cross- 開頭的檔(略過跨規則檢查、但一定要被別條規則命中、不算好例段數) [出處:2026-11-09 Issues/Kotlin規則包代碼審放行的小問題 第 6 項逐處判定] [因:17 處好例命中全是樣本沒照別條標準寫;另有一處 review-fp 樣本是會擋 TEST-5 對有限流的誤報,改記在規則註解;不擋的話新樣本會再犯] [不選:把去重案例整段刪掉(失去不重複報的回歸保護)] [test:t_kotlin_rulepack_good_cross_rule]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+   - "[[Verification/2026-11-09_Android型錄待查證列逐列核對]]"
+   - "[[Verification/2026-11-09_Android型錄出處不全列重查]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 59fec80fe..5645e112c 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126662,55 +126662,73 @@ def _ktpack_edit(path, old, new):
+     t = Path(path).read_text(encoding="utf-8")
+     assert old in t, f"{path} 找不到要改的字:{old[:40]}"
+     Path(path).write_text(t.replace(old, new, 1), encoding="utf-8")
+ 
+ 
+ 
+ def t_kotlin_rulepack_good_cross_rule():
+     """好例樣本也要照每條會擋規則的標準寫:被別條會擋規則命中要報;刻意放別條壞寫法證明不重複報的,搬到 cross- 開頭的檔,
+     跨規則檢查略過它,但它一定要被別條規則命中,也不算好例段數;本條規則命中自己的 cross- 檔照算好例誤報
+     (Issues/Kotlin規則包代碼審放行的小問題 第 6 項,2026-11-09 逐處判完 17 處都是樣本該改)。
+-    翻紅釘:拿掉跨規則檢查 → ①紅;cross- 也照報 → ②紅;拿掉 cross- 沒被命中的檢查 → ③紅;cross- 算進好例段數 → ⑤紅。"""
++    翻紅釘:拿掉跨規則檢查 → 好例被別條命中那條紅;cross- 也照報 → 對照那條紅;拿掉 cross- 沒被命中的檢查 → 那條紅;
++    cross- 算進好例段數 → 段數那條紅;review-fp- 檔一律豁免跨規則 → review-fp 那條紅。"""
+     import shutil
++    # 不需要 ast-grep 的那半(同 t_kotlin_rulepack_samples 的靜態那半):cross- 檔的宣告不算好例段數
++    m0 = _ktpack()
++    d0 = Path(tempfile.mkdtemp(prefix="gctl-ktcross-"))
++    try:
++        (d0 / "good.kt").write_text("fun onlyOne() = 1\n", encoding="utf-8")
++        (d0 / (m0.CROSS_PREFIX + "other.kt")).write_text("fun a() = 1\nfun b() = 2\nclass C\n", encoding="utf-8")
++        check("★改壞★ cross- 檔的宣告不算好例段數(不靠 ast-grep)", m0.good_cases(d0) == 1, str(m0.good_cases(d0)))
++    finally:
++        shutil.rmtree(d0, ignore_errors=True)
+     sg = _ktpack_sg()
+     if not sg:
+-        print("  (本機沒有 ast-grep,這支只跑在有 ast-grep 的環境;CI 裝了 0.51.1 會跑)")
++        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑全部)")
+         return
+     host, other = "kt-retrofit-body-bang", "kt-okhttp-no-calltimeout"   # 兩條都是會擋規則
+     ma = _ktpack(copy=True)
+     mb = _ktpack(copy=True)
++    mc = _ktpack(copy=True)
+     try:
+         other_bad = sorted((ma.HERE / "samples" / "bad" / other).rglob("*.kt"))[0].read_text(encoding="utf-8")
+         host_bad = sorted((ma.HERE / "samples" / "bad" / host).rglob("*.kt"))[0].read_text(encoding="utf-8")
+         ga = ma.HERE / "samples" / "good" / host / "src" / "main" / "kotlin"
+         (ga / "OtherBad.kt").write_text(other_bad, encoding="utf-8")
+         (ga / "cross-nothing.kt").write_text("fun plainOne() = 1\nfun plainTwo() = 2\n", encoding="utf-8")
+         (ga / "cross-self.kt").write_text(host_bad, encoding="utf-8")
+         _r, pa = ma.check(sg)
+         ta = "\n".join(f"{a}: {b}" for a, b in pa)
+-        check("① 好例被別條會擋規則命中要報", f"{host}: 好例被會擋規則 {other} 命中" in ta, ta[:400])
+-        check("③ cross- 檔沒被別條規則命中要報", "cross-nothing.kt 以 cross- 開頭卻沒被別條規則命中" in ta, ta[:400])
+-        check("④ 本條規則命中自己的 cross- 檔照算好例誤報", f"{host}: 好例誤報" in ta, ta[:400])
++        check("★改壞★ 好例被別條會擋規則命中要報", f"{host}: 好例被會擋規則 {other} 命中" in ta, ta[:400])
++        check("★改壞★ cross- 檔沒被別條規則命中要報", "cross-nothing.kt 以 cross- 開頭卻沒被別條規則命中" in ta, ta[:400])
++        check("★改壞★ 本條規則命中自己的 cross- 檔照算好例誤報", f"{host}: 好例誤報" in ta, ta[:400])
++        # review-fp- 只豁免覆核級規則:另一份複本只放一支 review-fp- 檔裝別條會擋規則的壞寫法,照樣要報
++        gc = mc.HERE / "samples" / "good" / host / "src" / "main" / "kotlin"
++        (gc / "review-fp-other.kt").write_text(other_bad, encoding="utf-8")
++        _r, pc = mc.check(sg)
++        tc = "\n".join(f"{a}: {b}" for a, b in pc)
++        check("★改壞★ review-fp- 檔被別條會擋規則命中也照報", f"{host}: 好例被會擋規則 {other} 命中" in tc, tc[:400])
+         gb = mb.HERE / "samples" / "good" / host / "src" / "main" / "kotlin"
+         (gb / "cross-okhttp.kt").write_text(other_bad, encoding="utf-8")
+         seg = "kt-sequential-independent-await"
+         for f in sorted((mb.HERE / "samples" / "good" / seg).rglob("*.kt")):
+             f.write_text("fun onlyOne() = 1\n", encoding="utf-8")
+         gs = sorted((mb.HERE / "samples" / "good" / seg).rglob("*.kt"))[0].parent
+         (gs / "cross-many.kt").write_text(other_bad, encoding="utf-8")
+         _r, pb = mb.check(sg)
+         tb = "\n".join(f"{a}: {b}" for a, b in pb)
+-        check("② 同樣的別條壞寫法放進 cross- 檔就不報", "好例被會擋規則" not in tb and "沒被別條規則命中" not in tb, tb[:400])
+-        check("⑤ cross- 檔的宣告不算好例段數", f"{seg}: 好例至少要兩段" in tb, tb[:400])
++        check("★對照★ 同樣的別條壞寫法放進 cross- 檔就不報", "好例被會擋規則" not in tb and "沒被別條規則命中" not in tb, tb[:400])
++        check("★改壞★ cross- 檔的宣告不算好例段數", f"{seg}: 好例至少要兩段" in tb, tb[:400])
+     finally:
+         shutil.rmtree(ma.CATALOG.parents[2], ignore_errors=True)
+         shutil.rmtree(mb.CATALOG.parents[2], ignore_errors=True)
++        shutil.rmtree(mc.CATALOG.parents[2], ignore_errors=True)
+     print("  ✓ t_kotlin_rulepack_good_cross_rule")
+ 
+ 
+ def t_kotlin_rulepack_samples():
+     """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
+     只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""
+     import shlex as _shlex
+     import shutil
+     sg = _ktpack_sg()
+     m = _ktpack()

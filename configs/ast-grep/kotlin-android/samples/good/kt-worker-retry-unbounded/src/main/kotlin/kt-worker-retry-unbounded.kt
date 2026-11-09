@@ -21,6 +21,8 @@ class UploadWorker(c: Context, p: WorkerParameters) : CoroutineWorker(c, p) {
             runAttemptCount < MAX_ATTEMPTS -> Result.retry() // GOOD
             else -> Result.failure()
         }
+    } catch (e: IOException) {
+        Result.failure()
     }
 }
 

@@ -15,7 +15,7 @@ class UserStore { fun observeUser(): Flow<User> = flowOf() }
 // 容易誤報:getter 式函式回傳既有流的唯讀視圖,不重打資料層
 class I6ViewModel : ViewModel() {
     private val _state = MutableStateFlow(S())
-    private val _events = Channel<E>()
+    private val _ticks = Channel<Tick>()
     fun getState(): StateFlow<S> = _state.asStateFlow()
-    fun events(): Flow<E> = _events.receiveAsFlow()
+    fun ticks(): Flow<Tick> = _ticks.receiveAsFlow()
 }
