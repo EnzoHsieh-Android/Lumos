@@ -921,7 +921,7 @@ class BadForgetInitialTest {
 
 ## T1 虛擬時間
 
-型錄列:API-1、API-4、API-10、API-31、API-32、API-34、FLOW-29、CO-14。假依賴用 `delay` 模擬耗時,`runTest` 跳過 delay 但記下虛擬時間;斷言 `testScheduler.currentTime`、呼叫次數、逾時後的狀態。API-4 的兩個測試版本互斥(一支失敗要不要連坐是業務決定),照那段程式的情境表態答案只留一個;API-10 預設斷言「連點兩次只打一次 API」,後端有冪等鍵時改用〈測試:API-10 冪等鍵版〉。
+型錄列:API-1、API-4、API-10、API-32、API-34、FLOW-29、CO-14;API-31 型錄已停用(2026-11-09,查兩輪找不到權威原文),這節裡它的測試與壞寫法只當範例,不當標準。假依賴用 `delay` 模擬耗時,`runTest` 跳過 delay 但記下虛擬時間;斷言 `testScheduler.currentTime`、呼叫次數、逾時後的狀態。API-4 的兩個測試版本互斥(一支失敗要不要連坐是業務決定),照那段程式的情境表態答案只留一個;API-10 預設斷言「連點兩次只打一次 API」,後端有冪等鍵時改用〈測試:API-10 冪等鍵版〉。
 
 ### 依據
 
@@ -1673,7 +1673,7 @@ class DashboardLoader(private val api: DashboardApi) {
 
 ## T2 Flow 發射
 
-型錄列:API-8、FLOW-3、FLOW-18、FLOW-20、FLOW-23、FLOW-24、STATE-10。斷言收到哪幾筆、順序、有沒有多的;共享類數上游被執行幾次。
+型錄列:API-8、FLOW-18、FLOW-20、FLOW-23、FLOW-24、STATE-10;FLOW-3 型錄已停用(2026-11-09,查兩輪找不到權威原文),這節裡它的測試只當範例,不當標準。斷言收到哪幾筆、順序、有沒有多的;共享類數上游被執行幾次。
 
 ### 依據
 
@@ -4376,7 +4376,7 @@ class SyncWorker(context: Context, params: WorkerParameters, private val deps: S
 
 ## T9 Compose UI
 
-型錄列:STATE-12、STATE-23、UI-36、UI-52、ARCH-2、ARCH-3、TEST-32、DATA-63,無障礙 UI-106、UI-110。TEST-29(無限動畫讓測試等不到 idle)的〈測試〉與〈壞測試〉留著當對照,但型錄那列沒接:Compose 1.11 下讓時鐘自動推進的〈壞測試〉在 Robolectric 與模擬器都綠、沒卡住(實驗實測),這一組抓不到差別,型錄寫「未接(儀器批)」。跑在哪:〈測試〉10 支在 Robolectric(`app/src/test`;上面八列各一支、DATA-63 多一支「真的沒資料」、TEST-29 對照一支);〈測試:無障礙〉只在模擬器(`app/src/androidTest`)——無障礙檢查在 Robolectric 不報(好寫法、壞寫法都綠,實驗實測),對比檢查要實際算繪。
+型錄列:STATE-12、STATE-23、UI-36、UI-52、ARCH-2、ARCH-3、TEST-32,無障礙 UI-106、UI-110;DATA-63 型錄已停用(2026-11-09,查兩輪找不到權威原文),這節裡它的測試只當範例,不當標準。TEST-29(無限動畫讓測試等不到 idle)的〈測試〉與〈壞測試〉留著當對照,但型錄那列沒接:Compose 1.11 下讓時鐘自動推進的〈壞測試〉在 Robolectric 與模擬器都綠、沒卡住(實驗實測),這一組抓不到差別,型錄寫「未接(儀器批)」。跑在哪:〈測試〉10 支在 Robolectric(`app/src/test`;上面八列各一支、DATA-63 多一支「真的沒資料」、TEST-29 對照一支);〈測試:無障礙〉只在模擬器(`app/src/androidTest`)——無障礙檢查在 Robolectric 不報(好寫法、壞寫法都綠,實驗實測),對比檢查要實際算繪。
 
 `createComposeRule()` 掛畫面,假 ViewModel 直接推狀態。幾個寫法要點:
 

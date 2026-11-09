@@ -127438,15 +127438,15 @@ def t_kotlin_catalog_rows_wired():
 # 後半實驗把某列移出時,那列搬進「未接(儀器批)」並在驗證紀錄記原因(後半〈做法〉2)。
 _KT_TEMPLATE_GROUPS = {
     "T0": {"TEST-4", "TEST-5", "TEST-6", "TEST-7", "TEST-9", "TEST-14", "TEST-17", "TEST-18", "TEST-19", "TEST-20"},
-    "T1": {"API-1", "API-4", "API-10", "API-31", "API-32", "API-34", "FLOW-29", "CO-14"},
-    "T2": {"API-8", "FLOW-3", "FLOW-18", "FLOW-20", "FLOW-23", "FLOW-24", "STATE-10"},
+    "T1": {"API-1", "API-4", "API-10", "API-32", "API-34", "FLOW-29", "CO-14"},
+    "T2": {"API-8", "FLOW-18", "FLOW-20", "FLOW-23", "FLOW-24", "STATE-10"},
     "T3": {"STATE-6", "STATE-26"},
     "T4": {"API-21", "API-26", "API-30"},
     "T5": {"DATA-72", "DATA-73", "DATA-74"},
     "T6": {"DATA-17", "DATA-19", "DATA-21", "DATA-65", "DATA-69"},
     "T7": {"DATA-58", "DATA-60"},
     "T8": {"DATA-38", "DATA-39"},
-    "T9": {"STATE-12", "STATE-23", "UI-36", "UI-52", "ARCH-2", "ARCH-3", "TEST-32", "DATA-63",
+    "T9": {"STATE-12", "STATE-23", "UI-36", "UI-52", "ARCH-2", "ARCH-3", "TEST-32",
            "UI-106", "UI-110"},
     "T10": {"TEST-35"},
     "T11": {"ARCH-31", "ARCH-35", "STATE-17", "ARCH-56"},
@@ -127457,6 +127457,8 @@ _KT_UNWIRED = {
     # TEST-29 實驗移出:Compose 1.11 的無限動畫在 Robolectric 與模擬器都不讓測試卡住,範本抓不到差別(驗證紀錄 E3/E4)
     "未接(儀器批)": {"TEST-29"},
     "不接(代碼審或真機)": {"STATE-20", "CO-39", "UI-109", "DATA-44", "DATA-77", "PERF-1", "PERF-2", "CO-5"},
+    # 2026-11-09 查兩輪找不到權威原文而停用的 C 列(名稱標(停用))
+    "未接(停用)": {"API-31", "FLOW-3", "DATA-63"},
 }
 # 後半計劃〈做法〉2、S1:本批後不該再出現的兩個舊值
 _KT_RETIRED_VALUES = ("未接(架構測試後續計劃)", "未接(Ktor 範本後續)")
@@ -127486,13 +127488,13 @@ def t_kotlin_test_templates_sections():
     i2, i3 = tt.index("\n## T2 "), tt.index("\n## T3 ")
     m2.TEMPLATES.write_text(tt[:i2] + tt[i3:], encoding="utf-8")
     p2 = m2.template_problems()
-    check("★改壞★ 刪掉 T2 節:引用 T2 的 7 列各報一筆",
+    check("★改壞★ 刪掉 T2 節:引用 T2 的每一列各報一筆",
           sorted(p2) == sorted((r, "範本檔沒有 T2 節") for r in _KT_TEMPLATE_GROUPS["T2"]), str(p2))
     # 標題要以「## T2 」開頭才算:只剩「## T20 …」或正文提到 T2 都不算那一節
     m2b = _ktpack(copy=True)
     tt = m2b.TEMPLATES.read_text(encoding="utf-8").replace("\n## T2 ", "\n## T20 ", 1)
     m2b.TEMPLATES.write_text(tt, encoding="utf-8")
-    check("★改壞★ 標題寫成 ## T20 不算 T2 那一節", len(m2b.template_problems()) == 7, str(m2b.template_problems()))
+    check("★改壞★ 標題寫成 ## T20 不算 T2 那一節", len(m2b.template_problems()) == len(_KT_TEMPLATE_GROUPS["T2"]), str(m2b.template_problems()))
 
     # 改壞三:範本檔不存在
     m3 = _ktpack(copy=True)
@@ -128142,8 +128144,8 @@ def _kt_instr_wording_selfcheck(m, real):
     check("★對照★ 檔頭圍欄裡的 ## 不算檔頭結束、不報", not any("檔頭" in x for x in got), str(got))
 
 def t_kotlin_catalog_c_rows_batch_resolved():
-    """[S2;後半 S1] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T13、「未接(儀器批)」或
-    「不接(代碼審或真機)」,沒有「批五」與兩個作廢值;各值的列數與各範本組的列號等於計劃〈範圍〉。"""
+    """[S2;後半 S1] 型錄 68 列 C 列的「行為測試或正向約束=」值只准是範本 T0–T13、「未接(儀器批)」、
+    「不接(代碼審或真機)」或「未接(停用)」(2026-11-09 停用的列),沒有「批五」與兩個作廢值;各值的列數與各範本組的列號等於計劃〈範圍〉。"""
     m = _ktpack()
     rows = m.main_rows()   # 主表與批次值的讀法都呼叫 check.py,不另抄(代碼審 r2 架 F1、F3)
     c_rows = {r: c for r, c in rows.items() if "C" in c[6]}
@@ -129839,7 +129841,7 @@ _KT_STATS_LINES = (
     ("- 待查證:", ("待查證:0 列", "規則代號待查 0 列", "來源待核對 0 列")),
     ("- 規則包條數:", ("規則包條數:228", "error 49", "warning 118", "info 12", "hint 49", "其中 27 條")),
     ("- 被會擋的規則守到的列數", (":131",)),
-    ("- 出處不全的列:", ("列:23", "人裁的列:4")),
+    ("- 出處不全的列:", ("列:15", "人裁的列:4")),
     ("- 逐列查證", ("\u3015):534 列",)),
 )
 
