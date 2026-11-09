@@ -2047,6 +2047,55 @@ class TestScenarioProbeAblation(unittest.TestCase):
                 if child.poll() is None:
                     child.kill(); child.communicate(timeout=5)
 
+    def test_attempt_ledger_reads_clock_after_lock(self):
+        # 兩方同時搶最後一個名額:先讀時鐘的一方在等鎖時,另一方記下較晚的時間。
+        # 時鐘要在拿到寫鎖之後才讀,搶輸的一方才會得到「名額沒了」,不是假的時鐘回撥事故。
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.sqlite3"
+            t0 = 1_800_000_000.0
+            self.sp.attempt_ledger_remaining(ledger, 1, now=t0 - 20000)
+            clock = {"now": t0}
+            real_connect = sqlite3.connect
+
+            def racing_connect(*args, **kwargs):
+                # 另一方在本方讀帳之前搶先記下一筆,同時牆上時間往前走
+                side = real_connect(str(ledger), isolation_level=None)
+                side.execute("INSERT INTO launch_intents VALUES (?)", (t0 + 0.5,))
+                side.close()
+                clock["now"] = t0 + 1.0
+                return real_connect(*args, **kwargs)
+
+            with mock.patch.object(self.sp.time, "time", side_effect=lambda: clock["now"]), \
+                    mock.patch.object(sqlite3, "connect", racing_connect):
+                self.assertIs(self.sp.claim_model_attempt(ledger, 1), False)
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=t0 + 2.0), 0)
+            # 時鐘真的回撥(早於帳上最新一筆)照樣停止派工
+            with self.assertRaises(self.sp.ProbeAttemptLedgerError):
+                self.sp.claim_model_attempt(ledger, 1, now=t0)
+
+    def test_attempt_ledger_bad_clock_leaves_no_ledger_file(self):
+        # 時鐘壞掉(NaN、早於 1970)時要在建檔之前停,不然留下空帳檔,時鐘修好後帳也打不開
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.sqlite3"
+            for bad in (float("nan"), -1.0):
+                with mock.patch.object(self.sp.time, "time", return_value=bad):
+                    with self.assertRaisesRegex(self.sp.ProbeAttemptLedgerError, "時鐘不可判"):
+                        self.sp.claim_model_attempt(ledger, 1)
+                self.assertFalse(ledger.exists())
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1), 0)
+
+    def test_attempt_ledger_bad_clock_after_lock_stops(self):
+        # 拿鎖前時鐘正常、拿鎖後才壞:照樣停止派工,不記帳
+        with tempfile.TemporaryDirectory() as tmp:
+            ledger = Path(tmp) / "usage.sqlite3"
+            t0 = 1_800_000_000.0
+            self.sp.attempt_ledger_remaining(ledger, 1, now=t0 - 20000)
+            with mock.patch.object(self.sp.time, "time", side_effect=[t0, float("nan")]):
+                with self.assertRaisesRegex(self.sp.ProbeAttemptLedgerError, "時鐘不可判"):
+                    self.sp.claim_model_attempt(ledger, 1)
+            self.assertEqual(self.sp.attempt_ledger_remaining(ledger, 1, now=t0 + 1), 1)
+
     def test_attempt_ledger_two_parent_race_retains_loser_candidate(self):
         import subprocess
         with tempfile.TemporaryDirectory() as tmp:
