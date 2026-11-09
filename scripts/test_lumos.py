@@ -88226,9 +88226,11 @@ def t_python_resolver_order_and_floor():
 
 
 def _py314_old_interpreter():
-    """找一支真的 3.14 以前的直譯器(macOS 的 /usr/bin/python3 通常是 3.9);找不到回 None。"""
-    import subprocess as _sp, os as _os
-    for alt in ("/usr/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3.9", "/usr/bin/python3.12"):
+    """找一支真的 3.14 以前的直譯器(macOS 的 /usr/bin/python3 通常是 3.9);找不到回 None。
+    GitHub 的 Ubuntu 26 執行機內建 python3 已是 3.14,另看它預裝在 /opt/hostedtoolcache 的 3.10 到 3.13(2026-11-09 主線 CI)。"""
+    import subprocess as _sp, os as _os, glob as _gl
+    for alt in ("/usr/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3.9", "/usr/bin/python3.12",
+                *sorted(_gl.glob("/opt/hostedtoolcache/Python/3.1[0-3].*/x64/bin/python3"))):
         if not _os.path.exists(alt):
             continue
         r = _sp.run([alt, "-c", "import sys;print(sys.version_info >= (3, 14))"], capture_output=True, text=True)
@@ -88386,7 +88388,6 @@ def t_hooks_block_without_python314():
     hooks = Path(GRAPHCTL).resolve().parent / "hooks"
     tmp = Path(_tf.mkdtemp(prefix="gctl-py314h-"))
     nopy = _py314_sysbin(tmp)
-    withpy = _py314_sysbin(tmp, keep_python=True)
     good = tmp / "goodbin"
     good.mkdir()
     _os.symlink(sys.executable, good / "python3.14")
@@ -88396,14 +88397,22 @@ def t_hooks_block_without_python314():
     def hook(name, root, path, stdin="", **extra):
         return _sp.run(["/bin/bash", str(hooks / name)], cwd=str(root), capture_output=True, text=True, input=stdin,
                        env=dict(base, PATH=path, **extra), timeout=300)
-    old_py = any(n.startswith("python3") for n in _os.listdir(withpy))
+    # 「只找得到舊版」要一支真的 3.14 以前的直譯器:系統的 python3 不一定是舊版(GitHub 的 Ubuntu 26 執行機內建就是 3.14),
+    # 用 _py314_old_interpreter 挑一支,放進只有它的目錄,接在沒有 python 的工具目錄後面
+    old_exe = _py314_old_interpreter()
+    if old_exe:
+        withpy = tmp / "oldpy"
+        withpy.mkdir()
+        _os.symlink(old_exe, withpy / "python3")
+        withpy = str(withpy) + _os.pathsep + str(nopy)
+    old_py = old_exe is not None
     root = _py314_hook_repo(tmp / "a")
     if old_py:
         r = hook("pre-commit", root, str(withpy))
         check("①pre-commit 只找得到舊版 python:擋下印說明,不退回舊版", r.returncode == 1 and "要用 Python 3.14" in r.stderr
               and "Traceback" not in r.stderr, r.stdout[-200:] + r.stderr[-500:])
     else:
-        print("  (沒驗到①:這台機器 /usr/bin 沒有 python3)")
+        print("  (沒驗到①:這台機器找不到 3.14 以前的直譯器)")
     r = hook("pre-commit", root, str(nopy))
     check("①pre-commit 完全沒有 python:擋下並印安裝指令", r.returncode == 1 and "找不到任何 python" in r.stderr
           and "brew install python@3.14" in r.stderr, r.stderr[-400:])
@@ -134797,8 +134806,11 @@ def t_lwt_r1_term_int_cleanup():
             e = dict(_os.environ, PATH=str(helper / "bin") + _os.pathsep + _os.environ.get("PATH", ""),
                      FAKE_SG_SLEEP="30", FAKE_SG_LOG=str(log), TMPDIR=str(tmpd))
             e.pop("LUMOS_SKIP_LINT_NEW", None)
+            # 子程序的 SIGINT 先裝回預設(_ppc_sigint_default):GitHub 的 Ubuntu 26 執行機以忽略 SIGINT 的狀態啟動測試,
+            # Python 繼承忽略就不轉 KeyboardInterrupt,lint-new 照規矩不理會(同 nohup 照舊忽略 HUP)
             p = _sp.Popen([sys.executable, GRAPHCTL, "lint-new", "--worktree", "--since", str(since), "--repo", str(root)],
-                          cwd=str(root), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, env=e)
+                          cwd=str(root), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, env=e,
+                          preexec_fn=_ppc_sigint_default)
             t0 = _t.monotonic()
             while _t.monotonic() - t0 < 60 and not (log.is_file() and log.read_text(encoding="utf-8").strip()):
                 _t.sleep(0.05)

@@ -1,0 +1,158 @@
+diff --git a/docs/lumos-toolchain-knowledge/Systems/測試執行器.md b/docs/lumos-toolchain-knowledge/Systems/測試執行器.md
+index 0d7c5c13b..51ba13f74 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/測試執行器.md
++++ b/docs/lumos-toolchain-knowledge/Systems/測試執行器.md
+@@ -1,31 +1,32 @@
+ ---
+ type: system
+ status: doing
+ created: 2026-11-05
+-updated: 2026-11-08
++updated: 2026-11-09
+ responsibility: 負責 scripts/test_lumos.py 的執行入口:參數解析、子集挑選(-k、--suite)、分片(--shard、耗時表)、不帶條件時的預設切片與彙總、暫存隔離與收尾;不負責個別測試的內容與判準(那些歸各功能的家)
+ aliases: []
+ about_code:
+   - scripts/test_lumos.py
+ tags:
+   - type/system
+   - status/doing
+   - scope/platform
+ summary: |-
+   WHY:不帶條件跑全套時執行器自己切成 LUMOS_TEST_SHARDS(預設 4)片、各開子程序跑 --shard i/N 再彙總,--serial 才單一程序;推送前閘與 CI 照舊自帶 --shard [出處:[[Projects/測試總檔預設切片_計劃]]] [因:全套一再被單一程序跑,2026-11-04 一次 3 小時 40 分鐘只跑完一成五] [不選:Claude Code 工具前掛鉤擋(只管 AI)] [test:t_runner_default_fanout_green]
+   WHY:各片子程序自成行程群組(start_new_session),母程序收到 Ctrl-C、TERM、HUP 或開片途中出例外,每組送 TERM、等領頭最多 5 秒,再不論領頭死活每組送 KILL(孫程序忽略 TERM 也收得到),回 128+訊號編號同推送前閘;不用執行緒池 [出處:[[Projects/測試總檔預設切片_計劃]] 做法 2] [因:執行緒池的工作者要等已開跑的測試跑完才結束,[[Systems/bound-tests-gate]] 否決過] [test:t_runner_default_fanout_interrupt]
+   WHY:預設切片時各片跳過支數加總再跟單一程序的上限比一次,判法跟單一程序共用 _skip_baseline_applies [出處:[[Projects/測試總檔預設切片_計劃]] 做法 4] [因:只各片各比的話,覆蓋退化被拆散在各片裡看不到] [test:t_runner_default_fanout_skip_total]
+   PITFALL:對會開子程序的切片判斷做真程序變異,改壞「子程序不准再切」那道,沙盒裡子程序會一層層再開成程序炸彈 [出處:2026-11-05 實作自我變異,245 支 Python 約 141GB,使用者電腦當機重開] [根因:防遞迴只有參數一道,改壞就無限分裂] [修法:子程序帶 LUMOS_FANOUT_CHILD 標記當第二道,防遞迴只用同程序呼叫判斷函式驗] [test:t_runner_fanout_child_never_fans_out]
+   PITFALL:送 SIGINT 的切片中斷測試在推送前閘與 CI 必紅還留孤兒——背景(&)起的程序 SIGINT 是忽略的、會一路繼承,沙盒母程序收不到 Ctrl-C [出處:2026-11-05 代碼審 code-測試總檔預設切片 r1 正確性席實測] [根因:測試起沙盒母程序沒把 SIGINT 裝回預設] [修法:Popen 帶 preexec_fn 把 SIGINT 設回 SIG_DFL,同 [[Systems/bound-tests-gate]] 那條] [test:t_runner_default_fanout_interrupt]
+   WHY:預設切片的片數上限 16、帶 -x 照舊單一程序跑 [出處:[[Projects/測試總檔預設切片_計劃]] 做法 1] [因:每片各載入整支測試檔約 600MB,片數照環境變數無上限地開會吃光記憶體;-x 要一紅就停,切片後只停得了紅的那片] [test:t_runner_fanout_shards_parse]
+   WHY:預設切片原本忽略的訊號照舊忽略、開片到記下之間擋訊號(子程序開頭還原遮罩)、開始收片後三個訊號先忽略 [出處:[[Projects/測試總檔預設切片_計劃]] 做法 2、3] [因:nohup 跑全套關終端機不能作廢;剛開的片不能漏收;第二個訊號不能打斷收尾;遮罩沒還原各片收不到中斷] [test:t_runner_fanout_signal_handling]
+   WHY:預設切片放記錄檔的資料夾用 gctl-run- 開頭 [出處:[[Projects/測試總檔預設切片_計劃]] 做法 3] [因:紅了會留下,要靠執行器既有的暫存修剪在超過一天後收掉,不然一直累積] [test:t_runner_default_fanout_red]
+   WHY:開片時擋住的訊號遮罩在子程序開頭還原 [出處:[[Projects/測試總檔預設切片_計劃]] 做法 2] [因:遮罩會跨 fork 與 exec 傳給子程序,沒還原各片收不到中斷,全套會冒假紅] [test:t_runner_fanout_spawn_mask]
+   WHY:對話裡(進入點先存 CLAUDECODE=1 再從環境拿掉)不是推送前閘、不是切片子程序時,不帶關鍵字、--suite、--list 就擋、回 2,判在隔離與切片之前;只帶 --shard、-x、--ff 也擋;逃生門 LUMOS_ALLOW_FULL_SUITE=<理由>(去空白至少 10 字、有實字)放行,擋下與放行各記一行到 ~/.cache/lumos/full-suite-guard/events.jsonl;推送前閘紅燈提示從 ✗ FAILED 行抓名字逐支給 -k [出處:[[Projects/對話裡不准跑全套測試_計劃]]] [因:寫進記憶與 CLAUDE.md 都沒擋住對話裡跑全套(2026-11-07 兩次),原本的 --ff -x 提示在對話裡會被擋] [不選:估耗時佔比(設計審三輪打穿,使用者 2026-11-08 裁縮成只看篩選條件);工具前掛鉤比對指令字樣] [test:t_runner_chat_full_suite_block]
+   REVISIT:2026-12-08 讀 ~/.cache/lumos/full-suite-guard/events.jsonl 看擋下與逃生門放行次數、理由是否正當;Claude Code 的 CLAUDECODE 變數還在不在;CLAUDECODE 被執行器拿掉後,之後開的子程序都看不到它
++  PITFALL:GitHub 執行機換成 Ubuntu 26 後,送 SIGINT 給子程序、或假設系統 python3 是舊版的測試在 CI 穩定紅、本機綠 [出處:2026-11-09 主線 CI(ubuntu-latest 10/19 到 11/19 逐步換成 26.04,同一工作流程隨機分到 24 或 26)] [根因:Ubuntu 26 執行機以 SIGINT 忽略的狀態啟動測試,Python 繼承忽略就不轉 KeyboardInterrupt;映像內建 python3 已是 3.14.4] [test:t_lwt_r1_term_int_cleanup] [修法:送 SIGINT 的子程序啟動時把 SIGINT 恢復成預設;要舊版 Python 就逐一問版本找一支低於 3.14 的]
+ ---
+ # 測試執行器
+ 
+ 管 `scripts/test_lumos.py` 的執行入口那一段(`main()` 與它前面的參數解析、子集挑選、分片、預設切片、彙總與暫存收尾),不管檔裡各支測試的內容;個別測試的判準歸各功能的家。
+ 
+ 預設切片的設計與驗收條款見 [[Projects/測試總檔預設切片_計劃]];推送前閘怎麼挑測試子集見 [[Systems/bound-tests-gate]]。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 98909034a..75ee916c6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -88343,20 +88343,39 @@ def _py314_sysbin(tmp, keep_python=False):
+             continue
+         for name in _os.listdir(base):
+             if (not keep_python and name.startswith("py")) or (d / name).exists():
+                 continue
+             src = _os.path.join(base, name)
+             if _os.path.isfile(src) and _os.access(src, _os.X_OK):
+                 _os.symlink(src, d / name)
+     return d
+ 
+ 
++def _py314_old_python():
++    """回一支版本低於 3.14 的 python 絕對路徑,找不到回 None:系統位置、GitHub 執行機預裝的舊版、macOS 的框架安裝,逐一問版本。"""
++    import glob as _gl, subprocess as _sp, os as _os
++    cands = ["/usr/bin/python3", "/bin/python3", "/usr/local/bin/python3"]
++    for pat in ("/opt/hostedtoolcache/Python/3.1[0-3].*/x64/bin/python3", "/usr/bin/python3.1[0-3]",
++                "/Library/Frameworks/Python.framework/Versions/3.1[0-3]/bin/python3"):
++        cands += sorted(_gl.glob(pat))
++    for c in cands:
++        if not (_os.path.isfile(c) and _os.access(c, _os.X_OK)):
++            continue
++        try:
++            r = _sp.run([c, "-c", "import sys; print(sys.version_info < (3, 14))"], capture_output=True, text=True, timeout=20)
++        except (OSError, _sp.TimeoutExpired):
++            continue
++        if r.returncode == 0 and r.stdout.strip().splitlines()[-1:] == ["True"]:
++            return c
++    return None
++
++
+ def _py314_hook_repo(tmp, with_lumos=True):
+     import subprocess as _sp, shutil as _sh
+     root = tmp / "repo"
+     _sp.run(["git", "init", "-q", str(root)], check=True, capture_output=True)
+     _sp.run(["git", "-C", str(root), "config", "user.email", "t@t"], capture_output=True)
+     _sp.run(["git", "-C", str(root), "config", "user.name", "t"], capture_output=True)
+     (root / "docs" / "x-knowledge").mkdir(parents=True)
+     (root / "docs" / "x-knowledge" / "notes.txt").write_text("x\n", encoding="utf-8")
+     if with_lumos:
+         (root / "scripts").mkdir()
+@@ -88379,38 +88398,45 @@ def t_hooks_block_without_python314():
+     略過 LUMOS_PYTHON 改用別支時不講 → ⑦c紅;
+     驗 3.14 時要求整段輸出等於記號 → ②b紅。
+     """
+     print("t_hooks_block_without_python314")
+     import os as _os, tempfile as _tf, subprocess as _sp
+     if not hasattr(_os, "setsid"):
+         raise _SrcOnly("非 POSIX,這段沒驗到")
+     hooks = Path(GRAPHCTL).resolve().parent / "hooks"
+     tmp = Path(_tf.mkdtemp(prefix="gctl-py314h-"))
+     nopy = _py314_sysbin(tmp)
+-    withpy = _py314_sysbin(tmp, keep_python=True)
+     good = tmp / "goodbin"
+     good.mkdir()
+     _os.symlink(sys.executable, good / "python3.14")
+     base = {k: v for k, v in _os.environ.items() if k not in ("LUMOS_PYTHON", "LUMOS_REEXEC_PYTHON", "GIT_DIR")}
+     base.update(HOME=str(tmp), LUMOS_PYTHON_SEARCH_DIRS=str(tmp / "nowhere"))
+ 
+     def hook(name, root, path, stdin="", **extra):
+         return _sp.run(["/bin/bash", str(hooks / name)], cwd=str(root), capture_output=True, text=True, input=stdin,
+                        env=dict(base, PATH=path, **extra), timeout=300)
+-    old_py = any(n.startswith("python3") for n in _os.listdir(withpy))
++    # 「只找得到舊版」要一支真的低於 3.14 的直譯器:系統的 python3 不一定是舊版(GitHub 的 Ubuntu 26 執行機內建就是 3.14),
++    # 改成逐一問版本挑出一支,放進只有它的目錄,接在沒有 python 的工具目錄後面
++    old_exe = _py314_old_python()
++    if old_exe:
++        withpy = tmp / "oldpy"
++        withpy.mkdir()
++        _os.symlink(old_exe, withpy / "python3")
++        withpy = str(withpy) + _os.pathsep + str(nopy)
++    old_py = old_exe is not None
+     root = _py314_hook_repo(tmp / "a")
+     if old_py:
+         r = hook("pre-commit", root, str(withpy))
+         check("①pre-commit 只找得到舊版 python:擋下印說明,不退回舊版", r.returncode == 1 and "要用 Python 3.14" in r.stderr
+               and "Traceback" not in r.stderr, r.stdout[-200:] + r.stderr[-500:])
+     else:
+-        print("  (沒驗到①:這台機器 /usr/bin 沒有 python3)")
++        print("  (沒驗到①:這台機器找不到低於 3.14 的 python)")
+     r = hook("pre-commit", root, str(nopy))
+     check("①pre-commit 完全沒有 python:擋下並印安裝指令", r.returncode == 1 and "找不到任何 python" in r.stderr
+           and "brew install python@3.14" in r.stderr, r.stderr[-400:])
+     fake = tmp / "fakebin"
+     fake.mkdir()
+     (fake / "python3.14").write_text("#!/bin/sh\necho /usr/bin/true\n", encoding="utf-8")
+     (fake / "python3.14").chmod(0o755)
+     r = hook("pre-commit", root, str(fake) + _os.pathsep + str(nopy))
+     check("①b PATH 上的 python3.14 是假的、回一支 /usr/bin/true:不拿它跑閘,擋下並講明", r.returncode == 1
+           and "不是 3.14 以上的 python" in r.stderr, r.stderr[-400:])
+@@ -134790,22 +134816,25 @@ def t_lwt_r1_term_int_cleanup():
+     try:
+         since = _t.time()
+         _lwt_put(root, "app/New1.kt", "fun n1() {\n" + _LWT_BAD + "}\n", since + 5)
+         for label, sig in (("SIGTERM", _sig.SIGTERM), ("SIGINT", _sig.SIGINT)):
+             tmpd = helper / f"tmp-{label}"
+             tmpd.mkdir()
+             log = helper / f"sg-{label}.jsonl"
+             e = dict(_os.environ, PATH=str(helper / "bin") + _os.pathsep + _os.environ.get("PATH", ""),
+                      FAKE_SG_SLEEP="30", FAKE_SG_LOG=str(log), TMPDIR=str(tmpd))
+             e.pop("LUMOS_SKIP_LINT_NEW", None)
++            # 子程序的 SIGINT 先恢復成預設,模擬在終端機按 Ctrl-C:測試執行器可能以 SIGINT 忽略的狀態啟動(GitHub 的 Ubuntu 26 執行機就是),
++            # Python 只在 SIGINT 沒被父程序改過時才轉成 KeyboardInterrupt,繼承忽略時 lint-new 照規矩不理會(同 nohup 照舊忽略 HUP)
+             p = _sp.Popen([sys.executable, GRAPHCTL, "lint-new", "--worktree", "--since", str(since), "--repo", str(root)],
+-                          cwd=str(root), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, env=e)
++                          cwd=str(root), stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, env=e,
++                          preexec_fn=lambda: _sig.signal(_sig.SIGINT, _sig.SIG_DFL))
+             t0 = _t.monotonic()
+             while _t.monotonic() - t0 < 60 and not (log.is_file() and log.read_text(encoding="utf-8").strip()):
+                 _t.sleep(0.05)
+             rows = [_j.loads(ln) for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()] if log.is_file() else []
+             tool = rows[0]["pid"] if rows else None
+             if tool:
+                 pgs.append(tool)
+             check(f"★前置★ r1乙 {label}:假工具開起來了、暫存 SARIF 在", tool is not None and bool(list(tmpd.glob("lumos-lint-*.sarif"))),
+                   str(list(tmpd.iterdir())))
+             p.send_signal(sig)
