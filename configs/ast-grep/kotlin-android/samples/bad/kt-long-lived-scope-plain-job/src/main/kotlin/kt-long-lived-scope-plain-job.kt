@@ -25,3 +25,10 @@ class S3 {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("s3") + other)
 }
+
+// 兩層括號裡接的是一般 Job,不是那個 SupervisorJob 屬性:照報
+class S4 {
+    private val other = Job()
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("s4") + (other)) // BAD
+}

@@ -29,3 +29,15 @@ class Holder3 {
     private val job = SupervisorJob()
     private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("h3") + job)
 }
+
+// 容易誤報:括號包住 SupervisorJob 屬性再加上去,要認得是同一個屬性
+class Holder4 {
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main) + (job) // GOOD
+}
+
+// 容易誤報:兩層括號的加法,屬性在最裡層
+class Holder5 {
+    private val job = SupervisorJob()
+    private val scope = CoroutineScope(Dispatchers.Main) + (CoroutineName("h5") + (job)) // GOOD
+}
