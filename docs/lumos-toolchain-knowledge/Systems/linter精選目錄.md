@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-17
-updated: 2026-11-08
+updated: 2026-11-09
 self_audit: sonnet/2026-07-27
 about_code_stamp: batch-2026-08-23/2026-08-23/0c510637cbb0
 tags:
@@ -32,6 +32,8 @@ summary: |-
   REVISIT:2026-12-15 在一個裝了 detekt Gradle 外掛的 Android 專案照 CI 型別檢查範本實跑 detektBaseline<變體> 與 detekt<變體>(驗收 S9),記下任務名、耗時與基準線檔名,跑過就把範本裡「以外掛實際寫出的為準」改成實測值 [closed:2026-11-08 已在 macrobench-lab 複本實跑(AGP 8.13.2、detekt 1.23.8),範本改成實測檔名,紀錄在本篇 verified_by 那篇 2026-11-08 的驗證紀錄]
   PITFALL:compose-rules 那條 detekt 宣告少了 --build-upon-default-config 時,外掛規則一條都不跑、也不報錯 [出處:2026-11-06 本機 detekt 1.23.8 加外掛 0.4.28 實測] [根因:沒帶這個旗標時外掛規則沒被啟用(推測:外掛自帶的預設設定沒疊進來)] [test:t_detekt_compose_rules_shared_config]
   WHY:共用 detekt 設定照 detekt 官方 Compose 頁加六項放寬(Composable 命名、Preview 沒被呼叫與函式數、有預設值的參數、屬性宣告的數字、PascalCase 頂層常數) [出處:2026-11-06 Projects/Android現成檢查接上CI與推送前_計劃;https://detekt.dev/docs/introduction/compose/] [因:現行設定對一支標準 Compose 檔報 6 條,推送前會擋每個新寫的元件] [代價:非 Compose 專案的有預設值長參數、屬性宣告魔術數字、PascalCase 頂層常數也不再報] [test:t_detekt_compose_rules_shared_config]
+  PITFALL:AGP 9 內建 Kotlin 下照 CI 型別檢查範本跑 detekt<變體> 會找不到任務 [出處:2026-11-09 nowinandroid 實跑] [根因:detekt 1.23.8 只在套了 kotlin-android 外掛時建型別任務、用舊介面讀變體] [repro:AGP 9.3.2 專案套 detekt 1.23.8 後跑 ./gradlew :app:tasks --all 只見 detekt 與 detektBaseline] [修法:改用 detekt 2.0.0-alpha.6 加 android.disallowKotlinSourceSets=false]
+  REVISIT:2027-02-09 查 detekt 2.0 出正式版沒有:出了就把 CI 型別檢查範本裡 AGP 9 那條從 2.0.0-alpha.6 換成正式版、重跑一次 nowinandroid,並決定共用設定與本機 CLI 要不要一起升 2.0(UnusedPrivateMember 鍵名要跟著改)
 about_code:
   - configs/detekt/android.yml
   - configs/detekt/compose.yml
@@ -40,6 +42,7 @@ verified_by:
   - "[[Verification/2026-09-11_Python補棧合成樣本測試]]"
   - "[[Verification/2026-11-01_Kotlin慣例對齊官方與detekt實測]]"
   - "[[Verification/2026-11-08_detekt的CI型別檢查範本實跑]]"
+  - "[[Verification/2026-11-09_Android現成檢查範本在兩個公開專案實跑]]"
 ---
 # linter 精選目錄——各語言該掌握的 linter（2026-07 社群現況）
 
@@ -153,8 +156,17 @@ REVISIT:2026-12-13 若那時有 .NET 專案真的需要這道閘，把「攤開�
          baseline = file("config/detekt/baseline.xml")
      }
      ```
+     **AGP 9 預設的內建 Kotlin 下,1.23.8 不產按變體任務**(只有 `detekt`、`detektBaseline`;1.23.8 只在套了 `kotlin-android` 外掛時建型別任務、用舊介面讀變體,https://github.com/detekt/detekt/issues/8320 ;2026-11-09 nowinandroid 實測,[[Verification/2026-11-09_Android現成檢查範本在兩個公開專案實跑]])。已遷到內建 Kotlin 的專案改用 detekt `2.0.0-alpha.6`:
+     ```kotlin
+     plugins { id("dev.detekt") version "2.0.0-alpha.6" }   // 2.0 改了外掛代號;detekt { } 區塊寫法同上
+     dependencies { detektPlugins("io.nlopez.compose.rules:detekt:0.6.8") }   // compose-rules 0.6.4 到 0.6.8 對 detekt 2.0.0-alpha.6
+     ```
+     - `gradle.properties` 加 `android.disallowKotlinSourceSets=false`:detekt 支援內建 Kotlin 那次改動原文要求(https://github.com/detekt/detekt/pull/9100 ),沒設時 2.0 一樣只有兩個任務;AGP 會印「實驗性選項」警告,照常。
+     - 共用設定 android.yml 的 `UnusedPrivateMember:` 那一鍵在 2.0 不存在(拆成 `UnusedPrivateFunction` 等),複製進專案後改成 `UnusedPrivateFunction:`,不然設定檢查直接讓任務失敗。共用設定本身照舊用 1.23 的鍵名,因為推送前那條用的本機 CLI 是 1.23.8。
+     - 2.0 還是 alpha,型別規則在內建 Kotlin 下讀不到 BuildConfig、R 這類產生的類別,可能誤報(detekt 議題 #9402);誤報先進基準線。
+     - 退回舊模式(`android.builtInKotlin=false`、`android.newDsl=false`)對已遷移的專案不可行:每個模組要補套 `kotlin-android`,nowinandroid 的建置外掛直接失敗;這兩個旗標 AGP 10 也會移除。
   2. 第一次在本機跑 `./gradlew detektBaseline<變體>`(例 `detektBaselineDebug`)產基準線檔、提交(2026-11-08 實測 detekt 1.23.8:變體任務在 `baseline` 設的檔名後面自動加變體名,上面那樣設會寫成 `config/detekt/baseline-debug.xml`,`detektDebug` 也讀這支;要提交的是它)。要清舊帳時重產。
-  3. CI 加一步 `./gradlew detekt<變體>`(例 `detektDebug`;純 Kotlin 模組是 `detektMain`):有基準線以外的新告警就讓 CI 失敗。這一步才有型別資訊,InjectDispatcher、吞取消、`collectAsState` 這類規則在這裡擋。
+  3. CI 加一步 `./gradlew detekt<變體>`(例 `detektDebug`;純 Kotlin 模組是 `detektMain`):有基準線以外的新告警就讓 CI 失敗。這一步才有型別資訊,InjectDispatcher、吞取消、`collectAsState` 這類規則在這裡擋。要寫明這個任務名:`./gradlew check` 只帶不吃型別資訊的 `detekt`,不帶 `detekt<變體>`(2026-11-09 AGP 8.7.3 與 9.3.2 兩個專案 `check --dry-run` 實測)。
   - Compose 專案在 `dependencies` 加 `detektPlugins("io.nlopez.compose.rules:detekt:0.4.28")`,CI 這步也帶 compose-rules;外掛的設定照推送前那條指 `compose.yml`(`config.setFrom(files("<android.yml>", "<compose.yml>"))`)。
   - 沒貼的專案,`lumos lint-check` 與健檢會印 T4「型別規則目前哪裡都沒擋」(只看 `.github/workflows/` 字面有沒有 `detekt<變體>`,不驗它真的跑)。
 
@@ -182,10 +194,10 @@ Android Lint 官方只支援在 Gradle 專案用 `./gradlew lint` 跑整個模�
        lintChecks("com.android.security.lint:lint:1.0.4")
    }
    ```
-   Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4.1 以上用 `1.6.1`(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 `1.5.5`(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 `1.5.0`(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 `1.4.2`(lint 31.7.1);AGP 8.7.0 用 `1.4.0`(發行說明寫 Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本,只列一串依賴更新的 PR 標題(lint-api 從 31.7.2 一路升到 32.2.0、lint 外掛升到 9.2.0,另一則寫 lint 31.13.2),看不出最後用哪版建置,不列。版本不合時 lint 任務載不進外掛。Slack 預設關的三條(`ComposeUnstableReceiver`、`ComposeUnstableCollections`、`ComposeM2Api`)範本不開。
+   Slack 外掛版本要對 AGP:挑「建置用的 lint 版本不高於專案 lint 版本」的那版,lint 版本等於 AGP 版本加 23(1.5.5 的發行說明同時寫 lint 32.3.2 與 AGP lint plugin 9.3.2)。常見對照:AGP 9.4.1 以上用 `1.6.1`(lint 32.4.1);AGP 9.3.2 到 9.4.0 用 `1.5.5`(lint 32.3.2);AGP 9.2.1 到 9.3.1 用 `1.5.0`(lint 32.2.1);AGP 8.7.1 到 9.2.0 用 `1.4.2`(lint 31.7.1);AGP 8.7.0 用 `1.4.0`(發行說明寫 Build against Lint 8.7.0,即 lint 31.7.0);更舊的照發行說明挑(https://github.com/slackhq/compose-lints/releases )。表只是常見對照,邊界一律照「建置用 lint 版本不高於專案 lint(= AGP 加 23)」挑;1.4.3 的發行說明沒寫建置用 lint 版本,只列一串依賴更新的 PR 標題(lint-api 從 31.7.2 一路升到 32.2.0、lint 外掛升到 9.2.0,另一則寫 lint 31.13.2),看不出最後用哪版建置,不列。版本不合時 lint 任務載不進外掛。Slack 預設關的規則範本不開:`ComposeM2Api` 各版都預設關;`ComposeUnstableReceiver`、`ComposeUnstableCollections` 從 1.5.2 起才預設關(Slack 的理由:強跳過模式下穩定性檢查沒那麼重要,https://github.com/slackhq/compose-lints/pull/541 ),1.5.1 以前預設開(2026-11-09 AGP 8.7.3 專案配 1.4.2 實跑,基準線裡有 `ComposeUnstableCollections`)。用 1.5.1 以前的版本又想跟新版一致,在 `lint { disable += setOf("ComposeUnstableReceiver", "ComposeUnstableCollections") }` 關。
    第二行 `lintChecks` 是 Google 的 Android 資安規則包(2026-11-08 加,[[Projects/Android資安與崩潰靜態檢查補齊_計劃]];官方 README https://github.com/google/android-security-lints ,版本查 Google Maven https://dl.google.com/android/maven2/com/android/security/lint/lint/maven-metadata.xml ,當天最新 1.0.4):官方自己說它比內建檢查「更偏資安、也更實驗性」(more security-focused and experimental),可能誤報。版本規則跟 Slack 外掛同一條:1.0.4 的建置檔寫 `lintVersion = '31.5.1'`,換算要 **AGP 8.5.1 以上**。第一次接一樣照第 2 步先產基準線;**已經照範本接過 CI 的專案**加這一行時,要先刪掉 `lint-baseline.xml`、照第 2 步重產並提交再推,不然舊程式的資安告警會讓 CI 立刻紅。包裡 24 條檢查都登記在 Kotlin 寫法型錄 checks-catalog.md(家在 [[Systems/kotlin規則包]];現成規則欄寫 `資安包:<檢查 id>`),專案要關哪一條,照型錄的檢查 id 在 `lint { disable += "<id>" }` 關。
 2. 第一次在本機跑 `./gradlew lint<變體> -Dlint.baselines.continue=true`(例 `lintDebug`)產 `lint-baseline.xml`、提交。**先產基準線、提交,再做第 3 步**——反過來 `warningsAsErrors` 會讓舊專案一接就紅。要清舊帳時刪掉基準線檔重產。
-3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 lint):有基準線以外的新告警就讓 CI 失敗。
+3. CI 加一步 `./gradlew lint<變體>`(或 `./gradlew check`,AGP 讓 `check` 帶 `lint<預設變體>`;2026-11-09 AGP 8.7.3 與 9.3.2 實測都掛上):有基準線以外的新告警就讓 CI 失敗。
 - 沒接的專案,`lumos lint-check` 與健檢會印 A1(CI 設定檔裡都找不到 Android Lint 的跡象:lint 任務名,或跟 `gradlew`、`gradle` 寫在同一邏輯行(反斜線續行接起來算一行)的 `check`、`build`,或 Azure `tasks:`、gradle action 的 `arguments:`、Bitrise 的 `gradle_task:` 這三個欄位值裡的 `check`、`build`(CircleCI 的 `command:` 是通用欄位、不算,gradle orb 的 `command: build` 會多印);建置檔的 `lint { }` 區塊與 `lint-baseline.xml` 是第 1、2 步的痕跡,不算 CI 有跑;只看字面,找到一個就不印,找不到不代表一定沒跑)、A2(用 Compose 但 Slack compose-lints 與 compose-rules 兩套都沒接);宣告的 detekt 命令帶的外掛檔不在時印 A3(見上面 detekt 標準接法)。只看字面(A1 看 CI 設定檔、A2 看建置檔、A3 看宣告),不驗 CI 真的跑。
 
 ### Kotlin 寫法規則包標準接法(2026-11-05 立,[[Projects/Android協程與API寫法機械檢查標準_計劃]])

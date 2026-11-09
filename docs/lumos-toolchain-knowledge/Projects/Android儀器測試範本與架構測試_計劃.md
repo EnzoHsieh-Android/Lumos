@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-11-06
-updated: 2026-11-06
+updated: 2026-11-09
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/stack-knowledge
 lands_in:
   - Systems/kotlin規則包
