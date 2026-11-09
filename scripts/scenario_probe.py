@@ -980,8 +980,12 @@ def _attempt_ledger_transaction(path, limit, claim=False, now=None):
     if limit == 0:
         return True if claim else None
     import math
-    now = time.time() if now is None else now
-    if not isinstance(now, (int, float)) or not math.isfinite(now) or now < 0:
+    def clock_ok(value):
+        return isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+
+    read_clock_after_lock = now is None
+    # 沒指定時間時,建檔或上鎖前先驗一次牆上時鐘:壞了就不碰帳檔,免得留下空帳
+    if not clock_ok(time.time() if read_clock_after_lock else now):
         raise ProbeAttemptLedgerError("用量帳時鐘不可判")
     conn = None
     try:
@@ -997,6 +1001,11 @@ def _attempt_ledger_transaction(path, limit, claim=False, now=None):
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         conn = sqlite3.connect(str(path), timeout=5.0, isolation_level=None)
         conn.execute("BEGIN IMMEDIATE")
+        if read_clock_after_lock:
+            # 拿到寫鎖之後才讀時鐘:記帳時間照拿鎖先後排,同時搶名額的一方不會被誤判成時鐘回撥
+            now = time.time()
+            if not clock_ok(now):
+                raise ProbeAttemptLedgerError("用量帳時鐘不可判")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if fresh and version == 0:
             conn.execute("CREATE TABLE ledger_meta (id INTEGER PRIMARY KEY CHECK(id=1), initialized_at REAL NOT NULL)")

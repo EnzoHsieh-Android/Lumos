@@ -109581,6 +109581,19 @@ def t_scenario_probe_collect_only_and_answer_cap():
     check("探針四支相關測試全綠", run.returncode == 0 and f"Ran {len(names)} tests" in output, output[-4000:])
 
 
+def t_probe_attempt_ledger_clock():
+    """用量帳的時鐘:拿到寫鎖之後才讀(兩方搶名額不誤判成時鐘回撥)、時鐘壞時不留空帳檔、鎖後讀到壞時鐘照樣停
+    (代碼審 code-用量帳拿鎖後讀時鐘;主線 CI 自主迴圈測試時好時壞的根因)。包成主測試檔的入口,讓修正紀錄與筆記能綁。"""
+    root = Path(GRAPHCTL).resolve().parent.parent
+    names = ["TestScenarioProbeAblation.test_attempt_ledger_reads_clock_after_lock",
+             "TestScenarioProbeAblation.test_attempt_ledger_bad_clock_leaves_no_ledger_file",
+             "TestScenarioProbeAblation.test_attempt_ledger_bad_clock_after_lock_stops"]
+    run = subprocess.run([sys.executable, "scripts/test_autonomous_loop.py", *names],
+                         cwd=root, capture_output=True, text=True, timeout=120)
+    output = run.stdout + run.stderr
+    check("用量帳時鐘三支測試全綠", run.returncode == 0 and f"Ran {len(names)} tests" in output, output[-4000:])
+
+
 def t_test_quality_scan_cli():
     _need_src("scripts/test_quality_scan.py")
     _need_src("scripts/test_test_quality_scan.py")
