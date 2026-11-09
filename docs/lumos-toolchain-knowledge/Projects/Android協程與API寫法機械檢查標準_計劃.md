@@ -1,11 +1,11 @@
 ---
 type: project
-status: doing
+status: done
 created: 2026-11-04
-updated: 2026-11-05
+updated: 2026-11-09
 tags:
   - type/project
-  - status/doing
+  - status/done
   - scope/stack-knowledge
 related:
   - "[[Projects/Android協程與API協同機械審_調研]]"
@@ -145,3 +145,4 @@ RETIRE-IF: 某條自寫規則上線三個月,在消費專案的放行紀錄(`lum
 - r2(2026-11-05,四席 sonnet:正確性、邊界、資源、架構對齊):43 條/blocking 19/新機制(暫時索引、回合結束鉤子的預算與範圍、改檔前推列)集中 36 條,照熔斷提示把第二批拆成 [[Projects/Android寫法寫完當下自動檢查_計劃]] 帶走那 36 條;本計劃只留第一批,折 7 條(規則路徑過濾錨在 src/ 底下、釘 ast-grep 版本、待查證節不受檢、測試路徑寫實、設定鍵型別、訊息不含 $、命令列過長沿用 detekt 那案)。
 - 卷證:governance/review-reports/android協程與api寫法機械檢查標準/(r1-intake.md、r2-intake.md 有先查世界與逐條去向)
 - 2026-11-08 文字同步([[Projects/規則包覆核兩級接新增告警閘_計劃]]):「出處不全的規則只准提示級」改成「只准放不接閘的 rules-unwired/」、指向前案的連結改指新計劃;只改字面,條款綁的測試與意圖不變。
+- 收尾(2026-11-09):〈待查證〉清空(47 列逐列實跑或讀原始碼、最後 5 列出處重查),出處不全從 29 列降到 23 列(6 列找到原文,17 列補了部分原文的查證網址),型錄自檢 0 問題;條款 S5、S6 的人驗紀錄見 [[Verification/2026-11-05_Kotlin規則包真專案實測]]。細節 [[Verification/2026-11-09_Android型錄待查證列逐列核對]]、[[Verification/2026-11-09_Android型錄出處不全列重查]]。

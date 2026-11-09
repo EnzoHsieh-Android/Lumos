@@ -129775,11 +129775,11 @@ _KT_STATS_LINES = (
     ("- 級的組合:", (":A 207", "、A+B 28", "、A+B+C 2", "、A+C 3", "、A+C+D 1", "、A+D 1", "、B 179", "、B+C 9", "、B+C+D 1",
                     "、B+D 9", "、C 48", "、C+D 4", "、D 43")),
     ("- 情境:", ("形狀類 428", "語意類 107")),
-    ("- 待查證:", ("待查證:5 列", "規則代號待查 2 列", "來源待核對 3 列")),
+    ("- 待查證:", ("待查證:0 列", "規則代號待查 0 列", "來源待核對 0 列")),
     ("- 規則包條數:", ("規則包條數:228", "error 49", "warning 118", "info 12", "hint 49", "其中 27 條")),
     ("- 被會擋的規則守到的列數", (":131",)),
-    ("- 出處不全的列:", ("列:29", "人裁的列:4")),
-    ("- 逐列查證", ("\u3015):526 列",)),
+    ("- 出處不全的列:", ("列:23", "人裁的列:4")),
+    ("- 逐列查證", ("\u3015):534 列",)),
 )
 
 
@@ -129790,21 +129790,30 @@ def _kt_bump(item):
     return f"{head}{int(num) + 1}{tail}"
 
 
+_KT_PEND_HEAD = "| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n"
+_KT_PEND_ROW = "| API-3 | IJ:示例(ID 待查) | — |\n"
+
+
+def _kt_pend_seed(t, rows):
+    """改壞用:主表 API-3 的現成規則加一個待查標記、統計的待查證與代號待查各加 1,〈待查證〉表頭後面接 rows。
+    rows 給 _KT_PEND_ROW 時是一致狀態(自檢應該 0 問題);給別的就是只錯那一處。"""
+    t = _kt_line_sub("| API-3 | async", "Sonar:S6315", "Sonar:S6315;IJ:示例(ID 待查)")(t)
+    t = t.replace("- 待查證:0 列", "- 待查證:1 列", 1).replace("規則代號待查 0 列", "規則代號待查 1 列", 1)
+    return t.replace(_KT_PEND_HEAD, _KT_PEND_HEAD + rows, 1)
+
+
 _KT_STATS_MUTATIONS = (
     *((f"〈統計〉{item}", _kt_line_sub(prefix, item, _kt_bump(item))) for prefix, items in _KT_STATS_LINES for item in items),
-    # 下面兩個連〈統計〉的待查證數一起改到一致,只留給〈待查證〉跟主表的雙向比對抓(不讓統計那道代抓)
-    ("待查證列著主表已解決的 DATA-27", lambda t: t.replace("| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n",
-        "| 編號 | 待查的規則代號 | 待核對的來源 |\n|---|---|---|\n| DATA-27 | — | — |\n", 1)
-        .replace("- 待查證:5 列", "- 待查證:6 列", 1)),
-    ("待查證漏列主表還待查的 CO-3", lambda t: _kt_drop_line("| CO-3 | IJ:「Job used as an argument")(t)
-        .replace("- 待查證:5 列", "- 待查證:4 列", 1).replace("規則代號待查 2 列", "規則代號待查 1 列", 1)),
-    ("待查證來源格寫了主表沒有的待核對", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |",
-        "| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | X(未開頁核對) |", 1)),
-    ("待查證代號格寫 — 但主表還待查", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |", "| CO-3 | — | — |", 1)),
+    # 〈待查證〉清空之後(2026-11-09),下面幾個改壞先用 _kt_pend_seed 造一個「一致的待查狀態」(主表 API-3 帶待查、〈待查證〉列著它、
+    # 統計加 1),再只動一處;種子本身要一致,t_kt_catalog_stats_consistent 的 ①b 驗
+    ("待查證列著主表已解決的 DATA-27", lambda t: t.replace(_KT_PEND_HEAD, _KT_PEND_HEAD + "| DATA-27 | — | — |\n", 1)
+        .replace("- 待查證:0 列", "- 待查證:1 列", 1)),
+    ("待查證漏列主表還待查的 API-3", lambda t: _kt_pend_seed(t, "")),
+    ("待查證來源格寫了主表沒有的待核對", lambda t: _kt_pend_seed(t, "| API-3 | IJ:示例(ID 待查) | X(未開頁核對) |\n")),
+    ("待查證代號格寫 — 但主表還待查", lambda t: _kt_pend_seed(t, "| API-3 | — | — |\n")),
     # 代碼審 r3 審查甲三 1:只寫編號一格的列不准讓自檢崩,要照格子空著報
-    ("待查證只寫編號一格", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |", "| CO-3 |", 1)),
-    ("待查證編號重複", lambda t: t.replace("| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |",
-        "| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |\n| CO-3 | IJ:「Job used as an argument in a coroutine starter」(ID 待查:候選 CoroutineContextWithJob 只看到檔名) | — |", 1)),
+    ("待查證只寫編號一格", lambda t: _kt_pend_seed(t, "| API-3 |\n")),
+    ("待查證編號重複", lambda t: _kt_pend_seed(t, _KT_PEND_ROW + _KT_PEND_ROW)),
 )
 
 
@@ -129825,6 +129834,11 @@ def t_kt_catalog_stats_consistent():
         base = m.catalog_problems(rules)
         mine = [p for p in base if "〈統計〉" in p[1] or "待查證" in p[1]]
         check("① 真型錄:〈統計〉〈待查證〉這兩類自檢問題 0 筆", not mine, str(mine[:10]))
+        seed = _kt_pend_seed(text, _KT_PEND_ROW)
+        m.CATALOG.write_text(seed, encoding="utf-8")
+        got_seed = m.catalog_problems(rules)
+        check("①b 改壞用的待查種子本身一致(套上了、自檢沒多報)", seed != text and len(got_seed) == len(base),
+              str([p for p in got_seed if p not in base][:3]))
         for label, fn in _KT_STATS_MUTATIONS:
             mut = fn(text)
             check(f"★前置★ 改壞「{label}」有套上", mut != text, "")
