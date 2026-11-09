@@ -6,5 +6,7 @@ class UserRepository(private val api: UserApi) {
         api.user()
     } catch (e: HttpException) {
         throw NetworkError(e.code())
+    } catch (e: IOException) {
+        throw NetworkError(-1)
     }
 }

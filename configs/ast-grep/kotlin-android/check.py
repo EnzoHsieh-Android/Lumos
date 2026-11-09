@@ -29,6 +29,7 @@ SEVERITIES = ("error", "warning", "info", "hint")
 _DIR_SEVERITY = {"rules-hints": ("hint",), "rules-review": ("info",), "rules": ("error", "warning"), "rules-unwired": SEVERITIES}
 MSG_MAX = 120          # 新增告警閘解析 SARIF 時把訊息截在 120 字
 REVIEW_FP_PREFIX = "review-fp-"   # 好例樣本裡記「語意覆核級或不接閘規則已知會誤報」的檔名開頭,改規則形狀時拿來對照
+CROSS_PREFIX = "cross-"          # 好例樣本裡放「別條規則的壞寫法、用來證明本條不重複報」的檔名開頭;好例的跨規則檢查略過它,但它一定要被別條規則命中
 SCAN_TIMEOUT = 120     # 一次掃描的上限(秒);正常不到一秒,卡住時不要拖到外層測試逾時
 # 好例「一段」= 頂格開頭的宣告(函式、類別、物件、介面、帶註記的宣告)
 _DECL_RE = re.compile(r"^(?:@|fun |suspend fun |private |internal |public |class |data class |object |interface |abstract |open |sealed |enum |val |var |inline )")
@@ -995,8 +996,8 @@ def _sample_owner(f, kind):
 def good_cases(path):
     n = 0
     for f in Path(path).rglob("*.kt"):
-        if f.name.startswith(REVIEW_FP_PREFIX):
-            continue      # 已知誤報樣本不算「好例」段數
+        if f.name.startswith((REVIEW_FP_PREFIX, CROSS_PREFIX)):
+            continue      # 已知誤報樣本與跨規則邊界案例不算「好例」段數
         n += sum(1 for ln in f.read_text(encoding="utf-8").splitlines() if _DECL_RE.match(ln))
     return n
 
@@ -1037,8 +1038,11 @@ def check(sg):
         elif rid not in got:
             problems.append(("<pack>", f"SARIF 掃壞例樣本沒有新增告警閘讀得到的 {rid} 結果({cfg})"))
     review_ids = {r["id"] for r in rules if r["dir"] in ("rules-review", "rules-unwired")}
+    blocking_ids = {r["id"] for r in rules if r["dir"] == "rules"}
     # 每份設定檔對壞例、好例各掃一次,再依樣本所在目錄(samples/<bad|good>/<規則 id>/…)歸到各條規則
     hits = {}
+    cross_hits = {}        # (好例所屬規則, 命中的會擋規則) → 處數;好例應該是標準寫法,別條會擋規則也不該報
+    cross_files_hit = set()   # cross- 檔被別條規則命中過(證明它真的是跨規則邊界案例)
     for kind in ("bad", "good"):
         for _d, cfg in CONFIGS:
             got = scan(sg, cfg, HERE / "samples" / kind)
@@ -1049,7 +1053,18 @@ def check(sg):
                 owner = _sample_owner(f, kind)
                 if kind == "good" and Path(f).name.startswith(REVIEW_FP_PREFIX) and rule_id in review_ids:
                     continue      # 語意覆核級或不接閘規則已知的形狀誤報:記在樣本裡、改形狀時對照,不算好例誤報
+                if kind == "good" and owner and rule_id != owner:
+                    if Path(f).name.startswith(CROSS_PREFIX):
+                        cross_files_hit.add(str(Path(f)))
+                    elif rule_id in blocking_ids:
+                        cross_hits[(owner, rule_id)] = cross_hits.get((owner, rule_id), 0) + 1
                 hits[(kind, owner, rule_id)] = hits.get((kind, owner, rule_id), 0) + 1
+    for (owner, rule_id), n in sorted(cross_hits.items()):
+        problems.append((owner, f"好例被會擋規則 {rule_id} 命中 {n} 處(好例要照每條會擋規則的標準寫;刻意放別條的壞寫法證明不重複報,要搬到 {CROSS_PREFIX} 開頭的檔)"))
+    for f in sorted((HERE / "samples" / "good").rglob(CROSS_PREFIX + "*.kt")):
+        rel = str(f.relative_to(HERE))
+        if not any(h == rel or h.endswith("/" + rel) or h == str(f) for h in cross_files_hit):
+            problems.append((_sample_owner(rel, "good") or "<pack>", f"{rel} 以 {CROSS_PREFIX} 開頭卻沒被別條規則命中(不是跨規則邊界案例就改回一般好例)"))
     for r in rules:
         rid = r["id"]
         bad, good = HERE / "samples" / "bad" / rid, HERE / "samples" / "good" / rid

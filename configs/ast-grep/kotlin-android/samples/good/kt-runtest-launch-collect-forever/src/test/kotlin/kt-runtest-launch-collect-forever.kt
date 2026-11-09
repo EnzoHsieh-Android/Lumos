@@ -27,6 +27,7 @@ class VmFirstTest {
         val loaded = async { vm.state.first { it > 0 } } // GOOD
         launch { vm.state.first { it > 0 } } // GOOD
         vm.load()
+        advanceUntilIdle()
         assertEquals(1, loaded.await())
     }
 }

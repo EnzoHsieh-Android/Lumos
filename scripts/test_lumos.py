@@ -126664,6 +126664,67 @@ def _ktpack_edit(path, old, new):
     Path(path).write_text(t.replace(old, new, 1), encoding="utf-8")
 
 
+
+def t_kotlin_rulepack_good_cross_rule():
+    """好例樣本也要照每條會擋規則的標準寫:被別條會擋規則命中要報;刻意放別條壞寫法證明不重複報的,搬到 cross- 開頭的檔,
+    跨規則檢查略過它,但它一定要被別條規則命中,也不算好例段數;本條規則命中自己的 cross- 檔照算好例誤報
+    (Issues/Kotlin規則包代碼審放行的小問題 第 6 項,2026-11-09 逐處判完 17 處都是樣本該改)。
+    翻紅釘:拿掉跨規則檢查 → 好例被別條命中那條紅;cross- 也照報 → 對照那條紅;拿掉 cross- 沒被命中的檢查 → 那條紅;
+    cross- 算進好例段數 → 段數那條紅;review-fp- 檔一律豁免跨規則 → review-fp 那條紅。"""
+    import shutil
+    # 不需要 ast-grep 的那半(同 t_kotlin_rulepack_samples 的靜態那半):cross- 檔的宣告不算好例段數
+    m0 = _ktpack()
+    d0 = Path(tempfile.mkdtemp(prefix="gctl-ktcross-"))
+    try:
+        (d0 / "good.kt").write_text("fun onlyOne() = 1\n", encoding="utf-8")
+        (d0 / (m0.CROSS_PREFIX + "other.kt")).write_text("fun a() = 1\nfun b() = 2\nclass C\n", encoding="utf-8")
+        check("★改壞★ cross- 檔的宣告不算好例段數(不靠 ast-grep)", m0.good_cases(d0) == 1, str(m0.good_cases(d0)))
+    finally:
+        shutil.rmtree(d0, ignore_errors=True)
+    sg = _ktpack_sg()
+    if not sg:
+        print("  (本機沒有 ast-grep,只跑了不靠 ast-grep 的那半;CI 裝了 0.51.1 會跑全部)")
+        return
+    host, other = "kt-retrofit-body-bang", "kt-okhttp-no-calltimeout"   # 兩條都是會擋規則
+    ma = _ktpack(copy=True)
+    mb = _ktpack(copy=True)
+    mc = _ktpack(copy=True)
+    try:
+        other_bad = sorted((ma.HERE / "samples" / "bad" / other).rglob("*.kt"))[0].read_text(encoding="utf-8")
+        host_bad = sorted((ma.HERE / "samples" / "bad" / host).rglob("*.kt"))[0].read_text(encoding="utf-8")
+        ga = ma.HERE / "samples" / "good" / host / "src" / "main" / "kotlin"
+        (ga / "OtherBad.kt").write_text(other_bad, encoding="utf-8")
+        (ga / "cross-nothing.kt").write_text("fun plainOne() = 1\nfun plainTwo() = 2\n", encoding="utf-8")
+        (ga / "cross-self.kt").write_text(host_bad, encoding="utf-8")
+        _r, pa = ma.check(sg)
+        ta = "\n".join(f"{a}: {b}" for a, b in pa)
+        check("★改壞★ 好例被別條會擋規則命中要報", f"{host}: 好例被會擋規則 {other} 命中" in ta, ta[:400])
+        check("★改壞★ cross- 檔沒被別條規則命中要報", "cross-nothing.kt 以 cross- 開頭卻沒被別條規則命中" in ta, ta[:400])
+        check("★改壞★ 本條規則命中自己的 cross- 檔照算好例誤報", f"{host}: 好例誤報" in ta, ta[:400])
+        # review-fp- 只豁免覆核級規則:另一份複本只放一支 review-fp- 檔裝別條會擋規則的壞寫法,照樣要報
+        gc = mc.HERE / "samples" / "good" / host / "src" / "main" / "kotlin"
+        (gc / "review-fp-other.kt").write_text(other_bad, encoding="utf-8")
+        _r, pc = mc.check(sg)
+        tc = "\n".join(f"{a}: {b}" for a, b in pc)
+        check("★改壞★ review-fp- 檔被別條會擋規則命中也照報", f"{host}: 好例被會擋規則 {other} 命中" in tc, tc[:400])
+        gb = mb.HERE / "samples" / "good" / host / "src" / "main" / "kotlin"
+        (gb / "cross-okhttp.kt").write_text(other_bad, encoding="utf-8")
+        seg = "kt-sequential-independent-await"
+        for f in sorted((mb.HERE / "samples" / "good" / seg).rglob("*.kt")):
+            f.write_text("fun onlyOne() = 1\n", encoding="utf-8")
+        gs = sorted((mb.HERE / "samples" / "good" / seg).rglob("*.kt"))[0].parent
+        (gs / "cross-many.kt").write_text(other_bad, encoding="utf-8")
+        _r, pb = mb.check(sg)
+        tb = "\n".join(f"{a}: {b}" for a, b in pb)
+        check("★對照★ 同樣的別條壞寫法放進 cross- 檔就不報", "好例被會擋規則" not in tb and "沒被別條規則命中" not in tb, tb[:400])
+        check("★改壞★ cross- 檔的宣告不算好例段數", f"{seg}: 好例至少要兩段" in tb, tb[:400])
+    finally:
+        shutil.rmtree(ma.CATALOG.parents[2], ignore_errors=True)
+        shutil.rmtree(mb.CATALOG.parents[2], ignore_errors=True)
+        shutil.rmtree(mc.CATALOG.parents[2], ignore_errors=True)
+    print("  ✓ t_kotlin_rulepack_good_cross_rule")
+
+
 def t_kotlin_rulepack_samples():
     """[S1] 每條規則壞例至少命中兩處、好例零命中且至少兩段、載入條數等於 id 數、
     只掃測試碼的規則對祖先目錄叫 test 的正式碼不命中。另把複本逐項改壞,檢查要各自抓到。"""

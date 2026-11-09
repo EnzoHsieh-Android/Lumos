@@ -15,7 +15,8 @@ fun NavGraphBuilder.graph(nav: NavController) {
 
 // 容易誤報(代碼審 r1 M3):結果回呼與組建內的區域函式裡導航
 @Composable
-fun PickThenGo(navController: NavController) {
+fun PickThenGo() {
+    val navController = rememberNavController()
     val l2 = rememberLauncherForActivityResult(GetContent()) { navController.navigate("y") }
     fun goHome() { navController.navigate("home") }
     Button(onClick = { goHome() }) { }

@@ -7,6 +7,7 @@ class FiniteTest {
     }
     @Test fun b() = runTest {
         val values = mutableListOf<Int>()
-        launch { flowOf(1, 2).toList(values) }
+        launch { flowOf(1, 2).collect { values += it } }   // 有限流;不用 toList(會撞會擋的 TEST-5)
+        advanceUntilIdle()
     }
 }

@@ -14,7 +14,7 @@ summary: |-
   FLAG:TECHNICAL
   PITFALL:規則檔 files 清單項目後面接行內註解提到 src/main 時,只掃測試碼的規則被誤判成不是,祖先目錄守衛靜默略過 [出處:2026-11-05 code-kotlin規則包 r4 正確性、邊界席] [根因:_files_block_is_test_only 只去整行註解] [repro:check.py 對 files 區塊 `- '**/src/test*/**'  # 不含 src/main` 回 False]
   PITFALL:推送閘把規則包教材樣本當產品碼:測試作弊比對報沒斷言、Room 守衛報範例 DAO 沒測試 [出處:2026-11-05 Kotlin 規則包第一次推送被擋] [根因:樣本目錄排除只接到風險分級、棧別題與 linter 那半,作弊比對與 Room 守衛各自挑檔] [防回歸:修好時各補一條樣本目錄不報、同形一般檔照報的測試]
-  REVISIT:2026-11-20 逐處判好例目錄被別條會擋規則命中的 15 處(樣本寫得不夠標準就改樣本,規則誤報就改規則、搬語意覆核級或 rules-unwired/),判完再決定要不要加「好例被別條規則命中也報」的檢查
+  REVISIT:2026-11-20 逐處判好例目錄被別條會擋規則命中的 15 處(樣本寫得不夠標準就改樣本,規則誤報就改規則、搬語意覆核級或 rules-unwired/),判完再決定要不要加「好例被別條規則命中也報」的檢查 [closed:2026-11-09 17 處判完全是樣本該改,已改樣本並加跨規則檢查,見〈修好紀錄〉第 6 項]
   REVISIT:2026-12-04 kt-long-lived-scope-plain-job 還會誤報 `+ (job)` 與兩層巢狀加法(代碼審規則包樣本不當產品碼 r1 正確性席實測);改成遞迴認括號與加法、補好例,或判定少見就寫進規則註解
 related:
   - "[[Systems/kotlin規則包]]"
@@ -63,3 +63,4 @@ related:
 - 5:`kt-long-lived-scope-plain-job` 認括號裡再包一層加法;好例 `Holder3`、反向壞例 `S3`。
 - 7:測試防竄改比對(`_tg_kind`)與 Room 守衛(觸發判斷、git grep、DAO 差異)都走 `_RULEPACK_SAMPLE_RE`;測試 `t_tq_guard_skips_rulepack_samples`、`t_room_guard_skips_rulepack_samples`(四個排除點各自改壞都翻紅)。自我檢查的迴圈變數也改成底線。
 - 6 未修,改成分流:好例目錄被別條會擋規則命中的有 13 組、15 處(2026-11-05 量),每一處要判是樣本寫得不夠標準、還是那條規則誤報(例:`kt-public-mutable-holder` 的好例用事件 Channel 被 `kt-vm-channel-event` 報 3 處)。逐處判完前不加「好例被別條規則命中也報」的檢查,免得把規則誤報當樣本問題修掉。
+- 6(2026-11-09 修好):重算是 15 組、17 處,逐處判完全是好例沒照別條會擋規則的標準寫(沒有規則誤報),13 處照標準寫法改樣本;另 4 處是刻意放別條壞寫法證明不重複報的去重案例,搬到 `cross-` 開頭的檔。規則包自檢加跨規則檢查:好例被別條會擋規則命中要報、`cross-` 檔略過但一定要被別條規則命中、不算好例段數;測試 `t_kotlin_rulepack_good_cross_rule`(各道各自改壞都翻紅;沒有 ast-grep 的環境只跑「cross- 不算段數」那半,免得零斷言判紅)。另外 kt-runtest-launch-collect-forever 的 review-fp 樣本第二例 `launch { flowOf(1, 2).toList(values) }` 是會擋的 TEST-5(kt-test-tolist-not-background)對有限流的真實誤報;會擋規則不准在好例留已知誤報,所以樣本改成不用 toList,誤報寫進那條規則的「容易誤報」註解;review-fp- 檔被別條會擋規則命中也照報(測試有釘)。

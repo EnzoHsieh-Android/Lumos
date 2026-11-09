@@ -7,7 +7,3 @@ object Settings {
 class Vm2 : ViewModel() {
     val heavy by lazy { compute() } // GOOD
 }
-// 去重:SharingStarted.Lazily 歸 kt-statein-lazily-or-no-timeout 報,這條不重複
-class Vm3(repo: Repo) : ViewModel() {
-    val c = repo.items.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
-}
