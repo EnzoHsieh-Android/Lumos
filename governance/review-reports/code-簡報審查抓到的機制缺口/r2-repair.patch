@@ -1,0 +1,203 @@
+diff --git a/configs/ast-grep/kotlin-android/samples/bad/kt-lifecycle-collect-without-repeat/src/main/kotlin/kt-lifecycle-collect-without-repeat.kt b/configs/ast-grep/kotlin-android/samples/bad/kt-lifecycle-collect-without-repeat/src/main/kotlin/kt-lifecycle-collect-without-repeat.kt
+index 181f42493..20de3c0f8 100644
+--- a/configs/ast-grep/kotlin-android/samples/bad/kt-lifecycle-collect-without-repeat/src/main/kotlin/kt-lifecycle-collect-without-repeat.kt
++++ b/configs/ast-grep/kotlin-android/samples/bad/kt-lifecycle-collect-without-repeat/src/main/kotlin/kt-lifecycle-collect-without-repeat.kt
+@@ -20,21 +20,21 @@ class FeedFragment : Fragment() {
+     }
+ }
+ 
+ // 實作 Service 的巢狀介面不是 Service:照報
+ class PlayerFragment : Fragment(), MediaSessionService.Listener {
+     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+         lifecycleScope.launch { vm.player.collect { draw(it) } } // BAD
+     }
+ }
+ 
+-// ProcessLifecycleOwner 不豁免(依據不足):在畫面類別裡照報
++// ProcessLifecycleOwner 不豁免:官方說它是所有 Activity 的合成生命週期,STARTED 就是 App 有畫面在前景
+ class BannerFragment : Fragment() {
+     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+         ProcessLifecycleOwner.get().lifecycleScope.launch { session.state.collect { show(it) } } // BAD
+     }
+ }
+ 
+ // 例外只看類別自己的繼承清單:Activity 裡有內部 Service 類別,Activity 自己的收集照報
+ class MainActivity : AppCompatActivity() {
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+diff --git a/docs/lumos-toolchain-knowledge/Projects/簡報審查抓到的機制缺口_計劃.md b/docs/lumos-toolchain-knowledge/Projects/簡報審查抓到的機制缺口_計劃.md
+index 1c6efd5ac..b2a17e24c 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/簡報審查抓到的機制缺口_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/簡報審查抓到的機制缺口_計劃.md
+@@ -42,21 +42,21 @@ RETIRE-IF: Android Lint 或 compose-rules 出了同一種只管畫面收集的
+ 
+ | 機制 | 依據 | 出處 |
+ |---|---|---|
+ | 規則只管畫面的收集 | 官方說 repeatOnLifecycle 是為了「只在 UI 顯示在畫面上時處理」(This approach processes the flow emissions only when the UI is visible on the screen),2026-11-09 讀 | https://developer.android.com/topic/libraries/architecture/views/coroutines-views |
+ | Service 不是畫面 | 「A Service that is also a LifecycleOwner」,已知子類別 MediaSessionService、間接子類別 MediaLibraryService,2026-11-09 讀 | https://developer.android.com/reference/androidx/lifecycle/LifecycleService |
+ | README 實驗句(錯誤筆記) | 被測 claude-haiku-4-5;只看程式碼 20/25、現行 12/25;Opus 四組 25/25「在天花板」 | lumos-gvc 工作樹 Verification/2026-09-19_受控實驗程式碼為主四組對照(未提交);摘要見 [[Projects/Lumos定位_程式碼為主脈絡為輔_計劃]] |
+ | README 實驗句(正確筆記) | 四題八十場,H06 只看程式碼 0/5、有筆記三組合計 8/15,其餘三題四組都接近滿分 | lumos-gvc 工作樹 Verification/2026-09-21_戊組知識只在Issue的四題八十場(未提交) |
+ 
+ ## 驗收條款
+ 
+-- [S1] 當規則包樣本自測跑到 kt-lifecycle-collect-without-repeat 時,包在 LifecycleService、MediaSessionService 子類別裡的收集(launch 裡 collect、launch(Dispatchers.IO) 裡 collect、launchIn 三種)應 不報;同一支壞例檔裡另有 Service 類別時,Fragment、實作 MediaSessionService.Listener 的 Fragment、ProcessLifecycleOwner 的收集、外圍 Activity 本身的收集 應 照報 [test:t_kotlin_rulepack_samples]
++- [S1] 當規則包逐例表掃到 kt-lifecycle-collect-without-repeat 時,包在 LifecycleService、MediaSessionService 子類別裡的收集(launch 裡 collect、launch(Dispatchers.IO) 裡 collect、launchIn 三種)應 不報;同一支壞例檔裡另有 Service 類別時,Fragment、實作 MediaSessionService.Listener 的 Fragment、ProcessLifecycleOwner 的收集、外圍 Activity 本身的收集 應 照報 [test:t_kotlin_rulepack_security_rules]
+ - [S4] 當讀 README 中英兩版那句實驗時,應 寫明 Haiku 4.5 只看程式碼 20 場、讀到故意寫錯的筆記 12 場、Opus 在天花板、筆記正確時只有一題看得出幫助 [manual:對照 lumos-gvc 工作樹兩份 Verification 原始紀錄逐字核對中英兩版]
+ 
+ ## 預期值表
+ 
+ | 條款 | 輸入 | 預期 | 來源 |
+ |---|---|---|---|
+ | S1 | `class SyncService : LifecycleService()` 裡 `lifecycleScope.launch { flow.collect {} }` | 不報 | LifecycleService 官方說明是 Service;repeatOnLifecycle 官方適用範圍是 UI |
+ | S1 | 同上類別裡 `lifecycleScope.launch(Dispatchers.IO) { flow.collect {} }` | 不報 | 原規則兩種 launch 寫法都認,例外兩種都豁免 |
+ | S1 | `repo.pings.onEach { }.launchIn(lifecycleScope)` 在 MediaSessionService 子類別裡 | 不報 | 同上 |
+ | S1 | 壞例檔同時有 Service 類別與 `class SettingsFragment : Fragment()` 的 collect | Fragment 那處照報 | repeatOnLifecycle 官方範例就是 Fragment |
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 1f76868c4..92aa1ed90 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -61,21 +61,21 @@ summary: |-
+   RULE:改了型錄某列的壞寫法欄或現成規則欄,那列〈接電證據〉的真跑樣本要照新的壞寫法重寫、照範本設定重跑,判定照結果改(自檢只驗樣本檔在不在,驗不了樣本跟壞寫法欄還一不一致) [依據:審計] [since:2026-11-08] [retire:when-gone:configs/ast-grep/kotlin-android/samples/lint-wiring] [confirmed:2026-11-08]
+   WHY:check.py 的 wiring_table、wiring_dir 不加底線,是給測試讀判定表與樣本目錄用(同 situation_dir 的例外) [出處:代碼審 code-型錄接電要附證據 r1 架構對齊席] [因:測試要用複本的樣本目錄做改壞]
+   WHY:規則掛的型錄列出處不全時,先再查一次權威出處,查得到就照原文改寫型錄列並保留規則,查不到或跟官方說法相反就把規則移出規則包,不再停放在 rules-unwired/;型錄列保留出處不全當參考、不掛規則(2026-11-09 起再查兩輪都查不到的型錄列改標停用、不再當參考,見停用那條 WHY) [出處:使用者 2026-11-08「每條納入規則的檢查,都必須有憑據、有來源,總不能讓來歷不明的規則來把關」「移掉之前,先查明出處,有的就不用刪」;[[Projects/Android不接閘資安規則重量_計劃]] 範圍 5] [因:只登記不擋的規則也會在推送前印出來、被當成標準看,出處不明就不該出現] [不選:照舊停放在 rules-unwired/(來歷不明的規則照樣印給人看)] [test:t_kotlin_rulepack_unwired_dir]
+   WHY:有出處、單檔語法認得出的形狀列補自寫規則,先放 rules-unwired/(hint)、樣本外量過升級條件才搬 rules/;已知單檔排除不了的誤報類(API-2 的 Play services Task)搬 rules/ 時拿掉 review-fp 樣本、誤報寫進實測欄,出處只有建議語氣、沒寫後果的(UI-33)過了也只放 rules-hints/(rules/ 的 warning 也會擋,推送前擋不擋看目錄不看等級) [出處:[[Projects/Android形狀列補規則_計劃]]] [因:出處只證明是壞寫法,不證明規則抓得準;rules/ 的規則不豁免 review-fp 樣本] [不選:出處有就直接放 rules/] [test:t_kotlin_rulepack_security_rules]
+   WHY:同一個 DisposableEffect 判斷「有沒有註冊監聽」只准一份,UI-32(有註冊卻留空 onDispose,會擋)與 UI-33(沒註冊卻寫空 onDispose,只登記)都引用 utils/has-registration-call,同一段只會被其中一條報 [出處:[[Projects/Android形狀列補規則_計劃]] 設計審 r1 架構對齊] [因:兩條各寫一份判斷會漂移,給出相反建議] [不選:UI-33 自己複製一份註冊字表] [test:t_kotlin_rulepack_security_rules]
+   WHY:自寫規則的逐例測試要附改壞列舉證據:逐項拿掉每個比對樣式、正規式選項、has/not/inside 結構條件、變數綁定、字邊界與錨點、stopBy,每項都要有例子變紅;拿掉也不影響行為的記成等價改壞,規則載入不了的另列,證據放卷證 [出處:[[Projects/Android形狀列補規則_計劃]] 代碼審 r1~r3 跑滿回顧] [因:三輪都卡在規則條件沒例子守,靠審查席逐項點名補一輪只補一類] [不選:只靠審查席點名補例] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄現成規則欄寫某條檢查涵蓋這列,要拿這列壞寫法實跑過、或有寫明判斷條件的原始碼與說明原文;只確認代號存在不算 [出處:2026-11-09 待查證逐列核對 Verification/2026-11-09_Android型錄待查證列逐列核對] [因:CO-2 的 detekt 候選代號都存在,實跑卻連好寫法也報、壞寫法反而不報;另有四個代號根本不存在] [不選:只比對工具的代號清單]
+   WHY:好例樣本也要照每條會擋規則的標準寫,自檢會報被別條會擋規則命中的好例;刻意放別條壞寫法證明本條不重複報的去重案例,放 cross- 開頭的檔(略過跨規則檢查、但一定要被別條規則命中、不算好例段數) [出處:2026-11-09 Issues/Kotlin規則包代碼審放行的小問題 第 6 項逐處判定] [因:17 處好例命中全是樣本沒照別條標準寫;另有一處 review-fp 樣本是會擋 TEST-5 對有限流的誤報,改記在規則註解;不擋的話新樣本會再犯] [不選:把去重案例整段刪掉(失去不重複報的回歸保護)] [test:t_kotlin_rulepack_good_cross_rule]
+   WHY:型錄列查兩輪都找不到權威原文就標(停用):名稱加(停用)、通電批次寫「未接(停用)」、決策表不再指向它,編號與內容留著不重用 [出處:2026-11-09 Verification/2026-11-09_Android型錄出處不全列重查] [因:使用者原則「來源不明可不行」與「移掉之前先查明出處」;整列刪掉會弄斷測試範本、情境樣本與筆記的編號引用] [不選:整列刪除;只標出處不全(決策表 D-38 會繼續拿沒出處的列出推送前表態題)] [test:t_kotlin_catalog_c_rows_batch_resolved]
+   REVISIT:2027-02-09 型錄主表的(停用)標記接上型錄自檢:標了(停用)的列通電批次每個接電方式都要是「=未接(停用)」、情境決策表不准指向它、規則訊息不准引用它,〈統計〉的停用列數由程式核對;補先紅後綠測試(2026-11-09 停用 9 列時只靠人讀與 C 列範本測試)
+-  WHY:kt-lifecycle-collect-without-repeat 不報外圍類別自己繼承 LifecycleService、MediaSessionService、MediaLibraryService 的收集,ProcessLifecycleOwner 照報 [出處:[[Projects/簡報審查抓到的機制缺口_計劃]] 設計審 r1、r2] [因:官方說 repeatOnLifecycle 是為了只在 UI 顯示在畫面上時處理,Service 本來就在背景收;ProcessLifecycleOwner 官方只說是所有 Activity 的合成生命週期、沒說不是畫面,依據不足] [不選:往類別本體裡找(Activity 裡有內部 Service 時 Activity 自己的收集也被豁免)] [test:t_kotlin_rulepack_lifecycle_service_scope]
++  WHY:kt-lifecycle-collect-without-repeat 不報外圍類別自己繼承 LifecycleService、MediaSessionService、MediaLibraryService 的收集,ProcessLifecycleOwner 照報 [出處:[[Projects/簡報審查抓到的機制缺口_計劃]] 設計審 r1、r2] [因:官方說 repeatOnLifecycle 是為了只在 UI 顯示在畫面上時處理,Service 本來就在背景收;ProcessLifecycleOwner 官方說可以看作所有 Activity 的合成生命週期、用來在 App 回前景或進背景時反應,STARTED 就是 App 有畫面在前景,正是這條規則管的情況] [不選:往類別本體裡找(Activity 裡有內部 Service 時 Activity 自己的收集也被豁免)] [test:t_kotlin_rulepack_security_rules]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+   - "[[Verification/2026-11-09_Android型錄待查證列逐列核對]]"
+   - "[[Verification/2026-11-09_Android型錄出處不全列重查]]"
+ ---
+ # kotlin規則包
+ 
+ > 白話:Kotlin/Android 寫法的機械檢查規則包(ast-grep)與它的單一來源型錄。型錄每一列寫一種常見錯誤寫法、官方的標準寫法、出處網址、機器怎麼查、在哪一批接上自動檢查;規則包把能用語法結構比對的列寫成規則,推送前的新增告警閘只擋這次新增的告警,訊息帶型錄編號與最短修法。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index dc48575da..be11908db 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -126868,60 +126868,20 @@ def t_kotlin_rulepack_samples():
+     for d in ("rules", "rules-review", "rules-hints", "rules-unwired"):
+         for y in (me.HERE / d).glob("*.yml"):
+             y.unlink()
+     _r, cp = me.check(sg)
+     check("★改壞★ 一條規則都沒讀到要報", any("一條規則都沒讀到" in b for _a, b in cp), str(cp[:3]))
+     # 規則包放在祖先目錄叫 good 的地方:命中照樣歸對規則(代碼審 r1 通才、正確性席)
+     mg = _ktpack(copy=True, under="good/bad")
+     _r, cp = mg.check(sg)
+     check("祖先目錄叫 good/bad 時樣本歸屬照樣對", not [p for p in cp if "壞例" in p[1] or "好例誤報" in p[1]], str(cp[:3]))
+ 
+-def t_kotlin_rulepack_lifecycle_service_scope():
+-    """[S1] kt-lifecycle-collect-without-repeat 的 Service 例外逐行核對:壞例檔每一行標 // BAD 的都要被這條報、沒標的(檔裡的 Service 類別、
+-    Activity 裡的內部 Service)都不報;好例檔這條零命中。判準來源:Projects/簡報審查抓到的機制缺口_計劃 預期值表 S1
+-    (repeatOnLifecycle 官方適用範圍是 UI;只看類別自己的繼承清單)。翻紅釘:has 改成往類別本體裡找(加 stopBy: end)→
+-    Activity 那行不再報,逐行核對紅;排除的名字換成不存在的名字 → 好例 Service 收集被報,好例零命中紅。"""
+-    import shutil as _sh
+-    rid = "kt-lifecycle-collect-without-repeat"
+-    m = _ktpack()
+-    base = m.HERE / "samples"
+-    bad = base / "bad" / rid / "src" / "main" / "kotlin" / f"{rid}.kt"
+-    good = base / "good" / rid / "src" / "main" / "kotlin" / f"{rid}.kt"
+-    want = {i + 1 for i, ln in enumerate(bad.read_text(encoding="utf-8").splitlines()) if "// BAD" in ln}
+-    rule = (m.HERE / "rules" / "state.yml").read_text(encoding="utf-8")
+-    check("S1 靜態那半:規則帶三個 Service 名字的排除、壞例至少 6 處標 BAD", "LifecycleService|MediaSessionService|MediaLibraryService" in rule and len(want) >= 6, str(sorted(want)))
+-    sg = _ktpack_sg()
+-    if not sg:
+-        print("  (本機沒有 ast-grep,只跑了靜態那半;CI 裝了 0.51.1 會逐行核對)")
+-        return
+-
+-    def lines(mod, target):
+-        hits = mod.scan(sg, "sgconfig.yml", target)
+-        return None if hits is None else {ln for r, _f, ln in hits if r == rid}
+-    got = lines(m, bad)
+-    check("S1 壞例:標 BAD 的每一行都報、其他行都不報(含 Activity 自己那行、Service 類別不報)", got == want, f"多報 {sorted((got or set()) - want)} 漏報 {sorted(want - (got or set()))}")
+-    check("S1 好例:這條零命中(Service 裡三種收集都不報)", lines(m, good) == set(), str(lines(m, good)))
+-    mc = _ktpack(copy=True)
+-    try:
+-        _ktpack_edit(mc.HERE / "rules" / "state.yml", "MediaLibraryService)\\s*\\('\n      stopBy: end",
+-                     "MediaLibraryService)\\s*\\('\n        stopBy: end\n      stopBy: end")
+-        mbad = mc.HERE / "samples" / "bad" / rid / "src" / "main" / "kotlin" / f"{rid}.kt"
+-        got2 = lines(mc, mbad)
+-        check("★改壞★ has 往類別本體裡找 → Activity 那行被豁免,逐行核對抓得到", got2 is not None and got2 != want, str(got2))
+-        _ktpack_edit(mc.HERE / "rules" / "state.yml", "(LifecycleService|MediaSessionService|MediaLibraryService)", "(NoSuchService)")
+-        mgood = mc.HERE / "samples" / "good" / rid / "src" / "main" / "kotlin" / f"{rid}.kt"
+-        got3 = lines(mc, mgood)
+-        check("★改壞★ 排除名單換成不存在的名字 → 好例 Service 收集被報", bool(got3), str(got3))
+-    finally:
+-        _sh.rmtree(mc.HERE.parents[2], ignore_errors=True)
+-
+-
+ def t_kotlin_rulepack_messages_cite_catalog():
+     """[S2] 每條規則訊息以型錄裡存在的 [編號] 開頭、≤120 字、有分號與改用/改成、不含 $;id 唯一;
+     severity 只三種;引用出處不全的列只准放 rules-unwired/(2026-11-08 起,見 t_kotlin_rulepack_unwired_dir)。改壞的訊息要被逐條抓到。"""
+     m = _ktpack()
+     rules = m.load_rules()
+     cat_ids, _t = m.catalog_ids()
+     probs = m.message_problems(rules, cat_ids)
+     check("S2 真規則包的訊息格式全過", not probs, str(probs[:5]))
+     ids = [r["id"] for r in rules]
+     check("S2 id 唯一", len(ids) == len(set(ids)), str(len(ids)))
+@@ -127276,20 +127236,30 @@ _KTSEC_CASES = (
+     ("src/main/kotlin/C218.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @IntKey(1)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+     ("src/main/kotlin/C219.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @LongKey(1L)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+     ("src/main/kotlin/C220.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @ClassKey(Foo::class)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+     ("src/main/kotlin/C221.kt", 'package sec\n\n@Module\n@InstallIn(SingletonComponent::class)\nobject NetModule {\n    @Provides\n    fun a(): OkHttpClient {\n        return OkHttpClient()\n    }\n\n    @Provides\n    @LazyClassKey(Foo::class)\n    @Named("x")\n    fun b(): OkHttpClient {\n        return OkHttpClient()\n    }\n}\n', "kt-hilt-binding-missing-qualifier", 0, ()),
+     # 代碼審 r4(C222~C224):asFlow() 後面接 buffer、flowOn 這類 Flow 算子仍是 Flow,不報;收成 toList() 之後又是清單,照報
+     ("src/main/kotlin/C222.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().buffer().map { it.await() }.toList()\n', "kt-map-await-deferred", 0, ()),
+     ("src/main/kotlin/C223.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().flowOn(io).map { it.await() }.toList()\n', "kt-map-await-deferred", 0, ()),
+     ("src/main/kotlin/C224.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().buffer().toList().map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
+     ("src/main/kotlin/C225.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().toSet().map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
+     ("src/main/kotlin/C226.kt", 'package sec\n\nsuspend fun f(ds: List<Deferred<Int>>) = ds.asFlow().toCollection(mutableListOf()).map { it.await() }\n', "kt-map-await-deferred", 1, (3,)),
++    # [[Projects/簡報審查抓到的機制缺口_計劃]] 預期值表 S1(C227~C233):kt-lifecycle-collect-without-repeat 的 Service 例外。
++    # 外圍任一層類別自己的繼承清單有 LifecycleService、MediaSessionService、MediaLibraryService 時不報(C227~C230,含套件前綴與內部類別);
++    # 實作 MediaSessionService.Listener 的 Fragment、ProcessLifecycleOwner(官方:所有 Activity 的合成生命週期)、Activity 裡另有內部 Service 時 Activity 自己的收集照報(C231~C233)。
++    ("src/main/kotlin/C227.kt", 'package sec\n\nclass SyncService : LifecycleService() {\n    override fun onCreate() {\n        super.onCreate()\n        lifecycleScope.launch { repo.changes.collect { upload(it) } }\n        lifecycleScope.launch(Dispatchers.IO) { repo.more.collect { upload(it) } }\n        repo.pings.onEach { ping(it) }.launchIn(lifecycleScope)\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 0, ()),
++    ("src/main/kotlin/C228.kt", 'package sec\n\nclass PlaybackService : androidx.media3.session.MediaSessionService() {\n    override fun onCreate() {\n        super.onCreate()\n        lifecycleScope.launch { player.state.collect { update(it) } }\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 0, ()),
++    ("src/main/kotlin/C229.kt", 'package sec\n\nclass LibraryService : MediaLibraryService() {\n    override fun onCreate() {\n        super.onCreate()\n        catalog.updates.onEach { notify(it) }.launchIn(lifecycleScope)\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 0, ()),
++    ("src/main/kotlin/C230.kt", 'package sec\n\nclass SyncService : LifecycleService() {\n    inner class Uploader {\n        fun start() {\n            lifecycleScope.launch { repo.changes.collect { upload(it) } }\n        }\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 0, ()),
++    ("src/main/kotlin/C231.kt", 'package sec\n\nclass PlayerFragment : Fragment(), MediaSessionService.Listener {\n    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {\n        lifecycleScope.launch { vm.player.collect { draw(it) } }\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 1, (5,)),
++    ("src/main/kotlin/C232.kt", 'package sec\n\nclass App : Application() {\n    override fun onCreate() {\n        super.onCreate()\n        ProcessLifecycleOwner.get().lifecycleScope.launch { session.state.collect { show(it) } }\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 1, (6,)),
++    ("src/main/kotlin/C233.kt", 'package sec\n\nclass MainActivity : AppCompatActivity() {\n    override fun onCreate(savedInstanceState: Bundle?) {\n        super.onCreate(savedInstanceState)\n        lifecycleScope.launch { vm.state.collect { render(it) } }\n    }\n\n    inner class LocalService : LifecycleService() {\n        override fun onCreate() {\n            super.onCreate()\n            lifecycleScope.launch { repo.changes.collect { upload(it) } }\n        }\n    }\n}\n', "kt-lifecycle-collect-without-repeat", 1, (6,)),
+ )
+ # 路徑排除:rules/state.yml 那份七項加 debug 變體目錄(計劃範圍 4)
+ _KTSEC_IGNORES = ("**/src/test*/**", "**/src/androidTest*/**", "**/src/testFixtures/**", "**/src/*Test/**",
+                   "**/src/sharedTest/**", "**/*-test/src/**", "**/*testing/src/**", "**/src/debug*/**")
+ # 第三批計劃範圍 2:Compose 多平台的桌面原始碼(桌面沒有手機鍵盤快取)
+ _KTSEC_IGNORES_DESKTOP = (*_KTSEC_IGNORES, "**/src/desktopMain/**", "**/src/jvmMain/**", "**/desktop*/src/**", "**/*-desktop/src/**")
+ # 規則 id → (放哪個目錄, 哪支檔, 訊息開頭的新型錄列編號[, 路徑排除;沒寫的是 _KTSEC_IGNORES 八項])(計劃範圍 4 與〈實驗〉第二輪的放置)
+ _KTSEC_PLACE = {
+     "kt-webview-file-url-access": ("rules", "api.yml", "API-40"),
+     "kt-webview-debugging-enabled": ("rules-unwired", "api.yml", "API-41"),
+@@ -127347,21 +127317,24 @@ def t_kotlin_rulepack_security_rules():
+     Zip Slip 拿掉 canonicalPath 排除 → C57 紅;寫死秘密拿掉值的鍵名樣式排除與數字要求 → C65 紅(passwordKey 不是靠名稱排除擋的);
+     生物辨識拿掉單參數限制 → C69 紅;指令執行拿掉串接那支 → C70 紅、改成任何參數都報 → C71 紅;
+     混合內容搬到 rules-unwired/、訊息編號寫錯、訊息超過 120 字、路徑排除多帶建置腳本三項 → S4 那幾道紅。
+     第三批([[Projects/Android資安靜態檢查補齊第三批_計劃]] S1、S2,C95~C116 是預期值表 S1 逐列、C117~C120 是代碼審 r1 補的):
+     密碼欄拿掉「字面 KeyboardOptions 沒設密碼鍵盤」那支 → C101~C103 紅;拿掉 keyboardType 字面值後接逗號那支 → C117 紅;
+     名單拿掉 BasicTextField2 → C108 紅;放行只認 Password 不認 NumberPassword → C104 紅;拿掉 desktopMain 排除 → C100 與 S4 紅;
+     等級改 warning → S2 紅;Jackson 拿掉 AsProperty 兩個名字 → C118、C119 紅;呼叫名拿掉 ^ 錨點 → C121、C122 紅(代碼審 r2)。
+     形狀列補規則([[Projects/Android形狀列補規則_計劃]] S2、S4,C127~C226,選填第五欄=預期行號):API-2 拿掉具名參數樣式 → C128 紅;
+     UI-33 拿掉「沒註冊」條件 → C132 紅;共用註冊判斷不認 Observer → C132 兩列紅;ARCH-59 拿掉多重綁定排除 → C148 紅、
+     不認 @Named → C134 紅、不認同檔 @Qualifier → C136 紅;ARCH-62 拿掉泛型寫法 → C145 紅、fromActivity 或 fromFragment 認錯元件 → C142、C143 紅、
+-    fromView 不認 ViewNoFragmentComponent → C144 紅、多元件只認第一個 → C146 紅、不認舊名 ApplicationComponent → C152 紅;UI-33 別處有清理的排除失效 → C149、C150 紅;fromFragment 或 fromView 認錯元件 → C153、C154、C155 紅;@InstallIn 比對不跨行 → C156 紅;拿掉 asFlow 排除 → C157 紅;scan 行號差一 → 帶 lines 的各例紅;型錄現成規則欄沒寫規則 id → S4 紅。"""
++    fromView 不認 ViewNoFragmentComponent → C144 紅、多元件只認第一個 → C146 紅、不認舊名 ApplicationComponent → C152 紅;UI-33 別處有清理的排除失效 → C149、C150 紅;fromFragment 或 fromView 認錯元件 → C153、C154、C155 紅;@InstallIn 比對不跨行 → C156 紅;拿掉 asFlow 排除 → C157 紅;scan 行號差一 → 帶 lines 的各例紅;型錄現成規則欄沒寫規則 id → S4 紅。
++    Service 例外([[Projects/簡報審查抓到的機制缺口_計劃]] S1,C227~C233):has 改成往類別本體裡找(加 stopBy: end)→ C233 紅;
++    排除的名字換成不存在的名字 → C227~C230、C233 紅;拿掉 androidx.media3.session 前綴 → C228 紅;外層 inside 拿掉 stopBy: end → C227~C230、C233 紅;
++    regex 拿掉 ^ 錨點與建構子括號、改成名字出現就算 → C231 紅。"""
+     print("t_kotlin_rulepack_security_rules")
+     import shutil as _sh
+     m = _ktpack()
+     rules = {r["id"]: r for r in m.load_rules()}
+     for rid, (d, fname, cat, *extra) in _KTSEC_PLACE.items():
+         want_ign = extra[0] if extra else _KTSEC_IGNORES
+         r = rules.get(rid)
+         check(f"S4 {rid} 在 {d}/{fname}", r is not None and (r["dir"], r["file"]) == (d, fname),
+               str(r and (r["dir"], r["file"])))
+         msg = (r or {}).get("message", "")
