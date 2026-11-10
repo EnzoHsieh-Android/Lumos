@@ -447,7 +447,7 @@ Notes need maintenance after they are written. Lumos checks whether notes were u
 <details>
 <summary>See the three checks and their configuration</summary>
 
-Notes that still describe old code mislead AI. When I planted incorrect notes in a synthetic project, the smaller model, Haiku 4.5, dropped from 20 correct answers out of 25 to 12. So Lumos puts one checkpoint at each of three moments: writing notes, committing, and pushing.
+Notes that still describe old code mislead AI. In a controlled experiment on a synthetic project (25 runs per group), the smaller model Haiku 4.5 got 20 runs right when reading only the code, but just 12 when it also read deliberately wrong notes; Opus scored 25 out of 25 in every group, so the experiment hit its ceiling and could not measure a difference. A separate batch of 80 runs with correct notes (Haiku only) showed a benefit on only one question (0/5 reading only the code versus 8/15 across the three groups with notes); the other three questions were mostly near full marks. So Lumos puts one checkpoint at each of three moments: writing notes, committing, and pushing.
 
 **First check: when writing notes, record only what the code cannot show.**
 

@@ -68,6 +68,7 @@ summary: |-
   WHY:好例樣本也要照每條會擋規則的標準寫,自檢會報被別條會擋規則命中的好例;刻意放別條壞寫法證明本條不重複報的去重案例,放 cross- 開頭的檔(略過跨規則檢查、但一定要被別條規則命中、不算好例段數) [出處:2026-11-09 Issues/Kotlin規則包代碼審放行的小問題 第 6 項逐處判定] [因:17 處好例命中全是樣本沒照別條標準寫;另有一處 review-fp 樣本是會擋 TEST-5 對有限流的誤報,改記在規則註解;不擋的話新樣本會再犯] [不選:把去重案例整段刪掉(失去不重複報的回歸保護)] [test:t_kotlin_rulepack_good_cross_rule]
   WHY:型錄列查兩輪都找不到權威原文就標(停用):名稱加(停用)、通電批次寫「未接(停用)」、決策表不再指向它,編號與內容留著不重用 [出處:2026-11-09 Verification/2026-11-09_Android型錄出處不全列重查] [因:使用者原則「來源不明可不行」與「移掉之前先查明出處」;整列刪掉會弄斷測試範本、情境樣本與筆記的編號引用] [不選:整列刪除;只標出處不全(決策表 D-38 會繼續拿沒出處的列出推送前表態題)] [test:t_kotlin_catalog_c_rows_batch_resolved]
   REVISIT:2027-02-09 型錄主表的(停用)標記接上型錄自檢:標了(停用)的列通電批次每個接電方式都要是「=未接(停用)」、情境決策表不准指向它、規則訊息不准引用它,〈統計〉的停用列數由程式核對;補先紅後綠測試(2026-11-09 停用 9 列時只靠人讀與 C 列範本測試)
+  WHY:kt-lifecycle-collect-without-repeat 不報外圍類別自己繼承 LifecycleService、MediaSessionService、MediaLibraryService 的收集(外圍是 Service 時連 ProcessLifecycleOwner 的收集也不報,看寫法認不出 Service 裡這樣寫的意圖),非 Service 類別裡的 ProcessLifecycleOwner 照報 [出處:[[Projects/簡報審查抓到的機制缺口_計劃]] 設計審 r1、r2] [因:官方說 repeatOnLifecycle 是為了只在 UI 顯示在畫面上時處理,Service 本來就在背景收;ProcessLifecycleOwner 官方說可以看作所有 Activity 的合成生命週期、用來在 App 回前景或進背景時反應,STARTED 就是 App 有畫面在前景,正是這條規則管的情況] [不選:往類別本體裡找(Activity 裡有內部 Service 時 Activity 自己的收集也被豁免)] [test:t_kotlin_rulepack_security_rules]
 verified_by:
   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
