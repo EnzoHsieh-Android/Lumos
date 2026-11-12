@@ -740,12 +740,12 @@
 | D-1 | 互不依賴的一次性呼叫(同一功能要打兩三支 API,彼此不讀對方結果) | `coroutineScope { val a = async { api.a() }; val b = async { api.b() }; Ui(a.await(), b.await()) }` | (換列)第二支要用第一支的結果 → 見下一列「有依賴的串接」;其中一支失敗不該拖垮另一支 → 見「失敗各自承擔」 | coroutineScope | 主:`\basync\b(?!.*\}\s*\.await\(\))` `\bcoroutineScope\b` `\.await\(\)`;例外:(無) | API-1、API-3 | 同「對應檢查」各列的來源欄;API-14 已停用、不再列為對應(2026-11-09) |
 | D-2 | 有依賴的串接(B 要 A 的結果) | 直接循序呼叫 `val user = api.user(); val orders = api.orders(user.id)`,不要包 `async { }.await()` | (換列)串接裡有一段互不依賴 → 那一段改用上一列的 `async` 並行 | (無) | 主:(無);例外:(無) | API-1 | 同「對應檢查」各列的來源欄;API-14 已停用、不再列為對應(2026-11-09) |
 | D-3 | 多筆同型(同一支 API 打 N 次) | `ids.map { id -> async { api.load(id) } }.awaitAll()`;筆數大時 `val sem = Semaphore(8)` 包 `sem.withPermit { }` 或用 `Dispatchers.IO.limitedParallelism(8)` | 每筆要各自成敗 → `supervisorScope` 內 `map { async { runCatching { api.load(it) } } }.awaitAll()`;結果要寫進共用集合 → 讓 async 回傳值,不要在 async 裡 `list.add` | awaitAll、Semaphore、withPermit、limitedParallelism | 主:`\.awaitAll\(\)` `\basync\b`;例外:(無) | API-2、CO-30、CO-39 | 同「對應檢查」各列的來源欄 |
-| D-4 | 只要最新一次(搜尋框、篩選切換、快速重新整理) | `query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(…)`;命令式就 `searchJob?.cancel(); searchJob = viewModelScope.launch { … }` | 每一次都必須做完(寫入、扣款、上傳) → 用 `collect` 或排隊(`Channel` + 單一消費者),不要 `collectLatest`/`flatMapLatest` | debounce、flatMapLatest、collectLatest、viewModelScope.launch | 主:`\bflatMapLatest\b\|\?\.cancel\(\)`;例外:`\.collect\s*\{\|\bChannel\b` | API-8、FLOW-22 | 同「對應檢查」各列的來源欄 |
-| D-5 | 持續更新的多來源合併(畫面狀態由幾條會變的資料組成) | `combine(repo.user, repo.settings, query) { u, s, q -> UiState(u, s, q) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)`;每個來源要有初值(StateFlow 或 `.onStart { emit(預設) }`) | 兩邊必須一筆對一筆配對 → 見「嚴格一對一配對」;某來源只在第一次需要 → `first()` 取一次再進 combine | combine、stateIn、WhileSubscribed、onStart | 主:`\bcombine\s*\(` `\.stateIn\(` `\bWhileSubscribed\(`;例外:`\.first\(\)` | FLOW-1、FLOW-19、STATE-4、STATE-8 | 同「對應檢查」各列的來源欄 |
+| D-4 | 只要最新一次(搜尋框、篩選切換、快速重新整理) | `query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(…)`(只要最新一次的轉換用 `mapLatest`、`transformLatest` 同類:新值來時取消前一個);命令式就 `searchJob?.cancel(); searchJob = viewModelScope.launch { … }` | 每一次都必須做完(寫入、扣款、上傳) → 用 `collect`、`flatMapConcat` 依序做完,順序不重要時 `flatMapMerge` 並行做完,或排隊(`Channel` + 單一消費者),不要 `collectLatest`/`flatMapLatest`/`mapLatest`/`transformLatest` | debounce、flatMapLatest、collectLatest、viewModelScope.launch、flatMapConcat、flatMapMerge、mapLatest、transformLatest | 主:`\bflatMapLatest\b\|\bmapLatest\b\|\btransformLatest\b\|\?\.cancel\(\)`;例外:`\.collect\s*\{\|\bChannel\b\|\bflatMapConcat\b\|\bflatMapMerge\b` | API-8、FLOW-22 | 同「對應檢查」各列的來源欄 |
+| D-5 | 持續更新的多來源合併(畫面狀態由幾條會變的資料組成) | `combine(repo.user, repo.settings, query) { u, s, q -> UiState(u, s, q) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)`;每個來源要有初值(StateFlow 或 `.onStart { emit(預設) }`) | 兩邊必須一筆對一筆配對 → 見「嚴格一對一配對」;某來源只在第一次需要 → `first()` 取一次再進 combine | combine、stateIn、WhileSubscribed、onStart、SharingStarted.Lazily、SharingStarted.Eagerly | 主:`\bcombine\s*\(` `\.stateIn\(` `\bWhileSubscribed\(`;例外:`\.first\(\)` | FLOW-1、FLOW-19、STATE-4、STATE-8 | 同「對應檢查」各列的來源欄 |
 | D-6 | 嚴格一對一配對(第 n 個請求配第 n 個回應) | 兩條冷流 `requests.zip(responses) { q, r -> q to r }` | 任何一邊是狀態流(StateFlow、stateIn 產物) → 改 `combine`;zip 會丟掉多出來的值、等不到另一邊時卡住 | zip、combine、stateIn | 主:(無);例外:`\bcombine\s*\(` | FLOW-2 | 同「對應檢查」各列的來源欄 |
 | D-7 | 一次性事件 vs 狀態(Snackbar、導航、錯誤提示) | 事件化成狀態:`data class UiState(val userMessage: String? = null)`,UI 顯示後呼叫 `vm.userMessageShown()` 清掉;導航用狀態欄位 + UI 端 `LaunchedEffect(state.navigateTo)` 並回報已處理 | 真的不屬於畫面狀態的內部訊號 → `Channel<Event>(Channel.BUFFERED)` + `receiveAsFlow()`,UI 端在 `repeatOnLifecycle(STARTED)` 裡收;不要用 `replay > 0` 的 SharedFlow、不要靠 StateFlow 重發相同值 | Channel、receiveAsFlow、MutableSharedFlow、SingleLiveEvent、LaunchedEffect、showSnackbar、navigate | 主:(無);例外:`\breceiveAsFlow\(\)` | FLOW-7、FLOW-24、FLOW-25、STATE-10、STATE-11、STATE-12、STATE-28、STATE-17 | 同「對應檢查」各列的來源欄 |
-| D-8 | 失敗連坐(任何一支失敗整件事就失敗) | `try { coroutineScope { val a = async { … }; val b = async { … }; combine(a.await(), b.await()) } } catch (e: IOException) { 錯誤狀態 }`——try 包在 `coroutineScope` 外面 | (換列)不該連坐 → 下一列 | coroutineScope | 主:`\bcoroutineScope\b` `\btry\s*\{\s*(?:return\s+)?coroutineScope\b` `\}\s*catch\s*\(`;例外:(無) | API-4、CO-8 | 同「對應檢查」各列的來源欄 |
-| D-9 | 失敗各自承擔(一支壞了另一支照常顯示) | `supervisorScope { val a = async { api.a() }; val b = async { api.b() }; Ui(runCatching { a.await() }, runCatching { b.await() }) }`(`runCatching` 換成會重拋 `CancellationException` 的版本);`supervisorScope { launch { try { … } catch (e: Exception) { … } } }` 每個子協程自己接 | (換列)業務上要全有或全無 → 上一列 | supervisorScope、runCatching、CancellationException | 主:`\bsupervisorScope\b` `\brunCatching\b\|\bcatch\s*\(`;例外:(無) | API-4、CO-9、CO-11、CO-2 | 同「對應檢查」各列的來源欄 |
+| D-8 | 失敗連坐(任何一支失敗整件事就失敗) | `try { coroutineScope { val a = async { … }; val b = async { … }; combine(a.await(), b.await()) } } catch (e: IOException) { 錯誤狀態 }`——try 包在 `coroutineScope` 外面 | (換列)不該連坐 → 下一列 | coroutineScope、supervisorScope | 主:`\bcoroutineScope\b` `\btry\s*\{\s*(?:return\s+)?coroutineScope\b` `\}\s*catch\s*\(`;例外:(無) | API-4、CO-8 | 同「對應檢查」各列的來源欄 |
+| D-9 | 失敗各自承擔(一支壞了另一支照常顯示) | `supervisorScope { val a = async { api.a() }; val b = async { api.b() }; Ui(runCatching { a.await() }, runCatching { b.await() }) }`(`runCatching` 換成會重拋 `CancellationException` 的版本);`supervisorScope { launch { try { … } catch (e: Exception) { … } } }` 每個子協程自己接 | (換列)業務上要全有或全無 → 上一列 | supervisorScope、runCatching、CancellationException、coroutineScope | 主:`\bsupervisorScope\b` `\brunCatching\b\|\bcatch\s*\(`;例外:(無) | API-4、CO-9、CO-11、CO-2 | 同「對應檢查」各列的來源欄 |
 | D-10 | 需要逾時 | OkHttp `OkHttpClient.Builder().callTimeout(30, SECONDS)`;Ktor `install(HttpTimeout) { requestTimeoutMillis = 30_000 }`;協程 `withTimeoutOrNull(5_000) { … } ?: 逾時狀態` | 長連線或串流下載 → 不設整體 callTimeout,改 `readTimeout` + 心跳或進度逾時;逾時後還持有資源 → 資源在 `withTimeout` 外取得、用 `use { }` | callTimeout、HttpTimeout、withTimeout、withTimeoutOrNull、readTimeout | 主:`\bcallTimeout\(\|\bHttpTimeout\b\|\bwithTimeoutOrNull\(`;例外:`\breadTimeout\b\|\.use\s*\{` | API-5、API-6、API-32、API-33、CO-14 | 同「對應檢查」各列的來源欄 |
 | D-11 | 需要重試 | Flow:`retryWhen { cause, attempt -> (cause is IOException && attempt < 3).also { if (it) delay(500L shl attempt.toInt()) } }`;命令式:`repeat(3) { attempt -> runCatching { return api.x() }; delay(500L shl attempt) }`;WorkManager:`Result.retry()` 搭 `if (runAttemptCount >= 3) Result.failure()` 與 `setBackoffCriteria(EXPONENTIAL, …)` | 非冪等寫入、4xx 永久錯誤 → 不重試,直接回錯誤;401 → 走重新登入流程(Authenticator 用 `priorResponse` 數次數、超過回 null) | retry、retryWhen、Result.retry、runAttemptCount、Authenticator、repeat | 主:`\bretryWhen\b\|\brepeat\s*\(\|\bResult\.retry\(\)` `\bdelay\s*\(\|\bsetBackoffCriteria\(\|\brunAttemptCount\b`;例外:(無) | API-7、API-21、API-35、DATA-36 | 同「對應檢查」各列的來源欄 |
 | D-12 | 需要防重複送出 | ViewModel:`if (submitJob?.isActive == true) return; submitJob = viewModelScope.launch { … }`,UI `enabled = !uiState.isSubmitting`;導航點擊 `dropUnlessResumed { onNext() }`;背景工作 `enqueueUniqueWork(name, ExistingWorkPolicy.KEEP, req)`;多處同時刷新同一資源 → 共用一個進行中的 `Deferred` 或 `Mutex` | 每次都要送(例如送出多則訊息)→ 排隊:`Channel` + 單一消費者依序送,而不是丟掉 | dropUnlessResumed、enqueueUniqueWork、Mutex | 主:`\?\.isActive\s*==\s*true\|\bdropUnlessResumed\b\|\benqueueUniqueWork\((?![^)]*\bREPLACE\b)\|\bMutex\b\|\bDeferred\b`;例外:`\bChannel\b` | API-10、ARCH-3、DATA-30 | 同「對應檢查」各列的來源欄 |
@@ -796,7 +796,7 @@
 | D-57 | 要發通知 | 通知只說「有一則新訊息」、細節進 App 認證後才看;內容敏感又一定要放時設 `setVisibility(NotificationCompat.VISIBILITY_PRIVATE)` 加 `setPublicVersion(<遮掉內容的版本>)`,或 `VISIBILITY_SECRET` 整則藏起來(VISIBILITY_PRIVATE 是預設值,單寫它不算照做) | 通知內容不含敏感資料(例:下載完成、提醒事項)→ 照一般寫法,不必設可見度 | setContentText、setContentTitle、NotificationCompat.Builder | 主:(無);例外:(無) | DATA-100 | https://mas.owasp.org/MASTG/tests/android/MASVS-PLATFORM/MASTG-TEST-0315/ https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0037/ |
 | D-58 | 自訂文字或圖示顏色(深色、淺色主題都要看) | 文字與背景對比至少 4.5:1(大字 3:1):優先用主題配好的成對顏色,例 `color = MaterialTheme.colorScheme.onSurface` 配 `surface` 背景;自訂顏色要量過對比 | 純裝飾、不帶資訊的圖形或停用中的元件 → 不要求對比 | Color(、colorScheme、textColor、tint | 主:(無);例外:(無) | UI-110 | https://developer.android.com/guide/topics/ui/accessibility/apps https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html |
 | D-59 | 本機資料會被離線修改、之後跟伺服器同步 | 寫入時記錄變更時間等版本中繼資料,同步時連同資料送到伺服器,由網路資料源照既定規則決定誰贏(例:「last write wins」丟棄比現況舊的寫入) | 本機資料唯讀、只從伺服器拉 → 不用衝突策略 | sync、lastModified、updatedAt、conflict、merge | 主:(無);例外:(無) | DATA-65 | https://developer.android.com/topic/architecture/data-layer/offline-first |
-| D-60 | 迴圈裡對一份大清單反覆查「有沒有包含」 | 迴圈前先轉成集合:`val set = bigList.toHashSet()`,迴圈內 `set.contains(x)`(HashSet 的 contains 是常數時間,ArrayList 是線性時間) | 清單很小或只查一次 → 不用轉 | contains(、in bigList、indexOf( | 主:(無);例外:(無) | PERF-26 | https://developer.android.com/reference/java/util/ArrayList https://developer.android.com/reference/java/util/HashSet |
+| D-60 | 迴圈裡對一份大清單反覆查「有沒有包含」 | 迴圈前先轉成集合:`val set = bigList.toHashSet()`,迴圈內 `set.contains(x)`(HashSet 的 contains 是常數時間,ArrayList 是線性時間) | 清單很小或只查一次 → 不用轉 | contains(、indexOf( | 主:(無);例外:(無) | PERF-26 | https://developer.android.com/reference/java/util/ArrayList https://developer.android.com/reference/java/util/HashSet |
 
 ## 待查證
 
@@ -1069,6 +1069,567 @@
 | PERF-36 | CI 範本:Android Lint | CheckResult | 擋不到 | 沒報 | 沒報(Warning、預設開);標準函式庫的 map 沒有 @CheckResult | 〔真跑 2026-11-08:PERF-36.kt.txt〕 |
 | PERF-38 | CI 範本:Android Lint | ObsoleteSdkInt | 擋得到 | Warning | if (Build.VERSION.SDK_INT >= 21) 那行 | 〔真跑 2026-11-08:PERF-38.kt.txt〕 |
 
+## API 決策點
+
+母體:kotlinx-coroutines-core 1.10.2,klib https://github.com/Kotlin/kotlinx.coroutines/blob/1.10.2/kotlinx-coroutines-core/api/kotlinx-coroutines-core.klib.api sha256 e46db0611d116408e48a9bd883f69cc3abba8430ab6d50891e6cc4c1d06dff3d,jvm https://github.com/Kotlin/kotlinx.coroutines/blob/1.10.2/kotlinx-coroutines-core/api/kotlinx-coroutines-core.api sha256 1d520a80b819d20667eb814bb1c8b8ea724e23ea118672a36066dd87c34e8e59
+
+協程核心函式庫的每個公開名稱恰好一列(抽法、比對形狀、五種歸屬與核對見 [[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]];自檢是 configs/ast-grep/kotlin-android/check.py 的 api_decision_problems)。歸屬:`D-n`=這一列的決策點;`撞名 D-n`=那列觸發字搜得到但意思不同;`決策不問 <主表列編號>`=是決策點但不當觸發字,由那一列的壞寫法片段走〈叫不出的壞寫法〉;`決策不問 代碼審`=是決策點但型錄沒寫到;`無決策`=不代表情境選擇。
+
+| 名稱 | 歸屬 | 理由 |
+|---|---|---|
+| AbstractCoroutine | 無決策 | 內部實作類別,App 不直接用 |
+| AbstractFlow | 無決策 | 內部實作類別,App 不直接用 |
+| acquire | 決策不問 代碼審 | Semaphore 取得許可,決定並行數上限 |
+| actor | 決策不問 代碼審 | 用協程包共享狀態的舊做法(已標過時) |
+| ActorScope | 無決策 | actor 區塊裡的接收者範圍型別,決定在 actor |
+| afterCompletion | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| afterResume | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| all | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| any | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| asCompletableFuture | 無決策 | 跟 Java 的 Future 互通 |
+| asContextElement | 無決策 | 把 ThreadLocal 帶進協程情境 |
+| asCoroutineDispatcher | 決策不問 代碼審 | 自建執行緒池當調度器,要自己負責關 |
+| asDeferred | 無決策 | 建流或轉型的小工具,不帶決策 |
+| asExecutor | 無決策 | 把調度器包成 Java Executor |
+| asFlow | 無決策 | 建流或轉型的小工具,不帶決策 |
+| asSharedFlow | 無決策 | 建流或轉型的小工具,不帶決策 |
+| asStateFlow | 無決策 | 建流或轉型的小工具,不帶決策 |
+| async | 決策不問 API-3 | 選並行且要接結果;太常見不當觸發字 |
+| ATOMIC | 決策不問 代碼審 | 選 ATOMIC 等於決定啟動前不可被取消 |
+| attachChild | 無決策 | Job 的內部掛載點,App 不直接用 |
+| availablePermits | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| await | 決策不問 API-2 | 等並行結果;太常見不當觸發字 |
+| awaitAll | D-3 | 多筆同型並行後一起等 |
+| awaitCancellation | 決策不問 代碼審 | 決定讓協程永久掛起直到被取消 |
+| awaitClose | 決策不問 代碼審 | callbackFlow 內決定何時、如何釋放資源 |
+| awaitInternal | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| broadcast | 決策不問 代碼審 | 把流/頻道廣播給多個接收者,共享方式的決定 |
+| BroadcastChannel | 決策不問 代碼審 | 多接收者廣播,共享方式的決定(已淘汰) |
+| buffer | D-16 | 背壓:生產比消費快時排隊的容量 |
+| BUFFERED | D-16 | Channel 容量選預設緩衝 |
+| BufferOverflow | 決策不問 代碼審 | 緩衝滿了怎麼辦,背壓策略的決定 |
+| cache | 無決策 | 舊版已棄用的 API |
+| callbackFlow | D-16 | 回呼轉 Flow,要決定背壓 |
+| callCancelHandler | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| callerFrame | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| callOnCancellation | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| cancel | 無決策 | 停用字,不帶決策:取消 Job 的動作本身,取消與否的決定由所在情境判 |
+| cancelAndJoin | 決策不問 代碼審 | 決定取消並等它真正結束 |
+| cancelChildren | 決策不問 代碼審 | 決定只取消子協程、保留自己 |
+| cancelConsumed | 無決策 | 舊版已棄用的 API |
+| cancelCoroutine | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| cancelFutureOnCancellation | 無決策 | 已棄用的 Future 取消串接 |
+| cancelInternal | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| cancellable | 決策不問 代碼審 | 決定讓流可在收集中被取消 |
+| CancellableContinuation | D-25 | 回呼包成 suspend 時的接續物件 |
+| CancellableContinuationImpl | 無決策 | 內部實作類別,App 不直接用 |
+| CancellationException | D-9 | 失敗各自承擔時要重拋取消 |
+| cancellationExceptionMessage | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| catch | 決策不問 CO-2 | Flow 的 catch 也會吞例外;型錄只在 try/catch 寫到這個字 |
+| Channel | D-7、D-16 | 一次性事件管道與背壓容量的選擇 |
+| channel | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| channelFlow | 決策不問 代碼審 | 決定可並行發射、有緩衝的流 |
+| ChannelIterator | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| ChannelResult | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| childCancelled | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| ChildHandle | 無決策 | 內部實作類別,App 不直接用 |
+| ChildJob | 無決策 | 內部實作類別,App 不直接用 |
+| children | 無決策 | 讀取子 Job 清單的屬性 |
+| chunked | 無決策 | 舊版已棄用的 API |
+| clauseObject | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| close | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| CloseableCoroutineDispatcher | 決策不問 代碼審 | 自建執行緒池,需決定何時關閉 |
+| closed | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| ClosedReceiveChannelException | 無決策 | 例外類別,不是寫法選擇 |
+| ClosedSendChannelException | 無決策 | 例外類別,不是寫法選擇 |
+| collect | 決策不問 FLOW-6 | 收集方式決定背壓;太常見不當觸發字 |
+| collectIndexed | 無決策 | 舊版已棄用的 API |
+| collectLatest | D-4、D-16 | 新值來就取消前一次處理 |
+| collectSafely | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| combine | D-5、D-6、撞名 D-35 | 多來源合併;對 D-35 Paging 只是同名運算子 |
+| combineLatest | 無決策 | 舊版已棄用的 API |
+| combineTransform | 決策不問 代碼審 | 合併多流並自訂輸出,取最新值的決定 |
+| command | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| compareAndSet | 決策不問 代碼審 | 比較後設值,併發修改的決定 |
+| CompletableDeferred | 決策不問 代碼審 | 手動決定何時以何值完成 |
+| CompletableJob | 決策不問 代碼審 | 手動決定何時完成或失敗 |
+| complete | 決策不問 代碼審 | 手動完成 Job/Deferred,決定完成時機 |
+| completeExceptionally | 決策不問 代碼審 | 手動以失敗完成,失敗傳遞的決定 |
+| completeResume | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| completeWith | 決策不問 代碼審 | 手動以結果完成,決定完成時機與結果 |
+| completionCause | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| completionCauseHandled | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| CompletionHandlerException | 無決策 | 例外類別,不是寫法選擇 |
+| compose | 無決策 | 舊版已棄用的 API |
+| concatMap | 無決策 | 舊版已棄用的 API |
+| concatWith | 無決策 | 舊版已棄用的 API |
+| conflate | D-16 | 背壓:只處理最新值 |
+| CONFLATED | D-16 | Channel 容量選只留最新 |
+| ConflatedBroadcastChannel | 決策不問 代碼審 | 只留最新值的廣播,共享與丟值的決定 |
+| consume | D-26 | 取一部分就結束並關掉 Channel |
+| consumeAsFlow | 決策不問 代碼審 | 頻道轉流且只能被收集一次,共享決定 |
+| consumeEach | D-26 | 逐筆消費並關掉 Channel |
+| consumes | 無決策 | 舊版已棄用的 API |
+| consumesAll | 無決策 | 舊版已棄用的 API |
+| context | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| CopyableThreadContextElement | 無決策 | 可複製的 ThreadLocal 情境元素,除錯與情境傳遞用 |
+| CopyableThrowable | 無決策 | 例外類別,不是寫法選擇 |
+| coroutineContext | 無決策 | 讀取目前協程情境的屬性 |
+| CoroutineDispatcher | D-20、D-55 | 決定在哪個執行緒跑 |
+| CoroutineExceptionHandler | D-27 | 例外怎麼回到畫面狀態 |
+| CoroutineId | 無決策 | 除錯模式給協程編號的情境元素 |
+| CoroutineName | 無決策 | 幫協程命名的情境元素,除錯用 |
+| CoroutineScope | 決策不問 CO-1 | 自建範圍決定生命週期與調度器;寫死調度器就不能注入 |
+| coroutineScope | D-1、D-8、D-9 | 並行範圍,一支失敗全部取消 |
+| CoroutineStart | 決策不問 代碼審 | 啟動模式的選擇,決定協程何時開始跑 |
+| count | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| createCopy | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| currentCoroutineContext | 無決策 | 讀取目前協程的情境 |
+| debounce | D-4 | 只要最新一次:等輸入停下才送 |
+| DEFAULT | 決策不問 代碼審 | 選 DEFAULT 等於決定立即排程、可被取消 |
+| Default | 決策不問 CO-39 | 選 CPU 執行緒池;調度器該不該寫死歸 CO-1(那列片段寫的是 Dispatchers.IO、不含這個名稱),這裡指 CO-39 只因為它的壞寫法片段 async(Default) 寫到這個名稱 |
+| DEFAULT_BUFFER_PROPERTY_NAME | 無決策 | 系統屬性名稱常數,不是寫法選擇 |
+| DEFAULT_CONCURRENCY | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| DEFAULT_CONCURRENCY_PROPERTY_NAME | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| DefaultDelay | 無決策 | 內部實作類別,App 不直接用 |
+| Deferred | 無決策 | 停用字,不帶決策:async 結果的型別,決定在 async |
+| Delay | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| delay | 決策不問 API-7 | 重試或輪詢間隔;太常見不當觸發字 |
+| delayEach | 無決策 | 舊版已棄用的 API |
+| delayFlow | 無決策 | 舊版已棄用的 API |
+| DelicateCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+| dispatch | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| Dispatchers | 決策不問 CO-1 | 選調度器;寫死就不能注入 |
+| dispatcherWasUnconfined | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| dispatchYield | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| DisposableHandle | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| dispose | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| disposeOnCancellation | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| disposeOnCompletion | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| distinct | 無決策 | 舊版已棄用的 API |
+| distinctBy | 無決策 | 舊版已棄用的 API |
+| distinctUntilChanged | 決策不問 代碼審 | 決定相同連續值不重複發出 |
+| distinctUntilChangedBy | 無決策 | 舊版已棄用的 API |
+| doSelect | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| drop | 決策不問 代碼審 | 決定略過前幾筆,只取部分 |
+| DROP_LATEST | 決策不問 代碼審 | 緩衝滿時丟新值,背壓決定 |
+| DROP_OLDEST | 決策不問 代碼審 | 緩衝滿時丟舊值,背壓決定 |
+| dropWhile | 決策不問 代碼審 | 決定略過開頭符合條件的值,只取部分 |
+| Eagerly | D-5 | 共享立刻開始、不會停 |
+| elementAt | 決策不問 代碼審 | 只取第 N 筆並結束,只取部分 |
+| elementAtOrNull | 決策不問 代碼審 | 只取第 N 筆,不足回 null,只取部分 |
+| emit | 無決策 | 在流裡送出一個值;共享流掛起與否的選擇在 tryEmit 那一列 |
+| emitAll | 無決策 | 建流或轉型的小工具,不帶決策 |
+| emptyFlow | 無決策 | 建流或轉型的小工具,不帶決策 |
+| ensureActive | 決策不問 代碼審 | 決定在此處檢查取消,取消的協作點 |
+| ensurePresent | 無決策 | 檢查 ThreadLocal 情境元素在不在 |
+| exceptionOrNull | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| ExecutorCoroutineDispatcher | 決策不問 代碼審 | 自建執行緒池調度器的型別,用完要 close |
+| ExperimentalCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+| ExperimentalForInheritanceCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+| failure | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| filter | 無決策 | 停用字,不帶決策:一般過濾運算子 |
+| filterIndexed | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| filterIsInstance | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| filterNot | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| filterNotNull | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| filterNotNullTo | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| first | 決策不問 FLOW-23 | 只取第一筆,空流會拋例外 |
+| firstOrNull | D-26 | 只取第一筆、可能為空 |
+| FIXED_DELAY | 決策不問 代碼審 | ticker 每次送完才開始等下一個間隔 |
+| FIXED_PERIOD | 決策不問 代碼審 | ticker 照固定週期送,消費慢時會補送 |
+| flatMap | 無決策 | 舊版已棄用的 API |
+| flatMapConcat | D-4 | 新值排隊、舊的做完才換 |
+| flatMapLatest | D-4 | 新值來就取消舊的 |
+| flatMapMerge | D-4 | 新值來時舊的不取消、並行跑 |
+| flatten | 無決策 | 舊版已棄用的 API |
+| flattenConcat | 決策不問 代碼審 | 決定內層流依序處理、不並行 |
+| flattenMerge | 決策不問 代碼審 | 決定內層流並行合併,並行度可調 |
+| Flow | 無決策 | 停用字,不帶決策:流的型別本身 |
+| flow | 決策不問 FLOW-18 | 建冷流,每個收集者各觸發一次 |
+| FlowCollector | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| flowOf | 無決策 | 建流或轉型的小工具,不帶決策 |
+| flowOn | 決策不問 代碼審 | 決定上游在哪個執行緒/派發器跑 |
+| FlowPreview | 無決策 | 註解標記,不是寫法選擇 |
+| fold | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| forEach | 無決策 | 停用字,不帶決策:一般迴圈 |
+| future | 決策不問 代碼審 | 啟動回傳 CompletableFuture 的協程,生命週期由範圍決定 |
+| getAndUpdate | 決策不問 代碼審 | 原子更新並取舊值,併發修改的決定 |
+| getCancellationException | 無決策 | 讀取取消原因 |
+| getChildJobCancellationCause | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| getCompleted | 決策不問 代碼審 | 不等待直接取值,未完成會丟例外 |
+| getCompletionExceptionOrNull | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| getContinuationCancellationCause | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| getOrElse | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| getOrNull | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| getOrThrow | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| getResult | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| getStackTraceElement | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| GlobalScope | D-19 | 不綁生命週期的範圍,呼叫端等不到完成 |
+| handleBuilderException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| handleCoroutineException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| handleException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| handleJobException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| hasNext | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| holder | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| holdsLock | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| immediate | 決策不問 代碼審 | Main.immediate 決定已在主執行緒就不再派發 |
+| indexOf | 撞名 D-60 | Channel 的 indexOf,不是大清單查找 |
+| initCancellability | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| initParentJob | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| initSelectResult | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| injectMain | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| interceptContinuation | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| InternalCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+| InternalForInheritanceCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+| invoke | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| invokeOnCancellation | D-25 | 回呼包成 suspend 時取消要收掉回呼 |
+| invokeOnClose | 決策不問 代碼審 | 決定通道關閉時的收尾處理 |
+| invokeOnCompletion | 無決策 | 註冊完成回呼,不是情境選擇 |
+| invokeOnTimeout | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| IO | 決策不問 CO-1 | 選 IO 執行緒池;寫死就不能注入 |
+| isActive | 無決策 | 停用字,不帶決策:讀取狀態的屬性 |
+| isCancelled | 無決策 | 讀取狀態的屬性 |
+| isClosed | 無決策 | 讀取 ChannelResult 是否因 Channel 關閉而失敗 |
+| isClosedForReceive | 無決策 | 讀取 Channel 是否已關閉、不能再收的屬性 |
+| isClosedForSend | 無決策 | 讀取 Channel 是否已關閉、不能再送的屬性 |
+| isCompleted | 無決策 | 讀取狀態的屬性 |
+| isCompletedExceptionally | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| isDispatchNeeded | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| isEmpty | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| isFailure | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| isLazy | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| isLocked | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| isPresent | 無決策 | 檢查 ThreadLocal 情境元素在不在 |
+| isScopedCoroutine | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| isSuccess | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| iterator | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| Job | 決策不問 代碼審 | 建 Job 當父協程會決定失敗傳遞;太常見不當觸發字 |
+| job | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| Job0 | 無決策 | JS 平台上 Job() 工廠函式的改名(JsName),決定在 Job 那一列 |
+| JobImpl | 無決策 | 內部實作類別,App 不直接用 |
+| JobSupport | 無決策 | 內部實作類別,App 不直接用 |
+| join | 無決策 | 等待 Job 結束,不是情境選擇 |
+| joinAll | 決策不問 代碼審 | 決定等全部 Job 結束 |
+| key | 無決策 | 停用字,不帶決策:協程情境元素的鍵 |
+| last | 決策不問 代碼審 | 同名異義:型錄 UI-21 寫到的 last 是字串樣板裡的變數;Flow 的 last 只取最後一筆、要等流結束 |
+| lastIndexOf | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| lastOrNull | 決策不問 代碼審 | 等流結束只取最後一筆,無界流不會回來 |
+| launch | 決策不問 API-8 | 發後不管的協程;太常見不當觸發字 |
+| launchIn | 決策不問 代碼審 | 決定把流綁在哪個 scope 收集,生命週期決定 |
+| Lazily | D-5 | 共享第一個收集者才開始、之後不停 |
+| LAZY | 決策不問 代碼審 | 選 LAZY 等於決定到 start/await 才啟動 |
+| limitedParallelism | D-3 | 多筆同型時限制並行數 |
+| lock | 決策不問 代碼審 | Mutex 加鎖,決定互斥與可能掛起 |
+| Main | 決策不問 代碼審 | 選 Main 等於決定在主執行緒跑 |
+| MainCoroutineDispatcher | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| MainScope | 決策不問 代碼審 | 決定協程綁主執行緒,需自行取消 |
+| map | 無決策 | 停用字,不帶決策:一般轉換運算子 |
+| mapIndexed | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| mapIndexedNotNull | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| mapLatest | D-4 | 新值來就取消前一個轉換 |
+| mapNotNull | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| maxWith | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| merge | 撞名 D-59 | Flow 的 merge 運算子,不是資料同步衝突合併 |
+| minWith | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| MODE_CANCELLABLE | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| MutableSharedFlow | D-7 | 一次性事件用熱流發送 |
+| MutableStateFlow | D-27 | 畫面狀態用可變狀態流 |
+| Mutex | D-12 | 防重複送出與互斥 |
+| name | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| nameString | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| newCoroutineContext | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| newFixedThreadPoolContext | 決策不問 代碼審 | 自建固定大小執行緒池,執行緒與容量決定 |
+| newSingleThreadContext | 決策不問 代碼審 | 自建單執行緒,執行緒決定 |
+| next | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| next0 | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| NonCancellable | D-17 | 畫面離開也要做完的工作 |
+| NonDisposableHandle | 無決策 | 內部實作類別,App 不直接用 |
+| none | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| observeOn | 無決策 | 舊版已棄用的 API |
+| ObsoleteCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+| offer | 無決策 | 舊版已棄用的 API |
+| onAwait | 無決策 | select 子句,決策已在 select |
+| onAwaitInternal | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| onCancellationConstructor | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| onCancelled | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| onCancelling | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| onClosed | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| onCompleted | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| onCompletion | 決策不問 代碼審 | 決定流完成或取消時的收尾 |
+| onCompletionInternal | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| onEach | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| onEmpty | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| onErrorResume | 無決策 | 舊版已棄用的 API |
+| onErrorResumeNext | 無決策 | 舊版已棄用的 API |
+| onErrorReturn | 無決策 | 舊版已棄用的 API |
+| onFailure | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| onJoin | 無決策 | select 子句用的等待條件 |
+| onLock | 無決策 | select 子句,決策已在 select |
+| onReceive | 無決策 | select 子句,決策已在 select |
+| onReceiveCatching | 無決策 | select 子句,決策已在 select |
+| onReceiveOrNull | 無決策 | 舊版已棄用的 API |
+| onSend | 無決策 | select 子句,決策已在 select |
+| onStart | D-5 | 合併來源補初值(Flow 的 onStart) |
+| onSubscription | 決策不問 代碼審 | 決定訂閱成立後才開始,避免漏值 |
+| onSuccess | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| onTimeout | 無決策 | select 子句,決策已在 select |
+| openSubscription | 無決策 | 舊版已棄用的 API |
+| parent | 無決策 | 讀取父 Job 的屬性 |
+| parentCancelled | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| ParentJob | 無決策 | 內部實作類別,App 不直接用 |
+| plus | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| poll | 無決策 | 舊版已棄用的 API |
+| processResFunc | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| produce | D-26 | 建 Channel 生產者,取一部分就要關 |
+| produceIn | 決策不問 代碼審 | 決定把流轉為頻道,啟動與緩衝決定 |
+| ProducerScope | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| publish | 無決策 | 舊版已棄用的 API |
+| publishOn | 無決策 | 舊版已棄用的 API |
+| receive | D-26 | 從 Channel 取一筆 |
+| receiveAsFlow | D-7 | 一次性事件從 Channel 轉成流 |
+| receiveCatching | 決策不問 代碼審 | 決定接收時不丟例外,失敗傳遞方式 |
+| ReceiveChannel | D-26 | 只取一部分時要負責關 |
+| receiveOrNull | 無決策 | 舊版已棄用的 API |
+| reduce | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| regFunc | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| release | 決策不問 代碼審 | Semaphore 釋放許可,與並行數上限成對 |
+| releaseInterceptedContinuation | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| RENDEZVOUS | D-16 | Channel 容量選零緩衝、兩邊會合 |
+| replay | 決策不問 FLOW-25 | 共享流重播幾筆,事件流重播會重送 |
+| replayCache | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| requireNoNulls | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| resetReplayCache | 決策不問 代碼審 | 決定清掉重播快取 |
+| resume | D-25 | 回呼只回一次結果時恢復協程 |
+| resumeUndispatched | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| resumeUndispatchedWithException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| resumeWith | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| retry | D-11 | 重試要有上限與退避 |
+| retryWhen | D-11 | 重試條件與退避 |
+| run | 無決策 | 停用字,不帶決策:一般作用域函式 |
+| runBlocking | 決策不問 代碼審 | 會阻塞呼叫執行緒,在主執行緒用會卡畫面 |
+| runInterruptible | 決策不問 代碼審 | 阻塞呼叫改成取消時可中斷 |
+| Runnable | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| runningFold | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| runningReduce | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| sample | 決策不問 代碼審 | 決定定時取樣,丟掉中間值 |
+| scan | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| scanFold | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| scanReduce | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| scheduleResumeAfterDelay | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| select | 決策不問 代碼審 | 決定競速取第一個完成的結果 |
+| SelectBuilder | 無決策 | select 子句,決策已在 select |
+| SelectBuilderImpl | 無決策 | 內部實作類別,App 不直接用 |
+| SelectClause | 無決策 | select 子句,決策已在 select |
+| SelectClause0 | 無決策 | select 子句,決策已在 select |
+| SelectClause1 | 無決策 | select 子句,決策已在 select |
+| SelectClause2 | 無決策 | select 子句,決策已在 select |
+| SelectImplementation | 無決策 | 內部實作類別,App 不直接用 |
+| selectInRegistrationPhase | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| SelectInstance | 無決策 | 內部實作類別,App 不直接用 |
+| selectOld | 無決策 | 舊版已棄用的 API |
+| selectUnbiased | 決策不問 代碼審 | 決定競速時公平挑選,不偏前者 |
+| selectUnbiasedOld | 無決策 | 舊版已棄用的 API |
+| Semaphore | D-3 | 多筆同型時限制並行數 |
+| send | 決策不問 代碼審 | 滿了會掛起發送端,背壓的決定 |
+| sendBlocking | 決策不問 代碼審 | 阻塞呼叫執行緒送資料,主執行緒用會卡畫面 |
+| SendChannel | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| SharedFlow | 決策不問 代碼審 | 決定以多訂閱者、可重播方式共享事件 |
+| shareIn | D-15 | 冷流轉熱流共享 |
+| SharingCommand | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| SharingStarted | 決策不問 STATE-4 | 共享何時開始與停止 |
+| single | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| singleOrNull | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| skip | 無決策 | 舊版已棄用的 API |
+| START | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| start | 無決策 | 啟動延遲啟動的 Job(延遲啟動本身由 CoroutineStart 決定) |
+| startCoroutineCancellable | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| startWith | 無決策 | 舊版已棄用的 API |
+| StateFlow | 決策不問 STATE-13 | 畫面狀態的型別選擇 |
+| stateIn | D-5、D-6、D-15、撞名 D-49 | 冷流轉狀態流共享;對 D-49 測試情境只是同名 |
+| STOP | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| STOP_AND_RESET_REPLAY_CACHE | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| subscribe | 無決策 | 舊版已棄用的 API |
+| subscribeOn | 無決策 | 舊版已棄用的 API |
+| subscriptionCount | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| success | 無決策 | ChannelResult 的取值/判斷輔助,非情境選擇 |
+| SupervisorJob | 決策不問 代碼審 | 決定子協程失敗不連累兄弟,失敗傳遞 |
+| SupervisorJob0 | 無決策 | JS 平台上 SupervisorJob() 工廠函式的改名(JsName),決定在 SupervisorJob 那一列 |
+| supervisorScope | D-8、D-9 | 並行範圍,一支失敗不連坐 |
+| SUSPEND | 決策不問 代碼審 | 緩衝滿時掛起發送端,背壓決定 |
+| suspendCancellableCoroutine | D-25 | 回呼包成可取消的 suspend |
+| switchMap | 無決策 | 舊版已棄用的 API |
+| take | 決策不問 代碼審 | 只取前幾筆就結束;太常見不當觸發字 |
+| takeWhile | 決策不問 代碼審 | 決定符合條件才繼續,只取部分 |
+| ThreadContextElement | 無決策 | 把 ThreadLocal 帶進協程的擴充點 |
+| ticker | 決策不問 代碼審 | 定時送值的 Channel(已標過時),要選背壓模式 |
+| TickerMode | 決策不問 代碼審 | ticker 的節奏:固定週期還是固定間隔 |
+| timeout | 決策不問 代碼審 | 決定流逾時就失敗,逾時決定 |
+| TimeoutCancellationException | 無決策 | 例外類別,不是寫法選擇 |
+| toCancellationException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| toChannel | 無決策 | 建流或轉型的小工具,不帶決策 |
+| toCollection | 決策不問 代碼審 | 收齊整條流進集合,無界流會卡住 |
+| toDebugString | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| toList | 決策不問 FLOW-20 | 把整條流收齊到記憶體,無界流會卡住 |
+| toMap | 決策不問 代碼審 | 收齊整條流到記憶體,無界流會卡住 |
+| toMutableList | 決策不問 代碼審 | 收齊整條流到記憶體,無界流會卡住 |
+| toMutableSet | 決策不問 代碼審 | 收齊整條流到記憶體,無界流會卡住 |
+| toSet | 決策不問 代碼審 | 收齊整條流到記憶體,無界流會卡住 |
+| toStringInternalImpl | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| transform | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| transformLatest | D-4 | 新值來就取消前一個轉換 |
+| transformWhile | 決策不問 代碼審 | 決定條件不符即停止,只取部分 |
+| tryAcquire | 決策不問 代碼審 | 不等待地搶許可,決定滿了就放棄 |
+| tryEmit | 決策不問 代碼審 | 不掛起發射,滿了可能丟值,背壓決定 |
+| tryLock | 決策不問 代碼審 | 不等待地搶鎖,決定搶不到就放棄 |
+| tryReceive | 決策不問 代碼審 | 非阻塞接收,決定沒資料就放棄 |
+| tryResume | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| tryResumeWithException | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| trySelect | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| trySelectDetailed | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| trySend | D-16 | 背壓下不掛起的送出,失敗要處理 |
+| trySendBlocking | 決策不問 代碼審 | 阻塞呼叫執行緒嘗試送出,主執行緒用會卡畫面 |
+| UnbiasedSelectBuilderImpl | 無決策 | 內部實作類別,App 不直接用 |
+| UnbiasedSelectImplementation | 無決策 | 內部實作類別,App 不直接用 |
+| Unconfined | 決策不問 代碼審 | 選 Unconfined 等於不指定執行緒,隨呼叫者 |
+| UNDISPATCHED | 決策不問 代碼審 | 選 UNDISPATCHED 等於決定先在呼叫端執行緒跑 |
+| UNLIMITED | D-16 | Channel 容量選無上限,生產快時記憶體會漲 |
+| unlock | 決策不問 代碼審 | Mutex 解鎖,與互斥範圍成對 |
+| unsafeTransform | 無決策 | 內部擴充點/回呼,App 不直接用 |
+| update | 決策不問 代碼審 | 原子更新 StateFlow,併發修改的決定 |
+| updateAndGet | 決策不問 代碼審 | 原子更新並取新值,併發修改的決定 |
+| value | 決策不問 STATE-8 | 直接寫狀態值;太常見不當觸發字 |
+| valueOrNull | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+| whileSelect | 決策不問 代碼審 | 決定迴圈式競速等待多個來源 |
+| WhileSubscribed | D-5 | 共享只在有人收集時跑 |
+| withContext | 決策不問 CO-1 | 切執行緒;寫死調度器就不能注入 |
+| withIndex | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+| withLock | 決策不問 代碼審 | 決定以 Mutex 互斥保護區段 |
+| withPermit | D-3 | 多筆同型時限制並行數 |
+| withTimeout | D-10 | 逾時拋例外 |
+| withTimeoutOrNull | D-10 | 逾時回 null |
+| yield | 決策不問 代碼審 | 決定讓出執行緒給其他協程 |
+| YieldContext | 無決策 | 內部實作類別,App 不直接用 |
+| zip | D-6 | 嚴格一對一配對 |
+
+## 叫不出的壞寫法
+
+情境列每個對應檢查的每段壞寫法片段(沒有片段算一個 <無片段>),照推送前同一套路徑篩選與切段叫不出那一列的,都列在這裡、寫明改由誰抓(自檢是 configs/ast-grep/kotlin-android/check.py 的 bad_snippet_reach_problems;改由:`規則 <id>` 要片段落在那條規則壞例的 // BAD 行、`範本 T<n>` 要片段在那組範本該對應檢查的壞寫法小節程式裡、`代碼審`、`不是寫法`)。補了觸發字讓某段叫得出,就要刪掉這裡那一列。
+
+| 列編號 | 對應檢查 | 片段 | 改由 | 理由 |
+|---|---|---|---|---|
+| D-1 | API-1 | `val a = x.f(…)` | 代碼審 | D-1 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+| D-1 | API-1 | `val b = y.g(…)` | 代碼審 | D-1 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+| D-1 | API-3 | `async { }` | 代碼審 | D-1 的觸發字比對不到這段片段;代碼審看是不是犯了 API-3「async 的結果要有人接」 |
+| D-2 | API-1 | `val a = x.f(…)` | 代碼審 | D-2 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+| D-2 | API-1 | `val b = y.g(…)` | 代碼審 | D-2 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+| D-3 | API-2 | `.map { it.await() }` | 規則 kt-map-await-deferred | kt-map-await-deferred 是 API-2 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+| D-3 | API-2 | `forEach { it.await() }` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 API-2「多筆同型要用 awaitAll」 |
+| D-3 | CO-30 | `ids.map { async(Dispatchers.IO) { blockingCall(it) } }` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-30「大量並行 IO 沒限流」 |
+| D-3 | CO-39 | `val list = mutableListOf<X>(); ids.map { async(Default) { list.add(f(it)) } }` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-39「協程裡改非執行緒安全集合或快取」 |
+| D-3 | CO-39 | `mutableMapOf` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-39「協程裡改非執行緒安全集合或快取」 |
+| D-5 | FLOW-1 | `a.collect { x -> b.collect { y -> … } }` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-1「合成用 combine,不巢狀收集」 |
+| D-5 | FLOW-1 | `collectLatest` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-1「合成用 combine,不巢狀收集」 |
+| D-5 | FLOW-1 | `collect` | 規則 kt-nested-collect | kt-nested-collect 是 FLOW-1 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+| D-5 | FLOW-19 | `launch { a.collect { … }; b.collect { … } }` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-19「同一協程連續 collect 兩條熱流」 |
+| D-5 | STATE-8 | `init { viewModelScope.launch { repo.stream().collect { _state.value = it } } }` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-8「init 裡 collect 再倒進另一個狀態」 |
+| D-7 | FLOW-24 | `init { _events.emit(Loaded) }` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-24「replay=0 的 SharedFlow 在收集者訂閱前 emit」 |
+| D-7 | STATE-10 | `_state.value = Error("網路失敗")` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-10「以為 StateFlow 會發出相等的新值」 |
+| D-7 | STATE-11 | `Event<T>.getContentIfNotHandled()` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-11「用 SingleLiveEvent 或 Event 包裝類傳一次性事件」 |
+| D-7 | STATE-12 | `vm.userMessageShown()` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-12「轉成狀態的事件沒有「已消費」回報」 |
+| D-7 | STATE-28 | `val e by vm.events.collectAsState(null)` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-28「一次性事件用 collectAsState 收」 |
+| D-7 | STATE-17 | `live.postValue(e1); live.postValue(e2)` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-17「把 postValue 當事件串流用」 |
+| D-9 | CO-9 | `scope.launch { launch(handler) { … } }` | 代碼審 | D-9 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-9「CoroutineExceptionHandler 裝在子協程或 async 上」 |
+| D-9 | CO-9 | `scope.async(handler) { … }` | 代碼審 | D-9 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-9「CoroutineExceptionHandler 裝在子協程或 async 上」 |
+| D-9 | CO-2 | `catch (e: Exception)` | 規則 kt-suspend-catch-swallows-cancellation | kt-suspend-catch-swallows-cancellation 是 CO-2 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+| D-9 | CO-2 | `catch (e: Throwable)` | 代碼審 | D-9 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-2「不吞取消」 |
+| D-10 | API-5 | `OkHttpClient.Builder()…build()` | 規則 kt-okhttp-no-calltimeout | kt-okhttp-no-calltimeout 是 API-5 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+| D-10 | API-6 | `HttpClient(OkHttp) { }` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-6「Ktor(OkHttp 引擎)要設整個呼叫的逾時」 |
+| D-10 | API-32 | `catch (e: CancellationException) { throw e }` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-32「withTimeout 逾時被當成一般取消」 |
+| D-10 | API-33 | `while (System.currentTimeMillis() - start < t) { … }` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-33「自己做逾時而不用協程 API」 |
+| D-10 | API-33 | `Handler.postDelayed` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-33「自己做逾時而不用協程 API」 |
+| D-11 | API-7 | `while (true)` | 代碼審 | D-11 的觸發字比對不到這段片段;代碼審看是不是犯了 API-7「重試要有上限與退避」 |
+| D-11 | API-7 | `delay(常數)` | 不是寫法 | 示意寫法,不是一段可比對的程式 |
+| D-11 | API-21 | `authenticate()` | 代碼審 | D-11 的觸發字比對不到這段片段;代碼審看是不是犯了 API-21「權杖刷新沒看有沒有已經試過、也沒設上限」 |
+| D-11 | API-21 | `priorResponse` | 代碼審 | D-11 的觸發字比對不到這段片段;代碼審看是不是犯了 API-21「權杖刷新沒看有沒有已經試過、也沒設上限」 |
+| D-12 | API-10 | `onClick` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 API-10「防重複送出」 |
+| D-12 | API-10 | `launch` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 API-10「防重複送出」 |
+| D-12 | ARCH-3 | `onClick = { navController.navigate(...) }` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-3「Compose 導航點擊沒擋生命週期」 |
+| D-12 | ARCH-3 | `Modifier.clickable { nav.navigate(...) }` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-3「Compose 導航點擊沒擋生命週期」 |
+| D-12 | DATA-30 | `enqueue(OneTimeWorkRequest)` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-30「一次性工作沒用 unique 或 policy 選錯」 |
+| D-12 | DATA-30 | `ExistingWorkPolicy.REPLACE` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-30「一次性工作沒用 unique 或 policy 選錯」 |
+| D-13 | STATE-6 | `MutableStateFlow` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-6「被系統殺掉後能還原」 |
+| D-13 | STATE-14 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 STATE-14「把 ViewModel 當長期儲存」 |
+| D-13 | STATE-18 | `savedStateHandle["list"] = ArrayList(bigList)` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-18「把大物件或複雜結構塞進 saved state」 |
+| D-13 | STATE-18 | `outState.putParcelable("bmp", bitmap)` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-18「把大物件或複雜結構塞進 saved state」 |
+| D-13 | STATE-20 | `savedStateHandle[…]` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-20「以為 SavedStateHandle 一寫入就存好了」 |
+| D-13 | STATE-26 | `launch()` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-26「等結果的流程,額外狀態只放記憶體」 |
+| D-13 | STATE-27 | `var text by remember { mutableStateOf("") }` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-27「文字輸入用 remember 不用 rememberSaveable」 |
+| D-13 | STATE-27 | `remember { mutableStateOf(TextFieldValue()) }` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-27「文字輸入用 remember 不用 rememberSaveable」 |
+| D-15 | FLOW-18 | `flow { api.fetch() }` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-18「冷流被多個收集者各自觸發」 |
+| D-15 | FLOW-19 | `launch { a.collect { … }; b.collect { … } }` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-19「同一協程連續 collect 兩條熱流」 |
+| D-15 | FLOW-20 | `launch { state.collect { … }; doAfter() }` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-20「在熱流 collect 之後寫程式碼」 |
+| D-15 | FLOW-20 | `state.toList()` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-20「在熱流 collect 之後寫程式碼」 |
+| D-15 | STATE-3 | `fun getPostalCode(addr): LiveData<String> = repo.getPostCode(addr)` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-3「stateIn/shareIn 與輸出流只建一次」 |
+| D-16 | FLOW-6 | `collect { slowWork(it) }` | 代碼審 | D-16 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-6「背壓策略要寫明」 |
+| D-17 | ARCH-65 | `viewModelScope.launch { repo.save() }` | 代碼審 | D-17 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-65「必須完成的寫入綁在 viewModelScope」 |
+| D-17 | CO-21 | `suspend fun bookmark() { externalScope.launch { ds.save() } }` | 代碼審 | D-17 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-21「用外部長壽 scope launch 卻不 join」 |
+| D-18 | ARCH-64 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 ARCH-64「UI 同時讀網路和 DB 兩個來源」 |
+| D-18 | DATA-64 | `api.post(x)` | 代碼審 | D-18 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-64「寫入只送網路,不先寫本機」 |
+| D-19 | CO-43 | `fun initialize() { scope.launch { … } }` | 代碼審 | D-19 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-43「發後不管的公開 API 無法得知完成」 |
+| D-20 | CO-5 | `suspend fun load() = dao.blockingQuery()` | 代碼審 | D-20 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-5「suspend 函式要 main-safe」 |
+| D-20 | CO-1 | `withContext(Dispatchers.IO)` | 規則 kt-hardcoded-dispatchers-io | kt-hardcoded-dispatchers-io 是 CO-1 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+| D-20 | CO-1 | `CoroutineScope(Dispatchers.IO)` | 代碼審 | D-20 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-1「Dispatcher 可注入」 |
+| D-20 | CO-26 | `launch(Dispatchers.IO) { repo.fetch() }` | 代碼審 | D-20 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-26「對已 main-safe 的 suspend 多包一層切換」 |
+| D-21 | TEST-7 | `[Loading, Success]` | 不是寫法 | 示意寫法,不是一段可比對的程式 |
+| D-21 | TEST-15 | `UnconfinedTestDispatcher` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-15「測併發順序卻用 UnconfinedTestDispatcher」 |
+| D-23 | API-26 | `suspend fun delete(): Foo` | 代碼審 | D-23 的觸發字比對不到這段片段;代碼審看是不是犯了 API-26「204 空 body 遇到非空回應型別會丟例外」 |
+| D-26 | FLOW-23 | `repo.find().first()` | 代碼審 | D-26 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-23「可能為空的冷流用 first()」 |
+| D-27 | STATE-13 | `val error: StateFlow<String?>` | 代碼審 | D-27 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-13「用一堆布林與可空欄位拼出畫面狀態」 |
+| D-27 | STATE-13 | `val data: StateFlow<…>` | 代碼審 | D-27 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-13「用一堆布林與可空欄位拼出畫面狀態」 |
+| D-27 | CO-10 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 CO-10「以為 CoroutineExceptionHandler 能接住後繼續」 |
+| D-29 | CO-24 | `appScope.launch { … activity.showX() }` | 代碼審 | D-29 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-24「協程把 Activity/View/Context 捕捉進長壽 scope」 |
+| D-29 | ARCH-31 | `postDelayed` | 代碼審 | D-29 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-31「非同步回呼裡做 FragmentTransaction 沒看生命週期」 |
+| D-30 | UI-42 | `val s = scroll.value` | 代碼審 | D-30 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-42「狀態讀取太早(父層讀了往下傳值)」 |
+| D-31 | UI-39 | `data class UiState(var x: Int)` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+| D-31 | UI-39 | `MutableList` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+| D-31 | UI-39 | `ArrayList` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+| D-31 | UI-39 | `HashMap` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+| D-33 | UI-89 | `Button(isPrimary = true, isOutlined = false)` | 代碼審 | D-33 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-89「元件用大量布林旗標控樣式」 |
+| D-33 | UI-90 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-90「元件把大量樣式參數攤平」 |
+| D-35 | UI-52 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-52「清單項目 0 尺寸」 |
+| D-36 | DATA-60 | `data.isEmpty()` | 代碼審 | D-36 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-60「endOfPaginationReached 判斷錯」 |
+| D-36 | DATA-61 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 DATA-61「用了 RemoteMediator,UI 卻直接讀網路」 |
+| D-36 | DATA-62 | `LAUNCH_INITIAL_REFRESH` | 代碼審 | D-36 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-62「initialize() 沒覆寫,每次開都全量刷新(人裁)」 |
+| D-36 | DATA-69 | `dao.clear()` | 代碼審 | D-36 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-69「刷新失敗卻先清本機快取」 |
+| D-37 | ARCH-53 | `@Entity` | 代碼審 | D-37 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-53「網路或資料庫模型一路傳到 UI」 |
+| D-37 | ARCH-66 | `suspend fun x(): Result<T>` | 代碼審 | D-37 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-66「把 kotlin.Result 當公開 API 錯誤模型,失敗種類不明」 |
+| D-39 | ARCH-56 | `class MainActivity : AppCompatActivity()` | 代碼審 | D-39 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-56「Fragment 標 @AndroidEntryPoint 但宿主 Activity 沒標」 |
+| D-43 | DATA-13 | `data_extraction_rules` | 代碼審 | D-43 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-13「敏感資料放在會被備份的 DataStore 或 prefs」 |
+| D-46 | DATA-44 | `onStartCommand` | 代碼審 | D-46 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-44「startForegroundService 後沒及時 startForeground、服務回呼做重活」 |
+| D-47 | DATA-73 | `enum class Status { A, B }` | 代碼審 | D-47 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-73「列舉遇到未知值就崩潰」 |
+| D-48 | DATA-77 | `-keep` | 代碼審 | D-48 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-77「R8 混淆掉解析用的模型」 |
+| D-49 | TEST-6 | `runTest { val vm = VM(fake); fake.emit(1); assertEquals(1, vm.score.value) }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-6「測 stateIn(WhileSubscribed) 卻沒有收集者」 |
+| D-49 | TEST-14 | `runTest(UnconfinedTestDispatcher()) { launch { a(); delay(10); b() }; assert(a, b) }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-14「以為 Unconfined 會跑完整個協程」 |
+| D-49 | TEST-20 | `vm.state.test { vm.load(); assertEquals(Success, awaitItem()) }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-20「Turbine 搭配 StateFlow 忘了初始值(出處不全)」 |
+| D-50 | TEST-18 | `flow.test { awaitItem() }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-18「Turbine 有未消費事件就結束」 |
+| D-50 | TEST-19 | `awaitItem()` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-19「Turbine 用 awaitItem 等錯誤」 |
+| D-51 | TEST-29 | `rememberInfiniteTransition` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-29「無限動畫讓 Compose 測試永不 idle(出處不全)」 |
+| D-51 | TEST-29 | `assertIsDisplayed()` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-29「無限動畫讓 Compose 測試永不 idle(出處不全)」 |
+| D-51 | TEST-30 | `registerIdlingResource` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-30「外部非同步工作沒註冊 IdlingResource」 |
+| D-51 | TEST-30 | `waitUntil` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-30「外部非同步工作沒註冊 IdlingResource」 |
+| D-51 | TEST-32 | `onNodeWithText("子文字")` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-32「合併語意樹造成找不到子節點」 |
+| D-52 | UI-106 | `Modifier.size(24.dp).clickable { }` | 代碼審 | D-52 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-106「觸控目標小於 48dp」 |
+| D-52 | UI-108 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-108「相關元素沒合併語意」 |
+| D-52 | UI-111 | `Text` | 代碼審 | D-52 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-111「標題沒標 heading」 |
+| D-53 | TEST-37 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 TEST-37「測試打真實網路或後端」 |
+| D-54 | TEST-35 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 TEST-35「洩漏回歸沒有自動化檢查」 |
+| D-55 | PERF-6 | `Regex(...)` | 代碼審 | D-55 的觸發字比對不到這段片段;代碼審看是不是犯了 PERF-6「主執行緒做重運算」 |
+| D-57 | DATA-100 | `setVisibility(NotificationCompat.VISIBILITY_PUBLIC)` | 代碼審 | D-57 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-100「通知放敏感資料」 |
+| D-58 | UI-110 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-110「對比不足」 |
+| D-59 | DATA-65 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 DATA-65「衝突解決沒策略」 |
+| D-60 | PERF-26 | `bigList` | 代碼審 | D-60 的觸發字比對不到這段片段;代碼審看是不是犯了 PERF-26「大清單重複用 list.contains 查詢」 |
+
 ## 統計
 
 手寫(沒有程式產生):改主表或規則包時用程式重數各主題表格列數後手動更新(規則包數字數 `configs/ast-grep/kotlin-android/rules*/*.yml`);總列數、各主題、各級、級的組合、情境、出處不全與人裁、規則包各等級、不接閘、被會擋的規則守到的列數、逐列查證、待查證這幾個數由型錄自檢(同一支 check.py 的 stats_problems)核對;情境決策表那行還沒核對。
@@ -1086,3 +1647,5 @@
 - 出處不全的列:15(其中 9 列另標停用,2026-11-09 兩輪查不到權威原文;另 8 列改寫成只寫原文支持的主張、拿掉出處不全);人裁的列:4
 - 逐列查證(來源欄有〔查證 日期:網址〕):534 列;沒有的 1 列都是查不到權威原文、已標出處不全(2026-11-07 逐列查證,卷證見 [[Projects/Android寫法型錄逐列查證_計劃]];2026-11-08 使用者裁 API-14、TEST-31 標出處不全、DATA-12 照官方改寫並改成人裁列;同日再查,ARCH-3 等 6 列找到直接講到規則判定寫法的官方原文、拿掉出處不全;API-14、API-36、UI-103、TEST-31 查不到或跟官方相反,維持出處不全,五條規則移出規則包(其中 API-36 於 2026-11-09 依 CERT ERR51-J 拿掉出處不全,規則仍不在規則包),見 [[Projects/Android不接閘資安規則重量_計劃]])
 - 情境決策表列數:60(證據樣式:主寫 `(無)` 的 19 列、例外寫 `(無)` 的 37 列、兩段都 `(無)` 的 15 列;2026-11-09 補 D-58 到 D-60、D-38 停用;2026-11-08 用 check.py 的 dt_table 重數,先前寫的 8、31、5 已過期)
+- API 決策點:公開名稱 434(每列每個歸屬項各算一筆:D-n 62、撞名 4、決策不問主表列 18、決策不問代碼審 95、無決策 266;母體 kotlinx-coroutines-core 1.10.2,2026-11-12 用 check.py 的 _api_names 抽,含 jvm-only.txt 手列的 19 個)
+- 叫不出的壞寫法:111 個(改由:規則 5、範本 0、代碼審 104、不是寫法 2;2026-11-12 用 check.py 的反查重數,補了 D-4、D-5、D-8、D-9 的觸發字之後)
