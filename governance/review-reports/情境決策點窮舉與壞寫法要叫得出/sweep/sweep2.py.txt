@@ -1,0 +1,53 @@
+"""全表掃描:每列情境(D-n)的「對應檢查」列,其壞寫法欄裡每段反引號程式片段,單獨當新增時能不能叫出那一列 D-n。
+叫不出 = 選錯寫法時情境題不會問這一列。用法:python3.14 sweep.py <工作樹根>"""
+import importlib.machinery, importlib.util, re, sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+def load(path, name):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+sys.dont_write_bytecode = True
+lm = load(root / "scripts/lumos", "lm")
+kp = load(root / "configs/ast-grep/kotlin-android/check.py", "kp")
+text = (root / "skills/kotlin-idioms/checks-catalog.md").read_text(encoding="utf-8")
+rows, probs = kp.dt_table(text)
+main = kp.main_rows(text)
+hdr = None
+for ln in text.split("\n"):
+    if ln.startswith("| 編號 |") or ln.startswith("| 編號|"):
+        hdr = [c.strip() for c in re.split(r"(?<!\\)\|", ln)]
+        break
+bad_idx = hdr.index("壞寫法形狀") if hdr and "壞寫法形狀" in hdr else None
+
+total = holes = 0
+for r in rows:
+    if r["retired"] or not r["triggers"]:
+        continue
+    for cid in re.findall(r"[A-Z]+-\d+", r["checks"]):
+        mr = main.get(cid)
+        if not mr:
+            continue
+        cells = mr if isinstance(mr, list) else list(mr.values()) if isinstance(mr, dict) else []
+        bad = None
+        if isinstance(mr, dict):
+            bad = mr.get("壞寫法形狀") or mr.get("bad")
+        if bad is None and bad_idx is not None and isinstance(mr, list):
+            bad = mr[2] if len(mr) > 2 else None
+        if not bad:
+            continue
+        for snip in re.findall(r"`([^`]+)`", bad):
+            if False:
+                continue
+            total += 1
+            code = "class X {\n    fun f() {\n        " + snip.replace("\\|", "|") + "\n    }\n}\n"
+            segs = lm._kt_sit_text_segments("X.kt", code, rows)
+            hit = any(r["id"] in sg["rows"] for sg in segs)
+            if not hit:
+                holes += 1
+                print(f"{r['id']}\t{cid}\t{snip[:110]}")
+print(f"--- 片段 {total},叫不出對應情境列的 {holes}", file=sys.stderr)

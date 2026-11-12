@@ -1,0 +1,25 @@
+"""r2 修補逐道改回舊寫法,跑對應測試確認會紅;每次還原。用法:python3.14 mutate2.py <repo>"""
+import shutil, subprocess, sys
+from pathlib import Path
+repo = Path(sys.argv[1]); p = repo / "configs/ast-grep/kotlin-android/check.py"
+orig = p.read_text(encoding="utf-8")
+M = [
+    ("沒關的圍欄留最後一行", "hidden.update({a} if b is None else {a, b})", "hidden.update({a, b if b is not None else len(lines) - 1})", "template_fence_parity"),
+    ("沒關的圍欄留最後一行(範本小節)", "hidden.update({a} if b is None else {a, b})", "hidden.update({a, b if b is not None else len(lines) - 1})", "bad_snippets_reach"),
+    ("只照 \\n 切", '        raw = text.split("\\n")\n', "        raw = text.splitlines()\n", "bad_snippets_reach"),
+    ("字串裡的標記不算", "if len(_BAD_MARK_RE.findall(ln)) <= len(_BAD_MARK_RE.findall(kept[no - 1])):", "if not _BAD_MARK_RE.search(ln):", "bad_snippets_reach"),
+    ("只跳整行註記", "not _ANNOTATION_ONLY_RE.match(code[k])", 'not code[k].lstrip().startswith("@")', "bad_snippets_reach"),
+    ("片段格整格才取內文", 'whole = len(sn) == 1 and re.fullmatch(r"`[^`]*`", c[2]) is not None', 'whole = len(sn) == 1 and c[2].startswith("`")', "bad_snippets_reach"),
+]
+try:
+    for label, a, b, k in M:
+        if orig.count(a) != 1:
+            print(f"?? {label}: 找不到改壞點({orig.count(a)})"); continue
+        p.write_text(orig.replace(a, b), encoding="utf-8")
+        r = subprocess.run([sys.executable, "scripts/test_lumos.py", "-k", k], cwd=repo, capture_output=True, text=True)
+        last = [ln for ln in r.stdout.splitlines() if "passed" in ln][-1:] or ["?"]
+        print(f"{'紅 ' if ' 0 failed' not in last[0] else '綠!'} {label}: {last[0]}")
+finally:
+    p.write_text(orig, encoding="utf-8")
+    for d in (repo / "configs/ast-grep/kotlin-android").rglob("__pycache__"):
+        shutil.rmtree(d, ignore_errors=True)
