@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-07-10
-updated: 2026-08-18
+updated: 2026-11-12
 self_audit: sonnet/2026-08-21
 tags:
   - type/system
@@ -25,6 +25,8 @@ summary: |-
   DEP:[[Systems/lumos-cli-read]][[Systems/cochange-guard]]
   TEST:t_tokenizer/search_ranked/context_recommend/impact_ranked/impact_diff/impact_hook_v11 全綠+全套1018 | VERIFY:[[Verification/2026-07-11_hook面v1.1轉正]] | VERIFY:[[Verification/2026-07-10_檢索排序v1]][[Verification/2026-07-11_檢索goldset評測]]
   KEY:[2026-09-15 評測尺切換與跨臂對齊]★新尺(condensed)自 2026-09-15 起真的上線了★,歷史帳帶切換標記、切了不回頭。同批改動修掉四處同族缺陷(都是「拿不同批題目的平均互比」):新舊尺之間、編輯面三條排法的視窗、兩條臂之間、恆等斷言用的五個參考值。★原委、重現方式、真實語料量測與還沒補的缺口一律看 [[Issues/尺切換恆等斷言反覆不過]]★;未補的那條在 [[Issues/held閘沒看弱證據旗標]]
+  WHY:改檔題的出題母體改成「改檔前掛鉤會觸發的檔」(直接呼叫掛鉤那支單檔判斷,不另抄清單),追加模式多「每支檔最多幾題」(預設 1=每支檔一題,同舊規則;出題母體不管帶不帶都換成新的;擴充時用 3,題庫已有的算進名額,同檔同提交或同改動片段不重出) [出處:[[Projects/改檔題庫擴充_計劃]] 2026-11-12] [因:保留組只有 9 題有效題,逐題差異標準差換算要約 25 題才量得出 5 個百分點;舊理由「同檔候選池幾乎一樣」對常改大檔不成立,不同改動推出的前 8 名兩兩重疊 0–0.2] [不選:不設上限(同檔的題不完全獨立)] [test:t_goldset_edit_cases_hook_eligible]
+  WHY:追加改檔題時同一支檔的名額算進題庫已有的題,同檔同提交或同改動片段不重出 [出處:[[Projects/改檔題庫擴充_計劃]] 2026-11-12] [因:上限不算既有題或不比片段,同一題會換個編號再進卷,等於灌水] [test:t_goldset_file_quota_cap]
 related:
   - "[[Projects/檢索優化_計劃]]"
   - "[[Systems/lumos-cli-read]]"
@@ -52,11 +54,13 @@ verified_by:
   - "[[Verification/2026-10-06_審查附件影響修復主線CI]]"
   - "[[Verification/測試品質分支推送前修復驗證]]"
   - "[[Verification/測試品質分支第二輪修復驗證]]"
+  - "[[Verification/2026-11-13_改檔題庫擴充與新基線]]"
 aliases:
   - 檢索排序與關聯推薦
 about_code:
   - scripts/lumos
   - governance/eval/retrieval_eval.py
+  - governance/eval/build_goldset.py
 ---
 # retrieval-ranking（檢索排序與關聯推薦 v1）
 
