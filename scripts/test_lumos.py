@@ -54028,8 +54028,18 @@ def t_extcode_single_source():
     check("S4 九個棧的 extcode 題都引用同一組常數且帶 shape_only", not bad, str(bad))
     check("S4 sql 沒有 extcode 題", not any(s["id"].endswith("-extcode") for s in m._STACK_QUESTION_SPECS["sql"]), "")
     check("S4 鏡頭編譯的正規式就是同兩組字串", [p.pattern for p in m._EXTCODE_RX_PLAIN] == list(m._EXTCODE_WHEN) and [p.pattern for p in m._EXTCODE_RX_RAW] == list(m._EXTCODE_WHEN_RAW), "")
-    src = _insp.getsource(m._lens_changed_lines) + _insp.getsource(m._extcode_hit)
-    check("S4 鏡頭用同一支過濾與正規化", "_stack_changed_ok(" in src and "_vendored_skip(" in src and "_stack_norm_line(" in src, "")
+    import ast as _ast
+    import textwrap as _tw
+
+    def _calls(fn):
+        """函式本體裡真正呼叫到的名字(解析語法樹;docstring 與註解裡提到的不算)。"""
+        tree = _ast.parse(_tw.dedent(_insp.getsource(fn)))
+        return {n.func.id for n in _ast.walk(tree) if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)}
+    called = _calls(m._lens_changed_lines) | _calls(m._extcode_hit)
+    # 鏡頭的路徑篩選收進 _kt_sit_path_ok(情境段與型錄自檢共用,情境決策點窮舉計劃),它再叫 _stack_changed_ok:往下查一層
+    if "_kt_sit_path_ok" in called:
+        called |= _calls(m._kt_sit_path_ok)
+    check("S4 鏡頭用同一支過濾與正規化", {"_stack_changed_ok", "_vendored_skip", "_stack_norm_line"} <= called, str(sorted(called)))
 
 
 def t_impact_hook_shebang_and_ttl_mark():
