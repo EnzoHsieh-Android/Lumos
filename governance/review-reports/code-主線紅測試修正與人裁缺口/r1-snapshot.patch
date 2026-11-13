@@ -1,0 +1,111 @@
+diff --git a/docs/lumos-toolchain-knowledge/Issues/人裁殺傷力在真實Android專案跑不動的四個缺口.md b/docs/lumos-toolchain-knowledge/Issues/人裁殺傷力在真實Android專案跑不動的四個缺口.md
+new file mode 100644
+index 000000000..c0002c43b
+--- /dev/null
++++ b/docs/lumos-toolchain-knowledge/Issues/人裁殺傷力在真實Android專案跑不動的四個缺口.md
+@@ -0,0 +1,40 @@
++---
++type: issue
++status: open
++created: 2026-11-13
++updated: 2026-11-13
++aliases: []
++about_code: []
++tags:
++  - type/issue
++  - status/open
++  - scope/stack-knowledge
++summary: |-
++  FLAG:TECHNICAL
++  PITFALL:人裁把 flatMapLatest 換成 flatMapConcat 驗殺傷力時,換完編譯不過(檔頭只 import 了 flatMapLatest),判成弱證據而拒絕寫回 [出處:2026-11-13 測試品質實驗室 Android 副本實跑 lumos situation-rule] [根因:壞法只能改段內一處字串,碰不到檔頭 import] [repro:副本裡 import 逐一寫明時跑 situation-rule --old flatMapLatest --new flatMapConcat,判 killed_unattributed]
++---
++# 人裁殺傷力在真實Android專案跑不動的四個缺口
++
++背景:[[Projects/情境題答案要引規格出處與回寫循環_計劃]] 上線後,2026-11-13 第一次在真的 Gradle 專案跑完整循環(測試品質實驗室 Android 子專案的暫存副本,搜尋框 `flatMapLatest` 加兩支測試、計劃不寫「只顯示最後一次」)。循環本身走通:只送一次值的測試判 survived 被拒、連送兩次的判 killed 寫回 S2、規格閘認得人裁條款。下面四件是實驗室假平台測不出、真專案才冒出來的。
++
++## 症狀
++
++1. **(最優先)換運算子的壞法編譯不過。** `--old flatMapLatest {…}` / `--new flatMapConcat {…}` 只換那一行;檔頭逐一寫的 `import kotlinx.coroutines.flow.flatMapLatest` 沒跟著換,壞法版編譯失敗 → `killed_unattributed`(弱證據)→ 人裁拒絕。Android 專案多半逐一寫 import,所以面試題那種情境照常操作就走不通。實跑時把 import 改成 `kotlinx.coroutines.flow.*` 才繞過。
++2. **`lumos init` 給 Android 猜的 run_cmd 是壞的**:`./gradlew test --tests '*{method}'`,Android 的 `test` 是總任務、不收 `--tests`(Gradle 報 Unknown command-line option),要 `:app:testDebugUnitTest --tests …`。新接入的 Android 專案殺傷力全部跑不起來。
++3. **人裁指令的錯誤訊息指向不存在的旗標**:算不出主線分岔點時印「用 --diff <A..B> 指定」,但 `situation-rule` 沒有 `--diff`(只有 `--branch`)。
++4. **殺傷力帳本沒留輸出摘錄**:判 `killed_unattributed` 時 kill-log 的 tail 是空的,看不出是編譯失敗,要自己開工作樹重跑才查得到。
++
++## 根因
++
++1:宣告式壞法只能改段內恰好一處字串(範圍 4 刻意限定在這一段、同一列),import 在段外。2:init 依副檔名猜 kotlin-junit 範本,沒分 Android 與純 JVM。3:錯誤訊息沿用 code-loop 的說法。4:人裁的 kill-log 那筆沒帶執行器輸出。
++
++## 現在怎麼繞
++
++1:被測檔改用整包 import(`kotlinx.coroutines.flow.*`)。2:手改 `.lumos/config.json` 的 run_cmd 成 `./gradlew :app:testDebugUnitTest --tests '*{method}'`。3:在有主線分支的工作樹跑,或帶 `--branch`。4:手動 `git worktree add` 那個版本重跑綁定測試看輸出。
++
++## 什麼條件算修好
++
++- 1:換運算子的人裁在逐一 import 的 Android 檔上判得出 killed(可能做法:壞法允許連帶改 import、或允許多處替換但限定在同一列的觸發字;要先寫計劃、不能放寬「只改這一段」到可以任意改檔),有逐一 import 的端到端測試。
++- 2:init 偵測到 Android(com.android.application / library 外掛)時給 `testDebugUnitTest` 版本的 run_cmd,有測試。
++- 3:訊息改成指向 `--branch` 或補 `--diff`。
++- 4:人裁那筆 kill-log 帶得出失敗原因的摘錄。
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index e5b23a16d..cea4a5e68 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -53891,22 +53891,32 @@ def t_extcode_single_source():
+     stacks = ("kt", "cs", "vue", "react", "swift", "node", "py", "java", "dart")
+     bad = []
+     for stk in stacks:
+         sp = [s for s in m._STACK_QUESTION_SPECS[stk] if s["id"] == f"{stk}-extcode"]
+         if not (len(sp) == 1 and sp[0]["q"] is m._EXTCODE_Q and list(sp[0]["when"]) == list(m._EXTCODE_WHEN)
+                 and list(sp[0]["when_raw"]) == list(m._EXTCODE_WHEN_RAW) and sp[0].get("shape_only") is True):
+             bad.append(stk)
+     check("S4 九個棧的 extcode 題都引用同一組常數且帶 shape_only", not bad, str(bad))
+     check("S4 sql 沒有 extcode 題", not any(s["id"].endswith("-extcode") for s in m._STACK_QUESTION_SPECS["sql"]), "")
+     check("S4 鏡頭編譯的正規式就是同兩組字串", [p.pattern for p in m._EXTCODE_RX_PLAIN] == list(m._EXTCODE_WHEN) and [p.pattern for p in m._EXTCODE_RX_RAW] == list(m._EXTCODE_WHEN_RAW), "")
+-    src = _insp.getsource(m._lens_changed_lines) + _insp.getsource(m._extcode_hit)
+-    check("S4 鏡頭用同一支過濾與正規化", "_stack_changed_ok(" in src and "_vendored_skip(" in src and "_stack_norm_line(" in src, "")
++    import ast as _ast
++    import textwrap as _tw
++
++    def _calls(fn):
++        """函式本體裡真正呼叫到的名字(解析語法樹;docstring 與註解裡提到的不算)。"""
++        tree = _ast.parse(_tw.dedent(_insp.getsource(fn)))
++        return {n.func.id for n in _ast.walk(tree) if isinstance(n, _ast.Call) and isinstance(n.func, _ast.Name)}
++    called = _calls(m._lens_changed_lines) | _calls(m._extcode_hit)
++    # 鏡頭的路徑篩選收進 _kt_sit_path_ok(情境段與型錄自檢共用,情境決策點窮舉計劃),它再叫 _stack_changed_ok:往下查一層
++    if "_kt_sit_path_ok" in called:
++        called |= _calls(m._kt_sit_path_ok)
++    check("S4 鏡頭用同一支過濾與正規化", {"_stack_changed_ok", "_vendored_skip", "_stack_norm_line"} <= called, str(sorted(called)))
+ 
+ 
+ def t_impact_hook_shebang_and_ttl_mark():
+     """主session鏡頭利用率_計劃 前置修正:①無副檔名檔靠 shebang 入樣(先解絕對路徑、安全讀首行、二進位/不存在不算)
+     ②TTL 判定與寫標記拆開(mark=False 不寫;_ttl_mark 才寫)。"""
+     import importlib.util, tempfile as _tf, os as _os
+     from importlib.machinery import SourceFileLoader
+     hook_path = str(Path(__file__).resolve().parent / "hooks" / "claude" / "impact-hook.py")
+     loader = SourceFileLoader("impact_hook_mod_shebang", hook_path)
+     spec = importlib.util.spec_from_loader("impact_hook_mod_shebang", loader)
+diff --git a/skills/lumos-project-notes/commands/INDEX.md b/skills/lumos-project-notes/commands/INDEX.md
+index 4674d3e6d..d0c49599d 100644
+--- a/skills/lumos-project-notes/commands/INDEX.md
++++ b/skills/lumos-project-notes/commands/INDEX.md
+@@ -28,20 +28,20 @@
+ 
+ ## 二、十類子檔
+ 
+ | 你正在… | 開這個子檔 | 裡面有 |
+ |---|---|---|
+ | 進場,想搞懂現況 | `commands/01-進場查脈絡.md` | search / context / show / contracts / links / backlinks / map / query / decisions / recent / stats / export / handoff / events |
+ | 動手前,想知道會碰到什麼 | `commands/02-動手前算波及.md` | impact / pitfalls / test-layers / testmap / cochange / delguard / link-candidates / about-code |
+ | 寫／掃測試、寫回圖譜(品質、分類、Issue、決策) | `commands/03-寫回圖譜.md` | new / set / summary-add / summary-line / updated-sync / append / remove / decision-add·supersede·reindex / rel-cascade / self-audit / signoff / sync-verified-by / archive / spec-trace / graph-rename.sh / test-quality |
+ | 寫完想確認沒寫壞、收工前體檢 | `commands/04-自檢與健康.md` | lint / note-shape --slots / doctor / stale / gov / drift-history / drift exam / drift scan·fix·ack(存量漂移) / fold-check / refcheck / lint-check / lint-watch / compose-metrics / macrobench / anchor |
+ | 設計 spec 要過審 | `commands/05-設計審查迴圈.md` | prose-lint / loop list / loop next / loop status / canary record / canary second / quote-check / seat-check / severity-check / decision-refs(T3養成、list/prune核對／撤誤填) / loop replay / loop verify-progress / loop compress / loop canary-stats / loop capture-counts / loop cap-decision / loop retro / loop retro-stats |
+-| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check·blind-judge / situation-rule(情境題人裁寫回規格) / room-guard·test-guard / note-audit prepare·record·check·skip(筆記內容審)·reread-{prepare,record,check}(回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add(--covers、--try)·kill-rm(不帶 --id 列出)·kill(--id) / ci-wait·ci-status / arch-template / push-range / test-durations / push-summary / 離線收斂評測 |
++| 代碼要推、要過高風險審 | `commands/06-代碼審與推送.md` | pitfalls --diff / loop fix-check / code-loop pass·skip·check·blind-judge / situation-rule(人裁寫回) / room-guard·test-guard / note-audit prepare·record·check·skip·reread-*(回頭重讀) / guard list·scaffold·bind·audit·trace·kill-add·kill-rm·kill / ci-wait·ci-status / arch-template / push-range / test-durations / push-summary / 離線收斂評測 |
+ | 裝機、更新、拆機(人工操作) | `commands/07-安裝維運.md` | bootstrap / init / install / update / deinit / teardown / uninstall / sqlfluff-sarif / stylelint-sarif / dart-sarif |
+ | 想知道哪些是 hook 自動跑、不用手敲 | `commands/08-自動跑的.md` | pre-commit / pre-push / post-commit / Claude 與 Codex 的 hooks 各自呼叫了什麼(兩家同一批檔;Codex 收工會擋一次) |
+ | 接手陌生/舊專案,圖譜空或稀疏 | `commands/09-節點還原.md` | 七步還原:init 骨架 / 錨點定位 / 考古 why / 落節點蓋 regen 章 / 合約候選 / 交叉查核雙軌留痕 |
+ | 功能碰登入、權限、付款、個資 | `commands/10-資安護欄.md` | 登記 / 證據 / 人審簽章 / 擋下代碼 |
+ 
+ ## 三、三條不變的規矩
+ 1. **先讀程式碼,再查脈絡**(理由、限制、事故)。改 code 前跑 `lumos impact --file <檔>`;不解釋可以,不查不行。筆記與程式衝突怎麼裁,照專案 CLAUDE.md／AGENTS.md 的紀律區塊。
+ 2. 改了會影響行為、決策、驗證的 code,當次寫回圖譜。**先問程式碼推不推得出來**:推得出來的別抄;程式碼答不了的現況同一行帶 `[來源:…]`;理由用 `WHY:`、限制用 `RULE:`(退場條件)、事故用 `PITFALL:`(防回歸)。刪除的測試改 `[test-gone:名稱]`。詳見 `commands/03-寫回圖譜.md`。
+ 3. 寫完節點跑 `lumos lint <節點>`;收工跑 `lumos doctor`。
