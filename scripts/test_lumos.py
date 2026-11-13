@@ -134414,12 +134414,18 @@ def t_situation_rule_interrupt():
             os.environ.update(o_env)
         check("①中斷 → rc2、計劃不動、治理帳沒有 situation-rule", rc == 2 and plan.read_bytes() == before and not _srl_gov(root), err.getvalue()[-300:])
         d = Path(tempfile.mkdtemp(prefix="gctl-srl-int-"))
+        # CI 用 `&` 在背景跑分片,非互動 shell 的背景程序繼承「忽略 SIGINT」,interrupt_main 在那種情況什麼都不做;
+        # 這裡暫時裝回 Python 預設的 Ctrl-C 處理,模擬使用者在終端按 Ctrl-C 的真實情況,跑完還原。
+        import signal as _sg
+        o_int = _sg.signal(_sg.SIGINT, _sg.default_int_handler)
         threading.Timer(1.0, _thread.interrupt_main).start()
         got = None
         try:
             m._kill_run("echo $$ > pid; sleep 30", d, 60)
         except KeyboardInterrupt:
             got = "interrupted"
+        finally:
+            _sg.signal(_sg.SIGINT, o_int)
         pid = int((d / "pid").read_text().strip()) if (d / "pid").exists() else None
         alive = True
         if pid:
