@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-08-22
-updated: 2026-11-08
+updated: 2026-11-14
 about_code_stamp: batch-2026-08-23/2026-08-23/5461ed371d06
 self_audit: sonnet/2026-08-30
 responsibility: 負責推送前與 CI 跑哪些測試:合約測試閘(綁了 [test:] 的測試當場跑)、推送前掛鉤的閘順序與一次列出全部擋下原因、CI 的範圍判定與測試要的外部工具安裝;不負責各道閘自己的判定(歸各閘的家)
@@ -57,6 +57,8 @@ summary: |-
   WHY:pre-push 呼叫 spec-gate --push-check 回 1 時印通用的「推送前規格閘擋下,原因見上面列的每一條」(擋下記錄的理由同樣改通用),不再只講風險低計劃的條款測試 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 2] [因:push-check 擋的原因已有條款測試、預期值表簽核、新計劃的〈依據來源〉三種,固定文案會把缺〈依據來源〉講成測試沒綠] [test:t_psrc_hook_generic_message]
   PITFALL:純文件推送時 CI 只跑 prep 工作的文件子集,原本只裝 ruff;文件子集裡有要外部工具的測試(t_detekt_compose_rules_shared_config 等,CI 上找不到 ast-grep、detekt、compose-rules 外掛會判紅),#178 合併後主線紅 3 支,而且只印每片尾巴、查不出名字 [出處:2026-11-08 #178 主線 CI] [根因:三支工具只在全套的 shards 工作裝,prep 跑文件子集前沒裝] [修法:prep 在文件子集前照 shards 抄那三步、只多一行 if suite == docs(照專案每個工作各自抄的做法,不另立複合動作;代碼審 r1 架構對齊),兩處除了 if 逐字相同由 t_ci_yml_test_tools_in_sync 守;文件子集紅時照全套那步先撈 ✗ 行] [repro:CI=1 不給 LUMOS_AST_GREP 跑 python3.14 scripts/test_lumos.py --shard 4/4 --suite docs --graph,t_detekt_compose_rules_shared_config 紅]
   PITFALL:CI 用 curl 未驗證身分下載 detekt 與 compose-rules 外掛的發布檔,GitHub 有「未驗證使用者逾時增加」事件時 504 或連線中斷,#182 合併後主線同一類下載連紅四次(curl --retry 3 預設只等約 7 秒) [出處:2026-11-08 githubstatus 事件 Increase in timeouts for some unauthenticated users] [根因:發布檔下載沒帶 token、重試時間短過下載站故障] [修法:改 gh release download 帶 github.token,包 5 次逐次拉長的重試(共等 150 秒),sha256 校驗照留] [test:t_ci_yml_release_downloads_authenticated]
+  PITFALL:CI 全套第 1、2 份同機跑合計接近 30 分鐘上限,shards 工作會被 GitHub 取消而不是紅 [出處:2026-11-13 主線 CI 兩次 cancelled(#201、#203 合併後)] [根因:分片按測試順序切,重的測試集中在前兩份(1570、1693 秒,最輕 876 秒)] [防回歸:ci.yml shards timeout-minutes 45] [修法:分片依實測耗時重新平衡]
+  REVISIT:2026-12-15 依各份實測耗時重新平衡全套分片(目前第 2 份約 28 分、第 15 份約 15 分),平衡後把 shards 的 timeout-minutes 調回 30
 verified_by:
   - "[[Verification/2026-09-09_接入靜默失效七項落地]]"
   - "[[Verification/2026-09-11_多平台缺指令逐平台處理]]"
