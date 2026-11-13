@@ -286,6 +286,7 @@ nice-to-have 轉化成的 fix。
 3. **commit 慣例（pre-commit gate 硬擋 code 無圖譜 commit）**：把計劃節點
    {路徑} 的 Task {N} checkbox 勾成 [x] 同 commit 進。message 照 brief。
    不要 --no-verify。{branch} 直接 commit。
+4. **寫小工具前先找既有**:要寫原子寫、終端探測、讀檔、路徑或大小寫比對、讀帳、跳脫輸出這類小工具之前,先在被改的檔搜同功能的既有函式;報告列「搜了什麼、用了哪支,或為什麼不能用」。(情境題引規格出處代碼審三輪各冒一次「另寫一套而專案已有」,手冊早有這條但只寫在編排者那邊,跑滿回顧在卷證 `governance/review-reports/code-情境題引規格出處/cap-retro.json`)
 
 完成後完整報告寫 {task-N-report.md 路徑}（測試紅→綠輸出、build、commit hash、
 {任務特定證據}），回覆只回：狀態（DONE/DONE_WITH_CONCERNS/NEEDS_CONTEXT/BLOCKED）、
