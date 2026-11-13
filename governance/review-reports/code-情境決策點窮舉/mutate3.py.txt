@@ -1,0 +1,27 @@
+"""r3 修補逐道改壞,跑對應測試確認會紅;每次還原。用法:python3.14 mutate3.py <repo>"""
+import shutil, subprocess, sys
+from pathlib import Path
+repo = Path(sys.argv[1]); p = repo / "configs/ast-grep/kotlin-android/check.py"
+orig = p.read_text(encoding="utf-8")
+OLD = 'end = nxt + 1 if re.match(r"^\\s*(?:@[\\w.:]+(?:\\([^()]*\\))?\\s*)+$", code[nxt]) else nxt'
+M = [
+    ("註記改回一層括號的字面正規式", "        end = _annotation_end(code, nxt)\n", "        " + OLD + "\n"),
+    ("括號配對只認第一個收尾", "            if depth == 0:\n                return i, j", "            if c == cl:\n                return i, j"),
+    ("括號到檔尾沒關當註記", "        end = _one_annotation_end(code, i, j)\n        if end is None:\n            return k\n",
+     "        end = _one_annotation_end(code, i, j)\n        if end is None:\n            return len(code)\n"),
+    ("行數對不上不報", "    if not len(raw) == len(code) == len(kept):", "    if False:"),
+    ("非整格不還原直線", "sn[0] if whole else _unpipe(c[2])", "sn[0] if whole else c[2]"),
+    ("範本檔圍欄沒關不報", '    if _fence_regions(env["templates"].splitlines(), False)[1]:', "    if False:"),
+]
+try:
+    for label, a, b in M:
+        if orig.count(a) != 1:
+            print(f"?? {label}: 找不到改壞點({orig.count(a)})"); continue
+        p.write_text(orig.replace(a, b), encoding="utf-8")
+        r = subprocess.run([sys.executable, "scripts/test_lumos.py", "-k", "bad_snippets_reach"], cwd=repo, capture_output=True, text=True)
+        last = [ln for ln in r.stdout.splitlines() if "passed" in ln][-1:] or ["?"]
+        print(f"{'紅 ' if ' 0 failed' not in last[0] else '綠!'} {label}: {last[0]}")
+finally:
+    p.write_text(orig, encoding="utf-8")
+    for d in (repo / "configs/ast-grep/kotlin-android").rglob("__pycache__"):
+        shutil.rmtree(d, ignore_errors=True)

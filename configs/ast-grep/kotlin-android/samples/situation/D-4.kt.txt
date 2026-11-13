@@ -3,6 +3,10 @@
 class SearchVm(private val repo: Repo) : ViewModel() {
     val results = query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 }
+// === main-ok 只要最新一次的轉換:mapLatest(新值來時取消前一個轉換)
+class SearchVm(private val repo: Repo) : ViewModel() {
+    val results = query.mapLatest { repo.search(it) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+}
 // === main-ok 命令式:先取消前一個 Job 再 launch
 class SearchVm(private val repo: Repo) : ViewModel() {
     private var searchJob: Job? = null
@@ -24,15 +28,31 @@ class UploadVm(private val repo: Repo) : ViewModel() {
         viewModelScope.launch { for (u in queue) repo.upload(u) }
     }
 }
+// === alt-ok 每一次都要做完:flatMapConcat 依序上傳
+class UploadVm(private val repo: Repo) : ViewModel() {
+    val done = uploads.flatMapConcat { u -> flow { emit(repo.upload(u)) } }
+}
+// === alt-ok 每一次都要做完、順序不重要:flatMapMerge 並行上傳
+class UploadVm(private val repo: Repo) : ViewModel() {
+    val done = uploads.flatMapMerge(concurrency = 4) { u -> flow { emit(repo.upload(u)) } }
+}
 // === bad API-8 每次呼叫都 launch,沒取消前一個
 class SearchVm(private val repo: Repo) : ViewModel() {
     fun search(q: String) {
         viewModelScope.launch { _state.value = repo.search(q) }
     }
 }
-// === bad 搜尋框用 flatMapConcat
+// === bad main 搜尋框用 flatMapConcat(flatMapConcat 本身是「每一次都要做完」時合法的例外寫法,只對標準寫法算錯)
 class SearchVm(private val repo: Repo) : ViewModel() {
     val results = query.debounce(300).flatMapConcat { repo.search(it) }
+}
+// === bad main 搜尋框用 flatMapMerge、沒有 debounce(觸發字只能靠操作符本身;flatMapMerge 是順序不重要時的例外寫法,只對標準寫法算錯)
+class SearchVm(private val repo: Repo) : ViewModel() {
+    val results = query.flatMapMerge { repo.search(it) }
+}
+// === bad main 搜尋框用 flatMapConcat、沒有 debounce(觸發字只能靠操作符本身;只對標準寫法算錯)
+class SearchVm(private val repo: Repo) : ViewModel() {
+    val results = query.flatMapConcat { repo.search(it) }
 }
 // === bad FLOW-22 collectLatest 用在不能被中斷的寫入
 class SyncVm(private val db: Db) : ViewModel() {

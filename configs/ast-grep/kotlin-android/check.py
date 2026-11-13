@@ -8,6 +8,7 @@
 用法:python3 check.py [--sg <ast-grep 執行檔>] [--json]
 退出碼:0 全過、1 有問題、2 找不到 ast-grep。零依賴(只用標準庫)。
 """
+import hashlib
 import json
 import os
 import re
@@ -200,7 +201,7 @@ def dt_evidence_parse(cell):
         if part == _NONE_TRIGGER:
             out[key] = None
             continue
-        pats = [x.replace("\\|", "|") for x in re.findall(r"`([^`]+)`", part)]
+        pats = _snippets(part)
         if not 1 <= len(pats) <= 3 or re.sub(r"`[^`]+`", "", part).strip():
             probs.append(f"證據樣式的{name}:要寫「(無)」或一到三條反引號包住的正規式")
             continue
@@ -597,6 +598,15 @@ def _stats_expected(text, rows, rules):
              ("待查證代號待查", r"- 待查證:[^\n]*?規則代號待查 (\d+) 列", sum(1 for a, _b in need if a)),
              ("待查證來源待核對", r"- 待查證:[^\n]*?來源待核對 (\d+) 列", sum(1 for _a, b in need if b)),
              ("接電證據", r"- 接電證據:(\d+) 筆", len(wiring_table(text)[0]))]
+    _head, api_rows, _has = _api_table(text)
+    reach_rows, _rhas = _unreach_table(text)
+    items = [x for _n, its, _r in api_rows for x in its]
+    want += [("API 公開名稱", r"- API 決策點:公開名稱 (\d+)", len(api_rows))]
+    want += [(f"API 歸屬 {k}", rf"- API 決策點:[^\n]*?{k} (\d+)", sum(1 for x in items if _api_item_kind(x) == k))
+             for k in ("D-n", "撞名", "決策不問主表列", "決策不問代碼審", "無決策")]
+    want += [("叫不出的單位", r"- 叫不出的壞寫法:(\d+) 個", len(reach_rows))]
+    want += [(f"叫不出改由 {k}", rf"- 叫不出的壞寫法:[^\n]*?{k} (\d+)", sum(1 for _a, _b, _c, ro, _w in reach_rows if ro.split(" ")[0] == k))
+             for k in ("規則", "範本", "代碼審", "不是寫法")]
     if rules is not None:
         want += [("規則包條數", r"- 規則包條數:(\d+)", len(rules)),
                  ("不接閘條數", r"- 規則包條數:[^\n]*?其中 (\d+) 條在不接閘", sum(1 for r in rules if r.get("dir") == "rules-unwired"))]
@@ -751,6 +761,594 @@ def situation_sample_problems(lumos=None):
     return out
 
 
+# ── API 決策點與壞寫法反查(Projects/情境決策點窮舉與壞寫法要叫得出_計劃)──────────────────────────────
+# 推送前的情境題只在「被問到」時守得住。兩道自檢讓「沒被問到」不再沒人知道:
+# ①〈API 決策點〉:協程核心函式庫的公開名稱(釘版 klib 清單 + 手列的 JVM 專屬名稱)每個恰好歸類一次,歸到情境列的要被
+#   那列觸發字搜得到,反過來觸發字搜得到的名稱也要歸到那列;
+# ②〈叫不出的壞寫法〉:情境列每個對應檢查的每段壞寫法片段(沒有片段算一個 <無片段>),單獨包成一支檔要叫得出那一列,
+#   叫不出就要在表上寫明改由誰抓,改由在片段層級驗(規則看壞例樣本的 // BAD 行、範本看那個對應檢查的壞寫法小節)。
+# 兩道都要借 scripts/lumos 的觸發字比對與切段(同 situation_sample_problems),所以不放進 catalog_problems。
+_API_TITLE = "API 決策點"
+_UNREACH_TITLE = "叫不出的壞寫法"
+_API_ANCHORS = ("flatMapLatest", "Mutex", "Lazily", "UNLIMITED", "trySend")
+_API_MIN_NAMES = 300
+_API_HEAD_RE = re.compile(r"^母體:kotlinx-coroutines-core (\S+),klib (\S+) sha256 ([0-9a-f]{64}),jvm (\S+) sha256 ([0-9a-f]{64})\s*$", re.MULTILINE)
+_API_SKIP_NAMES = frozenset(("equals", "hashCode", "toString", "copy", "values", "valueOf", "entries"))
+_API_SIG_RE = re.compile(r"^([\w.]+)/([^|]+)\|(.*)$")
+_API_ITEM_RE = re.compile(r"^(?:(D-[1-9]\d*)|撞名 (D-[1-9]\d*)|決策不問 ((?:[A-Z]+-[1-9]\d*)|代碼審)|(無決策))$")
+_STOPWORD_REASON = "停用字,不帶決策:"
+_HOMONYM_REASON = "同名異義:"
+_NO_SNIPPET = "<無片段>"
+_ROUTE_RE = re.compile(r"^(?:規則 (kt-[\w-]+)|範本 (T\d+)|(代碼審)|(不是寫法))$")
+_SINGLE_IDENT_RE = re.compile(r"^[A-Za-z_][\w.]*(?:\(\))?$")
+BAD_HEADING_RE = re.compile(r"^### 壞寫法[::]\s*([A-Z]+-\d+)(?=\s|$)")   # 範本檔每組裡的壞寫法小節;小節到下一個 ### 或 ## 為止
+SCAN_FAILED = object()   # --sg 模式但掃描逾時或失敗:反查的「規則」改由一律判問題(跟「不在 --sg 模式」的 None 分開)
+_REACH_TEST_PATH = "app/src/test/java/x/XTest.kt"
+_REACH_MAIN_PATH = "app/src/main/java/x/X.kt"
+
+
+def coroutines_api_dir():
+    return HERE / "coroutines-api"
+
+
+def _cap(n):
+    return n[:1].upper() + n[1:]
+
+
+def _api_klib_decls(ktext):
+    """klib 清單 → ([(套件, 鏈段落, 接收者完整名或 None, 是不是屬性, 是不是平台限定)], {完整名: object|enum})。只讀簽名註解。"""
+    decls, kinds, seen_decl, pending = [], {}, False, False
+    for ln in ktext.splitlines():
+        if ln.strip().startswith("// Targets:"):
+            pending = seen_decl          # 檔頭那一行(第一個宣告之前)不算平台標註
+            continue
+        decl, _sep, sig = ln.partition(" // ")
+        m = _API_SIG_RE.match(sig.strip()) if _sep else None
+        if not m or not decl.strip():
+            continue
+        seen_decl = True
+        pkg, chain, rest = m.groups()
+        if re.search(r"\bobject\b", decl):
+            kinds[f"{pkg}/{chain}"] = "object"
+        elif re.search(r"\benum class\b", decl):
+            kinds[f"{pkg}/{chain}"] = "enum"
+        recv = re.match(r"@([\w.]+)\{", rest)
+        decls.append((pkg, chain.split("."), recv.group(1) if recv else None, bool(re.search(r"\b(?:val|var)\b", decl)), pending))
+        pending = False
+    return decls, kinds
+
+
+def _api_companions(jtext):
+    """klib 清單不標伴生物件;伴生物件在 JVM 是外層類別的靜態欄位(`static final field Factory L…/Channel$Factory;`)→ {完整名}。"""
+    out = set()
+    for typ in re.findall(r"static final field (?:\w+) L([\w/]+\$\w+);", jtext):
+        pkg_path, cls = typ.rsplit("/", 1)
+        out.add(pkg_path.replace("/", ".") + "/" + cls.replace("$", "."))
+    return out
+
+
+def _api_skip(pkg, parts, companions):
+    name = parts[-1]
+    return (name.startswith(("<", "_")) or name in _API_SKIP_NAMES or re.fullmatch(r"component\d+", name) is not None
+            or "$" in name or "-impl" in name or any(seg in ("internal", "debug") for seg in pkg.split("."))
+            or f"{pkg}/{'.'.join(parts)}" in companions)
+
+
+def _api_visible(pkg, parts, recv, is_prop, companions, kinds):
+    """可見寫法:object 成員、伴生物件成員、列舉值寫成「外層.名稱」(伴生物件那段拿掉);頂層擴充屬性寫成「接收者.名稱」;其他沒有。"""
+    name, parent = parts[-1], f"{pkg}/{'.'.join(parts[:-1])}"
+    if len(parts) > 1 and (parent in companions or kinds.get(parent) in ("object", "enum")):
+        kept = [p for k, p in enumerate(parts[:-1]) if f"{pkg}/{'.'.join(parts[:k + 1])}" not in companions]
+        return {".".join([*kept, name])}
+    if recv and is_prop and len(parts) == 1:
+        return {f"{recv.split('.')[-1]}.{name}"}
+    return set()
+
+
+def _api_jvm_only(only, jtext, names):
+    """jvm-only.txt 每一行「名稱 | JVM 清單裡的寫法」→ 加進 names,回問題清單。"""
+    probs = []
+    if not only.is_file():
+        return probs
+    for no, ln in enumerate(only.read_text(encoding="utf-8").splitlines(), 1):
+        if not ln.strip() or ln.lstrip().startswith("#"):
+            continue
+        left, _sep, right = (x.strip() for x in ln.partition("|"))
+        if not left or not right:
+            probs.append(("<api>", f"jvm-only.txt 第 {no} 行要寫「名稱 | JVM 清單裡的寫法」"))
+        elif right not in jtext:
+            probs.append(("<api>", f"jvm-only.txt 第 {no} 行右欄「{right}」不在 JVM 清單"))
+        elif left in names:
+            probs.append(("<api>", f"jvm-only.txt 第 {no} 行「{left}」klib 已有,不用手列"))
+        else:
+            names[left] = set()
+    return probs
+
+
+def _api_names(api_dir, version):
+    """母體 → ({名稱: 可見寫法集合}, 問題清單)。只讀 klib 清單每行的簽名註解(`套件/鏈|…`),不解析宣告部分(泛型、fun interface
+    這類形狀 klib 文法沒有公開規格);JVM 專屬名稱只來自同目錄的 jvm-only.txt(左欄名稱 | 右欄 JVM 清單裡的寫法)。"""
+    try:
+        ktext = (api_dir / f"kotlinx-coroutines-core-{version}.klib.api").read_text(encoding="utf-8")
+        jtext = (api_dir / f"kotlinx-coroutines-core-{version}.api").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        return {}, [("<api>", f"讀不到母體檔({e.__class__.__name__}:{e})")]
+    decls, kinds = _api_klib_decls(ktext)
+    companions = _api_companions(jtext)
+    names, limited = {}, {}
+    for pkg, parts, recv, is_prop, lim in decls:
+        if _api_skip(pkg, parts, companions):
+            continue
+        names.setdefault(parts[-1], set()).update(_api_visible(pkg, parts, recv, is_prop, companions, kinds))
+        limited[parts[-1]] = limited.get(parts[-1], True) and lim
+    for n in [n for n, lim in limited.items() if lim and n not in jtext and _cap(n) not in jtext]:
+        del names[n]
+    return names, _api_jvm_only(api_dir / "jvm-only.txt", jtext, names)
+
+
+def _api_shapes(name, vis, reverse=False):
+    """名稱的比對形狀:正向與停用字比簡名、可見寫法、簡名(;反向只比簡名與簡名((不然 object 名當觸發字會逼每個成員歸屬)。"""
+    return {name, name + "("} | (set() if reverse else set(vis))
+
+
+def _api_table(text):
+    """〈API 決策點〉→ (母體那一行的比對結果或 None, [(名稱, 歸屬項清單, 理由)], 節是否存在)。"""
+    sec = _section(text, _API_TITLE)
+    if sec is None:
+        return None, [], False
+    rows = []
+    for ln in sec.splitlines():
+        if not ln.startswith("|") or re.match(r"^\|\s*(?:名稱\s*\||-{3})", ln):
+            continue
+        c = [*_cells(ln), "", "", ""][:3]
+        rows.append((c[0].strip("`"), [x.strip() for x in _norm(c[1]).split("、") if x.strip()], c[2]))
+    return _API_HEAD_RE.search(sec), rows, True
+
+
+def _api_item_kind(x):
+    """歸屬項 → 統計用的種類:D-n、撞名、決策不問主表列、決策不問代碼審、無決策;認不得回空字串。"""
+    m = _API_ITEM_RE.match(x)
+    if not m:
+        return ""
+    if m.group(1):
+        return "D-n"
+    if m.group(2):
+        return "撞名"
+    if m.group(3):
+        return "決策不問代碼審" if m.group(3) == "代碼審" else "決策不問主表列"
+    return "無決策"
+
+
+def _unpipe(s):
+    """表格跳脫的 \\| 還原成 |;型錄格子的還原只走這一支。"""
+    return s.replace("\\|", "|")
+
+
+def _snippets(cell):
+    """格子 → 反引號片段清單(\\| 照 _unpipe 還原;不做長度或字元過濾)。主表壞寫法欄、決策表證據樣式、〈叫不出的壞寫法〉片段格都走這一支。"""
+    return [_unpipe(s) for s in re.findall(r"`([^`]+)`", cell)]
+
+
+def _word_in(lumos, needle, hay):
+    return re.search(lumos._kt_trigger_re(needle), hay) is not None
+
+
+def _referenced_checks(dt_rows):
+    return {cid for r in dt_rows if not r["retired"] for cid in re.findall(r"[A-Z]+-\d+", r["checks"])}
+
+
+def _api_mother_problems(head, api_dir):
+    """母體兩份檔的 sha256 → 問題。"""
+    out = []
+    ver = head.group(1)
+    for kind, want in (("klib", head.group(3)), ("jvm", head.group(5))):
+        p = api_dir / f"kotlinx-coroutines-core-{ver}{'.klib' if kind == 'klib' else ''}.api"
+        got = hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else None
+        if got != want:
+            out.append(("<api>", f"{kind} 母體 {p.name} 的 sha256 跟第一行對不上(母體被改過或檔不在)"))
+    return out
+
+
+class _ApiCtx:
+    """API 決策點核對要用的東西一次備好:母體名稱、決策表、觸發字正規式、被情境列引用的主表列。"""
+
+    def __init__(self, lumos, rows, names, dt_rows):
+        self.lumos, self.rows, self.names = lumos, rows, names
+        self.by_id = {r["id"]: r for r in dt_rows}
+        self.rx = {r["id"]: [re.compile(lumos._kt_trigger_re(t)) for t in r["triggers"]] for r in dt_rows if not r["retired"]}
+        self.refd = _referenced_checks(dt_rows)
+
+    def mentioned_by(self, shapes):
+        """哪些被情境列引用的主表列,壞寫法片段裡以整字寫到這些形狀。"""
+        return [cid for cid in sorted(self.refd) if cid in self.rows
+                and any(_word_in(self.lumos, s, sn) for s in shapes for sn in _snippets(self.rows[cid][2]))]
+
+
+def _api_item_problems(ctx, name, m, reason=""):
+    """一個歸屬項 → 問題清單。"""
+    shapes = _api_shapes(name, ctx.names[name])
+    d, crash, ask = m.group(1) or m.group(2), m.group(2), m.group(3)
+    if d:
+        r = ctx.by_id.get(d)
+        if r is None or r["retired"]:
+            return [f"{d} 不在決策表或是停用列"]
+        return [] if any(p.search(s) for p in ctx.rx[d] for s in shapes) else [f"{'撞名 ' if crash else ''}{d} 的觸發字搜不到這個名稱"]
+    if not ask:
+        return []
+    hit = ctx.mentioned_by(shapes)
+    if ask == "代碼審":
+        if not hit or _norm(reason).startswith(_HOMONYM_REASON):
+            return []          # 片段寫到的同名字是別的東西:理由以「同名異義:」開頭寫明,不必硬指不相干的列
+        return [f"決策不問 代碼審,但 {'、'.join(hit)} 的壞寫法片段寫到它(要指向那一列;片段裡的同名字是別的東西就把理由寫成「{_HOMONYM_REASON}…」)"]
+    return [] if ask in hit else [f"決策不問 {ask}:那一列不是情境列的對應檢查,或它的壞寫法片段沒有以整字寫到這個名稱"]
+
+
+def _api_row_problems(ctx, table):
+    """表上每一列 → (問題清單, {名稱: (歸屬項, 理由)})。"""
+    out, seen, attrs = [], set(), {}
+    for name, items, reason in table:
+        if name in seen:
+            out.append((name, "〈API 決策點〉同一個名稱出現兩列"))
+            continue
+        seen.add(name)
+        if not reason.strip():
+            out.append((name, "理由不准空白"))
+        if name not in ctx.names:
+            out.append((name, "表上有、母體沒有(升版拿掉或打錯)"))
+            continue
+        parsed = [_API_ITEM_RE.match(x) for x in items]
+        if not items or not all(parsed) or len(set(items)) != len(items) or ("無決策" in items and len(items) > 1):
+            out.append((name, f"歸屬欄寫法不對:「{'、'.join(items)}」(五種:D-n、撞名 D-n、決策不問 <主表列編號>、決策不問 代碼審、無決策;無決策只能單獨)"))
+            continue
+        attrs[name] = (items, reason)
+        out += [(name, p) for m in parsed for p in _api_item_problems(ctx, name, m, reason)]
+    out += [(name, "母體裡有、表上沒有(升版多出來的名稱要分類)") for name in sorted(set(ctx.names) - seen)]
+    return out, attrs
+
+
+def _api_sync_problems(ctx, attrs):
+    """反向同步(每一列各自覆蓋)與停用字規則 → 問題清單。"""
+    out = []
+    for rid, pats in ctx.rx.items():
+        for name, (items, _r) in attrs.items():
+            if rid not in items and f"撞名 {rid}" not in items and any(
+                    p.search(s) for p in pats for s in _api_shapes(name, ctx.names[name], reverse=True)):
+                out.append((name, f"{rid} 的觸發字搜得到它,歸屬要有 {rid} 或 撞名 {rid}"))
+    for name, (items, reason) in attrs.items():
+        if items == ["無決策"] and STOP_TRIGGERS & _api_shapes(name, ctx.names[name]) and not _norm(reason).startswith(_STOPWORD_REASON):
+            out.append((name, f"停用字表裡的名稱標無決策,理由要以「{_STOPWORD_REASON}」開頭並寫為什麼"))
+    return out
+
+
+def api_decision_problems(text, rows, api_dir=None, lumos=None):
+    """〈API 決策點〉自檢 → [(名稱或 <api>, 原因)](計劃範圍 1、2)。rows 是 main_rows 的結果。"""
+    if lumos is None:
+        lumos, why = load_lumos()
+        if lumos is None:
+            return [("<api>", "要載入 scripts/lumos:" + why)]
+    api_dir = Path(api_dir) if api_dir else coroutines_api_dir()
+    head, table, has = _api_table(text)
+    if not has:
+        return [("<api>", f"找不到〈{_API_TITLE}〉節")]
+    if head is None:
+        return [("<api>", f"〈{_API_TITLE}〉第一行要是「母體:kotlinx-coroutines-core <版本>,klib <網址> sha256 <值>,jvm <網址> sha256 <值>」")]
+    out = _api_mother_problems(head, api_dir)
+    names, nprobs = _api_names(api_dir, head.group(1))
+    out += nprobs
+    missing_anchor = [a for a in _API_ANCHORS if a not in names]
+    if missing_anchor or len(names) < _API_MIN_NAMES:
+        out.append(("<api>", f"抽法壞了:名稱 {len(names)} 個(下限 {_API_MIN_NAMES}),抽不到錨點 {missing_anchor}"))
+    dt_rows, dprobs = dt_table(text)
+    if dprobs:
+        return out + [(a, "決策表讀不懂,API 決策點自檢沒跑完:" + b) for a, b in dprobs]
+    ctx = _ApiCtx(lumos, rows, names, dt_rows)
+    row_probs, attrs = _api_row_problems(ctx, table)
+    return out + row_probs + _api_sync_problems(ctx, attrs)
+
+
+def _reach_units(text, rows, dt_rows):
+    """反查單位 → [(情境列, 對應檢查, 片段或 <無片段>)];停用列不算,觸發字寫(無)的列照算。"""
+    out = []
+    for r in dt_rows:
+        if r["retired"]:
+            continue
+        for cid in re.findall(r"[A-Z]+-\d+", r["checks"]):
+            if cid not in rows:
+                continue
+            sn = _snippets(rows[cid][2])
+            out += [(r["id"], cid, s) for s in sn] if sn else [(r["id"], cid, _NO_SNIPPET)]
+    return out
+
+
+def _reachable(lumos, unit, dt_rows):
+    rid, cid, snip = unit
+    if snip == _NO_SNIPPET:
+        return False
+    path = _REACH_TEST_PATH if cid.startswith("TEST-") else _REACH_MAIN_PATH
+    if not lumos._kt_sit_path_ok(path):
+        return False
+    code = "class X {\n    fun f() {\n        " + snip + "\n    }\n}\n"
+    return any(rid in sg["rows"] for sg in lumos._kt_sit_text_segments(path, code, dt_rows))
+
+
+def _unreach_table(text):
+    """〈叫不出的壞寫法〉→ ([(情境列, 對應檢查, 片段, 改由, 理由)], 節是否存在)。片段格整格恰好是一段反引號才取內文,
+    其餘(<無片段>、多段、反引號外還有字)照整格原文,對不上反查單位就會被報;兩種都做 \\| 還原。"""
+    sec = _section(text, _UNREACH_TITLE)
+    if sec is None:
+        return [], False
+    rows = []
+    for ln in sec.splitlines():
+        if not re.match(r"^\|\s*D-\d+\s*\|", ln):
+            continue
+        c = [*_cells(ln), "", "", "", "", ""][:5]
+        sn = _snippets(c[2])
+        whole = len(sn) == 1 and re.fullmatch(r"`[^`]*`", c[2]) is not None
+        rows.append((c[0], c[1], sn[0] if whole else _unpipe(c[2]), c[3], c[4]))
+    return rows, True
+
+
+def _norm_code(s):
+    """比對用:字串字面值清空、連續空白折成一個。"""
+    s = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _parts_in_order(lumos, snip, hay):
+    """片段以 … 或 ... 切段後,各段依序以整字出現在 hay 裡。"""
+    parts = [p.strip() for p in re.split(r"…|\.\.\.", _norm_code(snip)) if p.strip()]
+    if not parts:
+        return False          # 片段只有 … 或空白:沒有東西可比,不算比到
+    pos = 0
+    for part in parts:
+        m = re.compile(lumos._kt_trigger_re(part)).search(hay, pos)
+        if not m:
+            return False
+        pos = m.end()
+    return True
+
+
+_BAD_MARK_RE = re.compile(r"//\s*BAD(?![A-Za-z])")
+_ANNOTATION_NAME_RE = re.compile(r"[\w.:]+")
+_BRACKET_PAIRS = {"(": ")", "<": ">", "[": "]"}
+
+
+def _balanced_end(code, i, j):
+    """code[i][j] 是開括號 → 配對到的收尾括號之後的位置 (行, 欄);只數同一種括號,可跨行;到檔尾都沒關回 None。"""
+    op, cl, depth = code[i][j], _BRACKET_PAIRS[code[i][j]], 0
+    while i < len(code):
+        while j < len(code[i]):
+            c = code[i][j]
+            depth += (c == op) - (c == cl)
+            j += 1
+            if depth == 0:
+                return i, j
+        i, j = i + 1, 0
+    return None
+
+
+def _one_annotation_end(code, i, j):
+    """code[i][j] 是 `@` → 這一個註記結束後的位置 (行, 欄);`@[…]` 整組配對,`@名稱` 後面可接任意層 <…> 與 (…)。括號到檔尾都沒關回 None。"""
+    j += 1
+    if j < len(code[i]) and code[i][j] == "[":
+        return _balanced_end(code, i, j)
+    m = _ANNOTATION_NAME_RE.match(code[i], j)
+    j = m.end() if m else j
+    for opener in "<(":
+        if j < len(code[i]) and code[i][j] == opener:
+            end = _balanced_end(code, i, j)
+            if end is None:
+                return None
+            i, j = end
+    return i, j
+
+
+def _annotation_end(code, k):
+    """第 k 行起的註記段 → 註記之後的第一行程式在哪一行。照結構逐字元讀,不列舉寫法(一個註記怎麼讀見 _one_annotation_end),
+    一行可放幾個註記、參數可跨行。
+    回 k:第 k 行不是以 @ 開頭,或註記後面同一行就接著程式(例 `@Composable fun A()`);
+    回 i(>k):註記跨行、在第 i 行收尾後同一行接著程式;回 i+1:註記到第 i 行行尾就結束(整行只有註記),要從下一行繼續找。
+    括號到檔尾都沒關,當成不是註記,回 k。字串已先剝空,參數裡的字串不影響括號配對。"""
+    i, j = k, len(code[k]) - len(code[k].lstrip())
+    if not code[i][j:].startswith("@"):
+        return k
+    while True:
+        while j < len(code[i]) and code[i][j] in " \t":
+            j += 1
+        if j >= len(code[i]):
+            return i + 1
+        if code[i][j] != "@":
+            return i
+        end = _one_annotation_end(code, i, j)
+        if end is None:
+            return k
+        i, j = end
+
+
+def _sample_abs(f):
+    """壞例檔路徑 → 比對用的絕對路徑字串(ast-grep 回報的相對路徑以 HERE 為基準);_bad_lines 與 check() 的起訖行索引共用。"""
+    p = Path(f)
+    return str((p if p.is_absolute() else HERE / p).resolve())
+
+
+def _next_statement(code, start):
+    """從第 start 行(0 起)往下,跳過空行與只有註記的段落 → (語句開頭那一行, 比對用的程式);找不到回 None。
+    語句是那一行加上接著以 . 或 ?. 開頭的續行。"""
+    nxt = start
+    while True:
+        nxt = next((k for k in range(nxt, len(code)) if code[k].strip()), None)
+        if nxt is None:
+            return None
+        end = _annotation_end(code, nxt)
+        if end == nxt:
+            break
+        nxt = end
+    stmt = [code[nxt]]
+    for k in range(nxt + 1, len(code)):
+        if not code[k].lstrip().startswith((".", "?.")):
+            break
+        stmt.append(code[k])
+    return nxt, _norm_code(" ".join(stmt))
+
+
+def _bad_lines_in(lumos, text):
+    """一支壞例檔的全文 → ([(行號, 比對用的程式)], 問題或 None)。規則見 _bad_lines。"""
+    raw = text.split("\n")
+    code = lumos._strip_c_comments(text, blank_strings=True, keep_newlines=True, kotlin=True).split("\n")
+    kept = lumos._strip_c_comments(text, blank_strings=False, keep_newlines=True, kotlin=True).split("\n")
+    if not len(raw) == len(code) == len(kept):
+        return [], "去註解後行數對不上,判不了哪幾行標了 // BAD"
+    out = []
+    for no, ln in enumerate(raw, 1):
+        if len(_BAD_MARK_RE.findall(ln)) <= len(_BAD_MARK_RE.findall(kept[no - 1])):
+            continue                     # 這行的標記都還在「只拿掉註解」的版本裡=都在字串裡,不算
+        if code[no - 1].strip():
+            out.append((no, _norm_code(code[no - 1])))
+            continue
+        hit = _next_statement(code, no)
+        if hit is not None:
+            out.append((hit[0] + 1, hit[1]))
+    return out, None
+
+
+def _bad_lines(lumos, samples_dir, rule_id):
+    """samples/bad/<id>/ 底下標了 // BAD 的行 → ([(檔的絕對路徑, 行號, 比對用的程式)], 問題)。標記整字認(//BAD、// BAD:、
+    // BAD-NEXT 都算,// BADGE 不算);同一行有程式就比那一行,標記單獨一行就比它標的下一個語句(_next_statement:
+    下一個有程式的行,加上接著以 . 或 ?. 開頭的續行;只有註記的行跳過,註記照 _annotation_end 的結構讀(任意層括號、泛型、
+    @[…]、參數跨行),註記後面同一行接著程式的不跳)。去註解用 scripts/lumos 的 Kotlin 剝法;
+    標記要在註解裡才算(字串裡的 // BAD 不算)。三份行一律只照 \\n 切(換頁字元、U+2028 不斷行,跟 ast-grep 的行號一致)。"""
+    out, probs = [], []
+    for f in sorted((samples_dir / "bad" / rule_id).rglob("*.kt*")):
+        try:
+            text = f.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            probs.append(f"壞例檔 {f.name} 讀不了({e.__class__.__name__})")
+            continue
+        lines, why = _bad_lines_in(lumos, text)
+        if why:
+            probs.append(f"壞例檔 {f.name} {why}")
+        out += [(_sample_abs(f), no, ln) for no, ln in lines]
+    return out, probs
+
+
+def _fence_body(templates_text, group, cid):
+    """範本檔某一組裡標題是「### 壞寫法:<cid>」的每個小節的圍欄內文(同編號多節取聯集),併成一份字串。
+    找組走 template_sections;圍欄內外走 _visible_lines(keep_fenced 有無兩次的差就是圍欄內的行),不另寫圍欄判定。"""
+    lines = templates_text.splitlines()
+    secs = template_sections(templates_text)
+    starts = [i for g, i in secs if g == group]
+    if not starts:
+        return ""
+    a = starts[0]
+    b = min([i for _g, i in secs if i > a] or [len(lines)])
+    outside = {no - 1 for no, _ln in _visible_lines(lines)}
+    out, inside = [], False
+    for no, ln in _visible_lines(lines, keep_fenced=True):
+        i = no - 1
+        if not a <= i < b:
+            continue
+        if i in outside:
+            if ln.startswith("#"):
+                m = BAD_HEADING_RE.match(_norm(ln))
+                inside = bool(m and m.group(1) == cid)
+        elif inside:
+            out.append(ln)
+    return "\n".join(out)
+
+
+def _reach_unit_problems(lumos, units, listed, dt_rows):
+    """每個反查單位:叫不出卻沒列、叫得出卻還列著 → 問題。"""
+    out = []
+    for u in units:
+        reach = _reachable(lumos, u, dt_rows)
+        if not reach and u not in listed:
+            out.append((u[0], f"{u[1]} 的片段「{u[2]}」叫不出 {u[0]},〈{_UNREACH_TITLE}〉沒有這一列"))
+        elif reach and u in listed:
+            out.append((u[0], f"{u[1]} 的片段「{u[2]}」現在叫得出,〈{_UNREACH_TITLE}〉這一列過期了"))
+    return out
+
+
+def bad_snippet_reach_problems(text, rows, rules=None, samples_dir=None, templates_text=None, scan_index=None, lumos=None):
+    """〈叫不出的壞寫法〉自檢 → [(情境列或 <reach>, 原因)](計劃範圍 3)。scan_index:None=不在 --sg 模式、只做靜態核對;
+    SCAN_FAILED=--sg 但掃描失敗;字典 {(規則 id, 檔的絕對路徑): [(起始行, 結束行)]}=照起訖行核。"""
+    if lumos is None:
+        lumos, why = load_lumos()
+        if lumos is None:
+            return [("<reach>", "要載入 scripts/lumos:" + why)]
+    if templates_text is None:
+        templates_text = TEMPLATES.read_text(encoding="utf-8") if TEMPLATES.is_file() else ""
+    env = {"lumos": lumos, "rows": rows, "by_rule": {r["id"]: r for r in (load_rules() if rules is None else rules)},
+           "samples": Path(samples_dir) if samples_dir else HERE / "samples", "templates": templates_text, "scan_index": scan_index}
+    dt_rows, dprobs = dt_table(text)
+    if dprobs:
+        return [(a, "決策表讀不懂,反查沒跑:" + b) for a, b in dprobs]
+    table, has = _unreach_table(text)
+    if not has:
+        return [("<reach>", f"找不到〈{_UNREACH_TITLE}〉節")]
+    units = _reach_units(text, rows, dt_rows)
+    listed, out = {}, []
+    for r, c, s, route, why in table:
+        if (r, c, s) in listed:
+            out.append((r, f"〈{_UNREACH_TITLE}〉同一個(情境列, 對應檢查, 片段)出現兩列:{c}「{s}」"))
+        listed[(r, c, s)] = (route, why)
+    out += _reach_unit_problems(lumos, units, listed, dt_rows)
+    uset = set(units)
+    for (rid, cid, snip), (route, why) in listed.items():
+        if (rid, cid, snip) not in uset:
+            out.append((rid, f"〈{_UNREACH_TITLE}〉的 {cid}「{snip}」不是反查單位(片段已不在壞寫法欄,或那一對已有片段卻寫 {_NO_SNIPPET})"))
+        else:
+            out += [(rid, f"{cid}「{snip}」:{p}") for p in _route_problems(env, cid, snip, route, why)]
+    return out
+
+
+def _rule_route_problems(env, cid, snip, rule_id):
+    """改由「規則 <id>」→ 問題清單:規則在 rules/、訊息編號對、片段在 // BAD 行、--sg 時起訖行涵蓋。"""
+    r = env["by_rule"].get(rule_id)
+    if r is None or r.get("dir") != "rules" or not r["message"].startswith(f"[{cid}]"):
+        return [f"規則 {rule_id} 不在會擋的 rules/、或訊息開頭不是 [{cid}]"]
+    lines, probs = _bad_lines(env["lumos"], env["samples"], rule_id)
+    if probs:
+        return probs
+    hits = [(f, no) for f, no, ln in lines if _parts_in_order(env["lumos"], snip, ln)]
+    if not hits:
+        return [f"片段不在 samples/bad/{rule_id}/ 標了 // BAD 的行上"]
+    idx = env["scan_index"]
+    if idx is SCAN_FAILED:
+        return ["--sg 掃描逾時或失敗,驗不了規則有沒有報出這一行"]
+    if isinstance(idx, dict) and not any(a <= no <= b for f, no in hits for a, b in idx.get((rule_id, f), ())):
+        return [f"規則 {rule_id} 在壞例檔報出的節點,起訖行沒有涵蓋片段所在的 // BAD 行"]
+    return []
+
+
+def _template_route_problems(env, cid, snip, group):
+    """改由「範本 T<n>」→ 問題清單:不是單一識別字、跟通電批次對得上、片段在那組該對應檢查的壞寫法小節程式裡。"""
+    if _SINGLE_IDENT_RE.match(snip.strip()):
+        return ["片段只是一個識別字,不准用範本背書(只能用規則或代碼審)"]
+    if behavior_value(env["rows"][cid][9]) != f"範本 {group}":
+        return [f"範本 {group} 跟 {cid} 通電批次的「行為測試或正向約束=」對不上"]
+    if _fence_regions(env["templates"].splitlines(), False)[1]:
+        # 寬鬆讀法也關不上的圍欄:CommonMark 讓它吃到檔尾,後面各組的標題與程式都算進去,哪段屬於哪一組判不準,直接報
+        return [f"範本檔有沒關的圍欄,判不準範本 {group} 的小節程式到哪裡為止;先把圍欄關上"]
+    body = _norm_code(_fence_body(env["templates"], group, cid))
+    if not body:
+        return [f"範本 {group} 沒有「### 壞寫法:{cid}」小節的程式"]
+    return [] if _parts_in_order(env["lumos"], snip, body) else [f"片段不在範本 {group} 的「### 壞寫法:{cid}」小節程式裡"]
+
+
+def _route_problems(env, cid, snip, route, why):
+    m = _ROUTE_RE.match(route.strip())
+    if not m or not why.strip():
+        return ["改由只收「規則 <id>」「範本 T<n>」「代碼審」「不是寫法」四種,理由不准空白"]
+    rule_id, group, review, _notcode = m.groups()
+    if snip == _NO_SNIPPET and not review:
+        return [f"{_NO_SNIPPET} 只准改由代碼審"]
+    if rule_id:
+        return _rule_route_problems(env, cid, snip, rule_id)
+    if group:
+        return _template_route_problems(env, cid, snip, group)
+    return []
+
+
 _BEHAVIOR_RE = re.compile(r"行為測試或正向約束=([^;]*)")
 _TEMPLATE_VALUE_RE = re.compile(r"範本 (T\d+)")
 TEMPLATE_HEADING_RE = re.compile(r"^## (T\d+)(?:[ \t]|$)")   # 範本檔一組一節的標題;測試端也用這一條
@@ -833,14 +1431,18 @@ def _fence_regions(lines, strict):
     return regions, fence is not None
 
 
-def _visible_lines(lines):
+def _visible_lines(lines, keep_fenced=False):
     """圍欄外的行 → [(行號從 1 起, 原始行)]。先照 CommonMark 嚴格讀;讀完還有圍欄沒關,整份退回寬鬆讀法
-    (同字元、長度夠就算關)——跟 scripts/lumos 的 `_visible_lines` 同一個取捨。"""
+    (同字元、長度夠就算關)——跟 scripts/lumos 的 `_visible_lines` 同一個取捨。keep_fenced=True 時也留圍欄★內★的行
+    (圍欄標記行本身照樣不留;沒關的圍欄只有開頭那行是標記,內文一路到檔尾,照 CommonMark),同 scripts/lumos 的 keep_fenced。"""
     def _scan(strict):
         regions, unterminated = _fence_regions(lines, strict)
         hidden = set()
         for a, b in regions:
-            hidden.update(range(a, (b if b is not None else len(lines) - 1) + 1))
+            if keep_fenced:
+                hidden.update({a} if b is None else {a, b})
+            else:
+                hidden.update(range(a, (b if b is not None else len(lines) - 1) + 1))
         return [(i + 1, ln) for i, ln in enumerate(lines) if i not in hidden], unterminated
     out, unterminated = _scan(True)
     if unterminated:
@@ -915,6 +1517,13 @@ _TIMED_OUT = [False]   # 一次掃描逾時後,這次自我檢查剩下的掃描
 def scan(sg, cfg, target):
     """跑一次 ast-grep,回 [(ruleId, file, 起始行)](行從 1 起算,ast-grep 報的是比對到的節點的起始行);
     失敗或之前已逾時回 None。"""
+    got = scan_ranges(sg, cfg, target)
+    return None if got is None else [(rid, f, a) for rid, f, a, _b in got]
+
+
+def scan_ranges(sg, cfg, target):
+    """同 scan,但每筆多回節點的結束行:[(ruleId, file, 起始行, 結束行)]。反查的「規則」改由要看起訖行涵蓋片段那一行
+    (Projects/情境決策點窮舉與壞寫法要叫得出_計劃 範圍 4;既有 scan 的三元組呼叫端不動)。"""
     if _TIMED_OUT[0]:
         return None
     try:
@@ -932,7 +1541,7 @@ def scan(sg, cfg, target):
         if ln.strip():
             try:
                 d = json.loads(ln)
-                out.append((d["ruleId"], d["file"], d["range"]["start"]["line"] + 1))
+                out.append((d["ruleId"], d["file"], d["range"]["start"]["line"] + 1, d["range"]["end"]["line"] + 1))
             except (ValueError, KeyError, TypeError):
                 return None   # 輸出讀不懂就當這次掃描跑不起來,由呼叫端報「跑不起來」,不噴 traceback
 
@@ -1015,7 +1624,11 @@ def check(sg):
     cat_ids, _cat_text = catalog_ids()
     problems += message_problems(rules, cat_ids)
     problems += catalog_problems(rules)
-    problems += situation_sample_problems()
+    lumos, lumos_why = load_lumos()
+    problems += situation_sample_problems(lumos=lumos) if lumos else [("<situation>", "證據樣式自測要載入 scripts/lumos:" + lumos_why)]
+    cat_text = CATALOG.read_text(encoding="utf-8")
+    cat_rows = main_rows(cat_text)
+    problems += api_decision_problems(cat_text, cat_rows, lumos=lumos) if lumos else [("<api>", "要載入 scripts/lumos:" + lumos_why)]
     for d, cfg in CONFIGS:
         want = sum(1 for r in rules if r["dir"] == d)
         got, skipped = loaded_count(sg, cfg)
@@ -1043,9 +1656,16 @@ def check(sg):
     hits = {}
     cross_hits = {}        # (好例所屬規則, 命中的會擋規則) → 處數;好例應該是標準寫法,別條會擋規則也不該報
     cross_files_hit = set()   # cross- 檔被別條規則命中過(證明它真的是跨規則邊界案例)
+    scan_index = None
     for kind in ("bad", "good"):
-        for _d, cfg in CONFIGS:
-            got = scan(sg, cfg, HERE / "samples" / kind)
+        for d, cfg in CONFIGS:
+            ranged = scan_ranges(sg, cfg, HERE / "samples" / kind)
+            if kind == "bad" and d == "rules":
+                # 反查的「規則」改由要看會擋規則在壞例報出的節點起訖行(同一次掃描,不另掃)
+                scan_index = SCAN_FAILED if ranged is None else {}
+                for rule_id, f, a, b in ranged or ():
+                    scan_index.setdefault((rule_id, _sample_abs(f)), []).append((a, b))
+            got = None if ranged is None else [(rid, f, a) for rid, f, a, _b in ranged]
             if got is None:
                 problems.append(("<pack>", f"{cfg} 掃 samples/{kind} 跑不起來"))
                 continue
@@ -1082,6 +1702,10 @@ def check(sg):
                 problems.append((rid, f"好例誤報 {n} 處"))
             if good_cases(good) < 2:
                 problems.append((rid, "好例至少要兩段(頂格宣告算一段)"))
+    if lumos:
+        problems += bad_snippet_reach_problems(cat_text, cat_rows, rules=rules, scan_index=scan_index, lumos=lumos)
+    else:
+        problems.append(("<reach>", "要載入 scripts/lumos:" + lumos_why))
     test_only = [r for r in rules if r["test_only"]]
     if test_only:
         if not TEST_ONLY_ANCESTOR.is_dir():
@@ -1100,7 +1724,15 @@ def check(sg):
 
 def main(argv):
     if "--catalog-only" in argv:
-        probs = catalog_problems(load_rules()) + situation_sample_problems()
+        rules = load_rules()
+        lumos, why = load_lumos()
+        text = CATALOG.read_text(encoding="utf-8")
+        rows = main_rows(text)
+        if lumos:
+            probs = [*catalog_problems(rules), *situation_sample_problems(lumos=lumos), *api_decision_problems(text, rows, lumos=lumos),
+                     *bad_snippet_reach_problems(text, rows, rules=rules, lumos=lumos)]
+        else:
+            probs = [*catalog_problems(rules), ("<lumos>", "證據樣式自測、API 決策點與反查要載入 scripts/lumos:" + why)]
         for rid, why in probs:
             print(f"{rid}: {why}")
         print(f"型錄問題 {len(probs)} 個")

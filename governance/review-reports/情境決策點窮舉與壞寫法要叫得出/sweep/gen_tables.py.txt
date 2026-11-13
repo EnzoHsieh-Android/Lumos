@@ -1,0 +1,65 @@
+"""合成型錄〈API 決策點〉與〈叫不出的壞寫法〉兩節,插在〈統計〉之前(已有就換掉)。用法:python3.14 gen_tables.py <repo>"""
+import hashlib, importlib.machinery as M, importlib.util as U, re, sys
+from pathlib import Path
+sys.dont_write_bytecode = True
+repo = Path(sys.argv[1]); S = Path(__file__).parent
+def load(p, n):
+    l = M.SourceFileLoader(n, str(p)); s = U.spec_from_loader(n, l); m = U.module_from_spec(s); l.exec_module(m); return m
+kp = load(repo / "configs/ast-grep/kotlin-android/check.py", "kp"); lm = load(repo / "scripts/lumos", "lm")
+cur = load(S / "api-curated.py", "cur").CURATED
+api = kp.coroutines_api_dir()
+names, _ = kp._api_names(api, "1.10.2")
+rest = {}
+for ln in (S / "api-rest-classified.tsv").read_text(encoding="utf-8").splitlines():
+    if ln.strip():
+        n, a, r = (ln.split("\t") + ["", ""])[:3]
+        rest[n.strip()] = (a.strip(), r.strip())
+rows_out, miss = [], []
+for n in sorted(names, key=lambda x: (x.lower(), x)):
+    a, r = cur.get(n) or rest.get(n) or (None, None)
+    if a is None:
+        miss.append(n); continue
+    rows_out.append(f"| {n} | {a} | {r.replace('|', '/')} |")
+if miss:
+    print("沒有分類的名稱:", miss); sys.exit(1)
+sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+base = "https://github.com/Kotlin/kotlinx.coroutines/blob/1.10.2/kotlinx-coroutines-core/api/"
+api_sec = ("## API 決策點\n\n"
+    f"母體:kotlinx-coroutines-core 1.10.2,klib {base}kotlinx-coroutines-core.klib.api sha256 {sha(api / 'kotlinx-coroutines-core-1.10.2.klib.api')},"
+    f"jvm {base}kotlinx-coroutines-core.api sha256 {sha(api / 'kotlinx-coroutines-core-1.10.2.api')}\n\n"
+    "協程核心函式庫的每個公開名稱恰好一列(抽法、比對形狀、五種歸屬與核對見 [[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]];"
+    "自檢是 configs/ast-grep/kotlin-android/check.py 的 api_decision_problems)。歸屬:`D-n`=這一列的決策點;`撞名 D-n`=那列觸發字搜得到但意思不同;"
+    "`決策不問 <主表列編號>`=是決策點但不當觸發字,由那一列的壞寫法片段走〈叫不出的壞寫法〉;`決策不問 代碼審`=是決策點但型錄沒寫到;`無決策`=不代表情境選擇。\n\n"
+    "| 名稱 | 歸屬 | 理由 |\n|---|---|---|\n" + "\n".join(rows_out) + "\n")
+# 反查
+text = kp.CATALOG.read_text(encoding="utf-8"); rows = kp.main_rows(text); dt, _ = kp.dt_table(text)
+NOTCODE = {"[Loading, Success]", "delay(常數)"}
+out = []
+for ln in (S / "reach-draft.tsv").read_text(encoding="utf-8").splitlines():
+    rid, cid, s, route = ln.split("\t")
+    if s in NOTCODE:
+        route, why = "不是寫法", "示意寫法,不是一段可比對的程式"
+    elif route.startswith("規則 "):
+        why = f"{route[3:]} 是 {cid} 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息)"
+    elif s == kp._NO_SNIPPET:
+        why = f"壞寫法欄只有文字描述;代碼審看是不是犯了 {cid}「{rows[cid][1]}」"
+    elif cid.startswith("TEST-"):
+        why = f"測試檔在推送前不出情境段;代碼審看測試是不是犯了 {cid}「{rows[cid][1]}」"
+    else:
+        why = f"{rid} 的觸發字比對不到這段片段;代碼審看是不是犯了 {cid}「{rows[cid][1]}」"
+    cell = s if s == kp._NO_SNIPPET else "`" + s.replace("|", "\\|") + "`"
+    out.append(f"| {rid} | {cid} | {cell} | {route} | {why} |")
+reach_sec = ("## 叫不出的壞寫法\n\n"
+    "情境列每個對應檢查的每段壞寫法片段(沒有片段算一個 <無片段>),照推送前同一套路徑篩選與切段叫不出那一列的,都列在這裡、寫明改由誰抓"
+    "(自檢是 configs/ast-grep/kotlin-android/check.py 的 bad_snippet_reach_problems;改由:`規則 <id>` 要片段落在那條規則壞例的 // BAD 行、"
+    "`範本 T<n>` 要片段在那組範本該對應檢查的壞寫法小節程式裡、`代碼審`、`不是寫法`)。補了觸發字讓某段叫得出,就要刪掉這裡那一列。\n\n"
+    "| 列編號 | 對應檢查 | 片段 | 改由 | 理由 |\n|---|---|---|---|---|\n" + "\n".join(out) + "\n")
+t = text
+for title in ("API 決策點", "叫不出的壞寫法"):
+    i = t.find("\n## " + title)
+    if i >= 0:
+        j = t.find("\n## ", i + 1); t = t[:i] + t[j:]
+k = t.find("\n## 統計")
+t = t[:k] + "\n" + api_sec + "\n" + reach_sec + t[k:]
+kp.CATALOG.write_text(t, encoding="utf-8")
+print("api rows", len(rows_out), "reach rows", len(out))

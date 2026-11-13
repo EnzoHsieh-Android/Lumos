@@ -1,0 +1,559 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 86db62ce3f3783fcdca4c087245dc41e4ebb233c..91d45180a8f1d741e64366116a1ddf7e69f03b9d 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -134704,59 +134704,59 @@ def t_expected_requirement_reads_gov_late():
+         if o_since is None:
+             os.environ.pop("LUMOS_HIGH_RISK_EVIDENCE_SINCE", None)
+         else:
+             os.environ["LUMOS_HIGH_RISK_EVIDENCE_SINCE"] = o_since
+         _ksp_sh.rmtree(top, ignore_errors=True)
+ 
+ 
+ def t_situation_rule_shared_tools():
+     """[代碼審 r1 a1、a2、t4、a3、a4] 人裁指令改用既有工具,不另寫一套:
+     ①寫計劃:目標是符號連結或多重硬連結 → 回原因(_write_refusal_reason);檢查時丟 WriteBlocked → 轉成原因、不往上丟;
+-    寫完讀回跟要寫的不一樣 → 回原因;正常 → 寫入、回 None。
++    寫完讀回跟要寫的不一樣 → 回原因(標計劃已動);正常 → 寫入、回 None。失敗一律回 (原因, 計劃動了沒)。
+     ②終端探測:_confirm_tty 家族的只探測函式照 LUMOS_TTY 開(開不了 → False、開得了 → True),人裁指令不再自己開 /dev/tty。
+-    ③條款指紋:寫帳(cmd_situation_rule)與規格閘(_spec_gate_ruled_ids)都叫 _clause_sha,兩邊都不自己算 sha256(語法樹檢查)。
++    ③條款指紋:寫帳(cmd_situation_rule 的 _situation_rule_commit)與規格閘(_spec_gate_ruled_ids)都叫 _clause_sha,兩邊都不自己算 sha256(語法樹檢查)。
+     ④讀段所在檔的 HEAD 版走 _kt_sit_read_many(讀不到時的原因照它的),不自己跑 git show。判準來源:r1-intake 分組 4。"""
+     import os, ast, inspect, textwrap
+     m = _load_lumos_inproc()
+     d = Path(tempfile.mkdtemp(prefix="gctl-srl-tools-"))
+     try:
+         p = d / "plan.md"
+         p.write_text("舊\n", encoding="utf-8")
+         check("①正常 → 寫入、回 None", m._situation_rule_write(p, "新\n") is None and p.read_text(encoding="utf-8") == "新\n")
+         if hasattr(os, "symlink"):
+             ln = d / "ln.md"
+             os.symlink(str(p), str(ln))
+             why = m._situation_rule_write(ln, "壞\n")
+-            check("①符號連結 → 回原因、原檔不變", isinstance(why, str) and "符號連結" in why and p.read_text(encoding="utf-8") == "新\n", repr(why))
++            check("①符號連結 → 回原因(計劃沒動)、原檔不變", why[1] is False and "符號連結" in why[0] and p.read_text(encoding="utf-8") == "新\n", repr(why))
+         hl = d / "hl.md"
+         os.link(str(p), str(hl))
+         why = m._situation_rule_write(p, "壞\n")
+-        check("①多重硬連結 → 回原因、原檔不變", isinstance(why, str) and "硬連結" in why and p.read_text(encoding="utf-8") == "新\n", repr(why))
++        check("①多重硬連結 → 回原因(計劃沒動)、原檔不變", why[1] is False and "硬連結" in why[0] and p.read_text(encoding="utf-8") == "新\n", repr(why))
+         os.unlink(str(hl))
+         o_ref, o_wb = m._write_refusal_reason, m._write_bytes_atomic
+ 
+         def raise_wb(_p):
+             raise m.WriteBlocked("檢查寫入目標 plan.md 的連結狀態失敗:測試")
+         m._write_refusal_reason = raise_wb
+         try:
+             why = m._situation_rule_write(p, "壞\n")
+         except Exception as e:   # 測試要看到的就是「沒往上丟」:丟了什麼都記下來當失敗
+             why = e
+         finally:
+             m._write_refusal_reason = o_ref
+-        check("①檢查時丟 WriteBlocked → 轉成原因、不往上丟", isinstance(why, str) and "連結狀態失敗" in why, repr(why))
++        check("①檢查時丟 WriteBlocked → 轉成原因(計劃沒動)、不往上丟", isinstance(why, tuple) and why[1] is False and "連結狀態失敗" in why[0], repr(why))
+         m._write_bytes_atomic = lambda path, data: path.write_bytes(data + b"x")
+         try:
+             why = m._situation_rule_write(p, "新二\n")
+         finally:
+             m._write_bytes_atomic = o_wb
+-        check("①寫完讀回不一樣 → 回原因", isinstance(why, str) and "讀回" in why, repr(why))
++        check("①寫完讀回不一樣 → 回原因(計劃已動,代碼審 r2 t2)", why[1] is True and "讀回" in why[0], repr(why))
+         o_env = dict(os.environ)
+         o_stdin = sys.stdin
+ 
+         class _NoTty:
+             def isatty(self):
+                 return False
+         sys.stdin = _NoTty()
+         try:
+             os.environ["LUMOS_TTY"] = str(d / "沒有這個終端")
+             a = m._confirm_tty_probe()
+@@ -134772,21 +134772,21 @@ def t_situation_rule_shared_tools():
+         finally:
+             sys.stdin = o_stdin
+             os.environ.clear()
+             os.environ.update(o_env)
+         check("②只探測:LUMOS_TTY 開不了 → False;開得了(虛擬終端)→ True", a is False and got_b in (True, None), f"{a} {got_b}")
+         check("②人裁指令不再自己開終端(沒有 _tty_reachable)", not hasattr(m, "_tty_reachable"), "")
+ 
+         def calls_in(fn):
+             tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+             return {(n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+-        c1, c2 = calls_in(m.cmd_situation_rule), calls_in(m._spec_gate_ruled_ids)
++        c1, c2 = calls_in(m._situation_rule_commit), calls_in(m._spec_gate_ruled_ids)   # 寫帳在 r2 搬進 _situation_rule_commit
+         check("③寫帳與規格閘都叫 _clause_sha、兩邊都不自己算 sha256", "_clause_sha" in c1 and "_clause_sha" in c2 and "sha256" not in c1 | c2, f"{c1 & {'_clause_sha', 'sha256'}} {c2 & {'_clause_sha', 'sha256'}}")
+         line = "- [S8] 當甲 `x`,系統 應 乙 [test:t_a]"
+         import hashlib
+         check("③_clause_sha = 出處本文(保留反引號、剝掉 [S]/[test:])轉 NFC 的 sha256", m._clause_sha(line) == hashlib.sha256("當甲 `x`,系統 應 乙".encode("utf-8")).hexdigest())
+         seen = []
+         o_rm = m._kt_sit_read_many
+ 
+         def spy(rr, at_sha, rels, deadline=None):
+             seen.append((at_sha, list(rels)))
+             raise m._KtSitUnverifiable("git cat-file 讀不到 deadbeef 的檔(版本不存在或 git 出錯)")
+@@ -134925,20 +134925,465 @@ def t_kt_catalog_sources_in_rows():
+     rows, err = m._kt_decision_table(cat)
+     r1 = next((r for r in rows if r["id"] == "D-1"), {})
+     chk = (r1.get("check_refs") or [{}])[0]
+     check("戊 D-1 那列自帶來源格與展開後的網址", err is None and r1.get("source") == "SC" and r1.get("refs") == ["https://example.com/sc-rules"], str(r1)[:400])
+     check("戊 D-1 那列自帶對應檢查的名稱與網址", chk.get("id") == "API-1" and chk.get("name") == "互不依賴的呼叫要並行"
+           and chk.get("refs") == ["https://example.com/sc-rules"], str(chk))
+     mod, _why = m._kt_pack_check()
+     check("戊 規則包自檢程式不另有走第二輪決策表的 dt_sources", mod is not None and not hasattr(mod, "dt_sources"), "")
+ 
+ 
++# ── 代碼審 r2 修補(governance/review-reports/code-情境題引規格出處/r2-intake.md 分組 1 到 7)──────────────
++def _srl_inproc(m, root, cat, seg, patches=None, **kw):
++    """行程內跑 cmd_situation_rule(LUMOS_TTY 指到不存在的終端、帶 --consent),patches={名字: 物件} 只在這次呼叫期間換掉 m 上的同名物件
++    → (rc, stdout, stderr)。kw 可改 clause、test、consent。"""
++    import os, contextlib, io
++    rows, _e = m._kt_decision_table(cat)
++    patches = dict(patches or {}, _KT_DT_ROWS=rows)
++    saved = {k: getattr(m, k) for k in patches}
++    a = {"clause": _SRL_CLAUSE, "test": "test_latest", "consent": "好,照這條寫回計劃"}
++    a.update(kw)
++    o_env, o_cwd = dict(os.environ), os.getcwd()
++    out, err = io.StringIO(), io.StringIO()
++    for k, v in patches.items():
++        setattr(m, k, v)
++    os.environ.update({"LUMOS_TTY": "/nonexistent-tty", "LUMOS_KILL_TIMEOUT_FLOOR": "5"})
++    os.chdir(root)
++    try:
++        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++            rc = m.cmd_situation_rule(m.Env(Path(root) / _KSP_V), seg, "D-5", "Projects/搜尋_計劃", a["clause"], a["test"],
++                                      "app/Screen.kt", _SRL_OLD, _SRL_NEW, consent=a["consent"])
++    finally:
++        os.chdir(o_cwd)
++        for k, v in saved.items():
++            setattr(m, k, v)
++        os.environ.clear()
++        os.environ.update(o_env)
++    return rc, out.getvalue(), err.getvalue()
++
++
++def t_situation_rule_signal_during_write():
++    """[代碼審 r2 z1] 寫計劃到記治理帳那段收到終止訊號(SIGTERM)也走得到收尾,不被預設處理直接結束:
++    ①鎖內重讀計劃時收到(還沒寫)→ rc2、計劃與治理帳都沒寫;②計劃剛寫完、還沒記帳時收到 → rc1、講計劃已寫入 S8 與治理帳沒記到、
++    印補記用的那一行事件(條款 S8、殺傷力判定 killed);③記帳當中收到 → 帳照記完、rc0。三種離開後 SIGTERM 處理器都還原成進來前的。
++    訊號用「呼叫當下裝著的處理器」模擬(不真的對測試程序送 SIGTERM:沒裝處理器的舊版會被預設處理直接殺掉整支測試);
++    當下裝的還是進來前那支(沒保護)就記成沒裝、案例紅。判準來源:r2-intake 分組 1 z1;應抓到的錯:保護只包殺傷力那段。"""
++    import signal as _sig
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    base = _sig.getsignal(_sig.SIGTERM)
++    roots = []
++
++    def fire(fired):
++        h = _sig.getsignal(_sig.SIGTERM)
++        if callable(h) and h is not base:
++            h(_sig.SIGTERM, None)
++            fired.append(True)
++        else:
++            fired.append(False)
++    try:
++        root, plan, sha = _srl_repo()
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        o_read, n, fired = m._situation_rule_read, [], []
++
++        def read2(p):
++            n.append(1)
++            if len(n) == 2:   # 第二次讀 = 寫入鎖內重讀
++                fire(fired)
++            return o_read(p)
++        rc, _out, err = _srl_inproc(m, root, cat, segs[0]["seg"], {"_situation_rule_read": read2})
++        check("z1 ①鎖內重讀時收到 SIGTERM → 有處理器接住、rc2、計劃與治理帳都沒寫", fired == [True] and rc == 2 and plan.read_bytes() == before
++              and not _srl_gov(root) and "終止訊號" in err, f"fired={fired} rc={rc} {err[-400:]}")
++        check("z1 ①離開後 SIGTERM 處理器還原", _sig.getsignal(_sig.SIGTERM) is base, str(_sig.getsignal(_sig.SIGTERM)))
++        root, plan, sha = _srl_repo()
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        o_write, fired = m._situation_rule_write, []
++
++        def write_then_sig(p, t):
++            r = o_write(p, t)
++            fire(fired)
++            return r
++        rc, _out, err = _srl_inproc(m, root, cat, segs[0]["seg"], {"_situation_rule_write": write_then_sig})
++        import json as _j
++        line = next((ln for ln in err.splitlines() if ln.startswith("{")), "")
++        ev = _j.loads(line) if line else {}
++        check("z1 ②寫完計劃、記帳前收到 SIGTERM → rc1、講計劃已寫入 S8 與治理帳沒記到、計劃留著新條款、帳沒有",
++              fired == [True] and rc == 1 and "計劃已寫入 S8" in err and "治理帳沒記到" in err
++              and "- [S8] " + _SRL_CLAUSE in plan.read_text(encoding="utf-8") and not _srl_gov(root), f"fired={fired} rc={rc} {err[-500:]}")
++        check("z1 ②印出補記用的那一行事件(條款 S8、殺傷力判定 killed)", ev.get("gate") == "situation-rule" and ev.get("clause_id") == "S8"
++              and ev.get("kill_verdict") == "killed", line[:300])
++        check("z1 ②離開後 SIGTERM 處理器還原", _sig.getsignal(_sig.SIGTERM) is base, "")
++        root, plan, sha = _srl_repo()
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        o_ev, fired = m._gate_event, []
++
++        def ev_with_sig(*a, **kw):
++            fire(fired)
++            return o_ev(*a, **kw)
++        rc, _out, err = _srl_inproc(m, root, cat, segs[0]["seg"], {"_gate_event": ev_with_sig})
++        check("z1 ③記帳當中收到 SIGTERM → 帳照記完、rc0", fired == [True] and rc == 0 and len(_srl_gov(root)) == 1
++              and "- [S8] " + _SRL_CLAUSE in plan.read_text(encoding="utf-8"), f"fired={fired} rc={rc} {err[-400:]}")
++        check("z1 ③離開後 SIGTERM 處理器還原", _sig.getsignal(_sig.SIGTERM) is base, "")
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++_SRL_SIG2_CHILD = r'''
++import os, sys, signal, time, subprocess
++import importlib.machinery, importlib.util
++signal.signal(signal.SIGHUP, signal.SIG_DFL)              # 模擬一般終端(上一層用 nohup 開時子程序會繼承「忽略」)
++signal.signal(signal.SIGINT, signal.default_int_handler)  # 同上:背景程序的 SIGINT 可能是忽略
++p, d, repo, prefix = sys.argv[1:5]
++loader = importlib.machinery.SourceFileLoader("_lumos_srl_sig2", p)
++spec = importlib.util.spec_from_loader("_lumos_srl_sig2", loader)
++m = importlib.util.module_from_spec(spec)
++loader.exec_module(m)
++_run = subprocess.run
++def slow_run(args, *a, **kw):   # 收工作樹那一步放慢,第二個訊號才會落在收尾當中(大 repo 實際就要幾秒)
++    if isinstance(args, list) and "remove" in args:
++        open(os.path.join(d, "cleanup"), "w").close()
++        time.sleep(0.8)
++    return _run(args, *a, **kw)
++subprocess.run = slow_run
++def fake(env, node, recipes_override=None, result_out=None, **kw):
++    with m._isolated_worktree(repo, prefix=prefix) as wt:
++        print("WT", wt.path, wt.ok, flush=True)
++        m._kill_run("echo $$ > pgid.tmp && mv pgid.tmp pgid && exec sleep 600", d, 600)
++m.cmd_guard_kill = fake
++r0, rc = m._situation_rule_kill(None, "Projects/x.md", "S1", "t", "a.kt", "o", "n", 5.0)
++print("RC", rc, flush=True)
++sys.exit(rc if isinstance(rc, int) else 0)
++'''
++
++
++def _srl_sig_twice(first, second):
++    """t_situation_rule_double_signal 的一次:子程序在隔離工作樹裡跑一支一直睡的測試;等測試把群組編號寫進檔送 first,
++    等收尾開始(收工作樹那一步)再隔 0.05 秒送 second → (rc, stdout, stderr, 工作樹的暫存資料夾還在不在, git 還登記著幾棵工作樹, 群組收掉了沒)。
++    收尾一律:收掉自己開的測試群組與子程序、移除自己這支前綴的工作樹與暫存資料夾、刪自己的 repo。"""
++    import os, signal as _sig, time as _t, uuid
++    d = Path(tempfile.mkdtemp(prefix="gctl-srl-sig2-"))
++    repo = Path(tempfile.mkdtemp(prefix="gctl-srl-sig2-repo-"))
++    prefix = f"gctl-srl-sig2-wt-{uuid.uuid4().hex[:8]}-"
++    base = Path(os.path.realpath(tempfile.gettempdir()))
++    for a in (("init", "-q"), ("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")):
++        subprocess.run(["git", *a], cwd=repo, capture_output=True)
++    env = dict(os.environ, LUMOS_SRL_SIG_CHILD="1")
++    p = subprocess.Popen([sys.executable, "-c", _SRL_SIG2_CHILD, GRAPHCTL, str(d), str(repo), prefix],
++                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
++    pgid, gone, out, err, left, nwt = None, False, "", "", None, None
++    try:
++        t0 = _t.time()
++        while not (d / "pgid").exists() and _t.time() - t0 < 30 and p.poll() is None:
++            _t.sleep(0.02)
++        if (d / "pgid").exists():
++            pgid = int((d / "pgid").read_text().strip())
++        p.send_signal(first)
++        t0 = _t.time()
++        while not (d / "cleanup").exists() and _t.time() - t0 < 10 and p.poll() is None:
++            _t.sleep(0.01)
++        _t.sleep(0.05)
++        if p.poll() is None:
++            p.send_signal(second)
++        out, err = p.communicate(timeout=30)
++        gone = _srl_group_gone(pgid)
++        left = [x.name for x in base.glob(prefix + "*")]
++        wl = subprocess.run(["git", "-C", str(repo), "worktree", "list", "--porcelain"], capture_output=True, text=True).stdout
++        nwt = wl.count("worktree ")
++    finally:
++        if pgid and not gone:
++            try:
++                os.killpg(pgid, _sig.SIGKILL)   # 收自己開的測試群組
++            except OSError:
++                pass
++        if p.poll() is None:
++            p.kill()
++            p.wait()
++        for x in base.glob(prefix + "*"):   # 只有這次的亂數前綴
++            subprocess.run(["git", "-C", str(repo), "worktree", "remove", "--force", str(x / "wt")], capture_output=True)
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(repo, ignore_errors=True)
++        _ksp_sh.rmtree(d, ignore_errors=True)
++    return p.returncode, out, err, left, nwt, (pgid is not None and gone)
++
++
++def t_situation_rule_double_signal():
++    """[代碼審 r2 c1] 殺傷力期間連收兩個終止訊號(關終端時核心與 shell 各送一次 SIGHUP、對話工具逾時補送 SIGTERM、連按兩次 Ctrl-C):
++    第一個轉成中斷、走收尾;收尾當中(工作樹移除那一步,測試放慢到 0.8 秒)第二個只記下、不再打斷 → 工作樹的暫存資料夾刪掉、
++    git 不再登記那棵工作樹、測試的程序群組收掉、rc2。組合:SIGTERM×2、SIGTERM→SIGHUP、SIGINT×2。
++    ★防遞迴★:子程序只跑上面那段固定程式(不載測試檔);子程序環境帶 LUMOS_SRL_SIG_CHILD=1,在那種環境裡這支測試不再開子程序。
++    判準來源:r2-intake 分組 1 c1;應抓到的錯:收尾期間處理器照樣丟例外,把 worktree remove 與刪暫存資料夾打斷。"""
++    import os, signal as _sig
++    if os.environ.get("LUMOS_SRL_SIG_CHILD"):
++        raise _SrcOnly("已經在子程序裡(防遞迴),不再開子程序")
++    if not hasattr(os, "killpg") or not hasattr(_sig, "SIGHUP"):
++        raise _SrcOnly("非 POSIX(沒有 killpg 或 SIGHUP),這段沒驗到")
++    for a, b in ((_sig.SIGTERM, _sig.SIGTERM), (_sig.SIGTERM, _sig.SIGHUP), (_sig.SIGINT, _sig.SIGINT)):
++        rc, out, err, left, nwt, gone = _srl_sig_twice(a, b)
++        name = f"{_sig.Signals(a).name}→{_sig.Signals(b).name}"
++        check(f"c1 {name} → rc2、講被中斷", rc == 2 and "RC 2" in out and "被中斷" in err, f"rc={rc} {out[-200:]} {err[-300:]}")
++        check(f"c1 {name} → 工作樹的暫存資料夾刪掉、git 只剩主工作樹", left == [] and nwt == 1, f"left={left} nwt={nwt} {out[-200:]}")
++        check(f"c1 {name} → 測試的程序群組收掉", gone, out[-200:])
++
++
++def t_situation_rule_already_written():
++    """[代碼審 r2 c3] 計劃已有同文、只綁同一支測試的條款(寫了計劃、帳沒記到或被中斷)時,「已寫過」訊息分兩種:
++    ①治理帳已有對得上(計劃、條款編號、條款文字雜湊、測試名)的 situation-rule → 講已經完成、什麼都不用做,rc0(docstring:0 = 寫回且記帳),不跑殺傷力;
++    ②沒有 → rc2、講先把計劃裡那一條刪掉再重跑(補記要的殺傷力判定與配方身分拿不到),不跑殺傷力。
++    兩種先在 _situation_rule_insert 單元驗(ruled 給帳上認得的條款集合),再走一次指令。判準來源:r2-intake 分組 1 c3;
++    應抓到的錯:一律叫人照補記方法補(被強殺時根本沒印出補記事件)。"""
++    import hashlib, json as _j
++    m = _load_lumos_inproc()
++    t3 = "# 甲\n\n## 驗收條款\n\n- [S1] 當甲,系統 應 乙 [test:t_a]\n- [S2] 當丙,系統 應 丁 [test:t_y]\n"
++    new, cid, why = m._situation_rule_insert(t3, "當丙,系統 應 丁", "t_y", ruled=lambda: {"S2"})
++    check("c3 ①單元:帳上認得 S2 → 不插、回 S2、講已經完成什麼都不用做", new is None and cid == "S2" and why and "不用做" in why, repr(why))
++    new, cid, why = m._situation_rule_insert(t3, "當丙,系統 應 丁", "t_y", ruled=lambda: set())
++    check("c3 ②單元:帳上沒有 → 不插、講先把 S2 那一條刪掉再重跑", new is None and cid is None and why and "S2" in why and "刪掉" in why
++          and "不用做" not in why, repr(why))
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        line = f"- [S8] {_SRL_CLAUSE} [test:test_latest]"
++        plan.write_text(plan.read_text(encoding="utf-8").replace("[test:test_f]\n", "[test:test_f]\n" + line + "\n", 1), encoding="utf-8")
++        gl = root / "docs" / ".governance-log.jsonl"
++        ev = {"ts": "2026-11-13T10:00:00+08:00", "commit": sha[:7], "gate": "situation-rule", "kind": "situation-rule", "hard": False,
++              "nodes": ["Projects/搜尋_計劃.md"], "note": "人裁", "plan": "Projects/搜尋_計劃.md", "clause_id": "S8", "clause_text": _SRL_CLAUSE,
++              "clause_sha": hashlib.sha256(_SRL_CLAUSE.encode("utf-8")).hexdigest(), "test_name": "test_latest", "origin": "ai", "consent": "好",
++              "kill_verdict": "killed", "recipe_id": "r", "seg": segs[0]["seg"], "row": "D-5"}
++        gl.write_text(_j.dumps(ev, ensure_ascii=False) + "\n", encoding="utf-8")
++        subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++        subprocess.run(["git", "commit", "-qm", "寫回 S8 與帳"], cwd=root, capture_output=True)
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        check("c3 ①指令:計劃已寫過 S8、帳也記了 → rc0、講什麼都不用做、計劃不動、沒跑殺傷力、帳沒多一筆",
++              r.returncode == 0 and "不用做" in (r.stdout + r.stderr) and plan.read_bytes() == before and not _srl_kill(root)
++              and len(_srl_gov(root)) == 1, f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}")
++        gl.write_text("", encoding="utf-8")
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        check("c3 ②指令:計劃已寫過 S8、帳沒有 → rc2、講先刪掉 S8 再重跑、計劃不動、沒跑殺傷力",
++              r.returncode == 2 and "刪掉" in r.stderr and "S8" in r.stderr and plan.read_bytes() == before and not _srl_kill(root),
++              f"rc={r.returncode} {r.stderr[-300:]}")
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_same_exact_refs():
++    """[代碼審 r2 b1] 「已寫過」跟規格閘(_spec_gate_ruled_ids)同一套口徑:那一行綁的測試恰好是 {--test} 才算。
++    ①舊條款同文、綁兩支(t_a,t_b)、--test t_a → 照插 S2(補記的帳規格閘也不會認那一行,不能叫人補記);
++    ②兩支寫成兩個 [test:] → 同樣照插;★對照★ 只綁 t_a → 不插、講已寫過 S1。判準來源:r2-intake 分組 2;應抓到的錯:只看 refs 含不含 --test。"""
++    m = _load_lumos_inproc()
++    for label, tail in (("①[test:t_a,t_b]", "[test:t_a,t_b]"), ("②[test:t_a] [test:t_b]", "[test:t_a] [test:t_b]")):
++        t = f"# 甲\n\n## 驗收條款\n\n- [S1] 當甲,系統 應 乙 {tail}\n"
++        new, cid, why = m._situation_rule_insert(t, "當甲,系統 應 乙", "t_a")
++        check(f"b1 {label}、--test t_a → 照插 S2", cid == "S2" and new is not None and "- [S2] 當甲,系統 應 乙 [test:t_a]" in new, repr(why))
++    t = "# 甲\n\n## 驗收條款\n\n- [S1] 當甲,系統 應 乙 [test:t_a]\n"
++    new, cid, why = m._situation_rule_insert(t, "當甲,系統 應 乙", "t_a")
++    check("b1 ★對照★ 只綁 t_a → 不插、講已寫過 S1", new is None and why and "已寫過 S1" in why, repr(why))
++
++
++def t_situation_rule_read_line_endings():
++    """[代碼審 r2 t1、c2、b2、a2] 讀計劃照 load_raw_for_edit(拒 BOM 與 CRLF,訊息用它的、不另抄),另擋單獨的 CR(\\r 不接 \\n:
++    切行會把它當換行、插條款整份接回時改成 LF):①計劃〈其他〉節有一個單獨的 \\r → rc2、講 CR、計劃位元組不變、沒跑殺傷力;
++    ②計劃開頭帶 BOM → rc2、講 BOM(load_raw_for_edit 的訊息)、位元組不變、沒跑殺傷力;③讀計劃的那支叫 load_raw_for_edit、不自己判 \\r\\n(語法樹)。
++    CRLF 那案在 t_situation_rule_crlf_and_encoding。判準來源:r2-intake 分組 3;應抓到的錯:只拒 CRLF、BOM 照收。"""
++    import ast, inspect, textwrap
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        orig = plan.read_bytes()
++        for label, data, word in (("①單獨的 CR", orig.replace("## 其他\n\n".encode("utf-8"), "## 其他\n\n備註\r殘留\n\n".encode("utf-8"), 1), "CR"),
++                                  ("②開頭帶 BOM", b"\xef\xbb\xbf" + orig, "BOM")):
++            plan.write_bytes(data)
++            subprocess.run(["git", "-c", "core.autocrlf=false", "commit", "-qam", label], cwd=root, capture_output=True)
++            r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++            check(f"{label} → rc2、講 {word}、計劃位元組不變、沒跑殺傷力", r.returncode == 2 and word in r.stderr and plan.read_bytes() == data
++                  and not _srl_kill(root) and not _srl_gov(root), f"rc={r.returncode} {r.stderr[-300:]}")
++        tree = ast.parse(textwrap.dedent(inspect.getsource(m._situation_rule_read)))
++        calls = {(n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")) for n in ast.walk(tree) if isinstance(n, ast.Call)}
++        consts = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant)][1:]   # 第一個是 docstring
++        check("③讀計劃叫 load_raw_for_edit、不自己判 \\r\\n、不另抄它的 CRLF/BOM 訊息", "load_raw_for_edit" in calls and b"\r\n" not in consts
++              and not any(isinstance(c, str) and ("Windows" in c or "BOM" in c) for c in consts), f"{calls} {consts}")
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_readback_mismatch():
++    """[代碼審 r2 t2] 寫完讀回跟要寫的不一樣時計劃其實已被取代:①_situation_rule_write 回 (原因, True)(計劃動了);
++    ★對照★ 拒絕符號連結時回 (原因, False);②整支指令 → rc1(不是 rc2:docstring 的 2 是「計劃與治理帳都不動」)、講計劃已動、治理帳沒記、
++    照「已寫過」那條處理;帳沒有 situation-rule。讀回不一致用換掉 _write_bytes_atomic(多寫一個位元組)造。判準來源:r2-intake 分組 4。"""
++    import os
++    m = _load_lumos_inproc()
++    d = Path(tempfile.mkdtemp(prefix="gctl-srl-rb-"))
++    cat = _srl_cat()
++    root = None
++    try:
++        p = d / "plan.md"
++        p.write_text("舊\n", encoding="utf-8")
++        o_wb = m._write_bytes_atomic
++        m._write_bytes_atomic = lambda path, data: o_wb(path, data + b"x")
++        try:
++            got = m._situation_rule_write(p, "新\n")
++        finally:
++            m._write_bytes_atomic = o_wb
++        check("t2 ①讀回不一致 → (原因, True):計劃已動", isinstance(got, tuple) and got[1] is True and "讀回" in got[0], repr(got))
++        if hasattr(os, "symlink"):
++            ln = d / "ln.md"
++            os.symlink(str(p), str(ln))
++            got = m._situation_rule_write(ln, "壞\n")
++            check("t2 ★對照★ 符號連結 → (原因, False):計劃沒動", isinstance(got, tuple) and got[1] is False and "符號連結" in got[0], repr(got))
++        root, _plan, sha = _srl_repo()
++        segs = _srl_segs(root, cat, sha)
++        rc, _out, err = _srl_inproc(m, root, cat, segs[0]["seg"], {"_write_bytes_atomic": lambda path, data: o_wb(path, data + b"x")})
++        check("t2 ②指令:讀回不一致 → rc1、講計劃已動與治理帳沒記、照已寫過處理;帳沒有 situation-rule",
++              rc == 1 and "計劃已動" in err and "治理帳沒記" in err and "已寫過" in err and not _srl_gov(root), f"rc={rc} {err[-400:]}")
++    finally:
++        _ksp_sh.rmtree(d, ignore_errors=True)
++        if root is not None:
++            _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_isolated_worktree_keep_failed_build():
++    """[代碼審 r2 z2] keep=True 但工作樹沒建起來(where 不是 git repo,ok 為假)→ 不寫保留標記、暫存資料夾照收掉(on_keep 照舊叫:guard kill 每個平台一行)
++    (留著的話只有一個標記檔,清殘骸永遠跳過它)。★對照★ keep=True 建得起來 → 留現場、有標記(t_isolated_worktree_keep_marker)。
++    資料夾前綴用這支測試自己的亂數前綴,只碰自己建的。判準來源:r2-intake 分組 5。"""
++    import os, uuid
++    m = _load_lumos_inproc()
++    pre = f"gctl-iwkf-{uuid.uuid4().hex[:8]}-"
++    base = Path(os.path.realpath(tempfile.gettempdir()))
++    notrepo = Path(tempfile.mkdtemp(prefix="gctl-iwkf-notrepo-"))
++    kept = []
++    parent = None
++    try:
++        with m._isolated_worktree(notrepo, prefix=pre, keep=True, on_keep=kept.append) as wt:
++            ok, parent = wt.ok, Path(wt.path).parent
++        check("z2 建樹失敗 + keep → ok 為假、暫存資料夾收掉(連同標記)、on_keep 照舊叫一次(guard kill 輸出不變)",
++              not ok and not parent.exists() and len(kept) == 1,
++              f"ok={ok} exists={parent.exists()} kept={kept} {list(parent.iterdir()) if parent.exists() else ''}")
++    finally:
++        for x in base.glob(pre + "*"):   # 只有這支測試的亂數前綴
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(notrepo, ignore_errors=True)
++
++
++def t_situation_rule_plan_symlink_and_case():
++    """[代碼審 r2 x1、b3] --plan 的包含檢查:①圖譜的 Projects/ 本身是符號連結(指到圖譜外)→ rc2、講符號連結、連結指到的那份計劃不變、沒跑殺傷力
++    (原本拿解開後的 Projects 當基準,檢查照過);②--plan 的大小寫跟實際檔名不同 → 拒絕並印實際檔名:
++    單元用換掉的 os.listdir 驗(任何檔系統都跑得到);指令層在大小寫不敏感的檔系統上斷言印出實際檔名,大小寫敏感的檔系統上只斷言拒絕(那裡檔本來就找不到)。
++    判準來源:r2-intake 分組 6;應抓到的錯:包含檢查以 Projects 解開後的位置為準、大小寫照放(帳上路徑規格閘對不上)。"""
++    import os
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    roots = []
++    try:
++        if hasattr(os, "symlink"):
++            root, plan, sha = _srl_repo()
++            roots.append(root)
++            segs = _srl_segs(root, cat, sha)
++            v = root / _KSP_V
++            outside = root / "外面的Projects"
++            os.rename(str(v / "Projects"), str(outside))
++            os.symlink(str(outside), str(v / "Projects"))
++            subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++            subprocess.run(["git", "commit", "-qm", "Projects 換成連結"], cwd=root, capture_output=True)
++            tgt = outside / "搜尋_計劃.md"
++            before = tgt.read_bytes()
++            r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++            check("x1 ①Projects/ 本身是符號連結 → rc2、講 Projects/ 本身是連結(那一道的訊息)、那份計劃不變、沒跑殺傷力",
++                  r.returncode == 2 and "Projects/ 本身是符號連結" in r.stderr
++                  and tgt.read_bytes() == before and not _srl_kill(root), f"rc={r.returncode} {r.stderr[-300:]}")
++        root, plan, sha = _srl_repo()
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        v = root / _KSP_V
++        real = v / "Projects" / "Abc_計劃.md"
++        real.write_bytes(plan.read_bytes())
++        subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++        subprocess.run(["git", "commit", "-qm", "大小寫計劃"], cwd=root, capture_output=True)
++        before = real.read_bytes()
++        insensitive = (v / "projects").exists()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--plan": "Projects/abc_計劃"}))
++        check("b3 ②指令:--plan 大小寫跟實際檔名不同 → rc2、計劃不變、沒跑殺傷力" + ("(大小寫不敏感:印實際檔名)" if insensitive else "(大小寫敏感:找不到)"),
++              r.returncode == 2 and real.read_bytes() == before and not _srl_kill(root) and (not insensitive or "Abc_計劃" in r.stderr),
++              f"rc={r.returncode} {r.stderr[-300:]}")
++        o_ld = m.os.listdir
++        vreal = os.path.realpath(str(v))
++
++        def fake_ld(path):
++            pr = os.path.realpath(str(path))
++            if pr == vreal:
++                return ["Projects", "Systems"]
++            if pr == os.path.join(vreal, "Projects"):
++                return ["Abc_計劃.md", "搜尋_計劃.md"]
++            return o_ld(path)
++        m.os.listdir = fake_ld
++        try:
++            got = m._situation_rule_plan_case(v, "Projects/abc_計劃.md")
++            same = m._situation_rule_plan_case(v, "Projects/Abc_計劃.md")
++        finally:
++            m.os.listdir = o_ld
++        check("b3 ②單元:大小寫不同 → 回實際檔名 Abc_計劃.md;★對照★ 一字不差 → None", got == "Projects/Abc_計劃.md" and same is None, f"{got!r} {same!r}")
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_spec_gate_ruled_ai_reminder():
++    """[代碼審 r2 x2] 規格閘認到 origin 為 ai 的人裁條款時多印一行提醒(帶 consent 原話),不擋:
++    ①風險低(兩向閘那條路):帳上 S2 那筆 origin ai → 印「AI 依對話核可代跑」與原話,rc 跟 human 那次一樣;★對照★ origin human → 不印;
++    ②風險高(預期值表那條路,_spec_gate_expected_part):只剩人裁條款、origin ai → 印提醒、不擋(回 None);
++    ③原話裡的控制字元經 _kill_esc,不原樣進終端。判準來源:r2-intake 分組 7;應抓到的錯:只有一條路印、原話不清洗。"""
++    import hashlib, json as _j, contextlib, io
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "srlai")
++    body2 = "當按下儲存,系統應存檔"
++    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", f"- [S2] {body2} [test:t_green]"])
++    _sg_commit(d, "plan")
++
++    def ev(origin, consent, plan="Projects/甲_計劃.md", cid="S2"):
++        return _j.dumps({"ts": "2026-11-13T10:00:00+08:00", "commit": "abc1234", "gate": "situation-rule", "kind": "situation-rule", "hard": False,
++                         "nodes": [plan], "note": "人裁", "plan": plan, "clause_id": cid, "clause_text": body2,
++                         "clause_sha": hashlib.sha256(body2.encode("utf-8")).hexdigest(), "test_name": "t_green", "origin": origin,
++                         "consent": consent, "kill_verdict": "killed", "recipe_id": "r", "seg": "a" * 16, "row": "D-5"}, ensure_ascii=False) + "\n"
++    gl = d / "docs" / ".governance-log.jsonl"
++    gl.write_text(ev("human", ""), encoding="utf-8")
++    rh = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
++    check("x2 ★對照★ origin human → 照人裁認、不印 AI 代跑提醒", "人裁寫回的條款(S2)" in rh.stdout and "AI 依對話核可代跑" not in rh.stdout, rh.stdout[-600:])
++    gl.write_text(ev("ai", "好,照這條寫回\x1b[31m"), encoding="utf-8")
++    ra = run(kg, "spec-gate", "Projects/甲_計劃", "--no-run")
++    check("x2 ①風險低:origin ai → 印 AI 代跑提醒與原話、rc 跟 human 那次一樣(不擋)", "AI 依對話核可代跑" in ra.stdout and "好,照這條寫回" in ra.stdout
++          and ra.returncode == rh.returncode, f"{ra.returncode} vs {rh.returncode} {ra.stdout[-600:]}")
++    check("x2 ③原話的控制字元不原樣進終端", "\x1b[31m" not in ra.stdout, repr(ra.stdout[-300:]))
++    m = _load_lumos_inproc()
++    text = "---\ntype: project\n---\n# 丙\n\n## 驗收條款\n\n- [S1] " + body2 + " [test:t_green]\n"
++    (kg / "Projects" / "丙_計劃.md").write_text(text, encoding="utf-8")
++    gl.write_text(ev("ai", "好", plan="Projects/丙_計劃.md", cid="S1"), encoding="utf-8")
++    env = m.Env(kg)
++    with contextlib.redirect_stdout(io.StringIO()) as o:
++        got = m._spec_gate_expected_part(env, "Projects/丙_計劃.md", text, "high")
++    check("x2 ②風險高:只剩人裁條款、origin ai → 印提醒、不擋", got is None and "AI 依對話核可代跑" in o.getvalue() and "S1" in o.getvalue(), o.getvalue()[-400:])
++    gl.write_text(ev("human", "", plan="Projects/丙_計劃.md", cid="S1"), encoding="utf-8")
++    with contextlib.redirect_stdout(io.StringIO()) as o:
++        got = m._spec_gate_expected_part(env, "Projects/丙_計劃.md", text, "high")
++    check("x2 ②★對照★ 風險高、origin human → 不印", got is None and "AI 依對話核可代跑" not in o.getvalue(), o.getvalue()[-400:])
++
++
+ # ── 盲判代碼審 r2 的修補(governance/review-reports/code-android情境題盲判/r2-intake.md 甲到戊)──────────────
+ def _disp_ledger_rewrite(d, branch, fn):
+     """治理帳裡這個分支最後一筆 dispositions 事件交給 fn 改(fn 收 dispositions dict、原地改)——測試讀側重驗用,
+     取代原本改本機標記檔的做法(代碼審 code-android情境題盲判 r2 乙:表態只從治理帳讀)。"""
+     import json as _j
+     p = Path(d) / "docs" / ".governance-log.jsonl"
+     lines = p.read_text(encoding="utf-8").split("\n")
+     for i in range(len(lines) - 1, -1, -1):
+         if '"dispositions"' in lines[i]:
+             ev = _j.loads(lines[i])

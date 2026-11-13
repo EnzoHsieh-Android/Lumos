@@ -1,0 +1,64 @@
+"""實驗:搜尋框用不同 flatMap 操作符時,pitfalls --diff 會不會出情境題 kt-situation 與 D-4。
+用法:python3.14 d4probe.py <lumos 腳本路徑> <工作根目錄>"""
+import json, subprocess, sys
+from pathlib import Path
+
+LUMOS, WORK = sys.argv[1], Path(sys.argv[2])
+
+BASE = """package app
+
+import androidx.lifecycle.ViewModel
+
+class SearchViewModel(private val repo: Repo) : ViewModel() {
+    val x = 1
+}
+"""
+
+def vm(op, debounce):
+    chain = "query.debounce(300)." if debounce else "query."
+    return f"""package app
+
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+
+class SearchViewModel(private val repo: Repo) : ViewModel() {{
+    val x = 1
+    private val query = MutableStateFlow("")
+    val results = {chain}{op} {{ q -> flow {{ emit(repo.search(q)) }} }}
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    fun onQuery(q: String) {{ query.value = q }}
+}}
+"""
+
+def g(root, *a):
+    return subprocess.run(["git", *a], cwd=root, capture_output=True, text=True, check=True)
+
+def case(name, op, debounce):
+    root = WORK / name
+    root.mkdir(parents=True)
+    g(root, "init", "-q", "-b", "main"); g(root, "config", "user.email", "t@t.t"); g(root, "config", "user.name", "t")
+    (root / "app/src/main").mkdir(parents=True)
+    (root / "app/src/main/AndroidManifest.xml").write_text("<manifest/>\n")
+    (root / "settings.gradle.kts").write_text('include(":app")\n')
+    (root / "app/build.gradle.kts").write_text('plugins { id("com.android.application") }\n')
+    kt = root / "app/src/main/java/app/SearchViewModel.kt"
+    kt.parent.mkdir(parents=True)
+    kt.write_text(BASE)
+    g(root, "add", "-A"); g(root, "commit", "-qm", "init")
+    g(root, "checkout", "-q", "-b", "feat")
+    kt.write_text(vm(op, debounce))
+    g(root, "add", "-A"); g(root, "commit", "-qm", "change")
+    r = subprocess.run([sys.executable, LUMOS, "pitfalls", "--diff", "main..HEAD", "--repo", str(root), "--json"],
+                       capture_output=True, text=True)
+    try:
+        d = json.loads(r.stdout)
+    except ValueError:
+        print(f"{name:28s} 解析失敗 rc={r.returncode} {r.stderr[-300:]}")
+        return
+    qs = json.dumps(d.get("stack_questions_meta") or d.get("stack_questions") or {}, ensure_ascii=False)
+    segs = [s for s in (d.get("kt_situation_segments") or d.get("situation_segments") or [])]
+    print(f"{name:28s} 情境題={'kt-situation' in qs}  段={[(s.get('lines'), s.get('rows')) for s in segs]}")
+
+for name, op, deb in [("latest(對照)", "flatMapLatest", False), ("merge", "flatMapMerge", False),
+                      ("concat", "flatMapConcat", False), ("merge+debounce", "flatMapMerge", True)]:
+    case(name, op, deb)

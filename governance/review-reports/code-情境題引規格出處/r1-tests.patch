@@ -1,0 +1,1406 @@
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 49c958930..1474c7b25 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -158,6 +158,7 @@ import os as _os_mod
+ _os_mod.environ.setdefault("LUMOS_PANEL_RETIRE_CUTOFF", "9999-12-31")   # probe輪退場 d1:既有 panel 行為測試凍結在退役前語意;退役行為由 t_panel_probe_retired 自帶 cutoff 覆寫驗
+ _os_mod.environ.setdefault("LUMOS_HIGH_RISK_EVIDENCE_SINCE", "9999-12-31")   # 高風險測試證據加嚴:既有規格閘測試停在生效前(不要求預期值表與簽);新測試用 _hre_since 改
+ _os_mod.environ.setdefault("LUMOS_PLAN_SOURCES_SINCE", "9999-12-31")   # 計劃依據來源必填:既有規格閘、推送前與健檢測試停在生效前(不要求〈依據來源〉);新測試用 _psrc_since 改
++_os_mod.environ.setdefault("LUMOS_KT_SIT_SPEC_SINCE", "9999-12-31")   # 情境題引出處:既有情境題測試停在生效前(不要求 spec/quote);新測試用 _ksp_since 改
+ 
+ 
+ def run(vault, *args, expect_rc=None):
+@@ -132807,7 +132808,7 @@ def t_blind_judge_follows_disposition_branch():
+     got = []
+     orig = m._kt_sit_verdict_one
+ 
+-    def spy(repo_root, diff_range, at_sha, ent, cache, deadline=None, branch=None, bj_raw=None):
++    def spy(repo_root, diff_range, at_sha, ent, cache, deadline=None, branch=None, bj_raw=None, disp_rec=None):   # disp_rec:情境題引出處依作者表態日期分新舊制
+         got.append((branch, bj_raw))
+         return None
+     pf = {"stack_questions_applicable": {"kt": ["q"]},
+@@ -133042,6 +133043,1384 @@ def t_gov_situation_field_types():
+             shutil.rmtree(root, ignore_errors=True)
+ 
+ 
++# ── 情境題答案引規格出處(Projects/情境題答案要引規格出處與回寫循環_計劃 範圍 1 到 3、S1 到 S7、S18)──────────────
++# 固定材料:一個圖譜(搜尋計劃 doing、lands_in 指到 app/Screen.kt 的家 Systems/搜尋;結帳計劃 doing、連到別處),
++# 一支情境檔 _SIT_S2_KT(第一段 D-1、第二段 D-3)。條款本文與引句的實字數、哪幾條在〈驗收條款〉節都照下面的字面手數。
++import shutil as _ksp_sh
++
++_KSP_SEARCH_PLAN = """---
++type: project
++status: doing
++lands_in:
++  - "[[{land}]]"
++---
++# 搜尋_計劃
++{extra}
++## 驗收條款
++
++- [S1] 當使用者開啟搜尋頁,系統 應 顯示輸入框 [test:test_a]
++- [S2] 當沒有結果,系統 應 顯示空狀態 [test:test_b]
++- [S3] 當使用者連續輸入,搜尋結果 應 只顯示最後一次查詢的結果 [test:test_c]
++- [S5] 當使用者連續輸入,搜尋結果 應 用 `flatMapLatest` 只顯示最後一次查詢的結果 [test:test_e]
++
++## 其他
++
++- [S4] 當網路斷線,系統 應 顯示重試按鈕的提示文字 [test:test_d]
++"""
++_KSP_CHECKOUT_PLAN = """---
++type: project
++status: doing
++lands_in:
++  - "[[Systems/結帳]]"
++---
++# 結帳_計劃
++
++## 驗收條款
++
++- [S1] 當使用者按下結帳,系統 應 建立訂單並顯示訂單編號 [test:test_x]
++"""
++_KSP_HOME = """---
++type: system
++status: doing
++about_code:
++  - {code}
++---
++# 搜尋
++"""
++_KSP_V = "docs/t-knowledge"
++_KSP_S3 = "Projects/搜尋_計劃#S3"
++_KSP_Q3 = "只顯示最後一次查詢的結果"          # 12 個實字,S3 本文裡逐字有
++_KSP_MAIN12 = {"applies": True, "variant": "main", "evidence": "app/Screen.kt:12"}
++
++
++def _ksp_vault(land="Systems/搜尋", code="app/Screen.kt", extra=""):
++    return {f"{_KSP_V}/Projects/搜尋_計劃.md": _KSP_SEARCH_PLAN.format(land=land, extra=extra),
++            f"{_KSP_V}/Projects/結帳_計劃.md": _KSP_CHECKOUT_PLAN,
++            f"{_KSP_V}/Systems/搜尋.md": _KSP_HOME.format(code=code)}
++
++
++class _ksp_since:
++    """測試期間把情境題出處的生效日改成 day(總開關預設 9999,既有情境題測試停在生效前),離開時還原。"""
++    def __init__(self, day):
++        self.day = day
++
++    def __enter__(self):
++        self.old = _os_mod.environ.get("LUMOS_KT_SIT_SPEC_SINCE")
++        _os_mod.environ["LUMOS_KT_SIT_SPEC_SINCE"] = self.day
++        return self
++
++    def __exit__(self, *_a):
++        if self.old is None:
++            _os_mod.environ.pop("LUMOS_KT_SIT_SPEC_SINCE", None)
++        else:
++            _os_mod.environ["LUMOS_KT_SIT_SPEC_SINCE"] = self.old
++
++
++def _ksp_repo(vault=None):
++    """main 上提交圖譜(vault=None 用預設那份;給 {} 就沒有圖譜),feat/sit 分支加 app/Screen.kt。回 (root, HEAD 的 sha)。"""
++    base = dict(_ksp_vault() if vault is None else vault)
++    base["README2.md"] = "x\n"
++    root = _sit_repo(base, {"app/Screen.kt": _SIT_S2_KT})
++    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
++    return root, sha
++
++
++def _ksp_verdict(root, sha, ent_fn, rec=None, waive_first=False, patch=None, bj_fn=None):
++    """行程內跑推送前的情境題核對(_kt_sit_verdict_one,沒給 bj_fn=沒有 branch、不核盲判):表換成測試型錄、segs 從被推版本重算,
++    ent_fn(segs) 產作者答案。rec=作者表態事件(預設寫於 2026-12-01,配合呼叫端的生效日);waive_first=第一段寫段放行。
++    patch={函式名: 替身}:暫時換掉 lumos 裡的函式(造失敗用)。bj_fn(segs) → 盲判帳全文(位元組):給了就以分支 feat/sit 核盲判。
++    回 (問題句或 None, segs, cache)。"""
++    import json as _j
++    m = _load_lumos_inproc()
++    rows, _e = m._kt_decision_table(_sit_catalog())
++    segs = m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
++    if waive_first:
++        (Path(root) / ".lumos" / "lint-waivers.json").write_text(
++            _j.dumps({"waivers": [{"key": "kt-situation:" + segs[0]["seg"], "rule": "kt-situation", "reason": "測試"}]}), encoding="utf-8")
++    orig = {"_KT_DT_ROWS": m._KT_DT_ROWS}
++    m._KT_DT_ROWS = rows
++    for k, v in (patch or {}).items():
++        orig[k] = getattr(m, k)
++        setattr(m, k, v)
++    try:
++        cache = {}
++        bjk = {"branch": "feat/sit", "bj_raw": bj_fn(segs)} if bj_fn is not None else {}
++        pr = m._kt_sit_verdict_one(str(root), "HEAD~1..HEAD", sha, ent_fn(segs), cache,
++                                   disp_rec=rec if rec is not None else {"written_at": "2026-12-01T09:00:00+08:00", "ts": "2026-12-01T09:00:00+08:00"},
++                                   **bjk)
++    finally:
++        for k, v in orig.items():
++            setattr(m, k, v)
++    return pr, segs, cache
++
++
++def _ksp_d1(**spec):
++    """第一段 D-1 答適用(照標準寫法、evidence 第 12 行)加上 spec/quote;第二段 D-3 答不適用。"""
++    return lambda segs: _sit_ans(segs, {**_KSP_MAIN12, **spec}, {"applies": False})
++
++
++def _ksp_ledger_disp(root):
++    import json as _j
++    p = Path(root) / "docs" / ".governance-log.jsonl"
++    if not p.is_file():
++        return []
++    return [d for d in (_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("{"))
++            if d.get("kind") == "dispositions"]
++
++
++def t_kt_sit_spec_shape():
++    """[情境題答案要引規格出處 S1] 表態收件(code-loop dispositions)在今天已過生效日時驗出處兩欄的形狀,不合整份不寫治理帳:
++    ①引句正規化後不到 10 個實字(預期值表 S1 第一列「只要 最新 一次」=6 字);②沒出處卻有引句(S1 第二列);
++    ③出處寫法不合〈用詞〉:編號帶前導 0、少 S、不在 Projects/ 底下、不是字串;④答不適用的列填了照樣驗。
++    對照:合格的一份寫得進去;同一份壞形狀在生效日之前照舊制收(證明是依生效日切換);型錄自檢 check.py 走的 _kt_sit_row_check 照舊制。
++    判準來源:計劃〈用詞〉出處、引句與〈範圍〉1「收的時候(形狀)」;應抓到的錯:沒驗形狀、門檻數錯(數了空白)、生效日沒接上收件。"""
++    import json as _j
++    cat = _sit_catalog()
++    root, tpl, _sha = _sit_s2_setup(cat)
++    segs = [{"seg": s["seg"], "rows": list(s["rows"])} for s in (tpl.get("kt-situation") or {}).get("segments") or []]
++    check("S1 ★前置★ 樣板切出兩段", len(segs) == 2, str(segs))
++
++    def write(sit):
++        doc = dict(tpl)
++        doc["kt-situation"] = sit
++        f = root / "disp.json"
++        f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
++        return _sit_run(["code-loop", "dispositions", str(f), "--repo", str(root)], cat)
++
++    try:
++        with _ksp_since("2000-01-01"):
++            cases = [
++                ("引句 6 個實字(只要 最新 一次)", {"spec": _KSP_S3, "quote": "只要 最新 一次"}, None, "quote"),
++                ("沒出處卻有引句", {"spec": "", "quote": "使用者連續輸入時只顯示最後一次"}, None, "quote 也要留空"),
++                ("編號帶前導 0(S03)", {"spec": "Projects/搜尋_計劃#S03", "quote": _KSP_Q3}, None, "spec"),
++                ("少了 S(#3)", {"spec": "Projects/搜尋_計劃#3", "quote": _KSP_Q3}, None, "spec"),
++                ("不在 Projects/ 底下", {"spec": "搜尋_計劃#S3", "quote": _KSP_Q3}, None, "spec"),
++                ("spec 不是字串", {"spec": 3, "quote": _KSP_Q3}, None, "字串"),
++                ("答不適用的列填了壞引句", None, {"applies": False, "spec": _KSP_S3, "quote": "太短了"}, "quote"),
++            ]
++            for label, d1, d3, word in cases:
++                n0 = len(_ksp_ledger_disp(root))
++                sit = _sit_ans(segs, {**_KSP_MAIN12, **d1} if d1 is not None else _KSP_MAIN12, d3 or {"applies": False})
++                w = write(sit)
++                check(f"S1 {label} → 拒收(rc2)、治理帳沒多一筆", w.returncode == 2 and len(_ksp_ledger_disp(root)) == n0 and word in w.stderr,
++                      f"rc={w.returncode} {w.stderr[-400:]}")
++            n0 = len(_ksp_ledger_disp(root))
++            w = write(_sit_ans(segs, {**_KSP_MAIN12, "spec": _KSP_S3, "quote": _KSP_Q3}, {"applies": False}))
++            check("S1 ★對照★ 合格的出處與 12 字引句 → 寫進去(rc0、帳多一筆)", w.returncode == 0 and len(_ksp_ledger_disp(root)) == n0 + 1, w.stderr[-400:])
++            w = write(_sit_ans(segs, {**_KSP_MAIN12, "spec": "Projects/搜尋_計劃.md#S3", "quote": "  只顯示最後一次  查詢的結果 "}, {"applies": False}))
++            check("S1 ★對照★ 計劃名帶 .md、引句前後與中間多空白(收成一個仍 12 字)→ 照收", w.returncode == 0, w.stderr[-400:])
++            w = write(_sit_ans(segs, _KSP_MAIN12, {"applies": False}))
++            check("S1 ★對照★ 答適用但兩欄都沒寫 → 形狀照收(沒出處是推送前的事,S3)", w.returncode == 0, w.stderr[-400:])
++        with _ksp_since("9999-12-31"):
++            w = write(_sit_ans(segs, {**_KSP_MAIN12, "spec": _KSP_S3, "quote": "只要 最新 一次"}, {"applies": False}))
++            check("S1 ★對照★ 生效日之前 → 同一份壞引句照舊制收(rc0)", w.returncode == 0, w.stderr[-400:])
++        m = _load_lumos_inproc()
++        sg = {"seg": "s1", "file": "app/A.kt", "start": 1, "end": 3, "lines": [2], "rows": ["D-1"], "material": [1, 3], "_mat": "", "_code": ["", "", ""]}
++        row = {"id": "D-1", "switch": False, "evidence": {"main": None, "alt": None}, "alt": "", "standard": ""}
++        with _ksp_since("2000-01-01"):
++            got = m._kt_sit_row_check(sg, "D-1", {"applies": True, "variant": "main", "evidence": "app/A.kt:2", "spec": "亂寫", "quote": "x"}, row)
++        check("S1 型錄自檢 check.py 的 _kt_sit_row_check 照舊制(壞的出處兩欄不看)", got is None, repr(got))
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_kt_sit_spec_verify():
++    """[情境題答案要引規格出處 S2] 推送前核對作者答適用那列的出處內容(預期值表 S2 四列加邊界):
++    ①引搜尋計劃 S3、引句「只顯示最後一次查詢的結果」→ 不擋;②引結帳計劃 S1(存在但不在對應名單)→ 擋,印對應計劃與條款清單;
++    ③引句「只顯示每一次查詢的結果」(本文沒有)→ 擋;④S5 本文保留反引號,引句少了反引號 → 擋、帶反引號 → 過;
++    ⑤S4 定義在〈其他〉節(不在〈驗收條款〉)→ 擋;⑥S9 不存在 → 擋;⑦引句多空白(正規化收成一個)→ 過;⑧答不適用的列填了錯出處 → 擋。
++    判準來源:計劃〈範圍〉1 推送前核對、〈用詞〉出處/出處本文/引句;應抓到的錯:不查名單、不限〈驗收條款〉節、出處本文剝了反引號、引句沒正規化、不適用列不驗。"""
++    root, sha = _ksp_repo()
++    try:
++        with _ksp_since("2026-11-13"):
++            pr, segs, _c = _ksp_verdict(root, sha, _ksp_d1(spec=_KSP_S3, quote=_KSP_Q3))
++            check("S2 ★前置★ 兩段、第一段候選列 D-1", [s["rows"] for s in segs] == [["D-1"], ["D-3"]], str([s["rows"] for s in segs]))
++            check("S2 ①引搜尋計劃 S3、引句逐字在本文 → 不擋", pr is None, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="Projects/結帳_計劃#S1", quote="建立訂單並顯示訂單編號"))
++            check("S2 ②引不在對應名單的結帳計劃 → 擋、講不在名單", isinstance(pr, str) and "不在這次的對應計劃名單" in pr, repr(pr))
++            check("S2 ②擋下訊息印對應計劃的條款清單(搜尋計劃、S1 到 S3 與 S5 的前段文字;不列結帳計劃、不列節外的 S4)",
++                  isinstance(pr, str) and "Projects/搜尋_計劃:S1 當使用者開啟搜尋頁" in pr and "S3 當使用者連續輸入,搜尋結果 應 只顯示最後一" in pr
++                  and "S5 " in pr and "Projects/結帳_計劃:" not in pr and "S4 當網路斷線" not in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec=_KSP_S3, quote="只顯示每一次查詢的結果"))
++            check("S2 ③引句不在出處本文 → 擋", isinstance(pr, str) and "引句不在" in pr and "S3" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="Projects/搜尋_計劃#S5", quote="用 flatMapLatest 只顯示最後一次"))
++            check("S2 ④出處本文保留反引號:引句少了反引號 → 擋", isinstance(pr, str) and "引句不在" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="Projects/搜尋_計劃#S5", quote="用 `flatMapLatest` 只顯示最後一次"))
++            check("S2 ④★對照★ 引句照本文帶反引號 → 不擋", pr is None, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="Projects/搜尋_計劃#S4", quote="顯示重試按鈕的提示文字"))
++            check("S2 ⑤條款定義在〈驗收條款〉節以外 → 擋", isinstance(pr, str) and "沒有 S4" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="Projects/搜尋_計劃#S9", quote=_KSP_Q3))
++            check("S2 ⑥條款不存在 → 擋", isinstance(pr, str) and "沒有 S9" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec=_KSP_S3, quote="搜尋結果   應\n只顯示最後一次"))
++            check("S2 ⑦引句的連續空白與換行收成一個空格後逐字在本文 → 不擋", pr is None, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, lambda segs: _sit_ans(segs, {**_KSP_MAIN12, "spec": _KSP_S3, "quote": _KSP_Q3},
++                                                                       {"applies": False, "spec": "Projects/結帳_計劃#S1", "quote": "建立訂單並顯示訂單編號"}))
++            check("S2 ⑧答不適用的列填了不在名單的出處 → 照樣核、擋", isinstance(pr, str) and "D-3" in pr and "不在這次的對應計劃名單" in pr, repr(pr))
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_kt_sit_spec_missing_blocks():
++    """[情境題答案要引規格出處 S3] 作者答 D-1 適用、spec 空 → 推送前擋,訊息印人裁指令骨架(帶好這段的段身分與列)與現有條款清單;
++    對照:同一段答不適用、spec 空 → 不擋(只有答適用的列要引);生效日之前寫的表態 → 不擋(S18 另測細節)。
++    判準來源:計劃〈範圍〉2 與預期值表 S3 列;應抓到的錯:答適用沒出處放行、骨架沒帶段與列、只擋不給改引的清單。"""
++    root, sha = _ksp_repo()
++    try:
++        with _ksp_since("2026-11-13"):
++            pr, segs, _c = _ksp_verdict(root, sha, _ksp_d1(spec="", quote=""))
++            seg = segs[0]["seg"] if segs else "?"
++            check("S3 答適用、spec 空 → 擋、講沒有出處", isinstance(pr, str) and "沒有出處" in pr, repr(pr))
++            check("S3 擋下訊息印人裁指令骨架(這段的段身分、--row D-1、這段的檔)",
++                  isinstance(pr, str) and f"lumos situation-rule --seg {seg} --row D-1 --plan Projects/<計劃名>" in pr and "--file app/Screen.kt" in pr, repr(pr))
++            check("S3 擋下訊息列出現有條款讓作者改引", isinstance(pr, str) and "Projects/搜尋_計劃:S1" in pr and "S3 當使用者連續輸入" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, lambda segs: _sit_ans(segs, {"applies": False}, {"applies": False}))
++            check("S3 ★對照★ 答不適用、spec 空 → 不擋", pr is None, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(), rec={"written_at": "2026-11-12T23:59:00+08:00"})
++            check("S3 ★對照★ 表態寫於生效日前一天 → 不擋", pr is None, repr(pr))
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_kt_sit_spec_no_plan_template():
++    """[情境題答案要引規格出處 S4] 表態樣板(pitfalls --dispositions-template)在今天已過生效日時:每列多 spec、quote 兩欄(空字串);
++    範圍找不到任何對應計劃(搜尋計劃 lands_in 指到別處、範圍只改了 kt 檔)→ 說明印寫計劃、人裁、段放行三條路,推送前答適用的列照擋(範圍 3);
++    對照:有對應計劃時列出計劃與條款編號(節外的 S4 不列);生效日之前樣板沒有兩欄;--carry 帶來的舊答案兩欄補空字串、不自動填。
++    判準來源:計劃〈範圍〉1 樣板、〈範圍〉3 與預期值表 S4 列;應抓到的錯:名單空時沒講出路、樣板漏欄、carry 把別的值填進兩欄。"""
++    import json as _j
++    cat = _sit_catalog()
++    roots = []
++    try:
++        def tpl_of(root):
++            t = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root)], cat)
++            return (_j.loads(t.stdout) if t.stdout.strip().startswith("{") else {}).get("kt-situation") or {}, t
++        root, sha = _ksp_repo(_ksp_vault(land="Systems/其他"))
++        roots.append(root)
++        with _ksp_since("2000-01-01"):
++            sit, t = tpl_of(root)
++            help_ = sit.get("spec_help") or ""
++            check("S4 名單空 → 說明印三條路:寫計劃、人裁、段放行", "寫一份計劃" in help_ and "人裁" in help_ and "lumos situation-rule" in help_
++                  and "段放行" in help_ and "lint-waive kt-situation:" in help_, help_ + t.stderr[-300:])
++            rows = [r for s in sit.get("segments") or [] for r in s["rows"].values()]
++            check("S4 樣板每列多 spec、quote 兩欄(空字串)", rows and all(r.get("spec") == "" and r.get("quote") == "" for r in rows), str(rows))
++            check("S4 樣板的說明放在 segments 之前", list(sit).index("spec_help") < list(sit).index("segments") if "spec_help" in sit else False, str(list(sit)))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="", quote=""))
++            check("S4 名單空、答適用的列 → 推送前擋,訊息同樣講三條路", isinstance(pr, str) and "沒有出處" in pr and "找不到任何對應計劃" in pr
++                  and "段放行" in pr, repr(pr))
++        root2, _sha2 = _ksp_repo()
++        roots.append(root2)
++        with _ksp_since("2000-01-01"):
++            sit, t = tpl_of(root2)
++            check("S4 ★對照★ 有對應計劃 → spec_plans 列搜尋計劃的 S1、S2、S3、S5(節外的 S4 不列、沒連到的結帳計劃不列)",
++                  sit.get("spec_plans") == {"Projects/搜尋_計劃": ["S1", "S2", "S3", "S5"]} and "找不到任何對應計劃" not in (sit.get("spec_help") or ""),
++                  str(sit.get("spec_plans")) + t.stderr[-300:])
++        with _ksp_since("9999-12-31"):
++            sit, _t = tpl_of(root2)
++            rows = [r for s in sit.get("segments") or [] for r in s["rows"].values()]
++            check("S4 ★對照★ 生效日之前 → 樣板沒有兩欄、沒有說明", rows and all("spec" not in r and "quote" not in r for r in rows) and "spec_help" not in sit, str(sit)[:400])
++            # 舊制寫一份表態(沒有兩欄),再用新制樣板 --carry
++            doc = _sit_fill_others(_j.loads(_sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root2)], cat).stdout))
++            segs = [{"seg": s["seg"], "rows": list(s["rows"])} for s in sit["segments"]]
++            doc["kt-situation"] = _sit_ans(segs, _KSP_MAIN12, {"applies": False})
++            f = root2 / "disp.json"
++            f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
++            w = _sit_run(["code-loop", "dispositions", str(f), "--repo", str(root2)], cat)
++            check("S4 ★前置★ 舊制表態寫得進去", w.returncode == 0, w.stderr[-300:])
++        with _ksp_since("2000-01-01"):
++            t = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--carry", "--repo", str(root2)], cat)
++            sit = (_j.loads(t.stdout) if t.stdout.strip().startswith("{") else {}).get("kt-situation") or {}
++            first = ((sit.get("segments") or [{}])[0].get("rows") or {}).get("D-1") or {}
++            check("S4 --carry 沿用舊答案:applies 等照舊,兩欄補空字串(不自動填)",
++                  first.get("applies") is True and first.get("evidence") == "app/Screen.kt:12" and first.get("spec") == "" and first.get("quote") == "",
++                  str(first) + t.stderr[-300:])
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_kt_sit_spec_waiver():
++    """[情境題答案要引規格出處 S5] 第一段有 kt-situation:<段身分> 段放行:答適用、spec 空 → 不擋(出處擋略過);同一段缺一列答案照擋;
++    形狀不合(引句太短)照擋;沒有圖譜的專案(名單算不出來)只要答適用的列都在放行段裡 → 不去算名單、不擋。
++    對照:沒有段放行的同一份答案擋(S3)。判準來源:計劃〈範圍〉2 段放行是出口、預期值表 S5 列;應抓到的錯:段放行沒蓋過出處擋、段放行連缺列都放掉。"""
++    roots = []
++    try:
++        with _ksp_since("2026-11-13"):
++            root, sha = _ksp_repo()
++            roots.append(root)
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="", quote=""))
++            check("S5 ★對照★ 沒有段放行 → 擋", isinstance(pr, str) and "沒有出處" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="", quote=""), waive_first=True)
++            check("S5 第一段有段放行、答適用沒出處 → 不擋", pr is None, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec="Projects/結帳_計劃#S1", quote="建立訂單並顯示訂單編號"), waive_first=True)
++            check("S5 第一段有段放行、出處不在名單 → 不擋(內容核對也略過)", pr is None, repr(pr))
++            def drop(segs):
++                a = _sit_ans(segs, _KSP_MAIN12, {"applies": False})
++                a["segments"][0]["rows"] = {}
++                return a
++            pr, _s, _c = _ksp_verdict(root, sha, drop, waive_first=True)
++            check("S5 段放行的段缺一列答案 → 照擋", isinstance(pr, str) and "缺列 D-1" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec=_KSP_S3, quote="太短"), waive_first=True)
++            check("S5 段放行的段出處形狀不合 → 照擋", isinstance(pr, str) and "quote" in pr, repr(pr))
++            root3, sha3 = _ksp_repo({})
++            roots.append(root3)
++            pr, _s, cache = _ksp_verdict(root3, sha3, _ksp_d1(spec="", quote=""), waive_first=True)
++            check("S5 沒有圖譜的專案、答適用的列都在放行段 → 不算名單、不擋", pr is None and "spec_names" not in cache, repr(pr) + str(list(cache)))
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++
++
++def t_kt_sit_spec_names_fail_closed():
++    """[情境題答案要引規格出處 S6] 對應計劃名單算不出來一律擋,訊息講「算不出對應計劃」與原因:①被推版本的樹沒有圖譜目錄(預期值表 S6 列);
++    ②git 讀不出圖譜內容(_drift_tree_env 回 None);③算名單時丟例外。合出處形狀的答案也一樣擋(名單算不出就核不了)。
++    對照:沒有答適用的列 → 不算名單、不擋;同一次核對名單只算一次(cache)。
++    判準來源:計劃〈用詞〉對應計劃名單「失敗一律擋」;應抓到的錯:名單算不出當空名單(會變成只擋沒出處的)、例外被當放行、每列重算。"""
++    m = _load_lumos_inproc()
++    roots = []
++    try:
++        with _ksp_since("2026-11-13"):
++            root, sha = _ksp_repo({})
++            roots.append(root)
++            pr, _s, _c = _ksp_verdict(root, sha, _ksp_d1(spec=_KSP_S3, quote=_KSP_Q3))
++            check("S6 ①樹裡沒有圖譜目錄 → 擋,講算不出對應計劃與原因", isinstance(pr, str) and "算不出對應計劃" in pr and "沒有圖譜目錄" in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, lambda segs: _sit_ans(segs, {"applies": False}, {"applies": False}))
++            check("S6 ★對照★ 沒有答適用的列 → 不算名單、不擋", pr is None, repr(pr))
++            root2, sha2 = _ksp_repo()
++            roots.append(root2)
++            pr, _s, _c = _ksp_verdict(root2, sha2, _ksp_d1(spec=_KSP_S3, quote=_KSP_Q3), patch={"_drift_tree_env": lambda *a, **k: None})
++            check("S6 ②讀不出圖譜內容 → 擋", isinstance(pr, str) and "算不出對應計劃" in pr and "讀不出" in pr, repr(pr))
++            def boom(*_a, **_k):
++                raise RuntimeError("壞了")
++            pr, _s, _c = _ksp_verdict(root2, sha2, _ksp_d1(spec=_KSP_S3, quote=_KSP_Q3), patch={"_spec_gate_push_candidates": boom})
++            check("S6 ③算名單丟例外 → 擋、帶例外種類", isinstance(pr, str) and "算不出對應計劃" in pr and "RuntimeError" in pr, repr(pr))
++            calls = []
++            orig = m._kt_sit_spec_names_calc
++            def spy(*a, **k):
++                calls.append(1)
++                return orig(*a, **k)
++            pr, _s, _c = _ksp_verdict(root2, sha2, lambda segs: _sit_ans(segs, {**_KSP_MAIN12, "spec": _KSP_S3, "quote": _KSP_Q3},
++                                                                        {"applies": True, "variant": "main", "evidence": "app/Screen.kt:19",
++                                                                         "spec": _KSP_S3, "quote": _KSP_Q3}),
++                                      patch={"_kt_sit_spec_names_calc": spy})
++            check("S6 ★對照★ 兩列都引出處 → 名單一次核對只算一次、兩列都過", pr is None and len(calls) == 1, f"{pr!r} calls={len(calls)}")
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++
++
++def t_kt_sit_spec_names_from_tree():
++    """[情境題答案要引規格出處 S7] 對應計劃名單照被推版本的樹算,不看工作目錄:
++    ①工作目錄的搜尋計劃正文多一條未提交的 [[Systems/搜尋]] 連結、被推版本沒有(lands_in 指別處)→ 名單不含搜尋計劃;
++    ②被推版本的家節點 about_code 是別支檔、工作目錄改成 app/Screen.kt(沒提交)→ 先用磁碟圖譜算過一次家對照表(行程內快取)之後,
++    記憶體圖譜照樣用自己的家 → 名單不含搜尋計劃。對照:同樣的工作目錄拿磁碟圖譜餵規格閘推送前那支,兩案都會含搜尋計劃(證明情境真的分得出兩邊)。
++    判準來源:計劃〈用詞〉對應計劃名單「名單只認被推版本」與 _impact_home_map 快取鍵那句;應抓到的錯:讀計劃正文開磁碟檔、家對照表快取不分版本。"""
++    m = _load_lumos_inproc()
++    roots = []
++    try:
++        # ①
++        root, sha = _ksp_repo(_ksp_vault(land="Systems/其他"))
++        roots.append(root)
++        p = root / _KSP_V / "Projects/搜尋_計劃.md"
++        p.write_text(p.read_text(encoding="utf-8").replace("# 搜尋_計劃\n", "# 搜尋_計劃\n\n落點見 [[Systems/搜尋]]。\n"), encoding="utf-8")
++        names, err = m._kt_sit_spec_names_calc(str(root), "HEAD~1..HEAD", sha)
++        check("S7 ①被推版本沒有那條連結 → 名單不含搜尋計劃", err is None and "Projects/搜尋_計劃" not in (names or {}), f"{err} {names}")
++        disk = m._spec_gate_push_candidates(m.Env(root / _KSP_V), root, _KSP_V, ["app/Screen.kt"])
++        check("S7 ①★對照★ 拿工作目錄的圖譜算 → 含搜尋計劃", "Projects/搜尋_計劃.md" in disk, str(disk))
++        # ②
++        root2, sha2 = _ksp_repo(_ksp_vault(code="app/Other.kt"))
++        roots.append(root2)
++        h = root2 / _KSP_V / "Systems/搜尋.md"
++        h.write_text(h.read_text(encoding="utf-8").replace("app/Other.kt", "app/Screen.kt"), encoding="utf-8")
++        disk = m._spec_gate_push_candidates(m.Env(root2 / _KSP_V), root2, _KSP_V, ["app/Screen.kt"])
++        check("S7 ②★對照★ 工作目錄的家對照表(先算、進快取)→ 含搜尋計劃", "Projects/搜尋_計劃.md" in disk, str(disk))
++        names, err = m._kt_sit_spec_names_calc(str(root2), "HEAD~1..HEAD", sha2)
++        check("S7 ②被推版本的家不管 app/Screen.kt → 名單不含搜尋計劃(家對照表不拿工作目錄那份)",
++              err is None and "Projects/搜尋_計劃" not in (names or {}), f"{err} {names}")
++        # 規格閘推送前那支:磁碟圖譜時 env_text 與直接讀檔相同(行為不變)
++        root3, sha3 = _ksp_repo()
++        roots.append(root3)
++        names, err = m._kt_sit_spec_names_calc(str(root3), "HEAD~1..HEAD", sha3)
++        check("S7 ★對照★ 被推版本本來就連到家 → 名單含搜尋計劃、條款只收〈驗收條款〉節的 S1/S2/S3/S5",
++              err is None and sorted((names or {}).get("Projects/搜尋_計劃", {})) == ["S1", "S2", "S3", "S5"], f"{err} {names}")
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++
++
++def t_kt_sit_spec_since():
++    """[情境題答案要引規格出處 S18] 新舊制依作者表態事件寫的日期判(written_at 的日期部分,缺就取 ts,兩個都沒有當新制),生效日可用
++    LUMOS_KT_SIT_SPEC_SINCE 覆寫:同一份「答適用、沒有 spec 欄」的答案,寫於生效日前 → 不擋;寫於當天或之後 → 擋。
++    另走一次整條路(code-loop dispositions 寫帳 → code-loop check 從帳讀回 written_at):生效日改到今天之後 → 放行;改到很早 → 擋。
++    判準來源:計劃〈用詞〉生效日與預期值表 S18 列;應抓到的錯:拿今天判而不是拿表態日期、帳讀回時丟掉 written_at、ts 後備沒接、缺日期當舊制。"""
++    import json as _j
++    root, sha = _ksp_repo()
++    cat = _sit_catalog()
++    try:
++        ans = _ksp_d1()   # 適用、沒有 spec/quote 兩個鍵
++        with _ksp_since("2026-06-01"):
++            for label, rec, blocked in (("written_at 早於生效日", {"written_at": "2026-01-05T10:00:00+08:00", "ts": "2026-07-01T00:00:00+08:00"}, False),
++                                        ("written_at 正好是生效日", {"written_at": "2026-06-01T00:00:01+08:00"}, True),
++                                        ("written_at 晚於生效日", {"written_at": "2026-07-01T10:00:00+08:00"}, True),
++                                        ("沒有 written_at、ts 早於生效日", {"ts": "2026-01-05T10:00:00+08:00"}, False),
++                                        ("沒有 written_at、ts 晚於生效日", {"ts": "2026-07-01T10:00:00+08:00"}, True),
++                                        ("兩個都沒有 → 當新制", {}, True)):
++                pr, _s, _c = _ksp_verdict(root, sha, ans, rec=rec)
++                ok = (isinstance(pr, str) and "沒有出處" in pr) if blocked else pr is None
++                check(f"S18 {label} → {'擋' if blocked else '照舊制不擋'}", ok, repr(pr))
++        m = _load_lumos_inproc()
++        got = m._codeloop_disp_from_event({"head_sha": "a" * 40, "ts": "t", "written_at": "2026-01-05T10:00:00+08:00"})
++        check("S18 治理帳事件轉表態紀錄時帶 written_at", got.get("written_at") == "2026-01-05T10:00:00+08:00", str(got))
++        # 整條路:舊制收件寫帳(沒有兩欄)→ check 照帳上 written_at 判
++        with _ksp_since("9999-12-31"):
++            t = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root)], cat)
++            doc = _sit_fill_others(_j.loads(t.stdout))
++            segs = [{"seg": s["seg"], "rows": list(s["rows"])} for s in doc["kt-situation"]["segments"]]
++            sit = _sit_ans(segs, _KSP_MAIN12, {"applies": False})
++            doc["kt-situation"] = sit
++            f = root / "disp.json"
++            f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
++            w = _sit_run(["code-loop", "dispositions", str(f), "--repo", str(root)], cat)
++            _sit_bj_agree(root, cat, sit)
++        check("S18 ★前置★ 表態寫進帳", w.returncode == 0, w.stderr[-300:])
++        def run_check():
++            c = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--json", "--repo", str(root)], cat)
++            return c.returncode, c.stdout + c.stderr
++        with _ksp_since("2999-01-01"):
++            rc, out = run_check()
++        check("S18 整條路:表態寫於生效日前 → check 放行", rc == 0 and "沒有出處" not in out, out[-600:])
++        with _ksp_since("2000-01-01"):
++            rc, out = run_check()
++        check("S18 整條路:表態寫於生效日後 → check 擋、講沒有出處", rc != 0 and "沒有出處" in out, out[-600:])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++# ── 情境題引出處:盲判看規格(Projects/情境題答案要引規格出處與回寫循環_計劃 範圍 6、S14 到 S17、範圍 9 三支)──────────────
++# 沿用上面 _ksp_* 的圖譜與情境檔:第一段候選 D-1、第二段候選 D-3;搜尋計劃〈驗收條款〉節有 S1、S2、S3、S5(S4 在節外)。
++_KBS_S3_BODY = "當使用者連續輸入,搜尋結果 應 只顯示最後一次查詢的結果"          # S3 的出處本文(剝掉 [S3] 與 [test:])
++_KBS_S5_BODY = "當使用者連續輸入,搜尋結果 應 用 `flatMapLatest` 只顯示最後一次查詢的結果"
++_KBS_S5 = "Projects/搜尋_計劃#S5"
++
++
++def _kbs_v(applies, followed=None, spec=None):
++    """一票盲判:applies/followed/reason,spec 給了才帶。"""
++    return {"applies": applies, **({"followed": followed} if applies else {}), "reason": "看段材料判的", **({"spec": spec} if spec is not None else {})}
++
++
++def _kbs_ledger(first=None, arbiter=None):
++    """回 bj_fn(segs) → 盲判帳全文:first/arbiter={段序號: {列: 票}};第一盲判沒給的格補「不適用」(第二段 D-3 同作者)。"""
++    import json as _j
++    def fn(segs):
++        out = []
++        for role, votes in (("first", first), ("arbiter", arbiter)):
++            if votes is None and role == "arbiter":
++                continue
++            bj = {}
++            for i, sg in enumerate(segs):
++                rows = dict((votes or {}).get(i) or {})
++                if role == "first":
++                    for rid in sg["rows"]:
++                        rows.setdefault(rid, _kbs_v(False))
++                if rows:
++                    bj[sg["seg"]] = {"file": sg["file"], "rows": rows}
++            out.append(_j.dumps({"gate": "code-loop", "kind": "blind-judge", "branch": "feat/sit", "head_sha": "a" * 40, "role": role,
++                                 "blind_judge": bj}, ensure_ascii=False))
++        return ("\n".join(out) + "\n").encode("utf-8")
++    return fn
++
++
++def _kbs_disp(root, cat, d1, d3=None, question="x"):
++    """在 _ksp 的 repo 寫一份作者表態(第一段 D-1=d1、第二段 D-3=d3)→ 段身分 [段一, 段二]。"""
++    import json as _j
++    t = _sit_run(["pitfalls", "--diff", "HEAD~1..HEAD", "--dispositions-template", "--repo", str(root)], cat)
++    doc = _sit_fill_others(_j.loads(t.stdout))
++    segs = [s["seg"] for s in doc["kt-situation"]["segments"]]
++    doc["kt-situation"] = {"status": "satisfied", "question": question,
++                           "segments": [{"seg": segs[0], "rows": {"D-1": d1}}, {"seg": segs[1], "rows": {"D-3": d3 or {"applies": False}}}]}
++    f = root / "disp.json"
++    f.write_text(_j.dumps(doc, ensure_ascii=False), encoding="utf-8")
++    w = _sit_run(["code-loop", "dispositions", str(f), "--repo", str(root)], cat)
++    assert w.returncode == 0, w.stderr[-400:]
++    return segs
++
++
++def _kbs_template(root, cat, *extra):
++    import json as _j
++    t = _bj_run(root, cat, "--template", *extra)
++    return (_j.loads(t.stdout) if t.stdout.strip().startswith("{") else {}), t
++
++
++def t_kt_bj_spec_material():
++    """[情境題答案要引規格出處 S14] 新制的盲判材料頂層放一次 specs:對應計劃〈驗收條款〉節每條的出處本文(搜尋計劃 S1、S2、S3、S5,
++    節外的 S4 不放、不在名單的結帳計劃不放);不放作者答案(spec/quote 欄、作者引的那條出處、作者的獨特字串)、預期值表內容、
++    治理帳的人裁紀錄;作答格式每列多 spec、指示多一句依 specs 填出處。對照:舊制(作者表態寫於生效日前)材料沒有 specs、作答格式沒有 spec。
++    判準來源:計劃〈範圍〉6 材料、預期值表 S14 列;應抓到的錯:specs 漏放或放錯層、夾帶作者答案或預期值表、舊制也塞 specs。"""
++    import json as _j
++    cat = _sit_catalog()
++    uniq = "UNIQ-作者答案-c41e"
++    tbl = "\n## 預期值表\n\n| 條款 | 輸入 | 預期 | 來源 |\n|---|---|---|---|\n| S3 | UNIQ-預期值輸入-9b | UNIQ-預期值預期-9b | 面試題 |\n"
++    root, _sha = _ksp_repo(_ksp_vault(extra=tbl))
++    try:
++        with _ksp_since("2000-01-01"):
++            _kbs_disp(root, cat, {**_KSP_MAIN12, "spec": _KSP_S3, "quote": _KSP_Q3}, question=uniq)
++            led = root / "docs" / ".governance-log.jsonl"
++            with open(led, "a", encoding="utf-8") as fh:
++                fh.write(_j.dumps({"ts": "2026-11-13T00:00:00+08:00", "gate": "situation-rule", "kind": "situation-rule",
++                                   "clause": "UNIQ-人裁紀錄-77", "head_sha": "b" * 40}, ensure_ascii=False) + "\n")
++            doc, t = _kbs_template(root, cat)
++            specs = doc.get("specs")
++            check("S14 材料頂層有 specs:搜尋計劃 S1、S2、S3、S5 與各自的出處本文(節外 S4、結帳計劃不放)",
++                  isinstance(specs, dict) and list(specs) == ["Projects/搜尋_計劃"] and sorted(specs["Projects/搜尋_計劃"]) == ["S1", "S2", "S3", "S5"]
++                  and specs["Projects/搜尋_計劃"]["S3"] == _KBS_S3_BODY and specs["Projects/搜尋_計劃"]["S5"] == _KBS_S5_BODY, str(specs)[:500] + t.stderr[-300:])
++            check("S14 specs 只在頂層一份(段裡不重複帶)", all("specs" not in s for s in doc.get("segments") or []) and t.stdout.count('"specs"') == 1, t.stdout[:300])
++            check("S14 不含作者答案:沒有 quote 欄、沒有作者引的 Projects/搜尋_計劃#S3、沒有作者的獨特字串、沒有 variant/evidence",
++                  '"quote"' not in t.stdout and _KSP_S3 not in t.stdout and uniq not in t.stdout and "variant" not in t.stdout
++                  and "app/Screen.kt:12" not in t.stdout, t.stdout[:400])
++            check("S14 不含預期值表內容與治理帳的人裁紀錄", "UNIQ-預期值" not in t.stdout and "UNIQ-人裁紀錄" not in t.stdout, t.stdout[:300])
++            rows_fmt = ((doc.get("answer_format") or {}).get("segments") or [{}])[0].get("rows", {}).get("D-<n>", {})
++            check("S14 作答格式每列多 spec、不收引句", "spec" in rows_fmt and "quote" not in rows_fmt, str(rows_fmt))
++            check("S14 指示多一句:判適用的列依 specs 填出處、引不到留空、不要用常識補需求",
++                  "specs" in doc.get("instructions", "") and "留空" in doc.get("instructions", "") and "常識" in doc.get("instructions", ""), doc.get("instructions", "")[-200:])
++        with _ksp_since("9999-12-31"):
++            doc, t = _kbs_template(root, cat)
++            rows_fmt = ((doc.get("answer_format") or {}).get("segments") or [{}])[0].get("rows", {}).get("D-<n>", {})
++            check("S14 ★對照★ 作者表態寫於生效日前(舊制)→ 材料沒有 specs、作答格式沒有 spec", t.returncode == 0 and "specs" not in doc and "spec" not in rows_fmt,
++                  str(list(doc)) + t.stderr[-300:])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_kt_bj_spec_shortcut_blocks():
++    """[情境題答案要引規格出處 S15] 捷徑擋:作者答 D-1 不適用,第一盲判或仲裁判適用並填了存在的出處 → 推送前擋,印那條條款原文、
++    講兩條出口(依那條判適用並引它重答、段放行)。①第一盲判引 S3(仲裁同作者、票面已解決)→ 擋、印 S3 原文;②第一盲判判適用沒出處、
++    仲裁判適用引 S3(票面是兩位盲判一致判照做、原本不擋)→ 擋;③作者全答不適用、名單算不出(沒有圖譜)→ 擋、講算不出對應計劃。
++    對照:盲判沒填出處、出處不在名單(結帳計劃)、條款不存在(S9)、這段有段放行、作者表態寫於生效日前 → 都不擋。
++    判準來源:計劃〈範圍〉6 捷徑擋與預期值表 S15 列;應抓到的錯:只看第一盲判、不驗出處存在就擋、段放行沒蓋過、舊制也擋、名單算不出當放行。"""
++    roots = []
++    try:
++        with _ksp_since("2026-11-13"):
++            root, sha = _ksp_repo()
++            roots.append(root)
++            def na(segs):
++                return _sit_ans(segs, {"applies": False}, {"applies": False})
++            arb_na = {0: {"D-1": _kbs_v(False)}}
++            pr, segs, _c = _ksp_verdict(root, sha, na, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True, _KSP_S3)}}, arb_na))
++            check("S15 ①第一盲判判適用引 S3、作者答不適用(仲裁同作者)→ 擋、印 S3 原文", isinstance(pr, str) and _KSP_S3 in pr and _KBS_S3_BODY in pr
++                  and "D-1" in pr, repr(pr))
++            check("S15 ①擋下訊息講兩條出口:依那條重答並引它、段放行", isinstance(pr, str) and "重答" in pr and "lint-waive kt-situation:" + segs[0]["seg"] in pr, repr(pr))
++            pr, _s, _c = _ksp_verdict(root, sha, na, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True)}}, {0: {"D-1": _kbs_v(True, True, _KSP_S3)}}))
++            check("S15 ②仲裁判適用引 S3(第一盲判沒出處)→ 擋", isinstance(pr, str) and _KBS_S3_BODY in pr, repr(pr))
++            for label, first, arb in (("盲判判適用沒填出處(仲裁同作者)", {0: {"D-1": _kbs_v(True, True)}}, arb_na),
++                                      ("出處是不在名單的結帳計劃", {0: {"D-1": _kbs_v(True, True, "Projects/結帳_計劃#S1")}}, arb_na),
++                                      ("出處條款不存在(S9)", {0: {"D-1": _kbs_v(True, True, "Projects/搜尋_計劃#S9")}}, arb_na),
++                                      ("出處是節外的 S4", {0: {"D-1": _kbs_v(True, True, "Projects/搜尋_計劃#S4")}}, arb_na)):
++                pr, _s, _c = _ksp_verdict(root, sha, na, bj_fn=_kbs_ledger(first, arb))
++                check(f"S15 ★對照★ {label} → 不擋", pr is None, repr(pr))
++            pr, _s, cache = _ksp_verdict(root, sha, na, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True, _KSP_S3)}}, arb_na), waive_first=True)
++            check("S15 ★對照★ 這段有段放行 → 不擋、也不為它算名單", pr is None and "spec_names" not in cache, repr(pr) + str(list(cache)))
++            d3_app = {"applies": True, "variant": "main", "evidence": "app/Screen.kt:19", "spec": _KSP_S3, "quote": _KSP_Q3}
++            pr, _s, cache = _ksp_verdict(root, sha, lambda segs: _sit_ans(segs, {"applies": False}, d3_app),
++                                         bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True, _KSP_S3)}, 1: {"D-3": _kbs_v(True, True, _KSP_S3)}}, arb_na),
++                                         waive_first=True)
++            check("S15 ★對照★ 這段有段放行、名單因別段已算出來 → 這段照樣不擋", pr is None and "spec_names" in cache, repr(pr) + str(list(cache)))
++            (root / ".lumos" / "lint-waivers.json").unlink()   # 段放行檔留在 repo 裡會蓋掉後面的案例
++            pr, _s, _c = _ksp_verdict(root, sha, na, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True, _KSP_S3)}}, arb_na),
++                                      rec={"written_at": "2026-11-12T23:59:00+08:00"})
++            check("S15 ★對照★ 作者表態寫於生效日前(舊制)→ 不擋", pr is None, repr(pr))
++            root2, sha2 = _ksp_repo({})
++            roots.append(root2)
++            pr, _s, _c = _ksp_verdict(root2, sha2, na, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True, _KSP_S3)}}, arb_na))
++            check("S15 ③作者全答不適用、盲判引了出處、名單算不出(沒有圖譜)→ 擋、講算不出對應計劃", isinstance(pr, str) and "算不出對應計劃" in pr, repr(pr))
++            pr, _s, cache = _ksp_verdict(root2, sha2, na, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True)}}, arb_na))
++            check("S15 ③★對照★ 名單算不出但盲判沒填出處 → 不算名單、不擋", pr is None and "spec_names" not in cache, repr(pr) + str(list(cache)))
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++
++
++def t_kt_bj_spec_differ_reminds():
++    """[情境題答案要引規格出處 S16] 作者與判適用的盲判都填了出處但不同 → 只提醒一行(附兩條原文)、記進提醒帳,不擋、不要求仲裁:
++    ①作者引 S3、第一盲判判適用照做引 S5 → 不擋、cache 提醒一筆 verdict=spec-differ、印出來的那行帶 S3 與 S5 原文;記帳一筆 warned、
++    verdict=spec-differ,同一版本重記不加;②仲裁判適用引 S5(作者引 S3、第一盲判不適用)→ 也提醒。
++    對照:盲判引同一條(寫法帶 .md)、盲判沒填出處、這段有段放行 → 不提醒。
++    判準來源:計劃〈範圍〉6 出處不同只提醒與預期值表 S16 列;應抓到的錯:出處不同就擋、要求仲裁、寫法不同當成不同條、沒記帳。"""
++    import json as _j
++    m = _load_lumos_inproc()
++    root, sha = _ksp_repo()
++    try:
++        with _ksp_since("2026-11-13"):
++            app = _ksp_d1(spec=_KSP_S3, quote=_KSP_Q3)
++            pr, _s, cache = _ksp_verdict(root, sha, app, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(True, True, _KBS_S5)}}))
++            rem = [r for r in cache.get("reminders") or [] if r.get("verdict") == "spec-differ"]
++            check("S16 ①出處不同 → 不擋、提醒一筆 spec-differ", pr is None and len(rem) == 1 and rem[0]["row"] == "D-1", repr(pr) + str(cache.get("reminders")))
++            lines = m._kt_sit_reminder_lines(cache.get("reminders") or [])
++            ln = next((x for x in lines if "出處不同" in x), "")
++            check("S16 ①提醒那一行附兩條原文(作者 S3、盲判 S5)、講不擋", _KBS_S3_BODY in ln and _KBS_S5_BODY in ln and "不擋" in ln, str(lines))
++            n = m._kt_sit_reminder_log(str(root), sha, cache.get("reminders") or [])
++            evs = [e for e in _sit_gov_events(root) if e.get("kind") == "warned" and e.get("verdict") == "spec-differ"]
++            check("S16 ①記進提醒帳一筆 warned、verdict=spec-differ", n == 1 and len(evs) == 1 and evs[0].get("row") == "D-1", f"n={n} {evs}")
++            m._kt_sit_reminder_log(str(root), sha, cache.get("reminders") or [])
++            check("S16 ①同一版本重記不加", len([e for e in _sit_gov_events(root) if e.get("verdict") == "spec-differ"]) == 1, "")
++            _conf, mj = m._gov_situation_confirm([("s", "D-1", "spec-differ"), ("s", "D-1", "majority-against-author")], {}, {}, {})
++            check("S16 ①統計:出處不同提醒不混進多數決提醒的則數", mj == {"D-1": {"majority-against-author": 1}}, str(mj))
++            pr, _s, cache = _ksp_verdict(root, sha, app, bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(False)}}, {0: {"D-1": _kbs_v(True, True, _KBS_S5)}}))
++            rem = [r for r in cache.get("reminders") or [] if r.get("verdict") == "spec-differ"]
++            check("S16 ②仲裁判適用引 S5、作者引 S3 → 不擋、提醒", pr is None and len(rem) == 1, repr(pr) + str(cache.get("reminders")))
++            for label, first, kw in (("盲判引同一條(寫法帶 .md)", {0: {"D-1": _kbs_v(True, True, "Projects/搜尋_計劃.md#S3")}}, {}),
++                                     ("盲判沒填出處", {0: {"D-1": _kbs_v(True, True)}}, {}),
++                                     ("這段有段放行", {0: {"D-1": _kbs_v(True, True, _KBS_S5)}}, {"waive_first": True})):
++                pr, _s, cache = _ksp_verdict(root, sha, app, bj_fn=_kbs_ledger(first), **kw)
++                rem = [r for r in cache.get("reminders") or [] if r.get("verdict") == "spec-differ"]
++                check(f"S16 ★對照★ {label} → 不擋、不提醒", pr is None and not rem, repr(pr) + _j.dumps(cache.get("reminders"), ensure_ascii=False)[:300])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_kt_bj_spec_roundtrip():
++    """[情境題答案要引規格出處 S17] 盲判作答每列帶 spec:①不在材料 specs 裡的出處(結帳計劃、S9、節外 S4)、寫法不合、不是字串 → 整份拒收 rc2、帳不寫;
++    ②合格的(D-1 引 S3、D-3 不適用 spec 空)→ 寫進帳,事件帶 spec;從帳折回的格子保留 spec;code-loop check 不報缺第一盲判、放行;
++    ③讀帳驗票:spec 是字串就收,不是字串整筆不算。對照:舊制(作者表態寫於生效日前)填了出處 → 拒收,沒填照舊收。
++    判準來源:計劃〈範圍〉6 作答(白名單、驗票、驗事件、折帳四處一起加)與預期值表 S17 列;應抓到的錯:四處漏一處(帶新欄的帳讀回整筆被丟、報缺第一盲判)、不驗出處存在。"""
++    m = _load_lumos_inproc()
++    cat = _sit_catalog()
++    roots = []
++    try:
++        with _ksp_since("2000-01-01"):
++            root, sha = _ksp_repo()
++            roots.append(root)
++            segs = _kbs_disp(root, cat, {**_KSP_MAIN12, "spec": _KSP_S3, "quote": _KSP_Q3})
++            def doc(spec1, spec3=""):
++                return {"segments": [{"seg": segs[0], "rows": {"D-1": _kbs_v(True, True, spec1)}}, {"seg": segs[1], "rows": {"D-3": _kbs_v(False, spec=spec3)}}]}
++            for label, d in (("不在對應名單的結帳計劃", doc("Projects/結帳_計劃#S1")), ("條款不存在 S9", doc("Projects/搜尋_計劃#S9")),
++                             ("節外的 S4", doc("Projects/搜尋_計劃#S4")), ("寫法不合(S03)", doc("Projects/搜尋_計劃#S03")), ("不是字串", doc(3))):
++                w = _bj_write(root, cat, d)
++                check(f"S17 ①出處{label} → 整份拒收 rc2、帳不寫", w.returncode == 2 and not _bj_events(root) and "spec" in w.stderr, w.stderr[-300:])
++            w = _bj_write(root, cat, doc(_KSP_S3))
++            ev = (_bj_events(root) or [{}])[0]
++            check("S17 ②合格 → 寫入 rc0、事件帶 spec", w.returncode == 0 and ((ev.get("blind_judge") or {}).get(segs[0], {}).get("rows", {}).get("D-1", {}).get("spec")) == _KSP_S3,
++                  w.stderr[-300:] + str(ev)[:300])
++            cells = m._kt_bj_read(root, "feat/sit")
++            check("S17 ②從帳折回的格子保留 spec(第一段 D-1 是 S3、第二段 D-3 是空字串)",
++                  (cells.get(segs[0]) or {}).get("D-1", {}).get("first", {}).get("spec") == _KSP_S3
++                  and (cells.get(segs[1]) or {}).get("D-3", {}).get("first", {}).get("spec") == "", str(cells)[:400])
++            c = _sit_run(["code-loop", "check", "--diff", "HEAD~1..HEAD", "--at-sha", sha, "--branch", "feat/sit", "--json", "--repo", str(root)], cat)
++            out = c.stdout + c.stderr
++            check("S17 ②code-loop check 讀回後不報缺第一盲判、放行", c.returncode == 0 and "缺第一盲判" not in out, out[-600:])
++            check("S17 ③讀帳驗票:spec 是字串 → 收;不是字串 → 整筆不算",
++                  m._kt_bj_event_ok({"role": "first", "blind_judge": {"s": {"rows": {"D-1": _kbs_v(True, True, _KSP_S3)}}}})
++                  and not m._kt_bj_event_ok({"role": "first", "blind_judge": {"s": {"rows": {"D-1": _kbs_v(True, True, 3)}}}}), "")
++        with _ksp_since("9999-12-31"):
++            root2, _sha2 = _ksp_repo()
++            roots.append(root2)
++            segs2 = _kbs_disp(root2, cat, _KSP_MAIN12)
++            w = _bj_write(root2, cat, {"segments": [{"seg": segs2[0], "rows": {"D-1": _kbs_v(True, True, _KSP_S3)}}]})
++            check("S17 ★對照★ 舊制填了出處 → 拒收 rc2、帳不寫", w.returncode == 2 and not _bj_events(root2), w.stderr[-300:])
++            w = _bj_write(root2, cat, {"segments": [{"seg": segs2[0], "rows": {"D-1": _kbs_v(True, True)}}]})
++            check("S17 ★對照★ 舊制沒填出處 → 照舊收", w.returncode == 0 and len(_bj_events(root2)) == 1, w.stderr[-300:])
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_kt_bj_spec_both_blind_na():
++    """[情境題答案要引規格出處 範圍 9:兩位盲判都判不適用] 天花板 5:兩位盲判都判不適用時捷徑擋與出處不同提醒都不觸發——
++    ①作者答 D-1 不適用、第一盲判也不適用(就算在不適用的列填了 S3)→ 不擋、沒有出處提醒;②作者答適用引 S3、第一盲判與仲裁都判不適用
++    (其中一位填了 S5)→ 不擋(票面照舊:兩位盲判一致判不適用只記 blind_agree)、沒有出處提醒。
++    判準來源:計劃〈範圍〉6(捷徑擋與提醒都只看判適用的盲判)、〈天花板〉5;應抓到的錯:不看 applies 就拿盲判的 spec 去擋或提醒。"""
++    root, sha = _ksp_repo()
++    try:
++        with _ksp_since("2026-11-13"):
++            pr, _s, cache = _ksp_verdict(root, sha, lambda segs: _sit_ans(segs, {"applies": False}, {"applies": False}),
++                                         bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(False, spec=_KSP_S3)}}))
++            check("範圍9 ①作者與第一盲判都判不適用(盲判在不適用列填了出處)→ 不擋、沒有出處提醒、不為它算名單",
++                  pr is None and not [r for r in cache.get("reminders") or [] if r.get("verdict") == "spec-differ"] and "spec_names" not in cache,
++                  repr(pr) + str(cache.get("reminders")) + str(list(cache)))
++            pr, _s, cache = _ksp_verdict(root, sha, _ksp_d1(spec=_KSP_S3, quote=_KSP_Q3),
++                                         bj_fn=_kbs_ledger({0: {"D-1": _kbs_v(False, spec=_KBS_S5)}}, {0: {"D-1": _kbs_v(False)}}))
++            check("範圍9 ②兩位盲判都判不適用(作者引 S3、一位盲判填了 S5)→ 不擋、沒有出處提醒、記 blind_agree",
++                  pr is None and not [r for r in cache.get("reminders") or [] if r.get("verdict") == "spec-differ"] and cache.get("blind_agree") == 1,
++                  repr(pr) + str(cache.get("reminders")) + str(cache.get("blind_agree")))
++        # 直接核 _kt_bj_check(名單已給):判不適用的盲判票就算帶了出處,捷徑擋與出處不同都不看它
++        m = _load_lumos_inproc()
++        names = {"plans": {"Projects/搜尋_計劃": {"S3": _KBS_S3_BODY, "S5": _KBS_S5_BODY}}, "err": None}
++        sg = [_bj_seg("s1", ["D-1"])]
++        cells = {"s1": {"D-1": {"first": _kbs_v(False, spec=_KBS_S5), "arbiter": _kbs_v(False, spec=_KBS_S5)}}}
++        for label, ans in (("作者答不適用", {"applies": False}), ("作者答適用引 S3", {"applies": True, "variant": "main", "evidence": "app/A.kt:3", "spec": _KSP_S3})):
++            _p, notes = m._kt_bj_check(sg, {"status": "satisfied", "segments": [{"seg": "s1", "rows": {"D-1": ans}}]}, cells, specs=names)
++            check(f"範圍9 ③直接核:{label}、兩位盲判判不適用但都填了 S5 → 沒有捷徑擋、沒有出處提醒",
++                  not notes["spec_block"] and not notes["spec_differ"], str(notes["spec_block"]) + str(notes["spec_differ"]))
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_kt_bj_spec_parts_each_carry():
++    """[情境題答案要引規格出處 範圍 9:分份材料各帶 specs] 35 段分兩份,--part 1 與 --part 2 的材料頂層都帶同一份 specs(搜尋計劃的條款);
++    第 2 份段裡的檔的家連到的計劃也在(specs 依整個推送範圍算、不依這一份的段)。
++    判準來源:計劃〈範圍〉6「分份(--part)時每份都帶這份 specs」;應抓到的錯:只有第 1 份帶、或依各份的段各算一份(兩份不同、寫入時驗不一致)。"""
++    cat = _sit_catalog()
++    many = "".join("    suspend fun f%d() = coroutineScope { %d }\n" % (i, i) for i in range(35))
++    base = dict(_ksp_vault(code="app/B.kt"))
++    base["app/B.kt"] = "package app\n\nclass B {\n}\n"
++    root = _sit_repo(base, {"app/B.kt": "package app\n\nclass B {\n" + many + "}\n"})
++    try:
++        with _ksp_since("2000-01-01"):
++            d1, t1 = _kbs_template(root, cat)
++            d2, t2 = _kbs_template(root, cat, "--part", "2")
++            want = {"Projects/搜尋_計劃": ["S1", "S2", "S3", "S5"]}
++            got1 = {k: sorted(v) for k, v in (d1.get("specs") or {}).items()}
++            check("範圍9 ★前置★ 分兩份(30 段+5 段)", d1.get("parts") == 2 and len(d1.get("segments") or []) == 30 and len(d2.get("segments") or []) == 5,
++                  t1.stderr[-300:] + t2.stderr[-300:])
++            check("範圍9 第 1 份頂層帶 specs(搜尋計劃 S1、S2、S3、S5)", got1 == want, str(got1) + t1.stderr[-300:])
++            check("範圍9 第 2 份頂層也帶、跟第 1 份同一份", d2.get("specs") == d1.get("specs") and d2.get("specs"), str(d2.get("specs"))[:300])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def _kbs_big_plan(land):
++    """條款合計超過 80,000 字的 doing 計劃(90 條、每條約 1,000 字),lands_in 指到 land。"""
++    lines = "".join(f"- [S{i}] 當使用者做第 {i} 件事,系統 應 " + "照需求處理並顯示結果" * 100 + f" [test:test_big_{i}]\n" for i in range(1, 91))
++    return f"---\ntype: project\nstatus: doing\nlands_in:\n  - \"[[{land}]]\"\n---\n# 大_計劃\n\n## 驗收條款\n\n{lines}"
++
++
++def t_kt_bj_spec_material_cap():
++    """[情境題答案要引規格出處 範圍 9:specs 超過上限] 對應計劃的條款合計超過 80,000 字時,材料只放「範圍裡被改到的計劃」加
++    「連到這幾段所在檔家節點的計劃」:①大計劃連到另一支被改程式(app/Other.kt,沒有情境段)的家 → 縮掉大計劃,留搜尋計劃(連到段所在檔的家)
++    與範圍裡被改到的計劃(狀態 done 也留);名單本身是含大計劃的(證明真的縮了);盲判引大計劃的條款 → 拒收(不在材料的 specs);
++    ②大計劃連到段所在檔的家(縮不掉)→ 拒絕產材料 rc2、stdout 沒有材料、訊息講縮小推送範圍或用段放行。
++    判準來源:計劃〈範圍〉6 材料上限;應抓到的錯:不縮就整份塞、縮的規則挑錯計劃(把被改到的計劃也縮掉)、縮完還超過照樣產材料。"""
++    m = _load_lumos_inproc()
++    cat = _sit_catalog()
++    roots = []
++    touched_plan = "---\ntype: project\nstatus: done\n---\n# 改到_計劃\n\n## 驗收條款\n\n- [S1] 當使用者登入,系統 應 顯示首頁 [test:test_t1]\n"
++    other_home = "---\ntype: system\nstatus: doing\nabout_code:\n  - app/Other.kt\n---\n# 其他\n"
++    try:
++        with _ksp_since("2000-01-01"):
++            for case, land in (("①", "Systems/其他"), ("②", "Systems/搜尋")):
++                base = dict(_ksp_vault())
++                base.update({f"{_KSP_V}/Projects/大_計劃.md": _kbs_big_plan(land), f"{_KSP_V}/Projects/改到_計劃.md": touched_plan,
++                             f"{_KSP_V}/Systems/其他.md": other_home, "app/Other.kt": "package app\n\nclass Other\n"})
++                root = _sit_repo(base, {"app/Screen.kt": _SIT_S2_KT, "app/Other.kt": "package app\n\nclass Other {\n}\n",
++                                        f"{_KSP_V}/Projects/改到_計劃.md": touched_plan + "- [S2] 當使用者登出,系統 應 回到登入頁 [test:test_t2]\n"})
++                roots.append(root)
++                sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
++                names, err = m._kt_sit_spec_names_calc(str(root), "HEAD~1..HEAD", sha)
++                check(f"範圍9 {case}★前置★ 對應計劃名單含大計劃、搜尋計劃、改到計劃", err is None and sorted(names or {}) == sorted(["Projects/大_計劃", "Projects/改到_計劃", "Projects/搜尋_計劃"]),
++                      f"{err} {sorted(names or {})}")
++                doc, t = _kbs_template(root, cat)
++                if case == "①":
++                    check("範圍9 ①超過上限 → 縮成被改到的計劃加連到段所在檔家節點的計劃(大計劃縮掉)",
++                          t.returncode == 0 and sorted(doc.get("specs") or {}) == sorted(["Projects/改到_計劃", "Projects/搜尋_計劃"]), str(sorted(doc.get("specs") or {})) + t.stderr[-300:])
++                    segs = [s["seg"] for s in doc.get("segments") or []]
++                    w = _bj_write(root, cat, {"segments": [{"seg": segs[0], "rows": {"D-1": _kbs_v(True, True, "Projects/大_計劃#S1")}}]}) if segs else None
++                    check("範圍9 ①盲判引被縮掉的大計劃條款 → 拒收 rc2", w is not None and w.returncode == 2 and not _bj_events(root), (w.stderr[-300:] if w else "沒有段"))
++                else:
++                    check("範圍9 ②縮完還超過 → 拒絕產材料 rc2、stdout 沒有材料、講縮小推送範圍或用段放行",
++                          t.returncode == 2 and not t.stdout.strip() and "縮小推送範圍" in t.stderr and "段放行" in t.stderr, t.stdout[:200] + t.stderr[-300:])
++    finally:
++        for r in roots:
++            _ksp_sh.rmtree(r, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++# ── 人裁指令 situation-rule(Projects/情境題答案要引規格出處與回寫循環_計劃 範圍 4、5、7、9;S8 到 S13、S19)──
++# 測試型錄多一列 D-5(觸發字兩個:flatMapLatest、flatMapConcat),人裁要在同一列的兩種寫法之間換。
++# 假平台:tests/run.py 讀 app/Screen.kt,test_latest 在第一段被換成 flatMapConcat 時紅(印「名字 FAILED」讓 guard kill 歸因得到),
++# test_once 永遠綠(只送一次值的測試看不出差別,預期值表 S10 第一列)。預期值都照條款字面手算,不呼叫被測函式產生。
++_SRL_CATALOG = _SIT_CATALOG.replace(
++    "| D-4 | (停用)舊列 | (停用) | (停用) | (無) | 主:(無);例外:(無) | API-1 | 測 |\n",
++    "| D-4 | (停用)舊列 | (停用) | (停用) | (無) | 主:(無);例外:(無) | API-1 | 測 |\n"
++    "| D-5 | 只要最新一次查詢的結果 | `flatMapLatest { }` | 每一次都要做完 → `flatMapConcat { }` | flatMapLatest、flatMapConcat | 主:(無);例外:(無) | API-1 | 測 |\n")
++_SRL_KT = ("package app\n"                                             # 1
++           "\n"                                                        # 2
++           "class Vm(private val q: Flow<String>) {\n"                 # 3
++           "    val a = q.flatMapLatest { search(it) }\n"              # 4 ← 第一段(1-7)
++           + "".join(f"    val p{i} = {i}\n" for i in range(5, 25))    # 5-24
++           + "    val b = q.flatMapLatest { other(it) }\n"             # 25 ← 第二段(22-26)
++           "}\n")                                                      # 26
++_SRL_RUNNER = ("import sys\n"
++               "m = sys.argv[1] if len(sys.argv) > 1 else 'test_latest'\n"
++               "src = open('app/Screen.kt', encoding='utf-8').read()\n"
++               "if m == 'test_latest' and 'flatMapConcat { search' in src:\n"
++               "    print(m + ' FAILED: 連續輸入收到兩次結果')\n"
++               "    sys.exit(1)\n"
++               "print(m + ' ok')\n")
++_SRL_PLAN = """---
++type: project
++status: doing
++lands_in:
++  - "[[Systems/搜尋]]"
++---
++# 搜尋_計劃
++
++{accept}
++## 預期值表
++
++| 條款 | 輸入 | 預期 | 來源 |
++|---|---|---|---|
++| S1 | 開搜尋頁 | 有輸入框 | 需求 |
++
++## 其他
++
++- [S7] 當網路斷線,系統 應 顯示重試按鈕的提示文字 [test:test_d]
++"""
++_SRL_ACCEPT = """## 驗收條款
++
++- [S1] 當使用者開啟搜尋頁,系統 應 顯示輸入框 [test:test_a]
++- [S2] 當沒有結果,系統 應 顯示空狀態 [test:test_b]
++- [S3] 當使用者連續輸入,搜尋結果 應 只顯示最後一次查詢的結果 [test:test_c]
++- [S4] 當查詢失敗,系統 應 顯示錯誤訊息 [test:test_e]
++- [S6] 當使用者清空輸入框,系統 應 清掉結果清單 [test:test_f]
++"""
++_SRL_CLAUSE = "當使用者在上一次查詢回來前又輸入,搜尋結果 應 丟掉上一次查詢的結果"
++_SRL_CFG = {"test_profile": "python", "test": {"method_regex": "(?m)^def (test_[A-Za-z0-9_]+)\\s*\\(",
++                                               "run_cmd": "python3 tests/run.py {method}"}}
++_SRL_OLD = "flatMapLatest { search(it) }"
++_SRL_NEW = "flatMapConcat { search(it) }"
++
++
++def _srl_repo(accept=_SRL_ACCEPT, config=None):
++    """main 上提交圖譜(搜尋計劃、家節點)與假平台,feat/sit 分支加 app/Screen.kt。回 (root, 計劃檔, HEAD sha)。"""
++    v = _KSP_V
++    base = {f"{v}/Projects/搜尋_計劃.md": _SRL_PLAN.format(accept=accept),
++            f"{v}/Systems/搜尋.md": _KSP_HOME.format(code="app/Screen.kt"),
++            "tests/run.py": _SRL_RUNNER,
++            "tests/test_search.py": "def test_latest():\n    pass\n\ndef test_once():\n    pass\n"}
++    root = _sit_repo(base, {"app/Screen.kt": _SRL_KT}, config=config or _SRL_CFG)
++    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
++    return root, root / v / "Projects" / "搜尋_計劃.md", sha
++
++
++def _srl_segs(root, cat, sha):
++    m = _load_lumos_inproc()
++    rows, _e = m._kt_decision_table(cat)
++    return m._kt_situation_segments(root, "HEAD~1..HEAD", sha, table=rows)
++
++
++def _srl_run(root, cat, *args, env=None):
++    e = dict(_os_mod.environ)
++    e.update({"LUMOS_KT_CATALOG": str(cat), "LUMOS_KILL_TIMEOUT_FLOOR": "5", "LUMOS_TTY": "/nonexistent-tty"})
++    e.update(env or {})
++    return subprocess.run([sys.executable, GRAPHCTL, "--vault", str(Path(root) / _KSP_V), "situation-rule", *args],
++                          cwd=root, capture_output=True, text=True, env=e, stdin=subprocess.DEVNULL)
++
++
++def _srl_args(seg, **kw):
++    d = {"--seg": seg, "--row": "D-5", "--plan": "Projects/搜尋_計劃", "--clause": _SRL_CLAUSE, "--test": "test_latest",
++         "--file": "app/Screen.kt", "--old": _SRL_OLD, "--new": _SRL_NEW, "--consent": "好,照這條寫回計劃"}
++    d.update(kw)
++    return [x for k, val in d.items() if val is not None for x in (k, val)]
++
++
++def _srl_gov(root):
++    import json as _j
++    p = Path(root) / "docs" / ".governance-log.jsonl"
++    return [d for d in (_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip().startswith("{"))
++            if d.get("gate") == "situation-rule"] if p.is_file() else []
++
++
++def _srl_kill(root):
++    import json as _j
++    p = Path(root) / "docs" / ".kill-log.jsonl"
++    return [_j.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.is_file() else []
++
++
++def _srl_cat():
++    return _sit_catalog(_SRL_CATALOG)
++
++
++def t_situation_rule_origin():
++    """[情境題答案要引規格出處 S8] 人裁誰裁的:①沒有互動終端、沒帶 --consent → rc2,計劃、治理帳、殺傷力帳本都不動(連殺傷力驗證都沒跑);
++    ②終端答 n → 不寫回(rc1)、計劃與治理帳不動;③終端答 y、沒帶 --consent → 寫回,記 origin human。
++    判準來源:計劃〈用詞〉人裁(回 ai 要 --consent、沒帶拒絕 rc2;有終端答 y 記 human)與預期值表 S8 列;
++    應抓到的錯:沒終端時照寫(記成 ai 卻沒有使用者原話)、先跑殺傷力才判誰裁的、答 n 照寫。"""
++    import os
++    if not hasattr(os, "openpty"):
++        raise _SrcOnly("非 POSIX(要 os.openpty 模擬終端機),這段沒驗到")
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        check("S8 ★前置★ 切出兩段、候選列都是 D-5", [s["rows"] for s in segs] == [["D-5"], ["D-5"]], str([(s["rows"], s["start"], s["end"]) for s in segs]))
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--consent": None}))
++        check("S8 ①沒有終端、沒帶 --consent → rc2、講要 --consent", r.returncode == 2 and "--consent" in r.stderr, f"rc={r.returncode} {r.stderr[-400:]}")
++        check("S8 ①計劃不動、治理帳沒有 situation-rule、殺傷力帳本沒建(沒跑殺傷力)",
++              plan.read_bytes() == before and not _srl_gov(root) and not (root / "docs" / ".kill-log.jsonl").exists(), r.stdout[-300:])
++        master, slave = os.openpty()
++        try:
++            os.write(master, b"n\n")
++            r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--consent": None}), env={"LUMOS_TTY": os.ttyname(slave)})
++            check("S8 ②終端答 n → rc1、計劃不動、治理帳沒有 situation-rule", r.returncode == 1 and plan.read_bytes() == before and not _srl_gov(root),
++                  f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-300:]}")
++            os.write(master, b"y\n")
++            r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--consent": None}), env={"LUMOS_TTY": os.ttyname(slave)})
++            evs = _srl_gov(root)
++            check("S8 ③終端答 y、沒帶 --consent → 寫回、治理帳一筆 origin human、consent 空字串",
++                  r.returncode == 0 and len(evs) == 1 and evs[0].get("origin") == "human" and evs[0].get("consent") == ""
++                  and "[S8]" in plan.read_text(encoding="utf-8"), f"rc={r.returncode} {r.stderr[-400:]} {evs}")
++            subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True)
++            subprocess.run(["git", "commit", "-qm", "寫回 S8"], cwd=root, capture_output=True)   # 照下一步提示先提交計劃,不然下一次被未提交改動擋
++            after3 = plan.read_bytes()
++            r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--consent": None}),
++                         env={"LUMOS_TTY": os.ttyname(slave), "LUMOS_TTY_TIMEOUT": "0.5"})
++            check("S8 ④終端開得起來但沒人答(逾時記成 ai)、沒帶 --consent → rc2、計劃與治理帳不動",
++                  r.returncode == 2 and "--consent" in r.stderr and plan.read_bytes() == after3 and len(_srl_gov(root)) == 1,
++                  f"rc={r.returncode} {r.stderr[-400:]}")
++        finally:
++            os.close(master)
++            os.close(slave)
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_recipe_scope():
++    """[情境題答案要引規格出處 S9] 殺傷力配方限定這一段、同一列不同寫法,不合就拒絕、計劃不動、不跑殺傷力:
++    ①--old 是同檔另一段(第 25 行)的 flatMapLatest → 拒絕(不在這段起訖行);②--old 與 --new 含的觸發字集合相同(只多一個空白)→ 拒絕;
++    ③--new 不含那一列任何觸發字 → 拒絕;④--old 在整支檔出現兩次 → 拒絕;⑤--file 不是這一段所在的檔 → 拒絕。
++    判準來源:計劃〈範圍〉4 殺傷力驗證第一點與預期值表 S9 兩列;應抓到的錯:只看 --old 在檔裡出現一次、不看段起訖行;只看兩邊有觸發字、不看集合不同。"""
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        s1 = segs[0]["seg"]
++        before = plan.read_bytes()
++        cases = [("①--old 落在第二段(不在這段起訖行)", {"--old": "flatMapLatest { other(it) }", "--new": "flatMapConcat { other(it) }"}, "起訖行"),
++                 ("②兩邊觸發字集合相同", {"--new": "flatMapLatest  { search(it) }"}, "觸發字"),
++                 ("③--new 沒有那一列的觸發字", {"--new": "map { search(it) }"}, "觸發字"),
++                 ("④--old 在整支檔出現兩次", {"--old": "flatMapLatest", "--new": "flatMapConcat"}, "2 次"),
++                 ("⑤--file 不是這段所在的檔", {"--file": "app/Other.kt"}, "這一段在")]
++        for label, kw, word in cases:
++            r = _srl_run(root, cat, *_srl_args(s1, **kw))
++            check(f"S9 {label} → rc2、計劃不動、沒跑殺傷力", r.returncode == 2 and word in r.stderr and plan.read_bytes() == before
++                  and not _srl_kill(root) and not _srl_gov(root), f"rc={r.returncode} {r.stderr[-400:]}")
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_kill_required():
++    """[情境題答案要引規格出處 S10] 殺傷力判定不是沒有弱證據的 killed 就拒絕、計劃與治理帳不動:
++    ①綁的測試只送一次值(test_once),壞法照綠 → survived,拒絕並印七態結果;②平台 run_cmd 沒有 {method}(整套跑)→ killed 帶弱證據,拒絕並講弱證據原因。
++    兩次的殺傷力帳本那筆都帶 source: situation-rule。判準來源:計劃〈用詞〉宣告式壞法、〈範圍〉4 與預期值表 S10 兩列;
++    應抓到的錯:survived 照寫、弱證據的 killed 照寫(把 kill-add --try 不看弱證據的規矩搬過來)。"""
++    cat = _srl_cat()
++    roots = []
++    try:
++        root, plan, sha = _srl_repo()
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--test": "test_once"}))
++        kl = _srl_kill(root)
++        check("S10 ①survived → rc2、印 survived、計劃不動、治理帳沒有 situation-rule",
++              r.returncode == 2 and "survived" in (r.stdout + r.stderr) and plan.read_bytes() == before and not _srl_gov(root),
++              f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-400:]}")
++        check("S10 ①殺傷力帳本那筆是 survived、帶 source situation-rule", len(kl) == 1 and kl[0].get("verdict") == "survived"
++              and kl[0].get("source") == "situation-rule", str(kl))
++        cfg = {"test_profile": "python", "test": {"method_regex": _SRL_CFG["test"]["method_regex"], "run_cmd": "python3 tests/run.py test_latest"}}
++        root, plan, sha = _srl_repo(config=cfg)
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        kl = _srl_kill(root)
++        check("S10 ②整套跑 → killed 但弱證據:rc2、講弱證據與整套跑、計劃不動、治理帳沒有 situation-rule",
++              r.returncode == 2 and "弱證據:run_cmd 沒有 {method}、整套一起跑" in r.stderr and plan.read_bytes() == before and not _srl_gov(root),
++              f"rc={r.returncode} {r.stdout[-300:]} {r.stderr[-400:]}")
++        check("S10 ②殺傷力帳本那筆是 killed、weak true、帶 source situation-rule", len(kl) == 1 and kl[0].get("verdict") == "killed"
++              and kl[0].get("weak") is True and kl[0].get("source") == "situation-rule", str(kl))
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_writes_clause():
++    """[情境題答案要引規格出處 S11] 殺傷力判定是沒有弱證據的 killed(test_latest 連送兩個值,壞法把第一段換成 flatMapConcat 會紅):
++    計劃現有定義行最大是〈其他〉節的 S7、〈驗收條款〉節最後一條是 S6、中間缺 S5 → 在 S6 那行之後插 `- [S8] <條款> [test:test_latest]`;
++    預期值表與 S7 不動;治理帳一筆 gate/kind situation-rule,欄位齊(段、列、計劃、條款編號、條款文字與雜湊、測試名、origin ai、consent 原話、
++    殺傷力判定、配方身分、驗證時的 HEAD);殺傷力帳本那筆 killed、weak false、帶 source;印下一步(提交計劃、重答出處、重跑表態與留痕);
++    治理帳在跑之前就有未提交改動(簿記檔)不擋。判準來源:計劃〈範圍〉4 寫回與記帳兩點、預期值表 S11 列;
++    應抓到的錯:號碼取節內最大或填缺號、插在節尾空行或檔尾、碰到預期值表、帳缺欄、簿記檔也算未提交。"""
++    import hashlib
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        gl = root / "docs" / ".governance-log.jsonl"
++        gl.write_text('{"ts":"x","gate":"code-loop","kind":"warned","note":"簿記","nodes":[],"hard":false}\n', encoding="utf-8")   # 簿記檔未提交
++        before = plan.read_text(encoding="utf-8")
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        after = plan.read_text(encoding="utf-8")
++        want_line = f"- [S8] {_SRL_CLAUSE} [test:test_latest]"
++        exp = before.replace("[test:test_f]\n", "[test:test_f]\n" + want_line + "\n", 1)
++        check("S11 rc0、計劃只多 S8 那一行,插在〈驗收條款〉節最後一條(S6)之後;預期值表與 S7 不動",
++              r.returncode == 0 and after == exp, f"rc={r.returncode} {r.stderr[-500:]}\n{after}")
++        rows = {x["id"]: x for x in m.clause_bindings(after, {}, None, lambda _p: set(), lambda _p: "") if x.get("defined")}
++        check("S11 新條款是定義行、綁到 test_latest", "S8" in rows and rows["S8"].get("state") != "duplicate"
++              and "test_latest" in str(rows["S8"].get("refs")), str(rows.get("S8")))
++        evs = _srl_gov(root)
++        e = evs[0] if len(evs) == 1 else {}
++        check("S11 治理帳恰一筆 situation-rule(gate 與 kind 都是)", len(evs) == 1 and e.get("kind") == "situation-rule", str(evs)[:500])
++        want = {"seg": segs[0]["seg"], "row": "D-5", "plan": "Projects/搜尋_計劃.md", "clause_id": "S8", "clause_text": _SRL_CLAUSE,
++                "clause_sha": hashlib.sha256(_SRL_CLAUSE.encode("utf-8")).hexdigest(), "test_name": "test_latest", "origin": "ai",
++                "consent": "好,照這條寫回計劃", "kill_verdict": "killed",
++                "recipe_id": m._kill_recipe_key("Projects/搜尋_計劃.md", "S8", "app/Screen.kt", _SRL_OLD), "head_sha": sha}
++        bad = {k: (e.get(k), v) for k, v in want.items() if e.get(k) != v}
++        check("S11 治理帳那筆欄位齊且值對", not bad, str(bad))
++        kl = _srl_kill(root)
++        check("S11 殺傷力帳本那筆 killed、weak false、帶 source situation-rule", len(kl) == 1 and kl[0].get("verdict") == "killed"
++              and kl[0].get("weak") is False and kl[0].get("source") == "situation-rule", str(kl))
++        check("S11 印下一步:提交計劃、重答出處、重跑表態與代碼審留痕、規格閘留痕",
++              all(w in r.stdout for w in ("提交", "Projects/搜尋_計劃#S8", "--carry", "代碼審", "規格閘")), r.stdout[-800:])
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_ledger_fail():
++    """[情境題答案要引規格出處 範圍 4 記帳] 計劃寫回之後治理帳沒記到 → rc1、印「計劃已寫入 S<號>,治理帳沒記到,不要重跑」與補記用的那一行事件;
++    計劃保留新條款(不回滾、不叫人重跑:重跑會多寫一條重複條款)。判準來源:計劃〈範圍〉4 寫完計劃再記治理帳那點、〈實務隱患〉寫回成功帳沒記到。"""
++    import os, contextlib, io, json as _j
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        rows, _e = m._kt_decision_table(cat)
++        o_rows, o_ev = m._KT_DT_ROWS, m._gate_event
++        m._KT_DT_ROWS, m._gate_event = rows, (lambda *a, **kw: False)
++        o_env, o_cwd = dict(os.environ), os.getcwd()
++        os.environ.update({"LUMOS_TTY": "/nonexistent-tty", "LUMOS_KILL_TIMEOUT_FLOOR": "5"})
++        os.chdir(root)
++        try:
++            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
++                rc = m.cmd_situation_rule(m.Env(root / _KSP_V), segs[0]["seg"], "D-5", "Projects/搜尋_計劃", _SRL_CLAUSE, "test_latest",
++                                          "app/Screen.kt", _SRL_OLD, _SRL_NEW, consent="好")
++        finally:
++            os.chdir(o_cwd)
++            m._KT_DT_ROWS, m._gate_event = o_rows, o_ev
++            os.environ.clear()
++            os.environ.update(o_env)
++        e = err.getvalue()
++        line = next((ln for ln in e.splitlines() if ln.startswith("{")), "")
++        ev = _j.loads(line) if line else {}
++        check("記帳失敗 → rc1、講計劃已寫入 S8 與不要重跑", rc == 1 and "計劃已寫入 S8" in e and "不要重跑" in e, e[-500:])
++        check("記帳失敗 → 印出補記用的那一筆事件(gate situation-rule、條款 S8)", ev.get("gate") == "situation-rule" and ev.get("clause_id") == "S8", line[:300])
++        check("記帳失敗 → 計劃保留新條款", "- [S8] " + _SRL_CLAUSE in plan.read_text(encoding="utf-8") and not _srl_gov(root), "")
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_insert_position():
++    """[情境題答案要引規格出處 範圍 4 寫回] 寫回位置與號碼(行程內直接驗插入那一步):
++    ①〈驗收條款〉節一條都沒有 → 插在節標題下一行;②號碼是全文定義行最大號加一(節外的 S9 也算)、不填缺號;
++    ③條款文字插進去後不是定義行(例:前面又塞一個 [S3] 讓這行變引用)→ 拒絕、回原因。判準來源:計劃〈範圍〉4 寫回那點。"""
++    m = _load_lumos_inproc()
++    text = "# 甲\n\n## 驗收條款\n\n說明文字\n\n## 其他\n\n- [S9] 當甲,系統 應 乙 [test:t_x]\n"
++    new, cid, why = m._situation_rule_insert(text, "當丙,系統 應 丁", "t_y")
++    check("①節內沒條款 → 插在節標題下一行;②號碼 S10(全文最大 S9 加一)",
++          cid == "S10" and why is None and new == text.replace("## 驗收條款\n", "## 驗收條款\n- [S10] 當丙,系統 應 丁 [test:t_y]\n", 1), repr(new))
++    new, cid, why = m._situation_rule_insert(text, "當丙,系統 應 `丁", "t_y")
++    check("③插進去之後沒綁到測試(反引號沒成對把 [test:] 吞掉)→ 不插、回原因", new is None and why and "t_y" in why, repr(why))
++    new, cid, why = m._situation_rule_insert(text.replace("## 驗收條款", "## 其他節"), "當丙,系統 應 丁", "t_y")
++    check("沒有〈驗收條款〉節 → 不插、回原因", new is None and why and "驗收條款" in why, repr(why))
++
++
++def t_situation_rule_clause_text():
++    """[情境題答案要引規格出處 S12] 條款文字不合就拒絕、計劃不動、不跑殺傷力:未成對的反引號(預期值表 S12 列)、[keeps]、[Keeps] 變體、
++    [test:]、[manual:]、[S、換行、|、<!--、句式不合一條文法(缺「應」)。對照:成對的反引號照收(S11 那支已驗寫入)。
++    判準來源:計劃〈範圍〉4 條款文字那點;應抓到的錯:只擋部分記號、不跑句式判斷。"""
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        bad = [("反引號不成對", "當搜尋,系統 應 用 `flatMapLatest 只顯示最後一次", "反引號要成對"),
++               ("[keeps]", "當搜尋,系統 應 只顯示最後一次 [keeps]", "維持既有行為的標記"),
++               ("[Keeps] 變體", "當搜尋,系統 應 只顯示最後一次 [Keeps]", "維持既有行為的標記"),
++               ("[test:]", "當搜尋,系統 應 只顯示最後一次 [test:t_z]", "不准有 [test:"),
++               ("[manual:]", "當搜尋,系統 應 只顯示最後一次 [manual:人看]", "不准有 [manual:"),
++               ("[S", "當搜尋,系統 應 照 [S3] 只顯示最後一次", "不准有 [S"),
++               ("換行", "當搜尋,系統 應 只顯示\n最後一次", "不准有 換行"),
++               ("管線", "當搜尋,系統 應 只顯示 | 最後一次", "不准有 |"),
++               ("HTML 註解", "當搜尋,系統 應 只顯示最後一次 <!-- x -->", "不准有 <!--"),
++               ("缺「應」", "當搜尋,系統只顯示最後一次", "條款句式不合")]
++        for label, clause, word in bad:
++            r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--clause": clause}))
++            check(f"S12 {label} → rc2、講原因、計劃不動、沒跑殺傷力", r.returncode == 2 and plan.read_bytes() == before and not _srl_kill(root)
++                  and word in r.stderr, f"rc={r.returncode} {r.stderr[-300:]}")
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_rejects():
++    """[情境題答案要引規格出處 範圍 9] 人裁其他拒絕情形(都在殺傷力之前,計劃不動、沒跑殺傷力):①計劃沒有〈驗收條款〉節 → 叫人先補節;
++    ②簿記檔以外有未提交改動 → 拒絕;③專案沒宣告 run_cmd → 拒絕、出口是段放行;④段身分不在這次範圍 → 拒絕;⑤列不是那段的候選列 → 拒絕;
++    ⑥計劃檔不存在 → 拒絕。判準來源:計劃〈範圍〉4 第二點、殺傷力驗證「工作目錄」與「沒有 run_cmd」兩點、〈範圍〉9。"""
++    cat = _srl_cat()
++    roots = []
++    try:
++        root, plan, sha = _srl_repo(accept="## 別的節\n\n- [S1] 當使用者開啟搜尋頁,系統 應 顯示輸入框 [test:test_a]\n")
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        check("①沒有〈驗收條款〉節 → rc2、叫人先補節、計劃不動", r.returncode == 2 and "驗收條款" in r.stderr and "先補" in r.stderr
++              and plan.read_bytes() == before and not _srl_kill(root), r.stderr[-300:])
++        root, plan, sha = _srl_repo()
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        (root / "README.md").write_text("改了沒提交\n", encoding="utf-8")
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        check("②簿記檔以外有未提交改動 → rc2、點名那支檔、計劃不動", r.returncode == 2 and "未提交" in r.stderr and "README.md" in r.stderr
++              and plan.read_bytes() == before and not _srl_kill(root), r.stderr[-300:])
++        subprocess.run(["git", "checkout", "-q", "--", "README.md"], cwd=root)
++        r = _srl_run(root, cat, *_srl_args("f" * 16))
++        check("④段身分不在這次範圍 → rc2、列出這次的段", r.returncode == 2 and segs[0]["seg"] in r.stderr and not _srl_kill(root), r.stderr[-300:])
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--row": "D-1"}))
++        check("⑤列不是那段的候選列 → rc2", r.returncode == 2 and "D-5" in r.stderr and not _srl_kill(root), r.stderr[-300:])
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"], **{"--plan": "Projects/沒有_計劃"}))
++        check("⑥計劃檔不存在 → rc2", r.returncode == 2 and "沒有_計劃" in r.stderr and not _srl_kill(root), r.stderr[-300:])
++        root, plan, sha = _srl_repo(config={"test_profile": "python", "test": {"method_regex": _SRL_CFG["test"]["method_regex"]}})
++        roots.append(root)
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        r = _srl_run(root, cat, *_srl_args(segs[0]["seg"]))
++        check("③沒有 run_cmd → rc2、出口是段放行、計劃不動", r.returncode == 2 and "run_cmd" in r.stderr and "lint-waive kt-situation:" in r.stderr
++              and plan.read_bytes() == before and not _srl_kill(root), r.stderr[-300:])
++    finally:
++        for x in roots:
++            _ksp_sh.rmtree(x, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_situation_rule_interrupt():
++    """[情境題答案要引規格出處 範圍 4 中斷] ①殺傷力驗證中按 Ctrl-C(KeyboardInterrupt)→ rc2、計劃與治理帳都不寫;
++    ②_kill_run 被 KeyboardInterrupt 打斷時收掉測試的整個程序群組再往上丟(子程序不留著跑)。判準來源:計劃〈範圍〉4 中斷那點。"""
++    import os, threading, _thread, time as _t, contextlib, io
++    m = _load_lumos_inproc()
++    cat = _srl_cat()
++    root, plan, sha = _srl_repo()
++    try:
++        segs = _srl_segs(root, cat, sha)
++        before = plan.read_bytes()
++        orig = m.cmd_guard_kill
++
++        def boom(*a, **kw):
++            raise KeyboardInterrupt
++        rows, _e = m._kt_decision_table(cat)
++        o_rows = m._KT_DT_ROWS
++        m.cmd_guard_kill, m._KT_DT_ROWS = boom, rows
++        o_env = dict(os.environ)
++        os.environ["LUMOS_TTY"] = "/nonexistent-tty"
++        o_cwd = os.getcwd()
++        os.chdir(root)
++        try:
++            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
++                rc = m.cmd_situation_rule(m.Env(root / _KSP_V), segs[0]["seg"], "D-5", "Projects/搜尋_計劃", _SRL_CLAUSE, "test_latest",
++                                          "app/Screen.kt", _SRL_OLD, _SRL_NEW, consent="好")
++        finally:
++            os.chdir(o_cwd)
++            m.cmd_guard_kill, m._KT_DT_ROWS = orig, o_rows
++            os.environ.clear()
++            os.environ.update(o_env)
++        check("①中斷 → rc2、計劃不動、治理帳沒有 situation-rule", rc == 2 and plan.read_bytes() == before and not _srl_gov(root), err.getvalue()[-300:])
++        d = Path(tempfile.mkdtemp(prefix="gctl-srl-int-"))
++        threading.Timer(1.0, _thread.interrupt_main).start()
++        got = None
++        try:
++            m._kill_run("echo $$ > pid; sleep 30", d, 60)
++        except KeyboardInterrupt:
++            got = "interrupted"
++        pid = int((d / "pid").read_text().strip()) if (d / "pid").exists() else None
++        alive = True
++        if pid:
++            _t.sleep(0.3)
++            try:
++                os.kill(pid, 0)
++            except ProcessLookupError:
++                alive = False
++        check("②_kill_run 被中斷 → 往上丟 KeyboardInterrupt、子程序群組已收掉", got == "interrupted" and pid and not alive, f"{got} {pid} {alive}")
++        _ksp_sh.rmtree(d, ignore_errors=True)
++    finally:
++        _ksp_sh.rmtree(root, ignore_errors=True)
++        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
++
++
++def t_guard_kill_recipes_override():
++    """[情境題答案要引規格出處 S19 / 範圍 4] cmd_guard_kill 的 recipes_override:給了就只跑那幾條、不讀筆記的配方(筆記一條都沒有也跑),
++    result_out 交回判定,殺傷力帳本那筆多帶 source: situation-rule;不給時照筆記跑、帳本那筆沒有 source(原呼叫端行為不變)。
++    判準來源:計劃〈範圍〉4 殺傷力驗證「不另抽共用」那點與〈回退〉;應抓到的錯:給了 override 還讀筆記(筆記沒配方就擋)、帳本沒標來源。"""
++    import contextlib, io
++    m = _load_lumos_inproc()
++    root, v = _mk_kill_env()
++    ov = [{"invariant": "臨時", "test": "TestLimitFive", "file": "prod.py", "old": "LIMIT = 5", "new": "LIMIT = 99", "note": ""}]
++    out = {}
++    import os
++    o_env = dict(os.environ)
++    os.environ["LUMOS_KILL_TIMEOUT_FLOOR"] = "5"
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as err:
++            rc = m.cmd_guard_kill(m.Env(v), "Systems/Limit", recipes_override=ov, result_out=out)
++            rc0 = m.cmd_guard_kill(m.Env(v), "Systems/Limit")
++    finally:
++        os.environ.clear()
++        os.environ.update(o_env)
++    rows = _kill_log_rows_of(v)
++    check("①筆記沒配方、給 override → 照跑那一條、rc0、result_out 是 killed", rc == 0 and [x["verdict"] for x in out.get("rows") or []] == ["killed"],
++          f"rc={rc} {out} {err.getvalue()[-300:]}")
++    check("①殺傷力帳本恰一筆、帶 source situation-rule", len(rows) == 1 and rows[0].get("source") == "situation-rule", str(rows))
++    check("②不給 override → 照舊讀筆記(沒配方就擋 rc2)", rc0 == 2, str(rc0))
++    (v / "Systems" / "Limit.md").write_text(_kr_note([_kr_recipe("prod.py", new="LIMIT = 98")]), encoding="utf-8")
++    _kr_commit(root, "recipe")
++    os.environ["LUMOS_KILL_TIMEOUT_FLOOR"] = "5"
++    try:
++        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
++            m.cmd_guard_kill(m.Env(v), "Systems/Limit", recipes_override=ov)
++            m.cmd_guard_kill(m.Env(v), "Systems/Limit")
++    finally:
++        os.environ.clear()
++        os.environ.update(o_env)
++    rows = _kill_log_rows_of(v)
++    check("③筆記有配方又給 override → 只跑 override(帳本那筆是臨時配方)", len(rows) == 3 and rows[1].get("invariant") == "臨時"
++          and rows[1].get("source") == "situation-rule", str(rows)[:600])
++    check("④不給 override 照筆記跑:帳本那筆沒有 source 欄", rows[2].get("invariant") == "上限恆為5" and "source" not in rows[2], str(rows[2]))
++    _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_kill_log_situation_rule_rows_skipped():
++    """[情境題答案要引規格出處 範圍 4] 殺傷力帳本裡 source: situation-rule 的筆,兩個讀者都跳過(它們只看筆記宣告的配方):
++    ①doctor P2「最近一次真跑判 survived」:同一條筆記配方最近一筆是 situation-rule 的 survived → 不列(拿掉那筆才列,證明是被跳過不是別的原因);
++    ②表態背書(_backing_kill_rows,寫表態時算背書的讀者):situation-rule 的 killed 不算進背書的列。"""
++    import json as _json
++    m = _load_lumos_inproc()
++    root, v = _mk_kill_env()
++    A = _kr_recipe("prod.py")
++    (v / "Systems" / "Limit.md").write_text(_kr_note([A]), encoding="utf-8")
++    _kr_commit(root, "recipes")
++    head = _kr_git(root, "rev-parse", "HEAD").stdout.strip()
++    node = "Systems/Limit.md"
++    sid = m._kill_recipe_id(node, A)[:12]
++    rid = m._kill_recipe_key(node, A["invariant"], A["file"], A["old"])
++
++    def row(verdict, ts, **kw):
++        return {"ts": ts, "node": node, "commit": head[:8], "invariant": A["invariant"], "test": A["test"], "platform": "",
++                "verdict": verdict, "note": "", "flaky_risk": False, "tail": "", "covers": [], "recipe_id": rid,
++                "head_sha": head, "weak": False, **kw}
++    log = v.parent / ".kill-log.jsonl"
++    log.write_text(_json.dumps(row("survived", "2026-10-01T10:00:00", source="situation-rule"), ensure_ascii=False) + "\n", encoding="utf-8")
++    out = run(v, "doctor", "--verbose").stdout
++    check("①P2:最近一筆是 situation-rule 的 survived → 不列", f"重跑:lumos guard kill Systems/Limit --id {sid}" not in out, out[-1500:])
++    log.write_text(_json.dumps(row("survived", "2026-10-01T10:00:00"), ensure_ascii=False) + "\n", encoding="utf-8")
++    out = run(v, "doctor", "--verbose").stdout
++    check("①★對照★ 同一筆拿掉 source → 列出來", "最近一次真跑判 survived" in out and f"--id {sid}" in out, out[-1500:])
++    log.write_text(_json.dumps(row("killed", "2026-10-01T10:00:00", source="situation-rule"), ensure_ascii=False) + "\n"
++                   + _json.dumps(row("killed", "2026-10-01T11:00:00", invariant="x"), ensure_ascii=False) + "\n", encoding="utf-8")
++    got = m._backing_kill_rows(str(root))
++    check("②背書讀者:situation-rule 那筆跳過、一般那筆留著", len(got) == 1 and got[0].get("ts") == "2026-10-01T11:00:00", str(got))
++    _ksp_sh.rmtree(root, ignore_errors=True)
++
++
++def t_spec_gate_ruled_clause_as_keeps():
++    """[情境題答案要引規格出處 S13] 規格閘認人裁條款:風險低計劃 S1 新行為(紅)、S2 是人裁寫回(測試綠、沒標 keeps、測試名在計劃建立前不存在):
++    ①治理帳有一筆 situation-rule,計劃、條款編號、條款文字雜湊都對得上 → S2 當既有行為,不因綠而擋(rc0 PASS),也不要求「計劃前就存在」;
++    ②有人把 S2 本文改一個字 → 雜湊對不上、照一般條款判:綠就擋;③帳那筆的計劃是別份 → 照一般條款擋;
++    ④預期值表的新行為判定(_expected_requirement)把對得上的人裁條款扣掉:只剩人裁條款時不要求預期值表。
++    判準來源:計劃〈範圍〉5 與預期值表 S13 兩列;應抓到的錯:只比編號不比雜湊(改字後照放)、不比計劃。"""
++    import hashlib, json as _j
++    d, kg = _mk_spec_gate_repo(mkvault().parent.parent / "srl13")
++    body2 = "當按下儲存,系統應存檔"
++    _sg_plan2(kg, "甲", ["- [S1] 系統應回 200 [test:t_red]", f"- [S2] {body2} [test:t_green]"])
++    _sg_commit(d, "plan")
++
++    def ev(plan="Projects/甲_計劃.md", cid="S2", text=body2):
++        return _j.dumps({"ts": "2026-11-13T10:00:00+08:00", "commit": "abc1234", "gate": "situation-rule", "kind": "situation-rule", "hard": False,
++                         "nodes": [plan], "note": "人裁", "plan": plan, "clause_id": cid, "clause_text": text,
++                         "clause_sha": hashlib.sha256(text.encode("utf-8")).hexdigest(), "test_name": "t_green", "origin": "ai",
++                         "consent": "好", "kill_verdict": "killed", "recipe_id": "r", "seg": "a" * 16, "row": "D-5"}, ensure_ascii=False) + "\n"
++    gl = d / "docs" / ".governance-log.jsonl"
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    check("S13 ★前置★ 沒有人裁帳 → S2 綠被擋", r.returncode == 1 and "S2" in r.stdout, r.stdout[-500:])
++    # 先跑會擋的兩種(①放行後留了痕,同一份條款再跑會走「已有放行留痕」的出口)
++    gl.write_text(ev(plan="Projects/乙_計劃.md"), encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    check("S13 ③帳上那筆是別份計劃 → 照一般條款擋", r.returncode == 1 and "S2" in r.stdout, r.stdout[-500:])
++    gl.write_text(ev(), encoding="utf-8")
++    p = kg / "Projects" / "甲_計劃.md"
++    orig = p.read_text(encoding="utf-8")
++    p.write_text(orig.replace(body2, "當按下儲存,系統應存檔案"), encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    check("S13 ②S2 本文改一個字 → 雜湊對不上、照一般條款擋", r.returncode == 1 and "S2" in r.stdout, r.stdout[-500:])
++    p.write_text(orig, encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/甲_計劃")
++    check("S13 ①帳上有對得上雜湊的人裁 → 不因 S2 綠而擋、PASS(風險低)", r.returncode == 0 and "PASS(風險低)" in r.stdout
++          and "人裁寫回的條款(S2)" in r.stdout, r.stdout[-800:])
++    _sg_plan2(kg, "丁", [f"- [S1] {body2} [test:t_green]"])
++    _sg_commit(d, "plan2")
++    gl.write_text(ev(plan="Projects/丁_計劃.md", cid="S1"), encoding="utf-8")
++    r = run(kg, "spec-gate", "Projects/丁_計劃", "--no-run")
++    check("S13 ⑤唯一一條是人裁條款 → 同全標 keeps:至少一條要是新行為、擋", r.returncode == 1 and "至少一條" in r.stdout, r.stdout[-500:])
++    m = _load_lumos_inproc()
++    text = "---\ntype: project\n---\n# 丙\n\n## 驗收條款\n\n- [S1] " + body2 + " [test:t_green]\n"
++    (kg / "Projects" / "丙_計劃.md").write_text(text, encoding="utf-8")
++    gl.write_text(ev(plan="Projects/丙_計劃.md", cid="S1"), encoding="utf-8")
++    env = m.Env(kg)
++    check("S13 ④只剩人裁條款 → 預期值表不要求(_expected_requirement 回 None)",
++          m._expected_requirement(env, "Projects/丙_計劃.md", text, door="high") is None)
++    gl.write_text("", encoding="utf-8")
++    check("S13 ④★對照★ 沒有人裁帳 → 同一份要預期值表", m._expected_requirement(env, "Projects/丙_計劃.md", text, door="high") is not None)
++
++
++def t_gov_stats_situation_spec_counts():
++    """[情境題答案要引規格出處 範圍 7 / 範圍 9] gov --stats 情境題段多四個數:作者引出處的列數(生效日後的表態、spec 不空,同一格只算一次)、
++    因沒出處而擋的列數(生效日後的表態、答適用而 spec 空)、盲判出處與作者不同的提醒數(verdict spec-differ)、人裁次數(human 與帶 consent 的 ai 分開)。
++    對照:生效日前的表態不算進前兩個數。判準來源:計劃〈範圍〉7 與 RETIRE-IF。"""
++    import shutil
++    seg = _bjt_seg
++    rowa = {"applies": True, "variant": "main", "evidence": "a:1"}
++    disp_new = _bjt_line(kind="dispositions", branch="f", written_at="2026-12-01T10:00:00+08:00",
++                         dispositions={"kt-situation": {"status": "satisfied", "question": "q", "segments": [
++                             {"seg": seg("a"), "rows": {"D-1": {**rowa, "spec": "Projects/甲_計劃#S1", "quote": "一二三四五六七八九十"}}},
++                             {"seg": seg("b"), "rows": {"D-1": {**rowa, "spec": "", "quote": ""}}},
++                             {"seg": seg("c"), "rows": {"D-1": {**rowa}}},
++                             {"seg": seg("d"), "rows": {"D-1": {"applies": False, "spec": "", "quote": ""}}}]}})
++    disp_again = _bjt_line(kind="dispositions", branch="f", written_at="2026-12-02T10:00:00+08:00",
++                           dispositions={"kt-situation": {"status": "satisfied", "question": "q", "segments": [
++                               {"seg": seg("a"), "rows": {"D-1": {**rowa, "spec": "Projects/甲_計劃#S1", "quote": "一二三四五六七八九十"}}}]}})
++    disp_old = _bjt_line(kind="dispositions", branch="f", written_at="2026-01-01T10:00:00+08:00",
++                         dispositions={"kt-situation": {"status": "satisfied", "question": "q", "segments": [
++                             {"seg": seg("e"), "rows": {"D-1": {**rowa}}}]}})
++    differ = _bjt_line(kind="warned", scope="kt-situation", seg=seg("a"), row="D-1", variant="main", verdict="spec-differ", note="x")
++
++    def rule(origin, consent, cid):
++        import json as _j
++        return _j.dumps({"ts": "2026-12-01T10:00:00+08:00", "commit": "abc1234", "gate": "situation-rule", "kind": "situation-rule",
++                         "hard": False, "nodes": ["Projects/甲_計劃.md"], "note": "人裁", "plan": "Projects/甲_計劃.md", "clause_id": cid,
++                         "clause_text": "x", "clause_sha": "0" * 64, "test_name": "t", "origin": origin, "consent": consent,
++                         "kill_verdict": "killed", "recipe_id": "r", "seg": seg("b"), "row": "D-1"}, ensure_ascii=False) + "\n"
++    root, vault = _stats_fixture("gctl-srl-", [disp_old, disp_new, disp_again, differ, rule("human", "", "S2"), rule("ai", "好", "S3"),
++                                                rule("ai", "可以", "S4"), rule("ai", "", "S5")])   # 最後一筆 ai 沒帶 consent:不算
++    try:
++        with _ksp_since("2026-11-13"):
++            out = run(vault, "gov", "--since", "9999", "--stats", expect_rc=0).stdout
++        ln = next((x for x in out.splitlines() if "情境題引出處" in x), "")
++        check("範圍7 作者引出處 1 列、沒出處而擋 2 列、出處不同提醒 1、人裁 human 1、ai 2",
++              "作者引出處 1 列" in ln and "沒出處而擋 2 列" in ln and "出處不同提醒 1" in ln and "人裁 human 1、ai(帶 consent)2" in ln, out[-1500:])
++    finally:
++        shutil.rmtree(root, ignore_errors=True)
++
++
+ def t_kt_sit_key_codec():
+     """[代碼審 r1 戊,架構對齊 F5] 「段|列|種類」的編碼與解碼只有一支:證據提醒省略種類、多數決帶種類;解碼認兩段或三段,其餘當壞值;
+     提醒帳去重與統計都用這一支(總數事件 keys 裡帶種類的那筆,統計照種類分)。"""

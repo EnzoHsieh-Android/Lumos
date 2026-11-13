@@ -1,0 +1,46 @@
+"""每段叫不出情境列的壞寫法:候選字頻率、會擋規則、範本。用法:python3.14 triage.py <工作樹根> <語料根> <sweep-out.tsv>"""
+import importlib.machinery, importlib.util, re, sys
+from pathlib import Path
+
+root, corpus, holes_path = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+sys.dont_write_bytecode = True
+def load(path, name):
+    loader = importlib.machinery.SourceFileLoader(name, str(path))
+    spec = importlib.util.spec_from_loader(name, loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+lm = load(root / "scripts/lumos", "lm")
+kp = load(root / "configs/ast-grep/kotlin-android/check.py", "kp")
+text = (root / "skills/kotlin-idioms/checks-catalog.md").read_text(encoding="utf-8")
+main = kp.main_rows(text)
+
+files = [p for p in corpus.rglob("*.kt") if "/build/" not in str(p)]
+docs = []
+for p in files:
+    try:
+        docs.append(lm._kotlin_strip(p.read_text(encoding="utf-8")))
+    except Exception:
+        docs.append(p.read_text(encoding="utf-8", errors="replace"))
+def freq(tok):
+    rx = re.compile(lm._kt_trigger_re(tok))
+    return sum(1 for d in docs if rx.search(d)) / len(docs)
+
+blocking = {}
+for y in (root / "configs/ast-grep/kotlin-android/rules").rglob("*.yml"):
+    cur = None
+    for ln in y.read_text(encoding="utf-8").split("\n"):
+        m = re.match(r"^id:\s*(\S+)", ln)
+        if m:
+            cur = m.group(1)
+        m = re.match(r"^message:\s*'?\[([A-Z]+-\d+)", ln)
+        if m and cur:
+            blocking.setdefault(m.group(1), []).append(cur)
+
+for ln in holes_path.read_text(encoding="utf-8").splitlines():
+    rid, cid, snip = ln.split("\t", 2)
+    toks = sorted({t for t in re.findall(r"[A-Za-z_][A-Za-z0-9_.]*[A-Za-z0-9_]", snip) if t not in kp.STOP_TRIGGERS and len(t) > 3})
+    fs = ", ".join(f"{t}={freq(t):.1%}" for t in toks)
+    batch = main.get(cid, [""] * 10)[9] if cid in main else ""
+    tmpl = kp.behavior_value(batch) or ""
+    print(f"{rid}\t{cid}\t{snip[:70]}\t規則={','.join(blocking.get(cid, [])) or '-'}\t範本={tmpl or '-'}\t字={fs}")

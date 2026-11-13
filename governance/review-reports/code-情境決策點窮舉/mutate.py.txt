@@ -1,0 +1,42 @@
+"""逐一改壞 check.py 的守衛,跑指定測試,確認會紅;每次改完還原。用法:python3.14 mutate.py <repo>"""
+import os, shutil, subprocess, sys
+from pathlib import Path
+repo = Path(sys.argv[1]); p = repo / "configs/ast-grep/kotlin-android/check.py"
+orig = p.read_text(encoding="utf-8")
+SG = "/private/tmp/claude-501/-Users-enzo-orca-workspaces-lumos-toolchain-shearwater/abe4deee-64ee-43ea-85c3-2a647e0b825a/scratchpad/sgvenv/bin/ast-grep"
+M = [
+    ("範本:通批對不上", 'if behavior_value(env["rows"][cid][9]) != f"範本 {group}":', "if False:", "bad_snippets_reach"),
+    ("範本:小節沒程式", "    if not body:\n        return [f\"範本 {group}", "    if False:\n        return [f\"範本 {group}", "bad_snippets_reach"),
+    ("範本:片段比對", 'return [] if _parts_in_order(env["lumos"], snip, body) else', "return [] if True else", "bad_snippets_reach"),
+    ("規則:目錄", 'r.get("dir") != "rules" or ', "", "bad_snippets_reach"),
+    ("規則:訊息編號", ' or not r["message"].startswith(f"[{cid}]")', "", "bad_snippets_reach"),
+    ("起訖行上界", "a <= no <= b for f, no in hits", "a <= no for f, no in hits", "bad_snippets_reach"),
+    ("依序", "        pos = m.end()\n", "        pos = 0\n", "bad_snippets_reach"),
+    ("只有…", "    if not parts:\n        return False", "    if not parts:\n        return True", "bad_snippets_reach"),
+    ("\\|還原", 'return [s.replace("\\\\|", "|") for s in', "return [s for s in", "bad_snippets_reach"),
+    ("重複單位", "        if (r, c, s) in listed:\n", "        if False:\n", "bad_snippets_reach"),
+    ("BAD 整字", r'_BAD_MARK_RE = re.compile(r"//\s*BAD(?![A-Za-z])")', r'_BAD_MARK_RE = re.compile(r"//\s*BAD")', "bad_snippets_reach"),
+    ("同名重複", "        if name in seen:\n            out.append((name, \"〈API 決策點〉同一個名稱出現兩列\"))", "        if False:\n            out.append((name, \"〈API 決策點〉同一個名稱出現兩列\"))", "api_decision_points"),
+    ("停用列 D-n", '        if r is None or r["retired"]:', "        if r is None:", "api_decision_points"),
+    ("jvm 雜湊", '(("klib", head.group(3)), ("jvm", head.group(5)))', '(("klib", head.group(3)),)', "api_decision_points"),
+    ("錨點那一半", "    if missing_anchor or len(names) < _API_MIN_NAMES:", "    if len(names) < _API_MIN_NAMES:", "api_decision_points"),
+    ("下限那一半", "    if missing_anchor or len(names) < _API_MIN_NAMES:", "    if missing_anchor:", "api_decision_points"),
+    ("jvm-only 格式", "        if not left or not right:\n", "        if False:\n", "api_decision_points"),
+    ("jvm-only klib 已有", "        elif left in names:\n", "        elif False:\n", "api_decision_points"),
+    ("同名異義出口", "        if not hit or _norm(reason).startswith(_HOMONYM_REASON):", "        if not hit:", "api_decision_points"),
+    ("--sg 索引接線", "bad_snippet_reach_problems(cat_text, cat_rows, rules=rules, scan_index=scan_index, lumos=lumos)",
+     "bad_snippet_reach_problems(cat_text, cat_rows, rules=rules, scan_index=None, lumos=lumos)", "kotlin_rulepack_samples"),
+]
+try:
+    for label, a, b, k in M:
+        if orig.count(a) != 1:
+            print(f"?? {label}: 找不到改壞點({orig.count(a)})"); continue
+        p.write_text(orig.replace(a, b), encoding="utf-8")
+        env = dict(os.environ, LUMOS_AST_GREP=SG)
+        r = subprocess.run([sys.executable, "scripts/test_lumos.py", "-k", k], cwd=repo, capture_output=True, text=True, env=env)
+        last = [ln for ln in r.stdout.splitlines() if "passed" in ln][-1:] or ["?"]
+        print(f"{'紅 ' if ' 0 failed' not in last[0] else '綠!'} {label}: {last[0]}")
+finally:
+    p.write_text(orig, encoding="utf-8")
+    for d in (repo / "configs/ast-grep/kotlin-android").rglob("__pycache__"):
+        shutil.rmtree(d, ignore_errors=True)

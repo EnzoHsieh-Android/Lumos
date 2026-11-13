@@ -1,0 +1,763 @@
+diff --git a/configs/ast-grep/kotlin-android/check.py b/configs/ast-grep/kotlin-android/check.py
+index c607a91e19420fd9ffdd0529183a429c33e57b01..779747d1ee13977527a9facb25cce2f9152ee5df 100644
+--- a/configs/ast-grep/kotlin-android/check.py
++++ b/configs/ast-grep/kotlin-android/check.py
+@@ -1060,31 +1060,33 @@ def _reachable(lumos, unit, dt_rows):
+     if snip == _NO_SNIPPET:
+         return False
+     path = _REACH_TEST_PATH if cid.startswith("TEST-") else _REACH_MAIN_PATH
+     if not lumos._kt_sit_path_ok(path):
+         return False
+     code = "class X {\n    fun f() {\n        " + snip + "\n    }\n}\n"
+     return any(rid in sg["rows"] for sg in lumos._kt_sit_text_segments(path, code, dt_rows))
+ 
+ 
+ def _unreach_table(text):
+-    """〈叫不出的壞寫法〉→ ([(情境列, 對應檢查, 片段, 改由, 理由)], 節是否存在)。片段格去掉外層反引號、\\| 還原。"""
++    """〈叫不出的壞寫法〉→ ([(情境列, 對應檢查, 片段, 改由, 理由)], 節是否存在)。片段格整格恰好是一段反引號才取內文,
++    其餘(<無片段>、多段、反引號外還有字)照整格原文,對不上反查單位就會被報;兩種都做 \\| 還原。"""
+     sec = _section(text, _UNREACH_TITLE)
+     if sec is None:
+         return [], False
+     rows = []
+     for ln in sec.splitlines():
+         if not re.match(r"^\|\s*D-\d+\s*\|", ln):
+             continue
+         c = [*_cells(ln), "", "", "", "", ""][:5]
+         sn = _snippets(c[2])
+-        rows.append((c[0], c[1], sn[0] if len(sn) == 1 and c[2].startswith("`") else c[2], c[3], c[4]))
++        whole = len(sn) == 1 and re.fullmatch(r"`[^`]*`", c[2]) is not None
++        rows.append((c[0], c[1], sn[0] if whole else c[2].replace("\\|", "|"), c[3], c[4]))
+     return rows, True
+ 
+ 
+ def _norm_code(s):
+     """比對用:字串字面值清空、連續空白折成一個。"""
+     s = re.sub(r'"(?:[^"\\\n]|\\.)*"', '""', s)
+     return re.sub(r"\s+", " ", s).strip()
+ 
+ 
+ def _parts_in_order(lumos, snip, hay):
+@@ -1095,58 +1097,65 @@ def _parts_in_order(lumos, snip, hay):
+     pos = 0
+     for part in parts:
+         m = re.compile(lumos._kt_trigger_re(part)).search(hay, pos)
+         if not m:
+             return False
+         pos = m.end()
+     return True
+ 
+ 
+ _BAD_MARK_RE = re.compile(r"//\s*BAD(?![A-Za-z])")
++_ANNOTATION_ONLY_RE = re.compile(r"^\s*(?:@[\w.:]+(?:\([^()]*\))?\s*)+$")   # 整行只有註記(可帶一層括號參數)
+ 
+ 
+ def _sample_abs(f):
+     """壞例檔路徑 → 比對用的絕對路徑字串(ast-grep 回報的相對路徑以 HERE 為基準);_bad_lines 與 check() 的起訖行索引共用。"""
+     p = Path(f)
+     return str((p if p.is_absolute() else HERE / p).resolve())
+ 
+ 
+ def _bad_lines(lumos, samples_dir, rule_id):
+     """samples/bad/<id>/ 底下標了 // BAD 的行 → ([(檔的絕對路徑, 行號, 比對用的程式)], 問題)。標記整字認(//BAD、// BAD:、
+     // BAD-NEXT 都算,// BADGE 不算);同一行有程式就比那一行,標記單獨一行就比它標的下一個語句(下一個有程式的行,
+-    加上接著以 . 或 ?. 開頭的續行;@ 註記行跳過)。去註解用 scripts/lumos 的 Kotlin 剝法(字串裡的 // 不算註解)。"""
++    加上接著以 . 或 ?. 開頭的續行;整行只有註記的行跳過,註記後面同一行接著程式的不跳)。去註解用 scripts/lumos 的 Kotlin 剝法;
++    標記要在註解裡才算(字串裡的 // BAD 不算)。三份行一律只照 \\n 切(換頁字元、U+2028 不斷行,跟 ast-grep 的行號一致)。"""
+     out, probs = [], []
+     for f in sorted((samples_dir / "bad" / rule_id).rglob("*.kt*")):
+         try:
+             text = f.read_text(encoding="utf-8")
+         except (OSError, UnicodeDecodeError) as e:
+             probs.append(f"壞例檔 {f.name} 讀不了({e.__class__.__name__})")
+             continue
+-        raw = text.splitlines()
++        raw = text.split("\n")
+         code = lumos._strip_c_comments(text, blank_strings=True, keep_newlines=True, kotlin=True).split("\n")
++        kept = lumos._strip_c_comments(text, blank_strings=False, keep_newlines=True, kotlin=True).split("\n")
++        if not len(raw) == len(code) == len(kept):
++            probs.append(f"壞例檔 {f.name} 去註解後行數對不上,判不了哪幾行標了 // BAD")
++            continue
+         for no, ln in enumerate(raw, 1):
+-            if not _BAD_MARK_RE.search(ln):
+-                continue
++            if len(_BAD_MARK_RE.findall(ln)) <= len(_BAD_MARK_RE.findall(kept[no - 1])):
++                continue                     # 這行的標記都還在「只拿掉註解」的版本裡=都在字串裡,不算
+             if code[no - 1].strip():
+                 out.append((_sample_abs(f), no, _norm_code(code[no - 1])))
+                 continue
+-            nxt = next((k for k in range(no, len(raw)) if code[k].strip() and not code[k].lstrip().startswith("@")), None)
++            nxt = next((k for k in range(no, len(raw)) if code[k].strip() and not _ANNOTATION_ONLY_RE.match(code[k])), None)
+             if nxt is None:
+                 continue
+             stmt = [code[nxt]]
+             for k in range(nxt + 1, len(raw)):
+                 if not code[k].lstrip().startswith((".", "?.")):
+                     break
+                 stmt.append(code[k])
+             out.append((_sample_abs(f), nxt + 1, _norm_code(" ".join(stmt))))
+     return out, probs
+ 
++
+ def _fence_body(templates_text, group, cid):
+     """範本檔某一組裡標題是「### 壞寫法:<cid>」的每個小節的圍欄內文(同編號多節取聯集),併成一份字串。
+     找組走 template_sections;圍欄內外走 _visible_lines(keep_fenced 有無兩次的差就是圍欄內的行),不另寫圍欄判定。"""
+     lines = templates_text.splitlines()
+     secs = template_sections(templates_text)
+     starts = [i for g, i in secs if g == group]
+     if not starts:
+         return ""
+     a = starts[0]
+     b = min([i for _g, i in secs if i > a] or [len(lines)])
+@@ -1157,20 +1166,21 @@ def _fence_body(templates_text, group, cid):
+         if not a <= i < b:
+             continue
+         if i in outside:
+             if ln.startswith("#"):
+                 m = BAD_HEADING_RE.match(_norm(ln))
+                 inside = bool(m and m.group(1) == cid)
+         elif inside:
+             out.append(ln)
+     return "\n".join(out)
+ 
++
+ def _reach_unit_problems(lumos, units, listed, dt_rows):
+     """每個反查單位:叫不出卻沒列、叫得出卻還列著 → 問題。"""
+     out = []
+     for u in units:
+         reach = _reachable(lumos, u, dt_rows)
+         if not reach and u not in listed:
+             out.append((u[0], f"{u[1]} 的片段「{u[2]}」叫不出 {u[0]},〈{_UNREACH_TITLE}〉沒有這一列"))
+         elif reach and u in listed:
+             out.append((u[0], f"{u[1]} 的片段「{u[2]}」現在叫得出,〈{_UNREACH_TITLE}〉這一列過期了"))
+     return out
+@@ -1332,27 +1342,29 @@ def _fence_regions(lines, strict):
+             regions.append((start, i))
+             fence = None
+     if fence is not None:
+         regions.append((start, None))
+     return regions, fence is not None
+ 
+ 
+ def _visible_lines(lines, keep_fenced=False):
+     """圍欄外的行 → [(行號從 1 起, 原始行)]。先照 CommonMark 嚴格讀;讀完還有圍欄沒關,整份退回寬鬆讀法
+     (同字元、長度夠就算關)——跟 scripts/lumos 的 `_visible_lines` 同一個取捨。keep_fenced=True 時也留圍欄★內★的行
+-    (圍欄標記行本身照樣不留),同 scripts/lumos 的 keep_fenced。"""
++    (圍欄標記行本身照樣不留;沒關的圍欄只有開頭那行是標記,內文一路到檔尾,照 CommonMark),同 scripts/lumos 的 keep_fenced。"""
+     def _scan(strict):
+         regions, unterminated = _fence_regions(lines, strict)
+         hidden = set()
+         for a, b in regions:
+-            end = b if b is not None else len(lines) - 1
+-            hidden.update({a, end} if keep_fenced else range(a, end + 1))
++            if keep_fenced:
++                hidden.update({a} if b is None else {a, b})
++            else:
++                hidden.update(range(a, (b if b is not None else len(lines) - 1) + 1))
+         return [(i + 1, ln) for i, ln in enumerate(lines) if i not in hidden], unterminated
+     out, unterminated = _scan(True)
+     if unterminated:
+         out, _ = _scan(False)
+     return out
+ 
+ 
+ def template_sections(text):
+     """範本檔 → [(組代號, 標題行索引)],只認圍欄外、符合 TEMPLATE_HEADING_RE 的標題。測試端切段也用這一支。"""
+     out = []
+diff --git a/configs/ast-grep/kotlin-android/coroutines-api/jvm-only.txt b/configs/ast-grep/kotlin-android/coroutines-api/jvm-only.txt
+index fd143654ff511fe62980ec8da154b0cfa9178826..a13a0375255bbf3929df787dbf45a530c3fe69f1 100644
+--- a/configs/ast-grep/kotlin-android/coroutines-api/jvm-only.txt
++++ b/configs/ast-grep/kotlin-android/coroutines-api/jvm-only.txt
+@@ -1,13 +1,15 @@
+ # JVM 專屬、klib 清單沒有的公開名稱(只在 JVM 平台才有)。一行「名稱 | JVM 清單裡的寫法」;自檢核對右欄真的出現在 JVM 清單、左欄不在 klib 抽出的名稱裡。
+ # 初版 2026-11-12:把 JVM 清單 …Kt 門面類別的公開函式減掉 klib 名稱,得 22 個,逐個判(Projects/情境決策點窮舉與壞寫法要叫得出_計劃);
+ # 同日代碼審 r1 補判公開型別:JVM 清單的 kotlinx/coroutines 公開類別減掉 klib 名稱,6 個,全收;其中 TickerMode 的兩個列舉值一併收。
++# 這幾個 JVM 專屬型別的成員與屬性(例 ThreadContextElement 的 updateThreadContext、ExecutorCoroutineDispatcher 的 executor)不收,
++# 計劃〈天花板〉第 2 條明定;要收得先改計劃。
+ # 不收的 11 個:讀取函式 getCoroutineContext、getDEFAULT_CONCURRENCY、getDefaultDelay、getJob、getRECOVER_STACK_TRACES(原始碼寫屬性名);
+ # @JvmName 別名 debounceDuration、flowCombine、flowCombineTransform(原始碼寫 debounce、combine);事件迴圈內部函式 isIoDispatcherThread、
+ # processNextEventInCurrentThread、runSingleTaskFromCurrentSystemDispatcher(App 不會呼叫)。
+ actor | public static final fun actor
+ asCompletableFuture | public static final fun asCompletableFuture
+ asContextElement | public static final fun asContextElement
+ asCoroutineDispatcher | public static final fun from (Ljava/util/concurrent/Executor;)
+ asExecutor | public static final fun asExecutor
+ cancelFutureOnCancellation | public static final fun cancelFutureOnCancellation
+ ensurePresent | public static final fun ensurePresent
+diff --git a/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt b/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt
+index e7bdd280ce032cc15c476fecdded56e547831a3d..9b1a1025cf638cd0c68a747c839707a8d0c67b6f 100644
+--- a/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt
++++ b/configs/ast-grep/kotlin-android/samples/situation/D-4.kt.txt
+@@ -25,31 +25,35 @@ class UploadVm(private val repo: Repo) : ViewModel() {
+ class UploadVm(private val repo: Repo) : ViewModel() {
+     private val queue = Channel<Upload>(capacity = 64)
+     fun start() {
+         viewModelScope.launch { for (u in queue) repo.upload(u) }
+     }
+ }
+ // === alt-ok 每一次都要做完:flatMapConcat 依序上傳
+ class UploadVm(private val repo: Repo) : ViewModel() {
+     val done = uploads.flatMapConcat { u -> flow { emit(repo.upload(u)) } }
+ }
++// === alt-ok 每一次都要做完、順序不重要:flatMapMerge 並行上傳
++class UploadVm(private val repo: Repo) : ViewModel() {
++    val done = uploads.flatMapMerge(concurrency = 4) { u -> flow { emit(repo.upload(u)) } }
++}
+ // === bad API-8 每次呼叫都 launch,沒取消前一個
+ class SearchVm(private val repo: Repo) : ViewModel() {
+     fun search(q: String) {
+         viewModelScope.launch { _state.value = repo.search(q) }
+     }
+ }
+ // === bad main 搜尋框用 flatMapConcat(flatMapConcat 本身是「每一次都要做完」時合法的例外寫法,只對標準寫法算錯)
+ class SearchVm(private val repo: Repo) : ViewModel() {
+     val results = query.debounce(300).flatMapConcat { repo.search(it) }
+ }
+-// === bad 搜尋框用 flatMapMerge、沒有 debounce(觸發字只能靠操作符本身)
++// === bad main 搜尋框用 flatMapMerge、沒有 debounce(觸發字只能靠操作符本身;flatMapMerge 是順序不重要時的例外寫法,只對標準寫法算錯)
+ class SearchVm(private val repo: Repo) : ViewModel() {
+     val results = query.flatMapMerge { repo.search(it) }
+ }
+ // === bad main 搜尋框用 flatMapConcat、沒有 debounce(觸發字只能靠操作符本身;只對標準寫法算錯)
+ class SearchVm(private val repo: Repo) : ViewModel() {
+     val results = query.flatMapConcat { repo.search(it) }
+ }
+ // === bad FLOW-22 collectLatest 用在不能被中斷的寫入
+ class SyncVm(private val db: Db) : ViewModel() {
+     fun start() {
+diff --git a/docs/lumos-toolchain-knowledge/Projects/情境決策點窮舉與壞寫法要叫得出_計劃.md b/docs/lumos-toolchain-knowledge/Projects/情境決策點窮舉與壞寫法要叫得出_計劃.md
+index 99280297303a1d3c4b6aceedebe7ac0242bc59ce..1906ea8188a8162030157235a1c6d69b796f731b 100644
+--- a/docs/lumos-toolchain-knowledge/Projects/情境決策點窮舉與壞寫法要叫得出_計劃.md
++++ b/docs/lumos-toolchain-knowledge/Projects/情境決策點窮舉與壞寫法要叫得出_計劃.md
+@@ -39,21 +39,21 @@ RETIRE-IF: 上線八週後用 `lumos gov --stats` 的情境題段看:本案新
+ - **公開名稱**:從 API 母體抽出、寫程式時會打出來的名字,一個名字一列(不分多載、接收者、類別或同名工廠函式;`Channel` 類別與 `Channel(...)` 工廠是同一列)。抽法只有 `check.py` 的 `_api_names`(新增)一處:
+   - 主來源 klib 清單(以 UTF-8 讀),**只讀每一行行尾的簽名註解,不解析宣告部分**(宣告部分有巢狀泛型、`fun interface` 這類形狀,klib 文法沒有公開規格):宣告行是含 ` // ` 而且 ` // ` 之後是 `<套件>/<鏈>|…` 的行;`<鏈>` 以 `.` 切開,最後一段是名稱、前面是外層類別鏈;`|` 之後若有 `@<接收者完整名>` 就是擴充宣告。不收:名稱是 `<init>` 或 `<get-…>`、`<set-…>` 這類角括號開頭的;`equals`、`hashCode`、`toString`、`componentN`、`copy`;列舉的 `values`、`valueOf`、`entries`;伴生物件本身(klib 清單不標伴生物件,實作時實測;改看 JVM 清單:外層類別有 `static final field <名稱> L…/<外層>$<名稱>;` 的就是它的伴生物件,例 `Companion`、`Factory`);名稱含 `$` 或 `-impl`、或底線開頭的;套件含 `internal` 或 `debug` 的(看簽名註解自己的套件,不看父型別)。
+   - 只留適用 JVM 的:klib 宣告前一行標了 `// Targets: [...]`(檔頭那一行不算)的是只有部分平台才有的宣告;一個名稱的每一個宣告都標了平台,而且名稱本身與首字大寫的寫法(讀取函式 `getX` 會含它)都不在 JVM 清單全文裡(分大小寫的子字串),才不收——例 `promise`、`awaitAnimationFrame`。沒標平台的宣告是共用程式,JVM 也有,照收。總數以實作時實測為準,寫進〈統計〉。
+   - JVM 專屬名稱不自動從 JVM 清單抽(r1–r3 三輪實測:會抽進讀取函式、`@JvmName` 別名、內部名稱),改由同目錄的 `jvm-only.txt`(新增)手列:一行一個「名稱 | JVM 清單裡的寫法」(例 `asCoroutineDispatcher | from`、`runInterruptible | runInterruptible`、`future | future`);自檢核對右欄那個字串真的出現在 JVM 清單裡、左欄不在 klib 抽出的名稱裡。名單初版在實作時把 JVM 清單 `…Kt` 門面類別的公開函式減掉 klib 名稱後人工逐個判,判法寫進驗證紀錄。
+   - 每個名稱另記**可見寫法**,只有兩種:①名稱在類別鏈裡時(object 成員、伴生物件成員、列舉值),可見寫法是 `外層類別鏈.名稱`,伴生物件那一段拿掉(`Channel.Factory.UNLIMITED` → `Channel.UNLIMITED`、`SharingStarted.Companion.Lazily` → `SharingStarted.Lazily`、`CoroutineStart.LAZY`、`Dispatchers.Default`);②頂層擴充**屬性**,接收者是類別或 object 時,可見寫法是 `接收者簡名.名稱`(`IO` 的簽名註解是 `kotlinx.coroutines/IO|@kotlinx.coroutines.Dispatchers…` → `Dispatchers.IO`)。擴充函式不給可見寫法(不然 `Flow` 這類型別名會讓每個運算子都多一種形狀)。
+   - **比對形狀**:正向核對與停用字核對拿三種字串比——簡名、可見寫法(有的話)、簡名後接 `(`;反向同步只拿簡名與簡名後接 `(`(不拿可見寫法,不然 `NonCancellable` 這種 object 名當觸發字時,它的每個成員都會被逼著歸屬)。
+ - **決策點**:選了它就等於做了某個情境決定的公開名稱(例:`flatMapMerge` 等於選了「新值來了舊的不取消、並行跑」)。
+ - **反查單位**:每個非停用情境列 × 它的每個對應檢查是一對;那個對應檢查在型錄主表「壞寫法形狀」欄裡每一段反引號包住的文字(`\|` 還原成 `|`,不做長度或字元過濾)各是一個單位;那一欄一段反引號都沒有時,這一對算一個 `<無片段>` 單位(一定叫不出、一定要進表)。觸發字寫(無)的列(例 D-2)也算。
+ - **叫得出**:單位的片段包成 `class X {` / `fun f() {` / 片段 / `}` / `}` 當成一支新增檔;路徑依對應檢查編號:`TEST-` 開頭用 `app/src/test/java/x/XTest.kt`,其他用 `app/src/main/java/x/X.kt`;路徑先過 `_kt_sit_path_ok`,過了再切段,切出的段的候選列含那一列才算叫得出。`src/test` 底下的測試檔在推送前一律不出情境段,所以 `TEST-` 的單位一律叫不出、一律進表——寧可多列:放 `androidTest` 的儀器測試其實會被問,也照列(r3 兩席實測:「任一路徑叫得出就算」會把 `runTest`、Turbine 這類寫在 `src/test` 的寫法判成會被問到)。
+ - **改由**:〈叫不出的壞寫法〉每個單位沒被問到時改由誰抓,只在片段層級驗證:
+-  - `規則 <id>`:那條規則在會擋的 `rules/` 目錄,訊息開頭引的編號等於這個單位的對應檢查;片段要出現在 `samples/bad/<id>/` 某支壞例檔**標了 `// BAD` 的那一行**(壞例樣本既有的逐行標註,同 Semgrep 的 `ruleid:`;233 支壞例檔有 199 支已這樣標;標法有兩種:行尾 `// BAD`,或單獨一行 `// BAD:說明`/`// BAD-NEXT` 標它下一個語句(下一個有程式的行,加上接著以 `.` 或 `?.` 開頭的續行;`@` 註記行跳過),兩種都認;標記整字認,`//BAD` 算、`// BADGE` 不算;去註解用 scripts/lumos 的 Kotlin 剝法,字串裡的 `//` 不當註解;壞例檔讀不了(不是 UTF-8)報問題、不崩)。比對:那一行先去掉行尾 `// BAD…` 註解、剝字串,片段與那一行都把連續空白折成一個,片段前後要是整字邊界(同 `_kt_trigger_re` 的邊界規則);片段含 `…` 或 `...` 時以它切成幾段,各段要依序出現在同一行。完整自檢模式(`check.py --sg <ast-grep>`)另外確認:那條規則在那支壞例檔報出的某個節點,起訖行涵蓋那一行(同 PMD 規則測試驗違規的起訖行)。
++  - `規則 <id>`:那條規則在會擋的 `rules/` 目錄,訊息開頭引的編號等於這個單位的對應檢查;片段要出現在 `samples/bad/<id>/` 某支壞例檔**標了 `// BAD` 的那一行**(壞例樣本既有的逐行標註,同 Semgrep 的 `ruleid:`;233 支壞例檔有 199 支已這樣標;標法有兩種:行尾 `// BAD`,或單獨一行 `// BAD:說明`/`// BAD-NEXT` 標它下一個語句(下一個有程式的行,加上接著以 `.` 或 `?.` 開頭的續行;整行只有 `@` 註記的行跳過,註記後面同一行接著程式的不跳),兩種都認;標記整字認,`//BAD` 算、`// BADGE` 不算,而且要在註解裡(字串裡的 `// BAD` 不算);去註解用 scripts/lumos 的 Kotlin 剝法,字串裡的 `//` 不當註解;行一律只照 `\n` 切(換頁字元、U+2028 不斷行,跟 ast-grep 行號一致);壞例檔讀不了(不是 UTF-8)報問題、不崩)。比對:那一行先去掉行尾 `// BAD…` 註解、剝字串,片段與那一行都把連續空白折成一個,片段前後要是整字邊界(同 `_kt_trigger_re` 的邊界規則);片段含 `…` 或 `...` 時以它切成幾段,各段要依序出現在同一行。完整自檢模式(`check.py --sg <ast-grep>`)另外確認:那條規則在那支壞例檔報出的某個節點,起訖行涵蓋那一行(同 PMD 規則測試驗違規的起訖行)。
+   - `範本 T<n>`:等於這個單位的對應檢查列通電批次欄「行為測試或正向約束=」的值;範本那一組至少有一個標題是 `### 壞寫法:<對應檢查>` 的小節(編號後面接空白或行尾;冒號全形半形都認;同編號多個小節取聯集),而且片段照上一條的剝法、折空白與 `…` 切段,出現在那些小節的程式圍欄內文裡。片段只是一個識別字(可帶 `()`,例 `launch`、`collect`、`HashMap`)時不准用 `範本`(出現在範本程式裡幾乎必然成立,證明不了什麼),只能用 `規則` 或 `代碼審`。小節標題的認法寫成 `check.py` 的 `BAD_HEADING_RE`(新增,跟既有 `TEMPLATE_HEADING_RE` 放一起);讀圍欄內文用 `_fence_body`(新增),找組走既有的 `template_sections`,圍欄沒關時的寬嚴退讓照 `_visible_lines` 的同一套,既有的圍欄對齊測試一併涵蓋它。
+   - `代碼審`:理由要寫代碼審要看什麼。
+   - `不是寫法`:片段不是一段程式寫法(例 `[Loading, Success]`、`delay(常數)`)。
+   - `<無片段>` 單位只准用 `代碼審`(沒有片段可以核對規則樣本或範本;型錄裡有 4 對無片段的單位標了範本接電,也只能寫代碼審,理由可註明範本組別)。
+   - 其他值、或理由空白 → 問題。
+ 
+ ## 範圍
+ 
+ 1. **API 決策點節**:型錄在〈接電證據〉之後、〈統計〉之前新增〈API 決策點〉節。第一行固定 `母體:kotlinx-coroutines-core 1.10.2,klib <網址> sha256 <值>,jvm <網址> sha256 <值>`;接一張表「名稱 | 歸屬 | 理由」,公開名稱每個恰好一列。歸屬欄是一到多個歸屬項,以「、」分隔,每項是下面五種之一(歸屬項之間只用「、」,項內關鍵字與編號之間一個半形空白):
+    - `D-n`:那個名稱是這一列的決策點。那一列至少一個觸發字,它的正規式(`_kt_trigger_re`)搜得到這個名稱的任一種比對形狀;那一列不能是停用列。
+@@ -121,21 +121,23 @@ RETIRE-IF: 上線八週後用 `lumos gov --stats` 的情境題段看:本案新
+ | klib 清單照原始碼名稱、格式為實驗性 | BCV KLib 支援設計文件 | https://github.com/Kotlin/binary-compatibility-validator/blob/master/docs/design/KLibSupport.md |
+ | 1.10.2 版 klib 母體原檔 | kotlinx.coroutines 1.10.2 標籤的 `.klib.api` 檔 | https://github.com/Kotlin/kotlinx.coroutines/blob/1.10.2/kotlinx-coroutines-core/api/kotlinx-coroutines-core.klib.api |
+ | 1.10.2 版 JVM 母體原檔 | kotlinx.coroutines 1.10.2 標籤的 `.api` 檔 | https://github.com/Kotlin/kotlinx.coroutines/blob/1.10.2/kotlinx-coroutines-core/api/kotlinx-coroutines-core.api |
+ | 升版會多出名稱(S1 案例) | kotlinx.coroutines 1.11.0 標籤的 `.klib.api` 有 `associate`、1.10.2 沒有 | https://github.com/Kotlin/kotlinx.coroutines/blob/1.11.0/kotlinx-coroutines-core/api/kotlinx-coroutines-core.klib.api |
+ | 用官方 API 資料庫逐一檢查呼叫、只收適用平台 | Android Lint 的 `api-versions.xml`;過濾不適用 API 以減少誤報 | https://android.googlesource.com/platform/development/+/8ec5006 ;https://gitlab.e.foundation/e/os/android_build_soong/-/commit/67cf60e7c5bf29db9dec52c575d0250568371a18 |
+ | 不選 kotlin-metadata-jvm 讀原始碼名稱(要 JVM 執行環境、讀不到 `@JvmName`) | Kotlin 官方說明與維護者答覆 | https://kotlinlang.org/docs/metadata-jvm.html ;https://discuss.kotlinlang.org/t/announcing-kotlinx-metadata-jvm-library-for-reading-modifying-metadata-of-kotlin-jvm-class-files/7980 |
+ | klib 清單一行是「宣告部分 // 簽名部分」,文法以產生它的程式為準 | Kotlin 原始碼 util-klib-abi | https://pigweed.googlesource.com/third_party/github/JetBrains/kotlin/+/67ac90ce0868ee0c9cd08d72460f16efecded549/compiler/util-klib-abi/ |
+ | 改由規則驗違規位置的起訖行 | PMD 規則測試(7.12 起驗起訖行) | https://docs.pmd-code.org/pmd-doc-7.17.0/pmd_userdocs_extending_testing.html |
+ | 每個值都要被分類、漏了就錯 | Kotlin sealed 類別配 `when` 的窮舉要求 | https://kotlinlang.org/docs/sealed-classes.html#use-sealed-classes-with-when-expression |
+ | `mapLatest`、`transformLatest` 跟 `flatMapLatest` 同屬「新值來就取消舊的」 | kotlinx.coroutines `mapLatest` 文件 | https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines.flow/map-latest.html |
+-| 改由要逐段證明規則會報 | Semgrep 規則測試(`ruleid:`/`ok:` 逐行標註) | https://semgrep.dev/docs/writing-rules/testing-rules |
++| 改由要逐段證明規則會報;壞例的 `// BAD` 要是真的註解才算標記(字串裡的不算) | Semgrep 規則測試(`ruleid:`/`ok:` 逐行標註,標註寫成該語言的註解) | https://semgrep.dev/docs/writing-rules/testing-rules |
++| 範本小節的圍欄沒關時,內文一路算到檔尾(最後一行不丟) | CommonMark/GFM 圍欄程式區塊:沒關的圍欄由文件結尾關閉 | https://gfm.docschina.org/Leaf%20blocks/Fenced%20code%20blocks.html ;https://talk.commonmark.org/t/example-126-confusion-autoclosing-fence-blocks/4335 |
++| 壞例檔三份行(原文、去註解、只去註解)一律只照 `\n` 切 | Python `str.splitlines()` 另把換頁字元、U+2028 等當行界,`split("\n")` 不會;ast-grep 行號照 `\n` 算 | https://bugs.python.org/issue12855 |
+ | 規則要有正反例樣本自測 | ast-grep 規則測試(valid/invalid) | https://ast-grep.github.io/guide/test-rule.html |
+ 
+ 全表掃描的原始結果(反查單位的叫得出判定、分類用的頻率、規則、範本資料,以及數數腳本)存在卷證 `governance/review-reports/情境決策點窮舉與壞寫法要叫得出/sweep/`。設計時的數:184 個有片段的單位;照「只試 `app/src/test`」的口徑叫不出 103 個(r2 兩席各自重數);`<無片段>` 單位與兩個測試路徑的口徑在實作時用新腳本重數,寫進〈統計〉。
+ 
+ ## 驗收條款
+ 
+ - [S1] 當〈API 決策點〉表跟 API 母體一一對上、歸屬都通過核對時,`api_decision_problems` 應 回空;暫存母體加一行 1.11.0 才有的 `associate` 宣告(並更新 sha256)應 報 `associate` 沒分類;表上多一個母體沒有的名稱 應 報;同一名稱兩列 應 報;母體檔改一個位元組 應 報雜湊不符;歸到 `D-4` 但 D-4 觸發字拿掉 `flatMapMerge` 應 報;D-4 觸發字有 `flatMapMerge` 而表上 `flatMapMerge` 歸 `無決策` 應 報;D-16 觸發字 `UNLIMITED` 搜得到 `UNLIMITED` 而表上歸 `無決策` 應 報;觸發字 `indexOf(` 搜得到名稱 `indexOf` 的比對形狀 `indexOf(` 而表上歸 `無決策` 應 報;名稱 `combine` 寫 `D-5、D-6、撞名 D-35` 應 不報;標 `撞名 D-4` 而 D-4 觸發字搜不到那個名稱 應 報;`launch` 標 `決策不問 代碼審` 而型錄主表有列的壞寫法欄寫到 `launch` 應 報;停用字 `Dispatchers.IO` 對到名稱 `IO`(真 1.10.2 母體的頂層擴充屬性,可見寫法由接收者給出)、表上 `IO` 標 `無決策` 而理由沒有「停用字,不帶決策:」開頭 應 報;`CoroutineStart.LAZY` 的可見寫法 應 是 `CoroutineStart.LAZY`;`flatMapLatest` 應 沒有可見寫法;觸發字 `NonCancellable` 應 不會逼 `NonCancellable` 的成員 `cancel` 歸屬(反向只比簡名);`stateIn` 只寫 `D-15` 應 報 D-5、D-6、D-49 沒覆蓋;`決策不問 ARCH-76` 而 `DEFAULT` 只出現在 ARCH-76 的散文、或 ARCH-76 不是任何情境列的對應檢查 應 報;`jvm-only.txt` 右欄寫一個 JVM 清單沒有的字串 應 報;klib 簽名註解含巢狀泛型與 `fun interface` 的行 應 抽出正確的名稱(`toCollection`、`SharingStarted`、`Runnable` 都在,沒有 `>` 或 `interface` 這種名稱);`D-5、 D-6`(頓號後多空白)應 不報;`決策不問 API-2` 而 API-2 壞寫法欄沒有那個名稱 應 報;歸屬欄寫 `D-04`、`撞名D-4` 或 `無決策、D-4` 應 報;抽出的名稱少於 300 個或抽不到錨點 應 報;理由空白 應 報;klib 標了平台、JVM 清單沒有的 `promise` 應 不在母體;沒標平台的 `coroutineContext` 應 在母體;JVM 的 `getJob`、`flowCombine` 應 不在母體(JVM 專屬名稱只來自 `jvm-only.txt`);真型錄 應 回空 [test:t_kt_catalog_api_decision_points]
+ - [S2] 當反查單位照〈用詞〉包成一支檔時,叫不出對應情境列而〈叫不出的壞寫法〉沒有那一列 應 報列編號、對應檢查與片段;一對(情境列, 對應檢查)壞寫法欄沒有反引號片段時 應 要求一個 `<無片段>` 列;`TEST-` 的片段(例 TEST-15 的 `UnconfinedTestDispatcher`)應 判叫不出、要求進表;表上有但現在叫得出 應 報過期;表上的片段在壞寫法欄找不到 應 報;改由寫 `規則 kt-map-await-deferred` 而片段 `forEach { it.await() }` 不在它的壞例樣本 應 報;片段只出現在壞例樣本的 `//` 註解裡、或出現在沒標 `// BAD` 的行 應 報;片段 `OkHttpClient.Builder()…build()` 兩段依序出現在 `kt-okhttp-no-calltimeout` 壞例某行 `// BAD` 上 應 不報;單一識別字片段(`launch`)寫 `範本 T1` 應 報;`<無片段>` 寫 `規則` 或 `範本` 應 報;寫 `範本 T1` 而 T1 只有 `### 壞寫法:API-10 …` 沒有 `### 壞寫法:API-1 …` 應 報;片段不在那個壞寫法小節的程式圍欄裡 應 報;`<無片段>` 寫 `不是寫法` 應 報;改由是四種以外的值或理由空白 應 報;片段含表格跳脫的 `\|` 應 還原後再比;停用列的片段 應 不算;真型錄 應 回空 [test:t_kt_catalog_bad_snippets_reach_rows]
+ - [S3] 當 D-4 觸發字拿掉 `flatMapMerge` 時,S1 那道 應 紅(歸屬搜不到) [test:t_kt_catalog_api_decision_points]
+ - [S4] 當 D-4 觸發字拿掉 `flatMapMerge` 時,S2 那道 應 紅(API-8 壞寫法欄的片段 `flatMapMerge` 叫不出且表上沒有);只拿掉〈API 決策點〉裡 `flatMapMerge` 那一列時,S2 應 綠——兩道各自守、不互相掩護 [test:t_kt_catalog_bad_snippets_reach_rows]
+diff --git a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+index 124072eeeff001f53237c2bb2c240026565ead98..b531329cbdc4f10878669b9e25a531bb445ae6d6 100644
+--- a/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
++++ b/docs/lumos-toolchain-knowledge/Systems/kotlin規則包.md
+@@ -69,20 +69,21 @@ summary: |-
+   WHY:自寫規則的逐例測試要附改壞列舉證據:逐項拿掉每個比對樣式、正規式選項、has/not/inside 結構條件、變數綁定、字邊界與錨點、stopBy,每項都要有例子變紅;拿掉也不影響行為的記成等價改壞,規則載入不了的另列,證據放卷證 [出處:[[Projects/Android形狀列補規則_計劃]] 代碼審 r1~r3 跑滿回顧] [因:三輪都卡在規則條件沒例子守,靠審查席逐項點名補一輪只補一類] [不選:只靠審查席點名補例] [test:t_kotlin_rulepack_security_rules]
+   WHY:型錄現成規則欄寫某條檢查涵蓋這列,要拿這列壞寫法實跑過、或有寫明判斷條件的原始碼與說明原文;只確認代號存在不算 [出處:2026-11-09 待查證逐列核對 Verification/2026-11-09_Android型錄待查證列逐列核對] [因:CO-2 的 detekt 候選代號都存在,實跑卻連好寫法也報、壞寫法反而不報;另有四個代號根本不存在] [不選:只比對工具的代號清單]
+   WHY:好例樣本也要照每條會擋規則的標準寫,自檢會報被別條會擋規則命中的好例;刻意放別條壞寫法證明本條不重複報的去重案例,放 cross- 開頭的檔(略過跨規則檢查、但一定要被別條規則命中、不算好例段數) [出處:2026-11-09 Issues/Kotlin規則包代碼審放行的小問題 第 6 項逐處判定] [因:17 處好例命中全是樣本沒照別條標準寫;另有一處 review-fp 樣本是會擋 TEST-5 對有限流的誤報,改記在規則註解;不擋的話新樣本會再犯] [不選:把去重案例整段刪掉(失去不重複報的回歸保護)] [test:t_kotlin_rulepack_good_cross_rule]
+   WHY:型錄列查兩輪都找不到權威原文就標(停用):名稱加(停用)、通電批次寫「未接(停用)」、決策表不再指向它,編號與內容留著不重用 [出處:2026-11-09 Verification/2026-11-09_Android型錄出處不全列重查] [因:使用者原則「來源不明可不行」與「移掉之前先查明出處」;整列刪掉會弄斷測試範本、情境樣本與筆記的編號引用] [不選:整列刪除;只標出處不全(決策表 D-38 會繼續拿沒出處的列出推送前表態題)] [test:t_kotlin_catalog_c_rows_batch_resolved]
+   REVISIT:2027-02-09 型錄主表的(停用)標記接上型錄自檢:標了(停用)的列通電批次每個接電方式都要是「=未接(停用)」、情境決策表不准指向它、規則訊息不准引用它,〈統計〉的停用列數由程式核對;補先紅後綠測試(2026-11-09 停用 9 列時只靠人讀與 C 列範本測試)
+   WHY:kt-lifecycle-collect-without-repeat 不報外圍類別自己繼承 LifecycleService、MediaSessionService、MediaLibraryService 的收集(外圍是 Service 時連 ProcessLifecycleOwner 的收集也不報,看寫法認不出 Service 裡這樣寫的意圖),非 Service 類別裡的 ProcessLifecycleOwner 照報 [出處:[[Projects/簡報審查抓到的機制缺口_計劃]] 設計審 r1、r2] [因:官方說 repeatOnLifecycle 是為了只在 UI 顯示在畫面上時處理,Service 本來就在背景收;ProcessLifecycleOwner 官方說可以看作所有 Activity 的合成生命週期、用來在 App 回前景或進背景時反應,STARTED 就是 App 有畫面在前景,正是這條規則管的情況] [不選:往類別本體裡找(Activity 裡有內部 Service 時 Activity 自己的收集也被豁免)] [test:t_kotlin_rulepack_security_rules]
+   PITFALL:D-4「只要最新一次」的觸發字沒有 flatMapMerge、flatMapConcat,搜尋框沒加 debounce 時用這兩個操作符,推送前情境題不會把那一行切成段、D-4 不在候選列,作者與盲判都不會被問要不要取消舊查詢 [出處:2026-11-12 使用者面試題延伸實驗(三種操作符各建一個實驗 repo 跑 pitfalls --diff)] [根因:D-4 的反例樣本兩段都帶 debounce,觸發字靠 debounce 命中,自檢測不出操作符本身不是觸發字] [修法:觸發字補 flatMapConcat、flatMapMerge,反例樣本補兩段不帶 debounce 的] [test:t_kt_situation_evidence_samples]
+   WHY:型錄加〈API 決策點〉與〈叫不出的壞寫法〉兩節,由 check.py 的 api_decision_problems、bad_snippet_reach_problems 核:協程核心函式庫公開名稱每個恰好分類一次(歸到情境列的要被那列觸發字搜到、觸發字搜到的要歸到那列,每列各自覆蓋),情境列每個對應檢查的每段壞寫法片段叫不出時要寫明改由誰抓,改由只在片段層級驗(規則看壞例 // BAD 行與 --sg 起訖行、範本看那個對應檢查的壞寫法小節程式);兩支跟 situation_sample_problems 一樣要借 scripts/lumos,不放進 catalog_problems,在 check() 與 --catalog-only 另串、lumos 只載一次 [出處:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 範圍 1–4] [因:情境題只在被問到時守得住,2026-11-12 實驗搜尋框用 flatMapMerge 沒被問;反查單位 195 個,補字後仍有 111 個叫不出] [不選:從語料統計常見寫法(窮舉不完);名稱層級背書改由(設計審 r2 三席實測太鬆)] [test:t_kt_catalog_api_decision_points] [test:t_kt_catalog_bad_snippets_reach_rows]
+   WHY:API 母體只讀 klib 清單每行的簽名註解(套件/鏈|…),不解析宣告部分;伴生物件看 JVM 清單外層類別的靜態欄位判(klib 不標);可見寫法只給 object、伴生物件成員、列舉值與擴充屬性的接收者;JVM 專屬名稱手列在 coroutines-api/jvm-only.txt,不自動從 JVM 清單抽;_api_names 加底線是私有輔助,只有 coroutines_api_dir() 照 situation_dir 不加 [出處:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 設計審 r1–r3] [因:klib 宣告部分有巢狀泛型與 fun interface、文法沒有公開規格;從 JVM 編譯形狀還原名字三輪都被打穿(讀取函式大小寫、@JvmName 別名、雜湊後綴)] [不選:kotlin-metadata-jvm(要 JVM 執行環境、讀不到 @JvmName)] [test:t_kt_catalog_api_decision_points]
+   PITFALL:klib ABI 清單不標伴生物件,Channel.Factory 寫成普通的 final object,照宣告部分找 companion object 會讓 Channel.UNLIMITED 變成 Channel.Factory.UNLIMITED [出處:2026-11-12 情境決策點窮舉實作實測] [根因:klib 渲染不輸出 companion 修飾字] [修法:看 JVM 清單外層類別有沒有同名的 static final field] [test:t_kt_catalog_api_decision_points]
++  WHY:D-4 例外證據樣式收 flatMapConcat 與 flatMapMerge(每一次都要做完的合法寫法),證據樣式只驗作者答的寫法跟那一行程式一致,情境到底是不是「每一次都要做完」交盲判 [出處:代碼審 code-情境決策點窮舉 r2 合約席] [因:不收的話依序或並行上傳這類正確寫法答例外時,證據樣式對不上會誤提醒] [不選:把搜尋框用 flatMapConcat 算成例外也對不上(證據樣式無法從一行程式判出搜尋框還是上傳)] [代價:搜尋框誤用 flatMapConcat 又答例外時,推送前不提醒,只靠盲判抓] [test:t_kt_situation_evidence_samples]
+ verified_by:
+   - "[[Verification/2026-11-05_Kotlin規則包真專案實測]]"
+   - "[[Verification/2026-11-06_Android行為測試範本紅綠矩陣實跑]]"
+   - "[[Verification/2026-11-06_Android儀器測試範本與架構測試實跑]]"
+   - "[[Verification/2026-11-09_Android型錄待查證列逐列核對]]"
+   - "[[Verification/2026-11-09_Android型錄出處不全列重查]]"
+   - "[[Verification/2026-11-12_情境決策點窮舉實作驗證]]"
+ ---
+ # kotlin規則包
+ 
+diff --git a/docs/lumos-toolchain-knowledge/Verification/2026-11-12_情境決策點窮舉實作驗證.md b/docs/lumos-toolchain-knowledge/Verification/2026-11-12_情境決策點窮舉實作驗證.md
+index 323978b510c09efddcf08bae702da0310ed9bc1a..53975304e45bfef788835677f9fb00cc2cc71da5 100644
+--- a/docs/lumos-toolchain-knowledge/Verification/2026-11-12_情境決策點窮舉實作驗證.md
++++ b/docs/lumos-toolchain-knowledge/Verification/2026-11-12_情境決策點窮舉實作驗證.md
+@@ -12,37 +12,37 @@ plan_refs:
+   - "[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]]"
+ ---
+ # 2026-11-12_情境決策點窮舉實作驗證
+ 
+ > 白話:[[Projects/情境決策點窮舉與壞寫法要叫得出_計劃]] 實作後的實測紀錄——兩道新自檢在真型錄上 0 個問題、各自改壞會紅;補觸發字對 Now in Android 的情境段數幾乎沒影響;JVM 專屬名稱怎麼判;哪些分類是代理起草、編排者怎麼複核。
+ 
+ ## 自檢與測試
+ 
+ - `python3 configs/ast-grep/kotlin-android/check.py --catalog-only`:型錄問題 0 個。
+ - `check.py --sg <ast-grep 0.51.1>`(暫存區用 pip 裝的 ast-grep-cli 0.51.1,與 CI 釘版同):規則 228 條、問題 0 個;〈叫不出的壞寫法〉5 個「規則」改由的起訖行都涵蓋 // BAD 行。
+-- 測試子集(`python3.14 scripts/test_lumos.py -k …`):`api_decision_points` 28、`bad_snippets_reach` 22、`api_family_e2e` 4、`kt_situation_segments` 39(含路徑篩選共用的 S6)、`kt_catalog_stats_consistent` 128、`kotlin_rulepack_samples`(帶 LUMOS_AST_GREP)28,全過。
++- 測試子集(`python3.14 scripts/test_lumos.py -k …`,代碼審 r2 修補後重跑):`api_decision_points` 38、`bad_snippets_reach` 47、`api_family_e2e` 4、`kt_situation_segments` 39(含路徑篩選共用的 S6)、`kt_catalog_stats_consistent` 128、`kotlin_rulepack_samples`(帶 LUMOS_AST_GREP)29、`kt_catalog` 整組 310、`kt_situation` 整組 145、`template_fence_parity` 22,全過。
+ - 改壞驗證:D-4 拿掉 `mapLatest` 觸發字 → `api_family_e2e` 的 mapLatest 那案紅,還原後綠;D-4 拿掉 `flatMapMerge` → S1、S2 各自紅(測試內建);`_kt_sit_path_ok` 還沒建時 S6 紅、推送端仍內聯時 S6 紅。
+ 
+ ## Now in Android 量測(計劃範圍 5)
+ 
+ 語料:Now in Android 提交 `2982e63cb691ad49cd009aab43dc206fee6699c2`,正式碼(過 `_kt_sit_path_ok`)258 支 kt 檔,整份當新增切段。腳本在卷證 `governance/review-reports/情境決策點窮舉與壞寫法要叫得出/sweep/nia_measure.py.txt`。
+ 
+ | 型錄 | 至少命中一列的檔 | 情境段 | (段,列)配對 |
+ |---|---|---|---|
+ | 補字前(主線) | 128(49.6%) | 516 | 766 |
+ | 補字後(本分支) | 128(49.6%) | 515 | 775 |
+ 
+ 配對數增加 1.2%,低於停止線 20%。新觸發字的單字頻率:`mapLatest` 0.4%、`coroutineScope` 0.8%,`transformLatest`、`SharingStarted.Lazily`、`SharingStarted.Eagerly`、`supervisorScope` 都是 0%。
+ 
+ ## API 母體與分類
+ 
+-- 抽法實測:434 個名稱(klib 415 + `jvm-only.txt` 19;代碼審 r1 補判 JVM 專屬的 6 個型別與 TickerMode 兩個列舉值)。klib 清單不標伴生物件,改看 JVM 清單外層類別的靜態欄位判(`Channel$Factory`、`SharingStarted$Companion`);標了平台、JVM 清單又找不到而丟掉的 4 個:`asCoroutineDispatcher`、`asPromise`、`awaitAnimationFrame`、`promise`。
++- 抽法實測:434 個名稱(klib 415 + `jvm-only.txt` 19;代碼審 r1 補判 JVM 專屬的 6 個型別與 TickerMode 兩個列舉值;這些型別的成員照計劃〈天花板〉第 2 條不收)。klib 清單不標伴生物件,改看 JVM 清單外層類別的靜態欄位判(`Channel$Factory`、`SharingStarted$Companion`);標了平台、JVM 清單又找不到而丟掉的 4 個:`asCoroutineDispatcher`、`asPromise`、`awaitAnimationFrame`、`promise`。
+ - `jvm-only.txt` 初版:JVM 門面類別公開函式減 klib 名稱得 22 個,收 11 個原始碼會打的名字,不收的 11 個(讀取函式、`@JvmName` 別名、事件迴圈內部函式)寫在檔頭。`asCoroutineDispatcher` 在 JVM 叫 `from`,用右欄核對。
+ - 分類來源:被觸發字搜到的與停用字(約 90 個)編排者判;其餘 324 個由一個 sonnet 代理照固定判準起草(拿不準一律從寬標「決策不問 代碼審」),編排者看過它列的 89 個決策點與 5 個最拿不準的;自檢再抓出 6 個「標代碼審但型錄有列寫到」的,改指向那一列。
+ - 統計:D-n 62、撞名 4、決策不問主表列 18、決策不問代碼審 95、無決策 266。
+ 
+ ## 反查
+ 
+ - 反查單位 195 個(有片段 184、`<無片段>` 11),補字後叫不出 111 個:規則 5、代碼審 104、不是寫法 2(`[Loading, Success]`、`delay(常數)`)。範本 0 個:片段要以整段出現在範本壞寫法小節的程式裡,現有範本的程式是可跑的完整測試,型錄壞寫法欄的片段多是縮寫,一個都對不上。
+ 
+ ## 推送前機械檢查
+ 
+diff --git a/governance/review-reports/情境決策點窮舉與壞寫法要叫得出/sweep/gen_tables.py.txt b/governance/review-reports/情境決策點窮舉與壞寫法要叫得出/sweep/gen_tables.py.txt
+index 14b188e2db2208ca133257113cd44cc406a2a334..0b921d237f268e0684b30d96769d6cff046058ab 100644
+--- a/governance/review-reports/情境決策點窮舉與壞寫法要叫得出/sweep/gen_tables.py.txt
++++ b/governance/review-reports/情境決策點窮舉與壞寫法要叫得出/sweep/gen_tables.py.txt
+@@ -39,21 +39,21 @@ for ln in (S / "reach-draft.tsv").read_text(encoding="utf-8").splitlines():
+     rid, cid, s, route = ln.split("\t")
+     if s in NOTCODE:
+         route, why = "不是寫法", "示意寫法,不是一段可比對的程式"
+     elif route.startswith("規則 "):
+         why = f"{route[3:]} 是 {cid} 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息)"
+     elif s == kp._NO_SNIPPET:
+         why = f"壞寫法欄只有文字描述;代碼審看是不是犯了 {cid}「{rows[cid][1]}」"
+     elif cid.startswith("TEST-"):
+         why = f"測試檔在推送前不出情境段;代碼審看測試是不是犯了 {cid}「{rows[cid][1]}」"
+     else:
+-        why = f"{rid} 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 {cid}「{rows[cid][1]}」"
++        why = f"{rid} 的觸發字比對不到這段片段;代碼審看是不是犯了 {cid}「{rows[cid][1]}」"
+     cell = s if s == kp._NO_SNIPPET else "`" + s.replace("|", "\\|") + "`"
+     out.append(f"| {rid} | {cid} | {cell} | {route} | {why} |")
+ reach_sec = ("## 叫不出的壞寫法\n\n"
+     "情境列每個對應檢查的每段壞寫法片段(沒有片段算一個 <無片段>),照推送前同一套路徑篩選與切段叫不出那一列的,都列在這裡、寫明改由誰抓"
+     "(自檢是 configs/ast-grep/kotlin-android/check.py 的 bad_snippet_reach_problems;改由:`規則 <id>` 要片段落在那條規則壞例的 // BAD 行、"
+     "`範本 T<n>` 要片段在那組範本該對應檢查的壞寫法小節程式裡、`代碼審`、`不是寫法`)。補了觸發字讓某段叫得出,就要刪掉這裡那一列。\n\n"
+     "| 列編號 | 對應檢查 | 片段 | 改由 | 理由 |\n|---|---|---|---|---|\n" + "\n".join(out) + "\n")
+ t = text
+ for title in ("API 決策點", "叫不出的壞寫法"):
+     i = t.find("\n## " + title)
+diff --git a/scripts/test_lumos.py b/scripts/test_lumos.py
+index 44e8456a3eafa4952fc77415fe7e7324b5802fb1..234401ee7a98ed3dca21da31c8613b3f155193c6 100644
+--- a/scripts/test_lumos.py
++++ b/scripts/test_lumos.py
+@@ -127651,23 +127651,24 @@ def t_kotlin_template_fence_parity():
+         "收尾字元不同不算關": "a\n```\nx\n~~~\n## T3 x\n```\nb",
+         "收尾帶 info string 不算關(嚴格)": "a\n```\nx\n```kotlin\ny\n```\nb",
+         "縮排 3 格算圍欄": "a\n   ```\n## T1 x\n   ```\nb",
+         "縮排 4 格不算圍欄": "a\n    ```\n## T1 x\n    ```\nb",
+         "tab 開頭不算圍欄": "a\n\t```\n## T1 x\n\t```\nb",
+         "未閉合(嚴格讀不完退回寬鬆)": "a\n```\n## T1 x\n```kotlin\nb\n## T2 y",
+         "未閉合到檔尾": "a\n```kotlin\n## T1 x\nb",
+     }
+     for name, text in cases.items():
+         lines = text.split("\n")
+-        mine = [ln for _no, ln in m._visible_lines(lines)]
+-        theirs = [ln for _no, ln in lm._visible_lines(lines)]
+-        check(f"S1 圍欄判定跟 lumos 一致:{name}", mine == theirs, f"check.py={mine} lumos={theirs}")
++        for keep in (False, True):   # keep_fenced 兩條路都比(代碼審 code-情境決策點窮舉 r2:原本只比 False,沒關的圍欄丟最後一行沒人抓)
++            mine = [ln for _no, ln in m._visible_lines(lines, keep_fenced=keep)]
++            theirs = [ln for _no, ln in lm._visible_lines(lines, keep_fenced=keep)]
++            check(f"S1 圍欄判定跟 lumos 一致:{name}(keep_fenced={keep})", mine == theirs, f"check.py={mine} lumos={theirs}")
+ 
+ 
+ def _kt_template_sections(m, text):
+     """範本檔 → {組代號: {小節標題: 小節內文}}。組的切法呼叫 check.py 的 template_sections
+     (跟自檢同一條標題規則、圍欄裡的不算;代碼審 r2 架 F4),小節只看圍欄外的 `### ` 標題。
+     鍵 "" 是組標題到第一個小節之間的開頭段(代碼審 code-android儀器測試範本 r2 架構對齊 F1:開頭段也走這支,
+     不另外手切字串)。"""
+     lines = text.splitlines()
+     starts = m.template_sections(text)
+     visible = {no - 1 for no, _ln in m._visible_lines(lines)}
+@@ -131149,35 +131150,43 @@ def _sit_s2_inproc(cat, main12, main19):
+     check("S2 兩列都答不適用 → 不比證據(這一步只核表態形狀與段範圍)", pr == [], str(pr))
+ 
+ 
+ def t_kt_catalog_evidence_patterns():
+     """[Android寫法語意情境表態與盲判 範圍 1] 型錄〈情境決策表〉有「證據樣式」欄,每列都填;lumos 依表頭名稱讀得出每一列(列數照型錄實數,不寫死);
+     格式檢查抓得到:正規式編譯不過、段數或條數不對、停用列還有觸發字、表頭少了證據樣式欄。改壞的是複本,不碰真檔。"""
+     m = _load_lumos_inproc()
+     _real = Path(GRAPHCTL).resolve().parents[1] / _KTCAT_REL
+     rows, err = m._kt_decision_table(_real)
+     import re as _re
+-    _n = len(_re.findall(r"(?m)^\|\s*D-\d+\s*\|", _real.read_text(encoding="utf-8")))   # 型錄裡決策表列的實數(代碼審 r1 正確性 F5:不寫死)
++    _txt = _real.read_text(encoding="utf-8")
++    _dt0 = _txt.find("\n## 情境決策表")
++    _dt1 = _txt.find("\n## ", _dt0 + 5)
++    # 型錄裡決策表列的實數(代碼審 r1 正確性 F5:不寫死);只數〈情境決策表〉那一節——別節的表也有 | D-n | 開頭的列(代碼審 code-情境決策點窮舉 r2)
++    _n = len(_re.findall(r"(?m)^\|\s*D-\d+\s*\|", _txt[_dt0:_dt1 if _dt1 >= 0 else len(_txt)]))
+     check("真型錄讀得出每一列、從 D-1 連號、沒有問題", err is None and _n > 0 and [r["id"] for r in rows] == [f"D-{k}" for k in range(1, _n + 1)], str(err))
+     d1 = rows[0] if rows else {}
+     check("D-1 依表頭取欄:觸發字 coroutineScope、主證據樣式三條、例外(無)、是換列的列",
+           d1.get("triggers") == ["coroutineScope"] and len((d1.get("evidence") or {}).get("main") or []) == 3
+           and (d1.get("evidence") or {}).get("alt") is None and d1.get("switch") is True, str(d1)[:300])
+-    check("表格裡跳脫過的直線還原成 | 再編(D-4 主證據樣式是兩種寫法的或)",
+-          rows and rows[3]["evidence"]["main"] == [r"\bflatMapLatest\b|\?\.cancel\(\)"], str(rows[3]["evidence"] if rows else None))
++    _d4 = (rows[3]["evidence"]["main"] if rows else None) or []
++    check("表格裡跳脫過的直線還原成 | 再編(D-4 主證據樣式是幾種寫法的或,flatMapLatest 與 ?.cancel() 都比得到)",
++          len(_d4) == 1 and "\\|" not in _d4[0] and _re.search(_d4[0], "q.flatMapLatest { s(it) }") is not None
++          and _re.search(_d4[0], "job?.cancel()") is not None, str(rows[3]["evidence"] if rows else None))
+     kp = _ktpack()
+     check("型錄格式檢查全過", not kp.catalog_problems(), str(kp.catalog_problems()[:3]))
+     mc = _ktpack(copy=True)
+     lines = mc.CATALOG.read_text(encoding="utf-8").split("\n")
+     hdr_i = next(i for i, ln in enumerate(lines) if ln.startswith("| 列編號 |"))
+     hdr = {n: k for k, n in enumerate(mc._cells(lines[hdr_i]))}
+-    dts = [i for i, ln in enumerate(lines) if ln.startswith("| D-")]
++    _i_dt = next(i for i, ln in enumerate(lines) if ln.startswith("## 情境決策表"))
++    _i_end = next((i for i in range(_i_dt + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
++    dts = [i for i in range(_i_dt, _i_end) if lines[i].startswith("| D-")]
+     def setcell(i, name, val):
+         c = mc._cells(lines[i])
+         c[hdr[name]] = val
+         lines[i] = "| " + " | ".join(c) + " |"
+         return c[0]
+     bad_re = setcell(dts[0], "證據樣式", "主:`async(`;例外:(無)")
+     no_alt = setcell(dts[2], "證據樣式", "主:`awaitAll`")
+     four = setcell(dts[3], "證據樣式", "主:`a` `b` `c` `d`;例外:(無)")
+     retired = setcell(dts[4], "情境", "(停用)舊列")
+     mc.CATALOG.write_text("\n".join(lines), encoding="utf-8")
+@@ -131932,29 +131941,41 @@ def _reach_route_guards(kp, lm, text):
+     env["by_rule"] = {**by_rule, ok["id"]: {**ok, "dir": "rules-hints", "message": f"[{cid}]x"}}
+     check("S2 規則:不在會擋的 rules/ → 報", any("rules/" in w for w in kp._route_problems(env, cid, "x y", f"規則 {ok['id']}", "測試")))
+     env["by_rule"] = {**by_rule, ok["id"]: {**ok, "message": "[NOPE-1]x"}}
+     check("S2 規則:訊息開頭的編號不是這個對應檢查 → 報", any("rules/" in w for w in kp._route_problems(env, cid, "x y", f"規則 {ok['id']}", "測試")))
+     check("S2 片段依序比:build()…OkHttpClient 對 OkHttpClient.Builder().build() 不算",
+           not kp._parts_in_order(lm, "build()…OkHttpClient", kp._norm_code("val c = OkHttpClient.Builder().build()")))
+     check("S2 片段只有 … 或空白 → 不算比到", not kp._parts_in_order(lm, "…", "anything") and not kp._parts_in_order(lm, "   ", "x"))
+     check("S2 片段的 \\| 還原成 |", kp._snippets("`a \\| b`") == ["a | b"])
+     tbl = "\n## 叫不出的壞寫法\n\n| 列編號 | 對應檢查 | 片段 | 改由 | 理由 |\n|---|---|---|---|---|\n| D-1 | API-1 | `a \\| b` | 代碼審 | x |\n"
+     check("S2 表上片段格的 \\| 也還原", kp._unreach_table(tbl)[0][0][2] == "a | b")
++    check("S2 片段格反引號外還有字 → 照整格原文(不吞掉尾巴,才會被報成不是反查單位)",
++          kp._unreach_table(tbl.replace("`a \\| b`", "`a` 垃圾"))[0][0][2] == "`a` 垃圾")
++    tpl_open = f"## T2 x\n### 壞寫法:{cid} y\n```kotlin\nval a = 1\nval out = query.flatMapConcat {{ search(it) }}"
++    check("S2 範本小節的圍欄沒關到檔尾 → 最後一行照算圍欄內文(CommonMark)",
++          kp._fence_body(tpl_open, "T2", cid).endswith("query.flatMapConcat { search(it) }"), repr(kp._fence_body(tpl_open, "T2", cid)))
+     tmp = Path(tempfile.mkdtemp(prefix="gctl-badlines-"))
+     try:
+         d = tmp / "bad" / "kt-x"
+         d.mkdir(parents=True)
+         (d / "a.kt").write_text("val a = 1 //BAD\nval b = 2 // BADGE\n// BAD-NEXT\nrepo.sync()\n    .onCompletion { done() }\n"
+                                 "// BAD:網址在字串裡\nval u = \"http://x/y\".let { go(it) }\n// BAD:跳過註記\n@Foo\nfun z() = 3\n", encoding="utf-8")
+         (d / "b.kt").write_bytes(b"\xff\xfe bad")
++        (d / "c.kt").write_text("val s = 1 // a\x0cb\nval x = bar() // BAD\nval q = \"see // BAD\"\n// BAD\n"
++                                "@Composable fun A(vm: Vm = viewModel()) { }\nval z = 1\nval w = \"a b\" // BAD\n", encoding="utf-8")
++        got_c = {no: ln for f, no, ln in kp._bad_lines(lm, tmp, "kt-x")[0] if f.endswith("c.kt")}
++        check("S2 前一行註解裡有換頁字元,// BAD 仍對到自己那一行", got_c.get(2) == "val x = bar()", str(got_c))
++        check("S2 字串裡的 // BAD 不是標記", 3 not in got_c, str(got_c))
++        check("S2 // BAD 下一行是「@註記 + 同一行的程式」→ 標到那一行,不跳過", got_c.get(5, "").startswith("@Composable fun A"), str(got_c))
++        check("S2 同一行字串裡有 U+2028,行尾的 // BAD 照認", 7 in got_c, str(got_c))
+         got, probs = kp._bad_lines(lm, tmp, "kt-x")
+-        lines = {no: ln for _f, no, ln in got}
++        lines = {no: ln for f, no, ln in got if f.endswith("a.kt")}
+         check("S2 //BAD(沒空格)也認", 1 in lines, str(lines))
+         check("S2 // BADGE 不是標記", 2 not in lines, str(lines))
+         check("S2 // BAD-NEXT 標的是下一個語句,續行併進來", lines.get(4, "").endswith(".onCompletion { done() }"), str(lines))
+         check("S2 下一行字串裡的 // 不當註解截斷", ".let { go(it) }" in lines.get(7, ""), str(lines))
+         check("S2 // BAD:說明 下一行是 @ 註記就跳過,標到函式", lines.get(10, "").startswith("fun z()"), str(lines))
+         check("S2 壞例檔不是 UTF-8 → 報問題,不崩", any("讀不了" in p for p in probs), str(probs))
+     finally:
+         _sh.rmtree(tmp, ignore_errors=True)
+     env = {"lumos": lm, "rows": rows, "by_rule": by_rule, "samples": kp.HERE / "samples", "templates": "", "scan_index": None}
+     unit = next((r, c, s, ro) for r, c, s, ro, _w in kp._unreach_table(text)[0] if ro.startswith("規則 "))
+diff --git a/skills/kotlin-idioms/checks-catalog.md b/skills/kotlin-idioms/checks-catalog.md
+index 935f8d7f2ebdf7ce063c5414ffb21bcb8049adcb..1e8ab38885b80476738a934d97d5e37a8c0862a4 100644
+--- a/skills/kotlin-idioms/checks-catalog.md
++++ b/skills/kotlin-idioms/checks-catalog.md
+@@ -733,21 +733,21 @@
+ 
+ 語意類的列歸納成「看到這個情境 → 預設這樣寫 → 什麼時候不適用、改怎麼寫」。寫程式或審查時先認情境,再看對應檢查編號的列。
+ 
+ 「證據樣式」欄給推送前的情境題核對用(`lumos code-loop check` 在表態那一道裡):寫成 `主:… ;例外:…`,每段是 `(無)` 或一到三條反引號包住的 Python 正規式(分大小寫;表格裡的直線寫成 `\|`)。表態某一列適用、照標準寫法(`main`)或例外寫法(`alt`)時,對照的方式是:第一條要出現在表態指的那一行(剝掉註解與字串之後),其餘每一條要出現在段材料裡(從那一段往上最近的頂層或類別層宣告——函式、屬性或類別;找不到或超過 120 行時是段前後各 20 行),所以跨宣告的特徵(類別屬性配方法、介面配呼叫端)不寫成第二條。樣式只照那一列「標準寫法」「不適用時」欄寫明的字面特徵推,不另立寫法;寫不出字面特徵的(標準寫法是「不要寫某樣東西」或「照某個順序」,或同一段裡有寫不出特徵的寫法)寫 `(無)`;每列樣式附正例與反例(`configs/ast-grep/kotlin-android/samples/situation/<列編號>.kt.txt`),規則包自檢經真的切段與核對程式跑過:正例(標準寫法、例外寫法的範例)要對得上、反例(對應檢查列裡字面上跟標準寫法不同的壞寫法)要對不上;推送前對不上只提醒、記帳、待盲判,不擋(字面樣式分不出合法變體,先量真陽性率再談擋);壞寫法跟標準寫法只差在語意(數量、物件大小、哪個值會變、測的是不是順序)時樣式分不出,那一段寫 `(無)` 交盲判,不留會擋掉標準寫法或放過壞寫法的樣式;「不適用時」是換到別列的(見下一列、見上一列),在「不適用時」格子裡標 `(換列)`(慣例寫在開頭)、例外寫 `(無)`,那一列不准選例外(工具只認這個標記,不從中文用語推)。列編號只准往後加,刪列時在情境欄標「(停用)」、觸發字與證據樣式都改成 `(無)` 留著。
+ 
+ | 列編號 | 情境 | 標準寫法 | 不適用時 | 觸發字 | 證據樣式 | 對應檢查 | 來源 |
+ |---|---|---|---|---|---|---|---|
+ | D-1 | 互不依賴的一次性呼叫(同一功能要打兩三支 API,彼此不讀對方結果) | `coroutineScope { val a = async { api.a() }; val b = async { api.b() }; Ui(a.await(), b.await()) }` | (換列)第二支要用第一支的結果 → 見下一列「有依賴的串接」;其中一支失敗不該拖垮另一支 → 見「失敗各自承擔」 | coroutineScope | 主:`\basync\b(?!.*\}\s*\.await\(\))` `\bcoroutineScope\b` `\.await\(\)`;例外:(無) | API-1、API-3 | 同「對應檢查」各列的來源欄;API-14 已停用、不再列為對應(2026-11-09) |
+ | D-2 | 有依賴的串接(B 要 A 的結果) | 直接循序呼叫 `val user = api.user(); val orders = api.orders(user.id)`,不要包 `async { }.await()` | (換列)串接裡有一段互不依賴 → 那一段改用上一列的 `async` 並行 | (無) | 主:(無);例外:(無) | API-1 | 同「對應檢查」各列的來源欄;API-14 已停用、不再列為對應(2026-11-09) |
+ | D-3 | 多筆同型(同一支 API 打 N 次) | `ids.map { id -> async { api.load(id) } }.awaitAll()`;筆數大時 `val sem = Semaphore(8)` 包 `sem.withPermit { }` 或用 `Dispatchers.IO.limitedParallelism(8)` | 每筆要各自成敗 → `supervisorScope` 內 `map { async { runCatching { api.load(it) } } }.awaitAll()`;結果要寫進共用集合 → 讓 async 回傳值,不要在 async 裡 `list.add` | awaitAll、Semaphore、withPermit、limitedParallelism | 主:`\.awaitAll\(\)` `\basync\b`;例外:(無) | API-2、CO-30、CO-39 | 同「對應檢查」各列的來源欄 |
+-| D-4 | 只要最新一次(搜尋框、篩選切換、快速重新整理) | `query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(…)`(只要最新一次的轉換用 `mapLatest`、`transformLatest` 同類:新值來時取消前一個);命令式就 `searchJob?.cancel(); searchJob = viewModelScope.launch { … }` | 每一次都必須做完(寫入、扣款、上傳) → 用 `collect`、`flatMapConcat` 依序做完,或排隊(`Channel` + 單一消費者),不要 `collectLatest`/`flatMapLatest`/`mapLatest`/`transformLatest` | debounce、flatMapLatest、collectLatest、viewModelScope.launch、flatMapConcat、flatMapMerge、mapLatest、transformLatest | 主:`\bflatMapLatest\b\|\bmapLatest\b\|\btransformLatest\b\|\?\.cancel\(\)`;例外:`\.collect\s*\{\|\bChannel\b\|\bflatMapConcat\b` | API-8、FLOW-22 | 同「對應檢查」各列的來源欄 |
++| D-4 | 只要最新一次(搜尋框、篩選切換、快速重新整理) | `query.debounce(300).flatMapLatest { repo.search(it) }.stateIn(…)`(只要最新一次的轉換用 `mapLatest`、`transformLatest` 同類:新值來時取消前一個);命令式就 `searchJob?.cancel(); searchJob = viewModelScope.launch { … }` | 每一次都必須做完(寫入、扣款、上傳) → 用 `collect`、`flatMapConcat` 依序做完,順序不重要時 `flatMapMerge` 並行做完,或排隊(`Channel` + 單一消費者),不要 `collectLatest`/`flatMapLatest`/`mapLatest`/`transformLatest` | debounce、flatMapLatest、collectLatest、viewModelScope.launch、flatMapConcat、flatMapMerge、mapLatest、transformLatest | 主:`\bflatMapLatest\b\|\bmapLatest\b\|\btransformLatest\b\|\?\.cancel\(\)`;例外:`\.collect\s*\{\|\bChannel\b\|\bflatMapConcat\b\|\bflatMapMerge\b` | API-8、FLOW-22 | 同「對應檢查」各列的來源欄 |
+ | D-5 | 持續更新的多來源合併(畫面狀態由幾條會變的資料組成) | `combine(repo.user, repo.settings, query) { u, s, q -> UiState(u, s, q) }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState.Loading)`;每個來源要有初值(StateFlow 或 `.onStart { emit(預設) }`) | 兩邊必須一筆對一筆配對 → 見「嚴格一對一配對」;某來源只在第一次需要 → `first()` 取一次再進 combine | combine、stateIn、WhileSubscribed、onStart、SharingStarted.Lazily、SharingStarted.Eagerly | 主:`\bcombine\s*\(` `\.stateIn\(` `\bWhileSubscribed\(`;例外:`\.first\(\)` | FLOW-1、FLOW-19、STATE-4、STATE-8 | 同「對應檢查」各列的來源欄 |
+ | D-6 | 嚴格一對一配對(第 n 個請求配第 n 個回應) | 兩條冷流 `requests.zip(responses) { q, r -> q to r }` | 任何一邊是狀態流(StateFlow、stateIn 產物) → 改 `combine`;zip 會丟掉多出來的值、等不到另一邊時卡住 | zip、combine、stateIn | 主:(無);例外:`\bcombine\s*\(` | FLOW-2 | 同「對應檢查」各列的來源欄 |
+ | D-7 | 一次性事件 vs 狀態(Snackbar、導航、錯誤提示) | 事件化成狀態:`data class UiState(val userMessage: String? = null)`,UI 顯示後呼叫 `vm.userMessageShown()` 清掉;導航用狀態欄位 + UI 端 `LaunchedEffect(state.navigateTo)` 並回報已處理 | 真的不屬於畫面狀態的內部訊號 → `Channel<Event>(Channel.BUFFERED)` + `receiveAsFlow()`,UI 端在 `repeatOnLifecycle(STARTED)` 裡收;不要用 `replay > 0` 的 SharedFlow、不要靠 StateFlow 重發相同值 | Channel、receiveAsFlow、MutableSharedFlow、SingleLiveEvent、LaunchedEffect、showSnackbar、navigate | 主:(無);例外:`\breceiveAsFlow\(\)` | FLOW-7、FLOW-24、FLOW-25、STATE-10、STATE-11、STATE-12、STATE-28、STATE-17 | 同「對應檢查」各列的來源欄 |
+ | D-8 | 失敗連坐(任何一支失敗整件事就失敗) | `try { coroutineScope { val a = async { … }; val b = async { … }; combine(a.await(), b.await()) } } catch (e: IOException) { 錯誤狀態 }`——try 包在 `coroutineScope` 外面 | (換列)不該連坐 → 下一列 | coroutineScope、supervisorScope | 主:`\bcoroutineScope\b` `\btry\s*\{\s*(?:return\s+)?coroutineScope\b` `\}\s*catch\s*\(`;例外:(無) | API-4、CO-8 | 同「對應檢查」各列的來源欄 |
+ | D-9 | 失敗各自承擔(一支壞了另一支照常顯示) | `supervisorScope { val a = async { api.a() }; val b = async { api.b() }; Ui(runCatching { a.await() }, runCatching { b.await() }) }`(`runCatching` 換成會重拋 `CancellationException` 的版本);`supervisorScope { launch { try { … } catch (e: Exception) { … } } }` 每個子協程自己接 | (換列)業務上要全有或全無 → 上一列 | supervisorScope、runCatching、CancellationException、coroutineScope | 主:`\bsupervisorScope\b` `\brunCatching\b\|\bcatch\s*\(`;例外:(無) | API-4、CO-9、CO-11、CO-2 | 同「對應檢查」各列的來源欄 |
+ | D-10 | 需要逾時 | OkHttp `OkHttpClient.Builder().callTimeout(30, SECONDS)`;Ktor `install(HttpTimeout) { requestTimeoutMillis = 30_000 }`;協程 `withTimeoutOrNull(5_000) { … } ?: 逾時狀態` | 長連線或串流下載 → 不設整體 callTimeout,改 `readTimeout` + 心跳或進度逾時;逾時後還持有資源 → 資源在 `withTimeout` 外取得、用 `use { }` | callTimeout、HttpTimeout、withTimeout、withTimeoutOrNull、readTimeout | 主:`\bcallTimeout\(\|\bHttpTimeout\b\|\bwithTimeoutOrNull\(`;例外:`\breadTimeout\b\|\.use\s*\{` | API-5、API-6、API-32、API-33、CO-14 | 同「對應檢查」各列的來源欄 |
+ | D-11 | 需要重試 | Flow:`retryWhen { cause, attempt -> (cause is IOException && attempt < 3).also { if (it) delay(500L shl attempt.toInt()) } }`;命令式:`repeat(3) { attempt -> runCatching { return api.x() }; delay(500L shl attempt) }`;WorkManager:`Result.retry()` 搭 `if (runAttemptCount >= 3) Result.failure()` 與 `setBackoffCriteria(EXPONENTIAL, …)` | 非冪等寫入、4xx 永久錯誤 → 不重試,直接回錯誤;401 → 走重新登入流程(Authenticator 用 `priorResponse` 數次數、超過回 null) | retry、retryWhen、Result.retry、runAttemptCount、Authenticator、repeat | 主:`\bretryWhen\b\|\brepeat\s*\(\|\bResult\.retry\(\)` `\bdelay\s*\(\|\bsetBackoffCriteria\(\|\brunAttemptCount\b`;例外:(無) | API-7、API-21、API-35、DATA-36 | 同「對應檢查」各列的來源欄 |
+ | D-12 | 需要防重複送出 | ViewModel:`if (submitJob?.isActive == true) return; submitJob = viewModelScope.launch { … }`,UI `enabled = !uiState.isSubmitting`;導航點擊 `dropUnlessResumed { onNext() }`;背景工作 `enqueueUniqueWork(name, ExistingWorkPolicy.KEEP, req)`;多處同時刷新同一資源 → 共用一個進行中的 `Deferred` 或 `Mutex` | 每次都要送(例如送出多則訊息)→ 排隊:`Channel` + 單一消費者依序送,而不是丟掉 | dropUnlessResumed、enqueueUniqueWork、Mutex | 主:`\?\.isActive\s*==\s*true\|\bdropUnlessResumed\b\|\benqueueUniqueWork\((?![^)]*\bREPLACE\b)\|\bMutex\b\|\bDeferred\b`;例外:`\bChannel\b` | API-10、ARCH-3、DATA-30 | 同「對應檢查」各列的來源欄 |
+ | D-13 | 需要在程式被殺後還原 | 使用者輸入與選中 id 放 `SavedStateHandle`(`savedStateHandle.getStateFlow("query", "")`,寫入在使用者互動當下);Compose 文字輸入 `rememberSaveable { mutableStateOf("") }`;啟動結果流程的上下文存 `SavedStateHandle`;大資料只存 id、內容放資料庫 | 能從資料庫或網路重建的資料 → 不存 saved state(只存 id);要長期保存的使用者資料 → 寫 Room/DataStore,不是 saved state | SavedStateHandle、rememberSaveable、onSaveInstanceState、getStateFlow | 主:(無);例外:(無) | STATE-6、STATE-14、STATE-18、STATE-20、STATE-26、STATE-27 | 同「對應檢查」各列的來源欄 |
+ | D-14 | 需要跨畫面共享 | 同一 Activity 的 Fragment:`activityViewModels()`;同一導航子圖:`navGraphViewModels(R.id.graph)` 或 Compose `hiltViewModel(navController.getBackStackEntry(route))`(包在 `remember(entry)`);跨 ViewModel 的資料:`@Singleton` Repository 暴露 `Flow` | 不需要共享卻共享 → 用畫面自己的 `viewModels()`/`hiltViewModel()`;`@ViewModelScoped` 不會跨 ViewModel 共享 | activityViewModels、navGraphViewModels、hiltViewModel、getBackStackEntry、viewModels、ViewModelScoped | 主:`\bactivityViewModels\(\|\bnavGraphViewModels\(\|\bremember\s*\([^)]*\)\s*\{[^}]*\bgetBackStackEntry\(\|@Singleton\b`;例外:`\bviewModels\(\)\|\bhiltViewModel\(\)` | ARCH-11、ARCH-37、ARCH-60 | 同「對應檢查」各列的來源欄 |
+@@ -1180,21 +1180,21 @@
+ | CoroutineId | 無決策 | 除錯模式給協程編號的情境元素 |
+ | CoroutineName | 無決策 | 幫協程命名的情境元素,除錯用 |
+ | CoroutineScope | 決策不問 CO-1 | 自建範圍決定生命週期與調度器;寫死調度器就不能注入 |
+ | coroutineScope | D-1、D-8、D-9 | 並行範圍,一支失敗全部取消 |
+ | CoroutineStart | 決策不問 代碼審 | 啟動模式的選擇,決定協程何時開始跑 |
+ | count | 無決策 | 一般集合式/轉換運算子,非情境選擇 |
+ | createCopy | 無決策 | 內部擴充點/回呼,App 不直接用 |
+ | currentCoroutineContext | 無決策 | 讀取目前協程的情境 |
+ | debounce | D-4 | 只要最新一次:等輸入停下才送 |
+ | DEFAULT | 決策不問 代碼審 | 選 DEFAULT 等於決定立即排程、可被取消 |
+-| Default | 決策不問 CO-39 | 選 CPU 執行緒池;CO-39 的壞寫法片段 async(Default) 用的就是這個調度器 |
++| Default | 決策不問 CO-39 | 選 CPU 執行緒池;調度器該不該寫死歸 CO-1(那列片段寫的是 Dispatchers.IO、不含這個名稱),這裡指 CO-39 只因為它的壞寫法片段 async(Default) 寫到這個名稱 |
+ | DEFAULT_BUFFER_PROPERTY_NAME | 無決策 | 系統屬性名稱常數,不是寫法選擇 |
+ | DEFAULT_CONCURRENCY | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+ | DEFAULT_CONCURRENCY_PROPERTY_NAME | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+ | DefaultDelay | 無決策 | 內部實作類別,App 不直接用 |
+ | Deferred | 無決策 | 停用字,不帶決策:async 結果的型別,決定在 async |
+ | Delay | 無決策 | 介面/型別/屬性,本身不是情境選擇 |
+ | delay | 決策不問 API-7 | 重試或輪詢間隔;太常見不當觸發字 |
+ | delayEach | 無決策 | 舊版已棄用的 API |
+ | delayFlow | 無決策 | 舊版已棄用的 API |
+ | DelicateCoroutinesApi | 無決策 | 註解標記,不是寫法選擇 |
+@@ -1511,131 +1511,131 @@
+ | yield | 決策不問 代碼審 | 決定讓出執行緒給其他協程 |
+ | YieldContext | 無決策 | 內部實作類別,App 不直接用 |
+ | zip | D-6 | 嚴格一對一配對 |
+ 
+ ## 叫不出的壞寫法
+ 
+ 情境列每個對應檢查的每段壞寫法片段(沒有片段算一個 <無片段>),照推送前同一套路徑篩選與切段叫不出那一列的,都列在這裡、寫明改由誰抓(自檢是 configs/ast-grep/kotlin-android/check.py 的 bad_snippet_reach_problems;改由:`規則 <id>` 要片段落在那條規則壞例的 // BAD 行、`範本 T<n>` 要片段在那組範本該對應檢查的壞寫法小節程式裡、`代碼審`、`不是寫法`)。補了觸發字讓某段叫得出,就要刪掉這裡那一列。
+ 
+ | 列編號 | 對應檢查 | 片段 | 改由 | 理由 |
+ |---|---|---|---|---|
+-| D-1 | API-1 | `val a = x.f(…)` | 代碼審 | D-1 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+-| D-1 | API-1 | `val b = y.g(…)` | 代碼審 | D-1 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+-| D-1 | API-3 | `async { }` | 代碼審 | D-1 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-3「async 的結果要有人接」 |
+-| D-2 | API-1 | `val a = x.f(…)` | 代碼審 | D-2 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+-| D-2 | API-1 | `val b = y.g(…)` | 代碼審 | D-2 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
++| D-1 | API-1 | `val a = x.f(…)` | 代碼審 | D-1 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
++| D-1 | API-1 | `val b = y.g(…)` | 代碼審 | D-1 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
++| D-1 | API-3 | `async { }` | 代碼審 | D-1 的觸發字比對不到這段片段;代碼審看是不是犯了 API-3「async 的結果要有人接」 |
++| D-2 | API-1 | `val a = x.f(…)` | 代碼審 | D-2 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
++| D-2 | API-1 | `val b = y.g(…)` | 代碼審 | D-2 的觸發字比對不到這段片段;代碼審看是不是犯了 API-1「互不依賴的呼叫要並行」 |
+ | D-3 | API-2 | `.map { it.await() }` | 規則 kt-map-await-deferred | kt-map-await-deferred 是 API-2 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+-| D-3 | API-2 | `forEach { it.await() }` | 代碼審 | D-3 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-2「多筆同型要用 awaitAll」 |
+-| D-3 | CO-30 | `ids.map { async(Dispatchers.IO) { blockingCall(it) } }` | 代碼審 | D-3 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-30「大量並行 IO 沒限流」 |
+-| D-3 | CO-39 | `val list = mutableListOf<X>(); ids.map { async(Default) { list.add(f(it)) } }` | 代碼審 | D-3 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-39「協程裡改非執行緒安全集合或快取」 |
+-| D-3 | CO-39 | `mutableMapOf` | 代碼審 | D-3 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-39「協程裡改非執行緒安全集合或快取」 |
+-| D-5 | FLOW-1 | `a.collect { x -> b.collect { y -> … } }` | 代碼審 | D-5 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-1「合成用 combine,不巢狀收集」 |
+-| D-5 | FLOW-1 | `collectLatest` | 代碼審 | D-5 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-1「合成用 combine,不巢狀收集」 |
++| D-3 | API-2 | `forEach { it.await() }` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 API-2「多筆同型要用 awaitAll」 |
++| D-3 | CO-30 | `ids.map { async(Dispatchers.IO) { blockingCall(it) } }` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-30「大量並行 IO 沒限流」 |
++| D-3 | CO-39 | `val list = mutableListOf<X>(); ids.map { async(Default) { list.add(f(it)) } }` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-39「協程裡改非執行緒安全集合或快取」 |
++| D-3 | CO-39 | `mutableMapOf` | 代碼審 | D-3 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-39「協程裡改非執行緒安全集合或快取」 |
++| D-5 | FLOW-1 | `a.collect { x -> b.collect { y -> … } }` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-1「合成用 combine,不巢狀收集」 |
++| D-5 | FLOW-1 | `collectLatest` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-1「合成用 combine,不巢狀收集」 |
+ | D-5 | FLOW-1 | `collect` | 規則 kt-nested-collect | kt-nested-collect 是 FLOW-1 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+-| D-5 | FLOW-19 | `launch { a.collect { … }; b.collect { … } }` | 代碼審 | D-5 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-19「同一協程連續 collect 兩條熱流」 |
+-| D-5 | STATE-8 | `init { viewModelScope.launch { repo.stream().collect { _state.value = it } } }` | 代碼審 | D-5 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-8「init 裡 collect 再倒進另一個狀態」 |
+-| D-7 | FLOW-24 | `init { _events.emit(Loaded) }` | 代碼審 | D-7 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-24「replay=0 的 SharedFlow 在收集者訂閱前 emit」 |
+-| D-7 | STATE-10 | `_state.value = Error("網路失敗")` | 代碼審 | D-7 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-10「以為 StateFlow 會發出相等的新值」 |
+-| D-7 | STATE-11 | `Event<T>.getContentIfNotHandled()` | 代碼審 | D-7 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-11「用 SingleLiveEvent 或 Event 包裝類傳一次性事件」 |
+-| D-7 | STATE-12 | `vm.userMessageShown()` | 代碼審 | D-7 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-12「轉成狀態的事件沒有「已消費」回報」 |
+-| D-7 | STATE-28 | `val e by vm.events.collectAsState(null)` | 代碼審 | D-7 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-28「一次性事件用 collectAsState 收」 |
+-| D-7 | STATE-17 | `live.postValue(e1); live.postValue(e2)` | 代碼審 | D-7 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-17「把 postValue 當事件串流用」 |
+-| D-9 | CO-9 | `scope.launch { launch(handler) { … } }` | 代碼審 | D-9 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-9「CoroutineExceptionHandler 裝在子協程或 async 上」 |
+-| D-9 | CO-9 | `scope.async(handler) { … }` | 代碼審 | D-9 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-9「CoroutineExceptionHandler 裝在子協程或 async 上」 |
++| D-5 | FLOW-19 | `launch { a.collect { … }; b.collect { … } }` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-19「同一協程連續 collect 兩條熱流」 |
++| D-5 | STATE-8 | `init { viewModelScope.launch { repo.stream().collect { _state.value = it } } }` | 代碼審 | D-5 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-8「init 裡 collect 再倒進另一個狀態」 |
++| D-7 | FLOW-24 | `init { _events.emit(Loaded) }` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-24「replay=0 的 SharedFlow 在收集者訂閱前 emit」 |
++| D-7 | STATE-10 | `_state.value = Error("網路失敗")` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-10「以為 StateFlow 會發出相等的新值」 |
++| D-7 | STATE-11 | `Event<T>.getContentIfNotHandled()` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-11「用 SingleLiveEvent 或 Event 包裝類傳一次性事件」 |
++| D-7 | STATE-12 | `vm.userMessageShown()` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-12「轉成狀態的事件沒有「已消費」回報」 |
++| D-7 | STATE-28 | `val e by vm.events.collectAsState(null)` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-28「一次性事件用 collectAsState 收」 |
++| D-7 | STATE-17 | `live.postValue(e1); live.postValue(e2)` | 代碼審 | D-7 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-17「把 postValue 當事件串流用」 |
++| D-9 | CO-9 | `scope.launch { launch(handler) { … } }` | 代碼審 | D-9 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-9「CoroutineExceptionHandler 裝在子協程或 async 上」 |
++| D-9 | CO-9 | `scope.async(handler) { … }` | 代碼審 | D-9 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-9「CoroutineExceptionHandler 裝在子協程或 async 上」 |
+ | D-9 | CO-2 | `catch (e: Exception)` | 規則 kt-suspend-catch-swallows-cancellation | kt-suspend-catch-swallows-cancellation 是 CO-2 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+-| D-9 | CO-2 | `catch (e: Throwable)` | 代碼審 | D-9 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-2「不吞取消」 |
++| D-9 | CO-2 | `catch (e: Throwable)` | 代碼審 | D-9 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-2「不吞取消」 |
+ | D-10 | API-5 | `OkHttpClient.Builder()…build()` | 規則 kt-okhttp-no-calltimeout | kt-okhttp-no-calltimeout 是 API-5 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+-| D-10 | API-6 | `HttpClient(OkHttp) { }` | 代碼審 | D-10 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-6「Ktor(OkHttp 引擎)要設整個呼叫的逾時」 |
+-| D-10 | API-32 | `catch (e: CancellationException) { throw e }` | 代碼審 | D-10 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-32「withTimeout 逾時被當成一般取消」 |
+-| D-10 | API-33 | `while (System.currentTimeMillis() - start < t) { … }` | 代碼審 | D-10 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-33「自己做逾時而不用協程 API」 |
+-| D-10 | API-33 | `Handler.postDelayed` | 代碼審 | D-10 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-33「自己做逾時而不用協程 API」 |
+-| D-11 | API-7 | `while (true)` | 代碼審 | D-11 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-7「重試要有上限與退避」 |
++| D-10 | API-6 | `HttpClient(OkHttp) { }` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-6「Ktor(OkHttp 引擎)要設整個呼叫的逾時」 |
++| D-10 | API-32 | `catch (e: CancellationException) { throw e }` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-32「withTimeout 逾時被當成一般取消」 |
++| D-10 | API-33 | `while (System.currentTimeMillis() - start < t) { … }` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-33「自己做逾時而不用協程 API」 |
++| D-10 | API-33 | `Handler.postDelayed` | 代碼審 | D-10 的觸發字比對不到這段片段;代碼審看是不是犯了 API-33「自己做逾時而不用協程 API」 |
++| D-11 | API-7 | `while (true)` | 代碼審 | D-11 的觸發字比對不到這段片段;代碼審看是不是犯了 API-7「重試要有上限與退避」 |
+ | D-11 | API-7 | `delay(常數)` | 不是寫法 | 示意寫法,不是一段可比對的程式 |
+-| D-11 | API-21 | `authenticate()` | 代碼審 | D-11 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-21「權杖刷新沒看有沒有已經試過、也沒設上限」 |
+-| D-11 | API-21 | `priorResponse` | 代碼審 | D-11 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-21「權杖刷新沒看有沒有已經試過、也沒設上限」 |
+-| D-12 | API-10 | `onClick` | 代碼審 | D-12 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-10「防重複送出」 |
+-| D-12 | API-10 | `launch` | 代碼審 | D-12 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-10「防重複送出」 |
+-| D-12 | ARCH-3 | `onClick = { navController.navigate(...) }` | 代碼審 | D-12 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-3「Compose 導航點擊沒擋生命週期」 |
+-| D-12 | ARCH-3 | `Modifier.clickable { nav.navigate(...) }` | 代碼審 | D-12 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-3「Compose 導航點擊沒擋生命週期」 |
+-| D-12 | DATA-30 | `enqueue(OneTimeWorkRequest)` | 代碼審 | D-12 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-30「一次性工作沒用 unique 或 policy 選錯」 |
+-| D-12 | DATA-30 | `ExistingWorkPolicy.REPLACE` | 代碼審 | D-12 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-30「一次性工作沒用 unique 或 policy 選錯」 |
+-| D-13 | STATE-6 | `MutableStateFlow` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-6「被系統殺掉後能還原」 |
++| D-11 | API-21 | `authenticate()` | 代碼審 | D-11 的觸發字比對不到這段片段;代碼審看是不是犯了 API-21「權杖刷新沒看有沒有已經試過、也沒設上限」 |
++| D-11 | API-21 | `priorResponse` | 代碼審 | D-11 的觸發字比對不到這段片段;代碼審看是不是犯了 API-21「權杖刷新沒看有沒有已經試過、也沒設上限」 |
++| D-12 | API-10 | `onClick` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 API-10「防重複送出」 |
++| D-12 | API-10 | `launch` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 API-10「防重複送出」 |
++| D-12 | ARCH-3 | `onClick = { navController.navigate(...) }` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-3「Compose 導航點擊沒擋生命週期」 |
++| D-12 | ARCH-3 | `Modifier.clickable { nav.navigate(...) }` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-3「Compose 導航點擊沒擋生命週期」 |
++| D-12 | DATA-30 | `enqueue(OneTimeWorkRequest)` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-30「一次性工作沒用 unique 或 policy 選錯」 |
++| D-12 | DATA-30 | `ExistingWorkPolicy.REPLACE` | 代碼審 | D-12 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-30「一次性工作沒用 unique 或 policy 選錯」 |
++| D-13 | STATE-6 | `MutableStateFlow` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-6「被系統殺掉後能還原」 |
+ | D-13 | STATE-14 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 STATE-14「把 ViewModel 當長期儲存」 |
+-| D-13 | STATE-18 | `savedStateHandle["list"] = ArrayList(bigList)` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-18「把大物件或複雜結構塞進 saved state」 |
+-| D-13 | STATE-18 | `outState.putParcelable("bmp", bitmap)` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-18「把大物件或複雜結構塞進 saved state」 |
+-| D-13 | STATE-20 | `savedStateHandle[…]` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-20「以為 SavedStateHandle 一寫入就存好了」 |
+-| D-13 | STATE-26 | `launch()` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-26「等結果的流程,額外狀態只放記憶體」 |
+-| D-13 | STATE-27 | `var text by remember { mutableStateOf("") }` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-27「文字輸入用 remember 不用 rememberSaveable」 |
+-| D-13 | STATE-27 | `remember { mutableStateOf(TextFieldValue()) }` | 代碼審 | D-13 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-27「文字輸入用 remember 不用 rememberSaveable」 |
+-| D-15 | FLOW-18 | `flow { api.fetch() }` | 代碼審 | D-15 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-18「冷流被多個收集者各自觸發」 |
+-| D-15 | FLOW-19 | `launch { a.collect { … }; b.collect { … } }` | 代碼審 | D-15 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-19「同一協程連續 collect 兩條熱流」 |
+-| D-15 | FLOW-20 | `launch { state.collect { … }; doAfter() }` | 代碼審 | D-15 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-20「在熱流 collect 之後寫程式碼」 |
+-| D-15 | FLOW-20 | `state.toList()` | 代碼審 | D-15 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-20「在熱流 collect 之後寫程式碼」 |
+-| D-15 | STATE-3 | `fun getPostalCode(addr): LiveData<String> = repo.getPostCode(addr)` | 代碼審 | D-15 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-3「stateIn/shareIn 與輸出流只建一次」 |
+-| D-16 | FLOW-6 | `collect { slowWork(it) }` | 代碼審 | D-16 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-6「背壓策略要寫明」 |
+-| D-17 | ARCH-65 | `viewModelScope.launch { repo.save() }` | 代碼審 | D-17 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-65「必須完成的寫入綁在 viewModelScope」 |
+-| D-17 | CO-21 | `suspend fun bookmark() { externalScope.launch { ds.save() } }` | 代碼審 | D-17 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-21「用外部長壽 scope launch 卻不 join」 |
++| D-13 | STATE-18 | `savedStateHandle["list"] = ArrayList(bigList)` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-18「把大物件或複雜結構塞進 saved state」 |
++| D-13 | STATE-18 | `outState.putParcelable("bmp", bitmap)` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-18「把大物件或複雜結構塞進 saved state」 |
++| D-13 | STATE-20 | `savedStateHandle[…]` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-20「以為 SavedStateHandle 一寫入就存好了」 |
++| D-13 | STATE-26 | `launch()` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-26「等結果的流程,額外狀態只放記憶體」 |
++| D-13 | STATE-27 | `var text by remember { mutableStateOf("") }` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-27「文字輸入用 remember 不用 rememberSaveable」 |
++| D-13 | STATE-27 | `remember { mutableStateOf(TextFieldValue()) }` | 代碼審 | D-13 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-27「文字輸入用 remember 不用 rememberSaveable」 |
++| D-15 | FLOW-18 | `flow { api.fetch() }` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-18「冷流被多個收集者各自觸發」 |
++| D-15 | FLOW-19 | `launch { a.collect { … }; b.collect { … } }` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-19「同一協程連續 collect 兩條熱流」 |
++| D-15 | FLOW-20 | `launch { state.collect { … }; doAfter() }` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-20「在熱流 collect 之後寫程式碼」 |
++| D-15 | FLOW-20 | `state.toList()` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-20「在熱流 collect 之後寫程式碼」 |
++| D-15 | STATE-3 | `fun getPostalCode(addr): LiveData<String> = repo.getPostCode(addr)` | 代碼審 | D-15 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-3「stateIn/shareIn 與輸出流只建一次」 |
++| D-16 | FLOW-6 | `collect { slowWork(it) }` | 代碼審 | D-16 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-6「背壓策略要寫明」 |
++| D-17 | ARCH-65 | `viewModelScope.launch { repo.save() }` | 代碼審 | D-17 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-65「必須完成的寫入綁在 viewModelScope」 |
++| D-17 | CO-21 | `suspend fun bookmark() { externalScope.launch { ds.save() } }` | 代碼審 | D-17 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-21「用外部長壽 scope launch 卻不 join」 |
+ | D-18 | ARCH-64 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 ARCH-64「UI 同時讀網路和 DB 兩個來源」 |
+-| D-18 | DATA-64 | `api.post(x)` | 代碼審 | D-18 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-64「寫入只送網路,不先寫本機」 |
+-| D-19 | CO-43 | `fun initialize() { scope.launch { … } }` | 代碼審 | D-19 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-43「發後不管的公開 API 無法得知完成」 |
+-| D-20 | CO-5 | `suspend fun load() = dao.blockingQuery()` | 代碼審 | D-20 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-5「suspend 函式要 main-safe」 |
++| D-18 | DATA-64 | `api.post(x)` | 代碼審 | D-18 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-64「寫入只送網路,不先寫本機」 |
++| D-19 | CO-43 | `fun initialize() { scope.launch { … } }` | 代碼審 | D-19 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-43「發後不管的公開 API 無法得知完成」 |
++| D-20 | CO-5 | `suspend fun load() = dao.blockingQuery()` | 代碼審 | D-20 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-5「suspend 函式要 main-safe」 |
+ | D-20 | CO-1 | `withContext(Dispatchers.IO)` | 規則 kt-hardcoded-dispatchers-io | kt-hardcoded-dispatchers-io 是 CO-1 的會擋規則,片段落在它壞例標 // BAD 的行上(規則實際抓的形狀見規則訊息) |
+-| D-20 | CO-1 | `CoroutineScope(Dispatchers.IO)` | 代碼審 | D-20 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-1「Dispatcher 可注入」 |
+-| D-20 | CO-26 | `launch(Dispatchers.IO) { repo.fetch() }` | 代碼審 | D-20 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-26「對已 main-safe 的 suspend 多包一層切換」 |
++| D-20 | CO-1 | `CoroutineScope(Dispatchers.IO)` | 代碼審 | D-20 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-1「Dispatcher 可注入」 |
++| D-20 | CO-26 | `launch(Dispatchers.IO) { repo.fetch() }` | 代碼審 | D-20 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-26「對已 main-safe 的 suspend 多包一層切換」 |
+ | D-21 | TEST-7 | `[Loading, Success]` | 不是寫法 | 示意寫法,不是一段可比對的程式 |
+ | D-21 | TEST-15 | `UnconfinedTestDispatcher` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-15「測併發順序卻用 UnconfinedTestDispatcher」 |
+-| D-23 | API-26 | `suspend fun delete(): Foo` | 代碼審 | D-23 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 API-26「204 空 body 遇到非空回應型別會丟例外」 |
+-| D-26 | FLOW-23 | `repo.find().first()` | 代碼審 | D-26 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 FLOW-23「可能為空的冷流用 first()」 |
+-| D-27 | STATE-13 | `val error: StateFlow<String?>` | 代碼審 | D-27 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-13「用一堆布林與可空欄位拼出畫面狀態」 |
+-| D-27 | STATE-13 | `val data: StateFlow<…>` | 代碼審 | D-27 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 STATE-13「用一堆布林與可空欄位拼出畫面狀態」 |
++| D-23 | API-26 | `suspend fun delete(): Foo` | 代碼審 | D-23 的觸發字比對不到這段片段;代碼審看是不是犯了 API-26「204 空 body 遇到非空回應型別會丟例外」 |
++| D-26 | FLOW-23 | `repo.find().first()` | 代碼審 | D-26 的觸發字比對不到這段片段;代碼審看是不是犯了 FLOW-23「可能為空的冷流用 first()」 |
++| D-27 | STATE-13 | `val error: StateFlow<String?>` | 代碼審 | D-27 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-13「用一堆布林與可空欄位拼出畫面狀態」 |
++| D-27 | STATE-13 | `val data: StateFlow<…>` | 代碼審 | D-27 的觸發字比對不到這段片段;代碼審看是不是犯了 STATE-13「用一堆布林與可空欄位拼出畫面狀態」 |
+ | D-27 | CO-10 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 CO-10「以為 CoroutineExceptionHandler 能接住後繼續」 |
+-| D-29 | CO-24 | `appScope.launch { … activity.showX() }` | 代碼審 | D-29 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 CO-24「協程把 Activity/View/Context 捕捉進長壽 scope」 |
+-| D-29 | ARCH-31 | `postDelayed` | 代碼審 | D-29 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-31「非同步回呼裡做 FragmentTransaction 沒看生命週期」 |
+-| D-30 | UI-42 | `val s = scroll.value` | 代碼審 | D-30 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-42「狀態讀取太早(父層讀了往下傳值)」 |
+-| D-31 | UI-39 | `data class UiState(var x: Int)` | 代碼審 | D-31 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+-| D-31 | UI-39 | `MutableList` | 代碼審 | D-31 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+-| D-31 | UI-39 | `ArrayList` | 代碼審 | D-31 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+-| D-31 | UI-39 | `HashMap` | 代碼審 | D-31 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
+-| D-33 | UI-89 | `Button(isPrimary = true, isOutlined = false)` | 代碼審 | D-33 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-89「元件用大量布林旗標控樣式」 |
++| D-29 | CO-24 | `appScope.launch { … activity.showX() }` | 代碼審 | D-29 的觸發字比對不到這段片段;代碼審看是不是犯了 CO-24「協程把 Activity/View/Context 捕捉進長壽 scope」 |
++| D-29 | ARCH-31 | `postDelayed` | 代碼審 | D-29 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-31「非同步回呼裡做 FragmentTransaction 沒看生命週期」 |
++| D-30 | UI-42 | `val s = scroll.value` | 代碼審 | D-30 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-42「狀態讀取太早(父層讀了往下傳值)」 |
++| D-31 | UI-39 | `data class UiState(var x: Int)` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
++| D-31 | UI-39 | `MutableList` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
++| D-31 | UI-39 | `ArrayList` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
++| D-31 | UI-39 | `HashMap` | 代碼審 | D-31 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-39「資料類別含 var 或可變集合 → 就地修改後畫面不更新」 |
++| D-33 | UI-89 | `Button(isPrimary = true, isOutlined = false)` | 代碼審 | D-33 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-89「元件用大量布林旗標控樣式」 |
+ | D-33 | UI-90 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-90「元件把大量樣式參數攤平」 |
+ | D-35 | UI-52 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-52「清單項目 0 尺寸」 |
+-| D-36 | DATA-60 | `data.isEmpty()` | 代碼審 | D-36 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-60「endOfPaginationReached 判斷錯」 |
++| D-36 | DATA-60 | `data.isEmpty()` | 代碼審 | D-36 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-60「endOfPaginationReached 判斷錯」 |
+ | D-36 | DATA-61 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 DATA-61「用了 RemoteMediator,UI 卻直接讀網路」 |
+-| D-36 | DATA-62 | `LAUNCH_INITIAL_REFRESH` | 代碼審 | D-36 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-62「initialize() 沒覆寫,每次開都全量刷新(人裁)」 |
+-| D-36 | DATA-69 | `dao.clear()` | 代碼審 | D-36 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-69「刷新失敗卻先清本機快取」 |
+-| D-37 | ARCH-53 | `@Entity` | 代碼審 | D-37 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-53「網路或資料庫模型一路傳到 UI」 |
+-| D-37 | ARCH-66 | `suspend fun x(): Result<T>` | 代碼審 | D-37 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-66「把 kotlin.Result 當公開 API 錯誤模型,失敗種類不明」 |
+-| D-39 | ARCH-56 | `class MainActivity : AppCompatActivity()` | 代碼審 | D-39 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 ARCH-56「Fragment 標 @AndroidEntryPoint 但宿主 Activity 沒標」 |
+-| D-43 | DATA-13 | `data_extraction_rules` | 代碼審 | D-43 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-13「敏感資料放在會被備份的 DataStore 或 prefs」 |
+-| D-46 | DATA-44 | `onStartCommand` | 代碼審 | D-46 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-44「startForegroundService 後沒及時 startForeground、服務回呼做重活」 |
+-| D-47 | DATA-73 | `enum class Status { A, B }` | 代碼審 | D-47 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-73「列舉遇到未知值就崩潰」 |
+-| D-48 | DATA-77 | `-keep` | 代碼審 | D-48 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-77「R8 混淆掉解析用的模型」 |
++| D-36 | DATA-62 | `LAUNCH_INITIAL_REFRESH` | 代碼審 | D-36 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-62「initialize() 沒覆寫,每次開都全量刷新(人裁)」 |
++| D-36 | DATA-69 | `dao.clear()` | 代碼審 | D-36 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-69「刷新失敗卻先清本機快取」 |
++| D-37 | ARCH-53 | `@Entity` | 代碼審 | D-37 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-53「網路或資料庫模型一路傳到 UI」 |
++| D-37 | ARCH-66 | `suspend fun x(): Result<T>` | 代碼審 | D-37 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-66「把 kotlin.Result 當公開 API 錯誤模型,失敗種類不明」 |
++| D-39 | ARCH-56 | `class MainActivity : AppCompatActivity()` | 代碼審 | D-39 的觸發字比對不到這段片段;代碼審看是不是犯了 ARCH-56「Fragment 標 @AndroidEntryPoint 但宿主 Activity 沒標」 |
++| D-43 | DATA-13 | `data_extraction_rules` | 代碼審 | D-43 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-13「敏感資料放在會被備份的 DataStore 或 prefs」 |
++| D-46 | DATA-44 | `onStartCommand` | 代碼審 | D-46 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-44「startForegroundService 後沒及時 startForeground、服務回呼做重活」 |
++| D-47 | DATA-73 | `enum class Status { A, B }` | 代碼審 | D-47 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-73「列舉遇到未知值就崩潰」 |
++| D-48 | DATA-77 | `-keep` | 代碼審 | D-48 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-77「R8 混淆掉解析用的模型」 |
+ | D-49 | TEST-6 | `runTest { val vm = VM(fake); fake.emit(1); assertEquals(1, vm.score.value) }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-6「測 stateIn(WhileSubscribed) 卻沒有收集者」 |
+ | D-49 | TEST-14 | `runTest(UnconfinedTestDispatcher()) { launch { a(); delay(10); b() }; assert(a, b) }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-14「以為 Unconfined 會跑完整個協程」 |
+ | D-49 | TEST-20 | `vm.state.test { vm.load(); assertEquals(Success, awaitItem()) }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-20「Turbine 搭配 StateFlow 忘了初始值(出處不全)」 |
+ | D-50 | TEST-18 | `flow.test { awaitItem() }` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-18「Turbine 有未消費事件就結束」 |
+ | D-50 | TEST-19 | `awaitItem()` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-19「Turbine 用 awaitItem 等錯誤」 |
+ | D-51 | TEST-29 | `rememberInfiniteTransition` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-29「無限動畫讓 Compose 測試永不 idle(出處不全)」 |
+ | D-51 | TEST-29 | `assertIsDisplayed()` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-29「無限動畫讓 Compose 測試永不 idle(出處不全)」 |
+ | D-51 | TEST-30 | `registerIdlingResource` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-30「外部非同步工作沒註冊 IdlingResource」 |
+ | D-51 | TEST-30 | `waitUntil` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-30「外部非同步工作沒註冊 IdlingResource」 |
+ | D-51 | TEST-32 | `onNodeWithText("子文字")` | 代碼審 | 測試檔在推送前不出情境段;代碼審看測試是不是犯了 TEST-32「合併語意樹造成找不到子節點」 |
+-| D-52 | UI-106 | `Modifier.size(24.dp).clickable { }` | 代碼審 | D-52 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-106「觸控目標小於 48dp」 |
++| D-52 | UI-106 | `Modifier.size(24.dp).clickable { }` | 代碼審 | D-52 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-106「觸控目標小於 48dp」 |
+ | D-52 | UI-108 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-108「相關元素沒合併語意」 |
+-| D-52 | UI-111 | `Text` | 代碼審 | D-52 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 UI-111「標題沒標 heading」 |
++| D-52 | UI-111 | `Text` | 代碼審 | D-52 的觸發字比對不到這段片段;代碼審看是不是犯了 UI-111「標題沒標 heading」 |
+ | D-53 | TEST-37 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 TEST-37「測試打真實網路或後端」 |
+ | D-54 | TEST-35 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 TEST-35「洩漏回歸沒有自動化檢查」 |
+-| D-55 | PERF-6 | `Regex(...)` | 代碼審 | D-55 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 PERF-6「主執行緒做重運算」 |
+-| D-57 | DATA-100 | `setVisibility(NotificationCompat.VISIBILITY_PUBLIC)` | 代碼審 | D-57 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 DATA-100「通知放敏感資料」 |
++| D-55 | PERF-6 | `Regex(...)` | 代碼審 | D-55 的觸發字比對不到這段片段;代碼審看是不是犯了 PERF-6「主執行緒做重運算」 |
++| D-57 | DATA-100 | `setVisibility(NotificationCompat.VISIBILITY_PUBLIC)` | 代碼審 | D-57 的觸發字比對不到這段片段;代碼審看是不是犯了 DATA-100「通知放敏感資料」 |
+ | D-58 | UI-110 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 UI-110「對比不足」 |
+ | D-59 | DATA-65 | <無片段> | 代碼審 | 壞寫法欄只有文字描述;代碼審看是不是犯了 DATA-65「衝突解決沒策略」 |
+-| D-60 | PERF-26 | `bigList` | 代碼審 | D-60 的觸發字抓不到這種寫法(字面太常見或沒有專一的字);代碼審看是不是犯了 PERF-26「大清單重複用 list.contains 查詢」 |
++| D-60 | PERF-26 | `bigList` | 代碼審 | D-60 的觸發字比對不到這段片段;代碼審看是不是犯了 PERF-26「大清單重複用 list.contains 查詢」 |
+ 
+ ## 統計
+ 
+ 手寫(沒有程式產生):改主表或規則包時用程式重數各主題表格列數後手動更新(規則包數字數 `configs/ast-grep/kotlin-android/rules*/*.yml`);總列數、各主題、各級、級的組合、情境、出處不全與人裁、規則包各等級、不接閘、被會擋的規則守到的列數、逐列查證、待查證這幾個數由型錄自檢(同一支 check.py 的 stats_problems)核對;情境決策表那行還沒核對。
+ 
+ - 總列數:535(其中沿用既有編號 35 列;規則包實作時補的新列 0 列;2026-11-08 資安補齊新增 41 列:API-37~47、ARCH-68~88、DATA-79~87;同日資安補齊第二批新增 18 列:API-48~51、ARCH-89~91、DATA-88~98;同日第三批新增 3 列:UI-112、DATA-99、DATA-100)
+ - 各主題:API 51、FLOW 32、STATE 28、CO 44、UI 112、ARCH 91、DATA 100、TEST 38、PERF 39
+ - 各級(列的級含該字母就算一次,可複選所以加總大於總列數):A 242、B 228、C 68、D 59
+ - 各級(以第一個字母計,加總等於總列數):A 242、B 198、C 52、D 43
+ - 級的組合:A 207、A+B 28、A+B+C 2、A+C 3、A+C+D 1、A+D 1、B 179、B+C 9、B+C+D 1、B+D 9、C 48、C+D 4、D 43
