@@ -2,7 +2,7 @@
 type: system
 status: done
 created: 2026-06-26
-updated: 2026-11-07
+updated: 2026-11-13
 self_audit: sonnet/2026-08-21
 about_code_stamp: batch-2026-08-23/2026-08-23/de8e7c27fa36
 responsibility: 負責 lumos 的安裝、更新、初始化與拆除(install、uninstall、update、bootstrap、init、deinit、teardown)以及把工具檔複製進消費專案,連同安裝入口腳本;不負責掛鉤本身的檢查邏輯、也不負責找 3.14 的做法(那是 Systems/python直譯器選擇)
@@ -46,6 +46,7 @@ summary: |-
   SEE:[[Systems/回合結束寫法檢查]]
   WHY:四支安裝腳本內嵌的找 python 段(跟三支 git 掛鉤逐字相同)取到的不是絕對路徑就當找不到、印原因:安裝腳本自己不洗 PATH,PATH 有空項時 command -v 會回 ./python3.14 這種相對路徑 [出處:governance/review-reports/code-android寫法回合結束檢查/r6-資安-sonnet.md F1] [因:信任邊界見 [[Systems/hook信任邊界]]] [test:t_r6sh_launcher_relative]
   WHY:紀律範本〈設計與排查〉的 PRIOR-ART 那句後面只接一個短子句「每個機制的依據另寫進計劃〈依據來源〉表(新計劃規格閘與推送前會擋)」,機制定義、出處五種、三處分工寫進 lumos-project-notes skill 第 2 節;消費專案照既有重新注入流程拿到 [出處:[[Projects/計劃依據來源必填_計劃]] 範圍 4] [因:範本每回合注入、已超過瘦身門檻,細節搬進 skill] [test:t_graph_discipline_sources_line]
+  WHY:init 的設定骨架判斷是 Android 專案(建置檔剝完註解後認得 Android 外掛宣告,跟 Android 現成檢查提醒同一套)時,kotlin-junit 與 java-junit 的 run_cmd 給 ./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}',_請先確認 多一句(YOUR_MODULE 換成測試所在模組、有 flavor 時任務名是 test<Flavor>DebugUnitTest、用 ./gradlew tasks --all 看實際名稱);單平台與多平台兩條骨架路徑都改,不是 Android 照舊;佔位用 YOUR_MODULE 不用角括號(在 shell 是轉向) [出處:[[Projects/人裁殺傷力在真實Android專案跑得起來_計劃]] 範圍 3] [因:Android 的頂層 test 不收 --tests,原本的骨架在 Android 專案跑不了單支測試、人裁殺傷力一定失敗] [不選:工具推模組與任務名(任務是每模組、每 flavor 各一條,AGP 9 起只建受測建置類型的任務,會猜錯)] [代價:佔位沒改的話人裁跑殺傷力前會擋下,要人照專案實際填] [test:t_init_android_run_cmd]
 decisions:
   - content: 機器層 vs 專案層二分:install/uninstall/bootstrap 動機器共用項(~/.local/bin 全域 lumos、~/.claude skills+hooks);init/update/deinit 只動本 repo
     id: d1

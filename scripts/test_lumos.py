@@ -101735,6 +101735,7 @@ def t_kill_recipe_check_matches_guard_kill():
     import unicodedata
     m = _load_lumos_inproc()
     sub_cfg = {"default_platform": "p", "platforms": {"p": {"root": "sub", "profile": "python", "run_cmd": "python3 t.py"}}}
+    # 平台根 sub:guard kill 在樹裡的平台根跑 run_cmd(代碼審 code-人裁殺傷力android r1 g1),所以 sub 底下也要一支 t.py
 
     def sym(link, target):
         return lambda root: os.symlink(target(root) if callable(target) else target, root / link)
@@ -101768,7 +101769,7 @@ def t_kill_recipe_check_matches_guard_kill():
     cells = [
         # 正式路徑:判得準、跟 guard kill 一格一格對
         ("平台根是子資料夾,file 從 repo 頂算", dict(top_prod=False, cfg=sub_cfg, recipe_file="sub/prod.py",
-                                          files={"sub/prod.py": "LIMIT = 5\n"}), "ok"),
+                                          files={"sub/prod.py": "LIMIT = 5\n", "sub/t.py": "print('ok')\n"}), "ok"),
         ("平台根是 repo 頂", dict(), "ok"),
         ("可執行檔(模式 100755)", dict(setup=lambda r: os.chmod(r / "prod.py", 0o755)), "ok"),
         ("檔名含 tab(正式路徑照常判)", dict(recipe_file="a\tb.py", top_prod=False, files={"a\tb.py": "LIMIT = 5\n"}), "ok"),
@@ -101795,7 +101796,7 @@ def t_kill_recipe_check_matches_guard_kill():
          dict(after=lambda r: _kr_git(r, "rm", "--cached", "-q", "prod.py")), "ok"),
         # 不是正式路徑:一律 path,不預測 guard kill
         ("平台根是子資料夾,file 從平台根算", dict(top_prod=False, cfg=sub_cfg, recipe_file="prod.py",
-                                         files={"sub/prod.py": "LIMIT = 5\n"}), "path"),
+                                         files={"sub/prod.py": "LIMIT = 5\n", "sub/t.py": "print('ok')\n"}), "path"),
         ("repo 內檔案連結", dict(recipe_file="p.py", setup=sym("p.py", "prod.py")), "path", "是連結"),
         ("提交裡有只差大小寫的連結(macOS 上檢出會互蓋、繞到 .git)",
          dict(recipe_file="LIB/x.py", files={"LIB/x.py": "LIMIT = 5\n"}, after=index_add([("120000", "lib", ".git")])),
@@ -102622,7 +102623,8 @@ def t_gov_stats_contract_backing():
 
 def t_isolated_worktree_shared():
     """[S11] 共用隔離工作樹函式(Projects/代碼審修正關卡第0步_計劃):guard kill 建樹失敗時記成 error、繼續下一個平台;
-    多平台時在平台根下 `git -C` 建樹、測試在樹的最上層跑(跟抽函式之前一樣);--keep-worktree 時現場留著、路徑印到標準錯誤(--json)。"""
+    多平台時在平台根下 `git -C` 建樹、測試在樹裡的平台根跑(代碼審 code-人裁殺傷力android r1 g1 起:跟合約測試閘同一處,原本在樹的最上層);
+    --keep-worktree 時現場留著、路徑印到標準錯誤(--json)。"""
     import json as _json, os as _os, tempfile as _tf
     root, v = _mk_kill_env()
     (root / "sub").mkdir()
@@ -102630,7 +102632,7 @@ def t_isolated_worktree_shared():
     nogit = Path(_tf.mkdtemp(prefix="gctl-nogit-"))
     log = Path(_tf.mkdtemp(prefix="gctl-cwdlog-")) / "cwd.txt"
     cfg = {"default_platform": "py", "platforms": {
-        "py": {"profile": "python", "root": "sub", "run_cmd": f"pwd >> {log}; python3 test_guard.py"},
+        "py": {"profile": "python", "root": "sub", "run_cmd": f"pwd >> {log}; python3 ../test_guard.py"},
         "bad": {"profile": "python", "root": str(nogit), "run_cmd": "python3 test_guard.py"}}}
     (root / ".lumos" / "config.json").write_text(_json.dumps(cfg), encoding="utf-8")
     killer = _kr_recipe("prod.py", old="LIMIT = 5", new="LIMIT = 99", test="TestLimitFive")
@@ -102644,7 +102646,8 @@ def t_isolated_worktree_shared():
           and "worktree add 失敗" in by.get("bad", {}).get("detail", ""), str(res)[:400])
     check("②下一個平台照跑(killed)", by.get("py", {}).get("verdict") == "killed", str(res)[:400])
     cwds = [ln.strip() for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()] if log.exists() else []
-    check("③多平台時測試在樹的最上層跑(不是平台根 sub)", bool(cwds) and all(Path(c).name == "wt" for c in cwds), str(cwds))
+    check("③多平台時測試在樹裡的平台根 sub 跑(跟合約測試閘同一處)", bool(cwds) and all(Path(c).name == "sub" and Path(c).parent.name == "wt" for c in cwds),
+          str(cwds))
     wts = [ln for ln in _kr_git(root, "worktree", "list").stdout.splitlines()[1:] if ln.strip()]
     check("④跑完沒有殘留的工作樹", not wts, str(wts))
     r = _kgk_run(root, v, "Systems/Limit", "--json", "--keep-worktree")
@@ -134961,10 +134964,11 @@ def t_situation_rule_recipe_id_subdir_platform():
     cat = _srl_cat()
     v = _KSP_V
     cfg = {"default_platform": "and", "platforms": {"and": {"profile": "python", "root": "android",
-                                                         "method_regex": _SRL_CFG["test"]["method_regex"], "run_cmd": "python3 android/tests/run.py {method}"}}}
-    # guard kill 在平台根下 git worktree add,工作樹的根是 repo 頂:run_cmd 在 repo 頂跑,所以假測試讀 android/app/Screen.kt
+                                                         "method_regex": _SRL_CFG["test"]["method_regex"], "run_cmd": "python3 tests/run.py {method}"}}}
+    # guard kill 在平台根下 git worktree add,工作樹的根是 repo 頂(配方的 file 從這裡算);run_cmd 在樹裡的平台根 android/ 跑(同合約測試閘;
+    # 代碼審 code-人裁殺傷力android r1 g1),所以 run_cmd 不帶 cd、假測試照舊讀 app/Screen.kt
     base = {f"{v}/Projects/搜尋_計劃.md": _SRL_PLAN.format(accept=_SRL_ACCEPT), f"{v}/Systems/搜尋.md": _KSP_HOME.format(code="android/app/Screen.kt"),
-            "android/tests/run.py": _SRL_RUNNER.replace("'app/Screen.kt'", "'android/app/Screen.kt'"), "android/tests/test_search.py": "def test_latest():\n    pass\n\ndef test_once():\n    pass\n"}
+            "android/tests/run.py": _SRL_RUNNER, "android/tests/test_search.py": "def test_latest():\n    pass\n\ndef test_once():\n    pass\n"}
     root = _sit_repo(base, {"android/app/Screen.kt": _SRL_KT}, config=cfg)
     try:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
@@ -135830,6 +135834,973 @@ def t_situation_rule_plan_disk_spelling():
               str(calls))
     finally:
         _ksp_sh.rmtree(v, ignore_errors=True)
+
+
+# ── 人裁殺傷力在真實 Android 專案跑得起來(Projects/人裁殺傷力在真實Android專案跑得起來_計劃 範圍 1 到 6;S1 到 S9)──
+# 預期值都照計劃〈預期值表〉逐列手算(also 的 old/new、插入點、任務清單、摘錄),不呼叫被測函式產生。
+# 測試型錄在 D-5(flatMapLatest、flatMapConcat)之外多一列 D-6(WhileSubscribed、SharingStarted.Lazily),給 S1「名稱不必是觸發字」那列用。
+_SRA_D5_LINE = ("| D-5 | 只要最新一次查詢的結果 | `flatMapLatest { }` | 每一次都要做完 → `flatMapConcat { }` | flatMapLatest、flatMapConcat"
+                " | 主:(無);例外:(無) | API-1 | 測 |\n")
+_SRA_CATALOG = _SRL_CATALOG.replace(
+    _SRA_D5_LINE,
+    _SRA_D5_LINE + "| D-6 | 畫面狀態什麼時候開始收 | `stateIn(scope, WhileSubscribed(5000), x)` | 第一次訂閱後一直收 → `SharingStarted.Lazily`"
+                   " | WhileSubscribed、SharingStarted.Lazily | 主:(無);例外:(無) | API-1 | 測 |\n")
+_SRA_IMP = "import kotlinx.coroutines.flow.flatMapConcat"
+_SRA_IMPORTS3 = ("import kotlinx.coroutines.flow.Flow\n"
+                 "import kotlinx.coroutines.flow.flatMapLatest\n"
+                 "import kotlinx.coroutines.flow.map\n")
+
+
+def _sra_kt(header, tail=""):
+    """header 之後空一行接 class;第一段在 class 的下一行(flatMapLatest { search(it) })。"""
+    return header + "\n" + "class Vm(private val q: Flow<String>) {\n" + "    val a = q.flatMapLatest { search(it) }\n" + tail + "}\n"
+
+
+_SRA_KT_IMP = _sra_kt("package app\n\n" + _SRA_IMPORTS3)                       # 第 8 行是 val a
+_SRA_KT_PKG = _sra_kt("package app\n")                                          # 第 4 行是 val a
+_SRA_KT_STR = _sra_kt("/*\n * 授權\n */\n@file:Suppress(\"X\")\npackage app\n\n" + _SRA_IMPORTS3,
+                      tail='    fun t() = """\nimport foo.Bar\n"""\n')              # 第 12 行是 val a;第 14 行是字串裡的 import
+_SRA_KT_D6 = ("package app\n\n"
+              "import kotlinx.coroutines.flow.SharingStarted.Companion.WhileSubscribed\n"
+              "import kotlinx.coroutines.flow.stateIn\n\n"
+              "class Vm(private val q: Flow<String>, scope: CoroutineScope) {\n"
+              "    val s = q.stateIn(scope, WhileSubscribed(5000), \"\")\n"         # 第 7 行
+              "}\n")
+# 假平台:被改檔用到 flatMapConcat 卻沒有它的 import 就印 Kotlin 編譯錯誤、回 1(像真的 Gradle 編譯失敗);否則照 _SRL_RUNNER 跑測試
+_SRA_RUNNER = ("import os, sys\n"
+               "m = sys.argv[1] if len(sys.argv) > 1 else 'test_latest'\n"
+               "src = open('app/Screen.kt', encoding='utf-8').read()\n"
+               "if 'flatMapConcat' in src and 'import kotlinx.coroutines.flow.flatMapConcat' not in src.split('\\n'):\n"
+               "    print('e: file://' + os.getcwd() + '/app/Screen.kt:8:15 Unresolved reference: flatMapConcat')\n"
+               "    sys.exit(1)\n"
+               "if m == 'test_latest' and 'flatMapConcat { search' in src:\n"
+               "    print(m + ' FAILED: 連續輸入收到兩次結果')\n"
+               "    sys.exit(1)\n"
+               "print(m + ' ok')\n")
+
+
+def _sra_repo(kt, path="app/Screen.kt", runner=_SRA_RUNNER, config=None, extra=None, exe=()):
+    """_srl_repo 的變形:被改檔的路徑與內容、假平台、設定、額外的 base 檔都可換;exe 裡的檔在 HEAD 提交帶執行權限
+    (修改 HEAD 那個提交,改動範圍照舊是 HEAD~1..HEAD)。回 (root, 計劃檔, HEAD sha)。"""
+    v = _KSP_V
+    base = {f"{v}/Projects/搜尋_計劃.md": _SRL_PLAN.format(accept=_SRL_ACCEPT), f"{v}/Systems/搜尋.md": _KSP_HOME.format(code=path),
+            "tests/run.py": runner, "tests/test_search.py": "def test_latest():\n    pass\n\ndef test_once():\n    pass\n", **(extra or {})}
+    root = _sit_repo(base, {path: kt}, config=config or _SRL_CFG)
+    for x in exe:
+        (root / x).chmod(0o755)
+        subprocess.run(["git", "update-index", "--chmod=+x", x], cwd=root, capture_output=True)
+    if exe:
+        subprocess.run(["git", "commit", "-q", "--amend", "--no-edit"], cwd=root, capture_output=True)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True).stdout.strip()
+    return root, root / v / "Projects" / "搜尋_計劃.md", sha
+
+
+def _sra_seg(root, cat, sha, line, path="app/Screen.kt", rng="HEAD~1..HEAD"):
+    """包住第 line 行的那一段的段身分(沒有就 None)。"""
+    m = _load_lumos_inproc()
+    rows, _e = m._kt_decision_table(cat)
+    segs = m._kt_situation_segments(root, rng, sha, table=rows)
+    return next((s["seg"] for s in segs if s["file"] == path and s["start"] <= line <= s["end"]), None)
+
+
+def _sra_inproc(m, root, cat, seg, row="D-5", file="app/Screen.kt", old=_SRL_OLD, new=_SRL_NEW, imports=None, diff=None, run_kill=False):
+    """行程內跑 cmd_situation_rule,把交給 cmd_guard_kill 的臨時配方抓下來 → (rc, stdout, stderr, [每次呼叫的配方清單])。
+    run_kill 為假時不真跑殺傷力:替身回 2、不給結果,人裁照「沒有結果」拒絕(只看配方長什麼樣)。"""
+    import os, contextlib, io
+    rows, _e = m._kt_decision_table(cat)
+    got = []
+    o_kill = m.cmd_guard_kill
+
+    def spy(*a, **kw):
+        got.append([dict(r) for r in (kw.get("recipes_override") or [])])
+        return o_kill(*a, **kw) if run_kill else 2
+    saved = (m._KT_DT_ROWS, m.cmd_guard_kill)
+    o_env, o_cwd = dict(os.environ), os.getcwd()
+    out, err = io.StringIO(), io.StringIO()
+    m._KT_DT_ROWS, m.cmd_guard_kill = rows, spy
+    os.environ.update({"LUMOS_TTY": "/nonexistent-tty", "LUMOS_KILL_TIMEOUT_FLOOR": "5"})
+    os.chdir(root)
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = m.cmd_situation_rule(m.Env(Path(root) / _KSP_V), seg, row, "Projects/搜尋_計劃", _SRL_CLAUSE, "test_latest",
+                                      file, old, new, consent="好,照這條寫回計劃", imports=imports, diff=diff)
+    finally:
+        os.chdir(o_cwd)
+        m._KT_DT_ROWS, m.cmd_guard_kill = saved
+        os.environ.clear()
+        os.environ.update(o_env)
+    return rc, out.getvalue(), err.getvalue(), got
+
+
+def _sra_also(got):
+    """抓到的唯一一條配方的 also 欄(沒有這個鍵回字串 "<沒有>")。"""
+    rec = got[0][0] if len(got) == 1 and len(got[0]) == 1 else {}
+    return rec.get("also", "<沒有>")
+
+
+def t_situation_rule_import_flag_inserts():
+    """[人裁殺傷力在真實Android專案 S1] 人裁帶 --import:臨時配方多一筆 also,old 是檔頭區最後一行 import 那一整行加換行、
+    new 是那一行加換行再加補的 import 行。逐列對預期值表 S1 四列:①檔頭三行 import → 插在第三行(map)之後,端到端真跑(假平台缺 import 會
+    編譯失敗):確認畫面印「補 import」那一行、治理帳 imports 欄、殺傷力帳本 note 帶補的 import;②沒有 import 只有 package → 插在 package 行之後;
+    ③檔頭前有授權註解與 @file: 註記、函式裡多行字串有一行 `import foo.Bar` → 插在檔頭第三行 import 之後、不插進字串;
+    ④D-6 名稱不是觸發字(SharingStarted)、檔頭只 import 了 SharingStarted.Companion.WhileSubscribed → 收下;★對照★沒給 --import → 配方沒有 also 鍵;
+    ⑤檔頭區照 Kotlin 文法(多行 @file:、方括號、BOM、Tab、shebang、區塊與巢狀註解裡的 import 不當插入點也不算已有;代碼審 code-人裁殺傷力android r1 G3)。
+    判準來源:計劃〈範圍〉1、〈用詞〉檔頭區與預期值表 S1 四列;應抓到的錯:取整支檔最後一行 import(會插進字串)、碰到註解就當檔頭結束、
+    名稱限觸發字、沒給也帶空 also、確認畫面或帳本沒帶補的 import。"""
+    m = _load_lumos_inproc()
+    cat = _sit_catalog(_SRA_CATALOG)
+    roots = []
+    try:
+        root, _plan, sha = _sra_repo(_SRA_KT_IMP)
+        roots.append(root)
+        seg = _sra_seg(root, cat, sha, 8)
+        rc, out, err, got = _sra_inproc(m, root, cat, seg, imports=[_SRA_IMP], run_kill=True)
+        check("S1 ①also 是 [map 那一行 → map 那一行加 flatMapConcat 的 import]",
+              _sra_also(got) == [{"old": "import kotlinx.coroutines.flow.map\n",
+                                  "new": "import kotlinx.coroutines.flow.map\nimport kotlinx.coroutines.flow.flatMapConcat\n"}], str(got))
+        check("S1 ①帶對的 import 端到端 → rc0、確認畫面印「補 import」與那一行", rc == 0 and "補 import" in out and _SRA_IMP in out,
+              f"rc={rc} {out[-500:]} {err[-500:]}")
+        evs, kl = _srl_gov(root), _srl_kill(root)
+        check("S1 ①治理帳 situation-rule 那筆 imports 欄是 [那一行]", len(evs) == 1 and evs[0].get("imports") == [_SRA_IMP], str(evs)[:500])
+        check("S1 ①殺傷力帳本那筆 killed、note 帶補的 import", len(kl) == 1 and kl[0].get("verdict") == "killed"
+              and _SRA_IMP in str(kl[0].get("note")), str(kl)[:500])
+        rc, out, err, got = _sra_inproc(m, root, cat, seg)
+        check("S1 ★對照★沒給 --import → 配方沒有 also 鍵", _sra_also(got) == "<沒有>", str(got))
+        for label, kt, line, want_old in (("②只有 package 行 → 插在 package 行之後", _SRA_KT_PKG, 4, "package app\n"),
+                                          ("③檔頭前有註解與 @file:、字串裡有 import foo.Bar → 插在檔頭第三行 import 之後",
+                                           _SRA_KT_STR, 12, "import kotlinx.coroutines.flow.map\n")):
+            root, _plan, sha = _sra_repo(kt)
+            roots.append(root)
+            rc, out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, line), imports=[_SRA_IMP])
+            check(f"S1 {label}", _sra_also(got) == [{"old": want_old, "new": want_old + _SRA_IMP + "\n"}], f"{got} {err[-300:]}")
+        root, _plan, sha = _sra_repo(_SRA_KT_D6)
+        roots.append(root)
+        rc, out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, 7), row="D-6", old="WhileSubscribed(5000)",
+                                        new="SharingStarted.Lazily", imports=["import kotlinx.coroutines.flow.SharingStarted"])
+        check("S1 ④名稱 SharingStarted 不是觸發字、檔頭只有 SharingStarted.Companion.WhileSubscribed → 收下、also 插在 stateIn 那行之後",
+              _sra_also(got) == [{"old": "import kotlinx.coroutines.flow.stateIn\n",
+                                  "new": "import kotlinx.coroutines.flow.stateIn\nimport kotlinx.coroutines.flow.SharingStarted\n"}], f"{got} {err[-300:]}")
+        # ⑤檔頭區照 Kotlin 文法(代碼審 code-人裁殺傷力android r1 c2、b1、b2、t3;kotlinFile = [shebang] {fileAnnotation} packageHeader importList,
+        # 註解是隱藏記號):預期的 also 照文法手算——插入點是檔頭區最後一個不在註解裡的 import 行
+        imp = "import q.Q"
+        for label, src, want_old in (
+                ("多行 @file:OptIn(ktlint 折行)", "@file:OptIn(\n    ExperimentalCoroutinesApi::class,\n    FlowPreview::class,\n)\npackage a\nimport b.C\nclass X\n",
+                 "import b.C\n"),
+                ("@file:[A B] 方括號跨行", "@file:[\n    JvmName(\"K\")\n    Suppress(\"x\")\n]\npackage a\nimport b.C\nclass X\n", "import b.C\n"),
+                ("@file: 字串裡有括號", "@file:Suppress(\"a(\")\npackage a\nimport b.C\nclass X\n", "import b.C\n"),
+                ("檔首 BOM、有 import", "﻿package a.b\n\nimport x.Y\n\nfun f() {}\n", "import x.Y\n"),
+                ("檔首 BOM、只有 package(old 帶 BOM,跟檔裡那一行一字不差)", "﻿package a.b\nfun f() {}\n", "﻿package a.b\n"),
+                ("package 後接 Tab", "package\ta.b\n\nimport x.Y\n\nfun f() {}\n", "import x.Y\n"),
+                ("import 後接 Tab", "package a\nimport\tx.Y\nfun f() {}\n", "import\tx.Y\n"),
+                ("shebang 行", "#!/usr/bin/env kotlin\npackage a\nimport x.Y\nfun f() {}\n", "import x.Y\n"),
+                ("區塊註解裡的 import 不當插入點", "package a\nimport x.Y\n/*\nimport old.Z\n*/\nclass C {}\n", "import x.Y\n"),
+                ("巢狀區塊註解裡的 import 不當插入點", "package a\nimport x.Y\n/* a /* b */\nimport old.Z\n*/\nclass C {}\n", "import x.Y\n"),
+                ("區塊註解裡的同名 import 不算已有", "package a\nimport x.Y\n/*\nimport old.Q\n*/\nclass C {}\n", "import x.Y\n"),
+                ("行註解裡的同名 import 不算已有", "package a\nimport x.Y\n// import old.Q\nclass C {}\n", "import x.Y\n"),
+                ("行尾開了區塊註解的 import 不當插入點", "package a\nimport w.V\nimport x.Y /* 開\n 收 */\nclass C {}\n", "import w.V\n"),
+                ("一行一個區塊註解、後面接 import", "package a\n/* c */ import x.Y\nclass C {}\n", "/* c */ import x.Y\n")):
+            got, why = m._situation_rule_imports_problem(src, "Q.foo", [imp])
+            check(f"S1 ⑤檔頭區:{label} → also 插在 {want_old!r} 之後", why is None and got == [{"old": want_old, "new": want_old + imp + "\n"}],
+                  f"{got} {why}")
+    finally:
+        for x in roots:
+            _ksp_sh.rmtree(x, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+
+
+def t_situation_rule_import_flag_rejects():
+    """[人裁殺傷力在真實Android專案 S2] --import 不合一律 rc2、殺傷力不跑、計劃與兩本帳不動。逐列對預期值表 S2:
+    ①名稱 flatMapLatest 在 --new 出現、但檔頭已 import 它 → 拒絕(講已經 import);②debounce 不在 --new → 拒絕(講 --new);
+    ③形狀不合:`.*`、帶 as、尾隨空白、反引號、只有一段、非 ASCII → 拒絕;④檔頭已有同一行 flatMapConcat → 拒絕;
+    另依〈範圍〉1「同名不同套件、或 <套件>.* 都算已有」:⑤檔頭有 `import other.pkg.flatMapConcat` 或 `import kotlinx.coroutines.flow.*` → 拒絕;
+    ⑥檔頭區既沒有 import 也沒有 package → 拒絕(沒有插入點);⑦同一行給兩次 → 拒絕;⑧同一批名稱相同套件不同 → 拒絕(r1 b3);
+    ⑨名稱只是 --new 某識別字的一部分 → 拒絕(r1 c4);⑩檔頭區照 Kotlin 文法算已有(多行 @file:、BOM、多空白、; 多句、Tab as、註解後的 import;r1 G3)。
+    判準來源:計劃〈範圍〉1、〈用詞〉補 import 與預期值表 S2 四列;應抓到的錯:只比同一行、不比同名或萬用字元;形狀用 search 不用 fullmatch;
+    先跑殺傷力才判 --import。"""
+    m = _load_lumos_inproc()
+    cat = _sit_catalog(_SRA_CATALOG)
+    roots = []
+
+    def no_run(label, root, plan, before, rc, err, got, word):
+        check(f"S2 {label} → rc2、講原因、殺傷力沒跑、計劃與兩本帳不動", rc == 2 and word in err and got == [] and plan.read_bytes() == before
+              and not _srl_kill(root) and not _srl_gov(root), f"rc={rc} got={got} {err[-400:]}")
+    try:
+        root, plan, sha = _sra_repo(_SRA_KT_IMP)
+        roots.append(root)
+        seg = _sra_seg(root, cat, sha, 8)
+        before = plan.read_bytes()
+        rc, _out, err, got = _sra_inproc(m, root, cat, seg, new="flatMapConcat { search(it) }.flatMapLatest { it }",
+                                        imports=["import kotlinx.coroutines.flow.flatMapLatest"])
+        no_run("①檔頭已 import flatMapLatest", root, plan, before, rc, err, got, "已經 import")
+        rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=["import kotlinx.coroutines.flow.debounce"])
+        no_run("②debounce 不在 --new", root, plan, before, rc, err, got, "--new")
+        for bad in ("import kotlinx.coroutines.flow.*", "import kotlinx.coroutines.flow.flatMapConcat as fc",
+                    "import kotlinx.coroutines.flow.flatMapConcat ", "import kotlinx.coroutines.flow.`flatMapConcat`",
+                    "import flatMapConcat", "import kotlinx.coroutines.flow.flatMapConcaт", " import kotlinx.coroutines.flow.flatMapConcat"):
+            rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=[bad])
+            no_run(f"③形狀不合 {bad!r}", root, plan, before, rc, err, got, "形狀")
+        rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=[_SRA_IMP, _SRA_IMP])
+        no_run("⑦同一行給兩次", root, plan, before, rc, err, got, "重複")
+        for label, extra_imp, word in (("④檔頭已有同一行 flatMapConcat(多餘)", _SRA_IMP, "已經 import"),
+                                       ("⑤同名不同套件 other.pkg.flatMapConcat", "import other.pkg.flatMapConcat", "已經 import"),
+                                       ("⑤套件萬用字元 kotlinx.coroutines.flow.*", "import kotlinx.coroutines.flow.*", "已經 import")):
+            root, plan, sha = _sra_repo(_sra_kt("package app\n\n" + _SRA_IMPORTS3 + extra_imp + "\n"))
+            roots.append(root)
+            before = plan.read_bytes()
+            rc, _out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, 9), imports=[_SRA_IMP])
+            no_run(label, root, plan, before, rc, err, got, word)
+        root, plan, sha = _sra_repo(_sra_kt("// 沒有 package 也沒有 import\n"))
+        roots.append(root)
+        before = plan.read_bytes()
+        rc, _out, err, got = _sra_inproc(m, root, cat, _sra_seg(root, cat, sha, 4), imports=[_SRA_IMP])
+        no_run("⑥檔頭區沒有 import 也沒有 package", root, plan, before, rc, err, got, "插入點")
+        # ⑧同一批 --import 名稱相同、套件不同(代碼審 code-人裁殺傷力android r1 b3):Kotlin 編譯時名稱衝突,入口就擋
+        root, plan, sha = _sra_repo(_SRA_KT_IMP)
+        roots.append(root)
+        seg = _sra_seg(root, cat, sha, 8)
+        before = plan.read_bytes()
+        rc, _out, err, got = _sra_inproc(m, root, cat, seg, imports=[_SRA_IMP, "import other.pkg.flatMapConcat"])
+        no_run("⑧兩個 --import 名稱都是 flatMapConcat、套件不同", root, plan, before, rc, err, got, "名稱都是")
+        # ⑨名稱只是 --new 某個識別字的一部分(代碼審 r1 c4):整字比對 \b名稱\b,子字串不算
+        rc, _out, err, got = _sra_inproc(m, root, cat, seg, new="myflatMapConcatX { search(it) }", imports=[_SRA_IMP])
+        no_run("⑨名稱只出現在 --new 的 myflatMapConcatX 裡", root, plan, before, rc, err, got, "--new")
+        # 端到端那格配方檢查也可能先擋;直接問 --import 那一關,釘住整字比對本身(改成子字串會收下)
+        for new_txt in ("myflatMapConcatX { search(it) }", "flatMapConcatX { it }", "x.myflatMapConcat"):
+            got2, why = m._situation_rule_imports_problem(_SRA_KT_IMP, new_txt, [_SRA_IMP])
+            check(f"S2 ⑨單元:--new {new_txt!r} 只含名稱的一部分 → 拒絕、講不在 --new", got2 is None and "不在 --new" in (why or ""), f"{got2} {why}")
+        got2, why = m._situation_rule_imports_problem(_SRA_KT_IMP, "x.flatMapConcat { it }", [_SRA_IMP])
+        check("S2 ⑨單元★對照★--new 以識別字整字出現 → 收下", why is None and bool(got2), f"{got2} {why}")
+        # ⑩檔頭區照 Kotlin 文法算「已有」(r1 c2、b1、t3):多行 @file: 之後的 import、BOM 檔的 import、兩個空白、; 一行多句、as 別名都算已有
+        for label, src in (("多行 @file: 之後的 import q.Q", "@file:OptIn(\n    A::class,\n)\npackage a\nimport q.Q\nclass X\n"),
+                           ("檔首 BOM、import q.Q", "﻿package a\nimport q.Q\nclass X\n"),
+                           ("import 後兩個空白", "package a\nimport  q.Q\nclass X\n"),
+                           ("一行用 ; 寫兩句", "package a\nimport x.Y; import q.Q\nclass X\n"),
+                           ("一行用 ; 寫兩句、q.Q 在前", "package a\nimport q.Q; import x.Y\nclass X\n"),
+                           ("Tab 隔開的 as 別名", "package a\nimport z.W\tas\tQ\nclass X\n"),
+                           ("註解之後的 import", "package a\n/* 舊的 */ import r.Q\nclass X\n")):
+            got2, why = m._situation_rule_imports_problem(src, "Q.foo", ["import q.Q"])
+            check(f"S2 ⑩檔頭已有 Q({label})→ 拒絕、講已經 import", got2 is None and "已經 import" in (why or ""), f"{got2} {why}")
+    finally:
+        for x in roots:
+            _ksp_sh.rmtree(x, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+
+
+def _sra_kill_env(run_tpl):
+    """_mk_kill_env 加一支假平台:run_cmd 由 run_tpl 給({log} 換成工作樹外的紀錄檔;每跑一次把當時的 prod.py 與分隔線附加進去),
+    runner 檔另外提交。回 (root, vault, 紀錄檔)。"""
+    root, v = _mk_kill_env()
+    log = Path(tempfile.mkdtemp(prefix="gctl-sra-log-")) / "runs.txt"
+    (root / ".lumos" / "config.json").write_text(_json_mod_dumps({"test": {"run_cmd": run_tpl.format(log=log)}}), encoding="utf-8")
+    _kr_commit(root, "cfg")
+    return root, v, log
+
+
+def _json_mod_dumps(obj):
+    import json as _j
+    return _j.dumps(obj, ensure_ascii=False)
+
+
+def _sra_guard(m, v, recipes, keep=False, floor="5", note_run=False):
+    """行程內跑 cmd_guard_kill(臨時配方;note_run 為真時改照筆記跑)→ (rc, result_out, stdout, stderr)。"""
+    import os, contextlib, io
+    out = {}
+    o_env = dict(os.environ)
+    os.environ["LUMOS_KILL_TIMEOUT_FLOOR"] = floor
+    so, se = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(so), contextlib.redirect_stderr(se):
+            if note_run:
+                rc = m.cmd_guard_kill(m.Env(v), "Systems/Limit", result_out=out)
+            else:
+                rc = m.cmd_guard_kill(m.Env(v), "Systems/Limit", recipes_override=recipes, result_out=out, keep_worktree=keep)
+    finally:
+        os.environ.clear()
+        os.environ.update(o_env)
+    return rc, out, so.getvalue(), se.getvalue()
+
+
+_SRA_PROD = "LIMIT = 5\n\ndef check(n):\n    return n <= LIMIT\n"
+_SRA_RUN_TPL = "python3 test_guard.py; rc=$?; cat prod.py >> {log}; echo '----' >> {log}; exit $rc"
+
+
+def _sra_recipe(also=None, **kw):
+    r = {"invariant": "臨時", "test": "TestLimitFive", "file": "prod.py", "old": "return n <= LIMIT", "new": "return n < LIMIT", "note": ""}
+    if also is not None:
+        r["also"] = also
+    r.update(kw)
+    return r
+
+
+def t_guard_kill_also_rejects_non_import():
+    """[人裁殺傷力在真實Android專案 S3] 殺傷力驗證認臨時配方的 also(連帶替換):
+    ①共用小檢查 _kill_also_issue 的判法逐種:合格的(一整行 old、new 以 old 開頭、多出來的是 import 行)回空字串;
+    沒有 also 回空字串;多出來是 `val x = 1`、old 不以換行結尾、old 是兩行、new 不以 old 開頭、多出來是 `import a.*`、
+    多出來沒以換行結尾、兩筆、不是清單、元素不是物件都回原因;
+    ②真跑 guard kill:also 多出來是 `val x = 1` → 判 error、壞法那一次沒跑(紀錄檔只有基準那一次)、保留的工作樹裡 prod.py 跟原本一樣;
+    ③also 的 old 那一行在檔裡 0 次或 2 次 → error、壞法沒跑;④★對照★合格的 also(`import os.path`)→ 壞法那一次的 prod.py 是主替換加那一行 import、判 killed。
+    判準來源:計劃〈範圍〉2、〈實務隱患〉只准多加 import 與預期值表 S3 列;應抓到的錯:多出來的不驗形狀、套不上時當 drifted 或照寫、套不上照跑壞法。"""
+    m = _load_lumos_inproc()
+    ok_also = [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport os.path\n"}]
+    check("S3 ①合格的 also → 空字串", m._kill_also_issue({"also": ok_also}) == "", repr(m._kill_also_issue({"also": ok_also})))
+    check("S3 ①沒有 also → 空字串", m._kill_also_issue({"old": "x"}) == "", "")
+    bads = [("多出來是 val x = 1", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nval x = 1\n"}]),
+            ("old 不以換行結尾", [{"old": "LIMIT = 5", "new": "LIMIT = 5\nimport os.path\n"}]),
+            ("old 是兩行", [{"old": "LIMIT = 5\n\n", "new": "LIMIT = 5\n\nimport os.path\n"}]),
+            ("new 不以 old 開頭", [{"old": "LIMIT = 5\n", "new": "LIMIT = 6\nimport os.path\n"}]),
+            ("多出來是 import a.*", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport a.*\n"}]),
+            ("多出來沒以換行結尾", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport os.path"}]),
+            ("多出來兩行、第二行不是 import", [{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nimport os.path\nprint(1)\n"}]),
+            ("兩筆", ok_also + ok_also), ("不是清單", ok_also[0]), ("元素不是物件", ["LIMIT = 5\n"]),
+            ("old 不是字串", [{"old": 5, "new": "5\nimport os.path\n"}])]
+    for label, also in bads:
+        why = m._kill_also_issue({"also": also})
+        check(f"S3 ①{label} → 回原因", isinstance(why, str) and bool(why), repr(why))
+    root, v, log = _sra_kill_env(_SRA_RUN_TPL)
+    kept = []
+    try:
+        rc, out, so, se = _sra_guard(m, v, [_sra_recipe(also=bads[0][1])], keep=True)
+        runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
+        kept = [ln.split("現場保留: ", 1)[1].strip() for ln in so.splitlines() if "現場保留: " in ln]
+        check("S3 ②also 多 val x = 1 → 判 error、rc2", rc == 2 and [r["verdict"] for r in out.get("rows") or []] == ["error"], f"rc={rc} {out} {se[-300:]}")
+        check("S3 ②壞法那一次沒跑:紀錄檔只有基準那一次(原本的 prod.py)", runs == [_SRA_PROD, ""], repr(runs))
+        check("S3 ②保留的工作樹裡 prod.py 跟原本一樣(沒寫檔)", len(kept) == 1 and Path(kept[0], "prod.py").read_text(encoding="utf-8") == _SRA_PROD,
+              f"{kept} {so[-300:]}")
+        # 2 次那條:主替換把 return 那行換成第二行 LIMIT = 5(also 在主替換之後才套,所以對到兩行)
+        for label, also, kw in (("③old 那一行在檔裡 0 次", [{"old": "NOPE = 1\n", "new": "NOPE = 1\nimport os.path\n"}], {}),
+                                ("③主替換之後 old 那一行出現 2 次", ok_also, {"old": "    return n <= LIMIT", "new": "LIMIT = 5"})):
+            log.unlink()
+            rc, out, so, se = _sra_guard(m, v, [_sra_recipe(also=also, **kw)])
+            runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
+            check(f"S3 {label} → error、壞法沒跑", rc == 2 and [r["verdict"] for r in out.get("rows") or []] == ["error"]
+                  and runs == [_SRA_PROD, ""], f"rc={rc} {out} {runs}")
+        log.unlink()
+        rc, out, so, se = _sra_guard(m, v, [_sra_recipe(also=ok_also)])
+        runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
+        want_mut = "LIMIT = 5\nimport os.path\n\ndef check(n):\n    return n < LIMIT\n"
+        check("S3 ④★對照★合格的 also → 壞法那一次是主替換加 import 行、判 killed", [r["verdict"] for r in out.get("rows") or []] == ["killed"]
+              and runs == [_SRA_PROD, want_mut, ""], f"rc={rc} {out} {runs}")
+    finally:
+        for k in kept:
+            _ksp_sh.rmtree(Path(k).parent, ignore_errors=True)
+        _ksp_sh.rmtree(root, ignore_errors=True)
+        _ksp_sh.rmtree(log.parent, ignore_errors=True)
+
+
+def t_guard_kill_also_only_override():
+    """[人裁殺傷力在真實Android專案 S4] 筆記宣告的配方帶了 also 欄位(而且是會被判 error 的 `val x = 1`),guard kill 正常呼叫照舊跑:
+    判定跟同一條不帶 also 的配方一樣是 killed,壞法那一次的 prod.py 只有主替換、沒有 also 的那一行。
+    判準來源:計劃〈範圍〉2 只有臨時配方認 also 與預期值表 S4 列;應抓到的錯:筆記配方也套 also(會判 error 或多寫一行)。"""
+    m = _load_lumos_inproc()
+    root, v, log = _sra_kill_env(_SRA_RUN_TPL)
+    try:
+        verdicts = []
+        for also in ([{"old": "LIMIT = 5\n", "new": "LIMIT = 5\nval x = 1\n"}], None):
+            rec = _kr_recipe("prod.py", old="return n <= LIMIT", new="return n < LIMIT")
+            if also is not None:
+                rec["also"] = also
+            (v / "Systems" / "Limit.md").write_text(_kr_note([rec]), encoding="utf-8")
+            _kr_commit(root, "recipe")
+            if log.exists():
+                log.unlink()
+            _rc, out, _so, _se = _sra_guard(m, v, None, note_run=True)
+            runs = log.read_text(encoding="utf-8").split("----\n") if log.exists() else []
+            verdicts.append(([r["verdict"] for r in out.get("rows") or []], runs))
+        want_mut = "LIMIT = 5\n\ndef check(n):\n    return n < LIMIT\n"
+        check("S4 筆記配方帶 also → 照舊 killed、壞法那一次沒有 also 的那一行", verdicts[0] == (["killed"], [_SRA_PROD, want_mut, ""]), str(verdicts[0]))
+        check("S4 跟不帶 also 的同一條配方結果一樣", verdicts[0] == verdicts[1], str(verdicts))
+    finally:
+        _ksp_sh.rmtree(root, ignore_errors=True)
+        _ksp_sh.rmtree(log.parent, ignore_errors=True)
+
+
+def _sra_init(files):
+    """_init_skel 的同一套做法(暫存資料夾寫檔 → _init_config_skeleton → 讀回設定),讀完刪掉暫存資料夾。"""
+    import json as _j
+    d = Path(tempfile.mkdtemp(prefix="gctl-sra-init-"))
+    try:
+        for rel, txt in files.items():
+            p = d / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(txt, encoding="utf-8")
+        m = _load_lumos_inproc()
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            m._init_config_skeleton(d)
+        return _j.loads((d / ".lumos" / "config.json").read_text(encoding="utf-8"))
+    finally:
+        _ksp_sh.rmtree(d, ignore_errors=True)
+
+
+_SRA_AND_CMD = "./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'"
+_SRA_JVM_CMD = "./gradlew test --tests '*{method}'"
+
+
+def t_init_android_run_cmd():
+    """[人裁殺傷力在真實Android專案 S5] lumos init 的設定骨架:判斷是 Android 專案(建置檔剝完註解後有 Android 外掛宣告)時,
+    kotlin-junit 與 java-junit 的 run_cmd 給 `./gradlew :YOUR_MODULE:testDebugUnitTest --tests '*{method}'`,
+    _請先確認 多一句(換成測試所在模組、flavor 時任務名是 test<Flavor>DebugUnitTest、./gradlew tasks --all 看實際名稱)。逐列對預期值表 S5:
+    ①app/build.gradle.kts 宣告 com.android.application;②alias(libs.plugins.android.application);③不是 Android 的 Kotlin 專案 → 照舊;
+    另:④多平台骨架的 kotlin 平台一樣換;⑤Java 的 Android 專案(java-junit)一樣換;⑥Android 外掛只寫在註解裡 → 不算 Android、照舊。
+    判準來源:計劃〈範圍〉3、〈用詞〉Android 專案與預期值表 S5 三列;應抓到的錯:只改單平台那條路、註解也算宣告、不是 Android 也換、說明沒提 flavor。"""
+    kts_app = 'plugins {\n    id("com.android.application")\n}\n'
+    kts_alias = "plugins {\n    alias(libs.plugins.android.application)\n}\n"
+    kts_jvm = 'plugins {\n    kotlin("jvm")\n}\n'
+
+    def kt_files(ext=".kt"):
+        return {f"app/src/main/java/a/C{n}{ext}": "x\n" for n in range(4)}
+
+    m_skel = _load_lumos_inproc()._SKELETON_RUN_CMD
+
+    def note_ok(d):
+        n = d.get("_請先確認", "")
+        return "YOUR_MODULE" in n and "flavor" in n and "test<Flavor>DebugUnitTest" in n and "./gradlew tasks --all" in n
+
+    for label, build in (("①com.android.application", kts_app), ("②alias(libs.plugins.android.application)", kts_alias)):
+        d = _sra_init({**kt_files(), "app/build.gradle.kts": build})
+        check(f"S5 {label} → run_cmd 是 YOUR_MODULE 的 testDebugUnitTest 格式、_請先確認 提到模組、flavor 與 tasks --all",
+              (d.get("test") or {}).get("run_cmd") == _SRA_AND_CMD and note_ok(d), str(d)[:600])
+    d = _sra_init({**kt_files(), "build.gradle.kts": kts_jvm})
+    check("S5 ③不是 Android 的 Kotlin 專案 → run_cmd 照舊、_請先確認 不提 flavor",
+          (d.get("test") or {}).get("run_cmd") == _SRA_JVM_CMD and "flavor" not in d.get("_請先確認", ""), str(d)[:600])
+    d = _sra_init({**kt_files(), **{f"ios/V{n}.swift": "x\n" for n in range(4)}, "app/build.gradle.kts": kts_app})
+    kp = (d.get("platforms") or {}).get("kotlin") or {}
+    check("S5 ④多平台骨架的 kotlin 平台 → Android 格式、_請先確認 多那一句;swift 平台照舊", kp.get("run_cmd") == _SRA_AND_CMD and note_ok(d)
+          and ((d.get("platforms") or {}).get("swift") or {}).get("run_cmd") == m_skel.get("swift-xctest"), str(d)[:600])
+    d = _sra_init({**kt_files(".java"), "app/build.gradle": "apply plugin: 'com.android.application'\n"})
+    check("S5 ⑤Java 的 Android 專案(java-junit)→ Android 格式", d.get("test_profile") == "java-junit"
+          and (d.get("test") or {}).get("run_cmd") == _SRA_AND_CMD and note_ok(d), str(d)[:600])
+    d = _sra_init({**kt_files(), "app/build.gradle.kts": 'plugins {\n    // id("com.android.application")\n    kotlin("jvm")\n}\n'})
+    check("S5 ⑥Android 外掛只在註解裡 → 不算 Android、照舊", (d.get("test") or {}).get("run_cmd") == _SRA_JVM_CMD, str(d)[:600])
+
+
+_SRA_GRADLEW = "#!/bin/sh\necho 'BUILD SUCCESSFUL in 1s'\nexit 0\n"
+_SRA_BUILD_ANDLIB = 'plugins {\n    id("com.android.library")\n}\n'
+_SRA_BUILD_ANDAPP = 'plugins {\n    id("com.android.application")\n}\n'
+_SRA_BUILD_JVM = 'plugins {\n    kotlin("jvm")\n}\n'
+_SRA_FEAT = "feature/search/src/main/kotlin/app/Screen.kt"
+
+
+def _sra_android_repo(run_cmd, multi=True, plat_root=".", android=True, profile="kotlin-junit"):
+    """Android 版面的人裁 repo:平台根(plat_root)底下 settings、app(Android 應用)、feature/search(Android 函式庫,被改檔在這裡)、
+    core/domain(純 JVM)各一支建置檔;android=False 時三支都是純 JVM。假 gradlew 一律回成功。回 (root, 計劃檔, sha, 被改檔路徑)。"""
+    pre = "" if plat_root == "." else plat_root + "/"
+    builds = {f"{pre}settings.gradle.kts": 'include(":app", ":feature:search", ":core:domain")\n',
+              f"{pre}app/build.gradle.kts": _SRA_BUILD_ANDAPP if android else _SRA_BUILD_JVM,
+              f"{pre}feature/search/build.gradle.kts": _SRA_BUILD_ANDLIB if android else _SRA_BUILD_JVM,
+              f"{pre}core/domain/build.gradle.kts": _SRA_BUILD_JVM, "gradlew": _SRA_GRADLEW}
+    cfg = ({"default_platform": "kotlin", "platforms": {"kotlin": {"profile": profile, "root": plat_root, "run_cmd": run_cmd}}} if multi
+           else {"test_profile": profile, "test": {"run_cmd": run_cmd}})
+    path = pre + _SRA_FEAT
+    root, plan, sha = _sra_repo(_SRL_KT, path=path, config=cfg, extra=builds, exe=("gradlew",))
+    return root, plan, sha, path
+
+
+def t_situation_rule_android_run_cmd_check():
+    """[人裁殺傷力在真實Android專案 S6] 預設平台 profile 是 kotlin-junit 或 java-junit、run_cmd 的任務清單有擋下的 test 任務或含 YOUR_MODULE 時,
+    人裁在跑殺傷力之前拒絕(rc2、殺傷力帳本沒寫),印要改的設定鍵、正確格式、模組候選、flavor 與 tasks --all 提示。逐列對預期值表 S6:
+    ①多平台鍵 kotlin(看 profile 名)、`./gradlew test`、--file 在 feature/search → 拒絕、印 platforms.kotlin.run_cmd 與候選 :feature:search;
+    ②單平台 `./gradlew clean test` → 拒絕、印 test.run_cmd;③沒改的 YOUR_MODULE → 拒絕;④`:app:testDevDebugUnitTest` → 不擋、照跑殺傷力;
+    ⑤`:core:domain:test`(純 JVM 模組)→ 不擋;⑥平台根是 android → 拒絕、格式不加 cd、講在平台根執行(代碼審 code-人裁殺傷力android r1 g1:
+    殺傷力與合約測試閘都在平台根跑,同一條 run_cmd 加 cd 會讓合約測試閘紅)。
+    另:⑦`:feature:search:test`(Android 模組)→ 拒絕;⑧不是 Android 專案的 `./gradlew test` → 不擋;⑨profile 是 python(平台鍵照叫 kotlin)→ 不查;
+    ⑩`-x test`(選項的值)與⑪`&& echo test`(&& 之後)都不算任務 → 不擋;⑫`app:test`(沒有開頭冒號、相對根專案的模組路徑,Android 模組)→ 拒絕。
+    ⑬任務清單單元(代碼審 r1 a1、t2、c3、b4、t1:改用 detekt 那組拆段與帶值選項表):`sh -c "./gradlew test …"` 展開、`env X=1`/`FOO=1` 前綴剝掉、
+    `-P test`/`-D test`/`--console plain` 的值不算任務、`--tests=x` 帶等號只跳自己;`feature:search:test` 擋、`core:domain:test`(純 JVM)不擋;
+    ⑭結構:自寫切詞與選項表(_SR_GRADLE_VALUE_OPTS)拿掉、_gradle_task_list 叫 _detekt_walk_segments、選項表是 _GRADLE_VALUE_OPTS 加 --tests。
+    判準來源:計劃〈範圍〉4、〈用詞〉任務清單與擋下的 test 任務、預期值表 S6 六列、r1-intake G1 G2;應抓到的錯:看平台鍵名不看 profile、
+    擋了變體任務或純 JVM 模組、模組候選從 repo 根算、只認 : 開頭的模組路徑、選項表殘缺、不展開 sh -c。"""
+    cat = _srl_cat()
+    roots = []
+
+    def go(run_cmd, **kw):
+        root, plan, sha, path = _sra_android_repo(run_cmd, **kw)
+        roots.append(root)
+        seg = _sra_seg(root, cat, sha, 4, path=path)
+        r = _srl_run(root, cat, *_srl_args(seg or "x", **{"--file": path}))
+        return r, root, plan
+
+    try:
+        fmt = "./gradlew :<模組>:test<Variant>UnitTest --tests '*{method}'"
+        cand = "模組候選::feature:search("
+        blocked = [("①多平台鍵 kotlin、頂層 test", "./gradlew test --tests '*{method}'", {}, ["platforms.kotlin.run_cmd", cand]),
+                   ("②單平台 clean test", "./gradlew clean test --tests '*{method}'", {"multi": False}, ["test.run_cmd", cand]),
+                   ("③YOUR_MODULE 沒改", _SRA_AND_CMD, {}, ["YOUR_MODULE", cand]),
+                   ("⑦:feature:search:test 是 Android 模組", "./gradlew :feature:search:test --tests '*{method}'", {}, [cand]),
+                   ("⑫app:test 沒有開頭冒號(相對根專案)、Android 模組", "./gradlew app:test --tests '*{method}'", {}, [cand])]
+        for label, cmd, kw, words in blocked:
+            r, root, _plan = go(cmd, **kw)
+            msg = r.stderr
+            fmt_lines = [ln.strip() for ln in msg.splitlines() if fmt in ln]
+            check(f"S6 {label} → rc2、殺傷力沒跑", r.returncode == 2 and not _srl_kill(root), f"rc={r.returncode} {msg[-600:]}")
+            check(f"S6 {label} → 印正確格式(不以 cd 開頭)、要改的鍵、模組候選、flavor 與 tasks --all",
+                  bool(fmt_lines) and not any("cd " in ln.split("./gradlew")[0] for ln in fmt_lines)
+                  and all(w in msg for w in words) and "flavor" in msg and "./gradlew tasks --all" in msg, msg[-800:])
+        r, root, _plan = go("./gradlew test --tests '*{method}'", plat_root="android")
+        fmt_lines = [ln for ln in r.stderr.splitlines() if fmt in ln]
+        check("S6 ⑥平台根是 android → rc2、格式不加 cd、講在平台根執行、候選 :feature:search", r.returncode == 2 and not _srl_kill(root)
+              and bool(fmt_lines) and all(("正確格式:" + fmt) in ln and "在平台根執行" in ln for ln in fmt_lines)
+              and "cd android" not in r.stderr and "模組候選::feature:search(" in r.stderr, r.stderr[-800:])
+        # ⑬任務清單與擋下的 test 任務(單元;Android 模組 feature/search、app,純 JVM core/domain 用最後一個 repo 的平台根)
+        m = _load_lumos_inproc()
+        proot = root / "android"
+        for label, cmd, want in (("sh -c 展開", "sh -c \"./gradlew test --tests '*{method}'\"", ["test"]),
+                                 ("env 前綴剝掉", "env JAVA_HOME=/x ./gradlew test --tests x", ["test"]),
+                                 ("FOO=1 前綴剝掉", "FOO=1 ./gradlew test --tests x", ["test"]),
+                                 ("-P 的值不算任務", "./gradlew -P test :app:testDevDebugUnitTest", [":app:testDevDebugUnitTest"]),
+                                 ("-D 的值不算任務", "./gradlew -D test app:testDebugUnitTest", ["app:testDebugUnitTest"]),
+                                 ("--console 的值不算任務", "./gradlew --console plain test", ["test"]),
+                                 ("--tests=帶等號只跳自己", "./gradlew --tests=x test", ["test"]),
+                                 ("--tests 的值不算任務", "./gradlew :app:testDebugUnitTest --tests test", [":app:testDebugUnitTest"]),
+                                 ("cd 之後那段的 gradle", "cd sub && ./gradlew app:test --tests x", ["app:test"])):
+            got = [t for _pdir, ts in m._gradle_task_list(cmd) for t in ts]   # r2 起每個 gradle 段一組 (專案目錄, 任務)
+            check(f"S6 ⑬任務清單 {label}", got == want, f"{cmd!r} → {got}")
+        for label, tasks, want in (("feature:search:test(Android、無開頭冒號)→ 擋", ["feature:search:test"], ["feature:search:test"]),
+                                   ("core:domain:test(純 JVM、無開頭冒號)→ 不擋", ["core:domain:test"], []),
+                                   (":core:domain:test(純 JVM)→ 不擋", [":core:domain:test"], []),
+                                   ("..:test 不認", ["..:test"], []),
+                                   ("頂層 test(Android 專案)→ 擋", ["test"], ["test"])):
+            got = m._gradle_blocked_tasks(tasks, proot)
+            check(f"S6 ⑬擋下的 test 任務 {label}", got == want, f"{tasks} → {got}")
+        # 模組只看自己那一層的建置檔(r1 a2、t4 改用 _android_build_texts 時 max_depth=0):純 JVM 的 core 底下有 Android 子模組 legacy → :core:test 不擋
+        nest = Path(tempfile.mkdtemp(prefix="gctl-sra-nest-"))
+        try:
+            (nest / "core" / "legacy").mkdir(parents=True)
+            (nest / "core" / "build.gradle.kts").write_text(_SRA_BUILD_JVM, encoding="utf-8")
+            (nest / "core" / "legacy" / "build.gradle.kts").write_text(_SRA_BUILD_ANDLIB, encoding="utf-8")
+            got = m._gradle_blocked_tasks([":core:test", "core:legacy:test"], nest)
+            check("S6 ⑬模組只看自己那一層:純 JVM 的 core(底下有 Android 子模組)不擋、core:legacy:test 擋", got == ["core:legacy:test"], str(got))
+        finally:
+            _ksp_sh.rmtree(nest, ignore_errors=True)
+        import ast as _ast, inspect as _inspect, textwrap as _tw
+        tree = _ast.parse(_tw.dedent(_inspect.getsource(m._gradle_task_list)))
+        calls = {getattr(n.func, "id", "") for n in _ast.walk(tree) if isinstance(n, _ast.Call)}
+        names = {n.id for n in _ast.walk(tree) if isinstance(n, _ast.Name)}
+        check("S6 ⑭結構:_gradle_task_list 叫 _detekt_walk_segments、選項表用 _GRADLE_VALUE_OPTS、自寫的表與讀檔拿掉",
+              "_detekt_walk_segments" in calls and "_GRADLE_VALUE_OPTS" in names and "shlex" not in _inspect.getsource(m._gradle_task_list)
+              and not hasattr(m, "_SR_GRADLE_VALUE_OPTS") and not hasattr(m, "_SR_BUILD_NAMES") and not hasattr(m, "_gradle_build_android"),
+              f"{calls} {names}")
+        for label, cmd, kw in (("④變體任務 :app:testDevDebugUnitTest", "./gradlew :app:testDevDebugUnitTest --tests '*{method}'", {}),
+                               ("⑤純 JVM 模組 :core:domain:test", "./gradlew :core:domain:test --tests '*{method}'", {}),
+                               ("⑧不是 Android 專案的頂層 test", "./gradlew test --tests '*{method}'", {"android": False}),
+                               ("⑨profile 是 python", "./gradlew test --tests '*{method}'", {"profile": "python"}),
+                               ("⑩-x 後面的 test 是選項的值", "./gradlew :app:testDevDebugUnitTest -x test --tests '*{method}'", {}),
+                               ("⑪&& 之後的詞不算任務", "./gradlew :app:testDevDebugUnitTest --tests '*{method}' && echo test", {})):
+            r, root, _plan = go(cmd, **kw)
+            check(f"S6 {label} → 不擋、照舊跑殺傷力(殺傷力帳本有一筆)", len(_srl_kill(root)) == 1 and fmt not in r.stderr,
+                  f"rc={r.returncode} {r.stderr[-600:]}")
+    finally:
+        for x in roots:
+            _ksp_sh.rmtree(x, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+
+
+def t_situation_rule_android_run_cmd_segments():
+    """[代碼審 code-人裁殺傷力android r2 c1、b1、t1、g1、b2、b3] 任務清單看 run_cmd 的每一個 gradle 段、shell 註解不算、`-p` 換專案目錄、
+    `:test` 是根專案的 test、run_cmd 不是字串照設定錯拒絕。平台根是 Android 版面(app、lib 是 Android 模組,core 純 JVM;android/ 底下另一個
+    Gradle 專案:android/mobile 是 Android、android/core 純 JVM;平台根的 core 是 Android),直接問人裁的 run_cmd 檢查(_situation_rule_android_cmd_problem):
+    ①擋:`clean && test`、`--stop; test`、`:app:test || :lib:test`(兩個都要點名)、註解後換行的下一行 `test`、`:test`、`-p android :mobile:test`、
+    `--project-dir=android mobile:test`;②不擋(★對照★):`# test only` 行尾註解、註解裡的 `&& ./gradlew test`、`clean && :app:testDebugUnitTest`、
+    `-p android :core:test`(android/core 純 JVM);③端到端:兩個 gradle 段的 run_cmd → rc2、殺傷力沒跑;run_cmd 是清單、數字(Android 版面)或清單
+    (profile 是 python)→ rc2、講 run_cmd 不是字串、沒有 traceback、殺傷力沒跑。
+    判準來源:計劃〈用詞〉任務清單與擋下的 test 任務、r2-intake R1(POSIX 註解、Gradle -p 與 :test 的說明);應抓到的錯:只看第一個 gradle 段、
+    把 # 之後的詞當任務、-p 的值被跳過而照平台根找模組、:test 不擋、run_cmd 不是字串時丟例外。"""
+    m = _load_lumos_inproc()
+    proot = Path(tempfile.mkdtemp(prefix="gctl-sra-seg-"))
+    roots = []
+    cat = _srl_cat()
+    try:
+        # -p 那幾格要分得出「照 android/ 找模組」與「照平台根找模組」:mobile 只在 android/ 底下(Android);core 在平台根是 Android、
+        # 在 android/ 底下是純 JVM
+        for rel, txt in (("settings.gradle.kts", 'include(":app", ":lib", ":core")\n'), ("app/build.gradle.kts", _SRA_BUILD_ANDAPP),
+                         ("lib/build.gradle.kts", _SRA_BUILD_ANDLIB), ("core/build.gradle.kts", _SRA_BUILD_ANDLIB),
+                         ("android/settings.gradle.kts", 'include(":mobile", ":core")\n'), ("android/mobile/build.gradle.kts", _SRA_BUILD_ANDAPP),
+                         ("android/core/build.gradle.kts", _SRA_BUILD_JVM)):
+            (proot / rel).parent.mkdir(parents=True, exist_ok=True)
+            (proot / rel).write_text(txt, encoding="utf-8")
+
+        def why(cmd):
+            pdata = {"default_platform": "kotlin", "multiplatform": True,
+                     "platforms": {"kotlin": {"profile_name": "kotlin-junit", "root": str(proot), "run_cmd": cmd}}}
+            return m._situation_rule_android_cmd_problem(pdata, str(proot / "app" / "src" / "main" / "A.kt")) or ""
+        for label, cmd, words in (("兩段 clean && test", "./gradlew clean && ./gradlew test --tests '*{method}'", ["任務 test "]),
+                                  ("兩段 --stop; test", "./gradlew --stop; ./gradlew test", ["任務 test "]),
+                                  ("兩段 :app:test || :lib:test(兩個都點名)", "./gradlew :app:test || ./gradlew :lib:test", ["任務 :app:test ", "任務 :lib:test "]),
+                                  ("註解只到行尾:下一行的 test", "./gradlew :app:testDebugUnitTest # 註解\n./gradlew test", ["任務 test "]),
+                                  (":test 根專案的 test", "./gradlew :test --tests '*{method}'", ["任務 :test "]),
+                                  ("-p android :mobile:test(android/mobile 是 Android)", "./gradlew -p android :mobile:test --tests '*{method}'",
+                                   ["任務 :mobile:test "]),
+                                  ("--project-dir=android mobile:test", "./gradlew --project-dir=android mobile:test", ["任務 mobile:test "])):
+            got = why(cmd)
+            check(f"r2 R1 擋 {label}", bool(got) and all(w in got for w in words), f"{cmd!r} → {got!r}")
+        for label, cmd in (("# test only 行尾註解", "./gradlew :app:testDebugUnitTest --tests '*{method}' # test only"),
+                           ("註解裡的 && ./gradlew test", "./gradlew :app:testDebugUnitTest # 不要 && ./gradlew test"),
+                           ("兩段都沒有擋下的任務", "./gradlew clean && ./gradlew :app:testDebugUnitTest --tests '*{method}'"),
+                           ("-p android :core:test(android/core 純 JVM;平台根的 core 是 Android)", "./gradlew -p android :core:test --tests '*{method}'")):
+            got = why(cmd)
+            check(f"r2 R1 ★對照★不擋 {label}", got == "", f"{cmd!r} → {got!r}")
+
+        def go(run_cmd, **kw):
+            root, _plan, sha, path = _sra_android_repo(run_cmd, **kw)
+            roots.append(root)
+            seg = _sra_seg(root, cat, sha, 4, path=path)
+            return _srl_run(root, cat, *_srl_args(seg or "x", **{"--file": path})), root
+        r, root = go("./gradlew clean && ./gradlew test --tests '*{method}'")
+        check("r2 R1 端到端:兩個 gradle 段、第二段是頂層 test → rc2、殺傷力沒跑", r.returncode == 2 and not _srl_kill(root)
+              and "任務 test " in r.stderr, f"rc={r.returncode} {r.stderr[-600:]}")
+        for label, cmd, kw in (("清單", ["./gradlew", "test"], {}), ("數字", 123, {}), ("清單、profile 是 python", ["python3", "-m", "pytest"],
+                                                                                   {"profile": "python"})):
+            r, root = go(cmd, **kw)
+            check(f"r2 R1 run_cmd 是{label} → rc2、講 run_cmd 不是字串、沒有 traceback、殺傷力沒跑",
+                  r.returncode == 2 and "run_cmd" in r.stderr and "不是字串" in r.stderr and "Traceback" not in r.stderr
+                  and not _srl_kill(root), f"rc={r.returncode} {r.stderr[-600:]}")
+    finally:
+        _ksp_sh.rmtree(proot, ignore_errors=True)
+        for x in roots:
+            _ksp_sh.rmtree(x, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+
+
+def t_situation_rule_header_scan_strip():
+    """[代碼審 code-人裁殺傷力android r2 a1、z1] 檔頭區照既有 Kotlin 剝註解與字串(_strip_c_comments kotlin=True)判,不另寫一套:
+    ①多行 @file: 裡的三引號字串有一行 `import x.Y` → 不算已有、插在檔頭的 import q.Q 之後;同一支檔 --import q.Q → 講已經 import;
+    ②多行 @file: 的三引號字串第二行有 `(` → 括號照收、插在 import b.C 之後;③import 行同一行開了三引號字串(行尾在字串裡)→ 不當插入點、
+    字串裡的 `import q.Q` 不算已有;④巢狀區塊註解、⑤檔首 BOM 加 shebang 照舊;⑥檔頭只有 package 加 20 萬行空行 → 記憶體峰值
+    (tracemalloc)不超過原文的 40 倍(每行建一筆會到上百倍)、結果照舊插在 package 之後;⑦結構:檔頭掃描呼叫 _strip_c_comments、
+    自寫的逐行剝註解(_situation_rule_code_of_line)拿掉。
+    判準來源:r2-intake R2(單一剝註解入口、只留 import 與 package 行);應抓到的錯:自寫逐行掃描不認三引號字串(括號數錯、字串裡的 import 當真)、
+    行尾在字串裡的行當插入點、每行建一筆。"""
+    import tracemalloc
+    m = _load_lumos_inproc()
+    imp = "import q.Q"
+    for label, src, new, imps, want_old in (
+            ("①@file: 三引號字串裡的 import x.Y 不算已有", '@file:Suppress("""\nimport x.Y\n""")\npackage a\nimport q.Q\nclass X\n', "Y.f",
+             ["import x.Y"], "import q.Q\n"),
+            ("②@file: 三引號字串第二行有 (", '@file:Suppress(\n    """x\n(y"""\n)\npackage a\nimport b.C\nclass X\n', "Q.f", [imp], "import b.C\n"),
+            ("③import 行開了三引號字串、字串裡的 import q.Q 不算", 'package a\nimport x.Y\nimport z.W; val s = """\nimport q.Q\n"""\n', "Q.f", [imp],
+             "import x.Y\n"),
+            ("④巢狀區塊註解", "package a\nimport x.Y\n/* a /* b */ import old.Q\n*/\nimport z.W\nclass C\n", "Q.f", [imp], "import z.W\n"),
+            ("⑤BOM 加 shebang", "﻿#!/usr/bin/env kotlin\npackage a\nimport x.Y\nfun f() {}\n", "Q.f", [imp], "import x.Y\n")):
+        got, why = m._situation_rule_imports_problem(src, new, imps)
+        check(f"r2 R2 {label} → also 插在 {want_old!r} 之後", why is None and got == [{"old": want_old, "new": want_old + imps[0] + "\n"}],
+              f"{got} {why}")
+    got, why = m._situation_rule_imports_problem('@file:Suppress("""\nimport x.Y\n""")\npackage a\nimport q.Q\nclass X\n', "Q.f", [imp])
+    check("r2 R2 ①同一支檔 --import q.Q → 講已經 import", got is None and "已經 import" in (why or ""), f"{got} {why}")
+    src = "package a\n" + "\n" * 200_000
+    tracemalloc.start()
+    try:
+        got, why = m._situation_rule_imports_problem(src, "Q.f", [imp])
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    check("r2 R2 ⑥20 萬行空行 → 結果照舊插在 package 之後", why is None and got == [{"old": "package a\n", "new": "package a\n" + imp + "\n"}],
+          f"{got} {why}")
+    check("r2 R2 ⑥20 萬行空行 → 峰值不超過原文 40 倍(不每行建一筆)", peak <= 40 * len(src), f"peak={peak} src={len(src)}")
+    import inspect as _inspect
+    body = _inspect.getsource(m._situation_rule_header_scan)
+    check("r2 R2 ⑦結構:檔頭掃描呼叫 _strip_c_comments(kotlin=True)、自寫的逐行剝註解拿掉",
+          "_strip_c_comments(" in body and "kotlin=True" in body and not hasattr(m, "_situation_rule_code_of_line"), body[:300])
+
+
+def t_situation_rule_diff_no_git():
+    """[代碼審 code-人裁殺傷力android r2 a2] --diff 兩端照既有的 _lens_full_sha 解析(有逾時、git 跑不起來回 None):
+    ①git 在 PATH 上:`main..HEAD` → 收(None);左端解析不到 → 講解析不到;②PATH 換成空資料夾(git 不在)→ 回原因字串、不丟例外;
+    ③端到端:PATH 換成空資料夾跑人裁 → rc2、沒有 traceback;④結構:_situation_rule_diff_problem 呼叫 _lens_full_sha、不自己叫 subprocess。
+    判準來源:r2-intake R3;應抓到的錯:自叫 git 沒接 OSError(git 不在時 traceback)、沒逾時。"""
+    import os, inspect as _inspect
+    m = _load_lumos_inproc()
+    cat = _srl_cat()
+    root, _plan, sha = _sra_repo(_SRL_KT)
+    empty = Path(tempfile.mkdtemp(prefix="gctl-sra-nogit-"))
+    try:
+        check("r2 R3 ①main..HEAD → 收", m._situation_rule_diff_problem(root, "main..HEAD", sha) is None, "")
+        got = m._situation_rule_diff_problem(root, "nope-zzz..HEAD", sha)
+        check("r2 R3 ①左端解析不到 → 講解析不到", "解析不到" in (got or ""), repr(got))
+        o_path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(empty)
+        try:
+            try:
+                got = m._situation_rule_diff_problem(root, "main..HEAD", sha)
+            except Exception as e:   # 要的就是「不丟例外」:丟了就把例外當結果,下面的斷言紅
+                got = e
+        finally:
+            os.environ["PATH"] = o_path
+        check("r2 R3 ②git 不在 PATH → 回原因字串、不丟例外", isinstance(got, str) and "--diff" in got, repr(got))
+        seg = _sra_seg(root, cat, sha, 4)
+        r = _srl_run(root, cat, *_srl_args(seg or "x"), "--diff", "main..HEAD", env={"PATH": str(empty)})
+        check("r2 R3 ③端到端:git 不在 PATH → rc2、沒有 traceback", r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stderr[-600:]}")
+        body = _inspect.getsource(m._situation_rule_diff_problem)
+        check("r2 R3 ④結構:呼叫 _lens_full_sha、不自己叫 subprocess", "_lens_full_sha(" in body and "subprocess" not in body, body[:300])
+    finally:
+        _ksp_sh.rmtree(root, ignore_errors=True)
+        _ksp_sh.rmtree(empty, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+
+
+def t_guard_kill_runs_at_platform_root():
+    """[代碼審 code-人裁殺傷力android r1 g1] 平台根是 repo 的子資料夾(sub/)時,guard kill 在隔離工作樹裡的平台根跑 run_cmd,跟推送前的合約測試閘
+    (_run_bound_tests 在平台根跑)同一處:①run_cmd 不帶 cd(`python3 test_guard.py`,測試檔只在 sub/ 底下)→ 基準在平台根跑得綠、壞法紅、判 killed,
+    跑的資料夾是工作樹裡的 sub;②同一條 run_cmd 合約測試閘也綠;③★對照★平台根就是 repo 最上層 → 照舊在工作樹本身跑;
+    ④平台根在 HEAD 那一版不存在(沒提交)→ 判 error、講平台根、基準沒跑。
+    判準來源:r1-intake G2(同一條設定兩種執行目錄,照合約測試閘的語意統一);應抓到的錯:殺傷力在工作樹最上層跑(基準找不到測試檔 abort)、
+    平台根沒提交時丟例外。"""
+    import json as _j
+    m = _load_lumos_inproc()
+    root = Path(tempfile.mkdtemp(prefix="gctl-gkroot-"))
+    log = Path(tempfile.mkdtemp(prefix="gctl-gkroot-log-")) / "cwd.txt"
+    try:
+        _kr_init_repo(root)
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "prod.py").write_text(_SRA_PROD, encoding="utf-8")
+        (sub / "test_guard.py").write_text("import prod\ndef TestLimitFive():\n    assert prod.check(5) and not prod.check(6)\n"
+                                           "TestLimitFive()\nprint('1 passed')\n", encoding="utf-8")
+        v = root / "docs" / "kg-knowledge"
+        (v / "Systems").mkdir(parents=True)
+        (v / "MOC").mkdir()
+        (v / "MOC" / "i.md").write_text("---\ntype: moc\n---\n", encoding="utf-8")
+        (v / "Systems" / "Limit.md").write_text("---\ntype: system\nstatus: done\nsummary: |-\n"
+                                                "  KEY:★INVARIANT★ 上限恆為5,超過必拒 [test:TestLimitFive]\n---\n# Limit\n", encoding="utf-8")
+        cmd = f"pwd >> {log}; python3 test_guard.py"
+        (root / ".lumos").mkdir()
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "py", "platforms": {
+            "py": {"profile": "python", "root": "sub", "run_cmd": cmd}}}), encoding="utf-8")
+        _kr_commit(root, "init")
+        rec = _sra_recipe(file="sub/prod.py")
+        rc, out, _so, se = _sra_guard(m, v, [rec])
+        cwds = [ln.strip() for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()] if log.exists() else []
+        check("g1 ①run_cmd 不帶 cd、平台根 sub → 基準綠、壞法紅、判 killed", rc == 0 and [r["verdict"] for r in out.get("rows") or []] == ["killed"],
+              f"rc={rc} {out} {se[-300:]}")
+        check("g1 ①基準與壞法都在工作樹裡的平台根 sub 跑", len(cwds) == 2 and all(Path(c).name == "sub" and Path(c).parent.name == "wt" for c in cwds), str(cwds))
+        res, err = m._run_bound_tests(root, [("Systems/Limit", "py", "TestLimitFive", "real")])
+        check("g1 ②同一條 run_cmd 合約測試閘也綠", err is None and [x[3] for x in res or []] == ["green"], f"{err} {res}")
+        # ③對照:平台根就是 repo 最上層 → 在工作樹本身跑
+        log.unlink()
+        (root / "prod.py").write_text(_SRA_PROD, encoding="utf-8")
+        (root / "test_guard.py").write_text((sub / "test_guard.py").read_text(encoding="utf-8"), encoding="utf-8")
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "py", "platforms": {
+            "py": {"profile": "python", "root": ".", "run_cmd": cmd}}}), encoding="utf-8")
+        _kr_commit(root, "top")
+        rc, out, _so, se = _sra_guard(m, v, [_sra_recipe()])
+        cwds = [ln.strip() for ln in log.read_text(encoding="utf-8").splitlines() if ln.strip()] if log.exists() else []
+        check("g1 ③★對照★平台根是 repo 最上層 → 在工作樹本身跑、killed", [r["verdict"] for r in out.get("rows") or []] == ["killed"]
+              and len(cwds) == 2 and all(Path(c).name == "wt" for c in cwds), f"{out} {cwds}")
+        # ④平台根沒提交(HEAD 的工作樹裡沒有這個資料夾)
+        log.unlink()
+        (root / "later").mkdir()
+        (root / "later" / "x.txt").write_text("x\n", encoding="utf-8")
+        (root / ".lumos" / "config.json").write_text(_j.dumps({"default_platform": "py", "platforms": {
+            "py": {"profile": "python", "root": "later", "run_cmd": cmd}}}), encoding="utf-8")
+        rc, out, _so, se = _sra_guard(m, v, [_sra_recipe()])
+        rows = out.get("rows") or []
+        check("g1 ④平台根在 HEAD 不存在 → error、講平台根、基準沒跑", rc == 2 and [r["verdict"] for r in rows] == ["error"]
+              and "平台根" in rows[0].get("detail", "") and not log.exists(), f"rc={rc} {rows} {se[-300:]}")
+    finally:
+        _ksp_sh.rmtree(root, ignore_errors=True)
+        _ksp_sh.rmtree(log.parent, ignore_errors=True)
+
+
+def t_situation_rule_diff_flag():
+    """[人裁殺傷力在真實Android專案 S7] 人裁的 --diff:①repo 只有 develop(沒有 main、master)、帶 --diff develop~2..HEAD → 用那個範圍算出情境段、
+    寫回(rc0)、不印算不出範圍、不印沒採用;★對照★同一個 repo 不帶 --diff → 算不出範圍、rc2;
+    ②分支找得到主線分岔點、帶 --diff HEAD..HEAD(照它算會一段都沒有)→ 照分岔點算(寫回 rc0)、印「--diff 沒採用,改用 <分岔點>..<HEAD>」;
+    ③入口驗:`--diff=--output=x`、三點寫法、右端不是 HEAD(main..main)、左端解析不到、右端空 → rc2、殺傷力沒跑、沒寫出 x。
+    判準來源:計劃〈範圍〉5 與預期值表 S7 三列;應抓到的錯:給了 --diff 就蓋過分岔點、沒採用時不講、值原樣進 git。"""
+    cat = _srl_cat()
+    roots = []
+    try:
+        root, plan, sha = _sra_repo(_SRL_KT, runner=_SRL_RUNNER)
+        roots.append(root)
+        g = lambda *a: subprocess.run(["git", *a], cwd=root, capture_output=True, text=True)   # noqa: E731
+        for a in (("checkout", "-q", "main"), ("merge", "-q", "--ff-only", "feat/sit"), ("branch", "-m", "main", "develop"),
+                  ("branch", "-D", "feat/sit")):
+            g(*a)
+        (root / "README.md").write_text("y\n", encoding="utf-8")
+        g("commit", "-qam", "readme")
+        sha = g("rev-parse", "HEAD").stdout.strip()
+        seg = _sra_seg(root, cat, sha, 4, rng="develop~2..HEAD")
+        r0 = _srl_run(root, cat, *_srl_args(seg or "x"))
+        check("S7 ★對照★develop、不帶 --diff → rc2、講算不出改動範圍", r0.returncode == 2 and "算不出改動範圍" in r0.stderr, r0.stderr[-400:])
+        r = _srl_run(root, cat, *_srl_args(seg or "x"), "--diff", "develop~2..HEAD")
+        check("S7 ①develop、--diff develop~2..HEAD → 用那個範圍算出段、寫回 rc0、不印算不出範圍與沒採用",
+              seg is not None and r.returncode == 0 and "算不出" not in r.stderr and "沒採用" not in (r.stdout + r.stderr)
+              and "[S8]" in plan.read_text(encoding="utf-8"), f"seg={seg} rc={r.returncode} {r.stderr[-500:]}")
+        root, plan, sha = _sra_repo(_SRL_KT, runner=_SRL_RUNNER)
+        roots.append(root)
+        mb = subprocess.run(["git", "merge-base", "main", sha], cwd=root, capture_output=True, text=True).stdout.strip()
+        seg = _sra_seg(root, cat, sha, 4)
+        r = _srl_run(root, cat, *_srl_args(seg), "--diff", "HEAD..HEAD")
+        both = r.stdout + r.stderr
+        check("S7 ②找得到分岔點、--diff HEAD..HEAD → 照分岔點算、寫回 rc0、印沒採用與實際範圍",
+              r.returncode == 0 and "--diff 沒採用" in both and f"{mb}..{sha}" in both and "[S8]" in plan.read_text(encoding="utf-8"),
+              f"rc={r.returncode} {both[-600:]}")
+        root, plan, sha = _sra_repo(_SRL_KT, runner=_SRL_RUNNER)
+        roots.append(root)
+        seg = _sra_seg(root, cat, sha, 4)
+        before = plan.read_bytes()
+        for label, arg in (("--diff=--output=x", "--diff=--output=x"), ("三點寫法", "--diff=main...HEAD"), ("右端不是 HEAD", "--diff=main..main"),
+                           ("左端解析不到", "--diff=nope-zzz..HEAD"), ("右端空", "--diff=main.."), ("單一版本", "--diff=main")):
+            r = _srl_run(root, cat, *_srl_args(seg), arg)
+            check(f"S7 ③{label} → rc2、殺傷力沒跑、計劃不動", r.returncode == 2 and "--diff" in r.stderr and not _srl_kill(root)
+                  and plan.read_bytes() == before and not (root / "x").exists(), f"rc={r.returncode} {r.stderr[-400:]}")
+    finally:
+        for x in roots:
+            _ksp_sh.rmtree(x, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+
+
+_SRA_GRADLE_TAIL = ("\nFAILURE: Build failed with an exception.\n\n* What went wrong:\nExecution failed for task ':app:compileDebugKotlin'.\n"
+                    "> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction\n"
+                    "   > Compilation error. See log for more details\n\n* Try:\n> Run with --stacktrace option to get the stack trace.\n"
+                    "> Run with --info or --debug option to get more log output.\n> Run with --scan to get full insights.\n"
+                    "> Get more help at https://help.gradle.org.\n\nBUILD FAILED in 12s\n")
+_SRA_WWW = ("* What went wrong:\nExecution failed for task ':app:compileDebugKotlin'.\n"
+            "> A failure occurred while executing org.jetbrains.kotlin.compilerRunner.GradleCompilerRunnerWithWorkers$GradleKotlinCompilerWorkAction\n"
+            "   > Compilation error. See log for more details")
+# S8 端到端的假平台:被改檔用到 flatMapConcat 就照真 Gradle 編譯失敗的樣子印(e: 行在 FAILURE 與 Try 區塊之前;路徑一行用 realpath、一行用字面)
+_SRA_GRADLE_RUNNER = ("import os, sys\n"
+                      "src = open('app/Screen.kt', encoding='utf-8').read()\n"
+                      "if 'flatMapConcat' in src:\n"
+                      "    cwd = os.getcwd()\n"
+                      "    lit = cwd[len('/private'):] if cwd.startswith('/private/') else cwd\n"
+                      "    print('> Task :app:kspDebugKotlin')\n"
+                      "    for p, n in ((cwd, 12), (lit, 20), (cwd, 31)):\n"
+                      "        print('e: file://' + p + '/app/src/main/java/com/ex/SearchViewModel.kt:' + str(n) + ':5 Unresolved reference: flatMapConcat')\n"
+                      f"    sys.stdout.write({_SRA_GRADLE_TAIL!r})\n"
+                      "    sys.exit(1)\n"
+                      "print('ok')\n")
+
+
+def t_kill_log_fail_excerpt():
+    """[人裁殺傷力在真實Android專案 S8] 殺傷力判定是 killed_unattributed、timed_out_weak、abort 時,殺傷力帳本那筆多 fail_excerpt:
+    先遮路徑(工作樹的字面與 realpath → <worktree>、家目錄 → ~)再挑錯誤行(e: 、error:、E  、FAILED 開頭,FAILED 結尾,
+    * What went wrong: 到下一個空行),每行 200 字、總共 800 字,挑不到才退回結尾 800 字。逐列對預期值表 S8:
+    ①真 Gradle 樣式(三行 e:、一行是字面 /var 一行是 /private/var、後面 FAILURE、What went wrong、Try 四行、BUILD FAILED):
+    單元與人裁端到端都得三行 e:(<worktree>)加 What went wrong 區塊,tail 欄照舊是空的,人裁拒絕訊息印出摘錄;
+    ②`OtherTest > foo() FAILED` 那一行要挑到。另:③每行截 200、總共 800;④挑不到退回結尾 800 字;⑤家目錄遮成 ~;
+    ⑥guard kill 基準非綠(abort)→ 帳本有摘錄(含 What went wrong 與 ~)、tail 照舊是原文最後 200 字;⑦壞法逾時(timed_out_weak)→ 有摘錄;
+    ⑧killed 那筆帳本沒有 fail_excerpt、result_out 每列都有 fail_excerpt(killed 是空字串);⑨拒絕訊息最多印 12 行、控制字元跳脫;
+    ⑩遮路徑只在路徑邊界換(/Users/someone2 不動);⑪工作樹在家目錄底下時先遮工作樹(代碼審 code-人裁殺傷力android r1 b6、c5)。
+    判準來源:計劃〈範圍〉6 與預期值表 S8 兩列;應抓到的錯:只取結尾(會只剩 Try 區塊)、先挑行再遮路徑、短路徑先遮(/private 前綴殘留)、
+    改到既有 tail 欄。"""
+    import os
+    m = _load_lumos_inproc()
+    wt = tempfile.mkdtemp(prefix="gctl-sra-wt-")
+    real = os.path.realpath(wt)
+    home = "/Users/someone"
+    try:
+        e_lines = [f"e: file://{p}/app/src/main/java/com/ex/SearchViewModel.kt:{n}:5 Unresolved reference: flatMapConcat"
+                   for p, n in ((real, 12), (wt, 20), (real, 31))]
+        out = "> Task :app:kspDebugKotlin\n" + "\n".join(e_lines) + "\n" + _SRA_GRADLE_TAIL
+        want = "\n".join(f"e: file://<worktree>/app/src/main/java/com/ex/SearchViewModel.kt:{n}:5 Unresolved reference: flatMapConcat"
+                         for n in (12, 20, 31)) + "\n" + _SRA_WWW
+        got = m._kill_fail_excerpt(out, wt, home=home)
+        check("S8 ①單元:三行 e:(兩種路徑都遮成 <worktree>)加 What went wrong 區塊", got == want, f"\n{got}\n---\n{want}")
+        got = m._kill_fail_excerpt("> Task :app:testDebugUnitTest\n\nOtherTest > foo() FAILED\n    java.lang.AssertionError at OtherTest.kt:9\n\n"
+                                   "2 tests completed, 1 failed\n", wt, home=home)
+        check("S8 ②紅燈來自別支測試 → 挑到 OtherTest > foo() FAILED 那一行", got == "OtherTest > foo() FAILED", repr(got))
+        got = m._kill_fail_excerpt("error: " + "x" * 300 + "\n" + "".join(f"E  line{i} " + "y" * 150 + "\n" for i in range(8)), wt, home=home)
+        want3 = ("error: " + "x" * 300)[:200] + "\n" + "\n".join(f"E  line{i} " + "y" * 150 for i in range(8))
+        check("S8 ③每行截 200 字、依原順序取到 800 字", got == want3[:800], f"{len(got)} {got[:120]!r}")
+        tail_src = "".join(f"step {i} ok\n" for i in range(200))
+        got = m._kill_fail_excerpt(tail_src, wt, home=home)
+        check("S8 ④一行都挑不到 → 退回結尾 800 字", got == tail_src[-800:], repr(got[:80]))
+        got = m._kill_fail_excerpt(f"error: SDK location not found at {home}/Library/Android/sdk\n", wt, home=home)
+        check("S8 ⑤家目錄遮成 ~", got == "error: SDK location not found at ~/Library/Android/sdk", repr(got))
+        # ⑩路徑邊界(代碼審 code-人裁殺傷力android r1 b6):後面接 / 或不是檔名字元才換,名稱相近的別條路徑不動
+        got = m._kill_mask_paths(f"{home}2/x {home}/y {home}.bak/z {home}ABC/w {home}: {home}", wt, home)
+        check("S8 ⑩家目錄只在路徑邊界換:/Users/someone2、.bak、ABC 不動", got == f"{home}2/x ~/y {home}.bak/z {home}ABC/w ~: ~", repr(got))
+        # ⑪工作樹在家目錄底下(TMPDIR 設在家目錄):要先遮工作樹,順序換了會變成 ~/tmp/…(代碼審 r1 c5)
+        wt_home = home + "/tmp/lumos-kill-1/wt"
+        got = m._kill_mask_paths(f"e: file://{wt_home}/app/A.kt:3 x\nsdk at {home}/sdk\n", wt_home, home)
+        check("S8 ⑪工作樹在家目錄底下 → <worktree>/…,家目錄另遮成 ~", got == "e: file://<worktree>/app/A.kt:3 x\nsdk at ~/sdk\n", repr(got))
+        lines = m._kill_excerpt_show("\n".join(f"e: x{i}" for i in range(20)) + "\n\x1b[31me: red")
+        check("S8 ⑨拒絕訊息最多 12 行、控制字元跳脫", len(lines) == 12 and lines[0] == "e: x0" and lines[-1] == "e: x11"
+              and all("\x1b" not in ln for ln in m._kill_excerpt_show("\x1b[31me: red")), str(lines))
+    finally:
+        _ksp_sh.rmtree(wt, ignore_errors=True)
+    # ①端到端:人裁、假平台照真 Gradle 樣式編譯失敗 → killed_unattributed、帳本存摘錄、tail 照舊、拒絕訊息印摘錄
+    cat = _srl_cat()
+    root, _plan, sha = _sra_repo(_SRL_KT, runner=_SRA_GRADLE_RUNNER)
+    try:
+        seg = _sra_seg(root, cat, sha, 4)
+        r = _srl_run(root, cat, *_srl_args(seg))
+        kl = _srl_kill(root)
+        k0 = kl[0] if len(kl) == 1 else {}
+        want_e2e = "\n".join(f"e: file://<worktree>/app/src/main/java/com/ex/SearchViewModel.kt:{n}:5 Unresolved reference: flatMapConcat"
+                             for n in (12, 20, 31)) + "\n" + _SRA_WWW
+        check("S8 ①端到端:killed_unattributed、帳本 fail_excerpt 是三行 e:(<worktree>)加 What went wrong 區塊", k0.get("verdict") == "killed_unattributed"
+              and k0.get("fail_excerpt") == want_e2e, f"{k0}")
+        check("S8 ①端到端:tail 欄照舊(killed_unattributed 是空字串)", k0.get("tail") == "", repr(k0.get("tail")))
+        check("S8 ①端到端:人裁 rc2、拒絕訊息印出摘錄的 e: 行與 What went wrong", r.returncode == 2
+              and "e: file://<worktree>/app/src/main/java/com/ex/SearchViewModel.kt:20:5 Unresolved reference: flatMapConcat" in r.stderr
+              and "* What went wrong:" in r.stderr and "/private/" not in r.stderr, r.stderr[-1200:])
+    finally:
+        _ksp_sh.rmtree(root, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
+    # ⑥⑦⑧ guard kill:基準非綠、壞法逾時、killed
+    abort_runner = ("import os\n"
+                    "print('FAILURE: Build failed with an exception.')\nprint('')\nprint('* What went wrong:')\n"
+                    "print(\"Could not determine the dependencies of task ':app:testDebugUnitTest'.\")\n"
+                    "print('> SDK location not found at ' + os.path.expanduser('~') + '/Library/Android/sdk, see ' + os.getcwd() + '/local.properties')\n"
+                    "print('')\nprint('* Try:')\nprint('> Run with --stacktrace option to get the stack trace.')\nprint('')\nprint('BUILD FAILED in 1s')\n"
+                    "raise SystemExit(1)\n")
+    slow_runner = ("import sys, time\nsrc = open('prod.py', encoding='utf-8').read()\n"
+                   "if 'LIMIT = 99' in src:\n    print('e: boom', flush=True)\n    time.sleep(30)\nprint('ok')\n")
+    root, v = _mk_kill_env()
+    try:
+        (root / "abort_run.py").write_text(abort_runner, encoding="utf-8")
+        (root / "slow_run.py").write_text(slow_runner, encoding="utf-8")
+        _kr_commit(root, "runners")
+        cfgp = root / ".lumos" / "config.json"
+        ov = [{"invariant": "臨時", "test": "TestLimitFive", "file": "prod.py", "old": "LIMIT = 5", "new": "LIMIT = 99", "note": ""}]
+        cfgp.write_text('{"test": {"run_cmd": "python3 abort_run.py"}}', encoding="utf-8")
+        _rc, out, _so, _se = _sra_guard(m, v, ov)
+        k = _kill_log_rows_of(v)[-1]
+        hm = os.path.expanduser("~")
+        check("S8 ⑥基準非綠 → abort、帳本 fail_excerpt 含 What went wrong 區塊、家目錄遮成 ~、工作樹遮成 <worktree>",
+              k.get("verdict") == "abort" and "* What went wrong:" in k.get("fail_excerpt", "")
+              and "~/Library/Android/sdk" in k.get("fail_excerpt", "") and "<worktree>/local.properties" in k.get("fail_excerpt", "")
+              and hm not in k.get("fail_excerpt", ""), str(k)[:800])
+        check("S8 ⑥tail 照舊是原文最後 200 字(不遮路徑、不挑行)", k.get("tail", "").endswith("BUILD FAILED in 1s\n") and len(k.get("tail", "")) == 200
+              and "<worktree>" not in k.get("tail", ""), repr(k.get("tail")))
+        check("S8 ⑧result_out 那列帶 fail_excerpt(abort 時是摘錄)", (out.get("rows") or [{}])[0].get("fail_excerpt") == k.get("fail_excerpt"), str(out)[:400])
+        cfgp.write_text('{"test": {"run_cmd": "python3 slow_run.py"}}', encoding="utf-8")
+        _rc, out, _so, _se = _sra_guard(m, v, ov, floor="1")
+        k = _kill_log_rows_of(v)[-1]
+        check("S8 ⑦壞法逾時 → timed_out_weak、帳本 fail_excerpt 是 e: boom", k.get("verdict") == "timed_out_weak" and k.get("fail_excerpt") == "e: boom", str(k)[:600])
+        cfgp.write_text('{"test": {"run_cmd": "python3 test_guard.py"}}', encoding="utf-8")
+        _rc, out, _so, _se = _sra_guard(m, v, ov)
+        k = _kill_log_rows_of(v)[-1]
+        check("S8 ⑧killed → 帳本沒有 fail_excerpt、result_out 那列 fail_excerpt 是空字串", k.get("verdict") == "killed" and "fail_excerpt" not in k
+              and (out.get("rows") or [{}])[0].get("fail_excerpt") == "", f"{k} {out}")
+    finally:
+        _ksp_sh.rmtree(root, ignore_errors=True)
+
+
+def t_situation_rule_import_e2e():
+    """[人裁殺傷力在真實Android專案 S9] 假平台:被改檔用到 flatMapConcat 卻沒有它的 import 就印 `e: … Unresolved reference` 回 1(像 Gradle 編譯失敗),
+    否則跑測試;基準用 flatMapLatest 照常綠。檔頭三行逐一 import:①不帶 --import 跑人裁 → 殺傷力 killed_unattributed、rc2、計劃不動、
+    治理帳沒有 situation-rule、拒絕訊息印出 Unresolved reference 摘錄;②帶對的 --import → killed、寫回 S8、治理帳 imports 欄有那一行。
+    判準來源:計劃〈範圍〉1 端到端與預期值表 S9 列(設計審 r1 整合席);應抓到的錯:補了 import 卻沒進殺傷力的工作樹、人裁不認 killed 以外的判定。"""
+    cat = _sit_catalog(_SRA_CATALOG)
+    root, plan, sha = _sra_repo(_SRA_KT_IMP)
+    try:
+        seg = _sra_seg(root, cat, sha, 8)
+        before = plan.read_bytes()
+        r = _srl_run(root, cat, *_srl_args(seg or "x"))
+        kl = _srl_kill(root)
+        check("S9 ①不帶 --import → killed_unattributed、rc2、計劃不動、治理帳沒寫", r.returncode == 2 and [k.get("verdict") for k in kl] == ["killed_unattributed"]
+              and plan.read_bytes() == before and not _srl_gov(root), f"rc={r.returncode} {kl} {r.stderr[-500:]}")
+        check("S9 ①拒絕訊息印出 Unresolved reference 摘錄", "Unresolved reference: flatMapConcat" in r.stderr, r.stderr[-600:])
+        r = _srl_run(root, cat, *_srl_args(seg or "x"), "--import", _SRA_IMP)
+        kl, evs = _srl_kill(root), _srl_gov(root)
+        check("S9 ②帶對的 --import → killed、rc0、寫回 S8", r.returncode == 0 and [k.get("verdict") for k in kl] == ["killed_unattributed", "killed"]
+              and f"- [S8] {_SRL_CLAUSE} [test:test_latest]" in plan.read_text(encoding="utf-8"), f"rc={r.returncode} {kl} {r.stderr[-500:]}")
+        check("S9 ②治理帳那筆 imports 是 [那一行]", len(evs) == 1 and evs[0].get("imports") == [_SRA_IMP], str(evs)[:400])
+    finally:
+        _ksp_sh.rmtree(root, ignore_errors=True)
+        _ksp_sh.rmtree(cat.parent, ignore_errors=True)
 
 
 def t_spec_gate_ruled_ai_reminder():
