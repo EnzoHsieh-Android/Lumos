@@ -45478,6 +45478,133 @@ def t_goldset_append():
     check("★不就地竄改輸入★", _json.dumps(gs, sort_keys=True) == before, "輸入被改了")
 
 
+def _load_build_goldset(name):
+    import importlib.util
+    repo = Path(GRAPHCTL).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(name, repo / "governance" / "eval" / "build_goldset.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def t_goldset_edit_cases_hook_eligible():
+    """★改檔題的出題母體=改檔前掛鉤會觸發的檔★(Projects/改檔題庫擴充_計劃 S1)。
+
+    改檔題量的是掛鉤推筆記;掛鉤不會觸發的檔(審查報告、規則樣本 yml、文件、沒有直譯器宣告的無副檔名檔)
+    出成題目,量的是一條不存在的路。2026-11-12 實測近 400 個提交「改過的檔」上千支,幾乎全是這類。
+    預期值來源:掛鉤自己的觸發規則(副檔名清單+無副檔名看開頭的直譯器宣告),不是出題腳本另抄的清單。
+    翻紅釘:拿掉出題時那道掛鉤判斷 → yml/txt/無宣告檔會出題,第 2 到 4 條翻紅。"""
+    _need_src("governance/eval")
+    import shutil as _sh, subprocess as _sp
+    m = _load_build_goldset("build_goldset_s1")
+    d = Path(tempfile.mkdtemp(prefix="gctl-gs-s1-"))
+    try:
+        _git_init_commit(d)
+        files = {
+            "src/app.py": "def f():\n    return 1\n",
+            "tools/runner": "#!/usr/bin/env python3\nprint('x')\n",
+            "tools/notes": "just some words here\nmore words\n",
+            "governance/review-reports/x/r1.txt": "seat report line one\n",
+            "configs/ast-grep/rules/api.yml": "id: some-rule-here\n",
+            "configs/ast-grep/samples/bad/r1/src/main/kotlin/r1.kt": "fun bad() = Unit\n",
+        }
+        for rel, body in files.items():
+            p = d / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="utf-8")
+            _sp.run(["git", "add", rel], cwd=d, capture_output=True)
+            _sp.run(["git", "commit", "-qm", f"add {rel}"], cwd=d, capture_output=True)
+        got = {c["file"] for c in m.edit_cases(20, root=d)}
+        check("★一般程式檔會出題★", "src/app.py" in got, str(got))
+        check("★審查報告不出題★", "governance/review-reports/x/r1.txt" not in got, str(got))
+        check("★規則樣本 yml 不出題(掛鉤不觸發)★", "configs/ast-grep/rules/api.yml" not in got, str(got))
+        check("★沒有直譯器宣告的無副檔名檔不出題★", "tools/notes" not in got, str(got))
+        check("★規則範例 .kt(掛鉤會觸發但是測試資料)不出題★",
+              "configs/ast-grep/samples/bad/r1/src/main/kotlin/r1.kt" not in got, str(got))
+        check("有 python 直譯器宣告的無副檔名檔會出題(跟掛鉤一致)", "tools/runner" in got, str(got))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+
+def t_goldset_file_quota_cap():
+    """★同一支檔可以出多題,但有上限★(Projects/改檔題庫擴充_計劃 S2)。
+
+    舊規則「同檔只出一題」的理由是候選池幾乎一樣;2026-11-12 實測常改的大檔不成立
+    (同檔不同改動推出的前 8 名兩兩重疊 0 到 0.2),但同檔的題不完全獨立,所以要上限。
+    預期值來源:計劃 S2——題庫裡已有的算進名額、同檔同提交或同改動片段不重出。
+    翻紅釘:上限不算既有題 → a.py 會出到 4 題;不比改動片段 → 重複片段那題會進卷。"""
+    _need_src("governance/eval")
+    import json as _json
+    import shutil as _sh, subprocess as _sp
+    m = _load_build_goldset("build_goldset_s2")
+    gs = {"edit": [{"id": "E01", "file": "a.py", "delta": "d1", "commit": "s1", "split": "train"}],
+          "labels": {"E01": {"N1.md": {"final": 1}}}, "search": [], "snapshot_commit": "abc"}
+    new = [({"file": "a.py", "delta": "d1b", "commit": "s1"}, ["N2.md"]),  # 同提交(片段不同) → 跳過
+           ({"file": "a.py", "delta": "d2", "commit": "s2"}, ["N3.md"]),   # 第 2 題
+           ({"file": "a.py", "delta": "d2", "commit": "s9"}, ["N4.md"]),   # 改動片段重複 → 跳過
+           ({"file": "a.py", "delta": "d3", "commit": "s3"}, ["N5.md"]),   # 第 3 題
+           ({"file": "a.py", "delta": "d4", "commit": "s4"}, ["N6.md"]),   # 超過上限 → 跳過
+           ({"file": "b.py", "delta": "e1", "commit": "s5"}, ["N7.md"])]
+    out = m.append_edit_cases(gs, new, per_file=3)
+    a = [(e["commit"], e["delta"]) for e in out["edit"] if e["file"] == "a.py"]
+    check("★題庫已有的算進名額:a.py 剛好 3 題★", len(a) == 3, str(a))
+    check("★同檔同提交不重出★", sum(1 for c, _ in a if c == "s1") == 1, str(a))
+    check("★同檔同改動片段不重出★", sum(1 for _, dl in a if dl == "d2") == 1, str(a))
+    check("超過上限那題沒進卷", ("s4", "d4") not in a, str(a))
+    check("別的檔照常出題", any(e["file"] == "b.py" for e in out["edit"]), str(out["edit"]))
+    check("既有題原封不動", out["edit"][0] == gs["edit"][0] and out["labels"]["E01"] == {"N1.md": {"final": 1}},
+          str(out["edit"][0]))
+
+    # 抽題那一端也要照上限:同一支檔改了三次,上限 2 → 取兩個不同提交
+    d = Path(tempfile.mkdtemp(prefix="gctl-gs-s2-"))
+    try:
+        _git_init_commit(d)
+        p = d / "src" / "hot.py"
+        p.parent.mkdir(parents=True)
+        for i in range(3):
+            p.write_text("".join(f"value_number_{j} = {j}\n" for j in range(i + 1)), encoding="utf-8")
+            _sp.run(["git", "add", "src/hot.py"], cwd=d, capture_output=True)
+            _sp.run(["git", "commit", "-qm", f"edit {i}"], cwd=d, capture_output=True)
+        hot = [c for c in m.edit_cases(20, per_file=2, root=d) if c["file"] == "src/hot.py"]
+        check("★抽題端:同檔取到上限 2 題★", len(hot) == 2, str(hot))
+        check("★抽題端:兩題出自不同提交★", len({c["commit"] for c in hot}) == 2, str(hot))
+        one = [c for c in m.edit_cases(20, root=d) if c["file"] == "src/hot.py"]
+        check("不帶上限時同檔只取一題(舊行為)", len(one) == 1, str(one))
+        # 抽題端的改動片段去重:同一行先加、再刪、再加回,第一次與第三次的片段相同,只能算一題
+        q = d / "src" / "dup.py"
+        for body in ("alpha_value_line = 1\n", "", "alpha_value_line = 1\n"):
+            q.write_text(body, encoding="utf-8")
+            _sp.run(["git", "add", "src/dup.py"], cwd=d, capture_output=True)
+            _sp.run(["git", "commit", "-qm", "dup step"], cwd=d, capture_output=True)
+        dup = [c for c in m.edit_cases(20, per_file=3, root=d) if c["file"] == "src/dup.py"]
+        check("★抽題端:同檔同改動片段只出一題(刪掉那次另算一題)★", len(dup) == 2, str(dup))
+        check("抽題端:留下的兩題片段不同", len({c["delta"] for c in dup}) == 2, str(dup))
+    finally:
+        _sh.rmtree(d, ignore_errors=True)
+
+    # 追加流程的預先過濾:名額已滿與重複的候選,連建池(每題兩次影響查詢)都不該做
+    g = Path(tempfile.mkdtemp(prefix="gctl-gs-s2run-")) / "goldset.json"
+    try:
+        g.write_text(_json.dumps({"edit": [{"id": "E01", "file": "a.py", "delta": "d1", "commit": "s1", "split": "train"}],
+                                  "labels": {"E01": {"N1.md": {"final": 1}}}, "search": []}), encoding="utf-8")
+        m.edit_cases = lambda n, per_file=1, window=400: [
+            {"file": "a.py", "delta": "d1x", "commit": "s1"},   # 同提交
+            {"file": "a.py", "delta": "d2", "commit": "s2"},
+            {"file": "a.py", "delta": "d1", "commit": "s9"},    # 同片段
+            {"file": "a.py", "delta": "d3", "commit": "s3"},
+            {"file": "a.py", "delta": "d4", "commit": "s4"},    # 名額已滿
+            {"file": "b.py", "delta": "e1", "commit": "s5"}]
+        built = []
+        m.edit_pool = lambda f, dl: built.append((f, dl)) or ["N.md"]
+        rc = m._run_append(10, per_file=3, gpath=g)
+        out = _json.loads(g.read_text(encoding="utf-8"))
+        check("追加流程跑完 rc0", rc == 0, f"rc={rc}")
+        check("★預先過濾:只替該出的題建池★", built == [("a.py", "d2"), ("a.py", "d3"), ("b.py", "e1")], str(built))
+        check("寫回的題庫 a.py 剛好 3 題", sum(1 for e in out["edit"] if e["file"] == "a.py") == 3, str(out["edit"]))
+    finally:
+        _sh.rmtree(g.parent, ignore_errors=True)
+
+
 def t_must_see_ratchet():
     """★must-see 棘輪★:必看項(標2)的個數不准比上一筆 PASS 少,少一個就紅。
 
@@ -45537,6 +45664,9 @@ def t_build_goldset_junk_filter():
     check("★正常 code 檔不排除★", j("scripts/lumos") is False)
     check("★正常 py 不排除★", j("governance/eval/retrieval_eval.py") is False)
     check("★.min.js 但不在 vendor 也排除(壓縮檔沒有可讀 delta)★", j("web/app.min.js") is True)
+    check("★規則範例資料夾排除★", j("configs/x/samples/good/r/src/a.kt") is True)
+    check("★測試資料資料夾排除★", j("tests/fixtures/a.py") is True)
+    check("★檔名剛好叫 samples 不算資料夾,不排除★", j("scripts/samples") is False)
 
     # ★裸跑防護不准被拿掉★:全量重建會清空累積數月的人工標註(2026-08-18 立)。
     # 這條釘死「沒帶 --force-full 就非 0 退出」,免得日後有人為了方便把它拔了。
